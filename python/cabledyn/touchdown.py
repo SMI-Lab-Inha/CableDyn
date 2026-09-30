@@ -52,7 +52,7 @@ _QUANTITIES = {
 }
 
 
-def _readonly(values: npt.ArrayLike) -> np.ndarray:
+def _readonly(values: npt.ArrayLike) -> npt.NDArray[Any]:
     result = np.array(values, dtype=np.float64, copy=True)
     result.setflags(write=False)
     return result
@@ -96,13 +96,13 @@ class TouchdownHistory:
         Result file.
     """
 
-    time: np.ndarray
-    touching: np.ndarray
-    arc_length: np.ndarray
-    coordinates: np.ndarray
-    layback: np.ndarray
-    excursion: np.ndarray
-    arc_excursion: np.ndarray
+    time: npt.NDArray[Any]
+    touching: npt.NDArray[Any]
+    arc_length: npt.NDArray[Any]
+    coordinates: npt.NDArray[Any]
+    layback: npt.NDArray[Any]
+    excursion: npt.NDArray[Any]
+    arc_excursion: npt.NDArray[Any]
     grounded_end: str
     seabed_z: float
     tolerance: float
@@ -234,7 +234,9 @@ class TouchdownHistory:
         )
 
 
-def _positions(source: TimeHistory, line_id: int | None) -> tuple[np.ndarray, np.ndarray]:
+def _positions(
+    source: TimeHistory, line_id: int | None
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Return sample times and ``(n_samples, n_nodes, 3)`` node positions."""
     if isinstance(source, (LineNodeHistory, MoorDynLineHistory)):
         if line_id is not None:
@@ -261,7 +263,7 @@ def _positions(source: TimeHistory, line_id: int | None) -> tuple[np.ndarray, np
     return source.time, data
 
 
-def _profile_positions(profile: StaticProfile, line_id: int | None) -> np.ndarray:
+def _profile_positions(profile: StaticProfile, line_id: int | None) -> npt.NDArray[Any]:
     identifiers = profile.line_ids
     if line_id is None:
         if len(identifiers) != 1:
@@ -272,8 +274,8 @@ def _profile_positions(profile: StaticProfile, line_id: int | None) -> np.ndarra
 
 
 def _locate(
-    xyz: np.ndarray, level: float, end: str
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    xyz: npt.NDArray[Any], level: float, end: str
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any], npt.NDArray[Any], npt.NDArray[Any]]:
     """Return touching mask, TDP arc, TDP coordinates, and suspended-end xy per sample."""
     if end == "B":
         xyz = xyz[:, ::-1, :]

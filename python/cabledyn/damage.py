@@ -65,7 +65,7 @@ def _positive(value: float, name: str) -> float:
     return number
 
 
-def _readonly(values: npt.ArrayLike) -> np.ndarray:
+def _readonly(values: npt.ArrayLike) -> npt.NDArray[Any]:
     result = np.array(values, dtype=np.float64, copy=True)
     result.setflags(write=False)
     return result
@@ -245,7 +245,7 @@ def cable_stress(
     area: float,
     modulus: float,
     radius: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Return the axial stress at the outer and inner fibre, ``T/A +/- E kappa r``.
 
     This is the usual two-fibre recovery for a cable component (an armour
@@ -320,8 +320,8 @@ class DamageProfile:
     curve: FatigueCurve
     node_ids: tuple[int, ...]
     location_kind: str
-    location: np.ndarray
-    damage: np.ndarray
+    location: npt.NDArray[Any]
+    damage: npt.NDArray[Any]
     duration: float
     source: Path
 
@@ -493,7 +493,7 @@ class SeaStateDamage:
     name: str
     probability: float
     duration: float
-    damage: np.ndarray
+    damage: npt.NDArray[Any]
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -511,7 +511,7 @@ class SeaStateDamage:
         object.__setattr__(self, "damage", damage)
 
     @property
-    def annual_damage(self) -> np.ndarray:
+    def annual_damage(self) -> npt.NDArray[Any]:
         """The read-only damage contribution per year, ``p * damage * year / duration``."""
         return _readonly(self.probability * self.damage * SECONDS_PER_YEAR / self.duration)
 
@@ -542,9 +542,9 @@ class LifetimeFatigue:
     states: tuple[SeaStateDamage, ...]
     design_life: float
     design_factor: float
-    annual_damage: np.ndarray
-    lifetime_damage: np.ndarray
-    fatigue_life: np.ndarray
+    annual_damage: npt.NDArray[Any]
+    lifetime_damage: npt.NDArray[Any]
+    fatigue_life: npt.NDArray[Any]
 
     @property
     def total_probability(self) -> float:
@@ -571,7 +571,7 @@ class LifetimeFatigue:
         """Whether the lifetime damage is at most one everywhere."""
         return self.maximum_lifetime_damage <= 1.0
 
-    def contributions(self) -> dict[str, np.ndarray]:
+    def contributions(self) -> dict[str, npt.NDArray[Any]]:
         """Return each sea state's share of the factored annual damage.
 
         Returns

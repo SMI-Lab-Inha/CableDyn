@@ -24,6 +24,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -34,7 +35,7 @@ from cabledyn.results import LineNodeHistory, StaticProfile
 __all__ = ["LineGeometry", "Touchdown", "line_geometry"]
 
 
-def _readonly(values: npt.ArrayLike) -> np.ndarray:
+def _readonly(values: npt.ArrayLike) -> npt.NDArray[Any]:
     result = np.array(values, dtype=np.float64, copy=True)
     result.setflags(write=False)
     return result
@@ -68,7 +69,7 @@ class Touchdown:
 
     node: int
     arc_length: float
-    coordinates: np.ndarray
+    coordinates: npt.NDArray[Any]
     grounded_end: str
     grounded_length: float
     suspended_length: float
@@ -99,10 +100,10 @@ class LineGeometry:
         its two neighbours, in 1/m; ``nan`` at the two end nodes.
     """
 
-    coordinates: np.ndarray
-    arc_length: np.ndarray
-    inclination: np.ndarray
-    curvature: np.ndarray
+    coordinates: npt.NDArray[Any]
+    arc_length: npt.NDArray[Any]
+    inclination: npt.NDArray[Any]
+    curvature: npt.NDArray[Any]
 
     def __post_init__(self) -> None:
         for name in ("coordinates", "arc_length", "inclination", "curvature"):
@@ -271,7 +272,7 @@ def _coordinates(
     source: StaticProfile | LineNodeHistory | MoorDynLineHistory | npt.ArrayLike,
     line_id: int | None,
     time: float | None,
-) -> np.ndarray:
+) -> npt.NDArray[Any]:
     if isinstance(source, StaticProfile):
         if time is not None:
             raise ValueError("time does not apply to a static profile")

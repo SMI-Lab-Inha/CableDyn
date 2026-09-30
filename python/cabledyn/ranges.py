@@ -60,7 +60,7 @@ _NODE_POSITION = re.compile(r"L0*([1-9][0-9]{0,8})N0*([1-9][0-9]{0,8})p([xyz])",
 ArcSource = StaticProfile | Mapping[int, float] | None
 
 
-def _readonly(values: npt.ArrayLike) -> np.ndarray:
+def _readonly(values: npt.ArrayLike) -> npt.NDArray[Any]:
     result = np.array(values, dtype=np.float64, copy=True)
     result.setflags(write=False)
     return result
@@ -118,14 +118,14 @@ def node_position_channels(history: TimeHistory, line_id: int) -> dict[int, tupl
     return {node: (slot["x"], slot["y"], slot["z"]) for node, slot in sorted(axes.items())}
 
 
-def node_matrix(history: TimeHistory, channels: Mapping[int, str]) -> np.ndarray:
+def node_matrix(history: TimeHistory, channels: Mapping[int, str]) -> npt.NDArray[Any]:
     """Return the ``(n_samples, n_nodes)`` values of node channels."""
     return np.column_stack([history.column(name) for name in channels.values()])
 
 
 def node_locations(
     line_id: int, node_ids: tuple[int, ...], arc_length: ArcSource
-) -> tuple[str, np.ndarray]:
+) -> tuple[str, npt.NDArray[Any]]:
     """Return the location kind and the location of each node."""
     if arc_length is None:
         return "Node", np.asarray(node_ids, dtype=np.float64)
@@ -198,10 +198,10 @@ class RangeGraph:
     quantity: str
     unit: str | None
     location_kind: str
-    location: np.ndarray
-    maximum: np.ndarray
-    minimum: np.ndarray | None
-    mean: np.ndarray | None
+    location: npt.NDArray[Any]
+    maximum: npt.NDArray[Any]
+    minimum: npt.NDArray[Any] | None
+    mean: npt.NDArray[Any] | None
     source: Path
     time_window: tuple[float, float] | None = None
 
@@ -581,8 +581,8 @@ def element_range_graph(table: OutputTable, line_id: int, quantity: str) -> Rang
         raise KeyError(f"LineID {identifier} is not in {table.path.name}")
     order = np.argsort(table.column("Element")[mask], kind="stable")
 
-    def column(name: str) -> np.ndarray:
-        values: np.ndarray = table.column(name)[mask][order]
+    def column(name: str) -> npt.NDArray[Any]:
+        values: npt.NDArray[Any] = table.column(name)[mask][order]
         return values
 
     if quantity in {"curvature", "bend_moment"}:

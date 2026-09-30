@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -249,7 +250,7 @@ class FatigueCurve:
             return None
         return float(10.0 ** (self.log_a1 - self.m1 * math.log10(knee)))
 
-    def cycles_to_failure(self, ranges: npt.ArrayLike) -> np.ndarray:
+    def cycles_to_failure(self, ranges: npt.ArrayLike) -> npt.NDArray[Any]:
         """Return the constant-range endurance ``N`` for each range.
 
         Parameters

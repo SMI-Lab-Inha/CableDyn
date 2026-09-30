@@ -65,7 +65,7 @@ _CHUNK = 250_000
 _PLAIN_NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
-def _readonly(values: npt.ArrayLike, dtype: Any = np.float64) -> np.ndarray:
+def _readonly(values: npt.ArrayLike, dtype: Any = np.float64) -> npt.NDArray[Any]:
     result = np.array(values, dtype=dtype, copy=True)
     result.setflags(write=False)
     return result
@@ -105,9 +105,9 @@ class Bathymetry:
         a depth is not positive.
     """
 
-    x: np.ndarray
-    y: np.ndarray
-    depth: np.ndarray
+    x: npt.NDArray[Any]
+    y: npt.NDArray[Any]
+    depth: npt.NDArray[Any]
     source: Path | None = None
 
     def __post_init__(self) -> None:
@@ -127,7 +127,7 @@ class Bathymetry:
         if self.source is not None:
             object.__setattr__(self, "source", Path(self.source).expanduser().resolve())
 
-    def depth_at(self, x: npt.ArrayLike, y: npt.ArrayLike) -> np.ndarray:
+    def depth_at(self, x: npt.ArrayLike, y: npt.ArrayLike) -> npt.NDArray[Any]:
         """Return the water depth at points ``(x, y)``, in metres.
 
         Parameters
@@ -160,7 +160,7 @@ class Bathymetry:
             + tx * ty * d[ix + 1, iy + 1]
         )
 
-    def floor(self, x: npt.ArrayLike, y: npt.ArrayLike) -> np.ndarray:
+    def floor(self, x: npt.ArrayLike, y: npt.ArrayLike) -> npt.NDArray[Any]:
         """Return the seabed elevation ``z_floor = -depth`` at points ``(x, y)``.
 
         Parameters
@@ -181,7 +181,9 @@ class Bathymetry:
         return -self.depth_at(x, y)
 
 
-def _cell(axis: np.ndarray, query: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _cell(
+    axis: npt.NDArray[Any], query: npt.NDArray[Any]
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Cell index and clamped fraction of each query along one grid axis."""
     index = np.clip(np.searchsorted(axis, query, side="right") - 1, 0, axis.size - 2)
     fraction = (query - axis[index]) / (axis[index + 1] - axis[index])
@@ -261,7 +263,7 @@ def _same(a: float, b: float) -> bool:
     return bool(abs(a - b) <= 16.0 * np.finfo(np.float64).eps * max(1.0, abs(a), abs(b)))
 
 
-def _unique(values: np.ndarray) -> np.ndarray:
+def _unique(values: npt.NDArray[Any]) -> npt.NDArray[Any]:
     ordered = np.sort(values)
     unique = [float(ordered[0])]
     for value in ordered[1:]:
@@ -270,7 +272,7 @@ def _unique(values: np.ndarray) -> np.ndarray:
     return np.asarray(unique)
 
 
-def _grid_index(axis: np.ndarray, value: float) -> int:
+def _grid_index(axis: npt.NDArray[Any], value: float) -> int:
     index = int(np.argmin(np.abs(axis - value)))
     assert _same(float(axis[index]), value)  # every value produced the axis
     return index
@@ -278,7 +280,7 @@ def _grid_index(axis: np.ndarray, value: float) -> int:
 
 def segment_distance(
     p1: npt.ArrayLike, q1: npt.ArrayLike, p2: npt.ArrayLike, q2: npt.ArrayLike
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any], npt.NDArray[Any]]:
     """Return the minimum distance between segments ``p1-q1`` and ``p2-q2``.
 
     The closest points are ``p1 + s (q1 - p1)`` and ``p2 + t (q2 - p2)`` with
@@ -310,8 +312,8 @@ def segment_distance(
 
 
 def _segment_distance(
-    p1: np.ndarray, q1: np.ndarray, p2: np.ndarray, q2: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    p1: npt.NDArray[Any], q1: npt.NDArray[Any], p2: npt.NDArray[Any], q2: npt.NDArray[Any]
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any], npt.NDArray[Any]]:
     """Closest points of two segments (Ericson, Real-Time Collision Detection, 5.1.9)."""
     d1, d2, r = q1 - p1, q2 - p2, p1 - p2
     a = np.einsum("...i,...i->...", d1, d1)
@@ -368,10 +370,10 @@ class SeabedClearance:
         per-line result file).
     """
 
-    time: np.ndarray | None
-    node_ids: np.ndarray
-    arc_length: np.ndarray
-    clearance: np.ndarray
+    time: npt.NDArray[Any] | None
+    node_ids: npt.NDArray[Any]
+    arc_length: npt.NDArray[Any]
+    clearance: npt.NDArray[Any]
     radius: float = 0.0
     source: Path | None = None
     line_id: int | None = None
@@ -427,17 +429,17 @@ class SeabedClearance:
         return float(self.arc_length[self.minimum_index])
 
     @property
-    def node_minimum(self) -> np.ndarray:
+    def node_minimum(self) -> npt.NDArray[Any]:
         """``(n_nodes,)`` smallest clearance of each node over time."""
         return _readonly(np.min(self.clearance, axis=0))
 
     @property
-    def sample_minimum(self) -> np.ndarray:
+    def sample_minimum(self) -> npt.NDArray[Any]:
         """``(n_samples,)`` smallest clearance along the line at each sample."""
         return _readonly(np.min(self.clearance, axis=1))
 
     @property
-    def location(self) -> np.ndarray:
+    def location(self) -> npt.NDArray[Any]:
         """``(n_nodes,)`` time-mean arc length of each node, in metres."""
         return _readonly(np.mean(self.arc_length, axis=0))
 
@@ -632,14 +634,14 @@ class LineClearance:
         Radii subtracted from the centreline distance, in metres.
     """
 
-    time: np.ndarray | None
-    distance: np.ndarray
-    arc_length_a: np.ndarray
-    arc_length_b: np.ndarray
-    segment_a: np.ndarray
-    segment_b: np.ndarray
-    point_a: np.ndarray
-    point_b: np.ndarray
+    time: npt.NDArray[Any] | None
+    distance: npt.NDArray[Any]
+    arc_length_a: npt.NDArray[Any]
+    arc_length_b: npt.NDArray[Any]
+    segment_a: npt.NDArray[Any]
+    segment_b: npt.NDArray[Any]
+    point_a: npt.NDArray[Any]
+    point_b: npt.NDArray[Any]
     radius_a: float = 0.0
     radius_b: float = 0.0
 
@@ -672,7 +674,7 @@ class LineClearance:
         object.__setattr__(self, "radius_b", _radius(self.radius_b, "radius_b"))
 
     @property
-    def clearance(self) -> np.ndarray:
+    def clearance(self) -> npt.NDArray[Any]:
         """``(n_samples,)`` surface clearance: distance minus both radii, in metres."""
         return _readonly(self.distance - self.radius_a - self.radius_b)
 
@@ -776,7 +778,7 @@ class LineClearance:
 
 def _aligned(
     a: LinePositions, b: LinePositions
-) -> tuple[np.ndarray | None, np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[Any] | None, npt.NDArray[Any], npt.NDArray[Any]]:
     """Common sample times and the two position arrays on them."""
     if a.time is None and b.time is None:
         return None, a.positions, b.positions
@@ -801,14 +803,14 @@ def _aligned(
     return a.time, a.positions, b.positions
 
 
-def _segments(positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _segments(positions: npt.NDArray[Any]) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Segment start and end points; a single node is one zero-length segment."""
     if positions.shape[1] == 1:
         return positions, positions
     return positions[:, :-1], positions[:, 1:]
 
 
-def _chords(positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _chords(positions: npt.NDArray[Any]) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Segment lengths and the arc length at each segment start."""
     start, end = _segments(positions)
     chords = np.linalg.norm(end - start, axis=2)
@@ -918,7 +920,7 @@ class ClearanceMatrix:
     """
 
     names: tuple[str, ...]
-    minimum: np.ndarray
+    minimum: npt.NDArray[Any]
     pairs: Mapping[tuple[str, str], LineClearance]
 
     def __post_init__(self) -> None:

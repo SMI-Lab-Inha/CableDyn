@@ -23,8 +23,10 @@ import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 from cabledyn.results import TimeHistory, _clean_unit
 
@@ -129,7 +131,7 @@ class HistoryComparison:
 
     reference: Path
     candidate: Path
-    time: np.ndarray
+    time: npt.NDArray[Any]
     percentile: float
     channels: tuple[ChannelComparison, ...]
 
@@ -388,7 +390,7 @@ def compare_histories(
     if time.size < 2:
         raise ValueError("the aligned period needs at least two samples")
 
-    def aligned(table: TimeHistory, channel: str) -> np.ndarray:
+    def aligned(table: TimeHistory, channel: str) -> npt.NDArray[Any]:
         if table is base:
             return np.asarray(table.column(channel)[mask], dtype=np.float64)
         if table.time.shape == base.time.shape and np.array_equal(table.time, base.time):

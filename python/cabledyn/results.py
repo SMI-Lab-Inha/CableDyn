@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 
 from cabledyn._optional import pyplot
 from cabledyn._paths import windows_device_component
@@ -168,15 +169,15 @@ class SpatialStatistics:
     """
 
     location_kind: str
-    location_ids: np.ndarray
+    location_ids: npt.NDArray[Any]
     quantity: str
     unit: str | None
     count: int
-    minimum: np.ndarray
-    maximum: np.ndarray
-    mean: np.ndarray
-    standard_deviation: np.ndarray
-    rms: np.ndarray
+    minimum: npt.NDArray[Any]
+    maximum: npt.NDArray[Any]
+    mean: npt.NDArray[Any]
+    standard_deviation: npt.NDArray[Any]
+    rms: npt.NDArray[Any]
 
     def __post_init__(self) -> None:
         if not self.location_kind or not self.quantity:
@@ -240,7 +241,7 @@ class OutputTable:
     title: str
     channels: tuple[str, ...]
     units: tuple[str, ...] | None
-    values: np.ndarray
+    values: npt.NDArray[Any]
 
     def __post_init__(self) -> None:
         values = np.array(self.values, dtype=np.float64, copy=True)
@@ -256,7 +257,7 @@ class OutputTable:
         object.__setattr__(self, "units", tuple(self.units) if self.units is not None else None)
         object.__setattr__(self, "values", values)
 
-    def column(self, channel: str) -> np.ndarray:
+    def column(self, channel: str) -> npt.NDArray[Any]:
         """Return a read-only view of one named channel.
 
         Parameters
@@ -441,7 +442,7 @@ class TimeHistory(OutputTable):
         raise OutputFormatError(f"{self.path}: time-history table has no time channel")
 
     @property
-    def time(self) -> np.ndarray:
+    def time(self) -> npt.NDArray[Any]:
         """Read-only sample times in seconds."""
         return self.column(self.time_channel)
 
@@ -481,7 +482,7 @@ class TimeHistory(OutputTable):
             self.path, self.title, self.channels, self.units, self.values[mask].copy()
         )
 
-    def _interpolate(self, channels: tuple[str, ...], time: float) -> np.ndarray:
+    def _interpolate(self, channels: tuple[str, ...], time: float) -> npt.NDArray[Any]:
         """Linearly interpolate selected channels at one in-range physical time."""
         requested = float(time)
         if not np.isfinite(requested):
@@ -888,7 +889,7 @@ class LineNodeHistory(TimeHistory):
         """One-based node identifiers in public End-A-to-End-B order."""
         return tuple(range(1, (len(self.channels) - 1) // 3 + 1))
 
-    def coordinates(self, time: float) -> np.ndarray:
+    def coordinates(self, time: float) -> npt.NDArray[Any]:
         """Return an interpolated, read-only ``(n_nodes, 3)`` XYZ snapshot.
 
         Parameters
@@ -911,7 +912,7 @@ class LineNodeHistory(TimeHistory):
         values.setflags(write=False)
         return values
 
-    def arc_length(self, time: float) -> np.ndarray:
+    def arc_length(self, time: float) -> npt.NDArray[Any]:
         """Return cumulative deformed chord length from End A at ``time``.
 
         Parameters
@@ -1025,7 +1026,7 @@ class LineSegmentHistory(TimeHistory):
         """One-based segment identifiers in public End-A-to-End-B order."""
         return tuple(range(1, len(self.channels)))
 
-    def tensions(self, time: float) -> np.ndarray:
+    def tensions(self, time: float) -> npt.NDArray[Any]:
         """Return linearly interpolated segment tensions at one physical time.
 
         Parameters
@@ -1273,7 +1274,7 @@ class StaticProfile(OutputTable):
         """
         line = self.line(line_id)
 
-        def extrema(channel: str, operation: Callable[[np.ndarray], Any]) -> float | None:
+        def extrema(channel: str, operation: Callable[[npt.NDArray[Any]], Any]) -> float | None:
             return float(operation(line.column(channel))) if channel in line.channels else None
 
         max_curvature = extrema("Curvature", np.max)

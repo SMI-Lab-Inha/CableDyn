@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import operator
 from collections.abc import Iterable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import numpy as np
 import numpy.typing as npt
@@ -45,7 +45,7 @@ def _finite(value: float | None, name: str) -> float | None:
     return result
 
 
-def _rebuild(history: HistoryT, time: np.ndarray, values: np.ndarray) -> HistoryT:
+def _rebuild(history: HistoryT, time: npt.NDArray[Any], values: npt.NDArray[Any]) -> HistoryT:
     index = history.channels.index(history.time_channel)
     table = np.array(values, dtype=np.float64, copy=True)
     table[:, index] = time

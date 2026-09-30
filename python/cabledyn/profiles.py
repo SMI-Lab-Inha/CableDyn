@@ -114,7 +114,7 @@ _MOORDYN_NAMES = {
 }
 
 
-def _readonly(values: npt.ArrayLike, dtype: Any = np.float64) -> np.ndarray:
+def _readonly(values: npt.ArrayLike, dtype: Any = np.float64) -> npt.NDArray[Any]:
     result = np.array(values, dtype=dtype, copy=True)
     result.setflags(write=False)
     return result
@@ -137,7 +137,7 @@ def _finite_time(time: float) -> float:
     return value
 
 
-def _validate_time(time: np.ndarray | None, samples: int) -> np.ndarray | None:
+def _validate_time(time: npt.NDArray[Any] | None, samples: int) -> npt.NDArray[Any] | None:
     if time is None:
         if samples != 1:
             raise ValueError("a static result (time None) holds exactly one sample")
@@ -151,7 +151,7 @@ def _validate_time(time: np.ndarray | None, samples: int) -> np.ndarray | None:
 
 
 def _sample_weights(
-    time: np.ndarray, requested: float, interpolation: str
+    time: npt.NDArray[Any], requested: float, interpolation: str
 ) -> tuple[int, int, float]:
     """Return the two bracketing sample indices and the weight of the second."""
     value = _finite_time(requested)
@@ -168,7 +168,7 @@ def _sample_weights(
     return lower, upper, float(weight)
 
 
-def _window(time: np.ndarray, start: float | None, stop: float | None) -> np.ndarray:
+def _window(time: npt.NDArray[Any], start: float | None, stop: float | None) -> npt.NDArray[Any]:
     """Boolean mask of samples in the closed interval ``[start, stop]``."""
     if start is not None:
         start = _finite_time(start)
@@ -210,9 +210,9 @@ class LinePositions:
         node, or time does not strictly increase.
     """
 
-    time: np.ndarray | None
-    positions: np.ndarray
-    node_ids: np.ndarray
+    time: npt.NDArray[Any] | None
+    positions: npt.NDArray[Any]
+    node_ids: npt.NDArray[Any]
     source: Path | None = None
 
     def __post_init__(self) -> None:
@@ -246,7 +246,7 @@ class LinePositions:
         return int(self.positions.shape[1])
 
     @property
-    def arc_length(self) -> np.ndarray:
+    def arc_length(self) -> npt.NDArray[Any]:
         """Read-only ``(n_samples, n_nodes)`` cumulative chord length from End A, in m."""
         chords = np.linalg.norm(np.diff(self.positions, axis=1), axis=2)
         zeros = np.zeros((self.sample_count, 1))
@@ -254,7 +254,7 @@ class LinePositions:
 
     def at(
         self, time: float | None = None, *, interpolation: Interpolation = "linear"
-    ) -> np.ndarray:
+    ) -> npt.NDArray[Any]:
         """Return the ``(n_nodes, 3)`` node positions at one time.
 
         Parameters
@@ -281,7 +281,7 @@ class LinePositions:
 
     def arc_length_at(
         self, time: float | None = None, *, interpolation: Interpolation = "linear"
-    ) -> np.ndarray:
+    ) -> npt.NDArray[Any]:
         """Return the ``(n_nodes,)`` arc length from End A of the positions at one time.
 
         The arc length is the cumulative chord length of the node positions
@@ -312,8 +312,11 @@ class LinePositions:
 
 
 def _at(
-    time: np.ndarray | None, values: np.ndarray, requested: float | None, interpolation: str
-) -> np.ndarray:
+    time: npt.NDArray[Any] | None,
+    values: npt.NDArray[Any],
+    requested: float | None,
+    interpolation: str,
+) -> npt.NDArray[Any]:
     """Evaluate a ``(n_samples, ...)`` array at one time."""
     if interpolation not in {"linear", "nearest"}:
         raise ValueError("interpolation must be 'linear' or 'nearest'")
@@ -360,9 +363,9 @@ class LineField:
     quantity: str
     unit: str | None
     location_kind: str
-    ids: np.ndarray
-    time: np.ndarray | None
-    values: np.ndarray
+    ids: npt.NDArray[Any]
+    time: npt.NDArray[Any] | None
+    values: npt.NDArray[Any]
     source: Path | None = None
 
     def __post_init__(self) -> None:
@@ -387,7 +390,7 @@ class LineField:
 
     def at(
         self, time: float | None = None, *, interpolation: Interpolation = "linear"
-    ) -> np.ndarray:
+    ) -> npt.NDArray[Any]:
         """Return the ``(n_locations,)`` values at one time.
 
         Parameters
@@ -468,9 +471,9 @@ class ArcProfile:
     quantity: str
     unit: str | None
     location_kind: str
-    location: np.ndarray
-    ids: np.ndarray
-    values: np.ndarray
+    location: npt.NDArray[Any]
+    ids: npt.NDArray[Any]
+    values: npt.NDArray[Any]
     time: float | None
     source: Path | None = None
     id_kind: str = "Node"
@@ -877,6 +880,7 @@ def line_positions(
         line = _static_line(source, identifier)
         xyz = np.column_stack([line.column(axis) for axis in "XYZ"])
         return LinePositions(None, xyz[None], line.column("Node").astype(np.int64), line.path)
+    data: npt.NDArray[Any]
     if isinstance(source, LineNodeHistory):
         _no_line_id(identifier, source)
         data = source.values[:, 1:].reshape((source.time.size, -1, 3))
@@ -922,7 +926,7 @@ def line_positions(
         if time is not None:
             raise ValueError("time applies only to a (n_samples, n_nodes, 3) array")
         array = array[None]
-        stamps: np.ndarray | None = None
+        stamps: npt.NDArray[Any] | None = None
     elif array.ndim == 3:
         if time is None:
             raise ValueError("a (n_samples, n_nodes, 3) array needs the sample times")
@@ -937,7 +941,7 @@ def _node_arc(
     time: float | None,
     interpolation: Interpolation,
     line_id: int | None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Return node ids and their arc lengths from End A at ``time``."""
     if isinstance(locate, StaticProfile):
         line = _static_line(locate, line_id)
@@ -954,7 +958,7 @@ def _node_arc(
     return positions.node_ids, _cumulative_arc(xyz)
 
 
-def _cumulative_arc(xyz: np.ndarray) -> np.ndarray:
+def _cumulative_arc(xyz: npt.NDArray[Any]) -> npt.NDArray[Any]:
     """Cumulative chord length from the first of ``(n_nodes, 3)`` points."""
     return np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(xyz, axis=0), axis=1))))
 
@@ -983,7 +987,7 @@ def _place(
     time: float | None,
     interpolation: Interpolation,
     line_id: int | None,
-) -> tuple[str, np.ndarray]:
+) -> tuple[str, npt.NDArray[Any]]:
     """Return the location kind and location of each field value."""
     if locate is None:
         return field.location_kind, field.ids.astype(np.float64)
@@ -991,7 +995,9 @@ def _place(
     return "ArcLength", _assign(field, isinstance(locate, Mapping), node_ids, arc)
 
 
-def _assign(field: LineField, mapping: bool, node_ids: np.ndarray, arc: np.ndarray) -> np.ndarray:
+def _assign(
+    field: LineField, mapping: bool, node_ids: npt.NDArray[Any], arc: npt.NDArray[Any]
+) -> npt.NDArray[Any]:
     """Arc length of each field value from the arc length of the line nodes."""
     if field.location_kind == "Node":
         lookup = dict(zip(node_ids.tolist(), arc.tolist(), strict=True))
@@ -1011,7 +1017,7 @@ def _assign(field: LineField, mapping: bool, node_ids: np.ndarray, arc: np.ndarr
 
 def _mean_node_arc(
     locate: LocationSource, line_id: int | None, start: float | None, stop: float | None
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Node ids and their arc length, time-averaged over a window for a history."""
     if isinstance(locate, (StaticProfile, Mapping)):
         return _node_arc(locate, None, "linear", line_id)

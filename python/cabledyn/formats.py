@@ -30,8 +30,10 @@ import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 from cabledyn.errors import OutputFormatError
 from cabledyn.results import (
@@ -86,7 +88,7 @@ def _read_text_table(
     path: str | os.PathLike[str],
     *,
     repeated_channels: bool = False,
-) -> tuple[Path, str, tuple[str, ...], tuple[str, ...] | None, np.ndarray]:
+) -> tuple[Path, str, tuple[str, ...], tuple[str, ...] | None, npt.NDArray[Any]]:
     """Parse a whitespace-separated ``Time`` table: title, channels, optional units, rows.
 
     With ``repeated_channels`` a repeated channel name (legitimate in an OpenFAST
@@ -134,7 +136,7 @@ def _history(
     title: str,
     channels: tuple[str, ...],
     units: tuple[str, ...] | None,
-    values: np.ndarray,
+    values: npt.NDArray[Any],
 ) -> TimeHistory:
     try:
         return TimeHistory(path, title, channels, units, values)
@@ -150,7 +152,7 @@ class _BinaryCursor:
         self.data = data
         self.offset = 0
 
-    def take(self, count: int, dtype: str) -> np.ndarray:
+    def take(self, count: int, dtype: str) -> npt.NDArray[Any]:
         size = np.dtype(dtype).itemsize * count
         if count < 0 or self.offset + size > len(self.data):
             raise OutputFormatError(
@@ -225,6 +227,8 @@ def _read_openfast_binary(path: Path) -> TimeHistory:
     first, second = float(cursor.scalar("<d")), float(cursor.scalar("<d"))
     if not (np.isfinite(first) and np.isfinite(second)):
         raise OutputFormatError(f"{path}: binary time scale and offset must be finite")
+    scale: npt.NDArray[np.float64]
+    offset: npt.NDArray[np.float64]
     if file_id == _OUTB_NO_COMPRESS_WITHOUT_TIME:
         scale = np.ones(channel_count)
         offset = np.zeros(channel_count)
@@ -421,7 +425,7 @@ class MoorDynLineHistory(TimeHistory):
         """Number of nodes ``N + 1`` of the line."""
         return self.segment_count + 1
 
-    def node_vectors(self, quantity: str, time: float) -> np.ndarray:
+    def node_vectors(self, quantity: str, time: float) -> npt.NDArray[Any]:
         """Return an interpolated, read-only ``(N + 1, 3)`` node vector snapshot.
 
         Parameters
@@ -459,7 +463,7 @@ class MoorDynLineHistory(TimeHistory):
         values.setflags(write=False)
         return values
 
-    def positions(self, time: float) -> np.ndarray:
+    def positions(self, time: float) -> npt.NDArray[Any]:
         """Return interpolated ``(N + 1, 3)`` node positions in metres at ``time``.
 
         Parameters
@@ -481,7 +485,7 @@ class MoorDynLineHistory(TimeHistory):
         """
         return self.node_vectors("p", time)
 
-    def segment_values(self, quantity: str, time: float) -> np.ndarray:
+    def segment_values(self, quantity: str, time: float) -> npt.NDArray[Any]:
         """Return one interpolated segment scalar (``Ten``, ``Dmp``, ``Str``, ``SRt``, ``Lst``).
 
         Parameters
@@ -514,7 +518,7 @@ class MoorDynLineHistory(TimeHistory):
             raise KeyError(f"{self.path.name} has no {quantity!r} segment channels")
         return self._interpolate(names, time)
 
-    def segment_tensions(self, time: float) -> np.ndarray:
+    def segment_tensions(self, time: float) -> npt.NDArray[Any]:
         """Return interpolated segment tensions (``Seg<i>Ten``) at ``time``.
 
         Parameters

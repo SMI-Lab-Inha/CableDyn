@@ -27,7 +27,7 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -47,13 +47,13 @@ _EULER_GAMMA = 0.5772156649015329
 _BISECTION_STEPS = 200
 
 
-def _readonly(values: npt.ArrayLike) -> np.ndarray:
+def _readonly(values: npt.ArrayLike) -> npt.NDArray[Any]:
     result = np.array(values, dtype=np.float64, copy=True)
     result.setflags(write=False)
     return result
 
 
-def _sample(values: npt.ArrayLike, what: str) -> np.ndarray:
+def _sample(values: npt.ArrayLike, what: str) -> npt.NDArray[Any]:
     data = np.asarray(values, dtype=np.float64).ravel()
     if data.size < 2 or not np.all(np.isfinite(data)):
         raise ValueError(f"{what} needs at least two finite values")
@@ -76,7 +76,7 @@ def block_maxima(
     start: float | None = None,
     stop: float | None = None,
     minima: bool = False,
-) -> np.ndarray:
+) -> npt.NDArray[Any]:
     """Return the extreme of each complete block of ``block_duration`` seconds.
 
     Blocks start at the first selected sample and are half-open,
@@ -134,7 +134,7 @@ def block_maxima(
     return _readonly(result)
 
 
-def upcrossing_maxima(values: npt.ArrayLike, *, level: float | None = None) -> np.ndarray:
+def upcrossing_maxima(values: npt.ArrayLike, *, level: float | None = None) -> npt.NDArray[Any]:
     """Return the maximum between each pair of successive up-crossings of ``level``.
 
     ``level`` defaults to the sample mean. An up-crossing occurs between
@@ -206,7 +206,7 @@ class GumbelFit:
         if not math.isfinite(self.location) or not math.isfinite(self.scale) or self.scale <= 0:
             raise ValueError("Gumbel location must be finite and scale finite and positive")
 
-    def cdf(self, value: npt.ArrayLike) -> np.ndarray:
+    def cdf(self, value: npt.ArrayLike) -> npt.NDArray[Any]:
         """Non-exceedance probability of ``value``.
 
         Parameters
@@ -295,7 +295,7 @@ class GumbelFit:
         return self.quantile(1.0 - 1.0 / count)
 
 
-def _gumbel_likelihood_scale(data: np.ndarray) -> float:
+def _gumbel_likelihood_scale(data: npt.NDArray[Any]) -> float:
     """Root of the Gumbel maximum-likelihood equation for the scale parameter."""
     mean, minimum = float(np.mean(data)), float(np.min(data))
     shifted = data - minimum
@@ -392,7 +392,7 @@ class WeibullFit:
         ):
             raise ValueError("Weibull shape and scale must be finite and positive")
 
-    def cdf(self, value: npt.ArrayLike) -> np.ndarray:
+    def cdf(self, value: npt.ArrayLike) -> npt.NDArray[Any]:
         """Non-exceedance probability of ``value`` (zero for negative values).
 
         Parameters

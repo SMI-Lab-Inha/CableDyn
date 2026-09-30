@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 from cabledyn._optional import pyplot
 
@@ -100,8 +101,8 @@ class RainflowHistogram:
         Read-only weighted cycle count in each bin (half-cycles count 0.5).
     """
 
-    bin_edges: np.ndarray
-    counts: np.ndarray
+    bin_edges: npt.NDArray[Any]
+    counts: npt.NDArray[Any]
 
     def __post_init__(self) -> None:
         edges = np.asarray(self.bin_edges, dtype=np.float64).copy()
@@ -120,9 +121,9 @@ class RainflowHistogram:
         object.__setattr__(self, "counts", counts)
 
     @property
-    def bin_centers(self) -> np.ndarray:
+    def bin_centers(self) -> npt.NDArray[Any]:
         """Read-only arithmetic centres of the range bins."""
-        values: np.ndarray = 0.5 * (self.bin_edges[:-1] + self.bin_edges[1:])
+        values: npt.NDArray[Any] = 0.5 * (self.bin_edges[:-1] + self.bin_edges[1:])
         values.setflags(write=False)
         return values
 
@@ -436,7 +437,7 @@ class FatigueResult:
         return target
 
 
-def _reversals(series: np.ndarray) -> tuple[tuple[int, float], ...]:
+def _reversals(series: npt.NDArray[Any]) -> tuple[tuple[int, float], ...]:
     """Return endpoint-inclusive reversals, retaining the last plateau point."""
     unique: list[tuple[int, float]] = [(0, float(series[0]))]
     for index in range(1, series.size):
@@ -467,7 +468,9 @@ def _cycle(first: tuple[int, float], second: tuple[int, float], count: float) ->
 
 
 def rainflow_cycles(
-    values: Iterable[float] | np.ndarray, *, time: Iterable[float] | np.ndarray | None = None
+    values: Iterable[float] | npt.NDArray[Any],
+    *,
+    time: Iterable[float] | npt.NDArray[Any] | None = None,
 ) -> tuple[RainflowCycle, ...]:
     """Count Downing--Socie/ASTM-style cycles in a finite scalar history.
 
@@ -591,6 +594,7 @@ def cycle_histogram(
         count = operator.index(bins)  # type: ignore[arg-type]
     except TypeError:
         count = None
+    edges: npt.NDArray[Any]
     if count is None:
         try:
             edges = np.asarray(tuple(bins), dtype=np.float64)  # type: ignore[arg-type]

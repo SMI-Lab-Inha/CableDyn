@@ -322,7 +322,7 @@ class Snapshots:
 
     def bounds(self) -> tuple[FloatArray, FloatArray]:
         """Lower and upper corners ``(3,)`` of every recorded position [m]."""
-        chunks = [v.reshape(-1, 3) for v in self.lines.values()]
+        chunks: list[FloatArray] = [v.reshape(-1, 3) for v in self.lines.values()]
         chunks += [v.reshape(-1, 3) for v in self.rods.values()]
         chunks += [v.reshape(-1, 3) for v in self.points.values()]
         chunks += [v[:, :3] for v in self.bodies.values()]

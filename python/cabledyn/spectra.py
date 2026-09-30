@@ -49,7 +49,7 @@ def _nonnegative_integer(value: int, name: str) -> int:
     return result
 
 
-def _sampling(time: np.ndarray, *, rtol: float, atol: float) -> float:
+def _sampling(time: npt.NDArray[Any], *, rtol: float, atol: float) -> float:
     if time.ndim != 1 or time.size < 2 or not np.all(np.isfinite(time)):
         raise ValueError("spectral analysis requires at least two finite time samples")
     intervals = np.diff(time)
@@ -77,7 +77,7 @@ def _window_name(name: str) -> str:
     raise ValueError("window must be 'hann' or 'boxcar'")
 
 
-def _window(name: str, length: int) -> np.ndarray:
+def _window(name: str, length: int) -> npt.NDArray[Any]:
     if _window_name(name) == "hann":
         # Periodic (DFT-even) Hann, matching the current scipy.signal.welch default.
         return np.hanning(length + 1)[:-1]
@@ -98,10 +98,10 @@ def _squared_unit(unit: str | None) -> str | None:
 
 @dataclass(frozen=True)
 class _Welch:
-    frequency: np.ndarray
-    auto_x: np.ndarray
-    auto_y: np.ndarray | None
-    cross_xy: np.ndarray | None
+    frequency: npt.NDArray[Any]
+    auto_x: npt.NDArray[Any]
+    auto_y: npt.NDArray[Any] | None
+    cross_xy: npt.NDArray[Any] | None
     sample_interval: float
     sample_count: int
     segment_length: int
@@ -407,8 +407,8 @@ class PowerSpectrum:
     detrend: str
     uniform_rtol: float
     uniform_atol: float
-    frequency: np.ndarray
-    density: np.ndarray
+    frequency: npt.NDArray[Any]
+    density: npt.NDArray[Any]
 
     def __post_init__(self) -> None:
         if not isinstance(self.channel, str) or not self.channel:
@@ -713,9 +713,9 @@ class CoherenceResult:
     uniform_rtol: float
     uniform_atol: float
     power_floor_ratio: float
-    frequency: np.ndarray
-    coherence: np.ndarray
-    valid: np.ndarray
+    frequency: npt.NDArray[Any]
+    coherence: npt.NDArray[Any]
+    valid: npt.NDArray[Any]
 
     def __post_init__(self) -> None:
         if (

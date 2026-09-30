@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 import numpy as np
+import numpy.typing as npt
 
 from cabledyn._csv import number, write_csv
 from cabledyn.clearance import Bathymetry, seabed_clearance
@@ -459,7 +460,7 @@ def line_summary(
     return LineSummary(name=name, start_time=first, end_time=last, sample_count=count, **fields)
 
 
-def _span(time: np.ndarray | None) -> tuple[float | None, float | None, int]:
+def _span(time: npt.NDArray[Any] | None) -> tuple[float | None, float | None, int]:
     if time is None:
         return None, None, 1
     return float(time[0]), float(time[-1]), int(time.size)

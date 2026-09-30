@@ -90,7 +90,7 @@ def _positive(value: float, name: str) -> float:
     return number_
 
 
-def _readonly(values: npt.ArrayLike) -> np.ndarray:
+def _readonly(values: npt.ArrayLike) -> npt.NDArray[Any]:
     result = np.array(values, dtype=np.float64, copy=True)
     result.setflags(write=False)
     return result
@@ -136,7 +136,7 @@ class BendLimits:
         raise ValueError("condition must be 'storage' or 'dynamic'")
 
 
-def mbr_utilisation(curvature: npt.ArrayLike, mbr: float) -> np.ndarray:
+def mbr_utilisation(curvature: npt.ArrayLike, mbr: float) -> npt.NDArray[Any]:
     """Return the bend utilisation ``|kappa| * MBR`` (at most one to pass).
 
     Parameters
@@ -194,9 +194,9 @@ class BendCheck:
     condition: str
     mbr: float
     location_kind: str
-    location: np.ndarray
-    curvature: np.ndarray
-    utilisation: np.ndarray
+    location: npt.NDArray[Any]
+    curvature: npt.NDArray[Any]
+    utilisation: npt.NDArray[Any]
     critical_time: float | None
     source: Path
 
