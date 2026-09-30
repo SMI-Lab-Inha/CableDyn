@@ -150,7 +150,7 @@ Before the first release is published from a new GitHub repository:
       disable blank issues); disable the Wiki and Projects unless they will be
       maintained.
 - [ ] **Security**: enable private vulnerability reporting (used by
-      [SECURITY.md](SECURITY.md)), Dependabot alerts, and secret scanning.
+      [SECURITY.md](SECURITY.md)) and secret scanning.
 - [ ] **Actions**: allow GitHub-hosted runners; the workflows need no secrets
       beyond the automatic `GITHUB_TOKEN`, and only the release job writes
       (`contents: write`).
