@@ -81,5 +81,11 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Test (CTest)
-        # The tests are parallel-safe; resource-heavy ones reserve processors.
+        # The tests are parallel-safe; resource-heavy ones reserve processors. Four tests run
+        # at once, so each runs single-threaded: OpenMP and OpenBLAS would otherwise start a
+        # thread per core in every test and oversubscribe the runner. Tests that check
+        # threading set their own thread counts.
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
         run: ctest --test-dir build --output-on-failure --parallel 4
