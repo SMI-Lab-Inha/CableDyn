@@ -1,0 +1,173 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+# Developing CableDyn
+
+This guide is for developers who build and test CableDyn from source. It lists the
+commands for the environment, build, tests, Python package, documentation, and
+integration with OpenFAST, maintained by NLR (National Laboratory of the Rockies,
+formerly NREL). Contribution rules are in
+[CONTRIBUTING.md](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/CONTRIBUTING.md);
+the release procedure is in
+[RELEASE.md](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/RELEASE.md).
+
+## Environment
+
+Requirements: conda (Miniconda, Miniforge, or Anaconda) on Linux, macOS, or
+Windows, and git. `environment.yml` provides conda-forge gfortran, a C compiler,
+CMake, Ninja, Make, OpenBLAS/LAPACK, Python, and the developer tools
+(`pre-commit`, `fprettify`). Do not mix the conda gfortran with a system gfortran
+or Intel IFX.
+
+```powershell
+conda env create -f environment.yml
+conda activate cabledyn
+pre-commit install
+```
+
+## Build and test
+
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build -L fortran -LE slow --output-on-failure   # fast tier
+ctest --test-dir build --output-on-failure                       # full suite
+```
+
+The standalone driver is `build/cabledyn` (`build\bin\cabledyn.exe` with the conda
+toolchain on Windows, where CMake stages the runtime DLLs and every executable in
+`build\bin`); a build with an MSVC-style linker (Intel IFX) and the static release
+build name the same program `CableDyn_driver.exe`. On Windows, add
+`-DCMAKE_C_COMPILER=gcc` if CMake would otherwise pick a Visual Studio C compiler, so the
+C sources build with the conda MinGW `gcc` that matches `gfortran` (as CI does).
+The Debug configuration (`-DCMAKE_BUILD_TYPE=Debug`) adds `-fcheck=all
+-fbacktrace`. CMake finds LAPACK with `find_package(LAPACK)` and falls back to the
+conda OpenBLAS through `CONDA_PREFIX`. `cmake --install build --prefix stage`
+installs the driver, the shared library, and `CableDyn_CAPI.h`.
+
+| Selection | Tests |
+|---|---|
+| `-L fortran` | All Fortran tests |
+| `-L fortran -LE slow` | Fast tier |
+| `-L slow` | Long validation cases |
+| `-L l1` | The 10 analytical cases |
+| `-L static`, `-L dynamic` | Static and dynamic solver tests |
+| `-L integration` | End-to-end driver and aggregate tests |
+| `-L openfast` | OpenFAST shell and aggregate tests |
+| `-L external_ref` | IEA-15MW VolturnUS-S mooring comparisons |
+| `-L cosserat` | Secondary Cosserat path |
+| `-L python` | Python package, deck-style, and documentation checks |
+
+A test program can also be run directly from the build tree (`build/`, or
+`build\bin\` with the conda toolchain on Windows); it prints `PASS:` or
+stops at the first mismatch. The Fortran CI workflow builds Release and Debug on
+Ubuntu and Windows and runs the full suite on every pull request and push to
+`main`.
+
+## Python package
+
+The `cabledyn` package (`python/`) loads the C-ABI shared library built by
+`cmake --build build --target cabledyn_shared`. The `python_package` CTest runs its
+tests when the configured Python has `numpy` and `pytest`. To work on the package
+directly:
+
+```powershell
+python -m pip install -e ".\python[dev]"
+$env:CABLEDYN_LIBRARY = "<path to the built libcabledyn shared library>"
+python -m pytest python/tests -q
+cd python; python -m ruff check cabledyn tests; python -m ruff format --check cabledyn tests; python -m mypy; cd ..
+```
+
+The fatigue (`test_fatigue.py`) and spectral (`test_spectra.py`) tests do not load
+the shared library. They compare against independent references (the ASTM E1049
+cycle table and analytical sinusoids); do not replace these with snapshots of
+CableDyn output.
+
+On Windows, run Python from the activated `cabledyn` environment and point
+`CABLEDYN_LIBRARY` at the DLL. Do not prepend compiler or OpenBLAS runtime
+directories to `PATH` before importing NumPy: mixed runtime DLLs can terminate
+Python during NumPy initialisation.
+
+## Documentation
+
+```powershell
+python -m pip install -r doc/requirements.txt
+python -m sphinx -W --keep-going -n -b html doc doc/_build/html
+python tests/test_documentation.py
+```
+
+Markdown files outside `doc/` that the manual includes (`CHANGELOG.md`,
+`CONTRIBUTING.md`, `DEVELOPMENT.md`, `VALIDATION.md`) must link to repository
+files with absolute `https://github.com/SMI-Lab-Inha/CableDyn/blob/main/...`
+URLs.
+
+## Formatting and checks
+
+```powershell
+pre-commit run --all-files
+fprettify --indent 2 --line-length 120 src/<file>.f90
+```
+
+The hooks check whitespace, end-of-file, merge markers, YAML, large files, Fortran
+formatting (`fprettify`; `src/openfast/` is excluded), Python lint and formatting (`ruff`),
+and release metadata.
+Fortran lines longer than 120 columns must be split with `&` before formatting.
+
+## Coding standards
+
+### Fortran
+
+- Fortran 2018, free form, `IMPLICIT NONE` in every program unit.
+- Real kind `wp` from `CableDyn_Precision`; never `REAL*8` or `DOUBLE PRECISION`.
+- Modules are named `CableDyn_<Function>`; subroutines `CD_<Action>_<Object>`
+  (for example `CD_Assemble_Cable_Mass`).
+- Public subroutines take `ErrStat (INTEGER, INTENT(OUT))` and
+  `ErrMsg (CHARACTER(*), INTENT(OUT))`.
+- LAPACK: banded solvers (`DGBSV`, and `DPBTRF`/`DPBTRS` for symmetric positive
+  definite bands); a dense assembly is packed into band storage before the solve.
+- Warning-clean under `-std=f2018 -Wall -Wextra -fimplicit-none`.
+
+### SPDX headers
+
+Every source file starts with:
+
+```text
+! File: <path>
+! SPDX-License-Identifier: Apache-2.0
+! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
+```
+
+Use the comment syntax of the language (`#` for Python, PowerShell, and YAML).
+
+## OpenFAST integration
+
+The OpenFAST host module in `src/openfast/` compiles only inside an OpenFAST
+source tree. To build and check it locally:
+
+```powershell
+git clone https://github.com/OpenFAST/openfast.git <openfast>
+git -C <openfast> checkout 2895884d2be01862173c88d70f86b358d2f1a50a
+./integration/openfast/prepare_openfast_source.ps1 -OpenFASTRoot <openfast>
+cmake -S <openfast> -B <openfast-build-dir> -DCABLEDYN_ROOT=<CableDyn checkout>
+powershell -File integration/openfast/openfast_build_gate.ps1 -BuildDir <openfast-build-dir> -CaseFst <case.fst>
+```
+
+`openfast_build_gate.ps1` builds `openfast.exe`, runs a `CompMooring = 5` case,
+checks that the CableDyn banner appears in the log, and checks that the output is
+finite.
+
+An `openfast.exe` built this way through CMake does not embed the UTF-8
+active-code-page manifest (`app/utf8_code_page.manifest`), so on Windows it may not
+open input files in folders whose names the system code page cannot spell. The
+static release build (`release/build_static_windows.ps1`, which uses the OpenFAST
+Visual Studio solution) embeds the manifest. See
+[integration/openfast/README.md](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/integration/openfast/README.md)
+for details.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `gfortran` not found | environment not activated | `conda activate cabledyn` |
+| `find_package(LAPACK)` fails | no system LAPACK | install `liblapack-dev`, or build inside the conda environment |
+| Python exits while importing NumPy on Windows | runtime DLL directories on `PATH` | remove them from `PATH`; set `CABLEDYN_LIBRARY` instead |
+| Windows checkout differs from CI | CRLF line endings | `.gitattributes` enforces LF; run `git add --renormalize .` |

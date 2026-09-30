@@ -1,0 +1,19 @@
+{
+  "CableDyn_release": "v0.1.0",
+  "validation_date": "2026-09-29",
+  "executable_name": "cabledyn.exe",
+  "executable_sha256": "40774250d8f327c45b30715bb5e559be75bb2d22c8d9f492f781cfdbfa692e2c",
+  "compiler": "GNU Fortran 15.2.0",
+  "build_type": "Release",
+  "platform": "Windows 11 x86-64",
+  "primary_cases": 4,
+  "mesh_refinement_cases": 8,
+  "completed_cases": 12,
+  "nonlinear_misses": 0,
+  "experimental_markers_sha256": "1671cf5b9bf2567478c113cf38bb6d0c71a4fa580e7e52bd92026c5c98c258b2",
+  "marker_curvature_comparison_sha256": "169a2ac11f65f815d75ba84eb6c588693d19971aa524e4b619a34d27a0fb8715",
+  "marker_curvature_summary_sha256": "cd7598043724a79b2bd2f43deac83537319bffc9117f649c92298751236a5a83",
+  "mesh_refinement_summary_sha256": "964fa735d541f5674285fb31aca6053e414b516d579e0b7e41bc5b8cd6286659",
+  "free_rotation_profile_sha256": "e74e8d9873366c07d6ab9da5a989c9dd49737d3d368843358f3aff69d4c0407a",
+  "ideal_clamp_profile_sha256": "144c87e7b3c56b8bc5f9a0eae90af24620f004ad102092d40dc8dd9c00fcfb0d"
+}
