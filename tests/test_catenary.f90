@@ -232,7 +232,8 @@ CONTAINS
             CALL ref_newton(1, p, prm, ok)
             CALL require(ok .AND. p(2) > 0.0_wp .AND. p(2) < ls(j), 'sweep:exact-grounded-root')
           ELSE
-            p = [h, 0.0_wp]
+            ! Start the anchor vertical force from the straight-chord estimate H*Z/X - wL/2.
+            p = [h, MAX(0.0_wp, h*100.0_wp/xs(i) - 0.5_wp*1000.0_wp*ls(j))]
             CALL ref_newton(2, p, prm, ok)
             CALL require(ok .AND. p(2) >= -1.0e-9_wp*1000.0_wp*ls(j), 'sweep:exact-uplift-nonnegative')
           END IF
@@ -501,7 +502,14 @@ CONTAINS
         ok = .TRUE.; RETURN
       END IF
       DO c = 1, 2
-        pp = p; pp(c) = pp(c) + 1.0e-7_wp*MAX(1.0_wp, ABS(p(c)))
+        ! Both unknowns of the suspended form are forces: a difference step scaled to the
+        ! anchor vertical force alone (zero at the start) is lost in round-off against H.
+        pp = p
+        IF (kind == 2) THEN
+          pp(c) = pp(c) + 1.0e-7_wp*MAX(1.0_wp, ABS(p(1)), ABS(p(2)))
+        ELSE
+          pp(c) = pp(c) + 1.0e-7_wp*MAX(1.0_wp, ABS(p(c)))
+        END IF
         CALL ref_residual(kind, pp, prm, rp)
         jac(:, c) = (rp - r)/(pp(c) - p(c))
       END DO
@@ -509,6 +517,12 @@ CONTAINS
       dp = -[jac(2, 2)*r(1) - jac(1, 2)*r(2), -jac(2, 1)*r(1) + jac(1, 1)*r(2)]/det
       lam = 1.0_wp
       DO WHILE (p(1) + lam*dp(1) <= 0.0_wp .AND. lam > 1.0e-6_wp)
+        lam = 0.5_wp*lam
+      END DO
+      ! Accept only a step that reduces the residual.
+      DO WHILE (lam > 1.0e-6_wp)
+        CALL ref_residual(kind, p + lam*dp, prm, rp)
+        IF (nan_max_abs(rp) < nrm) EXIT
         lam = 0.5_wp*lam
       END DO
       p = p + lam*dp
