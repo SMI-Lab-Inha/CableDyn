@@ -189,6 +189,8 @@ epub_author = author
 epub_publisher = author
 epub_copyright = project_copyright
 epub_show_urls = "footnote"
+# sphinx.ext.githubpages writes .nojekyll, which has no EPUB media type.
+epub_exclude_files = [".nojekyll"]
 
 # Copy-button: strip shell/REPL prompts when copying code blocks.
 copybutton_prompt_text = r">>> |\.\.\. |\$ |PS [^>]*> "
