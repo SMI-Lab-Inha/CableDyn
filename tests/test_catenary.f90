@@ -245,6 +245,9 @@ CONTAINS
           END DO
           CALL require(err < 1.0e-6_wp, 'sweep:nodes-on-exact-catenary')
           CALL require(MINVAL(pos(3::3)) >= -100.0_wp - 1.0e-9_wp, 'sweep:no-seabed-penetration')
+          IF (.NOT. ok .OR. ABS(h - p(1)) > 1.0e-8_wp*p(1) .OR. .NOT. (err < 1.0e-6_wp)) &
+            WRITE (*, '(A,3I2,3ES24.16)') 'sweep case (i, j, k), seed H, reference H, node error:', &
+            i, j, k, h, p(1), err
         END DO
       END DO
     END DO
@@ -509,6 +512,13 @@ CONTAINS
         lam = 0.5_wp*lam
       END DO
       p = p + lam*dp
+      ! A step at round-off has converged even when the residual floor of the closed forms
+      ! (which varies with the platform's libm) sits just above tol.
+      IF (ALL(ABS(lam*dp) <= 1.0e-13_wp*MAX(1.0_wp, ABS(p)))) THEN
+        CALL ref_residual(kind, p, prm, r)
+        ok = nan_max_abs(r) < 1.0e3_wp*tol
+        RETURN
+      END IF
     END DO
   END SUBROUTINE ref_newton
 

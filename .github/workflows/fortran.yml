@@ -81,4 +81,5 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Test (CTest)
-        run: ctest --test-dir build --output-on-failure
+        # The tests are parallel-safe; resource-heavy ones reserve processors.
+        run: ctest --test-dir build --output-on-failure --parallel 4
