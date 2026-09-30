@@ -16,7 +16,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("cabledyn._lib")  # loads the shared library or skips
+try:
+    import cabledyn._lib  # loads the shared library
+except (ImportError, OSError) as exc:  # a missing library raises OSError
+    pytest.skip(f"CableDyn shared library not available: {exc}", allow_module_level=True)
 
 import cabledyn
 from cabledyn import _lib
@@ -192,7 +195,7 @@ def test_windows_dependency_directories_are_registered_before_loading(monkeypatc
     library.write_bytes(b"")
     (tmp_path / "build" / "runtime").mkdir()
     monkeypatch.setenv("CABLEDYN_LIBRARY", str(library))
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(os, "add_dll_directory", registered.append, raising=False)
     _load_private_lib_copy(monkeypatch, lambda path: _FakeLibrary(_lib.SUPPORTED_ABI))
     assert [Path(item) for item in registered] == [library.parent, tmp_path / "build" / "runtime"]

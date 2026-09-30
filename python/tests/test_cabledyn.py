@@ -19,7 +19,10 @@ import numpy as np
 import pytest
 
 cabledyn = pytest.importorskip("cabledyn")
-pytest.importorskip("cabledyn._lib")  # loads the shared library
+try:
+    import cabledyn._lib  # loads the shared library
+except (ImportError, OSError) as exc:  # a missing library raises OSError
+    pytest.skip(f"CableDyn shared library not available: {exc}", allow_module_level=True)
 
 REPO = Path(__file__).resolve().parent.parent.parent
 VOLTURNUS_DECK = REPO / "examples" / "iea15mw_volturnus_mooring.dat"

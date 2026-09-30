@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from ctypes import (
     POINTER,
     c_bool,
@@ -37,7 +38,7 @@ _dll_dir_handles: list[object] = []
 
 def _load() -> tuple[ctypes.CDLL, Path]:
     path = find_library()
-    if os.name == "nt":
+    if sys.platform == "win32":
         # The solver DLL depends on toolchain runtimes (libgfortran, OpenBLAS).
         # Python ignores PATH for dependent DLLs, so register their directories.
         for directory in dependency_directories(path):

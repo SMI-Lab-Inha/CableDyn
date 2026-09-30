@@ -17,7 +17,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("cabledyn._lib")  # loads the shared library or skips
+try:
+    import cabledyn._lib  # loads the shared library
+except (ImportError, OSError) as exc:  # a missing library raises OSError
+    pytest.skip(f"CableDyn shared library not available: {exc}", allow_module_level=True)
 
 import cabledyn
 from cabledyn import _lib

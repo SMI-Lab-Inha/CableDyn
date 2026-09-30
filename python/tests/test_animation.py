@@ -248,7 +248,10 @@ def test_animate_draws_every_frame(tmp_path):
 
 
 def _model_or_skip():
-    pytest.importorskip("cabledyn._lib")
+    try:
+        import cabledyn._lib  # noqa: F401  (loads the shared library)
+    except (ImportError, OSError) as exc:  # a missing library raises OSError
+        pytest.skip(f"CableDyn shared library not available: {exc}")
     from cabledyn.model import CableDyn
 
     return CableDyn
