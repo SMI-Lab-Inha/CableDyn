@@ -8,6 +8,9 @@ commit. Tags have the form `vMAJOR.MINOR.PATCH`; CableDyn follows semantic
 versioning and stays below `1.0.0` while its interfaces may change. Build and test
 details are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
+Work for the next release collects on `dev`. To release, merge `dev` into `main` and run
+this procedure on the resulting `main` commit.
+
 ## 1. Set and check the release metadata
 
 Update the version and date in `CHANGELOG.md`, `CMakeLists.txt`, the Fortran banner
@@ -154,7 +157,7 @@ Before the first release is published from a new GitHub repository:
 - [ ] **Actions**: allow GitHub-hosted runners; the workflows need no secrets
       beyond the automatic `GITHUB_TOKEN`, and only the release job writes
       (`contents: write`).
-- [ ] **Branch protection** on `main`: require pull requests, the `fortran` and
+- [ ] **Branch protection** on `main` and `dev`: require pull requests, the `fortran` and
       `python` workflow checks, and linear history.
 - [ ] **Read the Docs**: import the repository as project `cabledyn`, build
       `latest` and the release tag, and check the badge in the README.

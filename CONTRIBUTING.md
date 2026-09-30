@@ -51,13 +51,15 @@ and the OpenFAST build are described in
 
 ## Pull requests
 
-1. Fork the repository and branch from `main` with a descriptive name
+`main` holds the released code; new work collects on `dev` until the next release.
+
+1. Fork the repository and branch from `dev` with a descriptive name
    (`fix/<topic>`, `feat/<topic>`, `docs/<topic>`, `test/<topic>`, `perf/<topic>`,
    `ci/<topic>`).
 2. Keep each pull request to one change. Add or update tests for it.
 3. Run `pre-commit run --all-files` and the test suite (see
    [DEVELOPMENT.md](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/DEVELOPMENT.md)).
-4. Open the pull request against `main` with a
+4. Open the pull request against `dev` with a
    [Conventional Commits](https://www.conventionalcommits.org) title and complete
    the template.
 5. CI must pass and a maintainer must approve before merge. Pull requests are

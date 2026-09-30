@@ -4,7 +4,7 @@ name: python
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'python/**'
       - 'CMakeLists.txt'
@@ -29,7 +29,7 @@ on:
       - '*.md'
       - '.github/workflows/python.yml'
   pull_request:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'python/**'
       - 'CMakeLists.txt'

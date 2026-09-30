@@ -11,9 +11,9 @@ name: fortran
 # validation-record, and integration checks, so any change in the tree can affect it.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 concurrency:
   group: fortran-${{ github.workflow }}-${{ github.ref }}
