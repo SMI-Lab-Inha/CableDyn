@@ -30,6 +30,7 @@ PROGRAM test_catenary
   CALL case_suspended_exact()
   CALL case_vertical()
   CALL case_near_neutral_continuity()
+  CALL case_neutral_taut()
   CALL case_elevated_anchor()
   CALL case_sloped_bed()
 
@@ -40,6 +41,35 @@ PROGRAM test_catenary
   WRITE (*, '(A)') 'PASS: CableDyn_Catenary seed matches the independent reference values'
 
 CONTAINS
+
+  SUBROUTINE case_neutral_taut()
+    !! A neutrally buoyant taut line (the clamped-cable energy deck) carries a round-off
+    !! weight whose sign depends on the platform. Zero, tiny positive and tiny negative
+    !! weights must all seed the straight chord with the closed-form uniform tension.
+    INTEGER, PARAMETER :: n = 20
+    REAL(wp) :: lens(n), eav(n), wv(n), pos(3*(n + 1)), h, gl, chord, t_exact, dev
+    REAL(wp) :: wtiny(3) = [0.0_wp, 3.0e-14_wp, -3.0e-14_wp]
+    INTEGER  :: k, es, node
+    CHARACTER(160) :: em
+    lens = 1.0_wp; eav = 1.0e6_wp
+    chord = 20.1_wp
+    t_exact = (chord - 20.0_wp)/SUM(lens/eav)
+    DO k = 1, 3
+      wv = wtiny(k)
+      CALL CD_Catenary_Seed([1.0_wp, 0.0_wp, -50.0_wp], [21.1_wp, 0.0_wp, -50.0_wp], lens, eav, wv, &
+                            pos, h, gl, es, em, seabed_z=-200.0_wp)
+      CALL require(es == CD_CAT_OK, 'neutral-taut:seed-ok')
+      IF (es /= CD_CAT_OK) CYCLE
+      CALL require(ABS(h - t_exact) <= 1.0e-10_wp*t_exact .AND. .NOT. (ABS(gl) > 0.0_wp), &
+                   'neutral-taut:uniform-tension')
+      dev = 0.0_wp
+      DO node = 1, n + 1
+        dev = MAX(dev, ABS(pos(3*node - 1)), ABS(pos(3*node) + 50.0_wp))
+      END DO
+      CALL require(dev < 1.0e-12_wp, 'neutral-taut:straight-chord')
+      CALL require(ABS(pos(3*n + 1) - 21.1_wp) < 1.0e-12_wp, 'neutral-taut:endpoint-closed')
+    END DO
+  END SUBROUTINE case_neutral_taut
 
   INCLUDE 'nan_max_abs.inc'
 

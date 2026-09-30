@@ -799,9 +799,15 @@ set_tests_properties(l3_lazywave_fullcable PROPERTIES
 add_executable(test_static_init_sweep tests/test_static_init_sweep.f90)
 target_link_libraries(test_static_init_sweep PRIVATE cabledyn_core)
 add_test(NAME static_init_sweep COMMAND test_static_init_sweep WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+# The hang guard allows for a checked Debug build, about ten times slower than Release.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(_static_init_sweep_timeout 5400)
+else()
+  set(_static_init_sweep_timeout 900)
+endif()
 set_tests_properties(static_init_sweep PROPERTIES
                      LABELS "fortran;hermite;static;robustness;slow"
-                     TIMEOUT 900)
+                     TIMEOUT ${_static_init_sweep_timeout})
 
 # L3-6e: OUT-OF-PLANE (3D) dynamic lazy-wave -- the committed dynamic gates are planar;
 # this one frees the y DOFs and drives the 80 m hang-off with an elliptical heave+sway

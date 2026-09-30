@@ -6,6 +6,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The static solve of a taut, neutrally buoyant finite-EI line (mass per length equal to
+  the displaced mass) no longer depends on the sign of the round-off weight: a line whose
+  total weight is below 1e-12 of its axial stiffness is seeded as a straight, uniformly
+  stretched line. Previously the catenary seed could fail to close on some platforms.
+
 ## [0.1.0] - 2026-10-01
 
 First public release. Deck keywords, Python interfaces, and the C ABI are

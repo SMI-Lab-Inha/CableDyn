@@ -106,9 +106,9 @@ CONTAINS
     INTEGER  :: n_elem, n_nodes, i
     REAL(wp) :: hdelta(2), hdir(2), hspan, rise, total_length, scale, h_a, slope, l_fold
     REAL(wp) :: h_asc, h_desc, v_a, s_d, g, x_td, z_td, x_end, z_end, endpoint_err
-    REAL(wp) :: p2(2), p3(3)
+    REAL(wp) :: p2(2), p3(3), chord, t_straight, arc
     REAL(wp), ALLOCATABLE :: xloc(:), zloc(:)
-    LOGICAL  :: ok, hang, any_buoyant, elevated, valid, flat
+    LOGICAL  :: ok, hang, any_buoyant, elevated, valid, flat, weightless
 
     ErrStat = CD_CAT_OK
     ErrMsg = ''
@@ -173,7 +173,11 @@ CONTAINS
     ALLOCATE (xloc(n_nodes), zloc(n_nodes))
     hdir = [CD_ONE, CD_ZERO]
 
-    IF (.NOT. ANY(ABS(weight) > CD_ZERO) .AND. total_length > HYPOT(hspan, rise)) THEN
+    ! A neutrally buoyant line (mass per length equal to the displaced mass) carries a
+    ! round-off weight whose sign depends on the platform; below 1e-12 of the axial
+    ! stiffness it cannot shape the line, and the weight-scaled closure is ill-posed.
+    weightless = SUM(ABS(weight)*lengths) <= 1.0e-12_wp*MINVAL(ea)
+    IF (weightless .AND. total_length > HYPOT(hspan, rise)) THEN
       ! A weightless line is straight in every equilibrium; a slack one has no shape.
       ErrStat = CD_CAT_NOSEED
       ErrMsg = 'CD_Catenary_Seed: a weightless line longer than its chord has no catenary seed'
@@ -188,6 +192,21 @@ CONTAINS
         RETURN
       END IF
       xloc = CD_ZERO
+    ELSE IF (weightless) THEN
+      ! --- weightless taut line: straight along the chord, uniform tension ---
+      hdir = hdelta/hspan
+      chord = HYPOT(hspan, rise)
+      t_straight = (chord - total_length)/SUM(lengths/ea)
+      arc = CD_ZERO
+      xloc(1) = CD_ZERO
+      zloc(1) = CD_ZERO
+      DO i = 1, n_elem
+        arc = arc + lengths(i)*(CD_ONE + t_straight/ea(i))
+        xloc(i + 1) = arc/chord*hspan
+        zloc(i + 1) = arc/chord*rise
+      END DO
+      horizontal_tension = t_straight*hspan/chord
+      grounded_length = CD_ZERO
     ELSE
       hdir = hdelta/hspan
       ! With non-negative weight the line is a convex curve z(x) above the bed and below
