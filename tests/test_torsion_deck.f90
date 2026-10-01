@@ -23,7 +23,9 @@
 !>  8. a body rolling about a twisted line oscillates at sqrt(GJ / (L I)), the connection moment
 !>     being the torque along the line axis at every step;
 !>  9. static body/cable torsion coupling with no yaw restoring and with a yaw stiffness of the
-!>     order of GJ/L: the passes converge and the body moment balances to 1e-8.
+!>     order of GJ/L: the passes converge and the body moment balances to 1e-8;
+!> 10. gate 8 with a bending-pinned End A on the turning body (torsion restrained, the
+!>     semi-tangential end): the same torsional pendulum and connection moment.
 PROGRAM test_torsion_deck
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Conventions, ONLY: CD_Body_Rotation
@@ -57,7 +59,8 @@ PROGRAM test_torsion_deck
   IF (only == 0 .OR. only == 5) CALL check_body_statics()
   IF (only == 0 .OR. only == 6) CALL check_errors()
   IF (only == 0 .OR. only == 7) CALL check_dynamic_roll()
-  IF (only == 0 .OR. only == 8) CALL check_body_roll_dynamics()
+  IF (only == 0 .OR. only == 8) CALL check_body_roll_dynamics('Rigid')
+  IF (only == 0 .OR. only == 10) CALL check_body_roll_dynamics('Pinned')
   IF (only == 0 .OR. only == 9) CALL check_body_yaw_statics()
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' torsion deck gate(s) failed'
@@ -587,39 +590,44 @@ CONTAINS
   END SUBROUTINE insert_option
 
   ! ------------------------------------------------------------------------------------------
-  SUBROUTINE check_body_roll_dynamics()
+  SUBROUTINE check_body_roll_dynamics(bend)
     !! 8. A Rigid6 body (translation massive, rotational inertia I) holding a straight, taut line
     !!    twisted by one turn at its reference point, released with a small roll rate w0 about the
     !!    line axis: the line's torsion is the only roll stiffness, k = GJ/L, and nothing else holds
     !!    the twist, so the body is a torsional pendulum about the untwisted state: the torque is
     !!    M0 cos(Omega t) - sqrt(k I) w0 sin(Omega t), Omega = sqrt(k / I) (no torsional inertia in
     !!    the line), while the body turns through two turns and back; at every step the connection
-    !!    moment on the body is the torque along the line axis.
+    !!    moment on the body is the torque along the line axis. bend is End A's bending
+    !!    connection: Rigid (gate 8) or Pinned (gate 10; the torsion frame still turns with the body).
+    CHARACTER(*), INTENT(IN) :: bend
     REAL(wp), PARAMETER :: MB = 1.0e9_wp, IB = 1.0e3_wp, GJ = 5.0e4_wp, LN = 20.0_wp, W0 = 0.05_wp
     INTEGER, PARAMETER :: NSTEP = 400
     REAL(wp), ALLOCATABLE :: rec(:, :)
     REAL(wp) :: dg(3), anchor(3), v(2), m0, omega, amp, t, err_axis, err_wave, mt, dk(3), rk(3, 3), kt
-    CHARACTER(256) :: brow, pb, cb
+    CHARACTER(256) :: brow, pb, cb, ca
+    CHARACTER(64) :: root
     LOGICAL :: ok
     CHARACTER(512) :: em
     INTEGER :: k
+    root = 'tdeck_broll_'//bend
+    ca = '1 A '//bend//' 0.8 0 -0.6 Rigid 0 1 0 0'
     dg = [0.8_wp, 0.0_wp, -0.6_wp]
     anchor = [0.0_wp, 0.0_wp, -60.0_wp] + (LN*1.0001_wp)*dg
     WRITE (brow, '(A,ES24.16,A,ES24.16,A,3ES12.4)') '1 Rigid6 0 0 -60 0 0 0 ', MB, ' ', MB/RHOW, &
       ' 0 0 0 0 0 ', IB, IB, IB
     WRITE (pb, '(A,3ES24.16,A)') '2 Fixed ', anchor, ' 0 0 0 0'
     WRITE (cb, '(A,3ES24.16,A)') '1 B Rigid ', dg, ' Rigid 0 1 0 360'
-    CALL write_deck('tdeck_broll.dat', [neutral_type], [brow], &
+    CALL write_deck(TRIM(root)//'.dat', [neutral_type], [brow], &
                     [CHARACTER(96) :: '1 Body1 0 0 0 0 0 0 0', pb], [CHARACTER(16) :: '1 1 2 -'], &
                     [CHARACTER(24) :: '1 cab 20.0 20'], &
-                    [CHARACTER(256) :: '1 A Rigid 0.8 0 -0.6 Rigid 0 1 0 0', cb], &
+                    [ca, cb], &
                     [CHARACTER(24) :: '200.0 WtrDpth', 'moordyn bodyWetting', '0.01 dtM', '4.0 TMax', 'deck bodyIC'], &
                     [CHARACTER(12) :: 'Torq1N1'])
     CALL CD_Multibody_Probe_Arm([0.0_wp, 0.0_wp, 0.0_wp], W0*dg)
-    CALL run_deck('tdeck_broll.dat', 'tdeck_broll', ok, em)
+    CALL run_deck(TRIM(root)//'.dat', TRIM(root), ok, em)
     CALL CD_Multibody_Probe_Get(rec)
     ok = ok .AND. ALLOCATED(rec)
-    CALL require(ok, '8: the rolling-body deck runs and is probed: '//TRIM(em))
+    CALL require(ok, '8/10: the rolling-body deck ('//bend//' End A) runs and is probed: '//TRIM(em))
     IF (.NOT. ok) RETURN
     kt = GJ/LN
     m0 = kt*2.0_wp*PI
@@ -628,7 +636,7 @@ CONTAINS
     err_axis = 0.0_wp
     err_wave = 0.0_wp
     DO k = 0, NSTEP
-      CALL read_row('tdeck_broll.out', k, v, ok)
+      CALL read_row(TRIM(root)//'.out', k, v, ok)
       IF (.NOT. ok) EXIT
       t = v(1)
       mt = v(2)
@@ -637,11 +645,12 @@ CONTAINS
       err_axis = MAX(err_axis, NORM2(rec(24:26, k) - mt*dk)/m0)
       err_wave = MAX(err_wave, ABS(mt - (m0*COS(omega*t) - amp*SIN(omega*t)))/m0)
     END DO
-    CALL require(ok, '8: all output rows readable')
-    WRITE (*, '(A,ES10.3,A,ES10.3,A,F8.4,A)') 'body roll dynamics: moment-axis error ', err_axis, &
-      ', torque vs M0 cos(Omega t) - sqrt(k I) w0 sin(Omega t) ', err_wave, ' of M0 (Omega = ', omega, ' rad/s)'
-    CALL require(err_axis <= 1.0e-6_wp, '8: the connection moment on the body is the torque along the axis')
-    CALL require(err_wave <= 1.0e-2_wp, '8: the body swings as a torsional pendulum at sqrt(GJ/(L I))')
+    CALL require(ok, '8/10: all output rows readable')
+    WRITE (*, '(A,A,A,ES10.3,A,ES10.3,A,F8.4,A)') 'body roll dynamics (', bend, ' End A): moment-axis error ', &
+      err_axis, ', torque vs M0 cos(Omega t) - sqrt(k I) w0 sin(Omega t) ', err_wave, ' of M0 (Omega = ', omega, &
+      ' rad/s)'
+    CALL require(err_axis <= 1.0e-6_wp, '8/10: the connection moment on the body is the torque along the axis')
+    CALL require(err_wave <= 1.0e-2_wp, '8/10: the body swings as a torsional pendulum at sqrt(GJ/(L I))')
   END SUBROUTINE check_body_roll_dynamics
 
   ! ------------------------------------------------------------------------------------------
@@ -807,6 +816,72 @@ CONTAINS
     CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'not yet supported in coupled OpenFAST runs') > 0, &
                  'the coupled single-cable entry refuses torsion by name (got: '//TRIM(em)//')')
     CALL CD_HFMF_End(cab)
+    CALL check_scope_refusals()
   END SUBROUTINE check_errors
+
+  SUBROUTINE write_lines(path, rows)
+    CHARACTER(*), INTENT(IN) :: path, rows(:)
+    INTEGER :: u, i
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    DO i = 1, SIZE(rows)
+      WRITE (u, '(A)') TRIM(rows(i))
+    END DO
+    CLOSE (u)
+  END SUBROUTINE write_lines
+
+  SUBROUTINE check_scope_refusals()
+    !! 6 (continued). Torsion outside its scope stops by name: End A on a rod end, End A on a
+    !! Point3 body, and a torsional line carrying ATTACHMENTS.
+    CHARACTER(120) :: tail(9), ty(4)
+    ty(1) = '--- LINE TYPES ---'
+    ty(2) = 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+    ty(3) = '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    ty(4) = 'cab 0.2 60.0 1.0e9 0.0 1.0e5 1.0e8 1.0e4 1.0 1.0 1.2 0.0 1.0 0.0'
+    tail(1) = '--- SECTIONS ---'
+    tail(2) = 'LineID LineType Length NumSegs'
+    tail(3) = '(-) (-) (m) (-)'
+    tail(4) = '1 cab 100.0 40'
+    tail(5) = '--- OPTIONS ---'
+    tail(6) = '0.1 dtM'
+    tail(7) = '1.0 TMax'
+    tail(8) = '--- OUTPUTS ---'
+    tail(9) = '--- END ---'
+    ! End A on a rod end
+    CALL write_lines('tdeck_s1.dat', [CHARACTER(120) :: 'torsion scope', ty, '--- ROD TYPES ---', &
+                                      'Name Diam Mass Cd Ca CdEnd CaEnd', '(-) (m) (kg/m) (-) (-) (-) (-)', &
+                                      'arm 0.6 400.0 1.0 1.0 0.0 0.0', '--- RODS ---', &
+                                      'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs', &
+                                     '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)', '1 arm Fixed 0 0 -40 0 0 -50 4 -', &
+                          '--- POINTS ---', 'ID Type X Y Z Mass Vol CdA Ca', '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)', &
+                      '2 Fixed 100.0 0.0 -50.0 0 0 0 0', '--- LINES ---', 'ID NodeA NodeB Outputs', '(-) (-) (-) (-)', &
+                                      '1 R1B 2 -', tail(1:4), '--- END CONNECTIONS ---', &
+                                      'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist', &
+                        '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)', '1 A Rigid 0 0 -1 Rigid 1 0 0 0', &
+                                      '1 B Rigid 1 0 0 Rigid 0 0 1 0', tail(5:9)])
+    CALL expect_error('a torsional end on a rod is named', 'tdeck_s1.dat', 'tdeck_s1', 'on a rod end is not supported')
+    ! End A on a Point3 body
+    CALL write_lines('tdeck_s2.dat', [CHARACTER(120) :: 'torsion scope', ty, '--- BODIES ---', &
+                                      'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca', &
+                                      '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm) (Nm) (m2) (-)', &
+                                      '1 Point3 0 0 -50 0 0 0 1000.0 1.0 0 0 0 0 0', &
+                          '--- POINTS ---', 'ID Type X Y Z Mass Vol CdA Ca', '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)', &
+                                      '1 Body1 0 0 0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0', '--- LINES ---', &
+                         'ID NodeA NodeB Outputs', '(-) (-) (-) (-)', '1 1 2 -', tail(1:4), '--- END CONNECTIONS ---', &
+                                      'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist', &
+                        '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)', '1 A Pinned 1 0 0 Rigid 0 0 1 0', &
+                                      '1 B Rigid 1 0 0 Rigid 0 0 1 0', tail(5:9)])
+    CALL expect_error('a torsional end on a Point3 body is named', 'tdeck_s2.dat', 'tdeck_s2', 'needs a Rigid6 body')
+    ! a torsional line with ATTACHMENTS
+    CALL write_lines('tdeck_s3.dat', [CHARACTER(120) :: 'torsion scope', ty, '--- POINTS ---', &
+                                      'ID Type X Y Z Mass Vol CdA Ca', '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)', &
+                                '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0', '--- LINES ---', &
+                             'ID NodeA NodeB Outputs', '(-) (-) (-) (-)', '1 1 2 -', tail(1:4), '--- ATTACHMENTS ---', &
+                      'LineID ArcLength Mass Volume CdA Ca', '(-) (m) (kg) (m3) (m2) (-)', '1 50.0 100.0 0.1 0.1 1.0', &
+                     '--- END CONNECTIONS ---', 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist', &
+                         '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)', '1 A Rigid 1 0 0 Rigid 0 0 1 0', &
+                                      '1 B Rigid 1 0 0 Rigid 0 0 1 0', tail(5:9)])
+    CALL expect_error('a torsional line with ATTACHMENTS is named', 'tdeck_s3.dat', 'tdeck_s3', &
+                      'not combined with ATTACHMENTS')
+  END SUBROUTINE check_scope_refusals
 
 END PROGRAM test_torsion_deck
