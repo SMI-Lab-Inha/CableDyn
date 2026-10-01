@@ -22,6 +22,8 @@
 !>     line axis give Twist<L> = -roll and the quasi-static torque at every step;
 !>  8. a body rolling about a twisted line oscillates at sqrt(GJ / (L I)), the connection moment
 !>     being the torque along the line axis at every step;
+!>  9. static body/cable torsion coupling with no yaw restoring and with a yaw stiffness of the
+!>     order of GJ/L: the passes converge and the body moment balances to 1e-8.
 PROGRAM test_torsion_deck
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Conventions, ONLY: CD_Body_Rotation
@@ -42,7 +44,7 @@ PROGRAM test_torsion_deck
   WRITE (neutral_type, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, &
     ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
 
-  ! optional argument: run only gate 1..8 (diagnostics)
+  ! optional argument: run only gate 1..9 (diagnostics)
   only = 0
   IF (COMMAND_ARGUMENT_COUNT() > 0) THEN
     CALL GET_COMMAND_ARGUMENT(1, arg)
@@ -56,6 +58,7 @@ PROGRAM test_torsion_deck
   IF (only == 0 .OR. only == 6) CALL check_errors()
   IF (only == 0 .OR. only == 7) CALL check_dynamic_roll()
   IF (only == 0 .OR. only == 8) CALL check_body_roll_dynamics()
+  IF (only == 0 .OR. only == 9) CALL check_body_yaw_statics()
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' torsion deck gate(s) failed'
     ERROR STOP 1
@@ -641,6 +644,80 @@ CONTAINS
     CALL require(err_wave <= 1.0e-2_wp, '8: the body swings as a torsional pendulum at sqrt(GJ/(L I))')
   END SUBROUTINE check_body_roll_dynamics
 
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE yaw_deck(path, legs)
+    !! A buoyant Rigid6 body (no yaw restoring) held down by a vertical twisted finite-EI cable
+    !! clamped at its keel and at an anchor below, both ends restrained in torsion with 90 deg
+    !! of pretwist at the anchor, TMax 0, bodyIC static; legs > 0 adds two vertical EI = 0 legs
+    !! at +-legs m from the keel (yaw stiffness ~ 2 T legs**2 / L).
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: legs
+    CHARACTER(64) :: pts(6)
+    CHARACTER(16) :: lns(3)
+    CHARACTER(24) :: secs(3)
+    INTEGER :: np
+    pts(1) = '1 Body1 0.0 0.0 -2.0 0 0 0 0'
+    pts(2) = '2 Fixed 0.0 0.0 -100.0 0 0 0 0'
+    lns(1) = '1 1 2 -'
+    secs(1) = '1 cab 77.97 40'
+    np = 2
+    IF (legs > 0.0_wp) THEN
+      WRITE (pts(3), '(A,F6.2,A)') '3 Body1 ', legs, ' 0.0 -2.0 0 0 0 0'
+      WRITE (pts(4), '(A,F6.2,A)') '4 Body1 ', -legs, ' 0.0 -2.0 0 0 0 0'
+      WRITE (pts(5), '(A,F6.2,A)') '5 Fixed ', legs, ' 0.0 -100.0 0 0 0 0'
+      WRITE (pts(6), '(A,F6.2,A)') '6 Fixed ', -legs, ' 0.0 -100.0 0 0 0 0'
+      lns(2) = '2 3 5 -'
+      lns(3) = '3 4 6 -'
+      secs(2) = '2 poly 77.9 20'
+      secs(3) = '3 poly 77.9 20'
+      np = 6
+    END IF
+    CALL write_deck(path, [CHARACTER(96) :: 'poly 0.12 15.0 5.0e7 -1.0 0.0 1.0e6 1.0 1.0 1.0 1.2 0.2 1.0 0.0', &
+                           'cab 0.2 60.0 5.0e8 -1.0 2.0e4 1.0e8 1.0e4 1.0 1.0 1.2 0.0 1.0 0.0'], &
+                    [CHARACTER(96) :: '1 Rigid6 0 0 -20 0 0 0 2.0e4 40.0 0.0 2.0e6 2.0e6 8.0 0.5 3.5e4 3.5e4 3.5e4'], &
+                    pts(1:np), lns(1:np/2), secs(1:np/2), &
+                    [CHARACTER(96) :: '1 A Rigid 0 0 -1 Rigid 1 0 0 0', '1 B Rigid 0 0 -1 Rigid 1 0 0 90'], &
+                    [CHARACTER(24) :: '100.0 WtrDpth', '1.0e5 kBot', '1.0e4 cBot', '0.05 dtM', '0.0 TMax', &
+                     'static bodyIC'], &
+                    [CHARACTER(12) :: 'Body1Rz', 'Body1Mx', 'Body1My', 'Body1Mz', 'Torq1N1', 'Twist1'])
+  END SUBROUTINE yaw_deck
+
+  SUBROUTINE check_body_yaw_statics()
+    !! 9. Static body/cable torsion coupling for any ratio of the body's own restoring to GJ/L:
+    !!    (a) no yaw restoring at all (0 << GJ/L): the body yaws until the cable carries no torque;
+    !!    (b) two legs whose yaw stiffness is of the order of GJ/L: the twist is shared. In both the
+    !!    passes converge, Twist1 = 90 deg + body yaw (a straight vertical line: the yaw turns the
+    !!    End A frame about the line), and the static net moment on the body vanishes to 1e-8 of
+    !!    the untwisted torque GJ (pi/2) / L.
+    REAL(wp), PARAMETER :: M_REF = 1.0e4_wp*0.5_wp*PI/78.0_wp
+    REAL(wp) :: v(7), share
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: icase
+    DO icase = 1, 2
+      IF (icase == 1) THEN
+        CALL yaw_deck('tdeck_yaw.dat', 0.0_wp)
+      ELSE
+        CALL yaw_deck('tdeck_yaw.dat', 0.3_wp)
+      END IF
+      CALL run_deck('tdeck_yaw.dat', 'tdeck_yaw', ok, em)
+      CALL require(ok, '9: the yawing-body deck runs: '//TRIM(em))
+      IF (.NOT. ok) CYCLE
+      CALL read_row('tdeck_yaw.out', 0, v, ok)
+      CALL require(ok, '9: output readable')
+      share = v(7)/90.0_wp
+      WRITE (*, '(A,I0,A,F10.5,A,F10.5,A,ES10.3,A,ES11.3,A,F7.4)') 'body yaw statics (', icase, '): yaw ', v(2), &
+        ' deg, Twist1 ', v(7), ' deg, |net moment| ', NORM2(v(3:5))/M_REF, ' of GJ Phi/L, Torq ', v(6), &
+        ', cable share of the twist ', share
+      CALL require(ABS(v(7) - (90.0_wp + v(2))) <= 1.0e-5_wp, '9: Twist1 = 90 deg + body yaw')
+      CALL require(NORM2(v(3:5)) <= 1.0e-8_wp*M_REF, '9: static net moment on the body vanishes (1e-8)')
+      IF (icase == 1) THEN
+        CALL require(ABS(v(6)) <= 1.0e-8_wp*M_REF, '9a: without yaw restoring the cable ends untwisted')
+      ELSE
+        CALL require(share > 0.1_wp .AND. share < 0.9_wp, '9b: legs and cable share the twist (comparable stiffness)')
+      END IF
+    END DO
+  END SUBROUTINE check_body_yaw_statics
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE expect_error(label, path, root, needle)

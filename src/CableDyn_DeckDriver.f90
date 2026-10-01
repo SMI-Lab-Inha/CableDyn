@@ -19663,7 +19663,7 @@ CONTAINS
 
   SUBROUTINE solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                          ErrMsg, bathymetry, points_only, jac_check_err, ext_pt, ext_fm, &
-                                         end_force_a, quiet, skipped)
+                                         end_force_a, quiet, skipped, ext_km, ext_rot)
     !! Static equilibrium of the free objects of a deck: free Rigid6 bodies (six DOFs: position
     !! and a rotation-vector increment on SO(3)), free rods (position and the two rotations
     !! normal to the axis; the rod is symmetric about it) and, jointly with them, the
@@ -19730,6 +19730,11 @@ CONTAINS
     ! point ext_pt(e), the force ext_fm(1:3, e) at that point and the moment ext_fm(4:6, e).
     INTEGER, INTENT(IN), OPTIONAL :: ext_pt(:)
     REAL(wp), INTENT(IN), OPTIONAL :: ext_fm(:, :)
+    ! ... and a moment stiffness of the extra load (a finite-EI line's condensed torsion): with
+    ! the carrying body turned from the orientation ext_rot(:, :, e) by the rotation vector dw
+    ! (global axes), the moment ext_fm(4:6, e) becomes ext_fm(4:6, e) - ext_km(:, :, e) dw. The
+    ! central-difference own-load Jacobian carries it into the Newton step and the stability test.
+    REAL(wp), INTENT(IN), OPTIONAL :: ext_km(:, :, :), ext_rot(:, :, :)
     ! The end force every moving line exerts on its End A point at the solution (zero for a line
     ! that does not move), and quiet: no notes or completion line.
     REAL(wp), INTENT(OUT), OPTIONAL :: end_force_a(:, :)
@@ -20397,6 +20402,10 @@ CONTAINS
           IF (kk == 0) CYCLE
           fk(:, kk) = fk(:, kk) + ext_fm(1:3, es_l)
           mk(:, kk) = mk(:, kk) + cross3(pts(ext_pt(es_l))%pos - cen(:, kk), ext_fm(1:3, es_l)) + ext_fm(4:6, es_l)
+          IF (PRESENT(ext_km) .AND. PRESENT(ext_rot)) THEN
+            IF (okind(kk) == OBJ_BODY) mk(:, kk) = mk(:, kk) - MATMUL(ext_km(:, :, es_l), &
+                                                CD_Log_SO3(MATMUL(bds(idx(kk))%rot_eq, TRANSPOSE(ext_rot(:, :, es_l)))))
+          END IF
         END DO
       END IF
       good = .TRUE.
@@ -21163,7 +21172,12 @@ CONTAINS
     !! repeat from the deck state until these loads change by at most 1e-7 of the force scale
     !! (moments of the force scale times 1 m), so the converged pose balances the Hermite cable
     !! exactly: at the fixed point the core's surrogate end force cancels. A deck without such a
-    !! line is the core solve unchanged.
+    !! line is the core solve unchanged. A line with condensed torsion also returns its torque,
+    !! which depends on the object's rotation as strongly as GJ/L: each pass then also gives the
+    !! core the torque's moment stiffness (1/C) a a^T about the previous pass's pose (a = dTheta/dw
+    !! of the cable at that pose, its shape held; C the line torsional compliance), so the passes
+    !! converge whatever the ratio of the object's own restoring stiffness to GJ/L (the passes
+    !! alone would need it far above GJ/L), to 1e-10 of the force scale.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckBody), INTENT(INOUT) :: bodies(:)
     TYPE(DeckRodType), INTENT(IN) :: rod_types(:)
@@ -21178,15 +21192,16 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: points_only
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_check_err
     INTEGER, PARAMETER :: MAX_PASS = 60
-    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp
+    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp
     TYPE(DeckBody), ALLOCATABLE :: bodies0(:)
     TYPE(DeckRod), ALLOCATABLE :: rods0(:)
     TYPE(DeckPoint), ALLOCATABLE :: points0(:)
     INTEGER, ALLOCATABLE :: cl(:), ext_pt(:)
-    REAL(wp), ALLOCATABLE :: ext_fm(:, :), new_fm(:, :), fs(:, :)
+    REAL(wp), ALLOCATABLE :: ext_fm(:, :), new_fm(:, :), fs(:, :), ext_km(:, :, :), ext_rot(:, :, :)
+    REAL(wp), ALLOCATABLE :: new_km(:, :, :), new_rot(:, :, :)
     INTEGER :: j, pa, e, pass, ncl, eworst
     LOGICAL :: only_points, held
-    REAL(wp) :: scale, change
+    REAL(wp) :: scale, change, pass_tol_eff
     CHARACTER(24) :: b1
 
     ErrStat = CD_DECKDRV_OK
@@ -21226,23 +21241,33 @@ CONTAINS
     rods0 = rods
     points0 = points
     ALLOCATE (ext_pt(ncl), ext_fm(6, ncl), new_fm(6, ncl), fs(3, SIZE(lines)))
+    ALLOCATE (ext_km(3, 3, ncl), ext_rot(3, 3, ncl), new_km(3, 3, ncl), new_rot(3, 3, ncl))
+    pass_tol_eff = PASS_TOL
     DO e = 1, ncl
       ext_pt(e) = find_point(points, lines(cl(e))%nodeA)
+      IF (line_torsion_active(lines(cl(e)))) pass_tol_eff = PASS_TOL_TORSION
     END DO
     ext_fm = CD_ZERO
+    ext_km = CD_ZERO
+    ext_rot = CD_ZERO
+    DO e = 1, ncl
+      ext_rot(1, 1, e) = CD_ONE
+      ext_rot(2, 2, e) = CD_ONE
+      ext_rot(3, 3, e) = CD_ONE
+    END DO
     DO pass = 1, MAX_PASS
       bodies = bodies0
       rods = rods0
       points = points0
       CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                        ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                       quiet=pass > 1, skipped=held)
+                                       quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! the objects stay at their deck poses (the core has already said why): nothing to balance
       IF (held) RETURN
       scale = CD_ONE
       DO e = 1, ncl
-        CALL hermite_end_loads(cl(e), new_fm(:, e))
+        CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
         new_fm(1:3, e) = new_fm(1:3, e) - fs(:, cl(e))
         scale = MAX(scale, NORM2(fs(:, cl(e))), NORM2(new_fm(1:3, e) + fs(:, cl(e))))
@@ -21250,9 +21275,11 @@ CONTAINS
       change = MAXVAL(ABS(new_fm - ext_fm))
       eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
       ext_fm = new_fm
-      IF (change <= PASS_TOL*scale) EXIT
+      ext_km = new_km
+      ext_rot = new_rot
+      IF (change <= pass_tol_eff*scale) EXIT
     END DO
-    IF (change > PASS_TOL*scale) THEN
+    IF (change > pass_tol_eff*scale) THEN
       WRITE (b1, '(ES10.3)') change/scale
       CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the clamped or elastic END CONNECTION '// &
                       'of finite-EI LINE '//TRIM(int_to_str(lines(cl(eworst))%id))//' did not converge after '// &
@@ -21266,11 +21293,14 @@ CONTAINS
 
   CONTAINS
 
-    SUBROUTINE hermite_end_loads(jl, fm)
+    SUBROUTINE hermite_end_loads(jl, fm, km, rot)
       !! The cubic-Hermite static end force and connection moment of line jl on its End A object,
-      !! at the current (solved) object poses and point positions.
+      !! at the current (solved) object poses and point positions; for a line with condensed
+      !! torsion, km = (1/C) a a^T, the torque's moment stiffness against a rotation of the object
+      !! with the cable shape held (a = dTheta/dw: the End A frame turns, and a clamped end's
+      !! tangent with it), in global axes, and rot the object's orientation (km = 0 otherwise).
       INTEGER, INTENT(IN) :: jl
-      REAL(wp), INTENT(OUT) :: fm(6)
+      REAL(wp), INTENT(OUT) :: fm(6), km(3, 3), rot(3, 3)
       TYPE(CD_HFMF_ModuleType) :: cab
       TYPE(DeckLine) :: lnc
       TYPE(DeckPoint), ALLOCATABLE :: pc(:)
@@ -21279,8 +21309,10 @@ CONTAINS
       CHARACTER(512) :: note
       CHARACTER(300) :: em
       fm = CD_ZERO
+      km = CD_ZERO
       lnc = lines(jl)
       CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, check_axis=.FALSE.)
+      rot = rclamp
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       lnc%endconn_ez_ref(:, 1) = dclamp
       pc = points
@@ -21294,6 +21326,26 @@ CONTAINS
         CALL CD_HFMF_CalcOutput(cab, fm(1:3), es, em, y_moment=fm(4:6))
         IF (es /= CD_HFMF_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lnc%id))// &
                                               ' static end loads failed: '//TRIM(em))
+      END IF
+      IF (ErrStat == CD_DECKDRV_OK .AND. cab%line%torsion%active) THEN
+        BLOCK
+          REAL(wp) :: th, mt, eg(6), a(3), ag(3), cc
+          REAL(wp), ALLOCATABLE :: gq(:)
+          INTEGER :: nb
+          ALLOCATE (gq(cab%line%ndof))
+          CALL CD_HermiteCable_Dyn_Torsion_State(cab%line, th, mt, es, em, gq, eg)
+          IF (es == CD_HCDYN_OK) THEN
+            ! End A is the cable's last node (internal end 2)
+            a = eg(4:6)
+            IF (cab%line%endconn_mode(2) == CD_ENDCONN_RIGID) THEN
+              nb = cab%line%ndof - 3
+              a = a + cross3(cab%line%q(nb + 1:nb + 3), gq(nb + 1:nb + 3))
+            END IF
+            ag = [cab%frame_c*a(1) - cab%frame_s*a(2), cab%frame_s*a(1) + cab%frame_c*a(2), a(3)]
+            cc = CD_HermiteTorsion_Compliance(cab%line%torsion, cab%line%l0)
+            km = SPREAD(ag, 2, 3)*SPREAD(ag, 1, 3)/cc
+          END IF
+        END BLOCK
       END IF
       CALL CD_HFMF_End(cab)
     END SUBROUTINE hermite_end_loads
