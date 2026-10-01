@@ -43,6 +43,12 @@ MODULE CableDyn_HermiteTorsion
   PUBLIC :: CD_HermiteTorsion_Fold_Check
   PUBLIC :: CD_HermiteTorsion_Unwrap
   PUBLIC :: CD_HermiteTorsion_Accept
+  PUBLIC :: CD_HermiteTorsionType
+  PUBLIC :: CD_HermiteTorsion_Compliance
+  PUBLIC :: CD_HermiteTorsion_Validate
+  PUBLIC :: CD_HermiteTorsion_Bordered_Solve
+  PUBLIC :: CD_HermiteTorsion_Inertia
+  PUBLIC :: CD_HermiteTorsion_Lowest_Mode
 
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_OK = 0
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_BADINPUT = 1
@@ -61,8 +67,534 @@ MODULE CableDyn_HermiteTorsion
   REAL(wp), PARAMETER :: TWO_PI = 2.0_wp*CD_HTORS_PI
   REAL(wp), PARAMETER :: GEOM_TOL = 1.0e-12_wp
   REAL(wp), PARAMETER :: FRAME_TOL = 1.0e-8_wp
+  !! Normwise backward error accepted for a bordered (Sherman-Morrison) step.
+  REAL(wp), PARAMETER, PUBLIC :: CD_HTORS_BACKWARD_TOL = 1.0e-10_wp
+  !! Scaled eigenvalue magnitude below which one exact zero mode (rotation of a buckled shape
+  !! about a common clamp axis) is accepted as neutral, when the caller allows it.
+  REAL(wp), PARAMETER, PUBLIC :: CD_HTORS_ZERO_MODE_TOL = 1.0e-8_wp
+
+  TYPE :: CD_HermiteTorsionType
+    !! Condensed torsion of one line: inputs, the one persistent state value (the accepted,
+    !! unwrapped Theta) and the static stability report. Ends follow the solver's node order:
+    !! end 1 is node 1 and end 2 the last node (the kernel's A and B).
+    LOGICAL :: active = .FALSE.
+    !! Imposed relative roll of the end-2 frame with respect to the end-1 frame [rad]; real
+    !! valued, never wrapped (multiple turns are allowed).
+    REAL(wp) :: phi = CD_ZERO
+    !! Columns d_1, n_1, d_2, n_2 in the solve frame: unit end directors and unit reference
+    !! normals perpendicular to them.
+    REAL(wp) :: ends(3, 4) = CD_ZERO
+    !! Torsional end compliances 1/k_t [rad/(N m)] at ends 1 and 2 (0 for a rigid end).
+    REAL(wp) :: end_compliance(2) = CD_ZERO
+    !! Torsional stiffness GJ of every element [N m^2/rad] (the line compliance is the sum of
+    !! l0/GJ over the elements plus the end compliances).
+    REAL(wp), ALLOCATABLE :: gj(:)
+    INTEGER :: quadrature_order = 4
+    !! State: the accepted Theta (unwrapped) once has_theta; before that theta_hint selects the
+    !! 2 pi branch of the first evaluation (0 for an untwisted start).
+    LOGICAL :: has_theta = .FALSE.
+    REAL(wp) :: theta = CD_ZERO
+    REAL(wp) :: theta_hint = CD_ZERO
+    !! Torque M_t = (Phi - Theta)/C at the accepted state [N m]; positive is a right-handed twist.
+    REAL(wp) :: torque = CD_ZERO
+    !! Static controls: test the stability of every converged twist stage, leave an unstable
+    !! state by negative-curvature descent, and accept one exact zero mode (coaxial clamped
+    !! ends without gravity or current).
+    LOGICAL :: check_stability = .TRUE.
+    LOGICAL :: descend = .TRUE.
+    LOGICAL :: zero_mode_allowed = .FALSE.
+    !! Static report at the returned state: stability, negative-eigenvalue count of the tangent
+    !! on the free DOFs, the lowest Jacobi-scaled eigenvalue when it was computed (0 otherwise),
+    !! the total potential energy, the twist-continuation stage count and the descents taken.
+    LOGICAL :: stable = .FALSE.
+    INTEGER :: n_negative = 0
+    REAL(wp) :: lambda_min = CD_ZERO
+    REAL(wp) :: energy = CD_ZERO
+    INTEGER :: ramp_steps = 0
+    INTEGER :: descents = 0
+  END TYPE CD_HermiteTorsionType
 
 CONTAINS
+
+  ! ------------------------------------------------------------------------------------------
+  ! line torsion data
+  ! ------------------------------------------------------------------------------------------
+
+  PURE REAL(wp) FUNCTION CD_HermiteTorsion_Compliance(tors, l0) RESULT(c)
+    !! Line torsional compliance C = sum_e l0_e/GJ_e + 1/k_t1 + 1/k_t2 [rad/(N m)].
+    TYPE(CD_HermiteTorsionType), INTENT(IN) :: tors
+    REAL(wp), INTENT(IN) :: l0(:)
+    c = tors%end_compliance(1) + tors%end_compliance(2)
+    IF (ALLOCATED(tors%gj)) THEN
+      IF (SIZE(tors%gj) == SIZE(l0)) c = c + SUM(l0/tors%gj)
+    END IF
+  END FUNCTION CD_HermiteTorsion_Compliance
+
+  PURE SUBROUTINE CD_HermiteTorsion_Validate(tors, l0, ErrStat, ErrMsg)
+    !! Fail-closed check of an active torsion description against a mesh of SIZE(l0) elements.
+    TYPE(CD_HermiteTorsionType), INTENT(IN) :: tors
+    REAL(wp), INTENT(IN) :: l0(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k
+    ErrStat = CD_HTORS_BADINPUT
+    IF (.NOT. ALLOCATED(tors%gj)) THEN
+      ErrMsg = 'torsion: GJ per element is missing'
+      RETURN
+    END IF
+    IF (SIZE(tors%gj) /= SIZE(l0)) THEN
+      ErrMsg = 'torsion: GJ must have one entry per element'
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(tors%gj) .AND. CD_All_Finite(tors%ends) .AND. CD_Is_Finite(tors%phi) .AND. &
+               CD_All_Finite(tors%end_compliance) .AND. CD_Is_Finite(tors%theta) .AND. &
+               CD_Is_Finite(tors%theta_hint))) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'torsion: non-finite GJ, end frame, imposed twist, compliance or state'
+      RETURN
+    END IF
+    IF (ANY(.NOT. (tors%gj > CD_ZERO))) THEN
+      ErrMsg = 'torsion: GJ must be positive on every element'
+      RETURN
+    END IF
+    IF (ANY(tors%end_compliance < CD_ZERO)) THEN
+      ErrMsg = 'torsion: end compliances must be non-negative'
+      RETURN
+    END IF
+    IF (tors%quadrature_order < 1 .OR. tors%quadrature_order > NG_MAX) THEN
+      ErrMsg = 'torsion: quadrature order must lie in [1,6]'
+      RETURN
+    END IF
+    DO k = 1, 3, 2
+      IF (ABS(NORM2(tors%ends(:, k)) - CD_ONE) > FRAME_TOL .OR. ABS(NORM2(tors%ends(:, k + 1)) - CD_ONE) > FRAME_TOL &
+          .OR. ABS(DOT_PRODUCT(tors%ends(:, k), tors%ends(:, k + 1))) > FRAME_TOL) THEN
+        ErrMsg = 'torsion: each end director and reference normal must be orthonormal'
+        RETURN
+      END IF
+    END DO
+    ErrStat = CD_HTORS_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_HermiteTorsion_Validate
+
+  ! ------------------------------------------------------------------------------------------
+  ! bordered (Sherman-Morrison) solve and the inertia of B + g g^T / C
+  ! ------------------------------------------------------------------------------------------
+
+  SUBROUTINE CD_HermiteTorsion_Bordered_Solve(ab, kl, ku, g, compliance, rhs, x, ErrStat, ErrMsg, &
+                                              backward_error, shifted)
+    !! Solve (B + g g^T / C) x = rhs, B a general band matrix in LAPACK DGBSV storage (ab, with
+    !! the 2 kl + ku + 1 rows of DGBTRF; not modified) and g a dense vector, through one band
+    !! factorization of B and two right-hand sides (the bordered system [B g; g^T -C]):
+    !!   B y = rhs, B z = g, mu = g.y/(C + g.z), x = y - mu z.
+    !! The step is accepted only with a successful factorization, the pivot guard
+    !! min|U_ii| > 1e3 eps max|U_ii|, a denominator |C + g.z| > 1e-12 (C + |g.z|) and a normwise
+    !! backward error ||K x - rhs|| / (||K|| ||x|| + ||rhs||) <= CD_HTORS_BACKWARD_TOL (infinity
+    !! norms, K applied as the band product plus the rank-one term). Otherwise B is shifted by
+    !! sigma = 1e-10 max|diag B|, Sherman-Morrison is applied to the shifted matrix and two steps
+    !! of iterative refinement against the true K follow; the same backward-error test decides.
+    !! A failure of both leaves x = 0 with a named error. B may be singular where K is not (the
+    !! rank-one term is positive semidefinite); at a straight state g = 0 and K = B.
+    REAL(wp), INTENT(IN) :: ab(:, :)
+    INTEGER, INTENT(IN) :: kl, ku
+    REAL(wp), INTENT(IN) :: g(:), compliance, rhs(:)
+    REAL(wp), INTENT(OUT) :: x(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: backward_error
+    LOGICAL, INTENT(OUT), OPTIONAL :: shifted
+    REAL(wp), ALLOCATABLE :: lu(:, :), rr(:, :), res(:), dx(:)
+    INTEGER, ALLOCATABLE :: ipiv(:)
+    REAL(wp) :: sigma, eta, knorm
+    INTEGER :: n, ldab, attempt, refine
+    LOGICAL :: ok
+    CHARACTER(160) :: why
+
+    x = CD_ZERO
+    IF (PRESENT(backward_error)) backward_error = HUGE(CD_ONE)
+    IF (PRESENT(shifted)) shifted = .FALSE.
+    n = SIZE(ab, 2)
+    ldab = SIZE(ab, 1)
+    ErrStat = CD_HTORS_BADINPUT
+    IF (kl < 0 .OR. ku < 0 .OR. ldab /= 2*kl + ku + 1 .OR. SIZE(g) /= n .OR. SIZE(rhs) /= n .OR. SIZE(x) /= n) THEN
+      ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: inconsistent band storage or vector sizes'
+      RETURN
+    END IF
+    IF (.NOT. (compliance > CD_ZERO) .OR. .NOT. CD_Is_Finite(compliance)) THEN
+      ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: the line compliance must be finite and positive'
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(g) .AND. CD_All_Finite(rhs))) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: non-finite coupling vector or right-hand side'
+      RETURN
+    END IF
+    ALLOCATE (lu(ldab, n), rr(n, 2), res(n), dx(n), ipiv(n))
+    knorm = band_inf_norm(ab, kl, ku) + SUM(ABS(g))*MAXVAL(ABS(g))/compliance
+    sigma = CD_ZERO
+    why = ''
+    DO attempt = 1, 2
+      IF (attempt == 2) THEN
+        sigma = 1.0e-10_wp*MAX(MAXVAL(ABS(ab(kl + ku + 1, :))), TINY(CD_ONE))
+        IF (PRESENT(shifted)) shifted = .TRUE.
+      END IF
+      CALL sm_solve(sigma, rhs, x, ok, why)
+      IF (.NOT. ok) CYCLE
+      IF (attempt == 2) THEN
+        DO refine = 1, 2
+          CALL bordered_residual(x, res)
+          CALL sm_solve(sigma, res, dx, ok, why)
+          IF (.NOT. ok) EXIT
+          x = x + dx
+        END DO
+        IF (.NOT. ok) CYCLE
+      END IF
+      CALL bordered_residual(x, res)
+      eta = MAXVAL(ABS(res))/MAX(knorm*MAXVAL(ABS(x)) + MAXVAL(ABS(rhs)), TINY(CD_ONE))
+      IF (PRESENT(backward_error)) backward_error = eta
+      IF (CD_Is_Finite(eta) .AND. eta <= CD_HTORS_BACKWARD_TOL .AND. CD_All_Finite(x)) THEN
+        ErrStat = CD_HTORS_OK
+        ErrMsg = ''
+        RETURN
+      END IF
+      WRITE (why, '(A,ES9.2)') 'backward error ', eta
+    END DO
+    x = CD_ZERO
+    ErrStat = CD_HTORS_NONFINITE
+    ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: the bordered torsion step failed ('//TRIM(why)// &
+             '), also with a shifted factorization and refinement'
+
+  CONTAINS
+
+    SUBROUTINE sm_solve(shift, b, sol, success, reason)
+      REAL(wp), INTENT(IN) :: shift, b(:)
+      REAL(wp), INTENT(OUT) :: sol(:)
+      LOGICAL, INTENT(OUT) :: success
+      CHARACTER(*), INTENT(OUT) :: reason
+      REAL(wp) :: umax, umin, den, mu
+      INTEGER :: info, j
+      EXTERNAL :: dgbtrf, dgbtrs
+      success = .FALSE.
+      reason = ''
+      sol = CD_ZERO
+      lu = ab
+      IF (shift > CD_ZERO) lu(kl + ku + 1, :) = lu(kl + ku + 1, :) + shift
+      CALL dgbtrf(n, n, kl, ku, lu, ldab, ipiv, info)
+      IF (info /= 0) THEN
+        reason = 'singular band factor'
+        RETURN
+      END IF
+      umax = CD_ZERO
+      umin = HUGE(CD_ONE)
+      DO j = 1, n
+        umax = MAX(umax, ABS(lu(kl + ku + 1, j)))
+        umin = MIN(umin, ABS(lu(kl + ku + 1, j)))
+      END DO
+      IF (.NOT. (umin > 1.0e3_wp*EPSILON(CD_ONE)*umax)) THEN
+        reason = 'pivot guard'
+        RETURN
+      END IF
+      rr(:, 1) = b
+      rr(:, 2) = g
+      CALL dgbtrs('N', n, kl, ku, 2, lu, ldab, ipiv, rr, n, info)
+      IF (info /= 0 .OR. .NOT. CD_All_Finite(RESHAPE(rr, [2*n]))) THEN
+        reason = 'band back-substitution'
+        RETURN
+      END IF
+      den = compliance + DOT_PRODUCT(g, rr(:, 2))
+      IF (.NOT. (ABS(den) > 1.0e-12_wp*(compliance + ABS(DOT_PRODUCT(g, rr(:, 2)))))) THEN
+        reason = 'vanishing Sherman-Morrison denominator'
+        RETURN
+      END IF
+      mu = DOT_PRODUCT(g, rr(:, 1))/den
+      sol = rr(:, 1) - mu*rr(:, 2)
+      success = CD_All_Finite(sol)
+      IF (.NOT. success) reason = 'non-finite step'
+    END SUBROUTINE sm_solve
+
+    SUBROUTINE bordered_residual(sol, r)
+      !! r = rhs - (B + g g^T / C) sol, with the unshifted B.
+      REAL(wp), INTENT(IN) :: sol(:)
+      REAL(wp), INTENT(OUT) :: r(:)
+      INTEGER :: i, j
+      r = rhs - g*(DOT_PRODUCT(g, sol)/compliance)
+      DO j = 1, n
+        DO i = MAX(1, j - ku), MIN(n, j + kl)
+          r(i) = r(i) - ab(kl + ku + 1 + i - j, j)*sol(j)
+        END DO
+      END DO
+    END SUBROUTINE bordered_residual
+  END SUBROUTINE CD_HermiteTorsion_Bordered_Solve
+
+  PURE REAL(wp) FUNCTION band_inf_norm(ab, kl, ku) RESULT(v)
+    !! Infinity norm of a general band matrix in DGBSV storage.
+    REAL(wp), INTENT(IN) :: ab(:, :)
+    INTEGER, INTENT(IN) :: kl, ku
+    REAL(wp), ALLOCATABLE :: rows(:)
+    INTEGER :: n, i, j
+    n = SIZE(ab, 2)
+    ALLOCATE (rows(n))
+    rows = CD_ZERO
+    DO j = 1, n
+      DO i = MAX(1, j - ku), MIN(n, j + kl)
+        rows(i) = rows(i) + ABS(ab(kl + ku + 1 + i - j, j))
+      END DO
+    END DO
+    v = CD_ZERO
+    IF (n > 0) v = MAXVAL(rows)
+  END FUNCTION band_inf_norm
+
+  PURE SUBROUTINE scaled_symmetric_band(ab, kl, ku, mask, g, s, gs, dsc)
+    !! Lower symmetric band s (kl + 1 rows, LAPACK DPBTRF 'L' layout) of D sym(B) D on the DOFs
+    !! where mask is true (identity rows elsewhere), D = diag(|B_jj|^-1/2) (1 for a zero
+    !! diagonal), and gs = D g with masked entries zeroed. A congruence: the inertia of
+    !! sym(B) + g g^T / C equals that of s + gs gs^T / C.
+    REAL(wp), INTENT(IN) :: ab(:, :)
+    INTEGER, INTENT(IN) :: kl, ku
+    LOGICAL, INTENT(IN) :: mask(:)
+    REAL(wp), INTENT(IN) :: g(:)
+    REAL(wp), INTENT(OUT) :: s(:, :), gs(:), dsc(:)
+    INTEGER :: n, i, j, kd
+    n = SIZE(ab, 2)
+    kd = MIN(kl, ku)
+    dsc = CD_ONE
+    DO j = 1, n
+      IF (.NOT. mask(j)) CYCLE
+      IF (ABS(ab(kl + ku + 1, j)) > CD_ZERO) dsc(j) = CD_ONE/SQRT(ABS(ab(kl + ku + 1, j)))
+    END DO
+    s = CD_ZERO
+    DO j = 1, n
+      IF (.NOT. mask(j)) THEN
+        s(1, j) = CD_ONE
+        CYCLE
+      END IF
+      DO i = j, MIN(n, j + kd)
+        IF (.NOT. mask(i)) CYCLE
+        s(1 + i - j, j) = 0.5_wp*(ab(kl + ku + 1 + i - j, j) + ab(kl + ku + 1 + j - i, i))*dsc(i)*dsc(j)
+      END DO
+    END DO
+    gs = CD_ZERO
+    WHERE (mask) gs = dsc*g
+  END SUBROUTINE scaled_symmetric_band
+
+  SUBROUTINE CD_HermiteTorsion_Inertia(ab, kl, ku, mask, g, compliance, n_negative_b, n_negative, ErrStat, ErrMsg)
+    !! Number of negative eigenvalues of the symmetric part of K = B + g g^T / C on the DOFs
+    !! where mask is true (B in DGBSV storage). With the determinant lemma and interlacing,
+    !!   neg(K) = neg(B) - [1 + g^T B^-1 g / C < 0];
+    !! neg(B) is counted by a banded L D L^T factorization without pivoting of the Jacobi-scaled
+    !! symmetric band (Sylvester's law of inertia), which also gives B^-1 g. A banded Cholesky
+    !! success short-cuts the count (B positive definite, hence K). A vanishing pivot or a
+    !! multiplier growth above 1e8 makes the count unreliable: ErrStat = CD_HTORS_STEP.
+    REAL(wp), INTENT(IN) :: ab(:, :)
+    INTEGER, INTENT(IN) :: kl, ku
+    LOGICAL, INTENT(IN) :: mask(:)
+    REAL(wp), INTENT(IN) :: g(:), compliance
+    INTEGER, INTENT(OUT) :: n_negative_b, n_negative
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: s(:, :), gs(:), dsc(:), lb(:, :), d(:), tmp(:), w(:)
+    REAL(wp) :: acc, smax, gbg
+    INTEGER :: n, kd, i, j, k, info
+    EXTERNAL :: dpbtrf
+
+    n_negative_b = 0
+    n_negative = 0
+    n = SIZE(ab, 2)
+    kd = MIN(kl, ku)
+    IF (SIZE(ab, 1) /= 2*kl + ku + 1 .OR. SIZE(mask) /= n .OR. SIZE(g) /= n .OR. &
+        .NOT. (compliance > CD_ZERO)) THEN
+      ErrStat = CD_HTORS_BADINPUT
+      ErrMsg = 'CD_HermiteTorsion_Inertia: inconsistent input'
+      RETURN
+    END IF
+    ALLOCATE (s(kd + 1, n), gs(n), dsc(n), lb(kd + 1, n), d(n), tmp(n), w(n))
+    CALL scaled_symmetric_band(ab, kl, ku, mask, g, s, gs, dsc)
+    IF (.NOT. CD_All_Finite(RESHAPE(s, [SIZE(s)]))) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Inertia: non-finite tangent'
+      RETURN
+    END IF
+    lb = s
+    CALL dpbtrf('L', n, kd, lb, kd + 1, info)
+    IF (info == 0) THEN
+      ErrStat = CD_HTORS_OK
+      ErrMsg = ''
+      RETURN
+    END IF
+    smax = MAXVAL(ABS(s))
+    lb = CD_ZERO
+    DO j = 1, n
+      acc = s(1, j)
+      DO k = MAX(1, j - kd), j - 1
+        tmp(k) = lb(1 + j - k, k)*d(k)
+        acc = acc - lb(1 + j - k, k)*tmp(k)
+      END DO
+      d(j) = acc
+      IF (.NOT. (ABS(d(j)) > 1.0e-14_wp*smax)) THEN
+        ErrStat = CD_HTORS_STEP
+        ErrMsg = 'CD_HermiteTorsion_Inertia: vanishing pivot (count unreliable)'
+        RETURN
+      END IF
+      DO i = j + 1, MIN(n, j + kd)
+        acc = s(1 + i - j, j)
+        DO k = MAX(1, i - kd), j - 1
+          acc = acc - lb(1 + i - k, k)*tmp(k)
+        END DO
+        lb(1 + i - j, j) = acc/d(j)
+        IF (ABS(lb(1 + i - j, j)) > 1.0e8_wp) THEN
+          ErrStat = CD_HTORS_STEP
+          ErrMsg = 'CD_HermiteTorsion_Inertia: pivot growth (count unreliable)'
+          RETURN
+        END IF
+      END DO
+    END DO
+    n_negative_b = COUNT(d < CD_ZERO)
+    ! w = S^-1 gs by the factors: L y = gs, D, L^T w = y/D
+    w = gs
+    DO j = 1, n
+      DO i = j + 1, MIN(n, j + kd)
+        w(i) = w(i) - lb(1 + i - j, j)*w(j)
+      END DO
+    END DO
+    w = w/d
+    DO j = n, 1, -1
+      DO i = j + 1, MIN(n, j + kd)
+        w(j) = w(j) - lb(1 + i - j, j)*w(i)
+      END DO
+    END DO
+    gbg = DOT_PRODUCT(gs, w)
+    n_negative = n_negative_b
+    IF (CD_ONE + gbg/compliance < CD_ZERO) n_negative = n_negative - 1
+    IF (.NOT. CD_Is_Finite(gbg)) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Inertia: non-finite coupling term'
+      RETURN
+    END IF
+    ErrStat = CD_HTORS_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_HermiteTorsion_Inertia
+
+  SUBROUTINE CD_HermiteTorsion_Lowest_Mode(ab, kl, ku, mask, g, compliance, lambda, v, ErrStat, ErrMsg)
+    !! Lowest eigenvalue lambda of the Jacobi-scaled symmetric part of K = B + g g^T / C on the
+    !! DOFs where mask is true (the scaling of CD_HermiteTorsion_Inertia: diag(D sym(B) D) = +-1),
+    !! and the corresponding direction v in the unscaled DOFs (v^T K v has the sign of lambda;
+    !! max|v| = 1; zero where mask is false). Shift-invert power iteration on (S + sigma I +
+    !! gs gs^T / C)^-1, sigma just above the smallest shift that makes S + sigma I positive
+    !! definite (banded Cholesky, bisected), with Sherman-Morrison for the rank-one term.
+    REAL(wp), INTENT(IN) :: ab(:, :)
+    INTEGER, INTENT(IN) :: kl, ku
+    LOGICAL, INTENT(IN) :: mask(:)
+    REAL(wp), INTENT(IN) :: g(:), compliance
+    REAL(wp), INTENT(OUT) :: lambda, v(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, PARAMETER :: MAX_POWER = 400
+    REAL(wp), ALLOCATABLE :: s(:, :), gs(:), dsc(:), ch(:, :), u(:), y(:), z(:)
+    REAL(wp) :: sig_lo, sig_hi, sig, lam_old, den
+    INTEGER :: n, kd, k, it, info
+    LOGICAL :: pd
+    EXTERNAL :: dpbtrf, dpbtrs
+
+    lambda = CD_ZERO
+    v = CD_ZERO
+    n = SIZE(ab, 2)
+    kd = MIN(kl, ku)
+    IF (SIZE(ab, 1) /= 2*kl + ku + 1 .OR. SIZE(mask) /= n .OR. SIZE(g) /= n .OR. SIZE(v) /= n .OR. &
+        .NOT. (compliance > CD_ZERO) .OR. .NOT. ANY(mask)) THEN
+      ErrStat = CD_HTORS_BADINPUT
+      ErrMsg = 'CD_HermiteTorsion_Lowest_Mode: inconsistent input'
+      RETURN
+    END IF
+    ALLOCATE (s(kd + 1, n), gs(n), dsc(n), ch(kd + 1, n), u(n), y(n), z(n))
+    CALL scaled_symmetric_band(ab, kl, ku, mask, g, s, gs, dsc)
+    ! bracket the positive-definiteness shift of S
+    sig_lo = CD_ZERO
+    sig_hi = 1.0e-6_wp
+    DO k = 1, 60
+      CALL shifted_cholesky(sig_hi, pd)
+      IF (pd) EXIT
+      sig_lo = sig_hi
+      sig_hi = 4.0_wp*sig_hi
+    END DO
+    IF (.NOT. pd) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Lowest_Mode: no positive definite shift found'
+      RETURN
+    END IF
+    DO k = 1, 40
+      IF (sig_hi - sig_lo <= 1.0e-3_wp*sig_hi) EXIT
+      sig = 0.5_wp*(sig_lo + sig_hi)
+      CALL shifted_cholesky(sig, pd)
+      IF (pd) THEN
+        sig_hi = sig
+      ELSE
+        sig_lo = sig
+      END IF
+    END DO
+    sig = sig_hi
+    CALL shifted_cholesky(sig, pd)
+    ! z = (S + sigma I)^-1 gs for the Sherman-Morrison update
+    z = gs
+    CALL dpbtrs('L', n, kd, 1, ch, kd + 1, z, n, info)
+    den = compliance + DOT_PRODUCT(gs, z)
+    DO k = 1, n
+      u(k) = MERGE(CD_ONE + 0.5_wp*SIN(0.7_wp*k), CD_ZERO, mask(k))
+    END DO
+    u = u/NORM2(u)
+    lam_old = HUGE(CD_ONE)
+    DO it = 1, MAX_POWER
+      y = u
+      CALL dpbtrs('L', n, kd, 1, ch, kd + 1, y, n, info)
+      y = y - z*(DOT_PRODUCT(gs, y)/den)
+      WHERE (.NOT. mask) y = CD_ZERO
+      IF (.NOT. CD_All_Finite(y) .OR. NORM2(y) <= TINY(CD_ONE)) EXIT
+      u = y/NORM2(y)
+      lambda = rayleigh(u)
+      IF (ABS(lambda - lam_old) <= 1.0e-13_wp*MAX(CD_ONE, ABS(lambda))) EXIT
+      lam_old = lambda
+    END DO
+    IF (.NOT. (CD_All_Finite(u) .AND. CD_Is_Finite(lambda))) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Lowest_Mode: non-finite iterate'
+      lambda = CD_ZERO
+      RETURN
+    END IF
+    v = dsc*u
+    WHERE (.NOT. mask) v = CD_ZERO
+    IF (MAXVAL(ABS(v)) > CD_ZERO) v = v/MAXVAL(ABS(v))
+    ErrStat = CD_HTORS_OK
+    ErrMsg = ''
+
+  CONTAINS
+
+    SUBROUTINE shifted_cholesky(shift, ok)
+      REAL(wp), INTENT(IN) :: shift
+      LOGICAL, INTENT(OUT) :: ok
+      INTEGER :: j, inf
+      ch = s
+      DO j = 1, n
+        IF (mask(j)) ch(1, j) = ch(1, j) + shift
+      END DO
+      CALL dpbtrf('L', n, kd, ch, kd + 1, inf)
+      ok = inf == 0
+    END SUBROUTINE shifted_cholesky
+
+    REAL(wp) FUNCTION rayleigh(x) RESULT(rq)
+      !! x^T (S + gs gs^T / C) x / x^T x over the masked DOFs.
+      REAL(wp), INTENT(IN) :: x(:)
+      REAL(wp) :: acc
+      INTEGER :: i, j
+      acc = CD_ZERO
+      DO j = 1, n
+        IF (.NOT. mask(j)) CYCLE
+        acc = acc + s(1, j)*x(j)*x(j)
+        DO i = j + 1, MIN(n, j + kd)
+          IF (mask(i)) acc = acc + 2.0_wp*s(1 + i - j, j)*x(i)*x(j)
+        END DO
+      END DO
+      acc = acc + DOT_PRODUCT(gs, x)**2/compliance
+      rq = acc/MAX(DOT_PRODUCT(x, x), TINY(CD_ONE))
+    END FUNCTION rayleigh
+  END SUBROUTINE CD_HermiteTorsion_Lowest_Mode
 
   ! ------------------------------------------------------------------------------------------
   ! public routines

@@ -47,6 +47,11 @@ MODULE CableDyn_HermiteCableStatic
                                  CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, CD_BATHY_OK
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
   USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_HYDRO_OK
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
+                                     CD_HermiteTorsion_Accept, CD_HermiteTorsion_Compliance, &
+                                     CD_HermiteTorsion_Validate, CD_HermiteTorsion_Bordered_Solve, &
+                                     CD_HermiteTorsion_Inertia, CD_HermiteTorsion_Lowest_Mode, CD_HTORS_OK, &
+                                     CD_HTORS_KBAND, CD_HTORS_MAX_STEP, CD_HTORS_ZERO_MODE_TOL, CD_HTORS_PI
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_in_parallel
   IMPLICIT NONE
   PRIVATE
@@ -264,7 +269,7 @@ CONTAINS
                                           endconn_stiffness, endconn_direction, endconn_mode, &
                                           waterline_z, dry_buoyancy, merit_line_search, pseudo_transient, &
                                           energy_minimization, stable, water_weight, current, residual_out, &
-                                          tangent_out, friction, residual_unmet)
+                                          tangent_out, friction, residual_unmet, torsion)
     !! Solve the finite-EI static equilibrium of a Hermite bending-cable line.
     !!
     !! l0(ne), EA(ne), EI(ne), w(ne) : per-element rest length, axial/bending stiffness,
@@ -360,6 +365,26 @@ CONTAINS
     !!                                  its equilibrium value (the capacity's dependence on
     !!                                  the normal force is left out; see the final
     !!                                  evaluation).
+    !! torsion (optional, inout)       : condensed isotropic torsion of the line (Route A,
+    !!                                  CableDyn_HermiteTorsion), used when torsion%active.
+    !!                                  The loads and EI/buoyancy stages above run without it;
+    !!                                  the imposed twist is then ramped as the last load
+    !!                                  stage, from the twist of that untwisted equilibrium
+    !!                                  (zero torque) to torsion%phi, in steps of at most
+    !!                                  pi/4 halved on a failed stage. Each Newton step adds
+    !!                                  E_t = (Phi - Theta)**2/(2 C) and solves the bordered
+    !!                                  system [B g; g^T -C] by Sherman-Morrison on the band
+    !!                                  factor (CD_HermiteTorsion_Bordered_Solve); Theta is
+    !!                                  unwrapped against the last accepted iterate and every
+    !!                                  accepted iterate changes it by at most pi/2 (longer
+    !!                                  steps are cut). Each converged stage is tested for
+    !!                                  stability (the inertia of the tangent on the free
+    !!                                  DOFs); an unstable one (above a buckling onset) is
+    !!                                  left by negative-curvature descent along the lowest
+    !!                                  mode and energy minimisation, unless torsion%descend
+    !!                                  is false. On return torsion holds the accepted Theta,
+    !!                                  the torque and the stability report. Not combined
+    !!                                  with pseudo_transient or equilibrate_linear_system.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping
@@ -394,6 +419,7 @@ CONTAINS
     ! NOCONVERGE, "Newton did not converge"): the state is a finite best iterate a caller
     ! may continue from.
     LOGICAL, INTENT(OUT), OPTIONAL :: residual_unmet
+    TYPE(CD_HermiteTorsionType), INTENT(INOUT), OPTIONAL :: torsion
 
     INTEGER :: ne, nn, ndof, c, it, es, i, b, nci, n_buoy, omp_threads, axial_order, bending_order
     REAL(wp) :: eifac, rnorm, fscale, bfac, rmerit, ptc_tau, ptc_rprev, pi_total, pi_abs, lm_mu
@@ -429,6 +455,15 @@ CONTAINS
     ! capacity held at its equilibrium value.
     LOGICAL :: stab_eval
     REAL(wp), ALLOCATABLE :: ab_energy(:, :), r_energy(:), q_energy(:), sym(:, :)
+    ! Condensed torsion (optional torsion argument): use_tors when active, tors_on once the
+    ! twist stage runs. tors_g is dTheta/dq at the last assembly (global DOFs), tors_gr the same
+    ! in the rigid-end basis with held DOFs zeroed, tors_h d2Theta/dq2 (band, 23 rows),
+    ! tors_v the lowest mode of an unstable tangent (descent direction).
+    LOGICAL :: use_tors, tors_on, tors_have_mode, tors_descending
+    REAL(wp) :: tors_c, tors_phi_cur, tors_theta_acc, tors_theta_eval, tors_mt, tors_lambda
+    REAL(wp), ALLOCATABLE :: tors_g(:), tors_gr(:), tors_h(:, :), tors_v(:), tors_rhs(:), tors_q(:), tors_gs(:)
+    REAL(wp), ALLOCATABLE :: tors_grs(:), tors_gt(:)
+    REAL(wp), ALLOCATABLE :: tors_rhs2(:, :)
     REAL(wp) :: contact_cs(2)
 
     ErrStat = CD_HCSTAT_OK
@@ -635,6 +670,36 @@ CONTAINS
       use_endconn = ANY(endconn_kind == CD_ENDCONN_FINITE)
       use_rigid = ANY(endconn_kind == CD_ENDCONN_RIGID)
     END IF
+    use_tors = .FALSE.
+    tors_on = .FALSE.
+    tors_have_mode = .FALSE.
+    tors_descending = .FALSE.
+    tors_c = CD_ZERO
+    tors_phi_cur = CD_ZERO
+    tors_theta_acc = CD_ZERO
+    tors_theta_eval = CD_ZERO
+    tors_mt = CD_ZERO
+    tors_lambda = CD_ZERO
+    IF (PRESENT(torsion)) use_tors = torsion%active
+    IF (use_tors) THEN
+      CALL CD_HermiteTorsion_Validate(torsion, l0, es, ErrMsg)
+      IF (es /= CD_HTORS_OK) THEN
+        CALL fail(TRIM(ErrMsg)); RETURN
+      END IF
+      tors_c = CD_HermiteTorsion_Compliance(torsion, l0)
+      IF (.NOT. (tors_c > CD_ZERO) .OR. .NOT. CD_Is_Finite(tors_c)) THEN
+        CALL fail('torsion: the line compliance must be finite and positive'); RETURN
+      END IF
+      IF (use_ptc .OR. use_equilibration) THEN
+        CALL fail('torsion is not combined with pseudo_transient or equilibrate_linear_system'); RETURN
+      END IF
+      DO i = 1, 2
+        IF (endconn_kind(i) /= CD_ENDCONN_RIGID) CYCLE
+        IF (NORM2(torsion%ends(:, 2*i - 1) - endconn_d0(:, i)) > 1.0e-8_wp) THEN
+          CALL fail('torsion: the director at a rigid end must be the rigid connection direction'); RETURN
+        END IF
+      END DO
+    END IF
 
     ALLOCATE (q(ndof), trib(nn), freemask(ndof), solve_mask(ndof), w_cur(ne))
     ALLOCATE (R(ndof), dq(ndof), ab(LDAB_H, ndof), elem_f(12, ne), elem_K(12, 12, ne), &
@@ -642,7 +707,15 @@ CONTAINS
     IF (use_equilibration) ALLOCATE (ab_recovery(LDAB_H, ndof), scaled_residual(ndof))
     ALLOCATE (q_sec1(ndof), q_sec2(ndof))
     IF (use_backtracking) ALLOCATE (q_base(ndof))
-    IF (use_energy) ALLOCATE (ab_energy(LDAB_H, ndof), r_energy(ndof), q_energy(ndof), sym(KL_H + 1, ndof))
+    IF (use_energy .OR. use_tors) &
+      ALLOCATE (ab_energy(LDAB_H, ndof), r_energy(ndof), q_energy(ndof), sym(KL_H + 1, ndof))
+    IF (use_tors) THEN
+      ALLOCATE (tors_g(ndof), tors_gr(ndof), tors_h(2*CD_HTORS_KBAND + 1, ndof), tors_v(ndof), tors_rhs(ndof), &
+                tors_q(ndof), tors_gs(ndof), tors_rhs2(ndof, 2), tors_grs(ndof), tors_gt(ndof))
+      tors_g = CD_ZERO
+      tors_gr = CD_ZERO
+      tors_v = CD_ZERO
+    END IF
     q = seed
     q_sec1 = seed
     q_sec2 = seed
@@ -787,6 +860,16 @@ CONTAINS
       q_sec1 = q
     END DO
 
+    ! Condensed torsion: the imposed twist is the last load stage.
+    IF (use_tors) THEN
+      CALL torsion_continuation(es, ErrMsg)
+      IF (es /= CD_HCSTAT_OK) THEN
+        q_out = q
+        curv_out = CD_ZERO
+        ErrStat = es; RETURN
+      END IF
+    END IF
+
     ! Evaluate the TRUE residual at the final q and full EI (eifac = 1, w_cur = w here): the
     ! last update inside the loop may have reached tolerance, and its post-update
     ! residual must drive the convergence verdict rather than the pre-update value.
@@ -817,7 +900,34 @@ CONTAINS
           ErrStat = es; RETURN
         END IF
       END IF
-      stable = tangent_positive_definite()
+      IF (use_tors) THEN
+        CALL torsion_stability(stable, es, ErrMsg)
+        IF (es /= CD_HCSTAT_OK) THEN
+          q_out = q
+          curv_out = CD_ZERO
+          ErrStat = es; RETURN
+        END IF
+      ELSE
+        stable = tangent_positive_definite()
+      END IF
+    END IF
+    IF (use_tors) THEN
+      torsion%theta = tors_theta_acc
+      torsion%has_theta = .TRUE.
+      torsion%torque = tors_mt
+      torsion%energy = pi_total
+      IF (.NOT. PRESENT(stable)) THEN
+        IF (torsion%check_stability) THEN
+          CALL torsion_stability(torsion%stable, es, ErrMsg)
+          IF (es /= CD_HCSTAT_OK) THEN
+            q_out = q
+            curv_out = CD_ZERO
+            ErrStat = es; RETURN
+          END IF
+        END IF
+      ELSE
+        torsion%stable = stable
+      END IF
     END IF
 
     IF (res_out >= tol) THEN
@@ -1073,7 +1183,16 @@ CONTAINS
       ! coordinates are homogeneous constraints.  Transforming both rows and
       ! columns preserves symmetry and avoids the conditioning and arbitrary
       ! stiffness scale of a penalty approximation.
+      ! ---- condensed torsion: -M_t dTheta/dq in R, -M_t d2Theta/dq2 in the band ----
+      IF (tors_on) THEN
+        CALL add_torsion(es2, em2)
+        IF (es2 /= CD_HCSTAT_OK) THEN
+          es = CD_HCSTAT_NOCONVERGE; em = TRIM(em2); RETURN
+        END IF
+      END IF
+
       IF (use_rigid) CALL apply_rigid_system(R, ab)
+      IF (tors_on) CALL torsion_reduce()
 
       ! Dimensionally-consistent relative residual over the FREE DOFs. Translational (r)
       ! DOFs carry force residuals [N]; material-tangent (m) DOFs carry moment residuals
@@ -1175,7 +1294,13 @@ CONTAINS
         ab_recovery = ab
         merit = residual_merit(scaled_residual)
       END IF
-      IF (use_equilibration) THEN
+      IF (tors_on) THEN
+        tors_rhs = dq
+        CALL CD_HermiteTorsion_Bordered_Solve(ab, KL_H, KU_H, tors_gr, tors_c, tors_rhs, dq, es2, em2)
+        IF (es2 /= CD_HTORS_OK) THEN
+          es = CD_HCSTAT_NOCONVERGE; em = 'torsion: '//TRIM(em2); RETURN
+        END IF
+      ELSE IF (use_equilibration) THEN
         CALL CD_Solve_Banded_Refined(ab, KL_H, KU_H, dq, es2, em2)
       ELSE
         CALL CD_Solve_Banded(ab, KL_H, KU_H, dq, es2, em2)
@@ -1208,8 +1333,16 @@ CONTAINS
       IF (rnorm < R_TRUST .AND. dqnorm < DQ_TRUST) step_scale = CD_ONE
       IF (use_ptc) step_scale = CD_ONE
       IF (use_rigid) CALL limit_rigid_step(dq, step_scale)
+      IF (tors_on) CALL limit_torsion_step(tors_g, dq, step_scale)
       IF (.NOT. use_backtracking .OR. use_ptc) THEN
-        q = q + step_scale*dq
+        IF (tors_on) THEN
+          CALL torsion_take_step(step_scale, es2, em2)
+          IF (es2 /= CD_HCSTAT_OK) THEN
+            es = CD_HCSTAT_NOCONVERGE; em = TRIM(em2); RETURN
+          END IF
+        ELSE
+          q = q + step_scale*dq
+        END IF
       ELSE
         q_base = q
         merit_base = rmerit
@@ -1226,6 +1359,7 @@ CONTAINS
               accepted = trial_norm < rnorm
             END IF
             IF (accepted) THEN
+              IF (tors_on) tors_theta_acc = tors_theta_eval
               RETURN
             END IF
           END IF
@@ -1297,6 +1431,10 @@ CONTAINS
       ab_energy = ab
       r_energy = R
       q_energy = q
+      IF (tors_on) THEN
+        tors_gs = tors_g
+        tors_grs = tors_gr
+      END IF
       pi0 = pi_total
       pi_abs0 = pi_abs
       merit0 = rmerit
@@ -1307,16 +1445,23 @@ CONTAINS
       ! potential is only piecewise smooth, and on a structured floor the curvature of the
       ! bilinear grid is not differentiated, so near the solution its line search can
       ! collapse to round-off steps where the Newton iteration converges.
-      IF (merit0 < NEWTON_MERIT .AND. lm_mu <= NEWTON_MU) THEN
+      ! (Not during a torsional negative-curvature descent: a Newton step would return to the saddle.)
+      IF (merit0 < NEWTON_MERIT .AND. lm_mu <= NEWTON_MU .AND. .NOT. tors_descending) THEN
         dq = -r_energy
         DO j = 1, ndof
           IF (.NOT. solve_mask(j)) dq(j) = CD_ZERO
         END DO
-        CALL CD_Solve_Banded(ab, KL_H, KU_H, dq, es_trial, em_trial)
+        IF (tors_on) THEN
+          tors_rhs = dq
+          CALL CD_HermiteTorsion_Bordered_Solve(ab, KL_H, KU_H, tors_gr, tors_c, tors_rhs, dq, es_trial, em_trial)
+        ELSE
+          CALL CD_Solve_Banded(ab, KL_H, KU_H, dq, es_trial, em_trial)
+        END IF
         IF (es_trial == CD_LINALG_OK .AND. CD_All_Finite(dq)) THEN
           IF (use_rigid) CALL rigid_increment_to_global(dq)
           alpha = CD_ONE
           IF (use_rigid) CALL limit_rigid_step(dq, alpha)
+          IF (tors_on) CALL limit_torsion_step(tors_gs, dq, alpha)
           skip_tangent = .TRUE.
           ! Only a step that at least halves the merit (a full or half Newton step) is
           ! taken; a Newton direction that makes slower progress leaves the step to the
@@ -1326,6 +1471,7 @@ CONTAINS
             CALL newton_step(trial_norm, es_trial, em_trial, .FALSE.)
             IF (es_trial == CD_HCSTAT_OK .AND. rmerit <= 0.5_wp*merit0) THEN
               skip_tangent = .FALSE.
+              IF (tors_on) tors_theta_acc = tors_theta_eval
               RETURN
             END IF
             alpha = 0.5_wp*alpha
@@ -1363,7 +1509,17 @@ CONTAINS
         DO j = 1, ndof
           IF (.NOT. solve_mask(j)) dq(j) = CD_ZERO
         END DO
-        CALL dpbtrs('L', ndof, KL_H, 1, sym, KL_H + 1, dq, ndof, info)
+        IF (tors_on) THEN
+          ! (B_sym + mu D + g g^T / C) dq = -R by Sherman-Morrison on the Cholesky factor: the
+          ! rank-one term is positive semidefinite, so the direction still descends.
+          tors_rhs2(:, 1) = dq
+          tors_rhs2(:, 2) = tors_grs
+          CALL dpbtrs('L', ndof, KL_H, 2, sym, KL_H + 1, tors_rhs2, ndof, info)
+          IF (info == 0) dq = tors_rhs2(:, 1) - tors_rhs2(:, 2)*(DOT_PRODUCT(tors_grs, tors_rhs2(:, 1))/ &
+                                                                 (tors_c + DOT_PRODUCT(tors_grs, tors_rhs2(:, 2))))
+        ELSE
+          CALL dpbtrs('L', ndof, KL_H, 1, sym, KL_H + 1, dq, ndof, info)
+        END IF
         IF (info /= 0 .OR. .NOT. CD_All_Finite(dq)) THEN
           lm_mu = MAX(4.0_wp*lm_mu, 1.0e-8_wp)
           IF (lm_mu > 1.0e12_wp) EXIT
@@ -1373,6 +1529,7 @@ CONTAINS
         IF (use_rigid) CALL rigid_increment_to_global(dq)
         sc = CD_ONE
         IF (use_rigid) CALL limit_rigid_step(dq, sc)
+        IF (tors_on) CALL limit_torsion_step(tors_gs, dq, sc)
         alpha = sc
         skip_tangent = .TRUE.
         DO bt = 0, MAX_HALVINGS
@@ -1389,6 +1546,7 @@ CONTAINS
           END IF
           IF (accepted) THEN
             skip_tangent = .FALSE.
+            IF (tors_on) tors_theta_acc = tors_theta_eval
             IF (bt == 0) THEN
               lm_mu = 0.25_wp*lm_mu
               IF (lm_mu < 1.0e-10_wp) lm_mu = CD_ZERO
@@ -1405,6 +1563,390 @@ CONTAINS
       q = q_energy
       stalled = .TRUE.
     END SUBROUTINE energy_update
+
+    SUBROUTINE add_torsion(ecs, ecm)
+      !! Condensed torsion at the current q: Theta (unwrapped against the last accepted value; a
+      !! change above pi/2 is refused so that the caller cuts the step), M_t = (Phi - Theta)/C,
+      !! R <- R - M_t dTheta/dq, band <- band - M_t d2Theta/dq2, energy + (Phi - Theta)**2/(2 C).
+      INTEGER, INTENT(OUT) :: ecs
+      CHARACTER(*), INTENT(OUT) :: ecm
+      REAL(wp) :: raw, th, e_t
+      INTEGER :: ks
+      CHARACTER(200) :: km
+      ecs = CD_HCSTAT_OK
+      ecm = ''
+      IF (skip_tangent) THEN
+        CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, &
+                                    quadrature_order=torsion%quadrature_order)
+      ELSE
+        tors_h = CD_ZERO
+        CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, hband=tors_h, &
+                                    quadrature_order=torsion%quadrature_order)
+      END IF
+      IF (ks /= CD_HTORS_OK) THEN
+        ecs = CD_HCSTAT_NOCONVERGE
+        ecm = 'torsion: '//TRIM(km)
+        RETURN
+      END IF
+      th = CD_HermiteTorsion_Unwrap(raw, tors_theta_acc)
+      IF (ABS(th - tors_theta_acc) > CD_HTORS_MAX_STEP) THEN
+        ecs = CD_HCSTAT_NOCONVERGE
+        ecm = 'torsion: the twist changed by more than pi/2 from the last accepted state; cut the step'
+        RETURN
+      END IF
+      tors_theta_eval = th
+      tors_mt = (tors_phi_cur - th)/tors_c
+      R = R - tors_mt*tors_g
+      IF (.NOT. skip_tangent) ab(KL_H + 1:LDAB_H, :) = ab(KL_H + 1:LDAB_H, :) - tors_mt*tors_h
+      e_t = 0.5_wp*tors_c*tors_mt*tors_mt
+      pi_total = pi_total + e_t
+      pi_abs = pi_abs + e_t
+    END SUBROUTINE add_torsion
+
+    SUBROUTINE torsion_reduce()
+      !! dTheta/dq in the solve coordinates (the rigid-end basis, as apply_rigid_system maps R),
+      !! with every held DOF zeroed.
+      INTEGER :: iend, base, j
+      tors_gr = tors_g
+      IF (use_rigid) THEN
+        DO iend = 1, 2
+          IF (endconn_kind(iend) /= CD_ENDCONN_RIGID) CYCLE
+          base = MERGE(3, 6*(nn - 1) + 3, iend == 1)
+          tors_gr(base + 1:base + 3) = MATMUL(TRANSPOSE(rigid_basis(:, :, iend)), tors_g(base + 1:base + 3))
+        END DO
+      END IF
+      DO j = 1, ndof
+        IF (.NOT. solve_mask(j)) tors_gr(j) = CD_ZERO
+      END DO
+    END SUBROUTINE torsion_reduce
+
+    SUBROUTINE limit_torsion_step(grad, increment, scale)
+      !! Predictive twist-step limit: the linearised change grad . increment may not exceed half
+      !! the accepted limit (the acceptance test after the step remains in force).
+      REAL(wp), INTENT(IN) :: grad(:), increment(:)
+      REAL(wp), INTENT(INOUT) :: scale
+      REAL(wp) :: dth
+      dth = ABS(DOT_PRODUCT(grad, increment))
+      IF (dth*scale > 0.5_wp*CD_HTORS_MAX_STEP) scale = 0.5_wp*CD_HTORS_MAX_STEP/dth
+    END SUBROUTINE limit_torsion_step
+
+    SUBROUTINE torsion_take_step(scale, ecs, ecm)
+      !! q <- q + scale dq under the twist acceptance rule (CD_HermiteTorsion_Accept): the new
+      !! Theta, unwrapped against the last accepted value, may change by at most pi/2 and the
+      !! line must pass the fold guard; otherwise the step is halved, at most 30 times.
+      REAL(wp), INTENT(IN) :: scale
+      INTEGER, INTENT(OUT) :: ecs
+      CHARACTER(*), INTENT(OUT) :: ecm
+      REAL(wp) :: sfac, raw, th
+      INTEGER :: k, ks
+      CHARACTER(200) :: km
+      tors_q = q
+      sfac = scale
+      km = ''
+      DO k = 0, 30
+        q = tors_q + sfac*dq
+        CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_gt, ks, km, &
+                                    quadrature_order=torsion%quadrature_order)
+        IF (ks == CD_HTORS_OK) THEN
+          CALL CD_HermiteTorsion_Accept(tors_theta_acc, raw, th, ks, km)
+          IF (ks == CD_HTORS_OK) THEN
+            tors_theta_acc = th
+            ecs = CD_HCSTAT_OK
+            ecm = ''
+            RETURN
+          END IF
+        END IF
+        sfac = 0.5_wp*sfac
+      END DO
+      q = tors_q
+      ecs = CD_HCSTAT_NOCONVERGE
+      ecm = 'torsion: no admissible Newton step ('//TRIM(km)//')'
+    END SUBROUTINE torsion_take_step
+
+    SUBROUTINE torsion_continuation(ecs, ecm)
+      !! The imposed-twist load stage. From the converged untwisted state (Theta_0 on the branch
+      !! of torsion%theta, or of torsion%theta_hint on a first solve) Phi is ramped from Theta_0
+      !! (zero torque) to torsion%phi in stages of at most pi/4; a failed stage is restored and
+      !! halved, at most MAX_CUTS times. Each converged stage is tested for stability and an
+      !! unstable one is left by descent (torsion_stage).
+      INTEGER, INTENT(OUT) :: ecs
+      CHARACTER(*), INTENT(OUT) :: ecm
+      INTEGER, PARAMETER :: MAX_CUTS = 10
+      REAL(wp), ALLOCATABLE :: q_keep(:)
+      REAL(wp) :: raw, ref, phi0, total, lam, lam_try, dlam, dlam_max, th_keep
+      INTEGER :: ks, cuts, wios
+      LOGICAL :: ok
+      CHARACTER(200) :: km
+      CHARACTER(512) :: why
+      CHARACTER(1024) :: wbuf
+      ecs = CD_HCSTAT_OK
+      ecm = ''
+      torsion%ramp_steps = 0
+      torsion%descents = 0
+      torsion%stable = .FALSE.
+      torsion%n_negative = 0
+      torsion%lambda_min = CD_ZERO
+      CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, quadrature_order=torsion%quadrature_order)
+      IF (ks /= CD_HTORS_OK) THEN
+        ecs = CD_HCSTAT_NOCONVERGE
+        ecm = 'CD_HermiteCable_Static_Solve: torsion at the untwisted equilibrium: '//TRIM(km)
+        RETURN
+      END IF
+      ref = torsion%theta_hint
+      IF (torsion%has_theta) ref = torsion%theta
+      tors_theta_acc = CD_HermiteTorsion_Unwrap(raw, ref)
+      phi0 = tors_theta_acc
+      total = torsion%phi - phi0
+      tors_on = .TRUE.
+      dlam_max = CD_ONE/REAL(MAX(1, CEILING(ABS(total)/(0.25_wp*CD_HTORS_PI))), wp)
+      dlam = dlam_max
+      lam = CD_ZERO
+      cuts = 0
+      ALLOCATE (q_keep(ndof))
+      DO
+        lam_try = MIN(CD_ONE, lam + dlam)
+        IF (lam_try >= CD_ONE) THEN
+          tors_phi_cur = torsion%phi
+        ELSE
+          tors_phi_cur = phi0 + lam_try*total
+        END IF
+        q_keep = q
+        th_keep = tors_theta_acc
+        CALL torsion_stage(ok, why)
+        IF (ok) THEN
+          lam = lam_try
+          torsion%ramp_steps = torsion%ramp_steps + 1
+          IF (lam >= CD_ONE) EXIT
+          dlam = MIN(dlam_max, 2.0_wp*dlam)
+        ELSE
+          q = q_keep
+          tors_theta_acc = th_keep
+          cuts = cuts + 1
+          IF (cuts > MAX_CUTS) THEN
+            ecs = CD_HCSTAT_NOCONVERGE
+            wbuf = ''
+            WRITE (wbuf, '(A,ES12.5,A,ES12.5,A)', IOSTAT=wios) &
+              'CD_HermiteCable_Static_Solve: torsion continuation stalled at Phi = ', tors_phi_cur, &
+              ' rad (target ', torsion%phi, ' rad): '//TRIM(why)// &
+              '; the twisted line has no nearby static equilibrium on this path (for example a loop '// &
+              'forming), which needs a dynamic analysis'
+            ecm = wbuf
+            RETURN
+          END IF
+          dlam = 0.5_wp*dlam
+        END IF
+      END DO
+    END SUBROUTINE torsion_continuation
+
+    SUBROUTINE torsion_stage(ok, why)
+      !! Newton to tol at the current Phi, then (torsion%check_stability) the stability test and,
+      !! for an unstable state with torsion%descend, the negative-curvature descent.
+      LOGICAL, INTENT(OUT) :: ok
+      CHARACTER(*), INTENT(OUT) :: why
+      INTEGER :: it2, ks, wios
+      REAL(wp) :: rn
+      LOGICAL :: st
+      CHARACTER(512) :: km
+      CHARACTER(1024) :: wbuf
+      ok = .FALSE.
+      why = ''
+      km = ''
+      rn = HUGE(CD_ONE)
+      stalled = .FALSE.
+      DO it2 = 1, max_iter
+        CALL newton_step(rn, ks, km, .TRUE.)
+        IF (stalled) THEN
+          why = 'the Newton iteration stalled'
+          EXIT
+        END IF
+        IF (ks /= CD_HCSTAT_OK) THEN
+          why = km
+          EXIT
+        END IF
+        iters_out = iters_out + 1
+        res_out = rn
+        IF (rn < tol) THEN
+          ok = .TRUE.
+          EXIT
+        END IF
+      END DO
+      stalled = .FALSE.
+      IF (.NOT. ok) THEN
+        IF (LEN_TRIM(why) == 0) THEN
+          wbuf = ''
+          WRITE (wbuf, '(A,ES12.5)', IOSTAT=wios) 'Newton did not converge, ||R||=', rn
+          why = wbuf
+        END IF
+        RETURN
+      END IF
+      IF (.NOT. torsion%check_stability) RETURN
+      CALL torsion_stability(st, ks, km)
+      IF (ks /= CD_HCSTAT_OK) THEN
+        ok = .FALSE.
+        why = km
+        RETURN
+      END IF
+      torsion%stable = st
+      IF (st .OR. .NOT. torsion%descend) RETURN
+      CALL torsion_descent(ok, why)
+    END SUBROUTINE torsion_stage
+
+    SUBROUTINE torsion_stability(st, ecs, ecm)
+      !! Stability of the state q with torsion: the inertia of the symmetric tangent
+      !! B + g g^T / C on the free DOFs (CD_HermiteTorsion_Inertia). A negative (or unreliable)
+      !! count is checked by the lowest Jacobi-scaled eigenvalue (CD_HermiteTorsion_Lowest_Mode),
+      !! whose mode is kept for the descent; with torsion%zero_mode_allowed one eigenvalue within
+      !! CD_HTORS_ZERO_MODE_TOL of zero is neutral. A seabed friction capacity is held at its
+      !! equilibrium value, as for the stable argument.
+      LOGICAL, INTENT(OUT) :: st
+      INTEGER, INTENT(OUT) :: ecs
+      CHARACTER(*), INTENT(OUT) :: ecm
+      REAL(wp) :: rn
+      INTEGER :: ks, kin, nb, nk
+      CHARACTER(512) :: km
+      st = .FALSE.
+      ecs = CD_HCSTAT_OK
+      ecm = ''
+      tors_have_mode = .FALSE.
+      IF (use_friction .AND. .NOT. fr_frozen) stab_eval = .TRUE.
+      CALL newton_step(rn, ks, km, .FALSE.)
+      stab_eval = .FALSE.
+      IF (ks /= CD_HCSTAT_OK) THEN
+        ecs = CD_HCSTAT_NOCONVERGE
+        ecm = 'torsion stability evaluation failed: '//TRIM(km)
+        RETURN
+      END IF
+      CALL CD_HermiteTorsion_Inertia(ab, KL_H, KU_H, solve_mask, tors_gr, tors_c, nb, nk, kin, km)
+      torsion%lambda_min = CD_ZERO
+      torsion%n_negative = nk
+      IF (kin == CD_HTORS_OK .AND. nk == 0) THEN
+        st = .TRUE.
+        RETURN
+      END IF
+      CALL CD_HermiteTorsion_Lowest_Mode(ab, KL_H, KU_H, solve_mask, tors_gr, tors_c, tors_lambda, tors_v, ks, km)
+      IF (ks /= CD_HTORS_OK) THEN
+        ecs = CD_HCSTAT_NOCONVERGE
+        ecm = 'torsion stability evaluation failed: '//TRIM(km)
+        RETURN
+      END IF
+      tors_have_mode = .TRUE.
+      torsion%lambda_min = tors_lambda
+      IF (kin /= CD_HTORS_OK) THEN
+        nk = MERGE(1, 0, tors_lambda < -CD_HTORS_ZERO_MODE_TOL)
+        torsion%n_negative = nk
+      END IF
+      st = tors_lambda > CD_HTORS_ZERO_MODE_TOL .OR. &
+           (torsion%zero_mode_allowed .AND. nk <= 1 .AND. tors_lambda >= -CD_HTORS_ZERO_MODE_TOL)
+    END SUBROUTINE torsion_stability
+
+    SUBROUTINE torsion_descent(ok, why)
+      !! Leave an unstable twisted equilibrium: perturb along the lowest mode (both senses, a
+      !! decreasing amplitude) to a state of lower total energy, then minimise the energy
+      !! (energy_update without its Newton shortcut, which would return to the saddle) and test
+      !! the stability again; at most MAX_DESCENTS times.
+      LOGICAL, INTENT(OUT) :: ok
+      CHARACTER(*), INTENT(OUT) :: why
+      INTEGER, PARAMETER :: MAX_DESCENTS = 4
+      REAL(wp) :: e0, amp, a, rn, vscale, th0
+      INTEGER :: attempt, k, j, ks, it2
+      LOGICAL :: saved_energy, st, moved
+      CHARACTER(512) :: km
+      ok = .FALSE.
+      why = ''
+      km = ''
+      IF (drag_now .OR. (use_friction .AND. .NOT. fr_frozen)) THEN
+        why = 'the twisted equilibrium is unstable, and its energy descent needs conservative loads '// &
+              '(no current drag or sliding seabed friction)'
+        RETURN
+      END IF
+      DO attempt = 1, MAX_DESCENTS
+        IF (.NOT. tors_have_mode) THEN
+          why = 'no unstable mode was found for the descent'
+          RETURN
+        END IF
+        skip_tangent = .TRUE.
+        CALL newton_step(rn, ks, km, .FALSE.)
+        skip_tangent = .FALSE.
+        IF (ks /= CD_HCSTAT_OK) THEN
+          why = km
+          RETURN
+        END IF
+        e0 = pi_total
+        tors_rhs = tors_v
+        IF (use_rigid) CALL rigid_increment_to_global(tors_rhs)
+        vscale = CD_ZERO
+        DO j = 1, ndof
+          IF (MOD(j - 1, 6) >= 3) THEN
+            vscale = MAX(vscale, ABS(tors_rhs(j)))
+          ELSE
+            vscale = MAX(vscale, ABS(tors_rhs(j))/trib((j - 1)/6 + 1))
+          END IF
+        END DO
+        IF (.NOT. (vscale > CD_ZERO)) THEN
+          why = 'the unstable mode vanishes on the free DOFs'
+          RETURN
+        END IF
+        amp = 0.05_wp/vscale
+        tors_q = q
+        th0 = tors_theta_acc
+        moved = .FALSE.
+        DO k = 0, 11
+          a = amp*0.25_wp**(k/2)
+          IF (MOD(k, 2) == 1) a = -a
+          q = tors_q + a*tors_rhs
+          skip_tangent = .TRUE.
+          CALL newton_step(rn, ks, km, .FALSE.)
+          skip_tangent = .FALSE.
+          IF (ks == CD_HCSTAT_OK .AND. pi_total < e0) THEN
+            tors_theta_acc = tors_theta_eval
+            moved = .TRUE.
+            EXIT
+          END IF
+        END DO
+        IF (.NOT. moved) THEN
+          q = tors_q
+          tors_theta_acc = th0
+          why = 'no energy-decreasing perturbation along the unstable mode'
+          RETURN
+        END IF
+        saved_energy = use_energy
+        use_energy = .TRUE.
+        tors_descending = .TRUE.
+        lm_mu = CD_ZERO
+        stalled = .FALSE.
+        ok = .FALSE.
+        DO it2 = 1, MAX(max_iter, 200)
+          CALL newton_step(rn, ks, km, .TRUE.)
+          IF (stalled .OR. ks /= CD_HCSTAT_OK) EXIT
+          iters_out = iters_out + 1
+          res_out = rn
+          IF (rn < tol) THEN
+            ok = .TRUE.
+            EXIT
+          END IF
+        END DO
+        use_energy = saved_energy
+        tors_descending = .FALSE.
+        stalled = .FALSE.
+        lm_mu = CD_ZERO
+        IF (.NOT. ok) THEN
+          why = 'the energy descent from the unstable twisted state did not converge'
+          IF (LEN_TRIM(km) > 0) why = TRIM(why)//' ('//TRIM(km)//')'
+          RETURN
+        END IF
+        torsion%descents = torsion%descents + 1
+        CALL torsion_stability(st, ks, km)
+        IF (ks /= CD_HCSTAT_OK) THEN
+          ok = .FALSE.
+          why = km
+          RETURN
+        END IF
+        torsion%stable = st
+        IF (st) RETURN
+        ok = .FALSE.
+      END DO
+      why = 'the descent did not reach a stable twisted equilibrium'
+    END SUBROUTINE torsion_descent
 
     SUBROUTINE setup_friction(fr, ecs, ecm)
       !! Validate the friction and map its reference onto the nodes of this mesh; the
