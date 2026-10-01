@@ -323,6 +323,7 @@ add_library(cabledyn_obj OBJECT
   src/CableDyn_EndConnection.f90
   src/CableDyn_Vessel.f90
   src/CableDyn_HermiteCable.f90
+  src/CableDyn_HermiteTorsion.f90
   src/CableDyn_HermiteCableStatic.f90
   src/CableDyn_HermiteCableDynamic.f90
   src/CableDyn_Conventions.f90
