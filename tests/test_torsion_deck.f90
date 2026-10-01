@@ -25,7 +25,9 @@
 !>  9. static body/cable torsion coupling with no yaw restoring and with a yaw stiffness of the
 !>     order of GJ/L: the passes converge and the body moment balances to 1e-8;
 !> 10. gate 8 with a bending-pinned End A on the turning body (torsion restrained, the
-!>     semi-tangential end): the same torsional pendulum and connection moment.
+!>     semi-tangential end): the same torsional pendulum and connection moment;
+!> 11. gate 8 from rest at Omega dt = 2 and 5: the body roll follows the closed form of the
+!>     march's trapezoidal body integrator at every step (unconditionally stable).
 PROGRAM test_torsion_deck
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Conventions, ONLY: CD_Body_Rotation
@@ -62,6 +64,8 @@ PROGRAM test_torsion_deck
   IF (only == 0 .OR. only == 8) CALL check_body_roll_dynamics('Rigid')
   IF (only == 0 .OR. only == 10) CALL check_body_roll_dynamics('Pinned')
   IF (only == 0 .OR. only == 9) CALL check_body_yaw_statics()
+  IF (only == 0 .OR. only == 11) CALL check_body_roll_large_step(2.0_wp)
+  IF (only == 0 .OR. only == 11) CALL check_body_roll_large_step(5.0_wp)
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' torsion deck gate(s) failed'
     ERROR STOP 1
@@ -652,6 +656,77 @@ CONTAINS
     CALL require(err_axis <= 1.0e-6_wp, '8/10: the connection moment on the body is the torque along the axis')
     CALL require(err_wave <= 1.0e-2_wp, '8/10: the body swings as a torsional pendulum at sqrt(GJ/(L I))')
   END SUBROUTINE check_body_roll_dynamics
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_body_roll_large_step(wdt)
+    !! 11. Gate 8's torsional pendulum stepped coarsely, Omega dt = wdt (2 and 5): a Rigid6 body
+    !!     (translation massive, rotational inertia I = k (dt/wdt)^2) starts at rest on a straight
+    !!     line twisted by 30 deg. The monolithic march carries the body inertia with am = af,
+    !!     beta = 1/4, gamma = 1/2, which on the linear pendulum is the trapezoidal rule whatever
+    !!     the dissipation: unconditionally stable, x_{n+1} with the closed form below and
+    !!     bounded within [0, 60] deg. At these steps the body turns by up to 56 deg per step,
+    !!     so the junction must converge the moment balance to the rotation (not to the body
+    !!     weight) and keep each trial turn inside the torsion step limit.
+    REAL(wp), INTENT(IN) :: wdt
+    REAL(wp), PARAMETER :: MB = 1.0e9_wp, GJ = 5.0e4_wp, LN = 20.0_wp, DT = 0.01_wp, XEQ = 30.0_wp
+    INTEGER, PARAMETER :: NSTEP = 20
+    REAL(wp), ALLOCATABLE :: rec(:, :)
+    REAL(wp) :: dg(3), anchor(3), kt, ib, x, v, a, xp, a1, err, rk(3, 3), w(3), ang, s, th
+    CHARACTER(256) :: brow, pb, cb, ca
+    CHARACTER(24) :: opt_dt, opt_t
+    CHARACTER(64) :: root
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: k
+    WRITE (root, '(A,I0)') 'tdeck_bigstep_', NINT(wdt)
+    kt = GJ/LN
+    ib = kt*(DT/wdt)**2
+    dg = [0.8_wp, 0.0_wp, -0.6_wp]
+    anchor = [0.0_wp, 0.0_wp, -60.0_wp] + (LN*1.0001_wp)*dg
+    WRITE (brow, '(A,ES24.16,A,ES24.16,A,3ES24.16)') '1 Rigid6 0 0 -60 0 0 0 ', MB, ' ', MB/RHOW, &
+      ' 0 0 0 0 0 ', ib, ib, ib
+    WRITE (pb, '(A,3ES24.16,A)') '2 Fixed ', anchor, ' 0 0 0 0'
+    ca = '1 A Rigid 0.8 0 -0.6 Rigid 0 1 0 0'
+    WRITE (cb, '(A,3ES24.16,A)') '1 B Rigid ', dg, ' Rigid 0 1 0 30'
+    WRITE (opt_dt, '(ES12.5,A)') DT, ' dtM'
+    WRITE (opt_t, '(ES12.5,A)') NSTEP*DT, ' TMax'
+    CALL write_deck(TRIM(root)//'.dat', [neutral_type], [brow], &
+                    [CHARACTER(96) :: '1 Body1 0 0 0 0 0 0 0', pb], [CHARACTER(16) :: '1 1 2 -'], &
+                    [CHARACTER(24) :: '1 cab 20.0 20'], [ca, cb], &
+                    [CHARACTER(24) :: '200.0 WtrDpth', 'moordyn bodyWetting', opt_dt, opt_t, 'deck bodyIC'], &
+                    [CHARACTER(12) :: 'Torq1N1'])
+    CALL CD_Multibody_Probe_Arm([0.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 0.0_wp, 0.0_wp])
+    CALL run_deck(TRIM(root)//'.dat', TRIM(root), ok, em)
+    CALL CD_Multibody_Probe_Get(rec)
+    ok = ok .AND. ALLOCATED(rec)
+    CALL require(ok, '11: the coarse-step rolling-body deck runs and is probed: '//TRIM(em))
+    IF (.NOT. ok) RETURN
+    ok = UBOUND(rec, 2) >= NSTEP
+    CALL require(ok, '11: every step is recorded')
+    IF (.NOT. ok) RETURN
+    ! the march's own closed form in steps of dt (h = 1): a = wdt^2 (XEQ - x), from rest
+    x = 0.0_wp
+    v = 0.0_wp
+    a = wdt*wdt*XEQ
+    err = 0.0_wp
+    DO k = 1, NSTEP
+      xp = x + v + 0.25_wp*a
+      a1 = wdt*wdt*(XEQ - xp)/(1.0_wp + 0.25_wp*wdt*wdt)
+      x = xp + 0.25_wp*a1
+      v = v + 0.5_wp*(a + a1)
+      a = a1
+      rk = RESHAPE(rec(8:16, k), [3, 3])
+      ang = ACOS(MAX(-1.0_wp, MIN(1.0_wp, 0.5_wp*(rk(1, 1) + rk(2, 2) + rk(3, 3) - 1.0_wp))))
+      w = [rk(3, 2) - rk(2, 3), rk(1, 3) - rk(3, 1), rk(2, 1) - rk(1, 2)]
+      s = NORM2(w)
+      th = 0.0_wp
+      IF (s > 1.0e-12_wp) th = DOT_PRODUCT(w/s, dg)*ang*180.0_wp/PI
+      err = nan_max_abs([err, th - x])
+    END DO
+    WRITE (*, '(A,F4.1,A,ES10.3,A)') 'coarse-step body roll (Omega dt = ', wdt, &
+      '): largest body roll error against the trapezoidal closed form ', err, ' deg'
+    CALL require(err <= 1.0e-4_wp, '11: the coarse-step torsional pendulum follows the march''s closed form')
+  END SUBROUTINE check_body_roll_large_step
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE yaw_deck(path, legs)

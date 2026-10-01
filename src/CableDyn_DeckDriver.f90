@@ -98,7 +98,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Set_Friction_Axial, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State
-  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -17900,18 +17900,24 @@ CONTAINS
     END SUBROUTINE cable_load
   END SUBROUTINE mb_imp_group_residual
 
-  SUBROUTINE mb_imp_row_scales(mb, points, opts, rscale)
+  SUBROUTINE mb_imp_row_scales(mb, points, opts, bh2, rscale)
     !! The force (translation rows) and moment (rotation rows) scale of every junction row, from
     !! its own object: the larger of its weight, its buoyancy, the line reactions at its
     !! attachments (their magnitudes summed, so a junction whose line loads cancel keeps their
     !! scale) and the cable end forces on it (at least 1 N), times its size (at least 1 m) for
-    !! moments.
+    !! moments. A body holding a line restrained in torsion has its moment rows scaled by its
+    !! rotational step stiffness instead when that is smaller, I_min/(beta h^2) + sum 1/C (bh2 =
+    !! beta h^2) times TORS_ROT_REF, so that the junction tolerance bounds the rotation error
+    !! (JUNCTION_TOL TORS_ROT_REF rad): the weight of a heavy body with a small rotational
+    !! inertia would otherwise accept a moment residual far above the line torque.
     TYPE(MultibodyMarch), INTENT(IN) :: mb
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: bh2
     REAL(wp), INTENT(OUT) :: rscale(:)
+    REAL(wp), PARAMETER :: TORS_ROT_REF = 1.0e-2_wp
     INTEGER :: ib, ir, p, ip, k, o, base, bases(2)
-    REAL(wp) :: f, l, arms(3, 2)
+    REAL(wp) :: f, l, arms(3, 2), kt
     rscale = CD_ONE
     DO ib = 1, SIZE(mb%rigid)
       o = mb%jb_off(ib)
@@ -17926,6 +17932,9 @@ CONTAINS
       f = MAX(f, cable_force(1, ib))
       rscale(o + 1:o + 3) = f
       rscale(o + 4:o + 6) = f*l
+      kt = torsion_stiffness(ib)
+      IF (kt > CD_ZERO) rscale(o + 4:o + 6) = MIN(f*l, MAX(CD_ONE, &
+                                                         (MINVAL(mb%rigid(ib)%inertia)/bh2 + kt)*TORS_ROT_REF))
     END DO
     DO ir = 1, SIZE(mb%rods)
       o = mb%jr_off(ir)
@@ -17965,6 +17974,21 @@ CONTAINS
         IF (mb%cab_kind(cc) == kind .AND. mb%cab_obj(cc) == obj) fc = MAX(fc, NORM2(mb%cab_force(:, cc)))
       END DO
     END FUNCTION cable_force
+
+    REAL(wp) FUNCTION torsion_stiffness(obj) RESULT(ks)
+      !! Summed torsional stiffness 1/C of the active torsional cables on body obj (0: none).
+      INTEGER, INTENT(IN) :: obj
+      INTEGER :: cc
+      REAL(wp) :: cmp
+      ks = CD_ZERO
+      IF (.NOT. ALLOCATED(mb%cables)) RETURN
+      DO cc = 1, SIZE(mb%cables)
+        IF (mb%cab_kind(cc) /= 1 .OR. mb%cab_obj(cc) /= obj) CYCLE
+        IF (.NOT. mb%cables(cc)%line%torsion%active) CYCLE
+        cmp = CD_HermiteTorsion_Compliance(mb%cables(cc)%line%torsion, mb%cables(cc)%line%l0)
+        IF (cmp > CD_ZERO) ks = ks + CD_ONE/cmp
+      END DO
+    END FUNCTION torsion_stiffness
   END SUBROUTINE mb_imp_row_scales
 
   RECURSIVE SUBROUTINE mb_step_implicit(mb, points, opts, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
@@ -17996,7 +18020,7 @@ CONTAINS
     REAL(wp), PARAMETER :: JUNCTION_TOL = 1.0e-6_wp, PREDICTOR_TOL = 1.0e-9_wp
     CHARACTER(24) :: tstr
     INTEGER :: dep, it, g, c, ib, ir, p, o, es, lit, nj, gworst, it2
-    LOGICAL :: lconv, lstall, first, ok, conv2, stall2, refresh, lines_stepped
+    LOGICAL :: lconv, lstall, first, ok, conv2, stall2, refresh, lines_stepped, tors_turn, lim
     INTEGER, PARAMETER :: TAN_MAX_AGE = 20
     REAL(wp) :: rho, am, af, beta_na, gam_na, t_af, h, fac, dth, worst, tol_it, am_p, gam_p, beta_p
     REAL(wp), ALLOCATABLE :: x(:), xp(:), r(:), rp(:), jac(:, :), dx(:), kg(:, :), ga(:, :), rscale(:)
@@ -18076,8 +18100,15 @@ CONTAINS
     first = .TRUE.
     lines_stepped = .FALSE.
     ok = .FALSE.
+    tors_turn = .FALSE.
     gworst = 0
     DO it = 1, MAX_OUTER
+      ! a body holding a line restrained in torsion turns by less than pi/2 per step: the line
+      ! sees the body only through its orientation, which cannot tell a turn of psi from one of
+      ! psi - 2 pi, so a larger trial turn could settle one turn off. The trial is held inside
+      ! the limit; a step whose solution lies outside it does not converge and is halved.
+      CALL mb_torsion_turn_limit(mb, x, dt, beta_na, lim)
+      tors_turn = tors_turn .OR. lim
       CALL mb_imp_states(mb, x, dt, gam_na, beta_na, gam_p, beta_p, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL mb_imp_scatter(mb, points, ErrStat, ErrMsg)
@@ -18139,7 +18170,7 @@ CONTAINS
       END DO
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       IF (.NOT. ALL(IEEE_IS_FINITE(r))) EXIT
-      IF (it == 1) CALL mb_imp_row_scales(mb, points, opts, rscale)
+      IF (it == 1) CALL mb_imp_row_scales(mb, points, opts, beta_na*dt*dt, rscale)
       ! every row against its own object's force (moment) scale
       worst = CD_ZERO
       DO g = 1, mb%ng
@@ -18237,7 +18268,12 @@ CONTAINS
     END DO
     mb%tan_age = HUGE(1)
     IF (dep >= MAX_DEPTH) THEN
-      IF (ErrStat == CD_DECKDRV_OK) THEN
+      IF (ErrStat == CD_DECKDRV_OK .AND. tors_turn) THEN
+        WRITE (tstr, '(ES12.5)') time
+        CALL fail_solve(ErrStat, ErrMsg, 'monolithic body/point step at t = '//TRIM(ADJUSTL(tstr))// &
+                        ' s: a body holding a line restrained in torsion turns by more than 90 deg in one step '// &
+                        'even after '//TRIM(int_to_str(MAX_DEPTH))//' step halvings; reduce dtM')
+      ELSE IF (ErrStat == CD_DECKDRV_OK) THEN
         IF (gworst > 0) THEN
           SELECT CASE (mb%g_kind(gworst))
           CASE (1)
@@ -18307,6 +18343,38 @@ CONTAINS
       END DO
     END SUBROUTINE cable_columns
   END SUBROUTINE mb_step_implicit
+
+  SUBROUTINE mb_torsion_turn_limit(mb, x, dt, beta_na, limited)
+    !! Keep every body that holds a cable restrained in torsion within a turn of TURN_FRAC
+    !! CD_HTORS_MAX_STEP over the step to the trial accelerations x: when the Newmark rotation
+    !! increment dt omega_n + dt^2 ((1/2 - beta) alpha_n + beta alpha_{n+1}) of
+    !! CD_Rigid_Advance_Newmark is larger, alpha_{n+1} is moved so that the increment keeps its
+    !! direction at that length (limited = .TRUE.). The cable sees the body only through its
+    !! orientation, which cannot tell a turn of psi from one of psi - 2 pi.
+    TYPE(MultibodyMarch), INTENT(IN) :: mb
+    REAL(wp), INTENT(INOUT) :: x(:)
+    REAL(wp), INTENT(IN) :: dt, beta_na
+    LOGICAL, INTENT(OUT) :: limited
+    REAL(wp), PARAMETER :: TURN_FRAC = 0.9_wp
+    INTEGER :: c, ib, o
+    REAL(wp) :: base(3), dpsi(3), s
+    limited = .FALSE.
+    IF (.NOT. ALLOCATED(mb%cables)) RETURN
+    DO c = 1, SIZE(mb%cables)
+      IF (mb%cab_kind(c) /= 1 .OR. .NOT. mb%cables(c)%line%torsion%active) CYCLE
+      ib = mb%cab_obj(c)
+      o = mb%jb_off(ib)
+      IF (o < 0) CYCLE
+      base = dt*mb%old_rigid(ib)%omega + dt*dt*(0.5_wp - beta_na)*mb%old_rigid(ib)%alpha
+      dpsi = base + dt*dt*beta_na*x(o + 4:o + 6)
+      IF (NORM2(dpsi) <= TURN_FRAC*CD_HTORS_MAX_STEP) CYCLE
+      ! non-finite trials are left to the residual's finite check
+      IF (.NOT. ALL(IEEE_IS_FINITE(dpsi))) CYCLE
+      s = TURN_FRAC*CD_HTORS_MAX_STEP/NORM2(dpsi)
+      x(o + 4:o + 6) = (s*dpsi - base)/(dt*dt*beta_na)
+      limited = .TRUE.
+    END DO
+  END SUBROUTINE mb_torsion_turn_limit
 
   INTEGER FUNCTION mb_cable_group(mb, c) RESULT(g)
     !! The junction group that carries cable c's End A object (0: a held attachment or an object
