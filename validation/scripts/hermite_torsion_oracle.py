@@ -21,9 +21,9 @@ form with JAX (float64), differentiates it twice with respect to the nodal DOFs 
 rotations of the two end frames, and writes the reference values used by the Fortran test
 ``tests/test_hermite_torsion_kernel.f90``:
 
-    python validation/scripts/hermite_torsion_oracle.py [output]
+    python validation/scripts/hermite_torsion_oracle.py --out tests/data/torsion_oracle_reference.txt
 
-The default output is ``tests/data/torsion_oracle_reference.txt``. Requires JAX and NumPy.
+``--out`` is required (``--help`` only prints the usage). Requires JAX and NumPy.
 
 The end-frame derivatives are taken with respect to the rotation vector w of an
 incremental rotation exp(w) applied to both end directors at w = 0. Before writing,
@@ -35,7 +35,6 @@ end-node tangent.
 from __future__ import annotations
 
 import os
-import sys
 
 import numpy as np
 import jax
@@ -256,6 +255,12 @@ def main(path):
 
 
 if __name__ == "__main__":
-    here = os.path.dirname(os.path.abspath(__file__))
-    default = os.path.join(here, "..", "..", "tests", "data", "torsion_oracle_reference.txt")
-    main(os.path.normpath(sys.argv[1] if len(sys.argv) > 1 else default))
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="output path (the committed reference is tests/data/torsion_oracle_reference.txt)",
+    )
+    main(os.path.normpath(parser.parse_args().out))

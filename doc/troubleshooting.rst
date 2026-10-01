@@ -333,9 +333,14 @@ Torsion
      - outside the torsion scope (:doc:`capabilities`). Move End A to a ``Fixed``,
        ``Coupled``/``Vessel`` point or a Rigid6 body, or represent the modules as a smeared
        buoyancy section.
-   * - ``torsion is not yet supported in coupled OpenFAST runs (nor on the mixed EI = 0 +
-       finite-EI aggregate route or in FAST.Farm)``
-     - run the torsional line standalone, or set ``TorsStiffness Free`` in the coupled deck.
+   * - ``torsion is not yet supported in coupled OpenFAST runs`` / ``torsion is not yet supported
+       in a deck that mixes EI = 0 and finite-EI lines without a BODY, nor in coupled OpenFAST or
+       FAST.Farm runs``
+     - run the torsional line standalone (a mixed deck with a body runs on the multibody route,
+       which supports torsion), or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
+   * - ``a body holding a line restrained in torsion turns by more than 90 deg in one step even
+       after 6 step halvings``
+     - the body turns faster than one step can follow the twist; reduce ``dtM``.
    * - ``torsion in a dynamic run needs the force-blended generalised-alpha (OPTION
        alpha_force_blend True)`` / ``modal analysis (OPTION nModes) of a line with torsion is not
        yet supported``
@@ -344,11 +349,11 @@ Torsion
        no torque``
      - a ``Torq``/``Twist`` channel needs a line with a torsional restraint at both ends.
    * - ``motionFile: point <id> has a non-zero roll column, but no line restrained in torsion at
-       both ends ... has its End A there`` / ``the roll column of point <id> must be 0 at t = 0`` /
-       ``gives the roll column (12th) on some rows only`` / ``the roll column (12th, degrees) must
-       be a finite number``
-     - the roll column drives the End A frame of a torsional line, starts from 0 (put a constant
-       twist in ``Pretwist``), and appears on every row of the point or on none
+       both ends ... has its moving (non-Fixed) end there`` / ``the roll column of point <id> must
+       be 0 at t = 0`` / ``gives the roll column (12th) on some rows only`` / ``the roll column
+       (12th, degrees) must be a finite number``
+     - the roll column drives the frame of a torsional line's moving end, starts from 0 (put a
+       constant twist in ``Pretwist``), and appears on every row of the point or on none
        (:doc:`file_formats`).
 
 FAILURE and CONTROL sections

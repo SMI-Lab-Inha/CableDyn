@@ -176,24 +176,26 @@ Tokens after the eleventh are ignored, except on a deck with a torsional line (b
 
 **Roll column (torsion).** On a deck where some finite-EI line is restrained in torsion at both
 ends (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`), a numeric twelfth token is
-read as the roll of that line's End A frame about its End A direction ``Ez``, in degrees,
-right-handed. It imposes a twist history without turning the point: the line's imposed twist is
+read as the roll of the frame of that line's moving end (End A, or End B in a deck that lists the
+anchor as End A), in degrees, right-handed about the line tangent pointing into the line from that
+end. It imposes a twist history without turning the point: the line's imposed twist is
 
 .. math::
 
    \Phi(t) = \text{Pretwist}_B - \text{Pretwist}_A - \text{roll}(t),
 
-so a positive roll of End A lowers :math:`\Phi`, the same sign as rolling the End A frame by
-the same angle through a body or vessel. Rules:
+whichever end moves, so a positive roll lowers :math:`\Phi`. At End A it has the sense of
+``Pretwist`` (A) and of rolling the End A frame through a body or vessel; at End B, where the
+inward tangent is ``−Ez``, it has the opposite sense to ``Pretwist`` (B). Rules:
 
 * a point gives the roll on every row or on none (``gives the roll column (12th) on some rows
   only``);
 * the roll must be 0 at ``t = 0``, because the static initial condition uses the deck
   ``Pretwist``; give a constant twist there (``the roll column of point <id> must be 0 at
   t = 0``);
-* a non-zero roll is accepted only at a point that is End A of a line restrained in torsion at
-  both ends (``has a non-zero roll column, but no line restrained in torsion at both ends ...
-  has its End A there``);
+* a non-zero roll is accepted only at the moving end of a line restrained in torsion at both
+  ends (``has a non-zero roll column, but no line restrained in torsion at both ends ... has its
+  moving (non-Fixed) end there``);
 * the roll is real valued and not wrapped, so several turns are written as they accumulate.
   Torsion carries no inertia (see :doc:`theory`), so the torque follows the roll at once and no
   roll rate or acceleration column is needed.

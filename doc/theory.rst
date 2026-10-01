@@ -148,7 +148,7 @@ A line restrained in torsion at both ends (``END CONNECTIONS`` ``TorsStiffness``
 :doc:`driver_format`) adds the twist of an isotropic Kirchhoff rod without adding degrees of
 freedom. For an isotropic section with no distributed torque the twisting moment
 :math:`M = GJ\,u_3`, with :math:`u_3` the material twist rate, is uniform along the rod
-(:ref:`van der Heijden et al., 2003 <ref-vanderheijden2003>`, eqs. 5 and 22). The twist field
+(:ref:`van der Heijden et al., 2003 <ref-vanderheijden2003>`). The twist field
 then condenses to one scalar per line, and the line energy gains
 
 .. math::

@@ -771,16 +771,16 @@ LineID  End  Stiffness  EzX  EzY  EzZ   TorsStiffness  NxX  NxY  NxZ  Pretwist
 
 | Column | Meaning |
 |--------|---------|
-| `TorsStiffness` | `Free`/`Zero`/`0` (default, no torsional restraint), `Rigid`/`Infinity`/`Inf`, or a positive torsional end spring [N·m/rad] |
-| `NxX`, `NxY`, `NxZ` | zero-twist reference normal of the end, in the frame of `Ez`; finite, non-zero and not parallel to `Ez` (within about 0.06°); orthonormalised against `Ez` by the parser |
+| `TorsStiffness` | `Free`/`Zero`/`0` (default, no torsional restraint), `Rigid`/`Infinity`/`Inf` (any case), or a positive torsional end spring [N·m/rad], a plain finite number |
+| `NxX`, `NxY`, `NxZ` | zero-twist reference normal of the end, in the frame of `Ez`; finite numbers; at a restrained end non-zero and not parallel to `Ez` (within about 0.06°), orthonormalised against `Ez` by the parser; unused at a `Free` end |
 | `Pretwist` | optional roll of the end frame about `Ez` [deg, right-handed, default 0]; any real value, several turns included |
 
 Behaviour:
 
 - Torsion is solved only on a line restrained at **both** ends. With one end restrained the
   other end is free to twist, the line carries no torque, and the driver prints a note and
-  solves the line as without the columns. `Free` columns, or no columns, reproduce the
-  6-column results exactly.
+  solves the line as without the columns (the rules below then do not apply). `Free` columns,
+  or no columns, reproduce the 6-column results exactly.
 - The imposed twist is `Phi = Pretwist(B) − Pretwist(A)`, measured against the line's own
   geometric twist `Theta`, the parallel-transport rotation of the End A normal carried along the
   centreline to End B (zero for a line that stays in a plane, with both normals perpendicular to
@@ -792,8 +792,11 @@ Behaviour:
   the line then keeps its untwisted shape.
 - The torsion end frame turns with what carries the end: a Rigid6 body, the vessel of
   `vesselMotion`/`vesselRAO`, or nothing at a `Fixed` or held point. The `motionFile` roll
-  column rolls the End A frame about its direction
+  column rolls the frame of the line's moving end
   ([Prescribed motion](#prescribed-motion-motionfile)).
+- A Rigid6 body holding such a line turns by less than 90° per step: a step whose turn would be
+  larger is halved (the twist is read from the body's orientation, which repeats every turn), and
+  a run that still needs more after six halvings stops by name; reduce `dtM`.
 - Torsion may be restrained at a bending-`Pinned` end. The torque then passes through a
   constant-velocity-joint idealisation: the end frame is carried from `Ez` to the line tangent by
   the smallest rotation, so the end transmits the torque *semi-tangentially*, not as Greenhill's
@@ -811,9 +814,11 @@ Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B
 `GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point or a Rigid6
 `Body<N>` point. Each of the following stops with a named error: torsion on an `EI = 0` line,
 on a rod end or on a `Point3` body, a line with `ATTACHMENTS`, modal analysis (`nModes`), a
-dynamic run with `False alpha_force_blend`, the coupled OpenFAST and FAST.Farm routes and the
-mixed `EI = 0` + finite-EI aggregate (`torsion is not yet supported in coupled OpenFAST
-runs ...`), and a `Torq`/`Twist` channel on a line that is not restrained at both ends. Seabed
+dynamic run with `False alpha_force_blend`, any restrained end (one end included) in a coupled
+OpenFAST or FAST.Farm run or in a deck mixing `EI = 0` and finite-EI lines without a body
+(`torsion is not yet supported in a deck that mixes ...`; with a body such a deck runs on the
+multibody route, which supports torsion), and a `Torq`/`Twist` channel on a line that is not
+restrained at both ends. Seabed
 friction does not resist twist (the laid part of a line twists freely), and there is no
 torque–tension coupling.
 
@@ -1117,8 +1122,12 @@ cases. With an active path:
 
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
 plain numbers; tokens after the eleventh are ignored, except that a deck with a line restrained
-in torsion at both ends reads a twelfth, `roll` [deg]: the roll of that line's End A frame about
-its direction, which imposes `Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`. The roll is 0 at
+in torsion at both ends reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the
+line's moving end (End A, or End B in a deck that lists the `Fixed` anchor as End A), right-handed
+about the line tangent pointing into the line from that end. Either way it imposes
+`Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`: the roll has the sense of `Pretwist(A)` at End A
+(where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)` at End B (where it is
+`−Ez`). The roll is 0 at
 `t = 0` and is given on every row of the point or on none. Header lines must be comments. `time` must
 lie on the `0, dtM, 2·dtM, …, TMax` grid and `point_id` must be a prescribed point. Each
 (point, time) pair appears once, every prescribed point needs a row at every grid time, and rows

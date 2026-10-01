@@ -172,9 +172,12 @@ These apply to a finite-EI line restrained in torsion at both ends (:doc:`driver
 - The end frame of each end is its direction ``Ez`` (End A → End B) and its reference normal
   ``Nx``, in the frame of ``Ez``. ``Pretwist`` rolls the end frame about ``Ez`` by a right-handed
   angle, and the imposed twist is :math:`\Phi = \text{Pretwist}_B - \text{Pretwist}_A`. A
-  ``motionFile`` roll of End A enters with a minus sign,
-  :math:`\Phi = \text{Pretwist}_B - \text{Pretwist}_A - \text{roll}`, the same as a right-handed
-  rotation of a body or vessel carrying End A about ``Ez``.
+  ``motionFile`` roll turns the line's moving end right-handed about the tangent pointing into
+  the line from that end, and enters with a minus sign,
+  :math:`\Phi = \text{Pretwist}_B - \text{Pretwist}_A - \text{roll}`, whichever end moves. At
+  End A this is a right-handed rotation about ``Ez``, as of a body or vessel carrying End A; at
+  End B (a deck listing the anchor as End A) it is about ``−Ez``, the opposite sense to
+  ``Pretwist`` (B).
 - **Torque is positive** for a right-handed twist of End B relative to End A about the End A →
   End B tangent: the internal twisting moment :math:`GJ` times the twist rate, with arc length
   from End A, as OrcaFlex's ``Torque``. Reversing a line (swapping its ends) keeps the sign of

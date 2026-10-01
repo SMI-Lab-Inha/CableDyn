@@ -366,7 +366,7 @@ CONTAINS
     !!                                  its equilibrium value (the capacity's dependence on
     !!                                  the normal force is left out; see the final
     !!                                  evaluation).
-    !! torsion (optional, inout)       : condensed isotropic torsion of the line (Route A,
+    !! torsion (optional, inout)       : condensed isotropic torsion of the line (uniform torque,
     !!                                  CableDyn_HermiteTorsion), used when torsion%active.
     !!                                  The loads and EI/buoyancy stages above run without it;
     !!                                  the imposed twist is then ramped as the last load

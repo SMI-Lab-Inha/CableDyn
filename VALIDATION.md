@@ -822,8 +822,7 @@ in parentheses).
   400 and 1600, where the onset approaches the infinite-rod value `2√(EI T)` (ratio 1.0124 and
   1.0031), the 128-element error is 3.8e-7 and 6.5e-6. Above the onset the straight state is
   reported unstable and the static solve descends to a stable buckled state of lower energy and
-  relaxed torque. This static form stands in for the proposed dynamic hockling case: loop
-  formation and self-contact are not resolved (see Limits below).
+  relaxed torque. Dynamic loop formation and self-contact are not resolved (see Limits below).
 - **T-4 semi-tangential end** (`hermite_torsion_static`). A bending-pinned end restrained in
   torsion carries the torque about the bisector of the connection direction and the tangent.
   The onset is the root of `tan x = −x/3` (4.9112877 EI/L at `T = 0`, 7.2692742 at
@@ -872,34 +871,22 @@ in parentheses).
   axis (3.6e-12), its net wrench equals the line loads, it turns against the torque in statics
   (net moment ≤1e-6 N·m), and released with a roll rate it swings as a torsional pendulum at
   `√(GJ/(L I))` to 6.4e-5 of the torque amplitude, with clamped and with bending-pinned
-  torsional ends. The `motionFile` roll column and a rolling vessel give `Twist<L> = −roll` and
-  the quasi-static torque at every step.
+  torsional ends. Stepped coarsely from rest, at `Ω Δt` = 2 and 5, the pendulum follows the closed
+  form of the march's trapezoidal body integrator at every step (≤9.7e-8°), so the body–twist
+  coupling is stable at any step. The `motionFile` roll column and a rolling vessel give
+  `Twist<L> = −roll` and the quasi-static torque at every step.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
-  with `Free` columns, or with one restrained end, every output is byte-identical to the
-  6-column deck. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
+  with `Free` columns (whatever their normal), or with one restrained end, every output is
+  byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
+  give the same run. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
   `ATTACHMENTS`, modal analysis, the configuration blend, misuse of the roll column, channels on
-  an unrestrained line, and the coupled entries stop with named errors.
+  an unrestrained line, the coupled entries and a mixed `EI = 0` + finite-EI deck without a body
+  stop with named errors.
 
 Limits. The torsion model is quasi-static (no torsional inertia), takes no seabed friction
-against twist and no torque–tension coupling, and does not resolve self-contact: the dynamic
-loop-formation (hockling) case and the twisted slack catenary of the proposed OrcaFlex set are
-not part of this record. There is no experimental torsion case.
-
-| Proposed case | Gate |
-|---|---|
-| V0 kernel, invariants, fold guard | T-1 |
-| V1 pure torsion | T-2 |
-| V2 torsion off, bit-for-bit | backward compatibility; full CTest suite |
-| V3 zero-twist parity | T-6 (lazy wave), T-7 (3D sagging line) |
-| V4 Greenhill onsets and post-buckling | T-3, T-4 |
-| V5 Kirchhoff helix | T-7 |
-| V6 hockling onset | T-3 (static onset at `TL²/EI` 400, 1600); dynamic loop formation not run |
-| V7 Cosserat cross-check | T-8 (pure torsion, bent and twisted rod) |
-| V8 OrcaFlex | T-2, T-5, T-6; dynamic loop case not run |
-| V9 energy | T-10 (free vibration; body pendulum) |
-| V10 unwrap and restart | T-1, T-10 |
-| V11 Rigid6 body torque | T-10 |
-| V12 named errors | backward compatibility and refusals |
+against twist and no torque–tension coupling, and does not resolve self-contact. Dynamic loop
+formation (hockling) and a twisted slack catenary against OrcaFlex are not part of this record,
+and there is no experimental torsion case.
 
 ## Cross-code comparison method
 

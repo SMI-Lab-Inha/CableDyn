@@ -53,7 +53,8 @@ import os
 import time
 import traceback
 
-import OrcFxAPI as ofx
+# OrcFxAPI is imported only to run OrcaFlex (_load_orcaflex), so --summary works without it
+ofx = None
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SUMMARY_NAME = "orcaflex_torsion_summary.json"
@@ -639,8 +640,18 @@ def case_c():
     return res
 
 
+def _load_orcaflex() -> None:
+    """Import OrcFxAPI as the module-level ofx (needed only to run OrcaFlex)."""
+    global ofx
+    if ofx is None:
+        import OrcFxAPI
+
+        ofx = OrcFxAPI
+
+
 def run(cases: list[str], out_dir: str) -> str:
     """Run the OrcaFlex cases and write (update) the JSON summary; return its path."""
+    _load_orcaflex()
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, SUMMARY_NAME)
     with open(os.path.abspath(__file__), "rb") as fh:

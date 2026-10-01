@@ -764,7 +764,7 @@ def test_coupled_route_takes_no_motion_file_and_needs_a_line():
 # --------------------------------------------------------------------------- torsion
 
 # A straight finite-EI line clamped at a Coupled and a Fixed point with the optional torsion
-# columns of END CONNECTIONS (the native torsion deck gate's pure-torsion deck).
+# columns of END CONNECTIONS (the pure-torsion deck of test_torsion_deck).
 _TORSION = f"""\
 {_BAR} CableDyn Input File {_BAR}
 in-memory fixture: a straight finite-EI line restrained in torsion at both ends

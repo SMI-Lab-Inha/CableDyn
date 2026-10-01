@@ -10,22 +10,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
-- Torsion of finite-EI lines in the standalone driver: condensed isotropic torsion (uniform
-  torque, quasi-static, no torsional inertia) through the geometric twist of the cubic-Hermite
-  centreline, with no added degrees of freedom. Optional `END CONNECTIONS` columns
-  `TorsStiffness NxX NxY NxZ [Pretwist]` restrain the twist of a line end (`Free`, `Rigid` or a
-  spring) with a reference normal and a pretwist in degrees; a line restrained at both ends
-  needs an explicit `GJ`, and a bending-pinned end may be restrained (a semi-tangential end).
-  Statics ramp the imposed twist with a stability check and descend to the buckled shape above
-  an onset; dynamics carry the torque in every step, the End A frame turning with its Rigid6
-  body or vessel, and the new `motionFile` roll column imposes a twist history. The torque is
-  returned to a Rigid6 body at End A in statics and dynamics. New channels `Torq<L>N<J>`,
-  `Twist<L>N<J>` and `Twist<L>`, torque and twist range-graph columns, Python deck, channel-unit
-  and range-graph support, and the example `torsion_lazy_wave_hangoff_twist.dat`. Validated
-  against closed forms, the Cosserat rod path and OrcaFlex 11.6d (VALIDATION.md, Torsion). Coupled
-  OpenFAST and FAST.Farm runs, the mixed `EI = 0` + finite-EI aggregate, rod ends, bodies other
-  than Rigid6, lines with `ATTACHMENTS`, modal analysis and `False alpha_force_blend` stop with
-  a named error when torsion is requested; deck results without torsion are unchanged.
+- Torsion of finite-EI lines in the standalone driver (condensed, quasi-static, uniform torque):
+  `END CONNECTIONS` columns `TorsStiffness NxX NxY NxZ [Pretwist]`, a `motionFile` roll column,
+  the torque returned to Rigid6 bodies, channels `Torq<L>N<J>`, `Twist<L>N<J>` and `Twist<L>`,
+  range-graph columns, `DeckModel` and channel support in Python, and the example
+  `torsion_lazy_wave_hangoff_twist.dat`. Validated in VALIDATION.md (Torsion). Routes outside
+  its scope, coupled OpenFAST (NLR) runs included, stop with a named error; results without
+  torsion are unchanged.
 
 ### Fixed
 
