@@ -274,7 +274,7 @@ class DeckWriter:
 
         This writer has no torsion columns (``TorsStiffness NxX NxY NxZ Pretwist``) and
         no ``GJ`` column, so a torsion argument is refused; build a deck with torsion with
-        :meth:`cabledyn.builder.DeckModel.add_end_connection`.
+        ``cabledyn.builder.DeckModel.add_end_connection``.
 
         Parameters
         ----------
