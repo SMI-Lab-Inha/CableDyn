@@ -575,6 +575,11 @@ add_test(NAME hermite_torsion_static
          COMMAND test_hermite_torsion_static ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_analytic_refs.txt)
 set_tests_properties(hermite_torsion_static PROPERTIES LABELS "fortran;unit;static;validation")
 
+add_executable(test_torsion_validation tests/test_torsion_validation.f90)
+target_link_libraries(test_torsion_validation PRIVATE cabledyn_core)
+add_test(NAME torsion_validation
+         COMMAND test_torsion_validation ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_analytic_refs.txt)
+set_tests_properties(torsion_validation PROPERTIES LABELS "fortran;unit;static;validation")
 add_executable(test_hermite_torsion_dynamic tests/test_hermite_torsion_dynamic.f90)
 target_link_libraries(test_hermite_torsion_dynamic PRIVATE cabledyn_core)
 add_test(NAME hermite_torsion_dynamic COMMAND test_hermite_torsion_dynamic)
