@@ -8,6 +8,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Static torsion of finite-EI lines (condensed isotropic torsion): optional `END CONNECTIONS`
+  columns `TorsStiffness NxX NxY NxZ [Pretwist]` restrain the twist at a line end (`Free`,
+  `Rigid` or a stiffness) with a reference normal and a pretwist in degrees. A line restrained
+  at both ends needs an explicit `GJ` and is solved with its imposed twist, a stability check
+  and buckling descent; the torque is returned to a Rigid6 body at End A. New channels
+  `Torq<L>N<J>`, `Twist<L>N<J>` and `Twist<L>`. Statics only (`TMax 0`) in the standalone
+  driver; dynamic, modal and coupled OpenFAST/FAST.Farm runs with torsion stop with an error.
+
 ### Fixed
 
 - The static solve of a taut, neutrally buoyant finite-EI line (mass per length equal to
