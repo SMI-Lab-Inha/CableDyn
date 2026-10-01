@@ -110,6 +110,8 @@ Sign conventions
   normal reaction acts in :math:`+z` on a level floor, and along the upward surface normal on a
   sloped bathymetry (:doc:`theory`).
 - **Rotations** are right-handed about their axis.
+- **Torque** on a line with torsion is positive for a right-handed twist of End B relative to
+  End A (see `Torsion signs`_).
 
 Line topology and arc length
 ----------------------------
@@ -161,6 +163,29 @@ Angles at line ends
 - An ``END CONNECTIONS`` reference direction (``EzX EzY EzZ``) is a vector along the
   End-A→End-B tangent; at a coupled end it is stored in the supporting body's frame and rotates
   with it.
+
+Torsion signs
+-------------
+
+These apply to a finite-EI line restrained in torsion at both ends (:doc:`driver_format`).
+
+- The end frame of each end is its direction ``Ez`` (End A → End B) and its reference normal
+  ``Nx``, in the frame of ``Ez``. ``Pretwist`` rolls the end frame about ``Ez`` by a right-handed
+  angle, and the imposed twist is :math:`\Phi = \text{Pretwist}_B - \text{Pretwist}_A`. A
+  ``motionFile`` roll of End A enters with a minus sign,
+  :math:`\Phi = \text{Pretwist}_B - \text{Pretwist}_A - \text{roll}`, the same as a right-handed
+  rotation of a body or vessel carrying End A about ``Ez``.
+- **Torque is positive** for a right-handed twist of End B relative to End A about the End A →
+  End B tangent: the internal twisting moment :math:`GJ` times the twist rate, with arc length
+  from End A, as OrcaFlex's ``Torque``. Reversing a line (swapping its ends) keeps the sign of
+  the torque: the parser negates and swaps the pretwists, and :math:`\Phi` is unchanged.
+- **Twist** channels are in degrees: ``Twist<L>N<J>`` is the cable's own twist from End A to
+  node ``J``, ``Twist<L>`` the total :math:`\Phi - \Theta` with the end-spring windup. OrcaFlex
+  reports the twist rate in deg/m and end twisting stiffness in kN·m/deg; CableDyn's
+  ``TorsStiffness`` is in N·m/rad.
+- The geometric twist :math:`\Theta` is the angle about the End B direction, right-handed, from
+  the End B normal to the End A normal transported along the line. It is zero for a line in a
+  plane whose two normals are perpendicular to that plane.
 
 Orientation angles
 ------------------

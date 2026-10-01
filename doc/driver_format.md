@@ -257,7 +257,11 @@ A stock-order header applies only to the 10-column row.
 torsional stiffness, transverse and axial rotary inertia per length):
 `Name Diam Mass EA BA EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t`. The four extra values must be finite
 and either all `0` or all `> 0`. All zero, or the 10-column row, selects the circular-section
-closure `GAs = EA/(2(1+0.3))`, `GJ = EI/(1+0.3)`, `Irt = m d²/16`, `Irn = m d²/8`.
+closure `GAs = EA/(2(1+0.3))`, `GJ = EI/(1+0.3)`, `Irt = m d²/16`, `Irn = m d²/8`. The closure
+serves the secondary Cosserat path only: a finite-EI line restrained in torsion
+([END CONNECTIONS](#end-connections-optional-finite-ei-lines)) takes `GJ` [N·m²/rad] from the
+14-column row of each of its sections and stops by name without it. `GAs`, `Irt` and `Irn` are
+not used by the cubic-Hermite route, but the all-or-nothing rule still asks for positive values.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -635,7 +639,7 @@ never both: a `SECTIONS` row for a 7-column line is an error naming the line.
 |--------|---------|
 | `ID` | unique line id ≥ 1 |
 | `NodeA`, `NodeB` | End A / End B POINT ids (distinct). **End A is the fairlead (top) end and End B the anchor (lower) end**, as in OrcaFlex. |
-| `Outputs` | per-line file flags. `-` = none. `p` (node positions) and `t` (segment tensions) write `<out_root>.Line<ID>.p.out` / `.t.out`, End A first. Static EI = 0 decks write node/segment tables; independent EI = 0, point-system EI = 0, independent finite-EI, rod, and Rigid6 dynamic decks write time series (one row per output time). `r` writes the range graph `<out_root>.Line<ID>.range.out`: the minimum, maximum and mean over the run (from `RangeStart`) of the node tension, curvature, bend moment, declination and seabed clearance, on every standalone route; a coupled OpenFAST deck rejects it. Line-node channels in the main `.out` file are requested in `OUTPUTS`. |
+| `Outputs` | per-line file flags. `-` = none. `p` (node positions) and `t` (segment tensions) write `<out_root>.Line<ID>.p.out` / `.t.out`, End A first. Static EI = 0 decks write node/segment tables; independent EI = 0, point-system EI = 0, independent finite-EI, rod, and Rigid6 dynamic decks write time series (one row per output time). `r` writes the range graph `<out_root>.Line<ID>.range.out`: the minimum, maximum and mean over the run (from `RangeStart`) of the node tension, curvature, bend moment, declination and seabed clearance (and torque and twist on a line with torsion), on every standalone route; a coupled OpenFAST deck rejects it. Line-node channels in the main `.out` file are requested in `OUTPUTS`. |
 
 **Automatic anchor-first swap.** Stock MoorDyn decks list lines anchor first. When a line's
 `NodeA` is a `Fixed` point and its `NodeB` is a `Coupled`, `Vessel`, `Body<N>`, `Free`, or
@@ -751,6 +755,67 @@ Behaviour:
 Rows on an `EI = 0` line, duplicate rows, unknown line ids, null directions, negative stiffnesses,
 and non-finite values fail deck validation. OpenFAST linearisation with a platform-relative end
 connection is rejected at initialisation.
+
+#### Torsion columns
+
+Four or five optional columns restrain the twist of a finite-EI line end (rows of 10 or 11
+columns; the 6-column rows keep their meaning):
+
+```text
+--------------------- END CONNECTIONS -------------------------------
+LineID  End  Stiffness  EzX  EzY  EzZ   TorsStiffness  NxX  NxY  NxZ  Pretwist
+(-)     (-)  (N-m/rad)  (-)  (-)  (-)   (N-m/rad)      (-)  (-)  (-)  (deg)
+1       A    Rigid      1.0  0.0  0.0   Rigid          0.0  0.0  1.0  0.0
+1       B    Rigid      1.0  0.0  0.0   Rigid          0.0  0.0  1.0  720.0
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TorsStiffness` | `Free`/`Zero`/`0` (default, no torsional restraint), `Rigid`/`Infinity`/`Inf`, or a positive torsional end spring [N·m/rad] |
+| `NxX`, `NxY`, `NxZ` | zero-twist reference normal of the end, in the frame of `Ez`; finite, non-zero and not parallel to `Ez` (within about 0.06°); orthonormalised against `Ez` by the parser |
+| `Pretwist` | optional roll of the end frame about `Ez` [deg, right-handed, default 0]; any real value, several turns included |
+
+Behaviour:
+
+- Torsion is solved only on a line restrained at **both** ends. With one end restrained the
+  other end is free to twist, the line carries no torque, and the driver prints a note and
+  solves the line as without the columns. `Free` columns, or no columns, reproduce the
+  6-column results exactly.
+- The imposed twist is `Phi = Pretwist(B) − Pretwist(A)`, measured against the line's own
+  geometric twist `Theta`, the parallel-transport rotation of the End A normal carried along the
+  centreline to End B (zero for a line that stays in a plane, with both normals perpendicular to
+  that plane). The torque is uniform along the line, `M = (Phi − Theta)/C`, with the compliance
+  `C = Σ L/GJ` over the sections plus `1/k` of each torsional end spring. Positive torque is a
+  right-handed twist of End B relative to End A about the End A → End B tangent (OrcaFlex's
+  sign). A non-planar line has `Theta ≠ 0` in its untwisted shape; to start it free of torque,
+  set the End B pretwist to minus the static `Twist<L>` of a run with zero pretwist (in degrees);
+  the line then keeps its untwisted shape.
+- The torsion end frame turns with what carries the end: a Rigid6 body, the vessel of
+  `vesselMotion`/`vesselRAO`, or nothing at a `Fixed` or held point. The `motionFile` roll
+  column rolls the End A frame about its direction
+  ([Prescribed motion](#prescribed-motion-motionfile)).
+- Torsion may be restrained at a bending-`Pinned` end. The torque then passes through a
+  constant-velocity-joint idealisation: the end frame is carried from `Ez` to the line tangent by
+  the smallest rotation, so the end transmits the torque *semi-tangentially*, not as Greenhill's
+  axial-torque hinge. A straight rod with two such ends buckles at `M = 4.9113 EI/L` at zero
+  tension (`7.2693 EI/L` at `T L²/EI = 10`), not `2π EI/L`; clamped ends buckle at
+  `8.9868 EI/L` (see [theory](theory.rst)).
+- The torque returns to a Rigid6 body at End A, in the static body equilibrium and in the
+  dynamics; it is part of `Body<N>M*`.
+- Statics solve the imposed twist as the last load stage, in steps of at most 45°, test every
+  stage for stability and, above a buckling onset, leave the unstable straight state for the
+  buckled one. Dynamics carry the torque in every step; torsion has no inertia (quasi-static
+  torsion), so the torque follows the imposed twist without a torsional wave.
+
+Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B, an explicit
+`GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point or a Rigid6
+`Body<N>` point. Each of the following stops with a named error: torsion on an `EI = 0` line,
+on a rod end or on a `Point3` body, a line with `ATTACHMENTS`, modal analysis (`nModes`), a
+dynamic run with `False alpha_force_blend`, the coupled OpenFAST and FAST.Farm routes and the
+mixed `EI = 0` + finite-EI aggregate (`torsion is not yet supported in coupled OpenFAST
+runs ...`), and a `Torq`/`Twist` channel on a line that is not restrained at both ends. Seabed
+friction does not resist twist (the laid part of a line twists freely), and there is no
+torque–tension coupling.
 
 ### EQUIVALENT BUOYANCY (optional)
 
@@ -1051,7 +1116,10 @@ cases. With an active path:
   `motionFile`.
 
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
-plain numbers; tokens after the eleventh are ignored. Header lines must be comments. `time` must
+plain numbers; tokens after the eleventh are ignored, except that a deck with a line restrained
+in torsion at both ends reads a twelfth, `roll` [deg]: the roll of that line's End A frame about
+its direction, which imposes `Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`. The roll is 0 at
+`t = 0` and is given on every row of the point or on none. Header lines must be comments. `time` must
 lie on the `0, dtM, 2·dtM, …, TMax` grid and `point_id` must be a prescribed point. Each
 (point, time) pair appears once, every prescribed point needs a row at every grid time, and rows
 may appear in any order. See also [Auxiliary file formats](file_formats.rst).
@@ -1163,6 +1231,9 @@ bending moment. None of these channels is mandatory.
 | `TDP<L>x`, `TDP<L>y`, `TDP<L>z` | line L TDP position | m |
 | `TDP<L>Lay` | line L layback: horizontal distance from the TDP to the suspended end | m |
 | `TDP<L>Exc` | line L TDP excursion: horizontal TDP displacement from its initial position, along the initial direction toward the suspended end | m |
+| `Torq<L>N<J>` | line L torque at node J (uniform along the line); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line restrained in torsion at both ends | N·m |
+| `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` over the elements in between; 0 at End A, without the end-spring windup | deg |
+| `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included | deg |
 
 - `<L>`/`<P>` are deck LINE/POINT **ids**, not array positions. A channel that matches no
   supported form, names an unknown id, or carries trailing text (for example `Point2px_raw`) is a

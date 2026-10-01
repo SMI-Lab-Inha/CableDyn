@@ -326,7 +326,8 @@ channels instead) and accept ``r``.
    * - ``r``
      - ``<out_root>.Line<L>.range.out``
      - range graph: minimum, maximum and mean over the run of the node tension, curvature, bend
-       moment, declination and seabed clearance, one row per node (see below)
+       moment, declination and seabed clearance (and torque and twist on a line with torsion),
+       one row per node (see below)
 
 ``<L>`` is the deck line id. Each file starts with a ``#`` comment line (e.g.
 ``# CableDyn static line node positions; public node order EndA -> EndB``) and a header row;
@@ -356,7 +357,8 @@ the minimum, maximum and mean over the output times of the range window. The win
 ``.out`` row with ``t ≥ RangeStart`` (OPTION ``RangeStart``, default 0, see :doc:`options`), so a
 start-up transient can be excluded; a static run has one sample, ``t = 0``. The values are the
 node channels of the same run, ``Ten<L>N<J>``, ``Curv<L>N<J>``, ``BendMom<L>N<J>`` and
-``L<L>N<J>Dec``, evaluated at every node: the minimum and maximum equal those of the channel time
+``L<L>N<J>Dec`` (and ``Torq<L>N<J>`` and ``Twist<L>N<J>`` on a line with torsion), evaluated at
+every node: the minimum and maximum equal those of the channel time
 histories exactly, and the mean is their arithmetic mean. The file is written when the run
 completes; a run that stops early leaves none.
 
@@ -395,6 +397,13 @@ End A -> End B)``.
      - seabed clearance: node ``z`` minus the seabed elevation below the node (flat ``WtrDpth``
        or the ``bathymetryFile`` surface); negative where the node penetrates the penalty seabed.
        Present only when the deck defines a seabed
+   * - ``TorqueMin`` ``TorqueMax`` ``TorqueMean``
+     - ``(N.m)``
+     - torque, as ``Torq<L>N<J>``. Present only on a line restrained in torsion at both ends
+   * - ``TwistMin`` ``TwistMax`` ``TwistMean``
+     - ``(deg)``
+     - twist of the cable from End A to the node, as ``Twist<L>N<J>``. Present only on a line
+       restrained in torsion at both ends
 
 The accumulation keeps three numbers per node and quantity and makes no heap allocation per step.
 Sampling a line evaluates its node channels once per output row; on the 1024-element cubic-Hermite
@@ -545,6 +554,23 @@ Line-node channels
    * - ``L<L>N<J>Azi``
      - azimuth of the node's axial tangent from +X toward +Y, in [0, 360)
      - deg
+   * - ``Torq<L>N<J>``
+     - torque (twisting moment) at node ``J`` of a line restrained in torsion at both ends
+       (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`). It is uniform along the
+       line, :math:`M = (\Phi - \Theta)/C`; positive for a right-handed twist of End B relative
+       to End A about the End A → End B tangent, as OrcaFlex's ``Torque``
+     - N·m
+   * - ``Twist<L>N<J>``
+     - material twist of the cable itself from End A to node ``J``,
+       :math:`M \sum L_e/GJ_e` over the elements between them: 0 at End A, and at End B the
+       twist of the line without the windup of its torsional end springs. OrcaFlex reports the
+       twist rate (``Twist``, deg/m) instead; here it is integrated from End A
+     - deg
+   * - ``Twist<L>``
+     - total twist of the line, :math:`\Phi - \Theta = M C`, including the windup of
+       torsional end springs: the imposed twist :math:`\Phi` less the geometric twist
+       :math:`\Theta` the line takes up by writhing out of its plane
+     - deg
 
 Touchdown channels
 ~~~~~~~~~~~~~~~~~~
@@ -684,6 +710,8 @@ with exit code 1. A name is rejected when:
 * it references an unknown line or point id, or a node number larger than the line's node
   count, or is a ``TDP<L>`` name with a suffix other than ``s``, ``x``, ``y``, ``z``, ``Lay`` or
   ``Exc``;
+* it is a ``Torq<L>N<J>``, ``Twist<L>N<J>`` or ``Twist<L>`` channel of a line that is not
+  restrained in torsion at both ends (``... carries no torque``);
 * on a mixed ``EI = 0`` + finite-EI deck (and in OpenFAST), it is a ``Point<P>`` channel of a
   ``Coupled``/``Vessel`` point attached **only** to finite-EI lines — that point is not part of
   the ``EI = 0`` point system that serves point channels. Use the cable's
