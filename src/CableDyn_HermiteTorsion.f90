@@ -855,29 +855,31 @@ CONTAINS
         ErrMsg = 'CD_HermiteTorsion_Line: the workspace is not sized for this line'
         RETURN
       END IF
-      CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, work%u, work%pole, work%gu, work%huu, &
+      CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, work%nn, work%u, work%pole, work%gu, work%huu, &
                      work%huv, work%band, keep, hband, band_scale, end_grad, end_hess, end_cross, fold_margin, &
                      quadrature_order)
     ELSE
       nn = MAX(SIZE(q)/6, 2)
       ALLOCATE (local%u(3, 0:nn + 1), local%pole(3, 0:nn), local%gu(3, 0:nn + 1), local%huu(3, 3, 0:nn + 1), &
-                local%huv(3, 3, 0:nn), local%band(2*CD_HTORS_KBAND + 1, MAX(SIZE(q), 1)))
-      CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, local%u, local%pole, local%gu, local%huu, &
+                local%huv(3, 3, 0:nn), local%band(2*CD_HTORS_KBAND + 1, 6*nn))
+      CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, nn, local%u, local%pole, local%gu, local%huu, &
                      local%huv, local%band, .FALSE., hband, band_scale, end_grad, end_hess, end_cross, &
                      fold_margin, quadrature_order)
     END IF
   END SUBROUTINE CD_HermiteTorsion_Line
 
-  PURE SUBROUTINE line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, u, pole, gu, huu, huv, band, keep, &
+  PURE SUBROUTINE line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, nw, u, pole, gu, huu, huv, band, keep, &
                             hband, band_scale, end_grad, end_hess, end_cross, fold_margin, quadrature_order)
-    !! CD_HermiteTorsion_Line on caller scratch u(3,0:nn+1), pole(3,0:nn), gu(3,0:nn+1),
-    !! huu(3,3,0:nn+1), huv(3,3,0:nn), band(2 KBAND + 1, >= 6 nn); keep: compute the Hessian
-    !! into band even without hband.
+    !! CD_HermiteTorsion_Line on caller scratch for nw nodes (the scratch is explicit-shape so
+    !! that no expression on it needs a heap temporary); keep: compute the Hessian into band
+    !! even without hband. A q of another node count fails validation before any use.
     REAL(wp), INTENT(IN) :: q(:), Le(:), ends(3, 4)
     REAL(wp), INTENT(OUT) :: theta_raw, grad(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp), INTENT(INOUT) :: u(:, 0:), pole(:, 0:), gu(:, 0:), huu(:, :, 0:), huv(:, :, 0:), band(:, :)
+    INTEGER, INTENT(IN) :: nw
+    REAL(wp), INTENT(INOUT) :: u(3, 0:nw + 1), pole(3, 0:nw), gu(3, 0:nw + 1), huu(3, 3, 0:nw + 1), huv(3, 3, 0:nw)
+    REAL(wp), INTENT(INOUT) :: band(2*CD_HTORS_KBAND + 1, 6*nw)
     LOGICAL, INTENT(IN) :: keep
     REAL(wp), INTENT(INOUT), OPTIONAL :: hband(:, :)
     REAL(wp), INTENT(IN), OPTIONAL :: band_scale

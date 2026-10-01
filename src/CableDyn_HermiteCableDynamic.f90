@@ -71,7 +71,8 @@ MODULE CableDyn_HermiteCableDynamic
                                  CD_Bathymetry_Floor_Gradient, CD_End_Bathymetry, CD_BATHY_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
                                      CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Validate, CD_HTORS_OK, &
-                                     CD_HTORS_MAX_STEP
+                                     CD_HTORS_MAX_STEP, CD_HermiteTorsionWorkType, CD_HermiteTorsion_Work_Init, &
+                                     CD_HermiteTorsion_Work_End, CD_HermiteTorsion_Work_Add_Hessian
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_in_parallel
   IMPLICIT NONE
@@ -84,6 +85,8 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_EndConnection
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion
   PUBLIC :: CD_HermiteCable_Dyn_Torsion_State
+  PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Drive
+  PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Frames
   PUBLIC :: CD_HermiteCable_Dyn_EndConnection_Moment
   PUBLIC :: CD_HermiteCable_Dyn_Set_ModifiedNewton
   PUBLIC :: CD_HermiteCable_Dyn_Set_TangentReuse
@@ -316,12 +319,25 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: snap_q(:), snap_v(:), snap_a(:)
     REAL(wp) :: snap_t = CD_ZERO
     REAL(wp) :: snap_endconn_d0(3, 2) = CD_ZERO
-    ! Condensed torsion (CD_HermiteCable_Dyn_Set_Torsion): end frames, GJ, imposed twist and the
-    ! accepted Theta of the static solve. The residual, the end loads and the energy include it;
-    ! the time step does not yet (a model with torsion refuses to step). snap_torsion_theta is
-    ! the Theta of the last snapshot.
+    ! Condensed torsion (CD_HermiteCable_Dyn_Set_Torsion): end frames, GJ, imposed twist Phi and
+    ! the accepted (unwrapped) Theta of the committed state; the residual, the tangent, the end
+    ! loads and the energy include E_t = (Phi - Theta)**2/(2 C). A step drives the end frames and
+    ! Phi to the target of CD_HermiteCable_Dyn_Set_Torsion_Drive (held without one): the step
+    ! keeps that target in tors_step_ends/tors_step_phi and the residual uses it (tors_use_step)
+    ! once the committed force F_n is evaluated; the commit makes it the committed frames and Phi,
+    ! with Theta at q_{n+1}. Allocation-free step scratch: tors_work (the kernel), tors_g
+    ! (dTheta/dq at the last tangent), tors_gq (at the last residual), tors_gk and tors_zk (tors_g
+    ! in the solve coordinates and K_eff^-1 of it, kept with the factor) and tors_den
+    ! (C/(1 - alpha_f) + tors_gk . tors_zk) of the Sherman-Morrison (bordered) solve. snap_* are
+    ! the frames, Phi and Theta of the last snapshot.
     TYPE(CD_HermiteTorsionType) :: torsion
-    REAL(wp) :: snap_torsion_theta = CD_ZERO
+    TYPE(CD_HermiteTorsionWorkType) :: tors_work
+    REAL(wp), ALLOCATABLE :: tors_g(:), tors_gq(:), tors_gk(:), tors_zk(:)
+    REAL(wp) :: tors_den = CD_ZERO
+    LOGICAL :: tors_use_step = .FALSE., tors_drive_set = .FALSE.
+    REAL(wp) :: tors_step_ends(3, 4) = CD_ZERO, tors_step_phi = CD_ZERO
+    REAL(wp) :: tors_drive_ends(3, 4) = CD_ZERO, tors_drive_phi = CD_ZERO
+    REAL(wp) :: snap_torsion_theta = CD_ZERO, snap_torsion_phi = CD_ZERO, snap_torsion_ends(3, 4) = CD_ZERO
     LOGICAL :: snap_valid = .FALSE.
     ! Adaptive-Newton warmup counters are step-history too: a staged step (aggregate
     ! stage-then-commit) that advances them and is then rolled back must restore them, or the
@@ -2304,6 +2320,139 @@ CONTAINS
     !! e.g. a moving fairlead/hang-off heave driving a lazy-wave cable. These DOFs are held at
     !! pres_q during the Newton solve and their prescribed q/v/a enter the free-DOF residual
     !! through the mass and stiffness coupling; all four arrays must be supplied together.
+    !!
+    !! CONDENSED TORSION (CD_HermiteCable_Dyn_Set_Torsion): the end frames and Phi move to the
+    !! target of CD_HermiteCable_Dyn_Set_Torsion_Drive (consumed by this call; held without one).
+    !! The torsion is quasi-static (no torsional inertia): it adds -M_t dTheta/dq to the residual,
+    !! -M_t d2Theta/dq2 to the tangent and the rank-one (1 - alpha_f) g g^T / C, solved by
+    !! Sherman-Morrison on the band factor with g frozen with the factor (so a reused factor stays
+    !! consistent). Theta is unwrapped against the committed value and may change by at most pi/2
+    !! in a step (a larger change fails the evaluation, and the line search or the recovering step
+    !! cuts it). It needs the force-blended generalised-alpha.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT), TARGET :: model
+    REAL(wp), INTENT(IN) :: dt, tol
+    INTEGER, INTENT(IN) :: max_iter
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, INTENT(OUT), OPTIONAL :: iters_out
+    REAL(wp), INTENT(OUT), OPTIONAL :: res_out
+    INTEGER, INTENT(IN), OPTIONAL :: pres_dofs(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: pres_q(:), pres_v(:), pres_a(:)
+    REAL(wp), INTENT(OUT), OPTIONAL :: residual_history(:)
+    INTEGER, INTENT(OUT), OPTIONAL :: history_count
+    REAL(wp), INTENT(IN), OPTIONAL :: endconn_direction(3, 2)
+    REAL(wp), INTENT(IN), OPTIONAL :: endconn_direction_rate(3, 2), endconn_direction_acceleration(3, 2)
+    LOGICAL, INTENT(OUT), OPTIONAL :: tensile_failed
+    INTEGER :: iend
+    REAL(wp) :: dn, dvec(3), nvec(3)
+
+    model%tors_use_step = .FALSE.
+    IF (model%torsion%active) THEN
+      IF (.NOT. model%force_blend) THEN
+        IF (PRESENT(iters_out)) iters_out = 0
+        IF (PRESENT(res_out)) res_out = CD_ZERO
+        IF (PRESENT(history_count)) history_count = 0
+        IF (PRESENT(residual_history)) residual_history = CD_ZERO
+        IF (PRESENT(tensile_failed)) tensile_failed = .FALSE.
+        model%tors_drive_set = .FALSE.
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Step: torsion needs the force-blended generalised-alpha (alpha_force_blend)'
+        RETURN
+      END IF
+      IF (model%tors_drive_set) THEN
+        model%tors_step_ends = model%tors_drive_ends
+        model%tors_step_phi = model%tors_drive_phi
+      ELSE
+        model%tors_step_ends = model%torsion%ends
+        model%tors_step_phi = model%torsion%phi
+      END IF
+      model%tors_drive_set = .FALSE.
+      ! A rigid end's director is its connection direction: take the step's exactly and keep the
+      ! reference normal perpendicular to it (the smallest correction).
+      IF (PRESENT(endconn_direction)) THEN
+        DO iend = 1, 2
+          IF (model%endconn_mode(iend) /= CD_ENDCONN_RIGID) CYCLE
+          dn = NORM2(endconn_direction(:, iend))
+          IF (.NOT. (dn > CD_ZERO) .OR. .NOT. CD_Is_Finite(dn)) CYCLE
+          dvec = endconn_direction(:, iend)/dn
+          nvec = model%tors_step_ends(:, 2*iend)
+          nvec = nvec - DOT_PRODUCT(nvec, dvec)*dvec
+          dn = NORM2(nvec)
+          IF (.NOT. (dn > 1.0e-6_wp)) CYCLE
+          model%tors_step_ends(:, 2*iend - 1) = dvec
+          model%tors_step_ends(:, 2*iend) = nvec/dn
+        END DO
+      END IF
+    END IF
+    CALL dyn_step_core(model, dt, max_iter, tol, ErrStat, ErrMsg, iters_out, res_out, pres_dofs, pres_q, pres_v, &
+                       pres_a, residual_history, history_count, endconn_direction, endconn_direction_rate, &
+                       endconn_direction_acceleration, tensile_failed)
+    model%tors_use_step = .FALSE.
+  END SUBROUTINE CD_HermiteCable_Dyn_Step
+
+  SUBROUTINE CD_HermiteCable_Dyn_Set_Torsion_Drive(model, ends, phi, ErrStat, ErrMsg)
+    !! Target end frames (columns d_1, n_1, d_2, n_2 in the solve frame, orthonormal per end) and
+    !! imposed twist Phi [rad, unwrapped] of the condensed torsion at the end of the next step
+    !! (CD_HermiteCable_Dyn_Step or _Step_Recovering, which interpolates them over its substeps).
+    !! A turning parent turns its end frame; an imposed roll history changes Phi. The next step
+    !! consumes the target; without one the frames and Phi are held.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: ends(3, 4), phi
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k
+    ErrStat = CD_HCDYN_BADINPUT
+    IF (.NOT. model%initialized .OR. .NOT. model%torsion%active) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion_Drive: the model has no torsion'
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(RESHAPE(ends, [12])) .AND. CD_Is_Finite(phi))) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion_Drive: non-finite end frame or imposed twist'
+      RETURN
+    END IF
+    DO k = 1, 3, 2
+      IF (ABS(NORM2(ends(:, k)) - CD_ONE) > 1.0e-8_wp .OR. ABS(NORM2(ends(:, k + 1)) - CD_ONE) > 1.0e-8_wp .OR. &
+          ABS(DOT_PRODUCT(ends(:, k), ends(:, k + 1))) > 1.0e-8_wp) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion_Drive: each end director and reference normal must be orthonormal'
+        RETURN
+      END IF
+    END DO
+    model%tors_drive_ends = ends
+    model%tors_drive_phi = phi
+    model%tors_drive_set = .TRUE.
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_HermiteCable_Dyn_Set_Torsion_Drive
+
+  SUBROUTINE CD_HermiteCable_Dyn_Set_Torsion_Frames(model, ends, ErrStat, ErrMsg)
+    !! Move the COMMITTED torsion end frames without a step (a host writing its boundary between
+    !! steps): Theta is re-evaluated at the committed state with the new frames, unwrapped
+    !! against its value (at most pi/2 away), and the torque follows. Fails closed, unchanged.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: ends(3, 4)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: th
+    CALL CD_HermiteCable_Dyn_Set_Torsion_Drive(model, ends, model%torsion%phi, ErrStat, ErrMsg)
+    model%tors_drive_set = .FALSE.
+    IF (ErrStat /= CD_HCDYN_OK) RETURN
+    CALL torsion_theta_at(model, model%q, ends, th, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_HCDYN_OK) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion_Frames: '//TRIM(ErrMsg)
+      RETURN
+    END IF
+    model%torsion%ends = ends
+    model%torsion%theta = th
+    model%torsion%torque = (model%torsion%phi - th)/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+    model%fc_valid = .FALSE.
+    model%tr_valid = .FALSE.
+  END SUBROUTINE CD_HermiteCable_Dyn_Set_Torsion_Frames
+
+  SUBROUTINE dyn_step_core(model, dt, max_iter, tol, ErrStat, ErrMsg, iters_out, res_out, &
+                           pres_dofs, pres_q, pres_v, pres_a, residual_history, history_count, &
+                           endconn_direction, endconn_direction_rate, endconn_direction_acceleration, &
+                           tensile_failed)
+    !! The generalised-alpha step of CD_HermiteCable_Dyn_Step (which sets up the torsion target).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT), TARGET :: model
     REAL(wp), INTENT(IN) :: dt, tol
     INTEGER, INTENT(IN) :: max_iter
@@ -2324,7 +2473,7 @@ CONTAINS
     INTEGER :: ndof, it, es, i, np, ip, ls, gdof, nsolve_step, axial_element, axial_es
     INTEGER :: axial_worst_element, iv, attempt, n_attempt
     REAL(wp) :: c_a, c_v, c_a2, am, af, bt, gm, rnorm, fscale, rnt, lambda, chosen, lam_ok, cw, t_alpha
-    REAL(wp) :: e_bal, e_ma
+    REAL(wp) :: e_bal, e_ma, tors_theta_new
     REAL(wp) :: axial_qe(12), axial_min
     REAL(wp) :: axial_threshold, axial_margin, axial_worst_margin, axial_worst_force, axial_worst_xi
     REAL(wp) :: axial_worst_threshold
@@ -2367,11 +2516,6 @@ CONTAINS
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
     nsolve_step = 0
-    IF (model%torsion%active) THEN
-      ErrStat = CD_HCDYN_BADINPUT
-      ErrMsg = 'CD_HermiteCable_Dyn_Step: torsion is supported in statics only in this build'
-      RETURN
-    END IF
     ! Clock scratch is defined even when profiling is off, purely so -Wmaybe-uninitialized
     ! can prove it (every read sits under the same prof_enabled guard as its write).
     pt0 = 0_INT64; pc0 = 0_INT64; pcr = 1_INT64
@@ -2574,6 +2718,9 @@ CONTAINS
       model%fc_d0 = model%endconn_d0
       model%fc_valid = .TRUE.
     END IF
+    ! Condensed torsion: F_n above used the committed end frames and Phi; every evaluation of the
+    ! step from here on uses the step's target (set by CD_HermiteCable_Dyn_Step).
+    model%tors_use_step = model%torsion%active
     ! Newton predictor. The standard Newmark guess q_n + dt v_n + dt^2 (1/2 - beta) a_n (the
     ! acceleration map's base a_{n+1} = 0) is a far better start than q_n when the state is
     ! moving. When the committed acceleration is the physical one, the constant-acceleration
@@ -2773,6 +2920,17 @@ CONTAINS
           IF (attempt < n_attempt) CYCLE predict
           RETURN
         END IF
+        IF (model%torsion%active) THEN
+          ! Rank-one torsion term (1 - af) g g^T / C of the effective tangent: g in the solve
+          ! coordinates (as the residual), its K^-1 image and the Sherman-Morrison denominator,
+          ! all kept with this factor.
+          CALL torsion_factor(es, em2)
+          IF (es /= CD_HCDYN_OK) THEN
+            ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2)
+            IF (attempt < n_attempt) CYCLE predict
+            RETURN
+          END IF
+        END IF
         mn_factored = .TRUE.
         mn_fresh = .TRUE.
         factor_ok = .TRUE.
@@ -2803,6 +2961,7 @@ CONTAINS
         IF (attempt < n_attempt) CYCLE predict
         RETURN
       END IF
+      IF (model%torsion%active) CALL torsion_sm_correct()
       CALL transform_rigid_vector_to_global(model, step_rigid_basis, model%ws_dq)
       nsolve_step = nsolve_step + 1
       IF (PRESENT(iters_out)) iters_out = nsolve_step
@@ -2982,6 +3141,7 @@ CONTAINS
       CALL CD_Solve_Factored_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, model%ws_dq, es, em2, &
                                     factor_validated=.TRUE.)
       IF (es == CD_LINALG_OK) THEN
+        IF (model%torsion%active) CALL torsion_sm_correct()
         CALL transform_rigid_vector_to_global(model, step_rigid_basis, model%ws_dq)
         DO iv = 1, SIZE(model%ws_qtrial)
           model%ws_qtrial(iv) = model%ws_qk(iv) + model%ws_dq(iv)
@@ -3097,6 +3257,17 @@ CONTAINS
       END IF
     END IF
 
+    ! Condensed torsion: Theta at q_{n+1} with the step's end frames, unwrapped against the
+    ! committed value (within pi/2: every accepted evaluation already was), before anything is
+    ! committed so that a failure leaves the step-start state.
+    tors_theta_new = model%torsion%theta
+    IF (model%torsion%active) THEN
+      CALL torsion_theta_at(model, model%ws_qk, model%tors_step_ends, tors_theta_new, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
+      END IF
+    END IF
+
     ! Adaptive modified Newton: this step CONVERGED (a non-converged step returned above and
     ! does not count). Accumulate the warmup's full-Newton solve counts and, at the end of
     ! the warmup, latch tangent reuse on for the rest of the run iff the warmup averaged more
@@ -3139,6 +3310,13 @@ CONTAINS
     IF (model%fr_active) CALL commit_friction_anchors(model)
     model%t = model%t + dt
     IF (has_endconn_motion) model%endconn_d0 = step_endconn_target
+    IF (model%torsion%active) THEN
+      model%torsion%ends = model%tors_step_ends
+      model%torsion%phi = model%tors_step_phi
+      model%torsion%theta = tors_theta_new
+      model%torsion%torque = (model%torsion%phi - tors_theta_new)/ &
+                             CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+    END IF
     ! Carry the factor of this step's last iteration to the next step.
     model%tr_valid = model%tangent_reuse .AND. factor_ok
     IF (xs_start) THEN
@@ -3449,7 +3627,84 @@ CONTAINS
       END DO
     END SUBROUTINE add_rigid_transport_tangent
 
-  END SUBROUTINE CD_HermiteCable_Dyn_Step
+    SUBROUTINE torsion_factor(esx, emx)
+      !! After a factorisation of K_eff = B (band part): g = dTheta/dq at the tangent point in
+      !! the solve coordinates (rigid-end basis, held DOFs zeroed), z = B^-1 g and the
+      !! Sherman-Morrison denominator C/(1 - af) + g.z of (B + (1 - af) g g^T / C)^-1.
+      INTEGER, INTENT(OUT) :: esx
+      CHARACTER(*), INTENT(OUT) :: emx
+      INTEGER :: ii
+      REAL(wp) :: cr, gz
+      esx = CD_HCDYN_OK
+      emx = ''
+      DO ii = 1, ndof
+        model%tors_gk(ii) = model%tors_g(ii)
+      END DO
+      CALL transform_rigid_vector_to_local(model, step_rigid_basis, model%tors_gk)
+      DO ii = 1, ndof
+        IF (.NOT. model%solve_mask(ii)) model%tors_gk(ii) = CD_ZERO
+        model%tors_zk(ii) = model%tors_gk(ii)
+      END DO
+      CALL CD_Solve_Factored_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, model%tors_zk, esx, emx, &
+                                    factor_validated=.TRUE.)
+      IF (esx /= CD_LINALG_OK) THEN
+        esx = CD_HCDYN_NOCONVERGE
+        emx = 'torsion: tangent solve: '//TRIM(emx)
+        RETURN
+      END IF
+      esx = CD_HCDYN_OK
+      cr = CD_HermiteTorsion_Compliance(model%torsion, model%l0)/(CD_ONE - af)
+      gz = DOT_PRODUCT(model%tors_gk, model%tors_zk)
+      model%tors_den = cr + gz
+      IF (.NOT. (ABS(model%tors_den) > 1.0e-12_wp*(cr + ABS(gz))) .OR. .NOT. CD_Is_Finite(model%tors_den)) THEN
+        esx = CD_HCDYN_NOCONVERGE
+        emx = 'torsion: the bordered (Sherman-Morrison) tangent is singular'
+      END IF
+    END SUBROUTINE torsion_factor
+
+    SUBROUTINE torsion_sm_correct()
+      !! ws_dq <- ws_dq - z (g . ws_dq)/den: the solve with B turned into one with
+      !! B + (1 - af) g g^T / C (Sherman-Morrison), with g, z and den of the current factor.
+      REAL(wp) :: mu
+      INTEGER :: ii
+      mu = DOT_PRODUCT(model%tors_gk, model%ws_dq)/model%tors_den
+      DO ii = 1, ndof
+        model%ws_dq(ii) = model%ws_dq(ii) - mu*model%tors_zk(ii)
+      END DO
+    END SUBROUTINE torsion_sm_correct
+
+  END SUBROUTINE dyn_step_core
+
+  SUBROUTINE torsion_theta_at(model, q_cfg, ends, theta, ErrStat, ErrMsg)
+    !! Theta at q_cfg with end frames ends, unwrapped against the committed Theta; fails when it
+    !! moved by more than pi/2 (allocation-free: the model's kernel workspace and tors_gq).
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: q_cfg(:), ends(3, 4)
+    REAL(wp), INTENT(OUT) :: theta
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: raw
+    INTEGER :: es
+    CHARACTER(200) :: em
+    theta = model%torsion%theta
+    CALL CD_HermiteTorsion_Line(q_cfg, model%l0, ends, raw, model%tors_gq, es, em, &
+                                quadrature_order=model%torsion%quadrature_order, work=model%tors_work)
+    IF (es /= CD_HTORS_OK) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'torsion: '//TRIM(em)
+      RETURN
+    END IF
+    theta = CD_HermiteTorsion_Unwrap(raw, model%torsion%theta)
+    IF (ABS(theta - model%torsion%theta) > CD_HTORS_MAX_STEP) THEN
+      theta = model%torsion%theta
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'torsion: the twist moved more than pi/2 from its committed value in one step; a smaller '// &
+               'step resolves it'
+      RETURN
+    END IF
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+  END SUBROUTINE torsion_theta_at
 
   LOGICAL FUNCTION rigid_rays_valid(model, directions, state) RESULT(valid)
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
@@ -3522,6 +3777,7 @@ CONTAINS
     REAL(wp) :: tensile_force_save, tensile_threshold_save, tensile_xi_save, tensile_time_save
     ! The step-rotation diagnostic must not keep the turn of a step that is rewound.
     REAL(wp) :: rotation_save
+    REAL(wp) :: tors_theta0, tors_phi0, tors_phi1, tors_ends0(3, 4), tors_ends1(3, 4), tors_sub(3, 4)
     CHARACTER(300) :: em
     ! Tensile-qualification failure flag reported by each step (classified by flag, not by
     ! message text, so a short caller buffer cannot change the recovery decision).
@@ -3535,12 +3791,6 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Step_Recovering: model not initialised'
       RETURN
     END IF
-    IF (model%torsion%active) THEN
-      ErrStat = CD_HCDYN_BADINPUT
-      ErrMsg = 'CD_HermiteCable_Dyn_Step_Recovering: torsion is supported in statics only in this build'
-      RETURN
-    END IF
-
     has_pres = PRESENT(pres_dofs) .AND. PRESENT(pres_q) .AND. PRESENT(pres_v) .AND. PRESENT(pres_a)
     ! Reject a partial prescribed-motion set here too (not just in the underlying step): otherwise a
     ! caller that omits e.g. pres_a makes has_pres false and the common-path call below silently holds
@@ -3615,6 +3865,17 @@ CONTAINS
     tensile_xi_save = model%tensile_worst_xi
     tensile_time_save = model%tensile_worst_time
     rotation_save = model%max_step_rotation
+    ! Condensed torsion: the interval-start frames, Phi and Theta, and the interval-end target
+    ! (the pending drive, consumed by the full step), for the rewinds and the substep targets.
+    tors_theta0 = model%torsion%theta
+    tors_phi0 = model%torsion%phi
+    tors_ends0 = model%torsion%ends
+    tors_phi1 = tors_phi0
+    tors_ends1 = tors_ends0
+    IF (model%torsion%active .AND. model%tors_drive_set) THEN
+      tors_phi1 = model%tors_drive_phi
+      tors_ends1 = model%tors_drive_ends
+    END IF
     ! Common path: one full step. It performs no allocation or snapshot.
     IF (has_pres) THEN
       IF (PRESENT(endconn_direction)) THEN
@@ -3690,9 +3951,23 @@ CONTAINS
       model%tensile_worst_xi = tensile_xi_save
       model%tensile_worst_time = tensile_time_save
       model%max_step_rotation = rotation_save
+      CALL restore_torsion()
       es = CD_HCDYN_OK
       DO k = 1, nsub
         tensile_fail = .FALSE.
+        IF (model%torsion%active) THEN
+          frac = REAL(k, wp)/REAL(nsub, wp)
+          IF (k == nsub) THEN
+            tors_sub = tors_ends1
+            model%tors_drive_phi = tors_phi1
+          ELSE
+            CALL interpolate_torsion_frames(tors_ends0, tors_ends1, frac, tors_sub, es, em)
+            IF (es /= CD_HCDYN_OK) EXIT
+            model%tors_drive_phi = tors_phi0 + frac*(tors_phi1 - tors_phi0)
+          END IF
+          model%tors_drive_ends = tors_sub
+          model%tors_drive_set = .TRUE.
+        END IF
         IF (PRESENT(endconn_direction)) THEN
           frac = REAL(k, wp)/REAL(nsub, wp)
           CALL interpolate_endconn_kinematics(model, d0_save, d0_rate_save, d0_acceleration_save, &
@@ -3752,6 +4027,7 @@ CONTAINS
             model%tensile_worst_xi = tensile_xi_save
             model%tensile_worst_time = tensile_time_save
             model%max_step_rotation = rotation_save
+            CALL restore_torsion()
             ErrStat = CD_HCDYN_NOCONVERGE
             ErrMsg = 'CD_HermiteCable_Dyn_Step_Recovering: tensile qualification failed during '// &
                      'internal subdivision: '//TRIM(em)
@@ -3791,6 +4067,7 @@ CONTAINS
     model%tensile_worst_xi = tensile_xi_save
     model%tensile_worst_time = tensile_time_save
     model%max_step_rotation = rotation_save
+    CALL restore_torsion()
     ErrStat = CD_HCDYN_NOCONVERGE
     BLOCK
       ! Format into a local buffer: a record longer than the caller's ErrMsg
@@ -3810,6 +4087,18 @@ CONTAINS
       END IF
       ErrMsg = wbuf
     END BLOCK
+
+  CONTAINS
+
+    SUBROUTINE restore_torsion()
+      !! Interval-start torsion state (frames, Phi, Theta) after a rewind; no pending drive.
+      IF (.NOT. model%torsion%active) RETURN
+      model%torsion%theta = tors_theta0
+      model%torsion%phi = tors_phi0
+      model%torsion%ends = tors_ends0
+      model%torsion%torque = (tors_phi0 - tors_theta0)/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+      model%tors_drive_set = .FALSE.
+    END SUBROUTINE restore_torsion
   END SUBROUTINE CD_HermiteCable_Dyn_Step_Recovering
 
   SUBROUTINE quintic_boundary_state(q0, v0, a0, q1, v1, a1, duration, u, q, v, a)
@@ -3890,6 +4179,56 @@ CONTAINS
       a = a1
     END IF
   END SUBROUTINE interpolate_endconn_kinematics
+
+  SUBROUTINE interpolate_torsion_frames(ends0, ends1, fraction, ends, ErrStat, ErrMsg)
+    !! Torsion end frames at a fraction of a recovery interval: each end frame (d, n, d x n) turns
+    !! from ends0 to ends1 about one fixed axis (the geodesic on SO(3)), by fraction of the angle.
+    REAL(wp), INTENT(IN) :: ends0(3, 4), ends1(3, 4), fraction
+    REAL(wp), INTENT(OUT) :: ends(3, 4)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: f0(3, 3), f1(3, 3), rq(3, 3), w(3), ang, cth, sk(3, 3), rf(3, 3)
+    INTEGER :: k
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    ends = ends1
+    DO k = 1, 3, 2
+      f0(:, 1) = ends0(:, k)
+      f0(:, 2) = ends0(:, k + 1)
+      f0(:, 3) = tcross(ends0(:, k), ends0(:, k + 1))
+      f1(:, 1) = ends1(:, k)
+      f1(:, 2) = ends1(:, k + 1)
+      f1(:, 3) = tcross(ends1(:, k), ends1(:, k + 1))
+      rq = MATMUL(f1, TRANSPOSE(f0))
+      cth = MAX(-CD_ONE, MIN(CD_ONE, 0.5_wp*(rq(1, 1) + rq(2, 2) + rq(3, 3) - CD_ONE)))
+      ang = ACOS(cth)
+      IF (ang > 3.0_wp) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'torsion: an end frame turns by nearly 180 degrees within one interval'
+        RETURN
+      END IF
+      w = 0.5_wp*[rq(3, 2) - rq(2, 3), rq(1, 3) - rq(3, 1), rq(2, 1) - rq(1, 2)]
+      IF (ang > 1.0e-12_wp) w = w*ang/SIN(ang)
+      w = fraction*w
+      ang = NORM2(w)
+      rf = CD_ZERO
+      rf(1, 1) = CD_ONE
+      rf(2, 2) = CD_ONE
+      rf(3, 3) = CD_ONE
+      IF (ang > CD_ZERO) THEN
+        sk = RESHAPE([CD_ZERO, w(3), -w(2), -w(3), CD_ZERO, w(1), w(2), -w(1), CD_ZERO], [3, 3])/ang
+        rf = rf + SIN(ang)*sk + (CD_ONE - COS(ang))*MATMUL(sk, sk)
+      END IF
+      ends(:, k) = MATMUL(rf, ends0(:, k))
+      ends(:, k + 1) = MATMUL(rf, ends0(:, k + 1))
+    END DO
+  CONTAINS
+    PURE FUNCTION tcross(a, b) RESULT(c)
+      REAL(wp), INTENT(IN) :: a(3), b(3)
+      REAL(wp) :: c(3)
+      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
+    END FUNCTION tcross
+  END SUBROUTINE interpolate_torsion_frames
 
   LOGICAL FUNCTION temporal_increment_ok(model) RESULT(ok)
     !! Cheap accepted-step quality gate. Newton convergence proves equilibrium at its discrete
@@ -4393,7 +4732,8 @@ CONTAINS
     !! Theta. The residual, the support reaction, the end force, the connection moment (now
     !! including the torque) and the energy then include E_t = (Phi - Theta)**2/(2 C); the
     !! acceleration is recomputed from the complete load set. An inactive description removes
-    !! the torsion. The time step refuses a model with torsion (statics only in this build).
+    !! the torsion. The time step then carries the torsion (see CD_HermiteCable_Dyn_Step); its
+    !! scratch is sized here, so a step allocates nothing.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     TYPE(CD_HermiteTorsionType), INTENT(IN) :: torsion
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4425,6 +4765,21 @@ CONTAINS
         ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: the torsion state has no accepted Theta (solve the statics first)'
         RETURN
       END IF
+      IF (model%tors_work%nn /= model%nn) THEN
+        CALL CD_HermiteTorsion_Work_Init(model%tors_work, model%nn, es, em)
+        IF (es /= CD_HTORS_OK) THEN
+          ErrStat = CD_HCDYN_BADINPUT
+          ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: '//TRIM(em)
+          RETURN
+        END IF
+      END IF
+      IF (.NOT. ALLOCATED(model%tors_g)) ALLOCATE (model%tors_g(model%ndof), model%tors_gq(model%ndof), &
+                                                   model%tors_gk(model%ndof), model%tors_zk(model%ndof))
+      model%tors_g = CD_ZERO
+      model%tors_gq = CD_ZERO
+      model%tors_gk = CD_ZERO
+      model%tors_zk = CD_ZERO
+      model%tors_den = CD_ONE
       model%torsion = torsion
       ALLOCATE (gq(model%ndof))
       CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, es, em, gq, eg)
@@ -4437,7 +4792,13 @@ CONTAINS
       model%torsion%theta = th
       model%torsion%torque = mt
     END IF
+    model%tors_use_step = .FALSE.
+    model%tors_drive_set = .FALSE.
+    model%tors_step_ends = model%torsion%ends
+    model%tors_step_phi = model%torsion%phi
     model%snap_torsion_theta = model%torsion%theta
+    model%snap_torsion_phi = model%torsion%phi
+    model%snap_torsion_ends = model%torsion%ends
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
     CALL CD_HermiteCable_Dyn_Recompute_Acceleration(model, es, em)
@@ -4519,6 +4880,8 @@ CONTAINS
     model%snap_t = model%t
     model%snap_endconn_d0 = model%endconn_d0
     model%snap_torsion_theta = model%torsion%theta
+    model%snap_torsion_phi = model%torsion%phi
+    model%snap_torsion_ends = model%torsion%ends
     IF (model%fr_active) model%snap_fr_anchor = model%fr_anchor
     model%snap_na_steps_done = model%na_steps_done
     model%snap_na_iter_sum = model%na_iter_sum
@@ -4559,6 +4922,12 @@ CONTAINS
     model%t = model%snap_t
     model%endconn_d0 = model%snap_endconn_d0
     model%torsion%theta = model%snap_torsion_theta
+    model%torsion%phi = model%snap_torsion_phi
+    model%torsion%ends = model%snap_torsion_ends
+    IF (model%torsion%active) model%torsion%torque = (model%torsion%phi - model%torsion%theta)/ &
+                                                     CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+    model%tors_drive_set = .FALSE.
+    model%tors_use_step = .FALSE.
     IF (model%fr_active) model%fr_anchor = model%snap_fr_anchor
     model%na_steps_done = model%snap_na_steps_done
     model%na_iter_sum = model%snap_na_iter_sum
@@ -4647,7 +5016,18 @@ CONTAINS
     model%snap_t = CD_ZERO
     model%snap_endconn_d0 = CD_ZERO
     model%torsion = CD_HermiteTorsionType()
+    CALL CD_HermiteTorsion_Work_End(model%tors_work)
+    IF (ALLOCATED(model%tors_g)) DEALLOCATE (model%tors_g, model%tors_gq, model%tors_gk, model%tors_zk)
+    model%tors_den = CD_ZERO
+    model%tors_use_step = .FALSE.
+    model%tors_drive_set = .FALSE.
+    model%tors_step_ends = CD_ZERO
+    model%tors_step_phi = CD_ZERO
+    model%tors_drive_ends = CD_ZERO
+    model%tors_drive_phi = CD_ZERO
     model%snap_torsion_theta = CD_ZERO
+    model%snap_torsion_phi = CD_ZERO
+    model%snap_torsion_ends = CD_ZERO
     model%snap_valid = .FALSE.
     model%require_tensile = .FALSE.
     model%tensile_mode = CD_HCDYN_TENSILE_OFF
@@ -5089,18 +5469,67 @@ CONTAINS
       END DO
     END IF
 
-    ! Condensed torsion (statics only in this build): R <- R - M_t dTheta/dq at q_cfg.
-    IF (model%torsion%active .AND. want_residual) THEN
-      BLOCK
-        REAL(wp) :: th, mt, gq(model%ndof)
-        CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, es, em2, gq, q_eval=q_cfg)
-        IF (es /= CD_HCDYN_OK) THEN
-          ErrStat = es; ErrMsg = TRIM(em2); RETURN
-        END IF
-        R = R - mt*gq
-      END BLOCK
+    ! Condensed torsion: R <- R - M_t dTheta/dq and Kb <- Kb - M_t d2Theta/dq2 at q_cfg (the
+    ! rank-one g g^T / C joins the solve by Sherman-Morrison; g is kept in tors_g).
+    IF (model%torsion%active .AND. (want_residual .OR. want_tangent)) THEN
+      CALL assemble_torsion(model, q_cfg, want_residual, want_tangent, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = TRIM(em2); RETURN
+      END IF
     END IF
   END SUBROUTINE assemble_residual
+
+  SUBROUTINE assemble_torsion(model, q_cfg, want_residual, want_tangent, ErrStat, ErrMsg)
+    !! Condensed-torsion part of assemble_residual, allocation-free: Theta at q_cfg (unwrapped
+    !! against the committed Theta, at most pi/2 away) with the committed end frames and Phi, or
+    !! the running step's target ones (tors_use_step); M_t = (Phi - Theta)/C; R -= M_t dTheta/dq
+    !! (want_residual); Kb -= M_t d2Theta/dq2 and tors_g = dTheta/dq (want_tangent).
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT), TARGET :: model
+    REAL(wp), INTENT(IN) :: q_cfg(:)
+    LOGICAL, INTENT(IN) :: want_residual, want_tangent
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), POINTER :: g(:)
+    REAL(wp) :: raw, th, mt, phi
+    INTEGER :: es, i
+    CHARACTER(200) :: em
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    IF (want_tangent) THEN
+      g => model%tors_g
+    ELSE
+      g => model%tors_gq
+    END IF
+    IF (model%tors_use_step) THEN
+      phi = model%tors_step_phi
+      CALL CD_HermiteTorsion_Line(q_cfg, model%l0, model%tors_step_ends, raw, g, es, em, &
+                                  quadrature_order=model%torsion%quadrature_order, work=model%tors_work, &
+                                  keep_hessian=want_tangent)
+    ELSE
+      phi = model%torsion%phi
+      CALL CD_HermiteTorsion_Line(q_cfg, model%l0, model%torsion%ends, raw, g, es, em, &
+                                  quadrature_order=model%torsion%quadrature_order, work=model%tors_work, &
+                                  keep_hessian=want_tangent)
+    END IF
+    IF (es /= CD_HTORS_OK) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'torsion: '//TRIM(em)
+      RETURN
+    END IF
+    th = CD_HermiteTorsion_Unwrap(raw, model%torsion%theta)
+    IF (ABS(th - model%torsion%theta) > CD_HTORS_MAX_STEP) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'torsion: the twist moved more than pi/2 from its accepted value'
+      RETURN
+    END IF
+    mt = (phi - th)/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+    IF (want_residual) THEN
+      DO i = 1, model%ndof
+        model%ws_R(i) = model%ws_R(i) - mt*g(i)
+      END DO
+    END IF
+    IF (want_tangent) CALL CD_HermiteTorsion_Work_Add_Hessian(model%tors_work, model%ws_Kb, -mt)
+  END SUBROUTINE assemble_torsion
 
   SUBROUTINE add_endconn_band(R, Kb, q_cfg, node, k_rot, d0, want_residual, want_tangent, &
                               ErrStat, ErrMsg)

@@ -575,6 +575,11 @@ add_test(NAME hermite_torsion_static
          COMMAND test_hermite_torsion_static ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_analytic_refs.txt)
 set_tests_properties(hermite_torsion_static PROPERTIES LABELS "fortran;unit;static;validation")
 
+add_executable(test_hermite_torsion_dynamic tests/test_hermite_torsion_dynamic.f90)
+target_link_libraries(test_hermite_torsion_dynamic PRIVATE cabledyn_core)
+add_test(NAME hermite_torsion_dynamic COMMAND test_hermite_torsion_dynamic)
+set_tests_properties(hermite_torsion_dynamic PROPERTIES LABELS "fortran;unit;dynamic;validation")
+
 add_executable(test_hermite_cable_static tests/test_hermite_cable_static.f90)
 target_link_libraries(test_hermite_cable_static PRIVATE cabledyn_core)
 add_test(NAME hermite_cable_static COMMAND test_hermite_cable_static)
@@ -1193,6 +1198,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
            COMMAND test_step_allocations ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/range_mixed_alloc.dat
                    200.0 200 ranges)
   set_tests_properties(step_allocations_ranges PROPERTIES LABELS "fortran;openfast;dynamic;memory")
+  # The same gate on a finite-EI cable with condensed torsion (a turning parent and a changing twist).
+  add_test(NAME step_allocations_torsion COMMAND test_step_allocations torsion)
+  set_tests_properties(step_allocations_torsion PROPERTIES LABELS "fortran;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)
@@ -1666,7 +1674,7 @@ set_tests_properties(clamped_cable_ends PROPERTIES LABELS "fortran;driver;integr
 add_executable(test_torsion_deck tests/test_torsion_deck.f90)
 target_link_libraries(test_torsion_deck PRIVATE cabledyn_core)
 add_test(NAME torsion_deck COMMAND test_torsion_deck)
-set_tests_properties(torsion_deck PROPERTIES LABELS "fortran;driver;integration;static")
+set_tests_properties(torsion_deck PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
 add_executable(test_rod_hydro tests/test_rod_hydro.f90)
 target_link_libraries(test_rod_hydro PRIVATE cabledyn_core)
@@ -1978,6 +1986,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_hermite_cable
       test_hermite_torsion_kernel
       test_hermite_torsion_static
+      test_hermite_torsion_dynamic
       test_hermite_cable_static
       test_hermite_sequenced
       test_hermite_resolution
