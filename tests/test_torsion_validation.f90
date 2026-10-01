@@ -312,7 +312,7 @@ CONTAINS
     IF (es /= CD_HCSTAT_OK) RETURN
     drift = 0.0_wp
     DO k = 0, NE
-      drift = MAX(drift, ABS(NORM2(q(6*k + 1:6*k + 2)) - a))
+      drift = nan_max_abs([drift, ABS(NORM2(q(6*k + 1:6*k + 2)) - a)])
     END DO
     ! end reaction: derivatives of the discrete total energy at the solution
     h = 1.0e-6_wp

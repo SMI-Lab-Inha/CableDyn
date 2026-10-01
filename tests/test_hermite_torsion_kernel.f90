@@ -15,7 +15,9 @@ PROGRAM test_hermite_torsion_kernel
   !!   U  2 pi unwrapping through more than three turns, and the pi/2 step limit,
   !!   G  fold guard (element and articulated end) and fail-closed input checks,
   !!   E  the element routine against finite differences and against the line assembly,
-  !!   W  the allocation-free workspace evaluation (bit-identical, kept Hessian, size checks).
+  !!   W  the allocation-free workspace evaluation (bit-identical, kept Hessian, size checks),
+  !!   L  the bordered solve on its direct, shifted and dense paths and its named failure, the
+  !!      inertia count's input checks and unreliable count, and the compliance of a bad input.
   !! Argument 1: path of the reference data file.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsion_Element, CD_HermiteTorsion_Line, CD_HermiteTorsion_Fold_Check, &
@@ -23,7 +25,10 @@ PROGRAM test_hermite_torsion_kernel
                                      CD_HTORS_BADINPUT, CD_HTORS_FOLD, CD_HTORS_NONFINITE, CD_HTORS_STEP, &
                                      CD_HTORS_KBAND, CD_HTORS_PI, CD_HermiteTorsionWorkType, &
                                      CD_HermiteTorsion_Work_Init, CD_HermiteTorsion_Work_End, &
-                                     CD_HermiteTorsion_Work_Add_Hessian
+                                     CD_HermiteTorsion_Work_Add_Hessian, CD_HermiteTorsion_Bordered_Solve, &
+                                     CD_HermiteTorsion_Inertia, CD_HermiteTorsion_Compliance, CD_HermiteTorsionType, &
+                                     CD_HTORS_ILLCOND, CD_HTORS_UNRELIABLE, CD_HTORS_DENSE_MAX
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_NAN, IEEE_VALUE, IEEE_QUIET_NAN
   IMPLICIT NONE
 
   INTEGER, PARAMETER :: KB = CD_HTORS_KBAND, LDAB = 3*KB + 1
@@ -48,6 +53,7 @@ PROGRAM test_hermite_torsion_kernel
   CALL check_accept_rule()
   CALL check_fold_and_inputs()
   CALL check_element_routine()
+  CALL check_linear_algebra()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -234,7 +240,7 @@ CONTAINS
       DO j = 1, n
         DO i = j, MIN(n, j + KB)
           nb = nb + 1
-          err_h = MAX(err_h, ABS(h(i, j) - band_ref(nb)), ABS(h(j, i) - band_ref(nb)))
+          err_h = nan_max_abs([err_h, ABS(h(i, j) - band_ref(nb)), ABS(h(j, i) - band_ref(nb))])
         END DO
       END DO
       err_h = err_h/scale_h
@@ -304,8 +310,8 @@ CONTAINS
       tp = 0.0_wp
       DO j = 1, n
         DO i = 1, n
-          IF (ABS(i - j) > KB) dum = MAX(dum, ABS(hfd(i, j)))
-          IF (ABS(i - j) == KB) tp = MAX(tp, ABS(h(i, j)))
+          IF (ABS(i - j) > KB) dum = nan_max_abs([dum, ABS(hfd(i, j))])
+          IF (ABS(i - j) == KB) tp = nan_max_abs([tp, ABS(h(i, j))])
         END DO
       END DO
       CALL require(dum <= 1.0e-7_wp*MAXVAL(ABS(h)), 'B: FD Hessian vanishes outside the band '//TRIM(tag))
@@ -429,13 +435,23 @@ CONTAINS
       CALL CD_HermiteTorsion_Line(q, le, ends, th1, g1, es, em, hband=h1, band_scale=-3.0_wp, end_grad=eg1)
       CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, end_grad=eg2, work=work, keep_hessian=.TRUE.)
       CALL require(es == CD_HTORS_OK, 'W: workspace evaluation succeeds '//TRIM(em))
-      CALL CD_HermiteTorsion_Work_Add_Hessian(work, h2, -3.0_wp)
+      CALL CD_HermiteTorsion_Work_Add_Hessian(work, h2, -3.0_wp, es, em)
+      CALL require(es == CD_HTORS_OK, 'W: the kept Hessian is added '//TRIM(em))
       CALL require(.NOT. (ABS(th1 - th2) > 0.0_wp) .AND. nan_max_abs(g1 - g2) <= 0.0_wp .AND. &
                    nan_max_abs(eg1 - eg2) <= 0.0_wp, 'W: workspace Theta and gradients bit-identical')
       CALL require(nan_max_abs(h1 - h2) <= 0.0_wp, 'W: kept Hessian scaled later equals band_scale')
       h2 = 0.0_wp
       CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, hband=h2, band_scale=-3.0_wp, work=work)
       CALL require(nan_max_abs(h1 - h2) <= 0.0_wp, 'W: workspace hband path bit-identical')
+      ! that call kept no Hessian: adding one now fails and leaves the band unchanged
+      h1 = h2
+      CALL CD_HermiteTorsion_Work_Add_Hessian(work, h2, 1.0_wp, es, em)
+      CALL require(es == CD_HTORS_BADINPUT .AND. INDEX(em, 'no Hessian') > 0 .AND. nan_max_abs(h1 - h2) <= 0.0_wp, &
+                   'W: adding a Hessian that was not kept is refused')
+      CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, work=work, keep_hessian=.TRUE.)
+      CALL CD_HermiteTorsion_Work_Add_Hessian(work, h2(:, 1:n - 6), 1.0_wp, es, em)
+      CALL require(es == CD_HTORS_BADINPUT .AND. INDEX(em, 'does not match') > 0, &
+                   'W: a band of another size is refused')
     END DO
     CALL CD_HermiteTorsion_Work_Init(work, n/6 + 1, es, em)
     CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, work=work)
@@ -473,7 +489,7 @@ CONTAINS
       DO k = 0, n/3 - 1
         gen = gen + cross(q(3*k + 1:3*k + 3), g(3*k + 1:3*k + 3))
       END DO
-      err_gen = MAX(err_gen, nan_max_abs(gen)/MAXVAL(ABS(g)))
+      err_gen = nan_max_abs([err_gen, nan_max_abs(gen)/MAXVAL(ABS(g))])
       DO ir = 1, 5
         w = [0.7_wp*ir, -1.3_wp + 0.4_wp*ir, 2.1_wp - 0.9_wp*ir]
         DO k = 0, n/3 - 1
@@ -484,8 +500,8 @@ CONTAINS
           ends2(:, k) = rotate(w, ends(:, k))
         END DO
         CALL CD_HermiteTorsion_Line(q2, le, ends2, th2, g2, es, em)
-        err_t = MAX(err_t, ABS(wrap(th2 - th)))
-        err_g = MAX(err_g, nan_max_abs(g2 - grot)/MAXVAL(ABS(g)))
+        err_t = nan_max_abs([err_t, ABS(wrap(th2 - th))])
+        err_g = nan_max_abs([err_g, nan_max_abs(g2 - grot)/MAXVAL(ABS(g))])
       END DO
       DEALLOCATE (q2, g, g2, grot)
     END DO
@@ -609,7 +625,7 @@ CONTAINS
         prev = th
       END IF
       raw_prev = raw
-      err = MAX(err, ABS(prev - expected))
+      err = nan_max_abs([err, ABS(prev - expected)])
       DEALLOCATE (q, le, g)
     END DO
     WRITE (*, '(A,F8.3,A,I0,A,ES9.2)') '  U unwrap: final Theta ', prev, ' rad, raw branch jumps ', jumps, &
@@ -757,5 +773,132 @@ CONTAINS
     CALL CD_HermiteTorsion_Element(qe, 1.0_wp, h, g, es, em, fold_margin=margin)
     CALL require(es == CD_HTORS_FOLD .AND. margin < 0.5_wp, 'E: element fold reported with its margin')
   END SUBROUTINE check_element_routine
+
+  ! ---------------------------------------------------------------------------------------
+  SUBROUTINE check_linear_algebra()
+    !! L  (B + g g^T / C) x = r on a 6x6 band (kl = ku = 2):
+    !!    - B regular: the direct Sherman-Morrison step;
+    !!    - B exactly singular, K regular: the shifted factorization with refinement;
+    !!    - C = 1e-8 with B nearly singular (lambda ~ 1e-10): g^T B^-1 g / C ~ 1e18 defeats both
+    !!      Sherman-Morrison paths although K is well conditioned, so the dense fallback solves it;
+    !!    - that case in a line beyond CD_HTORS_DENSE_MAX DOFs: named CD_HTORS_ILLCOND with x = 0.
+    !!    The inertia count refuses a non-square band and a NaN coupling vector, and reports a
+    !!    vanishing pivot as unreliable; the compliance of a description without GJ is NaN.
+    INTEGER, PARAMETER :: N = 6, KLB = 2, LD = 2*KLB + KLB + 1
+    REAL(wp) :: dense(N, N), g(N), r(N), x(N), xt(N), ab(LD, N), be, err
+    INTEGER :: es, i, nb, nk
+    LOGICAL :: sh, dn, mask(N)
+    CHARACTER(256) :: em
+    TYPE(CD_HermiteTorsionType) :: tors
+    g = [1.0_wp, 0.1_wp, 0.2_wp, -0.1_wp, 0.05_wp, 0.0_wp]
+    r = [1.0_wp, -2.0_wp, 0.5_wp, 1.0_wp, 0.0_wp, 3.0_wp]
+    ! direct path
+    CALL la_case(1.0_wp, 0.5_wp, 1.0_wp, g, r, x, xt, es, em, be, sh, dn)
+    err = nan_max_abs(x - xt)/MAXVAL(ABS(xt))
+    CALL require(es == CD_HTORS_OK .AND. .NOT. sh .AND. .NOT. dn .AND. err <= 1.0e-13_wp, &
+                 'L: direct bordered step '//TRIM(em))
+    ! B exactly singular (first pivot zero), K regular: shifted path
+    CALL la_case(0.0_wp, 0.0_wp, 1.0_wp, g, r, x, xt, es, em, be, sh, dn)
+    err = nan_max_abs(x - xt)/MAXVAL(ABS(xt))
+    CALL require(es == CD_HTORS_OK .AND. sh .AND. .NOT. dn .AND. err <= 1.0e-8_wp, &
+                 'L: shifted bordered step for a singular B '//TRIM(em))
+    ! g^T B^-1 g / C huge: dense fallback
+    CALL la_case(1.0e-10_wp + 0.09_wp, 0.3_wp, 1.0e-8_wp, g, r, x, xt, es, em, be, sh, dn)
+    err = nan_max_abs(x - xt)/MAXVAL(ABS(xt))
+    WRITE (*, '(A,I0,A,L1,A,L1,A,ES10.3,A,ES10.3)') 'bordered solve, g^T B^-1 g / C ~ 1e18: status ', es, &
+      ', shifted ', sh, ', dense ', dn, ', backward error ', be, ', error vs dense LU ', err
+    CALL require(es == CD_HTORS_OK .AND. dn .AND. err <= 1.0e-6_wp .AND. be <= 1.0e-10_wp, &
+                 'L: dense fallback when Sherman-Morrison fails')
+    ! the same system embedded in a line too large for the dense fallback: named, x = 0
+    BLOCK
+      INTEGER, PARAMETER :: NL = CD_HTORS_DENSE_MAX + 2
+      REAL(wp), ALLOCATABLE :: abl(:, :), gl(:), rl(:), xl(:)
+      ALLOCATE (abl(LD, NL), gl(NL), rl(NL), xl(NL))
+      abl = 0.0_wp
+      abl(2*KLB + 1, :) = 1.0_wp
+      abl(2*KLB + 1, 1) = 1.0e-10_wp + 0.09_wp
+      abl(2*KLB, 2) = 0.3_wp
+      abl(2*KLB + 2, 1) = 0.3_wp
+      gl = 0.0_wp
+      gl(1:N) = g
+      rl = 0.0_wp
+      rl(1:N) = r
+      CALL CD_HermiteTorsion_Bordered_Solve(abl, KLB, KLB, gl, 1.0e-8_wp, rl, xl, es, em, backward_error=be, &
+                                            shifted=sh, dense=dn)
+      CALL require(es == CD_HTORS_ILLCOND .AND. INDEX(em, 'ill-conditioned') > 0 .AND. nan_max_abs(xl) <= 0.0_wp &
+                   .AND. .NOT. dn, 'L: a failed bordered step beyond the dense size is named ill-conditioned, x = 0')
+    END BLOCK
+    ! a band with a zero pivot for the inertia checks: B = diag(0, 0, 1, 1, 1, 1)
+    dense = 0.0_wp
+    DO i = 3, N
+      dense(i, i) = 1.0_wp
+    END DO
+    CALL la_band(dense, KLB, ab)
+    g = 0.0_wp
+    g(1) = 1.0_wp
+    ! inertia input checks and the unreliable count
+    mask = .TRUE.
+    CALL CD_HermiteTorsion_Inertia(ab(2:, :), KLB - 1, KLB, mask, g, 1.0_wp, nb, nk, es, em)
+    CALL require(es == CD_HTORS_BADINPUT .AND. INDEX(em, 'kl = ku') > 0, 'L: inertia refuses a non-square band')
+    g(2) = IEEE_VALUE(1.0_wp, IEEE_QUIET_NAN)
+    CALL CD_HermiteTorsion_Inertia(ab, KLB, KLB, mask, g, 1.0_wp, nb, nk, es, em)
+    CALL require(es == CD_HTORS_NONFINITE, 'L: inertia refuses a NaN coupling vector')
+    g(2) = 0.0_wp
+    CALL CD_HermiteTorsion_Inertia(ab, KLB, KLB, mask, g, 1.0_wp, nb, nk, es, em)
+    CALL require(es == CD_HTORS_UNRELIABLE, 'L: a vanishing pivot makes the count unreliable')
+    ! compliance without GJ
+    CALL require(IEEE_IS_NAN(CD_HermiteTorsion_Compliance(tors, [1.0_wp, 1.0_wp])), &
+                 'L: the compliance of a description without GJ is NaN')
+    ALLOCATE (tors%gj(3))
+    tors%gj = 1.0_wp
+    CALL require(IEEE_IS_NAN(CD_HermiteTorsion_Compliance(tors, [1.0_wp, 1.0_wp])), &
+                 'L: the compliance with a GJ count that does not match the mesh is NaN')
+    tors%end_compliance = [0.5_wp, 0.25_wp]
+    CALL require(ABS(CD_HermiteTorsion_Compliance(tors, [1.0_wp, 2.0_wp, 3.0_wp]) - 6.75_wp) <= 1.0e-15_wp, &
+                 'L: compliance = sum L/GJ + end compliances')
+  END SUBROUTINE check_linear_algebra
+
+  SUBROUTINE la_band(dense, kl, ab)
+    !! General band storage (DGBSV, kl = ku) of a dense square matrix.
+    REAL(wp), INTENT(IN) :: dense(:, :)
+    INTEGER, INTENT(IN) :: kl
+    REAL(wp), INTENT(OUT) :: ab(:, :)
+    INTEGER :: i, j, n
+    n = SIZE(dense, 2)
+    ab = 0.0_wp
+    DO j = 1, n
+      DO i = MAX(1, j - kl), MIN(n, j + kl)
+        ab(2*kl + 1 + i - j, j) = dense(i, j)
+      END DO
+    END DO
+  END SUBROUTINE la_band
+
+  SUBROUTINE la_case(b11, b12, cc, g, r, x, xt, es, em, be, sh, dn)
+    !! B = identity with the leading 2x2 block [b11 b12; b12 1]: the bordered solve of
+    !! (B + g g^T / cc) x = r, and the reference xt from a dense LU of the same K.
+    REAL(wp), INTENT(IN) :: b11, b12, cc, g(:), r(:)
+    REAL(wp), INTENT(OUT) :: x(:), xt(:), be
+    INTEGER, INTENT(OUT) :: es
+    CHARACTER(*), INTENT(OUT) :: em
+    LOGICAL, INTENT(OUT) :: sh, dn
+    INTEGER, PARAMETER :: KL2 = 2
+    REAL(wp) :: dense(SIZE(g), SIZE(g)), kk(SIZE(g), SIZE(g)), ab(3*KL2 + 1, SIZE(g))
+    INTEGER :: i, n, info, ipiv(SIZE(g))
+    EXTERNAL :: dgesv
+    n = SIZE(g)
+    dense = 0.0_wp
+    DO i = 1, n
+      dense(i, i) = 1.0_wp
+    END DO
+    dense(1, 1) = b11
+    dense(1, 2) = b12
+    dense(2, 1) = b12
+    CALL la_band(dense, KL2, ab)
+    CALL CD_HermiteTorsion_Bordered_Solve(ab, KL2, KL2, g, cc, r, x, es, em, backward_error=be, shifted=sh, &
+                                          dense=dn)
+    kk = dense + SPREAD(g, 2, n)*SPREAD(g, 1, n)/cc
+    xt = r
+    CALL dgesv(n, 1, kk, n, ipiv, xt, n, info)
+  END SUBROUTINE la_case
 
 END PROGRAM test_hermite_torsion_kernel

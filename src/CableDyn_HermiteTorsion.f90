@@ -35,6 +35,7 @@ MODULE CableDyn_HermiteTorsion
   !! Gauss point or across a chain link), non-finite values, and malformed input.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite, CD_Is_Finite
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Gauss_Rule
+  USE CableDyn_Linalg, ONLY: CD_Solve_Dense_As_Banded, CD_LINALG_OK
   IMPLICIT NONE
   PRIVATE
 
@@ -59,6 +60,12 @@ MODULE CableDyn_HermiteTorsion
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_FOLD = 2
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_NONFINITE = 3
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_STEP = 4
+  !! The bordered step stayed above its backward-error bound on every path (all values finite).
+  INTEGER, PARAMETER, PUBLIC :: CD_HTORS_ILLCOND = 5
+  !! The inertia count is unreliable (vanishing pivot or pivot growth); compute the lowest mode.
+  INTEGER, PARAMETER, PUBLIC :: CD_HTORS_UNRELIABLE = 6
+  !! Largest system solved densely when the banded bordered step fails.
+  INTEGER, PARAMETER, PUBLIC :: CD_HTORS_DENSE_MAX = 600
   !! Half-bandwidth of d2Theta/dq2 (equal to that of the cable tangent).
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_KBAND = 11
   !! Fold guard: 1 + t1 . t at every Gauss point and 1 + u_j . u_j+1 on every chain link.
@@ -123,6 +130,8 @@ MODULE CableDyn_HermiteTorsion
     !! Passed as `work`, it makes the evaluation free of heap allocation (the dynamic step).
     INTEGER :: nn = 0
     REAL(wp), ALLOCATABLE :: u(:, :), pole(:, :), gu(:, :), huu(:, :, :), huv(:, :, :), band(:, :)
+    !! band holds the Hessian of the last successful CD_HermiteTorsion_Line call with keep_hessian
+    LOGICAL :: hess_valid = .FALSE.
   END TYPE CD_HermiteTorsionWorkType
 
 CONTAINS
@@ -132,13 +141,16 @@ CONTAINS
   ! ------------------------------------------------------------------------------------------
 
   PURE REAL(wp) FUNCTION CD_HermiteTorsion_Compliance(tors, l0) RESULT(c)
-    !! Line torsional compliance C = sum_e l0_e/GJ_e + 1/k_t1 + 1/k_t2 [rad/(N m)].
+    !! Line torsional compliance C = sum_e l0_e/GJ_e + 1/k_t1 + 1/k_t2 [rad/(N m)]. Meant for a
+    !! description that passed CD_HermiteTorsion_Validate: without one GJ per element it
+    !! returns NaN (so no caller can take the end compliances alone for the line's).
+    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
     TYPE(CD_HermiteTorsionType), INTENT(IN) :: tors
     REAL(wp), INTENT(IN) :: l0(:)
-    c = tors%end_compliance(1) + tors%end_compliance(2)
-    IF (ALLOCATED(tors%gj)) THEN
-      IF (SIZE(tors%gj) == SIZE(l0)) c = c + SUM(l0/tors%gj)
-    END IF
+    c = IEEE_VALUE(c, IEEE_QUIET_NAN)
+    IF (.NOT. ALLOCATED(tors%gj)) RETURN
+    IF (SIZE(tors%gj) /= SIZE(l0)) RETURN
+    c = tors%end_compliance(1) + tors%end_compliance(2) + SUM(l0/tors%gj)
   END FUNCTION CD_HermiteTorsion_Compliance
 
   PURE SUBROUTINE CD_HermiteTorsion_Validate(tors, l0, ErrStat, ErrMsg)
@@ -192,7 +204,7 @@ CONTAINS
   ! ------------------------------------------------------------------------------------------
 
   SUBROUTINE CD_HermiteTorsion_Bordered_Solve(ab, kl, ku, g, compliance, rhs, x, ErrStat, ErrMsg, &
-                                              backward_error, shifted)
+                                              backward_error, shifted, dense)
     !! Solve (B + g g^T / C) x = rhs, B a general band matrix in LAPACK DGBSV storage (ab, with
     !! the 2 kl + ku + 1 rows of DGBTRF; not modified) and g a dense vector, through one band
     !! factorization of B and two right-hand sides (the bordered system [B g; g^T -C]):
@@ -203,8 +215,12 @@ CONTAINS
     !! norms, K applied as the band product plus the rank-one term). Otherwise B is shifted by
     !! sigma = 1e-10 max|diag B|, Sherman-Morrison is applied to the shifted matrix and two steps
     !! of iterative refinement against the true K follow; the same backward-error test decides.
-    !! A failure of both leaves x = 0 with a named error. B may be singular where K is not (the
-    !! rank-one term is positive semidefinite); at a straight state g = 0 and K = B.
+    !! Sherman-Morrison loses accuracy when g^T B^-1 g / C is very large even if K is well
+    !! conditioned, so a line of at most CD_HTORS_DENSE_MAX DOFs is then solved densely (K
+    !! assembled, LU with partial pivoting, dense = .TRUE.) under the same test. A failure of
+    !! every path leaves x = 0 with ErrStat CD_HTORS_ILLCOND (CD_HTORS_NONFINITE only for a
+    !! non-finite result). B may be singular where K is not (the rank-one term is positive
+    !! semidefinite); at a straight state g = 0 and K = B.
     REAL(wp), INTENT(IN) :: ab(:, :)
     INTEGER, INTENT(IN) :: kl, ku
     REAL(wp), INTENT(IN) :: g(:), compliance, rhs(:)
@@ -212,17 +228,18 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: backward_error
-    LOGICAL, INTENT(OUT), OPTIONAL :: shifted
+    LOGICAL, INTENT(OUT), OPTIONAL :: shifted, dense
     REAL(wp), ALLOCATABLE :: lu(:, :), rr(:, :), res(:), dx(:)
     INTEGER, ALLOCATABLE :: ipiv(:)
     REAL(wp) :: sigma, eta, knorm
     INTEGER :: n, ldab, attempt, refine
-    LOGICAL :: ok
+    LOGICAL :: ok, finite_fail
     CHARACTER(160) :: why
 
     x = CD_ZERO
     IF (PRESENT(backward_error)) backward_error = HUGE(CD_ONE)
     IF (PRESENT(shifted)) shifted = .FALSE.
+    IF (PRESENT(dense)) dense = .FALSE.
     n = SIZE(ab, 2)
     ldab = SIZE(ab, 1)
     ErrStat = CD_HTORS_BADINPUT
@@ -269,12 +286,64 @@ CONTAINS
       END IF
       WRITE (why, '(A,ES9.2)') 'backward error ', eta
     END DO
+    ! dense fallback for a small line: K assembled and factored with partial pivoting
+    IF (n <= CD_HTORS_DENSE_MAX) THEN
+      CALL dense_solve(ok)
+      IF (ok) THEN
+        CALL bordered_residual(x, res)
+        eta = MAXVAL(ABS(res))/MAX(knorm*MAXVAL(ABS(x)) + MAXVAL(ABS(rhs)), TINY(CD_ONE))
+        IF (PRESENT(backward_error)) backward_error = eta
+        IF (CD_Is_Finite(eta) .AND. eta <= CD_HTORS_BACKWARD_TOL .AND. CD_All_Finite(x)) THEN
+          IF (PRESENT(dense)) dense = .TRUE.
+          ErrStat = CD_HTORS_OK
+          ErrMsg = ''
+          RETURN
+        END IF
+        WRITE (why, '(A,ES9.2)') 'dense backward error ', eta
+      END IF
+    END IF
+    finite_fail = CD_All_Finite(x)
     x = CD_ZERO
-    ErrStat = CD_HTORS_NONFINITE
-    ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: the bordered torsion step failed ('//TRIM(why)// &
-             '), also with a shifted factorization and refinement'
+    IF (finite_fail) THEN
+      ErrStat = CD_HTORS_ILLCOND
+      IF (n <= CD_HTORS_DENSE_MAX) THEN
+        ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: ill-conditioned bordered torsion step ('//TRIM(why)// &
+                 '), also with a shifted factorization, refinement and a dense solve'
+      ELSE
+        ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: ill-conditioned bordered torsion step ('//TRIM(why)// &
+                 '), also with a shifted factorization and refinement'
+      END IF
+    ELSE
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Bordered_Solve: non-finite bordered torsion step ('//TRIM(why)//')'
+    END IF
 
   CONTAINS
+
+    SUBROUTINE dense_solve(success)
+      !! x from the dense K = B + g g^T / C (LU with partial pivoting through the band solver
+      !! at full bandwidth); success on a regular factor and a finite x.
+      LOGICAL, INTENT(OUT) :: success
+      REAL(wp), ALLOCATABLE :: kd(:, :)
+      INTEGER :: i, j, info
+      CHARACTER(200) :: lmsg
+      ALLOCATE (kd(n, n))
+      DO j = 1, n
+        DO i = 1, n
+          kd(i, j) = g(i)*g(j)/compliance
+        END DO
+        DO i = MAX(1, j - ku), MIN(n, j + kl)
+          kd(i, j) = kd(i, j) + ab(kl + ku + 1 + i - j, j)
+        END DO
+      END DO
+      x = rhs
+      CALL CD_Solve_Dense_As_Banded(kd, x, info, lmsg)
+      success = info == CD_LINALG_OK .AND. CD_All_Finite(x)
+      IF (.NOT. success) THEN
+        why = TRIM(why)//'; dense factor singular'
+        x = CD_ZERO
+      END IF
+    END SUBROUTINE dense_solve
 
     SUBROUTINE sm_solve(shift, b, sol, success, reason)
       REAL(wp), INTENT(IN) :: shift, b(:)
@@ -394,7 +463,8 @@ CONTAINS
     !! neg(B) is counted by a banded L D L^T factorization without pivoting of the Jacobi-scaled
     !! symmetric band (Sylvester's law of inertia), which also gives B^-1 g. A banded Cholesky
     !! success short-cuts the count (B positive definite, hence K). A vanishing pivot or a
-    !! multiplier growth above 1e8 makes the count unreliable: ErrStat = CD_HTORS_STEP.
+    !! multiplier growth above 1e8 makes the count unreliable: ErrStat = CD_HTORS_UNRELIABLE. The
+    !! band must be square (kl = ku) and g finite.
     REAL(wp), INTENT(IN) :: ab(:, :)
     INTEGER, INTENT(IN) :: kl, ku
     LOGICAL, INTENT(IN) :: mask(:)
@@ -412,9 +482,14 @@ CONTAINS
     n = SIZE(ab, 2)
     kd = MIN(kl, ku)
     IF (SIZE(ab, 1) /= 2*kl + ku + 1 .OR. SIZE(mask) /= n .OR. SIZE(g) /= n .OR. &
-        .NOT. (compliance > CD_ZERO)) THEN
+        .NOT. (compliance > CD_ZERO) .OR. kl /= ku .OR. kl < 0) THEN
       ErrStat = CD_HTORS_BADINPUT
-      ErrMsg = 'CD_HermiteTorsion_Inertia: inconsistent input'
+      ErrMsg = 'CD_HermiteTorsion_Inertia: inconsistent input (a square band, kl = ku, is required)'
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(g) .AND. CD_Is_Finite(compliance))) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Inertia: non-finite coupling vector or compliance'
       RETURN
     END IF
     ALLOCATE (s(kd + 1, n), gs(n), dsc(n), lb(kd + 1, n), d(n), tmp(n), w(n))
@@ -441,7 +516,7 @@ CONTAINS
       END DO
       d(j) = acc
       IF (.NOT. (ABS(d(j)) > 1.0e-14_wp*smax)) THEN
-        ErrStat = CD_HTORS_STEP
+        ErrStat = CD_HTORS_UNRELIABLE
         ErrMsg = 'CD_HermiteTorsion_Inertia: vanishing pivot (count unreliable)'
         RETURN
       END IF
@@ -452,7 +527,7 @@ CONTAINS
         END DO
         lb(1 + i - j, j) = acc/d(j)
         IF (ABS(lb(1 + i - j, j)) > 1.0e8_wp) THEN
-          ErrStat = CD_HTORS_STEP
+          ErrStat = CD_HTORS_UNRELIABLE
           ErrMsg = 'CD_HermiteTorsion_Inertia: pivot growth (count unreliable)'
           RETURN
         END IF
@@ -510,9 +585,14 @@ CONTAINS
     n = SIZE(ab, 2)
     kd = MIN(kl, ku)
     IF (SIZE(ab, 1) /= 2*kl + ku + 1 .OR. SIZE(mask) /= n .OR. SIZE(g) /= n .OR. SIZE(v) /= n .OR. &
-        .NOT. (compliance > CD_ZERO) .OR. .NOT. ANY(mask)) THEN
+        .NOT. (compliance > CD_ZERO) .OR. .NOT. ANY(mask) .OR. kl /= ku .OR. kl < 0) THEN
       ErrStat = CD_HTORS_BADINPUT
-      ErrMsg = 'CD_HermiteTorsion_Lowest_Mode: inconsistent input'
+      ErrMsg = 'CD_HermiteTorsion_Lowest_Mode: inconsistent input (a square band, kl = ku, is required)'
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(g) .AND. CD_Is_Finite(compliance))) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTorsion_Lowest_Mode: non-finite coupling vector or compliance'
       RETURN
     END IF
     ALLOCATE (s(kd + 1, n), gs(n), dsc(n), ch(kd + 1, n), u(n), y(n), z(n))
@@ -776,18 +856,32 @@ CONTAINS
     IF (ALLOCATED(work%huv)) DEALLOCATE (work%huv)
     IF (ALLOCATED(work%band)) DEALLOCATE (work%band)
     work%nn = 0
+    work%hess_valid = .FALSE.
   END SUBROUTINE CD_HermiteTorsion_Work_End
 
-  PURE SUBROUTINE CD_HermiteTorsion_Work_Add_Hessian(work, hband, scale)
+  PURE SUBROUTINE CD_HermiteTorsion_Work_Add_Hessian(work, hband, scale, ErrStat, ErrMsg)
     !! Add scale * d2Theta/dq2, kept in `work` by the last CD_HermiteTorsion_Line call with
     !! keep_hessian, to the general band hband (layout as for CD_HermiteTorsion_Line's hband).
     !! This lets a caller scale the Hessian by a factor that depends on Theta (the torque).
+    !! Fails (hband unchanged) when the last call kept no Hessian or failed, or on a size mismatch.
     TYPE(CD_HermiteTorsionWorkType), INTENT(IN) :: work
     REAL(wp), INTENT(INOUT) :: hband(:, :)
     REAL(wp), INTENT(IN) :: scale
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: n, i, jj, i0, row0
     n = 6*work%nn
-    IF (n < 12 .OR. SIZE(hband, 2) /= n .OR. SIZE(hband, 1) < 2*CD_HTORS_KBAND + 1) RETURN
+    ErrStat = CD_HTORS_BADINPUT
+    IF (.NOT. work%hess_valid) THEN
+      ErrMsg = 'CD_HermiteTorsion_Work_Add_Hessian: the workspace holds no Hessian of a successful evaluation'
+      RETURN
+    END IF
+    IF (n < 12 .OR. SIZE(hband, 2) /= n .OR. SIZE(hband, 1) < 2*CD_HTORS_KBAND + 1) THEN
+      ErrMsg = 'CD_HermiteTorsion_Work_Add_Hessian: hband does not match the workspace'
+      RETURN
+    END IF
+    ErrStat = CD_HTORS_OK
+    ErrMsg = ''
     row0 = CD_HTORS_KBAND + 1
     i0 = SIZE(hband, 1) - 2*CD_HTORS_KBAND - 1
     DO jj = 1, n
@@ -806,7 +900,8 @@ CONTAINS
     !!   Le(n - 1)       element reference lengths
     !!   ends(3, 4)      columns d_A, n_A, d_B, n_B: unit end directors and unit reference
     !!                   normals (n perpendicular to d). A clamped end has d = its end tangent.
-    !!   theta_raw       sum of element holonomies + chain angle in (-pi, pi]; Theta is defined
+    !!   theta_raw       sum of the element holonomies plus the chain angle; only the chain angle
+    !!                   is wrapped to (-pi, pi], the holonomy sum is unbounded. Theta is defined
     !!                   modulo 2 pi -- pass it through CD_HermiteTorsion_Accept
     !!   grad(6 n)       dTheta/dq
     !!   hband           optional, INOUT: band_scale * d2Theta/dq2 is ADDED in general-band
@@ -853,11 +948,14 @@ CONTAINS
         IF (PRESENT(fold_margin)) fold_margin = CD_ZERO
         ErrStat = CD_HTORS_BADINPUT
         ErrMsg = 'CD_HermiteTorsion_Line: the workspace is not sized for this line'
+        work%hess_valid = .FALSE.
         RETURN
       END IF
+      work%hess_valid = .FALSE.
       CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, work%nn, work%u, work%pole, work%gu, work%huu, &
                      work%huv, work%band, keep, hband, band_scale, end_grad, end_hess, end_cross, fold_margin, &
                      quadrature_order)
+      work%hess_valid = keep .AND. ErrStat == CD_HTORS_OK
     ELSE
       nn = MAX(SIZE(q)/6, 2)
       ALLOCATE (local%u(3, 0:nn + 1), local%pole(3, 0:nn), local%gu(3, 0:nn + 1), local%huu(3, 3, 0:nn + 1), &
@@ -1067,7 +1165,10 @@ CONTAINS
     !! |theta_new - theta_prev| <= max_step (default pi/2, a margin below the hard limit pi at
     !! which the nearest branch becomes ambiguous). On rejection theta_new = theta_prev and
     !! ErrStat = CD_HTORS_STEP: the caller must cut the step. Call it after every accepted
-    !! Newton iterate and every accepted time step or load stage.
+    !! Newton iterate and every accepted time step or load stage. It sees only the wrapped trial
+    !! value, so it cannot tell a change of 3 pi/2 from one of -pi/2: callers also bound the
+    !! linearised change dTheta/dq . dq of every trial step before taking it (to pi/4 in the
+    !! static and dynamic Newton steps and the static descent perturbation).
     REAL(wp), INTENT(IN) :: theta_prev, theta_raw
     REAL(wp), INTENT(OUT) :: theta_new
     INTEGER, INTENT(OUT) :: ErrStat

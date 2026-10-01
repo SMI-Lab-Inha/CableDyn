@@ -51,7 +51,8 @@ MODULE CableDyn_HermiteCableStatic
                                      CD_HermiteTorsion_Accept, CD_HermiteTorsion_Compliance, &
                                      CD_HermiteTorsion_Validate, CD_HermiteTorsion_Bordered_Solve, &
                                      CD_HermiteTorsion_Inertia, CD_HermiteTorsion_Lowest_Mode, CD_HTORS_OK, &
-                                     CD_HTORS_KBAND, CD_HTORS_MAX_STEP, CD_HTORS_ZERO_MODE_TOL, CD_HTORS_PI
+                                     CD_HTORS_KBAND, CD_HTORS_MAX_STEP, CD_HTORS_ZERO_MODE_TOL, CD_HTORS_PI, &
+                                     CD_HTORS_UNRELIABLE
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_in_parallel
   IMPLICIT NONE
   PRIVATE
@@ -382,9 +383,18 @@ CONTAINS
     !!                                  DOFs); an unstable one (above a buckling onset) is
     !!                                  left by negative-curvature descent along the lowest
     !!                                  mode and energy minimisation, unless torsion%descend
-    !!                                  is false. On return torsion holds the accepted Theta,
-    !!                                  the torque and the stability report. Not combined
-    !!                                  with pseudo_transient or equilibrate_linear_system.
+    !!                                  is false. On a converged return torsion holds the
+    !!                                  accepted Theta (has_theta), the torque and the
+    !!                                  stability report; any other return leaves its Theta
+    !!                                  state unchanged. A re-solve with has_theta needs the
+    !!                                  untwisted equilibrium within pi/2 of the stored Theta
+    !!                                  (otherwise its turn count is ambiguous and the solve
+    !!                                  stops by name); start a new solve with has_theta
+    !!                                  false and theta_hint instead. residual_history and
+    !!                                  history_count cover the untwisted stages only;
+    !!                                  iters_out and res_out include the twist stages. Not
+    !!                                  combined with pseudo_transient,
+    !!                                  equilibrate_linear_system or tangent_out.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping
@@ -693,6 +703,10 @@ CONTAINS
       IF (use_ptc .OR. use_equilibration) THEN
         CALL fail('torsion is not combined with pseudo_transient or equilibrate_linear_system'); RETURN
       END IF
+      ! the band holds only B of K = B + g g^T / C: no banded tangent can carry the rank-one term
+      IF (PRESENT(tangent_out)) THEN
+        CALL fail('torsion is not combined with tangent_out (the twisted tangent is not banded)'); RETURN
+      END IF
       DO i = 1, 2
         IF (endconn_kind(i) /= CD_ENDCONN_RIGID) CYCLE
         IF (NORM2(torsion%ends(:, 2*i - 1) - endconn_d0(:, i)) > 1.0e-8_wp) THEN
@@ -912,10 +926,14 @@ CONTAINS
       END IF
     END IF
     IF (use_tors) THEN
-      torsion%theta = tors_theta_acc
-      torsion%has_theta = .TRUE.
-      torsion%torque = tors_mt
-      torsion%energy = pi_total
+      ! the accepted Theta becomes state only on a converged return: a NOCONVERGE return
+      ! leaves the caller's torsion state (and its branch) as it was
+      IF (res_out < tol) THEN
+        torsion%theta = tors_theta_acc
+        torsion%has_theta = .TRUE.
+        torsion%torque = tors_mt
+        torsion%energy = pi_total
+      END IF
       IF (.NOT. PRESENT(stable)) THEN
         IF (torsion%check_stability) THEN
           CALL torsion_stability(torsion%stable, es, ErrMsg)
@@ -1665,7 +1683,8 @@ CONTAINS
 
     SUBROUTINE torsion_continuation(ecs, ecm)
       !! The imposed-twist load stage. From the converged untwisted state (Theta_0 on the branch
-      !! of torsion%theta, or of torsion%theta_hint on a first solve) Phi is ramped from Theta_0
+      !! of torsion%theta_hint on a first solve; on a re-solve with has_theta, within pi/2 of
+      !! torsion%theta, or the solve stops by name) Phi is ramped from Theta_0
       !! (zero torque) to torsion%phi in stages of at most pi/4; a failed stage is restored and
       !! halved, at most MAX_CUTS times. Each converged stage is tested for stability and an
       !! unstable one is left by descent (torsion_stage).
@@ -1673,7 +1692,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: ecm
       INTEGER, PARAMETER :: MAX_CUTS = 10
       REAL(wp), ALLOCATABLE :: q_keep(:)
-      REAL(wp) :: raw, ref, phi0, total, lam, lam_try, dlam, dlam_max, th_keep
+      REAL(wp) :: raw, phi0, total, lam, lam_try, dlam, dlam_max, th_keep, res_untwisted
       INTEGER :: ks, cuts, wios
       LOGICAL :: ok
       CHARACTER(200) :: km
@@ -1681,6 +1700,7 @@ CONTAINS
       CHARACTER(1024) :: wbuf
       ecs = CD_HCSTAT_OK
       ecm = ''
+      res_untwisted = res_out
       torsion%ramp_steps = 0
       torsion%descents = 0
       torsion%stable = .FALSE.
@@ -1692,9 +1712,20 @@ CONTAINS
         ecm = 'CD_HermiteCable_Static_Solve: torsion at the untwisted equilibrium: '//TRIM(km)
         RETURN
       END IF
-      ref = torsion%theta_hint
-      IF (torsion%has_theta) ref = torsion%theta
-      tors_theta_acc = CD_HermiteTorsion_Unwrap(raw, ref)
+      IF (torsion%has_theta) THEN
+        ! A re-solve: the untwisted state must lie within the step limit of the stored Theta,
+        ! or its branch is ambiguous (the line may have released more than half a turn of writhe)
+        CALL CD_HermiteTorsion_Accept(torsion%theta, raw, tors_theta_acc, ks, km)
+        IF (ks /= CD_HTORS_OK) THEN
+          ecs = CD_HCSTAT_NOCONVERGE
+          ecm = 'CD_HermiteCable_Static_Solve: torsion: the untwisted equilibrium lies more than 90 deg of '// &
+                'twist from the stored Theta, so its turn count is ambiguous; solve from a fresh torsion '// &
+                'state (has_theta false) with theta_hint on the intended branch'
+          RETURN
+        END IF
+      ELSE
+        tors_theta_acc = CD_HermiteTorsion_Unwrap(raw, torsion%theta_hint)
+      END IF
       phi0 = tors_theta_acc
       total = torsion%phi - phi0
       tors_on = .TRUE.
@@ -1725,6 +1756,15 @@ CONTAINS
           IF (cuts > MAX_CUTS) THEN
             ecs = CD_HCSTAT_NOCONVERGE
             wbuf = ''
+            IF (lam <= CD_ZERO .AND. res_untwisted >= tol) THEN
+              ! not a loop: the untwisted equilibrium itself never reached the tolerance
+              WRITE (wbuf, '(A,ES12.5,A,ES12.5,A)', IOSTAT=wios) &
+                'CD_HermiteCable_Static_Solve: torsion continuation could not start: the untwisted '// &
+                'equilibrium ends at ||R|| = ', res_untwisted, ' above tol = ', tol, &
+                ' (a residual floor of this line); a looser tolerance is needed'
+              ecm = wbuf
+              RETURN
+            END IF
             WRITE (wbuf, '(A,ES12.5,A,ES12.5,A)', IOSTAT=wios) &
               'CD_HermiteCable_Static_Solve: torsion continuation stalled at Phi = ', tors_phi_cur, &
               ' rad (target ', torsion%phi, ' rad): '//TRIM(why)// &
@@ -1801,7 +1841,7 @@ CONTAINS
       LOGICAL, INTENT(OUT) :: st
       INTEGER, INTENT(OUT) :: ecs
       CHARACTER(*), INTENT(OUT) :: ecm
-      REAL(wp) :: rn
+      REAL(wp) :: rn, ztol
       INTEGER :: ks, kin, nb, nk
       CHARACTER(512) :: km
       st = .FALSE.
@@ -1819,6 +1859,11 @@ CONTAINS
       CALL CD_HermiteTorsion_Inertia(ab, KL_H, KU_H, solve_mask, tors_gr, tors_c, nb, nk, kin, km)
       torsion%lambda_min = CD_ZERO
       torsion%n_negative = nk
+      IF (kin /= CD_HTORS_OK .AND. kin /= CD_HTORS_UNRELIABLE) THEN
+        ecs = CD_HCSTAT_NOCONVERGE
+        ecm = 'torsion stability evaluation failed: '//TRIM(km)
+        RETURN
+      END IF
       IF (kin == CD_HTORS_OK .AND. nk == 0) THEN
         st = .TRUE.
         RETURN
@@ -1831,13 +1876,30 @@ CONTAINS
       END IF
       tors_have_mode = .TRUE.
       torsion%lambda_min = tors_lambda
-      IF (kin /= CD_HTORS_OK) THEN
-        nk = MERGE(1, 0, tors_lambda < -CD_HTORS_ZERO_MODE_TOL)
+      ! The zero-mode band is relative to the softest physical scale of the Jacobi-scaled
+      ! spectrum, the smallest EI/(EA Le^2) (bending against stretching), and at least
+      ! a round-off floor: an absolute 1e-8 could absorb a genuine soft bending mode of a stiff-EA
+      ! cable.
+      ztol = CD_HTORS_ZERO_MODE_TOL*MIN(CD_ONE, soft_scale())
+      ztol = MAX(ztol, 1.0e3_wp*EPSILON(CD_ONE))
+      IF (kin == CD_HTORS_OK) THEN
+        ! a reliable count of nk >= 1 negative eigenvalues: stable only as the allowed zero mode
+        st = torsion%zero_mode_allowed .AND. nk == 1 .AND. ABS(tors_lambda) <= ztol
+      ELSE
+        nk = MERGE(1, 0, tors_lambda < -ztol)
         torsion%n_negative = nk
+        st = tors_lambda > ztol .OR. (torsion%zero_mode_allowed .AND. tors_lambda >= -ztol)
       END IF
-      st = tors_lambda > CD_HTORS_ZERO_MODE_TOL .OR. &
-           (torsion%zero_mode_allowed .AND. nk <= 1 .AND. tors_lambda >= -CD_HTORS_ZERO_MODE_TOL)
     END SUBROUTINE torsion_stability
+
+    REAL(wp) FUNCTION soft_scale() RESULT(sc)
+      !! min over elements of EI/(EA Le^2) (1 without an axially stiff element).
+      INTEGER :: e
+      sc = CD_ONE
+      DO e = 1, ne
+        IF (EA(e) > CD_ZERO .AND. EI(e) > CD_ZERO) sc = MIN(sc, EI(e)/(EA(e)*l0(e)*l0(e)))
+      END DO
+    END FUNCTION soft_scale
 
     SUBROUTINE torsion_descent(ok, why)
       !! Leave an unstable twisted equilibrium: perturb along the lowest mode (both senses, a
@@ -1887,6 +1949,11 @@ CONTAINS
           RETURN
         END IF
         amp = 0.05_wp/vscale
+        ! predictive twist limit (the post-trial unwrap cannot tell 3 pi/2 from -pi/2); tors_g is
+        ! dTheta/dq at q from the evaluation above
+        a = CD_ONE
+        CALL limit_torsion_step(tors_g, amp*tors_rhs, a)
+        amp = a*amp
         tors_q = q
         th0 = tors_theta_acc
         moved = .FALSE.

@@ -42,7 +42,8 @@ MODULE CableDyn_OpenFAST_HermiteFMF
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, &
                                           CD_HermiteCable_Dyn_Set_Torsion, CD_HermiteCable_Dyn_Set_Torsion_Drive, &
                                           CD_HermiteCable_Dyn_Set_Torsion_Frames
-  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Line, &
+                                     CD_HermiteTorsion_Unwrap, CD_HTORS_OK, CD_HTORS_MAX_STEP
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Shapes
   USE CableDyn_EndConnection, ONLY: CD_EndConn_Project, CD_ENDCONN_OK, CD_ENDCONN_BADINPUT, &
                                     CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
@@ -811,10 +812,74 @@ CONTAINS
                                     u_orientation, u_angular_velocity, u_angular_acceleration)
     IF (ErrStat /= CD_HFMF_OK) THEN
       ErrMsg = 'CD_HFMF_PreflightCoupledKinematics: '//TRIM(em)
-    ELSE
-      ErrMsg = ''
+      RETURN
+    END IF
+    ErrMsg = ''
+    IF (self%tors_parent) THEN
+      ! the parent-attached torsion frame at the written state: the same acceptance as the
+      ! frame update of SetCoupledKinematics (fold guard, twist change within pi/2)
+      BLOCK
+        REAL(wp), ALLOCATABLE :: qc(:), g(:)
+        REAL(wp) :: ends(3, 4), raw, th
+        INTEGER :: ks, k
+        CHARACTER(200) :: km
+        ends = coupled_torsion_ends(self, target_dcm)
+        DO k = 1, 3, 2
+          IF (ABS(NORM2(ends(:, k)) - CD_ONE) > 1.0e-8_wp .OR. ABS(NORM2(ends(:, k + 1)) - CD_ONE) > 1.0e-8_wp &
+              .OR. ABS(DOT_PRODUCT(ends(:, k), ends(:, k + 1))) > 1.0e-8_wp) THEN
+            ErrStat = CD_HFMF_SOLVEFAIL
+            ErrMsg = 'CD_HFMF_PreflightCoupledKinematics: each end director and reference normal must be orthonormal'
+            RETURN
+          END IF
+        END DO
+        ALLOCATE (qc(SIZE(self%line%q)), g(SIZE(self%line%q)))
+        CALL coupled_candidate_q(self, u_pos, tangent_q, qc)
+        CALL CD_HermiteTorsion_Line(qc, self%line%l0, ends, raw, g, ks, km, &
+                                    quadrature_order=self%line%torsion%quadrature_order)
+        IF (ks /= CD_HTORS_OK) THEN
+          ErrStat = CD_HFMF_SOLVEFAIL
+          ErrMsg = 'CD_HFMF_PreflightCoupledKinematics: torsion: '//TRIM(km)
+          RETURN
+        END IF
+        th = CD_HermiteTorsion_Unwrap(raw, self%line%torsion%theta)
+        IF (ABS(th - self%line%torsion%theta) > CD_HTORS_MAX_STEP) THEN
+          ErrStat = CD_HFMF_SOLVEFAIL
+          ErrMsg = 'CD_HFMF_PreflightCoupledKinematics: torsion: the twist would move more than pi/2 from its '// &
+                   'committed value'
+        END IF
+      END BLOCK
     END IF
   END SUBROUTINE CD_HFMF_PreflightCoupledKinematics
+
+  FUNCTION coupled_torsion_ends(self, target_dcm) RESULT(ends)
+    !! The torsion end frames with the parent-attached end turned to target_dcm (solve frame).
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
+    REAL(wp), INTENT(IN) :: target_dcm(3, 3)
+    REAL(wp) :: ends(3, 4)
+    ends = self%line%torsion%ends
+    ends(:, 2*self%tors_index - 1) = frame_to_local(self, MATMUL(TRANSPOSE(target_dcm), self%tors_frame_parent(:, 1)))
+    ends(:, 2*self%tors_index) = frame_to_local(self, MATMUL(TRANSPOSE(target_dcm), self%tors_frame_parent(:, 2)))
+  END FUNCTION coupled_torsion_ends
+
+  SUBROUTINE coupled_candidate_q(self, u_pos, tangent_q, qc)
+    !! The configuration SetCoupledKinematics writes: the committed q with the coupled node's
+    !! translation and, for a rigid parent connection, its transported tangent (built the same
+    !! way, in place, by SetCoupledKinematics). qc must not be part of self.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
+    REAL(wp), INTENT(IN) :: u_pos(3), tangent_q(3)
+    REAL(wp), INTENT(OUT) :: qc(:)
+    INTEGER :: base, i
+    DO i = 1, SIZE(qc)
+      qc(i) = self%line%q(i)
+    END DO
+    IF (self%has_parent_endconn) THEN
+      IF (self%line%endconn_mode(self%parent_endconn_index) == CD_ENDCONN_RIGID) THEN
+        base = MERGE(3, 6*(self%line%nn - 1) + 3, self%parent_endconn_index == 1)
+        qc(base + 1:base + 3) = tangent_q
+      END IF
+    END IF
+    qc(self%pdof) = frame_to_local(self, u_pos)
+  END SUBROUTINE coupled_candidate_q
 
   SUBROUTINE CD_HFMF_SetCoupledKinematics(self, u_pos, u_vel, u_acc, ErrStat, ErrMsg, u_orientation, &
                                           u_angular_velocity, u_angular_acceleration)
@@ -834,8 +899,8 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: u_angular_velocity(3), u_angular_acceleration(3)
     REAL(wp) :: target_dcm(3, 3), d0_target(3, 2)
     REAL(wp) :: tangent_q(3), tangent_v(3), tangent_a(3)
-    REAL(wp) :: target_omega(3), target_alpha(3)
-    INTEGER :: base
+    REAL(wp) :: target_omega(3), target_alpha(3), tors_ends(3, 4)
+    INTEGER :: base, es
     CHARACTER(300) :: em
 
     CALL prepare_coupled_kinematics(self, u_pos, u_vel, u_acc, target_dcm, target_omega, target_alpha, &
@@ -844,6 +909,28 @@ CONTAINS
     IF (ErrStat /= CD_HFMF_OK) THEN
       ErrMsg = 'CD_HFMF_SetCoupledKinematics: '//TRIM(em)
       RETURN
+    END IF
+    ! A parent-attached torsion frame is checked at the state about to be written before
+    ! anything is written (the update is all or nothing)
+    IF (self%tors_parent) THEN
+      tors_ends = coupled_torsion_ends(self, target_dcm)
+      ! the candidate configuration in the line's trial scratch (as coupled_candidate_q builds it)
+      DO base = 1, SIZE(self%line%q)
+        self%line%ws_qtrial(base) = self%line%q(base)
+      END DO
+      IF (self%has_parent_endconn) THEN
+        IF (self%line%endconn_mode(self%parent_endconn_index) == CD_ENDCONN_RIGID) THEN
+          base = MERGE(3, 6*(self%line%nn - 1) + 3, self%parent_endconn_index == 1)
+          self%line%ws_qtrial(base + 1:base + 3) = tangent_q
+        END IF
+      END IF
+      self%line%ws_qtrial(self%pdof) = frame_to_local(self, u_pos)
+      CALL CD_HermiteCable_Dyn_Set_Torsion_Frames(self%line, tors_ends, es, em, q_check=self%line%ws_qtrial)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = CD_HFMF_SOLVEFAIL
+        ErrMsg = 'CD_HFMF_SetCoupledKinematics: '//TRIM(em)
+        RETURN
+      END IF
     END IF
     IF (self%has_parent_endconn) THEN
       IF (self%line%endconn_mode(self%parent_endconn_index) == CD_ENDCONN_RIGID) THEN
@@ -867,22 +954,14 @@ CONTAINS
     self%line%v(self%pdof) = frame_to_local(self, u_vel)
     self%line%a(self%pdof) = frame_to_local(self, u_acc)
     IF (self%tors_parent) THEN
-      ! the parent-attached torsion frame turns with the written orientation (committed state)
-      BLOCK
-        REAL(wp) :: tors_ends(3, 4)
-        INTEGER :: es
-        tors_ends = self%line%torsion%ends
-        tors_ends(:, 2*self%tors_index - 1) = frame_to_local(self, MATMUL(TRANSPOSE(target_dcm), &
-                                                                          self%tors_frame_parent(:, 1)))
-        tors_ends(:, 2*self%tors_index) = frame_to_local(self, MATMUL(TRANSPOSE(target_dcm), &
-                                                                      self%tors_frame_parent(:, 2)))
-        CALL CD_HermiteCable_Dyn_Set_Torsion_Frames(self%line, tors_ends, es, em)
-        IF (es /= CD_HCDYN_OK) THEN
-          ErrStat = CD_HFMF_SOLVEFAIL
-          ErrMsg = 'CD_HFMF_SetCoupledKinematics: '//TRIM(em)
-          RETURN
-        END IF
-      END BLOCK
+      ! the parent-attached torsion frame turns with the written orientation (committed state);
+      ! checked above at this very state, so it is accepted
+      CALL CD_HermiteCable_Dyn_Set_Torsion_Frames(self%line, tors_ends, es, em)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = CD_HFMF_SOLVEFAIL
+        ErrMsg = 'CD_HFMF_SetCoupledKinematics: '//TRIM(em)
+        RETURN
+      END IF
       IF (.NOT. self%has_parent_endconn) THEN
         self%parent_dcm = target_dcm
         self%parent_omega = target_omega
@@ -1520,6 +1599,21 @@ CONTAINS
     IF (.NOT. CD_All_Finite(buf)) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_UnpackMirror: mirror must be finite'; RETURN
     END IF
+    IF (self%line%torsion%active) THEN
+      ! the torsion block (last 14 values) is checked before anything is written: each end's
+      ! director and reference normal must be orthonormal, as Set_Torsion_Drive requires
+      k = SIZE(buf) - 14
+      DO i = 0, 1
+        ASSOCIATE (dv => buf(k + 3 + 6*i:k + 5 + 6*i), nv => buf(k + 6 + 6*i:k + 8 + 6*i))
+          IF (ABS(NORM2(dv) - CD_ONE) > 1.0e-8_wp .OR. ABS(NORM2(nv) - CD_ONE) > 1.0e-8_wp .OR. &
+              ABS(DOT_PRODUCT(dv, nv)) > 1.0e-8_wp) THEN
+            ErrStat = CD_HFMF_BADINPUT
+            ErrMsg = 'CD_HFMF_UnpackMirror: the torsion end frames must be orthonormal'
+            RETURN
+          END IF
+        END ASSOCIATE
+      END DO
+    END IF
     k = 0
     DO i = 1, self%line%ndof
       IF (self%line%freemask(i)) THEN
@@ -1564,6 +1658,22 @@ CONTAINS
       self%line%torsion%torque = (self%line%torsion%phi - self%line%torsion%theta)/ &
                                  CD_HermiteTorsion_Compliance(self%line%torsion, self%line%l0)
       self%line%tors_drive_set = .FALSE.
+      ! A parent-attached torsion frame without a parent end connection: the parent orientation
+      ! is not in the mirror but follows from the restored end frame (its director and normal
+      ! in parent axes, tors_frame_parent, and in global axes), so a later step without
+      ! u_orientation holds it instead of turning the frame back to the static orientation.
+      IF (self%tors_parent .AND. .NOT. self%has_parent_endconn) THEN
+        BLOCK
+          REAL(wp) :: fp(3, 3), gg(3, 3)
+          fp(:, 1) = self%tors_frame_parent(:, 1)
+          fp(:, 2) = self%tors_frame_parent(:, 2)
+          fp(:, 3) = cross3(fp(:, 1), fp(:, 2))
+          gg(:, 1) = frame_to_global(self, self%line%torsion%ends(:, 2*self%tors_index - 1))
+          gg(:, 2) = frame_to_global(self, self%line%torsion%ends(:, 2*self%tors_index))
+          gg(:, 3) = cross3(gg(:, 1), gg(:, 2))
+          self%parent_dcm = MATMUL(fp, TRANSPOSE(gg))
+        END BLOCK
+      END IF
     END IF
   END SUBROUTINE CD_HFMF_UnpackMirror
 

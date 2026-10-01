@@ -178,8 +178,8 @@ CONTAINS
       IF (es /= CD_HFMF_OK) EXIT
       CALL CD_HermiteCable_Dyn_Torsion_State(cab%line, th, mt, es, em)
       mref = GJ*phi/LL
-      worst = MAX(worst, ABS(mt - mref)/mref)
-      bent = MAX(bent, MAXVAL(ABS(cab%line%q(2:NDOF:6))), MAXVAL(ABS(cab%line%q(3:NDOF:6))))
+      worst = nan_max_abs([worst, ABS(mt - mref)/mref])
+      bent = nan_max_abs([bent, nan_max_abs(cab%line%q(2:NDOF:6)), nan_max_abs(cab%line%q(3:NDOF:6))])
       IF (k == 3) THEN
         CALL CD_HFMF_CalcOutput(cab, f, es, em, y_moment=m)
         CALL require(es == CD_HFMF_OK .AND. ABS(m(1) + mref) <= 1.0e-9_wp*mref .AND. &
@@ -214,8 +214,8 @@ CONTAINS
       CALL require(es == CD_HFMF_OK, 'T: turning-parent step: '//TRIM(em))
       IF (es /= CD_HFMF_OK) EXIT
       CALL CD_HermiteCable_Dyn_Torsion_State(cab%line, th, mt, es, em)
-      err_th = MAX(err_th, ABS(th - (th0 - psi)))
-      err_mt = MAX(err_mt, ABS(mt - GJ*2.0_wp/LL))
+      err_th = nan_max_abs([err_th, ABS(th - (th0 - psi))])
+      err_mt = nan_max_abs([err_mt, ABS(mt - GJ*2.0_wp/LL)])
     END DO
     WRITE (*, '(A,F9.4,A,ES10.3,A,ES10.3)') 'T turning parent: Theta after 1.5 turns ', cab%line%torsion%theta, &
       ' rad, Theta error ', err_th, ', torque error ', err_mt
@@ -276,12 +276,12 @@ CONTAINS
         EXIT
       END IF
       CALL CD_HermiteCable_Dyn_Energy(m, ke, se, es, em)
-      emax = MAX(emax, ke + se)
+      emax = nan_max_abs([emax, ke + se])
       emin = MIN(emin, ke + se)
       IF (phi > 0.0_wp) THEN
         CALL CD_HermiteCable_Dyn_Torsion_State(m, th, mt, es, em)
         et = 0.5_wp*(LL/GJ)*mt*mt
-        etmax = MAX(etmax, et)
+        etmax = nan_max_abs([etmax, et])
         etmin = MIN(etmin, et)
       END IF
     END DO

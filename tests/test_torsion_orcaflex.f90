@@ -462,15 +462,15 @@ CONTAINS
       ELSE
         etq = ABS(tq/lw(2, k) - 1.0_wp)
         eth = ABS(th - lw(3, k))/lw(1, k)
-        worst(1) = MAX(worst(1), etq)
-        worst(2) = MAX(worst(2), eth)
+        worst(1) = nan_max_abs([worst(1), etq])
+        worst(2) = nan_max_abs([worst(2), eth])
       END IF
       ekap = ABS(kap/lw(4, k) - 1.0_wp)
       ey = ABS(ymax - lw(5, k))
       eten = ABS(ten/lw(6, k) - 1.0_wp)
-      worst(3) = MAX(worst(3), ekap)
-      worst(4) = MAX(worst(4), ey)
-      worst(5) = MAX(worst(5), eten)
+      worst(3) = nan_max_abs([worst(3), ekap])
+      worst(4) = nan_max_abs([worst(4), ey])
+      worst(5) = nan_max_abs([worst(5), eten])
       WRITE (*, '(A,F4.1,A,2F11.3,A,2F9.5,A,2F9.6,A,2F7.3,A,2F10.1)') 'c: turns ', lw(1, k), &
         ': torque (CableDyn, OrcaFlex) ', tq, lw(2, k), ' N m; Theta ', th, lw(3, k), ' turns; peak curvature ', &
         kap, lw(4, k), ' 1/m; max|Y| ', ymax, lw(5, k), ' m; hang-off tension ', ten, lw(6, k)

@@ -17,7 +17,8 @@ PROGRAM test_hermite_torsion_static
   !!   M  more than two turns of imposed twist through the continuation: the torque law, the
   !!      Theta continuity between successive solves and agreement with a single solve;
   !!   F  fail-closed inputs (missing GJ, a director off the rigid direction, a rejected
-  !!      solver mode).
+  !!      solver mode or tangent output);
+  !!   R  a re-solve from a stored Theta: within pi/2 it continues, beyond it stops by name.
   !! Argument 1: tests/data/torsion_analytic_refs.txt.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve, CD_HCSTAT_OK, CD_HCSTAT_BADINPUT
@@ -42,6 +43,7 @@ PROGRAM test_hermite_torsion_static
   CALL check_post_buckling()
   CALL check_multi_turn()
   CALL check_fail_closed()
+  CALL check_resolve()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' torsion statics assertion(s) failed'
@@ -239,7 +241,8 @@ CONTAINS
         CALL require(es == CD_HCSTAT_OK, 'T: pure torsion solve converges: '//TRIM(em))
         c = 5.0_wp*0.2_wp/1.0e4_wp + 5.0_wp*0.2_wp/2.5e4_wp + 2.0_wp*isp*1.0e-4_wp
         err = ABS(tors%torque - PHIS(ip)/c)/(PHIS(ip)/c)
-        drift = MAX(nan_max_abs(q(2::6)), nan_max_abs(q(3::6)), nan_max_abs(q(5::6)), nan_max_abs(q(6::6)))/2.0_wp
+        drift = nan_max_abs([nan_max_abs(q(2::6)), nan_max_abs(q(3::6)), nan_max_abs(q(5::6)), &
+                             nan_max_abs(q(6::6))])/2.0_wp
         WRITE (*, '(A,I0,A,F5.1,A,ES12.5,A,ES9.2,A,ES9.2)') 'pure torsion (springs ', isp, ') Phi=', PHIS(ip), &
           ' rad: M_t=', tors%torque, ' N m, rel. error ', err, ', lateral drift/L ', drift
         CALL require(err <= 1.0e-12_wp, 'T: M_t = Phi/C to round-off')
@@ -313,7 +316,7 @@ CONTAINS
     tors%zero_mode_allowed = .TRUE.
     CALL fixed_rod(tors, q, es, em)
     CALL require(es == CD_HCSTAT_OK, 'B: the descent converges: '//TRIM(em))
-    amp = MAX(nan_max_abs(q(2::6)), nan_max_abs(q(3::6)))
+    amp = nan_max_abs([nan_max_abs(q(2::6)), nan_max_abs(q(3::6))])
     WRITE (*, '(A,ES12.5,A,F9.5,A,F9.5,A,ES10.3,A,I0,A,ES11.3)') 'post-buckling: E - E_straight = ', &
       tors%energy - e_straight, ', M_t ', tors%torque, ' (straight ', m_straight, '), lateral amplitude/L ', amp, &
       ', descents ', tors%descents, ', Theta ', tors%theta
@@ -485,6 +488,72 @@ CONTAINS
                                       1.0_wp, q, curv, res, it, es, em, pseudo_transient=.TRUE., torsion=tors)
     CALL require(es == CD_HCSTAT_BADINPUT .AND. INDEX(em, 'pseudo_transient') > 0, &
                  'F: pseudo-transient continuation with torsion is rejected')
+    BLOCK
+      REAL(wp) :: kband(34, 6*9), fres(6*9)
+      CALL straight_torsion(8, 1.0_wp, 1.0_wp, tors)
+      CALL CD_HermiteCable_Static_Solve(l0, [(1.0e7_wp, it=1, 8)], [(1.0_wp, it=1, 8)], [(0.0_wp, it=1, 8)], seed, &
+                                        [1, 2, 3, nd - 5, nd - 4, nd - 3], -1.0e6_wp, 0.0_wp, 1, 20, 1.0e-10_wp, &
+                                        1.0_wp, q, curv, res, it, es, em, residual_out=fres, tangent_out=kband, &
+                                        torsion=tors)
+      CALL require(es == CD_HCSTAT_BADINPUT .AND. INDEX(em, 'tangent_out') > 0, &
+                   'F: a banded tangent_out with torsion is rejected (it cannot hold g g^T / C)')
+    END BLOCK
   END SUBROUTINE check_fail_closed
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_resolve()
+    !! R  re-solve with a stored Theta (has_theta): the untwisted straight rod has Theta = 0, so a
+    !!    stored value within pi/2 continues on its branch (torque Phi / C), while one farther away
+    !!    (2 and 3.5 rad: the branch of 3.5 would be 2 pi, a torque one turn off) stops by name and
+    !!    leaves the stored state as it was.
+    REAL(wp), PARAMETER :: STORED(4) = [0.0_wp, 1.0_wp, 2.0_wp, 3.5_wp]
+    TYPE(CD_HermiteTorsionType) :: tors
+    REAL(wp), ALLOCATABLE :: q(:)
+    INTEGER :: k, es
+    LOGICAL :: near
+    CHARACTER(512) :: em
+    DO k = 1, SIZE(STORED)
+      CALL straight_torsion(10, 1.0_wp, 1.0_wp, tors)
+      tors%has_theta = .TRUE.
+      tors%theta = STORED(k)
+      CALL solve_rod(10, 1.0e7_wp, 1.0_wp, 1.0_wp, CD_ENDCONN_RIGID, tors, q, es, em)
+      near = STORED(k) <= 0.5_wp*CD_HTORS_PI
+      WRITE (*, '(A,F5.2,A,I0,A,F10.6,A,F10.6)') 're-solve from stored Theta ', STORED(k), ': status ', es, &
+        ', Theta ', tors%theta, ', torque ', tors%torque
+      IF (near) THEN
+        CALL require(es == CD_HCSTAT_OK .AND. ABS(tors%torque - 1.0_wp) <= 1.0e-10_wp, &
+                     'R: a stored Theta within pi/2 continues on its branch: '//TRIM(em))
+      ELSE
+        CALL require(es /= CD_HCSTAT_OK .AND. INDEX(em, 'ambiguous') > 0, &
+                     'R: a stored Theta beyond pi/2 of the untwisted state stops by name')
+        CALL require(tors%has_theta .AND. ABS(tors%theta - STORED(k)) <= 0.0_wp, &
+                     'R: the stopped re-solve leaves the stored Theta unchanged')
+      END IF
+    END DO
+    ! the same rod at a tolerance below its untwisted residual floor: the stop names the floor
+    BLOCK
+      REAL(wp), ALLOCATABLE :: seed(:), l0(:), f(:), curv(:)
+      REAL(wp) :: res
+      INTEGER :: it, nd
+      CALL straight_rod(10, 1.0_wp, seed, l0)
+      nd = SIZE(seed)
+      ALLOCATE (f(nd), curv(11))
+      DEALLOCATE (q)
+      ALLOCATE (q(nd))
+      f = 0.0_wp
+      f(nd - 5) = 1.0_wp
+      CALL straight_torsion(10, 1.0_wp, 1.0_wp, tors)
+      CALL CD_HermiteCable_Static_Solve(l0, [(1.0e7_wp, it=1, 10)], [(1.0_wp, it=1, 10)], [(0.0_wp, it=1, 10)], &
+                                        seed, [1, 2, 3, nd - 4, nd - 3], -1.0e6_wp, 0.0_wp, 1, 60, 1.0e-9_wp, &
+                                        1.0_wp, q, curv, res, it, es, em, f_nodal=f, &
+                                        endconn_stiffness=[0.0_wp, 0.0_wp], &
+                                        endconn_direction=RESHAPE([1.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], &
+                                                                  [3, 2]), &
+                                        endconn_mode=[CD_ENDCONN_RIGID, CD_ENDCONN_RIGID], torsion=tors)
+      WRITE (*, '(A,I0,A)') 'tolerance below the residual floor: status ', es, ' ('//TRIM(em)//')'
+      CALL require(es /= CD_HCSTAT_OK .AND. INDEX(em, 'residual floor') > 0 .AND. .NOT. tors%has_theta, &
+                   'R: a tolerance below the untwisted residual floor is reported as such')
+    END BLOCK
+  END SUBROUTINE check_resolve
 
 END PROGRAM test_hermite_torsion_static
