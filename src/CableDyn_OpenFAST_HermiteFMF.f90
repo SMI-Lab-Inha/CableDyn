@@ -39,7 +39,9 @@ MODULE CableDyn_OpenFAST_HermiteFMF
                                           CD_HermiteCable_Dyn_EndConnection_Moment, &
                                           CD_HermiteCable_Dyn_Curvature, &
                                           CD_HermiteCable_Dyn_Snapshot, CD_HermiteCable_Dyn_Restore, &
-                                          CD_HermiteCable_Dyn_End, CD_HCDYN_OK
+                                          CD_HermiteCable_Dyn_End, CD_HCDYN_OK, &
+                                          CD_HermiteCable_Dyn_Set_Torsion
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Shapes
   USE CableDyn_EndConnection, ONLY: CD_EndConn_Project, CD_ENDCONN_OK, CD_ENDCONN_BADINPUT, &
                                     CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
@@ -63,6 +65,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_Set_Contact
   PUBLIC :: CD_HFMF_Set_Attachments
   PUBLIC :: CD_HFMF_Set_EndConnection
+  PUBLIC :: CD_HFMF_Set_Torsion
   PUBLIC :: CD_HFMF_Refresh_Acceleration
   PUBLIC :: CD_HFMF_NNodes
   PUBLIC :: CD_HFMF_GetNodePositions
@@ -380,6 +383,31 @@ CONTAINS
       self%snap_parent_dcm = dcm
     END IF
   END SUBROUTINE CD_HFMF_Set_EndConnection
+
+  SUBROUTINE CD_HFMF_Set_Torsion(self, torsion, ErrStat, ErrMsg)
+    !! Install the condensed torsion of the cable's converged static solve (end frames and GJ in
+    !! the cable solve frame; see CD_HermiteCable_Dyn_Set_Torsion). CalcOutput then returns the
+    !! end force and connection moment with the torque. A cable with torsion does not step in
+    !! this build (statics only).
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
+    TYPE(CD_HermiteTorsionType), INTENT(IN) :: torsion
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(300) :: em
+    ErrStat = CD_HFMF_OK
+    ErrMsg = ''
+    IF (.NOT. self%initialized) THEN
+      ErrStat = CD_HFMF_BADINPUT
+      ErrMsg = 'CD_HFMF_Set_Torsion: module not initialised'
+      RETURN
+    END IF
+    CALL CD_HermiteCable_Dyn_Set_Torsion(self%line, torsion, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = CD_HFMF_BADINPUT
+      ErrMsg = 'CD_HFMF_Set_Torsion: '//TRIM(em)
+    END IF
+  END SUBROUTINE CD_HFMF_Set_Torsion
 
   SUBROUTINE CD_HFMF_Set_ModifiedNewton(self, enabled, ErrStat, ErrMsg)
     !! Pass-through to the model's modified-Newton (within-step tangent reuse) switch:
