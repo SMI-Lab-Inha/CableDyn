@@ -1,0 +1,498 @@
+! File: tests/test_torsion_deck.f90
+! SPDX-License-Identifier: Apache-2.0
+! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
+!> Deck-level gates of condensed torsion (END CONNECTIONS columns TorsStiffness NxX NxY NxZ
+!> [Pretwist], the standalone static route, the Torq/Twist channels and the body torque):
+!>  1. pure torsion of a straight neutral line clamped at two Fixed points, two turns of
+!>     pretwist: Torq = GJ Phi / L at every node, Twist<L> = 720 deg, Twist<L>N<J> linear from
+!>     End A; torsional end springs add their compliance;
+!>  2. backward compatibility: the same deck with Free torsion columns, or with one end
+!>     restrained only, writes the same .out bytes as the 6-column rows;
+!>  3. a pretwist sweep to three turns on a sagging clamped line: the torque grows in equal
+!>     steps (no 2 pi slip) and Twist<L> follows the pretwist;
+!>  4. body torque return: a massive Rigid6 body (attitude rolled, pitched and yawed) holding a
+!>     twisted straight taut line: the connection moment is M_t along the line axis (1e-8), the body
+!>     net wrench equals the line end loads (output precision), and the sign follows the end
+!>     that is twisted;
+!>  5. body static equilibrium: a moored body whose clamped cable is twisted rolls against the
+!>     torque and its static net moment vanishes;
+!>  6. named errors for malformed rows, missing GJ, an EI = 0 line, a channel on an unrestrained
+!>     line, a dynamic deck, the coupled entries.
+PROGRAM test_torsion_deck
+  USE CableDyn_Precision, ONLY: wp
+  USE CableDyn_Conventions, ONLY: CD_Body_Rotation
+  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Multibody_Probe_Arm, CD_Multibody_Probe_Get, &
+                                 CD_Init_Deck_Aggregate, CD_DeckAggregateType, CD_End_Deck_Aggregate, &
+                                 CD_Init_Deck_HermiteCable
+  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_End
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
+  IMPLICIT NONE
+
+  REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp, RHOW = 1025.0_wp
+  INTEGER :: n_fail = 0, only
+  CHARACTER(160) :: neutral_type
+  CHARACTER(16) :: arg
+  CHARACTER(8) :: no_rows(0)
+
+  ! neutral 0.2 m section: mass = rhoW pi d^2 / 4; EA 1e7, EI 1e6, GAs 1e8, GJ 5e4
+  WRITE (neutral_type, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, &
+    ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
+
+  ! optional argument: run only gate 1..6 (diagnostics)
+  only = 0
+  IF (COMMAND_ARGUMENT_COUNT() > 0) THEN
+    CALL GET_COMMAND_ARGUMENT(1, arg)
+    READ (arg, *) only
+  END IF
+  IF (only == 0 .OR. only == 1) CALL check_pure_torsion()
+  IF (only == 0 .OR. only == 2) CALL check_backward_compatible()
+  IF (only == 0 .OR. only == 3) CALL check_sweep()
+  IF (only == 0 .OR. only == 4) CALL check_body_torque()
+  IF (only == 0 .OR. only == 5) CALL check_body_statics()
+  IF (only == 0 .OR. only == 6) CALL check_errors()
+  IF (n_fail > 0) THEN
+    WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' torsion deck gate(s) failed'
+    ERROR STOP 1
+  END IF
+  WRITE (*, '(A)') 'PASS: torsion deck columns, statics, channels, body torque and refusals'
+
+CONTAINS
+
+  INCLUDE 'nan_max_abs.inc'
+
+  SUBROUTINE require(cond, msg)
+    LOGICAL, INTENT(IN) :: cond
+    CHARACTER(*), INTENT(IN) :: msg
+    IF (.NOT. cond) THEN
+      n_fail = n_fail + 1
+      WRITE (*, '(A,A)') 'FAILED: ', msg
+    END IF
+  END SUBROUTINE require
+
+  SUBROUTINE write_deck(path, types, bodies, points, lines, sections, endconns, options, outs)
+    CHARACTER(*), INTENT(IN) :: path
+    CHARACTER(*), INTENT(IN) :: types(:), bodies(:), points(:), lines(:), sections(:), endconns(:), options(:), &
+                                outs(:)
+    INTEGER :: u, i
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'torsion deck gate'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    IF (INDEX(types(1), 'TEN') > 0) THEN
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    ELSE
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    END IF
+    DO i = 1, SIZE(types)
+      IF (INDEX(types(i), 'TEN') > 0) THEN
+        WRITE (u, '(A)') TRIM(types(i) (1:INDEX(types(i), 'TEN') - 1))
+      ELSE
+        WRITE (u, '(A)') TRIM(types(i))
+      END IF
+    END DO
+    IF (SIZE(bodies) > 0) THEN
+      WRITE (u, '(A)') '--- BODIES ---'
+      WRITE (u, '(A)') 'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
+      WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm) (Nm) (m2) (-) (kgm2) (kgm2) (kgm2)'
+      DO i = 1, SIZE(bodies)
+        WRITE (u, '(A)') TRIM(bodies(i))
+      END DO
+    END IF
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    DO i = 1, SIZE(points)
+      WRITE (u, '(A)') TRIM(points(i))
+    END DO
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    DO i = 1, SIZE(lines)
+      WRITE (u, '(A)') TRIM(lines(i))
+    END DO
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    DO i = 1, SIZE(sections)
+      WRITE (u, '(A)') TRIM(sections(i))
+    END DO
+    IF (SIZE(endconns) > 0) THEN
+      WRITE (u, '(A)') '--- END CONNECTIONS ---'
+      WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+      WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
+      DO i = 1, SIZE(endconns)
+        WRITE (u, '(A)') TRIM(endconns(i))
+      END DO
+    END IF
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    DO i = 1, SIZE(options)
+      WRITE (u, '(A)') TRIM(options(i))
+    END DO
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    DO i = 1, SIZE(outs)
+      WRITE (u, '(A)') TRIM(outs(i))
+    END DO
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+  END SUBROUTINE write_deck
+
+  SUBROUTINE run_deck(path, root, ok, em_out)
+    CHARACTER(*), INTENT(IN) :: path, root
+    LOGICAL, INTENT(OUT) :: ok
+    CHARACTER(*), INTENT(OUT) :: em_out
+    LOGICAL :: conv
+    INTEGER :: es
+    CALL CD_Run_Deck_Driver(path, root, conv, es, em_out)
+    ok = es == CD_DECKDRV_OK .AND. conv
+  END SUBROUTINE run_deck
+
+  SUBROUTINE read_row(path, row, vals, ok)
+    !! Data row `row` (0 = first) of a driver .out file.
+    CHARACTER(*), INTENT(IN) :: path
+    INTEGER, INTENT(IN) :: row
+    REAL(wp), INTENT(OUT) :: vals(:)
+    LOGICAL, INTENT(OUT) :: ok
+    INTEGER :: u, ios, i
+    CHARACTER(2048) :: buf
+    ok = .FALSE.
+    vals = 0.0_wp
+    OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    IF (ios /= 0) RETURN
+    READ (u, '(A)', IOSTAT=ios) buf
+    READ (u, '(A)', IOSTAT=ios) buf
+    DO i = 0, row
+      READ (u, *, IOSTAT=ios) vals
+      IF (ios /= 0) THEN
+        CLOSE (u)
+        RETURN
+      END IF
+    END DO
+    CLOSE (u)
+    ok = ALL(IEEE_IS_FINITE(vals))
+  END SUBROUTINE read_row
+
+  LOGICAL FUNCTION same_file(a, b) RESULT(same)
+    !! Byte-identical text files.
+    CHARACTER(*), INTENT(IN) :: a, b
+    INTEGER :: ua, ub, ia, ib
+    CHARACTER(4096) :: la, lb
+    same = .FALSE.
+    OPEN (NEWUNIT=ua, FILE=a, STATUS='OLD', ACTION='READ', IOSTAT=ia)
+    IF (ia /= 0) RETURN
+    OPEN (NEWUNIT=ub, FILE=b, STATUS='OLD', ACTION='READ', IOSTAT=ib)
+    IF (ib /= 0) THEN
+      CLOSE (ua)
+      RETURN
+    END IF
+    DO
+      READ (ua, '(A)', IOSTAT=ia) la
+      READ (ub, '(A)', IOSTAT=ib) lb
+      IF (ia /= 0 .OR. ib /= 0) EXIT
+      IF (la /= lb) THEN
+        CLOSE (ua)
+        CLOSE (ub)
+        RETURN
+      END IF
+    END DO
+    same = ia /= 0 .AND. ib /= 0
+    CLOSE (ua)
+    CLOSE (ub)
+  END FUNCTION same_file
+
+  FUNCTION cross(a, b) RESULT(c)
+    REAL(wp), INTENT(IN) :: a(3), b(3)
+    REAL(wp) :: c(3)
+    c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
+  END FUNCTION cross
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE straight_deck(path, conn_a, conn_b, outs, types)
+    !! A 100 m neutral line along +x between two Fixed points, 40 elements, TMax 0.
+    CHARACTER(*), INTENT(IN) :: path, conn_a, conn_b, outs(:)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: types(:)
+    CHARACTER(160) :: trow(1)
+    CHARACTER(96) :: ec(2)
+    trow(1) = neutral_type
+    IF (PRESENT(types)) trow(1) = types(1)
+    ec(1) = '1 A '//conn_a
+    ec(2) = '1 B '//conn_b
+    CALL write_deck(path, trow, no_rows, &
+                    [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &
+                    [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], ec, &
+                    [CHARACTER(24) :: '0.1 dtM', '0.0 TMax'], outs)
+  END SUBROUTINE straight_deck
+
+  SUBROUTINE check_pure_torsion()
+    CHARACTER(16), PARAMETER :: OUTS(8) = [CHARACTER(16) :: 'Torq1N1', 'Torq1N21', 'Torq1N41', 'Twist1N1', &
+                                                                         'Twist1N21', 'Twist1N41', 'Twist1', 'FairTen1']
+    REAL(wp) :: v(9), m_ref, c
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: isp
+    DO isp = 0, 1
+      IF (isp == 0) THEN
+        CALL straight_deck('tdeck_pure.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+        c = 100.0_wp/5.0e4_wp
+      ELSE
+        CALL straight_deck('tdeck_pure.dat', 'Rigid 1 0 0 1.0e5 0 0 1 0', 'Rigid 1 0 0 1.0e5 0 0 1 720', OUTS)
+        c = 100.0_wp/5.0e4_wp + 2.0e-5_wp
+      END IF
+      CALL run_deck('tdeck_pure.dat', 'tdeck_pure', ok, em)
+      CALL require(ok, 'pure torsion deck runs: '//TRIM(em))
+      IF (.NOT. ok) CYCLE
+      CALL read_row('tdeck_pure.out', 0, v, ok)
+      CALL require(ok, 'pure torsion output readable')
+      m_ref = 4.0_wp*PI/c
+      WRITE (*, '(A,I0,A,3ES15.7,A,ES15.7,A,4F10.4)') 'deck pure torsion (springs ', isp, '): Torq ', v(2:4), &
+        ' ref ', m_ref, '; Twist N1/N21/N41/total ', v(5:8)
+      CALL require(nan_max_abs(v(2:4) - m_ref) <= 1.0e-6_wp*m_ref, 'Torq = GJ Phi / C at every node')
+      CALL require(ABS(v(8) - 720.0_wp) <= 1.0e-5_wp, 'Twist<L> = 720 deg')
+      CALL require(ABS(v(5)) <= 1.0e-9_wp, 'Twist<L>N1 = 0 at End A')
+      CALL require(ABS(v(7) - m_ref*100.0_wp/5.0e4_wp*180.0_wp/PI) <= 1.0e-5_wp, 'Twist<L>N41 = M L / GJ')
+      CALL require(ABS(v(6) - 0.5_wp*v(7)) <= 1.0e-5_wp, 'Twist<L>N<J> linear along a uniform line')
+    END DO
+  END SUBROUTINE check_pure_torsion
+
+  SUBROUTINE check_backward_compatible()
+    !! 6-column rows (bending connections only) vs the same with Free torsion columns, and
+    !! with one end restrained in torsion: identical .out files.
+    CHARACTER(16), PARAMETER :: OUTS(4) = [CHARACTER(16) :: 'FairTen1', 'AnchTen1', 'BendMom1N1', 'Curv1N20']
+    CHARACTER(160) :: t10(1)
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    ! a sagging line so that the bending ends matter; 10-column type row (no GJ)
+    t10(1) = 'cab 0.2 60.0 1.0e9 0.0 1.0e5 0.0 0.0 0.0 0.0TEN'
+    CALL straight_deck('tdeck_bc0.dat', 'Rigid 1 0 -0.3', 'Rigid 1 0 0.3', OUTS, t10)
+    CALL run_deck('tdeck_bc0.dat', 'tdeck_bc0', ok, em)
+    CALL require(ok, 'six-column deck runs: '//TRIM(em))
+    CALL straight_deck('tdeck_bc1.dat', 'Rigid 1 0 -0.3 Free 0 1 0', 'Rigid 1 0 0.3 Free 0 1 0 45', OUTS, t10)
+    CALL run_deck('tdeck_bc1.dat', 'tdeck_bc1', ok, em)
+    CALL require(ok, 'Free torsion columns run: '//TRIM(em))
+    CALL require(same_file('tdeck_bc0.out', 'tdeck_bc1.out'), 'Free torsion columns: identical .out')
+    CALL straight_deck('tdeck_bc2.dat', 'Rigid 1 0 -0.3 Rigid 0 1 0', 'Rigid 1 0 0.3 Free 0 1 0 45', OUTS, t10)
+    CALL run_deck('tdeck_bc2.dat', 'tdeck_bc2', ok, em)
+    CALL require(ok, 'one-end torsion runs: '//TRIM(em))
+    CALL require(same_file('tdeck_bc0.out', 'tdeck_bc2.out'), 'one restrained end: identical .out')
+    CALL require(same_file('tdeck_bc0.static.out', 'tdeck_bc2.static.out'), 'one restrained end: identical profile')
+  END SUBROUTINE check_backward_compatible
+
+  SUBROUTINE check_sweep()
+    !! Sagging heavy line (EI 1e4, GJ 1e4) clamped at both ends; pretwist 0..1080 deg in 90 deg
+    !! steps (separate runs, each from the untwisted state).
+    REAL(wp) :: v(4), tq(0:12), tw(0:12), dstep
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    CHARACTER(96) :: cb
+    CHARACTER(160) :: trow(1)
+    INTEGER :: k
+    trow(1) = 'cab 0.2 60.0 1.0e9 0.0 1.0e4 1.0e8 1.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
+    DO k = 0, 12
+      WRITE (cb, '(A,F8.1)') 'Rigid 1 0 0.4 Rigid 0 1 0 ', 90.0_wp*k
+      CALL straight_deck('tdeck_sweep.dat', 'Rigid 1 0 -0.4 Rigid 0 1 0 0', TRIM(cb), &
+                         [CHARACTER(16) :: 'Torq1N1', 'Torq1N21', 'Twist1'], trow)
+      CALL run_deck('tdeck_sweep.dat', 'tdeck_sweep', ok, em)
+      CALL require(ok, 'sweep deck runs: '//TRIM(em))
+      IF (.NOT. ok) RETURN
+      CALL read_row('tdeck_sweep.out', 0, v, ok)
+      tq(k) = v(2)
+      tw(k) = v(4)
+      CALL require(ABS(v(2) - v(3)) <= 1.0e-6_wp*MAX(1.0_wp, ABS(v(2))), 'sweep: torque uniform along the line')
+    END DO
+    dstep = (tq(12) - tq(0))/12.0_wp
+    WRITE (*, '(A,ES12.5,A,ES12.5,A,F10.3,A)') 'deck sweep: torque step ', dstep, ' N m (max deviation ', &
+      MAXVAL(ABS(tq(1:12) - tq(0:11) - dstep)), '), Twist1 at 3 turns ', tw(12), ' deg'
+    CALL require(dstep > 0.0_wp, 'sweep: torque grows with the pretwist')
+    CALL require(MAXVAL(ABS(tq(1:12) - tq(0:11) - dstep)) <= 0.05_wp*dstep, 'sweep: equal torque steps, no slip')
+    CALL require(ABS(tw(12) - 1080.0_wp) <= 0.01_wp*1080.0_wp, 'sweep: Twist<L> follows the pretwist')
+  END SUBROUTINE check_sweep
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE body_deck(path, rot, pre_a, pre_b, outs)
+    !! Massive neutral Rigid6 body (attitude rot) holding a 20 m neutral line, stretched by 1e-4,
+    !! from its point off (body frame) along dglob = rot dbody to a Fixed anchor; both ends Rigid
+    !! in bending and torsion, normals nbody (body) / rot nbody (anchor).
+    CHARACTER(*), INTENT(IN) :: path, outs(:)
+    REAL(wp), INTENT(IN) :: rot(3)
+    REAL(wp), INTENT(IN) :: pre_a, pre_b
+    REAL(wp), PARAMETER :: MB = 1.0e9_wp
+    REAL(wp) :: r(3, 3), dbody(3), nbody(3), off(3), ra(3), anchor(3), dg(3), ng(3)
+    CHARACTER(256) :: brow, pa, pb, ca, cb
+    r = CD_Body_Rotation(rot(1), rot(2), rot(3))
+    dbody = [0.8_wp, 0.0_wp, -0.6_wp]
+    nbody = [0.0_wp, 1.0_wp, 0.0_wp]
+    off = [1.5_wp, 0.5_wp, -0.5_wp]
+    ra = [0.0_wp, 0.0_wp, -60.0_wp] + MATMUL(r, off)
+    dg = MATMUL(r, dbody)
+    ng = MATMUL(r, nbody)
+    anchor = ra + 20.002_wp*dg
+    WRITE (brow, '(A,3F8.2,A,ES24.16,A,ES24.16,A)') '1 Rigid6 0 0 -60 ', rot, ' ', MB, ' ', MB/RHOW, &
+      ' 0 0 0 0 0 1.0e12 1.0e12 1.0e12'
+    WRITE (pa, '(A,3ES24.16,A)') '1 Body1 ', off, ' 0 0 0 0'
+    WRITE (pb, '(A,3ES24.16,A)') '2 Fixed ', anchor, ' 0 0 0 0'
+    WRITE (ca, '(A,3ES24.16,A,3ES24.16,F9.2)') '1 A Rigid ', dbody, ' Rigid ', nbody, pre_a
+    WRITE (cb, '(A,3ES24.16,A,3ES24.16,F9.2)') '1 B Rigid ', dg, ' Rigid ', ng, pre_b
+    CALL write_deck(path, [neutral_type], [brow], [pa, pb], [CHARACTER(16) :: '1 1 2 -'], &
+                    [CHARACTER(24) :: '1 cab 20.0 20'], [ca, cb], &
+                    [CHARACTER(24) :: '200.0 WtrDpth', 'moordyn bodyWetting', '0.01 dtM', '0.0 TMax', 'deck bodyIC'], &
+                    outs)
+  END SUBROUTINE body_deck
+
+  SUBROUTINE check_body_torque()
+    CHARACTER(12), PARAMETER :: OUTS(7) = [CHARACTER(12) :: 'Body1Fx', 'Body1Fy', 'Body1Fz', 'Body1Mx', 'Body1My', &
+                                                                                                   'Body1Mz', 'Torq1N1']
+    REAL(wp), PARAMETER :: ROT(3) = [10.0_wp, -20.0_wp, 35.0_wp]
+    REAL(wp), ALLOCATABLE :: rec(:, :)
+    REAL(wp) :: r(3, 3), dg(3), off(3), m_ref, ma(3), fa(3), wrench(8), mnet(3), e_axis, ew
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: isign
+    r = CD_Body_Rotation(ROT(1), ROT(2), ROT(3))
+    dg = MATMUL(r, [0.8_wp, 0.0_wp, -0.6_wp])
+    off = [1.5_wp, 0.5_wp, -0.5_wp]
+    DO isign = 1, -1, -2
+      ! +: one turn at End B (Phi = +2 pi); -: one turn at End A (Phi = -2 pi)
+      IF (isign == 1) THEN
+        CALL body_deck('tdeck_body.dat', ROT, 0.0_wp, 360.0_wp, OUTS)
+      ELSE
+        CALL body_deck('tdeck_body.dat', ROT, 360.0_wp, 0.0_wp, OUTS)
+      END IF
+      m_ref = isign*5.0e4_wp*2.0_wp*PI/20.0_wp
+      CALL CD_Multibody_Probe_Arm([0.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 0.0_wp, 0.0_wp])
+      CALL run_deck('tdeck_body.dat', 'tdeck_body', ok, em)
+      CALL CD_Multibody_Probe_Get(rec)
+      ok = ok .AND. ALLOCATED(rec)
+      CALL require(ok, 'body torque deck runs and is probed: '//TRIM(em))
+      IF (.NOT. ok) RETURN
+      ma = rec(24:26, 0)
+      fa = rec(27:29, 0)
+      e_axis = NORM2(ma - m_ref*dg)/ABS(m_ref)
+      CALL read_row('tdeck_body.out', 0, wrench, ok)
+      CALL require(ok, 'body torque output readable')
+      mnet = cross(MATMUL(r, off), fa) + ma
+      ew = MAX(NORM2(wrench(2:4) - fa)/MAX(NORM2(fa), ABS(m_ref)/20.0_wp), NORM2(wrench(5:7) - mnet)/NORM2(mnet))
+      WRITE (*, '(A,I2,A,3ES14.6,A,ES10.3,A,ES10.3,A,ES14.6)') 'body torque (sign', isign, '): moment ', ma, &
+        ' axis error ', e_axis, ', net wrench vs line loads ', ew, ', Torq ', wrench(8)
+      CALL require(e_axis <= 1.0e-8_wp, 'body: connection moment = M_t along the line axis (1e-8)')
+      CALL require(ew <= 1.0e-6_wp, 'body: net wrench equals the line end loads (output precision)')
+      CALL require(ABS(wrench(8) - m_ref) <= 1.0e-6_wp*ABS(m_ref), 'body: Torq channel = M_t')
+      CALL require(NORM2(fa - DOT_PRODUCT(fa, dg)*dg) <= 1.0e-6_wp*NORM2(fa), &
+                   'body: the straight twisted line pulls along its axis only')
+    END DO
+  END SUBROUTINE check_body_torque
+
+  SUBROUTINE moored_deck(path, pretwist)
+    !! A buoyant body (C44 = C55 = 2e6 N m/rad) on three EI = 0 legs, with a finite-EI cable
+    !! clamped at its keel point (End A) and at an anchor on the seabed (End B), twisted by
+    !! pretwist at End B; bodyIC static, TMax 0.
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: pretwist
+    CHARACTER(96) :: ca, cb
+    ca = '4 A Rigid -0.7071067811865476 0.0 -0.7071067811865476 Rigid 0.0 1.0 0.0 0'
+    WRITE (cb, '(A,F8.1)') '4 B Rigid -1.0 0.0 0.0 Rigid 0.0 1.0 0.0 ', pretwist
+    CALL write_deck(path, [CHARACTER(96) :: 'poly 0.12 15.0 5.0e7 -1.0 0.0 1.0e6 1.0 1.0 1.0 1.2 0.2 1.0 0.0', &
+                           'cab 0.2 60.0 5.0e8 -1.0 2.0e4 1.0e8 1.0e4 1.0 1.0 1.2 0.0 1.0 0.0'], &
+                    [CHARACTER(96) :: '1 Rigid6 0 0 -20 0 0 0 2.0e4 40.0 0.0 2.0e6 2.0e6 8.0 0.5 3.5e4 3.5e4 3.5e4'], &
+                    [CHARACTER(48) :: '1 Body1 1.5 0.0 -2.0 0 0 0 0', '2 Body1 -0.75 1.299 -2.0 0 0 0 0', &
+                     '3 Body1 -0.75 -1.299 -2.0 0 0 0 0', '4 Fixed 40.0 0.0 -100.0 0 0 0 0', &
+                     '5 Fixed -20.0 34.641 -100.0 0 0 0 0', '6 Fixed -20.0 -34.641 -100.0 0 0 0 0', &
+                     '7 Body1 0.0 0.0 -3.0 0 0 0 0', '8 Fixed -40.0 0.0 -100.0 0 0 0 0'], &
+                    [CHARACTER(16) :: '1 1 4 -', '2 2 5 -', '3 3 6 -', '4 7 8 -'], &
+                    [CHARACTER(24) :: '1 poly 86.85 20', '2 poly 86.85 20', '3 poly 86.85 20', '4 cab 100.0 50'], &
+                    [CHARACTER(96) :: ca, cb], &
+                    [CHARACTER(24) :: '100.0 WtrDpth', '1.0e5 kBot', '1.0e4 cBot', '0.05 dtM', '0.0 TMax', &
+                     'static bodyIC'], &
+                    [CHARACTER(12) :: 'Body1Rx', 'Body1Ry', 'Body1Rz', 'Body1Mx', 'Body1My', 'Body1Mz', 'Torq4N1'])
+  END SUBROUTINE moored_deck
+
+  SUBROUTINE check_body_statics()
+    REAL(wp) :: v0(8), v1(8)
+    LOGICAL :: ok, ok1
+    CHARACTER(512) :: em
+    CALL moored_deck('tdeck_moor0.dat', 0.0_wp)
+    CALL run_deck('tdeck_moor0.dat', 'tdeck_moor0', ok, em)
+    CALL require(ok, 'moored untwisted deck runs: '//TRIM(em))
+    CALL moored_deck('tdeck_moor1.dat', 720.0_wp)
+    CALL run_deck('tdeck_moor1.dat', 'tdeck_moor1', ok1, em)
+    CALL require(ok1, 'moored twisted deck runs: '//TRIM(em))
+    IF (.NOT. (ok .AND. ok1)) RETURN
+    CALL read_row('tdeck_moor0.out', 0, v0, ok)
+    CALL read_row('tdeck_moor1.out', 0, v1, ok1)
+    CALL require(ok .AND. ok1, 'moored outputs readable')
+    WRITE (*, '(A,3F11.6,A,3F11.6,A,3ES11.3,A,ES12.5)') 'moored body: attitude untwisted ', v0(2:4), &
+      ' deg, twisted ', v1(2:4), ' deg; static net moment ', v1(5:7), ' N m; Torq ', v1(8)
+    CALL require(v1(8) > 1.0e3_wp, 'moored: the twisted cable carries torque')
+    CALL require(nan_max_abs(v1(2:4) - v0(2:4)) > 1.0e-3_wp, 'moored: the torque turns the body in statics')
+    CALL require(nan_max_abs(v1(5:7)) <= 1.0e-4_wp*v1(8), 'moored: the static body moment balances the torque')
+  END SUBROUTINE check_body_statics
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE expect_error(label, path, root, needle)
+    CHARACTER(*), INTENT(IN) :: label, path, root, needle
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    CALL run_deck(path, root, ok, em)
+    CALL require(.NOT. ok .AND. INDEX(em, needle) > 0, label//' (got: '//TRIM(em)//')')
+  END SUBROUTINE expect_error
+
+  SUBROUTINE check_errors()
+    CHARACTER(16), PARAMETER :: OUTS(1) = [CHARACTER(16) :: 'Torq1N1']
+    CHARACTER(160) :: t10(1), tei0(1)
+    TYPE(CD_DeckAggregateType) :: agg
+    TYPE(CD_HFMF_ModuleType) :: cab
+    INTEGER :: es, node
+    CHARACTER(512) :: em
+    CALL straight_deck('tdeck_e1.dat', 'Rigid 1 0 0 Rigid 0 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+    CALL expect_error('a 9-column row is named', 'tdeck_e1.dat', 'tdeck_e1', 'or 10 or 11 with the torsion columns')
+    CALL straight_deck('tdeck_e2.dat', 'Rigid 1 0 0 Stiff 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+    CALL expect_error('a bad TorsStiffness token is named', 'tdeck_e2.dat', 'tdeck_e2', 'torsional stiffness')
+    CALL straight_deck('tdeck_e3.dat', 'Rigid 1 0 0 -1.0 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+    CALL expect_error('a negative torsional stiffness is named', 'tdeck_e3.dat', 'tdeck_e3', 'torsional stiffness')
+    CALL straight_deck('tdeck_e4.dat', 'Rigid 1 0 0 Rigid 0 0 0 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+    CALL expect_error('a null reference normal is named', 'tdeck_e4.dat', 'tdeck_e4', 'must be non-zero')
+    CALL straight_deck('tdeck_e5.dat', 'Rigid 1 0 0 Rigid 2 0 0 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+    CALL expect_error('a normal along Ez is named', 'tdeck_e5.dat', 'tdeck_e5', 'must not be parallel')
+    CALL straight_deck('tdeck_e6.dat', 'Rigid 1 0 0 Rigid 0 NaN 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+    CALL expect_error('a non-finite normal is named', 'tdeck_e6.dat', 'tdeck_e6', 'is not a finite number')
+    t10(1) = 'cab 0.2 32.2 1.0e9 0.0 1.0e6 0.0 0.0 0.0 0.0TEN'
+    CALL straight_deck('tdeck_e7.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS, t10)
+    CALL expect_error('a torsional line without GJ is named', 'tdeck_e7.dat', 'tdeck_e7', 'must give an explicit GJ')
+    tei0(1) = 'cab 0.2 60.0 1.0e9 0.0 0.0 0.0 0.0 0.0 0.0TEN'
+    CALL straight_deck('tdeck_e8.dat', 'Pinned 1 0 0 Rigid 0 0 1 0', 'Pinned 1 0 0 Free 0 0 1 0', &
+                       [CHARACTER(16) :: 'FairTen1'], tei0)
+    CALL expect_error('torsion on an EI = 0 line is named', 'tdeck_e8.dat', 'tdeck_e8', 'require a finite-EI line')
+    CALL straight_deck('tdeck_e9.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Free 0 0 1 720', OUTS)
+    CALL expect_error('a torque channel on a line without torsion is named', 'tdeck_e9.dat', 'tdeck_e9', &
+                      'carries no torque')
+    CALL write_deck('tdeck_e10.dat', [neutral_type], no_rows, &
+                    [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &
+                    [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
+                    [CHARACTER(24) :: '0.1 dtM', '1.0 TMax'], OUTS)
+    CALL expect_error('a dynamic torsion deck is refused', 'tdeck_e10.dat', 'tdeck_e10', &
+                      'torsion is supported in statics only in this build')
+    CALL write_deck('tdeck_e11.dat', [neutral_type], no_rows, &
+                    [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &
+                    [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
+                    [CHARACTER(24) :: '0.1 dtM', '0.0 TMax', '3 nModes'], OUTS)
+    CALL expect_error('modal analysis with torsion is refused', 'tdeck_e11.dat', 'tdeck_e11', 'modal analysis')
+    ! coupled entries
+    CALL write_deck('tdeck_e12.dat', [neutral_type], no_rows, &
+                    [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &
+                    [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
+                    [CHARACTER(24) :: '0.1 dtM'], [CHARACTER(16) :: 'FairTen1'])
+    CALL CD_Init_Deck_Aggregate('tdeck_e12.dat', 0.1_wp, agg, es, em)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'not yet supported in coupled OpenFAST runs') > 0, &
+                 'the coupled aggregate refuses torsion by name (got: '//TRIM(em)//')')
+    CALL CD_End_Deck_Aggregate(agg)
+    CALL CD_Init_Deck_HermiteCable('tdeck_e12.dat', 0.1_wp, cab, node, es, em)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'not yet supported in coupled OpenFAST runs') > 0, &
+                 'the coupled single-cable entry refuses torsion by name (got: '//TRIM(em)//')')
+    CALL CD_HFMF_End(cab)
+  END SUBROUTINE check_errors
+
+END PROGRAM test_torsion_deck

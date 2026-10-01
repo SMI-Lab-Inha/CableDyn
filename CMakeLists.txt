@@ -1663,6 +1663,11 @@ target_link_libraries(test_clamped_cable_ends PRIVATE cabledyn_core)
 add_test(NAME clamped_cable_ends COMMAND test_clamped_cable_ends)
 set_tests_properties(clamped_cable_ends PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+add_executable(test_torsion_deck tests/test_torsion_deck.f90)
+target_link_libraries(test_torsion_deck PRIVATE cabledyn_core)
+add_test(NAME torsion_deck COMMAND test_torsion_deck)
+set_tests_properties(torsion_deck PROPERTIES LABELS "fortran;driver;integration;static")
+
 add_executable(test_rod_hydro tests/test_rod_hydro.f90)
 target_link_libraries(test_rod_hydro PRIVATE cabledyn_core)
 add_test(NAME rod_hydro COMMAND test_rod_hydro)
@@ -1932,6 +1937,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                          -Wno-compare-reals
                          -Wno-uninitialized
                          -Wno-maybe-uninitialized)
+  target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)
