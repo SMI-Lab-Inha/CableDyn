@@ -49,6 +49,10 @@ MODULE CableDyn_HermiteTorsion
   PUBLIC :: CD_HermiteTorsion_Bordered_Solve
   PUBLIC :: CD_HermiteTorsion_Inertia
   PUBLIC :: CD_HermiteTorsion_Lowest_Mode
+  PUBLIC :: CD_HermiteTorsionWorkType
+  PUBLIC :: CD_HermiteTorsion_Work_Init
+  PUBLIC :: CD_HermiteTorsion_Work_End
+  PUBLIC :: CD_HermiteTorsion_Work_Add_Hessian
 
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_OK = 0
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_BADINPUT = 1
@@ -113,6 +117,13 @@ MODULE CableDyn_HermiteTorsion
     INTEGER :: ramp_steps = 0
     INTEGER :: descents = 0
   END TYPE CD_HermiteTorsionType
+
+  TYPE :: CD_HermiteTorsionWorkType
+    !! Scratch of CD_HermiteTorsion_Line for a line of nn nodes (CD_HermiteTorsion_Work_Init).
+    !! Passed as `work`, it makes the evaluation free of heap allocation (the dynamic step).
+    INTEGER :: nn = 0
+    REAL(wp), ALLOCATABLE :: u(:, :), pole(:, :), gu(:, :), huu(:, :, :), huv(:, :, :), band(:, :)
+  END TYPE CD_HermiteTorsionWorkType
 
 CONTAINS
 
@@ -660,30 +671,33 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
     INTEGER :: order
+    REAL(wp), ALLOCATABLE :: u(:, :)
 
     order = NG_DEFAULT
     IF (PRESENT(quadrature_order)) order = quadrature_order
-    CALL line_fold_check(q, Le, ends, order, 'CD_HermiteTorsion_Fold_Check', margin, ErrStat, ErrMsg)
+    ALLOCATE (u(3, 0:MAX(SIZE(q)/6, 0) + 1))
+    CALL line_fold_check(q, Le, ends, order, 'CD_HermiteTorsion_Fold_Check', margin, ErrStat, ErrMsg, u)
   END SUBROUTINE CD_HermiteTorsion_Fold_Check
 
-  PURE SUBROUTINE line_fold_check(q, Le, ends, order, who, margin, ErrStat, ErrMsg)
+  PURE SUBROUTINE line_fold_check(q, Le, ends, order, who, margin, ErrStat, ErrMsg, u)
+    !! Validation and fold guard; u(3, 0:nn+1) receives the chain vertices (caller scratch).
     REAL(wp), INTENT(IN) :: q(:), Le(:), ends(3, 4)
     INTEGER, INTENT(IN) :: order
     CHARACTER(*), INTENT(IN) :: who
     REAL(wp), INTENT(OUT) :: margin
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT) :: u(:, 0:)
 
     INTEGER :: nn, e, j, ig
     REAL(wp) :: gp(NG_MAX), gw(NG_MAX), t1(3), a(3), b(3), rho, sp, val
-    REAL(wp), ALLOCATABLE :: u(:, :)
     CHARACTER(16) :: tag
 
     margin = CD_ZERO
+    u = CD_ZERO
     CALL validate_line(q, Le, ends, order, who, ErrStat, ErrMsg)
     IF (ErrStat /= CD_HTORS_OK) RETURN
     nn = SIZE(q)/6
-    ALLOCATE (u(3, 0:nn + 1))
     CALL chain_vertices(q, ends, u)
     CALL CD_HermiteCable_Gauss_Rule(order, gp, gw)
     margin = HUGE(CD_ONE)
@@ -733,8 +747,59 @@ CONTAINS
     ErrMsg = ''
   END SUBROUTINE line_fold_check
 
+  PURE SUBROUTINE CD_HermiteTorsion_Work_Init(work, nn, ErrStat, ErrMsg)
+    !! Size the scratch of CD_HermiteTorsion_Line for a line of nn >= 2 nodes.
+    TYPE(CD_HermiteTorsionWorkType), INTENT(INOUT) :: work
+    INTEGER, INTENT(IN) :: nn
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CALL CD_HermiteTorsion_Work_End(work)
+    IF (nn < 2) THEN
+      ErrStat = CD_HTORS_BADINPUT
+      ErrMsg = 'CD_HermiteTorsion_Work_Init: a line needs at least two nodes'
+      RETURN
+    END IF
+    ALLOCATE (work%u(3, 0:nn + 1), work%pole(3, 0:nn), work%gu(3, 0:nn + 1), work%huu(3, 3, 0:nn + 1), &
+              work%huv(3, 3, 0:nn), work%band(2*CD_HTORS_KBAND + 1, 6*nn))
+    work%nn = nn
+    ErrStat = CD_HTORS_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_HermiteTorsion_Work_Init
+
+  PURE SUBROUTINE CD_HermiteTorsion_Work_End(work)
+    !! Release the scratch of CD_HermiteTorsion_Work_Init.
+    TYPE(CD_HermiteTorsionWorkType), INTENT(INOUT) :: work
+    IF (ALLOCATED(work%u)) DEALLOCATE (work%u)
+    IF (ALLOCATED(work%pole)) DEALLOCATE (work%pole)
+    IF (ALLOCATED(work%gu)) DEALLOCATE (work%gu)
+    IF (ALLOCATED(work%huu)) DEALLOCATE (work%huu)
+    IF (ALLOCATED(work%huv)) DEALLOCATE (work%huv)
+    IF (ALLOCATED(work%band)) DEALLOCATE (work%band)
+    work%nn = 0
+  END SUBROUTINE CD_HermiteTorsion_Work_End
+
+  PURE SUBROUTINE CD_HermiteTorsion_Work_Add_Hessian(work, hband, scale)
+    !! Add scale * d2Theta/dq2, kept in `work` by the last CD_HermiteTorsion_Line call with
+    !! keep_hessian, to the general band hband (layout as for CD_HermiteTorsion_Line's hband).
+    !! This lets a caller scale the Hessian by a factor that depends on Theta (the torque).
+    TYPE(CD_HermiteTorsionWorkType), INTENT(IN) :: work
+    REAL(wp), INTENT(INOUT) :: hband(:, :)
+    REAL(wp), INTENT(IN) :: scale
+    INTEGER :: n, i, jj, i0, row0
+    n = 6*work%nn
+    IF (n < 12 .OR. SIZE(hband, 2) /= n .OR. SIZE(hband, 1) < 2*CD_HTORS_KBAND + 1) RETURN
+    row0 = CD_HTORS_KBAND + 1
+    i0 = SIZE(hband, 1) - 2*CD_HTORS_KBAND - 1
+    DO jj = 1, n
+      DO i = MAX(1, jj - CD_HTORS_KBAND), MIN(n, jj + CD_HTORS_KBAND)
+        hband(i0 + row0 + i - jj, jj) = hband(i0 + row0 + i - jj, jj) + scale*work%band(row0 + i - jj, jj)
+      END DO
+    END DO
+  END SUBROUTINE CD_HermiteTorsion_Work_Add_Hessian
+
   PURE SUBROUTINE CD_HermiteTorsion_Line(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, hband, band_scale, &
-                                         end_grad, end_hess, end_cross, fold_margin, quadrature_order)
+                                         end_grad, end_hess, end_cross, fold_margin, quadrature_order, work, &
+                                         keep_hessian)
     !! Theta, dTheta/dq and d2Theta/dq2 of one line.
     !!
     !!   q(6 n)          nodal DOFs [r_k, m_k], k = 1..n (n >= 2), as in the cable solvers
@@ -755,6 +820,10 @@ CONTAINS
     !!   end_cross(3,3,2) d2Theta/dw_A dm_1 and d2Theta/dw_B dm_n (rows w, columns m). Theta has
     !!                   no other w coupling (no w_A-w_B, no w-r).
     !!   fold_margin     min(1 + t1 . t) over Gauss points and chain links
+    !!   work            optional scratch sized for SIZE(q)/6 nodes (CD_HermiteTorsion_Work_Init):
+    !!                   the evaluation then allocates nothing
+    !!   keep_hessian    with work: compute d2Theta/dq2 into work (unscaled) for a later
+    !!                   CD_HermiteTorsion_Work_Add_Hessian, also without hband
     !!
     !! On any failure every output is zero and hband is left unchanged.
     REAL(wp), INTENT(IN) :: q(:), Le(:), ends(3, 4)
@@ -766,12 +835,60 @@ CONTAINS
     REAL(wp), INTENT(OUT), OPTIONAL :: end_grad(6), end_hess(3, 3, 2), end_cross(3, 3, 2)
     REAL(wp), INTENT(OUT), OPTIONAL :: fold_margin
     INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    TYPE(CD_HermiteTorsionWorkType), INTENT(INOUT), OPTIONAL :: work
+    LOGICAL, INTENT(IN), OPTIONAL :: keep_hessian
+    TYPE(CD_HermiteTorsionWorkType) :: local
+    INTEGER :: nn
+    LOGICAL :: keep
+
+    keep = .FALSE.
+    IF (PRESENT(keep_hessian)) keep = keep_hessian
+    IF (PRESENT(work)) THEN
+      IF (work%nn /= SIZE(q)/6 .OR. work%nn < 2) THEN
+        theta_raw = CD_ZERO
+        grad = CD_ZERO
+        IF (PRESENT(end_grad)) end_grad = CD_ZERO
+        IF (PRESENT(end_hess)) end_hess = CD_ZERO
+        IF (PRESENT(end_cross)) end_cross = CD_ZERO
+        IF (PRESENT(fold_margin)) fold_margin = CD_ZERO
+        ErrStat = CD_HTORS_BADINPUT
+        ErrMsg = 'CD_HermiteTorsion_Line: the workspace is not sized for this line'
+        RETURN
+      END IF
+      CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, work%u, work%pole, work%gu, work%huu, &
+                     work%huv, work%band, keep, hband, band_scale, end_grad, end_hess, end_cross, fold_margin, &
+                     quadrature_order)
+    ELSE
+      nn = MAX(SIZE(q)/6, 2)
+      ALLOCATE (local%u(3, 0:nn + 1), local%pole(3, 0:nn), local%gu(3, 0:nn + 1), local%huu(3, 3, 0:nn + 1), &
+                local%huv(3, 3, 0:nn), local%band(2*CD_HTORS_KBAND + 1, MAX(SIZE(q), 1)))
+      CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, local%u, local%pole, local%gu, local%huu, &
+                     local%huv, local%band, .FALSE., hband, band_scale, end_grad, end_hess, end_cross, &
+                     fold_margin, quadrature_order)
+    END IF
+  END SUBROUTINE CD_HermiteTorsion_Line
+
+  PURE SUBROUTINE line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, u, pole, gu, huu, huv, band, keep, &
+                            hband, band_scale, end_grad, end_hess, end_cross, fold_margin, quadrature_order)
+    !! CD_HermiteTorsion_Line on caller scratch u(3,0:nn+1), pole(3,0:nn), gu(3,0:nn+1),
+    !! huu(3,3,0:nn+1), huv(3,3,0:nn), band(2 KBAND + 1, >= 6 nn); keep: compute the Hessian
+    !! into band even without hband.
+    REAL(wp), INTENT(IN) :: q(:), Le(:), ends(3, 4)
+    REAL(wp), INTENT(OUT) :: theta_raw, grad(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(INOUT) :: u(:, 0:), pole(:, 0:), gu(:, 0:), huu(:, :, 0:), huv(:, :, 0:), band(:, :)
+    LOGICAL, INTENT(IN) :: keep
+    REAL(wp), INTENT(INOUT), OPTIONAL :: hband(:, :)
+    REAL(wp), INTENT(IN), OPTIONAL :: band_scale
+    REAL(wp), INTENT(OUT), OPTIONAL :: end_grad(6), end_hess(3, 3, 2), end_cross(3, 3, 2)
+    REAL(wp), INTENT(OUT), OPTIONAL :: fold_margin
+    INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
 
     INTEGER :: order, nn, n, e, j, k, i0, i, jj, row0
-    LOGICAL :: want_hess
+    LOGICAL :: want_hess, finite
     REAL(wp) :: scale, margin, he, ge(12), hk(12, 12), v(3), chi, sum_h, eg(6), eh(3, 3, 2), ec(3, 3, 2)
     REAL(wp) :: om, g9(9), h9(9, 9), pj(3, 3), pk(3, 3), sd(3, 3), dmy
-    REAL(wp), ALLOCATABLE :: u(:, :), pole(:, :), gu(:, :), huu(:, :, :), huv(:, :, :), band(:, :)
     CHARACTER(200) :: em
 
     theta_raw = CD_ZERO
@@ -784,9 +901,9 @@ CONTAINS
     IF (PRESENT(quadrature_order)) order = quadrature_order
     scale = CD_ONE
     IF (PRESENT(band_scale)) scale = band_scale
-    want_hess = PRESENT(hband) .OR. PRESENT(end_hess) .OR. PRESENT(end_cross)
+    want_hess = PRESENT(hband) .OR. PRESENT(end_hess) .OR. PRESENT(end_cross) .OR. keep
 
-    CALL line_fold_check(q, Le, ends, order, 'CD_HermiteTorsion_Line', margin, ErrStat, ErrMsg)
+    CALL line_fold_check(q, Le, ends, order, 'CD_HermiteTorsion_Line', margin, ErrStat, ErrMsg, u)
     IF (ErrStat /= CD_HTORS_OK) RETURN
     n = SIZE(q)
     nn = n/6
@@ -808,10 +925,8 @@ CONTAINS
       RETURN
     END IF
 
-    ALLOCATE (u(3, 0:nn + 1), pole(3, 0:nn), gu(3, 0:nn + 1), huu(3, 3, 0:nn + 1), huv(3, 3, 0:nn))
-    ALLOCATE (band(2*CD_HTORS_KBAND + 1, n))
     row0 = CD_HTORS_KBAND + 1          ! diagonal row of the local band
-    band = CD_ZERO
+    IF (want_hess) band(:, 1:n) = CD_ZERO
     CALL chain_vertices(q, ends, u)
 
     ! element holonomies
@@ -909,8 +1024,10 @@ CONTAINS
       ec(:, :, 2) = MATMUL(sd, MATMUL(TRANSPOSE(huv(:, :, nn)), pk))
     END IF
 
-    IF (.NOT. (CD_Is_Finite(theta_raw) .AND. CD_All_Finite(grad) .AND. CD_All_Finite(band) .AND. &
-               CD_All_Finite(eg) .AND. CD_All_Finite(RESHAPE(eh, [18])) .AND. CD_All_Finite(RESHAPE(ec, [18])))) THEN
+    finite = CD_Is_Finite(theta_raw) .AND. CD_All_Finite(grad) .AND. CD_All_Finite(eg)
+    IF (want_hess) finite = finite .AND. CD_All_Finite(band(:, 1:n)) .AND. CD_All_Finite(RESHAPE(eh, [18])) &
+                            .AND. CD_All_Finite(RESHAPE(ec, [18]))
+    IF (.NOT. finite) THEN
       ErrStat = CD_HTORS_NONFINITE
       ErrMsg = 'CD_HermiteTorsion_Line: non-finite twist or derivative'
       theta_raw = CD_ZERO
@@ -932,7 +1049,7 @@ CONTAINS
     IF (PRESENT(fold_margin)) fold_margin = margin
     ErrStat = CD_HTORS_OK
     ErrMsg = ''
-  END SUBROUTINE CD_HermiteTorsion_Line
+  END SUBROUTINE line_core
 
   ELEMENTAL REAL(wp) FUNCTION CD_HermiteTorsion_Unwrap(theta_raw, theta_prev) RESULT(theta)
     !! The 2 pi branch of theta_raw nearest to theta_prev: theta_raw + 2 pi round((prev - raw)/2 pi).

@@ -14,13 +14,16 @@ PROGRAM test_hermite_torsion_kernel
   !!   H  helix with Frenet end normals: Theta = -tau * length,
   !!   U  2 pi unwrapping through more than three turns, and the pi/2 step limit,
   !!   G  fold guard (element and articulated end) and fail-closed input checks,
-  !!   E  the element routine against finite differences and against the line assembly.
+  !!   E  the element routine against finite differences and against the line assembly,
+  !!   W  the allocation-free workspace evaluation (bit-identical, kept Hessian, size checks).
   !! Argument 1: path of the reference data file.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsion_Element, CD_HermiteTorsion_Line, CD_HermiteTorsion_Fold_Check, &
                                      CD_HermiteTorsion_Unwrap, CD_HermiteTorsion_Accept, CD_HTORS_OK, &
                                      CD_HTORS_BADINPUT, CD_HTORS_FOLD, CD_HTORS_NONFINITE, CD_HTORS_STEP, &
-                                     CD_HTORS_KBAND, CD_HTORS_PI
+                                     CD_HTORS_KBAND, CD_HTORS_PI, CD_HermiteTorsionWorkType, &
+                                     CD_HermiteTorsion_Work_Init, CD_HermiteTorsion_Work_End, &
+                                     CD_HermiteTorsion_Work_Add_Hessian
   IMPLICIT NONE
 
   INTEGER, PARAMETER :: KB = CD_HTORS_KBAND, LDAB = 3*KB + 1
@@ -38,6 +41,7 @@ PROGRAM test_hermite_torsion_kernel
   CALL check_oracle_reference()
   CALL check_finite_differences()
   CALL check_band_layout()
+  CALL check_workspace()
   CALL check_rigid_rotation()
   CALL check_planar()
   CALL check_helix_and_unwrap()
@@ -395,6 +399,54 @@ CONTAINS
     CALL require(nan_max_abs(hacc - 1.0_wp + 2.5_wp*h34) <= 1.0e-13_wp*MAXVAL(ABS(h34)), &
                  'B: band_scale accumulates into the band')
   END SUBROUTINE check_band_layout
+
+  ! ---------------------------------------------------------------------------------------
+  ! W: workspace variant (no allocation in the evaluation)
+  ! ---------------------------------------------------------------------------------------
+
+  SUBROUTINE check_workspace()
+    !! The workspace evaluation returns bit-identical values to the allocating one; keep_hessian
+    !! with CD_HermiteTorsion_Work_Add_Hessian equals hband with band_scale; a workspace sized for
+    !! another line, or released, is refused by name.
+    REAL(wp), ALLOCATABLE :: q(:), le(:), g1(:), g2(:), h1(:, :), h2(:, :)
+    REAL(wp) :: ends(3, 4), th1, th2, eg1(6), eg2(6)
+    TYPE(CD_HermiteTorsionWorkType) :: work
+    INTEGER :: n, es, k
+    CHARACTER(200) :: em
+    CALL random_line(16, 2, q, le)
+    n = SIZE(q)
+    ALLOCATE (g1(n), g2(n), h1(LDAB, n), h2(LDAB, n))
+    CALL CD_HermiteTorsion_Work_Init(work, n/6, es, em)
+    CALL require(es == CD_HTORS_OK, 'W: workspace sized')
+    DO k = 1, 2
+      IF (k == 1) THEN
+        ends = clamped_ends(q)
+      ELSE
+        ends = articulated_ends(q)
+      END IF
+      h1 = 0.0_wp
+      h2 = 0.0_wp
+      CALL CD_HermiteTorsion_Line(q, le, ends, th1, g1, es, em, hband=h1, band_scale=-3.0_wp, end_grad=eg1)
+      CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, end_grad=eg2, work=work, keep_hessian=.TRUE.)
+      CALL require(es == CD_HTORS_OK, 'W: workspace evaluation succeeds '//TRIM(em))
+      CALL CD_HermiteTorsion_Work_Add_Hessian(work, h2, -3.0_wp)
+      CALL require(.NOT. (ABS(th1 - th2) > 0.0_wp) .AND. nan_max_abs(g1 - g2) <= 0.0_wp .AND. &
+                   nan_max_abs(eg1 - eg2) <= 0.0_wp, 'W: workspace Theta and gradients bit-identical')
+      CALL require(nan_max_abs(h1 - h2) <= 0.0_wp, 'W: kept Hessian scaled later equals band_scale')
+      h2 = 0.0_wp
+      CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, hband=h2, band_scale=-3.0_wp, work=work)
+      CALL require(nan_max_abs(h1 - h2) <= 0.0_wp, 'W: workspace hband path bit-identical')
+    END DO
+    CALL CD_HermiteTorsion_Work_Init(work, n/6 + 1, es, em)
+    CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, work=work)
+    CALL require(es == CD_HTORS_BADINPUT .AND. INDEX(em, 'workspace is not sized') > 0 .AND. &
+                 nan_max_abs(g2) <= 0.0_wp, 'W: a workspace of another size is refused')
+    CALL CD_HermiteTorsion_Work_End(work)
+    CALL CD_HermiteTorsion_Line(q, le, ends, th2, g2, es, em, work=work)
+    CALL require(es == CD_HTORS_BADINPUT, 'W: a released workspace is refused')
+    CALL CD_HermiteTorsion_Work_Init(work, 1, es, em)
+    CALL require(es == CD_HTORS_BADINPUT, 'W: a one-node workspace is refused')
+  END SUBROUTINE check_workspace
 
   ! ---------------------------------------------------------------------------------------
   ! R: rigid rotation of everything
