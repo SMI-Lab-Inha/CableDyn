@@ -108,11 +108,14 @@ def test_range_graph_errors(files):
         element_range_graph(files["elements"], 1, "tension")
 
 
-def _write_range_file(path, clearance=True):
+def _write_range_file(path, clearance=True, torsion=False):
     names = ["Tension", "Curvature", "BendMoment", "Declination"] + (
         ["Clearance"] if clearance else []
     )
     units = ["(N)", "(1/m)", "(N.m)", "(deg)", "(m)"][: len(names)]
+    if torsion:
+        names += ["Torque", "Twist"]
+        units += ["(N.m)", "(deg)"]
     header = ["Node", "ArcLength"] + [f"{n}{s}" for n in names for s in ("Min", "Max", "Mean")]
     unit_row = ["(-)", "(m)"] + [u for u in units for _ in range(3)]
     rows = []
@@ -147,6 +150,25 @@ def test_read_range_graphs_from_a_range_file(tmp_path):
     clearance = read_range_graph(read_output(path), "clearance")
     assert clearance.unit == "m" and np.allclose(clearance.minimum, [51.0, 52.0, 53.0])
     assert read_range_graph(path, "declination").unit == "deg"
+
+
+def test_read_range_graphs_with_torsion(tmp_path):
+    path = _write_range_file(tmp_path / "tw.Line3.range.out", clearance=False, torsion=True)
+    graphs = read_range_graphs(path)
+    assert tuple(graphs) == (
+        "tension",
+        "curvature",
+        "bend_moment",
+        "declination",
+        "torque",
+        "twist",
+    )
+    assert graphs["torque"].unit == "N.m"
+    assert np.allclose(graphs["torque"].minimum, [51.0, 52.0, 53.0])
+    twist = read_range_graph(path, "twist")
+    assert twist.unit == "deg" and np.allclose(twist.maximum, [63.0, 64.0, 65.0])
+    with pytest.raises(KeyError, match="no torque"):
+        read_range_graph(_write_range_file(tmp_path / "plain.Line3.range.out"), "torque")
 
 
 def test_read_range_graph_errors(files, tmp_path):

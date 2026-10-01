@@ -3755,7 +3755,7 @@ class DeckFile:
         normalized_line_endpoints: dict[str, tuple[str, str]],
         point_types: dict[str, str],
         body_types: dict[str, str],
-        option_by_key: dict[str, DeckRecord],
+        option_by_key: dict[str, OptionRecord],
         has_tmax: bool,
     ) -> set[str]:
         """Native ``check_torsion_line`` and the driver's torsion scope; the torsional lines.

@@ -166,7 +166,8 @@ class RangeGraph:
         line (a per-line file whose name has no ``.Line<L>.`` part).
     quantity : str
         ``"tension"``, ``"curvature"``, ``"bend_moment"``, for a range file
-        also ``"declination"`` and ``"clearance"``, or, for an element table,
+        also ``"declination"``, ``"clearance"``, ``"torque"`` and ``"twist"``,
+        or, for an element table,
         ``"axial_resultant"``.
     unit : str | None
         Unit of the quantity: ``N``, ``1/m``, ``N-m``, ``deg``, or ``m``.
@@ -427,6 +428,8 @@ _RANGE_FILE_QUANTITIES: dict[str, tuple[str, str]] = {
     "bend_moment": ("BendMoment", "N-m"),
     "declination": ("Declination", "deg"),
     "clearance": ("Clearance", "m"),
+    "torque": ("Torque", "N-m"),
+    "twist": ("Twist", "deg"),
 }
 _RANGE_TITLE = re.compile(
     r"CableDyn range graph \(line ([1-9][0-9]*); ([1-9][0-9]*) samples from t =\s*(\S+) s to "
@@ -453,8 +456,9 @@ def read_range_graphs(source: str | os.PathLike[str] | OutputTable) -> dict[str,
     ``<root>.Line<L>.range.out`` is written by the driver for a line with the
     LINES ``Outputs`` flag ``r``: the minimum, maximum, and mean over the
     output times of the range window of the node tension, curvature, bend
-    moment, and declination, and the seabed clearance when the deck has a
-    seabed, at every node against its arc length.
+    moment, and declination, the seabed clearance when the deck has a
+    seabed, and the torque and twist from End A when the line is restrained
+    in torsion at both ends, at every node against its arc length.
 
     Parameters
     ----------
@@ -465,7 +469,8 @@ def read_range_graphs(source: str | os.PathLike[str] | OutputTable) -> dict[str,
     -------
     dict[str, RangeGraph]
         ``"tension"``, ``"curvature"``, ``"bend_moment"``, ``"declination"``,
-        and, with a seabed, ``"clearance"``.
+        with a seabed ``"clearance"``, and with torsion ``"torque"`` and
+        ``"twist"``.
 
     Raises
     ------
@@ -504,7 +509,7 @@ def read_range_graph(source: str | os.PathLike[str] | OutputTable, quantity: str
         The range file ``<root>.Line<L>.range.out``, or its table.
     quantity : str
         ``"tension"``, ``"curvature"``, ``"bend_moment"``, ``"declination"``,
-        or ``"clearance"``.
+        ``"clearance"``, ``"torque"`` or ``"twist"``.
 
     Returns
     -------
@@ -516,7 +521,8 @@ def read_range_graph(source: str | os.PathLike[str] | OutputTable, quantity: str
     Raises
     ------
     KeyError
-        If the file has no such quantity (clearance needs a seabed).
+        If the file has no such quantity (clearance needs a seabed, torque and
+        twist a line with torsion).
     ValueError
         If ``quantity`` is unknown or the table is not a range file.
     """
