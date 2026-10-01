@@ -312,6 +312,8 @@ _ROD_ATTACHMENT_ALIASES = {
     "cpld": "coupled",
 }
 _RIGID_END_CONNECTIONS = frozenset({"rigid", "infinity", "inf"})
+# TorsStiffness keywords of an end free to twist (a numeric 0 is free too)
+_FREE_TORSION_KEYWORDS = frozenset({"free", "zero"})
 # Native TORS_NX_PARALLEL_TOL: smallest |Nx x Ez| of unit vectors (about 0.06 degrees off Ez).
 _TORSION_NORMAL_PARALLEL_TOL = 1.0e-3
 _WATERKIN_FILENAME_LETTERS = frozenset("abcdfghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
@@ -563,6 +565,19 @@ def _table_float(token: str) -> float:
     value = float(mantissa if exponent is None else f"{mantissa}e{exponent}")
     if _is_subnormal(value):
         raise ValueError(f"{token!r} is subnormal; write 0 or a normal number")
+    return value
+
+
+def _keyword_column_real(token: str) -> float | None:
+    """Mirror the native ``parse_real_token`` on a keyword column (END CONNECTIONS stiffnesses).
+
+    The value of a plain real (``E``/``D`` exponent, no ``Q``; quotes removed as the
+    list-directed READ of a character column does), or ``None`` when the token is not a
+    number or is NaN, infinite or subnormal.
+    """
+    value = _fortran_real_value(_strip_quotes(token))
+    if value is None or not math.isfinite(value) or _is_subnormal(value):
+        return None
     return value
 
 
@@ -2878,16 +2893,17 @@ class DeckFile:
                 )
             assigned_end_connections.add(key)
 
-            stiffness_token = row.tokens[2].lower()
+            stiffness_token = _strip_quotes(row.tokens[2]).lower()
             if stiffness_token in _PINNED_END_CONNECTIONS:
                 non_pinned = False
             elif stiffness_token in _RIGID_END_CONNECTIONS:
                 non_pinned = True
             else:
-                stiffness = numeric(row.tokens[2], row, "END CONNECTIONS stiffness")
-                if stiffness < 0.0:
+                # native parse_real_token: a plain real (no q exponent), finite, not subnormal
+                stiffness = _keyword_column_real(row.tokens[2])
+                if stiffness is None or stiffness < 0.0:
                     raise DeckFormatError(
-                        f"{self._at(row)}: END CONNECTIONS stiffness must be "
+                        f"{self._at(row)}: END CONNECTIONS stiffness must be finite and "
                         "non-negative, Pinned, or Rigid"
                     )
                 non_pinned = stiffness > 0.0
@@ -2903,17 +2919,14 @@ class DeckFile:
                 )
             if len(row.tokens) > 6:
                 # native append_end_connection: TorsStiffness NxX NxY NxZ [Pretwist]
-                torsion_token = row.tokens[6].lower()
-                if torsion_token in {"free", "zero"}:
+                torsion_token = _strip_quotes(row.tokens[6]).lower()
+                if torsion_token in _FREE_TORSION_KEYWORDS:
                     restrained = False
                 elif torsion_token in _RIGID_END_CONNECTIONS:
                     restrained = True
                 else:
-                    try:
-                        torsion_k = _table_float(row.tokens[6])
-                    except ValueError:
-                        torsion_k = -1.0
-                    if not math.isfinite(torsion_k) or torsion_k < 0.0:
+                    torsion_k = _keyword_column_real(row.tokens[6])
+                    if torsion_k is None or torsion_k < 0.0:
                         raise DeckFormatError(
                             f"{self._at(row)}: END CONNECTIONS torsional stiffness must be finite "
                             "and non-negative, Free, or Rigid"
@@ -2929,24 +2942,9 @@ class DeckFile:
                 ]
                 if len(row.tokens) == 11:
                     numeric(row.tokens[10], row, "END CONNECTIONS pretwist")
-                normal_norm = math.sqrt(sum(value * value for value in normal))
-                if not math.isfinite(normal_norm) or normal_norm <= math.sqrt(sys.float_info.min):
-                    raise DeckFormatError(
-                        f"{self._at(row)}: END CONNECTIONS torsion reference normal "
-                        "(NxX NxY NxZ) must be non-zero"
-                    )
-                nx = [value / normal_norm for value in normal]
-                ez = [value / norm for value in direction]
-                parallel = math.sqrt(
-                    (nx[1] * ez[2] - nx[2] * ez[1]) ** 2
-                    + (nx[2] * ez[0] - nx[0] * ez[2]) ** 2
-                    + (nx[0] * ez[1] - nx[1] * ez[0]) ** 2
-                )
-                if parallel < _TORSION_NORMAL_PARALLEL_TOL:
-                    raise DeckFormatError(
-                        f"{self._at(row)}: END CONNECTIONS torsion reference normal "
-                        "(NxX NxY NxZ) must not be parallel to the direction Ez"
-                    )
+                if restrained:
+                    # a Free end has no torsion frame: its normal is not checked (native)
+                    self._check_torsion_normal(row, normal, direction, norm)
                 torsion_ends.setdefault(line_id, {})[end] = restrained
             if non_pinned:
                 has_finite_ei = any(
@@ -3038,6 +3036,7 @@ class DeckFile:
             body_types,
             option_by_key,
             has_tmax,
+            mixed_route,
         )
 
         rod_types = self._rows("ROD TYPES")
@@ -3746,6 +3745,33 @@ class DeckFile:
                     continue
             raise DeckFormatError(f"{self._label}: unsupported OUTPUT channel {channel!r}")
 
+    def _check_torsion_normal(
+        self,
+        row: DeckRecord,
+        normal: list[float],
+        direction: list[float],
+        direction_norm: float,
+    ) -> None:
+        """Native ``append_end_connection``: a restrained end's normal is non-zero, not along Ez."""
+        normal_norm = math.sqrt(sum(value * value for value in normal))
+        if not math.isfinite(normal_norm) or normal_norm <= math.sqrt(sys.float_info.min):
+            raise DeckFormatError(
+                f"{self._at(row)}: END CONNECTIONS torsion reference normal "
+                "(NxX NxY NxZ) must be non-zero"
+            )
+        nx = [value / normal_norm for value in normal]
+        ez = [value / direction_norm for value in direction]
+        parallel = math.sqrt(
+            (nx[1] * ez[2] - nx[2] * ez[1]) ** 2
+            + (nx[2] * ez[0] - nx[0] * ez[2]) ** 2
+            + (nx[0] * ez[1] - nx[1] * ez[0]) ** 2
+        )
+        if parallel < _TORSION_NORMAL_PARALLEL_TOL:
+            raise DeckFormatError(
+                f"{self._at(row)}: END CONNECTIONS torsion reference normal "
+                "(NxX NxY NxZ) must not be parallel to the direction Ez"
+            )
+
     def _check_torsion_lines(
         self,
         torsion_ends: dict[str, dict[str, bool]],
@@ -3757,15 +3783,18 @@ class DeckFile:
         body_types: dict[str, str],
         option_by_key: dict[str, OptionRecord],
         has_tmax: bool,
+        aggregate_route: bool,
     ) -> set[str]:
         """Native ``check_torsion_line`` and the driver's torsion scope; the torsional lines.
 
         A line with a torsional END CONNECTIONS restraint (TorsStiffness Rigid or a
-        stiffness) must be finite-EI with a Fixed End B. Restrained at both ends, torsion is
-        solved: every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
+        stiffness) must be finite-EI. With one restrained end it carries no torque and is
+        solved as without the columns. Restrained at both ends, torsion is solved: End B must
+        be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
         rod end nor on a body other than Rigid6. A deck with torsion runs dynamics only with
-        the force-blended generalised-alpha and takes no modal analysis; the coupled routes
-        refuse any torsion column.
+        the force-blended generalised-alpha and takes no modal analysis. The coupled routes
+        and a standalone mixed EI = 0 + finite-EI deck without bodies (``aggregate_route``,
+        run on the aggregate) refuse any torsion column, one restrained end included.
         """
         attachment_lines = set()
         for row in self._rows("ATTACHMENTS"):
@@ -3774,28 +3803,25 @@ class DeckFile:
             except ValueError:
                 continue
         torsion_lines: set[str] = set()
+        has_torsion_column = False
         for line_id, ends in torsion_ends.items():
             if not any(ends.values()):
                 continue
-            if self.caller_driven:
-                raise DeckFormatError(
-                    f"{self._label}: torsion is not yet supported in coupled OpenFAST runs (nor on "
-                    "the mixed EI = 0 + finite-EI aggregate route or in FAST.Farm); set "
-                    "TorsStiffness Free in the END CONNECTIONS rows"
-                )
+            has_torsion_column = True
             if not any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id]):
                 raise DeckFormatError(
                     f"{self._label}: torsional END CONNECTIONS (TorsStiffness Rigid or a "
                     f"stiffness) require a finite-EI line; line {line_id} has EI = 0"
                 )
+            # one restrained end only carries no torque: noted and ignored
+            if not (ends.get("a", False) and ends.get("b", False)):
+                continue
             end_a, end_b = normalized_line_endpoints[line_id]
             if point_types[end_b] != "fixed":
                 raise DeckFormatError(
                     f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
                     f"End B; line {line_id} has two moving ends"
                 )
-            if not (ends.get("a", False) and ends.get("b", False)):
-                continue
             for name in section_types_by_line[line_id]:
                 if not line_type_gj[name] > 0.0:
                     raise DeckFormatError(
@@ -3820,6 +3846,15 @@ class DeckFile:
                     "a Rigid6 body"
                 )
             torsion_lines.add(line_id)
+        # native CD_Init_Deck_Aggregate (deck_has_torsion_columns): the coupled routes and a
+        # standalone mixed EI = 0 + finite-EI deck without bodies refuse any restrained end
+        if has_torsion_column and (self.caller_driven or aggregate_route):
+            raise DeckFormatError(
+                f"{self._label}: torsion is not yet supported in a deck that mixes EI = 0 and "
+                "finite-EI lines without a BODY, nor in coupled OpenFAST or FAST.Farm runs (with a "
+                "BODY such a deck runs on the multibody route, which supports torsion); set "
+                "TorsStiffness Free in every END CONNECTIONS row"
+            )
         if not torsion_lines:
             return torsion_lines
         tmax_row = option_by_key.get("tmax")
@@ -4239,7 +4274,9 @@ class DeckFile:
         """Edit one ``END CONNECTIONS`` row selected by line id and end.
 
         Keyword names are column names, case-insensitive: ``lineid``, ``end``,
-        ``stiffness``, ``ezx``, ``ezy``, and ``ezz``.
+        ``stiffness``, ``ezx``, ``ezy``, ``ezz`` and, on a row that has the torsion
+        columns (10 or 11 values), ``torsstiffness``, ``nxx``, ``nxy``, ``nxz`` and
+        ``pretwist``.
 
         Parameters
         ----------
@@ -4249,7 +4286,9 @@ class DeckFile:
             ``"A"`` or ``"B"``.
         **changes : object
             New column values: ``stiffness`` in N m/rad (or ``Pinned`` /
-            ``Rigid``) and dimensionless direction components.
+            ``Rigid``), dimensionless direction components, ``torsstiffness`` in
+            N m/rad (or ``Free`` / ``Rigid``), the reference normal components and
+            ``pretwist`` in degrees. Keywords are written unquoted.
 
         Raises
         ------

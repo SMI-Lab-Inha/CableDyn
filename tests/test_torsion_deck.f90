@@ -388,7 +388,8 @@ CONTAINS
       CALL read_row('tdeck_body.out', 0, wrench, ok)
       CALL require(ok, 'body torque output readable')
       mnet = cross(MATMUL(r, off), fa) + ma
-      ew = MAX(NORM2(wrench(2:4) - fa)/MAX(NORM2(fa), ABS(m_ref)/20.0_wp), NORM2(wrench(5:7) - mnet)/NORM2(mnet))
+      ew = nan_max_abs([NORM2(wrench(2:4) - fa)/MAX(NORM2(fa), ABS(m_ref)/20.0_wp), &
+                        NORM2(wrench(5:7) - mnet)/NORM2(mnet)])
       WRITE (*, '(A,I2,A,3ES14.6,A,ES10.3,A,ES10.3,A,ES14.6)') 'body torque (sign', isign, '): moment ', ma, &
         ' axis error ', e_axis, ', net wrench vs line loads ', ew, ', Torq ', wrench(8)
       CALL require(e_axis <= 1.0e-8_wp, 'body: connection moment = M_t along the line axis (1e-8)')
@@ -488,8 +489,8 @@ CONTAINS
       CALL require(ok, '7a: output row readable')
       IF (.NOT. ok) EXIT
       roll = MERGE(0.0_wp, 30.0_wp, k == 0)
-      werr_a = MAX(werr_a, ABS(v(4) + roll))
-      terr = MAX(terr, ABS(v(2) - GJ*(-roll*PI/180.0_wp)/L), ABS(v(3) - v(2)))
+      werr_a = nan_max_abs([werr_a, ABS(v(4) + roll)])
+      terr = nan_max_abs([terr, ABS(v(2) - GJ*(-roll*PI/180.0_wp)/L), ABS(v(3) - v(2))])
     END DO
     WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'roll column (step): Twist1 error ', werr_a, ' deg, torque error ', terr, ' N m'
     CALL require(werr_a <= 1.0e-6_wp, '7a: Twist1 = -roll from the first step on')
@@ -513,8 +514,8 @@ CONTAINS
       CALL require(ok, '7b: output row readable')
       IF (.NOT. ok) EXIT
       roll = 60.0_wp*0.05_wp*k
-      werr_b = MAX(werr_b, ABS(v(4) + roll))
-      terr = MAX(terr, ABS(v(2) - GJ*(v(4)*PI/180.0_wp)/L))
+      werr_b = nan_max_abs([werr_b, ABS(v(4) + roll)])
+      terr = nan_max_abs([terr, ABS(v(2) - GJ*(v(4)*PI/180.0_wp)/L)])
     END DO
     WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'vessel roll: Twist1 error ', werr_b, ' deg, torque error ', terr, ' N m'
     CALL require(werr_b <= 1.0e-6_wp, '7b: the End A frame turns with the vessel: Twist1 = -roll(t)')
@@ -646,8 +647,8 @@ CONTAINS
       mt = v(2)
       rk = RESHAPE(rec(8:16, k), [3, 3])
       dk = MATMUL(rk, dg)
-      err_axis = MAX(err_axis, NORM2(rec(24:26, k) - mt*dk)/m0)
-      err_wave = MAX(err_wave, ABS(mt - (m0*COS(omega*t) - amp*SIN(omega*t)))/m0)
+      err_axis = nan_max_abs([err_axis, NORM2(rec(24:26, k) - mt*dk)/m0])
+      err_wave = nan_max_abs([err_wave, ABS(mt - (m0*COS(omega*t) - amp*SIN(omega*t)))/m0])
     END DO
     CALL require(ok, '8/10: all output rows readable')
     WRITE (*, '(A,A,A,ES10.3,A,ES10.3,A,F8.4,A)') 'body roll dynamics (', bend, ' End A): moment-axis error ', &
@@ -884,7 +885,7 @@ CONTAINS
                     [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
                     [CHARACTER(24) :: '0.1 dtM'], [CHARACTER(16) :: 'FairTen1'])
     CALL CD_Init_Deck_Aggregate('tdeck_e12.dat', 0.1_wp, agg, es, em)
-    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'not yet supported in coupled OpenFAST runs') > 0, &
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'nor in coupled OpenFAST or FAST.Farm runs') > 0, &
                  'the coupled aggregate refuses torsion by name (got: '//TRIM(em)//')')
     CALL CD_End_Deck_Aggregate(agg)
     CALL CD_Init_Deck_HermiteCable('tdeck_e12.dat', 0.1_wp, cab, node, es, em)

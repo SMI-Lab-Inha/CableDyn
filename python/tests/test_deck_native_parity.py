@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -862,7 +864,234 @@ def test_torsion_line_rules_follow_the_native_checks():
         _options(dynamic, "False alpha_force_blend"), "needs the force-blended generalised-alpha"
     )
     _rejects(_options(_TORSION, "3 nModes"), "modal analysis .* with torsion is not yet supported")
-    _rejects(_TORSION, "not yet supported in coupled OpenFAST runs", caller_driven=True)
+    _rejects(_TORSION, "nor in coupled OpenFAST or FAST.Farm runs", caller_driven=True)
+    # the coupled routes refuse one restrained end too (any torsion column), after the line rules
+    _rejects(one_end, "nor in coupled OpenFAST or FAST.Farm runs", caller_driven=True)
+    _rejects(ei0, "require a finite-EI line; line 1 has EI = 0", caller_driven=True)
+
+
+# The pure-torsion deck dynamic (TMax > 0), for the rules that need a dynamic run.
+_TORSION_DYN = _edit(_TORSION, ("0.0 TMax", "1.0 TMax"))
+_NO_TORSION_OUTPUTS = ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")
+
+
+def _torsion_body(body_row: str) -> str:
+    return _edit(
+        _TORSION_DYN,
+        (
+            f"{_BAR} POINTS {_BAR}",
+            f"{_BAR} BODIES {_BAR}\n"
+            "ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz\n"
+            f"{body_row}\n{_BAR} POINTS {_BAR}",
+        ),
+        ("1 Coupled 0.0 0.0 -50.0", "1 Body1 0.0 0.0 0.0"),
+    )
+
+
+def _torsion_two_moving(row_a: str) -> str:
+    return _edit(
+        _TORSION_DYN,
+        ("2 Fixed 100.0 0.0 -50.0 0 0 0 0", "2 Free 100.0 0.0 -50.0 100 0 0 0"),
+        (_TORSION_ROW_A, row_a),
+        ("1 B Rigid 1 0 0 Rigid", "1 B Pinned 1 0 0 Rigid"),
+    )
+
+
+def test_torsion_scope_rules_follow_the_native_checks():
+    # End A on a Rigid6 body is supported, on a Point3 body or a rod end it stops by name
+    DeckFile.from_text(
+        _torsion_body("1 Rigid6 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3")
+    )
+    _rejects(
+        _torsion_body("1 Point3 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0"),
+        "a torsional END CONNECTION on a body needs a Rigid6 body",
+    )
+    rod_end = _edit(
+        _TORSION_DYN,
+        (
+            f"{_BAR} POINTS {_BAR}",
+            f"{_BAR} ROD TYPES {_BAR}\nName Diam Mass Cd Ca CdEnd CaEnd\n"
+            "spar 1.0 300.0 0.8 1.0 0.0 0.0\n"
+            f"{_BAR} RODS {_BAR}\nID RodType Type XA YA ZA XB YB ZB NumSegs Outputs\n"
+            f"1 spar Fixed 0 0 -50 0 0 -40 2 -\n{_BAR} POINTS {_BAR}",
+        ),
+        ("1 1 2 -", "1 R1A 2 -"),
+        ("1 Coupled 0.0 0.0 -50.0 0 0 0 0\n", ""),
+    )
+    _rejects(rod_end, "a torsional END CONNECTION on a rod end is not supported")
+    attachments = _edit(
+        _TORSION,
+        (
+            f"{_BAR} OPTIONS {_BAR}",
+            f"{_BAR} ATTACHMENTS {_BAR}\nLineID ArcLength Mass Volume CdA Ca\n"
+            f"1 50.0 10.0 0.0 0.0 0.0\n{_BAR} OPTIONS {_BAR}",
+        ),
+    )
+    _rejects(attachments, "torsion is not combined with ATTACHMENTS")
+    # restrained at both ends, End B must be Fixed
+    _rejects(
+        _torsion_two_moving("1 A Pinned 1 0 0 Rigid 0 0 1 0\n"),
+        "torsional END CONNECTIONS require a finite-EI line with Fixed End B; line 1 has two "
+        "moving ends",
+    )
+    # one restrained end only, or none, is ignored: the same verdict as the six-column rows
+    one_end = _edit(_torsion_two_moving("1 A Pinned 1 0 0 Free 0 0 1 0\n"), _NO_TORSION_OUTPUTS)
+    six = _edit(
+        _torsion_two_moving("1 A Pinned 1 0 0\n"),
+        ("1 B Pinned 1 0 0 Rigid 0 0 1 720", "1 B Pinned 1 0 0"),
+        _NO_TORSION_OUTPUTS,
+    )
+    DeckFile.from_text(six)
+    DeckFile.from_text(one_end)
+    both_free = _edit(
+        _TORSION,
+        (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
+        ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Free 0 0 1 720"),
+    )
+    _rejects(both_free, "is not torsionally restrained at both ends")
+    DeckFile.from_text(_edit(both_free, _NO_TORSION_OUTPUTS))
+
+
+def test_torsion_on_a_standalone_mixed_deck_is_refused():
+    # a mixed EI = 0 + finite-EI deck without bodies runs on the aggregate, which has no torsion
+    gj_cable = _edit(
+        _MIXED,
+        (
+            "Name Diam Mass EA BA EI Cdn Cdt Can Cat\n",
+            "Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat\n",
+        ),
+        (
+            "chain 0.252 390.0 1.674e9 -1.0 0.0 1.37 0.64 1.0 0.0\n",
+            "chain 0.252 390.0 1.674e9 -1.0 0.0 0 0 0 0 1.37 0.64 1.0 0.0\n",
+        ),
+        (
+            "cable 0.2 60.0 4.0e8 0.0 1.0e4 1.2 0.1 1.0 0.0\n",
+            "cable 0.2 60.0 4.0e8 0.0 1.0e4 1.0e8 1.0e4 1.0 1.0 1.2 0.1 1.0 0.0\n",
+        ),
+    )
+    DeckFile.from_text(gj_cable)
+    for rows in (
+        ("2 A Rigid -1 0 0 Rigid 0 0 1 0", "2 B Rigid -1 0 0 Rigid 0 0 1 90"),
+        ("2 A Rigid -1 0 0 Rigid 0 0 1 0", "2 B Rigid -1 0 0 Free 0 0 1 0"),
+    ):
+        text = _section(
+            gj_cable,
+            "END CONNECTIONS",
+            "LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist",
+            *rows,
+        )
+        _rejects(text, "mixes EI = 0 and finite-EI lines without a BODY")
+        _rejects(_options(text, "10.0 TMax"), "mixes EI = 0 and finite-EI lines without a BODY")
+
+
+@pytest.mark.parametrize(
+    ("stiffness", "accepted"),
+    [
+        ("Inf", True),
+        ("Infinity", True),
+        ("RIGID", True),
+        ('"Rigid"', True),
+        ("Zero", True),
+        ("-0", True),
+        ("2.5d4", True),
+        ("+Inf", False),
+        ("1e-320", False),
+        ("1.0q5", False),
+        ("Pinned", False),
+    ],
+)
+def test_torsion_stiffness_keywords_and_numbers_follow_the_native_reader(stiffness, accepted):
+    text = _edit(_TORSION, (_TORSION_ROW_A, f"1 A Rigid 1 0 0 {stiffness} 0 1 1 -45\n"))
+    if stiffness.lower() in {"zero", "-0"}:
+        text = _edit(text, _NO_TORSION_OUTPUTS)
+    if accepted:
+        DeckFile.from_text(text)
+    else:
+        _rejects(text, "torsional stiffness must be finite and non-negative, Free, or Rigid")
+
+
+@pytest.mark.parametrize("stiffness", ["1.0q5", "1e-320", "+Inf", "NaN"])
+def test_bending_stiffness_numbers_follow_the_native_reader(stiffness):
+    _rejects(
+        _edit(_TORSION, (_TORSION_ROW_A, f"1 A {stiffness} 1 0 0 Rigid 0 1 1 -45\n")),
+        "END CONNECTIONS stiffness must be finite and non-negative, Pinned, or Rigid",
+    )
+
+
+def test_builders_write_or_refuse_the_torsion_columns():
+    from cabledyn.deck import DeckWriter
+
+    # DeckModel writes a 10-column row (no pretwist) that reads back the same
+    model = DeckModel.from_text(_edit(_TORSION, (_TORSION_ROW_A, ""), _NO_TORSION_OUTPUTS))
+    model.add_end_connection(
+        1, "A", "Rigid", (1.0, 0.0, 0.0), torsion_stiffness=2.5e4, normal=(0, 1, 1)
+    )
+    text = model.to_text()
+    row = next(r for r in DeckFile.from_text(text).end_connections if r.tokens[1] == "A")
+    assert len(row.tokens) == 10 and float(row.tokens[6]) == 2.5e4
+    # DeckFile edits the torsion columns of a row in place, keywords unquoted
+    deck = DeckFile.from_text(_TORSION)
+    deck.set_end_connection(1, "B", torsstiffness="Infinity", pretwist=90.0)
+    row_b = next(r for r in deck.end_connections if r.tokens[1] == "B")
+    assert row_b.tokens[6] == "Infinity" and float(row_b.tokens[10]) == 90.0
+    # the simple writer has no torsion columns and says so
+    with pytest.raises(ValueError, match="no torsion columns"):
+        DeckWriter().add_end_connection(1, "A", "Rigid", (1.0, 0.0, 0.0), torsion_stiffness="Rigid")
+
+
+def test_a_free_torsion_end_takes_any_reference_normal():
+    for normal in ("0 0 0", "1 0 0"):
+        DeckFile.from_text(
+            _edit(
+                _TORSION,
+                (_TORSION_ROW_A, f"1 A Rigid 1 0 0 Free {normal} 0\n"),
+                _NO_TORSION_OUTPUTS,
+            )
+        )
+
+
+_PARITY_DRIVER = (
+    os.environ.get("CABLEDYN_TEST_DRIVER", "").strip()
+    or os.environ.get("CABLEDYN_DRIVER", "").strip()
+)
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the native torsion parity",
+)
+@pytest.mark.parametrize(
+    "row_a",
+    [
+        "1 A Rigid 1 0 0 Inf 0 1 1 -45",
+        "1 A Rigid 1 0 0 Infinity 0 1 1 -45",
+        '1 A Rigid 1 0 0 "Rigid" 0 1 1 -45',
+        "1 A Rigid 1 0 0 +Inf 0 1 1 -45",
+        "1 A Rigid 1 0 0 1e-320 0 1 1 -45",
+        "1 A Rigid 1 0 0 1.0q5 0 1 1 -45",
+        "1 A 1.0q5 1 0 0 Rigid 0 1 1 -45",
+        "1 A Rigid 1 0 0 Rigid 0 0 1",
+    ],
+)
+def test_torsion_rows_get_the_native_verdict(row_a, tmp_path):
+    text = _edit(_TORSION, (_TORSION_ROW_A, f"{row_a}\n"))
+    try:
+        DeckFile.from_text(text)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    deck = tmp_path / "torsion.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "torsion")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=600,
+        check=False,
+    )
+    # exit code 1 is an input refusal; 0 a run and 2 a solve failure after validation
+    assert python_accepts == (completed.returncode != 1), completed.stdout + completed.stderr
 
 
 @pytest.mark.parametrize(

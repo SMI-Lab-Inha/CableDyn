@@ -2562,6 +2562,7 @@ CONTAINS
       CALL torsion_stage(es, em)
       IF (es /= CD_DECKDRV_OK) THEN
         ErrStat = es
+        IF (INDEX(em, 'CableDyn_DeckDriver: ') == 1) em = em(LEN('CableDyn_DeckDriver: ') + 1:)
         ErrMsg = 'CableDyn_DeckDriver: line '//TRIM(int_to_str(ln%id))//': '//TRIM(em)
         RETURN
       END IF
@@ -2797,6 +2798,7 @@ CONTAINS
       REAL(wp) :: nvec(3), dvec(3), tol_t
       INTEGER :: k, attempt
       CHARACTER(320) :: tnote
+      TYPE(CD_HermiteTorsionType) :: tors0
       est = CD_DECKDRV_OK
       emt = ''
       tors = CD_HermiteTorsionType()
@@ -2832,7 +2834,10 @@ CONTAINS
                                DOT_PRODUCT(tors%ends(:, 1), tors%ends(:, 3)) > CD_ONE - 1.0e-12_wp
       ! As for the untwisted solve: a residual stall at the tight standalone tolerance is
       ! repeated at the coupled static tolerance (a round-off floor of a stiff, light line).
+      ! Every attempt starts from the same fresh torsion state (no Theta carried over).
+      tors0 = tors
       DO attempt = 1, 2
+        tors = tors0
         tol_t = static_tol_target
         IF (attempt == 2) tol_t = COUPLED_STATIC_TOL
         IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
@@ -4891,9 +4896,8 @@ CONTAINS
                     ErrStat, ErrMsg, caller_driven=.TRUE.)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     IF (deck_has_torsion_columns(lines)) THEN
-      CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in coupled OpenFAST runs (nor on the mixed '// &
-                'EI = 0 + finite-EI aggregate route or in FAST.Farm); set TorsStiffness Free in the END '// &
-                'CONNECTIONS rows'); RETURN
+      CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in coupled OpenFAST runs; set TorsStiffness '// &
+                'Free in every END CONNECTIONS row'); RETURN
     END IF
     IF (.NOT. deck_has_finite_ei(types, sections)) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: deck has no finite-EI (EI>0) line; '// &
@@ -5047,9 +5051,10 @@ CONTAINS
                     failures=fails, controls=ctrls, run_tmax=run_tmax, host_coupled_objects=.TRUE.)
     IF (ErrStat == CD_DECKDRV_OK) THEN
       IF (deck_has_torsion_columns(lines)) THEN
-        CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in coupled OpenFAST runs (nor on the mixed '// &
-                  'EI = 0 + finite-EI aggregate route or in FAST.Farm); set TorsStiffness Free in the END '// &
-                  'CONNECTIONS rows'); RETURN
+        CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in a deck that mixes EI = 0 and finite-EI '// &
+                  'lines without a BODY, nor in coupled OpenFAST or FAST.Farm runs (with a BODY such a deck '// &
+                  'runs on the multibody route, which supports torsion); set TorsStiffness Free in every END '// &
+                  'CONNECTIONS row'); RETURN
       END IF
     END IF
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
@@ -8642,7 +8647,8 @@ CONTAINS
         CALL apply_syrope_ic(line, lines, nlin, ErrStat, ErrMsg)
       CASE (SEC_ENDCONN)
         IF (.NOT. has_numeric_token(line)) CYCLE
-        CALL list_safe_row(line, NO_TEXT_COLS, [2, 3], row, ErrStat, ErrMsg)
+        ! End, Stiffness and TorsStiffness take keywords (Rigid, Infinity, Inf, Free, ...)
+        CALL list_safe_row(line, NO_TEXT_COLS, [2, 3, 7], row, ErrStat, ErrMsg)
         IF (ErrStat == 0) CALL append_end_connection(row, endconns, nec, ErrStat, ErrMsg)
       CASE (SEC_TURBINES)
         IF (.NOT. has_numeric_token(line)) CYCLE
@@ -11102,6 +11108,7 @@ CONTAINS
       ec%mode = CD_ENDCONN_RIGID
       ec%stiffness = CD_ZERO
     CASE DEFAULT
+      ! parse_real_token rejects NaN, Inf and subnormal values (the row guard skips keyword columns)
       CALL parse_real_token(stiffness_token, ec%stiffness, ok)
       IF (.NOT. ok) ec%stiffness = -CD_ONE
       IF (.NOT. IEEE_IS_FINITE(ec%stiffness) .OR. ec%stiffness < CD_ZERO) THEN
@@ -11145,20 +11152,26 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal and pretwist must be finite')
         RETURN
       END IF
-      nx_norm = SQRT(DOT_PRODUCT(ec%nx, ec%nx))
-      IF (.NOT. IEEE_IS_FINITE(nx_norm) .OR. nx_norm <= SQRT(TINY(CD_ONE))) THEN
-        CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must be non-zero')
-        RETURN
+      IF (ec%tors_mode == TORS_FREE) THEN
+        ! a Free end has no torsion frame: its Nx and Pretwist are not used (6-column meaning)
+        ec%nx = CD_ZERO
+        ec%pretwist = CD_ZERO
+      ELSE
+        nx_norm = SQRT(DOT_PRODUCT(ec%nx, ec%nx))
+        IF (.NOT. IEEE_IS_FINITE(nx_norm) .OR. nx_norm <= SQRT(TINY(CD_ONE))) THEN
+          CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must be non-zero')
+          RETURN
+        END IF
+        ec%nx = ec%nx/nx_norm
+        IF (NORM2(cross3(ec%nx, ec%ez)) < TORS_NX_PARALLEL_TOL) THEN
+          CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must not be '// &
+                    'parallel to the direction Ez')
+          RETURN
+        END IF
+        ec%nx = ec%nx - DOT_PRODUCT(ec%nx, ec%ez)*ec%ez
+        ec%nx = ec%nx/NORM2(ec%nx)
+        ec%pretwist = ec%pretwist*DEG2RAD_TORS
       END IF
-      ec%nx = ec%nx/nx_norm
-      IF (NORM2(cross3(ec%nx, ec%ez)) < TORS_NX_PARALLEL_TOL) THEN
-        CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must not be '// &
-                  'parallel to the direction Ez')
-        RETURN
-      END IF
-      ec%nx = ec%nx - DOT_PRODUCT(ec%nx, ec%ez)*ec%ez
-      ec%nx = ec%nx/NORM2(ec%nx)
-      ec%pretwist = ec%pretwist*DEG2RAD_TORS
     END IF
 
     ALLOCATE (grown(nec + 1), STAT=istat)
@@ -13387,8 +13400,8 @@ CONTAINS
   CONTAINS
 
     SUBROUTINE check_torsion_line(ln, es_t, em_t)
-      !! A line with a torsional END CONNECTIONS restraint: a finite-EI (cubic-Hermite) line with
-      !! a Fixed End B. With both ends restrained (torsion active) every section's LINE TYPES row
+      !! A line with a torsional END CONNECTIONS restraint: a finite-EI (cubic-Hermite) line. With
+      !! both ends restrained (torsion active) End B must be Fixed, every section's LINE TYPES row
       !! must give an explicit GJ, End A may not be a rod end, a body End A must be a Rigid6 body,
       !! and ATTACHMENTS are not combined with it.
       TYPE(DeckLine), INTENT(IN) :: ln
@@ -13404,6 +13417,9 @@ CONTAINS
                   'finite-EI line; line '//TRIM(lid)//' has EI = 0')
         RETURN
       END IF
+      ! one restrained end only carries no torque (noted and ignored): the rules below apply to a
+      ! line restrained at both ends
+      IF (.NOT. ALL(ln%tors_mode /= TORS_FREE)) RETURN
       jp = find_point(points, ln%nodeB)
       IF (jp < 1) RETURN
       IF (TRIM(points(jp)%ptype) /= 'fixed') THEN
@@ -13411,7 +13427,6 @@ CONTAINS
                   TRIM(lid)//' has two moving ends')
         RETURN
       END IF
-      IF (.NOT. ALL(ln%tors_mode /= TORS_FREE)) RETURN
       DO js = 1, SIZE(sections)
         IF (sections(js)%line_id /= ln%id) CYCLE
         IF (sections(js)%ltype < 1 .OR. sections(js)%ltype > SIZE(types)) CYCLE
@@ -17934,7 +17949,7 @@ CONTAINS
       rscale(o + 4:o + 6) = f*l
       kt = torsion_stiffness(ib)
       IF (kt > CD_ZERO) rscale(o + 4:o + 6) = MIN(f*l, MAX(CD_ONE, &
-                                                         (MINVAL(mb%rigid(ib)%inertia)/bh2 + kt)*TORS_ROT_REF))
+                                                           (MINVAL(mb%rigid(ib)%inertia)/bh2 + kt)*TORS_ROT_REF))
     END DO
     DO ir = 1, SIZE(mb%rods)
       o = mb%jr_off(ir)
@@ -21327,9 +21342,17 @@ CONTAINS
       bodies = bodies0
       rods = rods0
       points = points0
-      CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
-                                       ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                       quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot)
+      ! the torque stiffness only with torsion: without it the core's arithmetic is exactly that
+      ! of a deck before torsion existed (no zero-stiffness correction, signed zeros kept)
+      IF (pass_tol_eff < PASS_TOL) THEN
+        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
+                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
+                                         quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot)
+      ELSE
+        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
+                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
+                                         quiet=pass > 1, skipped=held)
+      END IF
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! the objects stay at their deck poses (the core has already said why): nothing to balance
       IF (held) RETURN
@@ -23734,8 +23757,10 @@ CONTAINS
   CONTAINS
 
     SUBROUTINE check_motion_roll(est, emt)
-      !! The motionFile roll column drives a torsional line through its End A point only, and
-      !! starts from the static state (roll 0 at t = 0; a constant twist is the Pretwist).
+      !! The motionFile roll column drives a torsional line through its moving end only (internal
+      !! End A after the anchor-first swap: the user's End A, or End B of an anchor-first deck),
+      !! right-handed about the tangent pointing into the line, so Phi = Pretwist(B) -
+      !! Pretwist(A) - roll in either order; it starts from the static state (roll 0 at t = 0).
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
       INTEGER :: ip, li
@@ -23752,7 +23777,7 @@ CONTAINS
         IF (.NOT. used) THEN
           CALL fail(est, emt, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' has a non-zero roll '// &
                     'column, but no line restrained in torsion at both ends (END CONNECTIONS TorsStiffness) '// &
-                    'has its End A there'); RETURN
+                    'has its moving (non-Fixed) end there'); RETURN
         END IF
         IF (ABS(motion%roll(ip, 1)) > CD_ZERO) THEN
           CALL fail(est, emt, 'motionFile: the roll column of point '//TRIM(int_to_str(motion%point_ids(ip)))// &
