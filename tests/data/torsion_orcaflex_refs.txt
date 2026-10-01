@@ -1,7 +1,7 @@
 # OrcaFlex torsion reference values (summary values only) for tests/test_torsion_orcaflex.f90.
 # OrcaFlex 11.6d through OrcFxAPI; written by
 # validation/scripts/orcaflex_torsion_reference.py --refs from its JSON summary
-# (script SHA-256 5d98aba2157587ef...). Line IncludeTorsion Yes, statics Catenary then
+# (script SHA-256 65b6f529fec69320...). Line IncludeTorsion Yes, statics Catenary then
 # Full statics; StaticsTolerance 1e-09 (pure), 1e-08 (onsets, lazy wave);
 # StaticsMaxIterations 2000; TensionTorqueCoupling 0; seabed friction 0.
 # Units SI (N, m, N.m); OrcaFlex kN and kN.m are converted. See VALIDATION.md (torsion).
