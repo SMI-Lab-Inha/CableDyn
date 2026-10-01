@@ -2,11 +2,11 @@
 ! SPDX-License-Identifier: Apache-2.0
 ! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
 PROGRAM test_hermite_torsion_dynamic
-  !! Dynamic gates of condensed (Route A) torsion on the cubic-Hermite cable, on a 10 m line
+  !! Dynamic gates of condensed torsion on the cubic-Hermite cable, on a 10 m line
   !! clamped (Rigid bending connections) at both ends with both ends restrained in torsion:
   !!   S  step response: an imposed-twist step (u_twist) on a straight line gives the quasi-static
   !!      torque GJ Phi / L at the very first step and every later one, with the centreline
-  !!      unchanged. Route A has no torsional inertia, so the torque follows the imposed twist
+  !!      unchanged. Condensed torsion has no torsional inertia, so the torque follows the imposed twist
   !!      without a torsional wave or overshoot: the dynamic and quasi-static answers coincide;
   !!   T  turning parent: the coupled end's torsion frame turns with the parent orientation about
   !!      the line axis through 1.5 turns while the imposed twist follows it, so Theta passes
@@ -18,6 +18,8 @@ PROGRAM test_hermite_torsion_dynamic
   !!   R  restart: a moving, rolling run restored from a snapshot, and one rebuilt from the
   !!      checkpoint mirror into a fresh module, continue bit-identically (Theta and torque
   !!      included) after the frame has turned through more than one turn;
+  !!   A  the non-stepping boundary write and the mirror reload are all or nothing, and a reload
+  !!      recovers a parent-attached frame's orientation;
   !!   B  the bordered (Sherman-Morrison) step converges as fast as the line without torsion
   !!      on the same swaying, rolling motion with bending-pinned torsional ends (in such steps
   !!      the rank-one term is small beside the inertia; it carries weight near buckling), and
@@ -37,7 +39,7 @@ PROGRAM test_hermite_torsion_dynamic
                                           CD_HFMF_Set_Torsion, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, CD_HFMF_MirrorSize, &
                                           CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, CD_HFMF_SetCoupledKinematics, &
-                                          CD_HFMF_End, CD_HFMF_OK
+                                          CD_HFMF_End, CD_HFMF_OK, CD_HFMF_PreflightCoupledKinematics
   IMPLICIT NONE
 
   REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp
@@ -49,6 +51,7 @@ PROGRAM test_hermite_torsion_dynamic
   CALL check_turning_parent()
   CALL check_energy()
   CALL check_restart()
+  CALL check_boundary_and_mirror()
   CALL check_bordered_and_blend()
 
   IF (nfail > 0) THEN
@@ -393,6 +396,72 @@ CONTAINS
     CALL CD_HFMF_End(cab)
     CALL CD_HFMF_End(fresh)
   END SUBROUTINE check_restart
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_boundary_and_mirror()
+    !! A  the non-stepping boundary write is all or nothing: a coupled-end move together with a
+    !!    parent roll of 2 rad (beyond the pi/2 twist step) is refused by the preflight and by
+    !!    SetCoupledKinematics, and the cable state (q, v, a, frames, Theta, parent orientation)
+    !!    is left exactly as it was; a mirror whose torsion frames are not orthonormal is refused
+    !!    before anything is written; and a cable whose torsion frame turns with its parent but
+    !!    has no parent end connection recovers the parent orientation from the restored frame,
+    !!    so a restarted step without an orientation input holds it, as the uninterrupted run does.
+    TYPE(CD_HFMF_ModuleType) :: cab, fresh
+    REAL(wp) :: q(NDOF), x(3), v(3), a(3), dcm(3, 3), w(3), al(3), phi, q0(NDOF), v0(NDOF), a0(NDOF)
+    REAL(wp) :: ends0(3, 4), th0, pd0(3, 3), th, mt, tha, mta, t_snap
+    REAL(wp), ALLOCATABLE :: buf(:), bad(:)
+    LOGICAL :: ok, same
+    INTEGER :: es, k
+    CHARACTER(300) :: em
+    CALL line_seed(0.0_wp, 0.0_wp, q)
+    CALL build_cable(cab, q, 1.0_wp, 0.01_wp, 1.0e-6_wp, 0.8_wp, pinned=.TRUE.)
+    CALL march(cab, 0, 60, ok)
+    CALL require(ok, 'A: march before the boundary write')
+    q0 = cab%line%q
+    v0 = cab%line%v
+    a0 = cab%line%a
+    ends0 = cab%line%torsion%ends
+    th0 = cab%line%torsion%theta
+    pd0 = cab%parent_dcm
+    CALL drive(60, x, v, a, dcm, w, al, phi)
+    x(2) = x(2) + 0.01_wp
+    dcm = roll_x(3.0_wp*0.6_wp + 2.0_wp)
+    CALL CD_HFMF_PreflightCoupledKinematics(cab, x, v, a, es, em, u_orientation=dcm, u_angular_velocity=w, &
+                                            u_angular_acceleration=al)
+   CALL require(es /= CD_HFMF_OK .AND. INDEX(em, 'pi/2') > 0, 'A: the preflight refuses a 2 rad frame turn: '//TRIM(em))
+    CALL CD_HFMF_SetCoupledKinematics(cab, x, v, a, es, em, u_orientation=dcm, u_angular_velocity=w, &
+                                      u_angular_acceleration=al)
+    same = nan_max_abs(cab%line%q - q0) <= 0.0_wp .AND. nan_max_abs(cab%line%v - v0) <= 0.0_wp .AND. &
+           nan_max_abs(cab%line%a - a0) <= 0.0_wp .AND. nan_max_abs(cab%line%torsion%ends - ends0) <= 0.0_wp .AND. &
+           .NOT. (ABS(cab%line%torsion%theta - th0) > 0.0_wp) .AND. nan_max_abs(cab%parent_dcm - pd0) <= 0.0_wp
+    CALL require(es /= CD_HFMF_OK .AND. same, 'A: a refused boundary write leaves the cable unchanged')
+    ! a corrupt mirror: the torsion block (last 14 values) with a non-unit reference normal
+    ALLOCATE (buf(CD_HFMF_MirrorSize(cab)))
+    CALL CD_HFMF_PackMirror(cab, buf, es, em)
+    bad = buf
+    k = SIZE(bad) - 14
+    bad(k + 6:k + 8) = 1.1_wp*bad(k + 6:k + 8)
+    CALL CD_HFMF_UnpackMirror(cab, bad, cab%line%t, es, em)
+    CALL require(es /= CD_HFMF_OK .AND. INDEX(em, 'orthonormal') > 0 .AND. nan_max_abs(cab%line%q - q0) <= 0.0_wp, &
+                 'A: a mirror with non-orthonormal torsion frames is refused before any write')
+    ! restart without an orientation input after the reload
+    t_snap = cab%line%t
+    CALL drive(61, x, v, a, dcm, w, al, phi)
+    CALL CD_HFMF_UpdateStates(cab, x, v, a, es, em, u_twist=phi)
+    CALL CD_HermiteCable_Dyn_Torsion_State(cab%line, tha, mta, es, em)
+    CALL build_cable(fresh, q, 1.0_wp, 0.01_wp, 1.0e-6_wp, 0.8_wp, pinned=.TRUE.)
+    CALL CD_HFMF_UnpackMirror(fresh, buf, t_snap, es, em)
+    CALL require(es == CD_HFMF_OK, 'A: unpack: '//TRIM(em))
+    CALL CD_HFMF_UpdateStates(fresh, x, v, a, es, em, u_twist=phi)
+    CALL CD_HermiteCable_Dyn_Torsion_State(fresh%line, th, mt, es, em)
+    WRITE (*, '(A,ES12.5,A,ES12.5,A,ES10.3)') 'A restart without an orientation input: torque ', mt, &
+      ' (uninterrupted ', mta, '), parent orientation error ', nan_max_abs(fresh%parent_dcm - cab%parent_dcm)
+    CALL require(es == CD_HFMF_OK .AND. ABS(mt - mta) <= 1.0e-9_wp*ABS(mta) .AND. &
+                 nan_max_abs(fresh%parent_dcm - cab%parent_dcm) <= 1.0e-12_wp, &
+                 'A: the restored parent orientation holds the frame (no turn back to the static orientation)')
+    CALL CD_HFMF_End(cab)
+    CALL CD_HFMF_End(fresh)
+  END SUBROUTINE check_boundary_and_mirror
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE check_bordered_and_blend()

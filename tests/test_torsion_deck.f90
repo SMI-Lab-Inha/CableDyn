@@ -6,8 +6,9 @@
 !>  1. pure torsion of a straight neutral line clamped at two Fixed points, two turns of
 !>     pretwist: Torq = GJ Phi / L at every node, Twist<L> = 720 deg, Twist<L>N<J> linear from
 !>     End A; torsional end springs add their compliance;
-!>  2. backward compatibility: the same deck with Free torsion columns, or with one end
-!>     restrained only, writes the same .out bytes as the 6-column rows;
+!>  2. backward compatibility: the same deck with Free torsion columns (any normal), or with one
+!>     end restrained only, writes the same .out bytes as the 6-column rows; Rigid, Infinity,
+!>     Inf and a quoted "Rigid" are one restraint;
 !>  3. a pretwist sweep to three turns on a sagging clamped line: the torque grows in equal
 !>     steps (no 2 pi slip) and Twist<L> follows the pretwist;
 !>  4. body torque return: a massive Rigid6 body (attitude rolled, pitched and yawed) holding a
@@ -56,6 +57,7 @@ PROGRAM test_torsion_deck
   END IF
   IF (only == 0 .OR. only == 1) CALL check_pure_torsion()
   IF (only == 0 .OR. only == 2) CALL check_backward_compatible()
+  IF (only == 0 .OR. only == 2) CALL check_rigid_keywords()
   IF (only == 0 .OR. only == 3) CALL check_sweep()
   IF (only == 0 .OR. only == 4) CALL check_body_torque()
   IF (only == 0 .OR. only == 5) CALL check_body_statics()
@@ -293,7 +295,32 @@ CONTAINS
     CALL require(ok, 'one-end torsion runs: '//TRIM(em))
     CALL require(same_file('tdeck_bc0.out', 'tdeck_bc2.out'), 'one restrained end: identical .out')
     CALL require(same_file('tdeck_bc0.static.out', 'tdeck_bc2.static.out'), 'one restrained end: identical profile')
+    ! a Free end has no torsion frame: a zero normal, or one along Ez, is not checked
+    CALL straight_deck('tdeck_bc3.dat', 'Rigid 1 0 -0.3 Free 0 0 0', 'Rigid 1 0 0.3 Zero 1 0 0.3 45', OUTS, t10)
+    CALL run_deck('tdeck_bc3.dat', 'tdeck_bc3', ok, em)
+    CALL require(ok, 'Free torsion columns with an unused normal run: '//TRIM(em))
+    CALL require(same_file('tdeck_bc0.out', 'tdeck_bc3.out'), 'Free torsion columns, unused normal: identical .out')
   END SUBROUTINE check_backward_compatible
+
+  SUBROUTINE check_rigid_keywords()
+    !! The TorsStiffness spellings Rigid, Infinity, Inf and a quoted "Rigid" are the same
+    !! restraint: the pure-torsion deck writes the same .out with each.
+    CHARACTER(16), PARAMETER :: OUTS(2) = [CHARACTER(16) :: 'Torq1N1', 'Twist1']
+    CHARACTER(12), PARAMETER :: WORDS(3) = [CHARACTER(12) :: 'Infinity', 'Inf', '"Rigid"']
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: k
+    CALL straight_deck('tdeck_kw0.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
+    CALL run_deck('tdeck_kw0.dat', 'tdeck_kw0', ok, em)
+    CALL require(ok, 'keyword reference deck runs: '//TRIM(em))
+    DO k = 1, SIZE(WORDS)
+      CALL straight_deck('tdeck_kw1.dat', 'Rigid 1 0 0 '//TRIM(WORDS(k))//' 0 0 1 0', &
+                         'Rigid 1 0 0 '//TRIM(WORDS(k))//' 0 0 1 720', OUTS)
+      CALL run_deck('tdeck_kw1.dat', 'tdeck_kw1', ok, em)
+      CALL require(ok, 'TorsStiffness '//TRIM(WORDS(k))//' is accepted: '//TRIM(em))
+      CALL require(same_file('tdeck_kw0.out', 'tdeck_kw1.out'), 'TorsStiffness '//TRIM(WORDS(k))//' = Rigid')
+    END DO
+  END SUBROUTINE check_rigid_keywords
 
   SUBROUTINE check_sweep()
     !! Sagging heavy line (EI 1e4, GJ 1e4) clamped at both ends; pretwist 0..1080 deg in 90 deg
@@ -813,6 +840,27 @@ CONTAINS
     CALL require(.NOT. ok .AND. INDEX(em, needle) > 0, label//' (got: '//TRIM(em)//')')
   END SUBROUTINE expect_error
 
+  SUBROUTINE check_one_end_two_moving()
+    !! One restrained end is ignored before the torsion rules: on a line with two moving ends
+    !! (Coupled to Free, dynamic) the one-end row gets exactly the verdict of the six-column rows,
+    !! not the torsion rule "two moving ends".
+    LOGICAL :: ok0, ok1
+    CHARACTER(512) :: em0, em1
+    CHARACTER(48), PARAMETER :: PTS(2) = [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', &
+                                                                                     '2 Free 100.0 0.0 -50.0 100 0 0 0']
+    CALL write_deck('tdeck_om0.dat', [neutral_type], no_rows, PTS, [CHARACTER(16) :: '1 1 2 -'], &
+                    [CHARACTER(24) :: '1 cab 100.0 40'], [CHARACTER(96) :: '1 A Pinned 1 0 0', '1 B Pinned 1 0 0'], &
+                    [CHARACTER(24) :: '0.1 dtM', '1.0 TMax'], [CHARACTER(16) :: 'FairTen1'])
+    CALL write_deck('tdeck_om1.dat', [neutral_type], no_rows, PTS, [CHARACTER(16) :: '1 1 2 -'], &
+                    [CHARACTER(24) :: '1 cab 100.0 40'], &
+                    [CHARACTER(96) :: '1 A Pinned 1 0 0 Free 0 0 1 0', '1 B Pinned 1 0 0 Rigid 0 0 1 0'], &
+                    [CHARACTER(24) :: '0.1 dtM', '1.0 TMax'], [CHARACTER(16) :: 'FairTen1'])
+    CALL run_deck('tdeck_om0.dat', 'tdeck_om0', ok0, em0)
+    CALL run_deck('tdeck_om1.dat', 'tdeck_om1', ok1, em1)
+    CALL require((ok0 .EQV. ok1) .AND. TRIM(em0) == TRIM(em1) .AND. INDEX(em1, 'two moving ends') == 0, &
+                 'one restrained end on a line with two moving ends: the six-column verdict (got: '//TRIM(em1)//')')
+  END SUBROUTINE check_one_end_two_moving
+
   SUBROUTINE roll_error_deck(path, roll0, every_row)
     !! The roll deck with a motionFile whose roll column starts at roll0 deg and, unless
     !! every_row, is missing on the last row.
@@ -851,6 +899,12 @@ CONTAINS
     CALL expect_error('a normal along Ez is named', 'tdeck_e5.dat', 'tdeck_e5', 'must not be parallel')
     CALL straight_deck('tdeck_e6.dat', 'Rigid 1 0 0 Rigid 0 NaN 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
     CALL expect_error('a non-finite normal is named', 'tdeck_e6.dat', 'tdeck_e6', 'is not a finite number')
+    ! a twist far beyond the buckling onset: the failed stage is named once, with its line
+    t10(1) = 'cab 0.2 32.2013246 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
+    CALL straight_deck('tdeck_e15.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 36000', OUTS, t10)
+    CALL expect_error('a failed torsion stage is named without a doubled prefix', 'tdeck_e15.dat', 'tdeck_e15', &
+                      'CableDyn_DeckDriver: line 1: finite-EI torsion static solve failed')
+    CALL check_one_end_two_moving()
     t10(1) = 'cab 0.2 32.2 1.0e9 0.0 1.0e6 0.0 0.0 0.0 0.0TEN'
     CALL straight_deck('tdeck_e7.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS, t10)
     CALL expect_error('a torsional line without GJ is named', 'tdeck_e7.dat', 'tdeck_e7', 'must give an explicit GJ')
