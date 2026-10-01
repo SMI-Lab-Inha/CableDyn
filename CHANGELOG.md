@@ -10,13 +10,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
-- Static torsion of finite-EI lines (condensed isotropic torsion): optional `END CONNECTIONS`
-  columns `TorsStiffness NxX NxY NxZ [Pretwist]` restrain the twist at a line end (`Free`,
-  `Rigid` or a stiffness) with a reference normal and a pretwist in degrees. A line restrained
-  at both ends needs an explicit `GJ` and is solved with its imposed twist, a stability check
-  and buckling descent; the torque is returned to a Rigid6 body at End A. New channels
-  `Torq<L>N<J>`, `Twist<L>N<J>` and `Twist<L>`. Statics only (`TMax 0`) in the standalone
-  driver; dynamic, modal and coupled OpenFAST/FAST.Farm runs with torsion stop with an error.
+- Torsion of finite-EI lines (condensed isotropic torsion, quasi-static: no torsional
+  inertia): optional `END CONNECTIONS` columns `TorsStiffness NxX NxY NxZ [Pretwist]` restrain
+  the twist at a line end (`Free`, `Rigid` or a stiffness) with a reference normal and a
+  pretwist in degrees. A line restrained at both ends needs an explicit `GJ`. Statics solve the
+  imposed twist with a stability check and buckling descent; dynamics carry the torque in every
+  step, with End A's frame turning with its body or vessel and an optional `motionFile` roll
+  column for an imposed twist history. The torque is returned to a Rigid6 body at End A, in
+  statics (for any ratio of the body's restoring stiffness to GJ/L) and in dynamics. New
+  channels `Torq<L>N<J>`, `Twist<L>N<J>` and `Twist<L>`, and Torque and Twist range envelopes.
+  The Python deck tools accept the new columns and channels. Modal analysis and coupled
+  OpenFAST/FAST.Farm runs with torsion stop with an error.
 
 ### Fixed
 
