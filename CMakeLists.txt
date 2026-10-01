@@ -563,6 +563,12 @@ target_link_libraries(test_hermite_cable PRIVATE cabledyn_core)
 add_test(NAME hermite_cable COMMAND test_hermite_cable)
 set_tests_properties(hermite_cable PROPERTIES LABELS "fortran;unit;static")
 
+add_executable(test_hermite_torsion_kernel tests/test_hermite_torsion_kernel.f90)
+target_link_libraries(test_hermite_torsion_kernel PRIVATE cabledyn_core)
+add_test(NAME hermite_torsion_kernel
+         COMMAND test_hermite_torsion_kernel ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_oracle_reference.txt)
+set_tests_properties(hermite_torsion_kernel PROPERTIES LABELS "fortran;unit;static")
+
 add_executable(test_hermite_cable_static tests/test_hermite_cable_static.f90)
 target_link_libraries(test_hermite_cable_static PRIVATE cabledyn_core)
 add_test(NAME hermite_cable_static COMMAND test_hermite_cable_static)
@@ -1958,6 +1964,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_robust_init
       test_line
       test_hermite_cable
+      test_hermite_torsion_kernel
       test_hermite_cable_static
       test_hermite_sequenced
       test_hermite_resolution
