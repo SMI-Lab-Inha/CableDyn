@@ -125,7 +125,19 @@ _FIELDS = {
     "point": ("id", "type", "x", "y", "z", "mass", "vol", "cda", "ca"),
     "line": ("id", "nodea", "nodeb", "outputs"),
     "section": ("lineid", "linetype", "length", "numsegs"),
-    "end_connection": ("lineid", "end", "stiffness", "ezx", "ezy", "ezz"),
+    "end_connection": (
+        "lineid",
+        "end",
+        "stiffness",
+        "ezx",
+        "ezy",
+        "ezz",
+        "torsstiffness",
+        "nxx",
+        "nxy",
+        "nxz",
+        "pretwist",
+    ),
 }
 _PATH_OPTIONS = {
     "bathymetryfile",
@@ -300,6 +312,8 @@ _ROD_ATTACHMENT_ALIASES = {
     "cpld": "coupled",
 }
 _RIGID_END_CONNECTIONS = frozenset({"rigid", "infinity", "inf"})
+# Native TORS_NX_PARALLEL_TOL: smallest |Nx x Ez| of unit vectors (about 0.06 degrees off Ez).
+_TORSION_NORMAL_PARALLEL_TOL = 1.0e-3
 _WATERKIN_FILENAME_LETTERS = frozenset("abcdfghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
 # MoorDyn-C kinematics files the native reader opens by fixed name in the deck folder
 # (read_moordyn_c_kinematics): WaveKin 3, WaveKin 7 and Currents 1.
@@ -629,7 +643,11 @@ def _native_positive_int(text: str, first: int, last: int) -> int:
 def _parse_line_node_channel(lowered: str) -> tuple[int, int, int, int]:
     """Mirror the native ``parse_line_node_channel``: (line, node, kind, component)."""
     last = len(lowered)
-    for keyword, code in (("ten", 3), ("curv", 5), ("bendmom", 6)):
+    if lowered.startswith("twist") and last > 5 and "n" not in lowered[5:]:
+        # Twist<L>: the line's total twist (node 1)
+        line_id = _native_positive_int(lowered, 6, last)
+        return (line_id, 1, 11, 0) if line_id > 0 else (line_id, 0, 0, 0)
+    for keyword, code in (("torq", 9), ("twist", 10), ("ten", 3), ("curv", 5), ("bendmom", 6)):
         if lowered.startswith(keyword):
             prefix = len(keyword)
             separator = lowered.find("n", prefix)
@@ -696,7 +714,7 @@ def _channel_identity_key(channel: str) -> str:
     if touchdown is not None and int(touchdown.group(1)) > 0:
         component = ("s", "x", "y", "z", "lay", "exc").index(touchdown.group(2)) + 1
         return f"tdp:{int(touchdown.group(1))}:{component}"
-    if lowered.startswith(("ten", "curv", "bendmom", "l")):
+    if lowered.startswith(("ten", "curv", "bendmom", "l", "torq", "twist")):
         line_id, node_id, kind, component = _parse_line_node_channel(lowered)
         if line_id > 0 and node_id > 0 and kind > 0:
             return f"node:{line_id}:{node_id}:{kind}:{component}"
@@ -792,7 +810,8 @@ def _text_columns(section: str, width: int) -> frozenset[int]:
     if section == "RODS":
         return frozenset({1, 2, 10})
     if section == "END CONNECTIONS":
-        return frozenset({1, 2})
+        # End, Stiffness and the optional TorsStiffness keyword
+        return frozenset({1, 2, 6}) if width >= 10 else frozenset({1, 2})
     if section in {"POINTS", "SECTIONS", "BODIES"}:
         return frozenset({1})
     if section in {"ROD TYPES", "EQUIVALENT BUOYANCY"}:
@@ -2384,6 +2403,7 @@ class DeckFile:
         # name -> (Diam, MassDenInAir, static EA, EI) as written in LINE TYPES
         line_type_scales: dict[str, tuple[float, float]] = {}  # name -> (BA, max Cd/Ca)
         line_type_meta: dict[str, tuple[float, float, float, float]] = {}
+        line_type_gj: dict[str, float] = {}  # name -> explicit GJ of a 14-column row, else 0
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
@@ -2466,6 +2486,9 @@ class DeckFile:
                 numeric(row.tokens[2], row, "Mass"),
                 ea_static,
                 ei,
+            )
+            line_type_gj[row.tokens[0].lower()] = (
+                numeric(row.tokens[7], row, "GJ") if len(row.tokens) == 14 else 0.0
             )
             # Syrope keeps its BA_s on the working-curve model (native BA slot = 0)
             line_type_scales[row.tokens[0].lower()] = (
@@ -2823,9 +2846,15 @@ class DeckFile:
         self._check_attachments(line_ids, section_types_by_line, line_type_meta, line_lengths)
 
         assigned_end_connections: set[tuple[str, str]] = set()
+        # line id -> {end: torsionally restrained} from the optional torsion columns
+        torsion_ends: dict[str, dict[str, bool]] = {}
         for row in self.end_connections:
-            if len(row.tokens) != 6:
-                raise DeckFormatError(f"{self._at(row)}: END CONNECTIONS row needs 6 fields")
+            if len(row.tokens) not in (6, 10, 11):
+                raise DeckFormatError(
+                    f"{self._at(row)}: END CONNECTIONS row needs 6 fields "
+                    "(LineID End Stiffness EzX EzY EzZ), or 10 or 11 with the torsion columns "
+                    "(... TorsStiffness NxX NxY NxZ [Pretwist])"
+                )
             try:
                 line_id = str(_native_int(row.tokens[0]))
             except ValueError as exc:
@@ -2872,6 +2901,53 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{self._at(row)}: END CONNECTIONS direction must be non-zero"
                 )
+            if len(row.tokens) > 6:
+                # native append_end_connection: TorsStiffness NxX NxY NxZ [Pretwist]
+                torsion_token = row.tokens[6].lower()
+                if torsion_token in {"free", "zero"}:
+                    restrained = False
+                elif torsion_token in _RIGID_END_CONNECTIONS:
+                    restrained = True
+                else:
+                    try:
+                        torsion_k = _table_float(row.tokens[6])
+                    except ValueError:
+                        torsion_k = -1.0
+                    if not math.isfinite(torsion_k) or torsion_k < 0.0:
+                        raise DeckFormatError(
+                            f"{self._at(row)}: END CONNECTIONS torsional stiffness must be finite "
+                            "and non-negative, Free, or Rigid"
+                        )
+                    restrained = torsion_k > 0.0
+                normal = [
+                    numeric(
+                        row.tokens[index],
+                        row,
+                        f"END CONNECTIONS reference normal column {index + 1}",
+                    )
+                    for index in range(7, 10)
+                ]
+                if len(row.tokens) == 11:
+                    numeric(row.tokens[10], row, "END CONNECTIONS pretwist")
+                normal_norm = math.sqrt(sum(value * value for value in normal))
+                if not math.isfinite(normal_norm) or normal_norm <= math.sqrt(sys.float_info.min):
+                    raise DeckFormatError(
+                        f"{self._at(row)}: END CONNECTIONS torsion reference normal "
+                        "(NxX NxY NxZ) must be non-zero"
+                    )
+                nx = [value / normal_norm for value in normal]
+                ez = [value / norm for value in direction]
+                parallel = math.sqrt(
+                    (nx[1] * ez[2] - nx[2] * ez[1]) ** 2
+                    + (nx[2] * ez[0] - nx[0] * ez[2]) ** 2
+                    + (nx[0] * ez[1] - nx[1] * ez[0]) ** 2
+                )
+                if parallel < _TORSION_NORMAL_PARALLEL_TOL:
+                    raise DeckFormatError(
+                        f"{self._at(row)}: END CONNECTIONS torsion reference normal "
+                        "(NxX NxY NxZ) must not be parallel to the direction Ez"
+                    )
+                torsion_ends.setdefault(line_id, {})[end] = restrained
             if non_pinned:
                 has_finite_ei = any(
                     line_type_meta[line_type][3] > 0.0
@@ -2952,6 +3028,17 @@ class DeckFile:
             )
             for row in bodies
         }
+        torsion_lines = self._check_torsion_lines(
+            torsion_ends,
+            section_types_by_line,
+            line_type_meta,
+            line_type_gj,
+            normalized_line_endpoints,
+            point_types,
+            body_types,
+            option_by_key,
+            has_tmax,
+        )
 
         rod_types = self._rows("ROD TYPES")
         for row in rod_types:
@@ -3605,6 +3692,35 @@ class DeckFile:
                         f"{self._label}: OUTPUT {channel!r} references an unknown line"
                     )
                 continue
+            if lowered.startswith(("torq", "twist")):
+                # native: Torq<L>N<J>, Twist<L>N<J> and Twist<L> on a torsional line
+                line_number, node_id, kind, _ = _parse_line_node_channel(lowered)
+                line_id = str(line_number)
+                if (
+                    node_id == 0
+                    and line_id in line_ids
+                    and re.search(r"[0-9]n0(?![0-9])", lowered) is not None
+                ):
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: node numbers start at 1 = End A "
+                        "(MoorDyn numbers from N0)"
+                    )
+                if line_id not in line_ids or kind == 0 or node_id < 1:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: bad torsion channel (use "
+                        "Torq<L>N<J>, Twist<L>N<J> or Twist<L>, with a known line id)"
+                    )
+                if node_id > line_nelems[line_id] + 1:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r} node exceeds the line node count"
+                    )
+                if line_id not in torsion_lines:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: line {line_id} is not torsionally "
+                        "restrained at both ends (END CONNECTIONS TorsStiffness), so it carries "
+                        "no torque"
+                    )
+                continue
             if lowered.startswith(("ten", "curv", "bendmom", "l")):
                 # native parse_line_node_channel: Ten/Curv/BendMom<L>N<J>, L<L>N<J>...
                 line_number, node_id, kind, _ = _parse_line_node_channel(lowered)
@@ -3629,6 +3745,106 @@ class DeckFile:
                         )
                     continue
             raise DeckFormatError(f"{self._label}: unsupported OUTPUT channel {channel!r}")
+
+    def _check_torsion_lines(
+        self,
+        torsion_ends: dict[str, dict[str, bool]],
+        section_types_by_line: dict[str, list[str]],
+        line_type_meta: dict[str, tuple[float, float, float, float]],
+        line_type_gj: dict[str, float],
+        normalized_line_endpoints: dict[str, tuple[str, str]],
+        point_types: dict[str, str],
+        body_types: dict[str, str],
+        option_by_key: dict[str, DeckRecord],
+        has_tmax: bool,
+    ) -> set[str]:
+        """Native ``check_torsion_line`` and the driver's torsion scope; the torsional lines.
+
+        A line with a torsional END CONNECTIONS restraint (TorsStiffness Rigid or a
+        stiffness) must be finite-EI with a Fixed End B. Restrained at both ends, torsion is
+        solved: every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
+        rod end nor on a body other than Rigid6. A deck with torsion runs dynamics only with
+        the force-blended generalised-alpha and takes no modal analysis; the coupled routes
+        refuse any torsion column.
+        """
+        attachment_lines = set()
+        for row in self._rows("ATTACHMENTS"):
+            try:
+                attachment_lines.add(str(_native_int(row.tokens[0])))
+            except ValueError:
+                continue
+        torsion_lines: set[str] = set()
+        for line_id, ends in torsion_ends.items():
+            if not any(ends.values()):
+                continue
+            if self.caller_driven:
+                raise DeckFormatError(
+                    f"{self._label}: torsion is not yet supported in coupled OpenFAST runs (nor on "
+                    "the mixed EI = 0 + finite-EI aggregate route or in FAST.Farm); set "
+                    "TorsStiffness Free in the END CONNECTIONS rows"
+                )
+            if not any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id]):
+                raise DeckFormatError(
+                    f"{self._label}: torsional END CONNECTIONS (TorsStiffness Rigid or a "
+                    f"stiffness) require a finite-EI line; line {line_id} has EI = 0"
+                )
+            end_a, end_b = normalized_line_endpoints[line_id]
+            if point_types[end_b] != "fixed":
+                raise DeckFormatError(
+                    f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
+                    f"End B; line {line_id} has two moving ends"
+                )
+            if not (ends.get("a", False) and ends.get("b", False)):
+                continue
+            for name in section_types_by_line[line_id]:
+                if not line_type_gj[name] > 0.0:
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id} is torsionally restrained at both ends: "
+                        f'its LINE TYPES row "{name}" must give an explicit GJ > 0 (the 14-column '
+                        "row; torsion has no EI/1.3 default)"
+                    )
+            if line_id in attachment_lines:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: torsion is not combined with ATTACHMENTS "
+                    "in this build"
+                )
+            if _rod_point(point_types[end_a]) is not None:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a rod end is "
+                    "not supported (a rod has no spin angle in this build)"
+                )
+            body_id = _body_point_id(point_types[end_a])
+            if body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a body needs "
+                    "a Rigid6 body"
+                )
+            torsion_lines.add(line_id)
+        if not torsion_lines:
+            return torsion_lines
+        tmax_row = option_by_key.get("tmax")
+        dynamic = has_tmax and tmax_row is not None and _native_float(tmax_row.values[0]) > 0.0
+        blend_row = option_by_key.get("alpha_force_blend")
+        force_blend = blend_row is None or blend_row.values[0].lower() in {
+            "true",
+            "t",
+            "yes",
+            "y",
+            "on",
+            "1",
+        }
+        if dynamic and not force_blend:
+            raise DeckFormatError(
+                f"{self._label}: torsion in a dynamic run needs the force-blended "
+                "generalised-alpha (OPTION alpha_force_blend True)"
+            )
+        modes_row = option_by_key.get("n_modes")
+        if modes_row is not None and round(_native_float(modes_row.values[0])) > 0:
+            raise DeckFormatError(
+                f"{self._label}: modal analysis (OPTION nModes) of a line with torsion is not "
+                "yet supported"
+            )
+        return torsion_lines
 
     def _line_type_fields(self, record: DeckRecord) -> tuple[str, ...]:
         fields = _FIELDS["line_type"]

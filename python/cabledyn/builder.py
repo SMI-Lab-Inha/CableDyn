@@ -89,6 +89,8 @@ __all__ = [
 ]
 
 _END_CONNECTION_KEYWORDS = _PINNED_END_CONNECTIONS | _RIGID_END_CONNECTIONS
+# TorsStiffness keywords of the optional END CONNECTIONS torsion columns
+_TORSION_KEYWORDS = frozenset({"free", "zero"}) | _RIGID_END_CONNECTIONS
 
 Vec3 = tuple[float, float, float]
 """A three-component vector ``(x, y, z)``."""
@@ -107,7 +109,8 @@ _CHANNEL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     ("line", re.compile(r"(tdp)([0-9]+)(s|x|y|z|lay|exc)", re.IGNORECASE)),
-    ("line", re.compile(r"(ten|curv|bendmom)([0-9]+)(n[0-9]+)", re.IGNORECASE)),
+    ("line", re.compile(r"(ten|curv|bendmom|torq)([0-9]+)(n[0-9]+)", re.IGNORECASE)),
+    ("line", re.compile(r"(twist)([0-9]+)(n[0-9]+|)", re.IGNORECASE)),
     ("line", re.compile(r"(l)([0-9]+)(n[0-9]+(?:[pva][xyz]|dec|azi))", re.IGNORECASE)),
     ("point", re.compile(r"(point|con)([0-9]+)(p[xyz])", re.IGNORECASE)),
     ("point", re.compile(r"(point)([0-9]+)(f[xyzh])", re.IGNORECASE)),
@@ -543,12 +546,22 @@ class EndConnection:
         Rotational stiffness in N m/rad, ``Pinned``, or ``Rigid``.
     direction : tuple[float, float, float]
         Non-zero reference direction (End A to End B convention).
+    torsion_stiffness : float | str | None
+        Optional torsional restraint: ``Free``, ``Rigid`` or a stiffness in N m/rad; ``None``
+        writes the six-column row (no torsion columns).
+    normal : tuple[float, float, float] | None
+        Zero-twist reference normal in the frame of ``direction`` (with ``torsion_stiffness``).
+    pretwist : float | None
+        Optional roll of the end frame about ``direction``, in degrees.
     """
 
     line: Line
     end: str
     stiffness: float | str
     direction: Vec3
+    torsion_stiffness: float | str | None = None
+    normal: Vec3 | None = None
+    pretwist: float | None = None
 
 
 @dataclass(eq=False)
@@ -1906,6 +1919,10 @@ class DeckModel:
         end: str,
         stiffness: float | str,
         direction: Sequence[float],
+        *,
+        torsion_stiffness: float | str | None = None,
+        normal: Sequence[float] | None = None,
+        pretwist: float | None = None,
     ) -> EndConnection:
         """Add an ``END CONNECTIONS`` row; see :class:`EndConnection`.
 
@@ -1917,8 +1934,10 @@ class DeckModel:
         Raises
         ------
         ValueError
-            If ``end`` is not A or B, that line end already has a row, or
-            ``direction`` does not hold three values.
+            If ``end`` is not A or B, that line end already has a row,
+            ``direction`` or ``normal`` does not hold three values, or the
+            torsion columns are incomplete (``torsion_stiffness`` and ``normal``
+            go together; ``pretwist`` needs them).
         """
         target = self._line(line)
         letter = _end_letter(end)
@@ -1926,8 +1945,26 @@ class DeckModel:
             raise ValueError(f"line {target.id} End {letter} already has an end connection")
         if len(direction) != 3:
             raise ValueError(f"end-connection direction must be three numbers, got {direction!r}")
+        if (torsion_stiffness is None) != (normal is None):
+            raise ValueError("end-connection torsion_stiffness and normal must be given together")
+        if pretwist is not None and torsion_stiffness is None:
+            raise ValueError("end-connection pretwist needs torsion_stiffness and normal")
+        torsion_normal: Vec3 | None = None
+        if normal is not None:
+            if len(normal) != 3:
+                raise ValueError(f"end-connection normal must be three numbers, got {normal!r}")
+            nx, ny, nz = normal
+            torsion_normal = (nx, ny, nz)
         x, y, z = direction
-        item = EndConnection(target, letter, stiffness, (x, y, z))
+        item = EndConnection(
+            target,
+            letter,
+            stiffness,
+            (x, y, z),
+            torsion_stiffness=torsion_stiffness,
+            normal=torsion_normal,
+            pretwist=pretwist,
+        )
         self._end_connections.append(item)
         return item
 
@@ -2682,7 +2719,21 @@ class DeckModel:
                 else _num(row.stiffness, what)
             )
             direction = _vec(row.direction, 3, f"{what} direction")
-            rows.append([_int(row.line.id, what), _end_letter(row.end), stiffness, *direction])
+            cells = [_int(row.line.id, what), _end_letter(row.end), stiffness, *direction]
+            if row.torsion_stiffness is not None:
+                cells.append(
+                    _text(row.torsion_stiffness, what)
+                    if isinstance(row.torsion_stiffness, str)
+                    else _num(row.torsion_stiffness, what)
+                )
+                cells.extend(_vec(row.normal, 3, f"{what} normal"))
+                if row.pretwist is not None:
+                    cells.append(_num(row.pretwist, f"{what} pretwist"))
+            rows.append(cells)
+        if any(row.torsion_stiffness is not None for row in self._end_connections):
+            header = "LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist"
+            units = "(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)"
+            return header, units, rows
         header = "LineID End Stiffness EzX EzY EzZ"
         return header, "(-) (-) (N-m/rad) (-) (-) (-)", rows
 
@@ -2890,7 +2941,19 @@ class _Loader:
             t = row.tokens
             # Pinned/Free/Zero and Rigid/Infinity/Inf are keywords, not numbers
             stiffness: float | str = t[2] if t[2].lower() in _END_CONNECTION_KEYWORDS else _f(t[2])
-            model.add_end_connection(_native_int(t[0]), t[1], stiffness, _f3(t[3:6]))
+            if len(t) >= 10:
+                torsion: float | str = t[6] if t[6].lower() in _TORSION_KEYWORDS else _f(t[6])
+                model.add_end_connection(
+                    _native_int(t[0]),
+                    t[1],
+                    stiffness,
+                    _f3(t[3:6]),
+                    torsion_stiffness=torsion,
+                    normal=_f3(t[7:10]),
+                    pretwist=_f(t[10]) if len(t) == 11 else None,
+                )
+            else:
+                model.add_end_connection(_native_int(t[0]), t[1], stiffness, _f3(t[3:6]))
         for row in self.rows("EQUIVALENT BUOYANCY"):
             t = row.tokens
             model.add_equivalent_buoyancy(t[0], _f(t[1]), _f(t[2]))

@@ -757,3 +757,175 @@ def test_coupled_route_takes_no_motion_file_and_needs_a_line():
     )
     DeckFile.from_text(no_lines)
     _rejects(no_lines, "needs at least one line", caller_driven=True)
+
+
+# --------------------------------------------------------------------------- torsion
+
+# A straight finite-EI line clamped at a Coupled and a Fixed point with the optional torsion
+# columns of END CONNECTIONS (the native torsion deck gate's pure-torsion deck).
+_TORSION = f"""\
+{_BAR} CableDyn Input File {_BAR}
+in-memory fixture: a straight finite-EI line restrained in torsion at both ends
+{_BAR} LINE TYPES {_BAR}
+Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat
+cab 0.2 32.2 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0
+{_BAR} POINTS {_BAR}
+ID Type X Y Z Mass Vol CdA Ca
+1 Coupled 0.0 0.0 -50.0 0 0 0 0
+2 Fixed 100.0 0.0 -50.0 0 0 0 0
+{_BAR} LINES {_BAR}
+ID NodeA NodeB Outputs
+1 1 2 -
+{_BAR} SECTIONS {_BAR}
+LineID LineType Length NumSegs
+1 cab 100.0 40
+{_BAR} END CONNECTIONS {_BAR}
+LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist
+1 A Rigid 1 0 0 Rigid 0 0 1 0
+1 B Rigid 1 0 0 Rigid 0 0 1 720
+{_BAR} OPTIONS {_BAR}
+9.80665 g
+1025.0 rhoW
+50.0 WtrDpth
+0.1 dtM
+0.0 TMax
+{_BAR} OUTPUTS {_BAR}
+Torq1N1
+Twist1N41
+Twist1
+{_BAR} need this line {_BAR}
+"""
+_TORSION_ROW_A = "1 A Rigid 1 0 0 Rigid 0 0 1 0\n"
+
+
+def test_torsion_end_connection_columns_are_accepted():
+    deck = DeckFile.from_text(_TORSION)
+    assert len(deck.end_connections[0].tokens) == 10 + 1
+    # ten columns (no pretwist), keywords and a finite stiffness, mixed with six-column rows
+    DeckFile.from_text(_edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 1.0e5 0 0 1\n")))
+    DeckFile.from_text(_edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Inf 0 1 1 -45\n")))
+    six = _edit(
+        _TORSION,
+        (_TORSION_ROW_A, "1 A Rigid 1 0 0\n"),
+        ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n"),
+    )
+    DeckFile.from_text(six)
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        ("1 A Rigid 1 0 0 Rigid 0 0\n", "or 10 or 11 with the torsion columns"),
+        ("1 A Rigid 1 0 0 Rigid 0 0 1 0 0\n", "or 10 or 11 with the torsion columns"),
+        ("1 A Rigid 1 0 0 Stiff 0 0 1 0\n", "torsional stiffness must be finite and non-negative"),
+        ("1 A Rigid 1 0 0 -1.0 0 0 1 0\n", "torsional stiffness must be finite and non-negative"),
+        ("1 A Rigid 1 0 0 Rigid 0 0 0 0\n", r"reference normal \(NxX NxY NxZ\) must be non-zero"),
+        ("1 A Rigid 1 0 0 Rigid 2 0 0 0\n", "must not be parallel to the direction Ez"),
+        ("1 A Rigid 1 0 0 Rigid 0 x 1 0\n", "reference normal column 9 must be numeric"),
+        ("1 A Rigid 1 0 0 Rigid 0 0 1 nan\n", "is not a finite number"),
+    ],
+)
+def test_torsion_end_connection_columns_follow_the_native_rules(row, message):
+    _rejects(_edit(_TORSION, (_TORSION_ROW_A, row)), message)
+
+
+def test_torsion_line_rules_follow_the_native_checks():
+    # torsion has no EI/1.3 default: the 10-column LINE TYPES row has no GJ
+    no_gj = _edit(
+        _TORSION,
+        (
+            "Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat\n",
+            "Name Diam Mass EA BA EI Cdn Cdt Can Cat\n",
+        ),
+        (
+            "cab 0.2 32.2 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0",
+            "cab 0.2 32.2 1.0e7 0.0 1.0e6 0 0 0 0",
+        ),
+    )
+    _rejects(no_gj, "must give an explicit GJ > 0")
+    ei0 = _edit(
+        _TORSION,
+        ("1.0e7 0.0 1.0e6 1.0e8", "1.0e7 0.0 0.0 1.0e8"),
+        ("1 A Rigid 1 0 0 Rigid", "1 A Pinned 1 0 0 Rigid"),
+        ("1 B Rigid 1 0 0 Rigid", "1 B Pinned 1 0 0 Rigid"),
+        ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n"),
+    )
+    _rejects(ei0, "require a finite-EI line; line 1 has EI = 0")
+    # one restrained end is accepted (it carries no torque), but takes no torsion channel
+    one_end = _edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"))
+    _rejects(one_end, "is not torsionally restrained at both ends")
+    DeckFile.from_text(_edit(one_end, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")))
+    # the dynamic run needs the force blend; modal analysis and the coupled routes refuse torsion
+    dynamic = _edit(_TORSION, ("0.0 TMax\n", "10.0 TMax\n"))
+    DeckFile.from_text(dynamic)
+    _rejects(
+        _options(dynamic, "False alpha_force_blend"), "needs the force-blended generalised-alpha"
+    )
+    _rejects(_options(_TORSION, "3 nModes"), "modal analysis .* with torsion is not yet supported")
+    _rejects(_TORSION, "not yet supported in coupled OpenFAST runs", caller_driven=True)
+
+
+@pytest.mark.parametrize(
+    ("channel", "message"),
+    [
+        ("Torq1N42", "node exceeds the line node count"),
+        ("Torq1N0", "node numbers start at 1"),
+        ("Torq2N1", "bad torsion channel"),
+        ("Twist0", "bad torsion channel"),
+        ("TwistN1", "bad torsion channel"),
+    ],
+)
+def test_torsion_channels_follow_the_native_rules(channel, message):
+    _rejects(_edit(_TORSION, ("Twist1\n", f"Twist1\n{channel}\n")), message)
+
+
+def test_torsion_channels_are_one_identity_per_quantity():
+    _rejects(_edit(_TORSION, ("Twist1\n", "Twist1\nTORQ01N1\n")), "duplicate")
+    DeckFile.from_text(_edit(_TORSION, ("Twist1\n", "Twist1\nTwist1N1\nTorq1N41\n")))
+
+
+def test_model_round_trips_the_torsion_columns():
+    model = DeckModel.from_text(_TORSION)
+    row_a, row_b = model.end_connections
+    assert (row_a.torsion_stiffness, row_a.normal, row_a.pretwist) == (
+        "Rigid",
+        (0.0, 0.0, 1.0),
+        0.0,
+    )
+    assert row_b.pretwist == 720.0
+    text = model.to_text()
+    assert "TorsStiffness" in text and "Pretwist" in text
+    again = DeckModel.from_text(text)
+    assert [(r.torsion_stiffness, r.normal, r.pretwist) for r in again.end_connections] == [
+        (r.torsion_stiffness, r.normal, r.pretwist) for r in model.end_connections
+    ]
+    DeckFile.from_text(text)
+    # a six-column row keeps six columns; the builder checks the torsion arguments
+    plain = DeckModel.from_text(
+        _edit(
+            _TORSION,
+            (_TORSION_ROW_A, "1 A Rigid 1 0 0\n"),
+            ("1 B Rigid 1 0 0 Rigid 0 0 1 720\n", ""),
+            ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n"),
+        )
+    )
+    assert "TorsStiffness" not in plain.to_text()
+    with pytest.raises(ValueError, match="must be given together"):
+        plain.add_end_connection(1, "B", "Rigid", (1.0, 0.0, 0.0), torsion_stiffness="Rigid")
+    with pytest.raises(ValueError, match="pretwist needs"):
+        plain.add_end_connection(1, "B", "Rigid", (1.0, 0.0, 0.0), pretwist=10.0)
+    with pytest.raises(ValueError, match="normal must be three numbers"):
+        plain.add_end_connection(
+            1, "B", "Rigid", (1.0, 0.0, 0.0), torsion_stiffness=1.0e4, normal=(0.0, 1.0)
+        )
+    added = plain.add_end_connection(
+        1,
+        "B",
+        "Rigid",
+        (1.0, 0.0, 0.0),
+        torsion_stiffness=1.0e4,
+        normal=(0.0, 0.0, 1.0),
+        pretwist=90.0,
+    )
+    assert added.torsion_stiffness == 1.0e4
+    assert "TorsStiffness" in plain.to_text()
