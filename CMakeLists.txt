@@ -1832,6 +1832,16 @@ foreach(_lozon_case IN ITEMS
     LABELS "fortran;driver;integration;example;lozon")
 endforeach()
 
+# Torsion example: a lazy-wave cable twisted two turns at the hang-off through the motionFile
+# roll column (condensed torsion, quasi-static).
+add_test(
+  NAME example_torsion_lazy_wave_hangoff_twist
+  COMMAND cabledyn
+    "${CMAKE_CURRENT_SOURCE_DIR}/examples/torsion_lazy_wave_hangoff_twist.dat"
+    "${CMAKE_CURRENT_BINARY_DIR}/example_torsion_lazy_wave_hangoff_twist")
+set_tests_properties(example_torsion_lazy_wave_hangoff_twist PROPERTIES
+  LABELS "fortran;driver;integration;example;dynamic")
+
 # The teaching/reference deck enumerates all active defaults and documents every
 # mutually exclusive alternative.  Keep it runnable so the canonical OPTIONS
 # example cannot drift away from the production parser.

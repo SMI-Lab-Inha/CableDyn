@@ -46,6 +46,7 @@ Copy a deck under a new name and keep every file it references at the same relat
 | `data/syrope/` | Syrope settings and original working-curve table used by `syrope_polyester_mooring.dat`. |
 | `data/lozon/` | Prescribed hang-off heave history for `lozon_gomex80_power_cable_motion.dat` and the script that generates it. |
 | `data/vessel/` | 6-DOF vessel-motion record for `lazy_wave_vessel_motion.dat`, the script that generates it, and the illustrative RAO table for `lazy_wave_vessel_rao.dat`. |
+| `data/torsion/` | Hang-off roll history (motionFile roll column) for `torsion_lazy_wave_hangoff_twist.dat` and the script that generates it. |
 | `data/range_tdp/` | Fairlead surge history for `chain_range_tdp.dat` and the script that generates it. |
 | `moordynC_wavekin/` | A deck with the MoorDyn-C `wave_frequencies.txt` and `current_profile.txt` files it reads from its own folder. |
 | `plot_range_envelope.py` | Plots the tension envelope of a range-graph file (`python plot_range_envelope.py <out_root>`). |
@@ -92,3 +93,13 @@ The seven `lozon_*` decks take their dimensions and static properties from Lozon
 The dynamic stiffness and dashpots in the 200 m and 800 m mooring decks are taken from
 CableDyn's MoorDyn viscoelastic validation case and are labelled as such in each deck; do not
 cite them as values from the paper.
+
+## Torsion
+
+`torsion_lazy_wave_hangoff_twist.dat` is the Gulf of Mexico 80 m lazy-wave cable with an
+illustrative torsional stiffness `GJ` of 50 kN·m², clamped and restrained in torsion at both
+ends through the `END CONNECTIONS` torsion columns. The `motionFile` roll column twists the
+hang-off by two turns over 60 s; the run then holds the twist for 30 s. The torque settles at
+3.54 kN·m: the cable writhes 3.3 m out of its plane and takes up 30° of the 720° itself. The
+deck grammar is in [doc/driver_format.md](../doc/driver_format.md) and the model in the
+torsion section of [doc/theory.rst](../doc/theory.rst).
