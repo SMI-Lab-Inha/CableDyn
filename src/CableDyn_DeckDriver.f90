@@ -133,7 +133,8 @@ MODULE CableDyn_DeckDriver
                                   CD_Range_Commit_Sample, CD_Range_Clearance, CD_Range_TDP_Evaluate, &
                                   CD_Range_TDP_Reference, CD_Range_Write_Files, CD_Is_TDP_Channel, &
                                   CD_Parse_TDP_Channel, CD_RANGE_OK, CD_RANGE_BADINPUT, CD_RQ_TENSION, &
-                                  CD_RQ_CURVATURE, CD_RQ_BEND, CD_RQ_DECLINATION, CD_RQ_CLEARANCE, CD_TDP_N
+                                  CD_RQ_CURVATURE, CD_RQ_BEND, CD_RQ_DECLINATION, CD_RQ_CLEARANCE, CD_TDP_N, &
+                                  CD_RQ_TORQUE, CD_RQ_TWIST
   USE CableDyn_Conventions, ONLY: CD_Body_Rotation
   USE CableDyn_RigidKinematics, ONLY: CD_Rigid_Advance_Newmark, CD_RIGID_OK, CD_RIGID_NEWMARK_GAMMA, &
                                       CD_RIGID_NEWMARK_BETA
@@ -658,6 +659,11 @@ MODULE CableDyn_DeckDriver
     ! angular velocity and acceleration (3,t); an end connection on a vessel point turns with R.
     LOGICAL :: has_rot = .FALSE.
     REAL(wp), ALLOCATABLE :: rot(:, :, :), omega(:, :), alpha(:, :)
+    ! Roll column of motionFile point rows (read only on a deck with a torsional line): roll(p, t)
+    ! [rad] of the line end frames at point p about their directors, added to the END
+    ! CONNECTIONS Pretwist of those ends; has_roll when some row gives one.
+    LOGICAL :: has_roll = .FALSE.
+    REAL(wp), ALLOCATABLE :: roll(:, :)
   END TYPE
 
   TYPE :: DriverProgress
@@ -2680,7 +2686,15 @@ CONTAINS
       END IF
     END IF
     IF (tors_line) THEN
-      CALL CD_HFMF_Set_Torsion(cable, tors, es, em)
+      ! The End A torsion frame (director -Ez, reference normal Nx, in the frame of Ez) is held
+      ! by End A's parent and turns with it in the dynamics, whatever the bending connection.
+      BLOCK
+        REAL(wp) :: tframe(3, 2)
+        tframe(:, 1) = -ln%endconn_ez_ref(:, 1)/NORM2(ln%endconn_ez_ref(:, 1))
+        tframe(:, 2) = ln%tors_nx(:, 1) - DOT_PRODUCT(ln%tors_nx(:, 1), tframe(:, 1))*tframe(:, 1)
+        tframe(:, 2) = tframe(:, 2)/NORM2(tframe(:, 2))
+        CALL CD_HFMF_Set_Torsion(cable, tors, es, em, coupled_frame_parent=tframe, parent_orientation=fairlead_dcm)
+      END BLOCK
       IF (es /= CD_HFMF_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable torsion wiring failed: '//TRIM(em)); RETURN
       END IF
@@ -6093,18 +6107,19 @@ CONTAINS
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, failures=fails)
     IF (ErrStat /= 0) RETURN
-    ! Torsion (both ends of a line torsionally restrained) runs in statics only in this build: the
-    ! standalone cubic-Hermite route with TMax = 0, with or without bodies. One restrained end
-    ! carries no torque (the other end is free to twist), so it is noted and ignored.
+    ! Torsion (both ends of a line torsionally restrained) runs on the standalone cubic-Hermite
+    ! route and the multibody march, in statics and dynamics (quasi-static torsion: no torsional
+    ! inertia). One restrained end carries no torque (the other end is free to twist), so it is
+    ! noted and ignored.
     DO li = 1, SIZE(lines)
       IF (COUNT(lines(li)%tors_mode /= TORS_FREE) == 1) WRITE (output_unit, '(A)') '  Note: line '// &
         TRIM(int_to_str(lines(li)%id))//' is torsionally restrained at one end only; with the other end free '// &
         'to twist it carries no torque, so no torsion is solved.'
     END DO
     IF (ANY([(line_torsion_active(lines(li)), li=1, SIZE(lines))])) THEN
-      IF (opts%has_tmax .AND. opts%tmax > CD_ZERO) THEN
-        CALL fail(ErrStat, ErrMsg, 'torsion is supported in statics only in this build: a deck with torsional '// &
-                  'END CONNECTIONS at both ends of a line needs TMax 0'); RETURN
+      IF (opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. .NOT. opts%alpha_force_blend) THEN
+        CALL fail(ErrStat, ErrMsg, 'torsion in a dynamic run needs the force-blended generalised-alpha (OPTION '// &
+                  'alpha_force_blend True)'); RETURN
       END IF
       IF (opts%n_modes > 0) THEN
         CALL fail(ErrStat, ErrMsg, 'modal analysis (OPTION nModes) of a line with torsion is not yet supported'); RETURN
@@ -23443,7 +23458,10 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'Hermite standalone cable count does not match line count'); RETURN
     END IF
     IF (opts%has_motion_file) THEN
-      CALL read_motion_file(opts%motion_file, points, opts, motion, ErrStat, ErrMsg)
+      CALL read_motion_file(opts%motion_file, points, opts, motion, ErrStat, ErrMsg, &
+                            with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]))
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL check_motion_roll(ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! Install row 1 without advancing the cable clock. The first pass makes the
       ! t=0 fluid sample use the prescribed geometry. The held-field setter refreshes
@@ -23519,6 +23537,12 @@ CONTAINS
                                     u_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
                                     u_angular_velocity=motion%omega(:, step + 1), &
                                     u_angular_acceleration=motion%alpha(:, step + 1))
+        ELSE IF (motion%has_roll .AND. line_torsion_active(lines(i)) .AND. &
+                 find_motion_point(motion, lines(i)%nodeA) > 0) THEN
+          ! imposed roll of End A about its director: Phi = Pretwist(B) - (Pretwist(A) + roll)
+          CALL CD_HFMF_UpdateStates(cables(i), up, uv, ua, es, em, &
+                                    u_twist=lines(i)%tors_pretwist(2) - lines(i)%tors_pretwist(1) - &
+                                    motion%roll(find_motion_point(motion, lines(i)%nodeA), step + 1))
         ELSE
           CALL CD_HFMF_UpdateStates(cables(i), up, uv, ua, es, em)
         END IF
@@ -23586,6 +23610,37 @@ CONTAINS
     converged = ErrStat == CD_DECKDRV_OK
     IF (converged) CALL range_write(ranges, out_root, ErrStat, ErrMsg)
     converged = ErrStat == CD_DECKDRV_OK
+
+  CONTAINS
+
+    SUBROUTINE check_motion_roll(est, emt)
+      !! The motionFile roll column drives a torsional line through its End A point only, and
+      !! starts from the static state (roll 0 at t = 0; a constant twist is the Pretwist).
+      INTEGER, INTENT(OUT) :: est
+      CHARACTER(*), INTENT(OUT) :: emt
+      INTEGER :: ip, li
+      LOGICAL :: used
+      est = CD_DECKDRV_OK
+      emt = ''
+      IF (.NOT. motion%has_roll) RETURN
+      DO ip = 1, motion%n_point
+        IF (.NOT. ANY(ABS(motion%roll(ip, :)) > CD_ZERO)) CYCLE
+        used = .FALSE.
+        DO li = 1, SIZE(lines)
+          IF (lines(li)%nodeA == motion%point_ids(ip) .AND. line_torsion_active(lines(li))) used = .TRUE.
+        END DO
+        IF (.NOT. used) THEN
+          CALL fail(est, emt, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' has a non-zero roll '// &
+                    'column, but no line restrained in torsion at both ends (END CONNECTIONS TorsStiffness) '// &
+                    'has its End A there'); RETURN
+        END IF
+        IF (ABS(motion%roll(ip, 1)) > CD_ZERO) THEN
+          CALL fail(est, emt, 'motionFile: the roll column of point '//TRIM(int_to_str(motion%point_ids(ip)))// &
+                    ' must be 0 at t = 0 (the static solve uses the END CONNECTIONS Pretwist, which takes a '// &
+                    'constant twist)'); RETURN
+        END IF
+      END DO
+    END SUBROUTINE check_motion_roll
   END SUBROUTINE write_hermite_dynamic_out
 
   SUBROUTINE write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
@@ -26811,7 +26866,12 @@ CONTAINS
     END SELECT
   END SUBROUTINE prescribed_point_state
 
-  SUBROUTINE read_motion_file(path, points, opts, motion, ErrStat, ErrMsg, include_rod_points, include_body_points)
+  SUBROUTINE read_motion_file(path, points, opts, motion, ErrStat, ErrMsg, include_rod_points, include_body_points, &
+                              with_roll)
+    !! Prescribed point motion: rows "time point_id x y z vx vy vz ax ay az". with_roll (a deck
+    !! with a torsional line) also reads an optional 12th column, the roll [deg] of the line end
+    !! frames at that point about their directors (motion%roll, radians); a point gives it on
+    !! every row or on none, and without with_roll a 12th token stays commentary.
     CHARACTER(*), INTENT(IN) :: path
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -26820,8 +26880,12 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: include_rod_points
     LOGICAL, INTENT(IN), OPTIONAL :: include_body_points
+    LOGICAL, INTENT(IN), OPTIONAL :: with_roll
 
     INTEGER :: unit, ios, ip, it, pid, nstep, lineno, row_status, ipt
+    LOGICAL :: read_roll, roll_ok
+    LOGICAL, ALLOCATABLE :: roll_seen(:, :)
+    CHARACTER(DECK_RECLEN) :: roll_tok
     REAL(wp) :: t, qv(3), vv(3), av(3), tol, row(11), trow(21), rq(3, 3), rp(3)
     CHARACTER(DECK_RECLEN) :: line
     CHARACTER(256) :: why
@@ -26835,6 +26899,8 @@ CONTAINS
     accept_body_points = .FALSE.
     IF (PRESENT(include_rod_points)) accept_rod_points = include_rod_points
     IF (PRESENT(include_body_points)) accept_body_points = include_body_points
+    read_roll = .FALSE.
+    IF (PRESENT(with_roll)) read_roll = with_roll
     CALL grid_step_count(opts%tmax, opts%dtM, nstep, grid_ok)
     IF (.NOT. grid_ok .OR. nstep < 0) THEN
       CALL fail(ErrStat, ErrMsg, 'motionFile needs finite dtM > 0 and TMax >= 0 with a representable step count')
@@ -26866,6 +26932,13 @@ CONTAINS
     motion%v = CD_ZERO
     motion%a = CD_ZERO
     seen = .FALSE.
+    ALLOCATE (roll_seen(MERGE(motion%n_point, 0, read_roll), MERGE(motion%n_time, 0, read_roll)), STAT=ios)
+    IF (ios == 0 .AND. read_roll) ALLOCATE (motion%roll(motion%n_point, motion%n_time), STAT=ios)
+    IF (ios /= 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'cannot allocate the motionFile roll table'); RETURN
+    END IF
+    roll_seen = .FALSE.
+    IF (read_roll) motion%roll = CD_ZERO
     tol = 100.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, opts%tmax)
     IF (opts%motion_kind /= MOTION_POINT_ROWS) THEN
       IF (accept_rod_points .OR. accept_body_points) THEN
@@ -27046,8 +27119,35 @@ CONTAINS
       motion%v(:, ip, it) = vv
       motion%a(:, ip, it) = av
       seen(ip, it) = .TRUE.
+      IF (read_roll) THEN
+        ! the optional roll column: a 12th token shaped like a number must be one
+        CALL get_token(line, 12, roll_tok, roll_ok)
+        IF (roll_ok) roll_ok = numeric_token_shape(roll_tok)
+        IF (roll_ok) THEN
+          CALL parse_real_token(roll_tok, motion%roll(ip, it), roll_ok)
+          IF (roll_ok) roll_ok = IEEE_IS_FINITE(motion%roll(ip, it))
+          IF (.NOT. roll_ok) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'the roll column (12th, degrees) must be a finite number')
+            CALL add_row_context('motionFile', lineno, line, ErrMsg)
+            RETURN
+          END IF
+          motion%roll(ip, it) = motion%roll(ip, it)*QUARTER_PI/45.0_wp
+          roll_seen(ip, it) = .TRUE.
+        END IF
+      END IF
     END DO
     CLOSE (unit)
+    IF (read_roll) THEN
+      DO ip = 1, motion%n_point
+        IF (ANY(roll_seen(ip, :)) .AND. .NOT. ALL(roll_seen(ip, :))) THEN
+          CALL fail(ErrStat, ErrMsg, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' gives the '// &
+                    'roll column (12th) on some rows only; give it on every row of the point or on none')
+          RETURN
+        END IF
+      END DO
+      motion%has_roll = ANY(roll_seen)
+    END IF
     IF (.NOT. ALL(seen)) THEN
       IF (accept_rod_points .OR. accept_body_points) THEN
         CALL fail(ErrStat, ErrMsg, 'motionFile must provide every eligible prescribed point at every dtM time')
@@ -28596,6 +28696,13 @@ CONTAINS
     CALL CD_Range_Setup(rset, ids, nnodes, want_r, want_t, opts%range_start, opts%has_wtrdpth, -opts%wtrdpth, &
                         es, em, bathymetry=bathymetry)
     CALL range_status(es, em, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DECKDRV_OK .OR. .NOT. ALLOCATED(rset%lines)) RETURN
+    ! a line with condensed torsion adds its torque and twist envelopes
+    DO i = 1, SIZE(lines)
+      k = i
+      IF (by_id) k = lines(i)%id
+      IF (k >= 1 .AND. k <= SIZE(rset%lines)) rset%lines(k)%has_torsion = line_torsion_active(lines(i))
+    END DO
   END SUBROUTINE range_setup
 
   SUBROUTINE range_setup_planned(rset, lines, channels, opts, ErrStat, ErrMsg, models, fmodels, system, cables, &
@@ -28840,6 +28947,17 @@ CONTAINS
       rl%val(CD_RQ_CURVATURE, j) = curv
       rl%val(CD_RQ_BEND, j) = bend
     END DO
+    IF (rl%has_torsion .AND. cable%line%torsion%active) THEN
+      ! condensed torsion: the committed torque (uniform) and the cable's own twist from End A
+      ! (public node 1, the last internal node), as the Torq<L>N<J> and Twist<L>N<J> channels
+      rl%val(CD_RQ_TORQUE, :) = cable%line%torsion%torque
+      rl%val(CD_RQ_TWIST, 1) = CD_ZERO
+      DO j = 2, nn
+        inode = nn + 1 - j
+        rl%val(CD_RQ_TWIST, j) = rl%val(CD_RQ_TWIST, j - 1) + cable%line%torsion%torque* &
+                                 cable%line%l0(inode)/cable%line%torsion%gj(inode)*45.0_wp/QUARTER_PI
+      END DO
+    END IF
   END SUBROUTINE range_sample_cable
 
   SUBROUTINE aggregate_line_positions(system, cables, line_is_cable, line_obj_index, line_id, r, ErrStat, ErrMsg)

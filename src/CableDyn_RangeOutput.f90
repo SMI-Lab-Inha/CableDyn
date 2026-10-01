@@ -6,7 +6,8 @@ MODULE CableDyn_RangeOutput
   !!
   !! A route samples a line at an output row by filling the line's scratch arrays in
   !! public node order (End A -> End B): positions r(3, nn) in the global frame and the
-  !! node values of the Ten, Curv, BendMom and L<L>N<J>Dec channels. This module then
+  !! node values of the Ten, Curv, BendMom and L<L>N<J>Dec channels (and, on a line with
+  !! condensed torsion, of Torq<L>N<J> and Twist<L>N<J>). This module then
   !! adds the seabed clearance, keeps the range envelopes (minimum, maximum and running
   !! sum per node, allocation-free after setup) and evaluates the touchdown point.
   !!
@@ -35,7 +36,8 @@ MODULE CableDyn_RangeOutput
   INTEGER, PARAMETER, PUBLIC :: CD_RANGE_OK = 0, CD_RANGE_BADINPUT = 1, CD_RANGE_SOLVEFAIL = 2
   ! Node quantities of a sample (rows of CD_RangeLine%val).
   INTEGER, PARAMETER, PUBLIC :: CD_RQ_TENSION = 1, CD_RQ_CURVATURE = 2, CD_RQ_BEND = 3, &
-                                CD_RQ_DECLINATION = 4, CD_RQ_CLEARANCE = 5, CD_RQ_N = 5
+                                CD_RQ_DECLINATION = 4, CD_RQ_CLEARANCE = 5, CD_RQ_TORQUE = 6, CD_RQ_TWIST = 7, &
+                                CD_RQ_N = 7
   ! Components of the TDP channels (TDP<L>s, x, y, z, Lay, Exc).
   INTEGER, PARAMETER, PUBLIC :: CD_TDP_S = 1, CD_TDP_X = 2, CD_TDP_Y = 3, CD_TDP_Z = 4, CD_TDP_LAY = 5, &
                                 CD_TDP_EXC = 6, CD_TDP_N = 6
@@ -45,6 +47,9 @@ MODULE CableDyn_RangeOutput
     INTEGER :: nn = 0
     LOGICAL :: want_range = .FALSE.
     LOGICAL :: want_tdp = .FALSE.
+    ! The line carries condensed torsion: the route also fills the torque and twist rows, and
+    ! the range file gets their columns (zero rows otherwise, and no columns).
+    LOGICAL :: has_torsion = .FALSE.
     ! Sample scratch filled by the route (public order End A -> End B).
     REAL(wp), ALLOCATABLE :: r(:, :)          ! (3, nn) global node positions
     REAL(wp), ALLOCATABLE :: val(:, :)        ! (CD_RQ_N, nn) node values
@@ -419,25 +424,37 @@ CONTAINS
     CHARACTER(*), INTENT(IN) :: out_root
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: il, unit, ios, j, k, nq, n
+    INTEGER :: il, unit, ios, j, k, nq, n, kq, rows(CD_RQ_N)
     CHARACTER(LEN(out_root) + 32) :: path
     CHARACTER(1) :: tab
     CHARACTER(16) :: id_text
     CHARACTER(*), PARAMETER :: NAMES(CD_RQ_N) = &
-                               [CHARACTER(11) :: 'Tension', 'Curvature', 'BendMoment', 'Declination', 'Clearance']
-    CHARACTER(*), PARAMETER :: UNITS(CD_RQ_N) = [CHARACTER(7) :: '(N)', '(1/m)', '(N.m)', '(deg)', '(m)']
+                               [CHARACTER(11) :: 'Tension', 'Curvature', 'BendMoment', 'Declination', 'Clearance', &
+                                                  'Torque', 'Twist']
+    CHARACTER(*), PARAMETER :: UNITS(CD_RQ_N) = [CHARACTER(7) :: '(N)', '(1/m)', '(N.m)', '(deg)', '(m)', '(N.m)', &
+                                                                                                              '(deg)']
     CHARACTER(*), PARAMETER :: STATS(3) = [CHARACTER(4) :: 'Min', 'Max', 'Mean']
 
     ErrStat = CD_RANGE_OK
     ErrMsg = ''
     IF (.NOT. set%active) RETURN
     tab = CHAR(9)
-    nq = CD_RQ_N
-    IF (.NOT. set%has_floor) nq = CD_RQ_CLEARANCE - 1
     DO il = 1, SIZE(set%lines)
       IF (.NOT. set%lines(il)%want_range) CYCLE
       n = set%lines(il)%nsample
       IF (n < 1) CYCLE
+      ! the quantities written: Tension .. Declination, Clearance with a seabed, Torque and Twist
+      ! on a line with torsion
+      nq = CD_RQ_DECLINATION
+      rows(1:nq) = [(k, k=1, CD_RQ_DECLINATION)]
+      IF (set%has_floor) THEN
+        nq = nq + 1
+        rows(nq) = CD_RQ_CLEARANCE
+      END IF
+      IF (set%lines(il)%has_torsion) THEN
+        rows(nq + 1:nq + 2) = [CD_RQ_TORQUE, CD_RQ_TWIST]
+        nq = nq + 2
+      END IF
       WRITE (id_text, '(I0)') set%lines(il)%line_id
       path = TRIM(out_root)//'.Line'//TRIM(id_text)//'.range.out'
       OPEN (NEWUNIT=unit, FILE=TRIM(path), STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
@@ -451,14 +468,16 @@ CONTAINS
         ' s; public node order End A -> End B)'
       IF (ios /= 0) GOTO 910
       WRITE (unit, '(A)', ADVANCE='NO', IOSTAT=ios) 'Node'//tab//'ArcLength'
-      DO k = 1, nq
+      DO kq = 1, nq
+        k = rows(kq)
         DO j = 1, 3
           WRITE (unit, '(A)', ADVANCE='NO', IOSTAT=ios) tab//TRIM(NAMES(k))//TRIM(STATS(j))
         END DO
       END DO
       WRITE (unit, '(A)', IOSTAT=ios) ''
       WRITE (unit, '(A)', ADVANCE='NO', IOSTAT=ios) '(-)'//tab//'(m)'
-      DO k = 1, nq
+      DO kq = 1, nq
+        k = rows(kq)
         DO j = 1, 3
           WRITE (unit, '(A)', ADVANCE='NO', IOSTAT=ios) tab//TRIM(UNITS(k))
         END DO
@@ -467,7 +486,8 @@ CONTAINS
       IF (ios /= 0) GOTO 910
       DO j = 1, set%lines(il)%nn
         WRITE (unit, '(I0,A,ES15.7E3)', ADVANCE='NO', IOSTAT=ios) j, tab, set%lines(il)%arc(j)
-        DO k = 1, nq
+        DO kq = 1, nq
+          k = rows(kq)
           WRITE (unit, '(3(A,ES15.7E3))', ADVANCE='NO', IOSTAT=ios) tab, set%lines(il)%vmin(k, j), &
             tab, set%lines(il)%vmax(k, j), tab, set%lines(il)%vsum(k, j)/REAL(n, wp)
         END DO

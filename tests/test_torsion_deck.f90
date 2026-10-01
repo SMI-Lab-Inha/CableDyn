@@ -17,7 +17,11 @@
 !>  5. body static equilibrium: a moored body whose clamped cable is twisted rolls against the
 !>     torque and its static net moment vanishes;
 !>  6. named errors for malformed rows, missing GJ, an EI = 0 line, a channel on an unrestrained
-!>     line, a dynamic deck, the coupled entries.
+!>     line, the configuration blend in a dynamic run, roll-column misuse, the coupled entries;
+!>  7. dynamics driven at End A: a motionFile roll column (a step) and a vessel rolling about the
+!>     line axis give Twist<L> = -roll and the quasi-static torque at every step;
+!>  8. a body rolling about a twisted line oscillates at sqrt(GJ / (L I)), the connection moment
+!>     being the torque along the line axis at every step;
 PROGRAM test_torsion_deck
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Conventions, ONLY: CD_Body_Rotation
@@ -38,7 +42,7 @@ PROGRAM test_torsion_deck
   WRITE (neutral_type, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, &
     ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
 
-  ! optional argument: run only gate 1..6 (diagnostics)
+  ! optional argument: run only gate 1..8 (diagnostics)
   only = 0
   IF (COMMAND_ARGUMENT_COUNT() > 0) THEN
     CALL GET_COMMAND_ARGUMENT(1, arg)
@@ -50,11 +54,13 @@ PROGRAM test_torsion_deck
   IF (only == 0 .OR. only == 4) CALL check_body_torque()
   IF (only == 0 .OR. only == 5) CALL check_body_statics()
   IF (only == 0 .OR. only == 6) CALL check_errors()
+  IF (only == 0 .OR. only == 7) CALL check_dynamic_roll()
+  IF (only == 0 .OR. only == 8) CALL check_body_roll_dynamics()
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' torsion deck gate(s) failed'
     ERROR STOP 1
   END IF
-  WRITE (*, '(A)') 'PASS: torsion deck columns, statics, channels, body torque and refusals'
+  WRITE (*, '(A)') 'PASS: torsion deck columns, statics, dynamics, channels, body torque and refusals'
 
 CONTAINS
 
@@ -429,6 +435,214 @@ CONTAINS
   END SUBROUTINE check_body_statics
 
   ! ------------------------------------------------------------------------------------------
+  SUBROUTINE roll_deck(path, opt_motion, point_a)
+    !! The straight 100 m neutral line of straight_deck, End A on point_a (Coupled or Vessel),
+    !! both ends clamped and restrained in torsion with no pretwist, dynamic: dtM 0.05, TMax 0.5.
+    CHARACTER(*), INTENT(IN) :: path, opt_motion, point_a
+    CHARACTER(48) :: prow(2)
+    prow(1) = '1 '//point_a//' 0.0 0.0 -50.0 0 0 0 0'
+    prow(2) = '2 Fixed 100.0 0.0 -50.0 0 0 0 0'
+    CALL write_deck(path, [neutral_type], no_rows, prow, &
+                    [CHARACTER(16) :: '1 1 2 r'], [CHARACTER(24) :: '1 cab 100.0 40'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 0'], &
+                    [CHARACTER(48) :: '0.05 dtM', '0.5 TMax', opt_motion], &
+                    [CHARACTER(16) :: 'Torq1N1', 'Torq1N41', 'Twist1'])
+  END SUBROUTINE roll_deck
+
+  SUBROUTINE check_dynamic_roll()
+    !! 7a. motionFile roll column: End A rolls 30 deg about Ez at t = 0.05 s (a step): from that
+    !!     first step on, Twist1 = -30 deg and Torq = GJ Twist / L at both ends (quasi-static
+    !!     torsion: no torsional inertia, the torque follows the roll at once).
+    !! 7b. vesselMotion: the vessel rolls about the line axis at 60 deg/s: the End A frame turns
+    !!     with it and Twist1 = -roll(t), Torq = GJ Twist / L at every step (a frame rotation and
+    !!     an imposed roll of the same end are the same twist).
+    REAL(wp), PARAMETER :: GJ = 5.0e4_wp, L = 100.0_wp
+    REAL(wp) :: v(4), roll, werr_a, werr_b, terr
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: u, k
+    ! 7a
+    OPEN (NEWUNIT=u, FILE='tdeck_roll_motion.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, 10
+      roll = MERGE(0.0_wp, 30.0_wp, k == 0)
+      WRITE (u, '(F6.2,A,F6.1)') 0.05_wp*k, ' 1 0.0 0.0 -50.0 0 0 0 0 0 0 ', roll
+    END DO
+    CLOSE (u)
+    CALL roll_deck('tdeck_roll_a.dat', 'tdeck_roll_motion.txt motionFile', 'Coupled')
+    CALL run_deck('tdeck_roll_a.dat', 'tdeck_roll_a', ok, em)
+    CALL require(ok, '7a: the motionFile roll deck runs: '//TRIM(em))
+    werr_a = 0.0_wp
+    terr = 0.0_wp
+    DO k = 0, 10
+      CALL read_row('tdeck_roll_a.out', k, v, ok)
+      CALL require(ok, '7a: output row readable')
+      IF (.NOT. ok) EXIT
+      roll = MERGE(0.0_wp, 30.0_wp, k == 0)
+      werr_a = MAX(werr_a, ABS(v(4) + roll))
+      terr = MAX(terr, ABS(v(2) - GJ*(-roll*PI/180.0_wp)/L), ABS(v(3) - v(2)))
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'roll column (step): Twist1 error ', werr_a, ' deg, torque error ', terr, ' N m'
+    CALL require(werr_a <= 1.0e-6_wp, '7a: Twist1 = -roll from the first step on')
+    CALL require(terr <= 1.0e-6_wp*GJ, '7a: Torq = GJ Twist / L at both ends at every step (quasi-static)')
+    CALL check_roll_range('tdeck_roll_a.Line1.range.out', GJ*(-30.0_wp*PI/180.0_wp)/L)
+    ! 7b
+    OPEN (NEWUNIT=u, FILE='tdeck_roll_vessel.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, 10
+      WRITE (u, '(F6.2,A,F10.4,A,ES24.16,A)') 0.05_wp*k, ' 0 0 -50 ', 60.0_wp*0.05_wp*k, ' 0 0 0 0 0 ', &
+        60.0_wp*PI/180.0_wp, ' 0 0 0 0 0 0 0 0'
+    END DO
+    CLOSE (u)
+    CALL roll_deck('tdeck_roll_b.dat', 'tdeck_roll_vessel.txt vesselMotion', 'Vessel')
+    CALL insert_option('tdeck_roll_b.dat', '0|0|-50 vesselRef')
+    CALL run_deck('tdeck_roll_b.dat', 'tdeck_roll_b', ok, em)
+    CALL require(ok, '7b: the vessel-roll deck runs: '//TRIM(em))
+    werr_b = 0.0_wp
+    terr = 0.0_wp
+    DO k = 0, 10
+      CALL read_row('tdeck_roll_b.out', k, v, ok)
+      CALL require(ok, '7b: output row readable')
+      IF (.NOT. ok) EXIT
+      roll = 60.0_wp*0.05_wp*k
+      werr_b = MAX(werr_b, ABS(v(4) + roll))
+      terr = MAX(terr, ABS(v(2) - GJ*(v(4)*PI/180.0_wp)/L))
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'vessel roll: Twist1 error ', werr_b, ' deg, torque error ', terr, ' N m'
+    CALL require(werr_b <= 1.0e-6_wp, '7b: the End A frame turns with the vessel: Twist1 = -roll(t)')
+    CALL require(terr <= 1.0e-6_wp*GJ, '7b: Torq = GJ Twist / L under vessel roll')
+  END SUBROUTINE check_dynamic_roll
+
+  SUBROUTINE check_roll_range(path, m_step)
+    !! 7c. The range graph of a torsional line carries the torque and twist envelopes: over the
+    !!     roll step, Torque spans [m_step, 0] at every node and the twist from End A spans
+    !!     [-30, 0] deg at End B and is 0 at End A.
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: m_step
+    CHARACTER(2048) :: head
+    CHARACTER(64) :: names(40)
+    REAL(wp) :: row(40)
+    INTEGER :: u, ios, k, ncol, itq, itw, nrow
+    LOGICAL :: ok
+    ok = .FALSE.
+    OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL require(ios == 0, '7c: the range file of the torsional line exists')
+    IF (ios /= 0) RETURN
+    READ (u, '(A)') head
+    READ (u, '(A)') head
+    ncol = 0
+    names = ''
+    READ (head, *, IOSTAT=ios) names
+    DO k = 1, SIZE(names)
+      IF (LEN_TRIM(names(k)) > 0) ncol = k
+    END DO
+    itq = 0
+    itw = 0
+    DO k = 1, ncol
+      IF (TRIM(names(k)) == 'TorqueMin') itq = k
+      IF (TRIM(names(k)) == 'TwistMin') itw = k
+    END DO
+    CALL require(itq > 0 .AND. itw > 0, '7c: the range file has Torque and Twist columns')
+    IF (itq == 0 .OR. itw == 0) THEN
+      CLOSE (u)
+      RETURN
+    END IF
+    READ (u, '(A)') head
+    nrow = 0
+    DO
+      READ (u, *, IOSTAT=ios) row(1:ncol)
+      IF (ios /= 0) EXIT
+      nrow = nrow + 1
+      ok = ABS(row(itq) - m_step) <= 1.0e-6_wp*ABS(m_step) .AND. ABS(row(itq + 1)) <= 1.0e-6_wp*ABS(m_step)
+      CALL require(ok, '7c: Torque envelope [M_step, 0] at every node')
+      IF (nrow == 1) CALL require(ABS(row(itw)) + ABS(row(itw + 1)) <= 1.0e-9_wp, '7c: no twist at End A')
+      IF (nrow == 41) CALL require(ABS(row(itw) + 30.0_wp) <= 1.0e-6_wp .AND. ABS(row(itw + 1)) <= 1.0e-9_wp, &
+                                   '7c: twist envelope [-30, 0] deg at End B')
+    END DO
+    CLOSE (u)
+    CALL require(nrow == 41, '7c: one range row per node')
+    WRITE (*, '(A,I0,A)') 'roll range graph: ', nrow, ' nodes with Torque and Twist envelopes'
+  END SUBROUTINE check_roll_range
+
+  SUBROUTINE insert_option(path, row)
+    !! Insert an OPTIONS row (just after the section header) of a deck written by write_deck.
+    CHARACTER(*), INTENT(IN) :: path, row
+    CHARACTER(512) :: lines(400)
+    INTEGER :: u, n, ios, k
+    OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ')
+    n = 0
+    DO
+      READ (u, '(A)', IOSTAT=ios) lines(n + 1)
+      IF (ios /= 0) EXIT
+      n = n + 1
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    DO k = 1, n
+      WRITE (u, '(A)') TRIM(lines(k))
+      IF (INDEX(lines(k), '--- OPTIONS ---') > 0) WRITE (u, '(A)') TRIM(row)
+    END DO
+    CLOSE (u)
+  END SUBROUTINE insert_option
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_body_roll_dynamics()
+    !! 8. A Rigid6 body (translation massive, rotational inertia I) holding a straight, taut line
+    !!    twisted by one turn at its reference point, released with a small roll rate w0 about the
+    !!    line axis: the line's torsion is the only roll stiffness, k = GJ/L, and nothing else holds
+    !!    the twist, so the body is a torsional pendulum about the untwisted state: the torque is
+    !!    M0 cos(Omega t) - sqrt(k I) w0 sin(Omega t), Omega = sqrt(k / I) (no torsional inertia in
+    !!    the line), while the body turns through two turns and back; at every step the connection
+    !!    moment on the body is the torque along the line axis.
+    REAL(wp), PARAMETER :: MB = 1.0e9_wp, IB = 1.0e3_wp, GJ = 5.0e4_wp, LN = 20.0_wp, W0 = 0.05_wp
+    INTEGER, PARAMETER :: NSTEP = 400
+    REAL(wp), ALLOCATABLE :: rec(:, :)
+    REAL(wp) :: dg(3), anchor(3), v(2), m0, omega, amp, t, err_axis, err_wave, mt, dk(3), rk(3, 3), kt
+    CHARACTER(256) :: brow, pb, cb
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: k
+    dg = [0.8_wp, 0.0_wp, -0.6_wp]
+    anchor = [0.0_wp, 0.0_wp, -60.0_wp] + (LN*1.0001_wp)*dg
+    WRITE (brow, '(A,ES24.16,A,ES24.16,A,3ES12.4)') '1 Rigid6 0 0 -60 0 0 0 ', MB, ' ', MB/RHOW, &
+      ' 0 0 0 0 0 ', IB, IB, IB
+    WRITE (pb, '(A,3ES24.16,A)') '2 Fixed ', anchor, ' 0 0 0 0'
+    WRITE (cb, '(A,3ES24.16,A)') '1 B Rigid ', dg, ' Rigid 0 1 0 360'
+    CALL write_deck('tdeck_broll.dat', [neutral_type], [brow], &
+                    [CHARACTER(96) :: '1 Body1 0 0 0 0 0 0 0', pb], [CHARACTER(16) :: '1 1 2 -'], &
+                    [CHARACTER(24) :: '1 cab 20.0 20'], &
+                    [CHARACTER(256) :: '1 A Rigid 0.8 0 -0.6 Rigid 0 1 0 0', cb], &
+                    [CHARACTER(24) :: '200.0 WtrDpth', 'moordyn bodyWetting', '0.01 dtM', '4.0 TMax', 'deck bodyIC'], &
+                    [CHARACTER(12) :: 'Torq1N1'])
+    CALL CD_Multibody_Probe_Arm([0.0_wp, 0.0_wp, 0.0_wp], W0*dg)
+    CALL run_deck('tdeck_broll.dat', 'tdeck_broll', ok, em)
+    CALL CD_Multibody_Probe_Get(rec)
+    ok = ok .AND. ALLOCATED(rec)
+    CALL require(ok, '8: the rolling-body deck runs and is probed: '//TRIM(em))
+    IF (.NOT. ok) RETURN
+    kt = GJ/LN
+    m0 = kt*2.0_wp*PI
+    omega = SQRT(kt/IB)
+    amp = SQRT(kt*IB)*W0
+    err_axis = 0.0_wp
+    err_wave = 0.0_wp
+    DO k = 0, NSTEP
+      CALL read_row('tdeck_broll.out', k, v, ok)
+      IF (.NOT. ok) EXIT
+      t = v(1)
+      mt = v(2)
+      rk = RESHAPE(rec(8:16, k), [3, 3])
+      dk = MATMUL(rk, dg)
+      err_axis = MAX(err_axis, NORM2(rec(24:26, k) - mt*dk)/m0)
+      err_wave = MAX(err_wave, ABS(mt - (m0*COS(omega*t) - amp*SIN(omega*t)))/m0)
+    END DO
+    CALL require(ok, '8: all output rows readable')
+    WRITE (*, '(A,ES10.3,A,ES10.3,A,F8.4,A)') 'body roll dynamics: moment-axis error ', err_axis, &
+      ', torque vs M0 cos(Omega t) - sqrt(k I) w0 sin(Omega t) ', err_wave, ' of M0 (Omega = ', omega, ' rad/s)'
+    CALL require(err_axis <= 1.0e-6_wp, '8: the connection moment on the body is the torque along the axis')
+    CALL require(err_wave <= 1.0e-2_wp, '8: the body swings as a torsional pendulum at sqrt(GJ/(L I))')
+  END SUBROUTINE check_body_roll_dynamics
+
+
+  ! ------------------------------------------------------------------------------------------
   SUBROUTINE expect_error(label, path, root, needle)
     CHARACTER(*), INTENT(IN) :: label, path, root, needle
     LOGICAL :: ok
@@ -436,6 +650,25 @@ CONTAINS
     CALL run_deck(path, root, ok, em)
     CALL require(.NOT. ok .AND. INDEX(em, needle) > 0, label//' (got: '//TRIM(em)//')')
   END SUBROUTINE expect_error
+
+  SUBROUTINE roll_error_deck(path, roll0, every_row)
+    !! The roll deck with a motionFile whose roll column starts at roll0 deg and, unless
+    !! every_row, is missing on the last row.
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: roll0
+    LOGICAL, INTENT(IN) :: every_row
+    INTEGER :: u, k
+    OPEN (NEWUNIT=u, FILE=path//'.motion', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, 10
+      IF (k == 10 .AND. .NOT. every_row) THEN
+        WRITE (u, '(F6.2,A)') 0.05_wp*k, ' 1 0.0 0.0 -50.0 0 0 0 0 0 0'
+      ELSE
+        WRITE (u, '(F6.2,A,F6.1)') 0.05_wp*k, ' 1 0.0 0.0 -50.0 0 0 0 0 0 0 ', MERGE(roll0, 10.0_wp, k == 0)
+      END IF
+    END DO
+    CLOSE (u)
+    CALL roll_deck(path, path//'.motion motionFile', 'Coupled')
+  END SUBROUTINE roll_error_deck
 
   SUBROUTINE check_errors()
     CHARACTER(16), PARAMETER :: OUTS(1) = [CHARACTER(16) :: 'Torq1N1']
@@ -470,9 +703,13 @@ CONTAINS
                     [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &
                     [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
                     [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
-                    [CHARACTER(24) :: '0.1 dtM', '1.0 TMax'], OUTS)
-    CALL expect_error('a dynamic torsion deck is refused', 'tdeck_e10.dat', 'tdeck_e10', &
-                      'torsion is supported in statics only in this build')
+                    [CHARACTER(32) :: '0.1 dtM', '1.0 TMax', 'False alpha_force_blend'], OUTS)
+    CALL expect_error('the configuration blend is refused with torsion', 'tdeck_e10.dat', 'tdeck_e10', &
+                      'force-blended generalised-alpha')
+    CALL roll_error_deck('tdeck_e13.dat', 5.0_wp, .TRUE.)
+    CALL expect_error('a roll not starting from 0 is named', 'tdeck_e13.dat', 'tdeck_e13', 'must be 0 at t = 0')
+    CALL roll_error_deck('tdeck_e14.dat', 0.0_wp, .FALSE.)
+    CALL expect_error('a roll column on some rows only is named', 'tdeck_e14.dat', 'tdeck_e14', 'on some rows only')
     CALL write_deck('tdeck_e11.dat', [neutral_type], no_rows, &
                     [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &
                     [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
