@@ -88,6 +88,16 @@ article's methods, are compared in
 | **L5-wc** | Wall-clock vs explicit C solver | external-C RK2 (WD chain) | L2 0.967 s vs external-C 0.541 s; traces validated | matched comparison reported | Pass measured |
 | **L5-DPC** | Pinned-TDP lazy-wave spans, 80/200/800 m | OrcaFlex / refined MoorDyn-F | CableDyn 1.55/4.64/7.37 s; OrcaFlex 2.29/4.56/23.17 s; MoorDyn-F 249/145/243 s | resolved meshes, same host, one thread | Pass measured |
 | **L5-pk** | Snap-load peak, 3-code | MoorDyn-C + OrcaFlex | 4.86 / 6.32 / 10.22 MN | — | Informative |
+| **T-1** | Torsion kernel: twist of the centreline, gradient, Hessian | automatic differentiation; finite differences | ≤3.8e-15; ≤5.3e-11 | <1e-10; <1e-6 | Pass |
+| **T-2** | Pure torsion (multi-section, end springs, five turns) | `Φ/C`; OrcaFlex 11.6d | round-off; ≤1.7e-8 | <1e-12; <1e-7 | Pass |
+| **T-3** | Greenhill onset, clamped, `TL²/EI` −20 to 1600 | van der Heijden et al. (2003) eq. 33 | ≤3.9e-5 (32 elements); ≤6.5e-6 (128) | <1e-4; <1e-3 | Pass |
+| **T-4** | Onset, bending-pinned torsional (semi-tangential) end | `tan x = −x/3` | 6.4e-7 / 4.5e-7 | <1e-4 | Pass |
+| **T-5** | Onsets against OrcaFlex 11.6d (clamped and pinned) | OrcaFlex, extrapolated to zero segment length | ≤3.0e-5 | <2e-4 | Pass |
+| **T-6** | Lazy-wave cable twisted 0–5 turns at the hang-off | OrcaFlex 11.6d | torque ≤0.019%, peak curvature ≤0.056%, offset ≤27 mm, tension ≤0.091% | 1% / 1% / 0.1 m / 0.5% | Pass |
+| **T-7** | Kirchhoff helix, four turns | helical equilibrium | end force 1.5e-4, end moment 6.5e-5 | <5e-3 | Pass |
+| **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
+| **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
+| **T-10** | Torsion dynamics, restart and body torque | quasi-static torque, energy, uninterrupted run, pendulum | torque 2.2e-16; energy band 4.9e-4; restart bit-identical; pendulum 6.4e-5 | see [Torsion](#torsion) | Pass |
 
 **Pass** meets the stated acceptance value. **Pass measured** records a measured
 comparison without an acceptance value. **Informative** is reported but not used for
@@ -775,6 +785,121 @@ Two combinations stop with named errors instead of applying a mixed field:
 self-driven WaveKinMod-1 waves with WaterKin CurrentMod-2 host current, and a host
 SeaState using its own user-current CurrMod-2, which cannot be split into wave and
 current parts.
+
+## Torsion
+
+Condensed isotropic torsion of finite-EI lines (theory in the
+[manual](https://cabledyn.readthedocs.io/en/latest/theory.html#condensed-torsion)) is checked
+against closed forms, against the Cosserat rod path, and against OrcaFlex 11.6d. The OrcaFlex
+values are summary values in `tests/data/torsion_orcaflex_refs.txt`, written by
+[`validation/scripts/orcaflex_torsion_reference.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/orcaflex_torsion_reference.py)
+(OrcFxAPI 11.6d, line torsion included, statics tolerance 1e-9 for pure torsion and 1e-8
+otherwise, `TensionTorqueCoupling` 0, no seabed friction; about 5 min). Torque is positive for a
+right-handed twist of End B relative to End A, the OrcaFlex sign; OrcaFlex reports twist as a
+rate in deg/m and end twisting stiffness in kN·m/deg. Every case below is a CTest test (names
+in parentheses).
+
+- **T-1 twist kernel** (`hermite_torsion_kernel`). The geometric twist `Θ` of the centreline,
+  its gradient and Hessian, with clamped and articulated ends, match automatic differentiation of
+  an independent implementation on random large-deformation lines (Θ ≤4.4e-16, gradient
+  ≤9.2e-16, Hessian ≤3.8e-15, relative) and finite differences (Hessian 5.3e-11). `Θ` is
+  invariant under rigid rotation (2.2e-15), zero for planar curves, and equals `−τℓ` on a helix
+  (9.0e-7 at 48 elements, fourth order); unwrapping is continuous through three turns; the
+  `π/2` step limit and the fold guard stop by name.
+- **T-2 pure torsion** (`hermite_torsion_static`, `torsion_deck`, `torsion_orcaflex`). A straight
+  clamped rod with alternating `GJ` and end springs carries `Φ/C` to round-off with no lateral
+  drift; through the deck, `Torq`, `Twist<L>N<J>` and `Twist<L>` follow `GJ Φ/L` and the
+  end-spring compliance. Against OrcaFlex (90°, 450°, 1800° and −90°, `γ_A` 30° / `γ_B` 120°, two
+  sections in series) the deck torque agrees to the 8 digits of the output. OrcaFlex's line in
+  this case has `EI` 1 kN·m², so every case but ±90° lies above its buckling onset; OrcaFlex
+  statics stays on the straight branch there, while CableDyn's stability check leaves it for the
+  buckled shape. The deck therefore uses `EI` 1e3 kN·m²; the straight-branch torque does not
+  depend on `EI`.
+- **T-3 Greenhill onset** (`hermite_torsion_static`, `torsion_validation`). The critical torque
+  of a straight clamped rod under the dead tension `T`, bisected on the static stability report,
+  against eq. 33 of van der Heijden et al. (2003): at `TL²/EI` = −20, 0, 10, 50, 200 the 32-element
+  error is 1.8e-5, 9.0e-6, 7.5e-6, 6.8e-6 and 3.9e-5 with an observed order of 3.7 to 3.9; at
+  400 and 1600, where the onset approaches the infinite-rod value `2√(EI T)` (ratio 1.0124 and
+  1.0031), the 128-element error is 3.8e-7 and 6.5e-6. Above the onset the straight state is
+  reported unstable and the static solve descends to a stable buckled state of lower energy and
+  relaxed torque. This static form stands in for the proposed dynamic hockling case: loop
+  formation and self-contact are not resolved (see Limits below).
+- **T-4 semi-tangential end** (`hermite_torsion_static`). A bending-pinned end restrained in
+  torsion carries the torque about the bisector of the connection direction and the tangent.
+  The onset is the root of `tan x = −x/3` (4.9112877 EI/L at `T = 0`, 7.2692742 at
+  `TL²/EI = 10`), reproduced to 6.4e-7 and 4.5e-7; it is not Greenhill's `2π EI/L` for an
+  axial-torque hinge.
+- **T-5 onsets against OrcaFlex** (`torsion_orcaflex`). OrcaFlex detects the onset by
+  bisection on its modal stability flag and converges at second order in the segment length;
+  extrapolated, it reproduces eq. 33 to 3e-8–9e-6. CableDyn at 32 elements differs from the
+  extrapolated OrcaFlex value by 9.1e-6, 7.4e-6, 5.0e-6 and 3.0e-5 (clamped, `TL²/EI` 0, 10, 50,
+  200) and 4.9e-6 and 6.8e-7 (OrcaFlex's bending-free end with a twisting spring, `TL²/EI` 0 and
+  10), which confirms that both codes transmit torque semi-tangentially at such an end.
+- **T-6 lazy-wave cable** (`torsion_orcaflex`). The Lozon et al. (2025) Gulf of Mexico 80 m
+  cable with an illustrative `GJ` of 50 kN·m² is clamped at both ends in its untwisted static
+  orientation and twisted 1 to 5 turns at the hang-off. Against OrcaFlex at 0.375 m segments,
+  the hang-off torque agrees to ≤0.019%, the geometric twist `Θ` to ≤1.8e-4 turn per imposed turn
+  (`Θ` = 0.188 turn at 5 turns, so the torque is 3.8% below `GJ Φ/L`), the peak interior
+  curvature to ≤0.056% (0.1197 against 0.1196 1/m at 5 turns), the out-of-plane offset to ≤27 mm
+  of 6.8 m and the hang-off tension to ≤0.091%. The torque is uniform along the line. At zero
+  twist the restrained deck reproduces the same cable without torsion columns (positions
+  identical, tensions to 1.1e-8), the zero-twist parity case.
+- **T-7 Kirchhoff helix** (`torsion_validation`). A rod clamped on four turns of a helix (radius
+  1, pitch angle 30°, `EI` 1, 96 elements) with `Φ = Θ_helix + M C`, `M` = 0.5, stays on the helix
+  (radius drift 2.4e-4 of the radius), and the end reaction, taken as the derivative of the
+  discrete energy, is the helical wrench `F` = 0.058013 along the axis and `K` = 0.899519 about it
+  to 1.5e-4 and 6.5e-5. A three-dimensional sagging line restrained with `Φ` equal to its own
+  untwisted `Θ` (0.61 rad) reproduces the solve without torsion to solver tolerance.
+- **T-8 Cosserat cross-check** (`torsion_validation`). The same rod, solved by the cubic-Hermite
+  element with condensed torsion (16 elements) and by the secondary Cosserat rod path (128
+  elements with shear, a different formulation with nodal rotations), clamped with its far end
+  displaced and turned by `exp([0.25, −0.3, 1.2])`: the shapes agree to 4.2e-4 of the length and
+  the torques to 5.2e-5. Pure torsion agrees to round-off. The Cosserat path has no stability
+  report, so Greenhill onsets are not cross-checked on it.
+- **T-9 bordered Newton step** (`torsion_validation`). On a rod buckled out of plane at 1.05 and
+  1.20 times its clamped onset (`GJ = 2.5 EI`, the reference cable's ratio), Newton with the
+  bordered tangent `B + ∇Θ∇Θᵀ/C` (Sherman–Morrison on the band factor) returns from a 1e-6
+  perturbation in 3 iterations. Without the rank-one term the iteration converges only linearly,
+  at the rate `ρ = ∇Θᵀ B⁻¹ ∇Θ / C` predicted for it: ρ = 0.055 and 0.218, observed 0.055 and
+  0.217 (5 and 9 iterations). On these stable states `B` itself remains positive definite.
+- **T-10 dynamics, restart and bodies** (`hermite_torsion_dynamic`, `torsion_deck`). An imposed
+  twist step gives `GJ Φ/L` from the first step (2.2e-16): torsion has no inertia. A parent turned
+  through 1.5 turns carries the twist without a `2π` slip. A bowed, twisted line in free vibration
+  (`ρ∞ = 1`, no drag) keeps its total energy, torsional part included, within a band of 4.9e-4
+  of the vibration energy over ten periods, while the torsional share swings by 22%. A run
+  restored from a snapshot or rebuilt from the checkpoint mirror after more than one turn
+  continues bit-identically. A Rigid6 body on a twisted line receives the torque along the line
+  axis (3.6e-12), its net wrench equals the line loads, it turns against the torque in statics
+  (net moment ≤1e-6 N·m), and released with a roll rate it swings as a torsional pendulum at
+  `√(GJ/(L I))` to 6.4e-5 of the torque amplitude, with clamped and with bending-pinned
+  torsional ends. The `motionFile` roll column and a rolling vessel give `Twist<L> = −roll` and
+  the quasi-static torque at every step.
+- **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
+  with `Free` columns, or with one restrained end, every output is byte-identical to the
+  6-column deck. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
+  `ATTACHMENTS`, modal analysis, the configuration blend, misuse of the roll column, channels on
+  an unrestrained line, and the coupled entries stop with named errors.
+
+Limits. The torsion model is quasi-static (no torsional inertia), takes no seabed friction
+against twist and no torque–tension coupling, and does not resolve self-contact: the dynamic
+loop-formation (hockling) case and the twisted slack catenary of the proposed OrcaFlex set are
+not part of this record. There is no experimental torsion case.
+
+| Proposed case | Gate |
+|---|---|
+| V0 kernel, invariants, fold guard | T-1 |
+| V1 pure torsion | T-2 |
+| V2 torsion off, bit-for-bit | backward compatibility; full CTest suite |
+| V3 zero-twist parity | T-6 (lazy wave), T-7 (3D sagging line) |
+| V4 Greenhill onsets and post-buckling | T-3, T-4 |
+| V5 Kirchhoff helix | T-7 |
+| V6 hockling onset | T-3 (static onset at `TL²/EI` 400, 1600); dynamic loop formation not run |
+| V7 Cosserat cross-check | T-8 (pure torsion, bent and twisted rod) |
+| V8 OrcaFlex | T-2, T-5, T-6; dynamic loop case not run |
+| V9 energy | T-10 (free vibration; body pendulum) |
+| V10 unwrap and restart | T-1, T-10 |
+| V11 Rigid6 body torque | T-10 |
+| V12 named errors | backward compatibility and refusals |
 
 ## Cross-code comparison method
 

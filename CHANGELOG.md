@@ -10,17 +10,22 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
-- Torsion of finite-EI lines (condensed isotropic torsion, quasi-static: no torsional
-  inertia): optional `END CONNECTIONS` columns `TorsStiffness NxX NxY NxZ [Pretwist]` restrain
-  the twist at a line end (`Free`, `Rigid` or a stiffness) with a reference normal and a
-  pretwist in degrees. A line restrained at both ends needs an explicit `GJ`. Statics solve the
-  imposed twist with a stability check and buckling descent; dynamics carry the torque in every
-  step, with End A's frame turning with its body or vessel and an optional `motionFile` roll
-  column for an imposed twist history. The torque is returned to a Rigid6 body at End A, in
-  statics (for any ratio of the body's restoring stiffness to GJ/L) and in dynamics. New
-  channels `Torq<L>N<J>`, `Twist<L>N<J>` and `Twist<L>`, and Torque and Twist range envelopes.
-  The Python deck tools accept the new columns and channels. Modal analysis and coupled
-  OpenFAST/FAST.Farm runs with torsion stop with an error.
+- Torsion of finite-EI lines in the standalone driver: condensed isotropic torsion (uniform
+  torque, quasi-static, no torsional inertia) through the geometric twist of the cubic-Hermite
+  centreline, with no added degrees of freedom. Optional `END CONNECTIONS` columns
+  `TorsStiffness NxX NxY NxZ [Pretwist]` restrain the twist of a line end (`Free`, `Rigid` or a
+  spring) with a reference normal and a pretwist in degrees; a line restrained at both ends
+  needs an explicit `GJ`, and a bending-pinned end may be restrained (a semi-tangential end).
+  Statics ramp the imposed twist with a stability check and descend to the buckled shape above
+  an onset; dynamics carry the torque in every step, the End A frame turning with its Rigid6
+  body or vessel, and the new `motionFile` roll column imposes a twist history. The torque is
+  returned to a Rigid6 body at End A in statics and dynamics. New channels `Torq<L>N<J>`,
+  `Twist<L>N<J>` and `Twist<L>`, torque and twist range-graph columns, Python deck, channel-unit
+  and range-graph support, and the example `torsion_lazy_wave_hangoff_twist.dat`. Validated
+  against closed forms, the Cosserat rod path and OrcaFlex 11.6d (VALIDATION.md, Torsion). Coupled
+  OpenFAST and FAST.Farm runs, the mixed `EI = 0` + finite-EI aggregate, rod ends, bodies other
+  than Rigid6, lines with `ATTACHMENTS`, modal analysis and `False alpha_force_blend` stop with
+  a named error when torsion is requested; deck results without torsion are unchanged.
 
 ### Fixed
 
