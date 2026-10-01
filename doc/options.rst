@@ -327,7 +327,8 @@ Finite-EI cable controls
        Mexico 80 m cable in 3 m surge the mean hang-off tension is 12511 / 10097 / 9507 / 9360 N at
        ``dtM`` 0.1 / 0.05 / 0.025 / 0.0125 s with ``False`` and 9424 / 9322 / 9314 / 9311 N
        with ``True``. A run prints a note when a nodal tangent turns by more than 0.25 deg
-       (``True``) or 0.1 deg (``False``) in one step
+       (``True``) or 0.1 deg (``False``) in one step. A dynamic run with a torsional line
+       (``END CONNECTIONS`` ``TorsStiffness`` at both ends) needs ``True``
      - standalone and coupled (finite-EI lines)
      - ``False alpha_force_blend``
    * - ``cable_statics`` / ``cablestatics``
@@ -449,7 +450,9 @@ Ambient fluid and prescribed motion
        dynamic deck), or all finite-EI lines on the cubic-Hermite route (dynamic deck, every
        End B Fixed). Other decks are rejected; a deck that mixes ``EI = 0`` and finite-EI
        lines stops with ``OPTION nModes is not supported for mixed EI=0/finite-EI decks;
-       remove it or set it to 0``. The banded solver has no line-length limit: a
+       remove it or set it to 0``; a deck with a torsional line stops with ``modal analysis
+       (OPTION nModes) of a line with torsion is not yet supported``. The banded solver has no
+       line-length limit: a
        1024-element finite-EI cable takes a few seconds. See :doc:`theory`
      - standalone
      - ``10 nModes``
@@ -516,7 +519,9 @@ Ambient fluid and prescribed motion
      - path, or ``0``/``none``
      - absent
      - an active path requires ``dtM`` and ``TMax``; ``0`` or case-insensitive ``none`` disables
-       it. See the file grammar in :doc:`driver_format`
+       it. On a deck with a line restrained in torsion at both ends, an optional twelfth column
+       rolls that line's End A frame (degrees, 0 at ``t = 0``). See the file grammar in
+       :doc:`file_formats`
      - standalone ``Coupled``/``Vessel`` points, prescribed rods, and Rigid6 bodies; rejected
        on ``Connect``/``Free`` point-system, FAILURE, and mixed decks; forbidden in OpenFAST,
        where the host owns coupled motion

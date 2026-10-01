@@ -323,6 +323,7 @@ add_library(cabledyn_obj OBJECT
   src/CableDyn_EndConnection.f90
   src/CableDyn_Vessel.f90
   src/CableDyn_HermiteCable.f90
+  src/CableDyn_HermiteTorsion.f90
   src/CableDyn_HermiteCableStatic.f90
   src/CableDyn_HermiteCableDynamic.f90
   src/CableDyn_Conventions.f90
@@ -561,6 +562,28 @@ add_executable(test_hermite_cable tests/test_hermite_cable.f90)
 target_link_libraries(test_hermite_cable PRIVATE cabledyn_core)
 add_test(NAME hermite_cable COMMAND test_hermite_cable)
 set_tests_properties(hermite_cable PROPERTIES LABELS "fortran;unit;static")
+
+add_executable(test_hermite_torsion_kernel tests/test_hermite_torsion_kernel.f90)
+target_link_libraries(test_hermite_torsion_kernel PRIVATE cabledyn_core)
+add_test(NAME hermite_torsion_kernel
+         COMMAND test_hermite_torsion_kernel ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_oracle_reference.txt)
+set_tests_properties(hermite_torsion_kernel PROPERTIES LABELS "fortran;unit;static")
+
+add_executable(test_hermite_torsion_static tests/test_hermite_torsion_static.f90)
+target_link_libraries(test_hermite_torsion_static PRIVATE cabledyn_core)
+add_test(NAME hermite_torsion_static
+         COMMAND test_hermite_torsion_static ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_analytic_refs.txt)
+set_tests_properties(hermite_torsion_static PROPERTIES LABELS "fortran;unit;static;validation")
+
+add_executable(test_torsion_validation tests/test_torsion_validation.f90)
+target_link_libraries(test_torsion_validation PRIVATE cabledyn_core)
+add_test(NAME torsion_validation
+         COMMAND test_torsion_validation ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_analytic_refs.txt)
+set_tests_properties(torsion_validation PROPERTIES LABELS "fortran;unit;static;validation")
+add_executable(test_hermite_torsion_dynamic tests/test_hermite_torsion_dynamic.f90)
+target_link_libraries(test_hermite_torsion_dynamic PRIVATE cabledyn_core)
+add_test(NAME hermite_torsion_dynamic COMMAND test_hermite_torsion_dynamic)
+set_tests_properties(hermite_torsion_dynamic PROPERTIES LABELS "fortran;unit;dynamic;validation")
 
 add_executable(test_hermite_cable_static tests/test_hermite_cable_static.f90)
 target_link_libraries(test_hermite_cable_static PRIVATE cabledyn_core)
@@ -1180,6 +1203,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
            COMMAND test_step_allocations ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/range_mixed_alloc.dat
                    200.0 200 ranges)
   set_tests_properties(step_allocations_ranges PROPERTIES LABELS "fortran;openfast;dynamic;memory")
+  # The same gate on a finite-EI cable with condensed torsion (a turning parent and a changing twist).
+  add_test(NAME step_allocations_torsion COMMAND test_step_allocations torsion)
+  set_tests_properties(step_allocations_torsion PROPERTIES LABELS "fortran;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)
@@ -1650,6 +1676,17 @@ target_link_libraries(test_clamped_cable_ends PRIVATE cabledyn_core)
 add_test(NAME clamped_cable_ends COMMAND test_clamped_cable_ends)
 set_tests_properties(clamped_cable_ends PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+add_executable(test_torsion_deck tests/test_torsion_deck.f90)
+target_link_libraries(test_torsion_deck PRIVATE cabledyn_core)
+add_test(NAME torsion_deck COMMAND test_torsion_deck)
+set_tests_properties(torsion_deck PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
+
+add_executable(test_torsion_orcaflex tests/test_torsion_orcaflex.f90)
+target_link_libraries(test_torsion_orcaflex PRIVATE cabledyn_core)
+add_test(NAME torsion_orcaflex
+         COMMAND test_torsion_orcaflex ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_orcaflex_refs.txt)
+set_tests_properties(torsion_orcaflex PROPERTIES LABELS "fortran;driver;integration;static;validation;l3")
+
 add_executable(test_rod_hydro tests/test_rod_hydro.f90)
 target_link_libraries(test_rod_hydro PRIVATE cabledyn_core)
 add_test(NAME rod_hydro COMMAND test_rod_hydro)
@@ -1795,6 +1832,16 @@ foreach(_lozon_case IN ITEMS
     LABELS "fortran;driver;integration;example;lozon")
 endforeach()
 
+# Torsion example: a lazy-wave cable twisted two turns at the hang-off through the motionFile
+# roll column (condensed torsion, quasi-static).
+add_test(
+  NAME example_torsion_lazy_wave_hangoff_twist
+  COMMAND cabledyn
+    "${CMAKE_CURRENT_SOURCE_DIR}/examples/torsion_lazy_wave_hangoff_twist.dat"
+    "${CMAKE_CURRENT_BINARY_DIR}/example_torsion_lazy_wave_hangoff_twist")
+set_tests_properties(example_torsion_lazy_wave_hangoff_twist PROPERTIES
+  LABELS "fortran;driver;integration;example;dynamic")
+
 # The teaching/reference deck enumerates all active defaults and documents every
 # mutually exclusive alternative.  Keep it runnable so the canonical OPTIONS
 # example cannot drift away from the production parser.
@@ -1919,6 +1966,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                          -Wno-compare-reals
                          -Wno-uninitialized
                          -Wno-maybe-uninitialized)
+  target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)
@@ -1957,6 +2005,9 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_robust_init
       test_line
       test_hermite_cable
+      test_hermite_torsion_kernel
+      test_hermite_torsion_static
+      test_hermite_torsion_dynamic
       test_hermite_cable_static
       test_hermite_sequenced
       test_hermite_resolution

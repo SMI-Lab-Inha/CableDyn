@@ -16,9 +16,24 @@ PROGRAM test_step_allocations
   !! too: the envelope accumulation, the touchdown evaluation, and the EI = 0 and Hermite line
   !! samples with their FairTen/AnchTen end-force recovery.
   !!
+  !! With the single argument "torsion" the gate runs on a finite-EI cable with condensed torsion
+  !! instead (CD_HFMF_UpdateStates): a line clamped at both ends and restrained in torsion, its
+  !! coupled end swaying while the parent rolls about the line axis and the imposed twist
+  !! changes, so every step evaluates the twist kernel, its Hessian and the bordered solve. The
+  !! committed-state outputs (CD_HFMF_SetCoupledKinematics, CD_HFMF_CalcOutput with the connection
+  !! moment, both end forces, the energy and the torque query) are gated as well.
+  !!
   !! Usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]
+  !!        test_step_allocations torsion
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT, C_LONG_LONG
   USE CableDyn_Precision, ONLY: wp
+  USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType
+  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Init, CD_HFMF_Set_EndConnection, &
+                                          CD_HFMF_Set_Torsion, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, CD_HFMF_End, &
+                                          CD_HFMF_SetCoupledKinematics
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_End_Force, CD_HermiteCable_Dyn_Energy, &
+                                          CD_HermiteCable_Dyn_Torsion_State
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_NFluidNodes, CD_AGG_NumChannels, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_Snapshot, CD_AGG_SetFluidFields, CD_AGG_Step_Moving, &
@@ -47,6 +62,12 @@ PROGRAM test_step_allocations
   INTEGER(C_LONG_LONG) :: n_step_alloc, n_output_alloc
   LOGICAL :: ranges
 
+  IF (COMMAND_ARGUMENT_COUNT() == 1) THEN
+    CALL GET_COMMAND_ARGUMENT(1, arg)
+    IF (TRIM(arg) /= 'torsion') ERROR STOP 'a single argument must be "torsion"'
+    CALL torsion_gate()
+    STOP
+  END IF
   IF (COMMAND_ARGUMENT_COUNT() /= 3 .AND. COMMAND_ARGUMENT_COUNT() /= 4) THEN
     PRINT '(A)', 'usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]'
     ERROR STOP 2
@@ -147,6 +168,102 @@ CONTAINS
       n_output_alloc = n_output_alloc + (cd_test_allocation_count() - c0)
     END DO
   END SUBROUTINE march
+
+  SUBROUTINE torsion_gate()
+    !! Zero heap allocation in CD_HFMF_UpdateStates of a cable with condensed torsion.
+    INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NDOF = 6*NN, N_WARM = 40, N_COUNT = 200
+    REAL(wp), PARAMETER :: LL = 10.0_wp, DTT = 0.01_wp
+    TYPE(CD_HFMF_ModuleType) :: cab
+    TYPE(CD_HermiteTorsionType) :: tors
+    REAL(wp) :: q(NDOF), l0(NE), eye(3, 3), frame(3, 2), t, x(3), v(3), a(3), dcm(3, 3), f(3), m(3), psi
+    REAL(wp) :: fe(3), ke, se, th, mt
+    INTEGER :: k
+    INTEGER(C_LONG_LONG) :: c0, n_alloc, n_out, n_energy
+    n_out = 0
+    n_energy = 0
+    q = 0.0_wp
+    DO k = 1, NN
+      q(6*k - 5) = LL*REAL(k - 1, wp)/REAL(NE, wp)
+      q(6*k - 2) = 1.0_wp
+    END DO
+    l0 = LL/REAL(NE, wp)
+    eye = 0.0_wp
+    eye(1, 1) = 1.0_wp
+    eye(2, 2) = 1.0_wp
+    eye(3, 3) = 1.0_wp
+    CALL CD_HFMF_Init(cab, l0, [(1.0e5_wp, k=1, NE)], [(100.0_wp, k=1, NE)], [(1.0_wp, k=1, NE)], &
+                      [(0.0_wp, k=1, NE)], q, [1, 2, 3, NDOF - 5, NDOF - 4, NDOF - 3], 0.0_wp, 0.0_wp, 0.8_wp, &
+                      DTT, NN, es, em, max_iter=60, tol=1.0e-8_wp)
+    CALL check('torsion cable init')
+    CALL CD_HFMF_Set_EndConnection(cab, [0.0_wp, 0.0_wp], RESHAPE([1.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], &
+                                                                  [3, 2]), es, em, &
+                                   coupled_d0_parent=[1.0_wp, 0.0_wp, 0.0_wp], parent_orientation=eye, &
+                                   connection_mode=[CD_ENDCONN_RIGID, CD_ENDCONN_RIGID])
+    CALL check('torsion cable end connections')
+    tors%active = .TRUE.
+    tors%phi = 2.0_wp
+    tors%ends = RESHAPE([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, &
+                         0.0_wp, 0.0_wp, 1.0_wp], [3, 4])
+    ALLOCATE (tors%gj(NE))
+    tors%gj = 80.0_wp
+    tors%has_theta = .TRUE.
+    frame(:, 1) = [1.0_wp, 0.0_wp, 0.0_wp]
+    frame(:, 2) = [0.0_wp, 0.0_wp, 1.0_wp]
+    CALL CD_HFMF_Set_Torsion(cab, tors, es, em, coupled_frame_parent=frame, parent_orientation=eye)
+    CALL check('torsion cable torsion')
+    n_alloc = 0
+    DO k = 1, N_WARM + N_COUNT
+      t = DTT*REAL(k, wp)
+      x = [LL, 0.05_wp*SIN(2.0_wp*t), 0.0_wp]
+      v = [0.0_wp, 0.1_wp*COS(2.0_wp*t), 0.0_wp]
+      a = [0.0_wp, -0.2_wp*SIN(2.0_wp*t), 0.0_wp]
+      psi = 3.0_wp*t
+      dcm = eye
+      dcm(2, 2) = COS(psi)
+      dcm(3, 3) = COS(psi)
+      dcm(2, 3) = SIN(psi)
+      dcm(3, 2) = -SIN(psi)
+      c0 = cd_test_allocation_count()
+      IF (k > N_WARM) CALL cd_test_allocation_counting(1_C_INT)
+      CALL CD_HFMF_UpdateStates(cab, x, v, a, es, em, u_orientation=dcm, u_angular_velocity=[3.0_wp, 0.0_wp, 0.0_wp], &
+                                u_angular_acceleration=[0.0_wp, 0.0_wp, 0.0_wp], u_twist=2.0_wp - psi + 0.3_wp*SIN(t))
+      CALL cd_test_allocation_counting(0_C_INT)
+      CALL check('torsion cable step')
+      n_alloc = n_alloc + (cd_test_allocation_count() - c0)
+      ! the outputs of the committed state and the non-stepping boundary write: the loads and
+      ! connection moment, the end forces, the energy and the twist and torque queries
+      c0 = cd_test_allocation_count()
+      IF (k > N_WARM) CALL cd_test_allocation_counting(1_C_INT)
+      CALL CD_HFMF_SetCoupledKinematics(cab, x, v, a, es, em, u_orientation=dcm, &
+                                        u_angular_velocity=[3.0_wp, 0.0_wp, 0.0_wp], &
+                                        u_angular_acceleration=[0.0_wp, 0.0_wp, 0.0_wp])
+      IF (es == 0) CALL CD_HFMF_CalcOutput(cab, f, es, em, y_moment=m)
+      IF (es == 0) CALL CD_HermiteCable_Dyn_End_Force(cab%line, 1, fe, es, em)
+      IF (es == 0) CALL CD_HermiteCable_Dyn_End_Force(cab%line, NN, fe, es, em)
+      IF (es == 0) CALL CD_HermiteCable_Dyn_Torsion_State(cab%line, th, mt, es, em)
+      CALL cd_test_allocation_counting(0_C_INT)
+      CALL check('torsion cable output')
+      n_out = n_out + (cd_test_allocation_count() - c0)
+      ! the energy diagnostic (not a per-step output; its mass product uses a run-time-sized
+      ! temporary): only its torsion part is required to be allocation-free, so the count of
+      ! the call may not exceed that of the same call without torsion (one temporary)
+      c0 = cd_test_allocation_count()
+      IF (k > N_WARM) CALL cd_test_allocation_counting(1_C_INT)
+      CALL CD_HermiteCable_Dyn_Energy(cab%line, ke, se, es, em)
+      CALL cd_test_allocation_counting(0_C_INT)
+      CALL check('torsion cable energy')
+      IF (k > N_WARM) n_energy = MAX(n_energy, cd_test_allocation_count() - c0)
+    END DO
+    CALL CD_HFMF_End(cab)
+    PRINT '(A,I0,A,I0,A,I0,A)', 'torsion cable: ', N_COUNT, ' counted steps, ', n_alloc, &
+      ' heap allocations in the steps, ', n_out, ' in the outputs'
+    PRINT '(A,I0)', 'torsion cable energy diagnostic: heap allocations per call ', n_energy
+    IF (n_alloc /= 0 .OR. n_out /= 0 .OR. n_energy > 1) THEN
+      PRINT '(A)', 'FAIL: the per-step advance or the outputs of a cable with torsion allocated after warm-up'
+      ERROR STOP 1
+    END IF
+    PRINT '(A)', 'PASS: no heap allocation in the per-step advance or outputs of a cable with torsion after warm-up'
+  END SUBROUTINE torsion_gate
 
   SUBROUTINE check(stage)
     CHARACTER(*), INTENT(IN) :: stage

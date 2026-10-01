@@ -137,7 +137,126 @@ element, with a 2 % criterion relative to the largest local magnitude (at least 
 The element follows the geometrically exact Kirchhoff-rod formulation of
 :ref:`Boyer et al. (2011) <ref-boyer2011>` with the :math:`C^1` Hermite centreline
 interpolation of :ref:`Meier, Popp & Wall (2015) <ref-meier2015>`, reduced to a torsion-free
-cable.
+cable. Torsion enters only through the condensed line term below.
+
+.. _theory-torsion:
+
+Condensed torsion
+~~~~~~~~~~~~~~~~~
+
+A line restrained in torsion at both ends (``END CONNECTIONS`` ``TorsStiffness``, see
+:doc:`driver_format`) adds the twist of an isotropic Kirchhoff rod without adding degrees of
+freedom. For an isotropic section with no distributed torque the twisting moment
+:math:`M = GJ\,u_3`, with :math:`u_3` the material twist rate, is uniform along the rod
+(:ref:`van der Heijden et al., 2003 <ref-vanderheijden2003>`). The twist field
+then condenses to one scalar per line, and the line energy gains
+
+.. math::
+
+   E_t = \frac{(\Phi - \Theta(\mathbf{q}))^2}{2C}, \qquad
+   M = \frac{\Phi - \Theta}{C}, \qquad
+   C = \sum_e \frac{L_{0,e}}{GJ_e} + \frac{1}{k_A} + \frac{1}{k_B} .
+
+:math:`\Phi` is the imposed relative roll of the End B frame with respect to the End A frame
+(``Pretwist`` and the ``motionFile`` roll column), :math:`k_A, k_B` are the optional torsional end
+springs (:math:`1/k = 0` for ``Rigid``), and :math:`\Theta(\mathbf{q})` is the geometric twist of
+the centreline: the angle about the End B direction :math:`\mathbf{d}_B`, right-handed, from the
+End B reference normal :math:`\mathbf{n}_B` to the End A normal :math:`\mathbf{n}_A` carried to End B
+by parallel transport. Each end frame :math:`(\mathbf{d}, \mathbf{n})` turns with the body or vessel
+that holds the end. A clamped end has :math:`\mathbf{d}` equal to its end tangent; at a
+bending-pinned end :math:`\mathbf{d}` is the connection direction and the transport starts with
+the smallest rotation from :math:`\mathbf{d}` to the tangent.
+
+Because the Hermite centreline is :math:`C^1`, the transport factorises into one holonomy per
+element and a chain of smallest rotations between the unit node tangents
+:math:`\mathbf{t}_k = \mathbf{m}_k/\lvert\mathbf{m}_k\rvert`:
+
+.. math::
+
+   \Theta = \sum_e h_e + \chi, \qquad
+   h_e = \int_e \frac{\mathbf{t}_1 \cdot (\mathbf{a} \times \mathbf{b})}
+                     {\lvert\mathbf{a}\rvert^2 \left(1 + \mathbf{t}_1\cdot\mathbf{a}/\lvert\mathbf{a}\rvert\right)}
+         \,\mathrm{d}s ,
+
+with :math:`\mathbf{t}_1` the tangent at the element's first node, :math:`\mathbf{a} = \mathbf{r}'`,
+:math:`\mathbf{b} = \mathbf{r}''` at the Gauss points of the bending rule, and :math:`\chi` the
+angle of the smallest-rotation chain
+:math:`\mathbf{d}_A \to \mathbf{t}_1 \to \dots \to \mathbf{t}_N \to \mathbf{d}_B` applied to
+:math:`\mathbf{n}_A`. For differentiation, each link of the chain is written with a gauge frozen at
+the current configuration as a sum of signed solid angles
+:math:`\Omega(\mathbf{x}, \mathbf{y}, \mathbf{z}) = 2\operatorname{atan2}(\mathbf{x}\cdot(\mathbf{y}\times\mathbf{z}),
+1 + \mathbf{x}\cdot\mathbf{y} + \mathbf{y}\cdot\mathbf{z} + \mathbf{z}\cdot\mathbf{x})` of geodesic
+triangles, each of which involves at most two neighbouring tangents. The gradient and Hessian
+of :math:`\Theta` are therefore local, in closed form, and have the half-bandwidth of the cable
+tangent; the value of :math:`\Theta` is taken from the sequential product. This is the
+discrete parallel transport and holonomy of :ref:`Bergou et al. (2008) <ref-bergou2008>` applied
+to the Hermite centreline. The test suite checks the closed form against automatic
+differentiation of an independent reference implementation, against finite differences, and
+for invariance under rigid rotation.
+
+:math:`\Theta` is known modulo :math:`2\pi`. The solver carries its unwrapped value as a state
+of the line, unwraps each new evaluation to the branch nearest the last accepted value, and
+accepts no step that changes :math:`\Theta` by more than :math:`\pi/2`; such a step is cut. A
+link or Gauss point at which the tangent turns by more than 120° within one element or between
+neighbouring nodes (:math:`1 + \mathbf{t}_1\cdot\mathbf{t} < 0.5`) stops with a named error; a
+mesh that resolves the curvature is far from it.
+
+**Residual and tangent.** The torsion term adds :math:`-M\,\nabla\Theta` to the residual and
+
+.. math::
+
+   \mathbf{K} = \underbrace{\mathbf{K}_c - M\,\nabla^2\Theta}_{\mathbf{B}\ \text{(banded)}}
+               + \frac{1}{C}\,\nabla\Theta\,\nabla\Theta^{\mathsf T}
+
+to the tangent. The rank-one term is not banded; each Newton step solves the bordered system
+by Sherman–Morrison on the band factorisation of :math:`\mathbf{B}` with two right-hand sides,
+:math:`\mathbf{B}\mathbf{y} = -\mathbf{R}`, :math:`\mathbf{B}\mathbf{z} = \nabla\Theta`,
+:math:`\mathbf{x} = \mathbf{y} - \mathbf{z}\,(\nabla\Theta\cdot\mathbf{y})/(C + \nabla\Theta\cdot\mathbf{z})`,
+and accepts it on a backward-error test, with a shifted factorisation and iterative refinement
+as the fallback. Dropping the rank-one term would leave a Newton iteration that converges only
+linearly, at the rate :math:`\nabla\Theta^{\mathsf T}\mathbf{B}^{-1}\nabla\Theta / C`; on the
+post-buckled states of the validation (see :doc:`validation`) that rate is 0.05 to 0.22. The
+same term enters the dynamic effective tangent, scaled by :math:`1 - \alpha_f` of the force
+blend, and is frozen together with a reused factorisation.
+
+**Statics and stability.** The imposed twist is the last static load stage, ramped from the
+geometric twist of the untwisted equilibrium in steps of at most :math:`\pi/4`. Each converged
+stage is tested for stability by the inertia of :math:`\mathbf{K}` on the free DOFs,
+:math:`\operatorname{neg}(\mathbf{K}) = \operatorname{neg}(\mathbf{B}) -
+[1 + \nabla\Theta^{\mathsf T}\mathbf{B}^{-1}\nabla\Theta/C < 0]`, with the negative eigenvalues
+of :math:`\mathbf{B}` counted by a banded :math:`\mathbf{L}\mathbf{D}\mathbf{L}^{\mathsf T}`
+factorisation. Above a buckling onset the straight twisted state is a saddle to which Newton
+converges quadratically; the static solve then descends along the lowest mode with energy
+acceptance onto the buckled branch, and reports the descent. The onset is that of a
+clamped–clamped rod under the dead tension :math:`T`, eq. (33) of
+:ref:`van der Heijden et al. (2003) <ref-vanderheijden2003>`; at :math:`T = 0` it reduces to
+:math:`\tan x = x`, :math:`x = ML/2EI`, so :math:`M_{cr} = 8.9868\,EI/L`. At large tension it
+approaches the localised value :math:`2\sqrt{EI\,T}` of an infinite rod from above, reported in
+the same paper. A bending-pinned end restrained in torsion transmits the torque about the
+bisector of the connection direction and the tangent (a *semi-tangential* end, a
+constant-velocity joint), for which :math:`\tan x = -x/3` and :math:`M_{cr} = 4.9113\,EI/L` at
+zero tension, not the :math:`2\pi EI/L` of Greenhill's axial-torque hinge. OrcaFlex's
+bending-free end with a twisting spring gives the same value (see :doc:`validation`).
+
+**Dynamics and loads.** The torsion force enters the force-blended residual like the internal
+force, so a dynamic deck with torsion requires ``True alpha_force_blend`` (the default). Torsion
+carries no inertia: the torque follows the imposed twist within the step, without a torsional
+wave. This is accurate while the first torsional frequency of the line,
+:math:`\sqrt{GJ/I_p}/(2L)` with :math:`I_p` the polar mass moment per length, is well above the
+excitation; it is not for very long or torsionally soft lines. The moment of the torque on the
+object at End A is :math:`M\,\partial\Theta/\partial\boldsymbol{\omega}_A`, the derivative with
+respect to a rotation :math:`\boldsymbol{\omega}_A` of that object (for a clamped end, of its frame
+and the end tangent together), so the virtual work of the body moment is exact; for a straight
+line it is the torque along the line axis. The static body equilibrium uses the same moment and
+its stiffness :math:`\mathbf{a}\mathbf{a}^{\mathsf T}/C`, :math:`\mathbf{a} = \partial\Theta/\partial\boldsymbol{\omega}_A`.
+
+**Limits.** Seabed friction does not resist twist, so the laid part of a line twists freely
+(the friction torque of a cable on the seabed can be comparable with the twist torque near
+touchdown). There is no torque–tension coupling of armoured cables or wire ropes, no
+anisotropic or pre-twisted section, and no self-contact: a loop that closes on itself is not
+resolved. The model is that of :ref:`Meier, Popp & Wall (2014) <ref-meier2014>` and
+:ref:`Bergou et al. (2008) <ref-bergou2008>` restricted to the isotropic, torque-free-span case;
+it is not a new formulation.
 
 Constitutive laws
 -----------------

@@ -260,9 +260,21 @@ class DeckWriter:
         self._sections.append(f"{line} {line_type} {_num(length)} {segments}")
 
     def add_end_connection(
-        self, line_id: int, end: str, stiffness: float | str, direction: Sequence[float]
+        self,
+        line_id: int,
+        end: str,
+        stiffness: float | str,
+        direction: Sequence[float],
+        *,
+        torsion_stiffness: float | str | None = None,
+        normal: Sequence[float] | None = None,
+        pretwist: float | None = None,
     ) -> None:
         """Add a finite-EI line-end bending connection.
+
+        This writer has no torsion columns (``TorsStiffness NxX NxY NxZ Pretwist``) and
+        no ``GJ`` column, so a torsion argument is refused; build a deck with torsion with
+        ``cabledyn.builder.DeckModel.add_end_connection``.
 
         Parameters
         ----------
@@ -279,6 +291,8 @@ class DeckWriter:
             Three finite components of the non-zero end direction in the global
             frame, following CableDyn's End-A-to-End-B convention; normalized
             before writing.
+        torsion_stiffness, normal, pretwist : None
+            Not supported by this writer; any other value raises ``ValueError``.
 
         Raises
         ------
@@ -286,9 +300,16 @@ class DeckWriter:
             If ``line_id`` is not an integer.
         ValueError
             If ``line_id`` is not positive, ``end`` is not A or B, that end
-            already has a connection, ``stiffness`` is invalid, or
-            ``direction`` is not three finite components with a non-zero norm.
+            already has a connection, ``stiffness`` is invalid,
+            ``direction`` is not three finite components with a non-zero norm,
+            or a torsion argument is given.
         """
+        if torsion_stiffness is not None or normal is not None or pretwist is not None:
+            raise ValueError(
+                "the simple deck writer has no torsion columns or GJ; build a deck with torsion "
+                "with cabledyn.builder.DeckModel (add_end_connection(..., torsion_stiffness=..., "
+                "normal=..., pretwist=...))"
+            )
         key_id = _int(line_id, "line_id")
         if key_id < 1:
             raise ValueError("line_id must be positive")

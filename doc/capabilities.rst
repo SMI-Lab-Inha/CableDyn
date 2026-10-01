@@ -79,10 +79,23 @@ Line and constitutive capability
      - Supported with limits
      - single-section taut dynamic line with OWC and two history states; composite, hydro,
        finite-EI, current, and wave combinations fail closed by name
-   * - Torsion, hockling, nonlinear cross-section laws
+   * - Torsion of finite-EI lines
+     - Standalone only, with limits
+     - condensed isotropic torsion (uniform torque, quasi-static: no torsional inertia) of a
+       finite-EI line restrained in torsion at both ends (``END CONNECTIONS`` torsion columns,
+       explicit ``GJ``), in statics with a stability check and buckling descent, and in dynamics
+       with turning Rigid6 bodies, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll
+       column; ``Torq``/``Twist`` channels and range graphs. Stopped by name: coupled OpenFAST
+       and FAST.Farm, the mixed ``EI = 0`` + finite-EI aggregate, rod ends, bodies other than
+       Rigid6, lines with ``ATTACHMENTS``, modal analysis, ``False alpha_force_blend``, and C API
+       object queries (which take ``EI = 0`` decks only). Not modelled: seabed friction against
+       twist, torque–tension coupling, anisotropic sections, self-contact of a loop (see
+       :ref:`theory-torsion`)
+   * - Hockling loops, nonlinear cross-section laws
      - Not provided
-     - the production elements carry no torsion; the secondary Cosserat path
-       (:doc:`solver_paths`) is not a production route
+     - the buckling onset and the post-buckled shape are computed, but a loop that closes on
+       itself is not resolved; the secondary Cosserat path (:doc:`solver_paths`) is not a
+       production route
    * - Discrete attachments (``ATTACHMENTS``: buoyancy modules, clumps)
      - Supported
      - lumped at nodes of a finite-EI cable, standalone and coupled; rejected on the two-moving-end
@@ -90,7 +103,8 @@ Line and constitutive capability
    * - Modal analysis (``nModes``)
      - Standalone only
      - natural frequencies and mode shapes of each line about its static equilibrium (all
-       ``EI = 0`` lines, or all finite-EI lines on the Hermite route; flat seabed)
+       ``EI = 0`` lines, or all finite-EI lines on the Hermite route; flat seabed); a deck with
+       torsion is rejected
    * - VIV (``compVIV``)
      - Not implemented
      - use another validated model; CableDyn rejects the request

@@ -22,6 +22,25 @@ Element formulation
   and reduced models for geometrically exact Kirchhoff rods. *Computer Methods in Applied
   Mechanics and Engineering* **290**, 314–341. https://doi.org/10.1016/j.cma.2015.02.029
 
+.. _ref-meier2014:
+
+- **Meier, C., Popp, A. & Wall, W. A. (2014).** An objective 3D large deformation finite
+  element formulation for geometrically exact curved Kirchhoff rods. *Computer Methods in
+  Applied Mechanics and Engineering* **278**, 445–478. https://doi.org/10.1016/j.cma.2014.05.017
+
+.. _ref-bergou2008:
+
+- **Bergou, M., Wardetzky, M., Robinson, S., Audoly, B. & Grinspun, E. (2008).** Discrete
+  elastic rods. *ACM Transactions on Graphics* **27**\ (3), 63.
+  https://doi.org/10.1145/1360612.1360662
+
+.. _ref-vanderheijden2003:
+
+- **van der Heijden, G. H. M., Neukirch, S., Goss, V. G. A. & Thompson, J. M. T. (2003).**
+  Instability and self-contact phenomena in the writhing of clamped rods. *International
+  Journal of Mechanical Sciences* **45**\ (1), 161–196.
+  https://doi.org/10.1016/S0020-7403(02)00183-2
+
 .. _ref-simo1985:
 
 - **Simo, J. C. (1985).** A finite strain beam formulation. The three-dimensional dynamic

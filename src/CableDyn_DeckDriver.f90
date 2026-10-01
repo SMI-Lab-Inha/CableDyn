@@ -97,7 +97,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Set_Friction_Anchors, &
                                           CD_HermiteCable_Dyn_Set_Friction_Axial, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
-                                          CD_HermiteCable_Attachment_Drag
+                                          CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -108,7 +109,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_Set_Tensile_Monitor, CD_HFMF_Get_Tensile_Diagnostics, &
                                           CD_HFMF_Get_Recovery_Diagnostics, &
                                           CD_HFMF_Set_Recovery_Max_Substeps, &
-                                          CD_HFMF_Set_EndConnection, CD_HFMF_Set_Attachments, &
+                                          CD_HFMF_Set_EndConnection, CD_HFMF_Set_Attachments, CD_HFMF_Set_Torsion, &
                                           CD_HFMF_Set_Held_Fluid, CD_HFMF_Set_Contact, CD_HFMF_NNodes, &
                                           CD_HFMF_Refresh_Acceleration, &
                                           CD_HFMF_GetNodePositions, CD_HFMF_UpdateStates, &
@@ -132,7 +133,8 @@ MODULE CableDyn_DeckDriver
                                   CD_Range_Commit_Sample, CD_Range_Clearance, CD_Range_TDP_Evaluate, &
                                   CD_Range_TDP_Reference, CD_Range_Write_Files, CD_Is_TDP_Channel, &
                                   CD_Parse_TDP_Channel, CD_RANGE_OK, CD_RANGE_BADINPUT, CD_RQ_TENSION, &
-                                  CD_RQ_CURVATURE, CD_RQ_BEND, CD_RQ_DECLINATION, CD_RQ_CLEARANCE, CD_TDP_N
+                                  CD_RQ_CURVATURE, CD_RQ_BEND, CD_RQ_DECLINATION, CD_RQ_CLEARANCE, CD_TDP_N, &
+                                  CD_RQ_TORQUE, CD_RQ_TWIST
   USE CableDyn_Conventions, ONLY: CD_Body_Rotation
   USE CableDyn_RigidKinematics, ONLY: CD_Rigid_Advance_Newmark, CD_RIGID_OK, CD_RIGID_NEWMARK_GAMMA, &
                                       CD_RIGID_NEWMARK_BETA
@@ -383,6 +385,12 @@ MODULE CableDyn_DeckDriver
     INTEGER :: deck_line = 0              ! deck file line of the row, for error messages
   END TYPE
 
+  ! END CONNECTIONS torsional restraint (TorsStiffness column)
+  INTEGER, PARAMETER :: TORS_FREE = 0, TORS_RIGID = 1, TORS_FINITE = 2
+  ! Smallest |Nx x Ez| / |Nx| accepted for a reference normal (about 0.06 degrees off Ez).
+  REAL(wp), PARAMETER :: TORS_NX_PARALLEL_TOL = 1.0e-3_wp
+  REAL(wp), PARAMETER :: DEG2RAD_TORS = 3.14159265358979323846264338327950288_wp/180.0_wp
+
   TYPE :: DeckLine
     INTEGER :: id = 0, nodeA = 0, nodeB = 0
     CHARACTER(NAMELEN) :: outputs = '-'
@@ -397,6 +405,14 @@ MODULE CableDyn_DeckDriver
     INTEGER :: endconn_mode(2) = CD_ENDCONN_PINNED
     REAL(wp) :: endconn_k(2) = CD_ZERO
     REAL(wp) :: endconn_ez_ref(3, 2) = CD_ZERO
+    ! Torsional end restraint of the optional END CONNECTIONS columns (End A, End B): mode
+    ! TORS_FREE (default), TORS_RIGID or TORS_FINITE with stiffness tors_k [N m/rad]; tors_nx the
+    ! unit zero-twist reference normal in the frame of Ez (perpendicular to Ez); tors_pretwist
+    ! the roll of the end frame about Ez [rad]. Torsion is active only with both ends restrained.
+    INTEGER :: tors_mode(2) = TORS_FREE
+    REAL(wp) :: tors_k(2) = CD_ZERO
+    REAL(wp) :: tors_nx(3, 2) = CD_ZERO
+    REAL(wp) :: tors_pretwist(2) = CD_ZERO
     INTEGER :: deck_line = 0              ! deck file line of the row, for error messages
     ! ATTACHMENTS (finite-EI lines): one column per discrete attachment -- arc length from
     ! End A [m], mass [kg], displaced volume [m^3], drag area CdA [m^2], added-mass Ca [-],
@@ -410,6 +426,10 @@ MODULE CableDyn_DeckDriver
     INTEGER :: mode = CD_ENDCONN_PINNED
     REAL(wp) :: stiffness = CD_ZERO
     REAL(wp) :: ez(3) = CD_ZERO
+    INTEGER :: tors_mode = TORS_FREE
+    REAL(wp) :: tors_k = CD_ZERO
+    REAL(wp) :: nx(3) = CD_ZERO
+    REAL(wp) :: pretwist = CD_ZERO
   END TYPE
 
   TYPE :: DeckFailure
@@ -639,6 +659,11 @@ MODULE CableDyn_DeckDriver
     ! angular velocity and acceleration (3,t); an end connection on a vessel point turns with R.
     LOGICAL :: has_rot = .FALSE.
     REAL(wp), ALLOCATABLE :: rot(:, :, :), omega(:, :), alpha(:, :)
+    ! Roll column of motionFile point rows (read only on a deck with a torsional line): roll(p, t)
+    ! [rad] of the line end frames at point p about their directors, added to the END
+    ! CONNECTIONS Pretwist of those ends; has_roll when some row gives one.
+    LOGICAL :: has_roll = .FALSE.
+    REAL(wp), ALLOCATABLE :: roll(:, :)
   END TYPE
 
   TYPE :: DriverProgress
@@ -1530,6 +1555,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: w_bare_deck(:), l0_deck_att(:), w_bare(:)
     INTEGER, ALLOCATABLE :: att_node(:)
     REAL(wp) :: att_offset
+    ! Condensed torsion (both END CONNECTIONS rows torsionally restrained): solved as the last
+    ! static load stage on the final mesh, then installed in the cable.
+    LOGICAL :: tors_line
+    TYPE(CD_HermiteTorsionType) :: tors
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -1664,6 +1693,10 @@ CONTAINS
       IF (endconn_mode(i) /= CD_ENDCONN_PINNED .AND. &
           ABS(endconn_d0_local(2, i)) > 64.0_wp*EPSILON(CD_ONE)) require_3d_static = .TRUE.
     END DO
+    ! A twisted line leaves the plane of its chord (the torque bends it out of plane), so a
+    ! torsional line is solved in 3D from the start.
+    tors_line = line_torsion_active(ln)
+    IF (tors_line) require_3d_static = .TRUE.
     ! A current with a component across the vertical plane of the chord pushes the line out
     ! of that plane, which the dynamics (endpoints held, every other DOF free) follow: the
     ! static equilibrium is then solved in 3D as well.
@@ -2525,6 +2558,15 @@ CONTAINS
         'found, so a cross-flow or a lateral disturbance can move the line away from it'
       CALL report_note(note_text)
     END IF
+    IF (tors_line) THEN
+      CALL torsion_stage(es, em)
+      IF (es /= CD_DECKDRV_OK) THEN
+        ErrStat = es
+        IF (INDEX(em, 'CableDyn_DeckDriver: ') == 1) em = em(LEN('CableDyn_DeckDriver: ') + 1:)
+        ErrMsg = 'CableDyn_DeckDriver: line '//TRIM(int_to_str(ln%id))//': '//TRIM(em)
+        RETURN
+      END IF
+    END IF
     IF (contact_enabled) CALL anchor_overshoot_note()
     ! Safety is independent of the opt-in adaptive accuracy policy. Diagnose the
     ! equilibrium on the FINAL user/refined mesh and reject an element-localized fold
@@ -2644,6 +2686,20 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable end-connection wiring failed: '//TRIM(em)); RETURN
       END IF
     END IF
+    IF (tors_line) THEN
+      ! The End A torsion frame (director -Ez, reference normal Nx, in the frame of Ez) is held
+      ! by End A's parent and turns with it in the dynamics, whatever the bending connection.
+      BLOCK
+        REAL(wp) :: tframe(3, 2)
+        tframe(:, 1) = -ln%endconn_ez_ref(:, 1)/NORM2(ln%endconn_ez_ref(:, 1))
+        tframe(:, 2) = ln%tors_nx(:, 1) - DOT_PRODUCT(ln%tors_nx(:, 1), tframe(:, 1))*tframe(:, 1)
+        tframe(:, 2) = tframe(:, 2)/NORM2(tframe(:, 2))
+        CALL CD_HFMF_Set_Torsion(cable, tors, es, em, coupled_frame_parent=tframe, parent_orientation=fairlead_dcm)
+      END BLOCK
+      IF (es /= CD_HFMF_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'finite-EI cable torsion wiring failed: '//TRIM(em)); RETURN
+      END IF
+    END IF
     IF (contact_enabled) THEN
       CALL CD_Nodal_Seabed_Stiffness(opts%kbot, diam, l0, contact_kn, es, em)
       IF (es /= CD_LINE_OK) THEN
@@ -2729,6 +2785,85 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable alpha_force_blend wiring failed: '//TRIM(em)); RETURN
     END IF
   CONTAINS
+
+    SUBROUTINE torsion_stage(est, emt)
+      !! The condensed-torsion load stage of a line restrained in torsion at both ends: from the
+      !! converged untwisted state on the final mesh (l0_am), CD_HermiteCable_Static_Solve ramps
+      !! the imposed twist Phi = Pretwist(End B) - Pretwist(End A) with the same loads, contact,
+      !! end connections and current as the untwisted solve, tests every stage for stability and
+      !! descends from an unstable one. End frames are taken in the solve frame: internal end 1
+      !! is deck End B (global axes), end 2 deck End A (its parent's axes, turned with it).
+      INTEGER, INTENT(OUT) :: est
+      CHARACTER(*), INTENT(OUT) :: emt
+      REAL(wp) :: nvec(3), dvec(3), tol_t
+      INTEGER :: k, attempt
+      CHARACTER(320) :: tnote
+      TYPE(CD_HermiteTorsionType) :: tors0
+      est = CD_DECKDRV_OK
+      emt = ''
+      tors = CD_HermiteTorsionType()
+      tors%active = .TRUE.
+      tors%quadrature_order = opts%bending_quadrature_order
+      tors%gj = gj_in
+      IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%gj, l0, l0_am)
+      DO k = 1, 2
+        dvec = endconn_d0_local(:, k)/NORM2(endconn_d0_local(:, k))
+        IF (k == 1) THEN
+          nvec = ln%tors_nx(:, 2)
+        ELSE
+          nvec = MATMUL(TRANSPOSE(fairlead_dcm), ln%tors_nx(:, 1))
+        END IF
+        nvec = [frame_cs(1)*nvec(1) + frame_cs(2)*nvec(2), -frame_cs(2)*nvec(1) + frame_cs(1)*nvec(2), nvec(3)]
+        nvec = nvec - DOT_PRODUCT(nvec, dvec)*dvec
+        IF (NORM2(nvec) < TORS_NX_PARALLEL_TOL) THEN
+          est = CD_DECKDRV_BADINPUT
+          emt = 'torsion reference normal parallel to the end direction'
+          RETURN
+        END IF
+        tors%ends(:, 2*k - 1) = dvec
+        tors%ends(:, 2*k) = nvec/NORM2(nvec)
+      END DO
+      tors%end_compliance = CD_ZERO
+      IF (ln%tors_mode(2) == TORS_FINITE) tors%end_compliance(1) = CD_ONE/ln%tors_k(2)
+      IF (ln%tors_mode(1) == TORS_FINITE) tors%end_compliance(2) = CD_ONE/ln%tors_k(1)
+      tors%phi = ln%tors_pretwist(2) - ln%tors_pretwist(1)
+      ! Rotating a buckled shape about a common clamp axis is an exact symmetry only without
+      ! weight or current, with both ends clamped on one axis.
+      tors%zero_mode_allowed = .NOT. ANY(ABS(w_am) > CD_ZERO) .AND. .NOT. opts%has_current .AND. &
+                               ALL(endconn_mode == CD_ENDCONN_RIGID) .AND. &
+                               DOT_PRODUCT(tors%ends(:, 1), tors%ends(:, 3)) > CD_ONE - 1.0e-12_wp
+      ! As for the untwisted solve: a residual stall at the tight standalone tolerance is
+      ! repeated at the coupled static tolerance (a round-off floor of a stiff, light line).
+      ! Every attempt starts from the same fresh torsion state (no Theta carried over).
+      tors0 = tors
+      DO attempt = 1, 2
+        tors = tors0
+        tol_t = static_tol_target
+        IF (attempt == 2) tol_t = COUPLED_STATIC_TOL
+        IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+          CALL hermite_static_torsion(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, curv, fixed_am, &
+                                      contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
+                                      endconn_mode, opts, tol_t, tors, est, emt, bathymetry=bathymetry, &
+                                      cur_obj=cur_obj)
+        ELSE
+          CALL hermite_static_torsion(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, curv, fixed_am, &
+                                      contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
+                                      endconn_mode, opts, tol_t, tors, est, emt, cur_obj=cur_obj)
+        END IF
+        IF (est == CD_DECKDRV_OK .OR. est == CD_DECKDRV_BADINPUT) EXIT
+        IF (static_tol_target >= COUPLED_STATIC_TOL) EXIT
+      END DO
+      IF (est == CD_DECKDRV_OK .AND. tol_t > static_tol_target) THEN
+        WRITE (tnote, '(A,I0,A,ES9.2,A,ES9.2)') 'line ', ln%id, ': torsion static residual floor above the '// &
+          'tolerance ', static_tol_target, '; twisted equilibrium accepted at ', tol_t
+        CALL report_note(tnote)
+      END IF
+      IF (est /= CD_DECKDRV_OK) RETURN
+      WRITE (tnote, '(A,I0,A,ES12.5,A,ES12.5,A,I0,A,I0,A)') 'line ', ln%id, ': torsion solved, imposed twist ', &
+        tors%phi*45.0_wp/QUARTER_PI, ' deg, torque ', tors%torque, ' N m (', tors%ramp_steps, &
+        ' twist stage(s), ', tors%descents, ' buckling descent(s))'
+      CALL report_note(tnote)
+    END SUBROUTINE torsion_stage
 
     SUBROUTINE bow_route(done, why)
       !! A line too long for its span whose anchor walk failed or reached an equilibrium the
@@ -4518,6 +4653,76 @@ CONTAINS
     END IF
   END SUBROUTINE hermite_static_stable
 
+  SUBROUTINE hermite_static_torsion(l0_deck, l0, ea, ei, w, diam_deck, dry_deck, q, curv, fixed_dofs, &
+                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, opts, &
+                                    tol, tors, ErrStat, ErrMsg, bathymetry, cur_obj)
+    !! Torsion stage of a deck cable on its final mesh l0: CD_HermiteCable_Static_Solve from the
+    !! converged untwisted state q (one EI and buoyancy stage, a polish) with the torsion
+    !! description tors, under the same contact, dry-buoyancy, end-connection and current terms
+    !! as hermite_static_stable. On success q and curv hold the twisted equilibrium and tors its
+    !! accepted Theta, torque and stability report.
+    REAL(wp), INTENT(IN) :: l0_deck(:), l0(:), ea(:), ei(:), w(:), diam_deck(:), dry_deck(:)
+    REAL(wp), INTENT(INOUT) :: q(:), curv(:)
+    INTEGER, INTENT(IN) :: fixed_dofs(:)
+    LOGICAL, INTENT(IN) :: contact_enabled
+    REAL(wp), INTENT(IN) :: contact_z, frame_cs(2), endconn_k(2), endconn_d0(3, 2), tol
+    INTEGER, INTENT(IN) :: endconn_mode(2)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(CD_HermiteTorsionType), INTENT(INOUT) :: tors
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
+    REAL(wp), ALLOCATABLE :: diam(:), dry(:), knnode(:), q_out(:)
+    REAL(wp) :: res
+    INTEGER :: i, ne, it, es
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    ne = SIZE(l0)
+    diam = diam_deck
+    dry = dry_deck
+    IF (ne /= SIZE(l0_deck)) THEN
+      CALL remap_elem_by_reference_arc(diam, l0_deck, l0)
+      CALL remap_elem_by_reference_arc(dry, l0_deck, l0)
+    END IF
+    ALLOCATE (q_out(SIZE(q)))
+    IF (contact_enabled) THEN
+      ALLOCATE (knnode(ne + 1))
+      knnode = CD_ZERO
+      DO i = 1, ne
+        knnode(i) = knnode(i) + 0.5_wp*opts%kbot*diam(i)*l0(i)
+        knnode(i + 1) = knnode(i + 1) + 0.5_wp*opts%kbot*diam(i)*l0(i)
+      END DO
+      CALL CD_HermiteCable_Static_Solve(l0, ea, ei, w, q, fixed_dofs, contact_z, CD_ZERO, 1, 200, &
+                                        tol, 0.7_wp, q_out, curv, res, it, es, em, n_buoy_steps=1, &
+                                        contact_kn=knnode, bathymetry=bathymetry, contact_frame_cs=frame_cs, &
+                                        axial_quadrature_order=opts%axial_quadrature_order, &
+                                        bending_quadrature_order=opts%bending_quadrature_order, &
+                                        endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
+                                        endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
+                                        water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors)
+    ELSE
+      CALL CD_HermiteCable_Static_Solve(l0, ea, ei, w, q, fixed_dofs, contact_z, CD_ZERO, 1, 200, &
+                                        tol, 0.7_wp, q_out, curv, res, it, es, em, n_buoy_steps=1, &
+                                        axial_quadrature_order=opts%axial_quadrature_order, &
+                                        bending_quadrature_order=opts%bending_quadrature_order, &
+                                        endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
+                                        endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
+                                        water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors)
+    END IF
+    IF (es == CD_HCSTAT_BADINPUT) THEN
+      CALL fail(ErrStat, ErrMsg, 'finite-EI torsion static solve rejected the input: '//TRIM(em)); RETURN
+    ELSE IF (es /= CD_HCSTAT_OK) THEN
+      CALL fail_solve(ErrStat, ErrMsg, 'finite-EI torsion static solve failed: '//TRIM(em)); RETURN
+    END IF
+    IF (.NOT. tors%stable) THEN
+      CALL fail_solve(ErrStat, ErrMsg, 'finite-EI torsion static solve ended on an unstable equilibrium'); RETURN
+    END IF
+    q = q_out
+  END SUBROUTINE hermite_static_torsion
+
   SUBROUTINE audit_hermite_static(l0, q, ea, ei, w, diam, endconn_mode, physical, message, compression_note)
     !! Physical-branch audit of a converged deck cable (CD_HermiteCable_Branch_Audit).
     !! A rotationally restrained end (Finite/Rigid connection) may turn the centreline
@@ -4690,6 +4895,10 @@ CONTAINS
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, caller_driven=.TRUE.)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    IF (deck_has_torsion_columns(lines)) THEN
+      CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in coupled OpenFAST runs; set TorsStiffness '// &
+                'Free in every END CONNECTIONS row'); RETURN
+    END IF
     IF (.NOT. deck_has_finite_ei(types, sections)) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: deck has no finite-EI (EI>0) line; '// &
                 'EI=0 decks use CD_Init_Deck_System'); RETURN
@@ -4840,6 +5049,14 @@ CONTAINS
                     ErrStat, ErrMsg, caller_driven=.TRUE., env_gravity=env_gravity, &
                     env_rho_water=env_rho_water, env_wtrdpth=env_wtrdpth, allow_turbine=.TRUE., &
                     failures=fails, controls=ctrls, run_tmax=run_tmax, host_coupled_objects=.TRUE.)
+    IF (ErrStat == CD_DECKDRV_OK) THEN
+      IF (deck_has_torsion_columns(lines)) THEN
+        CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in a deck that mixes EI = 0 and finite-EI '// &
+                  'lines without a BODY, nor in coupled OpenFAST or FAST.Farm runs (with a BODY such a deck '// &
+                  'runs on the multibody route, which supports torsion); set TorsStiffness Free in every END '// &
+                  'CONNECTIONS row'); RETURN
+      END IF
+    END IF
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     host_dcm = CD_ZERO
     host_dcm(1, 1) = CD_ONE
@@ -5895,6 +6112,24 @@ CONTAINS
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, failures=fails)
     IF (ErrStat /= 0) RETURN
+    ! Torsion (both ends of a line torsionally restrained) runs on the standalone cubic-Hermite
+    ! route and the multibody march, in statics and dynamics (quasi-static torsion: no torsional
+    ! inertia). One restrained end carries no torque (the other end is free to twist), so it is
+    ! noted and ignored.
+    DO li = 1, SIZE(lines)
+      IF (COUNT(lines(li)%tors_mode /= TORS_FREE) == 1) WRITE (output_unit, '(A)') '  Note: line '// &
+        TRIM(int_to_str(lines(li)%id))//' is torsionally restrained at one end only; with the other end free '// &
+        'to twist it carries no torque, so no torsion is solved.'
+    END DO
+    IF (ANY([(line_torsion_active(lines(li)), li=1, SIZE(lines))])) THEN
+      IF (opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. .NOT. opts%alpha_force_blend) THEN
+        CALL fail(ErrStat, ErrMsg, 'torsion in a dynamic run needs the force-blended generalised-alpha (OPTION '// &
+                  'alpha_force_blend True)'); RETURN
+      END IF
+      IF (opts%n_modes > 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'modal analysis (OPTION nModes) of a line with torsion is not yet supported'); RETURN
+      END IF
+    END IF
     ! A FAILURE deck is inherently dynamic (the trigger fires at a committed march
     ! step) and runs on the point-system object graph -- the only path with the
     ! reserve-point detach machinery. Every other branch fails closed by name.
@@ -8412,7 +8647,8 @@ CONTAINS
         CALL apply_syrope_ic(line, lines, nlin, ErrStat, ErrMsg)
       CASE (SEC_ENDCONN)
         IF (.NOT. has_numeric_token(line)) CYCLE
-        CALL list_safe_row(line, NO_TEXT_COLS, [2, 3], row, ErrStat, ErrMsg)
+        ! End, Stiffness and TorsStiffness take keywords (Rigid, Infinity, Inf, Free, ...)
+        CALL list_safe_row(line, NO_TEXT_COLS, [2, 3, 7], row, ErrStat, ErrMsg)
         IF (ErrStat == 0) CALL append_end_connection(row, endconns, nec, ErrStat, ErrMsg)
       CASE (SEC_TURBINES)
         IF (.NOT. has_numeric_token(line)) CYCLE
@@ -10811,11 +11047,16 @@ CONTAINS
 
   SUBROUTINE append_end_connection(line, endconns, nec, ErrStat, ErrMsg)
     !! END CONNECTIONS row:
-    !!   LineID  End  BendingStiffness  EzX  EzY  EzZ
+    !!   LineID  End  BendingStiffness  EzX  EzY  EzZ  [TorsStiffness  NxX  NxY  NxZ  [Pretwist]]
     !! End is A or B. BendingStiffness is a non-negative number in N m/rad,
     !! Pinned/Free/Zero, or Rigid/Infinity. Ez follows the line End-A-to-End-B
     !! convention and is normalized here. Rigid selects the exact tangent-direction
     !! constraint; it is never converted to a large finite penalty stiffness.
+    !! The optional torsion columns (10 or 11 columns in all): TorsStiffness is Free/Zero/0
+    !! (default), Rigid/Infinity/Inf, or a positive torsional stiffness in N m/rad; Nx is the
+    !! zero-twist reference normal in the frame of Ez (finite, non-zero, not parallel to Ez;
+    !! orthonormalised against Ez here); Pretwist [deg, default 0, any real value] rolls the end
+    !! frame about Ez (right-hand rule).
     CHARACTER(*), INTENT(IN) :: line
     TYPE(DeckEndConnection), ALLOCATABLE, INTENT(INOUT) :: endconns(:)
     INTEGER, INTENT(INOUT) :: nec
@@ -10824,19 +11065,28 @@ CONTAINS
 
     TYPE(DeckEndConnection), ALLOCATABLE :: grown(:)
     TYPE(DeckEndConnection) :: ec
-    CHARACTER(NAMELEN) :: end_token, stiffness_token
-    REAL(wp) :: ez_norm
-    INTEGER :: ios, istat
+    CHARACTER(NAMELEN) :: end_token, stiffness_token, tors_token
+    REAL(wp) :: ez_norm, nx_norm
+    INTEGER :: ios, istat, ntok
     LOGICAL :: ok
 
     ErrStat = 0
     ErrMsg = ''
-    IF (count_tokens(line) /= 6) THEN
+    ntok = count_tokens(line)
+    IF (ntok /= 6 .AND. ntok /= 10 .AND. ntok /= 11) THEN
       CALL fail(ErrStat, ErrMsg, &
-                'END CONNECTIONS row needs 6 columns: LineID End Stiffness EzX EzY EzZ')
+                'END CONNECTIONS row needs 6 columns (LineID End Stiffness EzX EzY EzZ), or 10 or 11 with '// &
+                'the torsion columns (... TorsStiffness NxX NxY NxZ [Pretwist])')
       RETURN
     END IF
-    READ (line, *, IOSTAT=ios) ec%line_id, end_token, stiffness_token, ec%ez
+    tors_token = 'free'
+    IF (ntok == 6) THEN
+      READ (line, *, IOSTAT=ios) ec%line_id, end_token, stiffness_token, ec%ez
+    ELSE IF (ntok == 10) THEN
+      READ (line, *, IOSTAT=ios) ec%line_id, end_token, stiffness_token, ec%ez, tors_token, ec%nx
+    ELSE
+      READ (line, *, IOSTAT=ios) ec%line_id, end_token, stiffness_token, ec%ez, tors_token, ec%nx, ec%pretwist
+    END IF
     IF (ios /= 0 .OR. ec%line_id < 1) THEN
       CALL fail(ErrStat, ErrMsg, 'malformed END CONNECTIONS row')
       RETURN
@@ -10858,6 +11108,7 @@ CONTAINS
       ec%mode = CD_ENDCONN_RIGID
       ec%stiffness = CD_ZERO
     CASE DEFAULT
+      ! parse_real_token rejects NaN, Inf and subnormal values (the row guard skips keyword columns)
       CALL parse_real_token(stiffness_token, ec%stiffness, ok)
       IF (.NOT. ok) ec%stiffness = -CD_ONE
       IF (.NOT. IEEE_IS_FINITE(ec%stiffness) .OR. ec%stiffness < CD_ZERO) THEN
@@ -10881,6 +11132,47 @@ CONTAINS
       RETURN
     END IF
     ec%ez = ec%ez/ez_norm
+    IF (ntok > 6) THEN
+      SELECT CASE (to_lower(TRIM(tors_token)))
+      CASE ('free', 'zero')
+        ec%tors_mode = TORS_FREE
+      CASE ('rigid', 'infinity', 'inf')
+        ec%tors_mode = TORS_RIGID
+      CASE DEFAULT
+        CALL parse_real_token(tors_token, ec%tors_k, ok)
+        IF (.NOT. ok) ec%tors_k = -CD_ONE
+        IF (.NOT. IEEE_IS_FINITE(ec%tors_k) .OR. ec%tors_k < CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsional stiffness must be finite and non-negative, '// &
+                    'Free, or Rigid')
+          RETURN
+        END IF
+        ec%tors_mode = MERGE(TORS_FINITE, TORS_FREE, ec%tors_k > CD_ZERO)
+      END SELECT
+      IF (.NOT. (ALL(IEEE_IS_FINITE(ec%nx)) .AND. IEEE_IS_FINITE(ec%pretwist))) THEN
+        CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal and pretwist must be finite')
+        RETURN
+      END IF
+      IF (ec%tors_mode == TORS_FREE) THEN
+        ! a Free end has no torsion frame: its Nx and Pretwist are not used (6-column meaning)
+        ec%nx = CD_ZERO
+        ec%pretwist = CD_ZERO
+      ELSE
+        nx_norm = SQRT(DOT_PRODUCT(ec%nx, ec%nx))
+        IF (.NOT. IEEE_IS_FINITE(nx_norm) .OR. nx_norm <= SQRT(TINY(CD_ONE))) THEN
+          CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must be non-zero')
+          RETURN
+        END IF
+        ec%nx = ec%nx/nx_norm
+        IF (NORM2(cross3(ec%nx, ec%ez)) < TORS_NX_PARALLEL_TOL) THEN
+          CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must not be '// &
+                    'parallel to the direction Ez')
+          RETURN
+        END IF
+        ec%nx = ec%nx - DOT_PRODUCT(ec%nx, ec%ez)*ec%ez
+        ec%nx = ec%nx/NORM2(ec%nx)
+        ec%pretwist = ec%pretwist*DEG2RAD_TORS
+      END IF
+    END IF
 
     ALLOCATE (grown(nec + 1), STAT=istat)
     IF (istat /= 0) THEN
@@ -11018,6 +11310,10 @@ CONTAINS
       lines(lidx)%endconn_mode(endconns(i)%end_index) = endconns(i)%mode
       lines(lidx)%endconn_k(endconns(i)%end_index) = endconns(i)%stiffness
       lines(lidx)%endconn_ez_ref(:, endconns(i)%end_index) = endconns(i)%ez
+      lines(lidx)%tors_mode(endconns(i)%end_index) = endconns(i)%tors_mode
+      lines(lidx)%tors_k(endconns(i)%end_index) = endconns(i)%tors_k
+      lines(lidx)%tors_nx(:, endconns(i)%end_index) = endconns(i)%nx
+      lines(lidx)%tors_pretwist(endconns(i)%end_index) = endconns(i)%pretwist
     END DO
   END SUBROUTINE resolve_end_connections
 
@@ -12019,7 +12315,7 @@ CONTAINS
       CALL parse_point_channel(ch, a, b)
       IF (a > 0 .AND. b > 0) key = 'point:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))
     ELSE IF (starts_with(lo, 'ten') .OR. starts_with(lo, 'curv') .OR. starts_with(lo, 'bendmom') .OR. &
-             starts_with(lo, 'l')) THEN
+             starts_with(lo, 'l') .OR. starts_with(lo, 'torq') .OR. starts_with(lo, 'twist')) THEN
       CALL parse_line_node_channel(ch, a, b, c, d)
       IF (a > 0 .AND. b > 0 .AND. c > 0) key = 'node:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))// &
                                                ':'//TRIM(int_to_str(c))//':'//TRIM(int_to_str(d))
@@ -12122,6 +12418,20 @@ CONTAINS
         ez_tmp = lines(i)%endconn_ez_ref(:, 1)
         lines(i)%endconn_ez_ref(:, 1) = -lines(i)%endconn_ez_ref(:, 2)
         lines(i)%endconn_ez_ref(:, 2) = -ez_tmp
+        ! torsion: the reference normals swap with their ends; a pretwist is a roll about Ez,
+        ! which is reversed, so its sign flips (Phi = pretwist B - pretwist A is unchanged)
+        mode_tmp = lines(i)%tors_mode(1)
+        lines(i)%tors_mode(1) = lines(i)%tors_mode(2)
+        lines(i)%tors_mode(2) = mode_tmp
+        k_tmp = lines(i)%tors_k(1)
+        lines(i)%tors_k(1) = lines(i)%tors_k(2)
+        lines(i)%tors_k(2) = k_tmp
+        ez_tmp = lines(i)%tors_nx(:, 1)
+        lines(i)%tors_nx(:, 1) = lines(i)%tors_nx(:, 2)
+        lines(i)%tors_nx(:, 2) = ez_tmp
+        k_tmp = lines(i)%tors_pretwist(1)
+        lines(i)%tors_pretwist(1) = -lines(i)%tors_pretwist(2)
+        lines(i)%tors_pretwist(2) = -k_tmp
         ! attachment arcs are measured from End A, which is now the other end
         IF (ALLOCATED(lines(i)%att)) &
           lines(i)%att(1, :) = SUM(sections%length, MASK=sections%line_id == lines(i)%id) - lines(i)%att(1, :)
@@ -13037,6 +13347,10 @@ CONTAINS
 
     DO i = 1, SIZE(lines)
       at_line = lines(i)%deck_line
+      IF (ANY(lines(i)%tors_mode /= TORS_FREE)) THEN
+        CALL check_torsion_line(lines(i), ErrStat, ErrMsg)
+        IF (ErrStat /= 0) RETURN
+      END IF
       IF (.NOT. ANY(lines(i)%endconn_mode /= CD_ENDCONN_PINNED)) CYCLE
       IF (.NOT. line_is_finite_ei(lines(i), types, sections)) THEN
         CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS requires a finite-EI line')
@@ -13082,6 +13396,69 @@ CONTAINS
       IF (ErrStat /= 0) RETURN
     END DO
     at_line = 0
+
+  CONTAINS
+
+    SUBROUTINE check_torsion_line(ln, es_t, em_t)
+      !! A line with a torsional END CONNECTIONS restraint: a finite-EI (cubic-Hermite) line. With
+      !! both ends restrained (torsion active) End B must be Fixed, every section's LINE TYPES row
+      !! must give an explicit GJ, End A may not be a rod end, a body End A must be a Rigid6 body,
+      !! and ATTACHMENTS are not combined with it.
+      TYPE(DeckLine), INTENT(IN) :: ln
+      INTEGER, INTENT(OUT) :: es_t
+      CHARACTER(*), INTENT(OUT) :: em_t
+      INTEGER :: js, jp, jb
+      CHARACTER(32) :: lid
+      es_t = 0
+      em_t = ''
+      lid = TRIM(int_to_str(ln%id))
+      IF (.NOT. line_is_finite_ei(ln, types, sections)) THEN
+        CALL fail(es_t, em_t, 'torsional END CONNECTIONS (TorsStiffness Rigid or a stiffness) require a '// &
+                  'finite-EI line; line '//TRIM(lid)//' has EI = 0')
+        RETURN
+      END IF
+      ! one restrained end only carries no torque (noted and ignored): the rules below apply to a
+      ! line restrained at both ends
+      IF (.NOT. ALL(ln%tors_mode /= TORS_FREE)) RETURN
+      jp = find_point(points, ln%nodeB)
+      IF (jp < 1) RETURN
+      IF (TRIM(points(jp)%ptype) /= 'fixed') THEN
+        CALL fail(es_t, em_t, 'torsional END CONNECTIONS require a finite-EI line with Fixed End B; line '// &
+                  TRIM(lid)//' has two moving ends')
+        RETURN
+      END IF
+      DO js = 1, SIZE(sections)
+        IF (sections(js)%line_id /= ln%id) CYCLE
+        IF (sections(js)%ltype < 1 .OR. sections(js)%ltype > SIZE(types)) CYCLE
+        IF (.NOT. (types(sections(js)%ltype)%gj > CD_ZERO)) THEN
+          CALL fail(es_t, em_t, 'line '//TRIM(lid)//' is torsionally restrained at both ends: its LINE TYPES '// &
+                    'row "'//TRIM(types(sections(js)%ltype)%name)//'" must give an explicit GJ > 0 (the '// &
+                    '14-column row; torsion has no EI/1.3 default)')
+          RETURN
+        END IF
+      END DO
+      IF (ALLOCATED(ln%att)) THEN
+        CALL fail(es_t, em_t, 'line '//TRIM(lid)//': torsion is not combined with ATTACHMENTS in this build')
+        RETURN
+      END IF
+      jp = find_point(points, ln%nodeA)
+      IF (jp < 1) RETURN
+      IF (is_rod_point_type(points(jp)%ptype)) THEN
+        CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on a rod end is not supported '// &
+                  '(a rod has no spin angle in this build)')
+        RETURN
+      END IF
+      IF (starts_with(TRIM(points(jp)%ptype), 'body')) THEN
+        jb = find_body(bodies, points(jp)%body_id)
+        IF (jb > 0) THEN
+          IF (TRIM(bodies(jb)%btype) /= 'rigid6') THEN
+            CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on a body needs a Rigid6 '// &
+                      'body')
+            RETURN
+          END IF
+        END IF
+      END IF
+    END SUBROUTINE check_torsion_line
   END SUBROUTINE finalize_checks
 
   ! --------------------------------------------------------------------------- !
@@ -15991,7 +16368,8 @@ CONTAINS
       pc = points
       pa = find_point(points, cab_lines(c)%nodeA)
       IF (TRIM(pc(pa)%ptype) /= 'fixed') pc(pa)%ptype = 'coupled'
-      mb%cab_clamp(c) = cab_lines(c)%endconn_mode(1) /= CD_ENDCONN_PINNED .AND. TRIM(points(pa)%ptype) /= 'fixed'
+      mb%cab_clamp(c) = (cab_lines(c)%endconn_mode(1) /= CD_ENDCONN_PINNED .OR. line_torsion_active(cab_lines(c))) &
+                        .AND. TRIM(points(pa)%ptype) /= 'fixed'
       IF (mb%cab_clamp(c)) THEN
         ! End A clamped or elastic on its object: the connection direction is stored in the object
         ! frame and turns with the object's orientation (the OpenFAST parent-frame contract)
@@ -17537,18 +17915,24 @@ CONTAINS
     END SUBROUTINE cable_load
   END SUBROUTINE mb_imp_group_residual
 
-  SUBROUTINE mb_imp_row_scales(mb, points, opts, rscale)
+  SUBROUTINE mb_imp_row_scales(mb, points, opts, bh2, rscale)
     !! The force (translation rows) and moment (rotation rows) scale of every junction row, from
     !! its own object: the larger of its weight, its buoyancy, the line reactions at its
     !! attachments (their magnitudes summed, so a junction whose line loads cancel keeps their
     !! scale) and the cable end forces on it (at least 1 N), times its size (at least 1 m) for
-    !! moments.
+    !! moments. A body holding a line restrained in torsion has its moment rows scaled by its
+    !! rotational step stiffness instead when that is smaller, I_min/(beta h^2) + sum 1/C (bh2 =
+    !! beta h^2) times TORS_ROT_REF, so that the junction tolerance bounds the rotation error
+    !! (JUNCTION_TOL TORS_ROT_REF rad): the weight of a heavy body with a small rotational
+    !! inertia would otherwise accept a moment residual far above the line torque.
     TYPE(MultibodyMarch), INTENT(IN) :: mb
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: bh2
     REAL(wp), INTENT(OUT) :: rscale(:)
+    REAL(wp), PARAMETER :: TORS_ROT_REF = 1.0e-2_wp
     INTEGER :: ib, ir, p, ip, k, o, base, bases(2)
-    REAL(wp) :: f, l, arms(3, 2)
+    REAL(wp) :: f, l, arms(3, 2), kt
     rscale = CD_ONE
     DO ib = 1, SIZE(mb%rigid)
       o = mb%jb_off(ib)
@@ -17563,6 +17947,9 @@ CONTAINS
       f = MAX(f, cable_force(1, ib))
       rscale(o + 1:o + 3) = f
       rscale(o + 4:o + 6) = f*l
+      kt = torsion_stiffness(ib)
+      IF (kt > CD_ZERO) rscale(o + 4:o + 6) = MIN(f*l, MAX(CD_ONE, &
+                                                           (MINVAL(mb%rigid(ib)%inertia)/bh2 + kt)*TORS_ROT_REF))
     END DO
     DO ir = 1, SIZE(mb%rods)
       o = mb%jr_off(ir)
@@ -17602,6 +17989,21 @@ CONTAINS
         IF (mb%cab_kind(cc) == kind .AND. mb%cab_obj(cc) == obj) fc = MAX(fc, NORM2(mb%cab_force(:, cc)))
       END DO
     END FUNCTION cable_force
+
+    REAL(wp) FUNCTION torsion_stiffness(obj) RESULT(ks)
+      !! Summed torsional stiffness 1/C of the active torsional cables on body obj (0: none).
+      INTEGER, INTENT(IN) :: obj
+      INTEGER :: cc
+      REAL(wp) :: cmp
+      ks = CD_ZERO
+      IF (.NOT. ALLOCATED(mb%cables)) RETURN
+      DO cc = 1, SIZE(mb%cables)
+        IF (mb%cab_kind(cc) /= 1 .OR. mb%cab_obj(cc) /= obj) CYCLE
+        IF (.NOT. mb%cables(cc)%line%torsion%active) CYCLE
+        cmp = CD_HermiteTorsion_Compliance(mb%cables(cc)%line%torsion, mb%cables(cc)%line%l0)
+        IF (cmp > CD_ZERO) ks = ks + CD_ONE/cmp
+      END DO
+    END FUNCTION torsion_stiffness
   END SUBROUTINE mb_imp_row_scales
 
   RECURSIVE SUBROUTINE mb_step_implicit(mb, points, opts, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
@@ -17633,7 +18035,7 @@ CONTAINS
     REAL(wp), PARAMETER :: JUNCTION_TOL = 1.0e-6_wp, PREDICTOR_TOL = 1.0e-9_wp
     CHARACTER(24) :: tstr
     INTEGER :: dep, it, g, c, ib, ir, p, o, es, lit, nj, gworst, it2
-    LOGICAL :: lconv, lstall, first, ok, conv2, stall2, refresh, lines_stepped
+    LOGICAL :: lconv, lstall, first, ok, conv2, stall2, refresh, lines_stepped, tors_turn, lim
     INTEGER, PARAMETER :: TAN_MAX_AGE = 20
     REAL(wp) :: rho, am, af, beta_na, gam_na, t_af, h, fac, dth, worst, tol_it, am_p, gam_p, beta_p
     REAL(wp), ALLOCATABLE :: x(:), xp(:), r(:), rp(:), jac(:, :), dx(:), kg(:, :), ga(:, :), rscale(:)
@@ -17713,8 +18115,15 @@ CONTAINS
     first = .TRUE.
     lines_stepped = .FALSE.
     ok = .FALSE.
+    tors_turn = .FALSE.
     gworst = 0
     DO it = 1, MAX_OUTER
+      ! a body holding a line restrained in torsion turns by less than pi/2 per step: the line
+      ! sees the body only through its orientation, which cannot tell a turn of psi from one of
+      ! psi - 2 pi, so a larger trial turn could settle one turn off. The trial is held inside
+      ! the limit; a step whose solution lies outside it does not converge and is halved.
+      CALL mb_torsion_turn_limit(mb, x, dt, beta_na, lim)
+      tors_turn = tors_turn .OR. lim
       CALL mb_imp_states(mb, x, dt, gam_na, beta_na, gam_p, beta_p, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL mb_imp_scatter(mb, points, ErrStat, ErrMsg)
@@ -17776,7 +18185,7 @@ CONTAINS
       END DO
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       IF (.NOT. ALL(IEEE_IS_FINITE(r))) EXIT
-      IF (it == 1) CALL mb_imp_row_scales(mb, points, opts, rscale)
+      IF (it == 1) CALL mb_imp_row_scales(mb, points, opts, beta_na*dt*dt, rscale)
       ! every row against its own object's force (moment) scale
       worst = CD_ZERO
       DO g = 1, mb%ng
@@ -17874,7 +18283,12 @@ CONTAINS
     END DO
     mb%tan_age = HUGE(1)
     IF (dep >= MAX_DEPTH) THEN
-      IF (ErrStat == CD_DECKDRV_OK) THEN
+      IF (ErrStat == CD_DECKDRV_OK .AND. tors_turn) THEN
+        WRITE (tstr, '(ES12.5)') time
+        CALL fail_solve(ErrStat, ErrMsg, 'monolithic body/point step at t = '//TRIM(ADJUSTL(tstr))// &
+                        ' s: a body holding a line restrained in torsion turns by more than 90 deg in one step '// &
+                        'even after '//TRIM(int_to_str(MAX_DEPTH))//' step halvings; reduce dtM')
+      ELSE IF (ErrStat == CD_DECKDRV_OK) THEN
         IF (gworst > 0) THEN
           SELECT CASE (mb%g_kind(gworst))
           CASE (1)
@@ -17944,6 +18358,38 @@ CONTAINS
       END DO
     END SUBROUTINE cable_columns
   END SUBROUTINE mb_step_implicit
+
+  SUBROUTINE mb_torsion_turn_limit(mb, x, dt, beta_na, limited)
+    !! Keep every body that holds a cable restrained in torsion within a turn of TURN_FRAC
+    !! CD_HTORS_MAX_STEP over the step to the trial accelerations x: when the Newmark rotation
+    !! increment dt omega_n + dt^2 ((1/2 - beta) alpha_n + beta alpha_{n+1}) of
+    !! CD_Rigid_Advance_Newmark is larger, alpha_{n+1} is moved so that the increment keeps its
+    !! direction at that length (limited = .TRUE.). The cable sees the body only through its
+    !! orientation, which cannot tell a turn of psi from one of psi - 2 pi.
+    TYPE(MultibodyMarch), INTENT(IN) :: mb
+    REAL(wp), INTENT(INOUT) :: x(:)
+    REAL(wp), INTENT(IN) :: dt, beta_na
+    LOGICAL, INTENT(OUT) :: limited
+    REAL(wp), PARAMETER :: TURN_FRAC = 0.9_wp
+    INTEGER :: c, ib, o
+    REAL(wp) :: base(3), dpsi(3), s
+    limited = .FALSE.
+    IF (.NOT. ALLOCATED(mb%cables)) RETURN
+    DO c = 1, SIZE(mb%cables)
+      IF (mb%cab_kind(c) /= 1 .OR. .NOT. mb%cables(c)%line%torsion%active) CYCLE
+      ib = mb%cab_obj(c)
+      o = mb%jb_off(ib)
+      IF (o < 0) CYCLE
+      base = dt*mb%old_rigid(ib)%omega + dt*dt*(0.5_wp - beta_na)*mb%old_rigid(ib)%alpha
+      dpsi = base + dt*dt*beta_na*x(o + 4:o + 6)
+      IF (NORM2(dpsi) <= TURN_FRAC*CD_HTORS_MAX_STEP) CYCLE
+      ! non-finite trials are left to the residual's finite check
+      IF (.NOT. ALL(IEEE_IS_FINITE(dpsi))) CYCLE
+      s = TURN_FRAC*CD_HTORS_MAX_STEP/NORM2(dpsi)
+      x(o + 4:o + 6) = (s*dpsi - base)/(dt*dt*beta_na)
+      limited = .TRUE.
+    END DO
+  END SUBROUTINE mb_torsion_turn_limit
 
   INTEGER FUNCTION mb_cable_group(mb, c) RESULT(g)
     !! The junction group that carries cable c's End A object (0: a held attachment or an object
@@ -19300,7 +19746,7 @@ CONTAINS
 
   SUBROUTINE solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                          ErrMsg, bathymetry, points_only, jac_check_err, ext_pt, ext_fm, &
-                                         end_force_a, quiet, skipped)
+                                         end_force_a, quiet, skipped, ext_km, ext_rot)
     !! Static equilibrium of the free objects of a deck: free Rigid6 bodies (six DOFs: position
     !! and a rotation-vector increment on SO(3)), free rods (position and the two rotations
     !! normal to the axis; the rod is symmetric about it) and, jointly with them, the
@@ -19367,6 +19813,11 @@ CONTAINS
     ! point ext_pt(e), the force ext_fm(1:3, e) at that point and the moment ext_fm(4:6, e).
     INTEGER, INTENT(IN), OPTIONAL :: ext_pt(:)
     REAL(wp), INTENT(IN), OPTIONAL :: ext_fm(:, :)
+    ! ... and a moment stiffness of the extra load (a finite-EI line's condensed torsion): with
+    ! the carrying body turned from the orientation ext_rot(:, :, e) by the rotation vector dw
+    ! (global axes), the moment ext_fm(4:6, e) becomes ext_fm(4:6, e) - ext_km(:, :, e) dw. The
+    ! central-difference own-load Jacobian carries it into the Newton step and the stability test.
+    REAL(wp), INTENT(IN), OPTIONAL :: ext_km(:, :, :), ext_rot(:, :, :)
     ! The end force every moving line exerts on its End A point at the solution (zero for a line
     ! that does not move), and quiet: no notes or completion line.
     REAL(wp), INTENT(OUT), OPTIONAL :: end_force_a(:, :)
@@ -20034,6 +20485,10 @@ CONTAINS
           IF (kk == 0) CYCLE
           fk(:, kk) = fk(:, kk) + ext_fm(1:3, es_l)
           mk(:, kk) = mk(:, kk) + cross3(pts(ext_pt(es_l))%pos - cen(:, kk), ext_fm(1:3, es_l)) + ext_fm(4:6, es_l)
+          IF (PRESENT(ext_km) .AND. PRESENT(ext_rot)) THEN
+            IF (okind(kk) == OBJ_BODY) mk(:, kk) = mk(:, kk) - MATMUL(ext_km(:, :, es_l), &
+                                                CD_Log_SO3(MATMUL(bds(idx(kk))%rot_eq, TRANSPOSE(ext_rot(:, :, es_l)))))
+          END IF
         END DO
       END IF
       good = .TRUE.
@@ -20800,7 +21255,12 @@ CONTAINS
     !! repeat from the deck state until these loads change by at most 1e-7 of the force scale
     !! (moments of the force scale times 1 m), so the converged pose balances the Hermite cable
     !! exactly: at the fixed point the core's surrogate end force cancels. A deck without such a
-    !! line is the core solve unchanged.
+    !! line is the core solve unchanged. A line with condensed torsion also returns its torque,
+    !! which depends on the object's rotation as strongly as GJ/L: each pass then also gives the
+    !! core the torque's moment stiffness (1/C) a a^T about the previous pass's pose (a = dTheta/dw
+    !! of the cable at that pose, its shape held; C the line torsional compliance), so the passes
+    !! converge whatever the ratio of the object's own restoring stiffness to GJ/L (the passes
+    !! alone would need it far above GJ/L), to 1e-10 of the force scale.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckBody), INTENT(INOUT) :: bodies(:)
     TYPE(DeckRodType), INTENT(IN) :: rod_types(:)
@@ -20815,15 +21275,16 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: points_only
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_check_err
     INTEGER, PARAMETER :: MAX_PASS = 60
-    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp
+    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp
     TYPE(DeckBody), ALLOCATABLE :: bodies0(:)
     TYPE(DeckRod), ALLOCATABLE :: rods0(:)
     TYPE(DeckPoint), ALLOCATABLE :: points0(:)
     INTEGER, ALLOCATABLE :: cl(:), ext_pt(:)
-    REAL(wp), ALLOCATABLE :: ext_fm(:, :), new_fm(:, :), fs(:, :)
+    REAL(wp), ALLOCATABLE :: ext_fm(:, :), new_fm(:, :), fs(:, :), ext_km(:, :, :), ext_rot(:, :, :)
+    REAL(wp), ALLOCATABLE :: new_km(:, :, :), new_rot(:, :, :)
     INTEGER :: j, pa, e, pass, ncl, eworst
     LOGICAL :: only_points, held
-    REAL(wp) :: scale, change
+    REAL(wp) :: scale, change, pass_tol_eff
     CHARACTER(24) :: b1
 
     ErrStat = CD_DECKDRV_OK
@@ -20834,7 +21295,7 @@ CONTAINS
     ALLOCATE (cl(0))
     IF (.NOT. only_points .AND. .NOT. PRESENT(jac_check_err) .AND. opts%body_ic_static) THEN
       DO j = 1, SIZE(lines)
-        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED) CYCLE
+        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_active(lines(j))) CYCLE
         IF (.NOT. line_is_finite_ei(lines(j), types, sections)) CYCLE
         pa = find_point(points, lines(j)%nodeA)
         IF (pa < 1) CYCLE
@@ -20863,23 +21324,41 @@ CONTAINS
     rods0 = rods
     points0 = points
     ALLOCATE (ext_pt(ncl), ext_fm(6, ncl), new_fm(6, ncl), fs(3, SIZE(lines)))
+    ALLOCATE (ext_km(3, 3, ncl), ext_rot(3, 3, ncl), new_km(3, 3, ncl), new_rot(3, 3, ncl))
+    pass_tol_eff = PASS_TOL
     DO e = 1, ncl
       ext_pt(e) = find_point(points, lines(cl(e))%nodeA)
+      IF (line_torsion_active(lines(cl(e)))) pass_tol_eff = PASS_TOL_TORSION
     END DO
     ext_fm = CD_ZERO
+    ext_km = CD_ZERO
+    ext_rot = CD_ZERO
+    DO e = 1, ncl
+      ext_rot(1, 1, e) = CD_ONE
+      ext_rot(2, 2, e) = CD_ONE
+      ext_rot(3, 3, e) = CD_ONE
+    END DO
     DO pass = 1, MAX_PASS
       bodies = bodies0
       rods = rods0
       points = points0
-      CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
-                                       ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                       quiet=pass > 1, skipped=held)
+      ! the torque stiffness only with torsion: without it the core's arithmetic is exactly that
+      ! of a deck before torsion existed (no zero-stiffness correction, signed zeros kept)
+      IF (pass_tol_eff < PASS_TOL) THEN
+        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
+                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
+                                         quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot)
+      ELSE
+        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
+                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
+                                         quiet=pass > 1, skipped=held)
+      END IF
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! the objects stay at their deck poses (the core has already said why): nothing to balance
       IF (held) RETURN
       scale = CD_ONE
       DO e = 1, ncl
-        CALL hermite_end_loads(cl(e), new_fm(:, e))
+        CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
         new_fm(1:3, e) = new_fm(1:3, e) - fs(:, cl(e))
         scale = MAX(scale, NORM2(fs(:, cl(e))), NORM2(new_fm(1:3, e) + fs(:, cl(e))))
@@ -20887,9 +21366,11 @@ CONTAINS
       change = MAXVAL(ABS(new_fm - ext_fm))
       eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
       ext_fm = new_fm
-      IF (change <= PASS_TOL*scale) EXIT
+      ext_km = new_km
+      ext_rot = new_rot
+      IF (change <= pass_tol_eff*scale) EXIT
     END DO
-    IF (change > PASS_TOL*scale) THEN
+    IF (change > pass_tol_eff*scale) THEN
       WRITE (b1, '(ES10.3)') change/scale
       CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the clamped or elastic END CONNECTION '// &
                       'of finite-EI LINE '//TRIM(int_to_str(lines(cl(eworst))%id))//' did not converge after '// &
@@ -20903,11 +21384,14 @@ CONTAINS
 
   CONTAINS
 
-    SUBROUTINE hermite_end_loads(jl, fm)
+    SUBROUTINE hermite_end_loads(jl, fm, km, rot)
       !! The cubic-Hermite static end force and connection moment of line jl on its End A object,
-      !! at the current (solved) object poses and point positions.
+      !! at the current (solved) object poses and point positions; for a line with condensed
+      !! torsion, km = (1/C) a a^T, the torque's moment stiffness against a rotation of the object
+      !! with the cable shape held (a = dTheta/dw: the End A frame turns, and a clamped end's
+      !! tangent with it), in global axes, and rot the object's orientation (km = 0 otherwise).
       INTEGER, INTENT(IN) :: jl
-      REAL(wp), INTENT(OUT) :: fm(6)
+      REAL(wp), INTENT(OUT) :: fm(6), km(3, 3), rot(3, 3)
       TYPE(CD_HFMF_ModuleType) :: cab
       TYPE(DeckLine) :: lnc
       TYPE(DeckPoint), ALLOCATABLE :: pc(:)
@@ -20916,8 +21400,10 @@ CONTAINS
       CHARACTER(512) :: note
       CHARACTER(300) :: em
       fm = CD_ZERO
+      km = CD_ZERO
       lnc = lines(jl)
       CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, check_axis=.FALSE.)
+      rot = rclamp
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       lnc%endconn_ez_ref(:, 1) = dclamp
       pc = points
@@ -20931,6 +21417,26 @@ CONTAINS
         CALL CD_HFMF_CalcOutput(cab, fm(1:3), es, em, y_moment=fm(4:6))
         IF (es /= CD_HFMF_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lnc%id))// &
                                               ' static end loads failed: '//TRIM(em))
+      END IF
+      IF (ErrStat == CD_DECKDRV_OK .AND. cab%line%torsion%active) THEN
+        BLOCK
+          REAL(wp) :: th, mt, eg(6), a(3), ag(3), cc
+          REAL(wp), ALLOCATABLE :: gq(:)
+          INTEGER :: nb
+          ALLOCATE (gq(cab%line%ndof))
+          CALL CD_HermiteCable_Dyn_Torsion_State(cab%line, th, mt, es, em, gq, eg)
+          IF (es == CD_HCDYN_OK) THEN
+            ! End A is the cable's last node (internal end 2)
+            a = eg(4:6)
+            IF (cab%line%endconn_mode(2) == CD_ENDCONN_RIGID) THEN
+              nb = cab%line%ndof - 3
+              a = a + cross3(cab%line%q(nb + 1:nb + 3), gq(nb + 1:nb + 3))
+            END IF
+            ag = [cab%frame_c*a(1) - cab%frame_s*a(2), cab%frame_s*a(1) + cab%frame_c*a(2), a(3)]
+            cc = CD_HermiteTorsion_Compliance(cab%line%torsion, cab%line%l0)
+            km = SPREAD(ag, 2, 3)*SPREAD(ag, 1, 3)/cc
+          END IF
+        END BLOCK
       END IF
       CALL CD_HFMF_End(cab)
     END SUBROUTINE hermite_end_loads
@@ -23095,7 +23601,10 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'Hermite standalone cable count does not match line count'); RETURN
     END IF
     IF (opts%has_motion_file) THEN
-      CALL read_motion_file(opts%motion_file, points, opts, motion, ErrStat, ErrMsg)
+      CALL read_motion_file(opts%motion_file, points, opts, motion, ErrStat, ErrMsg, &
+                            with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]))
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL check_motion_roll(ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! Install row 1 without advancing the cable clock. The first pass makes the
       ! t=0 fluid sample use the prescribed geometry. The held-field setter refreshes
@@ -23171,6 +23680,12 @@ CONTAINS
                                     u_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
                                     u_angular_velocity=motion%omega(:, step + 1), &
                                     u_angular_acceleration=motion%alpha(:, step + 1))
+        ELSE IF (motion%has_roll .AND. line_torsion_active(lines(i)) .AND. &
+                 find_motion_point(motion, lines(i)%nodeA) > 0) THEN
+          ! imposed roll of End A about its director: Phi = Pretwist(B) - (Pretwist(A) + roll)
+          CALL CD_HFMF_UpdateStates(cables(i), up, uv, ua, es, em, &
+                                    u_twist=lines(i)%tors_pretwist(2) - lines(i)%tors_pretwist(1) - &
+                                    motion%roll(find_motion_point(motion, lines(i)%nodeA), step + 1))
         ELSE
           CALL CD_HFMF_UpdateStates(cables(i), up, uv, ua, es, em)
         END IF
@@ -23238,6 +23753,39 @@ CONTAINS
     converged = ErrStat == CD_DECKDRV_OK
     IF (converged) CALL range_write(ranges, out_root, ErrStat, ErrMsg)
     converged = ErrStat == CD_DECKDRV_OK
+
+  CONTAINS
+
+    SUBROUTINE check_motion_roll(est, emt)
+      !! The motionFile roll column drives a torsional line through its moving end only (internal
+      !! End A after the anchor-first swap: the user's End A, or End B of an anchor-first deck),
+      !! right-handed about the tangent pointing into the line, so Phi = Pretwist(B) -
+      !! Pretwist(A) - roll in either order; it starts from the static state (roll 0 at t = 0).
+      INTEGER, INTENT(OUT) :: est
+      CHARACTER(*), INTENT(OUT) :: emt
+      INTEGER :: ip, li
+      LOGICAL :: used
+      est = CD_DECKDRV_OK
+      emt = ''
+      IF (.NOT. motion%has_roll) RETURN
+      DO ip = 1, motion%n_point
+        IF (.NOT. ANY(ABS(motion%roll(ip, :)) > CD_ZERO)) CYCLE
+        used = .FALSE.
+        DO li = 1, SIZE(lines)
+          IF (lines(li)%nodeA == motion%point_ids(ip) .AND. line_torsion_active(lines(li))) used = .TRUE.
+        END DO
+        IF (.NOT. used) THEN
+          CALL fail(est, emt, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' has a non-zero roll '// &
+                    'column, but no line restrained in torsion at both ends (END CONNECTIONS TorsStiffness) '// &
+                    'has its moving (non-Fixed) end there'); RETURN
+        END IF
+        IF (ABS(motion%roll(ip, 1)) > CD_ZERO) THEN
+          CALL fail(est, emt, 'motionFile: the roll column of point '//TRIM(int_to_str(motion%point_ids(ip)))// &
+                    ' must be 0 at t = 0 (the static solve uses the END CONNECTIONS Pretwist, which takes a '// &
+                    'constant twist)'); RETURN
+        END IF
+      END DO
+    END SUBROUTINE check_motion_roll
   END SUBROUTINE write_hermite_dynamic_out
 
   SUBROUTINE write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
@@ -26463,7 +27011,12 @@ CONTAINS
     END SELECT
   END SUBROUTINE prescribed_point_state
 
-  SUBROUTINE read_motion_file(path, points, opts, motion, ErrStat, ErrMsg, include_rod_points, include_body_points)
+  SUBROUTINE read_motion_file(path, points, opts, motion, ErrStat, ErrMsg, include_rod_points, include_body_points, &
+                              with_roll)
+    !! Prescribed point motion: rows "time point_id x y z vx vy vz ax ay az". with_roll (a deck
+    !! with a torsional line) also reads an optional 12th column, the roll [deg] of the line end
+    !! frames at that point about their directors (motion%roll, radians); a point gives it on
+    !! every row or on none, and without with_roll a 12th token stays commentary.
     CHARACTER(*), INTENT(IN) :: path
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -26472,8 +27025,12 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: include_rod_points
     LOGICAL, INTENT(IN), OPTIONAL :: include_body_points
+    LOGICAL, INTENT(IN), OPTIONAL :: with_roll
 
     INTEGER :: unit, ios, ip, it, pid, nstep, lineno, row_status, ipt
+    LOGICAL :: read_roll, roll_ok
+    LOGICAL, ALLOCATABLE :: roll_seen(:, :)
+    CHARACTER(DECK_RECLEN) :: roll_tok
     REAL(wp) :: t, qv(3), vv(3), av(3), tol, row(11), trow(21), rq(3, 3), rp(3)
     CHARACTER(DECK_RECLEN) :: line
     CHARACTER(256) :: why
@@ -26487,6 +27044,8 @@ CONTAINS
     accept_body_points = .FALSE.
     IF (PRESENT(include_rod_points)) accept_rod_points = include_rod_points
     IF (PRESENT(include_body_points)) accept_body_points = include_body_points
+    read_roll = .FALSE.
+    IF (PRESENT(with_roll)) read_roll = with_roll
     CALL grid_step_count(opts%tmax, opts%dtM, nstep, grid_ok)
     IF (.NOT. grid_ok .OR. nstep < 0) THEN
       CALL fail(ErrStat, ErrMsg, 'motionFile needs finite dtM > 0 and TMax >= 0 with a representable step count')
@@ -26518,6 +27077,13 @@ CONTAINS
     motion%v = CD_ZERO
     motion%a = CD_ZERO
     seen = .FALSE.
+    ALLOCATE (roll_seen(MERGE(motion%n_point, 0, read_roll), MERGE(motion%n_time, 0, read_roll)), STAT=ios)
+    IF (ios == 0 .AND. read_roll) ALLOCATE (motion%roll(motion%n_point, motion%n_time), STAT=ios)
+    IF (ios /= 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'cannot allocate the motionFile roll table'); RETURN
+    END IF
+    roll_seen = .FALSE.
+    IF (read_roll) motion%roll = CD_ZERO
     tol = 100.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, opts%tmax)
     IF (opts%motion_kind /= MOTION_POINT_ROWS) THEN
       IF (accept_rod_points .OR. accept_body_points) THEN
@@ -26698,8 +27264,35 @@ CONTAINS
       motion%v(:, ip, it) = vv
       motion%a(:, ip, it) = av
       seen(ip, it) = .TRUE.
+      IF (read_roll) THEN
+        ! the optional roll column: a 12th token shaped like a number must be one
+        CALL get_token(line, 12, roll_tok, roll_ok)
+        IF (roll_ok) roll_ok = numeric_token_shape(roll_tok)
+        IF (roll_ok) THEN
+          CALL parse_real_token(roll_tok, motion%roll(ip, it), roll_ok)
+          IF (roll_ok) roll_ok = IEEE_IS_FINITE(motion%roll(ip, it))
+          IF (.NOT. roll_ok) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'the roll column (12th, degrees) must be a finite number')
+            CALL add_row_context('motionFile', lineno, line, ErrMsg)
+            RETURN
+          END IF
+          motion%roll(ip, it) = motion%roll(ip, it)*QUARTER_PI/45.0_wp
+          roll_seen(ip, it) = .TRUE.
+        END IF
+      END IF
     END DO
     CLOSE (unit)
+    IF (read_roll) THEN
+      DO ip = 1, motion%n_point
+        IF (ANY(roll_seen(ip, :)) .AND. .NOT. ALL(roll_seen(ip, :))) THEN
+          CALL fail(ErrStat, ErrMsg, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' gives the '// &
+                    'roll column (12th) on some rows only; give it on every row of the point or on none')
+          RETURN
+        END IF
+      END DO
+      motion%has_roll = ANY(roll_seen)
+    END IF
     IF (.NOT. ALL(seen)) THEN
       IF (accept_rod_points .OR. accept_body_points) THEN
         CALL fail(ErrStat, ErrMsg, 'motionFile must provide every eligible prescribed point at every dtM time')
@@ -27350,6 +27943,26 @@ CONTAINS
       IF (comp < 1 .OR. comp > 3 .OR. point_index(points, pidx) == 0) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": bad point id or component'); RETURN
       END IF
+    ELSE IF (starts_with(lo, 'torq') .OR. starts_with(lo, 'twist')) THEN
+      CALL parse_line_node_channel(ch, line_id, node, kind, comp)
+      li = find_line(lines, line_id)
+      IF (li /= 0 .AND. node == 0 .AND. names_node_zero(lo)) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node numbers start at 1 = End A (MoorDyn '// &
+                  'numbers from N0)'); RETURN
+      END IF
+      IF (li == 0 .OR. kind == 0 .OR. node < 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": bad torsion channel (use Torq<L>N<J>, '// &
+                  'Twist<L>N<J> or Twist<L>, with a known line id)'); RETURN
+      END IF
+      nelem = line_nelem_from_sections(lines(li)%id, sections)
+      IF (node > nelem + 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node index exceeds line node count'); RETURN
+      END IF
+      IF (.NOT. line_torsion_active(lines(li))) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line '//TRIM(int_to_str(line_id))//' is not '// &
+                  'torsionally restrained at both ends (END CONNECTIONS TorsStiffness), so it carries no '// &
+                  'torque'); RETURN
+      END IF
     ELSE IF (starts_with(lo, 'ten') .OR. starts_with(lo, 'curv') .OR. &
              starts_with(lo, 'bendmom') .OR. starts_with(lo, 'l')) THEN
       CALL parse_line_node_channel(ch, line_id, node, kind, comp)
@@ -27370,7 +27983,7 @@ CONTAINS
                 '" not supported (use FairTen<L>, AnchTen<L>, FairIncl<L>, AnchIncl<L>, '// &
                 'FairDecl<L>, AnchDecl<L> (FairAngle/AnchAngle aliases), '// &
                 'Point<P>p{x,y,z} (alias Con<P>p{x,y,z}), Point<P>F{x,y,z,H}, '// &
-                'Ten<L>N<J>, Curv<L>N<J>, BendMom<L>N<J>, '// &
+                'Ten<L>N<J>, Curv<L>N<J>, BendMom<L>N<J>, Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
                 'L<L>N<J>p{x,y,z}, L<L>N<J>v{x,y,z}, L<L>N<J>a{x,y,z}, L<L>N<J>Dec, L<L>N<J>Azi, '// &
                 'TDP<L>{s,x,y,z,Lay,Exc}, or the Body<N>/Rod<N> channels)'); RETURN
     END IF
@@ -27561,6 +28174,9 @@ CONTAINS
     !!   L<L>N<J>a{x,y,z}  -> kind=4, comp=1..3 acceleration        [m/s^2]
     !!   L<L>N<J>Dec       -> kind=7, comp=0    declination         [deg]
     !!   L<L>N<J>Azi       -> kind=8, comp=0    azimuth             [deg]
+    !!   Torq<L>N<J>       -> kind=9, comp=0    line torque         [N.m]
+    !!   Twist<L>N<J>      -> kind=10, comp=0   twist from End A    [deg]
+    !!   Twist<L>          -> kind=11, comp=0   total twist (node 1) [deg]
     CHARACTER(*), INTENT(IN) :: ch
     INTEGER, INTENT(OUT) :: line_id, node_id, kind, comp
 
@@ -27573,8 +28189,27 @@ CONTAINS
     kind = 0
     comp = 0
     last = LEN_TRIM(lo)
-    ! Scalar-per-node channels with a leading keyword: Ten / Curv / BendMom.
-    IF (starts_with(lo, 'ten')) THEN
+    ! Scalar-per-node channels with a leading keyword: Ten / Curv / BendMom / Torq / Twist, and
+    ! the line total Twist<L> (kind 11, node 1).
+    IF (starts_with(lo, 'torq')) THEN
+      CALL parse_keyword_line_node(lo, 4, last, line_id, node_id)
+      IF (line_id > 0 .AND. node_id > 0) kind = 9
+      RETURN
+    ELSE IF (starts_with(lo, 'twist')) THEN
+      IF (last > 5) THEN
+        IF (INDEX(lo(6:last), 'n') == 0) THEN
+          line_id = parse_positive_int(lo, 6, last)
+          IF (line_id > 0) THEN
+            node_id = 1
+            kind = 11
+          END IF
+          RETURN
+        END IF
+      END IF
+      CALL parse_keyword_line_node(lo, 5, last, line_id, node_id)
+      IF (line_id > 0 .AND. node_id > 0) kind = 10
+      RETURN
+    ELSE IF (starts_with(lo, 'ten')) THEN
       CALL parse_keyword_line_node(lo, 3, last, line_id, node_id)
       IF (line_id > 0 .AND. node_id > 0) kind = 3
       RETURN
@@ -28206,6 +28841,13 @@ CONTAINS
     CALL CD_Range_Setup(rset, ids, nnodes, want_r, want_t, opts%range_start, opts%has_wtrdpth, -opts%wtrdpth, &
                         es, em, bathymetry=bathymetry)
     CALL range_status(es, em, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DECKDRV_OK .OR. .NOT. ALLOCATED(rset%lines)) RETURN
+    ! a line with condensed torsion adds its torque and twist envelopes
+    DO i = 1, SIZE(lines)
+      k = i
+      IF (by_id) k = lines(i)%id
+      IF (k >= 1 .AND. k <= SIZE(rset%lines)) rset%lines(k)%has_torsion = line_torsion_active(lines(i))
+    END DO
   END SUBROUTINE range_setup
 
   SUBROUTINE range_setup_planned(rset, lines, channels, opts, ErrStat, ErrMsg, models, fmodels, system, cables, &
@@ -28450,6 +29092,17 @@ CONTAINS
       rl%val(CD_RQ_CURVATURE, j) = curv
       rl%val(CD_RQ_BEND, j) = bend
     END DO
+    IF (rl%has_torsion .AND. cable%line%torsion%active) THEN
+      ! condensed torsion: the committed torque (uniform) and the cable's own twist from End A
+      ! (public node 1, the last internal node), as the Torq<L>N<J> and Twist<L>N<J> channels
+      rl%val(CD_RQ_TORQUE, :) = cable%line%torsion%torque
+      rl%val(CD_RQ_TWIST, 1) = CD_ZERO
+      DO j = 2, nn
+        inode = nn + 1 - j
+        rl%val(CD_RQ_TWIST, j) = rl%val(CD_RQ_TWIST, j - 1) + cable%line%torsion%torque* &
+                                 cable%line%l0(inode)/cable%line%torsion%gj(inode)*45.0_wp/QUARTER_PI
+      END DO
+    END IF
   END SUBROUTINE range_sample_cable
 
   SUBROUTINE aggregate_line_positions(system, cables, line_is_cable, line_obj_index, line_id, r, ErrStat, ErrMsg)
@@ -29188,6 +29841,27 @@ CONTAINS
       IF (es /= CD_HCABLE_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
       END IF
+    CASE (9, 10, 11)   ! condensed torsion: torque [N m], twist from End A to node J, total twist [deg]
+      BLOCK
+        REAL(wp) :: th, mt
+        INTEGER :: e
+        CALL CD_HermiteCable_Dyn_Torsion_State(cable%line, th, mt, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+        END IF
+        IF (kind == 9) THEN
+          val = mt
+        ELSE IF (kind == 11) THEN
+          val = mt*CD_HermiteTorsion_Compliance(cable%line%torsion, cable%line%l0)*45.0_wp/QUARTER_PI
+        ELSE IF (cable%line%torsion%active) THEN
+          ! End A is the last internal node: the cable's own twist over the elements inode..ne
+          val = CD_ZERO
+          DO e = inode, nelem
+            val = val + cable%line%l0(e)/cable%line%torsion%gj(e)
+          END DO
+          val = mt*val*45.0_wp/QUARTER_PI
+        END IF
+      END BLOCK
     CASE (8)   ! azimuth: local-frame azimuth plus the cable's frame heading, wrapped
       val = line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6)
       IF (.NOT. cable_frame_is_identity(cable)) THEN
@@ -29947,6 +30621,22 @@ CONTAINS
     m(2, 3) = sx*cy
     m(3, 3) = cx*cy
   END FUNCTION ptfm_zyx_dcm
+
+  PURE LOGICAL FUNCTION line_torsion_active(ln) RESULT(active)
+    !! Condensed torsion is solved on a line only when both ends declare a torsional restraint.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    active = ALL(ln%tors_mode /= TORS_FREE)
+  END FUNCTION line_torsion_active
+
+  PURE LOGICAL FUNCTION deck_has_torsion_columns(lines) RESULT(has)
+    !! Some END CONNECTIONS row declares a torsional restraint (TorsStiffness not Free).
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    INTEGER :: i
+    has = .FALSE.
+    DO i = 1, SIZE(lines)
+      IF (ANY(lines(i)%tors_mode /= TORS_FREE)) has = .TRUE.
+    END DO
+  END FUNCTION deck_has_torsion_columns
 
   LOGICAL FUNCTION line_is_finite_ei(ln, types, sections) RESULT(is_finite)
     !! A LINE is a finite-EI (bending) cable iff ANY of its sections has EI > 0.

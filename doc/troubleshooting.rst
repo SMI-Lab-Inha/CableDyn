@@ -304,6 +304,58 @@ Model data
      - remove ``staggered bodyScheme``; on a rod end give the direction along the rod axis
        (either sense).
 
+Torsion
+~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 42 58
+
+   * - Message
+     - Cause and fix
+   * - ``END CONNECTIONS row needs 6 columns ..., or 10 or 11 with the torsion columns``
+     - a torsion row is ``LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ
+       [Pretwist]``; see :doc:`driver_format`.
+   * - ``END CONNECTIONS torsional stiffness must be finite and non-negative, Free, or Rigid`` /
+       ``torsion reference normal (NxX NxY NxZ) must be non-zero`` / ``must not be parallel to
+       the direction Ez``
+     - give ``Free``, ``Rigid`` or a stiffness in N·m/rad, and a reference normal that is not
+       along ``Ez``.
+   * - ``line <L> is torsionally restrained at both ends: its LINE TYPES row ... must give an
+       explicit GJ > 0``
+     - torsion has no ``EI/1.3`` default: use the 14-column ``LINE TYPES`` row with ``GJ`` (and
+       positive ``GAs``, ``Irt``, ``Irn``) for every section of the line.
+   * - ``torsional END CONNECTIONS ... require a finite-EI line`` / ``require a finite-EI line
+       with Fixed End B``
+     - torsion is solved on cubic-Hermite lines whose End B is an anchor.
+   * - ``a torsional END CONNECTION on a rod end is not supported`` / ``on a body needs a Rigid6
+       body`` / ``torsion is not combined with ATTACHMENTS in this build``
+     - outside the torsion scope (:doc:`capabilities`). Move End A to a ``Fixed``,
+       ``Coupled``/``Vessel`` point or a Rigid6 body, or represent the modules as a smeared
+       buoyancy section.
+   * - ``torsion is not yet supported in coupled OpenFAST runs`` / ``torsion is not yet supported
+       in a deck that mixes EI = 0 and finite-EI lines without a BODY, nor in coupled OpenFAST or
+       FAST.Farm runs``
+     - run the torsional line standalone (a mixed deck with a body runs on the multibody route,
+       which supports torsion), or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
+   * - ``a body holding a line restrained in torsion turns by more than 90 deg in one step even
+       after 6 step halvings``
+     - the body turns faster than one step can follow the twist; reduce ``dtM``.
+   * - ``torsion in a dynamic run needs the force-blended generalised-alpha (OPTION
+       alpha_force_blend True)`` / ``modal analysis (OPTION nModes) of a line with torsion is not
+       yet supported``
+     - remove ``False alpha_force_blend`` or ``nModes`` from a deck with torsion.
+   * - ``OUTPUT "Torq...": line <L> is not torsionally restrained at both ends ..., so it carries
+       no torque``
+     - a ``Torq``/``Twist`` channel needs a line with a torsional restraint at both ends.
+   * - ``motionFile: point <id> has a non-zero roll column, but no line restrained in torsion at
+       both ends ... has its moving (non-Fixed) end there`` / ``the roll column of point <id> must
+       be 0 at t = 0`` / ``gives the roll column (12th) on some rows only`` / ``the roll column
+       (12th, degrees) must be a finite number``
+     - the roll column drives the frame of a torsional line's moving end, starts from 0 (put a
+       constant twist in ``Pretwist``), and appears on every row of the point or on none
+       (:doc:`file_formats`).
+
 FAILURE and CONTROL sections
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -385,6 +437,16 @@ but a few geometries are genuinely hard:
   exist: the surplus must fold or form another contact region. CableDyn rejects a resulting
   element-localized wad through the curvature safety check. This is not fixed by relaxing Newton
   tolerances; revise the physical support/contact model or geometry.
+- **A twisted finite-EI line.** ``torsion continuation stalled at Phi = ... (target ...)``
+  reports the imposed twist the static ramp reached: beyond it the line has no nearby static
+  equilibrium on the path, typically because a loop is forming (hockling), which needs a
+  dynamic analysis and is not resolved as self-contact. ``finite-EI torsion static solve ended on
+  an unstable equilibrium`` means the descent from a buckled (unstable) twisted state did not
+  find a stable one. ``the twist moved more than pi/2 from its committed value in one step``
+  stops a dynamic step that would change the twist by more than a quarter turn (the unwrapping
+  of the twist cannot be trusted beyond it): reduce ``dtM`` or slow the imposed roll.
+  ``tangent turns by more than 120 degrees`` names an element or node pair where the twist of
+  the centreline is no longer reliable: refine the mesh there.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
   from the catenary/arch seed.
@@ -402,6 +464,15 @@ Warnings and notes that do not stop a run
 .. list-table::
    :header-rows: 1
    :widths: 42 58
+
+   * - ``Note: line <L> is torsionally restrained at one end only; ... no torsion is solved``
+     - with the other end free to twist the line carries no torque, so the torsion columns of the
+       restrained end have no effect. Restrain both ends to solve torsion.
+   * - ``Note: line <L>: torsion solved, imposed twist ... deg, torque ... N m (<n> twist
+       stage(s), <m> buckling descent(s))``
+     - the static twist stage of a torsional line. A non-zero descent count means the straight or
+       untwisted branch was unstable at the imposed twist and the solve moved to a buckled shape;
+       check the shape and the ``Twist<L>`` channel.
 
    * - Message
      - Cause and fix

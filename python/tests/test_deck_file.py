@@ -123,7 +123,7 @@ def test_end_connections_round_trip_edit_and_cli_inventory(tmp_path, capsys):
     ("row", "message"),
     [
         ("1 C 2.0e4 -0.25 0.0 -0.97", "End must be A or B"),
-        ("1 A -1 -0.25 0.0 -0.97", "stiffness must be non-negative"),
+        ("1 A -1 -0.25 0.0 -0.97", "stiffness must be finite and non-negative, Pinned, or Rigid"),
         ("1 A nan -0.25 0.0 -0.97", "stiffness must be finite"),
         ("1 A 2.0e4 0 0 0", "direction must be non-zero"),
         ("9 A 2.0e4 -0.25 0.0 -0.97", "references an undefined line"),

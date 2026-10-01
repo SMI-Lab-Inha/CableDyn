@@ -335,6 +335,11 @@ The matching range-graph views are:
    tensions.plot_range(725.125)
    tensions.plot_envelope(600.0, 4200.0)
 
+The solver's own range file (``<root>.Line<L>.range.out``, LINES flag ``r``) is read by
+:func:`cabledyn.read_range_graphs`; on a line restrained in torsion it also returns the
+``"torque"`` (N·m) and ``"twist"`` (deg, from End A) envelopes, and :func:`cabledyn.read_output`
+attaches those units to the ``Torq<L>N<J>``, ``Twist<L>N<J>`` and ``Twist<L>`` channels.
+
 DataFrame and pyDatView interoperability
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

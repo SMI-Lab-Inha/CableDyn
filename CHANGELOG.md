@@ -8,6 +8,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Torsion of finite-EI lines in the standalone driver (condensed, quasi-static, uniform torque):
+  `END CONNECTIONS` columns `TorsStiffness NxX NxY NxZ [Pretwist]`, a `motionFile` roll column,
+  the torque returned to Rigid6 bodies, channels `Torq<L>N<J>`, `Twist<L>N<J>` and `Twist<L>`,
+  range-graph columns, `DeckModel` and channel support in Python, and the example
+  `torsion_lazy_wave_hangoff_twist.dat`. Validated in VALIDATION.md (Torsion). Routes outside
+  its scope, coupled OpenFAST (NLR) runs included, stop with a named error; results without
+  torsion are unchanged.
+
 ### Fixed
 
 - The static solve of a taut, neutrally buoyant finite-EI line (mass per length equal to
