@@ -29,6 +29,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   initialisation workspaces of the coupled aggregate and the C API are now allocated on the
   heap, every executable of such a build reserves a 64 MiB stack, and the new `stack` tests
   run the library on a 1 MiB thread stack. Results are unchanged.
+- The static Windows `openfast.exe` compiles the CableDyn adapter with `/heap-arrays:1024`,
+  like the CableDyn core, so its run-time-sized arrays no longer use the
+  `openfast.exe` stack.
 
 ## [0.1.0] - 2026-10-01
 
