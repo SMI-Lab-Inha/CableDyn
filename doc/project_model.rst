@@ -19,17 +19,28 @@ Objects and properties
    Every object is a :class:`ModelObject` with a stable ``uid``, a ``name``, a ``parent`` and
    typed properties declared with descriptors (:class:`Quantity`, :class:`Integer`,
    :class:`Choice`, :class:`Vec3`, :class:`Ref`, :class:`Children`, :class:`Strategy`, ...).
-   Quantities are stored in SI units. Each property has a role: ``physics`` (written to the
-   deck), ``construction`` (library and construction data such as a chain grade or a floater's
-   hydrodynamic database; not written today), ``appearance`` (for the 3D views; never written),
-   ``derived`` or ``meta``. :meth:`ModelObject.properties` lists the descriptors, which carry
-   label, group, unit dimension, limits and documentation for editors.
+   Quantities are stored in SI units (angles in degrees, as in the deck); non-finite numbers
+   are refused. Each property has a role: ``physics`` (written to the deck), ``construction``
+   (library and construction data such as a chain grade or a floater's hydrodynamic database;
+   not written today), ``appearance`` (for the 3D views; never written), ``derived`` or
+   ``meta``. :meth:`ModelObject.properties` lists the descriptors, which carry label, group,
+   unit dimension, limits and documentation for editors. A value whose meaning changes with its
+   sign in the deck is split: the axial damping is either a damping in N s or a dimensionless
+   damping ratio (:class:`AxialModel`).
+
+Identity and ownership
+   Every object has one owner and a uid that is unique in its project: inserting an object whose
+   uid is already used, or making an object own one of its owners, is refused.
+   :meth:`ModelObject.from_dict` gives a copy fresh uids by default; pass ``within=project``
+   so the copy keeps its references to the project's objects (paste).
 
 References, renaming and removal
    Objects refer to each other by reference, never by name or deck id, so renaming cannot break
    a link. Removing a referenced object either fails with :class:`ObjectInUseError` or cascades
-   (:func:`plan_removal`): a referrer whose required reference is lost is removed with it, an
-   optional reference is cleared, and a line left without sections is removed.
+   (:func:`plan_removal`): a referrer whose required reference is lost is removed with it
+   (:meth:`ModelObject.required_references`, which can depend on the referrer's state, such as
+   a body rod's body), an optional reference is cleared, and a line left without sections is
+   removed. Weak references, such as group memberships, never block a removal and are cleared.
    :meth:`Project.used_by` answers "used by" questions.
 
 Events and commands
@@ -38,7 +49,8 @@ Events and commands
    ancestor, so one subscription on the :class:`Project` sees the whole model. Interactive edits
    are :class:`Command` objects pushed onto a :class:`CommandStack`, which provides undo, redo,
    merging of drags, grouping (:meth:`CommandStack.macro`) and a clean (saved) marker. Undo
-   restores the project's :meth:`~ModelObject.to_dict` exactly.
+   restores the project's :meth:`~ModelObject.to_dict` exactly. A change listener must not push,
+   undo or redo while a command is being applied; the stack refuses it.
 
 Validation
    Three layers (:func:`validate_project`): property checks with the numeric limits shared with
@@ -69,7 +81,9 @@ graph; :class:`DeckWriter` builds a fresh :class:`~cabledyn.DeckModel` and rende
 keyword spellings, the order and descriptions of ``OPTIONS`` rows are kept as hints, so a
 deck read and written back gives exactly ``DeckModel.load(deck).to_text()``. Comments and
 column alignment of the original file are not kept. ``OPTIONS`` rows the model does not type are
-kept verbatim as :class:`ExtraOption` objects. The writer returns an :class:`IdMap` between
+kept verbatim as :class:`ExtraOption` objects. An extra row that sets a typed option (a duplicate
+kept from a deck, for example) never overrides the typed property: the writer places it before
+the typed row, and validation warns about it. The writer returns an :class:`IdMap` between
 objects and deck ids.
 
 .. code-block:: python
@@ -85,9 +99,13 @@ objects and deck ids.
    text = DeckWriter(project).to_text()
 
 :class:`ProjectStore` writes a ``.cdproj`` zip archive (or an unzipped folder) with
-``project.json`` (the whole graph, physics and appearance, with a schema version),
-``model.dat`` (the deck, when the project is valid), ``assets/`` and ``results.json``. Objects of
-a type the reader does not know are kept verbatim.
+``project.json`` (the whole graph, physics and appearance, as strict JSON with a schema
+version), ``model.dat``, ``assets/`` and ``results.json``. ``model.dat`` is written only when
+the project passes every validation layer. Its relative side-file paths (motion, bathymetry,
+WaterKin and Syrope files) are rewritten to resolve from the project folder (a folder project)
+or from the folder that holds the archive (a zip project), and side files that cannot be found
+are listed in ``project.json``. Each file is replaced atomically. Objects, properties and
+references the reader does not understand are kept and written back unchanged.
 
 Extending the model
 -------------------
