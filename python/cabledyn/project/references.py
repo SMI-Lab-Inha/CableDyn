@@ -5,7 +5,11 @@ Objects refer to each other through :class:`~cabledyn.project.Ref` and
 :class:`~cabledyn.project.RefList` properties. Removing an object that is
 still referred to either fails (:class:`ObjectInUseError`) or cascades:
 
-* a referrer whose *required* reference loses its target is removed too;
+* a referrer whose *required* reference loses its target is removed too
+  (:meth:`~cabledyn.project.ModelObject.required_references`, which can
+  depend on the referrer's state, such as a body rod's body);
+* a weak reference (a group membership) never blocks a removal and is
+  cleared;
 * an optional reference is cleared;
 * a reference list drops the target, and a referrer left with fewer targets
   than its ``min_items`` is removed;
@@ -46,7 +50,13 @@ def _ids(obj: ModelObject) -> set[int]:
     return {id(item) for item in obj.walk()}
 
 
-def referrers(root: ModelObject, obj: ModelObject) -> list[tuple[ModelObject, str]]:
+def _is_weak(item: ModelObject, name: str) -> bool:
+    return bool(getattr(type(item).get_property(name), "weak", False))
+
+
+def referrers(
+    root: ModelObject, obj: ModelObject, *, include_weak: bool = False
+) -> list[tuple[ModelObject, str]]:
     """Return ``(referrer, property name)`` pairs that point into ``obj``.
 
     Parameters
@@ -55,6 +65,8 @@ def referrers(root: ModelObject, obj: ModelObject) -> list[tuple[ModelObject, st
         The object graph to search (normally the project).
     obj : ModelObject
         The referenced object; references to its descendants count too.
+    include_weak : bool
+        Also list weak (bookkeeping) references such as group memberships.
 
     Returns
     -------
@@ -68,6 +80,8 @@ def referrers(root: ModelObject, obj: ModelObject) -> list[tuple[ModelObject, st
             continue
         names: list[str] = []
         for name, target in item.references():
+            if not include_weak and _is_weak(item, name):
+                continue
             if id(target) in inside and name not in names:
                 names.append(name)
         found.extend((item, name) for name in names)
@@ -163,9 +177,10 @@ def plan_removal(
         for item in root.walk():
             if id(item) in doomed_ids or not _removable(item):
                 continue
+            required = item.required_references()
             for prop in type(item).properties():
                 value = item._values[prop.name]
-                if isinstance(prop, Ref) and prop.required:
+                if isinstance(prop, Ref) and prop.name in required:
                     if value is not None and id(value) in doomed_ids:
                         candidates.append(item)
                         break

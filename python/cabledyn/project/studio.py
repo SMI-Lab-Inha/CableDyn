@@ -33,7 +33,7 @@ class Group(ModelObject):
 
     type_label = "Group"
     abstract = False
-    members = RefList(ModelObject, role=_M, group="Group")
+    members = RefList(ModelObject, weak=True, role=_M, group="Group")
     colour = OptionalColour(group="Group")
 
 

@@ -68,6 +68,10 @@ class TypeRegistry:
             raise ValueError(f"type key {key!r} is already used by {existing.__name__}")
         self._by_key[key] = cls
 
+    def unregister(self, key: str) -> None:
+        """Remove the class registered under ``key`` (no-op if none)."""
+        self._by_key.pop(key, None)
+
     def get(self, key: str) -> type[ModelObject]:
         """Return the class registered under ``key``.
 
@@ -91,9 +95,7 @@ class TypeRegistry:
     def subclasses_of(self, base: type[ModelObject]) -> list[type[ModelObject]]:
         """Return the registered concrete classes that are ``base`` or derive from it."""
         return [
-            cls
-            for cls in self._by_key.values()
-            if issubclass(cls, base) and not cls.__dict__.get("abstract", False)
+            cls for cls in self._by_key.values() if issubclass(cls, base) and not cls.is_abstract()
         ]
 
 
@@ -125,8 +127,8 @@ def model_type(key: str) -> Callable[[type[M]], type[M]]:
     """
 
     def register(cls: type[M]) -> type[M]:
-        cls.type_key = key
         REGISTRY.register(key, cls)
+        cls.type_key = key
         return cls
 
     return register
@@ -136,19 +138,30 @@ class SerialContext:
     """State of one project-file read or write.
 
     It maps uids to rebuilt objects, defers references until every object
-    exists, and collects objects of unknown type (kept verbatim) and warnings.
+    exists, and collects objects of unknown type (kept verbatim), duplicate
+    uids and warnings.
+
+    Values this version cannot use (an unknown property, a value a property
+    refuses, a reference to an object that is not rebuilt, a sub-object of
+    unknown type) are kept raw on the object and written back unchanged by
+    :meth:`ModelObject.to_dict` until the property is assigned.
 
     Parameters
     ----------
     fresh_uids : bool
         Give rebuilt objects new uids (for copy and paste) instead of the
-        stored ones.
+        stored ones. References inside the rebuilt data still resolve.
+    within : ModelObject | None
+        An existing object graph (the project a copy is pasted into);
+        references to its objects resolve to them.
     """
 
-    def __init__(self, *, fresh_uids: bool = False) -> None:
+    def __init__(self, *, fresh_uids: bool = False, within: ModelObject | None = None) -> None:
         self.fresh_uids = fresh_uids
+        self.within = within
         self.objects: dict[str, ModelObject] = {}
         self.unknown: list[dict[str, Any]] = []
+        self.duplicates: list[str] = []
         self.warnings: list[str] = []
         self._pending: list[tuple[ModelObject, Ref[Any] | RefList[Any], Any]] = []
 
@@ -177,6 +190,9 @@ class SerialContext:
             return None
         key = data["type"]
         if key not in REGISTRY:
+            self.warn(f"kept an object of unknown type {key!r} verbatim")
+            if owner is not None and index is None:
+                return None  # a sub-object slot: the owner keeps the raw data
             self.unknown.append(
                 {
                     "owner": None if owner is None else owner.uid,
@@ -185,16 +201,19 @@ class SerialContext:
                     "data": data,
                 }
             )
-            self.warn(f"kept an object of unknown type {key!r} verbatim")
             return None
         cls = REGISTRY.get(key)
         obj = cls.__new__(cls)
         obj._setup()
         stored = data.get("uid")
-        if isinstance(stored, str) and stored and not self.fresh_uids:
-            obj._uid = stored
         if isinstance(stored, str) and stored:
-            self.objects[stored] = obj
+            if stored in self.objects:
+                self.duplicates.append(stored)
+                self.warn(f"uid {stored} is used by more than one object")
+            else:
+                self.objects[stored] = obj
+                if not self.fresh_uids:
+                    obj._uid = stored
         hints = data.get("deck_hints")
         if isinstance(hints, dict):
             obj.deck_hints = dict(hints)
@@ -207,7 +226,11 @@ class SerialContext:
             try:
                 value = prop.from_json(values[prop.name], self, obj)
             except (TypeError, ValueError) as exc:
-                self.warn(f"{cls.__name__}.{prop.name}: kept the default ({exc})")
+                self.warn(
+                    f"{cls.__name__}.{prop.name}: kept the default and the stored value "
+                    f"for a later save ({exc})"
+                )
+                obj._preserved[prop.name] = values[prop.name]
                 continue
             if not isinstance(prop, Children):
                 old = obj._values[prop.name]
@@ -216,7 +239,8 @@ class SerialContext:
                 obj._values[prop.name] = value
         for name in values:
             if name not in cls._property_map():
-                self.warn(f"{cls.__name__}: ignored unknown property {name!r}")
+                self.warn(f"{cls.__name__}: kept unknown property {name!r} verbatim")
+                obj._preserved[name] = values[name]
         return obj
 
     def defer(self, obj: ModelObject, prop: Ref[Any] | RefList[Any], data: Any) -> None:
@@ -231,9 +255,13 @@ class SerialContext:
         KeyError
             If no rebuilt object has ``uid``.
         """
-        if not isinstance(uid, str) or uid not in self.objects:
-            raise KeyError(f"no object with uid {uid!r}")
-        return self.objects[uid]
+        if isinstance(uid, str) and uid in self.objects:
+            return self.objects[uid]
+        if isinstance(uid, str) and self.within is not None:
+            for obj in self.within.walk():
+                if obj.uid == uid:
+                    return obj
+        raise KeyError(f"no object with uid {uid!r}")
 
     def resolve(self) -> None:
         """Resolve every deferred reference; dangling ones become warnings."""
@@ -241,7 +269,11 @@ class SerialContext:
             try:
                 obj._values[prop.name] = prop.resolve(data, self)
             except (KeyError, TypeError) as exc:
-                self.warn(f"{obj.label()}: dropped reference {prop.name} ({exc})")
+                self.warn(
+                    f"{obj.label()}: reference {prop.name} is unresolved and kept for a "
+                    f"later save ({exc})"
+                )
+                obj._preserved[prop.name] = data
         self._pending.clear()
 
 
@@ -274,7 +306,8 @@ class ModelObject(ModelObjectLike):
     type_label: ClassVar[str] = "Object"
     """Human-readable class name for the GUI."""
     abstract: ClassVar[bool] = True
-    """Abstract classes are not offered by :meth:`Strategy.options`."""
+    """Set ``abstract = True`` in a class body to mark that class (not its
+    subclasses) abstract; read it with :meth:`is_abstract`."""
 
     name = Text("", role=Role.META, group="Identity", doc="Name shown in the model browser.")
     description = Text("", multiline=True, role=Role.META, group="Identity", doc="Free-text notes.")
@@ -293,8 +326,14 @@ class ModelObject(ModelObjectLike):
                 raise AttributeError(f"{type(self).__name__} has no settable property {key!r}")
             setattr(self, key, value)
 
+    @classmethod
+    def is_abstract(cls) -> bool:
+        """Whether this class itself is abstract (not offered as a strategy option)."""
+        return bool(cls.__dict__.get("abstract", False))
+
     def _setup(self) -> None:
         self._uid = uuid.uuid4().hex
+        self._preserved: dict[str, Any] = {}
         self._parent: ModelObject | None = None
         self._slot: str | None = None
         self.events = EventHub()
@@ -384,6 +423,20 @@ class ModelObject(ModelObjectLike):
         self._parent = None
         self._slot = None
 
+    def _check_adoption(self, obj: ModelObject) -> None:
+        """Refuse to make ``obj`` a descendant of this object if that forms a cycle."""
+        node: ModelObject | None = self
+        while node is not None:
+            if node is obj:
+                raise ValueError(f"{obj.label()} cannot own itself or one of its owners")
+            node = node._parent
+
+    def _adopt(self, obj: ModelObject) -> None:
+        """Called on the root when ``obj`` joins its tree (the project tracks uids)."""
+
+    def _release(self, obj: ModelObject) -> None:
+        """Called on the root when ``obj`` leaves its tree."""
+
     def children(self) -> Iterator[ModelObject]:
         """Yield the directly owned sub-objects, in property order."""
         for prop in type(self).properties():
@@ -410,6 +463,17 @@ class ModelObject(ModelObjectLike):
                 found.extend((prop.name, target) for target in self._values[prop.name])
         return found
 
+    def required_references(self) -> frozenset[str]:
+        """Return the names of the references this object cannot do without now.
+
+        A cascading removal that takes the target of one of them removes this
+        object too. The base returns the :class:`~cabledyn.project.Ref`
+        properties declared ``required``; subclasses add conditional ones.
+        """
+        return frozenset(
+            prop.name for prop in type(self).properties() if isinstance(prop, Ref) and prop.required
+        )
+
     # ------------------------------------------------------------------ changes
 
     def _assign(self, prop: Property[Any], value: Any) -> None:
@@ -421,9 +485,18 @@ class ModelObject(ModelObjectLike):
         if isinstance(prop, Child):
             if value.parent is not None:
                 raise ValueError(f"{value.label()} already belongs to {value.parent.label()}")
+            self._check_adoption(value)
+            root = self.root()
+            root._release(old)
+            try:
+                root._adopt(value)
+            except ValueError:
+                root._adopt(old)
+                raise
             old._detach()
             value._attach(self, prop.name)
         self._values[prop.name] = value
+        self._preserved.pop(prop.name, None)
         event_type = ReferenceChanged if prop.is_reference else PropertyChanged
         self.emit(event_type(self, prop.name, old, value))
 
@@ -472,8 +545,20 @@ class ModelObject(ModelObjectLike):
     def to_dict(self, ctx: SerialContext | None = None) -> dict[str, Any]:
         """Return the JSON-compatible form of this object and its descendants.
 
-        References are written as the target's uid.
+        References are written as the target's uid. Raw values kept from a
+        project file (see :class:`SerialContext`) are written back unchanged.
+
+        Raises
+        ------
+        TypeError
+            If the class is not registered with :func:`model_type` (it would
+            be read back as another class).
         """
+        cls = type(self)
+        if self.type_key not in REGISTRY or REGISTRY.get(self.type_key) is not cls:
+            raise TypeError(
+                f"{cls.__name__} is not registered with model_type and cannot be written"
+            )
         context = ctx or SerialContext()
         data: dict[str, Any] = {
             "type": self.type_key,
@@ -483,22 +568,34 @@ class ModelObject(ModelObjectLike):
                 for prop in type(self).properties()
             },
         }
+        data["properties"].update(_json_copy(self._preserved))
         if self.deck_hints:
             data["deck_hints"] = _json_copy(self.deck_hints)
         return data
 
     @classmethod
-    def from_dict(cls: type[M], data: dict[str, Any], *, fresh_uids: bool = False) -> M:
+    def from_dict(
+        cls: type[M],
+        data: dict[str, Any],
+        *,
+        fresh_uids: bool = True,
+        within: ModelObject | None = None,
+    ) -> M:
         """Rebuild an object (and its descendants) written by :meth:`to_dict`.
 
-        References to objects outside ``data`` are dropped with a warning.
+        The copy gets new uids by default, so it can be pasted next to the
+        original. References to objects outside ``data`` are kept raw (see
+        :class:`SerialContext`).
 
         Parameters
         ----------
         data : dict
             The dictionary.
         fresh_uids : bool
-            Give the rebuilt objects new uids.
+            Give the rebuilt objects new uids; ``False`` keeps the stored ones.
+        within : ModelObject | None
+            The graph the copy will join (normally the project): references to
+            its objects resolve, so a pasted line keeps its end points.
 
         Returns
         -------
@@ -510,7 +607,7 @@ class ModelObject(ModelObjectLike):
         TypeError
             If ``data`` does not describe a ``cls`` object.
         """
-        ctx = SerialContext(fresh_uids=fresh_uids)
+        ctx = SerialContext(fresh_uids=fresh_uids, within=within)
         obj = ctx.build(data)
         if not isinstance(obj, cls):
             raise TypeError(f"data does not describe a {cls.__name__}")

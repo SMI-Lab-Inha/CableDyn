@@ -11,12 +11,13 @@ A model class declares its data as class attributes::
 Each descriptor knows its type, SI dimension, default, limits, role, group
 and documentation. The descriptors drive the property panel, the project file,
 validation layer 1, and the deck writer (which reads only ``physics``
-properties). Values are stored in SI units.
+properties). Values are stored in SI units (angles in degrees).
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import math
 import numbers
 import re
@@ -227,15 +228,18 @@ class Property(Generic[T]):
 
 
 class _NumberMixin:
-    """Limits shared by :class:`Quantity` and :class:`Integer`."""
+    """Limits shared by the numeric descriptors (and reported by ``describe``)."""
 
     minimum: float | None
     maximum: float | None
     limit: str | None
 
+    def describe(self) -> dict[str, Any]:
+        info: dict[str, Any] = super().describe()  # type: ignore[misc]
+        info.update(minimum=self.minimum, maximum=self.maximum, limit=self.limit)
+        return info
+
     def _limit_issues(self, prop: Property[Any], obj: ModelObject, value: float) -> list[Issue]:
-        if not math.isfinite(value):
-            return [prop._issue(obj, f"must be finite, got {value!r}")]
         found: list[Issue] = []
         if self.minimum is not None and value < self.minimum:
             found.append(prop._issue(obj, f"must be at least {self.minimum:g}"))
@@ -251,7 +255,10 @@ class _NumberMixin:
 def _float(value: object, what: str) -> float:
     if not _is_number(value):
         raise TypeError(f"{what} must be a number, got {value!r}")
-    return float(value)  # type: ignore[arg-type]
+    result = float(value)  # type: ignore[arg-type]
+    if not math.isfinite(result):
+        raise ValueError(f"{what} must be finite, got {value!r}")
+    return result
 
 
 def _int(value: object, what: str) -> int:
@@ -263,7 +270,7 @@ def _int(value: object, what: str) -> int:
 
 
 class Quantity(_NumberMixin, Property[float]):
-    """A real number with a physical dimension, stored in SI units.
+    """A real number with a physical dimension, stored in SI units (angles in degrees).
 
     Parameters
     ----------
@@ -306,11 +313,6 @@ class Quantity(_NumberMixin, Property[float]):
 
     def check(self, obj: ModelObject, value: float) -> list[Issue]:
         return self._limit_issues(self, obj, value)
-
-    def describe(self) -> dict[str, Any]:
-        info = super().describe()
-        info.update(minimum=self.minimum, maximum=self.maximum, limit=self.limit)
-        return info
 
 
 class OptionalQuantity(_NumberMixin, Property[float | None]):
@@ -723,7 +725,9 @@ class OptionalVec3(_NumberMixin, Property[Vec3Value | None]):
 class JsonValue(Property[Any]):
     """Opaque JSON-compatible data (GUI layouts, plot specifications, ...).
 
-    The value is deep-copied on assignment; it is never written to a deck.
+    The value must be JSON data (dictionaries with string keys, lists,
+    strings, finite numbers, Booleans, ``None``); it is copied on assignment
+    and never written to a deck.
     """
 
     kind = "json"
@@ -733,7 +737,11 @@ class JsonValue(Property[Any]):
         super().__init__(default, **kwargs)
 
     def coerce(self, value: object) -> Any:
-        return copy.deepcopy(value)
+        try:
+            text = json.dumps(value, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{self.name} must be JSON data with finite numbers ({exc})") from exc
+        return json.loads(text)
 
 
 class Ref(Property[ObjT | None], Generic[ObjT]):
@@ -750,17 +758,26 @@ class Ref(Property[ObjT | None], Generic[ObjT]):
     target : type
         The class (or common base class) of admissible targets.
     required : bool
-        A missing target is an error (validation layer 2).
+        A missing target is an error (validation layer 2). An object can
+        make a reference required conditionally with
+        :meth:`ModelObject.required_references`.
+    weak : bool
+        A bookkeeping reference (for example a group membership): it never
+        blocks a removal, is cleared when its target goes, and is left out
+        of "used by".
     **kwargs
         See :class:`Property`.
     """
 
     kind = "ref"
 
-    def __init__(self, target: type[ObjT], *, required: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self, target: type[ObjT], *, required: bool = True, weak: bool = False, **kwargs: Any
+    ) -> None:
         super().__init__(None, **kwargs)
         self.target = target
-        self.required = required
+        self.required = required and not weak
+        self.weak = weak
 
     @property
     def is_reference(self) -> bool:
@@ -802,7 +819,7 @@ class Ref(Property[ObjT | None], Generic[ObjT]):
 
     def describe(self) -> dict[str, Any]:
         info = super().describe()
-        info.update(target=self.target.__name__, required=self.required)
+        info.update(target=self.target.__name__, required=self.required, weak=self.weak)
         return info
 
 
@@ -816,16 +833,21 @@ class RefList(Property[tuple[ObjT, ...]], Generic[ObjT]):
     min_items : int
         Fewest targets; a removal that leaves fewer removes the referrer
         when cascading.
+    weak : bool
+        A bookkeeping list (group members): see :class:`Ref`.
     **kwargs
         See :class:`Property`.
     """
 
     kind = "ref_list"
 
-    def __init__(self, target: type[ObjT], *, min_items: int = 0, **kwargs: Any) -> None:
+    def __init__(
+        self, target: type[ObjT], *, min_items: int = 0, weak: bool = False, **kwargs: Any
+    ) -> None:
         super().__init__((), **kwargs)
         self.target = target
-        self.min_items = min_items
+        self.min_items = 0 if weak else min_items
+        self.weak = weak
 
     @property
     def is_reference(self) -> bool:
@@ -874,7 +896,7 @@ class RefList(Property[tuple[ObjT, ...]], Generic[ObjT]):
 
     def describe(self) -> dict[str, Any]:
         info = super().describe()
-        info.update(target=self.target.__name__, min_items=self.min_items)
+        info.update(target=self.target.__name__, min_items=self.min_items, weak=self.weak)
         return info
 
 
@@ -925,6 +947,8 @@ class Child(Property[ObjT], Generic[ObjT]):
     def from_json(self, data: Any, ctx: SerialContext, obj: ModelObject) -> ObjT:
         built = ctx.build(data, owner=obj, slot=self.name)
         if built is None or not isinstance(built, self.base):
+            if isinstance(data, dict):
+                obj._preserved[self.name] = data
             return self.initial(obj)
         built._attach(obj, self.name)
         return built

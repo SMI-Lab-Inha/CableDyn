@@ -10,6 +10,8 @@ appearance sub-object used by the presentation view.
 
 from __future__ import annotations
 
+import math
+
 from cabledyn.project.appearance import (
     CableAppearance,
     ChainAppearance,
@@ -32,7 +34,6 @@ from cabledyn.project.descriptors import (
     Quantity,
     Role,
     Strategy,
-    Vector,
 )
 from cabledyn.project.issues import Issue, Severity
 from cabledyn.project.units import (
@@ -76,18 +77,47 @@ _HYDRO = "Hydrodynamics"
 
 
 class AxialModel(ModelObject):
-    """Base class of the axial (tension-strain) models of a line type."""
+    """Base class of the axial (tension-strain) models of a line type.
+
+    The deck's ``BA`` column holds an axial damping in N s, or a negative
+    value meaning a damping ratio. The two meanings have different units, so
+    the model keeps them apart: ``damping_mode`` chooses ``damping``
+    (``damping``, N s) or ``ratio`` (``damping_ratio``,
+    dimensionless, written as its negative). ``dynamic_damping`` is the
+    optional second value ``Bd`` of a two-spring model.
+    """
 
     type_label = "Axial model"
     abstract = True
-    damping = Vector(
-        AXIAL_DAMPING,
-        (0.0,),
-        lengths=(1, 2),
-        limit="coefficient",
-        group="Axial",
-        doc="Axial damping BA (negative: damping ratio); two values (static, dynamic).",
+    damping_mode = Choice(("damping", "ratio"), group="Axial damping")
+    damping = Quantity(
+        AXIAL_DAMPING, 0.0, minimum=0.0, limit="coefficient", group="Axial damping", doc="BA."
     )
+    damping_ratio = Quantity(
+        DIMENSIONLESS, 0.0, minimum=0.0, group="Axial damping", doc="Axial damping ratio."
+    )
+    dynamic_damping = OptionalQuantity(
+        AXIAL_DAMPING, minimum=0.0, limit="coefficient", group="Axial damping", doc="Bd."
+    )
+
+    def deck_damping(self) -> float | tuple[float, ...]:
+        """Return the deck ``BA`` value: one number, or ``(BA, Bd)``."""
+        static = -self.damping_ratio if self.damping_mode == "ratio" else self.damping
+        if self.dynamic_damping is None:
+            return static
+        return (static, self.dynamic_damping)
+
+    def set_deck_damping(self, value: float | tuple[float, ...]) -> None:
+        """Set the damping from a deck ``BA`` value (a negative static value is a ratio)."""
+        values = value if isinstance(value, tuple) else (value,)
+        static = values[0]
+        if static < 0.0 or math.copysign(1.0, static) < 0.0:
+            self.damping_mode = "ratio"
+            self.damping_ratio = -static
+        else:
+            self.damping_mode = "damping"
+            self.damping = static
+        self.dynamic_damping = values[1] if len(values) > 1 else None
 
 
 @model_type("axial.linear")

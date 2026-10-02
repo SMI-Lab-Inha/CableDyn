@@ -172,10 +172,10 @@ def test_replace_strategy_copies_shared_values() -> None:
     assert isinstance(project.seabed, BathymetrySeabed)
     assert project.seabed.stiffness == 3.0e5 and project.seabed.friction == 0.6
     chain = m["chain"]
-    chain.axial.damping = (-1.0,)
+    chain.axial.damping = 3.0
     check_undo_redo(project, ReplaceStrategy(chain, "axial", ViscoelasticAxial()))
     plain = ReplaceStrategy(chain, "axial", ViscoelasticAxial(), copy_common=False)
-    assert plain.new.damping == (0.0,)
+    assert plain.new.damping == 0.0
     with pytest.raises(TypeError, match="not a sub-object"):
         ReplaceStrategy(chain, "diameter", FlatSeabed)
 

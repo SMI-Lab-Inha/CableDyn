@@ -41,6 +41,30 @@ class ExtraOption(ModelObject):
     values = TextList((), group="Option", doc="Value tokens as written.")
     note = OptionalText(group="Option", doc="Description written after ' - '.")
 
+    def invariants(self) -> list[Issue]:
+        """Warn when the row sets an option the model types.
+
+        Such a row (a duplicate kept from a deck, or added by hand) never
+        overrides the typed property: the deck writer places it before the
+        typed row, so the typed value is the one the solver uses.
+        """
+        from cabledyn.project.deck import typed_option
+
+        found = super().invariants()
+        typed = typed_option(self.keyword)
+        if typed is not None:
+            found.append(
+                Issue(
+                    Severity.WARNING,
+                    f"this row sets the typed option {typed!r}; the typed property wins, so "
+                    "edit it there and remove this row",
+                    self,
+                    "keyword",
+                    2,
+                )
+            )
+        return found
+
 
 @model_type("settings")
 class AnalysisSettings(ModelObject):

@@ -47,9 +47,14 @@ class Rod(ModelObject):
     )
     segments = Integer(1, minimum=0, group="Discretisation", doc="0 for a zero-length rod.")
     outputs = Text("-", group="Outputs", doc="Output flags: '-' or 'p'.")
-    end_a = Child(RodEndpoint, lambda: RodEndpoint.make("A"))
-    end_b = Child(RodEndpoint, lambda: RodEndpoint.make("B"))
+    end_a = Child(RodEndpoint, lambda: RodEndpoint.make("A"), read_only=True)
+    end_b = Child(RodEndpoint, lambda: RodEndpoint.make("B"), read_only=True)
     colour = OptionalColour(group="Appearance")
+
+    def required_references(self) -> frozenset[str]:
+        """A body or body_pinned rod cannot do without its body."""
+        found = super().required_references()
+        return found | {"body"} if self.attachment in _BODY_KINDS else found
 
     def endpoint(self, end: str) -> RodEndpoint:
         """Return the endpoint object of ``end`` (``"A"`` or ``"B"``)."""

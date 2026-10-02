@@ -25,6 +25,7 @@ Examples
 from __future__ import annotations
 
 import contextlib
+import copy
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -260,10 +261,12 @@ class AddObject(Command):
             raise ValueError(f"{obj.label()} already belongs to {obj.parent.label()}")
         self.collection = collection
         self.obj = obj
-        self.index = len(collection) if index is None else index
+        self.index = index
         self.text = f"Add {obj.label()}"
 
     def do(self) -> None:
+        if self.index is None:
+            self.index = len(self.collection)
         self.collection.insert(self.index, self.obj)
 
     def undo(self) -> None:
@@ -475,47 +478,83 @@ class ApplyLibraryItem(MacroCommand):
         )
 
 
-class ImportDeck(MacroCommand):
+class ImportDeck(Command):
     """Add the objects of a deck (or of another project) to a project.
 
     Libraries, objects and rows are appended; the environment, seabed,
-    motion and settings of the imported model replace the project's when
-    ``replace_environment`` is true. Name clashes of line or rod types are
-    left for validation to report.
+    motion and settings of the imported model (and its option spellings and
+    order) replace the project's when ``replace_environment`` is true. Name
+    clashes of line or rod types are left for validation to report. The
+    objects move out of ``source`` when the command is first applied.
 
     Parameters
     ----------
     project : Project
         The receiving project.
     source : Project
-        A project built by :class:`~cabledyn.project.DeckReader`; its objects
-        move into ``project``.
+        A project built by :class:`~cabledyn.project.DeckReader`.
     replace_environment : bool
-        Also take the environment, seabed, motion and settings.
+        Also take the environment, seabed, motion, settings and option hints.
     """
 
     _SINGLE = ("environment", "seabed", "motion", "settings")
 
-    def __init__(self, project: Project, source: Project, *, replace_environment: bool = True):
+    def __init__(
+        self, project: Project, source: Project, *, replace_environment: bool = True
+    ) -> None:
+        self.project = project
+        self.source = source
+        self.replace_environment = replace_environment
+        self.text = f"Import {source.title}"
+        self._inner: MacroCommand | None = None
+        self._hints: tuple[Any, Any] | None = None
+
+    def _build(self) -> MacroCommand:
+        project, source = self.project, self.source
         commands: list[Command] = []
         for prop in type(source).properties():
             if not isinstance(prop, Children):
                 continue
-            items = list(source._values[prop.name])
             target = project._values[prop.name]
-            for item in items:
+            for item in list(source._values[prop.name]):
                 source._values[prop.name].remove(item)
                 commands.append(AddObject(target, item))
         for channel in list(source.outputs.channels):
             source.outputs.channels.remove(channel)
             commands.append(AddObject(project.outputs.channels, channel))
-        if replace_environment:
+        if self.replace_environment:
             for name in self._SINGLE:
                 replacement = source._values[name]
                 replacement._detach()
                 source._values[name] = type(source).get_property(name).initial(source)
                 commands.append(SetProperty(project, name, replacement))
-        super().__init__(f"Import {source.title}", commands)
+            self._hints = (
+                project.deck_hints.get("options"),
+                copy.deepcopy(source.deck_hints.get("options")),
+            )
+        return MacroCommand(self.text, commands)
+
+    def do(self) -> None:
+        if self._inner is None:
+            self._inner = self._build()
+        self._inner.do()
+        if self._hints is not None:
+            self._set_hints(self._hints[1])
+
+    def undo(self) -> None:
+        assert self._inner is not None
+        self._inner.undo()
+        if self._hints is not None:
+            self._set_hints(self._hints[0])
+
+    def _set_hints(self, hints: Any) -> None:
+        if hints is None:
+            self.project.deck_hints.pop("options", None)
+        else:
+            self.project.deck_hints["options"] = copy.deepcopy(hints)
+
+    def affected(self) -> tuple[ModelObject, ...]:
+        return (self.project,) if self._inner is None else (self.project, *self._inner.affected())
 
 
 @dataclass(frozen=True)
@@ -549,6 +588,7 @@ class CommandStack:
         self._clean: int | None = 0
         self._limit = limit
         self._macro: list[MacroCommand] = []
+        self._busy = False
         self._listeners: list[Callable[[StackChanged], None]] = []
 
     # ------------------------------------------------------------------ state
@@ -606,15 +646,29 @@ class CommandStack:
 
     # ------------------------------------------------------------------ actions
 
+    def _run(self, action: Callable[[], None]) -> None:
+        if self._busy:
+            raise RuntimeError(
+                "the command stack is applying a command; a change listener must not push, "
+                "undo or redo (schedule it after the current change instead)"
+            )
+        self._busy = True
+        try:
+            action()
+        finally:
+            self._busy = False
+
     def push(self, command: Command) -> None:
         """Apply ``command`` and record it (inside a macro: add it to the macro).
 
         Raises
         ------
+        RuntimeError
+            If called while a command is being applied (from a change listener).
         Exception
             Whatever the command raises; nothing is recorded then.
         """
-        command.do()
+        self._run(command.do)
         self._record(command)
 
     def _record(self, command: Command) -> None:
@@ -640,9 +694,9 @@ class CommandStack:
         """Revert the last applied command (no-op if none)."""
         if not self.can_undo:
             return
+        command = self._commands[self._index - 1]
+        self._run(command.undo)
         self._index -= 1
-        command = self._commands[self._index]
-        command.undo()
         self._notify("undo", command)
 
     def redo(self) -> None:
@@ -650,7 +704,7 @@ class CommandStack:
         if not self.can_redo:
             return
         command = self._commands[self._index]
-        command.do()
+        self._run(command.do)
         self._index += 1
         self._notify("redo", command)
 

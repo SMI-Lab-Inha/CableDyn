@@ -113,7 +113,8 @@ class ObjectCollection(Generic[ObjT]):
         TypeError
             If ``item`` has the wrong type.
         ValueError
-            If ``item`` already has a parent.
+            If ``item`` already has a parent, would own its own owner, or
+            brings a uid the project already uses.
         """
         if not isinstance(item, self._type):
             raise TypeError(
@@ -121,6 +122,8 @@ class ObjectCollection(Generic[ObjT]):
             )
         if item.parent is not None:
             raise ValueError(f"{item.label()} already belongs to {item.parent.label()}")
+        self._owner._check_adoption(item)
+        self._owner.root()._adopt(item)
         position = max(0, min(index, len(self._items)))
         self._items.insert(position, item)
         item._attach(self._owner, self._name)
@@ -145,6 +148,7 @@ class ObjectCollection(Generic[ObjT]):
             If ``item`` is not in the collection.
         """
         position = self.index(item)
+        self._owner.root()._release(item)
         del self._items[position]
         item._detach()
         self._owner.emit(ChildRemoved(self._owner, self._name, item, position))

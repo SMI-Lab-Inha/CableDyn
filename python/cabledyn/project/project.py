@@ -98,16 +98,51 @@ class Project(ModelObject):
     studio = Child(StudioData, role=Role.META)
 
     def _setup(self) -> None:
+        self._uid_index: dict[str, ModelObject] | None = None
         super()._setup()
         self.unknown_objects: list[dict[str, Any]] = []
         self.load_warnings: list[str] = []
 
+    def _index(self) -> dict[str, ModelObject]:
+        if self._uid_index is None:
+            index: dict[str, ModelObject] = {}
+            for obj in self.walk():
+                index.setdefault(obj.uid, obj)
+            self._uid_index = index
+        return self._uid_index
+
+    def _adopt(self, obj: ModelObject) -> None:
+        index = self._index()
+        joining = list(obj.walk())
+        for item in joining:
+            existing = index.get(item.uid)
+            if existing is not None and existing is not item:
+                raise ValueError(
+                    f"{item.label()} has uid {item.uid}, already used by {existing.label()}; "
+                    "a copy needs fresh uids"
+                )
+        for item in joining:
+            index[item.uid] = item
+
+    def _release(self, obj: ModelObject) -> None:
+        index = self._index()
+        for item in obj.walk():
+            if index.get(item.uid) is item:
+                del index[item.uid]
+
+    def duplicate_uids(self) -> list[str]:
+        """Return the uids used by more than one object (empty when consistent)."""
+        seen: set[str] = set()
+        found: list[str] = []
+        for obj in self.walk():
+            if obj.uid in seen and obj.uid not in found:
+                found.append(obj.uid)
+            seen.add(obj.uid)
+        return found
+
     def find(self, uid: str) -> ModelObject | None:
         """Return the object with ``uid`` anywhere in the project, or ``None``."""
-        for obj in self.walk():
-            if obj.uid == uid:
-                return obj
-        return None
+        return self._index().get(uid)
 
     def objects_of(self, kind: type[M]) -> Iterator[M]:
         """Yield every object of class ``kind`` in the project, depth first."""

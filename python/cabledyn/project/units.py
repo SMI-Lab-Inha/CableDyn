@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Physical dimensions, units, and display-unit preferences.
 
-Every quantity in :mod:`cabledyn.project` is stored in SI units. A
-:class:`Dimension` names what a quantity measures, a :class:`Unit` converts
-between a display unit and SI, and a :class:`UnitSystem` holds the display unit
-chosen for each dimension. Conversions are linear (``si = value * scale``);
-no supported unit has an offset.
+Every quantity in :mod:`cabledyn.project` is stored in the unit the deck uses:
+SI units, except angles, which are stored in degrees (the deck convention). A
+:class:`Dimension` names what a quantity measures and its storage unit, a
+:class:`Unit` converts between a display unit and the storage unit, and a
+:class:`UnitSystem` holds the display unit chosen for each dimension.
+Conversions are linear (``stored = value * scale``); no supported unit has an
+offset.
 
 Examples
 --------
@@ -76,7 +78,7 @@ class Dimension:
     label : str
         Human-readable name.
     si : str
-        Symbol of the SI unit in which values are stored.
+        Symbol of the unit in which values are stored (SI; degrees for angles).
     """
 
     key: str
@@ -152,7 +154,9 @@ class Unit:
     Attributes
     ----------
     symbol : str
-        Unit symbol, unique across all dimensions.
+        Unit symbol. A symbol may measure several dimensions (``N/m`` is a
+        force per length or a stiffness); then
+        :func:`~cabledyn.project.units.unit` needs the dimension.
     dimension : Dimension
         What the unit measures.
     scale : float

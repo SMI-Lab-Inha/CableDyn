@@ -10,17 +10,18 @@ to the point classes; ``Coupled`` and ``Vessel`` points are
 from __future__ import annotations
 
 from cabledyn.project.base import ModelObject, model_type
-from cabledyn.project.bodies import Body
+from cabledyn.project.bodies import Body, Turbine
 from cabledyn.project.descriptors import (
     Choice,
-    Integer,
     OptionalColour,
+    OptionalInteger,
     OptionalQuantity,
     Quantity,
     Ref,
     Role,
     Vec3,
 )
+from cabledyn.project.issues import Issue, Severity
 from cabledyn.project.units import AREA, DIMENSIONLESS, LENGTH, MASS, VOLUME
 
 __all__ = [
@@ -134,11 +135,43 @@ class ConnectPoint(Point):
 class TurbinePoint(Point):
     """A point carried by a FAST.Farm turbine (deck ``Turbine<J>``/``T<J>``).
 
-    The position is relative to the turbine's reference.
+    The point refers to its :class:`~cabledyn.project.Turbine` object, so it
+    follows a renumbered turbine and is removed with it. In a coupled farm
+    deck without a ``TURBINES`` table the turbine is known only by its number,
+    given in ``turbine_number`` instead. The position is relative to the
+    turbine's reference.
     """
 
     type_label = "Turbine point"
-    turbine = Integer(1, minimum=1, maximum=10000, group="Farm", doc="Turbine number J.")
+    turbine = Ref(Turbine, required=False, group="Farm", doc="The turbine.")
+    turbine_number = OptionalInteger(
+        minimum=1,
+        maximum=10000,
+        group="Farm",
+        doc="Turbine number J when the deck has no TURBINES row for it.",
+    )
+
+    def number(self) -> int | None:
+        """Return the turbine number J written to the deck, or ``None``."""
+        return self.turbine.number if self.turbine is not None else self.turbine_number
+
+    def required_references(self) -> frozenset[str]:
+        found = super().required_references()
+        return found | {"turbine"} if self.turbine_number is None else found
+
+    def invariants(self) -> list[Issue]:
+        found = super().invariants()
+        if (self.turbine is None) == (self.turbine_number is None):
+            found.append(
+                Issue(
+                    Severity.ERROR,
+                    "give either the turbine or a turbine number",
+                    self,
+                    "turbine",
+                    2,
+                )
+            )
+        return found
 
 
 @model_type("point.body")

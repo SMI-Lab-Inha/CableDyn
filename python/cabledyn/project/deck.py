@@ -104,7 +104,7 @@ from cabledyn.project.types import (
     ViscoelasticAxial,
 )
 
-__all__ = ["DeckExportError", "DeckReader", "DeckWriter", "IdMap"]
+__all__ = ["DeckExportError", "DeckReader", "DeckWriter", "IdMap", "typed_option"]
 
 _TRUE = frozenset({"true", "t", "yes", "y", "on", "1"})
 _FALSE = frozenset({"false", "f", "no", "n", "off", "0"})
@@ -603,25 +603,23 @@ class _Reader:
         return [self.lines[id(line)] for line in rows]
 
     def line_type(self, row: _b.LineType) -> None:
-        damping = row.ba if isinstance(row.ba, tuple) else (row.ba,)
         axial: LinearAxial | ViscoelasticAxial | SyropeAxial
         if isinstance(row.ea, _b.SyropeEA):
-            axial = SyropeAxial(
-                settings_file=row.ea.settings, alpha=row.ea.alpha, beta=row.ea.beta, damping=damping
-            )
+            axial = SyropeAxial(settings_file=row.ea.settings, alpha=row.ea.alpha, beta=row.ea.beta)
         elif isinstance(row.ea, tuple):
             if len(row.ea) == 2:
-                axial = ViscoelasticAxial(
-                    static_stiffness=row.ea[0], dynamic_stiffness=row.ea[1], damping=damping
-                )
+                axial = ViscoelasticAxial(static_stiffness=row.ea[0], dynamic_stiffness=row.ea[1])
             elif len(row.ea) == 3:
                 axial = ViscoelasticAxial(
-                    static_stiffness=row.ea[0], alpha_mbl=row.ea[1], beta=row.ea[2], damping=damping
+                    static_stiffness=row.ea[0], alpha_mbl=row.ea[1], beta=row.ea[2]
                 )
             else:
                 raise DeckFormatError(f"line type {row.name!r}: unsupported EA {row.ea!r}")
         else:
-            axial = LinearAxial(stiffness=row.ea, damping=damping)
+            axial = LinearAxial(stiffness=row.ea)
+        if isinstance(row.ba, tuple) and len(row.ba) > 2:
+            raise DeckFormatError(f"line type {row.name!r}: unsupported BA {row.ba!r}")
+        axial.set_deck_damping(row.ba)
         bending = BendingModel(
             bending_stiffness=row.ei,
             shear_stiffness=row.gas,
@@ -734,7 +732,11 @@ class _Reader:
         elif kind == "rod" and row.rod_end is not None:
             item = RodPoint(rod_end=self._endpoint(row.rod_end))
         elif kind in {"turbine", "t"} and row.turbine is not None:
-            item = TurbinePoint(turbine=row.turbine)
+            farm = {turbine.number: turbine for turbine in self.project.turbines}
+            if row.turbine in farm:
+                item = TurbinePoint(turbine=farm[row.turbine])
+            else:
+                item = TurbinePoint(turbine_number=row.turbine)
         else:
             raise DeckFormatError(f"point {row.id}: unsupported type {row.type!r}")
         item.name = f"Point {row.id}"
@@ -823,7 +825,7 @@ class _Reader:
             linear_damping=_tuple(row.blin),
             quadratic_damping=_tuple(row.bquad),
         )
-        item.deck_hints.update(deck_id=row.id, csys=row.csys)
+        item.deck_hints["csys"] = row.csys
         self.project.external_loads.append(item)
 
     # ------------------------------------------------------------------ options
@@ -1046,10 +1048,49 @@ class _Row:
     values: tuple[str, ...]
     description: str | None
     owner: ModelObject
+    group: str | None
+
+
+def _valid_hint(hint: Any) -> bool:
+    """Whether an option hint (possibly from a hand-edited file) has the expected shape."""
+    return (
+        isinstance(hint, dict)
+        and isinstance(hint.get("position"), (int, float))
+        and not isinstance(hint.get("position"), bool)
+        and isinstance(hint.get("keyword"), str)
+        and isinstance(hint.get("values"), list)
+        and all(isinstance(token, str) for token in hint["values"])
+        and isinstance(hint.get("encoded"), list)
+        and isinstance(hint.get("description"), (str, type(None)))
+    )
+
+
+# ``wavetrain`` rows add up (every row is a train), so a kept one never overrides.
+_SPECIAL_OPTIONS = frozenset({"waves", "current", "vesselref", "bathymetry", "dynamic_solver"})
+
+
+def typed_option(keyword: str) -> str | None:
+    """Return the typed option an ``OPTIONS`` keyword sets, or ``None``.
+
+    ``motionFile``, ``vesselMotion`` and ``vesselRAO`` all set ``"motion"``.
+    """
+    identity = _option_key(keyword)
+    if identity in _MOTION_KEYS:
+        return "motion"
+    if identity in _SCALAR_BY_ID or identity in _SPECIAL_OPTIONS:  # one row wins
+        return identity
+    return None
 
 
 class DeckWriter:
     """Write a :class:`~cabledyn.project.Project` as a CableDyn deck.
+
+    Relative side-file paths resolve from the folder of the project's
+    ``deck_path``; with no ``deck_path`` they resolve from the working folder
+    (:class:`~cabledyn.project.ProjectStore` anchors them at the project
+    file). Points, lines, bodies and rods keep their deck ids where they can;
+    external loads are numbered 1, 2, ... in collection order, as the deck
+    requires.
 
     Parameters
     ----------
@@ -1236,16 +1277,12 @@ class DeckWriter:
             for position, item in enumerate(items):
                 if position not in assigned:
                     following += 1
-                    while following in used:
-                        following += 1
-                    used.add(following)
                     assigned[position] = following
                 self.id_map.add(item, kind, assigned[position])
 
     def _id(self, obj: ModelObject) -> int:
         found = self.id_map.deck_id(obj)
-        if not isinstance(found, int):
-            raise self._fail(obj, "is not part of the project")
+        assert isinstance(found, int)  # every numbered object gets an id in _ids
         return found
 
     def _libraries(self, model: DeckModel) -> None:
@@ -1294,7 +1331,7 @@ class DeckWriter:
             diam=item.diameter,
             mass=item.mass_per_length,
             ea=ea,
-            ba=_multi(axial.damping),
+            ba=axial.deck_damping(),
             ei=bending.bending_stiffness,
             cdn=item.drag_normal,
             cdt=item.drag_axial,
@@ -1378,6 +1415,8 @@ class DeckWriter:
     def _rod(self, model: DeckModel, rod: Rod) -> _b.Rod:
         if rod.rod_type is None:
             raise self._fail(rod, "has no rod type")
+        if rod.rod_type.parent is not self.project:
+            raise self._fail(rod, "uses a rod type outside the project")
         canonical = _ROD_TOKENS[rod.attachment]
         accepted = frozenset(
             token
@@ -1441,7 +1480,11 @@ class DeckWriter:
             rod_end = self._rod_end(model, point.rod_end)
         elif isinstance(point, TurbinePoint):
             token = _hinted(point, "Turbine", frozenset({"turbine", "t"}))
-            turbine = point.turbine
+            turbine = point.number()
+            if turbine is None:
+                raise self._fail(point, "has no turbine")
+            if point.turbine is not None and point.turbine.parent is not self.project:
+                raise self._fail(point, "refers to a turbine outside the project")
         else:
             raise self._fail(point, "has no deck point type")
         x, y, z = point.position
@@ -1555,19 +1598,17 @@ class DeckWriter:
             hint = load.deck_hints.get("csys")
             letter = "L" if load.axes == "body" else "G"
             csys = hint if isinstance(hint, str) and hint.upper() == letter else letter
-            deck_id = load.deck_hints.get("deck_id")
-            load_id = deck_id if isinstance(deck_id, int) else number
             self._call(
                 load,
                 model.add_external_load,
-                load_id,
+                number,
                 self._deck_bodies[id(load.body)],
                 csys=csys,
                 force=_multi(load.force),
                 blin=_multi(load.linear_damping),
                 bquad=_multi(load.quadratic_damping),
             )
-            self.id_map.add(load, "external_load", load_id)
+            self.id_map.add(load, "external_load", number)
             self._sections["EXTERNAL LOADS"].append(load)
 
     def _end_connection(self, model: DeckModel, row: EndConnection, line: Line) -> None:
@@ -1622,24 +1663,28 @@ class DeckWriter:
         rows: list[_Row] = []
         fresh = 1.0e9
 
-        def add(identity: str, keyword: str, encoded: tuple[str, ...], owner: ModelObject) -> None:
+        def hinted(
+            hint: Any, keyword: str, encoded: tuple[str, ...], owner: ModelObject, group: str
+        ) -> None:
             nonlocal fresh
-            hint = hints.get(identity)
-            if isinstance(hint, dict):
-                same = list(encoded) == hint.get("encoded")
-                values = tuple(hint["values"]) if same else encoded
+            if _valid_hint(hint):
+                same = list(encoded) == hint["encoded"]
                 rows.append(
                     _Row(
                         float(hint["position"]),
-                        str(hint.get("keyword") or keyword),
-                        values,
-                        hint.get("description"),
+                        hint["keyword"] or keyword,
+                        tuple(hint["values"]) if same else encoded,
+                        hint["description"],
                         owner,
+                        group,
                     )
                 )
             else:
                 fresh += 1.0
-                rows.append(_Row(fresh, keyword, encoded, None, owner))
+                rows.append(_Row(fresh, keyword, encoded, None, owner, group))
+
+        def add(identity: str, keyword: str, encoded: tuple[str, ...], owner: ModelObject) -> None:
+            hinted(hints.get(identity), keyword, encoded, owner, identity.split(":")[0])
 
         for scalar in _SCALARS:
             owner = _owner(project, scalar.owner)
@@ -1657,21 +1702,7 @@ class DeckWriter:
         if isinstance(waves, MultiTrainSea):
             for train in waves.trains:
                 encoded = _encode_train(train)
-                hint = train.deck_hints.get("option")
-                if isinstance(hint, dict):
-                    same = list(encoded) == hint.get("encoded")
-                    rows.append(
-                        _Row(
-                            float(hint["position"]),
-                            str(hint.get("keyword") or "wavetrain"),
-                            tuple(hint["values"]) if same else encoded,
-                            hint.get("description"),
-                            train,
-                        )
-                    )
-                else:
-                    fresh += 1.0
-                    rows.append(_Row(fresh, "wavetrain", encoded, None, train))
+                hinted(train.deck_hints.get("option"), "wavetrain", encoded, train, "wavetrain")
         elif not isinstance(waves, NoWaves) or "waves" in hints:
             add("waves", "waves", _encode_wave(waves), environment)
         current = environment.current
@@ -1681,14 +1712,23 @@ class DeckWriter:
         self._motion(motion, hints, add)
         if motion.reference is not None:
             add("vesselref", "vesselRef", _encode_vector(motion.reference), motion)
+        # Kept rows go where they were; a kept row of a typed option is moved
+        # before every typed row of that option, so the typed property wins.
+        last_extra: dict[str, float] = {}
         for extra in settings.extra_options:
             position = extra.deck_hints.get("position")
-            if isinstance(position, int):
+            if isinstance(position, int) and not isinstance(position, bool):
                 order = float(position)
             else:
                 fresh += 1.0
                 order = fresh
-            rows.append(_Row(order, extra.keyword, tuple(extra.values), extra.note, extra))
+            group = typed_option(extra.keyword)
+            rows.append(_Row(order, extra.keyword, tuple(extra.values), extra.note, extra, None))
+            if group is not None:
+                last_extra[group] = max(order, last_extra.get(group, order))
+        for row in rows:
+            if row.group is not None and row.group in last_extra:
+                row.position = max(row.position, last_extra[row.group] + 0.5)
         rows.sort(key=lambda row: row.position)
         for row in rows:
             self._call(
@@ -1709,8 +1749,10 @@ class DeckWriter:
             raise self._fail(motion, "needs a file")
         keyword = "vesselRAO" if isinstance(motion, FloaterRAO) else _MOTION_KEYWORDS[type(motion)]
         hint = hints.get("motion")
-        same_keyword = isinstance(hint, dict) and _option_key(str(hint.get("keyword"))) == (
-            keyword.lower()
+        same_keyword = (
+            isinstance(hint, dict)
+            and _valid_hint(hint)
+            and _option_key(str(hint["keyword"])) == keyword.lower()
         )
         add("motion" if same_keyword else "motion:changed", keyword, (file,), motion)
 

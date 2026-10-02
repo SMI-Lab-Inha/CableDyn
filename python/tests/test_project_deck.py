@@ -69,7 +69,6 @@ from cabledyn.project import (
     ViscoelasticAxial,
     WaveModel,
     WaveTrain,
-    model_type,
     validate_project,
 )
 from cabledyn.project.deck import (
@@ -86,12 +85,10 @@ from cabledyn.project.validation import errors
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@model_type("test.wave.odd")
 class OddWave(WaveModel):
     """A wave model without a deck form."""
 
 
-@model_type("test.current.odd")
 class OddCurrent(CurrentModel):
     """A current model without a deck form."""
 
@@ -144,6 +141,27 @@ def normalise(project: Project) -> Any:
     return substitute(data)
 
 
+def semantic(project: Project) -> Any:
+    """The graph without uids (references become positions), names, paths or hints."""
+    copy = Project.from_dict(project.to_dict())
+    for obj in copy.walk():
+        obj.deck_hints.clear()
+    order = {obj.uid: index for index, obj in enumerate(copy.walk())}
+
+    def clean(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {
+                key: clean(value)
+                for key, value in node.items()
+                if key not in {"uid", "name", "deck_path"}
+            }
+        if isinstance(node, list):
+            return [clean(value) for value in node]
+        return order.get(node, node) if isinstance(node, str) else node
+
+    return clean(copy.to_dict()["properties"])
+
+
 def test_the_round_trip_covers_the_repository_decks() -> None:
     accepted = [path for path in CANDIDATES if _load(path) is not None]
     rejected = sorted(path.name for path in CANDIDATES if path not in accepted)
@@ -173,6 +191,14 @@ def test_deck_round_trip(path: Path, tmp_path: Path) -> None:
     assert normalise(again) == normalise(project)
     assert DeckWriter(again).to_text() == canonical
     assert errors(validate_project(project)) == []
+    # Without any hint (ids, spellings, option order) the deck still means the same.
+    stripped = Project.from_dict(project.to_dict())
+    for obj in stripped.walk():
+        obj.deck_hints.clear()
+    hint_free = DeckReader.from_text(
+        DeckWriter(stripped).to_text(), path=model.path, caller_driven=model.caller_driven
+    )
+    assert semantic(hint_free) == semantic(project)
 
 
 # --------------------------------------------------------------------------- reader details
@@ -280,7 +306,7 @@ def full_project() -> Project:
     chain = p.line_types.append(
         GenericLineType("chain", diameter=0.1, mass_per_length=50.0, drag_normal=1.2)
     )
-    chain.axial = LinearAxial(stiffness=5.0e8, damping=(-1.0,))
+    chain.axial = LinearAxial(stiffness=5.0e8, damping_mode="ratio", damping_ratio=1.0)
     cable = p.line_types.append(ChainType("cable", diameter=0.2, mass_per_length=80.0))
     cable.bending = BendingModel(bending_stiffness=1.0e4)
     rod_type = p.rod_types.append(RodType("pipe", diameter=1.0, mass_per_length=100.0))
@@ -440,8 +466,8 @@ def test_writer_body_rod_and_row_variants() -> None:
     project.bodies.append(
         Rigid6Body("md", row_format="moordyn", inertia=(1.0, 2.0, 3.0), drag_area=(1.0, 2.0))
     )
-    project.turbines.append(Turbine(number=2, platform_displacement=(1, 0, 0, 0, 0, 0)))
-    project.points.append(TurbinePoint("tp", turbine=2))
+    farm = project.turbines.append(Turbine(number=2, platform_displacement=(1, 0, 0, 0, 0, 0)))
+    project.points.append(TurbinePoint("tp", turbine=farm))
     project.points.append(ConnectPoint("c"))
     project.points.append(FloaterPoint("v", kind="floater"))
     line.end_connections.append(EndConnection(end="A", rotation="pinned"))
@@ -503,7 +529,9 @@ def test_writer_body_rod_and_row_variants() -> None:
 def test_writer_axial_models() -> None:
     project = full_project()
     chain = project.line_types[0]
-    chain.axial = ViscoelasticAxial(static_stiffness=1e8, dynamic_stiffness=2e8, damping=(1.0, 2.0))
+    chain.axial = ViscoelasticAxial(
+        static_stiffness=1e8, dynamic_stiffness=2e8, damping=1.0, dynamic_damping=2.0
+    )
     assert "100000000.0|200000000.0" in DeckWriter(project).to_text(validate=False)
     chain.axial = ViscoelasticAxial(static_stiffness=1e8, alpha_mbl=10.0, beta=0.2)
     assert "100000000.0|10.0|0.2" in DeckWriter(project).to_text(validate=False)
@@ -584,7 +612,6 @@ def test_write_to_file(tmp_path: Path) -> None:
     DeckWriter(project).write(target, overwrite=True)
 
 
-@model_type("test.axial.odd")
 class OddAxial(AxialModel):
     """An axial model subclass the writer does not know."""
 

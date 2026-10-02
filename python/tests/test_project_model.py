@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -85,7 +86,6 @@ from cabledyn.project.schema import DECK_LIMITS, DeckLimit, deck_limit
 from cabledyn.project.units import LENGTH
 
 
-@model_type("test.widget")
 class Widget(ModelObject):
     """A test class using every scalar descriptor."""
 
@@ -106,6 +106,14 @@ class Widget(ModelObject):
     values = Vector(LENGTH, (1.0,), lengths=(1, 3))
     keys = TextList(("k",))
     blob = JsonValue({"a": 1})
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _registered_widget() -> Iterator[None]:
+    """Register the test class for this module only (no leak into other tests)."""
+    model_type("test.widget")(Widget)
+    yield
+    REGISTRY.unregister("test.widget")
 
 
 def _events(obj: ModelObject) -> list[Event]:
@@ -186,14 +194,17 @@ def test_layer_one_checks() -> None:
     w.count = 9
     w.spare = -1
     w.target = (2.0e6, 0.0, 0.0)
-    w.values = (float("nan"),)
     messages = {(issue.prop, issue.message) for issue in w.validate()}
     assert ("length", "must be at most 10") in messages
     assert ("width", "must be at least 1") in messages
     assert ("count", "must be at most 5") in messages
     assert ("spare", "must be at least 0") in messages
     assert ("target", "magnitude must be at most 1e+06") in messages
-    assert any(prop == "values" and "finite" in message for prop, message in messages)
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="finite"):
+            w.length = bad
+        with pytest.raises(ValueError, match="finite"):
+            w.values = (bad,)
     w.length = -1.0
     assert any(i.message == "must be at least 0" for i in w.validate())
     issue = w.validate()[0]
@@ -522,7 +533,7 @@ def test_to_dict_and_from_dict_round_trip() -> None:
     project.environment.waves = JonswapWave()
     chain.deck_hints["note"] = ("kept", 1)
     data = project.to_dict()
-    copy = Project.from_dict(data)
+    copy = Project.from_dict(data, fresh_uids=False)
     assert copy.to_dict() == data
     assert copy.uid == project.uid
     assert copy.lines[0].end_a is copy.points[0]
@@ -556,11 +567,18 @@ def test_from_dict_tolerates_unknown_and_bad_entries() -> None:
     assert rebuilt.lines[0].outputs == "-"
     assert rebuilt.lines[0].end_b is None
     assert isinstance(rebuilt.environment, Environment)
-    assert sorted(entry["data"]["type"] for entry in ctx.unknown) == ["plugin.buoy", "plugin.env"]
+    assert [entry["data"]["type"] for entry in ctx.unknown] == ["plugin.buoy"]
+    written = rebuilt.to_dict()["properties"]
+    assert written["environment"] == {"type": "plugin.env", "properties": {}}
+    assert written["lines"][0]["properties"]["bogus"] == 1
+    assert written["lines"][0]["properties"]["outputs"] == 5
+    assert written["lines"][0]["properties"]["end_b"] == "no-such-uid"
+    rebuilt.lines[0].outputs = "pt"
+    assert rebuilt.to_dict()["properties"]["lines"][0]["properties"]["outputs"] == "pt"
     text = " | ".join(ctx.warnings)
     for fragment in ("unknown type", "malformed", "kept the default", "unknown property"):
         assert fragment in text
-    assert "dropped reference end_b" in text
+    assert "reference end_b is unresolved" in text
     assert "not a valid item" in text
     with pytest.raises(KeyError):
         ctx.lookup(5)
@@ -596,10 +614,12 @@ def test_project_validate_all_runs_every_layer() -> None:
     assert isinstance(issues[0], Issue)
 
 
-def test_floater_type_extension_slot() -> None:
-    @model_type("test.hydro.tabulated")
+def test_floater_type_extension_slot(request: pytest.FixtureRequest) -> None:
     class TabulatedDatabase(HydroDatabaseFile):
         """A plugin database kind."""
+
+    model_type("test.hydro.tabulated")(TabulatedDatabase)
+    request.addfinalizer(lambda: REGISTRY.unregister("test.hydro.tabulated"))
 
     floater_type = FloaterType()
     assert isinstance(floater_type.hydrodynamics, NoHydroDatabase)
