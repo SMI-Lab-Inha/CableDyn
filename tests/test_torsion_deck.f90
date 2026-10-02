@@ -603,8 +603,9 @@ CONTAINS
   SUBROUTINE insert_option(path, row)
     !! Insert an OPTIONS row (just after the section header) of a deck written by write_deck.
     CHARACTER(*), INTENT(IN) :: path, row
-    CHARACTER(512) :: lines(400)
+    CHARACTER(512), ALLOCATABLE :: lines(:)   ! the deck text on the heap, not the stack
     INTEGER :: u, n, ios, k
+    ALLOCATE (lines(400))
     OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ')
     n = 0
     DO

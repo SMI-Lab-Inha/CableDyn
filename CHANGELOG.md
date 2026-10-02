@@ -24,6 +24,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the displaced mass) no longer depends on the sign of the round-off weight: a line whose
   total weight is below 1e-12 of its axial stiffness is seeded as a straight, uniformly
   stretched line. Previously the catenary seed could fail to close on some platforms.
+- Windows builds with gfortran: the `modal` test could stop with a stack overflow on some
+  CPUs, because it kept 1.7 MB of dense matrices on the stack. Large test arrays and the
+  initialisation workspaces of the coupled aggregate and the C API are now allocated on the
+  heap, every executable of such a build reserves a 64 MiB stack, and the new `stack` tests
+  run the library on a 1 MiB thread stack. Results are unchanged.
+- The static Windows `openfast.exe` compiles the CableDyn adapter with `/heap-arrays:1024`,
+  like the CableDyn core, so its run-time-sized arrays no longer use the
+  `openfast.exe` stack.
+- Builds with gfortran 16 are free of `-Wuninitialized` warnings; the reported values (the
+  bounds of unallocated components) were never read.
 
 ## [0.1.0] - 2026-10-01
 

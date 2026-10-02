@@ -598,11 +598,13 @@ CONTAINS
     INTEGER, PARAMETER :: NE = 16, ND = 6*(NE + 1), MAXIT = 30
     TYPE(CD_HermiteTorsionType) :: tors
     REAL(wp) :: seed(ND), qs(ND), l0(NE), curv(NE + 1), res, ends(3, 4), q0(ND), hist(MAXIT, 2), sk, fdead(ND)
-    REAL(wp) :: ab(LDAB, ND), abc(LDAB, ND), g(ND), z(ND), e, th, mt, qfin(ND), dfin, rho, amp, rate
+    REAL(wp) :: g(ND), z(ND), e, th, mt, qfin(ND), dfin, rho, amp, rate
+    REAL(wp), ALLOCATABLE :: ab(:, :), abc(:, :)   ! band matrices on the heap, not the stack
     INTEGER :: k, it, es, ic, nit(2), nneg_b, nneg_k, info, ipiv(ND), nr
     LOGICAL :: conv(2), ok, mask(ND)
     CHARACTER(512) :: em
     EXTERNAL :: dgbsv
+    ALLOCATE (ab(LDAB, ND), abc(LDAB, ND))
     l0 = 1.0_wp/NE
     fdead = 0.0_wp
     fdead(ND - 5) = 10.0_wp

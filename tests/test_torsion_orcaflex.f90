@@ -396,8 +396,9 @@ CONTAINS
   SUBROUTINE add_outputs(path)
     !! Append the torsion channels to the OUTPUTS of a deck written by write_deck.
     CHARACTER(*), INTENT(IN) :: path
-    CHARACTER(512) :: lines(200)
+    CHARACTER(512), ALLOCATABLE :: lines(:)   ! the deck text on the heap, not the stack
     INTEGER :: u, n, ios, k
+    ALLOCATE (lines(200))
     OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ')
     n = 0
     DO

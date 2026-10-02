@@ -3305,9 +3305,15 @@ CONTAINS
       INTEGER, INTENT(OUT) :: esr
       CHARACTER(*), INTENT(OUT) :: emr
       TYPE(DeckOptions) :: opts_sw
-      TYPE(CD_HFMF_ModuleType) :: sw_cable
-      INTEGER :: sw_node, k, nsw
+      ! ALLOCATABLE: off the stack of this recursive builder (see DEVELOPMENT.md)
+      TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: sw_cable
+      INTEGER :: sw_node, k, nsw, sw_stat
       CHARACTER(2048) :: sw_note
+      ALLOCATE (sw_cable, STAT=sw_stat)
+      IF (sw_stat /= 0) THEN
+        CALL fail(esr, emr, 'still-water friction reference allocation failed')
+        RETURN
+      END IF
       opts_sw = opts
       opts_sw%has_current = .FALSE.
       opts_sw%has_current_profile = .FALSE.

@@ -44,6 +44,16 @@ The Debug configuration (`-DCMAKE_BUILD_TYPE=Debug`) adds `-fcheck=all
 conda OpenBLAS through `CONDA_PREFIX`. `cmake --install build --prefix stage`
 installs the driver, the shared library, and `CableDyn_CAPI.h`.
 
+A Windows build with gfortran links every executable with a 64 MiB stack reserve
+(the MinGW default is 2 MiB). With OpenMP enabled, gfortran keeps fixed-size local
+arrays on the stack, and the stack depth of the OpenBLAS kernels differs between
+CPUs, so a small reserve can pass on one machine and overflow on another. The
+shared library cannot rely on this reserve: the host program (for example
+`python.exe`, which reserves about 2 MB) sets the stack of the threads that call
+it. The `-L stack` tests check the library on a thread with a 1 MiB stack and, in
+a Windows gfortran build, the driver and the modal test relinked with a 1 MiB
+reserve and the reserve written into each executable.
+
 | Selection | Tests |
 |---|---|
 | `-L fortran` | All Fortran tests |
@@ -56,6 +66,7 @@ installs the driver, the shared library, and `CableDyn_CAPI.h`.
 | `-L external_ref` | IEA-15MW VolturnUS-S mooring comparisons |
 | `-L cosserat` | Secondary Cosserat path |
 | `-L python` | Python package, deck-style, and documentation checks |
+| `-L stack` | Library, driver, and modal test on a 1 MiB stack |
 
 A test program can also be run directly from the build tree (`build/`, or
 `build\bin\` with the conda toolchain on Windows); it prints `PASS:` or
@@ -124,7 +135,14 @@ Fortran lines longer than 120 columns must be split with `&` before formatting.
   `ErrMsg (CHARACTER(*), INTENT(OUT))`.
 - LAPACK: banded solvers (`DGBSV`, and `DPBTRF`/`DPBTRS` for symmetric positive
   definite bands); a dense assembly is packed into band storage before the solve.
-- Warning-clean under `-std=f2018 -Wall -Wextra -fimplicit-none`.
+- Warning-clean under `-std=f2018 -Wall -Wextra -fimplicit-none` with gfortran 15
+  and 16. gfortran 16 can report `-Wuninitialized` for a default-initialised local
+  derived-type variable with allocatable components: the optimiser copies the
+  unset bounds of its unallocated arrays, which the program never reads. Such a
+  local is `ALLOCATABLE` where this occurs.
+- Keep large data off the stack: a local array or derived-type variable that can
+  exceed about 64 KB is `ALLOCATABLE`, except on the per-step path, which uses the
+  preallocated workspaces and does not allocate.
 
 ### SPDX headers
 

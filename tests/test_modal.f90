@@ -52,12 +52,14 @@ CONTAINS
   SUBROUTINE case_taut_string()
     INTEGER, PARAMETER :: NE = 100, NN = NE + 1, NM = 80
     REAL(wp), PARAMETER :: L = 100.0_wp, EA = 1.0e8_wp, RHO = 100.0_wp, EPS = 1.0e-3_wp
-    REAL(wp) :: q(3*NN), l0(NE), ea_(NE), rho_a(NE), k(3*NN, 3*NN), m(3*NN, 3*NN), om2(NM), sh(3*NN, NM)
+    REAL(wp) :: q(3*NN), l0(NE), ea_(NE), rho_a(NE), om2(NM)
     REAL(wp) :: t, mc, f_exp, f_got, l0tot, ax, tr
-    REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :)
+    ! The dense matrices and the mode shapes (about 1.7 MB) live on the heap, not the stack.
+    REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :), k(:, :), m(:, :), sh(:, :)
     INTEGER :: conn(2, NE), i, j, es, nf, nmode, kd
     LOGICAL :: free(3*NN)
     CHARACTER(256) :: em
+    ALLOCATE (k(3*NN, 3*NN), m(3*NN, 3*NN), sh(3*NN, NM))
     l0tot = L/(1.0_wp + EPS)
     DO i = 1, NE
       conn(:, i) = [i, i + 1]
@@ -211,12 +213,12 @@ CONTAINS
     !! A slack tension-only string has no stiffness (K = 0): every frequency is zero and the
     !! banded solver still returns M-orthonormal shapes for the repeated zero eigenvalue.
     INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NM = 6
-    REAL(wp) :: q(3*NN), l0(NE), ea_(NE), rho_a(NE), om2(NM), sh(3*NN, NM), gram(NM, NM)
-    REAL(wp) :: k(3*NN, 3*NN), m(3*NN, 3*NN)
-    REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :)
+    REAL(wp) :: q(3*NN), l0(NE), ea_(NE), rho_a(NE), om2(NM), gram(NM, NM)
+    REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :), k(:, :), m(:, :), sh(:, :)
     INTEGER :: conn(2, NE), i, es, nf, kd
     LOGICAL :: free(3*NN)
     CHARACTER(256) :: em
+    ALLOCATE (k(3*NN, 3*NN), m(3*NN, 3*NN), sh(3*NN, NM))
     DO i = 1, NE
       conn(:, i) = [i, i + 1]
     END DO

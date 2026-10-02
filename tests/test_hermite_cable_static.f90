@@ -193,13 +193,14 @@ CONTAINS
     INTEGER, PARAMETER :: NE = 25, NN = NE + 1, NDOF = 6*NN
     REAL(wp), PARAMETER :: G = 9.80665_wp, RHOW = 1025.0_wp, D = 0.2_wp, MPL = 80.0_wp
     REAL(wp), PARAMETER :: EAX = 1.0e6_wp, LTOT = 100.0_wp, ZTOP = 18.0_wp, PI_L = 3.14159265358979324_wp
-    TYPE(CD_HermiteCableDynType) :: dyn
+    TYPE(CD_HermiteCableDynType), ALLOCATABLE :: dyn   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), bvec(NE), rho_a(NE), diam(NE), cd0(NE)
     REAL(wp) :: seed(NDOF), q(NDOF), curv(NN), res, area, wsub, buoy, lo, hi, sd, t0, zex, sig, err, fr(3)
     REAL(wp) :: amax, zend
     INTEGER :: fixed(4*NN + 1), nfix, i, es, iters, k
     CHARACTER(300) :: em
 
+    ALLOCATE (dyn)
     area = 0.25_wp*PI_L*D*D
     wsub = (MPL - RHOW*area)*G
     buoy = RHOW*G*area

@@ -45,7 +45,9 @@ the system code page cannot spell; the static release build embeds it.
 
 For the static Windows release, pass a clean, unpatched checkout to
 `release/build_static_windows.ps1`; it applies the series itself (see
-[Installation](../../doc/installation.rst)).
+[Installation](../../doc/installation.rst)). Its Visual Studio project compiles the CableDyn
+adapter with `/heap-arrays:1024`, as the static CMake build compiles the CableDyn core, so arrays
+whose size is known only at run time are placed on the heap rather than on the `openfast.exe` stack.
 
 ## License of modified files
 

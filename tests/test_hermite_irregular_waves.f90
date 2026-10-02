@@ -353,10 +353,11 @@ CONTAINS
 
   SUBROUTINE irregular_smoke()
     INTEGER, PARAMETER :: N = 12
-    TYPE(CD_HermiteCableDynType) :: m
+    TYPE(CD_HermiteCableDynType), ALLOCATABLE :: m   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     REAL(wp) :: amp(N), per(N), ph(N), q0(66), qend(66)
     INTEGER :: es
     CHARACTER(300) :: em
+    ALLOCATE (m)
     CALL make_table(N, amp, per, ph)
     CALL build_hanging_cable(m)
     q0 = m%q

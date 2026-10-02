@@ -164,10 +164,11 @@ CONTAINS
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE check_step_response()
-    TYPE(CD_HFMF_ModuleType) :: cab
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     REAL(wp) :: q(NDOF), xa(3), phi, worst, bent, th, mt, f(3), m(3), mref
     INTEGER :: k, es
     CHARACTER(300) :: em
+    ALLOCATE (cab)
     CALL line_seed(0.0_wp, 0.0_wp, q)
     CALL build_cable(cab, q, 1.0_wp, 0.01_wp, 1.0e-8_wp, 0.8_wp)
     xa = q(NDOF - 5:NDOF - 3)
@@ -344,13 +345,14 @@ CONTAINS
 
   SUBROUTINE check_restart()
     INTEGER, PARAMETER :: K_SNAP = 250, K_END = 400
-    TYPE(CD_HFMF_ModuleType) :: cab, fresh
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab, fresh   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     REAL(wp) :: q(NDOF), qa(NDOF), va(NDOF), tha, mta, th, mt, x(3), v(3), a(3), dcm(3, 3), w(3), al(3), phi
     REAL(wp) :: t_snap
     REAL(wp), ALLOCATABLE :: buf(:)
     LOGICAL :: ok
     INTEGER :: es
     CHARACTER(300) :: em
+    ALLOCATE (cab, fresh)
     CALL line_seed(0.0_wp, 0.0_wp, q)
     CALL build_cable(cab, q, 1.0_wp, 0.01_wp, 1.0e-6_wp, 0.8_wp)
     ! a restart is exact with cross-step factor reuse off (the factor's age is not state)

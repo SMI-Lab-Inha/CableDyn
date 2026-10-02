@@ -287,7 +287,10 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: force(:), jac_q(:, :), jac_v(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: f_ba(NDOF), jq_ba(NDOF, NDOF), jv_ba(NDOF, NDOF), f_sb(NDOF), kr_sb(NDOF, NDOF)
+    REAL(wp) :: f_ba(NDOF), f_sb(NDOF)
+    ! The three Jacobian blocks (about 95 KB) live on the heap, not the stack.
+    REAL(wp), ALLOCATABLE :: jq_ba(:, :), jv_ba(:, :), kr_sb(:, :)
+    ALLOCATE (jq_ba(NDOF, NDOF), jv_ba(NDOF, NDOF), kr_sb(NDOF, NDOF))
     CALL CD_Cable_Axial_Damping_Load(q, v, conn_h, l0_h, ba_h, f_ba, jq_ba, jv_ba, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DAMP_OK) RETURN
     CALL CD_Seabed_Penalty_Load(RESHAPE(q, [3, NN]), kn_h, SEABED_Z, f_sb, kr_sb, ErrStat, ErrMsg)
