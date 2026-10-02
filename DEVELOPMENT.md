@@ -50,8 +50,9 @@ arrays on the stack, and the stack depth of the OpenBLAS kernels differs between
 CPUs, so a small reserve can pass on one machine and overflow on another. The
 shared library cannot rely on this reserve: the host program (for example
 `python.exe`, which reserves about 2 MB) sets the stack of the threads that call
-it. The `-L stack` tests check the library on a thread with a 1 MiB stack and, on
-Windows, the driver and the modal test relinked with a 1 MiB reserve.
+it. The `-L stack` tests check the library on a thread with a 1 MiB stack and, in
+a Windows gfortran build, the driver and the modal test relinked with a 1 MiB
+reserve and the reserve written into each executable.
 
 | Selection | Tests |
 |---|---|

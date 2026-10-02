@@ -29,6 +29,7 @@
 #else
 #include <limits.h>
 #include <pthread.h>
+#include <unistd.h>
 #endif
 
 enum { N_STEP = 3 };
@@ -148,10 +149,12 @@ static int run_on_small_stack(struct deck_task *t, size_t stack_bytes)
     /* A reservation, as the linker's stack reserve of an executable, not a commit. */
     HANDLE th = (HANDLE)_beginthreadex(NULL, (unsigned)stack_bytes, deck_thread, t,
                                        STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    DWORD waited;
+
     if (th == NULL) return 1;
-    WaitForSingleObject(th, INFINITE);
+    waited = WaitForSingleObject(th, INFINITE);
     CloseHandle(th);
-    return 0;
+    return waited != WAIT_OBJECT_0;
 }
 #else
 static void *deck_thread(void *arg)
@@ -164,11 +167,14 @@ static int run_on_small_stack(struct deck_task *t, size_t stack_bytes)
 {
     pthread_attr_t attr;
     pthread_t th;
+    long page = sysconf(_SC_PAGESIZE);
     int rc;
 
 #if defined(PTHREAD_STACK_MIN)
     if (stack_bytes < (size_t)PTHREAD_STACK_MIN) stack_bytes = (size_t)PTHREAD_STACK_MIN;
 #endif
+    /* Some systems (macOS) accept only a whole number of pages. */
+    if (page > 0) stack_bytes = (stack_bytes + (size_t)page - 1) / (size_t)page * (size_t)page;
     if (pthread_attr_init(&attr) != 0) return 1;
     rc = pthread_attr_setstacksize(&attr, stack_bytes);
     if (rc == 0) rc = pthread_create(&th, &attr, deck_thread, t);
@@ -181,6 +187,7 @@ static int run_on_small_stack(struct deck_task *t, size_t stack_bytes)
 int main(int argc, char **argv)
 {
     long stack_kib;
+    char *end;
     int i, failures = 0;
     struct deck_task task;
 
@@ -189,16 +196,16 @@ int main(int argc, char **argv)
               stderr);
         return 2;
     }
-    stack_kib = strtol(argv[1], NULL, 10);
-    if (stack_kib <= 0) {
-        fputs("FAIL: stack size must be a positive number of KiB\n", stderr);
+    stack_kib = strtol(argv[1], &end, 10);
+    if (end == argv[1] || *end != '\0' || stack_kib <= 0 || stack_kib > 1048576L) {
+        fputs("FAIL: the stack size must be a whole number of KiB in [1, 1048576]\n", stderr);
         return 2;
     }
     for (i = 3; i < argc; i += 2) {
         memset(&task, 0, sizeof task);
         task.deck = argv[i];
-        task.dt = strtod(argv[i - 1], NULL);
-        if (!(task.dt > 0.0)) {
+        task.dt = strtod(argv[i - 1], &end);
+        if (end == argv[i - 1] || *end != '\0' || !(task.dt > 0.0) || !isfinite(task.dt)) {
             fprintf(stderr, "FAIL: %s: the coupling step must be positive\n", argv[i]);
             ++failures;
             continue;

@@ -1691,19 +1691,25 @@ if(CABLEDYN_GNU_WINDOWS_STACK)
                    "${CMAKE_BINARY_DIR}/stack_small/stack_driver_large_deck")
   set_tests_properties(stack_driver_large_deck PROPERTIES
                        LABELS "fortran;driver;integration;dynamic;stack" TIMEOUT 900)
-  if(CMAKE_OBJDUMP)
-    # The reserve each link actually received: <binary>=<bytes>, '|'-separated.
-    string(JOIN "|" _cabledyn_stack_checks
-           "$<TARGET_FILE:cabledyn>=${CABLEDYN_EXE_STACK_RESERVE}"
-           "$<TARGET_FILE:test_modal>=${CABLEDYN_EXE_STACK_RESERVE}"
-           "$<TARGET_FILE:test_c_api_stack>=${CABLEDYN_EXE_STACK_RESERVE}"
-           "$<TARGET_FILE:test_modal_small_stack>=${CABLEDYN_SMALL_STACK_RESERVE}"
-           "$<TARGET_FILE:cabledyn_small_stack>=${CABLEDYN_SMALL_STACK_RESERVE}")
-    add_test(NAME stack_reserve
-             COMMAND ${CMAKE_COMMAND} -DOBJDUMP=${CMAKE_OBJDUMP} "-DCHECKS=${_cabledyn_stack_checks}"
-                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_stack_reserve.cmake)
-    set_tests_properties(stack_reserve PROPERTIES LABELS "unit;driver;stack")
-  endif()
+  # The reserve each link actually received, read from the PE headers: <binary>=<bytes>.
+  string(JOIN "|" _cabledyn_stack_checks
+         "$<TARGET_FILE:cabledyn>=${CABLEDYN_EXE_STACK_RESERVE}"
+         "$<TARGET_FILE:test_modal>=${CABLEDYN_EXE_STACK_RESERVE}"
+         "$<TARGET_FILE:test_c_api_stack>=${CABLEDYN_EXE_STACK_RESERVE}"
+         "$<TARGET_FILE:test_modal_small_stack>=${CABLEDYN_SMALL_STACK_RESERVE}"
+         "$<TARGET_FILE:cabledyn_small_stack>=${CABLEDYN_SMALL_STACK_RESERVE}")
+  add_test(NAME stack_reserve
+           COMMAND ${CMAKE_COMMAND} "-DCHECKS=${_cabledyn_stack_checks}"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_stack_reserve.cmake)
+  set_tests_properties(stack_reserve PROPERTIES LABELS "unit;driver;stack")
+  # The check itself must see a reserve that differs from the expected one.
+  add_test(NAME stack_reserve_mismatch
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCHECKS=$<TARGET_FILE:test_modal_small_stack>=${CABLEDYN_EXE_STACK_RESERVE}"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_stack_reserve.cmake)
+  set_tests_properties(stack_reserve_mismatch PROPERTIES LABELS "unit;driver;stack"
+                       PASS_REGULAR_EXPRESSION
+                       "stack reserve ${CABLEDYN_SMALL_STACK_RESERVE} bytes, expected ${CABLEDYN_EXE_STACK_RESERVE}")
 endif()
 
 add_executable(test_seabed_friction_aniso tests/test_seabed_friction_aniso.f90)
