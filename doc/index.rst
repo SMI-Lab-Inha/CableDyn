@@ -221,6 +221,7 @@ as described in :doc:`citing`.
    python
    python_postprocessing
    api_python
+   project_model
    api_reference
 
 .. toctree::

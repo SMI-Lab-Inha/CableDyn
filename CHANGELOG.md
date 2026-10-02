@@ -10,6 +10,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- `cabledyn.project`, a GUI-independent object model of a complete CableDyn model: typed,
+  unit-aware objects that refer to each other by reference, change events, undoable commands,
+  three validation layers ending in the native deck rules, deck import and export through
+  `DeckModel` (every repository deck reads and writes back to its canonical text), and the
+  `.cdproj` project file. Documented in the "Project object model" page.
+
 - Torsion of finite-EI lines in the standalone driver (condensed, quasi-static, uniform torque):
   `END CONNECTIONS` columns `TorsStiffness NxX NxY NxZ [Pretwist]`, a `motionFile` roll column,
   the torque returned to Rigid6 bodies, channels `Torq<L>N<J>`, `Twist<L>N<J>` and `Twist<L>`,
