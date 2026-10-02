@@ -169,6 +169,31 @@ nitpick_ignore += [
     )
 ]
 
+nitpick_ignore += [
+    ("py:class", f"cabledyn.builder.{name}")
+    for name in (
+        "Attachment",
+        "Body",
+        "Control",
+        "EndConnection",
+        "EquivalentBuoyancy",
+        "ExternalLoad",
+        "Failure",
+        "Line",
+        "LineType",
+        "MoorDynBody",
+        "OptionSet",
+        "OutputList",
+        "Point",
+        "Rod",
+        "RodEnd",
+        "RodType",
+        "Section",
+        "SyropeIC",
+        "Turbine",
+    )
+]
+
 # -- LaTeX / PDF output ------------------------------------------------------
 
 # XeLaTeX handles the Unicode used throughout the manual (Greek symbols, arrows, the

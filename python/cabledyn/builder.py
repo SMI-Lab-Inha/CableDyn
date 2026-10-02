@@ -1216,9 +1216,9 @@ class DeckModel:
         Absolute nominal deck path.
     caller_driven : bool
         Validation route.
-    options : OptionSet
+    options : ~cabledyn.builder.OptionSet
         The ``OPTIONS`` rows.
-    outputs : OutputList
+    outputs : ~cabledyn.builder.OutputList
         The ``OUTPUTS`` channels.
 
     Examples
@@ -1387,7 +1387,10 @@ class DeckModel:
 
     @property
     def bodies(self) -> ObjectCollection[AnyBody]:
-        """``BODIES`` rows (:class:`Body` or :class:`MoorDynBody`), looked up by id."""
+        """``BODIES`` rows, looked up by id.
+
+        Each is a :class:`~cabledyn.builder.Body` or a :class:`~cabledyn.builder.MoorDynBody`.
+        """
         return ObjectCollection(self._bodies, lambda item: item.id, "body")
 
     @property
@@ -1494,14 +1497,14 @@ class DeckModel:
 
         Parameters
         ----------
-        rod : Rod | int
+        rod : ~cabledyn.builder.Rod | int
             The rod or its id.
         end : str
             ``"A"`` or ``"B"``.
 
         Returns
         -------
-        RodEnd
+        ~cabledyn.builder.RodEnd
             The rod end.
         """
         if isinstance(rod, Rod):
@@ -1577,11 +1580,11 @@ class DeckModel:
         irt: float | None = None,
         irn: float | None = None,
     ) -> LineType:
-        """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
+        """Add a ``LINE TYPES`` row; see :class:`~cabledyn.builder.LineType` for the fields.
 
         Returns
         -------
-        LineType
+        ~cabledyn.builder.LineType
             The new line type.
 
         Raises
@@ -1608,11 +1611,11 @@ class DeckModel:
         cd_ax: float | None = None,
         ca_ax: float | None = None,
     ) -> RodType:
-        """Add a ``ROD TYPES`` row; see :class:`RodType` for the fields.
+        """Add a ``ROD TYPES`` row; see :class:`~cabledyn.builder.RodType` for the fields.
 
         Returns
         -------
-        RodType
+        ~cabledyn.builder.RodType
             The new rod type.
 
         Raises
@@ -1646,11 +1649,11 @@ class DeckModel:
         ca: float = 0.0,
         inertia: Vec3 | None = None,
     ) -> Body:
-        """Add a CableDyn ``BODIES`` row; see :class:`Body` for the fields.
+        """Add a CableDyn ``BODIES`` row; see :class:`~cabledyn.builder.Body` for the fields.
 
         Returns
         -------
-        Body
+        ~cabledyn.builder.Body
             The new body.
 
         Raises
@@ -1683,11 +1686,11 @@ class DeckModel:
         cda: float | tuple[float, ...] = 0.0,
         ca: float | tuple[float, ...] = 0.0,
     ) -> MoorDynBody:
-        """Add a 14-column MoorDyn ``BODIES`` row; see :class:`MoorDynBody`.
+        """Add a 14-column MoorDyn ``BODIES`` row; see :class:`~cabledyn.builder.MoorDynBody`.
 
         Returns
         -------
-        MoorDynBody
+        ~cabledyn.builder.MoorDynBody
             The new body.
 
         Raises
@@ -1714,14 +1717,14 @@ class DeckModel:
         outputs: str = "-",
         body: AnyBody | int | None = None,
     ) -> Rod:
-        """Add a ``RODS`` row; see :class:`Rod` for the fields.
+        """Add a ``RODS`` row; see :class:`~cabledyn.builder.Rod` for the fields.
 
         ``type`` may name a body directly (``"Body1"``, ``"Body1Pinned"``) or
         be ``"Body"``/``"BodyPinned"`` together with ``body``.
 
         Returns
         -------
-        Rod
+        ~cabledyn.builder.Rod
             The new rod.
 
         Raises
@@ -1747,11 +1750,11 @@ class DeckModel:
     def add_turbine(
         self, turbine_id: int, x: float, y: float, z: float, *, ptfm: Sequence[float] | None = None
     ) -> Turbine:
-        """Add a ``TURBINES`` row; see :class:`Turbine` for the fields.
+        """Add a ``TURBINES`` row; see :class:`~cabledyn.builder.Turbine` for the fields.
 
         Returns
         -------
-        Turbine
+        ~cabledyn.builder.Turbine
             The new turbine.
 
         Raises
@@ -1780,7 +1783,7 @@ class DeckModel:
         rod_end: RodEnd | None = None,
         turbine: int | None = None,
     ) -> Point:
-        """Add a ``POINTS`` row; see :class:`Point` for the fields.
+        """Add a ``POINTS`` row; see :class:`~cabledyn.builder.Point` for the fields.
 
         ``type`` may name the referenced object directly (``"Body1"``,
         ``"Rod2A"``, ``"Turbine3"``) or be ``"Body"``/``"Rod"``/``"Turbine"``
@@ -1788,7 +1791,7 @@ class DeckModel:
 
         Returns
         -------
-        Point
+        ~cabledyn.builder.Point
             The new point.
 
         Raises
@@ -1838,10 +1841,10 @@ class DeckModel:
         ----------
         line_id : int
             Unique line id.
-        end_a, end_b : Point | RodEnd | int | str
+        end_a, end_b : ~cabledyn.builder.Point | ~cabledyn.builder.RodEnd | int | str
             End A (fairlead side) and End B (anchor side): a point, a point
-            id, a :class:`RodEnd`, or a rod-end token such as ``"R1A"``.
-        line_type : LineType | str | None
+            id, a :class:`~cabledyn.builder.RodEnd`, or a rod-end token such as ``"R1A"``.
+        line_type : ~cabledyn.builder.LineType | str | None
             Line type of a first section; give ``length`` and ``num_segs`` too.
         length : float | None
             First-section unstretched length, in m.
@@ -1854,7 +1857,7 @@ class DeckModel:
 
         Returns
         -------
-        Line
+        ~cabledyn.builder.Line
             The new line.
 
         Raises
@@ -1888,9 +1891,9 @@ class DeckModel:
 
         Parameters
         ----------
-        line : Line | int
+        line : ~cabledyn.builder.Line | int
             The line or its id.
-        line_type : LineType | str
+        line_type : ~cabledyn.builder.LineType | str
             The section's line type or its name.
         length : float
             Unstretched length, in m.
@@ -1902,7 +1905,7 @@ class DeckModel:
 
         Returns
         -------
-        Section
+        ~cabledyn.builder.Section
             The new section.
         """
         target = self._line(line)
@@ -1924,11 +1927,11 @@ class DeckModel:
         normal: Sequence[float] | None = None,
         pretwist: float | None = None,
     ) -> EndConnection:
-        """Add an ``END CONNECTIONS`` row; see :class:`EndConnection`.
+        """Add an ``END CONNECTIONS`` row; see :class:`~cabledyn.builder.EndConnection`.
 
         Returns
         -------
-        EndConnection
+        ~cabledyn.builder.EndConnection
             The new row.
 
         Raises
@@ -1971,11 +1974,11 @@ class DeckModel:
     def add_equivalent_buoyancy(
         self, line_type: LineType | str, diam: float, submerged_weight: float
     ) -> EquivalentBuoyancy:
-        """Add an ``EQUIVALENT BUOYANCY`` row; see :class:`EquivalentBuoyancy`.
+        """Add an ``EQUIVALENT BUOYANCY`` row; see :class:`~cabledyn.builder.EquivalentBuoyancy`.
 
         Returns
         -------
-        EquivalentBuoyancy
+        ~cabledyn.builder.EquivalentBuoyancy
             The new row.
         """
         item = EquivalentBuoyancy(self._line_type(line_type), diam, submerged_weight)
@@ -1993,11 +1996,11 @@ class DeckModel:
         ca: float = 0.0,
         cdax: float | None = None,
     ) -> Attachment:
-        """Add an ``ATTACHMENTS`` row; see :class:`Attachment`.
+        """Add an ``ATTACHMENTS`` row; see :class:`~cabledyn.builder.Attachment`.
 
         Returns
         -------
-        Attachment
+        ~cabledyn.builder.Attachment
             The new row.
         """
         item = Attachment(self._line(line), arc_length, mass, volume, cda, ca, cdax)
@@ -2007,11 +2010,11 @@ class DeckModel:
     def add_syrope_ic(
         self, lines: Line | int | Iterable[Line | int], tmax0: float, tmean0: float
     ) -> SyropeIC:
-        """Add a ``SYROPE IC`` row; see :class:`SyropeIC`.
+        """Add a ``SYROPE IC`` row; see :class:`~cabledyn.builder.SyropeIC`.
 
         Returns
         -------
-        SyropeIC
+        ~cabledyn.builder.SyropeIC
             The new row.
         """
         item = SyropeIC(self._lines_of(lines), tmax0, tmean0)
@@ -2030,7 +2033,7 @@ class DeckModel:
 
         Returns
         -------
-        Failure
+        ~cabledyn.builder.Failure
             The new row.
         """
         item = Failure(self._point(point), self._lines_of(lines), fail_time, fail_tension)
@@ -2038,11 +2041,11 @@ class DeckModel:
         return item
 
     def add_control(self, channel: int, lines: Line | int | Iterable[Line | int]) -> Control:
-        """Add a ``CONTROL`` row; see :class:`Control`.
+        """Add a ``CONTROL`` row; see :class:`~cabledyn.builder.Control`.
 
         Returns
         -------
-        Control
+        ~cabledyn.builder.Control
             The new row.
         """
         item = Control(channel, self._lines_of(lines))
@@ -2059,11 +2062,11 @@ class DeckModel:
         blin: float | tuple[float, ...] = 0.0,
         bquad: float | tuple[float, ...] = 0.0,
     ) -> ExternalLoad:
-        """Add an ``EXTERNAL LOADS`` row; see :class:`ExternalLoad`.
+        """Add an ``EXTERNAL LOADS`` row; see :class:`~cabledyn.builder.ExternalLoad`.
 
         Returns
         -------
-        ExternalLoad
+        ~cabledyn.builder.ExternalLoad
             The new row.
         """
         item = ExternalLoad(load_id, self._body(body), csys, force, blin, bquad)
@@ -2304,8 +2307,12 @@ class DeckModel:
 
         Parameters
         ----------
-        obj : LineType | RodType | Body | MoorDynBody | Rod | Turbine | Point | Line
-            The object.
+        obj : object
+            The object: a :class:`~cabledyn.builder.LineType`,
+            :class:`~cabledyn.builder.RodType`, :class:`~cabledyn.builder.Body`,
+            :class:`~cabledyn.builder.MoorDynBody`, :class:`~cabledyn.builder.Rod`,
+            :class:`~cabledyn.builder.Turbine`, :class:`~cabledyn.builder.Point`, or
+            :class:`~cabledyn.builder.Line`.
         new : int | str
             The new id, or the new name of a line or rod type.
 
