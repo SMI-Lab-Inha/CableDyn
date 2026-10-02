@@ -274,12 +274,13 @@ CONTAINS
   SUBROUTINE check_current_rest_acceleration()
     !! A transverse current on an at-rest straight cable induces a non-zero initial acceleration --
     !! confirming Set_Drag refreshes the consistent a0 (still water leaves the straight cable at a0=0).
-    TYPE(CD_HermiteCableDynType) :: m
+    TYPE(CD_HermiteCableDynType), ALLOCATABLE :: m   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     REAL(wp), ALLOCATABLE :: l0(:), EAv(:), EIv(:), rhoAv(:), wv(:), seed(:)
     INTEGER, ALLOCATABLE :: fx(:)
     REAL(wp) :: dv(NE), cn(NE), ct(NE), cur(3)
     INTEGER :: es
     CHARACTER(300) :: em
+    ALLOCATE (m)
     CALL build_beam(0.0_wp, l0, EAv, EIv, rhoAv, wv, seed, fx)
     CALL CD_HermiteCable_Dyn_Init(m, l0, EAv, EIv, rhoAv, wv, seed, fx, 0.0_wp, 0.0_wp, 0.9_wp, es, em)
     CALL require(es == CD_HCDYN_OK, 'current-a0 init: '//TRIM(em))
@@ -297,7 +298,7 @@ CONTAINS
     !! completes a0 initialisation, but a later update must not overwrite the committed
     !! generalised-alpha acceleration from the preceding time station. The update still
     !! validates the proposed load transactionally.
-    TYPE(CD_HermiteCableDynType) :: m
+    TYPE(CD_HermiteCableDynType), ALLOCATABLE :: m   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     REAL(wp), ALLOCATABLE :: l0(:), EAv(:), EIv(:), rhoAv(:), wv(:), seed(:)
     INTEGER, ALLOCATABLE :: fx(:)
     REAL(wp) :: fluid_v(3, NE + 1), fluid_a(3, NE + 1), waterline(NE + 1)
@@ -305,6 +306,7 @@ CONTAINS
     INTEGER :: es
     CHARACTER(300) :: em
 
+    ALLOCATE (m)
     CALL build_beam(0.0_wp, l0, EAv, EIv, rhoAv, wv, seed, fx)
     CALL CD_HermiteCable_Dyn_Init(m, l0, EAv, EIv, rhoAv, wv, seed, fx, 0.0_wp, 0.0_wp, 0.4_wp, es, em)
     CALL require(es == CD_HCDYN_OK, 'held-field init: '//TRIM(em))

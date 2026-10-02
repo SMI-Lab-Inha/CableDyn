@@ -32,6 +32,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - The static Windows `openfast.exe` compiles the CableDyn adapter with `/heap-arrays:1024`,
   like the CableDyn core, so its run-time-sized arrays no longer use the
   `openfast.exe` stack.
+- Builds with gfortran 16 are free of `-Wuninitialized` warnings; the reported values (the
+  bounds of unallocated components) were never read.
 
 ## [0.1.0] - 2026-10-01
 

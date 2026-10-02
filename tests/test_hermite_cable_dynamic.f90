@@ -298,12 +298,13 @@ CONTAINS
     !! Installing the production nodal contact law must immediately refresh the
     !! consistent acceleration, while malformed replacement data fails before it can
     !! disturb the committed configuration.
-    TYPE(CD_HermiteCableDynType) :: m
+    TYPE(CD_HermiteCableDynType), ALLOCATABLE :: m   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     REAL(wp), ALLOCATABLE :: l0(:), EAv(:), EIv(:), rhoAv(:), wv(:), seed(:), kn(:), cn(:), a_before(:)
     INTEGER, ALLOCATABLE :: fx(:)
     INTEGER :: es, i
     CHARACTER(300) :: em
 
+    ALLOCATE (m)
     CALL build_beam(0.0_wp, l0, EAv, EIv, rhoAv, wv, seed, fx)
     DO i = 1, NE + 1
       seed(6*(i - 1) + 3) = -0.01_wp

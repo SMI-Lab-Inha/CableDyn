@@ -49,7 +49,7 @@ CONTAINS
   END SUBROUTINE require
 
   SUBROUTINE case_build_and_drive()
-    TYPE(CD_HFMF_ModuleType) :: cable
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cable   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     INTEGER :: cn, es, s, cnr, nn
     CHARACTER(256) :: em
     REAL(wp) :: r0(3), yk(3), u_pos(3), u_vel(3), u_acc(3), t, zh, vh, ah, ymin, ymax, ymag
@@ -59,6 +59,7 @@ CONTAINS
     INTEGER, PARAMETER :: NSTEP = 220, NSETTLE = 140
     LOGICAL :: stepped_ok
 
+    ALLOCATE (cable)
     CALL write_cable_deck('hcab_deck_hcable.dat')
     CALL CD_Init_Deck_HermiteCable('hcab_deck_hcable.dat', DT, cable, cn, es, em)
     CALL require(es == CD_DECKDRV_OK, 'deck -> Hermite cable init: '//TRIM(em))
@@ -127,7 +128,7 @@ CONTAINS
     !! arrays stay aligned with the refined solution); (c) the coupled node still tracks the
     !! refined fairlead; (d) the refined cable steps stably with smooth, bounded curvature (the
     !! prolongation produced a valid finer equilibrium, not a kink).
-    TYPE(CD_HFMF_ModuleType) :: plain, adapt
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: plain, adapt   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     INTEGER :: cn, es, s, nn_plain, nn_adapt, cnr
     CHARACTER(256) :: em
     REAL(wp) :: r0(3), u_pos(3), u_vel(3), u_acc(3), t, zh, vh, ah
@@ -137,6 +138,7 @@ CONTAINS
     INTEGER, PARAMETER :: NSTEP = 30
     LOGICAL :: stepped_ok
 
+    ALLOCATE (plain, adapt)
     CALL write_cable_deck('hcab_deck_hc_plain.dat')
     CALL CD_Init_Deck_HermiteCable('hcab_deck_hc_plain.dat', DT, plain, cn, es, em)
     CALL require(es == CD_DECKDRV_OK, 'adaptive-mesh: plain deck init: '//TRIM(em))
@@ -199,10 +201,11 @@ CONTAINS
     !! deck's dtM. The same lazy-wave deck WITHOUT dtM/TMax must still build and take a step. (A
     !! standalone finite-EI deck is structurally unaffected: its End A must be Coupled/Vessel/Body,
     !! so the standalone marching contract still demands a motionFile -- and hence dtM.)
-    TYPE(CD_HFMF_ModuleType) :: cable
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cable   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     INTEGER :: cn, es
     CHARACTER(256) :: em
     REAL(wp) :: u_pos(3)
+    ALLOCATE (cable)
     CALL write_cable_deck('hcab_deck_nodtm.dat', omit_time=.TRUE.)
     CALL CD_Init_Deck_HermiteCable('hcab_deck_nodtm.dat', 0.05_wp, cable, cn, es, em)
     CALL require(es == CD_DECKDRV_OK, 'caller-driven finite-EI deck builds WITHOUT dtM/TMax: '//TRIM(em))
@@ -286,12 +289,14 @@ CONTAINS
     !! Prove the public End-A row maps to the internal final node, the finite spring
     !! participates in the static seed and dynamic march, and its support moment is
     !! returned. An explicitly Pinned row must remain bit-identical to omission.
-    TYPE(CD_HFMF_ModuleType) :: omitted, pinned, finite, rigid, stock
+    ! ALLOCATABLE: see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: omitted, pinned, finite, rigid, stock
     INTEGER :: cn_o, cn_p, cn_f, cn_r, cn_s, es, s, i
     CHARACTER(256) :: em
     REAL(wp) :: pos(3), vel(3), acc(3), force(3), moment(3), dcm(3, 3), angle
     REAL(wp) :: d0_saved(3, 2), ymax, tangent(3), tangent_norm
 
+    ALLOCATE (omitted, pinned, finite, rigid, stock)
     cn_o = 0; cn_p = 0; cn_f = 0; cn_r = 0; cn_s = 0
 
     CALL write_cable_deck('hcab_deck_endconn_omitted.dat')
@@ -431,7 +436,7 @@ CONTAINS
     !! fairlead load, and (rotation-invariant) curvature -- at every compared step. A
     !! frame error anywhere (a missed rotation, a wrong transpose, an over-frozen DOF)
     !! breaks this equality at leading order.
-    TYPE(CD_HFMF_ModuleType) :: cab_p, cab_r
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab_p, cab_r   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
     INTEGER :: cn_p, cn_r, es, s, nn
     CHARACTER(256) :: em
     REAL(wp), PARAMETER :: DT = 0.05_wp, AMP = 1.0_wp, PER = 12.0_wp
@@ -443,6 +448,7 @@ CONTAINS
     REAL(wp) :: up(3), uv(3), ua(3), yp(3), yr(3), yp_rot(3), lerr, lref
     REAL(wp), ALLOCATABLE :: curv_p(:), curv_r(:)
 
+    ALLOCATE (cab_p, cab_r)
     c = COS(THETA); sth = SIN(THETA)
     a0 = [0.0_wp, 0.0_wp, -56.0_wp]
     f0 = [90.0_wp, 0.0_wp, -14.0_wp]

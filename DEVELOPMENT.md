@@ -135,7 +135,11 @@ Fortran lines longer than 120 columns must be split with `&` before formatting.
   `ErrMsg (CHARACTER(*), INTENT(OUT))`.
 - LAPACK: banded solvers (`DGBSV`, and `DPBTRF`/`DPBTRS` for symmetric positive
   definite bands); a dense assembly is packed into band storage before the solve.
-- Warning-clean under `-std=f2018 -Wall -Wextra -fimplicit-none`.
+- Warning-clean under `-std=f2018 -Wall -Wextra -fimplicit-none` with gfortran 15
+  and 16. gfortran 16 can report `-Wuninitialized` for a default-initialised local
+  derived-type variable with allocatable components: the optimiser copies the
+  unset bounds of its unallocated arrays, which the program never reads. Such a
+  local is `ALLOCATABLE` where this occurs.
 - Keep large data off the stack: a local array or derived-type variable that can
   exceed about 64 KB is `ALLOCATABLE`, except on the per-step path, which uses the
   preallocated workspaces and does not allocate.
