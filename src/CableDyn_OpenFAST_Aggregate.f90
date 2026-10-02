@@ -257,8 +257,10 @@ CONTAINS
     ! range_files: the caller writes the range graphs of the LINES flag r (CD_AGG_Range_*)
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
 
-    TYPE(CD_AGG_ModuleType) :: candidate
-    TYPE(CD_DeckAggregateType) :: parts
+    ! Both bundles (about 70 KB together) are built on the heap: initialisation runs on the
+    ! thread of the calling host, whose stack size CableDyn does not choose.
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: candidate
+    TYPE(CD_DeckAggregateType), ALLOCATABLE :: parts
     INTEGER :: es, ncp_total, istat, ich
     ! Static mesh-sequencing diagnostics can report several independently attempted
     ! hierarchies. Preserve that context through the aggregate boundary so a user sees
@@ -278,6 +280,12 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) THEN
       ErrStat = CD_AGG_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: dt must be positive'
+      RETURN
+    END IF
+    ALLOCATE (candidate, parts, STAT=istat)
+    IF (istat /= 0) THEN
+      ErrStat = CD_AGG_ALLOCFAIL
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: cannot allocate the initialisation workspace'
       RETURN
     END IF
     CALL CD_Init_Deck_Aggregate(deck_path, dt, parts, es, em, env_gravity=env_gravity, &

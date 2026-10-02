@@ -304,7 +304,8 @@ CONTAINS
     LOGICAL, INTENT(IN) :: has_dtm
     REAL(wp), INTENT(IN) :: dtm
     INTEGER(C_INT), INTENT(OUT) :: err_stat
-    TYPE(CD_AGG_ModuleType) :: new_agg
+    ! On the heap: InitDeck runs on the host's thread, whose stack size the host chooses.
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: new_agg
     INTEGER :: es, nm, stat
     REAL(wp), ALLOCATABLE :: pos(:, :), vel(:, :), acc(:, :), load(:, :)
     CHARACTER(CD_C_MSG_LEN) :: em
@@ -312,6 +313,11 @@ CONTAINS
     IF (.NOT. (has_dtm .AND. dtm > CD_ZERO)) THEN
       CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeck: a deck with finite-EI lines, BODIES or RODS '// &
                       'needs dtM, the fixed step of CableDyn_Step', err_stat)
+      RETURN
+    END IF
+    ALLOCATE (new_agg, STAT=stat)
+    IF (stat /= 0) THEN
+      CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_InitDeck: aggregate allocation failed', err_stat)
       RETURN
     END IF
     CALL CD_AGG_Init_From_Deck(new_agg, deck_path, dtm, es, em)

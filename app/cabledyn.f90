@@ -395,7 +395,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: run_stat
     CHARACTER(*), INTENT(OUT) :: run_msg
 
-    TYPE(CD_AGG_ModuleType) :: aggregate
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: aggregate   ! about 37 KB: on the heap, not the stack
     REAL(wp), ALLOCATABLE :: position(:, :), velocity(:, :), acceleration(:, :), load(:, :)
     REAL(wp) :: time, first_miss_time, last_miss_time, step_dt
     INTEGER :: es, n_moving, nstep, step, n_iter, miss_count, consecutive_miss, max_consecutive_miss
@@ -447,6 +447,12 @@ CONTAINS
     END IF
 
     mixed_run: BLOCK
+      ALLOCATE (aggregate, STAT=ios)
+      IF (ios /= 0) THEN
+        run_stat = CD_DECKDRV_SOLVEFAIL
+        run_msg = 'CableDyn_driver: cannot allocate the mixed aggregate'
+        EXIT mixed_run
+      END IF
       ! The aggregate is caller-driven and cannot refresh standalone wave/current
       ! OPTIONS. Reject such decks by name instead of silently holding zero fluid.
       CALL CD_AGG_Init_From_Deck(aggregate, deck, step_dt, es, em, forbid_deck_ambient=.TRUE., &
@@ -574,7 +580,7 @@ CONTAINS
     END BLOCK mixed_run
 
     IF (file_open) CLOSE (unit)
-    CALL CD_AGG_End(aggregate, es, em)
+    IF (ALLOCATED(aggregate)) CALL CD_AGG_End(aggregate, es, em)
   END SUBROUTINE run_mixed_held_deck
 
   LOGICAL FUNCTION deck_requests_modes(deck) RESULT(requested)
