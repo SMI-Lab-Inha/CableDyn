@@ -99,6 +99,22 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                       $<$<COMPILE_LANGUAGE:C>:-Wall>
                       $<$<COMPILE_LANGUAGE:C>:-Wextra>)
 endif()
+# GNU builds on Windows (MinGW-w64): every executable gets a 64 MiB stack reserve instead of
+# the 2 MiB MinGW default. With OpenMP, gfortran places fixed-size local arrays on the stack
+# (-fopenmp implies -frecursive), and the stack depth of the OpenBLAS kernels varies with the
+# CPU, so a small reserve can overflow on one machine and pass on another. A reserve is address
+# space, not committed memory. The library itself must run within a small stack, since a host
+# such as python.exe sets the stack of the threads that call it: the stack_* tests check that.
+# The static IFX release sets its own reserve on the driver.
+set(CABLEDYN_GNU_WINDOWS_STACK OFF)
+if(MINGW AND CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+  set(CABLEDYN_GNU_WINDOWS_STACK ON)
+  set(CABLEDYN_EXE_STACK_RESERVE 67108864)
+  set(CABLEDYN_SMALL_STACK_RESERVE 1048576)
+  add_link_options(
+    "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:-Wl,--stack,${CABLEDYN_EXE_STACK_RESERVE}>")
+endif()
+
 if(CABLEDYN_ENABLE_COVERAGE AND NOT CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
   message(FATAL_ERROR "CABLEDYN_ENABLE_COVERAGE requires GNU Fortran/gcov instrumentation")
 endif()
@@ -1074,6 +1090,25 @@ else()
                  "the portable C API lifecycle gate remains enabled")
 endif()
 
+# Portable (Win32 or POSIX threads) stack bound of the shared library: each deck is
+# initialised, stepped, and evaluated on a thread with a 1 MiB stack (a host program, not
+# CableDyn, chooses the stack of the threads that call the library). The decks are a
+# 2048-element finite-EI cable (12294 DOFs), an EI=0 + finite-EI aggregate, and an EI=0
+# mooring; a stack need that grew with the model would overflow here.
+add_executable(test_c_api_stack tests/test_c_api_stack.c)
+target_include_directories(test_c_api_stack PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(test_c_api_stack PRIVATE $<TARGET_LINKER_FILE:cabledyn_shared>)
+add_dependencies(test_c_api_stack cabledyn_shared)
+if(NOT WIN32)
+  target_link_libraries(test_c_api_stack PRIVATE Threads::Threads m)
+endif()
+add_test(NAME stack_c_api
+         COMMAND test_c_api_stack 1024
+                 0.05 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stack_humboldt800_2048_elements.dat
+                 0.025 ${CMAKE_CURRENT_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat
+                 0.1 ${CMAKE_CURRENT_SOURCE_DIR}/examples/iea15mw_volturnus_mooring.dat)
+set_tests_properties(stack_c_api PROPERTIES LABELS "c;unit;capi;stack" TIMEOUT 900)
+
 # Portable (Win32 or POSIX threads) gate: concurrent InitDeck of one deck and of decks
 # sharing a Syrope OWC table in the user's locale, concurrent Step on distinct handles,
 # the missing-file diagnostic, and the BLAS thread/memory policy of CableDyn_Create.
@@ -1629,6 +1664,47 @@ add_executable(test_modal tests/test_modal.f90)
 target_link_libraries(test_modal PRIVATE cabledyn_core)
 add_test(NAME modal COMMAND test_modal)
 set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validation")
+
+# Stack bound (GNU Windows builds): the modal test and the driver relinked with a 1 MiB stack
+# reserve, half the MinGW default, instead of the 64 MiB reserve of the other executables. A
+# large local array (as the dense matrices test_modal once kept on the stack) or a library
+# frame that grows with the model overflows here on every machine. The driver runs a
+# 2048-element finite-EI cable. Linux and macOS executables take their main-thread stack
+# from the environment (ulimit -s), so these links are Windows-only; test_c_api_stack covers
+# the library on every platform.
+if(CABLEDYN_GNU_WINDOWS_STACK)
+  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/stack_small")
+  add_executable(test_modal_small_stack tests/test_modal.f90)
+  target_link_libraries(test_modal_small_stack PRIVATE cabledyn_core)
+  add_executable(cabledyn_small_stack app/cabledyn.f90)
+  target_link_libraries(cabledyn_small_stack PRIVATE cabledyn_core)
+  foreach(_cabledyn_small IN ITEMS test_modal_small_stack cabledyn_small_stack)
+    # Appended after the 64 MiB directory-wide option; the last --stack wins (checked below).
+    target_link_options(${_cabledyn_small} PRIVATE "-Wl,--stack,${CABLEDYN_SMALL_STACK_RESERVE}")
+  endforeach()
+  add_test(NAME stack_modal COMMAND test_modal_small_stack
+           WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/stack_small")
+  set_tests_properties(stack_modal PROPERTIES LABELS "fortran;unit;driver;static;stack")
+  add_test(NAME stack_driver_large_deck
+           COMMAND cabledyn_small_stack
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/stack_humboldt800_2048_elements.dat"
+                   "${CMAKE_BINARY_DIR}/stack_small/stack_driver_large_deck")
+  set_tests_properties(stack_driver_large_deck PROPERTIES
+                       LABELS "fortran;driver;integration;dynamic;stack" TIMEOUT 900)
+  if(CMAKE_OBJDUMP)
+    # The reserve each link actually received: <binary>=<bytes>, '|'-separated.
+    string(JOIN "|" _cabledyn_stack_checks
+           "$<TARGET_FILE:cabledyn>=${CABLEDYN_EXE_STACK_RESERVE}"
+           "$<TARGET_FILE:test_modal>=${CABLEDYN_EXE_STACK_RESERVE}"
+           "$<TARGET_FILE:test_c_api_stack>=${CABLEDYN_EXE_STACK_RESERVE}"
+           "$<TARGET_FILE:test_modal_small_stack>=${CABLEDYN_SMALL_STACK_RESERVE}"
+           "$<TARGET_FILE:cabledyn_small_stack>=${CABLEDYN_SMALL_STACK_RESERVE}")
+    add_test(NAME stack_reserve
+             COMMAND ${CMAKE_COMMAND} -DOBJDUMP=${CMAKE_OBJDUMP} "-DCHECKS=${_cabledyn_stack_checks}"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_stack_reserve.cmake)
+    set_tests_properties(stack_reserve PROPERTIES LABELS "unit;driver;stack")
+  endif()
+endif()
 
 add_executable(test_seabed_friction_aniso tests/test_seabed_friction_aniso.f90)
 target_link_libraries(test_seabed_friction_aniso PRIVATE cabledyn_core)
