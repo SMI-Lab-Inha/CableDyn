@@ -1669,7 +1669,7 @@ target_link_libraries(test_stream_wave PRIVATE cabledyn_core)
 add_test(NAME stream_wave COMMAND test_stream_wave)
 set_tests_properties(stream_wave PROPERTIES LABELS "fortran;unit;driver;dynamic;validation;orcaflex")
 
-add_executable(test_modal tests/test_modal.f90)
+add_executable(test_modal tests/test_modal.f90 tests/blas_config_probe.c)
 target_link_libraries(test_modal PRIVATE cabledyn_core)
 add_test(NAME modal COMMAND test_modal)
 set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validation")
@@ -1683,7 +1683,7 @@ set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validat
 # the library on every platform.
 if(CABLEDYN_GNU_WINDOWS_STACK)
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/stack_small")
-  add_executable(test_modal_small_stack tests/test_modal.f90)
+  add_executable(test_modal_small_stack tests/test_modal.f90 tests/blas_config_probe.c)
   target_link_libraries(test_modal_small_stack PRIVATE cabledyn_core)
   add_executable(cabledyn_small_stack app/cabledyn.f90)
   target_link_libraries(cabledyn_small_stack PRIVATE cabledyn_core)

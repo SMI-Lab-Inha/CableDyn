@@ -372,10 +372,8 @@ static int signal_index(int sig)
 }
 
 /* What a signal's previous disposition is. sa_handler and sa_sigaction share storage, so the
- * SIG_IGN / SIG_DFL / SIG_ERR sentinels are recognised whatever the SA_SIGINFO flag says, and
- * only a real function is ever called. */
-enum { DISPOSITION_DEFAULT, DISPOSITION_IGNORED, DISPOSITION_UNKNOWN, DISPOSITION_HANDLER,
-       DISPOSITION_SIGINFO_HANDLER };
+ * SIG_IGN / SIG_DFL / SIG_ERR sentinels are recognised whatever the SA_SIGINFO flag says. */
+enum { DISPOSITION_DEFAULT, DISPOSITION_IGNORED, DISPOSITION_UNKNOWN, DISPOSITION_HANDLER };
 
 static int disposition(const struct sigaction *action)
 {
@@ -388,11 +386,12 @@ static int disposition(const struct sigaction *action)
     if (action->sa_handler == SIG_ERR) {
         return DISPOSITION_UNKNOWN;
     }
-    return (action->sa_flags & SA_SIGINFO) != 0 ? DISPOSITION_SIGINFO_HANDLER : DISPOSITION_HANDLER;
+    return DISPOSITION_HANDLER;
 }
 
 static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
 {
+    (void)context;
     int k = signal_index(sig);
     int fault = sig == SIGSEGV || sig == SIGBUS || sig == SIGFPE || sig == SIGILL;
     /* A fault the hardware raised re-executes when the handler returns; one sent by kill()
@@ -418,15 +417,13 @@ static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
         return;
     }
     /* Hand the signal to whatever handled it before (the Fortran runtime's backtrace or the
-     * default action), so the exit status and the fault context are unchanged. */
+     * default action). The saved action is re-installed exactly as it was -- handler, flags
+     * and mask -- and the signal is delivered again by the kernel, never by a direct call, so
+     * SA_RESETHAND, the saved sa_mask and the blocking of the signal during its own handler
+     * all apply as they would have without the report. */
     if (sigaction(sig, &cabledyn_previous[k], NULL) != 0) {
         /* Never leave this handler in place to be entered again. */
         signal(sig, SIG_DFL);
-    }
-    if (disposition(&cabledyn_previous[k]) == DISPOSITION_SIGINFO_HANDLER) {
-        /* A previous three-argument handler receives the original siginfo and context. */
-        cabledyn_previous[k].sa_sigaction(sig, info, context);
-        return;
     }
     if (synchronous) {
         /* Returning re-executes the faulting instruction, which raises the same fault, with

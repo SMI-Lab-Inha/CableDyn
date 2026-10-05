@@ -179,11 +179,40 @@ static void prior_term_handler(int sig)
     _exit(7);
 }
 
+/* SIGTERM handler of the SA_RESETHAND case: notes the call and returns. */
+static void resethand_term_handler(int sig)
+{
+    static const char text[] = "reset-on-delivery handler ran\n";
+    ssize_t ignored = write(STDERR_FILENO, text, sizeof text - 1);
+    (void)ignored;
+    (void)sig;
+}
+
+/* SIGTERM handler of the sa_mask case: SIGUSR1 (its sa_mask) and SIGTERM itself (no
+ * SA_NODEFER) must be blocked while it runs. */
+static void masked_term_handler(int sig)
+{
+    static const char ok_text[] = "masked handler: mask as saved\n";
+    static const char bad_text[] = "masked handler: mask NOT as saved\n";
+    sigset_t now;
+    ssize_t ignored;
+    int ok;
+    (void)sig;
+    sigemptyset(&now);
+    sigprocmask(SIG_BLOCK, NULL, &now);
+    ok = sigismember(&now, SIGUSR1) == 1 && sigismember(&now, SIGTERM) == 1;
+    ignored = ok ? write(STDERR_FILENO, ok_text, sizeof ok_text - 1)
+                 : write(STDERR_FILENO, bad_text, sizeof bad_text - 1);
+    (void)ignored;
+    _exit(5);
+}
+
 /* Run one child that sets SIGTERM to `setup`, installs the report and sends itself SIGTERM.
- * setup 0: SIG_IGN with SA_SIGINFO; 1: SIG_IGN; 2: SIG_DFL; 3: a one-argument handler. */
+ * setup 0: SIG_IGN with SA_SIGINFO; 1: SIG_IGN; 2: SIG_DFL; 3: a one-argument handler;
+ * 4: a handler with SA_RESETHAND (then a second SIGTERM); 5: a handler with sa_mask SIGUSR1. */
 static int disposition_case(int setup, const char *name)
 {
-    int errors[2], status = 0, ok, reports, ran;
+    int errors[2], status = 0, ok, reports, ran, reset_ran;
     pid_t child;
     char text[4096];
     struct sigaction action;
@@ -210,13 +239,23 @@ static int disposition_case(int setup, const char *name)
             action.sa_handler = SIG_IGN;
         } else if (setup == 2) {
             action.sa_handler = SIG_DFL;
-        } else {
+        } else if (setup == 3) {
             action.sa_handler = prior_term_handler;
+        } else if (setup == 4) {
+            action.sa_handler = resethand_term_handler;
+            action.sa_flags = SA_RESETHAND;
+        } else {
+            action.sa_handler = masked_term_handler;
+            sigaddset(&action.sa_mask, SIGUSR1);
         }
         sigaction(SIGTERM, &action, NULL);
         cabledyn_fatal_report_install();
         cabledyn_fatal_report_time(7534.6);
         kill(getpid(), SIGTERM);
+        if (setup == 4) {
+            /* The first SIGTERM reset the disposition: this one takes the default action. */
+            kill(getpid(), SIGTERM);
+        }
         /* Still running: an ignored SIGTERM must leave the process alone. */
         _exit(0);
     }
@@ -225,12 +264,18 @@ static int disposition_case(int setup, const char *name)
     waitpid(child, &status, 0);
     reports = count(text, "CableDyn_driver: stopped by a termination request");
     ran = count(text, "prior SIGTERM handler ran");
+    reset_ran = count(text, "reset-on-delivery handler ran");
     if (setup <= 1) {
         ok = WIFEXITED(status) && WEXITSTATUS(status) == 0 && reports == 0;
     } else if (setup == 2) {
         ok = WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM && reports == 1;
-    } else {
+    } else if (setup == 3) {
         ok = WIFEXITED(status) && WEXITSTATUS(status) == 7 && reports == 1 && ran == 1;
+    } else if (setup == 4) {
+        ok = WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM && reports == 1 && reset_ran == 1;
+    } else {
+        ok = WIFEXITED(status) && WEXITSTATUS(status) == 5 && reports == 1 &&
+             count(text, "masked handler: mask as saved") == 1;
     }
     fprintf(stderr, "dispositions: %s: child ended %s %d, %d report(s)%s\n", name,
             WIFSIGNALED(status) ? "by signal" : "with status",
@@ -244,7 +289,8 @@ static int disposition_case(int setup, const char *name)
 
 /* An ignored SIGTERM (with or without SA_SIGINFO) stays ignored and is never reported or
  * called; a default one is reported and ends the process by SIGTERM; a previous handler is
- * reported and then runs. Returns 0 when all hold, 1 otherwise. */
+ * reported and then runs under its own flags and mask (SA_RESETHAND resets it, its sa_mask
+ * and SIGTERM itself are blocked while it runs). Returns 0 when all hold, 1 otherwise. */
 int fatal_report_test_dispositions(void)
 {
     int failures = 0;
@@ -252,6 +298,8 @@ int fatal_report_test_dispositions(void)
     failures += disposition_case(1, "SIG_IGN");
     failures += disposition_case(2, "SIG_DFL");
     failures += disposition_case(3, "a one-argument handler");
+    failures += disposition_case(4, "a handler with SA_RESETHAND");
+    failures += disposition_case(5, "a handler with an sa_mask");
     if (failures != 0) {
         fprintf(stderr, "FAIL: dispositions: %d case(s) wrong\n", failures);
         return 1;

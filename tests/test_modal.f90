@@ -18,12 +18,25 @@ PROGRAM test_modal
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Modal
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install
+  USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
+  USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_CHAR, C_INT, C_NULL_CHAR
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: output_unit
   IMPLICIT NONE
+
+  INTERFACE
+    INTEGER(C_INT) FUNCTION blas_config(text, capacity) BIND(C, name='cabledyn_test_blas_config')
+      IMPORT :: C_CHAR, C_INT
+      CHARACTER(KIND=C_CHAR), INTENT(OUT) :: text(*)
+      INTEGER(C_INT), VALUE :: capacity
+    END FUNCTION blas_config
+  END INTERFACE
 
   REAL(wp), PARAMETER :: PI = 3.141592653589793238462643383279502884197_wp
   INTEGER :: nfail
 
   nfail = 0
+  CALL report_environment()
   CALL case_taut_string()
   CALL case_hermite_beam()
   CALL case_hermite_long_beam()
@@ -37,6 +50,30 @@ PROGRAM test_modal
   WRITE (*, '(A)') 'test_modal: all checks passed'
 
 CONTAINS
+
+  SUBROUTINE report_environment()
+    !! A crash of this test on some CI hosts left no output. Report an abnormal end (the
+    !! fault, e.g. a stack overflow or an access violation) on stderr, and name the LAPACK
+    !! runtime and the OpenBLAS kernel this host selected, before any case runs.
+    CHARACTER(KIND=C_CHAR) :: config(512)
+    CHARACTER(512) :: text
+    CHARACTER(1024) :: em
+    INTEGER :: es, n, i
+    CALL CD_Fatal_Report_Install()
+    CALL CD_Blas_Runtime_Check('test_modal', es, em)
+    IF (es /= CD_LINALG_OK) THEN
+      WRITE (*, '(A)') 'test_modal: '//TRIM(em)
+      ERROR STOP 1
+    END IF
+    n = blas_config(config, INT(SIZE(config), C_INT))
+    text = ''
+    DO i = 1, MIN(n, LEN(text))
+      IF (config(i) == C_NULL_CHAR) EXIT
+      text(i:i) = config(i)
+    END DO
+    IF (n > 0) WRITE (*, '(A)') 'test_modal: LAPACK runtime '//TRIM(text)
+    FLUSH (output_unit)
+  END SUBROUTINE report_environment
 
   INCLUDE 'nan_max_abs.inc'
 
