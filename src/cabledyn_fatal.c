@@ -371,6 +371,26 @@ static int signal_index(int sig)
     return -1;
 }
 
+/* What a signal's previous disposition is. sa_handler and sa_sigaction share storage, so the
+ * SIG_IGN / SIG_DFL / SIG_ERR sentinels are recognised whatever the SA_SIGINFO flag says, and
+ * only a real function is ever called. */
+enum { DISPOSITION_DEFAULT, DISPOSITION_IGNORED, DISPOSITION_UNKNOWN, DISPOSITION_HANDLER,
+       DISPOSITION_SIGINFO_HANDLER };
+
+static int disposition(const struct sigaction *action)
+{
+    if (action->sa_handler == SIG_IGN) {
+        return DISPOSITION_IGNORED;
+    }
+    if (action->sa_handler == SIG_DFL) {
+        return DISPOSITION_DEFAULT;
+    }
+    if (action->sa_handler == SIG_ERR) {
+        return DISPOSITION_UNKNOWN;
+    }
+    return (action->sa_flags & SA_SIGINFO) != 0 ? DISPOSITION_SIGINFO_HANDLER : DISPOSITION_HANDLER;
+}
+
 static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
 {
     int k = signal_index(sig);
@@ -399,9 +419,11 @@ static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
     }
     /* Hand the signal to whatever handled it before (the Fortran runtime's backtrace or the
      * default action), so the exit status and the fault context are unchanged. */
-    sigaction(sig, &cabledyn_previous[k], NULL);
-    if ((cabledyn_previous[k].sa_flags & SA_SIGINFO) != 0 &&
-        cabledyn_previous[k].sa_sigaction != NULL) {
+    if (sigaction(sig, &cabledyn_previous[k], NULL) != 0) {
+        /* Never leave this handler in place to be entered again. */
+        signal(sig, SIG_DFL);
+    }
+    if (disposition(&cabledyn_previous[k]) == DISPOSITION_SIGINFO_HANDLER) {
         /* A previous three-argument handler receives the original siginfo and context. */
         cabledyn_previous[k].sa_sigaction(sig, info, context);
         return;
@@ -481,10 +503,14 @@ void cabledyn_fatal_report_install(void)
         if (sigaction(cabledyn_signals[k], NULL, &cabledyn_previous[k]) != 0) {
             continue;
         }
-        /* A signal the parent set to be ignored (nohup, background job) stays ignored. */
-        if ((cabledyn_previous[k].sa_flags & SA_SIGINFO) == 0 &&
-            cabledyn_previous[k].sa_handler == SIG_IGN) {
+        /* A signal the parent set to be ignored (nohup, background job) stays ignored, with
+         * or without SA_SIGINFO; a disposition that cannot be classified is left alone. */
+        switch (disposition(&cabledyn_previous[k])) {
+        case DISPOSITION_IGNORED:
+        case DISPOSITION_UNKNOWN:
             continue;
+        default:
+            break;
         }
         sigaction(cabledyn_signals[k], &action, NULL);
     }

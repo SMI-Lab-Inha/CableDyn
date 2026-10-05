@@ -16,7 +16,10 @@ PROGRAM test_fatal_report
   !!   test_fatal_report context
   !!       (POSIX) a child process with an earlier three-argument SIGSEGV handler faults at a
   !!       known address: that handler must receive the fault's own siginfo, the child must end
-  !!       by the fault's signal, and the report must be written once.
+  !!       by the fault's signal, and the report must be written once;
+  !!   test_fatal_report dispositions
+  !!       (POSIX) an ignored SIGTERM, with or without SA_SIGINFO, stays ignored and unreported;
+  !!       a default one is reported and ends the process; a previous handler still runs.
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_DOUBLE, C_INT
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit
   USE CableDyn_Precision, ONLY: wp
@@ -36,6 +39,9 @@ PROGRAM test_fatal_report
     INTEGER(C_INT) FUNCTION fault_context() BIND(C, name='fatal_report_test_fault_context')
       IMPORT :: C_INT
     END FUNCTION fault_context
+    INTEGER(C_INT) FUNCTION dispositions() BIND(C, name='fatal_report_test_dispositions')
+      IMPORT :: C_INT
+    END FUNCTION dispositions
   END INTERFACE
 
   CHARACTER(4096) :: mode, arg2, arg3
@@ -71,6 +77,18 @@ PROGRAM test_fatal_report
       WRITE (*, '(A)') 'PASS: the fault reached the earlier handler with its own context'
     CASE DEFAULT
       CALL fail('the fault did not keep its own context')
+    END SELECT
+    STOP
+  END IF
+
+  IF (mode == 'dispositions') THEN
+    SELECT CASE (dispositions())
+    CASE (-1)
+      WRITE (*, '(A)') 'SKIP: the disposition check is POSIX-only'
+    CASE (0)
+      WRITE (*, '(A)') 'PASS: ignored signals stay ignored; others are reported and passed on'
+    CASE DEFAULT
+      CALL fail('a previous signal disposition was not kept')
     END SELECT
     STOP
   END IF

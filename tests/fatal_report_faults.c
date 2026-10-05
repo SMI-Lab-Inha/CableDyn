@@ -11,6 +11,7 @@
 void fatal_report_test_null_write(void);
 int fatal_report_test_raise_term(void);
 int fatal_report_test_fault_context(void);
+int fatal_report_test_dispositions(void);
 
 static volatile int *volatile fatal_report_null_target = 0;
 
@@ -34,6 +35,12 @@ int fatal_report_test_raise_term(void)
 #if defined(_WIN32)
 /* The fault-context check is POSIX-only: returns -1 (skipped). */
 int fatal_report_test_fault_context(void)
+{
+    return -1;
+}
+
+/* The disposition check is POSIX-only: returns -1 (skipped). */
+int fatal_report_test_dispositions(void)
 {
     return -1;
 }
@@ -157,6 +164,96 @@ int fatal_report_test_fault_context(void)
          count(text, "CableDyn_driver: fatal error:") == 1 && count(text, "t = 7534.600 s") == 1;
     if (!ok) {
         fprintf(stderr, "FAIL: fault context: the fault did not keep its own context\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* SIGTERM handler of the "handler" case: a real one-argument function. */
+static void prior_term_handler(int sig)
+{
+    static const char text[] = "prior SIGTERM handler ran\n";
+    ssize_t ignored = write(STDERR_FILENO, text, sizeof text - 1);
+    (void)ignored;
+    (void)sig;
+    _exit(7);
+}
+
+/* Run one child that sets SIGTERM to `setup`, installs the report and sends itself SIGTERM.
+ * setup 0: SIG_IGN with SA_SIGINFO; 1: SIG_IGN; 2: SIG_DFL; 3: a one-argument handler. */
+static int disposition_case(int setup, const char *name)
+{
+    int errors[2], status = 0, ok, reports, ran;
+    pid_t child;
+    char text[4096];
+    struct sigaction action;
+
+    if (pipe(errors) != 0) {
+        fprintf(stderr, "FAIL: dispositions: pipe() failed\n");
+        return 1;
+    }
+    fflush(NULL);
+    child = fork();
+    if (child < 0) {
+        fprintf(stderr, "FAIL: dispositions: fork() failed\n");
+        return 1;
+    }
+    if (child == 0) {
+        close(errors[0]);
+        dup2(errors[1], STDERR_FILENO);
+        memset(&action, 0, sizeof action);
+        sigemptyset(&action.sa_mask);
+        if (setup == 0) {
+            action.sa_handler = SIG_IGN; /* the sentinel, stored with SA_SIGINFO set */
+            action.sa_flags = SA_SIGINFO;
+        } else if (setup == 1) {
+            action.sa_handler = SIG_IGN;
+        } else if (setup == 2) {
+            action.sa_handler = SIG_DFL;
+        } else {
+            action.sa_handler = prior_term_handler;
+        }
+        sigaction(SIGTERM, &action, NULL);
+        cabledyn_fatal_report_install();
+        cabledyn_fatal_report_time(7534.6);
+        kill(getpid(), SIGTERM);
+        /* Still running: an ignored SIGTERM must leave the process alone. */
+        _exit(0);
+    }
+    close(errors[1]);
+    read_all(errors[0], text, sizeof text);
+    waitpid(child, &status, 0);
+    reports = count(text, "CableDyn_driver: stopped by a termination request");
+    ran = count(text, "prior SIGTERM handler ran");
+    if (setup <= 1) {
+        ok = WIFEXITED(status) && WEXITSTATUS(status) == 0 && reports == 0;
+    } else if (setup == 2) {
+        ok = WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM && reports == 1;
+    } else {
+        ok = WIFEXITED(status) && WEXITSTATUS(status) == 7 && reports == 1 && ran == 1;
+    }
+    fprintf(stderr, "dispositions: %s: child ended %s %d, %d report(s)%s\n", name,
+            WIFSIGNALED(status) ? "by signal" : "with status",
+            WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status), reports,
+            ok ? "" : " -- unexpected");
+    if (!ok) {
+        fprintf(stderr, "%s", text);
+    }
+    return ok ? 0 : 1;
+}
+
+/* An ignored SIGTERM (with or without SA_SIGINFO) stays ignored and is never reported or
+ * called; a default one is reported and ends the process by SIGTERM; a previous handler is
+ * reported and then runs. Returns 0 when all hold, 1 otherwise. */
+int fatal_report_test_dispositions(void)
+{
+    int failures = 0;
+    failures += disposition_case(0, "SIG_IGN with SA_SIGINFO");
+    failures += disposition_case(1, "SIG_IGN");
+    failures += disposition_case(2, "SIG_DFL");
+    failures += disposition_case(3, "a one-argument handler");
+    if (failures != 0) {
+        fprintf(stderr, "FAIL: dispositions: %d case(s) wrong\n", failures);
         return 1;
     }
     return 0;

@@ -1862,6 +1862,12 @@ add_test(NAME fatal_report_fault_context COMMAND test_fatal_report context)
 set_tests_properties(fatal_report_fault_context PROPERTIES
                      LABELS "fortran;unit;driver;stack" TIMEOUT 120
                      FAIL_REGULAR_EXPRESSION "FAIL:")
+# POSIX: the report keeps every previous disposition -- an ignored signal (with or without
+# SA_SIGINFO) stays ignored, a default one still ends the process, a handler still runs.
+add_test(NAME fatal_report_dispositions COMMAND test_fatal_report dispositions)
+set_tests_properties(fatal_report_dispositions PROPERTIES
+                     LABELS "fortran;unit;driver" TIMEOUT 120
+                     FAIL_REGULAR_EXPRESSION "FAIL:")
 add_test(
   NAME driver_repeat_exit
   COMMAND ${CMAKE_COMMAND}
