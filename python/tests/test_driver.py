@@ -241,6 +241,87 @@ def test_nonzero_exit_preserves_native_diagnostic(tmp_path, monkeypatch):
     assert "Newton failed" in str(caught.value)
 
 
+_CLOSING = "CableDyn_driver: ended with exit code 2\n"
+_PARTIAL_TABLE = "# CableDyn\nTime\tFairTen1\n0.0\t1.0\n7534.6\t2.0\n7534.65\t2."
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "table", "expected"),
+    [
+        # An exit the driver chose: its closing line ends stderr.
+        (
+            2,
+            "  init\nstep 12 did not converge\n" + _CLOSING,
+            None,
+            "failed with exit code 2: init\nstep 12 did not converge",
+        ),
+        # An interrupt or a fault the driver reported, with the time its output reached.
+        (
+            3221225725,
+            "  init\n\nCableDyn_driver: fatal error: stack overflow (exception 0xC00000FD) after "
+            "the step at simulated time t = 7534.600 s. The run did not finish; its output "
+            "files end at the last step written.\n",
+            _PARTIAL_TABLE,
+            "ended abnormally (exit code 3221225725); its output ends at t = 7534.6 s: "
+            "CableDyn_driver: fatal error: stack overflow",
+        ),
+        # Ended from outside (taskkill /F): no closing line and no report.
+        (
+            1,
+            "  CableDyn initialization completed.\n",
+            _PARTIAL_TABLE,
+            "initialization completed.\nCableDyn driver ended with exit code 1 without "
+            "reporting a result; its output ends at t = 7534.6 s: the process was ended from "
+            "outside",
+        ),
+        # The same with no output table yet.
+        (-9, "", None, "ended with exit code -9 without reporting a result: the process"),
+    ],
+)
+def test_nonzero_exit_tells_driver_failures_from_abnormal_ends(
+    tmp_path, monkeypatch, returncode, stderr, table, expected
+):
+    executable = tmp_path / "driver"
+    executable.write_bytes(b"placeholder")
+    executable.chmod(0o755)
+    deck = tmp_path / "model.dat"
+    deck.write_text("deck", encoding="ascii")
+
+    def fake_run(*args, **kwargs):
+        if table is not None:
+            (tmp_path / "run.out").write_bytes(table.encode("ascii"))
+        return subprocess.CompletedProcess(args[0], returncode, "  Progress:  65.0%\n", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(DriverExecutionError) as caught:
+        CableDynDriver(executable).run(deck, "run")
+    assert caught.value.returncode == returncode
+    assert expected in str(caught.value)
+    assert caught.value.stderr == stderr
+
+
+@pytest.mark.parametrize(
+    ("content", "window", "expected"),
+    [
+        (b"Time\ta\n0.0\t1\n0.5\t2\n", 1 << 20, 0.5),
+        (b"Time\ta\n0.0\t1\n0.5\t2\n1.0\t", 1 << 20, 0.5),  # last row cut short
+        (b"Time\ta\n0.0\t1\nnan\t2\n", 1 << 20, None),
+        (b"Time\ta\n0.0\t1\nq\t2\n", 1 << 20, None),
+        (b"Time\ta\n\n", 1 << 20, None),
+        # The window starts inside a row: that row is not trusted, the next whole one is.
+        (b"Time\ta\n123456.0\t1\n2.0\t2\n", 10, 2.0),
+        (b"Time\ta\n123456.0\t1\n", 10, None),
+    ],
+)
+def test_last_output_time_reads_only_whole_rows(tmp_path, content, window, expected):
+    from cabledyn.driver import _last_output_time
+
+    path = tmp_path / "run.out"
+    path.write_bytes(content)
+    assert _last_output_time(path, window) == expected
+    assert _last_output_time(tmp_path / "missing.out") is None
+
+
 def test_element_table_is_protected_reported_and_replaced(tmp_path, monkeypatch):
     executable = tmp_path / "driver"
     executable.write_bytes(b"placeholder")

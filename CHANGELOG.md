@@ -20,6 +20,20 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- The standalone driver no longer ends without a word when its process is interrupted or hits a
+  fatal fault. Ctrl+C, Ctrl+Break, closing the console window, `SIGINT`, `SIGTERM` and `SIGHUP`
+  are reported as `CableDyn_driver: stopped by <cause>`, and an access violation, a stack
+  overflow or another fatal fault as `CableDyn_driver: fatal error: <cause>`. Both reports give
+  the simulated time of the last committed step, and the exit status is unchanged. Previously a
+  stack overflow in a Windows GNU build ended the process with no message.
+- Every non-zero exit the driver makes itself now ends stderr with the closing line
+  `CableDyn_driver: ended with exit code <n>`. A process ended from outside (`taskkill /F`,
+  *End task*, `kill -9`) runs none of its own code and cannot report anything; the missing
+  closing line now identifies it, since `taskkill /F` leaves exit code 1, the same code as a
+  refused input. `CableDynDriver.run`, `cabledyn-run` and `cabledyn-study` report such a run as
+  ended early, with the time its output reached, instead of relaying the start-up log as the
+  error. The documentation explains how to recognise each kind of early end and warns that
+  `taskkill /IM CableDyn_driver.exe /F` ends every CableDyn run on the computer.
 - The static solve of a taut, neutrally buoyant finite-EI line (mass per length equal to
   the displaced mass) no longer depends on the sign of the round-off weight: a line whose
   total weight is below 1e-12 of its axial stiffness is seeded as a straight, uniformly

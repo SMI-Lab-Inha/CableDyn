@@ -14,7 +14,10 @@ PROGRAM cabledyn
   !! BODIES and RODS -- and, when dtM/TMax are present, marches the dynamics while
   !! writing the requested OUTPUTS at each row (doc/cli.rst).
   !!
-  !! Exit codes: 0 converged, 1 bad/unparseable deck, 2 solve failure.
+  !! Exit codes: 0 converged, 1 bad/unparseable deck, 2 solve failure. Every non-zero exit
+  !! the driver makes itself ends stderr with the closing line "CableDyn_driver: ended with
+  !! exit code <n>" (stop_run); an interrupt or a fatal fault is reported by
+  !! CableDyn_FatalReport with the simulated time reached.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Deck_Query_dtM, &
                                  CD_Classify_Dynamic_Completion, CD_DECKDRV_OK, &
@@ -30,6 +33,7 @@ PROGRAM cabledyn
                                          CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_OK, CD_AGG_BADINPUT
   USE CableDyn_Banner, ONLY: CD_Print_Banner
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install, CD_Fatal_Report_Time
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
   IMPLICIT NONE
   TYPE :: StandaloneProgress
@@ -78,14 +82,14 @@ PROGRAM cabledyn
     IF (deck_path(1:1) == '-') THEN
       WRITE (error_unit, '(A)') PROG//': unknown option "'//TRIM(deck_path)//'"'
       CALL print_usage(error_unit)
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     END IF
   END DO
 
   IF (nargs /= 2) THEN
     CALL CD_Print_Banner(error_unit)
     CALL print_usage(error_unit)
-    STOP 1, QUIET = .TRUE.
+    CALL stop_run(1)
   END IF
   CALL get_argument(1, deck_path)
   CALL get_argument(2, out_root)
@@ -101,8 +105,13 @@ PROGRAM cabledyn
   CALL CD_Blas_Runtime_Check(PROG, ErrStat, ErrMsg)
   IF (ErrStat /= CD_LINALG_OK) THEN
     WRITE (error_unit, '(A)') TRIM(ErrMsg)
-    STOP 2, QUIET = .TRUE.
+    CALL stop_run(2)
   END IF
+  ! From here on an interrupt or a fatal fault (an access violation, a stack overflow) is
+  ! reported on stderr with the simulated time reached, instead of ending the process
+  ! without a word. Installed after the LAPACK runtime has loaded, so its handlers are the
+  ! process's own.
+  CALL CD_Fatal_Report_Install()
   CALL CD_Deck_Query_dtM(TRIM(deck_path), dtM, has_dtm, ErrStat, ErrMsg, tmax=tmax, &
                          has_tmax=has_tmax, n_ei0=n_ei0, n_finite_ei=n_finite_ei, &
                          has_motion_file=has_motion_file, standalone_scan=.TRUE., &
@@ -125,9 +134,9 @@ PROGRAM cabledyn
   IF (ErrStat /= CD_DECKDRV_OK) THEN
     WRITE (error_unit, '(A)') TRIM(ErrMsg)
     IF (ErrStat == CD_DECKDRV_BADINPUT) THEN
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     ELSE
-      STOP 2, QUIET = .TRUE.
+      CALL stop_run(2)
     END IF
   END IF
   ! Keep the process-level contract fail-closed even if a future driver route
@@ -138,11 +147,22 @@ PROGRAM cabledyn
     ELSE
       WRITE (error_unit, '(A)') 'CableDyn_driver: run did not converge; output is for inspection only.'
     END IF
-    STOP 2, QUIET = .TRUE.
+    CALL stop_run(2)
   END IF
   WRITE (output_unit, '(A,A,A)') PROG//': converged run written to ', TRIM(out_root), '.out'
 
 CONTAINS
+
+  SUBROUTINE stop_run(code)
+    !! End the process with a non-zero exit code, after the diagnostic already written.
+    !! The closing line is the last stderr record of every exit the driver makes itself, so
+    !! a caller can tell such an exit from a process ended from outside (Task Manager,
+    !! `taskkill /F`, `kill -9`), which runs no code of the driver and leaves no closing line.
+    INTEGER, INTENT(IN) :: code
+    WRITE (error_unit, '(A,I0)') PROG//': ended with exit code ', code
+    FLUSH (error_unit)
+    STOP code, QUIET = .TRUE.
+  END SUBROUTINE stop_run
 
   SUBROUTINE get_argument(index, value)
     !! Command-line argument that fails closed when it cannot be retrieved whole
@@ -155,14 +175,14 @@ CONTAINS
     IF (arg_stat == -1) THEN
       WRITE (error_unit, '(A,I0,A,I0,A)') PROG//': argument ', index, ' is longer than ', LEN(value), &
         ' characters'
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     ELSE IF (arg_stat /= 0) THEN
       WRITE (error_unit, '(A,I0)') PROG//': cannot read command-line argument ', index
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     END IF
     IF (arg_len < 1) THEN
       WRITE (error_unit, '(A,I0,A)') PROG//': command-line argument ', index, ' is empty'
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     END IF
   END SUBROUTINE get_argument
 
@@ -180,12 +200,12 @@ CONTAINS
     CALL CD_Native_Path(deck, deck_spelling, stat, why)
     IF (stat /= CD_PATH_OK) THEN
       WRITE (error_unit, '(A)') PROG//': cannot read deck "'//deck//'": '//TRIM(why)
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     END IF
     CALL CD_Native_Path(root, root_spelling, stat, why, for_output=.TRUE., reserve=MAX_OUTPUT_SUFFIX)
     IF (stat /= CD_PATH_OK) THEN
       WRITE (error_unit, '(A)') PROG//': cannot write output files at "'//root//'": '//TRIM(why)
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     END IF
   END SUBROUTINE prepare_paths
 
@@ -206,7 +226,7 @@ CONTAINS
     IF (ios /= 0) THEN
       WRITE (error_unit, '(A)') PROG//': cannot write output files at "'//root// &
         '" (check that the directory exists and is writable)'
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     END IF
     IF (exists) THEN
       CLOSE (unit)
@@ -265,7 +285,7 @@ CONTAINS
         WRITE (error_unit, '(A)') PROG//': output root "'//root//'" would overwrite the '//what//' "'// &
           input//'" that the deck reads'
       END IF
-      STOP 1, QUIET = .TRUE.
+      CALL stop_run(1)
     END IF
   END SUBROUTINE check_input_not_output
 
@@ -337,7 +357,7 @@ CONTAINS
     CASE DEFAULT
       WRITE (error_unit, '(A)') PROG//': cannot create the output lock file "'//root//LOCK_SUFFIX//'"'
     END SELECT
-    STOP 1, QUIET = .TRUE.
+    CALL stop_run(1)
   END SUBROUTINE lock_output_root
 
   LOGICAL FUNCTION same_file(a, b) RESULT(same)
@@ -773,6 +793,8 @@ CONTAINS
     INTEGER(int64) :: now
     REAL(wp) :: elapsed, remaining, percent
     CHARACTER(16) :: elapsed_text, remaining_text
+    ! Every committed step: the time an abnormal end of the process reports.
+    CALL CD_Fatal_Report_Time(simulated_time)
     IF (step < progress%nstep .AND. MOD(step, progress%stride) /= 0) RETURN
     CALL SYSTEM_CLOCK(now)
     elapsed = CD_ZERO

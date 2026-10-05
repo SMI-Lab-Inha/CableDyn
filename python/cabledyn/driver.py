@@ -64,6 +64,59 @@ def _timeout_stream(value: str | bytes | None) -> str:
     return value
 
 
+# The last stderr line of every non-zero exit the driver makes itself.
+_CLOSING_LINE = re.compile(r"CableDyn_driver: ended with exit code -?\d+\s*\Z")
+# The driver's report of an interrupt or a fatal fault (src/cabledyn_fatal.c).
+_ABNORMAL_REPORT = re.compile(r"^CableDyn_driver: (?:fatal error:|stopped by) .*$", re.MULTILINE)
+
+
+def _last_output_time(main: Path, window: int = 1 << 20) -> float | None:
+    """Time of the last complete row of a main output table, or ``None``."""
+    try:
+        with main.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            start = max(0, size - window)
+            handle.seek(start)
+            tail = handle.read()
+    except OSError:
+        return None
+    lines = tail.splitlines(keepends=True)
+    # A row is trusted only whole: ended by a line end, and begun inside the window.
+    first_whole = 0 if start == 0 else 1
+    for line in reversed(lines[first_whole:]):
+        fields = line.split()
+        if not line.endswith(b"\n") or not fields:
+            continue
+        try:
+            value = float(fields[0])
+        except ValueError:
+            return None
+        return value if math.isfinite(value) else None
+    return None
+
+
+def _failure_message(returncode: int, stdout: str, stderr: str, main: Path) -> str:
+    """Describe a non-zero exit, telling the driver's own failures from an abnormal end."""
+    closing = _CLOSING_LINE.search(stderr)
+    if closing:
+        # The closing line repeats the exit code; the diagnostic is what precedes it.
+        diagnostic = stderr[: closing.start()].strip() or stdout.strip() or "no diagnostic"
+        return f"CableDyn driver failed with exit code {returncode}: {diagnostic}"
+    last = _last_output_time(main)
+    reached = "" if last is None else f"; its output ends at t = {last:g} s"
+    report = _ABNORMAL_REPORT.findall(stderr)
+    if report:
+        return f"CableDyn driver ended abnormally (exit code {returncode}){reached}: {report[-1]}"
+    # The conclusion goes last: summaries show the last line of a message.
+    diagnostic = stderr.strip() or stdout.strip()
+    tail = "".join(f"{line}\n" for line in diagnostic.splitlines()[-20:])
+    return (
+        f"{tail}CableDyn driver ended with exit code {returncode} without reporting a "
+        f"result{reached}: the process was ended from outside (for example by Task Manager, "
+        "taskkill /F or kill -9) or by a fault it could not report."
+    )
+
+
 @dataclass(frozen=True)
 class DriverResult:
     """Files and captured streams from one completed driver run.
@@ -511,9 +564,10 @@ class CableDynDriver:
                 stderr=_timeout_stream(exc.stderr),
             ) from exc
         if completed.returncode != 0:
-            diagnostic = completed.stderr.strip() or completed.stdout.strip() or "no diagnostic"
             raise DriverExecutionError(
-                f"CableDyn driver failed with exit code {completed.returncode}: {diagnostic}",
+                _failure_message(
+                    completed.returncode, completed.stdout, completed.stderr, Path(f"{root}.out")
+                ),
                 returncode=completed.returncode,
                 stdout=completed.stdout,
                 stderr=completed.stderr,

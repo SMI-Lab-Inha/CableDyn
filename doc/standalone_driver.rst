@@ -224,8 +224,46 @@ Exit status and automation
        result became non-finite; or, in a Windows GNU build, ``openblas.dll`` could not be
        loaded at start-up. The ``.out`` keeps the converged prefix for inspection only
 
-The reason is always in the stderr message. See :doc:`troubleshooting` for the message-by-message
-fixes.
+The reason is always in the stderr message, and the last stderr line of every such exit is the
+closing line ``CableDyn_driver: ended with exit code <n>``. See :doc:`troubleshooting` for the
+message-by-message fixes.
+
+.. _run-ended-early:
+
+When a run ends early
+~~~~~~~~~~~~~~~~~~~~~
+
+A run can also end without the driver choosing to. The output files then hold every row written
+before the end, and their last time is below ``TMax``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - How it ended
+     - What you see
+   * - interrupted: Ctrl+C or Ctrl+Break, closing the console window, logging off or shutting
+       down, ``SIGINT``, ``SIGTERM`` or ``SIGHUP``
+     - ``CableDyn_driver: stopped by <cause> after the step at simulated time t = <t> s`` on
+       stderr, followed by the Fortran runtime's own line where it has one (the release
+       Windows executable adds ``forrtl: error (200)`` and exits with ``1``; a GNU build exits
+       with ``0xC000013A`` on Windows and with the signal on Linux and macOS). Rows written while
+       the process was stopping may extend slightly past the reported time
+   * - a fatal fault, such as an access violation or a stack overflow
+     - ``CableDyn_driver: fatal error: <cause> (exception <code>) after the step at simulated
+       time t = <t> s`` on stderr, possibly followed by the runtime's own report (``forrtl:
+       severe (157)`` or ``(170)`` in the release Windows executable, which then exits with that
+       number). Otherwise the exit status is the exception code (Windows) or the signal. Please
+       report it, with the deck (see SUPPORT.md)
+   * - ended from outside: *End task* in Task Manager, ``taskkill /F`` or ``kill -9``
+     - nothing. These end a process without running any of its code, so no program can report
+       them. ``taskkill /F`` leaves exit code ``1``, the code of a refused input, but without the
+       closing line; ``kill -9`` leaves ``SIGKILL``
+
+To tell a completed run from one that ended early, check the exit status, the closing line, and
+that the last time in ``<output_root>.out`` reaches ``TMax``; the Python wrapper below reports
+such an end. ``taskkill /IM CableDyn_driver.exe /F`` ends *every* CableDyn run on the computer, not one; to
+stop a single run, end it by its process id (``taskkill /PID <pid> /F``).
 
 Output streams
 ~~~~~~~~~~~~~~
@@ -238,7 +276,9 @@ Output streams
      - Content
    * - ``stderr``
      - the identity banner of a normal run; every error message; the initialisation report of a
-       single-family (all ``EI = 0`` or all finite-EI) deck
+       single-family (all ``EI = 0`` or all finite-EI) deck; the report of an interrupt or a
+       fatal fault; and, last on a failed run, the closing line
+       ``CableDyn_driver: ended with exit code <n>``
    * - ``stdout``
      - ``--version``/``--help`` output; the mixed-deck initialisation summary; the
        ``Dynamic simulation:`` header and ``Progress:`` records with elapsed time and ETA;
@@ -260,7 +300,8 @@ Python automation
 The :class:`cabledyn.CableDynDriver` wrapper applies these rules automatically: it finds the
 executable, defaults the working directory to the deck directory, captures diagnostics, checks
 the exit code, rejects stale output unless overwrite is explicit, and validates every numeric
-row. See :doc:`python`.
+row. A run that ended early raises :class:`cabledyn.DriverExecutionError` with a message that
+says so and gives the time the output reached. See :doc:`python`.
 
 Choosing the standalone driver or OpenFAST
 -------------------------------------------

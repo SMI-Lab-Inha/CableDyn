@@ -329,7 +329,9 @@ add_library(cabledyn_obj OBJECT
   src/cabledyn_blas.c
   src/cabledyn_crt_locale.c
   src/cabledyn_path.c
+  src/cabledyn_fatal.c
   src/CableDyn_Precision.f90
+  src/CableDyn_FatalReport.f90
   src/CableDyn_PathIO.f90
   src/CableDyn_Banner.f90
   src/CableDyn_Linalg.f90
@@ -1807,6 +1809,37 @@ add_executable(test_crt_locale_guard tests/test_crt_locale_guard.f90 tests/crt_l
 target_link_libraries(test_crt_locale_guard PRIVATE cabledyn_core)
 add_test(NAME crt_locale_guard COMMAND test_crt_locale_guard $<IF:$<BOOL:${MINGW}>,1,0>)
 set_tests_properties(crt_locale_guard PROPERTIES LABELS "fortran;unit")
+# An abnormal end of the driver process is never silent: a stack overflow (on a 1 MiB stack
+# in Windows GNU builds), an access violation and, off Windows, SIGTERM each end the process
+# with a report on stderr of the cause and the simulated time reached; the march records the
+# time of every committed step for that report.
+add_executable(test_fatal_report tests/test_fatal_report.f90 tests/fatal_report_faults.c)
+target_link_libraries(test_fatal_report PRIVATE cabledyn_core)
+if(CABLEDYN_GNU_WINDOWS_STACK)
+  target_link_options(test_fatal_report PRIVATE "-Wl,--stack,${CABLEDYN_SMALL_STACK_RESERVE}")
+endif()
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/fatal_report")
+add_test(NAME fatal_report_march
+         COMMAND test_fatal_report march ${CMAKE_CURRENT_SOURCE_DIR}/examples/dynamic_chain_held.dat
+                 ${CMAKE_BINARY_DIR}/fatal_report/march)
+set_tests_properties(fatal_report_march PROPERTIES LABELS "fortran;unit;driver;dynamic")
+# The cause names the fault as each platform delivers it (macOS may deliver SIGBUS).
+foreach(_fatal IN ITEMS "overflow|during|(stack overflow|segmentation fault|bus error)"
+                        "overflow|before|(stack overflow|segmentation fault|bus error)"
+                        "null|during|(access violation|segmentation fault|bus error)"
+                        "term|during|a termination request")
+  string(REPLACE "|" ";" _fatal_case "${_fatal}")
+  list(GET _fatal_case 0 _fatal_mode)
+  list(GET _fatal_case 1 _fatal_when)
+  list(SUBLIST _fatal_case 2 -1 _fatal_cause)
+  string(JOIN "|" _fatal_cause ${_fatal_cause})
+  add_test(NAME fatal_report_${_fatal_mode}_${_fatal_when}
+           COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:test_fatal_report> -DMODE=${_fatal_mode}
+                   -DWHEN=${_fatal_when} "-DCAUSE=${_fatal_cause}"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_fatal_report.cmake)
+  set_tests_properties(fatal_report_${_fatal_mode}_${_fatal_when} PROPERTIES
+                       LABELS "fortran;unit;driver;stack" TIMEOUT 120)
+endforeach()
 add_test(
   NAME driver_repeat_exit
   COMMAND ${CMAKE_COMMAND}

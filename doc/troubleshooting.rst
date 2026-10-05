@@ -43,6 +43,12 @@ Exit codes at a glance
 The complete stream and exit-code contract is in :doc:`standalone_driver`. Error messages are on
 **stderr**. If you redirected it away (``2>/dev/null``), rerun without the redirect.
 
+A run that stops before ``TMax`` with no error message and without the closing line
+``CableDyn_driver: ended with exit code <n>`` was ended from outside the driver, for example by
+``taskkill /F`` (which leaves exit code ``1``) or *End task*; ``taskkill /IM CableDyn_driver.exe``
+ends every CableDyn run on the computer at once. An interrupt or a fatal fault is reported on
+stderr with the simulated time reached. See :ref:`run-ended-early`.
+
 Reading an error message
 ------------------------
 

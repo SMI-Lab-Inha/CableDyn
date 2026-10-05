@@ -1,0 +1,99 @@
+! File: tests/test_fatal_report.f90
+! SPDX-License-Identifier: Apache-2.0
+! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
+PROGRAM test_fatal_report
+  !! The driver's abnormal-end report (src/cabledyn_fatal.c, CableDyn_FatalReport).
+  !!
+  !!   test_fatal_report march <deck> <out_root>
+  !!       runs a dynamic deck and checks that the march recorded the time of its last
+  !!       committed step (TMax) for the report;
+  !!   test_fatal_report <fault> before|during
+  !!       installs the report, optionally records a simulated time, and ends the process
+  !!       with <fault>: overflow (unbounded recursion, a stack overflow), null (a write
+  !!       through a null pointer) or term (SIGTERM; POSIX only). tests/check_fatal_report.cmake
+  !!       checks the exit status and the stderr line.
+  USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_DOUBLE, C_INT
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit
+  USE CableDyn_Precision, ONLY: wp
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install, CD_Fatal_Report_Time
+  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
+  IMPLICIT NONE
+
+  INTERFACE
+    REAL(C_DOUBLE) FUNCTION last_time() BIND(C, name='cabledyn_fatal_report_last_time')
+      IMPORT :: C_DOUBLE
+    END FUNCTION last_time
+    SUBROUTINE null_write() BIND(C, name='fatal_report_test_null_write')
+    END SUBROUTINE null_write
+    INTEGER(C_INT) FUNCTION raise_term() BIND(C, name='fatal_report_test_raise_term')
+      IMPORT :: C_INT
+    END FUNCTION raise_term
+  END INTERFACE
+
+  CHARACTER(4096) :: mode, arg2, arg3
+  CHARACTER(1024) :: msg
+  LOGICAL :: converged
+  INTEGER :: stat
+
+  CALL GET_COMMAND_ARGUMENT(1, mode)
+  CALL GET_COMMAND_ARGUMENT(2, arg2)
+  CALL GET_COMMAND_ARGUMENT(3, arg3)
+
+  IF (mode == 'march') THEN
+    IF (last_time() >= 0.0_C_DOUBLE) CALL fail('a time is recorded before any step')
+    ! Negative and NaN times are not committed steps and leave the record unchanged.
+    CALL CD_Fatal_Report_Time(-1.0_wp)
+    IF (last_time() >= 0.0_C_DOUBLE) CALL fail('a negative time was recorded')
+    CALL CD_Run_Deck_Driver(TRIM(arg2), TRIM(arg3), converged, stat, msg)
+    IF (stat /= CD_DECKDRV_OK .OR. .NOT. converged) CALL fail('the deck did not run: '//TRIM(msg))
+    ! examples/dynamic_chain_held.dat: TMax 10 s.
+    IF (ABS(last_time() - 10.0_C_DOUBLE) > 1.0E-9_C_DOUBLE) THEN
+      WRITE (msg, '(A,ES23.15)') 'the march recorded t = ', last_time()
+      CALL fail(TRIM(msg)//', expected the last committed step at TMax = 10 s')
+    END IF
+    WRITE (*, '(A)') 'PASS: the march records the time of its last committed step'
+    STOP
+  END IF
+
+  CALL CD_Fatal_Report_Install()
+  CALL CD_Fatal_Report_Install() ! idempotent
+  IF (arg2 == 'during') THEN
+    CALL CD_Fatal_Report_Time(0.05_wp)
+    CALL CD_Fatal_Report_Time(7534.6_wp)
+  END IF
+  SELECT CASE (TRIM(mode))
+  CASE ('overflow')
+    WRITE (error_unit, '(A,I0)') 'unreachable: ', deep(1)
+  CASE ('null')
+    CALL null_write()
+  CASE ('term')
+    IF (raise_term() == 0_C_INT) THEN
+      WRITE (*, '(A)') 'SKIP: no SIGTERM on this platform'
+      STOP
+    END IF
+  CASE DEFAULT
+    CALL fail('unknown mode "'//TRIM(mode)//'"')
+  END SELECT
+  CALL fail('the '//TRIM(mode)//' fault did not end the process')
+
+CONTAINS
+
+  RECURSIVE INTEGER FUNCTION deep(depth) RESULT(r)
+    !! 64 KiB of stack per level without bound: a stack overflow on any stack size.
+    INTEGER, INTENT(IN) :: depth
+    INTEGER :: frame(16384)
+    frame = depth
+    IF (depth < 0) THEN
+      r = 0
+      RETURN
+    END IF
+    r = deep(depth + 1) + frame(MOD(depth, 16384) + 1)
+  END FUNCTION deep
+
+  SUBROUTINE fail(text)
+    CHARACTER(*), INTENT(IN) :: text
+    WRITE (error_unit, '(A)') 'FAIL: test_fatal_report: '//text
+    ERROR STOP 3
+  END SUBROUTINE fail
+
+END PROGRAM test_fatal_report

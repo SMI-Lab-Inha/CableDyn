@@ -169,8 +169,11 @@ Exit codes
        message names the library, each location tried and the Windows load error. The release
        ``CableDyn_driver.exe`` is statically linked and has no such dependency
 
-Every non-zero exit is accompanied by a message on stderr. See :doc:`troubleshooting` for the
-messages and their remedies.
+Every non-zero exit the driver makes itself writes its message on stderr and ends stderr with
+the closing line ``CableDyn_driver: ended with exit code <n>``. An interrupt or a fatal fault is
+reported with the simulated time reached; a process ended from outside (``taskkill /F``,
+``kill -9``) cannot report anything. See :ref:`run-ended-early` for how to recognise each case,
+and :doc:`troubleshooting` for the messages and their remedies.
 
 Examples
 ~~~~~~~~

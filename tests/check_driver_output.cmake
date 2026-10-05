@@ -28,6 +28,13 @@ if(NOT driver_result EQUAL EXPECT_RC)
   message(FATAL_ERROR
     "driver returned ${driver_result}, expected ${EXPECT_RC}\n${driver_text}")
 endif()
+# Every exit the driver makes itself with a non-zero code ends stderr with its closing line,
+# which tells such an exit from a process ended from outside.
+if(NOT EXPECT_RC EQUAL 0 AND
+   NOT driver_stderr MATCHES "CableDyn_driver: ended with exit code ${EXPECT_RC}[\r\n]*$")
+  message(FATAL_ERROR
+    "stderr does not end with the closing line for exit code ${EXPECT_RC}:\n${driver_stderr}")
+endif()
 foreach(pattern IN LISTS MUST_MATCH)
   if(NOT driver_text MATCHES "${pattern}")
     message(FATAL_ERROR "driver output does not match \"${pattern}\":\n${driver_text}")
