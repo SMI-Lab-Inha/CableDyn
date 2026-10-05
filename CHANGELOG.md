@@ -25,7 +25,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   are reported as `CableDyn_driver: stopped by <cause>`, and an access violation, a stack
   overflow or another fatal fault as `CableDyn_driver: fatal error: <cause>`. Both reports give
   the simulated time of the last committed step, and the exit status is unchanged. Previously a
-  stack overflow in a Windows GNU build ended the process with no message.
+  stack overflow in a Windows GNU build ended the process with no message. Every thread that
+  enters an OpenMP parallel region keeps room to report its own stack overflow, and on Linux
+  and macOS a hardware fault reaches the handler that was there before (the Fortran runtime's
+  backtrace, or the default action and its core dump) with its original address and context.
 - Every non-zero exit the driver makes itself now ends stderr with the closing line
   `CableDyn_driver: ended with exit code <n>`. A process ended from outside (`taskkill /F`,
   *End task*, `kill -9`) runs none of its own code and cannot report anything; the missing

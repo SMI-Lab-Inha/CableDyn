@@ -9,6 +9,7 @@ MODULE CableDyn_System
   !! dynamic (free/connect) points are composed around them by this owner rather than
   !! bypassing it. Rigid6 bodies and rods are marched over a system by the deck driver.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_All_Finite, CD_Is_Finite
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Model_Is_Initialized, CD_End_Model, &
                             CD_Model_NCoupledDOF, CD_Model_NDOF, CD_Model_NElem, &
                             CD_Get_Model_CoupledDofs, CD_Get_Model_CoupledMotion, &
@@ -1308,6 +1309,7 @@ CONTAINS
     n_team = line_team_size(system)
     !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i) SCHEDULE(STATIC) NUM_THREADS(n_team) IF(n_team > 1)
     DO i = 1, system%n_lines
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       CALL CD_Step_Model(system%lines(i), dt, system%line_converged(i), system%line_stalled(i), &
                          system%line_iter(i), system%line_stat(i), system%line_msg(i), &
                          prescribed_q=system%lines(i)%q_prescribed_work, &
@@ -2082,6 +2084,7 @@ CONTAINS
     n_team = line_team_size(system)
     !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, lo, hi) SCHEDULE(STATIC) NUM_THREADS(n_team) IF(n_team > 1)
     DO i = 1, system%n_lines
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       lo = system%line_off(i)
       hi = system%line_off(i + 1) - 1
       CALL CD_Calc_Model_CoupledLoads(system%lines(i), system%line_load_work(lo:hi), &

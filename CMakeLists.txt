@@ -1321,6 +1321,13 @@ if(Python3_Interpreter_FOUND)
     LABELS "python;documentation;examples"
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # Every OpenMP parallel region prepares its threads for the abnormal-end report.
+  add_test(NAME omp_fatal_init
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_omp_fatal_init.py)
+  set_tests_properties(omp_fatal_init PROPERTIES
+    LABELS "python;unit;stack"
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   add_test(NAME documentation_sources
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_documentation.py)
   set_tests_properties(documentation_sources PROPERTIES
@@ -1840,6 +1847,21 @@ foreach(_fatal IN ITEMS "overflow|during|(stack overflow|segmentation fault|bus 
   set_tests_properties(fatal_report_${_fatal_mode}_${_fatal_when} PROPERTIES
                        LABELS "fortran;unit;driver;stack" TIMEOUT 120)
 endforeach()
+# A stack overflow on an OpenMP worker thread with a 1 MiB stack is reported too: every
+# thread that enters a parallel region gets room for the handlers (tests/test_omp_fatal_init.py
+# checks that every region of the library and the driver asks for it).
+add_test(NAME fatal_report_omp_overflow_during
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:test_fatal_report> -DMODE=omp_overflow
+                 -DWHEN=during "-DCAUSE=(stack overflow|segmentation fault|bus error)"
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_fatal_report.cmake)
+set_tests_properties(fatal_report_omp_overflow_during PROPERTIES
+                     LABELS "fortran;unit;driver;stack" TIMEOUT 120
+                     ENVIRONMENT "OMP_NUM_THREADS=2;OMP_STACKSIZE=1M")
+# POSIX: a hardware fault keeps its own siginfo and context through the report.
+add_test(NAME fatal_report_fault_context COMMAND test_fatal_report context)
+set_tests_properties(fatal_report_fault_context PROPERTIES
+                     LABELS "fortran;unit;driver;stack" TIMEOUT 120
+                     FAIL_REGULAR_EXPRESSION "FAIL:")
 add_test(
   NAME driver_repeat_exit
   COMMAND ${CMAKE_COMMAND}

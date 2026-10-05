@@ -18,6 +18,7 @@ MODULE CableDyn_CosseratAssemble
   !! and scatter-adds Kt(12,12)/fint(12). The static solver can also assemble the
   !! free-DOF tangent block directly into LAPACK DGBSV band storage.
   USE CableDyn_Precision, ONLY: wp, CD_All_Finite, CD_Is_Finite
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE CableDyn_Cosserat, ONLY: CD_Reference_Frame, CD_Cosserat_Internal_Force, CD_Cosserat_Force_Tangent
   USE CableDyn_Mesh, ONLY: CD_Validate_Connectivity
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
@@ -116,6 +117,7 @@ CONTAINS
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, fe, Ke, elem_es, elem_em) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
     DO e = 1, n_elem
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       CALL CD_Reference_Frame(nodes_ref(:, a), nodes_ref(:, b), Lam0, L0)
@@ -316,6 +318,7 @@ CONTAINS
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
     DO e = 1, n_elem
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       CALL CD_Reference_Frame(nodes_ref(:, a), nodes_ref(:, b), Lam0, L0)
@@ -429,6 +432,7 @@ CONTAINS
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, es, em)
     DO e = 1, n_elem
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       CALL CD_Reference_Frame(nodes_ref(:, a), nodes_ref(:, b), Lam0, L0)

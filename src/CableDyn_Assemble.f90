@@ -21,6 +21,7 @@ MODULE CableDyn_Assemble
   !! This module adds NO physics -- gravity, buoyancy, seabed, damping, drag, and
   !! the Newton solve live in later modules.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE CableDyn_CableElem, ONLY: CD_Compute_Cable_Element
   USE CableDyn_Mesh, ONLY: CD_Validate_Connectivity, CD_Validate_Positive, CD_Validate_NonNegative
 !$ USE OMP_LIB, ONLY: omp_in_parallel, omp_get_max_threads
@@ -380,6 +381,7 @@ CONTAINS
     !$OMP SHARED(n_elem, elem_conn, nodes, ea, l0, tension_only, fe, elem_es) &
     !$OMP PRIVATE(e, a, b, nodes6, Kt6, Te, em)
     DO e = 1, n_elem
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       nodes6(1:3) = nodes(:, a)
@@ -460,6 +462,7 @@ CONTAINS
     !$OMP SHARED(n_elem, elem_conn, nodes, ea, l0, tension_only, te_buf, elem_es) &
     !$OMP PRIVATE(e, a, b, nodes6, Kt6, fint6, em)
     DO e = 1, n_elem
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       nodes6(1:3) = nodes(:, a)

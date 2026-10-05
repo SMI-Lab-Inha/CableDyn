@@ -37,6 +37,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   !! dt that differs from it (a mismatched size would silently desync the cables, whose
   !! generalised-alpha step carries the Init dt, from the mooring columns).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_OpenFAST_FMF, ONLY: CD_FMF_ModuleType, CD_FMF_Init_From_System, CD_FMF_NMovingPoints, &
                                    CD_FMF_GetPointMesh, CD_FMF_UpdateStates, &
@@ -1102,6 +1103,7 @@ CONTAINS
       !$OMP   PRIVATE(c, col, es, em) &
       !$OMP   IF(self%ncable > 1 .AND. .NOT. CD_HermiteCable_Dyn_Profile_Enabled()) SCHEDULE(STATIC)
       DO c = 1, self%ncable
+        CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
         col = self%ncp_sys + c
         CALL CD_HFMF_UpdateStates(self%cables(c), position(:, col), velocity(:, col), acceleration(:, col), &
                                   es, em, orientation(:, :, col), self%mv_omega(:, col), self%mv_alpha(:, col))
@@ -1113,6 +1115,7 @@ CONTAINS
       !$OMP PARALLEL DO DEFAULT(NONE) SHARED(self, position, velocity, acceleration) PRIVATE(c, col, es, em) &
       !$OMP   IF(self%ncable > 1 .AND. .NOT. CD_HermiteCable_Dyn_Profile_Enabled()) SCHEDULE(STATIC)
       DO c = 1, self%ncable
+        CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
         col = self%ncp_sys + c
         CALL CD_HFMF_UpdateStates(self%cables(c), position(:, col), velocity(:, col), acceleration(:, col), es, em, &
                                   u_angular_velocity=self%mv_omega(:, col), &

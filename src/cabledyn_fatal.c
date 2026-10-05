@@ -32,6 +32,19 @@
 void cabledyn_fatal_report_install(void);
 void cabledyn_fatal_report_time(double simulated_time);
 double cabledyn_fatal_report_last_time(void);
+void cabledyn_fatal_thread_init(void);
+
+/* Stack kept for the handlers on each thread: the Windows stack guarantee, the size of a
+ * POSIX alternate signal stack. */
+#define CABLEDYN_HANDLER_STACK (64 * 1024)
+
+#if defined(_MSC_VER)
+#define CABLEDYN_THREAD_LOCAL __declspec(thread)
+#else
+#define CABLEDYN_THREAD_LOCAL _Thread_local
+#endif
+/* Whether this thread has its handler stack (or needs none). */
+static CABLEDYN_THREAD_LOCAL int cabledyn_thread_ready = 0;
 
 /* Simulated time of the last committed step; negative until the first one. An aligned
  * double is written in one store on every supported target, and the handlers only read it. */
@@ -128,6 +141,8 @@ static void line_finish(cabledyn_line *line)
 static LPTOP_LEVEL_EXCEPTION_FILTER cabledyn_previous_filter = NULL;
 /* Set by the first report, so one event that reaches two handlers is reported once. */
 static volatile LONG cabledyn_reported = 0;
+/* Set once the driver has installed the report. */
+static volatile LONG cabledyn_installed = 0;
 
 static void write_stderr(const cabledyn_line *line)
 {
@@ -282,22 +297,29 @@ static BOOL WINAPI cabledyn_console_handler(DWORD event)
     return FALSE;
 }
 
+/* Keep room on this thread's stack for the handlers to run after a stack overflow. */
+static void cabledyn_thread_setup(void)
+{
+    ULONG guarantee = CABLEDYN_HANDLER_STACK;
+    SetThreadStackGuarantee(&guarantee);
+}
+
 void cabledyn_fatal_report_install(void)
 {
-    static volatile LONG installed = 0;
-    ULONG guarantee = 64UL * 1024UL;
-    if (InterlockedExchange(&installed, 1) != 0) {
+    if (InterlockedExchange(&cabledyn_installed, 1) != 0) {
         return;
     }
-    /* Keep room on the main thread's stack for the handlers to run after a stack overflow. */
-    SetThreadStackGuarantee(&guarantee);
+    cabledyn_thread_ready = 1;
+    cabledyn_thread_setup();
     AddVectoredExceptionHandler(1, cabledyn_vectored_handler);
     cabledyn_previous_filter = SetUnhandledExceptionFilter(cabledyn_exception_filter);
     SetConsoleCtrlHandler(cabledyn_console_handler, TRUE);
 }
 
 #else /* POSIX */
+#include <pthread.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #define CABLEDYN_NSIG 8
@@ -305,8 +327,14 @@ static const int cabledyn_signals[CABLEDYN_NSIG] = {SIGSEGV, SIGBUS, SIGFPE, SIG
                                                     SIGABRT, SIGINT, SIGTERM, SIGHUP};
 static struct sigaction cabledyn_previous[CABLEDYN_NSIG];
 static volatile sig_atomic_t cabledyn_reported = 0;
-/* The alternate stack the handlers run on, so a stack overflow can still be reported. */
-static char cabledyn_altstack[64 * 1024];
+/* Set once the driver has installed the report. */
+static volatile int cabledyn_installed = 0;
+/* The main thread's alternate stack, so a stack overflow can still be reported. */
+static char cabledyn_altstack[CABLEDYN_HANDLER_STACK];
+/* Worker threads' alternate stacks, freed when each thread ends. */
+static pthread_key_t cabledyn_altstack_key;
+static pthread_once_t cabledyn_altstack_once = PTHREAD_ONCE_INIT;
+static int cabledyn_altstack_key_ok = 0;
 
 static const char *signal_name(int sig)
 {
@@ -332,17 +360,31 @@ static const char *signal_name(int sig)
     }
 }
 
-static void cabledyn_signal_handler(int sig)
+static int signal_index(int sig)
 {
     int k;
+    for (k = 0; k < CABLEDYN_NSIG; ++k) {
+        if (cabledyn_signals[k] == sig) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
+{
+    int k = signal_index(sig);
+    int fault = sig == SIGSEGV || sig == SIGBUS || sig == SIGFPE || sig == SIGILL;
+    /* A fault the hardware raised re-executes when the handler returns; one sent by kill()
+     * or raise() (si_code <= 0) does not, and is re-sent below. */
+    int synchronous = fault && info != NULL && info->si_code > 0;
     if (!cabledyn_reported) {
         cabledyn_line line;
-        int fault = sig == SIGSEGV || sig == SIGBUS || sig == SIGFPE || sig == SIGILL ||
-                    sig == SIGABRT;
         cabledyn_reported = 1;
         line.len = 0;
         line.text[0] = '\0';
-        line_add(&line, fault ? "\nCableDyn_driver: fatal error: " : "\nCableDyn_driver: stopped by ");
+        line_add(&line, fault || sig == SIGABRT ? "\nCableDyn_driver: fatal error: "
+                                                : "\nCableDyn_driver: stopped by ");
         line_add(&line, signal_name(sig));
         line_add(&line, " ");
         line_add_when(&line);
@@ -352,45 +394,112 @@ static void cabledyn_signal_handler(int sig)
             (void)ignored;
         }
     }
-    /* Hand the signal to whatever handled it before (the Fortran runtime's backtrace or the
-     * default action), so the exit status is unchanged. SA_NODEFER delivers it at once. */
-    for (k = 0; k < CABLEDYN_NSIG; ++k) {
-        if (cabledyn_signals[k] == sig) {
-            sigaction(sig, &cabledyn_previous[k], NULL);
-            break;
-        }
+    if (k < 0) {
+        return;
     }
+    /* Hand the signal to whatever handled it before (the Fortran runtime's backtrace or the
+     * default action), so the exit status and the fault context are unchanged. */
+    sigaction(sig, &cabledyn_previous[k], NULL);
+    if ((cabledyn_previous[k].sa_flags & SA_SIGINFO) != 0 &&
+        cabledyn_previous[k].sa_sigaction != NULL) {
+        /* A previous three-argument handler receives the original siginfo and context. */
+        cabledyn_previous[k].sa_sigaction(sig, info, context);
+        return;
+    }
+    if (synchronous) {
+        /* Returning re-executes the faulting instruction, which raises the same fault, with
+         * its own address and context, under the previous disposition. */
+        return;
+    }
+    /* An asynchronous signal (or a fault sent by kill/raise): send it again. SA_NODEFER
+     * delivers it at once. */
     raise(sig);
+}
+
+/* Free a worker thread's alternate stack when the thread ends. */
+static void cabledyn_altstack_release(void *stack)
+{
+    stack_t off;
+    memset(&off, 0, sizeof off);
+    off.ss_flags = SS_DISABLE;
+    sigaltstack(&off, NULL);
+    free(stack);
+}
+
+static void cabledyn_altstack_key_create(void)
+{
+    cabledyn_altstack_key_ok = pthread_key_create(&cabledyn_altstack_key, cabledyn_altstack_release) == 0;
+}
+
+/* An alternate signal stack for this thread, so a stack overflow can still be reported. A
+ * thread that already has one keeps it. */
+static void cabledyn_thread_setup(void)
+{
+    stack_t current, alt;
+    void *stack;
+    if (sigaltstack(NULL, &current) == 0 && (current.ss_flags & SS_DISABLE) == 0) {
+        return;
+    }
+    pthread_once(&cabledyn_altstack_once, cabledyn_altstack_key_create);
+    if (!cabledyn_altstack_key_ok) {
+        return;
+    }
+    stack = malloc(CABLEDYN_HANDLER_STACK);
+    if (stack == NULL) {
+        return;
+    }
+    memset(&alt, 0, sizeof alt);
+    alt.ss_sp = stack;
+    alt.ss_size = CABLEDYN_HANDLER_STACK;
+    alt.ss_flags = 0;
+    if (sigaltstack(&alt, NULL) != 0 || pthread_setspecific(cabledyn_altstack_key, stack) != 0) {
+        cabledyn_altstack_release(stack);
+    }
 }
 
 void cabledyn_fatal_report_install(void)
 {
-    static int installed = 0;
     stack_t alt;
     struct sigaction action;
     int k;
-    if (installed) {
+    if (cabledyn_installed) {
         return;
     }
-    installed = 1;
+    cabledyn_installed = 1;
+    cabledyn_thread_ready = 1;
+    /* The main thread uses a static alternate stack, which outlives every handler. */
     memset(&alt, 0, sizeof alt);
     alt.ss_sp = cabledyn_altstack;
     alt.ss_size = sizeof cabledyn_altstack;
     alt.ss_flags = 0;
     sigaltstack(&alt, NULL);
     memset(&action, 0, sizeof action);
-    action.sa_handler = cabledyn_signal_handler;
+    action.sa_sigaction = cabledyn_signal_handler;
     sigemptyset(&action.sa_mask);
-    action.sa_flags = SA_ONSTACK | SA_NODEFER;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     for (k = 0; k < CABLEDYN_NSIG; ++k) {
         if (sigaction(cabledyn_signals[k], NULL, &cabledyn_previous[k]) != 0) {
             continue;
         }
         /* A signal the parent set to be ignored (nohup, background job) stays ignored. */
-        if (cabledyn_previous[k].sa_handler == SIG_IGN) {
+        if ((cabledyn_previous[k].sa_flags & SA_SIGINFO) == 0 &&
+            cabledyn_previous[k].sa_handler == SIG_IGN) {
             continue;
         }
         sigaction(cabledyn_signals[k], &action, NULL);
     }
 }
 #endif
+
+/* Prepare the calling thread for the report: called at the start of every OpenMP parallel
+ * region, it gives each worker thread room to report its own stack overflow. It does nothing
+ * until the driver has installed the report, so a host that loads the library is untouched,
+ * and after the first call on a thread it costs one thread-local test. */
+void cabledyn_fatal_thread_init(void)
+{
+    if (cabledyn_thread_ready || !cabledyn_installed) {
+        return;
+    }
+    cabledyn_thread_ready = 1;
+    cabledyn_thread_setup();
+}

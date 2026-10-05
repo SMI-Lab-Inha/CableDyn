@@ -11,11 +11,12 @@ MODULE CableDyn_FatalReport
   !! handler that had it before, so the exit status is unchanged. CD_Fatal_Report_Time records
   !! that time; the time marches call it after every committed step. It only stores a number,
   !! so a host that loads the library without installing the handlers is not affected.
+  !! CD_Fatal_Thread_Init prepares each OpenMP worker thread in the same way.
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_DOUBLE
   USE CableDyn_Precision, ONLY: wp
   IMPLICIT NONE
   PRIVATE
-  PUBLIC :: CD_Fatal_Report_Install, CD_Fatal_Report_Time
+  PUBLIC :: CD_Fatal_Report_Install, CD_Fatal_Report_Time, CD_Fatal_Thread_Init
 
   INTERFACE
     SUBROUTINE c_fatal_report_install() BIND(C, name='cabledyn_fatal_report_install')
@@ -24,6 +25,13 @@ MODULE CableDyn_FatalReport
       IMPORT :: C_DOUBLE
       REAL(C_DOUBLE), VALUE :: simulated_time
     END SUBROUTINE c_fatal_report_time
+    SUBROUTINE CD_Fatal_Thread_Init() BIND(C, name='cabledyn_fatal_thread_init')
+      !! The first statement of every OpenMP parallel region: gives the calling thread room
+      !! to report its own stack overflow (a Windows stack guarantee, a POSIX alternate
+      !! signal stack). Does nothing until the driver has installed the report, and costs one
+      !! thread-local test after a thread's first call. tests/check_omp_fatal_init.cmake
+      !! checks that no parallel region lacks it.
+    END SUBROUTINE CD_Fatal_Thread_Init
   END INTERFACE
 
 CONTAINS

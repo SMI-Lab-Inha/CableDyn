@@ -10,12 +10,17 @@ PROGRAM test_fatal_report
   !!   test_fatal_report <fault> before|during
   !!       installs the report, optionally records a simulated time, and ends the process
   !!       with <fault>: overflow (unbounded recursion, a stack overflow), null (a write
-  !!       through a null pointer) or term (SIGTERM; POSIX only). tests/check_fatal_report.cmake
-  !!       checks the exit status and the stderr line.
+  !!       through a null pointer), omp_overflow (a stack overflow on an OpenMP worker thread)
+  !!       or term (SIGTERM; POSIX only). tests/check_fatal_report.cmake checks the exit status
+  !!       and the stderr line;
+  !!   test_fatal_report context
+  !!       (POSIX) a child process with an earlier three-argument SIGSEGV handler faults at a
+  !!       known address: that handler must receive the fault's own siginfo, the child must end
+  !!       by the fault's signal, and the report must be written once.
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_DOUBLE, C_INT
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install, CD_Fatal_Report_Time
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install, CD_Fatal_Report_Time, CD_Fatal_Thread_Init
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
 
@@ -28,6 +33,9 @@ PROGRAM test_fatal_report
     INTEGER(C_INT) FUNCTION raise_term() BIND(C, name='fatal_report_test_raise_term')
       IMPORT :: C_INT
     END FUNCTION raise_term
+    INTEGER(C_INT) FUNCTION fault_context() BIND(C, name='fatal_report_test_fault_context')
+      IMPORT :: C_INT
+    END FUNCTION fault_context
   END INTERFACE
 
   CHARACTER(4096) :: mode, arg2, arg3
@@ -55,6 +63,18 @@ PROGRAM test_fatal_report
     STOP
   END IF
 
+  IF (mode == 'context') THEN
+    SELECT CASE (fault_context())
+    CASE (-1)
+      WRITE (*, '(A)') 'SKIP: the fault-context check is POSIX-only'
+    CASE (0)
+      WRITE (*, '(A)') 'PASS: the fault reached the earlier handler with its own context'
+    CASE DEFAULT
+      CALL fail('the fault did not keep its own context')
+    END SELECT
+    STOP
+  END IF
+
   CALL CD_Fatal_Report_Install()
   CALL CD_Fatal_Report_Install() ! idempotent
   IF (arg2 == 'during') THEN
@@ -66,6 +86,8 @@ PROGRAM test_fatal_report
     WRITE (error_unit, '(A,I0)') 'unreachable: ', deep(1)
   CASE ('null')
     CALL null_write()
+  CASE ('omp_overflow')
+    CALL overflow_on_worker()
   CASE ('term')
     IF (raise_term() == 0_C_INT) THEN
       WRITE (*, '(A)') 'SKIP: no SIGTERM on this platform'
@@ -89,6 +111,26 @@ CONTAINS
     END IF
     r = deep(depth + 1) + frame(MOD(depth, 16384) + 1)
   END FUNCTION deep
+
+  SUBROUTINE overflow_on_worker()
+    !! A stack overflow on OpenMP worker thread 1 (its stack set by OMP_STACKSIZE) while the
+    !! main thread waits at the region's barrier.
+!$  USE omp_lib, ONLY: omp_get_num_threads, omp_get_thread_num
+    INTEGER :: r
+    r = 0
+    !$OMP PARALLEL NUM_THREADS(2) DEFAULT(SHARED) FIRSTPRIVATE(r)
+    CALL CD_Fatal_Thread_Init()
+!$  IF (omp_get_num_threads() >= 2) THEN
+!$    IF (omp_get_thread_num() == 1) THEN
+!$      r = deep(1)
+!$      WRITE (error_unit, '(A,I0)') 'unreachable: ', r
+!$    END IF
+!$  END IF
+    !$OMP END PARALLEL
+!$  CALL fail('the parallel region had no worker thread')
+    WRITE (*, '(A)') 'SKIP: this build has no OpenMP'
+    STOP
+  END SUBROUTINE overflow_on_worker
 
   SUBROUTINE fail(text)
     CHARACTER(*), INTENT(IN) :: text
