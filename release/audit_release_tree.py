@@ -53,6 +53,7 @@ REQUIRED_PATHS = {
     "src/CableDyn_CAPI.f90",
     "validation/README.md",
     "validation/RELEASE_0_1_0.md",
+    "validation/RELEASE_0_1_1.md",
 }
 SENSITIVE_PATTERNS = (
     ("Windows user path", re.compile(rb"[A-Za-z]:[\\/]+Users[\\/]+", re.IGNORECASE)),

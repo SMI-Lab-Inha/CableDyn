@@ -3,14 +3,15 @@
 # Validation data
 
 This directory is for reviewers and users who want to check or reproduce the published
-CableDyn v0.1.0 assessments. It holds the compact inputs, reduction scripts and numerical
+CableDyn assessments. It holds the compact inputs, reduction scripts and numerical
 results; the case definitions and pass criteria are in [`VALIDATION.md`](../VALIDATION.md).
 Source publications, third-party models for OrcaFlex (Orcina) and OrcaFlex output files are not
 redistributed.
 
 | Path | Contents |
 | --- | --- |
-| [`RELEASE_0_1_0.md`](RELEASE_0_1_0.md) | Toolchains, test results, dependency revisions and asset hashes for v0.1.0 |
+| [`RELEASE_0_1_1.md`](RELEASE_0_1_1.md) | Toolchains, test results, dependency revisions and asset hashes for v0.1.1 |
+| [`RELEASE_0_1_0.md`](RELEASE_0_1_0.md) | The same for v0.1.0 |
 | [`bodies/`](bodies/README.md) | Rigid-body, rod and shared-anchor cases with MoorDyn-C twins, stored references and pass limits |
 | [`experiments/`](experiments/README.md) | Holcombe et al. (2025) static lazy-wave and Bergdahl et al. (2016) dynamic-chain comparisons |
 | [`PERFORMANCE_0_1_0.md`](PERFORMANCE_0_1_0.md) | Wall time of CableDyn 0.1.0, MoorDyn-C and MoorDyn-F at equal accuracy on five mooring, cable, buoy and coupled cases |
