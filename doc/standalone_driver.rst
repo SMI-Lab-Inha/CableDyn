@@ -245,9 +245,11 @@ before the end, and their last time is below ``TMax``.
    * - interrupted: Ctrl+C or Ctrl+Break, closing the console window, logging off or shutting
        down, ``SIGINT``, ``SIGTERM`` or ``SIGHUP``
      - ``CableDyn_driver: stopped by <cause> after the step at simulated time t = <t> s`` on
-       stderr, followed by the Fortran runtime's own line where it has one (the release
-       Windows executable adds ``forrtl: error (200)`` and exits with ``1``; a GNU build exits
-       with ``0xC000013A`` on Windows and with the signal on Linux and macOS). Rows written while
+       stderr, followed by the Fortran runtime's own lines where it has them (the release
+       Windows executable adds ``forrtl: error (200)`` and a traceback, and exits with a non-zero
+       code, ``1`` or, when the traceback meets output in progress, ``152`` after ``forrtl:
+       severe (152)``; a GNU build exits with ``0xC000013A`` on Windows and with the signal on
+       Linux and macOS). Rows written while
        the process was stopping may extend slightly past the reported time
    * - a fatal fault, such as an access violation or a stack overflow
      - ``CableDyn_driver: fatal error: <cause> after the step at simulated time t = <t> s`` on

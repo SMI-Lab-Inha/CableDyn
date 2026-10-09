@@ -282,6 +282,17 @@ _PARTIAL_TABLE = "# CableDyn\nTime\tFairTen1\n0.0\t1.0\n7534.6\t2.0\n7534.65\t2.
             "ended abnormally (exit code 1); its output ends at t = 7534.6 s: "
             "CableDyn_driver: stopped by Ctrl+Break after the step at simulated time t = 97.400 s",
         ),
+        # The same when the runtime's traceback meets output in progress (forrtl 152): the
+        # driver's own report wins over the runtime's lines.
+        (
+            152,
+            _CONTRACT + "\nCableDyn_driver: stopped by Ctrl+Break after the step at simulated "
+            "time t = 2076.000 s. The run did not finish; its output files end at the last step "
+            "written.\nforrtl: error (200): program aborting due to control-BREAK event\n"
+            "forrtl: severe (152): unresolved contention for Intel Fortran RTL global resource\n",
+            None,
+            "ended abnormally (exit code 152): CableDyn_driver: stopped by Ctrl+Break",
+        ),
         (
             3,
             _CONTRACT + "\nCableDyn_driver: fatal error: access violation (exception 0xC0000005) "
