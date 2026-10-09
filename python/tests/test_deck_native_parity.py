@@ -1079,6 +1079,18 @@ def test_a_free_torsion_end_takes_any_reference_normal():
         )
 
 
+@pytest.mark.parametrize("pretwist", ["-360001", "1e8", "-1e300"])
+def test_static_twist_above_1000_turns_is_refused_by_name(pretwist):
+    text = _edit(_TORSION, (_TORSION_ROW_A, f"1 A Rigid 1 0 0 Rigid 0 0 1 {pretwist}\n"))
+    with pytest.raises(DeckFormatError, match=r"line 1: the imposed twist .* exceeds 1000 turns"):
+        DeckFile.from_text(text)
+
+
+def test_static_twist_of_1000_turns_is_accepted():
+    text = _edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Rigid 0 0 1 -359000\n"))
+    DeckFile.from_text(text)
+
+
 _PARITY_DRIVER = (
     os.environ.get("CABLEDYN_TEST_DRIVER", "").strip()
     or os.environ.get("CABLEDYN_DRIVER", "").strip()
@@ -1108,6 +1120,8 @@ _PARITY_DRIVER = (
         "1 A Rigid 1 0 0 Rigid 1 0 0.0011 0",
         "1 A Rigid 1 0 0 Rigid 0 0 1 nan",
         "1 A Rigid 1 0 0 Rigid 0 0 1 1e400",
+        "1 A Rigid 1 0 0 Rigid 0 0 1 -360001",
+        "1 A Rigid 1 0 0 Rigid 0 0 1 1e8",
         "1 A Rigid 1 0 0 Free 0 0 0 0",
         "1 A Rigid 1 0 0 Free 1 0 0 -7200",
         "1 A Rigid 1 0 0 Free 0 nan 1 0",

@@ -314,6 +314,8 @@ _ROD_ATTACHMENT_ALIASES = {
 _RIGID_END_CONNECTIONS = frozenset({"rigid", "infinity", "inf"})
 # TorsStiffness keywords of an end free to twist (a numeric 0 is free too)
 _FREE_TORSION_KEYWORDS = frozenset({"free", "zero"})
+# native CD_HTORS_MAX_TWIST: the largest imposed static twist, 1000 turns
+_MAX_STATIC_TWIST_DEG = 360000.0
 # Native TORS_NX_PARALLEL_TOL: smallest |Nx x Ez| of unit vectors (about 0.06 degrees off Ez).
 _TORSION_NORMAL_PARALLEL_TOL = 1.0e-3
 _WATERKIN_FILENAME_LETTERS = frozenset("abcdfghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
@@ -2863,6 +2865,7 @@ class DeckFile:
         assigned_end_connections: set[tuple[str, str]] = set()
         # line id -> {end: torsionally restrained} from the optional torsion columns
         torsion_ends: dict[str, dict[str, bool]] = {}
+        torsion_pretwist: dict[str, dict[str, float]] = {}
         for row in self.end_connections:
             if len(row.tokens) not in (6, 10, 11):
                 raise DeckFormatError(
@@ -2946,8 +2949,10 @@ class DeckFile:
                     )
                     for index in range(7, 10)
                 ]
+                pretwist = 0.0
                 if len(row.tokens) == 11:
-                    numeric(row.tokens[10], row, "END CONNECTIONS pretwist")
+                    pretwist = numeric(row.tokens[10], row, "END CONNECTIONS pretwist")
+                torsion_pretwist.setdefault(line_id, {})[end] = pretwist
                 if restrained:
                     # a Free end has no torsion frame: its normal is not checked (native)
                     self._check_torsion_normal(where, row, normal, direction, norm)
@@ -3032,6 +3037,7 @@ class DeckFile:
         }
         torsion_lines = self._check_torsion_lines(
             torsion_ends,
+            torsion_pretwist,
             section_types_by_line,
             line_type_meta,
             line_type_gj,
@@ -3781,6 +3787,7 @@ class DeckFile:
     def _check_torsion_lines(
         self,
         torsion_ends: dict[str, dict[str, bool]],
+        torsion_pretwist: dict[str, dict[str, float]],
         section_types_by_line: dict[str, list[str]],
         line_type_meta: dict[str, tuple[float, float, float, float]],
         line_type_gj: dict[str, float],
@@ -3818,6 +3825,12 @@ class DeckFile:
             # one restrained end only carries no torque: noted and ignored
             if not (ends.get("a", False) and ends.get("b", False)):
                 continue
+            twist = torsion_pretwist[line_id]["b"] - torsion_pretwist[line_id]["a"]
+            if abs(twist) > _MAX_STATIC_TWIST_DEG:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: the imposed twist Pretwist(B) - Pretwist(A) = "
+                    f"{twist:.5e} deg exceeds 1000 turns (360000 deg), the largest static twist"
+                )
             end_a, end_b = normalized_line_endpoints[line_id]
             if point_types[end_b] != "fixed":
                 raise DeckFormatError(
