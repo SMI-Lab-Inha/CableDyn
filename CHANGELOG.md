@@ -20,6 +20,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   its scope, coupled OpenFAST (NLR) runs included, stop with a named error; results without
   torsion are unchanged.
 
+### Changed
+
+- Python: NumPy arrays in the public functions carry explicit element types, and the package
+  type-checks under `mypy --strict` on Python 3.10 and on current NumPy. Tests that need the
+  native shared library are skipped with a reason when it has not been built.
+- The test suite runs in parallel (`ctest -j`) and holds on hosted CI runners: the catenary
+  reference solve converges from a robust start on every platform, and the driver-path tests
+  check the case-insensitive spelling of an output root only on Windows.
+
 ### Fixed
 
 - The standalone driver no longer ends without a word when its process is interrupted or hits a
@@ -60,6 +69,7 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `openfast.exe` stack.
 - Builds with gfortran 16 are free of `-Wuninitialized` warnings; the reported values (the
   bounds of unallocated components) were never read.
+- The EPUB edition of the manual no longer contains the `.nojekyll` marker file.
 
 ## [0.1.0] - 2026-10-01
 
