@@ -329,7 +329,9 @@ add_library(cabledyn_obj OBJECT
   src/cabledyn_blas.c
   src/cabledyn_crt_locale.c
   src/cabledyn_path.c
+  src/cabledyn_fatal.c
   src/CableDyn_Precision.f90
+  src/CableDyn_FatalReport.f90
   src/CableDyn_PathIO.f90
   src/CableDyn_Banner.f90
   src/CableDyn_Linalg.f90
@@ -1319,6 +1321,13 @@ if(Python3_Interpreter_FOUND)
     LABELS "python;documentation;examples"
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # Every OpenMP parallel region prepares its threads for the abnormal-end report.
+  add_test(NAME omp_fatal_init
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_omp_fatal_init.py)
+  set_tests_properties(omp_fatal_init PROPERTIES
+    LABELS "python;unit;stack"
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   add_test(NAME documentation_sources
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_documentation.py)
   set_tests_properties(documentation_sources PROPERTIES
@@ -1660,10 +1669,22 @@ target_link_libraries(test_stream_wave PRIVATE cabledyn_core)
 add_test(NAME stream_wave COMMAND test_stream_wave)
 set_tests_properties(stream_wave PROPERTIES LABELS "fortran;unit;driver;dynamic;validation;orcaflex")
 
-add_executable(test_modal tests/test_modal.f90)
+add_executable(test_modal tests/test_modal.f90 tests/blas_config_probe.c)
 target_link_libraries(test_modal PRIVATE cabledyn_core)
 add_test(NAME modal COMMAND test_modal)
 set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validation")
+# The modal eigensolves through CableDyn's LAPACK layer with every argument array against a
+# no-access page: no read or write outside the arrays the modal code passes.
+if(NOT CABLEDYN_STATIC_WINDOWS_RELEASE)
+  add_executable(test_lapack_guard_pages tests/test_lapack_guard_pages.c)
+  target_link_libraries(test_lapack_guard_pages PRIVATE cabledyn_core)
+  set_target_properties(test_lapack_guard_pages PROPERTIES LINKER_LANGUAGE Fortran)
+  add_test(NAME lapack_guard_pages COMMAND test_lapack_guard_pages)
+  set_tests_properties(lapack_guard_pages PROPERTIES
+                       LABELS "c;unit;static" TIMEOUT 300
+                       ENVIRONMENT "OPENBLAS_CORETYPE=Haswell"
+                       FAIL_REGULAR_EXPRESSION "FAIL:")
+endif()
 
 # Stack bound (GNU Windows builds): the modal test and the driver relinked with a 1 MiB stack
 # reserve, half the MinGW default, instead of the 64 MiB reserve of the other executables. A
@@ -1674,7 +1695,7 @@ set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validat
 # the library on every platform.
 if(CABLEDYN_GNU_WINDOWS_STACK)
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/stack_small")
-  add_executable(test_modal_small_stack tests/test_modal.f90)
+  add_executable(test_modal_small_stack tests/test_modal.f90 tests/blas_config_probe.c)
   target_link_libraries(test_modal_small_stack PRIVATE cabledyn_core)
   add_executable(cabledyn_small_stack app/cabledyn.f90)
   target_link_libraries(cabledyn_small_stack PRIVATE cabledyn_core)
@@ -1807,6 +1828,66 @@ add_executable(test_crt_locale_guard tests/test_crt_locale_guard.f90 tests/crt_l
 target_link_libraries(test_crt_locale_guard PRIVATE cabledyn_core)
 add_test(NAME crt_locale_guard COMMAND test_crt_locale_guard $<IF:$<BOOL:${MINGW}>,1,0>)
 set_tests_properties(crt_locale_guard PROPERTIES LABELS "fortran;unit")
+# An abnormal end of the driver process is never silent: a stack overflow (on a 1 MiB stack
+# in Windows GNU builds), an access violation and, off Windows, SIGTERM each end the process
+# with a report on stderr of the cause and the simulated time reached; the march records the
+# time of every committed step for that report.
+add_executable(test_fatal_report tests/test_fatal_report.f90 tests/fatal_report_faults.c)
+target_link_libraries(test_fatal_report PRIVATE cabledyn_core)
+if(CABLEDYN_GNU_WINDOWS_STACK)
+  target_link_options(test_fatal_report PRIVATE "-Wl,--stack,${CABLEDYN_SMALL_STACK_RESERVE}")
+endif()
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/fatal_report")
+add_test(NAME fatal_report_march
+         COMMAND test_fatal_report march ${CMAKE_CURRENT_SOURCE_DIR}/examples/dynamic_chain_held.dat
+                 ${CMAKE_BINARY_DIR}/fatal_report/march)
+set_tests_properties(fatal_report_march PROPERTIES LABELS "fortran;unit;driver;dynamic")
+# The cause names the fault as each platform delivers it (macOS may deliver SIGBUS).
+foreach(_fatal IN ITEMS "overflow|during|(stack overflow|segmentation fault|bus error)"
+                        "overflow|before|(stack overflow|segmentation fault|bus error)"
+                        "null|during|(access violation|segmentation fault|bus error)"
+                        "term|during|a termination request")
+  string(REPLACE "|" ";" _fatal_case "${_fatal}")
+  list(GET _fatal_case 0 _fatal_mode)
+  list(GET _fatal_case 1 _fatal_when)
+  list(SUBLIST _fatal_case 2 -1 _fatal_cause)
+  string(JOIN "|" _fatal_cause ${_fatal_cause})
+  add_test(NAME fatal_report_${_fatal_mode}_${_fatal_when}
+           COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:test_fatal_report> -DMODE=${_fatal_mode}
+                   -DWHEN=${_fatal_when} "-DCAUSE=${_fatal_cause}"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_fatal_report.cmake)
+  set_tests_properties(fatal_report_${_fatal_mode}_${_fatal_when} PROPERTIES
+                       LABELS "fortran;unit;driver;stack" TIMEOUT 120)
+endforeach()
+# A stack overflow on an OpenMP worker thread with a 1 MiB stack is reported too: every
+# thread that enters a parallel region gets room for the handlers (tests/test_omp_fatal_init.py
+# checks that every region of the library and the driver asks for it).
+add_test(NAME fatal_report_omp_overflow_during
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:test_fatal_report> -DMODE=omp_overflow
+                 -DWHEN=during "-DCAUSE=(stack overflow|segmentation fault|bus error)"
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_fatal_report.cmake)
+set_tests_properties(fatal_report_omp_overflow_during PROPERTIES
+                     LABELS "fortran;unit;driver;stack" TIMEOUT 120
+                     ENVIRONMENT "OMP_NUM_THREADS=2;OMP_STACKSIZE=1M")
+# POSIX: a hardware fault keeps its own siginfo and context through the report.
+add_test(NAME fatal_report_fault_context COMMAND test_fatal_report context)
+set_tests_properties(fatal_report_fault_context PROPERTIES
+                     LABELS "fortran;unit;driver;stack" TIMEOUT 120
+                     FAIL_REGULAR_EXPRESSION "FAIL:")
+# POSIX: the report keeps every previous disposition -- an ignored signal (with or without
+# SA_SIGINFO) stays ignored, a default one still ends the process, a handler still runs.
+add_test(NAME fatal_report_sent_faults COMMAND test_fatal_report sent_faults)
+set_tests_properties(fatal_report_sent_faults PROPERTIES
+                     LABELS "fortran;unit;driver" TIMEOUT 120
+                     FAIL_REGULAR_EXPRESSION "FAIL:")
+add_test(NAME fatal_report_altstack COMMAND test_fatal_report altstack)
+set_tests_properties(fatal_report_altstack PROPERTIES
+                     LABELS "fortran;unit;driver;stack" TIMEOUT 120
+                     FAIL_REGULAR_EXPRESSION "FAIL:")
+add_test(NAME fatal_report_dispositions COMMAND test_fatal_report dispositions)
+set_tests_properties(fatal_report_dispositions PROPERTIES
+                     LABELS "fortran;unit;driver" TIMEOUT 120
+                     FAIL_REGULAR_EXPRESSION "FAIL:")
 add_test(
   NAME driver_repeat_exit
   COMMAND ${CMAKE_COMMAND}

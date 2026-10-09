@@ -18,6 +18,7 @@ MODULE CableDyn_CosseratAssemble
   !! and scatter-adds Kt(12,12)/fint(12). The static solver can also assemble the
   !! free-DOF tangent block directly into LAPACK DGBSV band storage.
   USE CableDyn_Precision, ONLY: wp, CD_All_Finite, CD_Is_Finite
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE CableDyn_Cosserat, ONLY: CD_Reference_Frame, CD_Cosserat_Internal_Force, CD_Cosserat_Force_Tangent
   USE CableDyn_Mesh, ONLY: CD_Validate_Connectivity
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
@@ -112,9 +113,11 @@ CONTAINS
     Ke = 0.0_wp
     elem_es = 0
     elem_em = ''
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) &
+    !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, fe, Ke, elem_es, elem_em) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
       a = elem_conn(1, e)
       b = elem_conn(2, e)
@@ -131,7 +134,8 @@ CONTAINS
         Ke(:, :, e) = Kte
       END IF
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (elem_es(e) /= 0) THEN
         Kt = 0.0_wp; fint = 0.0_wp
@@ -312,9 +316,11 @@ CONTAINS
     work%Ke(:, :, 1:n_elem) = 0.0_wp
     work%elem_es(1:n_elem) = 0
     work%elem_em(1:n_elem) = ''
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) &
+    !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
       a = elem_conn(1, e)
       b = elem_conn(2, e)
@@ -331,7 +337,8 @@ CONTAINS
         work%Ke(:, :, e) = Kte
       END IF
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (work%elem_es(e) /= 0) THEN
         Kb = 0.0_wp; fint = 0.0_wp
@@ -425,9 +432,11 @@ CONTAINS
     work%fe(:, 1:n_elem) = 0.0_wp
     work%elem_es(1:n_elem) = 0
     work%elem_em(1:n_elem) = ''
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) &
+    !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, es, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
       a = elem_conn(1, e)
       b = elem_conn(2, e)
@@ -443,7 +452,8 @@ CONTAINS
         work%fe(:, e) = finte
       END IF
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (work%elem_es(e) /= 0) THEN
         fint = 0.0_wp

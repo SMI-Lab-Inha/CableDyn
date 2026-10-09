@@ -394,6 +394,8 @@ src/
     cabledyn_blas.c            BLAS thread policy; run-time OpenBLAS loading (Windows GNU)
     cabledyn_mutex.c           C-ABI registry and initialisation locks
     cabledyn_crt_locale.c      MinGW-w64 guard for libgfortran's locale restore
+    CableDyn_FatalReport.f90   abnormal-end report of the driver (time reached)
+    cabledyn_fatal.c           interrupt, fault and stack-overflow handlers of the driver
 
   EI = 0 cable path:
     CableDyn_Mesh.f90          connectivity, property, and DOF-partition validation

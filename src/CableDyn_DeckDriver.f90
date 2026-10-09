@@ -31,6 +31,7 @@ MODULE CableDyn_DeckDriver
   !! scope. Features outside it parse but FAIL CLOSED with a clear error naming the unsupported
   !! feature.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
+  USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Time
   USE CableDyn_Loads, ONLY: CD_Submerged_Weight, CD_Equivalent_Buoyant_Section, CD_Assemble_Distributed_Load
   USE CableDyn_Assemble, ONLY: CD_Compute_Cable_Tension, CD_Cable_Free_Bandwidth, &
                                CD_Assemble_Cable_Tangent_Force_Banded_Free
@@ -25770,8 +25771,9 @@ CONTAINS
   END SUBROUTINE start_driver_progress
 
   SUBROUTINE update_driver_progress(progress, step, simulated_time)
-    !! Report only committed steps. ETA is based on average elapsed wall time per
-    !! committed step, so failed/retried nonlinear work is honestly included.
+    !! Called after every committed step; prints at 5% spacing. ETA is based on average
+    !! elapsed wall time per committed step, so failed/retried nonlinear work is honestly
+    !! included.
     TYPE(DriverProgress), INTENT(IN) :: progress
     INTEGER, INTENT(IN) :: step
     REAL(wp), INTENT(IN) :: simulated_time
@@ -25780,6 +25782,8 @@ CONTAINS
     REAL(wp) :: elapsed, remaining, percent
     CHARACTER(16) :: elapsed_text, remaining_text
 
+    ! Every committed step: the time an abnormal end of the process reports.
+    CALL CD_Fatal_Report_Time(simulated_time)
     IF (progress%nstep <= 0 .OR. step <= 0) RETURN
     IF (step < progress%nstep .AND. MOD(step, progress%report_stride) /= 0) RETURN
     CALL SYSTEM_CLOCK(now)

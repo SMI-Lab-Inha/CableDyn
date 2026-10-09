@@ -321,7 +321,10 @@ def test_cabledyn_study_failed_case_exits_one(fake_driver, tmp_path, capsys, mon
     assert "only: failed: CableDyn driver failed with exit code 3" in out
     assert (tmp_path / "study-results" / "only.stderr.log").read_text(
         encoding="utf-8"
-    ).strip() == "CableDyn_driver: deck line 3: synthetic failure"
+    ).strip().splitlines() == [
+        "CableDyn_driver: deck line 3: synthetic failure",
+        "CableDyn_driver: ended with exit code 3",
+    ]
 
 
 def test_cabledyn_study_preflight_errors_exit_two(fake_driver, tmp_path, capsys):

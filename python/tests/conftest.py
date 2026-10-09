@@ -40,6 +40,7 @@ if mode in {"fail", "partial-fail"}:
         with open(root + ".out", "w") as stream:
             stream.write("Time(s) FairTen1\n0.0 1.0\n")
     sys.stderr.write("CableDyn_driver: deck line 3: synthetic failure\n")
+    sys.stderr.write("CableDyn_driver: ended with exit code 3\n")
     sys.exit(3)
 if mode == "no-output":
     sys.exit(0)

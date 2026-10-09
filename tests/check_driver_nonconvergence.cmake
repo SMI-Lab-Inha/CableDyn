@@ -16,6 +16,18 @@ if(NOT driver_result EQUAL 2)
     "stdout:\n${driver_stdout}\nstderr:\n${driver_stderr}")
 endif()
 
+if(NOT driver_stderr MATCHES "CableDyn_driver: ended with exit code 2[\r\n]*$")
+  message(FATAL_ERROR "stderr does not end with the closing line for exit code 2:\n${driver_stderr}")
+endif()
+# The start-up statement of that contract, exactly as python/cabledyn/driver.py recognises it:
+# without it a caller cannot tell an outside kill from an older driver's refusal.
+string(FIND "${driver_stderr}"
+       "  Exit status: every failure ends stderr with \"CableDyn_driver: ended with exit code <n>\"."
+       contract_at)
+if(contract_at LESS 0)
+  message(FATAL_ERROR "stderr lacks the exit-status statement:\n${driver_stderr}")
+endif()
+
 set(driver_text "${driver_stdout}\n${driver_stderr}")
 if(NOT driver_text MATCHES "did not converge" OR
    NOT driver_text MATCHES "inspection only")

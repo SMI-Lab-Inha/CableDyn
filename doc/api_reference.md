@@ -176,6 +176,8 @@ The exchange contract is in {doc}`coupling_boundary`.
   - modal analysis about the static equilibrium (`nModes`, `<root>.modes.out`)
 * - `CableDyn_PathIO`
   - UTF-8 file names converted to the spelling the Fortran runtime opens exactly
+* - `CableDyn_FatalReport`
+  - the driver's report of an interrupt or a fatal fault, with the simulated time of the last committed step
 ```
 
 ## C helper sources
@@ -194,4 +196,6 @@ The exchange contract is in {doc}`coupling_boundary`.
   - process-local locks of the C ABI (handle registry and deck initialisation)
 * - `cabledyn_crt_locale.c`
   - a guard around the numeric-locale handling of the MinGW-w64 Fortran runtime
+* - `cabledyn_fatal.c`
+  - the driver's report of an interrupt or a fatal fault with the simulated time reached (the counterpart of `CableDyn_FatalReport`)
 ```
