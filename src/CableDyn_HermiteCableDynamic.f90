@@ -1336,6 +1336,15 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Set_EndConnection: model is not initialised'
       RETURN
     END IF
+    ! The torsion end frames take a rigid end's director from its connection and its Theta from
+    ! the current tangents: changing the connections under an installed torsion would leave both
+    ! stale, so the connections come first.
+    IF (model%torsion%active) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_EndConnection: the model carries torsion; set the end connections '// &
+               'before the torsion (CD_HermiteCable_Dyn_Set_Torsion)'
+      RETURN
+    END IF
 
     IF (.NOT. CD_All_Finite(k_rot) .OR. ANY(k_rot < CD_ZERO)) THEN
       ErrStat = CD_HCDYN_BADINPUT
@@ -4803,7 +4812,7 @@ CONTAINS
     REAL(wp) :: saved_step_ends(3, 4), saved_step_phi, saved_snap_theta, saved_snap_phi, saved_snap_ends(3, 4)
     REAL(wp) :: saved_drive_ends(3, 4), saved_drive_phi
     LOGICAL :: saved_snap_valid, saved_drive_set
-    INTEGER :: es
+    INTEGER :: es, iend
     CHARACTER(200) :: em
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
@@ -4828,6 +4837,18 @@ CONTAINS
         ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: the torsion state has no accepted Theta (solve the statics first)'
         RETURN
       END IF
+      ! as in the statics: a rigid end's director is its connection direction (the tangent there)
+      DO iend = 1, 2
+        IF (.NOT. model%has_endconn) EXIT
+        IF (model%endconn_mode(iend) /= CD_ENDCONN_RIGID) CYCLE
+        IF (NORM2(torsion%ends(:, 2*iend - 1) - model%endconn_d0(:, iend)) > 1.0e-8_wp) THEN
+          ErrStat = CD_HCDYN_BADINPUT
+          WRITE (em, '(A,I0,A)', IOSTAT=es) 'the director at rigid end ', iend, &
+            ' must be its connection direction (set the end connections first)'
+          ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: '//TRIM(em)
+          RETURN
+        END IF
+      END DO
       IF (model%tors_work%nn /= model%nn) THEN
         CALL CD_HermiteTorsion_Work_Init(model%tors_work, model%nn, es, em)
         IF (es /= CD_HTORS_OK) THEN

@@ -531,7 +531,8 @@ CONTAINS
     !! it invalidates the step snapshot as a new end connection does: a later Restore fails
     !! closed instead of rewinding to a state taken under the old loads. (b) A rejected
     !! description leaves the model and its snapshot as they were. (c) CD_HFMF_End returns the
-    !! module's torsion fields to their defaults.
+    !! module's torsion fields to their defaults. (d) End connections set under an installed
+    !! torsion and (e) a torsion director off a rigid connection direction are refused.
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab
     TYPE(CD_HermiteTorsionType) :: tors
     REAL(wp) :: q(NDOF), th0
@@ -561,6 +562,21 @@ CONTAINS
     CALL CD_HFMF_Restore(cab, es, em)
     CALL require(es /= CD_HFMF_OK, 'L: Restore after a new torsion description fails closed')
     CALL require(ABS(cab%line%torsion%phi - 2.0_wp) <= 0.0_wp, 'L: the failed Restore keeps the new torsion')
+    ! (d) the end connections come before the torsion, whose rigid-end directors follow them
+    CALL CD_HermiteCable_Dyn_Set_EndConnection(cab%line, [0.0_wp, 0.0_wp], &
+                                               RESHAPE([0.0_wp, 1.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]), &
+                                               es, em, connection_mode=[CD_ENDCONN_RIGID, CD_ENDCONN_RIGID])
+    CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'before the torsion') > 0, &
+                 'L: an end connection set under an installed torsion is refused by name (got: '//TRIM(em)//')')
+    CALL require(NORM2(cab%line%endconn_d0(:, 1) - [1.0_wp, 0.0_wp, 0.0_wp]) <= 0.0_wp, &
+                 'L: the refused end connection leaves the connection direction')
+    ! (e) a torsion director that is not the rigid connection direction is refused
+    CALL torsion_of(q, 2.0_wp, tors)
+    tors%ends(:, 1) = [0.0_wp, 1.0_wp, 0.0_wp]
+    tors%ends(:, 2) = [0.0_wp, 0.0_wp, 1.0_wp]
+    CALL CD_HermiteCable_Dyn_Set_Torsion(cab%line, tors, es, em)
+    CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'connection direction') > 0, &
+                 'L: a director off the rigid connection direction is refused (got: '//TRIM(em)//')')
     ! (c) End resets the parent-attached torsion frame
     CALL require(cab%tors_parent .AND. cab%tors_index == 2, 'L: the built cable has a parent torsion frame')
     CALL CD_HFMF_End(cab)

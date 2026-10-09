@@ -79,7 +79,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Torsion: installing a torsion description on a dynamic cable now invalidates its step
   snapshot, as a new end connection does, so a later restore cannot rewind to a state taken
   under the previous loads; a rejected description leaves the cable and its snapshot as they
-  were, and ending a cable module also clears its torsion frame.
+  were, and ending a cable module also clears its torsion frame. End connections set after
+  the torsion, and a torsion director that is not the rigid connection direction, are refused
+  by name.
 
 ## [0.1.0] - 2026-10-01
 
