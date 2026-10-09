@@ -68,12 +68,19 @@ def _timeout_stream(value: str | bytes | None) -> str:
 _CLOSING_LINE = re.compile(r"CableDyn_driver: ended with exit code -?\d+\s*\Z")
 # The start-up line of a driver that writes the closing line on every failure (app/cabledyn.f90).
 _EXIT_CONTRACT = re.compile(
-    r"^\s*Exit status: every failure ends stderr with "
+    r"^\s*Exit status: .*ends stderr with "
     r"\"CableDyn_driver: ended with exit code <n>\"",
     re.MULTILINE,
 )
 # The driver's report of an interrupt or a fatal fault (src/cabledyn_fatal.c).
 _ABNORMAL_REPORT = re.compile(r"^CableDyn_driver: (?:fatal error:|stopped by) .*$", re.MULTILINE)
+# The Fortran runtime's own report of an error it ends the process on (for example memory
+# exhaustion), which leaves no closing line.
+_RUNTIME_REPORT = re.compile(
+    r"^(?:forrtl: |Fortran runtime error|Error allocating|Operating system error|"
+    r"Program received signal).*$",
+    re.MULTILINE,
+)
 
 
 def _last_output_time(main: Path, window: int = 1 << 20) -> float | None:
@@ -113,6 +120,12 @@ def _failure_message(returncode: int, stdout: str, stderr: str, main: Path) -> s
     report = _ABNORMAL_REPORT.findall(stderr)
     if report:
         return f"CableDyn driver ended abnormally (exit code {returncode}){reached}: {report[-1]}"
+    runtime = _RUNTIME_REPORT.findall(stderr)
+    if runtime:
+        return (
+            f"CableDyn driver ended with a Fortran runtime error (exit code {returncode})"
+            f"{reached}: {runtime[-1].strip()}"
+        )
     if not _EXIT_CONTRACT.search(stderr):
         # A driver that does not state the exit contract (0.1.0 and older) writes no closing
         # line on any failure, so its own refusals look just like this: report them as such.

@@ -207,7 +207,8 @@ static const char *exception_name(DWORD code)
         return "array bounds exceeded";
     case EXCEPTION_NONCONTINUABLE_EXCEPTION:
         return "non-continuable exception";
-    case 0xC0000409UL: /* STATUS_STACK_BUFFER_OVERRUN: also raised by abort() / fast-fail */
+    case 0xC0000409UL: /* STATUS_STACK_BUFFER_OVERRUN raised as an exception; __fastfail,
+                          * which UCRT abort() uses, bypasses every handler */
         return "fast-fail abort";
     case 0xC0000374UL: /* STATUS_HEAP_CORRUPTION */
         return "heap corruption";
@@ -352,7 +353,9 @@ static BOOL WINAPI cabledyn_console_handler(DWORD event)
     return FALSE;
 }
 
-/* Keep room on this thread's stack for the handlers to run after a stack overflow. */
+/* Keep room on this thread's stack for the handlers to run after a stack overflow. The
+ * guarantee is taken from the usable stack of every thread (the main thread and each OpenMP
+ * worker). */
 static void cabledyn_thread_setup(void)
 {
     ULONG guarantee = CABLEDYN_HANDLER_STACK;

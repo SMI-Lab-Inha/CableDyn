@@ -29,7 +29,7 @@ MODULE CableDyn_FatalReport
       !! The first statement of every OpenMP parallel region: gives the calling thread room
       !! to report its own stack overflow (a Windows stack guarantee, a POSIX alternate
       !! signal stack). Does nothing until the driver has installed the report, and costs one
-      !! thread-local test after a thread's first call. tests/check_omp_fatal_init.cmake
+      !! thread-local test after a thread's first call. tests/test_omp_fatal_init.py
       !! checks that no parallel region lacks it.
     END SUBROUTINE CD_Fatal_Thread_Init
   END INTERFACE

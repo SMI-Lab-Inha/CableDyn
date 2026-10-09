@@ -226,6 +226,20 @@ try {
     & $driver (Join-Path $CableDynRoot 'examples\chain_catenary_shallow_30m.dat') $driverRoot
     if ($LASTEXITCODE -ne 0) { throw 'CableDyn_driver.exe static smoke case failed' }
 
+    # Exit-contract gate: a run states the contract at start, and a refused input exits 1
+    # with the closing line last on stderr (doc/standalone_driver.rst, "Exit status").
+    $contractRun = Invoke-NativeCapture $driver @(
+        (Join-Path $CableDynRoot 'examples\chain_catenary_shallow_30m.dat'), $driverRoot)
+    if ($contractRun.ExitCode -ne 0 -or $contractRun.Text -notmatch '(?m)^\s*Exit status: .*ended with exit code <n>') {
+        throw "CableDyn_driver.exe does not state its exit contract at start`n$($contractRun.Text)"
+    }
+    $refusal = Invoke-NativeCapture $driver @((Join-Path $cdBuild 'no_such_deck.dat'), (Join-Path $cdBuild 'no_such'))
+    $refusalLast = @($refusal.Text -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1
+    if ($refusal.ExitCode -ne 1 -or $refusalLast -notmatch '^CableDyn_driver: ended with exit code 1\s*$') {
+        throw "CableDyn_driver.exe refused input did not end with the closing line (exit $($refusal.ExitCode))`n$($refusal.Text)"
+    }
+    Write-Host 'PASS exit contract: start-up statement and closing line on a refused input'
+
     # Non-ANSI folder gate: a working folder whose name mixes Latin-1, Hangul, and accented
     # characters is outside every single ANSI code page, so only the embedded UTF-8
     # active-code-page manifest lets the Fortran runtime open files there. Run once from

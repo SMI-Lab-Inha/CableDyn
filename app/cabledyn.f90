@@ -103,8 +103,8 @@ PROGRAM cabledyn
   ! The exit contract, stated once at start: a caller that finds this line and later no
   ! closing line knows the process was ended from outside (a driver older than this line
   ! writes neither, so its failures must not be read that way).
-  WRITE (error_unit, '(A)') '  Exit status: every failure ends stderr with "'//PROG// &
-    ': ended with exit code <n>".'
+  WRITE (error_unit, '(A)') '  Exit status: every non-zero exit the driver makes itself '// &
+    'ends stderr with "'//PROG//': ended with exit code <n>".'
   ! The LAPACK runtime is loaded on first use in the Windows GNU build; a missing or
   ! incompatible library stops here with its diagnostic instead of as a solver failure.
   CALL CD_Blas_Runtime_Check(PROG, ErrStat, ErrMsg)
@@ -259,7 +259,7 @@ CONTAINS
     LOGICAL :: clash
 
     IF (PRESENT(input_spelling)) THEN
-      spelling = input_spelling
+      ALLOCATE (spelling, SOURCE=input_spelling)
     ELSE
       CALL CD_Native_Path(input, spelling, stat, why)
       ! A name the runtime cannot spell is not one of the outputs, which it can.

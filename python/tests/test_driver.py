@@ -244,7 +244,8 @@ def test_nonzero_exit_preserves_native_diagnostic(tmp_path, monkeypatch):
 _CLOSING = "CableDyn_driver: ended with exit code 2\n"
 # The start-up line of a driver that writes the closing line on every failure.
 _CONTRACT = (
-    '  Exit status: every failure ends stderr with "CableDyn_driver: ended with exit code <n>".\n'
+    "  Exit status: every non-zero exit the driver makes itself ends stderr with "
+    '"CableDyn_driver: ended with exit code <n>".\n'
 )
 _PARTIAL_TABLE = "# CableDyn\nTime\tFairTen1\n0.0\t1.0\n7534.6\t2.0\n7534.65\t2."
 
@@ -318,6 +319,20 @@ _PARTIAL_TABLE = "# CableDyn\nTime\tFairTen1\n0.0\t1.0\n7534.6\t2.0\n7534.65\t2.
             "CableDyn_DeckDriver: deck line 42: bad value",
         ),
         (2, "", None, "failed with exit code 2: Progress:  65.0%"),
+        # The Fortran runtime ended the run with its own error: never read as an outside end.
+        (
+            41,
+            _CONTRACT + "forrtl: severe (41): insufficient virtual memory\n",
+            _PARTIAL_TABLE,
+            "ended with a Fortran runtime error (exit code 41); its output ends at t = 7534.6 s: "
+            "forrtl: severe (41): insufficient virtual memory",
+        ),
+        (
+            2,
+            _CONTRACT + "Operating system error: Not enough space\nError allocating 8 bytes\n",
+            None,
+            "ended with a Fortran runtime error (exit code 2): Error allocating 8 bytes",
+        ),
     ],
 )
 def test_nonzero_exit_tells_driver_failures_from_abnormal_ends(

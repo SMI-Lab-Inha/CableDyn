@@ -22,7 +22,7 @@ endif()
 # The start-up statement of that contract, exactly as python/cabledyn/driver.py recognises it:
 # without it a caller cannot tell an outside kill from an older driver's refusal.
 string(FIND "${driver_stderr}"
-       "  Exit status: every failure ends stderr with \"CableDyn_driver: ended with exit code <n>\"."
+       "  Exit status: every non-zero exit the driver makes itself ends stderr with \"CableDyn_driver: ended with exit code <n>\"."
        contract_at)
 if(contract_at LESS 0)
   message(FATAL_ERROR "stderr lacks the exit-status statement:\n${driver_stderr}")

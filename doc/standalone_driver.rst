@@ -250,8 +250,9 @@ before the end, and their last time is below ``TMax``.
        with ``0xC000013A`` on Windows and with the signal on Linux and macOS). Rows written while
        the process was stopping may extend slightly past the reported time
    * - a fatal fault, such as an access violation or a stack overflow
-     - ``CableDyn_driver: fatal error: <cause> (exception <code>) after the step at simulated
-       time t = <t> s`` on stderr, possibly followed by the runtime's own report (``forrtl:
+     - ``CableDyn_driver: fatal error: <cause> after the step at simulated time t = <t> s`` on
+       stderr (on Windows the cause also names the exception code, the module and offset and,
+       for an access violation, the address), possibly followed by the runtime's own report (``forrtl:
        severe (157)`` or ``(170)`` in the release Windows executable, which then exits with that
        number). Otherwise the exit status is the exception code (Windows) or the signal. Please
        report it, with the deck (see SUPPORT.md)
@@ -263,7 +264,8 @@ before the end, and their last time is below ``TMax``.
 To tell a completed run from one that ended early, check the exit status, the closing line, and
 that the last time in ``<output_root>.out`` reaches ``TMax``; the Python wrapper below reports
 such an end. The driver states this contract at start, after the banner, with the line
-``Exit status: every failure ends stderr with "CableDyn_driver: ended with exit code <n>".``;
+``Exit status: every non-zero exit the driver makes itself ends stderr with
+"CableDyn_driver: ended with exit code <n>".``;
 a missing closing line means an outside end only when that line is present, since drivers of
 version 0.1.0 and earlier write neither. ``taskkill /IM CableDyn_driver.exe /F`` ends *every*
 CableDyn run on the computer, not one; to stop a single run, end it by its process id
