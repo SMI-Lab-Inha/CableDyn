@@ -13,6 +13,7 @@ int fatal_report_test_raise_term(void);
 int fatal_report_test_fault_context(void);
 int fatal_report_test_dispositions(void);
 int fatal_report_test_altstack(void);
+int fatal_report_test_sent_faults(void);
 int fatal_report_test_handlers_unchanged(int phase);
 
 static volatile int *volatile fatal_report_null_target = 0;
@@ -49,6 +50,12 @@ int fatal_report_test_dispositions(void)
 
 /* The alternate-stack check is POSIX-only: returns -1 (skipped). */
 int fatal_report_test_altstack(void)
+{
+    return -1;
+}
+
+/* The sent-fault check is POSIX-only: returns -1 (skipped). */
+int fatal_report_test_sent_faults(void)
 {
     return -1;
 }
@@ -439,6 +446,61 @@ int fatal_report_test_handlers_unchanged(int phase)
                     handler_signals[k]);
             return 1;
         }
+    }
+    return 0;
+}
+
+/* One child sends itself `sig` with kill() after installing the report. A fault signal sent by
+ * a process does not re-execute anything, so the report must send it again: the child ends by
+ * `sig` with one report, and never runs on to its normal exit. */
+static int sent_fault_case(int sig, const char *name)
+{
+    int errors[2], status = 0, ok, reports;
+    pid_t child;
+    char text[4096];
+    if (pipe(errors) != 0) {
+        fprintf(stderr, "FAIL: sent faults: pipe() failed\n");
+        return 1;
+    }
+    fflush(NULL);
+    child = fork();
+    if (child < 0) {
+        fprintf(stderr, "FAIL: sent faults: fork() failed\n");
+        return 1;
+    }
+    if (child == 0) {
+        close(errors[0]);
+        dup2(errors[1], STDERR_FILENO);
+        signal(sig, SIG_DFL);
+        cabledyn_fatal_report_install();
+        cabledyn_fatal_report_time(7534.6);
+        kill(getpid(), sig);
+        _exit(0); /* reached only if the sent signal was swallowed */
+    }
+    close(errors[1]);
+    read_all(errors[0], text, sizeof text);
+    waitpid(child, &status, 0);
+    reports = count(text, "CableDyn_driver: fatal error:");
+    ok = WIFSIGNALED(status) && WTERMSIG(status) == sig && reports == 1;
+    fprintf(stderr, "sent faults: %s: child ended %s %d, %d report(s)%s\n", name,
+            WIFSIGNALED(status) ? "by signal" : "with status",
+            WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status), reports,
+            ok ? "" : " -- unexpected");
+    if (!ok) {
+        fprintf(stderr, "%s", text);
+    }
+    return ok ? 0 : 1;
+}
+
+/* SIGSEGV and SIGFPE sent with kill() are reported and re-sent (on macOS SI_USER is positive,
+ * so the sender is told apart by name, not by sign). Returns 0 when both hold. */
+int fatal_report_test_sent_faults(void)
+{
+    int failures = sent_fault_case(SIGSEGV, "SIGSEGV from kill()") +
+                   sent_fault_case(SIGFPE, "SIGFPE from kill()");
+    if (failures != 0) {
+        fprintf(stderr, "FAIL: sent faults: %d case(s) wrong\n", failures);
+        return 1;
     }
     return 0;
 }

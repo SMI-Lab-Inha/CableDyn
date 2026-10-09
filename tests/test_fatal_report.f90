@@ -9,6 +9,9 @@ PROGRAM test_fatal_report
   !!       committed step (TMax) for the report, and that the library, as a host such as
   !!       OpenFAST uses it (the report not installed), left the process's signal and
   !!       exception handlers as they were;
+  !!   test_fatal_report sent_faults
+  !!       (POSIX) SIGSEGV and SIGFPE sent with kill() are reported and sent again (the child
+  !!       ends by the signal), never treated as hardware faults that re-execute;
   !!   test_fatal_report altstack
   !!       (POSIX) the main thread and each worker that calls CD_Fatal_Thread_Init get one
   !!       alternate signal stack of at least 64 KiB and the system's SIGSTKSZ;
@@ -50,6 +53,9 @@ PROGRAM test_fatal_report
     INTEGER(C_INT) FUNCTION altstack() BIND(C, name='fatal_report_test_altstack')
       IMPORT :: C_INT
     END FUNCTION altstack
+    INTEGER(C_INT) FUNCTION sent_faults() BIND(C, name='fatal_report_test_sent_faults')
+      IMPORT :: C_INT
+    END FUNCTION sent_faults
     INTEGER(C_INT) FUNCTION handlers_unchanged(phase) BIND(C, name='fatal_report_test_handlers_unchanged')
       IMPORT :: C_INT
       INTEGER(C_INT), VALUE :: phase
@@ -91,6 +97,18 @@ PROGRAM test_fatal_report
       WRITE (*, '(A)') 'PASS: the fault reached the earlier handler with its own context'
     CASE DEFAULT
       CALL fail('the fault did not keep its own context')
+    END SELECT
+    STOP
+  END IF
+
+  IF (mode == 'sent_faults') THEN
+    SELECT CASE (sent_faults())
+    CASE (-1)
+      WRITE (*, '(A)') 'SKIP: the sent-fault check is POSIX-only'
+    CASE (0)
+      WRITE (*, '(A)') 'PASS: faults sent with kill() are reported and sent again'
+    CASE DEFAULT
+      CALL fail('a fault sent with kill() was not sent again')
     END SELECT
     STOP
   END IF

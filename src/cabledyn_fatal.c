@@ -113,6 +113,23 @@ static void line_add_hex(cabledyn_line *line, unsigned long value)
     line->text[line->len] = '\0';
 }
 
+/* A 64-bit value as 0x and 16 hex digits. */
+static void line_add_hex64(cabledyn_line *line, unsigned long long value)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    char digits[16];
+    int n;
+    for (n = 15; n >= 0; --n) {
+        digits[n] = hex[value & 0xFULL];
+        value >>= 4;
+    }
+    line_add(line, "0x");
+    for (n = 0; n < 16 && line->len + 1 < sizeof line->text; ++n) {
+        line->text[line->len++] = digits[n];
+    }
+    line->text[line->len] = '\0';
+}
+
 /* "after the step at simulated time t = 7534.600 s" or the pre-march wording. */
 static void line_add_when(cabledyn_line *line)
 {
@@ -218,16 +235,54 @@ static int is_fatal_fault(DWORD code)
     }
 }
 
-static void report_exception(DWORD code)
+/* " in openblas.dll+0x...": the module that holds a code address, and the offset in it. */
+static void line_add_location(cabledyn_line *line, const void *address)
+{
+    HMODULE module = NULL;
+    char path[MAX_PATH];
+    DWORD len, i;
+    const char *name;
+    if (address == NULL ||
+        !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)address, &module)) {
+        return;
+    }
+    len = GetModuleFileNameA(module, path, (DWORD)sizeof path);
+    if (len == 0 || len >= sizeof path) {
+        return;
+    }
+    name = path;
+    for (i = 0; i < len; ++i) {
+        if (path[i] == '\\' || path[i] == '/') {
+            name = path + i + 1;
+        }
+    }
+    line_add(line, " in ");
+    line_add(line, name);
+    line_add(line, "+");
+    line_add_hex64(line, (unsigned long long)((const char *)address - (const char *)module));
+}
+
+static void report_exception(const EXCEPTION_RECORD *record)
 {
     if (InterlockedExchange(&cabledyn_reported, 1) == 0) {
         cabledyn_line line;
+        DWORD code = record->ExceptionCode;
         line.len = 0;
         line.text[0] = '\0';
         line_add(&line, "\nCableDyn_driver: fatal error: ");
         line_add(&line, exception_name(code));
         line_add(&line, " (exception ");
         line_add_hex(&line, (unsigned long)code);
+        /* Where it happened, and for an access violation what it touched: the evidence a
+         * report needs when the fault is inside a library. */
+        line_add_location(&line, record->ExceptionAddress);
+        if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR) &&
+            record->NumberParameters >= 2) {
+            ULONG_PTR kind = record->ExceptionInformation[0];
+            line_add(&line, kind == 1 ? ", writing " : kind == 8 ? ", executing " : ", reading ");
+            line_add_hex64(&line, (unsigned long long)record->ExceptionInformation[1]);
+        }
         line_add(&line, ") ");
         line_add_when(&line);
         line_finish(&line);
@@ -242,7 +297,7 @@ static LONG WINAPI cabledyn_vectored_handler(EXCEPTION_POINTERS *info)
 {
     if (info != NULL && info->ExceptionRecord != NULL &&
         is_fatal_fault(info->ExceptionRecord->ExceptionCode)) {
-        report_exception(info->ExceptionRecord->ExceptionCode);
+        report_exception(info->ExceptionRecord);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -251,7 +306,7 @@ static LONG WINAPI cabledyn_vectored_handler(EXCEPTION_POINTERS *info)
 static LONG WINAPI cabledyn_exception_filter(EXCEPTION_POINTERS *info)
 {
     if (info != NULL && info->ExceptionRecord != NULL) {
-        report_exception(info->ExceptionRecord->ExceptionCode);
+        report_exception(info->ExceptionRecord);
     }
     if (cabledyn_previous_filter != NULL) {
         return cabledyn_previous_filter(info);
@@ -360,6 +415,39 @@ static const char *signal_name(int sig)
     }
 }
 
+/* Whether a signal was sent by a process (kill, raise, sigqueue, a timer or an I/O or message
+ * completion) rather than raised by the hardware. The sender codes are compared by name:
+ * they are zero or negative on Linux, but SI_USER is 0x10001 on macOS. */
+static int sent_by_process(const siginfo_t *info)
+{
+    if (info == NULL || info->si_code <= 0) {
+        return 1;
+    }
+    switch (info->si_code) {
+#if defined(SI_USER)
+    case SI_USER:
+#endif
+#if defined(SI_QUEUE)
+    case SI_QUEUE:
+#endif
+#if defined(SI_TKILL)
+    case SI_TKILL:
+#endif
+#if defined(SI_TIMER)
+    case SI_TIMER:
+#endif
+#if defined(SI_ASYNCIO)
+    case SI_ASYNCIO:
+#endif
+#if defined(SI_MESGQ)
+    case SI_MESGQ:
+#endif
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int signal_index(int sig)
 {
     int k;
@@ -394,9 +482,9 @@ static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
     (void)context;
     int k = signal_index(sig);
     int fault = sig == SIGSEGV || sig == SIGBUS || sig == SIGFPE || sig == SIGILL;
-    /* A fault the hardware raised re-executes when the handler returns; one sent by kill()
-     * or raise() (si_code <= 0) does not, and is re-sent below. */
-    int synchronous = fault && info != NULL && info->si_code > 0;
+    /* A fault the hardware raised re-executes when the handler returns; one sent by a process
+     * (kill, raise) does not, and is re-sent below. */
+    int synchronous = fault && !sent_by_process(info);
     if (__sync_lock_test_and_set(&cabledyn_reported, 1) == 0) {
         cabledyn_line line;
         line.len = 0;

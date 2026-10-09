@@ -33,6 +33,11 @@ set(expected "CableDyn_driver: (fatal error: |stopped by )${CAUSE}[^\n]* ${when_
 if(NOT err MATCHES "${expected}")
   message(FATAL_ERROR "status ${result}, but stderr lacks the report \"${expected}\":\n${err}")
 endif()
+# On Windows a fault names the module and offset, and an access violation what it touched.
+if(CMAKE_HOST_WIN32 AND MODE STREQUAL "null" AND
+   NOT err MATCHES "exception 0xC0000005 in [^ ]+[.]exe[+]0x[0-9A-F]+, writing 0x0+[)]")
+  message(FATAL_ERROR "the access violation report lacks its location and address:\n${err}")
+endif()
 string(REGEX MATCHALL "CableDyn_driver: (fatal error|stopped by)" reports "${err}")
 list(LENGTH reports nreports)
 if(NOT nreports EQUAL 1)

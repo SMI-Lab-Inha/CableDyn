@@ -24,12 +24,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   fatal fault. Ctrl+C, Ctrl+Break, closing the console window, `SIGINT`, `SIGTERM` and `SIGHUP`
   are reported as `CableDyn_driver: stopped by <cause>`, and an access violation, a stack
   overflow or another fatal fault as `CableDyn_driver: fatal error: <cause>`. Both reports give
-  the simulated time of the last committed step, and the exit status is unchanged. Previously a
+  the simulated time of the last committed step, and the exit status is unchanged. On Windows a
+  fault report also names the module and offset of the fault and, for an access violation, the
+  address read or written. Previously a
   stack overflow in a Windows GNU build ended the process with no message. Every thread that
   enters an OpenMP parallel region keeps room to report its own stack overflow, and on Linux
   and macOS a hardware fault reaches the handler that was there before (the Fortran runtime's
   backtrace, or the default action and its core dump) with its original address and context,
-  and a previous handler runs under its own flags and signal mask.
+  and a previous handler runs under its own flags and signal mask; a fault signal sent by
+  another process (`kill`) is passed on as sent.
   A signal the driver was started with ignored (for example under `nohup`) stays ignored.
 - Every non-zero exit the driver makes itself now ends stderr with the closing line
   `CableDyn_driver: ended with exit code <n>`. A process ended from outside (`taskkill /F`,

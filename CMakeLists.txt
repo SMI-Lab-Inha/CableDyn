@@ -1673,6 +1673,18 @@ add_executable(test_modal tests/test_modal.f90 tests/blas_config_probe.c)
 target_link_libraries(test_modal PRIVATE cabledyn_core)
 add_test(NAME modal COMMAND test_modal)
 set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validation")
+# The modal eigensolves through CableDyn's LAPACK layer with every argument array against a
+# no-access page: no read or write outside the arrays the modal code passes.
+if(NOT CABLEDYN_STATIC_WINDOWS_RELEASE)
+  add_executable(test_lapack_guard_pages tests/test_lapack_guard_pages.c)
+  target_link_libraries(test_lapack_guard_pages PRIVATE cabledyn_core)
+  set_target_properties(test_lapack_guard_pages PROPERTIES LINKER_LANGUAGE Fortran)
+  add_test(NAME lapack_guard_pages COMMAND test_lapack_guard_pages)
+  set_tests_properties(lapack_guard_pages PROPERTIES
+                       LABELS "c;unit;static" TIMEOUT 300
+                       ENVIRONMENT "OPENBLAS_CORETYPE=Haswell"
+                       FAIL_REGULAR_EXPRESSION "FAIL:")
+endif()
 
 # Stack bound (GNU Windows builds): the modal test and the driver relinked with a 1 MiB stack
 # reserve, half the MinGW default, instead of the 64 MiB reserve of the other executables. A
@@ -1864,6 +1876,10 @@ set_tests_properties(fatal_report_fault_context PROPERTIES
                      FAIL_REGULAR_EXPRESSION "FAIL:")
 # POSIX: the report keeps every previous disposition -- an ignored signal (with or without
 # SA_SIGINFO) stays ignored, a default one still ends the process, a handler still runs.
+add_test(NAME fatal_report_sent_faults COMMAND test_fatal_report sent_faults)
+set_tests_properties(fatal_report_sent_faults PROPERTIES
+                     LABELS "fortran;unit;driver" TIMEOUT 120
+                     FAIL_REGULAR_EXPRESSION "FAIL:")
 add_test(NAME fatal_report_altstack COMMAND test_fatal_report altstack)
 set_tests_properties(fatal_report_altstack PROPERTIES
                      LABELS "fortran;unit;driver;stack" TIMEOUT 120
