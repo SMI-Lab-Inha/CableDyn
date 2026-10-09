@@ -900,6 +900,11 @@ CONTAINS
     CALL expect_error('a normal along Ez is named', 'tdeck_e5.dat', 'tdeck_e5', 'must not be parallel')
     CALL straight_deck('tdeck_e6.dat', 'Rigid 1 0 0 Rigid 0 NaN 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
     CALL expect_error('a non-finite normal is named', 'tdeck_e6.dat', 'tdeck_e6', 'is not a finite number')
+    ! an imposed twist above 1000 turns (a units slip) stops at the deck check, naming the line
+    ! and the value in degrees, instead of ramping the statics through millions of stages
+    CALL straight_deck('tdeck_e16.dat', 'Rigid 1 0 0 Rigid 0 0 1 -1.0e5', 'Rigid 1 0 0 Rigid 0 0 1 3.0e5', OUTS)
+    CALL expect_error('an imposed twist above 1000 turns is named', 'tdeck_e16.dat', 'tdeck_e16', &
+                      'line 1: the imposed twist Pretwist(B) - Pretwist(A) = 4.00000E+05 deg exceeds 1000 turns')
     ! a twist far beyond the buckling onset: the failed stage is named once, with its line
     t10(1) = 'cab 0.2 32.2013246 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
     CALL straight_deck('tdeck_e15.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 36000', OUTS, t10)

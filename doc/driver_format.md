@@ -773,7 +773,7 @@ LineID  End  Stiffness  EzX  EzY  EzZ   TorsStiffness  NxX  NxY  NxZ  Pretwist
 |--------|---------|
 | `TorsStiffness` | `Free`/`Zero`/`0` (default, no torsional restraint), `Rigid`/`Infinity`/`Inf` (any case), or a positive torsional end spring [N·m/rad], a plain finite number |
 | `NxX`, `NxY`, `NxZ` | zero-twist reference normal of the end, in the frame of `Ez`; finite numbers; at a restrained end non-zero and not parallel to `Ez` (within about 0.06°), orthonormalised against `Ez` by the parser |
-| `Pretwist` | optional roll of the end frame about `Ez` [deg, right-handed, default 0]; any finite value, several turns included |
+| `Pretwist` | optional roll of the end frame about `Ez` [deg, right-handed, default 0]; any finite value, several turns included, with the imposed twist `Pretwist(B) − Pretwist(A)` within 1000 turns (360 000°) |
 
 At a `Free` end the normal and `Pretwist` are only checked to be finite numbers; they are not
 used.

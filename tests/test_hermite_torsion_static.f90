@@ -477,6 +477,21 @@ CONTAINS
     CALL solve_rod(8, 1.0e7_wp, 1.0_wp, 1.0_wp, CD_ENDCONN_RIGID, tors, q, es, em)
     CALL require(es == CD_HCSTAT_BADINPUT .AND. INDEX(em, 'orthonormal') > 0, &
                  'F: a reference normal along the director is rejected')
+    ! an imposed twist beyond 1000 turns (a units slip) stops by name before the solve, instead of
+    ! a ramp of millions of stages or an overflowing stage count
+    CALL straight_torsion(8, 1.0_wp, 1.0e7_wp, tors)
+    CALL solve_rod(8, 1.0e7_wp, 1.0_wp, 1.0_wp, CD_ENDCONN_RIGID, tors, q, es, em)
+    CALL require(es == CD_HCSTAT_BADINPUT .AND. INDEX(em, 'exceeds 1000 turns') > 0 .AND. &
+                 INDEX(em, '1.00000E+07') > 0, 'F: an imposed twist above 1000 turns is rejected with its value')
+    CALL straight_torsion(8, 1.0_wp, 1.0e12_wp, tors)
+    CALL solve_rod(8, 1.0e7_wp, 1.0_wp, 1.0_wp, CD_ENDCONN_RIGID, tors, q, es, em)
+    CALL require(es == CD_HCSTAT_BADINPUT .AND. INDEX(em, 'exceeds 1000 turns') > 0, &
+                 'F: an imposed twist beyond the integer stage count is rejected by name')
+    CALL straight_torsion(8, 1.0_wp, 1.0_wp, tors)
+    tors%theta_hint = 1.0e5_wp
+    CALL solve_rod(8, 1.0e7_wp, 1.0_wp, 1.0_wp, CD_ENDCONN_RIGID, tors, q, es, em)
+    CALL require(es == CD_HCSTAT_BADINPUT .AND. INDEX(em, 'twist state') > 0, &
+                 'F: a twist branch hint above 1000 turns is rejected by name')
     CALL straight_torsion(8, 1.0_wp, 1.0_wp, tors)
     CALL straight_rod(8, 1.0_wp, seed, l0)
     nd = SIZE(seed)

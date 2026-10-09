@@ -73,6 +73,9 @@ MODULE CableDyn_HermiteTorsion
   REAL(wp), PARAMETER, PUBLIC :: CD_HTORS_PI = 3.14159265358979323846264338327950288_wp
   !! Largest accepted change of Theta between two accepted states.
   REAL(wp), PARAMETER, PUBLIC :: CD_HTORS_MAX_STEP = 0.5_wp*CD_HTORS_PI
+  !! Largest imposed static twist |Phi| [rad], 1000 turns: the static solve ramps Phi in stages
+  !! of at most pi/4, so a larger value (typically a units slip) would take beyond 8000 stages.
+  REAL(wp), PARAMETER, PUBLIC :: CD_HTORS_MAX_TWIST = 2000.0_wp*CD_HTORS_PI
 
   INTEGER, PARAMETER :: NG_DEFAULT = 4, NG_MAX = 6
   REAL(wp), PARAMETER :: TWO_PI = 2.0_wp*CD_HTORS_PI

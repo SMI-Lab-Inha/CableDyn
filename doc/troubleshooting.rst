@@ -327,6 +327,9 @@ Torsion
        the direction Ez``
      - give ``Free``, ``Rigid`` or a stiffness in N·m/rad, and a reference normal that is not
        along ``Ez``.
+   * - ``line <L>: the imposed twist Pretwist(B) - Pretwist(A) = ... deg exceeds 1000 turns``
+     - the static twist is ramped in stages of at most 45°, so it is limited to 1000 turns; check
+       the units of ``Pretwist`` (degrees).
    * - ``line <L> is torsionally restrained at both ends: its LINE TYPES row ... must give an
        explicit GJ > 0``
      - torsion has no ``EI/1.3`` default: use the 14-column ``LINE TYPES`` row with ``GJ`` (and

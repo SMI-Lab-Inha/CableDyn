@@ -99,7 +99,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Set_Friction_Axial, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State
-  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
+                                     CD_HTORS_MAX_TWIST
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -13427,6 +13428,17 @@ CONTAINS
       ! one restrained end only carries no torque (noted and ignored): the rules below apply to a
       ! line restrained at both ends
       IF (.NOT. ALL(ln%tors_mode /= TORS_FREE)) RETURN
+      IF (ABS(ln%tors_pretwist(2) - ln%tors_pretwist(1)) > CD_HTORS_MAX_TWIST) THEN
+        BLOCK
+          CHARACTER(32) :: tw
+          INTEGER :: tw_ios
+          tw = ''
+          WRITE (tw, '(ES12.5)', IOSTAT=tw_ios) (ln%tors_pretwist(2) - ln%tors_pretwist(1))/DEG2RAD_TORS
+          CALL fail(es_t, em_t, 'line '//TRIM(lid)//': the imposed twist Pretwist(B) - Pretwist(A) = '// &
+                    TRIM(ADJUSTL(tw))//' deg exceeds 1000 turns (360000 deg), the largest static twist')
+        END BLOCK
+        RETURN
+      END IF
       jp = find_point(points, ln%nodeB)
       IF (jp < 1) RETURN
       IF (TRIM(points(jp)%ptype) /= 'fixed') THEN

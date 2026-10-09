@@ -53,7 +53,7 @@ MODULE CableDyn_HermiteCableStatic
                                      CD_HermiteTorsion_Validate, CD_HermiteTorsion_Bordered_Solve, &
                                      CD_HermiteTorsion_Inertia, CD_HermiteTorsion_Lowest_Mode, CD_HTORS_OK, &
                                      CD_HTORS_KBAND, CD_HTORS_MAX_STEP, CD_HTORS_ZERO_MODE_TOL, CD_HTORS_PI, &
-                                     CD_HTORS_UNRELIABLE
+                                     CD_HTORS_UNRELIABLE, CD_HTORS_MAX_TWIST
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_in_parallel
   IMPLICIT NONE
   PRIVATE
@@ -700,6 +700,23 @@ CONTAINS
       tors_c = CD_HermiteTorsion_Compliance(torsion, l0)
       IF (.NOT. (tors_c > CD_ZERO) .OR. .NOT. CD_Is_Finite(tors_c)) THEN
         CALL fail('torsion: the line compliance must be finite and positive'); RETURN
+      END IF
+      ! the twist ramp takes stages of at most pi/4: bound it (and its integer stage count)
+      IF (ABS(torsion%phi) > CD_HTORS_MAX_TWIST .OR. ABS(torsion%theta_hint) > CD_HTORS_MAX_TWIST .OR. &
+          ABS(torsion%theta) > CD_HTORS_MAX_TWIST) THEN
+        BLOCK
+          CHARACTER(160) :: tw
+          INTEGER :: tw_ios
+          tw = ''
+          IF (ABS(torsion%phi) > CD_HTORS_MAX_TWIST) THEN
+            WRITE (tw, '(A,ES12.5,A)', IOSTAT=tw_ios) 'torsion: the imposed twist Phi = ', torsion%phi, &
+              ' rad exceeds 1000 turns (2000 pi rad), the largest static twist'
+          ELSE
+            tw = 'torsion: the twist state (theta or theta_hint) exceeds 1000 turns (2000 pi rad)'
+          END IF
+          CALL fail(TRIM(tw))
+        END BLOCK
+        RETURN
       END IF
       IF (use_ptc .OR. use_equilibration) THEN
         CALL fail('torsion is not combined with pseudo_transient or equilibrate_linear_system'); RETURN
@@ -1733,7 +1750,10 @@ CONTAINS
       phi0 = tors_theta_acc
       total = torsion%phi - phi0
       tors_on = .TRUE.
-      dlam_max = CD_ONE/REAL(MAX(1, CEILING(ABS(total)/(0.25_wp*CD_HTORS_PI))), wp)
+      ! |total| <= 4000 pi (Phi and Theta_0 within 1000 turns of zero, Theta_0 within pi of its
+      ! start): at most 16000 stages, so the integer stage count cannot overflow
+      dlam_max = CD_ONE/REAL(MAX(1, CEILING(MIN(ABS(total), 2.0_wp*CD_HTORS_MAX_TWIST + CD_HTORS_PI)/ &
+                                            (0.25_wp*CD_HTORS_PI))), wp)
       dlam = dlam_max
       lam = CD_ZERO
       cuts = 0

@@ -73,6 +73,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Python: `DeckFile` messages for an `END CONNECTIONS` row name the line, the end and the
   offending value, and the unit of a main-output channel written with leading zeros in its ids
   (`Ten01N04`, `Torq03N4`) is recognised, as the driver accepts such names.
+- Torsion: an imposed static twist `Pretwist(B) − Pretwist(A)` above 1000 turns (for example
+  a value given in the wrong units) now stops with a message naming the line and the value.
+  Before, the static twist ramp could run for millions of stages.
 
 ## [0.1.0] - 2026-10-01
 
