@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
 """Every OpenMP parallel region of the library and the driver prepares its threads for the
-abnormal-end report: its first statement (the first statement of the loop body, for a
-PARALLEL DO) is ``CALL CD_Fatal_Thread_Init()``, so a stack overflow on a worker thread is
-reported like one on the main thread (src/cabledyn_fatal.c)."""
+abnormal-end report once per thread: its first statement is ``CALL CD_Fatal_Thread_Init()``,
+before any worksharing loop, so a stack overflow on a worker thread is reported like one on
+the main thread (src/cabledyn_fatal.c). A combined ``PARALLEL DO`` (or ``SECTIONS``,
+``WORKSHARE``, ``LOOP``) construct has no place for that statement and is refused, as is the
+call made inside a loop body, where it would run once per iteration."""
 
 from __future__ import annotations
 
@@ -14,9 +16,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTIVE = re.compile(r"^\s*!\$omp\s+parallel\b(?P<rest>.*)$", re.IGNORECASE)
-DO_CLAUSE = re.compile(r"^\s*do\b", re.IGNORECASE)
+COMBINED = re.compile(r"^\s*(?:do|sections|workshare|loop)\b", re.IGNORECASE)
 DO_STATEMENT = re.compile(r"^\s*(?:\w+\s*:\s*)?do\b", re.IGNORECASE)
-INIT = re.compile(r"^\s*call\s+cd_fatal_thread_init\s*(?:\(\s*\))?\s*(?:!.*)?$", re.IGNORECASE)
+# A call that installs the abnormal-end handlers, from Fortran or C (not a declaration).
+INSTALL = re.compile(
+    r"^\s*call\s+cd_fatal_report_install\b"
+    r"|^\s*(?!void\b)[^/*]*\bcabledyn_fatal_report_install\s*\(\s*\)\s*;",
+    re.IGNORECASE,
+)
+INIT = re.compile(
+    r"^\s*call\s+cd_fatal_thread_init\s*(?:\(\s*\))?\s*(?:!.*)?$", re.IGNORECASE
+)
 
 
 def sources() -> list[Path]:
@@ -25,74 +35,108 @@ def sources() -> list[Path]:
     return [path for path in files if "openfast" not in path.parent.name.lower()]
 
 
-def statements(lines: list[str], start: int):
-    """Yield (index, text) of the statements after ``start``, skipping comments and blanks."""
-    for index in range(start, len(lines)):
-        text = lines[index].strip()
-        if not text or text.startswith("!"):
-            continue
-        yield index, lines[index]
+def is_statement(text: str) -> bool:
+    """A line that is neither blank nor a comment (OpenMP directives count as statements)."""
+    stripped = text.strip()
+    return bool(stripped) and (not stripped.startswith("!") or stripped[:2] == "!$")
 
 
-def missing_inits(lines: list[str]) -> tuple[int, list[int]]:
-    """Count the parallel regions and list the 1-based lines of those without the call."""
-    found, missing = 0, []
+def check(lines: list[str]) -> tuple[int, list[str]]:
+    """Count the parallel regions and describe each problem as '<line>: <reason>'."""
+    found, problems = 0, []
+    previous = ""
     index = 0
     while index < len(lines):
-        match = DIRECTIVE.match(lines[index])
-        if match is None:
-            index += 1
-            continue
-        found += 1
-        first = index
-        loop = DO_CLAUSE.match(match.group("rest")) is not None
-        while lines[index].rstrip().endswith("&"):
-            index += 1
-        following = statements(lines, index + 1)
-        nxt = next(following, None)
-        if loop:
-            if nxt is None or not DO_STATEMENT.match(nxt[1]):
-                missing.append(first + 1)
+        line = lines[index]
+        if INIT.match(line) and DO_STATEMENT.match(previous):
+            problems.append(f"{index + 1}: the call runs once per loop iteration")
+        match = DIRECTIVE.match(line)
+        if match is not None:
+            found += 1
+            first = index
+            while lines[index].rstrip().endswith("&"):
                 index += 1
-                continue
-            nxt = next(following, None)
-        if nxt is None or not INIT.match(nxt[1]):
-            missing.append(first + 1)
+            if COMBINED.match(match.group("rest")):
+                problems.append(
+                    f"{first + 1}: a combined construct; split it into PARALLEL + DO"
+                )
+            else:
+                following = (
+                    lines[k]
+                    for k in range(index + 1, len(lines))
+                    if is_statement(lines[k])
+                )
+                if not INIT.match(next(following, "")):
+                    problems.append(f"{first + 1}: the first statement is not the call")
+        if is_statement(lines[index]):
+            previous = lines[index]
         index += 1
-    return found, missing
+    return found, problems
+
+
+def install_calls() -> list[str]:
+    """Every place in the library, the driver and the OpenFAST integration that installs the
+    abnormal-end handlers, as '<path>:<line>'."""
+    found = []
+    for folder in ("src", "app", "integration"):
+        for path in sorted((ROOT / folder).rglob("*")):
+            if path.suffix.lower() not in {".f90", ".c", ".h"} or not path.is_file():
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if INSTALL.search(line):
+                    found.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
+    return found
 
 
 class OmpFatalInitTest(unittest.TestCase):
-    def test_every_parallel_region_prepares_its_threads(self) -> None:
+    def test_only_the_driver_installs_the_handlers(self) -> None:
+        # A host that loads the library (OpenFAST, Python) keeps its own signal and exception
+        # handling: only the standalone driver program installs the report.
+        calls = install_calls()
+        self.assertEqual([c.split(":")[0] for c in calls], ["app/cabledyn.f90"], calls)
+
+    def test_every_parallel_region_prepares_its_threads_once(self) -> None:
         total = 0
         problems = []
         for path in sources():
-            found, missing = missing_inits(path.read_text(encoding="utf-8").splitlines())
+            found, issues = check(path.read_text(encoding="utf-8").splitlines())
             total += found
-            problems += [f"{path.relative_to(ROOT)}:{line}" for line in missing]
-        self.assertGreater(total, 0, "no OpenMP parallel region found: the scan is broken")
+            problems += [f"{path.relative_to(ROOT)}:{issue}" for issue in issues]
+        self.assertGreater(
+            total, 0, "no OpenMP parallel region found: the scan is broken"
+        )
         self.assertEqual(
-            problems,
-            [],
-            "OpenMP parallel regions whose first statement is not CALL CD_Fatal_Thread_Init()",
+            problems, [], "OpenMP regions that do not prepare their threads once"
         )
 
-    def test_the_scan_catches_a_region_without_the_call(self) -> None:
+    def test_the_scan_accepts_the_split_form(self) -> None:
         good = [
-            "    !$OMP PARALLEL DO DEFAULT(SHARED) &",
+            "    !$OMP PARALLEL DEFAULT(SHARED) &",
             "    !$OMP PRIVATE(i)",
+            "    ! comment",
+            "    CALL CD_Fatal_Thread_Init() ! note",
+            "    !$OMP DO SCHEDULE(STATIC)",
             "    DO i = 1, n",
-            "      ! comment",
-            "      CALL CD_Fatal_Thread_Init() ! note",
+            "      x(i) = 0",
             "    END DO",
-            "    !$omp parallel",
-            "    call cd_fatal_thread_init()",
-            "    !$omp end parallel",
+            "    !$OMP END DO",
+            "    !$OMP END PARALLEL",
         ]
-        self.assertEqual(missing_inits(good), (2, []))
-        bad = ["  !$OMP PARALLEL DO", "  DO i = 1, n", "    x(i) = 0", "  END DO",
-               "  !$OMP PARALLEL", "  x = 1"]
-        self.assertEqual(missing_inits(bad), (2, [1, 5]))
+        self.assertEqual(check(good), (1, []))
+
+    def test_the_scan_refuses_missing_combined_and_per_iteration_calls(self) -> None:
+        bad = [
+            "  !$OMP PARALLEL DO",
+            "  DO i = 1, n",
+            "    CALL CD_Fatal_Thread_Init()",
+            "  END DO",
+            "  !$OMP PARALLEL",
+            "  x = 1",
+            "  !$OMP END PARALLEL",
+        ]
+        found, problems = check(bad)
+        self.assertEqual(found, 2)
+        self.assertEqual([p.split(":")[0] for p in problems], ["1", "3", "5"], problems)
 
 
 if __name__ == "__main__":

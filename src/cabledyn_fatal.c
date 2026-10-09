@@ -326,11 +326,11 @@ void cabledyn_fatal_report_install(void)
 static const int cabledyn_signals[CABLEDYN_NSIG] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL,
                                                     SIGABRT, SIGINT, SIGTERM, SIGHUP};
 static struct sigaction cabledyn_previous[CABLEDYN_NSIG];
-static volatile sig_atomic_t cabledyn_reported = 0;
+/* Set by the first report, with an atomic exchange (lock-free, so usable in a handler): two
+ * threads that fault together report once. */
+static volatile int cabledyn_reported = 0;
 /* Set once the driver has installed the report. */
 static volatile int cabledyn_installed = 0;
-/* The main thread's alternate stack, so a stack overflow can still be reported. */
-static char cabledyn_altstack[CABLEDYN_HANDLER_STACK];
 /* Worker threads' alternate stacks, freed when each thread ends. */
 static pthread_key_t cabledyn_altstack_key;
 static pthread_once_t cabledyn_altstack_once = PTHREAD_ONCE_INIT;
@@ -397,9 +397,8 @@ static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
     /* A fault the hardware raised re-executes when the handler returns; one sent by kill()
      * or raise() (si_code <= 0) does not, and is re-sent below. */
     int synchronous = fault && info != NULL && info->si_code > 0;
-    if (!cabledyn_reported) {
+    if (__sync_lock_test_and_set(&cabledyn_reported, 1) == 0) {
         cabledyn_line line;
-        cabledyn_reported = 1;
         line.len = 0;
         line.text[0] = '\0';
         line_add(&line, fault || sig == SIGABRT ? "\nCableDyn_driver: fatal error: "
@@ -435,6 +434,31 @@ static void cabledyn_signal_handler(int sig, siginfo_t *info, void *context)
     raise(sig);
 }
 
+/* The size of an alternate signal stack: at least CABLEDYN_HANDLER_STACK and at least what the
+ * system asks for (SIGSTKSZ is 128 KiB on macOS; on Linux it grows with the CPU's vector
+ * state, e.g. AVX-512 or AMX). */
+size_t cabledyn_fatal_altstack_size(void);
+size_t cabledyn_fatal_altstack_size(void)
+{
+    size_t size = CABLEDYN_HANDLER_STACK;
+#if defined(_SC_SIGSTKSZ)
+    long system_size = sysconf(_SC_SIGSTKSZ);
+    if (system_size > 0 && (size_t)system_size > size) {
+        size = (size_t)system_size;
+    }
+#endif
+#if defined(SIGSTKSZ)
+    {
+        /* SIGSTKSZ is a sysconf() call in recent glibc, which may return -1. */
+        long default_size = (long)SIGSTKSZ;
+        if (default_size > 0 && (size_t)default_size > size) {
+            size = (size_t)default_size;
+        }
+    }
+#endif
+    return size;
+}
+
 /* Free a worker thread's alternate stack when the thread ends. */
 static void cabledyn_altstack_release(void *stack)
 {
@@ -456,6 +480,7 @@ static void cabledyn_thread_setup(void)
 {
     stack_t current, alt;
     void *stack;
+    size_t size;
     if (sigaltstack(NULL, &current) == 0 && (current.ss_flags & SS_DISABLE) == 0) {
         return;
     }
@@ -463,13 +488,14 @@ static void cabledyn_thread_setup(void)
     if (!cabledyn_altstack_key_ok) {
         return;
     }
-    stack = malloc(CABLEDYN_HANDLER_STACK);
+    size = cabledyn_fatal_altstack_size();
+    stack = malloc(size);
     if (stack == NULL) {
         return;
     }
     memset(&alt, 0, sizeof alt);
     alt.ss_sp = stack;
-    alt.ss_size = CABLEDYN_HANDLER_STACK;
+    alt.ss_size = size;
     alt.ss_flags = 0;
     if (sigaltstack(&alt, NULL) != 0 || pthread_setspecific(cabledyn_altstack_key, stack) != 0) {
         cabledyn_altstack_release(stack);
@@ -478,7 +504,6 @@ static void cabledyn_thread_setup(void)
 
 void cabledyn_fatal_report_install(void)
 {
-    stack_t alt;
     struct sigaction action;
     int k;
     if (cabledyn_installed) {
@@ -486,12 +511,7 @@ void cabledyn_fatal_report_install(void)
     }
     cabledyn_installed = 1;
     cabledyn_thread_ready = 1;
-    /* The main thread uses a static alternate stack, which outlives every handler. */
-    memset(&alt, 0, sizeof alt);
-    alt.ss_sp = cabledyn_altstack;
-    alt.ss_size = sizeof cabledyn_altstack;
-    alt.ss_flags = 0;
-    sigaltstack(&alt, NULL);
+    cabledyn_thread_setup();
     memset(&action, 0, sizeof action);
     action.sa_sigaction = cabledyn_signal_handler;
     sigemptyset(&action.sa_mask);
@@ -520,7 +540,9 @@ void cabledyn_fatal_report_install(void)
  * and after the first call on a thread it costs one thread-local test. */
 void cabledyn_fatal_thread_init(void)
 {
-    if (cabledyn_thread_ready || !cabledyn_installed) {
+    /* The process-wide flag first: in a host that never installs the report, the thread-local
+     * flag is never touched (an emulated-TLS build would allocate it per thread). */
+    if (!cabledyn_installed || cabledyn_thread_ready) {
         return;
     }
     cabledyn_thread_ready = 1;

@@ -100,6 +100,11 @@ PROGRAM cabledyn
   ! remain visible on stdout; automation must use the exit status rather than assuming
   ! stdout contains only one machine-readable record.
   CALL CD_Print_Banner(error_unit)
+  ! The exit contract, stated once at start: a caller that finds this line and later no
+  ! closing line knows the process was ended from outside (a driver older than this line
+  ! writes neither, so its failures must not be read that way).
+  WRITE (error_unit, '(A)') '  Exit status: every failure ends stderr with "'//PROG// &
+    ': ended with exit code <n>".'
   ! The LAPACK runtime is loaded on first use in the Windows GNU build; a missing or
   ! incompatible library stops here with its diagnostic instead of as a solver failure.
   CALL CD_Blas_Runtime_Check(PROG, ErrStat, ErrMsg)

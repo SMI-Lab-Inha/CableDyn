@@ -242,6 +242,10 @@ def test_nonzero_exit_preserves_native_diagnostic(tmp_path, monkeypatch):
 
 
 _CLOSING = "CableDyn_driver: ended with exit code 2\n"
+# The start-up line of a driver that writes the closing line on every failure.
+_CONTRACT = (
+    '  Exit status: every failure ends stderr with "CableDyn_driver: ended with exit code <n>".\n'
+)
 _PARTIAL_TABLE = "# CableDyn\nTime\tFairTen1\n0.0\t1.0\n7534.6\t2.0\n7534.65\t2."
 
 
@@ -265,17 +269,54 @@ _PARTIAL_TABLE = "# CableDyn\nTime\tFairTen1\n0.0\t1.0\n7534.6\t2.0\n7534.65\t2.
             "ended abnormally (exit code 3221225725); its output ends at t = 7534.6 s: "
             "CableDyn_driver: fatal error: stack overflow",
         ),
-        # Ended from outside (taskkill /F): no closing line and no report.
+        # The report followed by the runtime's own lines: the release executable's Ctrl+Break
+        # (forrtl, exit 1) and a GNU access violation (the libgfortran backtrace).
         (
             1,
-            "  CableDyn initialization completed.\n",
+            _CONTRACT + "\nCableDyn_driver: stopped by Ctrl+Break after the step at simulated "
+            "time t = 97.400 s. The run did not finish; its output files end at the last step "
+            "written.\nforrtl: error (200): program aborting due to control-BREAK event\n"
+            "Image              PC                Routine            Line        Source\n",
+            _PARTIAL_TABLE,
+            "ended abnormally (exit code 1); its output ends at t = 7534.6 s: "
+            "CableDyn_driver: stopped by Ctrl+Break after the step at simulated time t = 97.400 s",
+        ),
+        (
+            3,
+            _CONTRACT + "\nCableDyn_driver: fatal error: access violation (exception 0xC0000005) "
+            "after the step at simulated time t = 12.000 s. The run did not finish; its output "
+            "files end at the last step written.\n\nProgram received signal SIGSEGV: "
+            "Segmentation fault - invalid memory reference.\n\nBacktrace for this error:\n",
+            None,
+            "ended abnormally (exit code 3): CableDyn_driver: fatal error: access violation",
+        ),
+        # Ended from outside (taskkill /F): the driver stated the exit contract, then wrote
+        # no closing line and no report.
+        (
+            1,
+            _CONTRACT + "  CableDyn initialization completed.\n",
             _PARTIAL_TABLE,
             "initialization completed.\nCableDyn driver ended with exit code 1 without "
             "reporting a result; its output ends at t = 7534.6 s: the process was ended from "
             "outside",
         ),
         # The same with no output table yet.
-        (-9, "", None, "ended with exit code -9 without reporting a result: the process"),
+        (
+            -9,
+            _CONTRACT,
+            None,
+            "ended with exit code -9 without reporting a result: the process",
+        ),
+        # A driver older than the exit contract (0.1.0) writes no closing line on its own
+        # refusals: they are reported with their own text, never as ended from outside.
+        (
+            1,
+            "  CableDyn  v0.1.0\nCableDyn_DeckDriver: deck line 42: bad value\n",
+            _PARTIAL_TABLE,
+            "failed with exit code 1; its output ends at t = 7534.6 s: CableDyn  v0.1.0\n"
+            "CableDyn_DeckDriver: deck line 42: bad value",
+        ),
+        (2, "", None, "failed with exit code 2: Progress:  65.0%"),
     ],
 )
 def test_nonzero_exit_tells_driver_failures_from_abnormal_ends(
@@ -298,6 +339,7 @@ def test_nonzero_exit_tells_driver_failures_from_abnormal_ends(
     assert caught.value.returncode == returncode
     assert expected in str(caught.value)
     assert caught.value.stderr == stderr
+    assert ("ended from outside" in str(caught.value)) == ("without reporting" in expected)
 
 
 @pytest.mark.parametrize(

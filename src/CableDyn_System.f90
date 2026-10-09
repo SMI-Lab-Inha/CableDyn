@@ -1307,16 +1307,18 @@ CONTAINS
     ! Line models own disjoint state and Newton workspaces. Workers stage results;
     ! the following serial pass selects the first error and reduces flags in deck order.
     n_team = line_team_size(system)
-    !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i) SCHEDULE(STATIC) NUM_THREADS(n_team) IF(n_team > 1)
+    !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i) NUM_THREADS(n_team) IF(n_team > 1)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(STATIC)
     DO i = 1, system%n_lines
-      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       CALL CD_Step_Model(system%lines(i), dt, system%line_converged(i), system%line_stalled(i), &
                          system%line_iter(i), system%line_stat(i), system%line_msg(i), &
                          prescribed_q=system%lines(i)%q_prescribed_work, &
                          prescribed_v=system%lines(i)%v_prescribed_work, &
                          prescribed_a=system%lines(i)%a_prescribed_work)
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO i = 1, system%n_lines
       IF (system%line_stat(i) /= CD_MODEL_OK) THEN
         CALL restore_failed_step(system, system%line_stat(i), 'line step failed: '//TRIM(system%line_msg(i)), &
@@ -2082,15 +2084,17 @@ CONTAINS
       RETURN
     END IF
     n_team = line_team_size(system)
-    !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, lo, hi) SCHEDULE(STATIC) NUM_THREADS(n_team) IF(n_team > 1)
+    !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i, lo, hi) NUM_THREADS(n_team) IF(n_team > 1)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(STATIC)
     DO i = 1, system%n_lines
-      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       lo = system%line_off(i)
       hi = system%line_off(i + 1) - 1
       CALL CD_Calc_Model_CoupledLoads(system%lines(i), system%line_load_work(lo:hi), &
                                       system%line_stat(i), system%line_msg(i))
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO i = 1, system%n_lines
       IF (system%line_stat(i) /= CD_MODEL_OK) THEN
         ErrStat = CD_SYSTEM_SOLVEFAIL

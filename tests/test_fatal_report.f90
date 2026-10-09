@@ -6,7 +6,12 @@ PROGRAM test_fatal_report
   !!
   !!   test_fatal_report march <deck> <out_root>
   !!       runs a dynamic deck and checks that the march recorded the time of its last
-  !!       committed step (TMax) for the report;
+  !!       committed step (TMax) for the report, and that the library, as a host such as
+  !!       OpenFAST uses it (the report not installed), left the process's signal and
+  !!       exception handlers as they were;
+  !!   test_fatal_report altstack
+  !!       (POSIX) the main thread and each worker that calls CD_Fatal_Thread_Init get one
+  !!       alternate signal stack of at least 64 KiB and the system's SIGSTKSZ;
   !!   test_fatal_report <fault> before|during
   !!       installs the report, optionally records a simulated time, and ends the process
   !!       with <fault>: overflow (unbounded recursion, a stack overflow), null (a write
@@ -42,6 +47,13 @@ PROGRAM test_fatal_report
     INTEGER(C_INT) FUNCTION dispositions() BIND(C, name='fatal_report_test_dispositions')
       IMPORT :: C_INT
     END FUNCTION dispositions
+    INTEGER(C_INT) FUNCTION altstack() BIND(C, name='fatal_report_test_altstack')
+      IMPORT :: C_INT
+    END FUNCTION altstack
+    INTEGER(C_INT) FUNCTION handlers_unchanged(phase) BIND(C, name='fatal_report_test_handlers_unchanged')
+      IMPORT :: C_INT
+      INTEGER(C_INT), VALUE :: phase
+    END FUNCTION handlers_unchanged
   END INTERFACE
 
   CHARACTER(4096) :: mode, arg2, arg3
@@ -58,7 +70,9 @@ PROGRAM test_fatal_report
     ! Negative and NaN times are not committed steps and leave the record unchanged.
     CALL CD_Fatal_Report_Time(-1.0_wp)
     IF (last_time() >= 0.0_C_DOUBLE) CALL fail('a negative time was recorded')
+    IF (handlers_unchanged(0_C_INT) /= 0_C_INT) CALL fail('cannot record the handlers')
     CALL CD_Run_Deck_Driver(TRIM(arg2), TRIM(arg3), converged, stat, msg)
+    IF (handlers_unchanged(1_C_INT) /= 0_C_INT) CALL fail('the library changed the host handlers')
     IF (stat /= CD_DECKDRV_OK .OR. .NOT. converged) CALL fail('the deck did not run: '//TRIM(msg))
     ! examples/dynamic_chain_held.dat: TMax 10 s.
     IF (ABS(last_time() - 10.0_C_DOUBLE) > 1.0E-9_C_DOUBLE) THEN
@@ -77,6 +91,18 @@ PROGRAM test_fatal_report
       WRITE (*, '(A)') 'PASS: the fault reached the earlier handler with its own context'
     CASE DEFAULT
       CALL fail('the fault did not keep its own context')
+    END SELECT
+    STOP
+  END IF
+
+  IF (mode == 'altstack') THEN
+    SELECT CASE (altstack())
+    CASE (-1)
+      WRITE (*, '(A)') 'SKIP: the alternate-stack check is POSIX-only'
+    CASE (0)
+      WRITE (*, '(A)') 'PASS: each prepared thread has one alternate signal stack of the system size'
+    CASE DEFAULT
+      CALL fail('an alternate signal stack is missing or too small')
     END SELECT
     STOP
   END IF

@@ -113,11 +113,12 @@ CONTAINS
     Ke = 0.0_wp
     elem_es = 0
     elem_em = ''
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) &
+    !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, fe, Ke, elem_es, elem_em) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
-      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       CALL CD_Reference_Frame(nodes_ref(:, a), nodes_ref(:, b), Lam0, L0)
@@ -133,7 +134,8 @@ CONTAINS
         Ke(:, :, e) = Kte
       END IF
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (elem_es(e) /= 0) THEN
         Kt = 0.0_wp; fint = 0.0_wp
@@ -314,11 +316,12 @@ CONTAINS
     work%Ke(:, :, 1:n_elem) = 0.0_wp
     work%elem_es(1:n_elem) = 0
     work%elem_em(1:n_elem) = ''
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) &
+    !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
-      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       CALL CD_Reference_Frame(nodes_ref(:, a), nodes_ref(:, b), Lam0, L0)
@@ -334,7 +337,8 @@ CONTAINS
         work%Ke(:, :, e) = Kte
       END IF
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (work%elem_es(e) /= 0) THEN
         Kb = 0.0_wp; fint = 0.0_wp
@@ -428,11 +432,12 @@ CONTAINS
     work%fe(:, 1:n_elem) = 0.0_wp
     work%elem_es(1:n_elem) = 0
     work%elem_em(1:n_elem) = ''
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) &
+    !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, es, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
-      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       CALL CD_Reference_Frame(nodes_ref(:, a), nodes_ref(:, b), Lam0, L0)
@@ -447,7 +452,8 @@ CONTAINS
         work%fe(:, e) = finte
       END IF
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (work%elem_es(e) /= 0) THEN
         fint = 0.0_wp

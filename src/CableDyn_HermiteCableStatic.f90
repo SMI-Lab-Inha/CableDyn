@@ -1011,9 +1011,10 @@ CONTAINS
 
       ! Evaluate independent element kernels concurrently into solve-lifetime buffers,
       ! then scatter in element order to retain deterministic residual/tangent sums.
-      !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(qe) SCHEDULE(STATIC) NUM_THREADS(omp_threads) IF(ne >= 32)
+      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qe) NUM_THREADS(omp_threads) IF(ne >= 32)
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+      !$OMP DO SCHEDULE(STATIC)
       DO e = 1, ne
-        CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
         qe(1:3) = q(6*(e - 1) + 1:6*(e - 1) + 3)
         qe(4:6) = q(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q(6*e + 1:6*e + 3)
@@ -1030,7 +1031,8 @@ CONTAINS
                                        bending_quadrature_order=bending_order)
         END IF
       END DO
-      !$OMP END PARALLEL DO
+      !$OMP END DO
+      !$OMP END PARALLEL
       pi_total = SUM(elem_E)
       pi_abs = SUM(ABS(elem_E))
       DO e = 1, ne
@@ -2127,15 +2129,17 @@ CONTAINS
       ! The element loads are independent: evaluated concurrently into the element buffers
       ! (free once the internal forces are scattered), then scattered in element order, so
       ! the sums are those of the serial loop.
-      !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(qe) SCHEDULE(STATIC) NUM_THREADS(omp_threads) IF(ne >= 32)
+      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qe) NUM_THREADS(omp_threads) IF(ne >= 32)
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+      !$OMP DO SCHEDULE(STATIC)
       DO e = 1, ne
-        CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
         qe(1:6) = q(6*(e - 1) + 1:6*e)
         qe(7:12) = q(6*e + 1:6*e + 6)
         CALL current_element_load(current, qe, l0(e), cur_d(e), cur_cn(e), cur_ct(e), want_jac, &
                                   elem_f(:, e), elem_K(:, :, e), elem_es(e), elem_em(e))
       END DO
-      !$OMP END PARALLEL DO
+      !$OMP END DO
+      !$OMP END PARALLEL
       DO e = 1, ne
         IF (elem_es(e) /= CD_HCSTAT_OK) THEN
           ecs = elem_es(e)

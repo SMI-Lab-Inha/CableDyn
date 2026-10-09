@@ -12,6 +12,8 @@ void fatal_report_test_null_write(void);
 int fatal_report_test_raise_term(void);
 int fatal_report_test_fault_context(void);
 int fatal_report_test_dispositions(void);
+int fatal_report_test_altstack(void);
+int fatal_report_test_handlers_unchanged(int phase);
 
 static volatile int *volatile fatal_report_null_target = 0;
 
@@ -43,6 +45,34 @@ int fatal_report_test_fault_context(void)
 int fatal_report_test_dispositions(void)
 {
     return -1;
+}
+
+/* The alternate-stack check is POSIX-only: returns -1 (skipped). */
+int fatal_report_test_altstack(void)
+{
+    return -1;
+}
+
+#include <stdio.h>
+#include <windows.h>
+
+/* The unhandled-exception filter a host process set is kept by every library call when the
+ * driver has not installed the report. phase 0 records, phase 1 compares. */
+static LPTOP_LEVEL_EXCEPTION_FILTER filter_before = NULL;
+
+int fatal_report_test_handlers_unchanged(int phase)
+{
+    LPTOP_LEVEL_EXCEPTION_FILTER now = SetUnhandledExceptionFilter(NULL);
+    SetUnhandledExceptionFilter(now);
+    if (phase == 0) {
+        filter_before = now;
+        return 0;
+    }
+    if (now != filter_before) {
+        fprintf(stderr, "FAIL: host: the unhandled-exception filter changed\n");
+        return 1;
+    }
+    return 0;
 }
 #else
 #include <stdint.h>
@@ -303,6 +333,112 @@ int fatal_report_test_dispositions(void)
     if (failures != 0) {
         fprintf(stderr, "FAIL: dispositions: %d case(s) wrong\n", failures);
         return 1;
+    }
+    return 0;
+}
+
+#include <pthread.h>
+
+void cabledyn_fatal_thread_init(void);
+size_t cabledyn_fatal_altstack_size(void);
+
+static int altstack_ok(const char *who, size_t need, void **base)
+{
+    stack_t current;
+    if (sigaltstack(NULL, &current) != 0 || (current.ss_flags & SS_DISABLE) != 0) {
+        fprintf(stderr, "FAIL: altstack: %s has no alternate signal stack\n", who);
+        return 0;
+    }
+    if (current.ss_size < need) {
+        fprintf(stderr, "FAIL: altstack: %s stack is %lu bytes, below %lu\n", who,
+                (unsigned long)current.ss_size, (unsigned long)need);
+        return 0;
+    }
+    if (base != NULL) {
+        *base = current.ss_sp;
+    }
+    return 1;
+}
+
+static void *prepared_worker(void *arg)
+{
+    void *first = NULL, *second = NULL;
+    int *ok = (int *)arg;
+    cabledyn_fatal_thread_init();
+    *ok = altstack_ok("a prepared worker", cabledyn_fatal_altstack_size(), &first);
+    cabledyn_fatal_thread_init(); /* once per thread: no second stack */
+    *ok = *ok && altstack_ok("a prepared worker", cabledyn_fatal_altstack_size(), &second) &&
+          first == second;
+    return NULL;
+}
+
+static void *plain_worker(void *arg)
+{
+    stack_t current;
+    int *ok = (int *)arg;
+    *ok = sigaltstack(NULL, &current) == 0 && (current.ss_flags & SS_DISABLE) != 0;
+    return NULL;
+}
+
+/* After the report is installed, the main thread and every worker that calls
+ * cabledyn_fatal_thread_init have an alternate signal stack of at least 64 KiB and at least the
+ * system's SIGSTKSZ / _SC_SIGSTKSZ; a worker that does not call it gets none. */
+int fatal_report_test_altstack(void)
+{
+    pthread_t thread;
+    int prepared = 0, plain = 0;
+    size_t need = cabledyn_fatal_altstack_size();
+    if (need < 64 * 1024) {
+        fprintf(stderr, "FAIL: altstack: size %lu is below 64 KiB\n", (unsigned long)need);
+        return 1;
+    }
+#if defined(_SC_SIGSTKSZ)
+    if (sysconf(_SC_SIGSTKSZ) > 0 && need < (size_t)sysconf(_SC_SIGSTKSZ)) {
+        fprintf(stderr, "FAIL: altstack: size %lu is below _SC_SIGSTKSZ\n", (unsigned long)need);
+        return 1;
+    }
+#endif
+    cabledyn_fatal_report_install();
+    if (!altstack_ok("the main thread", need, NULL)) {
+        return 1;
+    }
+    if (pthread_create(&thread, NULL, prepared_worker, &prepared) != 0 ||
+        pthread_join(thread, NULL) != 0 || !prepared) {
+        fprintf(stderr, "FAIL: altstack: a prepared worker thread\n");
+        return 1;
+    }
+    if (pthread_create(&thread, NULL, plain_worker, &plain) != 0 ||
+        pthread_join(thread, NULL) != 0 || !plain) {
+        fprintf(stderr, "FAIL: altstack: a worker that did not ask has an alternate stack\n");
+        return 1;
+    }
+    fprintf(stderr, "altstack: %lu bytes on the main thread and each prepared worker\n",
+            (unsigned long)need);
+    return 0;
+}
+
+/* The signal dispositions a host process set (here: the defaults) are kept by every library
+ * call when the driver has not installed the report. phase 0 records, phase 1 compares. */
+static struct sigaction handlers_before[8];
+static const int handler_signals[8] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL,
+                                       SIGABRT, SIGINT, SIGTERM, SIGHUP};
+
+int fatal_report_test_handlers_unchanged(int phase)
+{
+    int k;
+    struct sigaction now;
+    for (k = 0; k < 8; ++k) {
+        if (phase == 0) {
+            sigaction(handler_signals[k], NULL, &handlers_before[k]);
+            continue;
+        }
+        sigaction(handler_signals[k], NULL, &now);
+        if (now.sa_handler != handlers_before[k].sa_handler ||
+            now.sa_flags != handlers_before[k].sa_flags) {
+            fprintf(stderr, "FAIL: host: the disposition of signal %d changed\n",
+                    handler_signals[k]);
+            return 1;
+        }
     }
     return 0;
 }

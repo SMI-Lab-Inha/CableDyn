@@ -262,8 +262,12 @@ before the end, and their last time is below ``TMax``.
 
 To tell a completed run from one that ended early, check the exit status, the closing line, and
 that the last time in ``<output_root>.out`` reaches ``TMax``; the Python wrapper below reports
-such an end. ``taskkill /IM CableDyn_driver.exe /F`` ends *every* CableDyn run on the computer, not one; to
-stop a single run, end it by its process id (``taskkill /PID <pid> /F``).
+such an end. The driver states this contract at start, after the banner, with the line
+``Exit status: every failure ends stderr with "CableDyn_driver: ended with exit code <n>".``;
+a missing closing line means an outside end only when that line is present, since drivers of
+version 0.1.0 and earlier write neither. ``taskkill /IM CableDyn_driver.exe /F`` ends *every*
+CableDyn run on the computer, not one; to stop a single run, end it by its process id
+(``taskkill /PID <pid> /F``).
 
 Output streams
 ~~~~~~~~~~~~~~
@@ -275,7 +279,8 @@ Output streams
    * - Stream
      - Content
    * - ``stderr``
-     - the identity banner of a normal run; every error message; the initialisation report of a
+     - the identity banner of a normal run and the ``Exit status:`` line after it; every error
+       message; the initialisation report of a
        single-family (all ``EI = 0`` or all finite-EI) deck; the report of an interrupt or a
        fatal fault; and, last on a failed run, the closing line
        ``CableDyn_driver: ended with exit code <n>``

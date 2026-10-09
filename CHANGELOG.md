@@ -35,9 +35,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `CableDyn_driver: ended with exit code <n>`. A process ended from outside (`taskkill /F`,
   *End task*, `kill -9`) runs none of its own code and cannot report anything; the missing
   closing line now identifies it, since `taskkill /F` leaves exit code 1, the same code as a
-  refused input. `CableDynDriver.run`, `cabledyn-run` and `cabledyn-study` report such a run as
-  ended early, with the time its output reached, instead of relaying the start-up log as the
-  error. The documentation explains how to recognise each kind of early end and warns that
+  refused input. The driver states this at start, after the banner, in an `Exit status:` line.
+  `CableDynDriver.run`, `cabledyn-run` and `cabledyn-study` report such a run as ended early,
+  with the time its output reached, instead of relaying the start-up log as the error; with a
+  driver that does not write the `Exit status:` line (0.1.0 and earlier), a failure is
+  reported with the driver's own text as before. The documentation explains how to recognise each kind of early end and warns that
   `taskkill /IM CableDyn_driver.exe /F` ends every CableDyn run on the computer.
 - The static solve of a taut, neutrally buoyant finite-EI line (mass per length equal to
   the displaced mass) no longer depends on the sign of the round-off weight: a line whose

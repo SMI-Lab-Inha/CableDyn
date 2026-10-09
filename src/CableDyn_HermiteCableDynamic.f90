@@ -5255,15 +5255,17 @@ CONTAINS
     ! combined-output requests retain the lower-overhead serial path. A four-thread cap avoids
     ! tiny-kernel oversubscription while respecting a smaller host OpenMP thread limit.
     IF (tangent_only) THEN
-      !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(qe) SCHEDULE(STATIC) NUM_THREADS(omp_threads) IF(ne >= 32)
+      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qe) NUM_THREADS(omp_threads) IF(ne >= 32)
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+      !$OMP DO SCHEDULE(STATIC)
       DO e = 1, ne
-        CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
         CALL evaluate_tangent_element(model, e, q_cfg, v_cfg, t_eval, model%ws_elem_K(:, :, e), &
                                       model%ws_elem_Kdrag(:, :, e), model%ws_elem_Kv(:, :, e), &
                                       model%ws_elem_Kwave(:, :, e), model%ws_elem_Kheld(:, :, e), &
                                       model%ws_elem_es(e), model%ws_elem_em(e))
       END DO
-      !$OMP END PARALLEL DO
+      !$OMP END DO
+      !$OMP END PARALLEL
       DO e = 1, ne
         IF (model%ws_elem_es(e) /= CD_HCABLE_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'element: '//TRIM(model%ws_elem_em(e)); RETURN

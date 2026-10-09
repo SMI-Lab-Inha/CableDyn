@@ -377,18 +377,20 @@ CONTAINS
 
     ALLOCATE (fe(6, n_elem), elem_es(n_elem))
     n_team = axial_team_size()
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) NUM_THREADS(n_team) &
+    !$OMP PARALLEL DEFAULT(NONE) NUM_THREADS(n_team) &
     !$OMP SHARED(n_elem, elem_conn, nodes, ea, l0, tension_only, fe, elem_es) &
     !$OMP PRIVATE(e, a, b, nodes6, Kt6, Te, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
-      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       nodes6(1:3) = nodes(:, a)
       nodes6(4:6) = nodes(:, b)
       CALL CD_Compute_Cable_Element(nodes6, ea(e), l0(e), tension_only, Kt6, fe(:, e), Te, elem_es(e), em)
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (elem_es(e) /= 0) THEN
         ! Re-evaluate the first failing element serially for its message.
@@ -458,18 +460,20 @@ CONTAINS
 
     ALLOCATE (te_buf(n_elem), elem_es(n_elem))
     n_team = axial_team_size()
-    !$OMP PARALLEL DO DEFAULT(NONE) SCHEDULE(static) NUM_THREADS(n_team) &
+    !$OMP PARALLEL DEFAULT(NONE) NUM_THREADS(n_team) &
     !$OMP SHARED(n_elem, elem_conn, nodes, ea, l0, tension_only, te_buf, elem_es) &
     !$OMP PRIVATE(e, a, b, nodes6, Kt6, fint6, em)
+    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+    !$OMP DO SCHEDULE(static)
     DO e = 1, n_elem
-      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       a = elem_conn(1, e)
       b = elem_conn(2, e)
       nodes6(1:3) = nodes(:, a)
       nodes6(4:6) = nodes(:, b)
       CALL CD_Compute_Cable_Element(nodes6, ea(e), l0(e), tension_only, Kt6, fint6, te_buf(e), elem_es(e), em)
     END DO
-    !$OMP END PARALLEL DO
+    !$OMP END DO
+    !$OMP END PARALLEL
     DO e = 1, n_elem
       IF (elem_es(e) /= 0) THEN
         ! Re-evaluate the first failing element serially for its message.
