@@ -1698,6 +1698,9 @@ CONTAINS
     self%snap_parent_dcm = identity_dcm()
     self%snap_parent_omega = CD_ZERO
     self%snap_parent_alpha = CD_ZERO
+    self%tors_parent = .FALSE.
+    self%tors_index = 0
+    self%tors_frame_parent = CD_ZERO
     self%initialized = .FALSE.
   END SUBROUTINE CD_HFMF_End
 

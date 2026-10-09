@@ -53,6 +53,7 @@ PROGRAM test_hermite_torsion_dynamic
   CALL check_restart()
   CALL check_boundary_and_mirror()
   CALL check_bordered_and_blend()
+  CALL check_lifecycle()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -524,5 +525,48 @@ CONTAINS
                  'B: torsion refuses the configuration blend by name (got: '//TRIM(em)//')')
     CALL CD_HermiteCable_Dyn_End(m)
   END SUBROUTINE check_bordered_and_blend
+
+  SUBROUTINE check_lifecycle()
+    !! L. Torsion state lifecycle. (a) Installing a torsion description changes the load set, so
+    !! it invalidates the step snapshot as a new end connection does: a later Restore fails
+    !! closed instead of rewinding to a state taken under the old loads. (b) A rejected
+    !! description leaves the model and its snapshot as they were. (c) CD_HFMF_End returns the
+    !! module's torsion fields to their defaults.
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab
+    TYPE(CD_HermiteTorsionType) :: tors
+    REAL(wp) :: q(NDOF), th0
+    INTEGER :: es
+    CHARACTER(300) :: em
+    ALLOCATE (cab)
+    CALL line_seed(0.0_wp, 0.0_wp, q)
+    CALL build_cable(cab, q, 1.0_wp, 0.01_wp, 1.0e-6_wp, 0.8_wp)
+    ! (b) a rejected description: zero GJ on one element
+    CALL CD_HFMF_Snapshot(cab, es, em)
+    CALL require(es == CD_HFMF_OK, 'L: snapshot: '//TRIM(em))
+    th0 = cab%line%torsion%theta
+    CALL torsion_of(q, 2.0_wp, tors)
+    tors%gj(3) = 0.0_wp
+    CALL CD_HermiteCable_Dyn_Set_Torsion(cab%line, tors, es, em)
+    CALL require(es /= CD_HCDYN_OK, 'L: a zero GJ is rejected')
+    CALL require(ABS(cab%line%torsion%phi - 1.0_wp) <= 0.0_wp .AND. &
+                 .NOT. (ABS(cab%line%torsion%theta - th0) > 0.0_wp), &
+                 'L: a rejected description leaves the installed torsion')
+    CALL CD_HFMF_Restore(cab, es, em)
+    CALL require(es == CD_HFMF_OK, 'L: a rejected description leaves the snapshot valid: '//TRIM(em))
+    ! (a) an accepted description invalidates the snapshot
+    CALL CD_HFMF_Snapshot(cab, es, em)
+    CALL torsion_of(q, 2.0_wp, tors)
+    CALL CD_HermiteCable_Dyn_Set_Torsion(cab%line, tors, es, em)
+    CALL require(es == CD_HCDYN_OK, 'L: a new description is installed: '//TRIM(em))
+    CALL CD_HFMF_Restore(cab, es, em)
+    CALL require(es /= CD_HFMF_OK, 'L: Restore after a new torsion description fails closed')
+    CALL require(ABS(cab%line%torsion%phi - 2.0_wp) <= 0.0_wp, 'L: the failed Restore keeps the new torsion')
+    ! (c) End resets the parent-attached torsion frame
+    CALL require(cab%tors_parent .AND. cab%tors_index == 2, 'L: the built cable has a parent torsion frame')
+    CALL CD_HFMF_End(cab)
+    CALL require(.NOT. cab%tors_parent .AND. cab%tors_index == 0 .AND. MAXVAL(ABS(cab%tors_frame_parent)) <= 0.0_wp, &
+                 'L: CD_HFMF_End resets the parent torsion frame')
+    CALL require(.NOT. cab%line%torsion%active, 'L: CD_HFMF_End removes the torsion')
+  END SUBROUTINE check_lifecycle
 
 END PROGRAM test_hermite_torsion_dynamic

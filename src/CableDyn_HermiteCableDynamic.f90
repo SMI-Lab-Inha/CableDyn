@@ -4791,13 +4791,18 @@ CONTAINS
     !! including the torque) and the energy then include E_t = (Phi - Theta)**2/(2 C); the
     !! acceleration is recomputed from the complete load set. An inactive description removes
     !! the torsion. The time step then carries the torsion (see CD_HermiteCable_Dyn_Step); its
-    !! scratch is sized here, so a step allocates nothing.
+    !! scratch is sized here, so a step allocates nothing. Like a new end connection, a change
+    !! of the load set invalidates the step snapshot (CD_HermiteCable_Dyn_Restore then fails
+    !! closed); a failed call leaves the model, its snapshot included, as it was.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     TYPE(CD_HermiteTorsionType), INTENT(IN) :: torsion
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_HermiteTorsionType) :: saved
     REAL(wp) :: th, mt
+    REAL(wp) :: saved_step_ends(3, 4), saved_step_phi, saved_snap_theta, saved_snap_phi, saved_snap_ends(3, 4)
+    REAL(wp) :: saved_drive_ends(3, 4), saved_drive_phi
+    LOGICAL :: saved_snap_valid, saved_drive_set
     INTEGER :: es
     CHARACTER(200) :: em
     ErrStat = CD_HCDYN_OK
@@ -4851,6 +4856,15 @@ CONTAINS
       model%torsion%theta = th
       model%torsion%torque = mt
     END IF
+    saved_step_ends = model%tors_step_ends
+    saved_step_phi = model%tors_step_phi
+    saved_drive_ends = model%tors_drive_ends
+    saved_drive_phi = model%tors_drive_phi
+    saved_drive_set = model%tors_drive_set
+    saved_snap_theta = model%snap_torsion_theta
+    saved_snap_phi = model%snap_torsion_phi
+    saved_snap_ends = model%snap_torsion_ends
+    saved_snap_valid = model%snap_valid
     model%tors_use_step = .FALSE.
     model%tors_drive_set = .FALSE.
     model%tors_step_ends = model%torsion%ends
@@ -4858,11 +4872,23 @@ CONTAINS
     model%snap_torsion_theta = model%torsion%theta
     model%snap_torsion_phi = model%torsion%phi
     model%snap_torsion_ends = model%torsion%ends
+    ! the snapshot predates the new load set (as for CD_HermiteCable_Dyn_Set_EndConnection)
+    model%snap_valid = .FALSE.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
     CALL CD_HermiteCable_Dyn_Recompute_Acceleration(model, es, em)
     IF (es /= CD_HCDYN_OK) THEN
       model%torsion = saved
+      model%tors_c_valid = .FALSE.
+      model%tors_step_ends = saved_step_ends
+      model%tors_step_phi = saved_step_phi
+      model%tors_drive_ends = saved_drive_ends
+      model%tors_drive_phi = saved_drive_phi
+      model%tors_drive_set = saved_drive_set
+      model%snap_torsion_theta = saved_snap_theta
+      model%snap_torsion_phi = saved_snap_phi
+      model%snap_torsion_ends = saved_snap_ends
+      model%snap_valid = saved_snap_valid
       ErrStat = es
       ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: '//TRIM(em)
     END IF
