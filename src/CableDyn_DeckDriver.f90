@@ -11077,6 +11077,7 @@ CONTAINS
     REAL(wp) :: ez_norm, nx_norm
     INTEGER :: ios, istat, ntok
     LOGICAL :: ok
+    CHARACTER(64) :: where_
 
     ErrStat = 0
     ErrMsg = ''
@@ -11105,9 +11106,12 @@ CONTAINS
     CASE ('b', 'endb', 'end_b')
       ec%end_index = 2
     CASE DEFAULT
-      CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS End must be A or B')
+      CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS End must be A or B (line '//TRIM(int_to_str(ec%line_id))// &
+                ': "'//TRIM(end_token)//'")')
       RETURN
     END SELECT
+    ! every later message names the row's line and end, and the offending value
+    where_ = 'line '//TRIM(int_to_str(ec%line_id))//' End '//MERGE('A', 'B', ec%end_index == 1)
     SELECT CASE (to_lower(TRIM(stiffness_token)))
     CASE ('pinned', 'free', 'zero')
       ec%mode = CD_ENDCONN_PINNED
@@ -11121,7 +11125,8 @@ CONTAINS
       IF (.NOT. ok) ec%stiffness = -CD_ONE
       IF (.NOT. IEEE_IS_FINITE(ec%stiffness) .OR. ec%stiffness < CD_ZERO) THEN
         CALL fail(ErrStat, ErrMsg, &
-                  'END CONNECTIONS stiffness must be finite and non-negative, Pinned, or Rigid')
+                  'END CONNECTIONS stiffness must be finite and non-negative, Pinned, or Rigid ('// &
+                  TRIM(where_)//': "'//TRIM(stiffness_token)//'")')
         RETURN
       END IF
       IF (ec%stiffness > CD_ZERO) THEN
@@ -11131,12 +11136,13 @@ CONTAINS
       END IF
     END SELECT
     IF (.NOT. ALL(IEEE_IS_FINITE(ec%ez))) THEN
-      CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS no-moment direction must be finite')
+      CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS no-moment direction must be finite ('//TRIM(where_)//')')
       RETURN
     END IF
     ez_norm = SQRT(DOT_PRODUCT(ec%ez, ec%ez))
     IF (.NOT. IEEE_IS_FINITE(ez_norm) .OR. ez_norm <= SQRT(TINY(CD_ONE))) THEN
-      CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS no-moment direction must be non-zero')
+      CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS no-moment direction must be non-zero ('//TRIM(where_)// &
+                ': Ez = '//TRIM(vec_text(ec%ez))//')')
       RETURN
     END IF
     ec%ez = ec%ez/ez_norm
@@ -11151,13 +11157,14 @@ CONTAINS
         IF (.NOT. ok) ec%tors_k = -CD_ONE
         IF (.NOT. IEEE_IS_FINITE(ec%tors_k) .OR. ec%tors_k < CD_ZERO) THEN
           CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsional stiffness must be finite and non-negative, '// &
-                    'Free, or Rigid')
+                    'Free, or Rigid ('//TRIM(where_)//': "'//TRIM(tors_token)//'")')
           RETURN
         END IF
         ec%tors_mode = MERGE(TORS_FINITE, TORS_FREE, ec%tors_k > CD_ZERO)
       END SELECT
       IF (.NOT. (ALL(IEEE_IS_FINITE(ec%nx)) .AND. IEEE_IS_FINITE(ec%pretwist))) THEN
-        CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal and pretwist must be finite')
+        CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal and pretwist must be finite ('// &
+                  TRIM(where_)//')')
         RETURN
       END IF
       IF (ec%tors_mode == TORS_FREE) THEN
@@ -11167,13 +11174,15 @@ CONTAINS
       ELSE
         nx_norm = SQRT(DOT_PRODUCT(ec%nx, ec%nx))
         IF (.NOT. IEEE_IS_FINITE(nx_norm) .OR. nx_norm <= SQRT(TINY(CD_ONE))) THEN
-          CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must be non-zero')
+          CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must be non-zero ('// &
+                    TRIM(where_)//': Nx = '//TRIM(vec_text(ec%nx))//')')
           RETURN
         END IF
         ec%nx = ec%nx/nx_norm
         IF (NORM2(cross3(ec%nx, ec%ez)) < TORS_NX_PARALLEL_TOL) THEN
           CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS torsion reference normal (NxX NxY NxZ) must not be '// &
-                    'parallel to the direction Ez')
+                    'parallel to the direction Ez ('//TRIM(where_)//': Nx = '//TRIM(vec_text(ec%nx*nx_norm))// &
+                    ', Ez = '//TRIM(vec_text(ec%ez))//')')
           RETURN
         END IF
         ec%nx = ec%nx - DOT_PRODUCT(ec%nx, ec%ez)*ec%ez
@@ -11191,6 +11200,15 @@ CONTAINS
     grown(nec + 1) = ec
     CALL MOVE_ALLOC(grown, endconns)
     nec = nec + 1
+  CONTAINS
+    FUNCTION vec_text(v) RESULT(t)
+      !! "x y z" of a 3-vector, for messages.
+      REAL(wp), INTENT(IN) :: v(3)
+      CHARACTER(64) :: t
+      INTEGER :: wios
+      t = ''
+      WRITE (t, '(3(G0.6,:,1X))', IOSTAT=wios) v
+    END FUNCTION vec_text
   END SUBROUTINE append_end_connection
 
   SUBROUTINE append_line_attachment(row, lines, ErrStat, ErrMsg)
@@ -30091,7 +30109,8 @@ CONTAINS
   FUNCTION CD_Channel_Unit(ch) RESULT(unit)
     !! OrcaFlex-vocabulary output unit for a channel token, by kind: tension (FairTen/AnchTen/Ten)
     !! -> (N); curvature (Curv) -> (1/m); bend moment (BendMom) -> (N.m); endpoint orientation/
-    !! Dec/Azi -> (deg); position (Point/...p) -> (m); velocity (...v) -> (m/s);
+    !! Dec/Azi -> (deg); torque (Torq) -> (N.m); twist (Twist) -> (deg); position (Point/...p) -> (m);
+    !! velocity (...v) -> (m/s);
     !! acceleration (...a) -> (m/s2).
     CHARACTER(*), INTENT(IN) :: ch
     CHARACTER(10) :: unit
@@ -30127,6 +30146,8 @@ CONTAINS
       CASE (5); unit = '(1/m)'
       CASE (6); unit = '(N.m)'
       CASE (7, 8); unit = '(deg)'
+      CASE (9); unit = '(N.m)'
+      CASE (10, 11); unit = '(deg)'
       CASE (1); unit = '(m)'
       CASE (2); unit = '(m/s)'
       CASE (4); unit = '(m/s2)'

@@ -34,7 +34,7 @@ PROGRAM test_torsion_deck
   USE CableDyn_Conventions, ONLY: CD_Body_Rotation
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Multibody_Probe_Arm, CD_Multibody_Probe_Get, &
                                  CD_Init_Deck_Aggregate, CD_DeckAggregateType, CD_End_Deck_Aggregate, &
-                                 CD_Init_Deck_HermiteCable
+                                 CD_Init_Deck_HermiteCable, CD_Channel_Unit
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_End
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
@@ -892,12 +892,17 @@ CONTAINS
     CALL expect_error('a 9-column row is named', 'tdeck_e1.dat', 'tdeck_e1', 'or 10 or 11 with the torsion columns')
     CALL straight_deck('tdeck_e2.dat', 'Rigid 1 0 0 Stiff 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
     CALL expect_error('a bad TorsStiffness token is named', 'tdeck_e2.dat', 'tdeck_e2', 'torsional stiffness')
+    CALL expect_error('a bad TorsStiffness names its line, end and value', 'tdeck_e2.dat', 'tdeck_e2', &
+                      '(line 1 End A: "Stiff")')
     CALL straight_deck('tdeck_e3.dat', 'Rigid 1 0 0 -1.0 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
     CALL expect_error('a negative torsional stiffness is named', 'tdeck_e3.dat', 'tdeck_e3', 'torsional stiffness')
     CALL straight_deck('tdeck_e4.dat', 'Rigid 1 0 0 Rigid 0 0 0 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
     CALL expect_error('a null reference normal is named', 'tdeck_e4.dat', 'tdeck_e4', 'must be non-zero')
+    CALL expect_error('a null reference normal names its line and end', 'tdeck_e4.dat', 'tdeck_e4', &
+                      '(line 1 End A: Nx = ')
     CALL straight_deck('tdeck_e5.dat', 'Rigid 1 0 0 Rigid 2 0 0 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
     CALL expect_error('a normal along Ez is named', 'tdeck_e5.dat', 'tdeck_e5', 'must not be parallel')
+    CALL expect_error('a normal along Ez names its line and end', 'tdeck_e5.dat', 'tdeck_e5', '(line 1 End A: Nx = ')
     CALL straight_deck('tdeck_e6.dat', 'Rigid 1 0 0 Rigid 0 NaN 1 0', 'Rigid 1 0 0 Rigid 0 0 1 720', OUTS)
     CALL expect_error('a non-finite normal is named', 'tdeck_e6.dat', 'tdeck_e6', 'is not a finite number')
     ! an imposed twist above 1000 turns (a units slip) stops at the deck check, naming the line
@@ -953,6 +958,11 @@ CONTAINS
                  'the coupled single-cable entry refuses torsion by name (got: '//TRIM(em)//')')
     CALL CD_HFMF_End(cab)
     CALL check_scope_refusals()
+    ! the channel units of the torsion channels, as the range files label them
+    CALL require(TRIM(CD_Channel_Unit('Torq1N1')) == '(N.m)', 'Torq<L>N<J> unit is (N.m) (got '// &
+                 TRIM(CD_Channel_Unit('Torq1N1'))//')')
+    CALL require(TRIM(CD_Channel_Unit('Twist1N3')) == '(deg)', 'Twist<L>N<J> unit is (deg)')
+    CALL require(TRIM(CD_Channel_Unit('Twist12')) == '(deg)', 'Twist<L> unit is (deg)')
   END SUBROUTINE check_errors
 
   SUBROUTINE write_lines(path, rows)

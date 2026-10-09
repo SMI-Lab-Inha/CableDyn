@@ -82,6 +82,7 @@ All notable changes to CableDyn are recorded in this file. The format follows
   were, and ending a cable module also clears its torsion frame. End connections set after
   the torsion, and a torsion director that is not the rigid connection direction, are refused
   by name.
+- `END CONNECTIONS` row errors now name the line, the end and the offending value.
 
 ## [0.1.0] - 2026-10-01
 
