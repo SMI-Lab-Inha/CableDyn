@@ -45,6 +45,11 @@ HISTORICAL = re.compile(
 )
 
 
+# A line that names a past release on purpose (a test of how an older driver is handled)
+# carries this mark.
+PAST_RELEASE_MARK = "past-release"
+
+
 def tracked_files() -> list[str]:
     try:
         listing = subprocess.run(
@@ -70,6 +75,8 @@ def stale_version_references(version: str) -> list[str]:
         except UnicodeDecodeError:
             continue
         for number, line in enumerate(text.splitlines(), start=1):
+            if PAST_RELEASE_MARK in line:
+                continue
             for match in VERSION_REFERENCE.finditer(line):
                 if match.group(1) != version and match.group(1).startswith("0."):
                     stale.append(f"{name}:{number}: {line.strip()}")

@@ -311,9 +311,10 @@ _PARTIAL_TABLE = "# CableDyn\nTime\tFairTen1\n0.0\t1.0\n7534.6\t2.0\n7534.65\t2.
         # refusals: they are reported with their own text, never as ended from outside.
         (
             1,
-            "  CableDyn  v0.1.0\nCableDyn_DeckDriver: deck line 42: bad value\n",
+            "  CableDyn  v0.1.0\nCableDyn_DeckDriver: deck line 42: bad value\n",  # past-release
             _PARTIAL_TABLE,
-            "failed with exit code 1; its output ends at t = 7534.6 s: CableDyn  v0.1.0\n"
+            "failed with exit code 1; its output ends at t = 7534.6 s: "
+            "CableDyn  v0.1.0\n"  # past-release
             "CableDyn_DeckDriver: deck line 42: bad value",
         ),
         (2, "", None, "failed with exit code 2: Progress:  65.0%"),

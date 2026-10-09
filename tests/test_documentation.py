@@ -114,6 +114,7 @@ class DocumentationTests(unittest.TestCase):
         for unrelated in ("tolerance 0.0.9e-3", "OpenFAST v5.0.0", "numpy 2.4.3"):
             versions = [m.group(1) for m in pattern.finditer(unrelated)]
             self.assertFalse(any(v.startswith("0.") for v in versions), unrelated)
+        self.assertEqual(checker["PAST_RELEASE_MARK"], "past-release")
         historical = checker["HISTORICAL"]
         self.assertIsNotNone(historical.match("validation/RELEASE_0_1_0.md"))
         self.assertIsNone(historical.match("doc/installation.rst"))

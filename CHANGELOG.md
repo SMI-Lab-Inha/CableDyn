@@ -84,6 +84,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   by name.
 - `END CONNECTIONS` row errors now name the line, the end and the offending value.
 
+### Known issues
+
+- An intermittent access violation in the modal analysis tests has been seen on some hosted
+  CI runners with GNU builds that use OpenBLAS 0.3.34. The cause is under investigation. The
+  released Windows driver uses reference LAPACK and is not affected.
+
 ## [0.1.0] - 2026-10-01
 
 First public release. Deck keywords, Python interfaces, and the C ABI are
