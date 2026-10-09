@@ -32,11 +32,11 @@ are in [`VALIDATION.md`](../VALIDATION.md). The toolchains and pins are those of
 | Gate | Result |
 | --- | --- |
 | GNU Release build | 0 compiler warnings |
-| GNU Release CTest, including the slow tier | 231 of 231 passed |
+| GNU Release CTest, including the slow tier | 243 of 243 passed |
 | GNU Debug build (`-fcheck=all`) | 0 compiler warnings |
-| GNU Debug CTest | 231 of 231 passed |
-| GNU Debug CTest with `-finit-real=snan -finit-integer=-2147483647 -fcheck=all` | 231 of 231 passed |
-| Python package tests, native library and driver included | 1975 passed; 99.44% branch coverage (minimum 95%) |
+| GNU Debug CTest | 243 of 243 passed |
+| GNU Debug CTest with `-finit-real=snan -finit-integer=-2147483647 -fcheck=all` | 243 of 243 passed, 0 compiler warnings |
+| Python package tests, native library and driver included | 1993 passed; 99.44% branch coverage (minimum 95%) |
 | Ruff, Ruff format and mypy (strict) | passed |
 | Sphinx documentation, HTML and EPUB (`-W -n`) | built with no warnings |
 | pre-commit, all files | passed |
@@ -55,7 +55,8 @@ Every gate of `build_static_windows.ps1` passed. The smoke runs used a system-on
 | `CableDyn_driver.exe` imports | `KERNEL32.dll`, `SHELL32.dll` and `imagehlp.dll` only; stack reserve 268,435,456 bytes |
 | `openfast.exe` imports | `KERNEL32.dll` and `imagehlp.dll` only; stack reserve 9,999,999 bytes |
 | Standalone smoke | `--version`, the shallow-chain static deck from a mixed-script folder, and one dynamic step of the 952-element Gulf of Maine cable |
-| Memory growth over a 10× longer run | 4.7 → 4.7 MiB (`dynamic_chain_current.dat`), 20.4 → 20.4 MiB (`lozon_gomex80_power_cable.dat`); limit +16 MiB |
+| Memory growth over a 10× longer run | 4.7 → 4.7 MiB (`dynamic_chain_current.dat`), 31.0 → 20.5 MiB (`lozon_gomex80_power_cable.dat`; the 100 ms sampling caught a larger transient in the short run); limit +16 MiB |
+| Exit contract | a run states the exit contract after the banner; a refused input exits with 1 and ends stderr with `CableDyn_driver: ended with exit code 1` |
 | `CompMooring = 5` smoke | CableDyn banner, 41 committed rows at `dtM` 0.025 s, t = 0 fairlead tensions inside the 2.28–2.52 MN band, printed equilibrium tensions equal to the static profile |
 | `CompMooring = 3` smoke | stock MoorDyn initialises and the run ends normally |
 
@@ -69,11 +70,18 @@ bit-identical), and the Python wheel in a new virtual environment. All 20 checks
 key result of the decks that also ran for v0.1.0 agrees with the v0.1.0 executables within the
 kit tolerance (relative 1e-4; most are identical).
 
+The end-of-run reports of the release `CableDyn_driver.exe` were checked separately: a
+completed run exits with 0 and states the exit contract; a refused input exits with 1 and
+ends stderr with the closing line; a run ended from outside by its process id leaves no
+closing line; and Ctrl+Break gives `CableDyn_driver: stopped by Ctrl+Break after the step at
+simulated time t = ... s`, followed by the Intel Fortran runtime's `forrtl: error (200)` and
+traceback (exit code 152 in these runs, after `forrtl: severe (152)`).
+
 ## Assets
 
 | File | SHA-256 |
 | --- | --- |
-| `CableDyn_driver.exe` | `378668c5c0b27eb25c74bd34832d6f16e114c53a81da56a787a9ea906bbc3ccd` |
-| `openfast.exe` | `8d2071f61c4e596024dc9f84670d41fdee2e4cccc22f932cb678021f380467bc` |
-| `cabledyn-0.1.1-py3-none-any.whl` | `d39aaa11029c16255cddfa200b7df96cc20bff0f5050062b74541b941407be6f` |
-| `cabledyn-0.1.1.tar.gz` | `ad7b05ed07b66762e8e966e0a201e4e865765fe9b8621c33e20bdcaceee0dae8` |
+| `CableDyn_driver.exe` | `f9102899dc2742ee699a4f30d9863ccd064437a1c22de994e3c3bc518131d0e4` |
+| `openfast.exe` | `e969a70b50f90bd422d85b1ad37ebef7085eebde1cbb61255099fc9c43819e13` |
+| `cabledyn-0.1.1-py3-none-any.whl` | `05c0ad8c283af82ecf237493df4229fcd5db93cbdf75e67f9e2f7422b0455c4f` |
+| `cabledyn-0.1.1.tar.gz` | `264c892d5b618588f1d81b712dbacc7f7401ed021c07a9a4a39a5aaf059e0f6b` |
