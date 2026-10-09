@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +24,56 @@ def capture(relative_path: str, pattern: str, label: str) -> str:
     if match is None:
         raise ValueError(f"{relative_path}: cannot find {label}")
     return match.group(1)
+
+
+# Spellings that name a CableDyn release: "CableDyn 0.1.1", "CableDyn v0.1.1", "v0.1.1",
+# "cabledyn-0.1.1-py3-none-any.whl", ".../releases/tag/v0.1.1" and "libcabledyn.so.0.1.1".
+VERSION_REFERENCE = re.compile(
+    r"(?i)(?:cabledyn[ _-]+v?|cabledyn-|releases/tag/v|libcabledyn\.(?:so\.)?|(?<![\w.])v)"
+    r"(\d+\.\d+\.\d+)(?![\w.]*\d)"
+)
+SWEPT_SUFFIXES = {
+    ".c", ".cff", ".f90", ".h", ".json", ".md", ".ps1", ".py", ".rst", ".toml", ".txt", ".yml",
+}
+# Records of a past release keep the version they describe, and the test of this check
+# spells made-up versions; every other tracked file must name the current version only.
+HISTORICAL = re.compile(
+    r"^(CHANGELOG\.md|validation/(RELEASE|PERFORMANCE)_\d+_\d+_\d+\.md"
+    r"|validation/PAPER_REPRODUCTION\.md|validation/README\.md"
+    r"|validation/experiments/[^/]+/provenance\.json|validation/bodies/references/.*"
+    r"|tests/test_documentation\.py)$"
+)
+
+
+def tracked_files() -> list[str]:
+    try:
+        listing = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
+        ).stdout.decode("utf-8")
+        names = [name for name in listing.split("\0") if name]
+    except (OSError, subprocess.CalledProcessError):
+        names = [path.relative_to(ROOT).as_posix() for path in ROOT.rglob("*") if path.is_file()]
+    return sorted(name for name in names if Path(name).suffix in SWEPT_SUFFIXES)
+
+
+def stale_version_references(version: str) -> list[str]:
+    """Return ``path:line: text`` for every reference to a CableDyn version other than ``version``."""
+    stale = []
+    for name in tracked_files():
+        if HISTORICAL.match(name):
+            continue
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for number, line in enumerate(text.splitlines(), start=1):
+            for match in VERSION_REFERENCE.finditer(line):
+                if match.group(1) != version and match.group(1).startswith("0."):
+                    stale.append(f"{name}:{number}: {line.strip()}")
+    return stale
 
 
 def main() -> int:
@@ -118,6 +169,7 @@ def main() -> int:
         "Python licence file": (ROOT / "python" / "LICENSE").is_file(),
     }
     failures = [label for label, passed in checks.items() if not passed]
+    failures += [f"stale version reference {where}" for where in stale_version_references(version)]
     if failures:
         print("release metadata: FAIL", file=sys.stderr)
         for failure in failures:

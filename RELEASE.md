@@ -119,7 +119,7 @@ where practical), and keep the workflow URL with the release record.
 Tag only the commit that passed every check:
 
 ```powershell
-$ReleaseVersion = "0.1.0"
+$ReleaseVersion = "0.1.1"
 git tag -s "v$ReleaseVersion" -m "CableDyn v$ReleaseVersion"
 git push origin "v$ReleaseVersion"
 ```

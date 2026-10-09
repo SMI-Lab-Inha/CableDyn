@@ -15,8 +15,8 @@ The wheel and source distribution are attached to each
 package is not on PyPI or conda-forge. It requires Python 3.10 or newer and NumPy.
 
 ```powershell
-py -m pip install .\cabledyn-0.1.0-py3-none-any.whl
-py -m pip install ".\cabledyn-0.1.0-py3-none-any.whl[post]"   # adds pandas and matplotlib
+py -m pip install .\cabledyn-0.1.1-py3-none-any.whl
+py -m pip install ".\cabledyn-0.1.1-py3-none-any.whl[post]"   # adds pandas and matplotlib
 ```
 
 The package does not contain the solver. `CableDynDriver` runs

@@ -99,12 +99,12 @@ files directly, as shown below.
      - Library files
      - Header
    * - Linux
-     - ``lib/libcabledyn.so.0.1.0``, the soname link ``libcabledyn.so.1``, and the development
+     - ``lib/libcabledyn.so.0.1.1``, the soname link ``libcabledyn.so.1``, and the development
        link ``libcabledyn.so``. ``lib`` is the platform ``CMAKE_INSTALL_LIBDIR``, which can be
        ``lib64`` or a multiarch directory.
      - ``include/CableDyn_CAPI.h``
    * - macOS
-     - ``lib/libcabledyn.0.1.0.dylib``, ``lib/libcabledyn.1.dylib``, ``lib/libcabledyn.dylib``
+     - ``lib/libcabledyn.0.1.1.dylib``, ``lib/libcabledyn.1.dylib``, ``lib/libcabledyn.dylib``
      - ``include/CableDyn_CAPI.h``
    * - Windows, GNU toolchain
      - ``bin/libcabledyn.dll`` and the import library ``lib/libcabledyn.dll.a``. The GNU
@@ -233,7 +233,7 @@ ABI and versioning
      - the same four numbers, reported by the loaded library
    * - ``CableDyn_GetVersionString``
      - runtime
-     - ``"CableDyn 0.1.0 C-ABI 1"``
+     - ``"CableDyn 0.1.1 C-ABI 1"``
    * - shared-library ``SOVERSION``
      - 1
      - soname ``libcabledyn.so.1`` or install name ``libcabledyn.1.dylib``. The Windows DLL
@@ -486,7 +486,7 @@ Version queries
      - ``char *``
      - ``version_len``
      - yes: no-op
-     - receives ``"CableDyn 0.1.0 C-ABI 1"``, truncated to ``version_len - 1`` characters and
+     - receives ``"CableDyn 0.1.1 C-ABI 1"``, truncated to ``version_len - 1`` characters and
        ``NUL``-terminated
    * - ``version_len``
      - in

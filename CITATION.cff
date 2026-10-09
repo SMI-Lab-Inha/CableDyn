@@ -22,8 +22,8 @@ authors:
 repository-code: "https://github.com/SMI-Lab-Inha/CableDyn"
 url: "https://github.com/SMI-Lab-Inha/CableDyn"
 license: Apache-2.0
-version: 0.1.0
-date-released: 2026-10-01
+version: 0.1.1
+date-released: 2026-10-09
 keywords:
   - mooring dynamics
   - cable dynamics

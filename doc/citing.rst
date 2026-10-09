@@ -37,21 +37,21 @@ Software release
 ----------------
 
 Seo, J. H. (2026). *CableDyn: A cable and mooring dynamics solver for floating offshore
-wind* (version 0.1.0) [Computer software]. https://github.com/SMI-Lab-Inha/CableDyn
+wind* (version 0.1.1) [Computer software]. https://github.com/SMI-Lab-Inha/CableDyn
 
 .. code-block:: bibtex
 
-   @software{CableDyn_0_1_0,
+   @software{CableDyn_0_1_1,
      author  = {Seo, Jae Hoon},
      title   = {{CableDyn}: A cable and mooring dynamics solver for floating offshore wind},
-     version = {0.1.0},
+     version = {0.1.1},
      year    = {2026},
      url     = {https://github.com/SMI-Lab-Inha/CableDyn},
      license = {Apache-2.0}
    }
 
 When results depend on a particular release, quote the version reported in the solver banner
-(``CableDyn v0.1.0``) together with the options recorded for the run.
+(``CableDyn v0.1.1``) together with the options recorded for the run.
 
 Relation to the journal article
 -------------------------------

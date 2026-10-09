@@ -8,6 +8,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-09
+
 ### Added
 
 - Torsion of finite-EI lines in the standalone driver (condensed, quasi-static, uniform torque):
@@ -408,4 +410,6 @@ Corrections made during the pre-release review.
   values of the shipped example decks and states which tension (end element or
   `FairTen` end force) each comparison uses.
 
+[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.0

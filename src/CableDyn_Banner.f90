@@ -25,7 +25,7 @@ CONTAINS
     CASE (1)
       s = ' ==================================================================='
     CASE (2)
-      s = '   CableDyn  v0.1.0'
+      s = '   CableDyn  v0.1.1'
     CASE (3)
       s = '   Geometrically nonlinear cable & mooring dynamics for floating wind'
     CASE (4)

@@ -92,6 +92,32 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn(f"CABLEDYN_CAPI_VERSION_MAJOR {major}", header)
         self.assertIn(f"CABLEDYN_CAPI_VERSION_PATCH {patch}", header)
 
+    def test_every_tracked_file_names_the_current_version(self) -> None:
+        checker = runpy.run_path(str(ROOT / "release" / "check_release_metadata.py"))
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        match = re.search(r"project\(CableDynCore VERSION (\d+\.\d+\.\d+)", cmake)
+        self.assertIsNotNone(match, "CMake project version is missing")
+        version = match.group(1)
+        self.assertEqual(checker["stale_version_references"](version), [])
+        pattern = checker["VERSION_REFERENCE"]
+        for spelling in (
+            "CableDyn  v0.0.9",
+            "Running CableDyn (v0.0.9, 2026-01-01)",
+            "cabledyn-0.0.9-py3-none-any.whl",
+            "releases/tag/v0.0.9",
+            "lib/libcabledyn.so.0.0.9",
+            "CableDyn 0.0.9 C-ABI 1",
+        ):
+            found = pattern.search(spelling)
+            self.assertIsNotNone(found, spelling)
+            self.assertEqual(found.group(1), "0.0.9", spelling)
+        for unrelated in ("tolerance 0.0.9e-3", "OpenFAST v5.0.0", "numpy 2.4.3"):
+            versions = [m.group(1) for m in pattern.finditer(unrelated)]
+            self.assertFalse(any(v.startswith("0.") for v in versions), unrelated)
+        historical = checker["HISTORICAL"]
+        self.assertIsNotNone(historical.match("validation/RELEASE_0_1_0.md"))
+        self.assertIsNone(historical.match("doc/installation.rst"))
+
     def test_windows_release_is_publicly_reproducible(self) -> None:
         workflow = (
             ROOT / ".github" / "workflows" / "release-windows-static.yml"

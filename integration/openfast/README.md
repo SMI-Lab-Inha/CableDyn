@@ -9,7 +9,7 @@ who only run coupled cases should use the released `openfast.exe` and the
 
 The patches in [`patches/`](patches/) apply to the public OpenFAST upstream commit
 `2895884d2be01862173c88d70f86b358d2f1a50a` (the OpenFAST v5.0.0 release, used by
-CableDyn v0.1.0). They add only the OpenFAST host integration; the CableDyn sources come from
+CableDyn v0.1.1). They add only the OpenFAST host integration; the CableDyn sources come from
 this repository.
 
 | File | Purpose |

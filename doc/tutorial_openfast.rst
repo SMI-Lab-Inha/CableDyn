@@ -145,7 +145,7 @@ The CableDyn part of the console (other modules' lines trimmed):
 
 .. code-block:: text
 
-    Running CableDyn (v0.1.0, 2026-10-01).
+    Running CableDyn (v0.1.1, 2026-10-09).
       CableDyn: geometrically nonlinear cable & mooring dynamics for floating wind.
       ...
       CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM    )

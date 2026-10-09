@@ -56,7 +56,7 @@ CONTAINS
     abi_version = -1_C_INT
     msg = 'x'
     CALL CableDyn_GetVersion(major, minor, patch, abi_version)
-    CALL require(major == 0_C_INT .AND. minor == 1_C_INT .AND. patch == 0_C_INT .AND. abi_version == 1_C_INT, &
+    CALL require(major == 0_C_INT .AND. minor == 1_C_INT .AND. patch == 1_C_INT .AND. abi_version == 1_C_INT, &
                  'c-api-version:tuple')
     CALL CableDyn_GetVersionString(C_LOC(msg), INT(SIZE(msg), C_INT))
     CALL require(INDEX(c_text(msg), 'CableDyn') == 1 .AND. INDEX(c_text(msg), 'C-ABI 1') > 0, &

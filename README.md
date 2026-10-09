@@ -21,7 +21,7 @@ in the MoorDyn v2 format and solves them with two line formulations:
 - **Finite-bending lines** (finite-EI): cubic-Hermite elements for dynamic power
   cables, including lazy-wave configurations, with continuous centreline curvature.
 
-The current stable release is `v0.1.0`, the first public release. Interfaces are
+The current stable release is `v0.1.1`. Interfaces are
 versioned and may change before `1.0.0`.
 
 ## Capabilities
@@ -48,8 +48,8 @@ a named error rather than running approximately.
    |---|---|
    | `CableDyn_driver.exe` | Standalone solver for Windows x64 |
    | `openfast.exe` | OpenFAST with CableDyn available as `CompMooring = 5` |
-   | `cabledyn-0.1.0-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
-   | `cabledyn-0.1.0.tar.gz` | Python source distribution |
+   | `cabledyn-0.1.1-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
+   | `cabledyn-0.1.1.tar.gz` | Python source distribution |
    | `SHA256SUMS.txt` | Checksums for the assets above |
 
    Both executables are statically linked, need no installer, compiler, or runtime
@@ -82,7 +82,7 @@ a named error rather than running approximately.
    this run writes `examples\wd0050.out`:
 
    ```powershell
-   python -m pip install "cabledyn-0.1.0-py3-none-any.whl[post]"
+   python -m pip install "cabledyn-0.1.1-py3-none-any.whl[post]"
    cabledyn-run examples\wd0050_chain.dat wd0050 --executable .\CableDyn_driver.exe
    ```
 
@@ -151,7 +151,7 @@ If you use CableDyn in academic work, please cite:
 > offshore wind. *Ocean Engineering* 368 (Part 2), 128332, 2026.
 > <https://doi.org/10.1016/j.oceaneng.2026.128332>
 
-To identify the software version, also cite the release (CableDyn 0.1.0).
+To identify the software version, also cite the release (CableDyn 0.1.1).
 [CITATION.cff](CITATION.cff) contains both entries (GitHub **Cite this
 repository**); BibTeX is on the manual's
 [How to cite](https://cabledyn.readthedocs.io/en/latest/citing.html) page.

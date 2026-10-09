@@ -115,7 +115,7 @@ MODULE CableDyn
 
    PRIVATE
 
-   TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.1.0', '2026-10-01' )
+   TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.1.1', '2026-10-09' )
 
    !> Module-level instance registry: the CableDyn solver objects cannot live inside the
    !> registry-generated types, so each initialized module holds an integer handle

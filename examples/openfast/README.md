@@ -53,7 +53,7 @@ The initial CableDyn fairlead tensions are then the ~2.4 MN chain pretension.
 .\openfast.exe IEA-15-UMaine_CompMooring3_MoorDyn.fst    # MoorDyn
 ```
 
-The CableDyn run log identifies the module with `Running CableDyn (v0.1.0, 2026-10-01)` and
+The CableDyn run log identifies the module with `Running CableDyn (v0.1.1, 2026-10-09)` and
 prints the converged fairlead state of each line, as the standalone driver does:
 
 ```text
