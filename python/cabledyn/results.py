@@ -48,20 +48,23 @@ def _label(channel: str, unit: str | None) -> str:
 
 
 def _native_channel_unit(channel: str) -> str | None:
-    """Infer units for native main-output channels whose names are verbatim."""
+    """Infer units for native main-output channels whose names are verbatim.
+
+    Ids may carry leading zeros (``Ten01N01``), as the native channel parser accepts.
+    """
     patterns = (
-        (r"(?:FairTen|AnchTen)[1-9][0-9]*", "N"),
-        (r"(?:FairIncl|AnchIncl|FairDecl|AnchDecl|FairAngle|AnchAngle)[1-9][0-9]*", "deg"),
-        (r"Ten[1-9][0-9]*N[1-9][0-9]*", "N"),
-        (r"Curv[1-9][0-9]*N[1-9][0-9]*", "1/m"),
-        (r"BendMom[1-9][0-9]*N[1-9][0-9]*", "N-m"),
-        (r"Torq[1-9][0-9]*N[1-9][0-9]*", "N-m"),
-        (r"Twist[1-9][0-9]*(?:N[1-9][0-9]*)?", "deg"),
-        (r"L[1-9][0-9]*N[1-9][0-9]*p[xyz]", "m"),
-        (r"L[1-9][0-9]*N[1-9][0-9]*v[xyz]", "m/s"),
-        (r"L[1-9][0-9]*N[1-9][0-9]*a[xyz]", "m/s^2"),
-        (r"L[1-9][0-9]*N[1-9][0-9]*(?:Dec|Azi)", "deg"),
-        (r"(?:Point|Con)[1-9][0-9]*p[xyz]", "m"),
+        (r"(?:FairTen|AnchTen)0*[1-9][0-9]*", "N"),
+        (r"(?:FairIncl|AnchIncl|FairDecl|AnchDecl|FairAngle|AnchAngle)0*[1-9][0-9]*", "deg"),
+        (r"Ten0*[1-9][0-9]*N0*[1-9][0-9]*", "N"),
+        (r"Curv0*[1-9][0-9]*N0*[1-9][0-9]*", "1/m"),
+        (r"BendMom0*[1-9][0-9]*N0*[1-9][0-9]*", "N-m"),
+        (r"Torq0*[1-9][0-9]*N0*[1-9][0-9]*", "N-m"),
+        (r"Twist0*[1-9][0-9]*(?:N0*[1-9][0-9]*)?", "deg"),
+        (r"L0*[1-9][0-9]*N0*[1-9][0-9]*p[xyz]", "m"),
+        (r"L0*[1-9][0-9]*N0*[1-9][0-9]*v[xyz]", "m/s"),
+        (r"L0*[1-9][0-9]*N0*[1-9][0-9]*a[xyz]", "m/s^2"),
+        (r"L0*[1-9][0-9]*N0*[1-9][0-9]*(?:Dec|Azi)", "deg"),
+        (r"(?:Point|Con)0*[1-9][0-9]*p[xyz]", "m"),
     )
     for pattern, unit in patterns:
         if re.fullmatch(pattern, channel, flags=re.IGNORECASE):

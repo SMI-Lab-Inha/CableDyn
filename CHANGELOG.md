@@ -70,6 +70,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Builds with gfortran 16 are free of `-Wuninitialized` warnings; the reported values (the
   bounds of unallocated components) were never read.
 - The EPUB edition of the manual no longer contains the `.nojekyll` marker file.
+- Python: `DeckFile` messages for an `END CONNECTIONS` row name the line, the end and the
+  offending value, and the unit of a main-output channel written with leading zeros in its ids
+  (`Ten01N04`, `Torq03N4`) is recognised, as the driver accepts such names.
 
 ## [0.1.0] - 2026-10-01
 

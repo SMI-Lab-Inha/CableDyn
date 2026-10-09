@@ -170,7 +170,8 @@ class RangeGraph:
         or, for an element table,
         ``"axial_resultant"``.
     unit : str | None
-        Unit of the quantity: ``N``, ``1/m``, ``N-m``, ``deg``, or ``m``.
+        Unit of the quantity as the source labels it: ``N``, ``1/m``, ``deg``, ``m``,
+        and for a moment or torque ``N.m`` (the units row of a range file) or ``N-m``.
     location_kind : str
         ``"ArcLength"`` (``location`` in metres from End A) or ``"Node"``
         (``location`` is the one-based node number).

@@ -2866,7 +2866,7 @@ class DeckFile:
         for row in self.end_connections:
             if len(row.tokens) not in (6, 10, 11):
                 raise DeckFormatError(
-                    f"{self._at(row)}: END CONNECTIONS row needs 6 fields "
+                    f"{self._at(row)}: END CONNECTIONS row needs 6 columns "
                     "(LineID End Stiffness EzX EzY EzZ), or 10 or 11 with the torsion columns "
                     "(... TorsStiffness NxX NxY NxZ [Pretwist])"
                 )
@@ -2874,23 +2874,28 @@ class DeckFile:
                 line_id = str(_native_int(row.tokens[0]))
             except ValueError as exc:
                 raise DeckFormatError(
-                    f"{self._at(row)}: END CONNECTIONS LineID must be an integer"
+                    f"{self._at(row)}: END CONNECTIONS LineID must be an integer, "
+                    f"got {row.tokens[0]!r}"
                 ) from exc
             if _native_int(line_id) < 1:
-                raise DeckFormatError(f"{self._at(row)}: END CONNECTIONS LineID must be positive")
+                raise DeckFormatError(
+                    f"{self._at(row)}: END CONNECTIONS LineID must be positive, got {line_id}"
+                )
             if line_id not in line_ids:
                 raise DeckFormatError(
-                    f"{self._at(row)}: END CONNECTIONS references an undefined line"
+                    f"{self._at(row)}: END CONNECTIONS references an undefined line {line_id}"
                 )
             try:
                 end = _end_connection_end(row.tokens[1])
             except ValueError as exc:
-                raise DeckFormatError(f"{self._at(row)}: {exc}") from exc
+                raise DeckFormatError(
+                    f"{self._at(row)}: line {line_id}: {exc}, got {row.tokens[1]!r}"
+                ) from exc
+            # names the line end in every message below
+            where = f"{self._at(row)}: line {line_id} End {end.upper()}:"
             key = (line_id, end)
             if key in assigned_end_connections:
-                raise DeckFormatError(
-                    f"{self._at(row)}: duplicate END CONNECTIONS row for one line end"
-                )
+                raise DeckFormatError(f"{where} duplicate END CONNECTIONS row for one line end")
             assigned_end_connections.add(key)
 
             stiffness_token = _strip_quotes(row.tokens[2]).lower()
@@ -2903,8 +2908,8 @@ class DeckFile:
                 stiffness = _keyword_column_real(row.tokens[2])
                 if stiffness is None or stiffness < 0.0:
                     raise DeckFormatError(
-                        f"{self._at(row)}: END CONNECTIONS stiffness must be finite and "
-                        "non-negative, Pinned, or Rigid"
+                        f"{where} END CONNECTIONS stiffness must be finite and "
+                        f"non-negative, Pinned, or Rigid, got {row.tokens[2]!r}"
                     )
                 non_pinned = stiffness > 0.0
 
@@ -2915,7 +2920,8 @@ class DeckFile:
             norm = math.sqrt(sum(value * value for value in direction))
             if not math.isfinite(norm) or norm <= math.sqrt(sys.float_info.min):
                 raise DeckFormatError(
-                    f"{self._at(row)}: END CONNECTIONS direction must be non-zero"
+                    f"{where} END CONNECTIONS direction must be non-zero, got "
+                    f"({', '.join(row.tokens[3:6])})"
                 )
             if len(row.tokens) > 6:
                 # native append_end_connection: TorsStiffness NxX NxY NxZ [Pretwist]
@@ -2928,8 +2934,8 @@ class DeckFile:
                     torsion_k = _keyword_column_real(row.tokens[6])
                     if torsion_k is None or torsion_k < 0.0:
                         raise DeckFormatError(
-                            f"{self._at(row)}: END CONNECTIONS torsional stiffness must be finite "
-                            "and non-negative, Free, or Rigid"
+                            f"{where} END CONNECTIONS torsional stiffness must be finite "
+                            f"and non-negative, Free, or Rigid, got {row.tokens[6]!r}"
                         )
                     restrained = torsion_k > 0.0
                 normal = [
@@ -2944,7 +2950,7 @@ class DeckFile:
                     numeric(row.tokens[10], row, "END CONNECTIONS pretwist")
                 if restrained:
                     # a Free end has no torsion frame: its normal is not checked (native)
-                    self._check_torsion_normal(row, normal, direction, norm)
+                    self._check_torsion_normal(where, row, normal, direction, norm)
                 torsion_ends.setdefault(line_id, {})[end] = restrained
             if non_pinned:
                 has_finite_ei = any(
@@ -2952,13 +2958,11 @@ class DeckFile:
                     for line_type in section_types_by_line[line_id]
                 )
                 if not has_finite_ei:
-                    raise DeckFormatError(
-                        f"{self._at(row)}: END CONNECTIONS requires a finite-EI line"
-                    )
+                    raise DeckFormatError(f"{where} END CONNECTIONS requires a finite-EI line")
                 end_b = normalized_line_endpoints[line_id][1]
                 if point_types[end_b] != "fixed":
                     raise DeckFormatError(
-                        f"{self._at(row)}: non-pinned END CONNECTIONS require "
+                        f"{where} non-pinned END CONNECTIONS require "
                         "a finite-EI line with Fixed End B"
                     )
 
@@ -3747,6 +3751,7 @@ class DeckFile:
 
     def _check_torsion_normal(
         self,
+        where: str,
         row: DeckRecord,
         normal: list[float],
         direction: list[float],
@@ -3756,8 +3761,8 @@ class DeckFile:
         normal_norm = math.sqrt(sum(value * value for value in normal))
         if not math.isfinite(normal_norm) or normal_norm <= math.sqrt(sys.float_info.min):
             raise DeckFormatError(
-                f"{self._at(row)}: END CONNECTIONS torsion reference normal "
-                "(NxX NxY NxZ) must be non-zero"
+                f"{where} END CONNECTIONS torsion reference normal "
+                f"(NxX NxY NxZ) must be non-zero, got ({', '.join(row.tokens[7:10])})"
             )
         nx = [value / normal_norm for value in normal]
         ez = [value / direction_norm for value in direction]
@@ -3768,8 +3773,9 @@ class DeckFile:
         )
         if parallel < _TORSION_NORMAL_PARALLEL_TOL:
             raise DeckFormatError(
-                f"{self._at(row)}: END CONNECTIONS torsion reference normal "
-                "(NxX NxY NxZ) must not be parallel to the direction Ez"
+                f"{where} END CONNECTIONS torsion reference normal "
+                f"(NxX NxY NxZ) ({', '.join(row.tokens[7:10])}) must not be parallel to the "
+                f"direction Ez ({', '.join(row.tokens[3:6])})"
             )
 
     def _check_torsion_lines(
@@ -3796,12 +3802,8 @@ class DeckFile:
         and a standalone mixed EI = 0 + finite-EI deck without bodies (``aggregate_route``,
         run on the aggregate) refuse any torsion column, one restrained end included.
         """
-        attachment_lines = set()
-        for row in self._rows("ATTACHMENTS"):
-            try:
-                attachment_lines.add(str(_native_int(row.tokens[0])))
-            except ValueError:
-                continue
+        # _check_attachments has already accepted every LineID as an integer
+        attachment_lines = {str(_native_int(row.tokens[0])) for row in self._rows("ATTACHMENTS")}
         torsion_lines: set[str] = set()
         has_torsion_column = False
         for line_id, ends in torsion_ends.items():
@@ -4274,9 +4276,11 @@ class DeckFile:
         """Edit one ``END CONNECTIONS`` row selected by line id and end.
 
         Keyword names are column names, case-insensitive: ``lineid``, ``end``,
-        ``stiffness``, ``ezx``, ``ezy``, ``ezz`` and, on a row that has the torsion
-        columns (10 or 11 values), ``torsstiffness``, ``nxx``, ``nxy``, ``nxz`` and
-        ``pretwist``.
+        ``stiffness``, ``ezx``, ``ezy``, ``ezz``, on a row that has the torsion
+        columns (10 or 11 values) ``torsstiffness``, ``nxx``, ``nxy`` and ``nxz``, and
+        on an 11-value row ``pretwist``. An edit changes existing columns only: it does
+        not add the torsion columns or a pretwist to a shorter row (a ``KeyError``);
+        :class:`cabledyn.builder.DeckModel` writes rows of any width.
 
         Parameters
         ----------
@@ -4293,7 +4297,7 @@ class DeckFile:
         Raises
         ------
         KeyError
-            If the row or a column does not exist.
+            If the row does not exist, or the row has no such column.
         ValueError
             If ``end`` or a value is invalid.
         DeckFormatError

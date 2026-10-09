@@ -831,6 +831,35 @@ def test_torsion_end_connection_columns_follow_the_native_rules(row, message):
     _rejects(_edit(_TORSION, (_TORSION_ROW_A, row)), message)
 
 
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        (
+            "1 A Rigid 1 0 0 Stiff 0 0 1 0\n",
+            r"line 1 End A: END CONNECTIONS torsional stiffness .*, got 'Stiff'",
+        ),
+        ("1 A Rigid 1 0 0 -1.0 0 0 1 0\n", r"line 1 End A: .*, got '-1\.0'"),
+        ("1 A -5 1 0 0 Rigid 0 0 1 0\n", r"line 1 End A: END CONNECTIONS stiffness .*, got '-5'"),
+        (
+            "1 A Rigid 0 0 0 Rigid 0 0 1 0\n",
+            r"line 1 End A: .*direction must be non-zero, got \(0, 0, 0\)",
+        ),
+        ("1 A Rigid 1 0 0 Rigid 0 0 0 0\n", r"line 1 End A: .*must be non-zero, got \(0, 0, 0\)"),
+        (
+            "1 A Rigid 1 0 0 Rigid 2 0 0 0\n",
+            r"line 1 End A: .*\(2, 0, 0\) must not be parallel to the direction Ez \(1, 0, 0\)",
+        ),
+        ("1 C Rigid 1 0 0 Rigid 0 0 1 0\n", r"line 1: END CONNECTIONS End must be A or B, got 'C'"),
+        ("1 B Rigid 1 0 0 Rigid 0 0 1 0\n", r"line 1 End B: duplicate END CONNECTIONS row"),
+        ("7 A Rigid 1 0 0 Rigid 0 0 1 0\n", r"references an undefined line 7"),
+        ("0 A Rigid 1 0 0 Rigid 0 0 1 0\n", r"LineID must be positive, got 0"),
+        ("x A Rigid 1 0 0 Rigid 0 0 1 0\n", r"LineID must be an integer, got 'x'"),
+    ],
+)
+def test_end_connection_errors_name_the_line_end_and_value(row, message):
+    _rejects(_edit(_TORSION, (_TORSION_ROW_A, row)), message)
+
+
 def test_torsion_line_rules_follow_the_native_checks():
     # torsion has no EI/1.3 default: the 10-column LINE TYPES row has no GJ
     no_gj = _edit(
@@ -1071,10 +1100,25 @@ _PARITY_DRIVER = (
         "1 A Rigid 1 0 0 1.0q5 0 1 1 -45",
         "1 A 1.0q5 1 0 0 Rigid 0 1 1 -45",
         "1 A Rigid 1 0 0 Rigid 0 0 1",
+        "1 A Rigid 1 0 0 Pinned 0 0 1 0",
+        "1 A Rigid 1 0 0 Zero 0 0 1 0",
+        "1 A Rigid 1 0 0 2.5d4 +0 .5 1 1d2",
+        "1 A Rigid 1 0 0 Rigid 0 0 0 0",
+        "1 A Rigid 1 0 0 Rigid 1 0 0.0009 0",
+        "1 A Rigid 1 0 0 Rigid 1 0 0.0011 0",
+        "1 A Rigid 1 0 0 Rigid 0 0 1 nan",
+        "1 A Rigid 1 0 0 Rigid 0 0 1 1e400",
+        "1 A Rigid 1 0 0 Free 0 0 0 0",
+        "1 A Rigid 1 0 0 Free 1 0 0 -7200",
+        "1 A Rigid 1 0 0 Free 0 nan 1 0",
+        "1 A Rigid 1 0 0 Free 0 0 1 inf",
     ],
 )
 def test_torsion_rows_get_the_native_verdict(row_a, tmp_path):
     text = _edit(_TORSION, (_TORSION_ROW_A, f"{row_a}\n"))
+    if row_a.split()[6].lower() in {"free", "zero"}:
+        # one restrained end carries no torque: judge the row, not the torsion channels
+        text = _edit(text, _NO_TORSION_OUTPUTS)
     try:
         DeckFile.from_text(text)
         python_accepts = True
@@ -1092,6 +1136,52 @@ def test_torsion_rows_get_the_native_verdict(row_a, tmp_path):
     )
     # exit code 1 is an input refusal; 0 a run and 2 a solve failure after validation
     assert python_accepts == (completed.returncode != 1), completed.stdout + completed.stderr
+
+
+def _native_exit(text: str, tmp_path: Path) -> int:
+    deck = tmp_path / "torsion.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "torsion")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=600,
+        check=False,
+    )
+    return completed.returncode
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the native torsion parity",
+)
+@pytest.mark.parametrize(
+    "channel",
+    [
+        "TWIST01",
+        "torq01n041",
+        "Twist1N41",
+        "Twist1N42",
+        "Torq1N0",
+        "Twist1N0",
+        "Torq1",
+        "Twist",
+        "Twist1N",
+        "Torq1N1x",
+        "Twist1x",
+        "Twist2",
+    ],
+)
+def test_torsion_channels_get_the_native_verdict(channel, tmp_path):
+    text = _edit(_TORSION, ("Twist1\n", f"{channel}\n"))
+    try:
+        DeckFile.from_text(text)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    # exit code 1 is an input refusal; 0 a run and 2 a solve failure after validation
+    assert python_accepts == (_native_exit(text, tmp_path) != 1)
 
 
 @pytest.mark.parametrize(

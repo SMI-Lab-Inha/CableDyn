@@ -772,8 +772,11 @@ LineID  End  Stiffness  EzX  EzY  EzZ   TorsStiffness  NxX  NxY  NxZ  Pretwist
 | Column | Meaning |
 |--------|---------|
 | `TorsStiffness` | `Free`/`Zero`/`0` (default, no torsional restraint), `Rigid`/`Infinity`/`Inf` (any case), or a positive torsional end spring [N·m/rad], a plain finite number |
-| `NxX`, `NxY`, `NxZ` | zero-twist reference normal of the end, in the frame of `Ez`; finite numbers; at a restrained end non-zero and not parallel to `Ez` (within about 0.06°), orthonormalised against `Ez` by the parser; unused at a `Free` end |
-| `Pretwist` | optional roll of the end frame about `Ez` [deg, right-handed, default 0]; any real value, several turns included |
+| `NxX`, `NxY`, `NxZ` | zero-twist reference normal of the end, in the frame of `Ez`; finite numbers; at a restrained end non-zero and not parallel to `Ez` (within about 0.06°), orthonormalised against `Ez` by the parser |
+| `Pretwist` | optional roll of the end frame about `Ez` [deg, right-handed, default 0]; any finite value, several turns included |
+
+At a `Free` end the normal and `Pretwist` are only checked to be finite numbers; they are not
+used.
 
 Behaviour:
 
@@ -1241,8 +1244,8 @@ bending moment. None of these channels is mandatory.
 | `TDP<L>Lay` | line L layback: horizontal distance from the TDP to the suspended end | m |
 | `TDP<L>Exc` | line L TDP excursion: horizontal TDP displacement from its initial position, along the initial direction toward the suspended end | m |
 | `Torq<L>N<J>` | line L torque at node J (uniform along the line); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line restrained in torsion at both ends | N·m |
-| `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` over the elements in between; 0 at End A, without the end-spring windup | deg |
-| `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included | deg |
+| `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` over the elements in between; 0 at End A, without the end-spring windup. Only on a line restrained in torsion at both ends | deg |
+| `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included. Only on a line restrained in torsion at both ends | deg |
 
 - `<L>`/`<P>` are deck LINE/POINT **ids**, not array positions. A channel that matches no
   supported form, names an unknown id, or carries trailing text (for example `Point2px_raw`) is a

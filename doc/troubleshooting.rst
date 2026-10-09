@@ -591,6 +591,14 @@ executable (``cmake --install`` stages it) or run from the activated environment
 requested a ServoDyn controller, so copy that model-specific controller with the model or
 disable it. See :doc:`installation` (standalone binaries).
 
+**Stack size of a GNU build.** A build with gfortran on Windows (MinGW-w64) links the driver
+and the test programs with a 64 MiB stack reserve instead of the 2 MiB MinGW default, because
+with OpenMP gfortran places fixed-size local arrays on the stack. A reserve is address space,
+not committed memory. The shared library does not rely on it: a program that loads
+``libcabledyn``, such as ``python.exe``, chooses the stack of the threads that call it. The
+``stack`` tests check that the library runs on threads with a 1 MiB stack, and that a driver
+linked with a 1 MiB reserve runs a 2048-element deck.
+
 If your issue is not here, see :doc:`faq`; the :doc:`driver_format` row for the feature is the
 authoritative statement of what is supported, and :doc:`validation` records exactly which cases
 are validated.

@@ -314,6 +314,16 @@ def test_time_must_be_strictly_increasing(tmp_path):
         ("fairten1", "N"),
         ("l3n4PX", "m"),
         ("ANCHANGLE2", "deg"),
+        # ids with leading zeros, as the native channel parser reads them
+        ("FairTen01", "N"),
+        ("Ten01N004", "N"),
+        ("Torq03N004", "N-m"),
+        ("Twist03N4", "deg"),
+        ("Twist03", "deg"),
+        ("L03N04pz", "m"),
+        # an all-zero id is no channel
+        ("Twist0", None),
+        ("Torq0N1", None),
         ("Unknown", None),
     ],
 )

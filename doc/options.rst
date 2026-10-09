@@ -520,8 +520,8 @@ Ambient fluid and prescribed motion
      - absent
      - an active path requires ``dtM`` and ``TMax``; ``0`` or case-insensitive ``none`` disables
        it. On a deck with a line restrained in torsion at both ends, an optional twelfth column
-       rolls that line's End A frame (degrees, 0 at ``t = 0``). See the file grammar in
-       :doc:`file_formats`
+       rolls the frame of that line's moving end (degrees, 0 at ``t = 0``). See the file
+       grammar in :doc:`file_formats`
      - standalone ``Coupled``/``Vessel`` points, prescribed rods, and Rigid6 bodies; rejected
        on ``Connect``/``Free`` point-system, FAILURE, and mixed decks; forbidden in OpenFAST,
        where the host owns coupled motion

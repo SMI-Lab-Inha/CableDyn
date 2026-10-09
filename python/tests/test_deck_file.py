@@ -3110,7 +3110,7 @@ def test_point_line_and_section_references(edits, message):
 @pytest.mark.parametrize(
     ("row", "message"),
     [
-        ("1 A 2.0e4 0 0", "END CONNECTIONS row needs 6 fields"),
+        ("1 A 2.0e4 0 0", "END CONNECTIONS row needs 6 columns"),
         ("x A 2.0e4 0 0 -1", "END CONNECTIONS LineID must be an integer"),
         ("0 A 2.0e4 0 0 -1", "END CONNECTIONS LineID must be positive"),
     ],
