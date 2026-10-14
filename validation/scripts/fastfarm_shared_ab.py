@@ -103,6 +103,30 @@ def read_table(path: Path) -> dict[str, np.ndarray]:
     return {n.upper(): data[:, j] for j, n in enumerate(names)}
 
 
+def run_tmax(run: Path) -> float:
+    """TMax of a prepared run folder, from its FAST.Farm.fstf."""
+    fstf = run / "FAST.Farm.fstf"
+    if not fstf.is_file():
+        die(f"missing {fstf}")
+    m = re.search(r"^\s*(\S+)\s+TMax\b", fstf.read_text(), re.M)
+    if not m:
+        die(f"{fstf}: no TMax")
+    return float(m.group(1))
+
+
+def require_complete(table: dict, tmax: float, what: str) -> None:
+    """A run that stopped early would leave a shorter shared window: refuse it by name. A
+    complete table ends within one output interval of TMax (FAST.Farm's MoorDyn output omits
+    the last row)."""
+    t = table["TIME"]
+    if t.size < 2:
+        die(f"{what} has fewer than two rows")
+    t_end = float(t[-1])
+    dt_out = float(np.median(np.diff(t)))
+    if t_end < tmax - 1.5 * dt_out:
+        die(f"{what} ends at t = {t_end:g} s, before TMax = {tmax:g} s (incomplete run)")
+
+
 def align(a: dict, b: dict, t0: float, cadence_ms: int = 50) -> tuple[np.ndarray, np.ndarray]:
     """Indices of the samples both tables share on a 1 ms grid, every cadence_ms, from t0."""
     ta = np.round(a["TIME"] * 1000).astype(np.int64)
@@ -125,8 +149,13 @@ def row(label: str, xm: np.ndarray, xc: np.ndarray) -> dict:
 
 
 def compare(md_dir: Path, cd_dir: Path, t0: float, csv: Path | None) -> None:
+    tmax = run_tmax(md_dir)
+    if abs(run_tmax(cd_dir) - tmax) > 1.0e-9 * max(1.0, tmax):
+        die("the two runs have different TMax")
     md = read_table(md_dir / "FAST.Farm.FarmMD.MD.out")
     cd = read_table(cd_dir / "FAST.Farm.FarmCD.out")
+    require_complete(md, tmax, "MoorDyn mooring output")
+    require_complete(cd, tmax, "CableDyn mooring output")
     ia, ib = align(md, cd, t0)
     pairs = []
     ends = {1: ("T1 fairlead", "clump 2"), 2: ("clump 2", "clump 3"), 3: ("clump 3", "T2 fairlead")}
@@ -151,6 +180,8 @@ def compare(md_dir: Path, cd_dir: Path, t0: float, csv: Path | None) -> None:
     for tw in ("T1", "T2"):
         a = read_table(md_dir / f"FAST.Farm.{tw}.out")
         b = read_table(cd_dir / f"FAST.Farm.{tw}.out")
+        require_complete(a, tmax, f"MoorDyn run {tw} output")
+        require_complete(b, tmax, f"CableDyn run {tw} output")
         ja, jb = align(a, b, t0)
         for ch in ("PtfmSurge", "PtfmSway", "PtfmHeave", "PtfmRoll", "PtfmPitch", "PtfmYaw"):
             rows.append(row(f"{tw} {ch}", a[ch.upper()][ja], b[ch.upper()][jb]))
