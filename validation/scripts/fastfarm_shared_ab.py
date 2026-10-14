@@ -8,8 +8,10 @@ wake, JONSWAP waves), identical except for the shared-mooring module. CableDyn r
 MoorDyn deck ``SharedMooring2.dat`` unchanged.
 
 ``prepare`` copies the r-test folder twice and edits, identically in both copies except for
-``Mod_SharedMooring``: ``TMax``, ``WrMooringVis False``, turbine ``WrVTK 0``, and the clump
-position channels ``Point2p*``/``Point3p*`` added to the deck's OUTPUTS. Run ``FAST.Farm.exe
+``Mod_SharedMooring``: ``TMax``, ``WrMooringVis False``, turbine ``WrVTK 0``, and the
+anchor-leg anchor tensions ``AnchTen5``-``AnchTen7`` (the r-test deck writes ``AnchTen1``-
+``AnchTen4`` only) and the clump position channels ``Point2p*``/``Point3p*`` added to the
+deck's OUTPUTS. Run ``FAST.Farm.exe
 FAST.Farm.fstf`` in each copy (one OpenMP thread), then ``compare``.
 
 Channel pairing. MoorDyn writes ``FairTen<L>`` at the line's last node (deck ``AttachB``) and
@@ -79,7 +81,8 @@ def prepare(rtest: Path, out: Path, tmax: float) -> None:
         marker = "FairTen7\n"
         if marker not in t:
             die("SharedMooring2.dat: OUTPUTS marker FairTen7 not found")
-        extra = "".join(f"Point{p}p{c}\n" for p in (2, 3) for c in "xyz")
+        extra = "".join(f"AnchTen{line}\n" for line in (5, 6, 7))
+        extra += "".join(f"Point{p}p{c}\n" for p in (2, 3) for c in "xyz")
         deck.write_text(t.replace(marker, marker + extra, 1))
         print(f"prepared {run} (Mod_SharedMooring = {mod}, TMax = {tmax:g} s)")
 
@@ -132,8 +135,8 @@ def compare(md_dir: Path, cd_dir: Path, t0: float, csv: Path | None) -> None:
                       f"ANCHTEN{line}", f"FAIRTEN{line}"))
         pairs.append((f"L{line} end B, {b} [MD FairTen{line} / CD AnchTen{line}]",
                       f"FAIRTEN{line}", f"ANCHTEN{line}"))
-    pairs.append(("L4 anchor [AnchTen4]", "ANCHTEN4", "ANCHTEN4"))
     for line in (4, 5, 6, 7):
+        pairs.append((f"L{line} anchor [AnchTen{line}]", f"ANCHTEN{line}", f"ANCHTEN{line}"))
         pairs.append((f"L{line} fairlead [FairTen{line}]", f"FAIRTEN{line}", f"FAIRTEN{line}"))
     for p in (2, 3):
         for c in "XYZ":
