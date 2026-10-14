@@ -1900,6 +1900,14 @@ add_test(
 set_tests_properties(driver_repeat_exit PROPERTIES
   LABELS "fortran;driver;integration;static")
 
+# Run-time profile module: phase partition, a failed run's time kept in its phase, and exact
+# line-step counts under OpenMP.
+add_executable(test_profile tests/test_profile.f90)
+target_link_libraries(test_profile PRIVATE cabledyn_core)
+add_test(NAME profile COMMAND test_profile)
+set_tests_properties(profile PROPERTIES LABELS "fortran;unit;driver"
+                     ENVIRONMENT "OMP_NUM_THREADS=4")
+
 # Run-time profile (CABLEDYN_PROFILE): printed only when requested, before the success line,
 # with its phase rows and counts, and without changing any output file. One EI = 0 deck with
 # waves (fluid, steps and line counts) and one finite-EI deck on the cubic-Hermite route.
@@ -1919,7 +1927,14 @@ add_test(
     -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_finite_ei
     "-DEXPECT=\n    Finite-EI cable steps: [1-9][0-9]*, residual evaluations: [1-9]"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile.cmake)
-set_tests_properties(driver_profile_ei0 driver_profile_finite_ei PROPERTIES
+add_test(
+  NAME driver_profile_failure
+  COMMAND ${CMAKE_COMMAND}
+    -DDRIVER=$<TARGET_FILE:cabledyn>
+    -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/nonconvergent_motion.dat
+    -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_failure
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile_failure.cmake)
+set_tests_properties(driver_profile_ei0 driver_profile_finite_ei driver_profile_failure PROPERTIES
   LABELS "fortran;driver;integration;dynamic")
 
 # Command-line contract: unknown options, an output root whose .out would overwrite

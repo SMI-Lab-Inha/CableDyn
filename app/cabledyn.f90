@@ -34,10 +34,10 @@ PROGRAM cabledyn
   USE CableDyn_Banner, ONLY: CD_Print_Banner
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install, CD_Fatal_Report_Time
-  USE CableDyn_Profile, ONLY: CD_Profile_Requested, CD_Profile_Arm, CD_Profile_Armed, CD_Profile_Lap, &
-                              CD_Profile_Step, CD_Profile_Seconds, CD_Profile_Counts, CD_PROF_INPUT, CD_PROF_INIT, &
-                              CD_PROF_FLUID, CD_PROF_SOLVE, CD_PROF_CHECK, CD_PROF_OUTPUT, CD_PROF_PROGRESS, &
-                              CD_PROF_FINAL, CD_PROF_NPHASE
+  USE CableDyn_Profile, ONLY: CD_Profile_Requested, CD_Profile_Arm, CD_Profile_Armed, CD_Profile_Enter, &
+                              CD_Profile_Flush, CD_Profile_Step, CD_Profile_Seconds, CD_Profile_Counts, &
+                              CD_PROF_INPUT, CD_PROF_INIT, CD_PROF_FLUID, CD_PROF_SOLVE, CD_PROF_CHECK, &
+                              CD_PROF_OUTPUT, CD_PROF_PROGRESS, CD_PROF_FINAL, CD_PROF_NPHASE
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, CD_HermiteCable_Dyn_Get_Profile, &
                                           CD_HermiteCable_Dyn_Recovery_Reset, CD_HermiteCable_Dyn_Recovery_Count
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
@@ -135,7 +135,6 @@ PROGRAM cabledyn
                          has_tmax=has_tmax, n_ei0=n_ei0, n_finite_ei=n_finite_ei, &
                          has_motion_file=has_motion_file, standalone_scan=.TRUE., &
                          has_line_outputs=has_line_outputs, input_files=input_files, has_objects=has_objects)
-  CALL CD_Profile_Lap(CD_PROF_INPUT)
   IF (ErrStat == CD_DECKDRV_OK) THEN
     DO iarg = 1, SIZE(input_files)
       CALL check_input_not_output(TRIM(input_files(iarg)), TRIM(out_root), root_native, 'input file')
@@ -489,6 +488,8 @@ CONTAINS
     END IF
 
     mixed_run: BLOCK
+      ! the aggregate parses the deck again with its models: initialisation from here
+      CALL CD_Profile_Enter(CD_PROF_INIT)
       ALLOCATE (aggregate, STAT=ios)
       IF (ios /= 0) THEN
         run_stat = CD_DECKDRV_SOLVEFAIL
@@ -572,14 +573,14 @@ CONTAINS
       max_consecutive_miss = 0
       first_miss_time = CD_ZERO
       last_miss_time = CD_ZERO
-      ! the aggregate's deck parse, model build, statics and initial outputs
-      CALL CD_Profile_Lap(CD_PROF_INIT)
+      ! the march (no fluid sampled by the driver on this route) or, without one, finalisation
+      CALL CD_Profile_Enter(MERGE(CD_PROF_SOLVE, CD_PROF_FINAL, nstep > 0))
       IF (nstep > 0) CALL start_standalone_progress(progress, nstep, step_dt)
       DO step = 1, nstep
         time = REAL(step, wp)*step_dt
         CALL CD_AGG_Step_Moving(aggregate, step_dt, position, velocity, acceleration, step_converged, stalled, &
                                 n_iter, es, em, t_committed=time)
-        CALL CD_Profile_Lap(CD_PROF_SOLVE)
+        CALL CD_Profile_Enter(CD_PROF_OUTPUT)
         IF (es /= CD_AGG_OK) THEN
           CALL set_aggregate_error(es, em, run_stat, run_msg)
           EXIT mixed_run
@@ -608,7 +609,7 @@ CONTAINS
           CALL set_aggregate_error(es, em, run_stat, run_msg)
           EXIT mixed_run
         END IF
-        CALL CD_Profile_Lap(CD_PROF_OUTPUT)
+        CALL CD_Profile_Enter(CD_PROF_PROGRESS)
         CALL update_standalone_progress(progress, step, time)
       END DO
 
@@ -822,20 +823,23 @@ CONTAINS
     CALL CD_Profile_Step()
     ! Every committed step: the time an abnormal end of the process reports.
     CALL CD_Fatal_Report_Time(simulated_time)
-    IF (step < progress%nstep .AND. MOD(step, progress%stride) /= 0) RETURN
-    CALL SYSTEM_CLOCK(now)
-    elapsed = CD_ZERO
-    IF (progress%count_rate > 0_int64 .AND. now >= progress%start_count) &
-      elapsed = REAL(now - progress%start_count, wp)/REAL(progress%count_rate, wp)
-    remaining = CD_ZERO
-    IF (step < progress%nstep .AND. elapsed > CD_ZERO) &
-      remaining = elapsed*REAL(progress%nstep - step, wp)/REAL(step, wp)
-    percent = 100.0_wp*REAL(step, wp)/REAL(progress%nstep, wp)
-    elapsed_text = format_wall_time(elapsed)
-    remaining_text = format_wall_time(remaining)
-    WRITE (output_unit, '(A,F6.1,A,F12.3,A,A,A,A)') '  Progress: ', percent, '% | t = ', &
-      simulated_time, ' s | elapsed ', TRIM(elapsed_text), ' | ETA ', TRIM(remaining_text)
-    FLUSH (output_unit)
+    IF (step >= progress%nstep .OR. MOD(step, progress%stride) == 0) THEN
+      CALL SYSTEM_CLOCK(now)
+      elapsed = CD_ZERO
+      IF (progress%count_rate > 0_int64 .AND. now >= progress%start_count) &
+        elapsed = REAL(now - progress%start_count, wp)/REAL(progress%count_rate, wp)
+      remaining = CD_ZERO
+      IF (step < progress%nstep .AND. elapsed > CD_ZERO) &
+        remaining = elapsed*REAL(progress%nstep - step, wp)/REAL(step, wp)
+      percent = 100.0_wp*REAL(step, wp)/REAL(progress%nstep, wp)
+      elapsed_text = format_wall_time(elapsed)
+      remaining_text = format_wall_time(remaining)
+      WRITE (output_unit, '(A,F6.1,A,F12.3,A,A,A,A)') '  Progress: ', percent, '% | t = ', &
+        simulated_time, ' s | elapsed ', TRIM(elapsed_text), ' | ETA ', TRIM(remaining_text)
+      FLUSH (output_unit)
+    END IF
+    ! the next step, or after the last step the finalisation
+    CALL CD_Profile_Enter(MERGE(CD_PROF_FINAL, CD_PROF_SOLVE, step >= progress%nstep))
   END SUBROUTINE update_standalone_progress
 
   SUBROUTINE print_profile()
@@ -848,7 +852,9 @@ CONTAINS
     INTEGER :: line_max_iterations, n_step, n_resid, n_solve, n_am, n_alloc, n_tan, k
     IF (printed .OR. .NOT. CD_Profile_Armed()) RETURN
     printed = .TRUE.
-    CALL CD_Profile_Lap(CD_PROF_FINAL)
+    ! the running phase up to now: the finalisation of a completed run, or the phase in which a
+    ! failed run stopped
+    CALL CD_Profile_Flush()
     DO k = 1, CD_PROF_NPHASE
       seconds(k) = CD_Profile_Seconds(k)
     END DO

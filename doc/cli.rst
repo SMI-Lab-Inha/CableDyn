@@ -172,10 +172,14 @@ breakdown such as:
        Finite-EI cable steps: 4849, residual evaluations: 21255, tangent assemblies: 10391, linear solves: 10391, intervals recovered by substeps: 0.
        Finite-EI cable step time (s): residual 1.416, tangent 2.674, effective matrix 0.136, linear solve 0.943, added mass 0.167, other 0.457.
 
-The phases add up to the total, which runs from the start of the deck parse to the report.
+The phases add up to the total, which runs from the start of the deck parse to the report. If the
+run stops with an error, the time up to the stop counts to the phase in which it stopped, and
+finalisation stays at zero.
 
 * **Initialisation and statics** covers building the models, the static equilibrium, any modal
-  analysis, and the initial output rows.
+  analysis, and the initial output rows. For a static deck it also covers writing the output
+  files. On the mixed ``EI = 0`` + finite-EI route it includes the deck parse that builds the
+  models.
 * **Fluid sampled by the driver** is the deck wave and current field that the driver samples at
   the nodes before each step. A finite-EI cable evaluates the wave kinematics inside its
   element loads, and a ``motionFile`` Rigid6 or rod march samples the fluid within its step. On
