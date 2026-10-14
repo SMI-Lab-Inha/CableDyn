@@ -805,6 +805,12 @@ MODULE CableDyn_DeckDriver
     INTEGER :: n_outer = 0, max_outer = 0, n_steps_imp = 0, n_subdiv = 0
     ! condensed line tangent reuse: steps since the last refresh and the last step's outer count
     INTEGER :: tan_age = HUGE(1), last_outer = 0, n_refresh = 0
+    ! clamped-cable Jacobian reuse: each clamped cable's finite-difference contribution to the
+    ! junction Jacobian over its object's group (cab_jac(1:n, 1:n, c), rows and columns from the
+    ! group's first coordinate), the steps since it was built and the step size it was built for
+    REAL(wp), ALLOCATABLE :: cab_jac(:, :, :)
+    INTEGER :: cab_age = HUGE(1)
+    REAL(wp) :: cab_dt = CD_ZERO
     INTEGER, ALLOCATABLE :: jb_off(:), jr_off(:), jp_off(:), g_kind(:), g_idx(:), g_lo(:), g_hi(:)
     LOGICAL, ALLOCATABLE :: jactive(:), is_rot(:)
     ! jobj: coupled DOFs driven by a body or rod (the objects' trapezoidal levels at the line
@@ -16426,7 +16432,10 @@ CONTAINS
     ALLOCATE (mb%cables(SIZE(cab_lines)), mb%cab_kind(SIZE(cab_lines)), mb%cab_obj(SIZE(cab_lines)), &
               mb%cab_off(3, SIZE(cab_lines)), mb%cab_force(3, SIZE(cab_lines)), &
               mb%cab_clamp(SIZE(cab_lines)), mb%cab_moment(3, SIZE(cab_lines)), mb%cab_fend(3, SIZE(cab_lines)), &
-              mb%cab_mend(3, SIZE(cab_lines)), mb%cab_f0(3, SIZE(cab_lines)), mb%cab_m0(3, SIZE(cab_lines)))
+              mb%cab_mend(3, SIZE(cab_lines)), mb%cab_f0(3, SIZE(cab_lines)), mb%cab_m0(3, SIZE(cab_lines)), &
+              mb%cab_jac(6, 6, SIZE(cab_lines)))
+    mb%cab_jac = CD_ZERO
+    mb%cab_age = HUGE(1)
     mb%cab_kind = 0
     mb%cab_obj = 0
     mb%cab_off = CD_ZERO
@@ -18112,8 +18121,8 @@ CONTAINS
     ! times the object length scale); the line reactions carry the inner tolerance
     REAL(wp), PARAMETER :: JUNCTION_TOL = 1.0e-6_wp, PREDICTOR_TOL = 1.0e-9_wp
     CHARACTER(24) :: tstr
-    INTEGER :: dep, it, g, c, ib, ir, p, o, es, lit, nj, gworst, it2
-    LOGICAL :: lconv, lstall, first, ok, conv2, stall2, refresh, lines_stepped, tors_turn, lim
+    INTEGER :: dep, it, g, c, ib, ir, p, o, es, lit, nj, gworst, it2, gsz
+    LOGICAL :: lconv, lstall, first, ok, conv2, stall2, refresh, lines_stepped, tors_turn, lim, cab_refresh
     INTEGER, PARAMETER :: TAN_MAX_AGE = 20
     REAL(wp) :: rho, am, af, beta_na, gam_na, t_af, h, fac, dth, worst, tol_it, am_p, gam_p, beta_p
     REAL(wp), ALLOCATABLE :: x(:), xp(:), r(:), rp(:), jac(:, :), dx(:), kg(:, :), ga(:, :), rscale(:)
@@ -18194,6 +18203,7 @@ CONTAINS
     lines_stepped = .FALSE.
     ok = .FALSE.
     tors_turn = .FALSE.
+    cab_refresh = .FALSE.
     gworst = 0
     DO it = 1, MAX_OUTER
       ! a body holding a line restrained in torsion turns by less than pi/2 per step: the line
@@ -18284,6 +18294,7 @@ CONTAINS
         mb%max_outer = MAX(mb%max_outer, it)
         mb%last_outer = it
         IF (mb%tan_age < HUGE(1)) mb%tan_age = mb%tan_age + 1
+        IF (mb%cab_age < HUGE(1)) mb%cab_age = mb%cab_age + 1
         EXIT
       END IF
       IF (it == MAX_OUTER) EXIT
@@ -18316,15 +18327,36 @@ CONTAINS
       ! clamped cables: their end force and moment follow the object motion within the step; the
       ! condensed dynamic end tangent (translations and rotations of the attachment) enters by
       ! finite differences of the cable step over the columns of the object's group, each
-      ! perturbing the end-of-step pose by CABLE_FD rad or m
+      ! perturbing the end-of-step pose by CABLE_FD rad or m. Each column re-steps the whole
+      ! cable, so the columns are kept and reused like the lines' condensed tangent: rebuilt on
+      ! the first Jacobian of a step when they are TAN_MAX_AGE steps old, the previous step
+      ! needed more than two outer iterations or the step size changed, and on every Jacobian
+      ! from the third outer iteration on. A Newton with reused columns converges to the same
+      ! junction tolerance.
+      IF (it == 1) THEN
+        cab_refresh = mb%cab_age >= TAN_MAX_AGE .OR. mb%last_outer > 2 .OR. ABS(dt - mb%cab_dt) > CD_ZERO
+      ELSE
+        cab_refresh = cab_refresh .OR. it >= 3
+      END IF
       DO c = 1, SIZE(mb%cables)
         IF (.NOT. mb%cab_clamp(c)) CYCLE
         g = mb_cable_group(mb, c)
         IF (g == 0) CYCLE
-        CALL cable_columns(c, g)
-        IF (ErrStat /= CD_DECKDRV_OK) EXIT
+        IF (cab_refresh) THEN
+          CALL cable_columns(c, g)
+          IF (ErrStat /= CD_DECKDRV_OK) EXIT
+        ELSE
+          gsz = mb%g_hi(g) - mb%g_lo(g) + 1
+          jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(g):mb%g_hi(g)) = &
+            jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(g):mb%g_hi(g)) + mb%cab_jac(1:gsz, 1:gsz, c)
+        END IF
       END DO
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
+      IF (cab_refresh) THEN
+        mb%cab_age = 0
+        mb%cab_dt = dt
+        cab_refresh = .FALSE.
+      END IF
       dx = -r
       CALL CD_Solve_Dense_As_Banded(jac, dx, es, em)
       IF (es /= CD_LINALG_OK .OR. .NOT. ALL(IEEE_IS_FINITE(dx))) EXIT
@@ -18360,6 +18392,7 @@ CONTAINS
       CALL CD_HFMF_Restore(mb%cables(c), es, em)
     END DO
     mb%tan_age = HUGE(1)
+    mb%cab_age = HUGE(1)
     IF (dep >= MAX_DEPTH) THEN
       IF (ErrStat == CD_DECKDRV_OK .AND. tors_turn) THEN
         WRITE (tstr, '(ES12.5)') time
@@ -18402,7 +18435,8 @@ CONTAINS
     SUBROUTINE cable_columns(cc, gg)
       !! Add clamped cable cc's end-load derivative to the Jacobian columns of its group gg:
       !! the cable re-stepped from the step entry with each column perturbed, the group residual
-      !! re-evaluated at the unperturbed objects with the perturbed cable loads.
+      !! re-evaluated at the unperturbed objects with the perturbed cable loads. The columns are
+      !! also kept in mb%cab_jac for reuse.
       INTEGER, INTENT(IN) :: cc, gg
       REAL(wp), PARAMETER :: CABLE_FD = 1.0e-5_wp
       INTEGER :: col, lo, hi
@@ -18432,7 +18466,8 @@ CONTAINS
         mb%cab_force(:, cc) = fsave
         mb%cab_moment(:, cc) = msave
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        jac(lo:hi, col) = jac(lo:hi, col) + (rp(lo:hi) - r(lo:hi))/hc
+        mb%cab_jac(1:hi - lo + 1, col - lo + 1, cc) = (rp(lo:hi) - r(lo:hi))/hc
+        jac(lo:hi, col) = jac(lo:hi, col) + mb%cab_jac(1:hi - lo + 1, col - lo + 1, cc)
       END DO
     END SUBROUTINE cable_columns
   END SUBROUTINE mb_step_implicit
