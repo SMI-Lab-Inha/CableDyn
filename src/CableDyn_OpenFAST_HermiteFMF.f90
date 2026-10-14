@@ -1659,6 +1659,13 @@ CONTAINS
     ! The reloaded acceleration is committed history: a first held fluid field after the
     ! reload (the host re-sampling its field on the restored state) must keep it.
     self%line%a_restored = .TRUE.
+    ! Active line control: the reloaded state is committed with the lengths and rates in
+    ! place now, so the caller re-applies the command of the checkpointed step BEFORE the
+    ! reload (the committed force F_n belongs to those lengths).
+    IF (self%line%has_ctrl) THEN
+      self%line%l0_c = self%line%l0
+      self%line%l0_dot_c = self%line%l0_dot
+    END IF
     ! the force-blend committed force reloads with the state it was evaluated at
     self%line%fc_valid = .FALSE.
     IF (self%line%force_blend) THEN

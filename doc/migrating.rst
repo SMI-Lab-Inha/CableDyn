@@ -114,7 +114,9 @@ Keyword map
    * - ``FAILURE``, ``CONTROL`` sections
      - ``FAILURE`` on ``EI = 0`` decks, standalone and in OpenFAST (a deck with a finite-EI
        cable rejects it); ``CONTROL`` on ``EI = 0`` lines and finite-EI cables in OpenFAST, not
-       in FAST.Farm (the standalone driver rejects it)
+       in FAST.Farm (the standalone driver rejects it). The command changes the segment at the
+       line's host-driven end, or at the ``NodeB`` written in the deck when both or neither ends
+       are host-driven; a stock-order deck is controlled where MoorDyn-F controls it
    * - ``FairTen``, ``AnchTen``, point/node channels
      - same names; tensions in N (:doc:`outputs`). On a line with no ``Fixed`` end the two
        end channels name the opposite ends from MoorDyn's (see above)

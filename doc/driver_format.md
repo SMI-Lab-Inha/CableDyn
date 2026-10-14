@@ -966,24 +966,33 @@ ChannelID  Line(s)
 | `Line(s)` | one line id or a comma list without spaces (`1,2`) |
 
 Each line belongs to at most one channel. Before every advance, the channel's `DeltaL` sets the
-unstretched length of each assigned line's **last (fairlead-side) segment**, the segment at End A
-(MoorDyn's last segment once the automatic anchor-first swap has put the fairlead at End A), to
-its initial length plus `DeltaL`; `DeltaLdot` supplies the matching rate. The length is held over
-the advance. Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment
-paid out at constant strain carries no damping tension.
+unstretched length of each assigned line's **fairlead-side segment** to its initial length plus
+`DeltaL`; `DeltaLdot` supplies the matching rate. The fairlead-side segment is the one at the
+line's end on a host-driven point: `Coupled`, `Vessel`, `Turbine<J>`, `Body<N>`, or an end of a
+`Coupled` or `Vessel` rod. When both ends or neither end are on such points, it is the segment at
+the `NodeB` written in the deck. A line written in the stock MoorDyn order, with its host-driven
+end at `NodeB`, is therefore controlled where MoorDyn-F controls it, at its last segment N at
+`AttachB`; so is a line with both or no host-driven ends. A line written fairlead first, with its
+only host-driven end at `NodeA`, is controlled at that end. The length is held over the advance.
+Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment paid out at
+constant strain carries no damping tension.
 
-- On an `EI = 0` line the segment is the End-A element. A command that makes its length zero or
-  negative is rejected. A command above one initial segment length, or below minus half of it,
-  prints a one-time warning and is applied unclamped.
-- On a finite-EI cable the segment is the End-A segment of the deck mesh (the length of the
-  `SECTIONS` row at End A over its `NumSegs`). Where the static initialisation refined the mesh,
-  it is the cable elements that make up that segment. Each of them scales by (S + `DeltaL`)/S,
-  S being the segment's initial length, with rate `DeltaLdot` l/S for an element of initial
-  length l, so the segment becomes S + `DeltaL` long. The structural and attachment mass, the seabed contact
-  coefficients and the tributary lengths follow the new lengths; `BA` keeps its initial
-  resolution. A command outside −S/2 ≤ `DeltaL` ≤ S stops the run with a message that names the
-  line, because the cable mesh was resolved at the initial lengths. A cable restrained in torsion
-  cannot be controlled (the coupled route rejects torsion stiffness in END CONNECTIONS).
+- On an `EI = 0` line the segment is the end element on that side. A command that makes its
+  length zero or negative is rejected. A command above one initial segment length, or below minus
+  half of it, prints a one-time warning and is applied unclamped (MoorDyn-F stops at these
+  bounds).
+- On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
+  is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
+  its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that
+  make up that segment. Each of them scales by (S + `DeltaL`)/S, S being the segment's initial
+  length, with rate `DeltaLdot` l/S for an element of initial length l, so the segment becomes
+  S + `DeltaL` long. The structural and attachment mass, the seabed contact coefficients and the
+  tributary lengths follow the new lengths; `BA` keeps its initial resolution. The step blends
+  the force of the committed state, taken at the lengths of the previous advance, with the force
+  at the new lengths, so a length ramp is followed without lag at any `rhoInf`. A command outside
+  −S/2 ≤ `DeltaL` ≤ S stops the run with a message that names the line, because the cable mesh
+  was resolved at the initial lengths. A cable restrained in torsion cannot be controlled (the
+  coupled route rejects torsion stiffness in END CONNECTIONS).
 
 The host input arrays are sized to the highest channel id.
 

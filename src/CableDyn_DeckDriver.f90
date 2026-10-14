@@ -432,6 +432,10 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: tors_nx(3, 2) = CD_ZERO
     REAL(wp) :: tors_pretwist(2) = CD_ZERO
     INTEGER :: deck_line = 0              ! deck file line of the row, for error messages
+    ! True when the anchor-first swap (normalize_stock_endpoint_order) exchanged the two ends:
+    ! the deck's written NodeB (MoorDyn's AttachB) is then End A, otherwise End B. Active line
+    ! control reads it for a line with no single host-driven end.
+    LOGICAL :: ends_swapped = .FALSE.
     ! ATTACHMENTS (finite-EI lines): one column per discrete attachment -- arc length from
     ! End A [m], mass [kg], displaced volume [m^3], drag area CdA [m^2], added-mass Ca [-],
     ! axial drag area CdAx [m^2] (rows 1-6).
@@ -465,8 +469,9 @@ MODULE CableDyn_DeckDriver
 
   TYPE :: DeckControl
     !! One CONTROL row (MoorDyn cable control): ChannelID  LineID[,LineID...].
-    !! The host's DeltaL/DeltaLdot input for this channel modulates the LAST
-    !! (fairlead-side) segment's unstretched length of every listed line.
+    !! The host's DeltaL/DeltaLdot input for this channel modulates the unstretched length of
+    !! the fairlead-side segment of every listed line: the one at its end on a host-driven
+    !! point, or, when both or neither ends are, at the written NodeB (MoorDyn's AttachB).
     INTEGER :: channel = 0
     INTEGER, ALLOCATABLE :: line_ids(:)
   END TYPE
@@ -984,17 +989,20 @@ MODULE CableDyn_DeckDriver
     TYPE(DeckLine), ALLOCATABLE :: fail_lines(:)
     TYPE(DeckPoint), ALLOCATABLE :: fail_points(:)
     ! Active line control (CONTROL section), flattened per controlled line: the
-    ! host channel and the deck line id. An EI = 0 row (ctrl_is_cable false) holds
-    ! the system line index, the LAST (fairlead-side) element and its base
-    ! unstretched length -- l(N) = base + DeltaL(chan) each advance. A finite-EI row
-    ! holds the cable index, the first element of the trailing span that makes up
-    ! the deck's fairlead-side segment, and the span's base length S; the span's
-    ! base element lengths sit at ctrl_span_l0(ctrl_span_off + 1:) and each scales
-    ! by (S + DeltaL)/S.
+    ! host channel and the deck line id. The controlled segment is the deck segment at
+    ! the line's fairlead-side end: the end on a host-driven point (Coupled, Vessel,
+    ! Turbine<J>, Body<N>, a Coupled/Vessel rod end), or, when both or neither ends are,
+    ! the written NodeB (MoorDyn's AttachB, its segment N); a finite-EI line's is End A.
+    ! An EI = 0 row (ctrl_is_cable false) holds the system line index, that element and
+    ! its base unstretched length -- l = base + DeltaL(chan) each advance. A finite-EI row
+    ! holds the cable index, the first of the ctrl_nelem cable elements that make up that
+    ! segment, and the segment's base length S; their base lengths sit at
+    ! ctrl_span_l0(ctrl_span_off + 1:) and each scales by (S + DeltaL)/S.
     INTEGER :: n_ctrl_chans = 0
     INTEGER, ALLOCATABLE :: ctrl_chan(:)
     INTEGER, ALLOCATABLE :: ctrl_line(:)
     INTEGER, ALLOCATABLE :: ctrl_elem(:)
+    INTEGER, ALLOCATABLE :: ctrl_nelem(:)
     REAL(wp), ALLOCATABLE :: ctrl_base_l0(:)
     LOGICAL, ALLOCATABLE :: ctrl_is_cable(:)
     INTEGER, ALLOCATABLE :: ctrl_line_id(:)
@@ -6590,7 +6598,8 @@ CONTAINS
 
     ! CONTROL runtime table, from the built system lines and cables.
     IF (SIZE(ctrls) > 0) THEN
-      CALL build_aggregate_control_table(ctrls, lines, sections, types, is_fin, agg, ErrStat, ErrMsg)
+      CALL build_aggregate_control_table(ctrls, lines, points, rods, sections, types, is_fin, agg, &
+                                         ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CALL CD_End_Deck_Aggregate(agg); RETURN
       END IF
@@ -6668,23 +6677,31 @@ CONTAINS
     END BLOCK
   END SUBROUTINE CD_Init_Deck_Aggregate
 
-  SUBROUTINE build_aggregate_control_table(ctrls, lines, sections, types, is_fin, agg, ErrStat, ErrMsg)
+  SUBROUTINE build_aggregate_control_table(ctrls, lines, points, rods, sections, types, is_fin, agg, ErrStat, ErrMsg)
     !! CONTROL runtime table of the coupled aggregate: one row per controlled line, read
     !! from the BUILT models, never re-derived from the deck sections (both mesh builders
     !! reverse the deck's End A -> End B order). A deck line resolves to its object by its
     !! rank among the lines of its kind in deck order -- the order in which the EI = 0
     !! system and the cables are built (build_line_object_map) -- so a deck mixing both
     !! kinds addresses the right object.
-    !!   EI = 0 row: the LAST (fairlead-side) element of the system line and its base length.
-    !!   Finite-EI row: the trailing span of cable elements that makes up the deck's
-    !!   fairlead-side segment (End A after the anchor-first swap, the segment MoorDyn
-    !!   controls) with its base length S. When the static solve refined the deck mesh,
-    !!   that segment is several cable elements, those whose reference-arc midpoint lies in
-    !!   it (the rule the property remap uses).
+    !! The controlled segment is the one at the line's fairlead-side end: the end on a
+    !! host-driven point (Coupled, Vessel, Turbine<J>, Body<N>, or an end of a Coupled or
+    !! Vessel rod). When both ends or neither end are host-driven, it is the segment at
+    !! the NodeB the deck wrote (MoorDyn's AttachB, its segment N). The built models run
+    !! End B (node 1) -> End A (last node); the written NodeB is End A when the
+    !! anchor-first swap exchanged the ends and End B otherwise.
+    !!   EI = 0 row: that end element of the system line and its base length.
+    !!   Finite-EI row: the cable elements that make up the deck's End A segment (a
+    !!   finite-EI line runs from its Fixed anchor at End B to its host-driven fairlead at
+    !!   End A), with their base length S. When the static solve refined the deck mesh,
+    !!   they are the elements whose reference-arc midpoint lies in that segment (the rule
+    !!   the property remap uses).
     !! Every capability check runs here, so the apply loop cannot fail for input reasons
     !! after its prevalidation (a mid-loop failure would leave mixed lengths).
     TYPE(DeckControl), INTENT(IN) :: ctrls(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckRod), INTENT(IN) :: rods(:)
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     LOGICAL, INTENT(IN) :: is_fin(:)
@@ -6692,7 +6709,8 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
-    INTEGER :: i, j, k, c, nrow, jline, obj, ne_line, first, e, es
+    INTEGER :: i, j, k, c, nrow, jline, obj, ne_line, first, e, es, parent_end
+    LOGICAL :: host_a, host_b
     INTEGER, ALLOCATABLE :: conn(:, :), parent(:)
     REAL(wp), ALLOCATABLE :: l0_deck(:), ea(:), mpl(:), diam(:), ei(:), gas(:), gj(:), i_rt(:), i_rn(:)
     REAL(wp) :: span
@@ -6706,8 +6724,9 @@ CONTAINS
       nrow = nrow + SIZE(ctrls(i)%line_ids)
       agg%n_ctrl_chans = MAX(agg%n_ctrl_chans, ctrls(i)%channel)
     END DO
-    ALLOCATE (agg%ctrl_chan(nrow), agg%ctrl_line(nrow), agg%ctrl_elem(nrow), agg%ctrl_base_l0(nrow), &
-              agg%ctrl_is_cable(nrow), agg%ctrl_line_id(nrow), agg%ctrl_span_off(nrow), agg%ctrl_span_l0(0))
+    ALLOCATE (agg%ctrl_chan(nrow), agg%ctrl_line(nrow), agg%ctrl_elem(nrow), agg%ctrl_nelem(nrow), &
+              agg%ctrl_base_l0(nrow), agg%ctrl_is_cable(nrow), agg%ctrl_line_id(nrow), agg%ctrl_span_off(nrow), &
+              agg%ctrl_span_l0(0))
     c = 0
     DO i = 1, SIZE(ctrls)
       DO k = 1, SIZE(ctrls(i)%line_ids)
@@ -6726,6 +6745,7 @@ CONTAINS
         agg%ctrl_line_id(c) = lines(jline)%id
         agg%ctrl_is_cable(c) = is_fin(jline)
         agg%ctrl_span_off(c) = SIZE(agg%ctrl_span_l0)
+        agg%ctrl_nelem(c) = 1
         IF (.NOT. is_fin(jline)) THEN
           IF (.NOT. agg%has_sys) THEN
             CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' has no EI = 0 system line'); RETURN
@@ -6737,19 +6757,28 @@ CONTAINS
           IF (ne_line < 1) THEN
             CALL fail(ErrStat, ErrMsg, 'CONTROL line has no elements'); RETURN
           END IF
-          agg%ctrl_elem(c) = ne_line
-          agg%ctrl_base_l0(c) = agg%sys%lines(obj)%l0(ne_line)
+          ! the fairlead-side element: the host-driven end's, else the written NodeB's
+          ! (End A is the last element, End B the first)
+          host_a = host_driven_point(lines(jline)%nodeA)
+          host_b = host_driven_point(lines(jline)%nodeB)
+          IF (host_a .NEQV. host_b) THEN
+            e = MERGE(ne_line, 1, host_a)
+          ELSE
+            e = MERGE(ne_line, 1, lines(jline)%ends_swapped)
+          END IF
+          agg%ctrl_elem(c) = e
+          agg%ctrl_base_l0(c) = agg%sys%lines(obj)%l0(e)
           ! The deck path always supplies the seabed recompute inputs; this protects any
           ! future builder that does not.
           IF (agg%sys%lines(obj)%has_seabed .AND. .NOT. agg%sys%lines(obj)%has_seabed_recompute) THEN
             CALL fail(ErrStat, ErrMsg, 'CONTROL line was built without the seabed recompute inputs'); RETURN
           END IF
           IF (agg%sys%lines(obj)%has_viscoelastic) THEN
-            IF (agg%sys%lines(obj)%ve_mode(ne_line) /= 0) THEN
+            IF (agg%sys%lines(obj)%ve_mode(e) /= 0) THEN
               ! the runtime length update fails closed on a viscoelastic element (the
               ! dl_1 state has no rescaling law), so a deck composing CONTROL with a
-              ! viscoelastic fairlead segment must not start at all
-              CALL fail(ErrStat, ErrMsg, 'CONTROL targets a viscoelastic (ElasticMod 2) fairlead '// &
+              ! viscoelastic controlled segment must not start at all
+              CALL fail(ErrStat, ErrMsg, 'CONTROL targets a viscoelastic (ElasticMod 2) '// &
                         'segment; active line control is not supported on the viscoelastic model'); RETURN
             END IF
           END IF
@@ -6775,9 +6804,12 @@ CONTAINS
               CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//': '//TRIM(em)); RETURN
             END IF
             CALL reference_arc_parents(l0_deck, cab%l0, parent)
+            ! the deck's End A segment (deck element SIZE(l0_deck)): the trailing span of
+            ! cable elements whose parent it is
+            parent_end = SIZE(l0_deck)
             first = cab%ne + 1
             DO e = cab%ne, 1, -1
-              IF (parent(e) /= SIZE(l0_deck)) EXIT
+              IF (parent(e) /= parent_end) EXIT
               first = e
             END DO
             span = CD_ZERO
@@ -6785,17 +6817,39 @@ CONTAINS
               span = span + cab%l0(e)
             END DO
             IF (first > cab%ne .OR. &
-                ABS(span - l0_deck(SIZE(l0_deck))) > 1.0e-9_wp*MAX(CD_ONE, l0_deck(SIZE(l0_deck)))) THEN
-              CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//': the fairlead-side segment is not '// &
+                ABS(span - l0_deck(parent_end)) > 1.0e-9_wp*MAX(CD_ONE, l0_deck(parent_end))) THEN
+              CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//': the controlled segment is not '// &
                         'made up of whole cable elements'); RETURN
             END IF
             agg%ctrl_elem(c) = first
+            agg%ctrl_nelem(c) = cab%ne - first + 1
             agg%ctrl_base_l0(c) = span
             agg%ctrl_span_l0 = [agg%ctrl_span_l0, cab%l0(first:cab%ne)]
           END ASSOCIATE
         END IF
       END DO
     END DO
+
+  CONTAINS
+
+    LOGICAL FUNCTION host_driven_point(id) RESULT(host)
+      !! True for a point the host drives: Coupled or Vessel (Turbine<J> points are already
+      !! Coupled here), Body<N>, or an end of a Coupled or Vessel rod.
+      INTEGER, INTENT(IN) :: id
+      INTEGER :: ip, ir, rod_id, end_id
+      host = .FALSE.
+      ip = find_point(points, id)
+      IF (ip < 1) RETURN
+      host = TRIM(points(ip)%ptype) == 'coupled' .OR. TRIM(points(ip)%ptype) == 'vessel' .OR. &
+             starts_with(TRIM(points(ip)%ptype), 'body') .OR. points(ip)%turbine_id > 0
+      IF (host) RETURN
+      CALL parse_rod_point_type(points(ip)%ptype, rod_id, end_id)
+      IF (rod_id < 1 .OR. (end_id /= 1 .AND. end_id /= 2)) RETURN
+      DO ir = 1, SIZE(rods)
+        IF (rods(ir)%id == rod_id) host = TRIM(rods(ir)%rod_type) == 'coupled' .OR. &
+                                          TRIM(rods(ir)%rod_type) == 'vessel'
+      END DO
+    END FUNCTION host_driven_point
   END SUBROUTINE build_aggregate_control_table
 
   SUBROUTINE validate_aggregate_point_channels(channels, points, lines, is_fin, ErrStat, ErrMsg)
@@ -7112,6 +7166,7 @@ CONTAINS
     IF (ALLOCATED(agg%ctrl_chan)) DEALLOCATE (agg%ctrl_chan)
     IF (ALLOCATED(agg%ctrl_line)) DEALLOCATE (agg%ctrl_line)
     IF (ALLOCATED(agg%ctrl_elem)) DEALLOCATE (agg%ctrl_elem)
+    IF (ALLOCATED(agg%ctrl_nelem)) DEALLOCATE (agg%ctrl_nelem)
     IF (ALLOCATED(agg%ctrl_base_l0)) DEALLOCATE (agg%ctrl_base_l0)
     IF (ALLOCATED(agg%ctrl_is_cable)) DEALLOCATE (agg%ctrl_is_cable)
     IF (ALLOCATED(agg%ctrl_line_id)) DEALLOCATE (agg%ctrl_line_id)
@@ -13669,6 +13724,7 @@ CONTAINS
         tmp = lines(i)%nodeA
         lines(i)%nodeA = lines(i)%nodeB
         lines(i)%nodeB = tmp
+        lines(i)%ends_swapped = .TRUE.
         mode_tmp = lines(i)%endconn_mode(1)
         lines(i)%endconn_mode(1) = lines(i)%endconn_mode(2)
         lines(i)%endconn_mode(2) = mode_tmp
