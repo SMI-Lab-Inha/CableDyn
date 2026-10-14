@@ -12,7 +12,9 @@ PROGRAM test_wave_spectra
   !!      band-averaged periodogram matches S(omega); two trains add in energy; a spread
   !!      sea gives the lateral/longitudinal velocity-variance ratio 1/(2s + 1).
   !!   4. A long-crested JONSWAP train reproduces the original JONSWAP synthesis and its
-  !!      kinematics (same seed, same components, same Wheeler convention).
+  !!      kinematics (same seed, same components, same Wheeler convention); the kinematics
+  !!      of spread seas below and above the kept-phase length of CD_Sea_Kinematics equal a
+  !!      direct per-component sum.
   !!   5. Deck rows: spectral waves rows, WaveSpreading, wavetrain rows run end to end, and
   !!      malformed or conflicting rows are rejected.
   USE CableDyn_Precision, ONLY: wp
@@ -36,6 +38,7 @@ PROGRAM test_wave_spectra
   CALL case_two_trains()
   CALL case_spread_velocity_ratio()
   CALL case_legacy_jonswap_identity()
+  CALL case_kinematics_reference()
   CALL case_parse_rows()
   CALL case_deck_runs()
   IF (nfail > 0) THEN
@@ -492,6 +495,87 @@ CONTAINS
                    nan_max_abs(a1 - a2) < 1.0e-10_wp .AND. ABS(p1 - p2) < 1.0e-9_wp, 'legacy:same-kinematics')
     END DO
   END SUBROUTINE case_legacy_jonswap_identity
+
+  SUBROUTINE case_kinematics_reference()
+    !! CD_Sea_Kinematics against a direct per-component sum of the same linear kinematics with
+    !! Wheeler stretching, at points below the surface (one near the seabed) and one above it:
+    !!   1. 9 x 200 components: every phase cosine kept between the two passes;
+    !!   2. 31 x 200 components: the components past the kept length recomputed;
+    !!   3. a short sea in 1000 m: EXP(-2 k h), and near the seabed EXP(k z), underflow for the
+    !!      short components, which take the two-exponential form;
+    !!   4. kinematics asked at another depth than the synthesis: the two-exponential form.
+    ! allocatable: a default-initialised local with allocatable components draws spurious
+    ! -Wuninitialized warnings from gfortran 16 (DEVELOPMENT.md)
+    TYPE(CD_SeaType), ALLOCATABLE :: sea
+    TYPE(CD_WaveTrainType) :: tr
+    REAL(wp), PARAMETER :: SCL = 0.85_wp
+    REAL(wp), PARAMETER :: PX(4) = [0.0_wp, 37.5_wp, -210.0_wp, 4.0_wp]
+    REAL(wp), PARAMETER :: PY(4) = [0.0_wp, -12.0_wp, 95.0_wp, 1.0_wp]
+    REAL(wp), PARAMETER :: PT(4) = [0.0_wp, 13.7_wp, 401.25_wp, 7.0_wp]
+    INTEGER, PARAMETER :: NDIR(4) = [9, 31, 9, 9]
+    REAL(wp), PARAMETER :: SYNTH_DEPTH(4) = [120.0_wp, 120.0_wp, 1000.0_wp, 120.0_wp]
+    REAL(wp), PARAMETER :: CALL_DEPTH(4) = [120.0_wp, 120.0_wp, 1000.0_wp, 150.0_wp]
+    REAL(wp), PARAMETER :: PERIOD(4) = [10.0_wp, 10.0_wp, 4.0_wp, 10.0_wp]
+    REAL(wp) :: eta, v(3), a(3), p, eta_r, v_r(3), a_r(3), p_r, th, z_e, e1, e2, ch, sh, amp, depth, pz(4)
+    INTEGER :: es, js, ip, i
+    CHARACTER(256) :: em
+    CHARACTER(48) :: tag
+    ALLOCATE (sea)
+    DO js = 1, SIZE(NDIR)
+      CALL CD_Sea_Reset(sea)
+      tr%kind = CD_TRAIN_JONSWAP
+      tr%height = MERGE(1.0_wp, 6.0_wp, PERIOD(js) < 5.0_wp)
+      tr%period = PERIOD(js)
+      tr%gamma = 3.3_wp
+      tr%direction = 20.0_wp
+      tr%spreading = 4.0_wp
+      sea%n_dir = NDIR(js)
+      CALL CD_Sea_Add_Train(sea, tr, es, em)
+      CALL CD_Sea_Synthesise(sea, SYNTH_DEPTH(js), G, 3, es, em)
+      WRITE (tag, '(A,I0,A,I0)') 'sea-reference:case ', js, ', n_comp=', sea%n_comp
+      CALL require(es == CD_SEA_OK .AND. sea%n_comp == 200*NDIR(js), TRIM(tag)//':synth')
+      IF (es /= CD_SEA_OK) CYCLE
+      depth = CALL_DEPTH(js)
+      pz = [-1.5_wp, -20.0_wp, -0.95_wp*depth, 30.0_wp]
+      DO ip = 1, SIZE(PX)
+        CALL CD_Sea_Kinematics(sea, PX(ip), PY(ip), pz(ip), PT(ip), depth, SCL, eta, v, a, es, em, pdyn=p)
+        CALL require(es == CD_SEA_OK, TRIM(tag)//':kinematics: '//TRIM(em))
+        eta_r = 0.0_wp
+        DO i = 1, sea%n_comp
+          th = sea%k(i)*(PX(ip)*sea%cosb(i) + PY(ip)*sea%sinb(i)) - sea%omega(i)*PT(ip) + sea%phase(i)
+          eta_r = eta_r + SCL*sea%amplitude(i)*COS(th)
+        END DO
+        v_r = 0.0_wp
+        a_r = 0.0_wp
+        p_r = 0.0_wp
+        IF (pz(ip) <= eta_r) THEN
+          z_e = MIN(0.0_wp, (pz(ip) - eta_r)*depth/(depth + eta_r))
+          DO i = 1, sea%n_comp
+            th = sea%k(i)*(PX(ip)*sea%cosb(i) + PY(ip)*sea%sinb(i)) - sea%omega(i)*PT(ip) + sea%phase(i)
+            e1 = EXP(sea%k(i)*z_e)
+            e2 = EXP(-sea%k(i)*(z_e + 2.0_wp*depth))
+            ch = (e1 + e2)/(1.0_wp - sea%e2kd(i))
+            sh = (e1 - e2)/(1.0_wp - sea%e2kd(i))
+            amp = SCL*sea%amplitude(i)*sea%omega(i)
+            v_r = v_r + amp*[ch*COS(th)*sea%cosb(i), ch*COS(th)*sea%sinb(i), sh*SIN(th)]
+            amp = amp*sea%omega(i)
+            a_r = a_r + amp*[ch*SIN(th)*sea%cosb(i), ch*SIN(th)*sea%sinb(i), -sh*COS(th)]
+            p_r = p_r + amp/sea%k(i)*ch*COS(th)
+          END DO
+        END IF
+        CALL require(ABS(eta - eta_r) <= 1.0e-11_wp*MAX(1.0_wp, ABS(eta_r)), TRIM(tag)//':eta')
+        CALL require(nan_max_abs(v - v_r) <= 1.0e-11_wp*MAX(1.0_wp, MAXVAL(ABS(v_r))), TRIM(tag)//':velocity')
+        CALL require(nan_max_abs(a - a_r) <= 1.0e-11_wp*MAX(1.0_wp, MAXVAL(ABS(a_r))), TRIM(tag)//':acceleration')
+        CALL require(ABS(p - p_r) <= 1.0e-11_wp*MAX(1.0_wp, ABS(p_r)), TRIM(tag)//':pressure')
+      END DO
+      ! the last point lies above the surface: the elevation only, no kinematics
+      CALL require(pz(SIZE(pz)) > eta_r .AND. MAXVAL(ABS(v)) <= 0.0_wp .AND. MAXVAL(ABS(a)) <= 0.0_wp, &
+                   TRIM(tag)//':above-surface')
+      ! case 3 reaches both underflows that the two-exponential form handles
+      IF (js == 3) CALL require(ANY(sea%e2kd <= TINY(1.0_wp)) .AND. &
+                                ANY(EXP(sea%k*(-0.95_wp*depth)) <= TINY(1.0_wp)), TRIM(tag)//':underflow-reached')
+    END DO
+  END SUBROUTINE case_kinematics_reference
 
   SUBROUTINE case_parse_rows()
     TYPE(CD_WaveTrainType) :: tr
