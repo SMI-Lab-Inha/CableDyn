@@ -102,6 +102,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   grounded run turned sideways on the seabed: when the refinement of the catenary
   continuation stops on a compression in a current, its failure now names the current limit,
   so the driver retries out of the plane.
+- A finite-EI line solved in 3D (restrained in torsion, or with an end connection direction or
+  a current out of the vertical plane of its chord) on a deck mesh too coarse at touchdown or at a section
+  change no longer stops with "the converged state is an unstable equilibrium". The stable
+  equilibrium had read as a saddle: elements longer than the bending length cannot follow
+  the bend, the axial force at their Gauss points oscillates into compression, and that
+  compression lowered the out-of-plane stiffness until the stability test failed. The
+  catenary-continuation route is now repeated on the mesh that resolves the bending length,
+  as for a failed polish, and a note names both meshes. An equilibrium that is still unstable
+  on the refined mesh stops as before. Decks that solved before give the same results.
+  `tests/data/lazy_wave_touchdown_torsion_coarse.dat` is the regression case.
 
 ## [0.1.1] - 2026-10-09
 

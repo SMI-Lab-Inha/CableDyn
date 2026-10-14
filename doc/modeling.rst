@@ -86,6 +86,21 @@ refine regions with high curvature or rapidly varying load: hang-off and bend-st
 buoyancy-module transitions, sag bends, touchdown, and short weighted attachments. Avoid using a
 material boundary solely as a substitute for mesh refinement.
 
+**Starting mesh for a finite-EI line.** At touchdown, at a sag or hog bend and on each side of a
+section change, keep the element length at most half the bending length
+:math:`(EI/|w|)^{1/3}` of the section, with :math:`w` its submerged weight per metre. For a
+power cable with :math:`EI = 2\times10^4` N m² and :math:`w = 158` N/m that is 2.5 m. A longer
+element cannot follow the bend: it stays stiff in bending, and its stiff axial term absorbs the
+mismatch, so the pointwise axial force oscillates about the element mean, by tens of kN on a
+lazy wave of 1–2 kN tension at 10 m elements. The ``.t.out`` segment tensions, evaluated at the
+element midpoints, show these spikes and negative values near touchdown and at section changes;
+they shrink as the mesh is refined, and the element-mean force (what enters equilibrium, see
+``tensile_safety`` in :doc:`theory`) is far smoother. The compressed Gauss points also lower the
+out-of-plane stiffness: a line solved in 3D (restrained in torsion, or with an end connection
+direction or a current out of its vertical plane) can read as an unstable equilibrium on such a mesh. The static solve
+then repeats itself on the refined mesh and reports it in a note (see :doc:`troubleshooting`);
+meshing to the rule above avoids the extra solve.
+
 Perform a mesh study on engineering observables, not node identity. At minimum compare endpoint
 tension and the peak/position of curvature or touchdown response. Refine until the change is below
 the project tolerance. Cross-code comparisons should interpolate by normalised arc length as
