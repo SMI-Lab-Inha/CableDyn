@@ -16432,9 +16432,7 @@ CONTAINS
     ALLOCATE (mb%cables(SIZE(cab_lines)), mb%cab_kind(SIZE(cab_lines)), mb%cab_obj(SIZE(cab_lines)), &
               mb%cab_off(3, SIZE(cab_lines)), mb%cab_force(3, SIZE(cab_lines)), &
               mb%cab_clamp(SIZE(cab_lines)), mb%cab_moment(3, SIZE(cab_lines)), mb%cab_fend(3, SIZE(cab_lines)), &
-              mb%cab_mend(3, SIZE(cab_lines)), mb%cab_f0(3, SIZE(cab_lines)), mb%cab_m0(3, SIZE(cab_lines)), &
-              mb%cab_jac(6, 6, SIZE(cab_lines)))
-    mb%cab_jac = CD_ZERO
+              mb%cab_mend(3, SIZE(cab_lines)), mb%cab_f0(3, SIZE(cab_lines)), mb%cab_m0(3, SIZE(cab_lines)))
     mb%cab_age = HUGE(1)
     mb%cab_kind = 0
     mb%cab_obj = 0
@@ -17681,6 +17679,16 @@ CONTAINS
         mb%is_rot(mb%jr_off(ir) + 4:mb%jr_off(ir) + 6) = .TRUE.
       END IF
     END DO
+    ! the clamped cables' kept Jacobian columns span a whole group: a body's six coordinates
+    ! and three for each rod pinned to it
+    IF (ALLOCATED(mb%cables)) THEN
+      IF (ALLOCATED(mb%cab_jac)) DEALLOCATE (mb%cab_jac)
+      k = 1
+      IF (mb%ng > 0) k = MAX(k, MAXVAL(mb%g_hi(1:mb%ng) - mb%g_lo(1:mb%ng) + 1))
+      ALLOCATE (mb%cab_jac(k, k, SIZE(mb%cables)))
+      mb%cab_jac = CD_ZERO
+      mb%cab_age = HUGE(1)
+    END IF
   CONTAINS
     SUBROUTINE add_group(kind, idx)
       INTEGER, INTENT(IN) :: kind, idx
