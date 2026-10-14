@@ -169,6 +169,12 @@ cmake -S <openfast> -B <openfast-build-dir> -DCABLEDYN_ROOT=<CableDyn checkout>
 powershell -File integration/openfast/openfast_build_gate.ps1 -BuildDir <openfast-build-dir> -CaseFst <case.fst>
 ```
 
+With the MinGW gfortran of the conda environment, add
+`-DCMAKE_EXE_LINKER_FLAGS="-Wl,--stack,16777216"` to the configure line. OpenFAST's
+CMake raises the 2 MB default stack to 16 MB only for Cygwin and Visual Studio builds,
+and a MinGW `FAST.Farm.exe` (`-DBUILD_FASTFARM=ON`) with the default stack stops with a
+stack overflow while ElastoDyn initialises.
+
 `openfast_build_gate.ps1` builds `openfast.exe`, runs a `CompMooring = 5` case,
 checks that the CableDyn banner appears in the log, and checks that the output is
 finite.
