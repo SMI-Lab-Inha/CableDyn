@@ -580,7 +580,7 @@ CONTAINS
         time = REAL(step, wp)*step_dt
         CALL CD_AGG_Step_Moving(aggregate, step_dt, position, velocity, acceleration, step_converged, stalled, &
                                 n_iter, es, em, t_committed=time)
-        CALL CD_Profile_Enter(CD_PROF_OUTPUT)
+        CALL CD_Profile_Enter(CD_PROF_CHECK)
         IF (es /= CD_AGG_OK) THEN
           CALL set_aggregate_error(es, em, run_stat, run_msg)
           EXIT mixed_run
@@ -598,6 +598,7 @@ CONTAINS
         ELSE
           consecutive_miss = 0
         END IF
+        CALL CD_Profile_Enter(CD_PROF_OUTPUT)
         CALL CD_AGG_CalcOutput(aggregate, es, em)
         IF (es /= CD_AGG_OK) THEN
           CALL set_aggregate_error(es, em, run_stat, run_msg)

@@ -176,8 +176,10 @@ The phases add up to the total, which runs from the start of the deck parse to t
 run stops with an error, the time up to the stop counts to the phase in which it stopped, and
 finalisation stays at zero.
 
-* **Initialisation and statics** covers building the models, the static equilibrium, any modal
-  analysis, and the initial output rows. For a static deck it also covers writing the output
+* **Input parsing** covers reading the deck and its auxiliary files.
+* **Initialisation and statics** covers the synthesis of the deck's waves, building the models,
+  the static equilibrium, any modal analysis, and the initial output rows. For a static deck it
+  also covers writing the output
   files. On the mixed ``EI = 0`` + finite-EI route it includes the deck parse that builds the
   models.
 * **Fluid sampled by the driver** is the deck wave and current field that the driver samples at

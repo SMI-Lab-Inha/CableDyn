@@ -142,8 +142,8 @@ MODULE CableDyn_DeckDriver
                                       CD_RIGID_NEWMARK_BETA
   USE CableDyn_SO3, ONLY: CD_Log_SO3, CD_Exp_SO3
   USE CableDyn_PathIO, ONLY: CD_Open_Input, CD_Native_Path, CD_Strip_BOM
-  USE CableDyn_Profile, ONLY: CD_Profile_Enter, CD_Profile_Step, CD_PROF_INIT, CD_PROF_FLUID, CD_PROF_SOLVE, &
-                              CD_PROF_CHECK, CD_PROF_OUTPUT, CD_PROF_PROGRESS, CD_PROF_FINAL
+  USE CableDyn_Profile, ONLY: CD_Profile_Enter, CD_Profile_Step, CD_PROF_INPUT, CD_PROF_INIT, CD_PROF_FLUID, &
+                              CD_PROF_SOLVE, CD_PROF_CHECK, CD_PROF_OUTPUT, CD_PROF_PROGRESS, CD_PROF_FINAL
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
   IMPLICIT NONE
@@ -6170,14 +6170,17 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'FAILURE deck does not support seabed friction (the dynamic-point rule)'); RETURN
       END IF
     END IF
+    ! the wave synthesis or stream-function solve is initialisation; the bathymetry file read input
+    CALL CD_Profile_Enter(CD_PROF_INIT)
     CALL precompute_deck_wave(opts, ErrStat, ErrMsg)
     IF (ErrStat /= 0) RETURN
     IF (opts%has_bathymetry_file) THEN
+      CALL CD_Profile_Enter(CD_PROF_INPUT)
       CALL load_bathymetry_file(path_join(deck_dir(deck_path), opts%bathymetry_file), bathymetry, ErrStat, ErrMsg, &
                                 points=points)
       IF (ErrStat /= 0) RETURN
+      CALL CD_Profile_Enter(CD_PROF_INIT)
     END IF
-    CALL CD_Profile_Enter(CD_PROF_INIT)
     CALL print_static_input_warnings(types, points, lines, sections, opts)
     ! free Rigid6 bodies and rods (jointly with Free/Connect points) start at their static
     ! equilibrium on every route: static-only, TMax = 0 and the dynamic march (pinned rods turn
