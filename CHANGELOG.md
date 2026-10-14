@@ -150,6 +150,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   standalone driver and the C API refuse `CoupledPinned` rods by name; FAST.Farm decks still
   refuse rods, OpenFAST linearisation still refuses rods, and `CoupledPinned` bodies remain
   unsupported. See the manual's OpenFAST page (Lifecycle features).
+- A warning when line nodes of a coupled OpenFAST run (`CompMooring = 5`) lie outside the
+  SeaState wave-kinematics grid (`X_HalfWidth`, `Y_HalfWidth`, `Z_Depth`). SeaState gives such a
+  node the kinematics of the grid boundary: waves out of phase beyond a half-width, and
+  kinematics that are too strong below `Z_Depth`. Its fluid load was therefore wrong without
+  any message. CableDyn now checks its nodes at the static equilibrium and at every CableDyn
+  step. At the first node outside the grid it prints one warning with the number of nodes,
+  the farthest node in each direction and the SeaState inputs to enlarge. Nodes below a grid
+  that reaches the seabed (`Z_Depth` equal to the water depth, its default) are not reported.
+  The OpenFAST tutorial and `examples/openfast/README.md` now enlarge the r-test `MD_Shared`
+  grid (`X_HalfWidth = 100 m`, `Z_Depth = 40 m`), which covers the platform but not the
+  moorings, and quote their results for the enlarged grid. With the `MD_Shared` grid, the
+  line-1 fairlead tension standard deviation of the tutorial was 18 % too high. See the
+  manual's OpenFAST page (SeaState grid).
 
 ### Changed
 

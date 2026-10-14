@@ -46,6 +46,23 @@ $hd = 'IEA-15-240-RWT-UMaineSemi_HydroDynT1.dat'
 
 The initial CableDyn fairlead tensions are then the ~2.4 MN chain pretension.
 
+The `MD_Shared` `SeaState.dat` computes the wave kinematics on a grid that covers only the
+platform (`X_HalfWidth = Y_HalfWidth = 100 m`, `Z_Depth = 40 m`), while the anchors lie 838 m
+away on the 200 m seabed. SeaState gives every line node outside the grid the kinematics of the
+grid boundary, and CableDyn warns about it. Enlarge the grid:
+
+```powershell
+$ss = 'SeaState.dat'
+(Get-Content $ss) -replace '^\s*\S+(\s+[XY]_HalfWidth\s)', '           900$1' `
+                  -replace '^\s*\S+(\s+Z_Depth\s)', '     "default"$1' `
+                  -replace '^\s*\S+(\s+NX\s)', '            37$1' `
+                  -replace '^\s*\S+(\s+NZ\s)', '            11$1' |
+    Set-Content $ss -Encoding ascii
+```
+
+SeaState then needs about 4.6 GB of memory. The values in this file are for the enlarged grid.
+Grid sizing is described in the manual's OpenFAST page (SeaState grid).
+
 ## Run
 
 ```powershell
@@ -66,7 +83,7 @@ The force is the one the line exerts on the fairlead, including the end node's s
 chain weight, so it is slightly steeper than the line tangent. These are the static-equilibrium
 values, also written to `<root>.CD.static.out`. The requested `OUTPUTS` printed below them are
 the t = 0 values, which add the load of the SeaState wave kinematics at t = 0 on the end node:
-`FairTen1` reads 2.43621E+06 N. In still water the two agree.
+`FairTen1` reads 2.43752E+06 N. In still water the two agree.
 
 For the power-cable case, copy `../iea15mw_umaine_mixed_cabledyn.dat` beside the template and
 point `MooringFile` at it.
@@ -109,12 +126,12 @@ The channels to read for an ALS check:
 - The static equilibrium of every line is in `<root>.CD.static.out`.
 
 In the `MD_Shared` JONSWAP sea (Hs 6 m, Tp 12 s, travelling along +X) line 1 is the only line on
-the up-wave side. Before the break the fairlead tensions are 2.44 MN and `PtfmSurge` stays within
-−2.4 to 2.8 m. After it the platform drifts down-wave: `PtfmSurge` reaches 147 m by t = 400 s and
-is still growing, because the two remaining anchors lie down-wave of the platform. The intact
-lines slacken as it approaches them (`FairTen2` mean 1.29 MN over 300–400 s, no peak above the
-2.50 MN at the break). Run longer (`TMax`) to reach the new equilibrium. The 400 s run takes
-about 26 s.
+the up-wave side. Before the break the line-1 fairlead tension averages 2.44 MN and `PtfmSurge`
+stays within −2.5 to 3.6 m. After it the platform drifts down-wave: `PtfmSurge` reaches 147 m by
+t = 400 s and is still growing, because the two remaining anchors lie down-wave of the platform.
+The intact lines slacken as it approaches them (`FairTen2` mean 1.29 MN over 300–400 s, no peak
+above the 2.51 MN at the break). Run longer (`TMax`) to reach the new equilibrium. The 400 s run
+takes about 30 s.
 
 ## Notes
 

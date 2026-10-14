@@ -521,6 +521,8 @@ Warnings and notes that do not stop a run
    :header-rows: 1
    :widths: 42 58
 
+   * - Message
+     - Cause and fix
    * - ``Note: line <L> is torsionally restrained at one end only; ... no torsion is solved``
      - with the other end free to twist the line carries no torque, so the torsion columns of the
        restrained end have no effect. Restrain both ends to solve torsion.
@@ -529,9 +531,16 @@ Warnings and notes that do not stop a run
      - the static twist stage of a torsional line. A non-zero descent count means the straight or
        untwisted branch was unstable at the imposed twist and the solve moved to a buckled shape;
        check the shape and the ``Twist<L>`` channel.
-
-   * - Message
-     - Cause and fix
+   * - ``WARNING: CableDyn mooring module: <n> of the <N> CableDyn sampling nodes lie outside the
+       SeaState wave-kinematics grid at t = ... s`` (OpenFAST)
+     - the SeaState grid (``X_HalfWidth``, ``Y_HalfWidth``, ``Z_Depth``) does not cover the
+       lines, and SeaState gives the nodes outside it the kinematics of the grid boundary: waves
+       out of phase beyond a half-width, kinematics that are too strong below ``Z_Depth``. The
+       message names the farthest node in each direction. Enlarge the listed inputs in the
+       SeaState file past the farthest anchor (``Z_Depth`` to the water depth, its default) and
+       raise ``NX``, ``NY``, ``NZ`` to keep the spacing. A SeaState file written for the
+       platform alone, such as the r-test ``MD_Shared`` file, triggers it. See
+       :ref:`openfast:SeaState grid` for sizes and memory.
    * - ``WARNING: line type ... sinks ... m into the seabed ...; kBot is soft for this line``
      - a grounded run of this type would sink deeper than its own diameter into the penalty
        seabed. Raise ``kBot``; the default ``1.0e5`` embeds a heavy chain by about half its

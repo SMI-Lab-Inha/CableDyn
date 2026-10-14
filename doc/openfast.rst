@@ -98,6 +98,57 @@ WaterKin file can select file waves, a file depth-dependent current, host waves,
 current independently where the field is separable. Unsupported or double-counted combinations
 fail during initialisation. The selector matrix is in :doc:`options` and :doc:`driver_format`.
 
+SeaState grid
+~~~~~~~~~~~~~
+
+SeaState computes the wave and current kinematics on a grid set in its input file and
+interpolates them at the line nodes: ``X_HalfWidth`` and ``Y_HalfWidth`` about the origin,
+``Z_Depth`` below the still-water level, and ``NX``, ``NY``, ``NZ`` grid points (``NZ`` is
+spaced more finely near the surface). A node outside the grid gets the kinematics of the
+nearest grid boundary point, so its fluid load is wrong: beyond a half-width the waves are
+out of phase, and below ``Z_Depth`` the wave and current kinematics are those of the grid
+bottom, which are too strong. A SeaState file written for the platform alone usually covers
+only the platform. The r-test ``MD_Shared`` file used in :doc:`tutorial_openfast` has
+``X_HalfWidth = Y_HalfWidth = 100 m``, ``Z_Depth = 40 m`` and ``NZ = 2``, while the anchors lie
+838 m from the platform on a 200 m seabed. Size the grid for the lines:
+
+* ``X_HalfWidth`` and ``Y_HalfWidth`` beyond the farthest anchor or cable end, with margin for
+  the platform offset;
+* ``Z_Depth`` equal to the water depth (``"default"``); nodes on the seabed are then inside the
+  grid; and
+* ``NX``, ``NY`` and ``NZ`` raised with the extents to keep the grid spacing: a horizontal
+  spacing of about a tenth of the peak wavelength or less. A long-crested sea (``WaveDirMod =
+  0``) that travels along x does not vary in y, so ``NY = 2`` is enough for it.
+
+SeaState holds the whole time history of the grid in memory, so memory and initialisation time
+grow with (2 ``NX`` − 1)(2 ``NY`` − 1) ``NZ`` ``WaveTMax`` / ``WaveDT``. For the
+IEA-15MW case of :doc:`tutorial_openfast` (Hs 6 m, Tp 12 s, ``WaveTMax = 4800 s``,
+``WaveDT = 0.2 s``), ``X_HalfWidth = Y_HalfWidth = 900``, the default ``Z_Depth``, ``NX = 37``
+(25 m spacing), ``NY = 2`` and ``NZ = 11`` needs about 4.6 GB. Halving the spacing (``NX = 73``)
+or using ``NZ = 16`` changes the 10–70 s platform and fairlead-tension statistics by less than
+0.05 %. The ``MD_Shared`` grid gives a line-1 fairlead tension standard deviation 18 % too high
+(0.136 MN instead of 0.115 MN).
+
+CableDyn compares its nodes with the grid at the static equilibrium and at every CableDyn step.
+At the first node found outside it prints one warning and continues:
+
+.. code-block:: text
+
+   WARNING: CableDyn mooring module: 147 of the 153 CableDyn sampling nodes lie outside the
+   SeaState wave-kinematics grid at t = 0 s. SeaState clamps them to the grid boundary, so their
+   fluid kinematics and loads are not physical. Farthest: x = -837.6 m (grid |x| <= X_HalfWidth =
+   100 m); y = 725.38 m (grid |y| <= Y_HalfWidth = 100 m); z = -200.01 m (grid z >= -Z_Depth =
+   -40 m). In the SeaState input file enlarge X_HalfWidth, Y_HalfWidth and Z_Depth (Z_Depth at
+   most WtrDpth + MSL2SWL, its default) to cover the lines with margin for their motion, and
+   raise NX, NY and NZ to keep the grid spacing. This warning is not repeated.
+
+Only the directions in which nodes leave the grid are listed. Waves are checked in all three
+directions and a SeaState current (uniform in x and y) only in depth. Excursions smaller than
+1 % of the grid spacing at the boundary are ignored, and so are nodes below a grid that reaches
+the seabed (``Z_Depth = WtrDpth + MSL2SWL``): they are in the seabed, where the kinematics of the
+grid bottom are the right ones. FAST.Farm runs, which use still water, and SeaState fields
+without waves or current are not checked.
+
 Run and confirm
 ---------------
 
@@ -193,8 +244,9 @@ Example files
 
 The turbine sub-models are not part of this repository. :doc:`tutorial_openfast` gives the exact
 steps to fetch them from OpenFAST's ``r-test`` (``glue-codes/fast-farm/MD_Shared`` at revision
-``dd5feaaaa500ba7283140107806300d551cff0a7``) and to reset that farm model's turbine-1 initial
-pose to a single turbine at the origin.
+``dd5feaaaa500ba7283140107806300d551cff0a7``), to reset that farm model's turbine-1 initial
+pose to a single turbine at the origin, and to enlarge its SeaState grid to cover the moorings
+(see *SeaState grid*).
 
 Mixed moorings and power cables
 -------------------------------
