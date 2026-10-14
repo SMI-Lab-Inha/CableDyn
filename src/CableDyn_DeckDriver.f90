@@ -142,6 +142,8 @@ MODULE CableDyn_DeckDriver
                                       CD_RIGID_NEWMARK_BETA
   USE CableDyn_SO3, ONLY: CD_Log_SO3, CD_Exp_SO3
   USE CableDyn_PathIO, ONLY: CD_Open_Input, CD_Native_Path, CD_Strip_BOM
+  USE CableDyn_Profile, ONLY: CD_Profile_Lap, CD_Profile_Step, CD_PROF_INPUT, CD_PROF_INIT, CD_PROF_FLUID, &
+                              CD_PROF_SOLVE, CD_PROF_CHECK, CD_PROF_OUTPUT
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
   IMPLICIT NONE
@@ -6175,6 +6177,7 @@ CONTAINS
                                 points=points)
       IF (ErrStat /= 0) RETURN
     END IF
+    CALL CD_Profile_Lap(CD_PROF_INPUT)
     CALL print_static_input_warnings(types, points, lines, sections, opts)
     ! free Rigid6 bodies and rods (jointly with Free/Connect points) start at their static
     ! equilibrium on every route: static-only, TMax = 0 and the dynamic march (pinned rods turn
@@ -6500,6 +6503,7 @@ CONTAINS
       IF (.NOT. (opts%has_wtrdpth .OR. opts%has_bathymetry_file)) &
         CALL warn_line_below_anchor(lines, points, sections, q_all, q_off)
     END IF
+    CALL CD_Profile_Lap(CD_PROF_INIT)
 
     CALL write_out(out_root, channels, lines, points, ne, q_all, q_off, ten_all, ten_off, converged, ErrStat, ErrMsg, &
                    end_ten=end_all, end_force=end_vec, opts=opts, bathymetry=bathymetry)
@@ -14336,6 +14340,7 @@ CONTAINS
           RETURN
         END IF
       END IF
+      CALL CD_Profile_Lap(CD_PROF_FLUID)
       IF (opts%has_motion_file) THEN
         CALL step_motion_models(models, lines, points, motion, step + 1, opts%dtM, &
                                 opts%recovery_max_substeps, step_converged, stalled, n_iter, step_substeps, &
@@ -14344,6 +14349,7 @@ CONTAINS
         CALL step_held_models(models, opts%dtM, opts%recovery_max_substeps, step_converged, stalled, &
                               n_iter, step_substeps, es, em, step_work)
       END IF
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (step_substeps > 1) THEN
         recovery_event_count = recovery_event_count + 1
         recovery_max_substeps_used = MAX(recovery_max_substeps_used, step_substeps)
@@ -14373,6 +14379,7 @@ CONTAINS
         ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_CHECK)
       IF (opts%has_motion_file) THEN
         CALL write_model_row(unit, t, channels, lines, points, models, output_work, ErrStat, ErrMsg, motion, step + 1)
       ELSE
@@ -14389,6 +14396,7 @@ CONTAINS
         CALL close_dynamic_line_outputs(pos_units, ten_units)
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
@@ -14498,7 +14506,9 @@ CONTAINS
         ErrMsg = em
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_FLUID)
       CALL CD_Step_System_DynamicPoints(system, opts%dtM, step_converged, stalled, n_iter, es, em)
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (es /= CD_SYSTEM_OK) THEN
         CLOSE (unit)
         CALL close_dynamic_line_outputs(pos_units, ten_units)
@@ -14534,6 +14544,7 @@ CONTAINS
           RETURN
         END IF
       END IF
+      CALL CD_Profile_Lap(CD_PROF_CHECK)
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
@@ -14546,6 +14557,7 @@ CONTAINS
         CALL close_dynamic_line_outputs(pos_units, ten_units)
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
@@ -14869,9 +14881,11 @@ CONTAINS
           ErrMsg = em
           RETURN
         END IF
+        CALL CD_Profile_Lap(CD_PROF_FLUID)
         CALL step_rigid6_system(system, points, opts, rigid, t, opts%dtM, step_converged, stalled, n_iter, &
                                 es, em, step_work, bathymetry)
       END IF
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
         CALL close_dynamic_line_outputs(pos_units, ten_units)
@@ -14906,6 +14920,7 @@ CONTAINS
           RETURN
         END IF
       END IF
+      CALL CD_Profile_Lap(CD_PROF_CHECK)
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg, &
                                   rigid=rigid, opts=opts, bathymetry=bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
@@ -14919,6 +14934,7 @@ CONTAINS
         CALL close_dynamic_line_outputs(pos_units, ten_units)
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
@@ -15050,9 +15066,11 @@ CONTAINS
           ErrMsg = em
           RETURN
         END IF
+        CALL CD_Profile_Lap(CD_PROF_FLUID)
         CALL step_rod_system(system, points, opts, rod_state, t, opts%dtM, step_converged, stalled, n_iter, &
                              es, em, step_work, bathymetry)
       END IF
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
         CALL close_dynamic_line_outputs(pos_units, ten_units)
@@ -15080,6 +15098,7 @@ CONTAINS
         converged = .FALSE.
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_CHECK)
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg, &
                                   rods=rod_state, opts=opts, bathymetry=bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
@@ -15102,6 +15121,7 @@ CONTAINS
         CALL close_dynamic_rod_outputs(rod_pos_units)
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
@@ -16111,12 +16131,14 @@ CONTAINS
           CALL pin_rod(rst(k))
         END DO
       END IF
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (ErrStat == CD_DECKDRV_OK) CALL write_row(t)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         converged = .FALSE.
         CLOSE (unit)
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
@@ -16549,7 +16571,9 @@ CONTAINS
       t = REAL(step, wp)*opts%dtM
       CALL mb_hydro(t, .FALSE.)
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 800
+      CALL CD_Profile_Lap(CD_PROF_FLUID)
       CALL mb_step(mb, points, opts, t, opts%dtM, step_converged, stalled, n_iter, es, em, bathymetry)
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (es /= CD_DECKDRV_OK) THEN
         ErrStat = es
         ErrMsg = em
@@ -16569,9 +16593,11 @@ CONTAINS
           GOTO 800
         END IF
       END IF
+      CALL CD_Profile_Lap(CD_PROF_CHECK)
       CALL mb_outputs(t)
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 800
       IF (ALLOCATED(probe_rec) .AND. probe_armed) CALL probe_record(step, t)
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     IF (mb%implicit .AND. mb%n_steps_imp > 0) THEN
@@ -23697,6 +23723,7 @@ CONTAINS
       t = REAL(step, wp)*opts%dtM
       CALL update_hermite_deck_fluid(cables, opts, t, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
+      CALL CD_Profile_Lap(CD_PROF_FLUID)
       DO i = 1, SIZE(cables)
         IF (opts%has_motion_file) THEN
           pidx = find_point(points, lines(i)%nodeA)
@@ -23731,6 +23758,7 @@ CONTAINS
           ErrMsg = 'CableDyn_DeckDriver: Hermite standalone step failed: '//TRIM(em); EXIT
         END IF
       END DO
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL write_hermite_model_row(unit, t, channels, lines, points, cables, ErrStat, ErrMsg, &
                                    motion=motion, motion_time_index=MERGE(step + 1, 0, opts%has_motion_file), &
@@ -23738,6 +23766,7 @@ CONTAINS
       IF (ErrStat == CD_DECKDRV_OK) &
         CALL write_dynamic_hermite_line_outputs(t, lines, cables, pos_units, ten_units, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
@@ -24342,6 +24371,7 @@ CONTAINS
       ELSE
         CALL step_finite_held_models(models, opts, t, opts%dtM, step_converged, stalled, n_iter, es, em)
       END IF
+      CALL CD_Profile_Lap(CD_PROF_SOLVE)
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
         CALL close_dynamic_line_outputs(pos_units, ten_units)
@@ -24376,6 +24406,7 @@ CONTAINS
         CALL close_dynamic_line_outputs(pos_units, ten_units)
         RETURN
       END IF
+      CALL CD_Profile_Lap(CD_PROF_OUTPUT)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
@@ -25790,6 +25821,8 @@ CONTAINS
     INTEGER, INTENT(IN) :: nstep
     REAL(wp), INTENT(IN) :: dt
 
+    ! the run so far (model build, statics, initial outputs) is the initialisation phase
+    CALL CD_Profile_Lap(CD_PROF_INIT)
     progress%nstep = nstep
     progress%report_stride = MAX(1, (nstep + 19)/20)
     IF (nstep <= 0) RETURN
@@ -25812,6 +25845,7 @@ CONTAINS
     REAL(wp) :: elapsed, remaining, percent
     CHARACTER(16) :: elapsed_text, remaining_text
 
+    CALL CD_Profile_Step()
     ! Every committed step: the time an abnormal end of the process reports.
     CALL CD_Fatal_Report_Time(simulated_time)
     IF (progress%nstep <= 0 .OR. step <= 0) RETURN

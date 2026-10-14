@@ -132,7 +132,8 @@ Standard streams
      - the initialisation report on mixed ``EI = 0`` + finite-EI decks; dynamic progress
        (``Dynamic simulation: …`` and ``Progress: …% | t = … s | elapsed … | ETA …``, at 5 %
        intervals); ``Recovery audit: …`` and ``Tensile monitor: …`` summaries;
-       ``CableDyn: FAILURE …`` event lines; and, last, the success line
+       ``CableDyn: FAILURE …`` event lines; the run-time profile when ``CABLEDYN_PROFILE`` is
+       set (:ref:`cli-profile`); and, last, the success line
 
 The formats of the report and progress records are shown in :doc:`outputs`. On success the
 final stdout line is exactly::
@@ -142,6 +143,66 @@ final stdout line is exactly::
 stdout is a human-readable log, not a machine-parseable stream: its records vary with the deck
 and the route. Automation should rely on the **exit status** and read results from the output
 files. To keep only the stdout records, discard stderr (``2>/dev/null`` or ``2>$null``).
+
+.. _cli-profile:
+
+Run-time profile
+~~~~~~~~~~~~~~~~
+
+Set the environment variable ``CABLEDYN_PROFILE`` to ``1`` to see where the wall time of a run
+goes. The driver then prints ``Run-time profile armed by CABLEDYN_PROFILE.`` at the start and,
+at the end of the run (before the success line, or before the closing line of a failed run), a
+breakdown such as:
+
+.. code-block:: text
+
+     Run-time profile (CABLEDYN_PROFILE), wall-clock time:
+       input parsing                             0.002 s    0.0 %
+       initialisation and statics                0.233 s    3.1 %
+       dynamic march                             7.232 s   96.8 %
+         fluid sampled by the driver             0.050 s    0.7 %
+         line, cable and object steps            7.168 s   96.0 %
+         checks and line failures                0.001 s    0.0 %
+         outputs                                 0.013 s    0.2 %
+         progress and bookkeeping                0.000 s    0.0 %
+       finalisation                              0.000 s    0.0 %
+       total                                     7.467 s  100.0 %
+       March: 600 committed step(s), 12.0528 ms per step.
+       EI = 0 line steps: 3621 (substeps and retries included), Newton iterations: 4661 (1.287 per line step, at most 2).
+       Finite-EI cable steps: 4849, residual evaluations: 21255, tangent assemblies: 10391, linear solves: 10391, intervals recovered by substeps: 0.
+       Finite-EI cable step time (s): residual 1.416, tangent 2.674, effective matrix 0.136, linear solve 0.943, added mass 0.167, other 0.457.
+
+The phases add up to the total, which runs from the start of the deck parse to the report.
+
+* **Initialisation and statics** covers building the models, the static equilibrium, any modal
+  analysis, and the initial output rows.
+* **Fluid sampled by the driver** is the deck wave and current field that the driver samples at
+  the nodes before each step. A finite-EI cable evaluates the wave kinematics inside its
+  element loads, and a ``motionFile`` Rigid6 or rod march samples the fluid within its step. On
+  those routes, that work counts as **line, cable and object steps**.
+* **Outputs** covers the output channels, the per-line files, and the range-graph samples.
+
+The counts follow the march:
+
+* **EI = 0 line steps** counts every step of every tension-only line, including recovery
+  substeps, retries and, on the body marches, each re-step of a line within the body
+  iterations. **Newton iterations** is their total.
+* **Finite-EI cable steps** counts the same for the cubic-Hermite cables. A cable clamped to a
+  body is re-stepped in every body iteration, so the count can exceed the number of march
+  steps.
+
+An unset or empty variable, or ``0``, leaves the profile off. The driver reads the variable once,
+when it starts.
+
+The profile only reads the clock and never changes a result: every output file is identical
+with and without it. Its cost is a few clock reads per step.
+
+On the mixed ``EI = 0`` + finite-EI route, the cables of a profiled run are stepped one after
+another rather than concurrently, so that their counts stay exact. Without OpenMP, which
+includes the release executable, this changes nothing; with OpenMP, compare wall times of
+profiled runs only with other profiled runs.
+
+``openfast.exe`` reads the same variable for its own module profile (see :doc:`faq`).
 
 Exit codes
 ~~~~~~~~~~

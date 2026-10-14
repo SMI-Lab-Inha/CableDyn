@@ -8,6 +8,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Run-time profile of the standalone driver. With the environment variable
+  `CABLEDYN_PROFILE=1`, the driver prints at the end of the run how its wall time divides
+  between input parsing, initialisation and statics, and the dynamic march. The march is split
+  into the fluid sampled by the driver, the line, cable and object steps, the checks, the
+  outputs, and the progress report. The profile also gives the committed steps and the time per
+  step, the tension-only line steps and their Newton iterations, and the finite-EI cable steps
+  with their residual, tangent and solve counts and times. Every output file is the same with
+  and without it. See the manual's command-line page (Run-time profile).
+
 ### Changed
 
 - Faster wave kinematics of directional and multi-train seas (`wavetrain` rows, spectral
