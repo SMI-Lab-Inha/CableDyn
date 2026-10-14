@@ -1416,12 +1416,14 @@ CONTAINS
       ! apply the restored command HERE, on the rebuild transition itself, so every
       ! entry that can trigger a rebuild (UpdateStates -- including its supercycle
       ! early-return substeps -- and CalcOutput) resumes at the checkpointed lengths.
-      ! It runs BEFORE the interiors and mirrors reload: a finite-EI cable takes the
-      ! lengths in place at its mirror reload as those its committed state was reached
-      ! with (its committed force belongs to them), and the reload then brings back the
-      ! exact committed state of the uninterrupted run.
+      ! The restored command is the one the committed state was reached with, so the
+      ! lengths are re-applied as committed (the next advance blends them into its
+      ! generalised-alpha terms exactly as the uninterrupted run does). It runs before the
+      ! line interiors and cable mirrors reload below, which bring back the committed state
+      ! of the uninterrupted run, a cable's committed force included.
       IF (ALLOCATED(u1%DeltaL)) THEN
-         CALL CD_AGG_Apply_LineControl( Inst(id)%agg, REAL(u1%DeltaL, wp), REAL(u1%DeltaLdot, wp), es, em )
+         CALL CD_AGG_Apply_LineControl( Inst(id)%agg, REAL(u1%DeltaL, wp), REAL(u1%DeltaLdot, wp), es, em, &
+                                        restored=.TRUE. )
          IF (es /= CD_AGG_OK) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: line-control apply after the '// &
                              'checkpoint rebuild failed: '//TRIM(em), ErrStat, ErrMsg, RoutineName )

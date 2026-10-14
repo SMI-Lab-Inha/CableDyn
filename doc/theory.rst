@@ -1922,6 +1922,19 @@ segment :math:`N` at ``AttachB``). On an ``EI = 0`` line the commanded :math:`\D
 updated consistently, while ``BA`` keeps its initial resolution. Commands that would make the
 element length non-positive are rejected.
 
+On an ``EI = 0`` line the length is applied before a step and held over it, and the
+committed state keeps the lengths and rates it was reached with, :math:`L_{0,c}` and
+:math:`\dot L_{0,c}`, together with its acceleration. The generalised-:math:`\alpha` residual
+evaluates the internal force, the damping and the hydrodynamic loads at the blended configuration
+:math:`\mathbf{q}_{n+1-\alpha_f}`; for an element whose length changed it also blends the
+lengths, :math:`(1-\alpha_f) L_0 + \alpha_f L_{0,c}` (and the rates likewise), so that the
+configuration and the lengths are blended consistently and the new length belongs to
+:math:`t_{n+1}`. The step commits the new lengths with the new state. Re-deriving the committed
+acceleration under the new length, or blending the configuration but not the length, would add
+the force of the length change to the committed side of the blend, weighted by
+:math:`\alpha_m` and :math:`\alpha_f`; on a pay-out or haul-in ramp the tension would then lag
+the quasi-static value by a fixed fraction of its change per step, at any :math:`\rho_\infty`.
+
 On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
 up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by
 :math:`\lambda = (S + \Delta L)/S`, :math:`L_{0,e} = \lambda L_{0,e,\text{base}}`, with rate

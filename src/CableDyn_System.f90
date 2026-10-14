@@ -206,7 +206,7 @@ MODULE CableDyn_System
     ! init helpers (bitwise-deterministic), and the distributed-load remainder
     ! restores with f_ext -- the documented bit-identical restore must hold
     ! WITHOUT the caller re-applying its command.
-    REAL(wp), ALLOCATABLE :: snap_l0(:), snap_l0_dot(:), snap_fbase(:)
+    REAL(wp), ALLOCATABLE :: snap_l0(:), snap_l0_dot(:), snap_fbase(:), snap_l0_c(:), snap_l0_dot_c(:)
     ! Viscoelastic dl_1 joins the snapshot (per-element, concatenated like
     ! snap_l0): the state advances with every committed line step, so the
     ! aggregate stage-then-commit restore must rewind it with q/v/a.
@@ -448,6 +448,7 @@ CONTAINS
     IF (ALLOCATED(system%snap_bindings)) DEALLOCATE (system%snap_bindings)
     IF (ALLOCATED(system%snap_map)) DEALLOCATE (system%snap_map)
     IF (ALLOCATED(system%snap_l0)) DEALLOCATE (system%snap_l0, system%snap_l0_dot)
+    IF (ALLOCATED(system%snap_l0_c)) DEALLOCATE (system%snap_l0_c, system%snap_l0_dot_c)
     IF (ALLOCATED(system%snap_fbase)) DEALLOCATE (system%snap_fbase)
     IF (ALLOCATED(system%snap_ve_dl_1)) DEALLOCATE (system%snap_ve_dl_1)
     IF (ALLOCATED(system%snap_syrope_slow)) DEALLOCATE (system%snap_syrope_slow, system%snap_syrope_tmax)
@@ -1859,18 +1860,21 @@ CONTAINS
     IF (.NOT. ok) x = CD_ZERO
   END SUBROUTINE solve_spd3
 
-  SUBROUTINE CD_Update_System_Line_SegmentLength(system, line_index, elem, l0_new, l0_dot, ErrStat, ErrMsg)
+  SUBROUTINE CD_Update_System_Line_SegmentLength(system, line_index, elem, l0_new, l0_dot, ErrStat, ErrMsg, &
+                                                 restored)
     !! Active line control at the system level: update one element's unstretched
     !! length/rate on a contained line (CD_Update_Model_SegmentLength does the model
     !! work) and RECOMPUTE the end-node consistent-mass diagonal shares of every
     !! point bound to that line -- the implicit share a Free/Connect point carries
     !! (see the massless-point step) reads rho_a*l0/3, so a length change on an end
-    !! element moves it.
+    !! element moves it. restored = .TRUE. marks the length and rate as the committed
+    !! state's (a checkpoint restart re-applying the restored command).
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     INTEGER, INTENT(IN) :: line_index, elem
     REAL(wp), INTENT(IN) :: l0_new, l0_dot
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: restored
 
     INTEGER :: k, i, kb, es
     REAL(wp) :: md
@@ -1900,7 +1904,7 @@ CONTAINS
         END DO
       END DO
     END IF
-    CALL CD_Update_Model_SegmentLength(system%lines(line_index), elem, l0_new, l0_dot, es, em)
+    CALL CD_Update_Model_SegmentLength(system%lines(line_index), elem, l0_new, l0_dot, es, em, restored=restored)
     IF (es /= CD_MODEL_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'segment-length update failed: '//TRIM(em))
       RETURN
@@ -2914,6 +2918,9 @@ CONTAINS
       system%lines(i)%q_rollback = system%lines(i)%q
       system%lines(i)%v_rollback = system%lines(i)%v
       system%lines(i)%a_rollback = system%lines(i)%a
+      ! the committed lengths and rates (active line control) advance with a step too
+      system%lines(i)%l0_c_rollback = system%lines(i)%l0_c
+      system%lines(i)%l0_dot_c_rollback = system%lines(i)%l0_dot_c
       ! the viscoelastic dl_1 state advances with every committed line step, so
       ! it must roll back with q/v/a (a line that stepped can be rolled back
       ! when a sibling line or the coupled point solve fails)
@@ -2941,6 +2948,8 @@ CONTAINS
       system%lines(i)%q = system%lines(i)%q_rollback
       system%lines(i)%v = system%lines(i)%v_rollback
       system%lines(i)%a = system%lines(i)%a_rollback
+      system%lines(i)%l0_c = system%lines(i)%l0_c_rollback
+      system%lines(i)%l0_dot_c = system%lines(i)%l0_dot_c_rollback
       IF (system%lines(i)%has_viscoelastic) &
         system%lines(i)%ve_dl_1 = system%lines(i)%ve_dl_1_rollback
       IF (system%lines(i)%has_syrope) THEN
@@ -3049,6 +3058,7 @@ CONTAINS
           netot = netot + SIZE(system%lines(i)%l0)
         END DO
         ALLOCATE (system%snap_l0(netot), system%snap_l0_dot(netot), system%snap_fbase(ntot), &
+                  system%snap_l0_c(netot), system%snap_l0_dot_c(netot), &
                   system%snap_ve_dl_1(netot), system%snap_syrope_slow(netot), &
                   system%snap_syrope_tmax(netot), system%snap_fr_anchor(ntot))
       END BLOCK
@@ -3082,6 +3092,8 @@ CONTAINS
         he = le + ne_i - 1
         system%snap_l0(le:he) = system%lines(i)%l0
         system%snap_l0_dot(le:he) = system%lines(i)%l0_dot
+        system%snap_l0_c(le:he) = system%lines(i)%l0_c
+        system%snap_l0_dot_c(le:he) = system%lines(i)%l0_dot_c
         IF (system%lines(i)%has_viscoelastic) &
           system%snap_ve_dl_1(le:he) = system%lines(i)%ve_dl_1
         IF (system%lines(i)%has_syrope) THEN
@@ -3149,6 +3161,8 @@ CONTAINS
           he = le + ne_i - 1
           hi = lo + SIZE(system%lines(i)%q) - 1
           system%lines(i)%l0_dot = system%snap_l0_dot(le:he)
+          system%lines(i)%l0_c = system%snap_l0_c(le:he)
+          system%lines(i)%l0_dot_c = system%snap_l0_dot_c(le:he)
           IF (system%lines(i)%has_viscoelastic) &
             system%lines(i)%ve_dl_1 = system%snap_ve_dl_1(le:he)
           IF (system%lines(i)%has_syrope) THEN

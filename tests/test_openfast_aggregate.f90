@@ -164,6 +164,7 @@ PROGRAM test_openfast_aggregate
   CALL case_aggregate_line_control()
   CALL case_aggregate_cable_control()
   CALL case_restart_cable_control()
+  CALL case_restart_line_control()
   CALL case_restart_equivalence()
   CALL case_restart_friction()
   IF (nfail > 0) THEN
@@ -3630,11 +3631,11 @@ CONTAINS
       CALL require(es == CD_AGG_OK, 'ctrl-restart:B-init: '//TRIM(em))
       CALL CD_AGG_GetMovingPointMesh(agg_a, pa, v2, a2, la, es, em)
       CALL CD_AGG_UpdateStates_Moving(agg_b, pa, v2, a2, es, em)
-      ! the restored command goes on before the mirror reload (the shell rebuild order): the
-      ! reload marks those lengths as the committed state's, as they are in the uninterrupted
-      ! run, and brings back its committed force
+      ! the restored command goes on as the committed state's before the mirror reload (the
+      ! shell rebuild order), as its lengths are in the uninterrupted run; the reload brings
+      ! back the committed force
       CALL control_drive(npre, DT, r0, tgt, vel, dl, dldot)
-      CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em)
+      CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em, restored=.TRUE.)
       CALL require(es == CD_AGG_OK, 'ctrl-restart:B-reapply: '//TRIM(em))
       ALLOCATE (cbuf(CD_HFMF_MirrorSize(agg_a%cables(1))))
       CALL CD_HFMF_PackMirror(agg_a%cables(1), cbuf, es, em)
@@ -4310,6 +4311,113 @@ CONTAINS
     CALL CD_AGG_End(agg_p, es, em)
   END SUBROUTINE case_external_fluid_cable
 
+  SUBROUTINE case_restart_line_control()
+    !! CHECKPOINT-RESTART of a controlled EI = 0 deck, bit for bit (the shell rebuild's
+    !! recipe): instance A marches the three VolturnUS chains under a surge drive while
+    !! channel 1 pays their fairlead segments out on a ramp and then holds; a fresh
+    !! instance B takes A's coupled kinematics and line interiors [v; q; a], then re-applies
+    !! the last command as the committed state's (restored = .TRUE.); both continue under the
+    !! same drive and commands. A step after a length change blends the committed lengths
+    !! into its generalised-alpha terms, so B must carry A's committed lengths for the
+    !! trajectories to stay bit-identical. The checkpoint falls in the ramp and in the hold.
+    TYPE(CD_AGG_ModuleType) :: agg_a, agg_b
+    REAL(wp), PARAMETER :: DT = 0.05_wp
+    INTEGER, PARAMETER :: NPOST = 8
+    REAL(wp) :: r0(3, 3), vel(3, 3), acc(3, 3), tgt(3, 3), pa(3, 3), la(3, 3), pb(3, 3), lb(3, 3)
+    REAL(wp) :: v2(3, 3), a2(3, 3), dl, dldot
+    REAL(wp), ALLOCATABLE :: qL(:), vL(:), aL(:)
+    INTEGER :: es, ni, s, nl, il, ndof, npre, pass
+    LOGICAL :: cv, st, same
+    CHARACTER(512) :: em
+
+    CALL write_volturnus_deck('agg_restart_ctrl.dat', control_row='1 1,2,3')
+    DO pass = 1, 2
+      npre = MERGE(8, 30, pass == 1)
+      CALL CD_AGG_Init_From_Deck(agg_a, 'agg_restart_ctrl.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'ctrl-restart:A-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      CALL CD_AGG_GetMovingPointMesh(agg_a, r0, vel, acc, la, es, em)
+      tgt = r0
+      vel = 0.0_wp
+      acc = 0.0_wp
+      DO s = 1, npre
+        CALL ctrl_ramp_drive(s, DT, r0, tgt, vel, dl, dldot)
+        CALL CD_AGG_Apply_LineControl(agg_a, [dl], [dldot], es, em)
+        CALL CD_AGG_Step_Moving(agg_a, DT, tgt, vel, acc, cv, st, ni, es, em)
+        CALL require(es == CD_AGG_OK .AND. cv, 'ctrl-restart:A-march: '//TRIM(em))
+        IF (es /= CD_AGG_OK) RETURN
+      END DO
+      CALL CD_AGG_Init_From_Deck(agg_b, 'agg_restart_ctrl.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'ctrl-restart:B-init: '//TRIM(em))
+      CALL CD_AGG_GetMovingPointMesh(agg_a, pa, v2, a2, la, es, em)
+      CALL CD_AGG_UpdateStates_Moving(agg_b, pa, v2, a2, es, em)
+      nl = CD_System_NLines(agg_a%sys%fast%system, es, em)
+      DO il = 1, nl
+        ndof = CD_System_Line_NDOF(agg_a%sys%fast%system, il, es, em)
+        IF (ALLOCATED(qL)) DEALLOCATE (qL, vL, aL)
+        ALLOCATE (qL(ndof), vL(ndof), aL(ndof))
+        CALL CD_Get_System_Line_State(agg_a%sys%fast%system, il, qL, vL, aL, es, em)
+        CALL CD_Update_System_Line_Interior_State(agg_b%sys%fast%system, il, qL(4:ndof - 3), vL(4:ndof - 3), &
+                                                  es, em, a_interior=aL(4:ndof - 3))
+        CALL require(es == CD_SYSTEM_OK, 'ctrl-restart:B-interior: '//TRIM(em))
+      END DO
+      ! the restored command is the one A's committed state was reached with
+      CALL ctrl_ramp_drive(npre, DT, r0, tgt, vel, dl, dldot)
+      CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em, restored=.TRUE.)
+      CALL require(es == CD_AGG_OK, 'ctrl-restart:B-reapply: '//TRIM(em))
+      same = .TRUE.
+      DO il = 1, nl
+        same = same .AND. ALL(agg_b%sys%fast%system%lines(il)%l0 == agg_a%sys%fast%system%lines(il)%l0) .AND. &
+               ALL(agg_b%sys%fast%system%lines(il)%l0_c == agg_a%sys%fast%system%lines(il)%l0_c)
+      END DO
+      CALL require(same, 'ctrl-restart:B carries the lengths and the committed lengths of A')
+      DO s = npre + 1, npre + NPOST
+        CALL ctrl_ramp_drive(s, DT, r0, tgt, vel, dl, dldot)
+        CALL CD_AGG_Apply_LineControl(agg_a, [dl], [dldot], es, em)
+        CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em)
+        CALL CD_AGG_Step_Moving(agg_a, DT, tgt, vel, acc, cv, st, ni, es, em)
+        CALL require(es == CD_AGG_OK .AND. cv, 'ctrl-restart:A-continue: '//TRIM(em))
+        CALL CD_AGG_Step_Moving(agg_b, DT, tgt, vel, acc, cv, st, ni, es, em)
+        CALL require(es == CD_AGG_OK .AND. cv, 'ctrl-restart:B-continue: '//TRIM(em))
+        CALL CD_AGG_CalcOutput(agg_a, es, em)
+        CALL CD_AGG_CalcOutput(agg_b, es, em)
+        CALL CD_AGG_GetMovingPointMesh(agg_a, pa, v2, a2, la, es, em)
+        CALL CD_AGG_GetMovingPointMesh(agg_b, pb, v2, a2, lb, es, em)
+        same = same .AND. nan_max_abs(la - lb) <= 0.0_wp
+        DO il = 1, nl
+          same = same .AND. nan_max_abs(agg_a%sys%fast%system%lines(il)%q - agg_b%sys%fast%system%lines(il)%q) &
+                 <= 0.0_wp
+        END DO
+      END DO
+      WRITE (*, '(A,I0,A,ES10.3)') '  ctrl-restart (EI = 0) after step ', npre, ': max load difference ', &
+        nan_max_abs(la - lb)
+      CALL require(same, 'ctrl-restart:the restarted EI = 0 run continues bit-identically')
+      CALL CD_AGG_End(agg_a, es, em)
+      CALL CD_AGG_End(agg_b, es, em)
+    END DO
+  END SUBROUTINE case_restart_line_control
+
+  SUBROUTINE ctrl_ramp_drive(step, dt, r0, tgt, vel, dl, dldot)
+    !! Surge drive of every coupled point and the control command at t = step*dt: a 2 m
+    !! pay-out on a half-cosine ramp over 1 s, then held (case_restart_line_control).
+    INTEGER, INTENT(IN) :: step
+    REAL(wp), INTENT(IN) :: dt, r0(:, :)
+    REAL(wp), INTENT(INOUT) :: tgt(:, :), vel(:, :)
+    REAL(wp), INTENT(OUT) :: dl, dldot
+    REAL(wp), PARAMETER :: TR = 1.0_wp
+    REAL(wp) :: t
+    t = REAL(step, wp)*dt
+    tgt(1, :) = r0(1, :) + 0.5_wp*(1.0_wp - COS(2.0_wp*PI*t/4.0_wp))
+    vel(1, :) = 0.5_wp*(2.0_wp*PI/4.0_wp)*SIN(2.0_wp*PI*t/4.0_wp)
+    IF (t < TR) THEN
+      dl = 2.0_wp*0.5_wp*(1.0_wp - COS(PI*t/TR))
+      dldot = 2.0_wp*0.5_wp*(PI/TR)*SIN(PI*t/TR)
+    ELSE
+      dl = 2.0_wp
+      dldot = 0.0_wp
+    END IF
+  END SUBROUTINE ctrl_ramp_drive
+
   SUBROUTINE case_restart_equivalence()
     !! CHECKPOINT-RESTART semantics at the aggregate level (the shell rebuild's exact
     !! recipe): march instance A mid-flight, capture what a checkpoint carries -- the
@@ -4648,7 +4756,7 @@ CONTAINS
   ! deck writers
   ! ---------------------------------------------------------------------------------------
 
-  SUBROUTINE write_volturnus_deck(path, fairleads, extra_option, extra_option2, extra_option3)
+  SUBROUTINE write_volturnus_deck(path, fairleads, extra_option, extra_option2, extra_option3, control_row)
     !! IEA-15MW VolturnUS-S three-chain mooring (End A = Vessel fairlead, End B = Fixed
     !! anchor), 20 segments per line -- a pure EI=0 deck (all sections chain, EI = 0).
     !! fairleads (optional, 3x3): override the three Vessel coordinates, written
@@ -4657,9 +4765,10 @@ CONTAINS
     !! bit-for-bit -- the ptfm_init equivalence case keys on that.
     !! extra_option[23] (optional): verbatim OPTIONS lines appended before the terminator
     !! (deck current/waves/dtM/TMax variants for the external-fluid cases).
+    !! control_row (optional): a CONTROL section with this row.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN), OPTIONAL :: fairleads(3, 3)
-    CHARACTER(*), INTENT(IN), OPTIONAL :: extra_option, extra_option2, extra_option3
+    CHARACTER(*), INTENT(IN), OPTIONAL :: extra_option, extra_option2, extra_option3, control_row
     REAL(wp) :: fl(3, 3)
     INTEGER :: u, ios
     fl(:, 1) = [-58.0_wp, 0.0_wp, -14.0_wp]
@@ -4693,6 +4802,12 @@ CONTAINS
     WRITE (u, '(A)') '1 main 850.0 20'
     WRITE (u, '(A)') '2 main 850.0 20'
     WRITE (u, '(A)') '3 main 850.0 20'
+    IF (PRESENT(control_row)) THEN
+      WRITE (u, '(A)') '--- CONTROL ---'
+      WRITE (u, '(A)') 'ChannelID Lines'
+      WRITE (u, '(A)') '(-) (-)'
+      WRITE (u, '(A)') TRIM(control_row)
+    END IF
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'

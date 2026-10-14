@@ -43,6 +43,7 @@ PROGRAM test_model
 
   CALL case_lifecycle_static_step()
   CALL case_segment_length_update()
+  CALL case_segment_payout_ramp()
   CALL case_copy_model_preserves_state()
   CALL case_prescribed_step_updates_state()
   CALL case_recovery_common_path()
@@ -160,10 +161,13 @@ CONTAINS
 
   SUBROUTINE case_segment_length_update()
     !! Active line control (the CtrlChan mechanism): CD_Update_Model_SegmentLength
-    !! must leave the model INDISTINGUISHABLE from one BUILT with the new length --
-    !! the stale-cache killer (any l0-derived quantity cached at init and not
-    !! refreshed breaks the bitwise step equivalence). Also: paying out a taut
-    !! segment drops its tension (sign), and the validation battery fails closed.
+    !! keeps the committed acceleration and the lengths the committed state was reached
+    !! with; once that state is committed at the new length (the non-stepping commit
+    !! CD_Recompute_Model_Acceleration) the model must be INDISTINGUISHABLE from one
+    !! BUILT with the new length -- the stale-cache killer (any l0-derived quantity
+    !! cached at init and not refreshed breaks the bitwise step equivalence). Also:
+    !! paying out a taut segment drops its tension (sign), and the validation battery
+    !! fails closed.
     INTEGER, PARAMETER :: NE = 4, NN = NE + 1, NDOF = 3*NN
     TYPE(CD_ModelType) :: ma, mb
     TYPE(GenAlphaConfig) :: cfg
@@ -191,16 +195,21 @@ CONTAINS
     ! sign: paying out the taut end segment drops its tension, others unchanged
     CALL CD_Get_Model_Tension(ma, ten0, es, em)
     CALL require(es == CD_MODEL_OK, 'seglen:tension-0')
+    aa = ma%a
     CALL CD_Update_Model_SegmentLength(ma, NE, l0b(NE), 0.0_wp, es, em)
     CALL require(es == CD_MODEL_OK, 'seglen:update: '//TRIM(em))
+    CALL require(nan_max_abs(ma%a - aa) <= 0.0_wp .AND. nan_max_abs(ma%l0_c - l0) <= 0.0_wp, &
+                 'seglen:update-keeps-the-committed-acceleration-and-lengths')
     CALL CD_Get_Model_Tension(ma, ten1, es, em)
     CALL require(es == CD_MODEL_OK, 'seglen:tension-1')
     CALL require(ten1(NE) < ten0(NE), 'seglen:payout-drops-end-tension')
     CALL require(nan_max_abs(ten1(1:NE - 1) - ten0(1:NE - 1)) <= 0.0_wp, 'seglen:other-segments-untouched')
 
-    ! equivalence: the updated model matches the fresh-built twin bitwise --
-    ! tensions, coupled loads (the re-assembled mass cache), and a full dynamic
-    ! step under the same trajectory
+    ! equivalence: committed at the new length, the updated model matches the fresh-built
+    ! twin bitwise -- tensions, coupled loads (the re-assembled mass cache), and a full
+    ! dynamic step under the same trajectory
+    CALL CD_Recompute_Model_Acceleration(ma, es, em)
+    CALL require(es == CD_MODEL_OK .AND. nan_max_abs(ma%l0_c - l0b) <= 0.0_wp, 'seglen:commit-at-new-length')
     CALL CD_Get_Model_Tension(mb, tenb, es, em)
     CALL require(nan_max_abs(ten1 - tenb) <= 0.0_wp, 'seglen:tension-equals-fresh-build')
     CALL CD_Calc_Model_CoupledLoads(ma, loads_a, es, em)
@@ -242,6 +251,8 @@ CONTAINS
       CALL require(es == CD_MODEL_OK, 'seglen:init-weighted-fresh')
       CALL CD_Update_Model_SegmentLength(mw0, NE, l0b(NE), 0.0_wp, es, em)
       CALL require(es == CD_MODEL_OK, 'seglen:weighted-update: '//TRIM(em))
+      CALL CD_Recompute_Model_Acceleration(mw0, es, em)
+      CALL require(es == CD_MODEL_OK, 'seglen:weighted-commit: '//TRIM(em))
       CALL require(nan_max_abs(mw0%f_ext - mw1%f_ext) <= 0.0_wp, 'seglen:weighted-fext-bitwise')
       CALL require(nan_max_abs(mw0%l0 - mw1%l0) <= 0.0_wp, 'seglen:weighted-l0-bitwise')
       CALL require(nan_max_abs(mw0%a - mw1%a) <= 0.0_wp, 'seglen:weighted-accel-bitwise')
@@ -281,6 +292,8 @@ CONTAINS
       CALL require(es == CD_MODEL_OK, 'seglen:extload-update: '//TRIM(em))
       CALL CD_Update_Model_SegmentLength(mx0, NE, l0b(NE), 0.0_wp, es, em)
       CALL require(es == CD_MODEL_OK, 'seglen:extload-control: '//TRIM(em))
+      CALL CD_Recompute_Model_Acceleration(mx0, es, em)
+      CALL require(es == CD_MODEL_OK, 'seglen:extload-commit: '//TRIM(em))
       ! fresh twin: assembled at the NEW length plus the same bump
       CALL CD_Assemble_Distributed_Load(conn, l0b, wplx, fx1, es, em)
       CALL require(es == 0, 'seglen:extload-assemble-fresh')
@@ -378,6 +391,71 @@ CONTAINS
     CALL CD_Update_Model_SegmentLength(ma, 1, 1.0_wp, 0.0_wp, es, em)
     CALL require(es /= CD_MODEL_OK, 'seglen:uninitialized-fails')
   END SUBROUTINE case_segment_length_update
+
+  SUBROUTINE case_segment_payout_ramp()
+    !! A weightless EI = 0 line between fixed ends H = 10.1 m apart (initial strain 1 %),
+    !! its end element paid out at Ldot = 0.01 m/s from t = 0, marched with rho_inf = 0.4
+    !! and rho_inf = 0. The strain stays uniform, eps = H/L' - 1, so the reported tension
+    !! (elastic plus Kelvin-Voigt) is EA (H/L' - 1) - BA H Ldot/L'**2. The committed state
+    !! keeps the lengths it was reached with: re-deriving the committed acceleration under
+    !! the new length, or evaluating the blended configuration with the new length only,
+    !! lags the tension by a fixed fraction of its change per step, dT = EA H Ldot dt/L'**2
+    !! (the pay-out ramp artifact this check guards against).
+    INTEGER, PARAMETER :: NE = 10, NN = NE + 1, NDOF = 3*NN
+    REAL(wp), PARAMETER :: L = 10.0_wp, H = 10.1_wp, EAV = 1.0e5_wp, RHOA = 1.0_wp, BAV = 1.0e5_wp
+    REAL(wp), PARAMETER :: LDOT = 0.01_wp, TEND = 4.0_wp, DT = 0.01_wp
+    TYPE(CD_ModelType) :: m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, i, k, pass
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), ba(NE), q0(NDOF), v0(NDOF), f_ext(NDOF), ten(NE)
+    REAL(wp) :: t, lp, expect, err(2), d_step, hist(NINT(TEND/DT), 2), diff
+    LOGICAL :: conv, stalled
+    CHARACTER(200) :: em
+
+    DO i = 1, NE
+      conn(:, i) = [i, i + 1]
+    END DO
+    l0 = L/REAL(NE, wp)
+    ea = EAV
+    rho_a = RHOA
+    ba = BAV
+    DO i = 1, NN
+      q0(3*i - 2:3*i) = [REAL(i - 1, wp)*H/REAL(NE, wp), 0.0_wp, 0.0_wp]
+    END DO
+    fixed = [1, 2, 3, NDOF - 2, NDOF - 1, NDOF]
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    d_step = EAV*H*LDOT*DT/(L + LDOT*TEND)**2
+    err = 0.0_wp
+    DO pass = 1, 2
+      cfg%rho_inf = MERGE(0.4_wp, 0.0_wp, pass == 1)
+      cfg%rel_tol = 1.0e-10_wp
+      CALL CD_Init_Model(m, q0, v0, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, cfg, es, em, ba=ba)
+      CALL require(es == CD_MODEL_OK, 'payout:init: '//TRIM(em))
+      IF (es /= CD_MODEL_OK) RETURN
+      DO k = 1, NINT(TEND/DT)
+        t = REAL(k, wp)*DT
+        CALL CD_Update_Model_SegmentLength(m, NE, l0(NE) + LDOT*t, LDOT, es, em)
+        CALL require(es == CD_MODEL_OK, 'payout:update: '//TRIM(em))
+        CALL CD_Step_Model(m, DT, conv, stalled, n_iter, es, em)
+        CALL require(es == CD_MODEL_OK .AND. conv, 'payout:step: '//TRIM(em))
+        IF (es /= CD_MODEL_OK) EXIT
+        CALL CD_Get_Model_Tension(m, ten, es, em)
+        hist(k, pass) = ten(1)
+        IF (t < 1.0_wp) CYCLE
+        lp = L + LDOT*t
+        expect = EAV*(H/lp - 1.0_wp) - BAV*H*LDOT/(lp*lp)
+        err(pass) = MAX(err(pass), ABS(ten(1) - expect), ABS(ten(NE) - expect))
+      END DO
+      CALL CD_End_Model(m, es, em)
+    END DO
+    diff = MAXVAL(ABS(hist(NINT(1.0_wp/DT):, 1) - hist(NINT(1.0_wp/DT):, 2)))
+    WRITE (*, '(A,ES10.3,A,ES12.5,A,ES12.5,A,ES12.5)') '  payout ramp: per-step tension change ', d_step, &
+      ' N; max error vs the closed form at rho_inf = 0.4 ', err(1), ' N, at 0 ', err(2), ' N; difference ', diff
+    CALL require(err(1) <= 2.0e-2_wp*d_step, 'payout:rho_inf-0.4-follows-the-closed-form')
+    CALL require(err(2) <= 2.0e-2_wp*d_step, 'payout:rho_inf-0-follows-the-closed-form')
+    CALL require(diff <= 2.0e-2_wp*d_step, 'payout:rho_inf-0.4-equals-rho_inf-0')
+  END SUBROUTINE case_segment_payout_ramp
 
   SUBROUTINE case_copy_model_preserves_state()
     !! Checked model copies preserve persistent state and leave transient solver

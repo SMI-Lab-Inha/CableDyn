@@ -17,16 +17,18 @@ anchor tensions are steady, so the =5-vs-=3 comparison of the tension CHANGE fro
 cancels the codes' small static-tension offset) isolates how each solver renders the commanded
 length modulation into tension.
 
-The fast pay-out/haul-in RAMPS carry a rate-dependent axial-damping transient (BA*ldot from the
-commanded DeltaLdot) that the two element formulations render differently; that is reported as
-context but not gated -- the winch setpoint is the controlled quantity, not the slew transient.
+The pay-out and haul-in RAMPS are scored too: over each ramp and its settling into the next hold,
+the largest difference between the two codes' tensions must stay within GATE_RAMP_PCT of the
+MoorDyn baseline tension of that line. The commanded length changes every step there, so this
+checks that the length update enters the time integration the way MoorDyn's does.
 
 Usage:
     python validation/scripts/openfast_activetension_ab.py <cd5.out> <md3.out>
         [t_base_lo t_base_hi t_payout_lo t_payout_hi t_haulin_lo t_haulin_hi]
 
 Defaults match the DLL schedule (pay out over 40-100 s, hold to 160 s, haul in over 160-220 s,
-hold to 260 s): baseline [10,38], pay-out hold [110,158], haul-in hold [228,258].
+hold to 260 s): baseline [10,38], pay-out hold [110,158], haul-in hold [228,258]; the ramps are
+scored over [38,110] and [158,228] (from the end of one hold window to the start of the next).
 Channel names are matched case-insensitively (MoorDyn-F emits UPPERCASE).
 """
 
@@ -54,6 +56,9 @@ GATE_ANCHOR_PCT = 3.0  # anchor mean agreement at each hold
 # a real response -- each controlled hold must change the tension by at least this fraction of
 # baseline in each code -- so the A/B cannot pass vacuously on a dead cable-control path.
 GATE_MIN_RESPONSE_PCT = 1.0  # |dT| / baseline, per code, per controlled hold
+# Ramp agreement: max |T(=5) - T(=3)| over each ramp, as a percentage of the line's MoorDyn
+# baseline tension (controlled fairleads and anchors).
+GATE_RAMP_PCT = 1.0
 # Note: within a steady hold (DeltaLdot=0) the tension is essentially flat, so the =5-vs-=3
 # correlation of the hold window is noise-vs-noise and is reported for context only, NOT gated.
 # The gated quantity is the tension CHANGE from baseline -- the winch setpoint response.
@@ -221,6 +226,36 @@ def main() -> int:
         ANCHORS, "anchor (far-end) tensions -- steady agreement", GATE_ANCHOR_PCT, False
     )
 
+    # Ramps: the largest tension difference between the codes while the length changes.
+    ramps = {"pay-out ramp": (bh, pl), "haul-in ramp": (ph, hl)}
+    print("--- ramps -- largest tension difference while the length changes ---")
+    for ch in CONTROLLED + ANCHORS:
+        base3 = window(h3, r3, ch, bl, bh)
+        c5, c3 = col(h5, ch), col(h3, ch)
+        if not base3 or c5 < 0 or c3 < 0:
+            print(f"{ch:10} MISSING")
+            fails.append(ch)
+            continue
+        b3 = mean(base3)
+        parts = []
+        flag = "  ok"
+        for name, (lo, hi) in ramps.items():
+            d = max(
+                (
+                    abs(x5[c5] - x3[c3])
+                    for x5, x3 in zip(r5, r3)
+                    if lo <= x5[t5] <= hi and abs(x5[t5] - x3[t3]) <= 0.5 * dt_est
+                ),
+                default=math.nan,
+            )
+            parts.append(f"{name} {d / 1e3:7.1f} kN ({pct(d, b3):5.2f}%)")
+            if not (math.isfinite(d) and pct(d, b3) <= GATE_RAMP_PCT):
+                flag = "  <-- GATE FAIL"
+        if flag != "  ok":
+            fails.append(ch)
+        print(f"{ch:10} " + "   ".join(parts) + flag)
+    print()
+
     if fails:
         print(f"RESULT: FAIL -- {', '.join(dict.fromkeys(fails))}")
         return 1
@@ -228,7 +263,8 @@ def main() -> int:
         f"RESULT: PASS -- both codes show a real active-tension response "
         f"(>= {GATE_MIN_RESPONSE_PCT:.0f}% of baseline), the commanded pay-out/haul-in tension "
         f"response on the controlled lines agrees within {GATE_RESPONSE_PCT:.0f}%, and the anchor "
-        f"tensions within {GATE_ANCHOR_PCT:.0f}% between CableDyn and stock MoorDyn, end to end "
+        f"tensions within {GATE_ANCHOR_PCT:.0f}% between CableDyn and stock MoorDyn, and during the "
+        f"ramps the tensions differ by at most {GATE_RAMP_PCT:.0f}% of the baseline, end to end "
         "through the OpenFAST ServoDyn cable-control path."
     )
     return 0
