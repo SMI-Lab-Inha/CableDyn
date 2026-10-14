@@ -386,7 +386,8 @@ row. On this route:
   field;
 - a finite-EI cable cannot share a coupled deck with Rigid6 bodies, rods, or `Connect`/`Free`
   points;
-- CONTROL and FAILURE rows are rejected on decks that contain finite-EI cables;
+- FAILURE rows are rejected on decks that contain finite-EI cables; CONTROL rows may name
+  finite-EI cables (see [CONTROL](#control-optional-openfast-line-control));
 - `Coupled`/`Vessel` rods are platform-borne and need no `motionFile`: each is a node of the
   OpenFAST mesh at its End A, turns rigidly with the platform orientation (its deck coordinates,
   like those of `Coupled` points, are given at the undisplaced platform and moved by
@@ -965,17 +966,29 @@ ChannelID  Line(s)
 | `Line(s)` | one line id or a comma list without spaces (`1,2`) |
 
 Each line belongs to at most one channel. Before every advance, the channel's `DeltaL` sets the
-unstretched length of each assigned line's **last (fairlead-side) segment** to its initial length
-plus `DeltaL`; `DeltaLdot` supplies the matching rate. Axial damping on that segment acts on the
-strain rate, as in MoorDyn-F, so a segment paid out at constant strain carries no damping tension.
-A command that makes that segment length
-zero or negative is rejected. A command above one initial segment length, or below minus half of
-it, prints a one-time warning and is applied unclamped. The host input arrays are sized to the
-highest channel id.
+unstretched length of each assigned line's **last (fairlead-side) segment**, the segment at End A
+(MoorDyn's last segment once the automatic anchor-first swap has put the fairlead at End A), to
+its initial length plus `DeltaL`; `DeltaLdot` supplies the matching rate. The length is held over
+the advance. Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment
+paid out at constant strain carries no damping tension.
 
-CONTROL is supported only on the OpenFAST `CompMooring = 5` route, for pure `EI = 0`,
-non-FAST.Farm decks, without OpenFAST linearisation. The standalone driver rejects a CONTROL
-section, as does a coupled deck containing a finite-EI cable.
+- On an `EI = 0` line the segment is the End-A element. A command that makes its length zero or
+  negative is rejected. A command above one initial segment length, or below minus half of it,
+  prints a one-time warning and is applied unclamped.
+- On a finite-EI cable the segment is the End-A segment of the deck mesh (the length of the
+  `SECTIONS` row at End A over its `NumSegs`). Where the static initialisation refined the mesh,
+  it is the cable elements that make up that segment. Each of them scales by (S + `DeltaL`)/S,
+  S being the segment's initial length, with rate `DeltaLdot` l/S for an element of initial
+  length l, so the segment becomes S + `DeltaL` long. The structural and attachment mass, the seabed contact
+  coefficients and the tributary lengths follow the new lengths; `BA` keeps its initial
+  resolution. A command outside −S/2 ≤ `DeltaL` ≤ S stops the run with a message that names the
+  line, because the cable mesh was resolved at the initial lengths. A cable restrained in torsion
+  cannot be controlled (the coupled route rejects torsion stiffness in END CONNECTIONS).
+
+The host input arrays are sized to the highest channel id.
+
+CONTROL is supported only on the OpenFAST `CompMooring = 5` route, for non-FAST.Farm decks,
+without OpenFAST linearisation. The standalone driver rejects a CONTROL section.
 
 ### OPTIONS (`value keyword` order, case-insensitive keyword)
 

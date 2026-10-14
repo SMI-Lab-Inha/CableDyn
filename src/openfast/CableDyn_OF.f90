@@ -1437,6 +1437,9 @@ CONTAINS
       ! apply the restored command HERE, on the rebuild transition itself, so every
       ! entry that can trigger a rebuild (UpdateStates -- including its supercycle
       ! early-return substeps -- and CalcOutput) resumes at the checkpointed lengths.
+      ! A controlled finite-EI cable rebuilds its length caches as the uninterrupted
+      ! run did and drops the committed force reloaded with its mirror, so its next
+      ! step evaluates that force at the restored lengths.
       IF (ALLOCATED(u1%DeltaL)) THEN
          CALL CD_AGG_Apply_LineControl( Inst(id)%agg, REAL(u1%DeltaL, wp), REAL(u1%DeltaLdot, wp), es, em )
          IF (es /= CD_AGG_OK) THEN
@@ -1631,7 +1634,8 @@ CONTAINS
                IF (ErrStat >= AbortErrLev) RETURN
             END IF
             ! Active line control: apply the interpolated DeltaL/DeltaLdot command to
-            ! the controlled segments BEFORE the advance (the MoorDyn placement).
+            ! the controlled segments (EI=0 line segments and finite-EI cable spans)
+            ! BEFORE the advance (the MoorDyn placement).
             ! Runs AFTER the snapshot so a correction re-entry restores the
             ! step-start lengths and re-applies the corrected command.
             IF (ALLOCATED(Inst(id)%u_interp%DeltaL)) THEN

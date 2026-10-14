@@ -189,11 +189,10 @@ OpenFAST coverage
 
 The ``CompMooring = 5`` shell covers normal coupled time-domain stepping with its own ``dtM``,
 nonzero ``PtfmInit``, correction iterations, SeaState fields, checkpoint/restart, scoped
-quasi-static ``dYdu`` linearisation, line failures, active-tension control for ``EI = 0`` lines,
-and FAST.Farm shared moorings. Restart and linearisation do not arise under FAST.Farm, which
-does not call those module operations. Active ServoDyn control of a finite-EI cable
-remains rejected. See :doc:`openfast` for setup and :doc:`coupling_boundary` for the interface
-contract.
+quasi-static ``dYdu`` linearisation, line failures, active-tension control of ``EI = 0`` lines
+and finite-EI cables, and FAST.Farm shared moorings. Restart and linearisation do not arise under
+FAST.Farm, which does not call those module operations, and active-tension control is rejected
+there. See :doc:`openfast` for setup and :doc:`coupling_boundary` for the interface contract.
 
 How to interpret this page
 --------------------------

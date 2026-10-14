@@ -4,8 +4,10 @@
 PROGRAM test_hermite_axial_damping
   !! Axial Kelvin-Voigt damping on the finite-EI Hermite cable. The gates cover the
   !! analytical straight-element limit, rigid-body invariance, positive dissipation,
-  !! exact position/velocity Jacobians, and the transactional model setter.
+  !! exact position/velocity Jacobians, the unstretched-length rate of active line
+  !! control, and the transactional model setter.
   USE CableDyn_Precision, ONLY: wp
+  USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Axial_Resultant
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HermiteCable_Axial_Damping_Element, &
                                           CD_HermiteCable_Axial_Damping_Resultant, &
@@ -23,6 +25,7 @@ PROGRAM test_hermite_axial_damping
   nfail = 0
   CALL check_straight_limit()
   CALL check_jacobians_and_dissipation()
+  CALL check_length_rate()
   CALL check_setter_lifecycle()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -119,6 +122,95 @@ CONTAINS
     CALL require(nan_max_abs(kv - TRANSPOSE(kv)) < 1.0e-12_wp*scalev, &
                  'velocity Jacobian is symmetric')
   END SUBROUTINE check_jacobians_and_dissipation
+
+  SUBROUTINE check_length_rate()
+    !! Active line control: with an unstretched-length rate l0_dot the damped strain rate is
+    !! the time derivative of the strain |r_xi|/l0 - 1 the elastic resultant uses, along
+    !! q + v t and l0 + l0_dot t. Gates: a straight element paid out at constant strain
+    !! carries no damping force; the viscous resultant matches the central difference of that
+    !! strain; a zero rate reproduces the uncontrolled element; and the position and velocity
+    !! Jacobians with a rate match central differences.
+    REAL(wp), PARAMETER :: l0 = 2.2_wp, ba = 3.7e4_wp, ldot = 0.37_wp, stretch = 1.004_wp
+    REAL(wp), PARAMETER :: xs(3) = [0.0_wp, 0.31_wp, 0.83_wp]
+    REAL(wp) :: qe(12), ve(12), qp(12), qm(12), vp(12), vm(12)
+    REAL(wp) :: f(12), f0(12), fp(12), fm(12), kq(12, 12), kv(12, 12), kq0(12, 12), kv0(12, 12)
+    REAL(wp) :: kqfd(12, 12), kvfd(12, 12)
+    REAL(wp) :: td, sp, sm, h, errq, errv, scaleq, scalev, rate_fd
+    INTEGER :: es, j, k
+    CHARACTER(300) :: em
+
+    ! (a) constant-strain pay-out: r_2 moves with the growing reference at the element's
+    ! stretch and the tangents keep it, so the strain does not change anywhere
+    qe = [0.0_wp, 0.0_wp, 0.0_wp, stretch, 0.0_wp, 0.0_wp, &
+          stretch*l0, 0.0_wp, 0.0_wp, stretch, 0.0_wp, 0.0_wp]
+    ve = 0.0_wp
+    ve(7) = stretch*ldot
+    CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, l0, ba, f, kq, kv, es, em, l0_dot=ldot)
+    CALL require(es == CD_HCDYN_OK, 'pay-out element accepted: '//TRIM(em))
+    CALL require(nan_max_abs(f) <= 1.0e-12_wp*ba*ldot/l0, &
+                 'a straight element paid out at constant strain carries no damping force')
+    DO k = 1, SIZE(xs)
+      CALL CD_HermiteCable_Axial_Damping_Resultant(qe, ve, l0, ba, xs(k), td, es, em, l0_dot=ldot)
+      CALL require(es == CD_HCDYN_OK .AND. ABS(td) <= 1.0e-12_wp*ba*ldot/l0, &
+                   'constant-strain pay-out has no viscous resultant')
+    END DO
+    ! without the rate the end velocity reads as stretch: strain rate dH_3 stretch ldot/l0,
+    ! so f_r2 = BA stretch ldot/l0 times the integral of dH_3**2 = 36 x**2 (1 - x)**2, 6/5
+    CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, l0, ba, f, ErrStat=es, ErrMsg=em)
+    CALL require(ABS(f(7) - 1.2_wp*ba*stretch*ldot/l0) <= 1.0e-12_wp*ba*ldot/l0, &
+                 'without the rate the same motion reads as a stretching dashpot')
+
+    ! (b) the resultant is BA times the time derivative of the strain along the motion
+    qe = [0.10_wp, -0.20_wp, 0.30_wp, 0.90_wp, 0.20_wp, 0.15_wp, &
+          2.30_wp, 0.50_wp, 0.80_wp, 0.70_wp, -0.10_wp, 0.25_wp]
+    ve = [0.12_wp, -0.04_wp, 0.03_wp, 0.02_wp, 0.01_wp, -0.03_wp, &
+          -0.06_wp, 0.08_wp, 0.05_wp, -0.01_wp, 0.04_wp, 0.02_wp]
+    h = 1.0e-6_wp
+    DO k = 1, SIZE(xs)
+      CALL CD_HermiteCable_Axial_Resultant(qe + h*ve, l0 + h*ldot, 1.0_wp, xs(k), sp, es, em)
+      CALL CD_HermiteCable_Axial_Resultant(qe - h*ve, l0 - h*ldot, 1.0_wp, xs(k), sm, es, em)
+      rate_fd = (sp - sm)/(2.0_wp*h)
+      CALL CD_HermiteCable_Axial_Damping_Resultant(qe, ve, l0, ba, xs(k), td, es, em, l0_dot=ldot)
+      CALL require(es == CD_HCDYN_OK .AND. ABS(td - ba*rate_fd) <= 1.0e-7_wp*ba*MAX(ABS(rate_fd), 1.0e-3_wp), &
+                   'the controlled viscous resultant is BA times the strain rate along q(t), l0(t)')
+    END DO
+
+    ! (c) a zero rate is the uncontrolled element
+    CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, l0, ba, f0, kq0, kv0, es, em, 6)
+    CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, l0, ba, f, kq, kv, es, em, 6, 0.0_wp)
+    CALL require(nan_max_abs(f - f0) <= 0.0_wp .AND. nan_max_abs(kq - kq0) <= 0.0_wp .AND. &
+                 nan_max_abs(kv - kv0) <= 0.0_wp, 'a zero length rate reproduces the uncontrolled element')
+
+    ! (d) Jacobians with a rate against central differences
+    CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, l0, ba, f, kq, kv, es, em, 6, ldot)
+    CALL require(es == CD_HCDYN_OK, 'controlled curved element accepted: '//TRIM(em))
+    CALL require(nan_max_abs(kq - kq0) > 1.0e-3_wp*nan_max_abs(kq0), 'the length rate enters the position Jacobian')
+    DO j = 1, 12
+      h = 2.0e-7_wp*MAX(1.0_wp, ABS(qe(j)))
+      qp = qe; qm = qe
+      qp(j) = qp(j) + h; qm(j) = qm(j) - h
+      CALL CD_HermiteCable_Axial_Damping_Element(qp, ve, l0, ba, fp, ErrStat=es, ErrMsg=em, &
+                                                 quadrature_order=6, l0_dot=ldot)
+      CALL CD_HermiteCable_Axial_Damping_Element(qm, ve, l0, ba, fm, ErrStat=es, ErrMsg=em, &
+                                                 quadrature_order=6, l0_dot=ldot)
+      kqfd(:, j) = (fp - fm)/(2.0_wp*h)
+      h = 2.0e-7_wp*MAX(1.0_wp, ABS(ve(j)))
+      vp = ve; vm = ve
+      vp(j) = vp(j) + h; vm(j) = vm(j) - h
+      CALL CD_HermiteCable_Axial_Damping_Element(qe, vp, l0, ba, fp, ErrStat=es, ErrMsg=em, &
+                                                 quadrature_order=6, l0_dot=ldot)
+      CALL CD_HermiteCable_Axial_Damping_Element(qe, vm, l0, ba, fm, ErrStat=es, ErrMsg=em, &
+                                                 quadrature_order=6, l0_dot=ldot)
+      kvfd(:, j) = (fp - fm)/(2.0_wp*h)
+    END DO
+    scaleq = MAX(1.0_wp, nan_max_abs(kqfd))
+    scalev = MAX(1.0_wp, nan_max_abs(kvfd))
+    errq = nan_max_abs(kq - kqfd)/scaleq
+    errv = nan_max_abs(kv - kvfd)/scalev
+    WRITE (*, '(A,ES10.3,A,ES10.3)') '  controlled damping Jacobian relative errors: q=', errq, '  v=', errv
+    CALL require(errq < 2.0e-7_wp, 'controlled position Jacobian matches central differences')
+    CALL require(errv < 2.0e-8_wp, 'controlled velocity Jacobian matches central differences')
+  END SUBROUTINE check_length_rate
 
   SUBROUTINE check_setter_lifecycle()
     TYPE(CD_HermiteCableDynType) :: model

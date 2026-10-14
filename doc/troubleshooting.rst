@@ -402,10 +402,15 @@ FAILURE and CONTROL sections
        bodies and their lines only; model a clump or buoy on the line as part of a body.
    * - ``this entry point does not support the CONTROL section``
      - the standalone driver does not consume CONTROL. Line control is an OpenFAST
-       ``CompMooring = 5`` feature for ``EI = 0`` decks; remove the section for a standalone run.
+       ``CompMooring = 5`` feature; remove the section for a standalone run.
    * - ``CONTROL row has trailing content`` / ``line L is assigned to more than one CONTROL
        channel``
      - write ``ChannelID Lines`` with a comma list without spaces, and assign each line once.
+   * - ``control channel C would scale the controlled segment of finite-EI line L by ...``
+     - the command lies outside half to twice the initial length of the cable's fairlead-side
+       segment, the range its static mesh resolves. Keep ``CableDeltaL`` within it, or mesh the
+       fairlead-side section with fewer, longer segments so the command is a smaller fraction of
+       one.
 
 .. _non-convergence:
 
@@ -637,9 +642,10 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
 
    * - Not supported on the coupled route
      - Use instead
-   * - active ServoDyn control (``CONTROL``) on a deck with a **finite-EI** cable, or in FAST.Farm
-     - ``EI = 0`` line control **is** supported in a single-turbine model; for a controlled cable,
-       use stock MoorDyn (``CompMooring = 3``) in the same binary
+   * - active ServoDyn control (``CONTROL``) in FAST.Farm
+     - line control of ``EI = 0`` lines and finite-EI cables **is** supported in a single-turbine
+       model; for controlled lines in a farm, use stock MoorDyn (``CompMooring = 3``) in the same
+       binary
    * - deck ``waves``/``wavetrain`` OPTIONS, and a deck ``current`` on a deck with finite-EI
        cables, Rigid6 bodies or rods, in FAST.Farm, or with a SeaState that carries waves or
        current

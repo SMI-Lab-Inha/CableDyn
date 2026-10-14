@@ -20,6 +20,8 @@ PROGRAM test_openfast_aggregate
   !!   7) ptfm_init_equivalence -- the ptfm_init option == a pre-displaced deck, bit-for-bit,
   !!      against an independent transcription of the NWTC ZYX transform; zero == absent;
   !!      non-finite fails closed.
+  !!   8) line control -- CONTROL on EI=0 lines and finite-EI cables (alone and mixed), its
+  !!      fail-closed bounds, rewind and bit-identical checkpoint restart (--line-control-only).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -110,6 +112,17 @@ PROGRAM test_openfast_aggregate
       WRITE (*, '(A)') 'PASS: displaced semitaut mooring initialisation'
       STOP
     END IF
+    IF (TRIM(test_filter) == '--line-control-only') THEN
+      CALL case_aggregate_line_control()
+      CALL case_aggregate_cable_control()
+      CALL case_restart_cable_control()
+      IF (nfail > 0) THEN
+        WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' line-control assertion(s) failed'
+        ERROR STOP 1
+      END IF
+      WRITE (*, '(A)') 'PASS: coupled active line control'
+      STOP
+    END IF
   END IF
   CALL case_pure_mooring_equals_fmf()
   CALL case_mixed_deck_composition()
@@ -149,6 +162,8 @@ PROGRAM test_openfast_aggregate
   CALL case_farm_shared_anchor()
   CALL case_aggregate_failures()
   CALL case_aggregate_line_control()
+  CALL case_aggregate_cable_control()
+  CALL case_restart_cable_control()
   CALL case_restart_equivalence()
   CALL case_restart_friction()
   IF (nfail > 0) THEN
@@ -3231,6 +3246,337 @@ CONTAINS
     CALL CD_AGG_End(aggc, es, em)
   END SUBROUTINE case_aggregate_line_control
 
+  SUBROUTINE case_aggregate_cable_control()
+    !! Active line control of finite-EI cables on the coupled aggregate:
+    !!   (a) a cable-only deck controls the trailing span that makes up the deck's fairlead-
+    !!       side segment (40/13 m), and a zero command is bit-identical to no control over a
+    !!       driven march;
+    !!   (b) a pay-out scales every span element by (S + DeltaL)/S, leaves the rest, and the
+    !!       next step converges;
+    !!   (c) a command outside [0.5, 2] of the segment fails closed, naming the line, and
+    !!       writes nothing;
+    !!   (d) an aggregate snapshot rewinds a command with the cable's caches;
+    !!   (e) MIXED deck (cable = deck line 1, chain = deck line 2): the chain resolves to EI = 0
+    !!       system line 1 -- its rank among the EI = 0 lines, not its deck position -- and one
+    !!       channel drives both kinds;
+    !!   (f) CONTROL with a finite-EI cable in FAST.Farm fails closed by name;
+    !!   (g) on a mesh the static initialisation refined (adaptive_mesh), the span is the
+    !!       children of the fairlead-side segment, and the command scales all of them.
+    TYPE(CD_AGG_ModuleType) :: agg, aggc
+    REAL(wp), PARAMETER :: DT = 0.05_wp
+    REAL(wp) :: r0(3, 1), v0(3, 1), a0(3, 1), tgt(3, 1), lf(3, 1), lc(3, 1), pf(3, 1), vf(3, 1), af(3, 1)
+    REAL(wp), ALLOCATABLE :: l0_base(:), l0_keep(:), mgb_keep(:, :)
+    REAL(wp) :: s_span, lam, t
+    INTEGER :: es, ni, k, ne, first
+    LOGICAL :: cv, st, bit_same
+    CHARACTER(512) :: em
+
+    CALL write_cable_only_deck('agg_cable_plain.dat')
+    CALL write_cable_only_deck('agg_cable_ctrl.dat', control_row='1 1')
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_cable_plain.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'cablectrl: plain init: '//TRIM(em))
+    CALL CD_AGG_Init_From_Deck(aggc, 'agg_cable_ctrl.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'cablectrl: a finite-EI cable with CONTROL initialises: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL require(CD_AGG_NCtrlChans(aggc) == 1 .AND. SIZE(aggc%ctrl_chan) == 1, 'cablectrl: one channel, one row')
+    CALL require(aggc%ctrl_is_cable(1) .AND. aggc%ctrl_line(1) == 1 .AND. aggc%ctrl_line_id(1) == 1, &
+                 'cablectrl: the row addresses cable 1, deck line 1')
+    ne = aggc%cables(1)%line%ne
+    first = aggc%ctrl_elem(1)
+    s_span = SUM(aggc%cables(1)%line%l0(first:ne))
+    CALL require(first >= 1 .AND. first <= ne .AND. ABS(s_span - 40.0_wp/13.0_wp) <= 1.0e-12_wp*s_span .AND. &
+                 ABS(aggc%ctrl_base_l0(1) - s_span) <= 0.0_wp, &
+                 'cablectrl: the span is the trailing elements of the 40/13 m fairlead-side segment')
+    IF (first > 1) CALL require(SUM(aggc%cables(1)%line%l0(first - 1:ne)) > 40.0_wp/13.0_wp + 1.0e-9_wp, &
+                                'cablectrl: the span stops at the segment boundary')
+    l0_base = aggc%cables(1)%line%l0
+
+    ! (a) zero command == never controlled, bit for bit, under a driven fairlead
+    CALL CD_AGG_GetMovingPointMesh(agg, r0, v0, a0, lf, es, em)
+    tgt = r0
+    v0 = 0.0_wp
+    a0 = 0.0_wp
+    bit_same = .TRUE.
+    DO k = 1, 4
+      t = REAL(k, wp)*DT
+      tgt(1, 1) = r0(1, 1) + 0.2_wp*(1.0_wp - COS(2.0_wp*PI*t/2.0_wp))
+      v0(1, 1) = 0.2_wp*(2.0_wp*PI/2.0_wp)*SIN(2.0_wp*PI*t/2.0_wp)
+      CALL CD_AGG_Apply_LineControl(aggc, [0.0_wp], [0.0_wp], es, em)
+      CALL require(es == CD_AGG_OK, 'cablectrl: zero apply: '//TRIM(em))
+      CALL CD_AGG_Step_Moving(agg, DT, tgt, v0, a0, cv, st, ni, es, em)
+      CALL require(es == CD_AGG_OK .AND. cv, 'cablectrl: plain step: '//TRIM(em))
+      CALL CD_AGG_Step_Moving(aggc, DT, tgt, v0, a0, cv, st, ni, es, em)
+      CALL require(es == CD_AGG_OK .AND. cv, 'cablectrl: controlled step: '//TRIM(em))
+      CALL CD_AGG_CalcOutput(agg, es, em)
+      CALL CD_AGG_CalcOutput(aggc, es, em)
+      CALL CD_AGG_GetMovingPointMesh(agg, pf, vf, af, lf, es, em)
+      CALL CD_AGG_GetMovingPointMesh(aggc, pf, vf, af, lc, es, em)
+      bit_same = bit_same .AND. nan_max_abs(lc - lf) <= 0.0_wp .AND. &
+                 nan_max_abs(aggc%cables(1)%line%q - agg%cables(1)%line%q) <= 0.0_wp
+    END DO
+    CALL require(bit_same .AND. .NOT. aggc%cables(1)%line%has_ctrl, &
+                 'cablectrl: a zero command is bit-identical to an uncontrolled cable')
+
+    ! (b) pay-out: every span element scales by (S + DeltaL)/S, the rest is untouched
+    lam = (s_span + 0.4_wp)/s_span
+    CALL CD_AGG_Apply_LineControl(aggc, [0.4_wp], [0.1_wp], es, em)
+    CALL require(es == CD_AGG_OK, 'cablectrl: pay-out apply: '//TRIM(em))
+    CALL require(ALL(aggc%cables(1)%line%l0(first:ne) == l0_base(first:ne)*lam) .AND. &
+                 ALL(aggc%cables(1)%line%l0(1:first - 1) == l0_base(1:first - 1)), &
+                 'cablectrl: the span scales by (S + DeltaL)/S and nothing else moves')
+    CALL require(ABS(SUM(aggc%cables(1)%line%l0(first:ne)) - (s_span + 0.4_wp)) <= 1.0e-12_wp*s_span, &
+                 'cablectrl: the controlled segment is S + DeltaL long')
+    CALL require(ALL(ABS(aggc%cables(1)%line%l0_dot(first:ne) - 0.1_wp*l0_base(first:ne)/s_span) <= &
+                     1.0e-15_wp) .AND. ALL(aggc%cables(1)%line%l0_dot(1:first - 1) == 0.0_wp), &
+                 'cablectrl: each span element carries DeltaLdot l_e/S')
+    CALL CD_AGG_Step_Moving(aggc, DT, tgt, v0, a0, cv, st, ni, es, em)
+    CALL require(es == CD_AGG_OK .AND. cv, 'cablectrl: the step after a pay-out converges: '//TRIM(em))
+
+    ! (c) fail closed outside [0.5, 2], writing nothing
+    l0_keep = aggc%cables(1)%line%l0
+    CALL CD_AGG_Apply_LineControl(aggc, [-0.55_wp*s_span], [0.0_wp], es, em)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'finite-EI line 1') > 0 .AND. INDEX(em, '[0.5, 2]') > 0, &
+                 'cablectrl: scaling below half the segment fails closed by line')
+    CALL CD_AGG_Apply_LineControl(aggc, [1.05_wp*s_span], [0.0_wp], es, em)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'finite-EI line 1') > 0, &
+                 'cablectrl: scaling beyond twice the segment fails closed by line')
+    CALL require(ALL(aggc%cables(1)%line%l0 == l0_keep), 'cablectrl: a refused command writes nothing')
+
+    ! (d) an aggregate snapshot rewinds a command, caches included
+    l0_keep = aggc%cables(1)%line%l0
+    mgb_keep = aggc%cables(1)%line%Mgb
+    CALL CD_AGG_Snapshot(aggc, es, em)
+    CALL CD_AGG_Apply_LineControl(aggc, [-0.3_wp], [-0.2_wp], es, em)
+    CALL require(es == CD_AGG_OK .AND. ANY(aggc%cables(1)%line%Mgb /= mgb_keep), 'cablectrl: rewind apply')
+    CALL CD_AGG_Restore(aggc, es, em)
+    CALL require(es == CD_AGG_OK .AND. ALL(aggc%cables(1)%line%l0 == l0_keep) .AND. &
+                 ALL(aggc%cables(1)%line%Mgb == mgb_keep) .AND. &
+                 ALL(aggc%cables(1)%line%l0_dot(first:ne) == 0.1_wp*l0_base(first:ne)/s_span), &
+                 'cablectrl: the restore brings back the lengths, rates and mass bit for bit')
+    CALL CD_AGG_End(agg, es, em)
+    CALL CD_AGG_End(aggc, es, em)
+
+    ! (e) MIXED deck: the chain is deck line 2 but system line 1
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: aggm
+      REAL(wp), ALLOCATABLE :: tb(:), ta(:)
+      INTEGER :: nec
+      CALL write_mixed_deck('agg_mixed_ctrl.dat', control_row='1 2')
+      CALL CD_AGG_Init_From_Deck(aggm, 'agg_mixed_ctrl.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'cablectrl: mixed deck with a controlled chain: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        CALL require(.NOT. aggm%ctrl_is_cable(1) .AND. aggm%ctrl_line(1) == 1 .AND. aggm%ctrl_line_id(1) == 2, &
+                     'cablectrl: deck line 2 resolves to EI = 0 system line 1 (its rank, not its position)')
+        nec = CD_System_Line_NElem(aggm%sys%fast%system, 1, es, em)
+        ALLOCATE (tb(nec), ta(nec))
+        CALL CD_Get_System_Line_Tension(aggm%sys%fast%system, 1, tb, es, em)
+        CALL CD_AGG_Apply_LineControl(aggm, [0.5_wp], [0.0_wp], es, em)
+        CALL require(es == CD_AGG_OK .AND. aggm%sys%fast%system%lines(1)%l0(nec) == aggm%ctrl_base_l0(1) + 0.5_wp, &
+                     'cablectrl: the chain''s fairlead segment is base + DeltaL: '//TRIM(em))
+        CALL CD_Get_System_Line_Tension(aggm%sys%fast%system, 1, ta, es, em)
+        CALL require(ta(nec) < tb(nec), 'cablectrl: paying the chain out drops its fairlead tension')
+        CALL require(.NOT. aggm%cables(1)%line%has_ctrl, 'cablectrl: the cable is not touched')
+      END IF
+      CALL CD_AGG_End(aggm, es, em)
+      CALL write_mixed_deck('agg_mixed_ctrl2.dat', control_row='1 1,2')
+      CALL CD_AGG_Init_From_Deck(aggm, 'agg_mixed_ctrl2.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'cablectrl: mixed deck, one channel on both kinds: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        CALL require(aggm%ctrl_is_cable(1) .AND. .NOT. aggm%ctrl_is_cable(2) .AND. aggm%ctrl_line(2) == 1, &
+                     'cablectrl: rows for the cable and the chain')
+        CALL CD_AGG_Apply_LineControl(aggm, [0.3_wp], [0.0_wp], es, em)
+        nec = SIZE(aggm%sys%fast%system%lines(1)%l0)
+        CALL require(es == CD_AGG_OK .AND. aggm%cables(1)%line%has_ctrl .AND. &
+                     aggm%sys%fast%system%lines(1)%l0(nec) == aggm%ctrl_base_l0(2) + 0.3_wp, &
+                     'cablectrl: one channel drives the cable span and the chain segment')
+      END IF
+      CALL CD_AGG_End(aggm, es, em)
+    END BLOCK
+
+    ! (g) a mesh the static initialisation refined: the fairlead-side deck segment is now
+    ! several cable elements, and the command scales all of them
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: aggr
+      REAL(wp), ALLOCATABLE :: base(:)
+      INTEGER :: ner, fr
+      CALL write_cable_only_deck('agg_cable_ctrl_refined.dat', control_row='1 1', adaptive_mesh=.TRUE.)
+      CALL CD_AGG_Init_From_Deck(aggr, 'agg_cable_ctrl_refined.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'cablectrl: refined cable with CONTROL: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        ner = aggr%cables(1)%line%ne
+        fr = aggr%ctrl_elem(1)
+        WRITE (*, '(A,I0,A,I0,A)') '  cable control span on the refined mesh: ', ner - fr + 1, ' of ', ner, &
+          ' elements'
+        CALL require(ner > 47 .AND. MOD(ner, 47) == 0 .AND. ner - fr + 1 == ner/47, &
+                     'cablectrl: the span is the children of the refined fairlead-side segment')
+        CALL require(ABS(SUM(aggr%cables(1)%line%l0(fr:ner)) - 40.0_wp/13.0_wp) <= 1.0e-12_wp*40.0_wp, &
+                     'cablectrl: the refined span is the 40/13 m segment')
+        base = aggr%cables(1)%line%l0
+        CALL CD_AGG_Apply_LineControl(aggr, [0.3_wp], [0.0_wp], es, em)
+        CALL require(es == CD_AGG_OK .AND. &
+                     ALL(aggr%cables(1)%line%l0(fr:ner) == base(fr:ner)*((aggr%ctrl_base_l0(1) + 0.3_wp)/ &
+                                                                         aggr%ctrl_base_l0(1))) .AND. &
+                     ALL(aggr%cables(1)%line%l0(1:fr - 1) == base(1:fr - 1)), &
+                     'cablectrl: the command scales every child of the segment and nothing else')
+      END IF
+      CALL CD_AGG_End(aggr, es, em)
+    END BLOCK
+
+    ! (f) FAST.Farm: CONTROL on a deck with a finite-EI cable fails closed by name
+    BLOCK
+      INTEGER :: u, ios
+      OPEN (NEWUNIT=u, FILE='agg_farm_cable_ctrl.dat', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+      WRITE (u, '(A)') 'farm deck with one finite-EI cable and a CONTROL row'
+      WRITE (u, '(A)') '--- LINE TYPES ---'
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+      WRITE (u, '(A)') 'bare 0.16 36.70 4.69e8 0.0 1.99e4 1.2 0.1 1.0 0.0'
+      WRITE (u, '(A)') '--- POINTS ---'
+      WRITE (u, '(A)') 'ID Type X Y Z'
+      WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+      WRITE (u, '(A)') '1 Fixed 0.0 0.0 -56.0'
+      WRITE (u, '(A)') '2 Turbine1 90.0 0.0 -14.0'
+      WRITE (u, '(A)') '--- LINES ---'
+      WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+      WRITE (u, '(A)') '(-) (-) (-) (-)'
+      WRITE (u, '(A)') '1 2 1 -'
+      WRITE (u, '(A)') '--- SECTIONS ---'
+      WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+      WRITE (u, '(A)') '(-) (-) (m) (-)'
+      WRITE (u, '(A)') '1 bare 145.0 47'
+      CALL write_control_section(u, '1 1')
+      WRITE (u, '(A)') '--- OPTIONS ---'
+      WRITE (u, '(A)') '9.80665 g'
+      WRITE (u, '(A)') '1025.0 rhoW'
+      WRITE (u, '(A)') '--- need this line ---'
+      CLOSE (u)
+      CALL CD_AGG_Init_From_Deck(aggc, 'agg_farm_cable_ctrl.dat', DT, es, em, n_turbines=1, &
+                                 turbine_ref_pos=RESHAPE([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'CONTROL on a FAST.Farm deck') > 0, &
+                   'cablectrl: CONTROL of a finite-EI cable in FAST.Farm fails closed by name')
+      CALL CD_AGG_End(aggc, es, em)
+    END BLOCK
+  END SUBROUTINE case_aggregate_cable_control
+
+  SUBROUTINE case_restart_cable_control()
+    !! CHECKPOINT-RESTART of a controlled finite-EI cable, bit for bit (the shell rebuild's
+    !! recipe): instance A marches under a pay-out ramp and a hold; a fresh instance B is built
+    !! at the base lengths, takes A's coupled kinematics and cable mirror, and re-applies the
+    !! last command (the shell re-applies the restored DeltaL); both then continue under the
+    !! same drive and commands. The re-applied lengths rebuild B's mass, tributary lengths and
+    !! seabed coefficients exactly as A's were rebuilt, so the trajectories stay bit-identical,
+    !! on a suspended cable and on a grounded cable with stick-slip friction. The checkpoint
+    !! falls in the hold (A keeps its cached committed force; B evaluates it afresh) and in the
+    !! ramp.
+    TYPE(CD_AGG_ModuleType) :: agg_a, agg_b
+    REAL(wp), PARAMETER :: DT = 0.05_wp
+    INTEGER, PARAMETER :: NPOST = 6
+    REAL(wp), ALLOCATABLE :: r0(:, :), vel(:, :), acc(:, :), tgt(:, :), pa(:, :), la(:, :), pb(:, :), lb(:, :)
+    REAL(wp), ALLOCATABLE :: v2(:, :), a2(:, :), cbuf(:)
+    REAL(wp) :: dl, dldot
+    INTEGER :: es, ni, s, npt, deck, npre
+    LOGICAL :: cv, st, same
+    CHARACTER(512) :: em
+    CHARACTER(64) :: path
+
+    DO deck = 1, 3
+      SELECT CASE (deck)
+      CASE (1)
+        path = 'agg_restart_cable_ctrl.dat'
+        CALL write_cable_only_deck(path, control_row='1 1')
+        npre = 8
+      CASE (2)
+        path = 'agg_restart_cable_ctrl.dat'
+        npre = 4
+      CASE DEFAULT
+        path = 'agg_restart_ground_ctrl.dat'
+        CALL write_cable_grounded_deck(path, control_row='1 1')
+        npre = 8
+      END SELECT
+      CALL CD_AGG_Init_From_Deck(agg_a, TRIM(path), DT, es, em)
+      CALL require(es == CD_AGG_OK, 'ctrl-restart:A-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      npt = CD_AGG_NMovingPoints(agg_a, es, em)
+      IF (ALLOCATED(r0)) DEALLOCATE (r0, vel, acc, tgt, pa, la, pb, lb, v2, a2)
+      ALLOCATE (r0(3, npt), vel(3, npt), acc(3, npt), tgt(3, npt), pa(3, npt), la(3, npt), pb(3, npt), &
+                lb(3, npt), v2(3, npt), a2(3, npt))
+      CALL CD_AGG_GetMovingPointMesh(agg_a, r0, vel, acc, la, es, em)
+      tgt = r0
+      vel = 0.0_wp
+      acc = 0.0_wp
+      DO s = 1, npre
+        CALL control_drive(s, DT, r0, tgt, vel, dl, dldot)
+        CALL CD_AGG_Apply_LineControl(agg_a, [dl], [dldot], es, em)
+        CALL CD_AGG_Step_Moving(agg_a, DT, tgt, vel, acc, cv, st, ni, es, em)
+        CALL require(es == CD_AGG_OK .AND. cv, 'ctrl-restart:A-march: '//TRIM(em))
+        IF (es /= CD_AGG_OK) RETURN
+      END DO
+      ! the checkpoint: fresh B at the base lengths, A's kinematics and mirror, the last command
+      CALL CD_AGG_Init_From_Deck(agg_b, TRIM(path), DT, es, em)
+      CALL require(es == CD_AGG_OK, 'ctrl-restart:B-init: '//TRIM(em))
+      CALL CD_AGG_GetMovingPointMesh(agg_a, pa, v2, a2, la, es, em)
+      CALL CD_AGG_UpdateStates_Moving(agg_b, pa, v2, a2, es, em)
+      ALLOCATE (cbuf(CD_HFMF_MirrorSize(agg_a%cables(1))))
+      CALL CD_HFMF_PackMirror(agg_a%cables(1), cbuf, es, em)
+      CALL CD_HFMF_UnpackMirror(agg_b%cables(1), cbuf, agg_a%cables(1)%line%t, es, em)
+      CALL require(es == CD_HFMF_OK, 'ctrl-restart:cable-unpack: '//TRIM(em))
+      DEALLOCATE (cbuf)
+      CALL control_drive(npre, DT, r0, tgt, vel, dl, dldot)
+      CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em)
+      CALL require(es == CD_AGG_OK, 'ctrl-restart:B-reapply: '//TRIM(em))
+      CALL require(ALL(agg_b%cables(1)%line%l0 == agg_a%cables(1)%line%l0) .AND. &
+                   ALL(agg_b%cables(1)%line%Mgb == agg_a%cables(1)%line%Mgb) .AND. &
+                   ALL(agg_b%cables(1)%line%trib == agg_a%cables(1)%line%trib), &
+                   'ctrl-restart:re-applied lengths and caches equal the uninterrupted run''s')
+      IF (agg_a%cables(1)%line%has_contact) &
+        CALL require(ALL(agg_b%cables(1)%line%contact_kn == agg_a%cables(1)%line%contact_kn) .AND. &
+                     ALL(agg_b%cables(1)%line%fr_k == agg_a%cables(1)%line%fr_k), &
+                     'ctrl-restart:re-applied seabed coefficients equal the uninterrupted run''s')
+      same = .TRUE.
+      DO s = npre + 1, npre + NPOST
+        CALL control_drive(s, DT, r0, tgt, vel, dl, dldot)
+        CALL CD_AGG_Apply_LineControl(agg_a, [dl], [dldot], es, em)
+        CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em)
+        CALL CD_AGG_Step_Moving(agg_a, DT, tgt, vel, acc, cv, st, ni, es, em)
+        CALL require(es == CD_AGG_OK .AND. cv, 'ctrl-restart:A-continue: '//TRIM(em))
+        CALL CD_AGG_Step_Moving(agg_b, DT, tgt, vel, acc, cv, st, ni, es, em)
+        CALL require(es == CD_AGG_OK .AND. cv, 'ctrl-restart:B-continue: '//TRIM(em))
+        CALL CD_AGG_CalcOutput(agg_a, es, em)
+        CALL CD_AGG_CalcOutput(agg_b, es, em)
+        CALL CD_AGG_GetMovingPointMesh(agg_a, pa, v2, a2, la, es, em)
+        CALL CD_AGG_GetMovingPointMesh(agg_b, pb, v2, a2, lb, es, em)
+        same = same .AND. nan_max_abs(la - lb) <= 0.0_wp .AND. &
+               nan_max_abs(agg_a%cables(1)%line%q - agg_b%cables(1)%line%q) <= 0.0_wp .AND. &
+               nan_max_abs(agg_a%cables(1)%line%a - agg_b%cables(1)%line%a) <= 0.0_wp
+      END DO
+      WRITE (*, '(A,I0,A,ES10.3)') '  ctrl-restart deck ', deck, ': max load difference ', nan_max_abs(la - lb)
+      CALL require(same, 'ctrl-restart:the restarted run continues bit-identically')
+      CALL CD_AGG_End(agg_a, es, em)
+      CALL CD_AGG_End(agg_b, es, em)
+    END DO
+  END SUBROUTINE case_restart_cable_control
+
+  SUBROUTINE control_drive(step, dt, r0, tgt, vel, dl, dldot)
+    !! Surge drive of every coupled point and the control command at t = step*dt: a 0.3 m
+    !! pay-out on a half-cosine ramp over 0.3 s, then held.
+    INTEGER, INTENT(IN) :: step
+    REAL(wp), INTENT(IN) :: dt, r0(:, :)
+    REAL(wp), INTENT(INOUT) :: tgt(:, :), vel(:, :)
+    REAL(wp), INTENT(OUT) :: dl, dldot
+    REAL(wp), PARAMETER :: TR = 0.3_wp
+    REAL(wp) :: t
+    t = REAL(step, wp)*dt
+    tgt(1, :) = r0(1, :) + 0.2_wp*(1.0_wp - COS(2.0_wp*PI*t/2.0_wp))
+    vel(1, :) = 0.2_wp*(2.0_wp*PI/2.0_wp)*SIN(2.0_wp*PI*t/2.0_wp)
+    IF (t < TR) THEN
+      dl = 0.3_wp*0.5_wp*(1.0_wp - COS(PI*t/TR))
+      dldot = 0.3_wp*0.5_wp*(PI/TR)*SIN(PI*t/TR)
+    ELSE
+      dl = 0.3_wp
+      dldot = 0.0_wp
+    END IF
+  END SUBROUTINE control_drive
+
   SUBROUTINE write_agg_failure_deck(path, failure_row, control_row, composite_line2)
     !! Vessel fairlead + massy Connect junction + Fixed anchor, two 0.98 m lines --
     !! the connect rig behind the coupled facade, with optional FAILURE/CONTROL rows.
@@ -4319,13 +4665,15 @@ CONTAINS
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_touchdown_cable_end_tension
 
-  SUBROUTINE write_mixed_deck(path, finite_end_connection, rigid_end_connection)
+  SUBROUTINE write_mixed_deck(path, finite_end_connection, rigid_end_connection, control_row)
     !! MIXED deck: one EI=0 catenary chain (mooring) + one finite-EI lazy-wave power cable.
     !! Cable endpoints (Fixed anchor + Coupled fairlead) sit well above the -200 m seabed, so
     !! the suspended pinned-span cable ignores WtrDpth while the mooring uses it (touchdown).
+    !! control_row adds a CONTROL section (cable = deck line 1, chain = deck line 2).
     CHARACTER(*), INTENT(IN) :: path
     LOGICAL, INTENT(IN), OPTIONAL :: finite_end_connection
     LOGICAL, INTENT(IN), OPTIONAL :: rigid_end_connection
+    CHARACTER(*), INTENT(IN), OPTIONAL :: control_row
     INTEGER :: u, ios
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     WRITE (u, '(A)') 'MIXED deck: EI=0 chain mooring + finite-EI lazy-wave cable'
@@ -4373,6 +4721,7 @@ CONTAINS
         WRITE (u, '(A)') '1 A Rigid -0.24716 0 -0.968975'
       END IF
     END IF
+    IF (PRESENT(control_row)) CALL write_control_section(u, control_row)
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
@@ -4383,6 +4732,26 @@ CONTAINS
     WRITE (u, '(A)') '--- need this line ---'
     CLOSE (u)
   END SUBROUTINE write_mixed_deck
+
+  SUBROUTINE write_control_section(u, rows)
+    !! A CONTROL section; rows holds one or more rows separated by ';'.
+    INTEGER, INTENT(IN) :: u
+    CHARACTER(*), INTENT(IN) :: rows
+    INTEGER :: lo, hi
+    WRITE (u, '(A)') '--- CONTROL ---'
+    WRITE (u, '(A)') 'ChannelID Lines'
+    WRITE (u, '(A)') '(-) (-)'
+    lo = 1
+    DO
+      hi = INDEX(rows(lo:), ';')
+      IF (hi == 0) THEN
+        WRITE (u, '(A)') TRIM(rows(lo:))
+        EXIT
+      END IF
+      WRITE (u, '(A)') TRIM(rows(lo:lo + hi - 2))
+      lo = lo + hi
+    END DO
+  END SUBROUTINE write_control_section
 
   SUBROUTINE write_mixed_channels_deck(path, point_channel_id, outputs_row)
     !! The write_mixed_deck geometry (cable = line 1, mooring chain = line 2) plus an OUTPUTS
@@ -4481,14 +4850,18 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_mooring_channels_deck
 
-  SUBROUTINE write_cable_only_deck(path, modified_newton, cable_load_feedback)
+  SUBROUTINE write_cable_only_deck(path, modified_newton, cable_load_feedback, control_row, adaptive_mesh)
     !! A finite-EI lazy-wave power cable, coupled at the fairlead -- no EI=0 line. Bare +
     !! buoyancy-module properties from the Humboldt / GoMex 15 MW reference (the l3_lazywave
     !! and deck_hermite_cable convention). Purely SUSPENDED (no WtrDpth). modified_newton
-    !! adds the OPTIONS row (the tangent-reuse plumbing gate's twin-deck knob).
+    !! adds the OPTIONS row (the tangent-reuse plumbing gate's twin-deck knob); control_row
+    !! a CONTROL section; adaptive_mesh the OPTIONS row that lets the static solve refine
+    !! the 47 deck segments.
     CHARACTER(*), INTENT(IN) :: path
     LOGICAL, INTENT(IN), OPTIONAL :: modified_newton
     LOGICAL, INTENT(IN), OPTIONAL :: cable_load_feedback
+    CHARACTER(*), INTENT(IN), OPTIONAL :: control_row
+    LOGICAL, INTENT(IN), OPTIONAL :: adaptive_mesh
     INTEGER :: u, ios
     LOGICAL :: mn
     mn = .FALSE.
@@ -4515,11 +4888,15 @@ CONTAINS
     WRITE (u, '(A)') '1 bare 40.0 13'
     WRITE (u, '(A)') '1 buoy 50.0 16'
     WRITE (u, '(A)') '1 bare 55.0 18'
+    IF (PRESENT(control_row)) CALL write_control_section(u, control_row)
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
     WRITE (u, '(A)') '0.5 rhoInf'
     IF (mn) WRITE (u, '(A)') 'true modified_newton'
+    IF (PRESENT(adaptive_mesh)) THEN
+      IF (adaptive_mesh) WRITE (u, '(A)') 'true adaptive_mesh'
+    END IF
     IF (PRESENT(cable_load_feedback)) THEN
       IF (cable_load_feedback) THEN
         WRITE (u, '(A)') 'true cable_load_feedback'
@@ -4531,15 +4908,16 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_cable_only_deck
 
-  SUBROUTINE write_cable_grounded_deck(path, bathy_path, refined, extra_option)
+  SUBROUTINE write_cable_grounded_deck(path, bathy_path, refined, extra_option, control_row)
     !! Coupled finite-EI touchdown cable. The 115 m span between endpoints 96.9 m apart
     !! develops a grounded run on the -50 m bed without exceeding the 126 m planar
     !! L-shape capacity (longer fixtures necessarily wad on a frictionless bed).
-    !! Optional bathymetry_path replaces flat WtrDpth.
+    !! Optional bathymetry_path replaces flat WtrDpth; control_row adds a CONTROL section.
     CHARACTER(*), INTENT(IN) :: path
     CHARACTER(*), INTENT(IN), OPTIONAL :: bathy_path
     LOGICAL, INTENT(IN), OPTIONAL :: refined
     CHARACTER(*), INTENT(IN), OPTIONAL :: extra_option
+    CHARACTER(*), INTENT(IN), OPTIONAL :: control_row
     INTEGER :: u, ios
     LOGICAL :: fine_mesh
     fine_mesh = .FALSE.
@@ -4572,6 +4950,7 @@ CONTAINS
       WRITE (u, '(A)') '1 buoy 40.0 17'
       WRITE (u, '(A)') '1 bare 45.0 20'
     END IF
+    IF (PRESENT(control_row)) CALL write_control_section(u, control_row)
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
