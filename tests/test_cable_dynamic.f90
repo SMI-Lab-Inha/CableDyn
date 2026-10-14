@@ -47,6 +47,7 @@ PROGRAM test_cable_dynamic
   CALL case_preassembled_mass_rejects_offband_entries()
   CALL case_banded_added_mass_honors_structural_mass()
   CALL case_banded_dense_callback_mix_rejected()
+  CALL case_junction_tangent_after_allowance_exit()
   CALL case_fixed_dofs_held()
   CALL case_fail_closed()
   CALL case_failure_returns_input_state()
@@ -883,6 +884,106 @@ CONTAINS
     CALL expect_es(es, CD_DYN_BADINPUT, 'mix:init-load+amband-rejected')
   END SUBROUTINE case_banded_dense_callback_mix_rejected
 
+  SUBROUTINE case_junction_tangent_after_allowance_exit()
+    !! A step accepted by the near-tolerance allowance at the iteration limit exits right after
+    !! a fresh tangent evaluation, which overwrites the factored effective band with the
+    !! unfactored tangent. The junction end query must not back-solve with it as if it were
+    !! the last LU factorization: its condensed end tangent and end map must agree with those
+    !! the same converged iterate gets through an ordinary exit (whose factor is a valid LU).
+    INTEGER, PARAMETER :: I8 = SELECTED_INT_KIND(18)
+    INTEGER :: conn(2, 3), n_iter, k
+    REAL(wp) :: l0(3), ea(3), rho_a(3), f_ext(12), q(12), v(12)
+    REAL(wp) :: q_b(12), q_r(12), rel_tol, kb(6, 6), kr(6, 6), xb(6, 6), xr(6, 6), err_k, err_x
+    LOGICAL :: converged, found, valid
+
+    ! two free nodes between held ends, so the effective tangent couples the free nodes
+    conn = RESHAPE([1, 2, 2, 3, 3, 4], [2, 3])
+    l0 = 0.9_wp
+    ea = 1000.0_wp
+    rho_a = 5.0_wp
+    q = [0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, -0.1_wp, 2.0_wp, 0.0_wp, -0.1_wp, 3.0_wp, 0.0_wp, 0.0_wp]
+    f_ext = 0.0_wp
+    f_ext(6) = -15.0_wp
+    v = 0.0_wp
+    v(6) = -0.005_wp
+    callback_kq = 20.0_wp
+    callback_cv = 3.0_wp
+    ! a tolerance for which the single allowed Newton iteration ends between rel_tol and the
+    ! allowance 2 rel_tol: the step converges at the limit after a second, fresh tangent
+    found = .FALSE.
+    DO k = 0, 40
+      rel_tol = 7.0e-9_wp*10.0_wp**(-0.25_wp*REAL(k, wp))
+      CALL junction_query_step(conn, l0, ea, rho_a, f_ext, q, v, rel_tol, q_b, converged, n_iter, kb, xb, valid)
+      IF (converged .AND. n_iter == 1 .AND. callback_tangent_count >= 2) THEN
+        found = .TRUE.
+        EXIT
+      END IF
+    END DO
+    CALL require(found, 'allowance-exit:path-taken')
+    IF (.NOT. found) RETURN
+    CALL require(valid, 'allowance-exit:end-query-valid')
+    ! the same iterate through an ordinary exit: the allowance as the tolerance
+    CALL junction_query_step(conn, l0, ea, rho_a, f_ext, q, v, 2.0_wp*rel_tol, q_r, converged, n_iter, kr, xr, valid)
+    CALL require(converged .AND. valid .AND. callback_tangent_count == 1, 'allowance-exit:reference-ordinary-exit')
+    CALL require(ALL(TRANSFER(q_b, [0_I8]) == TRANSFER(q_r, [0_I8])), 'allowance-exit:same-iterate')
+    err_k = nan_max_abs(kb - kr)/nan_max_abs(kr)
+    err_x = nan_max_abs(xb - xr)/nan_max_abs(xr)
+    IF (.NOT. (err_k <= 1.0e-6_wp .AND. err_x <= 1.0e-6_wp)) &
+      WRITE (*, '(A,ES10.3,A,ES10.3)') 'allowance-exit: relative end-tangent error ', err_k, &
+      ', end-map error ', err_x
+    CALL require(err_k <= 1.0e-6_wp, 'allowance-exit:end-tangent-matches-ordinary-exit')
+    CALL require(err_x <= 1.0e-6_wp, 'allowance-exit:end-map-matches-ordinary-exit')
+  END SUBROUTINE case_junction_tangent_after_allowance_exit
+
+  SUBROUTINE junction_query_step(conn, l0, ea, rho_a, f_ext, q, v, rel_tol, q_new, converged, n_iter, &
+                                 end_k, end_x, valid)
+    !! One step of the four-node line (ends held) with the junction end query armed, one Newton
+    !! iteration allowed and a counted banded load, through a fresh workspace.
+    INTEGER, INTENT(IN) :: conn(2, 3)
+    REAL(wp), INTENT(IN) :: l0(3), ea(3), rho_a(3), f_ext(12), q(12), v(12), rel_tol
+    REAL(wp), INTENT(OUT) :: q_new(12), end_k(6, 6), end_x(6, 6)
+    LOGICAL, INTENT(OUT) :: converged, valid
+    INTEGER, INTENT(OUT) :: n_iter
+    TYPE(CD_CableGenAlphaWorkspace) :: work
+    TYPE(GenAlphaConfig) :: cfg
+    REAL(wp) :: a(12), v_new(12), a_new(12)
+    INTEGER :: es
+    LOGICAL :: stalled
+    CHARACTER(120) :: em
+
+    ! a consistent start: the predictor is then close to the step solution
+    CALL CD_Cable_Initial_Acceleration(q, v, conn, l0, ea, rho_a, .FALSE., f_ext, [1, 2, 3, 10, 11, 12], a, es, em, &
+                                       load_force_proc=linear_force_only)
+    CALL expect_es(es, CD_DYN_OK, 'allowance-exit:initial-acceleration')
+    cfg%rel_tol = rel_tol
+    cfg%abs_tol = TINY(1.0_wp)
+    cfg%max_iter = 1
+    work%end_request = .TRUE.
+    callback_tangent_count = 0
+    CALL CD_Cable_Gen_Alpha_Step(q, v, a, conn, l0, ea, rho_a, .FALSE., f_ext, [1, 2, 3, 10, 11, 12], 1.0e-3_wp, &
+                                 cfg, q_new, v_new, a_new, converged, stalled, n_iter, es, em, &
+                                 load_force_proc=linear_force_only, load_band_proc=counting_banded_load, &
+                                 workspace=work)
+    CALL expect_es(es, CD_DYN_OK, 'allowance-exit:step')
+    end_k = 0.0_wp
+    end_x = 0.0_wp
+    valid = work%end_valid
+    IF (valid) THEN
+      end_k = work%end_k
+      end_x = work%end_x
+    END IF
+  END SUBROUTINE junction_query_step
+
+  SUBROUTINE counting_banded_load(q_in, v_in, free, kl, ku, force, jac_q_band, jac_v_band, ErrStat, ErrMsg)
+    !! banded_linear_load, counting the tangent evaluations.
+    REAL(wp), INTENT(IN) :: q_in(:), v_in(:)
+    INTEGER, INTENT(IN) :: free(:), kl, ku
+    REAL(wp), INTENT(OUT) :: force(:), jac_q_band(:, :), jac_v_band(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    callback_tangent_count = callback_tangent_count + 1
+    CALL banded_linear_load(q_in, v_in, free, kl, ku, force, jac_q_band, jac_v_band, ErrStat, ErrMsg)
+  END SUBROUTINE counting_banded_load
   SUBROUTINE case_fixed_dofs_held()
     !! Fixed DOFs are returned bit-exactly at their q0 value with zero velocity and
     !! acceleration, even while the free interior node accelerates under gravity.

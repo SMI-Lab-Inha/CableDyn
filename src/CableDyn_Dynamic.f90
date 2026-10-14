@@ -170,7 +170,8 @@ MODULE CableDyn_Dynamic
     LOGICAL :: end_valid = .FALSE.
     ! the factored effective band in eff_band/ipiv belongs to the current step (a junction solve
     ! of this step factored it): a warm re-solve of the same step starts with a chord iteration
-    ! on it instead of assembling and factoring a new tangent
+    ! on it instead of assembling and factoring a new tangent. Cleared whenever eff_band is
+    ! overwritten by a tangent that is not factored.
     LOGICAL :: step_factor = .FALSE.
     ! force scale of the junction solves (largest element tension of the last one): the
     ! residual gate of a warm-started junction solve is relative to it, not to its own
@@ -979,6 +980,13 @@ CONTAINS
       IF (tangent_fresh) THEN
         IF (direct_banded) THEN
           CALL eval_dynamic(qk, R, es, em, effbandout=eff_band)
+          ! factored_now and work%step_factor state that eff_band/ipiv hold the LU of the last
+          ! factorization. eff_band now holds the unfactored tangent at qk, and they are set
+          ! again only once it is factored below: an exit before that (convergence, or the
+          ! near-tolerance allowance at the iteration limit) leaves the junction end query and
+          ! a warm re-solve to factor it instead of back-solving with an unfactored band.
+          factored_now = .FALSE.
+          work%step_factor = .FALSE.
         ELSE
           CALL eval_dynamic(qk, R, es, em, effout=eff)
         END IF

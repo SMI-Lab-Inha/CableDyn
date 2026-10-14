@@ -269,6 +269,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   on the rounded surface. When the anchor walk of a finite-EI line over a non-planar bathymetry
   reaches a state that is rejected, the failure no longer states that the line is too long for
   its span to hang as a catenary, which is proven over a planar seabed only.
+- Junction end tangent of a tension-only line step that ends right after a fresh tangent
+  evaluation. In the monolithic body and point coupling, a line step accepted within the
+  near-tolerance allowance at its Newton iteration limit (or converged on a freshly evaluated
+  tangent) still marked its last factorization as current, although the new tangent had
+  overwritten it. The condensed end tangent, and the warm start of a re-solve of the same step,
+  were then back-solved with the unfactored matrix: in a unit test the end tangent was wrong by
+  five orders of magnitude, which can slow or misdirect the outer junction iteration. The step
+  now clears the factorization flags whenever it overwrites the band without factoring it, so
+  the end query factors the current tangent. No example deck and no other test takes this
+  path, and their outputs are unchanged.
 
 ## [0.1.1] - 2026-10-09
 
