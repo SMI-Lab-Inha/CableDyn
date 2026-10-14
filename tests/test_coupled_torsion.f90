@@ -76,7 +76,10 @@ CONTAINS
   SUBROUTINE write_deck(path, point_a, vertical, anchor_x)
     !! The straight neutral torsion line, End A on point_a, outputs Torq1N1, Torq1N41, Twist1:
     !! along +x from (0, 0, -50) to (100, 0, -50), or with vertical from (0, 0, -20) down to
-    !! (anchor_x, 0, -120) (anchor_x: the farm-global x of the turbine the line hangs under).
+    !! (anchor_x, 0, -120.5) (anchor_x: the farm-global x of the turbine the line hangs under).
+    !! The vertical line is held taut at 0.5 % strain: at zero tension its static solve has no
+    !! catenary seed and its result depends on round-off (it failed with OpenBLAS's Prescott
+    !! kernels).
     CHARACTER(*), INTENT(IN) :: path, point_a
     LOGICAL, INTENT(IN), OPTIONAL :: vertical
     REAL(wp), INTENT(IN), OPTIONAL :: anchor_x
@@ -89,7 +92,7 @@ CONTAINS
     ax = 0.0_wp
     IF (PRESENT(anchor_x)) ax = anchor_x
     anchor = '2 Fixed 100.0 0.0 -50.0 0 0 0 0'
-    IF (vert) WRITE (anchor, '(A,F8.1,A)') '2 Fixed ', ax, ' 0.0 -120.0 0 0 0 0'
+    IF (vert) WRITE (anchor, '(A,F8.1,A)') '2 Fixed ', ax, ' 0.0 -120.5 0 0 0 0'
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'coupled torsion gate'
     WRITE (u, '(A)') '--- LINE TYPES ---'
