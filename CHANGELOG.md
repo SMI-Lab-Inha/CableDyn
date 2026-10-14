@@ -75,6 +75,29 @@ All notable changes to CableDyn are recorded in this file. The format follows
   routines and a 4 × 4 eigensolve, none of which passes DGEMM an inner dimension above 128,
   and the released Windows executables use reference LAPACK, so results are unchanged. An existing environment takes the exclusion with
   `conda env update -f environment.yml`, followed by a fresh build directory.
+- The anchor tension of a finite-EI cable laid on the seabed no longer jumps when the line moves
+  out of its plane. The seabed contact acts at the nodes, which carry no moment, so at an
+  anchor resting on the floor the end moment of the end element's weight turned the free end
+  tangent into the floor: the element dipped below the seabed between its nodes (27 mm for the
+  power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat`) and carried axial forces from
+  −47 kN to +127 kN about a line tension of 1.2 kN. Once the hang-off swayed, the element
+  buckled sideways; with seabed friction the anchor tension then locked at about 2.5 times its
+  static value for the rest of the run (1.22 kN to 3.1 kN in a coupled OpenFAST run while the
+  platform drifted toward the anchor), and without friction the end nodes wandered by up to
+  0.18 m. The seabed now carries the end element's weight with its end moment at a held line end
+  resting on the floor (along the floor normal on a sloped bathymetry), in the statics and the
+  dynamics alike. Lines whose held end does not rest on the seabed are unchanged. In the
+  shipped finite-EI examples with an anchor on the seabed the end tensions change by at most
+  0.7 N (0.05 %). Two decks of the statics robustness matrix change outcome. A lazy wave
+  in a 1 m/s current on a frictional bed (`LW_1015__cur_fr`) had been reported as a hairpin
+  past its anchor only at its exact seabed stiffness. It now fails closed: the friction-held
+  touchdown goes into compression at about 0.33 m/s, before any tension-only equilibrium is
+  reached from the still-water layout, and a slow current ramp in the dynamics with
+  `tensile_safety` stops at the same point. A short line in a 1.9 m/s current on a
+  frictionless bed (`CUR_1013`) had failed closed. It now finds the equilibrium with the
+  grounded run turned sideways on the seabed: when the refinement of the catenary
+  continuation stops on a compression in a current, its failure now names the current limit,
+  so the driver retries out of the plane.
 
 ## [0.1.1] - 2026-10-09
 

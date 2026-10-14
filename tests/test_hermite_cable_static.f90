@@ -348,11 +348,18 @@ CONTAINS
       qs(6*i - 5) = qs(6*i - 5) + 0.03_wp*SIN(REAL(i, wp))
       qs(6*i - 3) = qs(6*i - 3) + 0.02_wp*COS(REAL(i, wp))
     END DO
+    ! Both polishes backtrack: the anchor (0, -100) rests on the slope, so the floor carries
+    ! the anchor element's weight moment (CD_Seabed_End_Support) and the grounded run lies
+    ! straight along the slope instead of dipping into it element by element; from this
+    ! perturbation full Newton steps then leave that equilibrium's basin (a 0.25-scaled
+    ! perturbation fails, a 0.5-scaled one converges). The test compares the two contact
+    ! paths under identical solver options, which backtracking keeps (same count, same state).
     CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, qs, fixed(1:nfix), -100.0_wp, 0.0_wp, 1, 60, 1.0e-10_wp, &
-                                      1.0_wp, q1, curv, res, it1, es, em, contact_kn=kn*trib, bathymetry=bed)
+                                      1.0_wp, q1, curv, res, it1, es, em, contact_kn=kn*trib, bathymetry=bed, &
+                                      backtracking=.TRUE.)
     CALL require(es == CD_HCSTAT_OK, 'slope nodal polish: '//TRIM(em))
     CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, qs, fixed(1:nfix), -100.0_wp, kn, 1, 60, 1.0e-10_wp, &
-                                      1.0_wp, q2, curv, res, it2, es, em, bathymetry=bed)
+                                      1.0_wp, q2, curv, res, it2, es, em, bathymetry=bed, backtracking=.TRUE.)
     CALL require(es == CD_HCSTAT_OK, 'slope scalar polish converges: '//TRIM(em))
     CALL require(it2 <= it1 + 2, 'slope scalar polish converges as fast as the nodal path')
     CALL require(nan_max_abs(q2 - q1) < 1.0e-5_wp, 'slope scalar and nodal paths reach the same equilibrium')

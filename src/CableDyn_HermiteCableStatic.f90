@@ -43,7 +43,7 @@ MODULE CableDyn_HermiteCableStatic
                                     CD_ENDCONN_RIGID
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_SEABED_CONTACT_BLEND, CD_Seabed_Friction_Spring, &
                                     CD_Seabed_Friction_Aniso, CD_Seabed_Friction_Mu_Dir, CD_FRICTION_SPRING, &
-                                    CD_Seabed_Normal_Contact
+                                    CD_Seabed_Normal_Contact, CD_Seabed_End_Support
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
                                  CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, CD_BATHY_OK
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
@@ -475,7 +475,9 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: tors_g(:), tors_gr(:), tors_h(:, :), tors_v(:), tors_rhs(:), tors_q(:), tors_gs(:)
     REAL(wp), ALLOCATABLE :: tors_grs(:), tors_gt(:)
     REAL(wp), ALLOCATABLE :: tors_rhs2(:, :)
-    REAL(wp) :: contact_cs(2)
+    REAL(wp) :: contact_cs(2), end_support(3, 2), end_floor(3), end_g(2), end_sfac
+    INTEGER :: end_es
+    CHARACTER(200) :: end_em
 
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
@@ -784,6 +786,32 @@ CONTAINS
       trib(i) = trib(i) + 0.5_wp*l0(i)
       trib(i + 1) = trib(i + 1) + 0.5_wp*l0(i)
     END DO
+    ! A held end resting on the floor: the seabed carries the end element's weight with its
+    ! consistent end moment (CD_Seabed_End_Support; per unit weight, the floor's normal
+    ! share cos(slope) n of the weight), which the nodal contact cannot. Held translations
+    ! keep their seed, so the support is fixed for the solve.
+    end_support = CD_ZERO
+    IF (use_nodal_contact .OR. kn > CD_ZERO) THEN
+      DO i = 1, 2
+        c = MERGE(1, nn, i == 1)
+        b = 6*(c - 1)
+        IF (ANY(freemask(b + 1:b + 3)) .OR. .NOT. (w(MERGE(1, ne, i == 1)) > CD_ZERO)) CYCLE
+        end_floor(1) = seabed_z
+        end_g = CD_ZERO
+        IF (use_bathymetry) THEN
+          CALL CD_Bathymetry_Floor_Gradient(bathymetry, contact_cs(1)*q(b + 1) - contact_cs(2)*q(b + 2), &
+                                            contact_cs(2)*q(b + 1) + contact_cs(1)*q(b + 2), &
+                                            end_floor(1), end_floor(2), end_floor(3), end_es, end_em)
+          ! A failed query fails closed in the contact assembly at the same point.
+          IF (end_es /= CD_BATHY_OK) CYCLE
+          end_g = [contact_cs(1)*end_floor(2) + contact_cs(2)*end_floor(3), &
+                   -contact_cs(2)*end_floor(2) + contact_cs(1)*end_floor(3)]
+        END IF
+        end_sfac = SQRT(CD_ONE + end_g(1)*end_g(1) + end_g(2)*end_g(2))
+        end_support(:, i) = (CD_Seabed_End_Support((end_floor(1) - q(b + 3))/end_sfac)/(end_sfac*end_sfac))* &
+                            [-end_g(1), -end_g(2), CD_ONE]
+      END DO
+    END IF
     use_friction = .FALSE.
     fr_frozen = .FALSE.
     fr_mu = CD_ZERO
@@ -1084,6 +1112,19 @@ CONTAINS
         pi_total = pi_total + e_term
         pi_abs = pi_abs + ABS(e_term)
       END DO
+      ! the floor-carried end moments of held ends resting on the seabed
+      IF (end_support(3, 1) > CD_ZERO) THEN
+        R(4:6) = R(4:6) - (w_cur(1)*l0(1)*l0(1)/12.0_wp)*end_support(:, 1)
+        e_term = -(w_cur(1)*l0(1)*l0(1)/12.0_wp)*DOT_PRODUCT(end_support(:, 1), q(4:6))
+        pi_total = pi_total + e_term
+        pi_abs = pi_abs + ABS(e_term)
+      END IF
+      IF (end_support(3, 2) > CD_ZERO) THEN
+        R(6*ne + 4:6*ne + 6) = R(6*ne + 4:6*ne + 6) + (w_cur(ne)*l0(ne)*l0(ne)/12.0_wp)*end_support(:, 2)
+        e_term = (w_cur(ne)*l0(ne)*l0(ne)/12.0_wp)*DOT_PRODUCT(end_support(:, 2), q(6*ne + 4:6*ne + 6))
+        pi_total = pi_total + e_term
+        pi_abs = pi_abs + ABS(e_term)
+      END IF
 
       ! ---- dry-part buoyancy recovery above the optional free surface ----
       ! Configuration-dependent through the waterline crossings, so it adds the crossing
@@ -6168,6 +6209,12 @@ CONTAINS
           diag_out%axial_strain_min_elem, ', xi=', diag_out%axial_strain_min_xi, &
           ', strain=', diag_out%axial_strain_min
       END IF
+      ! In a current, name the limit the compression of this state shows (the grounded run
+      ! pushed into its end, or into a friction-held touchdown): the driver's out-of-plane
+      ! retry of a planar current needs it, as for the other routes' failures.
+      IF (PRESENT(current)) wbuf = TRIM(current_compression_note(l0_out, EA_out, q_out, seabed_z, &
+                                                                 .NOT. PRESENT(bathymetry), &
+                                                                 ALLOCATED(current%friction)))//TRIM(wbuf)
       ErrMsg = wbuf
       RETURN
     END IF

@@ -1292,7 +1292,8 @@
  },
  {
   "id": "LW_1015__cur_fr",
-  "expect": "admissible",
+  "expect": "current_friction_compression",
+  "why": "A seabed-friction current deck: the tension-only branch from the still-water layout ends near drag fraction 0.11 (about 0.33 m/s), where the friction-held touchdown goes into compression; a slow current ramp in the dynamics with tensile_safety stops there too (0.37 m/s). A hairpin past the anchor is reached only through that compression. Earlier releases reported it as an equilibrium through the mesh-sequenced coarse levels, whose anchor element dipped below the floor, and only at this exact kBot (not at kBot 1e5 +/- 0.001 % or at currents of 0.3 to 0.7 m/s).",
   "deck": "--------------------- CableDyn Input File ---------------------------\nLW_1015__cur_fr\n--------------------- LINE TYPES ------------------------------------\nTypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n(-) (m) (kg/m) (N) (-) (N-m2) (-) (-) (-) (-)\nbare 0.100445767 11.22757908 177452628.2 0 8881.762177 1.2 0.1 1 0\nbuoy 0.2900604656 65.36363376 177452628.2 0 11763.70697 1.2 0.1 1 0\n--------------------- POINTS ----------------------------------------\nID Type X Y Z\n(-) (-) (m) (m) (m)\n1 Coupled 0 0 -21.032628\n2 Fixed 515.799336 0 -439.732\n--------------------- LINES -----------------------------------------\nID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 -\n--------------------- SECTIONS --------------------------------------\nLineID LineType Length NumSegs\n(-) (-) (m) (-)\n1 bare 231.9579 123\n1 buoy 115.9305 61\n1 bare 480.7763 255\n--------------------- OPTIONS ---------------------------------------\n0.5 frictionMu\n9.80665 g\n1025.0 rhoW\n439.732 WtrDpth\n100000 kBot\n1.0e4 cBot\n0.05 dtM\n0.0 TMax\nFalse adaptive_mesh\nTrue tensile_safety\nuniform 1.0 0.0 0.0 current\n--------------------- OUTPUTS ---------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line --------------------------------\n",
   "lines": {
    "1": {
@@ -1303,7 +1304,8 @@
  },
  {
   "id": "LW_1015__cur_fr__rest",
-  "expect": "admissible",
+  "expect": "current_friction_compression",
+  "why": "The at-rest twin of LW_1015__cur_fr, which has no tension-only static equilibrium (see there).",
   "deck": "--------------------- CableDyn Input File ---------------------------\nLW_1015__cur_fr__rest\n--------------------- LINE TYPES ------------------------------------\nTypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n(-) (m) (kg/m) (N) (-) (N-m2) (-) (-) (-) (-)\nbare 0.100445767 11.22757908 177452628.2 0 8881.762177 1.2 0.1 1 0\nbuoy 0.2900604656 65.36363376 177452628.2 0 11763.70697 1.2 0.1 1 0\n--------------------- POINTS ----------------------------------------\nID Type X Y Z\n(-) (-) (m) (m) (m)\n1 Coupled 0 0 -21.032628\n2 Fixed 515.799336 0 -439.732\n--------------------- LINES -----------------------------------------\nID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 -\n--------------------- SECTIONS --------------------------------------\nLineID LineType Length NumSegs\n(-) (-) (m) (-)\n1 bare 231.9579 123\n1 buoy 115.9305 61\n1 bare 480.7763 255\n--------------------- OPTIONS ---------------------------------------\n0.5 frictionMu\n9.80665 g\n1025.0 rhoW\n439.732 WtrDpth\n100000 kBot\n1.0e4 cBot\n0.05 dtM\n1.0 TMax\nFalse adaptive_mesh\nTrue tensile_safety\nuniform 1.0 0.0 0.0 current\n--------------------- OUTPUTS ---------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line --------------------------------\n",
   "lines": {
    "1": {
@@ -1475,14 +1477,16 @@
  },
  {
   "id": "CUR_1013",
-  "expect": "current_compression",
+  "expect": "admissible",
+  "why": "The planar route stops with the grounded run pushed into its anchor; the out-of-plane retry then finds the run turned sideways on the seabed (tension at least 0.48 kN, no self-contact). Earlier releases did not run that retry for this deck because the catenary-continuation failure did not name the current limit.",
   "deck": "--------------------- CableDyn Input File ---------------------------\nCUR_1013\n--------------------- LINE TYPES ------------------------------------\nTypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n(-) (m) (kg/m) (N) (-) (N-m2) (-) (-) (-) (-)\nbare 0.1784650716 82.63060908 255233842 0 25945.91551 1.2 0.1 1 0\nbuoy 0.4710966462 88.94142595 255233842 0 40205.41756 1.2 0.1 1 0\n--------------------- POINTS ----------------------------------------\nID Type X Y Z\n(-) (-) (m) (m) (m)\n1 Coupled 0 0 -13.08348484\n2 Fixed 41.77649681 0 -42.543\n--------------------- LINES -----------------------------------------\nID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 -\n--------------------- SECTIONS --------------------------------------\nLineID LineType Length NumSegs\n(-) (-) (m) (-)\n1 bare 20.5504 2\n1 buoy 7.3589 1\n1 bare 35.1167 4\n--------------------- OPTIONS ---------------------------------------\n9.80665 g\n1025.0 rhoW\n42.543 WtrDpth\n3e+06 kBot\n1.0e4 cBot\n0.05 dtM\n0.0 TMax\nFalse adaptive_mesh\nTrue tensile_safety\nuniform 1.906 0.0 0.0 current\n--------------------- OUTPUTS ---------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line --------------------------------\n",
   "lines": {
    "1": {
     "oracle_tfair": [],
     "lambda_over_length": 0.0
    }
-  }
+  },
+  "note": "past its anchor, where it folds back"
  },
  {
   "id": "LWM_1002",

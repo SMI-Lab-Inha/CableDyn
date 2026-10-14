@@ -1031,7 +1031,11 @@ The fallback and the dynamic Hermite path use
 - **continuation in** ``EI``, and, for a net-buoyant line, **continuation in buoyancy**, which
   tracks the smooth branch of the buoyant arch from the seed;
 - the **consistent Hermite self-weight**, :math:`wL_0/2` on each end :math:`r_z` and
-  :math:`\pm wL_0^2/12` on the end :math:`m_z`;
+  :math:`\pm wL_0^2/12` on the end :math:`m_z`. At a held line end resting on the seabed the
+  floor carries the end element's weight with this end moment (its normal share
+  :math:`\cos\theta\,\mathbf{n}` on a floor of slope :math:`\theta` and upward normal
+  :math:`\mathbf{n}`): the nodal contact carries no moment, and the unbalanced end moment
+  would otherwise turn the end tangent into the floor;
 - **mesh sequencing**: the equilibrium is selected on a coarse mesh that preserves section,
   load, and contact-diameter interfaces, prolonged through the Hermite interpolant, and polished
   on each finer level and finally on the exact user mesh with the same residual test. Deterministic

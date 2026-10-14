@@ -67,7 +67,7 @@ MODULE CableDyn_HermiteCableDynamic
                             CD_Component_Wave_Kinematics, CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Contact_Gate, CD_SEABED_CONTACT_BLEND, &
                                     CD_Seabed_Friction_Stick_Slip, CD_Seabed_Friction_Aniso, &
-                                    CD_Seabed_Friction_Mu_Dir, CD_FRICTION_STICK_SLIP
+                                    CD_Seabed_Friction_Mu_Dir, CD_FRICTION_STICK_SLIP, CD_Seabed_End_Support
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
                                  CD_Bathymetry_Floor_Gradient, CD_End_Bathymetry, CD_BATHY_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -5278,7 +5278,7 @@ CONTAINS
     REAL(wp) :: fdry(4), kdry(4, 4), dry_wl, dry_b, dry_r
     INTEGER :: zdof(4), b
     LOGICAL :: dry
-    REAL(wp) :: endconn_d0_eval(3, 2)
+    REAL(wp) :: endconn_d0_eval(3, 2), support(3)
     CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -5356,6 +5356,14 @@ CONTAINS
         R(6*e + 3) = R(6*e + 3) + model%w(e)*0.5_wp*model%l0(e)
         R(6*e + 6) = R(6*e + 6) - model%w(e)*model%l0(e)*model%l0(e)/12.0_wp
       END DO
+      ! A held end resting on the floor: the seabed carries the end element's weight with
+      ! its consistent end moment (CD_Seabed_End_Support), which the nodal contact cannot.
+      IF (model%has_contact .OR. model%kn > CD_ZERO) THEN
+        IF (held_end_floor_support(model, q_cfg, 1, support)) &
+          R(4:6) = R(4:6) - (model%w(1)*model%l0(1)*model%l0(1)/12.0_wp)*support
+        IF (held_end_floor_support(model, q_cfg, 2, support)) &
+          R(6*ne + 4:6*ne + 6) = R(6*ne + 4:6*ne + 6) + (model%w(ne)*model%l0(ne)*model%l0(ne)/12.0_wp)*support
+      END IF
     END IF
     IF (model%has_attach) THEN
       CALL assemble_attachments(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, es, em2)
@@ -5870,6 +5878,50 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE assemble_contact
+
+  LOGICAL FUNCTION held_end_floor_support(model, q_cfg, iend, support) RESULT(held)
+    !! Floor reaction carrying the weight of the end element at line end iend (1: node 1,
+    !! 2: node nn) of a model with seabed contact, per unit weight: CD_Seabed_End_Support
+    !! times the floor's normal share of the weight, cos(slope) n, n the upward floor
+    !! normal (e_z on a flat bed). Its consistent end moment cancels the weight's on a
+    !! grounded end element; the along-floor part of the weight stays with the line. False
+    !! (support zero) unless the end node's translations are all held (not free), its end
+    !! element is net-heavy and the end rests on the floor the contact assembly uses there.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: q_cfg(:)
+    INTEGER, INTENT(IN) :: iend
+    REAL(wp), INTENT(OUT) :: support(3)
+    INTEGER :: node, e, ix, es
+    REAL(wp) :: xg, yg, z_floor, gxg, gyg, gx, gy, sfac, share
+    CHARACTER(200) :: em
+    support = CD_ZERO
+    held = .FALSE.
+    IF (iend == 1) THEN
+      node = 1; e = 1
+    ELSE
+      node = model%nn; e = model%ne
+    END IF
+    IF (.NOT. (model%w(e) > CD_ZERO)) RETURN
+    ix = 6*node - 5
+    IF (ANY(model%freemask(ix:ix + 2))) RETURN
+    gx = CD_ZERO
+    gy = CD_ZERO
+    z_floor = model%seabed_z
+    IF (model%has_contact .AND. model%has_contact_bathymetry) THEN
+      xg = model%contact_frame_c*q_cfg(ix) - model%contact_frame_s*q_cfg(ix + 1)
+      yg = model%contact_frame_s*q_cfg(ix) + model%contact_frame_c*q_cfg(ix + 1)
+      CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em)
+      ! A failed query fails closed in the contact assembly at the same point.
+      IF (es /= CD_BATHY_OK) RETURN
+      gx = model%contact_frame_c*gxg + model%contact_frame_s*gyg
+      gy = -model%contact_frame_s*gxg + model%contact_frame_c*gyg
+    END IF
+    sfac = SQRT(CD_ONE + gx*gx + gy*gy)
+    share = CD_Seabed_End_Support((z_floor - q_cfg(ix + 2))/sfac)
+    IF (.NOT. (share > CD_ZERO)) RETURN
+    held = .TRUE.
+    support = (share/(sfac*sfac))*[-gx, -gy, CD_ONE]
+  END FUNCTION held_end_floor_support
 
   SUBROUTINE commit_friction_anchors(model)
     !! Return mapping of the elastic-plastic friction springs at the committed state: a

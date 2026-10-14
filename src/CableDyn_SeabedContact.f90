@@ -16,6 +16,7 @@ MODULE CableDyn_SeabedContact
   PUBLIC :: CD_Seabed_Normal_Law
   PUBLIC :: CD_Seabed_Normal_Contact
   PUBLIC :: CD_Seabed_Contact_Gate
+  PUBLIC :: CD_Seabed_End_Support
   PUBLIC :: CD_Seabed_Friction_Spring
   PUBLIC :: CD_Seabed_Friction_Stick_Slip
   PUBLIC :: CD_Seabed_Friction_Aniso, CD_Seabed_Friction_Mu_Dir
@@ -98,6 +99,22 @@ CONTAINS
       dgate_dgap = CD_ZERO
     END IF
   END SUBROUTINE CD_Seabed_Contact_Gate
+
+  PURE REAL(wp) FUNCTION CD_Seabed_End_Support(gap) RESULT(support)
+    !! Share of the consistent end moment w l0^2/12 of a net-heavy end element that the
+    !! seabed carries at a HELD line end (translations fixed or prescribed) at signed normal
+    !! penetration gap = z_floor - z. The nodal penalty is the end-point (Lobatto)
+    !! integration of the floor reaction and carries no moment, so on a grounded end
+    !! element the weight's end moment would otherwise turn the free end tangent into the
+    !! floor: the element dips below the seabed between its nodes and, on a high-EA line,
+    !! carries large spurious axial forces of both signs. One for an end on or below the
+    !! floor, zero above the contact blend, linear in between (CD_Seabed_Contact_Gate
+    !! shifted by one blend length, so that an anchor placed exactly on the floor rests on
+    !! it). The end is held, so the share is constant within a solve and adds no tangent.
+    REAL(wp), INTENT(IN) :: gap
+    REAL(wp) :: dgate_dgap
+    CALL CD_Seabed_Contact_Gate(gap + CD_SEABED_CONTACT_BLEND, support, dgate_dgap)
+  END FUNCTION CD_Seabed_End_Support
 
   PURE SUBROUTINE CD_Seabed_Friction_Spring(d, stiffness, capacity, force, dforce_dd, dforce_dcap)
     !! Static seabed friction spring: the resisting force of a horizontal spring of
