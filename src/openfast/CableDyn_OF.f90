@@ -90,7 +90,7 @@ MODULE CableDyn
                                           CD_AGG_WriteStaticProfile
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
                                            CD_HFMF_FrictionMirrorSize, CD_HFMF_ForceMirrorSize, &
-                                           CD_HFMF_OK
+                                           CD_HFMF_TorsionMirrorSize, CD_HFMF_OK
    USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, &
                                             CD_HermiteCable_Dyn_Disable_Profile, &
                                             CD_HermiteCable_Dyn_Get_Profile, &
@@ -698,20 +698,23 @@ CONTAINS
                                         n_turbines=nT, &
                                         turbine_ref_pos=REAL(InitInp%TurbineRefPos, wp), &
                                         farm_ptfm_init=REAL(InitInp%PtfmInit(1:6, 1:nT), wp), &
-                                        forbid_deck_ambient=.TRUE., run_tmax=REAL(InitInp%Tmax, wp) )
+                                        forbid_deck_ambient=.TRUE., run_tmax=REAL(InitInp%Tmax, wp), &
+                                        host_orientation=.TRUE. )
          ELSE
             CALL CD_AGG_Init_From_Deck( Inst(id)%agg, TRIM(InitInp%FileName), dt_moor, es, em, &
                                         env_gravity=REAL(InitInp%g, wp), env_rho_water=REAL(InitInp%rhoW, wp), &
                                         env_wtrdpth=REAL(InitInp%WtrDepth, wp), external_fluid=use_extf, &
                                         n_turbines=nT, &
                                         turbine_ref_pos=REAL(InitInp%TurbineRefPos, wp), &
-                                        forbid_deck_ambient=.TRUE., run_tmax=REAL(InitInp%Tmax, wp) )
+                                        forbid_deck_ambient=.TRUE., run_tmax=REAL(InitInp%Tmax, wp), &
+                                        host_orientation=.TRUE. )
          END IF
       ELSE
          CALL CD_AGG_Init_From_Deck( Inst(id)%agg, TRIM(InitInp%FileName), dt_moor, es, em, &
                                      env_gravity=REAL(InitInp%g, wp), env_rho_water=REAL(InitInp%rhoW, wp), &
                                      env_wtrdpth=REAL(InitInp%WtrDepth, wp), ptfm_init=REAL(ptfm6, wp), &
-                                     external_fluid=use_extf, run_tmax=REAL(InitInp%Tmax, wp) )
+                                     external_fluid=use_extf, run_tmax=REAL(InitInp%Tmax, wp), &
+                                     host_orientation=.TRUE. )
       END IF
       IF (es /= CD_AGG_OK) THEN
          ! The slot stays inactive (it is activated only after full success, below), so this and
@@ -733,6 +736,17 @@ CONTAINS
       END IF
       IF (InitInp%Linearize .AND. Inst(id)%agg%ncable > 0) THEN
          DO ic = 1, Inst(id)%agg%ncable
+            ! a line restrained in torsion returns a torque moment that turns with the platform
+            ! even at a bending-pinned end: its rotational stiffness a a^T / C has no column in
+            ! the translation-only reduction either
+            IF (Inst(id)%agg%cables(ic)%line%torsion%active) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                                'of a line restrained in torsion is not supported; the torque''s '// &
+                                'orientation and moment Jacobian columns are not part of the current '// &
+                                'quasi-static reduction (set TorsStiffness Free to linearize).', &
+                                ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
             IF (.NOT. Inst(id)%agg%cables(ic)%has_parent_endconn) CYCLE
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
                              'with a platform-relative cable end connection is not supported; '// &
@@ -1308,7 +1322,8 @@ CONTAINS
       CALL CD_AGG_Init_From_Deck( Inst(id)%agg, TRIM(rst_deck), REAL(p%dtM0, wp), es, em, &
                                   env_gravity=REAL(p%g, wp), env_rho_water=REAL(p%rhoW, wp), &
                                   env_wtrdpth=REAL(p%WtrDpth, wp), external_fluid=use_extf, &
-                                  ptfm_init=REAL(p%PtfmInit, wp), run_tmax=REAL(p%Tmax, wp) )
+                                  ptfm_init=REAL(p%PtfmInit, wp), run_tmax=REAL(p%Tmax, wp), &
+                                  host_orientation=.TRUE. )
       CALL delete_file( rst_deck )
       IF (es /= CD_AGG_OK) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: checkpoint rebuild: '//TRIM(em), &
@@ -1381,6 +1396,12 @@ CONTAINS
       CALL mesh_to_arrays( u1%CoupledKinematics(1), ncp, Inst(id)%ws_pos, Inst(id)%ws_vel, &
                            Inst(id)%ws_acc, Inst(id)%ws_orient, Inst(id)%ws_omega, Inst(id)%ws_alpha, &
                            ErrStat2, ErrMsg2 )
+      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      IF (ErrStat >= AbortErrLev) RETURN
+      ! a cable restrained in torsion first takes its committed state: moving its fairlead
+      ! frame from the static pose to the restart pose is bounded (pi/2) against the twist
+      ! it had at the checkpoint, not at t = 0
+      CALL reload_cable_mirrors( Inst(id), m, x%states, REAL(t, wp), .TRUE., koff, ErrStat2, ErrMsg2 )
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) RETURN
       CALL CD_AGG_UpdateStates_Moving( Inst(id)%agg, Inst(id)%ws_pos, Inst(id)%ws_vel, Inst(id)%ws_acc, es, em, &
@@ -2760,9 +2781,11 @@ CONTAINS
       DO ic = 1, inst_%agg%ncable
          csz = CD_HFMF_MirrorSize( inst_%agg%cables(ic) )
          IF (csz <= 0) CYCLE                 ! uninitialised cable contributes no states
-         ! free DOFs; mirror = [v_free; q_free; a_free] then the friction anchors (if any)
+         ! free DOFs; mirror = [v_free; q_free; a_free] then the friction anchors, the
+         ! force-blend state and the torsion state (if any)
          nf = (csz - CD_HFMF_FrictionMirrorSize( inst_%agg%cables(ic) ) - &
-               CD_HFMF_ForceMirrorSize( inst_%agg%cables(ic) ))/3
+               CD_HFMF_ForceMirrorSize( inst_%agg%cables(ic) ) - &
+               CD_HFMF_TorsionMirrorSize( inst_%agg%cables(ic) ))/3
          LinStr = 'Cable '//TRIM(Num2LStr(ic))
          ! Build the per-DOF linearization names in an explicit pre-allocated loop, NOT an
          ! inline implied-do array constructor: an impure function (Num2LStr) evaluated inside
@@ -2794,8 +2817,9 @@ CONTAINS
                          iAry=koff + 2*nf + 1, Num=nf, Perturb=0.1_R8Ki, &
                          LinNames=CblLinAcc )
          DEALLOCATE (CblLinVel, CblLinPos, CblLinAcc)
-         ! stick-slip friction anchors (x, y per node) and the force-blend committed force
-         ! (flag + force) after the acceleration block: coverage-only, like the acceleration block
+         ! stick-slip friction anchors (x, y per node), the force-blend committed force
+         ! (flag + force) and the torsion state (Theta, Phi, end frames) after the acceleration
+         ! block: coverage-only, like the acceleration block
          IF (csz > 3*nf) THEN
             ALLOCATE (CblLinVel(csz - 3*nf), STAT=ErrStat2)
             IF (ErrStat2 /= 0) THEN
@@ -3137,27 +3161,8 @@ CONTAINS
             END BLOCK
          END IF
       END DO
-      koff = 0
-      IF (inst_%nlines > 0) koff = m%LineStateIsN(inst_%nlines)
-      DO ic = 1, inst_%agg%ncable
-         csz = CD_HFMF_MirrorSize( inst_%agg%cables(ic) )
-         IF (csz <= 0) CYCLE
-         IF (koff + csz > SIZE(states)) THEN
-            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
-                             ' mirror extends past the state vector.', ErrStat, ErrMsg, RoutineName )
-            RETURN
-         END IF
-         IF (ALLOCATED(inst_%ws_cbuf)) THEN
-            IF (SIZE(inst_%ws_cbuf) /= csz) DEALLOCATE (inst_%ws_cbuf)
-         END IF
-         IF (.NOT. ALLOCATED(inst_%ws_cbuf)) ALLOCATE (inst_%ws_cbuf(csz))
-         inst_%ws_cbuf = REAL(states(koff + 1:koff + csz), wp)
-         CALL CD_HFMF_UnpackMirror( inst_%agg%cables(ic), inst_%ws_cbuf, t_clock, es, em )
-         IF (es /= CD_HFMF_OK) THEN
-            CALL SetErrStat( ErrID_Fatal, TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
-         END IF
-         koff = koff + csz
-      END DO
+      CALL reload_cable_mirrors( inst_, m, states, t_clock, .FALSE., koff, ErrStat, ErrMsg )
+      IF (ErrStat >= AbortErrLev) RETURN
       ! coupled Rigid6 6-DOF body state: restore after the cable block, before the dynamic points
       ! (the body drives its attachment points, so the restored pose re-derives them next advance)
       IF (CD_AGG_HasRigid6( inst_%agg )) THEN
@@ -3298,6 +3303,54 @@ CONTAINS
          END IF
       END IF
    END SUBROUTINE reload_interiors_ary
+
+   SUBROUTINE reload_cable_mirrors(inst_, m, states, t_clock, torsion_only, koff, ErrStat, ErrMsg)
+      !! Unpack each cable's [v; q; a] free-DOF mirror (with its torsion tail) from the
+      !! checkpoint x%states layout. koff returns the offset past the cable block. With
+      !! torsion_only, only the cables restrained in torsion are unpacked: the checkpoint
+      !! rebuild restores their committed twist before it moves the fairlead to the restart
+      !! pose, whose preflight bounds the twist change against that committed value.
+      TYPE(CD_OF_Instance),         INTENT(INOUT) :: inst_
+      TYPE(CD_MiscVarType),         INTENT(IN)    :: m
+      REAL(R8Ki),                   INTENT(IN)    :: states(:)
+      REAL(wp),                     INTENT(IN)    :: t_clock
+      LOGICAL,                      INTENT(IN)    :: torsion_only
+      INTEGER(IntKi),               INTENT(OUT)   :: koff
+      INTEGER(IntKi),               INTENT(OUT)   :: ErrStat
+      CHARACTER(*),                 INTENT(OUT)   :: ErrMsg
+
+      character(*), parameter :: RoutineName = 'CableDyn:reload_cable_mirrors'
+      INTEGER(IntKi)          :: es, ic, csz
+      CHARACTER(512)          :: em
+
+      ErrStat = ErrID_None
+      ErrMsg  = ''
+      koff = 0
+      IF (inst_%nlines > 0) koff = m%LineStateIsN(inst_%nlines)
+      DO ic = 1, inst_%agg%ncable
+         csz = CD_HFMF_MirrorSize( inst_%agg%cables(ic) )
+         IF (csz <= 0) CYCLE
+         IF (koff + csz > SIZE(states)) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
+                             ' mirror extends past the state vector.', ErrStat, ErrMsg, RoutineName )
+            RETURN
+         END IF
+         IF (torsion_only .AND. .NOT. inst_%agg%cables(ic)%line%torsion%active) THEN
+            koff = koff + csz
+            CYCLE
+         END IF
+         IF (ALLOCATED(inst_%ws_cbuf)) THEN
+            IF (SIZE(inst_%ws_cbuf) /= csz) DEALLOCATE (inst_%ws_cbuf)
+         END IF
+         IF (.NOT. ALLOCATED(inst_%ws_cbuf)) ALLOCATE (inst_%ws_cbuf(csz))
+         inst_%ws_cbuf = REAL(states(koff + 1:koff + csz), wp)
+         CALL CD_HFMF_UnpackMirror( inst_%agg%cables(ic), inst_%ws_cbuf, t_clock, es, em )
+         IF (es /= CD_HFMF_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
+         END IF
+         koff = koff + csz
+      END DO
+   END SUBROUTINE reload_cable_mirrors
 
    SUBROUTINE pack_state_mirror(inst_, m, x, ErrStat, ErrMsg)
       TYPE(CD_OF_Instance),         INTENT(INOUT) :: inst_

@@ -3805,9 +3805,11 @@ class DeckFile:
         solved as without the columns. Restrained at both ends, torsion is solved: End B must
         be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
         rod end nor on a body other than Rigid6. A deck with torsion runs dynamics only with
-        the force-blended generalised-alpha and takes no modal analysis. The coupled routes
-        and a standalone mixed EI = 0 + finite-EI deck without bodies (``aggregate_route``,
-        run on the aggregate) refuse any torsion column, one restrained end included.
+        the force-blended generalised-alpha (a coupled run is always dynamic) and takes no
+        modal analysis. A standalone mixed EI = 0 + finite-EI deck without bodies
+        (``aggregate_route``, run on the aggregate, which moves the line ends by translation
+        only) refuses any torsion column, one restrained end included; the coupled OpenFAST
+        and FAST.Farm routes turn the fairlead frame with the platform and accept it.
         """
         # _check_attachments has already accepted every LineID as an integer
         attachment_lines = {str(_native_int(row.tokens[0])) for row in self._rows("ATTACHMENTS")}
@@ -3861,19 +3863,24 @@ class DeckFile:
                     "a Rigid6 body"
                 )
             torsion_lines.add(line_id)
-        # native CD_Init_Deck_Aggregate (deck_has_torsion_columns): the coupled routes and a
-        # standalone mixed EI = 0 + finite-EI deck without bodies refuse any restrained end
-        if has_torsion_column and (self.caller_driven or aggregate_route):
+        # native CD_Init_Deck_Aggregate (deck_has_torsion_columns): a standalone mixed EI = 0 +
+        # finite-EI deck without bodies moves its line ends by translation only and refuses any
+        # restrained end; the OpenFAST and FAST.Farm hosts turn the fairlead frame
+        if has_torsion_column and aggregate_route and not self.caller_driven:
             raise DeckFormatError(
-                f"{self._label}: torsion is not yet supported in a deck that mixes EI = 0 and "
-                "finite-EI lines without a BODY, nor in coupled OpenFAST or FAST.Farm runs (with a "
-                "BODY such a deck runs on the multibody route, which supports torsion); set "
-                "TorsStiffness Free in every END CONNECTIONS row"
+                f"{self._label}: a line restrained in torsion needs a host that turns its fairlead "
+                "frame: coupled OpenFAST and FAST.Farm runs do, while the C API and a standalone "
+                "deck that mixes EI = 0 and finite-EI lines without a BODY move the line ends by "
+                "translation only (with a BODY such a deck runs on the multibody route, which "
+                "supports torsion); set TorsStiffness Free in every END CONNECTIONS row"
             )
         if not torsion_lines:
             return torsion_lines
         tmax_row = option_by_key.get("tmax")
-        dynamic = has_tmax and tmax_row is not None and _native_float(tmax_row.values[0]) > 0.0
+        # a coupled run is always dynamic (the host owns TMax)
+        dynamic = self.caller_driven or (
+            has_tmax and tmax_row is not None and _native_float(tmax_row.values[0]) > 0.0
+        )
         blend_row = option_by_key.get("alpha_force_blend")
         force_blend = blend_row is None or blend_row.values[0].lower() in {
             "true",

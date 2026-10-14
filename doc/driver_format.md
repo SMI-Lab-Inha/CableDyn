@@ -815,15 +815,17 @@ Behaviour:
 
 Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B, an explicit
 `GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point or a Rigid6
-`Body<N>` point. Each of the following stops with a named error: torsion on an `EI = 0` line,
-on a rod end or on a `Point3` body, a line with `ATTACHMENTS`, modal analysis (`nModes`), a
-dynamic run with `False alpha_force_blend`, any restrained end (one end included) in a coupled
-OpenFAST or FAST.Farm run or in a deck mixing `EI = 0` and finite-EI lines without a body
-(`torsion is not yet supported in a deck that mixes ...`; with a body such a deck runs on the
-multibody route, which supports torsion), and a `Torq`/`Twist` channel on a line that is not
-restrained at both ends. Seabed
-friction does not resist twist (the laid part of a line twists freely), and there is no
-torque–tension coupling.
+`Body<N>` point; in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
+(see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
+torsion on an `EI = 0` line, on a rod end or on a `Point3` body, a line with `ATTACHMENTS`,
+modal analysis (`nModes`), a dynamic or coupled run with `False alpha_force_blend`, any
+restrained end (one end included) in a standalone deck mixing `EI = 0` and finite-EI lines
+without a body or through the C API, which move the line ends by translation only (`a line
+restrained in torsion needs a host that turns its fairlead frame ...`; with a body such a deck
+runs on the multibody route, which supports torsion), OpenFAST linearisation of a line
+restrained in torsion, and a `Torq`/`Twist` channel on a line that is not restrained at both
+ends. Seabed friction does not resist twist (the laid part of a line twists freely), and there
+is no torque–tension coupling.
 
 ### EQUIVALENT BUOYANCY (optional)
 

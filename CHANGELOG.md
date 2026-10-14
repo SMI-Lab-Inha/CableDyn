@@ -19,6 +19,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `EI = 0` + finite-EI route) the finite-EI cable steps with their residual, tangent and solve
   counts and times. Every output file is the same with and without it. See the manual's
   command-line page (Run-time profile).
+- Torsion of finite-EI lines in coupled OpenFAST (`CompMooring = 5`) and FAST.Farm runs. The
+  End A frame of a line restrained in torsion turns with the platform orientation, the torque
+  moment is returned to the platform, `PtfmInit` twists the line in the static initialisation,
+  the `Torq`/`Twist` channels are written, and the unwrapped twist is restored on a checkpoint
+  restart. The C API and the standalone deck that mixes `EI = 0` and finite-EI lines without a
+  body, which move the line ends by translation only, still refuse torsion columns by name, and
+  so does OpenFAST linearisation of a line restrained in torsion. See the manual's OpenFAST page
+  (Line torsion).
 
 ### Changed
 

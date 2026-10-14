@@ -1785,6 +1785,11 @@ target_link_libraries(test_torsion_deck PRIVATE cabledyn_core)
 add_test(NAME torsion_deck COMMAND test_torsion_deck)
 set_tests_properties(torsion_deck PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
+target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)
+add_test(NAME coupled_torsion COMMAND test_coupled_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(coupled_torsion PROPERTIES LABELS "fortran;unit;static;dynamic;openfast")
+
 add_executable(test_torsion_orcaflex tests/test_torsion_orcaflex.f90)
 target_link_libraries(test_torsion_orcaflex PRIVATE cabledyn_core)
 add_test(NAME torsion_orcaflex

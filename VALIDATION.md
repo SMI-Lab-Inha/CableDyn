@@ -98,6 +98,7 @@ article's methods, are compared in
 | **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
 | **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
 | **T-10** | Torsion dynamics, restart and body torque | quasi-static torque, energy, uninterrupted run, pendulum | torque 2.2e-16; energy band 4.9e-4; restart bit-identical; pendulum 6.4e-5 | see [Torsion](#torsion) | Pass |
+| **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
 
 **Pass** meets the stated acceptance value. **Pass measured** records a measured
 comparison without an acceptance value. **Informative** is reported but not used for
@@ -875,13 +876,32 @@ in parentheses).
   form of the march's trapezoidal body integrator at every step (≤9.7e-8°), so the body–twist
   coupling is stable at any step. The `motionFile` roll column and a rolling vessel give
   `Twist<L> = −roll` and the quasi-static torque at every step.
+- **T-11 coupled route** (`coupled_torsion`, `torsion_deck`; OpenFAST runs). On the aggregate
+  surface the OpenFAST and FAST.Farm shells drive, the straight neutral line of T-2 with its End A
+  on the platform fairlead twists by `−roll` when the platform rolls about the line axis: a
+  non-stepping update gives `Twist1 = −20°` and `GJ(−roll)/L` at both ends, with the fairlead
+  moment equal to that torque about the line axis and resisting the roll; a 60 °/s roll gives the
+  quasi-static torque at every step (twist error 1.8e-15°, torque 1.7e-13 N·m), and the aggregate
+  column equals the single coupled cable driven with the same calls bit for bit. 1.5 turns of roll
+  in 18° steps carry no `2π` slip, a snapshot–step–restore–step is bit-identical, and a
+  non-stepping turn of 100° stops by name without changing the state. `PtfmInit` yaw over a
+  vertical line and a FAST.Farm `Turbine2` yaw give the static twist `+yaw` (15° and 10°, 1e-5).
+  The shell's checkpoint recipe, which restores the committed twist before it moves the fairlead
+  to the restart pose, continues bit-identically after 150° of roll, where the previous order is
+  refused by the 90° bound. In OpenFAST (IEA-15 MW VolturnUS-S with three chains and a lazy-wave
+  power cable restrained in torsion, 60 s of irregular SeaState waves, no wind) the run
+  completes with `Torq4N1 = GJ·Twist4/L`, the twist follows the platform yaw (±0.14° against
+  ±0.12°), and
+  `openfast -restart` from 30 s reproduces all 1200 later rows of the OpenFAST and CableDyn
+  outputs bit for bit. No full FAST.Farm run is part of this record.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
   give the same run. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
-  `ATTACHMENTS`, modal analysis, the configuration blend, misuse of the roll column, channels on
-  an unrestrained line, the coupled entries and a mixed `EI = 0` + finite-EI deck without a body
-  stop with named errors.
+  `ATTACHMENTS`, modal analysis, the configuration blend (also on the coupled entries), misuse of
+  the roll column, channels on an unrestrained line, a coupled caller that passes no orientation
+  (the C API) and a standalone mixed `EI = 0` + finite-EI deck without a body stop with named
+  errors.
 
 Limits. The torsion model is quasi-static (no torsional inertia), takes no seabed friction
 against twist and no torque–tension coupling, and does not resolve self-contact. Dynamic loop
