@@ -14382,6 +14382,7 @@ CONTAINS
         ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
         RETURN
       END IF
+      CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       IF (opts%has_motion_file) THEN
         CALL write_model_row(unit, t, channels, lines, points, models, output_work, ErrStat, ErrMsg, motion, step + 1)
@@ -14547,6 +14548,7 @@ CONTAINS
           RETURN
         END IF
       END IF
+      CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
@@ -14924,6 +14926,7 @@ CONTAINS
           RETURN
         END IF
       END IF
+      CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg, &
                                   rigid=rigid, opts=opts, bathymetry=bathymetry)
@@ -15103,6 +15106,7 @@ CONTAINS
         converged = .FALSE.
         RETURN
       END IF
+      CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg, &
                                   rods=rod_state, opts=opts, bathymetry=bathymetry)
@@ -16137,8 +16141,11 @@ CONTAINS
           CALL pin_rod(rst(k))
         END DO
       END IF
-      CALL CD_Profile_Enter(CD_PROF_OUTPUT)
-      IF (ErrStat == CD_DECKDRV_OK) CALL write_row(t)
+      IF (ErrStat == CD_DECKDRV_OK) THEN
+        CALL CD_Profile_Step()
+        CALL CD_Profile_Enter(CD_PROF_OUTPUT)
+        CALL write_row(t)
+      END IF
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         converged = .FALSE.
         CLOSE (unit)
@@ -16599,6 +16606,7 @@ CONTAINS
           GOTO 800
         END IF
       END IF
+      CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       CALL mb_outputs(t)
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 800
@@ -23764,8 +23772,9 @@ CONTAINS
           ErrMsg = 'CableDyn_DeckDriver: Hermite standalone step failed: '//TRIM(em); EXIT
         END IF
       END DO
-      CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
+      CALL CD_Profile_Step()
+      CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       CALL write_hermite_model_row(unit, t, channels, lines, points, cables, ErrStat, ErrMsg, &
                                    motion=motion, motion_time_index=MERGE(step + 1, 0, opts%has_motion_file), &
                                    has_motion=opts%has_motion_file, ranges=ranges)
@@ -24396,6 +24405,7 @@ CONTAINS
                                             converged, ErrStat, ErrMsg)
         RETURN
       END IF
+      CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       IF (opts%has_motion_file) THEN
         CALL write_finite_model_row(unit, t, channels, lines, points, models, output_work, ErrStat, ErrMsg, &
@@ -25854,7 +25864,6 @@ CONTAINS
     REAL(wp) :: elapsed, remaining, percent
     CHARACTER(16) :: elapsed_text, remaining_text
 
-    CALL CD_Profile_Step()
     ! Every committed step: the time an abnormal end of the process reports.
     CALL CD_Fatal_Report_Time(simulated_time)
     IF (progress%nstep > 0 .AND. step > 0 .AND. &

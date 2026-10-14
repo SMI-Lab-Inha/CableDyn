@@ -203,10 +203,9 @@ when it starts.
 The profile only reads the clock and never changes a result: every output file is identical
 with and without it. Its cost is a few clock reads per step.
 
-On the mixed ``EI = 0`` + finite-EI route, the cables of a profiled run are stepped one after
-another rather than concurrently, so that their counts stay exact. Without OpenMP, which
-includes the release executable, this changes nothing; with OpenMP, compare wall times of
-profiled runs only with other profiled runs.
+On the mixed ``EI = 0`` + finite-EI route the cables step concurrently, so the profile does not
+count the finite-EI cable steps there. It says so in their place, and leaves that route's
+execution exactly as in an unprofiled run.
 
 ``openfast.exe`` reads the same variable for its own module profile (see :doc:`faq`).
 

@@ -62,6 +62,8 @@ PROGRAM cabledyn
   INTEGER :: nargs, ErrStat, n_ei0, n_finite_ei, iarg
   REAL(wp) :: dtM, tmax
   LOGICAL :: converged, has_dtm, has_tmax, has_motion_file, has_line_outputs, has_objects
+  ! the run-time profile includes the finite-EI cable step counters (not on the mixed route)
+  LOGICAL :: profile_cable_detail = .FALSE.
   ! Sized for the aggregate and deck-driver messages it relays (512-character buffers
   ! plus deck-line context), so no diagnostic is cut short.
   CHARACTER(1024) :: ErrMsg
@@ -124,10 +126,9 @@ PROGRAM cabledyn
   ! process's own.
   CALL CD_Fatal_Report_Install()
   ! Opt-in run-time profile (environment variable CABLEDYN_PROFILE), printed before the last
-  ! stdout line. It also arms the finite-EI cable step counters.
+  ! stdout line.
   IF (CD_Profile_Requested()) THEN
     CALL CD_Profile_Arm()
-    CALL CD_HermiteCable_Dyn_Reset_Profile()
     CALL CD_HermiteCable_Dyn_Recovery_Reset()
     WRITE (output_unit, '(A)') '  Run-time profile armed by CABLEDYN_PROFILE.'
   END IF
@@ -135,6 +136,13 @@ PROGRAM cabledyn
                          has_tmax=has_tmax, n_ei0=n_ei0, n_finite_ei=n_finite_ei, &
                          has_motion_file=has_motion_file, standalone_scan=.TRUE., &
                          has_line_outputs=has_line_outputs, input_files=input_files, has_objects=has_objects)
+  IF (ErrStat == CD_DECKDRV_OK .AND. CD_Profile_Armed()) THEN
+    ! The finite-EI step counters are process-global, so the aggregate of the mixed route steps
+    ! its cables one after another while they are armed. That route keeps its cables concurrent
+    ! and reports no finite-EI step detail; every other route steps its cables in turn anyway.
+    profile_cable_detail = .NOT. (n_ei0 > 0 .AND. n_finite_ei > 0 .AND. .NOT. has_objects)
+    IF (profile_cable_detail) CALL CD_HermiteCable_Dyn_Reset_Profile()
+  END IF
   IF (ErrStat == CD_DECKDRV_OK) THEN
     DO iarg = 1, SIZE(input_files)
       CALL check_input_not_output(TRIM(input_files(iarg)), TRIM(out_root), root_native, 'input file')
@@ -598,6 +606,8 @@ CONTAINS
         ELSE
           consecutive_miss = 0
         END IF
+        ! a committed step: count it, then its outputs
+        CALL CD_Profile_Step()
         CALL CD_Profile_Enter(CD_PROF_OUTPUT)
         CALL CD_AGG_CalcOutput(aggregate, es, em)
         IF (es /= CD_AGG_OK) THEN
@@ -821,7 +831,6 @@ CONTAINS
     INTEGER(int64) :: now
     REAL(wp) :: elapsed, remaining, percent
     CHARACTER(16) :: elapsed_text, remaining_text
-    CALL CD_Profile_Step()
     ! Every committed step: the time an abnormal end of the process reports.
     CALL CD_Fatal_Report_Time(simulated_time)
     IF (step >= progress%nstep .OR. MOD(step, progress%stride) == 0) THEN
@@ -888,6 +897,9 @@ CONTAINS
         ', tangent ', fixed(t_tan, 3), ', effective matrix ', fixed(t_eff, 3), ', linear solve ', &
         fixed(t_solve, 3), ', added mass ', fixed(t_am, 3), ', other ', &
         fixed(MAX(0.0_wp, t_step - (t_resid + t_tan + t_eff + t_solve + t_am)), 3), '.'
+    ELSE IF (.NOT. profile_cable_detail .AND. n_finite_ei > 0) THEN
+      WRITE (output_unit, '(A)') '    Finite-EI cable steps: not counted on the mixed EI = 0 + finite-EI route, '// &
+        'whose cables step concurrently.'
     END IF
     FLUSH (output_unit)
   END SUBROUTINE print_profile
