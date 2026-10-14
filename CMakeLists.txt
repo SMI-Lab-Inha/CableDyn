@@ -653,6 +653,14 @@ target_link_libraries(test_hermite_axial_damping PRIVATE cabledyn_core)
 add_test(NAME hermite_axial_damping COMMAND test_hermite_axial_damping)
 set_tests_properties(hermite_axial_damping PROPERTIES LABELS "fortran;unit;dynamic;damping")
 
+# Active line control of a finite-EI cable: the length update rebuilds the caches a fresh
+# build carries (bit for bit), is atomic and rewinds exactly; hanging, taut and paid-out
+# vertical cables meet their closed forms; a slow ramp ends at the static equilibrium.
+add_executable(test_hermite_cable_control tests/test_hermite_cable_control.f90)
+target_link_libraries(test_hermite_cable_control PRIVATE cabledyn_core)
+add_test(NAME hermite_cable_control COMMAND test_hermite_cable_control)
+set_tests_properties(hermite_cable_control PROPERTIES LABELS "fortran;unit;dynamic;hermite")
+
 add_executable(test_hermite_added_mass tests/test_hermite_added_mass.f90)
 target_link_libraries(test_hermite_added_mass PRIVATE cabledyn_core)
 add_test(NAME hermite_added_mass COMMAND test_hermite_added_mass)
@@ -2347,6 +2355,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_hermite_cable
       test_hermite_drag_dynamics
       test_hermite_axial_damping
+      test_hermite_cable_control
       test_endconn_spring)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
   endforeach()
@@ -2355,6 +2364,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                          -Wno-uninitialized
                          -Wno-maybe-uninitialized)
   target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)
@@ -2403,6 +2413,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_hermite_cable_dynamic
       test_hermite_drag_dynamics
       test_hermite_axial_damping
+      test_hermite_cable_control
       test_hermite_added_mass
       test_hermite_wave_forcing
       test_lazywave_dynamics

@@ -168,6 +168,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   moorings, and quote their results for the enlarged grid. With the `MD_Shared` grid, the
   line-1 fairlead tension standard deviation of the tutorial was 18 % too high. See the
   manual's OpenFAST page (SeaState grid).
+- Active tensioning of finite-EI cables in OpenFAST (`CompMooring = 5`). A `CONTROL` row may
+  now name a finite-EI (cubic-Hermite) cable, alone or in a deck with `EI = 0` lines. Before
+  each mooring step, ServoDyn's `CableDeltaL` and `CableDeltaLdot` scale every cable element of
+  the line's fairlead-side deck segment by (S + `DeltaL`)/S, with the matching rate, so the
+  segment becomes S + `DeltaL` long. The cable's mass, attachment masses, tributary lengths and
+  seabed contact coefficients follow the new lengths, and the axial damping acts on the rate of
+  the strain the elastic force uses, so a segment paid out at constant strain carries no damping
+  force. A command outside half to twice the segment's initial length stops the run with a
+  message that names the line, and FAST.Farm decks still reject `CONTROL`. A zero command leaves
+  the run bit-identical to an uncontrolled one, and a checkpoint restart continues
+  bit-identically. See the manual's deck format page (CONTROL).
 
 ### Changed
 

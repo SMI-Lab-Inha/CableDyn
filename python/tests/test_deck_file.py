@@ -3437,6 +3437,19 @@ def test_control_rows_fail_closed(rows, message):
         DeckFile.from_text(_with_section(_STATIC, "CONTROL", "Channel Lines", *rows))
 
 
+def test_control_rows_may_name_finite_ei_cables_on_the_coupled_route():
+    # native CD_Init_Deck_Aggregate controls the fairlead-side segment of a finite-EI cable
+    # too, alone or on one channel with EI = 0 lines (line 4 is the mixed deck's cable)
+    marker = "--------------------------- OPTIONS"
+    block = (
+        "--------------------------- CONTROL -------------------------------------------\n"
+        "ChannelID Lines\n(-) (-)\n1 4\n2 1,3\n"
+    )
+    text = (ROOT / "examples/iea15mw_umaine_mixed_cabledyn.dat").read_text(encoding="utf-8")
+    deck = DeckFile.from_text(text.replace(marker, block + marker, 1), caller_driven=True)
+    assert [row.tokens for row in deck._rows("CONTROL")] == [("1", "4"), ("2", "1,3")]
+
+
 # ---------------------------------------------------------------------------
 # Editing API error contract
 # ---------------------------------------------------------------------------

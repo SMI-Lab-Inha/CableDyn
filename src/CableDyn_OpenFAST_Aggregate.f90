@@ -53,7 +53,8 @@ MODULE CableDyn_OpenFAST_Aggregate
                                           CD_HFMF_SetCoupledKinematics, CD_HFMF_GetCoupledKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK, CD_HFMF_BADINPUT, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, &
-                                          CD_HFMF_Set_Held_Fluid, CD_HFMF_NNodes, CD_HFMF_GetNodePositions
+                                          CD_HFMF_Set_Held_Fluid, CD_HFMF_NNodes, CD_HFMF_GetNodePositions, &
+                                          CD_HFMF_Set_SegmentLength
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Profile_Enabled
   USE CableDyn_DeckDriver, ONLY: CD_DeckAggregateType, CD_Init_Deck_Aggregate, CD_End_Deck_Aggregate, &
                                  CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_Eval_Aggregate_Channel, &
@@ -192,11 +193,17 @@ MODULE CableDyn_OpenFAST_Aggregate
     TYPE(DeckFailure), ALLOCATABLE :: snap_failures(:)
     ! Active line control (CONTROL section): flattened channel -> (line, last
     ! element, base length) table; ctrl_warned suppresses the MoorDyn bound
-    ! warnings after the first exceedance per row.
+    ! warnings after the first exceedance per row. A finite-EI row (ctrl_is_cable)
+    ! holds the cable index, the first element of its controlled trailing span and the
+    ! span's base length S; the span's base element lengths sit at
+    ! ctrl_span_l0(ctrl_span_off + 1:) (see CD_DeckAggregateType).
     INTEGER :: n_ctrl_chans = 0
     INTEGER, ALLOCATABLE :: ctrl_chan(:), ctrl_line(:), ctrl_elem(:)
     REAL(wp), ALLOCATABLE :: ctrl_base_l0(:)
     LOGICAL, ALLOCATABLE :: ctrl_warned(:)
+    LOGICAL, ALLOCATABLE :: ctrl_is_cable(:)
+    INTEGER, ALLOCATABLE :: ctrl_line_id(:), ctrl_span_off(:)
+    REAL(wp), ALLOCATABLE :: ctrl_span_l0(:)
     ! Coupled Rigid6 bodies (pure EI=0 deck): the opaque runtime the facade marches over the
     ! EI=0 system each mooring step, in place of the plain moving step. has_rigid6 selects the
     ! body-march branch; the runtime's own snapshot buffer joins the aggregate snapshot/restore.
@@ -346,6 +353,10 @@ CONTAINS
       CALL MOVE_ALLOC(parts%ctrl_line, candidate%ctrl_line)
       CALL MOVE_ALLOC(parts%ctrl_elem, candidate%ctrl_elem)
       CALL MOVE_ALLOC(parts%ctrl_base_l0, candidate%ctrl_base_l0)
+      CALL MOVE_ALLOC(parts%ctrl_is_cable, candidate%ctrl_is_cable)
+      CALL MOVE_ALLOC(parts%ctrl_line_id, candidate%ctrl_line_id)
+      CALL MOVE_ALLOC(parts%ctrl_span_off, candidate%ctrl_span_off)
+      CALL MOVE_ALLOC(parts%ctrl_span_l0, candidate%ctrl_span_l0)
       ALLOCATE (candidate%ctrl_warned(SIZE(candidate%ctrl_chan)))
       candidate%ctrl_warned = .FALSE.
     END IF
@@ -1701,29 +1712,29 @@ CONTAINS
   END FUNCTION CD_AGG_NCtrlChans
 
   SUBROUTINE CD_AGG_Apply_LineControl(self, delta_l, delta_l_dot, ErrStat, ErrMsg)
-    !! Apply the host's cable-control command BEFORE an advance: for every
-    !! controlled line, the LAST (fairlead-side) segment's unstretched length
-    !! becomes base + delta_l(chan) with rate delta_l_dot(chan) -- the MoorDyn
-    !! convention, applied unclamped with the MoorDyn warning bounds (an increase
-    !! beyond one base segment length or a reduction past half of it warns once
-    !! per row and proceeds).
+    !! Apply the host's cable-control command BEFORE an advance. On an EI = 0 line the
+    !! LAST (fairlead-side) segment's unstretched length becomes base + delta_l(chan)
+    !! with rate delta_l_dot(chan) -- the MoorDyn convention, applied unclamped with the
+    !! MoorDyn warning bounds (an increase beyond one base segment length or a reduction
+    !! past half of it warns once per row and proceeds). On a finite-EI cable every
+    !! element of the trailing span that makes up the deck's fairlead-side segment (base
+    !! length S) scales by lambda = (S + delta_l)/S, with rate delta_l_dot*l_e/S, so the
+    !! segment takes the same length and rate; lambda outside [0.5, 2] (the same bounds,
+    !! enforced) fails closed by line, since the cable elements would leave the mesh
+    !! resolution the static initialisation established.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: delta_l(:), delta_l_dot(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
-    INTEGER :: c, ch, es
+    INTEGER :: c, ch, es, nspan, k
+    REAL(wp) :: lambda
     CHARACTER(512) :: em
 
     ErrStat = CD_AGG_OK
     ErrMsg = ''
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (.NOT. ALLOCATED(self%ctrl_chan)) RETURN
-    IF (.NOT. self%has_sys) THEN
-      ErrStat = CD_AGG_BADINPUT
-      ErrMsg = 'CableDyn_OpenFAST_Aggregate: line control requires the EI=0 system'
-      RETURN
-    END IF
     IF (SIZE(delta_l) < self%n_ctrl_chans .OR. SIZE(delta_l_dot) < self%n_ctrl_chans) THEN
       ErrStat = CD_AGG_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: the control command must cover every declared channel'
@@ -1738,14 +1749,58 @@ CONTAINS
     ! leave the aggregate at mixed lengths (the caller may treat BADINPUT as
     ! recoverable).
     DO c = 1, SIZE(self%ctrl_chan)
-      IF (delta_l(self%ctrl_chan(c)) <= -self%ctrl_base_l0(c)) THEN
-        ErrStat = CD_AGG_BADINPUT
-        ErrMsg = 'CableDyn_OpenFAST_Aggregate: DeltaL reduces a controlled segment to a non-positive length'
-        RETURN
+      ch = self%ctrl_chan(c)
+      IF (self%ctrl_is_cable(c)) THEN
+        IF (self%ctrl_line(c) < 1 .OR. self%ctrl_line(c) > self%ncable) THEN
+          ErrStat = CD_AGG_BADINPUT
+          ErrMsg = 'CableDyn_OpenFAST_Aggregate: line control addresses a cable the aggregate does not own'
+          RETURN
+        END IF
+        lambda = (self%ctrl_base_l0(c) + delta_l(ch))/self%ctrl_base_l0(c)
+        IF (.NOT. (lambda >= 0.5_wp .AND. lambda <= 2.0_wp)) THEN
+          ErrStat = CD_AGG_BADINPUT
+          WRITE (em, '(A,I0,A,I0,A,ES12.5,A)') 'CableDyn_OpenFAST_Aggregate: control channel ', ch, &
+            ' would scale the controlled segment of finite-EI line ', self%ctrl_line_id(c), ' by ', lambda, &
+            '; a finite-EI segment may only be scaled within [0.5, 2] of its initial length'
+          ErrMsg = TRIM(em)
+          RETURN
+        END IF
+      ELSE
+        IF (.NOT. self%has_sys) THEN
+          ErrStat = CD_AGG_BADINPUT
+          ErrMsg = 'CableDyn_OpenFAST_Aggregate: line control requires the EI=0 system'
+          RETURN
+        END IF
+        IF (delta_l(ch) <= -self%ctrl_base_l0(c)) THEN
+          ErrStat = CD_AGG_BADINPUT
+          ErrMsg = 'CableDyn_OpenFAST_Aggregate: DeltaL reduces a controlled segment to a non-positive length'
+          RETURN
+        END IF
       END IF
     END DO
     DO c = 1, SIZE(self%ctrl_chan)
       ch = self%ctrl_chan(c)
+      IF (self%ctrl_is_cable(c)) THEN
+        nspan = self%cables(self%ctrl_line(c))%line%ne - self%ctrl_elem(c) + 1
+        BLOCK
+          INTEGER :: elems(nspan)
+          REAL(wp) :: l0_new(nspan), l0_rate(nspan), base
+          lambda = (self%ctrl_base_l0(c) + delta_l(ch))/self%ctrl_base_l0(c)
+          DO k = 1, nspan
+            base = self%ctrl_span_l0(self%ctrl_span_off(c) + k)
+            elems(k) = self%ctrl_elem(c) + k - 1
+            l0_new(k) = base*lambda
+            l0_rate(k) = delta_l_dot(ch)*base/self%ctrl_base_l0(c)
+          END DO
+          CALL CD_HFMF_Set_SegmentLength(self%cables(self%ctrl_line(c)), elems, l0_new, l0_rate, es, em)
+        END BLOCK
+        IF (es /= CD_HFMF_OK) THEN
+          ErrStat = CD_AGG_BADINPUT
+          ErrMsg = 'CableDyn_OpenFAST_Aggregate: line-control update failed: '//TRIM(em)
+          RETURN
+        END IF
+        CYCLE
+      END IF
       IF (.NOT. self%ctrl_warned(c)) THEN
         IF (delta_l(ch) > self%ctrl_base_l0(c) .OR. delta_l(ch) < -0.5_wp*self%ctrl_base_l0(c)) THEN
           WRITE (*, '(A,I0,A)') 'CableDyn: WARNING -- control channel ', ch, &
@@ -1853,6 +1908,10 @@ CONTAINS
     IF (ALLOCATED(self%ctrl_elem)) DEALLOCATE (self%ctrl_elem)
     IF (ALLOCATED(self%ctrl_base_l0)) DEALLOCATE (self%ctrl_base_l0)
     IF (ALLOCATED(self%ctrl_warned)) DEALLOCATE (self%ctrl_warned)
+    IF (ALLOCATED(self%ctrl_is_cable)) DEALLOCATE (self%ctrl_is_cable)
+    IF (ALLOCATED(self%ctrl_line_id)) DEALLOCATE (self%ctrl_line_id)
+    IF (ALLOCATED(self%ctrl_span_off)) DEALLOCATE (self%ctrl_span_off)
+    IF (ALLOCATED(self%ctrl_span_l0)) DEALLOCATE (self%ctrl_span_l0)
     CALL CD_Rigid6_End(self%rigid6)
     self%has_rigid6 = .FALSE.
     CALL CD_Rod_End(self%rod)

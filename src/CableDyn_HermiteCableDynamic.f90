@@ -72,6 +72,7 @@ MODULE CableDyn_HermiteCableDynamic
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
                                  CD_Bathymetry_Floor_Gradient, CD_End_Bathymetry, CD_BATHY_OK, &
                                  CD_Bathymetry_Rotate_Curvature
+  USE CableDyn_Line, ONLY: CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
                                      CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Validate, CD_HTORS_OK, &
                                      CD_HTORS_MAX_STEP, CD_HermiteTorsionWorkType, CD_HermiteTorsion_Work_Init, &
@@ -105,6 +106,8 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_Attachments
   PUBLIC :: CD_HermiteCable_Attachment_Drag
   PUBLIC :: CD_HermiteCable_Dyn_Recompute_Acceleration
+  PUBLIC :: CD_HermiteCable_Dyn_Set_SegmentLength
+  PUBLIC :: CD_HermiteCable_Dyn_Set_Control_Seabed
   PUBLIC :: CD_HermiteCable_Dyn_Set_Irregular_Waves
   PUBLIC :: CD_HermiteCable_Drag_Element
   PUBLIC :: CD_HermiteCable_Axial_Damping_Element
@@ -192,6 +195,20 @@ MODULE CableDyn_HermiteCableDynamic
     ! axial quadrature as the elastic resultant. Off by default.
     LOGICAL :: has_axial_damping = .FALSE.
     REAL(wp), ALLOCATABLE :: BA(:)
+    ! Active line control (CD_HermiteCable_Dyn_Set_SegmentLength): a host changes the
+    ! unstretched lengths l0 of chosen elements between steps. has_ctrl is set by the first
+    ! change; from then on l0_dot(ne) holds the unstretched-length rate of every element
+    ! (zero outside the controlled span), which the axial damping subtracts from the strain
+    ! rate. A model that is never controlled leaves has_ctrl false and l0_dot unallocated, so
+    ! every evaluation is unchanged. BA keeps its initial resolution.
+    LOGICAL :: has_ctrl = .FALSE.
+    REAL(wp), ALLOCATABLE :: l0_dot(:)
+    ! Seabed recompute inputs of a controlled contact model (CD_HermiteCable_Dyn_Set_Control_Seabed):
+    ! the per-area penalty kBot, the per-element contact diameter and cBot/kBot, so a length
+    ! change rebuilds contact_kn/contact_cn with the helper the deck used at initialisation.
+    LOGICAL :: has_seabed_recompute = .FALSE.
+    REAL(wp) :: seabed_kbot = CD_ZERO, seabed_cn_over_kn = CD_ZERO
+    REAL(wp), ALLOCATABLE :: seabed_diameter_elem(:)
     REAL(wp) :: seabed_z = CD_ZERO, kn = CD_ZERO
     REAL(wp), ALLOCATABLE :: trib(:)                              ! nodal tributary length
     ! Production standalone contact. contact_kn/contact_cn are nodal coefficients [N/m]
@@ -311,6 +328,9 @@ MODULE CableDyn_HermiteCableDynamic
     LOGICAL :: a_restored = .FALSE.
     INTEGER, ALLOCATABLE :: att_node(:)
     REAL(wp), ALLOCATABLE :: att_w(:), att_b(:), att_fk(:), att_cda(:), att_cdax(:)
+    ! The two nodal mass terms each attachment adds to Mgb, the dry mass m and the added mass
+    ! Ca rho V, kept so that a length change rebuilds Mgb in the order initialisation used.
+    REAL(wp), ALLOCATABLE :: att_mass(:), att_madd(:)
     REAL(wp) :: att_rho = CD_ZERO
     ! Rollback copies of CD_HermiteCable_Dyn_Set_Held_Fluid, kept so a per-step field update
     ! allocates nothing: a (ndof), hf_u/hf_ud (3, nn), hf_wl (nn).
@@ -324,6 +344,10 @@ MODULE CableDyn_HermiteCableDynamic
     ! leave partially advanced state. Buffers allocate on first Snapshot (amortised zero;
     ! never touched by Step itself).
     REAL(wp), ALLOCATABLE :: snap_q(:), snap_v(:), snap_a(:)
+    ! The unstretched lengths and their rates join the snapshot (active line control): a
+    ! restore that changes l0 rebuilds the length-dependent caches from the restored lengths.
+    REAL(wp), ALLOCATABLE :: snap_l0(:), snap_l0_dot(:)
+    LOGICAL :: snap_has_ctrl = .FALSE.
     REAL(wp) :: snap_t = CD_ZERO
     REAL(wp) :: snap_endconn_d0(3, 2) = CD_ZERO
     ! Condensed torsion (CD_HermiteCable_Dyn_Set_Torsion): end frames, GJ, imposed twist Phi and
@@ -784,6 +808,8 @@ CONTAINS
       model%a = old_a
       CALL fail_contact('initial acceleration refresh failed: '//TRIM(em)); RETURN
     END IF
+    ! New nodal coefficients supersede any seabed recompute inputs given for the old ones.
+    model%has_seabed_recompute = .FALSE.
 
   CONTAINS
     SUBROUTINE fail_contact(msg)
@@ -950,7 +976,7 @@ CONTAINS
     a_old = model%a
     mgb_old = model%Mgb
     ALLOCATE (model%att_node(n), model%att_w(n), model%att_b(n), model%att_fk(n), model%att_cda(n), &
-              model%att_cdax(n))
+              model%att_cdax(n), model%att_mass(n), model%att_madd(n))
     model%att_node = node
     model%att_w = (mass - rho_w*volume)*gravity
     model%att_b = rho_w*gravity*volume
@@ -958,16 +984,19 @@ CONTAINS
     model%att_cda = cda
     model%att_cdax = cdax
     model%att_rho = rho_w
+    model%att_mass = mass
+    model%att_madd = ca*rho_w*volume
     DO k = 1, n
       DO d = 1, 3
         dof = 6*(node(k) - 1) + d
-        model%Mgb(KL_D + KU_D + 1, dof) = model%Mgb(KL_D + KU_D + 1, dof) + mass(k) + ca(k)*rho_w*volume(k)
+        model%Mgb(KL_D + KU_D + 1, dof) = model%Mgb(KL_D + KU_D + 1, dof) + model%att_mass(k) + model%att_madd(k)
       END DO
     END DO
     model%has_attach = .TRUE.
     CALL solve_consistent_acceleration(model, es, em)
     IF (es /= CD_HCDYN_OK) THEN
-      DEALLOCATE (model%att_node, model%att_w, model%att_b, model%att_fk, model%att_cda, model%att_cdax)
+      DEALLOCATE (model%att_node, model%att_w, model%att_b, model%att_fk, model%att_cda, model%att_cdax, &
+                  model%att_mass, model%att_madd)
       model%has_attach = .FALSE.
       model%Mgb = mgb_old
       model%a = a_old
@@ -1118,6 +1147,231 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Recompute_Acceleration: '//TRIM(ErrMsg)
     END IF
   END SUBROUTINE CD_HermiteCable_Dyn_Recompute_Acceleration
+
+  SUBROUTINE CD_HermiteCable_Dyn_Set_SegmentLength(model, elems, l0_new, l0_dot, ErrStat, ErrMsg)
+    !! Active line control (the OpenFAST cable-control channel): set the unstretched length
+    !! and its rate of the listed elements, applied before a step and held over it. Every
+    !! term that reads l0 when it is evaluated (elastic force, weight, drag, Froude-Krylov
+    !! load, added mass, dry-part buoyancy, the tensile audit and the residual scale) follows
+    !! at once. The cached terms are rebuilt from the new lengths in the order initialisation
+    !! used, so the model carries what one built with them would: the constant mass Mgb with
+    !! the attachment masses, the nodal tributary lengths and, on a contact model, the nodal
+    !! seabed coefficients and the friction spring stiffness. The rate enters the axial
+    !! damping (CD_HermiteCable_Axial_Damping_Element). The step uses the mass of the new
+    !! lengths and leaves out the rate term dM/dt v, as MoorDyn does; the committed
+    !! acceleration is kept as the history of the preceding step, and BA keeps its initial
+    !! resolution. The cached committed force and the carried step factor are discarded.
+    !! A call that changes no length and no rate (bit for bit) returns at once, so a zero
+    !! command on an uncontrolled model leaves it untouched. The update is atomic: every
+    !! check and rebuild runs before the model is written. A line restrained in torsion is
+    !! refused (its condensed torsional compliance has no length-control law here), as is a
+    !! contact model without the seabed recompute inputs.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER, INTENT(IN) :: elems(:)
+    REAL(wp), INTENT(IN) :: l0_new(:), l0_dot(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k, n, istat
+    LOGICAL :: lengths_changed, rates_changed
+    REAL(wp) :: rate_now
+    REAL(wp), ALLOCATABLE :: l0_trial(:)
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      CALL fail('model not initialised'); RETURN
+    END IF
+    n = SIZE(elems)
+    IF (n < 1 .OR. SIZE(l0_new) /= n .OR. SIZE(l0_dot) /= n) THEN
+      CALL fail('elems, l0_new and l0_dot must share one length >= 1'); RETURN
+    END IF
+    IF (ANY(elems < 1) .OR. ANY(elems > model%ne)) THEN
+      CALL fail('element index out of range'); RETURN
+    END IF
+    DO k = 2, n
+      IF (elems(k) <= elems(k - 1)) THEN
+        CALL fail('element indices must be strictly increasing'); RETURN
+      END IF
+    END DO
+    IF (.NOT. (CD_All_Finite(l0_new) .AND. CD_All_Finite(l0_dot))) THEN
+      CALL fail('l0 and l0_dot must be finite'); RETURN
+    END IF
+    IF (ANY(l0_new <= CD_ZERO)) THEN
+      CALL fail('l0 must be positive'); RETURN
+    END IF
+    IF (model%torsion%active) THEN
+      CALL fail('a line restrained in torsion is not supported (the condensed torsional compliance '// &
+                'has no length-control law)'); RETURN
+    END IF
+    IF (model%has_contact .AND. .NOT. model%has_seabed_recompute) THEN
+      CALL fail('a seabed-contact model needs the seabed recompute inputs '// &
+                '(CD_HermiteCable_Dyn_Set_Control_Seabed)'); RETURN
+    END IF
+    lengths_changed = .FALSE.
+    rates_changed = .FALSE.
+    DO k = 1, n
+      IF (.NOT. bits_equal(model%l0(elems(k)), l0_new(k))) lengths_changed = .TRUE.
+      rate_now = CD_ZERO
+      IF (model%has_ctrl) rate_now = model%l0_dot(elems(k))
+      IF (.NOT. bits_equal(rate_now, l0_dot(k))) rates_changed = .TRUE.
+    END DO
+    IF (.NOT. (lengths_changed .OR. rates_changed)) RETURN
+    IF (.NOT. ALLOCATED(model%l0_dot)) THEN
+      ALLOCATE (model%l0_dot(model%ne), STAT=istat)
+      IF (istat /= 0) THEN
+        CALL fail('rate storage allocation failed'); RETURN
+      END IF
+      model%l0_dot = CD_ZERO
+    END IF
+    IF (lengths_changed) THEN
+      ALLOCATE (l0_trial(model%ne), STAT=istat)
+      IF (istat /= 0) THEN
+        CALL fail('length storage allocation failed'); RETURN
+      END IF
+      l0_trial = model%l0
+      l0_trial(elems) = l0_new
+      CALL rebuild_length_caches(model, l0_trial, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_SegmentLength: '//TRIM(ErrMsg); RETURN
+      END IF
+    END IF
+    IF (.NOT. model%has_ctrl) model%l0_dot = CD_ZERO
+    model%has_ctrl = .TRUE.
+    model%l0_dot(elems) = l0_dot
+    model%fc_valid = .FALSE.
+    model%tr_valid = .FALSE.
+
+  CONTAINS
+    SUBROUTINE fail(msg)
+      CHARACTER(*), INTENT(IN) :: msg
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_SegmentLength: '//msg
+    END SUBROUTINE fail
+  END SUBROUTINE CD_HermiteCable_Dyn_Set_SegmentLength
+
+  SUBROUTINE CD_HermiteCable_Dyn_Set_Control_Seabed(model, kbot, diameter_elem, cn_over_kn, ErrStat, ErrMsg)
+    !! Store the seabed recompute inputs of a contact model for active line control: the
+    !! per-area penalty kbot [N/m^3], the per-element contact diameter [m] and the ratio
+    !! cn/kn, the inputs from which the deck built the installed nodal coefficients with
+    !! CD_Nodal_Seabed_Stiffness. Call after CD_HermiteCable_Dyn_Set_Contact. The inputs
+    !! must reproduce the installed contact_kn and contact_cn bit for bit at the present
+    !! lengths, so a length change rebuilds exactly the coefficients a model built with the
+    !! new lengths would carry; otherwise the call fails and changes nothing.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: kbot, diameter_elem(:), cn_over_kn
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: kn_check(:)
+    INTEGER :: es
+    CHARACTER(200) :: em
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      CALL fail('model not initialised'); RETURN
+    END IF
+    IF (.NOT. (model%has_contact .AND. ALLOCATED(model%contact_kn) .AND. ALLOCATED(model%contact_cn))) THEN
+      CALL fail('seabed contact (CD_HermiteCable_Dyn_Set_Contact) is required'); RETURN
+    END IF
+    IF (SIZE(diameter_elem) /= model%ne) THEN
+      CALL fail('diameter_elem must have one entry per element'); RETURN
+    END IF
+    IF (.NOT. (CD_Is_Finite(cn_over_kn) .AND. cn_over_kn >= CD_ZERO)) THEN
+      CALL fail('cn_over_kn must be finite and non-negative'); RETURN
+    END IF
+    CALL CD_Nodal_Seabed_Stiffness(kbot, diameter_elem, model%l0, kn_check, es, em)
+    IF (es /= CD_LINE_OK) THEN
+      CALL fail(TRIM(em)); RETURN
+    END IF
+    IF (.NOT. ALL(bits_equal(kn_check, model%contact_kn))) THEN
+      CALL fail('the inputs do not reproduce the installed nodal contact stiffness'); RETURN
+    END IF
+    IF (.NOT. ALL(bits_equal(kn_check*cn_over_kn, model%contact_cn))) THEN
+      CALL fail('the inputs do not reproduce the installed nodal contact damping'); RETURN
+    END IF
+    model%seabed_kbot = kbot
+    model%seabed_diameter_elem = diameter_elem
+    model%seabed_cn_over_kn = cn_over_kn
+    model%has_seabed_recompute = .TRUE.
+
+  CONTAINS
+    SUBROUTINE fail(msg)
+      CHARACTER(*), INTENT(IN) :: msg
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_Control_Seabed: '//msg
+    END SUBROUTINE fail
+  END SUBROUTINE CD_HermiteCable_Dyn_Set_Control_Seabed
+
+  SUBROUTINE rebuild_length_caches(model, l0_new, ErrStat, ErrMsg)
+    !! Install the unstretched lengths l0_new with every cache built from them, in the order
+    !! initialisation used, so the model matches one built with these lengths bit for bit:
+    !! the constant mass Mgb (element by element, then the attachment masses), the nodal
+    !! tributary lengths and, on a contact model, the nodal seabed coefficients
+    !! (CD_Nodal_Seabed_Stiffness, as the deck builds them) with the friction spring
+    !! stiffness that follows them. Everything is built first; the model is written only
+    !! when every build succeeded.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: l0_new(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: mgb_new(:, :), trib_new(:), kn_new(:), cn_new(:)
+    REAL(wp) :: Me(12, 12)
+    INTEGER :: e, k, d, dof, es, istat
+    CHARACTER(200) :: em
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (SIZE(l0_new) /= model%ne) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'length rebuild: l0 must have one entry per element'; RETURN
+    END IF
+    ALLOCATE (mgb_new(LDAB_D, model%ndof), trib_new(model%nn), STAT=istat)
+    IF (istat /= 0) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'length rebuild: workspace allocation failed'; RETURN
+    END IF
+    mgb_new = CD_ZERO
+    DO e = 1, model%ne
+      CALL CD_HermiteCable_Mass(model%rho_a(e), l0_new(e), Me, es, em)
+      IF (es /= CD_HCABLE_OK) THEN
+        ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'length rebuild: mass assembly: '//TRIM(em); RETURN
+      END IF
+      CALL scatter12_band(mgb_new, Me, e)
+    END DO
+    IF (model%has_attach) THEN
+      DO k = 1, SIZE(model%att_node)
+        DO d = 1, 3
+          dof = 6*(model%att_node(k) - 1) + d
+          mgb_new(KL_D + KU_D + 1, dof) = mgb_new(KL_D + KU_D + 1, dof) + model%att_mass(k) + model%att_madd(k)
+        END DO
+      END DO
+    END IF
+    trib_new = CD_ZERO
+    DO e = 1, model%ne
+      trib_new(e) = trib_new(e) + 0.5_wp*l0_new(e)
+      trib_new(e + 1) = trib_new(e + 1) + 0.5_wp*l0_new(e)
+    END DO
+    IF (model%has_contact) THEN
+      IF (.NOT. model%has_seabed_recompute) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'length rebuild: the seabed-contact model has no seabed recompute inputs'; RETURN
+      END IF
+      CALL CD_Nodal_Seabed_Stiffness(model%seabed_kbot, model%seabed_diameter_elem, l0_new, kn_new, es, em)
+      IF (es /= CD_LINE_OK) THEN
+        ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'length rebuild: seabed stiffness: '//TRIM(em); RETURN
+      END IF
+      cn_new = kn_new*model%seabed_cn_over_kn
+    END IF
+    model%l0 = l0_new
+    CALL MOVE_ALLOC(mgb_new, model%Mgb)
+    CALL MOVE_ALLOC(trib_new, model%trib)
+    IF (model%has_contact) THEN
+      CALL MOVE_ALLOC(kn_new, model%contact_kn)
+      CALL MOVE_ALLOC(cn_new, model%contact_cn)
+      IF (model%fr_active) model%fr_k = model%contact_kn
+    END IF
+  END SUBROUTINE rebuild_length_caches
+
+  ELEMENTAL LOGICAL FUNCTION bits_equal(a, b) RESULT(same)
+    !! Bitwise equality of two reals (so +0 and -0 differ).
+    REAL(wp), INTENT(IN) :: a, b
+    same = TRANSFER(a, 0_INT64) == TRANSFER(b, 0_INT64)
+  END FUNCTION bits_equal
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_ForceBlend(model, enabled, ErrStat, ErrMsg)
     !! Select the generalised-alpha blend. enabled = .TRUE. (the default): the residual
@@ -4617,8 +4871,14 @@ CONTAINS
     END IF
     r3 = fe(i0 + 1:i0 + 3)
     IF (model%has_axial_damping) THEN
-      CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), fdamp, ErrStat=es, ErrMsg=em2, &
-                                                 quadrature_order=model%axial_quadrature_order)
+      IF (model%has_ctrl) THEN
+        CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), fdamp, ErrStat=es, ErrMsg=em2, &
+                                                   quadrature_order=model%axial_quadrature_order, &
+                                                   l0_dot=model%l0_dot(e))
+      ELSE
+        CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), fdamp, ErrStat=es, ErrMsg=em2, &
+                                                   quadrature_order=model%axial_quadrature_order)
+      END IF
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
       END IF
@@ -5608,9 +5868,9 @@ CONTAINS
   END SUBROUTINE torsion_cache_fill
 
   SUBROUTINE CD_HermiteCable_Dyn_Snapshot(model, ErrStat, ErrMsg)
-    !! Capture the committed step state (q, v, a, t) into the model-owned snapshot
-    !! buffers (see the type note: the aggregate stage-then-commit contract). Buffers
-    !! allocate on first use and are reused thereafter.
+    !! Capture the committed step state (q, v, a, t) and the unstretched lengths with their
+    !! rates into the model-owned snapshot buffers (see the type note: the aggregate
+    !! stage-then-commit contract). Buffers allocate on first use and are reused thereafter.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
@@ -5622,11 +5882,19 @@ CONTAINS
       RETURN
     END IF
     IF (.NOT. ALLOCATED(model%snap_q)) THEN
-      ALLOCATE (model%snap_q(model%ndof), model%snap_v(model%ndof), model%snap_a(model%ndof))
+      ALLOCATE (model%snap_q(model%ndof), model%snap_v(model%ndof), model%snap_a(model%ndof), &
+                model%snap_l0(model%ne), model%snap_l0_dot(model%ne))
     END IF
     model%snap_q = model%q
     model%snap_v = model%v
     model%snap_a = model%a
+    model%snap_l0 = model%l0
+    model%snap_has_ctrl = model%has_ctrl
+    IF (model%has_ctrl) THEN
+      model%snap_l0_dot = model%l0_dot
+    ELSE
+      model%snap_l0_dot = CD_ZERO
+    END IF
     model%snap_t = model%t
     model%snap_endconn_d0 = model%endconn_d0
     model%snap_torsion_theta = model%torsion%theta
@@ -5650,10 +5918,13 @@ CONTAINS
 
   SUBROUTINE CD_HermiteCable_Dyn_Restore(model, ErrStat, ErrMsg)
     !! Restore the committed step state from the last Snapshot. Fails closed if no valid
-    !! snapshot exists (a restore must never silently run on stale or absent state).
+    !! snapshot exists (a restore must never silently run on stale or absent state). Lengths
+    !! changed by active line control since the snapshot come back with the caches built
+    !! from them, so no command need be re-applied.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: l0_restore(:)
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -5666,6 +5937,20 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Restore: no valid snapshot'
       RETURN
     END IF
+    ! Lengths first (active line control): when they moved since the snapshot, the
+    ! length-dependent caches are rebuilt from the snapshot lengths before any state is
+    ! written, so a failed rebuild leaves the model unchanged.
+    IF (.NOT. ALL(bits_equal(model%l0, model%snap_l0))) THEN
+      ! a copy, so no subobject of model is associated with a second dummy
+      l0_restore = model%snap_l0
+      CALL rebuild_length_caches(model, l0_restore, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Restore: '//TRIM(ErrMsg)
+        RETURN
+      END IF
+    END IF
+    model%has_ctrl = model%snap_has_ctrl
+    IF (model%has_ctrl) model%l0_dot = model%snap_l0_dot
     model%q = model%snap_q
     model%v = model%snap_v
     model%a = model%snap_a
@@ -5700,7 +5985,16 @@ CONTAINS
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     IF (ALLOCATED(model%att_node)) DEALLOCATE (model%att_node, model%att_w, model%att_b, model%att_fk, &
                                                model%att_cda, model%att_cdax)
+    IF (ALLOCATED(model%att_mass)) DEALLOCATE (model%att_mass, model%att_madd)
     model%has_attach = .FALSE.
+    IF (ALLOCATED(model%l0_dot)) DEALLOCATE (model%l0_dot)
+    model%has_ctrl = .FALSE.
+    IF (ALLOCATED(model%seabed_diameter_elem)) DEALLOCATE (model%seabed_diameter_elem)
+    model%has_seabed_recompute = .FALSE.
+    model%seabed_kbot = CD_ZERO
+    model%seabed_cn_over_kn = CD_ZERO
+    IF (ALLOCATED(model%snap_l0)) DEALLOCATE (model%snap_l0, model%snap_l0_dot)
+    model%snap_has_ctrl = .FALSE.
     IF (ALLOCATED(model%l0)) DEALLOCATE (model%l0)
     IF (ALLOCATED(model%EA)) DEALLOCATE (model%EA)
     IF (ALLOCATED(model%EI)) DEALLOCATE (model%EI)
@@ -6035,10 +6329,19 @@ CONTAINS
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         ve(1:3) = v_cfg(6*(e - 1) + 1:6*(e - 1) + 3); ve(4:6) = v_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         ve(7:9) = v_cfg(6*e + 1:6*e + 3); ve(10:12) = v_cfg(6*e + 4:6*e + 6)
-        IF (want_tangent) THEN
+        IF (want_tangent .AND. model%has_ctrl) THEN
+          CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
+                                                     fdamp, kdq, kdv, es, em2, &
+                                                     model%axial_quadrature_order, model%l0_dot(e))
+        ELSE IF (want_tangent) THEN
           CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
                                                      fdamp, kdq, kdv, es, em2, &
                                                      model%axial_quadrature_order)
+        ELSE IF (model%has_ctrl) THEN
+          CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
+                                                     fdamp, ErrStat=es, ErrMsg=em2, &
+                                                     quadrature_order=model%axial_quadrature_order, &
+                                                     l0_dot=model%l0_dot(e))
         ELSE
           CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
                                                      fdamp, ErrStat=es, ErrMsg=em2, &
@@ -6678,9 +6981,15 @@ CONTAINS
     END IF
 
     IF (model%has_axial_damping) THEN
-      CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
-                                                 fload, djq, djv, es, em, &
-                                                 model%axial_quadrature_order)
+      IF (model%has_ctrl) THEN
+        CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
+                                                   fload, djq, djv, es, em, &
+                                                   model%axial_quadrature_order, model%l0_dot(e))
+      ELSE
+        CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
+                                                   fload, djq, djv, es, em, &
+                                                   model%axial_quadrature_order)
+      END IF
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(em); RETURN
       END IF
@@ -6756,13 +7065,15 @@ CONTAINS
     END IF
   END SUBROUTINE evaluate_tangent_element
 
-  SUBROUTINE CD_HermiteCable_Axial_Damping_Resultant(qe, ve, l0, BA, xi, resultant, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_Axial_Damping_Resultant(qe, ve, l0, BA, xi, resultant, ErrStat, ErrMsg, l0_dot)
     !! Signed viscous axial resultant N_v = BA*strain_rate at one material point.
     !! This is the damping share added to the elastic resultant for tension outputs.
+    !! l0_dot: the unstretched-length rate of a controlled element (see the element routine).
     REAL(wp), INTENT(IN) :: qe(12), ve(12), l0, BA, xi
     REAL(wp), INTENT(OUT) :: resultant
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: l0_dot
     REAL(wp) :: H(4), dH(4), r_xi(3), v_xi(3), speed
     INTEGER :: s
 
@@ -6777,6 +7088,11 @@ CONTAINS
     IF (.NOT. CD_All_Finite(qe) .OR. .NOT. CD_All_Finite(ve)) THEN
       CALL fail('qe and ve must be finite'); RETURN
     END IF
+    IF (PRESENT(l0_dot)) THEN
+      IF (.NOT. CD_Is_Finite(l0_dot)) THEN
+        CALL fail('l0_dot must be finite'); RETURN
+      END IF
+    END IF
     IF (.NOT. (BA > CD_ZERO)) RETURN
     CALL CD_HermiteCable_Shapes(xi, l0, H, dH)
     r_xi = CD_ZERO
@@ -6789,6 +7105,7 @@ CONTAINS
     IF (.NOT. CD_Is_Finite(speed) .OR. speed <= 1.0e-12_wp*MAX(CD_ONE, l0)) THEN
       CALL fail('collapsed or non-finite element tangent'); RETURN
     END IF
+    IF (PRESENT(l0_dot)) v_xi = v_xi - (l0_dot/l0)*(dH(1)*qe(1:3) + dH(3)*qe(7:9))
     resultant = BA*DOT_PRODUCT(r_xi/speed, v_xi)/l0
     IF (.NOT. CD_Is_Finite(resultant)) CALL fail('non-finite damping resultant')
 
@@ -6802,7 +7119,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Axial_Damping_Resultant
 
   SUBROUTINE CD_HermiteCable_Axial_Damping_Element(qe, ve, l0, BA, fdamp, Kq, Kv, ErrStat, ErrMsg, &
-                                                   quadrature_order)
+                                                   quadrature_order, l0_dot)
     !! Consistent axial Kelvin-Voigt contribution for one cubic-Hermite element.
     !! The material coordinate is reference arc length s0 = l0*xi. With
     !! r_xi = dr/dxi, t = r_xi/|r_xi| and v_xi = dv/dxi,
@@ -6812,16 +7129,30 @@ CONTAINS
     !!
     !! fdamp is an INTERNAL generalized force, so v dot fdamp is non-negative.
     !! Kq = d(fdamp)/dq and Kv = d(fdamp)/dv are exact analytical Jacobians.
+    !!
+    !! l0_dot (optional): the unstretched-length rate of an element under active line
+    !! control. The strain |r_xi|/l0 - 1 then also changes with l0: the material-tangent
+    !! terms of r_xi carry the factor l0 and cancel, so only the end-position part
+    !! p = dH_1 r_1 + dH_3 r_2 contributes, and the strain rate becomes
+    !!
+    !!   strain_rate = t dot (v_xi - (l0_dot/l0) p) / l0,
+    !!
+    !! the rate of the strain the elastic resultant uses, so a segment paid out at constant
+    !! strain carries no damping force (the MoorDyn-F convention ldot - (l/L0) L0dot of the
+    !! EI = 0 lines, taken pointwise). Kq gains -BA dH_a dH_b (l0_dot/l0**2) t t^T on the
+    !! end-position columns b, and the transverse part of v_xi becomes that of the same
+    !! combination; Kv is unchanged.
     REAL(wp), INTENT(IN) :: qe(12), ve(12), l0, BA
     REAL(wp), INTENT(OUT) :: fdamp(12)
     REAL(wp), INTENT(OUT), OPTIONAL :: Kq(12, 12), Kv(12, 12)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    REAL(wp), INTENT(IN), OPTIONAL :: l0_dot
 
     REAL(wp) :: gp(6), gw(6), H(4), dH(4)
     REAL(wp) :: r_xi(3), v_xi(3), tangent(3), pperp(3), projector(3, 3)
-    REAL(wp) :: speed, strain_rate, scale_q, scale_v
+    REAL(wp) :: speed, strain_rate, scale_q, scale_v, rate_ratio
     INTEGER :: order, ig, s, sp, c, cp, ia, ib
 
     ErrStat = CD_HCDYN_OK
@@ -6841,6 +7172,13 @@ CONTAINS
     IF (order < 1 .OR. order > 6) THEN
       CALL fail('quadrature_order must lie in [1,6]'); RETURN
     END IF
+    rate_ratio = CD_ZERO
+    IF (PRESENT(l0_dot)) THEN
+      IF (.NOT. CD_Is_Finite(l0_dot)) THEN
+        CALL fail('l0_dot must be finite'); RETURN
+      END IF
+      rate_ratio = l0_dot/l0
+    END IF
     IF (.NOT. (BA > CD_ZERO)) RETURN
 
     CALL CD_HermiteCable_Gauss_Rule(order, gp, gw)
@@ -6857,6 +7195,8 @@ CONTAINS
         CALL fail('collapsed or non-finite element tangent at a quadrature point'); RETURN
       END IF
       tangent = r_xi/speed
+      ! controlled element: the rate of the end-position part of r_xi at fixed q
+      IF (PRESENT(l0_dot)) v_xi = v_xi - rate_ratio*(dH(1)*qe(1:3) + dH(3)*qe(7:9))
       strain_rate = DOT_PRODUCT(tangent, v_xi)/l0
       projector = CD_ZERO
       DO c = 1, 3
@@ -6884,6 +7224,9 @@ CONTAINS
                 scale_q = gw(ig)*BA*dH(s)*dH(sp)/speed
                 Kq(ia, ib) = Kq(ia, ib) + scale_q*(strain_rate*projector(c, cp) + &
                                                    tangent(c)*pperp(cp)/l0)
+                ! the length-rate term depends on the end positions (sp = 1, 3) only
+                IF (PRESENT(l0_dot) .AND. MOD(sp, 2) == 1) &
+                  Kq(ia, ib) = Kq(ia, ib) - gw(ig)*BA*dH(s)*dH(sp)*(rate_ratio/l0)*tangent(c)*tangent(cp)
               END IF
             END DO
           END DO

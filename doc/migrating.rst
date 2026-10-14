@@ -115,9 +115,9 @@ Keyword map
    * - ``WaterKin`` file (``CurrentMod 1``, ``WaveKinMod 1``)
      - same file; ``WaveKinMod 2`` and ``SEASTATE`` only when coupled to OpenFAST
    * - ``FAILURE``, ``CONTROL`` sections
-     - ``FAILURE`` on ``EI = 0`` decks, standalone and in OpenFAST; ``CONTROL`` on ``EI = 0``
-       decks in OpenFAST (the standalone driver rejects it). A deck with a finite-EI cable
-       rejects both
+     - ``FAILURE`` on ``EI = 0`` decks, standalone and in OpenFAST (a deck with a finite-EI
+       cable rejects it); ``CONTROL`` on ``EI = 0`` lines and finite-EI cables in OpenFAST, not
+       in FAST.Farm (the standalone driver rejects it)
    * - ``FairTen``, ``AnchTen``, point/node channels
      - same names; tensions in N (:doc:`outputs`). On a line with no ``Fixed`` end the two
        end channels name the opposite ends from MoorDyn's (see above)

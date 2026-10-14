@@ -128,7 +128,7 @@ point mesh. It supports:
   stored in the OpenFAST state record;
 - quasi-static linearisation;
 - FAST.Farm shared moorings;
-- line failures and active tension control of `EI = 0` lines;
+- line failures, and active tension control of `EI = 0` lines and finite-EI cables;
 - WaterKin files with independent selection of host wave and host current. SeaState's standard
   steady current is reconstructed on the same vertical nodes and weights SeaState uses, so it can
   be removed or kept exactly; a host field that cannot be separated is rejected.

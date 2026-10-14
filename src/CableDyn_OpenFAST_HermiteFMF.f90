@@ -41,7 +41,8 @@ MODULE CableDyn_OpenFAST_HermiteFMF
                                           CD_HermiteCable_Dyn_Snapshot, CD_HermiteCable_Dyn_Restore, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, &
                                           CD_HermiteCable_Dyn_Set_Torsion, CD_HermiteCable_Dyn_Set_Torsion_Drive, &
-                                          CD_HermiteCable_Dyn_Set_Torsion_Frames
+                                          CD_HermiteCable_Dyn_Set_Torsion_Frames, &
+                                          CD_HermiteCable_Dyn_Set_SegmentLength
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Line, &
                                      CD_HermiteTorsion_Unwrap, CD_HTORS_OK, CD_HTORS_MAX_STEP
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Shapes
@@ -65,6 +66,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_Set_Waves
   PUBLIC :: CD_HFMF_Set_Held_Fluid
   PUBLIC :: CD_HFMF_Set_Contact
+  PUBLIC :: CD_HFMF_Set_SegmentLength
   PUBLIC :: CD_HFMF_Set_Attachments
   PUBLIC :: CD_HFMF_Set_EndConnection
   PUBLIC :: CD_HFMF_Set_Torsion
@@ -1193,6 +1195,28 @@ CONTAINS
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Contact: '//TRIM(em)
     END IF
   END SUBROUTINE CD_HFMF_Set_Contact
+
+  SUBROUTINE CD_HFMF_Set_SegmentLength(self, elems, l0_new, l0_dot, ErrStat, ErrMsg)
+    !! Active line control through the FMF owner: set the unstretched lengths and their rates
+    !! of the listed elements before the next UpdateStates (CD_HermiteCable_Dyn_Set_SegmentLength).
+    !! Lengths do not depend on the frame, so the cable heading plays no part.
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(IN) :: elems(:)
+    REAL(wp), INTENT(IN) :: l0_new(:), l0_dot(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(300) :: em
+
+    ErrStat = CD_HFMF_OK; ErrMsg = ''
+    IF (.NOT. self%initialized) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_SegmentLength: module not initialised'; RETURN
+    END IF
+    CALL CD_HermiteCable_Dyn_Set_SegmentLength(self%line, elems, l0_new, l0_dot, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_SegmentLength: '//TRIM(em)
+    END IF
+  END SUBROUTINE CD_HFMF_Set_SegmentLength
 
   SUBROUTINE CD_HFMF_Refresh_Acceleration(self, ErrStat, ErrMsg)
     !! Recompute free-node acceleration after a direct-feedthrough boundary commit.
