@@ -45,7 +45,14 @@ dependencies:
 
   # BLAS / LAPACK — linked by the Fortran core (banded DGBSV/DGBTRF/DGBTRS and
   # DPBTRF/DPBTRS; DSBGVX, DSYGV and DSYEV for modal analysis).
-  - openblas
+  #
+  # OpenBLAS 0.3.34 is excluded: on AMD Zen 4/5 CPUs that expose AVX-512, its Zen and
+  # Haswell DGEMM kernels overrun their stack buffer for an inner dimension above 128
+  # in builds without the AVX-512 kernels (the win-64 package), or with a forced
+  # OPENBLAS_CORETYPE (OpenMathLib/OpenBLAS#6013, #6021; fixed after 0.3.34). The dense
+  # modal reference (DSYGV) of test_modal faulted there.
+  - openblas !=0.3.34
+  - libopenblas !=0.3.34
   - liblapack
 
   # Formatting / local commit hooks for Fortran development.
