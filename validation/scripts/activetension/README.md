@@ -74,7 +74,9 @@ At the holds, where `DeltaLdot = 0`, the tensions of CableDyn and stock MoorDyn 
 0.03 %. The tension changes from the baseline, which are the active-tension response, agree to
 within **0.6 %** on the controlled fairleads and **0.7 %** on the anchors. Both codes report the
 line-end force, and CableDyn's Newton static equilibrium and MoorDyn's dynamic relaxation give
-the same baseline tension to within 0.03 %. During the pay-out
-and haul-in ramps, axial damping driven by the commanded rate (`BA·ℓ̇`) produces a transient
-that the two element formulations represent slightly differently; it is reported for context
-and not scored.
+the same baseline tension to within 0.03 %. During the pay-out and haul-in ramps the tensions
+differ by at most **0.13 %** of the baseline tension on the controlled fairleads and **0.39 %**
+on the anchors; the scorer gates this at 1 %. Before CableDyn kept the committed lengths in the
+generalised-α step after a length change, the controlled fairleads had run up to 97 kN (4.1 %)
+above MoorDyn during the pay-out and 148 kN (6.3 %) below it during the haul-in, while the holds
+agreed as they do now.

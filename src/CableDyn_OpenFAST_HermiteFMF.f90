@@ -1196,13 +1196,14 @@ CONTAINS
     END IF
   END SUBROUTINE CD_HFMF_Set_Contact
 
-  SUBROUTINE CD_HFMF_Set_SegmentLength(self, elems, l0_new, l0_dot, ErrStat, ErrMsg)
+  SUBROUTINE CD_HFMF_Set_SegmentLength(self, elems, l0_new, l0_dot, ErrStat, ErrMsg, restored)
     !! Active line control through the FMF owner: set the unstretched lengths and their rates
     !! of the listed elements before the next UpdateStates (CD_HermiteCable_Dyn_Set_SegmentLength).
     !! Lengths do not depend on the frame, so the cable heading plays no part.
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
     INTEGER, INTENT(IN) :: elems(:)
     REAL(wp), INTENT(IN) :: l0_new(:), l0_dot(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: restored
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
@@ -1212,7 +1213,7 @@ CONTAINS
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_SegmentLength: module not initialised'; RETURN
     END IF
-    CALL CD_HermiteCable_Dyn_Set_SegmentLength(self%line, elems, l0_new, l0_dot, es, em)
+    CALL CD_HermiteCable_Dyn_Set_SegmentLength(self%line, elems, l0_new, l0_dot, es, em, restored=restored)
     IF (es /= CD_HCDYN_OK) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_SegmentLength: '//TRIM(em)
     END IF

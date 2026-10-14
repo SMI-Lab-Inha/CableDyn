@@ -548,6 +548,20 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `NodeB`. Lines from a `Fixed` anchor to a `Coupled`, `Vessel` or `Body<N>` point,
   written in either order, and lines written fairlead first from a host-driven `NodeA` control
   the same segment as before.
+- Active tensioning (`CONTROL`) of `EI = 0` lines no longer lags behind the commanded length
+  on a pay-out or haul-in ramp. A length update had re-derived the committed acceleration
+  under the new length, and the next generalised-α step evaluated its blended configuration
+  with the new length only, so the force of each length change entered the committed side of
+  the blend. The committed state now keeps its acceleration and the lengths it was reached
+  with, and a step after a change blends the old and new lengths with the configuration. In
+  the coupled OpenFAST comparison with stock MoorDyn (`validation/scripts/activetension/`), the
+  controlled fairlead tensions had run up to 97 kN (4.1 %) above MoorDyn during the pay-out and
+  148 kN (6.3 %) below it during the haul-in, at `rhoInf` 0.4 and still 58 kN and 89 kN at
+  `rhoInf` 0; they now stay within 3 kN (0.13 %). The hold tensions, which the published
+  comparison scores, move by less than 0.01 %, and the scorer now also gates the ramps.
+  Runs without `CONTROL`, and a zero command, are bit-identical to before. A checkpoint restart
+  re-applies the restored command as the committed state's, so a restart during a ramp
+  continues bit-identically.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

@@ -1712,7 +1712,7 @@ CONTAINS
     n = self%n_ctrl_chans
   END FUNCTION CD_AGG_NCtrlChans
 
-  SUBROUTINE CD_AGG_Apply_LineControl(self, delta_l, delta_l_dot, ErrStat, ErrMsg)
+  SUBROUTINE CD_AGG_Apply_LineControl(self, delta_l, delta_l_dot, ErrStat, ErrMsg, restored)
     !! Apply the host's cable-control command BEFORE an advance to the deck segment at the
     !! fairlead-side end of each controlled line: the end on a host-driven point, else the
     !! written NodeB (MoorDyn's AttachB, its segment N). On an EI = 0 line that element's
@@ -1724,11 +1724,15 @@ CONTAINS
     !! lambda = (S + delta_l)/S, with rate delta_l_dot*l_e/S, so the segment takes the same
     !! length and rate; lambda outside [0.5, 2] (the same bounds, enforced) fails closed by
     !! line, since the cable elements would leave the mesh resolution the static
-    !! initialisation established.
+    !! initialisation established. On both kinds the committed state keeps the lengths it
+    !! was reached with until the next advance commits the new ones. restored = .TRUE. is
+    !! the checkpoint-restart re-application of the command the committed state was reached
+    !! with: the lengths become the committed ones at once.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: delta_l(:), delta_l_dot(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: restored
 
     INTEGER :: c, ch, es, nspan, k
     REAL(wp) :: lambda
@@ -1795,7 +1799,8 @@ CONTAINS
             l0_new(k) = base*lambda
             l0_rate(k) = delta_l_dot(ch)*base/self%ctrl_base_l0(c)
           END DO
-          CALL CD_HFMF_Set_SegmentLength(self%cables(self%ctrl_line(c)), elems, l0_new, l0_rate, es, em)
+          CALL CD_HFMF_Set_SegmentLength(self%cables(self%ctrl_line(c)), elems, l0_new, l0_rate, es, em, &
+                                         restored=restored)
         END BLOCK
         IF (es /= CD_HFMF_OK) THEN
           ErrStat = CD_AGG_BADINPUT
@@ -1812,7 +1817,8 @@ CONTAINS
         END IF
       END IF
       CALL CD_Update_System_Line_SegmentLength(self%sys%fast%system, self%ctrl_line(c), self%ctrl_elem(c), &
-                                               self%ctrl_base_l0(c) + delta_l(ch), delta_l_dot(ch), es, em)
+                                               self%ctrl_base_l0(c) + delta_l(ch), delta_l_dot(ch), es, em, &
+                                               restored=restored)
       IF (es /= CD_SYSTEM_OK) THEN
         ErrStat = CD_AGG_BADINPUT
         ErrMsg = 'CableDyn_OpenFAST_Aggregate: line-control update failed: '//TRIM(em)

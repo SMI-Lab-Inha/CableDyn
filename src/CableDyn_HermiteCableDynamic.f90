@@ -1161,7 +1161,7 @@ CONTAINS
     END IF
   END SUBROUTINE CD_HermiteCable_Dyn_Recompute_Acceleration
 
-  SUBROUTINE CD_HermiteCable_Dyn_Set_SegmentLength(model, elems, l0_new, l0_dot, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_Dyn_Set_SegmentLength(model, elems, l0_new, l0_dot, ErrStat, ErrMsg, restored)
     !! Active line control (the OpenFAST cable-control channel): set the unstretched length
     !! and its rate of the listed elements, applied before a step and held over it. Every
     !! term that reads l0 when it is evaluated (elastic force, weight, drag, Froude-Krylov
@@ -1183,12 +1183,16 @@ CONTAINS
     !! command on an uncontrolled model leaves it untouched. The update is atomic: every
     !! check and rebuild runs before the model is written. A line restrained in torsion is
     !! refused (its condensed torsional compliance has no length-control law here), as is a
-    !! contact model without the seabed recompute inputs.
+    !! contact model without the seabed recompute inputs. restored = .TRUE. (a checkpoint
+    !! restart re-applying the command the committed state was reached with) makes the
+    !! lengths and rates the committed ones at once; a committed force reloaded with the
+    !! state belongs to them and stays valid.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: elems(:)
     REAL(wp), INTENT(IN) :: l0_new(:), l0_dot(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: restored
     INTEGER :: k, n, istat
     LOGICAL :: lengths_changed, rates_changed
     REAL(wp) :: rate_now
@@ -1232,7 +1236,10 @@ CONTAINS
       IF (model%has_ctrl) rate_now = model%l0_dot(elems(k))
       IF (.NOT. bits_equal(rate_now, l0_dot(k))) rates_changed = .TRUE.
     END DO
-    IF (.NOT. (lengths_changed .OR. rates_changed)) RETURN
+    IF (.NOT. (lengths_changed .OR. rates_changed)) THEN
+      CALL commit_restored()
+      RETURN
+    END IF
     IF (.NOT. ALLOCATED(model%l0_dot)) THEN
       ALLOCATE (model%l0_dot(model%ne), model%l0_c(model%ne), model%l0_dot_c(model%ne), &
                 model%ws_recovery_l0_c(model%ne), model%ws_recovery_l0_dot_c(model%ne), STAT=istat)
@@ -1264,6 +1271,7 @@ CONTAINS
     ! the cached committed force stays valid (it is the force at l0_c); the carried factor
     ! holds the tangent of the old lengths
     model%tr_valid = .FALSE.
+    CALL commit_restored()
 
   CONTAINS
     SUBROUTINE fail(msg)
@@ -1271,6 +1279,14 @@ CONTAINS
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Set_SegmentLength: '//msg
     END SUBROUTINE fail
+
+    SUBROUTINE commit_restored()
+      !! restored: the present lengths and rates are the committed state's.
+      IF (.NOT. PRESENT(restored)) RETURN
+      IF (.NOT. (restored .AND. model%has_ctrl)) RETURN
+      model%l0_c = model%l0
+      model%l0_dot_c = model%l0_dot
+    END SUBROUTINE commit_restored
   END SUBROUTINE CD_HermiteCable_Dyn_Set_SegmentLength
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Control_Seabed(model, kbot, diameter_elem, cn_over_kn, ErrStat, ErrMsg)

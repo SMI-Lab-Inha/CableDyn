@@ -62,6 +62,7 @@ MODULE CableDyn_Model
   USE CableDyn_Linalg, ONLY: CD_Solve_Dense_As_Banded, CD_Solve_Dense_As_Banded_Multiple, CD_Factor_Banded, &
                              CD_Solve_Factored_Banded_Multiple
   USE CableDyn_Profile, ONLY: CD_Profile_Count_Line_Step
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   IMPLICIT NONE
   PRIVATE
 
@@ -140,7 +141,7 @@ MODULE CableDyn_Model
   ! slots. commit_state_copy holds the one list of that state.
   TYPE :: CD_ModelCommitSlot
     REAL(wp), ALLOCATABLE :: q(:), v(:), a(:), ve_dl_1(:), syrope_slow(:), syrope_tmax(:)
-    REAL(wp), ALLOCATABLE :: fr_anchor(:, :)
+    REAL(wp), ALLOCATABLE :: fr_anchor(:, :), l0_c(:), l0_dot_c(:)
   END TYPE CD_ModelCommitSlot
 
   ! Diagnostics of the rotation- and snap-resolved sub-stepping (CD_Step_Model): calls counts
@@ -170,6 +171,14 @@ MODULE CableDyn_Model
     ! until CD_Update_Model_SegmentLength sets it). Feeds the axial-damping
     ! effective stretch rate.
     REAL(wp), ALLOCATABLE :: l0_dot(:)
+    ! The unstretched lengths and rates the committed state was reached with (active line
+    ! control). A step that follows a length change evaluates its alpha-level terms with the
+    ! blended lengths (1 - alpha_f) l0 + alpha_f l0_c (and rates likewise), so the committed
+    ! state keeps its own lengths in the generalised-alpha blend; each successful step makes
+    ! the present lengths the committed ones. l0_c_rollback / recovery_l0_c are the copies of
+    ! the system stage-then-commit and of the recovering step.
+    REAL(wp), ALLOCATABLE :: l0_c(:), l0_dot_c(:)
+    REAL(wp), ALLOCATABLE :: l0_c_rollback(:), l0_dot_c_rollback(:), recovery_l0_c(:), recovery_l0_dot_c(:)
     ! Per-element distributed load per unit LENGTH (3, n_elem) plus the
     ! NON-distributed remainder of the init f_ext, stored when the caller supplies
     ! the per-length load: a segment-length update REASSEMBLES the distributed part
@@ -911,6 +920,8 @@ CONTAINS
     model%cfg = cfg
     ALLOCATE (model%elem_conn(2, n_elem), model%fixed_dofs(SIZE(fixed_dofs)), &
               model%l0(n_elem), model%ea(n_elem), model%ea_dyn(n_elem), model%rho_a(n_elem), model%l0_dot(n_elem), &
+              model%l0_c(n_elem), model%l0_dot_c(n_elem), model%l0_c_rollback(n_elem), &
+              model%l0_dot_c_rollback(n_elem), model%recovery_l0_c(n_elem), model%recovery_l0_dot_c(n_elem), &
               model%f_ext(n_dof), &
               model%q(n_dof), model%v(n_dof), model%a(n_dof), &
               model%q_step(n_dof), model%v_step(n_dof), model%a_step(n_dof), &
@@ -926,6 +937,12 @@ CONTAINS
     model%fixed_dofs = fixed_dofs
     model%l0 = l0
     model%l0_dot = CD_ZERO
+    model%l0_c = l0
+    model%l0_dot_c = CD_ZERO
+    model%l0_c_rollback = l0
+    model%l0_dot_c_rollback = CD_ZERO
+    model%recovery_l0_c = l0
+    model%recovery_l0_dot_c = CD_ZERO
     model%ea = ea
     model%ea_dyn = ea
     model%rho_a = rho_a
@@ -2093,6 +2110,11 @@ CONTAINS
           ALLOCATE (s%q(model%n_dof), s%v(model%n_dof), s%a(model%n_dof), STAT=istat)
           IF (istat /= 0) RETURN
         END IF
+        IF (.NOT. sized(s%l0_c, model%n_elem)) THEN
+          IF (ALLOCATED(s%l0_c)) DEALLOCATE (s%l0_c, s%l0_dot_c)
+          ALLOCATE (s%l0_c(model%n_elem), s%l0_dot_c(model%n_elem), STAT=istat)
+          IF (istat /= 0) RETURN
+        END IF
         IF (model%has_viscoelastic) THEN
           IF (.NOT. sized(s%ve_dl_1, SIZE(model%ve_dl_1))) THEN
             IF (ALLOCATED(s%ve_dl_1)) DEALLOCATE (s%ve_dl_1)
@@ -2146,14 +2168,16 @@ CONTAINS
     END FUNCTION sized
   END FUNCTION sub_alloc
 
-  SUBROUTINE commit_state_copy(model, to_model, q, v, a, ve_dl_1, syrope_slow, syrope_tmax, fr_anchor)
+  SUBROUTINE commit_state_copy(model, to_model, q, v, a, ve_dl_1, syrope_slow, syrope_tmax, fr_anchor, &
+                               l0_c, l0_dot_c)
     !! The one list of the state a line step commits: the kinematics, the viscoelastic dl_1, the
-    !! Syrope slow strain and running maximum tension, and the friction anchors. to_model =
+    !! Syrope slow strain and running maximum tension, the friction anchors, and the unstretched
+    !! lengths and rates the committed state was reached with (l0_c, l0_dot_c, active line
+    !! control). to_model =
     !! .FALSE. saves the model's state into the arrays given, .TRUE. returns the model to them.
     !! Every snapshot of the committed state in this module goes through here (the sub-step
     !! slots of CD_Step_Model, save_recovery_state and restore_recovery_state). A state a step
-    !! comes to commit (such as the segment length of a line under active tension control) is
-    !! added here, as an optional array its snapshots pass; the rollback of the line system
+    !! comes to commit is added here, as an optional array its snapshots pass; the rollback of the line system
     !! (CableDyn_System: save_line_states, restore_line_states, CD_System_Snapshot and the
     !! frame snapshot of CD_Step_System) lists the same state and must follow. An optional array
     !! is passed as an allocatable that is allocated with the state it holds, so it is absent
@@ -2162,6 +2186,7 @@ CONTAINS
     LOGICAL, INTENT(IN) :: to_model
     REAL(wp), INTENT(INOUT) :: q(:), v(:), a(:)
     REAL(wp), INTENT(INOUT), OPTIONAL :: ve_dl_1(:), syrope_slow(:), syrope_tmax(:), fr_anchor(:, :)
+    REAL(wp), INTENT(INOUT), OPTIONAL :: l0_c(:), l0_dot_c(:)
     IF (to_model) THEN
       model%q = q
       model%v = v
@@ -2172,6 +2197,10 @@ CONTAINS
         model%syrope_tmax = syrope_tmax
       END IF
       IF (model%has_seabed_friction .AND. PRESENT(fr_anchor)) model%fr_anchor = fr_anchor
+      IF (PRESENT(l0_c) .AND. PRESENT(l0_dot_c)) THEN
+        model%l0_c = l0_c
+        model%l0_dot_c = l0_dot_c
+      END IF
     ELSE
       q = model%q
       v = model%v
@@ -2182,6 +2211,10 @@ CONTAINS
         syrope_tmax = model%syrope_tmax
       END IF
       IF (model%has_seabed_friction .AND. PRESENT(fr_anchor)) fr_anchor = model%fr_anchor
+      IF (PRESENT(l0_c) .AND. PRESENT(l0_dot_c)) THEN
+        l0_c = model%l0_c
+        l0_dot_c = model%l0_dot_c
+      END IF
     END IF
   END SUBROUTINE commit_state_copy
 
@@ -2191,7 +2224,8 @@ CONTAINS
     INTEGER, INTENT(IN) :: slot
     CALL commit_state_copy(model, .FALSE., model%sub_slot(slot)%q, model%sub_slot(slot)%v, model%sub_slot(slot)%a, &
                            model%sub_slot(slot)%ve_dl_1, model%sub_slot(slot)%syrope_slow, &
-                           model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor)
+                           model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor, &
+                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c)
   END SUBROUTINE sub_store
 
   SUBROUTINE sub_load(model, slot)
@@ -2200,7 +2234,8 @@ CONTAINS
     INTEGER, INTENT(IN) :: slot
     CALL commit_state_copy(model, .TRUE., model%sub_slot(slot)%q, model%sub_slot(slot)%v, model%sub_slot(slot)%a, &
                            model%sub_slot(slot)%ve_dl_1, model%sub_slot(slot)%syrope_slow, &
-                           model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor)
+                           model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor, &
+                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c)
   END SUBROUTINE sub_load
 
   SUBROUTINE sub_tensions(model, tension)
@@ -2366,9 +2401,11 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: prescribed_q(:), prescribed_v(:), prescribed_a(:)
 
-    INTEGER :: es
+    INTEGER :: es, e
     CHARACTER(160) :: em
-    LOGICAL :: has_load
+    LOGICAL :: has_load, blend
+    REAL(wp) :: af
+    REAL(wp), ALLOCATABLE :: l0_new(:), l0_dot_new(:)
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -2469,6 +2506,23 @@ CONTAINS
     ! the instantaneous limit (0) on EVERY exit below so committed-state queries
     ! (coupled loads, tension) never see a stale step size
     model%ve_dt = dt
+    ! Active line control: after a length or rate change the committed state keeps the
+    ! lengths it was reached with. The step's alpha-level terms (internal force, damping,
+    ! hydrodynamic loads and the mass the blend applies) take the blended lengths
+    ! (1 - alpha_f) l0 + alpha_f l0_c, element by element and only where they differ, and the
+    ! new lengths come back with the state at t_{n+1}. An unchanged model takes the plain path.
+    blend = .NOT. model_lengths_committed(model)
+    IF (blend) THEN
+      af = model%cfg%rho_inf/(model%cfg%rho_inf + CD_ONE)
+      l0_new = model%l0
+      l0_dot_new = model%l0_dot
+      DO e = 1, model%n_elem
+        IF (.NOT. bits_equal(l0_new(e), model%l0_c(e))) &
+          model%l0(e) = (CD_ONE - af)*l0_new(e) + af*model%l0_c(e)
+        IF (.NOT. bits_equal(l0_dot_new(e), model%l0_dot_c(e))) &
+          model%l0_dot(e) = (CD_ONE - af)*l0_dot_new(e) + af*model%l0_dot_c(e)
+      END DO
+    END IF
     IF (PRESENT(prescribed_q) .AND. has_load .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -2538,6 +2592,10 @@ CONTAINS
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, workspace=model%dynamic_workspace)
+    END IF
+    IF (blend) THEN
+      model%l0 = l0_new
+      model%l0_dot = l0_dot_new
     END IF
     model%ve_dt = CD_ZERO
     CALL CD_Profile_Count_Line_Step(n_iter)
@@ -2665,6 +2723,11 @@ CONTAINS
     model%q = model%q_step
     model%v = model%v_step
     model%a = model%a_step
+    ! the committed state is now the one of the present lengths and rates
+    IF (blend) THEN
+      model%l0_c = model%l0
+      model%l0_dot_c = model%l0_dot
+    END IF
     ! The mapping repeats the queries validated above, so it cannot fail here.
     IF (model%has_seabed_friction) &
       CALL mapped_friction_anchors(model, model%q, model%v, .TRUE., ErrStat, ErrMsg)
@@ -2879,12 +2942,33 @@ CONTAINS
     END BLOCK
   END SUBROUTINE CD_Step_Model_Recovering
 
+  LOGICAL FUNCTION model_lengths_committed(model) RESULT(same)
+    !! The unstretched lengths and rates are those the committed state was reached with (bit
+    !! for bit). A model without the committed copies counts as committed.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER :: e
+    same = .TRUE.
+    IF (.NOT. (ALLOCATED(model%l0_c) .AND. ALLOCATED(model%l0_dot_c))) RETURN
+    DO e = 1, SIZE(model%l0)
+      IF (.NOT. (bits_equal(model%l0(e), model%l0_c(e)) .AND. bits_equal(model%l0_dot(e), model%l0_dot_c(e)))) THEN
+        same = .FALSE.
+        RETURN
+      END IF
+    END DO
+  END FUNCTION model_lengths_committed
+
+  ELEMENTAL LOGICAL FUNCTION bits_equal(x, y) RESULT(same)
+    !! Bitwise equality of two reals (so +0 and -0 differ).
+    REAL(wp), INTENT(IN) :: x, y
+    same = TRANSFER(x, 0_INT64) == TRANSFER(y, 0_INT64)
+  END FUNCTION bits_equal
+
   SUBROUTINE save_recovery_state(model)
     !! Save the committed state into the recovery snapshot (commit_state_copy).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     CALL commit_state_copy(model, .FALSE., model%recovery_q0, model%recovery_v0, model%recovery_a0, &
                            model%recovery_ve_dl_1, model%recovery_syrope_slow, model%recovery_syrope_tmax, &
-                           model%recovery_fr_anchor)
+                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c)
   END SUBROUTINE save_recovery_state
 
   SUBROUTINE restore_recovery_state(model)
@@ -2892,7 +2976,7 @@ CONTAINS
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     CALL commit_state_copy(model, .TRUE., model%recovery_q0, model%recovery_v0, model%recovery_a0, &
                            model%recovery_ve_dl_1, model%recovery_syrope_slow, model%recovery_syrope_tmax, &
-                           model%recovery_fr_anchor)
+                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c)
     model%ve_dt = CD_ZERO
   END SUBROUTINE restore_recovery_state
 
@@ -4049,7 +4133,7 @@ CONTAINS
     END DO
   END SUBROUTINE CD_Calc_Model_CoupledEndMass
 
-  SUBROUTINE CD_Update_Model_SegmentLength(model, elem, l0_new, l0_dot, ErrStat, ErrMsg)
+  SUBROUTINE CD_Update_Model_SegmentLength(model, elem, l0_new, l0_dot, ErrStat, ErrMsg, restored)
     !! Active line control (the MoorDyn CtrlChan mechanism): set one element's
     !! unstretched length and its rate. The elastic tension and the per-step mass
     !! assembly read model%l0 directly, so the dynamics track the new length from
@@ -4058,11 +4142,16 @@ CONTAINS
     !! frozen at its init resolution (MoorDyn's convention -- BA derives from the
     !! INITIAL UnstrLen). Callers owning point bindings (the system) must recompute
     !! any end-node mass-diagonal shares after this call.
+    !! The committed state keeps its acceleration and the lengths it was reached with
+    !! (l0_c, l0_dot_c): the next step blends them into its alpha-level terms
+    !! (CD_Step_Model). restored = .TRUE. (a checkpoint restart re-applying the command of
+    !! the committed state) makes the new length and rate the committed ones as well.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: elem
     REAL(wp), INTENT(IN) :: l0_new, l0_dot
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: restored
     INTEGER :: es
     CHARACTER(160) :: em
     ErrStat = CD_MODEL_OK
@@ -4107,11 +4196,10 @@ CONTAINS
     END IF
     ! The update is atomic: every length-dependent quantity is built from a trial
     ! length vector first, and the committed fields are mutated only once all builds
-    ! succeeded. A failed acceleration recompute restores the entry state whole.
+    ! succeeded.
     BLOCK
-      REAL(wp) :: l0_trial(SIZE(model%l0)), f_dist(SIZE(model%f_ext)), f_ext_entry(SIZE(model%f_ext))
-      REAL(wp) :: l0_entry, l0_dot_entry
-      REAL(wp), ALLOCATABLE :: kn_new(:), kn_entry(:), cn_entry(:)
+      REAL(wp) :: l0_trial(SIZE(model%l0)), f_dist(SIZE(model%f_ext))
+      REAL(wp), ALLOCATABLE :: kn_new(:)
       l0_trial = model%l0
       l0_trial(elem) = l0_new
       ! Distributed external load tracks the length: REASSEMBLE the distributed part
@@ -4122,6 +4210,12 @@ CONTAINS
         CALL CD_Assemble_Distributed_Load(model%elem_conn, l0_trial, model%dist_load, f_dist, es, em)
         IF (es /= 0) THEN
           CALL fail(ErrStat, ErrMsg, 'segment-length update: distributed-load reassembly failed: '//TRIM(em))
+          RETURN
+        END IF
+        ! the external load the new length gives must be finite (an overflowing length
+        ! fails here, before anything is written)
+        IF (.NOT. CD_All_Finite(model%f_ext_dist_base + f_dist)) THEN
+          CALL fail(ErrStat, ErrMsg, 'segment-length update: the external load at the new length is not finite')
           RETURN
         END IF
       END IF
@@ -4135,39 +4229,27 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'segment-length update: seabed stiffness recompute failed: '//TRIM(em))
           RETURN
         END IF
+        IF (.NOT. CD_All_Finite(kn_new*model%seabed_cn_over_kn)) THEN
+          CALL fail(ErrStat, ErrMsg, 'segment-length update: the seabed coefficients at the new length are not finite')
+          RETURN
+        END IF
       END IF
       ! Commit. The consistent mass follows l0 implicitly (it is applied element by
-      ! element from the committed lengths, and the step rebuilds its mass band when they change).
-      l0_entry = model%l0(elem)
-      l0_dot_entry = model%l0_dot(elem)
-      f_ext_entry = model%f_ext
+      ! element from the present lengths, and the step rebuilds its mass band when they change).
       model%l0(elem) = l0_new
       model%l0_dot(elem) = l0_dot
       IF (ALLOCATED(model%dist_load)) model%f_ext = model%f_ext_dist_base + f_dist
       IF (model%has_seabed .AND. model%has_seabed_recompute) THEN
-        CALL MOVE_ALLOC(model%seabed_kn, kn_entry)
         CALL MOVE_ALLOC(kn_new, model%seabed_kn)
-        IF (ALLOCATED(model%seabed_cn)) THEN
-          cn_entry = model%seabed_cn
-          model%seabed_cn = model%seabed_kn*model%seabed_cn_over_kn
-        END IF
+        IF (ALLOCATED(model%seabed_cn)) model%seabed_cn = model%seabed_kn*model%seabed_cn_over_kn
       END IF
-      ! The committed acceleration satisfied the OLD length's equation of motion;
-      ! recompute it at the current q/v under the new length so the model is
-      ! indistinguishable from one built with it (load exchanges and the next
-      ! gen-alpha step start from a consistent state). A FULLY COUPLED model (no
-      ! free DOFs -- every line in a point-connected system) carries only
-      ! caller-prescribed accelerations, so there is nothing to recompute.
-      IF (SIZE(model%fixed_dofs) < model%n_dof) THEN
-        CALL CD_Recompute_Model_Acceleration(model, es, em)
-        IF (es /= CD_MODEL_OK) THEN
-          ! The recompute restored the acceleration; restore every other field.
-          model%l0(elem) = l0_entry
-          model%l0_dot(elem) = l0_dot_entry
-          model%f_ext = f_ext_entry
-          IF (ALLOCATED(kn_entry)) CALL MOVE_ALLOC(kn_entry, model%seabed_kn)
-          IF (ALLOCATED(cn_entry)) model%seabed_cn = cn_entry
-          CALL fail(ErrStat, ErrMsg, 'segment-length update: acceleration recompute failed: '//TRIM(em))
+      ! The committed acceleration is kept: it is the history of the step that reached the
+      ! committed state, at the lengths of that step (re-deriving it under the new length
+      ! would carry the force of the length change into the next step's alpha_m blend).
+      IF (PRESENT(restored)) THEN
+        IF (restored) THEN
+          model%l0_c(elem) = l0_new
+          model%l0_dot_c(elem) = l0_dot
         END IF
       END IF
     END BLOCK
@@ -5083,6 +5165,11 @@ CONTAINS
       model%a = a_entry
       RETURN
     END IF
+    ! the re-derived acceleration commits the state with the present lengths and rates
+    IF (.NOT. model_lengths_committed(model)) THEN
+      model%l0_c = model%l0
+      model%l0_dot_c = model%l0_dot
+    END IF
 
   CONTAINS
 
@@ -5484,6 +5571,12 @@ CONTAINS
     IF (ALLOCATED(model%rho_a)) DEALLOCATE (model%rho_a)
     IF (ALLOCATED(model%f_ext)) DEALLOCATE (model%f_ext)
     IF (ALLOCATED(model%l0_dot)) DEALLOCATE (model%l0_dot)
+    IF (ALLOCATED(model%l0_c)) DEALLOCATE (model%l0_c)
+    IF (ALLOCATED(model%l0_dot_c)) DEALLOCATE (model%l0_dot_c)
+    IF (ALLOCATED(model%l0_c_rollback)) DEALLOCATE (model%l0_c_rollback)
+    IF (ALLOCATED(model%l0_dot_c_rollback)) DEALLOCATE (model%l0_dot_c_rollback)
+    IF (ALLOCATED(model%recovery_l0_c)) DEALLOCATE (model%recovery_l0_c)
+    IF (ALLOCATED(model%recovery_l0_dot_c)) DEALLOCATE (model%recovery_l0_dot_c)
     IF (ALLOCATED(model%dist_load)) DEALLOCATE (model%dist_load)
     IF (ALLOCATED(model%f_ext_dist_base)) DEALLOCATE (model%f_ext_dist_base)
     IF (ALLOCATED(model%seabed_diameter_elem)) DEALLOCATE (model%seabed_diameter_elem)
@@ -5680,6 +5773,18 @@ CONTAINS
     CALL copy_real1(src%rho_a, work%rho_a, 'rho_a', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%l0_dot, work%l0_dot, 'l0_dot', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%l0_c, work%l0_c, 'l0_c', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%l0_dot_c, work%l0_dot_c, 'l0_dot_c', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%l0_c_rollback, work%l0_c_rollback, 'l0_c_rollback', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%l0_dot_c_rollback, work%l0_dot_c_rollback, 'l0_dot_c_rollback', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%recovery_l0_c, work%recovery_l0_c, 'recovery_l0_c', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%recovery_l0_dot_c, work%recovery_l0_dot_c, 'recovery_l0_dot_c', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real2(src%dist_load, work%dist_load, 'dist_load', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
@@ -5889,6 +5994,12 @@ CONTAINS
     CALL MOVE_ALLOC(from%ea, to%ea)
     CALL MOVE_ALLOC(from%rho_a, to%rho_a)
     CALL MOVE_ALLOC(from%l0_dot, to%l0_dot)
+    CALL MOVE_ALLOC(from%l0_c, to%l0_c)
+    CALL MOVE_ALLOC(from%l0_dot_c, to%l0_dot_c)
+    CALL MOVE_ALLOC(from%l0_c_rollback, to%l0_c_rollback)
+    CALL MOVE_ALLOC(from%l0_dot_c_rollback, to%l0_dot_c_rollback)
+    CALL MOVE_ALLOC(from%recovery_l0_c, to%recovery_l0_c)
+    CALL MOVE_ALLOC(from%recovery_l0_dot_c, to%recovery_l0_dot_c)
     CALL MOVE_ALLOC(from%dist_load, to%dist_load)
     CALL MOVE_ALLOC(from%f_ext_dist_base, to%f_ext_dist_base)
     CALL MOVE_ALLOC(from%f_ext, to%f_ext)
