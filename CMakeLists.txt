@@ -332,6 +332,7 @@ add_library(cabledyn_obj OBJECT
   src/cabledyn_fatal.c
   src/CableDyn_Precision.f90
   src/CableDyn_FatalReport.f90
+  src/CableDyn_Profile.f90
   src/CableDyn_PathIO.f90
   src/CableDyn_Banner.f90
   src/CableDyn_Linalg.f90
@@ -1898,6 +1899,43 @@ add_test(
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_repeat_exit.cmake)
 set_tests_properties(driver_repeat_exit PROPERTIES
   LABELS "fortran;driver;integration;static")
+
+# Run-time profile module: phase partition, a failed run's time kept in its phase, and exact
+# line-step counts under OpenMP.
+add_executable(test_profile tests/test_profile.f90)
+target_link_libraries(test_profile PRIVATE cabledyn_core)
+add_test(NAME profile COMMAND test_profile)
+set_tests_properties(profile PROPERTIES LABELS "fortran;unit;driver"
+                     ENVIRONMENT "OMP_NUM_THREADS=4")
+
+# Run-time profile (CABLEDYN_PROFILE): printed only when requested, before the success line,
+# with its phase rows and counts, and without changing any output file. One EI = 0 deck with
+# waves (fluid, steps and line counts) and one finite-EI deck on the cubic-Hermite route.
+add_test(
+  NAME driver_profile_ei0
+  COMMAND ${CMAKE_COMMAND}
+    -DDRIVER=$<TARGET_FILE:cabledyn>
+    -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/examples/dynamic_chain_waves.dat
+    -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_ei0
+    "-DEXPECT=\n    EI = 0 line steps: [1-9][0-9]* \\(substeps and retries included\\), Newton iterations: [1-9]"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile.cmake)
+add_test(
+  NAME driver_profile_finite_ei
+  COMMAND ${CMAKE_COMMAND}
+    -DDRIVER=$<TARGET_FILE:cabledyn>
+    -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/held_start_gomex80_power_cable.dat
+    -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_finite_ei
+    "-DEXPECT=\n    Finite-EI cable steps: [1-9][0-9]*, residual evaluations: [1-9]"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile.cmake)
+add_test(
+  NAME driver_profile_failure
+  COMMAND ${CMAKE_COMMAND}
+    -DDRIVER=$<TARGET_FILE:cabledyn>
+    -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/nonconvergent_motion.dat
+    -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_failure
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile_failure.cmake)
+set_tests_properties(driver_profile_ei0 driver_profile_finite_ei driver_profile_failure PROPERTIES
+  LABELS "fortran;driver;integration;dynamic")
 
 # Command-line contract: unknown options, an output root whose .out would overwrite
 # the deck, and an unwritable output directory all fail before any solve.

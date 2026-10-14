@@ -34,6 +34,12 @@ PROGRAM cabledyn
   USE CableDyn_Banner, ONLY: CD_Print_Banner
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install, CD_Fatal_Report_Time
+  USE CableDyn_Profile, ONLY: CD_Profile_Requested, CD_Profile_Arm, CD_Profile_Armed, CD_Profile_Enter, &
+                              CD_Profile_Flush, CD_Profile_Step, CD_Profile_Seconds, CD_Profile_Counts, &
+                              CD_PROF_INPUT, CD_PROF_INIT, CD_PROF_FLUID, CD_PROF_SOLVE, CD_PROF_CHECK, &
+                              CD_PROF_OUTPUT, CD_PROF_PROGRESS, CD_PROF_FINAL, CD_PROF_NPHASE
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, CD_HermiteCable_Dyn_Get_Profile, &
+                                          CD_HermiteCable_Dyn_Recovery_Reset, CD_HermiteCable_Dyn_Recovery_Count
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
   IMPLICIT NONE
   TYPE :: StandaloneProgress
@@ -56,6 +62,8 @@ PROGRAM cabledyn
   INTEGER :: nargs, ErrStat, n_ei0, n_finite_ei, iarg
   REAL(wp) :: dtM, tmax
   LOGICAL :: converged, has_dtm, has_tmax, has_motion_file, has_line_outputs, has_objects
+  ! the run-time profile includes the finite-EI cable step counters (not on the mixed route)
+  LOGICAL :: profile_cable_detail = .FALSE.
   ! Sized for the aggregate and deck-driver messages it relays (512-character buffers
   ! plus deck-line context), so no diagnostic is cut short.
   CHARACTER(1024) :: ErrMsg
@@ -117,10 +125,24 @@ PROGRAM cabledyn
   ! without a word. Installed after the LAPACK runtime has loaded, so its handlers are the
   ! process's own.
   CALL CD_Fatal_Report_Install()
+  ! Opt-in run-time profile (environment variable CABLEDYN_PROFILE), printed before the last
+  ! stdout line.
+  IF (CD_Profile_Requested()) THEN
+    CALL CD_Profile_Arm()
+    CALL CD_HermiteCable_Dyn_Recovery_Reset()
+    WRITE (output_unit, '(A)') '  Run-time profile armed by CABLEDYN_PROFILE.'
+  END IF
   CALL CD_Deck_Query_dtM(TRIM(deck_path), dtM, has_dtm, ErrStat, ErrMsg, tmax=tmax, &
                          has_tmax=has_tmax, n_ei0=n_ei0, n_finite_ei=n_finite_ei, &
                          has_motion_file=has_motion_file, standalone_scan=.TRUE., &
                          has_line_outputs=has_line_outputs, input_files=input_files, has_objects=has_objects)
+  IF (ErrStat == CD_DECKDRV_OK .AND. CD_Profile_Armed()) THEN
+    ! The finite-EI step counters are process-global, so the aggregate of the mixed route steps
+    ! its cables one after another while they are armed. That route keeps its cables concurrent
+    ! and reports no finite-EI step detail; every other route steps its cables in turn anyway.
+    profile_cable_detail = .NOT. (n_ei0 > 0 .AND. n_finite_ei > 0 .AND. .NOT. has_objects)
+    IF (profile_cable_detail) CALL CD_HermiteCable_Dyn_Reset_Profile()
+  END IF
   IF (ErrStat == CD_DECKDRV_OK) THEN
     DO iarg = 1, SIZE(input_files)
       CALL check_input_not_output(TRIM(input_files(iarg)), TRIM(out_root), root_native, 'input file')
@@ -154,6 +176,7 @@ PROGRAM cabledyn
     END IF
     CALL stop_run(2)
   END IF
+  CALL print_profile()
   WRITE (output_unit, '(A,A,A)') PROG//': converged run written to ', TRIM(out_root), '.out'
 
 CONTAINS
@@ -164,6 +187,7 @@ CONTAINS
     !! a caller can tell such an exit from a process ended from outside (Task Manager,
     !! `taskkill /F`, `kill -9`), which runs no code of the driver and leaves no closing line.
     INTEGER, INTENT(IN) :: code
+    CALL print_profile()
     WRITE (error_unit, '(A,I0)') PROG//': ended with exit code ', code
     FLUSH (error_unit)
     STOP code, QUIET = .TRUE.
@@ -472,6 +496,8 @@ CONTAINS
     END IF
 
     mixed_run: BLOCK
+      ! the aggregate parses the deck again with its models: initialisation from here
+      CALL CD_Profile_Enter(CD_PROF_INIT)
       ALLOCATE (aggregate, STAT=ios)
       IF (ios /= 0) THEN
         run_stat = CD_DECKDRV_SOLVEFAIL
@@ -555,11 +581,14 @@ CONTAINS
       max_consecutive_miss = 0
       first_miss_time = CD_ZERO
       last_miss_time = CD_ZERO
+      ! the march (no fluid sampled by the driver on this route) or, without one, finalisation
+      CALL CD_Profile_Enter(MERGE(CD_PROF_SOLVE, CD_PROF_FINAL, nstep > 0))
       IF (nstep > 0) CALL start_standalone_progress(progress, nstep, step_dt)
       DO step = 1, nstep
         time = REAL(step, wp)*step_dt
         CALL CD_AGG_Step_Moving(aggregate, step_dt, position, velocity, acceleration, step_converged, stalled, &
                                 n_iter, es, em, t_committed=time)
+        CALL CD_Profile_Enter(CD_PROF_CHECK)
         IF (es /= CD_AGG_OK) THEN
           CALL set_aggregate_error(es, em, run_stat, run_msg)
           EXIT mixed_run
@@ -577,6 +606,9 @@ CONTAINS
         ELSE
           consecutive_miss = 0
         END IF
+        ! a committed step: count it, then its outputs
+        CALL CD_Profile_Step()
+        CALL CD_Profile_Enter(CD_PROF_OUTPUT)
         CALL CD_AGG_CalcOutput(aggregate, es, em)
         IF (es /= CD_AGG_OK) THEN
           CALL set_aggregate_error(es, em, run_stat, run_msg)
@@ -588,6 +620,7 @@ CONTAINS
           CALL set_aggregate_error(es, em, run_stat, run_msg)
           EXIT mixed_run
         END IF
+        CALL CD_Profile_Enter(CD_PROF_PROGRESS)
         CALL update_standalone_progress(progress, step, time)
       END DO
 
@@ -800,21 +833,97 @@ CONTAINS
     CHARACTER(16) :: elapsed_text, remaining_text
     ! Every committed step: the time an abnormal end of the process reports.
     CALL CD_Fatal_Report_Time(simulated_time)
-    IF (step < progress%nstep .AND. MOD(step, progress%stride) /= 0) RETURN
-    CALL SYSTEM_CLOCK(now)
-    elapsed = CD_ZERO
-    IF (progress%count_rate > 0_int64 .AND. now >= progress%start_count) &
-      elapsed = REAL(now - progress%start_count, wp)/REAL(progress%count_rate, wp)
-    remaining = CD_ZERO
-    IF (step < progress%nstep .AND. elapsed > CD_ZERO) &
-      remaining = elapsed*REAL(progress%nstep - step, wp)/REAL(step, wp)
-    percent = 100.0_wp*REAL(step, wp)/REAL(progress%nstep, wp)
-    elapsed_text = format_wall_time(elapsed)
-    remaining_text = format_wall_time(remaining)
-    WRITE (output_unit, '(A,F6.1,A,F12.3,A,A,A,A)') '  Progress: ', percent, '% | t = ', &
-      simulated_time, ' s | elapsed ', TRIM(elapsed_text), ' | ETA ', TRIM(remaining_text)
-    FLUSH (output_unit)
+    IF (step >= progress%nstep .OR. MOD(step, progress%stride) == 0) THEN
+      CALL SYSTEM_CLOCK(now)
+      elapsed = CD_ZERO
+      IF (progress%count_rate > 0_int64 .AND. now >= progress%start_count) &
+        elapsed = REAL(now - progress%start_count, wp)/REAL(progress%count_rate, wp)
+      remaining = CD_ZERO
+      IF (step < progress%nstep .AND. elapsed > CD_ZERO) &
+        remaining = elapsed*REAL(progress%nstep - step, wp)/REAL(step, wp)
+      percent = 100.0_wp*REAL(step, wp)/REAL(progress%nstep, wp)
+      elapsed_text = format_wall_time(elapsed)
+      remaining_text = format_wall_time(remaining)
+      WRITE (output_unit, '(A,F6.1,A,F12.3,A,A,A,A)') '  Progress: ', percent, '% | t = ', &
+        simulated_time, ' s | elapsed ', TRIM(elapsed_text), ' | ETA ', TRIM(remaining_text)
+      FLUSH (output_unit)
+    END IF
+    ! the next step, or after the last step the finalisation
+    CALL CD_Profile_Enter(MERGE(CD_PROF_FINAL, CD_PROF_SOLVE, step >= progress%nstep))
   END SUBROUTINE update_standalone_progress
+
+  SUBROUTINE print_profile()
+    !! The run-time profile requested with CABLEDYN_PROFILE (CableDyn_Profile): the wall time
+    !! of each phase of the run, the step counts and the Newton iterations, and the interior of
+    !! the finite-EI cable steps. Printed once, on stdout, at the end of the run.
+    LOGICAL, SAVE :: printed = .FALSE.
+    REAL(wp) :: seconds(CD_PROF_NPHASE), total, march, t_step, t_resid, t_eff, t_solve, t_am, t_tan
+    INTEGER(int64) :: march_steps, line_steps, line_iterations
+    INTEGER :: line_max_iterations, n_step, n_resid, n_solve, n_am, n_alloc, n_tan, k
+    IF (printed .OR. .NOT. CD_Profile_Armed()) RETURN
+    printed = .TRUE.
+    ! the running phase up to now: the finalisation of a completed run, or the phase in which a
+    ! failed run stopped
+    CALL CD_Profile_Flush()
+    DO k = 1, CD_PROF_NPHASE
+      seconds(k) = CD_Profile_Seconds(k)
+    END DO
+    total = SUM(seconds)
+    march = SUM(seconds(CD_PROF_FLUID:CD_PROF_PROGRESS))
+    CALL CD_Profile_Counts(march_steps, line_steps, line_iterations, line_max_iterations)
+    WRITE (output_unit, '(A)') '  Run-time profile (CABLEDYN_PROFILE), wall-clock time:'
+    CALL profile_row('input parsing', seconds(CD_PROF_INPUT), total)
+    CALL profile_row('initialisation and statics', seconds(CD_PROF_INIT), total)
+    CALL profile_row('dynamic march', march, total)
+    CALL profile_row('  fluid sampled by the driver', seconds(CD_PROF_FLUID), total)
+    CALL profile_row('  line, cable and object steps', seconds(CD_PROF_SOLVE), total)
+    CALL profile_row('  checks and line failures', seconds(CD_PROF_CHECK), total)
+    CALL profile_row('  outputs', seconds(CD_PROF_OUTPUT), total)
+    CALL profile_row('  progress and bookkeeping', seconds(CD_PROF_PROGRESS), total)
+    CALL profile_row('finalisation', seconds(CD_PROF_FINAL), total)
+    CALL profile_row('total', total, total)
+    IF (march_steps > 0_int64) WRITE (output_unit, '(A,I0,A,A,A)') '    March: ', march_steps, &
+      ' committed step(s), ', fixed(1.0e3_wp*march/REAL(march_steps, wp), 4), ' ms per step.'
+    IF (line_steps > 0_int64) WRITE (output_unit, '(A,I0,A,I0,A,A,A,I0,A)') '    EI = 0 line steps: ', &
+      line_steps, ' (substeps and retries included), Newton iterations: ', line_iterations, ' (', &
+      fixed(REAL(line_iterations, wp)/REAL(line_steps, wp), 3), ' per line step, at most ', line_max_iterations, ').'
+    CALL CD_HermiteCable_Dyn_Get_Profile(n_step, n_resid, n_solve, n_am, n_alloc, t_step, t_resid, t_eff, &
+                                         t_solve, t_am, n_tan, t_tan)
+    IF (n_step > 0) THEN
+      WRITE (output_unit, '(A,I0,A,I0,A,I0,A,I0,A,I0,A)') '    Finite-EI cable steps: ', n_step, &
+        ', residual evaluations: ', n_resid, ', tangent assemblies: ', n_tan, ', linear solves: ', n_solve, &
+        ', intervals recovered by substeps: ', CD_HermiteCable_Dyn_Recovery_Count(), '.'
+      WRITE (output_unit, '(13A)') '    Finite-EI cable step time (s): residual ', fixed(t_resid, 3), &
+        ', tangent ', fixed(t_tan, 3), ', effective matrix ', fixed(t_eff, 3), ', linear solve ', &
+        fixed(t_solve, 3), ', added mass ', fixed(t_am, 3), ', other ', &
+        fixed(MAX(0.0_wp, t_step - (t_resid + t_tan + t_eff + t_solve + t_am)), 3), '.'
+    ELSE IF (.NOT. profile_cable_detail .AND. n_finite_ei > 0) THEN
+      WRITE (output_unit, '(A)') '    Finite-EI cable steps: not counted on the mixed EI = 0 + finite-EI route, '// &
+        'whose cables step concurrently.'
+    END IF
+    FLUSH (output_unit)
+  END SUBROUTINE print_profile
+
+  FUNCTION fixed(value, digits) RESULT(text)
+    !! value in fixed-point notation with the given decimals and a leading zero below one.
+    REAL(wp), INTENT(IN) :: value
+    INTEGER, INTENT(IN) :: digits
+    CHARACTER(:), ALLOCATABLE :: text
+    CHARACTER(32) :: buffer
+    CHARACTER(16) :: form
+    WRITE (form, '(A,I0,A)') '(F32.', digits, ')'
+    WRITE (buffer, form) value
+    text = TRIM(ADJUSTL(buffer))
+  END FUNCTION fixed
+
+  SUBROUTINE profile_row(label, seconds, total)
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), INTENT(IN) :: seconds, total
+    REAL(wp) :: share
+    share = 0.0_wp
+    IF (total > 0.0_wp) share = 100.0_wp*seconds/total
+    WRITE (output_unit, '(4X,A,T40,F12.3,A,F7.1,A)') label, seconds, ' s', share, ' %'
+  END SUBROUTINE profile_row
 
   PURE FUNCTION format_wall_time(seconds) RESULT(text)
     REAL(wp), INTENT(IN) :: seconds

@@ -376,6 +376,12 @@ the exchange buildable and testable without OpenFAST.
   carry `app/utf8_code_page.manifest`, which makes UTF-8 the process code page, so
   the Fortran runtime opens any name as written; a GNU build falls back to 8.3
   short names for characters outside the system ANSI code page.
+- **Run-time profile** (`CableDyn_Profile`): with `CABLEDYN_PROFILE` set, the standalone
+  driver charges its wall time to the phase that is running. Every time march marks where its
+  fluid update, step, checks, output and progress report begin, so a run that stops with an
+  error keeps its time in the phase it stopped in. The driver counts the `EI = 0` line steps and
+  Newton iterations in `CD_Step_Model`, and reports them with the finite-EI step counters of
+  `CableDyn_HermiteCableDynamic`. Unarmed, each mark is one test of a flag.
 - **C-ABI handles** (`cabledyn_mutex.c`): the handle registry is guarded by a
   spin-yield lock and deck initialisation by an input lock; operating on a handle
   while closing it from another thread is outside the API contract.
@@ -395,6 +401,7 @@ src/
     cabledyn_mutex.c           C-ABI registry and initialisation locks
     cabledyn_crt_locale.c      MinGW-w64 guard for libgfortran's locale restore
     CableDyn_FatalReport.f90   abnormal-end report of the driver (time reached)
+    CableDyn_Profile.f90       opt-in run-time profile of the driver (CABLEDYN_PROFILE)
     cabledyn_fatal.c           interrupt, fault and stack-overflow handlers of the driver
 
   EI = 0 cable path:

@@ -58,6 +58,7 @@ MODULE CableDyn_Model
   USE CableDyn_Mesh, ONLY: CD_Partition_Free_Dofs, CD_Validate_Connectivity
   USE CableDyn_Linalg, ONLY: CD_Solve_Dense_As_Banded, CD_Solve_Dense_As_Banded_Multiple, CD_Factor_Banded, &
                              CD_Solve_Factored_Banded_Multiple
+  USE CableDyn_Profile, ONLY: CD_Profile_Count_Line_Step
   IMPLICIT NONE
   PRIVATE
 
@@ -1815,6 +1816,7 @@ CONTAINS
                                    n_iter, es, em, workspace=model%dynamic_workspace)
     END IF
     model%ve_dt = CD_ZERO
+    CALL CD_Profile_Count_Line_Step(n_iter)
     IF (es /= CD_DYN_OK) THEN
       ErrStat = model_status_from_dyn(es)
       ErrMsg = 'CableDyn_Model: step failed: '//TRIM(em)
