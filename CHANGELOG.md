@@ -8,6 +8,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Faster wave kinematics of directional and multi-train seas (`wavetrain` rows, spectral
+  `waves` rows, `WaveSpreading`). Each component's phase cosine is now computed once for the
+  surface elevation and the kinematics, and its depth profile with one exponential instead of
+  two. `examples/chain_two_train_sea.dat` runs 17 % faster with the release build. The formulas
+  are unchanged. With gfortran the results are bit-identical. With the Intel compiler of the
+  release, which had computed the second cosine through a fused sine/cosine evaluation, they
+  can differ in the last printed digit.
+
 ### Fixed
 
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
