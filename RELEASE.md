@@ -68,9 +68,14 @@ only the `cabledyn` package and its metadata.
    `openfast.exe` with CableDyn, checks that a coupled run prints the CableDyn
    banner, and checks that the output is finite.
 2. **Linearisation check**: with the built executable, run
-   `python validation/scripts/openfast_lin_ab.py --exe <openfast.exe> --case-dir <case-dir>`.
-   The CableDyn mooring block must be symmetric to ≤ 1e-3 with negative restoring
-   diagonals and bounded sway coupling.
+   `python validation/scripts/openfast_lin_ab.py --exe <openfast.exe> --case-dir <case-dir>`,
+   where `<case-dir>` holds the `examples/openfast` IEA-15 UMaine twin decks and
+   the r-test `MD_Shared` turbine-1 ElastoDyn, HydroDyn, SeaState and HydroData
+   inputs (listed in the script docstring). The CableDyn mooring block must be
+   symmetric to ≤ 1e-3 with negative restoring diagonals and bounded sway
+   coupling. Its per-fairlead blocks and platform 6×6 stiffness must match stock
+   MoorDyn's quasi-static reduction to 0.5%. The script writes the `.lin` files
+   at full precision.
 3. Confirm that [VALIDATION.md](VALIDATION.md) matches the results at the release
    commit.
 

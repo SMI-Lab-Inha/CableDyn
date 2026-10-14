@@ -5,32 +5,68 @@
 Twin still-water IEA-15MW UMaine runs, identical except for the mooring module,
 each linearized once at the same time with module-level output (LinOutMod).
 
-WHAT IS GATED -- CableDyn's quasi-static dYdu stiffness block (force rows vs
-translation-displacement columns, matched by ROW/COLUMN LABELS) must satisfy
-the invariants of a true mooring tangent stiffness at equilibrium:
-  * symmetry (a conservative static tangent);
-  * negative displacement diagonals (restoring);
-  * spread-symmetry: a collective surge produces (near-)zero net sway force
-    on this y-symmetric three-line spread.
-Measured on this model the block is symmetric to machine noise and its
-collective surge stiffness is stable across operating points (~75 kN/m).
+The script derives the linearization decks from a time-domain twin pair:
+  * .fst: one linearization at --t-lin (default 0, the still-water initial
+    operating point the CableDyn documentation prescribes), LinInputs =
+    LinOutputs = 2, LinOutMod, and a FULL-PRECISION OutFmt (--outfmt, default
+    ES24.15E3). OpenFAST writes the .lin matrices with OutFmt; the usual
+    ES10.3E2 keeps 4 significant digits, which cannot resolve MoorDyn's
+    D - C A^-1 B (D ~ 1e8 N/m, the result ~ 1e4 N/m) -- the cancellation
+    turns the reduction into noise;
+  * HydroDyn: ExctnMod = RdtnMod = NewmanApp = 0 (HydroDyn refuses to
+    linearize DFT excitation, convolution radiation and Newman drift);
+  * SeaState: WaveMod = 0 (still water; SeaState linearizes only still water);
+  * MoorDyn deck: TmaxIC = --md-tmaxic (default 400 s) and threshIC = 1e-7,
+    so the dynamic-relaxation initial state is settled, and no
+    `SeaState WaterKin` row (no effect in still water).
 
-WHAT IS REPORTED, NOT GATED -- the same block from stock MoorDyn's
-zero-frequency reduction K_md = D - C A^-1 B. Measured on this catenary +
-seabed model, MoorDyn's own FD linearization is contact-noisy: its block is
-asymmetric (~14 %) and violates the spread's y-symmetry by orders of
-magnitude, so it is NOT a usable reference here (the numbers are printed as
-evidence). The rigorous cross-code check is the finite-displacement settled
-A/B (displaced-start static solves in both codes, `openfast_settled_ab.py`).
+WHAT IS GATED
+  1. CableDyn invariants of a tangent mooring stiffness at equilibrium, on its
+     quasi-static dYdu (force rows vs translation-displacement columns, matched
+     by ROW/COLUMN LABELS): symmetry, negative (restoring) displacement
+     diagonals, and no net sway force under a collective surge of this
+     y-symmetric spread.
+  2. The reference itself: MoorDyn's zero-frequency reduction
+     K_md = D - C A^-1 B must be symmetric (<= 1e-3) and its .lin matrices
+     must carry >= 10 significant digits; otherwise the comparison is refused
+     with a named error (the usual cause is a low-precision OutFmt).
+  3. CableDyn against MoorDyn, entry by entry:
+       * per-fairlead 3x3 stiffness blocks: entries >= 10 % of the block's
+         largest within --gate-pct (default 0.5 %), every entry >= 1 % of it
+         within 2 x --gate-pct; cross-fairlead entries ~0 in both;
+       * the 6x6 platform stiffness about the global origin (rigid platform
+         motion of the fairleads plus the geometric term of each code's own
+         operating-point fairlead loads): diagonals within --gate-pct, every
+         entry within --gate-pct of sqrt(K_ii K_jj).
+     Measured on this model (OutFmt ES24.15E3, TmaxIC 400 s, t = 0): the
+     dominant fairlead entries agree to 0.07-0.10 %, the small transverse
+     (H/X) entry to 0.29 %, the 6x6 diagonals to <= 0.10 % and every 6x6
+     entry to 1.0e-3 of sqrt(K_ii K_jj) or better.
+
+The 6x6 is the module-level stiffness. A full-system ElastoDyn linearization
+additionally contains a term of ElastoDyn/glue origin proportional to the
+static vertical platform load (identical for both modules; see VALIDATION.md).
+
+Case directory: the twin pair examples/openfast/IEA-15-UMaine_CompMooring5_CableDyn.fst
+and IEA-15-UMaine_CompMooring3_MoorDyn.fst (the --ref-cd/--ref-md defaults)
+with their mooring decks CableDyn_UMaine.dat and MoorDyn_UMaine.dat, plus the
+files they reference that are not in the repository: the ElastoDyn (with its
+tower and blade files), HydroDyn and SeaState inputs and the WAMIT HydroData
+folder of OpenFAST r-test glue-codes/fast-farm/MD_Shared (turbine 1, with the
+pose reset to zero as described in examples/openfast/README.md). The script
+writes its Main_lin_* decks and *_lin input copies into that directory.
 
 Fail-closed: missing .lin files, unparseable sections, empty matched blocks
 (e.g. a module whose coupled-mesh inputs did not enter the linearization set),
-and non-finite entries all abort with a named error.
+mismatched fairlead geometry between the two decks, and non-finite entries all
+abort with a named error.
 
 Usage:
     python validation/scripts/openfast_lin_ab.py --exe <openfast.exe> --case-dir <dir>
-        [--ref-cd Main_settle_cd5.fst] [--ref-md Main_settle_md3.fst]
-        [--t-lin 60.0] [--gate-pct 5.0] [--skip-run]
+        [--ref-cd IEA-15-UMaine_CompMooring5_CableDyn.fst]
+        [--ref-md IEA-15-UMaine_CompMooring3_MoorDyn.fst]
+        [--t-lin 0.0] [--gate-pct 0.5] [--outfmt ES24.15E3] [--md-tmaxic 400]
+        [--skip-run]
 """
 
 from __future__ import annotations
@@ -44,6 +80,7 @@ from pathlib import Path
 import numpy as np
 
 LIN_BLOCK = re.compile(r"^-+\s*LINEARIZATION\s*-+", re.IGNORECASE)
+MIN_DIGITS = 10   # significant digits the .lin matrices must carry for the MoorDyn reduction
 
 
 def die(msg: str) -> None:
@@ -51,14 +88,17 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
-def swap_keys(src: Path, dst: Path, swaps: dict[str, str], required: bool, what: str) -> set[str]:
+def swap_keys(src: Path, dst: Path, swaps: dict[str, str], required: bool, what: str,
+              drop: re.Pattern | None = None) -> set[str]:
     """Copy a value-first OpenFAST input file, replacing the value field of the
     named keys. The key is the LAST word before ' - ' (LinTimes carries a
-    comma-separated value list)."""
+    comma-separated value list). Lines matching `drop` are left out."""
     lines = src.read_text().splitlines(keepends=True)
     out: list[str] = []
     seen: set[str] = set()
     for ln in lines:
+        if drop is not None and drop.match(ln):
+            continue
         m = re.match(r"^\s*[^-\s].*?(\w+)\s+-\s", ln)
         key = m.group(1) if m else None
         if key in swaps:
@@ -74,12 +114,37 @@ def swap_keys(src: Path, dst: Path, swaps: dict[str, str], required: bool, what:
     return seen
 
 
-def prepare_lin_deck(src: Path, dst: Path, t_lin: float) -> None:
+def file_entry(text: str, key: str, where: str) -> str:
+    m = re.search(rf'"([^"]+)"\s+{key}\b', text)
+    if not m:
+        die(f"{where}: {key} entry not found")
+    return m.group(1)
+
+
+def derive(dst_fst: Path, text: str, key: str, suffix: str, swaps: dict[str, str],
+           need: set[str], what: str, drop: re.Pattern | None = None) -> str:
+    """Write a modified copy of the input file the .fst names under `key` and
+    point the .fst text at it."""
+    name = file_entry(text, key, dst_fst.name)
+    src = (dst_fst.parent / name).resolve()
+    if not src.is_file():
+        die(f"{dst_fst.name}: {key} file not found: {src}")
+    dst = dst_fst.parent / (src.stem + suffix + src.suffix)
+    seen = swap_keys(src, dst, swaps, required=False, what=what, drop=drop)
+    if need and not need & seen:
+        die(f"{src.name}: none of {sorted(need)} found -- cannot make the {what} deck")
+    return text.replace(f'"{name}"', f'"{dst.name}"')
+
+
+def prepare_lin_deck(src: Path, dst: Path, t_lin: float, outfmt: str, md_tmaxic: float) -> None:
     """Copy an .fst deck, enabling one linearization snapshot at t_lin, and derive
-    a linearization-compatible HydroDyn twin (no DFT excitation, no convolution
-    radiation, no Newman 2nd-order -- HydroDyn refuses to linearize those)."""
+    linearization-compatible HydroDyn/SeaState twins (and, for MoorDyn, a settled
+    initial-condition deck)."""
+    if not src.is_file():
+        die(f"reference deck not found: {src}")
     swap_keys(src, dst, {
-        "TMax": f"{t_lin:.1f}",
+        "TMax": f"{max(t_lin, 0.1):.6f}",
+        "OutFmt": f'"{outfmt}"',
         "Linearize": "True",
         "CalcSteady": "False",
         "NLinTimes": "1",
@@ -94,20 +159,17 @@ def prepare_lin_deck(src: Path, dst: Path, t_lin: float) -> None:
     }, required=True, what="linearization")
 
     text = dst.read_text()
-    m = re.search(r'"([^"]+)"\s+HydroFile', text)
-    if not m:
-        die(f"{dst.name}: HydroFile entry not found")
-    hydro_src = (dst.parent / m.group(1)).resolve()
-    hydro_dst = dst.parent / (hydro_src.stem + "_lin" + hydro_src.suffix)
-    seen = swap_keys(hydro_src, hydro_dst, {
-        "ExctnMod": "0",
-        "RdtnMod": "0",
-        "NewmanApp": "0",
-    }, required=False, what="HydroDyn linearization")
-    if not {"ExctnMod", "RdtnMod"} & seen:
-        die(f"{hydro_src.name}: neither ExctnMod nor RdtnMod found -- cannot make "
-            f"the HydroDyn deck linearization-compatible")
-    dst.write_text(text.replace(m.group(1), hydro_dst.name))
+    text = derive(dst, text, "HydroFile", "_lin",
+                  {"ExctnMod": "0", "RdtnMod": "0", "NewmanApp": "0"},
+                  {"ExctnMod", "RdtnMod"}, "HydroDyn linearization")
+    if re.search(r'^\s*1\s+CompSeaSt\b', text, re.M):
+        text = derive(dst, text, "SeaStFile", "_lin", {"WaveMod": "0"}, {"WaveMod"},
+                      "SeaState still-water")
+    if re.search(r'^\s*3\s+CompMooring\b', text, re.M):
+        text = derive(dst, text, "MooringFile", "_lin",
+                      {"TmaxIC": f"{md_tmaxic:.1f}", "threshIC": "1.0e-7"}, {"TmaxIC"},
+                      "MoorDyn settled-IC", drop=re.compile(r"^\s*SeaState\s+WaterKin\b", re.I))
+    dst.write_text(text)
 
 
 def run_case(exe: Path, fst: Path) -> None:
@@ -123,8 +185,30 @@ def run_case(exe: Path, fst: Path) -> None:
         die(f"openfast failed on {fst.name} (rc={proc.returncode}):\n{tail}")
 
 
+def coupled_points(fst: Path) -> np.ndarray:
+    """Coordinates of the Coupled/Vessel points of the mooring deck named by the .fst,
+    in deck order (the order of the coupled-mesh nodes in both modules)."""
+    text = fst.read_text()
+    deck = (fst.parent / file_entry(text, "MooringFile", fst.name)).resolve()
+    if not deck.is_file():
+        die(f"{fst.name}: MooringFile not found: {deck}")
+    pts: list[list[float]] = []
+    in_points = False
+    for ln in deck.read_text().splitlines():
+        if ln.lstrip().startswith("-"):
+            in_points = "POINTS" in ln.upper() or "CONNECTION" in ln.upper()
+            continue
+        tok = ln.split()
+        if in_points and len(tok) >= 5 and tok[0].isdigit() and \
+                tok[1].lower() in ("coupled", "vessel", "cpld", "ves"):
+            pts.append([float(v) for v in tok[2:5]])
+    if not pts:
+        die(f"{deck.name}: no Coupled/Vessel points found in the POINTS section")
+    return np.array(pts)
+
+
 def parse_module_lin(path: Path) -> dict:
-    """Parse an OpenFAST module .lin file: sizes, labels, and A/B/C/D matrices."""
+    """Parse an OpenFAST module .lin file: sizes, labels, operating points, A/B/C/D."""
     if not path.is_file():
         die(f"missing linearization file: {path}")
     text = path.read_text().splitlines()
@@ -166,6 +250,7 @@ def parse_module_lin(path: Path) -> dict:
 
     u_labels = read_labels("Order of inputs", n_u) if n_u else []
     y_labels = read_labels("Order of outputs", n_y) if n_y else []
+    digits = [99]
 
     def read_matrix(name: str, rows: int, cols: int) -> np.ndarray:
         if rows == 0 or cols == 0:
@@ -187,6 +272,9 @@ def parse_module_lin(path: Path) -> dict:
                         flat.extend(float(v) for v in toks)
                     except ValueError:
                         break
+                    if len(flat) == len(toks):   # first data row: mantissa digits
+                        mant = toks[0].lstrip("+-").upper().split("E")[0].replace(".", "")
+                        digits[0] = min(digits[0], len(mant))
                 if len(flat) != rows * cols:
                     die(f"{path.name}: {name} yielded {len(flat)} values, expected {rows * cols}")
                 mat = np.array(flat).reshape(rows, cols)
@@ -196,15 +284,13 @@ def parse_module_lin(path: Path) -> dict:
         die(f"{path.name}: matrix {name} ({rows}x{cols}) not found")
         raise AssertionError
 
-    return {
-        "n_x": n_x,
-        "u_labels": u_labels,
-        "y_labels": y_labels,
+    mats = {
         "A": read_matrix("A", n_x, n_x),
         "B": read_matrix("B", n_x, n_u),
         "C": read_matrix("C", n_y, n_x),
         "D": read_matrix("D", n_y, n_u),
     }
+    return {"n_x": n_x, "u_labels": u_labels, "y_labels": y_labels, "digits": digits[0], **mats}
 
 
 def match_indices(labels: list[str], must: list[str]) -> list[int]:
@@ -212,56 +298,88 @@ def match_indices(labels: list[str], must: list[str]) -> list[int]:
     return idx
 
 
+def op_values(labels: list[str], idx: list[int]) -> np.ndarray:
+    """Operating-point column (second token) of the selected label rows."""
+    return np.array([float(labels[i].split()[1].rstrip(",")) for i in idx])
+
+
 def static_impedance(mod: dict) -> np.ndarray:
     """K = D - C A^+ B (reduces to D when the module carries no states).
 
-    A^+ is the pseudo-inverse: a lumped-mass mooring on a FRICTIONLESS seabed has
-    neutral horizontal modes on its grounded nodes (zero restoring force), so A is
-    singular and a naive solve fills the block with junk (measured: asymmetric,
-    sign-flipped diagonals). The minimum-norm solution projects the neutral modes
-    out -- they stay put under a static boundary displacement, which is exactly the
-    quasi-static physics."""
+    A^+ is the pseudo-inverse when A is numerically singular: a lumped-mass
+    mooring on a FRICTIONLESS seabed can have neutral horizontal modes on its
+    grounded nodes (zero restoring force). The minimum-norm solution projects the
+    neutral modes out -- they stay put under a static boundary displacement, which
+    is exactly the quasi-static physics. On the settled UMaine deck with full
+    precision A is regular (the seabed penalty and line tension restrain every
+    node) and the plain solve is used."""
     if mod["n_x"] == 0:
         return mod["D"]
     A = mod["A"]
     sv = np.linalg.svd(A, compute_uv=False)
     cond = sv[0] / max(sv[-1], 1e-300)
+    print(f"MD state matrix: {A.shape[0]} states, cond ~ {cond:.2e}")
     if cond > 1e10:
-        print(f"note: state matrix cond ~ {cond:.2e} (neutral modes); using the "
-              f"pseudo-inverse zero-frequency reduction")
+        print("note: neutral modes; using the pseudo-inverse zero-frequency reduction")
         X = np.linalg.lstsq(A, mod["B"], rcond=1e-8)[0]
     else:
         X = np.linalg.solve(A, mod["B"])
     return mod["D"] - mod["C"] @ X
 
 
-def block(mod: dict, K: np.ndarray, row_must: list[str], col_must: list[str], what: str) -> np.ndarray:
+def block(mod: dict, K: np.ndarray, row_must: list[str], col_must: list[str], what: str) -> tuple:
     rows = match_indices(mod["y_labels"], row_must)
     cols = match_indices(mod["u_labels"], col_must)
     if not rows or not cols:
         die(f"{what}: no labels matched rows={row_must} ({len(rows)}) cols={col_must} ({len(cols)}) "
             f"-- the module's coupled mesh did not enter the linearization set")
-    return K[np.ix_(rows, cols)]
+    return K[np.ix_(rows, cols)], rows
+
+
+def skew(v: np.ndarray) -> np.ndarray:
+    return np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+
+
+def platform_stiffness(K: np.ndarray, r: np.ndarray, F0: np.ndarray) -> np.ndarray:
+    """6x6 stiffness -d[F; M]/d[u; theta] about the global origin for a rigid motion
+    of the fairleads (d_i = u + theta x r_i), from the nodal stiffness K = -dF/dx and
+    the operating-point fairlead loads F0 (load on the platform): the moment
+    linearisation adds the geometric term (theta x r_i) x F_i."""
+    n = r.shape[0]
+    T = np.zeros((3 * n, 6))
+    for i in range(n):
+        T[3 * i:3 * i + 3, 0:3] = np.eye(3)
+        T[3 * i:3 * i + 3, 3:6] = -skew(r[i])
+    dF = -K @ T
+    L = np.zeros((6, 6))
+    for i in range(n):
+        L[0:3] += dF[3 * i:3 * i + 3]
+        L[3:6] += skew(r[i]) @ dF[3 * i:3 * i + 3]
+        L[3:6, 3:6] += skew(F0[i]) @ skew(r[i])
+    return -L
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", type=Path, required=True)
     ap.add_argument("--case-dir", type=Path, required=True)
-    ap.add_argument("--ref-cd", default="Main_settle_cd5.fst")
-    ap.add_argument("--ref-md", default="Main_settle_md3.fst")
-    ap.add_argument("--t-lin", type=float, default=60.0)
-    # accepted for compatibility with the other A/B scripts; the pass criteria here are the
-    # invariants above, not a percentage
-    ap.add_argument("--gate-pct", type=float, default=5.0)
+    ap.add_argument("--ref-cd", default="IEA-15-UMaine_CompMooring5_CableDyn.fst")
+    ap.add_argument("--ref-md", default="IEA-15-UMaine_CompMooring3_MoorDyn.fst")
+    ap.add_argument("--t-lin", type=float, default=0.0)
+    ap.add_argument("--gate-pct", type=float, default=0.5,
+                    help="CableDyn vs MoorDyn tolerance in %% (see the module docstring)")
+    ap.add_argument("--outfmt", default="ES24.15E3",
+                    help="OutFmt written into both decks; the .lin matrices use it")
+    ap.add_argument("--md-tmaxic", type=float, default=400.0,
+                    help="MoorDyn dynamic-relaxation time TmaxIC (s)")
     ap.add_argument("--skip-run", action="store_true")
     args = ap.parse_args()
 
     case = args.case_dir
     cd_fst = case / "Main_lin_cd5.fst"
     md_fst = case / "Main_lin_md3.fst"
-    prepare_lin_deck(case / args.ref_cd, cd_fst, args.t_lin)
-    prepare_lin_deck(case / args.ref_md, md_fst, args.t_lin)
+    prepare_lin_deck(case / args.ref_cd, cd_fst, args.t_lin, args.outfmt, args.md_tmaxic)
+    prepare_lin_deck(case / args.ref_md, md_fst, args.t_lin, args.outfmt, args.md_tmaxic)
 
     if not args.skip_run:
         for fst in (cd_fst, md_fst):
@@ -276,12 +394,19 @@ def main() -> None:
         die("CableDyn module reported continuous states under linearization "
             "(the dYdu-only reduction must register Nx = 0)")
 
+    r_cd = coupled_points(cd_fst)
+    r_md = coupled_points(md_fst)
+    if r_cd.shape != r_md.shape or np.abs(r_cd - r_md).max() > 1e-6:
+        die(f"the two mooring decks have different Coupled/Vessel fairleads:\nCD {r_cd}\nMD {r_md}")
+
     K_cd = static_impedance(cd)
     K_md = static_impedance(md)
 
-    # The gated block: CD's quasi-static stiffness invariants.
-    kb_cd = block(cd, K_cd, ["force"], ["translation displacement"], "CD stiffness")
+    # 1. CableDyn's quasi-static stiffness invariants.
+    kb_cd, rows_cd = block(cd, K_cd, ["force"], ["translation displacement"], "CD stiffness")
     n = kb_cd.shape[0]
+    if n != 3 * r_cd.shape[0] or kb_cd.shape[1] != n:
+        die(f"CD stiffness block {kb_cd.shape} does not match {r_cd.shape[0]} coupled fairleads")
     sym = np.linalg.norm(kb_cd - kb_cd.T) / max(np.linalg.norm(kb_cd), 1e-30)
     print(f"CD stiffness block {kb_cd.shape}: symmetry |K-K^T|/|K| = {sym:.2e} (gate 1e-3)")
     diag = np.diag(kb_cd)
@@ -292,21 +417,75 @@ def main() -> None:
     fy = float(kb_cd[1::3, :] @ e @ np.ones(n // 3))
     print(f"CD collective surge stiffness: dFx = {fx:.5g} N/m, net sway leak |dFy/dFx| = "
           f"{abs(fy) / max(abs(fx), 1e-30):.2e} (gate 1e-2 on this y-symmetric spread)")
-    ok = sym <= 1e-3 and bool(np.all(diag < 0.0)) and abs(fy) <= 1e-2 * abs(fx)
+    failures: list[str] = []
+    if not (sym <= 1e-3 and bool(np.all(diag < 0.0)) and abs(fy) <= 1e-2 * abs(fx)):
+        failures.append("CD stiffness block violates the quasi-static invariants")
 
-    # Reported, not gated: stock MoorDyn's zero-frequency reduction on the same
-    # block. Measured contact-noisy on catenary + seabed decks (asymmetric,
-    # y-symmetry-violating) -- printed as evidence, not used as a reference.
-    kb_md = block(md, K_md, ["force"], ["translation displacement"], "MD stiffness")
+    # 2. The reference: MoorDyn's zero-frequency reduction on the same block.
+    kb_md, rows_md = block(md, K_md, ["force"], ["translation displacement"], "MD stiffness")
+    if kb_md.shape != kb_cd.shape:
+        die(f"MD stiffness block {kb_md.shape} differs from CD {kb_cd.shape}")
     sym_md = np.linalg.norm(kb_md - kb_md.T) / max(np.linalg.norm(kb_md), 1e-30)
-    fx_md = float(kb_md[0::3, :] @ e @ np.ones(n // 3))
-    fy_md = float(kb_md[1::3, :] @ e @ np.ones(n // 3))
-    print(f"MD (informational): collective surge dFx = {fx_md:.5g} N/m, asymmetry {sym_md:.2f}, "
-          f"sway leak |dFy/dFx| = {abs(fy_md) / max(abs(fx_md), 1e-30):.2f} -- a symmetric spread "
-          f"must have ~zero leak; MoorDyn's -lin FD is contact-noisy here and is not the reference")
+    print(f"MD reference: .lin digits {md['digits']} (gate >= {MIN_DIGITS}), "
+          f"symmetry |K-K^T|/|K| = {sym_md:.2e} (gate 1e-3)")
+    if md["digits"] < MIN_DIGITS or sym_md > 1e-3:
+        failures.append(f"MoorDyn reference unusable (digits {md['digits']}, asymmetry {sym_md:.2e}): "
+                        f"write the .lin files with a full-precision OutFmt (e.g. ES24.15E3) and "
+                        f"settle the MoorDyn initial condition (TmaxIC)")
 
-    if not ok:
-        die("CD stiffness block violates the quasi-static invariants (see above)")
+    # 3. CableDyn vs MoorDyn, entry by entry.
+    F0_cd = op_values(cd["y_labels"], rows_cd).reshape(-1, 3)
+    F0_md = op_values(md["y_labels"], rows_md).reshape(-1, 3)
+    dF0 = np.abs(F0_cd - F0_md).max() / np.abs(F0_md).max()
+    print(f"operating-point fairlead loads: max |CD-MD| / max|F| = {dF0:.2e} (gate 1e-2)")
+    if dF0 > 1e-2:
+        failures.append("the two operating points differ (fairlead loads)")
+    K = -kb_cd    # stiffness = -dF/dx
+    Kr = -kb_md
+    tol = args.gate_pct / 100.0
+    worst_dom, worst_all, worst_x = 0.0, 0.0, 0.0
+    print("per-fairlead 3x3 blocks (K = -dF/dx, N/m), CD / MD / rel. diff:")
+    for p in range(n // 3):
+        s = slice(3 * p, 3 * p + 3)
+        b, br = K[s, s], Kr[s, s]
+        big = np.abs(br).max()
+        for i in range(3):
+            row = []
+            for j in range(3):
+                rel = (b[i, j] - br[i, j]) / br[i, j] if abs(br[i, j]) > 1e-2 * big else 0.0
+                if abs(br[i, j]) >= 0.1 * big:
+                    worst_dom = max(worst_dom, abs(rel))
+                if abs(br[i, j]) >= 1e-2 * big:
+                    worst_all = max(worst_all, abs(rel))
+                row.append(f"{b[i, j]:11.5g} / {br[i, j]:11.5g} / {rel:+.2e}")
+            print(f"  fairlead {p + 1} {'xyz'[i]}: " + " | ".join(row))
+        for q in range(n // 3):
+            if q != p:
+                t = slice(3 * q, 3 * q + 3)
+                worst_x = max(worst_x, float(np.abs(K[s, t]).max() + np.abs(Kr[s, t]).max()) / big)
+    print(f"fairlead blocks: dominant entries max rel. diff {worst_dom:.2e} (gate {tol:.1e}); "
+          f"all entries >= 1% of block max {worst_all:.2e} (gate {2 * tol:.1e}); "
+          f"cross-fairlead / block max {worst_x:.1e} (gate 1e-6)")
+    if worst_dom > tol or worst_all > 2 * tol or worst_x > 1e-6:
+        failures.append("per-fairlead stiffness differs from MoorDyn beyond the gate")
+
+    K6 = platform_stiffness(K, r_cd, F0_cd)
+    K6r = platform_stiffness(Kr, r_md, F0_md)
+    dofs = ["Surge", "Sway", "Heave", "Roll", "Pitch", "Yaw"]
+    print("platform 6x6 stiffness about the origin, diagonal (CD / MD / rel. diff):")
+    rel_d = np.diag(K6) / np.diag(K6r) - 1.0
+    for i in range(6):
+        print(f"  {dofs[i]:5s} {K6[i, i]:13.6e} / {K6r[i, i]:13.6e} / {rel_d[i]:+.2e}")
+    norm = np.abs(K6 - K6r) / np.sqrt(np.abs(np.outer(np.diag(K6r), np.diag(K6r))))
+    i, j = np.unravel_index(int(norm.argmax()), norm.shape)
+    print(f"  surge-pitch {K6[0, 4]:.6e} / {K6r[0, 4]:.6e}, sway-roll {K6[1, 3]:.6e} / {K6r[1, 3]:.6e}")
+    print(f"6x6: max |diag rel. diff| {np.abs(rel_d).max():.2e} (gate {tol:.1e}); "
+          f"max |dK_ij|/sqrt(K_ii K_jj) {norm.max():.2e} at ({dofs[i]},{dofs[j]}) (gate {tol:.1e})")
+    if np.abs(rel_d).max() > tol or norm.max() > tol:
+        failures.append("platform 6x6 stiffness differs from MoorDyn beyond the gate")
+
+    if failures:
+        die("; ".join(failures))
     print("PASS")
 
 
