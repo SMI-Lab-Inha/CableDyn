@@ -219,6 +219,25 @@ direction reversal of exactly 180° in one host update is rejected, because the 
 is not unique. Formal linearisation (``Linearize = True``) with a platform-relative end
 connection fails during initialisation. Row grammar: :doc:`driver_format`.
 
+Line torsion
+------------
+
+A finite-EI line restrained in torsion at both ends (``END CONNECTIONS`` torsion columns, see
+:ref:`theory-torsion`) runs coupled as it does standalone. Its End A frame is given in platform
+axes and turns with the OpenFAST point-mesh orientation, whatever the bending connection, so a
+platform roll, pitch or yaw about the line's end direction twists the line. The torque moment is
+returned to OpenFAST with the connection moment, the ``Torq<L>N<J>`` and ``Twist<L>``
+channels are available, ``PtfmInit`` twists the line in the static initialisation, and the
+unwrapped twist is part of the checkpoint state. End B must be a ``Fixed`` point. Within one
+step the line may turn by more than 90° about its end direction, because the step is cut into
+substeps; an output probe moves the frame without a step, is limited to 90° from the
+committed twist, and stops by name beyond it (a restart first restores the checkpoint's twist,
+so it is not limited this way). Formal
+linearisation of a line restrained in torsion fails during initialisation: the torque's
+rotational stiffness has no column in the translation-only quasi-static reduction. The C API
+and the standalone deck that mixes ``EI = 0`` and finite-EI lines without a body move the line
+ends by translation only and refuse torsion columns.
+
 Lifecycle features
 ------------------
 

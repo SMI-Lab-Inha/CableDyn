@@ -342,11 +342,18 @@ Torsion
      - outside the torsion scope (:doc:`capabilities`). Move End A to a ``Fixed``,
        ``Coupled``/``Vessel`` point or a Rigid6 body, or represent the modules as a smeared
        buoyancy section.
-   * - ``torsion is not yet supported in coupled OpenFAST runs`` / ``torsion is not yet supported
-       in a deck that mixes EI = 0 and finite-EI lines without a BODY, nor in coupled OpenFAST or
-       FAST.Farm runs``
-     - run the torsional line standalone (a mixed deck with a body runs on the multibody route,
-       which supports torsion), or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
+   * - ``a line restrained in torsion needs a host that turns its fairlead frame``
+     - the standalone deck that mixes ``EI = 0`` and finite-EI lines without a body, and the C
+       API, move the line ends by translation only. Run the line in a coupled OpenFAST or
+       FAST.Farm run, add a body (such a deck runs on the multibody route, which supports
+       torsion), or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
+   * - ``formal OpenFAST linearization of a line restrained in torsion is not supported``
+     - linearise the model with ``TorsStiffness Free``; the torque's rotational stiffness is not
+       part of the quasi-static reduction.
+   * - ``torsion: the twist would move more than pi/2 from its committed value``
+     - the host turned a fairlead by more than 90° about the line's end direction without a
+       step (an output probe or a non-stepping input update). Keep the platform turn per
+       coupling step well below 90°.
    * - ``a body holding a line restrained in torsion turns by more than 90 deg in one step even
        after 6 step halvings``
      - the body turns faster than one step can follow the twist; reduce ``dtM``.

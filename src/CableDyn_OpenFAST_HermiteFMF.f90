@@ -83,6 +83,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_MirrorSize
   PUBLIC :: CD_HFMF_FrictionMirrorSize
   PUBLIC :: CD_HFMF_ForceMirrorSize
+  PUBLIC :: CD_HFMF_TorsionMirrorSize
   PUBLIC :: CD_HFMF_PackMirror
   PUBLIC :: CD_HFMF_UnpackMirror
   PUBLIC :: CD_HFMF_End
@@ -1482,17 +1483,18 @@ CONTAINS
     n = 0
     IF (.NOT. self%initialized) RETURN
     IF (ALLOCATED(self%line%freemask)) n = 3*COUNT(self%line%freemask)
-    n = n + CD_HFMF_FrictionMirrorSize(self) + CD_HFMF_ForceMirrorSize(self) + torsion_mirror_size(self)
+    n = n + CD_HFMF_FrictionMirrorSize(self) + CD_HFMF_ForceMirrorSize(self) + &
+        CD_HFMF_TorsionMirrorSize(self)
   END FUNCTION CD_HFMF_MirrorSize
 
-  INTEGER FUNCTION torsion_mirror_size(self) RESULT(n)
+  INTEGER FUNCTION CD_HFMF_TorsionMirrorSize(self) RESULT(n)
     !! Mirror slots of the condensed torsion, last: the accepted (unwrapped) Theta, Phi and the
     !! four end-frame vectors (14 values); zero without torsion.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
     IF (self%line%torsion%active) n = 14
-  END FUNCTION torsion_mirror_size
+  END FUNCTION CD_HFMF_TorsionMirrorSize
 
   INTEGER FUNCTION CD_HFMF_ForceMirrorSize(self) RESULT(n)
     !! Mirror slots of the force-blended generalised-alpha integrator state beyond [v; q; a] of

@@ -231,6 +231,14 @@ MODULE CableDyn_DeckDriver
   INTEGER, PARAMETER :: NAMELEN = CD_DECK_NAMELEN
   ! appended to a failed standalone march's message: the .out file keeps the committed rows
   CHARACTER(*), PARAMETER :: INSPECTION_NOTE = ' Output contains only committed states and is for inspection only.'
+  ! a line restrained in torsion on an entry whose caller does not turn the fairlead frame
+  CHARACTER(*), PARAMETER :: TORSION_NEEDS_ORIENTATION = 'a line restrained in torsion needs a host that '// &
+                             'turns its fairlead frame: coupled OpenFAST and FAST.Farm runs do, while the C API '// &
+                             'and a standalone deck that mixes EI = 0 and finite-EI lines without a BODY move '// &
+                             'the line ends by translation only (with a BODY such a deck runs on the multibody '// &
+                             'route, which supports torsion); set TorsStiffness Free in every END CONNECTIONS row'
+  CHARACTER(*), PARAMETER :: TORSION_NEEDS_FORCE_BLEND = 'torsion in a dynamic run needs the force-blended '// &
+                             'generalised-alpha (OPTION alpha_force_blend True)'
   REAL(wp), PARAMETER :: QUARTER_PI = 0.785398163397448309616_wp   ! pi/4 (displaced-area factor)
   REAL(wp), PARAMETER :: CD_RAD2DEG = 57.29577951308232087680_wp   ! 180/pi (declination/azimuth output)
   INTEGER, PARAMETER :: WAVE_NONE = 0, WAVE_AIRY = 1, WAVE_JONSWAP = 2, WAVE_COMPONENTS = 3
@@ -4883,16 +4891,20 @@ CONTAINS
     END IF
   END FUNCTION short_message
 
-  SUBROUTINE CD_Init_Deck_HermiteCable(deck_path, dt, cable, coupled_node, ErrStat, ErrMsg)
+  SUBROUTINE CD_Init_Deck_HermiteCable(deck_path, dt, cable, coupled_node, ErrStat, ErrMsg, host_orientation)
     !! Parse a single-cable deck (exactly one finite-EI LINE) and build it as a COUPLED
     !! cubic-Hermite lazy-wave cable driven at the fairlead. Fails closed on an EI=0 deck (use
     !! CD_Init_Deck_System) or a deck with more than one line (use the aggregate facade).
+    !! host_orientation: the caller passes the fairlead orientation with every update
+    !! (CD_HFMF_UpdateStates u_orientation), which a line restrained in torsion needs to turn
+    !! its End A frame; without it a torsion deck fails closed.
     CHARACTER(*), INTENT(IN) :: deck_path
     REAL(wp), INTENT(IN) :: dt
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     INTEGER, INTENT(OUT) :: coupled_node
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
 
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
@@ -4904,6 +4916,7 @@ CONTAINS
     TYPE(DeckOptions) :: opts
     CHARACTER(NAMELEN), ALLOCATABLE :: channels(:)
     TYPE(CD_BathymetryType) :: bathymetry
+    LOGICAL :: host_turns
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -4911,9 +4924,15 @@ CONTAINS
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, caller_driven=.TRUE.)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    IF (deck_has_torsion_columns(lines)) THEN
-      CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in coupled OpenFAST runs; set TorsStiffness '// &
-                'Free in every END CONNECTIONS row'); RETURN
+    host_turns = .FALSE.
+    IF (PRESENT(host_orientation)) host_turns = host_orientation
+    IF (deck_has_torsion_columns(lines) .AND. .NOT. host_turns) THEN
+      CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_ORIENTATION); RETURN
+    END IF
+    IF (SIZE(lines) == 1) THEN
+      IF (line_torsion_active(lines(1)) .AND. .NOT. opts%alpha_force_blend) THEN
+        CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_FORCE_BLEND); RETURN
+      END IF
     END IF
     IF (.NOT. deck_has_finite_ei(types, sections)) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: deck has no finite-EI (EI>0) line; '// &
@@ -4966,7 +4985,7 @@ CONTAINS
   SUBROUTINE CD_Init_Deck_Aggregate(deck_path, dt, agg, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                    range_files)
+                                    range_files, host_orientation)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -5032,8 +5051,14 @@ CONTAINS
     ! range_files: the caller writes the range graphs of the LINES flag r (the standalone
     ! mixed route); a coupled host does not, so the flag fails closed there.
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
+    ! host_orientation: the caller passes each moving point's orientation with every update
+    ! (the OpenFAST and FAST.Farm shells), which turns the fairlead frame of a finite-EI line
+    ! restrained in torsion. Without it (the C API, the standalone mixed route) a deck with
+    ! torsion columns fails closed rather than holding that frame fixed.
+    LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
 
     INTEGER :: nturb
+    LOGICAL :: host_turns
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
     TYPE(DeckRodType), ALLOCATABLE :: rod_types(:)
@@ -5066,11 +5091,13 @@ CONTAINS
                     env_rho_water=env_rho_water, env_wtrdpth=env_wtrdpth, allow_turbine=.TRUE., &
                     failures=fails, controls=ctrls, run_tmax=run_tmax, host_coupled_objects=.TRUE.)
     IF (ErrStat == CD_DECKDRV_OK) THEN
-      IF (deck_has_torsion_columns(lines)) THEN
-        CALL fail(ErrStat, ErrMsg, 'torsion is not yet supported in a deck that mixes EI = 0 and finite-EI '// &
-                  'lines without a BODY, nor in coupled OpenFAST or FAST.Farm runs (with a BODY such a deck '// &
-                  'runs on the multibody route, which supports torsion); set TorsStiffness Free in every END '// &
-                  'CONNECTIONS row'); RETURN
+      host_turns = .FALSE.
+      IF (PRESENT(host_orientation)) host_turns = host_orientation
+      IF (deck_has_torsion_columns(lines) .AND. .NOT. host_turns) THEN
+        CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_ORIENTATION); RETURN
+      END IF
+      IF (ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]) .AND. .NOT. opts%alpha_force_blend) THEN
+        CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_FORCE_BLEND); RETURN
       END IF
     END IF
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
@@ -6139,8 +6166,7 @@ CONTAINS
     END DO
     IF (ANY([(line_torsion_active(lines(li)), li=1, SIZE(lines))])) THEN
       IF (opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. .NOT. opts%alpha_force_blend) THEN
-        CALL fail(ErrStat, ErrMsg, 'torsion in a dynamic run needs the force-blended generalised-alpha (OPTION '// &
-                  'alpha_force_blend True)'); RETURN
+        CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_FORCE_BLEND); RETURN
       END IF
       IF (opts%n_modes > 0) THEN
         CALL fail(ErrStat, ErrMsg, 'modal analysis (OPTION nModes) of a line with torsion is not yet supported'); RETURN

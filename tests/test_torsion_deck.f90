@@ -949,13 +949,39 @@ CONTAINS
                     [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
                     [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
                     [CHARACTER(24) :: '0.1 dtM'], [CHARACTER(16) :: 'FairTen1'])
+    ! a caller that does not pass the fairlead orientation (the C API, the standalone mixed
+    ! route) is refused by name; one that does (the OpenFAST and FAST.Farm shells) builds the
+    ! line with its torsion
     CALL CD_Init_Deck_Aggregate('tdeck_e12.dat', 0.1_wp, agg, es, em)
-    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'nor in coupled OpenFAST or FAST.Farm runs') > 0, &
-                 'the coupled aggregate refuses torsion by name (got: '//TRIM(em)//')')
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'needs a host that turns its fairlead frame') > 0, &
+                 'an aggregate caller without orientations refuses torsion by name (got: '//TRIM(em)//')')
     CALL CD_End_Deck_Aggregate(agg)
     CALL CD_Init_Deck_HermiteCable('tdeck_e12.dat', 0.1_wp, cab, node, es, em)
-    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'not yet supported in coupled OpenFAST runs') > 0, &
-                 'the coupled single-cable entry refuses torsion by name (got: '//TRIM(em)//')')
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'needs a host that turns its fairlead frame') > 0, &
+                 'a single-cable caller without orientations refuses torsion by name (got: '//TRIM(em)//')')
+    CALL CD_HFMF_End(cab)
+    CALL CD_Init_Deck_Aggregate('tdeck_e12.dat', 0.1_wp, agg, es, em, host_orientation=.TRUE.)
+    CALL require(es == CD_DECKDRV_OK, 'an orientation-passing host builds the coupled torsion line (got: '// &
+                 TRIM(em)//')')
+    CALL CD_End_Deck_Aggregate(agg)
+    CALL CD_Init_Deck_HermiteCable('tdeck_e12.dat', 0.1_wp, cab, node, es, em, host_orientation=.TRUE.)
+    CALL require(es == CD_DECKDRV_OK, 'an orientation-passing host builds the single coupled torsion cable '// &
+                 '(got: '//TRIM(em)//')')
+    CALL require(cab%line%torsion%active, 'the single coupled cable carries its torsion')
+    CALL CD_HFMF_End(cab)
+    ! a coupled run is always dynamic: the configuration blend is refused with torsion
+    CALL write_deck('tdeck_e15.dat', [neutral_type], no_rows, &
+                    [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &
+                    [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
+                    [CHARACTER(32) :: '0.1 dtM', 'False alpha_force_blend'], [CHARACTER(16) :: 'FairTen1'])
+    CALL CD_Init_Deck_Aggregate('tdeck_e15.dat', 0.1_wp, agg, es, em, host_orientation=.TRUE.)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'force-blended generalised-alpha') > 0, &
+                 'the coupled aggregate refuses torsion with the configuration blend (got: '//TRIM(em)//')')
+    CALL CD_End_Deck_Aggregate(agg)
+    CALL CD_Init_Deck_HermiteCable('tdeck_e15.dat', 0.1_wp, cab, node, es, em, host_orientation=.TRUE.)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'force-blended generalised-alpha') > 0, &
+                 'the coupled single cable refuses torsion with the configuration blend (got: '//TRIM(em)//')')
     CALL CD_HFMF_End(cab)
     CALL check_scope_refusals()
     ! the channel units of the torsion channels, as the range files label them

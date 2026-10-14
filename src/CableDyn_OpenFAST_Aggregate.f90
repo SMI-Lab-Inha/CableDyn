@@ -221,7 +221,7 @@ CONTAINS
   SUBROUTINE CD_AGG_Init_From_Deck(self, deck_path, dt, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                   range_files)
+                                   range_files, host_orientation)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -257,6 +257,9 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: forbid_deck_ambient
     ! range_files: the caller writes the range graphs of the LINES flag r (CD_AGG_Range_*)
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
+    ! host_orientation: the caller passes the moving-point orientations with every update,
+    ! which a finite-EI line restrained in torsion requires (see CD_Init_Deck_Aggregate)
+    LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
 
     ! Both bundles (about 70 KB together) are built on the heap: initialisation runs on the
     ! thread of the calling host, whose stack size CableDyn does not choose.
@@ -295,7 +298,7 @@ CONTAINS
                                 coupled_positions=coupled_positions, n_turbines=n_turbines, &
                                 turbine_ref_pos=turbine_ref_pos, farm_ptfm_init=farm_ptfm_init, &
                                 forbid_deck_ambient=forbid_deck_ambient, run_tmax=run_tmax, &
-                                range_files=range_files)
+                                range_files=range_files, host_orientation=host_orientation)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF
