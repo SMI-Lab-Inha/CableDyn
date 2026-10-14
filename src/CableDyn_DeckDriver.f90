@@ -6509,7 +6509,8 @@ CONTAINS
 
     CALL write_out(out_root, channels, lines, points, ne, q_all, q_off, ten_all, ten_off, converged, ErrStat, ErrMsg, &
                    end_ten=end_all, end_force=end_vec, opts=opts, bathymetry=bathymetry)
-    CALL CD_Profile_Enter(CD_PROF_FINAL)
+    ! a failed static run stays in initialisation, where it stopped
+    IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL CD_Profile_Enter(CD_PROF_FINAL)
     IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
     IF (ErrStat /= 0) RETURN
     IF (.NOT. converged) THEN
