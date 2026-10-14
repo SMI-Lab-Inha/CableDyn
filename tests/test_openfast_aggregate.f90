@@ -3279,6 +3279,84 @@ CONTAINS
                    'aggctrl: FAILURE trailing token fails closed')
     END BLOCK
 
+    ! (b6) the controlled segment is the one at the line's fairlead-side end: the end on a
+    ! host-driven point, else the written NodeB (MoorDyn's AttachB, its segment N). Line 1
+    ! is Connect -> Vessel kept in deck order (the vessel is End B of the built model): the
+    ! vessel-side element is controlled, not the one at the Connect. Line 2 (Connect and
+    ! Fixed, no host-driven end) controls the element at its written NodeB: the anchor
+    ! when written Connect -> Fixed (End B); written Fixed -> Connect it is swapped (the
+    ! Connect is End A) and controls the End-A element.
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: aggv, aggs
+      REAL(wp) :: qn(9), vn(9), an(9), l1(2), l2(2)
+      CALL write_agg_failure_deck('agg_ctrl_attachb.dat', control_row='1 1,2', composite_line1=.TRUE., &
+                                  composite_line2=.TRUE.)
+      CALL CD_AGG_Init_From_Deck(aggv, 'agg_ctrl_attachb.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: AttachB deck init: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        l1 = aggv%sys%fast%system%lines(1)%l0
+        l2 = aggv%sys%fast%system%lines(2)%l0
+        CALL require(ALL(aggv%ctrl_elem == [1, 1]), 'aggctrl: lines kept in deck order control their End-B element')
+        CALL CD_AGG_Apply_LineControl(aggv, [0.05_wp], [0.0_wp], es, em)
+        CALL require(es == CD_AGG_OK, 'aggctrl: AttachB apply: '//TRIM(em))
+        CALL CD_Get_System_Line_State(aggv%sys%fast%system, 1, qn, vn, an, es, em)
+        CALL require(nan_max_abs(qn(1:3)) <= 1.0e-12_wp .AND. &
+                     aggv%sys%fast%system%lines(1)%l0(1) == l1(1) + 0.05_wp .AND. &
+                     aggv%sys%fast%system%lines(1)%l0(2) == l1(2), &
+                     'aggctrl: a Connect -> Vessel line in stock order controls the vessel-end segment')
+        CALL CD_Get_System_Line_State(aggv%sys%fast%system, 2, qn, vn, an, es, em)
+        CALL require(nan_max_abs(qn(1:3) - [2.0_wp, 0.0_wp, 0.0_wp]) <= 1.0e-12_wp .AND. &
+                     aggv%sys%fast%system%lines(2)%l0(1) == l2(1) + 0.05_wp .AND. &
+                     aggv%sys%fast%system%lines(2)%l0(2) == l2(2), &
+                     'aggctrl: a line without a host-driven end controls its written-NodeB segment')
+      END IF
+      CALL write_agg_failure_deck('agg_ctrl_stock.dat', control_row='1 2', composite_line2=.TRUE., &
+                                  stock_line2=.TRUE.)
+      CALL CD_AGG_Init_From_Deck(aggs, 'agg_ctrl_stock.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: stock-order deck init: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        CALL require(ALL(aggs%sys%fast%system%lines(2)%l0 == l2) .AND. aggs%ctrl_elem(1) == 2, &
+                     'aggctrl: a swapped line builds the same model and controls its End-A element')
+        CALL CD_AGG_Apply_LineControl(aggs, [0.05_wp], [0.0_wp], es, em)
+        CALL require(es == CD_AGG_OK .AND. aggs%sys%fast%system%lines(2)%l0(2) == l2(2) + 0.05_wp .AND. &
+                     aggs%sys%fast%system%lines(2)%l0(1) == l2(1), &
+                     'aggctrl: the swapped line controls its written-NodeB (Connect) segment')
+      END IF
+      CALL CD_AGG_End(aggv, es, em)
+      CALL CD_AGG_End(aggs, es, em)
+    END BLOCK
+
+    ! (b7) a coupled rod end is host-driven: a line written anchor first to a Coupled rod's
+    ! End B is kept in deck order (the swap only matches points) and controls its End-B
+    ! element, the rod end; the same line to a Coupled point at that position is swapped and
+    ! controls its End-A element, the same physical end. Written fairlead first from the rod
+    ! end it controls its End-A element.
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: aggr, aggp
+      INTEGER :: ner
+      CALL write_host_rod_deck('agg_ctrl_rod.dat', .FALSE., control_row='1 1', stock_line1=.TRUE.)
+      CALL CD_AGG_Init_From_Deck(aggr, 'agg_ctrl_rod.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: rod deck init: '//TRIM(em))
+      CALL write_host_rod_deck('agg_ctrl_rod_pts.dat', .TRUE., control_row='1 1', stock_line1=.TRUE.)
+      CALL CD_AGG_Init_From_Deck(aggp, 'agg_ctrl_rod_pts.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: rod-as-points deck init: '//TRIM(em))
+      IF (CD_AGG_IsInitialized(aggr) .AND. CD_AGG_IsInitialized(aggp)) THEN
+        ner = SIZE(aggr%sys%fast%system%lines(1)%l0)
+        CALL require(aggr%ctrl_elem(1) == 1 .AND. aggp%ctrl_elem(1) == ner, &
+                     'aggctrl: a line to a coupled rod end controls the segment at the rod end')
+      END IF
+      CALL CD_AGG_End(aggr, es, em)
+      CALL CD_AGG_End(aggp, es, em)
+      CALL write_host_rod_deck('agg_ctrl_rod_ff.dat', .FALSE., control_row='1 1')
+      CALL CD_AGG_Init_From_Deck(aggr, 'agg_ctrl_rod_ff.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: fairlead-first rod deck init: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        CALL require(aggr%ctrl_elem(1) == SIZE(aggr%sys%fast%system%lines(1)%l0), &
+                     'aggctrl: a line written fairlead first from a coupled rod end controls its End-A element')
+      END IF
+      CALL CD_AGG_End(aggr, es, em)
+    END BLOCK
+
     ! (c) fail-closed battery
     CALL CD_AGG_Apply_LineControl(aggc, [REAL(wp) ::], [REAL(wp) ::], es, em)
     CALL require(es /= CD_AGG_OK, 'aggctrl: short command vector fails closed')
@@ -3291,9 +3369,10 @@ CONTAINS
 
   SUBROUTINE case_aggregate_cable_control()
     !! Active line control of finite-EI cables on the coupled aggregate:
-    !!   (a) a cable-only deck controls the trailing span that makes up the deck's fairlead-
-    !!       side segment (40/13 m), and a zero command is bit-identical to no control over a
-    !!       driven march;
+    !!   (a) a cable-only deck controls the trailing span of cable elements that makes up the
+    !!       deck's fairlead-side segment (40/13 m), whether the line is written anchor first
+    !!       (MoorDyn order) or fairlead first; a zero command is bit-identical to no control
+    !!       over a driven march;
     !!   (b) a pay-out scales every span element by (S + DeltaL)/S, leaves the rest, and the
     !!       next step converges;
     !!   (c) a command outside [0.5, 2] of the segment fails closed, naming the line, and
@@ -3314,8 +3393,8 @@ CONTAINS
     LOGICAL :: cv, st, bit_same
     CHARACTER(512) :: em
 
-    CALL write_cable_only_deck('agg_cable_plain.dat')
-    CALL write_cable_only_deck('agg_cable_ctrl.dat', control_row='1 1')
+    CALL write_cable_only_deck('agg_cable_plain.dat', stock_order=.TRUE.)
+    CALL write_cable_only_deck('agg_cable_ctrl.dat', control_row='1 1', stock_order=.TRUE.)
     CALL CD_AGG_Init_From_Deck(agg, 'agg_cable_plain.dat', DT, es, em)
     CALL require(es == CD_AGG_OK, 'cablectrl: plain init: '//TRIM(em))
     CALL CD_AGG_Init_From_Deck(aggc, 'agg_cable_ctrl.dat', DT, es, em)
@@ -3333,6 +3412,22 @@ CONTAINS
     IF (first > 1) CALL require(SUM(aggc%cables(1)%line%l0(first - 1:ne)) > 40.0_wp/13.0_wp + 1.0e-9_wp, &
                                 'cablectrl: the span stops at the segment boundary')
     l0_base = aggc%cables(1)%line%l0
+    ! the same cable written fairlead first builds the same model and controls the same
+    ! fairlead-side span
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: aggf
+      INTEGER :: nf
+      CALL write_cable_only_deck('agg_cable_ctrl_ff.dat', control_row='1 1')
+      CALL CD_AGG_Init_From_Deck(aggf, 'agg_cable_ctrl_ff.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'cablectrl: fairlead-first deck init: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        nf = aggf%ctrl_nelem(1)
+        CALL require(aggf%ctrl_elem(1) == first .AND. nf == ne - first + 1 .AND. &
+                     aggf%ctrl_base_l0(1) == aggc%ctrl_base_l0(1) .AND. ALL(aggf%cables(1)%line%l0 == l0_base), &
+                     'cablectrl: a cable written fairlead first controls the same fairlead-side span')
+      END IF
+      CALL CD_AGG_End(aggf, es, em)
+    END BLOCK
 
     ! (a) zero command == never controlled, bit for bit, under a driven fairlead
     CALL CD_AGG_GetMovingPointMesh(agg, r0, v0, a0, lf, es, em)
@@ -3413,8 +3508,11 @@ CONTAINS
         nec = CD_System_Line_NElem(aggm%sys%fast%system, 1, es, em)
         ALLOCATE (tb(nec), ta(nec))
         CALL CD_Get_System_Line_Tension(aggm%sys%fast%system, 1, tb, es, em)
+        ! the chain is written fairlead first (Vessel NodeA, Fixed NodeB): its vessel end is
+        ! the fairlead side, End A of the built line (its last element)
         CALL CD_AGG_Apply_LineControl(aggm, [0.5_wp], [0.0_wp], es, em)
-        CALL require(es == CD_AGG_OK .AND. aggm%sys%fast%system%lines(1)%l0(nec) == aggm%ctrl_base_l0(1) + 0.5_wp, &
+        CALL require(es == CD_AGG_OK .AND. aggm%ctrl_elem(1) == nec .AND. &
+                     aggm%sys%fast%system%lines(1)%l0(nec) == aggm%ctrl_base_l0(1) + 0.5_wp, &
                      'cablectrl: the chain''s fairlead segment is base + DeltaL: '//TRIM(em))
         CALL CD_Get_System_Line_Tension(aggm%sys%fast%system, 1, ta, es, em)
         CALL require(ta(nec) < tb(nec), 'cablectrl: paying the chain out drops its fairlead tension')
@@ -3442,7 +3540,8 @@ CONTAINS
       TYPE(CD_AGG_ModuleType) :: aggr
       REAL(wp), ALLOCATABLE :: base(:)
       INTEGER :: ner, fr
-      CALL write_cable_only_deck('agg_cable_ctrl_refined.dat', control_row='1 1', adaptive_mesh=.TRUE.)
+      CALL write_cable_only_deck('agg_cable_ctrl_refined.dat', control_row='1 1', adaptive_mesh=.TRUE., &
+                                 stock_order=.TRUE.)
       CALL CD_AGG_Init_From_Deck(aggr, 'agg_cable_ctrl_refined.dat', DT, es, em)
       CALL require(es == CD_AGG_OK, 'cablectrl: refined cable with CONTROL: '//TRIM(em))
       IF (es == CD_AGG_OK) THEN
@@ -3504,31 +3603,37 @@ CONTAINS
   SUBROUTINE case_restart_cable_control()
     !! CHECKPOINT-RESTART of a controlled finite-EI cable, bit for bit (the shell rebuild's
     !! recipe): instance A marches under a pay-out ramp and a hold; a fresh instance B is built
-    !! at the base lengths, takes A's coupled kinematics and cable mirror, and re-applies the
-    !! last command (the shell re-applies the restored DeltaL); both then continue under the
-    !! same drive and commands. The re-applied lengths rebuild B's mass, tributary lengths and
-    !! seabed coefficients exactly as A's were rebuilt, so the trajectories stay bit-identical,
-    !! on a suspended cable and on a grounded cable with stick-slip friction. The checkpoint
-    !! falls in the hold (A keeps its cached committed force; B evaluates it afresh) and in the
-    !! ramp.
+    !! at the base lengths, takes A's coupled kinematics, re-applies the last command (the
+    !! shell re-applies the restored DeltaL) and then reloads A's cable mirror; both continue
+    !! under the same drive and commands. The re-applied lengths rebuild B's mass, tributary
+    !! lengths and seabed coefficients exactly as A's were rebuilt; the mirror reload that
+    !! follows brings back the committed force A carries into its next step and takes the
+    !! lengths in place as those the committed state was reached with (A's l0_c), so the
+    !! trajectories stay bit-identical, on a suspended cable and on a grounded cable with
+    !! stick-slip friction. The checkpoint falls in the hold and in the ramp. Deck 4 holds a
+    !! host fluid field (external_fluid) sampled before each command, as the shell does, and
+    !! re-sampled after the reload: each sample re-evaluates the committed force, at the
+    !! committed lengths, so the restart is bit-identical only if the reload took the
+    !! re-applied lengths as committed (the command goes on before the reload).
     TYPE(CD_AGG_ModuleType) :: agg_a, agg_b
     REAL(wp), PARAMETER :: DT = 0.05_wp
     INTEGER, PARAMETER :: NPOST = 6
     REAL(wp), ALLOCATABLE :: r0(:, :), vel(:, :), acc(:, :), tgt(:, :), pa(:, :), la(:, :), pb(:, :), lb(:, :)
-    REAL(wp), ALLOCATABLE :: v2(:, :), a2(:, :), cbuf(:)
+    REAL(wp), ALLOCATABLE :: v2(:, :), a2(:, :), cbuf(:), fv(:, :), fa(:, :), wl(:)
     REAL(wp) :: dl, dldot
-    INTEGER :: es, ni, s, npt, deck, npre
-    LOGICAL :: cv, st, same
+    INTEGER :: es, ni, s, npt, deck, npre, nfl
+    LOGICAL :: cv, st, same, fluid
     CHARACTER(512) :: em
     CHARACTER(64) :: path
 
-    DO deck = 1, 3
+    DO deck = 1, 4
+      fluid = deck == 4
       SELECT CASE (deck)
       CASE (1)
         path = 'agg_restart_cable_ctrl.dat'
         CALL write_cable_only_deck(path, control_row='1 1')
         npre = 8
-      CASE (2)
+      CASE (2, 4)
         path = 'agg_restart_cable_ctrl.dat'
         npre = 4
       CASE DEFAULT
@@ -3536,9 +3641,17 @@ CONTAINS
         CALL write_cable_grounded_deck(path, control_row='1 1')
         npre = 8
       END SELECT
-      CALL CD_AGG_Init_From_Deck(agg_a, TRIM(path), DT, es, em)
+      CALL CD_AGG_Init_From_Deck(agg_a, TRIM(path), DT, es, em, external_fluid=fluid)
       CALL require(es == CD_AGG_OK, 'ctrl-restart:A-init: '//TRIM(em))
       IF (es /= CD_AGG_OK) RETURN
+      IF (fluid) THEN
+        nfl = CD_AGG_NFluidNodes(agg_a, es, em)
+        IF (ALLOCATED(fv)) DEALLOCATE (fv, fa, wl)
+        ALLOCATE (fv(3, nfl), fa(3, nfl), wl(nfl))
+        fv = 0.0_wp
+        fa = 0.0_wp
+        wl = 0.0_wp
+      END IF
       npt = CD_AGG_NMovingPoints(agg_a, es, em)
       IF (ALLOCATED(r0)) DEALLOCATE (r0, vel, acc, tgt, pa, la, pb, lb, v2, a2)
       ALLOCATE (r0(3, npt), vel(3, npt), acc(3, npt), tgt(3, npt), pa(3, npt), la(3, npt), pb(3, npt), &
@@ -3549,24 +3662,30 @@ CONTAINS
       acc = 0.0_wp
       DO s = 1, npre
         CALL control_drive(s, DT, r0, tgt, vel, dl, dldot)
+        IF (fluid) CALL fluid_sample(agg_a, s, fv, fa, wl)
         CALL CD_AGG_Apply_LineControl(agg_a, [dl], [dldot], es, em)
         CALL CD_AGG_Step_Moving(agg_a, DT, tgt, vel, acc, cv, st, ni, es, em)
         CALL require(es == CD_AGG_OK .AND. cv, 'ctrl-restart:A-march: '//TRIM(em))
         IF (es /= CD_AGG_OK) RETURN
       END DO
       ! the checkpoint: fresh B at the base lengths, A's kinematics and mirror, the last command
-      CALL CD_AGG_Init_From_Deck(agg_b, TRIM(path), DT, es, em)
+      CALL CD_AGG_Init_From_Deck(agg_b, TRIM(path), DT, es, em, external_fluid=fluid)
       CALL require(es == CD_AGG_OK, 'ctrl-restart:B-init: '//TRIM(em))
       CALL CD_AGG_GetMovingPointMesh(agg_a, pa, v2, a2, la, es, em)
       CALL CD_AGG_UpdateStates_Moving(agg_b, pa, v2, a2, es, em)
+      ! the restored command goes on before the mirror reload (the shell rebuild order): the
+      ! reload marks those lengths as the committed state's, as they are in the uninterrupted
+      ! run, and brings back its committed force
+      CALL control_drive(npre, DT, r0, tgt, vel, dl, dldot)
+      CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em)
+      CALL require(es == CD_AGG_OK, 'ctrl-restart:B-reapply: '//TRIM(em))
       ALLOCATE (cbuf(CD_HFMF_MirrorSize(agg_a%cables(1))))
       CALL CD_HFMF_PackMirror(agg_a%cables(1), cbuf, es, em)
       CALL CD_HFMF_UnpackMirror(agg_b%cables(1), cbuf, agg_a%cables(1)%line%t, es, em)
       CALL require(es == CD_HFMF_OK, 'ctrl-restart:cable-unpack: '//TRIM(em))
       DEALLOCATE (cbuf)
-      CALL control_drive(npre, DT, r0, tgt, vel, dl, dldot)
-      CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em)
-      CALL require(es == CD_AGG_OK, 'ctrl-restart:B-reapply: '//TRIM(em))
+      ! the shell re-samples the host field on the restored state
+      IF (fluid) CALL fluid_sample(agg_b, npre, fv, fa, wl)
       CALL require(ALL(agg_b%cables(1)%line%l0 == agg_a%cables(1)%line%l0) .AND. &
                    ALL(agg_b%cables(1)%line%Mgb == agg_a%cables(1)%line%Mgb) .AND. &
                    ALL(agg_b%cables(1)%line%trib == agg_a%cables(1)%line%trib), &
@@ -3578,6 +3697,8 @@ CONTAINS
       same = .TRUE.
       DO s = npre + 1, npre + NPOST
         CALL control_drive(s, DT, r0, tgt, vel, dl, dldot)
+        IF (fluid) CALL fluid_sample(agg_a, s, fv, fa, wl)
+        IF (fluid) CALL fluid_sample(agg_b, s, fv, fa, wl)
         CALL CD_AGG_Apply_LineControl(agg_a, [dl], [dldot], es, em)
         CALL CD_AGG_Apply_LineControl(agg_b, [dl], [dldot], es, em)
         CALL CD_AGG_Step_Moving(agg_a, DT, tgt, vel, acc, cv, st, ni, es, em)
@@ -3598,6 +3719,20 @@ CONTAINS
       CALL CD_AGG_End(agg_b, es, em)
     END DO
   END SUBROUTINE case_restart_cable_control
+
+  SUBROUTINE fluid_sample(agg, step, fv, fa, wl)
+    !! A host fluid field for the coming step of case_restart_cable_control: a uniform
+    !! current that grows with the step count (fa and wl as given).
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
+    INTEGER, INTENT(IN) :: step
+    REAL(wp), INTENT(INOUT) :: fv(:, :)
+    REAL(wp), INTENT(IN) :: fa(:, :), wl(:)
+    INTEGER :: esf
+    CHARACTER(512) :: emf
+    fv(1, :) = 0.02_wp*REAL(step, wp)
+    CALL CD_AGG_SetFluidFields(agg, fv, fa, wl, esf, emf)
+    CALL require(esf == CD_AGG_OK, 'ctrl-restart:fluid field: '//TRIM(emf))
+  END SUBROUTINE fluid_sample
 
   SUBROUTINE control_drive(step, dt, r0, tgt, vel, dl, dldot)
     !! Surge drive of every coupled point and the control command at t = step*dt: a 0.3 m
@@ -3620,16 +3755,23 @@ CONTAINS
     END IF
   END SUBROUTINE control_drive
 
-  SUBROUTINE write_agg_failure_deck(path, failure_row, control_row, composite_line2)
+  SUBROUTINE write_agg_failure_deck(path, failure_row, control_row, composite_line2, composite_line1, stock_line2)
     !! Vessel fairlead + massy Connect junction + Fixed anchor, two 0.98 m lines --
     !! the connect rig behind the coupled facade, with optional FAILURE/CONTROL rows.
     !! composite_line2 splits line 2 into two sections with DIFFERENT segment
-    !! lengths (0.50 then 0.48) -- the control-base composite regression.
+    !! lengths (0.50 then 0.48) -- the control-base composite regression; composite_line1
+    !! splits line 1 (Connect -> Vessel, kept in deck order) the same way. stock_line2
+    !! writes line 2 anchor first (Fixed NodeA, sections reversed), which the anchor-first
+    !! swap turns into the same line.
     CHARACTER(*), INTENT(IN) :: path
     CHARACTER(*), INTENT(IN), OPTIONAL :: failure_row, control_row
-    LOGICAL, INTENT(IN), OPTIONAL :: composite_line2
-    LOGICAL :: comp2
+    LOGICAL, INTENT(IN), OPTIONAL :: composite_line2, composite_line1, stock_line2
+    LOGICAL :: comp2, comp1, stock2
     INTEGER :: u, ios
+    comp1 = .FALSE.
+    IF (PRESENT(composite_line1)) comp1 = composite_line1
+    stock2 = .FALSE.
+    IF (PRESENT(stock_line2)) stock2 = stock_line2
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     WRITE (u, '(A)') 'Coupled connect rig with optional FAILURE'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -3646,14 +3788,26 @@ CONTAINS
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
     WRITE (u, '(A)') '1 2 1 -'
-    WRITE (u, '(A)') '2 2 3 -'
+    IF (stock2) THEN
+      WRITE (u, '(A)') '2 3 2 -'
+    ELSE
+      WRITE (u, '(A)') '2 2 3 -'
+    END IF
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
-    WRITE (u, '(A)') '1 line 0.98 1'
+    IF (comp1) THEN
+      WRITE (u, '(A)') '1 line 0.50 1'
+      WRITE (u, '(A)') '1 line 0.48 1'
+    ELSE
+      WRITE (u, '(A)') '1 line 0.98 1'
+    END IF
     comp2 = .FALSE.
     IF (PRESENT(composite_line2)) comp2 = composite_line2
-    IF (comp2) THEN
+    IF (comp2 .AND. stock2) THEN
+      WRITE (u, '(A)') '2 line 0.48 1'
+      WRITE (u, '(A)') '2 line 0.50 1'
+    ELSE IF (comp2) THEN
       WRITE (u, '(A)') '2 line 0.50 1'
       WRITE (u, '(A)') '2 line 0.48 1'
     ELSE
@@ -4947,22 +5101,27 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_mooring_channels_deck
 
-  SUBROUTINE write_cable_only_deck(path, modified_newton, cable_load_feedback, control_row, adaptive_mesh)
+  SUBROUTINE write_cable_only_deck(path, modified_newton, cable_load_feedback, control_row, adaptive_mesh, &
+                                   stock_order)
     !! A finite-EI lazy-wave power cable, coupled at the fairlead -- no EI=0 line. Bare +
     !! buoyancy-module properties from the Humboldt / GoMex 15 MW reference (the l3_lazywave
     !! and deck_hermite_cable convention). Purely SUSPENDED (no WtrDpth). modified_newton
     !! adds the OPTIONS row (the tangent-reuse plumbing gate's twin-deck knob); control_row
     !! a CONTROL section; adaptive_mesh the OPTIONS row that lets the static solve refine
-    !! the 47 deck segments.
+    !! the 47 deck segments; stock_order writes the line anchor first (MoorDyn order, Fixed
+    !! NodeA, sections reversed), which the anchor-first swap turns into the same cable.
     CHARACTER(*), INTENT(IN) :: path
     LOGICAL, INTENT(IN), OPTIONAL :: modified_newton
     LOGICAL, INTENT(IN), OPTIONAL :: cable_load_feedback
     CHARACTER(*), INTENT(IN), OPTIONAL :: control_row
     LOGICAL, INTENT(IN), OPTIONAL :: adaptive_mesh
+    LOGICAL, INTENT(IN), OPTIONAL :: stock_order
     INTEGER :: u, ios
-    LOGICAL :: mn
+    LOGICAL :: mn, stock
     mn = .FALSE.
     IF (PRESENT(modified_newton)) mn = modified_newton
+    stock = .FALSE.
+    IF (PRESENT(stock_order)) stock = stock_order
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     WRITE (u, '(A)') 'finite-EI lazy-wave power cable, coupled at the fairlead (no EI=0 line)'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -4978,13 +5137,23 @@ CONTAINS
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
-    WRITE (u, '(A)') '1 2 1 -'
+    IF (stock) THEN
+      WRITE (u, '(A)') '1 1 2 -'
+    ELSE
+      WRITE (u, '(A)') '1 2 1 -'
+    END IF
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
-    WRITE (u, '(A)') '1 bare 40.0 13'
-    WRITE (u, '(A)') '1 buoy 50.0 16'
-    WRITE (u, '(A)') '1 bare 55.0 18'
+    IF (stock) THEN
+      WRITE (u, '(A)') '1 bare 55.0 18'
+      WRITE (u, '(A)') '1 buoy 50.0 16'
+      WRITE (u, '(A)') '1 bare 40.0 13'
+    ELSE
+      WRITE (u, '(A)') '1 bare 40.0 13'
+      WRITE (u, '(A)') '1 buoy 50.0 16'
+      WRITE (u, '(A)') '1 bare 55.0 18'
+    END IF
     IF (PRESENT(control_row)) CALL write_control_section(u, control_row)
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
@@ -5141,14 +5310,20 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_mixed_free_deck
 
-  SUBROUTINE write_host_rod_deck(path, rod_as_points)
+  SUBROUTINE write_host_rod_deck(path, rod_as_points, control_row, stock_line1)
     !! A Coupled (platform-borne) vertical rod, End A at z = -1 and End B at z = -3, moored at both
     !! ends to its own anchor, plus an independent Coupled fairlead with its own line. With
     !! rod_as_points the rod is replaced by two Coupled points at its end positions (the same
-    !! lines, the same statics): the reference for the rod's line-end loads.
+    !! lines, the same statics): the reference for the rod's line-end loads. control_row adds a
+    !! CONTROL section; stock_line1 writes line 1 anchor first (Fixed NodeA).
     CHARACTER(*), INTENT(IN) :: path
     LOGICAL, INTENT(IN) :: rod_as_points
+    CHARACTER(*), INTENT(IN), OPTIONAL :: control_row
+    LOGICAL, INTENT(IN), OPTIONAL :: stock_line1
     INTEGER :: u
+    LOGICAL :: stock1
+    stock1 = .FALSE.
+    IF (PRESENT(stock_line1)) stock1 = stock_line1
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'coupled host rod deck'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -5182,7 +5357,11 @@ CONTAINS
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
-    WRITE (u, '(A)') '1 3 1 -'
+    IF (stock1) THEN
+      WRITE (u, '(A)') '1 1 3 -'
+    ELSE
+      WRITE (u, '(A)') '1 3 1 -'
+    END IF
     WRITE (u, '(A)') '2 4 5 -'
     WRITE (u, '(A)') '3 2 6 -'
     WRITE (u, '(A)') '--- SECTIONS ---'
@@ -5191,6 +5370,7 @@ CONTAINS
     WRITE (u, '(A)') '1 line 8.0 6'
     WRITE (u, '(A)') '2 line 9.5 6'
     WRITE (u, '(A)') '3 line 9.5 6'
+    IF (PRESENT(control_row)) CALL write_control_section(u, control_row)
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'

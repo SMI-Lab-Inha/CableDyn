@@ -203,6 +203,12 @@ MODULE CableDyn_HermiteCableDynamic
     ! every evaluation is unchanged. BA keeps its initial resolution.
     LOGICAL :: has_ctrl = .FALSE.
     REAL(wp), ALLOCATABLE :: l0_dot(:)
+    ! The lengths and rates the committed state was reached with (allocated with l0_dot, set
+    ! at each commit): the force-blended committed force F_n = R(q_n, v_n, t_n) belongs to
+    ! them, so the first step after a length change blends F_n at these lengths with
+    ! R(q_{n+1}) at the new ones. ws_recovery_l0_c/ws_recovery_l0_dot_c are the step-start
+    ! copies of the recovering step.
+    REAL(wp), ALLOCATABLE :: l0_c(:), l0_dot_c(:), ws_recovery_l0_c(:), ws_recovery_l0_dot_c(:)
     ! Seabed recompute inputs of a controlled contact model (CD_HermiteCable_Dyn_Set_Control_Seabed):
     ! the per-area penalty kBot, the per-element contact diameter and cBot/kBot, so a length
     ! change rebuilds contact_kn/contact_cn with the helper the deck used at initialisation.
@@ -346,7 +352,7 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: snap_q(:), snap_v(:), snap_a(:)
     ! The unstretched lengths and their rates join the snapshot (active line control): a
     ! restore that changes l0 rebuilds the length-dependent caches from the restored lengths.
-    REAL(wp), ALLOCATABLE :: snap_l0(:), snap_l0_dot(:)
+    REAL(wp), ALLOCATABLE :: snap_l0(:), snap_l0_dot(:), snap_l0_c(:), snap_l0_dot_c(:)
     LOGICAL :: snap_has_ctrl = .FALSE.
     REAL(wp) :: snap_t = CD_ZERO
     REAL(wp) :: snap_endconn_d0(3, 2) = CD_ZERO
@@ -1119,7 +1125,8 @@ CONTAINS
     !! free-DOF acceleration from the complete installed load set at the model's current
     !! q/v/t. Optional prescribed fixed-DOF accelerations enter the consistent-mass RHS,
     !! including their off-diagonal coupling to free DOFs. Failure is atomic with respect
-    !! to the previously committed acceleration.
+    !! to the previously committed acceleration. Under active line control the committed
+    !! state then belongs to the present lengths and rates (l0_c, l0_dot_c).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
@@ -1145,6 +1152,12 @@ CONTAINS
     IF (ErrStat /= CD_HCDYN_OK) THEN
       model%a = a_old
       ErrMsg = 'CD_HermiteCable_Dyn_Recompute_Acceleration: '//TRIM(ErrMsg)
+    ELSE IF (model%has_ctrl) THEN
+      ! a committed force cached at other lengths no longer describes the committed state
+      IF (.NOT. (ALL(bits_equal(model%l0, model%l0_c)) .AND. ALL(bits_equal(model%l0_dot, model%l0_dot_c)))) &
+        model%fc_valid = .FALSE.
+      model%l0_c = model%l0
+      model%l0_dot_c = model%l0_dot
     END IF
   END SUBROUTINE CD_HermiteCable_Dyn_Recompute_Acceleration
 
@@ -1160,7 +1173,12 @@ CONTAINS
     !! damping (CD_HermiteCable_Axial_Damping_Element). The step uses the mass of the new
     !! lengths and leaves out the rate term dM/dt v, as MoorDyn does; the committed
     !! acceleration is kept as the history of the preceding step, and BA keeps its initial
-    !! resolution. The cached committed force and the carried step factor are discarded.
+    !! resolution. The committed state keeps the lengths it was reached with (l0_c,
+    !! l0_dot_c): the force-blended committed force F_n stays the force at those lengths
+    !! (cached or, after a cache loss, evaluated with them), and only the step's new force
+    !! R(q_{n+1}) takes the new ones, so a length ramp is not lagged by alpha_f times the
+    !! length change. The carried step factor is discarded, and the step after a change starts
+    !! from the Newmark predictor (the change is a load step).
     !! A call that changes no length and no rate (bit for bit) returns at once, so a zero
     !! command on an uncontrolled model leaves it untouched. The update is atomic: every
     !! check and rebuild runs before the model is written. A line restrained in torsion is
@@ -1216,11 +1234,17 @@ CONTAINS
     END DO
     IF (.NOT. (lengths_changed .OR. rates_changed)) RETURN
     IF (.NOT. ALLOCATED(model%l0_dot)) THEN
-      ALLOCATE (model%l0_dot(model%ne), STAT=istat)
+      ALLOCATE (model%l0_dot(model%ne), model%l0_c(model%ne), model%l0_dot_c(model%ne), &
+                model%ws_recovery_l0_c(model%ne), model%ws_recovery_l0_dot_c(model%ne), STAT=istat)
       IF (istat /= 0) THEN
         CALL fail('rate storage allocation failed'); RETURN
       END IF
       model%l0_dot = CD_ZERO
+    END IF
+    ! the first change: the committed state was reached with the present lengths, at rest
+    IF (.NOT. model%has_ctrl) THEN
+      model%l0_c = model%l0
+      model%l0_dot_c = CD_ZERO
     END IF
     IF (lengths_changed) THEN
       ALLOCATE (l0_trial(model%ne), STAT=istat)
@@ -1237,7 +1261,8 @@ CONTAINS
     IF (.NOT. model%has_ctrl) model%l0_dot = CD_ZERO
     model%has_ctrl = .TRUE.
     model%l0_dot(elems) = l0_dot
-    model%fc_valid = .FALSE.
+    ! the cached committed force stays valid (it is the force at l0_c); the carried factor
+    ! holds the tangent of the old lengths
     model%tr_valid = .FALSE.
 
   CONTAINS
@@ -1366,6 +1391,59 @@ CONTAINS
       IF (model%fr_active) model%fr_k = model%contact_kn
     END IF
   END SUBROUTINE rebuild_length_caches
+
+  SUBROUTINE assemble_committed_force(model, ErrStat, ErrMsg)
+    !! The committed force F_n = R(q_n, v_n, t_n) into ws_R, with the lengths and rates the
+    !! committed state was reached with (l0_c, l0_dot_c). After a length change the
+    !! length-dependent caches are rebuilt from l0_c for this one evaluation and the present
+    !! ones are moved back afterwards, bit for bit; otherwise this is the plain evaluation.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: l0_now(:), rate_now(:), mgb_now(:, :), trib_now(:), kn_now(:), cn_now(:), frk_now(:)
+    REAL(wp), ALLOCATABLE :: l0_old(:)
+    INTEGER :: es
+    CHARACTER(200) :: em
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (model%has_ctrl) THEN
+      IF (.NOT. (ALL(bits_equal(model%l0, model%l0_c)) .AND. ALL(bits_equal(model%l0_dot, model%l0_dot_c)))) THEN
+        rate_now = model%l0_dot
+        model%l0_dot = model%l0_dot_c
+        IF (.NOT. ALL(bits_equal(model%l0, model%l0_c))) THEN
+          l0_now = model%l0
+          mgb_now = model%Mgb
+          trib_now = model%trib
+          IF (model%has_contact) THEN
+            kn_now = model%contact_kn
+            cn_now = model%contact_cn
+            IF (model%fr_active) frk_now = model%fr_k
+          END IF
+          ! a copy, so no subobject of model is associated with a second dummy
+          l0_old = model%l0_c
+          CALL rebuild_length_caches(model, l0_old, es, em)
+          IF (es /= CD_HCDYN_OK) THEN
+            model%l0_dot = rate_now
+            ErrStat = es; ErrMsg = 'committed force: '//TRIM(em); RETURN
+          END IF
+          CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., ErrStat, ErrMsg)
+          model%l0 = l0_now
+          CALL MOVE_ALLOC(mgb_now, model%Mgb)
+          CALL MOVE_ALLOC(trib_now, model%trib)
+          IF (model%has_contact) THEN
+            CALL MOVE_ALLOC(kn_now, model%contact_kn)
+            CALL MOVE_ALLOC(cn_now, model%contact_cn)
+            IF (model%fr_active) CALL MOVE_ALLOC(frk_now, model%fr_k)
+          END IF
+        ELSE
+          CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., ErrStat, ErrMsg)
+        END IF
+        model%l0_dot = rate_now
+        RETURN
+      END IF
+    END IF
+    CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., ErrStat, ErrMsg)
+  END SUBROUTINE assemble_committed_force
 
   ELEMENTAL LOGICAL FUNCTION bits_equal(a, b) RESULT(same)
     !! Bitwise equality of two reals (so +0 and -0 differ).
@@ -2589,12 +2667,13 @@ CONTAINS
     IF (.NOT. had_field .AND. .NOT. model%a_restored) THEN
       CALL solve_consistent_acceleration(model, ErrStat, ErrMsg)
     ELSE
-      CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em)
+      CALL assemble_committed_force(model, es, em)
       ErrStat = es
       ErrMsg = em
       IF (es == CD_HCDYN_OK .AND. model%force_blend) THEN
         ! This validation is the next step's committed force F_n = R(q_n, v_n, t_n) under the
-        ! new field, the evaluation the step would otherwise repeat: cache it, keyed as usual.
+        ! new field (at the committed lengths), the evaluation the step would otherwise repeat:
+        ! cache it, keyed as usual.
         model%fc_R = model%ws_R
         model%fc_q = model%q
         model%fc_v = model%v
@@ -3021,9 +3100,10 @@ CONTAINS
         model%ws_an(pres_dofs(ip)) = model%a(pres_dofs(ip))
       END DO
     END IF
-    ! Committed force F_n = R(q_n, v_n, t_n) with the current load configuration: reused
-    ! from the previous step's converged evaluation when its key matches the committed
-    ! state exactly, evaluated here otherwise (one residual assembly).
+    ! Committed force F_n = R(q_n, v_n, t_n) with the current load configuration and the
+    ! lengths the committed state was reached with (active line control: l0_c): reused from
+    ! the previous step's converged evaluation when its key matches the committed state
+    ! exactly, evaluated here otherwise (one residual assembly).
     fc_hit = .FALSE.
     IF (model%force_blend) fc_hit = force_cache_matches()
     ! Cross-step factor reuse needs the step to continue bitwise from the state the carried
@@ -3035,7 +3115,7 @@ CONTAINS
     factor_ok = xs_active
     model%tr_valid = .FALSE.
     IF (model%force_blend .AND. .NOT. fc_hit) THEN
-      CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em2)
+      CALL assemble_committed_force(model, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
       END IF
@@ -3077,6 +3157,11 @@ CONTAINS
         e_ma = e_ma + model%ws_inert(iv)**2
       END DO
       use_ca = e_ma > CD_ZERO .AND. e_bal <= PRED_BALANCE**2*e_ma
+      ! Active line control: after a length or rate change the step's force departs from the
+      ! committed balance by the force of the change, a load step the constant-acceleration
+      ! guess does not anticipate; the step starts from the Newmark guess, which damps what
+      ! the change excites.
+      IF (use_ca .AND. model%has_ctrl) use_ca = lengths_committed()
     END IF
     ! The carried factor is used under the same smoothness test: through a transient it
     ! stops each step just inside the tolerance, and those states can lead the start-up of a
@@ -3687,6 +3772,11 @@ CONTAINS
       model%fc_d0 = model%endconn_d0
       model%fc_valid = .TRUE.
     END IF
+    ! The committed state was reached with the present lengths and rates.
+    IF (model%has_ctrl) THEN
+      model%l0_c = model%l0
+      model%l0_dot_c = model%l0_dot
+    END IF
     ! Largest nodal tangent turn of the step (the time-step diagnostic).
     DO i = 1, model%nn
       model%max_step_rotation = MAX(model%max_step_rotation, &
@@ -3735,6 +3825,19 @@ CONTAINS
       END DO
       win_done(slot) = .TRUE.
     END SUBROUTINE window_mean
+
+    LOGICAL FUNCTION lengths_committed() RESULT(ok)
+      !! The lengths and rates are those the committed state was reached with.
+      INTEGER :: ie
+      ok = .TRUE.
+      DO ie = 1, model%ne
+        IF (.NOT. (bits_equal(model%l0(ie), model%l0_c(ie)) .AND. &
+                   bits_equal(model%l0_dot(ie), model%l0_dot_c(ie)))) THEN
+          ok = .FALSE.
+          RETURN
+        END IF
+      END DO
+    END FUNCTION lengths_committed
 
     LOGICAL FUNCTION force_cache_matches() RESULT(ok)
       !! The cached F_n was evaluated at exactly the committed state and configuration.
@@ -4200,6 +4303,10 @@ CONTAINS
     model%ws_recovery_v0 = model%v
     model%ws_recovery_a0 = model%a
     IF (model%fr_active) model%ws_recovery_fr = model%fr_anchor
+    IF (model%has_ctrl) THEN
+      model%ws_recovery_l0_c = model%l0_c
+      model%ws_recovery_l0_dot_c = model%l0_dot_c
+    END IF
     t_save = model%t
     na_steps_save = model%na_steps_done; na_sum_save = model%na_iter_sum; na_mn_save = model%na_mn_active
     tensile_events_save = model%tensile_event_count
@@ -4287,6 +4394,8 @@ CONTAINS
       model%q = q_save; model%v = v_save; model%a = a_save; model%t = t_save
       model%endconn_d0 = d0_save
       IF (model%fr_active) model%fr_anchor = model%ws_recovery_fr
+      IF (model%has_ctrl) model%l0_c = model%ws_recovery_l0_c
+      IF (model%has_ctrl) model%l0_dot_c = model%ws_recovery_l0_dot_c
       model%na_steps_done = na_steps_save; model%na_iter_sum = na_sum_save; model%na_mn_active = na_mn_save
       model%tensile_event_count = tensile_events_save
       model%tensile_worst_element = tensile_element_save
@@ -4361,6 +4470,8 @@ CONTAINS
             model%q = q_save; model%v = v_save; model%a = a_save; model%t = t_save
             model%endconn_d0 = d0_save
             IF (model%fr_active) model%fr_anchor = model%ws_recovery_fr
+            IF (model%has_ctrl) model%l0_c = model%ws_recovery_l0_c
+            IF (model%has_ctrl) model%l0_dot_c = model%ws_recovery_l0_dot_c
             model%na_steps_done = na_steps_save
             model%na_iter_sum = na_sum_save
             model%na_mn_active = na_mn_save
@@ -4403,6 +4514,8 @@ CONTAINS
     model%q = q_save; model%v = v_save; model%a = a_save; model%t = t_save
     model%endconn_d0 = d0_save
     IF (model%fr_active) model%fr_anchor = model%ws_recovery_fr
+    IF (model%has_ctrl) model%l0_c = model%ws_recovery_l0_c
+    IF (model%has_ctrl) model%l0_dot_c = model%ws_recovery_l0_dot_c
     model%na_steps_done = na_steps_save; model%na_iter_sum = na_sum_save; model%na_mn_active = na_mn_save
     model%tensile_event_count = tensile_events_save
     model%tensile_worst_element = tensile_element_save
@@ -5883,7 +5996,8 @@ CONTAINS
     END IF
     IF (.NOT. ALLOCATED(model%snap_q)) THEN
       ALLOCATE (model%snap_q(model%ndof), model%snap_v(model%ndof), model%snap_a(model%ndof), &
-                model%snap_l0(model%ne), model%snap_l0_dot(model%ne))
+                model%snap_l0(model%ne), model%snap_l0_dot(model%ne), model%snap_l0_c(model%ne), &
+                model%snap_l0_dot_c(model%ne))
     END IF
     model%snap_q = model%q
     model%snap_v = model%v
@@ -5892,8 +6006,12 @@ CONTAINS
     model%snap_has_ctrl = model%has_ctrl
     IF (model%has_ctrl) THEN
       model%snap_l0_dot = model%l0_dot
+      model%snap_l0_c = model%l0_c
+      model%snap_l0_dot_c = model%l0_dot_c
     ELSE
       model%snap_l0_dot = CD_ZERO
+      model%snap_l0_c = model%l0
+      model%snap_l0_dot_c = CD_ZERO
     END IF
     model%snap_t = model%t
     model%snap_endconn_d0 = model%endconn_d0
@@ -5950,7 +6068,11 @@ CONTAINS
       END IF
     END IF
     model%has_ctrl = model%snap_has_ctrl
-    IF (model%has_ctrl) model%l0_dot = model%snap_l0_dot
+    IF (model%has_ctrl) THEN
+      model%l0_dot = model%snap_l0_dot
+      model%l0_c = model%snap_l0_c
+      model%l0_dot_c = model%snap_l0_dot_c
+    END IF
     model%q = model%snap_q
     model%v = model%snap_v
     model%a = model%snap_a
@@ -5987,13 +6109,14 @@ CONTAINS
                                                model%att_cda, model%att_cdax)
     IF (ALLOCATED(model%att_mass)) DEALLOCATE (model%att_mass, model%att_madd)
     model%has_attach = .FALSE.
-    IF (ALLOCATED(model%l0_dot)) DEALLOCATE (model%l0_dot)
+    IF (ALLOCATED(model%l0_dot)) DEALLOCATE (model%l0_dot, model%l0_c, model%l0_dot_c, model%ws_recovery_l0_c, &
+                                             model%ws_recovery_l0_dot_c)
     model%has_ctrl = .FALSE.
     IF (ALLOCATED(model%seabed_diameter_elem)) DEALLOCATE (model%seabed_diameter_elem)
     model%has_seabed_recompute = .FALSE.
     model%seabed_kbot = CD_ZERO
     model%seabed_cn_over_kn = CD_ZERO
-    IF (ALLOCATED(model%snap_l0)) DEALLOCATE (model%snap_l0, model%snap_l0_dot)
+    IF (ALLOCATED(model%snap_l0)) DEALLOCATE (model%snap_l0, model%snap_l0_dot, model%snap_l0_c, model%snap_l0_dot_c)
     model%snap_has_ctrl = .FALSE.
     IF (ALLOCATED(model%l0)) DEALLOCATE (model%l0)
     IF (ALLOCATED(model%EA)) DEALLOCATE (model%EA)

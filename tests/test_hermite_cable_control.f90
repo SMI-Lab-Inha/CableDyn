@@ -15,10 +15,13 @@ PROGRAM test_hermite_cable_control
   !!   D  a weightless taut cable paid out at a constant rate Ldot carries the Kelvin-Voigt
   !!      tension EA (H/L' - 1) - BA H Ldot/L'**2 (without the length rate it does not);
   !!   E  a slack cable whose top span is ramped slowly ends at the static equilibrium of the
-  !!      edited lengths.
-  !! The axial cases B-D hold every transverse DOF, so the closed forms are exact for the
+  !!      edited lengths;
+  !!   F  the cable of D paid out at a constant rate under the force-blended generalised-alpha
+  !!      with alpha_f > 0 carries the same tension as with alpha_f = 0, the closed form of D:
+  !!      the committed force of each step belongs to the lengths it was reached with.
+  !! The axial cases B-D and F hold every transverse DOF, so the closed forms are exact for the
   !! cubic-Hermite element (linear tension, quadratic displacement); the transient is damped
-  !! by BA and rho_inf = 0.
+  !! by BA and, in A-E, rho_inf = 0.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Reaction, &
@@ -43,6 +46,7 @@ PROGRAM test_hermite_cable_control
   CALL check_taut_haul_in()
   CALL check_payout_rate_lag()
   CALL check_slow_ramp_static()
+  CALL check_payout_alpha_f()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -98,7 +102,8 @@ CONTAINS
     lam = 1.3_wp
     CALL CD_HermiteCable_Dyn_Set_SegmentLength(a, SPAN, lam*l0(SPAN), [0.0_wp, 0.0_wp], es, em)
     CALL require(es == CD_HCDYN_OK .AND. a%has_ctrl, 'A: span lengthened: '//TRIM(em))
-    CALL require(.NOT. a%fc_valid .AND. .NOT. a%tr_valid, 'A: a length change drops the force cache and factor')
+    CALL require(.NOT. a%tr_valid .AND. same_bits(a%l0_c, l0) .AND. ALL(a%l0_dot_c == 0.0_wp), &
+                 'A: a length change drops the carried factor; the committed state keeps its lengths')
     l0b = l0
     l0b(SPAN) = lam*l0(SPAN)
     CALL build_bed_model(b, l0b, q, diam, KBOT, CBOT, ZBED, es, em)
@@ -109,9 +114,10 @@ CONTAINS
     CALL require(same_bits(a%contact_kn, b%contact_kn) .AND. same_bits(a%contact_cn, b%contact_cn), &
                  'A: nodal seabed coefficients equal a fresh build bit for bit')
     CALL require(same_bits(a%fr_k, b%fr_k), 'A: friction spring stiffness equals a fresh build bit for bit')
-    ! with the committed acceleration re-derived, the two models step identically
+    ! with the committed acceleration re-derived (a non-stepping commit, after which the
+    ! committed state belongs to the new lengths), the two models step identically
     CALL CD_HermiteCable_Dyn_Recompute_Acceleration(a, es, em)
-    CALL require(es == CD_HCDYN_OK .AND. nan_max_abs(a%a - b%a) <= 0.0_wp, &
+    CALL require(es == CD_HCDYN_OK .AND. nan_max_abs(a%a - b%a) <= 0.0_wp .AND. same_bits(a%l0_c, a%l0), &
                  'A: the re-derived acceleration equals the fresh model''s')
     DO k = 1, 3
       CALL CD_HermiteCable_Dyn_Step(a, DT, 50, 1.0e-10_wp, es, em)
@@ -123,11 +129,13 @@ CONTAINS
                  'A: the controlled model marches exactly as one built with the new lengths')
     CALL CD_HermiteCable_Dyn_End(b)
 
-    ! a rate-only change rebuilds nothing but drops the force cache
+    ! a rate-only change rebuilds nothing and keeps the committed force (it belongs to the
+    ! committed rates, which stay)
     ref = a
     CALL CD_HermiteCable_Dyn_Set_SegmentLength(a, SPAN, a%l0(SPAN), [0.05_wp, 0.05_wp], es, em)
     CALL require(es == CD_HCDYN_OK .AND. same_bits2(a%Mgb, ref%Mgb) .AND. same_bits(a%l0, ref%l0) .AND. &
-                 .NOT. a%fc_valid .AND. ALL(a%l0_dot(SPAN) == 0.05_wp) .AND. ALL(a%l0_dot(1:6) == 0.0_wp), &
+                 a%fc_valid .AND. same_bits(a%fc_R, ref%fc_R) .AND. ALL(a%l0_dot_c == 0.0_wp) .AND. &
+                 ALL(a%l0_dot(SPAN) == 0.05_wp) .AND. ALL(a%l0_dot(1:6) == 0.0_wp), &
                  'A: a rate-only change keeps the caches and records the rate on the span')
 
     ! atomic failure: nothing is written
@@ -397,18 +405,61 @@ CONTAINS
     CALL CD_HermiteCable_Dyn_End(m)
   END SUBROUTINE check_slow_ramp_static
 
+  SUBROUTINE check_payout_alpha_f()
+    !! F: the cable of D paid out at Ldot = 0.01 m/s, marched with rho_inf = 0.4
+    !! (alpha_f = 2/7) and with rho_inf = 0 (alpha_f = 0). The force-blended residual weighs
+    !! the committed force F_n by alpha_f; F_n is the force at the lengths of the step that
+    !! reached the committed state, so the blend tracks the quasi-static tension
+    !! EA (H/L' - 1) - BA H Ldot/L'**2 at either alpha_f. Evaluating F_n with the new lengths
+    !! instead lags the tension by a fixed fraction of the per-step change
+    !! dT = EA H Ldot dt/L'**2 (the pay-out ramp artifact this check guards against).
+    INTEGER, PARAMETER :: NE = 10
+    REAL(wp), PARAMETER :: L = 10.0_wp, H = 10.1_wp, EA = 1.0e5_wp, RHOA = 1.0_wp, BA = 1.0e5_wp
+    REAL(wp), PARAMETER :: LDOT = 0.01_wp, TEND = 4.0_wp, DT = 0.01_wp
+    TYPE(CD_HermiteCableDynType) :: m
+    REAL(wp) :: s, z(NE + 1), mz(NE + 1), err(2), t_hist(NINT(TEND/DT), 2), d_step, diff
+    INTEGER :: i, es, pass
+    CHARACTER(300) :: em
+
+    d_step = EA*H*LDOT*DT/(L + LDOT*TEND)**2
+    DO pass = 1, 2
+      DO i = 1, NE + 1
+        s = REAL(i - 1, wp)*L/REAL(NE, wp)
+        z(i) = s*H/L
+        mz(i) = H/L
+      END DO
+      CALL vertical_model(m, L/REAL(NE, wp), EA, 0.0_wp, RHOA, BA, z, mz, .TRUE., es, em, &
+                          rho_inf=MERGE(0.4_wp, 0.0_wp, pass == 1))
+      CALL require(es == CD_HCDYN_OK, 'F: init: '//TRIM(em))
+      IF (es /= CD_HCDYN_OK) RETURN
+      CALL march_rate(m, [NE - 1, NE], LDOT, .TRUE., TEND, DT, H, EA, BA, err(pass), es, em, t_hist(:, pass))
+      CALL require(es == CD_HCDYN_OK, 'F: march: '//TRIM(em))
+      CALL CD_HermiteCable_Dyn_End(m)
+      IF (es /= CD_HCDYN_OK) RETURN
+    END DO
+    diff = MAXVAL(ABS(t_hist(NINT(1.0_wp/DT):, 1) - t_hist(NINT(1.0_wp/DT):, 2)))
+    WRITE (*, '(A,ES10.3,A,ES12.5,A,ES12.5,A,ES12.5)') '  F: per-step tension change ', d_step, &
+      ' N; max error vs the closed form at alpha_f = 2/7 ', err(1), ' N, at alpha_f = 0 ', err(2), &
+      ' N; max difference ', diff
+    CALL require(err(1) <= 2.0e-2_wp*d_step, 'F: at alpha_f > 0 the tension follows the quasi-static closed form')
+    CALL require(diff <= 2.0e-2_wp*d_step, 'F: the tension at alpha_f > 0 equals the one at alpha_f = 0')
+  END SUBROUTINE check_payout_alpha_f
+
   ! ------------------------------------------------------------------------------------------
-  SUBROUTINE vertical_model(model, l, ea, w, rhoa, ba, z, mz, fix_bottom, ErrStat, ErrMsg)
+  SUBROUTINE vertical_model(model, l, ea, w, rhoa, ba, z, mz, fix_bottom, ErrStat, ErrMsg, rho_inf)
     !! A vertical cable along z (node 1 at the bottom, the last node at the fixed top) held in
-    !! every transverse DOF, so only r_z and m_z move: an axial bar under weight w.
+    !! every transverse DOF, so only r_z and m_z move: an axial bar under weight w. rho_inf
+    !! (default 0) is the generalised-alpha spectral radius.
     TYPE(CD_HermiteCableDynType), INTENT(OUT) :: model
     REAL(wp), INTENT(IN) :: l, ea, w, rhoa, ba, z(:), mz(:)
     LOGICAL, INTENT(IN) :: fix_bottom
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: rho_inf
     REAL(wp), ALLOCATABLE :: q(:)
     INTEGER, ALLOCATABLE :: fixed(:)
     INTEGER :: nn, ne, i, k
+    REAL(wp) :: rho
     nn = SIZE(z)
     ne = nn - 1
     ALLOCATE (q(6*nn))
@@ -421,8 +472,10 @@ CONTAINS
     END DO
     fixed = [fixed, 6*nn - 3]
     IF (fix_bottom) fixed = [fixed, 3]
+    rho = 0.0_wp
+    IF (PRESENT(rho_inf)) rho = rho_inf
     CALL CD_HermiteCable_Dyn_Init(model, [(l, k=1, ne)], [(ea, k=1, ne)], [(1.0_wp, k=1, ne)], &
-                                  [(rhoa, k=1, ne)], [(w, k=1, ne)], q, fixed, -1.0e3_wp, 0.0_wp, 0.0_wp, &
+                                  [(rhoa, k=1, ne)], [(w, k=1, ne)], q, fixed, -1.0e3_wp, 0.0_wp, rho, &
                                   ErrStat, ErrMsg)
     IF (ErrStat /= CD_HCDYN_OK) RETURN
     CALL CD_HermiteCable_Dyn_Set_Axial_Damping(model, [(ba, k=1, ne)], ErrStat, ErrMsg)
@@ -461,9 +514,10 @@ CONTAINS
     END DO
   END SUBROUTINE march_ramp
 
-  SUBROUTINE march_rate(model, span, ldot, with_rate, tend, dt, h, ea, ba, err_max, ErrStat, ErrMsg)
+  SUBROUTINE march_rate(model, span, ldot, with_rate, tend, dt, h, ea, ba, err_max, ErrStat, ErrMsg, tension)
     !! March a constant pay-out of the span (rate passed when with_rate) and return the largest
-    !! deviation of the top tension from EA (H/L' - 1) - BA H Ldot/L'**2 after the first second.
+    !! deviation of the top tension from EA (H/L' - 1) - BA H Ldot/L'**2 after the first second
+    !! (and, optionally, the top tension after every step).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: span(:)
     REAL(wp), INTENT(IN) :: ldot, tend, dt, h, ea, ba
@@ -471,6 +525,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: err_max
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: tension(:)
     REAL(wp) :: base(SIZE(span)), s_base, l_total, t, lp, rate, expect
     INTEGER :: n, k
     base = model%l0(span)
@@ -487,6 +542,7 @@ CONTAINS
       IF (ErrStat /= CD_HCDYN_OK) RETURN
       CALL CD_HermiteCable_Dyn_Step(model, dt, 50, 1.0e-6_wp, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCDYN_OK) RETURN
+      IF (PRESENT(tension)) tension(k) = top_tension(model)
       IF (t < 1.0_wp) CYCLE
       lp = l_total + ldot*t
       expect = ea*(h/lp - 1.0_wp) - ba*h*ldot/(lp*lp)

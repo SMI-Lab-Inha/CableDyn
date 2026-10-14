@@ -2239,14 +2239,18 @@ pre-allocated reserve free point that then moves with the attached line ends. On
 the bodies keep their staggered step with the remaining lines, and the reserve point is
 integrated on its line-end loads within the same line step.
 
-**Active line control.** A ``CONTROL`` row assigns a control channel to a line. On an
-``EI = 0`` line the commanded :math:`\Delta L` and :math:`\Delta\dot L` change the unstretched
-length and its rate of the End-A element, :math:`L_0 = L_{0,\text{base}} + \Delta L`; the
-structural mass and the point mass shares are updated consistently, while ``BA`` keeps its
-initial resolution. Commands that would make the element length non-positive are rejected.
+**Active line control.** A ``CONTROL`` row assigns a control channel to a line. The command
+acts on the segment at the line's fairlead-side end, the end on a host-driven point (coupled,
+vessel, turbine or body point, or an end of a coupled or vessel rod); when both or neither ends
+are host-driven, it acts on the segment at the ``NodeB`` written in the deck (MoorDyn-F's
+segment :math:`N` at ``AttachB``). On an ``EI = 0`` line the commanded :math:`\Delta L` and
+:math:`\Delta\dot L` change the unstretched length and its rate of that end element,
+:math:`L_0 = L_{0,\text{base}} + \Delta L`; the structural mass and the point mass shares are
+updated consistently, while ``BA`` keeps its initial resolution. Commands that would make the
+element length non-positive are rejected.
 
-On a finite-EI cable the command acts on the cable elements that make up the End-A segment of
-the deck mesh, of initial length :math:`S`. Each element scales by
+On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
+up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by
 :math:`\lambda = (S + \Delta L)/S`, :math:`L_{0,e} = \lambda L_{0,e,\text{base}}`, with rate
 :math:`\dot L_{0,e} = \Delta\dot L\, L_{0,e,\text{base}}/S`; :math:`\lambda` outside
 :math:`[0.5, 2]` is rejected. The length is applied before a step and held over it. The
@@ -2254,10 +2258,19 @@ consistent mass, the attachment masses, the tributary lengths and the nodal seab
 are rebuilt from the new lengths in the order initialisation used, so the model is the one a
 build with those lengths would give; the mass of the new lengths acts over the step and its rate
 term :math:`\dot{\mathbf{M}}\mathbf{v}` is not modelled (as in MoorDyn), and the committed
-acceleration is kept as the history of the preceding step. The axial damping acts on the rate of
-the strain :math:`\varepsilon = |\mathbf{r}_{,\xi}|/L_0 - 1` along the motion and the length
-change. The tangent terms of :math:`\mathbf{r}_{,\xi}` carry the factor :math:`L_0` and cancel,
-so with :math:`\mathbf{p} = H'_1 \mathbf{r}_1 + H'_3 \mathbf{r}_2` the end-position part,
+acceleration is kept as the history of the preceding step. The committed state keeps the lengths
+and rates it was reached with: in the force-blended residual the committed force
+:math:`\mathbf{F}_n = \mathbf{R}(\mathbf{q}_n, \mathbf{v}_n, t_n)` is the force at those
+lengths, and only :math:`\mathbf{R}(\mathbf{q}_{n+1}, \mathbf{v}_{n+1}, t_{n+1})` takes the new
+ones. Evaluating :math:`\mathbf{F}_n` at the new lengths would add the force of the length change
+to the committed state, which the blend weighs by :math:`\alpha_f`; on a pay-out ramp the
+tension would then lag the quasi-static value by a fixed fraction of its change per step. A step
+that follows a change starts its Newton iteration from the Newmark predictor, not from the
+constant-acceleration one, since the change is a step in the load. The axial damping acts on
+the rate of the strain :math:`\varepsilon = |\mathbf{r}_{,\xi}|/L_0 - 1` along the motion and
+the length change. The tangent terms of :math:`\mathbf{r}_{,\xi}` carry the
+factor :math:`L_0` and cancel, so with :math:`\mathbf{p} = H'_1 \mathbf{r}_1 + H'_3 \mathbf{r}_2`
+the end-position part,
 
 .. math::
 

@@ -191,14 +191,14 @@ MODULE CableDyn_OpenFAST_Aggregate
     TYPE(DeckLine), ALLOCATABLE :: fail_lines(:)
     TYPE(DeckPoint), ALLOCATABLE :: fail_points(:)
     TYPE(DeckFailure), ALLOCATABLE :: snap_failures(:)
-    ! Active line control (CONTROL section): flattened channel -> (line, last
-    ! element, base length) table; ctrl_warned suppresses the MoorDyn bound
-    ! warnings after the first exceedance per row. A finite-EI row (ctrl_is_cable)
-    ! holds the cable index, the first element of its controlled trailing span and the
-    ! span's base length S; the span's base element lengths sit at
-    ! ctrl_span_l0(ctrl_span_off + 1:) (see CD_DeckAggregateType).
+    ! Active line control (CONTROL section): flattened channel -> (line, controlled
+    ! element, base length) table; ctrl_warned suppresses the bound warnings after the
+    ! first exceedance per row. The controlled segment is the deck segment at the line's
+    ! fairlead-side end (see CD_DeckAggregateType). A finite-EI row (ctrl_is_cable) holds
+    ! the cable index, the first of the ctrl_nelem cable elements of that segment and its
+    ! base length S; their base lengths sit at ctrl_span_l0(ctrl_span_off + 1:).
     INTEGER :: n_ctrl_chans = 0
-    INTEGER, ALLOCATABLE :: ctrl_chan(:), ctrl_line(:), ctrl_elem(:)
+    INTEGER, ALLOCATABLE :: ctrl_chan(:), ctrl_line(:), ctrl_elem(:), ctrl_nelem(:)
     REAL(wp), ALLOCATABLE :: ctrl_base_l0(:)
     LOGICAL, ALLOCATABLE :: ctrl_warned(:)
     LOGICAL, ALLOCATABLE :: ctrl_is_cable(:)
@@ -352,6 +352,7 @@ CONTAINS
       CALL MOVE_ALLOC(parts%ctrl_chan, candidate%ctrl_chan)
       CALL MOVE_ALLOC(parts%ctrl_line, candidate%ctrl_line)
       CALL MOVE_ALLOC(parts%ctrl_elem, candidate%ctrl_elem)
+      CALL MOVE_ALLOC(parts%ctrl_nelem, candidate%ctrl_nelem)
       CALL MOVE_ALLOC(parts%ctrl_base_l0, candidate%ctrl_base_l0)
       CALL MOVE_ALLOC(parts%ctrl_is_cable, candidate%ctrl_is_cable)
       CALL MOVE_ALLOC(parts%ctrl_line_id, candidate%ctrl_line_id)
@@ -1712,16 +1713,18 @@ CONTAINS
   END FUNCTION CD_AGG_NCtrlChans
 
   SUBROUTINE CD_AGG_Apply_LineControl(self, delta_l, delta_l_dot, ErrStat, ErrMsg)
-    !! Apply the host's cable-control command BEFORE an advance. On an EI = 0 line the
-    !! LAST (fairlead-side) segment's unstretched length becomes base + delta_l(chan)
-    !! with rate delta_l_dot(chan) -- the MoorDyn convention, applied unclamped with the
-    !! MoorDyn warning bounds (an increase beyond one base segment length or a reduction
-    !! past half of it warns once per row and proceeds). On a finite-EI cable every
-    !! element of the trailing span that makes up the deck's fairlead-side segment (base
-    !! length S) scales by lambda = (S + delta_l)/S, with rate delta_l_dot*l_e/S, so the
-    !! segment takes the same length and rate; lambda outside [0.5, 2] (the same bounds,
-    !! enforced) fails closed by line, since the cable elements would leave the mesh
-    !! resolution the static initialisation established.
+    !! Apply the host's cable-control command BEFORE an advance to the deck segment at the
+    !! fairlead-side end of each controlled line: the end on a host-driven point, else the
+    !! written NodeB (MoorDyn's AttachB, its segment N). On an EI = 0 line that element's
+    !! unstretched length becomes base + delta_l(chan) with rate
+    !! delta_l_dot(chan) -- the MoorDyn convention -- applied unclamped: a command beyond
+    !! MoorDyn-F's bounds (an increase above one base segment length or a reduction past
+    !! half of it, which stop MoorDyn-F) warns once per row and proceeds. On a finite-EI
+    !! cable every cable element of that segment (base length S) scales by
+    !! lambda = (S + delta_l)/S, with rate delta_l_dot*l_e/S, so the segment takes the same
+    !! length and rate; lambda outside [0.5, 2] (the same bounds, enforced) fails closed by
+    !! line, since the cable elements would leave the mesh resolution the static
+    !! initialisation established.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: delta_l(:), delta_l_dot(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1781,7 +1784,7 @@ CONTAINS
     DO c = 1, SIZE(self%ctrl_chan)
       ch = self%ctrl_chan(c)
       IF (self%ctrl_is_cable(c)) THEN
-        nspan = self%cables(self%ctrl_line(c))%line%ne - self%ctrl_elem(c) + 1
+        nspan = self%ctrl_nelem(c)
         BLOCK
           INTEGER :: elems(nspan)
           REAL(wp) :: l0_new(nspan), l0_rate(nspan), base
@@ -1906,6 +1909,7 @@ CONTAINS
     IF (ALLOCATED(self%ctrl_chan)) DEALLOCATE (self%ctrl_chan)
     IF (ALLOCATED(self%ctrl_line)) DEALLOCATE (self%ctrl_line)
     IF (ALLOCATED(self%ctrl_elem)) DEALLOCATE (self%ctrl_elem)
+    IF (ALLOCATED(self%ctrl_nelem)) DEALLOCATE (self%ctrl_nelem)
     IF (ALLOCATED(self%ctrl_base_l0)) DEALLOCATE (self%ctrl_base_l0)
     IF (ALLOCATED(self%ctrl_warned)) DEALLOCATE (self%ctrl_warned)
     IF (ALLOCATED(self%ctrl_is_cable)) DEALLOCATE (self%ctrl_is_cable)

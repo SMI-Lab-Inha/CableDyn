@@ -175,10 +175,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   segment becomes S + `DeltaL` long. The cable's mass, attachment masses, tributary lengths and
   seabed contact coefficients follow the new lengths, and the axial damping acts on the rate of
   the strain the elastic force uses, so a segment paid out at constant strain carries no damping
-  force. A command outside half to twice the segment's initial length stops the run with a
-  message that names the line, and FAST.Farm decks still reject `CONTROL`. A zero command leaves
-  the run bit-identical to an uncontrolled one, and a checkpoint restart continues
-  bit-identically. See the manual's deck format page (CONTROL).
+  force. The generalised-α step takes its committed force at the lengths of the preceding step,
+  so a pay-out ramp follows the quasi-static tension at any `rhoInf`. A command outside half to
+  twice the segment's initial length stops the run with a message that names the line, and
+  FAST.Farm decks still reject `CONTROL`. A zero command leaves the run bit-identical to an
+  uncontrolled one, and a checkpoint restart continues bit-identically. See the manual's deck
+  format page (CONTROL).
 
 ### Changed
 
@@ -531,6 +533,21 @@ All notable changes to CableDyn are recorded in this file. The format follows
   than a factor four, as the manual states; it had kept the first tangent for the whole step,
   which a slow linear contraction could exhaust (30 iterations at the start of the 5 m heave
   cells of the L2-2 parity test with the force blend).
+- Active tensioning (`CONTROL`) of an `EI = 0` line now changes the segment at the line's
+  fairlead-side end, the end on a host-driven point (`Coupled`, `Vessel`, `Turbine<J>`,
+  `Body<N>` or a `Coupled`/`Vessel` rod end), and the segment at the `NodeB` written in the
+  deck when both or neither ends are host-driven, as MoorDyn-F does for a deck in its own order.
+  It had always changed the segment at CableDyn's End A, the `NodeA` of a line that the
+  automatic anchor-first swap leaves in deck order. Two kinds of line change: a line kept in
+  deck order whose only host-driven end is its `NodeB`, such as a stock-order
+  `Connect`-to-`Vessel` clump leg or a line from a `Fixed` anchor to a coupled rod end, now
+  controls the segment at the host-driven end instead of the one at its `NodeA`; and a line
+  with both or no host-driven ends that the swap leaves in deck order, such as a
+  `Connect`-to-`Fixed` or `Connect`-to-`Connect` line, a `Fixed` hang-off above a
+  `Free`/`Connect` point, or a line between two vessel points, now controls the segment at its
+  `NodeB`. Lines from a `Fixed` anchor to a `Coupled`, `Vessel` or `Body<N>` point,
+  written in either order, and lines written fairlead first from a host-driven `NodeA` control
+  the same segment as before.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,
