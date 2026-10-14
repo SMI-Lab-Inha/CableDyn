@@ -271,7 +271,8 @@ CONTAINS
                                           endconn_stiffness, endconn_direction, endconn_mode, &
                                           waterline_z, dry_buoyancy, merit_line_search, pseudo_transient, &
                                           energy_minimization, stable, water_weight, current, residual_out, &
-                                          tangent_out, friction, residual_unmet, torsion)
+                                          tangent_out, friction, residual_unmet, torsion, energy_out, &
+                                          end_share_hold)
     !! Solve the finite-EI static equilibrium of a Hermite bending-cable line.
     !!
     !! l0(ne), EA(ne), EI(ne), w(ne) : per-element rest length, axial/bending stiffness,
@@ -396,6 +397,15 @@ CONTAINS
     !!                                  iters_out and res_out include the twist stages. Not
     !!                                  combined with pseudo_transient,
     !!                                  equilibrate_linear_system or tangent_out.
+    !! energy_out (optional, out)      : the total potential energy of energy_minimization at
+    !!                                  the returned state (with residual_out, a check that
+    !!                                  the residual is its gradient).
+    !! end_share_hold (optional, 2)    : shares in [0, 1] of the end elements lying on the
+    !!                                  floor (node 1 end, node nn end) at which the potential
+    !!                                  takes the floor-carried end moments of held ends
+    !!                                  resting on the seabed; the residual keeps the shares of
+    !!                                  each iterate (CD_Seabed_End_Element_Share). Omitted, an
+    !!                                  energy line search holds the shares of its start.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping
@@ -430,6 +440,8 @@ CONTAINS
     ! NOCONVERGE, "Newton did not converge"): the state is a finite best iterate a caller
     ! may continue from.
     LOGICAL, INTENT(OUT), OPTIONAL :: residual_unmet
+    REAL(wp), INTENT(OUT), OPTIONAL :: energy_out
+    REAL(wp), INTENT(IN), OPTIONAL :: end_share_hold(2)
     TYPE(CD_HermiteTorsionType), INTENT(INOUT), OPTIONAL :: torsion
 
     INTEGER :: ne, nn, ndof, c, it, es, i, b, nci, n_buoy, omp_threads, axial_order, bending_order
@@ -476,6 +488,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: tors_grs(:), tors_gt(:)
     REAL(wp), ALLOCATABLE :: tors_rhs2(:, :)
     REAL(wp) :: contact_cs(2), end_support(3, 2), end_floor(3), end_g(2), end_sfac
+    ! Floor-carried end moments in the potential: the end element shares of the last
+    ! evaluation, and the shares held (end_share_held) by an energy line search or the caller.
+    REAL(wp) :: end_share_last(2), end_share_pi(2)
+    LOGICAL :: end_share_held, end_share_caller
     INTEGER :: end_es
     CHARACTER(200) :: end_em
 
@@ -792,6 +808,17 @@ CONTAINS
     ! keep their seed, so this factor is fixed for the solve; the share of the element lying
     ! on the floor (end_element_share) follows the iterate.
     end_support = CD_ZERO
+    end_share_last = CD_ZERO
+    end_share_pi = CD_ZERO
+    end_share_caller = PRESENT(end_share_hold)
+    IF (end_share_caller) THEN
+      IF (.NOT. CD_All_Finite(end_share_hold) .OR. ANY(end_share_hold < CD_ZERO) .OR. &
+          ANY(end_share_hold > CD_ONE)) THEN
+        CALL fail('end_share_hold must lie in [0, 1]'); RETURN
+      END IF
+      end_share_pi = end_share_hold
+    END IF
+    end_share_held = end_share_caller
     IF (use_nodal_contact .OR. kn > CD_ZERO) THEN
       DO i = 1, 2
         c = MERGE(1, nn, i == 1)
@@ -944,6 +971,7 @@ CONTAINS
     res_out = rnorm
     IF (PRESENT(residual_out)) residual_out = R
     IF (PRESENT(tangent_out)) tangent_out = ab
+    IF (PRESENT(energy_out)) energy_out = pi_total
     IF (PRESENT(stable)) THEN
       ! A seabed friction capacity mu*N follows the normal force, so a sliding node's
       ! friction row depends on its vertical position with no reciprocal term: a
@@ -1499,7 +1527,7 @@ CONTAINS
       REAL(wp), PARAMETER :: ARMIJO = 1.0e-4_wp
       INTEGER, PARAMETER :: MAX_SHIFTS = 60, MAX_HALVINGS = 30
       REAL(wp), PARAMETER :: NEWTON_MERIT = 1.0e-4_wp, NEWTON_MU = 1.0e-6_wp
-      REAL(wp) :: pi0, pi_abs0, merit0, dmax, gd, alpha, trial_norm, sc
+      REAL(wp) :: pi0, pi_abs0, merit0, dmax, gd, alpha, trial_norm, sc, share0(2)
       INTEGER :: shift, bt, j, i, es_trial, info
       LOGICAL :: accepted
       CHARACTER(200) :: em_trial
@@ -1516,6 +1544,10 @@ CONTAINS
       pi0 = pi_total
       pi_abs0 = pi_abs
       merit0 = rmerit
+      ! The floor-carried end moments enter the energy at the end element shares of q_energy,
+      ! held over the line search below: along it the residual's end-support load is then the
+      ! gradient of the energy the Armijo test uses (gd = R.dq), at the start and at every trial.
+      share0 = end_share_last
       ! Close to equilibrium (small residual, and the energy steps needing at most a
       ! negligible shift, i.e. a positive definite tangent), a plain Newton step on the
       ! full (possibly nonsymmetric) tangent with a residual-merit line search comes first. The energy is only a
@@ -1562,6 +1594,10 @@ CONTAINS
       DO j = 1, ndof
         IF (solve_mask(j)) dmax = MAX(dmax, ABS(ab_energy(KL_H + KU_H + 1, j)))
       END DO
+      IF (.NOT. end_share_caller) THEN
+        end_share_pi = share0
+        end_share_held = .TRUE.
+      END IF
       DO shift = 1, MAX_SHIFTS
         ! Symmetric part of K + mu*D in LAPACK lower band storage; fixed DOFs decoupled.
         sym = CD_ZERO
@@ -1624,6 +1660,7 @@ CONTAINS
           END IF
           IF (accepted) THEN
             skip_tangent = .FALSE.
+            end_share_held = end_share_caller
             IF (tors_on) tors_theta_acc = tors_theta_eval
             IF (bt == 0) THEN
               lm_mu = 0.25_wp*lm_mu
@@ -1638,6 +1675,7 @@ CONTAINS
         IF (lm_mu > 1.0e12_wp) EXIT
       END DO
       skip_tangent = .FALSE.
+      end_share_held = end_share_caller
       q = q_energy
       stalled = .TRUE.
     END SUBROUTINE energy_update
@@ -1997,6 +2035,11 @@ CONTAINS
           RETURN
         END IF
         e0 = pi_total
+        ! the energies compared below take the end element shares of this state (energy_update)
+        IF (.NOT. end_share_caller) THEN
+          end_share_pi = end_share_last
+          end_share_held = .TRUE.
+        END IF
         tors_rhs = tors_v
         IF (use_rigid) CALL rigid_increment_to_global(tors_rhs)
         vscale = CD_ZERO
@@ -2008,6 +2051,7 @@ CONTAINS
           END IF
         END DO
         IF (.NOT. (vscale > CD_ZERO)) THEN
+          end_share_held = end_share_caller
           why = 'the unstable mode vanishes on the free DOFs'
           RETURN
         END IF
@@ -2033,6 +2077,7 @@ CONTAINS
             EXIT
           END IF
         END DO
+        end_share_held = end_share_caller
         IF (.NOT. moved) THEN
           q = tors_q
           tors_theta_acc = th0
@@ -2429,13 +2474,19 @@ CONTAINS
       !! the element's consistent weight moment w l0^2/12 along end_support(:, iend) times
       !! the share of the element lying on the floor (CD_Seabed_End_Element_Share of the
       !! inner node's elastic normal force, the same contact law as the assembly below). The
-      !! share couples the end tangent to the inner node's translations. The potential takes
-      !! the share at the iterate: exact where it is 0 or 1, first order in between.
+      !! share couples the end tangent to the inner node's translations. The load is not
+      !! conservative where the share is between 0 and 1 (its conjugate force on the inner
+      !! node, mom (dS/dgap) (d.m) n, would be a contact force the floor does not exert), so
+      !! the potential takes the share end_share_pi (the share at the iterate, or the share
+      !! held by an energy line search, see energy_update): the residual is then the gradient
+      !! of the potential along a search, as for the other non-potential loads (current drag,
+      !! friction). The share at the iterate is recorded in end_share_last.
       INTEGER, INTENT(IN) :: iend, e, inode
       REAL(wp), INTENT(IN) :: sgn
       INTEGER, INTENT(OUT) :: sp_stat
       CHARACTER(*), INTENT(OUT) :: sp_msg
       REAL(wp) :: z_fl, gxg_s, gyg_s, g_s(2), sf, n_in(3), pen_s, normal_s, normal_gap_s, elem, delem, mom
+      REAL(wp) :: elem_pi
       INTEGER :: base, bin, i, j
       CHARACTER(200) :: em_s
       sp_stat = CD_HCSTAT_OK
@@ -2466,11 +2517,16 @@ CONTAINS
         normal_gap_s = CD_ZERO
       END IF
       CALL CD_Seabed_End_Element_Share(normal_s, normal_gap_s, 0.5_wp*w_cur(e)*l0(e), elem, delem)
-      IF (.NOT. (elem > CD_ZERO)) RETURN
+      end_share_last(iend) = elem
+      elem_pi = elem
+      IF (end_share_held) elem_pi = end_share_pi(iend)
       mom = sgn*w_cur(e)*l0(e)*l0(e)/12.0_wp
+      IF (elem_pi > CD_ZERO) THEN
+        pi_total = pi_total + mom*elem_pi*DOT_PRODUCT(end_support(:, iend), q(base + 1:base + 3))
+        pi_abs = pi_abs + ABS(mom*elem_pi*DOT_PRODUCT(end_support(:, iend), q(base + 1:base + 3)))
+      END IF
+      IF (.NOT. (elem > CD_ZERO)) RETURN
       R(base + 1:base + 3) = R(base + 1:base + 3) + (mom*elem)*end_support(:, iend)
-      pi_total = pi_total + mom*elem*DOT_PRODUCT(end_support(:, iend), q(base + 1:base + 3))
-      pi_abs = pi_abs + ABS(mom*elem*DOT_PRODUCT(end_support(:, iend), q(base + 1:base + 3)))
       ! d(gap)/d(r_inner) = -n_in (floor gradient held over the node)
       IF (delem /= CD_ZERO) THEN
         DO j = 1, 3

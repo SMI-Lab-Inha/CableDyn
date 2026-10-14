@@ -20,7 +20,7 @@ PROGRAM test_hermite_cable_static
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HermiteCable_Drag_Element, CD_HermiteCable_Dyn_Step
   USE CableDyn_SeabedContact, ONLY: CD_HermiteCable_Friction_Spring => CD_Seabed_Friction_Spring, &
-                                    CD_Seabed_End_Element_Share
+                                    CD_Seabed_End_Element_Share, CD_Seabed_Normal_Law
   USE CableDyn_Line, ONLY: CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
@@ -41,6 +41,7 @@ PROGRAM test_hermite_cable_static
   CALL check_seabed_mesh_jump()
   CALL check_scalar_contact_on_slope()
   CALL check_taut_line_anchored_on_floor()
+  CALL check_end_support_energy_gradient()
   CALL check_frictionless_slope_run()
   CALL check_long_sequence_hierarchy()
   CALL check_current_static()
@@ -383,6 +384,102 @@ CONTAINS
       CALL require(ABS(share - r*r*(3.0_wp - 2.0_wp*r)) <= 1.0e-15_wp, 'end element share: smoothstep')
     END DO
   END SUBROUTINE check_taut_line_anchored_on_floor
+
+  SUBROUTINE check_end_support_energy_gradient()
+    !! The energy line search (energy_minimization) tests the potential against R.dq, so the
+    !! residual must be the gradient of the potential it evaluates. With the end element's
+    !! inner node half way through its touchdown (share S = 1/2), the floor-carried end
+    !! moment depends on that node's height; the potential then takes the share held at the
+    !! search's start (end_share_hold), and central differences of it along several
+    !! directions reproduce R.d. With the share left to follow the trial states, the
+    !! difference along the inner node's height misses the end-support term by about
+    !! (w l0^2/12) (dS/dgap) m_z, here near 1 MN: no potential of R.
+    INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NDIR = 4
+    REAL(wp), PARAMETER :: H = 1.0e-5_wp
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(6*NN), qa(6*NN), q(6*NN), c(NN), res, r0(6*NN)
+    REAL(wp) :: trib(NN), kn, floor_z, gap, normal, normal_gap, share, dshare, ep, em_, rd, fd, fd_free, d(6*NN)
+    INTEGER :: fixed(6 + 2*NN), nfix, i, es, it, k
+    CHARACTER(512) :: em
+    l0 = 100.2_wp/NE; EA = 5.0e8_wp; EI = 2.0e4_wp; w = 800.0_wp; kn = 2.0e5_wp
+    trib = 0.0_wp
+    DO i = 1, NE
+      trib(i) = trib(i) + 0.5_wp*l0(i); trib(i + 1) = trib(i + 1) + 0.5_wp*l0(i)
+    END DO
+    CALL CD_HermiteCable_Trivial_Seed([0.0_wp, 0.0_wp, -100.0_wp], [60.0_wp, 0.0_wp, -20.0_wp], l0, -100.0_wp, &
+                                      seed, es, em)
+    fixed(1:6) = [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3]
+    nfix = 6
+    DO i = 1, NN
+      fixed(nfix + 1:nfix + 2) = [6*i - 4, 6*i - 1]
+      nfix = nfix + 2
+    END DO
+    ! the taut line without a seabed, then a floor placed just above its node 2 (the anchor
+    ! is held below it): node 2 carries a quarter of its share, r = 1/2 of half the element
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed(1:nfix), -1.0e4_wp, 0.0_wp, 4, 200, 1.0e-10_wp, &
+                                      1.0_wp, qa, c, res, it, es, em)
+    CALL require(es == CD_HCSTAT_OK, 'energy-gradient line: '//TRIM(em))
+    floor_z = qa(9) + 0.5_wp*(0.5_wp*w(1)*l0(1))/(kn*trib(2))
+    gap = floor_z - qa(9)
+    CALL CD_Seabed_Normal_Law(gap, kn*trib(2), normal, normal_gap)
+    CALL CD_Seabed_End_Element_Share(normal, normal_gap, 0.5_wp*w(1)*l0(1), share, dshare)
+    CALL require(share > 0.4_wp .AND. share < 0.6_wp, 'energy-gradient: inner node inside the touchdown')
+    CALL end_support_evaluation(l0, EA, EI, w, fixed(1:nfix), floor_z, kn*trib, qa, ep, [share, 0.0_wp], r0)
+    DO k = 1, NDIR
+      d = 0.0_wp
+      SELECT CASE (k)
+      CASE (1)
+        d(9) = 1.0_wp                                   ! the inner node's height
+      CASE (2)
+        d(4) = 0.6_wp; d(6) = -0.8_wp                   ! the anchor's end tangent
+      CASE (3)
+        d(7) = 0.3_wp; d(9) = -0.5_wp; d(4) = 0.2_wp; d(15) = 0.4_wp
+      CASE (4)
+        DO i = 2, NE
+          d(6*i - 5) = 0.1_wp*SIN(REAL(i, wp)); d(6*i - 3) = 0.1_wp*COS(REAL(i, wp))
+          d(6*i - 2) = 0.01_wp*SIN(2.0_wp*i); d(6*i) = 0.01_wp*COS(2.0_wp*i)
+        END DO
+        d(4) = 0.01_wp; d(6) = 0.01_wp
+      END SELECT
+      rd = DOT_PRODUCT(r0, d)
+      CALL end_support_evaluation(l0, EA, EI, w, fixed(1:nfix), floor_z, kn*trib, qa + H*d, ep, [share, 0.0_wp])
+      CALL end_support_evaluation(l0, EA, EI, w, fixed(1:nfix), floor_z, kn*trib, qa - H*d, em_, [share, 0.0_wp])
+      fd = (ep - em_)/(2.0_wp*H)
+      CALL require(ABS(fd - rd) <= 1.0e-5_wp*MAX(ABS(rd), 1.0e3_wp), &
+                   'energy-gradient: the held-share potential differentiates to R')
+      IF (ABS(fd - rd) > 1.0e-5_wp*MAX(ABS(rd), 1.0e3_wp)) WRITE (*, '(A,I2,2ES16.8)') '  direction, FD, R.d', k, fd, rd
+      IF (k == 1) THEN
+        CALL end_support_evaluation(l0, EA, EI, w, fixed(1:nfix), floor_z, kn*trib, qa + H*d, ep)
+        CALL end_support_evaluation(l0, EA, EI, w, fixed(1:nfix), floor_z, kn*trib, qa - H*d, em_)
+        fd_free = (ep - em_)/(2.0_wp*H)
+        CALL require(ABS(fd_free - rd) > 1.0e5_wp, 'energy-gradient: a share following the state is no potential')
+      END IF
+    END DO
+
+  END SUBROUTINE check_end_support_energy_gradient
+
+  SUBROUTINE end_support_evaluation(l0, EA, EI, w, fixed, floor_z, contact_kn, qx, energy, hold, residual)
+    !! Potential (energy_minimization's) and residual of a Hermite line at qx: an evaluation
+    !! only (a tolerance no state misses), with the end element shares held at hold if given.
+    REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), floor_z, contact_kn(:), qx(:)
+    INTEGER, INTENT(IN) :: fixed(:)
+    REAL(wp), INTENT(OUT) :: energy
+    REAL(wp), INTENT(IN), OPTIONAL :: hold(2)
+    REAL(wp), INTENT(OUT), OPTIONAL :: residual(:)
+    REAL(wp) :: qo(SIZE(qx)), co(SIZE(l0) + 1), ro(SIZE(qx)), rs
+    INTEGER :: ito, eso
+    CHARACTER(512) :: emo
+    IF (PRESENT(hold)) THEN
+      CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, qx, fixed, floor_z, 0.0_wp, 1, 1, HUGE(1.0_wp), &
+                                        1.0_wp, qo, co, rs, ito, eso, emo, contact_kn=contact_kn, &
+                                        residual_out=ro, energy_out=energy, end_share_hold=hold)
+    ELSE
+      CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, qx, fixed, floor_z, 0.0_wp, 1, 1, HUGE(1.0_wp), &
+                                        1.0_wp, qo, co, rs, ito, eso, emo, contact_kn=contact_kn, &
+                                        residual_out=ro, energy_out=energy)
+    END IF
+    CALL require(eso == CD_HCSTAT_OK, 'energy-gradient evaluation: '//TRIM(emo))
+    IF (PRESENT(residual)) residual = ro
+  END SUBROUTINE end_support_evaluation
 
   SUBROUTINE check_scalar_contact_on_slope()
     !! The scalar-kn contact path on a structured (sloped) bathymetry includes the slope
