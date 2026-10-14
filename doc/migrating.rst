@@ -34,7 +34,11 @@ elements — exactly equivalent to a CableDyn ``LINES`` row ``1 4 1 -`` plus one
 ``1 chain 850.0 50``. MoorDyn writes lines anchor-first; when ``AttachA`` is a ``Fixed`` anchor
 and ``AttachB`` a ``Vessel``/``Coupled``/``Body`` fairlead, CableDyn swaps the ends so that
 **End A is the fairlead**, as everywhere in CableDyn. Endpoint channels therefore keep their
-physical meaning: ``FairTen`` is at the fairlead, ``AnchTen`` at the anchor.
+physical meaning: ``FairTen`` is at the fairlead, ``AnchTen`` at the anchor. A line with no
+``Fixed`` end (a shared line between two turbines or through a clump) keeps the order written:
+CableDyn's ``FairTen`` is at ``AttachA`` and ``AnchTen`` at ``AttachB``, while MoorDyn writes
+``FairTen`` at ``AttachB`` (its last node) and ``AnchTen`` at ``AttachA``. Compare such lines
+by end, not by channel name.
 
 ``examples/openfast/MoorDyn_UMaine.dat`` is such a stock deck. For a standalone run it needs
 only what OpenFAST (maintained by NLR, the National Laboratory of the Rockies, formerly NREL)
@@ -112,7 +116,8 @@ Keyword map
        decks in OpenFAST (the standalone driver rejects it). A deck with a finite-EI cable
        rejects both
    * - ``FairTen``, ``AnchTen``, point/node channels
-     - same names; tensions in N (:doc:`outputs`)
+     - same names; tensions in N (:doc:`outputs`). On a line with no ``Fixed`` end the two
+       end channels name the opposite ends from MoorDyn's (see above)
 
 What differs on purpose
 ~~~~~~~~~~~~~~~~~~~~~~~

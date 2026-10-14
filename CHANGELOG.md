@@ -56,6 +56,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   called MoorDyn's reduction unusable; with the 4-digit default `OutFmt` the same case
   reproduces that asymmetric reduction, so the check now refuses a reference written below
   full precision. VALIDATION.md and the OpenFAST page of the manual are updated.
+- The FAST.Farm shared-mooring comparison with stock MoorDyn now covers 600 s of the r-test
+  `MD_Shared` farm (`validation/scripts/fastfarm_shared_ab.py`): tension means agree to 0.02 %,
+  extremes to 0.25 %, and platform motions to millimetres. The migration guide now says that on
+  a line with no `Fixed` end `FairTen` and `AnchTen` name the opposite ends from MoorDyn's.
 
 ### Fixed
 
