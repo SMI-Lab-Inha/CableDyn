@@ -189,3 +189,4 @@ for details.
 | `find_package(LAPACK)` fails | no system LAPACK | install `liblapack-dev`, or build inside the conda environment |
 | Python exits while importing NumPy on Windows | runtime DLL directories on `PATH` | remove them from `PATH`; set `CABLEDYN_LIBRARY` instead |
 | Windows checkout differs from CI | CRLF line endings | `.gitattributes` enforces LF; run `git add --renormalize .` |
+| `modal` test stops with an access violation in `openblas.dll` (AMD Zen 4/5) | OpenBLAS 0.3.34 DGEMM stack overrun (OpenMathLib/OpenBLAS#6013) | `conda env update -f environment.yml`, which excludes 0.3.34, then configure a fresh build directory: the build keeps a staged `openblas.dll` that is newer than the package's |

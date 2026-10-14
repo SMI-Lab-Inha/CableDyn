@@ -8,6 +8,21 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
+  access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
+  Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,
+  and its Zen and Haswell DGEMM kernels then overrun their stack buffer for an inner
+  dimension above 128. This happens in builds without the AVX-512 kernels, such as the
+  conda-forge Windows package, and in any build when `OPENBLAS_CORETYPE` forces one of these
+  kernels (OpenMathLib/OpenBLAS#6013 and #6021). The dense reference eigensolve
+  (`DSYGV`) of the modal tests reached it. On hosted CI runners the fault appeared only on
+  those runners whose AMD CPU exposed AVX-512. The solver itself calls only banded LAPACK
+  routines and a 4 × 4 eigensolve, none of which passes DGEMM an inner dimension above 128,
+  and the released Windows executables use reference LAPACK, so results are unchanged. An existing environment takes the exclusion with
+  `conda env update -f environment.yml`, followed by a fresh build directory.
+
 ## [0.1.1] - 2026-10-09
 
 ### Added
