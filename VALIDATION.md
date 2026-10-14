@@ -330,6 +330,24 @@ scripts, results, and source provenance are in
     bit-identical (`correction_rewind`); a 40 s `NumCrctn = 1` OpenFAST run matches
     stock MoorDyn to **≤0.16%** of range and is bit-identical to its own
     `NumCrctn = 0` run.
+  - *Linearisation*
+    ([`validation/scripts/openfast_lin_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_ab.py)):
+    the twin decks linearise once at t = 0. Each run has platform DOFs only, still water, and HydroDyn
+    `ExctnMod = RdtnMod = 0`. MoorDyn's relaxation runs for `TmaxIC = 400 s`, and both `.lin` files are
+    written with `OutFmt = ES24.15E3`. CableDyn's quasi-static `dYdu` (no states) is compared with
+    MoorDyn's zero-frequency reduction `D − C A⁻¹ B` over 882 states. The per-fairlead stiffness agrees
+    to **0.07–0.10%** (line 1: 49 741 / 49 706 N/m in-plane horizontal) and the transverse `H/X` term
+    to 0.29%. The platform 6×6 diagonals agree to **≤0.10%** (surge 77 211 / 77 156 N/m,
+    roll 2.6473e8 / 2.6466e8 N·m/rad), and every entry to ≤1.0e-3 of √(KᵢᵢKⱼⱼ). Standalone CableDyn
+    static solves reproduce the block by finite differences to 1.5e-5, and its transverse term equals
+    the analytic `H/X`. Both 50-segment models sit 7–12% above the continuous elastic catenary
+    because of the touchdown discretisation; refining to 800 segments converges to it within 0.1%.
+    MoorDyn's reduction needs the full-precision `OutFmt`. With the usual `ES10.3E2` (4 digits),
+    `D ≈ 1e8 N/m` cancels to a ~1e4 N/m result and the block is 57% asymmetric with sign-flipped
+    diagonals; the script refuses such a reference. In the full-system ElastoDyn linearisation, roll
+    and pitch are 7.29e6 N·m/rad below the module-level 6×6 for both mooring modules. A run with no
+    mooring and only a constant −6.084e6 N vertical load at the platform reference point (HydroDyn
+    `AddF0`) reproduces this term, so it comes from ElastoDyn/glue code and not from the mooring module.
 
   The mooring-only A/B compares an all-chain system that both codes model in the same
   way; the finite-EI cable under coupled motion is compared with OrcaFlex in L4-1c.
@@ -707,8 +725,8 @@ stop with a named error.
 | Correction iterations (`NumCrctn > 0`) | Pass verified | bit-identical to own `NumCrctn = 0` run |
 | SeaState wave/current kinematics | Pass verified | wave A/B ≤0.16% of range |
 | Checkpoint-restart (incl. Free/Connect points) | Pass verified | restarted window = continuous run to 0.0 |
-| Linearisation | Pass scoped | quasi-static `dYdu`; invariants tested; not compared entry by entry with MoorDyn's `-lin` output, which is sensitive to the seabed-contact operating point in this case |
-| FAST.Farm shared moorings + clumps + channel record | Pass verified | 60 s farm A/B against stock MoorDyn; tension differences range from 0.04% to 3% across the compared statistics |
+| Linearisation | Pass verified (quasi-static stiffness) | quasi-static `dYdu` compared entry by entry with stock MoorDyn's zero-frequency reduction `D − C A⁻¹ B` (full-precision `.lin` output): fairlead stiffness 0.07–0.10%, transverse `H/X` term 0.29%, platform 6×6 diagonals ≤0.10%; standalone static FD 1.5e-5; transverse term equals `H/X`. Velocity/acceleration columns are zero by design ([`openfast_lin_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_ab.py)) |
+| FAST.Farm shared moorings + clumps + channel record | Pass verified | 600 s A/B of the r-test `MD_Shared` farm against stock MoorDyn (same deck, analysis from 100 s; [`fastfarm_shared_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/fastfarm_shared_ab.py)): tension means ≤0.02%, minima and maxima ≤0.25%, platform motions within millimetres and 0.001°; shared-line tension std 2.2–2.7% lower, 1.0% at half the mooring step (CableDyn's implicit step at the 0.05 s coupling step against MoorDyn's 1e-4 s explicit step). On the shared lines, which have no Fixed end, `FairTen`/`AnchTen` name the opposite ends from MoorDyn's (see the migration guide). MoorDyn's initial settling does not converge for the anchor legs 6 and 7 (2.4 m excess length at t = 0), a start-up transient over by 100 s that most likely set the 3% end of the earlier 60 s record |
 | Slack-line tension convention | Pass verified | tension-only dynamics; BA on slack lines matches `MoorDyn_Line.f90` |
 | Farm + restart / Farm + linearisation | Not applicable | FAST.Farm has no restart and does not call module linearisation; the same applies to stock MoorDyn |
 | Line failures (`FAILURE` table) | Pass verified | MoorDyn semantics on both paths (reserve-point pre-allocation, time or tension trigger, detach onto a massless Free point); standalone (point systems and free Rigid6 bodies), coupled, and checkpoint-replay tests |

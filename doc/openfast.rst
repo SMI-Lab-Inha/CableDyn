@@ -256,7 +256,10 @@ without an auxiliary process:
   ``MooringFile`` and removed after use, so side files resolve as on restart. Set ``dtM = DT`` and linearise at the initial
   operating point (``CalcSteady = False``,
   ``LinTimes = 0``, platform at its still-water equilibrium, rotor speed and pitch at their
-  steady values). Contact switching makes derivatives near touchdown non-smooth. A deck with
+  steady values). Contact switching makes derivatives near touchdown non-smooth. OpenFAST writes
+  the ``.lin`` matrices in the ``.fst`` ``OutFmt``; to compare them with MoorDyn's
+  ``D - C A^-1 B``, use a full-precision format such as ``"ES24.15E3"``, because the usual
+  4-digit format cannot resolve that reduction. A deck with
   Rigid6 bodies or rods is rejected at initialisation: the quasi-static reduction would hold
   them at their deck pose instead of re-solving their equilibrium.
 * **FAST.Farm** selects CableDyn with ``Mod_SharedMooring = 5`` for shared lines and

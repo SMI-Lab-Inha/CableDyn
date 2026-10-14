@@ -46,6 +46,20 @@ All notable changes to CableDyn are recorded in this file. The format follows
   outer iterations per step. The junction converges to the same tolerance, so results differ
   only within it, and by no more than the tolerance already allowed against a tightly converged
   run: tensions by about 2e-6 relative and the body position by under 1 µm.
+- The OpenFAST linearisation check (`validation/scripts/openfast_lin_ab.py`) now compares
+  CableDyn's quasi-static mooring stiffness entry by entry with stock MoorDyn's zero-frequency
+  reduction `D - C A^-1 B`, and fails above 0.5 %. It writes the `.lin` files with the
+  full-precision `OutFmt` `ES24.15E3`, lets MoorDyn settle its initial condition, and
+  linearises at t = 0. Its default case is the `examples/openfast` IEA-15 UMaine twin. On
+  that case the per-fairlead stiffness agrees to 0.07–0.10 % (0.29 % for the transverse
+  term), and the platform 6 × 6 diagonals agree to 0.10 % or better. The earlier record had
+  called MoorDyn's reduction unusable; with the 4-digit default `OutFmt` the same case
+  reproduces that asymmetric reduction, so the check now refuses a reference written below
+  full precision. VALIDATION.md and the OpenFAST page of the manual are updated.
+- The FAST.Farm shared-mooring comparison with stock MoorDyn now covers 600 s of the r-test
+  `MD_Shared` farm (`validation/scripts/fastfarm_shared_ab.py`): tension means agree to 0.02 %,
+  extremes to 0.25 %, and platform motions to millimetres. The migration guide now says that on
+  a line with no `Fixed` end `FairTen` and `AnchTen` name the opposite ends from MoorDyn's.
 
 ### Fixed
 
