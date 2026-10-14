@@ -3158,8 +3158,8 @@ CONTAINS
           IF (ALLOCATED(system%lines(i)%f_ext_dist_base)) &
             system%lines(i)%f_ext_dist_base = system%snap_fbase(lo:hi)
           IF (MAXVAL(ABS(system%lines(i)%l0 - system%snap_l0(le:he))) > CD_ZERO) THEN
-            ! The consistent mass follows l0 implicitly (never stored); only the
-            ! length-dependent seabed coefficients need a rebuild.
+            ! The consistent mass follows l0 implicitly (the step rebuilds its mass band when the
+            ! lengths change); only the length-dependent seabed coefficients need a rebuild.
             system%lines(i)%l0 = system%snap_l0(le:he)
             IF (system%lines(i)%has_seabed .AND. system%lines(i)%has_seabed_recompute) THEN
               CALL CD_Nodal_Seabed_Stiffness(system%lines(i)%seabed_kbot, &

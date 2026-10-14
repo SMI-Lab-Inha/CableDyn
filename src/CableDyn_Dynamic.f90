@@ -145,6 +145,12 @@ MODULE CableDyn_Dynamic
     REAL(wp), ALLOCATABLE :: nodes_eval(:, :)
     INTEGER :: topo_n_nodes = 0, bw_kl = 0, bw_ku = 0
     LOGICAL :: topo_valid = .FALSE., bw_valid = .FALSE.
+    ! M_band holds the element consistent mass band assembled for the remembered connectivity
+    ! and free list (bw_free) from the lengths mb_l0 and masses per length mb_rho; a step whose
+    ! inputs match reuses it instead of assembling the same band again. Every other writer of
+    ! M_band clears mb_valid.
+    LOGICAL :: mb_valid = .FALSE.
+    REAL(wp), ALLOCATABLE :: mb_l0(:), mb_rho(:)
     INTEGER :: ad_kl = 0
     INTEGER, ALLOCATABLE :: ad_finv(:), ad_ipiv(:), ad_fixed(:)
     REAL(wp), ALLOCATABLE :: ad_full(:, :), ad_add(:, :), ad_ab(:, :), ad_x(:, :), ad_result(:, :)
@@ -311,6 +317,9 @@ CONTAINS
     work%bw_ku = 0
     work%topo_valid = .FALSE.
     work%bw_valid = .FALSE.
+    work%mb_valid = .FALSE.
+    IF (ALLOCATED(work%mb_l0)) DEALLOCATE (work%mb_l0)
+    IF (ALLOCATED(work%mb_rho)) DEALLOCATE (work%mb_rho)
     IF (ALLOCATED(work%ad_finv)) DEALLOCATE (work%ad_finv)
     IF (ALLOCATED(work%ad_ipiv)) DEALLOCATE (work%ad_ipiv)
     IF (ALLOCATED(work%ad_fixed)) DEALLOCATE (work%ad_fixed)
@@ -536,6 +545,8 @@ CONTAINS
           RETURN
         END IF
       END IF
+      ! the band is factored in place below: not the step's reusable mass band
+      work%mb_valid = .FALSE.
       IF (use_element_mass_band) THEN
         CALL assemble_mass_band_free(elem_conn, l0, rho_a, work%dof_marker(1:n_dof), kl, ku, M_band, es, em)
       ELSE
@@ -615,7 +626,7 @@ CONTAINS
     REAL(wp), POINTER :: a_eval(:), a_alpha(:), q_alpha(:), v_eval(:), v_alpha(:), fint_eval(:)
     ! q_alpha viewed as (3, n_nodes) nodal coordinates, without a copy
     REAL(wp), POINTER :: q_alpha_nodes(:, :)
-    LOGICAL :: topo_ok, bw_hit
+    LOGICAL :: topo_ok, bw_hit, mb_hit
     INTEGER :: il, jl
     REAL(wp), POINTER :: Kt_eval(:, :), tension_eval(:), load_eval(:), jac_q_eval(:, :), jac_v_eval(:, :)
     REAL(wp), POINTER :: M_eff_eval(:, :), M_add_eval(:, :), dMa_a_dq_eval(:, :)
@@ -745,6 +756,7 @@ CONTAINS
     direct_banded = .NOT. has_load_proc .AND. .NOT. has_added_mass_proc
     use_element_mass_band = direct_banded .AND. .NOT. PRESENT(structural_mass)
     CALL validate_topology_once(work, elem_conn, n_dof/3, topo_ok)
+    bw_hit = .FALSE.
     IF (direct_banded) THEN
       bw_hit = topo_ok .AND. work%bw_valid
       IF (bw_hit) bw_hit = SIZE(work%bw_free) == n_free
@@ -753,6 +765,7 @@ CONTAINS
         kl = work%bw_kl
         ku = work%bw_ku
       ELSE
+        work%mb_valid = .FALSE.
         CALL CD_Cable_Free_Bandwidth(elem_conn, n_dof/3, free, kl, ku, es, em, topology_validated=topo_ok)
         IF (es /= 0) THEN
           CALL fail(ErrStat, ErrMsg, 'bandwidth analysis failed: '//TRIM(em))
@@ -907,9 +920,20 @@ CONTAINS
           RETURN
         END IF
       END IF
+      es = 0
       IF (use_element_mass_band) THEN
-        CALL assemble_mass_band_free(elem_conn, l0, rho_a, work%dof_marker(1:n_dof), kl, ku, M_band, es, em)
+        ! The element mass band depends only on the connectivity, the free list, l0 and
+        ! rho_a: a step with the inputs of the remembered band (bw_hit: same connectivity and
+        ! free list) reuses it, which is the band the assembly would build again.
+        mb_hit = .FALSE.
+        IF (bw_hit) mb_hit = mass_band_matches(work, l0, rho_a)
+        IF (.NOT. mb_hit) THEN
+          work%mb_valid = .FALSE.
+          CALL assemble_mass_band_free(elem_conn, l0, rho_a, work%dof_marker(1:n_dof), kl, ku, M_band, es, em)
+          IF (es == 0 .AND. work%bw_valid) CALL remember_mass_band(work, l0, rho_a)
+        END IF
       ELSE
+        work%mb_valid = .FALSE.
         CALL pack_dense_free_band(M, free, kl, ku, CD_ONE, M_band, es, em)
       END IF
       IF (es /= 0) THEN
@@ -1017,7 +1041,10 @@ CONTAINS
               eff_band_unfactored(il, jl) = eff_band(il, jl)
             END DO
           END DO
-          CALL CD_Factor_Banded(eff_band, kl, ku, ipiv, es, em)
+          ! eval_dynamic has just checked this band finite when a banded load or added-mass
+          ! callback contributes to it; the factorization then skips repeating that scan.
+          CALL CD_Factor_Banded(eff_band, kl, ku, ipiv, es, em, &
+                                matrix_validated=has_load_band_proc .OR. has_added_mass_band_proc)
           factored_now = es == 0
           work%step_factor = factored_now .AND. work%end_request
           IF (es /= 0) THEN
@@ -1031,7 +1058,9 @@ CONTAINS
         op_norm = MAX(CD_ONE, dense_row_abs_sum_max(eff, free))
       END IF
       IF (direct_banded) THEN
-        CALL CD_Solve_Factored_Banded(eff_band, kl, ku, ipiv, dq, es, em)
+        ! A tangent factored in this iteration is the finite LU CD_Factor_Banded returned; a
+        ! reused one keeps the full check.
+        CALL CD_Solve_Factored_Banded(eff_band, kl, ku, ipiv, dq, es, em, factor_validated=tangent_fresh)
       ELSE
         eff_free = eff(free, free)
         CALL CD_Solve_Dense_As_Banded(eff_free, dq, es, em)
@@ -1758,6 +1787,12 @@ CONTAINS
     CALL ensure_real_vector(work%load_eval, n_dof, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DYN_OK) RETURN
     IF (need_band) THEN
+      ! a reallocated mass band no longer holds the remembered one
+      IF (ALLOCATED(work%M_band)) THEN
+        IF (SIZE(work%M_band, 1) < ldab .OR. SIZE(work%M_band, 2) < n_free) work%mb_valid = .FALSE.
+      ELSE
+        work%mb_valid = .FALSE.
+      END IF
       CALL ensure_real_matrix(work%M_band, ldab, n_free, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DYN_OK) RETURN
       CALL ensure_real_vector(work%M_add_a_eval, n_dof, ErrStat, ErrMsg)
@@ -1863,6 +1898,56 @@ CONTAINS
     work%bw_valid = .TRUE.
   END SUBROUTINE remember_bandwidth
 
+  LOGICAL FUNCTION mass_band_matches(work, l0, rho_a) RESULT(match)
+    !! work%M_band holds the element mass band of these l0 and rho_a (for the remembered
+    !! connectivity and free list). Equality is tested as <= and >= so that a NaN never matches.
+    TYPE(CD_CableGenAlphaWorkspace), INTENT(IN) :: work
+    REAL(wp), INTENT(IN) :: l0(:), rho_a(:)
+    INTEGER :: e
+
+    match = work%mb_valid
+    IF (match) match = SIZE(work%mb_l0) == SIZE(l0) .AND. SIZE(work%mb_rho) == SIZE(rho_a)
+    IF (.NOT. match) RETURN
+    DO e = 1, SIZE(l0)
+      IF (.NOT. (work%mb_l0(e) <= l0(e) .AND. work%mb_l0(e) >= l0(e))) THEN
+        match = .FALSE.
+        RETURN
+      END IF
+    END DO
+    DO e = 1, SIZE(rho_a)
+      IF (.NOT. (work%mb_rho(e) <= rho_a(e) .AND. work%mb_rho(e) >= rho_a(e))) THEN
+        match = .FALSE.
+        RETURN
+      END IF
+    END DO
+  END FUNCTION mass_band_matches
+
+  SUBROUTINE remember_mass_band(work, l0, rho_a)
+    !! Record the inputs of the element mass band just assembled into work%M_band.
+    TYPE(CD_CableGenAlphaWorkspace), INTENT(INOUT) :: work
+    REAL(wp), INTENT(IN) :: l0(:), rho_a(:)
+    INTEGER :: istat
+
+    work%mb_valid = .FALSE.
+    IF (ALLOCATED(work%mb_l0)) THEN
+      IF (SIZE(work%mb_l0) /= SIZE(l0)) DEALLOCATE (work%mb_l0)
+    END IF
+    IF (ALLOCATED(work%mb_rho)) THEN
+      IF (SIZE(work%mb_rho) /= SIZE(rho_a)) DEALLOCATE (work%mb_rho)
+    END IF
+    IF (.NOT. ALLOCATED(work%mb_l0)) THEN
+      ALLOCATE (work%mb_l0(SIZE(l0)), STAT=istat)
+      IF (istat /= 0) RETURN
+    END IF
+    IF (.NOT. ALLOCATED(work%mb_rho)) THEN
+      ALLOCATE (work%mb_rho(SIZE(rho_a)), STAT=istat)
+      IF (istat /= 0) RETURN
+    END IF
+    work%mb_l0 = l0
+    work%mb_rho = rho_a
+    work%mb_valid = .TRUE.
+  END SUBROUTINE remember_mass_band
+
   SUBROUTINE partition_free_dofs_workspace(fixed_dofs, n_dof, free, n_free, fixed, marker, ErrStat, ErrMsg)
     INTEGER, INTENT(IN) :: fixed_dofs(:), n_dof
     INTEGER, INTENT(INOUT) :: free(:), fixed(:)
@@ -1907,14 +1992,15 @@ CONTAINS
   END SUBROUTINE partition_free_dofs_workspace
 
   SUBROUTINE ensure_int_vector(x, n, ErrStat, ErrMsg)
+    !! The ensure_* helpers run for every workspace array on every step: they write ErrMsg only
+    !! on failure, and their callers (ensure_dof_workspace, ensure_step_workspace) clear it.
     INTEGER, ALLOCATABLE, INTENT(INOUT) :: x(:)
     INTEGER, INTENT(IN) :: n
     INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(*), INTENT(INOUT) :: ErrMsg
     INTEGER :: istat
 
     ErrStat = CD_DYN_OK
-    ErrMsg = ''
     IF (n < 0) THEN
       CALL fail(ErrStat, ErrMsg, 'internal workspace size must be non-negative')
       RETURN
@@ -1931,11 +2017,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE, INTENT(INOUT) :: x(:)
     INTEGER, INTENT(IN) :: n
     INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(*), INTENT(INOUT) :: ErrMsg
     INTEGER :: istat
 
     ErrStat = CD_DYN_OK
-    ErrMsg = ''
     IF (n < 0) THEN
       CALL fail(ErrStat, ErrMsg, 'internal workspace size must be non-negative')
       RETURN
@@ -1952,11 +2037,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE, INTENT(INOUT) :: x(:, :)
     INTEGER, INTENT(IN) :: n1, n2
     INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(*), INTENT(INOUT) :: ErrMsg
     INTEGER :: istat
 
     ErrStat = CD_DYN_OK
-    ErrMsg = ''
     IF (n1 < 0 .OR. n2 < 0) THEN
       CALL fail(ErrStat, ErrMsg, 'internal workspace shape must be non-negative')
       RETURN

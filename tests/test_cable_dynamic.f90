@@ -39,6 +39,7 @@ PROGRAM test_cable_dynamic
   CALL case_dynamic_load_callback_matches_fext()
   CALL case_banded_load_callback_matches_dense()
   CALL case_workspace_matches_legacy_step()
+  CALL case_workspace_mass_band_follows_inputs()
   CALL case_modified_newton_reuses_tangent()
   CALL case_line_search_fallback_handles_bad_tangent()
   CALL case_added_mass_callback_changes_initial_acceleration()
@@ -368,6 +369,68 @@ CONTAINS
       CALL expect(anew_work(i), anew_legacy(i), 'workspace:anew')
     END DO
   END SUBROUTINE case_workspace_matches_legacy_step
+
+  SUBROUTINE case_workspace_mass_band_follows_inputs()
+    !! A reusable workspace keeps the element mass band of its last step and reuses it while
+    !! the connectivity, free list, l0 and rho_a are unchanged. A change of any of them, or an
+    !! initial-acceleration solve (which factors the band in place), rebuilds it: every step
+    !! equals the same step through a fresh workspace bit for bit.
+    INTEGER :: conn(2, 2), es
+    REAL(wp) :: l0(2), ea(2), rho_a(2), q0(9), f_ext(9), q(9), v(9), a(9), l0b(2), rhob(2)
+    TYPE(CD_CableGenAlphaWorkspace) :: work
+    CHARACTER(120) :: em
+
+    CALL three_node_chain(conn, l0, ea, rho_a, q0)
+    f_ext = 0.0_wp
+    f_ext(6) = -15.0_wp
+    q = q0
+    q(6) = -0.04_wp
+    v = 0.0_wp
+    v(6) = -0.05_wp
+    a = 0.0_wp
+    a(5) = 0.2_wp
+    l0b = [0.9_wp, 0.93_wp]
+    rhob = [5.0_wp, 6.5_wp]
+
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:first')
+    CALL require(work%mb_valid, 'mass-band:remembered')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:reused')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0b, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:new-l0')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0b, ea, rhob, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:new-rho')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:back')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], 'mass-band:new-free-list')
+    CALL CD_Cable_Initial_Acceleration(q, v, conn, l0, ea, rho_a, .FALSE., f_ext, [1, 2, 3], &
+                                       a, es, em, workspace=work)
+    CALL expect_es(es, CD_DYN_OK, 'mass-band:initial-acceleration')
+    CALL require(.NOT. work%mb_valid, 'mass-band:initial-acceleration-clears')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], &
+                             'mass-band:after-initial-acceleration')
+  END SUBROUTINE case_workspace_mass_band_follows_inputs
+
+  SUBROUTINE mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, fixed, label)
+    !! One step through the shared workspace and the same step through a fresh one.
+    TYPE(CD_CableGenAlphaWorkspace), INTENT(INOUT) :: work
+    REAL(wp), INTENT(IN) :: q(9), v(9), a(9), l0(2), ea(2), rho_a(2), f_ext(9)
+    INTEGER, INTENT(IN) :: conn(2, 2), fixed(:)
+    CHARACTER(*), INTENT(IN) :: label
+    INTEGER, PARAMETER :: I8 = SELECTED_INT_KIND(18)
+    TYPE(GenAlphaConfig) :: cfg
+    TYPE(CD_CableGenAlphaWorkspace) :: fresh
+    REAL(wp) :: q_w(9), v_w(9), a_w(9), q_f(9), v_f(9), a_f(9)
+    INTEGER :: es_w, es_f, it_w, it_f
+    LOGICAL :: conv_w, conv_f, stall_w, stall_f
+    CHARACTER(120) :: em_w, em_f
+
+    CALL CD_Cable_Gen_Alpha_Step(q, v, a, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, 0.01_wp, cfg, &
+                                 q_w, v_w, a_w, conv_w, stall_w, it_w, es_w, em_w, workspace=work)
+    CALL CD_Cable_Gen_Alpha_Step(q, v, a, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, 0.01_wp, cfg, &
+                                 q_f, v_f, a_f, conv_f, stall_f, it_f, es_f, em_f, workspace=fresh)
+    CALL expect_es(es_w, CD_DYN_OK, label//':status')
+    CALL require(conv_w .AND. conv_f .AND. it_w == it_f .AND. es_w == es_f, label//':flags')
+    CALL require(ALL(TRANSFER(q_w, [0_I8]) == TRANSFER(q_f, [0_I8])) .AND. &
+                 ALL(TRANSFER(v_w, [0_I8]) == TRANSFER(v_f, [0_I8])) .AND. &
+                 ALL(TRANSFER(a_w, [0_I8]) == TRANSFER(a_f, [0_I8])), label//':bitwise')
+  END SUBROUTINE mass_band_step_pair
 
   SUBROUTINE case_modified_newton_reuses_tangent()
     !! The EI=0 generalized-alpha config advertises modified Newton. It must reuse

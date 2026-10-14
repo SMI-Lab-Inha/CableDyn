@@ -101,6 +101,33 @@ CONTAINS
                                         force_only, es, em)
     CALL require(es == CD_DAMP_OK, 'element:force-ok')
     CALL require(nan_max_abs(force_only - force_ref) < 1.0e-9_wp, 'element:force-only-match')
+
+    ! inputs_validated (the model hot path) skips only the input scan: the outputs, status and
+    ! message equal the default call's bit for bit, for a regular and a collapsed element
+    BLOCK
+      INTEGER, PARAMETER :: I8 = SELECTED_INT_KIND(18)
+      REAL(wp) :: f2(6), jq2(6, 6), jv2(6, 6)
+      INTEGER :: es2, icase
+      CHARACTER(160) :: em2
+      DO icase = 1, 2
+        IF (icase == 2) q(4:6) = q(1:3)
+        CALL CD_Axial_Damping_Element_Load(q(1:3), q(4:6), v(1:3), v(4:6), l0(1), ba(1), &
+                                           force_elem, jq_elem, jv_elem, es, em, l0_dot=0.3_wp)
+        CALL CD_Axial_Damping_Element_Load(q(1:3), q(4:6), v(1:3), v(4:6), l0(1), ba(1), &
+                                           f2, jq2, jv2, es2, em2, l0_dot=0.3_wp, inputs_validated=.TRUE.)
+        CALL require(ALL(TRANSFER(force_elem, [0_I8]) == TRANSFER(f2, [0_I8])) .AND. &
+                     ALL(TRANSFER(jq_elem, [0_I8]) == TRANSFER(jq2, [0_I8])) .AND. &
+                     ALL(TRANSFER(jv_elem, [0_I8]) == TRANSFER(jv2, [0_I8])) .AND. &
+                     es == es2 .AND. em == em2, 'element:validated-load-bitwise')
+        CALL CD_Axial_Damping_Element_Force(q(1:3), q(4:6), v(1:3), v(4:6), l0(1), ba(1), &
+                                            force_only, es, em, l0_dot=0.3_wp)
+        CALL CD_Axial_Damping_Element_Force(q(1:3), q(4:6), v(1:3), v(4:6), l0(1), ba(1), &
+                                            f2, es2, em2, l0_dot=0.3_wp, inputs_validated=.TRUE.)
+        CALL require(ALL(TRANSFER(force_only, [0_I8]) == TRANSFER(f2, [0_I8])) .AND. &
+                     es == es2 .AND. em == em2, 'element:validated-force-bitwise')
+      END DO
+      CALL require(es2 == CD_DAMP_BADINPUT, 'element:validated-collapsed-fails')
+    END BLOCK
   END SUBROUTINE case_element_kernel_matches_cable_path
 
   SUBROUTINE case_signed_tension()

@@ -139,6 +139,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   at 0.109 1/m instead of 0.075 1/m, and the anchor tension stays at its static 1.23 kN, where
   the coarse mesh showed stick-slip peaks up to 4.1 kN. The validation record and the tutorials
   are updated.
+- Faster tension-only (`EI = 0`) line steps. In every Newton evaluation the element kernels of
+  the line loads (axial damping, Morison drag, Froude-Krylov, buoyancy recovery, added mass) no
+  longer re-check, element by element, data the line model validates when it is set; the
+  Froude-Krylov and added-mass kernels check their section data once instead of three times;
+  the velocity Jacobians of the Froude-Krylov and buoyancy loads, which are zero, are no longer
+  added into the band; a step reuses the consistent-mass band of the previous one while the
+  lengths and masses are unchanged; and the Newton solve no longer rescans a matrix already
+  checked finite. With the release build, `examples/als_volturnus_line_break_time.dat` runs
+  13 % faster and `examples/spar_pinned_rods.dat` 13 %. Every input error is reported as
+  before. With gfortran the results are bit-identical. With the Intel compiler of the release
+  they can differ in the last printed digit, and by more where a deck amplifies round-off.
 
 ### Fixed
 

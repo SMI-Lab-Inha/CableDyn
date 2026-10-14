@@ -252,16 +252,27 @@ CONTAINS
     END DO
   END SUBROUTINE CD_Cable_Axial_Damping_Load
 
-  SUBROUTINE CD_Axial_Damping_Element_Force(qa, qb, va, vb, l0, ba, force, ErrStat, ErrMsg, l0_dot)
+  SUBROUTINE CD_Axial_Damping_Element_Force(qa, qb, va, vb, l0, ba, force, ErrStat, ErrMsg, l0_dot, &
+                                            inputs_validated)
     !! Two-node axial damping force kernel for model hot paths.
+    !! `inputs_validated` is an internal hot-path contract (as in CD_Component_Wave_Kinematics),
+    !! shared with CD_Axial_Damping_Element_Load: a caller that already guarantees a finite
+    !! state, a finite positive l0 and a finite resolved ba >= 0 skips the per-element input
+    !! scan. The default remains full validation for public/direct calls.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), va(3), vb(3), l0, ba
     REAL(wp), INTENT(OUT) :: force(6)
     REAL(wp), INTENT(IN), OPTIONAL :: l0_dot   !! unstretched-length rate (see the cable-path routines)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated
     REAL(wp) :: chord(3), tang(3), rel(3), length, ldot, td_vec(3)
 
-    CALL validate_element_inputs(qa, qb, va, vb, l0, ba, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_DAMP_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_element_inputs(qa, qb, va, vb, l0, ba, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     IF (ErrStat /= CD_DAMP_OK) RETURN
     IF (PRESENT(l0_dot)) THEN
@@ -285,18 +296,25 @@ CONTAINS
     force(4:6) = -td_vec
   END SUBROUTINE CD_Axial_Damping_Element_Force
 
-  SUBROUTINE CD_Axial_Damping_Element_Load(qa, qb, va, vb, l0, ba, force, jac_q, jac_v, ErrStat, ErrMsg, l0_dot)
+  SUBROUTINE CD_Axial_Damping_Element_Load(qa, qb, va, vb, l0, ba, force, jac_q, jac_v, ErrStat, ErrMsg, l0_dot, &
+                                           inputs_validated)
     !! Two-node axial damping force and residual-Jacobian kernel.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), va(3), vb(3), l0, ba
     REAL(wp), INTENT(OUT) :: force(6), jac_q(6, 6), jac_v(6, 6)
     REAL(wp), INTENT(IN), OPTIONAL :: l0_dot   !! unstretched-length rate: the damped rate is ldot - (length/l0)*l0_dot
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Axial_Damping_Element_Force
     INTEGER :: i
     REAL(wp) :: chord(3), tang(3), rel(3), length, ldot, k, td_vec(3)
     REAL(wp) :: eye(3, 3), ktt(3, 3), m1(3, 3), m2(3, 3), dmat(3, 3)
 
-    CALL validate_element_inputs(qa, qb, va, vb, l0, ba, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_DAMP_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_element_inputs(qa, qb, va, vb, l0, ba, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     jac_q = CD_ZERO
     jac_v = CD_ZERO
@@ -359,6 +377,13 @@ CONTAINS
       END DO
     END DO
   END FUNCTION outer
+
+  PURE LOGICAL FUNCTION trusted(inputs_validated) RESULT(trust)
+    !! The value of an optional inputs_validated flag (.FALSE. when absent).
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated
+    trust = .FALSE.
+    IF (PRESENT(inputs_validated)) trust = inputs_validated
+  END FUNCTION trusted
 
   SUBROUTINE add_block(mat, node_i, node_j, blk)
     !! Accumulate a 3x3 block into the (node_i, node_j) DOF positions of a global matrix.
