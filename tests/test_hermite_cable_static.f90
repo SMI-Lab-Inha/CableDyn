@@ -19,7 +19,8 @@ PROGRAM test_hermite_cable_static
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Reaction, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HermiteCable_Drag_Element, CD_HermiteCable_Dyn_Step
-  USE CableDyn_SeabedContact, ONLY: CD_HermiteCable_Friction_Spring => CD_Seabed_Friction_Spring
+  USE CableDyn_SeabedContact, ONLY: CD_HermiteCable_Friction_Spring => CD_Seabed_Friction_Spring, &
+                                    CD_Seabed_End_Element_Share
   USE CableDyn_Line, ONLY: CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
@@ -39,6 +40,7 @@ PROGRAM test_hermite_cable_static
   CALL check_dry_buoyancy_static()
   CALL check_seabed_mesh_jump()
   CALL check_scalar_contact_on_slope()
+  CALL check_taut_line_anchored_on_floor()
   CALL check_frictionless_slope_run()
   CALL check_long_sequence_hierarchy()
   CALL check_current_static()
@@ -309,17 +311,100 @@ CONTAINS
     CALL require(dev < 0.1_wp*pen0, 'mesh-jump penetration stays near w/(kBot d)')
   END SUBROUTINE check_seabed_mesh_jump
 
+  SUBROUTINE check_taut_line_anchored_on_floor()
+    !! The floor carries the end element's weight moment only where the element lies on it.
+    !! A taut line anchored on the floor rises into the water from its anchor: its end element
+    !! is clear of the floor beyond the anchor node, the seabed supports none of it, and the
+    !! line takes the bending of the same line without a seabed. Its static state (with the
+    !! curvature at the pinned anchor) and its held dynamic march must equal those of the
+    !! line with no seabed bit for bit. With the floor support decided by the anchor alone,
+    !! the cancelled end moment w l0^2/12 moved the line by 7 mm and raised the anchor
+    !! curvature by half (2.9e-3 to 4.3e-3 1/m). The element share itself is zero clear of
+    !! the floor, one laid, and C1 through touchdown.
+    INTEGER, PARAMETER :: NE = 20, NN = NE + 1
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), rho_a(NE), seed(6*NN), qa(6*NN), qb(6*NN), ca(NN), cb(NN), res
+    REAL(wp) :: trib(NN), kn, share, dshare, share_p, share_m, dsh_p, dsh_m, r
+    REAL(wp), PARAMETER :: RATIOS(3) = [1.0e-3_wp, 0.5_wp, 0.999_wp]
+    INTEGER :: fixed(6 + 2*NN), nfix, i, es, it, k
+    TYPE(CD_HermiteCableDynType) :: dyn_a, dyn_b
+    CHARACTER(512) :: em
+    l0 = 100.2_wp/NE; EA = 5.0e8_wp; EI = 2.0e4_wp; w = 800.0_wp; rho_a = 120.0_wp; kn = 2.0e5_wp
+    trib = 0.0_wp
+    DO i = 1, NE
+      trib(i) = trib(i) + 0.5_wp*l0(i); trib(i + 1) = trib(i + 1) + 0.5_wp*l0(i)
+    END DO
+    ! anchor on the 100 m floor, fairlead 60 m away and 80 m up: chord 100 m, length 100.2 m
+    CALL CD_HermiteCable_Trivial_Seed([0.0_wp, 0.0_wp, -100.0_wp], [60.0_wp, 0.0_wp, -20.0_wp], l0, -100.0_wp, &
+                                      seed, es, em)
+    CALL require(es == CD_HCSTAT_OK, 'taut anchored seed: '//TRIM(em))
+    fixed(1:6) = [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3]
+    nfix = 6
+    DO i = 1, NN
+      fixed(nfix + 1:nfix + 2) = [6*i - 4, 6*i - 1]
+      nfix = nfix + 2
+    END DO
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed(1:nfix), -100.0_wp, 0.0_wp, 4, 200, 1.0e-10_wp, &
+                                      1.0_wp, qa, ca, res, it, es, em, contact_kn=kn*trib)
+    CALL require(es == CD_HCSTAT_OK, 'taut anchored line on the floor: '//TRIM(em))
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed(1:nfix), -1.0e4_wp, 0.0_wp, 4, 200, 1.0e-10_wp, &
+                                      1.0_wp, qb, cb, res, it, es, em)
+    CALL require(es == CD_HCSTAT_OK, 'taut anchored line without seabed: '//TRIM(em))
+    CALL require(qa(6*2 - 3) + 100.0_wp > 1.0_wp, 'taut anchored line rises from its anchor')
+    CALL require(ALL(qa == qb), 'taut anchored line: the floor carries none of the rising end element')
+    CALL require(ALL(ca == cb), 'taut anchored line keeps the bending of the line without seabed')
+    ! The held dynamics with the scalar floor at the anchor height equal those without a floor.
+    CALL CD_HermiteCable_Dyn_Init(dyn_a, l0, EA, EI, rho_a, w, qa, fixed(1:nfix), -100.0_wp, kn, 0.8_wp, es, em)
+    CALL require(es == CD_HCDYN_OK, 'taut anchored dynamics with floor: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Init(dyn_b, l0, EA, EI, rho_a, w, qa, fixed(1:nfix), -1.0e4_wp, 0.0_wp, 0.8_wp, es, em)
+    CALL require(es == CD_HCDYN_OK, 'taut anchored dynamics without floor: '//TRIM(em))
+    DO k = 1, 5
+      CALL CD_HermiteCable_Dyn_Step(dyn_a, 0.05_wp, 30, 1.0e-9_wp, es, em)
+      CALL require(es == CD_HCDYN_OK, 'taut anchored step with floor: '//TRIM(em))
+      CALL CD_HermiteCable_Dyn_Step(dyn_b, 0.05_wp, 30, 1.0e-9_wp, es, em)
+      CALL require(es == CD_HCDYN_OK, 'taut anchored step without floor: '//TRIM(em))
+    END DO
+    CALL require(ALL(dyn_a%q == dyn_b%q) .AND. ALL(dyn_a%v == dyn_b%v), &
+                 'taut anchored dynamics: the floor carries none of the rising end element')
+    CALL CD_HermiteCable_Dyn_End(dyn_a)
+    CALL CD_HermiteCable_Dyn_End(dyn_b)
+    ! the element share: ratio r of the inner node's normal force to half the element weight
+    CALL CD_Seabed_End_Element_Share(0.0_wp, 0.0_wp, 100.0_wp, share, dshare)
+    CALL require(share == 0.0_wp .AND. dshare == 0.0_wp, 'end element share: clear of the floor')
+    CALL CD_Seabed_End_Element_Share(200.0_wp, 1.0e4_wp, 100.0_wp, share, dshare)
+    CALL require(share == 1.0_wp .AND. dshare == 0.0_wp, 'end element share: laid')
+    DO k = 1, 3
+      r = RATIOS(k)
+      ! normal = 100 r with d(normal)/d(gap) = 1e4: central difference of the share in the gap
+      CALL CD_Seabed_End_Element_Share(100.0_wp*r, 1.0e4_wp, 100.0_wp, share, dshare)
+      CALL CD_Seabed_End_Element_Share(100.0_wp*r + 1.0e-4_wp, 1.0e4_wp, 100.0_wp, share_p, dsh_p)
+      CALL CD_Seabed_End_Element_Share(100.0_wp*r - 1.0e-4_wp, 1.0e4_wp, 100.0_wp, share_m, dsh_m)
+      CALL require(ABS((share_p - share_m)/2.0e-8_wp - dshare) <= 1.0e-5_wp*MAX(1.0_wp, ABS(dshare)), &
+                   'end element share: derivative matches its difference quotient')
+      CALL require(ABS(share - r*r*(3.0_wp - 2.0_wp*r)) <= 1.0e-15_wp, 'end element share: smoothstep')
+    END DO
+  END SUBROUTINE check_taut_line_anchored_on_floor
+
   SUBROUTINE check_scalar_contact_on_slope()
     !! The scalar-kn contact path on a structured (sloped) bathymetry includes the slope
     !! terms of the penetration in its tangent: from a perturbed equilibrium it converges
-    !! quadratically to the same state as the nodal path with the equivalent stiffness.
-    !! The perturbation is a few centimetres: the frictionless reaction is normal to the
-    !! slope, so it couples x and z at every grounded node on this coarse mesh (elements
-    !! longer than the bending length), and the full-step Newton basin is that small.
+    !! as fast as, and to the same state as, the nodal path with the equivalent stiffness.
+    !! The frictionless reaction is normal to the slope, so it couples x and z at every
+    !! grounded node of this coarse mesh (elements longer than the bending length). The
+    !! layout is chosen so that the problem is well posed on every platform: the line, held
+    !! taut by a fairlead 200 m from the anchor, lies on the slope from its anchor
+    !! (on the floor) to a touchdown between nodes, every clear node stands at least 0.3 m
+    !! above the floor (no node in the contact blend), and the equilibrium is a stable one.
+    !! A slacker layout (fairlead at 150 m) touched down at a node and admitted neighbouring
+    !! equilibria within 3 cm that the polish reached or not depending on round-off (the
+    !! OpenBLAS kernel, the platform). The perturbation (7.5 mm in x, 5 mm in z) is a quarter
+    !! of the largest one from which both backtracking polishes return to the reference
+    !! under the Prescott, Haswell and SkylakeX kernels and the default one; backtracking
+    !! (the same option on both paths) keeps each Newton update a residual decrease.
     INTEGER, PARAMETER :: NE = 20, NN = NE + 1
-    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(6*NN), q1(6*NN), q2(6*NN), qs(6*NN), curv(NN), res
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(6*NN), q1(6*NN), q2(6*NN), qs(6*NN), qr(6*NN), curv(NN), res
     REAL(wp) :: trib(NN), kn, xg(2), yg(2), dep(2, 2)
     INTEGER :: fixed(6 + 2*NN), nfix, i, es, it1, it2
+    LOGICAL :: stable
     TYPE(CD_BathymetryType) :: bed
     CHARACTER(512) :: em
     xg = [-50.0_wp, 300.0_wp]; yg = [-50.0_wp, 50.0_wp]
@@ -331,7 +416,7 @@ CONTAINS
     DO i = 1, NE
       trib(i) = trib(i) + 6.5_wp; trib(i + 1) = trib(i + 1) + 6.5_wp
     END DO
-    CALL CD_HermiteCable_Trivial_Seed([0.0_wp, 0.0_wp, -100.0_wp], [150.0_wp, 0.0_wp, -20.0_wp], l0, -100.0_wp, &
+    CALL CD_HermiteCable_Trivial_Seed([0.0_wp, 0.0_wp, -100.0_wp], [200.0_wp, 0.0_wp, -20.0_wp], l0, -100.0_wp, &
                                       seed, es, em)
     CALL require(es == CD_HCSTAT_OK, 'slope seed: '//TRIM(em))
     fixed(1:6) = [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3]
@@ -341,23 +426,20 @@ CONTAINS
       nfix = nfix + 2
     END DO
     CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed(1:nfix), -100.0_wp, 0.0_wp, 8, 200, 1.0e-9_wp, &
-                                      0.7_wp, q1, curv, res, it1, es, em, contact_kn=kn*trib, bathymetry=bed)
+                                      0.7_wp, qr, curv, res, it1, es, em, contact_kn=kn*trib, bathymetry=bed, &
+                                      stable=stable)
     CALL require(es == CD_HCSTAT_OK, 'slope nodal reference: '//TRIM(em))
-    qs = q1
+    CALL require(stable, 'slope nodal reference is a stable equilibrium')
+    qs = qr
     DO i = 2, NE
-      qs(6*i - 5) = qs(6*i - 5) + 0.03_wp*SIN(REAL(i, wp))
-      qs(6*i - 3) = qs(6*i - 3) + 0.02_wp*COS(REAL(i, wp))
+      qs(6*i - 5) = qs(6*i - 5) + 0.0075_wp*SIN(REAL(i, wp))
+      qs(6*i - 3) = qs(6*i - 3) + 0.005_wp*COS(REAL(i, wp))
     END DO
-    ! Both polishes backtrack: the anchor (0, -100) rests on the slope, so the floor carries
-    ! the anchor element's weight moment (CD_Seabed_End_Support) and the grounded run lies
-    ! straight along the slope instead of dipping into it element by element; from this
-    ! perturbation full Newton steps then leave that equilibrium's basin (a 0.25-scaled
-    ! perturbation fails, a 0.5-scaled one converges). The test compares the two contact
-    ! paths under identical solver options, which backtracking keeps (same count, same state).
     CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, qs, fixed(1:nfix), -100.0_wp, 0.0_wp, 1, 60, 1.0e-10_wp, &
                                       1.0_wp, q1, curv, res, it1, es, em, contact_kn=kn*trib, bathymetry=bed, &
                                       backtracking=.TRUE.)
     CALL require(es == CD_HCSTAT_OK, 'slope nodal polish: '//TRIM(em))
+    CALL require(nan_max_abs(q1 - qr) < 1.0e-6_wp, 'slope nodal polish returns to the reference')
     CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, qs, fixed(1:nfix), -100.0_wp, kn, 1, 60, 1.0e-10_wp, &
                                       1.0_wp, q2, curv, res, it2, es, em, bathymetry=bed, backtracking=.TRUE.)
     CALL require(es == CD_HCSTAT_OK, 'slope scalar polish converges: '//TRIM(em))

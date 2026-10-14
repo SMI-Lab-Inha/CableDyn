@@ -67,7 +67,8 @@ MODULE CableDyn_HermiteCableDynamic
                             CD_Component_Wave_Kinematics, CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Contact_Gate, CD_SEABED_CONTACT_BLEND, &
                                     CD_Seabed_Friction_Stick_Slip, CD_Seabed_Friction_Aniso, &
-                                    CD_Seabed_Friction_Mu_Dir, CD_FRICTION_STICK_SLIP, CD_Seabed_End_Support
+                                    CD_Seabed_Friction_Mu_Dir, CD_FRICTION_STICK_SLIP, CD_Seabed_End_Support, &
+                                    CD_Seabed_End_Element_Share
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
                                  CD_Bathymetry_Floor_Gradient, CD_End_Bathymetry, CD_BATHY_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -5278,7 +5279,8 @@ CONTAINS
     REAL(wp) :: fdry(4), kdry(4, 4), dry_wl, dry_b, dry_r
     INTEGER :: zdof(4), b
     LOGICAL :: dry
-    REAL(wp) :: endconn_d0_eval(3, 2), support(3)
+    REAL(wp) :: endconn_d0_eval(3, 2), support(3), dsupport(3), nin(3), mend
+    INTEGER :: inode, jr, jc
     CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -5356,12 +5358,13 @@ CONTAINS
         R(6*e + 3) = R(6*e + 3) + model%w(e)*0.5_wp*model%l0(e)
         R(6*e + 6) = R(6*e + 6) - model%w(e)*model%l0(e)*model%l0(e)/12.0_wp
       END DO
-      ! A held end resting on the floor: the seabed carries the end element's weight with
-      ! its consistent end moment (CD_Seabed_End_Support), which the nodal contact cannot.
+      ! A held end whose end element lies on the floor: the seabed carries the element's
+      ! weight with its consistent end moment (CD_Seabed_End_Support and
+      ! CD_Seabed_End_Element_Share), which the nodal contact cannot.
       IF (model%has_contact .OR. model%kn > CD_ZERO) THEN
-        IF (held_end_floor_support(model, q_cfg, 1, support)) &
+        IF (held_end_floor_support(model, q_cfg, 1, support, dsupport, inode, nin)) &
           R(4:6) = R(4:6) - (model%w(1)*model%l0(1)*model%l0(1)/12.0_wp)*support
-        IF (held_end_floor_support(model, q_cfg, 2, support)) &
+        IF (held_end_floor_support(model, q_cfg, 2, support, dsupport, inode, nin)) &
           R(6*ne + 4:6*ne + 6) = R(6*ne + 4:6*ne + 6) + (model%w(ne)*model%l0(ne)*model%l0(ne)/12.0_wp)*support
       END IF
     END IF
@@ -5423,6 +5426,26 @@ CONTAINS
           IF (want_tangent) Kb(KL_D + KU_D + 1, gi) = Kb(KL_D + KU_D + 1, gi) + model%kn*model%trib(a)
         END IF
       END DO
+    END IF
+    ! The floor-carried end moment of a held end follows the contact of the end element's
+    ! inner node (inode, floor normal nin): its tangent couples the end tangent to that node.
+    IF (want_tangent .AND. (model%has_contact .OR. model%kn > CD_ZERO)) THEN
+      IF (held_end_floor_support(model, q_cfg, 1, support, dsupport, inode, nin)) THEN
+        mend = model%w(1)*model%l0(1)*model%l0(1)/12.0_wp
+        DO jc = 1, 3
+          DO jr = 1, 3
+            CALL scatter_contact_band(Kb, 3 + jr, 6*inode - 6 + jc, mend*dsupport(jr)*nin(jc))
+          END DO
+        END DO
+      END IF
+      IF (held_end_floor_support(model, q_cfg, 2, support, dsupport, inode, nin)) THEN
+        mend = model%w(ne)*model%l0(ne)*model%l0(ne)/12.0_wp
+        DO jc = 1, 3
+          DO jr = 1, 3
+            CALL scatter_contact_band(Kb, 6*ne + 3 + jr, 6*inode - 6 + jc, -mend*dsupport(jr)*nin(jc))
+          END DO
+        END DO
+      END IF
     END IF
 
     ! Scatter the element-private hydrodynamic tangents in the same phase and element
@@ -5879,48 +5902,88 @@ CONTAINS
     END DO
   END SUBROUTINE assemble_contact
 
-  LOGICAL FUNCTION held_end_floor_support(model, q_cfg, iend, support) RESULT(held)
+  LOGICAL FUNCTION held_end_floor_support(model, q_cfg, iend, support, dsupport, inode, nin) RESULT(held)
     !! Floor reaction carrying the weight of the end element at line end iend (1: node 1,
-    !! 2: node nn) of a model with seabed contact, per unit weight: CD_Seabed_End_Support
-    !! times the floor's normal share of the weight, cos(slope) n, n the upward floor
-    !! normal (e_z on a flat bed). Its consistent end moment cancels the weight's on a
-    !! grounded end element; the along-floor part of the weight stays with the line. False
-    !! (support zero) unless the end node's translations are all held (not free), its end
-    !! element is net-heavy and the end rests on the floor the contact assembly uses there.
+    !! 2: node nn) of a model with seabed contact, per unit weight: the floor's normal share
+    !! cos(slope) n of the weight (n the upward floor normal at the end, e_z on a flat bed)
+    !! times the share of the element lying on the floor. Its consistent end moment cancels
+    !! the weight's on a grounded end element; the along-floor part of the weight stays with
+    !! the line. The share is CD_Seabed_End_Support of the end node (on or below the floor)
+    !! times CD_Seabed_End_Element_Share of the element's inner node inode (the normal force
+    !! of its elastic contact law against half the element's weight): zero for an element
+    !! rising from an anchor on the floor, one for a laid element, smooth in between.
+    !! dsupport is d(support)/d(gap) of the inner node, whose gap gradient is -nin (nin its
+    !! floor normal). False (support zero) unless the end node's translations are all held
+    !! (not free), its end element is net-heavy and the share is positive.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     REAL(wp), INTENT(IN) :: q_cfg(:)
     INTEGER, INTENT(IN) :: iend
-    REAL(wp), INTENT(OUT) :: support(3)
+    REAL(wp), INTENT(OUT) :: support(3), dsupport(3), nin(3)
+    INTEGER, INTENT(OUT) :: inode
     INTEGER :: node, e, ix, es
-    REAL(wp) :: xg, yg, z_floor, gxg, gyg, gx, gy, sfac, share
+    REAL(wp) :: gap, sfac, share, nvec(3), sfac_in, gap_in, normal, normal_gap, elem, delem
     CHARACTER(200) :: em
     support = CD_ZERO
+    dsupport = CD_ZERO
+    nin = [CD_ZERO, CD_ZERO, CD_ONE]
     held = .FALSE.
     IF (iend == 1) THEN
-      node = 1; e = 1
+      node = 1; e = 1; inode = 2
     ELSE
-      node = model%nn; e = model%ne
+      node = model%nn; e = model%ne; inode = model%nn - 1
     END IF
     IF (.NOT. (model%w(e) > CD_ZERO)) RETURN
     ix = 6*node - 5
     IF (ANY(model%freemask(ix:ix + 2))) RETURN
-    gx = CD_ZERO
-    gy = CD_ZERO
-    z_floor = model%seabed_z
-    IF (model%has_contact .AND. model%has_contact_bathymetry) THEN
-      xg = model%contact_frame_c*q_cfg(ix) - model%contact_frame_s*q_cfg(ix + 1)
-      yg = model%contact_frame_s*q_cfg(ix) + model%contact_frame_c*q_cfg(ix + 1)
-      CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em)
-      ! A failed query fails closed in the contact assembly at the same point.
-      IF (es /= CD_BATHY_OK) RETURN
-      gx = model%contact_frame_c*gxg + model%contact_frame_s*gyg
-      gy = -model%contact_frame_s*gxg + model%contact_frame_c*gyg
-    END IF
-    sfac = SQRT(CD_ONE + gx*gx + gy*gy)
-    share = CD_Seabed_End_Support((z_floor - q_cfg(ix + 2))/sfac)
+    CALL floor_gap(node, gap, nvec, sfac, es)
+    IF (es /= CD_BATHY_OK) RETURN
+    share = CD_Seabed_End_Support(gap)
     IF (.NOT. (share > CD_ZERO)) RETURN
+    CALL floor_gap(inode, gap_in, nin, sfac_in, es)
+    IF (es /= CD_BATHY_OK) RETURN
+    IF (model%has_contact) THEN
+      CALL CD_Seabed_Normal_Law(gap_in, model%contact_kn(inode), normal, normal_gap)
+    ELSE IF (gap_in > CD_ZERO) THEN
+      normal = model%kn*model%trib(inode)*gap_in
+      normal_gap = model%kn*model%trib(inode)
+    ELSE
+      normal = CD_ZERO
+      normal_gap = CD_ZERO
+    END IF
+    CALL CD_Seabed_End_Element_Share(normal, normal_gap, 0.5_wp*model%w(e)*model%l0(e), elem, delem)
+    IF (.NOT. (elem > CD_ZERO)) RETURN
     held = .TRUE.
-    support = (share/(sfac*sfac))*[-gx, -gy, CD_ONE]
+    support = (share*elem/sfac)*nvec
+    dsupport = (share*delem/sfac)*nvec
+
+  CONTAINS
+
+    SUBROUTINE floor_gap(k, gap_k, n_k, sfac_k, es_k)
+      !! Normal penetration gap_k, upward floor normal n_k and slope factor of node k, on the
+      !! floor the contact assembly uses (structured bathymetry or the flat seabed plane). A
+      !! failed bathymetry query (es_k) fails closed in the contact assembly at the same point.
+      INTEGER, INTENT(IN) :: k
+      REAL(wp), INTENT(OUT) :: gap_k, n_k(3), sfac_k
+      INTEGER, INTENT(OUT) :: es_k
+      REAL(wp) :: xg, yg, z_floor, gxg, gyg, gx, gy
+      INTEGER :: kx
+      kx = 6*k - 5
+      es_k = CD_BATHY_OK
+      gx = CD_ZERO
+      gy = CD_ZERO
+      z_floor = model%seabed_z
+      IF (model%has_contact .AND. model%has_contact_bathymetry) THEN
+        xg = model%contact_frame_c*q_cfg(kx) - model%contact_frame_s*q_cfg(kx + 1)
+        yg = model%contact_frame_s*q_cfg(kx) + model%contact_frame_c*q_cfg(kx + 1)
+        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es_k, em)
+        IF (es_k /= CD_BATHY_OK) RETURN
+        gx = model%contact_frame_c*gxg + model%contact_frame_s*gyg
+        gy = -model%contact_frame_s*gxg + model%contact_frame_c*gyg
+      END IF
+      sfac_k = SQRT(CD_ONE + gx*gx + gy*gy)
+      n_k = [-gx, -gy, CD_ONE]/sfac_k
+      gap_k = (z_floor - q_cfg(kx + 2))/sfac_k
+    END SUBROUTINE floor_gap
   END FUNCTION held_end_floor_support
 
   SUBROUTINE commit_friction_anchors(model)

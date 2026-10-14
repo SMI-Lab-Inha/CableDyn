@@ -43,7 +43,7 @@ MODULE CableDyn_HermiteCableStatic
                                     CD_ENDCONN_RIGID
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_SEABED_CONTACT_BLEND, CD_Seabed_Friction_Spring, &
                                     CD_Seabed_Friction_Aniso, CD_Seabed_Friction_Mu_Dir, CD_FRICTION_SPRING, &
-                                    CD_Seabed_Normal_Contact, CD_Seabed_End_Support
+                                    CD_Seabed_Normal_Contact, CD_Seabed_End_Support, CD_Seabed_End_Element_Share
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
                                  CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, CD_BATHY_OK
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
@@ -786,10 +786,11 @@ CONTAINS
       trib(i) = trib(i) + 0.5_wp*l0(i)
       trib(i + 1) = trib(i + 1) + 0.5_wp*l0(i)
     END DO
-    ! A held end resting on the floor: the seabed carries the end element's weight with its
+    ! A held end resting on the floor: the seabed can carry the end element's weight with its
     ! consistent end moment (CD_Seabed_End_Support; per unit weight, the floor's normal
     ! share cos(slope) n of the weight), which the nodal contact cannot. Held translations
-    ! keep their seed, so the support is fixed for the solve.
+    ! keep their seed, so this factor is fixed for the solve; the share of the element lying
+    ! on the floor (end_element_share) follows the iterate.
     end_support = CD_ZERO
     IF (use_nodal_contact .OR. kn > CD_ZERO) THEN
       DO i = 1, 2
@@ -1112,18 +1113,15 @@ CONTAINS
         pi_total = pi_total + e_term
         pi_abs = pi_abs + ABS(e_term)
       END DO
-      ! the floor-carried end moments of held ends resting on the seabed
-      IF (end_support(3, 1) > CD_ZERO) THEN
-        R(4:6) = R(4:6) - (w_cur(1)*l0(1)*l0(1)/12.0_wp)*end_support(:, 1)
-        e_term = -(w_cur(1)*l0(1)*l0(1)/12.0_wp)*DOT_PRODUCT(end_support(:, 1), q(4:6))
-        pi_total = pi_total + e_term
-        pi_abs = pi_abs + ABS(e_term)
+      ! the floor-carried end moments of held ends whose end element lies on the seabed
+      es2 = CD_HCSTAT_OK
+      IF (end_support(3, 1) > CD_ZERO) CALL add_end_support(1, 1, 2, -CD_ONE, es2, em2)
+      IF (es2 /= CD_HCSTAT_OK) THEN
+        es = CD_HCSTAT_NOCONVERGE; em = TRIM(em2); RETURN
       END IF
-      IF (end_support(3, 2) > CD_ZERO) THEN
-        R(6*ne + 4:6*ne + 6) = R(6*ne + 4:6*ne + 6) + (w_cur(ne)*l0(ne)*l0(ne)/12.0_wp)*end_support(:, 2)
-        e_term = (w_cur(ne)*l0(ne)*l0(ne)/12.0_wp)*DOT_PRODUCT(end_support(:, 2), q(6*ne + 4:6*ne + 6))
-        pi_total = pi_total + e_term
-        pi_abs = pi_abs + ABS(e_term)
+      IF (end_support(3, 2) > CD_ZERO) CALL add_end_support(2, ne, nn - 1, CD_ONE, es2, em2)
+      IF (es2 /= CD_HCSTAT_OK) THEN
+        es = CD_HCSTAT_NOCONVERGE; em = TRIM(em2); RETURN
       END IF
 
       ! ---- dry-part buoyancy recovery above the optional free surface ----
@@ -2424,6 +2422,65 @@ CONTAINS
         END DO
       END DO
     END SUBROUTINE add_end_connection
+
+    SUBROUTINE add_end_support(iend, e, inode, sgn, sp_stat, sp_msg)
+      !! Scatter the floor-carried end moment of held end iend (end element e, inner node
+      !! inode; sgn = -1 at node 1, +1 at node nn) into the residual and the band tangent:
+      !! the element's consistent weight moment w l0^2/12 along end_support(:, iend) times
+      !! the share of the element lying on the floor (CD_Seabed_End_Element_Share of the
+      !! inner node's elastic normal force, the same contact law as the assembly below). The
+      !! share couples the end tangent to the inner node's translations. The potential takes
+      !! the share at the iterate: exact where it is 0 or 1, first order in between.
+      INTEGER, INTENT(IN) :: iend, e, inode
+      REAL(wp), INTENT(IN) :: sgn
+      INTEGER, INTENT(OUT) :: sp_stat
+      CHARACTER(*), INTENT(OUT) :: sp_msg
+      REAL(wp) :: z_fl, gxg_s, gyg_s, g_s(2), sf, n_in(3), pen_s, normal_s, normal_gap_s, elem, delem, mom
+      INTEGER :: base, bin, i, j
+      CHARACTER(200) :: em_s
+      sp_stat = CD_HCSTAT_OK
+      sp_msg = ''
+      base = MERGE(3, 6*(nn - 1) + 3, iend == 1)  ! end tangent DOFs are base+1 .. base+3
+      bin = 6*(inode - 1)                         ! inner-node translations bin+1 .. bin+3
+      z_fl = seabed_z
+      g_s = CD_ZERO
+      IF (use_bathymetry) THEN
+        CALL CD_Bathymetry_Floor_Gradient(bathymetry, contact_cs(1)*q(bin + 1) - contact_cs(2)*q(bin + 2), &
+                                          contact_cs(2)*q(bin + 1) + contact_cs(1)*q(bin + 2), &
+                                          z_fl, gxg_s, gyg_s, sp_stat, em_s)
+        IF (sp_stat /= CD_BATHY_OK) THEN
+          sp_stat = CD_HCSTAT_NOCONVERGE; sp_msg = 'bathymetry query failed: '//TRIM(em_s); RETURN
+        END IF
+        g_s = [contact_cs(1)*gxg_s + contact_cs(2)*gyg_s, -contact_cs(2)*gxg_s + contact_cs(1)*gyg_s]
+      END IF
+      sf = SQRT(CD_ONE + g_s(1)*g_s(1) + g_s(2)*g_s(2))
+      n_in = [-g_s(1), -g_s(2), CD_ONE]/sf
+      pen_s = (z_fl - q(bin + 3))/sf
+      IF (use_nodal_contact) THEN
+        CALL CD_Seabed_Normal_Law(pen_s, contact_kn(inode), normal_s, normal_gap_s)
+      ELSE IF (pen_s > CD_ZERO) THEN
+        normal_s = kn*trib(inode)*pen_s
+        normal_gap_s = kn*trib(inode)
+      ELSE
+        normal_s = CD_ZERO
+        normal_gap_s = CD_ZERO
+      END IF
+      CALL CD_Seabed_End_Element_Share(normal_s, normal_gap_s, 0.5_wp*w_cur(e)*l0(e), elem, delem)
+      IF (.NOT. (elem > CD_ZERO)) RETURN
+      mom = sgn*w_cur(e)*l0(e)*l0(e)/12.0_wp
+      R(base + 1:base + 3) = R(base + 1:base + 3) + (mom*elem)*end_support(:, iend)
+      pi_total = pi_total + mom*elem*DOT_PRODUCT(end_support(:, iend), q(base + 1:base + 3))
+      pi_abs = pi_abs + ABS(mom*elem*DOT_PRODUCT(end_support(:, iend), q(base + 1:base + 3)))
+      ! d(gap)/d(r_inner) = -n_in (floor gradient held over the node)
+      IF (delem /= CD_ZERO) THEN
+        DO j = 1, 3
+          DO i = 1, 3
+            ab(KL_H + KU_H + 1 + base + i - bin - j, bin + j) = ab(KL_H + KU_H + 1 + base + i - bin - j, bin + j) - &
+                                                                mom*delem*end_support(i, iend)*n_in(j)
+          END DO
+        END DO
+      END IF
+    END SUBROUTINE add_end_support
 
     PURE REAL(wp) FUNCTION residual_merit(residual) RESULT(value)
       !! Half the squared two-norm of the scaled residual over free DOFs. The

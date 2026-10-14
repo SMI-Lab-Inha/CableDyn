@@ -86,9 +86,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   platform drifted toward the anchor), and without friction the end nodes wandered by up to
   0.18 m. The seabed now carries the end element's weight with its end moment at a held line end
   resting on the floor (along the floor normal on a sloped bathymetry), in the statics and the
-  dynamics alike. Lines whose held end does not rest on the seabed are unchanged. In the
+  dynamics alike, in the share in which the element lies on the floor: the contact force of
+  its inner node against half the element's weight, through a smooth step that is zero when
+  that node is clear of the floor and one from half the weight up. Lines whose held end does
+  not rest on the seabed, or whose end element rises from it (a taut line anchored on the
+  floor), are unchanged. In the
   shipped finite-EI examples with an anchor on the seabed the end tensions change by at most
-  0.7 N (0.05 %). Two decks of the statics robustness matrix change outcome. A lazy wave
+  0.34 N (0.004 %). Two decks of the statics robustness matrix change outcome. A lazy wave
   in a 1 m/s current on a frictional bed (`LW_1015__cur_fr`) had been reported as a hairpin
   past its anchor only at its exact seabed stiffness. It now fails closed: the friction-held
   touchdown goes into compression at about 0.33 m/s, before any tension-only equilibrium is
