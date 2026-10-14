@@ -1999,6 +1999,16 @@ add_test(NAME driver_clamped_buoyant_held
     -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_clamped_buoyant_held
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_clamped_buoyant_held PROPERTIES LABELS "fortran;driver;integration;static")
+# A clamped finite-EI cable on a Rigid6 body that also holds a pinned rod: the body's junction
+# group has nine coordinates, which the cable's kept Jacobian columns must span (the Debug
+# build's bounds checks catch a cache sized for six).
+add_test(NAME driver_clamped_cable_pinned_rod
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/buoy_clamped_cable_pinned_rod.dat|pinned"
+    "-DONCE=converged run written"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_clamped_cable_pinned_rod
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_clamped_cable_pinned_rod PROPERTIES LABELS "fortran;driver;integration")
 
 if(WIN32 AND CABLEDYN_RUNTIME_DLLS)
   add_test(

@@ -29,6 +29,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   are unchanged. With gfortran the results are bit-identical. With the Intel compiler of the
   release, which had computed the second cosine through a fused sine/cosine evaluation, they
   can differ in the last printed digit.
+- Faster monolithic body steps with a finite-EI cable clamped or elastically connected to a
+  body or rod. The cable's finite-difference columns of the junction Jacobian, each of which
+  re-steps the whole cable, are now kept and reused across steps like the mooring lines'
+  condensed tangent. They are rebuilt when 20 steps old, after a step that needed more than two
+  outer iterations, when the step size changes, and from the third outer iteration of a step.
+  `examples/buoy_clamped_cable.dat` runs 66 % faster with the release build, with the same
+  outer iterations per step. The junction converges to the same tolerance, so results differ
+  only within it, and by no more than the tolerance already allowed against a tightly converged
+  run: tensions by about 2e-6 relative and the body position by under 1 µm.
 
 ### Fixed
 
