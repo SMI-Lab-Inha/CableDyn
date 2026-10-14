@@ -272,13 +272,21 @@ without an auxiliary process:
   lines reject it.
 * **Rigid6 bodies, Point3 bodies, and rigid rods** are translated at the deck boundary; their
   supported loads and restrictions in coupled runs are listed in :doc:`capabilities`. Free
-  Rigid6 bodies and rods start at their static equilibrium with the platform at ``PtfmInit``
-  (``bodyIC static``, the default), as in standalone runs. ``Coupled``/``Vessel`` rods are
-  platform-borne: each is a node of the coupling mesh at its End A that follows the platform
-  position and orientation and returns a force and a moment (MoorDyn-F's coupled rod, including
-  the rod's own and added-mass inertia). ``Coupled``/``Vessel`` bodies are platform-borne the
-  same way, with the node at the body reference point, and may share a deck with ``Free``
-  bodies. ``CoupledPinned`` rods and bodies, and ``Pinned`` rods, are not supported on this route.
+  Rigid6 bodies, free rods and pinned rods start at their static equilibrium with the platform
+  at ``PtfmInit`` (``bodyIC static``, the default), as in standalone runs. ``Coupled``/``Vessel``
+  rods are platform-borne: each is a node of the coupling mesh at its End A that follows the
+  platform position and orientation and returns a force and a moment (MoorDyn-F's coupled rod,
+  including the rod's own and added-mass inertia). ``CoupledPinned``/``VesselPinned`` rods are
+  pinned to the platform: the node at End A follows the platform position only, the rod turns
+  about it with its own rotation (the node orientation and angular rates are ignored), and the
+  node returns a force with zero moment (MoorDyn-F's coupled pinned rod). That force is the
+  rod's net load less its inertia, with the angular acceleration solved for the node's current
+  acceleration; a CalcOutput at an off-step acceleration therefore returns the rod's effective
+  inertia about the pin rather than its full mass. ``PtfmInit`` moves and turns such a rod with
+  the platform before the static solve balances it about its pin. ``Pinned`` rods turn about a
+  fixed End A. ``Coupled``/``Vessel`` bodies are platform-borne the same way as ``Coupled`` rods,
+  with the node at the body reference point, and may share a deck with ``Free`` bodies.
+  ``CoupledPinned`` bodies are not supported on this route.
 
 Each is a separate qualification: a successful ordinary run does not qualify restart,
 linearisation, control, failure, or farm behaviour for a new model.

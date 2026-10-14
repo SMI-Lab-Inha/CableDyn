@@ -440,9 +440,10 @@ CONTAINS
   SUBROUTINE check_rod_end_tokens()
     REAL(wp), ALLOCATABLE :: a(:, :), b(:, :)
     LOGICAL :: ok1, ok2
-    ! MoorDyn CoupledPinned/VesselPinned rods fail closed by name
+    ! MoorDyn CoupledPinned/VesselPinned rods need a coupled host: the standalone driver refuses
+    ! them by name
     CALL write_rod_deck('bodrod_cpldpin.dat', .TRUE., 'CoupledPinned')
-    CALL expect_reject('bodrod_cpldpin.dat', 'CoupledPinned/VesselPinned RODS are not supported', &
+    CALL expect_reject('bodrod_cpldpin.dat', 'CoupledPinned/VesselPinned ROD requires a coupled host', &
                        'a CoupledPinned rod')
     CALL write_rod_deck('bodrod_tokens.dat', .TRUE.)
     CALL write_rod_deck('bodrod_points.dat', .FALSE.)

@@ -730,8 +730,9 @@ Body and rod channels
 ~~~~~~~~~~~~~~~~~~~~~
 
 The MoorDyn-F names, for Rigid6 bodies and for rods (free, fixed, pinned, prescribed, fixed or
-pinned to a body), on every route that carries them, the OpenFAST ``CompMooring = 5`` route
-included. Loads are evaluated at the committed state of the output time.
+pinned to a body, and in OpenFAST pinned to the platform), on every route that carries them, the
+OpenFAST ``CompMooring = 5`` route included. Loads are evaluated at the committed state of the
+output time.
 
 .. list-table::
    :header-rows: 1

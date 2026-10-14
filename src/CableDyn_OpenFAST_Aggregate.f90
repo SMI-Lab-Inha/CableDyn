@@ -16,7 +16,9 @@ MODULE CableDyn_OpenFAST_Aggregate
   !!   i in ncp_sys+1 .. ncp_sys+ncable -> cable (i - ncp_sys)'s single coupled fairlead,
   !!   next nhost_rod columns               -> the k-th Coupled/Vessel ROD's End A (a 6-DOF host
   !!                                          node: orientation and angular rates in, force and
-  !!                                          moment about End A out),
+  !!                                          moment about End A out) or CoupledPinned ROD's pin
+  !!                                          (translation in, force out, zero moment; the rod
+  !!                                          turns about it on its own),
   !!   last nhost_body columns              -> the k-th Coupled/Vessel BODY's reference point
   !!                                          (6-DOF host node, force and moment about it),
   !! with ncp_total = ncp_sys + ncable + nhost_rod + nhost_body. All facade arrays are shaped
@@ -204,8 +206,9 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! channels, keyed by deck line id. The references are fixed at the converged initial
     ! state (a checkpoint rebuild re-derives the same state), so they carry no step state.
     TYPE(CD_RangeSet) :: ranges
-    ! Coupled/Vessel rods: the trailing host nodes of the moving surface, and the full EI=0
-    ! coupled-block scratch (3, n_system_coupled_dof/3) their Rod<N>A/B points are overlaid on.
+    ! Coupled/Vessel and CoupledPinned rods: the trailing host nodes of the moving surface, and
+    ! the full EI=0 coupled-block scratch (3, n_system_coupled_dof/3) their Rod<N>A/B points are
+    ! overlaid on.
     INTEGER :: nhost_rod = 0
     INTEGER :: nhost_body = 0   ! Coupled/Vessel bodies: the trailing host nodes after the rods
     ! Body/rod marches: the host fairleads' t + dt motion as a flat coupled-DOF overlay
@@ -649,7 +652,8 @@ CONTAINS
       END IF
     END DO
     ! Host rod nodes: End A kinematics of each Coupled/Vessel rod and the wrench about End A
-    ! from the system's current coupled-point loads (the CD_AGG_CalcOutput evaluation).
+    ! from the system's current coupled-point loads (the CD_AGG_CalcOutput evaluation); the pin
+    ! of a CoupledPinned rod and its force, with zero moment.
     IF (self%nhost_rod > 0) THEN
       CALL CD_FMF_GetPointMesh(self%sys, self%hb_pos, self%hb_vel, self%hb_acc, self%hb_load, es, em)
       IF (es /= CD_FMF_OK) THEN

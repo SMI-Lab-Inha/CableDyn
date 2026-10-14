@@ -128,6 +128,22 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - `CD_HermiteCable_Dyn_Curvature_Exact` and `CD_HFMF_Curvature_Exact`: the exact geometric
   nodal curvature of the cubic-Hermite centreline, the larger one-sided trace at a node, which
   `CD_HermiteCable_Dyn_Curvature` and `CD_HFMF_Curvature` returned up to 0.1.1.
+- `Pinned` and `CoupledPinned`/`VesselPinned` rods in coupled OpenFAST (`CompMooring = 5`) runs.
+  A `Pinned` rod turns about its fixed End A, which the coupled route previously refused. A
+  `CoupledPinned` rod (MoorDyn-F's coupled pinned rod) is a node of the coupling mesh at its
+  End A that takes the platform position only: the rod turns about it with its own rotation,
+  the pin acceleration loading that rotation through the rod's inertia, and the node returns
+  the rod's net force less its inertia with zero moment. The angular acceleration in that force
+  is solved for the node's current acceleration, so an output probe sees the rod's effective
+  inertia about the pin. `PtfmInit` moves the rod with the platform, the static initial
+  condition balances it about its pin, sub-cycled steps move the pin along the interpolated
+  host path, and checkpoint restarts and correction iterations reproduce the run bit for bit
+  with the existing rod state mirror. A rod end that carries no line no longer needs a
+  `Rod<N>A`/`Rod<N>B` POINT row on the coupled route. The C API runs `Pinned` rods, as its
+  manual page already stated. The standalone driver and the C API refuse `CoupledPinned` rods
+  by name; FAST.Farm decks still refuse rods, OpenFAST linearisation still refuses rods, and
+  `CoupledPinned` bodies remain unsupported. See the manual's OpenFAST page (Lifecycle
+  features).
 
 ### Changed
 

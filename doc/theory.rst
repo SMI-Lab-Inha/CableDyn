@@ -1781,9 +1781,9 @@ Deck ``POINTS``, ``BODIES``, and ``RODS`` records follow the MoorDyn object mode
   and :math:`\mathbf{G}_{c,k}^T(\mathbf{M}_k\mathbf{X}_k - \mathbf{F}_k) = \mathbf{0}` for each pinned rod
   :math:`k`: the pin passes the rod's force to the body and no moment, and the rod's rotation
   feels the pin acceleration. (MoorDyn adds every body-attached rod, pinned or not, to the body's
-  equations with its full force, moment and mass, and its pinned-rod rotation does not include
-  the pin acceleration, so the two formulations can differ for a pinned rod on an accelerating
-  body.)
+  equations with its full force, moment and mass; its pinned-rod rotation includes the pin
+  acceleration, taken from the body acceleration the rod's kinematics were last set with, so the
+  two formulations can differ by that lag for a pinned rod on an accelerating body.)
 - A **zero-length rod** (``NumSegs`` 0) is a point-like connector: it has no mass, volume or side
   loads, and its end terms act along an axis it does not have, so it reduces to a massless point
   at End A (``Free``, ``Fixed``, ``Coupled`` or on a body).
@@ -1793,7 +1793,8 @@ static equilibrium, solved jointly with the ``Free``/``Connect`` points. The unk
 body's position and a rotation-vector increment on SO(3) (for a free rod only the two rotations
 normal to its axis), each pinned rod's two rotations about its pin, and each point's position.
 A pinned rod's residual rows are its moment about the pin; its net force acts on its parent body
-at the pin (a rod pinned to a fixed point has none). A deck with pinned rods takes the
+at the pin (a rod pinned to a fixed point has none, and a ``CoupledPinned`` rod in OpenFAST is
+balanced about its pin at the platform's initial pose). A deck with pinned rods takes the
 central-difference Jacobian of the full residual. A finite-EI line enters with its axial
 stiffness and weight only. The residual is the net force and moment of the loads the
 dynamic step applies at rest: weight, buoyancy and hydrostatic restoring, steady-current drag,
@@ -1926,6 +1927,22 @@ alone (the central-difference bound :math:`\omega\,\Delta t < 2`) would allow a 
 The limit of 0.4 is set by accuracy: a rod released out of balance at :math:`\Delta t = 0.1` s
 follows the fairlead-tension transient of a :math:`\Delta t = 0.005` s run within 1.5 %.
 Both schemes start from the instantaneous acceleration of the initial state.
+
+On the coupled route a ``Pinned`` or ``CoupledPinned`` rod advances only its rotation in this
+way; its centre then follows the pin at :math:`t_{n+1}` (fixed, or placed by the host), so End A
+drives its lines with the pin motion exactly. The end-of-step angular acceleration solves the
+reduced pinned-rod equation with
+:math:`\mathbf{a} = \mathbf{a}_p + \boldsymbol{\alpha}\times\mathbf{r} + \boldsymbol{\omega}\times(\boldsymbol{\omega}\times\mathbf{r})`,
+so the pin acceleration :math:`\mathbf{a}_p` loads the rotation through the rod's inertia, and
+the implicit drag acts on the velocity change
+:math:`\tfrac{1}{2}\Delta t(\boldsymbol{\alpha}_{n+1} - \boldsymbol{\alpha}_n)\times\mathbf{r}` of the
+pinned centre. The sub-step estimate takes the line springs through their arms from the pin
+against the rotational inertia about the pin, and in a sub-cycled step the host pin moves linearly
+between its step-start and end-of-step position, velocity and acceleration. The host receives the
+rod's net load less its inertia at the pin, with the angular acceleration solved again for the
+pin's current acceleration, and no moment. MoorDyn-F's coupled pinned rod keeps the same pin
+acceleration term in its rotation equation and returns the same force: its output call evaluates
+the rod's state derivative at the current input first.
 
 **Mixed topologies.** One step marches every object of a deck together: bodies with their fixed
 and pinned rods, free and pinned rods, the ``EI = 0`` lines with their ``Free``/``Connect``

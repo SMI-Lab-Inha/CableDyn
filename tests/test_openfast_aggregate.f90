@@ -1821,13 +1821,14 @@ CONTAINS
     DEALLOCATE (s1, s2, s3, sbad)
   END SUBROUTINE case_coupled_rigid6_mirror
 
-  SUBROUTINE write_coupled_rod_deck(path, add_current, rod_type)
+  SUBROUTINE write_coupled_rod_deck(path, add_current, rod_type, extra_option)
     !! A submerged Free rod tethered between a Fixed anchor and a Coupled fairlead by two chain
     !! lines (still water). add_current appends a deck current OPTION to exercise the still-water scope.
-    !! rod_type replaces the rod's Free type (the other rod routes).
+    !! rod_type replaces the rod's Free type (the other rod routes); extra_option is one more
+    !! OPTIONS row.
     CHARACTER(*), INTENT(IN) :: path
     LOGICAL, INTENT(IN) :: add_current
-    CHARACTER(*), INTENT(IN), OPTIONAL :: rod_type
+    CHARACTER(*), INTENT(IN), OPTIONAL :: rod_type, extra_option
     INTEGER :: u, ios
     CHARACTER(16) :: rt
     rt = 'Free'
@@ -1872,6 +1873,7 @@ CONTAINS
     WRITE (u, '(A)') '10.0 WtrDpth'
     WRITE (u, '(A)') '1.0e5 kBot'
     IF (add_current) WRITE (u, '(A)') 'profile -2.0 0.0 0.0 0.0 0.0 2.0 0.0 0.0 current'
+    IF (PRESENT(extra_option)) WRITE (u, '(A)') extra_option
     WRITE (u, '(A)') '--- OUTPUTS ---'
     WRITE (u, '(A)') 'FairTen2'
     WRITE (u, '(A)') '--- end ---'
@@ -2037,10 +2039,35 @@ CONTAINS
     CALL require(x_flow - x_still > 1.0e-4_wp, 'rod-fluid:host-current-drives-rod-downstream')
     CALL CD_AGG_End(flow, es, em)
     CALL CD_AGG_End(still, es, em)
-    ! the coupled rod march turns no rod about a pin: a Pinned rod is refused by name
+    ! the coupled rod march turns a Pinned rod about its fixed End A. Pinned at its lower end the
+    ! rod (heavier than water, its slack upper line pulling End B down) has no stable balance, so
+    ! the static start refuses it by name; from the deck pose a sideways fairlead drift turns it.
     CALL write_coupled_rod_deck('agg_rod_pinned.dat', .FALSE., 'Pinned')
     CALL CD_AGG_Init_From_Deck(still, 'agg_rod_pinned.dat', DT, es, em)
-    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'Pinned ROD') > 0, 'rod:pinned-fails-closed-by-name: '//TRIM(em))
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'unstable') > 0, 'rod:pinned-unstable-static-start: '//TRIM(em))
+    CALL write_coupled_rod_deck('agg_rod_pinned.dat', .FALSE., 'Pinned', 'deck bodyIC')
+    CALL CD_AGG_Init_From_Deck(still, 'agg_rod_pinned.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'rod:pinned-accepted: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetMovingPointMesh(still, r0, v0, a0, load, es, em)
+    v0 = 0.0_wp
+    a0 = 0.0_wp
+    v0(1, 1) = 0.2_wp
+    x_still = 0.0_wp
+    DO s = 1, 40
+      r0(1, 1) = r0(1, 1) + 0.2_wp*DT
+      CALL CD_AGG_Step_Moving(still, DT, r0, v0, a0, cv, st, ia, es, em, t_committed=REAL(s, wp)*DT)
+      CALL require(es == CD_AGG_OK .AND. cv, 'rod:pinned-step: '//TRIM(em))
+      IF (es /= CD_AGG_OK) EXIT
+      CALL CD_AGG_Get_Rod_States(still, ss, es, em)
+      ! End A = centre - (L/2) e1 stays on the pin at (0, 0, -4)
+      x_still = MAX(x_still, nan_max_abs(ss(1:3) - ss(16:18) - [0.0_wp, 0.0_wp, -4.0_wp]))
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3)') 'coupled Pinned rod: max |End A - pin| = ', x_still, &
+      ' m; |omega| after 40 steps = ', nan_max_abs(ss(10:12))
+    CALL require(x_still <= 1.0e-12_wp, 'rod:pinned-end-A-stays-at-pin')
+    CALL require(nan_max_abs(ss(10:12)) > 0.0_wp, 'rod:pinned-turns-about-pin')
+    CALL CD_AGG_End(still, es, em)
   END SUBROUTINE case_coupled_rod_fluid
 
   SUBROUTINE case_rejected_static_branch_status()

@@ -104,7 +104,10 @@ Keyword map
      - supported subset: ``Point3``/``Rigid6`` bodies and rigid rods, lines attached through
        ``Body<N>`` points and at rod ends (``R<N>A``/``R<N>B`` in ``LINES``, or
        ``Rod<N>A``/``Rod<N>B`` points) (:doc:`tutorial_bodies`); ``ROD TYPES``
-       ``Cd Ca CdEnd CaEnd`` as in MoorDyn, with optional axial side ``CdAx CaAx`` columns
+       ``Cd Ca CdEnd CaEnd`` as in MoorDyn, with optional axial side ``CdAx CaAx`` columns.
+       ``CoupledPinned``/``VesselPinned`` rods run in OpenFAST as in MoorDyn-F (End A follows
+       the platform position, the rod turns about it, a force is returned without moment);
+       ``CoupledPinned`` bodies are rejected
    * - ``dtM``, ``TMax`` (standalone), ``WtrDpth``, ``rhoW``/``WtrDnsty``, ``g``
      - same
    * - ``kBot``, ``cBot``, seabed friction coefficient
