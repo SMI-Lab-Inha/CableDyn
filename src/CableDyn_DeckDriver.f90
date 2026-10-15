@@ -3376,7 +3376,8 @@ CONTAINS
       !! no other stability test has seen (planar_current_saddle and the 3D audit run on the
       !! smeared state), so neither an in-plane current nor a line solved in 3D skips it; a
       !! line solved in 3D is tested with the same end constraints. The lumped attachment drag,
-      !! a fixed-point load of the polish, is not part of the tangent. The arrays describe the state q_static is checked on: the final mesh l0_n with its
+      !! a fixed-point load of the polish, is not part of the tangent. The arrays describe the
+      !! state q_static is checked on: the final mesh l0_n with its
       !! element properties and weights w_n (the bare weights after an attachment polish,
       !! whose lumped nodal loads are dead loads and leave the tangent unchanged), diam_ref
       !! and dry_ref on the mesh l0_ref, and the static constraints fixed_n. The bending-length
@@ -3384,6 +3385,9 @@ CONTAINS
       REAL(wp), INTENT(IN) :: l0_ref(:), l0_n(:), ea_n(:), ei_n(:), w_n(:), w_rule(:), diam_ref(:), dry_ref(:)
       INTEGER, INTENT(IN) :: fixed_n(:)
       LOGICAL, INTENT(IN) :: after_polish
+      ! Largest factor the note names (a bending length below 1e-6 of the element length is
+      ! named as at least this factor).
+      INTEGER, PARAMETER :: SCALE_NOTE_MAX = 2**20
       INTEGER, ALLOCATABLE :: fixed_3d(:)
       INTEGER :: nd, es_h, k, scale_h
       LOGICAL :: stable_h
@@ -3391,14 +3395,20 @@ CONTAINS
       CHARACTER(1024) :: em_h
       CHARACTER(600) :: text_h
       CHARACTER(160) :: state_h, tail_h
+      CHARACTER(9) :: at_least_h
+      LOGICAL :: solved_3d
       IF (saddle_kept) RETURN
       IF (.NOT. after_polish .AND. (require_3d_static .OR. in_plane_current())) RETURN
       IF (PRESENT(coarse_pass)) THEN
         IF (coarse_pass) RETURN
       END IF
       IF (.NOT. ALLOCATED(q_static)) RETURN
-      IF (.NOT. require_3d_static .AND. SIZE(fixed_n) <= 6) RETURN
-      IF (require_3d_static) THEN
+      ! Only the end translations held: the state was solved in 3D (require_3d_static, or a
+      ! symmetry-broken retry of a planar saddle), which the static audit covered before an
+      ! attachment polish but not after it.
+      solved_3d = require_3d_static .OR. SIZE(fixed_n) <= 6
+      IF (solved_3d .AND. .NOT. after_polish) RETURN
+      IF (solved_3d) THEN
         state_h = 'its discrete attachment equilibrium, which is unstable'
         tail_h = 'a disturbance can move the line away from it'
       ELSE
@@ -3421,9 +3431,11 @@ CONTAINS
       ! refinement is capped, the deck mesh is not).
       need_h = bending_refine_need(l0_n, ei_n, w_rule)
       scale_h = 1
-      DO WHILE (REAL(scale_h, wp) < need_h)
+      DO WHILE (REAL(scale_h, wp) < need_h .AND. scale_h < SCALE_NOTE_MAX)
         scale_h = 2*scale_h
       END DO
+      at_least_h = ''
+      IF (REAL(scale_h, wp) < need_h) at_least_h = 'at least'
       IF (need_h > CD_ONE) THEN
         ! The longest element and the shortest half bending length it is measured against.
         h_max = CD_ZERO
@@ -3437,7 +3449,8 @@ CONTAINS
         WRITE (text_h, '(A,I0,A,I0,A,F0.2,A,F0.2,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
           ' starts the dynamics from '//TRIM(state_h)//' on its mesh of ', SIZE(l0_n), ' elements, up to ', h_max, &
           ' m long where half the bending length (EI/|w|)^(1/3) is ', rule, &
-          ' m; refine the mesh (', scale_h, 'x meets that length) or set adaptive_mesh True '// &
+          ' m; refine the mesh ('//TRIM(at_least_h)//REPEAT(' ', MIN(1, LEN_TRIM(at_least_h))), scale_h, &
+          'x meets that length) or set adaptive_mesh True '// &
           '(a line restrained in torsion is refined automatically)'
       ELSE
         WRITE (text_h, '(A,I0,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
