@@ -2014,6 +2014,65 @@ add_test(NAME driver_clamped_cable_pinned_rod
     -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_clamped_cable_pinned_rod
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_clamped_cable_pinned_rod PROPERTIES LABELS "fortran;driver;integration")
+# A lazy-wave cable restrained in torsion (3D static solve) whose deck mesh is too coarse at
+# touchdown: the deck-mesh equilibrium reads as unstable, the refined one is stable and used.
+add_test(NAME driver_lazy_wave_torsion_coarse_refined
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_torsion_coarse.dat|coarse"
+    "-DONCE=failed the stability test with elements longer than half the bending length"
+    "-DMUST_MATCH=stable on the refined mesh of 348 elements;torsion solved"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_lazy_wave_torsion_coarse_refined
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_lazy_wave_torsion_coarse_refined PROPERTIES
+  LABELS "fortran;driver;integration;static;torsion")
+# The same deck with the mesh-sequenced route first: its state is prolongated to the refined mesh.
+add_test(NAME driver_lazy_wave_torsion_coarse_sequenced
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_torsion_coarse_sequenced.dat|coarse"
+    "-DONCE=failed the stability test with elements longer than half the bending length"
+    "-DMUST_MATCH=stable on the refined mesh of 348 elements;torsion solved"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_lazy_wave_torsion_coarse_sequenced
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_lazy_wave_torsion_coarse_sequenced PROPERTIES
+  LABELS "fortran;driver;integration;static;torsion")
+# The same cable free in torsion (planar static): the coarse planar state is unstable out of its
+# plane and the hand-off names it once; on a mesh that resolves the bending length it does not.
+add_test(NAME driver_lazy_wave_planar_coarse_note
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_planar_coarse.dat|coarse"
+    "-DONCE=starts the dynamics from a static state solved in its vertical plane that is unstable"
+    "-DMUST_MATCH=mesh of 87 elements, the coarsest 10.00 m long;4x meets that length"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_lazy_wave_planar_coarse_note
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_lazy_wave_planar_coarse_note PROPERTIES
+  LABELS "fortran;driver;integration;static")
+add_test(NAME driver_lazy_wave_planar_refined_quiet
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_planar_refined.dat|refined"
+    "-DMUST_NOT=unstable out of"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_lazy_wave_planar_refined_quiet
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_lazy_wave_planar_refined_quiet PROPERTIES
+  LABELS "fortran;driver;integration;static")
+# The same pair with the buoyant stretch built from discrete ATTACHMENTS: the hand-off check runs
+# on the discrete equilibrium the attachment polish gives.
+add_test(NAME driver_lazy_wave_planar_coarse_att_note
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_planar_coarse_att.dat|coarse_att"
+    "-DONCE=starts the dynamics from a static state solved in its vertical plane that is unstable"
+    "-DMUST_MATCH=mesh of 87 elements, the coarsest 10.00 m long;4x meets that length;25 attachment.s. lumped"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_lazy_wave_planar_coarse_att_note
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_lazy_wave_planar_coarse_att_note PROPERTIES
+  LABELS "fortran;driver;integration;static")
+add_test(NAME driver_lazy_wave_planar_refined_att_quiet
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_planar_refined_att.dat|refined_att"
+    "-DMUST_NOT=unstable out of"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_lazy_wave_planar_refined_att_quiet
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_lazy_wave_planar_refined_att_quiet PROPERTIES
+  LABELS "fortran;driver;integration;static")
 
 if(WIN32 AND CABLEDYN_RUNTIME_DLLS)
   add_test(

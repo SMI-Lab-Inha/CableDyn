@@ -463,6 +463,17 @@ but a few geometries are genuinely hard:
   of the twist cannot be trusted beyond it): reduce ``dtM`` or slow the imposed roll.
   ``tangent turns by more than 120 degrees`` names an element or node pair where the twist of
   the centreline is no longer reliable: refine the mesh there.
+- **A finite-EI equilibrium reported unstable.** ``found no physical equilibrium ... the
+  converged state is an unstable equilibrium (tangent stiffness not positive definite)`` means
+  the state that balanced its residual is a saddle of the potential energy: a compressed strut, a
+  buckled arch or an inverted fold. A coarse mesh can also produce it. On elements longer than
+  half the bending length :math:`(EI/|w|)^{1/3}` the axial force oscillates into compression at
+  Gauss points near touchdown or a section change, which lowers the out-of-plane stiffness of a
+  line solved in 3D. Each static route therefore refines such a state to a mesh that resolves
+  the bending length before it fails: the catenary-continuation route is repeated there, and
+  the mesh-sequenced state is prolongated and polished there. If the message names that refined
+  mesh as well (``still unstable on the refined mesh``), the instability is physical: check the
+  layout, the line length and the buoyancy.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
   from the catenary/arch seed.
@@ -527,6 +538,29 @@ Warnings and notes that do not stop a run
        Newton system loses the precision to converge. An 80 m lazy wave (6.5 mm limit)
        solves at 8 mm elements and not at 4 to 6 mm, where the solve stops within seconds
        and names the mesh. Coarsen ``NumSegs`` to at least the length the note gives.
+   * - ``Note: line ...: the equilibrium on the deck mesh (... elements) failed the stability test
+       with elements longer than half the bending length; stable on the refined mesh of ...
+       elements`` (or ``the equilibrium on the mesh of ... elements (refined from the deck mesh of
+       ...) failed ...``)
+     - on the deck mesh, or on a refinement of it that was still too coarse, the static state
+       read as unstable, an artefact of elements longer than half the bending length
+       :math:`(EI/|w|)^{1/3}` (see :doc:`modeling`, step 5). The run uses
+       the refined mesh, statics and dynamics alike, and its outputs have that many segments.
+       Mesh the touchdown and section changes to that rule to keep the deck mesh.
+   * - ``Note: line ... starts the dynamics from a static state solved in its vertical plane that
+       is unstable out of that plane on its mesh of ... elements, the coarsest ... m long where
+       half the bending length (EI/|w|)^(1/3) is ... m; ...``
+     - a finite-EI line free in torsion is solved in its vertical plane, and the dynamics release
+       its out-of-plane DOFs. On elements longer than half the bending length the axial force at
+       touchdown or a section change oscillates into compression and makes that planar state
+       unstable out of the plane, so a lateral disturbance (a cross current, a sway motion) can
+       move the line from it in a way the mesh, not the physics, decides. On a line with
+       ``ATTACHMENTS`` the test runs on the discrete equilibrium, after the attachment polish,
+       and the bending length uses the smeared weight of the buoyant stretch. The results are
+       those of the deck as written. Refine the mesh by the factor the note gives, or set
+       ``adaptive_mesh True``; a line restrained in torsion is solved in 3D and refined
+       automatically (see :doc:`modeling`, step 5). When ``adaptive_mesh True`` is already set,
+       its own refinement criteria stopped short of the bending length: refine the deck mesh.
    * - ``Note: line ... mesh too coarse for its bends``
      - the element-mean axial force of a finite-EI line, averaged with its neighbours, is
        compressive, and the pointwise resultant oscillates well beyond it. Refine ``NumSegs`` in

@@ -315,15 +315,18 @@ seabed. Copy it into the case folder and point a copy of the ``.fst`` at it:
 
       Created CableDyn model: 4 line object(s), 8 point(s), 6 section(s) [EI=0: 3, finite-EI: 1].
       ...
-      Line 4 fairlead effective tension: 11898 N
-         force [Fx, Fy, Fz]: [1218.2, 0, -11835] N, inclination=84.123 deg
-         line tangent: inclination=83.927 deg, declination=173.93 deg, azimuth=0 deg
+      Line 4 fairlead effective tension: 11922 N
+         force [Fx, Fy, Fz]: [1230, 0, -11858] N, inclination=84.078 deg
+         line tangent: inclination=83.943 deg, declination=173.94 deg, azimuth=0 deg
       ...
-         Curv4N20 = 9.15231E-02 (1/m)
-         BendMom4N20 = 1821.3 (N.m)
+         Curv4N38 = 9.06020E-02 (1/m)
+         BendMom4N38 = 1803 (N.m)
 
 CableDyn found the cable's touchdown and lazy-wave shape by itself: in
-``Mixed_CableDyn.CD.static.out``, 38 of line 4's 88 nodes lie on the seabed. The chain moorings
+``Mixed_CableDyn.CD.static.out``, 149 of line 4's 249 nodes lie on the seabed. Node 38, 74 m
+from the hang-off, is the peak of the sag bend. The cable's elements are at most half its bending
+length :math:`(EI/|w|)^{1/3}` (the deck's comments give the numbers), which resolves the bends
+and the touchdown. The chain moorings
 use the cable element and the power cable the cubic-Hermite bending element, in one deck and one
 coupled solve. Plot line 4's ``Curvature`` against ``ArcLength`` before looking at the time
 history, and request ``Curv4N<J>``/``BendMom4N<J>`` channels at the hang-off, sag bend, arch, and

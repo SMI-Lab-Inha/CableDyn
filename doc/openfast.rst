@@ -201,7 +201,7 @@ Mixed moorings and power cables
 One deck may combine ``EI = 0`` chains and finite-EI (``EI > 0``) power cables; each line uses
 its own element. In ``iea15mw_umaine_mixed_cabledyn.dat`` line 4 runs from a platform hang-off
 to a fixed termination on the 200 m seabed; its bare/buoyant/bare sections form the lazy wave and
-a grounded tail (38 of 88 nodes on the seabed at equilibrium). ``WtrDpth``, ``kBot``, ``cBot``,
+a grounded tail (149 of 249 nodes on the seabed at equilibrium). ``WtrDpth``, ``kBot``, ``cBot``,
 and ``frictionMu`` define contact; a structured ``bathymetryFile`` may replace the flat floor.
 CableDyn finds touchdown during static initialisation. Inspect ``<RootName>.CD.static.out``
 (curvature, grounded length, section transitions, minimum bend radius) before the time history.

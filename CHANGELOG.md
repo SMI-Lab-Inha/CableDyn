@@ -19,6 +19,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `EI = 0` + finite-EI route) the finite-EI cable steps with their residual, tangent and solve
   counts and times. Every output file is the same with and without it. See the manual's
   command-line page (Run-time profile).
+- A note when a finite-EI line starts its dynamics from a static state that is unstable out of
+  its vertical plane. A line solved in that plane (free in torsion, no current or end direction
+  across it) has its out-of-plane DOFs held in the statics and released in the dynamics. On
+  elements longer than half the bending length the touchdown can make that state unstable out of
+  the plane, which the planar solve does not see. One stability test with the dynamic
+  constraints now runs at the hand-off (0.35 ms on an 87-element lazy wave, 6 ms on 2048
+  elements; on a line with `ATTACHMENTS`, on the discrete equilibrium after the attachment
+  polish) and the note names the line, its mesh and the factor that meets the bending length,
+  and recommends a finer mesh or `adaptive_mesh True`. Results do not change.
 - Torsion of finite-EI lines in coupled OpenFAST (`CompMooring = 5`) and FAST.Farm runs. The
   End A frame of a line restrained in torsion turns with the platform orientation, the torque
   moment is returned to the platform, `PtfmInit` twists the line in the static initialisation,
@@ -60,6 +69,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `MD_Shared` farm (`validation/scripts/fastfarm_shared_ab.py`): tension means agree to 0.02 %,
   extremes to 0.25 %, and platform motions to millimetres. The migration guide now says that on
   a line with no `Fixed` end `FairTen` and `AnchTen` name the opposite ends from MoorDyn's.
+- The power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` is meshed to the
+  half-bending-length rule: 248 elements (2 m, 2.5 m and 2.5 m in its three sections) instead
+  of 87 (4 m, 4 m and 10 m). On the 10 m grounded elements the touchdown was under-resolved and
+  the static state, solved in the vertical plane of the cable, was unstable out of that plane.
+  The static fairlead tension of the cable changes from 11 898 N to 11 922 N (11 921 N on a
+  1 m mesh), its anchor tension from 1218 N to 1230 N, and the touchdown curvature from
+  0.058 1/m to 0.079 1/m (0.080 1/m on the 1 m mesh). The curvature output moves with the
+  mesh: `Curv4N20`/`BendMom4N20` (76 m from the hang-off) become `Curv4N38`/`BendMom4N38`
+  (74 m, the peak of the sag bend). In the one-hour full-turbine run of the validation record
+  the hang-off tension statistics are unchanged (11.5 ± 1.1 kN), the touchdown curvature peaks
+  at 0.109 1/m instead of 0.075 1/m, and the anchor tension stays at its static 1.23 kN, where
+  the coarse mesh showed stick-slip peaks up to 4.1 kN. The validation record and the tutorials
+  are updated.
 
 ### Fixed
 
@@ -79,9 +101,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   out of its plane. The seabed contact acts at the nodes, which carry no moment, so at an
   anchor resting on the floor the end moment of the end element's weight turned the free end
   tangent into the floor: the element dipped below the seabed between its nodes (27 mm for the
-  power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat`) and carried axial forces from
-  −47 kN to +127 kN about a line tension of 1.2 kN. Once the hang-off swayed, the element
-  buckled sideways; with seabed friction the anchor tension then locked at about 2.5 times its
+  power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` on its former 10 m grounded
+  elements) and carried axial forces from −47 kN to +127 kN about a line tension of 1.2 kN.
+  Once the hang-off swayed, the element buckled sideways; with seabed friction the anchor tension then locked at about 2.5 times its
   static value for the rest of the run (1.22 kN to 3.1 kN in a coupled OpenFAST run while the
   platform drifted toward the anchor), and without friction the end nodes wandered by up to
   0.18 m. The seabed now carries the end element's weight with its end moment at a held line end
@@ -102,6 +124,20 @@ All notable changes to CableDyn are recorded in this file. The format follows
   grounded run turned sideways on the seabed: when the refinement of the catenary
   continuation stops on a compression in a current, its failure now names the current limit,
   so the driver retries out of the plane.
+- A finite-EI line solved in 3D (restrained in torsion, or with an end connection direction or
+  a current out of the vertical plane of its chord) on a deck mesh too coarse at touchdown or at a section
+  change no longer stops with "the converged state is an unstable equilibrium". The stable
+  equilibrium had read as a saddle: elements longer than the bending length cannot follow
+  the bend, the axial force at their Gauss points oscillates into compression, and that
+  compression lowered the out-of-plane stiffness until the stability test failed. Such a
+  state is now refined, from the mesh the route returned, to the mesh whose elements are at
+  most half the bending length: the catenary-continuation route is repeated there, as for a
+  failed polish, and the state of the mesh-sequenced route is prolongated there and polished.
+  This also covers a mesh that an adaptive or safety refinement left too coarse; a mesh that
+  already meets the rule is not refined again. A note names both meshes. An equilibrium that
+  is still unstable on the refined mesh stops as before. Decks that solved before give the
+  same results. `tests/data/lazy_wave_touchdown_torsion_coarse.dat` is the regression case,
+  solved with each route first.
 
 ## [0.1.1] - 2026-10-09
 
