@@ -3327,7 +3327,14 @@ CONTAINS
       CALL hermite_static_stable(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, fixed_am, &
                                  contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
                                  endconn_mode, opts, done, es_s, em_s, cur_obj=cur_obj)
-      IF (es_s /= CD_DECKDRV_OK) done = .FALSE.
+      IF (es_s /= CD_DECKDRV_OK) THEN
+        done = .FALSE.
+        RETURN
+      END IF
+      ! A polished 3D state that fails the stability test on a mesh longer than half the
+      ! bending length is carried to the mesh that resolves that length and polished there,
+      ! as the mesh-sequenced route's state is, before the planar saddle is fallen back on.
+      IF (.NOT. done) CALL sequenced_refined_polish(done, em_s)
     END SUBROUTINE symmetric_current_polish
 
     LOGICAL FUNCTION in_plane_current() RESULT(ok)
