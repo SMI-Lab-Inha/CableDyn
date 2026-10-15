@@ -13117,8 +13117,9 @@ CONTAINS
     !! z_grid (bathymetry): the bilinear surface of the tabulated depths, which the rounding
     !! of a crease moves by up to a sixth of its slope jump times the band half-width (the
     !! roundings of two lines add where their bands cross); an
-    !! anchor at the tabulated depth (between the two surfaces, within the tolerance) rests
-    !! on the seabed as well and is placed on the rounded surface z_floor.
+    !! anchor at the tabulated depth (within the tolerance of z_grid) rests on the seabed as
+    !! well and is placed on the rounded surface z_floor. An anchor between the two surfaces
+    !! but near neither is treated by its distance to z_floor alone.
     TYPE(DeckPoint), INTENT(INOUT) :: pt
     REAL(wp), INTENT(IN) :: z_floor
     CHARACTER(*), INTENT(IN) :: what
@@ -13126,7 +13127,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: z_grid
     CHARACTER(32) :: zs, fs, ts
-    REAL(wp) :: tol, z_lo, z_hi
+    REAL(wp) :: tol
 
     ErrStat = 0; ErrMsg = ''
     tol = CD_Static_Anchor_Seabed_Tolerance(z_floor)
@@ -13136,9 +13137,7 @@ CONTAINS
       RETURN
     END IF
     IF (PRESENT(z_grid)) THEN
-      z_lo = MIN(z_floor, z_grid) - tol*(CD_ONE + 1.0e-9_wp)
-      z_hi = MAX(z_floor, z_grid) + tol*(CD_ONE + 1.0e-9_wp)
-      IF (pt%pos(3) >= z_lo .AND. pt%pos(3) <= z_hi) THEN
+      IF (ABS(pt%pos(3) - z_grid) <= tol*(CD_ONE + 1.0e-9_wp)) THEN
         pt%pos(3) = z_floor
         RETURN
       END IF

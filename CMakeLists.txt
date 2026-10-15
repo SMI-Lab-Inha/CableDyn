@@ -2054,6 +2054,23 @@ add_test(NAME driver_lazy_wave_planar_refined_quiet
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_lazy_wave_planar_refined_quiet PROPERTIES
   LABELS "fortran;driver;integration;static")
+# A Fixed anchor in a crease of a bathymetry grid: at the tabulated depth it rests on the seabed
+# and is placed on the rounded surface; 1 cm below the rounded surface, between it and the grid
+# surface but within the seabed tolerance of neither, it is rejected.
+add_test(NAME driver_anchor_crease_tabulated
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/anchor_crease_tabulated.dat|tabulated"
+    "-DMUST_NOT=lies below the seabed"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_anchor_crease_tabulated
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_anchor_crease_tabulated PROPERTIES LABELS "fortran;driver;static;seabed")
+add_test(NAME driver_anchor_crease_between
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=1
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/anchor_crease_between.dat|between"
+    "-DMUST_MATCH=POINT 2 .Fixed. lies below the seabed"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_anchor_crease_between
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_anchor_crease_between PROPERTIES LABELS "fortran;driver;static;seabed")
 # The same pair with the buoyant stretch built from discrete ATTACHMENTS: the hand-off check runs
 # on the discrete equilibrium the attachment polish gives.
 add_test(NAME driver_lazy_wave_planar_coarse_att_note
