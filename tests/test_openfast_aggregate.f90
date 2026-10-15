@@ -3181,8 +3181,9 @@ CONTAINS
 
     ! (b3) ATOMIC command validation: with one channel driving BOTH lines
     ! (bases 0.98 and 0.48 on the composite deck), a command invalid only for the
-    ! SECOND row must leave the FIRST line untouched -- pre-fix the loop had
-    ! already updated it before hitting the bad row.
+    ! SECOND row (-0.3 m is within half of 0.98 m but not of 0.48 m) must leave the
+    ! FIRST line untouched -- pre-fix the loop had already updated it before hitting
+    ! the bad row.
     BLOCK
       TYPE(CD_AGG_ModuleType) :: agga
       REAL(wp), ALLOCATABLE :: t1b(:), t1a(:)
@@ -3193,8 +3194,9 @@ CONTAINS
       ne1 = CD_System_Line_NElem(agga%sys%fast%system, 1, es, em)
       ALLOCATE (t1b(ne1), t1a(ne1))
       CALL CD_Get_System_Line_Tension(agga%sys%fast%system, 1, t1b, es, em)
-      CALL CD_AGG_Apply_LineControl(agga, [-0.6_wp], [0.0_wp], es, em)
-      CALL require(es /= CD_AGG_OK, 'aggctrl: atomic bad-row command fails closed')
+      CALL CD_AGG_Apply_LineControl(agga, [-0.3_wp], [0.0_wp], es, em)
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'EI = 0 line 2') > 0, &
+                   'aggctrl: atomic bad-row command fails closed by the second line')
       CALL CD_Get_System_Line_Tension(agga%sys%fast%system, 1, t1a, es, em)
       CALL require(nan_max_abs(t1a - t1b) <= 0.0_wp, &
                    'aggctrl: a rejected command leaves every line bit-identical (no partial apply)')
@@ -3320,6 +3322,31 @@ CONTAINS
     CALL require(es /= CD_AGG_OK, 'aggctrl: short command vector fails closed')
     CALL CD_AGG_Apply_LineControl(aggc, [-1.0_wp], [0.0_wp], es, em)
     CALL require(es /= CD_AGG_OK, 'aggctrl: non-positive segment length fails closed')
+
+    ! (d) MoorDyn-F's bounds (MoorDyn.f90, ErrID_Fatal): an increase of more than one base
+    ! segment length or a reduction of more than half of one stops the run by line, command
+    ! and bound, and writes nothing; the bounds themselves are allowed, as in MoorDyn-F.
+    BLOCK
+      REAL(wp) :: s_base, l_keep
+      INTEGER :: il, ie
+      il = aggc%ctrl_line(1)
+      ie = aggc%ctrl_elem(1)
+      s_base = aggc%ctrl_base_l0(1)
+      CALL CD_AGG_Apply_LineControl(aggc, [s_base], [0.0_wp], es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: a pay-out of one segment length is within the bounds: '//TRIM(em))
+      CALL CD_AGG_Apply_LineControl(aggc, [-0.5_wp*s_base], [0.0_wp], es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: a haul-in of half a segment length is within the bounds: '//TRIM(em))
+      l_keep = aggc%sys%fast%system%lines(il)%l0(ie)
+      CALL CD_AGG_Apply_LineControl(aggc, [1.01_wp*s_base], [0.0_wp], es, em)
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'EI = 0 line 2') > 0 .AND. INDEX(em, 'MoorDyn-F') > 0 .AND. &
+                   INDEX(em, '-S/2 <= DeltaL <= S') > 0, &
+                   'aggctrl: a pay-out beyond one segment length stops by line and bound')
+      CALL require(aggc%sys%fast%system%lines(il)%l0(ie) == l_keep, 'aggctrl: a refused pay-out writes nothing')
+      CALL CD_AGG_Apply_LineControl(aggc, [-0.51_wp*s_base], [0.0_wp], es, em)
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'EI = 0 line 2') > 0, &
+                   'aggctrl: a haul-in beyond half a segment length stops by line')
+      CALL require(aggc%sys%fast%system%lines(il)%l0(ie) == l_keep, 'aggctrl: a refused haul-in writes nothing')
+    END BLOCK
 
     CALL CD_AGG_End(agg, es, em)
     CALL CD_AGG_End(aggc, es, em)

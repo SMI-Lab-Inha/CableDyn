@@ -186,15 +186,13 @@ MODULE CableDyn_OpenFAST_Aggregate
     TYPE(DeckPoint), ALLOCATABLE :: fail_points(:)
     TYPE(DeckFailure), ALLOCATABLE :: snap_failures(:)
     ! Active line control (CONTROL section): flattened channel -> (line, controlled
-    ! element, base length) table; ctrl_warned suppresses the bound warnings after the
-    ! first exceedance per row. The controlled segment is the deck segment at the line's
+    ! element, base length) table. The controlled segment is the deck segment at the line's
     ! fairlead-side end (see CD_DeckAggregateType). A finite-EI row (ctrl_is_cable) holds
     ! the cable index, the first of the ctrl_nelem cable elements of that segment and its
     ! base length S; their base lengths sit at ctrl_span_l0(ctrl_span_off + 1:).
     INTEGER :: n_ctrl_chans = 0
     INTEGER, ALLOCATABLE :: ctrl_chan(:), ctrl_line(:), ctrl_elem(:), ctrl_nelem(:)
     REAL(wp), ALLOCATABLE :: ctrl_base_l0(:)
-    LOGICAL, ALLOCATABLE :: ctrl_warned(:)
     LOGICAL, ALLOCATABLE :: ctrl_is_cable(:)
     INTEGER, ALLOCATABLE :: ctrl_line_id(:), ctrl_span_off(:)
     REAL(wp), ALLOCATABLE :: ctrl_span_l0(:)
@@ -351,8 +349,6 @@ CONTAINS
       CALL MOVE_ALLOC(parts%ctrl_line_id, candidate%ctrl_line_id)
       CALL MOVE_ALLOC(parts%ctrl_span_off, candidate%ctrl_span_off)
       CALL MOVE_ALLOC(parts%ctrl_span_l0, candidate%ctrl_span_l0)
-      ALLOCATE (candidate%ctrl_warned(SIZE(candidate%ctrl_chan)))
-      candidate%ctrl_warned = .FALSE.
     END IF
     ! Coupled Rigid6 decks: take over the opaque body runtime (deep-copied by the intrinsic
     ! assignment; the deck bundle is released in CD_End_Deck_Aggregate below).
@@ -1706,15 +1702,16 @@ CONTAINS
     !! Apply the host's cable-control command BEFORE an advance to the deck segment at the
     !! fairlead-side end of each controlled line: the end on a host-driven point, else the
     !! written NodeB (MoorDyn's AttachB, its segment N). On an EI = 0 line that element's
-    !! unstretched length becomes base + delta_l(chan) with rate
-    !! delta_l_dot(chan) -- the MoorDyn convention -- applied unclamped: a command beyond
-    !! MoorDyn-F's bounds (an increase above one base segment length or a reduction past
-    !! half of it, which stop MoorDyn-F) warns once per row and proceeds. On a finite-EI
-    !! cable every cable element of that segment (base length S) scales by
-    !! lambda = (S + delta_l)/S, with rate delta_l_dot*l_e/S, so the segment takes the same
-    !! length and rate; lambda outside [0.5, 2] (the same bounds, enforced) fails closed by
-    !! line, since the cable elements would leave the mesh resolution the static
-    !! initialisation established. On both kinds the committed state keeps the lengths it
+    !! unstretched length becomes base + delta_l(chan) with rate delta_l_dot(chan) -- the
+    !! MoorDyn convention. A command outside MoorDyn-F's bounds, -S/2 <= delta_l <= S with S
+    !! the segment's base length (MoorDyn-F's UnstrLen/N on its uniform lines), fails closed
+    !! by line, as MoorDyn-F stops the run there (ErrID_Fatal). On a finite-EI cable every
+    !! cable element of that segment (base length S) scales by lambda = (S + delta_l)/S,
+    !! with rate delta_l_dot*l_e/S, so the segment takes the same length and rate; lambda
+    !! outside [0.5, 2] -- the same bounds -- fails closed by line, as the cable elements
+    !! would also leave the mesh resolution the static initialisation established. Every
+    !! row is checked before any line changes, so a refused command writes nothing. On both
+    !! kinds the committed state keeps the lengths it
     !! was reached with until the next advance commits the new ones. restored = .TRUE. is
     !! the checkpoint-restart re-application of the command the committed state was reached
     !! with: the lengths become the committed ones at once.
@@ -1768,9 +1765,15 @@ CONTAINS
           ErrMsg = 'CableDyn_OpenFAST_Aggregate: line control requires the EI=0 system'
           RETURN
         END IF
-        IF (delta_l(ch) <= -self%ctrl_base_l0(c)) THEN
+        ! MoorDyn-F's bounds (MoorDyn.f90, the active-tension bounds check): no increase of
+        ! more than one segment length, no reduction of more than half of one
+        IF (delta_l(ch) > self%ctrl_base_l0(c) .OR. delta_l(ch) < -0.5_wp*self%ctrl_base_l0(c)) THEN
           ErrStat = CD_AGG_BADINPUT
-          ErrMsg = 'CableDyn_OpenFAST_Aggregate: DeltaL reduces a controlled segment to a non-positive length'
+          WRITE (em, '(A,I0,A,ES12.5,A,I0,A,ES12.5,A)') 'CableDyn_OpenFAST_Aggregate: control channel ', ch, &
+            ' commands DeltaL = ', delta_l(ch), ' m on EI = 0 line ', self%ctrl_line_id(c), &
+            '; its controlled segment (S = ', self%ctrl_base_l0(c), &
+            ' m) may only change within MoorDyn-F''s bounds -S/2 <= DeltaL <= S'
+          ErrMsg = TRIM(em)
           RETURN
         END IF
       END IF
@@ -1798,13 +1801,6 @@ CONTAINS
           RETURN
         END IF
         CYCLE
-      END IF
-      IF (.NOT. self%ctrl_warned(c)) THEN
-        IF (delta_l(ch) > self%ctrl_base_l0(c) .OR. delta_l(ch) < -0.5_wp*self%ctrl_base_l0(c)) THEN
-          WRITE (*, '(A,I0,A)') 'CableDyn: WARNING -- control channel ', ch, &
-            ' DeltaL exceeds the MoorDyn advisory bounds (+1/-0.5 segment lengths); applying unclamped'
-          self%ctrl_warned(c) = .TRUE.
-        END IF
       END IF
       CALL CD_Update_System_Line_SegmentLength(self%sys%fast%system, self%ctrl_line(c), self%ctrl_elem(c), &
                                                self%ctrl_base_l0(c) + delta_l(ch), delta_l_dot(ch), es, em, &
@@ -1894,7 +1890,6 @@ CONTAINS
     IF (ALLOCATED(self%ctrl_elem)) DEALLOCATE (self%ctrl_elem)
     IF (ALLOCATED(self%ctrl_nelem)) DEALLOCATE (self%ctrl_nelem)
     IF (ALLOCATED(self%ctrl_base_l0)) DEALLOCATE (self%ctrl_base_l0)
-    IF (ALLOCATED(self%ctrl_warned)) DEALLOCATE (self%ctrl_warned)
     IF (ALLOCATED(self%ctrl_is_cable)) DEALLOCATE (self%ctrl_is_cable)
     IF (ALLOCATED(self%ctrl_line_id)) DEALLOCATE (self%ctrl_line_id)
     IF (ALLOCATED(self%ctrl_span_off)) DEALLOCATE (self%ctrl_span_off)

@@ -406,6 +406,12 @@ FAILURE and CONTROL sections
    * - ``CONTROL row has trailing content`` / ``line L is assigned to more than one CONTROL
        channel``
      - write ``ChannelID Lines`` with a comma list without spaces, and assign each line once.
+   * - ``control channel C commands DeltaL = ... m on EI = 0 line L; its controlled segment
+       (S = ... m) may only change within MoorDyn-F's bounds -S/2 <= DeltaL <= S``
+     - the command lengthens the line's fairlead-side segment by more than one initial segment
+       length or shortens it by more than half of one, where MoorDyn-F also stops. Keep
+       ``CableDeltaL`` within the bounds, or mesh the line with fewer, longer segments so the
+       command is a smaller fraction of one.
    * - ``control channel C would scale the controlled segment of finite-EI line L by ...``
      - the command lies outside half to twice the initial length of the cable's fairlead-side
        segment, the range its static mesh resolves. Keep ``CableDeltaL`` within it, or mesh the
