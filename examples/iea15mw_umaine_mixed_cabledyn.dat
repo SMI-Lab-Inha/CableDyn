@@ -34,9 +34,14 @@ LineID  LineType  Length  NumSegs
 1       main      850.0   50
 2       main      850.0   50
 3       main      850.0   50
-4       bare      80.0    20
-4       buoy     100.0    25
-4       bare     420.0    42
+4       bare      80.0    40
+4       buoy     100.0    40
+4       bare     420.0   168
+-- Line 4 mesh: every element at most half the bending length (EI/|w|)^(1/3) of its section, so
+-- the touchdown, the sag and hog bends and the section changes are resolved: bare cable
+-- (w = 157.8 N/m) 5.02 m -> 2.51 m, 2.0 m and 2.5 m elements; buoyancy section (|w| = 80.1 N/m)
+-- 6.28 m -> 3.14 m, 2.5 m elements. A coarser mesh (10 m along the grounded run) reads the
+-- planar equilibrium as unstable out of its plane at touchdown (see doc/modeling.rst, step 5).
 --------------------------- OPTIONS -------------------------------------------
 9.80665  g                - Gravitational acceleration (m/s^2); overridden by OpenFAST [default: 9.80665]
 1025.0   rhoW             - Water density (kg/m^3); overridden by OpenFAST [default: 1025]
@@ -71,7 +76,7 @@ none      waves             - Wave model, height, period, and direction (m, s, d
 "AnchTen4"
 "FairIncl4"
 "AnchIncl4"
-"Curv4N20"
-"BendMom4N20"
+"Curv4N38"
+"BendMom4N38"
 END
 --------------------------- need this line ------------------------------------

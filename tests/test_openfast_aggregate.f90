@@ -4253,11 +4253,11 @@ CONTAINS
   END SUBROUTINE write_lozon_semitaut_deck
 
   SUBROUTINE case_touchdown_cable_end_tension()
-    !! The IEA-15MW touchdown power cable of the mixed example (line 2 beside one mooring
-    !! chain): bare / buoyant / bare sections, stiff EA = 4.69e8 N on 4-10 m elements,
-    !! ending on a 3e6 Pa/m seabed. Statics carry no horizontal load, so the anchor end sees
-    !! the grounded run's tension H (~1.2 kN). The node-sampled stretch EA*(|dr/ds| - 1) at
-    !! the held anchor read 78 kN; the element end force equals H.
+    !! The IEA-15MW touchdown power cable of the mixed example on its former mesh (line 2 beside one
+    !! mooring chain): bare / buoyant / bare sections, stiff EA = 4.69e8 N on 4-10 m elements,
+    !! ending on a 3e6 Pa/m seabed. Statics carry no horizontal load, so the anchor end sees the
+    !! grounded run's tension H (~1.2 kN). The node-sampled stretch EA*(|dr/ds| - 1) at the held
+    !! anchor read 78 kN; the element end force equals H.
     TYPE(CD_AGG_ModuleType) :: agg
     INTEGER :: u, ios, es, k
     REAL(wp) :: v(3)

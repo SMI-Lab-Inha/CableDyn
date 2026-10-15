@@ -169,14 +169,17 @@ Tensions and platform dynamic response agree to within 0.6 %, apart from the Ptf
 ### Finite-EI power cable, severe sea (Hs=11)
 
 The cases above use the all-chain mooring. This case uses the mixed deck
-`examples/iea15mw_umaine_mixed_cabledyn.dat`: three chains plus an 87-element (20 + 25 + 42)
-finite-EI cubic-Hermite lazy-wave cable that runs from the platform (point 7, `Coupled`) to a
-touchdown on the 200 m seabed and ends at an anchor (point 8, `Fixed`), in the full turbine under
-Hs=11 waves. The run completed (exit 0, all 2400 steps, 0 NaN/Inf), and its output contains the
-finite-EI curvature and bending-moment channels `Curv4N20` and `BendMom4N20`, which confirms that
-the cable ran on the finite-EI element. At the static initial state the standalone driver gives
-`Curv4N20` = 0.0915 1/m and `BendMom4N20` = 1821 N·m on this deck. This case has no MoorDyn-F
-twin and establishes completion only; cable accuracy is established against OrcaFlex in cases L3-4, L3-5, L3-6 and
+`examples/iea15mw_umaine_mixed_cabledyn.dat`: three chains plus a finite-EI cubic-Hermite
+lazy-wave cable that runs from the platform (point 7, `Coupled`) to a touchdown on the 200 m
+seabed and ends at an anchor (point 8, `Fixed`), in the full turbine under Hs=11 waves. The run
+used the deck's earlier 87-element (20 + 25 + 42) mesh of the cable; the example now meshes it
+with 248 elements to resolve its bending length, and the one-hour full-turbine run of the
+coupled finite-EI touchdown row in [`VALIDATION.md`](../VALIDATION.md) uses that mesh. The run
+completed (exit 0, all 2400 steps, 0 NaN/Inf), and its output contains the finite-EI curvature
+and bending-moment channels of the sag bend, which confirms that the cable ran on the finite-EI
+element. At the static initial state the standalone driver gives 0.0915 1/m and 1821 N·m on
+that mesh (`Curv4N20`, `BendMom4N20`), and 0.0906 1/m and 1803 N·m on the current one
+(`Curv4N38`, `BendMom4N38`). This case has no MoorDyn-F twin and establishes completion only; cable accuracy is established against OrcaFlex in cases L3-4, L3-5, L3-6 and
 L4-1c of [`VALIDATION.md`](../VALIDATION.md).
 
 ### Coupled rod between two fairleads, still water

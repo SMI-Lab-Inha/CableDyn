@@ -2,8 +2,7 @@
 ! SPDX-License-Identifier: Apache-2.0
 ! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
 PROGRAM test_flagship_compression_note
-  !! The maintained IEA-15 MW mixed example initialises without a compression or fine-mesh note
-  !! (its power cable carries only the hand-off note on the out-of-plane stability of its mesh).
+  !! The maintained IEA-15 MW mixed example initialises without a compression or mesh note.
   !! Its lazy-wave cable (line 4) rests on the nodal penalty seabed: the contact reaction at
   !! the touchdown node kinks the line, so the pointwise axial resultant dips below zero at
   !! every mesh and single element means next to the kink can be slightly negative. The line
@@ -51,17 +50,7 @@ PROGRAM test_flagship_compression_note
     DO i = 1, SIZE(agg%init_lines)
       IF (LEN_TRIM(agg%init_lines(i)%note) > 0) WRITE (*, '(A,I0,2A)') '  line ', agg%init_lines(i)%line_id, &
         ' note: ', TRIM(agg%init_lines(i)%note)
-      ! The power cable's deck mesh (10 m elements along the grounded run, half the bending
-      ! length 2.5 m) carries the hand-off note: its planar static state is unstable out of the
-      ! plane on that mesh. It is a mesh advisory, not a compression or fine-mesh note, and
-      ! the only note allowed here.
-      IF (INDEX(agg%init_lines(i)%note, 'starts the dynamics from a static state solved in its vertical plane') &
-          > 0) THEN
-        CALL check(agg%init_lines(i)%line_id == 4 .AND. INDEX(agg%init_lines(i)%note, NEW_LINE('a')) == 0, &
-                   'only the power cable carries the hand-off note, and no other note')
-      ELSE
-        CALL check(LEN_TRIM(agg%init_lines(i)%note) == 0, 'no static-initialisation note on any line')
-      END IF
+      CALL check(LEN_TRIM(agg%init_lines(i)%note) == 0, 'no static-initialisation note on any line')
     END DO
   END IF
 

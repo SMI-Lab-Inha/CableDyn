@@ -1,5 +1,5 @@
 # L4-1c hang-off harmonic table (cos convention: A cos(2 pi t/T + phase_deg))
-# source: CableDyn coupled OpenFAST run of the IEA-15-240-RWT UMaine mixed example (Main_mixed_600.out);
+# source: CableDyn coupled OpenFAST run of the IEA-15-240-RWT UMaine mixed example, 87-element cable mesh (Main_mixed_600.out);
 # offset (30.0,-20.0); window 232.4s; period<=40s; capture 85.4%
 16 4.131042 0.131826
 # period_s surge_amp surge_phase_deg heave_amp heave_phase_deg

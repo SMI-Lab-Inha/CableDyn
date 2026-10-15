@@ -553,14 +553,14 @@ CONTAINS
   END SUBROUTINE case_coupled_seabed_contact
 
   SUBROUTINE case_grounded_anchor_end()
-    !! A lazy-wave power cable laid on a frictional flat bed up to its pinned anchor on the
-    !! floor (Line 4 of examples/iea15mw_umaine_mixed_cabledyn.dat: 200 m depth, kBot 3e6,
-    !! frictionMu 0.35, 10 m grounded elements). The seabed carries the weight of the anchor
+    !! A lazy-wave power cable laid on a frictional flat bed up to its pinned anchor on the floor
+    !! (Line 4 of examples/iea15mw_umaine_mixed_cabledyn.dat on its former mesh: 200 m depth, kBot
+    !! 3e6, frictionMu 0.35, 10 m grounded elements). The seabed carries the weight of the anchor
     !! element, so its free end tangent stays along the floor; turned into the floor by the
-    !! unbalanced end moment of the weight, the element dipped about 27 mm below the bed,
-    !! carried axial forces from -47 kN to +127 kN about the 1.2 kN line tension, and
-    !! buckled sideways once the hang-off swayed, after which the friction locked the anchor
-    !! tension at about 2.5 times its static value while the line slackened.
+    !! unbalanced end moment of the weight, the element dipped about 27 mm below the bed, carried
+    !! axial forces from -47 kN to +127 kN about the 1.2 kN line tension, and buckled sideways once
+    !! the hang-off swayed, after which the friction locked the anchor tension at about 2.5 times
+    !! its static value while the line slackened.
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cable
     INTEGER :: cn, es, base, k
     CHARACTER(256) :: em

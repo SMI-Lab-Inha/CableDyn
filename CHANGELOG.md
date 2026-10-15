@@ -68,6 +68,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `MD_Shared` farm (`validation/scripts/fastfarm_shared_ab.py`): tension means agree to 0.02 %,
   extremes to 0.25 %, and platform motions to millimetres. The migration guide now says that on
   a line with no `Fixed` end `FairTen` and `AnchTen` name the opposite ends from MoorDyn's.
+- The power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` is meshed to the
+  half-bending-length rule: 248 elements (2 m, 2.5 m and 2.5 m in its three sections) instead
+  of 87 (4 m, 4 m and 10 m). On the 10 m grounded elements the touchdown was under-resolved and
+  the static state, solved in the vertical plane of the cable, was unstable out of that plane.
+  The static fairlead tension of the cable changes from 11 898 N to 11 922 N (11 921 N on a
+  1 m mesh), its anchor tension from 1218 N to 1230 N, and the touchdown curvature from
+  0.058 1/m to 0.079 1/m (0.080 1/m on the 1 m mesh). The curvature output moves with the
+  mesh: `Curv4N20`/`BendMom4N20` (76 m from the hang-off) become `Curv4N38`/`BendMom4N38`
+  (74 m, the peak of the sag bend). In the one-hour full-turbine run of the validation record
+  the hang-off tension statistics are unchanged (11.5 ± 1.1 kN), the touchdown curvature peaks
+  at 0.109 1/m instead of 0.075 1/m, and the anchor tension stays at its static 1.23 kN, where
+  the coarse mesh showed stick-slip peaks up to 4.1 kN. The validation record and the tutorials
+  are updated.
 
 ### Fixed
 
@@ -87,9 +100,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   out of its plane. The seabed contact acts at the nodes, which carry no moment, so at an
   anchor resting on the floor the end moment of the end element's weight turned the free end
   tangent into the floor: the element dipped below the seabed between its nodes (27 mm for the
-  power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat`) and carried axial forces from
-  −47 kN to +127 kN about a line tension of 1.2 kN. Once the hang-off swayed, the element
-  buckled sideways; with seabed friction the anchor tension then locked at about 2.5 times its
+  power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` on its former 10 m grounded
+  elements) and carried axial forces from −47 kN to +127 kN about a line tension of 1.2 kN.
+  Once the hang-off swayed, the element buckled sideways; with seabed friction the anchor tension then locked at about 2.5 times its
   static value for the rest of the run (1.22 kN to 3.1 kN in a coupled OpenFAST run while the
   platform drifted toward the anchor), and without friction the end nodes wandered by up to
   0.18 m. The seabed now carries the end element's weight with its end moment at a held line end
