@@ -2478,6 +2478,14 @@ CONTAINS
       ! toward its end can hold in the plane only as a saddle). Otherwise the out-of-plane
       ! (symmetry-breaking) pass finds the stable equilibrium.
       IF ((sequence_done .OR. primary_done) .AND. pass <= 2) THEN
+        ! On a mesh longer than half the bending length the out-of-plane negative mode can be
+        ! the mesh's, not a pitchfork of the line: the planar state is first carried to the
+        ! mesh that resolves that length and polished there (sequenced_refined_polish), and
+        ! kept if it is not a saddle there; otherwise the coarse state is restored and
+        ! classified as before.
+        IF (.NOT. primary_walked .AND. bending_refine_scale(l0_am, ei_am, w_am) >= 2) THEN
+          IF (planar_current_saddle()) CALL saddle_refined_retry()
+        END IF
         IF (planar_current_saddle()) THEN
           primary_done = .FALSE.
           sequence_done = .FALSE.
@@ -3234,6 +3242,51 @@ CONTAINS
       END IF
       retry = .TRUE.
     END FUNCTION symmetric_current_retry
+
+    SUBROUTINE saddle_refined_retry()
+      !! A planar state in an in-plane current that is a saddle out of its plane on a mesh
+      !! longer than half the bending length: polished on the refined mesh that resolves that
+      !! length (sequenced_refined_polish, which audits it with the planar constraints) and
+      !! kept when it is no saddle there; otherwise the coarse state and its notes are restored.
+      REAL(wp), ALLOCATABLE :: l0_c(:), ea_c(:), ei_c(:), w_c(:), q_c(:), curv_c(:)
+      INTEGER, ALLOCATABLE :: fixed_c(:)
+      TYPE(CD_HermiteResolutionType) :: diag_c
+      REAL(wp) :: res_c
+      INTEGER :: scale_c, ne_c
+      LOGICAL :: stab_c, done_r
+      CHARACTER(320) :: note_c
+      CHARACTER(1024) :: why_r
+      l0_c = l0_am
+      ea_c = ea_am
+      ei_c = ei_am
+      w_c = w_am
+      q_c = q_static
+      curv_c = curv
+      fixed_c = fixed_am
+      diag_c = diag
+      res_c = res
+      scale_c = applied_scale
+      ne_c = stability_from_ne
+      stab_c = stability_refined
+      note_c = compression_note
+      CALL sequenced_refined_polish(done_r, why_r)
+      IF (done_r) THEN
+        IF (.NOT. planar_current_saddle()) RETURN
+      END IF
+      CALL MOVE_ALLOC(l0_c, l0_am)
+      CALL MOVE_ALLOC(ea_c, ea_am)
+      CALL MOVE_ALLOC(ei_c, ei_am)
+      CALL MOVE_ALLOC(w_c, w_am)
+      CALL MOVE_ALLOC(q_c, q_static)
+      CALL MOVE_ALLOC(curv_c, curv)
+      CALL MOVE_ALLOC(fixed_c, fixed_am)
+      diag = diag_c
+      res = res_c
+      applied_scale = scale_c
+      stability_from_ne = ne_c
+      stability_refined = stab_c
+      compression_note = note_c
+    END SUBROUTINE saddle_refined_retry
 
     SUBROUTINE symmetric_current_polish(done)
       !! Pass 3 solved the line under the perturbed current: restore the exact current and
