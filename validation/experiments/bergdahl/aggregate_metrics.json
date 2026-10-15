@@ -1,12 +1,12 @@
 {
   "completed_cases": 30,
-  "mean_bias_N": 0.4581405133333342,
-  "mean_bias_percent_of_measured": 1.5799650380013595,
-  "mae_N": 1.3216888866666683,
-  "mape_percent": 3.114363588294243,
-  "rmse_N": 1.5803063158422797,
-  "maximum_absolute_error_percent": 7.720632768361595,
-  "pearson_correlation": 0.993312061701205,
-  "correlation_r_squared": 0.9866688519210985,
-  "lin_concordance_correlation": 0.9891670912995935
+  "mean_bias_N": 0.45431785333333463,
+  "mean_bias_percent_of_measured": 1.5717214764340497,
+  "mae_N": 1.324980640000002,
+  "mape_percent": 3.120217363988557,
+  "rmse_N": 1.586603785062259,
+  "maximum_absolute_error_percent": 7.717337853107351,
+  "pearson_correlation": 0.9932016283673366,
+  "correlation_r_squared": 0.986449474591529,
+  "lin_concordance_correlation": 0.989081600333658
 }

@@ -76,7 +76,7 @@ article's methods, are compared in
 | **L3-6e** | Out-of-plane / 3D whirl response | OrcaFlex 11.6d | 3D curv 0.52%, interior Y env ≤1.0 mm, sag ≤22 mm, tension 0.14/0.17/0.12% | curv <3%, env <5 cm, tension <2–3% | Pass |
 | **L3-7** | 1-hour VolturnUS-S mooring dynamic | OrcaFlex 11.6d | `FairTen` mean 0.27%, std 0.26%, min/max 0.50/0.43%, Fourier 0.27/1.14% | ≤5% | Pass |
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
-| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.11%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
+| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.59 N; MAPE 3.12%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -288,10 +288,10 @@ scripts, results, and source provenance are in
 - **L3-B Bergdahl dynamic chain test**
   ([Bergdahl et al., 2016](https://cabledyn.readthedocs.io/en/latest/references.html#ref-bergdahl2016)):
   over the full 30-condition period-radius matrix, cycle-maximum upper-end force
-  has RMSE 1.58 N, mean absolute percentage error 3.11%, Pearson correlation
+  has RMSE 1.59 N, mean absolute percentage error 3.12%, Pearson correlation
   0.993, and Lin concordance 0.989. Two phase-averaged measured histories have
   waveform RMSEs of 5.95% and 2.54% of their force ranges. Halving the mesh length
-  and the time step changes the mean cycle maximum by at most 0.49% and 0.28%. The
+  and the time step changes the mean cycle maximum by at most 0.34% and 0.22%. The
   0.3125 ms step resolves the segment axial modes that the snap loads excite; at
   1.25 ms the maxima are 2–15% higher and vary from cycle to cycle.
 
