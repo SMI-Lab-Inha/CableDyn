@@ -1594,11 +1594,11 @@ CONTAINS
           IF (.NOT. PRESENT(lay_azimuth)) laid_az = ATAN2(-SIN(laid_az), -COS(laid_az))
           CALL CD_Static_As_Laid_Reference(fairlead(1:2), laid_az, l0(n_elem:1:-1), ea(n_elem:1:-1), laid_t, &
                                            cur%friction_ref, es, em, bathymetry=bathymetry, &
-                                           sink=sink(n_elem + 1:1:-1))
+                                           sink=sink(n_elem + 1:1:-1), kn=seabed_kn(n_elem + 1:1:-1))
           cur%friction_ref = cur%friction_ref(:, n_elem + 1:1:-1)
         ELSE
           CALL CD_Static_As_Laid_Reference(anchor(1:2), laid_az, l0, ea, laid_t, cur%friction_ref, es, em, &
-                                           bathymetry=bathymetry, sink=sink)
+                                           bathymetry=bathymetry, sink=sink, kn=seabed_kn)
         END IF
       END BLOCK
       IF (es /= CD_STATIC_OK) THEN

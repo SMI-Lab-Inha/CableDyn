@@ -1315,7 +1315,7 @@ CONTAINS
   END SUBROUTINE CD_Static_Friction_Anchors
 
   SUBROUTINE CD_Static_As_Laid_Reference(origin, azimuth, l0, ea, laid_tension, ref, ErrStat, ErrMsg, bathymetry, &
-                                         sink)
+                                         sink, kn)
     !! As-laid position of a line on the seabed, the reference of its static seabed friction
     !! (OrcaFlex's "as laid" statics seabed friction policy): the line is laid from its
     !! bottom end (node 1, horizontal position origin) in the horizontal direction azimuth
@@ -1333,14 +1333,20 @@ CONTAINS
     !! horizontally by w_i (z_x, z_y)/k_i; its reference moves with it, so the line laid at
     !! rest on a slope carries no friction force (a deflection normal to the seabed is not a
     !! friction deflection, as in OrcaFlex's in-plane friction).
+    !! kn (optional, per node, with sink): the nodal seabed stiffness. With a positive
+    !! laid_tension on a bathymetry whose slope varies, the tension turns at every node of
+    !! the laid path and presses it into the seabed (over a crest) or lifts it (in a hollow);
+    !! the normal component of that turning force over kn is added to the node's sink, so
+    !! the line laid at its as-laid tension rests at its reference without friction.
     REAL(wp), INTENT(IN) :: origin(2), azimuth, l0(:), ea(:), laid_tension
     REAL(wp), INTENT(OUT) :: ref(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
-    REAL(wp), INTENT(IN), OPTIONAL :: sink(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: sink(:), kn(:)
     INTEGER :: n_elem, e, j, nsub, es
-    REAL(wp) :: dir(2), d, ds, step, x, y, zf, gx, gy, g, dshort
+    REAL(wp) :: dir(2), d, ds, step, x, y, zf, gx, gy, g, dshort, sink_j, p(3, 3), t_in(3), t_out(3), nrm(3)
+    REAL(wp), ALLOCATABLE :: ref0(:, :)
     CHARACTER(120) :: em
 
     ErrStat = CD_STATIC_OK
@@ -1393,15 +1399,46 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'as-laid reference: sink must be finite, one entry per node')
         RETURN
       END IF
-      ! node 1 is held: its reference stays at origin
+      IF (PRESENT(kn)) THEN
+        IF (SIZE(kn) /= n_elem + 1 .OR. .NOT. CD_All_Finite(kn)) THEN
+          CALL fail(ErrStat, ErrMsg, 'as-laid reference: kn must be finite, one entry per node')
+          RETURN
+        END IF
+      END IF
+      ! node 1 is held: its reference stays at origin. The turning force of the laid tension
+      ! is evaluated on the path before the sink (a second-order correction).
+      ref0 = ref
       DO j = 2, n_elem + 1
-        IF (.NOT. (sink(j) > CD_ZERO)) CYCLE
+        sink_j = sink(j)
+        IF (PRESENT(kn) .AND. laid_tension > CD_ZERO .AND. j <= n_elem) THEN
+          IF (kn(j) > CD_ZERO) THEN
+            DO e = 1, 3
+              CALL CD_Bathymetry_Floor_Gradient(bathymetry, ref0(1, j + e - 2), ref0(2, j + e - 2), p(3, e), gx, gy, &
+                                                es, em)
+              IF (es /= CD_BATHY_OK) THEN
+                CALL fail(ErrStat, ErrMsg, 'as-laid reference: bathymetry query failed: '//TRIM(em))
+                RETURN
+              END IF
+              p(1:2, e) = ref0(:, j + e - 2)
+              IF (e == 2) nrm = [-gx, -gy, CD_ONE]/SQRT(CD_ONE + gx*gx + gy*gy)
+            END DO
+            t_in = p(:, 2) - p(:, 1)
+            t_out = p(:, 3) - p(:, 2)
+            IF (NORM2(t_in) > CD_ZERO .AND. NORM2(t_out) > CD_ZERO) THEN
+              ! the tension's force on node j is T (t_out - t_in); its component into the
+              ! seabed (against the upward normal) adds to the node's penetration
+              sink_j = MAX(CD_ZERO, sink_j - laid_tension*DOT_PRODUCT(t_out/NORM2(t_out) - t_in/NORM2(t_in), nrm)/ &
+                           kn(j))
+            END IF
+          END IF
+        END IF
+        IF (.NOT. (sink_j > CD_ZERO)) CYCLE
         CALL CD_Bathymetry_Floor_Gradient(bathymetry, ref(1, j), ref(2, j), zf, gx, gy, es, em)
         IF (es /= CD_BATHY_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'as-laid reference: bathymetry query failed: '//TRIM(em))
           RETURN
         END IF
-        ref(:, j) = ref(:, j) + sink(j)*[gx, gy]
+        ref(:, j) = ref(:, j) + sink_j*[gx, gy]
       END DO
     END IF
   END SUBROUTINE CD_Static_As_Laid_Reference

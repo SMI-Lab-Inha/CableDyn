@@ -785,7 +785,12 @@ to node :math:`i` is :math:`s_i = \sum_{e<i} l_{0,e}(1 + T_\text{laid}/EA_e)` lo
 bathymetry the horizontal distance follows from integrating
 :math:`\mathrm{d}s = \sqrt{1 + z_{,\alpha}^2}\,\mathrm{d}d` in sub-steps of at most 1 m. A
 laid node sinks into the penalty seabed along its normal by its static penetration, which on a
-slope moves it horizontally by :math:`w_i\,(z_{,x}, z_{,y})/k_i`; its reference moves with it,
+slope moves it horizontally by :math:`w_i\,(z_{,x}, z_{,y})/k_i`. Where the slope varies, the
+laid tension turns at every node and adds
+:math:`-T_\text{laid}\,(\mathbf{t}_{i}^{+} - \mathbf{t}_{i}^{-})\cdot\mathbf{n}_i` to the
+normal load (it presses the line into a crest and lifts it from a hollow), with
+:math:`\mathbf{t}_{i}^{\pm}` the unit tangents of the laid path on either side of the node and
+:math:`\mathbf{n}_i` the upward normal. The reference moves with the node,
 so the line laid at rest carries no friction force (a deflection normal to the seabed is not a
 friction deflection, as in OrcaFlex's in-plane law). The static solve then holds every node in
 contact with a friction spring toward its reference, capped smoothly at :math:`\mu N`,

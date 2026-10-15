@@ -14,6 +14,7 @@ PROGRAM test_bathymetry
                                  CD_Bathymetry_Grid_Floor, CD_Bathymetry_Rotate_Curvature, &
                                  CD_BATHY_CREASE_FRACTION
   USE CableDyn_SeabedContact, ONLY: CD_SEABED_CONTACT_BLEND
+  USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
   IMPLICIT NONE
 
@@ -27,6 +28,7 @@ PROGRAM test_bathymetry
   CALL case_crease_rounding_c2()
   CALL case_crease_rounding_planar_exact()
   CALL case_crease_contact_tangent_fd()
+  CALL case_as_laid_tension_sink()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -468,5 +470,63 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE expect_vec_fd
+
+  SUBROUTINE case_as_laid_tension_sink()
+    !! The as-laid friction reference on a curved bathymetry (a Gaussian crest along x):
+    !! with kn and no laid tension it is bit-identical to the reference without kn; with a
+    !! laid tension T each interior node sinks by the extra T (t_out - t_in).n / kn into the
+    !! seabed (n the upward normal), which moves its reference by that amount times the
+    !! local gradient (checked against an independent evaluation on the unsunk path).
+    TYPE(CD_BathymetryType) :: bathy
+    INTEGER, PARAMETER :: NE = 20
+    REAL(wp), PARAMETER :: T = 2.0e4_wp, KN = 1.0e4_wp, SINK = 0.01_wp
+    REAL(wp) :: x(41), y(2), depth(41, 2), l0(NE), ea(NE), sk(NE + 1), kv(NE + 1)
+    REAL(wp) :: r_nokn(2, NE + 1), r_kn(2, NE + 1), r_t(2, NE + 1), r_t0(2, NE + 1), r_t_nokn(2, NE + 1)
+    REAL(wp) :: p(3, 3), g(2), nrm(3), tin(3), tout(3), extra, expect(2), worst
+    INTEGER :: i, j, k, es
+    CHARACTER(160) :: em
+
+    DO i = 1, SIZE(x)
+      x(i) = 5.0_wp*REAL(i - 1, wp)
+      depth(i, :) = 100.0_wp - 10.0_wp*EXP(-((x(i) - 100.0_wp)/30.0_wp)**2)
+    END DO
+    y = [-20.0_wp, 20.0_wp]
+    CALL CD_Init_Bathymetry(bathy, x, y, depth, es, em)
+    CALL expect_es(es, CD_BATHY_OK, 'aslaid:init')
+    l0 = 9.0_wp
+    ea = 1.0e9_wp
+    sk = SINK
+    kv = KN
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, 0.0_wp, r_nokn, es, em, bathymetry=bathy, &
+                                     sink=sk)
+    CALL expect_es(es, CD_STATIC_OK, 'aslaid:ref')
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, 0.0_wp, r_kn, es, em, bathymetry=bathy, &
+                                     sink=sk, kn=kv)
+    CALL require(ALL(r_kn == r_nokn), 'aslaid:no tension, kn changes nothing')
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, T, r_t, es, em, bathymetry=bathy, &
+                                     sink=sk, kn=kv)
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, T, r_t_nokn, es, em, bathymetry=bathy, &
+                                     sink=sk)
+    sk = 0.0_wp
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, T, r_t0, es, em, bathymetry=bathy)
+    worst = 0.0_wp
+    DO j = 2, NE
+      DO k = 1, 3
+        CALL floor_at(bathy, r_t0(1, j + k - 2), r_t0(2, j + k - 2), p(3, k), g)
+        p(1:2, k) = r_t0(:, j + k - 2)
+        IF (k == 2) nrm = [-g(1), -g(2), 1.0_wp]/SQRT(1.0_wp + g(1)**2 + g(2)**2)
+      END DO
+      tin = (p(:, 2) - p(:, 1))/NORM2(p(:, 2) - p(:, 1))
+      tout = (p(:, 3) - p(:, 2))/NORM2(p(:, 3) - p(:, 2))
+      extra = MAX(0.0_wp, SINK - T*DOT_PRODUCT(tout - tin, nrm)/KN)
+      CALL floor_at(bathy, r_t0(1, j), r_t0(2, j), p(3, 2), g)
+      expect = r_t0(:, j) + extra*g
+      worst = MAX(worst, MAXVAL(ABS(r_t(:, j) - expect)))
+    END DO
+    CALL require(worst <= 1.0e-12_wp, 'aslaid:tension sink matches the turning force')
+    ! the crest presses the laid line into the seabed: the references differ with tension
+    CALL require(MAXVAL(ABS(r_t - r_t_nokn)) > 1.0e-6_wp, 'aslaid:tension sink active on a crest')
+    CALL CD_End_Bathymetry(bathy)
+  END SUBROUTINE case_as_laid_tension_sink
 
 END PROGRAM test_bathymetry

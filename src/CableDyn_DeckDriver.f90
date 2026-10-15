@@ -3871,7 +3871,7 @@ CONTAINS
       REAL(wp), INTENT(OUT) :: ref_g(:, :)
       INTEGER, INTENT(OUT) :: esr
       CHARACTER(*), INTENT(OUT) :: emr
-      REAL(wp), ALLOCATABLE :: wn(:), kn_r(:), sn(:), l0_r(:), ea_r(:)
+      REAL(wp), ALLOCATABLE :: wn(:), kn_r(:), sn(:), kn_o(:), l0_r(:), ea_r(:)
       REAL(wp) :: o_xy(2)
       INTEGER :: k, ne_r
       ne_r = SIZE(l0)
@@ -3892,8 +3892,10 @@ CONTAINS
         END WHERE
         IF (from_top) THEN
           sn = wn(ne_r + 1:1:-1)
+          kn_o = kn_r(ne_r + 1:1:-1)
         ELSE
           sn = wn
+          kn_o = kn_r
         END IF
       END IF
       IF (from_top) THEN
@@ -3906,7 +3908,8 @@ CONTAINS
         ea_r = ea
         o_xy = points(pa)%pos(1:2)
       END IF
-      CALL CD_Static_As_Laid_Reference(o_xy, az, l0_r, ea_r, laid_t, ref_g, esr, emr, bathymetry=bathymetry, sink=sn)
+      CALL CD_Static_As_Laid_Reference(o_xy, az, l0_r, ea_r, laid_t, ref_g, esr, emr, bathymetry=bathymetry, sink=sn, &
+                                       kn=kn_o)
       IF (from_top .AND. esr == CD_STATIC_OK) ref_g = ref_g(:, ne_r + 1:1:-1)
     END SUBROUTINE as_laid_positions
 
