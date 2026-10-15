@@ -68,9 +68,10 @@ MODULE CableDyn_HermiteCableDynamic
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Contact_Gate, CD_SEABED_CONTACT_BLEND, &
                                     CD_Seabed_Friction_Stick_Slip, CD_Seabed_Friction_Aniso, &
                                     CD_Seabed_Friction_Mu_Dir, CD_FRICTION_STICK_SLIP, CD_Seabed_End_Support, &
-                                    CD_Seabed_End_Element_Share
+                                    CD_Seabed_End_Element_Share, CD_Seabed_Normal_Contact
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
-                                 CD_Bathymetry_Floor_Gradient, CD_End_Bathymetry, CD_BATHY_OK
+                                 CD_Bathymetry_Floor_Gradient, CD_End_Bathymetry, CD_BATHY_OK, &
+                                 CD_Bathymetry_Rotate_Curvature
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
                                      CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Validate, CD_HTORS_OK, &
                                      CD_HTORS_MAX_STEP, CD_HermiteTorsionWorkType, CD_HermiteTorsion_Work_Init, &
@@ -4526,6 +4527,7 @@ CONTAINS
     REAL(wp) :: qe(12), ve(12), fe(12), fdrag(12), fdamp(12), energy, fdry(4), kdry(4, 4), r3(3), gate, gate_gap
     REAL(wp) :: dry_wl, dry_b, dry_r, gap, normal, normal_gap, z_floor, xg, yg, gxg, gyg
     REAL(wp) :: gx, gy, sfac, nvec(3), vn, rk(3), jrel(3, 3), jtan(3, 3)
+    REAL(wp) :: curv_e(3), fcrease_e(3), kcrease_e(3, 3)
     INTEGER :: e, i0, iz, zslot, es, k
     LOGICAL :: dry, has_jac
     CHARACTER(200) :: em2
@@ -4586,12 +4588,21 @@ CONTAINS
       IF (model%has_contact_bathymetry) THEN
         xg = model%contact_frame_c*model%q(iz - 2) - model%contact_frame_s*model%q(iz - 1)
         yg = model%contact_frame_s*model%q(iz - 2) + model%contact_frame_c*model%q(iz - 1)
-        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em2)
+        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em2, &
+                                          crease_curvature=curv_e)
         IF (es /= CD_BATHY_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
         END IF
         gx = model%contact_frame_c*gxg + model%contact_frame_s*gyg
         gy = -model%contact_frame_s*gxg + model%contact_frame_c*gyg
+        ! the elastic force in a rounded crease (see assemble_contact)
+        IF (ANY(ABS(curv_e) > CD_ZERO)) THEN
+          CALL crease_contact_increment(z_floor - model%q(iz), gx, gy, model%contact_kn(node), &
+                                        CD_Bathymetry_Rotate_Curvature(curv_e, [model%contact_frame_c, &
+                                                                                model%contact_frame_s]), &
+                                        fcrease_e, kcrease_e)
+          r3 = r3 - fcrease_e
+        END IF
       END IF
       ! frictionless: along the upward floor normal, at the normal penetration and velocity
       sfac = SQRT(CD_ONE + gx*gx + gy*gy)
@@ -5817,6 +5828,8 @@ CONTAINS
     REAL(wp) :: sfac, nvec(3), vn, dnormal_dv(3)
     REAL(wp) :: d_fr(2), mu_c
     REAL(wp) :: ffr(2), dfr_dd(2, 2), dfr_dc(2)
+    REAL(wp) :: curv_g(3), curv_l(3), fcrease(3), kcrease(3, 3)
+    LOGICAL :: creased
     CHARACTER(200) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -5831,15 +5844,25 @@ CONTAINS
         xl = q_cfg(ix); yl = q_cfg(iy)
         xg = model%contact_frame_c*xl - model%contact_frame_s*yl
         yg = model%contact_frame_s*xl + model%contact_frame_c*yl
-        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em)
+        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em, &
+                                          crease_curvature=curv_g)
         IF (es /= CD_BATHY_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'bathymetry query failed: '//TRIM(em); RETURN
         END IF
         ! Chain the global floor gradient through the inverse local-to-global heading.
         gx = model%contact_frame_c*gxg + model%contact_frame_s*gyg
         gy = -model%contact_frame_s*gxg + model%contact_frame_c*gyg
+        creased = ANY(ABS(curv_g) > CD_ZERO)
       ELSE
         z_floor = model%seabed_z
+        creased = .FALSE.
+      END IF
+      ! In a rounded crease of the bathymetry the elastic force is the gradient of the
+      ! penalty potential of the static solve (CD_Seabed_Normal_Contact with the curvature):
+      ! its departure from the normal force F n, and its tangent, are added below.
+      IF (creased) THEN
+        curv_l = CD_Bathymetry_Rotate_Curvature(curv_g, [model%contact_frame_c, model%contact_frame_s])
+        CALL crease_contact_increment(z_floor - q_cfg(iz), gx, gy, model%contact_kn(i), curv_l, fcrease, kcrease)
       END IF
 
       sfac = SQRT(CD_ONE + gx*gx + gy*gy)
@@ -5868,6 +5891,16 @@ CONTAINS
             CALL scatter_contact_band(model%ws_Kvb, ix + jr - 1, ix + jc - 1, -nvec(jr)*dnormal_dv(jc))
           END DO
         END DO
+      END IF
+      IF (creased) THEN
+        IF (want_residual) model%ws_R(ix:iz) = model%ws_R(ix:iz) - fcrease
+        IF (want_tangent) THEN
+          DO jc = 1, 3
+            DO jr = 1, 3
+              CALL scatter_contact_band(model%ws_Kb, ix + jr - 1, ix + jc - 1, kcrease(jr, jc))
+            END DO
+          END DO
+        END IF
       END IF
 
       IF (.NOT. model%fr_active) CYCLE
@@ -5901,6 +5934,19 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE assemble_contact
+
+  PURE SUBROUTINE crease_contact_increment(gap_v, gx, gy, kn, curv, fdelta, kdelta)
+    !! Elastic contact force and residual tangent of a node in a rounded bathymetry crease
+    !! (CD_Seabed_Normal_Contact with the surface curvature) less those of the normal
+    !! force F n at the same point: the increment added to the normal-force assembly.
+    REAL(wp), INTENT(IN) :: gap_v, gx, gy, kn, curv(3)
+    REAL(wp), INTENT(OUT) :: fdelta(3), kdelta(3, 3)
+    REAL(wp) :: fp(3), kp(3, 3)
+    CALL CD_Seabed_Normal_Contact(gap_v, gx, gy, kn, fdelta, kdelta, curvature=curv)
+    CALL CD_Seabed_Normal_Contact(gap_v, gx, gy, kn, fp, kp)
+    fdelta = fdelta - fp
+    kdelta = kdelta - kp
+  END SUBROUTINE crease_contact_increment
 
   LOGICAL FUNCTION held_end_floor_support(model, q_cfg, iend, support, dsupport, inode, nin) RESULT(held)
     !! Floor reaction carrying the weight of the end element at line end iend (1: node 1,

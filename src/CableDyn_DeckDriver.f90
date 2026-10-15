@@ -40,7 +40,7 @@ MODULE CableDyn_DeckDriver
                              CD_STATIC_OK, CD_STATIC_BADINPUT
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, &
                                  CD_Bathymetry_Is_Initialized, CD_Bathymetry_Floor, &
-                                 CD_Bathymetry_Floor_Gradient, CD_BATHY_OK
+                                 CD_Bathymetry_Floor_Gradient, CD_Bathymetry_Grid_Floor, CD_BATHY_OK
   USE CableDyn_Line, ONLY: CD_LineType, CD_LineSection, CD_Build_Line_Mesh, &
                            CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Catenary, ONLY: CD_Catenary_Seed, CD_CAT_OK, CD_CAT_NOSEED
@@ -1548,7 +1548,7 @@ CONTAINS
     REAL(wp) :: saddle_res
     CHARACTER(320) :: saddle_notes
     LOGICAL :: primary_done, primary_inadmissible, tolerance_note, stable, kink_refined, sequence_done
-    LOGICAL :: primary_walked, walk_rejected
+    LOGICAL :: primary_walked, walk_rejected, primary_walk_planar
     ! Why the bow behind the fairlead was not reached (bow_route), blank when not tried.
     CHARACTER(1024) :: bow_msg, refine_msg
     ! Set when the deck-mesh equilibrium failed the stability test and the refined one passed.
@@ -2003,6 +2003,7 @@ CONTAINS
     sym_broken = .FALSE.
     planar_unstable = .FALSE.
     walk_rejected = .FALSE.
+    primary_walk_planar = .TRUE.
     saddle_tol_note = .FALSE.
     saddle_kink = .FALSE.
     saddle_stab = .FALSE.
@@ -2393,13 +2394,14 @@ CONTAINS
                                       static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, fixed_am, &
                                       applied_scale, diag, res, iters, es, em, primary_inadmissible, &
                                       tolerance_note, kink_refined, bathymetry=bathymetry, cur_obj=cur_obj, &
-                                      walked=primary_walked)
+                                      walked=primary_walked, walk_planar=primary_walk_planar)
         ELSE
           CALL hermite_static_primary(anchor, fairlead, l0, ea, ei, w, diam, dry_b, fixed_dofs, contact_enabled, &
                                       contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, opts, &
                                       static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, fixed_am, &
                                       applied_scale, diag, res, iters, es, em, primary_inadmissible, &
-                                      tolerance_note, kink_refined, cur_obj=cur_obj, walked=primary_walked)
+                                      tolerance_note, kink_refined, cur_obj=cur_obj, walked=primary_walked, &
+                                      walk_planar=primary_walk_planar)
         END IF
         IF (es == CD_HCSTAT_OK) THEN
           ! adaptive_mesh refines while the resolution screen is fragile, up to its cap; an
@@ -2555,6 +2557,17 @@ CONTAINS
         CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable static solve failed; '//TRIM(fine_note)// &
                         '. Catenary-continuation route: '//TRIM(short_message(primary_msg, 360))// &
                         '. Mesh-sequenced route: '//TRIM(short_message(sequence_msg, 360))); RETURN
+      END IF
+      ! Over a seabed that is not planar under the line the walk started from the plane
+      ! fitted to it: that the line cannot hang as a catenary is not proven there.
+      IF (walk_rejected .AND. .NOT. primary_walk_planar) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable static solve found no admissible equilibrium over '// &
+                        'the bathymetry: the line is longer than its span plus rise over the plane fitted to '// &
+                        'the bathymetry along the chord, and the equilibrium held by its bending stiffness that '// &
+                        'the anchor walk reached is rejected ('// &
+                        TRIM(short_message(primary_msg, 360))//'); mesh-sequenced route: '// &
+                        TRIM(short_message(sequence_msg, 240))//'; check the line length and the seabed under it')
+        RETURN
       END IF
       IF (walk_rejected) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable static solve found no admissible planar equilibrium '// &
@@ -4092,7 +4105,7 @@ CONTAINS
                                               endconn_mode, opts, static_tol, l0_am, ea_am, ei_am, w_am, q_static, &
                                               curv, fixed_am, applied_scale, diag, res, iters, ErrStat, ErrMsg, &
                                               inadmissible, tolerance_note, kink_refined, bathymetry, refined_pass, &
-                                              cur_obj, walked, fold_walk, stability_refine)
+                                              cur_obj, walked, fold_walk, stability_refine, walk_planar)
     !! Primary finite-EI static route of a deck cable (the OrcaFlex/MoorPy practice of
     !! "catenary statics, then full statics"):
     !!
@@ -4162,6 +4175,9 @@ CONTAINS
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
     ! Set when the returned state was reached by walking the anchor (see seed_walk).
     LOGICAL, INTENT(OUT), OPTIONAL :: walked
+    ! Whether the seabed under the line is planar (see planar_bed): a failed walk proves
+    ! the line too long for its span only then.
+    LOGICAL, INTENT(OUT), OPTIONAL :: walk_planar
     ! Trace the bow behind the fairlead (see fold_walk above).
     LOGICAL, INTENT(IN), OPTIONAL :: fold_walk
     ! Go straight to the refined repetition (see stability_refine above).
@@ -4200,6 +4216,7 @@ CONTAINS
     tolerance_note = .FALSE.
     kink_refined = .FALSE.
     IF (PRESENT(walked)) walked = .FALSE.
+    IF (PRESENT(walk_planar)) walk_planar = .TRUE.
     fold = .FALSE.
     IF (PRESENT(fold_walk)) fold = fold_walk
     applied_scale = 1
@@ -4264,6 +4281,7 @@ CONTAINS
     ! 1. exact elastic catenary seed (anchor = node 1, fairlead = node nnode)
     planar_bed = .NOT. PRESENT(bathymetry) .OR. &
                  fit_misfit <= 1.0e-6_wp*MAX(CD_ONE, SUM(l0), ABS(seabed_z))
+    IF (PRESENT(walk_planar)) walk_planar = planar_bed
     ! Bed height under the anchor (a non-planar bathymetry; see the anchor walk).
     anchor_bed = seabed_z
     IF (contact_enabled .AND. .NOT. planar_bed) THEN
@@ -13074,20 +13092,25 @@ CONTAINS
     END DO
   END SUBROUTINE reverse_line_sections
 
-  SUBROUTINE check_fixed_point_above_seabed(pt, z_floor, what, ErrStat, ErrMsg)
+  SUBROUTINE check_fixed_point_above_seabed(pt, z_floor, what, ErrStat, ErrMsg, z_grid)
     !! A Fixed point (anchor) must sit on or above the seabed. A point below it pins the
     !! attached line inside the penalty seabed, which is not a physical configuration
     !! (MoorDyn v2 rejects an anchor below the water depth the same way). An anchor within
     !! the practical seabed tolerance max(1 mm, 1e-5 |z_floor|) of the seabed, above or
     !! below (tabulated depths, rounded deck coordinates), rests on the seabed: its z is set
     !! to the seabed elevation. Further below is rejected.
+    !! z_grid (bathymetry): the bilinear surface of the tabulated depths, which the rounding
+    !! of a crease moves by up to a quarter of its slope jump times the band half-width; an
+    !! anchor at the tabulated depth (between the two surfaces, within the tolerance) rests
+    !! on the seabed as well and is placed on the rounded surface z_floor.
     TYPE(DeckPoint), INTENT(INOUT) :: pt
     REAL(wp), INTENT(IN) :: z_floor
     CHARACTER(*), INTENT(IN) :: what
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: z_grid
     CHARACTER(32) :: zs, fs, ts
-    REAL(wp) :: tol
+    REAL(wp) :: tol, z_lo, z_hi
 
     ErrStat = 0; ErrMsg = ''
     tol = CD_Static_Anchor_Seabed_Tolerance(z_floor)
@@ -13095,6 +13118,14 @@ CONTAINS
     IF (ABS(pt%pos(3) - z_floor) <= tol*(CD_ONE + 1.0e-9_wp)) THEN
       pt%pos(3) = z_floor
       RETURN
+    END IF
+    IF (PRESENT(z_grid)) THEN
+      z_lo = MIN(z_floor, z_grid) - tol*(CD_ONE + 1.0e-9_wp)
+      z_hi = MAX(z_floor, z_grid) + tol*(CD_ONE + 1.0e-9_wp)
+      IF (pt%pos(3) >= z_lo .AND. pt%pos(3) <= z_hi) THEN
+        pt%pos(3) = z_floor
+        RETURN
+      END IF
     END IF
     IF (pt%pos(3) > z_floor) RETURN
     WRITE (zs, '(G0.8)') pt%pos(3)
@@ -13115,7 +13146,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, es
-    REAL(wp) :: z_floor
+    REAL(wp) :: z_floor, z_grid
     CHARACTER(160) :: em
 
     ErrStat = 0; ErrMsg = ''
@@ -13123,8 +13154,10 @@ CONTAINS
       IF (TRIM(points(i)%ptype) /= 'fixed') CYCLE
       CALL CD_Bathymetry_Floor(bathymetry, points(i)%pos(1), points(i)%pos(2), z_floor, es, em)
       IF (es /= CD_BATHY_OK) CYCLE
+      CALL CD_Bathymetry_Grid_Floor(bathymetry, points(i)%pos(1), points(i)%pos(2), z_grid, es, em)
+      IF (es /= CD_BATHY_OK) CYCLE
       CALL check_fixed_point_above_seabed(points(i), z_floor, 'the bathymetry seabed at its (x, y), z', &
-                                          ErrStat, ErrMsg)
+                                          ErrStat, ErrMsg, z_grid=z_grid)
       IF (ErrStat /= 0) RETURN
     END DO
   END SUBROUTINE check_fixed_points_on_bathymetry

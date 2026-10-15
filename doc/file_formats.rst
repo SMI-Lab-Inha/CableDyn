@@ -343,7 +343,12 @@ Validation
   ``16·ε`` relative.
 * Rows may come in any order. Grid spacing does not have to be uniform.
 
-The seabed is interpolated bilinearly within each grid cell. On a slope the
+The seabed is interpolated bilinearly within each grid cell, and the creases of that
+surface along the interior grid lines are rounded within a band of half-width 5 % of
+the smaller grid spacing next to each line (a cubic fillet that makes the surface
+twice continuously differentiable; see :doc:`theory`). The rounding moves the surface
+by at most a sixth of the slope jump across the line times the band half-width, and
+leaves a planar grid and every patch without a crease exactly bilinear. On a slope the
 frictionless contact force acts along the surface normal, and its stiffness includes
 the slope of that surface. Outside the grid, depth is clamped to
 the value at the nearest edge.

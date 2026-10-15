@@ -790,12 +790,53 @@ A vertical axis (no horizontal projection) takes
 :math:`\mu_n`. An equal pair runs the isotropic law unchanged.
 
 A structured bathymetry grid gives :math:`z_\text{floor}(x, y)` by bilinear interpolation,
-clamped to the nearest edge outside the grid. On a sloped patch the elastic contact is
+clamped to the nearest edge outside the grid, with the creases of that surface rounded.
+Along every interior grid line the bilinear surface has a crease: its slope across the line
+jumps by :math:`J` (the second difference of the tabulated depths). A node that must rest in a
+concave crease, a valley along a grid line or the bottom of a pit, takes the normal of one cell
+or the other and has no static equilibrium there; a slack chain piled at the bottom of a
+trench and a frictionless grounded run slid sideways into a valley both end there. Each
+crease is therefore rounded within a band of half-width :math:`\delta_k`, 5 % of the smaller
+grid spacing next to line :math:`k`. Along one axis the interpolant :math:`g(x)` becomes
+
+.. math::
+
+   \tilde g(x) = g(x) + J_k\,h(x - x_k), \qquad
+   h(u) = \frac{(\delta_k - |u|)^3}{6\,\delta_k^2} \quad (|u| < \delta_k), \qquad h = 0 \text{ elsewhere}.
+
+:math:`h'(0^+) - h'(0^-) = -1` cancels the slope jump, and :math:`h`, :math:`h'` and :math:`h''`
+vanish at :math:`|u| = \delta_k`, so :math:`\tilde g` is :math:`C^2`. Its curvature
+:math:`J_k (\delta_k - |u|)/\delta_k^2` has the sign of the jump, so a valley stays convex and
+gains no spurious pit. The surface is the tensor product of the two rounded interpolants,
+:math:`z_\text{floor} = f + h_x J_x(y) + h_y \big(J_y(x) + h_x M\big)`, with :math:`f` the
+bilinear surface, :math:`J_x(y)` the jumps of the grid rows across the :math:`x` line
+interpolated linearly along it, :math:`J_y(x)` likewise, and :math:`M` the mixed second
+difference of the grid where two lines cross. Its height, gradient and curvature are
+continuous everywhere within the grid. Outside the bands it is the bilinear surface, and
+inside one it moves by at most :math:`|J|\,\delta/6`. A 0.2 slope jump on a 10 m grid moves
+it by 1.7 cm, within the static penetration of a chain (``w/(kBot Diam)``, 11 cm for a
+120 mm chain at ``kBot = 1e5``). A crease that would move the surface by less than 1 µm is not
+rounded: a planar grid, also one written to a few decimals, and every patch without a crease
+keep the bilinear surface exactly. The grid edges are not rounded, and outside the grid the
+surface stays level. Every query uses this one surface: the contact of the ``EI = 0`` and the
+Hermite path, statics and dynamics, its friction, the seabed clearance and touchdown outputs,
+and the Python post-processing (``cabledyn.Bathymetry``). A ``Fixed`` point placed at the
+tabulated depth of a creased grid node lies up to :math:`|J|\,\delta/6` below the rounded
+surface; it rests on the seabed and is placed on the rounded surface.
+
+On a sloped patch the elastic contact is
 frictionless and normal to the surface, on the ``EI = 0`` and the Hermite path alike: with
 :math:`s = \sqrt{1 + z_{,x}^2 + z_{,y}^2}` the force is :math:`f_n^{(k)}(g/s)\,\mathbf{n}`,
 :math:`\mathbf{n} = (-z_{,x}, -z_{,y}, 1)/s`, and its tangent
-:math:`f_n^{(k)\prime}\,\mathbf{n}\mathbf{n}^{\mathsf T}` (the grid curvature is not
-differentiated); on a level floor this is exactly the vertical law above. Its damping acts on
+:math:`f_n^{(k)\prime}\,\mathbf{n}\mathbf{n}^{\mathsf T}` (the twist of a bilinear cell is not
+differentiated); on a level floor this is exactly the vertical law above. Inside a crease band,
+where the surface curves, the elastic force is the gradient of the penalty potential
+:math:`E(g/s)` of the normal penetration, :math:`-f_n^{(k)}\,\partial(g/s)/\partial\mathbf{q}`:
+the normal force plus :math:`f_n^{(k)}\,g\,\nabla s/s^2`, a term of the order of the
+penetration times the curvature, and its tangent is the Hessian of that potential (third
+derivatives of the surface left out). The static energy minimisation then agrees with the
+force, and a node held in a rounded valley by its curvature has a consistent stiffness. Its
+damping acts on
 the velocity along :math:`\mathbf{n}`, and a friction capacity is :math:`\mu` times its
 magnitude. The static solve and the dynamics use the same law, so a grounded run on a slope
 rests at a static equilibrium of the march; its tension changes along the slope by the weight

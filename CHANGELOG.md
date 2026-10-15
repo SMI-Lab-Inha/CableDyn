@@ -161,11 +161,42 @@ All notable changes to CableDyn are recorded in this file. The format follows
   29 of 153 such runs changed, the fairlead force by at most 0.03 % and the anchor tension by
   at most 2.2 % (on 0.5 m roughness, where the anchor tension of the same deck differs by up
   to 13 % on a mesh four times finer). The decks `ROUGH_1001` to `ROUGH_1003` of the cable
-  statics matrix (with mesh twins) are the regression cases. The troubleshooting guide now
-  also describes the `EI = 0` counterpart, which this does not change: a tension-only line that
-  must rest in a valley or pit of a gridded bathymetry (slack chain piled at the bottom of a
-  trench, or a grounded run slid sideways into a valley) has no equilibrium with the node
-  contact on the creases of the bilinear surface.
+  statics matrix (with mesh twins) are the regression cases.
+- A line resting in a trench, a valley or a pit of a gridded bathymetry now has a static
+  equilibrium. Along every interior grid line the bilinear surface has a crease, and a node on
+  it took the normal of one adjacent cell, so a node that had to rest in a concave crease was
+  pushed back across it from either side and had no equilibrium. An `EI = 0` chain whose
+  frictionless tension falls to zero inside a trench (its excess length resting slack at the
+  bottom) failed with "no admissible static equilibrium", and so did a grounded run on a
+  two-dimensional rough seabed, which slides sideways into a valley along a grid line; a
+  finite-EI line on such a seabed could fail its first dynamic step. Each crease is now
+  rounded within a band of half-width 5 % of the smaller grid spacing next to its line, by
+  the cubic fillet `J (d - |u|)^3 / (6 d^2)` of the slope jump `J` across the line, applied as
+  a tensor product in both directions, so that the surface is twice continuously
+  differentiable. It moves the surface by at most `|J| d / 6` (1.7 cm for a slope jump of 0.2
+  on a 10 m grid), and a planar grid and every patch without a crease (one that would move the
+  surface by less than 1 µm) keep the bilinear surface bit for bit. In a band the elastic
+  contact force is the gradient of the penalty potential of the normal penetration, with its
+  Hessian as the tangent, in the statics and the dynamics alike. Every bathymetry query uses
+  this surface, the Python `Bathymetry` and its seabed clearance included. A `Fixed` point at
+  the tabulated depth of a creased grid node rests on the seabed and is placed on the rounded
+  surface. In the statics campaign the `EI = 0` decks on bathymetry solve 40 of 43 (32
+  before; the three left have anchors below the seabed), a 30 m trench now solves at every
+  depth from 2 m to 30 m (5 of 11 before), with the anchor tension `w` times the trench depth
+  as for a chain piled at the bottom (the fairlead tension within 0.15 % of the same trench
+  sampled with a level bottom cell, on a mesh four times finer), and the `EI = 0` rough-seabed
+  sweep solves 192 of 192 (191). Decks over a flat seabed or a planar bathymetry are unchanged, and so are all shipped
+  examples and test decks. Decks over creased bathymetries that solved before change: the
+  fairlead tension by at most 0.04 % (0.4 % for an `EI = 0` run that settles in another valley
+  of a two-dimensional rough seabed), the anchor tension by up to 8.5 %. The rounding removes
+  horizontal reactions of the one-sided normals: on a 2 m trench the two ends' horizontal
+  forces now agree to 0.02 % (1.2 % before), and the anchor tension of a finite-EI line on a
+  rough two-dimensional seabed is half as far from the one on a mesh four times finer. The
+  decks `trench_touchdown_pile`, `trench_grounded_run_pile` and `rough2d_seabed` of the `EI = 0`
+  statics robustness matrix are the regression cases, with an independent nodal force balance
+  on the rounded surface. When the anchor walk of a finite-EI line over a non-planar bathymetry
+  reaches a state that is rejected, the failure no longer states that the line is too long for
+  its span to hang as a catenary, which is proven over a planar seabed only.
 
 ## [0.1.1] - 2026-10-09
 

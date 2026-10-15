@@ -867,7 +867,7 @@ CONTAINS
       INTEGER, INTENT(OUT) :: es_out
       CHARACTER(*), INTENT(OUT) :: em_out
       INTEGER :: i, ix, iy, iz, a, b
-      REAL(wp) :: z_floor, dfdx, dfdy, gap, tangent, fvec(3), jac(3, 3), normal_i
+      REAL(wp) :: z_floor, dfdx, dfdy, gap, tangent, fvec(3), jac(3, 3), normal_i, curv(3)
 
       f_contact = CD_ZERO
       es_out = 0
@@ -876,8 +876,10 @@ CONTAINS
         ix = 3*i - 2
         iy = ix + 1
         iz = ix + 2
+        curv = CD_ZERO
         IF (bathymetry_active) THEN
-          CALL CD_Bathymetry_Floor_Gradient(bathymetry, qe(ix), qe(iy), z_floor, dfdx, dfdy, es_out, em_out)
+          CALL CD_Bathymetry_Floor_Gradient(bathymetry, qe(ix), qe(iy), z_floor, dfdx, dfdy, es_out, em_out, &
+                                            crease_curvature=curv)
           IF (es_out /= CD_BATHY_OK) RETURN
         ELSE
           z_floor = z_floor_local
@@ -885,7 +887,7 @@ CONTAINS
           dfdy = CD_ZERO
         END IF
         gap = z_floor - qe(iz)
-        IF (.NOT. (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO)) THEN
+        IF (.NOT. (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO .OR. ANY(ABS(curv) > CD_ZERO))) THEN
           ! level floor: the normal is vertical (the historical flat-floor evaluation)
           CALL CD_Seabed_Normal_Law(gap, kn(i), f_contact(iz), tangent)
           IF (add_tangent) CALL add_band(iz, iz, tangent)
@@ -895,7 +897,8 @@ CONTAINS
           END IF
           CYCLE
         END IF
-        CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, kn(i), fvec, jac)
+        ! (the tangent follows the rounding of a bathymetry crease; zero curvature elsewhere)
+        CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, kn(i), fvec, jac, curvature=curv)
         f_contact(ix:iz) = fvec
         ! on a slope the capacity follows the magnitude of the normal reaction (its
         ! dependence on the position is left out of the tangent)
@@ -1228,7 +1231,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: seabed_z_floor
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: n_nodes, i, es
-    REAL(wp) :: z_floor, dfdx, dfdy, normal, tangent, fvec(3), jac(3, 3), f(2), dfd(2, 2), dfc(2)
+    REAL(wp) :: z_floor, dfdx, dfdy, normal, tangent, fvec(3), jac(3, 3), f(2), dfd(2, 2), dfc(2), curv(3)
     CHARACTER(120) :: em
     ErrStat = CD_STATIC_OK
     ErrMsg = ''
@@ -1251,8 +1254,10 @@ CONTAINS
       z_floor = CD_ZERO
       dfdx = CD_ZERO
       dfdy = CD_ZERO
+      curv = CD_ZERO
       IF (PRESENT(bathymetry)) THEN
-        CALL CD_Bathymetry_Floor_Gradient(bathymetry, q(3*i - 2), q(3*i - 1), z_floor, dfdx, dfdy, es, em)
+        CALL CD_Bathymetry_Floor_Gradient(bathymetry, q(3*i - 2), q(3*i - 1), z_floor, dfdx, dfdy, es, em, &
+                                          crease_curvature=curv)
         IF (es /= CD_BATHY_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'friction anchors: bathymetry query failed: '//TRIM(em))
           RETURN
@@ -1262,8 +1267,8 @@ CONTAINS
       ELSE
         RETURN
       END IF
-      IF (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO) THEN
-        CALL CD_Seabed_Normal_Contact(z_floor - q(3*i), dfdx, dfdy, seabed_kn(i), fvec, jac)
+      IF (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO .OR. ANY(ABS(curv) > CD_ZERO)) THEN
+        CALL CD_Seabed_Normal_Contact(z_floor - q(3*i), dfdx, dfdy, seabed_kn(i), fvec, jac, curvature=curv)
         normal = NORM2(fvec)
       ELSE
         CALL CD_Seabed_Normal_Law(z_floor - q(3*i), seabed_kn(i), normal, tangent)
@@ -2106,7 +2111,7 @@ CONTAINS
 
     INTEGER :: n_dof, n_nodes, n_elem, k, e, a, b, node, es
     REAL(wp), ALLOCATABLE :: fint(:)
-    REAL(wp) :: zf, gx, gy, fvec(3), jac(3, 3), f2(6), jq2(6, 6), jv2(6, 6), va(3), vb(3), de, cn, ct, wla, wlb
+    REAL(wp) :: zf, gx, gy, fvec(3), jac(3, 3), curv(3), f2(6), jq2(6, 6), jv2(6, 6), va(3), vb(3), de, cn, ct, wla, wlb
     CHARACTER(200) :: em
     INTEGER :: ends(2)
 
@@ -2139,8 +2144,10 @@ CONTAINS
     IF (PRESENT(seabed_kn) .AND. (PRESENT(seabed_z_floor) .OR. PRESENT(bathymetry))) THEN
       DO k = 1, 2
         node = ends(k)
+        curv = CD_ZERO
         IF (PRESENT(bathymetry)) THEN
-          CALL CD_Bathymetry_Floor_Gradient(bathymetry, q(3*node - 2), q(3*node - 1), zf, gx, gy, es, em)
+          CALL CD_Bathymetry_Floor_Gradient(bathymetry, q(3*node - 2), q(3*node - 1), zf, gx, gy, es, em, &
+                                            crease_curvature=curv)
           IF (es /= CD_BATHY_OK) THEN
             CALL fail(ErrStat, ErrMsg, 'end forces: '//TRIM(em))
             RETURN
@@ -2150,7 +2157,7 @@ CONTAINS
           gx = CD_ZERO
           gy = CD_ZERO
         END IF
-        CALL CD_Seabed_Normal_Contact(zf - q(3*node), gx, gy, seabed_kn(node), fvec, jac)
+        CALL CD_Seabed_Normal_Contact(zf - q(3*node), gx, gy, seabed_kn(node), fvec, jac, curvature=curv)
         fint(3*node - 2:3*node) = fint(3*node - 2:3*node) + fvec
       END DO
     END IF

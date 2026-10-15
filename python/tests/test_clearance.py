@@ -132,6 +132,43 @@ def test_bathymetry_is_bilinear_and_clamped_outside_the_grid():
         bathymetry.floor(math.nan, 0.0)
 
 
+def test_bathymetry_rounds_the_creases_of_the_grid_as_the_solver():
+    # a crease of slope jump J = -1 at x = 10 (level, then deepening 1 m per metre); the band
+    # half-width is 5 % of the smaller spacing, 0.5 m, and the fillet J (delta - |u|)^3/(6 delta^2)
+    crease = Bathymetry(
+        [0.0, 10.0, 20.0], [0.0, 1.0], [[100.0, 100.0], [100.0, 100.0], [110.0, 110.0]]
+    )
+    np.testing.assert_allclose(
+        crease.depth_at([10.0, 10.2, 9.6, 9.5, 5.0, 10.5], 0.3),
+        [100.0 + 0.5 / 6.0, 100.218, 100.0 + 0.001 / 1.5, 100.0, 100.0, 100.5],
+        rtol=0.0,
+        atol=1e-12,
+    )
+    # continuous height and slope across the line and at the band edges
+    for x0 in (10.0, 9.5, 10.5):
+        a, b = crease.depth_at([x0 - 1e-7, x0 + 1e-7], 0.5)
+        assert abs(a - b) < 2.1e-7  # the slope there is at most 1
+        slope = crease.depth_at([x0 - 2e-4, x0 - 1e-4, x0 + 1e-4, x0 + 2e-4], 0.5)
+        assert abs((slope[1] - slope[0]) - (slope[3] - slope[2])) < 1e-6
+    # a planar grid (here written to six decimals) is not rounded: bit-identical bilinear
+    x = np.array([0.0, 10.0, 25.0, 30.0])
+    y = np.array([-5.0, 8.0, 20.0])
+    plane = np.round(388.949782 + 0.0732 * x[:, None] - 0.0417 * y[None, :], 6)
+    planar = Bathymetry(x, y, plane)
+    qx, qy = np.meshgrid(np.linspace(-1.0, 31.0, 97), np.linspace(-6.0, 21.0, 55))
+    ix = np.clip(np.searchsorted(x, qx, side="right") - 1, 0, x.size - 2)
+    iy = np.clip(np.searchsorted(y, qy, side="right") - 1, 0, y.size - 2)
+    tx = np.clip((qx - x[ix]) / (x[ix + 1] - x[ix]), 0.0, 1.0)
+    ty = np.clip((qy - y[iy]) / (y[iy + 1] - y[iy]), 0.0, 1.0)
+    bilinear = (
+        (1.0 - tx) * (1.0 - ty) * plane[ix, iy]
+        + tx * (1.0 - ty) * plane[ix + 1, iy]
+        + (1.0 - tx) * ty * plane[ix, iy + 1]
+        + tx * ty * plane[ix + 1, iy + 1]
+    )
+    assert np.array_equal(planar.depth_at(qx, qy), bilinear)
+
+
 @pytest.mark.parametrize(
     ("x", "y", "depth", "message"),
     [

@@ -465,7 +465,8 @@ Clearance
 :func:`cabledyn.seabed_clearance` returns the vertical clearance ``z - z_floor(x, y)`` of every
 node at every sample, less an optional ``radius``, above a flat seabed (pass its elevation,
 ``-WtrDpth``) or a :class:`~cabledyn.Bathymetry` read with :func:`cabledyn.read_bathymetry` from
-the deck's ``x y depth`` file (bilinear, clamped at the grid edges, as in the solver). It
+the deck's ``x y depth`` file (bilinear with its creases rounded, clamped at the grid edges, as
+in the solver). It
 reproduces the solver's ``Clearance`` range graph. The :class:`~cabledyn.SeabedClearance`
 reports the minimum with its time, node, and arc length, a profile at any time, and a range
 graph.

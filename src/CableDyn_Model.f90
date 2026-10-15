@@ -3622,7 +3622,7 @@ CONTAINS
     REAL(wp), INTENT(OUT), OPTIONAL :: kv_neighbour(3)
     INTEGER :: e, node, d0, idx(6), i
     REAL(wp) :: q2(6), chord(3), ell, tang(3), tt(3, 3), strain, material, tension, ke(3, 3), v_other(3)
-    REAL(wp) :: z_floor, dfdx, dfdy, gap, fvec(3), jac3(3, 3), damp_force, damp_dgap, damp_dvz
+    REAL(wp) :: z_floor, dfdx, dfdy, gap, fvec(3), jac3(3, 3), damp_force, damp_dgap, damp_dvz, curv_end(3)
     k_block = CD_ZERO
     c_block = CD_ZERO
     IF (PRESENT(kv_neighbour)) kv_neighbour = CD_ZERO
@@ -3683,7 +3683,8 @@ CONTAINS
     IF (model%has_seabed) THEN
       ! the end node's seabed contact (its neighbour is the fixed seabed, so no kv term)
       IF (model%has_bathymetry) THEN
-        CALL model_floor_gradient(model, model%q(d0), model%q(d0 + 1), z_floor, dfdx, dfdy, ErrStat, ErrMsg)
+        CALL model_floor_gradient(model, model%q(d0), model%q(d0 + 1), z_floor, dfdx, dfdy, ErrStat, ErrMsg, &
+                                  curvature=curv_end)
         IF (ErrStat /= CD_MODEL_OK) THEN
           k_block = CD_ZERO
           c_block = CD_ZERO
@@ -3694,9 +3695,10 @@ CONTAINS
         z_floor = model%seabed_z_floor
         dfdx = CD_ZERO
         dfdy = CD_ZERO
+        curv_end = CD_ZERO
       END IF
       gap = z_floor - model%q(d0 + 2)
-      CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, model%seabed_kn(node), fvec, jac3)
+      CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, model%seabed_kn(node), fvec, jac3, curvature=curv_end)
       k_block = k_block + jac3
       IF (model%has_seabed_damping) THEN
         BLOCK
@@ -5603,7 +5605,7 @@ CONTAINS
     REAL(wp) :: gap, normal, g(2), z_floor, dfdx, dfdy, tangent, dn_dv(3), dfc(2), nvec(3), vn
     LOGICAL :: sloped
     REAL(wp) :: d_fr(2), mu_c
-    REAL(wp) :: damp_force, damp_dgap, damp_dvz
+    REAL(wp) :: damp_force, damp_dgap, damp_dvz, curv_n(3)
     REAL(wp) :: q2(6), v2(6), f2(6), jq2(6, 6), jv2(6, 6), ea_d_eff, ea_1_eff, syr_tm, syr_ds
     LOGICAL :: free_map_ready
     REAL(wp) :: fluid2(3, 2), accel2(3, 2), wl2(2), dfdv(2, 2)
@@ -5654,21 +5656,22 @@ CONTAINS
         iy = 3*i - 1
         iz = 3*i
         IF (model%has_bathymetry) THEN
-          CALL model_floor_gradient(model, q(ix), q(iy), z_floor, dfdx, dfdy, ErrStat, ErrMsg)
+          CALL model_floor_gradient(model, q(ix), q(iy), z_floor, dfdx, dfdy, ErrStat, ErrMsg, curvature=curv_n)
           IF (ErrStat /= CD_MODEL_OK) RETURN
         ELSE
           z_floor = model%seabed_z_floor
           dfdx = CD_ZERO
           dfdy = CD_ZERO
+          curv_n = CD_ZERO
         END IF
         gap = z_floor - q(iz)
-        IF (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO) THEN
+        IF (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO .OR. ANY(ABS(curv_n) > CD_ZERO)) THEN
           ! sloped seabed: frictionless contact along the surface normal (the static
           ! initializer uses the same law, so the initial condition is an equilibrium)
           BLOCK
             REAL(wp) :: fvec(3), jac3(3, 3)
             INTEGER :: ra, cb
-            CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, model%seabed_kn(i), fvec, jac3)
+            CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, model%seabed_kn(i), fvec, jac3, curvature=curv_n)
             force(ix:iz) = force(ix:iz) + fvec
             DO cb = 1, 3
               DO ra = 1, 3
@@ -5917,11 +5920,11 @@ CONTAINS
         IF (model%has_bathymetry) THEN
           ! sloped seabed: frictionless contact along the surface normal
           BLOCK
-            REAL(wp) :: fvec(3), jac3(3, 3), gx, gy
-            CALL model_floor_gradient(model, q(ix), q(iy), z_floor, gx, gy, ErrStat, ErrMsg)
+            REAL(wp) :: fvec(3), jac3(3, 3), gx, gy, curv(3)
+            CALL model_floor_gradient(model, q(ix), q(iy), z_floor, gx, gy, ErrStat, ErrMsg, curvature=curv)
             IF (ErrStat /= CD_MODEL_OK) RETURN
-            IF (ABS(gx) > CD_ZERO .OR. ABS(gy) > CD_ZERO) THEN
-              CALL CD_Seabed_Normal_Contact(z_floor - q(iz), gx, gy, model%seabed_kn(i), fvec, jac3)
+            IF (ABS(gx) > CD_ZERO .OR. ABS(gy) > CD_ZERO .OR. ANY(ABS(curv) > CD_ZERO)) THEN
+              CALL CD_Seabed_Normal_Contact(z_floor - q(iz), gx, gy, model%seabed_kn(i), fvec, jac3, curvature=curv)
               force(slot(ix):slot(iz)) = force(slot(ix):slot(iz)) + fvec
               CYCLE
             END IF
@@ -6321,17 +6324,20 @@ CONTAINS
     END IF
   END SUBROUTINE validate_seabed_friction
 
-  SUBROUTINE model_floor_gradient(model, x, y, z_floor, dfdx, dfdy, ErrStat, ErrMsg)
+  SUBROUTINE model_floor_gradient(model, x, y, z_floor, dfdx, dfdy, ErrStat, ErrMsg, curvature)
     !! Seabed elevation and gradient of the model's bathymetry, with the bathymetry status
-    !! mapped to the model's (CD_MODEL_BADINPUT on a failed query).
+    !! mapped to the model's (CD_MODEL_BADINPUT on a failed query). curvature (optional):
+    !! the curvature of the crease rounding (CD_Bathymetry_Floor_Gradient).
     TYPE(CD_ModelType), INTENT(IN) :: model
     REAL(wp), INTENT(IN) :: x, y
     REAL(wp), INTENT(OUT) :: z_floor, dfdx, dfdy
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: curvature(3)
     INTEGER :: es
     CHARACTER(160) :: em
-    CALL CD_Bathymetry_Floor_Gradient(model%bathymetry, x, y, z_floor, dfdx, dfdy, es, em)
+    CALL CD_Bathymetry_Floor_Gradient(model%bathymetry, x, y, z_floor, dfdx, dfdy, es, em, &
+                                      crease_curvature=curvature)
     IF (es == CD_BATHY_OK) THEN
       ErrStat = CD_MODEL_OK
       ErrMsg = ''
