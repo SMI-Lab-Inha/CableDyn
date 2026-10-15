@@ -547,6 +547,17 @@ Warnings and notes that do not stop a run
        :math:`(EI/|w|)^{1/3}` (see :doc:`modeling`, step 5). The run uses
        the refined mesh, statics and dynamics alike, and its outputs have that many segments.
        Mesh the touchdown and section changes to that rule to keep the deck mesh.
+   * - ``Note: line ... starts the dynamics from a static state solved in its vertical plane that
+       is unstable out of that plane on its mesh of ... elements, up to ... m long where half the
+       bending length (EI/|w|)^(1/3) is ... m; ...``
+     - a finite-EI line free in torsion is solved in its vertical plane, and the dynamics release
+       its out-of-plane DOFs. On elements longer than half the bending length the axial force at
+       touchdown or a section change oscillates into compression and makes that planar state
+       unstable out of the plane, so a lateral disturbance (a cross current, a sway motion) can
+       move the line from it in a way the mesh, not the physics, decides. The results are those
+       of the deck as written. Refine the mesh by the factor the note gives, or set
+       ``adaptive_mesh True``; a line restrained in torsion is solved in 3D and refined
+       automatically (see :doc:`modeling`, step 5).
    * - ``Note: line ... mesh too coarse for its bends``
      - the element-mean axial force of a finite-EI line, averaged with its neighbours, is
        compressive, and the pointwise resultant oscillates well beyond it. Refine ``NumSegs`` in
