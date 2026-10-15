@@ -16,9 +16,10 @@ MODULE CableDyn_Static
   !! penalty contact force + its residual-Jacobian term are recomputed inside every
   !! residual/tangent evaluation (grounded catenary / mooring equilibrium); when
   !! absent it is the constant-f_ext solve, bit-for-bit unchanged. An OPTIONAL
-  !! steady current adds configuration-dependent Morison drag (CableCurrentLoad), and with
-  !! it the seabed friction that holds the line against the current (friction springs from
-  !! the still-water laid shape). Damping and wave loads belong to the dynamic path.
+  !! steady current adds configuration-dependent Morison drag (CableCurrentLoad), and the
+  !! same object carries the static seabed friction (friction springs from the as-laid
+  !! position, CD_Static_As_Laid_Reference), with or without the drag. Damping and wave
+  !! loads belong to the dynamic path.
   !!
   !! Conventions match the other modules: q is the flat (3 n_nodes) positions-only
   !! state [x1,y1,z1, x2,y2,z2, ...]; node nd owns DOFs 3*nd-2:3*nd; fixed_dofs are
@@ -48,6 +49,7 @@ MODULE CableDyn_Static
   PUBLIC :: CD_Static_Line_End_Forces
   PUBLIC :: CD_Static_Anchor_Seabed_Tolerance
   PUBLIC :: CD_Static_Friction_Anchors
+  PUBLIC :: CD_Static_As_Laid_Reference
 
   TYPE :: CableSolverConfig
     !! Newton / Armijo policy and its default tolerances.
@@ -88,13 +90,19 @@ MODULE CableDyn_Static
     ! residual evaluation (the dynamic march samples it at the actual node depths too), so the
     ! static state is an equilibrium of the marched model. It replaces node_velocity/velocity.
     REAL(wp), ALLOCATABLE :: profile_z(:), profile_velocity(:, :)
-    ! Seabed friction held against the current (friction_mu > 0 with friction_ref
-    ! allocated, on a line with seabed contact): each node in contact carries a horizontal
-    ! spring of its seabed stiffness from its reference position friction_ref(1:2, node),
-    ! capped smoothly at friction_mu times its normal reaction (CD_Seabed_Friction_Spring).
-    ! The reference is the still-water laid shape of the same line.
+    ! drag = .FALSE.: the object carries only the static seabed friction below (a line in
+    ! still water); the drag fields are then ignored and need not be set.
+    LOGICAL :: drag = .TRUE.
+    ! Static seabed friction (friction_mu > 0 with friction_ref allocated, on a line with
+    ! seabed contact): each node in contact carries a horizontal spring of its seabed
+    ! stiffness from its reference position friction_ref(1:2, node), capped smoothly at
+    ! friction_mu times its normal reaction (CD_Seabed_Friction_Spring). The reference is the
+    ! still-water equilibrium in a current (staticsFriction none), or the as-laid position of
+    ! the line (friction_as_laid, CD_Static_As_Laid_Reference), which also selects the
+    ! as-laid seed.
     REAL(wp) :: friction_mu = CD_ZERO
     REAL(wp), ALLOCATABLE :: friction_ref(:, :)
+    LOGICAL :: friction_as_laid = .FALSE.
     ! friction_mu_axial > 0 and different from friction_mu: anisotropic friction, with
     ! friction_mu the lateral coefficient (CD_Seabed_Friction_Aniso, line axis = chord
     ! through the neighbouring nodes).
@@ -116,6 +124,10 @@ MODULE CableDyn_Static
   INTEGER, PARAMETER, PUBLIC :: CD_STATIC_OK = 0
   INTEGER, PARAMETER, PUBLIC :: CD_STATIC_BADINPUT = 1
   INTEGER, PARAMETER, PUBLIC :: CD_STATIC_SINGULAR = 2
+  ! Static seabed friction policies (OrcaFlex "statics seabed friction policy"): none, or
+  ! friction toward the as-laid position (CD_Static_As_Laid_Reference).
+  INTEGER, PARAMETER, PUBLIC :: CD_STATIC_FRICTION_NONE = 0
+  INTEGER, PARAMETER, PUBLIC :: CD_STATIC_FRICTION_AS_LAID = 1
 
 CONTAINS
 
@@ -312,12 +324,14 @@ CONTAINS
     END IF
 
     ! --- optional steady-current Morison drag (configuration-dependent, ramp-scaled) ---
+    ! (a friction-only object, drag = .FALSE., carries no drag)
     current_active = PRESENT(current)
+    IF (current_active) current_active = current%drag
     profile_active = .FALSE.
     cf = CD_ONE
     IF (PRESENT(current_load_factor)) THEN
       ! A ramp factor without a current is a caller error: it would silently do nothing.
-      IF (.NOT. current_active) THEN
+      IF (.NOT. PRESENT(current)) THEN
         CALL fail(ErrStat, ErrMsg, 'current_load_factor given without a current load')
         RETURN
       END IF
@@ -415,7 +429,7 @@ CONTAINS
       ALLOCATE (drag_f(n_dof), drag_fz(n_dof), source=CD_ZERO)
     END IF
     friction_active = .FALSE.
-    IF (current_active .AND. seabed_active) THEN
+    IF (PRESENT(current) .AND. seabed_active) THEN
       ! Check finiteness before the mu > 0 gate: a NaN coefficient must fail closed, not
       ! silently disable (or make isotropic) the friction.
       IF (.NOT. (CD_Is_Finite(current%friction_mu) .AND. CD_Is_Finite(current%friction_mu_axial))) THEN
@@ -1300,6 +1314,205 @@ CONTAINS
     END DO
   END SUBROUTINE CD_Static_Friction_Anchors
 
+  SUBROUTINE CD_Static_As_Laid_Reference(origin, azimuth, l0, ea, laid_tension, ref, ErrStat, ErrMsg, bathymetry, &
+                                         sink)
+    !! As-laid position of a line on the seabed, the reference of its static seabed friction
+    !! (OrcaFlex's "as laid" statics seabed friction policy): the line is laid from its
+    !! bottom end (node 1, horizontal position origin) in the horizontal direction azimuth
+    !! [rad, from global +x toward +y], following the seabed profile, at the effective
+    !! tension laid_tension [N]. Node i then lies at the stretched arc length
+    !! s_i = sum_{e < i} l0_e (1 + laid_tension/ea_e) from node 1 along the seabed, so
+    !! ref(1:2, i) = origin + d_i (cos, sin)(azimuth), where the seabed path over the
+    !! horizontal distance d_i is s_i long: d_i = s_i on a level floor (no bathymetry),
+    !! and on a bathymetry the path is integrated in sub-steps of at most 1 m with the
+    !! midpoint slope along the azimuth. If every node rested at its reference, the line
+    !! would carry laid_tension throughout.
+    !! sink (optional, per node, on a bathymetry): the static penalty penetration factor
+    !! w_i/k_i of each node (its submerged weight over its seabed stiffness). A laid node
+    !! sinks into the penalty seabed along the surface normal, which on a slope moves it
+    !! horizontally by w_i (z_x, z_y)/k_i; its reference moves with it, so the line laid at
+    !! rest on a slope carries no friction force (a deflection normal to the seabed is not a
+    !! friction deflection, as in OrcaFlex's in-plane friction).
+    REAL(wp), INTENT(IN) :: origin(2), azimuth, l0(:), ea(:), laid_tension
+    REAL(wp), INTENT(OUT) :: ref(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), INTENT(IN), OPTIONAL :: sink(:)
+    INTEGER :: n_elem, e, j, nsub, es
+    REAL(wp) :: dir(2), d, ds, step, x, y, zf, gx, gy, g, dshort
+    CHARACTER(120) :: em
+
+    ErrStat = CD_STATIC_OK
+    ErrMsg = ''
+    n_elem = SIZE(l0)
+    IF (n_elem < 1 .OR. SIZE(ea) /= n_elem .OR. SIZE(ref, 1) /= 2 .OR. SIZE(ref, 2) /= n_elem + 1) THEN
+      CALL fail(ErrStat, ErrMsg, 'as-laid reference: inconsistent shapes')
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(origin) .AND. CD_Is_Finite(azimuth) .AND. CD_Is_Finite(laid_tension) .AND. &
+               CD_All_Finite(l0) .AND. CD_All_Finite(ea))) THEN
+      CALL fail(ErrStat, ErrMsg, 'as-laid reference: inputs must be finite')
+      RETURN
+    END IF
+    IF (ANY(l0 <= CD_ZERO) .OR. ANY(ea <= CD_ZERO) .OR. laid_tension < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'as-laid reference: l0 and ea must be positive and laid_tension non-negative')
+      RETURN
+    END IF
+    dir = [COS(azimuth), SIN(azimuth)]
+    ref(:, 1) = origin
+    d = CD_ZERO
+    DO e = 1, n_elem
+      ds = l0(e)*(CD_ONE + laid_tension/ea(e))
+      IF (PRESENT(bathymetry)) THEN
+        ! the horizontal advance is ds less the shortening of the sloped sub-steps, so a
+        ! level patch advances by exactly ds, bit-for-bit as on a flat floor
+        nsub = MAX(1, CEILING(ds))
+        step = ds/REAL(nsub, wp)
+        dshort = CD_ZERO
+        DO j = 1, nsub
+          ! midpoint slope along the azimuth (at the level-floor midpoint of the sub-step)
+          x = origin(1) + (d + REAL(j - 1, wp)*step - dshort + 0.5_wp*step)*dir(1)
+          y = origin(2) + (d + REAL(j - 1, wp)*step - dshort + 0.5_wp*step)*dir(2)
+          CALL CD_Bathymetry_Floor_Gradient(bathymetry, x, y, zf, gx, gy, es, em)
+          IF (es /= CD_BATHY_OK) THEN
+            CALL fail(ErrStat, ErrMsg, 'as-laid reference: bathymetry query failed: '//TRIM(em))
+            RETURN
+          END IF
+          g = gx*dir(1) + gy*dir(2)
+          dshort = dshort + step*(CD_ONE - CD_ONE/SQRT(CD_ONE + g*g))
+        END DO
+        d = d + (ds - dshort)
+      ELSE
+        d = d + ds
+      END IF
+      ref(:, e + 1) = origin + d*dir
+    END DO
+    IF (PRESENT(sink) .AND. PRESENT(bathymetry)) THEN
+      IF (SIZE(sink) /= n_elem + 1 .OR. .NOT. CD_All_Finite(sink)) THEN
+        CALL fail(ErrStat, ErrMsg, 'as-laid reference: sink must be finite, one entry per node')
+        RETURN
+      END IF
+      ! node 1 is held: its reference stays at origin
+      DO j = 2, n_elem + 1
+        IF (.NOT. (sink(j) > CD_ZERO)) CYCLE
+        CALL CD_Bathymetry_Floor_Gradient(bathymetry, ref(1, j), ref(2, j), zf, gx, gy, es, em)
+        IF (es /= CD_BATHY_OK) THEN
+          CALL fail(ErrStat, ErrMsg, 'as-laid reference: bathymetry query failed: '//TRIM(em))
+          RETURN
+        END IF
+        ref(:, j) = ref(:, j) + sink(j)*[gx, gy]
+      END DO
+    END IF
+  END SUBROUTINE CD_Static_As_Laid_Reference
+
+  SUBROUTINE CD_Static_As_Laid_Seed(anchor, fairlead, l0, ea, weight, ref, q, ok, seabed_z_floor, bathymetry)
+    !! As-laid seed of a line with static seabed friction (OrcaFlex's picture: the line laid
+    !! from its anchor, node 1, and its top end then moved to the fairlead, node n): nodes
+    !! 1..k rest on the seabed at their as-laid positions ref(1:2, :) (the friction
+    !! reference, CD_Static_As_Laid_Reference), and nodes k..n form the fully suspended
+    !! elastic catenary from node k to the fairlead. k is the first node at which the
+    !! suspended span leaves the seabed at or above the local seabed angle along its own
+    !! heading (tangent lift-off), found by bisection; a line laid past the point under its
+    !! fairlead turns back there, over its grounded run. q holds the positions (3 n_nodes);
+    !! ok = .FALSE. when no node qualifies. One of seabed_z_floor or bathymetry is given.
+    REAL(wp), INTENT(IN) :: anchor(3), fairlead(3), l0(:), ea(:), weight(:), ref(:, :)
+    REAL(wp), INTENT(OUT) :: q(:)
+    LOGICAL, INTENT(OUT) :: ok
+    REAL(wp), INTENT(IN), OPTIONAL :: seabed_z_floor
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: n_nodes, k_lo, k_hi, k_mid, it
+    REAL(wp) :: f_lo, f_hi, f_mid
+    LOGICAL :: v_lo, v_hi, v_mid
+
+    ok = .FALSE.
+    q = CD_ZERO
+    n_nodes = SIZE(l0) + 1
+    IF (SIZE(q) /= 3*n_nodes .OR. SIZE(ref, 1) /= 2 .OR. SIZE(ref, 2) /= n_nodes .OR. SIZE(ea) /= n_nodes - 1 &
+        .OR. SIZE(weight) /= n_nodes - 1) RETURN
+    IF (.NOT. (PRESENT(seabed_z_floor) .OR. PRESENT(bathymetry))) RETURN
+    k_lo = 1
+    CALL laid_at(k_lo, f_lo, v_lo)
+    IF (v_lo .AND. f_lo >= CD_ZERO) THEN
+      ok = .TRUE.
+      RETURN
+    END IF
+    k_hi = n_nodes - 1
+    CALL laid_at(k_hi, f_hi, v_hi)
+    IF (.NOT. (v_hi .AND. f_hi >= CD_ZERO)) RETURN
+    DO it = 1, 64
+      IF (k_hi - k_lo <= 1) EXIT
+      k_mid = (k_lo + k_hi)/2
+      CALL laid_at(k_mid, f_mid, v_mid)
+      IF (v_mid .AND. f_mid >= CD_ZERO) THEN
+        k_hi = k_mid
+      ELSE
+        k_lo = k_mid
+      END IF
+    END DO
+    CALL laid_at(k_hi, f_hi, v_hi)
+    ok = v_hi
+
+  CONTAINS
+
+    SUBROUTINE laid_at(k, mismatch, valid)
+      !! The seed with lift-off node k into q; mismatch is the elevation angle of the first
+      !! suspended element minus the seabed angle along its horizontal heading at the
+      !! lift-off point (>= 0: the span leaves the seabed tangent or steeper).
+      INTEGER, INTENT(IN) :: k
+      REAL(wp), INTENT(OUT) :: mismatch
+      LOGICAL, INTENT(OUT) :: valid
+      INTEGER :: i, es_d
+      REAL(wp) :: zf, gx, gy, g, p(3), h_s, g_s, u(3), uh
+      REAL(wp), ALLOCATABLE :: q_sus(:)
+      CHARACTER(200) :: em_d
+
+      valid = .FALSE.
+      mismatch = -HUGE(CD_ONE)
+      q(1:3) = anchor
+      DO i = 2, k
+        CALL floor_at(ref(1, i), ref(2, i), zf, gx, gy, es_d)
+        IF (es_d /= 0) RETURN
+        q(3*i - 2:3*i) = [ref(1, i), ref(2, i), zf]
+      END DO
+      p = q(3*k - 2:3*k)
+      IF (fairlead(3) <= p(3)) RETURN
+      ALLOCATE (q_sus(3*(n_nodes - k + 1)))
+      CALL CD_Catenary_Seed(p, fairlead, l0(k:), ea(k:), weight(k:), q_sus, h_s, g_s, es_d, em_d, &
+                            suspended=.TRUE.)
+      IF (es_d /= CD_CAT_OK) RETURN
+      IF (.NOT. CD_All_Finite(q_sus)) RETURN
+      q(3*k - 2:) = q_sus
+      u = q_sus(4:6) - q_sus(1:3)
+      IF (NORM2(u) <= CD_ZERO) RETURN
+      uh = NORM2(u(1:2))
+      g = CD_ZERO
+      IF (uh > CD_ZERO) THEN
+        CALL floor_at(p(1), p(2), zf, gx, gy, es_d)
+        IF (es_d /= 0) RETURN
+        g = (gx*u(1) + gy*u(2))/uh
+      END IF
+      mismatch = ATAN2(u(3), MAX(uh, TINY(CD_ONE))) - ATAN(g)
+      valid = .TRUE.
+    END SUBROUTINE laid_at
+
+    SUBROUTINE floor_at(x, y, zf, gx, gy, es_f)
+      !! Seabed elevation and gradient under (x, y): the flat floor or the bathymetry.
+      REAL(wp), INTENT(IN) :: x, y
+      REAL(wp), INTENT(OUT) :: zf, gx, gy
+      INTEGER, INTENT(OUT) :: es_f
+      CHARACTER(120) :: em_f
+      es_f = 0
+      gx = CD_ZERO
+      gy = CD_ZERO
+      IF (PRESENT(bathymetry)) THEN
+        CALL CD_Bathymetry_Floor_Gradient(bathymetry, x, y, zf, gx, gy, es_f, em_f)
+      ELSE
+        zf = seabed_z_floor
+      END IF
+    END SUBROUTINE floor_at
+  END SUBROUTINE CD_Static_As_Laid_Seed
+
   PURE FUNCTION friction_chord(q, node) RESULT(axis)
     !! Horizontal line axis at a node for anisotropic friction: the chord through its
     !! neighbours (one-sided at the ends), the axis of CableDyn_Model's dynamics.
@@ -1340,7 +1553,10 @@ CONTAINS
     !! H -> 0 limit (a straight hanging leg with the excess on the seabed, folded back where
     !! the seabed keeps falling); the other catenary variant; and a two-leg polyline of the
     !! right length that never compresses the line. Seed nodes deeper below the seabed than
-    !! their static penetration are lifted onto it.
+    !! their static penetration are lifted onto it. With static seabed friction (current
+    !! carrying friction_ref, CD_Static_As_Laid_Reference) the as-laid seed is tried first:
+    !! the nodes up to a lift-off node rest at their as-laid positions, and the rest hang as
+    !! the suspended catenary to the fairlead (the line laid, then its top end moved).
     !! For each seed:
     !!   A. Newton (plain, then Levenberg-Marquardt) with the compression-capable law, first at
     !!      the full load, then by load continuation. Accepted when it converges and (for a
@@ -1378,7 +1594,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ramp(:)
     INTEGER :: n_dof, n_elem, n_nodes, iseed, iorder, n_it, n_st, es
     INTEGER, PARAMETER :: SEED_ORDER(6) = [1, 5, 6, 2, 3, 4]
-    INTEGER, ALLOCATABLE :: fixed(:)
+    ! with static seabed friction, the as-laid seed (7) first
+    INTEGER, PARAMETER :: SEED_ORDER_LAID(7) = [7, 1, 5, 6, 2, 3, 4]
+    INTEGER, ALLOCATABLE :: fixed(:), order(:)
+    LOGICAL :: as_laid
     REAL(wp), ALLOCATABLE :: q_seed(:), q_try(:), q_mid(:), q_best(:), ten(:)
     REAL(wp) :: f_node, t_min, t_max, r_soft, r_firm, floor_a, slope_a, h_cat, g_cat
     LOGICAL :: has_seabed, anchor_grounded, conv, stalled, at_floor, have_seed, done, have_best
@@ -1477,13 +1696,25 @@ CONTAINS
       END IF
     END IF
 
+    ! static seabed friction from an as-laid reference: the as-laid seed leads
+    as_laid = .FALSE.
+    IF (has_seabed .AND. PRESENT(current)) THEN
+      IF (ALLOCATED(current%friction_ref) .AND. current%friction_mu > CD_ZERO .AND. current%friction_as_laid) &
+        as_laid = SIZE(current%friction_ref, 1) == 2 .AND. SIZE(current%friction_ref, 2) == n_nodes
+    END IF
+    IF (as_laid) THEN
+      order = SEED_ORDER_LAID
+    ELSE
+      order = SEED_ORDER
+    END IF
+
     notes = ''
     q_best = CD_ZERO
     have_best = .FALSE.
-    DO iorder = 1, SIZE(SEED_ORDER)
-      ! seed order: catenary, bathymetry drape, catenary on the penetrated seabed, slack
-      ! run, other catenary, polyline
-      iseed = SEED_ORDER(iorder)
+    DO iorder = 1, SIZE(order)
+      ! seed order: (as laid,) catenary, bathymetry drape, catenary on the penetrated seabed,
+      ! slack run, other catenary, polyline
+      iseed = order(iorder)
       CALL build_seed(iseed, have_seed)
       IF (.NOT. have_seed) CYCLE
       report%seed = seed_name
@@ -1791,6 +2022,14 @@ CONTAINS
         seed_name = 'seabed-draped catenary'
         IF (.NOT. (anchor_grounded .AND. PRESENT(bathymetry))) RETURN
         CALL drape_seed(ok)
+        IF (ok) ok = CD_All_Finite(q_seed)
+      CASE (7)
+        ! the as-laid line with its top end moved to the fairlead: a grounded run at the
+        ! friction reference positions lifting off into a suspended catenary
+        seed_name = 'as-laid run'
+        IF (.NOT. (anchor_grounded .AND. as_laid)) RETURN
+        CALL CD_Static_As_Laid_Seed(anchor, fairlead, l0, ea, weight, current%friction_ref, q_seed, ok, &
+                                    seabed_z_floor=seabed_z_floor, bathymetry=bathymetry)
         IF (ok) ok = CD_All_Finite(q_seed)
       CASE DEFAULT
         seed_name = 'two-leg polyline'
@@ -2129,6 +2368,7 @@ CONTAINS
     REAL(wp) :: zf, gx, gy, fvec(3), jac(3, 3), curv(3), f2(6), jq2(6, 6), jv2(6, 6), va(3), vb(3), de, cn, ct, wla, wlb
     CHARACTER(200) :: em
     INTEGER :: ends(2)
+    LOGICAL :: drag_ends
 
     ErrStat = CD_STATIC_OK
     ErrMsg = ''
@@ -2176,7 +2416,9 @@ CONTAINS
         fint(3*node - 2:3*node) = fint(3*node - 2:3*node) + fvec
       END DO
     END IF
-    IF (PRESENT(current)) THEN
+    drag_ends = PRESENT(current)
+    IF (drag_ends) drag_ends = current%drag
+    IF (drag_ends) THEN
       DO e = 1, n_elem
         a = elem_conn(1, e)
         b = elem_conn(2, e)

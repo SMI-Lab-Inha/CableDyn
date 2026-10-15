@@ -31,7 +31,8 @@ MODULE CableDyn_Model
                                  CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, &
                                  CD_Bathymetry_Seabed_Load, CD_End_Bathymetry, CD_BATHY_OK
   USE CableDyn_Static, ONLY: CableSolverConfig, CableCurrentLoad, CD_StaticLineReport, CD_Static_Line_Equilibrium, &
-                             CD_Static_Friction_Anchors, &
+                             CD_Static_Friction_Anchors, CD_Static_As_Laid_Reference, &
+                             CD_STATIC_FRICTION_AS_LAID, CD_STATIC_FRICTION_NONE, &
                              CD_STATIC_OK
   USE CableDyn_Assemble, ONLY: CD_Assemble_Cable_Internal_Force, CD_Assemble_Cable_Mass, &
                                CD_Assemble_Cable_Tangent_Force, CD_Compute_Cable_Tension
@@ -1269,7 +1270,8 @@ CONTAINS
                                 seabed_kbot, seabed_contact_diameter, seabed_cn_over_kn, &
                                 ve_ea_d, ve_ba, ve_ba_d, ve_alpha_mbl, ve_vbeta, &
                                 syrope_is, syrope_type, syrope_slow0, syrope_tmax0, &
-                                current_profile_z, current_profile_velocity)
+                                current_profile_z, current_profile_velocity, &
+                                static_friction, lay_azimuth, as_laid_tension)
     !! Initialise a persistent EI=0 dynamic model from an OrcaFlex-style line object:
     !! line types + sections + end points. This routine builds the mesh, assembles
     !! submerged-weight loads, obtains a static initial condition by load continuation,
@@ -1342,12 +1344,23 @@ CONTAINS
     ! then samples the current at each node's own elevation, as the dynamic march does, so the
     ! march starts from rest. Without it the static drag uses fluid_velocity as given.
     REAL(wp), INTENT(IN), OPTIONAL :: current_profile_z(:), current_profile_velocity(:, :)
+    ! Static seabed friction (with seabed_mu > 0 on a seabed): the policy
+    ! (CD_STATIC_FRICTION_AS_LAID, the default, or CD_STATIC_FRICTION_NONE), the lay azimuth
+    ! [rad, from global +x toward +y; default: the horizontal anchor -> fairlead direction,
+    ! +x for a vertical chord] and the as-laid effective tension [N, default 0] of
+    ! CD_Static_As_Laid_Reference. As laid, the static solve resists every grounded node's
+    ! horizontal displacement from its as-laid position with the friction springs, and the
+    ! stick-slip anchors of the dynamics continue their forces; with none the static solve
+    ! is frictionless and the anchors start at the static node positions.
+    INTEGER, INTENT(IN), OPTIONAL :: static_friction
+    REAL(wp), INTENT(IN), OPTIONAL :: lay_azimuth, as_laid_tension
 
     INTEGER, ALLOCATABLE :: elem_conn(:, :), fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mass_per_length(:), diameter(:)
     REAL(wp), ALLOCATABLE :: weight(:), elem_load(:, :), f_ext(:), q_static(:), v0(:)
-    INTEGER :: n_elem, n_dof, e, es, istat
-    LOGICAL :: dyn_to
+    INTEGER :: n_elem, n_dof, e, es, istat, fr_policy
+    LOGICAL :: dyn_to, friction_static
+    REAL(wp) :: laid_az, laid_t
     LOGICAL :: reverse_line, converged, use_current
     LOGICAL :: use_seabed, use_seabed_damping, use_seabed_friction, use_damping
     CHARACTER(200) :: em
@@ -1471,6 +1484,33 @@ CONTAINS
     dyn_to = tension_only
     IF (PRESENT(dynamic_tension_only)) dyn_to = dynamic_tension_only
 
+    ! Static seabed friction policy, lay azimuth and as-laid tension (validated even when
+    ! the line has no friction, so a bad value never passes silently).
+    fr_policy = CD_STATIC_FRICTION_NONE
+    IF (PRESENT(static_friction)) fr_policy = static_friction
+    IF (fr_policy /= CD_STATIC_FRICTION_AS_LAID .AND. fr_policy /= CD_STATIC_FRICTION_NONE) THEN
+      CALL fail(ErrStat, ErrMsg, 'line model static_friction must be CD_STATIC_FRICTION_AS_LAID or _NONE')
+      RETURN
+    END IF
+    laid_t = CD_ZERO
+    IF (PRESENT(as_laid_tension)) laid_t = as_laid_tension
+    IF (.NOT. CD_Is_Finite(laid_t) .OR. laid_t < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'line model as_laid_tension must be finite and non-negative')
+      RETURN
+    END IF
+    ! default lay azimuth: the vertical plane through the line ends (anchor -> fairlead)
+    laid_az = CD_ZERO
+    IF (NORM2(fairlead(1:2) - anchor(1:2)) > 1.0e-9_wp*MAX(CD_ONE, NORM2(fairlead - anchor))) &
+      laid_az = ATAN2(fairlead(2) - anchor(2), fairlead(1) - anchor(1))
+    IF (PRESENT(lay_azimuth)) laid_az = lay_azimuth
+    IF (.NOT. CD_Is_Finite(laid_az)) THEN
+      CALL fail(ErrStat, ErrMsg, 'line model lay_azimuth must be finite')
+      RETURN
+    END IF
+    friction_static = .FALSE.
+    IF (use_seabed .AND. use_seabed_friction) friction_static = seabed_mu > CD_ZERO .AND. &
+                                                                fr_policy == CD_STATIC_FRICTION_AS_LAID
+
     ! Static initial condition: the shared robust line initializer (the same one the
     ! static-only deck route uses). The equilibrium obeys the committed model's constitutive
     ! law (dyn_to): a tension-only line gets its tension-only equilibrium, never a compressed
@@ -1503,10 +1543,11 @@ CONTAINS
         cur%profile_velocity = current_profile_velocity
       END IF
       IF (PRESENT(drag_waterline_z)) cur%node_waterline = drag_waterline_z
-      ! A frictional seabed holds the line against the current from its still-water laid
-      ! shape: solve the line without the current first; that equilibrium is the reference
-      ! of the static friction springs, and their forces seed the stick-slip anchors below.
-      IF (use_seabed .AND. use_seabed_friction) THEN
+      ! Without the as-laid policy a frictional seabed holds the line against the current
+      ! from its still-water laid shape: solve the line without the current first; that
+      ! equilibrium is the reference of the static friction springs, and their forces seed
+      ! the stick-slip anchors below.
+      IF (use_seabed .AND. use_seabed_friction .AND. .NOT. friction_static) THEN
         IF (seabed_mu > CD_ZERO) THEN
           CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, dyn_to, &
                                           q_static, converged, report, es, em, seabed_z_floor=seabed_z_floor, &
@@ -1525,6 +1566,44 @@ CONTAINS
           END DO
         END IF
       END IF
+    ELSE
+      ! still water: the object carries only the static seabed friction (if any)
+      cur%drag = .FALSE.
+    END IF
+    ! Static seabed friction (the OrcaFlex "as laid" policy): every grounded node is held
+    ! by a friction spring toward its as-laid position -- the line laid from the anchor
+    ! along the lay azimuth on the seabed at the as-laid tension -- capped at mu N; the
+    ! spring forces then seed the stick-slip anchors of the march below.
+    IF (friction_static) THEN
+      cur%friction_mu = seabed_mu
+      cur%friction_as_laid = .TRUE.
+      IF (PRESENT(seabed_mu_axial)) cur%friction_mu_axial = seabed_mu_axial
+      ALLOCATE (cur%friction_ref(2, n_elem + 1))
+      BLOCK
+        ! static penalty penetration factor w_i/k_i of every node (see the routine)
+        REAL(wp) :: sink(n_elem + 1)
+        DO istat = 1, n_elem + 1
+          sink(istat) = MAX(-f_ext(3*istat), CD_ZERO)/seabed_kn(istat)
+        END DO
+        IF (fairlead(3) < anchor(3)) THEN
+          ! the line is laid from its bottom end, here the last node (the default azimuth
+          ! then points from it toward node 1)
+          IF (.NOT. PRESENT(lay_azimuth)) laid_az = ATAN2(-SIN(laid_az), -COS(laid_az))
+          CALL CD_Static_As_Laid_Reference(fairlead(1:2), laid_az, l0(n_elem:1:-1), ea(n_elem:1:-1), laid_t, &
+                                           cur%friction_ref, es, em, bathymetry=bathymetry, &
+                                           sink=sink(n_elem + 1:1:-1))
+          cur%friction_ref = cur%friction_ref(:, n_elem + 1:1:-1)
+        ELSE
+          CALL CD_Static_As_Laid_Reference(anchor(1:2), laid_az, l0, ea, laid_t, cur%friction_ref, es, em, &
+                                           bathymetry=bathymetry, sink=sink)
+        END IF
+      END BLOCK
+      IF (es /= CD_STATIC_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'line model seabed friction: '//TRIM(em))
+        RETURN
+      END IF
+    END IF
+    IF (use_current .OR. friction_static) THEN
       CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, dyn_to, &
                                       q_static, converged, report, es, em, seabed_z_floor=seabed_z_floor, &
                                       seabed_kn=seabed_kn, bathymetry=bathymetry, current=cur, &
@@ -1547,11 +1626,26 @@ CONTAINS
         BLOCK
           REAL(wp), ALLOCATABLE :: q_sw(:)
           TYPE(CD_StaticLineReport) :: report_sw
+          TYPE(CableCurrentLoad) :: cur_sw
           LOGICAL :: conv_sw
           ALLOCATE (q_sw(SIZE(q_static)))
-          CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, dyn_to, &
-                                          q_sw, conv_sw, report_sw, es, em, seabed_z_floor=seabed_z_floor, &
-                                          seabed_kn=seabed_kn, bathymetry=bathymetry, load_factors=load_factors)
+          IF (friction_static) THEN
+            ! still water with the same as-laid seabed friction
+            cur_sw%drag = .FALSE.
+            cur_sw%friction_mu = cur%friction_mu
+            cur_sw%friction_mu_axial = cur%friction_mu_axial
+            cur_sw%friction_ref = cur%friction_ref
+            cur_sw%friction_as_laid = .TRUE.
+            CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, &
+                                            dyn_to, q_sw, conv_sw, report_sw, es, em, &
+                                            seabed_z_floor=seabed_z_floor, seabed_kn=seabed_kn, &
+                                            bathymetry=bathymetry, current=cur_sw, load_factors=load_factors)
+          ELSE
+            CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, &
+                                            dyn_to, q_sw, conv_sw, report_sw, es, em, &
+                                            seabed_z_floor=seabed_z_floor, seabed_kn=seabed_kn, &
+                                            bathymetry=bathymetry, load_factors=load_factors)
+          END IF
           IF (es == CD_STATIC_OK .AND. conv_sw) THEN
             IF (ALLOCATED(cur%friction_ref)) THEN
               ErrMsg = 'CableDyn_Model: the line has a still-water equilibrium but none in the current: '// &

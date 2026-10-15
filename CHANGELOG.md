@@ -10,6 +10,28 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Seabed friction in the static solve, toward the as-laid position (OrcaFlex's *as laid*
+  statics seabed friction policy, opt-in): `asLaid staticsFriction`. Every grounded node is
+  held by a friction spring toward the position at which the line was laid from its anchor
+  along the lay azimuth on the seabed, with the regularised Coulomb law of the dynamics
+  (isotropic or axial/lateral, capped at `mu N`), in still water and in a current, on `EI = 0`
+  and finite-EI lines, standalone, coupled OpenFAST and through the C API; the march continues
+  the static springs, so a held run stays at rest. New OPTIONS `staticsFriction none|asLaid`,
+  `layAzimuth` and `layAzimuth<ID>` (default: each line's anchor → fairlead direction),
+  `asLaidTension` and `asLaidTension<ID>` (default 0). The default stays `none`, as in MoorDyn:
+  frictionless statics in still water (friction from the still-water equilibrium in a current),
+  conservative for anchor loads, and every deck without the new rows runs as before. With
+  `asLaid`, a 700 m chain on a 5° slope with `frictionMu 1`, which the frictionless static
+  folds 24.0 m back past its anchor, holds where it was laid (friction up to 0.087 `mu N`, the
+  slope; FairTen 714.2 → 622.9 kN; held for 2 s to 1.5e-10 of FairTen), and a 650 m finite-EI
+  cable on a 10° slope, rejected as too long for its span, solves. As an illustration of the
+  effect on anchor loads, `asLaid` in `iea15mw_umaine_mixed_cabledyn.dat` lowers the chains'
+  AnchTen from 1351.6 to 368.2 kN (FairTen +0.16 %) and the laid cable's from 1230 N to 0.36 N:
+  runs laid slack and pulled taut are held back by friction. A run laid at the tension it
+  carries (`asLaidTension`) mobilises none: on a flat seabed FairTen equals the frictionless
+  one to 6e-6 and AnchTen to 0.4 %. A finite-EI line laid past the point under its fairlead has
+  no static solution yet (its touchdown hook is not reached); a lay azimuth across the span
+  solves it. See the theory page (Friction in statics).
 - Run-time profile of the standalone driver. With the environment variable
   `CABLEDYN_PROFILE=1`, the driver prints at the end of the run how its wall time divides
   between input parsing, initialisation and statics, and the dynamic march. The march is split

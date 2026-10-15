@@ -464,6 +464,24 @@ but a few geometries are genuinely hard:
   turning angles; a finite-EI line carries compression there instead, which the driver notes.
   With 5 m elements on steep trench walls the end tensions of a pile still change by about 1 %
   on a mesh four times finer: refine the line over the trench when they matter.
+- **A grounded run that slides down a slope, or anchor tension with as-laid friction.** By default
+  (``staticsFriction none``) the static solve is frictionless in still water, so a grounded run
+  on a slope slides down it whatever ``frictionMu`` is, and a line longer than its span folds or
+  is rejected. ``asLaid staticsFriction`` holds every grounded node toward its as-laid position
+  (see :ref:`static-friction`), so the run rests where it was laid. A line laid slack
+  (``asLaidTension 0``) and pulled taut by its fairlead is then held back by friction along its
+  grounded run, and its anchor tension is lower than the frictionless static's by up to
+  ``mu w`` times the grounded length (an 850 m chain in 200 m of water with ``frictionMu 0.35``:
+  1352 → 368 kN). If the run was laid at a known tension, give it as ``asLaidTension`` (or
+  ``asLaidTension<ID>``): a run laid at the tension it carries mobilises no friction.
+- **A finite-EI line laid past the point under its fairlead** (``asLaid staticsFriction``). A line
+  longer than the seabed run
+  from its anchor to the point under its fairlead plus its hang is laid beyond that point, and
+  its suspended part turns back over the grounded run at the touchdown. On an ``EI = 0`` line
+  this fold solves; a finite-EI line must round it into a hook of its bending length, which the
+  static solve may not reach (it then fails with its route diagnostics, for example ``too long
+  for its span``). Lay the line across the span (``layAzimuth``, e.g. 90° from the
+  anchor → fairlead direction), shorten it, or move the anchor.
 - **A twisted finite-EI line.** ``torsion continuation stalled at Phi = ... (target ...)``
   reports the imposed twist the static ramp reached: beyond it the line has no nearby static
   equilibrium on the path, typically because a loop is forming (hockling), which needs a

@@ -70,7 +70,7 @@ MODULE CableDyn_HermiteCableStatic
   PUBLIC :: CD_HermiteCable_Prolong_Arc
   PUBLIC :: CD_HermiteCable_Static_Solve_AutoMesh
   PUBLIC :: CD_HermiteCable_Current_Load
-  PUBLIC :: CD_HermiteCable_Friction_Anchors
+  PUBLIC :: CD_HermiteCable_Friction_Anchors, CD_HermiteCable_Friction_Reference
   PUBLIC :: CD_HermiteCable_Mean_Axial_Extremes
   PUBLIC :: CD_Arclength_Dot, CD_Arclength_Unit_Tangent, CD_Arclength_Bordered_Update
   INTEGER, PARAMETER, PUBLIC :: CD_HCSTAT_OK = 0, CD_HCSTAT_BADINPUT = 1, CD_HCSTAT_NOCONVERGE = 2
@@ -169,7 +169,7 @@ MODULE CableDyn_HermiteCableStatic
   ! position, capped at mu times the normal contact force. The reference is a profile
   ! along the unstretched arc length (ref_s ascending; ref_xy(1:2, :) the solve-frame
   ! offsets from node 1, the held first end), interpolated at each node, so it survives
-  ! mesh refinement and a translated solve origin: the still-water laid shape.
+  ! mesh refinement and a translated solve origin: the as-laid position of the line.
   ! frozen_capacity (optional, one entry per node of the solved mesh) holds the capacities
   ! fixed: the springs are then conservative (the energy-minimising step applies), as the
   ! frozen drag of a fixed-point pass.
@@ -181,6 +181,9 @@ MODULE CableDyn_HermiteCableStatic
     REAL(wp) :: mu_axial = -1.0_wp
     REAL(wp), ALLOCATABLE :: ref_s(:), ref_xy(:, :)
     REAL(wp), ALLOCATABLE :: frozen_capacity(:)
+    ! the reference is the as-laid position (staticsFriction asLaid; otherwise the still-water
+    ! equilibrium of a current deck)
+    LOGICAL :: as_laid = .FALSE.
   END TYPE CD_HermiteStaticFrictionType
 
   TYPE, PUBLIC :: CD_HermiteStaticCurrentType
@@ -189,6 +192,8 @@ MODULE CableDyn_HermiteCableStatic
     REAL(wp) :: waterline_z = 0.0_wp
     REAL(wp) :: velocity(3) = 0.0_wp
     REAL(wp) :: frame_cs(2) = [1.0_wp, 0.0_wp]
+    ! drag = .FALSE.: a zero-velocity carrier of the as-laid seabed friction in still water
+    LOGICAL :: drag = .TRUE.
     REAL(wp), ALLOCATABLE :: profile_z(:), profile_velocity(:, :)
     REAL(wp), ALLOCATABLE :: arc_end(:), diam(:), cdn(:), cdt(:)
     ! Seabed friction held by the line against the current (allocated: active).
@@ -2874,6 +2879,13 @@ CONTAINS
     END DO
   END SUBROUTINE CD_HermiteCable_Mean_Axial_Extremes
 
+  PURE LOGICAL FUNCTION current_has_drag(cur) RESULT(has)
+    !! Whether a static current object carries a flow (a zero-velocity one only carries the
+    !! static seabed friction of a line in still water): the current diagnoses apply then only.
+    TYPE(CD_HermiteStaticCurrentType), INTENT(IN) :: cur
+    has = cur%drag
+  END FUNCTION current_has_drag
+
   FUNCTION current_compression_note(l0, EA, qx, seabed_z, flat, frictional, frictionless_run) RESULT(note)
     !! Diagnosis of a current that has no tension-only equilibrium on the traced branch:
     !! empty unless the state qx (the last one reached) carries an element-mean axial force
@@ -3044,11 +3056,11 @@ CONTAINS
     ! A current rides along the stiffness homotopy as the drag frozen at the last accepted
     ! configuration (drag_homotopy); if that path fails, the still-water homotopy is traced
     ! and the drag is then brought in by load steps at full stiffness.
-    ! Seabed friction holds the line against the current relative to its still-water laid
-    ! shape (the reference of its springs). The springs are memoryless, so the equilibrium
-    ! does not depend on the path that reaches it: they ride along the homotopy with the
-    ! drag, their capacities frozen at the same configuration (fric_stage). The still-water
-    ! homotopy of the fallback path runs without them.
+    ! Seabed friction holds the line relative to its as-laid position (the reference of its
+    ! springs; in still water a zero-velocity current carries it). The springs are
+    ! memoryless, so the equilibrium does not depend on the path that reaches it: they ride
+    ! along the homotopy with the drag, their capacities frozen at the same configuration
+    ! (fric_stage). The frictionless homotopy of the fallback path runs without them.
     use_fric = .FALSE.
     IF (PRESENT(current)) THEN
       IF (ALLOCATED(current%friction)) use_fric = current%friction%mu > CD_ZERO
@@ -3312,6 +3324,9 @@ CONTAINS
       CHARACTER(512) :: note
       LOGICAL :: flat
       flat = .NOT. PRESENT(bathymetry)
+      run_limit = .FALSE.
+      IF (.NOT. PRESENT(current)) RETURN
+      IF (.NOT. current_has_drag(current)) RETURN
       note = current_compression_note(l0, EA, qx, seabed_z, flat, use_fric, run_limit)
     END FUNCTION frictionless_run_limit
 
@@ -3321,6 +3336,9 @@ CONTAINS
       CHARACTER(512) :: note
       LOGICAL :: flat
       flat = .NOT. PRESENT(bathymetry)
+      note = ''
+      IF (.NOT. PRESENT(current)) RETURN
+      IF (.NOT. current_has_drag(current)) RETURN
       note = current_compression_note(l0, EA, qx, seabed_z, flat, use_fric)
     END FUNCTION compression_note
 
@@ -6219,9 +6237,11 @@ CONTAINS
       END IF
       IF (es /= CD_HCSTAT_OK) THEN
         ! Diagnosed on the last converged (parent-mesh) state, not on the unconverged iterate.
-        IF (PRESENT(current)) emloc = TRIM(current_compression_note(l0_out, EA_out, q_out, seabed_z, &
-                                                                    .NOT. PRESENT(bathymetry), &
-                                                                    ALLOCATED(current%friction)))//TRIM(emloc)
+        IF (PRESENT(current)) THEN
+          IF (current_has_drag(current)) &
+            emloc = TRIM(current_compression_note(l0_out, EA_out, q_out, seabed_z,.NOT. PRESENT(bathymetry), &
+                                                  ALLOCATED(current%friction)))//TRIM(emloc)
+        END IF
         ErrStat = es; ErrMsg = 'CD_HermiteCable_Static_Solve_AutoMesh: refined-mesh polish failed: '//TRIM(emloc)
         RETURN
       END IF
@@ -6330,9 +6350,11 @@ CONTAINS
       ! In a current, name the limit the compression of this state shows (the grounded run
       ! pushed into its end, or into a friction-held touchdown): the driver's out-of-plane
       ! retry of a planar current needs it, as for the other routes' failures.
-      IF (PRESENT(current)) wbuf = TRIM(current_compression_note(l0_out, EA_out, q_out, seabed_z, &
-                                                                 .NOT. PRESENT(bathymetry), &
-                                                                 ALLOCATED(current%friction)))//TRIM(wbuf)
+      IF (PRESENT(current)) THEN
+        IF (current_has_drag(current)) &
+          wbuf = TRIM(current_compression_note(l0_out, EA_out, q_out, seabed_z,.NOT. PRESENT(bathymetry), &
+                                               ALLOCATED(current%friction)))//TRIM(wbuf)
+      END IF
       ErrMsg = wbuf
       RETURN
     END IF

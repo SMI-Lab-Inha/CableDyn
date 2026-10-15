@@ -154,6 +154,14 @@ fallback) rather than by artificial drag-scaled relaxation. A converged
 solver is necessary but not sufficient: reject a result with the wrong touchdown side, impossible
 tension gradient, penetrated seabed, broken symmetry, or unresolved curvature peak.
 
+With seabed friction (``frictionMu``) the static solve is frictionless in still water by
+default, as in MoorDyn, which is conservative for anchor loads. ``asLaid staticsFriction``
+holds the grounded run toward the position in which the line was laid, as OrcaFlex's *as laid*
+policy does: then decide how the line was laid (``layAzimuth``, by default from the anchor
+toward the fairlead) and at what tension (``asLaidTension``, by default slack), because the
+anchor tension depends on it: a run laid slack and pulled taut is held back by friction. See
+:ref:`static-friction`.
+
 7. Configure dynamics and forcing
 ----------------------------------
 

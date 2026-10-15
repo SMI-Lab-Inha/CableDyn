@@ -1393,6 +1393,19 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 900
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # Static seabed friction toward the as-laid position: a run on a slope below the friction
+  # angle holds (EI = 0 and finite EI), the march continues the static springs at rest, a
+  # line laid at its run tension reproduces the frictionless statics, and the inputs are
+  # checked.
+  add_test(NAME static_friction_as_laid
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_static_friction_as_laid.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/static_friction_as_laid)
+  set_tests_properties(static_friction_as_laid PROPERTIES
+    LABELS "python;static;seabed"
+    TIMEOUT 600
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # Finite-EI generalised-alpha blends: force-blend dtM convergence under prescribed surge.
   add_test(NAME hermite_force_blend_dt
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hermite_force_blend_dt.py

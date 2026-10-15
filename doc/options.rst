@@ -105,7 +105,8 @@ Environment and seabed
      - finite, ≥ 0, or ``none``. A positive value needs ``WtrDpth`` or ``bathymetryFile``, and
        ``dtM``/``TMax`` in the standalone driver. Line nodes carry stick-slip friction springs; in
        a current the static solve holds the line with friction springs from its still-water laid
-       shape, and the march continues them. The isotropic shorthand of
+       shape, and the march continues them (``staticsFriction asLaid`` holds it toward its
+       as-laid position instead, in still water too). The isotropic shorthand of
        ``frictionMuAxial``/``frictionMuLateral``. Not supported (the deck is rejected) with a
        ``FAILURE`` section, on a deck with ``Connect``/``Free`` points or ``Point3`` buoys, or
        on a deck whose lines attach to ``Rigid6`` bodies or rods unless it runs on the default
@@ -126,6 +127,46 @@ Environment and seabed
        ``frictionMuNormal``, ``frictionMu_normal`` for the lateral one. See :doc:`theory`
      - both, within the limits of ``frictionMu``
      - ``0.2 frictionMuAxial``
+   * - ``staticsFriction`` / ``statics_friction`` / ``staticsSeabedFrictionPolicy`` /
+       ``seabedFrictionPolicy``
+     - word
+     - ``none``
+     - ``none`` or ``asLaid`` (also ``as_laid``, ``as-laid``), case-insensitive; OrcaFlex's
+       statics seabed friction policy. ``none``: the static solve is frictionless in still water
+       (in a deck current, friction springs from the still-water equilibrium hold the line), and
+       the friction anchors of the march start at the static node positions. ``asLaid``: the
+       static solve resists the horizontal displacement of every grounded node from its as-laid
+       position (the line laid from its anchor along ``layAzimuth`` on the seabed at
+       ``asLaidTension``, its top end then moved to the fairlead) with the regularised Coulomb
+       law of the dynamics, capped at ``mu N``, in still water and in a current, so a run on a
+       slope with ``tan(slope) < mu`` holds and surplus length rests where it was laid; the
+       march continues the springs. ``none`` is the default, as in MoorDyn: a run laid slack
+       and pulled taut is held back by its friction, so the as-laid statics lowers anchor
+       tensions (by up to ``mu w`` times the grounded length), and the frictionless statics is
+       the conservative choice for anchor loads unless the as-laid layout and tension are
+       known. Used only with ``frictionMu > 0`` and a seabed. See :ref:`static-friction`
+     - both
+     - ``asLaid staticsFriction``
+   * - ``layAzimuth`` / ``lay_azimuth``, and ``layAzimuth<ID>``
+     - real, deg
+     - absent: each line's anchor → fairlead direction
+     - finite. Horizontal direction, from global +x toward +y, in which the line was laid from
+       its anchor (its lower end): the as-laid reference of ``staticsFriction asLaid``.
+       ``layAzimuth`` sets every line; ``layAzimuth<ID>`` (the line ID appended, e.g.
+       ``layAzimuth2``) sets line ``ID`` and overrides it. A direction off the vertical plane of
+       the line ends puts the finite-EI static solve in 3D. An ID that names no line is
+       rejected
+     - both
+     - ``225.0 layAzimuth2``
+   * - ``asLaidTension`` / ``as_laid_tension``, and ``asLaidTension<ID>``
+     - real, N
+     - ``0``
+     - finite, ≥ 0. Effective tension with which the line was laid: the as-laid node spacing is
+       the unstretched one times ``1 + asLaidTension/EA``, so a run whose static tension equals
+       it carries no friction force. ``asLaidTension<ID>`` sets line ``ID`` alone, as for
+       ``layAzimuth<ID>``
+     - both
+     - ``2.0e5 asLaidTension1``
 
 Clock and initial condition
 ---------------------------

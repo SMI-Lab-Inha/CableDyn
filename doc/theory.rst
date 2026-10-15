@@ -751,24 +751,89 @@ failed or subdivided step, join the aggregate snapshot, and are part of the Open
 checkpoint. The force and its position and velocity Jacobians (through :math:`N`) are exact.
 Unlike a velocity-regularised Coulomb law, the spring holds its force at rest.
 
-In statics without a current the anchors are the static node positions and carry no force. In
-a deck current the static solve carries friction springs from a reference position, capped
-smoothly at :math:`\mu N`,
+.. _static-friction:
+
+**Friction in statics.** With seabed friction a static equilibrium is not unique: a grounded
+run can rest anywhere its friction holds it. Like OrcaFlex, CableDyn resolves this by assuming
+the position in which the line was originally laid and letting friction act toward it.
+OrcaFlex (Orcina's documentation, *Line data: statics*,
+https://www.orcina.com/webhelp/OrcaFlex/Content/html/Linedata,Statics.htm, and *Friction
+theory*, https://www.orcina.com/webhelp/OrcaFlex/Content/html/Frictiontheory.htm) offers the
+statics seabed friction policies *none*, *as laid* and *restart*. As laid, with a step 1
+statics method other than *prescribed*, the line is assumed laid starting with its bottom end
+at its position, in the *lay azimuth* direction away from it, following the seabed profile, and
+its top end then moved slowly to its position; the friction targets are spaced along the
+seabed by the unstretched segment lengths and the *as laid tension*, so a line with every node
+on its target carries that tension throughout. Friction applies in statics only to line-seabed
+contact and only when the policy is not *none*; each node's force acts toward its target and
+is capped at :math:`\mu R`, and dynamics then starts from the target positions of statics.
+OrcaFlex warns that a lay azimuth far from the vertical plane through the line ends makes the
+statics harder to converge. The documentation consulted does not state the defaults of these
+three data items.
+
+CableDyn implements the *as laid* and *none* policies (``staticsFriction``; *restart* has no
+counterpart, and there is no prescribed starting shape). *None* is the default, as in MoorDyn:
+the static solve is frictionless in still water, and in a deck current the friction springs
+below hold the line from its still-water equilibrium (the same line solved without the current
+first). It is conservative for anchor loads, since an as-laid run pulled taut is held back by
+its friction (below). With ``asLaid`` the reference of
+node :math:`i` is the as-laid position: the line is laid from its anchor (its lower end) along
+the azimuth :math:`\alpha` (``layAzimuth``; by default the horizontal anchor → fairlead
+direction, the vertical plane through the line ends) on the seabed at the tension
+:math:`T_\text{laid}` (``asLaidTension``, default 0), so that the seabed path from the anchor
+to node :math:`i` is :math:`s_i = \sum_{e<i} l_{0,e}(1 + T_\text{laid}/EA_e)` long; on a
+bathymetry the horizontal distance follows from integrating
+:math:`\mathrm{d}s = \sqrt{1 + z_{,\alpha}^2}\,\mathrm{d}d` in sub-steps of at most 1 m. A
+laid node sinks into the penalty seabed along its normal by its static penetration, which on a
+slope moves it horizontally by :math:`w_i\,(z_{,x}, z_{,y})/k_i`; its reference moves with it,
+so the line laid at rest carries no friction force (a deflection normal to the seabed is not a
+friction deflection, as in OrcaFlex's in-plane law). The static solve then holds every node in
+contact with a friction spring toward its reference, capped smoothly at :math:`\mu N`,
 
 .. math::
 
    \mathbf{f}_t = -\frac{k_i\,\mathbf{d}}{\sqrt{1 + (k_i\lvert\mathbf{d}\rvert/\mu N)^2}},
 
-with :math:`\mathbf{d}` the horizontal displacement from the reference. The reference is the
-still-water laid shape: the same line is solved without the current first, as OrcaFlex
-references its friction to the laid position, so the equilibrium depends on that path. The
-springs are memoryless, so the equilibrium does not depend on how the current is brought in;
-on the finite-EI path their capacities are frozen with the drag in the fixed-point passes and
-live in the final Newton solve, on the ``EI = 0`` path they are frozen at the line-search base
-point of the energy step. The anchors then start at :math:`\mathbf{a}_i = \mathbf{x}_i -
-\mathbf{f}_s/k_i` for the static spring force :math:`\mathbf{f}_s`, so the march starts in
-the static equilibrium and a line held at rest in the current keeps its static end tensions.
-Standalone and coupled runs share this model.
+with :math:`\mathbf{d}` the horizontal displacement from the reference and the anisotropic
+capacity :math:`\mu(\mathbf d) N` below when the axial and lateral coefficients differ. This is
+the regularised Coulomb law of the stick-slip spring of the dynamics: the same stiffness, the
+same capacity, a smooth corner where the dynamics has a sharp one (OrcaFlex ramps the force
+linearly to :math:`\mu R` over :math:`D_\text{crit} = \mu R/(k_s a)`). The springs act in
+still water and in a current alike; they are memoryless, so the equilibrium does not depend on
+how the loads are brought in. On the finite-EI path their capacities are frozen (with the drag
+of a current) in the fixed-point passes and live in the final Newton solve; on the ``EI = 0``
+path they are frozen at the line-search base point of the energy step. The ``EI = 0`` solve
+tries the as-laid seed first: the nodes up to a lift-off node on their references, the rest
+hanging as the suspended catenary to the fairlead, the lift-off node the first at which that
+catenary leaves the seabed tangentially. The finite-EI solve starts its bending-stiffness
+continuation from the ``EI = 0`` equilibrium with the same friction. A grounded run on a slope
+of angle :math:`\theta` then holds where :math:`\sin\theta \le \mu` (the horizontal friction
+force :math:`w\tan\theta` per unit length against the capacity :math:`\mu w/\cos\theta`;
+OrcaFlex's in-plane law holds while :math:`\tan\theta \le \mu`, and the two limits differ by
+under 1.6 % in :math:`\mu` for slopes up to 10°), and a line longer than its span rests where it was laid
+instead of sliding down the slope or folding past its anchor. A run pulled taut from its laid
+position is held back by friction toward the anchor, so its anchor tension is lower than in a
+frictionless static by up to :math:`\mu w` times the grounded length (``asLaidTension`` equal
+to the run's tension removes this). In the IEA-15 MW mixed example (850 m chains in 200 m of
+water, ``frictionMu 0.35``) ``asLaid`` lowers the chains' anchor tension from 1351.6 to
+368.2 kN (FairTen +0.16 %) and the laid power cable's from 1230 N to 0.36 N. With
+``staticsFriction none`` the still-water static solve is
+frictionless.
+
+A line longer than the seabed run from its anchor to the point under its fairlead plus its
+hang is laid past that point, and its suspended part turns back over the grounded run at the
+touchdown. The ``EI = 0`` path solves this fold; on the finite-EI path the bending stiffness
+must round it into a hook of the bending length, from which the static solve may not converge
+(the solve then fails closed with its route diagnostics): a lay azimuth across the span
+(``layAzimuth``), a shorter line, or the default ``staticsFriction none`` with a line that hangs as a
+catenary avoid it.
+
+After the static solve the stick-slip anchors of the march start at :math:`\mathbf{a}_i =
+\mathbf{x}_i - \mathbf{f}_s/k_i` for the static spring force :math:`\mathbf{f}_s`, so the
+march starts in the static equilibrium (OrcaFlex likewise starts dynamics from the targets of
+statics) and a line held at rest keeps its static end tensions. Without static friction the
+anchors are the static node positions and carry no force. Standalone, coupled OpenFAST and C
+API runs share this model (they build their lines with the same routines).
 
 **Anisotropic friction.** With ``frictionMuAxial`` :math:`\mu_a` and ``frictionMuLateral``
 :math:`\mu_n` (the OrcaFlex axial and normal coefficients) the capacity depends on the slip
@@ -884,6 +949,7 @@ beyond a :math:`10^{-6}` relative round-off band; a slack element reports zero t
    where the seabed keeps falling past the fairlead the excess slides down the frictionless
    slope and folds back, with zero tension at the fold; otherwise it lies slack); the other
    catenary variant; and a two-leg polyline of the line length that never compresses the line.
+   With static seabed friction the as-laid seed (:ref:`static-friction`) is tried first.
    Seed nodes deeper below the seabed than their static penetration are lifted onto it.
 2. **Compression-capable Newton** at the full load (Armijo line search on
    :math:`\tfrac{1}{2}\lVert\mathbf{R}\rVert^2`, :ref:`Armijo, 1966 <ref-armijo1966>`). A converged
