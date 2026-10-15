@@ -140,7 +140,8 @@ closed by ``END`` — not in the ``.fst`` ``OutList``:
    END
 
 The channel vocabulary (tensions, end angles, node tension, curvature, bend moment, position,
-velocity, acceleration, declination, azimuth) and units are in :doc:`outputs`.
+velocity, acceleration, declination, azimuth, the touchdown point, and the anchor uplift
+channels ``AnchFz<L>``, ``AnchFH<L>`` and ``TDP<L>Grd``) and units are in :doc:`outputs`.
 
 .. list-table::
    :header-rows: 1

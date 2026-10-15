@@ -30,7 +30,7 @@ PROGRAM test_lazywave_dynamics
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
                                           CD_HermiteCable_Dyn_Set_Waves, &
-                                          CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Curvature, &
+                                          CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Curvature_Exact, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK
   IMPLICIT NONE
 
@@ -172,7 +172,8 @@ PROGRAM test_lazywave_dynamics
     IF (es /= CD_HCDYN_OK) THEN
       CALL require(.FALSE., 'heave-driven step stalled: '//TRIM(em)); EXIT
     END IF
-    CALL CD_HermiteCable_Dyn_Curvature(model, cdyn, es, em)
+    ! the geometric curvature, the quantity of the static reference kstat
+    CALL CD_HermiteCable_Dyn_Curvature_Exact(model, cdyn, es, em)
     k_now = MAXVAL(cdyn)
     kdyn_max = MAX(kdyn_max, k_now); kdyn_min = MIN(kdyn_min, k_now)
     maxpos = MAX(maxpos, nan_max_abs(model%q - q_static))   ! max excursion from the static shape
@@ -226,7 +227,7 @@ PROGRAM test_lazywave_dynamics
     IF (es /= CD_HCDYN_OK) THEN
       CALL require(.FALSE., 'full-hydro step stalled: '//TRIM(em)); EXIT
     END IF
-    CALL CD_HermiteCable_Dyn_Curvature(model, cdyn, es, em)
+    CALL CD_HermiteCable_Dyn_Curvature_Exact(model, cdyn, es, em)
     k_now = MAXVAL(cdyn)
     kdyn_max = MAX(kdyn_max, k_now); kdyn_min = MIN(kdyn_min, k_now)
     maxpos = MAX(maxpos, nan_max_abs(model%q - q_static))

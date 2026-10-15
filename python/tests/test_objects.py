@@ -315,6 +315,12 @@ def test_views_equal_the_channel_evaluator_bit_for_bit(tmp_path):
         force = fixed.force()
         assert force[0] == model.channel("Point1Fx")
         assert np.linalg.norm(force) == pytest.approx(line.anchor_tension(), rel=1.0e-12)
+        # the anchor holds one line: AnchFz/AnchFH are components of the same end force
+        assert model.channel("AnchFz1") == model.channel("Point1Fz") == force[2]
+        assert model.channel("AnchFH1") == model.channel("Point1FH")
+        assert model.channel("AnchFH1") == pytest.approx(np.hypot(force[0], force[1]), rel=1.0e-14)
+        # a grounded anchor carries part of its end node's weight: a small downward force
+        assert -0.05 * line.anchor_tension() < model.channel("AnchFz1") < 0.0
         assert model.bodies == () and model.rods == ()
 
 
@@ -399,7 +405,19 @@ def test_rod_views(tmp_path):
 def test_channel_errors_and_stale_views(tmp_path):
     deck = _held_chain(tmp_path)
     model = CableDyn(deck)
-    for bad in ("", "x" * 65, "L1N99px", "Line1", "FairTen9", "L1N5q", "Body1Pz", "TDP1s"):
+    for bad in (
+        "",
+        "x" * 65,
+        "L1N99px",
+        "Line1",
+        "FairTen9",
+        "AnchFz9",
+        "AnchFz1x",
+        "L1N5q",
+        "Body1Pz",
+        "TDP1s",
+        "TDP1Grd",
+    ):
         with pytest.raises((CableDynError, ValueError)):
             model.channel(bad)
     with pytest.raises(TypeError):

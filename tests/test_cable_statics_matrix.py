@@ -122,14 +122,27 @@ def run_measured(cmd: list, cwd: str, env: dict, wall_limit: float):
 
 
 def read_static(path: Path) -> dict:
-    """Node rows of the static profile per line: [s, x, y, z, T]."""
+    """Node rows of the static profile per line: [s, x, y, z, T, curvature, bend moment]."""
     out: dict = {}
     for ln in path.read_text(encoding="utf-8").splitlines()[3:]:
         f = ln.split()
-        if len(f) < 7:
+        if len(f) < 9:
             continue
-        out.setdefault(int(f[0]), []).append([float(v) for v in f[2:7]])
+        out.setdefault(int(f[0]), []).append([float(v) for v in f[2:9]])
     return out
+
+
+def material_axial_force(row: list) -> float:
+    """Material axial force EA (|r'| - 1) at a profile node.
+
+    Why: the Tension column is the effective tension N = F . t recovered from nodal
+    equilibrium. The cubic-Hermite bending energy EI/2 |r''|^2 makes the material axial force
+    EA (|r'| - 1) = N + EI kappa^2 = Tension + BendMoment * Curvature, and the compression
+    notes judge material strain (element-mean EA (|r'| - 1)), so the matrix holds the notes to
+    the same quantity. At a tight bend N alone can be compressive while the material is in
+    tension (SW_1003: an end clamped into the seabed, kappa = 1.12 1/m).
+    """
+    return row[4] + row[6] * row[5]
 
 
 def read_end_forces(path: Path, every_row: bool = False):
@@ -249,8 +262,8 @@ def check_case(case: dict, res: dict) -> list:
             continue
         if self_intersects([r[1:4] for r in rows]):
             errs.append("line %s crosses itself" % lid)
-        tmin = min(r[4] for r in rows)
-        tmax = max(r[4] for r in rows)
+        tmin = min(material_axial_force(r) for r in rows)
+        tmax = max(material_axial_force(r) for r in rows)
         # only the compression notes waive nodal compression ("line N carries element-mean axial
         # compression ..." and the "line N: mesh too coarse for its bends" variant)
         noted = ("Note: line %s carries element-mean axial compression" % lid) in log or (

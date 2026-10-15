@@ -165,6 +165,33 @@ def check_tdp_vs_python(label: str, root: Path, line_id: int, seabed_z: float, t
     check(worst < tol, f"{label}: TDP channels agree with touchdown_history (max difference {worst:.1e} m)")
 
 
+def check_output_recovery(exe: str, deck: str, out: Path, env: dict, nodes: list[int]) -> None:
+    """OPTIONS OutputRecovery on the lazy-wave run: the element definitions change only the
+    interior node tension, curvature and bend moment; the end forces (also the end-node
+    Tension), positions and TDP are unchanged; an unknown value stops the run."""
+    element = set_option(deck, "OutputRecovery", "element")
+    (out / "lazywave_element.dat").write_text(element, encoding="utf-8", newline="\n")
+    run(exe, out / "lazywave_element.dat", out / "lazywave_element", env)
+    eq = read_output(out / "lazywave.out")
+    el = read_output(out / "lazywave_element.out")
+    same = ["FairTen1", *tdp_channels(1), f"Ten1N{nodes[0]}", f"Ten1N{nodes[-1]}"]
+    same += [f"L1N{j}p{c}" for j in nodes for c in "xyz"]
+    check(all(np.array_equal(eq.column(n), el.column(n)) for n in same),
+          "OutputRecovery element: end forces, end-node Tension, positions and TDP channels are unchanged")
+    changed = all(
+        not np.array_equal(eq.column(f"{p}1N{j}"), el.column(f"{p}1N{j}"))
+        for j in nodes[1:-1]
+        for p in ("Ten", "Curv", "BendMom")
+    )
+    check(changed, "OutputRecovery element: every interior Ten, Curv and BendMom channel takes the element definition")
+    bad = set_option(deck, "OutputRecovery", "nodal")
+    (out / "lazywave_bad.dat").write_text(bad, encoding="utf-8", newline="\n")
+    proc = subprocess.run([exe, str(out / "lazywave_bad.dat"), str(out / "lazywave_bad")], capture_output=True,
+                          text=True, env=env, cwd=out)
+    check(proc.returncode == 1 and "must be equilibrium or element" in proc.stdout + proc.stderr,
+          "OutputRecovery: an unknown value stops the run by name")
+
+
 def catenary_tdp(length: float, span: float, depth: float, w: float, ea: float) -> tuple[float, float, float]:
     """Elastic catenary resting on a frictionless seabed: (TDP deformed arc from the fairlead,
     TDP horizontal distance from the fairlead, horizontal tension)."""
@@ -349,6 +376,7 @@ def main() -> int:
     run(args.exe, out / "lazywave.dat", out / "lazywave", env)
     check_envelopes("cubic-Hermite", out / "lazywave", 1, nodes, 1.0, -80.0)
     check_tdp_vs_python("cubic-Hermite", out / "lazywave", 1, -80.0, 5e-3)
+    check_output_recovery(args.exe, deck, out, env, nodes)
 
     # --- Free point (point-system route)
     src = (examples / "clump_weight_free_point.dat").read_text(encoding="utf-8")

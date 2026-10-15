@@ -237,7 +237,7 @@ MODULE CableDyn_HermiteCableStatic
     REAL(wp) :: smoothed_axial_min = CD_ZERO !! minimum 3-element length-weighted mean axial force [N]
     LOGICAL :: smoothed_compressed = .FALSE. !! smoothed compression beyond compression_limit
     INTEGER :: smoothed_min_elem = 0        !! centre element of smoothed_axial_min
-    REAL(wp) :: nodal_axial_min = CD_ZERO   !! minimum interior-node segment tension [N]
+    REAL(wp) :: nodal_axial_min = CD_ZERO   !! minimum interior-node material axial force [N]
     INTEGER :: nodal_min_node = 0           !! interior node carrying nodal_axial_min
     REAL(wp) :: h_kappa_peak = CD_ZERO
     INTEGER :: h_kappa_elem = 0
@@ -5454,7 +5454,8 @@ CONTAINS
     !! tensile neighbours (a mesh-local kink, e.g. next to a nodal seabed-contact reaction)
     !! is excluded by it; a run of three or more compressed elements never is.
     !! audit%nodal_axial_min is the minimum over interior nodes of the length-weighted
-    !! average of the two adjacent element means: the node Tension output channel.
+    !! average of the two adjacent element means: the nodal material axial force (the node
+    !! Tension output channel under OPTIONS OutputRecovery element).
     REAL(wp), INTENT(IN) :: l0(:), q(:), EA(:)
     TYPE(CD_HermiteBranchAuditType), INTENT(OUT) :: audit
     INTEGER, INTENT(OUT) :: ErrStat

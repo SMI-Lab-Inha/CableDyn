@@ -107,8 +107,9 @@ strain energy
    \quad \mathbf{a} = \mathbf{r}',\ \mathbf{b} = \mathbf{r}'' .
 
 Using :math:`\kappa^2` directly, rather than :math:`\kappa`, keeps the energy smooth through
-the straight state. The stress-free reference is straight, and the reported bending moment is
-:math:`M = EI\,\kappa`.
+the straight state. The stress-free reference is straight, and the bending moment is
+:math:`M = EI\,\kappa`; the node outputs recover it from nodal equilibrium
+(:ref:`theory-output-recovery`).
 
 At each Gauss point, :math:`\mathbf{a}` and :math:`\mathbf{b}` are fixed linear maps of the
 12 element DOFs. The gradient and Hessian of the energy density with respect to
@@ -138,6 +139,108 @@ The element follows the geometrically exact Kirchhoff-rod formulation of
 :ref:`Boyer et al. (2011) <ref-boyer2011>` with the :math:`C^1` Hermite centreline
 interpolation of :ref:`Meier, Popp & Wall (2015) <ref-meier2015>`, reduced to a torsion-free
 cable. Torsion enters only through the condensed line term below.
+
+.. _theory-output-recovery:
+
+Node tension, curvature and bend moment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Section force.** For the energy density :math:`W(\mathbf{a}, \mathbf{b})` of the element, the
+force across a section (exerted by the part of the line beyond :math:`s` on the part before it)
+and the conjugate of the material tangent are
+
+.. math::
+
+   \mathbf{F} = \frac{\partial W}{\partial \mathbf{a}} - \left(\frac{\partial W}{\partial \mathbf{b}}\right)',
+   \qquad
+   \mathbf{m} = \frac{\partial W}{\partial \mathbf{b}}
+              = EI\,\frac{(\mathbf{a}\times\mathbf{b})\times\mathbf{a}}{\lvert\mathbf{a}\rvert^{6}} .
+
+On a stiff-``EA`` cable :math:`\lvert\mathbf{a}\rvert = 1 + \varepsilon` with
+:math:`\varepsilon \ll 1`, :math:`\mathbf{a}\cdot\mathbf{b} = O(\varepsilon)` and
+:math:`\mathbf{b} = \kappa\,\mathbf{n}`, so that
+:math:`\partial W/\partial\mathbf{a} = (EA\,\varepsilon - 2EI\kappa^2)\,\mathbf{t}` plus normal
+terms, :math:`\mathbf{m} = EI\,\kappa\,\mathbf{n}`, and
+:math:`(\partial W/\partial\mathbf{b})'\cdot\mathbf{t} = EI\,\mathbf{b}'\cdot\mathbf{t} = -EI\kappa^2`.
+The axial internal force of the rod, the effective tension that balances the loads, and the
+bend moment are therefore
+
+.. math::
+
+   N = \mathbf{F}\cdot\mathbf{t} = EA\,\varepsilon - EI\,\kappa^2,
+   \qquad
+   M = \lvert \mathbf{m} - (\mathbf{m}\cdot\mathbf{t})\,\mathbf{t} \rvert = EI\,\kappa .
+
+The bending energy measures the curvature per deformed length, and its dependence on the
+stretch puts :math:`-EI\kappa^2` into the axial force: :math:`EA(\lvert\mathbf{r}'\rvert - 1)`
+is a formulation quantity, not the tension, and exceeds :math:`N` by :math:`EI\kappa^2` on any
+mesh (161 N on a 1.2 kN tension at the sag bend of the lazy-wave cable of
+``iea15mw_umaine_mixed_cabledyn.dat``, :math:`\kappa = 0.09` 1/m). Global equilibrium fixes
+:math:`N` whatever the formulation: on a suspended run the horizontal component of
+:math:`\mathbf{F}` is constant and the vertical one changes by the submerged weight, so :math:`N`
+is what any code converges to, the OrcaFlex effective tension and the MoorDyn segment tension
+on a fine mesh among them.
+
+**Pointwise oscillation.** With a stiff ``EA`` the cubic interpolation cannot keep
+:math:`\lvert\mathbf{r}'\rvert` constant where the line must bend over an element (a nodal
+seabed reaction, a section junction): the pointwise axial resultant oscillates about the element
+mean by several times the tension, and the element means alternate between neighbours. On that
+cable as meshed in the example (87 elements, 10 m on the grounded run, tension 1.2 kN) the
+pointwise resultant spans -41.5 to +91.8 kN and the length-weighted element means at the nodes
+reach -173 N; at 1 m elements the pointwise field still spans -5.9 to +11.9 kN.
+
+**Recovery from nodal equilibrium.** The node outputs are recovered from the element end
+forces, the classical recovery of the finite-element nodal forces. For element :math:`e` the
+end residual
+
+.. math::
+
+   \mathbf{g}_e = \mathbf{f}_{\text{int},e} + \mathbf{f}_{\text{damp},e} - \mathbf{f}_{\text{ext},e}
+                + \mathbf{M}_e\,\mathbf{a}_e
+
+holds only the element's own distributed loads: consistent submerged weight, the buoyancy lost
+above the free surface, drag, Froude-Krylov force, structural and added-mass inertia, and the
+seabed reaction of its end nodes, each nodal reaction spread uniformly over the node's tributary
+length (the distributed floor reaction it stands for; without it a line resting on the floor
+would report the fixed-end moment :math:`w L_0^2/12` of its own weight). :math:`\mathbf{g}_e`
+is the generalised force the two end nodes exert on the element: its position rows at the
+End-B side of the internal arc are the section force :math:`\mathbf{F}_j^-` just before node
+:math:`j`, minus its rows at the other end the section force :math:`\mathbf{F}_j^+` just after
+it, and its tangent rows are :math:`\mathbf{m}` there. An interior node reports
+
+.. math::
+
+   N_j = \mathbf{t}_j\cdot\tfrac{1}{2}\left(\mathbf{F}_j^- + \mathbf{F}_j^+\right),
+   \qquad
+   M_j = \lvert \mathbf{m}_j - (\mathbf{m}_j\cdot\mathbf{t}_j)\,\mathbf{t}_j \rvert,
+   \qquad
+   \kappa_j = M_j / EI ,
+
+with :math:`\mathbf{t}_j` the unit nodal tangent, :math:`\mathbf{m}_j` the mean of the two
+one-sided values, and at a section junction the larger of :math:`M_j/EI` on the two sides. The
+difference of the two one-sided forces is the point load left at the node (seabed friction, an
+attachment), so the nodal section forces satisfy the discrete equilibrium exactly and carry
+none of the pointwise oscillation. A line end reports the ``FairTen``/``AnchTen`` end force and
+its one-sided moment; the segment tension of an element is the mean of the axial components of
+its own two end forces. The recovery costs one element evaluation per element and output row.
+
+On the 87-element lazy wave the interior node tension departs from the equilibrium of the
+converged line by at most 60 N (1552 N for the element means), 12 N at twice the mesh density
+and 0.3 N at 1 m elements (516 N); the largest curvature error falls from 64 % to 30 % of the
+peak at 87 elements and from 2.1 % to 0.8 % at 1 m. The peak curvature at a
+touchdown meshed coarser than the bending length is limited by the solution itself, not by the
+recovery.
+
+The condensed torque of a line restrained in torsion is not part of :math:`\mathbf{g}_e`: it adds
+a shear normal to the tangent and does no work on bending rotations. Including its element terms
+on ``torsion_lazy_wave_hangoff_twist.dat`` (two turns, torque 3.5 kN m) moves the tension by
+at most 0.45 N of 9.4 kN and moves the bend moment away from :math:`EI\kappa`.
+
+``OPTIONS`` ``OutputRecovery element`` restores the element definitions: the length-weighted
+mean of the element-mean axial forces :math:`EA(\lvert\mathbf{r}'\rvert - 1)` at an interior
+node, the larger one-sided exact curvature, and the midpoint axial resultant as the segment
+tension. The material-strain checks (``tensile_safety``, the static compression notes) judge
+:math:`EA\varepsilon` under either setting.
 
 .. _theory-torsion:
 
@@ -1102,8 +1205,8 @@ mesh-sequenced route described below first and this route as its fallback):
    when the polish on the split mesh does not converge, or at an element budget. The report is
    judged on element-mean forces: the mean over each element and its two neighbours
    (length-weighted) beyond the
-   admissible band, or a node tension (the segment tension, :doc:`outputs`) in compression by
-   more than a tenth of the peak tension.
+   admissible band, or a nodal material axial force (the length-weighted mean of the two
+   adjacent element means) in compression by more than a tenth of the peak tension.
    The nodal seabed-contact reaction kinks the line at the touchdown node, and the
    element there can carry a small negative mean between tensile neighbours at any mesh; that dip
    does not enter equilibrium and is not reported. A failing route falls back to the
@@ -1921,9 +2024,10 @@ Commands that would make the element length non-positive are rejected.
 Tension and coupled loads
 -------------------------
 
-An interior node tension is the segment tension: the average of the two adjacent element
-tensions (``EI = 0``), or the length-weighted average of the element-mean axial forces of the
-two adjacent elements (Hermite), including axial damping and constitutive-state contributions.
+An interior node tension is the segment tension, the average of the two adjacent element
+tensions, on an ``EI = 0`` line, and the effective tension recovered from nodal equilibrium
+(:ref:`theory-output-recovery`) on a Hermite line, including axial damping and
+constitutive-state contributions.
 ``FairTen``, ``AnchTen`` and the end-node tension channels report the line-end force instead
 (:doc:`conventions`, :doc:`outputs`). By the convention in :doc:`conventions` the reported
 tension is the effective tension. The

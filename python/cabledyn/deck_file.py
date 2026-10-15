@@ -248,6 +248,8 @@ _OPTION_ALIASES = {
     "lay_azimuth": "lay_azimuth",
     "aslaidtension": "as_laid_tension",
     "as_laid_tension": "as_laid_tension",
+    "outputrecovery": "output_recovery",
+    "output_recovery": "output_recovery",
 }
 # Per-line static friction rows (native apply_option): ``layAzimuth<ID>`` and ``asLaidTension<ID>``
 # with the LINE id appended; the id is a plain decimal suffix, and leading zeros name the same line.
@@ -718,6 +720,9 @@ def _channel_identity_key(channel: str) -> str:
     if lowered.startswith(("fairten", "anchten")):
         line_id = _native_id_suffix(lowered[7:])
         return f"{lowered[:7]}:{line_id}" if line_id > 0 else lowered
+    if lowered.startswith(("anchfz", "anchfh")):
+        line_id = _native_id_suffix(lowered[6:])
+        return f"{lowered[:6]}:{line_id}" if line_id > 0 else lowered
     if lowered.startswith(
         ("fairangle", "anchangle", "fairdecl", "anchdecl", "fairincl", "anchincl")
     ):
@@ -740,9 +745,9 @@ def _channel_identity_key(channel: str) -> str:
             else 0
         )
         return f"point:{point_id}:{component}" if point_id > 0 and component > 0 else lowered
-    touchdown = re.fullmatch(r"tdp([0-9]{1,9})(s|x|y|z|lay|exc)", lowered)
+    touchdown = re.fullmatch(r"tdp([0-9]{1,9})(s|x|y|z|lay|exc|grd)", lowered)
     if touchdown is not None and int(touchdown.group(1)) > 0:
-        component = ("s", "x", "y", "z", "lay", "exc").index(touchdown.group(2)) + 1
+        component = ("s", "x", "y", "z", "lay", "exc", "grd").index(touchdown.group(2)) + 1
         return f"tdp:{int(touchdown.group(1))}:{component}"
     if lowered.startswith(("ten", "curv", "bendmom", "l", "torq", "twist")):
         line_id, node_id, kind, component = _parse_line_node_channel(lowered)
@@ -1220,6 +1225,12 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
             None
             if value.lower() in {"continuation", "sequenced"}
             else "must be continuation or sequenced"
+        )
+    if key == "output_recovery":
+        return (
+            None
+            if value.lower() in {"equilibrium", "element"}
+            else "must be equilibrium or element"
         )
     if key in {"axial_quadrature_order", "bending_quadrature_order"}:
         try:
@@ -3682,8 +3693,8 @@ class DeckFile:
         for channel in channels:
             lowered = channel.lower()
             endpoint_channel = re.fullmatch(
-                r"(?:fairten|anchten|fairangle|anchangle|fairdecl|anchdecl|fairincl|anchincl)"
-                r"([0-9]+)",
+                r"(?:fairten|anchten|anchfz|anchfh|fairangle|anchangle|fairdecl|anchdecl"
+                r"|fairincl|anchincl)([0-9]+)",
                 lowered,
             )
             # Con<P>p{x,y,z} is the native alias of Point<P>p{x,y,z} (MoorDyn v1 spelling).
@@ -3743,8 +3754,9 @@ class DeckFile:
                         f"{self._label}: OUTPUT {channel!r} references an unknown point"
                     )
                 continue
-            # TDP<L>{s,x,y,z,Lay,Exc}: the touchdown point of line L (native CD_Parse_TDP_Channel)
-            touchdown_channel = re.fullmatch(r"tdp([0-9]{1,9})(?:s|x|y|z|lay|exc)", lowered)
+            # TDP<L>{s,x,y,z,Lay,Exc,Grd}: the touchdown point of line L (native
+            # CD_Parse_TDP_Channel)
+            touchdown_channel = re.fullmatch(r"tdp([0-9]{1,9})(?:s|x|y|z|lay|exc|grd)", lowered)
             if touchdown_channel:
                 if _channel_id(touchdown_channel.group(1)) not in line_ids:
                     raise DeckFormatError(

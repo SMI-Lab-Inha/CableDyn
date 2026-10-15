@@ -32,14 +32,22 @@ def _frames(kinks=None) -> np.ndarray:
 
 
 def _expected(xyz: np.ndarray) -> tuple[float, np.ndarray]:
-    """Straightforward scalar TDP: last grounded node from End A, chord crossing."""
+    """Straightforward scalar TDP: last grounded node from End A, then the crossing of the
+    level by the parabola through that node and the next two, in chord arc (on a straight
+    rise this is the chord crossing), nearest the suspended node."""
     level = SEABED + TOLERANCE
     last = int(np.argmax(xyz[:, 2] > level)) - 1
     low, high = xyz[last], xyz[last + 1]
-    fraction = (level - low[2]) / (high[2] - low[2])
     chords = np.linalg.norm(np.diff(xyz, axis=0), axis=1)
+    arcs = np.array([0.0, chords[last], chords[last] + chords[last + 1]])
+    coefficients = np.polyfit(arcs, xyz[last : last + 3, 2] - level, 2)
+    roots = [r.real for r in np.roots(coefficients) if abs(r.imag) < 1e-12]
+    inside = [r for r in roots if -1e-9 <= r <= chords[last] * (1.0 + 1e-9)]
+    fraction = max(inside) / chords[last]
     arc = float(np.sum(chords[:last]) + fraction * chords[last])
-    return arc, low + fraction * (high - low)
+    point = low + fraction * (high - low)
+    point[2] = level
+    return arc, point
 
 
 def _write_line(path, frames, times=TIMES):

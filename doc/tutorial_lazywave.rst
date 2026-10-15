@@ -84,7 +84,7 @@ Run it
 
    # CableDyn driver output (finite-EI dynamic; production cubic-Hermite route)
    Time(s)  FairTen1       AnchTen1       FairIncl1      AnchIncl1       Curv1N383      BendMom1N383
-   0.0...   9.3201701E+003 1.3269019E+003 8.1600621E+001 -3.6937724E-001 9.6834389E-002 1.9270043E+003
+   0.0...   9.3201701E+003 1.3269019E+003 8.1600621E+001 -3.6920305E-001 9.6829202E-002 1.9269011E+003
 
 Read the shape
 --------------

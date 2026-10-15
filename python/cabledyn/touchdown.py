@@ -14,9 +14,16 @@ output time, from node positions in any of three forms:
 A node is grounded when ``z <= seabed_z + tolerance``, and the grounded run
 must start at one end of the line (as for :meth:`cabledyn.LineGeometry.touchdown`).
 Between the last grounded node and the next one the touchdown point (TDP) is
-placed where the chord crosses ``seabed_z + tolerance``, so it moves smoothly
-rather than jumping from node to node. Arc length is the cumulative deformed
-chord length from End A through the available nodes.
+placed where the parabola through the last grounded node and the next two
+nodes (height against chord arc) crosses ``seabed_z + tolerance``, the crossing
+nearest the suspended node; with fewer than two suspended nodes, or no crossing
+inside the element, where the chord crosses that height. The crossing reaches a
+node exactly when the node reaches that height, so the TDP moves continuously as
+nodes ground and lift off, and the parabola follows a tangential lift-off between
+nodes instead of holding the TDP at the last grounded node (the behaviour of the
+chord crossing on a stiff seabed). It is the location of the driver's ``TDP<L>``
+channels. Arc length is the cumulative deformed chord length from End A through
+the available nodes.
 
 The excursion is the horizontal TDP displacement from a reference position,
 projected on the horizontal direction from the grounded end to the suspended
@@ -290,11 +297,39 @@ def _locate(
     rise = high[:, 2] - low[:, 2]
     with np.errstate(divide="ignore", invalid="ignore"):
         fraction = np.clip(np.where(rise > 0.0, (level - low[:, 2]) / rise, 0.0), 0.0, 1.0)
+    n = xyz.shape[1]
+    quadratic = touching & (last + 2 < n)
+    for row in np.nonzero(quadratic)[0]:
+        fraction[row] = _quadratic_fraction(xyz[row], int(last[row]), level, fraction[row])
     point = low + fraction[:, None] * (high - low)
+    point[touching, 2] = level
     tdp_arc = arc[rows, last] + fraction * chords[rows, np.minimum(last, chords.shape[1] - 1)]
     if end == "B":
         tdp_arc = arc[:, -1] - tdp_arc
     return touching, tdp_arc, point, xyz[:, -1, :2]
+
+
+def _quadratic_fraction(xyz: npt.NDArray[Any], last: int, level: float, linear: float) -> float:
+    """Crossing of ``level`` by the quadratic height through the last grounded node and the
+    first two suspended nodes, nearest the suspended node, as a fraction of the first chord
+    (the linear fraction when the quadratic has no crossing in the element)."""
+    g0, g1, g2 = (xyz[last + k, 2] - level for k in range(3))
+    l1 = float(np.linalg.norm(xyz[last + 1] - xyz[last]))
+    l2 = float(np.linalg.norm(xyz[last + 2] - xyz[last + 1]))
+    if not (l1 > 0.0 and l2 > 0.0):
+        return linear
+    d1 = (g1 - g0) / l1
+    qa = ((g2 - g1) / l2 - d1) / (l1 + l2)
+    qb = d1 - qa * l1
+    if abs(qa) * l1 <= 1e-12 * max(abs(qb), np.finfo(float).tiny):
+        return float(np.clip(-g0 / qb / l1, 0.0, 1.0)) if qb != 0.0 else linear
+    disc = qb * qb - 4.0 * qa * g0
+    if disc < 0.0:
+        return linear
+    x1 = (-qb - math.sqrt(disc)) / (2.0 * qa) if qb >= 0.0 else (-qb + math.sqrt(disc)) / (2.0 * qa)
+    x2 = g0 / (qa * x1) if x1 != 0.0 else 0.0
+    inside = [x for x in (x1, x2) if -1e-9 * l1 <= x <= l1 * (1.0 + 1e-9)]
+    return float(np.clip(max(inside) / l1, 0.0, 1.0)) if inside else linear
 
 
 def touchdown_history(

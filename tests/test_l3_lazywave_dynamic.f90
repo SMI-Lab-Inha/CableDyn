@@ -56,7 +56,7 @@ PROGRAM test_l3_lazywave_dynamic
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Step_Recovering, &
                                           CD_HermiteCable_Dyn_Recovery_Count, CD_HermiteCable_Dyn_Recovery_Reset, &
-                                          CD_HermiteCable_Dyn_Curvature, &
+                                          CD_HermiteCable_Dyn_Curvature_Exact, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK
   IMPLICIT NONE
 
@@ -360,7 +360,7 @@ CONTAINS
       IF (t >= T_SCORE) THEN
         cycle_index = MIN(3, MAX(1, INT((t - T_SCORE + 1.0e-9_wp)/PER) + 1))
         step_peak = 0.0_wp
-        CALL CD_HermiteCable_Dyn_Curvature(model, cdyn, es, em)
+        CALL CD_HermiteCable_Dyn_Curvature_Exact(model, cdyn, es, em)
         DO e = 1, ne
           qr(1:6) = model%q(6*(e - 1) + 1:6*e)
           qr(7:12) = model%q(6*e + 1:6*(e + 1))
@@ -786,7 +786,7 @@ CONTAINS
         minimum_axial = MIN(minimum_axial, axial_now)
         IF (k > peak) THEN; peak = k; peak_arc = arc; END IF
         cycle_peak(cycle_index) = MAX(cycle_peak(cycle_index), k)
-        CALL CD_HermiteCable_Dyn_Curvature(dyn, nodal_curvature, es, em)
+        CALL CD_HermiteCable_Dyn_Curvature_Exact(dyn, nodal_curvature, es, em)
         IF (es /= CD_HCDYN_OK) THEN; CALL CD_HermiteCable_Dyn_End(dyn); RETURN; END IF
         curvature_profile = MAX(curvature_profile, nodal_curvature)
         mnorm = NORM2(dyn%q(4:6)); tension = EA*(mnorm - 1.0_wp)/1000.0_wp

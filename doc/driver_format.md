@@ -1006,6 +1006,7 @@ syntax form. The most frequently edited keywords are:
 | `cable_load_feedback` | coupled finite-EI cable reaction switch. `True` returns cable force and moment to the host. `False` marches the cable with the same moving boundary and host fluid field and keeps its output channels, but returns zero force and moment; use it for a one-way comparison, not as a physical model | `True` |
 | `adaptive_mesh` | `True`/`False`; allow finite-EI mesh refinement when the static resolution check is fragile | `False` |
 | `cable_statics` | `continuation` or `sequenced`: which finite-EI static route runs first (the other is its fallback); both results are audited | `continuation` |
+| `OutputRecovery` / `output_recovery` | `equilibrium` or `element`: definition of the finite-EI node tension, curvature, bend moment and segment tension. `equilibrium` recovers them from nodal equilibrium (the effective tension F·t, the moment the neighbouring elements carry, curvature = moment / EI); `element` reports the length-weighted element-mean axial force EA(\|r'\| − 1), the larger one-sided exact curvature, and the element-midpoint axial resultant as segment tension. End forces, positions and TDP channels are the same under both | `equilibrium` |
 | `alpha_force_blend` | `True`/`False`; generalised-α blend of the finite-EI and `EI = 0` dynamics: forces (`True`) or the configuration `q_αf` (`False`), which biases the mean tension of a rotating finite-EI line at large `dtM` and lets `EI = 0` segments that go slack report spurious tension spikes | `True` |
 | `tensile_safety` | `False`, `warn`, or `True`; audits the element-mean axial force (three-point Gauss mean of the signed axial resultant, averaged over an element and its two neighbours). `True` rejects. `warn` commits the state, counts accepted-step events, and reports the worst force, threshold, element and time (the printed `xi` is always 0.5, the element centre) | `False` |
 | `tensile_strain_tolerance` | non-negative strain band for the dynamic tensile audit | `2e-6` |
@@ -1227,6 +1228,8 @@ bending moment. None of these channels is mandatory.
 |---------|---------|------|
 | `FairTen<L>` | line L fairlead (End A) line-end tension: the magnitude of the force the line actually exerts on its End-A point (end element force with axial damping, including the bending shear of a finite-EI line, plus the end node's share of the submerged weight, seabed contact and drag at the actual velocity; without the end node's inertia), the static end reaction at rest. Route differences (seabed friction, the two-moving-end route) are in [Outputs](outputs.rst) | N |
 | `AnchTen<L>` | line L anchor (End B) line-end tension, as `FairTen` | N |
+| `AnchFz<L>` | line L vertical component of the `AnchTen` end force, positive upward (the line lifts its End-B point). Not available on the two-moving-end finite-EI route, which rejects it by name | N |
+| `AnchFH<L>` | line L horizontal magnitude of the `AnchTen` end force (same availability as `AnchFz`) | N |
 | `FairIncl<L>` | line L fairlead (End A) signed inclination below horizontal (0 = horizontal; positive = downward) | deg |
 | `AnchIncl<L>` | line L anchor (End B) signed inclination below horizontal (0 = horizontal; positive = downward) | deg |
 | `FairDecl<L>` | line L fairlead (End A) declination from +GZ (0 = up, 90 = horizontal, 180 = down) | deg |
@@ -1236,18 +1239,19 @@ bending moment. None of these channels is mandatory.
 | `Con<P>p{x,y,z}` | alias of `Point<P>p{x,y,z}` (MoorDyn v1 spelling) | m |
 | `Body<N>…`, `Rod<N>…` | Rigid6 body and rod channels in the MoorDyn-F names: position, attitude, velocity and acceleration (`P`, `R`, `V`, `RV`, `A`, `RA`), net force and moment (`F`, `M`), rod end tensions (`TenA`, `TenB`), submerged fraction (`Sub`) and rod node positions (`Rod<N>N<k>P`). Available on every route that carries bodies or rods, OpenFAST included; the full list and units are in [Outputs](outputs.rst) | see Outputs |
 | `Point<P>F{x,y,z}`, `Point<P>FH` | resultant of the line-end and cable end forces on point P (each the `FairTen`/`AnchTen` end force): the anchor load of a Fixed point shared by several lines, the line load a free point balances; `FH` is its horizontal magnitude. Available on every route (static, `EI = 0`, finite-EI, multibody and OpenFAST) except the two-moving-end finite-EI route, which rejects it by name | N |
-| `Ten<L>N<J>` | line L tension at node J (interior nodes average the adjacent elements; end nodes report the line-end force of `FairTen`/`AnchTen`) | N |
-| `Curv<L>N<J>` | line L geometric curvature at node J. `EI = 0` lines: circle through the node and its two neighbours (end nodes take the adjacent interior value). Cubic-Hermite lines: exact curvature of the continuous centreline, the larger one-sided element value at an interior node | 1/m |
-| `BendMom<L>N<J>` | line L bend moment = EI × curvature **relative to the stress-free reference shape** (≈ 0 at the reference; equals EI × geometric curvature because the finite-EI reference is straight; 0 on EI = 0 lines) | N·m |
+| `Ten<L>N<J>` | line L effective tension at node J. EI = 0 lines: the mean of the two adjacent segment tensions. Finite-EI lines: the axial component of the section force recovered from nodal equilibrium (`OutputRecovery element`: the length-weighted mean of the adjacent element-mean axial forces). End nodes report the line-end force of `FairTen`/`AnchTen` | N |
+| `Curv<L>N<J>` | line L curvature at node J. `EI = 0` lines: geometric curvature of the circle through the node and its two neighbours (end nodes take the adjacent interior value). Cubic-Hermite lines: `BendMom<L>N<J>` / EI, the larger of the two sides at a section junction (`OutputRecovery element`: exact curvature of the continuous centreline, the larger one-sided element value at an interior node) | 1/m |
+| `BendMom<L>N<J>` | line L bend moment = EI × curvature **relative to the stress-free reference shape** (≈ 0 at the reference; the finite-EI reference is straight). Finite-EI lines: recovered from nodal equilibrium, the moment the neighbouring elements carry (`OutputRecovery element`: EI × the larger one-sided exact curvature); 0 on EI = 0 lines | N·m |
 | `L<L>N<J>p{x,y,z}` | line L node J position component | m |
 | `L<L>N<J>v{x,y,z}` | line L node J velocity component (0 in static-only runs) | m/s |
 | `L<L>N<J>a{x,y,z}` | line L node J acceleration component (0 in static-only runs) | m/s² |
 | `L<L>N<J>Dec` | line L declination of the axial tangent at node J (from +GZ; 0 = up, 90 = horizontal, 180 = down) | deg |
 | `L<L>N<J>Azi` | line L azimuth of the axial tangent at node J (from +GX toward +GY, in [0, 360)) | deg |
-| `TDP<L>s` | line L touchdown point (TDP): arc length from End A, interpolated between the last grounded node and the next where the centreline crosses the contact-onset height (1e-6 m above the seabed) | m |
+| `TDP<L>s` | line L touchdown point (TDP): arc length from End A, between the last grounded node and the next, where the parabola through the last grounded node and the next two nodes crosses the contact-onset height (1e-6 m above the seabed); continuous as nodes ground and lift off ([Outputs](outputs.rst)) | m |
 | `TDP<L>x`, `TDP<L>y`, `TDP<L>z` | line L TDP position | m |
 | `TDP<L>Lay` | line L layback: horizontal distance from the TDP to the suspended end | m |
 | `TDP<L>Exc` | line L TDP excursion: horizontal TDP displacement from its initial position, along the initial direction toward the suspended end | m |
+| `TDP<L>Grd` | line L grounded length: deformed chord length along the nodes from the grounded end to the TDP; 0 once the grounded end has lifted off | m |
 | `Torq<L>N<J>` | line L torque at node J (uniform along the line); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line restrained in torsion at both ends | N·m |
 | `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` over the elements in between; 0 at End A, without the end-spring windup. Only on a line restrained in torsion at both ends | deg |
 | `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included. Only on a line restrained in torsion at both ends | deg |
@@ -1265,6 +1269,10 @@ bending moment. None of these channels is mandatory.
 - `TDP<L>` channels need a seabed (`WtrDpth` or `bathymetryFile`) and a line that rests on the
   seabed at exactly one end in its initial state; otherwise the run stops with exit code 1
   naming the line. They are available on every route, OpenFAST included.
+- The anchor uplift check of a drag-embedment anchor (no vertical load at the anchor in the
+  intact condition) reads `AnchFz<L>` (its maximum over the run at most 0) or `TDP<L>Grd`
+  (greater than 0 throughout); see [Outputs](outputs.rst) for the end-node weight share that a
+  grounded `Fixed` anchor carries.
 - In an OpenFAST `CompMooring = 5` run, channel headers in the OpenFAST output and in
   `<OpenFASTRoot>.CD.out` use OpenFAST's 20-character width (`ChanLen`). A longer channel name
   stops coupled initialisation with an error naming the channel; keep coupled channel names

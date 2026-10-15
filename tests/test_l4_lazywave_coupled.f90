@@ -31,7 +31,7 @@ PROGRAM test_l4_lazywave_coupled
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve, CD_HCSTAT_OK
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
-                                          CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Curvature, &
+                                          CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Curvature_Exact, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK
   IMPLICIT NONE
 
@@ -301,7 +301,7 @@ CONTAINS
         CALL require(.FALSE., TRIM(names(is))//' dynamic step stalled: '//TRIM(em)); EXIT
       END IF
       IF (t >= T_SCORE) THEN
-        CALL CD_HermiteCable_Dyn_Curvature(model, cdyn, es, em)
+        CALL CD_HermiteCable_Dyn_Curvature_Exact(model, cdyn, es, em)
         DO i = 1, nn
           arc_i = REAL(i - 1, wp)*l0e
           IF (arc_i >= 0.03_wp*Lsus .AND. arc_i <= 0.97_wp*Lsus) kdyn_max = MAX(kdyn_max, cdyn(i))

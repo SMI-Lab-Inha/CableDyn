@@ -665,6 +665,7 @@ def test_unknown_scalar_option_keyword_fails_closed(tmp_path):
         ("1.5", "wave_seed", "must be an integer"),
         ("maybe", "alpha_force_blend", "native boolean"),
         ("relaxed", "cable_statics", "continuation or sequenced"),
+        ("nodal", "OutputRecovery", "equilibrium or element"),
     ],
 )
 def test_invalid_scalar_option_values_fail_closed(tmp_path, value, keyword, message):
@@ -738,6 +739,8 @@ def test_zero_e_exponent_waterkin_mode_is_accepted(tmp_path):
         "True alphaForceBlend",
         "continuation cable_statics",
         "sequenced cableStatics",
+        "equilibrium OutputRecovery",
+        "element output_recovery",
     ],
 )
 def test_native_scalar_option_vocabulary_is_accepted(tmp_path, row):
@@ -1986,6 +1989,10 @@ def test_static_line_endpoint_topology_matches_native_normalization(tmp_path):
         "TDP1z",
         "TDP1Lay",
         "TDP1Exc",
+        "TDP1Grd",
+        "AnchFz1",
+        "AnchFH1",
+        "anchfz01",
     ],
 )
 def test_output_channel_vocabulary_matches_native_parser(tmp_path, channel):
@@ -2008,6 +2015,11 @@ def test_output_channel_vocabulary_matches_native_parser(tmp_path, channel):
         ("TDP2s", "unknown line"),
         ("TDP1q", "unsupported OUTPUT"),
         ("TDP1sx", "unsupported OUTPUT"),
+        ("TDP1Grdx", "unsupported OUTPUT"),
+        ("AnchFz2", "unknown line"),
+        ("AnchFH0", "unknown line"),
+        ("AnchFz1x", "unsupported OUTPUT"),
+        ("AnchFy1", "unsupported OUTPUT"),
     ],
 )
 def test_invalid_output_channels_fail_before_case_generation(tmp_path, channel, message):
@@ -3628,6 +3640,9 @@ def test_case_generation_tolerates_unqueryable_existing_outputs(tmp_path, monkey
         ("L1N3va", "L1N3va"),
         ("TDP1s", "tdp01S"),
         ("TDP1Lay", "TDP1LAY"),
+        ("TDP1Grd", "tdp01GRD"),
+        ("AnchFz1", "anchfz01"),
+        ("AnchFH1", "ANCHFH1"),
     ],
 )
 def test_duplicate_output_channels_fail_like_native(first, second):
@@ -3653,8 +3668,8 @@ def test_duplicate_output_channel_on_one_row_and_across_sections_fails():
 
 def test_distinct_output_channels_are_not_collapsed():
     channels = (
-        "FairTen1 AnchTen1 FairIncl1 AnchIncl1 FairDecl1 AnchDecl1 Point1px Point1py "
-        "Point2px Ten1N1 Ten1N2 Curv1N1 BendMom1N1 L1N1px L1N1vx L1N1ax L1N1Dec L1N1Azi"
+        "FairTen1 AnchTen1 AnchFz1 AnchFH1 FairIncl1 AnchIncl1 FairDecl1 AnchDecl1 Point1px "
+        "Point1py Point2px Ten1N1 Ten1N2 Curv1N1 BendMom1N1 L1N1px L1N1vx L1N1ax L1N1Dec L1N1Azi"
     )
     deck = DeckFile.from_text(_edit(_STATIC, ("FairTen1\n", channels + "\n")))
     assert deck.outputs == tuple(channels.split())
@@ -3696,6 +3711,11 @@ def test_distinct_output_channels_are_not_collapsed():
         ("TDP2s", "tdp:2:1"),
         ("TDP0s", "tdp0s"),
         ("TDP1", "tdp1"),
+        ("TDP3Grd", "tdp:3:7"),
+        ("AnchFz01", "anchfz:1"),
+        ("AnchFH2", "anchfh:2"),
+        ("AnchFz", "anchfz"),
+        ("AnchFz0", "anchfz0"),
         ("Lxyz", "lxyz"),
         ("Other1", "other1"),
     ],

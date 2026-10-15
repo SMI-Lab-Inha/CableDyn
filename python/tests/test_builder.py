@@ -246,7 +246,9 @@ def test_edit_fields_in_place_and_revalidate() -> None:
 
 def test_rename_propagates_to_rows_and_output_channels() -> None:
     model = _chain_model()
-    model.outputs.add("Ten1N3", "L1N2px", "TDP1s", "Point2FH", "Con1py")
+    model.outputs.add(
+        "Ten1N3", "L1N2px", "TDP1s", "TDP1Grd", "AnchFz1", "AnchFH1", "Point2FH", "Con1py"
+    )
     model.rename(model.lines[1], 7)
     model.rename(model.points[1], 11)
     model.rename(model.line_types["chain"], "R3chain")
@@ -257,6 +259,9 @@ def test_rename_propagates_to_rows_and_output_channels() -> None:
         "Ten7N3",
         "L7N2px",
         "TDP7s",
+        "TDP7Grd",
+        "AnchFz7",
+        "AnchFH7",
         "Point2FH",
         "Con11py",
     ]

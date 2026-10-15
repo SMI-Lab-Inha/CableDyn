@@ -236,15 +236,19 @@ Plot ``Curvature`` or ``Tension`` against ``ArcLength`` for a fatigue or strengt
 
 .. note::
 
-   Node tensions are segment tensions; ``.elements.out`` holds pointwise field values. On a
-   finite-EI line the ``Tension`` column and ``Ten<L>N<J>`` report, at an interior node, the
-   length-weighted average of the element-mean axial forces of the two neighbouring elements
-   (the tension that enters equilibrium, as the segment tension of an ``EI = 0`` line). The
-   ``MinimumAxialResultant`` and ``MaximumAxialResultant`` columns of ``.elements.out`` are
-   extrema of the pointwise field :math:`EA\,(|\mathbf r'| - 1)`. With a stiff ``EA`` that
-   field oscillates about the element mean wherever an element cannot follow the line -- at a
-   nodal seabed-contact kink near touchdown and at a section junction -- and can dip below
-   zero there while the line is tensile. Curvature and bend moment are pointwise in both files.
+   On a finite-EI line the ``Tension``, ``Curvature`` and ``BendMoment`` columns and the
+   ``Ten``/``Curv``/``BendMom`` channels are recovered from nodal equilibrium
+   (:ref:`theory-output-recovery`): the effective tension :math:`\mathbf F\cdot\mathbf t`
+   is the axial component of the section force that balances the loads, and the bend moment
+   is the moment the elements on either side of the node carry. ``.elements.out`` holds the
+   pointwise element fields instead: the ``MinimumAxialResultant`` and
+   ``MaximumAxialResultant`` columns are extrema of the material axial force
+   :math:`EA\,(|\mathbf r'| - 1)`, which exceeds the effective tension by
+   :math:`EI\kappa^2` and, with a stiff ``EA``, oscillates about the element mean wherever an
+   element cannot follow the line -- at a nodal seabed-contact kink near touchdown and at a
+   section junction -- and can dip below zero there while the line is tensile. ``OPTIONS``
+   ``OutputRecovery element`` reports the element definitions in the node columns and channels
+   (:doc:`options`).
 
 ``<out_root>.elements.out`` — Hermite element extrema
 -----------------------------------------------------
@@ -322,7 +326,9 @@ channels instead) and accept ``r``.
      - node positions, End A → End B
    * - ``t``
      - ``<out_root>.Line<L>.t.out``
-     - segment (element) tensions, End A → End B
+     - segment (element) tensions, End A → End B; on a finite-EI line the mean of the axial
+       components of the element's own two equilibrium end forces (``OutputRecovery element``:
+       the axial resultant at the element midpoint)
    * - ``r``
      - ``<out_root>.Line<L>.range.out``
      - range graph: minimum, maximum and mean over the run of the node tension, curvature, bend
@@ -493,8 +499,18 @@ Line-end channels
      - line-end tension at End B (anchor) of line ``L``, defined as for ``FairTen``. On a
        grounded run it is close to the horizontal tension. A ``Fixed`` anchor at the seabed
        depth sits slightly above the grounded chain, which sinks into the penalty seabed, so the
-       anchor also carries part of its end node's weight (for example 192.4 kN against a
-       horizontal tension of 191.5 kN in :doc:`tutorial_catenary`)
+       anchor also carries its end node's weight (for example 192.4 kN against a horizontal
+       tension of 191.5 kN in :doc:`tutorial_catenary`; see `Anchor uplift`_)
+     - N
+   * - ``AnchFz<L>``
+     - vertical component of the ``AnchTen<L>`` end force, the force line ``L`` exerts on its
+       End-B point: positive upward (the line lifts the anchor), negative downward. On every
+       route that reports ``AnchTen`` except the two-moving-end finite-EI route, which rejects it
+       by name; for an anchor that holds one line it equals ``Point<P>Fz``
+     - N
+   * - ``AnchFH<L>``
+     - horizontal magnitude of the same end force, :math:`\sqrt{F_x^2 + F_y^2}`, with the same
+       availability; for an anchor that holds one line it equals ``Point<P>FH``
      - N
    * - ``FairIncl<L>`` / ``AnchIncl<L>``
      - signed inclination of the End-A / End-B tangent below horizontal
@@ -510,6 +526,40 @@ Line-end channels
 A grounded anchor segment reads ``AnchIncl ≈ 0``; the small non-zero value reports the actual
 orientation of the last element, which CableDyn does not force to horizontal.
 
+Anchor uplift
+~~~~~~~~~~~~~
+
+A drag-embedment anchor is designed for a horizontal pull and loses holding capacity under a
+vertical one, so design practice for catenary moorings (DNV-OS-E301, API RP 2SK) requires no
+vertical uplift at the anchor in the intact condition: some chain stays laid on the seabed. Two
+channels give the check for line ``L`` directly:
+
+* the maximum of ``AnchFz<L>`` over the run is at most 0;
+* the minimum of ``TDP<L>Grd`` (`Touchdown channels`_) over the run is greater than 0.
+
+The two agree: while chain is laid at the anchor the line pulls it horizontally, and once the
+grounded length reaches 0 the line lifts its anchor and ``AnchFz`` turns positive.
+
+On a laid ``EI = 0`` line ``AnchFz`` is a small negative value, not 0. The anchor node of a
+``Fixed`` point at the seabed depth is held at the seabed elevation, while the penalty seabed
+lets the grounded line sink by :math:`\delta = w/(k_\text{Bot}\,d)` (:math:`w` the submerged
+weight per unit length, :math:`d` the line diameter, see :doc:`conventions`). The anchor
+therefore carries the end node's lumped submerged weight, :math:`w\,\Delta L/2` for an anchor
+segment of unstretched length :math:`\Delta L`, and the downward pull of the anchor segment
+toward the sunk line, about :math:`H\delta/\Delta L` for a horizontal tension :math:`H`:
+
+.. math::
+
+   \mathtt{AnchFz} \approx -\left(\frac{w\,\Delta L}{2} + \frac{H\,\delta}{\Delta L}\right).
+
+In :doc:`tutorial_catenary` (:math:`w` = 3.18 kN/m, :math:`\Delta L` = 10 m,
+:math:`\delta` = 0.13 m) this estimate is −18.4 kN, and the run reports ``AnchFz1`` = −18.2 kN
+beside ``AnchFH1`` = 191.5 kN (the horizontal tension) and ``AnchTen1`` = 192.4 kN. The share
+belongs to the lumped anchor node: it scales with the anchor segment length, vanishes as the mesh
+is refined, and is not uplift. A finite-EI (cubic-Hermite) end resting on the seabed leaves its
+end node's weight to the floor and reads ``AnchFz`` = 0 there. Check the sign of ``AnchFz``, not
+the difference between ``AnchTen`` and ``AnchFH``.
+
 Line-node channels
 ~~~~~~~~~~~~~~~~~~
 
@@ -521,9 +571,13 @@ Line-node channels
      - Meaning
      - Unit
    * - ``Ten<L>N<J>``
-     - effective tension at node ``J``: an interior node takes the mean of its two neighbouring
-       element (segment) tensions -- on a finite-EI line their element-mean axial forces,
-       weighted by element length; an end node reports the line-end force of ``FairTen`` /
+     - effective tension at node ``J``. ``EI = 0`` lines: an interior node takes the mean of
+       its two neighbouring element (segment) tensions. Finite-EI lines: the axial component
+       :math:`\mathbf F\cdot\mathbf t` of the section force recovered from nodal equilibrium,
+       the mean of the end forces of the two neighbouring elements, each with its own
+       distributed loads and inertia (:ref:`theory-output-recovery`); ``OutputRecovery
+       element``: the length-weighted mean of the element-mean axial forces
+       :math:`EA(|\mathbf r'| - 1)`. An end node reports the line-end force of ``FairTen`` /
        ``AnchTen``. On the two-moving-end finite-EI route every value is the chord-stretch
        tension of ``FairTen`` there: the adjacent element at an end node and the unweighted
        mean of the two neighbouring elements at an interior node
@@ -531,13 +585,20 @@ Line-node channels
    * - ``Curv<L>N<J>``
      - curvature at node ``J``. ``EI = 0`` lines: discrete curvature of the circle through
        the node and its two neighbours (end nodes take the adjacent interior value).
-       Cubic-Hermite lines: exact curvature of the continuous centreline, taking the larger of
-       the two one-sided element values at an interior node
+       Cubic-Hermite lines: ``BendMom<L>N<J>`` / ``EI``, the larger of the two sides at a
+       section junction (``OutputRecovery element``: exact curvature of the continuous
+       centreline, the larger of the two one-sided element values at an interior node). The
+       library routines ``CD_HermiteCable_Dyn_Curvature`` and ``CD_HFMF_Curvature`` return the
+       same value; ``CD_HermiteCable_Dyn_Curvature_Exact`` and ``CD_HFMF_Curvature_Exact`` the
+       exact geometric traces
      - 1/m
    * - ``BendMom<L>N<J>``
-     - bend moment ``EI × κ`` measured relative to the stress-free reference shape. The
-       cubic-Hermite reference is straight, so there it equals ``EI × Curv<L>N<J>``
-       (larger one-sided value at an interior node); 0 on ``EI = 0`` lines
+     - bend moment ``EI × κ`` measured relative to the stress-free reference shape (the
+       cubic-Hermite reference is straight). Finite-EI lines: the component normal to the tangent
+       of the moment recovered from nodal equilibrium, the mean of the two neighbouring elements
+       (one-sided at a line end, where it is the end connection moment);
+       ``OutputRecovery element``: ``EI`` times the larger one-sided exact curvature. 0 on
+       ``EI = 0`` lines
      - N·m
    * - ``L<L>N<J>px`` / ``py`` / ``pz``
      - node position component
@@ -578,9 +639,16 @@ Touchdown channels
 For a line that rests on the seabed at one end, the touchdown point (TDP) at every output time.
 A node is grounded when its centreline is at most 1e-6 m (the height at which the seabed contact
 law engages) above the seabed; the grounded end is the end grounded in the initial state. Walking
-from that end, the TDP lies between the last grounded node and the next one, where the centreline
-crosses that height (linear interpolation of the clearance). The definitions are those of
-:func:`cabledyn.touchdown_history` with ``tolerance = 1e-6``.
+from that end, the TDP lies between the last grounded node and the next one, where the parabola
+through the last grounded node and the next two nodes (clearance against chord arc) crosses that
+height, the crossing nearest the suspended node; the TDP sits on that height. With fewer than two
+suspended nodes, or no crossing inside the element, the clearance is interpolated linearly. The
+crossing reaches a node exactly when the node reaches the onset height, so the TDP moves
+continuously as nodes ground and lift off, and between nodes it follows the lift-off of the line
+instead of resting on the last grounded node until the next one grounds: on a 450 m cable with
+5 m elements in a 10 m surge the largest step between output rows falls from 4.6 m (a whole
+element) to 0.08 m, and the error against a 1 m mesh from 3.0 m to 1.9 m. The definitions are
+those of :func:`cabledyn.touchdown_history` with ``tolerance = 1e-6``.
 
 .. list-table::
    :header-rows: 1
@@ -603,12 +671,20 @@ crosses that height (linear interpolation of the clearance). The definitions are
        projected on the initial horizontal direction from the TDP to the suspended end (positive
        toward the suspended end)
      - m
+   * - ``TDP<L>Grd``
+     - grounded length: deformed chord length along the nodes from the grounded end to the TDP
+       (``TDP<L>s`` measured from the grounded end instead of End A). 0 while no node beyond
+       the grounded end node is grounded: an anchor held at the seabed elevation counts as
+       grounded, but with its neighbour off the seabed no line lies there, so a taut or fully
+       suspended line reads 0. The whole line length when every node is grounded
+     - m
 
 The channels are available on every route, OpenFAST included, when the deck has a seabed
 (``WtrDpth`` or ``bathymetryFile``). A line whose initial state is grounded at both ends or at
 neither stops the run with exit code 1 naming the line. When the grounded end later lifts off,
-the channels report that end node; when the whole line rests on the seabed, the suspended end
-node.
+the channels report that end node (and ``TDP<L>Grd`` reads 0); when the whole line rests on the
+seabed, the suspended end node. ``TDP<L>Grd`` is the grounded length of the `Anchor uplift`_
+check.
 
 Point channels
 ~~~~~~~~~~~~~~
@@ -708,8 +784,8 @@ with exit code 1. A name is rejected when:
 * it matches none of the forms above, or carries trailing text (``Point2px_raw``,
   ``Point2pzz``, ``FairTen1x``);
 * it references an unknown line or point id, or a node number larger than the line's node
-  count, or is a ``TDP<L>`` name with a suffix other than ``s``, ``x``, ``y``, ``z``, ``Lay`` or
-  ``Exc``;
+  count, or is a ``TDP<L>`` name with a suffix other than ``s``, ``x``, ``y``, ``z``, ``Lay``,
+  ``Exc`` or ``Grd``;
 * it is a ``Torq<L>N<J>``, ``Twist<L>N<J>`` or ``Twist<L>`` channel of a line that is not
   restrained in torsion at both ends (``... carries no torque``);
 * on a mixed ``EI = 0`` + finite-EI deck (and in OpenFAST), it is a ``Point<P>`` channel of a

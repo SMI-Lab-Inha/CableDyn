@@ -137,12 +137,15 @@ Tension definitions
 - CableDyn models lines as solid members with no internal contents, and applies buoyancy as a
   distributed load (the Archimedes resultant of the pressure field), not as a pressure term in
   the tension. Under this convention the **reported tension is the effective tension**,
-  :math:`T_e = EA\,\varepsilon` plus any axial damping or constitutive-state contribution. This
-  is the quantity in the interior node tension channels, and the quantity compared with
-  OrcaFlex effective tension in :doc:`validation`. Node tensions are segment tensions: the mean
-  of the two neighbouring element tensions (on a finite-EI line, the element-mean axial forces
-  weighted by element length), like OrcaFlex mid-segment tension. The continuous element field
-  is reported separately in ``.elements.out``. ``FairTen``, ``AnchTen``, and the end-node
+  :math:`T_e = EA\,\varepsilon` plus any axial damping or constitutive-state contribution on an
+  ``EI = 0`` line, and the axial component :math:`\mathbf{F}\cdot\mathbf{t}` of the section
+  force recovered from nodal equilibrium on a finite-EI line, which differs from
+  :math:`EA\,\varepsilon` by :math:`EI\kappa^2` (:ref:`theory-output-recovery`). This is the
+  quantity in the interior node tension channels, and the quantity compared with OrcaFlex
+  effective tension in :doc:`validation`. On an ``EI = 0`` line node tensions are segment
+  tensions, the mean of the two neighbouring element tensions, like OrcaFlex mid-segment tension.
+  The continuous element field :math:`EA\,\varepsilon` of a finite-EI line is reported
+  separately in ``.elements.out``. ``FairTen``, ``AnchTen``, and the end-node
   tension channels report the line-end force instead: the actual force on the attachment, the
   end element force (axial damping included) plus the end node's share of weight, seabed
   contact, and drag at the actual velocity, without the end node's inertia (:doc:`outputs`).

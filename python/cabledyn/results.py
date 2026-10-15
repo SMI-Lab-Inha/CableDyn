@@ -53,7 +53,7 @@ def _native_channel_unit(channel: str) -> str | None:
     Ids may carry leading zeros (``Ten01N01``), as the native channel parser accepts.
     """
     patterns = (
-        (r"(?:FairTen|AnchTen)0*[1-9][0-9]*", "N"),
+        (r"(?:FairTen|AnchTen|AnchFz|AnchFH)0*[1-9][0-9]*", "N"),
         (r"(?:FairIncl|AnchIncl|FairDecl|AnchDecl|FairAngle|AnchAngle)0*[1-9][0-9]*", "deg"),
         (r"Ten0*[1-9][0-9]*N0*[1-9][0-9]*", "N"),
         (r"Curv0*[1-9][0-9]*N0*[1-9][0-9]*", "1/m"),

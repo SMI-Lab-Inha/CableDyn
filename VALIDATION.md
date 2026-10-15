@@ -93,7 +93,7 @@ article's methods, are compared in
 | **T-3** | Greenhill onset, clamped, `TL²/EI` −20 to 1600 | van der Heijden et al. (2003) eq. 33 | ≤3.9e-5 (32 elements); ≤6.5e-6 (128) | <1e-4; <1e-3 | Pass |
 | **T-4** | Onset, bending-pinned torsional (semi-tangential) end | `tan x = −x/3` | 6.4e-7 / 4.5e-7 | <1e-4 | Pass |
 | **T-5** | Onsets against OrcaFlex 11.6d (clamped and pinned) | OrcaFlex, extrapolated to zero segment length | ≤3.0e-5 | <2e-4 | Pass |
-| **T-6** | Lazy-wave cable twisted 0–5 turns at the hang-off | OrcaFlex 11.6d | torque ≤0.019%, peak curvature ≤0.056%, offset ≤27 mm, tension ≤0.091% | 1% / 1% / 0.1 m / 0.5% | Pass |
+| **T-6** | Lazy-wave cable twisted 0–5 turns at the hang-off | OrcaFlex 11.6d | torque ≤0.019%, peak curvature ≤0.049%, offset ≤27 mm, tension ≤0.091% | 1% / 1% / 0.1 m / 0.5% | Pass |
 | **T-7** | Kirchhoff helix, four turns | helical equilibrium | end force 1.5e-4, end moment 6.5e-5 | <5e-3 | Pass |
 | **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
 | **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
@@ -864,7 +864,7 @@ in parentheses).
   orientation and twisted 1 to 5 turns at the hang-off. Against OrcaFlex at 0.375 m segments,
   the hang-off torque agrees to ≤0.019%, the geometric twist `Θ` to ≤1.8e-4 turn per imposed turn
   (`Θ` = 0.188 turn at 5 turns, so the torque is 3.8% below `GJ Φ/L`), the peak interior
-  curvature to ≤0.056% (0.1197 against 0.1196 1/m at 5 turns), the out-of-plane offset to ≤27 mm
+  curvature to ≤0.049% (0.1197 against 0.1196 1/m at 5 turns), the out-of-plane offset to ≤27 mm
   of 6.8 m and the hang-off tension to ≤0.091%. The torque is uniform along the line. At zero
   twist the restrained deck reproduces the same cable without torsion columns (positions
   identical, tensions to 1.1e-8), the zero-twist parity case.

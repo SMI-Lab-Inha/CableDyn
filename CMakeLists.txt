@@ -1470,6 +1470,23 @@ if(Python3_Interpreter_FOUND)
     message(STATUS "range_graph_tdp: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
+  # Anchor uplift channels (AnchFz/AnchFH, TDP<L>Grd): the analytic laid and suspended elastic
+  # catenaries, the Point<P>F identity on every standalone route, and a surge that lifts the
+  # anchor of a catenary (needs numpy).
+  if(_range_tdp_numpy_rc EQUAL 0)
+    add_test(NAME anchor_uplift_channels
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_anchor_uplift.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --examples ${CMAKE_CURRENT_SOURCE_DIR}/examples
+                     --output ${CMAKE_BINARY_DIR}/anchor_uplift_channels)
+    set_tests_properties(anchor_uplift_channels PROPERTIES
+      LABELS "python;integration;static;dynamic;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+  else()
+    message(STATUS "anchor_uplift_channels: skipped (numpy not importable in ${Python3_EXECUTABLE})")
+  endif()
+
   # The arbiter imports numpy + scipy at load time; only register the test when they are
   # importable, so an image with python3 but without those packages does not fail the
   # validation suite with ModuleNotFoundError before any CableDyn gate runs.
