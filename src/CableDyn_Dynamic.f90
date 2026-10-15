@@ -605,7 +605,7 @@ CONTAINS
                                      converged, stalled, n_iter, ErrStat, ErrMsg, &
                                      load_proc, added_mass_proc, load_force_proc, &
                                      load_band_proc, prescribed_q, prescribed_v, prescribed_a, structural_mass, &
-                                     workspace, added_mass_band_proc, start_load)
+                                     workspace, added_mass_band_proc, start_load, probe_q, probe_R, probe_K)
     !! One generalized-alpha step: the constant load f_ext plus the optional load,
     !! banded-load, force-only and added-mass callbacks (hydrodynamics, damping, contact).
     !! On a singular effective tangent returns CD_DYN_SINGULAR; on a line-search
@@ -656,6 +656,14 @@ CONTAINS
     !! committed force there, not one advanced over the step). Absent: the step evaluates the
     !! force-only callback (or load_proc) at (q, v). Full (3 n_nodes) array.
     REAL(wp), INTENT(IN), OPTIONAL :: start_load(:)
+    !! TEST HOOK (unit tests of the tangent; production callers omit it). With probe_q (full
+    !! 3 n_nodes array, the fixed DOFs at their t_{n+1} values) present, the step returns after
+    !! its setup without iterating: probe_R is the residual (3 n_nodes) and probe_K the free-free
+    !! effective tangent (n_free x n_free, free DOFs in ascending order) of the Newton iteration
+    !! at probe_q, exactly as the iteration assembles them (banded or dense path). All three
+    !! are passed together; the state outputs are the t_n state, converged = .FALSE.
+    REAL(wp), INTENT(IN), OPTIONAL :: probe_q(:)
+    REAL(wp), INTENT(OUT), OPTIONAL :: probe_R(:), probe_K(:, :)
 
     INTEGER  :: n_dof, n_elem, n_free, bt, kl, ku, ldab
     INTEGER, POINTER :: free(:), fixed(:), ipiv(:)
@@ -1011,6 +1019,11 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'mass band packing failed: '//TRIM(em))
         RETURN
       END IF
+    END IF
+
+    IF (PRESENT(probe_q)) THEN
+      CALL probe_tangent()
+      RETURN
     END IF
 
     r0 = CD_ZERO
@@ -1640,6 +1653,44 @@ CONTAINS
         r = r + x(free(i))*x(free(i))
       END DO
     END FUNCTION free_dot
+
+    SUBROUTINE probe_tangent()
+      !! The residual and free-free effective tangent at probe_q (see probe_q).
+      INTEGER :: i, j
+      IF (.NOT. (PRESENT(probe_R) .AND. PRESENT(probe_K))) THEN
+        CALL fail(ErrStat, ErrMsg, 'probe_q needs probe_R and probe_K')
+        RETURN
+      END IF
+      IF (SIZE(probe_q) /= n_dof .OR. SIZE(probe_R) /= n_dof .OR. SIZE(probe_K, 1) /= n_free .OR. &
+          SIZE(probe_K, 2) /= n_free) THEN
+        CALL fail(ErrStat, ErrMsg, 'probe_q, probe_R must have shape (3 n_nodes), probe_K (n_free, n_free)')
+        RETURN
+      END IF
+      IF (direct_banded) THEN
+        CALL eval_dynamic(probe_q, R, es, em, effbandout=eff_band)
+      ELSE
+        CALL eval_dynamic(probe_q, R, es, em, effout=eff)
+      END IF
+      IF (es /= 0) THEN
+        CALL fail_callback(ErrStat, ErrMsg, em, es)
+        RETURN
+      END IF
+      DO i = 1, n_dof
+        probe_R(i) = R(i)
+      END DO
+      probe_K = CD_ZERO
+      DO j = 1, n_free
+        IF (direct_banded) THEN
+          DO i = MAX(1, j - ku), MIN(n_free, j + kl)
+            probe_K(i, j) = eff_band(kl + ku + 1 + i - j, j)
+          END DO
+        ELSE
+          DO i = 1, n_free
+            probe_K(i, j) = eff(free(i), free(j))
+          END DO
+        END IF
+      END DO
+    END SUBROUTINE probe_tangent
 
     SUBROUTINE form_trial(stp)
       !! q_trial = qk, then q_trial(free) += stp*dq.

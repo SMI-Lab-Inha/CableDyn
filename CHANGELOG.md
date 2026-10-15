@@ -199,10 +199,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   up to 6 % more wall time on `EI = 0` dynamic decks (one more force evaluation per step and
   about 4 % more Newton iterations). `False alpha_force_blend`, which until now
   applied to finite-EI lines only, selects the former scheme for `EI = 0` lines as well.
-- `modified_newton` on tension-only lines rebuilds the tangent when an iterate reduces the
-  residual by less than a factor four, as the manual states; it had kept the first tangent for
-  the whole step, which a slow linear contraction could exhaust (30 iterations at the start of
-  the 5 m heave cells of the L2-2 parity test with the force blend).
+- `modified_newton` on `EI = 0` lines (with or without the force blend, so also under
+  `False alpha_force_blend`) rebuilds the tangent when an iterate reduces the residual by less
+  than a factor four, as the manual states; it had kept the first tangent for the whole step,
+  which a slow linear contraction could exhaust (30 iterations at the start of the 5 m heave
+  cells of the L2-2 parity test with the force blend).
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

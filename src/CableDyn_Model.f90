@@ -3680,7 +3680,10 @@ CONTAINS
     !! converged step then leaves the alpha-level reaction rows of its fixed DOFs and the
     !! condensed dynamic end tangent (CD_Get_Model_EndQuery). active (one flag per fixed DOF,
     !! in model%fixed_dofs order) limits the tangent columns to the junction DOFs; arm_guess
-    !! warm-starts the step from the previous converged solve of the same step.
+    !! warm-starts the step from the previous converged solve of the same step. arm_guess
+    !! must be set only for a re-solve of that step from the same committed state (the
+    !! line rolled back to it): the warm re-solve also reuses the step-start force and load
+    !! of the force blend computed by the previous call.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     LOGICAL, INTENT(IN) :: request
     LOGICAL, INTENT(IN), OPTIONAL :: active(:)
@@ -4681,6 +4684,11 @@ CONTAINS
     REAL(wp), INTENT(IN) :: time, dt
     LOGICAL, INTENT(OUT) :: new_spike
     REAL(wp), PARAMETER :: SPIKE_ISOLATION = 4.0_wp, SPIKE_LINE_FACTOR = 10.0_wp
+    ! A segment counts as taut for the turn advisory above this fraction of the initial
+    ! line tension (a nearly slack segment turns freely, its tension error is irrelevant);
+    ! the spike test needs this many segments (the neighbours share the axial wave).
+    REAL(wp), PARAMETER :: TURN_TAUT_FRACTION = 1.0e-3_wp
+    INTEGER, PARAMETER :: SPIKE_MIN_ELEMS = 3
     INTEGER :: e, na, nb, istat
     REAL(wp) :: d(3), ell, strain, u(3), c, line_max, tn
     LOGICAL :: fresh
@@ -4719,7 +4727,9 @@ CONTAINS
       IF (model%audit_n >= 1) THEN
         ! the turn of a segment taut at both states (a slack segment turns freely and carries
         ! no tension whose accuracy the turn would measure)
-        IF (model%audit_now(e) > CD_ZERO .AND. model%audit_t(e, 1) > CD_ZERO) &
+        IF (model%audit_now(e) > TURN_TAUT_FRACTION*model%audit_floor .AND. &
+            model%audit_now(e) > CD_ZERO .AND. &
+            model%audit_t(e, 1) > TURN_TAUT_FRACTION*model%audit_floor .AND. model%audit_t(e, 1) > CD_ZERO) &
           model%audit_max_turn = MAX(model%audit_max_turn, &
                                      ACOS(MAX(-CD_ONE, MIN(CD_ONE, DOT_PRODUCT(u, model%audit_u(:, e)))))* &
                                      (180.0_wp/ACOS(-CD_ONE)))
@@ -4734,7 +4744,7 @@ CONTAINS
     END DO
     IF (model%audit_n == 0) model%audit_floor = MAX(CD_ZERO, MAXVAL(model%audit_now))
     ! spike test on the previous state, between its two neighbours
-    IF (model%audit_n >= 2) THEN
+    IF (model%audit_n >= 2 .AND. model%n_elem >= SPIKE_MIN_ELEMS) THEN
       line_max = MAX(MAXVAL(model%audit_t(:, 2)), MAXVAL(model%audit_now))
       DO e = 1, model%n_elem
         tn = model%audit_t(e, 1)

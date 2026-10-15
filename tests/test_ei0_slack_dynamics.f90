@@ -15,9 +15,17 @@ PROGRAM test_ei0_slack_dynamics
   !!   4. The run audit of the driver (stdout of the executable given as the first argument):
   !!      the configuration blend (False alpha_force_blend) of case 1 warns of a non-physical
   !!      tension spike, the force blend does not; rhoInf above 0.95 prints its note; a 10 m
-  !!      sway at dtM 0.2 s prints the segment-turn advisory.
+  !!      sway at dtM 0.2 s prints the segment-turn advisory; the unresolved slack-to-taut
+  !!      snaps of case 1 print the snap note.
+  !!   5. The Newton tangent of the force-blended step against a central finite difference of its
+  !!      residual (the step's probe_q hook), on a three-segment tension-only chain with one fixed
+  !!      node: all segments taut at t_n and at the trial state (release cap inactive), a segment
+  !!      taut at t_n and deeply slack at the trial state (cap active, its energy-gradient force
+  !!      W_n/(e_n - e_{n+1}) and tangent), and a segment slack at both states; each on the
+  !!      banded and the dense path. The cap's residual is also checked against the closed form.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
+  USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Cable_Gen_Alpha_Step, CD_DYN_OK
   IMPLICIT NONE
 
   REAL(wp), PARAMETER :: PI = 3.141592653589793238462643383279502884197_wp
@@ -29,6 +37,7 @@ PROGRAM test_ei0_slack_dynamics
   nfail = 0
   driver = ''
   IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, driver)
+  CALL case_tangent_consistency()
   CALL case_light_cable_coarse_step()
   CALL case_light_cable_release_cap()
   CALL case_viscoelastic_surge()
@@ -237,6 +246,154 @@ CONTAINS
     ok = cs == 0 .AND. ex == 0
   END SUBROUTINE run_driver_logged
 
+  SUBROUTINE zero_load(q, v, force, jac_q, jac_v, ErrStat, ErrMsg)
+    !! No dynamic load; selects the dense (load_proc) path of the step.
+    REAL(wp), INTENT(IN) :: q(:), v(:)
+    REAL(wp), INTENT(OUT) :: force(:), jac_q(:, :), jac_v(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    force = 0.0_wp
+    jac_q = 0.0_wp
+    jac_v = 0.0_wp
+    ErrStat = 0
+    ErrMsg = ''
+  END SUBROUTINE zero_load
+
+  SUBROUTINE chain_nodes(dirs, strain, l0, q)
+    !! Nodes of the chain from the fixed node at the origin: segment e runs along dirs(:, e)
+    !! with the length l0(e)*(1 + strain(e)).
+    REAL(wp), INTENT(IN) :: dirs(3, 3), strain(3), l0(3)
+    REAL(wp), INTENT(OUT) :: q(12)
+    INTEGER :: e
+    q(1:3) = 0.0_wp
+    DO e = 1, 3
+      q(3*e + 1:3*e + 3) = q(3*e - 2:3*e) + dirs(:, e)/NORM2(dirs(:, e))*l0(e)*(1.0_wp + strain(e))
+    END DO
+  END SUBROUTINE chain_nodes
+
+  SUBROUTINE blended_force(qn, q1, l0, ea, alpha_f, capped, f)
+    !! Closed form of the blended internal force (1 - alpha_f) f(q1) + alpha_f f(qn) of the
+    !! tension-only chain, with the release cap (capped) or without it.
+    REAL(wp), INTENT(IN) :: qn(12), q1(12), l0(3), ea(3), alpha_f
+    LOGICAL, INTENT(IN) :: capped
+    REAL(wp), INTENT(OUT) :: f(12)
+    INTEGER :: e
+    REAL(wp) :: dn(3), d1(3), ln, l1, t0, t1, e0, e1, dg, share(3)
+    f = 0.0_wp
+    DO e = 1, 3
+      dn = qn(3*e + 1:3*e + 3) - qn(3*e - 2:3*e)
+      d1 = q1(3*e + 1:3*e + 3) - q1(3*e - 2:3*e)
+      ln = NORM2(dn)
+      l1 = NORM2(d1)
+      t0 = MAX(0.0_wp, ea(e)*(ln/l0(e) - 1.0_wp))
+      t1 = MAX(0.0_wp, ea(e)*(l1/l0(e) - 1.0_wp))
+      e0 = ln - l0(e)
+      e1 = l1 - l0(e)
+      dg = alpha_f*t0
+      IF (capped .AND. t0 > 0.0_wp .AND. e1 < 0.0_wp) dg = MIN(dg, 0.5_wp*t0*e0/(e0 - e1))
+      share = (1.0_wp - alpha_f)*t1*d1/l1 + dg*dn/ln
+      f(3*e - 2:3*e) = f(3*e - 2:3*e) - share
+      f(3*e + 1:3*e + 3) = f(3*e + 1:3*e + 3) + share
+    END DO
+  END SUBROUTINE blended_force
+
+  SUBROUTINE probe_step(qn, vn, an, q1, l0, ea, rho_a, dense, R, K)
+    !! Residual and effective tangent of the force-blended step at q1 (the probe_q hook).
+    REAL(wp), INTENT(IN) :: qn(12), vn(12), an(12), q1(12), l0(3), ea(3), rho_a(3)
+    LOGICAL, INTENT(IN) :: dense
+    REAL(wp), INTENT(OUT) :: R(12), K(9, 9)
+    INTEGER :: conn(2, 3), n_iter, es
+    REAL(wp) :: qo(12), vo(12), ao(12)
+    LOGICAL :: converged, stalled
+    TYPE(GenAlphaConfig) :: cfg
+    TYPE(CD_CableGenAlphaWorkspace) :: work
+    CHARACTER(120) :: em
+    conn = RESHAPE([1, 2, 2, 3, 3, 4], [2, 3])
+    cfg%rho_inf = 0.4_wp
+    IF (dense) THEN
+      CALL CD_Cable_Gen_Alpha_Step(qn, vn, an, conn, l0, ea, rho_a, .TRUE., 0.0_wp*qn, [1, 2, 3], 0.05_wp, cfg, &
+                                   qo, vo, ao, converged, stalled, n_iter, es, em, load_proc=zero_load, &
+                                   workspace=work, probe_q=q1, probe_R=R, probe_K=K)
+    ELSE
+      CALL CD_Cable_Gen_Alpha_Step(qn, vn, an, conn, l0, ea, rho_a, .TRUE., 0.0_wp*qn, [1, 2, 3], 0.05_wp, cfg, &
+                                   qo, vo, ao, converged, stalled, n_iter, es, em, &
+                                   workspace=work, probe_q=q1, probe_R=R, probe_K=K)
+    END IF
+    IF (es /= CD_DYN_OK) THEN
+      WRITE (*, '(A)') 'MISMATCH [tangent:probe '//TRIM(em)//']'
+      nfail = nfail + 1
+      R = 0.0_wp
+      K = 0.0_wp
+    END IF
+  END SUBROUTINE probe_step
+
+  SUBROUTINE tangent_config(label, strain_n, strain_1, expect_cap)
+    !! One configuration of the three-segment chain (node 1 fixed): segment strains at t_n and
+    !! at the trial state of the step, t_n at rest but for a small velocity and acceleration.
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), INTENT(IN) :: strain_n(3), strain_1(3)
+    LOGICAL, INTENT(IN) :: expect_cap
+    REAL(wp), PARAMETER :: L0(3) = [1.0_wp, 1.2_wp, 0.8_wp], EA(3) = [1.0e6_wp, 1.5e6_wp, 0.8e6_wp]
+    REAL(wp), PARAMETER :: DIRS_N(3, 3) = RESHAPE([1.0_wp, 0.2_wp, 0.1_wp, 0.3_wp, 1.0_wp, -0.2_wp, &
+                                                   -0.2_wp, 0.4_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: DIRS_1(3, 3) = RESHAPE([1.0_wp, 0.27_wp, 0.04_wp, 0.36_wp, 1.0_wp, -0.12_wp, &
+                                                   -0.12_wp, 0.46_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: H = 1.0e-6_wp, ALPHA_F = 0.4_wp/1.4_wp
+    INTEGER :: p, j, free(9), i
+    REAL(wp) :: qn(12), vn(12), an(12), q1(12), qp(12), rho_a(3), R(12), Rp(12), Rm(12), K(9, 9), Kfd(9, 9)
+    REAL(wp) :: Kdump(9, 9), f_cap(12), f_raw(12), scale, err
+    LOGICAL :: dense
+    free = [(i + 3, i=1, 9)]
+    CALL chain_nodes(DIRS_N, strain_n, L0, qn)
+    CALL chain_nodes(DIRS_1, strain_1, L0, q1)
+    vn = 0.0_wp
+    an = 0.0_wp
+    DO i = 4, 12
+      vn(i) = 0.01_wp*SIN(1.7_wp*REAL(i, wp))
+      an(i) = 0.02_wp*COS(2.3_wp*REAL(i, wp))
+    END DO
+    ! the closed-form blended force: the residual of a nearly massless chain is the force
+    rho_a = 1.0e-9_wp
+    CALL probe_step(qn, 0.0_wp*vn, 0.0_wp*an, q1, L0, EA, rho_a, .FALSE., R, Kdump)
+    CALL blended_force(qn, q1, L0, EA, ALPHA_F, .TRUE., f_cap)
+    CALL blended_force(qn, q1, L0, EA, ALPHA_F, .FALSE., f_raw)
+    scale = MAXVAL(ABS(f_raw))
+    CALL require(MAXVAL(ABS(R(4:12) - f_cap(4:12))) < 1.0e-6_wp*scale, 'tangent:'//label//':residual-closed-form')
+    IF (expect_cap) THEN
+      CALL require(MAXVAL(ABS(f_cap - f_raw)) > 1.0e-2_wp*scale, 'tangent:'//label//':cap-active')
+    ELSE
+      CALL require(MAXVAL(ABS(f_cap - f_raw)) < 1.0e-12_wp*scale, 'tangent:'//label//':cap-inactive')
+    END IF
+    ! the tangent against the central difference of the residual, with inertia
+    rho_a = [2.0_wp, 3.0_wp, 1.5_wp]
+    DO p = 1, 2
+      dense = p == 2
+      CALL probe_step(qn, vn, an, q1, L0, EA, rho_a, dense, R, K)
+      DO j = 1, 9
+        qp = q1
+        qp(free(j)) = q1(free(j)) + H
+        CALL probe_step(qn, vn, an, qp, L0, EA, rho_a, dense, Rp, Kdump)
+        qp(free(j)) = q1(free(j)) - H
+        CALL probe_step(qn, vn, an, qp, L0, EA, rho_a, dense, Rm, Kdump)
+        Kfd(:, j) = (Rp(4:12) - Rm(4:12))/(2.0_wp*H)
+      END DO
+      scale = MAXVAL(ABS(K))
+      err = MAXVAL(ABS(K - Kfd))/scale
+      WRITE (*, '(A,A,A,L1,A,ES9.2)') '  tangent ', label, ' dense=', dense, ': max |K - K_fd|/max|K| = ', err
+      CALL require(err < 1.0e-6_wp, 'tangent:'//label//TRIM(MERGE(':dense ', ':banded', dense))//':fd-tangent')
+    END DO
+  END SUBROUTINE tangent_config
+
+  SUBROUTINE case_tangent_consistency()
+    ! (a) all segments taut at t_n and at the trial state: the cap is inactive
+    CALL tangent_config('taut-taut', [0.010_wp, 0.020_wp, 0.010_wp], [0.020_wp, 0.015_wp, 0.020_wp], .FALSE.)
+    ! (b) segment 1 taut at t_n and deeply slack at the trial state (release deeper than
+    !     0.75 e_n): it carries the energy gradient W_n/(e_n - e_{n+1}) instead of alpha_f T_n
+    CALL tangent_config('release-cap', [0.010_wp, 0.020_wp, 0.010_wp], [-0.050_wp, 0.015_wp, 0.020_wp], .TRUE.)
+    ! (c) segment 2 slack at both states
+    CALL tangent_config('slack-slack', [0.010_wp, -0.020_wp, 0.010_wp], [0.020_wp, -0.030_wp, 0.015_wp], .FALSE.)
+  END SUBROUTINE case_tangent_consistency
+
   SUBROUTINE case_light_cable_coarse_step()
     LOGICAL :: conv
     INTEGER :: es
@@ -296,6 +453,11 @@ CONTAINS
     CALL require(file_contains('ei0slack_audit_cfg.log', 'Warning: line 1: segment '), &
                  'audit:configuration-blend-spike-warned')
     CALL require(file_contains('ei0slack_audit_cfg.log', 'for a single step'), 'audit:spike-message')
+    ! the snaps of the light cable (axial wave crossing a segment ~160 times per step) are noted
+    CALL require(file_contains('ei0slack_audit_cfg.log', 'went from slack to taut above the initial tension'), &
+                 'audit:snap-note')
+    CALL require(file_contains('ei0slack_audit_cfg.log', 'snap-load peaks are not resolved in time'), &
+                 'audit:snap-note-text')
     ! the default force blend: no spike warning
     CALL light_cable_deck('ei0slack_audit_fb.dat', 0.1_wp, 40.0_wp, '', '-')
     CALL run_driver_logged('ei0slack_audit_fb.dat', 'ei0slack_audit_fb', 'ei0slack_audit_fb.log', ok)
