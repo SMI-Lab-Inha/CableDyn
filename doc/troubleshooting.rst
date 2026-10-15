@@ -554,8 +554,10 @@ Warnings and notes that do not stop a run
        its out-of-plane DOFs. On elements longer than half the bending length the axial force at
        touchdown or a section change oscillates into compression and makes that planar state
        unstable out of the plane, so a lateral disturbance (a cross current, a sway motion) can
-       move the line from it in a way the mesh, not the physics, decides. The results are those
-       of the deck as written. Refine the mesh by the factor the note gives, or set
+       move the line from it in a way the mesh, not the physics, decides. On a line with
+       ``ATTACHMENTS`` the test runs on the discrete equilibrium, after the attachment polish,
+       and the bending length uses the smeared weight of the buoyant stretch. The results are
+       those of the deck as written. Refine the mesh by the factor the note gives, or set
        ``adaptive_mesh True``; a line restrained in torsion is solved in 3D and refined
        automatically (see :doc:`modeling`, step 5).
    * - ``Note: line ... mesh too coarse for its bends``

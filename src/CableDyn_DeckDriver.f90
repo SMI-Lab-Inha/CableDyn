@@ -2660,7 +2660,8 @@ CONTAINS
         ', xi=', diag%axial_strain_min_xi, ', strain=', diag%axial_strain_min
       CALL fail_solve(ErrStat, ErrMsg, TRIM(em)); RETURN
     END IF
-    CALL handoff_lateral_note()
+    ! A line with ATTACHMENTS is checked on its discrete equilibrium, after the attachment polish.
+    IF (.NOT. has_att) CALL handoff_lateral_note(l0, l0_am, ea_am, ei_am, w_am, w_am, diam, dry_b, fixed_am)
     ! Build the coarse Morison arrays, then map every per-element quantity onto the
     ! refined reference-arc mesh.  This covers both global refinement and the local
     ! axial-oscillation refinement used by tensile safety.  Every child inherits the
@@ -2713,6 +2714,9 @@ CONTAINS
                                     contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
                                     endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      ! On the final mesh, with the bare weights the polished state carries; the bending-length
+      ! rule of the note uses the smeared section weights w.
+      CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, fixed_dofs)
       w = w_bare
       WRITE (note_text, '(A,I0,A,I0,A,ES10.3,A)') 'line ', ln%id, ': ', SIZE(att_node), &
         ' attachment(s) lumped at the nearest nodes (largest arc offset ', att_offset, ' m)'
@@ -3357,7 +3361,7 @@ CONTAINS
       saddle = es_p == CD_DECKDRV_OK .AND. .NOT. stable_3d
     END FUNCTION planar_current_saddle
 
-    SUBROUTINE handoff_lateral_note()
+    SUBROUTINE handoff_lateral_note(l0_ref, l0_n, ea_n, ei_n, w_n, w_rule, diam_ref, dry_ref, fixed_n)
       !! A diagnostic of the hand-off, never a change of state: a static state solved in the
       !! vertical plane of the line (out-of-plane DOFs held) starts dynamics in which only the
       !! end positions are held. On elements longer than half the bending length the axial
@@ -3366,53 +3370,59 @@ CONTAINS
       !! instead, see stability_refined_route). One stability test with the dynamic
       !! constraints, a single tangent assembly and banded factorisation, names it in a note.
       !! A test that cannot be evaluated prints nothing. Not run where another check covers
-      !! it: an in-plane current (planar_current_saddle) and a coarse pass of that current,
-      !! nor with attachments, whose static polish follows.
+      !! it: an in-plane current (planar_current_saddle) and a coarse pass of that current.
+      !! The arrays describe the state q_static is checked on: the final mesh l0_n with its
+      !! element properties and weights w_n (the bare weights after an attachment polish,
+      !! whose lumped nodal loads are dead loads and leave the tangent unchanged), diam_ref
+      !! and dry_ref on the mesh l0_ref, and the static constraints fixed_n. The bending-length
+      !! rule of the note uses the section weights w_rule (smeared over the attachments).
+      REAL(wp), INTENT(IN) :: l0_ref(:), l0_n(:), ea_n(:), ei_n(:), w_n(:), w_rule(:), diam_ref(:), dry_ref(:)
+      INTEGER, INTENT(IN) :: fixed_n(:)
       INTEGER, ALLOCATABLE :: fixed_3d(:)
       INTEGER :: nd, es_h, k, scale_h
       LOGICAL :: stable_h
       REAL(wp) :: h_max, rule
       CHARACTER(1024) :: em_h
       CHARACTER(600) :: text_h
-      IF (require_3d_static .OR. has_att .OR. saddle_kept .OR. in_plane_current()) RETURN
+      IF (require_3d_static .OR. saddle_kept .OR. in_plane_current()) RETURN
       IF (PRESENT(coarse_pass)) THEN
         IF (coarse_pass) RETURN
       END IF
-      IF (.NOT. ALLOCATED(fixed_am) .OR. .NOT. ALLOCATED(q_static)) RETURN
-      IF (SIZE(fixed_am) <= 6) RETURN
+      IF (.NOT. ALLOCATED(q_static)) RETURN
+      IF (SIZE(fixed_n) <= 6) RETURN
       nd = SIZE(q_static)
       fixed_3d = [1, 2, 3, nd - 5, nd - 4, nd - 3]
       IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
-        CALL hermite_static_stable(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, fixed_3d, &
+        CALL hermite_static_stable(l0_ref, l0_n, ea_n, ei_n, w_n, diam_ref, dry_ref, q_static, fixed_3d, &
                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
                                    endconn_mode, opts, stable_h, es_h, em_h, bathymetry=bathymetry, cur_obj=cur_obj)
       ELSE
-        CALL hermite_static_stable(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, fixed_3d, &
+        CALL hermite_static_stable(l0_ref, l0_n, ea_n, ei_n, w_n, diam_ref, dry_ref, q_static, fixed_3d, &
                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
                                    endconn_mode, opts, stable_h, es_h, em_h, cur_obj=cur_obj)
       END IF
       IF (es_h /= CD_DECKDRV_OK .OR. stable_h) RETURN
-      scale_h = bending_refine_scale(l0_am, ei_am, w_am)
+      scale_h = bending_refine_scale(l0_n, ei_n, w_rule)
       IF (scale_h >= 2) THEN
         ! The longest element and the shortest half bending length it is measured against.
         h_max = CD_ZERO
         rule = HUGE(CD_ONE)
-        DO k = 1, SIZE(l0_am)
-          IF (ei_am(k) > CD_ZERO .AND. ABS(w_am(k)) > CD_ZERO) THEN
-            h_max = MAX(h_max, l0_am(k))
-            rule = MIN(rule, 0.5_wp*(ei_am(k)/ABS(w_am(k)))**(CD_ONE/3.0_wp))
+        DO k = 1, SIZE(l0_n)
+          IF (ei_n(k) > CD_ZERO .AND. ABS(w_rule(k)) > CD_ZERO) THEN
+            h_max = MAX(h_max, l0_n(k))
+            rule = MIN(rule, 0.5_wp*(ei_n(k)/ABS(w_rule(k)))**(CD_ONE/3.0_wp))
           END IF
         END DO
         WRITE (text_h, '(A,I0,A,I0,A,F0.2,A,F0.2,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
           ' starts the dynamics from a static state solved in its vertical plane that is unstable out of '// &
-          'that plane on its mesh of ', SIZE(l0_am), ' elements, up to ', h_max, &
+          'that plane on its mesh of ', SIZE(l0_n), ' elements, up to ', h_max, &
           ' m long where half the bending length (EI/|w|)^(1/3) is ', rule, &
           ' m; refine the mesh (', scale_h, 'x meets that length) or set adaptive_mesh True '// &
           '(a line restrained in torsion is refined automatically)'
       ELSE
         WRITE (text_h, '(A,I0,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
           ' starts the dynamics from a static state solved in its vertical plane that is unstable out of '// &
-          'that plane on its mesh of ', SIZE(l0_am), ' elements, which resolves the bending length; '// &
+          'that plane on its mesh of ', SIZE(l0_n), ' elements, which resolves the bending length; '// &
           'a lateral disturbance can move the line out of the plane'
       END IF
       CALL report_note(text_h)

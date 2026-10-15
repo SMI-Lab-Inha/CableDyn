@@ -25,7 +25,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   elements longer than half the bending length the touchdown can make that state unstable out of
   the plane, which the planar solve does not see. One stability test with the dynamic
   constraints now runs at the hand-off (0.35 ms on an 87-element lazy wave, 6 ms on 2048
-  elements) and the note names the line, its mesh and the factor that meets the bending length,
+  elements; on a line with `ATTACHMENTS`, on the discrete equilibrium after the attachment
+  polish) and the note names the line, its mesh and the factor that meets the bending length,
   and recommends a finer mesh or `adaptive_mesh True`. Results do not change.
 - Torsion of finite-EI lines in coupled OpenFAST (`CompMooring = 5`) and FAST.Farm runs. The
   End A frame of a line restrained in torsion turns with the platform orientation, the torque
