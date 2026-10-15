@@ -867,7 +867,7 @@ CONTAINS
       INTEGER, INTENT(OUT) :: es_out
       CHARACTER(*), INTENT(OUT) :: em_out
       INTEGER :: i, ix, iy, iz, a, b
-      REAL(wp) :: z_floor, dfdx, dfdy, gap, tangent, fvec(3), jac(3, 3), normal_i, curv(3)
+      REAL(wp) :: z_floor, dfdx, dfdy, gap, tangent, fvec(3), jac(3, 3), normal_i, curv(3), tang_n
 
       f_contact = CD_ZERO
       es_out = 0
@@ -901,8 +901,17 @@ CONTAINS
         CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, kn(i), fvec, jac, curvature=curv)
         f_contact(ix:iz) = fvec
         ! on a slope the capacity follows the magnitude of the normal reaction (its
-        ! dependence on the position is left out of the tangent)
-        IF (friction_active) CALL add_friction(qe, f_contact, add_tangent, i, NORM2(fvec), CD_ZERO)
+        ! dependence on the position is left out of the tangent); in a crease band the
+        ! elastic force also carries the curvature term of the potential, so the capacity
+        ! is the scalar normal law there, as on the Hermite path and in the dynamics
+        IF (friction_active) THEN
+          IF (ANY(ABS(curv) > CD_ZERO)) THEN
+            CALL CD_Seabed_Normal_Law(gap/SQRT(CD_ONE + dfdx*dfdx + dfdy*dfdy), kn(i), normal_i, tang_n)
+          ELSE
+            normal_i = NORM2(fvec)
+          END IF
+          CALL add_friction(qe, f_contact, add_tangent, i, normal_i, CD_ZERO)
+        END IF
         IF (.NOT. add_tangent) CYCLE
         DO b = 1, 3
           DO a = 1, 3
@@ -1268,8 +1277,14 @@ CONTAINS
         RETURN
       END IF
       IF (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO .OR. ANY(ABS(curv) > CD_ZERO)) THEN
-        CALL CD_Seabed_Normal_Contact(z_floor - q(3*i), dfdx, dfdy, seabed_kn(i), fvec, jac, curvature=curv)
-        normal = NORM2(fvec)
+        IF (ANY(ABS(curv) > CD_ZERO)) THEN
+          ! a crease band: the scalar normal law, as in the static residual
+          CALL CD_Seabed_Normal_Law((z_floor - q(3*i))/SQRT(CD_ONE + dfdx*dfdx + dfdy*dfdy), seabed_kn(i), &
+                                    normal, tangent)
+        ELSE
+          CALL CD_Seabed_Normal_Contact(z_floor - q(3*i), dfdx, dfdy, seabed_kn(i), fvec, jac)
+          normal = NORM2(fvec)
+        END IF
       ELSE
         CALL CD_Seabed_Normal_Law(z_floor - q(3*i), seabed_kn(i), normal, tangent)
       END IF
