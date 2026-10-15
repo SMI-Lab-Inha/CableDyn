@@ -3144,7 +3144,9 @@ CONTAINS
         END IF
         iters = iters + it_r
         IF (es_r == CD_HCSTAT_OK) THEN
-          IF (k_tol > 1) tolerance_note = .TRUE.
+          ! reported whenever the accepted tolerance is above the target, also when the outer
+          ! tolerance had already been relaxed before this polish
+          IF (tol_r(k_tol) > static_tol_target) tolerance_note = .TRUE.
           EXIT
         END IF
       END DO
