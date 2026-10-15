@@ -2023,6 +2023,9 @@ CONTAINS
       END IF
     END IF
     route_pass: DO pass = 1, 3
+      ! set by the catenary-continuation route only: a state the sequenced route produced
+      ! was not walked
+      primary_walked = .FALSE.
       IF (primary_done) EXIT route_pass
       ! A planar equilibrium that is unstable out of its plane is not repeated by the
       ! mesh-sequenced route (also planar): the symmetry-breaking pass follows.
@@ -3282,6 +3285,7 @@ CONTAINS
       LOGICAL :: stab_c, done_r
       CHARACTER(320) :: note_c
       CHARACTER(1024) :: why_r
+      LOGICAL :: tol_c
       l0_c = l0_am
       ea_c = ea_am
       ei_c = ei_am
@@ -3295,6 +3299,7 @@ CONTAINS
       ne_c = stability_from_ne
       stab_c = stability_refined
       note_c = compression_note
+      tol_c = tolerance_note
       CALL sequenced_refined_polish(done_r, why_r)
       IF (done_r) THEN
         IF (.NOT. planar_current_saddle()) RETURN
@@ -3312,6 +3317,7 @@ CONTAINS
       stability_from_ne = ne_c
       stability_refined = stab_c
       compression_note = note_c
+      tolerance_note = tol_c
     END SUBROUTINE saddle_refined_retry
 
     SUBROUTINE symmetric_current_polish(done)
