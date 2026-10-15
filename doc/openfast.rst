@@ -339,8 +339,9 @@ without an auxiliary process:
   fairlead-side segment of ``EI = 0`` lines and finite-EI cables, the segment at the line's end
   on a host-driven point, or at the ``NodeB`` written in the deck when both or neither ends are
   (:doc:`driver_format`, CONTROL). On a finite-EI cable the command scales every cable element
-  of that segment, and a command beyond half or twice the segment's initial length stops the run
-  with a message that names the line. FAST.Farm decks reject CONTROL.
+  of that segment. On both kinds a command outside MoorDyn-F's bounds, from minus half to plus
+  one initial length of that segment, stops the run with a message that names the line, as it
+  stops MoorDyn-F. FAST.Farm decks reject CONTROL.
 * **Rigid6 bodies, Point3 bodies, and rigid rods** are translated at the deck boundary; their
   supported loads and restrictions in coupled runs are listed in :doc:`capabilities`. Free
   Rigid6 bodies, free rods and pinned rods start at their static equilibrium with the platform

@@ -992,10 +992,11 @@ only host-driven end at `NodeA`, is controlled at that end. The length is held o
 Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment paid out at
 constant strain carries no damping tension.
 
-- On an `EI = 0` line the segment is the end element on that side. A command that makes its
-  length zero or negative is rejected. A command above one initial segment length, or below minus
-  half of it, prints a one-time warning and is applied unclamped (MoorDyn-F stops at these
-  bounds).
+- On an `EI = 0` line the segment is the end element on that side, of initial length S. A command
+  outside MoorDyn-F's bounds, −S/2 ≤ `DeltaL` ≤ S (an increase of more than one segment length or
+  a reduction of more than half of one), stops the run with a message that names the line, the
+  command and the bound, as MoorDyn-F stops there. S is the element's own initial length, which
+  is MoorDyn-F's `UnstrLen/N` on a line of one section.
 - On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
   is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
   its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that
@@ -1005,8 +1006,9 @@ constant strain carries no damping tension.
   tributary lengths follow the new lengths; `BA` keeps its initial resolution. The step blends
   the force of the committed state, taken at the lengths of the previous advance, with the force
   at the new lengths, so a length ramp is followed without lag at any `rhoInf`. A command outside
-  −S/2 ≤ `DeltaL` ≤ S stops the run with a message that names the line, because the cable mesh
-  was resolved at the initial lengths. A cable restrained in torsion cannot be controlled (the
+  the same bounds, −S/2 ≤ `DeltaL` ≤ S (each element scaled within [0.5, 2] of its initial length),
+  stops the run with a message that names the line; the cable mesh was also resolved at the
+  initial lengths. A cable restrained in torsion cannot be controlled (the
   coupled route rejects torsion stiffness in END CONNECTIONS).
 
 The host input arrays are sized to the highest channel id.

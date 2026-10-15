@@ -2246,8 +2246,10 @@ are host-driven, it acts on the segment at the ``NodeB`` written in the deck (Mo
 segment :math:`N` at ``AttachB``). On an ``EI = 0`` line the commanded :math:`\Delta L` and
 :math:`\Delta\dot L` change the unstretched length and its rate of that end element,
 :math:`L_0 = L_{0,\text{base}} + \Delta L`; the structural mass and the point mass shares are
-updated consistently, while ``BA`` keeps its initial resolution. Commands that would make the
-element length non-positive are rejected.
+updated consistently, while ``BA`` keeps its initial resolution. Commands outside MoorDyn-F's
+bounds, :math:`-L_{0,\text{base}}/2 \le \Delta L \le L_{0,\text{base}}`, are rejected, as
+MoorDyn-F rejects them; a finite-EI cable takes the same bounds as a scaling of its segment
+within :math:`[0.5, 2]`.
 
 On an ``EI = 0`` line the length is applied before a step and held over it, and the
 committed state keeps the lengths and rates it was reached with, :math:`L_{0,c}` and

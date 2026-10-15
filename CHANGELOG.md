@@ -331,6 +331,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   0.63 m against 0.64 m converged, where the linear interpolation gave 0.23 m. On the
   `EI = 0` chain of `examples/chain_range_tdp.dat` the largest step falls from 2.59 m to 1.33 m.
   The TDP now lies on the contact-onset height, and `TDP<L>Grd` uses the same location.
+- Active tensioning (`CONTROL`) of an `EI = 0` line now stops the run when a command leaves
+  MoorDyn-F's bounds, as MoorDyn-F does: an increase of the controlled segment by more than its
+  initial length, or a reduction by more than half of it. The message names the channel, the
+  line, the command and the segment length. A command beyond these bounds had printed a one-time
+  warning and been applied. The bounds are those a finite-EI cable already enforced (a scaling
+  of its segment within [0.5, 2]), so both line kinds now share them, and every row is checked
+  before any line changes.
 - Faster wave kinematics of directional and multi-train seas (`wavetrain` rows, spectral
   `waves` rows, `WaveSpreading`). Each component's phase cosine is now computed once for the
   surface elevation and the kinematics, and its depth profile with one exponential instead of
