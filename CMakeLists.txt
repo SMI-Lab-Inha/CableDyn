@@ -2025,6 +2025,16 @@ add_test(NAME driver_lazy_wave_torsion_coarse_refined
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_lazy_wave_torsion_coarse_refined PROPERTIES
   LABELS "fortran;driver;integration;static;torsion")
+# The same deck with the mesh-sequenced route first: its state is prolongated to the refined mesh.
+add_test(NAME driver_lazy_wave_torsion_coarse_sequenced
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_torsion_coarse_sequenced.dat|coarse"
+    "-DONCE=failed the stability test with elements longer than half the bending length"
+    "-DMUST_MATCH=stable on the refined mesh of 348 elements;torsion solved"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_lazy_wave_torsion_coarse_sequenced
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_lazy_wave_torsion_coarse_sequenced PROPERTIES
+  LABELS "fortran;driver;integration;static;torsion")
 
 if(WIN32 AND CABLEDYN_RUNTIME_DLLS)
   add_test(

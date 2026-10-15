@@ -97,9 +97,10 @@ element midpoints, show these spikes and negative values near touchdown and at s
 they shrink as the mesh is refined, and the element-mean force (what enters equilibrium, see
 ``tensile_safety`` in :doc:`theory`) is far smoother. The compressed Gauss points also lower the
 out-of-plane stiffness: a line solved in 3D (restrained in torsion, or with an end connection
-direction or a current out of its vertical plane) can read as an unstable equilibrium on such a mesh. The static solve
-then repeats itself on the refined mesh and reports it in a note (see :doc:`troubleshooting`);
-meshing to the rule above avoids the extra solve.
+direction or a current out of its vertical plane) can read as an unstable equilibrium on such a
+mesh. The static solve then refines that state to the rule above, whichever route reached it and
+whether or not an adaptive refinement preceded, and reports it in a note (see
+:doc:`troubleshooting`); meshing to the rule avoids the extra solve.
 
 Perform a mesh study on engineering observables, not node identity. At minimum compare endpoint
 tension and the peak/position of curvature or touchdown response. Refine until the change is below

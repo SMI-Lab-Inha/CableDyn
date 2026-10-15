@@ -107,11 +107,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   change no longer stops with "the converged state is an unstable equilibrium". The stable
   equilibrium had read as a saddle: elements longer than the bending length cannot follow
   the bend, the axial force at their Gauss points oscillates into compression, and that
-  compression lowered the out-of-plane stiffness until the stability test failed. The
-  catenary-continuation route is now repeated on the mesh that resolves the bending length,
-  as for a failed polish, and a note names both meshes. An equilibrium that is still unstable
-  on the refined mesh stops as before. Decks that solved before give the same results.
-  `tests/data/lazy_wave_touchdown_torsion_coarse.dat` is the regression case.
+  compression lowered the out-of-plane stiffness until the stability test failed. Such a
+  state is now refined, from the mesh the route returned, to the mesh whose elements are at
+  most half the bending length: the catenary-continuation route is repeated there, as for a
+  failed polish, and the state of the mesh-sequenced route is prolongated there and polished.
+  This also covers a mesh that an adaptive or safety refinement left too coarse; a mesh that
+  already meets the rule is not refined again. A note names both meshes. An equilibrium that
+  is still unstable on the refined mesh stops as before. Decks that solved before give the
+  same results. `tests/data/lazy_wave_touchdown_torsion_coarse.dat` is the regression case,
+  solved with each route first.
 
 ## [0.1.1] - 2026-10-09
 

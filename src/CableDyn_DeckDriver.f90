@@ -1543,7 +1543,8 @@ CONTAINS
     ! A planar equilibrium in a current that is a saddle out of its plane (see route_pass).
     REAL(wp), ALLOCATABLE :: l0_saddle(:), ea_saddle(:), ei_saddle(:), w_saddle(:), q_saddle(:), curv_saddle(:)
     INTEGER, ALLOCATABLE :: fixed_saddle(:)
-    LOGICAL :: saddle_tol_note, saddle_kink
+    LOGICAL :: saddle_tol_note, saddle_kink, saddle_stab
+    INTEGER :: saddle_stab_ne
     REAL(wp) :: saddle_res
     CHARACTER(320) :: saddle_notes
     LOGICAL :: primary_done, primary_inadmissible, tolerance_note, stable, kink_refined, sequence_done
@@ -1552,6 +1553,8 @@ CONTAINS
     CHARACTER(1024) :: bow_msg, refine_msg
     ! Set when the deck-mesh equilibrium failed the stability test and the refined one passed.
     LOGICAL :: stability_refined
+    ! Elements of the mesh whose equilibrium failed the stability test before that refinement.
+    INTEGER :: stability_from_ne
     LOGICAL :: tensile_error
     CHARACTER(400) :: note_text
     CHARACTER(512) :: limit_text
@@ -1996,11 +1999,14 @@ CONTAINS
     tolerance_note = .FALSE.
     kink_refined = .FALSE.
     stability_refined = .FALSE.
+    stability_from_ne = 0
     sym_broken = .FALSE.
     planar_unstable = .FALSE.
     walk_rejected = .FALSE.
     saddle_tol_note = .FALSE.
     saddle_kink = .FALSE.
+    saddle_stab = .FALSE.
+    saddle_stab_ne = 0
     saddle_res = CD_ZERO
     saddle_notes = ''
     ! In a current the traced path can end at a fold or a pitchfork of the planar branch
@@ -2348,6 +2354,13 @@ CONTAINS
             IF (.NOT. stable) THEN
               sequence_done = .FALSE.
               sequence_msg = 'the converged state is an unstable equilibrium (tangent stiffness not positive definite)'
+              ! As for the catenary-continuation route below, on the mesh that resolves the
+              ! bending length; the sequenced state is prolongated there, not re-solved.
+              IF (bending_refine_scale(l0_am, ei_am, w_am) >= 2) THEN
+                CALL sequenced_refined_polish(sequence_done, refine_msg)
+                IF (.NOT. sequence_done .AND. LEN_TRIM(refine_msg) > 0) &
+                  sequence_msg = TRIM(sequence_msg)//'; '//TRIM(short_message(refine_msg, 240))
+              END IF
             END IF
           END IF
         ELSE
@@ -2408,10 +2421,12 @@ CONTAINS
             IF (.NOT. stable) THEN
               primary_done = .FALSE.
               primary_msg = 'the converged state is an unstable equilibrium (tangent stiffness not positive definite)'
-              ! An under-resolved deck mesh can turn a stable equilibrium into a discrete saddle
-              ! (see stability_refine in hermite_static_primary): the route is repeated once on
-              ! the mesh that resolves the bending length, and its state audited the same way.
-              IF (.NOT. primary_walked .AND. SIZE(l0_am) == SIZE(l0)) THEN
+              ! A mesh longer than half the bending length can turn a stable equilibrium into a
+              ! discrete saddle (see stability_refine in hermite_static_primary): the route is
+              ! repeated once on the mesh refined from the returned one to resolve that length,
+              ! and its state audited the same way. A returned mesh that already resolves it,
+              ! adaptively refined or not, is not refined again: its instability stands.
+              IF (.NOT. primary_walked .AND. bending_refine_scale(l0_am, ei_am, w_am) >= 2) THEN
                 CALL stability_refined_route(primary_done, refine_msg)
                 IF (.NOT. primary_done .AND. LEN_TRIM(refine_msg) > 0) &
                   primary_msg = TRIM(primary_msg)//'; '//TRIM(short_message(refine_msg, 240))
@@ -2474,6 +2489,8 @@ CONTAINS
           saddle_notes = compression_note
           saddle_tol_note = tolerance_note
           saddle_kink = kink_refined
+          saddle_stab = stability_refined
+          saddle_stab_ne = stability_from_ne
           saddle_res = res
           CALL MOVE_ALLOC(l0_am, l0_saddle)
           CALL MOVE_ALLOC(ea_am, ea_saddle)
@@ -2485,6 +2502,7 @@ CONTAINS
           compression_note = ''
           tolerance_note = .FALSE.
           kink_refined = .FALSE.
+          stability_refined = .FALSE.
           IF (ALLOCATED(sequence_iters)) DEALLOCATE (sequence_iters)
           IF (ALLOCATED(q_sequence)) DEALLOCATE (q_sequence)
           IF (ALLOCATED(q_coupled_tol)) DEALLOCATE (q_coupled_tol)
@@ -2514,6 +2532,8 @@ CONTAINS
       compression_note = saddle_notes
       tolerance_note = saddle_tol_note
       kink_refined = saddle_kink
+      stability_refined = saddle_stab
+      stability_from_ne = saddle_stab_ne
       res = saddle_res
       primary_done = .TRUE.
       saddle_kept = .TRUE.
@@ -2569,10 +2589,17 @@ CONTAINS
         CALL report_note('line '//TRIM(int_to_str(ln%id))//': '//TRIM(compression_note))
       END IF
     END IF
-    IF (stability_refined .AND. primary_done .AND. SIZE(l0_am) /= SIZE(l0)) THEN
-      WRITE (note_text, '(A,I0,A,I0,A,I0,A)') 'line ', ln%id, ': the equilibrium on the deck mesh (', SIZE(l0), &
-        ' elements) failed the stability test with elements longer than half the bending length; '// &
-        'stable on the refined mesh of ', SIZE(l0_am), ' elements'
+    IF (stability_refined .AND. (sequence_done .OR. primary_done)) THEN
+      IF (stability_from_ne == SIZE(l0)) THEN
+        WRITE (note_text, '(A,I0,A,I0,A,I0,A)') 'line ', ln%id, ': the equilibrium on the deck mesh (', SIZE(l0), &
+          ' elements) failed the stability test with elements longer than half the bending length; '// &
+          'stable on the refined mesh of ', SIZE(l0_am), ' elements'
+      ELSE
+        WRITE (note_text, '(A,I0,A,I0,A,I0,A,I0,A)') 'line ', ln%id, ': the equilibrium on the mesh of ', &
+          stability_from_ne, ' elements (refined from the deck mesh of ', SIZE(l0), ') failed the stability '// &
+          'test with elements longer than half the bending length; stable on the refined mesh of ', SIZE(l0_am), &
+          ' elements'
+      END IF
       CALL report_note(note_text)
     END IF
     IF (kink_refined .AND. primary_done) THEN
@@ -2950,39 +2977,156 @@ CONTAINS
     END SUBROUTINE bow_route
 
     SUBROUTINE stability_refined_route(done, why)
-      !! The catenary-continuation route repeated on the mesh that resolves the bending length
-      !! (hermite_static_primary with stability_refine), after its deck-mesh equilibrium failed
-      !! the stability test; the refined state is audited like the primary route's. done is
-      !! set with the state in the *_am outputs; otherwise why says what stopped it.
+      !! The catenary-continuation route repeated on the mesh that resolves the bending length,
+      !! refined from the mesh the route returned (the deck mesh, or a refinement of it that is
+      !! still too coarse), after that state failed the stability test (hermite_static_primary
+      !! with stability_refine). done is set with the audited, stable refined state in the *_am
+      !! outputs; otherwise why says what stopped it.
       LOGICAL, INTENT(OUT) :: done
       CHARACTER(*), INTENT(OUT) :: why
+      REAL(wp), ALLOCATABLE :: l0_s(:), ea_s(:), ei_s(:), w_s(:), diam_s(:), dry_s(:)
+      INTEGER, ALLOCATABLE :: fixed_s(:)
       INTEGER :: es_r
       CHARACTER(1024) :: em_r
-      LOGICAL :: inadm_r, walked_r, tol_r, kink_r, stable_r
+      LOGICAL :: inadm_r, walked_r, tol_r, kink_r
       done = .FALSE.
       why = ''
+      stability_from_ne = SIZE(l0_am)
+      ! The returned mesh is the input of the repetition, whose outputs overwrite the *_am arrays.
+      CALL MOVE_ALLOC(l0_am, l0_s)
+      CALL MOVE_ALLOC(ea_am, ea_s)
+      CALL MOVE_ALLOC(ei_am, ei_s)
+      CALL MOVE_ALLOC(w_am, w_s)
+      CALL MOVE_ALLOC(fixed_am, fixed_s)
+      diam_s = diam_on(l0, l0_s, diam)
+      dry_s = dry_b
+      IF (SIZE(l0_s) /= SIZE(l0)) CALL remap_elem_by_reference_arc(dry_s, l0, l0_s)
       IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
-        CALL hermite_static_primary(anchor, fairlead, l0, ea, ei, w, diam, dry_b, fixed_dofs, contact_enabled, &
-                                    contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, opts, &
-                                    static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, fixed_am, &
-                                    applied_scale, diag, res, iters, es_r, em_r, inadm_r, tol_r, kink_r, &
+        CALL hermite_static_primary(anchor, fairlead, l0_s, ea_s, ei_s, w_s, diam_s, dry_s, fixed_s, &
+                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
+                                    endconn_mode, opts, static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, &
+                                    fixed_am, applied_scale, diag, res, iters, es_r, em_r, inadm_r, tol_r, kink_r, &
                                     bathymetry=bathymetry, cur_obj=cur_obj, walked=walked_r, stability_refine=.TRUE.)
       ELSE
-        CALL hermite_static_primary(anchor, fairlead, l0, ea, ei, w, diam, dry_b, fixed_dofs, contact_enabled, &
-                                    contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, opts, &
-                                    static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, fixed_am, &
-                                    applied_scale, diag, res, iters, es_r, em_r, inadm_r, tol_r, kink_r, &
+        CALL hermite_static_primary(anchor, fairlead, l0_s, ea_s, ei_s, w_s, diam_s, dry_s, fixed_s, &
+                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
+                                    endconn_mode, opts, static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, &
+                                    fixed_am, applied_scale, diag, res, iters, es_r, em_r, inadm_r, tol_r, kink_r, &
                                     cur_obj=cur_obj, walked=walked_r, stability_refine=.TRUE.)
       END IF
       IF (es_r /= CD_HCSTAT_OK) THEN
         why = em_r
         RETURN
       END IF
-      ! A walked refined state is not substituted for an unwalked deck-mesh one.
+      ! A walked refined state is not substituted for an unwalked one.
       IF (walked_r) THEN
         why = 'the refined route reached its state by walking the anchor'
         RETURN
       END IF
+      CALL audit_refined_state(done, why)
+      IF (done) tolerance_note = tol_r
+    END SUBROUTINE stability_refined_route
+
+    SUBROUTINE sequenced_refined_polish(done, why)
+      !! The mesh-sequenced route's counterpart of stability_refined_route: its state, which
+      !! failed the stability test on a mesh longer than half the bending length, is carried to
+      !! the mesh that resolves that length by cubic-Hermite prolongation and polished there, as
+      !! the route's own refinement does, so the branch the sequencing selected is kept and the
+      !! fine mesh is never cold-started. done is set with the audited, stable refined state in
+      !! the *_am outputs; otherwise why says what stopped it.
+      LOGICAL, INTENT(OUT) :: done
+      CHARACTER(*), INTENT(OUT) :: why
+      REAL(wp), ALLOCATABLE :: l0_r(:), q_r(:), ea_r(:), ei_r(:), w_r(:), diam_r(:), dry_r(:)
+      INTEGER, ALLOCATABLE :: fixed_r(:)
+      INTEGER :: es_r, it_r, scale, k, parent
+      CHARACTER(1024) :: em_r
+      done = .FALSE.
+      why = ''
+      stability_from_ne = SIZE(l0_am)
+      scale = bending_refine_scale(l0_am, ei_am, w_am)
+      IF (scale < 2) RETURN
+      CALL CD_HermiteCable_Refine_Mesh(l0_am, q_static, fixed_am, scale, l0_r, q_r, fixed_r, es_r, em_r, &
+                                       inherit_dofs=[2, 5])
+      IF (es_r /= CD_HCSTAT_OK) THEN
+        why = em_r
+        RETURN
+      END IF
+      ALLOCATE (ea_r(SIZE(l0_r)), ei_r(SIZE(l0_r)), w_r(SIZE(l0_r)))
+      DO k = 1, SIZE(l0_r)
+        parent = (k - 1)/scale + 1
+        ea_r(k) = ea_am(parent)
+        ei_r(k) = ei_am(parent)
+        w_r(k) = w_am(parent)
+      END DO
+      diam_r = diam_on(l0, l0_r, diam)
+      dry_r = dry_b
+      CALL remap_elem_by_reference_arc(dry_r, l0, l0_r)
+      IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+        CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
+                                                   8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
+                                                   CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
+                                                   q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
+                                                   es_r, em_r, contact_diameter=diam_r, contact_kbot=opts%kbot, &
+                                                   bathymetry=bathymetry, contact_frame_cs=frame_cs, &
+                                                   initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
+                                                   axial_quadrature_order=opts%axial_quadrature_order, &
+                                                   bending_quadrature_order=opts%bending_quadrature_order, &
+                                                   require_tensile=tensile_error, &
+                                                   compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                                   refine_non_axial=opts%adaptive_mesh, &
+                                                   endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                                   endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                                   dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+      ELSE IF (contact_enabled) THEN
+        CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
+                                                   8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
+                                                   CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
+                                                   q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
+                                                   es_r, em_r, contact_diameter=diam_r, contact_kbot=opts%kbot, &
+                                                   contact_frame_cs=frame_cs, &
+                                                   initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
+                                                   axial_quadrature_order=opts%axial_quadrature_order, &
+                                                   bending_quadrature_order=opts%bending_quadrature_order, &
+                                                   require_tensile=tensile_error, &
+                                                   compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                                   refine_non_axial=opts%adaptive_mesh, &
+                                                   endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                                   endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                                   dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+      ELSE
+        CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
+                                                   8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
+                                                   CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
+                                                   q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
+                                                   es_r, em_r, &
+                                                   initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
+                                                   axial_quadrature_order=opts%axial_quadrature_order, &
+                                                   bending_quadrature_order=opts%bending_quadrature_order, &
+                                                   require_tensile=tensile_error, &
+                                                   compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                                   refine_non_axial=opts%adaptive_mesh, &
+                                                   endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                                   endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                                   dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+      END IF
+      iters = iters + it_r
+      IF (es_r /= CD_HCSTAT_OK) THEN
+        WRITE (why, '(A,I0,A)') 'on the ', scale, 'x refined mesh: '
+        why = TRIM(why)//' '//TRIM(em_r)
+        RETURN
+      END IF
+      CALL audit_refined_state(done, why)
+    END SUBROUTINE sequenced_refined_polish
+
+    SUBROUTINE audit_refined_state(done, why)
+      !! The audit of a state refined after a failed stability test (stability_refined_route,
+      !! sequenced_refined_polish): the physical-branch audit and the stability test of the
+      !! routes, on the refined mesh. Sets stability_refined when both pass.
+      LOGICAL, INTENT(OUT) :: done
+      CHARACTER(*), INTENT(OUT) :: why
+      INTEGER :: es_r
+      CHARACTER(1024) :: em_r
+      LOGICAL :: stable_r
       CALL audit_hermite_static(l0_am, q_static, ea_am, ei_am, w_am, diam_on(l0, l0_am, diam), endconn_mode, &
                                 done, why, compression_note)
       IF (.NOT. done) THEN
@@ -3007,13 +3151,12 @@ CONTAINS
         WRITE (why, '(A,I0,A)') 'still unstable on the refined mesh of ', SIZE(l0_am), ' elements'
       END IF
       IF (done) THEN
-        tolerance_note = tol_r
         stability_refined = .TRUE.
         why = ''
       ELSE
         compression_note = ''
       END IF
-    END SUBROUTINE stability_refined_route
+    END SUBROUTINE audit_refined_state
 
     SUBROUTINE still_water_compression(text)
       !! On a failed solve in a current: whether the same line without the current is
@@ -3704,6 +3847,27 @@ CONTAINS
     END DO
   END SUBROUTINE attachment_static_drag
 
+  PURE INTEGER FUNCTION bending_refine_scale(l0, ei, w) RESULT(scale)
+    !! The power-of-two refinement factor (at most CD_HC_REFINE_CAP, and at most
+    !! REFINED_MAX_ELEMENTS elements after it) that brings every element of a finite-EI mesh to
+    !! at most half its bending length (EI/|w|)^(1/3); 1 when the mesh already meets it. The
+    !! resolution rule of the refined repetition of the static route and of the stability retry.
+    REAL(wp), INTENT(IN) :: l0(:), ei(:), w(:)
+    ! Element cap of a refined repetition of the static route.
+    INTEGER, PARAMETER :: REFINED_MAX_ELEMENTS = 4096
+    REAL(wp) :: need
+    INTEGER :: k
+    need = CD_ONE
+    DO k = 1, SIZE(l0)
+      IF (ei(k) > CD_ZERO .AND. ABS(w(k)) > CD_ZERO) &
+        need = MAX(need, l0(k)/(0.5_wp*(ei(k)/ABS(w(k)))**(CD_ONE/3.0_wp)))
+    END DO
+    scale = 1
+    DO WHILE (REAL(scale, wp) < need .AND. scale < CD_HC_REFINE_CAP .AND. SIZE(l0)*2*scale <= REFINED_MAX_ELEMENTS)
+      scale = 2*scale
+    END DO
+  END FUNCTION bending_refine_scale
+
   RECURSIVE SUBROUTINE hermite_static_primary(anchor, fairlead, l0, ea, ei, w, diam, dry_b, fixed_dofs, &
                                               contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, &
                                               endconn_mode, opts, static_tol, l0_am, ea_am, ei_am, w_am, q_static, &
@@ -3746,13 +3910,14 @@ CONTAINS
     !! refined-mesh polish of its (unresolved) solution: the whole route is then repeated
     !! once on a uniformly refined mesh whose elements are at most half the local bending
     !! length (refined_pass marks that repetition), which also sets kink_refined.
-    !! stability_refine (optional): run that refined repetition directly. The caller passes it
-    !! when the equilibrium on the deck mesh failed the stability test: the pointwise axial
+    !! stability_refine (optional): run that refined repetition directly, refined from l0. The
+    !! caller passes it, with l0 the mesh the route returned (the deck mesh or a refinement of
+    !! it), when the equilibrium on that mesh failed the stability test: the pointwise axial
     !! resultant of a stiff-EA element longer than half the bending length oscillates about
     !! its element mean, and its compressed Gauss points lower the geometric stiffness of the
     !! transverse DOFs, so an under-resolved touchdown or section change can read as a saddle.
     !! A physical instability persists on the refined mesh; this artefact does not. ErrStat
-    !! is CD_HCSTAT_NOCONVERGE when the deck mesh already resolves the bending length or the
+    !! is CD_HCSTAT_NOCONVERGE when l0 already resolves the bending length or the
     !! refined route fails (ErrMsg says which).
     REAL(wp), INTENT(IN) :: anchor(3), fairlead(3), l0(:), ea(:), ei(:), w(:), diam(:), dry_b(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
@@ -3791,8 +3956,6 @@ CONTAINS
     ! Continuation floor on a mesh finer than sqrt(EI/EA) (see budget_cont).
     INTEGER, PARAMETER :: FINE_MIN_ITERATIONS = 20
     INTEGER, PARAMETER :: NFIT = 33
-    ! Element cap of the refined repetition of the route.
-    INTEGER, PARAMETER :: REFINED_MAX_ELEMENTS = 4096
     INTEGER :: nnode, ne, i, es, cont_iters, polish_iters, budget_cont, cmode, k_walk
     ! Anchor retreats tried for a line too long for its span (see seed_walk).
     INTEGER, PARAMETER :: WALK_MAX_TRIES = 6
@@ -3825,10 +3988,10 @@ CONTAINS
       IF (stability_refine) THEN
         ! refined_restart sets ErrStat only on success and appends why a refined mesh failed.
         ErrStat = CD_HCSTAT_NOCONVERGE
-        ErrMsg = 'unstable on the deck mesh'
+        ErrMsg = 'unstable on the returned mesh'
         CALL refined_restart()
-        IF (ErrStat /= CD_HCSTAT_OK .AND. TRIM(ErrMsg) == 'unstable on the deck mesh') &
-          ErrMsg = 'unstable on the deck mesh, which already resolves the bending length'
+        IF (ErrStat /= CD_HCSTAT_OK .AND. TRIM(ErrMsg) == 'unstable on the returned mesh') &
+          ErrMsg = 'unstable on the returned mesh, which already resolves the bending length'
         RETURN
       END IF
     END IF
@@ -4526,21 +4689,11 @@ CONTAINS
       !! refined equilibrium is returned in the *_am outputs like an adaptive refinement.
       REAL(wp), ALLOCATABLE :: l0_r(:), q_r(:), q_ref_r(:), ea_r(:), ei_r(:), w_r(:), diam_r(:), dry_r(:)
       INTEGER, ALLOCATABLE :: fixed_r(:)
-      REAL(wp) :: need
       INTEGER :: scale, scale_need, k, es_r, parent
       CHARACTER(512) :: em_r
       LOGICAL :: inadm_r, walked_sub
       IF (PRESENT(refined_pass) .OR. fold) RETURN
-      need = CD_ONE
-      DO k = 1, ne
-        IF (ei(k) > CD_ZERO .AND. ABS(w(k)) > CD_ZERO) &
-          need = MAX(need, l0(k)/(0.5_wp*(ei(k)/ABS(w(k)))**(CD_ONE/3.0_wp)))
-      END DO
-      scale_need = 1
-      DO WHILE (REAL(scale_need, wp) < need .AND. scale_need < CD_HC_REFINE_CAP .AND. &
-                ne*2*scale_need <= REFINED_MAX_ELEMENTS)
-        scale_need = 2*scale_need
-      END DO
+      scale_need = bending_refine_scale(l0, ei, w)
       IF (scale_need < 2) RETURN
       ! The needed factor first; when its continuation exhausts its element-scaled iteration
       ! budget, the coarser powers of two down to 2x (a halved mesh, still resolving the

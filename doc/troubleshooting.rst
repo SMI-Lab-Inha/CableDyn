@@ -469,10 +469,11 @@ but a few geometries are genuinely hard:
   buckled arch or an inverted fold. A coarse mesh can also produce it. On elements longer than
   half the bending length :math:`(EI/|w|)^{1/3}` the axial force oscillates into compression at
   Gauss points near touchdown or a section change, which lowers the out-of-plane stiffness of a
-  line solved in 3D. The catenary-continuation route therefore repeats itself on a mesh that
-  resolves the bending length before it fails. If the message names that refined mesh as well
-  (``still unstable on the refined mesh``), the instability is physical: check the layout, the
-  line length and the buoyancy.
+  line solved in 3D. Each static route therefore refines such a state to a mesh that resolves
+  the bending length before it fails: the catenary-continuation route is repeated there, and
+  the mesh-sequenced state is prolongated and polished there. If the message names that refined
+  mesh as well (``still unstable on the refined mesh``), the instability is physical: check the
+  layout, the line length and the buoyancy.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
   from the catenary/arch seed.
@@ -539,9 +540,11 @@ Warnings and notes that do not stop a run
        and names the mesh. Coarsen ``NumSegs`` to at least the length the note gives.
    * - ``Note: line ...: the equilibrium on the deck mesh (... elements) failed the stability test
        with elements longer than half the bending length; stable on the refined mesh of ...
-       elements``
-     - on the deck mesh the static state read as unstable, an artefact of elements longer than
-       half the bending length :math:`(EI/|w|)^{1/3}` (see :doc:`modeling`, step 5). The run uses
+       elements`` (or ``the equilibrium on the mesh of ... elements (refined from the deck mesh of
+       ...) failed ...``)
+     - on the deck mesh, or on a refinement of it that was still too coarse, the static state
+       read as unstable, an artefact of elements longer than half the bending length
+       :math:`(EI/|w|)^{1/3}` (see :doc:`modeling`, step 5). The run uses
        the refined mesh, statics and dynamics alike, and its outputs have that many segments.
        Mesh the touchdown and section changes to that rule to keep the deck mesh.
    * - ``Note: line ... mesh too coarse for its bends``
