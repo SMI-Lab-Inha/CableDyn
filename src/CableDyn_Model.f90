@@ -1345,9 +1345,11 @@ CONTAINS
     ! march starts from rest. Without it the static drag uses fluid_velocity as given.
     REAL(wp), INTENT(IN), OPTIONAL :: current_profile_z(:), current_profile_velocity(:, :)
     ! Static seabed friction (with seabed_mu > 0 on a seabed): the policy
-    ! (CD_STATIC_FRICTION_AS_LAID, the default, or CD_STATIC_FRICTION_NONE), the lay azimuth
-    ! [rad, from global +x toward +y; default: the horizontal anchor -> fairlead direction,
-    ! +x for a vertical chord] and the as-laid effective tension [N, default 0] of
+    ! (CD_STATIC_FRICTION_AS_LAID or CD_STATIC_FRICTION_NONE, the default), the lay azimuth
+    ! [rad, from global +x toward +y; default: the horizontal direction of the chord from
+    ! the line's lower end (anchor -> fairlead, or fairlead -> anchor when the fairlead is
+    ! lower), +x from the anchor for a vertical chord] and the as-laid effective tension
+    ! [N, default 0] of
     ! CD_Static_As_Laid_Reference. As laid, the static solve resists every grounded node's
     ! horizontal displacement from its as-laid position with the friction springs, and the
     ! stick-slip anchors of the dynamics continue their forces; with none the static solve
@@ -1498,7 +1500,8 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'line model as_laid_tension must be finite and non-negative')
       RETURN
     END IF
-    ! default lay azimuth: the vertical plane through the line ends (anchor -> fairlead)
+    ! default lay azimuth: the vertical plane through the line ends, from the anchor toward
+    ! the fairlead (negated below when the line is laid from its fairlead, the lower end)
     laid_az = CD_ZERO
     IF (NORM2(fairlead(1:2) - anchor(1:2)) > 1.0e-9_wp*MAX(CD_ONE, NORM2(fairlead - anchor))) &
       laid_az = ATAN2(fairlead(2) - anchor(2), fairlead(1) - anchor(1))

@@ -4094,6 +4094,92 @@ def test_anisotropic_friction_rows_fail_closed_like_native(rows, message):
 
 
 @pytest.mark.parametrize(
+    "rows",
+    [
+        "asLaid staticsFriction",
+        "none staticsFriction",
+        "ASLAID statics_friction",
+        "As_Laid staticsSeabedFrictionPolicy",
+        '"as-laid" seabedFrictionPolicy',
+        "45.0 layAzimuth",
+        "-30 lay_azimuth",
+        "180 layAzimuth1",
+        "2.0e5 asLaidTension",
+        "0 as_laid_tension",
+        "1e5 ASLAIDTENSION1",
+        "10 layAzimuth01\n20 layAzimuth1\n0.5 frictionMu\nasLaid staticsFriction",
+    ],
+)
+def test_static_friction_rows_are_native_compatible(rows):
+    deck = DeckFile.from_text(_wave_source(rows))
+    deck.validate()
+    assert deck.options
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        ("restart staticsFriction", "OPTION staticsFriction must be asLaid or none"),
+        ("1 seabedFrictionPolicy", "must be asLaid or none"),
+        ("inf layAzimuth", "must be finite"),
+        ("abc layAzimuth", "must be numeric"),
+        ("nan layAzimuth1", "must be finite"),
+        ("-1 asLaidTension", "must be >= 0"),
+        ("-1 asLaidTension1", "must be >= 0"),
+        ("inf as_laid_tension", "must be finite"),
+        ("30 layAzimuth2", "layAzimuth2 names no LINE"),
+        ("30 layAzimuth0", "layAzimuth0 names no LINE"),
+        ("30 asLaidTension7", "asLaidTension7 names no LINE"),
+        ("30 layAzimuth99999999999999999999", "names no LINE"),
+        ("1 asLaidTension99999999999999999999", "names no LINE"),
+        ("30 layAzimuth1x", "unknown OPTION keyword 'layAzimuth1x'"),
+        ("30 layAzimuth_1", "unknown OPTION keyword"),
+        ("30 layAzimuthx", "unknown OPTION keyword"),
+        ("30 asLaidTension-1", "unknown OPTION keyword"),
+    ],
+)
+def test_static_friction_rows_fail_closed_like_native(rows, message):
+    with pytest.raises(DeckFormatError, match=message):
+        DeckFile.from_text(_wave_source(rows)).validate()
+
+
+def test_static_friction_option_identities_and_editing():
+    deck = DeckFile.from_text(
+        _wave_source(
+            "90 layAzimuth\n45 LayAzimuth1\n30 layazimuth01\n0 asLaidTension\n"
+            "5e4 asLaidTension1\nasLaid STATICSFRICTION"
+        )
+    )
+    deck.validate()
+    assert deck.option("layAzimuth").values == ("90",)
+    assert deck.option("lay_azimuth").values == ("90",)
+    # layAzimuth1, LayAzimuth1 and layazimuth01 name one line: the last row wins
+    assert deck.option("layAzimuth1").values == ("30",)
+    assert deck.option("LAYAZIMUTH001").values == ("30",)
+    assert deck.option("asLaidTension1").values == ("5e4",)
+    assert deck.option("as_laid_tension").values == ("0",)
+    assert deck.option("staticsFriction").values == ("asLaid",)
+    assert deck.option("seabedFrictionPolicy").values == ("asLaid",)
+    with pytest.raises(KeyError):
+        deck.option("layAzimuth2")
+    deck.set_option("layAzimuth1", 120.0)
+    deck.set_option("lay_azimuth", -15)
+    deck.set_option("staticsFriction", "none")
+    assert deck.option("layAzimuth01").values == ("120",)
+    assert deck.option("layAzimuth").values == ("-15",)
+    assert deck.option("staticsFriction").values == ("none",)
+    with pytest.raises(DeckFormatError, match="asLaid or none"):
+        deck.set_option("staticsFriction", "restart")
+    with pytest.raises(DeckFormatError, match=">= 0"):
+        deck.set_option("asLaidTension1", -2.0)
+    with pytest.raises(DeckFormatError, match="must be finite"):
+        deck.set_option("layAzimuth1", float("inf"))
+    assert deck.option("staticsFriction").values == ("none",)
+    assert deck.option("asLaidTension1").values == ("5e4",)
+    assert DeckFile.from_text(deck.text()).option("layAzimuth1").values == ("120",)
+
+
+@pytest.mark.parametrize(
     ("row", "message"),
     [
         ("10 nModes", None),

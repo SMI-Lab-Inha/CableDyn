@@ -541,7 +541,7 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: friction_mu_axial_row = -1.0_wp, friction_mu_lateral_row = -1.0_wp
     ! Static seabed friction (staticsFriction, layAzimuth, asLaidTension rows): the policy
     ! (CD_STATIC_FRICTION_NONE, the default, or _AS_LAID), the lay azimuth [deg] for every
-    ! line (has_lay_azimuth; otherwise each line's anchor -> fairlead direction) and the
+    ! line (has_lay_azimuth; otherwise each line's chord direction, from its lower end) and the
     ! as-laid tension [N], with per-line overrides (layAzimuth<ID>, asLaidTension<ID>).
     INTEGER  :: static_friction = CD_STATIC_FRICTION_NONE
     LOGICAL  :: has_lay_azimuth = .FALSE.
@@ -1747,6 +1747,10 @@ CONTAINS
         require_3d_static = .TRUE.
       END IF
     END IF
+    ! A lay azimuth across the vertical plane of the chord puts the as-laid friction
+    ! reference, and the friction it holds, out of that plane: solved in 3D as well. This is
+    ! decided here, before the held (planar) DOFs below are chosen.
+    IF (as_laid_off_plane()) require_3d_static = .TRUE.
 
     CALL build_finite_section_mesh(ln, sections, types, conn, l0, ea, mpl, diam, ei, &
                                    gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg)
@@ -3840,50 +3844,110 @@ CONTAINS
       CALL CD_HFMF_End(sw_cable)
     END SUBROUTINE still_water_reference
 
-    SUBROUTINE as_laid_reference(esr, emr)
-      !! Friction reference of the static solve (CD_Static_As_Laid_Reference): the line laid
-      !! from its anchor (node 1) along the lay azimuth on the seabed at the as-laid tension,
-      !! as (x, y) offsets from node 1 in the solve frame along the unstretched arc length of
-      !! the deck mesh. A lay azimuth off the vertical plane of the chord puts the reference
-      !! out of that plane, so the static solve then runs in 3D.
+    LOGICAL FUNCTION as_laid_off_plane() RESULT(off)
+      !! Whether the as-laid seabed friction of this line has a lay azimuth across the
+      !! vertical plane of its chord (an explicit layAzimuth / layAzimuth<ID>; the default
+      !! azimuth is the chord's own heading and lies in that plane). Decided from the deck
+      !! options alone, so the static solve can be set up in 3D before its held DOFs are chosen.
+      REAL(wp), ALLOCATABLE :: lay_az_opt
+      REAL(wp) :: laid_t, dir_l(2)
+      off = .FALSE.
+      IF (.NOT. (contact_enabled .AND. opts%has_friction .AND. &
+                 opts%static_friction == CD_STATIC_FRICTION_AS_LAID)) RETURN
+      CALL line_static_friction(opts, ln%id, lay_az_opt, laid_t)
+      IF (.NOT. ALLOCATED(lay_az_opt)) RETURN
+      dir_l = [frame_cs(1)*COS(lay_az_opt) + frame_cs(2)*SIN(lay_az_opt), &
+               -frame_cs(2)*COS(lay_az_opt) + frame_cs(1)*SIN(lay_az_opt)]
+      off = ABS(dir_l(2)) > 64.0_wp*EPSILON(CD_ONE)
+    END FUNCTION as_laid_off_plane
+
+    SUBROUTINE as_laid_positions(with_sink, from_top, az, laid_t, ref_g, esr, emr)
+      !! Global (x, y) as-laid position of every node of the deck mesh (CD_Static_As_Laid_Reference):
+      !! the line laid on the seabed from its lower end (the anchor, node 1; the fairlead, the last
+      !! node, when from_top) along the azimuth az [rad] at the as-laid tension. with_sink: the
+      !! nodes sink into the penalty seabed as in the static solve, which moves them along a slope.
+      LOGICAL, INTENT(IN) :: with_sink, from_top
+      REAL(wp), INTENT(IN) :: az, laid_t
+      REAL(wp), INTENT(OUT) :: ref_g(:, :)
       INTEGER, INTENT(OUT) :: esr
       CHARACTER(*), INTENT(OUT) :: emr
-      REAL(wp), ALLOCATABLE :: lay_az_opt, ref_g(:, :)
-      REAL(wp) :: laid_t, az, dg(2), a_g(3), f_g(3), dir_l(2)
+      REAL(wp), ALLOCATABLE :: wn(:), kn_r(:), sn(:), l0_r(:), ea_r(:)
+      REAL(wp) :: o_xy(2)
       INTEGER :: k, ne_r
+      ne_r = SIZE(l0)
+      IF (with_sink .AND. PRESENT(bathymetry)) THEN
+        ! static penalty penetration factor w_i/k_i of every node (the nodal contact
+        ! stiffness of the solve, kBot Diam l0 lumped to the nodes)
+        ALLOCATE (wn(ne_r + 1), kn_r(ne_r + 1))
+        wn = CD_ZERO
+        kn_r = CD_ZERO
+        DO k = 1, ne_r
+          wn(k:k + 1) = wn(k:k + 1) + 0.5_wp*w(k)*l0(k)
+          kn_r(k:k + 1) = kn_r(k:k + 1) + 0.5_wp*opts%kbot*diam(k)*l0(k)
+        END DO
+        WHERE (kn_r > CD_ZERO)
+          wn = MAX(wn, CD_ZERO)/kn_r
+        ELSEWHERE
+          wn = CD_ZERO
+        END WHERE
+        IF (from_top) THEN
+          sn = wn(ne_r + 1:1:-1)
+        ELSE
+          sn = wn
+        END IF
+      END IF
+      IF (from_top) THEN
+        ! the line is laid from its bottom end, here the last node
+        l0_r = l0(ne_r:1:-1)
+        ea_r = ea(ne_r:1:-1)
+        o_xy = points(pb)%pos(1:2)
+      ELSE
+        l0_r = l0
+        ea_r = ea
+        o_xy = points(pa)%pos(1:2)
+      END IF
+      CALL CD_Static_As_Laid_Reference(o_xy, az, l0_r, ea_r, laid_t, ref_g, esr, emr, bathymetry=bathymetry, sink=sn)
+      IF (from_top .AND. esr == CD_STATIC_OK) ref_g = ref_g(:, ne_r + 1:1:-1)
+    END SUBROUTINE as_laid_positions
+
+    SUBROUTINE as_laid_reference(esr, emr)
+      !! Friction reference of the static solve (CD_Static_As_Laid_Reference): the line laid on
+      !! the seabed from its lower end (the anchor, node 1, unless the fairlead is lower, as in
+      !! the EI = 0 line model) along the lay azimuth at the as-laid tension, as (x, y) offsets
+      !! from node 1 in the solve frame along the unstretched arc length of the deck mesh. A lay
+      !! azimuth off the vertical plane of the chord puts the reference out of that plane (see
+      !! as_laid_off_plane): the static solve then runs in 3D. In the plane the reference is
+      !! held in it, but for the sink of its nodes along a cross slope.
+      INTEGER, INTENT(OUT) :: esr
+      CHARACTER(*), INTENT(OUT) :: emr
+      REAL(wp), ALLOCATABLE :: lay_az_opt, ref_g(:, :), ref_0(:, :)
+      REAL(wp) :: laid_t, az, dg(2), dg0(2), a_g(3), f_g(3)
+      INTEGER :: k, ne_r
+      LOGICAL :: from_top, in_plane
       esr = CD_DECKDRV_OK
       emr = ''
       ne_r = SIZE(l0)
       CALL line_static_friction(opts, ln%id, lay_az_opt, laid_t)
       a_g = points(pa)%pos
       f_g = points(pb)%pos
+      from_top = f_g(3) < a_g(3)
+      ! the default azimuth is the chord's horizontal direction from the line's lower end
+      ! (+x from the anchor, and -x from the fairlead, for a vertical chord)
       az = CD_ZERO
       IF (NORM2(f_g(1:2) - a_g(1:2)) > 1.0e-9_wp*MAX(CD_ONE, NORM2(f_g - a_g))) &
         az = ATAN2(f_g(2) - a_g(2), f_g(1) - a_g(1))
-      IF (ALLOCATED(lay_az_opt)) az = lay_az_opt
-      ALLOCATE (ref_g(2, ne_r + 1))
-      IF (PRESENT(bathymetry)) THEN
-        BLOCK
-          ! static penalty penetration factor w_i/k_i of every node (the nodal contact
-          ! stiffness of the solve, kBot Diam l0 lumped to the nodes)
-          REAL(wp) :: wn(ne_r + 1), kn_r(ne_r + 1)
-          wn = CD_ZERO
-          kn_r = CD_ZERO
-          DO k = 1, ne_r
-            wn(k:k + 1) = wn(k:k + 1) + 0.5_wp*w(k)*l0(k)
-            kn_r(k:k + 1) = kn_r(k:k + 1) + 0.5_wp*opts%kbot*diam(k)*l0(k)
-          END DO
-          WHERE (kn_r > CD_ZERO)
-            wn = MAX(wn, CD_ZERO)/kn_r
-          ELSEWHERE
-            wn = CD_ZERO
-          END WHERE
-          CALL CD_Static_As_Laid_Reference(a_g(1:2), az, l0, ea, laid_t, ref_g, esr, emr, bathymetry=bathymetry, &
-                                           sink=wn)
-        END BLOCK
-      ELSE
-        CALL CD_Static_As_Laid_Reference(a_g(1:2), az, l0, ea, laid_t, ref_g, esr, emr)
+      IF (ALLOCATED(lay_az_opt)) THEN
+        az = lay_az_opt
+      ELSE IF (from_top) THEN
+        az = ATAN2(-SIN(az), -COS(az))
       END IF
+      in_plane = .NOT. as_laid_off_plane()
+      ALLOCATE (ref_g(2, ne_r + 1), ref_0(2, ne_r + 1))
+      CALL as_laid_positions(.TRUE., from_top, az, laid_t, ref_g, esr, emr)
+      ! the laid line without the sink of its nodes: its cross-plane offset is geometric
+      ref_0 = ref_g
+      IF (esr == CD_STATIC_OK .AND. in_plane .AND. PRESENT(bathymetry)) &
+        CALL as_laid_positions(.FALSE., from_top, az, laid_t, ref_0, esr, emr)
       IF (esr /= CD_STATIC_OK) THEN
         esr = CD_DECKDRV_BADINPUT
         RETURN
@@ -3898,16 +3962,16 @@ CONTAINS
         cur_obj%friction%ref_s(k) = cur_obj%friction%ref_s(k - 1) + l0(k - 1)
       END DO
       DO k = 1, ne_r + 1
-        dg = ref_g(:, k) - ref_g(:, 1)
+        dg = ref_g(:, k) - a_g(1:2)
         cur_obj%friction%ref_xy(:, k) = [frame_cs(1)*dg(1) + frame_cs(2)*dg(2), -frame_cs(2)*dg(1) + frame_cs(1)*dg(2)]
+        IF (in_plane) THEN
+          ! the laid line lies in the vertical plane of the chord: only the sink offset of the
+          ! nodes on a cross slope (zero on a flat floor) leaves it
+          dg0 = ref_0(:, k) - a_g(1:2)
+          cur_obj%friction%ref_xy(2, k) = (-frame_cs(2)*dg(1) + frame_cs(1)*dg(2)) - &
+                                          (-frame_cs(2)*dg0(1) + frame_cs(1)*dg0(2))
+        END IF
       END DO
-      IF (ALLOCATED(lay_az_opt)) THEN
-        dir_l = [frame_cs(1)*COS(az) + frame_cs(2)*SIN(az), -frame_cs(2)*COS(az) + frame_cs(1)*SIN(az)]
-        IF (ABS(dir_l(2)) > 64.0_wp*EPSILON(CD_ONE)) require_3d_static = .TRUE.
-      ELSE
-        ! the default azimuth is the chord's own heading: the reference lies in its plane
-        cur_obj%friction%ref_xy(2, :) = CD_ZERO
-      END IF
     END SUBROUTINE as_laid_reference
 
     SUBROUTINE fine_mesh_note(note)
@@ -4786,12 +4850,19 @@ CONTAINS
       ok = .TRUE.
     END SUBROUTINE laid_seed_positions
 
+    LOGICAL FUNCTION in_current() RESULT(yes)
+      !! Whether the line is loaded by a real current: the current object carries drag. In
+      !! still water it may be present only as the carrier of the as-laid seabed friction.
+      yes = .FALSE.
+      IF (PRESENT(cur_obj)) yes = cur_obj%drag
+    END FUNCTION in_current
+
     LOGICAL FUNCTION planar_run_diagnosed(msg) RESULT(yes)
       !! Whether msg carries the frictionless grounded-run diagnosis of a current (the
       !! current drives the run on the seabed into compression) for this line held in its
       !! vertical plane (every node's out-of-plane DOF held).
       CHARACTER(*), INTENT(IN) :: msg
-      yes = PRESENT(cur_obj)
+      yes = in_current()
       IF (yes) yes = COUNT(MOD(fixed_dofs - 1, 6) == 1) >= nnode
       IF (yes) yes = INDEX(msg, 'the run on the seabed is in axial compression') > 0 .OR. &
                      INDEX(msg, 'the run on the seabed folds against its end') > 0
@@ -4900,7 +4971,7 @@ CONTAINS
       DO k = 2, nnode
         sref(k) = sref(k - 1) + l0(k - 1)
       END DO
-      energy = .NOT. PRESENT(cur_obj)
+      energy = .NOT. in_current()
       tol_w = MAX(cont_tol, WALK_TOL)
       tw = CD_ZERO
       dt = WALK_DT0
@@ -7407,7 +7478,7 @@ CONTAINS
     LOGICAL :: want_wave_cfg
     CHARACTER(200) :: em
     ! static seabed friction of this line: lay azimuth override [rad] (unallocated: the
-    ! default, the anchor -> fairlead direction) and as-laid tension [N]
+    ! default, the chord direction from the line's lower end) and as-laid tension [N]
     REAL(wp), ALLOCATABLE :: lay_az_opt
     REAL(wp) :: laid_t
 
@@ -9156,6 +9227,15 @@ CONTAINS
     IF (PRESENT(end_force)) end_force = CD_ZERO
     force_a = CD_ZERO
     force_b = CD_ZERO
+    ! This static-only EI = 0 solve carries no seabed friction (standalone, frictionMu needs
+    ! dtM and TMax, so the dynamic route owns it): fail closed on the as-laid policy instead of
+    ! reporting a frictionless equilibrium as the as-laid one.
+    IF (opts%has_friction .AND. opts%static_friction == CD_STATIC_FRICTION_AS_LAID .AND. &
+        (PRESENT(bathymetry) .OR. opts%has_wtrdpth)) THEN
+      CALL fail(ErrStat, ErrMsg, 'OPTION staticsFriction asLaid is not applied by the static-only line solve; '// &
+                'run the deck with dtM and TMax (the dynamic route holds the line toward its as-laid '// &
+                'position) or use staticsFriction none'); RETURN
+    END IF
     ! NodeA is deck End A/fairlead; NodeB is deck End B/anchor. Internally the
     ! catenary/static model remains anchor -> fairlead.
     anchor = points(find_point(points, ln%nodeB))%pos
@@ -12925,7 +13005,7 @@ CONTAINS
         opts%has_friction = (ErrStat == 0 .AND. opts%friction_mu > CD_ZERO)
       END IF
     CASE ('staticsfriction', 'statics_friction', 'staticsseabedfrictionpolicy', 'seabedfrictionpolicy')
-      ! OrcaFlex's statics seabed friction policy: "as laid" (the default) or "none"
+      ! OrcaFlex's statics seabed friction policy: "as laid" or "none" (the default)
       SELECT CASE (to_lower(TRIM(strip_quotes(val))))
       CASE ('aslaid', 'as_laid', 'as-laid')
         opts%static_friction = CD_STATIC_FRICTION_AS_LAID
@@ -13068,6 +13148,7 @@ CONTAINS
       BLOCK
         CHARACTER(LEN(kw)) :: kl
         INTEGER :: lid, ios_l, np
+        LOGICAL :: digits
         REAL(wp) :: xv
         kl = to_lower(TRIM(kw))
         np = 0
@@ -13078,11 +13159,16 @@ CONTAINS
           IF (kl(1:13) == 'aslaidtension') np = 13
         END IF
         ios_l = 1
+        digits = .FALSE.
         IF (np > 0) THEN
-          IF (VERIFY(TRIM(kl(np + 1:)), '0123456789') == 0) READ (kl(np + 1:), *, IOSTAT=ios_l) lid
+          digits = VERIFY(TRIM(kl(np + 1:)), '0123456789') == 0
+          IF (digits) READ (kl(np + 1:), *, IOSTAT=ios_l) lid
         END IF
-        IF (ios_l /= 0) THEN
+        IF (.NOT. digits) THEN
           CALL fail(ErrStat, ErrMsg, 'unknown OPTION keyword "'//TRIM(kw)//'"')
+        ELSE IF (ios_l /= 0) THEN
+          ! an integer suffix too large for a line ID
+          CALL fail(ErrStat, ErrMsg, 'OPTION '//TRIM(kw)//' names no LINE')
         ELSE
           CALL rd(val, xv, ErrStat, ErrMsg)
           IF (ErrStat == 0) THEN
@@ -17286,6 +17372,11 @@ CONTAINS
     first_miss_time = CD_ZERO
     last_miss_time = CD_ZERO
     ! ---- scope of the multibody march (fail closed by name) ----
+    IF (opts%has_friction .AND. opts%static_friction == CD_STATIC_FRICTION_AS_LAID) THEN
+      CALL fail(ErrStat, ErrMsg, 'a mixed-topology deck does not support OPTION staticsFriction asLaid (the '// &
+                'static equilibrium of its bodies, rods and points solves the lines without seabed friction); '// &
+                'use staticsFriction none'); RETURN
+    END IF
     IF (opts%has_motion_file) THEN
       CALL fail(ErrStat, ErrMsg, 'a mixed-topology deck (bodies, rods, dynamic points, EI=0 and finite-EI '// &
                 'lines together) does not support motionFile coupling'); RETURN

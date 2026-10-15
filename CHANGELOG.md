@@ -17,7 +17,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   (isotropic or axial/lateral, capped at `mu N`), in still water and in a current, on `EI = 0`
   and finite-EI lines, standalone, coupled OpenFAST and through the C API; the march continues
   the static springs, so a held run stays at rest. New OPTIONS `staticsFriction none|asLaid`,
-  `layAzimuth` and `layAzimuth<ID>` (default: each line's anchor → fairlead direction),
+  `layAzimuth` and `layAzimuth<ID>` (default: the horizontal direction of each line's chord,
+  from its lower end),
   `asLaidTension` and `asLaidTension<ID>` (default 0). The default stays `none`, as in MoorDyn:
   frictionless statics in still water (friction from the still-water equilibrium in a current),
   conservative for anchor loads, and every deck without the new rows runs as before. With
@@ -31,7 +32,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   carries (`asLaidTension`) mobilises none: on a flat seabed FairTen equals the frictionless
   one to 6e-6 and AnchTen to 0.4 %. A finite-EI line laid past the point under its fairlead has
   no static solution yet (its touchdown hook is not reached); a lay azimuth across the span
-  solves it. See the theory page (Friction in statics).
+  solves it. A lay azimuth across the vertical plane of the chord solves a finite-EI line in 3D
+  from the start, and a finite-EI line is laid from its lower end like an `EI = 0` one. The
+  policy is rejected, as `frictionMu` is, on decks with `Connect`/`Free` points, bodies or rods,
+  and on mixed-topology decks. The Python `DeckFile`, `DeckWriter` and `DeckModel` take the new
+  rows. See the theory page (Friction in statics).
 - Run-time profile of the standalone driver. With the environment variable
   `CABLEDYN_PROFILE=1`, the driver prints at the end of the run how its wall time divides
   between input parsing, initialisation and statics, and the dynamic march. The march is split

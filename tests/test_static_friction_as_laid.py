@@ -25,8 +25,19 @@ driver:
   frictionless ones (FairTen to 1e-4, AnchTen to 0.5 %, see the check); laid slack (the
   default), friction holds the run back and the anchor tension falls by at most mu w times the
   grounded length;
-* input checks: ``layAzimuth<ID>`` of a line that does not exist and an unknown policy are
-  rejected.
+* ``fei_flat_*`` (finite-EI cable on a flat seabed, laid slack): a lay azimuth across the vertical
+  plane of the chord (45 degrees) is solved in 3D from the start, so the state is consistent
+  (friction within mu N, a march from it stays at rest), while 180 degrees keeps the planar solve
+  and flips the reference (the anchor tension falls below the default one);
+* ``fei_cross`` (finite-EI cable on a cross slope): the lateral anchor force follows the EI = 0
+  line's, i.e. the sink offset of the laid nodes across the slope stays in the friction reference;
+* ``pl_*``: per-line rows win over the global ones (``layAzimuth<ID>`` over ``layAzimuth``,
+  ``asLaidTension<ID>`` over ``asLaidTension``, in either order), and a row for line 2 leaves
+  line 1 alone; ``aniso_*``: the axial coefficient rules the friction along a laid run;
+  ``multi``: a three-section line of different weights keeps every grounded node within mu N;
+* input checks: ``layAzimuth<ID>`` of a line that does not exist (also one too large for an
+  integer), an unknown suffix and an unknown policy are rejected, and the ``<ID>`` rows take
+  effect.
 
 usage: test_static_friction_as_laid.py --exe <cabledyn> --output <dir>
 """
@@ -63,15 +74,20 @@ def slope_grid(path: Path, depth0: float, slope_deg: float) -> None:
 
 
 def deck(title: str, ei: float, length: float, nseg: int, fair: tuple, anch: tuple, seabed: str,
-         extra: str = "", tmax: float = 0.0, mu: float = 1.0) -> str:
+         extra: str = "", tmax: float = 0.0, mu: float = 1.0, types: str | None = None,
+         sections: str | None = None) -> str:
     d, m, ea = CHAIN
+    if types is None:
+        types = f"chain {d} {m} {ea} -1 {ei} 1.37 0.64 1 0\n"
+    if sections is None:
+        sections = f"1 chain {length} {nseg}\n"
     return (
         "--------------------- CableDyn Input File ---\n"
         f"{title}\n"
         "--------------------- LINE TYPES ---\n"
         "TypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n"
         "(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)\n"
-        f"chain {d} {m} {ea} -1 {ei} 1.37 0.64 1 0\n"
+        f"{types}"
         "--------------------- POINTS ---\n"
         "ID Type X Y Z Mass Vol CdA Ca\n(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)\n"
         f"1 Coupled {fair[0]} {fair[1]} {fair[2]} 0 0 0 0\n"
@@ -80,7 +96,7 @@ def deck(title: str, ei: float, length: float, nseg: int, fair: tuple, anch: tup
         "ID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 pt\n"
         "--------------------- SECTIONS ---\n"
         "LineID LineType Length NumSegs\n(-) (-) (m) (-)\n"
-        f"1 chain {length} {nseg}\n"
+        f"{sections}"
         "--------------------- OPTIONS ---\n"
         f"{G} g\n{RHO} rhoW\n{seabed}\n100000.0 kBot\n1.0e4 cBot\n0.05 dtM\n{tmax} TMax\n"
         f"{mu} frictionMu\nasLaid staticsFriction\n{extra}"
@@ -113,8 +129,12 @@ def first_row(path: Path) -> list:
 
 
 def grounded_balance(cdir: Path, name: str, length: float, nseg: int, mu: float, depth0: float,
-                     slope_deg: float) -> tuple:
-    """Largest friction utilisation |f|/(mu N) over grounded nodes and the total friction."""
+                     slope_deg: float, band: float | None = None, end_trim: int = 0) -> tuple:
+    """Largest friction utilisation |f|/(mu N) over grounded nodes and the total friction.
+
+    band: only the nodes whose three neighbours on either side lie within band [m] of the
+    seabed are taken (a finite-EI cable bends at its touchdown, which the tension-only balance
+    does not carry), and not the last end_trim nodes before the anchor."""
     d, m, _ = CHAIN
     w = (m - RHO * math.pi / 4.0 * d * d) * G
     l0 = length / nseg
@@ -135,6 +155,12 @@ def grounded_balance(cdir: Path, name: str, length: float, nseg: int, mu: float,
         normal = -f[2] / nrm[2]
         if pos[i][2] > zf + 0.5 or not normal > 1.0e-6 * w * l0:
             continue
+        if i >= len(pos) - 1 - end_trim:
+            continue
+        if band is not None and not all(
+                abs(pos[j][2] + depth0 + math.tan(math.radians(slope_deg)) * pos[j][0]) < band
+                for j in range(max(i - 3, 0), min(i + 4, len(pos)))):
+            continue
         fr = math.hypot(f[0] + normal * nrm[0], f[1])
         total += fr
         worst = max(worst, fr / (mu * normal))
@@ -149,6 +175,98 @@ def at_rest(cdir: Path, static_name: str, rest_name: str) -> float:
     for row in table(cdir / (rest_name + ".out")):
         drift = max(drift, max(abs(row[n] - s0[n]) for n in s0 if n != "Time(s)"))
     return drift / scale
+
+
+def deck_two(title: str, extra: str = "", mu: float = 0.5) -> str:
+    """Two identical EI = 0 chains on a flat seabed, 1000 m apart (lines 1 and 2)."""
+    d, m, ea = CHAIN
+    return (
+        "--------------------- CableDyn Input File ---\n"
+        f"{title}\n"
+        "--------------------- LINE TYPES ---\n"
+        "TypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n"
+        "(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)\n"
+        f"chain {d} {m} {ea} -1 0 1.37 0.64 1 0\n"
+        "--------------------- POINTS ---\n"
+        "ID Type X Y Z Mass Vol CdA Ca\n(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)\n"
+        "1 Coupled -58 0 -14 0 0 0 0\n2 Fixed -837.6 0 -200 0 0 0 0\n"
+        "3 Coupled -58 1000 -14 0 0 0 0\n4 Fixed -837.6 1000 -200 0 0 0 0\n"
+        "--------------------- LINES ---\n"
+        "ID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 pt\n2 3 4 pt\n"
+        "--------------------- SECTIONS ---\n"
+        "LineID LineType Length NumSegs\n(-) (-) (m) (-)\n1 chain 850 85\n2 chain 850 85\n"
+        "--------------------- OPTIONS ---\n"
+        f"{G} g\n{RHO} rhoW\n200.0 WtrDpth\n100000.0 kBot\n1.0e4 cBot\n0.05 dtM\n0 TMax\n"
+        f"{mu} frictionMu\nasLaid staticsFriction\n{extra}"
+        "--------------------- OUTPUTS ---\n"
+        '"FairTen1"\n"AnchTen1"\n"FairTen2"\n"AnchTen2"\n'
+        "--------------------- need this line ---\n"
+    )
+
+
+def same(a: dict, b: dict, keys: tuple, tol: float = 1.0e-9) -> bool:
+    """Whether the channels ``keys`` of two output rows agree to the relative tolerance tol."""
+    return all(abs(a[k] - b[k]) <= tol * max(abs(a[k]), 1.0) for k in keys)
+
+
+def chain_weight() -> float:
+    """Submerged weight per length [N/m] of the test chain."""
+    d, m, _ = CHAIN
+    return (m - RHO * math.pi / 4.0 * d * d) * G
+
+
+def plateau_utilisation(cdir: Path, name: str, mu: float, zfloor: float, kbot: float, sections: tuple,
+                        trim: int = 2) -> tuple:
+    """Largest |f|/(mu N) over the nodes resting on a flat seabed, from the nodal balance.
+
+    The horizontal force that tensions and weight leave at a grounded node is what friction
+    carries (EI = 0, or a straight run of a finite-EI cable). The nodes are the ones at the
+    penetration depth of the penalty seabed, less ``trim`` at each end of the run (the bending
+    of a finite-EI cable acts at the touchdown and at the anchor). ``sections``: (diameter,
+    submerged weight per length, element length, number of elements) from End A. Returns
+    (utilisation, number of nodes, largest |y| of the line, the utilisation and the number of
+    nodes of each section, a node counted with the section of its End A element).
+    """
+    p = first_row(cdir / (name + ".Line1.p.out"))
+    pos = [p[3 * i:3 * i + 3] for i in range(len(p) // 3)]
+    ten = first_row(cdir / (name + ".Line1.t.out"))
+    elem = []  # per element: diameter, weight per length, length
+    owner = []  # per element: its section
+    for k, (dia, wt, l0, ne) in enumerate(sections):
+        elem += [(dia, wt, l0)] * ne
+        owner += [k] * ne
+    grounded = []
+    for i in range(1, len(pos) - 1):
+        # a node is grounded when it sits below the floor by (nearly) the penetration of the
+        # lighter of its two elements
+        pen = min(elem[i - 1][1] / (kbot * elem[i - 1][0]), elem[i][1] / (kbot * elem[i][0]))
+        if pos[i][2] < zfloor - 0.95 * pen:
+            grounded.append(i)
+    grounded = grounded[trim:len(grounded) - trim]
+    worst = 0.0
+    by_section = [[0.0, 0] for _ in sections]
+    for i in grounded:
+        f = [0.0, 0.0, -0.5 * (elem[i - 1][1] * elem[i - 1][2] + elem[i][1] * elem[i][2])]
+        for e, j in ((i - 1, i - 1), (i, i + 1)):
+            u = [pos[j][k] - pos[i][k] for k in range(3)]
+            n = math.sqrt(sum(x * x for x in u))
+            for k in range(3):
+                f[k] += ten[e] * u[k] / n
+        util = math.hypot(f[0], f[1]) / (mu * -f[2])
+        worst = max(worst, util)
+        by_section[owner[i - 1]][0] = max(by_section[owner[i - 1]][0], util)
+        by_section[owner[i - 1]][1] += 1
+    return worst, len(grounded), max(abs(q[1]) for q in pos), by_section
+
+
+def cross_grid(path: Path, depth0: float, slope_deg: float) -> None:
+    """A seabed z = -(depth0 + tan(slope) y): planar in y, falling toward +y (across the line)."""
+    t = math.tan(math.radians(slope_deg))
+    rows = []
+    for x in range(-300, 1000, 100):
+        for y in (-300.0, 300.0):
+            rows.append("%.1f %.1f %.12g" % (x, y, depth0 + t * y))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8", newline="\n")
 
 
 def main() -> int:
@@ -196,6 +314,14 @@ def main() -> int:
     rc, log = run(a.exe, cdir, "laid", deck("slope_fei", **fei))
     check(rc == 0, "slope_fei converges (rc %d)%s" % (rc, "" if rc == 0 else ": " + log.strip()[-300:]))
     if rc == 0:
+        # the straight grounded run (away from the touchdown and the anchor, where the cable
+        # bends) carries its slope load by friction: mobilised well above zero, within mu N
+        worst, total, past = grounded_balance(cdir, "laid", 650.0, 140, 1.0, depth0, slope, band=0.35,
+                                             end_trim=10)
+        check(worst <= 1.0 + 1.0e-2, "slope_fei: friction within mu N along the straight run (max %.4f)" % worst)
+        check(worst > 0.5 * math.tan(math.radians(slope)),
+              "slope_fei: friction holds the slope load (max utilisation %.4f, tan(slope) %.4f)"
+              % (worst, math.tan(math.radians(slope))))
         rc, log = run(a.exe, cdir, "rest", deck("slope_fei rest", **fei, tmax=1.0))
         check(rc == 0, "slope_fei at-rest march runs (rc %d)" % rc)
         if rc == 0:
@@ -204,6 +330,7 @@ def main() -> int:
 
     # --- flat seabed: friction not mobilised when laid at the run's tension ---
     cdir = root / "flat"
+    h_run = None  # the horizontal tension of the frictionless grounded run
     flat = dict(ei=0.0, length=850.0, nseg=85, fair=(-58, 0, -14), anch=(-837.6, 0, -200),
                 seabed="200.0 WtrDpth", mu=0.5)
     rc0, _ = run(a.exe, cdir, "none", deck("flat none", **flat, extra="none staticsFriction\n"))
@@ -211,6 +338,7 @@ def main() -> int:
     if rc0 == 0:
         r0 = table(cdir / "none.out")[0]
         h = abs(r0["Point2Fx"])  # the grounded run carries the anchor's horizontal tension
+        h_run = h
         rc, _ = run(a.exe, cdir, "taut", deck("flat taut", **flat, extra="%.9g asLaidTension\n" % h))
         check(rc == 0, "flat laid at the run tension converges")
         if rc == 0:
@@ -231,6 +359,172 @@ def main() -> int:
             check(0.0 < drop <= 0.5 * w * 850.0,
                   "flat laid slack: friction lowers AnchTen by %.4g N (within mu w L)" % drop)
 
+    # --- finite-EI cable on a flat seabed, laid slack: lay azimuth across the chord ---
+    # A lay azimuth off the vertical plane of the chord puts the reference (and its friction)
+    # out of that plane, so the static solve is 3D from the start: the state is then an
+    # equilibrium of the line (friction within mu N, a march from it stays at rest). At 180
+    # degrees the reference lies in the plane, on the far side of the anchor: the planar solve
+    # holds, and the friction saturates along the whole run, below the default's anchor tension.
+    cdir = root / "fei_flat"
+    kbot = 1.0e5
+    fl = dict(ei=1.0e4, length=400.0, nseg=80, fair=(300, 0, -10), anch=(0, 0, -200),
+              seabed="200.0 WtrDpth", mu=0.5)
+    fsec = ((d, w, 400.0 / 80, 80),)
+    fres = {}
+    for tag, extra in (("def", ""), ("az45", "45.0 layAzimuth\n"), ("az180", "180.0 layAzimuth\n")):
+        rc, log = run(a.exe, cdir, tag, deck("fei flat " + tag, **fl, extra=extra))
+        check(rc == 0, "fei_flat %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+        if rc != 0:
+            continue
+        fres[tag] = table(cdir / (tag + ".out"))[0]
+        util, ngr, maxy, _ = plateau_utilisation(cdir, tag, 0.5, -200.0, kbot, fsec)
+        check(ngr > 10 and 0.1 < util <= 1.05,
+              "fei_flat %s: friction within mu N over %d grounded nodes (max %.4f)" % (tag, ngr, util))
+        if tag == "az45":
+            check(maxy > 1.0, "fei_flat az45: the line leaves the chord plane (max |y| %.3f m)" % maxy)
+        else:
+            check(maxy < 1.0e-6, "fei_flat %s: the line stays in the chord plane (max |y| %.1e m)" % (tag, maxy))
+        rc, _ = run(a.exe, cdir, tag + "_rest", deck("fei flat rest " + tag, **fl, extra=extra, tmax=1.0))
+        check(rc == 0, "fei_flat %s at-rest march runs (rc %d)" % (tag, rc))
+        if rc == 0:
+            drift = at_rest(cdir, tag, tag + "_rest")
+            check(drift <= REST_TOL, "fei_flat %s stays at rest from the static state (drift %.2e)" % (tag, drift))
+    if "def" in fres and "az180" in fres:
+        check(fres["az180"]["AnchTen1"] < 0.8 * fres["def"]["AnchTen1"],
+              "fei_flat: the 180 degree reference flips (AnchTen %.4g below the default %.4g N)"
+              % (fres["az180"]["AnchTen1"], fres["def"]["AnchTen1"]))
+
+    # --- finite-EI cable on a cross slope, default lay azimuth ---
+    # The nodes laid at rest sink into the penalty seabed along its normal, across the slope too;
+    # the friction reference keeps that offset, so the lateral anchor force is that of the
+    # EI = 0 line (a reference without it adds a lateral spring force of the order of w tan(slope)).
+    cdir = root / "fei_cross"
+    cdir.mkdir(parents=True, exist_ok=True)
+    cross_grid(cdir / "bathy.txt", 200.0, 5.0)
+    fy = {}
+    for tag, ei in (("ei0", 0.0), ("fei", 1.0e4)):
+        cd = dict(ei=ei, length=400.0, nseg=80, fair=(300, 0, -10), anch=(0, 0, -200), seabed=sb)
+        rc, log = run(a.exe, cdir, tag, deck("fei cross " + tag, **cd))
+        check(rc == 0, "fei_cross %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+        if rc == 0:
+            fy[tag] = table(cdir / (tag + ".out"))[0]["Point2Fy"]
+    if len(fy) == 2:
+        check(fy["ei0"] * fy["fei"] > 0.0 and abs(fy["fei"] - fy["ei0"]) < 0.25 * abs(fy["ei0"]),
+              "fei_cross: lateral anchor force %.4g N follows the EI = 0 line's %.4g N" % (fy["fei"], fy["ei0"]))
+
+    # --- per-line rows, non-default azimuth and tension, anisotropic friction (EI = 0) ---
+    cdir = root / "perline"
+    keys = ("FairTen1", "AnchTen1", "Point1Fx", "Point2Fx", "Point1Fz")
+    pl = {}
+    cases = {
+        "def": "",
+        "g180": "180.0 layAzimuth\n",
+        "g90": "90.0 layAzimuth\n",
+        "p180": "90.0 layAzimuth\n180.0 layAzimuth1\n",
+        "p180b": "180.0 layAzimuth1\n90.0 layAzimuth\n",
+        "p90": "180.0 layAzimuth\n90.0 layAzimuth1\n",
+    }
+    if h_run is not None:
+        cases.update({
+            "gt": "%.9g asLaidTension\n" % h_run,
+            "pt": "0.0 asLaidTension\n%.9g asLaidTension1\n" % h_run,
+            "ptb": "%.9g asLaidTension1\n0.0 asLaidTension\n" % h_run,
+            "pt0": "%.9g asLaidTension\n0.0 asLaidTension1\n" % h_run,
+            "lay1": "180.0 layAzimuth1\n",
+        })
+    for tag, extra in cases.items():
+        rc, log = run(a.exe, cdir, tag, deck("perline " + tag, **flat, extra=extra))
+        check(rc == 0, "perline %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+        if rc == 0:
+            pl[tag] = table(cdir / (tag + ".out"))[0]
+    if {"def", "g180", "g90"} <= pl.keys():
+        check(not same(pl["g180"], pl["def"], keys, 1.0e-3),
+              "layAzimuth 180 changes the statics (AnchTen %.5g vs %.5g N)" % (pl["g180"]["AnchTen1"], pl["def"]["AnchTen1"]))
+        check(not same(pl["g90"], pl["def"], keys, 1.0e-3) and not same(pl["g90"], pl["g180"], keys, 1.0e-3),
+              "layAzimuth 90 gives its own statics (AnchTen %.5g N)" % pl["g90"]["AnchTen1"])
+    if {"g180", "p180", "p180b", "g90"} <= pl.keys():
+        check(same(pl["p180"], pl["g180"], keys) and same(pl["p180b"], pl["g180"], keys),
+              "layAzimuth1 wins over layAzimuth, in either order (as the global 180)")
+        check(not same(pl["p180"], pl["g90"], keys, 1.0e-3), "layAzimuth1 differs from the global value it overrides")
+    if {"g180", "p90", "g90"} <= pl.keys():
+        check(same(pl["p90"], pl["g90"], keys), "layAzimuth1 wins over layAzimuth (90 over 180)")
+    if {"def", "gt", "pt", "ptb", "pt0", "lay1"} <= pl.keys():
+        check(not same(pl["gt"], pl["def"], keys, 1.0e-3),
+              "asLaidTension changes the statics (AnchTen %.5g vs %.5g N)" % (pl["gt"]["AnchTen1"], pl["def"]["AnchTen1"]))
+        check(same(pl["pt"], pl["gt"], keys) and same(pl["ptb"], pl["gt"], keys),
+              "asLaidTension1 wins over asLaidTension, in either order (as the global value)")
+        check(same(pl["pt0"], pl["def"], keys), "asLaidTension1 0 wins over a global tension (as the default)")
+        check(not same(pl["lay1"], pl["def"], keys, 1.0e-3), "layAzimuth1 alone takes effect")
+
+    # two lines: a row for line 2 leaves line 1 alone
+    two = {}
+    for tag, extra in (("def", ""), ("g180", "180.0 layAzimuth\n"), ("l2", "180.0 layAzimuth2\n")) + (
+            (("gt", "%.9g asLaidTension\n" % h_run), ("t2", "%.9g asLaidTension2\n" % h_run)) if h_run else ()):
+        rc, log = run(a.exe, cdir, "two_" + tag, deck_two("two lines " + tag, extra=extra))
+        check(rc == 0, "two lines %s converge (rc %d)" % (tag, rc))
+        if rc == 0:
+            two[tag] = table(cdir / ("two_" + tag + ".out"))[0]
+
+    def of_line(row: dict, i: int) -> dict:
+        return {"FairTen1": row["FairTen%d" % i], "AnchTen1": row["AnchTen%d" % i]}
+
+    if {"def", "g180", "l2"} <= two.keys():
+        k2 = ("FairTen1", "AnchTen1")
+        check(same(of_line(two["def"], 1), of_line(two["def"], 2), k2), "two lines: identical lines give identical statics")
+        check(same(of_line(two["l2"], 1), of_line(two["def"], 1), k2),
+              "two lines: layAzimuth2 leaves line 1 at the default")
+        check(same(of_line(two["l2"], 2), of_line(two["g180"], 2), k2) and
+              not same(of_line(two["l2"], 2), of_line(two["def"], 2), k2, 1.0e-3),
+              "two lines: layAzimuth2 sets line 2 alone (AnchTen2 %.5g N)" % two["l2"]["AnchTen2"])
+    if {"def", "gt", "t2"} <= two.keys():
+        k2 = ("FairTen1", "AnchTen1")
+        check(same(of_line(two["t2"], 1), of_line(two["def"], 1), k2), "two lines: asLaidTension2 leaves line 1 alone")
+        check(same(of_line(two["t2"], 2), of_line(two["gt"], 2), k2) and
+              not same(of_line(two["t2"], 2), of_line(two["def"], 2), k2, 1.0e-3),
+              "two lines: asLaidTension2 sets line 2 alone (AnchTen2 %.5g N)" % two["t2"]["AnchTen2"])
+
+    # anisotropic friction: along a run laid and pulled along the chord the axial coefficient rules
+    cdir = root / "aniso"
+    an = {}
+    for tag, mu_iso, extra in (("iso05", 0.5, ""), ("iso02", 0.2, ""),
+                               ("ax05_lat02", 0.5, "0.2 frictionMuLateral\n"),
+                               ("ax02_lat05", 0.2, "0.5 frictionMuLateral\n")):
+        fa = dict(flat, mu=mu_iso)
+        rc, log = run(a.exe, cdir, tag, deck("aniso " + tag, **fa, extra=extra))
+        check(rc == 0, "aniso %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+        if rc == 0:
+            an[tag] = table(cdir / (tag + ".out"))[0]
+    if len(an) == 4:
+        k1 = ("FairTen1", "AnchTen1")
+        check(not same(an["iso05"], an["iso02"], k1, 1.0e-2), "aniso: the coefficient changes the anchor tension")
+        check(same(an["ax05_lat02"], an["iso05"], k1, 2.0e-3),
+              "aniso: axial 0.5 / lateral 0.2 acts as the isotropic 0.5 along the chord (AnchTen %.5g vs %.5g N)"
+              % (an["ax05_lat02"]["AnchTen1"], an["iso05"]["AnchTen1"]))
+        check(same(an["ax02_lat05"], an["iso02"], k1, 2.0e-3),
+              "aniso: axial 0.2 / lateral 0.5 acts as the isotropic 0.2 along the chord (AnchTen %.5g vs %.5g N)"
+              % (an["ax02_lat05"]["AnchTen1"], an["iso02"]["AnchTen1"]))
+
+    # --- a line of three sections of different weights: friction within mu N everywhere ---
+    cdir = root / "multi"
+    light = (0.1, 40.0, 5.0e8)  # diameter [m], mass [kg/m], EA [N]
+    wl = (light[1] - RHO * math.pi / 4.0 * light[0] ** 2) * G
+    mtypes = (f"chain {d} {m} {ea} -1 0 1.37 0.64 1 0\n"
+              f"light {light[0]} {light[1]} {light[2]} -1 0 1.2 0.6 1 0\n")
+    msecs = "1 chain 300 60\n1 light 300 60\n1 chain 250 50\n"
+    rc, log = run(a.exe, cdir, "multi", deck("multi", ei=0.0, length=850.0, nseg=170, fair=(-58, 0, -14),
+                                             anch=(-837.6, 0, -200), seabed="200.0 WtrDpth", mu=0.5,
+                                             types=mtypes, sections=msecs))
+    check(rc == 0, "multi converges (rc %d)%s" % (rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+    if rc == 0:
+        msec = ((d, w, 5.0, 60), (light[0], wl, 5.0, 60), (d, w, 5.0, 50))
+        util, ngr, _, by_sec = plateau_utilisation(cdir, "multi", 0.5, -200.0, kbot, msec)
+        check(by_sec[1][1] > 5 and by_sec[2][1] > 5,
+              "multi: the grounded run spans the light (%d nodes) and the heavy (%d) section" % (by_sec[1][1], by_sec[2][1]))
+        check(util <= 1.01, "multi: friction within mu N at every grounded node (max %.4f)" % util)
+        check(by_sec[1][0] > 0.9 and by_sec[2][0] > 0.5,
+              "multi: friction mobilised to mu N in the light section and beyond in the heavy (%.3f, %.3f)"
+              % (by_sec[1][0], by_sec[2][0]))
+
     # --- input checks ---
     cdir = root / "inputs"
     rc, log = run(a.exe, cdir, "badid", deck("bad id", **flat, extra="30.0 layAzimuth9\n"))
@@ -239,6 +533,25 @@ def main() -> int:
     check(rc != 0 and "asLaid or none" in log, "an unknown staticsFriction policy is rejected")
     rc, log = run(a.exe, cdir, "goodid", deck("good id", **flat, extra="180.0 layAzimuth1\n0 asLaidTension1\n"))
     check(rc == 0, "layAzimuth1 / asLaidTension1 rows are accepted")
+    if rc == 0 and "g180" in pl:
+        # the rows are not only accepted: line 1 is laid at 180 degrees (as the global row does)
+        check(same(table(cdir / "goodid.out")[0], pl["g180"], keys),
+              "layAzimuth1 180 / asLaidTension1 0 act as the global 180 degree lay")
+    if h_run is not None:
+        rc, log = run(a.exe, cdir, "goodid_t", deck("good id t", **flat, extra="%.9g asLaidTension1\n" % h_run))
+        check(rc == 0, "asLaidTension1 row is accepted")
+        if rc == 0 and "gt" in pl and "def" in pl:
+            row = table(cdir / "goodid_t.out")[0]
+            check(same(row, pl["gt"], keys) and not same(row, pl["def"], keys, 1.0e-3),
+                  "asLaidTension1 takes effect (AnchTen %.5g vs %.5g N laid slack)" % (row["AnchTen1"], pl["def"]["AnchTen1"]))
+    rc, log = run(a.exe, cdir, "hugeid", deck("huge id", **flat, extra="30.0 layAzimuth99999999999\n"))
+    check(rc != 0 and "names no LINE" in log, "layAzimuth with an integer suffix too large for a line ID is rejected")
+    rc, log = run(a.exe, cdir, "hugeidt", deck("huge id t", **flat, extra="1.0 asLaidTension99999999999999999999\n"))
+    check(rc != 0 and "names no LINE" in log, "asLaidTension with an integer suffix too large for a line ID is rejected")
+    rc, log = run(a.exe, cdir, "badsuffix", deck("bad suffix", **flat, extra="30.0 layAzimuth1x\n"))
+    check(rc != 0 and "unknown OPTION keyword" in log, "layAzimuth1x is an unknown keyword")
+    rc, log = run(a.exe, cdir, "badtension", deck("bad tension", **flat, extra="-1.0 asLaidTension1\n"))
+    check(rc != 0 and "must be finite and >= 0" in log, "a negative asLaidTension1 is rejected")
 
     print("static friction as laid: %d failure(s)" % len(FAILURES))
     return 1 if FAILURES else 0

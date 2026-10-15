@@ -39,7 +39,6 @@ from cabledyn.deck_file import (
     _PINNED_END_CONNECTIONS,
     _RIGID_END_CONNECTIONS,
     _ROD_ATTACHMENT_ALIASES,
-    _SCALAR_OPTION_KEYWORDS,
     _WAVETRAIN_KEYWORDS,
     DeckFile,
     DeckRecord,
@@ -47,6 +46,7 @@ from cabledyn.deck_file import (
     _copy_companions,
     _end_connection_end,
     _is_csys_token,
+    _is_scalar_option_keyword,
     _is_turbine_point_type,
     _native_int,
     _option_key,
@@ -970,7 +970,7 @@ class OptionSet:
             or lowered in _WAVETRAIN_KEYWORDS
             or _option_key(lowered) in _POSITIONAL_KEYS
         )
-        if lowered not in _SCALAR_OPTION_KEYWORDS and not multi:
+        if not _is_scalar_option_keyword(lowered) and not multi:
             raise ValueError(f"unknown option keyword {keyword!r}")
         if not values:
             raise ValueError(f"option {keyword} needs a value")

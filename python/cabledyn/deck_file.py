@@ -240,7 +240,20 @@ _OPTION_ALIASES = {
     "alphaforceblend": "alpha_force_blend",
     "cable_statics": "cable_statics",
     "cablestatics": "cable_statics",
+    "staticsfriction": "statics_friction",
+    "statics_friction": "statics_friction",
+    "staticsseabedfrictionpolicy": "statics_friction",
+    "seabedfrictionpolicy": "statics_friction",
+    "layazimuth": "lay_azimuth",
+    "lay_azimuth": "lay_azimuth",
+    "aslaidtension": "as_laid_tension",
+    "as_laid_tension": "as_laid_tension",
 }
+# Per-line static friction rows (native apply_option): ``layAzimuth<ID>`` and ``asLaidTension<ID>``
+# with the LINE id appended; the id is a plain decimal suffix, and leading zeros name the same line.
+_LINE_OPTION_PATTERN = re.compile(r"(layazimuth|aslaidtension)([0-9]+)\Z")
+_LINE_OPTION_FAMILIES = {"layazimuth": "lay_azimuth", "aslaidtension": "as_laid_tension"}
+_STATICS_FRICTION_POLICIES = frozenset({"aslaid", "as_laid", "as-laid", "none"})
 _SCALAR_OPTION_KEYWORDS = frozenset(_OPTION_ALIASES) | {
     "icmode",
     "bodyic",
@@ -800,12 +813,34 @@ def _selector_int(text: object, what: str) -> int:
     raise ValueError(f"{what} must be an integer, got {text!r}")
 
 
+def _line_option(keyword: str) -> tuple[str, int] | None:
+    """Return (family, line id) of a per-line static friction row, else ``None``.
+
+    ``layAzimuth<ID>`` and ``asLaidTension<ID>`` (case-insensitive) set the lay azimuth and the
+    as-laid tension of the LINE ``ID`` alone, over the global ``layAzimuth`` / ``asLaidTension``
+    row; the family is ``lay_azimuth`` or ``as_laid_tension``.
+    """
+    match = _LINE_OPTION_PATTERN.match(keyword.lower())
+    if match is None:
+        return None
+    return _LINE_OPTION_FAMILIES[match.group(1)], int(match.group(2))
+
+
+def _is_scalar_option_keyword(keyword: str) -> bool:
+    """Whether ``keyword`` (any case) is a two-token scalar OPTIONS keyword (per-line rows too)."""
+    return keyword.lower() in _SCALAR_OPTION_KEYWORDS or _line_option(keyword) is not None
+
+
 def _option_key(keyword: str) -> str:
     """Return the native identity of an option keyword (aliases collapse to one key)."""
     lowered = keyword.lower()
     if lowered in _WAVETRAIN_KEYWORDS:
         # native CD_Sea_Parse_Train takes both spellings of the one keyword
         return "wavetrain"
+    line_option = _line_option(lowered)
+    if line_option is not None:
+        # layAzimuth7 and layAzimuth07 set the same line natively: the last row wins
+        return f"{line_option[0]}:{line_option[1]}"
     return _OPTION_ALIASES.get(lowered, lowered)
 
 
@@ -1029,7 +1064,7 @@ def _dynamic_solver_values_are_valid(values: list[str] | tuple[str, ...]) -> boo
 def _scalar_option_value_error(keyword: str, value: str) -> str | None:
     """Return why a two-token scalar row violates ``apply_option`` semantics."""
     raw = keyword.lower()
-    key = _option_key(raw)
+    key = _option_key(raw).partition(":")[0]  # a per-line row takes its family's rules
     defect = _real_token_defect(value)
     if defect is not None and "subnormal" in defect:
         return defect
@@ -1051,6 +1086,7 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "friction",
         "friction_axial",
         "friction_lateral",
+        "as_laid_tension",
         "tensile_strain_tolerance",
         "ramp_time",
         "max_strain",
@@ -1077,6 +1113,8 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "friction",
         "friction_axial",
         "friction_lateral",
+        "lay_azimuth",
+        "as_laid_tension",
         "rhoinf",
         "tensile_strain_tolerance",
         "ramp_time",
@@ -1170,6 +1208,13 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         if abs(numeric - round(numeric)) > integer_tolerance:
             return "must be an integer"
         return None
+    if key == "statics_friction":
+        # native: the policy is dequoted and compared case-insensitively
+        return (
+            None
+            if _strip_quotes(value).lower() in _STATICS_FRICTION_POLICIES
+            else "must be asLaid or none"
+        )
     if key == "cable_statics":
         return (
             None
@@ -2076,7 +2121,7 @@ class DeckFile:
                 "Coulomb friction set by frictionMu, frictionMuLateral and frictionMuAxial; "
                 "remove the row"
             )
-        if keyword.lower() not in _SCALAR_OPTION_KEYWORDS:
+        if not _is_scalar_option_keyword(keyword):
             raise DeckFormatError(f"{where}: unknown OPTION keyword {keyword!r}")
         if error := _scalar_option_value_error(keyword, tokens[0]):
             raise DeckFormatError(f"{where}: OPTION {keyword} {error}")
@@ -2660,6 +2705,11 @@ class DeckFile:
             for point_type in point_types.values()
         )
         line_ids = unique(self.lines, "line", True)
+        for option in options:
+            line_option = _line_option(option.keyword)
+            if line_option is not None and str(line_option[1]) not in line_ids:
+                # native: layAzimuth<ID> / asLaidTension<ID> must name a LINE
+                raise DeckFormatError(f"{self._label}: OPTION {option.keyword} names no LINE")
         section_lines: set[str] = set()
         section_types_by_line: dict[str, list[str]] = {line_id: [] for line_id in line_ids}
         line_nelems: dict[str, int] = dict.fromkeys(line_ids, 0)

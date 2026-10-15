@@ -144,12 +144,15 @@ Environment and seabed
        and pulled taut is held back by its friction, so the as-laid statics lowers anchor
        tensions (by up to ``mu w`` times the grounded length), and the frictionless statics is
        the conservative choice for anchor loads unless the as-laid layout and tension are
-       known. Used only with ``frictionMu > 0`` and a seabed. See :ref:`static-friction`
+       known. Used only with ``frictionMu > 0`` and a seabed; rejected, like ``frictionMu``,
+       on decks with ``Connect``/``Free`` points, bodies or rods (and on mixed-topology
+       decks), whose static equilibrium solves the lines without seabed friction. See
+       :ref:`static-friction`
      - both
      - ``asLaid staticsFriction``
    * - ``layAzimuth`` / ``lay_azimuth``, and ``layAzimuth<ID>``
      - real, deg
-     - absent: each line's anchor → fairlead direction
+     - absent: each line's chord direction, from its lower end (anchor → fairlead)
      - finite. Horizontal direction, from global +x toward +y, in which the line was laid from
        its anchor (its lower end): the as-laid reference of ``staticsFriction asLaid``.
        ``layAzimuth`` sets every line; ``layAzimuth<ID>`` (the line ID appended, e.g.
