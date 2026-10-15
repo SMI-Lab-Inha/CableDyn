@@ -43,6 +43,10 @@ from cabledyn import read_output  # noqa: E402
 FAILURES: list[str] = []
 G = 9.80665
 RHO = 1025.0
+# TDP<L>Grd is continuous with the touchdown point: an anchor node held on the seabed with the next node
+# a few millimetres clear of it reads the contact-onset height times the chord over that clearance
+# (micrometres to millimetres), not exactly 0. Laid means more than a centimetre.
+GRD_TOL = 1.0e-2
 
 
 def check(ok: bool, message: str) -> None:
@@ -332,8 +336,10 @@ def main() -> int:
           f"suspended line: AnchFz1 + end-node weight = AnchFH1 tan(AnchIncl1) (difference "
           f"{(fz + node_w - fh * math.tan(incl)) / ten:+.1e} of AnchTen): the end force is the anchor "
           "segment's pull plus the anchor node's weight")
-    check(fz > 0.5 * ten and float(hist.column("TDP1Grd")[0]) == 0.0,
-          f"suspended line: AnchFz1 = {fz / 1e6:.3f} MN uplift and TDP1Grd = 0 (only the anchor node touches)")
+    grd_taut = float(hist.column("TDP1Grd")[0])
+    check(fz > 0.5 * ten and grd_taut < GRD_TOL,
+          f"suspended line: AnchFz1 = {fz / 1e6:.3f} MN uplift and TDP1Grd = {grd_taut:.1e} m (only the anchor "
+          "node touches: the TDP sits within the contact-onset height of it)")
     check_anchor_point("suspended line", out / "taut", 1, 1)
 
     # --- (d) dynamics: a 42 m fairlead surge away from the anchor lifts the laid chain off it
@@ -351,16 +357,17 @@ def main() -> int:
     check(finite and hist.time.size == 2001, f"surge: every channel is finite at all {hist.time.size} rows")
     check_anchor_point("surge", out / "lift", 1, 1)
     total = line_lengths(Path(f"{out / 'lift'}.Line1.p.out"))
-    laid = grd > 0.0
-    worst = float(np.max(np.abs((s + grd - total)[laid])))
-    check(worst < 2e-4, f"surge: TDP1s + TDP1Grd = deformed line length while chain is laid (max difference "
-          f"{worst:.1e} m over {int(np.count_nonzero(laid))} rows)")
-    check(bool(np.all(fz[laid] < 0.0)) and bool(np.all(grd[fz > 0.0] == 0.0)),
-          "surge: TDP1Grd > 0 implies AnchFz1 < 0, and AnchFz1 > 0 implies TDP1Grd = 0, at every row")
-    lift, bare = int(np.argmax(fz > 0.0)), int(np.argmax(grd == 0.0))
-    check(fz[0] < 0.0 and grd[0] > 390.0 and fz[-1] > 0.0 and grd[-1] == 0.0 and bool(np.all(fz[lift:] > 0.0))
-          and bool(np.all(grd[bare:] == 0.0)) and 0.0 <= hist.time[lift] - hist.time[bare] < 1.0,
-          f"surge: AnchFz1 {fz[0] / 1e3:.1f} -> {fz[-1] / 1e3:.1f} kN and TDP1Grd {grd[0]:.1f} -> {grd[-1]:.1f} m; "
+    laid = grd > GRD_TOL
+    worst = float(np.max(np.abs(s + grd - total)))
+    check(worst < 2e-4, f"surge: TDP1s + TDP1Grd = deformed line length at every row, laid or lifted (max "
+          f"difference {worst:.1e} m over {hist.time.size} rows, {int(np.count_nonzero(laid))} of them laid)")
+    check(bool(np.all(fz[laid] < 0.0)) and bool(np.all(grd[fz > 0.0] < GRD_TOL)),
+          f"surge: TDP1Grd > {GRD_TOL:g} m implies AnchFz1 < 0, and AnchFz1 > 0 implies TDP1Grd <= {GRD_TOL:g} m, "
+          "at every row")
+    lift, bare = int(np.argmax(fz > 0.0)), int(np.argmax(grd < GRD_TOL))
+    check(fz[0] < 0.0 and grd[0] > 390.0 and fz[-1] > 0.0 and grd[-1] < GRD_TOL and bool(np.all(fz[lift:] > 0.0))
+          and bool(np.all(grd[bare:] < GRD_TOL)) and 0.0 <= hist.time[lift] - hist.time[bare] < 1.0,
+          f"surge: AnchFz1 {fz[0] / 1e3:.1f} -> {fz[-1] / 1e3:.1f} kN and TDP1Grd {grd[0]:.1f} -> {grd[-1]:.1e} m; "
           f"the grounded length reaches 0 at t = {hist.time[bare]:.2f} s and the anchor lifts (AnchFz1 > 0) at "
           f"t = {hist.time[lift]:.2f} s, both for the rest of the run")
     h_end, v_end = suspended_catenary(550.0, 500.0 - offset, 100.0, w3, R3["ea"])
@@ -408,7 +415,8 @@ def main() -> int:
 
     src = (examples / "iea15mw_umaine_mixed_cabledyn.dat").read_text(encoding="utf-8")
     deck = set_option(src, "TMax", "0.5")
-    names = ["TDP1s", "TDP1Grd", "TDP4s", "TDP4Grd", *anchor_channels(1, 2), *anchor_channels(4, 8)]
+    names = ["TDP1s", "TDP1Grd", "TDP4s", "TDP4Grd", *anchor_channels(1, 2), *anchor_channels(4, 8),
+             "BendMom4N88", "BendMom4N87", "Curv4N88"]
     deck = set_outputs(deck, names)
     (out / "mixed.dat").write_text(deck, encoding="utf-8", newline="\n")
     run(args.exe, out / "mixed.dat", out / "mixed", env)
@@ -419,6 +427,15 @@ def main() -> int:
           bool(np.all(hist.column("TDP4Grd") > 0.0)),
           f"mixed aggregate: laid chain (TDP1Grd {hist.column('TDP1Grd')[0]:.1f} m, AnchFz1 "
           f"{hist.column('AnchFz1')[0] / 1e3:.2f} kN) and laid cable (TDP4Grd {hist.column('TDP4Grd')[0]:.1f} m)")
+    # the cable's 'bare' type laid on the seabed (10 m elements): the recovered bend moment at the Fixed
+    # anchor node and its neighbour carries no fixed-end moment of the element's weight w l0^2 / 12
+    w_bare = (36.70 - RHO * math.pi / 4.0 * 0.16**2) * G
+    m_end = w_bare * 10.0**2 / 12.0
+    bm_anchor, bm_next = hist.column("BendMom4N88"), hist.column("BendMom4N87")
+    check(bool(np.all(np.abs(bm_anchor) < 0.02 * m_end)) and bool(np.all(np.abs(bm_next) < 0.02 * m_end)) and
+          bool(np.all(hist.column("Curv4N88") < 0.02 * m_end / 1.99e4)),
+          f"mixed aggregate, laid anchor: end-node BendMom4 {np.max(np.abs(bm_anchor)):.2e} N.m and next node "
+          f"{np.max(np.abs(bm_next)):.2e} N.m, well below the element weight moment w l0^2/12 = {m_end:.0f} N.m")
 
     src = (examples / "rigid6_buoy.dat").read_text(encoding="utf-8")
     deck = set_outputs(set_option(src, "TMax", "0.2"), [*anchor_channels(1, 4), *anchor_channels(2, 5)])

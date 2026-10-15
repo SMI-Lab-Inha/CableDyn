@@ -405,8 +405,9 @@ the suspended end, and the arc-length excursion. Samples without a touchdown are
 The driver computes the same quantities during the run as the ``TDP<L>s``/``x``/``y``/``z``/
 ``Lay``/``Exc`` channels (see :doc:`outputs`), with ``tolerance`` equal to the contact-onset
 height of 1e-6 m. Its ``TDP<L>Grd`` channel adds the grounded length from the grounded end to the
-TDP (with End B grounded, the deformed line length less the TDP arc length; 0 when no node beyond
-the end node is grounded), for the anchor uplift check.
+TDP (with End B grounded, the deformed line length less the TDP arc length). It varies continuously
+with the TDP and is 0 only when the grounded end node itself is off the seabed or the TDP sits at
+that node, for the anchor uplift check.
 
 .. code-block:: python
 

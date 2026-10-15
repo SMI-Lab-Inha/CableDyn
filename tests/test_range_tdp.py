@@ -192,6 +192,30 @@ def check_output_recovery(exe: str, deck: str, out: Path, env: dict, nodes: list
           "OutputRecovery: an unknown value stops the run by name")
 
 
+def check_soft_section_curvature(exe: str, deck: str, out: Path, env: dict, nodes: list[int]) -> None:
+    """A section softer than max(|w| L0^2)/12 times 1 m (1.3 kN m^2 on this cable) cannot resolve a
+    curvature from the recovered moment, whose error does not scale with EI: Curv takes the exact
+    geometric trace (the OutputRecovery element value) instead of an amplified moment error. With
+    EI = 100 N m^2 the recovered curvature would exceed 6 1/m against a peak trace of 0.12 1/m."""
+    soft, count = re.subn(r"1\.99e4", "1.0e2", deck)
+    if count != 2:
+        raise RuntimeError("expected two EI entries in the lazy-wave line types, found %d" % count)
+    names = [f"Curv1N{j}" for j in nodes]
+    soft = set_outputs(soft, names)
+    (out / "lazywave_soft.dat").write_text(soft, encoding="utf-8", newline="\n")
+    run(exe, out / "lazywave_soft.dat", out / "lazywave_soft", env)
+    element = set_option(soft, "OutputRecovery", "element")
+    (out / "lazywave_soft_element.dat").write_text(element, encoding="utf-8", newline="\n")
+    run(exe, out / "lazywave_soft_element.dat", out / "lazywave_soft_element", env)
+    eq = read_output(out / "lazywave_soft.out")
+    el = read_output(out / "lazywave_soft_element.out")
+    worst = max(float(np.max(np.abs(eq.column(n) - el.column(n)))) for n in names)
+    peak = max(float(np.max(el.column(n))) for n in names)
+    check(worst == 0.0 and 0.0 < peak < 1.0,
+          f"soft section (EI = 100 N m^2): Curv takes the exact geometric trace (peak {peak:.3f} 1/m, "
+          f"difference to OutputRecovery element {worst:.1e})")
+
+
 def catenary_tdp(length: float, span: float, depth: float, w: float, ea: float) -> tuple[float, float, float]:
     """Elastic catenary resting on a frictionless seabed: (TDP deformed arc from the fairlead,
     TDP horizontal distance from the fairlead, horizontal tension)."""
@@ -377,6 +401,7 @@ def main() -> int:
     check_envelopes("cubic-Hermite", out / "lazywave", 1, nodes, 1.0, -80.0)
     check_tdp_vs_python("cubic-Hermite", out / "lazywave", 1, -80.0, 5e-3)
     check_output_recovery(args.exe, deck, out, env, nodes)
+    check_soft_section_curvature(args.exe, deck, out, env, nodes)
 
     # --- Free point (point-system route)
     src = (examples / "clump_weight_free_point.dat").read_text(encoding="utf-8")

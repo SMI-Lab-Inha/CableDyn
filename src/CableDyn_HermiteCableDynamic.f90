@@ -419,6 +419,20 @@ MODULE CableDyn_HermiteCableDynamic
     ! Node output definitions (CD_HermiteCable_Dyn_Set_Output_Recovery): equilibrium recovery
     ! by default, the element-mean axial force and exact curvature traces when set.
     LOGICAL :: output_element_recovery = .FALSE.
+    ! Smallest bending stiffness [N m^2] whose recovered bend moment resolves a curvature: the largest
+    ! consistent-load moment w L0^2/12 of an element over a 1 m bend radius. The moment recovered
+    ! from nodal equilibrium carries an error of that order, independent of EI, so over a softer
+    ! section it cannot give the curvature (node_values then takes the exact geometric trace).
+    REAL(wp) :: ei_resolve = CD_ZERO
+    ! Cache of the element end residuals behind the node outputs (CD_HermiteCable_Dyn_Node_Values),
+    ! valid for the state t, q, v, a and the configuration epoch it was filled at: the channels of
+    ! one output row share one evaluation per element. Allocated once at initialisation; rc_epoch
+    ! counts the loads configured after it (drag, waves, added mass, held fluid, contact).
+    INTEGER :: rc_epoch = 0, rc_key_epoch = -1
+    LOGICAL :: rc_key_ok = .FALSE.
+    REAL(wp) :: rc_t = CD_ZERO
+    REAL(wp), ALLOCATABLE :: rc_q(:), rc_v(:), rc_a(:), rc_g(:, :)
+    LOGICAL, ALLOCATABLE :: rc_have(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HermiteCableDynType
 
@@ -543,6 +557,7 @@ CONTAINS
     model%seabed_z = seabed_z; model%kn = kn
     ALLOCATE (model%l0(ne), model%EA(ne), model%EI(ne), model%rho_a(ne), model%w(ne))
     model%l0 = l0; model%EA = EA; model%EI = EI; model%rho_a = rho_a; model%w = w
+    model%ei_resolve = MAXVAL(ABS(w)*l0*l0)/12.0_wp
 
     ! gen-alpha constants
     rho = rho_inf
@@ -607,6 +622,9 @@ CONTAINS
 
     ! state: at-rest seed, v = 0, consistent a0
     ALLOCATE (model%q(ndof), model%v(ndof), model%a(ndof))
+    ALLOCATE (model%rc_q(ndof), model%rc_v(ndof), model%rc_a(ndof), model%rc_g(12, ne), model%rc_have(ne))
+    model%rc_have = .FALSE.
+    model%rc_key_ok = .FALSE.
     model%q = seed
     model%v = CD_ZERO
     model%a = CD_ZERO
@@ -653,6 +671,7 @@ CONTAINS
     CHARACTER(200) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1706,6 +1725,7 @@ CONTAINS
     LOGICAL :: had_drag
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1804,6 +1824,7 @@ CONTAINS
     CHARACTER(300) :: em
 
     ErrStat = CD_HCDYN_OK
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1874,6 +1895,7 @@ CONTAINS
     LOGICAL :: had_am
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1969,6 +1991,7 @@ CONTAINS
     CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -2088,6 +2111,7 @@ CONTAINS
     CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -2224,6 +2248,7 @@ CONTAINS
     LOGICAL :: had_field
     CHARACTER(240) :: em
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n. The carried step
     ! factor stays usable (a per-step field update only perturbs the drag and inertia tangent;
     ! the first field's consistent-acceleration solve drops it).
@@ -4726,8 +4751,12 @@ CONTAINS
 
   SUBROUTINE CD_HermiteCable_Dyn_Node_Values(model, node, tension, curvature, bend_moment, ErrStat, ErrMsg)
     !! Equilibrium node values at one node (internal order), from the two adjacent elements;
-    !! the same values as CD_HermiteCable_Dyn_Node_Recovery returns for that node.
-    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    !! the same values as CD_HermiteCable_Dyn_Node_Recovery returns for that node. The element end
+    !! residuals are kept in the model for the state they were evaluated at (see the rc_ fields),
+    !! so the tension, curvature and bend moment of a node, and of neighbouring nodes, share one
+    !! evaluation per element; a changed state or load configuration refreshes them. No
+    !! allocation.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4742,18 +4771,45 @@ CONTAINS
     IF (node < 1 .OR. node > model%nn) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Node_Values: node out of range'; RETURN
     END IF
+    ! the cached residuals belong to the state they were computed at (exact comparison; a NaN
+    ! state never matches and is recomputed)
+    IF (.NOT. (model%rc_key_ok .AND. model%rc_key_epoch == model%rc_epoch .AND. model%rc_t == model%t .AND. &
+               ALL(model%rc_q == model%q) .AND. ALL(model%rc_v == model%v) .AND. &
+               ALL(model%rc_a == model%a))) THEN
+      model%rc_q = model%q; model%rc_v = model%v; model%rc_a = model%a
+      model%rc_t = model%t; model%rc_key_epoch = model%rc_epoch
+      model%rc_key_ok = .TRUE.
+      model%rc_have = .FALSE.
+    END IF
     fm = CD_ZERO; mm = CD_ZERO; fp = CD_ZERO; mp = CD_ZERO
     IF (node > 1) THEN
-      CALL element_end_residual(model, node - 1, g, ErrStat, ErrMsg)
+      CALL cached_end_residual(node - 1, g)
       IF (ErrStat /= CD_HCDYN_OK) RETURN
       fm = g(7:9); mm = g(10:12)
     END IF
     IF (node < model%nn) THEN
-      CALL element_end_residual(model, node, g, ErrStat, ErrMsg)
+      CALL cached_end_residual(node, g)
       IF (ErrStat /= CD_HCDYN_OK) RETURN
       fp = -g(1:3); mp = -g(4:6)
     END IF
     CALL node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg)
+
+  CONTAINS
+
+    SUBROUTINE cached_end_residual(e, ge)
+      INTEGER, INTENT(IN) :: e
+      REAL(wp), INTENT(OUT) :: ge(12)
+      REAL(wp) :: gl(12)
+      IF (.NOT. model%rc_have(e)) THEN
+        CALL element_end_residual(model, e, gl, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_HCDYN_OK) THEN
+          ge = CD_ZERO; RETURN
+        END IF
+        model%rc_g(:, e) = gl
+        model%rc_have(e) = .TRUE.
+      END IF
+      ge = model%rc_g(:, e)
+    END SUBROUTINE cached_end_residual
   END SUBROUTINE CD_HermiteCable_Dyn_Node_Values
 
   SUBROUTINE CD_HermiteCable_Dyn_Node_Recovery(model, ErrStat, ErrMsg, tension, curvature, bend_moment, &
@@ -4776,7 +4832,9 @@ CONTAINS
     !! tension(j) = t_j . F_j (t_j the unit nodal tangent; a line end reports the end force
     !! magnitude of CD_HermiteCable_Dyn_End_Force), bend_moment(j) = |m_j - (m_j . t_j) t_j|,
     !! curvature(j) = bend_moment(j)/EI, the larger of the two sides at a section junction (the
-    !! exact geometric trace on an element without bending stiffness). segment_tension(e) is the
+    !! exact geometric trace on an element without bending stiffness, or with EI below ei_resolve,
+    !! where the recovered moment error w L0^2/12 exceeds the elastic moment of a 1 m bend radius).
+    !! segment_tension(e) is the
     !! mean of the axial components of element e's own two end forces. Every output is
     !! optional (node arrays nn, segment_tension ne); the routine allocates nothing.
     !!
@@ -4874,7 +4932,7 @@ CONTAINS
     DO side = 0, 1
       e = node - 1 + side
       IF (e < 1 .OR. e > model%ne) CYCLE
-      IF (model%EI(e) > CD_ZERO) THEN
+      IF (model%EI(e) > CD_ZERO .AND. model%EI(e) >= model%ei_resolve) THEN
         curvature = MAX(curvature, bend_moment/model%EI(e))
       ELSE
         CALL gather_elem(model, e, qe)
@@ -4996,7 +5054,8 @@ CONTAINS
     INTEGER, PARAMETER :: ZS(4) = [3, 6, 9, 12]
     REAL(wp) :: qe(12), ve(12), ae(12), fe(12), fx(12), energy, fdry(4), kdry(4, 4)
     REAL(wp) :: dry_wl, dry_b, dry_r, hf_mid(3), l0, fca(3), fcb(3), c, a4(4), m4(4, 4)
-    INTEGER :: es, k
+    REAL(wp) :: support(3), dsupport(3), nin(3)
+    INTEGER :: es, k, inode
     LOGICAL :: dry
     CHARACTER(200) :: em2
 
@@ -5098,6 +5157,19 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) GOTO 900
       IF (model%trib(e) > CD_ZERO) fca = fca*l0/model%trib(e)
       IF (model%trib(e + 1) > CD_ZERO) fcb = fcb*l0/model%trib(e + 1)
+      ! A held end whose end element lies on the floor (assemble_residual): the seabed carries the
+      ! element's weight with its consistent end moment, which the held end node's own contact
+      ! (a point reaction at an anchor sitting on the floor) cannot. The floor reaction of the
+      ! end half of that element is the support share of its weight, uniform with the reaction
+      ! of the neighbouring node, so that a laid end element carries no fixed-end moment.
+      IF (e == 1) THEN
+        IF (held_end_floor_support(model, model%q, 1, support, dsupport, inode, nin)) &
+          fca = (model%w(1)*l0)*support
+      END IF
+      IF (e == model%ne) THEN
+        IF (held_end_floor_support(model, model%q, 2, support, dsupport, inode, nin)) &
+          fcb = (model%w(e)*l0)*support
+      END IF
       ! integrals of the four shapes over xi in [0, 1/2] (fca) and [1/2, 1] (fcb)
       g(1:3) = g(1:3) - (0.40625_wp*fca + 0.09375_wp*fcb)
       g(4:6) = g(4:6) - l0*(0.0572916666666666667_wp*fca + 0.0260416666666666667_wp*fcb)
@@ -5634,6 +5706,8 @@ CONTAINS
                   model%ws_elem_Kwave, model%ws_elem_Kheld, &
                   model%ws_elem_es, model%ws_elem_em)
     END IF
+    IF (ALLOCATED(model%rc_q)) DEALLOCATE (model%rc_q, model%rc_v, model%rc_a, model%rc_g, model%rc_have)
+    model%rc_key_ok = .FALSE.
     IF (ALLOCATED(model%freemask)) DEALLOCATE (model%freemask)
     IF (ALLOCATED(model%solve_mask)) DEALLOCATE (model%solve_mask)
     IF (ALLOCATED(model%fmap)) DEALLOCATE (model%fmap)

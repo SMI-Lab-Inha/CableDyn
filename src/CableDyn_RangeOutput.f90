@@ -297,10 +297,9 @@ CONTAINS
     !! algorithm of cabledyn.touchdown_history. `touching` is false when the grounded end
     !! has lifted off (the TDP is then reported at that end) or every node is grounded (the
     !! TDP is then reported at the suspended end). `grounded` is the deformed chord length
-    !! from the grounded end to the TDP, the whole line when every node is grounded, and 0
-    !! when no node beyond the grounded end node is grounded: an end held at the seabed
-    !! elevation counts as grounded, but no line lies on the seabed there (the end is about
-    !! to lift, or has lifted).
+    !! from the grounded end to the TDP, so it varies continuously with the TDP: the whole
+    !! line when every node is grounded, and 0 only when the grounded end node itself is off
+    !! the seabed or the TDP sits at that node.
     REAL(wp), INTENT(IN) :: r(:, :), clearance(:)
     INTEGER, INTENT(IN) :: grounded_end
     LOGICAL, INTENT(OUT) :: touching
@@ -352,7 +351,6 @@ CONTAINS
       END IF
     END IF
     grounded = s_scan
-    IF (last <= 1) grounded = CD_ZERO
     arc = s_scan
     IF (grounded_end == 2) arc = s_total - s_scan
     suspended_xy = r(1:2, node_of(nn))

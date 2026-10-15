@@ -688,6 +688,11 @@ target_link_libraries(test_bathymetry PRIVATE cabledyn_core)
 add_test(NAME bathymetry COMMAND test_bathymetry)
 set_tests_properties(bathymetry PROPERTIES LABELS "fortran;unit;seabed")
 
+add_executable(test_range_tdp_locator tests/test_range_tdp_locator.f90)
+target_link_libraries(test_range_tdp_locator PRIVATE cabledyn_core)
+add_test(NAME range_tdp_locator COMMAND test_range_tdp_locator)
+set_tests_properties(range_tdp_locator PROPERTIES LABELS "fortran;unit;seabed")
+
 add_executable(test_hydro tests/test_hydro.f90)
 target_link_libraries(test_hydro PRIVATE cabledyn_core)
 add_test(NAME hydro COMMAND test_hydro)

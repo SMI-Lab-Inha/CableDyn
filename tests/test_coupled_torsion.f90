@@ -163,7 +163,7 @@ CONTAINS
   END FUNCTION yaw_dcm
 
   SUBROUTINE channels(agg, torq_a, torq_b, twist)
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: agg
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
     REAL(wp), INTENT(OUT) :: torq_a, torq_b, twist
     INTEGER :: es
     CHARACTER(256) :: em

@@ -1251,7 +1251,7 @@ bending moment. None of these channels is mandatory.
 | `TDP<L>x`, `TDP<L>y`, `TDP<L>z` | line L TDP position | m |
 | `TDP<L>Lay` | line L layback: horizontal distance from the TDP to the suspended end | m |
 | `TDP<L>Exc` | line L TDP excursion: horizontal TDP displacement from its initial position, along the initial direction toward the suspended end | m |
-| `TDP<L>Grd` | line L grounded length: deformed chord length along the nodes from the grounded end to the TDP; 0 once the grounded end has lifted off | m |
+| `TDP<L>Grd` | line L grounded length: deformed chord length along the nodes from the grounded end to the TDP; continuous with the TDP, 0 only when nothing touches (the grounded end has lifted off) | m |
 | `Torq<L>N<J>` | line L torque at node J (uniform along the line); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line restrained in torsion at both ends | N·m |
 | `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` over the elements in between; 0 at End A, without the end-spring windup. Only on a line restrained in torsion at both ends | deg |
 | `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included. Only on a line restrained in torsion at both ends | deg |
@@ -1271,7 +1271,7 @@ bending moment. None of these channels is mandatory.
   naming the line. They are available on every route, OpenFAST included.
 - The anchor uplift check of a drag-embedment anchor (no vertical load at the anchor in the
   intact condition) reads `AnchFz<L>` (its maximum over the run at most 0) or `TDP<L>Grd`
-  (greater than 0 throughout); see [Outputs](outputs.rst) for the end-node weight share that a
+  (greater than a small tolerance such as 0.01 m throughout); see [Outputs](outputs.rst) for the end-node weight share that a
   grounded `Fixed` anchor carries.
 - In an OpenFAST `CompMooring = 5` run, channel headers in the OpenFAST output and in
   `<OpenFASTRoot>.CD.out` use OpenFAST's 20-character width (`ChanLen`). A longer channel name

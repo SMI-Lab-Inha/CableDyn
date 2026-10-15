@@ -19740,7 +19740,7 @@ CONTAINS
   SUBROUTINE mb_point_force(mb, ch, val, ErrStat, ErrMsg)
     !! Point<P>F{x,y,z,H} on the multibody march: the resultant of the forces the attached EI=0
     !! lines and finite-EI cables exert on point P.
-    TYPE(MultibodyMarch), INTENT(IN) :: mb
+    TYPE(MultibodyMarch), INTENT(INOUT) :: mb
     CHARACTER(*), INTENT(IN) :: ch
     REAL(wp), INTENT(OUT) :: val
     INTEGER, INTENT(OUT) :: ErrStat
@@ -25118,7 +25118,7 @@ CONTAINS
     !! every node is available for touchdown, curvature, and tension inspection.
     CHARACTER(*), INTENT(IN) :: out_root
     TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cables(:)
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
@@ -25360,7 +25360,7 @@ CONTAINS
     CHARACTER(NAMELEN), INTENT(IN) :: channels(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cables(:)
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
     TYPE(MotionTable), INTENT(IN) :: motion
     LOGICAL, INTENT(IN) :: has_motion
     INTEGER, INTENT(OUT) :: ErrStat
@@ -30881,7 +30881,7 @@ CONTAINS
     TYPE(CD_SystemType), INTENT(IN) :: system
     ! ALLOCATABLE so a pure-mooring deck that declares channels (ncable = 0, cables unallocated)
     ! can pass its cables store: only a channel resolving to a cable dereferences it.
-    TYPE(CD_HFMF_ModuleType), ALLOCATABLE, INTENT(IN) :: cables(:)
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE, INTENT(INOUT) :: cables(:)
     LOGICAL, INTENT(IN) :: line_is_cable(:)
     INTEGER, INTENT(IN) :: line_obj_index(:)
     REAL(wp), INTENT(OUT) :: val
@@ -31353,7 +31353,7 @@ CONTAINS
     !! -> fairlead (node nn, the coupled endpoint), so deck End A = internal node nn. Bend moment is
     !! EI(node) * |kvec_current - kvec_reference|; the built cable's reference is straight
     !! (kvec_reference = 0), so it reduces to EI * geometric curvature magnitude.
-    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     CHARACTER(*), INTENT(IN) :: ch
     REAL(wp), INTENT(OUT) :: val
     INTEGER, INTENT(OUT) :: ErrStat
@@ -31602,7 +31602,7 @@ CONTAINS
   SUBROUTINE cable_node_values(cable, inode, tension, curvature, bend_moment, ErrStat, ErrMsg)
     !! Equilibrium node values of a finite-EI cable at internal node inode
     !! (CD_HermiteCable_Dyn_Node_Values): effective tension, curvature and bend moment.
-    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     INTEGER, INTENT(IN) :: inode
     REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
     INTEGER, INTENT(OUT) :: ErrStat

@@ -111,12 +111,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   (positive upward, the line lifting its anchor) and the horizontal magnitude of the `AnchTen<L>`
   end force; for an anchor that holds one line they equal `Point<P>Fz` and `Point<P>FH`.
   `TDP<L>Grd` is the grounded length, the deformed chord length from the grounded end to the
-  touchdown point, and is 0 while no node beyond the grounded end node rests on the seabed. The
+  touchdown point; it varies continuously with the touchdown point and is 0 only when nothing
+  touches (an anchor node on the seabed beside a node a few millimetres clear of it reads
+  micrometres to millimetres, so test it against a small tolerance such as 0.01 m). The
   channels are available on the static, `EI = 0`, finite-EI, mixed and multibody routes, in the C
   API and in coupled OpenFAST and FAST.Farm runs; the two-moving-end finite-EI route rejects
   `AnchFz`/`AnchFH` by name. The Python deck reader and builder accept the new names. See the
   manual's outputs page (Anchor uplift), which also states the end-node weight share that a laid
-  `Fixed` anchor carries (`AnchFz` slightly negative, not uplift).
+  `Fixed` anchor carries (slightly negative `AnchFz` on an `EI = 0` line, not uplift; exactly 0
+  on a finite-EI line, whose grounded end leaves its node weight to the floor).
 - `OutputRecovery` option (`equilibrium`, the default, or `element`): the definition of the
   finite-EI node tension, curvature, bend moment and segment tension (see Changed). `element`
   restores the definitions of 0.1.1. The Python deck reader accepts and checks it.
@@ -149,8 +152,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the example's mesh. A `.t.out` segment tension is now the mean of the axial components of the
   element's two end forces instead of the axial resultant at its midpoint. The library
   curvature (`CD_HermiteCable_Dyn_Curvature`, `CD_HFMF_Curvature`) follows the same definition
-  as the channels. Line-end values (`FairTen`, `AnchTen`, the end-node tension), positions and
-  the material-strain checks (`tensile_safety`, the static compression notes) are unchanged. On
+  as the channels. A section softer than `max(|w| L0^2)/12` times 1 m (about 1.3 kN m^2 for the
+  10 m elements of that cable) takes its curvature from the exact geometric trace, as an
+  `EI = 0` section does: the recovered moment carries an error of that order whatever `EI` is,
+  which `Curv = BendMom/EI` would amplify (6.9 1/m against 0.12 1/m at `EI` = 100 N m^2).
+  Line-end values (`FairTen`, `AnchTen`, the end-node tension; the end reaction, without the
+  inertia, added mass and seabed friction that the recovered section forces of the interior
+  nodes include), positions and the material-strain checks (`tensile_safety`, the static
+  compression notes) are unchanged. At a `Fixed` anchor resting on the seabed the end element
+  carries the floor-support share of its weight, as in the residual, so the end node reports
+  the bend moment of the line (0.02 N m, not 903 N m, at the anchor of the cable of
+  `examples/iea15mw_umaine_mixed_cabledyn.dat`, and 0.1 N m, not 205 N m, at the next node). On
   a line restrained in torsion the condensed torque is left out of the recovery; it moves the
   tension by at most 0.45 N of 9.4 kN on `examples/torsion_lazy_wave_hangoff_twist.dat`. Range
   graphs and `.t.out` files written every step cost 4 % more run time, plain channels under 2

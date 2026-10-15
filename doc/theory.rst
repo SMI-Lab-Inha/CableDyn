@@ -202,7 +202,10 @@ holds only the element's own distributed loads: consistent submerged weight, the
 above the free surface, drag, Froude-Krylov force, structural and added-mass inertia, and the
 seabed reaction of its end nodes, each nodal reaction spread uniformly over the node's tributary
 length (the distributed floor reaction it stands for; without it a line resting on the floor
-would report the fixed-end moment :math:`w L_0^2/12` of its own weight). :math:`\mathbf{g}_e`
+would report the fixed-end moment :math:`w L_0^2/12` of its own weight; at a held line end whose
+end element lies on the floor, the reaction of the end half is the floor-support share of the
+weight, the share that the static and dynamic residuals carry on the end tangent rows).
+:math:`\mathbf{g}_e`
 is the generalised force the two end nodes exert on the element: its position rows at the
 End-B side of the internal arc are the section force :math:`\mathbf{F}_j^-` just before node
 :math:`j`, minus its rows at the other end the section force :math:`\mathbf{F}_j^+` just after
@@ -218,11 +221,34 @@ it, and its tangent rows are :math:`\mathbf{m}` there. An interior node reports
 
 with :math:`\mathbf{t}_j` the unit nodal tangent, :math:`\mathbf{m}_j` the mean of the two
 one-sided values, and at a section junction the larger of :math:`M_j/EI` on the two sides. The
+recovered moment carries an error that does not depend on :math:`EI`, of the order of the largest
+consistent-load moment :math:`w L_0^2/12` of an element (a section junction leaves a jump of that
+order between the two one-sided moments), so over a soft section dividing by :math:`EI` amplifies
+it. A section whose :math:`EI` is below :math:`\max_e(\lvert w_e\rvert L_{0,e}^2)/12` times 1 m,
+the stiffness whose elastic moment at a 1 m bend radius equals that error, takes its curvature
+from the exact geometric trace instead, as an element with :math:`EI = 0` does (on the lazy-wave
+cable of ``iea15mw_umaine_mixed_cabledyn.dat`` with :math:`EI` lowered to 100 N m\ :sup:`2` the
+recovered curvature reaches 6.9 1/m against a geometric peak of 0.12 1/m; the bend moment of such a
+section remains the recovered one, with that error). The
 difference of the two one-sided forces is the point load left at the node (seabed friction, an
-attachment), so the nodal section forces satisfy the discrete equilibrium exactly and carry
-none of the pointwise oscillation. A line end reports the ``FairTen``/``AnchTen`` end force and
-its one-sided moment; the segment tension of an element is the mean of the axial components of
-its own two end forces. The recovery costs one element evaluation per element and output row.
+attachment). At the converged static state the nodal section forces satisfy the discrete
+equilibrium exactly. In a dynamic run the recovery is the balance at the output time
+:math:`t_{n+1}`, with the position, velocity and acceleration the step committed there: the
+inertia term :math:`\mathbf{M}_e\mathbf{a}_e` uses the step's acceleration
+:math:`\mathbf{a}_{n+1}` at :math:`\mathbf{q}_{n+1}`. The integrator balances the generalised-alpha
+combination of the :math:`t_n` and :math:`t_{n+1}` states, so the recovered forces differ from
+the integrator's balance by :math:`O(\Delta t)`; the recovered forces carry none of the pointwise
+oscillation. A line end reports the ``FairTen``/``AnchTen`` end force and its one-sided moment;
+the segment tension of an element is the mean of the axial components of its own two end forces.
+The recovery costs one element evaluation per element and output row.
+
+The end node tension and the interior node tension are therefore different quantities. The end
+value is the end reaction, the force on the support or the platform: it holds the end element's
+internal force and the end node's share of the weight, buoyancy, drag and contact, but not
+inertia, added mass or seabed friction, which stay in the coupled load. The interior value is the
+recovered section force, built from end forces that include those terms. At rest and in a
+quasi-static march the two agree; under acceleration the interior values carry the inertia and
+added-mass terms of the two neighbouring elements, and the end values do not.
 
 On the 87-element lazy wave the interior node tension departs from the equilibrium of the
 converged line by at most 60 N (1552 N for the element means), 12 N at twice the mesh density

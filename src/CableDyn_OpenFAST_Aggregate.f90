@@ -1888,7 +1888,7 @@ CONTAINS
                                 note)
     !! Return one line's unconditional converged-static fairlead result in deck order, and
     !! (optional note) the static-initialisation notes of a finite-EI line ('' if none).
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     INTEGER, INTENT(IN) :: i
     INTEGER, INTENT(OUT) :: line_id
     REAL(wp), INTENT(OUT) :: tension, force(3), inclination, declination, azimuth
@@ -1925,7 +1925,7 @@ CONTAINS
   SUBROUTINE CD_AGG_ChannelHeader(self, i, hdr, unt, ErrStat, ErrMsg)
     !! Header token and OrcaFlex unit label for channel i (1 .. CD_AGG_NumChannels), for the
     !! OpenFAST InitOut%WriteOutputHdr / WriteOutputUnt registration.
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     INTEGER, INTENT(IN) :: i
     CHARACTER(*), INTENT(OUT) :: hdr, unt
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1965,7 +1965,7 @@ CONTAINS
     !! module reports the SAME value the standalone driver computes for that channel on the same
     !! configuration. Resolve to the EI=0 system's line/point state or a finite-EI cable's state
     !! through the retained deck-line-id map.
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     INTEGER, INTENT(IN) :: i
     REAL(wp), INTENT(OUT) :: value
     INTEGER, INTENT(OUT) :: ErrStat
@@ -2043,7 +2043,7 @@ CONTAINS
     !! effective tension, curvature, bend moment, declination, signed inclination below the
     !! horizontal, and azimuth. The channel evaluator remains the single source of truth for
     !! every reported physical quantity, so standalone and coupled results share conventions.
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     CHARACTER(*), INTENT(IN) :: path
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg

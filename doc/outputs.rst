@@ -535,10 +535,13 @@ vertical uplift at the anchor in the intact condition: some chain stays laid on 
 channels give the check for line ``L`` directly:
 
 * the maximum of ``AnchFz<L>`` over the run is at most 0;
-* the minimum of ``TDP<L>Grd`` (`Touchdown channels`_) over the run is greater than 0.
+* the minimum of ``TDP<L>Grd`` (`Touchdown channels`_) over the run is greater than a small
+  tolerance (0.01 m is a centimetre, far below an element).
 
 The two agree: while chain is laid at the anchor the line pulls it horizontally, and once the
-grounded length reaches 0 the line lifts its anchor and ``AnchFz`` turns positive.
+grounded length falls to the tolerance the line lifts its anchor and ``AnchFz`` turns positive.
+``TDP<L>Grd`` is continuous with the touchdown point, so an anchor node held on the seabed beside a
+node a few millimetres clear of it reads micrometres to millimetres, not exactly 0.
 
 On a laid ``EI = 0`` line ``AnchFz`` is a small negative value, not 0. The anchor node of a
 ``Fixed`` point at the seabed depth is held at the seabed elevation, while the penalty seabed
@@ -578,15 +581,19 @@ Line-node channels
        distributed loads and inertia (:ref:`theory-output-recovery`); ``OutputRecovery
        element``: the length-weighted mean of the element-mean axial forces
        :math:`EA(|\mathbf r'| - 1)`. An end node reports the line-end force of ``FairTen`` /
-       ``AnchTen``. On the two-moving-end finite-EI route every value is the chord-stretch
-       tension of ``FairTen`` there: the adjacent element at an end node and the unweighted
-       mean of the two neighbouring elements at an interior node
+       ``AnchTen``, the end reaction on the support or platform, which excludes inertia, added
+       mass and seabed friction (the interior values are the recovered section force, whose
+       element end forces include inertia and added mass). On the two-moving-end finite-EI route
+       every value is the chord-stretch tension of ``FairTen`` there: the adjacent element at an
+       end node and the unweighted mean of the two neighbouring elements at an interior node
      - N
    * - ``Curv<L>N<J>``
      - curvature at node ``J``. ``EI = 0`` lines: discrete curvature of the circle through
        the node and its two neighbours (end nodes take the adjacent interior value).
        Cubic-Hermite lines: ``BendMom<L>N<J>`` / ``EI``, the larger of the two sides at a
-       section junction (``OutputRecovery element``: exact curvature of the continuous
+       section junction, and the exact geometric curvature where ``EI`` is below
+       ``max(|w| L0^2)/12`` times 1 m (:ref:`theory-output-recovery`) (``OutputRecovery
+       element``: exact curvature of the continuous
        centreline, the larger of the two one-sided element values at an interior node). The
        library routines ``CD_HermiteCable_Dyn_Curvature`` and ``CD_HFMF_Curvature`` return the
        same value; ``CD_HermiteCable_Dyn_Curvature_Exact`` and ``CD_HFMF_Curvature_Exact`` the
@@ -673,10 +680,11 @@ those of :func:`cabledyn.touchdown_history` with ``tolerance = 1e-6``.
      - m
    * - ``TDP<L>Grd``
      - grounded length: deformed chord length along the nodes from the grounded end to the TDP
-       (``TDP<L>s`` measured from the grounded end instead of End A). 0 while no node beyond
-       the grounded end node is grounded: an anchor held at the seabed elevation counts as
-       grounded, but with its neighbour off the seabed no line lies there, so a taut or fully
-       suspended line reads 0. The whole line length when every node is grounded
+       (``TDP<L>s`` measured from the grounded end instead of End A). It varies continuously with
+       the TDP: it grows from 0 as the TDP leaves the grounded end node, so a line whose
+       neighbour of the anchor is just above the seabed reads a fraction of the first element, and
+       it is 0 only when nothing touches (the grounded end node itself is off the seabed, or the
+       TDP sits at that node). The whole line length when every node is grounded
      - m
 
 The channels are available on every route, OpenFAST included, when the deck has a seabed
