@@ -138,6 +138,34 @@ All notable changes to CableDyn are recorded in this file. The format follows
   is still unstable on the refined mesh stops as before. Decks that solved before give the
   same results. `tests/data/lazy_wave_touchdown_torsion_coarse.dat` is the regression case,
   solved with each route first.
+- A finite-EI line over a bathymetry that is not a plane along its chord no longer fails its
+  statics on a few centimetres of roughness. The catenary seed is laid on the plane fitted to
+  the bathymetry along the chord, which need not pass through the anchor, and it was rejected
+  as soon as a node dipped about 1e-6 of the line length below that plane. The
+  catenary-continuation route then stopped at once, and the mesh-sequenced fallback often ended
+  on a kinked branch ("unresolved/kinked equilibrium"). In a sweep of a chain on a rough
+  seabed, 39 of 96 runs on a 25 m survey grid failed this way, at every roughness from 2 cm to
+  0.5 m. The seed is now measured against the actual bed: a node deeper below it than its
+  static penalty penetration (submerged weight over `kBot` × `Diam` × length) is lifted onto
+  the bed, a shallower one is left to the contact solve, and the continuation, which queries
+  the full surface, settles the contact. The equilibrium is audited, tested for stability and
+  checked for kinks as before. A line too long for the fitted plane is also walked into place
+  from a retreated anchor over such a bathymetry (the moved anchor kept at its height above
+  the bed under it); as the bed can hold the excess length in its dips, a failed walk there
+  is not reported as proof that the line is too long, and the mesh-sequenced route still runs.
+  All 192 finite-EI runs of the sweep now solve, within 1 % of the fairlead force on a mesh
+  four times finer and 0.8 % of the `EI = 0` line. Decks over a flat seabed or a planar
+  bathymetry are unchanged, and so are all shipped examples and test decks. A deck over a
+  non-planar bathymetry that solved before can now take the catenary-continuation route
+  instead of the mesh-sequenced one, or start from a seed lifted out of a bump: in the sweep
+  29 of 153 such runs changed, the fairlead force by at most 0.03 % and the anchor tension by
+  at most 2.2 % (on 0.5 m roughness, where the anchor tension of the same deck differs by up
+  to 13 % on a mesh four times finer). The decks `ROUGH_1001` to `ROUGH_1003` of the cable
+  statics matrix (with mesh twins) are the regression cases. The troubleshooting guide now
+  also describes the `EI = 0` counterpart, which this does not change: a tension-only line that
+  must rest in a valley or pit of a gridded bathymetry (slack chain piled at the bottom of a
+  trench, or a grounded run slid sideways into a valley) has no equilibrium with the node
+  contact on the creases of the bilinear surface.
 
 ## [0.1.1] - 2026-10-09
 

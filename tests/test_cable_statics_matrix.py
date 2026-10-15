@@ -6,7 +6,7 @@
 A deterministic sample of finite-EI (cubic-Hermite) cable decks drawn from a seeded
 robustness study: lazy waves (single and modular buoyancy, some floating at the
 surface), steep and lazy-S waves, heavy catenaries, lines hung in mid-water, sloped
-structured seabeds, azimuthal layouts, rotationally restrained hang-offs, current and
+and rough structured seabeds, azimuthal layouts, rotationally restrained hang-offs, current and
 friction options, mixed mooring + cable decks, refined meshes, and metamorphic twins
 (translated, rotated, anchor-first, split sections, constant-depth grid). Every deck is
 run through the standalone driver and checked against its committed expectation:

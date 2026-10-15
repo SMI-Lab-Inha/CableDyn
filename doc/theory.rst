@@ -882,7 +882,14 @@ mesh-sequenced route described below first and this route as its fallback):
    declared seabed plane (flat ``WtrDpth``, or the least-squares plane of a structured bathymetry
    along the chord) or hung in mid-water when there is no seabed. The solve runs in the vertical
    plane of the chord, translated to the anchor, so a translated or rotated deck gives the same
-   numbers to round-off. When the only catenary through the endpoints passes below a planar
+   numbers to round-off. Over a bathymetry that is not a plane along the chord (a surveyed
+   seabed with roughness, bumps or dips), the seed laid on the fitted plane meets the actual bed
+   wherever the bed rises above that plane: every seed node deeper below the actual bed than its
+   static penalty penetration (nodal submerged weight over the nodal contact stiffness
+   ``kBot`` :math:`\times` ``Diam`` :math:`\times` length) is lifted onto the bed, and the
+   continuation below, which queries the full surface, settles the contact. Such a seed is
+   never rejected for its penetration; the equilibrium it leads to is audited like any other.
+   When the only catenary through the endpoints passes below a planar
    seabed (flat, or a structured bathymetry whose profile under the chord is straight), the
    line is too long for its span to hang as a catenary. Without buoyant sections the line is a
    convex curve between the chord and the seabed, so it cannot be longer than the path down to
@@ -899,7 +906,11 @@ mesh-sequenced route described below first and this route as its fallback):
    short of the anchor (the bow snaps through, or the line would have to lie on itself), or the
    bathymetry does not continue its plane behind the anchor, the run stops and names the
    geometry: no admissible planar equilibrium clear of the seabed was found, the line being too
-   long for its span to hang as a catenary, with where the walk stopped. A walked state that
+   long for its span to hang as a catenary, with where the walk stopped. A line too long for
+   the plane fitted to a non-planar bathymetry is walked the same way, the moved anchor kept
+   at its height above the bed under it and the seed draped as above; as such a bed can hold
+   the excess length in its dips, a failed walk there proves nothing, and the mesh-sequenced
+   route runs before the run stops. A walked state that
    the audit below rejects (self-contact, instability) hands over to the mesh-sequenced route,
    and is named the same way when that finds none; with ``tensile_safety True`` a walked state
    in compression is rejected by name (a bow held by bending is compressed).

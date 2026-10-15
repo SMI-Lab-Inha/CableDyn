@@ -453,6 +453,21 @@ but a few geometries are genuinely hard:
   exist: the surplus must fold or form another contact region. CableDyn rejects a resulting
   element-localized wad through the curvature safety check. This is not fixed by relaxing Newton
   tolerances; revise the physical support/contact model or geometry.
+- **An** ``EI = 0`` **line resting in a valley or pit of a gridded bathymetry.** The bilinear
+  bathymetry surface has a crease along every grid line, and a node exactly on a crease takes the
+  surface normal of one adjacent cell. A node that must rest in a concave crease (a V-shaped
+  valley or the bottom vertex of a pit) with too little tension to hold it off the crease has no
+  static equilibrium in that contact model: its contact force always points back across the
+  crease. Two layouts meet it. A grounded run whose frictionless tension
+  :math:`T = T_0 + w\,(z - z_0)` falls to zero inside a trench piles its excess length at the
+  bottom, and more than one element's worth of slack needs a place where the bed is level. A
+  grounded run on a two-dimensional rough bed slides sideways into a valley along a grid line.
+  The run then ends with ``no admissible static equilibrium`` (exit code ``2``). A bathymetry
+  grid with a level cell at the bottom of the trench (the deepest points sampled in pairs of
+  equal depth) or a smoother survey grid under the grounded run avoids it. A finite-EI line
+  over the same surface takes the static route solved in its vertical plane, whose seed is
+  draped onto the bed; it notes any compression its bending stiffness carries at the bottom of
+  a trench, where a chain would pile.
 - **A twisted finite-EI line.** ``torsion continuation stalled at Phi = ... (target ...)``
   reports the imposed twist the static ramp reached: beyond it the line has no nearby static
   equilibrium on the path, typically because a loop is forming (hockling), which needs a
