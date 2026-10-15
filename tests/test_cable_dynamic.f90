@@ -184,39 +184,46 @@ CONTAINS
 
   SUBROUTINE case_reference_one_step()
     !! One generalized-alpha step of a taut 3-node chain under gravity (node 2 free,
-    !! ends fixed) reproduces the reference q/v/a to the float64 floor.
-    INTEGER  :: conn(2, 2), fixed(6), es, n_iter, i
+    !! ends fixed) reproduces the reference q/v/a to the float64 floor, for the force blend
+    !! (the default) and the configuration blend. The references solve the same step for
+    !! the middle node's z in 40-digit decimal arithmetic: G(z) = M a_alpha + f(z) - F with
+    !! f the force blend (1 - af) f_z(q_{n+1}) + af f_z(q_n) or the configuration blend
+    !! f_z((1 - af) q_{n+1} + af q_n), rho_inf = 0.8, dt = 0.01, from rest with a0 = -15.
+    !! The tight tolerance keeps the Newton error below the reference precision.
+    INTEGER  :: conn(2, 2), fixed(6), es, n_iter, i, k
     REAL(wp) :: l0(2), ea(2), rho_a(2), q0(9), f_ext(9), load(3, 2)
     REAL(wp) :: q(9), v(9), a(9), q_new(9), v_new(9), a_new(9)
     LOGICAL  :: converged, stalled
     TYPE(GenAlphaConfig) :: cfg
     CHARACTER(120) :: em
-    REAL(wp), PARAMETER :: want_q(9) = [0.0_wp, 0.0_wp, 0.0_wp, &
-                                        1.0_wp, 0.0_wp, -7.485738187584846e-4_wp, &
-                                        2.0_wp, 0.0_wp, 0.0_wp]
-    REAL(wp), PARAMETER :: want_v(9) = [0.0_wp, 0.0_wp, 0.0_wp, &
-                                        0.0_wp, 0.0_wp, -0.14971761611417994_wp, &
-                                        0.0_wp, 0.0_wp, 0.0_wp]
-    REAL(wp), PARAMETER :: want_a(9) = [0.0_wp, 0.0_wp, 0.0_wp, &
-                                        0.0_wp, 0.0_wp, -14.9537917277749_wp, &
-                                        0.0_wp, 0.0_wp, 0.0_wp]
+    REAL(wp), PARAMETER :: want_z(2) = [-7.4857381553276945e-4_wp, -7.4857381801437368e-4_wp]
+    REAL(wp), PARAMETER :: want_vz(2) = [-0.149717615475488341_wp, -0.149717615966845990_wp]
+    REAL(wp), PARAMETER :: want_az(2) = [-14.95379162326173_wp, -14.95379170366571_wp]
     CALL three_node_chain(conn, l0, ea, rho_a, q0)
     load = SPREAD([0.0_wp, 0.0_wp, -50.0_wp], 2, 2)
     CALL CD_Assemble_Distributed_Load(conn, l0, load, f_ext, es, em)
     CALL expect_es(es, 0, 'reference:fext-ErrStat')
-    q = q0; v = 0.0_wp
     fixed = [1, 2, 3, 7, 8, 9]
-    CALL CD_Cable_Initial_Acceleration(q, v, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, a, es, em)
-    CALL expect_es(es, CD_DYN_OK, 'reference:a0-ErrStat')
-    CALL expect(a(6), -15.0_wp, 'reference:a0-z')
-    CALL CD_Cable_Gen_Alpha_Step(q, v, a, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, &
-                                 0.01_wp, cfg, q_new, v_new, a_new, converged, stalled, n_iter, es, em)
-    CALL expect_es(es, CD_DYN_OK, 'reference:step-ErrStat')
-    CALL require(converged, 'reference:converged')
-    DO i = 1, 9
-      CALL expect(q_new(i), want_q(i), 'reference:q')
-      CALL expect(v_new(i), want_v(i), 'reference:v')
-      CALL expect(a_new(i), want_a(i), 'reference:a')
+    cfg%rel_tol = 1.0e-14_wp
+    DO k = 1, 2
+      cfg%force_blend = k == 1
+      q = q0; v = 0.0_wp
+      CALL CD_Cable_Initial_Acceleration(q, v, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, a, es, em)
+      CALL expect_es(es, CD_DYN_OK, 'reference:a0-ErrStat')
+      CALL expect(a(6), -15.0_wp, 'reference:a0-z')
+      CALL CD_Cable_Gen_Alpha_Step(q, v, a, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, &
+                                   0.01_wp, cfg, q_new, v_new, a_new, converged, stalled, n_iter, es, em)
+      CALL expect_es(es, CD_DYN_OK, 'reference:step-ErrStat')
+      CALL require(converged, 'reference:converged')
+      DO i = 1, 9
+        IF (i == 6) CYCLE
+        CALL expect(q_new(i), q0(i), 'reference:q-held')
+        CALL expect(v_new(i), 0.0_wp, 'reference:v-held')
+        CALL expect(a_new(i), 0.0_wp, 'reference:a-held')
+      END DO
+      CALL expect(q_new(6), want_z(k), 'reference:q')
+      CALL expect(v_new(6), want_vz(k), 'reference:v')
+      CALL expect(a_new(6), want_az(k), 'reference:a')
     END DO
   END SUBROUTINE case_reference_one_step
 
@@ -549,6 +556,9 @@ CONTAINS
     a_bad = a_ref
     cfg%max_iter = 80
     cfg%armijo_max_backtracks = 14
+    ! both steps converged far below the comparison tolerance (a = (q - q_pred)/(beta dt^2)
+    ! magnifies the Newton error in q by 4e4 at this step)
+    cfg%rel_tol = 1.0e-12_wp
 
     CALL CD_Cable_Gen_Alpha_Step(q_ref, v_ref, a_ref, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, &
                                  0.01_wp, cfg, q_clean_out, v_clean_out, a_clean_out, &

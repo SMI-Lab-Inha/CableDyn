@@ -55,7 +55,8 @@ MODULE CableDyn_DeckDriver
                             CD_Get_Model_CoupledDofs, CD_Get_Model_State, CD_Get_Model_Tension, &
                             CD_Get_Model_EndForces, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Hydro_Fields, &
-                            CD_Recompute_Model_Acceleration, CD_Step_Model, CD_Step_Model_Recovering, CD_MODEL_OK
+                            CD_Recompute_Model_Acceleration, CD_Step_Model, CD_Step_Model_Recovering, CD_MODEL_OK, &
+                            CD_Audit_Model_Step
   USE CableDyn_System, ONLY: CD_SystemType, CD_SystemPointType, CD_LineEndpointBinding, &
                              CD_Init_System_From_Points, CD_End_System, CD_System_Line_NDOF, &
                              CD_System_Line_NElem, CD_Get_System_Point_State, CD_Get_System_Line_State, &
@@ -242,6 +243,8 @@ MODULE CableDyn_DeckDriver
   CHARACTER(*), PARAMETER :: TORSION_NEEDS_FORCE_BLEND = 'torsion in a dynamic run needs the force-blended '// &
                              'generalised-alpha (OPTION alpha_force_blend True)'
   REAL(wp), PARAMETER :: QUARTER_PI = 0.785398163397448309616_wp   ! pi/4 (displaced-area factor)
+  ! rhoInf above which a dynamic run notes the missing numerical dissipation (run_deck_driver)
+  REAL(wp), PARAMETER :: RHO_INF_NOTE = 0.95_wp
   REAL(wp), PARAMETER :: CD_RAD2DEG = 57.29577951308232087680_wp   ! 180/pi (declination/azimuth output)
   INTEGER, PARAMETER :: WAVE_NONE = 0, WAVE_AIRY = 1, WAVE_JONSWAP = 2, WAVE_COMPONENTS = 3
   ! WAVE_SEA: spectral/multi-train/spread seas of CableDyn_WaveSpectra
@@ -7089,6 +7092,18 @@ CONTAINS
         TRIM(int_to_str(lines(li)%id))//' is torsionally restrained at one end only; with the other end free '// &
         'to twist it carries no torque, so no torsion is solved.'
     END DO
+    ! rhoInf near 1 leaves the march without numerical dissipation of the modes dtM does not
+    ! resolve (axial waves, slack-taut transitions). In an irregular sea a finite-EI lazy wave
+    ! at rhoInf = 1 with a 1e-4 Newton tolerance peaked at 2e5 N against 1.02e4 N (3e4 N at
+    ! 0.99), and was exact at 1e-6; EI=0 lines at rhoInf = 1 and 1e-4 failed the plausibility
+    ! guard, and at the default tolerance their peaks rose by factors of 2 to 5 at rhoInf >= 0.95.
+    IF (opts%has_dtm .AND. opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. opts%rho_inf > RHO_INF_NOTE) THEN
+      WRITE (output_unit, '(A,F5.3,A)') '  Note: rhoInf = ', opts%rho_inf, ' leaves almost no numerical '// &
+        'dissipation: modes dtM does not resolve (axial waves, slack-taut transitions) keep the residual a '// &
+        'Newton step leaves and the energy of under-resolved snaps, which can raise tensions several times. '// &
+        'Use rhoInf <= 0.95 (default 0.4), or a relative dynamic_solver tolerance of 1e-6 or tighter and a '// &
+        'dtM that resolves the snaps.'
+    END IF
     IF (ANY([(line_torsion_active(lines(li)), li=1, SIZE(lines))])) THEN
       IF (opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. .NOT. opts%alpha_force_blend) THEN
         CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_FORCE_BLEND); RETURN
@@ -7581,6 +7596,7 @@ CONTAINS
     dynamic_cfg%max_iter = opts%dynamic_max_iter
     dynamic_cfg%armijo_max_backtracks = opts%dynamic_backtracks
     dynamic_cfg%modified_newton = opts%dynamic_modified_newton
+    dynamic_cfg%force_blend = opts%alpha_force_blend
     CALL CD_Build_Line_Mesh(secs, lts, .TRUE., conn, l0, ea, mpl, diam, es, em)
     IF (es /= CD_LINE_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'line mesh for model init: '//TRIM(em)); RETURN
@@ -15523,6 +15539,7 @@ CONTAINS
         ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
         RETURN
       END IF
+      CALL audit_line_models(models, lines, t, opts%dtM)
       CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       IF (opts%has_motion_file) THEN
@@ -15552,6 +15569,7 @@ CONTAINS
       WRITE (output_unit, '(A,I0,A,I0,A)') '  Recovery audit: dynamic run subdivided ', &
         recovery_event_count, ' nominal interval(s); maximum substeps used=', recovery_max_substeps_used, '.'
     END IF
+    IF (ErrStat == CD_DECKDRV_OK) CALL report_line_model_audits(models, lines, opts%dtM)
     IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(output_work%rset, out_root, ErrStat, ErrMsg)
   END SUBROUTINE write_dynamic_out
 
@@ -15679,6 +15697,7 @@ CONTAINS
         converged = .FALSE.
         RETURN
       END IF
+      CALL audit_system_lines(system, lines, t, opts%dtM)
       IF (PRESENT(failures)) THEN
         CALL check_and_fire_failures(system, lines, points, failures, t, es, em)
         IF (es /= CD_DECKDRV_OK) THEN
@@ -15710,6 +15729,7 @@ CONTAINS
     CALL close_dynamic_line_outputs(pos_units, ten_units)
     CALL CD_Classify_Dynamic_Completion('dynamic point-system run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
+    IF (ErrStat == CD_DECKDRV_OK) CALL report_system_line_audits(system, lines, opts%dtM)
     IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(output_work%rset, out_root, ErrStat, ErrMsg)
   END SUBROUTINE write_system_dynamic_out
 
@@ -16057,6 +16077,7 @@ CONTAINS
         converged = .FALSE.
         RETURN
       END IF
+      CALL audit_system_lines(system, lines, t, opts%dtM)
       IF (PRESENT(failures)) THEN
         CALL check_and_fire_failures(system, lines, points, failures, t, es, em)
         IF (es /= CD_DECKDRV_OK) THEN
@@ -16089,6 +16110,7 @@ CONTAINS
     CALL close_dynamic_line_outputs(pos_units, ten_units)
     CALL CD_Classify_Dynamic_Completion('Rigid6 dynamic run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
+    IF (ErrStat == CD_DECKDRV_OK) CALL report_system_line_audits(system, lines, opts%dtM)
     IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(output_work%rset, out_root, ErrStat, ErrMsg)
   END SUBROUTINE write_rigid6_dynamic_out
 
@@ -16247,6 +16269,7 @@ CONTAINS
         converged = .FALSE.
         RETURN
       END IF
+      CALL audit_system_lines(system, lines, t, opts%dtM)
       CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg, &
@@ -16279,6 +16302,7 @@ CONTAINS
     CALL close_dynamic_rod_outputs(rod_pos_units)
     CALL CD_Classify_Dynamic_Completion('rod dynamic run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
+    IF (ErrStat == CD_DECKDRV_OK) CALL report_system_line_audits(system, lines, opts%dtM)
     IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(output_work%rset, out_root, ErrStat, ErrMsg)
   END SUBROUTINE write_rod_dynamic_out
 
@@ -17753,6 +17777,7 @@ CONTAINS
           ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
           GOTO 800
         END IF
+        CALL audit_system_lines(mb%system, sys_lines, t, opts%dtM)
       END IF
       CALL CD_Profile_Step()
       CALL CD_Profile_Enter(CD_PROF_OUTPUT)
@@ -17768,6 +17793,7 @@ CONTAINS
     END IF
     CALL CD_Classify_Dynamic_Completion('multibody dynamic run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
+    IF (ErrStat == CD_DECKDRV_OK .AND. mb%has_sys) CALL report_system_line_audits(mb%system, sys_lines, opts%dtM)
     IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(mb_ranges, out_root, ErrStat, ErrMsg)
 800 CONTINUE
     CLOSE (unit)
@@ -26393,6 +26419,109 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE update_wave_models
+
+  SUBROUTINE audit_line_models(models, lines, time, dt)
+    !! Run audit of one committed host step over the standalone EI=0 line models (models(i)
+    !! is deck line i): see CD_Audit_Model_Step. Warns once per line, at the line's first
+    !! implausible tension spike.
+    TYPE(CD_ModelType), INTENT(INOUT) :: models(:)
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    REAL(wp), INTENT(IN) :: time, dt
+    INTEGER :: i
+    LOGICAL :: spike
+    DO i = 1, SIZE(models)
+      CALL CD_Audit_Model_Step(models(i), time, dt, spike)
+      IF (spike) CALL warn_line_spike(models(i), audited_line_id(lines, i))
+    END DO
+  END SUBROUTINE audit_line_models
+
+  SUBROUTINE audit_system_lines(system, lines, time, dt)
+    !! audit_line_models over the EI=0 lines of a point-connected system.
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    REAL(wp), INTENT(IN) :: time, dt
+    INTEGER :: i
+    LOGICAL :: spike
+    IF (.NOT. ALLOCATED(system%lines)) RETURN
+    DO i = 1, SIZE(system%lines)
+      CALL CD_Audit_Model_Step(system%lines(i), time, dt, spike)
+      IF (spike) CALL warn_line_spike(system%lines(i), audited_line_id(lines, i))
+    END DO
+  END SUBROUTINE audit_system_lines
+
+  INTEGER FUNCTION audited_line_id(lines, i) RESULT(id)
+    !! Deck id of line i (i itself past the deck lines).
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    INTEGER, INTENT(IN) :: i
+    id = i
+    IF (i <= SIZE(lines)) id = lines(i)%id
+  END FUNCTION audited_line_id
+
+  SUBROUTINE warn_line_spike(model, line_id)
+    !! The once-per-line warning of the run audit's first implausible tension spike.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: line_id
+    INTEGER :: ios
+    WRITE (output_unit, '(A,I0,A,I0,A,ES10.3,A,F10.3,A,F0.1,A)', IOSTAT=ios) '  Warning: line ', line_id, &
+      ': segment ', model%audit_spike_elem, ' carried ', model%audit_spike_tension, ' N at t =', &
+      model%audit_spike_time, ' s for a single step, ', model%audit_spike_ratio, &
+      ' times the largest tension on the line one step before and after: a non-physical tension spike '// &
+      '(an under-resolved slack-taut transition). Check the result with a smaller dtM (doc: troubleshooting).'
+  END SUBROUTINE warn_line_spike
+
+  SUBROUTINE report_model_audit(model, line_id, dt)
+    !! End-of-run notes of the run audit of one EI=0 line: the time-step advisory (largest
+    !! chord turn of a taut segment in one step; calibrated against dtM 3.125 ms on chain
+    !! catenaries under 5 m heave, 10 m surge and 15 m sway and on a light laid cable under
+    !! 10 m sway: the mean and standard deviation of the fairlead tension err by 0.9 % at
+    !! 1.2 deg per step (sway, standard deviation), 0.6 % at 1.4 deg and 1.3 % at 2.9 deg
+    !! (heave, mean), in proportion with the turn), the unresolved slack-to-taut snaps, and
+    !! the number of implausible tension spikes after the warned first one.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: line_id
+    REAL(wp), INTENT(IN) :: dt
+    REAL(wp), PARAMETER :: EI0_TURN_NOTE = 1.0_wp
+    INTEGER :: ios
+    IF (model%audit_max_turn > EI0_TURN_NOTE) THEN
+      WRITE (output_unit, '(A,I0,A,F7.3,A)', IOSTAT=ios) '  Note: line ', line_id, ': a taut segment turned up to ', &
+        model%audit_max_turn, ' deg in one step; a smaller dtM would resolve the line''s rotation (tension '// &
+        'mean and standard-deviation errors of about 1 % and more above 1 deg per step).'
+    END IF
+    IF (model%audit_snaps > 0 .AND. model%audit_snap_courant > CD_ONE) THEN
+      WRITE (output_unit, '(A,I0,A,I0,A,ES9.2,A,F0.1,A)', IOSTAT=ios) '  Note: line ', line_id, ': ', &
+        model%audit_snaps, ' segment step(s) went from slack to taut above the initial tension; at dtM =', &
+        dt, ' s the axial wave crosses a segment up to ', model%audit_snap_courant, &
+        ' times per step, so the snap-load peaks are not resolved in time: confirm peak tensions with a '// &
+        'smaller dtM.'
+    END IF
+    IF (model%audit_spikes > 1) THEN
+      WRITE (output_unit, '(A,I0,A,I0,A)', IOSTAT=ios) '  Warning: line ', line_id, ': ', model%audit_spikes, &
+        ' non-physical single-step tension spikes in all (the first is reported above).'
+    END IF
+  END SUBROUTINE report_model_audit
+
+  SUBROUTINE report_line_model_audits(models, lines, dt)
+    !! report_model_audit over the standalone EI=0 line models.
+    TYPE(CD_ModelType), INTENT(IN) :: models(:)
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    REAL(wp), INTENT(IN) :: dt
+    INTEGER :: i
+    DO i = 1, SIZE(models)
+      CALL report_model_audit(models(i), audited_line_id(lines, i), dt)
+    END DO
+  END SUBROUTINE report_line_model_audits
+
+  SUBROUTINE report_system_line_audits(system, lines, dt)
+    !! report_model_audit over the EI=0 lines of a point-connected system.
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    REAL(wp), INTENT(IN) :: dt
+    INTEGER :: i
+    IF (.NOT. ALLOCATED(system%lines)) RETURN
+    DO i = 1, SIZE(system%lines)
+      CALL report_model_audit(system%lines(i), audited_line_id(lines, i), dt)
+    END DO
+  END SUBROUTINE report_system_line_audits
 
   SUBROUTINE check_model_plausibility(model, max_strain, line_id, time, ErrStat, ErrMsg)
     !! Per-step plausibility guard on one committed EI=0 line state. A generalized-alpha

@@ -103,6 +103,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Recompute_Model_Acceleration
   PUBLIC :: CD_Model_Is_Initialized
   PUBLIC :: CD_Copy_Model
+  PUBLIC :: CD_Audit_Model_Step
 
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_OK = 0
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_BADINPUT = 1
@@ -168,6 +169,12 @@ MODULE CableDyn_Model
     INTEGER, ALLOCATABLE :: free_map_work(:)
     TYPE(CD_CableGenAlphaWorkspace) :: dynamic_workspace
     REAL(wp), ALLOCATABLE :: load_force_work(:)
+    ! the load contributors at the committed state, the step-start share of the force-blended
+    ! generalised-alpha residual (scratch, rebuilt every step)
+    REAL(wp), ALLOCATABLE :: load_start_work(:)
+    ! load_start_work holds the committed-state load of the last step: a warm re-solve of the
+    ! same step (the junction coupling, dynamic_workspace%guess_armed) reuses it
+    LOGICAL :: load_start_valid = .FALSE.
     REAL(wp), ALLOCATABLE :: load_jq_work(:, :)
     REAL(wp), ALLOCATABLE :: load_jv_work(:, :)
     LOGICAL :: has_seabed = .FALSE.
@@ -277,6 +284,22 @@ MODULE CableDyn_Model
     REAL(wp), ALLOCATABLE :: added_mass_can_elem(:)
     REAL(wp), ALLOCATABLE :: added_mass_cat_elem(:)
     TYPE(GenAlphaConfig) :: cfg
+    ! Run audit of the committed host steps (CD_Audit_Model_Step), diagnostics only: never part
+    ! of the state, of a copy, or of a result. audit_t holds the elastic segment tensions of the
+    ! last two audited states (column 1 the latest; -1 marks a segment whose tension the
+    ! viscoelastic or Syrope law carries), audit_u the unit chords of the latest one, audit_n
+    ! how many states are held (0 to 2). audit_floor is the largest tension of the first audited
+    ! state. audit_max_turn is the largest turn of a taut segment's chord in one step (deg),
+    ! audit_snaps the segments that went from slack to taut above audit_floor in one step and
+    ! audit_snap_courant the largest dt*c/l0 (c the axial wave speed) among them. audit_spikes
+    ! counts the implausible tension spikes, the first one recorded with its time, segment,
+    ! tension and ratio to the largest tension of the line one step before and after.
+    INTEGER :: audit_n = 0
+    REAL(wp), ALLOCATABLE :: audit_t(:, :), audit_u(:, :), audit_now(:)
+    REAL(wp) :: audit_time = CD_ZERO, audit_floor = CD_ZERO, audit_max_turn = CD_ZERO
+    REAL(wp) :: audit_snap_courant = CD_ZERO
+    INTEGER :: audit_snaps = 0, audit_spikes = 0, audit_spike_elem = 0
+    REAL(wp) :: audit_spike_time = CD_ZERO, audit_spike_tension = CD_ZERO, audit_spike_ratio = CD_ZERO
   END TYPE CD_ModelType
 
 CONTAINS
@@ -373,6 +396,7 @@ CONTAINS
     ! under memory pressure before any checked allocation runs).
     CALL clear_model_load_contributor_workspace(model)
     CALL CD_Clear_GenAlpha_Workspace(model%dynamic_workspace)
+    CALL clear_model_audit(model)
     old_model = model
 
     n_dof = SIZE(q0)
@@ -1852,6 +1876,35 @@ CONTAINS
     has_load = model%has_seabed .OR. model%has_seabed_damping .OR. model%has_seabed_friction .OR. &
                model%has_damping .OR. model%has_viscoelastic .OR. model%has_syrope .OR. model%has_morison_drag .OR. &
                model%has_froude_krylov .OR. model%has_buoyancy_recovery
+    ! Force-blended generalised alpha: the load contributors at the committed state (q_n, v_n)
+    ! carry the alpha_f share of the residual. They are evaluated here, in the instantaneous
+    ! limit (ve_dt = 0), so the viscoelastic and Syrope elements give their committed force.
+    ! A warm re-solve of the same step (the junction coupling re-steps the line from the same
+    ! committed state with moved ends) reuses the load of the previous call.
+    IF (.NOT. (has_load .AND. model%cfg%force_blend)) THEN
+      model%load_start_valid = .FALSE.
+    ELSE IF (.NOT. (model%dynamic_workspace%guess_armed .AND. model%load_start_valid)) THEN
+      model%load_start_valid = .FALSE.
+      IF (ALLOCATED(model%load_start_work)) THEN
+        IF (SIZE(model%load_start_work) /= model%n_dof) DEALLOCATE (model%load_start_work)
+      END IF
+      IF (.NOT. ALLOCATED(model%load_start_work)) THEN
+        ALLOCATE (model%load_start_work(model%n_dof), STAT=es)
+        IF (es /= 0) THEN
+          ErrStat = CD_MODEL_ALLOCFAIL
+          ErrMsg = 'CableDyn_Model: step-start load workspace allocation failed'
+          RETURN
+        END IF
+      END IF
+      model%ve_dt = CD_ZERO
+      CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es, em)
+      IF (es /= CD_MODEL_OK) THEN
+        ErrStat = es
+        ErrMsg = 'CableDyn_Model: step-start load failed: '//TRIM(em)
+        RETURN
+      END IF
+      model%load_start_valid = .TRUE.
+    END IF
     ! arm the viscoelastic contributors with the step size: in-step load
     ! evaluations use the backward-Euler-eliminated dl_1(q, v); it is reset to
     ! the instantaneous limit (0) on EVERY exit below so committed-state queries
@@ -1865,7 +1918,7 @@ CONTAINS
                                    es, em, load_force_proc=model_force, load_band_proc=model_load_band, &
                                    added_mass_band_proc=model_added_mass_band, prescribed_q=prescribed_q, &
                                    prescribed_v=prescribed_v, prescribed_a=prescribed_a, &
-                                   workspace=model%dynamic_workspace)
+                                   workspace=model%dynamic_workspace, start_load=model%load_start_work)
     ELSE IF (PRESENT(prescribed_q) .AND. has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1873,7 +1926,8 @@ CONTAINS
                                    n_iter, &
                                    es, em, load_force_proc=model_force, load_band_proc=model_load_band, &
                                    prescribed_q=prescribed_q, prescribed_v=prescribed_v, &
-                                   prescribed_a=prescribed_a, workspace=model%dynamic_workspace)
+                                   prescribed_a=prescribed_a, workspace=model%dynamic_workspace, &
+                                   start_load=model%load_start_work)
     ELSE IF (PRESENT(prescribed_q) .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1895,14 +1949,15 @@ CONTAINS
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
-                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace)
+                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
+                                   start_load=model%load_start_work)
     ELSE IF (has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
-                                   workspace=model%dynamic_workspace)
+                                   workspace=model%dynamic_workspace, start_load=model%load_start_work)
     ELSE IF (model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -4601,6 +4656,126 @@ CONTAINS
     END SUBROUTINE model_added_mass_band
   END SUBROUTINE CD_Recompute_Model_Acceleration
 
+  SUBROUTINE CD_Audit_Model_Step(model, time, dt, new_spike)
+    !! Audit one committed host step of an EI=0 line (called once per output step by the
+    !! standalone driver, after the step's plausibility guard). Cheap, O(n_elem), and
+    !! diagnostic only. It tracks
+    !!
+    !! * the largest turn of a taut segment's chord over one step, the measure of how well
+    !!   dtM resolves the rotation of the line (time-step advisory);
+    !! * slack-to-taut snaps above the initial tension scale, with the largest dt*c/l0 among
+    !!   them (c = sqrt(EA/m) the axial wave speed): dt*c/l0 > 1 leaves the snap peak
+    !!   unresolved in time;
+    !! * implausible tension spikes. A segment's elastic tension T_n at the previous audited
+    !!   step is a spike when it exceeds four times its own tension one step before and one
+    !!   step after, ten times the largest tension anywhere on the line one step before and
+    !!   one step after, and the largest tension of the initial state. A physical snap or
+    !!   tension wave persists over the axial transit time and is shared by the neighbouring
+    !!   segments, so no line, resolved or not, carries such an isolated single-step peak; an
+    !!   integrator artefact (an under-resolved slack-taut transition) does.
+    !!
+    !! new_spike reports the line's first spike (so the caller warns once per line). The
+    !! elastic tension is EA*max(strain, 0) of the plain elements; viscoelastic and Syrope
+    !! elements, whose tension comes from their own laws, are skipped.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: time, dt
+    LOGICAL, INTENT(OUT) :: new_spike
+    REAL(wp), PARAMETER :: SPIKE_ISOLATION = 4.0_wp, SPIKE_LINE_FACTOR = 10.0_wp
+    INTEGER :: e, na, nb, istat
+    REAL(wp) :: d(3), ell, strain, u(3), c, line_max, tn
+    LOGICAL :: fresh
+
+    new_spike = .FALSE.
+    IF (.NOT. model%initialized .OR. model%n_elem < 1) RETURN
+    fresh = .NOT. (ALLOCATED(model%audit_t) .AND. ALLOCATED(model%audit_u) .AND. ALLOCATED(model%audit_now))
+    IF (.NOT. fresh) fresh = SIZE(model%audit_t, 1) /= model%n_elem
+    IF (fresh) THEN
+      IF (ALLOCATED(model%audit_t)) DEALLOCATE (model%audit_t)
+      IF (ALLOCATED(model%audit_u)) DEALLOCATE (model%audit_u)
+      IF (ALLOCATED(model%audit_now)) DEALLOCATE (model%audit_now)
+      ALLOCATE (model%audit_t(model%n_elem, 2), model%audit_u(3, model%n_elem), model%audit_now(model%n_elem), &
+                STAT=istat)
+      IF (istat /= 0) RETURN
+      model%audit_n = 0
+    END IF
+    ! current elastic tensions, chords and the chord turn against the previous audited state
+    DO e = 1, model%n_elem
+      na = model%elem_conn(1, e)
+      nb = model%elem_conn(2, e)
+      d = model%q(3*nb - 2:3*nb) - model%q(3*na - 2:3*na)
+      ell = NORM2(d)
+      IF (.NOT. ell > CD_ZERO) THEN
+        u = CD_ZERO
+      ELSE
+        u = d/ell
+      END IF
+      IF (model%ea_dyn(e) > CD_ZERO) THEN
+        strain = ell/model%l0(e) - CD_ONE
+        IF (model%tension_only .AND. strain < CD_ZERO) strain = CD_ZERO
+        model%audit_now(e) = model%ea_dyn(e)*strain
+      ELSE
+        model%audit_now(e) = -CD_ONE
+      END IF
+      IF (model%audit_n >= 1) THEN
+        ! the turn of a segment taut at both states (a slack segment turns freely and carries
+        ! no tension whose accuracy the turn would measure)
+        IF (model%audit_now(e) > CD_ZERO .AND. model%audit_t(e, 1) > CD_ZERO) &
+          model%audit_max_turn = MAX(model%audit_max_turn, &
+                                     ACOS(MAX(-CD_ONE, MIN(CD_ONE, DOT_PRODUCT(u, model%audit_u(:, e)))))* &
+                                     (180.0_wp/ACOS(-CD_ONE)))
+        ! slack at the previous state, taut above the initial tension scale now
+        IF (model%audit_t(e, 1) == CD_ZERO .AND. model%audit_now(e) > model%audit_floor) THEN
+          model%audit_snaps = model%audit_snaps + 1
+          c = SQRT(model%ea_dyn(e)/model%rho_a(e))
+          model%audit_snap_courant = MAX(model%audit_snap_courant, dt*c/model%l0(e))
+        END IF
+      END IF
+      model%audit_u(:, e) = u
+    END DO
+    IF (model%audit_n == 0) model%audit_floor = MAX(CD_ZERO, MAXVAL(model%audit_now))
+    ! spike test on the previous state, between its two neighbours
+    IF (model%audit_n >= 2) THEN
+      line_max = MAX(MAXVAL(model%audit_t(:, 2)), MAXVAL(model%audit_now))
+      DO e = 1, model%n_elem
+        tn = model%audit_t(e, 1)
+        IF (.NOT. (tn > model%audit_floor)) CYCLE
+        IF (tn <= SPIKE_ISOLATION*MAX(model%audit_t(e, 2), model%audit_now(e))) CYCLE
+        IF (tn <= SPIKE_LINE_FACTOR*line_max) CYCLE
+        model%audit_spikes = model%audit_spikes + 1
+        IF (model%audit_spikes == 1) THEN
+          model%audit_spike_time = model%audit_time
+          model%audit_spike_elem = e
+          model%audit_spike_tension = tn
+          model%audit_spike_ratio = tn/MAX(line_max, TINY(CD_ONE))
+          new_spike = .TRUE.
+        END IF
+      END DO
+    END IF
+    model%audit_t(:, 2) = model%audit_t(:, 1)
+    model%audit_t(:, 1) = model%audit_now
+    model%audit_time = time
+    model%audit_n = MIN(model%audit_n + 1, 2)
+  END SUBROUTINE CD_Audit_Model_Step
+
+  SUBROUTINE clear_model_audit(model)
+    !! Reset the run audit (CD_Audit_Model_Step).
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    IF (ALLOCATED(model%audit_t)) DEALLOCATE (model%audit_t)
+    IF (ALLOCATED(model%audit_u)) DEALLOCATE (model%audit_u)
+    IF (ALLOCATED(model%audit_now)) DEALLOCATE (model%audit_now)
+    model%audit_n = 0
+    model%audit_time = CD_ZERO
+    model%audit_floor = CD_ZERO
+    model%audit_max_turn = CD_ZERO
+    model%audit_snap_courant = CD_ZERO
+    model%audit_snaps = 0
+    model%audit_spikes = 0
+    model%audit_spike_elem = 0
+    model%audit_spike_time = CD_ZERO
+    model%audit_spike_tension = CD_ZERO
+    model%audit_spike_ratio = CD_ZERO
+  END SUBROUTINE clear_model_audit
+
   SUBROUTINE CD_End_Model(model, ErrStat, ErrMsg)
     !! Release all allocatable model storage. Safe to call on an uninitialised model.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
@@ -4642,6 +4817,7 @@ CONTAINS
     IF (ALLOCATED(model%free_map_work)) DEALLOCATE (model%free_map_work)
     CALL CD_Clear_GenAlpha_Workspace(model%dynamic_workspace)
     CALL clear_model_load_contributor_workspace(model)
+    CALL clear_model_audit(model)
     IF (ALLOCATED(model%seabed_kn)) DEALLOCATE (model%seabed_kn)
     IF (ALLOCATED(model%seabed_cn)) DEALLOCATE (model%seabed_cn)
     CALL CD_End_Bathymetry(model%bathymetry)
@@ -5397,6 +5573,8 @@ CONTAINS
     IF (ALLOCATED(model%load_force_work)) DEALLOCATE (model%load_force_work)
     IF (ALLOCATED(model%load_jq_work)) DEALLOCATE (model%load_jq_work)
     IF (ALLOCATED(model%load_jv_work)) DEALLOCATE (model%load_jv_work)
+    IF (ALLOCATED(model%load_start_work)) DEALLOCATE (model%load_start_work)
+    model%load_start_valid = .FALSE.
   END SUBROUTINE clear_model_load_contributor_workspace
 
   PURE LOGICAL FUNCTION mode3_marked(alpha_mbl, e) RESULT(marked)

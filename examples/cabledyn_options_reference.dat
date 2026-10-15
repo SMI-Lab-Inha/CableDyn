@@ -40,7 +40,7 @@ False     modified_newton  - Tangent-reuse mode {False=full Newton; True=guarded
 True      cable_load_feedback - Return finite-EI cable reactions to OpenFAST {False; True} [default: True]
 False     adaptive_mesh    - Automatic finite-EI refinement {False; True} [default: False]
 continuation cable_statics - Finite-EI static route order {continuation; sequenced} [default: continuation]
-True      alpha_force_blend - Finite-EI generalised-alpha force blend {True; False=configuration blend} [default: True]
+True      alpha_force_blend - Generalised-alpha force blend, finite-EI and EI=0 lines {True; False=configuration blend} [default: True]
 False     tensile_safety   - Element-mean axial-force audit {False; warn; True=reject} [default: False]
 2.0e-6    tensile_strain_tolerance - Dynamic audit strain band [default: 2.0e-6]
 1024      recovery_max_substeps - Internal dynamic-step recovery ceiling {4..65536} [default: 1024]

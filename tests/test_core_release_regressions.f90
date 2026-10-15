@@ -159,12 +159,13 @@ CONTAINS
     ALLOCATE (qc(nc), vc(nc), ac(nc))
     CALL CD_Get_System_CoupledMotion(system, qc, vc, ac, es, em)
     CALL require(es == CD_SYSTEM_OK, 'fallback:coupled-motion')
-    ! pull both ends of both lines outward
+    ! pull both ends of both lines outward, unevenly so the free middle node must move (a
+    ! symmetric pull leaves it balanced at its predictor up to round-off)
     DO i = 0, 1
       qc(6*i + 1) = qc(6*i + 1) - 0.004_wp
       vc(6*i + 1) = -0.2_wp
-      qc(6*i + 4) = qc(6*i + 4) + 0.004_wp
-      vc(6*i + 4) = 0.2_wp
+      qc(6*i + 4) = qc(6*i + 4) + 0.010_wp
+      vc(6*i + 4) = 0.5_wp
     END DO
     ac = 0.0_wp
 
