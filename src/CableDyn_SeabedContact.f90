@@ -16,6 +16,7 @@ MODULE CableDyn_SeabedContact
   PUBLIC :: CD_Seabed_Normal_Law
   PUBLIC :: CD_Seabed_Normal_Contact
   PUBLIC :: CD_Seabed_Contact_Gate
+  PUBLIC :: CD_Seabed_End_Support, CD_Seabed_End_Element_Share
   PUBLIC :: CD_Seabed_Friction_Spring
   PUBLIC :: CD_Seabed_Friction_Stick_Slip
   PUBLIC :: CD_Seabed_Friction_Aniso, CD_Seabed_Friction_Mu_Dir
@@ -98,6 +99,47 @@ CONTAINS
       dgate_dgap = CD_ZERO
     END IF
   END SUBROUTINE CD_Seabed_Contact_Gate
+
+  PURE REAL(wp) FUNCTION CD_Seabed_End_Support(gap) RESULT(support)
+    !! Share of the consistent end moment w l0^2/12 of a net-heavy end element that the
+    !! seabed can carry at a HELD line end (translations fixed or prescribed) at signed normal
+    !! penetration gap = z_floor - z, before the element's own contact
+    !! (CD_Seabed_End_Element_Share) is weighed in. The nodal penalty is the end-point (Lobatto)
+    !! integration of the floor reaction and carries no moment, so on a grounded end
+    !! element the weight's end moment would otherwise turn the free end tangent into the
+    !! floor: the element dips below the seabed between its nodes and, on a high-EA line,
+    !! carries large spurious axial forces of both signs. One for an end on or below the
+    !! floor, zero above the contact blend, linear in between (CD_Seabed_Contact_Gate
+    !! shifted by one blend length, so that an anchor placed exactly on the floor rests on
+    !! it). The end is held, so this factor is constant within a solve and adds no tangent.
+    REAL(wp), INTENT(IN) :: gap
+    REAL(wp) :: dgate_dgap
+    CALL CD_Seabed_Contact_Gate(gap + CD_SEABED_CONTACT_BLEND, support, dgate_dgap)
+  END FUNCTION CD_Seabed_End_Support
+
+  PURE SUBROUTINE CD_Seabed_End_Element_Share(normal, normal_gap, weight_share, share, dshare_dgap)
+    !! Share of an end element lying on the floor, from the contact of its inner node: the
+    !! ratio r of that node's elastic normal force to the element's weight share it would
+    !! carry laid on the floor (half the element's weight), through the C1 smoothstep
+    !! 3 r^2 - 2 r^3 on 0 <= r <= 1 (zero at r <= 0, one at r >= 1). A laid element (r near
+    !! 2, the node also carrying its other element) is fully on the floor, an element rising
+    !! from its end into the water (node clear of the floor) not at all, and the share is
+    !! continuous with a continuous derivative through touchdown and lift-off of the node.
+    !! normal_gap is d(normal)/d(gap); dshare_dgap the derivative of the share in that gap.
+    REAL(wp), INTENT(IN) :: normal, normal_gap, weight_share
+    REAL(wp), INTENT(OUT) :: share, dshare_dgap
+    REAL(wp) :: r
+    share = CD_ZERO
+    dshare_dgap = CD_ZERO
+    IF (.NOT. (weight_share > CD_ZERO)) RETURN
+    r = normal/weight_share
+    IF (r >= CD_ONE) THEN
+      share = CD_ONE
+    ELSE IF (r > CD_ZERO) THEN
+      share = r*r*(3.0_wp - 2.0_wp*r)
+      dshare_dgap = 6.0_wp*r*(CD_ONE - r)*normal_gap/weight_share
+    END IF
+  END SUBROUTINE CD_Seabed_End_Element_Share
 
   PURE SUBROUTINE CD_Seabed_Friction_Spring(d, stiffness, capacity, force, dforce_dd, dforce_dcap)
     !! Static seabed friction spring: the resisting force of a horizontal spring of

@@ -25,6 +25,10 @@ run through the standalone driver and checked against its committed expectation:
   naming the axial compression;
 * ``current_compression`` decks (a current pushing the grounded run along the frictionless
   seabed into compression: no tension-only equilibrium) must fail closed with that diagnosis;
+* ``current_friction_compression`` decks (on a frictional seabed the current pushes the
+  suspended span into the friction-held touchdown before any tension-only equilibrium is
+  reached from the still-water layout) must fail closed with that diagnosis; a deck's ``why``
+  records the evidence;
 * an admissible deck with a ``note`` must print it: a very strong current on a frictionless
   seabed folds the line back past its anchor (a hairpin), a stable equilibrium the driver
   keeps and names;
@@ -221,6 +225,10 @@ def check_case(case: dict, res: dict) -> list:
         if res["rc"] == 0 or "run on the seabed is in axial compression" not in log:
             errs.append("expected the grounded-run compression diagnosis, rc=%s" % res["rc"])
         return errs
+    if exp == "current_friction_compression":
+        if res["rc"] == 0 or "the friction holds the grounded run" not in log:
+            errs.append("expected the friction-held touchdown compression diagnosis, rc=%s" % res["rc"])
+        return errs
     if res["rc"] != 0:
         tail = [ln for ln in log.splitlines() if "CableDyn_DeckDriver" in ln]
         errs.append("admissible deck failed rc=%s: %s" % (res["rc"], (tail[-1] if tail else "")[:300]))
@@ -321,7 +329,8 @@ def main() -> int:
             errs.append("CPU time %.1f s beyond the %.0f s per-deck bound" % (
                 res["cpu"], case.get("cpu_limit", DECK_CPU_LIMIT) * a.cpu_limit / DECK_CPU_LIMIT))
         rest = case.get("rest_of")
-        if rest and not errs:
+        # an at-rest twin of a deck expected to fail closed fails closed itself (checked above)
+        if rest and not errs and case["expect"] == "admissible":
             pr = byid.get(rest)
             if pr is None or pr["rc"] != 0 or "forces" not in pr:
                 errs.append("static parent %s did not converge" % rest)

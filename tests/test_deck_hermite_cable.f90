@@ -16,6 +16,7 @@ PROGRAM test_deck_hermite_cable
                                           CD_HFMF_MinSpanZ, CD_HFMF_Snapshot, CD_HFMF_Restore, &
                                           CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_End_Force, CD_HCDYN_OK
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_NAN
   IMPLICIT NONE
   INTEGER :: nfail
@@ -31,6 +32,7 @@ PROGRAM test_deck_hermite_cable
   CALL case_azimuthal_frame_objectivity()
   CALL case_reject_motionfile()
   CALL case_coupled_seabed_contact()
+  CALL case_grounded_anchor_end()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -549,6 +551,98 @@ CONTAINS
                  'coupled contact load is finite')
     CALL CD_HFMF_End(cable)
   END SUBROUTINE case_coupled_seabed_contact
+
+  SUBROUTINE case_grounded_anchor_end()
+    !! A lazy-wave power cable laid on a frictional flat bed up to its pinned anchor on the
+    !! floor (Line 4 of examples/iea15mw_umaine_mixed_cabledyn.dat: 200 m depth, kBot 3e6,
+    !! frictionMu 0.35, 10 m grounded elements). The seabed carries the weight of the anchor
+    !! element, so its free end tangent stays along the floor; turned into the floor by the
+    !! unbalanced end moment of the weight, the element dipped about 27 mm below the bed,
+    !! carried axial forces from -47 kN to +127 kN about the 1.2 kN line tension, and
+    !! buckled sideways once the hang-off swayed, after which the friction locked the anchor
+    !! tension at about 2.5 times its static value while the line slackened.
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cable
+    INTEGER :: cn, es, base, k
+    CHARACTER(256) :: em
+    REAL(wp) :: u0(3), u_pos(3), u_vel(3), u_acc(3), f(3), t, r, rd, rdd, s, c, ten0, ten_max, tz
+    REAL(wp), PARAMETER :: DT = 0.025_wp, AMP = 2.0_wp, PER = 10.0_wp, RAMP = 5.0_wp, TEND = 30.0_wp
+    REAL(wp), PARAMETER :: PI = 3.141592653589793_wp
+    INTEGER :: u, ios
+    OPEN (NEWUNIT=u, FILE='hcab_deck_grounded_anchor.dat', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    WRITE (u, '(A)') 'lazy-wave power cable laid on a frictional bed up to its anchor'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'bare 0.16 36.70 4.69e8 0.0 1.99e4 1.2 0.1 1.0 0.0'
+    WRITE (u, '(A)') 'buoy 0.29 59.53 4.69e8 0.0 1.99e4 1.2 0.1 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 30.0 0.0 -20.0'
+    WRITE (u, '(A)') '2 Fixed 500.0 0.0 -200.0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 bare 80.0 20'
+    WRITE (u, '(A)') '1 buoy 100.0 25'
+    WRITE (u, '(A)') '1 bare 420.0 42'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '200.0 WtrDpth'
+    WRITE (u, '(A)') '3.0e6 kBot'
+    WRITE (u, '(A)') '3.0e5 cBot'
+    WRITE (u, '(A)') '0.35 frictionMu'
+    WRITE (u, '(A)') '0.4 rhoInf'
+    WRITE (u, '(A)') '--- need this line ---'
+    CLOSE (u)
+    ALLOCATE (cable)
+    CALL CD_Init_Deck_HermiteCable('hcab_deck_grounded_anchor.dat', DT, cable, cn, es, em)
+    CALL require(es == CD_DECKDRV_OK, 'grounded-anchor cable initializes: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    CALL require(cable%line%fr_active, 'grounded-anchor cable carries seabed friction')
+    ! The anchor is model node 1: its end tangent lies along the floor in the static state.
+    tz = ABS(cable%line%q(6))/NORM2(cable%line%q(4:6))
+    CALL require(tz <= 1.0e-3_wp, 'anchor end tangent stays along the floor')
+    IF (tz > 1.0e-3_wp) WRITE (*, '(A,ES12.4)') '  anchor tangent z share ', tz
+    CALL CD_HermiteCable_Dyn_End_Force(cable%line, 1, f, es, em)
+    CALL require(es == CD_HCDYN_OK, 'static anchor force: '//TRIM(em))
+    ten0 = NORM2(f)
+    ! Sway the hang-off sideways (2 m, 10 s, C2 quintic start): the in-plane line is then
+    ! perturbed out of its plane, which seeds the end-element buckling within ~25 s.
+    base = 6*(cn - 1)
+    u0 = cable%line%q(base + 1:base + 3)
+    ten_max = ten0
+    DO k = 1, NINT(TEND/DT)
+      t = k*DT
+      IF (t < RAMP) THEN
+        s = t/RAMP
+        r = 10.0_wp*s**3 - 15.0_wp*s**4 + 6.0_wp*s**5
+        rd = (30.0_wp*s**2 - 60.0_wp*s**3 + 30.0_wp*s**4)/RAMP
+        rdd = (60.0_wp*s - 180.0_wp*s**2 + 120.0_wp*s**3)/RAMP**2
+      ELSE
+        r = 1.0_wp; rd = 0.0_wp; rdd = 0.0_wp
+      END IF
+      s = SIN(2.0_wp*PI*t/PER)
+      c = COS(2.0_wp*PI*t/PER)
+      u_pos = u0 + [0.0_wp, AMP*r*s, 0.0_wp]
+      u_vel = [0.0_wp, AMP*(rd*s + r*(2.0_wp*PI/PER)*c), 0.0_wp]
+      u_acc = [0.0_wp, AMP*(rdd*s + 2.0_wp*rd*(2.0_wp*PI/PER)*c - r*(2.0_wp*PI/PER)**2*s), 0.0_wp]
+      CALL CD_HFMF_UpdateStates(cable, u_pos, u_vel, u_acc, es, em)
+      IF (es /= CD_HFMF_OK) EXIT
+      CALL CD_HermiteCable_Dyn_End_Force(cable%line, 1, f, es, em)
+      IF (es /= CD_HCDYN_OK) EXIT
+      ten_max = MAX(ten_max, NORM2(f))
+    END DO
+    CALL require(es == CD_HFMF_OK, 'swayed grounded-anchor march converges: '//TRIM(em))
+    CALL require(ten_max <= 1.1_wp*ten0, 'friction does not ratchet the anchor tension up')
+    IF (ten_max > 1.1_wp*ten0) WRITE (*, '(A,2ES12.4)') '  anchor tension static / peak ', ten0, ten_max
+    CALL CD_HFMF_End(cable)
+  END SUBROUTINE case_grounded_anchor_end
 
   SUBROUTINE write_cable_deck(path, extra_option, fairlead_y, omit_time, endpoints, second_extra_option, &
                               endconn_row, second_endconn_row, stock_order, ba_value)
