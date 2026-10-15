@@ -2661,7 +2661,7 @@ CONTAINS
       CALL fail_solve(ErrStat, ErrMsg, TRIM(em)); RETURN
     END IF
     ! A line with ATTACHMENTS is checked on its discrete equilibrium, after the attachment polish.
-    IF (.NOT. has_att) CALL handoff_lateral_note(l0, l0_am, ea_am, ei_am, w_am, w_am, diam, dry_b, fixed_am)
+    IF (.NOT. has_att) CALL handoff_lateral_note(l0, l0_am, ea_am, ei_am, w_am, w_am, diam, dry_b, fixed_am, .FALSE.)
     ! Build the coarse Morison arrays, then map every per-element quantity onto the
     ! refined reference-arc mesh.  This covers both global refinement and the local
     ! axial-oscillation refinement used by tensile safety.  Every child inherits the
@@ -2716,7 +2716,8 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! On the final mesh, with the bare weights the polished state carries; the bending-length
       ! rule of the note uses the smeared section weights w.
-      CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, fixed_dofs)
+      CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, fixed_dofs, &
+                                .TRUE.)
       w = w_bare
       WRITE (note_text, '(A,I0,A,I0,A,ES10.3,A)') 'line ', ln%id, ': ', SIZE(att_node), &
         ' attachment(s) lumped at the nearest nodes (largest arc offset ', att_offset, ' m)'
@@ -3361,7 +3362,7 @@ CONTAINS
       saddle = es_p == CD_DECKDRV_OK .AND. .NOT. stable_3d
     END FUNCTION planar_current_saddle
 
-    SUBROUTINE handoff_lateral_note(l0_ref, l0_n, ea_n, ei_n, w_n, w_rule, diam_ref, dry_ref, fixed_n)
+    SUBROUTINE handoff_lateral_note(l0_ref, l0_n, ea_n, ei_n, w_n, w_rule, diam_ref, dry_ref, fixed_n, after_polish)
       !! A diagnostic of the hand-off, never a change of state: a static state solved in the
       !! vertical plane of the line (out-of-plane DOFs held) starts dynamics in which only the
       !! end positions are held. On elements longer than half the bending length the axial
@@ -3371,20 +3372,25 @@ CONTAINS
       !! constraints, a single tangent assembly and banded factorisation, names it in a note.
       !! A test that cannot be evaluated prints nothing. Not run where another check covers
       !! it: an in-plane current (planar_current_saddle) and a coarse pass of that current.
-      !! The arrays describe the state q_static is checked on: the final mesh l0_n with its
+      !! after_polish: the state is the discrete equilibrium of an attachment polish, which
+      !! planar_current_saddle (run on the smeared state) has not seen, so an in-plane current
+      !! does not skip it; the lumped attachment drag, a fixed-point load of the polish, is
+      !! not part of the tangent there either. The arrays describe the state q_static is checked on: the final mesh l0_n with its
       !! element properties and weights w_n (the bare weights after an attachment polish,
       !! whose lumped nodal loads are dead loads and leave the tangent unchanged), diam_ref
       !! and dry_ref on the mesh l0_ref, and the static constraints fixed_n. The bending-length
       !! rule of the note uses the section weights w_rule (smeared over the attachments).
       REAL(wp), INTENT(IN) :: l0_ref(:), l0_n(:), ea_n(:), ei_n(:), w_n(:), w_rule(:), diam_ref(:), dry_ref(:)
       INTEGER, INTENT(IN) :: fixed_n(:)
+      LOGICAL, INTENT(IN) :: after_polish
       INTEGER, ALLOCATABLE :: fixed_3d(:)
       INTEGER :: nd, es_h, k, scale_h
       LOGICAL :: stable_h
-      REAL(wp) :: h_max, rule
+      REAL(wp) :: h_max, rule, need_h
       CHARACTER(1024) :: em_h
       CHARACTER(600) :: text_h
-      IF (require_3d_static .OR. saddle_kept .OR. in_plane_current()) RETURN
+      IF (require_3d_static .OR. saddle_kept) RETURN
+      IF (.NOT. after_polish .AND. in_plane_current()) RETURN
       IF (PRESENT(coarse_pass)) THEN
         IF (coarse_pass) RETURN
       END IF
@@ -3402,8 +3408,14 @@ CONTAINS
                                    endconn_mode, opts, stable_h, es_h, em_h, cur_obj=cur_obj)
       END IF
       IF (es_h /= CD_DECKDRV_OK .OR. stable_h) RETURN
-      scale_h = bending_refine_scale(l0_n, ei_n, w_rule)
-      IF (scale_h >= 2) THEN
+      ! The advice names the uncapped power of two that meets the rule (the automatic
+      ! refinement is capped, the deck mesh is not).
+      need_h = bending_refine_need(l0_n, ei_n, w_rule)
+      scale_h = 1
+      DO WHILE (REAL(scale_h, wp) < need_h)
+        scale_h = 2*scale_h
+      END DO
+      IF (need_h > CD_ONE) THEN
         ! The longest element and the shortest half bending length it is measured against.
         h_max = CD_ZERO
         rule = HUGE(CD_ONE)
@@ -3922,23 +3934,33 @@ CONTAINS
   PURE INTEGER FUNCTION bending_refine_scale(l0, ei, w) RESULT(scale)
     !! The power-of-two refinement factor (at most CD_HC_REFINE_CAP, and at most
     !! REFINED_MAX_ELEMENTS elements after it) that brings every element of a finite-EI mesh to
-    !! at most half its bending length (EI/|w|)^(1/3); 1 when the mesh already meets it. The
-    !! resolution rule of the refined repetition of the static route and of the stability retry.
+    !! at most half its bending length (EI/|w|)^(1/3); 1 when the mesh already meets it or the
+    !! caps allow no doubling. The resolution rule of the refined repetition of the static route
+    !! and of the stability retry. A capped factor can fall short of the rule: whether the mesh
+    !! meets it is bending_refine_need(...) <= 1.
     REAL(wp), INTENT(IN) :: l0(:), ei(:), w(:)
     ! Element cap of a refined repetition of the static route.
     INTEGER, PARAMETER :: REFINED_MAX_ELEMENTS = 4096
     REAL(wp) :: need
+    need = bending_refine_need(l0, ei, w)
+    scale = 1
+    DO WHILE (REAL(scale, wp) < need .AND. scale < CD_HC_REFINE_CAP .AND. SIZE(l0)*2*scale <= REFINED_MAX_ELEMENTS)
+      scale = 2*scale
+    END DO
+  END FUNCTION bending_refine_scale
+
+  PURE REAL(wp) FUNCTION bending_refine_need(l0, ei, w) RESULT(need)
+    !! The uncapped refinement a finite-EI mesh needs for every element to be at most half its
+    !! bending length (EI/|w|)^(1/3): the largest ratio of element length to that length, at
+    !! least 1 (1 when the mesh meets the rule).
+    REAL(wp), INTENT(IN) :: l0(:), ei(:), w(:)
     INTEGER :: k
     need = CD_ONE
     DO k = 1, SIZE(l0)
       IF (ei(k) > CD_ZERO .AND. ABS(w(k)) > CD_ZERO) &
         need = MAX(need, l0(k)/(0.5_wp*(ei(k)/ABS(w(k)))**(CD_ONE/3.0_wp)))
     END DO
-    scale = 1
-    DO WHILE (REAL(scale, wp) < need .AND. scale < CD_HC_REFINE_CAP .AND. SIZE(l0)*2*scale <= REFINED_MAX_ELEMENTS)
-      scale = 2*scale
-    END DO
-  END FUNCTION bending_refine_scale
+  END FUNCTION bending_refine_need
 
   RECURSIVE SUBROUTINE hermite_static_primary(anchor, fairlead, l0, ea, ei, w, diam, dry_b, fixed_dofs, &
                                               contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, &

@@ -59,9 +59,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # The per-deck bound is on the solver's CPU time, which does not grow with machine load; the
-# wall-clock limit only stops a hung process and is scaled far above any loaded-machine run.
+# wall-clock limit only stops a hung process and is scaled far above any loaded-machine run:
+# at least DECK_WALL_LIMIT and WALL_PER_CPU times the configuration's CPU bound (--cpu-limit),
+# so a Debug build, whose CPU bound is ten times larger, is not stopped as hung while it is
+# still inside that bound.
 DECK_CPU_LIMIT = 60.0
 DECK_WALL_LIMIT = 600.0
+WALL_PER_CPU = 4.0
 
 
 def _windows_cpu_seconds(handle) -> float:
@@ -190,7 +194,7 @@ def self_intersects(xyz: list) -> bool:
     return False
 
 
-def run_case(exe: str, root: Path, case: dict) -> dict:
+def run_case(exe: str, root: Path, case: dict, wall_limit: float = DECK_WALL_LIMIT) -> dict:
     cdir = root / case["id"]
     cdir.mkdir(parents=True, exist_ok=True)
     if case.get("bathy"):
@@ -201,7 +205,7 @@ def run_case(exe: str, root: Path, case: dict) -> dict:
     env.setdefault("OMP_NUM_THREADS", "1")
     t0 = time.time()
     rc, log, cpu = run_measured([exe, str(cdir / "deck.dat"), str(cdir / "out")], str(cdir), env,
-                                DECK_WALL_LIMIT)
+                                wall_limit)
     return {"id": case["id"], "rc": rc, "log": log, "time": time.time() - t0, "cpu": cpu, "dir": cdir}
 
 
@@ -314,16 +318,17 @@ def main() -> int:
     cases = json.loads(Path(a.cases).read_text(encoding="utf-8"))
     root = Path(a.output)
     root.mkdir(parents=True, exist_ok=True)
+    wall_limit = max(DECK_WALL_LIMIT, WALL_PER_CPU * a.cpu_limit)
     t0 = time.time()
     with ThreadPoolExecutor(a.workers) as ex:
-        results = list(ex.map(lambda c: run_case(a.exe, root, c), cases))
+        results = list(ex.map(lambda c: run_case(a.exe, root, c, wall_limit), cases))
     byid = {r["id"]: r for r in results}
     failures = 0
     for case in cases:
         res = byid[case["id"]]
         errs = check_case(case, res)
         if res["rc"] == "TIMEOUT":
-            errs.append("no exit within the %.0f s wall-clock hang guard" % DECK_WALL_LIMIT)
+            errs.append("no exit within the %.0f s wall-clock hang guard" % wall_limit)
         # a deck's own bound (a fast failure) scales with the configuration's bound
         elif not res["cpu"] <= case.get("cpu_limit", DECK_CPU_LIMIT) * a.cpu_limit / DECK_CPU_LIMIT:
             errs.append("CPU time %.1f s beyond the %.0f s per-deck bound" % (
