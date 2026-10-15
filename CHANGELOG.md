@@ -138,6 +138,69 @@ All notable changes to CableDyn are recorded in this file. The format follows
   is still unstable on the refined mesh stops as before. Decks that solved before give the
   same results. `tests/data/lazy_wave_touchdown_torsion_coarse.dat` is the regression case,
   solved with each route first.
+- A finite-EI line over a bathymetry that is not a plane along its chord no longer fails its
+  statics on a few centimetres of roughness. The catenary seed is laid on the plane fitted to
+  the bathymetry along the chord, which need not pass through the anchor, and it was rejected
+  as soon as a node dipped about 1e-6 of the line length below that plane. The
+  catenary-continuation route then stopped at once, and the mesh-sequenced fallback often ended
+  on a kinked branch ("unresolved/kinked equilibrium"). In a sweep of a chain on a rough
+  seabed, 39 of 96 runs on a 25 m survey grid failed this way, at every roughness from 2 cm to
+  0.5 m. The seed is now measured against the actual bed: a node deeper below it than its
+  static penalty penetration (submerged weight over `kBot` × `Diam` × length) is lifted onto
+  the bed, a shallower one is left to the contact solve, and the continuation, which queries
+  the full surface, settles the contact. The equilibrium is audited, tested for stability and
+  checked for kinks as before. A line too long for the fitted plane is also walked into place
+  from a retreated anchor over such a bathymetry (the moved anchor kept at its height above
+  the bed under it); as the bed can hold the excess length in its dips, a failed walk there
+  is not reported as proof that the line is too long, and the mesh-sequenced route still runs.
+  All 192 finite-EI runs of the sweep now solve, within 1 % of the fairlead force on a mesh
+  four times finer and 0.8 % of the `EI = 0` line. Decks over a flat seabed or a planar
+  bathymetry are unchanged, and so are all shipped examples and test decks. A deck over a
+  non-planar bathymetry that solved before can now take the catenary-continuation route
+  instead of the mesh-sequenced one, or start from a seed lifted out of a bump: in the sweep
+  29 of 153 such runs changed, the fairlead force by at most 0.03 % and the anchor tension by
+  at most 2.2 % (on 0.5 m roughness, where the anchor tension of the same deck differs by up
+  to 13 % on a mesh four times finer). The decks `ROUGH_1001` to `ROUGH_1003` of the cable
+  statics matrix (with mesh twins) are the regression cases.
+- A line resting in a trench, a valley or a pit of a gridded bathymetry now has a static
+  equilibrium. Along every interior grid line the bilinear surface has a crease, and a node on
+  it took the normal of one adjacent cell, so a node that had to rest in a concave crease was
+  pushed back across it from either side and had no equilibrium. An `EI = 0` chain whose
+  frictionless tension falls to zero inside a trench (its excess length resting slack at the
+  bottom) failed with "no admissible static equilibrium", and so did a grounded run on a
+  two-dimensional rough seabed, which slides sideways into a valley along a grid line; a
+  finite-EI line on such a seabed could fail its first dynamic step. Each crease is now
+  rounded within a band of half-width 5 % of the smaller grid spacing next to its line, by
+  the cubic fillet `J (d - |u|)^3 / (6 d^2)` of the slope jump `J` across the line, applied as
+  a tensor product in both directions, so that the surface is twice continuously
+  differentiable. It moves the surface by at most `|J| d / 6` along one line (1.7 cm for a
+  slope jump of 0.2 on a 10 m grid; at a crossing of two lines the two roundings add), and a
+  grid that is exactly planar, and every patch without a crease (one that would move the
+  surface by less than 1 µm), keep the bilinear surface bit for bit; the rounding errors of a
+  plane written to two or three decimals are themselves creases and are rounded by a fraction
+  of a millimetre. In a band the elastic contact force is the gradient of the penalty
+  potential of the normal penetration (up to the twist of a bilinear cell, which the tangent
+  leaves out as before), with its Hessian as the tangent, in the statics and the dynamics
+  alike. Every bathymetry query uses
+  this surface, the Python `Bathymetry` and its seabed clearance included. A `Fixed` point at
+  the tabulated depth of a creased grid node rests on the seabed and is placed on the rounded
+  surface. In the statics campaign the `EI = 0` decks on bathymetry solve 40 of 43 (32
+  before; the three left have anchors below the seabed), a 30 m trench now solves at every
+  depth from 2 m to 30 m (5 of 11 before), with the anchor tension `w` times the trench depth
+  as for a chain piled at the bottom (the fairlead tension within 0.15 % of the same trench
+  sampled with a level bottom cell, on a mesh four times finer), and the `EI = 0` rough-seabed
+  sweep solves 192 of 192 (191). Decks over a flat seabed or a planar bathymetry are unchanged, and so are all shipped
+  examples and test decks. Decks over creased bathymetries that solved before change: the
+  fairlead tension by at most 0.04 % (0.4 % for an `EI = 0` run that settles in another valley
+  of a two-dimensional rough seabed), the anchor tension by up to 8.5 %. The rounding removes
+  horizontal reactions of the one-sided normals: on a 2 m trench the two ends' horizontal
+  forces now agree to 0.02 % (1.2 % before), and the anchor tension of a finite-EI line on a
+  rough two-dimensional seabed is half as far from the one on a mesh four times finer. The
+  decks `trench_touchdown_pile`, `trench_grounded_run_pile` and `rough2d_seabed` of the `EI = 0`
+  statics robustness matrix are the regression cases, with an independent nodal force balance
+  on the rounded surface. When the anchor walk of a finite-EI line over a non-planar bathymetry
+  reaches a state that is rejected, the failure no longer states that the line is too long for
+  its span to hang as a catenary, which is proven over a planar seabed only.
 
 ## [0.1.1] - 2026-10-09
 

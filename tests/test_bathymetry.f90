@@ -4,12 +4,15 @@
 PROGRAM test_bathymetry
   !! Unit tests for the structured bathymetry service and variable-elevation
   !! seabed contact tangent. These tests are self-contained analytical checks:
-  !! bilinear interpolation on a plane, edge clamping, and fail-closed validation.
+  !! bilinear interpolation on a plane, edge clamping, fail-closed validation, and the
+  !! C2 rounding of the creases of a non-planar grid.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, &
                                  CD_Bathymetry_Depth, CD_Bathymetry_Floor, &
                                  CD_Bathymetry_Floor_Gradient, CD_Bathymetry_Seabed_Load, &
-                                 CD_Bathymetry_Is_Initialized, CD_BATHY_OK, CD_BATHY_BADINPUT
+                                 CD_Bathymetry_Is_Initialized, CD_BATHY_OK, CD_BATHY_BADINPUT, &
+                                 CD_Bathymetry_Grid_Floor, CD_Bathymetry_Rotate_Curvature, &
+                                 CD_BATHY_CREASE_FRACTION
   USE CableDyn_SeabedContact, ONLY: CD_SEABED_CONTACT_BLEND
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
   IMPLICIT NONE
@@ -21,6 +24,9 @@ PROGRAM test_bathymetry
   CALL case_variable_seabed_contact_tangent()
   CALL case_variable_seabed_tangent_fd()
   CALL case_fail_closed_inputs()
+  CALL case_crease_rounding_c2()
+  CALL case_crease_rounding_planar_exact()
+  CALL case_crease_contact_tangent_fd()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -254,6 +260,200 @@ CONTAINS
 
     CALL CD_End_Bathymetry(bathy)
   END SUBROUTINE case_fail_closed_inputs
+
+  SUBROUTINE init_creased_bathy(bathy)
+    !! A non-planar grid with creases along every interior line (non-uniform spacing).
+    TYPE(CD_BathymetryType), INTENT(OUT) :: bathy
+    REAL(wp) :: x(5), y(4), depth(5, 4)
+    INTEGER :: i, j, es
+    CHARACTER(160) :: em
+    x = [0.0_wp, 10.0_wp, 25.0_wp, 30.0_wp, 42.0_wp]
+    y = [-5.0_wp, 8.0_wp, 20.0_wp, 26.0_wp]
+    DO j = 1, SIZE(y)
+      DO i = 1, SIZE(x)
+        depth(i, j) = 100.0_wp + 2.0_wp*SIN(0.37_wp*x(i) + 0.11_wp*y(j)) + &
+                      1.5_wp*COS(0.23_wp*y(j) - 0.05_wp*x(i)) + 0.1_wp*REAL(MOD(3*i + 5*j, 7), wp)
+      END DO
+    END DO
+    CALL CD_Init_Bathymetry(bathy, x, y, depth, es, em)
+    CALL expect_es(es, CD_BATHY_OK, 'crease:init')
+  END SUBROUTINE init_creased_bathy
+
+  SUBROUTINE floor_at(bathy, x, y, z, g)
+    TYPE(CD_BathymetryType), INTENT(IN) :: bathy
+    REAL(wp), INTENT(IN) :: x, y
+    REAL(wp), INTENT(OUT) :: z, g(2)
+    INTEGER :: es
+    CHARACTER(160) :: em
+    CALL CD_Bathymetry_Floor_Gradient(bathy, x, y, z, g(1), g(2), es, em)
+    CALL expect_es(es, CD_BATHY_OK, 'crease:query')
+  END SUBROUTINE floor_at
+
+  SUBROUTINE case_crease_rounding_c2()
+    !! The rounded surface is C2: height, gradient and the curvatures z_xx and z_yy are
+    !! continuous across every interior grid line (at a crossing as well) and at the edges
+    !! of the bands; the gradient is the derivative of the height and the curvature that
+    !! of the gradient (central differences); outside the bands the surface is the
+    !! bilinear one, bit for bit; inside a band it moves by at most a sixth of the slope
+    !! jump times the band half-width.
+    TYPE(CD_BathymetryType) :: bathy
+    REAL(wp), PARAMETER :: EPS = 1.0e-9_wp, H = 1.0e-5_wp
+    REAL(wp), PARAMETER :: LINES_X(3) = [10.0_wp, 25.0_wp, 30.0_wp], LINES_Y(2) = [8.0_wp, 20.0_wp]
+    REAL(wp), PARAMETER :: ALONG_X(4) = [3.0_wp, 8.0_wp, 8.1_wp, 19.95_wp]
+    REAL(wp), PARAMETER :: ALONG_Y(4) = [4.0_wp, 10.0_wp, 9.8_wp, 29.9_wp]
+    REAL(wp) :: za, zb, ga(2), gb(2), zg, z, g(2), gp(2), gm(2), zp, zm, curv(3), delta, dz, ca(3), cb(3)
+    REAL(wp) :: pts(2, 6), zpp, zpm, zmp, zmm, twist
+    INTEGER :: k, j, es
+    CHARACTER(160) :: em
+
+    CALL init_creased_bathy(bathy)
+    ! across the x lines, away from and at the crossings with the y lines
+    DO k = 1, SIZE(LINES_X)
+      DO j = 1, SIZE(ALONG_X)
+        CALL CD_Bathymetry_Floor_Gradient(bathy, LINES_X(k) - EPS, ALONG_X(j), za, ga(1), ga(2), es, em, &
+                                          crease_curvature=ca)
+        CALL CD_Bathymetry_Floor_Gradient(bathy, LINES_X(k) + EPS, ALONG_X(j), zb, gb(1), gb(2), es, em, &
+                                          crease_curvature=cb)
+        CALL require(ABS(za - zb) <= 1.0e-8_wp, 'crease:x-line height continuous')
+        CALL require(MAXVAL(ABS(ga - gb)) <= 1.0e-6_wp, 'crease:x-line gradient continuous')
+        CALL require(ABS(ca(1) - cb(1)) <= 1.0e-5_wp .AND. ABS(ca(3) - cb(3)) <= 1.0e-5_wp, &
+                     'crease:x-line curvature continuous')
+      END DO
+    END DO
+    DO k = 1, SIZE(LINES_Y)
+      DO j = 1, SIZE(ALONG_Y)
+        CALL CD_Bathymetry_Floor_Gradient(bathy, ALONG_Y(j), LINES_Y(k) - EPS, za, ga(1), ga(2), es, em, &
+                                          crease_curvature=ca)
+        CALL CD_Bathymetry_Floor_Gradient(bathy, ALONG_Y(j), LINES_Y(k) + EPS, zb, gb(1), gb(2), es, em, &
+                                          crease_curvature=cb)
+        CALL require(ABS(za - zb) <= 1.0e-8_wp, 'crease:y-line height continuous')
+        CALL require(MAXVAL(ABS(ga - gb)) <= 1.0e-6_wp, 'crease:y-line gradient continuous')
+        CALL require(ABS(ca(1) - cb(1)) <= 1.0e-5_wp .AND. ABS(ca(3) - cb(3)) <= 1.0e-5_wp, &
+                     'crease:y-line curvature continuous')
+      END DO
+    END DO
+    ! at the band edge of the x line 25 (half-width 5 % of the smaller spacing, 5 m)
+    delta = CD_BATHY_CREASE_FRACTION*5.0_wp
+    CALL CD_Bathymetry_Floor_Gradient(bathy, 25.0_wp + delta - EPS, 3.0_wp, za, ga(1), ga(2), es, em, &
+                                      crease_curvature=ca)
+    CALL CD_Bathymetry_Floor_Gradient(bathy, 25.0_wp + delta + EPS, 3.0_wp, zb, gb(1), gb(2), es, em, &
+                                      crease_curvature=cb)
+    CALL require(ABS(za - zb) <= 1.0e-8_wp .AND. MAXVAL(ABS(ga - gb)) <= 1.0e-6_wp .AND. &
+                 MAXVAL(ABS(ca - cb)) <= 1.0e-5_wp, 'crease:band edge C2')
+    ! outside every band (and outside the grid): exactly the bilinear surface
+    pts = RESHAPE([5.0_wp, 2.0_wp, 17.0_wp, 14.0_wp, 27.5_wp, 23.0_wp, 36.0_wp, 0.0_wp, -3.0_wp, 14.0_wp, &
+                   50.0_wp, 30.0_wp], [2, 6])
+    DO j = 1, SIZE(pts, 2)
+      CALL floor_at(bathy, pts(1, j), pts(2, j), z, g)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j), pts(2, j), zg, es, em)
+      CALL require(z == zg, 'crease:outside the bands the surface is bilinear')
+    END DO
+    ! gradient and curvature against central differences inside bands and at crossings
+    pts = RESHAPE([10.2_wp, 3.0_wp, 24.9_wp, 14.0_wp, 4.0_wp, 7.7_wp, 29.92_wp, 20.1_wp, 10.1_wp, 8.2_wp, &
+                   25.05_wp, 19.97_wp], [2, 6])
+    DO j = 1, SIZE(pts, 2)
+      CALL CD_Bathymetry_Floor_Gradient(bathy, pts(1, j), pts(2, j), z, g(1), g(2), es, em, crease_curvature=curv)
+      CALL floor_at(bathy, pts(1, j) + H, pts(2, j), zp, gp)
+      CALL floor_at(bathy, pts(1, j) - H, pts(2, j), zm, gm)
+      CALL require(ABS((zp - zm)/(2.0_wp*H) - g(1)) <= 1.0e-6_wp, 'crease:dz/dx')
+      ! the rounding's curvature: the bilinear part of z_xx is zero within a cell
+      CALL require(ABS((gp(1) - gm(1))/(2.0_wp*H) - curv(1)) <= 1.0e-4_wp*MAX(1.0_wp, ABS(curv(1))), &
+                   'crease:z_xx')
+      CALL floor_at(bathy, pts(1, j), pts(2, j) + H, zp, gp)
+      CALL floor_at(bathy, pts(1, j), pts(2, j) - H, zm, gm)
+      CALL require(ABS((zp - zm)/(2.0_wp*H) - g(2)) <= 1.0e-6_wp, 'crease:dz/dy')
+      CALL require(ABS((gp(2) - gm(2))/(2.0_wp*H) - curv(3)) <= 1.0e-4_wp*MAX(1.0_wp, ABS(curv(3))), &
+                   'crease:z_yy')
+      ! z_xy of the rounding: the y-derivative of z_x less the twist of the bilinear cell,
+      ! which the curvature leaves out (a four-point difference of the bilinear surface)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) + H, pts(2, j) + H, zpp, es, em)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) + H, pts(2, j) - H, zpm, es, em)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) - H, pts(2, j) + H, zmp, es, em)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) - H, pts(2, j) - H, zmm, es, em)
+      twist = (zpp - zpm - zmp + zmm)/(4.0_wp*H*H)
+      CALL require(ABS((gp(1) - gm(1))/(2.0_wp*H) - twist - curv(2)) <= 1.0e-4_wp*MAX(1.0_wp, ABS(curv(2))), &
+                   'crease:z_xy')
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j), pts(2, j), zg, es, em)
+      dz = ABS(z - zg)
+      ! slope jumps below 1 here: a band of half-width <= 0.6 m moves the surface by < 0.1 m
+      CALL require(dz > 0.0_wp .AND. dz <= 0.1_wp, 'crease:bounded rounding inside a band')
+    END DO
+    ! the turned curvature is the Hessian in the turned frame (90 degrees: xx <-> yy)
+    curv = CD_Bathymetry_Rotate_Curvature([1.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 1.0_wp])
+    CALL require(ABS(curv(1)) <= 1.0e-15_wp .AND. ABS(curv(2)) <= 1.0e-15_wp .AND. &
+                 ABS(curv(3) - 1.0_wp) <= 1.0e-15_wp, 'crease:turned curvature')
+    CALL CD_End_Bathymetry(bathy)
+  END SUBROUTINE case_crease_rounding_c2
+
+  SUBROUTINE case_crease_rounding_planar_exact()
+    !! A planar grid has no crease: the surface and its gradient are the bilinear ones bit
+    !! for bit everywhere, inside the bands too, also for a plane written to six decimals.
+    TYPE(CD_BathymetryType) :: bathy
+    REAL(wp) :: x(4), y(3), depth(4, 3), z, zg, g(2), curv(3), xq, yq
+    INTEGER :: i, j, k, es
+    CHARACTER(160) :: em
+    x = [0.0_wp, 10.0_wp, 25.0_wp, 30.0_wp]
+    y = [-5.0_wp, 8.0_wp, 20.0_wp]
+    DO k = 1, 2
+      DO j = 1, SIZE(y)
+        DO i = 1, SIZE(x)
+          depth(i, j) = 388.949782_wp + 0.0732_wp*x(i) - 0.0417_wp*y(j)
+          IF (k == 2) depth(i, j) = ANINT(depth(i, j)*1.0e6_wp)/1.0e6_wp
+        END DO
+      END DO
+      CALL CD_Init_Bathymetry(bathy, x, y, depth, es, em)
+      CALL expect_es(es, CD_BATHY_OK, 'planar:init')
+      DO j = 0, 40
+        DO i = 0, 40
+          xq = -1.0_wp + 32.0_wp*REAL(i, wp)/40.0_wp + 0.01_wp*REAL(MOD(j, 3), wp)
+          yq = -6.0_wp + 27.0_wp*REAL(j, wp)/40.0_wp
+          CALL CD_Bathymetry_Floor_Gradient(bathy, xq, yq, z, g(1), g(2), es, em, crease_curvature=curv)
+          CALL CD_Bathymetry_Grid_Floor(bathy, xq, yq, zg, es, em)
+          CALL require(z == zg .AND. ALL(curv == 0.0_wp), 'planar:bit-identical bilinear surface')
+        END DO
+      END DO
+      ! on the lines themselves (inside every band)
+      CALL CD_Bathymetry_Floor(bathy, 10.0_wp, 8.0_wp, z, es, em)
+      CALL CD_Bathymetry_Grid_Floor(bathy, 10.0_wp, 8.0_wp, zg, es, em)
+      CALL require(z == zg, 'planar:bit-identical at a crossing')
+    END DO
+    CALL CD_End_Bathymetry(bathy)
+  END SUBROUTINE case_crease_rounding_planar_exact
+
+  SUBROUTINE case_crease_contact_tangent_fd()
+    !! In a band (at a crossing of two lines) the contact force is the gradient of the
+    !! penalty potential of the rounded surface, and its residual tangent the Hessian:
+    !! k_resid(:, j) = -d f/d q_j against central differences (to 1 % of the largest
+    !! entry: the tangent leaves out the third derivatives of the surface, a term of the
+    !! order of the force times the penetration times d(curvature)/dq), and symmetric.
+    TYPE(CD_BathymetryType) :: bathy
+    REAL(wp) :: nodes(3, 1), kn(1), f0(3), fp(3), fm(3), kres(3, 3), kbase(3, 3), fd_col(3), trial(3, 1), z
+    REAL(wp) :: h
+    INTEGER :: es, j
+    CHARACTER(160) :: em
+    CALL init_creased_bathy(bathy)
+    CALL CD_Bathymetry_Floor(bathy, 10.1_wp, 8.15_wp, z, es, em)
+    nodes(:, 1) = [10.1_wp, 8.15_wp, z - 0.05_wp]
+    kn = [2.0e4_wp]
+    h = 1.0e-6_wp
+    CALL CD_Bathymetry_Seabed_Load(bathy, nodes, kn, f0, kres, es, em)
+    CALL expect_es(es, CD_BATHY_OK, 'crease-fd:base')
+    kbase = kres
+    DO j = 1, 3
+      trial = nodes
+      trial(j, 1) = trial(j, 1) + h
+      CALL CD_Bathymetry_Seabed_Load(bathy, trial, kn, fp, kres, es, em)
+      trial = nodes
+      trial(j, 1) = trial(j, 1) - h
+      CALL CD_Bathymetry_Seabed_Load(bathy, trial, kn, fm, kres, es, em)
+      fd_col = -(fp - fm)/(2.0_wp*h)
+      CALL require(MAXVAL(ABS(kbase(:, j) - fd_col)) <= 1.0e-2_wp*MAXVAL(ABS(kbase)), 'crease-fd:kcol')
+    END DO
+    ! the node is in contact (the tangent above is not trivially zero)
+    CALL require(ABS(f0(3)) > 0.0_wp, 'crease-fd:in contact')
+    CALL require(MAXVAL(ABS(kbase - TRANSPOSE(kbase))) <= 1.0e-9_wp*MAXVAL(ABS(kbase)), 'crease-fd:symmetric')
+    CALL CD_End_Bathymetry(bathy)
+  END SUBROUTINE case_crease_contact_tangent_fd
 
   SUBROUTINE expect_vec_fd(got, want, label)
     REAL(wp), INTENT(IN) :: got(:), want(:)

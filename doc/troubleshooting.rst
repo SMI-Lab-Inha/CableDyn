@@ -453,6 +453,17 @@ but a few geometries are genuinely hard:
   exist: the surplus must fold or form another contact region. CableDyn rejects a resulting
   element-localized wad through the curvature safety check. This is not fixed by relaxing Newton
   tolerances; revise the physical support/contact model or geometry.
+- **A line resting in a trench, valley or pit of a gridded bathymetry.** A frictionless grounded
+  run's tension :math:`T = T_0 + w\,(z - z_0)` falls with depth. In a trench deep enough it reaches
+  zero, and an ``EI = 0`` line then rests slack at the bottom with its excess length piled there;
+  the anchor tension of the run rising from the pile is :math:`w` times the depth of the trench
+  below the anchor, whatever the line length. On a two-dimensional rough bed the run slides
+  sideways into the valleys. Both rest in the creases of the bilinear grid, which the solver
+  rounds over 5 % of the grid spacing (see :doc:`theory`) so that a node has an equilibrium
+  there. A pile appears in the static profile as coincident nodes with zero tension and large
+  turning angles; a finite-EI line carries compression there instead, which the driver notes.
+  With 5 m elements on steep trench walls the end tensions of a pile still change by about 1 %
+  on a mesh four times finer: refine the line over the trench when they matter.
 - **A twisted finite-EI line.** ``torsion continuation stalled at Phi = ... (target ...)``
   reports the imposed twist the static ramp reached: beyond it the line has no nearby static
   equilibrium on the path, typically because a loop is forming (hockling), which needs a

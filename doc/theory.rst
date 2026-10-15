@@ -790,12 +790,59 @@ A vertical axis (no horizontal projection) takes
 :math:`\mu_n`. An equal pair runs the isotropic law unchanged.
 
 A structured bathymetry grid gives :math:`z_\text{floor}(x, y)` by bilinear interpolation,
-clamped to the nearest edge outside the grid. On a sloped patch the elastic contact is
+clamped to the nearest edge outside the grid, with the creases of that surface rounded.
+Along every interior grid line the bilinear surface has a crease: its slope across the line
+jumps by :math:`J` (the second difference of the tabulated depths). A node that must rest in a
+concave crease, a valley along a grid line or the bottom of a pit, takes the normal of one cell
+or the other and has no static equilibrium there; a slack chain piled at the bottom of a
+trench and a frictionless grounded run slid sideways into a valley both end there. Each
+crease is therefore rounded within a band of half-width :math:`\delta_k`, 5 % of the smaller
+grid spacing next to line :math:`k`. Along one axis the interpolant :math:`g(x)` becomes
+
+.. math::
+
+   \tilde g(x) = g(x) + J_k\,h(x - x_k), \qquad
+   h(u) = \frac{(\delta_k - |u|)^3}{6\,\delta_k^2} \quad (|u| < \delta_k), \qquad h = 0 \text{ elsewhere}.
+
+:math:`h'(0^+) - h'(0^-) = -1` cancels the slope jump, and :math:`h`, :math:`h'` and :math:`h''`
+vanish at :math:`|u| = \delta_k`, so :math:`\tilde g` is :math:`C^2`. Its curvature
+:math:`J_k (\delta_k - |u|)/\delta_k^2` has the sign of the jump, so a valley stays convex and
+gains no spurious pit. The surface is the tensor product of the two rounded interpolants,
+:math:`z_\text{floor} = f + h_x J_x(y) + h_y \big(J_y(x) + h_x M\big)`, with :math:`f` the
+bilinear surface, :math:`J_x(y)` the jumps of the grid rows across the :math:`x` line
+interpolated linearly along it, :math:`J_y(x)` likewise, and :math:`M` the mixed second
+difference of the grid where two lines cross. Its height, gradient and curvature are
+continuous everywhere within the grid. Outside the bands it is the bilinear surface, and
+inside the band of one line it moves by at most :math:`|J|\,\delta/6`; where two bands
+cross the two roundings and the mixed term add. A 0.2 slope jump on a 10 m grid moves
+it by 1.7 cm, within the static penetration of a chain (``w/(kBot Diam)``, 11 cm for a
+120 mm chain at ``kBot = 1e5``). A crease that would move the surface by less than 1 µm is not
+rounded: an exactly planar grid and every patch without a crease keep the bilinear surface
+exactly. A plane written to two or three decimals has creases of the size of its rounding,
+which are rounded by a fraction of a millimetre. The grid edges are not rounded, and outside the grid the
+surface stays level. Every height and gradient query uses this one surface: the contact of
+the ``EI = 0`` and the Hermite path, statics and dynamics, the friction frame and capacity,
+the seabed clearance and touchdown outputs, and the Python post-processing
+(``cabledyn.Bathymetry``). The friction capacity uses the normal force :math:`f_n^{(k)}(g/s)`;
+inside a band it leaves out the curvature term of the contact force below, of the order of
+the penetration times the curvature. A ``Fixed`` point placed at the
+tabulated depth of a creased grid node lies up to :math:`|J|\,\delta/6` below the rounded
+surface; it rests on the seabed and is placed on the rounded surface.
+
+On a sloped patch the elastic contact is
 frictionless and normal to the surface, on the ``EI = 0`` and the Hermite path alike: with
 :math:`s = \sqrt{1 + z_{,x}^2 + z_{,y}^2}` the force is :math:`f_n^{(k)}(g/s)\,\mathbf{n}`,
 :math:`\mathbf{n} = (-z_{,x}, -z_{,y}, 1)/s`, and its tangent
-:math:`f_n^{(k)\prime}\,\mathbf{n}\mathbf{n}^{\mathsf T}` (the grid curvature is not
-differentiated); on a level floor this is exactly the vertical law above. Its damping acts on
+:math:`f_n^{(k)\prime}\,\mathbf{n}\mathbf{n}^{\mathsf T}` (the twist of a bilinear cell is not
+differentiated); on a level floor this is exactly the vertical law above. Inside a crease band,
+where the surface curves, the elastic force is the gradient of the penalty potential
+:math:`E(g/s)` of the normal penetration, :math:`-f_n^{(k)}\,\partial(g/s)/\partial\mathbf{q}`:
+the normal force plus :math:`f_n^{(k)}\,g\,\nabla s/s^2`, a term of the order of the
+penetration times the curvature, and its tangent is the Hessian of that potential (third
+derivatives of the surface left out). The static energy minimisation then agrees with the
+force up to the twist of the bilinear cell, which is left out of the tangent as on a sloped
+patch, and a node held in a rounded valley by its curvature has a consistent stiffness. Its
+damping acts on
 the velocity along :math:`\mathbf{n}`, and a friction capacity is :math:`\mu` times its
 magnitude. The static solve and the dynamics use the same law, so a grounded run on a slope
 rests at a static equilibrium of the march; its tension changes along the slope by the weight
@@ -882,7 +929,14 @@ mesh-sequenced route described below first and this route as its fallback):
    declared seabed plane (flat ``WtrDpth``, or the least-squares plane of a structured bathymetry
    along the chord) or hung in mid-water when there is no seabed. The solve runs in the vertical
    plane of the chord, translated to the anchor, so a translated or rotated deck gives the same
-   numbers to round-off. When the only catenary through the endpoints passes below a planar
+   numbers to round-off. Over a bathymetry that is not a plane along the chord (a surveyed
+   seabed with roughness, bumps or dips), the seed laid on the fitted plane meets the actual bed
+   wherever the bed rises above that plane: every seed node deeper below the actual bed than its
+   static penalty penetration (nodal submerged weight over the nodal contact stiffness
+   ``kBot`` :math:`\times` ``Diam`` :math:`\times` length) is lifted onto the bed, and the
+   continuation below, which queries the full surface, settles the contact. Such a seed is
+   never rejected for its penetration; the equilibrium it leads to is audited like any other.
+   When the only catenary through the endpoints passes below a planar
    seabed (flat, or a structured bathymetry whose profile under the chord is straight), the
    line is too long for its span to hang as a catenary. Without buoyant sections the line is a
    convex curve between the chord and the seabed, so it cannot be longer than the path down to
@@ -899,7 +953,11 @@ mesh-sequenced route described below first and this route as its fallback):
    short of the anchor (the bow snaps through, or the line would have to lie on itself), or the
    bathymetry does not continue its plane behind the anchor, the run stops and names the
    geometry: no admissible planar equilibrium clear of the seabed was found, the line being too
-   long for its span to hang as a catenary, with where the walk stopped. A walked state that
+   long for its span to hang as a catenary, with where the walk stopped. A line too long for
+   the plane fitted to a non-planar bathymetry is walked the same way, the moved anchor kept
+   at its height above the bed under it and the seed draped as above; as such a bed can hold
+   the excess length in its dips, a failed walk there proves nothing, and the mesh-sequenced
+   route runs before the run stops. A walked state that
    the audit below rejects (self-contact, instability) hands over to the mesh-sequenced route,
    and is named the same way when that finds none; with ``tensile_safety True`` a walked state
    in compression is rejected by name (a bow held by bending is compressed).

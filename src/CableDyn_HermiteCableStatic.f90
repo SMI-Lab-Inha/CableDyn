@@ -45,7 +45,8 @@ MODULE CableDyn_HermiteCableStatic
                                     CD_Seabed_Friction_Aniso, CD_Seabed_Friction_Mu_Dir, CD_FRICTION_SPRING, &
                                     CD_Seabed_Normal_Contact, CD_Seabed_End_Support, CD_Seabed_End_Element_Share
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
-                                 CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, CD_BATHY_OK
+                                 CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, CD_BATHY_OK, &
+                                 CD_Bathymetry_Rotate_Curvature
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
   USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_HYDRO_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -1062,6 +1063,7 @@ CONTAINS
       LOGICAL, INTENT(IN) :: do_update
       REAL(wp) :: qe(12)
       REAL(wp) :: pen, dqnorm, z_floor, gxg, gyg, gx, gy, xg, yg, normal, normal_gap, kn_eff
+      REAL(wp) :: curv_g(3), curv_l(3)
       REAL(wp) :: step_scale, trial_norm, row_scale, column_scale, merit, trial_merit, merit_base, diag_floor
       REAL(wp) :: gradient_component, column_norm2, fdry(4), kdry(4, 4), e_term
       ! Frictionless contact on a sloped floor: the force along the upward surface normal
@@ -1219,15 +1221,18 @@ CONTAINS
       DO a = 1, nn
         gi = 6*(a - 1) + 3
         gx = CD_ZERO; gy = CD_ZERO; z_floor = seabed_z
+        curv_l = CD_ZERO
         IF (use_bathymetry) THEN
           xg = contact_cs(1)*q(gi - 2) - contact_cs(2)*q(gi - 1)
           yg = contact_cs(2)*q(gi - 2) + contact_cs(1)*q(gi - 1)
-          CALL CD_Bathymetry_Floor_Gradient(bathymetry, xg, yg, z_floor, gxg, gyg, es2, em2)
+          CALL CD_Bathymetry_Floor_Gradient(bathymetry, xg, yg, z_floor, gxg, gyg, es2, em2, crease_curvature=curv_g)
           IF (es2 /= CD_BATHY_OK) THEN
             es = CD_HCSTAT_NOCONVERGE; em = 'bathymetry query failed: '//TRIM(em2); RETURN
           END IF
           gx = contact_cs(1)*gxg + contact_cs(2)*gyg
           gy = -contact_cs(2)*gxg + contact_cs(1)*gyg
+          ! the curvature of a rounded crease, turned into the solve frame like the gradient
+          IF (ANY(ABS(curv_g) > CD_ZERO)) curv_l = CD_Bathymetry_Rotate_Curvature(curv_g, contact_cs)
         END IF
         pen = z_floor - q(gi)
         ! The penetration normal to the floor is pen/sfac (sfac = 1 on a level floor).
@@ -1250,7 +1255,7 @@ CONTAINS
           kn_eff = contact_kn(a)
           IF (use_bathymetry) THEN
             ! Frictionless: the force acts along the upward normal of the (sloped) floor.
-            CALL CD_Seabed_Normal_Contact(pen, gx, gy, kn_eff, fcon, jcon)
+            CALL CD_Seabed_Normal_Contact(pen, gx, gy, kn_eff, fcon, jcon, curvature=curv_l)
             e_term = seabed_potential(pen/sfac, kn_eff)
             pi_total = pi_total + e_term
             pi_abs = pi_abs + e_term

@@ -5,11 +5,13 @@
 
 A deterministic sample of the regimes a mooring designer meets -- grounded catenary, semi-taut,
 taut, fully suspended, multi-section composite, nearly taut, slack (the H -> 0 limit), vertical,
-anchors just off the seabed, sloped seabed, fine meshes, soft seabed, steady current, one- and
-two-segment lines, and Free/Connect points -- is written as cabledyn decks and solved by the
-production executable. Every case must converge with no compressed element and an independent
-nodal force balance (tensions, lumped weight, penalty seabed along the local normal, Morison
-drag). Cases with a continuous elastic-catenary solution also match it (element tensions and the
+anchors just off the seabed, sloped seabed, gridded seabeds with a trench or 2D roughness (their
+creases rounded as in the solver), fine meshes, soft seabed, steady current, one- and two-segment
+lines, and Free/Connect points -- is written as cabledyn decks and solved by the production
+executable. Every case must converge with no compressed element and an independent nodal force
+balance (tensions, lumped weight, penalty seabed along the local normal, or in a rounded crease
+the gradient of its penalty potential, Morison drag); a trench deep enough to hold the excess
+length slack at its bottom must show it, with the anchor tension of the run rising from there. Cases with a continuous elastic-catenary solution also match it (element tensions and the
 line-end forces FairTen/AnchTen); a subset is run through both the static-only and the dynamic
 (TMax = 0) route, which must report the same end tensions; an anchor genuinely below the seabed
 must be rejected with a clear message.
@@ -239,7 +241,16 @@ def nodal_balance(case, root):
                 s = math.sqrt(1 + gx * gx + gy * gy)
                 pen = (zf - P[i, 2]) / s
                 if pen > 0:
-                    F[i] += kn[i] * pen * np.array([-gx, -gy, 1.0]) / s
+                    hess = case["floor_hess"](P[i, 0], P[i, 1]) if "floor_hess" in case else None
+                    if hess is None:
+                        F[i] += kn[i] * pen * np.array([-gx, -gy, 1.0]) / s
+                    else:
+                        # in a rounded crease: the gradient of the penalty potential of the
+                        # normal penetration g = (zf - z)/s, force = -k g dg/dq
+                        fxx, fxy, fyy = hess
+                        ds = np.array([gx * fxx + gy * fxy, gx * fxy + gy * fyy, 0.0]) / s
+                        dg = np.array([gx, gy, -1.0]) / s - (zf - P[i, 2]) * ds / s**2
+                        F[i] -= kn[i] * pen * dg
         if "current" in case:
             # a depth profile is sampled at each node's own elevation (as the dynamics do)
             vel = [case["current"](z) for z in P[:, 2]]
@@ -261,11 +272,67 @@ def nodal_balance(case, root):
     return worst
 
 
+# ------------------------------------------------------------------ rounded bathymetry
+class RoundedGrid:
+    """The solver's seabed of a structured grid, written independently in basis form.
+
+    z(x, y) = sum_ij z_ij phi_i(x) psi_j(y), with phi_i the hat functions of the x grid whose
+    kinks at the interior grid lines are rounded by the cubic fillet J (d - |u|)^3 / (6 d^2)
+    (J the slope jump of the hat there, d = 5 % of the smaller spacing next to the line);
+    likewise psi_j. Gradient and curvature by central differences of z. Data creases that
+    would move the surface by less than 1 micrometre are not rounded in the solver; the
+    grids used here have none.
+    """
+
+    def __init__(self, xs, ys, z):
+        self.xs, self.ys, self.z = np.asarray(xs, float), np.asarray(ys, float), np.asarray(z, float)
+
+    @staticmethod
+    def _basis(axis, q):
+        n = axis.size
+        q = min(max(q, axis[0]), axis[-1])
+        phi = np.zeros(n)
+        i = min(max(int(np.searchsorted(axis, q, side="right")) - 1, 0), n - 2)
+        t = (q - axis[i]) / (axis[i + 1] - axis[i])
+        phi[i], phi[i + 1] = 1.0 - t, t
+        for k in range(1, n - 1):
+            d = 0.05 * min(axis[k] - axis[k - 1], axis[k + 1] - axis[k])
+            u = abs(q - axis[k])
+            if u >= d:
+                continue
+            h = (d - u) ** 3 / (6.0 * d * d)
+            # slope jumps of the hats at line k: hat k-1, k and k+1
+            phi[k - 1] += h * (1.0 / (axis[k] - axis[k - 1]))
+            phi[k] += h * (-1.0 / (axis[k] - axis[k - 1]) - 1.0 / (axis[k + 1] - axis[k]))
+            phi[k + 1] += h * (1.0 / (axis[k + 1] - axis[k]))
+        return phi
+
+    def height(self, x, y):
+        return float(self._basis(self.xs, x) @ self.z @ self._basis(self.ys, y))
+
+    def floor(self, x, y, h=1.0e-5):
+        gx = (self.height(x + h, y) - self.height(x - h, y)) / (2 * h)
+        gy = (self.height(x, y + h) - self.height(x, y - h)) / (2 * h)
+        return self.height(x, y), gx, gy
+
+    def hess(self, x, y, h=1.0e-4):
+        z0 = self.height(x, y)
+        fxx = (self.height(x + h, y) - 2 * z0 + self.height(x - h, y)) / h**2
+        fyy = (self.height(x, y + h) - 2 * z0 + self.height(x, y - h)) / h**2
+        fxy = (self.height(x + h, y + h) - self.height(x + h, y - h) - self.height(x - h, y + h)
+               + self.height(x - h, y - h)) / (4 * h * h)
+        # a bilinear cell has no z_xx or z_yy: the contact there is the normal force
+        return (fxx, fxy, fyy) if abs(fxx) > 1e-3 or abs(fyy) > 1e-3 else None
+
+    def rows(self):
+        return [(float(x), float(y), float(-self.z[i, j])) for i, x in enumerate(self.xs) for j, y in enumerate(self.ys)]
+
+
 # ------------------------------------------------------------------ case builders
 CASES: list[dict] = []
 # The matrix is seeded, so the designs the oracle can close are fixed: a change in the
 # oracle, the seed or the case table that drops cases must fail, not shrink the matrix.
-EXPECTED_CASES = 71
+EXPECTED_CASES = 74
 
 
 def single(name, t, L, nseg, fair, anch, depth=None, kbot=1.0e5, extra=(), oracle=True, slope=None,
@@ -400,6 +467,28 @@ def build_cases():
         grid = [(x, y, 70.0 - math.tan(th) * x) for x in (-200.0, 900.0) for y in (-300.0, 300.0)]
         single("slope_fold_%+.1fdeg" % deg, chain12, length, nseg, (97.0, 0.0, -1.0), (0.0, 0.0, -70.0), bathy=grid,
                floor=floor, slope=th, oracle=False)
+    # --- a gridded seabed with valleys (the creases of the bilinear grid rounded by the
+    # solver): a 30 m Gaussian trench under the touchdown, and in the grounded run, deep
+    # enough that the frictionless run's tension T = T0 + w (z - z0) falls to zero inside it
+    # and the excess length rests slack at the bottom (the anchor tension is then w times the
+    # trench depth below the anchor); and a +-0.5 m random seabed on a 10 m grid in both
+    # directions, whose valleys the frictionless grounded run slides sideways into ---
+    xs = [-100.0 + 5.0 * k for k in range(141)]
+    for tag, xc, n_seg in (("touchdown", 200.0, 104), ("grounded_run", 350.0, 104)):
+        trench = RoundedGrid(xs, [-100.0, 100.0],
+                             [[-100.0 - 30.0 * math.exp(-((x - xc) / 40.0) ** 2)] * 2 for x in xs])
+        za = trench.height(450.0, 0.0)
+        c = single("trench_%s_pile" % tag, chain12, 520.0, n_seg, (0.0, 0.0, -10.0), (450.0, 0.0, za),
+                   bathy=trench.rows(), floor=trench.floor, oracle=False)
+        c["floor_hess"] = trench.hess
+        c["pile_dz"] = za - trench.height(xc, 0.0)
+    rr = random.Random(20261015)
+    xs = [-100.0 + 10.0 * k for k in range(71)]
+    ys = [-100.0 + 10.0 * k for k in range(21)]
+    rough = RoundedGrid(xs, ys, [[-100.0 if x == 450.0 else -100.0 + rr.uniform(-0.5, 0.5) for _ in ys] for x in xs])
+    c = single("rough2d_seabed", chain12, 520.0, 104, (0.0, 0.0, -10.0), (450.0, 0.0, -100.0), bathy=rough.rows(),
+               floor=rough.floor, oracle=False)
+    c["floor_hess"] = rough.hess
     # --- a soft seabed (kBot = 1e3): the grounded run sinks ~4 m, and the line only fits its
     # span because of that penetration ---
     wire_soft = line_type("wiresoft", "wire", 0.10)
@@ -482,6 +571,14 @@ def evaluate(case, exe):
     check(bal < BALANCE_TOL, "%s: nodal force balance %.3g" % (name, bal))
     if case.get("point_case"):
         check_points(case, row)
+    if case.get("pile_dz"):
+        # a slack element at the bottom of the trench, and the anchor tension of the grounded
+        # run that rises from a zero tension there: w times the trench depth below the anchor
+        T = read_tensions(os.path.join(d, "o.Line1.t.out"))
+        w = next(iter(case["types"].values()))["w"]
+        check(T.min() <= 0.0, "%s: the excess length rests slack at the bottom of the trench" % name)
+        check(abs(row["AnchTen1"] - w * case["pile_dz"]) < 0.02 * w * case["pile_dz"],
+              "%s: AnchTen %.6g vs w*depth %.6g" % (name, row["AnchTen1"], w * case["pile_dz"]))
     if case.get("fair_ref"):
         # slack line: the hanging leg carries about its own weight w*h (the discrete grounded
         # run keeps a small horizontal tension), never a compressed strut or zero

@@ -54,7 +54,7 @@ CONTAINS
     END IF
   END SUBROUTINE CD_Seabed_Normal_Law
 
-  PURE SUBROUTINE CD_Seabed_Normal_Contact(gap, dfdx, dfdy, stiffness, force, jac)
+  PURE SUBROUTINE CD_Seabed_Normal_Contact(gap, dfdx, dfdy, stiffness, force, jac, curvature)
     !! Frictionless penalty contact with a locally planar seabed z = f(x, y) of gradient
     !! (dfdx, dfdy). ``gap = f(x, y) - z`` is the vertical penetration; the penetration
     !! normal to the surface is gap/s, s = sqrt(1 + dfdx^2 + dfdy^2), and the contact force
@@ -63,9 +63,17 @@ CONTAINS
     !! the vertical law. ``jac`` is the residual tangent -d(force)/dq = F'(gap/s) n n^T
     !! (the surface gradient is held fixed over the node, i.e. the bathymetry curvature
     !! term is omitted).
+    !! curvature (optional): the second derivatives (f_xx, f_xy, f_yy) of a curved patch of
+    !! the surface (the rounding of a bathymetry crease). Where it is nonzero the force is
+    !! the gradient of the penalty potential E(g) of the normal penetration g = gap/s,
+    !! force = -F(g) dg/dq with dg/dq = (f_x, f_y, -1)/s - gap grad(s)/s^2 (the normal
+    !! force F n plus F gap grad(s)/s^2, a term of the order of the penetration times the
+    !! curvature), and jac is the Hessian F' dg dg^T + F d2g/dq2 of that potential (third
+    !! derivatives of the surface left out), so that the static energy and the force agree.
     REAL(wp), INTENT(IN) :: gap, dfdx, dfdy, stiffness
     REAL(wp), INTENT(OUT) :: force(3), jac(3, 3)
-    REAL(wp) :: s, normal(3), magnitude, dmag
+    REAL(wp), INTENT(IN), OPTIONAL :: curvature(3)
+    REAL(wp) :: s, normal(3), magnitude, dmag, hm(2, 2), grad(2), ds(3), dgap(3), dg(3), d2s(2, 2)
     INTEGER :: a, b
 
     s = SQRT(CD_ONE + dfdx*dfdx + dfdy*dfdy)
@@ -77,6 +85,24 @@ CONTAINS
         jac(a, b) = dmag*normal(a)*normal(b)
       END DO
     END DO
+    IF (.NOT. PRESENT(curvature)) RETURN
+    IF (.NOT. ANY(ABS(curvature) > CD_ZERO)) RETURN
+    hm = RESHAPE([curvature(1), curvature(2), curvature(2), curvature(3)], [2, 2])
+    grad = [dfdx, dfdy]
+    ds = CD_ZERO
+    ds(1:2) = MATMUL(hm, grad)/s
+    dgap = [dfdx, dfdy, -CD_ONE]
+    dg = dgap/s - gap*ds/(s*s)
+    force = -magnitude*dg
+    ! d2s/dq2 on (x, y), third derivatives of the surface left out
+    d2s = (MATMUL(hm, hm) - RESHAPE([ds(1)*ds(1), ds(2)*ds(1), ds(1)*ds(2), ds(2)*ds(2)], [2, 2]))/s
+    DO b = 1, 3
+      DO a = 1, 3
+        jac(a, b) = dmag*dg(a)*dg(b) + magnitude*(-dgap(b)*ds(a) - dgap(a)*ds(b) + &
+                                                  2.0_wp*gap*ds(a)*ds(b)/s)/(s*s)
+      END DO
+    END DO
+    jac(1:2, 1:2) = jac(1:2, 1:2) + magnitude*(hm/s - gap*d2s/(s*s))
   END SUBROUTINE CD_Seabed_Normal_Contact
 
   PURE SUBROUTINE CD_Seabed_Contact_Gate(gap, gate, dgate_dgap)

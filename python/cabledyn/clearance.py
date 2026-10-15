@@ -63,6 +63,11 @@ __all__ = [
 # (sample, segment, segment) entries, bounding the temporary memory.
 _CHUNK = 250_000
 _PLAIN_NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+# Crease rounding of the bathymetry surface, as in the solver (CableDyn_Bathymetry): band
+# half-width as a fraction of the smaller grid spacing next to a line, and the smallest
+# surface change [m] a crease must make to be rounded.
+_CREASE_FRACTION = 0.05
+_CREASE_MIN_HEIGHT = 1.0e-6
 
 
 def _readonly(values: npt.ArrayLike, dtype: Any = np.float64) -> npt.NDArray[Any]:
@@ -83,8 +88,12 @@ class Bathymetry:
     """A structured seabed: water depth on a rectangular ``x``-``y`` grid.
 
     The seabed elevation is ``z_floor = -depth``. Between grid points it is
-    bilinear in each cell; outside the grid it takes the value at the nearest
-    grid edge, as in the solver.
+    bilinear in each cell, with the creases of that surface along the interior
+    grid lines rounded within a narrow band (the C2 fillet of the solver: a
+    crease with slope jump ``J`` is moved by ``J (delta - |u|)^3 / (6 delta^2)`` at
+    distance ``|u| < delta`` from its line, ``delta`` five per cent of the smaller
+    spacing next to it); outside the grid it takes the value at the nearest grid
+    edge, as in the solver.
 
     Attributes
     ----------
@@ -153,12 +162,68 @@ class Bathymetry:
         ix, tx = _cell(self.x, qx)
         iy, ty = _cell(self.y, qy)
         d = self.depth
-        return np.asarray(
+        bilinear = (
             (1.0 - tx) * (1.0 - ty) * d[ix, iy]
             + tx * (1.0 - ty) * d[ix + 1, iy]
             + (1.0 - tx) * ty * d[ix, iy + 1]
             + tx * ty * d[ix + 1, iy + 1]
         )
+        return np.asarray(bilinear - self._crease_rounding(qx, qy, ix, iy, tx, ty))
+
+    def _crease_rounding(
+        self,
+        qx: npt.NDArray[Any],
+        qy: npt.NDArray[Any],
+        ix: npt.NDArray[Any],
+        iy: npt.NDArray[Any],
+        tx: npt.NDArray[Any],
+        ty: npt.NDArray[Any],
+    ) -> npt.NDArray[Any]:
+        """Rise of the rounded surface over the bilinear one (zero outside the bands).
+
+        ``hx Jx(y) + hy (Jy(x) + hx M)``: ``J`` the slope jumps of the grid rows
+        (columns) across the line, interpolated linearly along it, ``M`` the mixed
+        second difference at a crossing of two lines, ``h`` the fillet.
+        """
+        kx, hx = _crease_band(self.x, ix, qx)
+        ky, hy = _crease_band(self.y, iy, qy)
+        z = -self.depth
+        rise = np.zeros(np.shape(qx))
+        on_x = kx >= 0
+        on_y = ky >= 0
+        if not (np.any(on_x) or np.any(on_y)):
+            return rise
+        kxs = np.clip(kx, 1, self.x.size - 2)
+        kys = np.clip(ky, 1, self.y.size - 2)
+        dlx = _CREASE_FRACTION * np.minimum(
+            self.x[kxs] - self.x[kxs - 1], self.x[kxs + 1] - self.x[kxs]
+        )
+        dly = _CREASE_FRACTION * np.minimum(
+            self.y[kys] - self.y[kys - 1], self.y[kys + 1] - self.y[kys]
+        )
+
+        def jump_x(j: npt.NDArray[Any]) -> npt.NDArray[Any]:
+            jump = (z[kxs + 1, j] - z[kxs, j]) / (self.x[kxs + 1] - self.x[kxs]) - (
+                z[kxs, j] - z[kxs - 1, j]
+            ) / (self.x[kxs] - self.x[kxs - 1])
+            return np.where(np.abs(jump) * dlx / 6.0 > _CREASE_MIN_HEIGHT, jump, 0.0)
+
+        def jump_y(i: npt.NDArray[Any]) -> npt.NDArray[Any]:
+            jump = (z[i, kys + 1] - z[i, kys]) / (self.y[kys + 1] - self.y[kys]) - (
+                z[i, kys] - z[i, kys - 1]
+            ) / (self.y[kys] - self.y[kys - 1])
+            return np.where(np.abs(jump) * dly / 6.0 > _CREASE_MIN_HEIGHT, jump, 0.0)
+
+        jx = (1.0 - ty) * jump_x(iy) + ty * jump_x(iy + 1)
+        jy = (1.0 - tx) * jump_y(ix) + tx * jump_y(ix + 1)
+        mxy = (jump_x(kys + 1) - jump_x(kys)) / (self.y[kys + 1] - self.y[kys]) - (
+            jump_x(kys) - jump_x(kys - 1)
+        ) / (self.y[kys] - self.y[kys - 1])
+        mxy = np.where(
+            on_x & on_y & (np.abs(mxy) * dlx * dly / 36.0 > _CREASE_MIN_HEIGHT), mxy, 0.0
+        )
+        rise = np.where(on_x, hx * jx, 0.0) + np.where(on_y, hy * (jy + hx * mxy), 0.0)
+        return np.asarray(rise)
 
     def floor(self, x: npt.ArrayLike, y: npt.ArrayLike) -> npt.NDArray[Any]:
         """Return the seabed elevation ``z_floor = -depth`` at points ``(x, y)``.
@@ -188,6 +253,31 @@ def _cell(
     index = np.clip(np.searchsorted(axis, query, side="right") - 1, 0, axis.size - 2)
     fraction = (query - axis[index]) / (axis[index + 1] - axis[index])
     return index, np.clip(fraction, 0.0, 1.0)
+
+
+def _crease_band(
+    axis: npt.NDArray[Any], index: npt.NDArray[Any], query: npt.NDArray[Any]
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
+    """Interior grid line whose crease band holds each query (-1: none) and the fillet there.
+
+    The fillet is ``(delta - |u|)^3 / (6 delta^2)``, ``u`` the distance from the line and
+    ``delta`` the band half-width; a query outside the grid lies in no band.
+    """
+    n = axis.size
+    inside = (query >= axis[0]) & (query <= axis[-1])
+    line = np.full(np.shape(query), -1)
+    fillet = np.zeros(np.shape(query))
+    for k in (index, index + 1):
+        interior = inside & (k >= 1) & (k <= n - 2) & (line < 0)
+        ks = np.clip(k, 1, max(n - 2, 1))
+        if n < 3:
+            continue
+        delta = _CREASE_FRACTION * np.minimum(axis[ks] - axis[ks - 1], axis[ks + 1] - axis[ks])
+        u = np.abs(query - axis[ks])
+        hit = interior & (u < delta)
+        line = np.where(hit, k, line)
+        fillet = np.where(hit, (delta - u) ** 3 / (6.0 * delta * delta), fillet)
+    return line, fillet
 
 
 def _strip_comment(text: str) -> str:
