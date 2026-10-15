@@ -513,6 +513,62 @@ library is located. Array ordering, frames, and units at the coupling boundary f
       :raises ValueError: if the path contains a NUL character or, on Windows, cannot be
          represented in the active ANSI code page.
 
+   .. py:method:: init_deck_at(deck, q0)
+
+      Initialise from a deck file with the static initial condition solved at the host's
+      positions of the coupled points (``CableDyn_InitDeckAt``). Every line-bound
+      ``Coupled``/``Vessel`` point starts at its entry of ``q0`` instead of its deck coordinates;
+      the lines, ``Free``/``Connect`` points, bodies and rods are solved in equilibrium with those
+      points held there, at rest. A host whose body starts away from the deck coordinates then
+      starts without a transient (:ref:`capi-host-coupling`).
+
+      :param deck: Path of the ``.dat`` deck, as for :meth:`init_deck`.
+      :type deck: str | os.PathLike
+      :param q0: Either the full coupled vector of the deck (``n_coupled_dof`` values, the layout
+         :meth:`step` uses; the ``Fixed``, ``Free`` and ``Connect`` blocks are not read), or the
+         ``Coupled``/``Vessel`` blocks alone, in coupled-vector order (the ``MoorDyn_Init``
+         layout of a points-only deck). Flat or column-per-point ``(3, n)``; positions in m.
+      :type q0: array_like
+      :raises CableDynError: if the deck fails to initialise, or ``q0`` does not match its
+         coupled points. A failed initialisation keeps any previously initialised model.
+      :raises ValueError: if ``q0`` is not finite or its length is not a multiple of 3.
+      :raises RuntimeError: if the loaded library predates ABI 1 minor extension 2.
+
+   .. py:method:: save_state()
+                  restore_state()
+
+      Save the whole model, and :attr:`time`, into the instance's single save slot; return to
+      it (``CableDyn_SaveState``, ``CableDyn_RestoreState``). The slot is a copy of every line,
+      point, body and rod state with its solver history. A restore keeps the slot, so one save
+      serves every outer corrector of a host time step, and a restore followed by a step is
+      bit-identical to taking that step from the saved state directly. A new initialisation
+      discards the slot.
+
+      :raises CableDynError: on an uninitialised model, or from :meth:`restore_state` when
+         nothing was saved since the model was initialised.
+      :raises RuntimeError: if the loaded library predates ABI 1 minor extension 2.
+
+   .. py:method:: coupled_layout()
+
+      Return the owner of each 3-DOF block of the coupled vector (``CableDyn_GetCoupledLayout``):
+      a tuple of ``(point_id, kind)`` pairs, block ``k`` holding the degrees of freedom
+      ``3k .. 3k+2``. ``kind`` is ``"fixed"``, ``"coupled"`` (``Coupled`` or ``Vessel``),
+      ``"free"`` or ``"connect"``. On a point-system deck every line-bound point has a block, in
+      deck ``POINTS`` order; on the coupled aggregate (finite-EI lines, bodies or rods) only the
+      ``Coupled`` points do.
+
+      :rtype: tuple[tuple[int, str], ...]
+      :raises CableDynError: on an uninitialised model or one built from raw arrays.
+
+   .. py:method:: host_dofs()
+
+      Return the indices of the coupled degrees of freedom the host drives, those of the
+      ``"coupled"`` blocks of :meth:`coupled_layout`, as an integer array. With ``x`` the
+      ``(3, n)`` host positions of those points in layout order,
+      ``q[model.host_dofs()] = x.reshape(-1, order="F")`` fills them in a full coupled vector.
+
+      :rtype: numpy.ndarray
+
    .. py:property:: initialized
       :type: bool
 
@@ -666,7 +722,8 @@ library is located. Array ordering, frames, and units at the coupling boundary f
    .. py:property:: time
       :type: float
 
-      Simulation time (s): 0 after initialisation, advanced by every completed step.
+      Simulation time (s): 0 after initialisation, advanced by every completed step, and set back
+      by :meth:`restore_state`.
 
    .. py:property:: deck
       :type: pathlib.Path | None
@@ -711,8 +768,10 @@ imports without the shared library.
 
 .. py:function:: abi_minor()
 
-   Return the extension level of ABI 1 of the loaded library: 1 when it has the object queries
-   behind :attr:`CableDyn.lines` and :meth:`CableDyn.channel`, 0 for an older library.
+   Return the extension level of ABI 1 of the loaded library: 2 when it also has the
+   host-coupling calls behind :meth:`CableDyn.init_deck_at`, :meth:`CableDyn.save_state` and
+   :meth:`CableDyn.coupled_layout`, 1 when it has the object queries behind
+   :attr:`CableDyn.lines` and :meth:`CableDyn.channel`, 0 for an older library.
 
    :rtype: int
 

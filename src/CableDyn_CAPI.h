@@ -18,17 +18,18 @@
  *   J[i + j*n] = d(load_i)/d(q_j).
  * - Diagnostics are retained per handle (up to 1024 characters) and copied by
  *   CableDyn_GetLastError, truncated to message_len - 1 and NUL-terminated.
- * - Create and Close are thread-safe. InitDeck, InitLine, and InitLines are
- *   serialised process-wide (they parse files through the Fortran runtime), so
- *   concurrent initialisations of distinct handles succeed one after another.
- *   The remaining per-handle calls run concurrently on distinct handles. A
- *   handle must not be used by two threads at once, and must not be used while
- *   another thread closes it.
+ * - Create and Close are thread-safe. InitDeck, InitDeckAt, InitLine, and
+ *   InitLines are serialised process-wide (they parse files through the Fortran
+ *   runtime), so concurrent initialisations of distinct handles succeed one
+ *   after another. The remaining per-handle calls run concurrently on distinct
+ *   handles. A handle must not be used by two threads at once, and must not be
+ *   used while another thread closes it.
  * - The first Create applies the BLAS thread policy (one OpenBLAS thread unless
  *   the environment variable CABLEDYN_BLAS_THREADS says otherwise) and, in the
  *   Windows GNU build, loads openblas.dll. When that runtime cannot be loaded,
- *   InitDeck, InitLine and InitLines return CD_C_ALLOC_FAIL and GetLastError names
- *   the library, the locations tried and the Windows load error.
+ *   InitDeck, InitDeckAt, InitLine and InitLines return CD_C_ALLOC_FAIL and
+ *   GetLastError names the library, the locations tried and the Windows load
+ *   error.
  */
 #ifndef CABLEDYN_CAPI_H
 #define CABLEDYN_CAPI_H
@@ -125,8 +126,9 @@ int CableDyn_NLines(void *handle, int *err_stat);
  * output. A deck with finite-EI lines, BODIES or RODS runs on the coupled
  * aggregate (it needs dtM); other decks keep the point route. Check
  * CableDyn_GetAbiMinor() >= 1 before using these on a library of unknown
- * vintage. */
-#define CABLEDYN_CAPI_ABI_MINOR 1
+ * vintage. CABLEDYN_CAPI_ABI_MINOR is the extension level this header
+ * declares (2: the host-coupling calls below are present too). */
+#define CABLEDYN_CAPI_ABI_MINOR 2
 
 #define CD_C_OBJ_LINE 1
 #define CD_C_OBJ_POINT 2
@@ -172,6 +174,40 @@ void CableDyn_GetRodState(void *handle, int index, double *nodes, int n_nodes,
  * "Point4Fz", "Body1Pz", "Rod2TenA", "TDP1s", ...) at the committed state. */
 void CableDyn_EvalChannel(void *handle, const char *token, int token_len,
                           double *value, int *err_stat);
+
+/* ---- ABI 1, minor extension 2: host coupling --------------------------------
+ *
+ * For a host (a CFD solver) that drives the Coupled points of a deck. Check
+ * CableDyn_GetAbiMinor() >= 2 before using these on a library of unknown
+ * vintage. doc/capi.rst, "Coupling a host (CFD) solver", gives the call
+ * sequence. */
+
+/* Point types of CableDyn_GetCoupledLayout (and of the point subtype of
+ * CableDyn_GetObjectInfo). The host drives the CD_C_POINT_COUPLED blocks. */
+#define CD_C_POINT_FIXED 1
+#define CD_C_POINT_COUPLED 2 /* Coupled or Vessel */
+#define CD_C_POINT_FREE 3
+#define CD_C_POINT_CONNECT 4
+
+/* CableDyn_InitDeck with the static solve at the host's positions: every
+ * line-bound Coupled/Vessel point starts at its entry of q0 (statics at rest).
+ * q0 is either the full coupled vector of the deck's route (n_q0 =
+ * CableDyn_NCoupledDOF after the call; Fixed, Free and Connect blocks are not
+ * read) or the Coupled/Vessel blocks alone, in coupled-vector order. n_q0 = 0
+ * (q0 may be NULL) for a deck without line-bound Coupled/Vessel points. */
+void CableDyn_InitDeckAt(void *handle, const char *deck_path, int deck_path_len,
+                         const double *q0, int n_q0, int *err_stat);
+/* One save slot per handle: SaveState copies the whole model (replacing an
+ * earlier save); RestoreState returns to it and keeps it, so one save serves
+ * every outer corrector of a host time step. A restore followed by a step is
+ * bit-identical to stepping from the saved state. Valid until the next Init*. */
+void CableDyn_SaveState(void *handle, int *err_stat);
+void CableDyn_RestoreState(void *handle, int *err_stat);
+/* Owner of each 3-DOF block k of the coupled vector (DOFs 3k..3k+2): deck
+ * point id and CD_C_POINT_* type. n_block = CableDyn_NCoupledDOF / 3; NULL
+ * skips an output. Not available on a raw-array (InitLine/InitLines) handle. */
+void CableDyn_GetCoupledLayout(void *handle, int *point_id, int *point_type,
+                               int n_block, int *err_stat);
 
 #ifdef __cplusplus
 }

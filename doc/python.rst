@@ -772,6 +772,23 @@ motion are rejected in-process (they run in the standalone driver): time-varying
 kinematics enter through :meth:`~cabledyn.CableDyn.update_point_fluid_fields`, and motion through
 the coupled kinematics of every step.
 
+A host that moves the ``Coupled`` points from its own body solver starts the model at its
+positions and rewinds it between the passes of an iterated time step (:ref:`capi-host-coupling`
+explains each call and how it differs from MoorDyn):
+
+.. code-block:: python
+
+   with CableDyn() as model:
+       model.init_deck_at("mooring.dat", fairleads)  # (3, n): the Coupled points, layout order
+       q, v, a = model.get_coupled_motion()
+       host = model.host_dofs()  # the "coupled" blocks of model.coupled_layout()
+       model.save_state()  # at the first pass of a host time step
+       for corrector in range(3):
+           model.restore_state()  # every pass restarts from the saved state
+           q[host], v[host], a[host] = x_end, v_end, a_end  # flat host motion at t + dt
+           model.step(dt, q, v, a)
+           loads = model.calc_output()[host].reshape(3, -1, order="F")
+
 Objects and output channels
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

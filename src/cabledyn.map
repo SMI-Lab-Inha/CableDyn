@@ -10,6 +10,7 @@
     CableDyn_EvalChannel;
     CableDyn_GetAbiMinor;
     CableDyn_GetBodyState;
+    CableDyn_GetCoupledLayout;
     CableDyn_GetCoupledMotion;
     CableDyn_GetLastError;
     CableDyn_GetLineValues;
@@ -19,6 +20,7 @@
     CableDyn_GetVersion;
     CableDyn_GetVersionString;
     CableDyn_InitDeck;
+    CableDyn_InitDeckAt;
     CableDyn_InitLine;
     CableDyn_InitLines;
     CableDyn_IsInitialized;
@@ -26,6 +28,8 @@
     CableDyn_NLines;
     CableDyn_NObjects;
     CableDyn_NPoints;
+    CableDyn_RestoreState;
+    CableDyn_SaveState;
     CableDyn_Step;
     CableDyn_UpdatePointFluidFields;
     CableDyn_UpdateStates;

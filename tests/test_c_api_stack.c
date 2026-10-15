@@ -11,10 +11,12 @@
  * MSVC-linked program is 1 MB), so the library must not rely on the stack reserve of
  * a CableDyn executable. For every deck this program starts one thread whose stack
  * is <stack_kib> KiB and, on that thread, creates a handle, initialises the deck,
- * steps it with the coupled points held (coupling step <dt> s), evaluates the coupled
- * loads, and closes the handle. A stack overflow ends the process (SIGSEGV on POSIX
- * systems, STATUS_STACK_OVERFLOW on Windows), which fails the test. On Windows the
- * deepest stack page the thread touched is also reported.
+ * steps it with the coupled points held (coupling step <dt> s), saves the state, takes
+ * one more step and restores it (the whole-model copies of CableDyn_SaveState and
+ * CableDyn_RestoreState), evaluates the coupled loads, and closes the handle. A stack
+ * overflow ends the process (SIGSEGV on POSIX systems, STATUS_STACK_OVERFLOW on
+ * Windows), which fails the test. On Windows the deepest stack page the thread touched
+ * is also reported.
  */
 #include "CableDyn_CAPI.h"
 
@@ -114,6 +116,21 @@ static void run_deck(struct deck_task *t)
             fail(t, m, "held-point step did not converge");
             goto done;
         }
+    }
+    CableDyn_SaveState(m, &err);
+    if (err != CD_C_OK) {
+        fail(t, m, "state save failed");
+        goto done;
+    }
+    CableDyn_Step(m, t->dt, q, v, a, ndof, &converged, &stalled, &n_iter, &err);
+    if (err != CD_C_OK || !converged || stalled) {
+        fail(t, m, "held-point step after the save did not converge");
+        goto done;
+    }
+    CableDyn_RestoreState(m, &err);
+    if (err != CD_C_OK) {
+        fail(t, m, "state restore failed");
+        goto done;
     }
     CableDyn_CalcOutput(m, loads, ndof, &err);
     if (err != CD_C_OK) {

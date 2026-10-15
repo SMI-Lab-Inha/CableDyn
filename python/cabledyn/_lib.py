@@ -175,6 +175,41 @@ def _bind_object_queries() -> bool:
 _has_object_queries = _bind_object_queries()
 
 
+# --- ABI 1, minor extension 2: host coupling ---------------------------------
+# Initialization at the host's coupled positions, the one-slot state save and
+# restore of outer correctors, and the coupled layout query. A library built
+# before the extension lacks these symbols and reports ``abi_minor() < 2``.
+
+#: Minor extension level of ABI 1 this binding uses for the host-coupling calls
+#: (the newest extension the binding knows).
+HOST_COUPLING_ABI_MINOR = 2
+
+
+def _bind_host_coupling() -> bool:
+    try:
+        init_at = _lib.CableDyn_InitDeckAt
+    except AttributeError:
+        return False
+    init_at.argtypes = [c_void_p, c_char_p, c_int, _DBL, c_int, POINTER(c_int)]
+    init_at.restype = None
+    _lib.CableDyn_SaveState.argtypes = [c_void_p, POINTER(c_int)]
+    _lib.CableDyn_SaveState.restype = None
+    _lib.CableDyn_RestoreState.argtypes = [c_void_p, POINTER(c_int)]
+    _lib.CableDyn_RestoreState.restype = None
+    _lib.CableDyn_GetCoupledLayout.argtypes = [
+        c_void_p,
+        POINTER(c_int),
+        POINTER(c_int),
+        c_int,
+        POINTER(c_int),
+    ]
+    _lib.CableDyn_GetCoupledLayout.restype = None
+    return True
+
+
+_has_host_coupling = _bind_host_coupling()
+
+
 def abi_minor() -> int:
     """The loaded library's ABI 1 extension level (0 before the object queries)."""
     if not _has_object_queries:

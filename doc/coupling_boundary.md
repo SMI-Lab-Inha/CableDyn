@@ -75,7 +75,9 @@ on `t + dt` and the host time grid is unchanged. In OpenFAST the module may adva
 
 The public header declares the complete interface of C ABI version 1, including the object
 queries of its minor extension 1 (ABI 1.1; check `CableDyn_GetAbiMinor() >= 1` before calling
-them). Signatures and examples are in the [C API guide](capi.rst).
+them) and the host-coupling calls of its minor extension 2 (ABI 1.2; check
+`CableDyn_GetAbiMinor() >= 2`). Signatures and examples are in the [C API guide](capi.rst),
+whose section "Coupling a host (CFD) solver" gives the call sequence of a CFD host.
 
 | Group | Functions |
 | --- | --- |
@@ -86,6 +88,7 @@ them). Signatures and examples are in the [C API guide](capi.rst).
 | Output | `CableDyn_CalcOutput`, `CableDyn_CalcOutputDerivatives`, `CableDyn_GetCoupledMotion` |
 | Queries | `CableDyn_NCoupledDOF`, `CableDyn_NPoints`, `CableDyn_NLines`, `CableDyn_GetLastError` |
 | Object queries (ABI 1.1) | `CableDyn_GetAbiMinor`, `CableDyn_NObjects`, `CableDyn_GetObjectInfo`, `CableDyn_GetLineValues`, `CableDyn_GetPointState`, `CableDyn_GetBodyState`, `CableDyn_GetRodState`, `CableDyn_EvalChannel`: the model's lines, points, bodies and rods, their committed state, and any `OUTPUTS` channel |
+| Host coupling (ABI 1.2) | `CableDyn_InitDeckAt` (`CableDyn_InitDeck` with the statics solved at the host's positions of the `Coupled` points), `CableDyn_SaveState`, `CableDyn_RestoreState` (a one-slot in-memory save of the whole model for outer correctors), `CableDyn_GetCoupledLayout` (the deck point id and type of every block of the coupled vector) |
 
 Rules shared by every entry point:
 

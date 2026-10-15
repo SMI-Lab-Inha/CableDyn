@@ -29,12 +29,18 @@ A model lives behind an opaque handle. The lifecycle is:
 .. code-block:: text
 
    CableDyn_Create
-     -> CableDyn_InitDeck | CableDyn_InitLine | CableDyn_InitLines     (initialize; may repeat)
+     -> CableDyn_InitDeck | CableDyn_InitDeckAt                       (initialize; may repeat)
+        | CableDyn_InitLine | CableDyn_InitLines
      -> CableDyn_GetCoupledMotion                                     (read the initial state)
-     -> loop:  [CableDyn_UpdatePointFluidFields]
+     -> loop:  [CableDyn_SaveState | CableDyn_RestoreState]           (host outer correctors)
+               [CableDyn_UpdatePointFluidFields]
                CableDyn_Step(dt, motion at t+dt)
                CableDyn_CalcOutput                                    (loads at t+dt)
      -> CableDyn_Close
+
+A host solver that drives the ``Coupled`` points of a deck, a CFD code in particular, should
+read `Coupling a host (CFD) solver`_ first: it gives the call sequence and how it differs from
+MoorDyn's C API.
 
 .. list-table:: Function summary
    :header-rows: 1
@@ -72,6 +78,11 @@ A model lives behind an opaque handle. The lifecycle is:
        ``CableDyn_GetRodState``, ``CableDyn_EvalChannel``
      - object queries (ABI 1.1): the objects of the model, their committed state, and any
        ``OUTPUTS`` channel (`Object queries`_)
+   * - ``CableDyn_InitDeckAt``, ``CableDyn_SaveState``, ``CableDyn_RestoreState``,
+       ``CableDyn_GetCoupledLayout``
+     - host coupling (ABI 1.2): initialization with the statics at the host's positions, a
+       one-slot state save and restore for outer correctors, and the owner of each block of
+       the coupled vector (`Host coupling calls`_)
 
 Building and linking
 --------------------
@@ -125,7 +136,7 @@ a work buffer of about 128 MB at once (about 4 GB on a 32-CPU machine). The Wind
 therefore does not import ``openblas.dll``: the first ``CableDyn_Create`` (or, in an executable,
 the first solve) loads the ``openblas.dll`` next to the CableDyn library or executable with a
 one-thread pool, falling back to the standard DLL search order. If it cannot be loaded,
-``InitDeck``, ``InitLine`` and ``InitLines`` return ``CD_C_ALLOC_FAIL`` and
+``InitDeck``, ``InitDeckAt``, ``InitLine`` and ``InitLines`` return ``CD_C_ALLOC_FAIL`` and
 ``CableDyn_GetLastError`` names the library, each location tried and the Windows load error;
 the standalone driver prints the same diagnostic and exits with status 2. Other builds
 that link OpenBLAS call ``openblas_set_num_threads(1)`` at the first ``Create``; the Intel
@@ -226,8 +237,9 @@ ABI and versioning
      - 1
      - the C ABI revision the header describes
    * - ``CABLEDYN_CAPI_ABI_MINOR`` / ``CableDyn_GetAbiMinor()``
-     - 1
-     - additive extensions of ABI 1: 1 adds the `Object queries`_
+     - 2
+     - additive extensions of ABI 1: 1 adds the `Object queries`_, 2 the
+       `Host coupling calls`_
    * - ``CableDyn_GetVersion(&major, &minor, &patch, &abi)``
      - runtime
      - the same four numbers, reported by the loaded library
@@ -258,7 +270,8 @@ The Python package does this check at import and rejects a library that speaks a
 
 A minor extension only adds functions: every ABI 1 prototype and its semantics are unchanged,
 so a caller built against an older header keeps working. A caller that uses the additions checks
-``CableDyn_GetAbiMinor() >= 1`` before calling them.
+``CableDyn_GetAbiMinor() >= 1`` before calling the object queries, and
+``CableDyn_GetAbiMinor() >= 2`` before calling the host-coupling functions.
 
 Calling conventions
 -------------------
@@ -301,10 +314,10 @@ These rules apply to every entry point. The Python package uses the same array o
   water at :math:`z = 0` (:doc:`conventions`). See `State, units, and load sign`_.
 * **Threads.** ``Create`` and ``Close`` are thread-safe; a process-wide mutex guards the handle
   registry, independently of OpenMP. Separate handles may run concurrently on separate threads.
-  ``InitDeck``, ``InitLine``, and ``InitLines`` are serialised by a second process-wide lock:
-  they open and parse files through the Fortran runtime, which cannot open one file on two units
-  at once (two threads reading the same deck, or decks sharing a Syrope OWC table) and whose
-  formatted I/O is not safe to run concurrently. Concurrent initialisations therefore succeed but
+  ``InitDeck``, ``InitDeckAt``, ``InitLine``, and ``InitLines`` are serialised by a second
+  process-wide lock: they open and parse files through the Fortran runtime, which cannot open
+  one file on two units at once (two threads reading the same deck, or decks sharing a Syrope
+  OWC table) and whose formatted I/O is not safe to run concurrently. Concurrent initialisations therefore succeed but
   run one after another; a thread blocks while another thread initialises. ``Step``,
   ``UpdateStates``, ``CalcOutput``, and the other per-handle calls do no file or formatted I/O
   when they succeed and run concurrently on separate handles. A single handle must not be used
@@ -322,7 +335,8 @@ These rules apply to every entry point. The Python package uses the same array o
   the new handle.
 * **Re-initialisation is atomic.** Calling any ``Init*`` function on an initialised handle
   replaces the model only on success. If the new initialisation fails, the previous model is
-  kept unchanged.
+  kept unchanged, and so is the state saved by ``CableDyn_SaveState``; a successful one
+  discards that save.
 * **Time.** The library keeps no clock. Only ``dt`` enters ``CableDyn_Step``, and the host owns
   the time line.
 
@@ -378,12 +392,19 @@ Coupled DOF layout
 so do the rows and columns of every Jacobian. The layout is fixed when the handle is
 initialised.
 
-``CableDyn_InitDeck``
+``CableDyn_InitDeck`` or ``CableDyn_InitDeckAt``, point route (``EI = 0`` lines only)
    One ``x, y, z`` block for every deck point that is attached to at least one line end, in
    ``POINTS`` table order. This includes points of every type: ``Fixed`` anchors,
    ``Coupled``/``Vessel`` points, and ``Free``/``Connect`` points. ``n_coupled_dof`` is
    three times the number of attached points. A point referenced by no line gets no block, but
    it is still counted by ``CableDyn_NPoints``.
+
+``CableDyn_InitDeck`` or ``CableDyn_InitDeckAt``, aggregate route (finite-EI lines, bodies, rods)
+   One ``x, y, z`` block for every host-driven point and nothing else: first the
+   ``Coupled``/``Vessel`` points attached to an ``EI = 0`` line, in ``POINTS`` table order,
+   then the fairlead (End A, which must be ``Coupled``/``Vessel``) of each finite-EI line, in
+   ``LINES`` table order. ``Fixed`` anchors, ``Free``/``Connect`` points, bodies and rods have
+   no block.
 
 ``CableDyn_InitLine``
    ``n_fixed`` entries. Entry ``k`` is the DOF ``fixed_dofs[k]``, in the order the caller
@@ -403,6 +424,11 @@ Every block is prescribed by the caller on each ``Step`` and ``UpdateStates``, i
 anchor blocks of a deck. Fill the vectors once from ``CableDyn_GetCoupledMotion``, then
 overwrite only the blocks the host drives. Deck ``Free`` and ``Connect`` points are the
 exception, described under ``CableDyn_Step``.
+
+On a deck model, ``CableDyn_GetCoupledLayout`` (ABI 1.2) returns the deck point id and type
+of every block, so a host does not have to derive the layout from the deck: the host drives
+the blocks of type ``CD_C_POINT_COUPLED``. `Coupling a host (CFD) solver`_ works through an
+example.
 
 State, units, and load sign
 ---------------------------
@@ -447,6 +473,206 @@ their loads at that point are summed.
 
 **Jacobians.** For the tight Newton loop of a monolithic host, the linear load model is
 :math:`L(q+\delta q, v+\delta v, a+\delta a) \approx L + J_q\,\delta q + J_v\,\delta v - M_a\,\delta a`.
+
+.. _capi-host-coupling:
+
+Coupling a host (CFD) solver
+----------------------------
+
+This section is for a host that moves a body with its own equations of motion, typically a CFD
+solver with a rigid-body solver, and drives the deck's ``Coupled`` points as fairleads on that
+body. It goes through the coupling step by step and compares each step with MoorDyn's C API
+(``MoorDyn_Create``, ``MoorDyn_Init``, ``MoorDyn_Step``, ``MoorDyn_Serialize``), because a host
+written for MoorDyn needs the differences below, not only renamed calls. The functions are
+those of ABI 1.2: check ``CableDyn_GetAbiMinor() >= 2``.
+
+The example is the floating box of foamMooring's ``EsfLOWC`` tutorial,
+``tests/data/foam_esflowc_box_points.dat``: four slack ``EI = 0`` lines from ``Fixed`` anchors
+1 to 4 to ``Coupled`` fairleads 5 to 8. The deck places the fairleads at
+:math:`z = -0.062` m; the CFD box starts with them at :math:`z = -0.077` m.
+
+Step 1: initialise at the host's positions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+*MoorDyn.* ``MoorDyn_Create`` parses the input file; ``MoorDyn_Init(X, XD)`` then moves the
+coupled points to the host's ``X`` and computes the initial condition there.
+
+*CableDyn.* ``CableDyn_InitDeckAt(h, deck, deck_len, q0, n_q0, &err)`` does both in one call: it
+parses the deck and solves the statics with every line-bound ``Coupled``/``Vessel`` point held at
+its entry of ``q0``. ``CableDyn_InitDeck`` solves them at the deck coordinates instead, and a
+host whose body starts elsewhere then gives the lines a start-up transient on its first steps.
+For the box, the deck statics followed by fairleads held 15 mm lower move line 4's fairlead load
+by up to 0.38 N, 74 % of its 0.52 N static value, and it is still 0.04 N off after 1 s
+(:math:`\Delta t = 10^{-3}` s). After ``CableDyn_InitDeckAt`` the held fairleads keep their
+load to round-off (:math:`2 \times 10^{-16}` N over the same second), and line 4's fairlead load
+is the standalone value of the deck moved to the CFD positions, (0.3026, -0.0761, -0.4114) N
+(MoorDyn: (0.3034, -0.0763, -0.4136) N).
+
+``q0`` is one of two vectors; its length selects which:
+
+* the ``Coupled``/``Vessel`` blocks alone, in coupled-vector order: 3 values per host point.
+  This is the layout of MoorDyn's ``X`` for a deck whose coupled objects are points, and the
+  one a host that knows only its fairleads can build before any handle exists;
+* the full coupled vector, ``CableDyn_NCoupledDOF`` values. Its ``Fixed``, ``Free`` and
+  ``Connect`` blocks are not read.
+
+The statics start at rest: there is no counterpart of MoorDyn's ``XD``. A host whose body is
+already moving imposes the velocities on the coupled blocks with ``CableDyn_UpdateStates``
+after the initialisation; the line interiors stay at rest.
+
+Step 2: build the coupled vector from the layout
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+*MoorDyn.* The coupled vector holds the coupled objects and nothing else: 3 values per coupled
+point, 6 per coupled body or rod.
+
+*CableDyn.* On the point route (decks of ``EI = 0`` lines) the vector has a block for every
+line-bound point, ``Fixed`` anchors included, in ``POINTS`` order. On the aggregate route
+(finite-EI lines, bodies or rods) only the host-driven points have blocks (`Coupled DOF
+layout`_). Ask the handle rather than deriving the layout from the deck:
+
+.. code-block:: c
+
+   int n = CableDyn_NCoupledDOF(h, &err);                 /* 24 for the box */
+   int ids[8], types[8];                                  /* n / 3 blocks */
+   CableDyn_GetCoupledLayout(h, ids, types, n / 3, &err);
+
+.. list-table:: Coupled vector of the box (point route)
+   :header-rows: 1
+   :widths: 14 18 18 50
+
+   * - Block ``k``
+     - DOFs
+     - ``point_id[k]``
+     - ``point_type[k]``
+   * - 0 to 3
+     - 0 to 11
+     - 1 to 4
+     - ``CD_C_POINT_FIXED``: the anchors
+   * - 4 to 7
+     - 12 to 23
+     - 5 to 8
+     - ``CD_C_POINT_COUPLED``: the fairleads, driven by the host
+
+Seed ``q``, ``v`` and ``a`` once from ``CableDyn_GetCoupledMotion`` after the initialisation,
+and before each step overwrite only the ``CD_C_POINT_COUPLED`` blocks. Every block is
+prescribed on every step, so the anchor blocks must keep the values ``GetCoupledMotion``
+returned: zeros there would move the anchors to the origin. ``CableDyn_CalcOutput`` returns a
+load for every block, and the anchor blocks carry the anchor reactions, which are not loads on
+the host.
+
+Step 3: step with the motion at the end of the step
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+*MoorDyn.* ``MoorDyn_Step(X, XD, F, &t, &dt)`` takes the coupled state at the start of the
+step, :math:`t`, extrapolates it over the step with ``XD``, and returns the forces at
+:math:`t + \Delta t`.
+
+*CableDyn.* ``CableDyn_Step(h, dt, q, v, a, ...)`` takes the prescribed position, velocity and
+acceleration at the end of the step, :math:`t + \Delta t`, and ``CableDyn_CalcOutput`` then
+returns the loads at :math:`t + \Delta t`. Pass the host's motion for the new time level (in a
+CFD time step, the body's current iterate for it) with a consistent acceleration: the
+integrator uses ``v`` and ``a``, not only ``q``. A host without body accelerations can use the
+backward difference :math:`a = (v(t + \Delta t) - v(t)) / \Delta t`.
+
+Step 4: outer correctors save and restore
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A host that iterates its time step (PIMPLE outer correctors, predictor-corrector schemes)
+advances the mooring once per pass and must rewind it between passes, or the mooring advances
+by several steps per host step.
+
+*MoorDyn.* The host serialises the system at the start of the time step
+(``MoorDyn_Serialize``) and deserialises it before every repeated pass.
+
+*CableDyn.* ``CableDyn_SaveState`` copies the whole model into the handle's single save slot
+(every line, point, body and rod state with its solver history); ``CableDyn_RestoreState``
+returns to it. A restore keeps the slot, so one save at the first pass of a time step serves
+every later pass. A restore followed by a step is bit-identical to taking that step from the
+saved state directly, and any number of steps may lie between the save and the restore (the
+sub-steps of Step 6). A successful ``Init*`` call discards the save.
+
+The names differ from MoorDyn's file calls: ``MoorDyn_SaveState`` writes the state to a file,
+``CableDyn_SaveState`` keeps it in memory. Serialising the state to a caller buffer or a
+restart file (``MoorDyn_Serialize``, ``MoorDyn_Save``/``MoorDyn_Load``) is not supported. A
+restarted host re-initialises with ``CableDyn_InitDeckAt`` at its restart positions, which
+gives the statics there rather than the dynamic state.
+
+Step 5: sum the loads into a rigid-body force and moment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The sign convention is MoorDyn's: each block of ``coupled_loads`` is the force the lines exert
+on that point, in newtons, in global axes (`State, units, and load sign`_). For a rigid body
+with reference point :math:`r`, sum the ``CD_C_POINT_COUPLED`` blocks only:
+
+.. math::
+
+   F = \sum_k f_k, \qquad M_r = \sum_k (x_k - r) \times f_k
+
+where :math:`x_k` is the fairlead position the step was taken with. A host that applies the
+moment about the global origin (foamMooring's ``moorDynR2`` in point mode accumulates
+:math:`x_k \times f_k`) uses :math:`r = 0`. Do not add the anchor blocks.
+
+Step 6: fixed step on the aggregate route
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On the point route each ``CableDyn_Step`` takes any :math:`\Delta t > 0`. On the aggregate route
+every step must use the deck's ``dtM``: a host step of :math:`m` times ``dtM`` is taken as
+:math:`m` calls of ``CableDyn_Step``, with the host-driven motion interpolated linearly between
+the start and the end of the host step. One ``CableDyn_SaveState`` before the first sub-step
+and one ``CableDyn_RestoreState`` undo all of them. MoorDyn sub-steps internally with its own
+``dtM``.
+
+Step 7: units and frame
+~~~~~~~~~~~~~~~~~~~~~~~
+
+SI units in the global right-handed frame with z up and still water at :math:`z = 0`
+(:doc:`conventions`), as in MoorDyn. A host in another frame or unit system converts the
+motion it passes and the loads it receives.
+
+Call sequence
+~~~~~~~~~~~~~
+
+The calls a restraint of a CFD rigid-body solver makes, with ``n_fair`` fairleads on one body
+whose positions ``x_fair`` (``3 * n_fair`` values in coupled-vector order: on the point route
+the deck's ``POINTS`` order of the ``Coupled`` points) the host computes from the body pose:
+
+.. code-block:: c
+
+   /* First call, the body at its initial pose. */
+   CableDyn_Create(&h, &err);
+   CableDyn_InitDeckAt(h, deck, (int)strlen(deck), x_fair, 3 * n_fair, &err);
+   n = CableDyn_NCoupledDOF(h, &err);
+   CableDyn_GetCoupledLayout(h, ids, types, n / 3, &err);  /* host blocks: CD_C_POINT_COUPLED */
+   CableDyn_GetCoupledMotion(h, q, v, a, n, &err);         /* seed every block */
+   t_saved = -HUGE_VAL;                                    /* nothing saved yet */
+
+   /* Every call: time t = t_prev + dt of the current pass of the host time step. */
+   if (t != t_saved) {                      /* first pass: the model is at t_prev */
+       CableDyn_SaveState(h, &err);
+       t_saved = t;
+   } else {                                 /* a later pass of the same step */
+       CableDyn_RestoreState(h, &err);
+   }
+   /* the fairlead motion at t (the END of the step) into the host blocks, in layout order */
+   for (j = 0, k = 0; k < n / 3; ++k) {
+       if (types[k] != CD_C_POINT_COUPLED) continue;
+       for (c = 0; c < 3; ++c) {
+           q[3 * k + c] = x_fair[3 * j + c];
+           v[3 * k + c] = v_fair[3 * j + c];
+           a[3 * k + c] = a_fair[3 * j + c];
+       }
+       ++j;
+   }
+   CableDyn_Step(h, dt, q, v, a, n, &converged, &stalled, &n_iter, &err);
+   CableDyn_CalcOutput(h, f, n, &err);
+   /* F = sum of f over the host blocks; M = sum of (x - r) x f over the same blocks */
+
+   /* End of the run. */
+   CableDyn_Close(&h, &err);
+
+Check ``err`` after every call. On the aggregate route, replace the single ``CableDyn_Step``
+by the sub-steps of Step 6.
 
 Function reference
 ------------------
@@ -620,8 +846,9 @@ but the C ABI writes no output files.
 rods, with their lines) runs on the same coupled aggregate as the OpenFAST module, with these
 differences from the point-system decks:
 
-* the coupled DOFs are the ``x, y, z`` of the deck's ``Coupled``/``Vessel`` points only, in deck
-  order (anchors are not part of the vector); the bodies and rods are integrated internally;
+* the coupled DOFs are the ``x, y, z`` of the deck's ``Coupled``/``Vessel`` points only, in
+  the order of `Coupled DOF layout`_ (anchors are not part of the vector); the bodies and
+  rods are integrated internally;
 * the deck must declare ``dtM``, and every ``CableDyn_Step`` must use that ``dt``;
 * the run is in still water: deck waves or currents are rejected, and
   ``CableDyn_UpdatePointFluidFields`` and ``CableDyn_CalcOutputDerivatives`` return
@@ -1393,6 +1620,7 @@ them all zero.
 
 Copies the current coupled motion. Right after ``CableDyn_InitDeck`` this is the static
 solution: the deck coordinates of every attached point, with zero velocity and acceleration.
+After ``CableDyn_InitDeckAt`` the host-driven blocks hold their entries of ``q0`` instead.
 Use it to seed the host's coupled vectors before the first step. The buffers are set to zero
 before the copy and stay zero if the call fails. The model is not changed.
 
@@ -1545,6 +1773,140 @@ calls.
 capacity of a larger buffer, as for the other string arguments. ``token_len`` must be at least 1,
 and a token longer than 64 characters (the longest channel name) is rejected with
 ``CD_C_BAD_INPUT``.
+
+Host coupling calls
+~~~~~~~~~~~~~~~~~~~
+
+ABI 1 minor extension 2: check ``CableDyn_GetAbiMinor() >= 2`` before calling these.
+`Coupling a host (CFD) solver`_ shows how they fit together.
+
+.. code-block:: c
+
+   #define CD_C_POINT_FIXED 1
+   #define CD_C_POINT_COUPLED 2   /* Coupled or Vessel */
+   #define CD_C_POINT_FREE 3
+   #define CD_C_POINT_CONNECT 4
+
+   void CableDyn_InitDeckAt(void *handle, const char *deck_path, int deck_path_len,
+                            const double *q0, int n_q0, int *err_stat);
+   void CableDyn_SaveState(void *handle, int *err_stat);
+   void CableDyn_RestoreState(void *handle, int *err_stat);
+   void CableDyn_GetCoupledLayout(void *handle, int *point_id, int *point_type,
+                                  int n_block, int *err_stat);
+
+The ``CD_C_POINT_*`` codes are also the point ``subtype`` of ``CableDyn_GetObjectInfo``.
+
+**CableDyn_InitDeckAt.** ``CableDyn_InitDeck`` with the static solve at the host's positions of
+the coupled points. ``handle``, ``deck_path`` and ``deck_path_len`` are as for
+``CableDyn_InitDeck``, and the call takes the same routes, rejects the same decks, and is
+serialised and transactional in the same way.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 8 12 12 12 38
+
+   * - Argument
+     - Dir
+     - C type
+     - Length
+     - NULL
+     - Meaning
+   * - ``q0``
+     - in
+     - ``const double *``
+     - ``n_q0``
+     - only if ``n_q0 == 0``
+     - host positions [m], interleaved ``x, y, z``: either the ``Coupled``/``Vessel`` blocks
+       alone, in coupled-vector order, or the full coupled vector (whose ``Fixed``, ``Free`` and
+       ``Connect`` blocks are not read)
+   * - ``n_q0``
+     - in
+     - ``int``
+     - --
+     - --
+     - 3 times the number of line-bound ``Coupled``/``Vessel`` points, or
+       ``CableDyn_NCoupledDOF`` of the new model; 0 for a deck without line-bound
+       ``Coupled``/``Vessel`` points
+
+Every line-bound ``Coupled``/``Vessel`` point is placed at its entry of ``q0`` before the static
+solve, and the lines, ``Free``/``Connect`` points, bodies and rods are solved in equilibrium with
+those points held there. The result equals ``CableDyn_InitDeck`` of the deck with those points
+moved to ``q0``. The statics start at rest: every coupled velocity and acceleration is zero,
+and ``CableDyn_GetCoupledMotion`` returns ``q0`` in the host-driven blocks. A
+``Coupled``/``Vessel`` point referenced by no line has no block and keeps its deck coordinates.
+On the aggregate route the two forms of ``q0`` coincide; a point that has two blocks there (a
+fairlead shared by an ``EI = 0`` and a finite-EI line) needs the same position in both.
+
+An ``n_q0`` that is negative, not a multiple of 3, or fits neither form, a ``NULL`` or
+non-finite ``q0``, a line's End A moved below its ``Fixed`` End B anchor (on a deck without
+``Free`` or ``Connect`` points), and the deck rejections of ``CableDyn_InitDeck`` return
+``CD_C_BAD_INPUT``; the diagnostics of a ``q0`` that does not fit the deck call it
+``coupled_positions``. A static-solve failure returns ``CD_C_SOLVE_FAIL``.
+
+**CableDyn_SaveState, CableDyn_RestoreState.** One save slot per handle, for a host's outer
+correctors.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - Function
+     - Effect
+   * - ``CableDyn_SaveState``
+     - copies the whole model into the slot, replacing any earlier save: every line, point,
+       body and rod state with its solver history (viscoelastic, Syrope and seabed-friction
+       states), the point fluid fields of ``CableDyn_UpdatePointFluidFields``, and the
+       aggregate route's step time
+   * - ``CableDyn_RestoreState``
+     - returns the model to the slot and keeps the slot, so one save serves any number of
+       restores
+
+A restore followed by a step is bit-identical to taking that step from the saved state
+directly, whatever ran between the save and the restore: the slot is a copy of the model
+object, independent of the rollback buffers the steps use internally. A successful ``Init*``
+call discards the slot; a failed one keeps it with the model. Both calls return
+``CD_C_NOT_INITIALIZED`` before an initialisation, and ``RestoreState`` returns
+``CD_C_BAD_INPUT`` when nothing has been saved since the model was initialised. Each call copies
+the model, so it allocates memory of the size of the model and costs about as much as copying
+it; it does no file I/O and follows the threading rules of the other per-handle calls. There is
+no serialisation of the state to a caller buffer.
+
+**CableDyn_GetCoupledLayout.** The owner of each 3-DOF block of the coupled vector.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 8 12 12 12 38
+
+   * - Argument
+     - Dir
+     - C type
+     - Length
+     - NULL
+     - Meaning
+   * - ``point_id``
+     - out
+     - ``int *``
+     - ``n_block``
+     - yes: skipped
+     - deck point id of block ``k`` (DOFs ``3k`` to ``3k+2``, 0-based)
+   * - ``point_type``
+     - out
+     - ``int *``
+     - ``n_block``
+     - yes: skipped
+     - ``CD_C_POINT_FIXED``, ``_COUPLED``, ``_FREE`` or ``_CONNECT``
+   * - ``n_block``
+     - in
+     - ``int``
+     - --
+     - --
+     - must equal ``CableDyn_NCoupledDOF / 3``
+
+The host drives the ``CD_C_POINT_COUPLED`` blocks. On the point route the blocks are the
+line-bound points of every type in ``POINTS`` order; on the aggregate route they are the
+``Coupled``/``Vessel`` points only (`Coupled DOF layout`_). A handle initialised from raw arrays
+has no deck points, and the call returns ``CD_C_BAD_INPUT``: its coupled vector is the caller's
+own ``fixed_dofs`` list. A wrong ``n_block`` returns ``CD_C_BAD_INPUT``.
 
 Examples
 --------

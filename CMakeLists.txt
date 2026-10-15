@@ -1081,6 +1081,20 @@ add_test(NAME c_api_shared
                  ${CMAKE_CURRENT_SOURCE_DIR}/examples/dynamic_chain_waves.dat)
 set_tests_properties(c_api_shared PROPERTIES LABELS "c;unit;capi;shared")
 
+# The host-coupling calls of ABI 1.2 through the public header and the shared library:
+# initialization at the host's positions (the foamMooring EsfLOWC box, whose fairleads start
+# below their deck coordinates), state save/restore on both routes, and the layout query.
+add_executable(test_c_api_host_coupling tests/test_c_api_host_coupling.c)
+target_include_directories(test_c_api_host_coupling PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(test_c_api_host_coupling PRIVATE cabledyn_shared)
+if(NOT WIN32)
+  target_link_libraries(test_c_api_host_coupling PRIVATE m)
+endif()
+add_test(NAME c_api_host_coupling
+         COMMAND test_c_api_host_coupling ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/foam_esflowc_box_points.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/host_coupling_chain_cable.dat)
+set_tests_properties(c_api_host_coupling PROPERTIES LABELS "c;unit;capi;shared;dynamic")
+
 find_package(Threads QUIET)
 if(Threads_FOUND AND CMAKE_USE_PTHREADS_INIT)
   add_executable(test_c_api_concurrency tests/test_c_api_concurrency.c)
@@ -1094,10 +1108,10 @@ else()
 endif()
 
 # Portable (Win32 or POSIX threads) stack bound of the shared library: each deck is
-# initialised, stepped, and evaluated on a thread with a 1 MiB stack (a host program, not
-# CableDyn, chooses the stack of the threads that call the library). The decks are a
-# 2048-element finite-EI cable (12294 DOFs), an EI=0 + finite-EI aggregate, and an EI=0
-# mooring; a stack need that grew with the model would overflow here.
+# initialised, stepped, saved and restored, and evaluated on a thread with a 1 MiB stack (a
+# host program, not CableDyn, chooses the stack of the threads that call the library). The
+# decks are a 2048-element finite-EI cable (12294 DOFs), an EI=0 + finite-EI aggregate, and an
+# EI=0 mooring; a stack need that grew with the model would overflow here.
 add_executable(test_c_api_stack tests/test_c_api_stack.c)
 target_include_directories(test_c_api_stack PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(test_c_api_stack PRIVATE $<TARGET_LINKER_FILE:cabledyn_shared>)
