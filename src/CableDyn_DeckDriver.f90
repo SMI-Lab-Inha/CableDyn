@@ -3391,7 +3391,8 @@ CONTAINS
       INTEGER, ALLOCATABLE :: fixed_3d(:)
       INTEGER :: nd, es_h, k, scale_h
       LOGICAL :: stable_h
-      REAL(wp) :: h_max, rule, need_h
+      REAL(wp) :: h_max, rule, need_h, ratio_h
+      CHARACTER(160) :: fix_h
       CHARACTER(1024) :: em_h
       CHARACTER(600) :: text_h
       CHARACTER(160) :: state_h, tail_h
@@ -3437,21 +3438,33 @@ CONTAINS
       at_least_h = ''
       IF (REAL(scale_h, wp) < need_h) at_least_h = 'at least'
       IF (need_h > CD_ONE) THEN
-        ! The longest element and the shortest half bending length it is measured against.
+        ! The coarsest element against its own half bending length (the element of the
+        ! largest ratio, which sets need_h).
         h_max = CD_ZERO
         rule = HUGE(CD_ONE)
+        ratio_h = CD_ZERO
         DO k = 1, SIZE(l0_n)
           IF (ei_n(k) > CD_ZERO .AND. ABS(w_rule(k)) > CD_ZERO) THEN
-            h_max = MAX(h_max, l0_n(k))
-            rule = MIN(rule, 0.5_wp*(ei_n(k)/ABS(w_rule(k)))**(CD_ONE/3.0_wp))
+            IF (l0_n(k)/(0.5_wp*(ei_n(k)/ABS(w_rule(k)))**(CD_ONE/3.0_wp)) > ratio_h) THEN
+              rule = 0.5_wp*(ei_n(k)/ABS(w_rule(k)))**(CD_ONE/3.0_wp)
+              h_max = l0_n(k)
+              ratio_h = h_max/rule
+            END IF
           END IF
         END DO
+        ! AutoMesh refines by its own criteria, which need not meet the bending length: a run
+        ! that already sets adaptive_mesh is told to refine the deck mesh.
+        IF (opts%adaptive_mesh) THEN
+          fix_h = 'x meets that length; adaptive_mesh True did not)'
+        ELSE
+          fix_h = 'x meets that length) or set adaptive_mesh True (a line restrained in torsion is '// &
+                  'refined automatically)'
+        END IF
         WRITE (text_h, '(A,I0,A,I0,A,F0.2,A,F0.2,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
-          ' starts the dynamics from '//TRIM(state_h)//' on its mesh of ', SIZE(l0_n), ' elements, up to ', h_max, &
-          ' m long where half the bending length (EI/|w|)^(1/3) is ', rule, &
-          ' m; refine the mesh ('//TRIM(at_least_h)//REPEAT(' ', MIN(1, LEN_TRIM(at_least_h))), scale_h, &
-          'x meets that length) or set adaptive_mesh True '// &
-          '(a line restrained in torsion is refined automatically)'
+          ' starts the dynamics from '//TRIM(state_h)//' on its mesh of ', SIZE(l0_n), &
+          ' elements, the coarsest ', h_max, ' m long where half the bending length (EI/|w|)^(1/3) is ', rule, &
+          ' m; refine the deck mesh ('//TRIM(at_least_h)//REPEAT(' ', MIN(1, LEN_TRIM(at_least_h))), scale_h, &
+          TRIM(fix_h)
       ELSE
         WRITE (text_h, '(A,I0,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
           ' starts the dynamics from '//TRIM(state_h)//' on its mesh of ', SIZE(l0_n), &
