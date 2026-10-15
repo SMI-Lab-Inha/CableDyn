@@ -3052,7 +3052,9 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: why
       REAL(wp), ALLOCATABLE :: l0_r(:), q_r(:), ea_r(:), ei_r(:), w_r(:), diam_r(:), dry_r(:)
       INTEGER, ALLOCATABLE :: fixed_r(:)
-      INTEGER :: es_r, it_r, scale, k, parent
+      INTEGER :: es_r, it_r, scale, k, parent, k_tol
+      REAL(wp) :: tol_r(3)
+      REAL(wp), PARAMETER :: CONTACT_FLOOR_TOL = 1.0e-5_wp
       CHARACTER(1024) :: em_r
       done = .FALSE.
       why = ''
@@ -3075,55 +3077,77 @@ CONTAINS
       diam_r = diam_on(l0, l0_r, diam)
       dry_r = dry_b
       CALL remap_elem_by_reference_arc(dry_r, l0, l0_r)
-      IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
-        CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
-                                                   8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
-                                                   CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
-                                                   q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
-                                                   es_r, em_r, contact_diameter=diam_r, contact_kbot=opts%kbot, &
-                                                   bathymetry=bathymetry, contact_frame_cs=frame_cs, &
-                                                   initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
-                                                   axial_quadrature_order=opts%axial_quadrature_order, &
-                                                   bending_quadrature_order=opts%bending_quadrature_order, &
-                                                   require_tensile=tensile_error, &
-                                                   compression_mode=CD_HC_COMPRESSION_STRICT, &
-                                                   refine_non_axial=opts%adaptive_mesh, &
-                                                   endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
-                                                   endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
-                                                   dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
-      ELSE IF (contact_enabled) THEN
-        CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
-                                                   8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
-                                                   CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
-                                                   q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
-                                                   es_r, em_r, contact_diameter=diam_r, contact_kbot=opts%kbot, &
-                                                   contact_frame_cs=frame_cs, &
-                                                   initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
-                                                   axial_quadrature_order=opts%axial_quadrature_order, &
-                                                   bending_quadrature_order=opts%bending_quadrature_order, &
-                                                   require_tensile=tensile_error, &
-                                                   compression_mode=CD_HC_COMPRESSION_STRICT, &
-                                                   refine_non_axial=opts%adaptive_mesh, &
-                                                   endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
-                                                   endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
-                                                   dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
-      ELSE
-        CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
-                                                   8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
-                                                   CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
-                                                   q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
-                                                   es_r, em_r, &
-                                                   initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
-                                                   axial_quadrature_order=opts%axial_quadrature_order, &
-                                                   bending_quadrature_order=opts%bending_quadrature_order, &
-                                                   require_tensile=tensile_error, &
-                                                   compression_mode=CD_HC_COMPRESSION_STRICT, &
-                                                   refine_non_axial=opts%adaptive_mesh, &
-                                                   endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
-                                                   endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
-                                                   dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
-      END IF
-      iters = iters + it_r
+      ! The tolerance ladder of the routes (the tight target, the coupled static tolerance, the
+      ! contact floor): the state refined here may have been accepted only at one of the
+      ! relaxed tolerances, which the refined polish must be allowed to reach as well.
+      tol_r = [static_tol, MAX(static_tol, COUPLED_STATIC_TOL), &
+               MERGE(MAX(static_tol, CONTACT_FLOOR_TOL), CD_ZERO, contact_enabled)]
+      DO k_tol = 1, 3
+        IF (k_tol > 1) THEN
+          IF (.NOT. (tol_r(k_tol) > MAXVAL(tol_r(1:k_tol - 1)))) CYCLE
+          IF (INDEX(em_r, 'Newton did not converge') == 0) EXIT
+        END IF
+        IF (ALLOCATED(l0_am)) DEALLOCATE (l0_am)
+        IF (ALLOCATED(ea_am)) DEALLOCATE (ea_am)
+        IF (ALLOCATED(ei_am)) DEALLOCATE (ei_am)
+        IF (ALLOCATED(w_am)) DEALLOCATE (w_am)
+        IF (ALLOCATED(q_static)) DEALLOCATE (q_static)
+        IF (ALLOCATED(curv)) DEALLOCATE (curv)
+        IF (ALLOCATED(fixed_am)) DEALLOCATE (fixed_am)
+        IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+          CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
+                                                     8, 80, tol_r(k_tol), 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
+                                                     CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
+                                                     q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
+                                                     es_r, em_r, contact_diameter=diam_r, contact_kbot=opts%kbot, &
+                                                     bathymetry=bathymetry, contact_frame_cs=frame_cs, &
+                                                     initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
+                                                     axial_quadrature_order=opts%axial_quadrature_order, &
+                                                     bending_quadrature_order=opts%bending_quadrature_order, &
+                                                     require_tensile=tensile_error, &
+                                                     compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                                     refine_non_axial=opts%adaptive_mesh, &
+                                                     endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                                     endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+        ELSE IF (contact_enabled) THEN
+          CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
+                                                     8, 80, tol_r(k_tol), 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
+                                                     CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
+                                                     q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
+                                                     es_r, em_r, contact_diameter=diam_r, contact_kbot=opts%kbot, &
+                                                     contact_frame_cs=frame_cs, &
+                                                     initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
+                                                     axial_quadrature_order=opts%axial_quadrature_order, &
+                                                     bending_quadrature_order=opts%bending_quadrature_order, &
+                                                     require_tensile=tensile_error, &
+                                                     compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                                     refine_non_axial=opts%adaptive_mesh, &
+                                                     endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                                     endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+        ELSE
+          CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
+                                                     8, 80, tol_r(k_tol), 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
+                                                     CD_HC_REFINE_CAP, [2, 5], l0_am, ea_am, ei_am, w_am, &
+                                                     q_static, curv, fixed_am, applied_scale, diag, res, it_r, &
+                                                     es_r, em_r, &
+                                                     initial_polish=.TRUE., require_resolved=opts%adaptive_mesh, &
+                                                     axial_quadrature_order=opts%axial_quadrature_order, &
+                                                     bending_quadrature_order=opts%bending_quadrature_order, &
+                                                     require_tensile=tensile_error, &
+                                                     compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                                     refine_non_axial=opts%adaptive_mesh, &
+                                                     endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                                     endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+        END IF
+        iters = iters + it_r
+        IF (es_r == CD_HCSTAT_OK) THEN
+          IF (k_tol > 1) tolerance_note = .TRUE.
+          EXIT
+        END IF
+      END DO
       IF (es_r /= CD_HCSTAT_OK) THEN
         WRITE (why, '(A,I0,A)') 'on the ', scale, 'x refined mesh: '
         why = TRIM(why)//' '//TRIM(em_r)
