@@ -33,8 +33,9 @@ MODULE CableDyn_Bathymetry
   INTEGER, PARAMETER, PUBLIC :: CD_BATHY_OK = 0, CD_BATHY_BADINPUT = 1, CD_BATHY_ALLOCFAIL = 2
   ! Crease rounding (see crease_blend): band half-width as a fraction of the smaller grid
   ! spacing next to the line, and the smallest surface change [m] a crease must make to be
-  ! rounded (below it the grid is treated as uncreased there: a plane written to a few
-  ! decimals stays exactly bilinear).
+  ! rounded (below it the grid is treated as uncreased there: an exactly planar grid stays
+  ! exactly bilinear; the rounding errors of a plane written to two or three decimals are
+  ! creases above it and are rounded by a fraction of a millimetre).
   REAL(wp), PARAMETER, PUBLIC :: CD_BATHY_CREASE_FRACTION = 0.05_wp
   REAL(wp), PARAMETER, PUBLIC :: CD_BATHY_CREASE_MIN_HEIGHT = 1.0e-6_wp
 
@@ -374,6 +375,7 @@ CONTAINS
     jx0 = CD_ZERO
     jx1 = CD_ZERO
     on_x = .FALSE.
+    on_m = .FALSE.
     IF (kx > 0) THEN
       CALL crease_fillet(u, dlx, kx == ix, hx, hxp, hxpp)
       CALL x_jump(bathy, kx, iy, dlx, jx0, on_x)

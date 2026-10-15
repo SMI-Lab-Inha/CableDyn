@@ -302,7 +302,7 @@ CONTAINS
     REAL(wp), PARAMETER :: ALONG_X(4) = [3.0_wp, 8.0_wp, 8.1_wp, 19.95_wp]
     REAL(wp), PARAMETER :: ALONG_Y(4) = [4.0_wp, 10.0_wp, 9.8_wp, 29.9_wp]
     REAL(wp) :: za, zb, ga(2), gb(2), zg, z, g(2), gp(2), gm(2), zp, zm, curv(3), delta, dz, ca(3), cb(3)
-    REAL(wp) :: pts(2, 6)
+    REAL(wp) :: pts(2, 6), zpp, zpm, zmp, zmm, twist
     INTEGER :: k, j, es
     CHARACTER(160) :: em
 
@@ -364,6 +364,15 @@ CONTAINS
       CALL require(ABS((zp - zm)/(2.0_wp*H) - g(2)) <= 1.0e-6_wp, 'crease:dz/dy')
       CALL require(ABS((gp(2) - gm(2))/(2.0_wp*H) - curv(3)) <= 1.0e-4_wp*MAX(1.0_wp, ABS(curv(3))), &
                    'crease:z_yy')
+      ! z_xy of the rounding: the y-derivative of z_x less the twist of the bilinear cell,
+      ! which the curvature leaves out (a four-point difference of the bilinear surface)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) + H, pts(2, j) + H, zpp, es, em)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) + H, pts(2, j) - H, zpm, es, em)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) - H, pts(2, j) + H, zmp, es, em)
+      CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j) - H, pts(2, j) - H, zmm, es, em)
+      twist = (zpp - zpm - zmp + zmm)/(4.0_wp*H*H)
+      CALL require(ABS((gp(1) - gm(1))/(2.0_wp*H) - twist - curv(2)) <= 1.0e-4_wp*MAX(1.0_wp, ABS(curv(2))), &
+                   'crease:z_xy')
       CALL CD_Bathymetry_Grid_Floor(bathy, pts(1, j), pts(2, j), zg, es, em)
       dz = ABS(z - zg)
       ! slope jumps below 1 here: a band of half-width <= 0.6 m moves the surface by < 0.1 m

@@ -2562,9 +2562,9 @@ CONTAINS
       ! fitted to it: that the line cannot hang as a catenary is not proven there.
       IF (walk_rejected .AND. .NOT. primary_walk_planar) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable static solve found no admissible equilibrium over '// &
-                        'the bathymetry: the line is longer than its span plus rise over the plane fitted to '// &
-                        'the bathymetry along the chord, and the equilibrium held by its bending stiffness that '// &
-                        'the anchor walk reached is rejected ('// &
+                        'the bathymetry: no catenary clears the plane fitted to the bathymetry along the chord, '// &
+                        'and the anchor walk toward an equilibrium held by the bending stiffness did not reach '// &
+                        'an accepted state ('// &
                         TRIM(short_message(primary_msg, 360))//'); mesh-sequenced route: '// &
                         TRIM(short_message(sequence_msg, 240))//'; check the line length and the seabed under it')
         RETURN
@@ -4704,8 +4704,9 @@ CONTAINS
       REAL(wp) :: tw, dt, dt_prev, a_cur(3), a_new(3), res_w, wgt, tol_w
       INTEGER :: it_w, es_w, k, total_it
       LOGICAL :: have_prev, energy, folded, fold_now
-      REAL(wp) :: fit, path_len, r_td(2), p, up(3), tl
-      INTEGER :: k_td, kk
+      REAL(wp) :: fit, path_len, r_td(2), p, up(3), tl, xb_w, yb_w, zb_w
+      INTEGER :: k_td, kk, es_b
+      CHARACTER(512) :: em_b
       CHARACTER(512) :: em_w
       ALLOCATE (q_try(6*nnode), q_new(6*nnode), q_prev(6*nnode), sref(nnode), curv_w(nnode))
       sref(1) = CD_ZERO
@@ -4780,8 +4781,22 @@ CONTAINS
           path_len = NORM2(a_l - a_seed)
           IF (k_td > 1) dt = MIN(dt, MAX(WALK_DT_MIN, -fit/path_len))
         END IF
-        a_cur = a_seed + tw*(a_l - a_seed)
+        a_cur = q_cont(1:3)
         a_new = a_seed + (tw + dt)*(a_l - a_seed)
+        ! Over a non-planar bathymetry the walked anchor follows the bed under it at the
+        ! anchor's own height above the bed (a straight path would cut through a ridge or
+        ! leave a dip); it ends at a_l, where that height is the deck's.
+        IF (.NOT. planar_bed .AND. PRESENT(bathymetry)) THEN
+          xb_w = frame_cs(1)*a_new(1) - frame_cs(2)*a_new(2)
+          yb_w = frame_cs(2)*a_new(1) + frame_cs(1)*a_new(2)
+          CALL CD_Bathymetry_Floor(bathymetry, xb_w, yb_w, zb_w, es_b, em_b)
+          IF (es_b /= CD_BATHY_OK) THEN
+            iters = iters + total_it
+            CALL walk_failed('the bathymetry under the walked anchor could not be queried ('//TRIM(em_b)//')')
+            RETURN
+          END IF
+          a_new(3) = zb_w + (a_l(3) - anchor_bed)
+        END IF
         IF (have_prev) THEN
           q_try = q_cont + (q_cont - q_prev)*(dt/dt_prev)
         ELSE
@@ -13100,7 +13115,8 @@ CONTAINS
     !! below (tabulated depths, rounded deck coordinates), rests on the seabed: its z is set
     !! to the seabed elevation. Further below is rejected.
     !! z_grid (bathymetry): the bilinear surface of the tabulated depths, which the rounding
-    !! of a crease moves by up to a quarter of its slope jump times the band half-width; an
+    !! of a crease moves by up to a sixth of its slope jump times the band half-width (the
+    !! roundings of two lines add where their bands cross); an
     !! anchor at the tabulated depth (between the two surfaces, within the tolerance) rests
     !! on the seabed as well and is placed on the rounded surface z_floor.
     TYPE(DeckPoint), INTENT(INOUT) :: pt

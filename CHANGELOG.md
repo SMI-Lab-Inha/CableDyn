@@ -173,11 +173,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   rounded within a band of half-width 5 % of the smaller grid spacing next to its line, by
   the cubic fillet `J (d - |u|)^3 / (6 d^2)` of the slope jump `J` across the line, applied as
   a tensor product in both directions, so that the surface is twice continuously
-  differentiable. It moves the surface by at most `|J| d / 6` (1.7 cm for a slope jump of 0.2
-  on a 10 m grid), and a planar grid and every patch without a crease (one that would move the
-  surface by less than 1 µm) keep the bilinear surface bit for bit. In a band the elastic
-  contact force is the gradient of the penalty potential of the normal penetration, with its
-  Hessian as the tangent, in the statics and the dynamics alike. Every bathymetry query uses
+  differentiable. It moves the surface by at most `|J| d / 6` along one line (1.7 cm for a
+  slope jump of 0.2 on a 10 m grid; at a crossing of two lines the two roundings add), and a
+  grid that is exactly planar, and every patch without a crease (one that would move the
+  surface by less than 1 µm), keep the bilinear surface bit for bit; the rounding errors of a
+  plane written to two or three decimals are themselves creases and are rounded by a fraction
+  of a millimetre. In a band the elastic contact force is the gradient of the penalty
+  potential of the normal penetration (up to the twist of a bilinear cell, which the tangent
+  leaves out as before), with its Hessian as the tangent, in the statics and the dynamics
+  alike. Every bathymetry query uses
   this surface, the Python `Bathymetry` and its seabed clearance included. A `Fixed` point at
   the tabulated depth of a creased grid node rests on the seabed and is placed on the rounded
   surface. In the statics campaign the `EI = 0` decks on bathymetry solve 40 of 43 (32

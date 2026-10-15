@@ -813,14 +813,19 @@ bilinear surface, :math:`J_x(y)` the jumps of the grid rows across the :math:`x`
 interpolated linearly along it, :math:`J_y(x)` likewise, and :math:`M` the mixed second
 difference of the grid where two lines cross. Its height, gradient and curvature are
 continuous everywhere within the grid. Outside the bands it is the bilinear surface, and
-inside one it moves by at most :math:`|J|\,\delta/6`. A 0.2 slope jump on a 10 m grid moves
+inside the band of one line it moves by at most :math:`|J|\,\delta/6`; where two bands
+cross the two roundings and the mixed term add. A 0.2 slope jump on a 10 m grid moves
 it by 1.7 cm, within the static penetration of a chain (``w/(kBot Diam)``, 11 cm for a
 120 mm chain at ``kBot = 1e5``). A crease that would move the surface by less than 1 µm is not
-rounded: a planar grid, also one written to a few decimals, and every patch without a crease
-keep the bilinear surface exactly. The grid edges are not rounded, and outside the grid the
-surface stays level. Every query uses this one surface: the contact of the ``EI = 0`` and the
-Hermite path, statics and dynamics, its friction, the seabed clearance and touchdown outputs,
-and the Python post-processing (``cabledyn.Bathymetry``). A ``Fixed`` point placed at the
+rounded: an exactly planar grid and every patch without a crease keep the bilinear surface
+exactly. A plane written to two or three decimals has creases of the size of its rounding,
+which are rounded by a fraction of a millimetre. The grid edges are not rounded, and outside the grid the
+surface stays level. Every height and gradient query uses this one surface: the contact of
+the ``EI = 0`` and the Hermite path, statics and dynamics, the friction frame and capacity,
+the seabed clearance and touchdown outputs, and the Python post-processing
+(``cabledyn.Bathymetry``). The friction capacity uses the normal force :math:`f_n^{(k)}(g/s)`;
+inside a band it leaves out the curvature term of the contact force below, of the order of
+the penetration times the curvature. A ``Fixed`` point placed at the
 tabulated depth of a creased grid node lies up to :math:`|J|\,\delta/6` below the rounded
 surface; it rests on the seabed and is placed on the rounded surface.
 
@@ -835,7 +840,8 @@ where the surface curves, the elastic force is the gradient of the penalty poten
 the normal force plus :math:`f_n^{(k)}\,g\,\nabla s/s^2`, a term of the order of the
 penetration times the curvature, and its tangent is the Hessian of that potential (third
 derivatives of the surface left out). The static energy minimisation then agrees with the
-force, and a node held in a rounded valley by its curvature has a consistent stiffness. Its
+force up to the twist of the bilinear cell, which is left out of the tangent as on a sloped
+patch, and a node held in a rounded valley by its curvature has a consistent stiffness. Its
 damping acts on
 the velocity along :math:`\mathbf{n}`, and a friction capacity is :math:`\mu` times its
 magnitude. The static solve and the dynamics use the same law, so a grounded run on a slope
