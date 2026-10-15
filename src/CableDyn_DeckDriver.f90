@@ -3373,9 +3373,10 @@ CONTAINS
       !! A test that cannot be evaluated prints nothing. Not run where another check covers
       !! it: an in-plane current (planar_current_saddle) and a coarse pass of that current.
       !! after_polish: the state is the discrete equilibrium of an attachment polish, which
-      !! planar_current_saddle (run on the smeared state) has not seen, so an in-plane current
-      !! does not skip it; the lumped attachment drag, a fixed-point load of the polish, is
-      !! not part of the tangent there either. The arrays describe the state q_static is checked on: the final mesh l0_n with its
+      !! no other stability test has seen (planar_current_saddle and the 3D audit run on the
+      !! smeared state), so neither an in-plane current nor a line solved in 3D skips it; a
+      !! line solved in 3D is tested with the same end constraints. The lumped attachment drag,
+      !! a fixed-point load of the polish, is not part of the tangent. The arrays describe the state q_static is checked on: the final mesh l0_n with its
       !! element properties and weights w_n (the bare weights after an attachment polish,
       !! whose lumped nodal loads are dead loads and leave the tangent unchanged), diam_ref
       !! and dry_ref on the mesh l0_ref, and the static constraints fixed_n. The bending-length
@@ -3389,13 +3390,21 @@ CONTAINS
       REAL(wp) :: h_max, rule, need_h
       CHARACTER(1024) :: em_h
       CHARACTER(600) :: text_h
-      IF (require_3d_static .OR. saddle_kept) RETURN
-      IF (.NOT. after_polish .AND. in_plane_current()) RETURN
+      CHARACTER(160) :: state_h, tail_h
+      IF (saddle_kept) RETURN
+      IF (.NOT. after_polish .AND. (require_3d_static .OR. in_plane_current())) RETURN
       IF (PRESENT(coarse_pass)) THEN
         IF (coarse_pass) RETURN
       END IF
       IF (.NOT. ALLOCATED(q_static)) RETURN
-      IF (SIZE(fixed_n) <= 6) RETURN
+      IF (.NOT. require_3d_static .AND. SIZE(fixed_n) <= 6) RETURN
+      IF (require_3d_static) THEN
+        state_h = 'its discrete attachment equilibrium, which is unstable'
+        tail_h = 'a disturbance can move the line away from it'
+      ELSE
+        state_h = 'a static state solved in its vertical plane that is unstable out of that plane'
+        tail_h = 'a lateral disturbance can move the line out of the plane'
+      END IF
       nd = SIZE(q_static)
       fixed_3d = [1, 2, 3, nd - 5, nd - 4, nd - 3]
       IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
@@ -3426,16 +3435,14 @@ CONTAINS
           END IF
         END DO
         WRITE (text_h, '(A,I0,A,I0,A,F0.2,A,F0.2,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
-          ' starts the dynamics from a static state solved in its vertical plane that is unstable out of '// &
-          'that plane on its mesh of ', SIZE(l0_n), ' elements, up to ', h_max, &
+          ' starts the dynamics from '//TRIM(state_h)//' on its mesh of ', SIZE(l0_n), ' elements, up to ', h_max, &
           ' m long where half the bending length (EI/|w|)^(1/3) is ', rule, &
           ' m; refine the mesh (', scale_h, 'x meets that length) or set adaptive_mesh True '// &
           '(a line restrained in torsion is refined automatically)'
       ELSE
         WRITE (text_h, '(A,I0,A,I0,A)', IOSTAT=k) 'line ', ln%id, &
-          ' starts the dynamics from a static state solved in its vertical plane that is unstable out of '// &
-          'that plane on its mesh of ', SIZE(l0_n), ' elements, which resolves the bending length; '// &
-          'a lateral disturbance can move the line out of the plane'
+          ' starts the dynamics from '//TRIM(state_h)//' on its mesh of ', SIZE(l0_n), &
+          ' elements, which resolves the bending length; '//TRIM(tail_h)
       END IF
       CALL report_note(text_h)
     END SUBROUTINE handoff_lateral_note
