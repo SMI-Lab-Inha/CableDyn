@@ -605,7 +605,8 @@ CONTAINS
                                      converged, stalled, n_iter, ErrStat, ErrMsg, &
                                      load_proc, added_mass_proc, load_force_proc, &
                                      load_band_proc, prescribed_q, prescribed_v, prescribed_a, structural_mass, &
-                                     workspace, added_mass_band_proc, start_load, probe_q, probe_R, probe_K)
+                                     workspace, added_mass_band_proc, start_load, start_tension, &
+                                     probe_q, probe_R, probe_K)
     !! One generalized-alpha step: the constant load f_ext plus the optional load,
     !! banded-load, force-only and added-mass callbacks (hydrodynamics, damping, contact).
     !! On a singular effective tangent returns CD_DYN_SINGULAR; on a line-search
@@ -656,6 +657,13 @@ CONTAINS
     !! committed force there, not one advanced over the step). Absent: the step evaluates the
     !! force-only callback (or load_proc) at (q, v). Full (3 n_nodes) array.
     REAL(wp), INTENT(IN), OPTIONAL :: start_load(:)
+    !! Force blend on a tension-only line whose load callbacks carry the axial law of some
+    !! elements (ea = 0 there; the viscoelastic and Syrope elements of a line model): the
+    !! step-start tension of each element (n_elem), the along-chord force of that law in
+    !! start_load (or in the step-start load the step evaluates). The release cap then bounds
+    !! the alpha_f share of those elements as it bounds that of the elastic ones; entries of
+    !! elements with ea > 0 are ignored. Absent: the cap covers the elastic elements only.
+    REAL(wp), INTENT(IN), OPTIONAL :: start_tension(:)
     !! TEST HOOK (unit tests of the tangent; production callers omit it). With probe_q (full
     !! 3 n_nodes array, the fixed DOFs at their t_{n+1} values) present, the step returns after
     !! its setup without iterating: probe_R is the residual (3 n_nodes) and probe_K the free-free
@@ -711,6 +719,10 @@ CONTAINS
     n_iter = 0
     ErrStat = CD_DYN_OK
     ErrMsg = ''
+    ! Only a warm re-solve of the step whose step-start data the workspace holds may reuse
+    ! them (start_valid): any other call drops them before its first return, so an unarmed
+    ! call that fails early cannot leave an older step's data to a later armed re-solve.
+    IF (PRESENT(workspace)) workspace%start_valid = workspace%start_valid .AND. workspace%guess_armed
     n_dof = SIZE(q)
     has_load_proc = PRESENT(load_proc)
     has_load_band_proc = PRESENT(load_band_proc)
@@ -1472,9 +1484,22 @@ CONTAINS
         em_s = 'step-start internal-force assembly failed: '//TRIM(em_s)
         RETURN
       END IF
-      ! release cap: the step-start tension, stretch and chord of every taut element (the
-      ! assembly above has validated the connectivity and the element lengths)
+      ! release cap: the step-start tension, stretch and chord of every stretched element (the
+      ! assembly above has validated the connectivity and the element lengths). An element
+      ! with ea = 0 takes the tension of the law its load callback carries (start_tension).
       release_cap = tension_only .AND. alpha_f > CD_ZERO
+      IF (release_cap .AND. PRESENT(start_tension)) THEN
+        IF (SIZE(start_tension) /= n_elem) THEN
+          es_s = CD_DYN_BADINPUT
+          em_s = 'start_tension must have shape (n_elem)'
+          RETURN
+        END IF
+        IF (.NOT. CD_All_Finite(start_tension)) THEN
+          es_s = CD_DYN_BADINPUT
+          em_s = 'start_tension must be finite'
+          RETURN
+        END IF
+      END IF
       IF (release_cap) THEN
         DO i = 1, n_elem
           BLOCK
@@ -1484,7 +1509,13 @@ CONTAINS
             chord_n(:, i) = d/ell
             stretch_n(i) = ell - l0(i)
             tension_n(i) = CD_ZERO
-            IF (stretch_n(i) > CD_ZERO) tension_n(i) = ea(i)*(ell/l0(i) - CD_ONE)
+            IF (stretch_n(i) > CD_ZERO) THEN
+              IF (ea(i) > CD_ZERO) THEN
+                tension_n(i) = ea(i)*(ell/l0(i) - CD_ONE)
+              ELSE IF (PRESENT(start_tension)) THEN
+                tension_n(i) = MAX(start_tension(i), CD_ZERO)
+              END IF
+            END IF
           END BLOCK
         END DO
       END IF
@@ -1955,7 +1986,11 @@ CONTAINS
       !! carries the discrete energy gradient W_0/(e_0 - e_1), which returns exactly W_0 (the
       !! smaller of the two is kept, so the blend is continuous in e_1). Every other element,
       !! and every taut one, keeps the force blend. The residual and the tangent are corrected
-      !! by the difference.
+      !! by the difference. An element whose axial law a load callback carries (ea = 0, T_0
+      !! from start_tension) is capped the same way with the same W_0 = T_0 e_0/2: the energy
+      !! of the viscoelastic springs at rest, and an upper bound of the energy below a
+      !! stiffening loading curve such as Syrope's, so the alpha_f share of every
+      !! tension-only element returns at most T_0 e_0/2 over a release.
       REAL(wp), INTENT(IN) :: q_eval(:)
       REAL(wp), INTENT(INOUT) :: Rout(:)
       REAL(wp), INTENT(INOUT), OPTIONAL :: effout(:, :), effbandout(:, :)

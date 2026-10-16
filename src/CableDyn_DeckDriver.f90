@@ -15487,6 +15487,8 @@ CONTAINS
       CALL close_dynamic_line_outputs(pos_units, ten_units)
       RETURN
     END IF
+    ! the run audit starts from the initial state (its tension scale is that of t = 0)
+    CALL audit_line_models(models, lines, CD_ZERO, opts%dtM)
     CALL start_driver_progress(progress, nstep, opts%dtM)
     DO step = 1, nstep
       t = REAL(step, wp)*opts%dtM
@@ -15650,6 +15652,8 @@ CONTAINS
       CALL close_dynamic_line_outputs(pos_units, ten_units)
       RETURN
     END IF
+    ! the run audit starts from the initial state (its tension scale is that of t = 0)
+    CALL audit_system_lines(system, lines, CD_ZERO, opts%dtM)
     CALL start_driver_progress(progress, nstep, opts%dtM)
     DO step = 1, nstep
       t = REAL(step, wp)*opts%dtM
@@ -16032,6 +16036,8 @@ CONTAINS
       CALL close_dynamic_line_outputs(pos_units, ten_units)
       RETURN
     END IF
+    ! the run audit starts from the initial state (its tension scale is that of t = 0)
+    CALL audit_system_lines(system, lines, CD_ZERO, opts%dtM)
     CALL start_driver_progress(progress, nstep, opts%dtM)
     DO step = 1, nstep
       t = REAL(step, wp)*opts%dtM
@@ -16220,6 +16226,8 @@ CONTAINS
       CALL close_dynamic_rod_outputs(rod_pos_units)
       RETURN
     END IF
+    ! the run audit starts from the initial state (its tension scale is that of t = 0)
+    CALL audit_system_lines(system, lines, CD_ZERO, opts%dtM)
     CALL start_driver_progress(progress, nstep, opts%dtM)
     DO step = 1, nstep
       t = REAL(step, wp)*opts%dtM
@@ -17751,6 +17759,8 @@ CONTAINS
     IF (ErrStat /= CD_DECKDRV_OK) GOTO 800
     CALL mb_outputs(CD_ZERO)
     IF (ErrStat /= CD_DECKDRV_OK) GOTO 800
+    ! the run audit starts from the initial state (its tension scale is that of t = 0)
+    IF (mb%has_sys) CALL audit_system_lines(mb%system, sys_lines, CD_ZERO, opts%dtM)
     CALL start_driver_progress(progress, nstep, opts%dtM)
     DO step = 1, nstep
       t = REAL(step, wp)*opts%dtM
@@ -26422,7 +26432,8 @@ CONTAINS
 
   SUBROUTINE audit_line_models(models, lines, time, dt)
     !! Run audit of one committed host step over the standalone EI=0 line models (models(i)
-    !! is deck line i): see CD_Audit_Model_Step. Warns once per line, at the line's first
+    !! is deck line i): see CD_Audit_Model_Step. Every route that audits calls it once on the
+    !! initial state (time 0) before its march. Warns once per line, at the line's first
     !! implausible tension spike.
     TYPE(CD_ModelType), INTENT(INOUT) :: models(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
