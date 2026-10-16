@@ -7,8 +7,9 @@ PROGRAM test_shared_anchor
   !!      anchor resultant Point4F equals the sum of the three single-line decks' anchor forces
   !!      (a Fixed anchor couples nothing) in statics and in a dynamic run with one fairlead
   !!      driven by a motionFile, and each single-line anchor force has the AnchTen magnitude;
-  !!   2. a Free clump shared by the three lines: its line resultant balances its submerged
-  !!      weight, Point4F + (rhoW V - m) g e3 = 0.
+  !!   2. a Free clump shared by the three lines, resting on the seabed: its line resultant and
+  !!      its own seabed reaction (kBot A pen over its footprint A = Vol^(2/3)) balance its
+  !!      submerged weight, Point4F + kBot A pen e3 + (rhoW V - m) g e3 = 0.
   !!   3. the same three fairleads written as Turbine<J> points of a TURBINES section (reference
   !!      position, turbine-local fairlead) and driven by per-turbine rigid-body motion records
   !!      reproduce the Coupled-point deck.
@@ -18,7 +19,7 @@ PROGRAM test_shared_anchor
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
 
-  REAL(wp), PARAMETER :: RHO_W = 1025.0_wp, GRAV = 9.80665_wp
+  REAL(wp), PARAMETER :: RHO_W = 1025.0_wp, GRAV = 9.80665_wp, KBOT = 1.0e5_wp   ! the default kBot
   REAL(wp), PARAMETER :: FAIR(3, 3) = RESHAPE([0.0_wp, 0.0_wp, -10.0_wp, 600.0_wp, 0.0_wp, -10.0_wp, &
                                                300.0_wp, 519.615242_wp, -10.0_wp], [3, 3])
   REAL(wp), PARAMETER :: ANCHOR(3) = [300.0_wp, 173.205081_wp, -100.0_wp]
@@ -128,6 +129,7 @@ CONTAINS
       IF (which(j)) WRITE (u, '(A,I0)') 'AnchTen', j
     END DO
     WRITE (u, '(A)') 'Point4Fx Point4Fy Point4Fz Point4FH'
+    IF (clump) WRITE (u, '(A)') 'Point4pz'
     WRITE (u, '(A)') '--- end ---'
     CLOSE (u)
   END SUBROUTINE write_deck
@@ -328,15 +330,21 @@ CONTAINS
 
   SUBROUTINE check_free_clump()
     REAL(wp), ALLOCATABLE :: d(:, :)
-    REAL(wp) :: w_sub, err
+    REAL(wp) :: w_sub, err, pen
     LOGICAL :: ok
 
     CALL write_deck('shared_clump.dat', [.TRUE., .TRUE., .TRUE.], .TRUE., .TRUE., .FALSE.)
-    CALL run('shared_clump.dat', 'shared_clump', 8, d, ok)
+    CALL run('shared_clump.dat', 'shared_clump', 9, d, ok)
     IF (.NOT. ok) RETURN
     w_sub = (20000.0_wp - RHO_W*2.0_wp)*GRAV
-    err = NORM2(d(5:7, 1) + [0.0_wp, 0.0_wp, -w_sub])/w_sub
-    WRITE (*, '(A,ES11.3)') 'shared Free clump: |F_lines + submerged weight|/weight = ', err
-    CALL require(err <= 1.0e-6_wp, 'shared free point: line resultant balances the submerged weight')
+    ! the clump rests on the 100 m seabed on its own footprint, (2 m^3)^(2/3)
+    pen = -100.0_wp - d(9, 1)
+    CALL require(pen > 0.0_wp .AND. pen <= w_sub/(KBOT*2.0_wp**(2.0_wp/3.0_wp)), &
+                 'shared free point: the clump rests on its footprint')
+    err = NORM2(d(5:7, 1) + [0.0_wp, 0.0_wp, KBOT*2.0_wp**(2.0_wp/3.0_wp)*MAX(pen, 0.0_wp) - w_sub])/w_sub
+    WRITE (*, '(A,ES11.3)') 'shared Free clump: |F_lines + seabed reaction + submerged weight|/weight = ', err
+    ! the depth is printed to 8 digits (1e-5 m at 100 m), and kBot A 1e-5 m is 1e-5 of the weight
+    CALL require(err <= 2.0e-5_wp, 'shared free point: line resultant and seabed reaction balance the '// &
+                 'submerged weight')
   END SUBROUTINE check_free_clump
 END PROGRAM test_shared_anchor

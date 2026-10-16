@@ -89,7 +89,8 @@ Environment and seabed
      - real, Pa/m (N/m³)
      - ``1.0e5``
      - finite, > 0 when a seabed is present. Mapped to each line node and rod contact station by
-       local diameter × tributary length; a Rigid6 reference point uses a fixed 1 m² area
+       local diameter × tributary length; a Free/Connect point with Mass or Vol over its footprint
+       (Vol, or Mass/7850 kg/m³, to the power 2/3); a Rigid6 reference point uses a fixed 1 m² area
      - both
      - ``1.0e5 kBot``
    * - ``cBot`` / ``cb``

@@ -20,6 +20,7 @@ MODULE CableDyn_System
                             CD_Model_Has_Friction, CD_Get_Model_Friction_Anchors, CD_Set_Model_Friction_Anchors, &
                             CD_Get_Model_EndNodeMassDiag, CD_Get_Model_EndNodeAddedMass, &
                             CD_Get_Model_EndNodeTangent, CD_Set_Model_EndQuery, CD_Get_Model_EndQuery, &
+                            CD_Model_Seabed_Point_Load, &
                             CD_Update_Model_SegmentLength, CD_ModelControlSaveType, CD_Save_Model_Control, &
                             CD_Restore_Model_Control, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Interior_State, CD_Step_Model, &
@@ -97,6 +98,7 @@ MODULE CableDyn_System
   PUBLIC :: CD_System_Junction_Rewind
   PUBLIC :: CD_System_Point_Base
   PUBLIC :: CD_System_Point_Environment
+  PUBLIC :: CD_System_Point_Seabed
   PUBLIC :: CD_Detach_System_LineEnds
   PUBLIC :: CD_Update_System_Line_SegmentLength
   PUBLIC :: CD_Save_System_Line_Control, CD_Restore_System_Line_Control
@@ -152,6 +154,13 @@ MODULE CableDyn_System
     REAL(wp) :: fluid_acceleration(3) = CD_ZERO
     REAL(wp) :: waterline_z = CD_ZERO
     REAL(wp) :: fluid_density = CD_ZERO
+    ! Seabed contact of a Free/Connect point (a clump weight or a grounded buoy): normal
+    ! stiffness seabed_k = kBot*A [N/m] and one-sided normal damping seabed_c = cBot*A
+    ! [N.s/m] over its contact footprint A, applied with the line nodes' contact law
+    ! against the floor of a line bound to the point (CD_System_Point_Seabed). Zero: no
+    ! contact (the default, and every point not built from a deck footprint).
+    REAL(wp) :: seabed_k = CD_ZERO
+    REAL(wp) :: seabed_c = CD_ZERO
   END TYPE CD_SystemPointType
 
   TYPE :: CD_LineEndpointBinding
@@ -1623,6 +1632,66 @@ CONTAINS
     CALL point_environment_force(point, point_velocity, force, effective_mass, ErrStat, ErrMsg)
   END SUBROUTINE CD_System_Point_Environment
 
+  SUBROUTINE CD_System_Point_Seabed(system, point_index, q, v, in_contact, force, jac_q, jac_v, ErrStat, ErrMsg)
+    !! Seabed contact load of system point point_index at position q and velocity v: the line
+    !! nodes' normal contact law (CD_Model_Seabed_Point_Load) with the point's own stiffness
+    !! seabed_k and damping seabed_c, against the floor of the first bound line that has a
+    !! seabed, else of any line of the system (every line of a deck shares the deck's floor).
+    !! jac_q = -d(force)/dq and jac_v = -d(force)/dv. in_contact is .FALSE., with every output
+    !! exactly zero, for a point without a footprint, in a system without a seabed, or clear of
+    !! the floor.
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: point_index
+    REAL(wp), INTENT(IN) :: q(3), v(3)
+    LOGICAL, INTENT(OUT) :: in_contact
+    REAL(wp), INTENT(OUT) :: force(3), jac_q(3, 3), jac_v(3, 3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k, li, es
+    CHARACTER(160) :: em
+
+    in_contact = .FALSE.
+    force = CD_ZERO
+    jac_q = CD_ZERO
+    jac_v = CD_ZERO
+    ErrStat = CD_SYSTEM_OK
+    ErrMsg = ''
+    IF (.NOT. ALLOCATED(system%points) .OR. .NOT. ALLOCATED(system%bindings)) RETURN
+    IF (point_index < 1 .OR. point_index > SIZE(system%points)) RETURN
+    IF (.NOT. (system%points(point_index)%seabed_k > CD_ZERO .OR. system%points(point_index)%seabed_c > CD_ZERO)) &
+      RETURN
+    IF (.NOT. ALLOCATED(system%lines)) RETURN
+    ! the floor of a bound line, or of any line of the system for a point whose lines have all
+    ! been detached (a line failure): a clump left without lines still rests on the seabed
+    li = 0
+    DO k = 1, SIZE(system%bindings)
+      IF (system%bindings(k)%point_id /= system%points(point_index)%id) CYCLE
+      IF (system%bindings(k)%line_index < 1 .OR. system%bindings(k)%line_index > SIZE(system%lines)) CYCLE
+      IF (.NOT. system%lines(system%bindings(k)%line_index)%has_seabed) CYCLE
+      li = system%bindings(k)%line_index
+      EXIT
+    END DO
+    IF (li == 0) THEN
+      DO k = 1, SIZE(system%lines)
+        IF (.NOT. system%lines(k)%has_seabed) CYCLE
+        li = k
+        EXIT
+      END DO
+    END IF
+    IF (li == 0) RETURN
+    CALL CD_Model_Seabed_Point_Load(system%lines(li), q, v, system%points(point_index)%seabed_k, &
+                                    system%points(point_index)%seabed_c, in_contact, force, jac_q, jac_v, es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      in_contact = .FALSE.
+      force = CD_ZERO
+      jac_q = CD_ZERO
+      jac_v = CD_ZERO
+      WRITE (ErrMsg, '(A,I0,A)') 'CableDyn_System: seabed contact of point ', system%points(point_index)%id, &
+        ' failed: '//TRIM(em)
+      ErrStat = system_status_from_model(es)
+    END IF
+  END SUBROUTINE CD_System_Point_Seabed
+
   INTEGER FUNCTION CD_System_Point_Base(system, point_index) RESULT(base)
     !! Zero-based coupled-DOF offset of system point point_index (-1 when unbound).
     TYPE(CD_SystemType), INTENT(IN) :: system
@@ -1646,7 +1715,8 @@ CONTAINS
 
     INTEGER :: p, base, es, k
     REAL(wp) :: ma_blk(3, 3), k_blk(3, 3), c_blk(3, 3), rhs3(3), kv_nbr(3)
-    LOGICAL :: solve_ok
+    REAL(wp) :: sea_f(3), sea_k(3, 3), sea_c(3, 3)
+    LOGICAL :: solve_ok, sea_contact
     LOGICAL, ALLOCATABLE :: integ(:)
     CHARACTER(1024) :: em
 
@@ -1798,6 +1868,19 @@ CONTAINS
                MATMUL(ma_blk, system%a_work(base + 1:base + 3)) - &
                dt*(MATMUL(k_blk, system%v_work(base + 1:base + 3)) - kv_nbr)
         ma_blk = ma_blk + dt*c_blk + dt*dt*k_blk
+        ! The point's own seabed contact, linearised about the step start like the end
+        ! blocks: F(q+, v+) = F - K (dt v + dt^2 a+) - C dt a+ (K = -dF/dq, C = -dF/dv), so
+        ! a light point on a stiff footprint does not bounce. Nothing is added off the floor.
+        CALL CD_System_Point_Seabed(system, p, system%q_work(base + 1:base + 3), system%v_work(base + 1:base + 3), &
+                                    sea_contact, sea_f, sea_k, sea_c, es, em)
+        IF (es /= CD_SYSTEM_OK) THEN
+          CALL restore_failed_dynamic_points(system, system%point_rollback, es, em, ErrStat, ErrMsg)
+          RETURN
+        END IF
+        IF (sea_contact) THEN
+          rhs3 = rhs3 + sea_f - dt*MATMUL(sea_k, system%v_work(base + 1:base + 3))
+          ma_blk = ma_blk + dt*sea_c + dt*dt*sea_k
+        END IF
         DO k = 1, 3
           ma_blk(k, k) = ma_blk(k, k) + system%point_mass_work(p)
         END DO
@@ -2866,7 +2949,8 @@ CONTAINS
                  CD_All_Finite(points(i)%a) .AND. CD_All_Finite(points(i)%force) .AND. &
                  CD_Is_Finite(points(i)%mass) .AND. &
                  CD_Is_Finite(points(i)%volume) .AND. CD_Is_Finite(points(i)%cda) .AND. &
-                 CD_Is_Finite(points(i)%ca))) THEN
+                 CD_Is_Finite(points(i)%ca) .AND. CD_Is_Finite(points(i)%seabed_k) .AND. &
+                 CD_Is_Finite(points(i)%seabed_c))) THEN
         CALL fail(ErrStat, ErrMsg, 'point state and load properties must be finite')
         RETURN
       END IF
@@ -2881,6 +2965,10 @@ CONTAINS
       END IF
       IF (points(i)%volume < CD_ZERO .OR. points(i)%cda < CD_ZERO .OR. points(i)%ca < CD_ZERO) THEN
         CALL fail(ErrStat, ErrMsg, 'point volume, CdA, and Ca must be non-negative')
+        RETURN
+      END IF
+      IF (points(i)%seabed_k < CD_ZERO .OR. points(i)%seabed_c < CD_ZERO) THEN
+        CALL fail(ErrStat, ErrMsg, 'point seabed contact stiffness and damping must be non-negative')
         RETURN
       END IF
       DO j = i + 1, SIZE(points)

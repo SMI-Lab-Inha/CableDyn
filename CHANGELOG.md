@@ -183,6 +183,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   still reject `CONTROL`. A zero command, with a `DeltaLdot` of either sign, leaves the run
   bit-identical to an uncontrolled one, and a checkpoint restart continues bit-identically. See
   the manual's deck format page (CONTROL).
+- A note when the static layout of an `EI = 0` line folds back on the seabed (a hairpin), the
+  twin of the finite-EI note. A current toward the anchor or a seabed falling past it can carry
+  the grounded run of a tension-only line past its anchor on a frictionless seabed, where it
+  folds back with zero tension at the fold: a 2 m/s current carried a chain 20 m past its anchor,
+  a 5° slope 24 m, without a word. The equilibrium is kept, and one note per line names the fold
+  (the distance past the anchor, or a turn above 150° of the grounded run), its cause at the
+  fold (the current, the slope, or a slack run) and the remedy (seabed friction or a shorter
+  line). It is printed on the static, `TMax = 0`, point-system and multibody routes and returned
+  in the line report of the OpenFAST aggregate. No example deck prints it, and no result
+  changes. See the manual's theory page (EI = 0 path) and Troubleshooting.
 
 ### Changed
 
@@ -635,6 +645,20 @@ All notable changes to CableDyn are recorded in this file. The format follows
   OPTION); an anchor below the seabed by more than the
   tolerance gives the depth, the tolerance rule, and the Z to use. These messages change no
   acceptance rule.
+- `Free` and `Connect` points (clump weights, buoys) now have their own seabed contact. Until
+  now only the end nodes of the attached lines held a point on the seabed, over their
+  tributary length, so a heavy clump sank silently into it: a 50 t clump between two polyester
+  lines ended 2.8 m below the seabed, a 20 t clump on chain 1.0 m. A point with `Mass` or `Vol`
+  now rests on a footprint `A = V^(2/3)` (`V` = `Vol`, or `Mass`/7850 kg/m³ for a clump declared
+  by its mass alone) with the line contact law, stiffness `kBot·A` and damping `cBot·A`, along
+  the surface normal on a bathymetry, in the point static equilibrium and in the monolithic,
+  staggered and OpenFAST point steps; MoorDyn points have no seabed contact. The 50 t clump now
+  rests 0.95 m deep (its weight alone presses its 3.44 m² footprint in by 1.43 m) and the 20 t
+  clump 0.67 m. The point routes still reject `frictionMu`, so the contact is frictionless.
+  Results change only where a point touches the seabed: of the examples only
+  `clump_weight_free_point.dat`, whose clump now rests 4.7 cm deep instead of 6.6 cm and whose
+  anchor tension falls from 186 kN to 92 kN; decks whose points stay clear of the seabed give
+  identical output. See the manual's theory page (Seabed contact).
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

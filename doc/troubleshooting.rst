@@ -652,7 +652,17 @@ Warnings and notes that do not stop a run
        it folds back to it (see :doc:`theory`). The layout is a valid, stable equilibrium of the
        deck as written, but not the usual one. If the real seabed holds the line, declare
        ``frictionMu``; otherwise check the line length and the current, and inspect
-       ``<out_root>.static.out`` before using the layout.
+       ``<out_root>.static.out`` before using the layout. On an ``EI = 0`` line the note names
+       the cause at the fold: the current, a seabed sloping down past the anchor (the static
+       solve applies ``frictionMu`` against a deck current only, so there only a shorter line
+       prevents the fold), or neither, when the folded run carries no tension (a slack line laid
+       out and back; a shorter line removes it).
+   * - ``Note: line ...: the static layout folds the grounded run back on itself (a ... deg turn
+       at node ..., a hairpin) ...``
+     - an ``EI = 0`` line whose grounded run turns back by more than 150° at a node, away from
+       its ends (for example a slack line whose excess length the static solve lays out and back
+       on the seabed). As above, the layout is an equilibrium of the deck as written; check the
+       line length before using it.
    * - ``Note: line ...: the equilibrium in the current is held in the vertical plane of the line; it
        is unstable out of that plane ...``
      - in a current along the plane of the line the static state is a planar equilibrium that a
