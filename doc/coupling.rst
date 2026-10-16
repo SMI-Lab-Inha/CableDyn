@@ -49,9 +49,9 @@ solve is mathematically incorrect; changing ``NumCrctn`` does not change that de
    answer — on:
 
    - any ``CONTROL`` section in FAST.Farm (active ServoDyn control, ``CableDeltaL``, of
-     ``EI = 0`` lines and finite-EI cables is supported in a single-turbine model), and a
-     command that would scale a controlled finite-EI segment below half or above twice its
-     initial length,
+     ``EI = 0`` lines and finite-EI cables is supported in a single-turbine model), a
+     command outside MoorDyn-F's bounds or one that would make a controlled segment
+     non-positive, and ``CONTROL`` of a finite-EI cable under ``False alpha_force_blend``,
    - coupled ``Rigid6`` bodies and rods in a FAST.Farm deck,
    - deck ``waves``/``wavetrain`` OPTIONS (the host SeaState supplies the waves), and a deck
      ``current`` except as a steady current on a single-turbine, pure ``EI = 0`` deck without

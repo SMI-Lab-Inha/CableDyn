@@ -120,8 +120,8 @@ Keyword map
        in FAST.Farm (the standalone driver rejects it). The command changes the segment at the
        line's host-driven end, or at the ``NodeB`` written in the deck when both or neither ends
        are host-driven; a stock-order deck is controlled where MoorDyn-F controls it. A
-       command outside MoorDyn-F's bounds (−S/2 ≤ ``DeltaL`` ≤ S) stops the run, as it stops
-       MoorDyn-F
+       command outside MoorDyn-F's bounds (−S/2 ≤ ``DeltaL`` ≤ S with S = ``UnstrLen``/N, the
+       same comparison) stops the run, as it stops MoorDyn-F
    * - ``FairTen``, ``AnchTen``, point/node channels
      - same names; tensions in N (:doc:`outputs`). On a line with no ``Fixed`` end the two
        end channels name the opposite ends from MoorDyn's (see above)

@@ -2247,9 +2247,11 @@ segment :math:`N` at ``AttachB``). On an ``EI = 0`` line the commanded :math:`\D
 :math:`\Delta\dot L` change the unstretched length and its rate of that end element,
 :math:`L_0 = L_{0,\text{base}} + \Delta L`; the structural mass and the point mass shares are
 updated consistently, while ``BA`` keeps its initial resolution. Commands outside MoorDyn-F's
-bounds, :math:`-L_{0,\text{base}}/2 \le \Delta L \le L_{0,\text{base}}`, are rejected, as
-MoorDyn-F rejects them; a finite-EI cable takes the same bounds as a scaling of its segment
-within :math:`[0.5, 2]`.
+bounds, :math:`-\bar L/2 \le \Delta L \le \bar L` with :math:`\bar L` the line's unstretched
+length over its number of segments (``UnstrLen``/N, the base length of the controlled segment
+on a line of one section), are rejected with the same comparisons MoorDyn-F makes, on both line
+kinds; so is a command that would make the controlled segment non-positive, which only a line
+of several sections allows.
 
 On an ``EI = 0`` line the length is applied before a step and held over it, and the
 committed state keeps the lengths and rates it was reached with, :math:`L_{0,c}` and
@@ -2267,8 +2269,8 @@ the quasi-static value by a fixed fraction of its change per step, at any :math:
 On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
 up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by
 :math:`\lambda = (S + \Delta L)/S`, :math:`L_{0,e} = \lambda L_{0,e,\text{base}}`, with rate
-:math:`\dot L_{0,e} = \Delta\dot L\, L_{0,e,\text{base}}/S`; :math:`\lambda` outside
-:math:`[0.5, 2]` is rejected. The length is applied before a step and held over it. The
+:math:`\dot L_{0,e} = \Delta\dot L\, L_{0,e,\text{base}}/S`. The length is applied before a
+step and held over it. The
 consistent mass, the attachment masses, the tributary lengths and the nodal seabed coefficients
 are rebuilt from the new lengths in the order initialisation used, so the model is the one a
 build with those lengths would give; the mass of the new lengths acts over the step and its rate
@@ -2277,7 +2279,9 @@ acceleration is kept as the history of the preceding step. The committed state k
 and rates it was reached with: in the force-blended residual the committed force
 :math:`\mathbf{F}_n = \mathbf{R}(\mathbf{q}_n, \mathbf{v}_n, t_n)` is the force at those
 lengths, and only :math:`\mathbf{R}(\mathbf{q}_{n+1}, \mathbf{v}_{n+1}, t_{n+1})` takes the new
-ones. Evaluating :math:`\mathbf{F}_n` at the new lengths would add the force of the length change
+ones; an acceleration re-derived between the command and the step (a boundary commit) is solved
+at those lengths too, since it belongs to the committed state. The configuration-blended form
+(``False alpha_force_blend``) has no such treatment and is refused for a controlled cable. Evaluating :math:`\mathbf{F}_n` at the new lengths would add the force of the length change
 to the committed state, which the blend weighs by :math:`\alpha_f`; on a pay-out ramp the
 tension would then lag the quasi-static value by a fixed fraction of its change per step. A step
 that follows a change starts its Newton iteration from the Newmark predictor, not from the

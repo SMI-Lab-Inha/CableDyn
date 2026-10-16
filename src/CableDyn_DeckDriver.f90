@@ -248,6 +248,8 @@ MODULE CableDyn_DeckDriver
                              'route, which supports torsion); set TorsStiffness Free in every END CONNECTIONS row'
   CHARACTER(*), PARAMETER :: TORSION_NEEDS_FORCE_BLEND = 'torsion in a dynamic run needs the force-blended '// &
                              'generalised-alpha (OPTION alpha_force_blend True)'
+  CHARACTER(*), PARAMETER :: CONTROL_NEEDS_FORCE_BLEND = 'active line control of a finite-EI line needs the '// &
+                             'force-blended generalised-alpha (OPTION alpha_force_blend True)'
   REAL(wp), PARAMETER :: QUARTER_PI = 0.785398163397448309616_wp   ! pi/4 (displaced-area factor)
   ! rhoInf above which a dynamic run notes the missing numerical dissipation (run_deck_driver)
   REAL(wp), PARAMETER :: RHO_INF_NOTE = 0.95_wp
@@ -1022,18 +1024,24 @@ MODULE CableDyn_DeckDriver
     ! host channel and the deck line id. The controlled segment is the deck segment at
     ! the line's fairlead-side end: the end on a host-driven point (Coupled, Vessel,
     ! Turbine<J>, Body<N>, a Coupled/Vessel rod end), or, when both or neither ends are,
-    ! the written NodeB (MoorDyn's AttachB, its segment N); a finite-EI line's is End A.
+    ! the written NodeB (MoorDyn's AttachB, its segment N); on a finite-EI line that is its
+    ! host-driven End A.
     ! An EI = 0 row (ctrl_is_cable false) holds the system line index, that element and
     ! its base unstretched length -- l = base + DeltaL(chan) each advance. A finite-EI row
     ! holds the cable index, the first of the ctrl_nelem cable elements that make up that
     ! segment, and the segment's base length S; their base lengths sit at
     ! ctrl_span_l0(ctrl_span_off + 1:) and each scales by (S + DeltaL)/S.
+    ! ctrl_unstr_len and ctrl_nsegs are the deck line's unstretched length and segment
+    ! count (summed over its sections), MoorDyn-F's UnstrLen and N: its command bounds
+    ! -0.5 UnstrLen/N <= DeltaL <= UnstrLen/N.
     INTEGER :: n_ctrl_chans = 0
     INTEGER, ALLOCATABLE :: ctrl_chan(:)
     INTEGER, ALLOCATABLE :: ctrl_line(:)
     INTEGER, ALLOCATABLE :: ctrl_elem(:)
     INTEGER, ALLOCATABLE :: ctrl_nelem(:)
     REAL(wp), ALLOCATABLE :: ctrl_base_l0(:)
+    REAL(wp), ALLOCATABLE :: ctrl_unstr_len(:)
+    INTEGER, ALLOCATABLE :: ctrl_nsegs(:)
     LOGICAL, ALLOCATABLE :: ctrl_is_cable(:)
     INTEGER, ALLOCATABLE :: ctrl_line_id(:)
     INTEGER, ALLOCATABLE :: ctrl_span_off(:)
@@ -6732,13 +6740,17 @@ CONTAINS
     !! End B (node 1) -> End A (last node); the written NodeB is End A when the
     !! anchor-first swap exchanged the ends and End B otherwise.
     !!   EI = 0 row: that end element of the system line and its base length.
-    !!   Finite-EI row: the cable elements that make up the deck's End A segment (a
-    !!   finite-EI line runs from its Fixed anchor at End B to its host-driven fairlead at
-    !!   End A), with their base length S. When the static solve refined the deck mesh,
-    !!   they are the elements whose reference-arc midpoint lies in that segment (the rule
-    !!   the property remap uses).
-    !! Every capability check runs here, so the apply loop cannot fail for input reasons
-    !! after its prevalidation (a mid-loop failure would leave mixed lengths).
+    !!   Finite-EI row: the cable elements that make up the deck segment at that end, with
+    !!   their base length S. The coupled cable builder runs a finite-EI line from its Fixed
+    !!   anchor at End B to its Coupled/Vessel fairlead at End A, so the rule gives End A; a
+    !!   finite-EI line whose End A is not its only host-driven end fails closed by name.
+    !!   When the static solve refined the deck mesh, the span is the elements whose
+    !!   reference-arc midpoint lies in that segment (the rule the property remap uses).
+    !! Each row also keeps the deck line's unstretched length and segment count (MoorDyn-F's
+    !! UnstrLen and N, summed over the line's sections), from which the apply takes
+    !! MoorDyn-F's command bounds. Every capability check runs here (a finite-EI line also
+    !! needs the force-blended generalised-alpha), so the apply loop cannot fail for input
+    !! reasons after its prevalidation.
     TYPE(DeckControl), INTENT(IN) :: ctrls(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
@@ -6767,7 +6779,7 @@ CONTAINS
     END DO
     ALLOCATE (agg%ctrl_chan(nrow), agg%ctrl_line(nrow), agg%ctrl_elem(nrow), agg%ctrl_nelem(nrow), &
               agg%ctrl_base_l0(nrow), agg%ctrl_is_cable(nrow), agg%ctrl_line_id(nrow), agg%ctrl_span_off(nrow), &
-              agg%ctrl_span_l0(0))
+              agg%ctrl_span_l0(0), agg%ctrl_unstr_len(nrow), agg%ctrl_nsegs(nrow))
     c = 0
     DO i = 1, SIZE(ctrls)
       DO k = 1, SIZE(ctrls(i)%line_ids)
@@ -6787,6 +6799,20 @@ CONTAINS
         agg%ctrl_is_cable(c) = is_fin(jline)
         agg%ctrl_span_off(c) = SIZE(agg%ctrl_span_l0)
         agg%ctrl_nelem(c) = 1
+        ! MoorDyn-F's UnstrLen and N of the line (the bounds of its command)
+        agg%ctrl_unstr_len(c) = CD_ZERO
+        agg%ctrl_nsegs(c) = 0
+        DO j = 1, SIZE(sections)
+          IF (sections(j)%line_id /= lines(jline)%id) CYCLE
+          agg%ctrl_unstr_len(c) = agg%ctrl_unstr_len(c) + sections(j)%length
+          agg%ctrl_nsegs(c) = agg%ctrl_nsegs(c) + sections(j)%nsegs
+        END DO
+        IF (.NOT. (agg%ctrl_nsegs(c) > 0 .AND. agg%ctrl_unstr_len(c) > CD_ZERO)) THEN
+          CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' has no unstretched length and segment count'); RETURN
+        END IF
+        ! the fairlead-side end: the host-driven one, else the written NodeB
+        host_a = host_driven_point(lines(jline)%nodeA)
+        host_b = host_driven_point(lines(jline)%nodeB)
         IF (.NOT. is_fin(jline)) THEN
           IF (.NOT. agg%has_sys) THEN
             CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' has no EI = 0 system line'); RETURN
@@ -6798,10 +6824,7 @@ CONTAINS
           IF (ne_line < 1) THEN
             CALL fail(ErrStat, ErrMsg, 'CONTROL line has no elements'); RETURN
           END IF
-          ! the fairlead-side element: the host-driven end's, else the written NodeB's
-          ! (End A is the last element, End B the first)
-          host_a = host_driven_point(lines(jline)%nodeA)
-          host_b = host_driven_point(lines(jline)%nodeB)
+          ! the fairlead-side element (End A is the last element, End B the first)
           IF (host_a .NEQV. host_b) THEN
             e = MERGE(ne_line, 1, host_a)
           ELSE
@@ -6823,7 +6846,21 @@ CONTAINS
                         'segment; active line control is not supported on the viscoelastic model'); RETURN
             END IF
           END IF
+          IF (agg%sys%lines(obj)%has_syrope) THEN
+            IF (agg%sys%lines(obj)%syrope_is(e)) THEN
+              ! the same rule for the Syrope working-curve states
+              CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' targets a Syrope segment; active '// &
+                        'line control is not supported on the Syrope model'); RETURN
+            END IF
+          END IF
         ELSE
+          ! the coupled cable builder makes End A the host-driven fairlead and End B the
+          ! Fixed anchor; any other arrangement would control a segment that is not the
+          ! fairlead-side one, so it fails closed
+          IF (.NOT. (host_a .AND. .NOT. host_b)) THEN
+            CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//': active line control of a finite-EI '// &
+                      'line needs its End A, the fairlead, to be its only host-driven end'); RETURN
+          END IF
           IF (.NOT. ALLOCATED(agg%cables)) THEN
             CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' has no finite-EI cable'); RETURN
           END IF
@@ -6838,6 +6875,9 @@ CONTAINS
             IF (cab%has_contact .AND. .NOT. cab%has_seabed_recompute) THEN
               CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' was built without the seabed '// &
                         'recompute inputs'); RETURN
+            END IF
+            IF (.NOT. cab%force_blend) THEN
+              CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//': '//CONTROL_NEEDS_FORCE_BLEND); RETURN
             END IF
             CALL build_finite_section_mesh(lines(jline), sections, types, conn, l0_deck, ea, mpl, diam, ei, &
                                            gas, gj, i_rt, i_rn, es, em)
@@ -7209,6 +7249,8 @@ CONTAINS
     IF (ALLOCATED(agg%ctrl_elem)) DEALLOCATE (agg%ctrl_elem)
     IF (ALLOCATED(agg%ctrl_nelem)) DEALLOCATE (agg%ctrl_nelem)
     IF (ALLOCATED(agg%ctrl_base_l0)) DEALLOCATE (agg%ctrl_base_l0)
+    IF (ALLOCATED(agg%ctrl_unstr_len)) DEALLOCATE (agg%ctrl_unstr_len)
+    IF (ALLOCATED(agg%ctrl_nsegs)) DEALLOCATE (agg%ctrl_nsegs)
     IF (ALLOCATED(agg%ctrl_is_cable)) DEALLOCATE (agg%ctrl_is_cable)
     IF (ALLOCATED(agg%ctrl_line_id)) DEALLOCATE (agg%ctrl_line_id)
     IF (ALLOCATED(agg%ctrl_span_off)) DEALLOCATE (agg%ctrl_span_off)

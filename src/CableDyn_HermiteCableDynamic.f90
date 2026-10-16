@@ -107,6 +107,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Attachment_Drag
   PUBLIC :: CD_HermiteCable_Dyn_Recompute_Acceleration
   PUBLIC :: CD_HermiteCable_Dyn_Set_SegmentLength
+  PUBLIC :: CD_HermiteCableControlSaveType, CD_HermiteCable_Dyn_Save_Control, CD_HermiteCable_Dyn_Restore_Control
   PUBLIC :: CD_HermiteCable_Dyn_Set_Control_Seabed
   PUBLIC :: CD_HermiteCable_Dyn_Set_Irregular_Waves
   PUBLIC :: CD_HermiteCable_Drag_Element
@@ -468,6 +469,21 @@ MODULE CableDyn_HermiteCableDynamic
     LOGICAL, ALLOCATABLE :: rc_have(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HermiteCableDynType
+
+  TYPE :: CD_HermiteCableControlSaveType
+    !! What CD_HermiteCable_Dyn_Set_SegmentLength writes, as CD_HermiteCable_Dyn_Save_Control
+    !! found it (the length caches are rebuilt from the lengths on a restore).
+    LOGICAL :: valid = .FALSE., has_ctrl = .FALSE., tr_valid = .FALSE., rates = .FALSE.
+    REAL(wp), ALLOCATABLE :: l0(:), l0_dot(:), l0_c(:), l0_dot_c(:)
+  END TYPE CD_HermiteCableControlSaveType
+
+  TYPE :: committed_lengths_aside
+    !! The present lengths, rates and length caches of a controlled model, set aside while
+    !! one evaluation of the committed state runs with the lengths and rates that state was
+    !! reached with (enter_committed_lengths / leave_committed_lengths).
+    LOGICAL :: lengths = .FALSE., rates = .FALSE.
+    REAL(wp), ALLOCATABLE :: l0(:), rate(:), mgb(:, :), trib(:), kn(:), cn(:), frk(:)
+  END TYPE committed_lengths_aside
 
 CONTAINS
 
@@ -1125,8 +1141,11 @@ CONTAINS
     !! free-DOF acceleration from the complete installed load set at the model's current
     !! q/v/t. Optional prescribed fixed-DOF accelerations enter the consistent-mass RHS,
     !! including their off-diagonal coupling to free DOFs. Failure is atomic with respect
-    !! to the previously committed acceleration. Under active line control the committed
-    !! state then belongs to the present lengths and rates (l0_c, l0_dot_c).
+    !! to the previously committed acceleration. Under active line control the acceleration
+    !! is the committed state's: between a length change (CD_HermiteCable_Dyn_Set_SegmentLength)
+    !! and the next step it is solved with the lengths and rates that state was reached with
+    !! (l0_c, l0_dot_c), which stay the committed ones, so the step still blends the old and new
+    !! lengths.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
@@ -1141,23 +1160,17 @@ CONTAINS
     END IF
     a_old = model%a
     IF (PRESENT(pres_dofs) .AND. PRESENT(pres_a)) THEN
-      CALL solve_consistent_acceleration(model, ErrStat, ErrMsg, pres_dofs=pres_dofs, pres_a=pres_a)
+      CALL solve_committed_acceleration(model, ErrStat, ErrMsg, pres_dofs=pres_dofs, pres_a=pres_a)
     ELSE IF (PRESENT(pres_dofs) .OR. PRESENT(pres_a)) THEN
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Recompute_Acceleration: pres_dofs and pres_a must be supplied together'
       RETURN
     ELSE
-      CALL solve_consistent_acceleration(model, ErrStat, ErrMsg)
+      CALL solve_committed_acceleration(model, ErrStat, ErrMsg)
     END IF
     IF (ErrStat /= CD_HCDYN_OK) THEN
       model%a = a_old
       ErrMsg = 'CD_HermiteCable_Dyn_Recompute_Acceleration: '//TRIM(ErrMsg)
-    ELSE IF (model%has_ctrl) THEN
-      ! a committed force cached at other lengths no longer describes the committed state
-      IF (.NOT. (ALL(bits_equal(model%l0, model%l0_c)) .AND. ALL(bits_equal(model%l0_dot, model%l0_dot_c)))) &
-        model%fc_valid = .FALSE.
-      model%l0_c = model%l0
-      model%l0_dot_c = model%l0_dot
     END IF
   END SUBROUTINE CD_HermiteCable_Dyn_Recompute_Acceleration
 
@@ -1179,11 +1192,14 @@ CONTAINS
     !! R(q_{n+1}) takes the new ones, so a length ramp is not lagged by alpha_f times the
     !! length change. The carried step factor is discarded, and the step after a change starts
     !! from the Newmark predictor (the change is a load step).
-    !! A call that changes no length and no rate (bit for bit) returns at once, so a zero
-    !! command on an uncontrolled model leaves it untouched. The update is atomic: every
-    !! check and rebuild runs before the model is written. A line restrained in torsion is
-    !! refused (its condensed torsional compliance has no length-control law here), as is a
-    !! contact model without the seabed recompute inputs. restored = .TRUE. (a checkpoint
+    !! A call that changes no length and no rate (bit for bit, a rate of -0 counting as +0)
+    !! returns at once, so a zero command of either sign on an uncontrolled model leaves it
+    !! untouched. The update is atomic: every check and rebuild runs before the model is
+    !! written. A line restrained in torsion is refused (its condensed torsional compliance
+    !! has no length-control law here), as is a contact model without the seabed recompute
+    !! inputs and a model on the configuration-blended generalised-alpha (force blend off,
+    !! CD_HermiteCable_Dyn_Set_ForceBlend), whose blended state has no committed-length
+    !! treatment, so a ramp would lag by alpha_f times the length change. restored = .TRUE. (a checkpoint
     !! restart re-applying the command the committed state was reached with) makes the
     !! lengths and rates the committed ones at once; a committed force reloaded with the
     !! state belongs to them and stays valid.
@@ -1196,7 +1212,7 @@ CONTAINS
     INTEGER :: k, n, istat
     LOGICAL :: lengths_changed, rates_changed
     REAL(wp) :: rate_now
-    REAL(wp), ALLOCATABLE :: l0_trial(:)
+    REAL(wp), ALLOCATABLE :: l0_trial(:), rate_new(:)
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -1228,13 +1244,19 @@ CONTAINS
       CALL fail('a seabed-contact model needs the seabed recompute inputs '// &
                 '(CD_HermiteCable_Dyn_Set_Control_Seabed)'); RETURN
     END IF
+    IF (.NOT. model%force_blend) THEN
+      CALL fail('the configuration-blended generalised-alpha (force blend off) is not supported: '// &
+                'enable the force blend (CD_HermiteCable_Dyn_Set_ForceBlend)'); RETURN
+    END IF
+    ! a rate of -0 is stored as +0, so a zero command of either sign is inert
+    rate_new = positive_zero(l0_dot)
     lengths_changed = .FALSE.
     rates_changed = .FALSE.
     DO k = 1, n
       IF (.NOT. bits_equal(model%l0(elems(k)), l0_new(k))) lengths_changed = .TRUE.
       rate_now = CD_ZERO
       IF (model%has_ctrl) rate_now = model%l0_dot(elems(k))
-      IF (.NOT. bits_equal(rate_now, l0_dot(k))) rates_changed = .TRUE.
+      IF (.NOT. bits_equal(rate_now, rate_new(k))) rates_changed = .TRUE.
     END DO
     IF (.NOT. (lengths_changed .OR. rates_changed)) THEN
       CALL commit_restored()
@@ -1267,7 +1289,7 @@ CONTAINS
     END IF
     IF (.NOT. model%has_ctrl) model%l0_dot = CD_ZERO
     model%has_ctrl = .TRUE.
-    model%l0_dot(elems) = l0_dot
+    model%l0_dot(elems) = rate_new
     ! the cached committed force stays valid (it is the force at l0_c); the carried factor
     ! holds the tangent of the old lengths
     model%tr_valid = .FALSE.
@@ -1288,6 +1310,67 @@ CONTAINS
       model%l0_dot_c = model%l0_dot
     END SUBROUTINE commit_restored
   END SUBROUTINE CD_HermiteCable_Dyn_Set_SegmentLength
+
+  SUBROUTINE CD_HermiteCable_Dyn_Save_Control(model, saved)
+    !! Save what CD_HermiteCable_Dyn_Set_SegmentLength writes (the lengths, rates, committed
+    !! lengths and rates, the control flag and the carried-factor flag), so that a caller
+    !! applying one command to several models can take back the ones it already changed
+    !! when a later one fails (CD_HermiteCable_Dyn_Restore_Control).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    TYPE(CD_HermiteCableControlSaveType), INTENT(INOUT) :: saved
+    saved%valid = model%initialized
+    IF (.NOT. saved%valid) RETURN
+    saved%has_ctrl = model%has_ctrl
+    saved%tr_valid = model%tr_valid
+    saved%l0 = model%l0
+    saved%rates = ALLOCATED(model%l0_dot)
+    IF (saved%rates) THEN
+      saved%l0_dot = model%l0_dot
+      saved%l0_c = model%l0_c
+      saved%l0_dot_c = model%l0_dot_c
+    END IF
+  END SUBROUTINE CD_HermiteCable_Dyn_Save_Control
+
+  SUBROUTINE CD_HermiteCable_Dyn_Restore_Control(model, saved, ErrStat, ErrMsg)
+    !! Take the model back to what CD_HermiteCable_Dyn_Save_Control saved. Lengths changed
+    !! since get the caches built from the saved lengths, as CD_HermiteCable_Dyn_Restore
+    !! rebuilds them: the caches are a function of the lengths (built in the order
+    !! initialisation used), so the model is the saved one bit for bit. Fails closed, writing
+    !! nothing, when the save does not belong to the model or the rebuild fails.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    TYPE(CD_HermiteCableControlSaveType), INTENT(IN) :: saved
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: l0_back(:)
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. (model%initialized .AND. saved%valid)) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Restore_Control: no saved control state'; RETURN
+    END IF
+    IF (SIZE(saved%l0) /= model%ne) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Restore_Control: the saved state belongs to another model'; RETURN
+    END IF
+    IF (.NOT. ALL(bits_equal(model%l0, saved%l0))) THEN
+      l0_back = saved%l0
+      CALL rebuild_length_caches(model, l0_back, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Restore_Control: '//TRIM(ErrMsg); RETURN
+      END IF
+    END IF
+    IF (saved%rates) THEN
+      model%l0_dot = saved%l0_dot
+      model%l0_c = saved%l0_c
+      model%l0_dot_c = saved%l0_dot_c
+      IF (.NOT. ALLOCATED(model%ws_recovery_l0_c)) &
+        ALLOCATE (model%ws_recovery_l0_c(model%ne), model%ws_recovery_l0_dot_c(model%ne))
+    ELSE IF (ALLOCATED(model%l0_dot)) THEN
+      DEALLOCATE (model%l0_dot, model%l0_c, model%l0_dot_c, model%ws_recovery_l0_c, model%ws_recovery_l0_dot_c)
+    END IF
+    model%has_ctrl = saved%has_ctrl
+    model%tr_valid = saved%tr_valid
+  END SUBROUTINE CD_HermiteCable_Dyn_Restore_Control
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Control_Seabed(model, kbot, diameter_elem, cn_over_kn, ErrStat, ErrMsg)
     !! Store the seabed recompute inputs of a contact model for active line control: the
@@ -1408,64 +1491,119 @@ CONTAINS
     END IF
   END SUBROUTINE rebuild_length_caches
 
+  SUBROUTINE enter_committed_lengths(model, aside, ErrStat, ErrMsg)
+    !! Install the lengths and rates the committed state was reached with (l0_c, l0_dot_c) for
+    !! one evaluation of the committed state, setting the present ones aside: after a length
+    !! change the length-dependent caches are rebuilt from l0_c, and leave_committed_lengths
+    !! moves the present ones back bit for bit. A model that is not under active line control,
+    !! or whose lengths and rates are the committed ones, is left as it is. On failure nothing
+    !! is written.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    TYPE(committed_lengths_aside), INTENT(INOUT) :: aside
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: l0_old(:)
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    aside%lengths = .FALSE.
+    aside%rates = .FALSE.
+    IF (.NOT. model%has_ctrl) RETURN
+    IF (ALL(bits_equal(model%l0, model%l0_c)) .AND. ALL(bits_equal(model%l0_dot, model%l0_dot_c))) RETURN
+    IF (.NOT. ALL(bits_equal(model%l0, model%l0_c))) THEN
+      aside%l0 = model%l0
+      aside%mgb = model%Mgb
+      aside%trib = model%trib
+      IF (model%has_contact) THEN
+        aside%kn = model%contact_kn
+        aside%cn = model%contact_cn
+        IF (model%fr_active) aside%frk = model%fr_k
+      END IF
+      ! a copy, so no subobject of model is associated with a second dummy
+      l0_old = model%l0_c
+      CALL rebuild_length_caches(model, l0_old, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      aside%lengths = .TRUE.
+    END IF
+    aside%rate = model%l0_dot
+    model%l0_dot = model%l0_dot_c
+    aside%rates = .TRUE.
+  END SUBROUTINE enter_committed_lengths
+
+  SUBROUTINE leave_committed_lengths(model, aside)
+    !! Move back the present lengths, rates and caches enter_committed_lengths set aside.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    TYPE(committed_lengths_aside), INTENT(INOUT) :: aside
+    IF (aside%lengths) THEN
+      model%l0 = aside%l0
+      CALL MOVE_ALLOC(aside%mgb, model%Mgb)
+      CALL MOVE_ALLOC(aside%trib, model%trib)
+      IF (model%has_contact) THEN
+        CALL MOVE_ALLOC(aside%kn, model%contact_kn)
+        CALL MOVE_ALLOC(aside%cn, model%contact_cn)
+        IF (model%fr_active) CALL MOVE_ALLOC(aside%frk, model%fr_k)
+      END IF
+    END IF
+    IF (aside%rates) model%l0_dot = aside%rate
+    aside%lengths = .FALSE.
+    aside%rates = .FALSE.
+  END SUBROUTINE leave_committed_lengths
+
   SUBROUTINE assemble_committed_force(model, ErrStat, ErrMsg)
     !! The committed force F_n = R(q_n, v_n, t_n) into ws_R, with the lengths and rates the
-    !! committed state was reached with (l0_c, l0_dot_c). After a length change the
-    !! length-dependent caches are rebuilt from l0_c for this one evaluation and the present
-    !! ones are moved back afterwards, bit for bit; otherwise this is the plain evaluation.
+    !! committed state was reached with (l0_c, l0_dot_c; enter_committed_lengths); without a
+    !! pending length or rate change this is the plain evaluation.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp), ALLOCATABLE :: l0_now(:), rate_now(:), mgb_now(:, :), trib_now(:), kn_now(:), cn_now(:), frk_now(:)
-    REAL(wp), ALLOCATABLE :: l0_old(:)
+    TYPE(committed_lengths_aside) :: aside
     INTEGER :: es
     CHARACTER(200) :: em
 
-    ErrStat = CD_HCDYN_OK; ErrMsg = ''
-    IF (model%has_ctrl) THEN
-      IF (.NOT. (ALL(bits_equal(model%l0, model%l0_c)) .AND. ALL(bits_equal(model%l0_dot, model%l0_dot_c)))) THEN
-        rate_now = model%l0_dot
-        model%l0_dot = model%l0_dot_c
-        IF (.NOT. ALL(bits_equal(model%l0, model%l0_c))) THEN
-          l0_now = model%l0
-          mgb_now = model%Mgb
-          trib_now = model%trib
-          IF (model%has_contact) THEN
-            kn_now = model%contact_kn
-            cn_now = model%contact_cn
-            IF (model%fr_active) frk_now = model%fr_k
-          END IF
-          ! a copy, so no subobject of model is associated with a second dummy
-          l0_old = model%l0_c
-          CALL rebuild_length_caches(model, l0_old, es, em)
-          IF (es /= CD_HCDYN_OK) THEN
-            model%l0_dot = rate_now
-            ErrStat = es; ErrMsg = 'committed force: '//TRIM(em); RETURN
-          END IF
-          CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., ErrStat, ErrMsg)
-          model%l0 = l0_now
-          CALL MOVE_ALLOC(mgb_now, model%Mgb)
-          CALL MOVE_ALLOC(trib_now, model%trib)
-          IF (model%has_contact) THEN
-            CALL MOVE_ALLOC(kn_now, model%contact_kn)
-            CALL MOVE_ALLOC(cn_now, model%contact_cn)
-            IF (model%fr_active) CALL MOVE_ALLOC(frk_now, model%fr_k)
-          END IF
-        ELSE
-          CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., ErrStat, ErrMsg)
-        END IF
-        model%l0_dot = rate_now
-        RETURN
-      END IF
+    CALL enter_committed_lengths(model, aside, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = es; ErrMsg = 'committed force: '//TRIM(em); RETURN
     END IF
     CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., ErrStat, ErrMsg)
+    CALL leave_committed_lengths(model, aside)
   END SUBROUTINE assemble_committed_force
+
+  SUBROUTINE solve_committed_acceleration(model, ErrStat, ErrMsg, pres_dofs, pres_a)
+    !! solve_consistent_acceleration for the committed state: the acceleration is the
+    !! committed state's, so under active line control it is solved with the lengths and rates
+    !! that state was reached with (l0_c, l0_dot_c; enter_committed_lengths), which stay the
+    !! committed ones. Without a pending length or rate change this is the plain solve.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, INTENT(IN), OPTIONAL :: pres_dofs(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: pres_a(:)
+    TYPE(committed_lengths_aside) :: aside
+    INTEGER :: es
+    CHARACTER(200) :: em
+
+    CALL enter_committed_lengths(model, aside, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = es; ErrMsg = 'committed acceleration: '//TRIM(em); RETURN
+    END IF
+    CALL solve_consistent_acceleration(model, ErrStat, ErrMsg, pres_dofs=pres_dofs, pres_a=pres_a)
+    CALL leave_committed_lengths(model, aside)
+  END SUBROUTINE solve_committed_acceleration
 
   ELEMENTAL LOGICAL FUNCTION bits_equal(a, b) RESULT(same)
     !! Bitwise equality of two reals (so +0 and -0 differ).
     REAL(wp), INTENT(IN) :: a, b
     same = TRANSFER(a, 0_INT64) == TRANSFER(b, 0_INT64)
   END FUNCTION bits_equal
+
+  ELEMENTAL REAL(wp) FUNCTION positive_zero(x) RESULT(y)
+    !! x with a negative zero replaced by +0, on the bits (so no floating-point mode can keep
+    !! the sign); every other value is returned unchanged.
+    REAL(wp), INTENT(IN) :: x
+    INTEGER(INT64) :: bits
+    bits = TRANSFER(x, 0_INT64)
+    IF (bits == -HUGE(0_INT64) - 1_INT64) bits = 0_INT64
+    y = TRANSFER(bits, y)
+  END FUNCTION positive_zero
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_ForceBlend(model, enabled, ErrStat, ErrMsg)
     !! Select the generalised-alpha blend. enabled = .TRUE. (the default): the residual
@@ -1482,6 +1620,12 @@ CONTAINS
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Set_ForceBlend: model not initialised'
+      RETURN
+    END IF
+    IF (model%has_ctrl .AND. .NOT. enabled) THEN
+      ! active line control needs the committed-length treatment of the force blend
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_ForceBlend: a model under active line control needs the force blend'
       RETURN
     END IF
     model%force_blend = enabled
@@ -2681,7 +2825,7 @@ CONTAINS
     model%hf_wl = waterline_z
     model%has_held_field = .TRUE.
     IF (.NOT. had_field .AND. .NOT. model%a_restored) THEN
-      CALL solve_consistent_acceleration(model, ErrStat, ErrMsg)
+      CALL solve_committed_acceleration(model, ErrStat, ErrMsg)
     ELSE
       CALL assemble_committed_force(model, es, em)
       ErrStat = es

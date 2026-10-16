@@ -992,11 +992,17 @@ only host-driven end at `NodeA`, is controlled at that end. The length is held o
 Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment paid out at
 constant strain carries no damping tension.
 
-- On an `EI = 0` line the segment is the end element on that side, of initial length S. A command
-  outside MoorDyn-F's bounds, −S/2 ≤ `DeltaL` ≤ S (an increase of more than one segment length or
-  a reduction of more than half of one), stops the run with a message that names the line, the
-  command and the bound, as MoorDyn-F stops there. S is the element's own initial length, which
-  is MoorDyn-F's `UnstrLen/N` on a line of one section.
+A command outside MoorDyn-F's bounds stops the run with a message that names the channel, the
+line, the command and the bound, as MoorDyn-F stops there. With `UnstrLen` the line's unstretched
+length and N its number of segments, both summed over its `SECTIONS` rows, MoorDyn-F refuses
+`DeltaL` > `UnstrLen`/N and `DeltaL` < −0.5 `UnstrLen`/N; CableDyn makes the same comparisons, so
+a command MoorDyn-F accepts is accepted. On a line of one section `UnstrLen`/N is the controlled
+segment's initial length S, and the bounds read −S/2 ≤ `DeltaL` ≤ S. On a line of several
+sections the controlled segment can be shorter or longer than `UnstrLen`/N; a command within the
+bounds that would make it zero or negative (possible when it is shorter than half of
+`UnstrLen`/N) also stops the run, with a message that names the line.
+
+- On an `EI = 0` line the segment is the end element on that side, of initial length S.
 - On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
   is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
   its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that
@@ -1005,11 +1011,14 @@ constant strain carries no damping tension.
   S + `DeltaL` long. The structural and attachment mass, the seabed contact coefficients and the
   tributary lengths follow the new lengths; `BA` keeps its initial resolution. The step blends
   the force of the committed state, taken at the lengths of the previous advance, with the force
-  at the new lengths, so a length ramp is followed without lag at any `rhoInf`. A command outside
-  the same bounds, −S/2 ≤ `DeltaL` ≤ S (each element scaled within [0.5, 2] of its initial length),
-  stops the run with a message that names the line; the cable mesh was also resolved at the
-  initial lengths. A cable restrained in torsion cannot be controlled (the
-  coupled route rejects torsion stiffness in END CONNECTIONS).
+  at the new lengths, so a length ramp is followed without lag at any `rhoInf`. This needs the
+  force-blended generalised-α, the default: a deck that controls a finite-EI cable under
+  `False alpha_force_blend` fails at initialisation with a message that names the line. Within
+  the bounds above, a cable of one section scales each element within [0.5, 2] of its initial
+  length; on a cable of several sections the scaling can leave that range, beyond the
+  resolution its static mesh was built for, so keep large commands on a fairlead section whose
+  segments are at least `UnstrLen`/N long. A cable restrained in torsion cannot be controlled
+  (the coupled route rejects torsion stiffness in END CONNECTIONS).
 
 The host input arrays are sized to the highest channel id.
 
