@@ -237,7 +237,7 @@ CONTAINS
     REAL(wp) :: sigma, eta, knorm
     INTEGER :: n, ldab, attempt, refine
     LOGICAL :: ok, finite_fail
-    CHARACTER(160) :: why
+    CHARACTER(1024) :: why
 
     x = CD_ZERO
     IF (PRESENT(backward_error)) backward_error = HUGE(CD_ONE)
@@ -329,7 +329,7 @@ CONTAINS
       LOGICAL, INTENT(OUT) :: success
       REAL(wp), ALLOCATABLE :: kd(:, :)
       INTEGER :: i, j, info
-      CHARACTER(200) :: lmsg
+      CHARACTER(1024) :: lmsg
       ALLOCATE (kd(n, n))
       DO j = 1, n
         DO i = 1, n
@@ -708,7 +708,7 @@ CONTAINS
 
     REAL(wp) :: hk(12, 12), margin
     INTEGER :: order
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     order = NG_DEFAULT
     IF (PRESENT(quadrature_order)) order = quadrature_order
@@ -992,7 +992,7 @@ CONTAINS
     LOGICAL :: want_hess, finite
     REAL(wp) :: scale, margin, he, ge(12), hk(12, 12), v(3), chi, sum_h, eg(6), eh(3, 3, 2), ec(3, 3, 2)
     REAL(wp) :: om, g9(9), h9(9, 9), pj(3, 3), pk(3, 3), sd(3, 3), dmy
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     theta_raw = CD_ZERO
     grad = CD_ZERO

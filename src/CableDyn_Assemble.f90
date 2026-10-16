@@ -99,7 +99,7 @@ CONTAINS
 
     INTEGER  :: n_nodes, n_elem, e, a, b, ia, ib, i, j, es
     REAL(wp) :: nodes6(6), Kt6(6, 6), fint6(6), Te
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     Kt = CD_ZERO
     fint = CD_ZERO
@@ -277,7 +277,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: g2f(:)
       INTEGER  :: e, a, b, i, j, fi, fj, row, gmap(6), elem_es
       REAL(wp) :: nodes6(6), Kt6(6, 6), fint6(6), Te
-      CHARACTER(120) :: em
+      CHARACTER(1024) :: em
 
       DO e = 1, n_elem
         a = elem_conn(1, e)
@@ -342,7 +342,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: fe(:, :)
     INTEGER, ALLOCATABLE :: elem_es(:)
     INTEGER :: n_team
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     fint = CD_ZERO
     CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg, topology_validated)
@@ -428,7 +428,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: te_buf(:)
     INTEGER, ALLOCATABLE :: elem_es(:)
     INTEGER :: n_team
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     tension = CD_ZERO
     CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg, topology_validated)

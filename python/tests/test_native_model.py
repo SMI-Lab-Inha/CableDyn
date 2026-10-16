@@ -370,3 +370,18 @@ def test_home_relative_deck_path_is_expanded(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     with cabledyn.CableDyn("~/volturnus.dat") as m:
         assert m.deck == deck.resolve()
+
+
+def test_long_failure_message_is_kept_whole():
+    # The weightless-line diagnosis names the cause, three nested solver reasons, and the
+    # remedy; it is longer than the 1024 characters the handle once retained, and its closing
+    # advice must reach the caller.
+    deck = REPO / "tests" / "data" / "msg_weightless_finite_ei.dat"
+    with cabledyn.CableDyn() as m:
+        with pytest.raises(CableDynError) as caught:
+            m.init_deck(deck)
+        detail = caught.value.detail
+        assert len(detail) > 1024
+        assert "weightless (neutrally buoyant) line is longer than its span" in detail
+        assert detail.endswith("or a tension that holds it taut")
+        assert "net-heavy" not in detail

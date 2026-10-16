@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -2969,6 +2970,16 @@ def test_missing_required_section_is_named():
 def test_net_buoyant_ei0_line_type_fails_like_native(tmp_path, mass):
     path = _chain_variant(tmp_path, ("0.2466   373.5 ", f"0.2466   {mass} "))
     with pytest.raises(DeckFormatError, match="net-buoyant"):
+        DeckFile.read(path)
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.0 + 1.0e-7, 1.0 - 1.0e-7])
+def test_neutrally_buoyant_ei0_line_type_is_weightless_and_slack(tmp_path, scale):
+    # A mass typed to seven digits does not cancel the displaced mass exactly; the gate treats
+    # the 1e-6 band around it as neutral and says the slack line is indeterminate.
+    mass = 1025.0 * math.pi / 4.0 * 0.2466**2 * scale
+    path = _chain_variant(tmp_path, ("0.2466   373.5 ", f"0.2466   {mass:.9f} "))
+    with pytest.raises(DeckFormatError, match="weightless and slack"):
         DeckFile.read(path)
 
 

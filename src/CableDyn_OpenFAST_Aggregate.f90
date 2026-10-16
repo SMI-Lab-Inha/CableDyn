@@ -580,7 +580,7 @@ CONTAINS
 
     INTEGER :: c, col, es
     REAL(wp) :: y_fair(3)
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     position = CD_ZERO
     velocity = CD_ZERO
@@ -746,7 +746,7 @@ CONTAINS
     INTEGER :: c, col, es
     REAL(wp) :: zero_angular(3)
     LOGICAL :: is_output_probe
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     zero_angular = CD_ZERO
@@ -910,7 +910,7 @@ CONTAINS
     INTEGER :: c, col, es, nsys, nsub
     LOGICAL :: csys, ssys, staged
     REAL(wp) :: t_start
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -1235,7 +1235,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: c, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (self%has_sys) THEN
       CALL CD_FMF_Snapshot(self%sys, es, em)
@@ -1274,7 +1274,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: c, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (self%has_sys) THEN
       CALL CD_FMF_Restore(self%sys, es, em)
@@ -1305,7 +1305,7 @@ CONTAINS
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     CHARACTER(*), INTENT(INOUT) :: ErrMsg
     INTEGER :: c, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     IF (self%has_sys) THEN
       CALL CD_FMF_Restore(self%sys, es, em)
       IF (es /= CD_FMF_OK) ErrMsg = TRIM(ErrMsg)//'; RESTORE FAILED (system): '//TRIM(em)
@@ -1328,7 +1328,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nl, li, ic, ib, ir, ip, nbody, nrod, nhydropt, ndof, nn, maxdof, nblk, es, istat
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_AGG_OK
     ErrMsg = ''
     candidate%nfluid = 0
@@ -1428,7 +1428,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: li, ndof, nn, i, es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     xyz = CD_ZERO
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (SIZE(xyz, 1) /= 3 .OR. SIZE(xyz, 2) /= self%nfluid) THEN
@@ -1518,7 +1518,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: dynamic_pressure(:)
     INTEGER :: li, o1, o2, i, es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     ! Uniform contract for BOTH line families: host fields are only accepted on a
     ! build that declared them. Cables always carry a drag/added-mass configuration,
@@ -1650,7 +1650,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (self%has_sys) THEN
@@ -1693,7 +1693,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_AGG_OK
     ErrMsg = ''
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
@@ -1752,7 +1752,7 @@ CONTAINS
 
     INTEGER :: c, ch, es, nspan, k, nrow
     REAL(wp) :: lambda, mean_seg
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     CHARACTER(16) :: line_kind
 
     ErrStat = CD_AGG_OK
@@ -2119,7 +2119,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
 
     value = CD_ZERO
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
@@ -2152,7 +2152,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (.NOT. self%ranges%active) RETURN
@@ -2176,7 +2176,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     CALL CD_Deck_Range_Write(self%ranges, root, es, em)
@@ -2199,7 +2199,7 @@ CONTAINS
     LOGICAL :: refined
     REAL(wp) :: s, xyz(3), xyz_prev(3), tension, curvature, bend_moment, declination, azimuth
     CHARACTER(CD_DECK_NAMELEN) :: ch
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     CHARACTER(1) :: tab
 
     ErrStat = CD_AGG_OK
@@ -2377,7 +2377,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_AGG_OK
     ErrMsg = ''
     IF (self%nhost_rod + self%nhost_body == 0 .OR. .NOT. self%has_sys) RETURN
@@ -2408,7 +2408,7 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: step_start
     INTEGER :: c0, c1, es
     LOGICAL :: at_start
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_AGG_OK
     ErrMsg = ''
     at_start = .FALSE.

@@ -197,7 +197,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_FAST_MESH_OK
     ErrMsg = ''
@@ -266,7 +266,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     body_wrench = CD_ZERO
     ErrStat = CD_FAST_MESH_OK

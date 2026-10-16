@@ -205,7 +205,7 @@ CONTAINS
     REAL(wp) :: Lam0(3, 3), L0, qe(12), Is(3, 3), om(3), w
     REAL(wp), ALLOCATABLE :: mv(:), v_trans(:)
     LOGICAL :: mult_e
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
     strain_e = CD_ZERO; kinetic_e = CD_ZERO; ErrStat = CD_DYN_OK; ErrMsg = ''
     IF (SIZE(nodes_ref, 1) /= 3 .OR. SIZE(elem_conn, 1) /= 2) THEN
       ErrStat = CD_DYN_BADINPUT; ErrMsg = 'CD_Cosserat_Mechanical_Energy: nodes_ref (3,*) / elem_conn (2,*)'
@@ -860,7 +860,7 @@ CONTAINS
     TYPE(CD_CosseratGenAlphaWorkspace), POINTER :: work
     INTEGER, POINTER :: free(:)
     REAL(wp), POINTER :: fint(:), rhs(:), M_band(:, :), support_accel(:), support_force(:)
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
     a0 = CD_ZERO; ErrStat = CD_DYN_OK; ErrMsg = ''
     n_dof = SIZE(q)
     IF (MOD(n_dof, 6) /= 0 .OR. n_dof < 12 .OR. SIZE(f_ext) /= n_dof .OR. SIZE(a0) /= n_dof) THEN
@@ -1023,7 +1023,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: theta_n_abs(:, :)   ! absolute t_n nodal rotations (multiplicative path)
     REAL(wp), ALLOCATABLE :: rot_chain(:, :, :)  ! per-node consistent-tangent chain Jacobian J_c
     REAL(wp), ALLOCATABLE :: q_cand(:)           ! composed end-of-step candidate pose (validation)
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     q_new = CD_ZERO; v_new = CD_ZERO; a_new = CD_ZERO
     converged = .FALSE.; stalled = .FALSE.; n_iter = 0

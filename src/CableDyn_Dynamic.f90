@@ -434,7 +434,7 @@ CONTAINS
     TYPE(CD_CableGenAlphaWorkspace), TARGET :: local_workspace
     TYPE(CD_CableGenAlphaWorkspace), POINTER :: work
     INTEGER  :: es
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: use_element_mass_band
 
     a0 = CD_ZERO
@@ -758,7 +758,7 @@ CONTAINS
     LOGICAL  :: factored_now, guess_used, prev_end_ok, reuse_factor, reused, warm_call, r_at_qk
     LOGICAL  :: scales_stale, trial_is_iterate
     INTEGER  :: es
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     q_new = CD_ZERO
     v_new = CD_ZERO
@@ -1439,7 +1439,7 @@ CONTAINS
       !! factors the tangent at qk once.
       INTEGER :: nfx, j, i, k2, es2
       REAL(wp) :: h, acc
-      CHARACTER(120) :: em2
+      CHARACTER(1024) :: em2
       LOGICAL :: keep
       LOGICAL :: act(SIZE(fixed))
       REAL(wp), ALLOCATABLE :: sfe(:, :)
@@ -2586,7 +2586,7 @@ CONTAINS
     INTEGER, INTENT(IN) :: elem_conn(:, :), n_nodes
     LOGICAL, INTENT(OUT) :: validated
     INTEGER :: es, istat
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     validated = work%topo_valid
     IF (validated) validated = work%topo_n_nodes == n_nodes

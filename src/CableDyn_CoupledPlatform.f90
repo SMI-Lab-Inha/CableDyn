@@ -68,7 +68,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: k_rr(:, :), k_rf(:, :), k_fr(:, :), xcol(:)
     REAL(wp) :: k_ff(3, 3)
     LOGICAL :: conv, stalled, at_floor
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_PLAT_OK; ErrMsg = ''
     q = CD_ZERO; g = CD_ZERO; k_fair = CD_ZERO
@@ -191,7 +191,7 @@ CONTAINS
     REAL(wp) :: forces(3, n_lines), trial_forces(3, n_lines)
     REAL(wp) :: merit, merit_trial, alpha, fscale, mscale
     LOGICAL :: ok, trial_ok
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     REAL(wp), PARAMETER :: ARMIJO_C1 = 1.0e-4_wp
 
     ErrStat = CD_PLAT_OK; ErrMsg = ''
@@ -333,7 +333,7 @@ CONTAINS
     REAL(wp) :: jac(3, 6), jt_kf(6, 3), geom(3, 3)
     REAL(wp), ALLOCATABLE :: qline(:)
     INTEGER :: li, es_l, n_dof
-    CHARACTER(200) :: em_l
+    CHARACTER(1024) :: em_l
 
     all_ok = .TRUE.; ErrStat = CD_PLAT_OK; ErrMsg = ''
     residual = CD_ZERO; k_sys = CD_ZERO

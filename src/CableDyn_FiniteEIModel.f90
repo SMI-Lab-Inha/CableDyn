@@ -77,7 +77,7 @@ CONTAINS
 
     INTEGER :: n_nodes, n_elem, n_dof, i, es
     TYPE(CD_FiniteEIModelType) :: old_model
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DYN_OK
     ErrMsg = ''
@@ -324,7 +324,7 @@ CONTAINS
     INTEGER :: i, d, es
     LOGICAL :: do_recompute
     REAL(wp), ALLOCATABLE :: q_tmp(:), v_tmp(:), a_tmp(:), a_presc(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DYN_OK
     ErrMsg = ''
@@ -410,7 +410,7 @@ CONTAINS
     LOGICAL :: recompute
     INTEGER :: es
     REAL(wp), ALLOCATABLE :: a_tmp(:), a_presc(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DYN_OK
     ErrMsg = ''
