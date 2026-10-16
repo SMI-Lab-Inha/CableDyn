@@ -42,11 +42,14 @@ class ValidationRecordTests(unittest.TestCase):
         match = re.search(r"project\(CableDynCore VERSION (\d+\.\d+\.\d+)", cmake)
         self.assertIsNotNone(match)
         expected = f"v{match.group(1)}"
+        # A record rerun on an unreleased development build after that release says so; the
+        # version bump of the next release makes it fail here until the record is rerun.
+        development = f"{expected}+dev (unreleased)"
         for relative in (
             "experiments/holcombe/provenance.json",
             "experiments/bergdahl/provenance.json",
         ):
-            self.assertEqual(load_json(VALIDATION / relative)["CableDyn_release"], expected)
+            self.assertIn(load_json(VALIDATION / relative)["CableDyn_release"], (expected, development))
 
     def test_holcombe_marker_curvature_summary(self) -> None:
         directory = VALIDATION / "experiments" / "holcombe"

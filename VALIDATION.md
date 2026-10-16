@@ -74,15 +74,15 @@ article's methods, are compared in
 | **L3-6c** | Irregular-sea (JONSWAP) dynamic lazy-wave | OrcaFlex 11.6d (same 80-component sea) | curv 0.21%; tension 0.20/0.19/0.23%; wave-driven curv rise 1.0%, tension range 2.1% | curv <2%, tension <1%; rise <15%, range <10% | Pass |
 | **L3-6d** | Moving-touchdown dynamic contact | OrcaFlex 11.6d installed | curv 0.48/0.58%, tension 0.74/0.90/0.80%, TDP 0.08 m, migration 2–3 m/cycle | curv <3–5%, tension <2–3%, TDP excursion bounds <1.5 m | Pass |
 | **L3-6e** | Out-of-plane / 3D whirl response | OrcaFlex 11.6d | 3D curv 0.52%, interior Y env ≤1.0 mm, sag ≤22 mm, tension 0.14/0.17/0.12% | curv <3%, env <5 cm, tension <2–3% | Pass |
-| **L3-7** | 1-hour VolturnUS-S mooring dynamic | OrcaFlex 11.6d | `FairTen` mean 0.28%, std 0.25%, min/max 0.15/0.43%, Fourier 0.27/1.13% | ≤5% | Pass |
+| **L3-7** | 1-hour VolturnUS-S mooring dynamic | OrcaFlex 11.6d | `FairTen` mean 0.27%, std 0.26%, min/max 0.50/0.43%, Fourier 0.27/1.14% | ≤5% | Pass |
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
-| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.11%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
+| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.13%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
 | **L4-1c** | Lozon lazy-wave cable under coupled FOWT motion, 3 depths | OrcaFlex 11.6d | curv amplification 0.05/0.09/0.01%; dyn curv 0.24/0.35/1.01%; tension <0.7% | ampl <2%, curv <2–3%, tension <1.5–2% | Pass |
 | **L4-rot** | Coupled mooring rotational stiffness | held 1° pitch geometry | upwind −16.0 kN, downwind +7.8 kN each; first-order restoring moment | signs + first-order | Pass |
-| **L5-stab** | Snap-load Δt-stability | sub-CFL fine-dt (0.5 ms) self-ref | peak 2.7% at dt = 20 ms (explicit limit 3.2 ms) | — | Pass |
+| **L5-stab** | Snap-load Δt-stability | sub-CFL fine-dt (0.5 ms) self-ref | peak 1.5% at dt = 20 ms (explicit limit 3.2 ms) | — | Pass |
 | **L5-stab** | Snap-load Δt-stability, implicit and explicit steps | MoorDyn-C explicit step limit | 20 ms implicit; ~1 ms explicit | — | Pass |
 | **L5-V** | VolturnUS-S 1-hr mooring wall-clock | measured, matched protocol | CableDyn 18.1–32 s across repeated runs (full Newton) vs OrcaFlex 14.5 s; heave-only config 10.3 s | — | Pass (response at L3-7) |
 | **L5-wc** | Wall-clock vs explicit C solver | external-C RK2 (WD chain) | L2 0.967 s vs external-C 0.541 s; traces validated | matched comparison reported | Pass measured |
@@ -178,7 +178,7 @@ initialisation.
 - **L3-1 WD0050 static** (`l3_orcaflex_static`): fairlead/anchor **0.154% /
   0.848%**. The OrcaFlex reference is within 0.657/0.731% of MoorDyn-C.
 - **L3-2 regular-wave dynamic** (`l3_orcaflex_wave_dynamic`): mean fairlead
-  tension **0.298%** (2% acceptance), swing **8.405%** (15% acceptance) against an
+  tension **0.298%** (2% acceptance), swing **8.411%** (15% acceptance) against an
   OrcaFlex reference with implicit dt 0.005 s. Wave stretching changes the OrcaFlex
   swing by only 0.18%, and the unpinned OrcaFlex dt=0.1 s is not converged
   (refinement moves it toward CableDyn). The residual comes from surface-piercing
@@ -255,10 +255,11 @@ initialisation.
   **0.14 / 0.17 / 0.12%**.
 - **L3-7 1-hour mooring dynamic** (`l3_longduration_mooring`): VolturnUS-S
   all-chain line driven for one hour by 5 m/90 s surge + 2 m/12 s heave. Over the
-  steady 3400 s window the `FairTen` channel differs from OrcaFlex by **0.28% in
-  mean, 0.25% in std, 0.15 / 0.43% in minimum / maximum, and 0.27% (90 s) / 1.13%
+  steady 3400 s window the `FairTen` channel differs from OrcaFlex by **0.27% in
+  mean, 0.26% in std, 0.50 / 0.43% in minimum / maximum, and 0.27% (90 s) / 1.14%
   (12 s) in Fourier amplitude**. The end-element tension carries the 1.28% static
-  offset of L2-V in its mean and extremes.
+  offset of L2-V in its mean and extremes. The force-blended `EI = 0` step moved the
+  minimum by +7 kN (0.15% before) and the other statistics by at most 0.01%.
 - **L-fig curvature overlay**: `l3_lazywave_dynamic` writes each site's along-arc
   curvature profile.
   [`validation/scripts/curvature_profile_overlay.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/curvature_profile_overlay.py)
@@ -287,10 +288,13 @@ scripts, results, and source provenance are in
 - **L3-B Bergdahl dynamic chain test**
   ([Bergdahl et al., 2016](https://cabledyn.readthedocs.io/en/latest/references.html#ref-bergdahl2016)):
   over the full 30-condition period-radius matrix, cycle-maximum upper-end force
-  has RMSE 1.58 N, mean absolute percentage error 3.11%, Pearson correlation
+  has RMSE 1.58 N, mean absolute percentage error 3.13%, Pearson correlation
   0.993, and Lin concordance 0.989. Two phase-averaged measured histories have
-  waveform RMSEs of 5.95% and 2.54% of their force ranges. Halving the mesh length
-  and the time step changes the mean cycle maximum by at most 0.49% and 0.28%. The
+  waveform RMSEs of 5.95% and 2.54% of their force ranges; these two were computed with the
+  executable of the 2026-10-09 record (the configuration-blended `EI = 0` step), because the
+  article supplement's `expData.dat` they need was not available for the rerun (see the
+  experiment's README and `provenance.json`). Halving the mesh length
+  and the time step changes the mean cycle maximum by at most 0.52% and 0.19%. The
   0.3125 ms step resolves the segment axial modes that the snap loads excite; at
   1.25 ms the maxima are 2–15% higher and vary from cycle to cycle.
 
@@ -373,7 +377,9 @@ scripts, results, and source provenance are in
 - **Snap load** (`snap_load`): a grounded tension-only line goes slack, then snaps
   to ~10 MN. Implicit generalised-α integrates it at **dt = 20 ms, above the
   explicit CFL limit of about 3.2 ms**, with every step converged (stable up to about
-  30 ms in a sweep); the peak is within **2.7%** of the 0.5 ms sub-CFL reference.
+  30 ms in a sweep); the peak is within **1.5%** of the 0.5 ms sub-CFL reference
+  (1.1% at 10 ms, 0.05% at 5 ms). Before the force-blended `EI = 0` step these were
+  2.76 / 0.62 / 0.16%; the 2.76% at 20 ms is the value published as 2.7% (truncated).
 - **Implicit and explicit steps**: on the matched near-taut snap, MoorDyn-C's
   explicit RK2 needs `dtM ≲ 1 ms`, as expected of an explicit scheme at this line
   stiffness; CableDyn's implicit step remains stable at **20 ms**.

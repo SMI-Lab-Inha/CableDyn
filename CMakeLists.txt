@@ -1781,6 +1781,12 @@ add_executable(test_dynamics_regressions tests/test_dynamics_regressions.f90)
 target_link_libraries(test_dynamics_regressions PRIVATE cabledyn_core)
 add_test(NAME dynamics_regressions COMMAND test_dynamics_regressions)
 set_tests_properties(dynamics_regressions PROPERTIES LABELS "fortran;driver;integration;dynamic")
+# Tension-only lines going slack and snapping taut at the default rhoInf: force blend, release
+# cap and the driver's run audit (the driver executable is passed for its stdout).
+add_executable(test_ei0_slack_dynamics tests/test_ei0_slack_dynamics.f90)
+target_link_libraries(test_ei0_slack_dynamics PRIVATE cabledyn_core)
+add_test(NAME ei0_slack_dynamics COMMAND test_ei0_slack_dynamics $<TARGET_FILE:cabledyn>)
+set_tests_properties(ei0_slack_dynamics PROPERTIES LABELS "fortran;driver;integration;dynamic")
 
 add_executable(test_deck_reader_io tests/test_deck_reader_io.f90)
 target_link_libraries(test_deck_reader_io PRIVATE cabledyn_core)

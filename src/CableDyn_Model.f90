@@ -103,6 +103,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Recompute_Model_Acceleration
   PUBLIC :: CD_Model_Is_Initialized
   PUBLIC :: CD_Copy_Model
+  PUBLIC :: CD_Audit_Model_Step
 
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_OK = 0
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_BADINPUT = 1
@@ -168,6 +169,19 @@ MODULE CableDyn_Model
     INTEGER, ALLOCATABLE :: free_map_work(:)
     TYPE(CD_CableGenAlphaWorkspace) :: dynamic_workspace
     REAL(wp), ALLOCATABLE :: load_force_work(:)
+    ! the load contributors at the committed state, the step-start share of the force-blended
+    ! generalised-alpha residual (scratch, rebuilt every step)
+    REAL(wp), ALLOCATABLE :: load_start_work(:)
+    ! the tension of the viscoelastic and Syrope elements in load_start_work (n_elem, zero for
+    ! the other elements; allocated only on a model with either law): the release cap of the
+    ! force blend bounds their alpha_f share as it bounds that of the elastic elements
+    REAL(wp), ALLOCATABLE :: tension_start_work(:)
+    ! their axial stiffness at the committed state (EA_D/l0, Syrope K1/l0; n_elem, allocated
+    ! with tension_start_work), which bounds the secant end tension of the release cap
+    REAL(wp), ALLOCATABLE :: stiffness_start_work(:)
+    ! load_start_work holds the committed-state load of the last step: a warm re-solve of the
+    ! same step (the junction coupling, dynamic_workspace%guess_armed) reuses it
+    LOGICAL :: load_start_valid = .FALSE.
     REAL(wp), ALLOCATABLE :: load_jq_work(:, :)
     REAL(wp), ALLOCATABLE :: load_jv_work(:, :)
     LOGICAL :: has_seabed = .FALSE.
@@ -277,6 +291,23 @@ MODULE CableDyn_Model
     REAL(wp), ALLOCATABLE :: added_mass_can_elem(:)
     REAL(wp), ALLOCATABLE :: added_mass_cat_elem(:)
     TYPE(GenAlphaConfig) :: cfg
+    ! Run audit of the committed host steps (CD_Audit_Model_Step), diagnostics only: never part
+    ! of the state, of a copy, or of a result. audit_t holds the segment tensions of the last two
+    ! audited states (column 1 the latest; the elastic tension, or that of the viscoelastic or
+    ! Syrope law; -1 marks a segment whose law could not be evaluated), audit_u the unit chords
+    ! of the latest one, audit_n how many states are held (0 to 2). audit_floor is the largest
+    ! tension of the first audited state (the initial state: the driver audits it before its
+    ! march). audit_max_turn is the largest turn of a taut segment's chord in one step (deg),
+    ! audit_snaps the segments that went from slack to taut above audit_floor in one step and
+    ! audit_snap_courant the largest dt*c/l0 (c the axial wave speed) among them. audit_spikes
+    ! counts the implausible tension spikes, the first one recorded with its time, segment,
+    ! tension and ratio to the largest tension of the line one step before and after.
+    INTEGER :: audit_n = 0
+    REAL(wp), ALLOCATABLE :: audit_t(:, :), audit_u(:, :), audit_now(:)
+    REAL(wp) :: audit_time = CD_ZERO, audit_floor = CD_ZERO, audit_max_turn = CD_ZERO
+    REAL(wp) :: audit_snap_courant = CD_ZERO
+    INTEGER :: audit_snaps = 0, audit_spikes = 0, audit_spike_elem = 0
+    REAL(wp) :: audit_spike_time = CD_ZERO, audit_spike_tension = CD_ZERO, audit_spike_ratio = CD_ZERO
   END TYPE CD_ModelType
 
 CONTAINS
@@ -373,6 +404,7 @@ CONTAINS
     ! under memory pressure before any checked allocation runs).
     CALL clear_model_load_contributor_workspace(model)
     CALL CD_Clear_GenAlpha_Workspace(model%dynamic_workspace)
+    CALL clear_model_audit(model)
     old_model = model
 
     n_dof = SIZE(q0)
@@ -1832,6 +1864,10 @@ CONTAINS
     n_iter = 0
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
+    ! Only a warm re-solve of the step whose committed-state load load_start_work holds may
+    ! reuse it: any other call drops it before its first return (see the step workspace's
+    ! start_valid), so an unarmed call that fails early leaves no older step's load behind.
+    IF (.NOT. model%dynamic_workspace%guess_armed) model%load_start_valid = .FALSE.
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_MODEL_NOT_INITIALIZED
       ErrMsg = 'CableDyn_Model: model is not initialized'
@@ -1852,6 +1888,71 @@ CONTAINS
     has_load = model%has_seabed .OR. model%has_seabed_damping .OR. model%has_seabed_friction .OR. &
                model%has_damping .OR. model%has_viscoelastic .OR. model%has_syrope .OR. model%has_morison_drag .OR. &
                model%has_froude_krylov .OR. model%has_buoyancy_recovery
+    ! Force-blended generalised alpha: the load contributors at the committed state (q_n, v_n)
+    ! carry the alpha_f share of the residual. They are evaluated here, in the instantaneous
+    ! limit (ve_dt = 0), so the viscoelastic and Syrope elements give their committed force,
+    ! whose tension (tension_start_work) the release cap of the step bounds like the elastic
+    ! tension. A warm re-solve of the same step (the junction coupling re-steps the line from
+    ! the same committed state with moved ends) reuses the load of the previous call.
+    IF (.NOT. (has_load .AND. model%cfg%force_blend)) THEN
+      model%load_start_valid = .FALSE.
+    ELSE IF (.NOT. (model%dynamic_workspace%guess_armed .AND. model%load_start_valid)) THEN
+      model%load_start_valid = .FALSE.
+      IF (ALLOCATED(model%load_start_work)) THEN
+        IF (SIZE(model%load_start_work) /= model%n_dof) DEALLOCATE (model%load_start_work)
+      END IF
+      IF (.NOT. ALLOCATED(model%load_start_work)) THEN
+        ALLOCATE (model%load_start_work(model%n_dof), STAT=es)
+        IF (es /= 0) THEN
+          ErrStat = CD_MODEL_ALLOCFAIL
+          ErrMsg = 'CableDyn_Model: step-start load workspace allocation failed'
+          RETURN
+        END IF
+      END IF
+      ! tension_start_work stays unallocated without a viscoelastic or Syrope element, and the
+      ! step then sees start_tension absent
+      IF (ALLOCATED(model%tension_start_work)) THEN
+        IF (SIZE(model%tension_start_work) /= model%n_elem .OR. &
+            .NOT. (model%has_viscoelastic .OR. model%has_syrope)) DEALLOCATE (model%tension_start_work)
+      END IF
+      IF ((model%has_viscoelastic .OR. model%has_syrope) .AND. .NOT. ALLOCATED(model%tension_start_work)) THEN
+        ALLOCATE (model%tension_start_work(model%n_elem), STAT=es)
+        IF (es /= 0) THEN
+          ErrStat = CD_MODEL_ALLOCFAIL
+          ErrMsg = 'CableDyn_Model: step-start tension workspace allocation failed'
+          RETURN
+        END IF
+      END IF
+      IF (ALLOCATED(model%stiffness_start_work)) THEN
+        IF (.NOT. ALLOCATED(model%tension_start_work)) THEN
+          DEALLOCATE (model%stiffness_start_work)
+        ELSE IF (SIZE(model%stiffness_start_work) /= model%n_elem) THEN
+          DEALLOCATE (model%stiffness_start_work)
+        END IF
+      END IF
+      IF (ALLOCATED(model%tension_start_work) .AND. .NOT. ALLOCATED(model%stiffness_start_work)) THEN
+        ALLOCATE (model%stiffness_start_work(model%n_elem), STAT=es)
+        IF (es /= 0) THEN
+          ErrStat = CD_MODEL_ALLOCFAIL
+          ErrMsg = 'CableDyn_Model: step-start stiffness workspace allocation failed'
+          RETURN
+        END IF
+      END IF
+      model%ve_dt = CD_ZERO
+      IF (ALLOCATED(model%tension_start_work)) THEN
+        CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es, em, &
+                                     law_tension=model%tension_start_work, &
+                                     law_stiffness=model%stiffness_start_work)
+      ELSE
+        CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es, em)
+      END IF
+      IF (es /= CD_MODEL_OK) THEN
+        ErrStat = es
+        ErrMsg = 'CableDyn_Model: step-start load failed: '//TRIM(em)
+        RETURN
+      END IF
+      model%load_start_valid = .TRUE.
+    END IF
     ! arm the viscoelastic contributors with the step size: in-step load
     ! evaluations use the backward-Euler-eliminated dl_1(q, v); it is reset to
     ! the instantaneous limit (0) on EVERY exit below so committed-state queries
@@ -1865,7 +1966,10 @@ CONTAINS
                                    es, em, load_force_proc=model_force, load_band_proc=model_load_band, &
                                    added_mass_band_proc=model_added_mass_band, prescribed_q=prescribed_q, &
                                    prescribed_v=prescribed_v, prescribed_a=prescribed_a, &
-                                   workspace=model%dynamic_workspace)
+                                   workspace=model%dynamic_workspace, start_load=model%load_start_work, &
+                                   start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (PRESENT(prescribed_q) .AND. has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1873,7 +1977,10 @@ CONTAINS
                                    n_iter, &
                                    es, em, load_force_proc=model_force, load_band_proc=model_load_band, &
                                    prescribed_q=prescribed_q, prescribed_v=prescribed_v, &
-                                   prescribed_a=prescribed_a, workspace=model%dynamic_workspace)
+                                   prescribed_a=prescribed_a, workspace=model%dynamic_workspace, &
+                                   start_load=model%load_start_work, start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (PRESENT(prescribed_q) .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1895,14 +2002,20 @@ CONTAINS
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
-                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace)
+                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
+                                   start_load=model%load_start_work, start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
-                                   workspace=model%dynamic_workspace)
+                                   workspace=model%dynamic_workspace, start_load=model%load_start_work, &
+                                   start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -3625,7 +3738,10 @@ CONTAINS
     !! converged step then leaves the alpha-level reaction rows of its fixed DOFs and the
     !! condensed dynamic end tangent (CD_Get_Model_EndQuery). active (one flag per fixed DOF,
     !! in model%fixed_dofs order) limits the tangent columns to the junction DOFs; arm_guess
-    !! warm-starts the step from the previous converged solve of the same step.
+    !! warm-starts the step from the previous converged solve of the same step. arm_guess
+    !! must be set only for a re-solve of that step from the same committed state (the
+    !! line rolled back to it): the warm re-solve also reuses the step-start force and load
+    !! of the force blend computed by the previous call.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     LOGICAL, INTENT(IN) :: request
     LOGICAL, INTENT(IN), OPTIONAL :: active(:)
@@ -3972,10 +4088,27 @@ CONTAINS
         END DO
       END BLOCK
     END IF
+    ! the viscoelastic and Syrope elements report their own law's tension
+    CALL model_law_tensions(model, tension, ErrStat, ErrMsg)
+  END SUBROUTINE CD_Get_Model_Tension
+
+  SUBROUTINE model_law_tensions(model, tension, ErrStat, ErrMsg)
+    !! Overwrite the entries of the viscoelastic and Syrope elements of tension (n_elem) with
+    !! their law's tension at the committed state (CD_Get_Model_Tension); the other entries
+    !! are left as they are.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(INOUT) :: tension(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(160) :: em
+
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
     IF (model%has_viscoelastic) THEN
       ! viscoelastic elements report the series-Kelvin tension MagT + MagTd at the
-      ! COMMITTED state and dl_1 (the elastic EA recovery above does not apply
-      ! to them -- their dynamic elastic stiffness lives in the state)
+      ! COMMITTED state and dl_1 (the elastic EA recovery of CD_Get_Model_Tension does not
+      ! apply to them -- their dynamic elastic stiffness lives in the state)
       BLOCK
         INTEGER :: e, na, nb
         REAL(wp) :: ea_d_eff, ea_1_eff
@@ -4004,8 +4137,8 @@ CONTAINS
     END IF
     IF (model%has_syrope) THEN
       ! Syrope elements report the working-curve tension at the COMMITTED state
-      ! (the along-tangent component of the element force; the elastic EA
-      ! recovery above does not apply -- their stiffness lives in the states)
+      ! (the along-tangent component of the element force; the elastic EA recovery of
+      ! CD_Get_Model_Tension does not apply -- their stiffness lives in the states)
       BLOCK
         INTEGER :: e, idx_scr(6)
         REAL(wp) :: q2b(6), v2b(6), f6(6), j6(6, 6), jv6(6, 6), tmean, dslow, chord(3)
@@ -4023,7 +4156,7 @@ CONTAINS
         END DO
       END BLOCK
     END IF
-  END SUBROUTINE CD_Get_Model_Tension
+  END SUBROUTINE model_law_tensions
 
   SUBROUTINE CD_Update_Model_Hydro_Fields(model, ErrStat, ErrMsg, fluid_velocity, drag_waterline_z, &
                                           fluid_acceleration, fk_waterline_z, added_mass_waterline_z, &
@@ -4601,6 +4734,196 @@ CONTAINS
     END SUBROUTINE model_added_mass_band
   END SUBROUTINE CD_Recompute_Model_Acceleration
 
+  SUBROUTINE CD_Audit_Model_Step(model, time, dt, new_spike)
+    !! Audit one committed host step of an EI=0 line (called by the standalone driver on the
+    !! initial state and once per output step, after the step's plausibility guard). Cheap,
+    !! O(n_elem) (and one evaluation of the viscoelastic and Syrope laws), and
+    !! diagnostic only. It tracks
+    !!
+    !! * the largest turn of a taut segment's chord over one step, the measure of how well
+    !!   dtM resolves the rotation of the line (time-step advisory);
+    !! * slack-to-taut snaps above the initial tension scale, with the largest dt*c/l0 among
+    !!   them (c = sqrt(EA/m) the axial wave speed; EA the dynamic stiffness: EA_D of a
+    !!   viscoelastic segment, alpha + beta*T of a Syrope one): dt*c/l0 > 1 leaves the snap
+    !!   peak unresolved in time;
+    !! * implausible tension spikes. A segment's tension T_n at the previous audited
+    !!   step is a spike when it exceeds four times its own tension one step before and one
+    !!   step after, ten times the largest tension anywhere on the line one step before and
+    !!   one step after, and the largest tension of the initial state. A physical snap or
+    !!   tension wave persists over the axial transit time and is shared by the neighbouring
+    !!   segments, so no line, resolved or not, carries such an isolated single-step peak; an
+    !!   integrator artefact (an under-resolved slack-taut transition) does.
+    !!
+    !! new_spike reports the line's first spike (so the caller warns once per line). The
+    !! tension is EA*max(strain, 0) of the elastic elements (EA*strain on a line that allows
+    !! compression) and the tension of their own law at the committed state for the
+    !! viscoelastic and Syrope elements (CD_Get_Model_Tension); the driver calls the audit
+    !! once on the initial state, so the "initial tension" is that of t = 0.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: time, dt
+    LOGICAL, INTENT(OUT) :: new_spike
+    REAL(wp), PARAMETER :: SPIKE_ISOLATION = 4.0_wp, SPIKE_LINE_FACTOR = 10.0_wp
+    ! A segment counts as taut for the turn advisory above this fraction of the initial
+    ! line tension (a nearly slack segment turns freely, its tension error is irrelevant);
+    ! the spike test needs this many segments (the neighbours share the axial wave).
+    REAL(wp), PARAMETER :: TURN_TAUT_FRACTION = 1.0e-3_wp
+    INTEGER, PARAMETER :: SPIKE_MIN_ELEMS = 3
+    INTEGER :: e, na, nb, istat, es
+    REAL(wp) :: d(3), ell, strain, u(3), c, line_max, tn
+    REAL(wp), ALLOCATABLE :: law(:)
+    LOGICAL :: fresh, laws
+    CHARACTER(160) :: em
+
+    new_spike = .FALSE.
+    IF (.NOT. model%initialized .OR. model%n_elem < 1) RETURN
+    fresh = .NOT. (ALLOCATED(model%audit_t) .AND. ALLOCATED(model%audit_u) .AND. ALLOCATED(model%audit_now))
+    IF (.NOT. fresh) fresh = SIZE(model%audit_t, 1) /= model%n_elem
+    IF (fresh) THEN
+      IF (ALLOCATED(model%audit_t)) DEALLOCATE (model%audit_t)
+      IF (ALLOCATED(model%audit_u)) DEALLOCATE (model%audit_u)
+      IF (ALLOCATED(model%audit_now)) DEALLOCATE (model%audit_now)
+      ALLOCATE (model%audit_t(model%n_elem, 2), model%audit_u(3, model%n_elem), model%audit_now(model%n_elem), &
+                STAT=istat)
+      IF (istat /= 0) RETURN
+      model%audit_n = 0
+    END IF
+    ! the law tensions of the viscoelastic and Syrope segments at the committed state (a
+    ! segment whose law cannot be evaluated is left out, -1, as is every segment without a
+    ! tension when the evaluation fails)
+    laws = model%has_viscoelastic .OR. model%has_syrope
+    IF (laws) THEN
+      ! a local array, not model%audit_now itself (the law evaluation reads the model)
+      ALLOCATE (law(model%n_elem), STAT=istat)
+      laws = istat == 0
+    END IF
+    IF (laws) THEN
+      law = -CD_ONE
+      CALL model_law_tensions(model, law, es, em)
+      laws = es == CD_MODEL_OK
+      IF (laws) model%audit_now = law
+    END IF
+    ! current tensions, chords and the chord turn against the previous audited state
+    DO e = 1, model%n_elem
+      na = model%elem_conn(1, e)
+      nb = model%elem_conn(2, e)
+      d = model%q(3*nb - 2:3*nb) - model%q(3*na - 2:3*na)
+      ell = NORM2(d)
+      IF (.NOT. ell > CD_ZERO) THEN
+        u = CD_ZERO
+      ELSE
+        u = d/ell
+      END IF
+      IF (model%ea_dyn(e) > CD_ZERO) THEN
+        strain = ell/model%l0(e) - CD_ONE
+        IF (model%tension_only .AND. strain < CD_ZERO) strain = CD_ZERO
+        model%audit_now(e) = model%ea_dyn(e)*strain
+      ELSE IF (laws .AND. law_element(e)) THEN
+        ! a tension-only law reports no compression; keep a finite value only
+        IF (.NOT. CD_Is_Finite(model%audit_now(e))) THEN
+          model%audit_now(e) = -CD_ONE
+        ELSE IF (model%tension_only) THEN
+          model%audit_now(e) = MAX(model%audit_now(e), CD_ZERO)
+        END IF
+      ELSE
+        model%audit_now(e) = -CD_ONE
+      END IF
+      IF (model%audit_n >= 1) THEN
+        ! the turn of a segment taut at both states (a slack segment turns freely and carries
+        ! no tension whose accuracy the turn would measure)
+        IF (model%audit_now(e) > TURN_TAUT_FRACTION*model%audit_floor .AND. &
+            model%audit_now(e) > CD_ZERO .AND. &
+            model%audit_t(e, 1) > TURN_TAUT_FRACTION*model%audit_floor .AND. model%audit_t(e, 1) > CD_ZERO) &
+          model%audit_max_turn = MAX(model%audit_max_turn, &
+                                     ACOS(MAX(-CD_ONE, MIN(CD_ONE, DOT_PRODUCT(u, model%audit_u(:, e)))))* &
+                                     (180.0_wp/ACOS(-CD_ONE)))
+        ! slack at the previous state, taut above the initial tension scale now
+        IF (model%audit_t(e, 1) >= CD_ZERO .AND. .NOT. model%audit_t(e, 1) > CD_ZERO .AND. &
+            model%audit_now(e) > model%audit_floor) THEN
+          model%audit_snaps = model%audit_snaps + 1
+          c = SQRT(wave_stiffness(e)/model%rho_a(e))
+          model%audit_snap_courant = MAX(model%audit_snap_courant, dt*c/model%l0(e))
+        END IF
+      END IF
+      model%audit_u(:, e) = u
+    END DO
+    IF (model%audit_n == 0) model%audit_floor = MAX(CD_ZERO, MAXVAL(model%audit_now))
+    ! spike test on the previous state, between its two neighbours
+    IF (model%audit_n >= 2 .AND. model%n_elem >= SPIKE_MIN_ELEMS) THEN
+      line_max = MAX(MAXVAL(model%audit_t(:, 2)), MAXVAL(model%audit_now))
+      DO e = 1, model%n_elem
+        tn = model%audit_t(e, 1)
+        IF (.NOT. (tn > model%audit_floor)) CYCLE
+        IF (tn <= SPIKE_ISOLATION*MAX(model%audit_t(e, 2), model%audit_now(e))) CYCLE
+        IF (tn <= SPIKE_LINE_FACTOR*line_max) CYCLE
+        model%audit_spikes = model%audit_spikes + 1
+        IF (model%audit_spikes == 1) THEN
+          model%audit_spike_time = model%audit_time
+          model%audit_spike_elem = e
+          model%audit_spike_tension = tn
+          model%audit_spike_ratio = tn/MAX(line_max, TINY(CD_ONE))
+          new_spike = .TRUE.
+        END IF
+      END DO
+    END IF
+    model%audit_t(:, 2) = model%audit_t(:, 1)
+    model%audit_t(:, 1) = model%audit_now
+    model%audit_time = time
+    model%audit_n = MIN(model%audit_n + 1, 2)
+
+  CONTAINS
+
+    LOGICAL FUNCTION law_element(k) RESULT(is_law)
+      !! Segment k carries the viscoelastic or the Syrope law.
+      INTEGER, INTENT(IN) :: k
+      is_law = .FALSE.
+      IF (model%has_viscoelastic) is_law = model%ve_mode(k) /= 0
+      IF (model%has_syrope .AND. .NOT. is_law) is_law = model%syrope_is(k)
+    END FUNCTION law_element
+
+    REAL(wp) FUNCTION wave_stiffness(k) RESULT(stiff)
+      !! The axial stiffness of segment k that sets its wave speed: EA of an elastic segment,
+      !! the fast spring of a law (EA_D of the viscoelastic law, alpha + beta*T of the Syrope
+      !! law at the segment tension T); the static EA if the law's value is unavailable.
+      INTEGER, INTENT(IN) :: k
+      REAL(wp) :: ea_d_eff, ea_1_eff
+      INTEGER :: es_k
+      CHARACTER(200) :: em_k
+      stiff = model%ea_dyn(k)
+      IF (stiff > CD_ZERO) RETURN
+      stiff = model%ea(k)
+      IF (model%has_viscoelastic) THEN
+        IF (model%ve_mode(k) /= 0) THEN
+          CALL model_viscoelastic_coeffs(model, k, ea_d_eff, ea_1_eff, es_k, em_k)
+          IF (es_k == CD_MODEL_OK .AND. ea_d_eff > CD_ZERO) stiff = ea_d_eff
+          RETURN
+        END IF
+      END IF
+      IF (model%has_syrope) THEN
+        IF (model%syrope_is(k)) stiff = model%syrope_type(k)%alpha + &
+                                        model%syrope_type(k)%beta*MAX(model%audit_now(k), CD_ZERO)
+      END IF
+    END FUNCTION wave_stiffness
+  END SUBROUTINE CD_Audit_Model_Step
+
+  SUBROUTINE clear_model_audit(model)
+    !! Reset the run audit (CD_Audit_Model_Step).
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    IF (ALLOCATED(model%audit_t)) DEALLOCATE (model%audit_t)
+    IF (ALLOCATED(model%audit_u)) DEALLOCATE (model%audit_u)
+    IF (ALLOCATED(model%audit_now)) DEALLOCATE (model%audit_now)
+    model%audit_n = 0
+    model%audit_time = CD_ZERO
+    model%audit_floor = CD_ZERO
+    model%audit_max_turn = CD_ZERO
+    model%audit_snap_courant = CD_ZERO
+    model%audit_snaps = 0
+    model%audit_spikes = 0
+    model%audit_spike_elem = 0
+    model%audit_spike_time = CD_ZERO
+    model%audit_spike_tension = CD_ZERO
+    model%audit_spike_ratio = CD_ZERO
+  END SUBROUTINE clear_model_audit
+
   SUBROUTINE CD_End_Model(model, ErrStat, ErrMsg)
     !! Release all allocatable model storage. Safe to call on an uninitialised model.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
@@ -4642,6 +4965,7 @@ CONTAINS
     IF (ALLOCATED(model%free_map_work)) DEALLOCATE (model%free_map_work)
     CALL CD_Clear_GenAlpha_Workspace(model%dynamic_workspace)
     CALL clear_model_load_contributor_workspace(model)
+    CALL clear_model_audit(model)
     IF (ALLOCATED(model%seabed_kn)) DEALLOCATE (model%seabed_kn)
     IF (ALLOCATED(model%seabed_cn)) DEALLOCATE (model%seabed_cn)
     CALL CD_End_Bathymetry(model%bathymetry)
@@ -5397,6 +5721,10 @@ CONTAINS
     IF (ALLOCATED(model%load_force_work)) DEALLOCATE (model%load_force_work)
     IF (ALLOCATED(model%load_jq_work)) DEALLOCATE (model%load_jq_work)
     IF (ALLOCATED(model%load_jv_work)) DEALLOCATE (model%load_jv_work)
+    IF (ALLOCATED(model%load_start_work)) DEALLOCATE (model%load_start_work)
+    IF (ALLOCATED(model%tension_start_work)) DEALLOCATE (model%tension_start_work)
+    IF (ALLOCATED(model%stiffness_start_work)) DEALLOCATE (model%stiffness_start_work)
+    model%load_start_valid = .FALSE.
   END SUBROUTINE clear_model_load_contributor_workspace
 
   PURE LOGICAL FUNCTION mode3_marked(alpha_mbl, e) RESULT(marked)
@@ -5982,7 +6310,8 @@ CONTAINS
     END IF
   END SUBROUTINE model_contributor_load_banded
 
-  SUBROUTINE model_contributor_force(model, q, v, force, ErrStat, ErrMsg, end_nodes_only)
+  SUBROUTINE model_contributor_force(model, q, v, force, ErrStat, ErrMsg, end_nodes_only, law_tension, &
+                                     law_stiffness)
     !! Assemble all configured non-structural model load contributors without tangents.
     !! end_nodes_only: only the first and last node's entries are needed (end-force recovery);
     !! the other nodes and the elements not touching an end are skipped, and the two end entries
@@ -5990,12 +6319,19 @@ CONTAINS
     !! compact 9-vector [first node (3), last node (3), sum over the other nodes the end
     !! elements reach (3)], so the recovery needs no n_dof-long scratch; the third block only
     !! carries the finiteness check of the full assembly.
+    !! law_tension (n_elem; with a full assembly): the along-chord tension of the element force
+    !! of the viscoelastic and Syrope laws in `force`, zero for every other element.
+    !! law_stiffness (n_elem; with law_tension): the axial stiffness of those laws at (q, v), in
+    !! N per metre of elongation: EA_D/l0 (the dynamic branch, at the committed state of a
+    !! load-dependent EA_D) and Syrope's K1/l0 = (alpha + beta T_mean)/l0; zero elsewhere.
     TYPE(CD_ModelType), INTENT(IN) :: model
     REAL(wp), INTENT(IN) :: q(:), v(:)
     REAL(wp), INTENT(OUT) :: force(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: end_nodes_only
+    REAL(wp), INTENT(OUT), OPTIONAL :: law_tension(:)
+    REAL(wp), INTENT(OUT), OPTIONAL :: law_stiffness(:)
 
     INTEGER :: n, e, i, ix, iy, iz, idx(6), nn
     LOGICAL :: ends
@@ -6012,6 +6348,22 @@ CONTAINS
       ErrStat = CD_MODEL_BADINPUT
       ErrMsg = 'CableDyn_Model: model force received inconsistent q/v/force shapes'
       RETURN
+    END IF
+    IF (PRESENT(law_tension)) THEN
+      IF (ends .OR. SIZE(law_tension) /= model%n_elem) THEN
+        ErrStat = CD_MODEL_BADINPUT
+        ErrMsg = 'CableDyn_Model: model force law tensions need a full assembly and shape (n_elem)'
+        RETURN
+      END IF
+      law_tension = CD_ZERO
+    END IF
+    IF (PRESENT(law_stiffness)) THEN
+      IF (.NOT. PRESENT(law_tension) .OR. SIZE(law_stiffness) /= model%n_elem) THEN
+        ErrStat = CD_MODEL_BADINPUT
+        ErrMsg = 'CableDyn_Model: model force law stiffnesses need the law tensions and shape (n_elem)'
+        RETURN
+      END IF
+      law_stiffness = CD_ZERO
     END IF
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -6117,6 +6469,8 @@ CONTAINS
                                              f2, ErrStat, ErrMsg)
           IF (ErrStat /= 0) RETURN
           CALL scatter_element_vector(force, idx, f2)
+          IF (PRESENT(law_tension)) law_tension(e) = element_law_tension()
+          IF (PRESENT(law_stiffness)) law_stiffness(e) = ea_d_eff/model%l0(e)
         END IF
       END IF
       IF (model%has_syrope) THEN
@@ -6124,6 +6478,9 @@ CONTAINS
           CALL model_syrope_element(model, e, q2, v2, f2, syr_jac, syr_jac_v, syr_tm, syr_ds, ErrStat, ErrMsg)
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL scatter_element_vector(force, idx, f2)
+          IF (PRESENT(law_tension)) law_tension(e) = element_law_tension()
+          IF (PRESENT(law_stiffness)) law_stiffness(e) = (model%syrope_type(e)%alpha + &
+                                                          model%syrope_type(e)%beta*syr_tm)/model%l0(e)
         END IF
       END IF
       IF (model%has_morison_drag) THEN
@@ -6175,6 +6532,14 @@ CONTAINS
         j = j + 6
       END IF
     END FUNCTION slot
+
+    REAL(wp) FUNCTION element_law_tension() RESULT(t)
+      !! Along-chord tension of the element force f2 on node a (the laws keep the element
+      !! longer than their collapse length, so the chord is nonzero).
+      REAL(wp) :: chord(3)
+      chord = q2(4:6) - q2(1:3)
+      t = DOT_PRODUCT(f2(1:3), chord/NORM2(chord))
+    END FUNCTION element_law_tension
   END SUBROUTINE model_contributor_force
 
   SUBROUTINE seabed_normal_damping_load(q, v, z_floor, c_n, force, jac_q, jac_v, ErrStat, ErrMsg)

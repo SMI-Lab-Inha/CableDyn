@@ -561,6 +561,31 @@ Warnings and notes that do not stop a run
    * - ``Note: line ...: a nodal tangent turned up to ... deg in one step``
      - the time-step audit of a finite-EI line: above 0.25° per step (0.1° with
        ``False alpha_force_blend``) the mean tension can err by about 1 %. Reduce ``dtM``.
+   * - ``Note: line ...: a taut segment turned up to ... deg in one step``
+     - the time-step audit of an ``EI = 0`` line: above 1° per step the mean and standard
+       deviation of the tension can err by about 1 % (1.3 % at 2.9° on a heaving chain). Reduce
+       ``dtM`` if that matters for the result.
+   * - ``Note: line ...: ... segment step(s) went from slack to taut above the initial tension``
+     - snap loads on an ``EI = 0`` line at a ``dtM`` that does not resolve the axial wave over a
+       segment: the peak is set by a single step (a 15 m surge of a semi-taut chain–polyester
+       line peaks at 5.7 MN at ``dtM`` 0.05 s against 4.6 MN at 0.0025 s). The run is valid;
+       confirm design peaks with a smaller ``dtM``.
+   * - ``Warning: line ...: segment ... carried ... N at t = ... s for a single step, ... times
+       the largest tension on the line one step before and after``
+     - a non-physical tension spike: the tension of one segment (elastic, viscoelastic or
+       Syrope) rose and fell within one step to ten times anything the line carried one step
+       before and after, which no physical
+       snap or tension wave does. It is the signature of an under-resolved slack–taut
+       transition integrated without energy control, for example with
+       ``False alpha_force_blend`` (the ``EI = 0`` scheme of 0.1.1 and earlier) or with
+       ``rhoInf`` near 1. Remove ``False alpha_force_blend``, keep ``rhoInf`` at or below
+       0.95, or reduce ``dtM``; the run summary counts the spikes of the line.
+   * - ``Note: rhoInf = ... leaves almost no numerical dissipation``
+     - printed by the standalone driver for a dynamic deck with ``rhoInf`` above 0.95: the modes ``dtM`` does not resolve keep the residual of each
+       Newton step and the energy of under-resolved snaps. In an irregular sea this can raise the
+       tensions several times (a lazy wave at ``1 rhoInf`` with a ``1e-4`` Newton tolerance
+       peaked at twenty times the converged value). Use ``rhoInf`` ≤ 0.95 (default 0.4), or a
+       ``dynamic_solver`` relative tolerance of ``1e-6`` or tighter and a smaller ``dtM``.
    * - ``Note: line ...: elements as short as ... are below sqrt(EI/EA)``
      - the finite-EI deck mesh is finer than the axial-bending length :math:`\sqrt{EI/EA}`:
        the axial stiffness of each element swamps its bending stiffness and the static

@@ -10,12 +10,16 @@ MODULE CableDyn_Dynamic
   !! and C-facing lifecycle layers.
   !!
   !! One consistent-mass step advances (q_n, v_n, a_n) -> (q_{n+1}, v_{n+1}, a_{n+1})
-  !! over dt by solving, at the alpha-blended configuration q_alpha,
-  !!   R(q) = M a_alpha + f_int(q_alpha) - f_ext = 0
+  !! over dt by solving the force-blended residual (GenAlphaConfig%force_blend, default)
+  !!   R(q) = M a_alpha + (1 - alpha_f) r(q_{n+1}, v_{n+1}) + alpha_f r(q_n, v_n) = 0,
+  !!   r = f_int - f_ext - f_load,
+  !! with a release cap on tension-only elements that release within the step (see
+  !! apply_release_cap), or the configuration-blended R(q) = M a_alpha + f_int(q_alpha) - ...,
   !! for the Newton variable q = q_{n+1} with a Newton + Armijo line search on the
   !! 1/2||R||^2 merit. Optional callbacks add dynamic loads, force-only residual
-  !! evaluations, added mass, and prescribed support motion. The effective tangent is
-  !!   (1 - alpha_m)/(beta dt^2) M + (1 - alpha_f) K_t(q_alpha),
+  !! evaluations, added mass (at q_alpha either way), and prescribed support motion. The
+  !! effective tangent is
+  !!   (1 - alpha_m)/(beta dt^2) M + (1 - alpha_f) K_t(q_{n+1} or q_alpha),
   !! and the free-DOF block is assembled and solved directly in banded DGBSV
   !! storage when no arbitrary dense callback Jacobian is active.
   !!
@@ -73,6 +77,11 @@ MODULE CableDyn_Dynamic
                                                   !! (CD_Cosserat_Gen_Alpha_Step) reads it; the EI=0 cable
                                                   !! path has no rotation DOFs. With .TRUE. the step fails
                                                   !! closed on moving supports and dynamic load callbacks.
+    LOGICAL  :: force_blend = .TRUE.              !! EI=0 cable step only: .TRUE. blends the internal force
+                                                  !! and the dynamic loads, (1 - alpha_f) r(q_{n+1}, v_{n+1})
+                                                  !! + alpha_f r(q_n, v_n); .FALSE. evaluates them at the
+                                                  !! blended configuration (q_alpha, v_alpha). The finite-EI
+                                                  !! paths have their own setting.
   END TYPE GenAlphaConfig
 
   TYPE :: CD_CableGenAlphaWorkspace
@@ -114,6 +123,22 @@ MODULE CableDyn_Dynamic
     REAL(wp), ALLOCATABLE :: fint_eval(:)
     REAL(wp), ALLOCATABLE :: tension_eval(:)
     REAL(wp), ALLOCATABLE :: load_eval(:)
+    ! force blend (GenAlphaConfig%force_blend): the configuration the internal force and the
+    ! dynamic loads are evaluated at (q_{n+1}), and the step-start internal force and dynamic
+    ! load (at q_n, v_n) that enter the blend with weight alpha_f
+    REAL(wp), ALLOCATABLE :: q_force(:)
+    REAL(wp), ALLOCATABLE :: fint_n(:)
+    REAL(wp), ALLOCATABLE :: load_n(:)
+    ! release cap of the force blend (tension-only elements): the step-start tension, stretch
+    ! l - l0 and unit chord of every element, and the bound of its secant stiffness
+    ! (start_stiffness of a law element, HUGE otherwise)
+    REAL(wp), ALLOCATABLE :: tension_n(:), stretch_n(:), chord_n(:, :), stiff_n(:)
+    ! the axial dashpot of an elastic element (axial_damping): BA/l0, the payout rate l0_dot/l0
+    ! and the dashpot tension at the step start, zero without one
+    REAL(wp), ALLOCATABLE :: dcoef_n(:), rl0dot_n(:), damp_n(:)
+    ! fint_n, load_n and the release-cap data hold the step-start values of the last call: a
+    ! warm re-solve of the same step (guess_armed, from the same committed state) reuses them
+    LOGICAL :: start_valid = .FALSE.
     REAL(wp), ALLOCATABLE :: eff(:, :)
     REAL(wp), ALLOCATABLE :: eff_free(:, :)
     REAL(wp), ALLOCATABLE :: Kt_eval(:, :)
@@ -294,6 +319,17 @@ CONTAINS
     IF (ALLOCATED(work%fint_eval)) DEALLOCATE (work%fint_eval)
     IF (ALLOCATED(work%tension_eval)) DEALLOCATE (work%tension_eval)
     IF (ALLOCATED(work%load_eval)) DEALLOCATE (work%load_eval)
+    IF (ALLOCATED(work%q_force)) DEALLOCATE (work%q_force)
+    IF (ALLOCATED(work%fint_n)) DEALLOCATE (work%fint_n)
+    IF (ALLOCATED(work%load_n)) DEALLOCATE (work%load_n)
+    IF (ALLOCATED(work%tension_n)) DEALLOCATE (work%tension_n)
+    IF (ALLOCATED(work%stretch_n)) DEALLOCATE (work%stretch_n)
+    IF (ALLOCATED(work%chord_n)) DEALLOCATE (work%chord_n)
+    IF (ALLOCATED(work%stiff_n)) DEALLOCATE (work%stiff_n)
+    IF (ALLOCATED(work%dcoef_n)) DEALLOCATE (work%dcoef_n)
+    IF (ALLOCATED(work%rl0dot_n)) DEALLOCATE (work%rl0dot_n)
+    IF (ALLOCATED(work%damp_n)) DEALLOCATE (work%damp_n)
+    work%start_valid = .FALSE.
     IF (ALLOCATED(work%eff)) DEALLOCATE (work%eff)
     IF (ALLOCATED(work%eff_free)) DEALLOCATE (work%eff_free)
     IF (ALLOCATED(work%Kt_eval)) DEALLOCATE (work%Kt_eval)
@@ -577,7 +613,9 @@ CONTAINS
                                      converged, stalled, n_iter, ErrStat, ErrMsg, &
                                      load_proc, added_mass_proc, load_force_proc, &
                                      load_band_proc, prescribed_q, prescribed_v, prescribed_a, structural_mass, &
-                                     workspace, added_mass_band_proc)
+                                     workspace, added_mass_band_proc, start_load, start_tension, &
+                                     probe_q, probe_R, probe_K, start_stiffness, axial_damping, &
+                                     axial_l0_rate)
     !! One generalized-alpha step: the constant load f_ext plus the optional load,
     !! banded-load, force-only and added-mass callbacks (hydrodynamics, damping, contact).
     !! On a singular effective tangent returns CD_DYN_SINGULAR; on a line-search
@@ -622,6 +660,42 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: prescribed_q(:), prescribed_v(:), prescribed_a(:)
     REAL(wp), INTENT(IN), OPTIONAL :: structural_mass(:, :)
     TYPE(CD_CableGenAlphaWorkspace), INTENT(INOUT), TARGET, OPTIONAL :: workspace
+    !! Force blend (cfg%force_blend) with a load callback: the dynamic load at the step-start
+    !! state (q, v) as the callbacks return it for the committed state (a constitutive law
+    !! with internal state, such as the viscoelastic and Syrope contributors, gives its
+    !! committed force there, not one advanced over the step). Absent: the step evaluates the
+    !! force-only callback (or load_proc) at (q, v). Full (3 n_nodes) array.
+    REAL(wp), INTENT(IN), OPTIONAL :: start_load(:)
+    !! Force blend on a tension-only line whose load callbacks carry the axial law of some
+    !! elements (ea = 0 there; the viscoelastic and Syrope elements of a line model): the
+    !! step-start tension of each element (n_elem), the along-chord force of that law in
+    !! start_load (or in the step-start load the step evaluates). The release cap then bounds
+    !! the force blend of those elements as it bounds that of the elastic ones; entries of
+    !! elements with ea > 0 are ignored. Absent: the cap covers the elastic elements only.
+    REAL(wp), INTENT(IN), OPTIONAL :: start_tension(:)
+    !! With start_tension: the axial stiffness of each law element at the step-start state
+    !! (n_elem, N per metre of elongation, >= 0; the viscoelastic EA_D/l0 and the Syrope
+    !! K1/l0 = (alpha + beta T_mean)/l0 of a line model). It bounds the secant stiffness
+    !! T_n/e_n with which the release cap estimates the end tension of a law element that ends
+    !! taut (see apply_release_cap). Entries of elements with ea > 0 are ignored. Absent: the
+    !! secant is not bounded.
+    REAL(wp), INTENT(IN), OPTIONAL :: start_stiffness(:)
+    !! Force blend on a tension-only line whose load callbacks carry a linear axial dashpot on
+    !! elements with ea > 0 (the axial damping of a line model): its coefficient BA per element
+    !! (n_elem, N s, >= 0), the dashpot force on node a being (BA/l0) (t . (v_b - v_a)
+    !! - (l/l0) l0_dot) t, with axial_l0_rate the unstretched-length rate l0_dot (n_elem; absent:
+    !! zero). The release cap then covers the dashpot's step-start share too (see
+    !! apply_release_cap). Entries of elements with ea = 0 are ignored. Absent: the cap covers
+    !! the elastic force only.
+    REAL(wp), INTENT(IN), OPTIONAL :: axial_damping(:), axial_l0_rate(:)
+    !! TEST HOOK (unit tests of the tangent; production callers omit it). With probe_q (full
+    !! 3 n_nodes array, the fixed DOFs at their t_{n+1} values) present, the step returns after
+    !! its setup without iterating: probe_R is the residual (3 n_nodes) and probe_K the free-free
+    !! effective tangent (n_free x n_free, free DOFs in ascending order) of the Newton iteration
+    !! at probe_q, exactly as the iteration assembles them (banded or dense path). All three
+    !! are passed together; the state outputs are the t_n state, converged = .FALSE.
+    REAL(wp), INTENT(IN), OPTIONAL :: probe_q(:)
+    REAL(wp), INTENT(OUT), OPTIONAL :: probe_R(:), probe_K(:, :)
 
     INTEGER  :: n_dof, n_elem, n_free, bt, kl, ku, ldab
     INTEGER, POINTER :: free(:), fixed(:), ipiv(:)
@@ -631,6 +705,15 @@ CONTAINS
     REAL(wp), POINTER :: a_eval(:), a_alpha(:), q_alpha(:), v_eval(:), v_alpha(:), fint_eval(:)
     ! q_alpha viewed as (3, n_nodes) nodal coordinates, without a copy
     REAL(wp), POINTER :: q_alpha_nodes(:, :)
+    ! force blend: q_force holds q_{n+1} for the force evaluation, fint_n and load_n the
+    ! step-start internal force and dynamic load; qf, vf (qf_nodes) are the state the internal
+    ! force and the dynamic loads are evaluated at (q_{n+1}, v_{n+1} with the force blend,
+    ! q_alpha, v_alpha without)
+    REAL(wp), POINTER :: q_force(:), q_n_nodes(:, :), fint_n(:), load_n(:)
+    REAL(wp), POINTER :: qf(:), vf(:), qf_nodes(:, :)
+    REAL(wp), POINTER :: tension_n(:), stretch_n(:), chord_n(:, :), stiff_n(:)
+    REAL(wp), POINTER :: dcoef_n(:), rl0dot_n(:), damp_n(:)
+    LOGICAL :: force_blend, release_cap
     LOGICAL :: topo_ok, bw_hit, mb_hit
     INTEGER :: il, jl
     REAL(wp), POINTER :: Kt_eval(:, :), tension_eval(:), load_eval(:), jac_q_eval(:, :), jac_v_eval(:, :)
@@ -661,6 +744,10 @@ CONTAINS
     n_iter = 0
     ErrStat = CD_DYN_OK
     ErrMsg = ''
+    ! Only a warm re-solve of the step whose step-start data the workspace holds may reuse
+    ! them (start_valid): any other call drops them before its first return, so an unarmed
+    ! call that fails early cannot leave an older step's data to a later armed re-solve.
+    IF (PRESENT(workspace)) workspace%start_valid = workspace%start_valid .AND. workspace%guess_armed
     n_dof = SIZE(q)
     has_load_proc = PRESENT(load_proc)
     has_load_band_proc = PRESENT(load_band_proc)
@@ -865,6 +952,28 @@ CONTAINS
       END DO
     END IF
 
+    ! --- force blend: the step-start internal force and dynamic load, the alpha_f share of
+    !     the blended residual (1 - alpha_f) r(q_{n+1}, v_{n+1}) + alpha_f r(q_n, v_n) ---
+    !     A warm re-solve of the same step (the junction coupling re-steps the line from the
+    !     same committed state with moved ends) reuses those of the previous call.
+    force_blend = cfg%force_blend
+    release_cap = .FALSE.
+    IF (force_blend) THEN
+      IF (work%guess_armed .AND. work%start_valid) THEN
+        release_cap = tension_only .AND. alpha_f > CD_ZERO
+      ELSE
+        work%start_valid = .FALSE.
+        CALL start_forces(es, em)
+        IF (es /= 0) THEN
+          CALL fail_callback(ErrStat, ErrMsg, em, es)
+          RETURN
+        END IF
+        work%start_valid = .TRUE.
+      END IF
+    ELSE
+      work%start_valid = .FALSE.
+    END IF
+
     DO il = 1, n_dof
       qk(il) = q_pred(il)
     END DO
@@ -947,6 +1056,11 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'mass band packing failed: '//TRIM(em))
         RETURN
       END IF
+    END IF
+
+    IF (PRESENT(probe_q)) THEN
+      CALL probe_tangent()
+      RETURN
     END IF
 
     r0 = CD_ZERO
@@ -1199,7 +1313,10 @@ CONTAINS
           EXIT
         END IF
       END IF
-      IF (.NOT. cfg%modified_newton) have_eff = .FALSE.
+      ! modified Newton keeps the factorised tangent only while each iterate reduces the
+      ! residual to at most a quarter of the previous one (a frozen tangent converges
+      ! linearly, and a slow contraction would spend the iteration budget)
+      IF (.NOT. cfg%modified_newton .OR. norm > 0.25_wp*norm_before) have_eff = .FALSE.
     END DO
 
     work%resid_first = converged .AND. n_iter == 0 .AND. .NOT. guess_used
@@ -1377,6 +1494,141 @@ CONTAINS
       work%end_valid = CD_All_Finite(work%end_k) .AND. CD_All_Finite(work%end_r)
     END SUBROUTINE end_junction_data
 
+    SUBROUTINE start_forces(es_s, em_s)
+      !! fint_n = f_int(q_n) and load_n = the dynamic load at (q_n, v_n): start_load when the
+      !! caller supplies it, else the force-only callback (or load_proc) evaluated there.
+      INTEGER, INTENT(OUT) :: es_s
+      CHARACTER(*), INTENT(OUT) :: em_s
+      INTEGER :: i
+      es_s = 0
+      em_s = ''
+      CALL CD_Assemble_Cable_Internal_Force(q_n_nodes, elem_conn, l0, ea, tension_only, fint_n, es_s, em_s, &
+                                            topology_validated=topo_ok)
+      IF (es_s /= 0) THEN
+        es_s = CD_DYN_BADINPUT
+        em_s = 'step-start internal-force assembly failed: '//TRIM(em_s)
+        RETURN
+      END IF
+      ! release cap: the step-start tension, stretch and chord of every stretched element (the
+      ! assembly above has validated the connectivity and the element lengths). An element
+      ! with ea = 0 takes the tension of the law its load callback carries (start_tension) and
+      ! the bound of its secant stiffness (start_stiffness).
+      release_cap = tension_only .AND. alpha_f > CD_ZERO
+      IF (release_cap .AND. PRESENT(start_tension)) THEN
+        IF (SIZE(start_tension) /= n_elem) THEN
+          es_s = CD_DYN_BADINPUT
+          em_s = 'start_tension must have shape (n_elem)'
+          RETURN
+        END IF
+        IF (.NOT. CD_All_Finite(start_tension)) THEN
+          es_s = CD_DYN_BADINPUT
+          em_s = 'start_tension must be finite'
+          RETURN
+        END IF
+        IF (PRESENT(start_stiffness)) THEN
+          IF (SIZE(start_stiffness) /= n_elem) THEN
+            es_s = CD_DYN_BADINPUT
+            em_s = 'start_stiffness must have shape (n_elem)'
+            RETURN
+          END IF
+          IF (.NOT. CD_All_Finite(start_stiffness) .OR. ANY(start_stiffness < CD_ZERO)) THEN
+            es_s = CD_DYN_BADINPUT
+            em_s = 'start_stiffness must be finite and non-negative'
+            RETURN
+          END IF
+        END IF
+      END IF
+      IF (release_cap .AND. PRESENT(axial_damping)) THEN
+        IF (SIZE(axial_damping) /= n_elem) THEN
+          es_s = CD_DYN_BADINPUT
+          em_s = 'axial_damping must have shape (n_elem)'
+          RETURN
+        END IF
+        IF (.NOT. CD_All_Finite(axial_damping) .OR. ANY(axial_damping < CD_ZERO)) THEN
+          es_s = CD_DYN_BADINPUT
+          em_s = 'axial_damping must be finite and non-negative'
+          RETURN
+        END IF
+        IF (PRESENT(axial_l0_rate)) THEN
+          IF (SIZE(axial_l0_rate) /= n_elem) THEN
+            es_s = CD_DYN_BADINPUT
+            em_s = 'axial_l0_rate must have shape (n_elem)'
+            RETURN
+          END IF
+          IF (.NOT. CD_All_Finite(axial_l0_rate)) THEN
+            es_s = CD_DYN_BADINPUT
+            em_s = 'axial_l0_rate must be finite'
+            RETURN
+          END IF
+        END IF
+      END IF
+      IF (release_cap) THEN
+        DO i = 1, n_elem
+          BLOCK
+            REAL(wp) :: d(3), ell
+            d = q_n_nodes(:, elem_conn(2, i)) - q_n_nodes(:, elem_conn(1, i))
+            ell = NORM2(d)
+            chord_n(:, i) = d/ell
+            stretch_n(i) = ell - l0(i)
+            tension_n(i) = CD_ZERO
+            stiff_n(i) = HUGE(CD_ONE)
+            dcoef_n(i) = CD_ZERO
+            rl0dot_n(i) = CD_ZERO
+            damp_n(i) = CD_ZERO
+            IF (ea(i) > CD_ZERO .AND. PRESENT(axial_damping)) THEN
+              IF (axial_damping(i) > CD_ZERO) THEN
+                ! the dashpot tension the start load carries, as the callback evaluates it
+                dcoef_n(i) = axial_damping(i)/l0(i)
+                IF (PRESENT(axial_l0_rate)) rl0dot_n(i) = axial_l0_rate(i)/l0(i)
+                damp_n(i) = dcoef_n(i)*(DOT_PRODUCT(chord_n(:, i), v_n(3*elem_conn(2, i) - 2:3*elem_conn(2, i)) - &
+                                                    v_n(3*elem_conn(1, i) - 2:3*elem_conn(1, i))) - ell*rl0dot_n(i))
+              END IF
+            END IF
+            IF (stretch_n(i) > CD_ZERO) THEN
+              IF (ea(i) > CD_ZERO) THEN
+                tension_n(i) = ea(i)*(ell/l0(i) - CD_ONE)
+              ELSE IF (PRESENT(start_tension)) THEN
+                tension_n(i) = MAX(start_tension(i), CD_ZERO)
+                IF (PRESENT(start_stiffness)) stiff_n(i) = start_stiffness(i)
+              END IF
+            END IF
+          END BLOCK
+        END DO
+      END IF
+      DO i = 1, n_dof
+        load_n(i) = CD_ZERO
+      END DO
+      IF (.NOT. (has_load_proc .OR. has_load_band_proc)) RETURN
+      IF (PRESENT(start_load)) THEN
+        IF (SIZE(start_load) /= n_dof) THEN
+          es_s = CD_DYN_BADINPUT
+          em_s = 'start_load must have shape (3 n_nodes)'
+          RETURN
+        END IF
+        DO i = 1, n_dof
+          load_n(i) = start_load(i)
+        END DO
+      ELSE IF (has_load_force_proc) THEN
+        CALL load_force_proc_cb(q_n, v_n, load_n, es_s, em_s)
+        IF (es_s /= 0) THEN
+          em_s = 'step-start dynamic force load failed: '//TRIM(em_s)
+          RETURN
+        END IF
+      ELSE
+        jac_q_eval = CD_ZERO
+        jac_v_eval = CD_ZERO
+        CALL load_proc_cb(q_n, v_n, load_n, jac_q_eval, jac_v_eval, es_s, em_s)
+        IF (es_s /= 0) THEN
+          em_s = 'step-start dynamic load failed: '//TRIM(em_s)
+          RETURN
+        END IF
+      END IF
+      IF (.NOT. CD_All_Finite(load_n)) THEN
+        es_s = CD_DYN_BADINPUT
+        em_s = 'step-start dynamic load is non-finite'
+      END IF
+    END SUBROUTINE start_forces
+
     SUBROUTINE refresh_band_scales()
       !! Diagonal scale and max absolute row sum of the current (unfactored) effective band.
       IF (.NOT. scales_stale) RETURN
@@ -1428,8 +1680,28 @@ CONTAINS
       a_alpha => workspace_ref%a_alpha(1:n_dof)
       q_alpha => workspace_ref%q_alpha(1:n_dof)
       q_alpha_nodes(1:3, 1:n_dof/3) => workspace_ref%q_alpha(1:n_dof)
+      q_force => workspace_ref%q_force(1:n_dof)
+      q_n_nodes(1:3, 1:n_dof/3) => workspace_ref%q_n(1:n_dof)
+      fint_n => workspace_ref%fint_n(1:n_dof)
+      load_n => workspace_ref%load_n(1:n_dof)
+      tension_n => workspace_ref%tension_n(1:n_elem)
+      stretch_n => workspace_ref%stretch_n(1:n_elem)
+      chord_n => workspace_ref%chord_n(1:3, 1:n_elem)
+      stiff_n => workspace_ref%stiff_n(1:n_elem)
+      dcoef_n => workspace_ref%dcoef_n(1:n_elem)
+      rl0dot_n => workspace_ref%rl0dot_n(1:n_elem)
+      damp_n => workspace_ref%damp_n(1:n_elem)
       v_eval => workspace_ref%v_eval(1:n_dof)
       v_alpha => workspace_ref%v_alpha(1:n_dof)
+      IF (cfg%force_blend) THEN
+        qf => workspace_ref%q_force(1:n_dof)
+        qf_nodes(1:3, 1:n_dof/3) => workspace_ref%q_force(1:n_dof)
+        vf => workspace_ref%v_eval(1:n_dof)
+      ELSE
+        qf => workspace_ref%q_alpha(1:n_dof)
+        qf_nodes(1:3, 1:n_dof/3) => workspace_ref%q_alpha(1:n_dof)
+        vf => workspace_ref%v_alpha(1:n_dof)
+      END IF
       fint_eval => workspace_ref%fint_eval(1:n_dof)
       tension_eval => workspace_ref%tension_eval(1:n_elem)
       load_eval => workspace_ref%load_eval(1:n_dof)
@@ -1493,6 +1765,44 @@ CONTAINS
       END DO
     END FUNCTION free_dot
 
+    SUBROUTINE probe_tangent()
+      !! The residual and free-free effective tangent at probe_q (see probe_q).
+      INTEGER :: i, j
+      IF (.NOT. (PRESENT(probe_R) .AND. PRESENT(probe_K))) THEN
+        CALL fail(ErrStat, ErrMsg, 'probe_q needs probe_R and probe_K')
+        RETURN
+      END IF
+      IF (SIZE(probe_q) /= n_dof .OR. SIZE(probe_R) /= n_dof .OR. SIZE(probe_K, 1) /= n_free .OR. &
+          SIZE(probe_K, 2) /= n_free) THEN
+        CALL fail(ErrStat, ErrMsg, 'probe_q, probe_R must have shape (3 n_nodes), probe_K (n_free, n_free)')
+        RETURN
+      END IF
+      IF (direct_banded) THEN
+        CALL eval_dynamic(probe_q, R, es, em, effbandout=eff_band)
+      ELSE
+        CALL eval_dynamic(probe_q, R, es, em, effout=eff)
+      END IF
+      IF (es /= 0) THEN
+        CALL fail_callback(ErrStat, ErrMsg, em, es)
+        RETURN
+      END IF
+      DO i = 1, n_dof
+        probe_R(i) = R(i)
+      END DO
+      probe_K = CD_ZERO
+      DO j = 1, n_free
+        IF (direct_banded) THEN
+          DO i = MAX(1, j - ku), MIN(n_free, j + kl)
+            probe_K(i, j) = eff_band(kl + ku + 1 + i - j, j)
+          END DO
+        ELSE
+          DO i = 1, n_free
+            probe_K(i, j) = eff(free(i), free(j))
+          END DO
+        END IF
+      END DO
+    END SUBROUTINE probe_tangent
+
     SUBROUTINE form_trial(stp)
       !! q_trial = qk, then q_trial(free) += stp*dq.
       REAL(wp), INTENT(IN) :: stp
@@ -1506,9 +1816,10 @@ CONTAINS
     END SUBROUTINE form_trial
 
     SUBROUTINE eval_dynamic(q_eval, Rout, es_e, em_e, effout, effbandout)
-      !! R = M a_alpha + f_int(q_alpha) - f_ext (f_ext_alpha = f_ext, constant). When
+      !! R = M a_alpha + (1-af) r(q_eval, v_eval) + af r(q_n, v_n) with the force blend, else
+      !! M a_alpha + f_int(q_alpha) - f_ext - load(q_alpha, v_alpha) (f_ext constant). When
       !! the OPTIONAL effout is present it also returns the effective tangent
-      !! (1-am)/(beta dt^2) M + (1-af) K_t(q_alpha); when absent only the internal
+      !! (1-am)/(beta dt^2) M + (1-af) K_t(q_eval or q_alpha); when absent only the internal
       !! force is assembled (the residual-only path the line search uses). Host-
       !! associates M, q_pred, q_n, a_n, f_ext, the Chung-Hulbert params, and the mesh.
       REAL(wp), INTENT(IN)  :: q_eval(:)
@@ -1531,6 +1842,11 @@ CONTAINS
         q_alpha(iv) = (CD_ONE - alpha_f)*q_eval(iv) + alpha_f*q_n(iv)
         v_alpha(iv) = (CD_ONE - alpha_f)*v_eval(iv) + alpha_f*v_n(iv)
       END DO
+      IF (force_blend) THEN
+        DO iv = 1, n_dof
+          q_force(iv) = q_eval(iv)
+        END DO
+      END IF
       IF (obj_levels) THEN
         DO il2 = 1, SIZE(fixed)
           IF (.NOT. object_level(il2)) CYCLE
@@ -1543,7 +1859,7 @@ CONTAINS
       END IF
       load_eval = CD_ZERO
       IF (PRESENT(effbandout)) THEN
-        CALL CD_Assemble_Cable_Tangent_Force_Banded_Free(q_alpha_nodes, elem_conn, l0, ea, &
+        CALL CD_Assemble_Cable_Tangent_Force_Banded_Free(qf_nodes, elem_conn, l0, ea, &
                                                          tension_only, free, kl, ku, Kt_band, fint_eval, &
                                                          tension_eval, es_e, em_e, topology_validated=topo_ok, &
                                                          free_map=work%dof_marker(1:n_dof))
@@ -1555,7 +1871,7 @@ CONTAINS
         END IF
         IF (has_load_band_proc) THEN
           ! the callback defines every INTENT(OUT) band entry itself
-          CALL load_band_proc_cb(q_alpha, v_alpha, free, kl, ku, load_eval, jq_band, jv_band, es_e, em_e)
+          CALL load_band_proc_cb(qf, vf, free, kl, ku, load_eval, jq_band, jv_band, es_e, em_e)
           IF (es_e /= 0) THEN
             em_e = 'dynamic banded load failed: '//TRIM(em_e)
             Rout = CD_ZERO
@@ -1572,7 +1888,7 @@ CONTAINS
           END IF
         END IF
       ELSE IF (PRESENT(effout)) THEN
-        CALL CD_Assemble_Cable_Tangent_Force(q_alpha_nodes, elem_conn, l0, ea, &
+        CALL CD_Assemble_Cable_Tangent_Force(qf_nodes, elem_conn, l0, ea, &
                                              tension_only, Kt_eval, fint_eval, tension_eval, es_e, em_e, &
                                              topology_validated=topo_ok)
         IF (es_e /= 0) THEN
@@ -1582,7 +1898,7 @@ CONTAINS
           RETURN
         END IF
       ELSE
-        CALL CD_Assemble_Cable_Internal_Force(q_alpha_nodes, elem_conn, l0, ea, &
+        CALL CD_Assemble_Cable_Internal_Force(qf_nodes, elem_conn, l0, ea, &
                                               tension_only, fint_eval, es_e, em_e, topology_validated=topo_ok)
         IF (es_e /= 0) THEN
           em_e = 'internal-force assembly failed: '//TRIM(em_e)
@@ -1594,7 +1910,7 @@ CONTAINS
       IF (tangent_requested .AND. has_load_proc) THEN
         jac_q_eval = CD_ZERO
         jac_v_eval = CD_ZERO
-        CALL load_proc_cb(q_alpha, v_alpha, load_eval, jac_q_eval, jac_v_eval, es_e, em_e)
+        CALL load_proc_cb(qf, vf, load_eval, jac_q_eval, jac_v_eval, es_e, em_e)
         IF (es_e /= 0) THEN
           em_e = 'dynamic load failed: '//TRIM(em_e)
           Rout = CD_ZERO
@@ -1612,7 +1928,7 @@ CONTAINS
           RETURN
         END IF
       ELSE IF (has_load_force_proc .AND. .NOT. tangent_requested) THEN
-        CALL load_force_proc_cb(q_alpha, v_alpha, load_eval, es_e, em_e)
+        CALL load_force_proc_cb(qf, vf, load_eval, es_e, em_e)
         IF (es_e /= 0) THEN
           em_e = 'dynamic force load failed: '//TRIM(em_e)
           Rout = CD_ZERO
@@ -1629,7 +1945,7 @@ CONTAINS
       ELSE IF (has_load_proc) THEN
         jac_q_eval = CD_ZERO
         jac_v_eval = CD_ZERO
-        CALL load_proc_cb(q_alpha, v_alpha, load_eval, jac_q_eval, jac_v_eval, es_e, em_e)
+        CALL load_proc_cb(qf, vf, load_eval, jac_q_eval, jac_v_eval, es_e, em_e)
         IF (es_e /= 0) THEN
           em_e = 'dynamic load failed: '//TRIM(em_e)
           Rout = CD_ZERO
@@ -1678,6 +1994,18 @@ CONTAINS
           RETURN
         END IF
       END IF
+      IF (force_blend) THEN
+        ! (1 - alpha_f) r(q_{n+1}, v_{n+1}) + alpha_f r(q_n, v_n); the tangent below takes the
+        ! (1 - alpha_f) share of the derivatives at q_{n+1}
+        DO iv = 1, n_dof
+          fint_eval(iv) = (CD_ONE - alpha_f)*fint_eval(iv) + alpha_f*fint_n(iv)
+        END DO
+        IF (has_load_proc .OR. has_load_band_proc) THEN
+          DO iv = 1, n_dof
+            load_eval(iv) = (CD_ONE - alpha_f)*load_eval(iv) + alpha_f*load_n(iv)
+          END DO
+        END IF
+      END IF
       IF (has_added_mass_proc) THEN
         Rout = MATMUL(M_eff_eval, a_alpha) + fint_eval - f_ext - load_eval
       ELSE IF (has_added_mass_band_proc) THEN
@@ -1717,7 +2045,193 @@ CONTAINS
           RETURN
         END IF
       END IF
+      IF (force_blend .AND. release_cap) THEN
+        IF (PRESENT(effbandout)) THEN
+          CALL apply_release_cap(q_eval, Rout, effbandout=effbandout)
+        ELSE IF (PRESENT(effout)) THEN
+          CALL apply_release_cap(q_eval, Rout, effout=effout)
+        ELSE
+          CALL apply_release_cap(q_eval, Rout)
+        END IF
+      END IF
     END SUBROUTINE eval_dynamic
+
+    SUBROUTINE apply_release_cap(q_eval, Rout, effout, effbandout)
+      !! Release cap of the force blend. A tension-only element taut at t_n (tension T_0,
+      !! stretch e_0 = l_n - l0 > 0, chord d_0 = l_n t_0) carries alpha_f T_0 along its
+      !! step-start chord t_0 in the blended residual, a constant force over the step. Over the
+      !! relative displacement d_1 - d_0 of its ends it returns the work alpha_f T_0 p to the
+      !! motion, with the projected shortening p = l_n - t_0 . d_1, not the shortening
+      !! e_0 - e_1 = l_n - |d_1|: a segment that turns as it releases has p well above e_0 - e_1
+      !! (up to l_n + |d_1| for a reversed chord). The end share (1 - alpha_f) T_1 t_1, T_1 the
+      !! tension at t_{n+1}, returns -(1 - alpha_f) T_1 p_1 with p_1 = |d_1| - t_1 . d_0. The
+      !! element itself only released its strain energy W_0 = T_0 e_0/2, so the blend of an
+      !! element that releases (deeply, or turning) within one step can create energy. The cap
+      !! uses an estimate T^_1 of T_1: T^_1 = k e_1 for e_1 > 0 and 0 otherwise, with the secant
+      !! k = T_0/e_0. When alpha_f T_0 p exceeds N = W_0 + (1 - alpha_f) T^_1 p_1 the element
+      !! carries N/p instead of alpha_f T_0 along t_0 (the smaller of the two is kept, so the
+      !! blend is continuous in d_1), so its blend returns at most
+      !! W_0 + (1 - alpha_f)(T^_1 - T_1) p_1 over the step, and never more than without the cap.
+      !! T^_1 vanishes as the end state crosses the rest length, so the cap fades out
+      !! continuously there (a cap on slack end states alone would jump by up to alpha_f T_0).
+      !! For an elastic element T^_1 = T_1: its blend returns at most W_0 over every step (an
+      !! element that ends slack carries the discrete energy gradient W_0/p and returns exactly
+      !! W_0), and the cap acts on a taut end state only when the element turned and
+      !! T_1 < alpha_f/(1 - alpha_f) T_0. An element slack at t_n keeps the force blend.
+      !! N >= W_0/2 always (k e_0 <= T_0), so 4 alpha_f p <= e_0 is a sufficient test of an
+      !! inactive cap. The residual and the tangent are corrected by the difference.
+      !! An element whose axial law a load callback carries (ea = 0, T_0 from start_tension) is
+      !! capped the same way with the same W_0 = T_0 e_0/2 (the energy of the viscoelastic
+      !! springs at rest, an upper bound of the energy below a stiffening loading curve such as
+      !! Syrope's) and k = min(T_0/e_0, k_n), k_n its step-start axial stiffness
+      !! (start_stiffness), which bounds the secant where T_0 is mostly damping or lagged state
+      !! at a small e_0. Its law tension T_1 is not that of a linear spring, so its blend
+      !! returns at most W_0 when (T^_1 - T_1) p_1 <= 0: always when it ends below l0 with no
+      !! law tension, and otherwise not guaranteed, e.g. when it ends above l0 with less law
+      !! tension than T^_1 (zero once the slow branch has taken up the stretch, or below
+      !! Syrope's minimum strain), by up to (1 - alpha_f) k e_1 p_1.
+      !! An elastic element with a linear axial dashpot (axial_damping) also keeps alpha_f T_d,0
+      !! along t_0, T_d,0 the dashpot tension at t_n, and its end share carries
+      !! (1 - alpha_f) T_d,1 t_1 (the dashpot pushes and pulls; it is not tension-only). The
+      !! dashpot stores no energy, so the budget stays W_0. Where the end state lies below the
+      !! band edge l0 + c e_0, c = alpha_f/(1 - alpha_f), the cap covers the dashpot with the
+      !! weight phi = 1 at and below l0, falling linearly to 0 at the band edge: it replaces the
+      !! kept force alpha_f (T_0 + phi T_d,0) by N/p when that is smaller, with
+      !! N = max(W_0 + (1 - alpha_f)(T^_1 + phi T_d,1) p_1, 0), T_d,1 the dashpot tension the
+      !! residual carries at (q_{n+1}, v_{n+1}). Over a step with p > 0 (the cap leaves an
+      !! element that does not shorten along t_0) the blend of such an element then returns at
+      !! most W_0 + (1 - phi) D, D the work of its uncapped blended dashpot
+      !! alpha_f T_d,0 p - (1 - alpha_f) T_d,1 p_1, unless N would be negative (its end share
+      !! alone returns more than W_0; the capped kept force is then zero). At and below l0
+      !! (phi = 1) that is W_0. Above the band edge (phi = 0), and on every element without a
+      !! dashpot, the cap is the one above, so the force-blended dashpot of a taut line keeps the
+      !! standard generalised-alpha treatment. The weight is continuous, so is the capped force;
+      !! the tangent carries dT_d,1/dq_{n+1} through v_{n+1} (gamma/(beta dt)).
+      REAL(wp), INTENT(IN) :: q_eval(:)
+      REAL(wp), INTENT(INOUT) :: Rout(:)
+      REAL(wp), INTENT(INOUT), OPTIONAL :: effout(:, :), effbandout(:, :)
+      INTEGER :: e, na, nb, i, j, gi(6), fi, fj
+      REAL(wp) :: d1(3), l1, e1, e0, t0, p, p1, num, ln, k0, ten1, cosang, dg, delta, t1(3), g(3), blk(3, 3), sgn
+      REAL(wp) :: band, phi, dphi, td1, dv(3), dp1(3), dtd1(3), kc
+      LOGICAL :: taut_end, damped
+      band = alpha_f/(CD_ONE - alpha_f)
+      DO e = 1, n_elem
+        t0 = tension_n(e)
+        IF (.NOT. t0 > CD_ZERO) CYCLE
+        na = elem_conn(1, e)
+        nb = elem_conn(2, e)
+        d1 = q_eval(3*nb - 2:3*nb) - q_eval(3*na - 2:3*na)
+        e0 = stretch_n(e)
+        ! projected shortening p = l_n - t_0 . d_1 (l_n = l0 + e_0); the common case, an element
+        ! that does not release, is decided here without a root
+        p = e0 + (l0(e) - (chord_n(1, e)*d1(1) + chord_n(2, e)*d1(2) + chord_n(3, e)*d1(3)))
+        ! a damped element whose end state lies below the band edge l0 + band e_0
+        damped = dcoef_n(e) > CD_ZERO
+        IF (damped) damped = d1(1)*d1(1) + d1(2)*d1(2) + d1(3)*d1(3) < (l0(e) + band*e0)**2
+        IF (damped) THEN
+          IF (.NOT. p > CD_ZERO) CYCLE
+          l1 = NORM2(d1)
+          IF (.NOT. l1 > CD_ZERO) CYCLE
+          e1 = l1 - l0(e)
+          ln = l0(e) + e0
+          t1 = d1/l1
+          cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
+          p1 = (e1 - e0) + 0.5_wp*ln*((t1(1) - chord_n(1, e))**2 + (t1(2) - chord_n(2, e))**2 + &
+                                      (t1(3) - chord_n(3, e))**2)
+          k0 = MIN(t0/e0, stiff_n(e))
+          ten1 = k0*MAX(e1, CD_ZERO)
+          ! the dashpot weight and its slope along t_1 (zero at and below l0)
+          phi = CD_ONE
+          dphi = CD_ZERO
+          IF (e1 > CD_ZERO) THEN
+            phi = MAX(CD_ONE - e1/(band*e0), CD_ZERO)
+            IF (phi > CD_ZERO) dphi = -CD_ONE/(band*e0)
+          END IF
+          ! the end share's dashpot tension, as the residual evaluates it at (q_eval, v_eval)
+          dv = v_eval(3*nb - 2:3*nb) - v_eval(3*na - 2:3*na)
+          td1 = dcoef_n(e)*(DOT_PRODUCT(t1, dv) - l1*rl0dot_n(e))
+          num = 0.5_wp*t0*e0 + (CD_ONE - alpha_f)*(ten1 + phi*td1)*p1
+          kc = t0 + phi*damp_n(e)
+          dg = MAX(num, CD_ZERO)/p
+          IF (dg >= alpha_f*kc) CYCLE
+          delta = dg - alpha_f*kc
+          Rout(3*na - 2:3*na) = Rout(3*na - 2:3*na) - delta*chord_n(:, e)
+          Rout(3*nb - 2:3*nb) = Rout(3*nb - 2:3*nb) + delta*chord_n(:, e)
+          IF (.NOT. (PRESENT(effout) .OR. PRESENT(effbandout))) CYCLE
+          ! d(delta)/d(x_b) = g, d(delta)/d(x_a) = -g: dp/dd_1 = -t_0, dp_1/dd_1 as above,
+          ! d(phi)/dd_1 = dphi t_1, and dT_d,1/dx_b = (BA/l0)((dv - (t_1 . dv) t_1)/l_1
+          ! + (gamma/(beta dt) - l0_dot/l0) t_1), v_b moving with gamma/(beta dt) x_b
+          g = -alpha_f*damp_n(e)*dphi*t1
+          IF (num > CD_ZERO) THEN
+            dp1 = t1 - (ln/l1)*(chord_n(:, e) - cosang*t1)
+            dtd1 = dcoef_n(e)*((dv - DOT_PRODUCT(t1, dv)*t1)/l1 + (gamma/(beta*dt) - rl0dot_n(e))*t1)
+            g = g + (num/(p*p))*chord_n(:, e) + ((CD_ONE - alpha_f)/p)*((ten1 + phi*td1)*dp1 + phi*p1*dtd1 + &
+                                                                        dphi*td1*p1*t1)
+            IF (e1 > CD_ZERO) g = g + ((CD_ONE - alpha_f)/p)*k0*p1*t1
+          END IF
+        ELSE
+          IF (.NOT. 4.0_wp*alpha_f*p > e0) CYCLE
+          num = 0.5_wp*t0*e0
+          taut_end = d1(1)*d1(1) + d1(2)*d1(2) + d1(3)*d1(3) > l0(e)*l0(e)
+          l1 = CD_ZERO
+          e1 = CD_ZERO
+          ten1 = CD_ZERO
+          IF (taut_end) THEN
+            ! the end share's work: p_1 = |d_1| - t_1 . d_0 = (e_1 - e_0) + l_n (1 - t_1 . t_0),
+            ! with 1 - t_1 . t_0 = |t_1 - t_0|^2/2 (no cancellation at small turns)
+            l1 = NORM2(d1)
+            e1 = l1 - l0(e)
+            taut_end = e1 > CD_ZERO
+          END IF
+          IF (taut_end) THEN
+            ln = l0(e) + e0
+            ! the secant stiffness, bounded for a law element by its step-start axial stiffness
+            k0 = MIN(t0/e0, stiff_n(e))
+            ten1 = k0*e1
+            t1 = d1/l1
+            cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
+            p1 = (e1 - e0) + 0.5_wp*ln*((t1(1) - chord_n(1, e))**2 + (t1(2) - chord_n(2, e))**2 + &
+                                        (t1(3) - chord_n(3, e))**2)
+            num = num + (CD_ONE - alpha_f)*ten1*p1
+          END IF
+          dg = num/p
+          IF (dg >= alpha_f*t0) CYCLE
+          delta = dg - alpha_f*t0
+          Rout(3*na - 2:3*na) = Rout(3*na - 2:3*na) - delta*chord_n(:, e)
+          Rout(3*nb - 2:3*nb) = Rout(3*nb - 2:3*nb) + delta*chord_n(:, e)
+          IF (.NOT. (PRESENT(effout) .OR. PRESENT(effbandout))) CYCLE
+          ! d(delta)/d(x_b) = g, d(delta)/d(x_a) = -g, with dp/dd_1 = -t_0,
+          ! dT_1/dd_1 = k0 t_1 and dp_1/dd_1 = t_1 - (l_n/|d_1|)(t_0 - (t_1 . t_0) t_1)
+          g = (num/(p*p))*chord_n(:, e)
+          IF (taut_end) g = g + ((CD_ONE - alpha_f)/p)*((k0*p1 + ten1)*t1 - &
+                                                        ten1*(ln/l1)*(chord_n(:, e) - cosang*t1))
+        END IF
+        DO j = 1, 3
+          DO i = 1, 3
+            blk(i, j) = chord_n(i, e)*g(j)
+          END DO
+        END DO
+        DO i = 1, 3
+          gi(i) = 3*na - 3 + i
+          gi(3 + i) = 3*nb - 3 + i
+        END DO
+        DO j = 1, 6
+          DO i = 1, 6
+            ! rows of node a carry -delta t_0, columns of node a d(delta)/d(x_a) = -g
+            sgn = MERGE(-CD_ONE, CD_ONE, i <= 3)*MERGE(-CD_ONE, CD_ONE, j <= 3)
+            IF (PRESENT(effout)) THEN
+              effout(gi(i), gi(j)) = effout(gi(i), gi(j)) + sgn*blk(MOD(i - 1, 3) + 1, MOD(j - 1, 3) + 1)
+            ELSE
+              fi = work%dof_marker(gi(i))
+              fj = work%dof_marker(gi(j))
+              IF (fi <= 0 .OR. fj <= 0) CYCLE
+              effbandout(kl + ku + 1 + fi - fj, fj) = effbandout(kl + ku + 1 + fi - fj, fj) + &
+                                                      sgn*blk(MOD(i - 1, 3) + 1, MOD(j - 1, 3) + 1)
+            END IF
+          END DO
+        END DO
+      END DO
+    END SUBROUTINE apply_release_cap
 
   END SUBROUTINE CD_Cable_Gen_Alpha_Step
 
@@ -1799,6 +2313,26 @@ CONTAINS
     CALL ensure_real_vector(work%tension_eval, n_elem, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DYN_OK) RETURN
     CALL ensure_real_vector(work%load_eval, n_dof, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%q_force, n_dof, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%fint_n, n_dof, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%load_n, n_dof, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%tension_n, n_elem, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%stretch_n, n_elem, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_matrix(work%chord_n, 3, n_elem, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%stiff_n, n_elem, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%dcoef_n, n_elem, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%rl0dot_n, n_elem, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%damp_n, n_elem, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DYN_OK) RETURN
     IF (need_band) THEN
       ! a reallocated mass band no longer holds the remembered one

@@ -4,34 +4,34 @@
   "temporal_reference_time_step_s": 0.00015625,
   "primary_nominal_element_length_m": 0.2,
   "primary_time_step_s": 0.0003125,
-  "maximum_primary_spatial_difference_percent": 0.4921365643366542,
-  "maximum_primary_temporal_difference_percent": 0.2837639065583831,
+  "maximum_primary_spatial_difference_percent": 0.5236270564721716,
+  "maximum_primary_temporal_difference_percent": 0.18888172026785752,
   "rows": [
     {
       "period_s": 1.25,
       "radius_m": 0.2,
-      "force_h0p400_dt0p0003125_N": 67.98496359999999,
-      "force_h0p200_dt0p0003125_N": 67.993336,
-      "force_h0p100_dt0p0003125_N": 68.329611,
-      "force_h0p200_dt0p00015625_N": 67.8009414,
-      "force_h0p200_dt0p000625_N": 72.53998779999999,
-      "spatial_difference_h0p400_dt0p0003125_percent": -0.50438952447719,
-      "spatial_difference_h0p200_dt0p0003125_percent": -0.4921365643366542,
-      "temporal_difference_h0p200_dt0p0003125_percent": 0.2837639065583831,
-      "temporal_difference_h0p200_dt0p000625_percent": 6.9896469018643925
+      "force_h0p400_dt0p0003125_N": 68.15018140000001,
+      "force_h0p200_dt0p0003125_N": 67.9673104,
+      "force_h0p100_dt0p0003125_N": 68.32507899999999,
+      "force_h0p200_dt0p00015625_N": 67.8391746,
+      "force_h0p200_dt0p000625_N": 72.2422804,
+      "spatial_difference_h0p400_dt0p0003125_percent": -0.25597862828666473,
+      "spatial_difference_h0p200_dt0p0003125_percent": -0.5236270564721716,
+      "temporal_difference_h0p200_dt0p0003125_percent": 0.18888172026785752,
+      "temporal_difference_h0p200_dt0p000625_percent": 6.490506150704244
     },
     {
       "period_s": 3.5,
       "radius_m": 0.2,
-      "force_h0p400_dt0p0003125_N": 52.3676382,
-      "force_h0p200_dt0p0003125_N": 52.3627916,
-      "force_h0p100_dt0p0003125_N": 52.34125759999999,
-      "force_h0p200_dt0p00015625_N": 52.3462366,
-      "force_h0p200_dt0p000625_N": 54.1330478,
-      "spatial_difference_h0p400_dt0p0003125_percent": 0.05040115811051929,
-      "spatial_difference_h0p200_dt0p0003125_percent": 0.041141541085191115,
-      "temporal_difference_h0p200_dt0p0003125_percent": 0.03162596028919464,
-      "temporal_difference_h0p200_dt0p000625_percent": 3.4134473002401142
+      "force_h0p400_dt0p0003125_N": 52.3714018,
+      "force_h0p200_dt0p0003125_N": 52.35406759999999,
+      "force_h0p100_dt0p0003125_N": 52.345151599999994,
+      "force_h0p200_dt0p00015625_N": 52.3533266,
+      "force_h0p200_dt0p000625_N": 53.9582166,
+      "spatial_difference_h0p400_dt0p0003125_percent": 0.0501482930083001,
+      "spatial_difference_h0p200_dt0p0003125_percent": 0.01703309614638552,
+      "temporal_difference_h0p200_dt0p0003125_percent": 0.0014153828383290867,
+      "temporal_difference_h0p200_dt0p000625_percent": 3.0654976564564618
     }
   ]
 }

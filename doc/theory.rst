@@ -1280,7 +1280,8 @@ and the residual is evaluated at the intermediate states
               - \mathbf{f}_\text{ext}(\mathbf{q}_\alpha, \mathbf{v}_\alpha, t_\alpha),
    \qquad (\cdot)_\alpha = (1 - \alpha_f)(\cdot)_{n+1} + \alpha_f(\cdot)_n .
 
-Time-dependent loads (waves) are evaluated at :math:`t_\alpha`. The Hermite path blends the
+On the finite-EI path time-dependent loads (waves) are then evaluated at :math:`t_\alpha`; the
+``EI = 0`` path holds the fluid fields over the step (below). By default both paths blend the
 *forces* instead (``alpha_force_blend``, default ``True``; ``False`` selects the form above),
 
 .. math::
@@ -1290,15 +1291,145 @@ Time-dependent loads (waves) are evaluated at :math:`t_\alpha`. The Hermite path
               + \alpha_f\,\mathbf{r}(\mathbf{q}_n, \mathbf{v}_n, t_n),
    \qquad \mathbf{r} = \mathbf{f}_\text{int} - \mathbf{f}_\text{ext},
 
-with the same accuracy and tangent. Its position and tangent-vector DOFs rotate with the line,
-and a blended configuration :math:`\mathbf{q}_\alpha` would shorten the tangents of a rotating
-element, a spurious stretch of order :math:`\alpha_f(1 - \alpha_f)(\omega\Delta t)^2 EA` that
-raises the mean tension at large time steps. :math:`\mathbf{r}_n` is the previous step's
-converged force, reused unless the state or the load configuration changed in between. Since it
-enters every later step, the accepted state is taken one Newton correction beyond the tolerance
-(the last factorisation reused), so a loose Newton tolerance does not bias the response. Both
-forms converge to the same response; the force blend removes the rotation-driven bias (see
-``alpha_force_blend`` in :doc:`options`). The effective tangent is
+with the same accuracy and tangent. On the Hermite path the position and tangent-vector DOFs
+rotate with the line, and a blended configuration :math:`\mathbf{q}_\alpha` would shorten the
+tangents of a rotating element, a spurious stretch of order
+:math:`\alpha_f(1 - \alpha_f)(\omega\Delta t)^2 EA` that raises the mean tension at large time
+steps. There :math:`\mathbf{r}_n` is the previous step's converged force, reused unless the state
+or the load configuration changed in between. Since it enters every later step, the accepted
+state is taken one Newton correction beyond the tolerance (the last factorisation reused), so a
+loose Newton tolerance does not bias the response. Both forms converge to the same response; the
+force blend removes the rotation-driven bias (see ``alpha_force_blend`` in :doc:`options`).
+
+On the ``EI = 0`` path the force blend covers the axial force of the elements and every
+dynamic load: axial damping, the viscoelastic and Syrope laws, seabed contact, damping and
+friction, Morison drag, Froude–Krylov and buoyancy loads. Added mass stays at
+:math:`(\mathbf{q}_\alpha, \mathbf{a}_{\alpha_m})`. :math:`\mathbf{r}_n` is evaluated afresh at
+the committed state of every step, with the viscoelastic and Syrope elements at their committed
+internal state, so the scheme carries no extra state and a restart is exact; a re-solve of the
+same step from the same state (the junction coupling) reuses it. The fluid fields of an
+``EI = 0`` line (current, wave velocity and acceleration, and the waterline) are held over the
+step: before the step the host (the standalone driver, or the coupling host) samples them for
+the end of the step, :math:`t_{n+1}`, at the committed node positions, and every load
+evaluation of the step uses them. Both shares of the force blend therefore see the fields of
+:math:`t_{n+1}`, so :math:`\mathbf{r}_n` is :math:`\mathbf{r}(\mathbf{q}_n, \mathbf{v}_n)` with
+those fields rather than with the fields of :math:`t_n`, and the configuration blend evaluates
+the loads with them at :math:`(\mathbf{q}_\alpha, \mathbf{v}_\alpha)` rather than at
+:math:`t_\alpha`, as it did before the force blend. The finite-EI path instead evaluates its
+wave loads at :math:`t_{n+1}` for the end share and reuses its :math:`\mathbf{r}_n`, evaluated at
+its own :math:`t_n` in the previous step. The configuration blend fails at slack–taut
+transitions. A tension-only element is a
+one-sided spring, and the residual sets its force at :math:`\mathbf{q}_\alpha`; the end state
+:math:`\mathbf{q}_{n+1} = (\mathbf{q}_\alpha - \alpha_f\mathbf{q}_n)/(1 - \alpha_f)` extrapolates
+past it. A segment slack at :math:`t_n` that carries a tension at :math:`t_\alpha` thus ends the
+step stretched by :math:`\alpha_f/(1 - \alpha_f)` of its former slack on top: with
+:math:`\rho_\infty = 0.4` a 2 m segment of a light, axially stiff cable (80 kg/m, EA 8e8 N) that
+was 0.2 m slack reports about 30 MN. A mass dropped 1 m onto a tension-only spring
+(:math:`\omega = 1000` rad/s) peaks at 6.9 MN at :math:`\Delta t` = 0.1 s with the configuration
+blend, against the resolved 0.35 MN; the force blend gives 5.7 kN, the under-resolved impact
+dissipated as at :math:`\rho_\infty = 0`.
+
+**Release cap.** The force blend alone still creates energy when a taut element releases
+within one step. An element with tension :math:`T_n`, stretch :math:`e_n = l_n - l_0 > 0` and
+chord :math:`\mathbf{d}_n = l_n \mathbf{t}_n` at :math:`t_n` keeps :math:`\alpha_f T_n` along
+:math:`\mathbf{t}_n` for the whole step, a constant force. Over the relative displacement
+:math:`\mathbf{d}_{n+1} - \mathbf{d}_n` of its ends it returns the work :math:`\alpha_f T_n p` to
+the motion, with the projected shortening :math:`p = l_n - \mathbf{t}_n \cdot \mathbf{d}_{n+1}`.
+This is not the shortening :math:`e_n - e_{n+1}` of the element: since
+:math:`p = (e_n - e_{n+1}) + l_{n+1}(1 - \mathbf{t}_n \cdot \mathbf{t}_{n+1})`, a segment that
+turns as it releases moves much further against that force than it shortens. The end share
+:math:`(1 - \alpha_f) T_{n+1} \mathbf{t}_{n+1}` returns :math:`-(1 - \alpha_f) T_{n+1} p_{n+1}`,
+with :math:`p_{n+1} = l_{n+1} - \mathbf{t}_{n+1} \cdot \mathbf{d}_n`. The element released only
+its strain energy :math:`W_n = \tfrac{1}{2} T_n e_n`. An element that ends slack
+(:math:`T_{n+1} = 0`) therefore creates energy once :math:`p > e_n/(2\alpha_f)`: along a fixed
+chord, a release deeper than :math:`e_n (1/(2\alpha_f) - 1)` (0.75 :math:`e_n` at
+:math:`\rho_\infty = 0.4`); a nearly unstretched segment that turns by 90° returns about
+:math:`\alpha_f T_n l_n`, hundreds of times :math:`W_n`. On a slack light cable this feeds a
+sustained rattle of single-step tension spikes. The cap bounds the work of the element's blended
+force by :math:`W_n`: along :math:`\mathbf{t}_n` the element carries the smaller of
+:math:`\alpha_f T_n` and :math:`(W_n + (1 - \alpha_f) T_{n+1} p_{n+1})/p`, which is the discrete
+energy gradient :math:`W_n/p` when it ends slack, and the residual and the tangent take the
+difference (:math:`\partial p/\partial \mathbf{d}_{n+1} = -\mathbf{t}_n`). With
+:math:`T_{n+1} = T_n e_{n+1}/e_n`, the tension of a linear element, the cap fades out as the end
+state crosses the rest length, so the residual stays continuous in :math:`\mathbf{q}_{n+1}`. A
+cap on the slack end states alone would jump there, by up to :math:`\alpha_f T_n` for a turned
+element. The cap does not act on an element that ends above :math:`\alpha_f/(1 - \alpha_f)\,T_n`
+(0.4 :math:`T_n`), nor on one that keeps its direction and ends taut, nor on one slack at
+:math:`t_n`: those elements, every element going taut (where the force blend dissipates), and
+every line that allows compression keep the force blend. In the slack-cable case above the
+internal forces created 2.7e8 J over 20 s with the configuration blend, 6.7e7 J with the force
+blend alone, 0.19 J with a cap on :math:`e_n - e_{n+1}` (the turn of the releasing segments) and
+4e-4 J (round-off) with the projected cap. The fairlead peak is 0.10 MN. The snap is not
+resolved in time: with the cap the peak ranges from 0.10 to 0.18 MN over :math:`\Delta t` from
+2.5 to 0.25 ms, against 0.13 to 0.19 MN at :math:`\rho_\infty = 0`. For a linear element the
+force blend and the cap reduce to the configuration blend, so the linear spectral properties and
+the second-order accuracy are unchanged.
+
+The segments whose tension comes from a constitutive law, the viscoelastic and Syrope segments
+(whose law enters the step as a dynamic load), are capped in the same way: :math:`T_n` is the
+law's tension at the committed state, the force :math:`\mathbf{r}_n` carries, with the same
+:math:`e_n` and :math:`W_n = \tfrac{1}{2} T_n e_n`. For the viscoelastic law at rest :math:`W_n`
+is the energy of its two springs, which both carry :math:`T_n` and whose stretches add up to
+:math:`e_n`; for the Syrope law, whose loading curve stiffens, it bounds the energy below the
+curve from above. A law's tension is not proportional to the stretch: damping or the lagged
+internal state can carry :math:`T_n` at a vanishing :math:`e_n`, where the secant
+:math:`T_n/e_n` is unbounded and the cap would switch off within a band of width about
+:math:`e_n`, nearly a jump for the Newton iteration. The cap therefore estimates the end
+tension as :math:`\hat T_{n+1} = k\,e_{n+1}` with :math:`k = \min(T_n/e_n, k_n)`, :math:`k_n`
+the law's axial stiffness at the committed state (:math:`EA_D/l_0` for the viscoelastic law,
+:math:`K_1/l_0 = (\alpha + \beta T_\text{mean})/l_0` for Syrope). In general the blend of an
+element returns at most :math:`W_n + (1 - \alpha_f)(\hat T_{n+1} - T_{n+1})\,p_{n+1}` over the
+step, :math:`T_{n+1}` its actual end tension, and never more than without the cap. For an
+elastic segment the two tensions coincide and the bound is :math:`W_n`. A law segment that ends
+below :math:`l_0` with no law tension returns at most :math:`W_n` as well; one that ends above
+:math:`l_0` with less law tension than the estimate (zero once the slow branch has taken up the
+stretch, or below Syrope's minimum strain) can return up to
+:math:`(1 - \alpha_f)\,k\,e_{n+1} p_{n+1}` more. With the light cable above made lightly damped
+viscoelastic (EA 8e8 | 1.6e9 N, BA 1e8 | 1e6 N s) the anchor peaks at 0.085 MN at
+:math:`\Delta t` = 0.1 s with the cap on its
+segments (the snap is not resolved at that step, so the peak depends on round-off: other
+compilers and platforms give other values) and at 0.145 MN without it, against 0.082 to
+0.095 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
+surge that goes slack peaks at 1.64 MN at 0.1 s, against 1.78 MN at 1 and 2.5 ms, with or
+without the cap.
+
+An elastic segment with axial damping (``BA``) also keeps :math:`\alpha_f T_{d,n}` along
+:math:`\mathbf{t}_n`, :math:`T_{d,n}` the tension of its dashpot at :math:`t_n`. A segment that
+extends at :math:`t_n` and releases within the step carries that force against the shortening
+as well: in the test chain (dashpot tension 1.6 to 62 times the elastic one) the blend of a
+segment that turns and releases returned up to 2750 :math:`W_n` with only its elastic share
+capped.
+The dashpot pushes as well as pulls, so its end share
+:math:`(1 - \alpha_f) T_{d,n+1}\mathbf{t}_{n+1}` acts at a slack end state too, and it stores no
+energy, so the budget stays :math:`W_n`. The cap covers the dashpot with a weight :math:`\phi`
+that is 1 while the end state is at or below :math:`l_0` and falls linearly to 0 at
+:math:`l_0 + c\,e_n`, :math:`c = \alpha_f/(1 - \alpha_f)` (the end stretch below which the cap
+can act on an elastic segment): the kept force :math:`\alpha_f (T_n + \phi T_{d,n})` is replaced
+by :math:`N/p` when that is smaller, with
+:math:`N = \max(W_n + (1 - \alpha_f)(\hat T_{n+1} + \phi T_{d,n+1})\,p_{n+1}, 0)` and
+:math:`T_{d,n+1}` the dashpot tension the residual carries at
+:math:`(\mathbf{q}_{n+1}, \mathbf{v}_{n+1})`; the tangent carries its dependence on
+:math:`\mathbf{q}_{n+1}` through :math:`\mathbf{v}_{n+1}` (the factor
+:math:`\gamma/(\beta\Delta t)`). Over a step in which it shortens along :math:`\mathbf{t}_n`
+(:math:`p > 0`; the cap leaves the other steps alone) the blend of such a segment then returns
+at most :math:`W_n + (1 - \phi) D`, :math:`D = \alpha_f T_{d,n} p - (1 - \alpha_f)
+T_{d,n+1} p_{n+1}` the work of its uncapped blended dashpot, except when the end share alone
+returns more than :math:`W_n` (:math:`N` would be negative; the capped kept force is then
+zero). At
+and below :math:`l_0` that is :math:`W_n`. Above :math:`l_0 + c\,e_n` the cap is the elastic one,
+so the force-blended dashpot of a taut segment keeps the standard generalised-α treatment, under
+which a linear dashpot is dissipative; :math:`\phi` is continuous, and so is the capped force.
+The viscoelastic law keeps its total tension, dashpots included, as :math:`T_n` (above).
+
+The one-sided seabed contact is not capped. A node that leaves the floor within a step keeps
+:math:`\alpha_f` of its step-start contact force :math:`N_n` for the whole step: over a lift-off
+distance :math:`d` it returns at most :math:`\alpha_f N_n d` to the motion, against the energy
+:math:`\tfrac{1}{2} N_n g_n` of the penalty spring at the penetration :math:`g_n` (millimetres).
+The excess is the step-start support acting for :math:`\alpha_f` of a step longer than it should,
+an impulse of at most :math:`\alpha_f N_n \Delta t` per lift-off that vanishes with
+:math:`\Delta t`; the contact law's sloped-floor normal and the friction anchors, which the step
+does not see, leave no energy bound as simple as the segments'. Seabed damping and friction are
+dissipative and keep the plain force blend as well. The effective tangent is
 
 .. math::
 
@@ -1393,9 +1524,34 @@ partly subdivided state is ever committed.
 **Step size.** Being implicit, the scheme is not bound by the explicit axial-wave limit. In the
 snap-load verification a slack line snapping to about 10 MN integrates stably at
 :math:`\Delta t = 20\,\mathrm{ms}`, well above the explicit limit of 3.2 ms, with the peak
-within 2.7% of a 2 ms reference (:doc:`validation`). The time step must still resolve the
+within 1.5% of a 0.5 ms reference (:doc:`validation`). The time step must still resolve the
 response of interest and, for explicitly integrated points and bodies (below), their own
-stability limit.
+stability limit. The standalone driver audits every ``EI = 0`` line on the initial state and at
+each output step, and reports at the end of the run:
+
+- the largest turn of the chord of a taut segment in one step. Above 1 deg it prints a note:
+  against a 3.125 ms reference on chain catenaries under 5 m heave, 10 m surge and 15 m sway
+  and on a light laid cable under 10 m sway, the mean and standard deviation of the fairlead
+  tension err by 0.9 % at 1.2 deg per step (sway, standard deviation), and by 0.6 % at
+  1.4 deg and 1.3 % at 2.9 deg (heave, mean), in proportion with the turn;
+- segments that go from slack to taut above the initial tension in one step while the axial
+  wave crosses a segment more than once per step (:math:`\Delta t\,c/l_0 > 1`,
+  :math:`c = \sqrt{EA/m}` with the dynamic stiffness of the segment, :math:`EA_D` of a viscoelastic
+  segment and :math:`\alpha + \beta T` of a Syrope one): the snap peaks are then not resolved in
+  time, and the note asks for a confirmation at a smaller ``dtM``;
+- non-physical tension spikes. The tension of a segment at one step (its elastic tension, or the
+  tension of its viscoelastic or Syrope law at the committed state) is a spike when it exceeds
+  four times its own tension one step before and one step after, ten times the largest
+  tension anywhere on the line one step before and one step after, and the largest tension of
+  the initial state. A physical snap or tension wave persists over the axial transit time and is
+  shared by the neighbouring segments, so no line carries such an isolated single-step peak.
+  The first spike of a line is reported as a warning with its segment, tension and time, at most
+  once per line, and the run summary gives the count. Over the 746 decks of a dynamics
+  robustness campaign it warns in none of the 704 runs that complete. Applied to the same
+  decks' configuration-blend results it flags 37 of the 49 runs whose segment tensions were 3
+  to 370 times those of the force blend, and 1 of the 158 runs within 25 % of them. Spikes
+  that persist over several steps (a rattle at :math:`\rho_\infty` near 1) are left to the
+  ``maxStrain`` guard and the ``rhoInf`` note.
 
 Attached objects and line ends
 ------------------------------
@@ -1566,7 +1722,7 @@ added mass, gyroscopic terms, hydrostatics, drag and seabed contact, and the lin
 The iteration is a multilevel Newton. For a trial :math:`\mathbf{x}` every attached line is
 stepped from its committed state with the resulting end motion prescribed, and returns its
 reaction at the alpha level, :math:`\mathbf{f}_e = -\mathbf{R}_E` (the end rows of its own
-residual :math:`\mathbf{M}\mathbf{a}_{\alpha_m} + \mathbf{f}_\text{int}(\mathbf{q}_{\alpha_f}) - \mathbf{f}_\text{ext}`),
+residual :math:`\mathbf{M}\mathbf{a}_{\alpha_m} + (1 - \alpha_f)\,\mathbf{r}_{n+1} + \alpha_f\,\mathbf{r}_n`),
 so the end-node inertia, drag and added mass enter exactly, and its condensed dynamic end
 stiffness :math:`\mathbf{K}_e = \mathbf{S}_{EE} - \mathbf{S}_{EF}\mathbf{S}_{FF}^{-1}\mathbf{S}_{FE}`
 of the step's effective tangent :math:`\mathbf{S}`, the exact implicit-function derivative of
