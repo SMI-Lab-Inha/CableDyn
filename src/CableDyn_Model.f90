@@ -25,6 +25,7 @@ MODULE CableDyn_Model
   USE CableDyn_Line, ONLY: CD_Nodal_Seabed_Stiffness
   USE CableDyn_CableElem, ONLY: CD_Compute_Cable_Element
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Normal_Contact, CD_Seabed_Contact_Gate, &
+                                    CD_SEABED_CONTACT_BLEND, &
                                     CD_Seabed_Friction_Stick_Slip, CD_Seabed_Friction_Aniso, &
                                     CD_Seabed_Friction_Mu_Dir, CD_FRICTION_STICK_SLIP
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_Bathymetry_Is_Initialized, &
@@ -90,6 +91,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Get_Model_EndNodeMassDiag
   PUBLIC :: CD_Get_Model_EndNodeAddedMass
   PUBLIC :: CD_Get_Model_EndNodeTangent
+  PUBLIC :: CD_Model_Seabed_Point_Load
   PUBLIC :: CD_Set_Model_EndQuery
   PUBLIC :: CD_Get_Model_EndQuery
   PUBLIC :: CD_Update_Model_SegmentLength
@@ -6979,6 +6981,72 @@ CONTAINS
     CALL seabed_normal_damping_terms(gap_n, vn, model%seabed_cn(node), damping, damp_dgap, dn_dvn)
     dn_dv = dn_dvn*nvec
   END SUBROUTINE seabed_normal_velocity_gradient
+
+  SUBROUTINE CD_Model_Seabed_Point_Load(model, x, vel, k_n, c_n, in_contact, force, jac_q, jac_v, ErrStat, ErrMsg)
+    !! The line's own nodal seabed law evaluated for a point that is not one of its nodes (a
+    !! Free/Connect point the line is attached to): normal stiffness k_n [N/m] and one-sided
+    !! normal damping c_n [N.s/m] against this model's floor (flat or bathymetry, along the
+    !! surface normal on a slope, with the crease rounding), exactly as a line node with those
+    !! coefficients. force is the seabed load on the point, jac_q = -d(force)/dq and
+    !! jac_v = -d(force)/dv its residual tangents. in_contact is .FALSE. (and every output
+    !! exactly zero) when the model has no seabed or the point is clear of the contact.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: x(3), vel(3), k_n, c_n
+    LOGICAL, INTENT(OUT) :: in_contact
+    REAL(wp), INTENT(OUT) :: force(3), jac_q(3, 3), jac_v(3, 3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: z_floor, dfdx, dfdy, curv(3), gap, normal, tangent, gap_n, vn, nvec(3)
+    REAL(wp) :: damp_force, damp_dgap, damp_dvz
+    LOGICAL :: sloped
+    INTEGER :: a, b
+
+    in_contact = .FALSE.
+    force = CD_ZERO
+    jac_q = CD_ZERO
+    jac_v = CD_ZERO
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%has_seabed) RETURN
+    IF (.NOT. (k_n > CD_ZERO .OR. c_n > CD_ZERO)) RETURN
+    IF (model%has_bathymetry) THEN
+      CALL model_floor_gradient(model, x(1), x(2), z_floor, dfdx, dfdy, ErrStat, ErrMsg, curvature=curv)
+      IF (ErrStat /= CD_MODEL_OK) RETURN
+    ELSE
+      z_floor = model%seabed_z_floor
+      dfdx = CD_ZERO
+      dfdy = CD_ZERO
+      curv = CD_ZERO
+    END IF
+    gap = z_floor - x(3)
+    ! The normal penetration is the vertical one over s >= 1, so a point more than the
+    ! touchdown blend above the floor (vertically) is clear of every term below.
+    IF (gap <= -CD_SEABED_CONTACT_BLEND*SQRT(CD_ONE + dfdx*dfdx + dfdy*dfdy)) RETURN
+    IF (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO .OR. ANY(ABS(curv) > CD_ZERO)) THEN
+      CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, k_n, force, jac_q, curvature=curv)
+    ELSE
+      CALL CD_Seabed_Normal_Law(gap, k_n, normal, tangent)
+      force(3) = normal
+      jac_q(3, 3) = tangent
+    END IF
+    IF (c_n > CD_ZERO) THEN
+      CALL node_contact_normal(model, x(1), x(2), x(3), vel, gap_n, vn, nvec, sloped, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_MODEL_OK) THEN
+        force = CD_ZERO
+        jac_q = CD_ZERO
+        RETURN
+      END IF
+      CALL seabed_normal_damping_terms(gap_n, vn, c_n, damp_force, damp_dgap, damp_dvz)
+      force = force + damp_force*nvec
+      DO b = 1, 3
+        DO a = 1, 3
+          jac_q(a, b) = jac_q(a, b) + damp_dgap*nvec(a)*nvec(b)
+          jac_v(a, b) = -damp_dvz*nvec(a)*nvec(b)
+        END DO
+      END DO
+    END IF
+    in_contact = .TRUE.
+  END SUBROUTINE CD_Model_Seabed_Point_Load
 
   PURE SUBROUTINE seabed_normal_damping_terms(gap, vz, c_n, force, dforce_dgap, dforce_dvz)
     !! One-sided normal seabed damping at normal penetration gap and normal velocity vz

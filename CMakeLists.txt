@@ -978,6 +978,14 @@ target_link_libraries(test_deck_massless_connect PRIVATE cabledyn_core)
 add_test(NAME deck_massless_connect COMMAND test_deck_massless_connect WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(deck_massless_connect PROPERTIES LABELS "fortran;driver;integration;dynamic")
 
+# Seabed contact of Free/Connect points: a clump weight rests on its own footprint in the
+# statics and stays at rest in the monolithic and staggered marches, on a flat and a sloped
+# seabed; the fold note of an EI = 0 line reaches the OpenFAST aggregate's line report.
+add_executable(test_point_seabed_contact tests/test_point_seabed_contact.f90)
+target_link_libraries(test_point_seabed_contact PRIVATE cabledyn_core)
+add_test(NAME point_seabed_contact COMMAND test_point_seabed_contact WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(point_seabed_contact PROPERTIES LABELS "fortran;driver;integration;dynamic;static")
+
 add_executable(test_openfast_shell tests/test_openfast_shell.f90)
 target_link_libraries(test_openfast_shell PRIVATE cabledyn_core)
 add_test(NAME openfast_shell COMMAND test_openfast_shell)
@@ -2090,6 +2098,33 @@ add_test(NAME driver_advisories
     -DSEABED_DECK=${CMAKE_CURRENT_SOURCE_DIR}/examples/chain_catenary_shallow_30m.dat
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_advisories.cmake)
 set_tests_properties(driver_advisories PROPERTIES LABELS "fortran;driver;integration")
+# The fold note of an EI = 0 line, once per folded line and never on a usual layout: a current
+# that pushes the grounded run 20 m past its anchor (TMax = 0, the line-model route), a seabed
+# sloping down past the anchor (static run over a bathymetry), and a grounded chain that does
+# not fold.
+add_test(NAME driver_ei0_fold_note_current
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ei0_hairpin_current.dat|hairpin"
+    "-DONCE=Note: line 1: the static layout carries the grounded run 20\\.[0-9]+ m past its anchor, where it folds back;the current drives the run along the seabed, which holds it only by friction"
+    "-DMUST_MATCH=seabed friction or a shorter line prevents it"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_fold_note_current
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_ei0_fold_note_current PROPERTIES LABELS "fortran;driver;integration;static")
+add_test(NAME driver_ei0_fold_note_slope
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ei0_fold_slope.dat|slope"
+    "-DONCE=Note: line 1: the static layout carries the grounded run 2[0-9]\\.[0-9]+ m past its anchor, where it folds back;the seabed slope drives the run downhill"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_fold_note_slope
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_ei0_fold_note_slope PROPERTIES LABELS "fortran;driver;integration;static")
+add_test(NAME driver_ei0_no_fold_note
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/examples/chain_catenary_shallow_30m.dat|shallow"
+    "-DONCE=converged run written"
+    "-DMUST_NOT=folds back|a hairpin"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_no_fold_note
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_ei0_no_fold_note PROPERTIES LABELS "fortran;driver;integration;static")
 # A clamped finite-EI cable with a buoyant section on a Rigid6 body: the body static solve
 # holds the objects at their deck poses, warns once, and reports no balanced clamped end loads.
 add_test(NAME driver_clamped_buoyant_held

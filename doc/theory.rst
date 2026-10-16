@@ -1070,6 +1070,30 @@ component :math:`w\sin\theta` per unit length, and a run pushed down the slope i
 is compressed there. On the Hermite path the contact acts on the nodal position DOFs only, not
 on the tangent DOFs.
 
+**Free and Connect points.** A clump weight or a buoy (a ``Free`` or ``Connect`` point with
+``Mass`` or ``Vol``) has its own seabed contact, the line law above with the stiffness
+:math:`k_p = k_\text{Bot} A` and the damping :math:`c_p = c_\text{Bot} A` over its contact
+footprint
+
+.. math::
+
+   A = V^{2/3}, \qquad V = \begin{cases} \text{Vol}, & \text{Vol} > 0, \\
+   \text{Mass}/\rho_s, & \text{otherwise}, \end{cases}
+
+the area of a cube of the point's volume (the OrcaFlex 3D-buoy default contact area, volume
+over height, for a cube), with :math:`\rho_s = 7850\ \mathrm{kg/m^3}`: a clump declared by its
+mass alone, its buoyancy left out, takes the volume of solid steel of that mass. A point with
+neither (a massless line junction) has no footprint. Without it only the end nodes of the
+attached lines held a point on the bed, over their tributary length: a 50 t clump between two
+polyester lines (``kBot = 1e5``) sank 2.8 m into the seabed; on its 3.44 m² footprint it rests
+0.95 m deep, within the 1.43 m that its weight alone would press it in, and the lines no longer
+hang it from the seabed. MoorDyn points have no seabed contact. The contact acts along the
+surface normal of a sloped or rounded bathymetry, in the point static equilibrium and in the
+monolithic and staggered point steps alike (in the staggered step its stiffness and damping are
+linearly implicit, like the end blocks of the attached lines), so a grounded point starts at
+rest. The contact is frictionless: the point routes reject ``frictionMu``. A point clear of the
+seabed sees exactly no contact load, and its results are unchanged.
+
 Static equilibrium
 ------------------
 
@@ -1135,8 +1159,26 @@ march) enters the static equilibrium as Morison drag on the line at rest, so the
 offset is part of the initial condition. ``Connect`` and ``Free`` points are then placed at
 their static force balance: a trust-region Newton iteration on the point positions whose
 residual sums the attached lines' end forces (each line re-solved for the moving ends), the
-point's weight and buoyancy, and its current drag. It is the rigid-body equilibrium solve
-described under *Rigid-body initial condition* below, with points as the only unknowns.
+point's weight and buoyancy, its current drag, and its own seabed contact (see Seabed
+contact above). It is the rigid-body equilibrium solve described under *Rigid-body initial
+condition* below, with points as the only unknowns.
+
+A tension-only line on a frictionless seabed can reach a folded (hairpin) equilibrium: a
+current toward the anchor, or a seabed falling past it, drives the grounded run beyond the
+anchor, and the run folds back to it with zero tension at the fold; a slack line can likewise
+be laid out and back. The equilibrium is kept, and the driver prints one note per such line,
+on every ``EI = 0`` route (static, ``TMax = 0`` and the dynamic initial condition, the point
+and multibody systems, and the line report of the OpenFAST aggregate), naming the fold and its
+cause at the fold node (the current, the seabed slope, or a slack run): ``the static layout
+carries the grounded run ... m past its anchor, where it folds back (a hairpin)`` when grounded
+nodes lie more than 1 % of the horizontal span plus 0.5 m beyond a grounded end whose other
+end is suspended, measured along the horizontal chord (the criterion of the finite-EI note
+below), or ``the static layout folds the grounded run back on itself (a ... deg turn at node
+...)`` when the run turns by more than 150° at a node whose two neighbours are also grounded
+(within 5 cm of the floor). Seabed friction holds the run in a current, but the static solve
+applies it against a deck current only, so on a slope only a shorter line prevents the fold.
+The note never changes a result. No example deck and no ``EI = 0`` line of the statics test
+matrices prints it except the folded layouts it describes.
 
 Hermite path
 ~~~~~~~~~~~~
@@ -1695,7 +1737,8 @@ Deck ``POINTS``, ``BODIES``, and ``RODS`` records follow the MoorDyn object mode
 - **Fixed, coupled, and vessel points** prescribe the position, velocity, and acceleration of
   line ends.
 - **Free points** (``Point3`` buoys, clump weights, connectors) have three translational DOFs.
-  Each carries its weight and buoyancy :math:`(\rho V - m)\,g\,\mathbf{e}_z`, point loads, and,
+  Each carries its weight and buoyancy :math:`(\rho V - m)\,g\,\mathbf{e}_z`, point loads, its
+  own seabed contact (a ``Free`` or ``Connect`` point, see Seabed contact above), and,
   while below the surface, lumped Morison terms
   :math:`\tfrac{1}{2}\rho\,C_dA\,\lvert\mathbf{u}_r\rvert\mathbf{u}_r + \rho V(1 + C_a)\,\dot{\mathbf{u}}_f`
   with added mass :math:`\rho V C_a`. Points are advanced around the implicit line step with
