@@ -1425,10 +1425,13 @@ CONTAINS
             t_in = p(:, 2) - p(:, 1)
             t_out = p(:, 3) - p(:, 2)
             IF (NORM2(t_in) > CD_ZERO .AND. NORM2(t_out) > CD_ZERO) THEN
-              ! the tension's force on node j is T (t_out - t_in); its component into the
-              ! seabed (against the upward normal) adds to the node's penetration
-              sink_j = MAX(CD_ZERO, sink_j - laid_tension*DOT_PRODUCT(t_out/NORM2(t_out) - t_in/NORM2(t_in), nrm)/ &
-                           kn(j))
+              ! the tension's force on node j is T (t_out - t_in); its component P into the
+              ! seabed (against the upward normal) deepens the normal penetration by P/kn,
+              ! which moves the node horizontally by (P/kn) (z_x, z_y)/s: in units of the
+              ! sink (the factor of the gradient, w/kn for the weight) that is P/(kn s), with
+              ! 1/s = nrm(3) the vertical component of the unit normal
+              sink_j = MAX(CD_ZERO, sink_j - laid_tension*DOT_PRODUCT(t_out/NORM2(t_out) - t_in/NORM2(t_in), nrm)* &
+                           nrm(3)/kn(j))
             END IF
           END IF
         END IF

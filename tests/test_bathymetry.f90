@@ -474,9 +474,9 @@ CONTAINS
   SUBROUTINE case_as_laid_tension_sink()
     !! The as-laid friction reference on a curved bathymetry (a Gaussian crest along x):
     !! with kn and no laid tension it is bit-identical to the reference without kn; with a
-    !! laid tension T each interior node sinks by the extra T (t_out - t_in).n / kn into the
-    !! seabed (n the upward normal), which moves its reference by that amount times the
-    !! local gradient (checked against an independent evaluation on the unsunk path).
+    !! laid tension T each interior node's normal penetration deepens by the load
+    !! -T (t_out - t_in).n / kn (n the upward normal), which moves its reference horizontally
+    !! by that over s = sqrt(1 + |grad z|^2) times the local gradient (checked against an independent evaluation on the unsunk path).
     TYPE(CD_BathymetryType) :: bathy
     INTEGER, PARAMETER :: NE = 20
     REAL(wp), PARAMETER :: T = 2.0e4_wp, KN = 1.0e4_wp, SINK = 0.01_wp
@@ -518,8 +518,8 @@ CONTAINS
       END DO
       tin = (p(:, 2) - p(:, 1))/NORM2(p(:, 2) - p(:, 1))
       tout = (p(:, 3) - p(:, 2))/NORM2(p(:, 3) - p(:, 2))
-      extra = MAX(0.0_wp, SINK - T*DOT_PRODUCT(tout - tin, nrm)/KN)
       CALL floor_at(bathy, r_t0(1, j), r_t0(2, j), p(3, 2), g)
+      extra = MAX(0.0_wp, SINK - T*DOT_PRODUCT(tout - tin, nrm)/(KN*SQRT(1.0_wp + g(1)**2 + g(2)**2)))
       expect = r_t0(:, j) + extra*g
       worst = MAX(worst, MAXVAL(ABS(r_t(:, j) - expect)))
     END DO

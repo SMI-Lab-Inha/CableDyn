@@ -790,7 +790,9 @@ laid tension turns at every node and adds
 :math:`-T_\text{laid}\,(\mathbf{t}_{i}^{+} - \mathbf{t}_{i}^{-})\cdot\mathbf{n}_i` to the
 normal load (it presses the line into a crest and lifts it from a hollow), with
 :math:`\mathbf{t}_{i}^{\pm}` the unit tangents of the laid path on either side of the node and
-:math:`\mathbf{n}_i` the upward normal. The reference moves with the node,
+:math:`\mathbf{n}_i` the upward normal; a normal load :math:`P` deepens the normal penetration by
+:math:`P/k_i` and so moves the node horizontally by :math:`P\,(z_{,x}, z_{,y})/(k_i s)`, with
+:math:`s = \sqrt{1 + z_{,x}^2 + z_{,y}^2}`. The reference moves with the node,
 so the line laid at rest carries no friction force (a deflection normal to the seabed is not a
 friction deflection, as in OrcaFlex's in-plane law). The static solve then holds every node in
 contact with a friction spring toward its reference, capped smoothly at :math:`\mu N`,
