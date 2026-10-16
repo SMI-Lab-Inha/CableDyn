@@ -44,6 +44,7 @@ PROGRAM test_model
   CALL case_lifecycle_static_step()
   CALL case_segment_length_update()
   CALL case_segment_payout_ramp()
+  CALL case_segment_force_blend_committed_side()
   CALL case_copy_model_preserves_state()
   CALL case_prescribed_step_updates_state()
   CALL case_recovery_common_path()
@@ -403,9 +404,10 @@ CONTAINS
     !! and rho_inf = 0. The strain stays uniform, eps = H/L' - 1, so the reported tension
     !! (elastic plus Kelvin-Voigt) is EA (H/L' - 1) - BA H Ldot/L'**2. The committed state
     !! keeps the lengths it was reached with: re-deriving the committed acceleration under
-    !! the new length, or evaluating the blended configuration with the new length only,
-    !! lags the tension by a fixed fraction of its change per step, dT = EA H Ldot dt/L'**2
-    !! (the pay-out ramp artifact this check guards against).
+    !! the new length, or evaluating the step-start force of the force blend (the default;
+    !! under False alpha_force_blend the blended configuration) with the new length, lags the
+    !! tension by a fixed fraction of its change per step, dT = EA H Ldot dt/L'**2 (the
+    !! pay-out ramp artifact this check guards against).
     INTEGER, PARAMETER :: NE = 10, NN = NE + 1, NDOF = 3*NN
     REAL(wp), PARAMETER :: L = 10.0_wp, H = 10.1_wp, EAV = 1.0e5_wp, RHOA = 1.0_wp, BAV = 1.0e5_wp
     REAL(wp), PARAMETER :: LDOT = 0.01_wp, TEND = 4.0_wp, DT = 0.01_wp
@@ -413,7 +415,7 @@ CONTAINS
     TYPE(GenAlphaConfig) :: cfg
     INTEGER :: conn(2, NE), fixed(6), es, n_iter, i, k, pass
     REAL(wp) :: l0(NE), ea(NE), rho_a(NE), ba(NE), q0(NDOF), v0(NDOF), f_ext(NDOF), ten(NE)
-    REAL(wp) :: t, lp, expect, err(2), d_step, hist(NINT(TEND/DT), 2), diff
+    REAL(wp) :: t, lp, expect, err(3), d_step, hist(NINT(TEND/DT), 3), diff, diff_cfg
     LOGICAL :: conv, stalled
     CHARACTER(200) :: em
 
@@ -432,8 +434,10 @@ CONTAINS
     f_ext = 0.0_wp
     d_step = EAV*H*LDOT*DT/(L + LDOT*TEND)**2
     err = 0.0_wp
-    DO pass = 1, 2
-      cfg%rho_inf = MERGE(0.4_wp, 0.0_wp, pass == 1)
+    ! pass 1: rho_inf 0.4, 2: rho_inf 0, 3: rho_inf 0.4 with the configuration blend
+    DO pass = 1, 3
+      cfg%rho_inf = MERGE(0.0_wp, 0.4_wp, pass == 2)
+      cfg%force_blend = pass /= 3
       cfg%rel_tol = 1.0e-10_wp
       CALL CD_Init_Model(m, q0, v0, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, cfg, es, em, ba=ba)
       CALL require(es == CD_MODEL_OK, 'payout:init: '//TRIM(em))
@@ -455,12 +459,105 @@ CONTAINS
       CALL CD_End_Model(m, es, em)
     END DO
     diff = MAXVAL(ABS(hist(NINT(1.0_wp/DT):, 1) - hist(NINT(1.0_wp/DT):, 2)))
+    diff_cfg = MAXVAL(ABS(hist(NINT(1.0_wp/DT):, 3) - hist(NINT(1.0_wp/DT):, 2)))
     WRITE (*, '(A,ES10.3,A,ES12.5,A,ES12.5,A,ES12.5)') '  payout ramp: per-step tension change ', d_step, &
       ' N; max error vs the closed form at rho_inf = 0.4 ', err(1), ' N, at 0 ', err(2), ' N; difference ', diff
-    CALL require(err(1) <= 2.0e-2_wp*d_step, 'payout:rho_inf-0.4-follows-the-closed-form')
-    CALL require(err(2) <= 2.0e-2_wp*d_step, 'payout:rho_inf-0-follows-the-closed-form')
-    CALL require(diff <= 2.0e-2_wp*d_step, 'payout:rho_inf-0.4-equals-rho_inf-0')
+    WRITE (*, '(A,ES12.5,A,ES12.5)') '  payout ramp, False alpha_force_blend at rho_inf = 0.4: max error ', err(3), &
+      ' N; difference to rho_inf = 0 ', diff_cfg
+    ! the error is the start-up transient (1.8e-3 d_step at either rho_inf); a step-start force at
+    ! blended or new lengths under the force blend leaves 7e-3 and 2.6 d_step, and a difference
+    ! between the two rho_inf of 9e-4 d_step and more
+    CALL require(err(1) <= 5.0e-3_wp*d_step, 'payout:rho_inf-0.4-follows-the-closed-form')
+    CALL require(err(2) <= 5.0e-3_wp*d_step, 'payout:rho_inf-0-follows-the-closed-form')
+    CALL require(diff <= 1.0e-4_wp*d_step, 'payout:rho_inf-0.4-equals-rho_inf-0')
+    CALL require(err(3) <= 5.0e-3_wp*d_step .AND. diff_cfg <= 1.0e-4_wp*d_step, 'payout:configuration-blend')
   END SUBROUTINE case_segment_payout_ramp
+
+  SUBROUTINE case_segment_force_blend_committed_side()
+    !! Under the force blend (the default) the committed side of the first step after a length
+    !! and rate command is the committed state's own: a weighted, damped, grounded tension-only
+    !! line paid out at its end element gives, bit for bit, the acceleration recompute, the
+    !! step-start load (damping at the committed rate, seabed contact with the committed
+    !! tributary lengths), the step-start internal force and the release-cap data of its
+    !! uncommanded twin, while the force at t_{n+1}, the present external load and seabed
+    !! coefficients are the new lengths' and the inertia takes the blended lengths.
+    INTEGER, PARAMETER :: NE = 4, NN = NE + 1, NDOF = 3*NN
+    REAL(wp), PARAMETER :: KBOT = 1.0e5_wp, CN_RATIO = 0.05_wp, DL = 0.02_wp, LDOT = 0.3_wp
+    TYPE(CD_ModelType) :: a, b
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, i
+    REAL(wp) :: l0(NE), l1(NE), ea(NE), rho_a(NE), ba(NE), diam(NE), q0(NDOF), v0(NDOF), wpl(3, NE)
+    REAL(wp) :: fw(NDOF), fw1(NDOF), lm(NE), af
+    REAL(wp), ALLOCATABLE :: kn(:), kn1(:)
+    LOGICAL :: conv, stalled
+    CHARACTER(200) :: em
+
+    CALL straight_cable(NE, conn, l0, ea, rho_a, q0, fixed)
+    v0 = 0.0_wp
+    DO i = 4, NDOF - 3
+      v0(i) = 0.05_wp*SIN(1.3_wp*REAL(i, wp))
+    END DO
+    wpl = 0.0_wp
+    wpl(3, :) = -7.5_wp
+    ba = 50.0_wp
+    diam = 0.1_wp
+    l1 = l0
+    l1(NE) = l0(NE) + DL
+    CALL CD_Assemble_Distributed_Load(conn, l0, wpl, fw, es, em)
+    CALL CD_Assemble_Distributed_Load(conn, l1, wpl, fw1, es, em)
+    CALL CD_Nodal_Seabed_Stiffness(KBOT, diam, l0, kn, es, em)
+    CALL CD_Nodal_Seabed_Stiffness(KBOT, diam, l1, kn1, es, em)
+    CALL require(es == 0, 'committed-side:seabed-helper')
+    af = cfg%rho_inf/(cfg%rho_inf + 1.0_wp)
+    lm = l0
+    lm(NE) = (1.0_wp - af)*l1(NE) + af*l0(NE)
+    CALL CD_Init_Model(a, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                       dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                       seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+    CALL require(es == CD_MODEL_OK, 'committed-side:init-a: '//TRIM(em))
+    CALL CD_Init_Model(b, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                       dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                       seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+    CALL require(es == CD_MODEL_OK, 'committed-side:init-b: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    CALL CD_Update_Model_SegmentLength(a, NE, l1(NE), LDOT, es, em)
+    CALL require(es == CD_MODEL_OK, 'committed-side:update: '//TRIM(em))
+    CALL require(nan_max_abs(a%f_ext - fw1) <= 0.0_wp .AND. nan_max_abs(a%seabed_kn - kn1) <= 0.0_wp, &
+                 'committed-side:present-load-is-the-new-lengths')
+    ! the committed acceleration, re-derived, is the twin's
+    CALL CD_Recompute_Model_Acceleration(a, es, em)
+    CALL require(es == CD_MODEL_OK, 'committed-side:recompute-a: '//TRIM(em))
+    CALL CD_Recompute_Model_Acceleration(b, es, em)
+    CALL require(es == CD_MODEL_OK, 'committed-side:recompute-b: '//TRIM(em))
+    CALL require(nan_max_abs(a%a - b%a) <= 0.0_wp, 'committed-side:recompute-equals-twin')
+    CALL require(nan_max_abs(a%f_ext - fw1) <= 0.0_wp .AND. nan_max_abs(a%seabed_kn - kn1) <= 0.0_wp .AND. &
+                 nan_max_abs(a%seabed_cn - CN_RATIO*kn1) <= 0.0_wp .AND. nan_max_abs(a%l0 - l1) <= 0.0_wp .AND. &
+                 a%l0_dot(NE) == LDOT .AND. nan_max_abs(a%l0_c - l0) <= 0.0_wp, 'committed-side:recompute-restores')
+    ! the step: the committed side bit for bit the twin's
+    CALL CD_Step_Model(a, 0.02_wp, conv, stalled, n_iter, es, em)
+    CALL require(es == CD_MODEL_OK .AND. conv, 'committed-side:step-a: '//TRIM(em))
+    CALL CD_Step_Model(b, 0.02_wp, conv, stalled, n_iter, es, em)
+    CALL require(es == CD_MODEL_OK .AND. conv, 'committed-side:step-b: '//TRIM(em))
+    IF (.NOT. (ALLOCATED(a%load_start_work) .AND. ALLOCATED(b%load_start_work))) THEN
+      CALL require(.FALSE., 'committed-side:start-load-allocated')
+      RETURN
+    END IF
+    CALL require(nan_max_abs(a%load_start_work - b%load_start_work) <= 0.0_wp, 'committed-side:start-load-equals-twin')
+    CALL require(nan_max_abs(a%dynamic_workspace%fint_n - b%dynamic_workspace%fint_n) <= 0.0_wp .AND. &
+                 nan_max_abs(a%dynamic_workspace%tension_n - b%dynamic_workspace%tension_n) <= 0.0_wp .AND. &
+                 nan_max_abs(a%dynamic_workspace%stretch_n - b%dynamic_workspace%stretch_n) <= 0.0_wp .AND. &
+                 nan_max_abs(a%dynamic_workspace%damp_n - b%dynamic_workspace%damp_n) <= 0.0_wp, &
+                 'committed-side:start-force-and-cap-data-equal-twin')
+    CALL require(MAXVAL(ABS(b%dynamic_workspace%damp_n)) > 0.0_wp, 'committed-side:start-dashpot-nonzero')
+    CALL require(MAXVAL(ABS(b%load_start_work)) > 0.0_wp .AND. MAXVAL(b%dynamic_workspace%tension_n) > 0.0_wp, &
+                 'committed-side:start-data-nonzero')
+    CALL require(nan_max_abs(a%dynamic_workspace%mb_l0 - lm) <= 0.0_wp, 'committed-side:inertia-at-blended-lengths')
+    CALL require(nan_max_abs(a%q - b%q) > 0.0_wp, 'committed-side:command-moves-the-line')
+    CALL require(nan_max_abs(a%f_ext - fw1) <= 0.0_wp .AND. nan_max_abs(a%l0 - l1) <= 0.0_wp .AND. &
+                 nan_max_abs(a%l0_c - l1) <= 0.0_wp .AND. a%l0_dot_c(NE) == LDOT, 'committed-side:step-commits')
+    CALL CD_End_Model(a, es, em)
+    CALL CD_End_Model(b, es, em)
+  END SUBROUTINE case_segment_force_blend_committed_side
 
   SUBROUTINE case_copy_model_preserves_state()
     !! Checked model copies preserve persistent state and leave transient solver
