@@ -267,7 +267,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   under the new length, and the next generalised-α step evaluated its blended configuration
   with the new length only, so the force of each length change entered the committed side of
   the blend. The committed state now keeps its acceleration and the lengths it was reached
-  with, and a step after a change blends the old and new lengths with the configuration. In
+  with, and a step after a change blends the old and new lengths with the configuration; an
+  acceleration re-derived between a command and the next step, as a host state update does, is
+  solved at the committed lengths and leaves them committed. In
   the coupled OpenFAST comparison with stock MoorDyn (`validation/scripts/activetension/`), the
   controlled fairlead tensions had run up to 97 kN (4.1 %) above MoorDyn during the pay-out and
   148 kN (6.3 %) below it during the haul-in, at `rhoInf` 0.4 and still 58 kN and 89 kN at

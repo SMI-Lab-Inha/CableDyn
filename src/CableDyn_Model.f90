@@ -4604,6 +4604,36 @@ CONTAINS
     !! external loads, environmental loads, added mass, and fixed/coupled DOF map.
     !! Use this after runtime updates when the caller needs a consistent
     !! acceleration before a load exchange or diagnostic query.
+    !! Under active line control the acceleration is the committed state's: between a length
+    !! change (CD_Update_Model_SegmentLength) and the next step it is solved with the lengths
+    !! and rates that state was reached with (l0_c, l0_dot_c), which stay the committed ones,
+    !! so the step still blends the old and new lengths. As in the step's blend, only the
+    !! element lengths and rates take the committed values; the external load and the seabed
+    !! coefficients are the present ones. The present lengths and rates are put back bit for
+    !! bit on every exit.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: l0_now(:), l0_dot_now(:)
+    LOGICAL :: aside
+
+    aside = .FALSE.
+    IF (model%initialized) aside = .NOT. model_lengths_committed(model)
+    IF (aside) THEN
+      l0_now = model%l0
+      l0_dot_now = model%l0_dot
+      model%l0 = model%l0_c
+      model%l0_dot = model%l0_dot_c
+    END IF
+    CALL recompute_model_acceleration_now(model, ErrStat, ErrMsg)
+    IF (aside) THEN
+      model%l0 = l0_now
+      model%l0_dot = l0_dot_now
+    END IF
+  END SUBROUTINE CD_Recompute_Model_Acceleration
+
+  SUBROUTINE recompute_model_acceleration_now(model, ErrStat, ErrMsg)
+    !! CD_Recompute_Model_Acceleration with the lengths and rates in place.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
@@ -4668,11 +4698,6 @@ CONTAINS
     IF (ErrStat /= CD_MODEL_OK) THEN
       model%a = a_entry
       RETURN
-    END IF
-    ! the re-derived acceleration commits the state with the present lengths and rates
-    IF (.NOT. model_lengths_committed(model)) THEN
-      model%l0_c = model%l0
-      model%l0_dot_c = model%l0_dot
     END IF
 
   CONTAINS
@@ -4880,7 +4905,7 @@ CONTAINS
                                    ErrStat, ErrMsg, need_tangent=need_tangent)
       ErrStat = as_dyn_callback_status(ErrStat)
     END SUBROUTINE model_added_mass_band
-  END SUBROUTINE CD_Recompute_Model_Acceleration
+  END SUBROUTINE recompute_model_acceleration_now
 
   SUBROUTINE CD_Audit_Model_Step(model, time, dt, new_spike)
     !! Audit one committed host step of an EI=0 line (called by the standalone driver on the

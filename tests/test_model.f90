@@ -162,8 +162,9 @@ CONTAINS
   SUBROUTINE case_segment_length_update()
     !! Active line control (the CtrlChan mechanism): CD_Update_Model_SegmentLength
     !! keeps the committed acceleration and the lengths the committed state was reached
-    !! with; once that state is committed at the new length (the non-stepping commit
-    !! CD_Recompute_Model_Acceleration) the model must be INDISTINGUISHABLE from one
+    !! with (a re-derived acceleration keeps them too); once the new length is committed
+    !! (restored = .TRUE., the checkpoint-restart re-application) and the acceleration
+    !! re-derived (CD_Recompute_Model_Acceleration) the model must be INDISTINGUISHABLE from one
     !! BUILT with the new length -- the stale-cache killer (any l0-derived quantity
     !! cached at init and not refreshed breaks the bitwise step equivalence). Also:
     !! paying out a taut segment drops its tension (sign), and the validation battery
@@ -209,6 +210,10 @@ CONTAINS
     ! twin bitwise -- tensions, coupled loads (the re-assembled mass cache), and a full
     ! dynamic step under the same trajectory
     CALL CD_Recompute_Model_Acceleration(ma, es, em)
+    CALL require(es == CD_MODEL_OK .AND. nan_max_abs(ma%l0_c - l0) <= 0.0_wp .AND. nan_max_abs(ma%a - aa) <= 0.0_wp, &
+                 'seglen:recompute-keeps-the-committed-lengths')
+    CALL CD_Update_Model_SegmentLength(ma, NE, l0b(NE), 0.0_wp, es, em, restored=.TRUE.)
+    CALL CD_Recompute_Model_Acceleration(ma, es, em)
     CALL require(es == CD_MODEL_OK .AND. nan_max_abs(ma%l0_c - l0b) <= 0.0_wp, 'seglen:commit-at-new-length')
     CALL CD_Get_Model_Tension(mb, tenb, es, em)
     CALL require(nan_max_abs(ten1 - tenb) <= 0.0_wp, 'seglen:tension-equals-fresh-build')
@@ -249,7 +254,7 @@ CONTAINS
       CALL CD_Init_Model(mw1, q0, v0, conn, l0b, ea, rho_a, .FALSE., fw1, fixed, cfg, es, em, &
                          dist_load_per_length=wpl)
       CALL require(es == CD_MODEL_OK, 'seglen:init-weighted-fresh')
-      CALL CD_Update_Model_SegmentLength(mw0, NE, l0b(NE), 0.0_wp, es, em)
+      CALL CD_Update_Model_SegmentLength(mw0, NE, l0b(NE), 0.0_wp, es, em, restored=.TRUE.)
       CALL require(es == CD_MODEL_OK, 'seglen:weighted-update: '//TRIM(em))
       CALL CD_Recompute_Model_Acceleration(mw0, es, em)
       CALL require(es == CD_MODEL_OK, 'seglen:weighted-commit: '//TRIM(em))
@@ -290,7 +295,7 @@ CONTAINS
       fx0(3*2 - 1) = fx0(3*2 - 1) + 3.0_wp
       CALL CD_Update_Model_External_Loads(mx0, fx0, es, em)
       CALL require(es == CD_MODEL_OK, 'seglen:extload-update: '//TRIM(em))
-      CALL CD_Update_Model_SegmentLength(mx0, NE, l0b(NE), 0.0_wp, es, em)
+      CALL CD_Update_Model_SegmentLength(mx0, NE, l0b(NE), 0.0_wp, es, em, restored=.TRUE.)
       CALL require(es == CD_MODEL_OK, 'seglen:extload-control: '//TRIM(em))
       CALL CD_Recompute_Model_Acceleration(mx0, es, em)
       CALL require(es == CD_MODEL_OK, 'seglen:extload-commit: '//TRIM(em))

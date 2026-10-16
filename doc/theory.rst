@@ -1938,6 +1938,9 @@ acceleration under the new length, or blending the configuration but not the len
 the force of the length change to the committed side of the blend, weighted by
 :math:`\alpha_m` and :math:`\alpha_f`; on a pay-out or haul-in ramp the tension would then lag
 the quasi-static value by a fixed fraction of its change per step, at any :math:`\rho_\infty`.
+An acceleration re-derived between the command and the step (a host state update or a
+boundary commit) belongs to the committed state, so it is solved with :math:`L_{0,c}` and
+:math:`\dot L_{0,c}`, which stay the committed lengths and rates.
 
 On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
 up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by
