@@ -29,8 +29,13 @@ driver:
   plane of the chord (45 degrees) is solved in 3D from the start, so the state is consistent
   (friction within mu N, a march from it stays at rest), while 180 degrees keeps the planar solve
   and flips the reference (the anchor tension falls below the default one);
-* ``fei_cross`` (finite-EI cable on a cross slope): the lateral anchor force follows the EI = 0
-  line's, i.e. the sink offset of the laid nodes across the slope stays in the friction reference;
+* ``fei_cross`` (a cable on a cross slope, EI = 0 and finite EI): the lateral anchor force stays a
+  small fraction of the one a reference without the sink offset of the laid nodes would give, and
+  the finite-EI line, solved in 3D because the seabed slopes across its chord, stays at rest when
+  marched;
+* ``att_cross`` (a finite-EI line with discrete buoyancy modules on a cross slope): the reference
+  sinks each node under its discrete load, so the module nodes rest on the laid path (no lateral
+  kink, as in the smeared twin) and a march from the static state stays at rest;
 * ``pl_*``: per-line rows win over the global ones (``layAzimuth<ID>`` over ``layAzimuth``,
   ``asLaidTension<ID>`` over ``asLaidTension``, in either order), and a row for line 2 leaves
   line 1 alone; ``aniso_*``: the axial coefficient rules the friction along a laid run;
@@ -75,12 +80,16 @@ def slope_grid(path: Path, depth0: float, slope_deg: float) -> None:
 
 def deck(title: str, ei: float, length: float, nseg: int, fair: tuple, anch: tuple, seabed: str,
          extra: str = "", tmax: float = 0.0, mu: float = 1.0, types: str | None = None,
-         sections: str | None = None) -> str:
+         sections: str | None = None, attachments: str | None = None) -> str:
     d, m, ea = CHAIN
     if types is None:
         types = f"chain {d} {m} {ea} -1 {ei} 1.37 0.64 1 0\n"
     if sections is None:
         sections = f"1 chain {length} {nseg}\n"
+    if attachments is not None:
+        sections += ("--------------------- ATTACHMENTS ---\n"
+                     "LineID ArcLength Mass Volume CdA Ca CdAx\n(-) (m) (kg) (m^3) (m^2) (-) (m^2)\n"
+                     f"{attachments}")
     return (
         "--------------------- CableDyn Input File ---\n"
         f"{title}\n"
@@ -396,8 +405,14 @@ def main() -> int:
 
     # --- finite-EI cable on a cross slope, default lay azimuth ---
     # The nodes laid at rest sink into the penalty seabed along its normal, across the slope too;
-    # the friction reference keeps that offset, so the lateral anchor force is that of the
-    # EI = 0 line (a reference without it adds a lateral spring force of the order of w tan(slope)).
+    # the friction reference keeps that offset. A reference without it would leave the run shifted
+    # down the slope by the sink, about w tan(slope)/(kBot d) = 1 cm, which the anchor would carry
+    # as a lateral force of AnchTen times that shift over an element (about +0.4 kN, down the slope).
+    # With it the lateral anchor force is a small fraction of that, up the slope, for the EI = 0
+    # line and for the finite-EI one (whose end force follows the cable's end tangent where the
+    # EI = 0 line's follows the chord of its first element). The seabed slope across the chord
+    # pushes the run out of its vertical plane against its friction, so the finite-EI line is solved
+    # in 3D and a march from its static state stays at rest.
     cdir = root / "fei_cross"
     cdir.mkdir(parents=True, exist_ok=True)
     cross_grid(cdir / "bathy.txt", 200.0, 5.0)
@@ -407,10 +422,75 @@ def main() -> int:
         rc, log = run(a.exe, cdir, tag, deck("fei cross " + tag, **cd))
         check(rc == 0, "fei_cross %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
         if rc == 0:
-            fy[tag] = table(cdir / (tag + ".out"))[0]["Point2Fy"]
-    if len(fy) == 2:
-        check(fy["ei0"] * fy["fei"] > 0.0 and abs(fy["fei"] - fy["ei0"]) < 0.25 * abs(fy["ei0"]),
-              "fei_cross: lateral anchor force %.4g N follows the EI = 0 line's %.4g N" % (fy["fei"], fy["ei0"]))
+            r0 = table(cdir / (tag + ".out"))[0]
+            # the anchor force of a run shifted down the slope by its sink, half of it
+            bound = 0.5 * r0["AnchTen1"] * w / (1.0e5 * d) * math.tan(math.radians(5.0)) / 5.0
+            fy[tag] = r0["Point2Fy"]
+            check(-bound < fy[tag] < 0.0,
+                  "fei_cross %s: lateral anchor force %.4g N up the slope, within half the %.4g N of a reference "
+                  "without the sink" % (tag, fy[tag], 2.0 * bound))
+        if rc == 0 and tag == "fei":
+            rc, _ = run(a.exe, cdir, "fei_rest", deck("fei cross rest", **cd, tmax=1.0))
+            check(rc == 0, "fei_cross fei at-rest march runs (rc %d)" % rc)
+            if rc == 0:
+                drift = at_rest(cdir, "fei", "fei_rest")
+                check(drift <= REST_TOL, "fei_cross fei stays at rest from the static state (drift %.2e)" % drift)
+
+    # --- finite-EI line with discrete buoyancy modules on a cross slope ---
+    # Three modules (net buoyancy 8.09 kN, two thirds of a node's weight) on the grounded run of a
+    # soft rope (EA 2e7 N: its laid slack run beyond the touchdown is held by friction at a small
+    # tension, so it rests as laid). The static solve smears each module over its node's two
+    # elements, then polishes to the discrete loads; the friction reference sinks every node under
+    # those discrete loads, so a module node rests on the laid path as its neighbours do. A
+    # reference built from the smeared weights would deflect each module node across the slope by
+    # about half its net weight times tan(slope) over the nodal seabed stiffness (3.3 mm) and hold
+    # that with a spurious friction force (the seabed stiffness times that kink). Checked: the
+    # lateral kink of the line at the module nodes stays within a tenth of that and no larger than
+    # in its smeared twin (each module spread over its node's two elements as a section), and a
+    # march from the static state stays at rest.
+    cdir = root / "att_cross"
+    cdir.mkdir(parents=True, exist_ok=True)
+    cross_grid(cdir / "bathy.txt", 200.0, 5.0)
+    ea_soft, l_att, n_att, mods = 2.0e7, 600.0, 120, (450.0, 500.0, 550.0)
+    m_mod, v_mod = 200.0, 1.0
+    d_m = 0.5 * (m_mod - RHO * v_mod) / 5.0  # smeared mass per length over each of the two elements
+    soft = f"chain {d} {m} {ea_soft} -1 1.0e4 1.37 0.64 1 0\n"
+    ac = dict(ei=1.0e4, length=l_att, nseg=n_att, fair=(500, 0, -10), anch=(0, 0, -200), seabed=sb)
+    att_rows = "".join("1 %.1f %.1f %.1f 0.0 0.0 0.0\n" % (s, m_mod, v_mod) for s in mods)
+    secs, s0 = "", 0.0
+    for s in mods:
+        secs += "1 chain %.1f %d\n1 mod %.1f 2\n" % (s - 5.0 - s0, round((s - 5.0 - s0) / 5.0), 10.0)
+        s0 = s + 5.0
+    secs += "1 chain %.1f %d\n" % (l_att - s0, round((l_att - s0) / 5.0))
+    twin_types = soft + f"mod {d} {m + d_m} {ea_soft} -1 1.0e4 1.37 0.64 1 0\n"
+    ys = {}
+    for tag, kw in (("discrete", dict(types=soft, attachments=att_rows)),
+                    ("smeared", dict(types=twin_types, sections=secs))):
+        rc, log = run(a.exe, cdir, tag, deck("att cross " + tag, **ac, **kw))
+        check(rc == 0, "att_cross %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+        if rc != 0:
+            continue
+        p = first_row(cdir / (tag + ".Line1.p.out"))
+        ys[tag] = [p[3 * i + 1] for i in range(len(p) // 3)]
+        if tag == "discrete":
+            rc, _ = run(a.exe, cdir, tag + "_rest", deck("att cross rest", **ac, **kw, tmax=1.0))
+            check(rc == 0, "att_cross at-rest march runs (rc %d)" % rc)
+            if rc == 0:
+                drift = at_rest(cdir, tag, tag + "_rest")
+                check(drift <= REST_TOL, "att_cross stays at rest from the static state (drift %.2e)" % drift)
+    if len(ys) == 2:
+        spurious = 0.5 * abs(m_mod - RHO * v_mod) * G * math.tan(math.radians(5.0)) / (1.0e5 * d * 5.0)
+
+        def kink(y: list) -> float:
+            """Largest lateral offset of a module node from the chord of its two neighbours [m]."""
+            return max(abs(y[k] - 0.5 * (y[k - 1] + y[k + 1])) for k in (round(s / 5.0) for s in mods))
+
+        kd, ks = kink(ys["discrete"]), kink(ys["smeared"])
+        check(kd < 0.1 * spurious,
+              "att_cross: no lateral kink at the module nodes (%.2e m, the smeared reference's %.2e m)" % (kd, spurious))
+        check(kd <= ks,
+              "att_cross: the module nodes rest on the laid path as closely as in the smeared twin (%.2e <= %.2e m)"
+              % (kd, ks))
 
     # --- per-line rows, non-default azimuth and tension, anisotropic friction (EI = 0) ---
     cdir = root / "perline"

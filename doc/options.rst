@@ -157,8 +157,8 @@ Environment and seabed
        its anchor (its lower end): the as-laid reference of ``staticsFriction asLaid``.
        ``layAzimuth`` sets every line; ``layAzimuth<ID>`` (the line ID appended, e.g.
        ``layAzimuth2``) sets line ``ID`` and overrides it. A direction off the vertical plane of
-       the line ends puts the finite-EI static solve in 3D. An ID that names no line is
-       rejected
+       the line ends puts the finite-EI static solve in 3D, as does a bathymetry sloping across
+       that plane under the laid run. An ID that names no line is rejected
      - both
      - ``225.0 layAzimuth2``
    * - ``asLaidTension`` / ``as_laid_tension``, and ``asLaidTension<ID>``

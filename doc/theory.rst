@@ -785,8 +785,11 @@ to node :math:`i` is :math:`s_i = \sum_{e<i} l_{0,e}(1 + T_\text{laid}/EA_e)` lo
 bathymetry the horizontal distance follows from integrating
 :math:`\mathrm{d}s = \sqrt{1 + z_{,\alpha}^2}\,\mathrm{d}d` in sub-steps of at most 1 m. A
 laid node sinks into the penalty seabed along its normal by its static penetration, which on a
-slope moves it horizontally by :math:`w_i\,(z_{,x}, z_{,y})/k_i`. Where the slope varies, the
-laid tension turns at every node and adds
+slope moves it horizontally by :math:`w_i\,(z_{,x}, z_{,y})/k_i`, with :math:`w_i` its nodal
+load: its share of the line's submerged weight, plus the net weight of a discrete attachment
+lumped at it (the finite-EI solve first smears an attachment over the two elements at its
+node, then rebuilds the reference for the discrete loads before it polishes to them). Where
+the slope varies, the laid tension turns at every node and adds
 :math:`-T_\text{laid}\,(\mathbf{t}_{i}^{+} - \mathbf{t}_{i}^{-})\cdot\mathbf{n}_i` to the
 normal load (it presses the line into a crest and lifts it from a hollow), with
 :math:`\mathbf{t}_{i}^{\pm}` the unit tangents of the laid path on either side of the node and
@@ -812,8 +815,13 @@ of a current) in the fixed-point passes and live in the final Newton solve; on t
 path they are frozen at the line-search base point of the energy step. The ``EI = 0`` solve
 tries the as-laid seed first: the nodes up to a lift-off node on their references, the rest
 hanging as the suspended catenary to the fairlead, the lift-off node the first at which that
-catenary leaves the seabed tangentially. The finite-EI solve starts its bending-stiffness
-continuation from the ``EI = 0`` equilibrium with the same friction. A grounded run on a slope
+catenary leaves the seabed tangentially (on a line whose fairlead lies below its other end, as
+a FAST.Farm shared line may, the reference and this seed are laid from the fairlead). The
+finite-EI solve starts its bending-stiffness continuation from the ``EI = 0`` equilibrium with
+the same friction, in 3D (only the two ends held) when the lay azimuth leaves the vertical plane
+of the chord or the seabed under the laid run slopes across that plane: the seabed normal then
+pushes the run out of the plane against its friction, which a solve in the plane would leave
+unbalanced at the start of the march. A grounded run on a slope
 of angle :math:`\theta` then holds where :math:`\sin\theta \le \mu` (the horizontal friction
 force :math:`w\tan\theta` per unit length against the capacity :math:`\mu w/\cos\theta`;
 OrcaFlex's in-plane law holds while :math:`\tan\theta \le \mu`, and the two limits differ by

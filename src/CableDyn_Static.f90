@@ -1608,7 +1608,10 @@ CONTAINS
     !! their static penetration are lifted onto it. With static seabed friction (current
     !! carrying friction_ref, CD_Static_As_Laid_Reference) the as-laid seed is tried first:
     !! the nodes up to a lift-off node rest at their as-laid positions, and the rest hang as
-    !! the suspended catenary to the fairlead (the line laid, then its top end moved).
+    !! the suspended catenary to the fairlead (the line laid, then its top end moved). The
+    !! reference is laid from the lower end of the line: node 1, or node n when it lies below
+    !! node 1 (a line without a Fixed anchor at node 1), whose seed is the mirror image, laid
+    !! from node n and hanging to node 1.
     !! For each seed:
     !!   A. Newton (plain, then Levenberg-Marquardt) with the compression-capable law, first at
     !!      the full load, then by load continuation. Accepted when it converges and (for a
@@ -2077,11 +2080,18 @@ CONTAINS
         IF (ok) ok = CD_All_Finite(q_seed)
       CASE (7)
         ! the as-laid line with its top end moved to the fairlead: a grounded run at the
-        ! friction reference positions lifting off into a suspended catenary
+        ! friction reference positions lifting off into a suspended catenary. The reference
+        ! is laid from the lower end of the line (CD_Static_As_Laid_Reference): node 1, or
+        ! node n when it lies below node 1, whose seed is built on the reversed line
         seed_name = 'as-laid run'
-        IF (.NOT. (anchor_grounded .AND. as_laid)) RETURN
-        CALL CD_Static_As_Laid_Seed(anchor, fairlead, l0, ea, weight, current%friction_ref, q_seed, ok, &
-                                    seabed_z_floor=seabed_z_floor, bathymetry=bathymetry)
+        IF (.NOT. as_laid) RETURN
+        IF (fairlead(3) < anchor(3)) THEN
+          CALL laid_seed_from_last(ok)
+        ELSE
+          IF (.NOT. anchor_grounded) RETURN
+          CALL CD_Static_As_Laid_Seed(anchor, fairlead, l0, ea, weight, current%friction_ref, q_seed, ok, &
+                                      seabed_z_floor=seabed_z_floor, bathymetry=bathymetry)
+        END IF
         IF (ok) ok = CD_All_Finite(q_seed)
       CASE DEFAULT
         seed_name = 'two-leg polyline'
@@ -2089,6 +2099,31 @@ CONTAINS
         ok = CD_All_Finite(q_seed)
       END SELECT
     END SUBROUTINE build_seed
+
+    SUBROUTINE laid_seed_from_last(ok)
+      !! As-laid seed of a line laid from its last node (node n below node 1, the reference
+      !! laid from node n): CD_Static_As_Laid_Seed on the reversed line (node n first, with
+      !! the element and reference arrays reversed), its node order then reversed back into
+      !! q_seed. ok = .FALSE. when node n does not rest on the seabed or the seed has no
+      !! lift-off node.
+      LOGICAL, INTENT(OUT) :: ok
+      INTEGER :: es_r, i_r
+      REAL(wp) :: floor_n
+      REAL(wp), ALLOCATABLE :: q_rev(:)
+      CHARACTER(200) :: em_r
+      ok = .FALSE.
+      floor_n = seabed_floor_at(fairlead(1), fairlead(2), es_r, em_r)
+      IF (es_r /= 0) RETURN
+      IF (fairlead(3) > floor_n + CD_Static_Anchor_Seabed_Tolerance(floor_n)) RETURN
+      ALLOCATE (q_rev(n_dof))
+      CALL CD_Static_As_Laid_Seed(fairlead, anchor, l0(n_elem:1:-1), ea(n_elem:1:-1), weight(n_elem:1:-1), &
+                                  current%friction_ref(:, n_nodes:1:-1), q_rev, ok, &
+                                  seabed_z_floor=seabed_z_floor, bathymetry=bathymetry)
+      IF (.NOT. ok) RETURN
+      DO i_r = 1, n_nodes
+        q_seed(3*i_r - 2:3*i_r) = q_rev(3*(n_nodes - i_r) + 1:3*(n_nodes - i_r) + 3)
+      END DO
+    END SUBROUTINE laid_seed_from_last
 
     SUBROUTINE drape_seed(ok)
       !! Seed for a grounded line on a non-planar or sloped seabed: nodes 1..k lie on the

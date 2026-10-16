@@ -32,8 +32,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   carries (`asLaidTension`) mobilises none: on a flat seabed FairTen equals the frictionless
   one to 6e-6 and AnchTen to 0.4 %. A finite-EI line laid past the point under its fairlead has
   no static solution yet (its touchdown hook is not reached); a lay azimuth across the span
-  solves it. A lay azimuth across the vertical plane of the chord solves a finite-EI line in 3D
-  from the start, and a finite-EI line is laid from its lower end like an `EI = 0` one. The
+  solves it. A lay azimuth across the vertical plane of the chord, or a bathymetry sloping across
+  it under the laid run, solves a finite-EI line in 3D from the start (so a march from it stays
+  at rest), and a finite-EI line is laid from its lower end like an `EI = 0` one; a line whose
+  fairlead lies below its other end is laid, and seeded, from the fairlead. With discrete
+  `ATTACHMENTS` the reference sinks each node under its discrete load (its share of the line's
+  weight plus the attachment's net weight), so a module node rests on the laid path like the rest
+  of the run instead of taking its sink for a friction deflection. The
   policy is rejected, as `frictionMu` is, on decks with `Connect`/`Free` points, bodies or rods,
   and on mixed-topology decks. The Python `DeckFile`, `DeckWriter` and `DeckModel` take the new
   rows. See the theory page (Friction in statics).
