@@ -156,8 +156,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   kinematics that are too strong below `Z_Depth`. Its fluid load was therefore wrong without
   any message. CableDyn now checks its nodes at the static equilibrium and at every CableDyn
   step. At the first node outside the grid it prints one warning with the number of nodes,
-  the farthest node in each direction and the SeaState inputs to enlarge. Nodes below a grid
-  that reaches the seabed (`Z_Depth` equal to the water depth, its default) are not reported.
+  the farthest node in each direction and the SeaState inputs to enlarge. Only nodes in the
+  water are checked (a cable or jumper above the free surface carries no fluid load), and
+  nodes below a grid that reaches the seabed (`Z_Depth` equal to the water depth, its
+  default) are not reported.
   The OpenFAST tutorial and `examples/openfast/README.md` now enlarge the r-test `MD_Shared`
   grid (`X_HalfWidth = 100 m`, `Z_Depth = 40 m`), which covers the platform but not the
   moorings, and quote their results for the enlarged grid. With the `MD_Shared` grid, the

@@ -1741,12 +1741,6 @@ CONTAINS
                           ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
-      ! Grid coverage: checked on the positions about to be sampled, at Init (the static
-      ! equilibrium) and then every mooring step until the one warning has been issued.
-      IF (.NOT. inst_e%grid_warned) THEN
-         CALL check_wavefield_grid( inst_e, p%WaveField, t_sample, init_call, ErrStat2, ErrMsg2 )
-         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
-      END IF
       DO i = 1, inst_e%nfluid
          IF (.NOT. inst_e%agg%host_wave_enabled .AND. .NOT. inst_e%agg%host_current_enabled) THEN
             ! An explicit WaterKin file may disable both host components even
@@ -1841,6 +1835,13 @@ CONTAINS
          inst_e%fx_pd(i) = 0.0_wp
          IF (inst_e%agg%host_wave_enabled) inst_e%fx_pd(i) = REAL(pdyn, wp)
       END DO
+      ! Grid coverage: checked on the positions just sampled (with their free-surface
+      ! elevations), at Init (the static equilibrium) and then every mooring step until the one
+      ! warning has been issued.
+      IF (.NOT. inst_e%grid_warned) THEN
+         CALL check_wavefield_grid( inst_e, p%WaveField, t_sample, init_call, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      END IF
       CALL CD_AGG_SetFluidFields( inst_e%agg, inst_e%fx_vel, inst_e%fx_acc, inst_e%fx_wl, es, em, &
                                   dynamic_pressure=inst_e%fx_pd )
       IF (es /= CD_AGG_OK) THEN
@@ -1857,13 +1858,26 @@ CONTAINS
       !! SetIndex horizontally, the depth mapping of WaveField_Interp_Setup4D vertically), so
       !! the node receives the kinematics of the nearest boundary point -- out of phase
       !! horizontally, too strong below Z_Depth. SeaState's own clamping notice is generic, names
-      !! no node, and is issued once, at the Init sample, where the glue drops it. The extents are read from the WaveField's volume-grid parameters, i.e.
-      !! exactly the grid the sampler interpolates. Excursions below 1 % of the boundary grid
-      !! spacing are ignored. Below a grid that reaches the seabed (Z_Depth = WtrDpth + MSL2SWL,
-      !! the SeaState maximum) a node is in the seabed and the seabed kinematics are the right
-      !! ones. SeaState's current is uniform in x and y, so the horizontal check applies to
-      !! waves only. Cost: a few comparisons per node per mooring step until the warning.
-      !! at_init marks the Init call, at the static equilibrium (t = 0).
+      !! no node, and is issued once, at the Init sample, where the glue drops it. The extents are
+      !! read from the WaveField's volume-grid parameters, i.e. exactly the grid the sampler
+      !! interpolates. Excursions below 1 % of the boundary grid spacing are ignored. Below a
+      !! grid that reaches the seabed (Z_Depth = WtrDpth + MSL2SWL, the SeaState maximum) a node
+      !! is in the seabed and the seabed kinematics are the right ones. SeaState's current is
+      !! uniform in x and y, so the horizontal check applies to waves only.
+      !!
+      !! Only nodes in the water are checked: a node above the free surface carries no fluid
+      !! load whatever kinematics it is given, so a suspended cable or jumper above the water
+      !! outside the grid is no error. A node is in the water at or below the free-surface
+      !! elevation just sampled for it (fx_wl; the still-water level when the host waves are
+      !! off), which decides its wetting in CableDyn, and, without wave stretching
+      !! (WaveStMod = 0), at or below the still-water level too, above which SeaState gives a
+      !! node zero kinematics without reading the grid. Called after the nodes' sampling, on the
+      !! positions just sampled. Cost: a few comparisons per node per mooring step until the
+      !! warning. at_init marks the Init call, at the static equilibrium (t = 0).
+      !!
+      !! The message states first that it is given once, so that a caller's message buffer that
+      !! cuts its tail keeps that; the farthest-node details are left out if the message would not
+      !! fit the remaining length of ErrMsg.
       TYPE(CD_OF_Instance),      INTENT(INOUT) :: inst_e
       TYPE(SeaSt_WaveFieldType), INTENT(IN   ) :: wf
       REAL(DbKi),                INTENT(IN   ) :: t_sample
@@ -1873,11 +1887,11 @@ CONTAINS
 
       character(*), parameter   :: RoutineName = 'check_wavefield_grid'
       LOGICAL                   :: waves, grid_current, check_xy(2), check_z, outside
-      INTEGER(IntKi)            :: i, k, nout, nin
-      REAL(wp)                  :: lo(2), hi(2), tol(2), zbot, tol_z, ex, ex_max(3), at_max(3)
+      INTEGER(IntKi)            :: i, k, nout, nin, nwet, room
+      REAL(wp)                  :: lo(2), hi(2), tol(2), zbot, tol_z, ex, ex_max(3), at_max(3), surface
       CHARACTER(11)             :: inp(3), res(3)
       CHARACTER(1024)           :: farthest, enlarge, refine
-      CHARACTER(ErrMsgLen)      :: msg
+      CHARACTER(:), ALLOCATABLE :: head, msg
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -1898,9 +1912,15 @@ CONTAINS
       IF (.NOT. (ANY(check_xy) .OR. check_z)) RETURN
 
       nout   = 0_IntKi
+      nwet   = 0_IntKi
       ex_max = 0.0_wp
       at_max = 0.0_wp
       DO i = 1, inst_e%nfluid
+         ! nodes above the free surface carry no fluid load (see above)
+         surface = inst_e%fx_wl(i)
+         IF (wf%WaveStMod == 0_IntKi) surface = MIN(surface, 0.0_wp)
+         IF (inst_e%fx_xyz(3, i) > surface) CYCLE
+         nwet = nwet + 1_IntKi
          outside = .FALSE.
          DO k = 1, 2
             IF (.NOT. check_xy(k)) CYCLE
@@ -1965,19 +1985,22 @@ CONTAINS
       IF (ex_max(3) > 0.0_wp) enlarge = TRIM(enlarge)//' (Z_Depth at most WtrDpth + MSL2SWL, its default)'
 
       inst_e%grid_warned = .TRUE.
-      msg = 'CableDyn mooring module: '//TRIM(Num2LStr(nout))//' of the '//TRIM(Num2LStr(inst_e%nfluid))// &
-            ' CableDyn sampling nodes lie outside the SeaState wave-kinematics grid at t = '// &
-            TRIM(Num2LStr(t_sample))//' s. SeaState clamps them to the grid boundary, so their fluid '// &
-            'kinematics and loads are not physical. Farthest: '//TRIM(farthest(3:))// &
-            '. In the SeaState input file enlarge '//TRIM(enlarge)//' to cover the lines with margin '// &
-            'for their motion, and raise '//TRIM(refine)//' to keep the grid spacing. This warning is '// &
-            'not repeated.'
-      CALL SetErrStat( ErrID_Warn, TRIM(msg), ErrStat, ErrMsg, RoutineName )
+      head = 'CableDyn mooring module: '//TRIM(Num2LStr(nout))//' of the '//TRIM(Num2LStr(nwet))// &
+             ' CableDyn sampling nodes in the water lie outside the SeaState wave-kinematics grid at t = '// &
+             TRIM(Num2LStr(t_sample))//' s (warned once). SeaState clamps them to the grid boundary, so '// &
+             'their fluid kinematics and loads are not physical.'
+      msg = head//' Farthest: '//TRIM(farthest(3:))//'. In the SeaState input file enlarge '//TRIM(enlarge)// &
+            ' to cover the lines with margin for their motion, and raise '//TRIM(refine)// &
+            ' to keep the grid spacing.'
+      ! SetErrStat appends the message to ErrMsg after a line break and the routine name
+      room = LEN(ErrMsg) - LEN_TRIM(ErrMsg) - LEN(RoutineName) - 2
+      IF (LEN(msg) > room) msg = head//' Enlarge '//TRIM(enlarge)//' in the SeaState input file.'
+      CALL SetErrStat( ErrID_Warn, msg, ErrStat, ErrMsg, RoutineName )
       ! The OpenFAST glue does not print module initialization warnings (FAST_InitializeAll_T
       ! passes its status on to FAST_InitMappings, which resets it), so the Init check also
       ! writes the warning to the screen, as the deck dtM warning does. A warning raised
       ! during the time march reaches the screen through the glue's error check.
-      IF (at_init) CALL WrScr( '   WARNING: '//TRIM(msg) )
+      IF (at_init) CALL WrScr( '   WARNING: '//msg )
    END SUBROUTINE check_wavefield_grid
 
 !----------------------------------------------------------------------------------------------------------------------------------

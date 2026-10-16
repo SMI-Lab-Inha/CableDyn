@@ -134,15 +134,21 @@ At the first node found outside it prints one warning and continues:
 
 .. code-block:: text
 
-   WARNING: CableDyn mooring module: 147 of the 153 CableDyn sampling nodes lie outside the
-   SeaState wave-kinematics grid at t = 0 s. SeaState clamps them to the grid boundary, so their
-   fluid kinematics and loads are not physical. Farthest: x = -837.6 m (grid |x| <= X_HalfWidth =
-   100 m); y = 725.38 m (grid |y| <= Y_HalfWidth = 100 m); z = -200.01 m (grid z >= -Z_Depth =
-   -40 m). In the SeaState input file enlarge X_HalfWidth, Y_HalfWidth and Z_Depth (Z_Depth at
-   most WtrDpth + MSL2SWL, its default) to cover the lines with margin for their motion, and
-   raise NX, NY and NZ to keep the grid spacing. This warning is not repeated.
+   WARNING: CableDyn mooring module: 147 of the 153 CableDyn sampling nodes in the water lie
+   outside the SeaState wave-kinematics grid at t = 0 s (warned once). SeaState clamps them to
+   the grid boundary, so their fluid kinematics and loads are not physical. Farthest: x = -837.6
+   m (grid |x| <= X_HalfWidth = 100 m); y = 725.38 m (grid |y| <= Y_HalfWidth = 100 m); z =
+   -200.01 m (grid z >= -Z_Depth = -40 m). In the SeaState input file enlarge X_HalfWidth,
+   Y_HalfWidth and Z_Depth (Z_Depth at most WtrDpth + MSL2SWL, its default) to cover the lines
+   with margin for their motion, and raise NX, NY and NZ to keep the grid spacing.
 
-Only the directions in which nodes leave the grid are listed. Waves are checked in all three
+Only nodes in the water are checked: a node above the free surface carries no fluid load,
+whatever kinematics SeaState would give it, so a suspended cable or jumper above the water may
+leave the grid. A node counts as in the water at or below the free-surface elevation sampled
+for it, which also decides its wetting in CableDyn (the still-water level when the host waves
+are off), and, without wave stretching (``WaveStMod = 0``), at or below the still-water level,
+above which SeaState gives zero kinematics without reading the grid. Only the directions in
+which nodes leave the grid are listed. Waves are checked in all three
 directions and a SeaState current (uniform in x and y) only in depth. Excursions smaller than
 1 % of the grid spacing at the boundary are ignored, and so are nodes below a grid that reaches
 the seabed (``Z_Depth = WtrDpth + MSL2SWL``): they are in the seabed, where the kinematics of the

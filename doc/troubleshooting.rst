@@ -531,10 +531,11 @@ Warnings and notes that do not stop a run
      - the static twist stage of a torsional line. A non-zero descent count means the straight or
        untwisted branch was unstable at the imposed twist and the solve moved to a buckled shape;
        check the shape and the ``Twist<L>`` channel.
-   * - ``WARNING: CableDyn mooring module: <n> of the <N> CableDyn sampling nodes lie outside the
-       SeaState wave-kinematics grid at t = ... s`` (OpenFAST)
+   * - ``WARNING: CableDyn mooring module: <n> of the <N> CableDyn sampling nodes in the water
+       lie outside the SeaState wave-kinematics grid at t = ... s (warned once)`` (OpenFAST)
      - the SeaState grid (``X_HalfWidth``, ``Y_HalfWidth``, ``Z_Depth``) does not cover the
-       lines, and SeaState gives the nodes outside it the kinematics of the grid boundary: waves
+       lines in the water (nodes above the free surface carry no fluid load and are not
+       counted), and SeaState gives the nodes outside it the kinematics of the grid boundary: waves
        out of phase beyond a half-width, kinematics that are too strong below ``Z_Depth``. The
        message names the farthest node in each direction. Enlarge the listed inputs in the
        SeaState file past the farthest anchor (``Z_Depth`` to the water depth, its default) and
