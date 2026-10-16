@@ -564,16 +564,27 @@ All notable changes to CableDyn are recorded in this file. The format follows
   on a pay-out or haul-in ramp. A length update had re-derived the committed acceleration
   under the new length, and the next generalised-α step evaluated its blended configuration
   with the new length only, so the force of each length change entered the committed side of
-  the blend. The committed state now keeps its acceleration and the lengths it was reached
-  with, and a step after a change blends the old and new lengths with the configuration; an
-  acceleration re-derived between a command and the next step, as a host state update does, is
-  solved at the committed lengths and leaves them committed. In
+  the blend. The committed state now keeps its acceleration and the lengths and rates it was
+  reached with, and each share of the step after a change takes the lengths of its own time
+  level. With the force-blended step (the default), the step-start force is evaluated at the
+  committed lengths and rates: the internal force, every dynamic load, every step-start
+  quantity of the release cap (stretch, tension, secant and law stiffness, dashpot tension, and
+  the one-step dissipation budget of a dashpot slack at the step start),
+  and the distributed external load and seabed coefficients those lengths give; the cap's
+  end-state quantities take the new lengths; the end-of-step force takes the new lengths, and the inertia (the
+  structural and added mass, which the force blend keeps at the α level) the blended ones.
+  Under `False alpha_force_blend` the step blends the old and new lengths with the
+  configuration. An acceleration re-derived between a command and the next step, as a host
+  state update does, is solved at the committed lengths, as the step evaluates its committed
+  side, and leaves them committed. On a taut line paid out at a tension change of 1 N per step,
+  the tension follows the closed form to 1.8 mN at `rhoInf` 0.4 and 0 alike (the start-up
+  transient), where a step-start force at the new lengths lags by 2.6 N. In
   the coupled OpenFAST comparison with stock MoorDyn (`validation/scripts/activetension/`), the
   controlled fairlead tensions had run up to 97 kN (4.1 %) above MoorDyn during the pay-out and
   148 kN (6.3 %) below it during the haul-in, at `rhoInf` 0.4 and still 58 kN and 89 kN at
   `rhoInf` 0; they now stay within 3 kN (0.13 %). The hold tensions, which the published
   comparison scores, move by less than 0.01 %, and the scorer now also gates the ramps.
-  Runs without `CONTROL`, and a zero command, are bit-identical to before. A checkpoint restart
+  This change leaves runs without `CONTROL`, and a zero command, bit-identical. A checkpoint restart
   re-applies the restored command as the committed state's, so a restart during a ramp
   continues bit-identically.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the

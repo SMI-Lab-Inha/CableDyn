@@ -163,6 +163,14 @@ MODULE CableDyn_Model
     REAL(wp), ALLOCATABLE :: l0(:), l0_dot(:), l0_c(:), l0_dot_c(:), f_ext(:), seabed_kn(:), seabed_cn(:)
   END TYPE CD_ModelControlSaveType
 
+  TYPE :: model_lengths_aside
+    !! The present lengths and rates, and the external load and seabed coefficients that follow
+    !! the lengths, that enter_committed_lengths set aside (leave_committed_lengths moves them
+    !! back).
+    LOGICAL :: active = .FALSE.
+    REAL(wp), ALLOCATABLE :: l0(:), l0_dot(:), f_ext(:), kn(:), cn(:)
+  END TYPE model_lengths_aside
+
   TYPE :: CD_ModelType
     !! Persistent positions-only EI=0 model state and immutable mesh/properties.
     LOGICAL :: initialized = .FALSE.
@@ -2410,9 +2418,11 @@ CONTAINS
 
     INTEGER :: es, e
     CHARACTER(160) :: em
-    LOGICAL :: has_load, blend
+    LOGICAL :: has_load, blend, force_lengths
     REAL(wp) :: af
-    REAL(wp), ALLOCATABLE :: l0_new(:), l0_dot_new(:)
+    REAL(wp), ALLOCATABLE :: l0_new(:), l0_dot_new(:), l0_start(:), l0_mass(:), f_ext_new(:), f_ext_c(:)
+    REAL(wp), ALLOCATABLE :: l0_dot_start(:)
+    TYPE(model_lengths_aside) :: aside
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -2449,78 +2459,61 @@ CONTAINS
     ! whose tension (tension_start_work) the release cap of the step bounds like the elastic
     ! tension. A warm re-solve of the same step (the junction coupling re-steps the line from
     ! the same committed state with moved ends) reuses the load of the previous call.
-    IF (.NOT. (has_load .AND. model%cfg%force_blend)) THEN
-      model%load_start_valid = .FALSE.
-    ELSE IF (.NOT. (model%dynamic_workspace%guess_armed .AND. model%load_start_valid)) THEN
-      model%load_start_valid = .FALSE.
-      IF (ALLOCATED(model%load_start_work)) THEN
-        IF (SIZE(model%load_start_work) /= model%n_dof) DEALLOCATE (model%load_start_work)
-      END IF
-      IF (.NOT. ALLOCATED(model%load_start_work)) THEN
-        ALLOCATE (model%load_start_work(model%n_dof), STAT=es)
-        IF (es /= 0) THEN
-          ErrStat = CD_MODEL_ALLOCFAIL
-          ErrMsg = 'CableDyn_Model: step-start load workspace allocation failed'
-          RETURN
-        END IF
-      END IF
-      ! tension_start_work stays unallocated without a viscoelastic or Syrope element, and the
-      ! step then sees start_tension absent
-      IF (ALLOCATED(model%tension_start_work)) THEN
-        IF (SIZE(model%tension_start_work) /= model%n_elem .OR. &
-            .NOT. (model%has_viscoelastic .OR. model%has_syrope)) DEALLOCATE (model%tension_start_work)
-      END IF
-      IF ((model%has_viscoelastic .OR. model%has_syrope) .AND. .NOT. ALLOCATED(model%tension_start_work)) THEN
-        ALLOCATE (model%tension_start_work(model%n_elem), STAT=es)
-        IF (es /= 0) THEN
-          ErrStat = CD_MODEL_ALLOCFAIL
-          ErrMsg = 'CableDyn_Model: step-start tension workspace allocation failed'
-          RETURN
-        END IF
-      END IF
-      IF (ALLOCATED(model%stiffness_start_work)) THEN
-        IF (.NOT. ALLOCATED(model%tension_start_work)) THEN
-          DEALLOCATE (model%stiffness_start_work)
-        ELSE IF (SIZE(model%stiffness_start_work) /= model%n_elem) THEN
-          DEALLOCATE (model%stiffness_start_work)
-        END IF
-      END IF
-      IF (ALLOCATED(model%tension_start_work) .AND. .NOT. ALLOCATED(model%stiffness_start_work)) THEN
-        ALLOCATE (model%stiffness_start_work(model%n_elem), STAT=es)
-        IF (es /= 0) THEN
-          ErrStat = CD_MODEL_ALLOCFAIL
-          ErrMsg = 'CableDyn_Model: step-start stiffness workspace allocation failed'
-          RETURN
-        END IF
-      END IF
-      model%ve_dt = CD_ZERO
-      IF (ALLOCATED(model%tension_start_work)) THEN
-        CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es, em, &
-                                     law_tension=model%tension_start_work, &
-                                     law_stiffness=model%stiffness_start_work)
-      ELSE
-        CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es, em)
-      END IF
+    !
+    ! Active line control: after a length or rate change the committed state keeps the lengths
+    ! and rates it was reached with (l0_c, l0_dot_c), and the step that follows treats them as
+    ! the generalised-alpha form requires. With the force blend, r(q_{n+1}, v_{n+1}) takes the
+    ! present lengths, rates, external load and seabed coefficients, and r(q_n, v_n) those of
+    ! the committed state: its load (here) and its internal force and release-cap data (the
+    ! step's start_l0) are evaluated at l0_c and l0_dot_c, with the distributed load and the
+    ! recomputed seabed coefficients rebuilt at l0_c (enter_committed_lengths), and the
+    ! constant external load of the step blends the two, (1 - alpha_f) f_ext + alpha_f f_ext_c.
+    ! The inertia, which the force blend keeps at the alpha level (M a_alpha, the added mass
+    ! at q_alpha), takes the blended lengths (1 - alpha_f) l0 + alpha_f l0_c. Under
+    ! False alpha_force_blend every alpha-level term (internal force, damping, hydrodynamic
+    ! loads, the structural and added mass) takes the blended lengths and rates, with the
+    ! present external load and seabed coefficients. Either way the lengths are blended element
+    ! by element and only where they differ, the new lengths come back with the state at
+    ! t_{n+1}, and an unchanged model takes the plain path.
+    blend = .NOT. model_lengths_committed(model)
+    force_lengths = blend .AND. model%cfg%force_blend
+    af = model%cfg%rho_inf/(model%cfg%rho_inf + CD_ONE)
+    IF (force_lengths) THEN
+      CALL enter_committed_lengths(model, aside, .TRUE., es, em)
       IF (es /= CD_MODEL_OK) THEN
         ErrStat = es
-        ErrMsg = 'CableDyn_Model: step-start load failed: '//TRIM(em)
+        ErrMsg = 'CableDyn_Model: step-start lengths: '//TRIM(em)
         RETURN
       END IF
-      model%load_start_valid = .TRUE.
+      IF (ALLOCATED(aside%f_ext)) f_ext_c = model%f_ext
     END IF
+    CALL step_start_load(ErrStat, ErrMsg)
+    IF (force_lengths) CALL leave_committed_lengths(model, aside)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
     ! arm the viscoelastic contributors with the step size: in-step load
     ! evaluations use the backward-Euler-eliminated dl_1(q, v); it is reset to
     ! the instantaneous limit (0) on EVERY exit below so committed-state queries
     ! (coupled loads, tension) never see a stale step size
     model%ve_dt = dt
-    ! Active line control: after a length or rate change the committed state keeps the
-    ! lengths it was reached with. The step's alpha-level terms (internal force, damping,
-    ! hydrodynamic loads and the mass the blend applies) take the blended lengths
-    ! (1 - alpha_f) l0 + alpha_f l0_c, element by element and only where they differ, and the
-    ! new lengths come back with the state at t_{n+1}. An unchanged model takes the plain path.
-    blend = .NOT. model_lengths_committed(model)
-    IF (blend) THEN
-      af = model%cfg%rho_inf/(model%cfg%rho_inf + CD_ONE)
+    IF (force_lengths) THEN
+      ! the release cap's step-start dashpot takes the committed rates (start_l0_rate)
+      l0_dot_start = model%l0_dot_c
+      IF (.NOT. ALL(bits_equal(model%l0, model%l0_c))) THEN
+        l0_start = model%l0_c
+        l0_mass = model%l0
+        DO e = 1, model%n_elem
+          IF (.NOT. bits_equal(model%l0(e), model%l0_c(e))) &
+            l0_mass(e) = (CD_ONE - af)*model%l0(e) + af*model%l0_c(e)
+        END DO
+      END IF
+      IF (ALLOCATED(f_ext_c)) THEN
+        f_ext_new = model%f_ext
+        DO e = 1, model%n_dof
+          IF (.NOT. bits_equal(f_ext_new(e), f_ext_c(e))) &
+            model%f_ext(e) = (CD_ONE - af)*f_ext_new(e) + af*f_ext_c(e)
+        END DO
+      END IF
+    ELSE IF (blend) THEN
       l0_new = model%l0
       l0_dot_new = model%l0_dot
       DO e = 1, model%n_elem
@@ -2541,7 +2534,8 @@ CONTAINS
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
                                    start_tension=model%tension_start_work, &
                                    start_stiffness=model%stiffness_start_work, &
-                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot, &
+                                   start_l0=l0_start, mass_l0=l0_mass, start_l0_rate=l0_dot_start)
     ELSE IF (PRESENT(prescribed_q) .AND. has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -2552,7 +2546,8 @@ CONTAINS
                                    prescribed_a=prescribed_a, workspace=model%dynamic_workspace, &
                                    start_load=model%load_start_work, start_tension=model%tension_start_work, &
                                    start_stiffness=model%stiffness_start_work, &
-                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot, &
+                                   start_l0=l0_start, mass_l0=l0_mass, start_l0_rate=l0_dot_start)
     ELSE IF (PRESENT(prescribed_q) .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -2560,14 +2555,16 @@ CONTAINS
                                    n_iter, &
                                    es, em, added_mass_band_proc=model_added_mass_band, prescribed_q=prescribed_q, &
                                    prescribed_v=prescribed_v, prescribed_a=prescribed_a, &
-                                   workspace=model%dynamic_workspace)
+                                   workspace=model%dynamic_workspace, &
+                                   start_l0=l0_start, mass_l0=l0_mass)
     ELSE IF (PRESENT(prescribed_q)) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, &
                                    es, em, prescribed_q=prescribed_q, prescribed_v=prescribed_v, &
-                                   prescribed_a=prescribed_a, workspace=model%dynamic_workspace)
+                                   prescribed_a=prescribed_a, workspace=model%dynamic_workspace, &
+                                   start_l0=l0_start, mass_l0=l0_mass)
     ELSE IF (has_load .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -2577,7 +2574,8 @@ CONTAINS
                                    added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
                                    start_load=model%load_start_work, start_tension=model%tension_start_work, &
                                    start_stiffness=model%stiffness_start_work, &
-                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot, &
+                                   start_l0=l0_start, mass_l0=l0_mass, start_l0_rate=l0_dot_start)
     ELSE IF (has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -2587,23 +2585,25 @@ CONTAINS
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
                                    start_tension=model%tension_start_work, &
                                    start_stiffness=model%stiffness_start_work, &
-                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot, &
+                                   start_l0=l0_start, mass_l0=l0_mass, start_l0_rate=l0_dot_start)
     ELSE IF (model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
-                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace)
+                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
+                                   start_l0=l0_start, mass_l0=l0_mass)
     ELSE
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
-                                   n_iter, es, em, workspace=model%dynamic_workspace)
+                                   n_iter, es, em, workspace=model%dynamic_workspace, &
+                                   start_l0=l0_start, mass_l0=l0_mass)
     END IF
-    IF (blend) THEN
-      model%l0 = l0_new
-      model%l0_dot = l0_dot_new
-    END IF
+    IF (ALLOCATED(l0_new)) model%l0 = l0_new
+    IF (ALLOCATED(l0_dot_new)) model%l0_dot = l0_dot_new
+    IF (ALLOCATED(f_ext_new)) model%f_ext = f_ext_new
     model%ve_dt = CD_ZERO
     CALL CD_Profile_Count_Line_Step(n_iter)
     IF (es /= CD_DYN_OK) THEN
@@ -2741,6 +2741,79 @@ CONTAINS
 
   CONTAINS
 
+    SUBROUTINE step_start_load(es_s, em_s)
+      !! The force blend's load at the committed state (q_n, v_n) into load_start_work (with the
+      !! law tensions and axial stiffnesses of the viscoelastic and Syrope elements in
+      !! tension_start_work and stiffness_start_work), unless a
+      !! warm re-solve of the same step reuses the previous call's; without the force blend or a
+      !! load contributor there is none. Evaluated with the model as the caller left it (the
+      !! committed lengths entered after a length change).
+      INTEGER, INTENT(OUT) :: es_s
+      CHARACTER(*), INTENT(OUT) :: em_s
+      CHARACTER(160) :: em_c
+      es_s = CD_MODEL_OK
+      em_s = ''
+      IF (.NOT. (has_load .AND. model%cfg%force_blend)) THEN
+        model%load_start_valid = .FALSE.
+        RETURN
+      END IF
+      IF (model%dynamic_workspace%guess_armed .AND. model%load_start_valid) RETURN
+      model%load_start_valid = .FALSE.
+      IF (ALLOCATED(model%load_start_work)) THEN
+        IF (SIZE(model%load_start_work) /= model%n_dof) DEALLOCATE (model%load_start_work)
+      END IF
+      IF (.NOT. ALLOCATED(model%load_start_work)) THEN
+        ALLOCATE (model%load_start_work(model%n_dof), STAT=es_s)
+        IF (es_s /= 0) THEN
+          es_s = CD_MODEL_ALLOCFAIL
+          em_s = 'CableDyn_Model: step-start load workspace allocation failed'
+          RETURN
+        END IF
+      END IF
+      ! tension_start_work stays unallocated without a viscoelastic or Syrope element, and the
+      ! step then sees start_tension absent
+      IF (ALLOCATED(model%tension_start_work)) THEN
+        IF (SIZE(model%tension_start_work) /= model%n_elem .OR. &
+            .NOT. (model%has_viscoelastic .OR. model%has_syrope)) DEALLOCATE (model%tension_start_work)
+      END IF
+      IF ((model%has_viscoelastic .OR. model%has_syrope) .AND. .NOT. ALLOCATED(model%tension_start_work)) THEN
+        ALLOCATE (model%tension_start_work(model%n_elem), STAT=es_s)
+        IF (es_s /= 0) THEN
+          es_s = CD_MODEL_ALLOCFAIL
+          em_s = 'CableDyn_Model: step-start tension workspace allocation failed'
+          RETURN
+        END IF
+      END IF
+      IF (ALLOCATED(model%stiffness_start_work)) THEN
+        IF (.NOT. ALLOCATED(model%tension_start_work)) THEN
+          DEALLOCATE (model%stiffness_start_work)
+        ELSE IF (SIZE(model%stiffness_start_work) /= model%n_elem) THEN
+          DEALLOCATE (model%stiffness_start_work)
+        END IF
+      END IF
+      IF (ALLOCATED(model%tension_start_work) .AND. .NOT. ALLOCATED(model%stiffness_start_work)) THEN
+        ALLOCATE (model%stiffness_start_work(model%n_elem), STAT=es_s)
+        IF (es_s /= 0) THEN
+          es_s = CD_MODEL_ALLOCFAIL
+          em_s = 'CableDyn_Model: step-start stiffness workspace allocation failed'
+          RETURN
+        END IF
+      END IF
+      model%ve_dt = CD_ZERO
+      IF (ALLOCATED(model%tension_start_work)) THEN
+        CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es_s, em_c, &
+                                     law_tension=model%tension_start_work, &
+                                     law_stiffness=model%stiffness_start_work)
+      ELSE
+        CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es_s, em_c)
+      END IF
+      IF (es_s /= CD_MODEL_OK) THEN
+        em_s = 'CableDyn_Model: step-start load failed: '//TRIM(em_c)
+        RETURN
+      END IF
+      model%load_start_valid = .TRUE.
+    END SUBROUTINE step_start_load
+
     SUBROUTINE model_force(q, v, force, ErrStat, ErrMsg)
       REAL(wp), INTENT(IN) :: q(:), v(:)
       REAL(wp), INTENT(OUT) :: force(:)
@@ -2762,6 +2835,8 @@ CONTAINS
 
     SUBROUTINE model_added_mass_band(q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, ErrStat, ErrMsg, &
                                      need_tangent)
+      !! The added mass at q_alpha; after a length change under the force blend with the
+      !! blended lengths of the inertia (l0_mass, unallocated and so absent otherwise).
       REAL(wp), INTENT(IN) :: q(:), accel(:)
       INTEGER, INTENT(IN) :: free(:), kl, ku
       REAL(wp), INTENT(OUT) :: M_add_a(:), M_add_band(:, :), dMa_a_dq_band(:, :)
@@ -2769,7 +2844,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: ErrMsg
       LOGICAL, INTENT(IN), OPTIONAL :: need_tangent
       CALL model_added_mass_banded(model, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
-                                   ErrStat, ErrMsg, need_tangent=need_tangent)
+                                   ErrStat, ErrMsg, need_tangent=need_tangent, l0_elem=l0_mass)
       ErrStat = as_dyn_callback_status(ErrStat)
     END SUBROUTINE model_added_mass_band
   END SUBROUTINE step_model_plain
@@ -2979,6 +3054,86 @@ CONTAINS
     IF (bits == -HUGE(0_INT64) - 1_INT64) bits = 0_INT64
     y = TRANSFER(bits, y)
   END FUNCTION positive_zero
+
+  SUBROUTINE enter_committed_lengths(model, aside, loads, ErrStat, ErrMsg)
+    !! Install the lengths and rates the committed state was reached with (l0_c, l0_dot_c) for
+    !! an evaluation of the committed state, setting the present ones aside;
+    !! leave_committed_lengths moves them back bit for bit. With loads, the external load and
+    !! the seabed coefficients that follow the lengths (the distributed load, and the seabed
+    !! stiffness and damping of a model that recomputes them) are rebuilt at l0_c as well, with
+    !! the helpers and in the order CD_Update_Model_SegmentLength uses, so they are those of the
+    !! committed lengths; they are rebuilt only when a length differs (a rate change alone
+    !! leaves them as they are). A model whose lengths and rates are the committed ones is left
+    !! as it is. On failure nothing is written.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    TYPE(model_lengths_aside), INTENT(INOUT) :: aside
+    LOGICAL, INTENT(IN) :: loads
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: f_c(:), kn_c(:)
+    LOGICAL :: rebuild
+    INTEGER :: es
+    CHARACTER(160) :: em
+
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    aside%active = .FALSE.
+    IF (.NOT. model%initialized) RETURN
+    IF (model_lengths_committed(model)) RETURN
+    rebuild = loads
+    IF (rebuild) rebuild = .NOT. ALL(bits_equal(model%l0, model%l0_c))
+    IF (rebuild .AND. ALLOCATED(model%dist_load)) THEN
+      ALLOCATE (f_c(SIZE(model%f_ext)), STAT=es)
+      IF (es /= 0) THEN
+        ErrStat = CD_MODEL_ALLOCFAIL
+        ErrMsg = 'committed lengths: external-load workspace allocation failed'
+        RETURN
+      END IF
+      CALL CD_Assemble_Distributed_Load(model%elem_conn, model%l0_c, model%dist_load, f_c, es, em)
+      IF (es /= 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'committed lengths: distributed-load assembly failed: '//TRIM(em))
+        RETURN
+      END IF
+      f_c = model%f_ext_dist_base + f_c
+    END IF
+    IF (rebuild .AND. model%has_seabed .AND. model%has_seabed_recompute) THEN
+      CALL CD_Nodal_Seabed_Stiffness(model%seabed_kbot, model%seabed_diameter_elem, model%l0_c, kn_c, es, em)
+      IF (es /= 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'committed lengths: seabed stiffness recompute failed: '//TRIM(em))
+        RETURN
+      END IF
+    END IF
+    aside%l0 = model%l0
+    aside%l0_dot = model%l0_dot
+    model%l0 = model%l0_c
+    model%l0_dot = model%l0_dot_c
+    IF (ALLOCATED(f_c)) THEN
+      CALL MOVE_ALLOC(model%f_ext, aside%f_ext)
+      CALL MOVE_ALLOC(f_c, model%f_ext)
+    END IF
+    IF (ALLOCATED(kn_c)) THEN
+      CALL MOVE_ALLOC(model%seabed_kn, aside%kn)
+      CALL MOVE_ALLOC(kn_c, model%seabed_kn)
+      IF (ALLOCATED(model%seabed_cn)) THEN
+        CALL MOVE_ALLOC(model%seabed_cn, aside%cn)
+        model%seabed_cn = model%seabed_kn*model%seabed_cn_over_kn
+      END IF
+    END IF
+    aside%active = .TRUE.
+  END SUBROUTINE enter_committed_lengths
+
+  SUBROUTINE leave_committed_lengths(model, aside)
+    !! Move back what enter_committed_lengths set aside.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    TYPE(model_lengths_aside), INTENT(INOUT) :: aside
+    IF (.NOT. aside%active) RETURN
+    model%l0 = aside%l0
+    model%l0_dot = aside%l0_dot
+    IF (ALLOCATED(aside%f_ext)) CALL MOVE_ALLOC(aside%f_ext, model%f_ext)
+    IF (ALLOCATED(aside%kn)) CALL MOVE_ALLOC(aside%kn, model%seabed_kn)
+    IF (ALLOCATED(aside%cn)) CALL MOVE_ALLOC(aside%cn, model%seabed_cn)
+    aside%active = .FALSE.
+  END SUBROUTINE leave_committed_lengths
 
   SUBROUTINE save_recovery_state(model)
     !! Save the committed state into the recovery snapshot (commit_state_copy).
@@ -5178,29 +5333,25 @@ CONTAINS
     !! Under active line control the acceleration is the committed state's: between a length
     !! change (CD_Update_Model_SegmentLength) and the next step it is solved with the lengths
     !! and rates that state was reached with (l0_c, l0_dot_c), which stay the committed ones,
-    !! so the step still blends the old and new lengths. As in the step's blend, only the
-    !! element lengths and rates take the committed values; the external load and the seabed
-    !! coefficients are the present ones. The present lengths and rates are put back bit for
-    !! bit on every exit.
+    !! so the step still treats the old and new lengths as it should. The state is evaluated as
+    !! the step evaluates its committed side: with the force blend (the step-start force r_n)
+    !! the external load and the seabed coefficients that follow the lengths are rebuilt at
+    !! the committed lengths too (enter_committed_lengths); under False alpha_force_blend, as
+    !! in that step's blend, only the element lengths and rates take the committed values and
+    !! the external load and the seabed coefficients are the present ones. The present values
+    !! are put back bit for bit on every exit.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp), ALLOCATABLE :: l0_now(:), l0_dot_now(:)
-    LOGICAL :: aside
+    TYPE(model_lengths_aside) :: aside
 
-    aside = .FALSE.
-    IF (model%initialized) aside = .NOT. model_lengths_committed(model)
-    IF (aside) THEN
-      l0_now = model%l0
-      l0_dot_now = model%l0_dot
-      model%l0 = model%l0_c
-      model%l0_dot = model%l0_dot_c
+    CALL enter_committed_lengths(model, aside, model%cfg%force_blend, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) THEN
+      ErrMsg = 'CableDyn_Model: acceleration recompute: '//TRIM(ErrMsg)
+      RETURN
     END IF
     CALL recompute_model_acceleration_now(model, ErrStat, ErrMsg)
-    IF (aside) THEN
-      model%l0 = l0_now
-      model%l0_dot = l0_dot_now
-    END IF
+    CALL leave_committed_lengths(model, aside)
   END SUBROUTINE CD_Recompute_Model_Acceleration
 
   SUBROUTINE recompute_model_acceleration_now(model, ErrStat, ErrMsg)
@@ -7839,7 +7990,9 @@ CONTAINS
   END SUBROUTINE model_added_mass_full
 
   SUBROUTINE model_added_mass_banded(model, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
-                                     ErrStat, ErrMsg, need_tangent)
+                                     ErrStat, ErrMsg, need_tangent, l0_elem)
+    !! l0_elem (n_elem, finite and positive): the element lengths to use instead of model%l0
+    !! (the blended lengths of a step after a length change).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: q(:), accel(:)
     INTEGER, INTENT(IN) :: free(:), kl, ku
@@ -7847,9 +8000,10 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: need_tangent
+    REAL(wp), INTENT(IN), OPTIONAL :: l0_elem(:)
 
     INTEGER :: e, i, n, ldab, idx(6)
-    REAL(wp) :: q2(6), a2(6), wl2(2), m2(6, 6), dm2(6, 6), ma2(6)
+    REAL(wp) :: q2(6), a2(6), wl2(2), m2(6, 6), dm2(6, 6), ma2(6), le
     LOGICAL :: want_tangent, zero_accel, free_map_ready
 
     ErrStat = CD_MODEL_OK
@@ -7884,6 +8038,16 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'banded added mass q/accel must be finite')
       RETURN
     END IF
+    IF (PRESENT(l0_elem)) THEN
+      IF (SIZE(l0_elem) /= model%n_elem) THEN
+        CALL fail(ErrStat, ErrMsg, 'banded added mass lengths must have shape (n_elem)')
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(l0_elem) .OR. ANY(l0_elem <= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'banded added mass lengths must be finite and positive')
+        RETURN
+      END IF
+    END IF
 
     IF (want_tangent) THEN
       model%free_map_work(1:n) = 0
@@ -7904,16 +8068,18 @@ CONTAINS
     DO e = 1, model%n_elem
       CALL extract_element_state(model, e, q, accel, idx, q2, a2)
       CALL extract_nodal_scalar(model%added_mass_waterline_z, model, e, wl2)
+      le = model%l0(e)
+      IF (PRESENT(l0_elem)) le = l0_elem(e)
       IF (want_tangent) THEN
         IF (zero_accel) THEN
-          CALL CD_Added_Mass_Element_Matrix(q2(1:3), q2(4:6), model%l0(e), wl2(1), wl2(2), &
+          CALL CD_Added_Mass_Element_Matrix(q2(1:3), q2(4:6), le, wl2(1), wl2(2), &
                                             model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                             model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
                                             m2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
           IF (ErrStat /= 0) RETURN
           ma2 = CD_ZERO
         ELSE
-          CALL CD_Added_Mass_Element(q2(1:3), q2(4:6), a2(1:3), a2(4:6), model%l0(e), wl2(1), wl2(2), &
+          CALL CD_Added_Mass_Element(q2(1:3), q2(4:6), a2(1:3), a2(4:6), le, wl2(1), wl2(2), &
                                      model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                      model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
                                      m2, dm2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
@@ -7921,7 +8087,7 @@ CONTAINS
           ma2 = MATMUL(m2, a2)
         END IF
       ELSE
-        CALL CD_Added_Mass_Element_Force(q2(1:3), q2(4:6), a2(1:3), a2(4:6), model%l0(e), wl2(1), wl2(2), &
+        CALL CD_Added_Mass_Element_Force(q2(1:3), q2(4:6), a2(1:3), a2(4:6), le, wl2(1), wl2(2), &
                                          model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                          model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
                                          ma2, ErrStat, ErrMsg, inputs_validated=.TRUE.)

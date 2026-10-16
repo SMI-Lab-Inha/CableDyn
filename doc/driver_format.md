@@ -1002,7 +1002,11 @@ sections the controlled segment can be shorter or longer than `UnstrLen`/N; a co
 bounds that would make it zero or negative (possible when it is shorter than half of
 `UnstrLen`/N) also stops the run, with a message that names the line.
 
-- On an `EI = 0` line the segment is the end element on that side, of initial length S.
+- On an `EI = 0` line the segment is the end element on that side, of initial length S. The
+  step evaluates the committed side of its generalised-α blend at the lengths of the previous
+  advance (with the force blend, the default, the step-start force; under
+  `False alpha_force_blend`, lengths blended with the configuration), so a length ramp is
+  followed without lag at any `rhoInf`.
 - On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
   is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
   its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that
