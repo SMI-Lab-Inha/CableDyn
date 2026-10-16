@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cabledyn.deck_file import _SCALAR_OPTION_KEYWORDS, DeckFile
+from cabledyn.deck_file import DeckFile, _is_scalar_option_keyword
 
 _POINT_TYPES = {"fixed", "coupled", "vessel", "free", "connect"}
 _END_CONNECTION_ENDS = {
@@ -391,7 +391,7 @@ class DeckWriter:
                 f"option keyword must be a string, got {type(keyword).__name__}; "
                 "the argument order is set_option(value, keyword, description)"
             )
-        if keyword.lower() not in _SCALAR_OPTION_KEYWORDS:
+        if not _is_scalar_option_keyword(keyword):
             raise ValueError(
                 f"unknown option keyword {keyword!r}; the argument order is "
                 "set_option(value, keyword, description)"

@@ -599,6 +599,31 @@ def test_collections_are_live_lookups() -> None:
     assert "DeckModel" in repr(model)
 
 
+def test_option_set_static_friction_rows() -> None:
+    model = _chain_model()
+    options = model.options
+    options.set("staticsFriction", "asLaid")
+    options.set("layAzimuth", 45.0)
+    options.set("layAzimuth1", 180.0)
+    options.set("LAYAZIMUTH01", 90.0)  # the same line as layAzimuth1: replaces it
+    options.set("asLaidTension1", 1.0e5)
+    assert [row.keyword for row in options if row.keyword.lower().startswith("layazimuth")] == [
+        "layAzimuth",
+        "LAYAZIMUTH01",
+    ]
+    assert options.value("layAzimuth1") == "90.0" and options.value("asLaidTension1") == "100000.0"
+    assert options.value("layAzimuth2") is None
+    model.validate()
+    text = model.to_text()
+    assert "asLaid staticsFriction" in text and "90.0 LAYAZIMUTH01" in text
+    assert options.remove("layAzimuth1") == 1 and "layAzimuth" in options
+    with pytest.raises(ValueError, match="unknown option keyword"):
+        options.set("layAzimuth1x", 1.0)
+    options.set("layAzimuth3", 10.0)
+    with pytest.raises(Exception, match="names no LINE"):
+        model.validate()
+
+
 def test_option_set_semantics() -> None:
     model = _chain_model()
     options = model.options

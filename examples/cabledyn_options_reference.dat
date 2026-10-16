@@ -77,6 +77,11 @@ none      waves             - Wave model and parameters (m, s, deg) {none; airy;
 -- 3       WaterKin         - MoorDyn-C WaveKin 3/7: wave_elevation.txt / wave_frequencies.txt in the deck folder
 -- 0.5     frictionMuAxial  - Seabed friction along the line axis {>=0} [default: frictionMu]
 -- 0.5     frictionMuLateral - Seabed friction across the line axis {>=0} [default: frictionMu]
+-- asLaid  staticsFriction  - Statics seabed friction policy {none; asLaid} [default: none]
+-- 0.0     layAzimuth       - Lay azimuth of every line from +x toward +y (deg) [default: anchor -> fairlead]
+-- 225.0   layAzimuth2      - Lay azimuth of line 2 alone (deg) [default: layAzimuth]
+-- 0.0     asLaidTension    - As-laid effective tension of every line (N) [default: 0]
+-- 2.0e5   asLaidTension2   - As-laid effective tension of line 2 alone (N) [default: asLaidTension]
 -- 0       nModes           - Modal analysis: lowest natural modes per line {0=off; 1 to 1000} [default: 0]
 -- "WaterKin.dat" WaterKin - MoorDyn-F WaterKin file (standalone file modes or coupled host selectors)
 -- SEASTATE WaterKin        - Full host SeaState field (OpenFAST aggregate only)
@@ -92,6 +97,8 @@ none      waves             - Wave model and parameters (m, s, deg) {none; airy;
 -- Keyword aliases (equivalent spellings, case-insensitive):
 --   g = gravity; rhoW = WtrDnsty = water_density; WtrDpth = water_depth; kBot = kb; cBot = cb
 --   bathymetryFile = bathymetry_file = seafloorFile = seafloor_file; frictionMu = mu = frictionCoefficient
+--   staticsFriction = statics_friction = staticsSeabedFrictionPolicy = seabedFrictionPolicy
+--   layAzimuth = lay_azimuth; asLaidTension = as_laid_tension
 --   dtM = dt; rhoInf = rho_inf; modified_newton = modifiedNewton; adaptive_mesh = adaptiveMesh
 --   cable_statics = cableStatics; alpha_force_blend = alphaForceBlend
 --   maxStrain = max_strain; WaveSeed = wave_seed; rampTime = ramp_time = tRamp

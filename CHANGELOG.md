@@ -10,6 +10,46 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Seabed friction in the static solve, toward the as-laid position (OrcaFlex's *as laid*
+  statics seabed friction policy, opt-in): `asLaid staticsFriction`. Every grounded node is
+  held by a friction spring toward the position at which the line was laid from its lower end
+  (the anchor, or the fairlead when that is lower) along the lay azimuth on the seabed, with the regularised Coulomb law of the dynamics
+  (isotropic or axial/lateral, capped at `mu N`), in still water and in a current, on `EI = 0`
+  and finite-EI lines, standalone, coupled OpenFAST and through the C API; the march continues
+  the static springs, so a held run stays at rest. New OPTIONS `staticsFriction none|asLaid`,
+  `layAzimuth` and `layAzimuth<ID>` (default: the horizontal direction of each line's chord,
+  from its lower end),
+  `asLaidTension` and `asLaidTension<ID>` (default 0). The default stays `none`, as in MoorDyn:
+  frictionless statics in still water (friction from the still-water equilibrium in a current),
+  conservative for anchor loads, and every deck without the new rows runs as before. With
+  `asLaid`, a 700 m chain on a 5° slope with `frictionMu 1`, which the frictionless static
+  folds 24.0 m back past its anchor, holds where it was laid (friction up to 0.087 `mu N`, the
+  slope; FairTen 714.2 → 622.9 kN; held for 2 s to 1.5e-10 of FairTen), and a 650 m finite-EI
+  cable on a 10° slope, rejected as too long for its span, solves. As an illustration of the
+  effect on anchor loads, `asLaid` in `iea15mw_umaine_mixed_cabledyn.dat` lowers the chains'
+  AnchTen from 1351.6 to 368.2 kN (FairTen +0.16 %) and the laid cable's from 1230 N to 0.36 N:
+  runs laid slack and pulled taut are held back by friction. A run laid at the tension it
+  carries (`asLaidTension`) mobilises none: on a flat seabed FairTen equals the frictionless
+  one to 6e-6 and AnchTen to 0.4 %. A finite-EI line laid past the point under its fairlead has
+  no static solution yet (its touchdown hook is not reached); a lay azimuth across the span
+  solves it. A lay azimuth across the vertical plane of the chord, or a bathymetry sloping across
+  it under the laid run, solves a finite-EI line in 3D from the start (so a march from it stays
+  at rest), and a finite-EI line is laid from its lower end like an `EI = 0` one; a line whose
+  fairlead lies below its other end is laid, and seeded, from the fairlead. With discrete
+  `ATTACHMENTS` the reference sinks each node under its discrete load (its share of the line's
+  weight plus the attachment's net weight), so a module node rests on the laid path like the rest
+  of the run instead of taking its sink for a friction deflection. On a mesh the finite-EI
+  statics refines (adaptive refinement, the bending-length and stability refinements) or
+  coarsens, the reference is laid on that mesh itself, under its own lumped weights and nodal
+  seabed stiffnesses, and the march takes it on the final mesh: a run refined 16x on a seabed
+  curved along it and sloping across it, with a section change on the grounded run, rests where
+  its twin declared on the refined mesh does (to solver precision), where a reference
+  interpolated from the deck nodes moved it by up to 1 mm and reversed its lateral anchor force. The policy is rejected
+  where the statics carry no seabed friction: on decks with bodies, rods or dynamic
+  (`Connect`/`Free`) points (`frictionMu` itself is rejected on the latter and accepted on the
+  default monolithic body and rod march), and on a finite-EI deck whose line has a moving End B
+  (a line shared between two turbines, which takes the compatibility route). The Python `DeckFile`, `DeckWriter` and `DeckModel` take the new
+  rows. See the theory page (Friction in statics).
 - Run-time profile of the standalone driver. With the environment variable
   `CABLEDYN_PROFILE=1`, the driver prints at the end of the run how its wall time divides
   between input parsing, initialisation and statics, and the dynamic march. The march is split

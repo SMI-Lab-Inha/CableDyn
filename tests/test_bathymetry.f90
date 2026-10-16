@@ -14,6 +14,8 @@ PROGRAM test_bathymetry
                                  CD_Bathymetry_Grid_Floor, CD_Bathymetry_Rotate_Curvature, &
                                  CD_BATHY_CREASE_FRACTION
   USE CableDyn_SeabedContact, ONLY: CD_SEABED_CONTACT_BLEND
+  USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK, CD_Static_Line_Equilibrium, &
+                             CableSolverConfig, CableCurrentLoad, CD_StaticLineReport
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
   IMPLICIT NONE
 
@@ -27,6 +29,8 @@ PROGRAM test_bathymetry
   CALL case_crease_rounding_c2()
   CALL case_crease_rounding_planar_exact()
   CALL case_crease_contact_tangent_fd()
+  CALL case_as_laid_tension_sink()
+  CALL case_as_laid_seed_from_last()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -468,5 +472,158 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE expect_vec_fd
+
+  SUBROUTINE case_as_laid_tension_sink()
+    !! The as-laid friction reference on a curved bathymetry (a Gaussian crest along x):
+    !! with kn and no laid tension it is bit-identical to the reference without kn; with a
+    !! laid tension T each interior node's normal penetration deepens by the load
+    !! -T (t_out - t_in).n / kn (n the upward normal), which moves its reference horizontally
+    !! by that over s = sqrt(1 + |grad z|^2) times the local gradient (checked against an independent evaluation on the unsunk path).
+    TYPE(CD_BathymetryType) :: bathy
+    INTEGER, PARAMETER :: NE = 20
+    REAL(wp), PARAMETER :: T = 2.0e4_wp, KN = 1.0e4_wp, SINK = 0.01_wp
+    REAL(wp) :: x(41), y(2), depth(41, 2), l0(NE), ea(NE), sk(NE + 1), kv(NE + 1)
+    REAL(wp) :: r_nokn(2, NE + 1), r_kn(2, NE + 1), r_t(2, NE + 1), r_t0(2, NE + 1), r_t_nokn(2, NE + 1)
+    REAL(wp) :: p(3, 3), g(2), nrm(3), tin(3), tout(3), extra, expect(2), worst
+    INTEGER :: i, j, k, es
+    CHARACTER(160) :: em
+
+    DO i = 1, SIZE(x)
+      x(i) = 5.0_wp*REAL(i - 1, wp)
+      depth(i, :) = 100.0_wp - 10.0_wp*EXP(-((x(i) - 100.0_wp)/30.0_wp)**2)
+    END DO
+    y = [-20.0_wp, 20.0_wp]
+    CALL CD_Init_Bathymetry(bathy, x, y, depth, es, em)
+    CALL expect_es(es, CD_BATHY_OK, 'aslaid:init')
+    l0 = 9.0_wp
+    ea = 1.0e9_wp
+    sk = SINK
+    kv = KN
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, 0.0_wp, r_nokn, es, em, bathymetry=bathy, &
+                                     sink=sk)
+    CALL expect_es(es, CD_STATIC_OK, 'aslaid:ref')
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, 0.0_wp, r_kn, es, em, bathymetry=bathy, &
+                                     sink=sk, kn=kv)
+    CALL require(ALL(r_kn == r_nokn), 'aslaid:no tension, kn changes nothing')
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, T, r_t, es, em, bathymetry=bathy, &
+                                     sink=sk, kn=kv)
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, T, r_t_nokn, es, em, bathymetry=bathy, &
+                                     sink=sk)
+    sk = 0.0_wp
+    CALL CD_Static_As_Laid_Reference([0.0_wp, 0.0_wp], 0.0_wp, l0, ea, T, r_t0, es, em, bathymetry=bathy)
+    worst = 0.0_wp
+    DO j = 2, NE
+      DO k = 1, 3
+        CALL floor_at(bathy, r_t0(1, j + k - 2), r_t0(2, j + k - 2), p(3, k), g)
+        p(1:2, k) = r_t0(:, j + k - 2)
+        IF (k == 2) nrm = [-g(1), -g(2), 1.0_wp]/SQRT(1.0_wp + g(1)**2 + g(2)**2)
+      END DO
+      tin = (p(:, 2) - p(:, 1))/NORM2(p(:, 2) - p(:, 1))
+      tout = (p(:, 3) - p(:, 2))/NORM2(p(:, 3) - p(:, 2))
+      CALL floor_at(bathy, r_t0(1, j), r_t0(2, j), p(3, 2), g)
+      extra = MAX(0.0_wp, SINK - T*DOT_PRODUCT(tout - tin, nrm)/(KN*SQRT(1.0_wp + g(1)**2 + g(2)**2)))
+      expect = r_t0(:, j) + extra*g
+      worst = MAX(worst, MAXVAL(ABS(r_t(:, j) - expect)))
+    END DO
+    CALL require(worst <= 1.0e-12_wp, 'aslaid:tension sink matches the turning force')
+    ! the crest presses the laid line into the seabed: the references differ with tension
+    CALL require(MAXVAL(ABS(r_t - r_t_nokn)) > 1.0e-6_wp, 'aslaid:tension sink active on a crest')
+    CALL CD_End_Bathymetry(bathy)
+  END SUBROUTINE case_as_laid_tension_sink
+
+  SUBROUTINE case_as_laid_seed_from_last()
+    !! The as-laid seed of the EI = 0 static equilibrium for a line whose last node is its lower
+    !! end (a line without a Fixed anchor at node 1, e.g. a FAST.Farm shared line): its friction
+    !! reference is laid from node n (as CD_Init_Line_Model lays it), and the seed must be laid
+    !! from node n too, the mirror image of the seed of the same line numbered from its lower
+    !! end. A grounded line (300 m, laid slack, mu = 0.5) is solved both ways, on a level floor
+    !! and on a bathymetry rising toward the upper end: both take the as-laid seed and reach the
+    !! same equilibrium, node for node mirrored.
+    INTEGER, PARAMETER :: NE = 60, NN = NE + 1
+    REAL(wp), PARAMETER :: L0E = 5.0_wp, EA = 1.0e9_wp, WPL = 1.0e3_wp, KNE = 5.0e4_wp, Z0 = -100.0_wp
+    REAL(wp), PARAMETER :: SLOPE = 0.05_wp, MU = 0.5_wp
+    TYPE(CD_BathymetryType) :: bathy
+    TYPE(CableSolverConfig) :: cfg
+    TYPE(CableCurrentLoad) :: fr_a, fr_b
+    TYPE(CD_StaticLineReport) :: rep_a, rep_b
+    INTEGER :: conn(2, NE), i, j, es, icase
+    REAL(wp) :: l0(NE), ea_e(NE), w(NE), f_ext(3*NN), kn(NN), sink(NN), lo(3), up(3)
+    REAL(wp) :: ref(2, NN), q_a(3*NN), q_b(3*NN), gx(21), gy(2), depth(21, 2), worst
+    LOGICAL :: conv_a, conv_b
+    CHARACTER(160) :: em
+    CHARACTER(32) :: tag
+
+    DO i = 1, NE
+      conn(:, i) = [i, i + 1]
+    END DO
+    l0 = L0E
+    ea_e = EA
+    w = WPL
+    f_ext = 0.0_wp
+    kn = KNE
+    DO i = 1, NE
+      f_ext(3*i) = f_ext(3*i) - 0.5_wp*WPL*L0E
+      f_ext(3*i + 3) = f_ext(3*i + 3) - 0.5_wp*WPL*L0E
+    END DO
+    kn(1) = 0.5_wp*KNE
+    kn(NN) = 0.5_wp*KNE
+    sink = MAX(-f_ext(3:3*NN:3), 0.0_wp)/kn
+    DO i = 1, SIZE(gx)
+      gx(i) = -50.0_wp + 20.0_wp*REAL(i - 1, wp)
+      depth(i, :) = -(Z0 + SLOPE*gx(i))
+    END DO
+    gy = [-50.0_wp, 50.0_wp]
+    CALL CD_Init_Bathymetry(bathy, gx, gy, depth, es, em)
+    CALL expect_es(es, CD_BATHY_OK, 'laid-last:init')
+    lo = [0.0_wp, 0.0_wp, Z0]
+    up = [250.0_wp, 0.0_wp, -10.0_wp]
+    DO icase = 1, 2
+      tag = MERGE('laid-last:flat ', 'laid-last:slope', icase == 1)
+      ! the reference laid from the lower end along +x (the default azimuth of either numbering)
+      IF (icase == 1) THEN
+        CALL CD_Static_As_Laid_Reference(lo(1:2), 0.0_wp, l0, ea_e, 0.0_wp, ref, es, em)
+      ELSE
+        CALL CD_Static_As_Laid_Reference(lo(1:2), 0.0_wp, l0, ea_e, 0.0_wp, ref, es, em, bathymetry=bathy, &
+                                         sink=sink, kn=kn)
+      END IF
+      CALL expect_es(es, CD_STATIC_OK, TRIM(tag)//' reference')
+      fr_a%drag = .FALSE.
+      fr_a%friction_mu = MU
+      fr_a%friction_as_laid = .TRUE.
+      fr_a%friction_ref = ref
+      fr_b = fr_a
+      fr_b%friction_ref = ref(:, NN:1:-1)
+      IF (icase == 1) THEN
+        CALL CD_Static_Line_Equilibrium(lo, up, conn, l0, ea_e, w, f_ext, cfg, .TRUE., q_a, conv_a, rep_a, es, em, &
+                                        seabed_z_floor=Z0, seabed_kn=kn, current=fr_a)
+        CALL expect_es(es, CD_STATIC_OK, TRIM(tag)//' from node 1')
+        CALL CD_Static_Line_Equilibrium(up, lo, conn, l0, ea_e, w, f_ext, cfg, .TRUE., q_b, conv_b, rep_b, es, em, &
+                                        seabed_z_floor=Z0, seabed_kn=kn, current=fr_b)
+      ELSE
+        CALL CD_Static_Line_Equilibrium(lo, up, conn, l0, ea_e, w, f_ext, cfg, .TRUE., q_a, conv_a, rep_a, es, em, &
+                                        seabed_kn=kn, bathymetry=bathy, current=fr_a)
+        CALL expect_es(es, CD_STATIC_OK, TRIM(tag)//' from node 1')
+        CALL CD_Static_Line_Equilibrium(up, lo, conn, l0, ea_e, w, f_ext, cfg, .TRUE., q_b, conv_b, rep_b, es, em, &
+                                        seabed_kn=kn, bathymetry=bathy, current=fr_b)
+      END IF
+      CALL expect_es(es, CD_STATIC_OK, TRIM(tag)//' from node n')
+      CALL require(conv_a .AND. conv_b, TRIM(tag)//' both numberings converge')
+      CALL require(TRIM(rep_a%seed) == 'as-laid run', TRIM(tag)//' node 1 lower: as-laid seed ('// &
+                   TRIM(rep_a%seed)//')')
+      CALL require(TRIM(rep_b%seed) == 'as-laid run', TRIM(tag)//' node n lower: as-laid seed ('// &
+                   TRIM(rep_b%seed)//')')
+      worst = 0.0_wp
+      DO i = 1, NN
+        j = NN + 1 - i
+        worst = MAX(worst, MAXVAL(ABS(q_b(3*i - 2:3*i) - q_a(3*j - 2:3*j))))
+      END DO
+      IF (.NOT. (worst <= 1.0e-6_wp)) WRITE (*, '(A,ES10.3,A)') '  '//TRIM(tag)//': mirror mismatch ', worst, ' m'
+      CALL require(worst <= 1.0e-6_wp, TRIM(tag)//' the two numberings give the mirrored equilibrium')
+      ! the run rests on the seabed where it was laid (its friction holds it there)
+      CALL require(ABS(q_a(3*11) - (Z0 + MERGE(0.0_wp, SLOPE*q_a(3*11 - 2), icase == 1))) < 0.2_wp, &
+                   TRIM(tag)//' node 11 rests on the seabed')
+    END DO
+    CALL CD_End_Bathymetry(bathy)
+  END SUBROUTINE case_as_laid_seed_from_last
 
 END PROGRAM test_bathymetry

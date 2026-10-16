@@ -65,6 +65,25 @@ def test_writer_output_validates_and_round_trips(tmp_path):
     assert path.read_text(encoding="ascii") == deck.text()
 
 
+def test_writer_accepts_static_friction_rows(tmp_path):
+    deck = _writer()
+    deck.set_option("asLaid", "staticsFriction", "Statics seabed friction policy")
+    deck.set_option(45.0, "layAzimuth")
+    deck.set_option(180.0, "layAzimuth1")
+    deck.set_option(2.0e5, "asLaidTension1")
+    parsed = DeckFile.read(deck.write(tmp_path / "friction.dat"))
+    assert parsed.option("staticsFriction").values == ("asLaid",)
+    assert parsed.option("layAzimuth").values == ("45.0",)
+    assert parsed.option("LAYAZIMUTH1").values == ("180.0",)
+    assert parsed.option("asLaidTension1").values == ("200000.0",)
+    with pytest.raises(ValueError, match="unknown option keyword 'layAzimuth1x'"):
+        deck.set_option(1.0, "layAzimuth1x")
+    bad = _writer()
+    bad.set_option(30.0, "layAzimuth7")
+    with pytest.raises(DeckFormatError, match="names no LINE"):
+        bad.text()
+
+
 def test_set_option_rejects_swapped_value_and_keyword():
     deck = _writer()
     with pytest.raises(TypeError, match="set_option\\(value, keyword"):
