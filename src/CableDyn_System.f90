@@ -24,6 +24,7 @@ MODULE CableDyn_System
                             CD_Calc_Model_CoupledLoads, CD_Recompute_Model_Acceleration, &
                             CD_Calc_Model_CoupledKinematicDerivatives, &
                             CD_Calc_Model_CoupledAccelDerivative, CD_Update_Model_CoupledAccelDerivative, &
+                            CD_Calc_Model_CoupledEndMass, &
                             CD_Update_Model_External_Loads, CD_Update_Model_Hydro_Fields, &
                             CD_MODEL_OK, CD_MODEL_BADINPUT, &
                             CD_MODEL_SOLVEFAIL, CD_MODEL_NOT_INITIALIZED, CD_MODEL_ALLOCFAIL, CD_Copy_Model
@@ -2183,20 +2184,28 @@ CONTAINS
     END DO
   END SUBROUTINE CD_Calc_System_CoupledKinematicDerivatives
 
-  SUBROUTINE CD_Calc_System_CoupledAccelDerivative(system, dload_da, ErrStat, ErrMsg)
+  SUBROUTINE CD_Calc_System_CoupledAccelDerivative(system, dload_da, ErrStat, ErrMsg, frozen_interior)
     !! Return the aggregate analytic coupled-load derivative with respect to
-    !! compact prescribed coupled accelerations.
+    !! compact prescribed coupled accelerations. By default the line interiors'
+    !! accelerations follow the coupled ones (the condensed derivative of a step);
+    !! frozen_interior = .TRUE. holds them (-M_cc of every line,
+    !! CD_Calc_Model_CoupledEndMass): the response of CD_Calc_System_CoupledLoads when
+    !! only the coupled motion changes, as in an output probe.
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     REAL(wp), INTENT(OUT) :: dload_da(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: frozen_interior
 
     INTEGER :: i, j, k, lo, hi, nc, es, row, col
+    LOGICAL :: frozen
     CHARACTER(160) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
     dload_da = CD_ZERO
+    frozen = .FALSE.
+    IF (PRESENT(frozen_interior)) frozen = frozen_interior
     IF (.NOT. system%initialized) THEN
       ErrStat = CD_SYSTEM_NOT_INITIALIZED
       ErrMsg = 'CableDyn_System: system is not initialized'
@@ -2216,8 +2225,25 @@ CONTAINS
         RETURN
       END IF
       hi = lo + nc - 1
-      ! the line's derivative stays in its own workspace (ad_result) and is summed from there
-      IF (nc > 0) THEN
+      IF (nc > 0 .AND. frozen) THEN
+        BLOCK
+          REAL(wp) :: m_cc(nc, nc)
+          CALL CD_Calc_Model_CoupledEndMass(system%lines(i), m_cc, es, em)
+          IF (es /= CD_MODEL_OK) THEN
+            ErrStat = CD_SYSTEM_SOLVEFAIL
+            ErrMsg = 'CableDyn_System: line coupled end mass failed: '//TRIM(em)
+            RETURN
+          END IF
+          DO j = 1, nc
+            row = system%coupled_dof_map(lo + j - 1)
+            DO k = 1, nc
+              col = system%coupled_dof_map(lo + k - 1)
+              dload_da(row, col) = dload_da(row, col) - m_cc(j, k)
+            END DO
+          END DO
+        END BLOCK
+      ELSE IF (nc > 0) THEN
+        ! the line's derivative stays in its own workspace (ad_result) and is summed from there
         CALL CD_Update_Model_CoupledAccelDerivative(system%lines(i), es, em)
         IF (es /= CD_MODEL_OK) THEN
           ErrStat = CD_SYSTEM_SOLVEFAIL

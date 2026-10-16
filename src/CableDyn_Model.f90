@@ -96,6 +96,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Calc_Model_CoupledLoads
   PUBLIC :: CD_Calc_Model_CoupledKinematicDerivatives
   PUBLIC :: CD_Calc_Model_CoupledAccelDerivative, CD_Update_Model_CoupledAccelDerivative
+  PUBLIC :: CD_Calc_Model_CoupledEndMass
   PUBLIC :: CD_Update_Model_Hydro_Fields
   PUBLIC :: CD_Update_Model_External_Loads
   PUBLIC :: CD_Update_Model_CoupledMotion
@@ -3491,6 +3492,51 @@ CONTAINS
     CALL CD_Update_Model_CoupledAccelDerivative(model, ErrStat, ErrMsg)
     IF (ErrStat == CD_MODEL_OK) dload_da = model%dynamic_workspace%ad_result
   END SUBROUTINE CD_Calc_Model_CoupledAccelDerivative
+
+  SUBROUTINE CD_Calc_Model_CoupledEndMass(model, m_cc, ErrStat, ErrMsg)
+    !! The coupled-coupled block M_cc of the line mass (the consistent structural mass plus the
+    !! added mass at the current positions, exactly as CD_Update_Model_CoupledAccelDerivative
+    !! assembles it), n_coupled_dof square in the compact coupled ordering. -M_cc is the
+    !! derivative of CD_Calc_Model_CoupledLoads with respect to the prescribed coupled
+    !! accelerations at fixed free-DOF accelerations: the response of the coupled loads when
+    !! only the coupled motion changes and the line interior keeps its state (an output probe),
+    !! whereas CD_Calc_Model_CoupledAccelDerivative lets the free accelerations follow.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(OUT) :: m_cc(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: nc, bwf, e, i, j, r, c
+
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    m_cc = CD_ZERO
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_MODEL_NOT_INITIALIZED
+      ErrMsg = 'CableDyn_Model: model is not initialized'
+      RETURN
+    END IF
+    nc = SIZE(model%fixed_dofs)
+    IF (SIZE(m_cc, 1) /= nc .OR. SIZE(m_cc, 2) /= nc) THEN
+      CALL fail(ErrStat, ErrMsg, 'm_cc output must have shape (n_coupled_dof, n_coupled_dof)')
+      RETURN
+    END IF
+    IF (nc == 0) RETURN
+    ! brings the banded full mass ad_full up to date (or confirms its cache)
+    CALL CD_Update_Model_CoupledAccelDerivative(model, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    ! the half-bandwidth ad_full was stored with (CD_Update_Model_CoupledAccelDerivative)
+    bwf = 2
+    DO e = 1, model%n_elem
+      bwf = MAX(bwf, 3*ABS(model%elem_conn(1, e) - model%elem_conn(2, e)) + 2)
+    END DO
+    DO j = 1, nc
+      c = model%fixed_dofs(j)
+      DO i = 1, nc
+        r = model%fixed_dofs(i)
+        IF (ABS(r - c) <= bwf) m_cc(i, j) = model%dynamic_workspace%ad_full(bwf + 1 + r - c, c)
+      END DO
+    END DO
+  END SUBROUTINE CD_Calc_Model_CoupledEndMass
 
   SUBROUTINE CD_Update_Model_SegmentLength(model, elem, l0_new, l0_dot, ErrStat, ErrMsg)
     !! Active line control (the MoorDyn CtrlChan mechanism): set one element's

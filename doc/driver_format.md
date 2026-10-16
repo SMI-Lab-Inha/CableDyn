@@ -402,9 +402,13 @@ row. On this route:
   for the node's current acceleration, so the rotation feels the platform acceleration and a
   CalcOutput at an off-step acceleration returns the rod's effective inertia about the pin.
   `Pinned` rods turn about their fixed End A. With `bodyIC static` both start balanced about
-  their pins. A rod end that carries no line needs no `Rod<ID>A`/`Rod<ID>B` POINT row on this
-  route. Outside a coupled host a `CoupledPinned` rod is rejected by name ("requires a coupled
-  host"), zero-length ones included;
+  their pins; a pinned rod that carries no line is not part of the static solve and starts at
+  rest in its deck orientation, turned by `PtfmInit` for a `CoupledPinned` rod (a dry pendulum
+  given at an angle starts at that angle). An end
+  of a `Pinned` or `CoupledPinned` rod that carries no line needs no `Rod<ID>A`/`Rod<ID>B` POINT
+  row on this route; every other rod needs a line or a POINT row at both ends. Outside a
+  coupled host a `CoupledPinned` rod is rejected by name ("requires a coupled host"),
+  zero-length ones included;
 - `Coupled`/`Vessel` bodies are platform-borne the same way: a mesh node at the body reference
   point, the body frame turning with the platform, returning the force and moment about the
   reference point of its `Body<ID>` lines, weight, buoyancy and restoring, Morison and

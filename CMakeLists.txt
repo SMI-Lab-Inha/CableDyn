@@ -1046,7 +1046,8 @@ set_tests_properties(openfast_aggregate openfast_aggregate_touchdown PROPERTIES
 
 # Pinned and CoupledPinned rods on the coupled aggregate: the compound-pendulum period, a held
 # host equal to a fixed pin, constant and harmonic pin accelerations against closed forms,
-# sub-cycling, snapshot/restore, the output probe, restart and PtfmInit with the static start.
+# sub-cycling, snapshot/restore, the output probe, restart, PtfmInit with the static start, a
+# step without the staged rods, and rod ends without a line.
 add_executable(test_openfast_pinned_rod tests/test_openfast_pinned_rod.f90)
 target_link_libraries(test_openfast_pinned_rod PRIVATE cabledyn_core)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/openfast_pinned_rod)

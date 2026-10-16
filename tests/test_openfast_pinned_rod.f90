@@ -16,15 +16,20 @@ PROGRAM test_openfast_pinned_rod
   !!      explicitly and matches a run at the sub-step size; the host orientation and angular
   !!      rates are ignored;
   !!   6) snapshot / step / restore / step is bit-identical;
-  !!   7) an output probe returns -M_eff a_p for a pin acceleration a_p (the re-solved rotation)
+  !!   7) an output probe returns -M_eff a_p for a pin acceleration a_p (the re-solved rotation),
+  !!      does not depend on the end acceleration the attached lines' loads were evaluated with,
   !!      and leaves the state bit-identical once restored;
   !!   8) a fresh instance overlaid with the checkpoint state (host kinematics, line interiors,
-  !!      rod states, committed line-end motion) continues bit-identically;
+  !!      rod states, committed line-end motion) returns the same loads before the next step and
+  !!      continues bit-identically;
   !!   9) PtfmInit moves the pin with the platform and the static initial condition balances the
   !!      rod about it;
-  !!  10) a CoupledPinned rod outside a coupled host is refused by name.
+  !!  10) a CoupledPinned rod outside a coupled host is refused by name;
+  !!  11) the rod march needs no staged copy of the step-start rods (the rod carries its
+  !!      step-start pin): a step without one is bit-identical;
+  !!  12) only a Pinned or CoupledPinned rod may leave an end without a line or POINT row.
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
+  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Rod_SetHostKinematics, CD_Step_Aggregate_Rod
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_UpdateStates_Moving, &
                                          CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_Snapshot, CD_AGG_Restore, &
@@ -33,7 +38,7 @@ PROGRAM test_openfast_pinned_rod
                                          CD_AGG_HasRod
   USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_Get_System_Line_State, &
                              CD_Update_System_Line_Interior_State, CD_SYSTEM_OK, CD_System_NSystemCoupledDOF, &
-                             CD_Get_System_CoupledMotion, CD_Update_System_CoupledMotion
+                             CD_Get_System_CoupledMotion, CD_Update_System_CoupledMotion, CD_Calc_System_CoupledLoads
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
   REAL(wp), PARAMETER :: PI = 3.141592653589793_wp, G = 9.80665_wp
@@ -49,6 +54,8 @@ PROGRAM test_openfast_pinned_rod
   CALL case_probe()
   CALL case_ptfm_static()
   CALL case_standalone_refusal()
+  CALL case_unstaged_step()
+  CALL case_bare_rod_ends()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -761,6 +768,16 @@ CONTAINS
     CALL CD_Get_System_CoupledMotion(coarse%sys%fast%system, cq, cvv, ca, es, em)
     CALL CD_Update_System_CoupledMotion(agg_b%sys%fast%system, cq, cvv, ca, es, em)
     CALL require(es == CD_SYSTEM_OK, 'restart:coupled motion: '//TRIM(em))
+    ! between steps (a supercycled host evaluates the restored state before the next step) the
+    ! pin force depends on the mirrored rod state only, not on the host pin it was stepped with
+    CALL CD_AGG_CalcOutput(coarse, es, em)
+    CALL CD_AGG_GetMovingPointMesh(coarse, p, v, a, f, es, em, moment=mo)
+    CALL CD_AGG_CalcOutput(agg_b, es, em)
+    CALL CD_AGG_GetMovingPointMesh(agg_b, p, v, a, fb, es, em, moment=mb)
+    WRITE (*, '(A,ES10.3)') 'CoupledPinned restart overlay: |pin force difference| before the next step = ', &
+      nan_max_abs(f - fb)
+    CALL require(nan_max_abs(f - fb) <= 0.0_wp .AND. nan_max_abs(mo - mb) <= 0.0_wp, &
+                 'restart:bit-identical loads of the restored state before the next step')
     err = 0.0_wp
     DO step = NC + 2, NC + 30
       k = host_surge(REAL(step, wp)*DTC)
@@ -802,9 +819,9 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: p(:, :), v(:, :), a(:, :), f(:, :), f0(:, :), mo(:, :), p0(:, :)
     REAL(wp), ALLOCATABLE :: sp(:, :), sv(:, :), sa(:, :), so(:, :, :), sw(:, :), sal(:, :)
     REAL(wp), ALLOCATABLE :: lq(:, :), lv(:, :), la(:, :), rs(:), rs2(:), fb(:, :), mb(:, :)
-    REAL(wp), ALLOCATABLE :: cq(:), cvv(:), ca(:)
-    REAL(wp) :: ic, ip, ap, k(9), err
-    INTEGER :: es, n, step, it, nl, il, ndof, maxdof, ncd
+    REAL(wp), ALLOCATABLE :: cq(:), cvv(:), ca(:), q2(:), v2(:), a2(:), l1(:), l2(:)
+    REAL(wp) :: ic, ip, ap, k(9), err, endb(3)
+    INTEGER :: es, n, step, it, nl, il, ndof, maxdof, ncd, ib
     LOGICAL :: cv, st
     CHARACTER(512) :: em
 
@@ -883,6 +900,36 @@ CONTAINS
       CALL CD_AGG_CalcOutput(agg, es, em)
       CALL CD_AGG_GetMovingPointMesh(agg, p, v, a, f, es, em, moment=mo)
       CALL require(ALL(IEEE_IS_FINITE(f)) .AND. nan_max_abs(mo(:, n)) <= 0.0_wp, 'probe:finite force, zero moment')
+      ! The tethers load End B with their end-node inertia at the end acceleration the system
+      ! holds (the probe pin with the committed rotation). Give that end another acceleration:
+      ! its line load changes, the pin force does not (the inertia is moved to the re-solved
+      ! rotation exactly).
+      CALL CD_AGG_Get_Rod_States(agg, rs2, es, em)
+      endb = rs2(1:3) + rs2(16:18)
+      ALLOCATE (q2(ncd), v2(ncd), a2(ncd), l1(ncd), l2(ncd))
+      CALL CD_Get_System_CoupledMotion(agg%sys%fast%system, q2, v2, a2, es, em)
+      ib = 0
+      DO il = 1, ncd/3
+        IF (nan_max_abs(q2(3*il - 2:3*il) - endb) <= 1.0e-9_wp) ib = il
+      END DO
+      CALL require(ib > 0, 'probe:End B is a coupled point of the line system')
+      IF (ib > 0) THEN
+        CALL CD_Calc_System_CoupledLoads(agg%sys%fast%system, l1, es, em)
+        a2(3*ib - 2:3*ib) = a2(3*ib - 2:3*ib) + [3.0_wp, -2.0_wp, 1.0_wp]
+        CALL CD_Update_System_CoupledMotion(agg%sys%fast%system, q2, v2, a2, es, em)
+        CALL require(es == CD_SYSTEM_OK, 'probe:end acceleration: '//TRIM(em))
+        CALL CD_Calc_System_CoupledLoads(agg%sys%fast%system, l2, es, em)
+        CALL CD_AGG_CalcOutput(agg, es, em)
+        CALL CD_AGG_GetMovingPointMesh(agg, p, v, a, fb, es, em, moment=mb)
+        WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'probe with another End B acceleration: line load change ', &
+          nan_max_abs(l2(3*ib - 2:3*ib) - l1(3*ib - 2:3*ib)), ' N, pin force change ', &
+          nan_max_abs(fb(:, n) - f(:, n)), ' N'
+        CALL require(nan_max_abs(l2(3*ib - 2:3*ib) - l1(3*ib - 2:3*ib)) > 1.0_wp, &
+                     'probe:the End B line load carries the end acceleration')
+        CALL require(nan_max_abs(fb(:, n) - f(:, n)) <= 1.0e-9_wp*nan_max_abs(f(:, n)) .AND. &
+                     nan_max_abs(mb(:, n)) <= 0.0_wp, 'probe:pin force independent of the held end acceleration')
+      END IF
+      DEALLOCATE (q2, v2, a2, l1, l2)
       CALL CD_AGG_UpdateStates_Moving(agg, sp, sv, sa, es, em, output_probe=.TRUE., orientation=so, &
                                       angular_velocity=sw, angular_acceleration=sal)
       DO il = 1, nl
@@ -961,6 +1008,99 @@ CONTAINS
                  'ptfm:host force is the net rod load, no moment')
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_ptfm_static
+
+  ! --------------------------------------------------------------------------------------------- !
+  ! 11-12: a step without the staged rods, and rod ends without a point                           !
+  ! --------------------------------------------------------------------------------------------- !
+
+  SUBROUTINE case_unstaged_step()
+    !! The rod march of a CoupledPinned rod needs no staged copy of the step-start rods: the rod
+    !! state carries its step-start pin. One instance marches through CD_AGG_Step_Moving (which
+    !! stages the rods and passes them on); its twin takes the t + dt pin through
+    !! CD_Rod_SetHostKinematics and steps with CD_Step_Aggregate_Rod alone (no staged rods, no
+    !! host overlay: the independent fairlead stays where the start transfer put it). Over the
+    !! first step (the start-acceleration solve with the pin at its step-start pose) and the
+    !! sub-cycled steps after it (the pin interpolated from its step start), the two are
+    !! bit-identical under a harmonic pin surge, whose acceleration differs between step start
+    !! and end.
+    TYPE(CD_AGG_ModuleType) :: staged, bare
+    REAL(wp), PARAMETER :: DTC = 0.1_wp
+    REAL(wp), ALLOCATABLE :: p(:, :), v(:, :), a(:, :), f(:, :), p0(:, :), rs(:), rs2(:)
+    REAL(wp), ALLOCATABLE :: cq(:), cvv(:), ca(:), cq2(:), cvv2(:), ca2(:)
+    REAL(wp) :: k(9), err, t
+    INTEGER :: es, n, step, it, ncd
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+
+    CALL write_tethered_deck('pinrod_unstaged.dat', 'CoupledPinned', 'deck')
+    CALL CD_AGG_Init_From_Deck(staged, 'pinrod_unstaged.dat', DTC, es, em)
+    CALL require(es == CD_AGG_OK, 'unstaged:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_Init_From_Deck(bare, 'pinrod_unstaged.dat', DTC, es, em)
+    n = CD_AGG_NMovingPoints(staged, es, em)
+    ALLOCATE (p(3, n), v(3, n), a(3, n), f(3, n), p0(3, n))
+    ALLOCATE (rs(CD_AGG_Rod_MirrorSize(staged)), rs2(CD_AGG_Rod_MirrorSize(staged)))
+    ncd = CD_System_NSystemCoupledDOF(staged%sys%fast%system)
+    ALLOCATE (cq(ncd), cvv(ncd), ca(ncd), cq2(ncd), cvv2(ncd), ca2(ncd))
+    CALL CD_AGG_GetMovingPointMesh(staged, p0, v, a, f, es, em)
+    err = 0.0_wp
+    DO step = 0, 20
+      t = REAL(step, wp)*DTC
+      k = host_surge(t)
+      p = p0
+      v = 0.0_wp
+      a = 0.0_wp
+      p(:, n) = p0(:, n) + k(1:3)
+      v(:, n) = k(4:6)
+      a(:, n) = k(7:9)
+      IF (step == 0) THEN
+        CALL CD_AGG_UpdateStates_Moving(staged, p, v, a, es, em)
+        CALL CD_AGG_UpdateStates_Moving(bare, p, v, a, es, em)
+        CALL require(es == CD_AGG_OK, 'unstaged:start transfer: '//TRIM(em))
+        CYCLE
+      END IF
+      CALL CD_AGG_Step_Moving(staged, DTC, p, v, a, cv, st, it, es, em, t_committed=t)
+      CALL require(es == CD_AGG_OK, 'unstaged:staged step: '//TRIM(em))
+      CALL CD_Rod_SetHostKinematics(bare%rod, p(:, n:n), v(:, n:n), a(:, n:n), es, em)
+      CALL require(es == CD_DECKDRV_OK, 'unstaged:pin transfer: '//TRIM(em))
+      CALL CD_Step_Aggregate_Rod(bare%sys%fast%system, bare%rod, t - DTC, DTC, cv, st, it, es, em)
+      CALL require(es == CD_DECKDRV_OK, 'unstaged:bare step: '//TRIM(em))
+      IF (es /= CD_DECKDRV_OK) EXIT
+      CALL CD_AGG_Get_Rod_States(staged, rs, es, em)
+      CALL CD_AGG_Get_Rod_States(bare, rs2, es, em)
+      CALL CD_Get_System_CoupledMotion(staged%sys%fast%system, cq, cvv, ca, es, em)
+      CALL CD_Get_System_CoupledMotion(bare%sys%fast%system, cq2, cvv2, ca2, es, em)
+      err = MAX(err, nan_max_abs(rs - rs2), nan_max_abs(cq - cq2), nan_max_abs(cvv - cvv2), nan_max_abs(ca - ca2))
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'CoupledPinned step without staged rods: max |state difference| = ', err, &
+      ' (rod turned ', ABS(rod_angle(rs)), ' rad)'
+    CALL require(err <= 0.0_wp, 'unstaged:the step-start pin needs no staged rods (bit-identical)')
+    CALL require(ABS(rod_angle(rs)) > 1.0e-3_wp, 'unstaged:the pin motion turns the rod')
+    CALL CD_AGG_End(staged, es, em)
+    CALL CD_AGG_End(bare, es, em)
+  END SUBROUTINE case_unstaged_step
+
+  SUBROUTINE case_bare_rod_ends()
+    !! On the coupled route only a Pinned or CoupledPinned rod may leave an end without a line or
+    !! Rod<N>A/B POINT row (its pin holds it): the tethered deck, whose rod carries no line at End
+    !! A, initialises with a Pinned or CoupledPinned rod and is refused with a Free or Coupled
+    !! one, as before this release.
+    TYPE(CD_AGG_ModuleType) :: agg
+    CHARACTER(16), PARAMETER :: KINDS(4) = [CHARACTER(16) :: 'Pinned', 'CoupledPinned', 'Free', 'Coupled']
+    INTEGER :: es, i
+    CHARACTER(512) :: em
+    DO i = 1, 4
+      CALL write_tethered_deck('pinrod_bare.dat', TRIM(KINDS(i)), 'deck')
+      CALL CD_AGG_Init_From_Deck(agg, 'pinrod_bare.dat', 0.02_wp, es, em)
+      IF (i <= 2) THEN
+        CALL require(es == CD_AGG_OK, 'bare-end:'//TRIM(KINDS(i))//' rod accepted: '//TRIM(em))
+      ELSE
+        CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'requires Rod<N>A and Rod<N>B points') > 0 .AND. &
+                     INDEX(em, 'Rod1A') > 0, 'bare-end:'//TRIM(KINDS(i))//' rod refused: '//TRIM(em))
+      END IF
+      CALL CD_AGG_End(agg, es, em)
+    END DO
+  END SUBROUTINE case_bare_rod_ends
 
   ! --------------------------------------------------------------------------------------------- !
   ! 10: no coupled host                                                                           !

@@ -817,12 +817,14 @@ CONTAINS
       END IF
     END IF
     IF (self%nhost_rod + self%nhost_body > 0) THEN
+      ! a transfer without advancing: the host kinematics of the committed time, from which the
+      ! next step of a CoupledPinned rod starts (an output probe is restored by its caller)
       IF (PRESENT(orientation)) THEN
         CALL set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, orientation=orientation, &
-                              angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha)
+                              angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha, step_start=.TRUE.)
       ELSE
         CALL set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, &
-                              angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha)
+                              angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha, step_start=.TRUE.)
       END IF
       IF (ErrStat /= CD_AGG_OK) RETURN
       CALL overlay_host_objects(self, is_output_probe, ErrStat, ErrMsg)
@@ -2228,18 +2230,24 @@ CONTAINS
   END SUBROUTINE overlay_host_objects
 
   SUBROUTINE set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, orientation, &
-                              angular_velocity, angular_acceleration)
+                              angular_velocity, angular_acceleration, step_start)
     !! Impose the host-rod columns (the trailing nhost_rod moving columns) on the rod runtime.
+    !! step_start: a transfer that does not advance (CD_AGG_UpdateStates_Moving), whose host
+    !! kinematics the next step of a CoupledPinned rod starts from (CD_Rod_SetHostKinematics).
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: step_start
     INTEGER :: c0, c1, es
+    LOGICAL :: at_start
     CHARACTER(512) :: em
     ErrStat = CD_AGG_OK
     ErrMsg = ''
+    at_start = .FALSE.
+    IF (PRESENT(step_start)) at_start = step_start
     IF (self%nhost_body > 0) THEN
       c0 = self%ncp_sys + self%ncable + self%nhost_rod + 1
       c1 = ncp_all(self)
@@ -2265,19 +2273,19 @@ CONTAINS
       IF (PRESENT(angular_velocity)) THEN
         CALL CD_Rod_SetHostKinematics(self%rod, position(:, c0:c1), velocity(:, c0:c1), acceleration(:, c0:c1), &
                                       es, em, orientation(:, :, c0:c1), angular_velocity(:, c0:c1), &
-                                      angular_acceleration(:, c0:c1))
+                                      angular_acceleration(:, c0:c1), step_start=at_start)
       ELSE
         CALL CD_Rod_SetHostKinematics(self%rod, position(:, c0:c1), velocity(:, c0:c1), acceleration(:, c0:c1), &
-                                      es, em, orientation(:, :, c0:c1))
+                                      es, em, orientation(:, :, c0:c1), step_start=at_start)
       END IF
     ELSE
       IF (PRESENT(angular_velocity)) THEN
         CALL CD_Rod_SetHostKinematics(self%rod, position(:, c0:c1), velocity(:, c0:c1), acceleration(:, c0:c1), &
                                       es, em, angular_velocity=angular_velocity(:, c0:c1), &
-                                      angular_acceleration=angular_acceleration(:, c0:c1))
+                                      angular_acceleration=angular_acceleration(:, c0:c1), step_start=at_start)
       ELSE
         CALL CD_Rod_SetHostKinematics(self%rod, position(:, c0:c1), velocity(:, c0:c1), acceleration(:, c0:c1), &
-                                      es, em)
+                                      es, em, step_start=at_start)
       END IF
     END IF
     IF (es /= CD_DECKDRV_OK) CALL map_deck_status(es, em, ErrStat, ErrMsg)

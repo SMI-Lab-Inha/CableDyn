@@ -136,10 +136,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the rod's net force less its inertia with zero moment. The angular acceleration in that force
   is solved for the node's current acceleration, so an output probe sees the rod's effective
   inertia about the pin. `PtfmInit` moves the rod with the platform, the static initial
-  condition balances it about its pin, sub-cycled steps move the pin along the interpolated
-  host path, and checkpoint restarts and correction iterations reproduce the run bit for bit
-  with the existing rod state mirror. A rod end that carries no line no longer needs a
-  `Rod<N>A`/`Rod<N>B` POINT row on the coupled route. The C API runs `Pinned` rods, as its
+  condition balances it about its pin (a pinned rod that carries no line keeps its deck
+  orientation), sub-cycled steps move the pin along the host path interpolated linearly as for
+  every other host node, and checkpoint restarts and correction iterations reproduce the run bit
+  for bit with the existing rod state mirror. An end of a `Pinned` or `CoupledPinned` rod that
+  carries no line needs no `Rod<N>A`/`Rod<N>B` POINT row on the coupled route; other rods still
+  need one at both ends. The C API runs `Pinned` rods, as its
   manual page already stated. The standalone driver and the C API refuse `CoupledPinned` rods
   by name; FAST.Farm decks still refuse rods, OpenFAST linearisation still refuses rods, and
   `CoupledPinned` bodies remain unsupported. See the manual's OpenFAST page (Lifecycle

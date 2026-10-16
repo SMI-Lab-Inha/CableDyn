@@ -1794,7 +1794,9 @@ body's position and a rotation-vector increment on SO(3) (for a free rod only th
 normal to its axis), each pinned rod's two rotations about its pin, and each point's position.
 A pinned rod's residual rows are its moment about the pin; its net force acts on its parent body
 at the pin (a rod pinned to a fixed point has none, and a ``CoupledPinned`` rod in OpenFAST is
-balanced about its pin at the platform's initial pose). A deck with pinned rods takes the
+balanced about its pin at the platform's initial pose). A free or pinned rod that no line
+attaches to (nor, for a rod pinned to a body, any line of its body) is not an unknown: it keeps
+its deck pose and starts at rest there. A deck with pinned rods takes the
 central-difference Jacobian of the full residual. A finite-EI line enters with its axial
 stiffness and weight only. The residual is the net force and moment of the loads the
 dynamic step applies at rest: weight, buoyancy and hydrostatic restoring, steady-current drag,
@@ -1937,12 +1939,34 @@ so the pin acceleration :math:`\mathbf{a}_p` loads the rotation through the rod'
 the implicit drag acts on the velocity change
 :math:`\tfrac{1}{2}\Delta t(\boldsymbol{\alpha}_{n+1} - \boldsymbol{\alpha}_n)\times\mathbf{r}` of the
 pinned centre. The sub-step estimate takes the line springs through their arms from the pin
-against the rotational inertia about the pin, and in a sub-cycled step the host pin moves linearly
-between its step-start and end-of-step position, velocity and acceleration. The host receives the
-rod's net load less its inertia at the pin, with the angular acceleration solved again for the
-pin's current acceleration, and no moment. MoorDyn-F's coupled pinned rod keeps the same pin
-acceleration term in its rotation equation and returns the same force: its output call evaluates
-the rod's state derivative at the current input first.
+against the rotational inertia about the pin. In a sub-cycled step the host pin's position,
+velocity and acceleration are each interpolated linearly between their step-start values (the End
+A motion of the committed rod) and the end-of-step host input, as the host fairleads of the lines
+and the ``Coupled`` rods are, so points on one platform keep their relative positions under a
+translation within the step. This is second order: between exact end values the interpolated
+position departs from the host path by at most :math:`\Delta t^2 \max|\mathbf{a}_p|/8`, the
+interpolated velocity is not the derivative of the interpolated position (they differ by
+:math:`O(\Delta t\,|\mathbf{a}_p|)`), and a pin moving at constant velocity is reproduced exactly.
+A first step without a committed angular acceleration takes its starting one with the pin at its
+step-start pose.
+
+The host receives the rod's net load less its inertia at the pin, and no moment. It is the
+direct feedthrough of the pin acceleration at the rod's current state: the pin position,
+velocity and acceleration are those the host last set (re-derived from the rod's End A motion,
+so that a checkpoint restart reproduces the force between steps bit for bit), the rotation, the
+angular velocity and the held fluid are the committed ones, and the angular acceleration is
+solved again for the pin's current acceleration. A CalcOutput at an off-step pin acceleration
+therefore returns the rod's effective inertia about the pin. The attached lines keep their
+committed interior state, accelerations included, as in every output evaluation, and their end
+loads are taken at the end accelerations of the re-solved rotation: the solve moves the end-node
+inertia from the end accelerations the system holds with the lines' coupled mass block
+:math:`\mathbf{M}_{cc}` (structural and added mass; the step's corrector instead lets the line
+interior follow, :math:`\mathbf{M}_{cc} - \mathbf{M}_{cf}\mathbf{M}_{ff}^{-1}\mathbf{M}_{fc}`). At a
+held interior the end loads are linear in the end accelerations, so the force does not depend on
+the end accelerations the line loads were evaluated with. MoorDyn-F's coupled pinned rod keeps
+the same pin acceleration term in its rotation equation and returns the same force: its output
+call evaluates the rod's state derivative at the current input first (its lumped line mass has
+no interior coupling).
 
 **Mixed topologies.** One step marches every object of a deck together: bodies with their fixed
 and pinned rods, free and pinned rods, the ``EI = 0`` lines with their ``Free``/``Connect``

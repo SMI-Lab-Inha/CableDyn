@@ -720,6 +720,13 @@ MODULE CableDyn_DeckDriver
     ! about it stays its own degree of freedom
     LOGICAL :: is_host_pinned = .FALSE.
     REAL(wp) :: pin_v(3) = CD_ZERO, pin_a(3) = CD_ZERO
+    ! pin0, pin0_v, pin0_a (host-pinned rod): the pin kinematics at the start of the coming step,
+    ! i.e. the End A motion of the committed rod state (set_rod_pin_start). They are set where
+    ! the committed state is (Init, the end of every step, a mirror restore, a host transfer
+    ! that does not advance) and not by the transfer of the t + dt host kinematics before a
+    ! step, so the step's start-acceleration solve and its sub-steps have the step-start pin
+    ! without a staged copy of the rods.
+    REAL(wp) :: pin0(3) = CD_ZERO, pin0_v(3) = CD_ZERO, pin0_a(3) = CD_ZERO
     ! Rod pinned to a body (Body<N>Pinned): the index of the parent body in the march's body
     ! states and the pin (End A) in the body frame; pin then follows the body
     INTEGER :: parent = 0
@@ -16408,8 +16415,30 @@ CONTAINS
       rod_state(i)%inertia(1) = 0.5_wp*rod_state(i)%mass*radius*radius
       rod_state(i)%inertia(2) = rod_state(i)%mass*(3.0_wp*radius*radius + rod_state(i)%length**2)/12.0_wp
       rod_state(i)%inertia(3) = rod_state(i)%inertia(2)
+      ! a host-pinned rod starts its first step from its pin at rest in the deck pose
+      IF (rod_state(i)%is_host_pinned) CALL set_rod_pin_start(rod_state(i))
     END DO
   END SUBROUTINE init_rod_states
+
+  SUBROUTINE rod_end_a_motion(rod, p, v, a)
+    !! Position, velocity and acceleration of a rod's End A from its rigid motion (centre, frame,
+    !! angular rates).
+    TYPE(RodState), INTENT(IN) :: rod
+    REAL(wp), INTENT(OUT) :: p(3), v(3), a(3)
+    REAL(wp) :: arm(3)
+    arm = MATMUL(rod%rot_mat, [-rod%half_length, CD_ZERO, CD_ZERO])
+    p = rod%r + arm
+    v = rod%v + cross3(rod%omega, arm)
+    a = rod%a + cross3(rod%alpha, arm) + cross3(rod%omega, cross3(rod%omega, arm))
+  END SUBROUTINE rod_end_a_motion
+
+  SUBROUTINE set_rod_pin_start(rod)
+    !! Record the committed End A motion of a host-pinned rod as the pin kinematics its next step
+    !! starts from (RodState%pin0). Derived from the rod state, which the checkpoint mirror
+    !! carries, so a restored run takes the same values bit for bit.
+    TYPE(RodState), INTENT(INOUT) :: rod
+    CALL rod_end_a_motion(rod, rod%pin0, rod%pin0_v, rod%pin0_a)
+  END SUBROUTINE set_rod_pin_start
 
   SUBROUTINE ensure_rod_step_workspace(work, ncoupled, nrod, npoint)
     TYPE(RodStepWorkspace), INTENT(INOUT) :: work
@@ -20001,10 +20030,11 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: host_q(:), host_v(:), host_a(:)
 
     INTEGER :: ir, nsub, isub, it, base_a, base_b, k
-    ! host_start: step-start state of the host-driven rods (see step_rigid6_system)
+    ! host_start: step-start state of the Coupled/Vessel rods (see step_rigid6_system); a
+    ! host-pinned rod carries its step-start pin itself (RodState%pin0)
     TYPE(RodState), INTENT(IN), OPTIONAL :: host_start(:)
     REAL(wp), ALLOCATABLE :: hk_end(:, :)
-    LOGICAL :: conv_s, stall_s
+    LOGICAL :: conv_s, stall_s, host_pins
     REAL(wp) :: omega2, arms(3, 2), mass6(6), added6(6, 6), drag6(6, 6), f_dummy(3), m_dummy(3), mp(3, 3)
     REAL(wp), ALLOCATABLE :: q0h(:), v0h(:), a0h(:)
 
@@ -20046,20 +20076,21 @@ CONTAINS
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     ! A host-pinned rod without a committed acceleration (the first step) takes its starting
     ! acceleration with its pin at the step start: the host has already placed the pin at
-    ! t + dt, so the rods go back to the staged start for it and return to t + dt after it.
-    IF (PRESENT(host_start)) THEN
-      IF (ANY(rod_state%is_host_pinned .AND. .NOT. rod_state%accel_valid)) THEN
-        CALL save_host_end_rod(rod_state, hk_end)
-        CALL interp_host_rod(rod_state, host_start, hk_end, CD_ZERO)
-        CALL rod_start_accelerations(system, points, opts, rod_state, time - dt, work, ErrStat, ErrMsg, bathymetry)
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        CALL interp_host_rod(rod_state, host_start, hk_end, CD_ONE)
-      END IF
+    ! t + dt, so the rods go back to their step-start pin (pin0, which the rod state carries;
+    ! no staged copy is needed) for it and return to t + dt after it.
+    host_pins = ANY(rod_state%is_host_pinned)
+    IF (ANY(rod_state%is_host_pinned .AND. .NOT. rod_state%accel_valid)) THEN
+      CALL save_host_end_rod(rod_state, hk_end)
+      CALL interp_host_pins(rod_state, hk_end, CD_ZERO)
+      CALL rod_start_accelerations(system, points, opts, rod_state, time - dt, work, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL interp_host_pins(rod_state, hk_end, CD_ONE)
     END IF
     DO isub = 1, nsub
-      IF (nsub > 1 .AND. PRESENT(host_start)) THEN
+      IF (nsub > 1 .AND. (PRESENT(host_start) .OR. host_pins)) THEN
         IF (isub == 1) CALL save_host_end_rod(rod_state, hk_end)
-        CALL interp_host_rod(rod_state, host_start, hk_end, REAL(isub, wp)/REAL(nsub, wp))
+        IF (PRESENT(host_start)) CALL interp_host_rod(rod_state, host_start, hk_end, REAL(isub, wp)/REAL(nsub, wp))
+        IF (host_pins) CALL interp_host_pins(rod_state, hk_end, REAL(isub, wp)/REAL(nsub, wp))
       END IF
       IF (.NOT. PRESENT(host_mask)) THEN
         CALL step_rod_once(system, points, opts, rod_state, time - dt + REAL(isub, wp)*dt/REAL(nsub, wp), &
@@ -20079,6 +20110,10 @@ CONTAINS
       stalled = stalled .OR. stall_s
       n_iter = n_iter + it
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    END DO
+    ! the committed pin of a host-pinned rod starts its next step
+    DO ir = 1, SIZE(rod_state)
+      IF (rod_state(ir)%is_host_pinned) CALL set_rod_pin_start(rod_state(ir))
     END DO
   END SUBROUTINE step_rod_system
 
@@ -20143,36 +20178,15 @@ CONTAINS
   END SUBROUTINE save_host_end_rod
 
   SUBROUTINE interp_host_rod(rods, start, hk, s)
-    !! Rod twin of interp_host_rigid (the rod centre and frame of each host-driven rod). A
-    !! host-pinned rod keeps its own rotation: only its pin moves, linearly between the End A
-    !! kinematics of the staged step start (derived from the committed rod state, as the line
-    !! ends see them) and the t + dt host values in hk, and the rod follows it (mb_snap_pinned).
+    !! Rod twin of interp_host_rigid (the rod centre and frame of each Coupled/Vessel rod; a
+    !! host-pinned rod moves its pin in interp_host_pins).
     TYPE(RodState), INTENT(INOUT) :: rods(:)
     TYPE(RodState), INTENT(IN) :: start(:)
     REAL(wp), INTENT(IN) :: hk(:, :), s
     INTEGER :: ir
-    REAL(wp) :: r1(3, 3), arm(3), p0(3), v0(3), a0(3)
-    TYPE(RigidBodyState) :: no_parent(0)
+    REAL(wp) :: r1(3, 3)
     DO ir = 1, SIZE(rods)
-      IF (ir > SIZE(start)) CYCLE
-      IF (rods(ir)%is_host_pinned) THEN
-        IF (s >= CD_ONE) THEN
-          rods(ir)%pin = hk(25:27, ir)
-          rods(ir)%pin_v = hk(28:30, ir)
-          rods(ir)%pin_a = hk(31:33, ir)
-        ELSE
-          arm = MATMUL(start(ir)%rot_mat, [-start(ir)%half_length, CD_ZERO, CD_ZERO])
-          p0 = start(ir)%r + arm
-          v0 = start(ir)%v + cross3(start(ir)%omega, arm)
-          a0 = start(ir)%a + cross3(start(ir)%alpha, arm) + cross3(start(ir)%omega, cross3(start(ir)%omega, arm))
-          rods(ir)%pin = p0 + s*(hk(25:27, ir) - p0)
-          rods(ir)%pin_v = v0 + s*(hk(28:30, ir) - v0)
-          rods(ir)%pin_a = a0 + s*(hk(31:33, ir) - a0)
-        END IF
-        CALL mb_snap_pinned(rods(ir), no_parent)
-        CYCLE
-      END IF
-      IF (.NOT. rods(ir)%is_prescribed) CYCLE
+      IF (.NOT. rods(ir)%is_prescribed .OR. ir > SIZE(start)) CYCLE
       r1 = RESHAPE(hk(16:24, ir), [3, 3])
       IF (s >= CD_ONE) THEN
         rods(ir)%r = hk(1:3, ir)
@@ -20192,6 +20206,37 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE interp_host_rod
+
+  SUBROUTINE interp_host_pins(rods, hk, s)
+    !! Place the pin of every host-pinned rod at fraction s of its step and move the rod with it
+    !! (mb_snap_pinned); the rod keeps its own rotation. Position, velocity and acceleration are
+    !! each linear between the step-start pin (pin0, the End A motion of the committed rod state,
+    !! as the line ends see it) and the t + dt host values in hk (rows 25 to 33); s = 1 restores
+    !! the t + dt pin. This is the interpolation the sub-steps give every other host node (the
+    !! host fairleads of the lines and the Coupled rods), so points on one platform keep their
+    !! relative positions under a translation inside the step. It is second order: between exact
+    !! end values a linear position deviates from the host path by at most dt^2 max|a|/8, the
+    !! velocity by dt^2 max|da/dt|/8 and the acceleration by dt^2 max|d2a/dt2|/8, and the
+    !! interpolated velocity is not the derivative of the interpolated position (the two differ
+    !! by O(dt max|a|)). A constant-velocity pin is reproduced exactly.
+    TYPE(RodState), INTENT(INOUT) :: rods(:)
+    REAL(wp), INTENT(IN) :: hk(:, :), s
+    INTEGER :: ir
+    TYPE(RigidBodyState) :: no_parent(0)
+    DO ir = 1, SIZE(rods)
+      IF (.NOT. rods(ir)%is_host_pinned) CYCLE
+      IF (s >= CD_ONE) THEN
+        rods(ir)%pin = hk(25:27, ir)
+        rods(ir)%pin_v = hk(28:30, ir)
+        rods(ir)%pin_a = hk(31:33, ir)
+      ELSE
+        rods(ir)%pin = rods(ir)%pin0 + s*(hk(25:27, ir) - rods(ir)%pin0)
+        rods(ir)%pin_v = rods(ir)%pin0_v + s*(hk(28:30, ir) - rods(ir)%pin0_v)
+        rods(ir)%pin_a = rods(ir)%pin0_a + s*(hk(31:33, ir) - rods(ir)%pin0_a)
+      END IF
+      CALL mb_snap_pinned(rods(ir), no_parent)
+    END DO
+  END SUBROUTINE interp_host_pins
 
   SUBROUTINE step_rod_once(system, points, opts, rod_state, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
                            work, bathymetry, host_mask, host_q, host_v, host_a)
@@ -23308,10 +23353,21 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: host_dcm(3, 3)
     INTEGER :: ir, k, nh
 
-    ! a rod end that no line attaches to needs no Rod<N>A/B point (a CoupledPinned rod often
-    ! carries its line at End B only)
+    ! An end of a Pinned or CoupledPinned rod that no line attaches to needs no Rod<N>A/B point
+    ! (a CoupledPinned rod often carries its line at End B only, and a pendulum none): its
+    ! pin holds the rod. Every other rod keeps the rule that both ends have a point.
     CALL init_rod_states(rod_types, rods, points, rt%rods, ErrStat, ErrMsg, no_points=.TRUE.)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    DO ir = 1, SIZE(rt%rods)
+      IF (rt%rods(ir)%is_pinned) CYCLE
+      IF (rt%rods(ir)%point_a_index == 0 .OR. rt%rods(ir)%point_b_index == 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'Rod state initialization requires Rod<N>A and Rod<N>B points: ROD '// &
+                  TRIM(int_to_str(rt%rods(ir)%rod_id))//' ('//TRIM(rods(ir)%rod_type)//') has no line or Rod'// &
+                  TRIM(int_to_str(rt%rods(ir)%rod_id))//MERGE('A', 'B', rt%rods(ir)%point_a_index == 0)// &
+                  ' POINT at that end; on the coupled route only a Pinned or CoupledPinned rod may leave an end free')
+        RETURN
+      END IF
+    END DO
     rt%opts = opts
     rt%points = points
     rt%host_o0 = CD_ZERO
@@ -23344,7 +23400,7 @@ CONTAINS
   END FUNCTION CD_Rod_NHost
 
   SUBROUTINE CD_Rod_SetHostKinematics(rt, position, velocity, acceleration, ErrStat, ErrMsg, orientation, &
-                                      angular_velocity, angular_acceleration)
+                                      angular_velocity, angular_acceleration, step_start)
     !! Impose the host node kinematics (End A position/velocity/acceleration, the host
     !! orientation and angular rates, all global; arrays shaped (3[,3], NHost)) on every
     !! Coupled/Vessel rod: R = O^T (O0 R0), centre = End A + (L/2) R e1 with the rigid
@@ -23353,12 +23409,17 @@ CONTAINS
     !! its pin kinematics and ignores the orientation and angular rates: it keeps its own
     !! rotation and follows the pin (mb_snap_pinned, with its committed angular acceleration).
     !! Atomic: validates everything before any change.
+    !!
+    !! step_start: the kinematics are those of the committed time (a transfer that does not
+    !! advance, CD_AGG_UpdateStates_Moving), not the t + dt input of a coming step; the next step
+    !! of a CoupledPinned rod then starts from this pin (RodState%pin0). Default .FALSE.
     TYPE(CD_RodRuntimeType), INTENT(INOUT) :: rt
     REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: step_start
     INTEGER :: k, ir, nh
     REAL(wp) :: o(3, 3), rot(3, 3), arm(3), w(3), al(3)
     TYPE(RigidBodyState) :: no_parent(0)
@@ -23392,6 +23453,9 @@ CONTAINS
         rt%rods(ir)%pin_v = velocity(:, k)
         rt%rods(ir)%pin_a = acceleration(:, k)
         CALL mb_snap_pinned(rt%rods(ir), no_parent)
+        IF (PRESENT(step_start)) THEN
+          IF (step_start) CALL set_rod_pin_start(rt%rods(ir))
+        END IF
         CYCLE
       END IF
       o = rt%host_o0
@@ -23494,11 +23558,28 @@ CONTAINS
     !! gyroscopic term w x (I w).
     !!
     !! A CoupledPinned rod returns a force and no moment (MoorDyn-F's coupled pinned rod): the
-    !! load it exerts on its pin, its net load less its inertia -M a. Its angular acceleration
-    !! is re-solved here at the current state and pin acceleration (the host's, which an
-    !! output probe may have changed), with the attached line-end inertia moved to the solved
-    !! attachment accelerations as in the step's corrector (rod_body_acceleration at dt = 0);
-    !! the committed angular acceleration is not used.
+    !! load it exerts on its pin, its net load less its inertia -M a. This is the direct
+    !! feedthrough of the pin acceleration, evaluated at the rod's current state:
+    !!  * the pin position, velocity and acceleration are the End A motion of the rod state,
+    !!    which CD_Rod_SetHostKinematics has moved with the host node (an output probe's
+    !!    off-step kinematics included). They are re-derived from the rod state here (equal to
+    !!    the host's values to round-off) so that the force depends on the checkpointed rod
+    !!    state only: a restored run evaluates it bit for bit, also between steps;
+    !!  * the rotation and the angular velocity are the rod's committed states (a probe moves
+    !!    the pin, not the rotation), and the fluid is the step's held host fluid, as for every
+    !!    other object a CalcOutput evaluates;
+    !!  * the angular acceleration is solved again for the current pin acceleration
+    !!    (rod_body_acceleration at dt = 0); the committed one is not used, so a probe sees the
+    !!    rod's effective inertia about the pin;
+    !!  * the attached lines keep their committed interior state, accelerations included (as
+    !!    every output evaluation does), and their end loads are taken at the end accelerations
+    !!    of the re-solved rotation: the loads come with the end accelerations the system holds
+    !!    (the probe overlay places the Rod<N>A/B ends with the probe pin and the committed
+    !!    angular acceleration), and the solve moves their end-node inertia to the re-solved
+    !!    ones with the lines' coupled mass block, D = -M_cc (frozen_interior; the step's
+    !!    corrector instead lets the interior follow). The coupled loads are linear in the end
+    !!    accelerations at a held interior, so this is exact: the force does not depend on
+    !!    which end accelerations the line loads were evaluated with.
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     TYPE(CD_RodRuntimeType), INTENT(INOUT) :: rt
     REAL(wp), INTENT(IN) :: loads(:, :)
@@ -23508,7 +23589,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: ir, base, j, n, es
     REAL(wp) :: arm(3), f_end(3, 2), f_env(3), m_env(3), f_sb(3), m_sb(3), added6(6, 6), drag6(6, 6)
-    REAL(wp) :: dv(6, 6), acc6(6), ig(3, 3), mc(3), acc(3), alpha(3)
+    REAL(wp) :: dv(6, 6), acc6(6), ig(3, 3), mc(3), acc(3), alpha(3), pin_host(9)
     CHARACTER(160) :: em
 
     force = CD_ZERO
@@ -23528,13 +23609,23 @@ CONTAINS
       CALL ensure_rod_step_workspace(rt%work, n, SIZE(rt%rods), SIZE(system%points))
       rt%work%loads(1:n) = RESHAPE(loads, [n])
       CALL CD_Get_System_CoupledMotion(system, rt%work%q(1:n), rt%work%v(1:n), rt%work%a(1:n), es, em)
-      IF (es == CD_SYSTEM_OK) CALL CD_Calc_System_CoupledAccelDerivative(system, rt%work%dload_da, es, em)
+      ! the end-node inertia moves with the line interior held (an output evaluation keeps the
+      ! committed interior state, accelerations included)
+      IF (es == CD_SYSTEM_OK) CALL CD_Calc_System_CoupledAccelDerivative(system, rt%work%dload_da, es, em, &
+                                                                         frozen_interior=.TRUE.)
       IF (es /= CD_SYSTEM_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'CD_Rod_HostWrench: pinned-rod line query failed: '//TRIM(em)); RETURN
       END IF
+      ! evaluate with the pin re-derived from the rod state, then put the host's values back
+      ! (state-const)
+      pin_host = [rt%rods(ir)%pin, rt%rods(ir)%pin_v, rt%rods(ir)%pin_a]
+      CALL rod_end_a_motion(rt%rods(ir), rt%rods(ir)%pin, rt%rods(ir)%pin_v, rt%rods(ir)%pin_a)
       CALL rod_body_acceleration(system, rt%points, rt%opts, rt%rods(ir), CD_ZERO, CD_ZERO, &
                                  [CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO], rt%work, acc, alpha, &
                                  ErrStat, ErrMsg, pin_load=force)
+      rt%rods(ir)%pin = pin_host(1:3)
+      rt%rods(ir)%pin_v = pin_host(4:6)
+      rt%rods(ir)%pin_a = pin_host(7:9)
       RETURN
     END IF
     arm = rt%rods(ir)%half_length*rt%rods(ir)%rot_mat(:, 1)
@@ -23966,20 +24057,15 @@ CONTAINS
       rt%rods(ir)%rot_mat = RESHAPE(states(k + 16:k + 24), [3, 3])
       rt%rods(ir)%accel_valid = .TRUE.
       ! A CoupledPinned rod's pin is its End A: its kinematics follow from the restored state
-      ! (the End A motion the line ends carry), so the mirror needs no pin entries.
-      IF (rt%rods(ir)%is_host_pinned) CALL derive_host_pin(rt%rods(ir))
+      ! (the End A motion the line ends carry), so the mirror needs no pin entries. The
+      ! continuing run derives its step-start pin from the same committed state with the same
+      ! arithmetic (set_rod_pin_start), so the restored pin0 is bit-identical to it; pin, pin_v
+      ! and pin_a are replaced by the host transfer before the next step or output evaluation.
+      IF (rt%rods(ir)%is_host_pinned) THEN
+        CALL rod_end_a_motion(rt%rods(ir), rt%rods(ir)%pin, rt%rods(ir)%pin_v, rt%rods(ir)%pin_a)
+        CALL set_rod_pin_start(rt%rods(ir))
+      END IF
     END DO
-
-  CONTAINS
-
-    SUBROUTINE derive_host_pin(rod)
-      TYPE(RodState), INTENT(INOUT) :: rod
-      REAL(wp) :: arm(3)
-      arm = MATMUL(rod%rot_mat, [-rod%half_length, CD_ZERO, CD_ZERO])
-      rod%pin = rod%r + arm
-      rod%pin_v = rod%v + cross3(rod%omega, arm)
-      rod%pin_a = rod%a + cross3(rod%alpha, arm) + cross3(rod%omega, cross3(rod%omega, arm))
-    END SUBROUTINE derive_host_pin
   END SUBROUTINE CD_Rod_Set_States
 
   SUBROUTINE CD_Rod_Apply_States(system, rt, ErrStat, ErrMsg)
