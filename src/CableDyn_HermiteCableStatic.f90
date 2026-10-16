@@ -2733,6 +2733,14 @@ CONTAINS
     REAL(wp) :: arc, smid
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
+    ! a carrier without drag (drag = .FALSE.: the static seabed friction alone) loads no
+    ! element, whatever its velocity, and needs no drag properties
+    IF (.NOT. current%drag) THEN
+      d = CD_ZERO
+      cn = CD_ZERO
+      ct = CD_ZERO
+      RETURN
+    END IF
     IF (.NOT. (current%rho > CD_ZERO) .OR. .NOT. CD_Is_Finite(current%rho) .OR. &
         .NOT. (current%load_factor >= CD_ZERO) .OR. .NOT. CD_Is_Finite(current%load_factor) .OR. &
         .NOT. CD_All_Finite(current%velocity) .OR. .NOT. CD_Is_Finite(current%waterline_z) .OR. &
@@ -2786,6 +2794,8 @@ CONTAINS
     fd = CD_ZERO
     djq = CD_ZERO
     ve = CD_ZERO
+    ! no drag on a friction-only carrier (current_element_props)
+    IF (.NOT. current%drag) RETURN
     IF (ALLOCATED(current%profile_z)) THEN
       CALL CD_Current_Profile_Velocity(qe(3), current%profile_z, current%profile_velocity, ua, es, em)
       IF (es == CD_HYDRO_OK) CALL CD_Current_Profile_Velocity(qe(9), current%profile_z, current%profile_velocity, &

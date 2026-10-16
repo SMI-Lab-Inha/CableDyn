@@ -4820,6 +4820,9 @@ CONTAINS
       CALL CD_HermiteCable_Friction_Reference(cur_obj%friction, l0, anchor(1:2), ref_l, es_ld, em_ld)
       IF (es_ld /= CD_HCSTAT_OK) RETURN
       fr_ld%drag = .FALSE.
+      ! the static seabed friction of the as-laid policy: the laid-run seed order of
+      ! CD_Static_Line_Equilibrium (SEED_ORDER_LAID) applies
+      fr_ld%friction_as_laid = .TRUE.
       fr_ld%friction_mu = cur_obj%friction%mu
       fr_ld%friction_mu_axial = cur_obj%friction%mu_axial
       ALLOCATE (fr_ld%friction_ref(2, nnode))
