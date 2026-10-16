@@ -272,7 +272,7 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: ws_elem_f(:, :), ws_elem_K(:, :, :), ws_elem_Kdrag(:, :, :)
     REAL(wp), ALLOCATABLE :: ws_elem_Kv(:, :, :), ws_elem_Kwave(:, :, :), ws_elem_Kheld(:, :, :)
     INTEGER, ALLOCATABLE :: ws_elem_es(:)
-    CHARACTER(512), ALLOCATABLE :: ws_elem_em(:)
+    CHARACTER(200), ALLOCATABLE :: ws_elem_em(:)
     REAL(wp) :: alpha_m = CD_ZERO, alpha_f = CD_ZERO, beta = CD_ZERO, gamma = CD_ZERO
     ! Optional Morison drag (transverse + tangential quadratic drag on the submerged cable, relative
     ! to a uniform fluid velocity). Off by default; wired in via CD_HermiteCable_Dyn_Set_Drag.
@@ -6419,10 +6419,10 @@ CONTAINS
     REAL(wp) :: endconn_d0_eval(3, 2), support(3), dsupport(3), nin(3), mend
     INTEGER :: inode, jr, jc
     CHARACTER(1024) :: em2
-    ! The per-element kernels (element, axial damping, drag, wave load) report fixed messages of
-    ! under 200 characters, nested ones included; em_e takes them. Each kernel resets its message
-    ! buffer at every call, so this one is kept small (a 1024-character one costs 2-3 % of a step).
-    CHARACTER(256) :: em_e
+    ! em_e takes the messages of the per-element kernels (element, axial damping, drag, wave load),
+    ! fixed texts of at most 184 characters with the nested CableDyn_Hydro ones. Each kernel resets
+    ! its message at every call, so this buffer stays as short as those texts allow.
+    CHARACTER(200) :: em_e
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     ne = model%ne
@@ -6969,7 +6969,7 @@ CONTAINS
     REAL(wp) :: ffr(2), dfr_dd(2, 2), dfr_dc(2)
     REAL(wp) :: curv_g(3), curv_l(3), fcrease(3), kcrease(3, 3)
     LOGICAL :: creased
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (.NOT. model%has_contact .OR. .NOT. ALLOCATED(model%contact_kn) .OR. &
@@ -7107,7 +7107,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: inode
     INTEGER :: node, e, ix, es
     REAL(wp) :: gap, sfac, share, nvec(3), sfac_in, gap_in, normal, normal_gap, elem, delem
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em
     support = CD_ZERO
     dsupport = CD_ZERO
     nin = [CD_ZERO, CD_ZERO, CD_ONE]
@@ -7180,7 +7180,7 @@ CONTAINS
     INTEGER :: i, ix, iz, es
     REAL(wp) :: xl, yl, xg, yg, z_floor, gxg, gyg, gap, normal, normal_gap, gate, gate_gap
     REAL(wp) :: dxy(2), dlen, cap, mu_d, q_d, gq_d(2), gx, gy, sfac, nvec(3), vn
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em
     DO i = 1, model%nn
       ix = 6*i - 5; iz = ix + 2
       gx = CD_ZERO
@@ -7250,11 +7250,10 @@ CONTAINS
     REAL(wp) :: djq(12, 12), djv(12, 12), fjq(12, 12)
     REAL(wp) :: hf_mid(3)
     INTEGER :: es
-    ! The element kernels report fixed messages of under 200 characters (nested ones included),
-    ! which fit em and the 512-character per-element buffer (ws_elem_em) this fills. Each kernel
-    ! resets em at every call, so em is kept small; ErrMsg is written only on a failure (the
-    ! caller reads it only when ErrStat says so).
-    CHARACTER(256) :: em
+    ! The element kernels write fixed messages of at most 184 characters (nested ones included),
+    ! which fit em and the per-element buffer ws_elem_em this fills. Each kernel resets em at every
+    ! call, so em stays short; ErrMsg is written only on a failure (the caller reads it only then).
+    CHARACTER(200) :: em
 
     ErrStat = CD_HCDYN_OK
     qe(1:6) = q_cfg(6*(e - 1) + 1:6*e)
@@ -7599,9 +7598,9 @@ CONTAINS
     REAL(wp) :: scale, eta_w, uw(3), aw(3)
     LOGICAL :: has_wv, has_shared, has_trio, has_cmp, any_wv_arg, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, es
-    ! the message of a per-Gauss-point CableDyn_Hydro kinematics or Morison call (each is under 200
-    ! characters): a small buffer, as these calls reset it at every Gauss point
-    CHARACTER(256) :: em2
+    ! the message of a per-Gauss-point CableDyn_Hydro kinematics or Morison call (at most 154
+    ! characters): a short buffer, as these calls reset it at every Gauss point
+    CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     want_jac = PRESENT(djq)
@@ -7874,9 +7873,9 @@ CONTAINS
     REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha
     LOGICAL :: has_trio, has_cmp, has_held, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, k, es
-    ! the message of a per-Gauss-point CableDyn_Hydro kinematics call (each is under 200 characters):
-    ! a small buffer, as these calls reset it at every Gauss point
-    CHARACTER(256) :: em2
+    ! the message of a per-Gauss-point CableDyn_Hydro kinematics call (at most 154 characters): a
+    ! short buffer, as these calls reset it at every Gauss point
+    CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     want_jac = PRESENT(fjq)

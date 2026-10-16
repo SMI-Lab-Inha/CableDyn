@@ -203,7 +203,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: j, es
     REAL(wp) :: zf
-    CHARACTER(1024) :: em
+    CHARACTER(160) :: em
 
     ErrStat = CD_RANGE_OK
     ErrMsg = ''

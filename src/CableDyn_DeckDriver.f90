@@ -8975,7 +8975,7 @@ CONTAINS
     INTEGER :: nnode, i, ix, iy, iz, es
     REAL(wp), PARAMETER :: vreg = 1.0e-3_wp
     REAL(wp) :: z_floor, gap, normal, normal_tangent, gate, gate_tangent, denom
-    CHARACTER(1024) :: em
+    CHARACTER(160) :: em
 
     f_ext = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -9067,7 +9067,7 @@ CONTAINS
 
     INTEGER :: nnode, i, ix, iy, iz, es
     REAL(wp) :: z_floor, dfdx, dfdy
-    CHARACTER(1024) :: em
+    CHARACTER(160) :: em
 
     CALL init_finite_contact_band(q, v, kn, cn, mu, free, kl, ku, free_map, f_ext, jac_q_band, jac_v_band, &
                                   nnode, ErrStat, ErrMsg)
@@ -9267,7 +9267,7 @@ CONTAINS
     INTEGER :: idx(6)
     REAL(wp) :: xa(3), xb(3), va(3), vb(3), eta_a, eta_b
     REAL(wp) :: fluid_a(3), fluid_b(3), accel_a(3), accel_b(3), f2(6)
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em ! per-element kinematics and Morison messages (at most 160 characters)
 
     f_ext = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -9335,7 +9335,7 @@ CONTAINS
     INTEGER :: idx(6)
     REAL(wp) :: xa(3), xb(3), va(3), vb(3), eta_a, eta_b
     REAL(wp) :: fluid_a(3), fluid_b(3), accel_a(3), accel_b(3), f2(6), jq2(6, 6), jv2(6, 6)
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em ! per-element kinematics and Morison messages (at most 160 characters)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -9429,7 +9429,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: current_velocity(3)
     INTEGER :: es
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em ! per-node kinematics messages (at most 160 characters)
 
     eta = CD_ZERO
     fluid_velocity = CD_ZERO
@@ -19661,7 +19661,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: ib, ir, p, o, es
-    CHARACTER(1024) :: em
+    CHARACTER(160) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     DO ib = 1, SIZE(mb%rigid)
@@ -21513,7 +21513,9 @@ CONTAINS
       arm = MATMUL(rod%rot_mat, [s, CD_ZERO, CD_ZERO])
       r_eval = rod%r + arm
       v_eval = rod%v + cross3(rod%omega, arm)
-      CALL deck_seabed_floor_at(r_eval(1), r_eval(2), opts, has_floor, z_floor, ErrStat, ErrMsg, bathymetry)
+      ! (a floor query message is at most 126 characters: it resets only that share of ErrMsg)
+      CALL deck_seabed_floor_at(r_eval(1), r_eval(2), opts, has_floor, z_floor, ErrStat, &
+                                ErrMsg(1:MIN(LEN(ErrMsg), 200)), bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       IF (.NOT. has_floor) CYCLE
       penetration = z_floor - r_eval(3)
@@ -22147,7 +22149,7 @@ CONTAINS
       LOGICAL, INTENT(IN) :: want_pdyn
       INTEGER :: es, ih
       REAL(wp) :: tq
-      CHARACTER(1024) :: em
+      CHARACTER(200) :: em ! per-node kinematics messages (at most 160 characters)
 
       uq = CD_ZERO
       duq = CD_ZERO
@@ -23852,7 +23854,7 @@ CONTAINS
       REAL(wp), ALLOCATABLE, INTENT(IN) :: zf
       REAL(wp) :: zfl
       INTEGER :: es_b
-      CHARACTER(1024) :: em_b
+      CHARACTER(160) :: em_b
       below = .FALSE.
       IF (PRESENT(bathymetry)) THEN
         CALL CD_Bathymetry_Floor(bathymetry, pos(1), pos(2), zfl, es_b, em_b)
@@ -26074,7 +26076,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER :: es
-    CHARACTER(1024) :: em
+    CHARACTER(160) :: em
     LOGICAL :: bathy_ready
 
     ErrStat = CD_DECKDRV_OK
@@ -26114,7 +26116,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
     REAL(wp) :: x_cb(3), eta, u(3), du(3), r_e, h
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em ! kinematics messages (at most 160 characters)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -26237,7 +26239,7 @@ CONTAINS
 
     INTEGER :: es
     REAL(wp) :: eta, rel(3), rel_speed, fluid_velocity(3), fluid_acceleration(3), phi, fk
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em ! kinematics messages (at most 160 characters)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -26742,6 +26744,7 @@ CONTAINS
     INTEGER :: i, j, nn, es
     REAL(wp) :: eta, wv(3), wa(3)
     CHARACTER(1024) :: em
+    CHARACTER(200) :: em_k ! a per-node current or wave kinematics message (at most 160 characters)
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (.NOT. (opts%has_current .OR. opts%has_wave)) RETURN
     DO i = 1, SIZE(cables)
@@ -26755,15 +26758,15 @@ CONTAINS
         fv = CD_ZERO; fa = CD_ZERO; wl = CD_ZERO
         DO j = 1, nn
           IF (opts%has_current) THEN
-            fv(:, j) = deck_current_velocity(opts, xyz(3, j), es, em)
+            fv(:, j) = deck_current_velocity(opts, xyz(3, j), es, em_k)
             IF (es /= CD_HYDRO_OK) THEN
-              CALL hermite_fluid_fail('current profile', em); RETURN
+              CALL hermite_fluid_fail('current profile', em_k); RETURN
             END IF
           END IF
           IF (opts%has_wave) THEN
-            CALL deck_wave_kinematics(opts, xyz(1, j), xyz(2, j), xyz(3, j), time, eta, wv, wa, es, em)
+            CALL deck_wave_kinematics(opts, xyz(1, j), xyz(2, j), xyz(3, j), time, eta, wv, wa, es, em_k)
             IF (es /= CD_HYDRO_OK) THEN
-              CALL hermite_fluid_fail('wave kinematics', em); RETURN
+              CALL hermite_fluid_fail('wave kinematics', em_k); RETURN
             END IF
             fv(:, j) = fv(:, j) + wv; fa(:, j) = wa; wl(j) = eta
           END IF
@@ -32057,7 +32060,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nn, ne, e, j, k, inode, es
     REAL(wp) :: curv, bend
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em ! per-element curvature messages (at most 55 characters)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -33043,7 +33046,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: xi
     REAL(wp) :: qr(12), vr(12), l0, viscous
     INTEGER :: es
-    CHARACTER(1024) :: em
+    CHARACTER(160) :: em
     t = CD_ZERO
     IF (e < 1 .OR. e > cable%line%ne) RETURN
     l0 = cable%line%l0(e)

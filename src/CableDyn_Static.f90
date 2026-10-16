@@ -807,7 +807,7 @@ CONTAINS
       REAL(wp), INTENT(OUT) :: energy, magnitude
       INTEGER :: e, a, b, i, es_e
       REAL(wp) :: ell, eps, w_el, zf, gx, gy, g, s, pot, bl
-      CHARACTER(1024) :: em_e
+      CHARACTER(120) :: em_e
 
       energy = CD_ZERO
       magnitude = CD_ZERO
