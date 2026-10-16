@@ -1596,6 +1596,8 @@ CONTAINS
     INTEGER, PARAMETER :: FALLBACK_SEQUENCE_BUDGET = 2000
     LOGICAL :: standalone_mode, contact_enabled, used_trivial_seed, anchor_on_flat_bed, allow_extra_sequence
     LOGICAL :: polish_ready
+    ! Set when the attachment polish needed its fallbacks (attachment_fallback_checks).
+    LOGICAL :: att_fell_back
     LOGICAL :: bathymetry_flat, require_3d_static, sym_broken, planar_unstable, saddle_kept
     ! A planar equilibrium in a current that is a saddle out of its plane (see route_pass).
     REAL(wp), ALLOCATABLE :: l0_saddle(:), ea_saddle(:), ei_saddle(:), w_saddle(:), q_saddle(:), curv_saddle(:)
@@ -2858,8 +2860,18 @@ CONTAINS
       END IF
       CALL attachment_static_polish(l0, ea, ei, w_bare, w, diam, att_node, ln%att, q_static, fixed_dofs, &
                                     contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
-                                    endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj)
+                                    endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj, &
+                                    fell_back=att_fell_back)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      ! A discrete state the damped Newton solves did not reach alone (pseudo-transient
+      ! continuation, line search or smaller load steps) passes the acceptance checks the
+      ! smeared state passed above: the kink limit, the tensile contract, the physical-branch
+      ! audit and the stability test. A polish whose Newton solves all converge is a small
+      ! warm-started correction of an accepted state and is not checked again.
+      IF (att_fell_back) THEN
+        CALL attachment_fallback_checks()
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      END IF
       ! On the final mesh, with the bare weights the polished state carries; the bending-length
       ! rule of the note uses the smeared section weights w.
       CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, fixed_dofs, &
@@ -3708,6 +3720,70 @@ CONTAINS
       CALL report_note(text_h)
     END SUBROUTINE handoff_lateral_note
 
+    SUBROUTINE attachment_fallback_checks()
+      !! Acceptance of a discrete attachment equilibrium the polish reached with its fallbacks
+      !! (attachment_static_polish, fell_back), on the final mesh: the kink limit and, under
+      !! tensile_safety True, the tensile contract of the mesh safety diagnosis, the
+      !! physical-branch audit and the stability test with the static constraints, as for the
+      !! smeared state. The tangent takes the bare weights (the lumped attachment loads are
+      !! dead loads); the audit's compression allowance takes the section weights w smeared
+      !! over the attachments, as for the smeared state. Fails closed naming the check.
+      CHARACTER(*), PARAMETER :: WHAT = 'finite-EI static solve with discrete ATTACHMENTS: the discrete '// &
+                                 'equilibrium reached after a failed Newton solve (pseudo-transient '// &
+                                 'continuation, line search or smaller load steps) '
+      TYPE(CD_HermiteResolutionType) :: diag_f
+      LOGICAL :: ok_f
+      INTEGER :: es_f
+      CHARACTER(1024) :: em_f
+      IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+        CALL CD_HermiteCable_Resolution_Metrics(l0, q_static, contact_z, CD_ZERO, CD_HC_KINK_LIMIT, diag_f, es_f, &
+                                                em_f, bathymetry=bathymetry, contact_frame_cs=frame_cs, EA=ea, EI=ei, &
+                                                compression_mode=CD_HC_COMPRESSION_STRICT)
+      ELSE
+        CALL CD_HermiteCable_Resolution_Metrics(l0, q_static, contact_z, CD_ZERO, CD_HC_KINK_LIMIT, diag_f, es_f, &
+                                                em_f, EA=ea, EI=ei, compression_mode=CD_HC_COMPRESSION_STRICT)
+      END IF
+      IF (es_f /= CD_HCSTAT_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, WHAT//'could not be diagnosed: '//TRIM(em_f)); RETURN
+      END IF
+      IF (diag_f%h_kappa_peak > CD_HC_KINK_LIMIT) THEN
+        WRITE (em_f, '(A,ES12.5,A,ES12.5,A,I0)') 'is unresolved/kinked: max(h*kappa)=', diag_f%h_kappa_peak, &
+          ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', diag_f%h_kappa_elem
+        CALL fail_solve(ErrStat, ErrMsg, WHAT//TRIM(em_f)); RETURN
+      END IF
+      IF (opts%tensile_mode == CD_HCDYN_TENSILE_ERROR .AND. diag_f%axial_compression) THEN
+        WRITE (em_f, '(A,ES12.5,A,ES12.5,A,I0,A,F8.5,A,ES12.5)') &
+          'carries axial compression under tensile_safety True: element-mean axial force=', &
+          diag_f%axial_strain_min_resultant, ' N below tolerance=', diag_f%axial_tolerance, ' N at element ', &
+          diag_f%axial_strain_min_elem, ', xi=', diag_f%axial_strain_min_xi, ', strain=', diag_f%axial_strain_min
+        CALL fail_solve(ErrStat, ErrMsg, WHAT//TRIM(em_f)); RETURN
+      END IF
+      CALL audit_hermite_static(l0, q_static, ea, ei, w, diam, endconn_mode, ok_f, em_f)
+      IF (.NOT. ok_f) THEN
+        CALL fail_solve(ErrStat, ErrMsg, WHAT//'is rejected: '//TRIM(em_f)); RETURN
+      END IF
+      IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_dofs, &
+                                   contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, &
+                                   opts, ok_f, ErrStat, ErrMsg, bathymetry=bathymetry, cur_obj=cur_obj)
+      ELSE
+        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_dofs, &
+                                   contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, &
+                                   opts, ok_f, ErrStat, ErrMsg, cur_obj=cur_obj)
+      END IF
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (.NOT. ok_f) THEN
+        CALL fail_solve(ErrStat, ErrMsg, WHAT//'is an unstable equilibrium (tangent stiffness not positive '// &
+                        'definite)'); RETURN
+      END IF
+    END SUBROUTINE attachment_fallback_checks
+
+    FUNCTION dry_b_final() RESULT(dry)
+      !! Dry buoyancy per length on the final mesh (as dry_b on the deck mesh).
+      REAL(wp), ALLOCATABLE :: dry(:)
+      dry = opts%rhoW*opts%g*QUARTER_PI*diam**2
+    END FUNCTION dry_b_final
+
     LOGICAL FUNCTION coarse_current_eligible() RESULT(ok)
       !! coarse_current_first applies to an in-plane current (in_plane_current) without
       !! seabed friction or attachments, on a deck build that is not itself the coarse one,
@@ -4229,7 +4305,7 @@ CONTAINS
 
   SUBROUTINE attachment_static_polish(l0, ea, ei, w_bare, w_smear, diam, node, att, q, fixed_dofs, &
                                       contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, &
-                                      opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj)
+                                      opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj, fell_back)
     !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in warm-started
     !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
     !! forces -(m - rho V) g e_z and, in a deck current, the attachment current drag grow from
@@ -4242,6 +4318,8 @@ CONTAINS
     !! not converge is repeated from the last converged state with pseudo-transient
     !! continuation and then with a residual-merit line search; when neither converges, the
     !! step is halved (down to MIN_STEP), and it grows back to 1/NSTEP after converged steps.
+    !! At most MAX_FAILED_STEPS load steps may fail in all (a step that converges at one size
+    !! and fails at twice it, over and over, would otherwise take about a thousand cycles).
     !! The smeared state carries no attachment drag, and on a frictional seabed, whose
     !! regularised friction force turns from its sticking stiffness to its sliding capacity
     !! over a short slip, the Newton update for a cross-flow drag can overshoot far from the
@@ -4249,6 +4327,10 @@ CONTAINS
     !! regularisation avoids. Once a damped Newton solve has failed, the
     !! later ones get NEWTON_RETRY_ITER iterations before the fallbacks take over. A polish
     !! whose damped Newton solves all converge takes exactly the solves it took before.
+    !! fell_back (optional out) reports that a damped Newton solve failed, so that the state
+    !! was reached with the fallbacks (and the caller re-runs its acceptance checks on it).
+    !! A failure names the load fraction of the first failed solve and, when the homotopy
+    !! stops, the load fraction it reached.
     REAL(wp), INTENT(IN) :: l0(:), ea(:), ei(:), w_bare(:), w_smear(:), diam(:), att(:, :)
     INTEGER, INTENT(IN) :: node(:), fixed_dofs(:), endconn_mode(2)
     REAL(wp), INTENT(INOUT) :: q(:)
@@ -4259,22 +4341,28 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
+    LOGICAL, INTENT(OUT), OPTIONAL :: fell_back
     INTEGER, PARAMETER :: NSTEP = 8, MAX_FIXED_POINT = 60
     ! Smallest load-fraction step: 1/NSTEP halved seven times. Newton budget once a damped
-    ! Newton solve of this polish has failed (a converging one takes well under it).
+    ! Newton solve of this polish has failed (a converging one takes well under it). Budget
+    ! of failed load steps (each at most NEWTON_RETRY_ITER + 400 Newton iterations).
     REAL(wp), PARAMETER :: MIN_STEP = 1.0_wp/1024.0_wp
-    INTEGER, PARAMETER :: NEWTON_RETRY_ITER = 40
+    INTEGER, PARAMETER :: NEWTON_RETRY_ITER = 40, MAX_FAILED_STEPS = 32
     REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
     REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), dry(:), knnode(:), wl(:), q_out(:), curv(:)
     REAL(wp) :: lam, lam_done, dlam, res, change
-    INTEGER :: i, k, ne, fp
+    INTEGER :: i, k, ne, fp, n_failed
     LOGICAL :: has_drag, converged, newton_failed
-    CHARACTER(1024) :: fail_msg
-    CHARACTER(48) :: step_buf
+    ! The damped Newton failure of the first failed solve, and of the last one.
+    CHARACTER(1024) :: first_msg, last_msg
+    CHARACTER(48) :: step_buf, lam_buf
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
-    fail_msg = ''
+    IF (PRESENT(fell_back)) fell_back = .FALSE.
+    first_msg = ''
+    last_msg = ''
     newton_failed = .FALSE.
+    n_failed = 0
     ne = SIZE(l0)
     ALLOCATE (f_att(6*(ne + 1)), f_drag(6*(ne + 1)), dry(ne), q_out(SIZE(q)), curv(ne + 1))
     f_att = CD_ZERO
@@ -4302,11 +4390,20 @@ CONTAINS
         lam_done = lam
         dlam = MIN(2.0_wp*dlam, CD_ONE/REAL(NSTEP, wp))
       ELSE
+        n_failed = n_failed + 1
         dlam = 0.5_wp*dlam
-        IF (dlam < MIN_STEP) THEN
-          WRITE (step_buf, '(ES9.2)') MIN_STEP
-          CALL fail_solve(ErrStat, ErrMsg, TRIM(fail_msg)//'; load-fraction steps down to '// &
-                          TRIM(ADJUSTL(step_buf))//' did not converge either')
+        IF (dlam < MIN_STEP .OR. n_failed >= MAX_FAILED_STEPS) THEN
+          WRITE (lam_buf, '(F8.6)') lam_done
+          IF (dlam < MIN_STEP) THEN
+            WRITE (step_buf, '(ES9.2)') MIN_STEP
+            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
+                            TRIM(ADJUSTL(lam_buf))//', where load steps down to '//TRIM(ADJUSTL(step_buf))// &
+                            ' did not converge either')
+          ELSE
+            WRITE (step_buf, '(I0)') MAX_FAILED_STEPS
+            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
+                            TRIM(ADJUSTL(lam_buf))//' after '//TRIM(step_buf)//' load steps had failed')
+          END IF
           RETURN
         END IF
       END IF
@@ -4316,7 +4413,7 @@ CONTAINS
       CALL solve_with(CD_ONE, converged, change)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       IF (.NOT. converged) THEN
-        CALL fail_solve(ErrStat, ErrMsg, TRIM(fail_msg)//' (attachment current drag fixed point)'); RETURN
+        CALL fail_solve(ErrStat, ErrMsg, TRIM(last_msg)//' (attachment current drag fixed point)'); RETURN
       END IF
       IF (change <= FIXED_POINT_TOL) RETURN
     END DO
@@ -4328,8 +4425,9 @@ CONTAINS
       !! evaluated on the incoming state: the damped Newton iteration and, when it does not
       !! converge, the pseudo-transient continuation and the residual-merit line search, each
       !! from the incoming state. ok reports convergence; q is updated only then, and dq_max
-      !! is the resulting largest DOF change. Otherwise fail_msg names the load fraction and
-      !! the damped Newton failure. A failed drag evaluation or a rejected input sets ErrStat.
+      !! is the resulting largest DOF change. Otherwise last_msg (and, the first time,
+      !! first_msg) names the load fraction and the damped Newton failure. A failed drag
+      !! evaluation or a rejected input sets ErrStat.
       REAL(wp), INTENT(IN) :: scale
       LOGICAL, INTENT(OUT) :: ok
       REAL(wp), INTENT(OUT), OPTIONAL :: dq_max
@@ -4379,13 +4477,15 @@ CONTAINS
           ! numbers into a local buffer: an internal WRITE into the caller's ErrMsg would abort
           ! on a short buffer
           WRITE (num_buf, '(F5.3,A,ES10.3)') scale, ' (relative residual ', res
-          fail_msg = 'finite-EI static solve with discrete ATTACHMENTS failed at load '// &
+          last_msg = 'finite-EI static solve with discrete ATTACHMENTS failed at load '// &
                      'fraction '//TRIM(num_buf)//'): '//TRIM(em)
+          IF (.NOT. newton_failed) first_msg = last_msg
           newton_failed = .TRUE.
+          IF (PRESENT(fell_back)) fell_back = .TRUE.
         END IF
         ! A rejected input is rejected by every update rule.
         IF (es == CD_HCSTAT_BADINPUT) THEN
-          CALL fail_solve(ErrStat, ErrMsg, TRIM(fail_msg)); RETURN
+          CALL fail_solve(ErrStat, ErrMsg, TRIM(last_msg)); RETURN
         END IF
       END DO
       IF (.NOT. ok) RETURN
