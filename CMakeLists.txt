@@ -2230,8 +2230,8 @@ cabledyn_msg_test(pliant_connect_end_b msg_pliant_connect_end_b.dat 1
   "finite-EI LINE 1 in a mixed-topology deck needs a Fixed End B;End B is POINT 2 .connect.;Anchor the cable on a Fixed point"
   "")
 cabledyn_msg_test(mixed_current msg_mixed_current.dat 1
-  "the deck current OPTION is not supported on this route;a standalone mixed deck;runs the mooring in STILL WATER"
-  "this coupled mode")
+  "the deck current OPTION is not supported for a standalone mixed EI=0/finite-EI deck;runs the mooring in STILL WATER;couple the deck to OpenFAST .CompMooring = 5. with SeaState"
+  "this coupled mode;the C API;FAST.Farm")
 cabledyn_msg_test(mixed_connect_coupled_cable msg_mixed_connect_coupled_cable.dat 1
   "finite-EI LINE 3: a Coupled/Vessel End A .POINT 1. would need motionFile coupling to drive it;remove the Connect/Free points;held still .that route takes no motionFile either."
   "is driven by a motionFile")

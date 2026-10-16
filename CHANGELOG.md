@@ -437,8 +437,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   finite-EI cable ending on a `Connect`/`Free`/`Coupled` point, or on a Coupled End A that a deck
   with `Connect`/`Free` points cannot drive (it would need `motionFile` coupling), names the point
   and what the route supports; the "this coupled mode runs the mooring in
-  STILL WATER" message of a mixed deck with waves or current no longer implies a coupled run and
-  says which routes evaluate the deck fluid; an anchor below the seabed by more than the
+  STILL WATER" rejection of deck waves or current now names the route that rejects it (a
+  standalone mixed deck, which is not coupled, or FAST.Farm) and gives that route's remedy (an
+  all-`EI = 0` or all-finite-EI deck, or OpenFAST with SeaState; in FAST.Farm, removing the
+  OPTION); an anchor below the seabed by more than the
   tolerance gives the depth, the tolerance rule, and the Z to use. These messages change no
   acceptance rule.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the

@@ -2403,13 +2403,14 @@ CONTAINS
     LOGICAL, INTENT(IN) :: commit
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, ix
+    INTEGER :: i, ix, lk
     REAL(wp) :: normal, cap, d(2), dlen, k, mu_d, q_d, gq_d(2)
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
+    lk = MIN(LEN(ErrMsg), KERNEL_MSG_LEN) ! the per-node query's share of ErrMsg
     DO i = 1, SIZE(model%fr_anchor, 2)
       ix = 3*i - 2
-      normal = seabed_normal_reaction(model, q(ix), q(ix + 1), q(ix + 2), v(ix:ix + 2), i, ErrStat, ErrMsg)
+      normal = seabed_normal_reaction(model, q(ix), q(ix + 1), q(ix + 2), v(ix:ix + 2), i, ErrStat, ErrMsg(1:lk))
       IF (ErrStat /= CD_MODEL_OK) RETURN
       IF (.NOT. commit) CYCLE
       IF (model%seabed_friction_aniso) THEN
