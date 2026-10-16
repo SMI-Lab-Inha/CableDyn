@@ -13218,9 +13218,18 @@ CONTAINS
     REAL(wp) :: x
     LOGICAL :: ok
     CHARACTER(16) :: rule
+    CHARACTER(LEN(kw)) :: key
 
     ErrStat = 0; ErrMsg = ''
-    SELECT CASE (to_lower(TRIM(kw)))
+    ! a per-line row (layAzimuth<ID>, asLaidTension<ID>) takes the rule of its family
+    key = to_lower(TRIM(kw))
+    IF (LEN_TRIM(key) > 10) THEN
+      IF (key(1:10) == 'layazimuth' .AND. VERIFY(TRIM(key(11:)), '0123456789') == 0) key = 'layazimuth'
+    END IF
+    IF (LEN_TRIM(key) > 13) THEN
+      IF (key(1:13) == 'aslaidtension' .AND. VERIFY(TRIM(key(14:)), '0123456789') == 0) key = 'aslaidtension'
+    END IF
+    SELECT CASE (TRIM(key))
     CASE ('g', 'gravity', 'rhow', 'wtrdnsty', 'water_density', 'wtrdpth', 'water_depth', 'dtm', 'dt', 'dtwave')
       rule = 'positive'
     CASE ('tmax', 'tensile_strain_tolerance', 'tensilestraintolerance', 'ramptime', 'ramp_time', 'tramp', &

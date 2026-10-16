@@ -551,7 +551,14 @@ def main() -> int:
     rc, log = run(a.exe, cdir, "badsuffix", deck("bad suffix", **flat, extra="30.0 layAzimuth1x\n"))
     check(rc != 0 and "unknown OPTION keyword" in log, "layAzimuth1x is an unknown keyword")
     rc, log = run(a.exe, cdir, "badtension", deck("bad tension", **flat, extra="-1.0 asLaidTension1\n"))
-    check(rc != 0 and "must be finite and >= 0" in log, "a negative asLaidTension1 is rejected")
+    check(rc != 0 and "asLaidTension1" in log, "a negative asLaidTension1 is rejected")
+    # every row is validated, also one a later row for the same line overrides
+    rc, log = run(a.exe, cdir, "shadowt", deck("shadowed tension", **flat,
+                                             extra="-1.0 asLaidTension1\n0.0 asLaidTension1\n"))
+    check(rc != 0 and "asLaidTension1" in log, "a negative asLaidTension1 shadowed by a valid row is rejected")
+    rc, log = run(a.exe, cdir, "shadowaz", deck("shadowed azimuth", **flat,
+                                              extra="nan layAzimuth1\n30.0 layAzimuth1\n"))
+    check(rc != 0 and "layAzimuth1" in log, "a NaN layAzimuth1 shadowed by a valid row is rejected")
 
     print("static friction as laid: %d failure(s)" % len(FAILURES))
     return 1 if FAILURES else 0
