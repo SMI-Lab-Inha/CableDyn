@@ -200,7 +200,10 @@ void CableDyn_InitDeckAt(void *handle, const char *deck_path, int deck_path_len,
 /* One save slot per handle: SaveState copies the whole model (replacing an
  * earlier save); RestoreState returns to it and keeps it, so one save serves
  * every outer corrector of a host time step. A restore followed by a step is
- * bit-identical to stepping from the saved state. Valid until the next Init*. */
+ * bit-identical to stepping from the saved state. A successful Init* call
+ * discards the save; a failed InitDeck/InitDeckAt keeps it with the model; a
+ * failed InitLine/InitLines discards it, except on a handle whose deck model
+ * runs on the coupled aggregate, which stays live with its save. */
 void CableDyn_SaveState(void *handle, int *err_stat);
 void CableDyn_RestoreState(void *handle, int *err_stat);
 /* Owner of each 3-DOF block k of the coupled vector (DOFs 3k..3k+2): deck

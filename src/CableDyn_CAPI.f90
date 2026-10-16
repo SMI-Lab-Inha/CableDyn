@@ -164,7 +164,9 @@ MODULE CableDyn_CAPI
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: no_cables(:)
     ! The single save slot of CableDyn_SaveState/RestoreState: a deep copy of the route's model
     ! object (the point system, or the aggregate on the heap) and the aggregate's committed time,
-    ! valid (has_saved) from a SaveState until the next successful initialization.
+    ! valid (has_saved) from a SaveState until a successful initialization or a failed
+    ! InitLine/InitLines on a handle whose live model is a point system (drop_point_save_on_failure);
+    ! a failed InitDeck/InitDeckAt, or a failed InitLine/InitLines on an aggregate handle, keeps it.
     LOGICAL :: has_saved = .FALSE.
     TYPE(CD_FAST_ModuleType) :: saved_fast
     TYPE(CD_AGG_ModuleType), ALLOCATABLE :: saved_agg
@@ -595,12 +597,28 @@ CONTAINS
     REAL(C_DOUBLE), VALUE :: rho_inf
     INTEGER(C_INT), INTENT(OUT) :: err_stat
 
-    IF (.NOT. blas_runtime_ready(handle, 'CableDyn_InitLine', err_stat)) RETURN
-    CALL cabledyn_input_lock()
-    CALL init_line_serialised(handle, n_nodes, n_elem, q0_ptr, v0_ptr, elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, &
-                              fixed_dofs_ptr, n_fixed, tension_only, rho_inf, err_stat)
-    CALL cabledyn_input_unlock()
+    IF (blas_runtime_ready(handle, 'CableDyn_InitLine', err_stat)) THEN
+      CALL cabledyn_input_lock()
+      CALL init_line_serialised(handle, n_nodes, n_elem, q0_ptr, v0_ptr, elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, &
+                                fixed_dofs_ptr, n_fixed, tension_only, rho_inf, err_stat)
+      CALL cabledyn_input_unlock()
+    END IF
+    CALL drop_point_save_on_failure(handle, err_stat)
   END SUBROUTINE CableDyn_InitLine
+
+  SUBROUTINE drop_point_save_on_failure(handle, err_stat)
+    !! After a failed CableDyn_InitLine/InitLines the save slot follows the live model. These
+    !! calls rebuild the point system in place, so a handle whose live model is that point
+    !! system must be initialized again and loses the state saved for it. On a handle whose live
+    !! model is an aggregate (a deck with finite-EI lines, bodies or rods), the failure leaves
+    !! the aggregate live (use_agg is cleared only on success) and the save with it.
+    TYPE(C_PTR), VALUE :: handle
+    INTEGER(C_INT), INTENT(IN) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    IF (err_stat == CD_C_OK) RETURN
+    IF (validate_handle(handle, h) /= CD_C_OK) RETURN
+    IF (.NOT. h%use_agg) CALL drop_saved_state(h)
+  END SUBROUTINE drop_point_save_on_failure
 
   SUBROUTINE init_line_serialised(handle, n_nodes, n_elem, q0_ptr, v0_ptr, elem_conn_ptr, l0_ptr, ea_ptr, &
                                   rho_a_ptr, fixed_dofs_ptr, n_fixed, tension_only, rho_inf, err_stat)
@@ -694,9 +712,6 @@ CONTAINS
       CALL set_point_line_map(h, [1])
       CALL store_status(h, err_stat, '')
     ELSE
-      ! the raw-array route builds the point system in place: after a failure the previous
-      ! model is gone, and with it the state saved for it
-      CALL drop_saved_state(h)
       CALL store_status(h, err_stat, 'CableDyn_InitLine: '//TRIM(fast_em))
     END IF
   END SUBROUTINE init_line_serialised
@@ -716,12 +731,14 @@ CONTAINS
     REAL(C_DOUBLE), VALUE :: rho_inf
     INTEGER(C_INT), INTENT(OUT) :: err_stat
 
-    IF (.NOT. blas_runtime_ready(handle, 'CableDyn_InitLines', err_stat)) RETURN
-    CALL cabledyn_input_lock()
-    CALL init_lines_serialised(handle, n_lines, n_nodes_ptr, n_elem_ptr, n_fixed_ptr, q0_ptr, v0_ptr, &
-                               elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, fixed_dofs_ptr, &
-                               coupled_map_ptr, n_coupled_map, tension_only, rho_inf, err_stat)
-    CALL cabledyn_input_unlock()
+    IF (blas_runtime_ready(handle, 'CableDyn_InitLines', err_stat)) THEN
+      CALL cabledyn_input_lock()
+      CALL init_lines_serialised(handle, n_lines, n_nodes_ptr, n_elem_ptr, n_fixed_ptr, q0_ptr, v0_ptr, &
+                                 elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, fixed_dofs_ptr, &
+                                 coupled_map_ptr, n_coupled_map, tension_only, rho_inf, err_stat)
+      CALL cabledyn_input_unlock()
+    END IF
+    CALL drop_point_save_on_failure(handle, err_stat)
   END SUBROUTINE CableDyn_InitLines
 
   SUBROUTINE init_lines_serialised(handle, n_lines, n_nodes_ptr, n_elem_ptr, n_fixed_ptr, q0_ptr, v0_ptr, &
@@ -893,9 +910,6 @@ CONTAINS
       CALL set_point_line_map(h, [(i, i=1, INT(n_lines))])
       CALL store_status(h, err_stat, '')
     ELSE
-      ! the raw-array route builds the point system in place: after a failure the previous
-      ! model is gone, and with it the state saved for it
-      CALL drop_saved_state(h)
       CALL store_status(h, err_stat, 'CableDyn_InitLines: '//TRIM(em))
     END IF
   END SUBROUTINE init_lines_serialised
@@ -1741,15 +1755,18 @@ CONTAINS
     !! friction states, the last converged step), the point fluid fields, and on the aggregate
     !! route the committed time. The slot holds a deep copy of the model object, independent of
     !! the step's own rollback buffers, so any number of steps may follow before the restore.
-    !! It stays valid until the next successful Init* call.
+    !! A successful Init* call discards the slot; a failed InitDeck/InitDeckAt keeps it with the
+    !! model, and a failed InitLine/InitLines discards it unless the handle's live model is an
+    !! aggregate (drop_point_save_on_failure). Only the allocation of the aggregate slot itself
+    !! returns CD_C_ALLOC_FAIL (the handle then holds no save); running out of memory inside
+    !! the copy, an intrinsic assignment of allocatable components, aborts the process.
     TYPE(C_PTR), VALUE :: handle
     INTEGER(C_INT), INTENT(OUT) :: err_stat
     TYPE(CD_C_Handle), POINTER :: h
     INTEGER :: stat
 
     IF (.NOT. query_ready(handle, h, 'CableDyn_SaveState', err_stat)) RETURN
-    ! the slot is invalid while it is overwritten (an allocation failure inside the copy
-    ! must not leave a half-written slot marked valid)
+    ! the slot is invalid while it is overwritten, and stays so if its allocation fails
     h%has_saved = .FALSE.
     IF (h%use_agg) THEN
       IF (.NOT. ALLOCATED(h%saved_agg)) THEN

@@ -229,10 +229,12 @@ class CableDyn:
         a transient. ``q0`` is either the full coupled vector of the deck
         (``n_coupled_dof`` values, the layout of :meth:`step`; the Fixed, Free and
         Connect blocks are not read) or the Coupled/Vessel blocks alone, in
-        coupled-vector order (the ``MoorDyn_Init`` layout of a points-only deck),
-        flat or column-per-point ``(3, n)`` (a ``(3, 3)`` array is rejected as
-        ambiguous: pass three points flat). See :meth:`coupled_layout`. A failed
-        initialization keeps any previously initialized model.
+        coupled-vector order (the ``MoorDyn_Init`` layout of a deck whose coupled
+        objects are points that are all attached to lines: a Coupled point attached
+        to no line has no block here), flat or column-per-point ``(3, n)`` with
+        ``n != 3`` (a ``(3, 3)`` array is rejected as ambiguous: pass three points
+        flat). See :meth:`coupled_layout`. A failed initialization keeps any
+        previously initialized model and its saved state.
         """
         _encode_path(deck)  # rejects a NUL before any file-system call
         resolved = Path(deck).expanduser().resolve()
@@ -504,14 +506,19 @@ class CableDyn:
         """Save the whole model and :attr:`time` into the handle's single save slot.
 
         The slot is a deep copy of the model (every line, point, body and rod
-        state with its solver history), replacing any earlier save. It stays valid
-        until the next initialization, so one save serves every outer corrector of
-        a host time step (see :meth:`restore_state`).
+        state with its solver history), replacing any earlier save. A successful
+        initialization discards it and a failed one keeps it with the model, so one
+        save serves every outer corrector of a host time step (see
+        :meth:`restore_state`). Save when a host time step starts after the
+        previous one was accepted, and restore on every repeated pass from the
+        same start time, whatever its ``dt``.
         """
         with self._lock:
             self._require_host_coupling()
             status = c_int()
             _lib.CableDyn_SaveState(self._handle, byref(status))
+            if status.value != 0:
+                self._saved_time = None  # a failed save leaves no save in the slot
             self._check("CableDyn_SaveState", status.value)
             self._saved_time = self._time
 

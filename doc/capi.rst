@@ -337,8 +337,10 @@ These rules apply to every entry point. The Python package uses the same array o
   ``CableDyn_InitDeckAt`` on an initialised handle replaces the model only on success. If the
   new initialisation fails, the previous model is kept unchanged, and so is the state saved by
   ``CableDyn_SaveState``; a successful one discards that save. ``CableDyn_InitLine`` and
-  ``CableDyn_InitLines`` build the model in place: after a failure the handle must be
-  initialised again, and the saved state is discarded.
+  ``CableDyn_InitLines`` build the point model in place: after a failure the handle must be
+  initialised again, and the saved state is discarded. The one exception is a handle whose
+  deck model runs on the coupled aggregate (finite-EI lines, bodies or rods): a failed
+  ``InitLine``/``InitLines`` leaves that model live, and its saved state with it.
 * **Time.** The library keeps no clock. Only ``dt`` enters ``CableDyn_Step``, and the host owns
   the time line.
 
@@ -513,8 +515,10 @@ is the standalone value of the deck moved to the CFD positions, (0.3026, -0.0761
 ``q0`` is one of two vectors; its length selects which:
 
 * the ``Coupled``/``Vessel`` blocks alone, in coupled-vector order: 3 values per host point.
-  This is the layout of MoorDyn's ``X`` for a deck whose coupled objects are points, and the
-  one a host that knows only its fairleads can build before any handle exists;
+  This is the layout of MoorDyn's ``X`` for a deck whose coupled objects are points that are
+  all attached to lines (MoorDyn's ``X`` also holds a ``Coupled`` point attached to no line,
+  which has no block here), and the one a host that knows only its fairleads can build before
+  any handle exists;
 * the full coupled vector, ``CableDyn_NCoupledDOF`` values. Its ``Fixed``, ``Free`` and
   ``Connect`` blocks are not read.
 
@@ -525,8 +529,8 @@ after the initialisation; the line interiors stay at rest.
 Step 2: build the coupled vector from the layout
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-*MoorDyn.* The coupled vector holds the coupled objects and nothing else: 3 values per coupled
-point, 6 per coupled body or rod.
+*MoorDyn.* The coupled vector holds the coupled objects and nothing else: 6 values per coupled
+body or cantilevered rod, 3 per pinned rod or coupled point.
 
 *CableDyn.* On the point route (decks of ``EI = 0`` lines) the vector has a block for every
 line-bound point, ``Fixed`` anchors included, in ``POINTS`` order. On the aggregate route
@@ -594,6 +598,17 @@ every later pass. A restore followed by a step is bit-identical to taking that s
 saved state directly, and any number of steps may lie between the save and the restore (the
 sub-steps of Step 6). A successful ``Init*`` call discards the save.
 
+Key the save on the start time of the pass, :math:`t_{prev} = t - \Delta t`, not on its end
+time :math:`t`. Save when a pass starts later than the saved state, which happens once the
+previous step has been accepted and the model stands at :math:`t_{prev}`; restore before
+every other pass, which starts from the same :math:`t_{prev}` whatever its :math:`\Delta t`.
+A host that rejects a step and retries it with a smaller :math:`\Delta t` thus restores: keyed
+on :math:`t`, the retry would look like a new step and save a model that the rejected pass has
+already advanced. Compare the start times with a tolerance, as foamMooring's
+``sixDoFMooringRestraints`` ``moorDynR2`` does (a new step when
+:math:`t_{prev} - t_{saved} \ge 10^{-3}\,\Delta t`), since :math:`t - \Delta t` is subject to
+round-off.
+
 The names differ from MoorDyn's file calls: ``MoorDyn_SaveState`` writes the state to a file,
 ``CableDyn_SaveState`` keeps it in memory. Serialising the state to a caller buffer or a
 restart file (``MoorDyn_Serialize``, ``MoorDyn_Save``/``MoorDyn_Load``) is not supported. A
@@ -611,9 +626,12 @@ with reference point :math:`r`, sum the ``CD_C_POINT_COUPLED`` blocks only:
 
    F = \sum_k f_k, \qquad M_r = \sum_k (x_k - r) \times f_k
 
-where :math:`x_k` is the fairlead position the step was taken with. A host that applies the
-moment about the global origin (foamMooring's ``moorDynR2`` in point mode accumulates
-:math:`x_k \times f_k`) uses :math:`r = 0`. Do not add the anchor blocks.
+where :math:`x_k` is the fairlead position the step was taken with. The reference point
+depends on the host's restraint: foamMooring's ``moorDynR2`` of ``rigidBodyMooringRestraints``
+in point mode accumulates :math:`x_k \times f_k`, the moment about the global origin
+(:math:`r = 0`), while its ``moorDynR2`` of ``sixDoFMooringRestraints`` accumulates
+:math:`(x_k - x_{CoR}) \times f_k` about the body's centre of rotation
+(:math:`r = x_{CoR}`). Do not add the anchor blocks.
 
 Step 6: fixed step on the aggregate route
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -649,11 +667,11 @@ the deck's ``POINTS`` order of the ``Coupled`` points) the host computes from th
    CableDyn_GetCoupledMotion(h, q, v, a, n, &err);         /* seed every block */
    t_saved = -HUGE_VAL;                                    /* nothing saved yet */
 
-   /* Every call: time t = t_prev + dt of the current pass of the host time step. */
-   if (t != t_saved) {                      /* first pass: the model is at t_prev */
+   /* Every call: a pass of the host time step from t_prev = t - dt to t. */
+   if (t_prev - t_saved >= 1.0e-3 * dt) {   /* a new step: the model is at t_prev */
        CableDyn_SaveState(h, &err);
-       t_saved = t;
-   } else {                                 /* a later pass of the same step */
+       t_saved = t_prev;
+   } else {                                 /* a repeated pass from t_saved, any dt */
        CableDyn_RestoreState(h, &err);
    }
    /* the fairlead motion at t (the END of the step) into the host blocks, in layout order */
@@ -1865,13 +1883,19 @@ correctors.
 
 A restore followed by a step is bit-identical to taking that step from the saved state
 directly, whatever ran between the save and the restore: the slot is a copy of the model
-object, independent of the rollback buffers the steps use internally. A successful ``Init*``
-call discards the slot; a failed one keeps it with the model. Both calls return
+object, independent of the rollback buffers the steps use internally. The slot follows the
+model it was taken from: a successful ``Init*`` call discards it; a failed ``CableDyn_InitDeck``
+or ``CableDyn_InitDeckAt`` keeps it with the model; a failed ``CableDyn_InitLine`` or
+``CableDyn_InitLines`` discards it, except on a handle whose model runs on the coupled
+aggregate, which stays live with its save (`Calling conventions`_). Both calls return
 ``CD_C_NOT_INITIALIZED`` before an initialisation, and ``RestoreState`` returns
 ``CD_C_BAD_INPUT`` when nothing has been saved since the model was initialised. Each call copies
 the model, so it allocates memory of the size of the model and costs about as much as copying
-it; it does no file I/O and follows the threading rules of the other per-handle calls. There is
-no serialisation of the state to a caller buffer.
+it; it does no file I/O and follows the threading rules of the other per-handle calls. On the
+aggregate route ``SaveState`` returns ``CD_C_ALLOC_FAIL`` when the slot itself cannot be
+allocated, and the handle then holds no save; running out of memory during the copy of the
+model, on either route and in either call, aborts the process, as any Fortran assignment of
+allocatable data does. There is no serialisation of the state to a caller buffer.
 
 **CableDyn_GetCoupledLayout.** The owner of each 3-DOF block of the coupled vector.
 

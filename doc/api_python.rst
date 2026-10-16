@@ -527,11 +527,17 @@ library is located. Array ordering, frames, and units at the coupling boundary f
       :param q0: Either the full coupled vector of the deck (``n_coupled_dof`` values, the layout
          :meth:`step` uses; the ``Fixed``, ``Free`` and ``Connect`` blocks are not read), or the
          ``Coupled``/``Vessel`` blocks alone, in coupled-vector order (the ``MoorDyn_Init``
-         layout of a points-only deck). Flat or column-per-point ``(3, n)``; positions in m.
+         layout of a deck whose coupled objects are points that are all attached to lines: a
+         ``Coupled`` point attached to no line has no block here). Flat, or column-per-point
+         ``(3, n)`` with ``n`` ≠ 3; positions in m.
       :type q0: array_like
       :raises CableDynError: if the deck fails to initialise, or ``q0`` does not match its
-         coupled points. A failed initialisation keeps any previously initialised model.
-      :raises ValueError: if ``q0`` is not finite or its length is not a multiple of 3.
+         coupled points. A failed initialisation keeps any previously initialised model and its
+         saved state.
+      :raises ValueError: if the path is rejected as by :meth:`init_deck`; if ``q0`` is a ``(3, 3)``
+         array, which is ambiguous (column-per-point or row-per-point: pass three points flat);
+         if ``q0`` has any other shape than flat or ``(3, n)``, or a length that is not a
+         multiple of 3; or if ``q0`` is not finite.
       :raises RuntimeError: if the loaded library predates ABI 1 minor extension 2.
 
    .. py:method:: save_state()
@@ -541,8 +547,10 @@ library is located. Array ordering, frames, and units at the coupling boundary f
       it (``CableDyn_SaveState``, ``CableDyn_RestoreState``). The slot is a copy of every line,
       point, body and rod state with its solver history. A restore keeps the slot, so one save
       serves every outer corrector of a host time step, and a restore followed by a step is
-      bit-identical to taking that step from the saved state directly. A new initialisation
-      discards the slot.
+      bit-identical to taking that step from the saved state directly. Save when a host time
+      step starts after the previous one was accepted, and restore on every repeated pass from
+      the same start time, whatever its ``dt`` (:ref:`capi-host-coupling`). A successful
+      initialisation discards the slot; a failed one keeps it with the model.
 
       :raises CableDynError: on an uninitialised model, or from :meth:`restore_state` when
          nothing was saved since the model was initialised.

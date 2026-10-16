@@ -99,12 +99,16 @@ Rules shared by every entry point:
   (up to 1024 characters) and copied by `CableDyn_GetLastError`.
 - `CableDyn_NPoints` returns the column count expected by `CableDyn_UpdatePointFluidFields`; it
   can exceed `NCoupledDOF/3` when a deck has output-only fixed or coupled points.
-- Initialisation is transactional: a failed call leaves the handle as it was (uninitialised,
-  or holding its previous model).
+- Deck initialisation is transactional: a failed `CableDyn_InitDeck` or `CableDyn_InitDeckAt`
+  leaves the handle as it was (uninitialised, or holding its previous model and the state
+  saved for it by `CableDyn_SaveState`). `CableDyn_InitLine` and `CableDyn_InitLines` build the
+  point model in place: after a failure the handle must be initialised again and its saved
+  state is discarded, except on a handle whose deck model runs on the coupled aggregate, which
+  stays live with its saved state. A successful initialisation discards the saved state.
 
 The interface ships as the versioned shared library `libcabledyn` (`cabledyn.dll` in an Intel
 Fortran and MSVC build; CMake target `cabledyn_shared`) with the installed header; it reports
-CableDyn 0.1.1 and C ABI version 1, minor extension 1. The Python package uses the same library.
+CableDyn 0.1.1 and C ABI version 1, minor extension 2. The Python package uses the same library.
 
 ### Concurrency
 

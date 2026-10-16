@@ -165,6 +165,30 @@ def test_save_restore_is_bit_identical(deck, q_host, dt, amp):
             model.restore_state()
 
 
+def test_a_failed_initialization_keeps_the_save(tmp_path):
+    """A failed init_deck/init_deck_at keeps the model and its save; restore still works."""
+    dt = 1.0e-3
+    with CableDyn() as model, CableDyn() as ref:
+        model.init_deck_at(BOX, BOX_FAIRLEADS)
+        ref.init_deck_at(BOX, BOX_FAIRLEADS)
+        q0, _, _ = model.get_coupled_motion()
+        model.save_state()
+        model.step(dt, *_motion(model, q0, 0.02, dt))
+        with pytest.raises(CableDynError):
+            model.init_deck(tmp_path / "missing.dat")
+        with pytest.raises(CableDynError, match="coupled_positions"):
+            model.init_deck_at(BOX, BOX_FAIRLEADS[:, :2])
+        with pytest.raises(ValueError, match="column-per-point"):
+            model.init_deck_at(BOX, BOX_FAIRLEADS.T)  # (4, 3): row per point
+        model.restore_state()
+        assert model.time == 0.0
+        for s in range(1, 4):
+            motion = _motion(model, q0, 0.005, s * dt)
+            model.step(dt, *motion)
+            ref.step(dt, *motion)
+            assert np.array_equal(model.calc_output(), ref.calc_output())
+
+
 def test_aggregate_layout_holds_only_the_coupled_points():
     with CableDyn(MIXED) as model:
         assert model.coupled_layout() == ((2, "coupled"), (4, "coupled"))
