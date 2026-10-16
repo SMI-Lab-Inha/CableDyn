@@ -832,7 +832,8 @@ state at the time of the call through the same evaluator as the deck ``OUTPUTS``
 length and the end tensions; ``Point`` its position, velocity and the resultant line force;
 ``Body`` its pose, velocity, acceleration and net wrench about the reference point; ``Rod`` its
 node positions, End A pose, velocity and wrench. :meth:`~cabledyn.CableDyn.channel` evaluates
-any ``OUTPUTS`` token (``L2N5px``, ``Curv1N3``, ``Point4Fz``, ``Body1Pz``, ``Rod2TenA``, ...).
+any ``OUTPUTS`` token (``L2N5px``, ``Curv1N3``, ``Point4Fz``, ``AnchFz1``, ``Body1Pz``,
+``Rod2TenA``, ...).
 Views are cheap and hold no state; re-initialising or closing the model makes them stale, and a
 stale view raises :class:`cabledyn.CableDynError`.
 

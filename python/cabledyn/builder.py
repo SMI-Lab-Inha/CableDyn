@@ -103,12 +103,12 @@ _CHANNEL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "line",
         re.compile(
-            r"(fairten|anchten|fairangle|anchangle|fairdecl|anchdecl|fairincl|anchincl)"
+            r"(fairten|anchten|anchfz|anchfh|fairangle|anchangle|fairdecl|anchdecl|fairincl|anchincl)"
             r"([0-9]+)()",
             re.IGNORECASE,
         ),
     ),
-    ("line", re.compile(r"(tdp)([0-9]+)(s|x|y|z|lay|exc)", re.IGNORECASE)),
+    ("line", re.compile(r"(tdp)([0-9]+)(s|x|y|z|lay|exc|grd)", re.IGNORECASE)),
     ("line", re.compile(r"(ten|curv|bendmom|torq)([0-9]+)(n[0-9]+)", re.IGNORECASE)),
     ("line", re.compile(r"(twist)([0-9]+)(n[0-9]+|)", re.IGNORECASE)),
     ("line", re.compile(r"(l)([0-9]+)(n[0-9]+(?:[pva][xyz]|dec|azi))", re.IGNORECASE)),

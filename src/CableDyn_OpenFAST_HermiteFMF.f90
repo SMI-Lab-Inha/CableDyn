@@ -37,7 +37,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Step_Recovering, &
                                           CD_HermiteCable_Dyn_Reaction, &
                                           CD_HermiteCable_Dyn_EndConnection_Moment, &
-                                          CD_HermiteCable_Dyn_Curvature, &
+                                          CD_HermiteCable_Dyn_Curvature, CD_HermiteCable_Dyn_Curvature_Exact, &
                                           CD_HermiteCable_Dyn_Snapshot, CD_HermiteCable_Dyn_Restore, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, &
                                           CD_HermiteCable_Dyn_Set_Torsion, CD_HermiteCable_Dyn_Set_Torsion_Drive, &
@@ -78,7 +78,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_SetCoupledKinematics
   PUBLIC :: CD_HFMF_GetCoupledKinematics
   PUBLIC :: CD_HFMF_CalcOutput
-  PUBLIC :: CD_HFMF_Curvature
+  PUBLIC :: CD_HFMF_Curvature, CD_HFMF_Curvature_Exact
   PUBLIC :: CD_HFMF_MinSpanZ
   PUBLIC :: CD_HFMF_MirrorSize
   PUBLIC :: CD_HFMF_FrictionMirrorSize
@@ -1379,7 +1379,8 @@ CONTAINS
   END FUNCTION frame_to_global
 
   SUBROUTINE CD_HFMF_Curvature(self, curv_out, ErrStat, ErrMsg)
-    !! Nodal centreline curvature at the current state (the fatigue report channel).
+    !! Nodal curvature at the current state, the definition of the Curv<L>N<J> channels
+    !! (CD_HermiteCable_Dyn_Curvature: recovered from nodal equilibrium by default).
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(OUT) :: curv_out(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1395,6 +1396,25 @@ CONTAINS
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Curvature: '//TRIM(em)
     END IF
   END SUBROUTINE CD_HFMF_Curvature
+
+  SUBROUTINE CD_HFMF_Curvature_Exact(self, curv_out, ErrStat, ErrMsg)
+    !! Nodal geometric curvature of the cubic-Hermite centreline at the current state, the larger
+    !! one-sided trace at an interior node (CD_HermiteCable_Dyn_Curvature_Exact).
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
+    REAL(wp), INTENT(OUT) :: curv_out(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(300) :: em
+    ErrStat = CD_HFMF_OK; ErrMsg = ''
+    IF (.NOT. self%initialized) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Curvature_Exact: module not initialised'; RETURN
+    END IF
+    CALL CD_HermiteCable_Dyn_Curvature_Exact(self%line, curv_out, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Curvature_Exact: '//TRIM(em)
+    END IF
+  END SUBROUTINE CD_HFMF_Curvature_Exact
 
   REAL(wp) FUNCTION CD_HFMF_MinSpanZ(self) RESULT(zmin)
     !! Minimum global z along the cubic-Hermite CENTRELINE (its static-seeded shape), computed

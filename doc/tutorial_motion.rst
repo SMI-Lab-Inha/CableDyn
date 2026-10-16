@@ -111,13 +111,13 @@ full-amplitude heave cycle):
      - 1 578
      - 1 326
    * - ``Curv1N25`` (1/m)
-     - 0.0911
-     - 0.1034
-     - 0.0969
+     - 0.0915
+     - 0.1041
+     - 0.0973
    * - ``BendMom1N25`` (N·m)
-     - 1 813
-     - 2 058
-     - 1 929
+     - 1 820
+     - 2 073
+     - 1 937
 
 A 3 m heave swings the hang-off tension by ±40 % about its static value and changes the sag-bend
 curvature by about ±6 %. Plot ``FairTen1`` against ``Time(s)``: the first 12 s show the smooth
@@ -156,7 +156,7 @@ connection moment:
    .\CableDyn_driver.exe .\examples\lazy_wave_vessel_motion.dat .\results\vessel80
 
 At rest the hang-off tension is 9320 N and the end moment is below 1 N·m. Over the last 24 s the
-fairlead tension ranges from 7485 to 10969 N and the end moment peaks at 2953 N·m (a curvature of
+fairlead tension ranges from 7485 to 10969 N and the end moment peaks at 2955 N·m (a curvature of
 0.148 1/m, a bend radius of about 6.7 m). With the hang-off pinned, the end tangent swings
 between 71.5° and 89.2°; the clamp holds it to the vessel pitch, so the cable bends near the
 vessel instead. The peak moment changes by less than 0.1 % at ``dtM = 0.025`` s or with twice

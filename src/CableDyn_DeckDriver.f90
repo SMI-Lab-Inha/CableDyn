@@ -97,6 +97,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HCDYN_TENSILE_ERROR, &
                                           CD_HermiteCable_Axial_Damping_Resultant, &
                                           CD_HermiteCable_Axial_Damping_Element, CD_HermiteCable_Dyn_End_Force, &
+                                          CD_HermiteCable_Dyn_Node_Values, CD_HermiteCable_Dyn_Node_Recovery, &
+                                          CD_HermiteCable_Dyn_Set_Output_Recovery, &
                                           CD_HermiteCable_Dyn_Set_ForceBlend, CD_HC_FORCE_BLEND_DEFAULT, &
                                           CD_HermiteCable_Dyn_Set_Friction_Anchors, &
                                           CD_HermiteCable_Dyn_Set_Friction_Axial, &
@@ -605,6 +607,10 @@ MODULE CableDyn_DeckDriver
     ! catenary-seeded EI continuation first and the mesh-sequenced route as its fallback;
     ! 'sequenced' runs the mesh-sequenced route first.
     LOGICAL  :: cable_statics_sequenced = .FALSE.
+    ! Finite-EI node output definitions (OutputRecovery): 'equilibrium' (default) recovers the
+    ! effective tension, curvature and bend moment from nodal equilibrium; 'element' reports the
+    ! element-mean axial force EA (|r'| - 1) and the exact one-sided curvature traces.
+    LOGICAL  :: output_element_recovery = .FALSE.
     INTEGER  :: tensile_mode = CD_HCDYN_TENSILE_OFF
     REAL(wp) :: tensile_strain_tolerance = 2.0e-6_wp
     ! HOST-DRIVEN AMBIENT FLUID (not a deck keyword): set by CD_Init_Deck_Aggregate when
@@ -2959,6 +2965,8 @@ CONTAINS
     IF (es /= CD_HCDYN_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable alpha_force_blend wiring failed: '//TRIM(em)); RETURN
     END IF
+    ! OPTIONS OutputRecovery selects the definition of the node tension, curvature and bend moment.
+    CALL CD_HermiteCable_Dyn_Set_Output_Recovery(cable%line, opts%output_element_recovery)
   CONTAINS
 
     SUBROUTINE torsion_stage(est, emt)
@@ -5731,8 +5739,9 @@ CONTAINS
       ! the pointwise resultant, and a single element mean between tensile neighbours, dip
       ! next to a nodal seabed-contact reaction (a kink no element can follow, at every
       ! mesh) while the line in equilibrium stays tensile. Compression is reported when the
-      ! 3-element smoothed mean exceeds the admissible band, or when the node Tension
-      ! channel (the segment tension) falls below a tenth of the peak tension.
+      ! 3-element smoothed mean exceeds the admissible band, or when the nodal material
+      ! axial force (the length-weighted mean of the two adjacent element means) falls below a
+      ! tenth of the peak tension.
       hl_max = CD_ZERO
       DO e = 1, ne
         IF (ABS(w(e)) > CD_ZERO .AND. ei(e) > CD_ZERO) &
@@ -12975,6 +12984,15 @@ CONTAINS
       CASE DEFAULT
         CALL fail(ErrStat, ErrMsg, 'OPTION cable_statics "'//TRIM(val)//'" must be continuation or sequenced')
       END SELECT
+    CASE ('outputrecovery', 'output_recovery')
+      SELECT CASE (TRIM(to_lower(val)))
+      CASE ('equilibrium')
+        opts%output_element_recovery = .FALSE.
+      CASE ('element')
+        opts%output_element_recovery = .TRUE.
+      CASE DEFAULT
+        CALL fail(ErrStat, ErrMsg, 'OPTION OutputRecovery "'//TRIM(val)//'" must be equilibrium or element')
+      END SELECT
     CASE ('cable_load_feedback', 'cableloadfeedback')
       CALL rd_bool(val, opts%cable_load_feedback, ErrStat, ErrMsg)
     CASE ('tensile_safety', 'tensilesafety')
@@ -13432,7 +13450,7 @@ CONTAINS
 
   FUNCTION channel_identity_key(ch) RESULT(key)
     !! Canonical identity of an OUTPUTS channel, for duplicate detection: names compare
-    !! case-insensitively, numeric ids by value (FairTen01 = FairTen1), and alias
+    !! case-insensitively, numeric ids by value (FairTen01 = FairTen1, AnchFz01 = AnchFz1), and alias
     !! spellings of one quantity collapse (Con<P>p{x,y,z} = Point<P>p{x,y,z};
     !! FairAngle<L> = FairDecl<L>, AnchAngle<L> = AnchDecl<L>). Names outside the parsed
     !! families keep their lowercased spelling.
@@ -13446,6 +13464,9 @@ CONTAINS
     IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten')) THEN
       a = int_suffix(ch, 8)
       IF (a > 0) key = lo(1:7)//':'//TRIM(int_to_str(a))
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      a = anchor_force_line_id(ch)
+      IF (a > 0) key = lo(1:6)//':'//TRIM(int_to_str(a))
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       a = endpoint_angle_line_id(ch)
       IF (a <= 0) RETURN
@@ -19719,7 +19740,7 @@ CONTAINS
   SUBROUTINE mb_point_force(mb, ch, val, ErrStat, ErrMsg)
     !! Point<P>F{x,y,z,H} on the multibody march: the resultant of the forces the attached EI=0
     !! lines and finite-EI cables exert on point P.
-    TYPE(MultibodyMarch), INTENT(IN) :: mb
+    TYPE(MultibodyMarch), INTENT(INOUT) :: mb
     CHARACTER(*), INTENT(IN) :: ch
     REAL(wp), INTENT(OUT) :: val
     INTEGER, INTENT(OUT) :: ErrStat
@@ -24947,7 +24968,8 @@ CONTAINS
     IF (ErrStat == CD_DECKDRV_OK) &
       CALL write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
     IF (ErrStat == CD_DECKDRV_OK) &
-      CALL write_dynamic_hermite_line_outputs(CD_ZERO, lines, cables, pos_units, ten_units, ErrStat, ErrMsg)
+      CALL write_dynamic_hermite_line_outputs(CD_ZERO, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, &
+                                              ranges=ranges)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit); CALL close_dynamic_line_outputs(pos_units, ten_units); RETURN
     END IF
@@ -24999,7 +25021,8 @@ CONTAINS
                                    motion=motion, motion_time_index=MERGE(step + 1, 0, opts%has_motion_file), &
                                    has_motion=opts%has_motion_file, ranges=ranges)
       IF (ErrStat == CD_DECKDRV_OK) &
-        CALL write_dynamic_hermite_line_outputs(t, lines, cables, pos_units, ten_units, ErrStat, ErrMsg)
+        CALL write_dynamic_hermite_line_outputs(t, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, &
+                                                ranges=ranges)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL CD_Profile_Enter(CD_PROF_PROGRESS)
       CALL update_driver_progress(progress, step, t)
@@ -25095,7 +25118,7 @@ CONTAINS
     !! every node is available for touchdown, curvature, and tension inspection.
     CHARACTER(*), INTENT(IN) :: out_root
     TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cables(:)
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
@@ -25337,7 +25360,7 @@ CONTAINS
     CHARACTER(NAMELEN), INTENT(IN) :: channels(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cables(:)
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
     TYPE(MotionTable), INTENT(IN) :: motion
     LOGICAL, INTENT(IN) :: has_motion
     INTEGER, INTENT(OUT) :: ErrStat
@@ -25407,6 +25430,8 @@ CONTAINS
       ELSE
         IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten')) THEN
           line_id = int_suffix(channels(i), 8)
+        ELSE IF (is_anchor_force_channel(lo)) THEN
+          line_id = anchor_force_line_id(channels(i))
         ELSE IF (is_endpoint_angle_channel(lo)) THEN
           line_id = endpoint_angle_line_id(channels(i))
         ELSE
@@ -25471,13 +25496,17 @@ CONTAINS
     END DO
   END SUBROUTINE open_dynamic_hermite_line_outputs
 
-  SUBROUTINE write_dynamic_hermite_line_outputs(time, lines, cables, pos_units, ten_units, ErrStat, ErrMsg)
+  SUBROUTINE write_dynamic_hermite_line_outputs(time, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, ranges)
+    !! One row of the per-line position and segment-tension files. ranges, when given, is the
+    !! range set sampled for this row by write_hermite_model_row: a line with a range graph
+    !! then reuses the segment tensions of that sample's recovery pass (range_sample_cable).
     REAL(wp), INTENT(IN) :: time
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cables(:)
     INTEGER, INTENT(IN) :: pos_units(:), ten_units(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_RangeSet), INTENT(IN), OPTIONAL :: ranges
     INTEGER :: i, node, inode, seg, k
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     DO i = 1, SIZE(lines)
@@ -25502,8 +25531,19 @@ CONTAINS
       IF (ten_units(i) /= 0) THEN
         BLOCK
           REAL(wp) :: tension(cables(i)%line%ne)
+          LOGICAL :: shared
+          shared = .FALSE.
+          IF (PRESENT(ranges)) THEN
+            IF (CD_Range_Needs_Sample(ranges, i)) shared = ranges%lines(i)%want_range .AND. &
+                                                           .NOT. cables(i)%line%output_element_recovery
+          END IF
+          IF (shared) THEN
+            tension = ranges%lines(i)%ten_e(cables(i)%line%ne:1:-1)
+          ELSE
+            CALL cable_segment_tensions(cables(i), tension, ErrStat, ErrMsg)
+            IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          END IF
           DO seg = 1, cables(i)%line%ne
-            tension(seg) = cable_element_tension(cables(i), cables(i)%line%ne - seg + 1)
             IF (.NOT. IEEE_IS_FINITE(tension(seg))) THEN
               WRITE (ten_units(i), ROW_VALUES_FMT, ADVANCE='NO') time, (char_tab(), tension(k), k=1, seg - 1)
               CALL fail_solve(ErrStat, ErrMsg, 'non-finite Hermite line tension output'); RETURN
@@ -27070,7 +27110,7 @@ CONTAINS
           work%ch_kind(j) = CH_TDP
           work%ch_line(j) = il
           work%ch_comp(j) = comp
-        ELSE IF (is_point_force_channel(lo) .OR. is_object_channel(lo)) THEN
+        ELSE IF (is_point_force_channel(lo) .OR. is_object_channel(lo) .OR. is_anchor_force_channel(lo)) THEN
           CYCLE   ! evaluated channel-at-a-time (CH_LEGACY)
         ELSE IF (is_point_channel(lo)) THEN
           CALL parse_point_channel(channels(j), pidx, comp)
@@ -27311,6 +27351,15 @@ CONTAINS
         ErrMsg = 'CableDyn_DeckDriver: system dynamic end-tension recovery failed: '//TRIM(em)
         RETURN
       END IF
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      ! a component of the AnchTen end force (End B = internal first node)
+      li = find_line(lines, anchor_force_line_id(ch))
+      CALL line_model_anchor_force(system%lines(li), lo, val, es, em)
+      IF (es /= CD_DECKDRV_OK) THEN
+        ErrStat = CD_DECKDRV_SOLVEFAIL
+        ErrMsg = 'CableDyn_DeckDriver: system dynamic end-force recovery failed: '//TRIM(em)
+        RETURN
+      END IF
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       li = find_line(lines, endpoint_angle_line_id(ch))
       ndof = CD_System_Line_NDOF(system, li, es, em)
@@ -27431,6 +27480,12 @@ CONTAINS
     IF (is_point_force_channel(lo)) THEN
       CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": Point<P>F channels are not available on the '// &
                 'two-moving-end finite-EI route (use FairTen/AnchTen)')
+      RETURN
+    END IF
+    ! this route reports the axial chord-stretch tension of the end elements, not an end-force vector
+    IF (is_anchor_force_channel(lo)) THEN
+      CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": AnchFz/AnchFH channels are not available on the '// &
+                'two-moving-end finite-EI route (use AnchTen and AnchIncl)')
       RETURN
     END IF
     IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten')) THEN
@@ -27616,6 +27671,15 @@ CONTAINS
       IF (es /= CD_DECKDRV_OK) THEN
         ErrStat = CD_DECKDRV_SOLVEFAIL
         ErrMsg = 'CableDyn_DeckDriver: dynamic end-tension recovery failed: '//TRIM(em)
+        RETURN
+      END IF
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      ! a component of the AnchTen end force (End B = internal first node)
+      li = find_line(lines, anchor_force_line_id(ch))
+      CALL line_model_anchor_force(models(li), lo, val, es, em)
+      IF (es /= CD_DECKDRV_OK) THEN
+        ErrStat = CD_DECKDRV_SOLVEFAIL
+        ErrMsg = 'CableDyn_DeckDriver: dynamic end-force recovery failed: '//TRIM(em)
         RETURN
       END IF
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
@@ -29250,6 +29314,17 @@ CONTAINS
       ELSE
         v = ten_all(ten_off(li) + 1)             ! deck End B anchor = internal first element
       END IF
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      ! a component of the AnchTen end force; without end_force, of the anchor element's pull
+      ! on the anchor node (its tension along the element, toward the internal second node)
+      li = find_line(lines, anchor_force_line_id(ch))
+      IF (PRESENT(end_force)) THEN
+        fsum = end_force(:, 1, li)
+      ELSE
+        fsum = q_all(q_off(li) + 4:q_off(li) + 6) - q_all(q_off(li) + 1:q_off(li) + 3)
+        IF (NORM2(fsum) > CD_ZERO) fsum = ten_all(ten_off(li) + 1)*fsum/NORM2(fsum)
+      END IF
+      v = anchor_force_component(lo, fsum)
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       li = find_line(lines, endpoint_angle_line_id(ch))
       IF (is_fair_endpoint_angle(lo)) THEN
@@ -29339,6 +29414,10 @@ CONTAINS
       IF (find_line(lines, int_suffix(ch, 8)) == 0) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": unknown line id'); RETURN
       END IF
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      IF (find_line(lines, anchor_force_line_id(ch)) == 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": unknown line id'); RETURN
+      END IF
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       IF (find_line(lines, endpoint_angle_line_id(ch)) == 0) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": unknown line id'); RETURN
@@ -29352,7 +29431,7 @@ CONTAINS
       CALL CD_Parse_TDP_Channel(ch, line_id, comp)
       IF (comp < 1) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": bad touchdown channel (use TDP<L>s, TDP<L>x, '// &
-                  'TDP<L>y, TDP<L>z, TDP<L>Lay or TDP<L>Exc)'); RETURN
+                  'TDP<L>y, TDP<L>z, TDP<L>Lay, TDP<L>Exc or TDP<L>Grd)'); RETURN
       END IF
       IF (find_line(lines, line_id) == 0) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": unknown line id'); RETURN
@@ -29399,12 +29478,12 @@ CONTAINS
       END IF
     ELSE
       CALL fail(ErrStat, ErrMsg, 'OUTPUT channel "'//TRIM(ch)// &
-                '" not supported (use FairTen<L>, AnchTen<L>, FairIncl<L>, AnchIncl<L>, '// &
+                '" not supported (use FairTen<L>, AnchTen<L>, AnchFz<L>, AnchFH<L>, FairIncl<L>, AnchIncl<L>, '// &
                 'FairDecl<L>, AnchDecl<L> (FairAngle/AnchAngle aliases), '// &
                 'Point<P>p{x,y,z} (alias Con<P>p{x,y,z}), Point<P>F{x,y,z,H}, '// &
                 'Ten<L>N<J>, Curv<L>N<J>, BendMom<L>N<J>, Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
                 'L<L>N<J>p{x,y,z}, L<L>N<J>v{x,y,z}, L<L>N<J>a{x,y,z}, L<L>N<J>Dec, L<L>N<J>Azi, '// &
-                'TDP<L>{s,x,y,z,Lay,Exc}, or the Body<N>/Rod<N> channels)'); RETURN
+                'TDP<L>{s,x,y,z,Lay,Exc,Grd}, or the Body<N>/Rod<N> channels)'); RETURN
     END IF
   END SUBROUTINE check_channel
 
@@ -29435,6 +29514,55 @@ CONTAINS
     IF (is_point) RETURN
     IF (starts_with(lo, 'con') .AND. LEN(lo) >= 4) is_point = VERIFY(lo(4:4), '0123456789') == 0
   END FUNCTION is_point_channel
+
+  LOGICAL FUNCTION is_anchor_force_channel(lo) RESULT(yes)
+    !! AnchFz<L> / AnchFH<L> (lower case): the vertical component and the horizontal magnitude
+    !! of the AnchTen<L> end force, the force line L exerts on its End-B point.
+    CHARACTER(*), INTENT(IN) :: lo
+    yes = starts_with(lo, 'anchfz') .OR. starts_with(lo, 'anchfh')
+  END FUNCTION is_anchor_force_channel
+
+  INTEGER FUNCTION anchor_force_line_id(ch) RESULT(line_id)
+    !! Deck line id of an AnchFz<L> / AnchFH<L> name; 0 when the suffix is not a positive id.
+    CHARACTER(*), INTENT(IN) :: ch
+    line_id = int_suffix(ch, 7)
+  END FUNCTION anchor_force_line_id
+
+  REAL(wp) FUNCTION anchor_force_component(lo, force) RESULT(v)
+    !! AnchFz (force(3), positive upward: the line lifts its anchor) or AnchFH (horizontal
+    !! magnitude) of the global end-B force vector `force` the line exerts on its anchor.
+    CHARACTER(*), INTENT(IN) :: lo
+    REAL(wp), INTENT(IN) :: force(3)
+    IF (starts_with(lo, 'anchfz')) THEN
+      v = force(3)
+    ELSE
+      v = SQRT(force(1)**2 + force(2)**2)
+    END IF
+  END FUNCTION anchor_force_component
+
+  SUBROUTINE line_model_anchor_force(model, lo, val, ErrStat, ErrMsg)
+    !! AnchFz / AnchFH of an EI=0 line model: a component of the force the line exerts on the
+    !! point holding its internal first node (deck End B), the vector whose norm is AnchTen.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    CHARACTER(*), INTENT(IN) :: lo
+    REAL(wp), INTENT(OUT) :: val
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: f_first(3), f_last(3)
+    INTEGER :: es
+    CHARACTER(160) :: em
+
+    val = CD_ZERO
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    CALL CD_Get_Model_EndForces(model, f_first, f_last, es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      ErrStat = CD_DECKDRV_SOLVEFAIL
+      ErrMsg = em
+      RETURN
+    END IF
+    val = anchor_force_component(lo, f_first)
+  END SUBROUTINE line_model_anchor_force
 
   LOGICAL FUNCTION is_point_force_channel(lo) RESULT(yes)
     !! Point<P>F{x,y,z} / Point<P>FH: the resultant of the line-end forces on point P.
@@ -30444,10 +30572,12 @@ CONTAINS
   END SUBROUTINE range_sample_fmodel
 
   SUBROUTINE range_sample_cable(cable, rl, ErrStat, ErrMsg)
-    !! Sample a cubic-Hermite cable with the evaluators of eval_cable_channel: end-force
-    !! tension at the ends and the length-weighted element-mean axial force inside, the
-    !! larger one-sided exact curvature and EI * curvature traces, and the declination of
-    !! the cable-local state; positions are rotated into the deck's global frame.
+    !! Sample a cubic-Hermite cable with the definitions of eval_cable_channel: the node
+    !! tension, curvature and bend moment recovered from nodal equilibrium in one pass
+    !! (OutputRecovery element: end-force tension at the ends, the length-weighted element-mean
+    !! axial force inside, the larger one-sided exact curvature and EI * curvature traces), and
+    !! the declination of the cable-local state; positions are rotated into the deck's global
+    !! frame.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
     TYPE(CD_RangeLine), INTENT(INOUT) :: rl
     INTEGER, INTENT(OUT) :: ErrStat
@@ -30479,38 +30609,20 @@ CONTAINS
       END DO
     END DO
     IF (.NOT. rl%want_range) RETURN   ! a touchdown-only line needs the positions alone
-    ! element traces: mean axial force, curvature at xi = 0 (vs) and xi = 1 (as)
-    DO e = 1, ne
-      rl%ten_e(e) = cable_element_mean_tension(cable, e)
-      CALL cable_element_curvature(cable, e, CD_ZERO, rl%vs(e), es, em)
-      IF (es == CD_HCABLE_OK) CALL cable_element_curvature(cable, e, CD_ONE, rl%as(e), es, em)
-      IF (es /= CD_HCABLE_OK) THEN
-        CALL fail_solve(ErrStat, ErrMsg, 'range-graph curvature sample failed: '//TRIM(em)); RETURN
+    IF (.NOT. cable%line%output_element_recovery) THEN
+      ! equilibrium node values, one pass over the elements straight into the public-order rows
+      ! (internal node i is public node nn + 1 - i); the segment tensions (internal order) stay
+      ! in rl%ten_e for the .t.out row
+      CALL CD_HermiteCable_Dyn_Node_Recovery(cable%line, es, em, tension=rl%val(CD_RQ_TENSION, nn:1:-1), &
+                                             curvature=rl%val(CD_RQ_CURVATURE, nn:1:-1), &
+                                             bend_moment=rl%val(CD_RQ_BEND, nn:1:-1), segment_tension=rl%ten_e)
+      IF (es /= CD_HCDYN_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'range-graph node-value recovery failed: '//TRIM(em)); RETURN
       END IF
-    END DO
-    DO j = 1, nn
-      inode = nn + 1 - j
-      IF (inode == 1 .OR. inode == nn) THEN
-        CALL cable_end_tension(cable, inode, rl%val(CD_RQ_TENSION, j), ErrStat, ErrMsg)
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      ELSE
-        rl%val(CD_RQ_TENSION, j) = (cable%line%l0(inode - 1)*rl%ten_e(inode - 1) + &
-                                    cable%line%l0(inode)*rl%ten_e(inode))/ &
-                                   (cable%line%l0(inode - 1) + cable%line%l0(inode))
-      END IF
-      curv = CD_ZERO
-      bend = CD_ZERO
-      IF (inode > 1) THEN
-        curv = MAX(curv, rl%as(inode - 1))
-        bend = MAX(bend, cable%line%EI(inode - 1)*rl%as(inode - 1))
-      END IF
-      IF (inode <= ne) THEN
-        curv = MAX(curv, rl%vs(inode))
-        bend = MAX(bend, cable%line%EI(inode)*rl%vs(inode))
-      END IF
-      rl%val(CD_RQ_CURVATURE, j) = curv
-      rl%val(CD_RQ_BEND, j) = bend
-    END DO
+    ELSE
+      CALL range_sample_cable_element(ErrStat, ErrMsg)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    END IF
     IF (rl%has_torsion .AND. cable%line%torsion%active) THEN
       ! condensed torsion: the committed torque (uniform) and the cable's own twist from End A
       ! (public node 1, the last internal node), as the Torq<L>N<J> and Twist<L>N<J> channels
@@ -30522,6 +30634,49 @@ CONTAINS
                                  cable%line%l0(inode)/cable%line%torsion%gj(inode)*45.0_wp/QUARTER_PI
       END DO
     END IF
+
+  CONTAINS
+
+    SUBROUTINE range_sample_cable_element(ErrStat, ErrMsg)
+      !! OutputRecovery element: end-force tension at the ends and the length-weighted
+      !! element-mean axial force inside, the larger one-sided exact curvature and EI * curvature.
+      INTEGER, INTENT(OUT) :: ErrStat
+      CHARACTER(*), INTENT(OUT) :: ErrMsg
+      ErrStat = CD_DECKDRV_OK
+      ErrMsg = ''
+      ! element traces: mean axial force, curvature at xi = 0 (vs) and xi = 1 (as)
+      DO e = 1, ne
+        rl%ten_e(e) = cable_element_mean_tension(cable, e)
+        CALL cable_element_curvature(cable, e, CD_ZERO, rl%vs(e), es, em)
+        IF (es == CD_HCABLE_OK) CALL cable_element_curvature(cable, e, CD_ONE, rl%as(e), es, em)
+        IF (es /= CD_HCABLE_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'range-graph curvature sample failed: '//TRIM(em)); RETURN
+        END IF
+      END DO
+      DO j = 1, nn
+        inode = nn + 1 - j
+        IF (inode == 1 .OR. inode == nn) THEN
+          CALL cable_end_tension(cable, inode, rl%val(CD_RQ_TENSION, j), ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        ELSE
+          rl%val(CD_RQ_TENSION, j) = (cable%line%l0(inode - 1)*rl%ten_e(inode - 1) + &
+                                      cable%line%l0(inode)*rl%ten_e(inode))/ &
+                                     (cable%line%l0(inode - 1) + cable%line%l0(inode))
+        END IF
+        curv = CD_ZERO
+        bend = CD_ZERO
+        IF (inode > 1) THEN
+          curv = MAX(curv, rl%as(inode - 1))
+          bend = MAX(bend, cable%line%EI(inode - 1)*rl%as(inode - 1))
+        END IF
+        IF (inode <= ne) THEN
+          curv = MAX(curv, rl%vs(inode))
+          bend = MAX(bend, cable%line%EI(inode)*rl%vs(inode))
+        END IF
+        rl%val(CD_RQ_CURVATURE, j) = curv
+        rl%val(CD_RQ_BEND, j) = bend
+      END DO
+    END SUBROUTINE range_sample_cable_element
   END SUBROUTINE range_sample_cable
 
   SUBROUTINE aggregate_line_positions(system, cables, line_is_cable, line_obj_index, line_id, r, ErrStat, ErrMsg)
@@ -30726,7 +30881,7 @@ CONTAINS
     TYPE(CD_SystemType), INTENT(IN) :: system
     ! ALLOCATABLE so a pure-mooring deck that declares channels (ncable = 0, cables unallocated)
     ! can pass its cables store: only a channel resolving to a cable dereferences it.
-    TYPE(CD_HFMF_ModuleType), ALLOCATABLE, INTENT(IN) :: cables(:)
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE, INTENT(INOUT) :: cables(:)
     LOGICAL, INTENT(IN) :: line_is_cable(:)
     INTEGER, INTENT(IN) :: line_obj_index(:)
     REAL(wp), INTENT(OUT) :: val
@@ -30830,7 +30985,8 @@ CONTAINS
       RETURN
     END IF
 
-    ! TDP<L>{s,x,y,z,Lay,Exc}: the touchdown point of the current configuration.
+    ! TDP<L>{s,x,y,z,Lay,Exc,Grd}: the touchdown point of the current configuration and the
+    ! grounded length behind it.
     IF (CD_Is_TDP_Channel(lo)) THEN
       IF (.NOT. PRESENT(ranges)) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": touchdown channels are not available here'); RETURN
@@ -30870,6 +31026,8 @@ CONTAINS
     ! Resolve the channel's deck line id; every other line-node token uses its own parser.
     IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten')) THEN
       line_id = int_suffix(ch, 8)
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      line_id = anchor_force_line_id(ch)
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       line_id = endpoint_angle_line_id(ch)
     ELSE
@@ -30903,8 +31061,10 @@ CONTAINS
                                                 tension, ErrStat, ErrMsg)
     !! Segment (element) tensions of deck line line_id in public order End A -> End B, the
     !! values the standalone driver writes to .Line<L>.t.out: the EI=0 element tensions of
-    !! CD_Get_Model_Tension, or the Hermite element-midpoint axial tension of a finite-EI cable.
-    !! tension must hold exactly the line's element count.
+    !! CD_Get_Model_Tension, or the segment tensions of a finite-EI cable (cable_segment_tensions:
+    !! the mean axial component of the element's two equilibrium end forces, or under OPTIONS
+    !! OutputRecovery element the axial resultant at the element midpoint). tension must hold
+    !! exactly the line's element count.
     INTEGER, INTENT(IN) :: line_id
     LOGICAL, INTENT(IN) :: has_sys
     TYPE(CD_SystemType), INTENT(IN) :: system
@@ -30915,7 +31075,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
-    INTEGER :: obj, ne, seg, es
+    INTEGER :: obj, ne, es
     CHARACTER(200) :: em
 
     ErrStat = CD_DECKDRV_OK
@@ -30939,9 +31099,7 @@ CONTAINS
       IF (SIZE(tension) /= ne) THEN
         CALL fail(ErrStat, ErrMsg, 'segment tensions: output size does not match the element count'); RETURN
       END IF
-      DO seg = 1, ne
-        tension(seg) = cable_element_tension(cables(obj), ne - seg + 1)
-      END DO
+      CALL cable_segment_tensions(cables(obj), tension, ErrStat, ErrMsg)
       RETURN
     END IF
     IF (.NOT. has_sys) THEN
@@ -31035,6 +31193,8 @@ CONTAINS
       ok = LEN_TRIM(lo) > 7
       IF (ok) ok = VERIFY(lo(8:LEN_TRIM(lo)), '0123456789') == 0
       IF (ok) ok = int_suffix(ch, 8) > 0
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      ok = anchor_force_line_id(ch) > 0
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       ok = endpoint_angle_line_id(ch) > 0
     ELSE
@@ -31104,6 +31264,14 @@ CONTAINS
       ELSE
         CALL line_model_end_tension(system%lines(li), 1, ne + 1, val, es, em)
       END IF
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL sys_solvefail(ch, em, ErrStat, ErrMsg); RETURN
+      END IF
+      RETURN
+    END IF
+    IF (is_anchor_force_channel(lo)) THEN
+      ! a component of the AnchTen end force (End B = internal first node)
+      CALL line_model_anchor_force(system%lines(li), lo, val, es, em)
       IF (es /= CD_DECKDRV_OK) THEN
         CALL sys_solvefail(ch, em, ErrStat, ErrMsg); RETURN
       END IF
@@ -31188,7 +31356,7 @@ CONTAINS
     !! -> fairlead (node nn, the coupled endpoint), so deck End A = internal node nn. Bend moment is
     !! EI(node) * |kvec_current - kvec_reference|; the built cable's reference is straight
     !! (kvec_reference = 0), so it reduces to EI * geometric curvature magnitude.
-    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     CHARACTER(*), INTENT(IN) :: ch
     REAL(wp), INTENT(OUT) :: val
     INTEGER, INTENT(OUT) :: ErrStat
@@ -31196,6 +31364,7 @@ CONTAINS
 
     CHARACTER(NAMELEN) :: lo
     INTEGER :: line_id, node, kind, comp, nnode, nelem, inode, es
+    REAL(wp) :: sec_ten, sec_curv, sec_bend
     CHARACTER(200) :: em
 
     ErrStat = CD_DECKDRV_OK
@@ -31212,6 +31381,19 @@ CONTAINS
       RETURN
     ELSE IF (starts_with(lo, 'anchten')) THEN
       CALL cable_end_tension(cable, 1, val, ErrStat, ErrMsg)
+      RETURN
+    ELSE IF (is_anchor_force_channel(lo)) THEN
+      ! a component of the AnchTen end force; Fz and the horizontal magnitude do not depend on
+      ! the cable's frame heading about +z
+      BLOCK
+        REAL(wp) :: force(3)
+        CALL CD_HermiteCable_Dyn_End_Force(cable%line, 1, force, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": finite-EI end-force recovery failed: '// &
+                          TRIM(em)); RETURN
+        END IF
+        val = anchor_force_component(lo, force)
+      END BLOCK
       RETURN
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       IF (is_fair_endpoint_angle(lo)) THEN
@@ -31233,15 +31415,16 @@ CONTAINS
         IF (inode == 1 .OR. inode == nnode) THEN
           ! a line end: the same support-reaction tension as FairTen/AnchTen
           CALL cable_end_tension(cable, inode, val, ErrStat, ErrMsg)
-        ELSE
-          ! Segment tension, as the EI=0 nodal channel: the length-weighted average of
-          ! the two adjacent element-mean axial forces. The pointwise resultant at the
-          ! node is not reported: with a stiff EA it oscillates about the element mean
-          ! wherever an element cannot follow the line (a nodal seabed-contact kink, a
-          ! section junction), by up to several times the line tension at any mesh.
+        ELSE IF (cable%line%output_element_recovery) THEN
+          ! OutputRecovery element: the length-weighted average of the two adjacent
+          ! element-mean axial forces EA (|r'| - 1)
           val = (cable%line%l0(inode - 1)*cable_element_mean_tension(cable, inode - 1) + &
                  cable%line%l0(inode)*cable_element_mean_tension(cable, inode))/ &
                 (cable%line%l0(inode - 1) + cable%line%l0(inode))
+        ELSE
+          ! effective tension from nodal equilibrium (CD_HermiteCable_Dyn_Node_Recovery)
+          CALL cable_node_values(cable, inode, val, sec_curv, sec_bend, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
         END IF
       END BLOCK
     CASE (1)   ! position (cable-local state rotated to the deck's global frame)
@@ -31250,12 +31433,20 @@ CONTAINS
       val = cable_global_component(cable, cable%line%v(6*(inode - 1) + 1:6*(inode - 1) + 3), comp)
     CASE (4)   ! acceleration
       val = cable_global_component(cable, cable%line%a(6*(inode - 1) + 1:6*(inode - 1) + 3), comp)
-    CASE (5)   ! exact Hermite curvature, retaining the larger interface trace
+    CASE (5)   ! curvature: recovered bend moment / EI, or the larger exact one-sided trace
+      IF (.NOT. cable%line%output_element_recovery) THEN
+        CALL cable_node_values(cable, inode, sec_ten, val, sec_bend, ErrStat, ErrMsg)
+        RETURN
+      END IF
       CALL cable_nodal_curvature(cable, inode, val, es, em)
       IF (es /= CD_HCABLE_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
       END IF
-    CASE (6)   ! exact |EI*kappa|, retaining the larger interface trace
+    CASE (6)   ! bend moment: recovered from nodal equilibrium, or EI times the larger exact trace
+      IF (.NOT. cable%line%output_element_recovery) THEN
+        CALL cable_node_values(cable, inode, sec_ten, sec_curv, val, ErrStat, ErrMsg)
+        RETURN
+      END IF
       CALL cable_nodal_bend_moment(cable, inode, val, es, em)
       IF (es /= CD_HCABLE_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
@@ -31411,6 +31602,44 @@ CONTAINS
     tension = NORM2(force)
   END SUBROUTINE cable_end_tension
 
+  SUBROUTINE cable_node_values(cable, inode, tension, curvature, bend_moment, ErrStat, ErrMsg)
+    !! Equilibrium node values of a finite-EI cable at internal node inode
+    !! (CD_HermiteCable_Dyn_Node_Values): effective tension, curvature and bend moment.
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
+    INTEGER, INTENT(IN) :: inode
+    REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(200) :: em
+    ErrStat = CD_DECKDRV_OK; ErrMsg = ''
+    CALL CD_HermiteCable_Dyn_Node_Values(cable%line, inode, tension, curvature, bend_moment, es, em)
+    IF (es /= CD_HCDYN_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI node-value recovery failed: '//TRIM(em))
+  END SUBROUTINE cable_node_values
+
+  SUBROUTINE cable_segment_tensions(cable, tension, ErrStat, ErrMsg)
+    !! Segment tensions of a finite-EI cable in public order (segment 1 at End A): the mean of
+    !! the axial components of each element's own equilibrium end forces, in one pass
+    !! (CD_HermiteCable_Dyn_Node_Recovery); OutputRecovery element: the axial resultant at the
+    !! element midpoint.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    REAL(wp), INTENT(OUT) :: tension(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: ne, e, es
+    CHARACTER(200) :: em
+    ErrStat = CD_DECKDRV_OK; ErrMsg = ''
+    ne = cable%line%ne
+    IF (cable%line%output_element_recovery) THEN
+      DO e = 1, ne
+        tension(e) = cable_element_tension(cable, ne - e + 1)
+      END DO
+      RETURN
+    END IF
+    CALL CD_HermiteCable_Dyn_Node_Recovery(cable%line, es, em, segment_tension=tension(ne:1:-1))
+    IF (es /= CD_HCDYN_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI segment-tension recovery failed: '//TRIM(em))
+  END SUBROUTINE cable_segment_tensions
+
   SUBROUTINE cable_nodal_curvature(cable, inode, curvature, ErrStat, ErrMsg)
     !! Exact one-sided Hermite curvature traces at an internal line node.  Curvature
     !! need not be continuous across a material interface because the interpolation
@@ -31487,8 +31716,8 @@ CONTAINS
 
   FUNCTION CD_Channel_Unit(ch) RESULT(unit)
     !! OrcaFlex-vocabulary output unit for a channel token, by kind: tension (FairTen/AnchTen/Ten)
-    !! -> (N); curvature (Curv) -> (1/m); bend moment (BendMom) -> (N.m); endpoint orientation/
-    !! Dec/Azi -> (deg); torque (Torq) -> (N.m); twist (Twist) -> (deg); position (Point/...p) -> (m);
+    !! and anchor force (AnchFz/AnchFH) -> (N); curvature (Curv) -> (1/m); bend moment (BendMom)
+    !! -> (N.m); endpoint orientation/Dec/Azi -> (deg); torque (Torq) -> (N.m); twist (Twist) -> (deg); position (Point/...p) -> (m);
     !! velocity (...v) -> (m/s);
     !! acceleration (...a) -> (m/s2).
     CHARACTER(*), INTENT(IN) :: ch
@@ -31510,7 +31739,7 @@ CONTAINS
       CASE (22:24); unit = '(N.m)'
       CASE DEFAULT; unit = '(-)'
       END SELECT
-    ELSE IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten')) THEN
+    ELSE IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten') .OR. is_anchor_force_channel(lo)) THEN
       unit = '(N)'
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       unit = '(deg)'

@@ -298,6 +298,9 @@ def test_time_must_be_strictly_increasing(tmp_path):
     ("channel", "unit"),
     [
         ("FairTen1", "N"),
+        ("AnchFz1", "N"),
+        ("AnchFH2", "N"),
+        ("anchfh02", "N"),
         ("AnchIncl2", "deg"),
         ("Ten3N4", "N"),
         ("Curv3N4", "1/m"),
@@ -324,6 +327,7 @@ def test_time_must_be_strictly_increasing(tmp_path):
         # an all-zero id is no channel
         ("Twist0", None),
         ("Torq0N1", None),
+        ("AnchFz0", None),
         ("Unknown", None),
     ],
 )

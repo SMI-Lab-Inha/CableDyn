@@ -772,7 +772,7 @@ CONTAINS
   SUBROUTINE write_mixed_row(unit, time, aggregate, stat, msg)
     INTEGER, INTENT(IN) :: unit
     REAL(wp), INTENT(IN) :: time
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: aggregate
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: aggregate
     INTEGER, INTENT(OUT) :: stat
     CHARACTER(*), INTENT(OUT) :: msg
     INTEGER :: i, ios

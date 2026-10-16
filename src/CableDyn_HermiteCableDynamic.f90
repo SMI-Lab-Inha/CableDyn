@@ -121,6 +121,10 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Energy
   PUBLIC :: CD_HermiteCable_Dyn_Curvature
   PUBLIC :: CD_HermiteCable_Dyn_Reaction
+  PUBLIC :: CD_HermiteCable_Dyn_Curvature_Exact
+  PUBLIC :: CD_HermiteCable_Dyn_Set_Output_Recovery
+  PUBLIC :: CD_HermiteCable_Dyn_Node_Recovery
+  PUBLIC :: CD_HermiteCable_Dyn_Node_Values
   PUBLIC :: CD_HermiteCable_Dyn_End_Force
   PUBLIC :: CD_HermiteCable_Dyn_Set_ForceBlend
   PUBLIC :: CD_HermiteCable_Dyn_Max_Step_Rotation
@@ -412,6 +416,26 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp) :: tensile_worst_force = CD_ZERO, tensile_worst_threshold = CD_ZERO
     REAL(wp) :: tensile_worst_xi = CD_ZERO, tensile_worst_time = CD_ZERO
     INTEGER :: recovery_event_count = 0, recovery_max_substeps_used = 0
+    ! Node output definitions (CD_HermiteCable_Dyn_Set_Output_Recovery): equilibrium recovery
+    ! by default, the element-mean axial force and exact curvature traces when set.
+    LOGICAL :: output_element_recovery = .FALSE.
+    ! Smallest bending stiffness [N m^2] whose recovered bend moment resolves a curvature: the largest
+    ! consistent-load moment w L0^2/12 of an element over a 1 m bend radius. The moment recovered
+    ! from nodal equilibrium carries an error of that order, independent of EI, so over a softer
+    ! section it cannot give the curvature (node_values then takes the exact geometric trace).
+    REAL(wp) :: ei_resolve = CD_ZERO
+    ! Cache of the element end residuals behind the node outputs (CD_HermiteCable_Dyn_Node_Values).
+    ! Element e's entry rc_g(:, e) is valid for the time and configuration epoch the cache was
+    ! keyed at (rc_t, rc_key_epoch) and for the element's own 12 q, v and a DOFs it was evaluated
+    ! at (rc_q/rc_v/rc_a(:, e)), the only state its residual depends on, so a node query costs two
+    ! element comparisons and the channels of one output row share one evaluation per element.
+    ! Allocated once at initialisation; rc_epoch counts the loads configured after it (drag,
+    ! axial damping, waves, added mass, held fluid, contact).
+    INTEGER :: rc_epoch = 0, rc_key_epoch = -1
+    LOGICAL :: rc_key_ok = .FALSE.
+    REAL(wp) :: rc_t = CD_ZERO
+    REAL(wp), ALLOCATABLE :: rc_q(:, :), rc_v(:, :), rc_a(:, :), rc_g(:, :)
+    LOGICAL, ALLOCATABLE :: rc_have(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HermiteCableDynType
 
@@ -536,6 +560,7 @@ CONTAINS
     model%seabed_z = seabed_z; model%kn = kn
     ALLOCATE (model%l0(ne), model%EA(ne), model%EI(ne), model%rho_a(ne), model%w(ne))
     model%l0 = l0; model%EA = EA; model%EI = EI; model%rho_a = rho_a; model%w = w
+    model%ei_resolve = MAXVAL(ABS(w)*l0*l0)/12.0_wp
 
     ! gen-alpha constants
     rho = rho_inf
@@ -600,6 +625,9 @@ CONTAINS
 
     ! state: at-rest seed, v = 0, consistent a0
     ALLOCATE (model%q(ndof), model%v(ndof), model%a(ndof))
+    ALLOCATE (model%rc_q(12, ne), model%rc_v(12, ne), model%rc_a(12, ne), model%rc_g(12, ne), model%rc_have(ne))
+    model%rc_have = .FALSE.
+    model%rc_key_ok = .FALSE.
     model%q = seed
     model%v = CD_ZERO
     model%a = CD_ZERO
@@ -646,6 +674,7 @@ CONTAINS
     CHARACTER(200) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1699,6 +1728,7 @@ CONTAINS
     LOGICAL :: had_drag
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1797,6 +1827,7 @@ CONTAINS
     CHARACTER(300) :: em
 
     ErrStat = CD_HCDYN_OK
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1867,6 +1898,7 @@ CONTAINS
     LOGICAL :: had_am
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -1962,6 +1994,7 @@ CONTAINS
     CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -2081,6 +2114,7 @@ CONTAINS
     CHARACTER(200) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
     model%tr_valid = .FALSE.
@@ -2217,6 +2251,7 @@ CONTAINS
     LOGICAL :: had_field
     CHARACTER(240) :: em
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n. The carried step
     ! factor stays usable (a per-step field update only perturbs the drag and inertia tangent;
     ! the first field's consistent-acceleration solve drops it).
@@ -4417,7 +4452,32 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Energy
 
   SUBROUTINE CD_HermiteCable_Dyn_Curvature(model, curv_out, ErrStat, ErrMsg)
-    !! Per-node centreline curvature at the current state (element-midpoint / endpoint maxima).
+    !! Per-node curvature at the current state, the definition of the Curv<L>N<J> channels: the
+    !! bend moment recovered from nodal equilibrium over EI (CD_HermiteCable_Dyn_Node_Recovery),
+    !! or, under CD_HermiteCable_Dyn_Set_Output_Recovery(.TRUE.), the exact one-sided traces of
+    !! CD_HermiteCable_Dyn_Curvature_Exact.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: curv_out(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (model%output_element_recovery) THEN
+      CALL CD_HermiteCable_Dyn_Curvature_Exact(model, curv_out, ErrStat, ErrMsg)
+      RETURN
+    END IF
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature: model not initialised'; RETURN
+    END IF
+    IF (SIZE(curv_out) /= model%nn) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature: curv_out must be nn'; RETURN
+    END IF
+    CALL CD_HermiteCable_Dyn_Node_Recovery(model, ErrStat, ErrMsg, curvature=curv_out)
+  END SUBROUTINE CD_HermiteCable_Dyn_Curvature
+
+  SUBROUTINE CD_HermiteCable_Dyn_Curvature_Exact(model, curv_out, ErrStat, ErrMsg)
+    !! Per-node geometric curvature of the cubic-Hermite centreline at the current state: the
+    !! exact curvature of the element interpolation at the node, the larger of the two
+    !! one-sided traces at an interior node (the curvature is discontinuous there).
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     REAL(wp), INTENT(OUT) :: curv_out(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4427,10 +4487,10 @@ CONTAINS
     CHARACTER(200) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (.NOT. model%initialized) THEN
-      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature: model not initialised'; RETURN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: model not initialised'; RETURN
     END IF
     IF (SIZE(curv_out) /= model%nn) THEN
-      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature: curv_out must be nn'; RETURN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: curv_out must be nn'; RETURN
     END IF
     DO a = 1, model%nn
       curv_out(a) = CD_ZERO
@@ -4441,7 +4501,7 @@ CONTAINS
         CALL gather_elem(model, a, qe)
         CALL CD_HermiteCable_Curvature(qe, model%l0(a), CD_ZERO, kR, es, em2)
         IF (es /= CD_HCABLE_OK) THEN
-          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Curvature: '//TRIM(em2); RETURN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: '//TRIM(em2); RETURN
         END IF
         curv_out(a) = kR
       END IF
@@ -4449,12 +4509,12 @@ CONTAINS
         CALL gather_elem(model, a - 1, qe)
         CALL CD_HermiteCable_Curvature(qe, model%l0(a - 1), CD_ONE, kL, es, em2)
         IF (es /= CD_HCABLE_OK) THEN
-          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Curvature: '//TRIM(em2); RETURN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: '//TRIM(em2); RETURN
         END IF
         curv_out(a) = MAX(curv_out(a), kL)
       END IF
     END DO
-  END SUBROUTINE CD_HermiteCable_Dyn_Curvature
+  END SUBROUTINE CD_HermiteCable_Dyn_Curvature_Exact
 
   SUBROUTINE CD_HermiteCable_Dyn_Reaction(model, node, freac, ErrStat, ErrMsg)
     !! Constraint reaction at a fixed/prescribed node: the force the LINE exerts ON its
@@ -4681,6 +4741,493 @@ CONTAINS
     IF ((model%has_contact .OR. model%kn > CD_ZERO) .AND. .NOT. (gap <= -CD_SEABED_CONTACT_BLEND)) &
       force(3) = MAX(force(3), CD_ZERO)
   END SUBROUTINE CD_HermiteCable_Dyn_End_Force
+
+  SUBROUTINE CD_HermiteCable_Dyn_Set_Output_Recovery(model, element_recovery)
+    !! Definition of the node tension, curvature and bend moment (OPTIONS OutputRecovery).
+    !! .FALSE. (equilibrium, the default): recovered from nodal equilibrium
+    !! (CD_HermiteCable_Dyn_Node_Recovery). .TRUE. (element): the element-mean axial force
+    !! EA (|r'| - 1) and the exact one-sided curvature traces of the element interpolation.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    LOGICAL, INTENT(IN) :: element_recovery
+    model%output_element_recovery = element_recovery
+  END SUBROUTINE CD_HermiteCable_Dyn_Set_Output_Recovery
+
+  SUBROUTINE CD_HermiteCable_Dyn_Node_Values(model, node, tension, curvature, bend_moment, ErrStat, ErrMsg)
+    !! Equilibrium node values at one node (internal order), from the two adjacent elements;
+    !! the same values as CD_HermiteCable_Dyn_Node_Recovery returns for that node. The element end
+    !! residuals are kept in the model for the element state they were evaluated at (see the rc_
+    !! fields), so the tension, curvature and bend moment of a node, and of neighbouring nodes,
+    !! share one evaluation per element; a changed time, load configuration or element state
+    !! refreshes them. A query compares the two adjacent elements' states only, so a loop over
+    !! every node of a line costs O(nn). No allocation.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER, INTENT(IN) :: node
+    REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: g(12), fm(3), mm(3), fp(3), mp(3)
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    tension = CD_ZERO; curvature = CD_ZERO; bend_moment = CD_ZERO
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Node_Values: model not initialised'; RETURN
+    END IF
+    IF (node < 1 .OR. node > model%nn) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Node_Values: node out of range'; RETURN
+    END IF
+    ! the cached residuals belong to the time and load configuration they were computed at, and
+    ! each to its element's state (exact comparisons; a NaN never matches and is recomputed)
+    IF (.NOT. (model%rc_key_ok .AND. model%rc_key_epoch == model%rc_epoch .AND. model%rc_t == model%t)) THEN
+      model%rc_t = model%t; model%rc_key_epoch = model%rc_epoch
+      model%rc_key_ok = .TRUE.
+      model%rc_have = .FALSE.
+    END IF
+    fm = CD_ZERO; mm = CD_ZERO; fp = CD_ZERO; mp = CD_ZERO
+    IF (node > 1) THEN
+      CALL cached_end_residual(node - 1, g)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      fm = g(7:9); mm = g(10:12)
+    END IF
+    IF (node < model%nn) THEN
+      CALL cached_end_residual(node, g)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      fp = -g(1:3); mp = -g(4:6)
+    END IF
+    CALL node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg)
+
+  CONTAINS
+
+    SUBROUTINE cached_end_residual(e, ge)
+      INTEGER, INTENT(IN) :: e
+      REAL(wp), INTENT(OUT) :: ge(12)
+      REAL(wp) :: gl(12)
+      INTEGER :: i0
+      ! the element's residual depends on its own two nodes' q, v and a only (element_end_residual)
+      i0 = 6*(e - 1)
+      IF (model%rc_have(e)) THEN
+        IF (ALL(model%rc_q(:, e) == model%q(i0 + 1:i0 + 12)) .AND. ALL(model%rc_v(:, e) == model%v(i0 + 1:i0 + 12)) &
+            .AND. ALL(model%rc_a(:, e) == model%a(i0 + 1:i0 + 12))) THEN
+          ge = model%rc_g(:, e); RETURN
+        END IF
+      END IF
+      model%rc_have(e) = .FALSE.
+      CALL element_end_residual(model, e, gl, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ge = CD_ZERO; RETURN
+      END IF
+      model%rc_q(:, e) = model%q(i0 + 1:i0 + 12)
+      model%rc_v(:, e) = model%v(i0 + 1:i0 + 12)
+      model%rc_a(:, e) = model%a(i0 + 1:i0 + 12)
+      model%rc_g(:, e) = gl
+      model%rc_have(e) = .TRUE.
+      ge = gl
+    END SUBROUTINE cached_end_residual
+  END SUBROUTINE CD_HermiteCable_Dyn_Node_Values
+
+  SUBROUTINE CD_HermiteCable_Dyn_Node_Recovery(model, ErrStat, ErrMsg, tension, curvature, bend_moment, &
+                                               segment_tension)
+    !! Effective tension, curvature and bend moment at every node (internal order) recovered
+    !! from nodal equilibrium, in one pass over the elements.
+    !!
+    !! For element e the end residual g_e = f_int + f_damp - f_ext + M_e a_e holds the element's
+    !! own distributed loads (consistent submerged weight, dry-part buoyancy, drag,
+    !! Froude-Krylov force, the seabed contact of its end nodes spread over their tributary
+    !! lengths, and the structural and added-mass inertia): it is the generalized force the two
+    !! end nodes exert on the element. Its position rows on the End-B side (internal node e+1)
+    !! are the section force just before that node, minus its rows on the End-A side the
+    !! section force just after node e; its tangent rows are the conjugate of the material
+    !! tangent, EI r'' at the node. An interior node reports the mean of its two one-sided
+    !! values, whose difference is the point load left at the node, so the nodal section
+    !! forces satisfy the discrete equilibrium exactly and do not carry the pointwise
+    !! oscillation of the stiff-EA axial strain.
+    !!
+    !! tension(j) = t_j . F_j (t_j the unit nodal tangent; a line end reports the end force
+    !! magnitude of CD_HermiteCable_Dyn_End_Force), bend_moment(j) = |m_j - (m_j . t_j) t_j|,
+    !! curvature(j) = bend_moment(j)/EI, the larger of the two sides at a section junction (the
+    !! exact geometric trace on an element without bending stiffness, or with EI below ei_resolve,
+    !! where the recovered moment error w L0^2/12 exceeds the elastic moment of a 1 m bend radius).
+    !! segment_tension(e) is the
+    !! mean of the axial components of element e's own two end forces. Every output is
+    !! optional (node arrays nn, segment_tension ne); the routine allocates nothing.
+    !!
+    !! The condensed torque of a line restrained in torsion is not part of g_e: it adds a shear
+    !! normal to the tangent and does no work on bending rotations, so tension and bend moment
+    !! are its axial and normal parts without it. Read-only.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: tension(:), curvature(:), bend_moment(:), segment_tension(:)
+    REAL(wp) :: g(12), fm(3), mm(3), fp(3), mp(3), ta(3), tb(3)
+    INTEGER :: e, nn
+    LOGICAL :: want_nodes
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: model not initialised'; RETURN
+    END IF
+    nn = model%nn
+    IF (.NOT. (size_ok(tension, nn) .AND. size_ok(curvature, nn) .AND. size_ok(bend_moment, nn) .AND. &
+               size_ok(segment_tension, model%ne))) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: node arrays must be nn, segment_tension ne'; RETURN
+    END IF
+    want_nodes = PRESENT(tension) .OR. PRESENT(curvature) .OR. PRESENT(bend_moment)
+    fm = CD_ZERO; mm = CD_ZERO
+    DO e = 1, model%ne
+      CALL element_end_residual(model, e, g, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      fp = -g(1:3); mp = -g(4:6)
+      IF (want_nodes) THEN
+        CALL store_node(e)
+        IF (ErrStat /= CD_HCDYN_OK) RETURN
+      END IF
+      IF (PRESENT(segment_tension)) THEN
+        ta = unit_tangent(model, e)
+        tb = unit_tangent(model, e + 1)
+        segment_tension(e) = 0.5_wp*(DOT_PRODUCT(ta, fp) + DOT_PRODUCT(tb, g(7:9)))
+      END IF
+      fm = g(7:9); mm = g(10:12)
+    END DO
+    fp = CD_ZERO; mp = CD_ZERO
+    IF (want_nodes) CALL store_node(nn)
+
+  CONTAINS
+
+    SUBROUTINE store_node(node)
+      INTEGER, INTENT(IN) :: node
+      REAL(wp) :: t_n, k_n, b_n
+      CALL node_values(model, node, fm, mm, fp, mp, t_n, k_n, b_n, ErrStat, ErrMsg)
+      IF (PRESENT(tension)) tension(node) = t_n
+      IF (PRESENT(curvature)) curvature(node) = k_n
+      IF (PRESENT(bend_moment)) bend_moment(node) = b_n
+    END SUBROUTINE store_node
+
+    PURE LOGICAL FUNCTION size_ok(x, n) RESULT(ok)
+      REAL(wp), INTENT(IN), OPTIONAL :: x(:)
+      INTEGER, INTENT(IN) :: n
+      ok = .TRUE.
+      IF (PRESENT(x)) ok = SIZE(x) == n
+    END FUNCTION size_ok
+  END SUBROUTINE CD_HermiteCable_Dyn_Node_Recovery
+
+  SUBROUTINE node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg)
+    !! Node values from the one-sided section force and moment before (fm, mm) and after
+    !! (fp, mp) the node; a line end uses its only side (see CD_HermiteCable_Dyn_Node_Recovery).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: node
+    REAL(wp), INTENT(IN) :: fm(3), mm(3), fp(3), mp(3)
+    REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace
+    INTEGER :: e, side
+    CHARACTER(200) :: em2
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    t = unit_tangent(model, node)
+    IF (node == 1) THEN
+      f = fp; m = mp
+    ELSE IF (node == model%nn) THEN
+      f = fm; m = mm
+    ELSE
+      f = 0.5_wp*(fm + fp); m = 0.5_wp*(mm + mp)
+    END IF
+    IF (node == 1 .OR. node == model%nn) THEN
+      CALL CD_HermiteCable_Dyn_End_Force(model, node, fend, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      tension = NORM2(fend)
+    ELSE
+      tension = DOT_PRODUCT(t, f)
+    END IF
+    bend_moment = NORM2(m - DOT_PRODUCT(m, t)*t)
+    curvature = CD_ZERO
+    DO side = 0, 1
+      e = node - 1 + side
+      IF (e < 1 .OR. e > model%ne) CYCLE
+      IF (model%EI(e) > CD_ZERO .AND. model%EI(e) >= model%ei_resolve) THEN
+        curvature = MAX(curvature, bend_moment/model%EI(e))
+      ELSE
+        CALL gather_elem(model, e, qe)
+        CALL CD_HermiteCable_Curvature(qe, model%l0(e), REAL(1 - side, wp), trace, ErrStat, em2)
+        IF (ErrStat /= CD_HCABLE_OK) THEN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: '//TRIM(em2); RETURN
+        END IF
+        curvature = MAX(curvature, trace)
+      END IF
+    END DO
+  END SUBROUTINE node_values
+
+  PURE FUNCTION unit_tangent(model, node) RESULT(t)
+    !! Unit material tangent of a node (internal arc direction); zero when degenerate.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: node
+    REAL(wp) :: t(3), tn
+    t = model%q(6*(node - 1) + 4:6*(node - 1) + 6)
+    tn = NORM2(t)
+    IF (tn > CD_ZERO) THEN
+      t = t/tn
+    ELSE
+      t = CD_ZERO
+    END IF
+  END FUNCTION unit_tangent
+
+  SUBROUTINE node_contact_normal(model, node, fc, ErrStat, ErrMsg)
+    !! Frictionless seabed contact force on a node at the committed state, exactly as
+    !! assemble_contact applies it: the normal force with its damping and, in a rounded crease
+    !! of the bathymetry, the elastic increment of the penalty potential (crease_contact_increment).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: node
+    REAL(wp), INTENT(OUT) :: fc(3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: z_floor, gx, gy, xg, yg, gxg, gyg, sfac, nvec(3), gap, normal, normal_gap, vn, gate, gate_gap
+    REAL(wp) :: curv_g(3), fcrease(3), kcrease(3, 3)
+    INTEGER :: iz, es
+    LOGICAL :: creased
+    CHARACTER(200) :: em2
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    fc = CD_ZERO
+    iz = 6*(node - 1) + 3
+    IF (model%has_contact) THEN
+      z_floor = model%seabed_z
+      gx = CD_ZERO; gy = CD_ZERO
+      creased = .FALSE.
+      IF (model%has_contact_bathymetry) THEN
+        xg = model%contact_frame_c*model%q(iz - 2) - model%contact_frame_s*model%q(iz - 1)
+        yg = model%contact_frame_s*model%q(iz - 2) + model%contact_frame_c*model%q(iz - 1)
+        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em2, &
+                                          crease_curvature=curv_g)
+        IF (es /= CD_BATHY_OK) THEN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'node_contact_normal: '//TRIM(em2); RETURN
+        END IF
+        gx = model%contact_frame_c*gxg + model%contact_frame_s*gyg
+        gy = -model%contact_frame_s*gxg + model%contact_frame_c*gyg
+        creased = ANY(ABS(curv_g) > CD_ZERO)
+      END IF
+      sfac = SQRT(CD_ONE + gx*gx + gy*gy)
+      nvec = [-gx, -gy, CD_ONE]/sfac
+      gap = (z_floor - model%q(iz))/sfac
+      CALL CD_Seabed_Normal_Law(gap, model%contact_kn(node), normal, normal_gap)
+      CALL CD_Seabed_Contact_Gate(gap, gate, gate_gap)
+      IF (normal <= CD_ZERO .AND. gate <= CD_ZERO) RETURN
+      vn = DOT_PRODUCT(model%v(iz - 2:iz), nvec)
+      IF (ALLOCATED(model%contact_cn) .AND. vn < CD_ZERO) normal = normal - model%contact_cn(node)*gate*vn
+      fc = normal*nvec
+      IF (creased) THEN
+        CALL crease_contact_increment(z_floor - model%q(iz), gx, gy, model%contact_kn(node), &
+                                      CD_Bathymetry_Rotate_Curvature(curv_g, [model%contact_frame_c, &
+                                                                              model%contact_frame_s]), &
+                                      fcrease, kcrease)
+        fc = fc + fcrease
+      END IF
+    ELSE IF (model%kn > CD_ZERO) THEN
+      gap = model%seabed_z - model%q(iz)
+      IF (gap > CD_ZERO) fc(3) = model%kn*gap*model%trib(node)
+    END IF
+  END SUBROUTINE node_contact_normal
+
+  SUBROUTINE added_mass_force(qe, ae, l0, waterline_z, rho, diam, can, cat, f, ErrStat, ErrMsg)
+    !! Added-mass inertia force Ma(qe) ae of one element without forming Ma: the quadrature,
+    !! wet/dry culling and deformed length measure of CD_HermiteCable_AddedMass_Element.
+    REAL(wp), INTENT(IN) :: qe(12), ae(12), l0, waterline_z, rho, diam, can, cat
+    REAL(wp), INTENT(OUT) :: f(12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, PARAMETER :: NGP = 4
+    REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
+    REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4), rpos(3), rp(3), acc(3), speed, tangent(3), fa(3), area
+    INTEGER :: g, sh, c
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    f = CD_ZERO
+    area = 0.25_wp*PI_L*diam*diam
+    gp = [0.5_wp*(CD_ONE - 0.8611363115940526_wp), 0.5_wp*(CD_ONE - 0.3399810435848563_wp), &
+          0.5_wp*(CD_ONE + 0.3399810435848563_wp), 0.5_wp*(CD_ONE + 0.8611363115940526_wp)]
+    gw = 0.5_wp*[0.3478548451374538_wp, 0.6521451548625461_wp, &
+                 0.6521451548625461_wp, 0.3478548451374538_wp]
+    DO g = 1, NGP
+      CALL CD_HermiteCable_Shapes(gp(g), l0, H, dH)
+      DO c = 1, 3
+        rpos(c) = H(1)*qe(c) + H(2)*qe(3 + c) + H(3)*qe(6 + c) + H(4)*qe(9 + c)
+        rp(c) = dH(1)*qe(c) + dH(2)*qe(3 + c) + dH(3)*qe(6 + c) + dH(4)*qe(9 + c)
+        acc(c) = H(1)*ae(c) + H(2)*ae(3 + c) + H(3)*ae(6 + c) + H(4)*ae(9 + c)
+      END DO
+      IF (rpos(3) > waterline_z) CYCLE                 ! dry Gauss point: no added mass
+      speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)
+      IF (speed <= 1.0e-12_wp) THEN
+        ErrStat = CD_HCDYN_NOCONVERGE
+        ErrMsg = 'added-mass force: degenerate centreline (|dr/dxi| ~ 0)'; RETURN
+      END IF
+      tangent = rp/speed
+      fa = gw(g)*speed*rho*area*(can*acc + (cat - can)*DOT_PRODUCT(tangent, acc)*tangent)
+      DO sh = 1, 4
+        f(3*(sh - 1) + 1:3*sh) = f(3*(sh - 1) + 1:3*sh) + H(sh)*fa
+      END DO
+    END DO
+  END SUBROUTINE added_mass_force
+
+  SUBROUTINE element_end_residual(model, e, g, ErrStat, ErrMsg)
+    !! g = f_int + f_damp - f_ext + M_e a_e of element e alone at the committed state, with the
+    !! element's own distributed loads (see CD_HermiteCable_Dyn_Node_Recovery).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    REAL(wp), INTENT(OUT) :: g(12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
+    INTEGER, PARAMETER :: ZS(4) = [3, 6, 9, 12]
+    REAL(wp) :: qe(12), ve(12), ae(12), fe(12), fx(12), energy, fdry(4), kdry(4, 4)
+    REAL(wp) :: dry_wl, dry_b, dry_r, hf_mid(3), l0, fca(3), fcb(3), c, a4(4), m4(4, 4)
+    REAL(wp) :: support(3), dsupport(3), nin(3)
+    INTEGER :: es, k, inode
+    LOGICAL :: dry
+    CHARACTER(200) :: em2
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''; em2 = ''
+    g = CD_ZERO
+    l0 = model%l0(e)
+    qe(1:6) = model%q(6*(e - 1) + 1:6*e); qe(7:12) = model%q(6*e + 1:6*(e + 1))
+    ve(1:6) = model%v(6*(e - 1) + 1:6*e); ve(7:12) = model%v(6*e + 1:6*(e + 1))
+    CALL CD_HermiteCable_Element(qe, l0, model%EA(e), model%EI(e), energy, fe, ErrStat=es, ErrMsg=em2, &
+                                 axial_quadrature_order=model%axial_quadrature_order, &
+                                 bending_quadrature_order=model%bending_quadrature_order)
+    IF (es /= CD_HCABLE_OK) GOTO 900
+    g = fe
+    IF (model%has_axial_damping) THEN
+      CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, l0, model%BA(e), fx, ErrStat=es, ErrMsg=em2, &
+                                                 quadrature_order=model%axial_quadrature_order)
+      IF (es /= CD_HCDYN_OK) GOTO 900
+      g = g + fx
+    END IF
+    ! consistent submerged weight (as assemble_residual)
+    g(3) = g(3) + model%w(e)*0.5_wp*l0
+    g(6) = g(6) + model%w(e)*l0*l0/12.0_wp
+    g(9) = g(9) + model%w(e)*0.5_wp*l0
+    g(12) = g(12) - model%w(e)*l0*l0/12.0_wp
+    IF (model%has_drag .OR. model%has_am) THEN
+      IF (model%has_drag) THEN
+        dry_wl = model%waterline_z
+        dry_b = model%rho_w*model%gravity*0.25_wp*PI_L*model%diam(e)**2
+        dry_r = 0.5_wp*model%diam(e)
+      ELSE
+        dry_wl = model%am_wl
+        dry_b = model%am_rho*model%gravity*0.25_wp*PI_L*model%am_diam(e)**2
+        dry_r = 0.5_wp*model%am_diam(e)
+      END IF
+      IF (model%has_held_field) dry_wl = 0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1))
+      CALL CD_HermiteCable_Dry_Buoyancy(qe(ZS), l0, dry_b, dry_wl, fdry, kdry, dry, radius=dry_r)
+      IF (dry) g(ZS) = g(ZS) + fdry
+    END IF
+    IF (model%has_drag) THEN
+      IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
+        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
+                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                          fx, ErrStat=es, ErrMsg=em2, &
+                                          wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t, &
+                                          wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
+                                          wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
+                                          wvc_e2kd=model%wv_e2kd)
+      ELSE IF (model%has_wave) THEN
+        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
+                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                          fx, ErrStat=es, ErrMsg=em2, &
+                                          wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
+                                          wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t)
+      ELSE IF (model%has_held_field) THEN
+        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, &
+                                          model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
+                                          0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
+                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                          fx, ErrStat=es, ErrMsg=em2)
+      ELSE
+        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
+                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                          fx, ErrStat=es, ErrMsg=em2)
+      END IF
+      IF (es /= CD_HCDYN_OK) GOTO 900
+      g = g - fx
+    END IF
+    IF (model%has_am .AND. (model%has_wave .OR. model%has_held_field)) THEN
+      IF (model%has_held_field) THEN
+        hf_mid = 0.5_wp*(model%hf_ud(:, e) + model%hf_ud(:, e + 1))
+        CALL CD_HermiteCable_FK_Element(qe, l0, 0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
+                                        model%am_rho, model%am_diam(e), model%am_can(e), model%am_cat(e), &
+                                        wv_depth=CD_ZERO, wv_dir=CD_ZERO, wv_t=CD_ZERO, &
+                                        ffk=fx, ErrStat=es, ErrMsg=em2, hf_a=hf_mid)
+      ELSE IF (model%wv_ncomp > 0) THEN
+        CALL CD_HermiteCable_FK_Element(qe, l0, model%am_wl, model%am_rho, model%am_diam(e), &
+                                        model%am_can(e), model%am_cat(e), &
+                                        wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t, &
+                                        ffk=fx, ErrStat=es, ErrMsg=em2, &
+                                        wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
+                                        wvc_k=model%wv_kc, wvc_ph=model%wv_phc, wvc_e2kd=model%wv_e2kd)
+      ELSE
+        CALL CD_HermiteCable_FK_Element(qe, l0, model%am_wl, model%am_rho, model%am_diam(e), &
+                                        model%am_can(e), model%am_cat(e), &
+                                        wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
+                                        wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t, &
+                                        ffk=fx, ErrStat=es, ErrMsg=em2)
+      END IF
+      IF (es /= CD_HCDYN_OK) GOTO 900
+      g = g - fx
+    END IF
+    ! Seabed contact acts at the nodes; spread over each node's tributary length it is the
+    ! distributed floor reaction it stands for. Its consistent share is taken out of the element,
+    ! so a line resting on the floor carries no fixed-end moment of its own weight.
+    IF (model%has_contact .OR. model%kn > CD_ZERO) THEN
+      CALL node_contact_normal(model, e, fca, es, em2)
+      IF (es /= CD_HCDYN_OK) GOTO 900
+      CALL node_contact_normal(model, e + 1, fcb, es, em2)
+      IF (es /= CD_HCDYN_OK) GOTO 900
+      IF (model%trib(e) > CD_ZERO) fca = fca*l0/model%trib(e)
+      IF (model%trib(e + 1) > CD_ZERO) fcb = fcb*l0/model%trib(e + 1)
+      ! A held end whose end element lies on the floor (assemble_residual): the seabed carries the
+      ! element's weight with its consistent end moment, which the held end node's own contact
+      ! (a point reaction at an anchor sitting on the floor) cannot. The floor reaction of the
+      ! end half of that element is the support share of its weight, uniform with the reaction
+      ! of the neighbouring node, so that a laid end element carries no fixed-end moment.
+      IF (e == 1) THEN
+        IF (held_end_floor_support(model, model%q, 1, support, dsupport, inode, nin)) &
+          fca = (model%w(1)*l0)*support
+      END IF
+      IF (e == model%ne) THEN
+        IF (held_end_floor_support(model, model%q, 2, support, dsupport, inode, nin)) &
+          fcb = (model%w(e)*l0)*support
+      END IF
+      ! integrals of the four shapes over xi in [0, 1/2] (fca) and [1/2, 1] (fcb)
+      g(1:3) = g(1:3) - (0.40625_wp*fca + 0.09375_wp*fcb)
+      g(4:6) = g(4:6) - l0*(0.0572916666666666667_wp*fca + 0.0260416666666666667_wp*fcb)
+      g(7:9) = g(7:9) - (0.09375_wp*fca + 0.40625_wp*fcb)
+      g(10:12) = g(10:12) + l0*(0.0260416666666666667_wp*fca + 0.0572916666666666667_wp*fcb)
+    END IF
+    ae(1:6) = model%a(6*(e - 1) + 1:6*e); ae(7:12) = model%a(6*e + 1:6*(e + 1))
+    IF (ANY(ABS(ae) > CD_ZERO)) THEN
+      ! consistent structural mass, closed form of CD_HermiteCable_Mass: per component the
+      ! 4 x 4 cubic-Hermite block on [r1, m1, r2, m2]
+      c = model%rho_a(e)*l0/420.0_wp
+      m4 = RESHAPE([156.0_wp, 22.0_wp*l0, 54.0_wp, -13.0_wp*l0, &
+                    22.0_wp*l0, 4.0_wp*l0*l0, 13.0_wp*l0, -3.0_wp*l0*l0, &
+                    54.0_wp, 13.0_wp*l0, 156.0_wp, -22.0_wp*l0, &
+                    -13.0_wp*l0, -3.0_wp*l0*l0, -22.0_wp*l0, 4.0_wp*l0*l0], [4, 4])
+      DO k = 1, 3
+        a4 = [ae(k), ae(3 + k), ae(6 + k), ae(9 + k)]
+        a4 = c*MATMUL(m4, a4)
+        g(k) = g(k) + a4(1); g(3 + k) = g(3 + k) + a4(2)
+        g(6 + k) = g(6 + k) + a4(3); g(9 + k) = g(9 + k) + a4(4)
+      END DO
+      IF (model%has_am) THEN
+        dry_wl = model%am_wl
+        IF (model%has_held_field) dry_wl = 0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1))
+        CALL added_mass_force(qe, ae, l0, dry_wl, model%am_rho, model%am_diam(e), model%am_can(e), &
+                              model%am_cat(e), fx, es, em2)
+        IF (es /= CD_HCDYN_OK) GOTO 900
+        g = g + fx
+      END IF
+    END IF
+    RETURN
+900 ErrStat = CD_HCDYN_NOCONVERGE
+    ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: element '//TRIM(em2)
+  END SUBROUTINE element_end_residual
 
   PURE REAL(wp) FUNCTION CD_HermiteCable_Dyn_Max_Step_Rotation(model) RESULT(angle)
     !! Largest angle [rad] through which a nodal tangent turned over one committed step
@@ -5183,6 +5730,8 @@ CONTAINS
                   model%ws_elem_Kwave, model%ws_elem_Kheld, &
                   model%ws_elem_es, model%ws_elem_em)
     END IF
+    IF (ALLOCATED(model%rc_q)) DEALLOCATE (model%rc_q, model%rc_v, model%rc_a, model%rc_g, model%rc_have)
+    model%rc_key_ok = .FALSE.
     IF (ALLOCATED(model%freemask)) DEALLOCATE (model%freemask)
     IF (ALLOCATED(model%solve_mask)) DEALLOCATE (model%solve_mask)
     IF (ALLOCATED(model%fmap)) DEALLOCATE (model%fmap)

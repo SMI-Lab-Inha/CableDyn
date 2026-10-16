@@ -255,19 +255,19 @@ current loads the run across its axis, so the lateral coefficient decides:
      - Sway at s = 160 m (m)
    * - 0.3 / 1.0 (deck)
      - 59.0
-     - 109.8
+     - 109.6
      - 0.01
    * - 1.0 isotropic
      - 59.0
-     - 109.8
+     - 109.6
      - 0.01
    * - 0.3 isotropic
      - 64.3
-     - 117.5
+     - 117.1
      - 11.8
    * - none
      - 73.9
-     - 128.0
+     - 127.9
      - 19.6
 
 A single coefficient equal to the axial value lets the laid run slide up to 16 m sideways and

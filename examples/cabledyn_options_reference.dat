@@ -40,6 +40,7 @@ False     modified_newton  - Tangent-reuse mode {False=full Newton; True=guarded
 True      cable_load_feedback - Return finite-EI cable reactions to OpenFAST {False; True} [default: True]
 False     adaptive_mesh    - Automatic finite-EI refinement {False; True} [default: False]
 continuation cable_statics - Finite-EI static route order {continuation; sequenced} [default: continuation]
+equilibrium OutputRecovery - Finite-EI node tension/curvature/moment {equilibrium; element} [default: equilibrium]
 True      alpha_force_blend - Generalised-alpha force blend, finite-EI and EI=0 lines {True; False=configuration blend} [default: True]
 False     tensile_safety   - Element-mean axial-force audit {False; warn; True=reject} [default: False]
 2.0e-6    tensile_strain_tolerance - Dynamic audit strain band [default: 2.0e-6]
@@ -100,7 +101,7 @@ none      waves             - Wave model and parameters (m, s, deg) {none; airy;
 --   staticsFriction = statics_friction = staticsSeabedFrictionPolicy = seabedFrictionPolicy
 --   layAzimuth = lay_azimuth; asLaidTension = as_laid_tension
 --   dtM = dt; rhoInf = rho_inf; modified_newton = modifiedNewton; adaptive_mesh = adaptiveMesh
---   cable_statics = cableStatics; alpha_force_blend = alphaForceBlend
+--   cable_statics = cableStatics; alpha_force_blend = alphaForceBlend; OutputRecovery = output_recovery
 --   maxStrain = max_strain; WaveSeed = wave_seed; rampTime = ramp_time = tRamp
 --   RangeStart = range_start
 --   cable_load_feedback = cableLoadFeedback; tensile_safety = tensileSafety

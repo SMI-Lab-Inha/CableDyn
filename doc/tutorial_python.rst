@@ -202,8 +202,8 @@ node. The fairlead tension ranges from 524 to 2815 kN (mean 1332 kN, static 1006
 ``python C:\CableDyn\examples\plot_range_envelope.py results\range --save range.png`` plots the
 band and the mean against arc length. The ``TDP1s``, ``TDP1Lay`` and ``TDP1Exc`` channels track the
 touchdown
-point: at rest it lies 159.9 m of arc from the fairlead with a 149.7 m layback, and during the
-surge it moves between 109.9 and 286.6 m of arc, an excursion of −126.3 to +49.9 m.
+point: at rest it lies 159.7 m of arc from the fairlead with a 149.5 m layback, and during the
+surge it moves between 109.7 and 285.4 m of arc, an excursion of −125.2 to +49.9 m.
 
 Python API for GUIs and scripting
 ---------------------------------

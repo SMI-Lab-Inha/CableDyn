@@ -15,10 +15,16 @@ MODULE CableDyn_RangeOutput
   !! centreline is at most CD_SEABED_CONTACT_BLEND above the seabed (the height at which
   !! the normal contact law activates). The grounded end is the end grounded in the
   !! initial state; walking from it, the TDP lies between the last grounded node and the
-  !! next one, where the centreline crosses that height. Arc length is the deformed chord
+  !! next one, where the parabola through the last grounded node and the next two (clearance
+  !! against chord arc) crosses that height, the crossing nearest the suspended node; it
+  !! reaches a node exactly when the node does, so the TDP moves continuously as nodes ground
+  !! and lift off (linear clearance when there is no such crossing). The TDP sits on that
+  !! height. Arc length is the deformed chord
   !! length from End A, layback the horizontal distance from the TDP to the suspended end,
-  !! and the excursion the horizontal TDP displacement from its initial position projected
-  !! on the initial horizontal direction from the TDP to the suspended end.
+  !! the excursion the horizontal TDP displacement from its initial position projected
+  !! on the initial horizontal direction from the TDP to the suspended end, and the grounded
+  !! length the deformed chord length from the grounded end to the TDP (0 while no node
+  !! beyond the grounded end node is grounded).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Floor, CD_Bathymetry_Is_Initialized, &
                                  CD_BATHY_OK
@@ -38,9 +44,9 @@ MODULE CableDyn_RangeOutput
   INTEGER, PARAMETER, PUBLIC :: CD_RQ_TENSION = 1, CD_RQ_CURVATURE = 2, CD_RQ_BEND = 3, &
                                 CD_RQ_DECLINATION = 4, CD_RQ_CLEARANCE = 5, CD_RQ_TORQUE = 6, CD_RQ_TWIST = 7, &
                                 CD_RQ_N = 7
-  ! Components of the TDP channels (TDP<L>s, x, y, z, Lay, Exc).
+  ! Components of the TDP channels (TDP<L>s, x, y, z, Lay, Exc, Grd).
   INTEGER, PARAMETER, PUBLIC :: CD_TDP_S = 1, CD_TDP_X = 2, CD_TDP_Y = 3, CD_TDP_Z = 4, CD_TDP_LAY = 5, &
-                                CD_TDP_EXC = 6, CD_TDP_N = 6
+                                CD_TDP_EXC = 6, CD_TDP_GRD = 7, CD_TDP_N = 7
 
   TYPE :: CD_RangeLine
     INTEGER :: line_id = 0
@@ -286,17 +292,20 @@ CONTAINS
     END DO
   END SUBROUTINE CD_Range_Commit_Sample
 
-  PURE SUBROUTINE tdp_locate(r, clearance, grounded_end, touching, arc, point, suspended_xy)
+  PURE SUBROUTINE tdp_locate(r, clearance, grounded_end, touching, arc, point, suspended_xy, grounded)
     !! Touchdown point of one configuration for a given grounded end (1 = A, 2 = B), the
     !! algorithm of cabledyn.touchdown_history. `touching` is false when the grounded end
     !! has lifted off (the TDP is then reported at that end) or every node is grounded (the
-    !! TDP is then reported at the suspended end).
+    !! TDP is then reported at the suspended end). `grounded` is the deformed chord length
+    !! from the grounded end to the TDP, so it varies continuously with the TDP: the whole
+    !! line when every node is grounded, and 0 only when the grounded end node itself is off
+    !! the seabed or the TDP sits at that node.
     REAL(wp), INTENT(IN) :: r(:, :), clearance(:)
     INTEGER, INTENT(IN) :: grounded_end
     LOGICAL, INTENT(OUT) :: touching
-    REAL(wp), INTENT(OUT) :: arc, point(3), suspended_xy(2)
+    REAL(wp), INTENT(OUT) :: arc, point(3), suspended_xy(2), grounded
     INTEGER :: nn, k, j, jn, last
-    REAL(wp) :: g_low, g_high, fraction, chord, s_scan, s_total
+    REAL(wp) :: g_low, g_high, fraction, chord, s_scan, s_total, z_floor
     LOGICAL :: grounded_first, all_grounded
 
     nn = SIZE(r, 2)
@@ -319,6 +328,7 @@ CONTAINS
       g_low = clearance(node_of(last)) - CD_SEABED_CONTACT_BLEND
       g_high = clearance(node_of(last + 1)) - CD_SEABED_CONTACT_BLEND
       IF (g_high > g_low) fraction = MIN(CD_ONE, MAX(CD_ZERO, -g_low/(g_high - g_low)))
+      CALL quadratic_fraction(fraction)
     END IF
     s_scan = CD_ZERO
     s_total = CD_ZERO
@@ -333,7 +343,14 @@ CONTAINS
       jn = node_of(last + 1)
       point = r(:, j) + fraction*(r(:, jn) - r(:, j))
       s_scan = s_scan + fraction*NORM2(r(:, jn) - r(:, j))
+      ! the TDP sits at the contact-onset height: floor (z - clearance) interpolated along the
+      ! chord, plus the onset height
+      IF (touching) THEN
+        z_floor = (CD_ONE - fraction)*(r(3, j) - clearance(j)) + fraction*(r(3, jn) - clearance(jn))
+        point(3) = z_floor + CD_SEABED_CONTACT_BLEND
+      END IF
     END IF
+    grounded = s_scan
     arc = s_scan
     IF (grounded_end == 2) arc = s_total - s_scan
     suspended_xy = r(1:2, node_of(nn))
@@ -345,6 +362,46 @@ CONTAINS
       node = k_scan
       IF (grounded_end == 2) node = nn + 1 - k_scan
     END FUNCTION node_of
+
+    PURE SUBROUTINE quadratic_fraction(f)
+      !! Quadratic clearance g(x) through the last grounded node (x = 0) and the first two
+      !! suspended nodes (x = l1, l1 + l2), g measured from the contact-onset height; the
+      !! touchdown is its crossing nearest the suspended node inside the element [0, l1]. The
+      !! crossing reaches a node exactly when that node reaches the onset height, so the
+      !! location is continuous as nodes ground and lift off. Keeps f (linear) when the line
+      !! has fewer than two suspended nodes or the quadratic has no crossing in the element.
+      REAL(wp), INTENT(INOUT) :: f
+      REAL(wp) :: g0, g1, g2, l1, l2, d1, qa, qb, disc, x1, x2, xc
+      IF (last + 2 > nn) RETURN
+      g0 = clearance(node_of(last)) - CD_SEABED_CONTACT_BLEND
+      g1 = clearance(node_of(last + 1)) - CD_SEABED_CONTACT_BLEND
+      g2 = clearance(node_of(last + 2)) - CD_SEABED_CONTACT_BLEND
+      l1 = NORM2(r(:, node_of(last + 1)) - r(:, node_of(last)))
+      l2 = NORM2(r(:, node_of(last + 2)) - r(:, node_of(last + 1)))
+      IF (.NOT. (l1 > CD_ZERO) .OR. .NOT. (l2 > CD_ZERO)) RETURN
+      d1 = (g1 - g0)/l1
+      qa = ((g2 - g1)/l2 - d1)/(l1 + l2)
+      qb = d1 - qa*l1
+      ! qa x^2 + qb x + g0 = 0
+      IF (ABS(qa)*l1 <= 1.0e-12_wp*MAX(ABS(qb), TINY(CD_ONE))) THEN
+        IF (ABS(qb) > CD_ZERO) f = MIN(CD_ONE, MAX(CD_ZERO, (-g0/qb)/l1))
+        RETURN
+      END IF
+      disc = qb*qb - 4.0_wp*qa*g0
+      IF (disc < CD_ZERO) RETURN
+      ! numerically stable pair of roots
+      IF (qb >= CD_ZERO) THEN
+        x1 = (-qb - SQRT(disc))/(2.0_wp*qa)
+      ELSE
+        x1 = (-qb + SQRT(disc))/(2.0_wp*qa)
+      END IF
+      x2 = CD_ZERO
+      IF (ABS(x1) > CD_ZERO) x2 = g0/(qa*x1)
+      xc = -HUGE(CD_ONE)
+      IF (x1 >= -1.0e-9_wp*l1 .AND. x1 <= l1*(CD_ONE + 1.0e-9_wp)) xc = MAX(xc, x1)
+      IF (x2 >= -1.0e-9_wp*l1 .AND. x2 <= l1*(CD_ONE + 1.0e-9_wp)) xc = MAX(xc, x2)
+      IF (xc > -HUGE(CD_ONE)) f = MIN(CD_ONE, MAX(CD_ZERO, xc/l1))
+    END SUBROUTINE quadratic_fraction
   END SUBROUTINE tdp_locate
 
   SUBROUTINE CD_Range_TDP_Reference(line, r, clearance, ErrStat, ErrMsg)
@@ -354,7 +411,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL :: ga, gb, touching
-    REAL(wp) :: arc, point(3), suspended_xy(2), span
+    REAL(wp) :: arc, point(3), suspended_xy(2), span, grounded
     INTEGER :: nn
 
     ErrStat = CD_RANGE_OK
@@ -378,7 +435,7 @@ CONTAINS
       RETURN
     END IF
     line%tdp_end = MERGE(1, 2, ga)
-    CALL tdp_locate(r, clearance, line%tdp_end, touching, arc, point, suspended_xy)
+    CALL tdp_locate(r, clearance, line%tdp_end, touching, arc, point, suspended_xy, grounded)
     span = NORM2(suspended_xy - point(1:2))
     IF (.NOT. touching .OR. .NOT. (span > CD_ZERO)) THEN
       ErrStat = CD_RANGE_BADINPUT
@@ -402,20 +459,21 @@ CONTAINS
 
   PURE SUBROUTINE CD_Range_TDP_Evaluate(line, r, clearance, tdp)
     !! Touchdown channels of one configuration against the line's fixed reference:
-    !! tdp = [arc from End A, x, y, z, layback, excursion].
+    !! tdp = [arc from End A, x, y, z, layback, excursion, grounded length].
     TYPE(CD_RangeLine), INTENT(IN) :: line
     REAL(wp), INTENT(IN) :: r(:, :), clearance(:)
     REAL(wp), INTENT(OUT) :: tdp(CD_TDP_N)
     LOGICAL :: touching
-    REAL(wp) :: arc, point(3), suspended_xy(2)
+    REAL(wp) :: arc, point(3), suspended_xy(2), grounded
 
     tdp = CD_ZERO
     IF (.NOT. line%tdp_ready) RETURN
-    CALL tdp_locate(r, clearance, line%tdp_end, touching, arc, point, suspended_xy)
+    CALL tdp_locate(r, clearance, line%tdp_end, touching, arc, point, suspended_xy, grounded)
     tdp(CD_TDP_S) = arc
     tdp(CD_TDP_X:CD_TDP_Z) = point
     tdp(CD_TDP_LAY) = NORM2(suspended_xy - point(1:2))
     tdp(CD_TDP_EXC) = DOT_PRODUCT(point(1:2) - line%ref_xy, line%ref_dir)
+    tdp(CD_TDP_GRD) = grounded
   END SUBROUTINE CD_Range_TDP_Evaluate
 
   SUBROUTINE CD_Range_Write_Files(set, out_root, ErrStat, ErrMsg)
@@ -512,7 +570,7 @@ CONTAINS
   END FUNCTION CD_Is_TDP_Channel
 
   PURE SUBROUTINE CD_Parse_TDP_Channel(ch, line_id, comp)
-    !! TDP<L>s / x / y / z / Lay / Exc (case-insensitive, leading zeros allowed) -> deck line
+    !! TDP<L>s / x / y / z / Lay / Exc / Grd (case-insensitive, leading zeros allowed) -> deck line
     !! id and component CD_TDP_*; comp = 0 (and line_id = 0) when malformed.
     CHARACTER(*), INTENT(IN) :: ch
     INTEGER, INTENT(OUT) :: line_id, comp
@@ -543,6 +601,7 @@ CONTAINS
     CASE ('z'); comp = CD_TDP_Z
     CASE ('lay'); comp = CD_TDP_LAY
     CASE ('exc'); comp = CD_TDP_EXC
+    CASE ('grd'); comp = CD_TDP_GRD
     END SELECT
     IF (comp == 0 .OR. line_id < 1) THEN
       comp = 0

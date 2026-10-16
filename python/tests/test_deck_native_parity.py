@@ -206,13 +206,25 @@ def test_attachment_arc_length_lies_on_the_line(arc, accepted):
 
 
 @pytest.mark.parametrize(
-    "channel", ["FairTen01", "AnchIncl001", "TDP01s", "L01N1px", "Ten01N01", "Point01px", "Con01pz"]
+    "channel",
+    [
+        "FairTen01",
+        "AnchIncl001",
+        "AnchFz01",
+        "AnchFH001",
+        "TDP01s",
+        "TDP01Grd",
+        "L01N1px",
+        "Ten01N01",
+        "Point01px",
+        "Con01pz",
+    ],
 )
 def test_line_and_point_channel_ids_may_have_leading_zeros(channel):
     DeckFile.from_text(_edit(_HELD, ("FairTen1\n", f"{channel}\n")))
 
 
-@pytest.mark.parametrize("channel", ["TDP1q", "Point1pq", "Ten9N0"])
+@pytest.mark.parametrize("channel", ["TDP1q", "Point1pq", "Ten9N0", "AnchFz1z", "TDP1Grd1"])
 def test_malformed_line_and_point_channels_fail_closed(channel):
     _rejects(_edit(_HELD, ("FairTen1\n", f"FairTen1\n{channel}\n")), "unsupported OUTPUT")
 

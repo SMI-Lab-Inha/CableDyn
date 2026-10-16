@@ -1842,6 +1842,16 @@ CONTAINS
       CALL require(tok_ok(1) .AND. tok_ok(2), 'channel gate admits well-formed TDP tokens')
       CALL require(.NOT. tok_ok(3) .AND. .NOT. tok_ok(4), 'channel gate rejects a malformed TDP suffix')
     END BLOCK
+    ! ... and the anchor uplift channels: AnchFz<L>, AnchFH<L>, TDP<L>Grd
+    BLOCK
+      LOGICAL :: tok_ok(7)
+      tok_ok = [CD_Channel_Token_Parses('AnchFz1'), CD_Channel_Token_Parses('ANCHFH012'), &
+                CD_Channel_Token_Parses('TDP3Grd'), CD_Channel_Token_Parses('AnchFz'), &
+                CD_Channel_Token_Parses('AnchFz0'), CD_Channel_Token_Parses('AnchFz1x'), &
+                CD_Channel_Token_Parses('TDP1Grdx')]
+      CALL require(ALL(tok_ok(1:3)), 'channel gate admits AnchFz, AnchFH and TDP<L>Grd tokens')
+      CALL require(.NOT. ANY(tok_ok(4:7)), 'channel gate rejects malformed anchor uplift tokens')
+    END BLOCK
     ! the synthesised sea is bounded in total components, not only per factor
     BLOCK
       CHARACTER(1) :: nl

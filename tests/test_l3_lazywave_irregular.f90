@@ -37,7 +37,7 @@ PROGRAM test_l3_lazywave_irregular
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
                                           CD_HermiteCable_Dyn_Set_Irregular_Waves, &
-                                          CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Curvature, &
+                                          CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Curvature_Exact, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK
   IMPLICIT NONE
 
@@ -239,7 +239,7 @@ PROGRAM test_l3_lazywave_irregular
     END IF
     steps_done = steps_done + 1
     IF (t >= T_SCORE) THEN
-      CALL CD_HermiteCable_Dyn_Curvature(model, cdyn, es, em)
+      CALL CD_HermiteCable_Dyn_Curvature_Exact(model, cdyn, es, em)
       DO i = 1, nn
         arc_i = REAL(i - 1, wp)*l0e
         IF (arc_i >= 0.03_wp*Lsus .AND. arc_i <= 0.97_wp*Lsus) kdyn = MAX(kdyn, cdyn(i))

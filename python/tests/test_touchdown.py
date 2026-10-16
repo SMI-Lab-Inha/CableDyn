@@ -32,14 +32,22 @@ def _frames(kinks=None) -> np.ndarray:
 
 
 def _expected(xyz: np.ndarray) -> tuple[float, np.ndarray]:
-    """Straightforward scalar TDP: last grounded node from End A, chord crossing."""
+    """Straightforward scalar TDP: last grounded node from End A, then the crossing of the
+    level by the parabola through that node and the next two, in chord arc (on a straight
+    rise this is the chord crossing)."""
     level = SEABED + TOLERANCE
     last = int(np.argmax(xyz[:, 2] > level)) - 1
     low, high = xyz[last], xyz[last + 1]
-    fraction = (level - low[2]) / (high[2] - low[2])
     chords = np.linalg.norm(np.diff(xyz, axis=0), axis=1)
+    arcs = np.array([0.0, chords[last], chords[last] + chords[last + 1]])
+    coefficients = np.polyfit(arcs, xyz[last : last + 3, 2] - level, 2)
+    roots = [r.real for r in np.roots(coefficients) if abs(r.imag) < 1e-12]
+    inside = [r for r in roots if -1e-9 <= r <= chords[last] * (1.0 + 1e-9)]
+    fraction = max(inside) / chords[last]
     arc = float(np.sum(chords[:last]) + fraction * chords[last])
-    return arc, low + fraction * (high - low)
+    point = low + fraction * (high - low)
+    point[2] = level
+    return arc, point
 
 
 def _write_line(path, frames, times=TIMES):
@@ -112,6 +120,43 @@ def test_touchdown_history_grounded_at_end_b(tmp_path):
     np.testing.assert_allclose(backward.arc_length, lengths - forward.arc_length)
     np.testing.assert_allclose(backward.excursion, forward.excursion)
     np.testing.assert_allclose(backward.layback, forward.layback)
+
+
+def test_touchdown_on_a_convex_stencil_lies_just_before_the_barely_lifted_node(tmp_path):
+    # Clearance above the onset height -0.005, 0.01, 1.0, 2.0 m on 1 m spacing: node 2 is barely off
+    # the seabed and the line rises sharply beyond it, so the line leaves the seabed just before
+    # node 2. The chord crossing (a third of the way) would put the TDP a node behind. The
+    # parabola through the first three nodes crosses zero once inside the element, at 0.97 chord.
+    level = SEABED + TOLERANCE
+    z = level + np.array([-0.005, 0.01, 1.0, 2.0])
+    frame = np.column_stack([np.arange(4.0), np.zeros(4), z])[None, :, :]
+    history = touchdown_history(
+        _write_line(tmp_path / "convex.p.out", frame, times=[0.0]),
+        seabed_z=SEABED,
+        tolerance=TOLERANCE,
+    )
+    arc, point = _expected(frame[0])
+    assert history.arc_length[0] == pytest.approx(arc)
+    np.testing.assert_allclose(history.coordinates[0], point)
+    assert 0.95 < history.coordinates[0, 0] < 1.0
+    # the same stencil with node 1 exactly at the onset height: the second crossing, still inside
+    z = level + np.array([0.0, 0.01, 1.0, 2.0])
+    frame = np.column_stack([np.arange(4.0), np.zeros(4), z])[None, :, :]
+    history = touchdown_history(
+        _write_line(tmp_path / "onset.p.out", frame, times=[0.0]),
+        seabed_z=SEABED,
+        tolerance=TOLERANCE,
+    )
+    assert 0.95 < history.coordinates[0, 0] < 1.0
+    # a node reaching the onset height maps to that node
+    z = level + np.array([-0.5, 1e-12, 1.0, 2.0])
+    frame = np.column_stack([np.arange(4.0), np.zeros(4), z])[None, :, :]
+    history = touchdown_history(
+        _write_line(tmp_path / "node.p.out", frame, times=[0.0]),
+        seabed_z=SEABED,
+        tolerance=TOLERANCE,
+    )
+    assert history.coordinates[0, 0] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_touchdown_history_from_main_output_node_channels(tmp_path):

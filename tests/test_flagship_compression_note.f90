@@ -10,9 +10,11 @@ PROGRAM test_flagship_compression_note
   !! positive, and that is the quantity the static note is gated on.
   !!
   !! The node Tension channel Ten4N<j> (static profile, standalone and coupled outputs) is
-  !! the segment tension: at interior nodes the length-weighted average of the two adjacent
-  !! element-mean axial forces, recomputed here independently; at the ends the end force.
-  !! It stays within the end tensions instead of the pointwise spikes at the touchdown.
+  !! the effective tension recovered from nodal equilibrium; at the ends the end force. On the
+  !! suspended part it is checked here against the statics of the free body between the node
+  !! and the fairlead: the fairlead force less the submerged weight of the elements in between,
+  !! projected on the nodal tangent. It stays within the end tensions instead of the pointwise
+  !! spikes at the touchdown.
   !!
   !! A deck whose finite-EI elements are shorter than sqrt(EI/EA) (the conditioning limit
   !! of the static Newton system) carries the fine-mesh note; the flagship does not.
@@ -21,6 +23,7 @@ PROGRAM test_flagship_compression_note
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Branch_Audit, CD_HermiteBranchAuditType, CD_HCSTAT_OK
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Axial_Resultant
   USE CableDyn_DeckDriver, ONLY: CD_Eval_Aggregate_Channel
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_End_Force, CD_HCDYN_OK
   IMPLICIT NONE
 
   TYPE(CD_AGG_ModuleType) :: agg
@@ -29,7 +32,8 @@ PROGRAM test_flagship_compression_note
   CHARACTER(512) :: em
   INTEGER :: es, i, nfail, nn, j, inode, k
   REAL(wp), ALLOCATABLE :: ten(:), emean(:)
-  REAL(wp) :: qe(12), ng, expect, dev_max, t_end
+  REAL(wp) :: qe(12), ng, expect, dev_max, t_end, fair(3), sec(3), tan_j(3)
+  INTEGER :: first_free, n_checked
   CHARACTER(32) :: ch
   REAL(wp), PARAMETER :: G3X(3) = [0.5_wp - 0.5_wp*SQRT(0.6_wp), 0.5_wp, 0.5_wp + 0.5_wp*SQRT(0.6_wp)]
   REAL(wp), PARAMETER :: G3W(3) = [5.0_wp/18.0_wp, 8.0_wp/18.0_wp, 5.0_wp/18.0_wp]
@@ -81,21 +85,46 @@ PROGRAM test_flagship_compression_note
           emean(j) = emean(j) + G3W(k)*ng
         END DO
       END DO
-      dev_max = 0.0_wp
+      WRITE (*, '(A,2ES12.4)') '  element-mean axial force min, max [N]: ', MINVAL(emean), MAXVAL(emean)
       DO j = 1, nn
         WRITE (ch, '(A,I0)') 'Ten4N', j
         CALL CD_Eval_Aggregate_Channel(TRIM(ch), agg%has_sys, agg%sys%fast%system, agg%cables, &
                                        agg%line_is_cable, agg%line_obj_index, ten(j), es, em)
         IF (es /= 0) CALL check(.FALSE., 'node Tension channel '//TRIM(ch)//': '//TRIM(em))
-        inode = nn - j + 1
-        IF (inode > 1 .AND. inode < nn) THEN
-          expect = (ln%l0(inode - 1)*emean(inode - 1) + ln%l0(inode)*emean(inode))/(ln%l0(inode - 1) + ln%l0(inode))
-          dev_max = MAX(dev_max, ABS(ten(j) - expect))
+      END DO
+      ! Suspended run next to the fairlead (internal nodes first_free .. nn): no node from
+      ! first_free - 1 on touches the seabed (1 cm clearance), so the only loads between an
+      ! interior node and the fairlead, and in the element before it, are the consistent
+      ! submerged weights of the elements (the reaction of a grounded node is spread over its
+      ! tributary length, into the element after it).
+      first_free = 2
+      DO k = nn, 1, -1
+        IF (ln%q(6*(k - 1) + 3) <= ln%seabed_z + 0.01_wp) THEN
+          first_free = k + 2
+          EXIT
         END IF
+      END DO
+      CALL CD_HermiteCable_Dyn_End_Force(ln, nn, fair, es, em)
+      CALL check(es == CD_HCDYN_OK, 'fairlead end force evaluated: '//TRIM(em))
+      sec = -fair                      ! force of the fairlead on the line
+      dev_max = 0.0_wp
+      n_checked = 0
+      DO inode = nn - 1, first_free, -1
+        sec(3) = sec(3) - ln%w(inode)*ln%l0(inode)
+        tan_j = ln%q(6*(inode - 1) + 4:6*(inode - 1) + 6)
+        expect = DOT_PRODUCT(sec, tan_j)/NORM2(tan_j)
+        dev_max = MAX(dev_max, ABS(ten(nn - inode + 1) - expect))
+        n_checked = n_checked + 1
       END DO
       t_end = MAX(ten(1), ten(nn))
       WRITE (*, '(A,3ES12.4)') '  node Tension min, max, max end tension [N]: ', MINVAL(ten), MAXVAL(ten), t_end
-      CALL check(dev_max <= 1.0e-6_wp*t_end, 'interior node Tension is the length-weighted element-mean average')
+      WRITE (*, '(A,I0,A,ES12.4)') '  suspended nodes checked against the free-body statics: ', n_checked, &
+        '; largest difference [N]: ', dev_max
+      CALL check(n_checked > 40, 'the suspended run spans the sag and hog bends')
+      ! The initialised state keeps a consistent acceleration of order 1e-4 m/s^2, whose inertia
+      ! the recovery includes and the free-body statics leave out (0.03 N here): 1e-5 of the
+      ! end tension bounds it; the element-mean axial force dips to -1.98 kN at the touchdown.
+      CALL check(dev_max <= 1.0e-5_wp*t_end, 'interior node Tension is the free-body effective tension')
       CALL check(MINVAL(ten) > -0.1_wp*MAXVAL(ten), 'node Tension carries no compression beyond a tenth of the peak')
       CALL check(MAXVAL(ten) <= 1.001_wp*t_end, 'node Tension peaks at the line end, not at the touchdown')
     END ASSOCIATE

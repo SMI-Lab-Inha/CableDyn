@@ -42,12 +42,13 @@ PROGRAM test_openfast_aggregate
                                    CD_FMF_GetMovingPointMesh, CD_FMF_Step_Moving, CD_FMF_CalcOutput, &
                                    CD_FMF_End, CD_FMF_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_Restore, CD_HFMF_MinSpanZ, CD_HFMF_Curvature, CD_HFMF_CalcOutput, &
-                                          CD_HFMF_OK, &
+                                          CD_HFMF_OK, CD_HFMF_Curvature_Exact, &
                                           CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror
   ! Public driver-side evaluators, used to cross-check the shell channel path against the
   ! standalone driver's channel definitions on the aggregate's own static configuration.
   USE CableDyn_DeckDriver, ONLY: tangent_declination_deg
-  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, CD_HermiteCable_Dyn_Get_Profile
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, CD_HermiteCable_Dyn_Get_Profile, &
+                                          CD_HermiteCable_Dyn_Set_Output_Recovery
   USE CableDyn_Model, ONLY: CD_Get_Model_EndForces, CD_MODEL_OK
   USE CableDyn_System, ONLY: CD_System_NSystemCoupledDOF, CD_Get_System_CoupledMotion, &
                              CD_Update_System_CoupledMotion, &
@@ -114,6 +115,7 @@ PROGRAM test_openfast_aggregate
   CALL case_pure_mooring_equals_fmf()
   CALL case_mixed_deck_composition()
   CALL case_touchdown_cable_end_tension()
+  CALL case_anchor_uplift_channels()
   CALL case_output_channels()
   CALL case_pure_cable_deck()
   CALL case_cable_load_feedback()
@@ -805,16 +807,30 @@ CONTAINS
     END BLOCK
     CALL require(vFairTen2 > 1.0e3_wp, 'chan:FairTen2-physical')
 
-    ! (b) cable Curv1N5 is the exact one-sided Hermite curvature at deck node 5,
-    ! conservatively retaining the larger adjacent-element trace.  The channel and
-    ! public HFMF recovery must share that definition.
+    ! (b) cable Curv1N5 and the public HFMF nodal curvature share one definition at deck node 5:
+    ! the bend moment recovered from nodal equilibrium over EI by default, and under
+    ! OutputRecovery element the exact one-sided Hermite curvature, the larger adjacent-element
+    ! trace (CD_HFMF_Curvature_Exact). The channel follows the cable's setting.
     nnode = agg%cables(1)%line%nn
     ALLOCATE (exact_curvature(nnode))
     CALL CD_HFMF_Curvature(agg%cables(1), exact_curvature, es, em)
-    CALL require(es == CD_HFMF_OK, 'chan:exact-Hermite-curvature: '//TRIM(em))
+    CALL require(es == CD_HFMF_OK, 'chan:recovered-curvature: '//TRIM(em))
     kexp = exact_curvature(nnode - 5 + 1)
     CALL require(ABS(vCurv1N5 - kexp) <= 1.0e-9_wp + 1.0e-6_wp*ABS(kexp), 'chan:Curv1N5-matches-driver')
     CALL require(vCurv1N5 > 0.0_wp, 'chan:Curv1N5-nonzero')
+    CALL CD_HFMF_Curvature_Exact(agg%cables(1), exact_curvature, es, em)
+    CALL require(es == CD_HFMF_OK, 'chan:exact-Hermite-curvature: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Set_Output_Recovery(agg%cables(1)%line, .TRUE.)
+    BLOCK
+      REAL(wp) :: k_element(nnode), v_element
+      CALL CD_HFMF_Curvature(agg%cables(1), k_element, es, em)
+      CALL require(es == CD_HFMF_OK .AND. MAXVAL(ABS(k_element - exact_curvature)) <= 0.0_wp, &
+                   'chan:element-recovery-curvature-is-the-exact-trace')
+      CALL CD_AGG_EvalChannel(agg, 3, v_element, es, em)
+      CALL require(es == CD_AGG_OK .AND. ABS(v_element - exact_curvature(nnode - 5 + 1)) <= &
+                   1.0e-9_wp + 1.0e-6_wp*ABS(exact_curvature(nnode - 5 + 1)), 'chan:Curv1N5-element-matches-driver')
+    END BLOCK
+    CALL CD_HermiteCable_Dyn_Set_Output_Recovery(agg%cables(1)%line, .FALSE.)
 
     ! (c) cable FairAngle1 == declination of the End-A one-sided tangent (deck nodes 1,2).
     base = 6*(nnode - 1); r1 = agg%cables(1)%line%q(base + 1:base + 3)
@@ -4259,13 +4275,80 @@ CONTAINS
     !! grounded run's tension H (~1.2 kN). The node-sampled stretch EA*(|dr/ds| - 1) at the held
     !! anchor read 78 kN; the element end force equals H.
     TYPE(CD_AGG_ModuleType) :: agg
-    INTEGER :: u, ios, es, k
+    INTEGER :: es, k
     REAL(wp) :: v(3)
     CHARACTER(512) :: em
     REAL(wp), PARAMETER :: DT = 0.025_wp
 
-    OPEN (NEWUNIT=u, FILE='agg_touchdown_cable.dat', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
-    CALL require(ios == 0, 'touchdown: create deck')
+    CALL write_touchdown_cable_deck('agg_touchdown_cable.dat', 'FairTen2 AnchTen2 Ten2N70')
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_touchdown_cable.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'touchdown: init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_CalcOutput(agg, es, em)
+    CALL require(es == CD_AGG_OK, 'touchdown: calc: '//TRIM(em))
+    DO k = 1, 3
+      CALL CD_AGG_EvalChannel(agg, k, v(k), es, em)
+      CALL require(es == CD_AGG_OK, 'touchdown: eval: '//TRIM(em))
+    END DO
+    CALL require(v(3) > 1.0e3_wp .AND. v(3) < 1.5e3_wp, 'touchdown: grounded-run tension is the horizontal tension H')
+    CALL require(ABS(v(2) - v(3)) < 0.05_wp*v(3), 'touchdown: cable AnchTen equals the grounded-run tension H')
+    CALL require(v(1) > 1.1e4_wp .AND. v(1) < 1.25e4_wp, 'touchdown: cable FairTen carries the suspended weight')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE case_touchdown_cable_end_tension
+
+  SUBROUTINE case_anchor_uplift_channels()
+    !! The anchor uplift channels through the shell accessor CD_AGG_EvalChannel, on the
+    !! touchdown deck: an EI=0 chain (line 1, anchor point 2) and a finite-EI power cable
+    !! (line 2, anchor point 4), both laid at the anchor. AnchFz/AnchFH are the components of the
+    !! AnchTen end force and equal the Point<P>F resultant of the one-line anchor; the chain's
+    !! anchor node carries its share of the chain weight (AnchFz < 0), the cable's grounded end
+    !! leaves it to the floor (AnchFz = 0); TDP<L>s + TDP<L>Grd is the deformed line length.
+    TYPE(CD_AGG_ModuleType) :: agg
+    INTEGER :: es, k
+    REAL(wp) :: v(14)
+    CHARACTER(512) :: em
+    REAL(wp), PARAMETER :: DT = 0.025_wp
+
+    CALL write_touchdown_cable_deck('agg_anchor_uplift.dat', &
+                                    'AnchTen1 AnchFz1 AnchFH1 Point2Fz Point2FH TDP1s TDP1Grd'//NEW_LINE('a')// &
+                                    'AnchTen2 AnchFz2 AnchFH2 Point4Fz Point4FH TDP2s TDP2Grd')
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_anchor_uplift.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'uplift: init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL require(CD_AGG_NumChannels(agg) == 14, 'uplift: fourteen channels')
+    CALL CD_AGG_CalcOutput(agg, es, em)
+    CALL require(es == CD_AGG_OK, 'uplift: calc: '//TRIM(em))
+    v = 0.0_wp
+    DO k = 1, MIN(14, CD_AGG_NumChannels(agg))
+      CALL CD_AGG_EvalChannel(agg, k, v(k), es, em)
+      CALL require(es == CD_AGG_OK .AND. IEEE_IS_FINITE(v(k)), 'uplift: eval: '//TRIM(em))
+    END DO
+    WRITE (*, '(A,3ES13.5,A,2ES13.5)') 'uplift: chain AnchTen/Fz/FH = ', v(1:3), ', TDP s/Grd = ', v(6:7)
+    WRITE (*, '(A,3ES13.5,A,2ES13.5)') 'uplift: cable AnchTen/Fz/FH = ', v(8:10), ', TDP s/Grd = ', v(13:14)
+    ! EI=0 chain (system line)
+    CALL require(v(2) == v(4) .AND. v(3) == v(5), 'uplift: chain AnchFz1/AnchFH1 equal Point2Fz/Point2FH')
+    CALL require(ABS(HYPOT(v(2), v(3)) - v(1)) <= 1.0e-12_wp*v(1), 'uplift: chain AnchTen1 is |(AnchFH1, AnchFz1)|')
+    CALL require(v(2) < 0.0_wp .AND. -v(2) < 0.1_wp*v(1), 'uplift: laid chain anchor carries a small downward share')
+    CALL require(v(7) > 100.0_wp .AND. ABS(v(6) + v(7) - 850.0_wp) < 0.005_wp*850.0_wp, &
+                 'uplift: chain grounded length, TDP1s + TDP1Grd = deformed length')
+    ! finite-EI cable
+    CALL require(v(9) == v(11) .AND. v(10) == v(12), 'uplift: cable AnchFz2/AnchFH2 equal Point4Fz/Point4FH')
+    CALL require(ABS(HYPOT(v(9), v(10)) - v(8)) <= 1.0e-12_wp*v(8), 'uplift: cable AnchTen2 is |(AnchFH2, AnchFz2)|')
+    CALL require(ABS(v(9)) <= 1.0e-9_wp*v(8), 'uplift: grounded cable end leaves its node weight to the floor')
+    CALL require(v(14) > 100.0_wp .AND. ABS(v(13) + v(14) - 600.0_wp) < 0.01_wp*600.0_wp, &
+                 'uplift: cable grounded length, TDP2s + TDP2Grd = deformed length')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE case_anchor_uplift_channels
+
+  SUBROUTINE write_touchdown_cable_deck(path, outputs_row)
+    !! IEA-15MW mooring chain (line 1, Fixed anchor point 2) + touchdown power cable (line 2,
+    !! Fixed anchor point 4) on a 200 m seabed, with the given OUTPUTS row(s).
+    CHARACTER(*), INTENT(IN) :: path, outputs_row
+    INTEGER :: u, ios
+
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL require(ios == 0, 'touchdown: create deck '//path)
+    IF (ios /= 0) RETURN
     WRITE (u, '(A)') 'IEA-15MW mooring chain + touchdown power cable'
     WRITE (u, '(A)') '--- LINE TYPES ---'
     WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
@@ -4300,24 +4383,11 @@ CONTAINS
     WRITE (u, '(A)') '3.0e5 cBot'
     WRITE (u, '(A)') '0.35 frictionMu'
     WRITE (u, '(A)') '--- OUTPUTS ---'
-    WRITE (u, '(A)') 'FairTen2 AnchTen2 Ten2N70'
+    WRITE (u, '(A)') outputs_row
     WRITE (u, '(A)') 'END'
     WRITE (u, '(A)') '--- need this line ---'
     CLOSE (u)
-    CALL CD_AGG_Init_From_Deck(agg, 'agg_touchdown_cable.dat', DT, es, em)
-    CALL require(es == CD_AGG_OK, 'touchdown: init: '//TRIM(em))
-    IF (es /= CD_AGG_OK) RETURN
-    CALL CD_AGG_CalcOutput(agg, es, em)
-    CALL require(es == CD_AGG_OK, 'touchdown: calc: '//TRIM(em))
-    DO k = 1, 3
-      CALL CD_AGG_EvalChannel(agg, k, v(k), es, em)
-      CALL require(es == CD_AGG_OK, 'touchdown: eval: '//TRIM(em))
-    END DO
-    CALL require(v(3) > 1.0e3_wp .AND. v(3) < 1.5e3_wp, 'touchdown: grounded-run tension is the horizontal tension H')
-    CALL require(ABS(v(2) - v(3)) < 0.05_wp*v(3), 'touchdown: cable AnchTen equals the grounded-run tension H')
-    CALL require(v(1) > 1.1e4_wp .AND. v(1) < 1.25e4_wp, 'touchdown: cable FairTen carries the suspended weight')
-    CALL CD_AGG_End(agg, es, em)
-  END SUBROUTINE case_touchdown_cable_end_tension
+  END SUBROUTINE write_touchdown_cable_deck
 
   SUBROUTINE write_mixed_deck(path, finite_end_connection, rigid_end_connection)
     !! MIXED deck: one EI=0 catenary chain (mooring) + one finite-EI lazy-wave power cable.

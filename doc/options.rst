@@ -410,6 +410,21 @@ Finite-EI cable controls
        tolerance (see :doc:`theory`)
      - both (finite-EI lines)
      - ``sequenced cable_statics``
+   * - ``OutputRecovery`` / ``output_recovery``
+     - mode
+     - ``equilibrium``
+     - definition of the finite-EI node outputs (``Ten``, ``Curv``, ``BendMom`` channels, the
+       static-profile and range-graph columns, ``.t.out`` segment tensions).
+       ``equilibrium`` recovers them from nodal equilibrium: the effective tension
+       :math:`\mathbf F\cdot\mathbf t`, the moment the neighbouring elements carry, and
+       curvature = moment / ``EI`` (see :ref:`theory-output-recovery`). ``element`` reports the
+       length-weighted element-mean axial force :math:`EA(\lvert\mathbf r'\rvert - 1)`, the
+       larger one-sided exact curvature, and the axial resultant at the element midpoint as the
+       segment tension, the definitions up to CableDyn 0.1.1. End forces, positions, ``TDP``
+       channels and the material-strain checks (``tensile_safety``, compression notes) are the
+       same under both
+     - both (finite-EI lines)
+     - ``element OutputRecovery``
    * - ``axial_quadrature_order`` / ``axialquadratureorder`` / ``axial_quadrature``
      - integer, –
      - ``4``

@@ -184,12 +184,13 @@ and clamps it there at 60° below horizontal:
 
 The direction is given in the body frame and turns with the buoy. The clamp moment,
 ``BendMom4N1``, acts on the body in the static solve and in the dynamics, and is part of
-``Body1M*``. At rest the clamp carries 9.53 kN·m (a pinned cable would leave at 82°) and
+``Body1M*``. At rest the clamp carries 9.63 kN·m (a pinned cable would leave at 82°) and
 ``Body1My`` is zero; the moment tilts the buoy to a static pitch of 0.15° instead of 0.30°
-pinned. In 1 m, 14 s swell the clamp moment ranges from 8.6 to 10.8 kN·m and the buoy pitches
-between −1.35° and +1.07°. With ``Pinned`` the end moment stays below 0.5 N·m. The first 10 m of
-cable use 0.25 m elements to resolve the bending near the clamp; halving them changes the moment
-by 0.8 %. A finite ``Stiffness`` in N·m/rad models a compliant hang-off.
+pinned. In 1 m, 14 s swell the clamp moment ranges from 8.7 to 11.0 kN·m and the buoy pitches
+between −1.35° and +1.07°. With ``Pinned`` the end moment stays below 0.1 N·m. The first 10 m of
+cable use 0.25 m elements to resolve the bending near the clamp; ``BendMom4N1`` is the moment the
+end element carries in equilibrium, so halving them changes it by under 0.01 % (0.5 % for twice
+the elements' length). A finite ``Stiffness`` in N·m/rad models a compliant hang-off.
 
 A spar with pinned rods
 -----------------------

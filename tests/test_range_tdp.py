@@ -165,6 +165,57 @@ def check_tdp_vs_python(label: str, root: Path, line_id: int, seabed_z: float, t
     check(worst < tol, f"{label}: TDP channels agree with touchdown_history (max difference {worst:.1e} m)")
 
 
+def check_output_recovery(exe: str, deck: str, out: Path, env: dict, nodes: list[int]) -> None:
+    """OPTIONS OutputRecovery on the lazy-wave run: the element definitions change only the
+    interior node tension, curvature and bend moment; the end forces (also the end-node
+    Tension), positions and TDP are unchanged; an unknown value stops the run."""
+    element = set_option(deck, "OutputRecovery", "element")
+    (out / "lazywave_element.dat").write_text(element, encoding="utf-8", newline="\n")
+    run(exe, out / "lazywave_element.dat", out / "lazywave_element", env)
+    eq = read_output(out / "lazywave.out")
+    el = read_output(out / "lazywave_element.out")
+    same = ["FairTen1", *tdp_channels(1), f"Ten1N{nodes[0]}", f"Ten1N{nodes[-1]}"]
+    same += [f"L1N{j}p{c}" for j in nodes for c in "xyz"]
+    check(all(np.array_equal(eq.column(n), el.column(n)) for n in same),
+          "OutputRecovery element: end forces, end-node Tension, positions and TDP channels are unchanged")
+    changed = all(
+        not np.array_equal(eq.column(f"{p}1N{j}"), el.column(f"{p}1N{j}"))
+        for j in nodes[1:-1]
+        for p in ("Ten", "Curv", "BendMom")
+    )
+    check(changed, "OutputRecovery element: every interior Ten, Curv and BendMom channel takes the element definition")
+    bad = set_option(deck, "OutputRecovery", "nodal")
+    (out / "lazywave_bad.dat").write_text(bad, encoding="utf-8", newline="\n")
+    proc = subprocess.run([exe, str(out / "lazywave_bad.dat"), str(out / "lazywave_bad")], capture_output=True,
+                          text=True, env=env, cwd=out)
+    check(proc.returncode == 1 and "must be equilibrium or element" in proc.stdout + proc.stderr,
+          "OutputRecovery: an unknown value stops the run by name")
+
+
+def check_soft_section_curvature(exe: str, deck: str, out: Path, env: dict, nodes: list[int]) -> None:
+    """A section softer than max(|w| L0^2)/12 times 1 m (1.3 kN m^2 on this cable) cannot resolve a
+    curvature from the recovered moment, whose error does not scale with EI: Curv takes the exact
+    geometric trace (the OutputRecovery element value) instead of an amplified moment error. With
+    EI = 100 N m^2 the recovered curvature would exceed 6 1/m against a peak trace of 0.12 1/m."""
+    soft, count = re.subn(r"1\.99e4", "1.0e2", deck)
+    if count != 2:
+        raise RuntimeError("expected two EI entries in the lazy-wave line types, found %d" % count)
+    names = [f"Curv1N{j}" for j in nodes]
+    soft = set_outputs(soft, names)
+    (out / "lazywave_soft.dat").write_text(soft, encoding="utf-8", newline="\n")
+    run(exe, out / "lazywave_soft.dat", out / "lazywave_soft", env)
+    element = set_option(soft, "OutputRecovery", "element")
+    (out / "lazywave_soft_element.dat").write_text(element, encoding="utf-8", newline="\n")
+    run(exe, out / "lazywave_soft_element.dat", out / "lazywave_soft_element", env)
+    eq = read_output(out / "lazywave_soft.out")
+    el = read_output(out / "lazywave_soft_element.out")
+    worst = max(float(np.max(np.abs(eq.column(n) - el.column(n)))) for n in names)
+    peak = max(float(np.max(el.column(n))) for n in names)
+    check(worst == 0.0 and 0.0 < peak < 1.0,
+          f"soft section (EI = 100 N m^2): Curv takes the exact geometric trace (peak {peak:.3f} 1/m, "
+          f"difference to OutputRecovery element {worst:.1e})")
+
+
 def catenary_tdp(length: float, span: float, depth: float, w: float, ea: float) -> tuple[float, float, float]:
     """Elastic catenary resting on a frictionless seabed: (TDP deformed arc from the fairlead,
     TDP horizontal distance from the fairlead, horizontal tension)."""
@@ -349,6 +400,8 @@ def main() -> int:
     run(args.exe, out / "lazywave.dat", out / "lazywave", env)
     check_envelopes("cubic-Hermite", out / "lazywave", 1, nodes, 1.0, -80.0)
     check_tdp_vs_python("cubic-Hermite", out / "lazywave", 1, -80.0, 5e-3)
+    check_output_recovery(args.exe, deck, out, env, nodes)
+    check_soft_section_curvature(args.exe, deck, out, env, nodes)
 
     # --- Free point (point-system route)
     src = (examples / "clump_weight_free_point.dat").read_text(encoding="utf-8")

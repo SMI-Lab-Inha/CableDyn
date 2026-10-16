@@ -1965,7 +1965,7 @@ CONTAINS
     !! module reports the SAME value the standalone driver computes for that channel on the same
     !! configuration. Resolve to the EI=0 system's line/point state or a finite-EI cable's state
     !! through the retained deck-line-id map.
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     INTEGER, INTENT(IN) :: i
     REAL(wp), INTENT(OUT) :: value
     INTEGER, INTENT(OUT) :: ErrStat
@@ -2043,7 +2043,7 @@ CONTAINS
     !! effective tension, curvature, bend moment, declination, signed inclination below the
     !! horizontal, and azimuth. The channel evaluator remains the single source of truth for
     !! every reported physical quantity, so standalone and coupled results share conventions.
-    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     CHARACTER(*), INTENT(IN) :: path
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg

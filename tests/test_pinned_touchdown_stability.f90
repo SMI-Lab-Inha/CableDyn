@@ -13,7 +13,7 @@ PROGRAM test_pinned_touchdown_stability
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, &
                                          CD_AGG_End, CD_AGG_OK
-  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_Curvature, CD_HFMF_OK
+  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_Curvature_Exact, CD_HFMF_OK
   IMPLICIT NONE
 
   REAL(wp), PARAMETER :: DT = 0.05_wp, T_END = 30.0_wp, RAMP_TIME = 10.0_wp
@@ -63,7 +63,10 @@ PROGRAM test_pinned_touchdown_stability
       CALL require(.FALSE., 'held dynamic step at t='//TRIM(real_text(REAL(s, wp)*DT))//' s: '//TRIM(em))
       EXIT
     END IF
-    CALL CD_HFMF_Curvature(agg%cables(1), curvature, hs, em)
+    ! The geometric trace of the centreline at the pinned hang-off: a collapsing endpoint tangent
+    ! shows here. The recovered curvature (CD_HFMF_Curvature) is the equilibrium moment over EI,
+    ! which a pinned end does not carry, so it cannot detect the collapse.
+    CALL CD_HFMF_Curvature_Exact(agg%cables(1), curvature, hs, em)
     IF (hs /= CD_HFMF_OK) THEN
       CALL require(.FALSE., 'curvature evaluation: '//TRIM(em))
       EXIT

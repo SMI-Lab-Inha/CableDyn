@@ -688,6 +688,11 @@ target_link_libraries(test_bathymetry PRIVATE cabledyn_core)
 add_test(NAME bathymetry COMMAND test_bathymetry)
 set_tests_properties(bathymetry PROPERTIES LABELS "fortran;unit;seabed")
 
+add_executable(test_range_tdp_locator tests/test_range_tdp_locator.f90)
+target_link_libraries(test_range_tdp_locator PRIVATE cabledyn_core)
+add_test(NAME range_tdp_locator COMMAND test_range_tdp_locator)
+set_tests_properties(range_tdp_locator PROPERTIES LABELS "fortran;unit;seabed")
+
 add_executable(test_hydro tests/test_hydro.f90)
 target_link_libraries(test_hydro PRIVATE cabledyn_core)
 add_test(NAME hydro COMMAND test_hydro)
@@ -1468,6 +1473,23 @@ if(Python3_Interpreter_FOUND)
       ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
     message(STATUS "range_graph_tdp: skipped (numpy not importable in ${Python3_EXECUTABLE})")
+  endif()
+
+  # Anchor uplift channels (AnchFz/AnchFH, TDP<L>Grd): the analytic laid and suspended elastic
+  # catenaries, the Point<P>F identity on every standalone route, and a surge that lifts the
+  # anchor of a catenary (needs numpy).
+  if(_range_tdp_numpy_rc EQUAL 0)
+    add_test(NAME anchor_uplift_channels
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_anchor_uplift.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --examples ${CMAKE_CURRENT_SOURCE_DIR}/examples
+                     --output ${CMAKE_BINARY_DIR}/anchor_uplift_channels)
+    set_tests_properties(anchor_uplift_channels PROPERTIES
+      LABELS "python;integration;static;dynamic;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+  else()
+    message(STATUS "anchor_uplift_channels: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
   # The arbiter imports numpy + scipy at load time; only register the test when they are
