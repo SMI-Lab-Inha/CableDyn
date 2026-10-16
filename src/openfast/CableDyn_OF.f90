@@ -77,7 +77,7 @@ MODULE CableDyn
                                           CD_AGG_Snapshot, CD_AGG_Restore, &
                                           CD_AGG_NMovingPoints, CD_AGG_NDynamicPoints, CD_AGG_Refresh_PointMesh, &
                                           CD_AGG_NFailures, &
-                                          CD_AGG_HasRigid6, CD_AGG_HasRod, &
+                                          CD_AGG_HasRigid6, CD_AGG_HasRod, CD_AGG_HasPoint3, &
                                           CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
                                           CD_AGG_Set_Rigid6_States, &
                                           CD_AGG_Rod_MirrorSize, CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States, &
@@ -734,6 +734,15 @@ CONTAINS
                           'with Rigid6 bodies or RODs is not supported; the quasi-static reduction '// &
                           'holds them at their deck pose instead of re-solving their equilibrium '// &
                           '(linearize a deck without BODIES/RODS).', ErrStat, ErrMsg, RoutineName )
+         RETURN
+      END IF
+      ! A Point3 buoy steps as a Free point, but the static solve holds it at its deck position:
+      ! each perturbed re-solve would leave it there and omit its compliance as well.
+      IF (InitInp%Linearize .AND. CD_AGG_HasPoint3( Inst(id)%agg )) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                          'with Point3 buoys is not supported; the quasi-static reduction holds a '// &
+                          'Point3 buoy at its deck position instead of re-solving its equilibrium '// &
+                          '(model the buoy as a Free point to linearize).', ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
       IF (InitInp%Linearize .AND. Inst(id)%agg%ncable > 0) THEN

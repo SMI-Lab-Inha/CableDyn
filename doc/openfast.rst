@@ -262,8 +262,9 @@ without an auxiliary process:
   the ``.lin`` matrices in the ``.fst`` ``OutFmt``; to compare them with MoorDyn's
   ``D - C A^-1 B``, use a full-precision format such as ``"ES24.15E3"``, because the usual
   4-digit format cannot resolve that reduction. A deck with
-  Rigid6 bodies or rods is rejected at initialisation: the quasi-static reduction would hold
-  them at their deck pose instead of re-solving their equilibrium.
+  Rigid6 bodies, rods or ``Point3`` buoys is rejected at initialisation: the quasi-static
+  reduction would hold them at their deck pose instead of re-solving their equilibrium (a
+  ``Free`` point with the buoy's ``Mass``, ``Vol``, ``CdA`` and ``Ca`` is re-solved).
 * **FAST.Farm** selects CableDyn with ``Mod_SharedMooring = 5`` for shared lines and
   connections. Gravity, water density, depth, and ``TMax`` are host-owned and must agree across
   turbines, otherwise initialisation fails.
