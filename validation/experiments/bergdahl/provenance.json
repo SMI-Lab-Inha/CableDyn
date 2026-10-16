@@ -1,5 +1,5 @@
 {
-  "CableDyn_release": "v0.1.1",
+  "CableDyn_release": "v0.1.1+dev (unreleased)",
   "validation_date": "2026-10-16",
   "executable_name": "cabledyn.exe",
   "executable_sha256": "bb64e4ebe13a77ead7c73cd51f1c29e5764f0acc78c7dc644148032e561f0c80",
@@ -20,6 +20,6 @@
   "waveform_T1p25_sha256": "65c8c846636c378b800bb3c7a95ccd2bde766d789af3cdffce26a2e688e1a134",
   "waveform_T3p50_sha256": "b3ca65ebfc1d61b5510e54876fc11d1604fc18ffcca3eab523dc7d67f50da4d8",
   "waveform_metrics_sha256": "2803a57cb7726f966a00e00bf6eb070231b9c702ae67a81685da50991d0adb11",
-  "waveform_note": "Waveform metrics were computed with the executable of the 2026-10-09 validation (sha256 71090e2e28c9e1d99c5180d05a395ebcc891a77cc5294d315a57c691904745ac); the force-blended EI = 0 step of this release was not rerun on them because the article supplement's expData.dat, which reduce_bergdahl_waveforms.py reads, was not available. The measured phase averages are those of expData.dat, as carried in the waveform CSVs.",
+  "waveform_note": "Waveform metrics were computed with the executable of the 2026-10-09 validation (sha256 71090e2e28c9e1d99c5180d05a395ebcc891a77cc5294d315a57c691904745ac); the force-blended EI = 0 step of this development build was not rerun on them because the article supplement's expData.dat, which reduce_bergdahl_waveforms.py reads, was not available. The measured phase averages are those of expData.dat, as carried in the waveform CSVs.",
   "refinement_summary_sha256": "8ed5569e1af06b0453b8075d440eb362fdf8a2c651cab8fc2a9c6d5e2a7e61d5"
 }

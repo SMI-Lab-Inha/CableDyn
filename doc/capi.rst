@@ -1044,7 +1044,10 @@ solve returns ``CD_C_SOLVE_FAIL``.
 
 The Newton settings are fixed at their
 defaults: relative residual tolerance :math:`10^{-8}`, at most 30 iterations per step, and at
-most 12 line-search backtracks.
+most 12 line-search backtracks. So is the generalised-α scheme: these lines always take the
+force-blended step (``alpha_force_blend`` ``True``, with the release cap on a tension-only line,
+:doc:`theory`). They cannot select the configuration blend of 0.1.1 and earlier
+(``False alpha_force_blend``), which only a deck sets, through ``CableDyn_InitDeck``.
 
 ``CableDyn_InitLines``
 ~~~~~~~~~~~~~~~~~~~~~~

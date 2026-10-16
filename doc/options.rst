@@ -298,9 +298,10 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
        damp the modes ``dtM`` does not resolve (axial waves, slack-taut transitions) faster;
        ``0`` annihilates them in one step. Above ``0.95`` the march has almost no numerical
        dissipation: those modes then keep the residual each Newton step leaves and the energy
-       of under-resolved snaps, and a run prints a note. In an irregular sea a finite-EI lazy
-       wave at ``1 rhoInf`` with a ``1e-4`` relative Newton tolerance peaked at 2.0e5 N against
-       1.02e4 N (3.1e4 N at ``0.99``) and was exact with ``1e-6``; ``EI = 0`` lines at ``1`` and
+       of under-resolved snaps, and the standalone driver prints a note. In an irregular sea a
+       finite-EI lazy wave at ``1 rhoInf`` with a ``1e-4`` relative Newton tolerance peaked at
+       2.0e5 N against 1.02e4 N (3.1e4 N at ``0.99``) and was exact with ``1e-6``; ``EI = 0``
+       lines at ``1`` and
        ``1e-4`` failed the ``maxStrain`` guard, and at the default tolerance their peaks rose
        2 to 5 times at ``0.95`` to ``1``. Keep ``rhoInf`` at or below ``0.95``, or tighten the
        ``dynamic_solver`` relative tolerance to ``1e-6`` and resolve the snaps with ``dtM``
@@ -393,7 +394,9 @@ Finite-EI cable controls
        ``dtM`` 0.1 / 0.05 / 0.025 / 0.0125 s with ``False`` and 9424 / 9322 / 9314 / 9311 N
        with ``True``. A run prints a note when a nodal tangent turns by more than 0.25 deg
        (``True``) or 0.1 deg (``False``) in one step. A dynamic run with a torsional line
-       (``END CONNECTIONS`` ``TorsStiffness`` at both ends) needs ``True``
+       (``END CONNECTIONS`` ``TorsStiffness`` at both ends) needs ``True``. The lines the raw C
+       API builds without a deck (``CableDyn_InitLine``, ``CableDyn_InitLines``) always use
+       ``True``: their only integrator setting is ``rho_inf`` (:doc:`capi`)
      - standalone and coupled (finite-EI and ``EI = 0`` lines)
      - ``False alpha_force_blend``
    * - ``cable_statics`` / ``cablestatics``

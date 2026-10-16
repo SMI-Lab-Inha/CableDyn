@@ -290,7 +290,10 @@ scripts, results, and source provenance are in
   over the full 30-condition period-radius matrix, cycle-maximum upper-end force
   has RMSE 1.59 N, mean absolute percentage error 3.12%, Pearson correlation
   0.993, and Lin concordance 0.989. Two phase-averaged measured histories have
-  waveform RMSEs of 5.95% and 2.54% of their force ranges. Halving the mesh length
+  waveform RMSEs of 5.95% and 2.54% of their force ranges; these two were computed with the
+  executable of the 2026-10-09 record (the configuration-blended `EI = 0` step), because the
+  article supplement's `expData.dat` they need was not available for the rerun (see the
+  experiment's README and `provenance.json`). Halving the mesh length
   and the time step changes the mean cycle maximum by at most 0.34% and 0.22%. The
   0.3125 ms step resolves the segment axial modes that the snap loads excite; at
   1.25 ms the maxima are 2–15% higher and vary from cycle to cycle.
@@ -375,7 +378,8 @@ scripts, results, and source provenance are in
   to ~10 MN. Implicit generalised-α integrates it at **dt = 20 ms, above the
   explicit CFL limit of about 3.2 ms**, with every step converged (stable up to about
   30 ms in a sweep); the peak is within **1.6%** of the 0.5 ms sub-CFL reference
-  (1.1% at 10 ms, 0.05% at 5 ms; 2.8 / 0.6 / 0.16% before the force-blended `EI = 0` step).
+  (1.1% at 10 ms, 0.05% at 5 ms). Before the force-blended `EI = 0` step these were
+  2.76 / 0.62 / 0.16%; the 2.76% at 20 ms is the value published as 2.7% (truncated).
 - **Implicit and explicit steps**: on the matched near-taut snap, MoorDyn-C's
   explicit RK2 needs `dtM ≲ 1 ms`, as expected of an explicit scheme at this line
   stiffness; CableDyn's implicit step remains stable at **20 ms**.

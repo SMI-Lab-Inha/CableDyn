@@ -1280,7 +1280,8 @@ and the residual is evaluated at the intermediate states
               - \mathbf{f}_\text{ext}(\mathbf{q}_\alpha, \mathbf{v}_\alpha, t_\alpha),
    \qquad (\cdot)_\alpha = (1 - \alpha_f)(\cdot)_{n+1} + \alpha_f(\cdot)_n .
 
-Time-dependent loads (waves) are evaluated at :math:`t_\alpha`. By default both paths blend the
+On the finite-EI path time-dependent loads (waves) are then evaluated at :math:`t_\alpha`; the
+``EI = 0`` path holds the fluid fields over the step (below). By default both paths blend the
 *forces* instead (``alpha_force_blend``, default ``True``; ``False`` selects the form above),
 
 .. math::
@@ -1305,9 +1306,19 @@ dynamic load: axial damping, the viscoelastic and Syrope laws, seabed contact, d
 friction, Morison drag, Froude–Krylov and buoyancy loads. Added mass stays at
 :math:`(\mathbf{q}_\alpha, \mathbf{a}_{\alpha_m})`. :math:`\mathbf{r}_n` is evaluated afresh at
 the committed state of every step, with the viscoelastic and Syrope elements at their committed
-internal state, and with the fluid fields of the step, so the scheme carries no extra state and
-a restart is exact; a re-solve of the same step from the same state (the junction coupling)
-reuses it. The configuration blend fails at slack–taut transitions. A tension-only element is a
+internal state, so the scheme carries no extra state and a restart is exact; a re-solve of the
+same step from the same state (the junction coupling) reuses it. The fluid fields of an
+``EI = 0`` line (current, wave velocity and acceleration, and the waterline) are held over the
+step: before the step the host (the standalone driver, or the coupling host) samples them for
+the end of the step, :math:`t_{n+1}`, at the committed node positions, and every load
+evaluation of the step uses them. Both shares of the force blend therefore see the fields of
+:math:`t_{n+1}`, so :math:`\mathbf{r}_n` is :math:`\mathbf{r}(\mathbf{q}_n, \mathbf{v}_n)` with
+those fields rather than with the fields of :math:`t_n`, and the configuration blend evaluates
+the loads with them at :math:`(\mathbf{q}_\alpha, \mathbf{v}_\alpha)` rather than at
+:math:`t_\alpha`, as it did before the force blend. The finite-EI path instead evaluates its
+wave loads at :math:`t_{n+1}` for the end share and reuses its :math:`\mathbf{r}_n`, evaluated at
+its own :math:`t_n` in the previous step. The configuration blend fails at slack–taut
+transitions. A tension-only element is a
 one-sided spring, and the residual sets its force at :math:`\mathbf{q}_\alpha`; the end state
 :math:`\mathbf{q}_{n+1} = (\mathbf{q}_\alpha - \alpha_f\mathbf{q}_n)/(1 - \alpha_f)` extrapolates
 past it. A segment slack at :math:`t_n` that carries a tension at :math:`t_\alpha` thus ends the
@@ -1335,7 +1346,32 @@ keep the force blend. In the slack-cable case above the internal forces created 
 with the cap; the fairlead peak is 0.14 MN, against 0.13 to 0.19 MN at
 :math:`\rho_\infty = 0` and at :math:`\Delta t` down to 0.25 ms. For a linear element the force
 blend and the cap reduce to the configuration blend, so the linear spectral properties and the
-second-order accuracy are unchanged. The effective tangent is
+second-order accuracy are unchanged.
+
+The segments whose tension comes from a constitutive law, the viscoelastic and Syrope segments
+(whose law enters the step as a dynamic load), are capped in the same way: :math:`T_n` is the
+law's tension at the committed state, the force :math:`\mathbf{r}_n` carries, with the same
+:math:`e_n` and :math:`W_n = \tfrac{1}{2} T_n e_n`. For the viscoelastic law at rest this is the
+energy of its two springs, which both carry :math:`T_n` and whose stretches add up to
+:math:`e_n`; for the Syrope law, whose loading curve stiffens, it bounds the energy below the
+curve from above. So the :math:`\alpha_f` share of every segment of a tension-only line returns
+at most :math:`\tfrac{1}{2} T_n e_n` in a release (a release that ends above :math:`l_0` returns
+at most :math:`\alpha_f T_n e_n`, and :math:`\alpha_f \le \tfrac{1}{2}`). With the light cable
+above made lightly damped viscoelastic (EA 8e8 | 1.6e9 N, BA 1e8 | 1e6 N s) the anchor peaks at
+0.081 MN at :math:`\Delta t` = 0.1 s with the cap on its segments and at 0.145 MN without it,
+against 0.076 to 0.094 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
+surge that goes slack peaks at 1.64 MN at 0.1 s, against 1.78 MN at 1 and 2.5 ms, with or
+without the cap.
+
+The one-sided seabed contact is not capped. A node that leaves the floor within a step keeps
+:math:`\alpha_f` of its step-start contact force :math:`N_n` for the whole step: over a lift-off
+distance :math:`d` it returns at most :math:`\alpha_f N_n d` to the motion, against the energy
+:math:`\tfrac{1}{2} N_n g_n` of the penalty spring at the penetration :math:`g_n` (millimetres).
+The excess is the step-start support acting for :math:`\alpha_f` of a step longer than it should,
+an impulse of at most :math:`\alpha_f N_n \Delta t` per lift-off that vanishes with
+:math:`\Delta t`; the contact law's sloped-floor normal and the friction anchors, which the step
+does not see, leave no energy bound as simple as the segments'. Seabed damping and friction are
+dissipative and keep the plain force blend as well. The effective tangent is
 
 .. math::
 
@@ -1432,8 +1468,8 @@ snap-load verification a slack line snapping to about 10 MN integrates stably at
 :math:`\Delta t = 20\,\mathrm{ms}`, well above the explicit limit of 3.2 ms, with the peak
 within 1.6% of a 0.5 ms reference (:doc:`validation`). The time step must still resolve the
 response of interest and, for explicitly integrated points and bodies (below), their own
-stability limit. The standalone driver audits every ``EI = 0`` line at each output step and
-reports at the end of the run:
+stability limit. The standalone driver audits every ``EI = 0`` line on the initial state and at
+each output step, and reports at the end of the run:
 
 - the largest turn of the chord of a taut segment in one step. Above 1 deg it prints a note:
   against a 3.125 ms reference on chain catenaries under 5 m heave, 10 m surge and 15 m sway
@@ -1442,10 +1478,12 @@ reports at the end of the run:
   1.4 deg and 1.3 % at 2.9 deg (heave, mean), in proportion with the turn;
 - segments that go from slack to taut above the initial tension in one step while the axial
   wave crosses a segment more than once per step (:math:`\Delta t\,c/l_0 > 1`,
-  :math:`c = \sqrt{EA/m}`): the snap peaks are then not resolved in time, and the note asks for a
-  confirmation at a smaller ``dtM``;
-- non-physical tension spikes. The elastic tension of a segment at one step is a spike when it
-  exceeds four times its own tension one step before and one step after, ten times the largest
+  :math:`c = \sqrt{EA/m}` with the dynamic stiffness of the segment, :math:`EA_D` of a viscoelastic
+  segment and :math:`\alpha + \beta T` of a Syrope one): the snap peaks are then not resolved in
+  time, and the note asks for a confirmation at a smaller ``dtM``;
+- non-physical tension spikes. The tension of a segment at one step (its elastic tension, or the
+  tension of its viscoelastic or Syrope law at the committed state) is a spike when it exceeds
+  four times its own tension one step before and one step after, ten times the largest
   tension anywhere on the line one step before and one step after, and the largest tension of
   the initial state. A physical snap or tension wave persists over the axial transit time and is
   shared by the neighbouring segments, so no line carries such an isolated single-step peak.

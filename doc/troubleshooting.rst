@@ -572,15 +572,16 @@ Warnings and notes that do not stop a run
        confirm design peaks with a smaller ``dtM``.
    * - ``Warning: line ...: segment ... carried ... N at t = ... s for a single step, ... times
        the largest tension on the line one step before and after``
-     - a non-physical tension spike: the elastic tension of one segment rose and fell within one
-       step to ten times anything the line carried one step before and after, which no physical
+     - a non-physical tension spike: the tension of one segment (elastic, viscoelastic or
+       Syrope) rose and fell within one step to ten times anything the line carried one step
+       before and after, which no physical
        snap or tension wave does. It is the signature of an under-resolved slack–taut
        transition integrated without energy control, for example with
        ``False alpha_force_blend`` (the ``EI = 0`` scheme of 0.1.1 and earlier) or with
        ``rhoInf`` near 1. Remove ``False alpha_force_blend``, keep ``rhoInf`` at or below
        0.95, or reduce ``dtM``; the run summary counts the spikes of the line.
    * - ``Note: rhoInf = ... leaves almost no numerical dissipation``
-     - ``rhoInf`` above 0.95: the modes ``dtM`` does not resolve keep the residual of each
+     - printed by the standalone driver for a dynamic deck with ``rhoInf`` above 0.95: the modes ``dtM`` does not resolve keep the residual of each
        Newton step and the energy of under-resolved snaps. In an irregular sea this can raise the
        tensions several times (a lazy wave at ``1 rhoInf`` with a ``1e-4`` Newton tolerance
        peaked at twenty times the converged value). Use ``rhoInf`` ≤ 0.95 (default 0.4), or a

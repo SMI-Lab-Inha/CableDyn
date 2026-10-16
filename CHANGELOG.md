@@ -93,18 +93,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   Coupling a host (CFD) solver, that compares the call sequence step by step with MoorDyn's C
   API: initialisation, vector layout, end-of-step motion, outer correctors, load summation,
   the fixed step of the aggregate route, and units.
-- Run audit of tension-only (`EI = 0`) lines in the standalone driver. At every output step it
-  tracks the largest turn of a taut segment's chord, the segments that snap from slack to
-  taut, and non-physical tension spikes: a segment whose elastic tension at one step exceeds
-  four times its own one step before and after, ten times the largest tension anywhere on the
-  line one step before and after, and the largest tension of the initial state. The first spike
-  of a line is reported as a warning, once per line, and the run summary counts them. The run
-  ends with a note when a taut segment turned by more than 1° in one step (the mean and
-  standard deviation of the tension err by about 1 % and more above it; 1.3 % at 2.9° on a
-  heaving chain), and when segments snapped taut while the axial wave crosses a segment more
-  than once per step, so the snap peaks are not resolved in time. A dynamic deck with `rhoInf`
-  above 0.95 prints a note on the missing numerical dissipation. See the manual's troubleshooting
-  page.
+- Run audit of tension-only (`EI = 0`) lines in the standalone driver. On the initial state and
+  at every output step it tracks the largest turn of a taut segment's chord, the segments that
+  snap from slack to taut, and non-physical tension spikes: a segment whose tension (the elastic
+  tension, or that of its viscoelastic or Syrope law) at one step exceeds four times its own one
+  step before and after, ten times the largest tension anywhere on the line one step before and
+  after, and the largest tension of the initial state. The first spike of a line is reported as
+  a warning, once per line, and the run summary counts them. The run ends with a note when a
+  taut segment turned by more than 1° in one step (the mean and standard deviation of the
+  tension err by about 1 % and more above it; 1.3 % at 2.9° on a heaving chain), and when
+  segments snapped taut while the axial wave crosses a segment more than once per step, so the
+  snap peaks are not resolved in time. The standalone driver also prints a note for a dynamic
+  deck with `rhoInf` above 0.95, on the missing numerical dissipation. See the manual's
+  troubleshooting page.
 
 ### Changed
 
@@ -165,8 +166,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
-- Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step
-  evaluated the axial force and the dynamic loads at the blended configuration
+- Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated
+  the axial force and the dynamic loads at the blended configuration
   `q_α = (1 − α_f) q_{n+1} + α_f q_n`. A segment that was slack at the start of a step and
   carries tension at `q_α` then ends the step stretched beyond it,
   `q_{n+1} = (q_α − α_f q_n)/(1 − α_f)`, and a segment going slack within a step returned more
@@ -174,31 +175,36 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `rhoInf = 0.4`, at every `dtM` from 0.002 to 0.2 s, on realistic input: a light, axially stiff
   cable (80 kg/m, EA 8e8 N) under 3 m heave reported 4.2 MN at the fairlead and 3.4 MN at the
   anchor (`dtM` 0.0025 s) and 20 MN at the anchor (`dtM` 0.1 s), against 0.1 to 0.18 MN at
-  `rhoInf = 0`, at `dtM` down to 0.25 ms and with a finite-EI model; the same cable in an
-  `Hs` 8 m JONSWAP sea 0.41 MN at the anchor against 0.043 MN; the shipped viscoelastic
-  polyester in 15 m surge 2.69 MN against 1.80 MN; a semi-taut chain–polyester leg 9.5 MN at
-  the anchor against 4.6 MN; and a line on a stiff seabed failed the plausibility guard. The
-  step now blends forces, `(1 − α_f) r(q_{n+1}, v_{n+1}) + α_f r(q_n, v_n)`, as the finite-EI
-  path does, for the axial force and every dynamic load (damping, viscoelastic and Syrope laws,
-  seabed, drag, Froude–Krylov, buoyancy; added mass stays at `q_α`). The step-start force is
-  evaluated afresh at the committed state, so no state is added and restarts stay exact. An
-  element going from taut to slack within a step carries at most its discrete energy gradient
-  (the strain energy it releases over the shortening), so a release can no longer create
-  energy. At the default `rhoInf` the reproducers now give 0.14 / 0.08 MN, 0.092 / 0.096 MN,
-  0.075 / 0.043 MN and 1.80 MN, as their references, and the stiff-seabed line runs to
-  completion; the chain–polyester anchor snap peaks at 5.8 MN at `dtM` 0.05 s, a single-step
-  peak (4.6 MN at 0.0025 s) that the new snap note reports. On a linear element the scheme
-  is unchanged, so taut lines keep their accuracy: every MoorDyn-C, OrcaFlex, analytic and
-  experimental comparison that runs locally still passes, and its reported error moves by at
-  most 0.35 percentage points (the minimum fairlead tension of the one-hour VolturnUS-S
-  record, 0.15 % to 0.50 %; the snap-load peak at 20 ms improves from 2.8 % to 1.6 %; see
-  VALIDATION.md). Every `EI = 0` dynamic output changes. Over the shipped examples the
-  statistics of the tensions change by at most 0.23 % (mean) and 0.9 % (maximum), except the
-  two `als_volturnus` decks, whose pre-failure anchor snap at 250 s is resolved by one or two
-  samples and peaks 10 % lower. Static runs and finite-EI lines are unchanged. The step costs
-  up to 6 % more wall time on `EI = 0` dynamic decks (one more force evaluation per step and
-  about 4 % more Newton iterations). `False alpha_force_blend`, which until now
-  applied to finite-EI lines only, selects the former scheme for `EI = 0` lines as well.
+  `rhoInf = 0`, at `dtM` down to 0.25 ms and with a finite-EI model; the same cable in an `Hs`
+  8 m JONSWAP sea 0.41 MN at the anchor against 0.043 MN; the shipped viscoelastic polyester in
+  15 m surge 2.69 MN against 1.80 MN; a semi-taut chain–polyester leg 9.5 MN at the anchor
+  against 4.6 MN; and a line on a stiff seabed failed the plausibility guard. The step now blends
+  forces, `(1 − α_f) r(q_{n+1}, v_{n+1}) + α_f r(q_n, v_n)`, as the finite-EI path does, for the
+  axial force and every dynamic load (damping, viscoelastic and Syrope laws, seabed, drag,
+  Froude–Krylov, buoyancy; added mass stays at `q_α`). The step-start force is evaluated afresh
+  at the committed state, so no state is added and restarts stay exact. An element going from
+  taut to slack within a step carries at most its discrete energy gradient (the strain energy it
+  releases over the shortening), so a release can no longer create energy; the viscoelastic and
+  Syrope segments are capped the same way with the tension of their law (the same cable made
+  lightly damped viscoelastic peaks at 0.081 MN at the anchor at `dtM` 0.1 s, against 0.145 MN
+  without the cap on its segments and 0.076 to 0.094 MN at 0.5 to 2.5 ms). The seabed contact of
+  a node that lifts off within a step is not capped (see the manual's theory page). At the
+  default `rhoInf` the reproducers now give 0.14 / 0.08 MN, 0.092 / 0.096 MN, 0.075 / 0.043 MN
+  and 1.80 MN, as their references, and the stiff-seabed line runs to completion; the
+  chain–polyester anchor snap peaks at 5.8 MN at `dtM` 0.05 s, a single-step peak (4.6 MN at
+  0.0025 s) that the new snap note reports. On a linear element the scheme is unchanged, so taut
+  lines keep their accuracy: every MoorDyn-C, OrcaFlex, analytic and experimental comparison that
+  runs locally still passes, and its reported error moves by at most 0.35 percentage points (the
+  minimum fairlead tension of the one-hour VolturnUS-S record, 0.15 % to 0.50 %; the snap-load
+  peak at 20 ms improves from 2.76 %, published as 2.7 %, to 1.6 %; see VALIDATION.md). Every
+  `EI = 0` dynamic output changes. Over the shipped examples the statistics of the tensions
+  change by at most 0.23 % (mean) and 0.9 % (maximum), except the two `als_volturnus` decks,
+  whose pre-failure anchor snap at 250 s is resolved by one or two samples and peaks 10 % lower.
+  Static runs and finite-EI lines are unchanged. The step costs up to 6 % more wall time on
+  `EI = 0` dynamic decks (one more force evaluation per step and about 4 % more Newton
+  iterations). `False alpha_force_blend`, which until now applied to finite-EI lines only,
+  selects the former scheme for `EI = 0` lines as well. Lines that the C API builds without a
+  deck (`CableDyn_InitLine`, `CableDyn_InitLines`) always take the force blend.
 - `modified_newton` on `EI = 0` lines (with or without the force blend, so also under
   `False alpha_force_blend`) rebuilds the tangent when an iterate reduces the residual by less
   than a factor four, as the manual states; it had kept the first tangent for the whole step,
