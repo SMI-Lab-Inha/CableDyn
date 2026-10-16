@@ -708,7 +708,7 @@ CONTAINS
 
     REAL(wp) :: hk(12, 12), margin
     INTEGER :: order
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em
 
     order = NG_DEFAULT
     IF (PRESENT(quadrature_order)) order = quadrature_order
@@ -992,7 +992,7 @@ CONTAINS
     LOGICAL :: want_hess, finite
     REAL(wp) :: scale, margin, he, ge(12), hk(12, 12), v(3), chi, sum_h, eg(6), eh(3, 3, 2), ec(3, 3, 2)
     REAL(wp) :: om, g9(9), h9(9, 9), pj(3, 3), pk(3, 3), sd(3, 3), dmy
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em
 
     theta_raw = CD_ZERO
     grad = CD_ZERO

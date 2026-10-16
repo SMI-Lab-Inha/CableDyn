@@ -477,7 +477,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: R(:), dq(:), ab(:, :), ab_recovery(:, :), scaled_residual(:)
     REAL(wp), ALLOCATABLE :: elem_f(:, :), elem_K(:, :, :), elem_E(:)
     INTEGER, ALLOCATABLE :: elem_es(:)
-    CHARACTER(512), ALLOCATABLE :: elem_em(:)
+    CHARACTER(200), ALLOCATABLE :: elem_em(:)
     ! Secant-predictor history: the converged states of the two previous buoyancy
     ! stages (q_sec1 = stage b-1, q_sec2 = stage b-2).
     REAL(wp), ALLOCATABLE :: q_sec1(:), q_sec2(:)
@@ -1094,6 +1094,7 @@ CONTAINS
       INTEGER :: e, a, b, gi, gj, j, es2, bt, es_trial, zdof(4)
       LOGICAL :: dry, accepted
       CHARACTER(1024) :: em2, em_trial
+      CHARACTER(160) :: em_b ! a per-node bathymetry query message (at most 69 characters)
 
       es = CD_HCSTAT_OK; em = ''; rnorm = CD_ZERO; merit = CD_ZERO
       IF (use_rigid) THEN
@@ -1246,9 +1247,9 @@ CONTAINS
         IF (use_bathymetry) THEN
           xg = contact_cs(1)*q(gi - 2) - contact_cs(2)*q(gi - 1)
           yg = contact_cs(2)*q(gi - 2) + contact_cs(1)*q(gi - 1)
-          CALL CD_Bathymetry_Floor_Gradient(bathymetry, xg, yg, z_floor, gxg, gyg, es2, em2, crease_curvature=curv_g)
+          CALL CD_Bathymetry_Floor_Gradient(bathymetry, xg, yg, z_floor, gxg, gyg, es2, em_b, crease_curvature=curv_g)
           IF (es2 /= CD_BATHY_OK) THEN
-            es = CD_HCSTAT_NOCONVERGE; em = 'bathymetry query failed: '//TRIM(em2); RETURN
+            es = CD_HCSTAT_NOCONVERGE; em = 'bathymetry query failed: '//TRIM(em_b); RETURN
           END IF
           gx = contact_cs(1)*gxg + contact_cs(2)*gyg
           gy = -contact_cs(2)*gxg + contact_cs(1)*gyg
@@ -2593,7 +2594,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: a
       REAL(wp) :: qe(12), kL, kR
       INTEGER :: es3
-      CHARACTER(1024) :: em3
+      CHARACTER(200) :: em3
       kap = CD_ZERO
       IF (a <= ne) THEN
         CALL gather_elem(a, qe)
@@ -2804,7 +2805,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ref(:, :)
     REAL(wp) :: z_floor, gxg, gyg, xg, yg, normal, normal_gap, dfd(2, 2), dfc(2), cs(2)
     INTEGER :: node, ix, nn, es
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
     nn = SIZE(l0) + 1
@@ -2930,7 +2931,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: ve(12), djv(12, 12), ua(3), ub(3), ug(3), ul(3)
     INTEGER :: es
-    CHARACTER(1024) :: em
+    CHARACTER(200) :: em
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
     fd = CD_ZERO

@@ -205,7 +205,7 @@ CONTAINS
     REAL(wp) :: Lam0(3, 3), L0, qe(12), Is(3, 3), om(3), w
     REAL(wp), ALLOCATABLE :: mv(:), v_trans(:)
     LOGICAL :: mult_e
-    CHARACTER(1024) :: em
+    CHARACTER(120) :: em
     strain_e = CD_ZERO; kinetic_e = CD_ZERO; ErrStat = CD_DYN_OK; ErrMsg = ''
     IF (SIZE(nodes_ref, 1) /= 3 .OR. SIZE(elem_conn, 1) /= 2) THEN
       ErrStat = CD_DYN_BADINPUT; ErrMsg = 'CD_Cosserat_Mechanical_Energy: nodes_ref (3,*) / elem_conn (2,*)'

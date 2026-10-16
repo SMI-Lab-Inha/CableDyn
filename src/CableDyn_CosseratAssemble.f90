@@ -56,7 +56,7 @@ MODULE CableDyn_CosseratAssemble
     REAL(wp), ALLOCATABLE :: fe(:, :)
     REAL(wp), ALLOCATABLE :: Ke(:, :, :)
     INTEGER, ALLOCATABLE :: elem_es(:)
-    CHARACTER(512), ALLOCATABLE :: elem_em(:)
+    CHARACTER(120), ALLOCATABLE :: elem_em(:)
   END TYPE CD_CosseratAssemblyWorkspace
 
 CONTAINS
@@ -94,8 +94,8 @@ CONTAINS
     REAL(wp) :: Lam0(3, 3), L0, qe(12), Kte(12, 12), finte(12)
     REAL(wp), ALLOCATABLE :: fe(:, :), Ke(:, :, :)
     INTEGER, ALLOCATABLE :: elem_es(:)
-    CHARACTER(512), ALLOCATABLE :: elem_em(:)
-    CHARACTER(512) :: em ! an element message (short and fixed), stored in elem_em(512)
+    CHARACTER(120), ALLOCATABLE :: elem_em(:)
+    CHARACTER(120) :: em
 
     CD_COSASM_N_TANGENT = CD_COSASM_N_TANGENT + 1
     CALL SYSTEM_CLOCK(c0, rate)
@@ -271,7 +271,7 @@ CONTAINS
     LOGICAL :: apply_chain
     INTEGER(INT64) :: c0, rate
     REAL(wp) :: Lam0(3, 3), L0, qe(12), Kte(12, 12), finte(12)
-    CHARACTER(512) :: em ! an element message (short and fixed), stored in elem_em(512)
+    CHARACTER(120) :: em
 
     CD_COSASM_N_TANGENT = CD_COSASM_N_TANGENT + 1
     CALL SYSTEM_CLOCK(c0, rate)
@@ -415,7 +415,7 @@ CONTAINS
     INTEGER :: n_nodes, n_elem, e, a, b, ndof, gmap(12), i, es
     INTEGER(INT64) :: c0, rate
     REAL(wp) :: Lam0(3, 3), L0, qe(12), finte(12)
-    CHARACTER(512) :: em ! an element message (short and fixed), stored in elem_em(512)
+    CHARACTER(120) :: em
 
     CD_COSASM_N_FORCE = CD_COSASM_N_FORCE + 1
     CALL SYSTEM_CLOCK(c0, rate)
