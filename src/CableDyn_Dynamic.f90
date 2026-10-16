@@ -151,6 +151,9 @@ MODULE CableDyn_Dynamic
     ! M_band clears mb_valid.
     LOGICAL :: mb_valid = .FALSE.
     REAL(wp), ALLOCATABLE :: mb_l0(:), mb_rho(:)
+    ! TEST-ONLY diagnostic: the number of steps that reused the remembered mass band (saturating).
+    ! Only the unit tests read it (to assert that the cache hit); no result depends on it.
+    INTEGER :: mb_hits = 0
     INTEGER :: ad_kl = 0
     INTEGER, ALLOCATABLE :: ad_finv(:), ad_ipiv(:), ad_fixed(:)
     REAL(wp), ALLOCATABLE :: ad_full(:, :), ad_add(:, :), ad_ab(:, :), ad_x(:, :), ad_result(:, :)
@@ -319,6 +322,7 @@ CONTAINS
     work%topo_valid = .FALSE.
     work%bw_valid = .FALSE.
     work%mb_valid = .FALSE.
+    work%mb_hits = 0
     IF (ALLOCATED(work%mb_l0)) DEALLOCATE (work%mb_l0)
     IF (ALLOCATED(work%mb_rho)) DEALLOCATE (work%mb_rho)
     IF (ALLOCATED(work%ad_finv)) DEALLOCATE (work%ad_finv)
@@ -932,6 +936,8 @@ CONTAINS
           work%mb_valid = .FALSE.
           CALL assemble_mass_band_free(elem_conn, l0, rho_a, work%dof_marker(1:n_dof), kl, ku, M_band, es, em)
           IF (es == 0 .AND. work%bw_valid) CALL remember_mass_band(work, l0, rho_a)
+        ELSE IF (work%mb_hits < HUGE(work%mb_hits)) THEN
+          work%mb_hits = work%mb_hits + 1
         END IF
       ELSE
         work%mb_valid = .FALSE.

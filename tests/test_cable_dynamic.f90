@@ -393,39 +393,58 @@ CONTAINS
     l0b = [0.9_wp, 0.93_wp]
     rhob = [5.0_wp, 6.5_wp]
 
-    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:first')
+    ! each step states whether it must reuse the remembered band (the workspace's test-only
+    ! hit counter), so a cache that never hits fails here
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], .FALSE., &
+                             'mass-band:first')
     CALL require(work%mb_valid, 'mass-band:remembered')
-    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:reused')
-    CALL mass_band_step_pair(work, q, v, a, conn, l0b, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:new-l0')
-    CALL mass_band_step_pair(work, q, v, a, conn, l0b, ea, rhob, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:new-rho')
-    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], 'mass-band:back')
-    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], 'mass-band:new-free-list')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], .TRUE., &
+                             'mass-band:reused')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0b, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], .FALSE., &
+                             'mass-band:new-l0')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0b, ea, rhob, f_ext, [1, 2, 3, 7, 8, 9], .FALSE., &
+                             'mass-band:new-rho')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0b, ea, rhob, f_ext, [1, 2, 3, 7, 8, 9], .TRUE., &
+                             'mass-band:new-rho-reused')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3, 7, 8, 9], .FALSE., &
+                             'mass-band:back')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], .FALSE., &
+                             'mass-band:new-free-list')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], .TRUE., &
+                             'mass-band:new-free-list-reused')
     CALL CD_Cable_Initial_Acceleration(q, v, conn, l0, ea, rho_a, .FALSE., f_ext, [1, 2, 3], &
                                        a, es, em, workspace=work)
     CALL expect_es(es, CD_DYN_OK, 'mass-band:initial-acceleration')
     CALL require(.NOT. work%mb_valid, 'mass-band:initial-acceleration-clears')
-    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], &
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], .FALSE., &
                              'mass-band:after-initial-acceleration')
+    CALL mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, [1, 2, 3], .TRUE., &
+                             'mass-band:after-initial-acceleration-reused')
   END SUBROUTINE case_workspace_mass_band_follows_inputs
 
-  SUBROUTINE mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, fixed, label)
-    !! One step through the shared workspace and the same step through a fresh one.
+  SUBROUTINE mass_band_step_pair(work, q, v, a, conn, l0, ea, rho_a, f_ext, fixed, expect_hit, label)
+    !! One step through the shared workspace and the same step through a fresh one; the shared
+    !! step reuses the remembered mass band exactly when expect_hit (test-only counter mb_hits).
     TYPE(CD_CableGenAlphaWorkspace), INTENT(INOUT) :: work
     REAL(wp), INTENT(IN) :: q(9), v(9), a(9), l0(2), ea(2), rho_a(2), f_ext(9)
     INTEGER, INTENT(IN) :: conn(2, 2), fixed(:)
+    LOGICAL, INTENT(IN) :: expect_hit
     CHARACTER(*), INTENT(IN) :: label
     INTEGER, PARAMETER :: I8 = SELECTED_INT_KIND(18)
     TYPE(GenAlphaConfig) :: cfg
     TYPE(CD_CableGenAlphaWorkspace) :: fresh
     REAL(wp) :: q_w(9), v_w(9), a_w(9), q_f(9), v_f(9), a_f(9)
-    INTEGER :: es_w, es_f, it_w, it_f
+    INTEGER :: es_w, es_f, it_w, it_f, hits
     LOGICAL :: conv_w, conv_f, stall_w, stall_f
     CHARACTER(120) :: em_w, em_f
 
+    hits = work%mb_hits
     CALL CD_Cable_Gen_Alpha_Step(q, v, a, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, 0.01_wp, cfg, &
                                  q_w, v_w, a_w, conv_w, stall_w, it_w, es_w, em_w, workspace=work)
+    CALL require(work%mb_hits == hits + MERGE(1, 0, expect_hit), label//':cache-hit')
     CALL CD_Cable_Gen_Alpha_Step(q, v, a, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, 0.01_wp, cfg, &
                                  q_f, v_f, a_f, conv_f, stall_f, it_f, es_f, em_f, workspace=fresh)
+    CALL require(fresh%mb_hits == 0, label//':fresh-no-hit')
     CALL expect_es(es_w, CD_DYN_OK, label//':status')
     CALL require(conv_w .AND. conv_f .AND. it_w == it_f .AND. es_w == es_f, label//':flags')
     CALL require(ALL(TRANSFER(q_w, [0_I8]) == TRANSFER(q_f, [0_I8])) .AND. &
