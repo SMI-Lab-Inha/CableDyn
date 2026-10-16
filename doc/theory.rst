@@ -1368,17 +1368,27 @@ the second-order accuracy are unchanged.
 The segments whose tension comes from a constitutive law, the viscoelastic and Syrope segments
 (whose law enters the step as a dynamic load), are capped in the same way: :math:`T_n` is the
 law's tension at the committed state, the force :math:`\mathbf{r}_n` carries, with the same
-:math:`e_n`, :math:`W_n = \tfrac{1}{2} T_n e_n` and secant end tension
-:math:`T_{n+1} = T_n e_{n+1}/e_n`. For the viscoelastic law at rest :math:`W_n` is the energy of
-its two springs, which both carry :math:`T_n` and whose stretches add up to :math:`e_n`; for the
-Syrope law, whose loading curve stiffens, it bounds the energy below the curve from above. So the
-blend of every segment of a tension-only line that ends slack returns at most
-:math:`\tfrac{1}{2} T_n e_n` over the step, and so does that of an elastic segment that ends
-taut; for a law segment that ends taut the bound holds with the secant end tension in place of
-the law's. With the light cable above made lightly damped viscoelastic (EA 8e8 | 1.6e9 N,
-BA 1e8 | 1e6 N s) the anchor peaks at 0.072 MN at :math:`\Delta t` = 0.1 s with the cap on its
+:math:`e_n` and :math:`W_n = \tfrac{1}{2} T_n e_n`. For the viscoelastic law at rest :math:`W_n`
+is the energy of its two springs, which both carry :math:`T_n` and whose stretches add up to
+:math:`e_n`; for the Syrope law, whose loading curve stiffens, it bounds the energy below the
+curve from above. A law's tension is not proportional to the stretch: damping or the lagged
+internal state can carry :math:`T_n` at a vanishing :math:`e_n`, where the secant
+:math:`T_n/e_n` is unbounded and the cap would switch off within a band of width about
+:math:`e_n`, nearly a jump for the Newton iteration. The cap therefore estimates the end
+tension as :math:`\hat T_{n+1} = k\,e_{n+1}` with :math:`k = \min(T_n/e_n, k_n)`, :math:`k_n`
+the law's axial stiffness at the committed state (:math:`EA_D/l_0` for the viscoelastic law,
+:math:`K_1/l_0 = (\alpha + \beta T_\text{mean})/l_0` for Syrope). In general the blend of an
+element returns at most :math:`W_n + (1 - \alpha_f)(\hat T_{n+1} - T_{n+1})\,p_{n+1}` over the
+step, :math:`T_{n+1}` its actual end tension, and never more than without the cap. For an
+elastic segment the two tensions coincide and the bound is :math:`W_n`. A law segment that ends
+below :math:`l_0` with no law tension returns at most :math:`W_n` as well; one that ends above
+:math:`l_0` with less law tension than the estimate (zero once the slow branch has taken up the
+stretch, or below Syrope's minimum strain) can return up to
+:math:`(1 - \alpha_f)\,k\,e_{n+1} p_{n+1}` more. With the light cable above made lightly damped
+viscoelastic (EA 8e8 | 1.6e9 N, BA 1e8 | 1e6 N s) the anchor peaks at 0.085 MN at
+:math:`\Delta t` = 0.1 s with the cap on its
 segments (the snap is not resolved at that step, so the peak depends on round-off: other
-compilers and platforms give other values) and at 0.145 MN without it, against 0.087 to
+compilers and platforms give other values) and at 0.145 MN without it, against 0.082 to
 0.095 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
 surge that goes slack peaks at 1.64 MN at 0.1 s, against 1.78 MN at 1 and 2.5 ms, with or
 without the cap.

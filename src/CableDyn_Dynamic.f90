@@ -130,8 +130,9 @@ MODULE CableDyn_Dynamic
     REAL(wp), ALLOCATABLE :: fint_n(:)
     REAL(wp), ALLOCATABLE :: load_n(:)
     ! release cap of the force blend (tension-only elements): the step-start tension, stretch
-    ! l - l0 and unit chord of every element
-    REAL(wp), ALLOCATABLE :: tension_n(:), stretch_n(:), chord_n(:, :)
+    ! l - l0 and unit chord of every element, and the bound of its secant stiffness
+    ! (start_stiffness of a law element, HUGE otherwise)
+    REAL(wp), ALLOCATABLE :: tension_n(:), stretch_n(:), chord_n(:, :), stiff_n(:)
     ! fint_n, load_n and the release-cap data hold the step-start values of the last call: a
     ! warm re-solve of the same step (guess_armed, from the same committed state) reuses them
     LOGICAL :: start_valid = .FALSE.
@@ -321,6 +322,7 @@ CONTAINS
     IF (ALLOCATED(work%tension_n)) DEALLOCATE (work%tension_n)
     IF (ALLOCATED(work%stretch_n)) DEALLOCATE (work%stretch_n)
     IF (ALLOCATED(work%chord_n)) DEALLOCATE (work%chord_n)
+    IF (ALLOCATED(work%stiff_n)) DEALLOCATE (work%stiff_n)
     work%start_valid = .FALSE.
     IF (ALLOCATED(work%eff)) DEALLOCATE (work%eff)
     IF (ALLOCATED(work%eff_free)) DEALLOCATE (work%eff_free)
@@ -606,7 +608,7 @@ CONTAINS
                                      load_proc, added_mass_proc, load_force_proc, &
                                      load_band_proc, prescribed_q, prescribed_v, prescribed_a, structural_mass, &
                                      workspace, added_mass_band_proc, start_load, start_tension, &
-                                     probe_q, probe_R, probe_K)
+                                     probe_q, probe_R, probe_K, start_stiffness)
     !! One generalized-alpha step: the constant load f_ext plus the optional load,
     !! banded-load, force-only and added-mass callbacks (hydrodynamics, damping, contact).
     !! On a singular effective tangent returns CD_DYN_SINGULAR; on a line-search
@@ -664,6 +666,13 @@ CONTAINS
     !! the force blend of those elements as it bounds that of the elastic ones; entries of
     !! elements with ea > 0 are ignored. Absent: the cap covers the elastic elements only.
     REAL(wp), INTENT(IN), OPTIONAL :: start_tension(:)
+    !! With start_tension: the axial stiffness of each law element at the step-start state
+    !! (n_elem, N per metre of elongation, >= 0; the viscoelastic EA_D/l0 and the Syrope
+    !! K1/l0 = (alpha + beta T_mean)/l0 of a line model). It bounds the secant stiffness
+    !! T_n/e_n with which the release cap estimates the end tension of a law element that ends
+    !! taut (see apply_release_cap). Entries of elements with ea > 0 are ignored. Absent: the
+    !! secant is not bounded.
+    REAL(wp), INTENT(IN), OPTIONAL :: start_stiffness(:)
     !! TEST HOOK (unit tests of the tangent; production callers omit it). With probe_q (full
     !! 3 n_nodes array, the fixed DOFs at their t_{n+1} values) present, the step returns after
     !! its setup without iterating: probe_R is the residual (3 n_nodes) and probe_K the free-free
@@ -687,7 +696,7 @@ CONTAINS
     ! q_alpha, v_alpha without)
     REAL(wp), POINTER :: q_force(:), q_n_nodes(:, :), fint_n(:), load_n(:)
     REAL(wp), POINTER :: qf(:), vf(:), qf_nodes(:, :)
-    REAL(wp), POINTER :: tension_n(:), stretch_n(:), chord_n(:, :)
+    REAL(wp), POINTER :: tension_n(:), stretch_n(:), chord_n(:, :), stiff_n(:)
     LOGICAL :: force_blend, release_cap
     LOGICAL :: topo_ok, bw_hit, mb_hit
     INTEGER :: il, jl
@@ -1486,7 +1495,8 @@ CONTAINS
       END IF
       ! release cap: the step-start tension, stretch and chord of every stretched element (the
       ! assembly above has validated the connectivity and the element lengths). An element
-      ! with ea = 0 takes the tension of the law its load callback carries (start_tension).
+      ! with ea = 0 takes the tension of the law its load callback carries (start_tension) and
+      ! the bound of its secant stiffness (start_stiffness).
       release_cap = tension_only .AND. alpha_f > CD_ZERO
       IF (release_cap .AND. PRESENT(start_tension)) THEN
         IF (SIZE(start_tension) /= n_elem) THEN
@@ -1499,6 +1509,18 @@ CONTAINS
           em_s = 'start_tension must be finite'
           RETURN
         END IF
+        IF (PRESENT(start_stiffness)) THEN
+          IF (SIZE(start_stiffness) /= n_elem) THEN
+            es_s = CD_DYN_BADINPUT
+            em_s = 'start_stiffness must have shape (n_elem)'
+            RETURN
+          END IF
+          IF (.NOT. CD_All_Finite(start_stiffness) .OR. ANY(start_stiffness < CD_ZERO)) THEN
+            es_s = CD_DYN_BADINPUT
+            em_s = 'start_stiffness must be finite and non-negative'
+            RETURN
+          END IF
+        END IF
       END IF
       IF (release_cap) THEN
         DO i = 1, n_elem
@@ -1509,11 +1531,13 @@ CONTAINS
             chord_n(:, i) = d/ell
             stretch_n(i) = ell - l0(i)
             tension_n(i) = CD_ZERO
+            stiff_n(i) = HUGE(CD_ONE)
             IF (stretch_n(i) > CD_ZERO) THEN
               IF (ea(i) > CD_ZERO) THEN
                 tension_n(i) = ea(i)*(ell/l0(i) - CD_ONE)
               ELSE IF (PRESENT(start_tension)) THEN
                 tension_n(i) = MAX(start_tension(i), CD_ZERO)
+                IF (PRESENT(start_stiffness)) stiff_n(i) = start_stiffness(i)
               END IF
             END IF
           END BLOCK
@@ -1611,6 +1635,7 @@ CONTAINS
       tension_n => workspace_ref%tension_n(1:n_elem)
       stretch_n => workspace_ref%stretch_n(1:n_elem)
       chord_n => workspace_ref%chord_n(1:3, 1:n_elem)
+      stiff_n => workspace_ref%stiff_n(1:n_elem)
       v_eval => workspace_ref%v_eval(1:n_dof)
       v_alpha => workspace_ref%v_alpha(1:n_dof)
       IF (cfg%force_blend) THEN
@@ -1987,21 +2012,29 @@ CONTAINS
       !! tension at t_{n+1}, returns -(1 - alpha_f) T_1 p_1 with p_1 = |d_1| - t_1 . d_0. The
       !! element itself only released its strain energy W_0 = T_0 e_0/2, so the blend of an
       !! element that releases (deeply, or turning) within one step can create energy. The cap
-      !! bounds the work of the blended force by W_0: when alpha_f T_0 p exceeds
-      !! N = W_0 + (1 - alpha_f) T_1 p_1 the element carries N/p instead of alpha_f T_0 along t_0
-      !! (the smaller of the two is kept, so the blend is continuous in d_1). An element slack at
-      !! t_{n+1} (T_1 = 0) carries the discrete energy gradient W_0/p and returns exactly W_0.
-      !! For e_1 > 0, T_1 = T_0 e_1/e_0, the tension of an elastic element, so the cap fades out
-      !! continuously as the end state crosses the rest length (a cap on slack end states alone
-      !! would jump there by up to alpha_f T_0). It acts on a taut end state only when the
-      !! element turned and T_1 < alpha_f/(1 - alpha_f) T_0; an element slack at t_n keeps the
-      !! force blend. N >= W_0/2 always, so 4 alpha_f p <= e_0 is a sufficient test of an
-      !! inactive cap. The residual and the tangent are corrected by the difference. An element
-      !! whose axial law a load callback carries (ea = 0, T_0 from start_tension) is capped the
-      !! same way with the same W_0 = T_0 e_0/2 (the energy of the viscoelastic springs at
-      !! rest, an upper bound of the energy below a stiffening loading curve such as Syrope's)
-      !! and the same secant T_1, so the blend of every tension-only element that ends slack
-      !! returns at most T_0 e_0/2 (an elastic one also when it ends taut).
+      !! uses an estimate T^_1 of T_1: T^_1 = k e_1 for e_1 > 0 and 0 otherwise, with the secant
+      !! k = T_0/e_0. When alpha_f T_0 p exceeds N = W_0 + (1 - alpha_f) T^_1 p_1 the element
+      !! carries N/p instead of alpha_f T_0 along t_0 (the smaller of the two is kept, so the
+      !! blend is continuous in d_1), so its blend returns at most
+      !! W_0 + (1 - alpha_f)(T^_1 - T_1) p_1 over the step, and never more than without the cap.
+      !! T^_1 vanishes as the end state crosses the rest length, so the cap fades out
+      !! continuously there (a cap on slack end states alone would jump by up to alpha_f T_0).
+      !! For an elastic element T^_1 = T_1: its blend returns at most W_0 over every step (an
+      !! element that ends slack carries the discrete energy gradient W_0/p and returns exactly
+      !! W_0), and the cap acts on a taut end state only when the element turned and
+      !! T_1 < alpha_f/(1 - alpha_f) T_0. An element slack at t_n keeps the force blend.
+      !! N >= W_0/2 always (k e_0 <= T_0), so 4 alpha_f p <= e_0 is a sufficient test of an
+      !! inactive cap. The residual and the tangent are corrected by the difference.
+      !! An element whose axial law a load callback carries (ea = 0, T_0 from start_tension) is
+      !! capped the same way with the same W_0 = T_0 e_0/2 (the energy of the viscoelastic
+      !! springs at rest, an upper bound of the energy below a stiffening loading curve such as
+      !! Syrope's) and k = min(T_0/e_0, k_n), k_n its step-start axial stiffness
+      !! (start_stiffness), which bounds the secant where T_0 is mostly damping or lagged state
+      !! at a small e_0. Its law tension T_1 is not that of a linear spring, so its blend
+      !! returns at most W_0 when (T^_1 - T_1) p_1 <= 0: always when it ends below l0 with no
+      !! law tension, and otherwise not guaranteed, e.g. when it ends above l0 with less law
+      !! tension than T^_1 (zero once the slow branch has taken up the stretch, or below
+      !! Syrope's minimum strain), by up to (1 - alpha_f) k e_1 p_1.
       REAL(wp), INTENT(IN) :: q_eval(:)
       REAL(wp), INTENT(INOUT) :: Rout(:)
       REAL(wp), INTENT(INOUT), OPTIONAL :: effout(:, :), effbandout(:, :)
@@ -2033,7 +2066,8 @@ CONTAINS
         END IF
         IF (taut_end) THEN
           ln = l0(e) + e0
-          k0 = t0/e0
+          ! the secant stiffness, bounded for a law element by its step-start axial stiffness
+          k0 = MIN(t0/e0, stiff_n(e))
           ten1 = k0*e1
           t1 = d1/l1
           cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
@@ -2171,6 +2205,8 @@ CONTAINS
     CALL ensure_real_vector(work%stretch_n, n_elem, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DYN_OK) RETURN
     CALL ensure_real_matrix(work%chord_n, 3, n_elem, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DYN_OK) RETURN
+    CALL ensure_real_vector(work%stiff_n, n_elem, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DYN_OK) RETURN
     IF (need_band) THEN
       ! a reallocated mass band no longer holds the remembered one

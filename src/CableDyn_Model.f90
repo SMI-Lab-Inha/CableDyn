@@ -176,6 +176,9 @@ MODULE CableDyn_Model
     ! the other elements; allocated only on a model with either law): the release cap of the
     ! force blend bounds their alpha_f share as it bounds that of the elastic elements
     REAL(wp), ALLOCATABLE :: tension_start_work(:)
+    ! their axial stiffness at the committed state (EA_D/l0, Syrope K1/l0; n_elem, allocated
+    ! with tension_start_work), which bounds the secant end tension of the release cap
+    REAL(wp), ALLOCATABLE :: stiffness_start_work(:)
     ! load_start_work holds the committed-state load of the last step: a warm re-solve of the
     ! same step (the junction coupling, dynamic_workspace%guess_armed) reuses it
     LOGICAL :: load_start_valid = .FALSE.
@@ -1920,10 +1923,26 @@ CONTAINS
           RETURN
         END IF
       END IF
+      IF (ALLOCATED(model%stiffness_start_work)) THEN
+        IF (.NOT. ALLOCATED(model%tension_start_work)) THEN
+          DEALLOCATE (model%stiffness_start_work)
+        ELSE IF (SIZE(model%stiffness_start_work) /= model%n_elem) THEN
+          DEALLOCATE (model%stiffness_start_work)
+        END IF
+      END IF
+      IF (ALLOCATED(model%tension_start_work) .AND. .NOT. ALLOCATED(model%stiffness_start_work)) THEN
+        ALLOCATE (model%stiffness_start_work(model%n_elem), STAT=es)
+        IF (es /= 0) THEN
+          ErrStat = CD_MODEL_ALLOCFAIL
+          ErrMsg = 'CableDyn_Model: step-start stiffness workspace allocation failed'
+          RETURN
+        END IF
+      END IF
       model%ve_dt = CD_ZERO
       IF (ALLOCATED(model%tension_start_work)) THEN
         CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es, em, &
-                                     law_tension=model%tension_start_work)
+                                     law_tension=model%tension_start_work, &
+                                     law_stiffness=model%stiffness_start_work)
       ELSE
         CALL model_contributor_force(model, model%q, model%v, model%load_start_work, es, em)
       END IF
@@ -1948,7 +1967,8 @@ CONTAINS
                                    added_mass_band_proc=model_added_mass_band, prescribed_q=prescribed_q, &
                                    prescribed_v=prescribed_v, prescribed_a=prescribed_a, &
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
-                                   start_tension=model%tension_start_work)
+                                   start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work)
     ELSE IF (PRESENT(prescribed_q) .AND. has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1957,7 +1977,8 @@ CONTAINS
                                    es, em, load_force_proc=model_force, load_band_proc=model_load_band, &
                                    prescribed_q=prescribed_q, prescribed_v=prescribed_v, &
                                    prescribed_a=prescribed_a, workspace=model%dynamic_workspace, &
-                                   start_load=model%load_start_work, start_tension=model%tension_start_work)
+                                   start_load=model%load_start_work, start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work)
     ELSE IF (PRESENT(prescribed_q) .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1980,7 +2001,8 @@ CONTAINS
                                    n_iter, es, em, &
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
                                    added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
-                                   start_load=model%load_start_work, start_tension=model%tension_start_work)
+                                   start_load=model%load_start_work, start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work)
     ELSE IF (has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1988,7 +2010,8 @@ CONTAINS
                                    n_iter, es, em, &
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
-                                   start_tension=model%tension_start_work)
+                                   start_tension=model%tension_start_work, &
+                                   start_stiffness=model%stiffness_start_work)
     ELSE IF (model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -5696,6 +5719,7 @@ CONTAINS
     IF (ALLOCATED(model%load_jv_work)) DEALLOCATE (model%load_jv_work)
     IF (ALLOCATED(model%load_start_work)) DEALLOCATE (model%load_start_work)
     IF (ALLOCATED(model%tension_start_work)) DEALLOCATE (model%tension_start_work)
+    IF (ALLOCATED(model%stiffness_start_work)) DEALLOCATE (model%stiffness_start_work)
     model%load_start_valid = .FALSE.
   END SUBROUTINE clear_model_load_contributor_workspace
 
@@ -6282,7 +6306,8 @@ CONTAINS
     END IF
   END SUBROUTINE model_contributor_load_banded
 
-  SUBROUTINE model_contributor_force(model, q, v, force, ErrStat, ErrMsg, end_nodes_only, law_tension)
+  SUBROUTINE model_contributor_force(model, q, v, force, ErrStat, ErrMsg, end_nodes_only, law_tension, &
+                                     law_stiffness)
     !! Assemble all configured non-structural model load contributors without tangents.
     !! end_nodes_only: only the first and last node's entries are needed (end-force recovery);
     !! the other nodes and the elements not touching an end are skipped, and the two end entries
@@ -6292,6 +6317,9 @@ CONTAINS
     !! carries the finiteness check of the full assembly.
     !! law_tension (n_elem; with a full assembly): the along-chord tension of the element force
     !! of the viscoelastic and Syrope laws in `force`, zero for every other element.
+    !! law_stiffness (n_elem; with law_tension): the axial stiffness of those laws at (q, v), in
+    !! N per metre of elongation: EA_D/l0 (the dynamic branch, at the committed state of a
+    !! load-dependent EA_D) and Syrope's K1/l0 = (alpha + beta T_mean)/l0; zero elsewhere.
     TYPE(CD_ModelType), INTENT(IN) :: model
     REAL(wp), INTENT(IN) :: q(:), v(:)
     REAL(wp), INTENT(OUT) :: force(:)
@@ -6299,6 +6327,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: end_nodes_only
     REAL(wp), INTENT(OUT), OPTIONAL :: law_tension(:)
+    REAL(wp), INTENT(OUT), OPTIONAL :: law_stiffness(:)
 
     INTEGER :: n, e, i, ix, iy, iz, idx(6), nn
     LOGICAL :: ends
@@ -6323,6 +6352,14 @@ CONTAINS
         RETURN
       END IF
       law_tension = CD_ZERO
+    END IF
+    IF (PRESENT(law_stiffness)) THEN
+      IF (.NOT. PRESENT(law_tension) .OR. SIZE(law_stiffness) /= model%n_elem) THEN
+        ErrStat = CD_MODEL_BADINPUT
+        ErrMsg = 'CableDyn_Model: model force law stiffnesses need the law tensions and shape (n_elem)'
+        RETURN
+      END IF
+      law_stiffness = CD_ZERO
     END IF
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -6429,6 +6466,7 @@ CONTAINS
           IF (ErrStat /= 0) RETURN
           CALL scatter_element_vector(force, idx, f2)
           IF (PRESENT(law_tension)) law_tension(e) = element_law_tension()
+          IF (PRESENT(law_stiffness)) law_stiffness(e) = ea_d_eff/model%l0(e)
         END IF
       END IF
       IF (model%has_syrope) THEN
@@ -6437,6 +6475,8 @@ CONTAINS
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL scatter_element_vector(force, idx, f2)
           IF (PRESENT(law_tension)) law_tension(e) = element_law_tension()
+          IF (PRESENT(law_stiffness)) law_stiffness(e) = (model%syrope_type(e)%alpha + &
+                                                          model%syrope_type(e)%beta*syr_tm)/model%l0(e)
         END IF
       END IF
       IF (model%has_morison_drag) THEN

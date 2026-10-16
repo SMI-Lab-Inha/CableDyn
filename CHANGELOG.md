@@ -189,9 +189,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   slack exceeds by far (a nearly unstretched segment turning by 90° would otherwise return
   hundreds of times its strain energy), and it fades out continuously as the end state crosses
   the rest length. The viscoelastic and Syrope segments are capped the same way with the tension
-  of their law (the same cable made lightly damped viscoelastic peaks at 0.072 MN at the anchor
-  at `dtM` 0.1 s, a snap that step does not resolve, against 0.145 MN without the cap on its
-  segments and 0.087 to 0.095 MN at 0.5 to 2.5 ms). The seabed contact of
+  of their law, their end tension estimated with a secant stiffness bounded by the law's axial
+  stiffness, so that damping carried at a vanishing stretch does not make the cap switch
+  abruptly (the same cable made lightly damped viscoelastic peaks at 0.085 MN at the anchor at
+  `dtM` 0.1 s, a snap that step does not resolve, against 0.145 MN without the cap on its
+  segments and 0.082 to 0.095 MN at 0.5 to 2.5 ms). The seabed contact of
   a node that lifts off within a step is not capped (see the manual's theory page). At the
   default `rhoInf` the reproducers now give 0.10 / 0.09 MN, 0.092 / 0.106 MN, 0.075 / 0.043 MN
   and 1.80 MN, as their references, and the stiff-seabed line runs to completion; the
