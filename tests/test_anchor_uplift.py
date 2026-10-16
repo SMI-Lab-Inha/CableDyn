@@ -446,10 +446,15 @@ def main() -> int:
     # there: the anchor node is held at the seabed depth and the laid run sinks delta = w/(kBot d) into
     # the penalty seabed, a bend of about 2 delta / l0^2 over the anchor element (EI 2 delta / l0^2 =
     # 2.1 N.m on 2.5 m elements), which the bound allows on top of 2 % of the weight moment
-    w_bare = (36.70 - RHO * math.pi / 4.0 * 0.16**2) * G
-    ei_bare, kbot = 1.99e4, 3.0e6
+    bare_row = re.search(r"^bare\s+(\S+)\s+(\S+)\s+\S+\s+\S+\s+(\S+)", src, re.MULTILINE)
+    kbot_row = re.search(r"^(\S+)\s+kBot\b", src, re.MULTILINE)
+    check(bare_row is not None and kbot_row is not None, "mixed example: bare LINE TYPES row and kBot option")
+    assert bare_row is not None and kbot_row is not None
+    d_bare, mass_bare, ei_bare = (float(v) for v in bare_row.groups())
+    kbot = float(kbot_row.group(1))
+    w_bare = (mass_bare - RHO * math.pi / 4.0 * d_bare**2) * G
     m_end = w_bare * l0_end**2 / 12.0
-    m_sink = ei_bare * 2.0 * w_bare / (kbot * 0.16) / l0_end**2
+    m_sink = ei_bare * 2.0 * w_bare / (kbot * d_bare) / l0_end**2
     bound = 0.02 * m_end + m_sink
     bm_anchor, bm_next = hist.column(f"BendMom4N{n_anchor}"), hist.column(f"BendMom4N{n_anchor - 1}")
     check(bool(np.all(np.abs(bm_anchor) < bound)) and bool(np.all(np.abs(bm_next) < bound)) and

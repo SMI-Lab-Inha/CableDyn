@@ -430,7 +430,7 @@ MODULE CableDyn_HermiteCableDynamic
     ! at (rc_q/rc_v/rc_a(:, e)), the only state its residual depends on, so a node query costs two
     ! element comparisons and the channels of one output row share one evaluation per element.
     ! Allocated once at initialisation; rc_epoch counts the loads configured after it (drag,
-    ! waves, added mass, held fluid, contact).
+    ! axial damping, waves, added mass, held fluid, contact).
     INTEGER :: rc_epoch = 0, rc_key_epoch = -1
     LOGICAL :: rc_key_ok = .FALSE.
     REAL(wp) :: rc_t = CD_ZERO

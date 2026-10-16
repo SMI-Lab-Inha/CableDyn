@@ -214,7 +214,7 @@ on every route:
      - node position in the global frame (Z up, ``Z = 0`` at the still-water line)
    * - ``Tension``
      - ``(N)``
-     - nodal effective tension, the segment tension (same definition as ``Ten<L>N<J>``)
+     - nodal effective tension (same definition as ``Ten<L>N<J>``)
    * - ``Curvature``
      - ``(1/m)``
      - nodal curvature (same definition as ``Curv<L>N<J>``)
