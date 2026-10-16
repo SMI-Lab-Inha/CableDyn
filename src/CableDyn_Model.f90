@@ -144,11 +144,14 @@ MODULE CableDyn_Model
     ! effective stretch rate.
     REAL(wp), ALLOCATABLE :: l0_dot(:)
     ! The unstretched lengths and rates the committed state was reached with (active line
-    ! control). A step that follows a length change evaluates its alpha-level terms with the
-    ! blended lengths (1 - alpha_f) l0 + alpha_f l0_c (and rates likewise), so the committed
-    ! state keeps its own lengths in the generalised-alpha blend; each successful step makes
-    ! the present lengths the committed ones. l0_c_rollback / recovery_l0_c are the copies of
-    ! the system stage-then-commit and of the recovering step.
+    ! control), so the committed state keeps its own lengths in the generalised-alpha blend of
+    ! the step that follows a length change (CD_Step_Model). With the force blend the step-start
+    ! force takes l0_c and l0_dot_c (with the external load and seabed coefficients of l0_c),
+    ! the end-of-step force the present lengths and rates, and only the inertia the blended
+    ! lengths (1 - alpha_f) l0 + alpha_f l0_c; under False alpha_force_blend every alpha-level
+    ! term takes the blended lengths and rates. Each successful step makes the present lengths
+    ! the committed ones. l0_c_rollback / recovery_l0_c are the copies of the system
+    ! stage-then-commit and of the recovering step.
     REAL(wp), ALLOCATABLE :: l0_c(:), l0_dot_c(:)
     REAL(wp), ALLOCATABLE :: l0_c_rollback(:), l0_dot_c_rollback(:), recovery_l0_c(:), recovery_l0_dot_c(:)
     ! Per-element distributed load per unit LENGTH (3, n_elem) plus the
@@ -3744,8 +3747,11 @@ CONTAINS
     !! INITIAL UnstrLen). Callers owning point bindings (the system) must recompute
     !! any end-node mass-diagonal shares after this call.
     !! The committed state keeps its acceleration and the lengths it was reached with
-    !! (l0_c, l0_dot_c): the next step blends them into its alpha-level terms
-    !! (CD_Step_Model). restored = .TRUE. (a checkpoint restart re-applying the command of
+    !! (l0_c, l0_dot_c). With the force blend the next step (CD_Step_Model) evaluates its
+    !! step-start force at l0_c and l0_dot_c, its end-of-step force at the new lengths and
+    !! rates, and only its inertia at the blended lengths (1 - alpha_f) l0 + alpha_f l0_c;
+    !! under False alpha_force_blend it blends the lengths and rates into every alpha-level
+    !! term. restored = .TRUE. (a checkpoint restart re-applying the command of
     !! the committed state) makes the new length and rate the committed ones as well. A rate
     !! of -0 is stored as +0, so a zero command of either sign leaves an uncontrolled model
     !! bit-identical (the committed-length test compares bits).
@@ -4633,35 +4639,37 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'external-load update requires initialized rollback workspace')
       RETURN
     END IF
-    model%f_ext_rollback = model%f_ext
-    model%a_rollback = model%a
-    model%f_ext = f_ext
-    CALL CD_Recompute_Model_Acceleration(model, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_MODEL_OK) THEN
-      model%f_ext = model%f_ext_rollback
-      model%a = model%a_rollback
-      RETURN
-    END IF
-    ! Maintain the distributed-load invariant f_ext = remainder + assemble(dist, l0):
-    ! a later segment-length update RECONSTRUCTS f_ext from the remainder, so a
-    ! runtime external-load update that skipped this would be silently WIPED by the
-    ! next control command. Recomputed only on success (the rollback path above
-    ! restores the committed pair untouched).
-    IF (ALLOCATED(model%dist_load)) THEN
-      BLOCK
-        REAL(wp) :: f_dist(SIZE(model%f_ext))
-        INTEGER :: es2
-        CHARACTER(160) :: em2
+    ! Maintain the distributed-load invariant f_ext = remainder + assemble(dist, l0): a later
+    ! segment-length update RECONSTRUCTS f_ext from the remainder, so a runtime external-load
+    ! update that skipped this would be silently WIPED by the next control command. The
+    ! remainder is stored BEFORE the acceleration recompute, which under the force blend after
+    ! a pending length change rebuilds the committed external load from it
+    ! (enter_committed_lengths); a failed recompute restores f_ext, the remainder and a.
+    BLOCK
+      REAL(wp) :: f_dist(SIZE(model%f_ext))
+      REAL(wp), ALLOCATABLE :: base_entry(:)
+      INTEGER :: es2
+      CHARACTER(160) :: em2
+      IF (ALLOCATED(model%dist_load)) THEN
         CALL CD_Assemble_Distributed_Load(model%elem_conn, model%l0, model%dist_load, f_dist, es2, em2)
         IF (es2 /= 0) THEN
-          model%f_ext = model%f_ext_rollback
-          model%a = model%a_rollback
           CALL fail(ErrStat, ErrMsg, 'external-load update: distributed-load remainder failed: '//TRIM(em2))
           RETURN
         END IF
-        model%f_ext_dist_base = model%f_ext - f_dist
-      END BLOCK
-    END IF
+        base_entry = model%f_ext_dist_base
+      END IF
+      model%f_ext_rollback = model%f_ext
+      model%a_rollback = model%a
+      model%f_ext = f_ext
+      IF (ALLOCATED(model%dist_load)) model%f_ext_dist_base = model%f_ext - f_dist
+      CALL CD_Recompute_Model_Acceleration(model, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_MODEL_OK) THEN
+        model%f_ext = model%f_ext_rollback
+        model%a = model%a_rollback
+        IF (ALLOCATED(base_entry)) model%f_ext_dist_base = base_entry
+        RETURN
+      END IF
+    END BLOCK
   END SUBROUTINE CD_Update_Model_External_Loads
 
   SUBROUTINE CD_Update_Model_CoupledMotion(model, q_coupled, v_coupled, a_coupled, ErrStat, ErrMsg)

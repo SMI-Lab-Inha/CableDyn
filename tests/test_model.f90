@@ -557,6 +557,36 @@ CONTAINS
                  nan_max_abs(a%l0_c - l1) <= 0.0_wp .AND. a%l0_dot_c(NE) == LDOT, 'committed-side:step-commits')
     CALL CD_End_Model(a, es, em)
     CALL CD_End_Model(b, es, em)
+
+    ! An external-load update between the command and the step: the committed acceleration it
+    ! re-derives carries the new load (the distributed-load remainder is refreshed before the
+    ! committed external load is rebuilt from it), as the uncommanded twin given the same load.
+    BLOCK
+      REAL(wp) :: bump(NDOF), scale_a
+      bump = 0.0_wp
+      bump(3*2 - 1) = 3.0_wp
+      bump(3*3) = -4.0_wp
+      CALL CD_Init_Model(a, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                         dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                         seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+      CALL CD_Init_Model(b, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                         dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                         seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-init: '//TRIM(em))
+      CALL CD_Update_Model_SegmentLength(a, NE, l1(NE), LDOT, es, em)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-command: '//TRIM(em))
+      CALL CD_Update_Model_External_Loads(a, fw1 + bump, es, em)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-update-a: '//TRIM(em))
+      CALL CD_Update_Model_External_Loads(b, fw + bump, es, em)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-update-b: '//TRIM(em))
+      scale_a = MAXVAL(ABS(b%a))
+      CALL require(scale_a > 0.0_wp .AND. nan_max_abs(a%a - b%a) <= 1.0e-12_wp*scale_a, &
+                   'committed-side:extload-recompute-equals-twin')
+      CALL require(nan_max_abs(a%f_ext - (fw1 + bump)) <= 0.0_wp .AND. nan_max_abs(a%l0_c - l0) <= 0.0_wp, &
+                   'committed-side:extload-keeps-present-load-and-committed-lengths')
+      CALL CD_End_Model(a, es, em)
+      CALL CD_End_Model(b, es, em)
+    END BLOCK
   END SUBROUTINE case_segment_force_blend_committed_side
 
   SUBROUTINE case_copy_model_preserves_state()
