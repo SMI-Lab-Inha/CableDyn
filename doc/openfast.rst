@@ -178,7 +178,8 @@ Before trusting a run, confirm in the console:
 #. the ``dtM`` line and the model inventory (``Created CableDyn model: ... line object(s)``);
 #. for every line, the converged fairlead effective tension, force vector, inclination,
    declination, and azimuth at the static equilibrium — printed unconditionally, whether or not
-   ``OUTPUTS`` is present;
+   ``OUTPUTS`` is present — followed by the line's static-initialisation notes, if any
+   (``Note: line ...``, for example a folded ``EI = 0`` layout; see :doc:`troubleshooting`);
 #. ``Requested CableDyn OUTPUTS at t = 0 s``, the deck's channels in the first output row. With
    SeaState waves or current the header adds ``SeaState kinematics at t = 0``: the equilibrium is
    solved before the kinematics act, so a line-end tension at t = 0 can differ slightly from the

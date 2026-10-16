@@ -624,7 +624,8 @@ lines. `CdA` adds lumped drag and `Ca` lumped added mass in EI = 0 dynamic runs 
 profile current or deck waves. A `Connect`/`Free` point with `Mass` or `Vol` (a clump weight or
 a buoy) has its own seabed contact, the line contact law with stiffness `kBot·A` and damping
 `cBot·A` over the footprint `A = V^(2/3)`, where `V = Vol`, or `Mass/7850` (solid steel) when
-`Vol = 0`; a point with neither has none (see the theory manual, Seabed contact).
+`Vol = 0`; a point with neither has none. A `Point3` buoy has the same contact over the footprint
+of its BODY `Mass`/`Vol` (see the theory manual, Seabed contact).
 `Connect`/`Free` points require `dtM`/`TMax` in the
 standalone driver. Non-zero `Mass`/`Vol`/`CdA`/`Ca` on `Fixed`, `Coupled`, `Vessel`, `Body<N>`,
 `Rod<N>A/B`, or `Turbine<J>` points is rejected.
@@ -1045,8 +1046,8 @@ syntax form. The most frequently edited keywords are:
 | `rhoW` / `WtrDnsty` | water density [kg/m³] | 1025.0 |
 | `WtrDpth` | water depth [m]; seabed plane z = −WtrDpth. Omit for a suspended or taut line with no bottom contact | none |
 | `bathymetryFile` / `bathymetry_file` / `seafloorFile` | structured bathymetry file (rows `x y depth`); mutually exclusive with `WtrDpth`. Supported for static EI = 0, independent-line EI = 0 dynamic, EI = 0 `Connect`/`Free` point-system line contact, cubic-Hermite finite-EI dynamic with held or prescribed-translation ends, free/fixed rod dynamic, and Rigid6 dynamic decks | none |
-| `kBot` | seabed penalty stiffness base [Pa/m = N/m³], scaled per line node and rod contact station by diameter × tributary length, at a Free/Connect point with Mass or Vol by its footprint `V^(2/3)` (`V` = Vol, or Mass/7850), and by a fixed 1 m² reference area at a Rigid6 reference point (only with `WtrDpth`/`bathymetryFile`) | 1.0e5 |
-| `cBot` | seabed normal damping base [Pa·s/m = N·s/m³], scaled like `kBot`; active only on contacting nodes moving downward | 1.0e4 |
+| `kBot` | seabed penalty stiffness base [Pa/m = N/m³], scaled per line node and rod contact station by diameter × tributary length, at a Free/Connect point with Mass or Vol and a Point3 buoy by its footprint `V^(2/3)` (`V` = Vol, or Mass/7850), and by a fixed 1 m² reference area at a Rigid6 reference point (only with `WtrDpth`/`bathymetryFile`) | 1.0e5 |
+| `cBot` | seabed normal damping base [Pa·s/m = N·s/m³], scaled like `kBot` (also over a point footprint); active only on contacting nodes and points moving downward | 1.0e4 |
 | `bodyIC` | `static`: free `Rigid6` bodies and free rods, with `Free`/`Connect` points, start at their static equilibrium; `deck`: they start at their deck pose (for example a free-decay test) | `static` |
 | `frictionMu` / `mu` | isotropic seabed friction coefficient: stick-slip springs on line nodes (held by the static solve too in a deck current, from the still-water laid shape, or toward the as-laid position with `staticsFriction asLaid`), regularised kinetic friction on rods and bodies; requires `WtrDpth` or `bathymetryFile`, and `dtM`/`TMax` in the standalone driver. Rejected on some routes (decks with `Connect`/`Free` points, `Point3` buoys or `FAILURE` rows, and body or rod decks off the default monolithic march); see the [OPTIONS reference](options.rst) | 0 |
 | `frictionMuAxial` / `frictionMuLateral` | anisotropic line friction: the coefficients along and across the local line axis (OrcaFlex axial/normal); an omitted one takes `frictionMu`; both positive or both zero; rods and bodies use the lateral one | `frictionMu` |

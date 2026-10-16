@@ -1071,28 +1071,31 @@ is compressed there. On the Hermite path the contact acts on the nodal position 
 on the tangent DOFs.
 
 **Free and Connect points.** A clump weight or a buoy (a ``Free`` or ``Connect`` point with
-``Mass`` or ``Vol``) has its own seabed contact, the line law above with the stiffness
-:math:`k_p = k_\text{Bot} A` and the damping :math:`c_p = c_\text{Bot} A` over its contact
-footprint
+``Mass`` or ``Vol``, or a ``Point3`` buoy, whose ``Body<N>`` attachment point steps as a free
+point with the BODY ``Mass`` and ``Vol``) has its own seabed contact, the line law above with
+the stiffness :math:`k_p = k_\text{Bot} A` and the damping :math:`c_p = c_\text{Bot} A` over its
+contact footprint
 
 .. math::
 
    A = V^{2/3}, \qquad V = \begin{cases} \text{Vol}, & \text{Vol} > 0, \\
    \text{Mass}/\rho_s, & \text{otherwise}, \end{cases}
 
-the area of a cube of the point's volume (the OrcaFlex 3D-buoy default contact area, volume
-over height, for a cube), with :math:`\rho_s = 7850\ \mathrm{kg/m^3}`: a clump declared by its
-mass alone, its buoyancy left out, takes the volume of solid steel of that mass. A point with
-neither (a massless line junction) has no footprint. Without it only the end nodes of the
+the face area of a cube of the point's volume, CableDyn's own area-equivalent of a compact
+body (a point carries no shape), with :math:`\rho_s = 7850\ \mathrm{kg/m^3}`: a clump declared
+by its mass alone, its buoyancy left out, takes the volume of solid steel of that mass. A point
+with neither (a massless line junction) has no footprint. Without it only the end nodes of the
 attached lines held a point on the bed, over their tributary length: a 50 t clump between two
 polyester lines (``kBot = 1e5``) sank 2.8 m into the seabed; on its 3.44 m² footprint it rests
 0.95 m deep, within the 1.43 m that its weight alone would press it in, and the lines no longer
-hang it from the seabed. MoorDyn points have no seabed contact. The contact acts along the
-surface normal of a sloped or rounded bathymetry, in the point static equilibrium and in the
-monolithic and staggered point steps alike (in the staggered step its stiffness and damping are
-linearly implicit, like the end blocks of the attached lines), so a grounded point starts at
-rest. The contact is frictionless: the point routes reject ``frictionMu``. A point clear of the
-seabed sees exactly no contact load, and its results are unchanged.
+hang it from the seabed. The contact acts along the surface normal of a sloped or rounded
+bathymetry, in the point static equilibrium and in the monolithic and staggered point steps
+alike (in the staggered step its stiffness and damping are linearly implicit, like the end
+blocks of the attached lines), so a grounded point starts at rest. A ``Point3`` buoy is not
+placed by the static solve (it starts at its deck position) but carries the same contact in
+every march, the monolithic and staggered steps and the coupled point step of the OpenFAST
+aggregate and the C API. The contact is frictionless: the point routes reject ``frictionMu``. A
+point clear of the seabed sees exactly no contact load, and its results are unchanged.
 
 Static equilibrium
 ------------------
@@ -1163,22 +1166,34 @@ point's weight and buoyancy, its current drag, and its own seabed contact (see S
 contact above). It is the rigid-body equilibrium solve described under *Rigid-body initial
 condition* below, with points as the only unknowns.
 
-A tension-only line on a frictionless seabed can reach a folded (hairpin) equilibrium: a
-current toward the anchor, or a seabed falling past it, drives the grounded run beyond the
-anchor, and the run folds back to it with zero tension at the fold; a slack line can likewise
-be laid out and back. The equilibrium is kept, and the driver prints one note per such line,
-on every ``EI = 0`` route (static, ``TMax = 0`` and the dynamic initial condition, the point
-and multibody systems, and the line report of the OpenFAST aggregate), naming the fold and its
-cause at the fold node (the current, the seabed slope, or a slack run): ``the static layout
-carries the grounded run ... m past its anchor, where it folds back (a hairpin)`` when grounded
-nodes lie more than 1 % of the horizontal span plus 0.5 m beyond a grounded end whose other
-end is suspended, measured along the horizontal chord (the criterion of the finite-EI note
-below), or ``the static layout folds the grounded run back on itself (a ... deg turn at node
-...)`` when the run turns by more than 150° at a node whose two neighbours are also grounded
-(within 5 cm of the floor). Seabed friction holds the run in a current, but the static solve
-applies it against a deck current only, so on a slope only a shorter line prevents the fold.
-The note never changes a result. No example deck and no ``EI = 0`` line of the statics test
-matrices prints it except the folded layouts it describes.
+A tension-only line on a seabed that does not hold it can reach a folded (hairpin)
+equilibrium: a current toward the anchor, or a seabed falling past it, drives the grounded run
+beyond the anchor, and the run folds back to it with zero tension at the fold; a slack line can
+likewise be laid out and back. The equilibrium is kept, and the driver prints one note per such
+line, on every ``EI = 0`` route (static, ``TMax = 0`` and the dynamic initial condition, the
+point and multibody systems, and the OpenFAST aggregate, whose line report returns it and whose
+OpenFAST initialisation report prints it): ``the static layout carries the grounded run ... m
+past its anchor, where it folds back (a hairpin)`` when grounded nodes lie more than 1 % of the
+horizontal span plus 0.5 m beyond a grounded end whose other end is suspended, measured along
+the horizontal chord (the criterion of the finite-EI note below; only for a horizontal span of
+at least a tenth of the water depth at that end, or of the height of the other end above it if
+that is larger, so that a near-vertical line, whose side away from its other end is not
+defined, is left to the next test), or ``the static layout folds the grounded run back on
+itself (a ... deg turn at node ...)`` when the run turns by more than 150°
+at a node whose two neighbours are also grounded (within 5 cm of the floor). The note names the
+cause: a deck current acting on the line (a current profile that vanishes at the seabed still
+pulls the run through the suspended span), a seabed steeper than 0.5° at the fold, or neither
+(a slack run). Its remedy follows the deck's static friction. Without ``frictionMu``: friction
+against a current, or friction toward the as-laid position (``staticsFriction asLaid``) on a
+slope, since with the default ``staticsFriction none`` the static solve applies friction against
+a deck current only. With ``frictionMu`` and ``staticsFriction none`` on a slope:
+``staticsFriction asLaid``. With friction that already acts and still does not hold the run, or
+on a deck whose route rejects ``frictionMu`` (``Connect``/``Free`` points, ``Point3`` buoys) or
+``staticsFriction asLaid`` (bodies and rods): a shorter line. Under ``staticsFriction asLaid``
+with a ``layAzimuth`` that lays the line from its lower end away from its other end, the deck
+itself lays the run past that end and no note is made. The note never changes a result. No
+example deck and no ``EI = 0`` line of the statics test matrices prints it except the folded
+layouts it describes.
 
 Hermite path
 ~~~~~~~~~~~~
@@ -1830,7 +1845,7 @@ Deck ``POINTS``, ``BODIES``, and ``RODS`` records follow the MoorDyn object mode
   line ends.
 - **Free points** (``Point3`` buoys, clump weights, connectors) have three translational DOFs.
   Each carries its weight and buoyancy :math:`(\rho V - m)\,g\,\mathbf{e}_z`, point loads, its
-  own seabed contact (a ``Free`` or ``Connect`` point, see Seabed contact above), and,
+  own seabed contact (with ``Mass`` or ``Vol``, see Seabed contact above), and,
   while below the surface, lumped Morison terms
   :math:`\tfrac{1}{2}\rho\,C_dA\,\lvert\mathbf{u}_r\rvert\mathbf{u}_r + \rho V(1 + C_a)\,\dot{\mathbf{u}}_f`
   with added mass :math:`\rho V C_a`. Points are advanced around the implicit line step with

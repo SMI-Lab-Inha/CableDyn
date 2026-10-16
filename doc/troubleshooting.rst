@@ -653,10 +653,14 @@ Warnings and notes that do not stop a run
        deck as written, but not the usual one. If the real seabed holds the line, declare
        ``frictionMu``; otherwise check the line length and the current, and inspect
        ``<out_root>.static.out`` before using the layout. On an ``EI = 0`` line the note names
-       the cause at the fold: the current, a seabed sloping down past the anchor (the static
-       solve applies ``frictionMu`` against a deck current only, so there only a shorter line
-       prevents the fold), or neither, when the folded run carries no tension (a slack line laid
-       out and back; a shorter line removes it).
+       the cause, the current, a seabed sloping down past the anchor, or neither (a slack line
+       laid out and back, which a shorter line removes), and the remedy that fits the deck: with
+       the default ``staticsFriction none`` the static solve applies ``frictionMu`` against a
+       deck current only, so on a slope the note points to ``staticsFriction asLaid``, which
+       holds the run toward its as-laid position; where friction already acts, or the deck's
+       route rejects it (``Connect``/``Free`` points, ``Point3`` buoys), it points to a shorter
+       line. A run that ``staticsFriction asLaid`` lays past its anchor along ``layAzimuth`` is
+       the deck's own layout and is not noted.
    * - ``Note: line ...: the static layout folds the grounded run back on itself (a ... deg turn
        at node ..., a hairpin) ...``
      - an ``EI = 0`` line whose grounded run turns back by more than 150° at a node, away from
