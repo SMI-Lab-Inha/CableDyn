@@ -6263,21 +6263,31 @@ CONTAINS
     END IF
     IF (PRESENT(forbid_deck_ambient)) THEN
       IF (forbid_deck_ambient) THEN
+        ! The two callers that forbid deck ambient fluid: the FAST.Farm shell (n_turbines >= 1) and
+        ! the standalone runner of a mixed EI=0/finite-EI deck. Each gets the advice of its route.
         IF (opts%has_wave) THEN
-          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck waves OPTION is not supported on this '// &
-                    'route: a host-driven or mixed EI=0/finite-EI deck (a standalone mixed deck, the C API, '// &
-                    'OpenFAST or FAST.Farm) runs the mooring in STILL WATER, because no ambient fluid field covers '// &
-                    'its span. '// &
-                    'Remove the waves OPTION, or run a deck whose lines are all EI=0 or all finite-EI (those '// &
-                    'standalone routes evaluate the deck waves), or let the OpenFAST host supply them'); RETURN
+          IF (nturb > 0) THEN
+            CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck waves OPTION is not supported in '// &
+                      'FAST.Farm: the shared mooring of a farm runs in STILL WATER (no fluid field spans the '// &
+                      'farm). Remove the waves OPTION'); RETURN
+          END IF
+          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck waves OPTION is not supported for a '// &
+                    'standalone mixed EI=0/finite-EI deck: this route runs the mooring in STILL WATER, because '// &
+                    'no ambient fluid field covers its span. Remove the waves OPTION, run a deck whose lines are '// &
+                    'all EI=0 or all finite-EI (those standalone routes evaluate the deck waves), or couple the '// &
+                    'deck to OpenFAST (CompMooring = 5) with SeaState, which supplies the waves'); RETURN
         END IF
         IF (opts%has_current .OR. opts%has_current_profile) THEN
-          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported on this '// &
-                    'route: a host-driven or mixed EI=0/finite-EI deck (a standalone mixed deck, the C API, '// &
-                    'OpenFAST or FAST.Farm) runs the mooring in STILL WATER, because no ambient fluid field covers '// &
-                    'its span. '// &
-                    'Remove the current OPTION, or run a deck whose lines are all EI=0 or all finite-EI (those '// &
-                    'standalone routes evaluate the deck current), or let the OpenFAST host supply it'); RETURN
+          IF (nturb > 0) THEN
+            CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported in '// &
+                      'FAST.Farm: the shared mooring of a farm runs in STILL WATER (no fluid field spans the '// &
+                      'farm). Remove the current OPTION'); RETURN
+          END IF
+          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported for a '// &
+                    'standalone mixed EI=0/finite-EI deck: this route runs the mooring in STILL WATER, because '// &
+                    'no ambient fluid field covers its span. Remove the current OPTION, run a deck whose lines are '// &
+                    'all EI=0 or all finite-EI (those standalone routes evaluate the deck current), or couple the '// &
+                    'deck to OpenFAST (CompMooring = 5) with SeaState, which supplies the current'); RETURN
         END IF
       END IF
     END IF
@@ -9637,16 +9647,27 @@ CONTAINS
   SUBROUTINE append_note_line(buffer, text)
     !! Append one initialisation note as a new text line of buffer. A note that does not fit
     !! with room left for the omission marker is replaced by the marker, which ends the buffer,
-    !! so no note is ever cut short.
+    !! so no note is ever cut short. Notes that ended with the marker in a shorter buffer (a
+    !! cable's notes copied into a line summary) still take a note that fits: it goes before
+    !! the marker, which stays last.
     CHARACTER(*), INTENT(INOUT) :: buffer
     CHARACTER(*), INTENT(IN) :: text
     CHARACTER(*), PARAMETER :: OMITTED = 'further initialisation notes omitted'
-    INTEGER :: n
+    INTEGER :: n, nb
     IF (LEN_TRIM(text) == 0) RETURN
     n = LEN_TRIM(buffer)
     IF (n > 0) THEN
       IF (n >= LEN(OMITTED)) THEN
-        IF (buffer(n - LEN(OMITTED) + 1:n) == OMITTED) RETURN
+        IF (buffer(n - LEN(OMITTED) + 1:n) == OMITTED) THEN
+          nb = MAX(0, n - LEN(OMITTED) - 1) ! the notes before the marker and its line break
+          IF (nb > 0) THEN
+            IF (nb + 1 + LEN_TRIM(text) + 1 + LEN(OMITTED) <= LEN(buffer)) &
+              buffer = buffer(1:nb)//NEW_LINE('a')//TRIM(text)//NEW_LINE('a')//OMITTED
+          ELSE IF (LEN_TRIM(text) + 1 + LEN(OMITTED) <= LEN(buffer)) THEN
+            buffer = TRIM(text)//NEW_LINE('a')//OMITTED
+          END IF
+          RETURN
+        END IF
       END IF
       IF (n + 1 + LEN_TRIM(text) + 1 + LEN(OMITTED) <= LEN(buffer)) THEN
         buffer = buffer(1:n)//NEW_LINE('a')//TRIM(text)

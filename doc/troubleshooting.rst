@@ -284,12 +284,16 @@ Model data
        deck (the ``EI = 0`` lines on the Coupled point directly): a host (OpenFAST
        ``CompMooring = 5`` or the C API) drives its Coupled points, and the standalone driver
        runs it with them held still (that route takes no ``motionFile`` either).
-   * - ``the deck current OPTION is not supported on this route`` / ``the deck waves OPTION ...``
-     - a mixed ``EI = 0``/finite-EI deck (run standalone, through the C API, OpenFAST or
-       FAST.Farm) runs the mooring in still water: no ambient fluid field covers its span, and
-       a coupled host supplies its own waves and current. Remove the ``waves``/``current``
-       OPTION, run a deck whose lines are all ``EI = 0`` or all finite-EI (those standalone
-       routes evaluate the deck waves and current), or let the OpenFAST host supply them.
+   * - ``the deck current OPTION is not supported for a standalone mixed EI=0/finite-EI deck`` /
+       ``the deck waves OPTION ...``
+     - the standalone driver runs a mixed ``EI = 0``/finite-EI deck in still water: no ambient
+       fluid field covers its span. Remove the ``waves``/``current`` OPTION, run a deck whose
+       lines are all ``EI = 0`` or all finite-EI (those standalone routes evaluate the deck waves
+       and current), or couple the deck to OpenFAST (``CompMooring = 5``) with SeaState, which
+       supplies them.
+   * - ``the deck current OPTION is not supported in FAST.Farm`` / ``the deck waves OPTION ...``
+     - the shared mooring of a FAST.Farm farm runs in still water (no fluid field spans the
+       farm). Remove the ``waves``/``current`` OPTION.
    * - ``POINT <n> (Fixed) lies below the seabed ... by <d> m, more than the <tol> m seabed
        tolerance``
      - a Fixed anchor within ``max(1 mm, 1e-5 |z_seabed|)`` of the seabed (``-WtrDpth``, or the
