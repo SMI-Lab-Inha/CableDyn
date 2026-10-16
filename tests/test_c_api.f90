@@ -12,7 +12,8 @@ PROGRAM test_c_api
                            CableDyn_UpdatePointFluidFields, CableDyn_Step, CableDyn_CalcOutput, &
                            CableDyn_CalcOutputDerivatives, CableDyn_GetCoupledMotion, CableDyn_GetLastError, &
                            CableDyn_GetVersion, &
-                           CableDyn_GetVersionString, CableDyn_NCoupledDOF, CableDyn_NPoints, CableDyn_NLines
+                           CableDyn_GetVersionString, CableDyn_NCoupledDOF, CableDyn_NPoints, CableDyn_NLines, &
+                           CableDyn_SaveState, CableDyn_RestoreState
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_Step_Moving, &
                                          CD_AGG_CalcOutput, CD_AGG_GetMovingPointMesh, CD_AGG_End, CD_AGG_OK
@@ -539,7 +540,8 @@ CONTAINS
   SUBROUTINE case_deck_bodies_rods()
     !! A deck with a free rod (and one with a free Rigid6 body) initializes through the aggregate:
     !! the coupled DOFs are its Coupled points, the step is the deck dtM, and 20 driven steps
-    !! reproduce CD_AGG driven directly bit-for-bit (loads and coupled motion). A mismatched dt,
+    !! reproduce CD_AGG driven directly bit-for-bit (loads and coupled motion), also across a
+    !! SaveState / three trial steps / RestoreState rewind half way. A mismatched dt,
     !! load derivatives and point fluid fields fail closed by name; a Coupled rod (a 6-DOF host
     !! node) is rejected by the standalone deck rules.
     CHARACTER(*), PARAMETER :: ROD_DECK = 'capi_rod_deck.dat', BODY_DECK = 'capi_body_deck.dat', &
@@ -590,6 +592,21 @@ CONTAINS
       a = 0.0_C_DOUBLE
       maxdiff = 0.0_wp
       DO s = 1, 20
+        IF (s == 11) THEN
+          ! An outer-corrector rewind half way: save, take three trial steps with another motion,
+          ! restore. The march must go on bit for bit with the directly driven aggregate.
+          CALL CableDyn_SaveState(handle, es)
+          CALL require(es == 0_C_INT, 'c-api-objects:save')
+          DO i = 1, 3
+            q(1) = qo(1) - 0.1_C_DOUBLE*REAL(i, C_DOUBLE)
+            v(1) = -0.2_C_DOUBLE
+            CALL CableDyn_Step(handle, 0.005_C_DOUBLE, C_LOC(q), C_LOC(v), C_LOC(a), 3_C_INT, converged, &
+                               stalled, n_iter, es)
+            CALL require(es == 0_C_INT, 'c-api-objects:trial-step')
+          END DO
+          CALL CableDyn_RestoreState(handle, es)
+          CALL require(es == 0_C_INT, 'c-api-objects:restore')
+        END IF
         q(1) = qo(1) + 0.05_C_DOUBLE*SIN(0.5_C_DOUBLE*REAL(s, C_DOUBLE))
         v(1) = 0.025_C_DOUBLE*COS(0.5_C_DOUBLE*REAL(s, C_DOUBLE))
         CALL CableDyn_Step(handle, 0.005_C_DOUBLE, C_LOC(q), C_LOC(v), C_LOC(a), 3_C_INT, converged, stalled, &

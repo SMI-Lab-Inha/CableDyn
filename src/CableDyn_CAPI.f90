@@ -32,7 +32,8 @@ MODULE CableDyn_CAPI
                                CD_FAST_NOT_INITIALIZED, CD_FAST_ALLOCFAIL, CD_FAST_UpdatePointFluidFields
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType
   USE CableDyn_Precision, ONLY: wp, CD_ZERO
-  USE CableDyn_System, ONLY: CD_SystemType, CD_System_Line_NDOF
+  USE CableDyn_System, ONLY: CD_SystemType, CD_System_Line_NDOF, CD_Get_System_PointBlocks, CD_SYSTEM_OK, &
+                             CD_POINT_COUPLED
   IMPLICIT NONE
   PRIVATE
 
@@ -62,6 +63,10 @@ MODULE CableDyn_CAPI
   PUBLIC :: CableDyn_GetBodyState
   PUBLIC :: CableDyn_GetRodState
   PUBLIC :: CableDyn_EvalChannel
+  PUBLIC :: CableDyn_InitDeckAt
+  PUBLIC :: CableDyn_SaveState
+  PUBLIC :: CableDyn_RestoreState
+  PUBLIC :: CableDyn_GetCoupledLayout
 
   INTEGER(C_INT), PARAMETER :: CD_C_OK = 0_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_BAD_HANDLE = 1_C_INT
@@ -74,8 +79,9 @@ MODULE CableDyn_CAPI
   INTEGER(C_INT), PARAMETER :: CD_C_VERSION_PATCH = 1_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_ABI_VERSION = 1_C_INT
   CHARACTER(*), PARAMETER :: CD_C_VERSION_STRING = 'CableDyn 0.1.1 C-ABI 1'
-  !> Minor extension level of ABI 1: 1 adds the in-process object queries.
-  INTEGER(C_INT), PARAMETER :: CD_C_ABI_MINOR = 1_C_INT
+  !> Minor extension level of ABI 1: 1 adds the in-process object queries, 2 the host-coupling
+  !> calls (initialization at host positions, state save/restore, the coupled layout query).
+  INTEGER(C_INT), PARAMETER :: CD_C_ABI_MINOR = 2_C_INT
   !> Object kinds of CableDyn_NObjects / CableDyn_GetObjectInfo.
   INTEGER(C_INT), PARAMETER :: CD_C_OBJ_LINE = 1_C_INT, CD_C_OBJ_POINT = 2_C_INT, CD_C_OBJ_BODY = 3_C_INT, &
                                CD_C_OBJ_ROD = 4_C_INT
@@ -156,6 +162,15 @@ MODULE CableDyn_CAPI
     LOGICAL, ALLOCATABLE :: pt_is_cable(:)
     INTEGER, ALLOCATABLE :: pt_obj(:)
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: no_cables(:)
+    ! The single save slot of CableDyn_SaveState/RestoreState: a deep copy of the route's model
+    ! object (the point system, or the aggregate on the heap) and the aggregate's committed time,
+    ! valid (has_saved) from a SaveState until a successful initialization or a failed
+    ! InitLine/InitLines on a handle whose live model is a point system (drop_point_save_on_failure);
+    ! a failed InitDeck/InitDeckAt, or a failed InitLine/InitLines on an aggregate handle, keeps it.
+    LOGICAL :: has_saved = .FALSE.
+    TYPE(CD_FAST_ModuleType) :: saved_fast
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: saved_agg
+    REAL(wp) :: saved_agg_t = CD_ZERO
     CHARACTER(CD_C_MSG_LEN) :: last_error = ''
   END TYPE CD_C_Handle
 
@@ -225,15 +240,66 @@ CONTAINS
 
     IF (.NOT. blas_runtime_ready(handle, 'CableDyn_InitDeck', err_stat)) RETURN
     CALL cabledyn_input_lock()
-    CALL init_deck_serialised(handle, deck_path_ptr, deck_path_len, err_stat)
+    CALL init_deck_serialised(handle, deck_path_ptr, deck_path_len, 'CableDyn_InitDeck', err_stat)
     CALL cabledyn_input_unlock()
   END SUBROUTINE CableDyn_InitDeck
 
-  SUBROUTINE init_deck_serialised(handle, deck_path_ptr, deck_path_len, err_stat)
-    !! CableDyn_InitDeck body; the caller holds the process-wide input lock.
+  SUBROUTINE CableDyn_InitDeckAt(handle, deck_path_ptr, deck_path_len, q0_ptr, n_q0, err_stat) &
+    BIND(C, NAME='CableDyn_InitDeckAt')
+    !! CableDyn_InitDeck with the static solve at the host's positions of the coupled points:
+    !! every line-bound Coupled/Vessel point starts at its entry of q0 instead of its deck
+    !! coordinates, and the statics (lines, Free/Connect points, bodies and rods) are solved
+    !! with those points held there, at rest. q0 is either the full coupled vector of the
+    !! deck's route (n_q0 = CableDyn_NCoupledDOF after the call; the Fixed, Free and Connect
+    !! blocks are not read) or the Coupled/Vessel blocks alone, in coupled-vector order. A
+    !! deck without line-bound Coupled/Vessel points takes n_q0 = 0 (q0 may then be null).
+    !! Serialised process-wide and transactional like CableDyn_InitDeck.
+    TYPE(C_PTR), VALUE :: handle, deck_path_ptr, q0_ptr
+    INTEGER(C_INT), VALUE :: deck_path_len, n_q0
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    REAL(C_DOUBLE), POINTER :: q0_c(:)
+    REAL(wp), ALLOCATABLE :: positions(:, :)
+    INTEGER :: stat
+
+    IF (.NOT. blas_runtime_ready(handle, 'CableDyn_InitDeckAt', err_stat)) RETURN
+    err_stat = validate_handle(handle, h)
+    IF (err_stat /= CD_C_OK) RETURN
+    IF (n_q0 < 0_C_INT .OR. MOD(n_q0, 3_C_INT) /= 0_C_INT) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeckAt: n_q0 must be a non-negative multiple of 3', &
+                      err_stat)
+      RETURN
+    END IF
+    IF (n_q0 > 0_C_INT .AND. .NOT. C_ASSOCIATED(q0_ptr)) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeckAt: q0 pointer is null', err_stat)
+      RETURN
+    END IF
+    ALLOCATE (positions(3, INT(n_q0)/3), STAT=stat)
+    IF (stat /= 0) THEN
+      CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_InitDeckAt: q0 allocation failed', err_stat)
+      RETURN
+    END IF
+    IF (n_q0 > 0_C_INT) THEN
+      CALL C_F_POINTER(q0_ptr, q0_c, [INT(n_q0)])
+      IF (.NOT. ALL(IEEE_IS_FINITE(q0_c))) THEN
+        CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeckAt: q0 must be finite', err_stat)
+        RETURN
+      END IF
+      positions = RESHAPE(REAL(q0_c, wp), SHAPE(positions))
+    END IF
+    CALL cabledyn_input_lock()
+    CALL init_deck_serialised(handle, deck_path_ptr, deck_path_len, 'CableDyn_InitDeckAt', err_stat, positions)
+    CALL cabledyn_input_unlock()
+  END SUBROUTINE CableDyn_InitDeckAt
+
+  SUBROUTINE init_deck_serialised(handle, deck_path_ptr, deck_path_len, caller, err_stat, positions)
+    !! CableDyn_InitDeck / CableDyn_InitDeckAt body; the caller holds the process-wide input
+    !! lock. positions (3, n): the host positions of CableDyn_InitDeckAt.
     TYPE(C_PTR), VALUE :: handle, deck_path_ptr
     INTEGER(C_INT), VALUE :: deck_path_len
+    CHARACTER(*), INTENT(IN) :: caller
     INTEGER(C_INT), INTENT(OUT) :: err_stat
+    REAL(wp), INTENT(IN), OPTIONAL :: positions(:, :)
 
     TYPE(CD_C_Handle), POINTER :: h
     TYPE(CD_FAST_ModuleType) :: new_fast
@@ -248,20 +314,19 @@ CONTAINS
     err_stat = validate_handle(handle, h)
     IF (err_stat /= CD_C_OK) RETURN
     IF (deck_path_len < 1_C_INT .OR. .NOT. C_ASSOCIATED(deck_path_ptr)) THEN
-      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeck: deck path pointer is null or length is non-positive', &
-                      err_stat)
+      CALL set_status(h, CD_C_BAD_INPUT, caller//': deck path pointer is null or length is non-positive', err_stat)
       RETURN
     END IF
     CALL C_F_POINTER(deck_path_ptr, path_c, [INT(deck_path_len)])
     ALLOCATE (CHARACTER(LEN=INT(deck_path_len)) :: deck_path, STAT=stat)
     IF (stat /= 0) THEN
-      CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_InitDeck: deck path allocation failed', err_stat)
+      CALL set_status(h, CD_C_ALLOC_FAIL, caller//': deck path allocation failed', err_stat)
       RETURN
     END IF
     DO i = 1, INT(deck_path_len)
       IF (path_c(i) == C_NULL_CHAR) THEN
         IF (i == 1) THEN
-          CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeck: deck path is empty', err_stat)
+          CALL set_status(h, CD_C_BAD_INPUT, caller//': deck path is empty', err_stat)
           RETURN
         END IF
         deck_path = deck_path(:i - 1)
@@ -275,55 +340,124 @@ CONTAINS
     CALL CD_Deck_Query_dtM(TRIM(deck_path), dtm, has_dtm, es, em, standalone_scan=.TRUE., n_bodies_rods=n_objects, &
                            n_finite_ei=n_finite)
     IF (es == CD_DECKDRV_OK .AND. (n_objects > 0 .OR. n_finite > 0)) THEN
-      CALL init_deck_aggregate(h, TRIM(deck_path), has_dtm, dtm, err_stat)
+      CALL init_deck_aggregate(h, TRIM(deck_path), has_dtm, dtm, caller, err_stat, positions)
       RETURN
     END IF
-    CALL CD_Init_Deck_System(TRIM(deck_path), new_fast%system, dtm, gravity, rho_water, es, em, line_ids=line_ids)
+    ! An absent positions argument stays absent through the optional coupled_positions.
+    CALL CD_Init_Deck_System(TRIM(deck_path), new_fast%system, dtm, gravity, rho_water, es, em, line_ids=line_ids, &
+                             coupled_positions=positions)
     IF (es /= CD_DECKDRV_OK) THEN
       CALL map_deck_status(es, err_stat)
-      CALL store_status(h, err_stat, 'CableDyn_InitDeck: '//TRIM(em))
+      CALL store_status(h, err_stat, caller//': '//TRIM(em))
       CALL CD_FAST_End(new_fast, end_es, end_em)
       RETURN
+    END IF
+    IF (PRESENT(positions)) THEN
+      CALL check_point_start(new_fast, positions, em)
+      IF (LEN_TRIM(em) > 0) THEN
+        CALL set_status(h, CD_C_BAD_INPUT, caller//': '//TRIM(em), err_stat)
+        CALL CD_FAST_End(new_fast, end_es, end_em)
+        RETURN
+      END IF
     END IF
     CALL CD_FAST_End(h%fast, end_es, end_em)
     h%fast = new_fast
     CALL CD_FAST_End(new_fast, end_es, end_em)
     CALL drop_aggregate(h)
+    CALL drop_saved_state(h)
     CALL set_point_line_map(h, line_ids)
     CALL store_status(h, CD_C_OK, '')
     err_stat = CD_C_OK
   END SUBROUTINE init_deck_serialised
 
-  SUBROUTINE init_deck_aggregate(h, deck_path, has_dtm, dtm, err_stat)
+  SUBROUTINE check_point_start(fast, positions, msg)
+    !! Post-condition of CableDyn_InitDeckAt on the point route: every Coupled block of the new
+    !! system starts at its host position (msg is blank when it does). positions holds either
+    !! one column per coupled block or one per Coupled block (apply_point_system_positions).
+    TYPE(CD_FAST_ModuleType), INTENT(IN) :: fast
+    REAL(wp), INTENT(IN) :: positions(:, :)
+    CHARACTER(*), INTENT(OUT) :: msg
+    INTEGER, ALLOCATABLE :: blocks(:)
+    REAL(wp), ALLOCATABLE :: q(:), v(:), a(:)
+    INTEGER :: k, col, n, es, stat
+    LOGICAL :: full
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    msg = ''
+    n = CD_FAST_NCoupledDOF(fast, es, em)
+    IF (es /= CD_FAST_OK) THEN
+      msg = 'the coupled vector of the new model is unavailable: '//TRIM(em)
+      RETURN
+    END IF
+    CALL CD_Get_System_PointBlocks(fast%system, blocks, es, em)
+    IF (es /= CD_SYSTEM_OK .OR. .NOT. ALLOCATED(blocks)) THEN
+      msg = 'the coupled layout of the new model is unavailable'
+      RETURN
+    END IF
+    ALLOCATE (q(n), v(n), a(n), STAT=stat)
+    IF (stat /= 0) THEN
+      msg = 'workspace allocation failed'
+      RETURN
+    END IF
+    CALL CD_FAST_GetCoupledMotion(fast, q, v, a, es, em)
+    IF (es /= CD_FAST_OK) THEN
+      msg = 'the coupled motion of the new model is unavailable: '//TRIM(em)
+      RETURN
+    END IF
+    full = SIZE(positions, 2) == SIZE(blocks)
+    col = 0
+    DO k = 1, SIZE(blocks)
+      IF (full) col = col + 1
+      IF (fast%system%points(blocks(k))%point_type /= CD_POINT_COUPLED) CYCLE
+      IF (.NOT. full) col = col + 1
+      IF (.NOT. same_position(q(3*k - 2:3*k), positions(:, col))) THEN
+        msg = 'coupled point '//TRIM(int_text(fast%system%points(blocks(k))%id))//' did not start at its '// &
+              'position in q0'
+        RETURN
+      END IF
+    END DO
+  END SUBROUTINE check_point_start
+
+  PURE LOGICAL FUNCTION same_position(x, y) RESULT(same)
+    !! Two coupled-point positions agree to 1e-9 relative (1e-9 m below 1 m).
+    REAL(wp), INTENT(IN) :: x(3), y(3)
+    same = ALL(ABS(x - y) <= 1.0e-9_wp*MAX(1.0_wp, ABS(y)))
+  END FUNCTION same_position
+
+  SUBROUTINE init_deck_aggregate(h, deck_path, has_dtm, dtm, caller, err_stat, positions)
     !! Build a BODIES/RODS deck on the coupled aggregate (transactional: the handle keeps its
     !! previous model on failure). Coupled/Vessel rods and bodies are 6-DOF host nodes, which the
     !! translational C ABI cannot drive; the standalone deck rules already reject them without a
-    !! motionFile, and the aggregate rejects a motionFile.
+    !! motionFile, and the aggregate rejects a motionFile. positions (3, n_moving): the host
+    !! positions of CableDyn_InitDeckAt, in the aggregate's coupled order.
     TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
     CHARACTER(*), INTENT(IN) :: deck_path
     LOGICAL, INTENT(IN) :: has_dtm
     REAL(wp), INTENT(IN) :: dtm
+    CHARACTER(*), INTENT(IN) :: caller
     INTEGER(C_INT), INTENT(OUT) :: err_stat
+    REAL(wp), INTENT(IN), OPTIONAL :: positions(:, :)
     ! On the heap: InitDeck runs on the host's thread, whose stack size the host chooses.
     TYPE(CD_AGG_ModuleType), ALLOCATABLE :: new_agg
-    INTEGER :: es, nm, stat
+    INTEGER :: es, nm, stat, k
     REAL(wp), ALLOCATABLE :: pos(:, :), vel(:, :), acc(:, :), load(:, :)
     CHARACTER(CD_C_MSG_LEN) :: em
 
     IF (.NOT. (has_dtm .AND. dtm > CD_ZERO)) THEN
-      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeck: a deck with finite-EI lines, BODIES or RODS '// &
+      CALL set_status(h, CD_C_BAD_INPUT, caller//': a deck with finite-EI lines, BODIES or RODS '// &
                       'needs dtM, the fixed step of CableDyn_Step', err_stat)
       RETURN
     END IF
     ALLOCATE (new_agg, STAT=stat)
     IF (stat /= 0) THEN
-      CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_InitDeck: aggregate allocation failed', err_stat)
+      CALL set_status(h, CD_C_ALLOC_FAIL, caller//': aggregate allocation failed', err_stat)
       RETURN
     END IF
-    CALL CD_AGG_Init_From_Deck(new_agg, deck_path, dtm, es, em)
+    ! An absent positions argument stays absent through the optional coupled_positions.
+    CALL CD_AGG_Init_From_Deck(new_agg, deck_path, dtm, es, em, coupled_positions=positions)
     IF (es /= CD_AGG_OK) THEN
       CALL map_agg_status(es, err_stat)
-      CALL store_status(h, err_stat, 'CableDyn_InitDeck: '//TRIM(em))
+      CALL store_status(h, err_stat, caller//': '//TRIM(em))
       CALL CD_AGG_End(new_agg, es, em)
       RETURN
     END IF
@@ -333,11 +467,37 @@ CONTAINS
     ALLOCATE (pos(3, nm), vel(3, nm), acc(3, nm), load(3, nm), STAT=stat)
     IF (stat /= 0) THEN
       CALL CD_AGG_End(new_agg, es, em)
-      CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_InitDeck: aggregate workspace allocation failed', err_stat)
+      CALL set_status(h, CD_C_ALLOC_FAIL, caller//': aggregate workspace allocation failed', err_stat)
       RETURN
+    END IF
+    IF (PRESENT(positions)) THEN
+      ! Post-condition: every moving point starts at its host position. A point that appears
+      ! in two blocks (a fairlead shared by an EI=0 line and a finite-EI line) takes the
+      ! position of its last block, so two different entries for it are rejected here.
+      CALL CD_AGG_GetMovingPointMesh(new_agg, pos, vel, acc, load, es, em)
+      IF (es == CD_AGG_OK .AND. SIZE(positions, 2) == nm) THEN
+        DO k = 1, nm
+          IF (.NOT. same_position(pos(:, k), positions(:, k))) THEN
+            es = CD_AGG_BADINPUT
+            em = 'coupled block '//TRIM(int_text(k - 1))//' did not start at its position in q0 (a point '// &
+                 'listed in two blocks needs the same position in both)'
+            EXIT
+          END IF
+        END DO
+      ELSE IF (es == CD_AGG_OK) THEN
+        es = CD_AGG_BADINPUT
+        em = 'q0 does not match the coupled vector of the new model'
+      END IF
+      IF (es /= CD_AGG_OK) THEN
+        CALL map_agg_status(es, err_stat)
+        CALL store_status(h, err_stat, caller//': '//TRIM(em))
+        CALL CD_AGG_End(new_agg, es, em)
+        RETURN
+      END IF
     END IF
     CALL CD_FAST_End(h%fast, es, em)
     CALL drop_aggregate(h)
+    CALL drop_saved_state(h)
     CALL clear_c_workspace(h)
     CALL MOVE_ALLOC(pos, h%agg_pos)
     CALL MOVE_ALLOC(vel, h%agg_vel)
@@ -357,10 +517,45 @@ CONTAINS
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: src, dst
     INTEGER :: es
     CHARACTER(CD_C_MSG_LEN) :: em
-    CALL CD_AGG_End(dst, es, em)
-    dst = src
+    CALL copy_aggregate(src, dst)
     CALL CD_AGG_End(src, es, em)
   END SUBROUTINE move_aggregate
+
+  SUBROUTINE copy_aggregate(src, dst)
+    !! Replace dst by a deep copy of src: every allocatable component (each sub-model's state,
+    !! histories, snapshot buffers and solver workspace) is copied, so the copy evolves
+    !! exactly as src would. Dummy arguments, so the assignment needs no temporary.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: src
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: dst
+    INTEGER :: es
+    CHARACTER(CD_C_MSG_LEN) :: em
+    CALL CD_AGG_End(dst, es, em)
+    dst = src
+  END SUBROUTINE copy_aggregate
+
+  SUBROUTINE copy_point_system(src, dst)
+    !! The point-route twin of copy_aggregate.
+    TYPE(CD_FAST_ModuleType), INTENT(IN) :: src
+    TYPE(CD_FAST_ModuleType), INTENT(INOUT) :: dst
+    INTEGER :: es
+    CHARACTER(CD_C_MSG_LEN) :: em
+    CALL CD_FAST_End(dst, es, em)
+    dst = src
+  END SUBROUTINE copy_point_system
+
+  SUBROUTINE drop_saved_state(h)
+    !! Discard the save slot (a new initialization replaces the model it belongs to).
+    TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
+    INTEGER :: es
+    CHARACTER(CD_C_MSG_LEN) :: em
+    IF (ALLOCATED(h%saved_agg)) THEN
+      CALL CD_AGG_End(h%saved_agg, es, em)
+      DEALLOCATE (h%saved_agg)
+    END IF
+    CALL CD_FAST_End(h%saved_fast, es, em)
+    h%saved_agg_t = CD_ZERO
+    h%has_saved = .FALSE.
+  END SUBROUTINE drop_saved_state
 
   SUBROUTINE drop_aggregate(h)
     !! Release the aggregate route of a handle (another initialization replaces it).
@@ -402,12 +597,28 @@ CONTAINS
     REAL(C_DOUBLE), VALUE :: rho_inf
     INTEGER(C_INT), INTENT(OUT) :: err_stat
 
-    IF (.NOT. blas_runtime_ready(handle, 'CableDyn_InitLine', err_stat)) RETURN
-    CALL cabledyn_input_lock()
-    CALL init_line_serialised(handle, n_nodes, n_elem, q0_ptr, v0_ptr, elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, &
-                              fixed_dofs_ptr, n_fixed, tension_only, rho_inf, err_stat)
-    CALL cabledyn_input_unlock()
+    IF (blas_runtime_ready(handle, 'CableDyn_InitLine', err_stat)) THEN
+      CALL cabledyn_input_lock()
+      CALL init_line_serialised(handle, n_nodes, n_elem, q0_ptr, v0_ptr, elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, &
+                                fixed_dofs_ptr, n_fixed, tension_only, rho_inf, err_stat)
+      CALL cabledyn_input_unlock()
+    END IF
+    CALL drop_point_save_on_failure(handle, err_stat)
   END SUBROUTINE CableDyn_InitLine
+
+  SUBROUTINE drop_point_save_on_failure(handle, err_stat)
+    !! After a failed CableDyn_InitLine/InitLines the save slot follows the live model. These
+    !! calls rebuild the point system in place, so a handle whose live model is that point
+    !! system must be initialized again and loses the state saved for it. On a handle whose live
+    !! model is an aggregate (a deck with finite-EI lines, bodies or rods), the failure leaves
+    !! the aggregate live (use_agg is cleared only on success) and the save with it.
+    TYPE(C_PTR), VALUE :: handle
+    INTEGER(C_INT), INTENT(IN) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    IF (err_stat == CD_C_OK) RETURN
+    IF (validate_handle(handle, h) /= CD_C_OK) RETURN
+    IF (.NOT. h%use_agg) CALL drop_saved_state(h)
+  END SUBROUTINE drop_point_save_on_failure
 
   SUBROUTINE init_line_serialised(handle, n_nodes, n_elem, q0_ptr, v0_ptr, elem_conn_ptr, l0_ptr, ea_ptr, &
                                   rho_a_ptr, fixed_dofs_ptr, n_fixed, tension_only, rho_inf, err_stat)
@@ -497,6 +708,7 @@ CONTAINS
     CALL map_fast_status(es, err_stat)
     IF (err_stat == CD_C_OK) THEN
       CALL drop_aggregate(h)
+      CALL drop_saved_state(h)
       CALL set_point_line_map(h, [1])
       CALL store_status(h, err_stat, '')
     ELSE
@@ -519,12 +731,14 @@ CONTAINS
     REAL(C_DOUBLE), VALUE :: rho_inf
     INTEGER(C_INT), INTENT(OUT) :: err_stat
 
-    IF (.NOT. blas_runtime_ready(handle, 'CableDyn_InitLines', err_stat)) RETURN
-    CALL cabledyn_input_lock()
-    CALL init_lines_serialised(handle, n_lines, n_nodes_ptr, n_elem_ptr, n_fixed_ptr, q0_ptr, v0_ptr, &
-                               elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, fixed_dofs_ptr, &
-                               coupled_map_ptr, n_coupled_map, tension_only, rho_inf, err_stat)
-    CALL cabledyn_input_unlock()
+    IF (blas_runtime_ready(handle, 'CableDyn_InitLines', err_stat)) THEN
+      CALL cabledyn_input_lock()
+      CALL init_lines_serialised(handle, n_lines, n_nodes_ptr, n_elem_ptr, n_fixed_ptr, q0_ptr, v0_ptr, &
+                                 elem_conn_ptr, l0_ptr, ea_ptr, rho_a_ptr, fixed_dofs_ptr, &
+                                 coupled_map_ptr, n_coupled_map, tension_only, rho_inf, err_stat)
+      CALL cabledyn_input_unlock()
+    END IF
+    CALL drop_point_save_on_failure(handle, err_stat)
   END SUBROUTINE CableDyn_InitLines
 
   SUBROUTINE init_lines_serialised(handle, n_lines, n_nodes_ptr, n_elem_ptr, n_fixed_ptr, q0_ptr, v0_ptr, &
@@ -692,6 +906,7 @@ CONTAINS
     CALL map_fast_status(es, err_stat)
     IF (err_stat == CD_C_OK) THEN
       CALL drop_aggregate(h)
+      CALL drop_saved_state(h)
       CALL set_point_line_map(h, [(i, i=1, INT(n_lines))])
       CALL store_status(h, err_stat, '')
     ELSE
@@ -1092,6 +1307,7 @@ CONTAINS
     h%magic = 0_INT64
     CALL CD_FAST_End(h%fast, es, em)
     CALL drop_aggregate(h)
+    CALL drop_saved_state(h)
     CALL clear_c_workspace(h)
     DEALLOCATE (h)
     handle = C_NULL_PTR
@@ -1526,6 +1742,170 @@ CONTAINS
     value = REAL(val, C_DOUBLE)
     CALL store_status(h, CD_C_OK, '')
   END SUBROUTINE CableDyn_EvalChannel
+
+  ! ---------------------------------------------------------------------------------------
+  ! Host coupling (C ABI 1, minor extension 2): CableDyn_InitDeckAt (above, with InitDeck),
+  ! the one-slot state save/restore a host's outer correctors (PIMPLE, predictor-corrector)
+  ! rewind with, and the owner of each block of the coupled vector.
+  ! ---------------------------------------------------------------------------------------
+
+  SUBROUTINE CableDyn_SaveState(handle, err_stat) BIND(C, NAME='CableDyn_SaveState')
+    !! Save the whole model into the handle's single save slot, replacing any earlier save:
+    !! every line, point, body and rod state with its solver history (viscoelastic, Syrope and
+    !! friction states, the last converged step), the point fluid fields, and on the aggregate
+    !! route the committed time. The slot holds a deep copy of the model object, independent of
+    !! the step's own rollback buffers, so any number of steps may follow before the restore.
+    !! A successful Init* call discards the slot; a failed InitDeck/InitDeckAt keeps it with the
+    !! model, and a failed InitLine/InitLines discards it unless the handle's live model is an
+    !! aggregate (drop_point_save_on_failure). Only the allocation of the aggregate slot itself
+    !! returns CD_C_ALLOC_FAIL (the handle then holds no save); running out of memory inside
+    !! the copy, an intrinsic assignment of allocatable components, aborts the process.
+    TYPE(C_PTR), VALUE :: handle
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    INTEGER :: stat
+
+    IF (.NOT. query_ready(handle, h, 'CableDyn_SaveState', err_stat)) RETURN
+    ! the slot is invalid while it is overwritten, and stays so if its allocation fails
+    h%has_saved = .FALSE.
+    IF (h%use_agg) THEN
+      IF (.NOT. ALLOCATED(h%saved_agg)) THEN
+        ! On the heap, as the live aggregate: the host chooses this thread's stack size.
+        ALLOCATE (h%saved_agg, STAT=stat)
+        IF (stat /= 0) THEN
+          CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_SaveState: save slot allocation failed', err_stat)
+          RETURN
+        END IF
+      END IF
+      CALL copy_aggregate(h%agg, h%saved_agg)
+      h%saved_agg_t = h%agg_t
+    ELSE
+      CALL copy_point_system(h%fast, h%saved_fast)
+    END IF
+    h%has_saved = .TRUE.
+    CALL store_status(h, CD_C_OK, '')
+    err_stat = CD_C_OK
+  END SUBROUTINE CableDyn_SaveState
+
+  SUBROUTINE CableDyn_RestoreState(handle, err_stat) BIND(C, NAME='CableDyn_RestoreState')
+    !! Return the model to the last CableDyn_SaveState. The slot is kept, so one save serves any
+    !! number of restores (one per outer corrector). A restore followed by a step is
+    !! bit-identical to taking that step from the saved state without the intervening steps.
+    TYPE(C_PTR), VALUE :: handle
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+
+    IF (.NOT. query_ready(handle, h, 'CableDyn_RestoreState', err_stat)) RETURN
+    IF (.NOT. h%has_saved) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_RestoreState: no state has been saved since the model was '// &
+                      'initialized', err_stat)
+      RETURN
+    END IF
+    IF (h%use_agg) THEN
+      CALL copy_aggregate(h%saved_agg, h%agg)
+      h%agg_t = h%saved_agg_t
+    ELSE
+      CALL copy_point_system(h%saved_fast, h%fast)
+    END IF
+    CALL store_status(h, CD_C_OK, '')
+    err_stat = CD_C_OK
+  END SUBROUTINE CableDyn_RestoreState
+
+  SUBROUTINE CableDyn_GetCoupledLayout(handle, point_id_ptr, point_type_ptr, n_block, err_stat) &
+    BIND(C, NAME='CableDyn_GetCoupledLayout')
+    !! The owner of each 3-DOF block of the coupled vector: block k (0-based, DOFs 3k .. 3k+2)
+    !! moves deck point point_id[k], of type point_type[k] (1 Fixed, 2 Coupled/Vessel, 3 Free,
+    !! 4 Connect). The host drives the type-2 blocks; the others take the values last returned
+    !! by CableDyn_GetCoupledMotion. n_block must equal CableDyn_NCoupledDOF / 3; a null pointer
+    !! skips that output. A raw-array handle has no deck points (its coupled vector is the
+    !! caller's own fixed-DOF list) and is rejected with CD_C_BAD_INPUT.
+    TYPE(C_PTR), VALUE :: handle, point_id_ptr, point_type_ptr
+    INTEGER(C_INT), VALUE :: n_block
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    INTEGER(C_INT), POINTER :: out_c(:)
+    INTEGER, ALLOCATABLE :: ids(:), types(:)
+
+    IF (.NOT. query_ready(handle, h, 'CableDyn_GetCoupledLayout', err_stat)) RETURN
+    CALL coupled_layout(h, ids, types, err_stat)
+    IF (err_stat /= CD_C_OK) RETURN
+    IF (INT(n_block) /= SIZE(ids)) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_GetCoupledLayout: n_block does not match '// &
+                      'CableDyn_NCoupledDOF / 3', err_stat)
+      RETURN
+    END IF
+    IF (SIZE(ids) > 0 .AND. C_ASSOCIATED(point_id_ptr)) THEN
+      CALL C_F_POINTER(point_id_ptr, out_c, [SIZE(ids)])
+      out_c = INT(ids, C_INT)
+    END IF
+    IF (SIZE(ids) > 0 .AND. C_ASSOCIATED(point_type_ptr)) THEN
+      CALL C_F_POINTER(point_type_ptr, out_c, [SIZE(types)])
+      out_c = INT(types, C_INT)
+    END IF
+    CALL store_status(h, CD_C_OK, '')
+  END SUBROUTINE CableDyn_GetCoupledLayout
+
+  SUBROUTINE coupled_layout(h, ids, types, err_stat)
+    !! Deck point id and point type (the CD_POINT_* codes) of each coupled block. Point route:
+    !! the line-bound points of every type in deck POINT order. Aggregate route: the moving
+    !! points, i.e. the EI=0-bound Coupled/Vessel points in deck POINT order, then the fairlead
+    !! (End A, which the coupled cable builder requires to be Coupled/Vessel) of each finite-EI
+    !! line in deck LINE order.
+    TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
+    INTEGER, ALLOCATABLE, INTENT(OUT) :: ids(:), types(:)
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    INTEGER, ALLOCATABLE :: blocks(:)
+    INTEGER :: es, i, k, nm, nsys
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    err_stat = CD_C_OK
+    IF (.NOT. h%use_agg) THEN
+      CALL CD_Get_System_PointBlocks(h%fast%system, blocks, es, em)
+      IF (es /= CD_SYSTEM_OK) THEN
+        CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_GetCoupledLayout: '//TRIM(em), err_stat)
+        RETURN
+      END IF
+      IF (.NOT. ALLOCATED(blocks)) THEN
+        CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_GetCoupledLayout: a handle initialized from raw arrays '// &
+                        'has no deck points; its coupled vector is the caller''s fixed-DOF list', err_stat)
+        RETURN
+      END IF
+      IF (ANY(blocks < 1)) THEN
+        CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_GetCoupledLayout: a coupled block has no owning point', &
+                        err_stat)
+        RETURN
+      END IF
+      ALLOCATE (ids(SIZE(blocks)), types(SIZE(blocks)))
+      ids = h%fast%system%points(blocks)%id
+      types = h%fast%system%points(blocks)%point_type
+      RETURN
+    END IF
+    nm = CD_AGG_NMovingPoints(h%agg, es, em)
+    nsys = 0
+    IF (h%agg%has_sys) nsys = h%agg%ncp_sys
+    IF (es /= CD_AGG_OK .OR. nm /= nsys + h%agg%ncable) THEN
+      CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_GetCoupledLayout: the moving points of the model are not '// &
+                      'its Coupled points and cable fairleads', err_stat)
+      RETURN
+    END IF
+    ALLOCATE (ids(nm), types(nm))
+    IF (nsys > 0) THEN
+      CALL CD_Get_System_PointBlocks(h%agg%sys%fast%system, blocks, es, em)
+      IF (es /= CD_SYSTEM_OK .OR. .NOT. ALLOCATED(blocks)) THEN
+        CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_GetCoupledLayout: the system layout is unavailable', err_stat)
+        RETURN
+      END IF
+      DO i = 1, nsys
+        k = blocks(h%agg%sys%moving_blocks(i))
+        ids(i) = h%agg%sys%fast%system%points(k)%id
+        types(i) = h%agg%sys%fast%system%points(k)%point_type
+      END DO
+    END IF
+    DO i = 1, h%agg%ncable
+      ids(nsys + i) = h%agg%cable_points(1, i)
+      types(nsys + i) = CD_POINT_COUPLED
+    END DO
+  END SUBROUTINE coupled_layout
 
   LOGICAL FUNCTION query_ready(handle, h, caller, err_stat) RESULT(ready)
     !! Validate the handle of an object query and require an initialized model.

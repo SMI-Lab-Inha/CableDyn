@@ -76,6 +76,23 @@ All notable changes to CableDyn are recorded in this file. The format follows
   body, which move the line ends by translation only, still refuse torsion columns by name, and
   so does OpenFAST linearisation of a line restrained in torsion. See the manual's OpenFAST page
   (Line torsion).
+- C ABI 1 minor extension 2 (`CableDyn_GetAbiMinor() == 2`) for hosts that drive the
+  `Coupled` points of a deck, such as CFD solvers. Every existing function is unchanged.
+  `CableDyn_InitDeckAt` solves the statics with the `Coupled`/`Vessel` points at the host's
+  positions, the counterpart of `MoorDyn_Init(X, XD)` (the statics start at rest), so a body
+  that starts away from the deck coordinates starts without a transient: for foamMooring's
+  `EsfLOWC` box, whose fairleads start 15 mm below the deck, the fairlead load of
+  `CableDyn_InitDeck` followed by held fairleads deviates by up to 0.38 N of 0.52 N, and stays
+  constant to round-off after `CableDyn_InitDeckAt`. `CableDyn_SaveState` and
+  `CableDyn_RestoreState` keep one in-memory copy of the whole model for outer correctors
+  (PIMPLE); a restore followed by a step is bit-identical to stepping from the saved state, on
+  both routes and across any number of steps. `CableDyn_GetCoupledLayout` returns the deck point
+  id and type of every block of the coupled vector, which on the point route includes the
+  `Fixed` anchors. The Python `CableDyn` class gains `init_deck_at`, `save_state`,
+  `restore_state`, `coupled_layout` and `host_dofs`. The manual's C API page has a new section,
+  Coupling a host (CFD) solver, that compares the call sequence step by step with MoorDyn's C
+  API: initialisation, vector layout, end-of-step motion, outer correctors, load summation,
+  the fixed step of the aggregate route, and units.
 
 ### Changed
 

@@ -139,7 +139,7 @@ def main() -> int:
         "C header ABI minor level": f"CABLEDYN_CAPI_ABI_MINOR {abi_minor}" in read(
             "src/CableDyn_CAPI.h"
         ),
-        "Python ABI minor level": f"OBJECT_QUERY_ABI_MINOR = {abi_minor}" in read(
+        "Python ABI minor level": f"HOST_COUPLING_ABI_MINOR = {abi_minor}" in read(
             "python/cabledyn/_lib.py"
         ),
         "C header ABI version": f"CABLEDYN_CAPI_ABI_VERSION {abi_version}" in read(

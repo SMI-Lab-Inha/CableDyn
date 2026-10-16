@@ -148,7 +148,8 @@ static int check_deck_step(const char *deck)
         double *xyz = NULL, *seg = NULL, pos[3], force[3], fair = 0.0, ten0 = 0.0;
         const char *token = "FairTen1";
 
-        CHECK(CableDyn_GetAbiMinor() >= 1 && CABLEDYN_CAPI_ABI_MINOR == 1, "ABI minor level");
+        CHECK(CableDyn_GetAbiMinor() >= 1 && CableDyn_GetAbiMinor() == CABLEDYN_CAPI_ABI_MINOR,
+              "ABI minor level");
         nl = CableDyn_NObjects(m, CD_C_OBJ_LINE, &err);
         CHECK(err == CD_C_OK && nl == CableDyn_NLines(m, &err), "line inventory");
         np = CableDyn_NObjects(m, CD_C_OBJ_POINT, &err);

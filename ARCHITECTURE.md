@@ -500,8 +500,11 @@ import only Windows system DLLs.
   minor extension 1 (`CableDyn_GetAbiMinor() ≥ 1`) adds in-process object queries
   (object counts and ids, line node and segment values, point, body, and rod
   states, and any output channel through `CableDyn_EvalChannel`), which return
-  what the matching output channel reports for the same state (see
-  [doc/capi.rst](doc/capi.rst)).
+  what the matching output channel reports for the same state. Minor extension 2
+  (`≥ 2`) adds the host-coupling calls: `CableDyn_InitDeckAt` (the statics solved
+  at the host's coupled-point positions), `CableDyn_SaveState` /
+  `CableDyn_RestoreState` (a one-slot deep copy of the model object for outer
+  correctors) and `CableDyn_GetCoupledLayout` (see [doc/capi.rst](doc/capi.rst)).
 - **Python** (`python/cabledyn`): runs the driver, reads and post-processes
   outputs, edits decks, runs studies, and binds the C interface through ctypes
   with a pinned ABI version. With its object views and snapshots it is designed

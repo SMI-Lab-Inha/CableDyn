@@ -21,7 +21,16 @@ import numpy.typing as npt
 from cabledyn import _lib as _lib_module
 from cabledyn._lib import _lib
 from cabledyn.errors import CableDynError, ConvergenceError
-from cabledyn.objects import Body, Line, Point, Rod, build_views, eval_channel
+from cabledyn.objects import (
+    _POINT_KINDS,
+    Body,
+    Line,
+    Point,
+    PointKind,
+    Rod,
+    build_views,
+    eval_channel,
+)
 
 __all__ = ["Body", "CableDyn", "CableDynError", "ConvergenceError", "Line", "Point", "Rod"]
 
@@ -138,6 +147,8 @@ class CableDyn:
         self._views = ((), (), (), ())
         self._views_valid = False
         self._time = 0.0
+        # the time of the state in the save slot (None: nothing saved since the initialization)
+        self._saved_time: float | None = None
         self._deck: Path | None = None
         status = c_int()
         _lib.CableDyn_Create(byref(self._handle), byref(status))
@@ -206,10 +217,68 @@ class CableDyn:
             status = c_int()
             _lib.CableDyn_InitDeck(self._handle, path, len(path), byref(status))
             self._check("CableDyn_InitDeck", status.value)
-            self._generation += 1
-            self._views_valid = False
-            self._time = 0.0
-            self._deck = resolved
+            self._initialized_from(resolved)
+
+    def init_deck_at(self, deck: str | os.PathLike[str], q0: ArrayInput) -> None:
+        """Initialize from a deck with the statics solved at the host's coupled positions.
+
+        Every line-bound Coupled/Vessel point starts at its entry of ``q0`` instead
+        of its deck coordinates, and the static equilibrium (lines, Free/Connect
+        points, bodies, rods) is solved with those points held there, at rest; a
+        host whose body starts away from the deck coordinates then starts without
+        a transient. ``q0`` is either the full coupled vector of the deck
+        (``n_coupled_dof`` values, the layout of :meth:`step`; the Fixed, Free and
+        Connect blocks are not read) or the Coupled/Vessel blocks alone, in
+        coupled-vector order (the ``MoorDyn_Init`` layout of a deck whose coupled
+        objects are points that are all attached to lines: a Coupled point attached
+        to no line has no block here), flat or column-per-point ``(3, n)`` with
+        ``n != 3`` (a ``(3, 3)`` array is rejected as ambiguous: pass three points
+        flat). See :meth:`coupled_layout`. A failed initialization keeps any
+        previously initialized model and its saved state.
+        """
+        _encode_path(deck)  # rejects a NUL before any file-system call
+        resolved = Path(deck).expanduser().resolve()
+        path = _encode_path(resolved)
+        q = _as_real_array(q0, "q0")
+        if q.ndim == 2 and q.shape == (3, 3):
+            # three points: column-per-point and row-per-point look alike
+            raise ValueError(
+                "q0 of shape (3, 3) is ambiguous (column-per-point or row-per-point); "
+                "pass it flat, x1 y1 z1 x2 y2 z2 ..."
+            )
+        if q.ndim == 2 and q.shape[0] == 3:
+            q = np.ascontiguousarray(q.reshape(-1, order="F"))
+        if q.ndim != 1 or q.size % 3 != 0:
+            raise ValueError(
+                f"q0 must be flat (3 * n,) or column-per-point (3, n); got shape {np.shape(q0)}"
+            )
+        if not np.all(np.isfinite(q)):
+            raise ValueError("q0 must be finite (no NaN or Inf)")
+        with self._lock:
+            self._require_host_coupling()
+            status = c_int()
+            _lib.CableDyn_InitDeckAt(
+                self._handle, path, len(path), _dbl_ptr(q), int(q.size), byref(status)
+            )
+            self._check("CableDyn_InitDeckAt", status.value)
+            self._initialized_from(resolved)
+
+    def _initialized_from(self, deck: Path) -> None:
+        """Book-keeping after a successful deck initialization (the caller holds the lock)."""
+        self._generation += 1
+        self._views_valid = False
+        self._time = 0.0
+        self._saved_time = None
+        self._deck = deck
+
+    @staticmethod
+    def _require_host_coupling() -> None:
+        if _lib_module.abi_minor() < _lib_module.HOST_COUPLING_ABI_MINOR:
+            # not a C status: the loaded library lacks the entry points
+            raise RuntimeError(
+                "the loaded CableDyn library predates the host-coupling calls "
+                "(ABI 1 minor extension 2); rebuild it from this checkout"
+            )
 
     @property
     def initialized(self) -> bool:
@@ -249,7 +318,10 @@ class CableDyn:
 
     @property
     def time(self) -> float:
-        """Simulation time [s]: 0 after initialization, advanced by every completed step."""
+        """Simulation time [s]: 0 after initialization, advanced by every completed step.
+
+        :meth:`restore_state` sets it back to the time of the saved state.
+        """
         with self._lock:
             return self._time
 
@@ -427,6 +499,82 @@ class CableDyn:
             _lib.CableDyn_CalcOutput(self._handle, _dbl_ptr(loads), n, byref(status))
             self._check("CableDyn_CalcOutput", status.value)
             return loads
+
+    # -- host coupling: outer correctors and the coupled layout -------------------
+
+    def save_state(self) -> None:
+        """Save the whole model and :attr:`time` into the handle's single save slot.
+
+        The slot is a deep copy of the model (every line, point, body and rod
+        state with its solver history), replacing any earlier save. A successful
+        initialization discards it and a failed one keeps it with the model, so one
+        save serves every outer corrector of a host time step (see
+        :meth:`restore_state`). Save when a host time step starts after the
+        previous one was accepted, and restore on every repeated pass from the
+        same start time, whatever its ``dt``.
+        """
+        with self._lock:
+            self._require_host_coupling()
+            status = c_int()
+            _lib.CableDyn_SaveState(self._handle, byref(status))
+            if status.value != 0:
+                self._saved_time = None  # a failed save leaves no save in the slot
+            self._check("CableDyn_SaveState", status.value)
+            self._saved_time = self._time
+
+    def restore_state(self) -> None:
+        """Return the model and :attr:`time` to the last :meth:`save_state`.
+
+        The save is kept, so the call can be repeated. A restore followed by a
+        step is bit-identical to taking that step from the saved state directly.
+        Raises :class:`CableDynError` when nothing was saved since the model was
+        initialized.
+        """
+        with self._lock:
+            self._require_host_coupling()
+            status = c_int()
+            _lib.CableDyn_RestoreState(self._handle, byref(status))
+            self._check("CableDyn_RestoreState", status.value)
+            if self._saved_time is not None:
+                self._time = self._saved_time
+
+    def coupled_layout(self) -> tuple[tuple[int, PointKind], ...]:
+        """The owner of each 3-DOF block of the coupled vector, as ``(point_id, kind)``.
+
+        Block ``k`` holds DOFs ``3k .. 3k+2`` of the vectors :meth:`step`,
+        :meth:`get_coupled_motion` and :meth:`calc_output` use; ``kind`` is
+        ``"fixed"``, ``"coupled"`` (Coupled or Vessel), ``"free"`` or
+        ``"connect"``. On a point-system deck every line-bound point has a block,
+        in deck POINTS order; on the coupled aggregate (finite-EI lines, bodies or
+        rods) only the Coupled points do. The host drives the ``"coupled"``
+        blocks (:meth:`host_dofs`).
+        """
+        with self._lock:
+            self._require_host_coupling()
+            nb = self.n_coupled_dof // 3
+            ids = np.zeros(max(nb, 1), dtype=np.intc)
+            kinds = np.zeros(max(nb, 1), dtype=np.intc)
+            status = c_int()
+            _lib.CableDyn_GetCoupledLayout(
+                self._handle,
+                ids.ctypes.data_as(POINTER(c_int)),
+                kinds.ctypes.data_as(POINTER(c_int)),
+                nb,
+                byref(status),
+            )
+            self._check("CableDyn_GetCoupledLayout", status.value)
+            return tuple((int(ids[k]), _POINT_KINDS.get(int(kinds[k]), "fixed")) for k in range(nb))
+
+    def host_dofs(self) -> npt.NDArray[np.intp]:
+        """Indices of the coupled DOFs the host drives (the ``"coupled"`` blocks).
+
+        With ``x`` the ``(3, n)`` host positions of those points in layout order,
+        ``q[model.host_dofs()] = x.reshape(-1, order="F")`` fills them in a full
+        coupled vector ``q`` taken from :meth:`get_coupled_motion`.
+        """
+        layout = self.coupled_layout()
+        blocks = [k for k, (_, kind) in enumerate(layout) if kind == "coupled"]
+        return np.array([3 * k + c for k in blocks for c in range(3)], dtype=np.intp)
 
     def update_point_fluid_fields(
         self,

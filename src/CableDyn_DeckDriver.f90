@@ -1073,7 +1073,7 @@ CONTAINS
   END SUBROUTINE CD_Init_Deck_Models
 
   SUBROUTINE CD_Init_Deck_System(deck_path, system, dtM, gravity, rho_water, ErrStat, ErrMsg, caller_driven, &
-                                 env_gravity, env_rho_water, env_wtrdpth, line_ids)
+                                 env_gravity, env_rho_water, env_wtrdpth, line_ids, coupled_positions)
     !! Parse a supported EI=0 deck and initialize one persistent multi-line
     !! CableDyn system with product-facing points and endpoint bindings.
     !! caller_driven (default .FALSE.): the host marches the system, so the deck's
@@ -1084,6 +1084,8 @@ CONTAINS
     !! host values override deck-declared ones); a deck-declared bathymetryFile
     !! keeps its structured seabed over the host's flat depth.
     !! line_ids: the deck id of each system line (system line order = deck order).
+    !! coupled_positions (3, n): the host's positions of the line-bound Coupled/Vessel
+    !! points, placed before the static solve (layout: apply_point_system_positions).
     CHARACTER(*), INTENT(IN) :: deck_path
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     REAL(wp), INTENT(OUT) :: dtM, gravity, rho_water
@@ -1092,6 +1094,7 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: caller_driven
     REAL(wp), INTENT(IN), OPTIONAL :: env_gravity, env_rho_water, env_wtrdpth
     INTEGER, ALLOCATABLE, INTENT(OUT), OPTIONAL :: line_ids(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: coupled_positions(:, :)
 
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
@@ -1149,6 +1152,12 @@ CONTAINS
     IF (opts%has_motion_file) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_System does not support motionFile point-system initialization')
       RETURN
+    END IF
+    IF (PRESENT(coupled_positions)) THEN
+      CALL apply_point_system_positions(points, lines, coupled_positions, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL revalidate_ptfm_points(points, lines, ErrStat, ErrMsg, origin='coupled_positions')
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END IF
     IF (opts%has_bathymetry_file) THEN
       CALL load_bathymetry_file(path_join(deck_dir(deck_path), opts%bathymetry_file), bathymetry, ErrStat, ErrMsg, &
@@ -6429,7 +6438,7 @@ CONTAINS
     IF (PRESENT(coupled_positions)) THEN
       CALL apply_coupled_positions(points, lines, is_fin, coupled_positions, ptfm_init, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      CALL revalidate_ptfm_points(points, lines, ErrStat, ErrMsg)
+      CALL revalidate_ptfm_points(points, lines, ErrStat, ErrMsg, origin='coupled_positions')
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END IF
 
@@ -31840,23 +31849,80 @@ CONTAINS
     END IF
   END SUBROUTINE apply_coupled_positions
 
-  SUBROUTINE revalidate_ptfm_points(points, lines, ErrStat, ErrMsg)
+  SUBROUTINE apply_point_system_positions(points, lines, coupled_positions, ErrStat, ErrMsg)
+    !! Place the host-driven points of a point-system deck at the host's positions before
+    !! the static solve. The columns follow the point-system coupled vector, whose blocks are
+    !! the line-bound points of every type in deck POINT order. coupled_positions holds either
+    !! one column per line-bound point (the full coupled vector; only the Coupled/Vessel
+    !! columns are read, the Fixed, Free and Connect columns are not) or one column per
+    !! line-bound Coupled/Vessel point (those columns only, in the same order). The column
+    !! count selects the form; when every line-bound point is Coupled/Vessel the two agree.
+    !! Fails closed on a shape or count mismatch and on non-finite input.
+    TYPE(DeckPoint), INTENT(INOUT) :: points(:)
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    REAL(wp), INTENT(IN) :: coupled_positions(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: i, icol, n_bound, n_host
+    LOGICAL :: full
+    LOGICAL, ALLOCATABLE :: bound(:), host(:)
+    CHARACTER(12) :: t1, t2, t3
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (SIZE(coupled_positions, 1) /= 3) THEN
+      CALL fail(ErrStat, ErrMsg, 'coupled_positions must be shaped (3, n)'); RETURN
+    END IF
+    IF (.NOT. ALL(IEEE_IS_FINITE(coupled_positions))) THEN
+      CALL fail(ErrStat, ErrMsg, 'coupled_positions must be finite'); RETURN
+    END IF
+    ALLOCATE (bound(SIZE(points)), host(SIZE(points)))
+    DO i = 1, SIZE(points)
+      bound(i) = ANY(lines(:)%nodeA == points(i)%id) .OR. ANY(lines(:)%nodeB == points(i)%id)
+      host(i) = bound(i) .AND. (TRIM(points(i)%ptype) == 'coupled' .OR. TRIM(points(i)%ptype) == 'vessel')
+    END DO
+    n_bound = COUNT(bound)
+    n_host = COUNT(host)
+    full = SIZE(coupled_positions, 2) == n_bound
+    IF (.NOT. full .AND. SIZE(coupled_positions, 2) /= n_host) THEN
+      WRITE (t1, '(I0)') SIZE(coupled_positions, 2)
+      WRITE (t2, '(I0)') n_bound
+      WRITE (t3, '(I0)') n_host
+      CALL fail(ErrStat, ErrMsg, 'coupled_positions has '//TRIM(t1)//' points; the deck has '//TRIM(t2)// &
+                ' line-bound points (the coupled vector), '//TRIM(t3)//' of them Coupled/Vessel'); RETURN
+    END IF
+    icol = 0
+    DO i = 1, SIZE(points)
+      IF (full .AND. bound(i)) icol = icol + 1
+      IF (.NOT. host(i)) CYCLE
+      IF (.NOT. full) icol = icol + 1
+      points(i)%pos = coupled_positions(:, icol)
+    END DO
+  END SUBROUTINE apply_point_system_positions
+
+  SUBROUTINE revalidate_ptfm_points(points, lines, ErrStat, ErrMsg, origin)
     !! Re-establish the parse's position-dependent contracts on ptfm_init-displaced
     !! geometry (the transform runs after finalize_and_validate, so without this a
     !! displaced deck could hand the static builders geometry the undisplaced deck
     !! would have failed closed on): every point position stays finite, and on a
     !! static deck no LINE's fairlead-side End A ends up below its Fixed End B anchor
-    !! (the ordering contract the catenary seeding relies on).
+    !! (the ordering contract the catenary seeding relies on). origin names the input
+    !! that moved the points in the diagnostics (default 'ptfm_init').
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(*), INTENT(IN), OPTIONAL :: origin
     INTEGER :: i, ia, ib
+    CHARACTER(32) :: what
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
+    what = 'ptfm_init'
+    IF (PRESENT(origin)) what = origin
     DO i = 1, SIZE(points)
       IF (.NOT. ALL(IEEE_IS_FINITE(points(i)%pos))) THEN
-        CALL fail(ErrStat, ErrMsg, 'ptfm_init produced a non-finite point position'); RETURN
+        CALL fail(ErrStat, ErrMsg, TRIM(what)//' produced a non-finite point position'); RETURN
       END IF
     END DO
     IF (deck_has_dynamic_points(points)) RETURN
@@ -31866,7 +31932,7 @@ CONTAINS
       IF (ia == 0 .OR. ib == 0) CYCLE   ! endpoint resolution already validated by the parse
       IF (TRIM(points(ib)%ptype) == 'fixed') THEN
         IF (points(ia)%pos(3) < points(ib)%pos(3)) THEN
-          CALL fail(ErrStat, ErrMsg, 'ptfm_init displaces a LINE End A fairlead (NodeA) below its '// &
+          CALL fail(ErrStat, ErrMsg, TRIM(what)//' displaces a LINE End A fairlead (NodeA) below its '// &
                     'Fixed End B anchor (NodeB)'); RETURN
         END IF
       END IF

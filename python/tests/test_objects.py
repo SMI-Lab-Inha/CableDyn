@@ -431,7 +431,8 @@ def test_unbound_handle_and_raw_lines(monkeypatch, tmp_path):
 
 
 def test_abi_minor_is_reported():
-    assert _lib.abi_minor() == _lib.OBJECT_QUERY_ABI_MINOR == cabledyn.abi_minor() == 1
+    assert _lib.OBJECT_QUERY_ABI_MINOR == 1
+    assert _lib.abi_minor() == cabledyn.abi_minor() == _lib.HOST_COUPLING_ABI_MINOR == 2
     assert objects_module.OBJ_ROD == 4
 
 

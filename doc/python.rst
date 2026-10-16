@@ -772,6 +772,39 @@ motion are rejected in-process (they run in the standalone driver): time-varying
 kinematics enter through :meth:`~cabledyn.CableDyn.update_point_fluid_fields`, and motion through
 the coupled kinematics of every step.
 
+A host that moves the ``Coupled`` points from its own body solver starts the model at its
+positions and rewinds it between the passes of an iterated time step. The save is keyed on the
+start time of the pass, so a pass retried with a smaller ``dt`` restores as well
+(:ref:`capi-host-coupling` explains each call and how it differs from MoorDyn):
+
+.. code-block:: python
+
+   import math
+
+   from cabledyn import CableDyn
+
+
+   class Mooring:
+       def __init__(self, deck, fairleads):
+           # fairleads: the Coupled points in layout order, flat or (3, n) with n != 3
+           self.model = CableDyn()
+           self.model.init_deck_at(deck, fairleads)
+           self.q, self.v, self.a = self.model.get_coupled_motion()
+           self.host = self.model.host_dofs()  # the "coupled" blocks of coupled_layout()
+           self.t_saved = -math.inf  # nothing saved yet
+
+       def solve(self, t, dt, x_end, v_end, a_end):
+           """One pass of the host time step from t - dt to t (flat host motion at t)."""
+           t_prev = t - dt
+           if t_prev - self.t_saved >= 1e-3 * dt:  # a new step: the model is at t_prev
+               self.model.save_state()
+               self.t_saved = t_prev
+           else:  # a repeated pass from the same start time, whatever its dt
+               self.model.restore_state()
+           self.q[self.host], self.v[self.host], self.a[self.host] = x_end, v_end, a_end
+           self.model.step(dt, self.q, self.v, self.a)
+           return self.model.calc_output()[self.host].reshape(3, -1, order="F")
+
 Objects and output channels
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
