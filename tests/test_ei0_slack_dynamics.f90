@@ -264,6 +264,29 @@ CONTAINS
     CLOSE (u)
   END FUNCTION file_contains
 
+  SUBROUTINE echo_tail(path, n)
+    !! Print the last n lines of a log (the reason a driver run stopped).
+    CHARACTER(*), INTENT(IN) :: path
+    INTEGER, INTENT(IN) :: n
+    CHARACTER(4096) :: ring(16), line
+    INTEGER :: u, ios, k, m, i
+    m = MIN(MAX(n, 1), SIZE(ring))
+    k = 0
+    OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    IF (ios /= 0) RETURN
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      k = k + 1
+      ring(MOD(k - 1, m) + 1) = line
+    END DO
+    CLOSE (u)
+    WRITE (*, '(A)') '  --- end of '//path//':'
+    DO i = MAX(1, k - m + 1), k
+      WRITE (*, '(A)') '  '//TRIM(ring(MOD(i - 1, m) + 1))
+    END DO
+  END SUBROUTINE echo_tail
+
   SUBROUTINE run_driver_logged(deck, root, log, ok)
     !! Run the driver executable on a deck, its stdout and stderr to log.
     CHARACTER(*), INTENT(IN) :: deck, root, log
@@ -474,23 +497,27 @@ CONTAINS
   SUBROUTINE case_run_audit()
     LOGICAL :: ok
     CHARACTER(64) :: opts(4)
-    ! the configuration blend of case 1: its spikes are reported once, as a warning
+    ! the configuration blend of case 1: its spikes are reported once, as a warning. Its
+    ! non-physical spikes make the run chaotic: whether it completes or a later spike stops it
+    ! fail-closed depends on round-off (it did both on Linux CI runners of the same commit), so
+    ! only the warning, written at the first spike, is required of it
     CALL light_cable_deck('ei0slack_audit_cfg.dat', 0.1_wp, 40.0_wp, 'False alpha_force_blend', '-')
     CALL run_driver_logged('ei0slack_audit_cfg.dat', 'ei0slack_audit_cfg', 'ei0slack_audit_cfg.log', ok)
-    CALL require(ok, 'audit:configuration-blend-run')
+    IF (.NOT. ok) CALL echo_tail('ei0slack_audit_cfg.log', 6)
     CALL require(file_contains('ei0slack_audit_cfg.log', 'Warning: line 1: segment '), &
                  'audit:configuration-blend-spike-warned')
     CALL require(file_contains('ei0slack_audit_cfg.log', 'for a single step'), 'audit:spike-message')
-    ! the snaps of the light cable (axial wave crossing a segment ~160 times per step) are noted
-    CALL require(file_contains('ei0slack_audit_cfg.log', 'went from slack to taut above the initial tension'), &
-                 'audit:snap-note')
-    CALL require(file_contains('ei0slack_audit_cfg.log', 'snap-load peaks are not resolved in time'), &
-                 'audit:snap-note-text')
     ! the default force blend: no spike warning
     CALL light_cable_deck('ei0slack_audit_fb.dat', 0.1_wp, 40.0_wp, '', '-')
     CALL run_driver_logged('ei0slack_audit_fb.dat', 'ei0slack_audit_fb', 'ei0slack_audit_fb.log', ok)
+    IF (.NOT. ok) CALL echo_tail('ei0slack_audit_fb.log', 6)
     CALL require(ok, 'audit:force-blend-run')
     CALL require(.NOT. file_contains('ei0slack_audit_fb.log', 'Warning: line'), 'audit:force-blend-no-warning')
+    ! the snaps of the light cable (axial wave crossing a segment ~160 times per step) are noted
+    CALL require(file_contains('ei0slack_audit_fb.log', 'went from slack to taut above the initial tension'), &
+                 'audit:snap-note')
+    CALL require(file_contains('ei0slack_audit_fb.log', 'snap-load peaks are not resolved in time'), &
+                 'audit:snap-note-text')
     CALL require(.NOT. file_contains('ei0slack_audit_fb.log', 'Note: rhoInf'), 'audit:default-rhoinf-no-note')
     ! rhoInf above 0.95
     CALL light_cable_deck('ei0slack_audit_rho.dat', 0.1_wp, 12.0_wp, '0.99 rhoInf', '-')
