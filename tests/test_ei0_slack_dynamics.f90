@@ -614,10 +614,23 @@ CONTAINS
     IF (.NOT. ok) CALL echo_tail('ei0slack_audit_fb.log', 6)
     CALL require(ok, 'audit:force-blend-run')
     CALL require(.NOT. file_contains('ei0slack_audit_fb.log', 'Warning: line'), 'audit:force-blend-no-warning')
-    ! the snaps of the light cable (axial wave crossing a segment ~160 times per step) are noted
-    CALL require(file_contains('ei0slack_audit_fb.log', 'went from slack to taut above the initial tension'), &
+    ! snaps of the light cable (axial wave crossing a segment ~160 times per step) are noted. The
+    ! 3 m heave above snaps only just past the initial tension, so whether a coarse step counts a
+    ! snap there depends on round-off; a 6 m heave at 8 s snaps the line well past it
+    CALL write_motion('ei0slack_snap.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 3, 6.0_wp, 8.0_wp, 8.0_wp, &
+                      0.1_wp, 40.0_wp)
+    opts(1) = '0.1 dtM'
+    opts(2) = '40.0 TMax'
+    opts(3) = 'ei0slack_snap.txt motionFile'
+    opts(4) = ''
+    CALL write_deck('ei0slack_audit_snap.dat', CABLE, [205.0_wp, 0.0_wp, -80.0_wp], [5.0_wp, 0.0_wp, -14.0_wp], &
+                    230.0_wp, 115, 80.0_wp, '-', opts)
+    CALL run_driver_logged('ei0slack_audit_snap.dat', 'ei0slack_audit_snap', 'ei0slack_audit_snap.log', ok)
+    IF (.NOT. ok) CALL echo_tail('ei0slack_audit_snap.log', 6)
+    CALL require(ok, 'audit:snap-run')
+    CALL require(file_contains('ei0slack_audit_snap.log', 'went from slack to taut above the initial tension'), &
                  'audit:snap-note')
-    CALL require(file_contains('ei0slack_audit_fb.log', 'snap-load peaks are not resolved in time'), &
+    CALL require(file_contains('ei0slack_audit_snap.log', 'snap-load peaks are not resolved in time'), &
                  'audit:snap-note-text')
     CALL require(.NOT. file_contains('ei0slack_audit_fb.log', 'Note: rhoInf'), 'audit:default-rhoinf-no-note')
     ! rhoInf above 0.95
