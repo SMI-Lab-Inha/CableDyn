@@ -1393,6 +1393,34 @@ compilers and platforms give other values) and at 0.145 MN without it, against 0
 surge that goes slack peaks at 1.64 MN at 0.1 s, against 1.78 MN at 1 and 2.5 ms, with or
 without the cap.
 
+An elastic segment with axial damping (``BA``) also keeps :math:`\alpha_f T_{d,n}` along
+:math:`\mathbf{t}_n`, :math:`T_{d,n}` the tension of its dashpot at :math:`t_n`. A segment that
+extends at :math:`t_n` and releases within the step carries that force against the shortening
+as well: in the test chain (dashpot tension 1.6 to 62 times the elastic one) the blend of a
+segment that turns and releases returned up to 2750 :math:`W_n` with only its elastic share
+capped.
+The dashpot pushes as well as pulls, so its end share
+:math:`(1 - \alpha_f) T_{d,n+1}\mathbf{t}_{n+1}` acts at a slack end state too, and it stores no
+energy, so the budget stays :math:`W_n`. The cap covers the dashpot with a weight :math:`\phi`
+that is 1 while the end state is at or below :math:`l_0` and falls linearly to 0 at
+:math:`l_0 + c\,e_n`, :math:`c = \alpha_f/(1 - \alpha_f)` (the end stretch below which the cap
+can act on an elastic segment): the kept force :math:`\alpha_f (T_n + \phi T_{d,n})` is replaced
+by :math:`N/p` when that is smaller, with
+:math:`N = \max(W_n + (1 - \alpha_f)(\hat T_{n+1} + \phi T_{d,n+1})\,p_{n+1}, 0)` and
+:math:`T_{d,n+1}` the dashpot tension the residual carries at
+:math:`(\mathbf{q}_{n+1}, \mathbf{v}_{n+1})`; the tangent carries its dependence on
+:math:`\mathbf{q}_{n+1}` through :math:`\mathbf{v}_{n+1}` (the factor
+:math:`\gamma/(\beta\Delta t)`). Over a step in which it shortens along :math:`\mathbf{t}_n`
+(:math:`p > 0`; the cap leaves the other steps alone) the blend of such a segment then returns
+at most :math:`W_n + (1 - \phi) D`, :math:`D = \alpha_f T_{d,n} p - (1 - \alpha_f)
+T_{d,n+1} p_{n+1}` the work of its uncapped blended dashpot, except when the end share alone
+returns more than :math:`W_n` (:math:`N` would be negative; the capped kept force is then
+zero). At
+and below :math:`l_0` that is :math:`W_n`. Above :math:`l_0 + c\,e_n` the cap is the elastic one,
+so the force-blended dashpot of a taut segment keeps the standard generalised-α treatment, under
+which a linear dashpot is dissipative; :math:`\phi` is continuous, and so is the capped force.
+The viscoelastic law keeps its total tension, dashpots included, as :math:`T_n` (above).
+
 The one-sided seabed contact is not capped. A node that leaves the floor within a step keeps
 :math:`\alpha_f` of its step-start contact force :math:`N_n` for the whole step: over a lift-off
 distance :math:`d` it returns at most :math:`\alpha_f N_n d` to the motion, against the energy

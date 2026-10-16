@@ -193,11 +193,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   stiffness, so that damping carried at a vanishing stretch does not make the cap switch
   abruptly (the same cable made lightly damped viscoelastic peaks at 0.085 MN at the anchor at
   `dtM` 0.1 s, a snap that step does not resolve, against 0.145 MN without the cap on its
-  segments and 0.082 to 0.095 MN at 0.5 to 2.5 ms). The seabed contact of
+  segments and 0.082 to 0.095 MN at 0.5 to 2.5 ms). An elastic segment with axial damping
+  keeps the step-start dashpot force along its old chord too; where its end state is slack, or
+  taut by less than `α_f/(1 − α_f)` of its stretch, the cap covers that force as well, crediting
+  the dashpot's end share, so that the whole blend of a segment ending slack returns at most its
+  strain energy unless that end share alone returns more (in the test chain it returned up to
+  2750 times that with only the elastic share capped); a damped segment that ends taut beyond
+  that band keeps the plain force blend. The seabed contact of
   a node that lifts off within a step is not capped (see the manual's theory page). At the
   default `rhoInf` the reproducers now give 0.10 / 0.09 MN, 0.092 / 0.106 MN, 0.075 / 0.043 MN
   and 1.80 MN, as their references, and the stiff-seabed line runs to completion; the
-  chain–polyester anchor snap peaks at 5.8 MN at `dtM` 0.05 s, a single-step peak (4.6 MN at
+  chain–polyester anchor snap peaks at 5.7 MN at `dtM` 0.05 s, a single-step peak (4.6 MN at
   0.0025 s) that the new snap note reports. On a linear element the scheme is unchanged, so taut
   lines keep their accuracy: every MoorDyn-C, OrcaFlex, analytic and experimental comparison that
   runs locally still passes, and its reported error moves by at most 0.35 percentage points (the

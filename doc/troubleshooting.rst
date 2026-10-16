@@ -568,7 +568,7 @@ Warnings and notes that do not stop a run
    * - ``Note: line ...: ... segment step(s) went from slack to taut above the initial tension``
      - snap loads on an ``EI = 0`` line at a ``dtM`` that does not resolve the axial wave over a
        segment: the peak is set by a single step (a 15 m surge of a semi-taut chain–polyester
-       line peaks at 5.8 MN at ``dtM`` 0.05 s against 4.6 MN at 0.0025 s). The run is valid;
+       line peaks at 5.7 MN at ``dtM`` 0.05 s against 4.6 MN at 0.0025 s). The run is valid;
        confirm design peaks with a smaller ``dtM``.
    * - ``Warning: line ...: segment ... carried ... N at t = ... s for a single step, ... times
        the largest tension on the line one step before and after``

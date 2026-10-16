@@ -1968,7 +1968,8 @@ CONTAINS
                                    prescribed_v=prescribed_v, prescribed_a=prescribed_a, &
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
                                    start_tension=model%tension_start_work, &
-                                   start_stiffness=model%stiffness_start_work)
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (PRESENT(prescribed_q) .AND. has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -1978,7 +1979,8 @@ CONTAINS
                                    prescribed_q=prescribed_q, prescribed_v=prescribed_v, &
                                    prescribed_a=prescribed_a, workspace=model%dynamic_workspace, &
                                    start_load=model%load_start_work, start_tension=model%tension_start_work, &
-                                   start_stiffness=model%stiffness_start_work)
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (PRESENT(prescribed_q) .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -2002,7 +2004,8 @@ CONTAINS
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
                                    added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
                                    start_load=model%load_start_work, start_tension=model%tension_start_work, &
-                                   start_stiffness=model%stiffness_start_work)
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (has_load) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
@@ -2011,7 +2014,8 @@ CONTAINS
                                    load_force_proc=model_force, load_band_proc=model_load_band, &
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
                                    start_tension=model%tension_start_work, &
-                                   start_stiffness=model%stiffness_start_work)
+                                   start_stiffness=model%stiffness_start_work, &
+                                   axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot)
     ELSE IF (model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
