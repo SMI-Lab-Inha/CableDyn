@@ -5887,7 +5887,9 @@ CONTAINS
     ! q and v are finite (checked above) and every element input the kernels validate -- l0,
     ! the damping coefficients, the nodal fluid fields and waterlines, and the section scalars --
     ! is validated wherever the model sets it (CD_Init_Model, CD_Update_Model_Hydro_Fields,
-    ! CD_Update_Model_SegmentLength): the kernels skip their per-element input scan.
+    ! CD_Update_Model_SegmentLength): the kernels skip their per-element input scan. Every
+    ! writer of these fields must validate them (the snapshot restore and the model copies
+    ! assign only previously validated states).
     DO e = 1, model%n_elem
       CALL extract_element_state(model, e, q, v, idx, q2, v2)
       IF (model%has_damping) THEN

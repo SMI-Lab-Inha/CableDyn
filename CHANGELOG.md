@@ -277,8 +277,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   were then back-solved with the unfactored matrix: in a unit test the end tangent was wrong by
   five orders of magnitude, which can slow or misdirect the outer junction iteration. The step
   now clears the factorization flags whenever it overwrites the band without factoring it, so
-  the end query factors the current tangent. No example deck and no other test takes this
-  path, and their outputs are unchanged.
+  the end query factors the current tangent (one more tangent assembly and factorization for
+  such a step of a junction solve). The outputs of the example decks and of the other tests
+  are unchanged.
 
 ## [0.1.1] - 2026-10-09
 
