@@ -1947,8 +1947,12 @@ translation within the step. This is second order: between exact end values the 
 position departs from the host path by at most :math:`\Delta t^2 \max|\mathbf{a}_p|/8`, the
 interpolated velocity is not the derivative of the interpolated position (they differ by
 :math:`O(\Delta t\,|\mathbf{a}_p|)`), and a pin moving at constant velocity is reproduced exactly.
-A first step without a committed angular acceleration takes its starting one with the pin at its
-step-start pose.
+A first step without a committed angular acceleration (the aggregate and the C API) takes its
+starting one with the pin at its step-start pose; under OpenFAST the rod state mirror reloaded
+at the initial output call carries the committed accelerations of the initial condition, zero
+for the static start, so a start out of equilibrium (``bodyIC deck``) begins its first step
+from rest acceleration, an error of order :math:`\Delta t` in that step's velocity, as for a
+free rod.
 
 The host receives the rod's net load less its inertia at the pin, and no moment. It is the
 direct feedthrough of the pin acceleration at the rod's current state: the pin position,

@@ -141,11 +141,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   every other host node, and checkpoint restarts and correction iterations reproduce the run bit
   for bit with the existing rod state mirror. An end of a `Pinned` or `CoupledPinned` rod that
   carries no line needs no `Rod<N>A`/`Rod<N>B` POINT row on the coupled route; other rods still
-  need one at both ends. The C API runs `Pinned` rods, as its
-  manual page already stated. The standalone driver and the C API refuse `CoupledPinned` rods
-  by name; FAST.Farm decks still refuse rods, OpenFAST linearisation still refuses rods, and
-  `CoupledPinned` bodies remain unsupported. See the manual's OpenFAST page (Lifecycle
-  features).
+  need one at both ends. The C API runs `Pinned` rods, as its manual page already stated. The
+  standalone driver and the C API refuse `CoupledPinned` rods by name; FAST.Farm decks still
+  refuse rods, OpenFAST linearisation still refuses rods, and `CoupledPinned` bodies remain
+  unsupported. See the manual's OpenFAST page (Lifecycle features).
 
 ### Changed
 
