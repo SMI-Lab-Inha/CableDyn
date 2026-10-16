@@ -552,6 +552,8 @@ def main() -> int:
     check(rc != 0 and "unknown OPTION keyword" in log, "layAzimuth1x is an unknown keyword")
     rc, log = run(a.exe, cdir, "badtension", deck("bad tension", **flat, extra="-1.0 asLaidTension1\n"))
     check(rc != 0 and "asLaidTension1" in log, "a negative asLaidTension1 is rejected")
+    rc, log = run(a.exe, cdir, "hugetension", deck("huge tension", **flat, extra="1.0e30 asLaidTension\n"))
+    check(rc != 0 and "more than 100 %" in log, "an asLaidTension above EA fails closed instead of overflowing")
     # every row is validated, also one a later row for the same line overrides
     rc, log = run(a.exe, cdir, "shadowt", deck("shadowed tension", **flat,
                                              extra="-1.0 asLaidTension1\n0.0 asLaidTension1\n"))

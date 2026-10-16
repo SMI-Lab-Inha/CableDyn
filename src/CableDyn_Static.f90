@@ -1365,6 +1365,18 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'as-laid reference: l0 and ea must be positive and laid_tension non-negative')
       RETURN
     END IF
+    ! A laid tension that stretches an element beyond its length is no laid state (and would
+    ! make the seabed path integration below unbounded): fail closed.
+    IF (ANY(laid_tension > ea)) THEN
+      CALL fail(ErrStat, ErrMsg, 'as-laid reference: asLaidTension stretches an element by more than 100 % '// &
+                '(asLaidTension > EA); give the tension the line was laid with')
+      RETURN
+    END IF
+    IF (PRESENT(bathymetry) .AND. SUM(l0)*2.0_wp > 1.0e7_wp) THEN
+      CALL fail(ErrStat, ErrMsg, 'as-laid reference: the laid length exceeds the 1e7 m the seabed path '// &
+                'integration supports')
+      RETURN
+    END IF
     dir = [COS(azimuth), SIN(azimuth)]
     ref(:, 1) = origin
     d = CD_ZERO
