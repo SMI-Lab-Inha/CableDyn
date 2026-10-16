@@ -22,7 +22,8 @@ PROGRAM test_hermite_automesh
   !!   8. LOCAL refinement (local_refinement): a line with one coarse section is refined where its
   !!      h*kappa fails, graded into the fine section, within the per-element cap, and agrees with
   !!      the global refinement; a resolved mesh, max_scale = 1 and the end-layer rig behave as
-  !!      in the global mode; the per-element diagnosis outputs are consistent.
+  !!      in the global mode; the element limit takes bending-length levels before h*kappa
+  !!      levels; the per-element diagnosis outputs are consistent.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve, &
                                          CD_HermiteCable_Static_Solve_AutoMesh, &
@@ -48,6 +49,7 @@ PROGRAM test_hermite_automesh
   CALL case_local_refinement()
   CALL case_local_unchanged()
   CALL case_local_boundary_layer()
+  CALL case_local_element_limit()
   CALL case_metrics_element_outputs()
 
   IF (nfail > 0) THEN
@@ -387,8 +389,8 @@ CONTAINS
     INTEGER, ALLOCATABLE :: fixed(:), fixo(:), fixg(:)
     TYPE(CD_HermiteResolutionType) :: dg, dgg
     INTEGER :: nfix, scale, scaleg, its, es, e, k, ng, no
-    REAL(wp) :: seabed_z, res, ratio, dmax, xg
-    LOGICAL :: dyadic
+    REAL(wp) :: seabed_z, res, ratio, dmax, xg, deck_ratio
+    LOGICAL :: dyadic, graded
     CHARACTER(240) :: em
     CALL build_two_section_rig(3, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
     CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
@@ -411,12 +413,17 @@ CONTAINS
       xg = xg + l0o(e)
     END DO
     CALL check(dyadic, 'local: elements are power-of-two children within the cap')
-    ! Graded: neighbours differ by at most twice, except across the deck's own 10:1 jump.
-    ratio = 0.0_wp
+    ! Graded: neighbours differ by at most twice, except across the deck's own 10:1 jump
+    ! (the node at 30 m between a 10 m and a 1 m caller element), where the jump is at most it.
+    graded = .TRUE.
+    xg = 0.0_wp
     DO e = 1, SIZE(l0o) - 1
-      ratio = MAX(ratio, MAX(l0o(e)/l0o(e + 1), l0o(e + 1)/l0o(e)))
+      ratio = MAX(l0o(e)/l0o(e + 1), l0o(e + 1)/l0o(e))
+      xg = xg + l0o(e)
+      deck_ratio = MERGE(10.0_wp, 1.0_wp, ABS(xg - 30.0_wp) < 1.0e-9_wp)
+      IF (ratio > MAX(2.0_wp, deck_ratio)*(1.0_wp + 1.0e-12_wp)) graded = .FALSE.
     END DO
-    CALL check(ratio <= 10.0_wp*(1.0_wp + 1.0e-12_wp), 'local: no new size jump beyond the deck one')
+    CALL check(graded, 'local: new neighbour length jumps at most 2x (the deck jump excepted)')
     ! The far end of the fine section is not touched.
     CALL check(ALL(ABS(l0o(SIZE(l0o) - 19:) - 1.0_wp) < 1.0e-12_wp), 'local: resolved fine section unchanged')
     ! Same equilibrium as the global refinement, on far fewer elements.
@@ -516,6 +523,40 @@ CONTAINS
     CALL check(es == CD_HCSTAT_OK .AND. scale == 2 .AND. SIZE(l0o) == 2, 'local boundary: end layer split once')
     CALL check(.NOT. dg%boundary_unresolved, 'local boundary: end layer resolved')
   END SUBROUTINE case_local_boundary_layer
+
+  SUBROUTINE case_local_element_limit()
+    !! A pass that would exceed the element limit (8192) gives up bending-length levels before
+    !! h*kappa levels. 520 elements of 0.19 m with EI = 1e-2 (half the bending length is
+    !! 2.3 cm) all ask for 16 children by the bending-length rule (8320 elements), and with the
+    !! h*kappa target 3e-4 the elements about the sag ask for 16 by h*kappa as well. Taking one
+    !! level less everywhere (8x) would leave the sag at h*kappa about 4e-4 with no pass able to
+    !! split it further within the limit; keeping its h*kappa levels and giving the
+    !! bending-length rule one level meets the target in one pass. (The tolerance is the
+    !! round-off floor of the 6000-element polish.)
+    INTEGER, PARAMETER :: NE = 520
+    REAL(wp), PARAMETER :: TARGET = 3.0e-4_wp
+    REAL(wp), ALLOCATABLE :: l0(:), EA(:), EI(:), w(:), seed(:)
+    REAL(wp), ALLOCATABLE :: l0o(:), EAo(:), EIo(:), wo(:), qo(:), curvo(:)
+    INTEGER, ALLOCATABLE :: fixed(:), fixo(:)
+    TYPE(CD_HermiteResolutionType) :: dg
+    INTEGER :: nfix, scale, its, es
+    REAL(wp) :: seabed_z, res, h
+    CHARACTER(240) :: em
+    CALL build_rig(NE, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
+    EI = 1.0e-2_wp
+    h = l0(1)
+    CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
+                                               8, 120, 1.0e-6_wp, 0.7_wp, TARGET, 0.0_wp, 16, [2, 5], &
+                                               l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, res, its, es, em, &
+                                               local_refinement=.TRUE.)
+    IF (es /= CD_HCSTAT_OK) WRITE (*, '(A)') '  (local limit automesh error) '//TRIM(em)
+    CALL check(es == CD_HCSTAT_OK, 'local limit: solve ok')
+    IF (es /= CD_HCSTAT_OK) RETURN
+    CALL check(SIZE(l0o) <= 8192 .AND. SIZE(l0o) > 8*NE, 'local limit: within the limit, beyond 8x')
+    CALL check(ABS(MINVAL(l0o) - h/16.0_wp) <= 1.0e-12_wp*h, 'local limit: h*kappa needs keep 16 children')
+    CALL check(ABS(MAXVAL(l0o) - h/8.0_wp) <= 1.0e-12_wp*h, 'local limit: bending-length needs give a level')
+    CALL check(dg%h_kappa_peak <= TARGET, 'local limit: h*kappa target met')
+  END SUBROUTINE case_local_element_limit
 
   SUBROUTINE case_metrics_element_outputs()
     !! The per-element outputs of the resolution diagnosis: the h*kappa field peaks at

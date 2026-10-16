@@ -1290,7 +1290,9 @@ mesh-sequenced route described below first and this route as its fallback):
    element between finer ones carries a spurious axial oscillation), the state is carried to
    the new mesh by the Hermite interpolant of each element and polished, and the pass is
    repeated on the polished state while the target is not met and an element can still be
-   split, within 8192 elements. Elements the criteria leave alone keep their deck length, so
+   split (at most 12 passes), within 8192 elements: a pass that would exceed them gives up the
+   bending-length splits first, then the grading, and only then the curvature, end-layer and
+   contact splits. Elements the criteria leave alone keep their deck length, so
    a single coarse section costs only its own refinement (a 462-element lazy
    wave whose 180 m top section has two elements: 492 elements, where refining the whole line
    by the factor of its worst element gave 7392). A deck mesh too coarse for the bending length
@@ -2331,7 +2333,9 @@ load in warm-started Newton solves; in a deck current the drag at rest is added 
 solve is repeated with the drag of its own solution until the nodes stop moving. The load moves
 in eighths; a step whose damped Newton solve does not converge is repeated from the last
 converged state with pseudo-transient continuation and then with a residual-merit line search,
-and is halved (down to 1/1024) when neither converges. The smeared state carries no
+and is halved (down to 1/1024, with at most 32 failed steps in all) when neither converges; a
+discrete state reached this way passes the kink, tensile, physical-branch and stability checks
+of the smeared state before it is accepted. The smeared state carries no
 attachment drag, and on a frictional seabed, whose regularised friction force turns from its
 sticking stiffness to its sliding capacity over a short slip, the Newton update for a
 cross-flow drag can overshoot and diverge from the first step (a lazy wave with 25 modules in a

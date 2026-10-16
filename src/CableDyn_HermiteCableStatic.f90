@@ -6400,10 +6400,14 @@ CONTAINS
                                    diag_out%axial_strain_min_xi >= CD_ONE - 1.0e-6_wp))
     end_res_prev = diag_out%axial_strain_min_resultant
     ! A local resolution pass runs while an element can still be split (local_resolution_mesh
-    ! says when none can); the global and axial passes keep their cumulative-factor bound.
+    ! says when none can), at most MAX_LOCAL_RESOLUTION_PASSES times, and in the local mode an
+    ! axial pass at most MAX_LOCAL_AXIAL_PASSES times (applied_scale, the largest factor of
+    ! any element there, need not grow with every pass); the global passes, and the axial
+    ! passes of the global mode, keep their cumulative-factor bound.
     DO WHILE (needs_refinement .AND. &
-              (applied_scale < max_scale .OR. (local_axial .AND. local_passes < MAX_LOCAL_AXIAL_PASSES) .OR. &
-               (local_mode .AND. .NOT. local_axial .AND. kcap > 0 .AND. &
+              ((local_axial .AND. local_passes < MAX_LOCAL_AXIAL_PASSES) .OR. &
+               (.NOT. local_mode .AND. applied_scale < max_scale) .OR. &
+               (.NOT. local_axial .AND. local_mode .AND. kcap > 0 .AND. &
                 local_res_passes < MAX_LOCAL_RESOLUTION_PASSES)))
       ! A signed axial oscillation is local, usually at a section interface or the
       ! touchdown transition.  Split every offending element and its immediate
@@ -6524,11 +6528,12 @@ CONTAINS
       CALL MOVE_ALLOC(curvnew, curv_out)
       DEALLOCATE (qr)
       CALL MOVE_ALLOC(level_r, level_out)
-      IF (local_axial) THEN
-        applied_scale = MIN(max_scale, applied_scale*scale)
-      ELSE IF (local_mode) THEN
-        ! The largest factor of any element (its level is at most kcap here).
+      IF (local_mode) THEN
+        ! The largest factor of any element from its caller element (an axial pass splits
+        ! only the marked elements, so it raises the factor of those alone).
         applied_scale = MAX(applied_scale, MIN(max_scale, 2**MIN(MAXVAL(level_out), 30)))
+      ELSE IF (local_axial) THEN
+        applied_scale = MIN(max_scale, applied_scale*scale)
       ELSE
         applied_scale = applied_scale*scale
       END IF
@@ -6781,25 +6786,31 @@ CONTAINS
       !! each limited to kcap bisections from the caller element. The levels are then graded:
       !! an element is split further while it is longer than max(2, its length ratio to the
       !! neighbour before the pass) times that neighbour's new length. A pass that would exceed
-      !! the element limit AUTO_MAX_ELEMENTS takes one level less everywhere, as the global
-      !! refinement halves its factor. none is set when no element can be split.
+      !! the element limit AUTO_MAX_ELEMENTS gives up first the bending-length levels (one
+      !! level at a time, graded), then the grading, and only then takes one level less of the
+      !! h*kappa, end-layer and contact needs at a time: those name a bend or a boundary layer
+      !! the state shows, where the bending-length rule is a mesh-quality rule. none is set
+      !! when no element can be split.
       LOGICAL, INTENT(OUT) :: none
       INTEGER, INTENT(OUT) :: esx
       CHARACTER(*), INTENT(OUT) :: emx
-      INTEGER, ALLOCATABLE :: base(:), need(:), need_n(:), lev_c(:), lev_n(:), par_c(:), par_n(:)
+      INTEGER, ALLOCATABLE :: base(:), bend(:), need(:), need_n(:), lev_c(:), lev_n(:), par_c(:), par_n(:)
       INTEGER, ALLOCATABLE :: fix_c(:), fix_n(:)
       REAL(wp), ALLOCATABLE :: l0_c(:), q_c(:), l0_n(:), q_n(:)
       LOGICAL, ALLOCATABLE :: split(:)
       INTEGER :: nec, e, a, k, red
       INTEGER(I8) :: n_new
       REAL(wp) :: hk_local, half_bend
+      LOGICAL :: fits
       none = .TRUE.
       esx = CD_HCSTAT_OK
       emx = ''
       nec = SIZE(l0_out)
-      ALLOCATE (base(nec), need(nec))
+      ! base: the h*kappa, end-layer and contact needs; bend: the bending-length needs.
+      ALLOCATE (base(nec), bend(nec), need(nec))
       hk_local = MIN(h_kappa_target, CD_HC_HKAPPA_TARGET)
       base = 0
+      bend = 0
       DO e = 1, nec
         IF (.NOT. (elem_hk(e) > hk_local)) CYCLE
         k = 0
@@ -6815,7 +6826,7 @@ CONTAINS
         DO WHILE (l0_out(e) > half_bend*2.0_wp**k*(CD_ONE + 1.0e-12_wp) .AND. level_out(e) + k < kcap)
           k = k + 1
         END DO
-        base(e) = MAX(base(e), k)
+        bend(e) = k
       END DO
       base(1) = MAX(base(1), end_layer_levels(diag_out%hop_boundary_ratio, level_out(1)))
       base(nec) = MAX(base(nec), end_layer_levels(diag_out%end_boundary_ratio, level_out(nec)))
@@ -6825,14 +6836,24 @@ CONTAINS
           IF (level_out(e) < kcap) base(e) = MAX(base(e), 1)
         END DO
       END DO
-      IF (ALL(base == 0)) RETURN
-      DO red = 0, MAXVAL(base)
-        need = MAX(base - red, 0)
+      IF (ALL(base == 0) .AND. ALL(bend == 0)) RETURN
+      ! Within the element limit: the bending-length levels go first, then the grading, then
+      ! the other needs a level at a time (the first try is the whole graded need).
+      fits = .FALSE.
+      DO red = 0, MAXVAL(bend)
+        need = MAX(base, bend - red)
         CALL grade(need)
         n_new = SUM(2_I8**need)
-        IF (n_new <= INT(AUTO_MAX_ELEMENTS, I8)) EXIT
+        fits = n_new <= INT(AUTO_MAX_ELEMENTS, I8)
+        IF (fits) EXIT
       END DO
-      IF (n_new > INT(AUTO_MAX_ELEMENTS, I8) .OR. ALL(need == 0)) RETURN
+      DO red = 0, MAXVAL(base)
+        IF (fits) EXIT
+        need = MAX(base - red, 0)
+        n_new = SUM(2_I8**need)
+        fits = n_new <= INT(AUTO_MAX_ELEMENTS, I8)
+      END DO
+      IF (.NOT. fits .OR. ALL(need == 0)) RETURN
       none = .FALSE.
 
       ! Bisect level by level: the children of a split cubic-Hermite element carry the same
