@@ -1189,9 +1189,16 @@ slope, since with the default ``staticsFriction none`` the static solve applies 
 a deck current only. With ``frictionMu`` and ``staticsFriction none`` on a slope:
 ``staticsFriction asLaid``. With friction that already acts and still does not hold the run, or
 on a deck whose route rejects ``frictionMu`` (``Connect``/``Free`` points, ``Point3`` buoys) or
-``staticsFriction asLaid`` (bodies and rods): a shorter line. Under ``staticsFriction asLaid``
-with a ``layAzimuth`` that lays the line from its lower end away from its other end, the deck
-itself lays the run past that end and no note is made. The note never changes a result. No
+``staticsFriction asLaid`` (the multibody march): a shorter line. A run without ``dtM`` and
+``TMax`` takes the static-only line solve, which carries no seabed friction at all, so there
+the note adds that friction needs ``dtM`` and ``TMax`` (``TMax = 0`` for the statics alone).
+Under ``staticsFriction asLaid`` no note is made when the as-laid reference itself (the line
+laid on the seabed from its lower end, the anchor or the fairlead when that is lower, along
+``layAzimuth`` or by default toward the other end, over its length) reaches past the grounded
+end by more than the threshold above: the deck lays the run there, for example from the anchor
+away from the fairlead, or from a lower fairlead toward the anchor and beyond it. The same rule
+and the same causes and remedies apply to the finite-EI note below. The note never changes a
+result. No
 example deck and no ``EI = 0`` line of the statics test matrices prints it except the folded
 layouts it describes.
 
@@ -1346,10 +1353,14 @@ seeded with the CableDyn shape converge to the same layout, and a dynamic run fr
 rest and returns to it after a disturbance. The standalone driver prints a note when the
 grounded run of the static layout lies past its anchor (``the static layout carries the
 grounded run ... m past its anchor``), because the layout differs from the usual one and a
-real seabed with friction, or a shorter line, would not reach it. The note names static
-seabed friction (``frictionMu`` with ``staticsFriction asLaid``) or a shorter line as the
-remedy, only the shorter line when ``asLaid`` is already on, and is not made when ``asLaid``
-with a ``layAzimuth`` away from the fairlead lays the run past the anchor itself. When the 3D solve also
+real seabed with friction, or a shorter line, would not reach it. The note names the same
+cause and remedy as the ``EI = 0`` fold note above (one rule for both): the finite-EI static
+solve also applies ``frictionMu`` against a deck current under ``staticsFriction none``, so
+``frictionMu`` answers a current and ``staticsFriction asLaid`` a slope, and a shorter line
+remains where that friction already acts or the route rejects it (the multibody march rejects
+``asLaid``, and a deck with ``Connect``/``Free`` points or ``Point3`` buoys ``frictionMu``).
+Under ``asLaid`` no note is made when the as-laid reference itself, the line laid from its
+lower end along ``layAzimuth``, reaches past the anchor. When the 3D solve also
 fails, the solve stops with
 the diagnosis (the element-mean compression, where it sits, and its height above the seabed)
 and suggests ``frictionMu``; neither the pseudo-arclength continuation of the planar path

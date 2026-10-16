@@ -107,8 +107,9 @@ CONTAINS
   SUBROUTINE case_point3_march(scheme)
     !! A Point3 buoy of the clump's mass (BODY Mass 50000, Vol 0) set at the clump's static
     !! position: no static solve places a Point3, so it starts there, and it stays at rest only
-    !! if its own footprint carries the share of its weight that the clump's did (about 1 m of
-    !! penetration's worth, 1.3e5 N: without it the buoy sinks centimetres in the first steps).
+    !! if its own footprint carries the share of its weight that the clump's did, kBot*A*pen =
+    !! 3.44e5 N/m * 0.95 m = 3.3e5 N (without it the buoy sinks about 2.8 m into the seabed
+    !! over the 2 s march, against the 1e-3 m bound here).
     CHARACTER(*), INTENT(IN) :: scheme
     REAL(wp), ALLOCATABLE :: rows(:, :)
     INTEGER :: es

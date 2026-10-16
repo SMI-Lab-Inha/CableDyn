@@ -193,10 +193,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   remedy that fits the deck's static friction: `frictionMu` against a current,
   `staticsFriction asLaid` on a slope (with the default `staticsFriction none` the static solve
   applies friction against a deck current only), or a shorter line where friction already acts
-  or the route rejects it. A run that `staticsFriction asLaid` lays past its anchor along
-  `layAzimuth` is not noted, nor is a near-vertical line (horizontal span under a tenth of the
-  water depth) past its end. The finite-EI note now names the same remedy and skips the same
-  as-laid run. It is printed on the static, `TMax = 0`, point-system and
+  or the route rejects it; a run without `dtM` and `TMax` is told that friction needs them,
+  since the static-only line solve carries none. A run that the `staticsFriction asLaid`
+  reference itself lays past its end (laid from the lower end along `layAzimuth`) is not
+  noted, nor is a near-vertical line (horizontal span under a tenth of the water depth) past
+  its end. The finite-EI note on a run past its anchor, which named "seabed friction or a
+  shorter line" whatever the deck, now names the same cause and remedy by the same rule and
+  skips the same as-laid run. It is printed on the static, `TMax = 0`, point-system and
   multibody routes and in the OpenFAST initialisation report, which now also prints the
   initialisation notes of finite-EI cables, and returned in the line report of the OpenFAST
   aggregate. No example deck prints it, and no result changes. See the manual's theory page
@@ -674,8 +677,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   equilibrium (which does not place a `Point3` buoy) and in the monolithic, staggered and
   OpenFAST/C API point steps. The 50 t clump now rests 0.95 m deep (its weight alone presses
   its 3.44 m² footprint in by 1.43 m) and the 20 t clump 0.67 m. The point routes still reject
-  `frictionMu`, so the contact is frictionless.
-  Results change only where a point touches the seabed: of the examples only
+  `frictionMu`, so the contact is frictionless. Formal OpenFAST linearisation of a deck with a
+  `Point3` buoy now fails closed by name, like a deck with Rigid6 bodies or rods: its
+  quasi-static re-solve held the buoy at its deck position. Results change only where a point touches the seabed: of the examples only
   `clump_weight_free_point.dat`, whose clump now rests 4.7 cm deep instead of 6.6 cm and whose
   anchor tension falls from 186 kN to 92 kN; decks whose points stay clear of the seabed give
   identical output. See the manual's theory page (Seabed contact).
