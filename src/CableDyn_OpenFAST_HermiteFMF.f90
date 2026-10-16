@@ -169,7 +169,7 @@ CONTAINS
     INTEGER, INTENT(IN), OPTIONAL :: axial_quadrature_order, bending_quadrature_order
     TYPE(CD_HFMF_ModuleType) :: candidate
     INTEGER :: es, s, gd
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. CD_Is_Finite(dt) .OR. dt <= CD_ZERO) THEN
@@ -242,7 +242,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: gravity
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Drag: module not initialised'; RETURN
@@ -263,7 +263,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Attachments: module not initialised'; RETURN
@@ -282,7 +282,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK
     ErrMsg = ''
     IF (.NOT. self%initialized) THEN
@@ -313,7 +313,7 @@ CONTAINS
     LOGICAL :: endpoint_connected
     REAL(wp) :: d0_local(3, 2)
     REAL(wp) :: parent_d0(3), parent_d0_norm, dcm(3, 3)
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HFMF_OK
     ErrMsg = ''
@@ -415,7 +415,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: coupled_frame_parent(3, 2), parent_orientation(3, 3)
     INTEGER :: es, ci
     REAL(wp) :: dl(3), nl(3)
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK
     ErrMsg = ''
     IF (.NOT. self%initialized) THEN
@@ -497,7 +497,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_ModifiedNewton: module not initialised'; RETURN
@@ -514,7 +514,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Tensile_Safety: module not initialised'; RETURN
@@ -532,7 +532,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: strain_tolerance
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Tensile_Monitor: module not initialised'; RETURN
@@ -550,7 +550,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: worst_force, worst_threshold, worst_xi, worst_time
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     IF (.NOT. self%initialized) THEN
       event_count = 0; worst_element = 0
       worst_force = CD_ZERO; worst_threshold = CD_ZERO; worst_xi = CD_ZERO; worst_time = CD_ZERO
@@ -570,7 +570,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: event_count, max_substeps_used, ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     IF (.NOT. self%initialized) THEN
       event_count = 0; max_substeps_used = 0
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Get_Recovery_Diagnostics: module not initialised'; RETURN
@@ -609,7 +609,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_AddedMass: module not initialised'; RETURN
@@ -627,7 +627,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Waves: module not initialised'; RETURN
@@ -655,7 +655,7 @@ CONTAINS
     REAL(wp) :: tors_ends(3, 4), tors_phi
     REAL(wp) :: target_dcm(3, 3), target_d0(3, 2), target_omega(3), target_alpha(3)
     REAL(wp) :: target_d0_rate(3, 2), target_d0_acceleration(3, 2), omega_local(3), alpha_local(3)
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_UpdateStates: module not initialised'; RETURN
@@ -761,7 +761,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Snapshot: module not initialised'; RETURN
@@ -783,7 +783,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Restore: module not initialised'; RETURN
@@ -811,7 +811,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: u_angular_velocity(3), u_angular_acceleration(3)
     REAL(wp) :: target_dcm(3, 3), d0_target(3, 2), tangent_q(3), tangent_v(3), tangent_a(3)
     REAL(wp) :: target_omega(3), target_alpha(3)
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
 
     CALL prepare_coupled_kinematics(self, u_pos, u_vel, u_acc, target_dcm, target_omega, target_alpha, &
                                     d0_target, tangent_q, tangent_v, tangent_a, ErrStat, em, &
@@ -907,7 +907,7 @@ CONTAINS
     REAL(wp) :: tangent_q(3), tangent_v(3), tangent_a(3)
     REAL(wp) :: target_omega(3), target_alpha(3), tors_ends(3, 4)
     INTEGER :: base, es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
 
     CALL prepare_coupled_kinematics(self, u_pos, u_vel, u_acc, target_dcm, target_omega, target_alpha, &
                                     d0_target, tangent_q, tangent_v, tangent_a, ErrStat, em, &
@@ -1139,7 +1139,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es, i
     LOGICAL :: has_heading
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Held_Fluid: module not initialised'; RETURN
@@ -1176,7 +1176,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: es
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
@@ -1203,7 +1203,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
     REAL(wp) :: coupled_a(3)
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
@@ -1258,7 +1258,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: y_moment(3)
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''; y_fair = CD_ZERO
     IF (PRESENT(y_moment)) y_moment = CD_ZERO
     IF (.NOT. self%initialized) THEN
@@ -1391,7 +1391,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Curvature: module not initialised'; RETURN

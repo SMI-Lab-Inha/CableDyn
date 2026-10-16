@@ -58,7 +58,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: Kb(:, :), fint(:), R_free(:), dq(:)
     REAL(wp), ALLOCATABLE :: dq_global(:), q_trial(:), R_trial(:), fint0(:)
     REAL(wp) :: f_ext_base, conv_scale, rnorm, merit, merit_trial, alpha, scale_trial
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.; stalled = .FALSE.; n_iter = 0
     ErrStat = CD_COS_OK; ErrMsg = ''
@@ -179,7 +179,7 @@ CONTAINS
       REAL(wp), INTENT(OUT) :: Rf(:), sc
       REAL(wp), ALLOCATABLE :: fint_e(:)
       INTEGER :: es_e
-      CHARACTER(120) :: em_e
+      CHARACTER(1024) :: em_e
       ALLOCATE (fint_e(n_dof))
       CALL CD_Assemble_Cosserat_Internal_Force(nodes_ref, elem_conn, ea, gas, ei, gj, qe, &
                                                reduced_shear, fint_e, es_e, em_e)

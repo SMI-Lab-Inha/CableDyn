@@ -477,7 +477,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: R(:), dq(:), ab(:, :), ab_recovery(:, :), scaled_residual(:)
     REAL(wp), ALLOCATABLE :: elem_f(:, :), elem_K(:, :, :), elem_E(:)
     INTEGER, ALLOCATABLE :: elem_es(:)
-    CHARACTER(200), ALLOCATABLE :: elem_em(:)
+    CHARACTER(512), ALLOCATABLE :: elem_em(:)
     ! Secant-predictor history: the converged states of the two previous buoyancy
     ! stages (q_sec1 = stage b-1, q_sec2 = stage b-2).
     REAL(wp), ALLOCATABLE :: q_sec1(:), q_sec2(:)
@@ -1093,7 +1093,7 @@ CONTAINS
       INTEGER :: jr, jc
       INTEGER :: e, a, b, gi, gj, j, es2, bt, es_trial, zdof(4)
       LOGICAL :: dry, accepted
-      CHARACTER(200) :: em2, em_trial
+      CHARACTER(1024) :: em2, em_trial
 
       es = CD_HCSTAT_OK; em = ''; rnorm = CD_ZERO; merit = CD_ZERO
       IF (use_rigid) THEN
@@ -1556,7 +1556,7 @@ CONTAINS
       REAL(wp) :: pi0, pi_abs0, merit0, dmax, gd, alpha, trial_norm, sc, share0(2)
       INTEGER :: shift, bt, j, i, es_trial, info
       LOGICAL :: accepted
-      CHARACTER(200) :: em_trial
+      CHARACTER(1024) :: em_trial
       EXTERNAL :: dpbtrf, dpbtrs
 
       es = CD_HCSTAT_OK; em = ''
@@ -1820,7 +1820,7 @@ CONTAINS
       INTEGER :: ks, cuts, wios
       LOGICAL :: ok
       CHARACTER(200) :: km
-      CHARACTER(512) :: why
+      CHARACTER(1024) :: why
       CHARACTER(1024) :: wbuf
       ecs = CD_HCSTAT_OK
       ecm = ''
@@ -2516,7 +2516,7 @@ CONTAINS
       REAL(wp) :: z_fl, gxg_s, gyg_s, g_s(2), sf, n_in(3), pen_s, normal_s, normal_gap_s, elem, delem, mom
       REAL(wp) :: elem_pi
       INTEGER :: base, bin, i, j
-      CHARACTER(200) :: em_s
+      CHARACTER(1024) :: em_s
       sp_stat = CD_HCSTAT_OK
       sp_msg = ''
       base = MERGE(3, 6*(nn - 1) + 3, iend == 1)  ! end tangent DOFs are base+1 .. base+3
@@ -2593,7 +2593,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: a
       REAL(wp) :: qe(12), kL, kR
       INTEGER :: es3
-      CHARACTER(200) :: em3
+      CHARACTER(1024) :: em3
       kap = CD_ZERO
       IF (a <= ne) THEN
         CALL gather_elem(a, qe)
@@ -2804,7 +2804,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ref(:, :)
     REAL(wp) :: z_floor, gxg, gyg, xg, yg, normal, normal_gap, dfd(2, 2), dfc(2), cs(2)
     INTEGER :: node, ix, nn, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
     nn = SIZE(l0) + 1
@@ -2930,7 +2930,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: ve(12), djv(12, 12), ua(3), ub(3), ug(3), ul(3)
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
     fd = CD_ZERO
@@ -3053,10 +3053,10 @@ CONTAINS
     ! TRUE for the two frictionless grounded-run diagnoses (the run folds against its end or
     ! is pushed along the seabed in compression).
     LOGICAL, INTENT(OUT), OPTIONAL :: frictionless_run
-    CHARACTER(512) :: note
+    CHARACTER(1024) :: note
     REAL(wp) :: t_min, t_max, s_min, z_min, z_top
     INTEGER :: k, k_min, wios, ne, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     note = ''
     IF (PRESENT(frictionless_run)) frictionless_run = .FALSE.
     ne = SIZE(l0)
@@ -3162,7 +3162,7 @@ CONTAINS
     REAL(wp) :: lambda, lambda_try, dlog, stage_tol, res
     REAL(wp), ALLOCATABLE :: q(:), q_try(:), curv(:), ei_stage(:)
     REAL(wp) :: k_stage(2)
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: final_stage, restart_stage, snapped
     ! The current is brought in after the still-water EI continuation (unallocated: the
     ! stages run without the configuration-dependent drag).
@@ -3479,7 +3479,7 @@ CONTAINS
       !! TRUE when the diagnosis of state qx is a grounded run driven along a frictionless
       !! seabed (see current_compression_note).
       REAL(wp), INTENT(IN) :: qx(:)
-      CHARACTER(512) :: note
+      CHARACTER(1024) :: note
       LOGICAL :: flat
       flat = .NOT. PRESENT(bathymetry)
       run_limit = .FALSE.
@@ -3491,7 +3491,7 @@ CONTAINS
     FUNCTION compression_note(qx) RESULT(note)
       !! current_compression_note for this line (flat seabed plane unless bathymetry).
       REAL(wp), INTENT(IN) :: qx(:)
-      CHARACTER(512) :: note
+      CHARACTER(1024) :: note
       LOGICAL :: flat
       flat = .NOT. PRESENT(bathymetry)
       note = ''
@@ -3803,7 +3803,7 @@ CONTAINS
       REAL(wp) :: z_floor, gxg, gyg, xg, yg, normal, normal_gap, trib_k, cs(2), mu_c, q_c, gq_c(2)
       REAL(wp), ALLOCATABLE :: fr_ref_c(:, :), kn_c(:)
       INTEGER :: k, es_c
-      CHARACTER(200) :: em_c
+      CHARACTER(1024) :: em_c
       cs = [CD_ONE, CD_ZERO]
       IF (PRESENT(contact_frame_cs)) cs = contact_frame_cs
       IF (current%friction%mu_axial > CD_ZERO .AND. ABS(current%friction%mu_axial - current%friction%mu) > CD_ZERO) THEN
@@ -4514,7 +4514,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_prev(:)
     INTEGER, ALLOCATABLE :: fx_l(:), nodes_l(:), nodes_prev(:)
     TYPE(CD_HermiteResolutionType) :: coarse_diag
-    CHARACTER(300) :: em_l
+    CHARACTER(1024) :: em_l
     ! The level solve failed only on its final residual (a finite best iterate to continue from).
     LOGICAL :: unmet_l
     CHARACTER(200) :: diagnostic_msg
@@ -5066,7 +5066,7 @@ CONTAINS
     CHARACTER(*), INTENT(INOUT) :: ErrMsg
     INTEGER :: es, ne
     TYPE(CD_HermiteResolutionType) :: diag
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     IF (ErrStat /= CD_HCSTAT_OK) RETURN
     ne = SIZE(l0)
@@ -5139,7 +5139,7 @@ CONTAINS
                 axial_element_min, axial_element_min_xi, axial_element_max, axial_element_max_xi, &
                 axial_element_strain, tol_e, tol_rel, ratio
     REAL(wp), ALLOCATABLE :: elem_min(:), elem_min_xi(:), elem_max(:)
-    CHARACTER(120) :: em3
+    CHARACTER(1024) :: em3
     LOGICAL, ALLOCATABLE :: contact_node(:)
     LOGICAL :: in_island, axial_strain_seen
 
@@ -5473,7 +5473,7 @@ CONTAINS
     REAL(wp) :: H(4), dH(4), r(3), rp(3), ke, u_peak, nmin, nmax, umin, umax, ea_max, nmean, ng, allowance
     REAL(wp) :: reversal, emean(SIZE(l0)), sm, wl
     LOGICAL :: reject_c, folded
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
@@ -5950,7 +5950,7 @@ CONTAINS
     REAL(wp) :: qe(12), nmin, xmin, nmax, xmax, tol_rel, tol_e
     REAL(wp), ALLOCATABLE :: elem_min(:)
     LOGICAL, ALLOCATABLE :: raw(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCSTAT_OK; ErrMsg = ''
     IF (SIZE(l0) < 1 .OR. SIZE(EA) /= SIZE(l0) .OR. SIZE(q) /= 6*(SIZE(l0) + 1)) THEN
@@ -6597,7 +6597,7 @@ CONTAINS
       REAL(wp), INTENT(IN) :: qx(:)
       INTEGER :: node, gz, esx
       REAL(wp) :: z_floor
-      CHARACTER(200) :: emx
+      CHARACTER(1024) :: emx
       pen = CD_ZERO
       DO node = 1, SIZE(qx)/6
         gz = 6*(node - 1) + 3

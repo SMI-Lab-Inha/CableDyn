@@ -388,7 +388,7 @@ CONTAINS
     INTEGER :: n_dof, n_elem, n_nodes, es, istat, e
     INTEGER, ALLOCATABLE :: free(:)
     TYPE(CD_ModelType) :: old_model
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: use_seabed, use_seabed_damping, use_seabed_friction
     LOGICAL :: use_damping, use_drag, use_fk, use_buoyancy, use_added_mass, has_load
     LOGICAL :: use_viscoelastic, use_syrope
@@ -1400,7 +1400,7 @@ CONTAINS
     REAL(wp) :: laid_az, laid_t
     LOGICAL :: reverse_line, converged, use_current
     LOGICAL :: use_seabed, use_seabed_damping, use_seabed_friction, use_damping
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     TYPE(CableCurrentLoad) :: cur
     TYPE(CD_StaticLineReport) :: report
 
@@ -1857,7 +1857,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: prescribed_q(:), prescribed_v(:), prescribed_a(:)
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: has_load
 
     converged = .FALSE.
@@ -2050,7 +2050,7 @@ CONTAINS
       BLOCK
         INTEGER :: e2, na, nb, es2
         REAL(wp) :: ea_d_eff, ea_1_eff
-        CHARACTER(200) :: em2
+        CHARACTER(1024) :: em2
         DO e2 = 1, model%n_elem
           IF (model%ve_mode(e2) == 0) CYCLE
           na = model%elem_conn(1, e2)
@@ -2106,7 +2106,7 @@ CONTAINS
       BLOCK
         INTEGER :: e2, na, nb, es2
         REAL(wp) :: dl1_next, ea_d_eff, ea_1_eff
-        CHARACTER(200) :: em2
+        CHARACTER(1024) :: em2
         DO e2 = 1, model%n_elem
           IF (model%ve_mode(e2) == 0) CYCLE
           CALL model_viscoelastic_coeffs(model, e2, ea_d_eff, ea_1_eff, es2, em2)
@@ -2219,7 +2219,7 @@ CONTAINS
     LOGICAL :: has_pres, conv_sub, stall_sub, rung_ok
     REAL(wp) :: subdt, fraction
     REAL(wp), ALLOCATABLE :: pq(:), pv(:), pa(:)
-    CHARACTER(300) :: em, first_em
+    CHARACTER(1024) :: em, first_em
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -2821,7 +2821,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, es
     REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -2981,7 +2981,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es, istat, k
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -3065,7 +3065,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es, nc, n_free, i, j, row, col
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -3215,7 +3215,7 @@ CONTAINS
     INTEGER :: idx(6), conn1(2, 1)
     REAL(wp) :: coeff, s, q2(6), l02(1), wl2(2), m2(6, 6)
     LOGICAL :: hit, ok
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -3553,7 +3553,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -3725,7 +3725,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, node, d0, idx(6), es
     REAL(wp) :: q2(6), wl2(2), m2(6, 6)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ma_block = CD_ZERO
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4030,7 +4030,7 @@ CONTAINS
     REAL(wp) :: load(9)
     REAL(wp) :: fint_first(3), fint_last(3), nodes6(6), Kt6(6, 6), fint6(6), Te
     INTEGER :: es, n, nn, e, a, b
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     force_first = CD_ZERO
     force_last = CD_ZERO
@@ -4086,7 +4086,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     tension = CD_ZERO
     ErrStat = CD_MODEL_OK
@@ -4399,7 +4399,7 @@ CONTAINS
       BLOCK
         REAL(wp) :: f_dist(SIZE(model%f_ext))
         INTEGER :: es2
-        CHARACTER(160) :: em2
+        CHARACTER(1024) :: em2
         CALL CD_Assemble_Distributed_Load(model%elem_conn, model%l0, model%dist_load, f_dist, es2, em2)
         IF (es2 /= 0) THEN
           model%f_ext = model%f_ext_rollback
@@ -4512,7 +4512,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: has_load
     INTEGER :: nc
     LOGICAL :: prescribed_workspace_ready
@@ -4582,7 +4582,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: ErrMsg
 
       INTEGER :: es, n_free, i, j, row, col
-      CHARACTER(160) :: em
+      CHARACTER(1024) :: em
 
       ErrStat = CD_MODEL_OK
       ErrMsg = ''
@@ -5112,7 +5112,7 @@ CONTAINS
 
     TYPE(CD_ModelType) :: work
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -5496,7 +5496,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: istat, e, es2
-    CHARACTER(160) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -5588,7 +5588,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     CALL CD_End_Model(model, es, em)
     model = old_model
@@ -5795,7 +5795,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     ea_d_eff = CD_ZERO
@@ -5834,7 +5834,7 @@ CONTAINS
     REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC), slow_at
     LOGICAL :: on_wc
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     force = CD_ZERO
     jac_q = CD_ZERO
     jac_v = CD_ZERO
@@ -5874,7 +5874,7 @@ CONTAINS
     REAL(wp) :: chord(3), length, eps, slow_at, f6(6), jq6(6, 6), dslow
     LOGICAL :: on_wc
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     slow_next = model%syrope_slow(e)
     t_mean = CD_ZERO
@@ -6858,7 +6858,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: curvature(3)
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     CALL CD_Bathymetry_Floor_Gradient(model%bathymetry, x, y, z_floor, dfdx, dfdy, es, em, &
                                       crease_curvature=curvature)
     IF (es == CD_BATHY_OK) THEN
@@ -6883,7 +6883,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
     REAL(wp) :: z_floor, dfdx, dfdy, sfac
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''

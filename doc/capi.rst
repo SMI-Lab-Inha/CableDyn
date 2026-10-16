@@ -382,7 +382,7 @@ A step that finishes without meeting the Newton tolerance still returns ``CD_C_O
 Diagnostics
 ~~~~~~~~~~~
 
-Each handle keeps the text of its last failure, up to 1024 characters. The message is set by a
+Each handle keeps the text of its last failure, up to 4096 characters. The message is set by a
 failing call on a valid handle and cleared by a successful one. ``CableDyn_GetLastError`` does
 not change it, and neither does ``CableDyn_IsInitialized``. A call rejected with
 ``CD_C_BAD_HANDLE`` has no handle to store a message in. ``CableDyn_GetLastError`` on such a
@@ -1686,7 +1686,7 @@ before the copy and stay zero if the call fails. The model is not changed.
      - --
      - --
      - buffer capacity in bytes. A value below 1 makes the call a no-op. A message is at most
-       1024 characters, so a buffer of 1025 bytes always holds the full message and its
+       4096 characters, so a buffer of 4097 bytes always holds the full message and its
        terminating ``NUL``.
 
 State and size queries

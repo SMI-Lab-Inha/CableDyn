@@ -401,6 +401,41 @@ All notable changes to CableDyn are recorded in this file. The format follows
   than a factor four, as the manual states; it had kept the first tangent for the whole step,
   which a slow linear contraction could exhaust (30 iterations at the start of the 5 m heave
   cells of the L2-2 parity test with the force blend).
+- Failure messages are no longer cut off by fixed-size buffers. The tensile qualification
+  failure of a dynamic step ended mid-advice (`... at element 64, xi= 0.5000; increase`) because
+  the buffers that carried it from the Hermite cable through the OpenFAST module and the deck
+  driver held 200, 300 and 256 characters. Every message buffer of the solver chain, the
+  C API handle (now 4096 characters; `CableDyn_GetLastError` still truncates to the caller's
+  buffer, and the Python binding reads 4097 bytes), the standalone driver and the OpenFAST
+  glue is now long enough for the longest diagnostic. Results do not change.
+- A neutrally buoyant line is named as such. A finite-EI line whose net weight is zero and that
+  is longer than its span was reported as "the net-heavy line is too long for its span to hang
+  as a catenary", which is not the cause; the message now says the line is weightless, has no
+  catenary, and could only bow under axial compression, and advises shortening it to its span
+  or giving it weight or tension. An `EI = 0` line type whose mass equals the displaced water
+  mass to seven digits passed the net-buoyant gate on rounding and then failed with a generic
+  non-convergence message; the gate now treats a relative 1e-6 band around the displaced mass as
+  neutral and rejects it at the line type with "weightless and slack: its static shape is
+  indeterminate". The Python deck reader applies the same band. A line type heavier than the band
+  is unaffected.
+- A line stretched far beyond its elastic range now says so. A line 50 % shorter than its span
+  converged at 100 % strain and 1.2 GN with no message, because `maxStrain` guards only the
+  dynamics. The initialisation report notes the static fairlead strain (tension over the EA of
+  the End A section) above `maxStrain` when the option is given, and above 10 % when it is not.
+  Only a note: the equilibrium and the outputs are unchanged.
+- A section too coarse for its line is warned about. The coarse-mesh warning fired only for a line
+  with fewer than three segments in all, so a 100 m one-segment top section on a 520 m line
+  (fairlead tension off by 50 %) passed silently. Every section of at most four segments whose
+  segments are longer than 10 % of the line now gets a warning, for `EI = 0` and finite-EI lines,
+  in the single-topology driver and in the standalone mixed route.
+- Rejection messages name the unsupported capability and the workaround. A line between two
+  Coupled points suggests splitting it at a `Connect` point; a finite-EI cable ending on a
+  `Connect`/`Free`/`Coupled` point, or driven from a Coupled End A in a deck with `Connect`/`Free`
+  points, names the point and what the route supports; the "this coupled mode runs the mooring in
+  STILL WATER" message of a mixed deck with waves or current no longer implies a coupled run and
+  says which routes evaluate the deck fluid; an anchor below the seabed by more than the
+  tolerance gives the depth, the tolerance rule, and the Z to use. These messages change no
+  acceptance rule.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

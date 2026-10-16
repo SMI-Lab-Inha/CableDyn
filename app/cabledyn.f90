@@ -66,7 +66,7 @@ PROGRAM cabledyn
   LOGICAL :: profile_cable_detail = .FALSE.
   ! Sized for the aggregate and deck-driver messages it relays (512-character buffers
   ! plus deck-line context), so no diagnostic is cut short.
-  CHARACTER(1024) :: ErrMsg
+  CHARACTER(4096) :: ErrMsg
 
   nargs = COMMAND_ARGUMENT_COUNT()
 

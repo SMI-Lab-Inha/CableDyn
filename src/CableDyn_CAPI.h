@@ -16,7 +16,7 @@
  *   indices are 1-based. The Jacobians written by
  *   CableDyn_CalcOutputDerivatives are n-by-n column-major:
  *   J[i + j*n] = d(load_i)/d(q_j).
- * - Diagnostics are retained per handle (up to 1024 characters) and copied by
+ * - Diagnostics are retained per handle (up to 4096 characters) and copied by
  *   CableDyn_GetLastError, truncated to message_len - 1 and NUL-terminated.
  * - Create and Close are thread-safe. InitDeck, InitDeckAt, InitLine, and
  *   InitLines are serialised process-wide (they parse files through the Fortran

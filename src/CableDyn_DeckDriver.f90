@@ -162,6 +162,16 @@ MODULE CableDyn_DeckDriver
   INTEGER, PARAMETER :: INSTALLED_SEQUENCE_COARSE_FLOOR = 24
   ! Deepest mesh hierarchy CD_HermiteCable_Sequence_* accepts (levels including the user mesh).
   INTEGER, PARAMETER :: SEQUENCE_MAX_LEVELS = 20
+  ! A line type whose dry mass is within this relative band of the displaced water mass is
+  ! neutrally buoyant: its net weight is zero to within the precision of a typed mass
+  ! (a mass written to seven digits against a diameter does not cancel exactly).
+  REAL(wp), PARAMETER :: NEUTRAL_BUOYANCY_REL_TOL = 1.0e-6_wp
+  ! A section of at most COARSE_SECTION_MAX_SEGS segments, each longer than COARSE_SECTION_FRACTION of its
+  ! line, is warned about as too coarse (warn_coarse_sections). A static strain above
+  ! STATIC_STRAIN_NOTE_DEFAULT is noted (static_strain_note) when OPTION maxStrain is not given.
+  REAL(wp), PARAMETER :: COARSE_SECTION_FRACTION = 0.1_wp
+  INTEGER, PARAMETER :: COARSE_SECTION_MAX_SEGS = 4
+  REAL(wp), PARAMETER :: STATIC_STRAIN_NOTE_DEFAULT = 0.1_wp
 
   PUBLIC :: CD_Run_Deck_Driver
   PUBLIC :: CD_Deck_Equilibrium_Jacobian_Check
@@ -531,6 +541,7 @@ MODULE CableDyn_DeckDriver
     ! Per-step plausibility guard (OPTION maxStrain): a committed dynamic state with any
     ! element stretched beyond this strain (or non-finite) fails the run; 0 disables.
     REAL(wp) :: max_strain = 0.5_wp
+    LOGICAL :: has_max_strain = .FALSE.
     ! WaveKinMod-1 elevation history reduced once to its real Fourier components.
     ! These feed the same arbitrary-component Airy kernel used by reference-matched
     ! irregular seas; wave_eta_mean carries the zero-frequency waterline offset.
@@ -1215,7 +1226,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER :: i, es
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -1263,7 +1274,7 @@ CONTAINS
     TYPE(CD_LineEndpointBinding), ALLOCATABLE :: bindings(:)
     TYPE(DeckPoint), ALLOCATABLE :: pts(:)
     INTEGER :: i, es, nres, maxid
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -1358,7 +1369,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER :: i, es
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -1412,7 +1423,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: load_per_length(:, :), w(:)
     REAL(wp) :: anchor(3), fairlead(3)
     INTEGER :: pa, pb, es, nnode, ndof
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -1613,8 +1624,12 @@ CONTAINS
     ! Elements of the mesh whose equilibrium failed the stability test before that refinement.
     INTEGER :: stability_from_ne
     LOGICAL :: tensile_error
-    CHARACTER(400) :: note_text
-    CHARACTER(512) :: limit_text
+    CHARACTER(1024) :: note_text
+    CHARACTER(1024) :: limit_text
+    ! The geometric cause of a line with no admissible planar equilibrium clear of the seabed:
+    ! too long to hang as a catenary (net-heavy), or weightless (no catenary exists at all).
+    LOGICAL :: weightless_line
+    CHARACTER(400) :: geom_cause, geom_advice
     ! Steady deck current for the static solve (unallocated: no current and no static friction).
     TYPE(CD_HermiteStaticCurrentType), ALLOCATABLE :: cur_obj, cur_exact
     ! Static seabed friction toward the as-laid position (static springs, continued by
@@ -1834,6 +1849,19 @@ CONTAINS
     IF (has_att) THEN
       CALL attachment_nodes(l0, ln%att(1, :), att_node, att_offset)
       CALL smear_attachments(w, l0, att_node, ln%att, opts%rhoW, opts%g)
+    END IF
+    ! Zero net weight everywhere (to the neutral-buoyancy band, attachments included): the line has
+    ! no catenary, and the net-heavy diagnosis of a line too long for its span does not apply.
+    weightless_line = ALL(ABS(w) <= NEUTRAL_BUOYANCY_REL_TOL*opts%rhoW*opts%g*QUARTER_PI*diam**2)
+    IF (weightless_line) THEN
+      geom_cause = 'the weightless (neutrally buoyant) line is longer than its span, so it cannot hang as a '// &
+                   'catenary: with no net weight a tension-only line is straight, and a longer one could only bow '// &
+                   'by bending under axial compression'
+      geom_advice = 'shorten the line to its span, or give it net weight (MassDenInAir above the displaced '// &
+                    'water mass, or clumps) or a tension that holds it taut'
+    ELSE
+      geom_cause = 'the net-heavy line is too long for its span to hang as a catenary'
+      geom_advice = 'shorten the line or move the anchor'
     END IF
     anchor_on_flat_bed = contact_enabled .AND. (.NOT. PRESENT(bathymetry) .OR. bathymetry_flat) .AND. &
                          ABS(anchor(3) - contact_z) <= 1.0e-6_wp*MAX(CD_ONE, ABS(contact_z))
@@ -2546,8 +2574,8 @@ CONTAINS
           ! the anchor back (hermite_static_primary) gave no admissible equilibrium either;
           ! em says why (where the walk stopped, or what rejected its state).
           CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable static solve found no admissible planar '// &
-                          'equilibrium clear of the seabed: the net-heavy line is too long for its span to '// &
-                          'hang as a catenary ('//TRIM(em)//'); shorten the line or move the anchor'); RETURN
+                          'equilibrium clear of the seabed: '//TRIM(geom_cause)// &
+                          ' ('//TRIM(em)//'); '//TRIM(geom_advice)); RETURN
         ELSE IF (.NOT. primary_done .AND. es /= CD_HCSTAT_OK) THEN
           primary_msg = em
         END IF
@@ -2655,11 +2683,11 @@ CONTAINS
       END IF
       IF (walk_rejected) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable static solve found no admissible planar equilibrium '// &
-                        'clear of the seabed: the net-heavy line is too long for its span to hang as a catenary, '// &
+                        'clear of the seabed: '//TRIM(geom_cause)//', '// &
                         'and the equilibrium held by its bending stiffness that the anchor walk reached is '// &
                         'rejected ('// &
                         TRIM(short_message(primary_msg, 360))//'); mesh-sequenced route: '// &
-                        TRIM(short_message(sequence_msg, 240))//'; shorten the line or move the anchor'); RETURN
+                        TRIM(short_message(sequence_msg, 240))//'; '//TRIM(geom_advice)); RETURN
       END IF
       ! A current with no tension-only equilibrium is named first, in full: the nested
       ! route diagnostics below are bounded and would cut it. A line already compressed
@@ -4124,7 +4152,7 @@ CONTAINS
       REAL(wp), PARAMETER :: GROUNDED_TOL = 0.05_wp
       REAL(wp) :: e_h(2), span, past, floor_z, xg, yg, pos(3)
       INTEGER :: k, esb
-      CHARACTER(200) :: emb
+      CHARACTER(1024) :: emb
       span = NORM2(fairlead(1:2) - anchor(1:2))
       IF (span <= 1.0e-9_wp*MAX(CD_ONE, SUM(l0))) RETURN
       e_h = (fairlead(1:2) - anchor(1:2))/span
@@ -4275,7 +4303,7 @@ CONTAINS
       REAL(wp), INTENT(IN) :: scale
       REAL(wp), INTENT(OUT), OPTIONAL :: dq_max
       INTEGER :: it, es
-      CHARACTER(512) :: em
+      CHARACTER(1024) :: em
       CHARACTER(48) :: num_buf
       f_drag = CD_ZERO
       IF (has_drag) THEN
@@ -4330,7 +4358,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, base, es
     REAL(wp) :: ug(3), ul(3), fd(3)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     DO k = 1, SIZE(node)
       IF (.NOT. (att(4, k) > CD_ZERO .OR. att(6, k) > CD_ZERO)) CYCLE
@@ -4479,16 +4507,16 @@ CONTAINS
     ! Anchor retreats tried for a line too long for its span (see seed_walk).
     INTEGER, PARAMETER :: WALK_MAX_TRIES = 6
     LOGICAL :: walk_ok, fold
-    CHARACTER(400) :: walk_msg_c
+    CHARACTER(1024) :: walk_msg_c
     REAL(wp) :: walk_d, a_seed(3)
-    CHARACTER(512) :: walk_msg
+    CHARACTER(1024) :: walk_msg
     LOGICAL :: tensile, refine_all, planar_bed, walk_needed, laid
     REAL(wp) :: h_target
     REAL(wp) :: origin(2), a_l(3), f_l(3), seabed_z, seabed_slope, horizontal_tension, grounded_length
     REAL(wp) :: lambda0, ratio, span(2), span_len, t, xg, yg, zf, sx, sz, sxx, sxz, xl, yl
     REAL(wp) :: res_cont, cont_tol, phi, penetration, zfit(NFIT), fit_misfit, fine_limit, seed_bed, anchor_bed
     REAL(wp), ALLOCATABLE :: pos(:), q_seed(:), q_cont(:), curv_cont(:), knnode(:), tdir(:, :), stretch(:)
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
@@ -4998,7 +5026,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: text
       TYPE(CD_HermiteBranchAuditType) :: audit_w
       INTEGER :: es_w, ios_w
-      CHARACTER(200) :: em_w
+      CHARACTER(1024) :: em_w
       text = ''
       CALL CD_HermiteCable_Branch_Audit(l0, q_cont, ea, audit_w, es_w, em_w)
       IF (es_w /= CD_HCSTAT_OK) RETURN
@@ -5086,8 +5114,8 @@ CONTAINS
       LOGICAL :: have_prev, energy, folded, fold_now
       REAL(wp) :: fit, path_len, r_td(2), p, up(3), tl, xb_w, yb_w, zb_w
       INTEGER :: k_td, kk, es_b
-      CHARACTER(512) :: em_b
-      CHARACTER(512) :: em_w
+      CHARACTER(1024) :: em_b
+      CHARACTER(1024) :: em_w
       ALLOCATE (q_try(6*nnode), q_new(6*nnode), q_prev(6*nnode), sref(nnode), curv_w(nnode))
       sref(1) = CD_ZERO
       DO k = 2, nnode
@@ -5290,7 +5318,7 @@ CONTAINS
       LOGICAL :: planar, inadm_g, walked_sub
       INTEGER :: kend(2), iend, e_end, k, j, n_g, nf, es_g, slot
       REAL(wp) :: t_end, blayer
-      CHARACTER(512) :: em_g
+      CHARACTER(1024) :: em_g
       IF (PRESENT(refined_pass) .OR. fold) RETURN
       kend = 0
       DO iend = 1, 2
@@ -5393,7 +5421,7 @@ CONTAINS
       REAL(wp), ALLOCATABLE :: l0_r(:), q_r(:), q_ref_r(:), ea_r(:), ei_r(:), w_r(:), diam_r(:), dry_r(:)
       INTEGER, ALLOCATABLE :: fixed_r(:)
       INTEGER :: scale, scale_need, k, es_r, parent
-      CHARACTER(512) :: em_r
+      CHARACTER(1024) :: em_r
       LOGICAL :: inadm_r, walked_sub
       IF (PRESENT(refined_pass) .OR. fold) RETURN
       scale_need = bending_refine_scale(l0, ei, w)
@@ -5592,7 +5620,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: diam(:), dry(:), knnode(:), q_eval(:), curv(:)
     REAL(wp) :: res
     INTEGER :: i, ne, it, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -5725,7 +5753,7 @@ CONTAINS
     REAL(wp) :: zone(2), qe(12), t_end, total, allowance, hl_max, excess, denom
     LOGICAL :: report_c
     INTEGER :: ne, iend, e, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     physical = .FALSE.
     message = ''
@@ -6201,14 +6229,20 @@ CONTAINS
     IF (PRESENT(forbid_deck_ambient)) THEN
       IF (forbid_deck_ambient) THEN
         IF (opts%has_wave) THEN
-          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: this coupled mode runs the mooring in '// &
-                    'STILL WATER (no ambient fluid field covers the mooring span); remove the deck '// &
-                    'waves OPTION'); RETURN
+          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck waves OPTION is not supported on this '// &
+                    'route: a host-driven or mixed EI=0/finite-EI deck (a standalone mixed deck, the C API, '// &
+                    'OpenFAST or FAST.Farm) runs the mooring in STILL WATER, because no ambient fluid field covers '// &
+                    'its span. '// &
+                    'Remove the waves OPTION, or run a deck whose lines are all EI=0 or all finite-EI (those '// &
+                    'standalone routes evaluate the deck waves), or let the OpenFAST host supply them'); RETURN
         END IF
         IF (opts%has_current .OR. opts%has_current_profile) THEN
-          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: this coupled mode runs the mooring in '// &
-                    'STILL WATER (no ambient fluid field covers the mooring span); remove the deck '// &
-                    'current OPTION'); RETURN
+          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported on this '// &
+                    'route: a host-driven or mixed EI=0/finite-EI deck (a standalone mixed deck, the C API, '// &
+                    'OpenFAST or FAST.Farm) runs the mooring in STILL WATER, because no ambient fluid field covers '// &
+                    'its span. '// &
+                    'Remove the current OPTION, or run a deck whose lines are all EI=0 or all finite-EI (those '// &
+                    'standalone routes evaluate the deck current), or let the OpenFAST host supply it'); RETURN
         END IF
       END IF
     END IF
@@ -6695,6 +6729,26 @@ CONTAINS
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CALL CD_End_Deck_Aggregate(agg); RETURN
     END IF
+    ! A static strain above the note level is named in the line's initialisation note (every route that
+    ! prints the notes of this summary shows it), and the standalone mixed route -- the caller that
+    ! asks for the range graphs -- also warns about coarse sections, as the single-topology driver does.
+    BLOCK
+      INTEGER :: il
+      CHARACTER(1024) :: strain_note
+      DO il = 1, SIZE(agg%init_lines)
+        CALL static_strain_note(agg%init_lines(il)%line_id, agg%init_lines(il)%fair_tension, sections, types, opts, &
+                                strain_note)
+        IF (LEN_TRIM(strain_note) == 0) CYCLE
+        IF (LEN_TRIM(agg%init_lines(il)%note) > 0) THEN
+          agg%init_lines(il)%note = TRIM(agg%init_lines(il)%note)//NEW_LINE('a')//TRIM(strain_note)
+        ELSE
+          agg%init_lines(il)%note = strain_note
+        END IF
+      END DO
+      IF (PRESENT(range_files)) THEN
+        IF (range_files) CALL warn_coarse_sections(lines, sections)
+      END IF
+    END BLOCK
 
     ! Per moving slot, the driving turbine (0 outside farm mode) -- the SAME
     ! enumeration the coupled_positions override uses: the system's BOUND
@@ -7021,7 +7075,7 @@ CONTAINS
     !! `cables` deallocated here).
     TYPE(CD_DeckAggregateType), INTENT(INOUT) :: agg
     INTEGER :: c, es
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
     IF (agg%has_sys) CALL CD_End_System(agg%sys, es, em)
     agg%has_sys = .FALSE.
     agg%n_turbines = 0
@@ -7099,7 +7153,7 @@ CONTAINS
     CHARACTER(NAMELEN), ALLOCATABLE :: channels(:)
     REAL(wp), ALLOCATABLE :: q_all(:), ten_all(:), end_all(:, :), end_vec(:, :, :)
     INTEGER, ALLOCATABLE :: q_off(:), ten_off(:), nn(:), ne(:)
-    CHARACTER(512) :: fail_msg
+    CHARACTER(1024) :: fail_msg
     TYPE(CD_ModelType), ALLOCATABLE :: models(:)
     TYPE(FiniteDeckModel), ALLOCATABLE :: finite_models(:)
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: hermite_models(:)
@@ -7109,7 +7163,7 @@ CONTAINS
     TYPE(CD_LineInitSummary), ALLOCATABLE :: init_summaries(:)
     INTEGER :: nl, li, es, j, n_finite
     LOGICAL :: line_conv, has_line_outputs, has_finite, has_dyn_points, has_rigid6, hermite_standalone_eligible
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.
     ErrStat = CD_DECKDRV_OK
@@ -7189,6 +7243,7 @@ CONTAINS
       CALL CD_Profile_Enter(CD_PROF_INIT)
     END IF
     CALL print_static_input_warnings(types, points, lines, sections, opts)
+    CALL warn_coarse_sections(lines, sections)
     ! free Rigid6 bodies and rods (jointly with Free/Connect points) start at their static
     ! equilibrium on every route: static-only, TMax = 0 and the dynamic march (pinned rods turn
     ! about their pins, a rod pinned to a body with the body)
@@ -7293,7 +7348,8 @@ CONTAINS
           IF (ErrStat == CD_DECKDRV_OK .AND. opts%n_modes > 0) &
             CALL write_deck_modes_hermite(out_root, lines, opts, hermite_models, ErrStat, ErrMsg)
           IF (ErrStat == CD_DECKDRV_OK) THEN
-            CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries)
+            CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                        types=types, opts=opts)
             CALL write_hermite_dynamic_out(out_root, channels, lines, points, opts, hermite_models, &
                                            converged, ErrStat, ErrMsg, bathymetry=bathymetry)
           END IF
@@ -7318,7 +7374,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries)
+        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                    types=types, opts=opts)
         CALL write_finite_dynamic_out(out_root, channels, lines, points, opts, finite_models, &
                                       converged, ErrStat, ErrMsg, bathymetry=bathymetry)
         CALL end_finite_models(finite_models)
@@ -7360,7 +7417,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries)
+        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                    types=types, opts=opts)
         IF (opts%has_bathymetry_file) THEN
           CALL write_rod_dynamic_out(out_root, channels, rod_types, rods, lines, points, opts, point_system, &
                                      converged, ErrStat, ErrMsg, bathymetry=bathymetry)
@@ -7393,7 +7451,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries)
+        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                    types=types, opts=opts)
         IF (opts%has_bathymetry_file) THEN
           CALL write_rigid6_dynamic_out(out_root, channels, bodies, lines, points, opts, point_system, &
                                         converged, ErrStat, ErrMsg, bathymetry=bathymetry, rod_types=rod_types, &
@@ -7426,7 +7485,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries)
+        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                    types=types, opts=opts)
         CALL write_system_dynamic_out(out_root, channels, lines, points, opts, point_system, converged, &
                                       ErrStat, ErrMsg, failures=fails, bathymetry=bathymetry)
         CALL CD_End_System(point_system, es, em)
@@ -7447,7 +7507,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries)
+        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                    types=types, opts=opts)
         CALL write_dynamic_out(out_root, channels, lines, points, opts, models, converged, ErrStat, ErrMsg, &
                                bathymetry=bathymetry)
         CALL end_models(models)
@@ -7509,7 +7570,8 @@ CONTAINS
     IF (converged) THEN
       CALL collect_raw_init_summaries(lines, points, ne, q_all, q_off, ten_all, ten_off, init_summaries, &
                                       end_ten=end_all, end_force=end_vec)
-      CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries)
+      CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                  types=types, opts=opts)
       IF (.NOT. (opts%has_wtrdpth .OR. opts%has_bathymetry_file)) &
         CALL warn_line_below_anchor(lines, points, sections, q_all, q_off)
     END IF
@@ -7613,7 +7675,7 @@ CONTAINS
     REAL(wp), PARAMETER :: factors(4) = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
     INTEGER :: j, i, e, es
     LOGICAL :: want_wave_cfg
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ! static seabed friction of this line: lay azimuth override [rad] (unallocated: the
     ! default, the chord direction from the line's lower end) and as-laid tension [N]
     REAL(wp), ALLOCATABLE :: lay_az_opt
@@ -7959,7 +8021,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: sslow(:), stmax(:), kn(:), diam(:), cn(:), t_static(:)
     REAL(wp) :: eps0, t_ref, secant, total_l0, t_hist, eps_bar, t_mean_static
     INTEGER :: ne, e, es, n_owc, iter
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     CHARACTER(24) :: s_eps, s_lo, s_hi
     ! static seabed friction of this line: lay azimuth override [rad] and as-laid tension
     REAL(wp), ALLOCATABLE :: lay_az_opt
@@ -8263,7 +8325,7 @@ CONTAINS
     !! Best-effort cleanup for partially initialized model arrays.
     TYPE(CD_ModelType), INTENT(INOUT) :: models(:)
     INTEGER :: i, es
-    CHARACTER(80) :: em
+    CHARACTER(1024) :: em
     DO i = 1, SIZE(models)
       CALL CD_End_Model(models(i), es, em)
     END DO
@@ -8273,7 +8335,7 @@ CONTAINS
     !! Best-effort cleanup for finite-EI dynamic deck model arrays.
     TYPE(FiniteDeckModel), INTENT(INOUT) :: models(:)
     INTEGER :: i, es
-    CHARACTER(80) :: em
+    CHARACTER(1024) :: em
     DO i = 1, SIZE(models)
       CALL CD_End_FiniteEI_Model(models(i)%model, es, em)
       IF (ALLOCATED(models(i)%l0)) DEALLOCATE (models(i)%l0)
@@ -8585,7 +8647,7 @@ CONTAINS
     REAL(wp) :: chord(3), chord_len, chord_dir(3), lift(3), lift_norm, tan_a(3), tan_b(3)
     REAL(wp) :: handle_scale
     INTEGER :: nnode, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -8699,7 +8761,7 @@ CONTAINS
     INTEGER :: nnode, i, ix, iy, iz, es
     REAL(wp), PARAMETER :: vreg = 1.0e-3_wp
     REAL(wp) :: z_floor, gap, normal, normal_tangent, gate, gate_tangent, denom
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     f_ext = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -8791,7 +8853,7 @@ CONTAINS
 
     INTEGER :: nnode, i, ix, iy, iz, es
     REAL(wp) :: z_floor, dfdx, dfdy
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     CALL init_finite_contact_band(q, v, kn, cn, mu, free, kl, ku, free_map, f_ext, jac_q_band, jac_v_band, &
                                   nnode, ErrStat, ErrMsg)
@@ -8991,7 +9053,7 @@ CONTAINS
     INTEGER :: idx(6)
     REAL(wp) :: xa(3), xb(3), va(3), vb(3), eta_a, eta_b
     REAL(wp) :: fluid_a(3), fluid_b(3), accel_a(3), accel_b(3), f2(6)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     f_ext = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -9059,7 +9121,7 @@ CONTAINS
     INTEGER :: idx(6)
     REAL(wp) :: xa(3), xb(3), va(3), vb(3), eta_a, eta_b
     REAL(wp) :: fluid_a(3), fluid_b(3), accel_a(3), accel_b(3), f2(6), jq2(6, 6), jv2(6, 6)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -9153,7 +9215,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: current_velocity(3)
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     eta = CD_ZERO
     fluid_velocity = CD_ZERO
@@ -9313,6 +9375,92 @@ CONTAINS
     END IF
   END SUBROUTINE print_static_input_warnings
 
+  SUBROUTINE warn_coarse_sections(lines, sections)
+    !! Standard-output WARNINGS for a section too coarse for the line it belongs to: a section of at
+    !! most COARSE_SECTION_MAX_SEGS segments whose segments (section length / NumSegs) are longer
+    !! than COARSE_SECTION_FRACTION of the line's total length (a short line of eight segments is
+    !! a deliberate coarse model and is not reported). Each segment of an EI=0 line is
+    !! a straight chord and each element of a finite-EI line a cubic-Hermite span, so a one-element
+    !! 100 m top section on a 520 m line cannot follow the line shape there and shifts the fairlead tension by tens of percent. The
+    !! whole-line check of print_static_input_warnings (fewer than three segments) does not see a
+    !! coarse section inside a finely meshed line, and a line with fewer than three segments is
+    !! reported whole by that check, not here.
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    INTEGER :: i, j, nseg_line
+    REAL(wp) :: total, seg_len
+    CHARACTER(32) :: b1, b2, b3
+
+    DO i = 1, SIZE(lines)
+      total = CD_ZERO
+      nseg_line = 0
+      DO j = 1, SIZE(sections)
+        IF (sections(j)%line_id /= lines(i)%id) CYCLE
+        total = total + sections(j)%length
+        nseg_line = nseg_line + sections(j)%nsegs
+      END DO
+      IF (.NOT. (total > CD_ZERO) .OR. nseg_line < 3) CYCLE
+      DO j = 1, SIZE(sections)
+        IF (sections(j)%line_id /= lines(i)%id .OR. sections(j)%nsegs < 1) CYCLE
+        seg_len = sections(j)%length/REAL(sections(j)%nsegs, wp)
+        IF (seg_len <= COARSE_SECTION_FRACTION*total .OR. sections(j)%nsegs > COARSE_SECTION_MAX_SEGS) CYCLE
+        WRITE (b1, '(F12.2)') sections(j)%length
+        WRITE (b2, '(F12.2)') seg_len
+        WRITE (b3, '(F6.1)') 100.0_wp*seg_len/total
+        WRITE (output_unit, '(A)') ' WARNING: LINE '//TRIM(int_to_str(lines(i)%id))//' section of type "'// &
+          TRIM(sections(j)%ltype_name)//'" ('//TRIM(ADJUSTL(b1))//' m in '//TRIM(int_to_str(sections(j)%nsegs))// &
+          ' segment(s)) has segments of '//TRIM(ADJUSTL(b2))//' m, '//TRIM(ADJUSTL(b3))// &
+          ' % of the line length: too coarse to follow the line shape there, which can shift the tensions '// &
+          'by tens of percent; refine its NumSegs (aim for segments under 10 % of the line length)'
+      END DO
+    END DO
+  END SUBROUTINE warn_coarse_sections
+
+  SUBROUTINE static_strain_note(line_id, tension, sections, types, opts, note)
+    !! The static initial state of a line stretched beyond STATIC_STRAIN_NOTE_DEFAULT (or OPTION
+    !! maxStrain when it is given): the fairlead tension over the EA of the section at End A. A
+    !! line far shorter than its span converges at such a strain without any message, because
+    !! the dynamic strain guard (maxStrain) does not apply to the static solve. Only a note --
+    !! the equilibrium and every output are unchanged. Types whose tension is not EA times
+    !! strain (Syrope working curves, load-dependent stiffness) are not assessed.
+    INTEGER, INTENT(IN) :: line_id
+    REAL(wp), INTENT(IN) :: tension
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    CHARACTER(*), INTENT(OUT) :: note
+    INTEGER :: j, k
+    REAL(wp) :: strain, limit
+    CHARACTER(32) :: b1, b2, b3
+    CHARACTER(40) :: source
+
+    note = ''
+    IF (.NOT. (tension > CD_ZERO .AND. tension < HUGE(CD_ONE))) RETURN
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= line_id) CYCLE
+      k = find_type(types, sections(j)%ltype_name)
+      IF (k < 1) RETURN
+      IF (types(k)%is_syrope .OR. types(k)%elastic_mod == 3 .OR. .NOT. (types(k)%ea > CD_ZERO)) RETURN
+      strain = tension/types(k)%ea
+      limit = STATIC_STRAIN_NOTE_DEFAULT
+      source = 'the static default'
+      IF (opts%has_max_strain .AND. opts%max_strain > CD_ZERO) THEN
+        limit = opts%max_strain
+        source = 'OPTION maxStrain'
+      END IF
+      IF (.NOT. (strain > limit)) RETURN
+      WRITE (b1, '(F10.1)') 100.0_wp*strain
+      WRITE (b2, '(F10.1)') 100.0_wp*limit
+      WRITE (b3, '(ES10.3)') tension
+      note = 'LINE '//TRIM(int_to_str(line_id))//' is stretched to a static strain of '//TRIM(ADJUSTL(b1))// &
+             ' % at the fairlead (tension '//TRIM(ADJUSTL(b3))//' N over the EA of section type '// &
+             TRIM(types(k)%name)//'), above '//TRIM(ADJUSTL(b2))//' % ('//TRIM(source)// &
+             '): check the line length against the span and the EA. The dynamic maxStrain guard does '// &
+             'not apply to the static solve'
+      RETURN
+    END DO
+  END SUBROUTINE static_strain_note
+
   SUBROUTINE warn_line_below_anchor(lines, points, sections, q_all, q_off)
     !! Standard-output WARNING for a deck with no seabed (no WtrDpth or bathymetryFile) on
     !! which a line hangs below its lowest Fixed end by more than max(1 m, 1 % of its
@@ -9388,7 +9536,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: kn(:)
     REAL(wp) :: anchor(3), fairlead(3), force_a(3), force_b(3)
     INTEGER :: ne, n_dof, i, j, ns, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     TYPE(CableSolverConfig) :: cfg
     TYPE(CD_StaticLineReport) :: report
     TYPE(CableCurrentLoad) :: cur
@@ -9650,7 +9798,7 @@ CONTAINS
     CHARACTER(3*DECK_RECLEN) :: row
     ! The whole header record: a title banner may carry "INPUT FILE" far to the right.
     CHARACTER(DECK_RECLEN) :: secname
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: why
     ! Deck line of each OUTPUTS channel, for finalizer messages.
     INTEGER, ALLOCATABLE :: channel_lines(:)
     INTEGER :: nch_before, i_ch
@@ -10327,7 +10475,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: lineno
 
     INTEGER :: unit, ios, k, nrow, wavekinmod, currentmod, row_status
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: why
     ! Value lines are split into whitespace tokens and each value is parsed whole: a
     ! list-directed READ would stop an unquoted WaveKinFile path at its first '/' and
     ! read "0.5/2" as 0.5.
@@ -10583,7 +10731,7 @@ CONTAINS
 
     INTEGER :: unit, ios, n, n_window, j, k, nc, nraw, bracket, row_status, lineno
     CHARACTER(DECK_RECLEN) :: line
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: why
     REAL(wp) :: te_row(2), tr, dt, tol, angle, ca, sa, scale, frac
     REAL(wp) :: cos_step, sin_step, cos_j, sin_j, cos_next, trig_norm
     REAL(wp), ALLOCATABLE :: times(:), eta_rows(:), sample_eta(:)
@@ -10971,7 +11119,7 @@ CONTAINS
       INTEGER :: unit, ios, st, lineno, nrow, nc_row
       LOGICAL :: started
       CHARACTER(DECK_RECLEN) :: line
-      CHARACTER(256) :: why
+      CHARACTER(1024) :: why
       CHARACTER(CD_DECK_PATHLEN) :: fpath
       ALLOCATE (t(nmax, 16))
       fpath = path_join(dir, TRIM(name))
@@ -12599,7 +12747,7 @@ CONTAINS
 
     REAL(wp) :: mass_per_length(1)
     INTEGER :: i, j, idx, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = 0
     ErrMsg = ''
@@ -12981,6 +13129,7 @@ CONTAINS
       CALL rd(val, opts%ramp_time, ErrStat, ErrMsg)
     CASE ('maxstrain', 'max_strain')
       CALL rd(val, opts%max_strain, ErrStat, ErrMsg)
+      opts%has_max_strain = ErrStat == 0
     CASE ('streamorder', 'stream_order')
       CALL rd(val, x1, ErrStat, ErrMsg)
       IF (ErrStat == 0) THEN
@@ -13716,7 +13865,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: z_grid
-    CHARACTER(32) :: zs, fs, ts
+    CHARACTER(32) :: zs, fs, ts, ds
     REAL(wp) :: tol
 
     ErrStat = 0; ErrMsg = ''
@@ -13736,10 +13885,13 @@ CONTAINS
     WRITE (zs, '(G0.8)') pt%pos(3)
     WRITE (fs, '(G0.8)') z_floor
     WRITE (ts, '(ES9.2)') tol
+    WRITE (ds, '(ES9.2)') z_floor - pt%pos(3)
     CALL fail(ErrStat, ErrMsg, 'POINT '//TRIM(int_to_str(pt%id))//' (Fixed) lies below the seabed: z = '// &
               TRIM(ADJUSTL(zs))//' m is under '//what//' = '//TRIM(ADJUSTL(fs))// &
-              ' m by more than the '//TRIM(ADJUSTL(ts))//' m seabed tolerance; place the anchor on (or above) '// &
-              'the seabed')
+              ' m by '//TRIM(ADJUSTL(ds))//' m, more than the '//TRIM(ADJUSTL(ts))//' m seabed tolerance '// &
+              '(max(1 mm, 1e-5 |seabed z|); an anchor within it rests on the seabed and is placed on it, '// &
+              'a deeper one is never moved silently). Set the anchor Z to '//TRIM(ADJUSTL(fs))// &
+              ' m (the seabed) or higher')
   END SUBROUTINE check_fixed_point_above_seabed
 
   SUBROUTINE check_fixed_points_on_bathymetry(points, bathymetry, ErrStat, ErrMsg)
@@ -13752,7 +13904,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, es
     REAL(wp) :: z_floor, z_grid
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = 0; ErrMsg = ''
     DO i = 1, SIZE(points)
@@ -13817,6 +13969,7 @@ CONTAINS
     INTEGER :: i, j, idx, nsec_for_line, body_id, body_idx, rod_id, rod_idx, na_ref, nb_ref
     INTEGER :: nstep
     LOGICAL :: grid_ok
+    REAL(wp) :: displaced_mass
     CHARACTER(NAMELEN) :: ta, tb
     ErrStat = 0; ErrMsg = ''
     at_line = 0
@@ -14520,8 +14673,12 @@ CONTAINS
           IF (.NOT. ((tb == 'coupled' .OR. tb == 'vessel') .AND. &
                      points(find_point(points, lines(i)%nodeA))%turbine_id > 0 .AND. &
                      points(find_point(points, lines(i)%nodeB))%turbine_id > 0)) THEN
-            CALL fail(ErrStat, ErrMsg, 'LINE End B (NodeB) must be a Fixed (anchor) point '// &
-                      '(exception: a FAST.Farm shared line between two Turbine<J> fairleads)'); RETURN
+            CALL fail(ErrStat, ErrMsg, 'LINE '//TRIM(int_to_str(lines(i)%id))//' End B (NodeB, POINT '// &
+                      TRIM(int_to_str(lines(i)%nodeB))//', '//TRIM(tb)//') must be a Fixed (anchor) point: a line '// &
+                      'between two moving points (a shared line) is not supported, except a FAST.Farm shared line '// &
+                      'between two Turbine<J> fairleads. Workaround: split it into two lines that meet at a '// &
+                      'Connect point in the middle (each line then ends on one Coupled point; the deck becomes '// &
+                      'dynamic and needs dtM and TMax)'); RETURN
           END IF
         ELSE
           IF (points(find_point(points, lines(i)%nodeA))%pos(3) < &
@@ -14604,10 +14761,18 @@ CONTAINS
       ! run gets its clock from dtM; the executable's metadata scan also admits a
       ! clock-free static aggregate solve. Unsupported endpoint coupling is rejected
       ! before initialization.
-      IF (types(idx)%mass <= opts%rhoW*QUARTER_PI*types(idx)%diam**2) THEN
+      displaced_mass = opts%rhoW*QUARTER_PI*types(idx)%diam**2
+      IF (types(idx)%mass <= displaced_mass*(CD_ONE + NEUTRAL_BUOYANCY_REL_TOL)) THEN
         IF (types(idx)%ei <= CD_ZERO .OR. &
             (.NOT. opts%has_dtm .AND. .NOT. caller_driven .AND. &
              .NOT. (allow_static_finite_ei .AND. .NOT. opts%has_tmax))) THEN
+          IF (types(idx)%ei <= CD_ZERO .AND. types(idx)%mass > displaced_mass*(CD_ONE - NEUTRAL_BUOYANCY_REL_TOL)) THEN
+            CALL fail(ErrStat, ErrMsg, 'LINE TYPE "'//TRIM(types(idx)%name)//'" is net-buoyant to within 1e-6 '// &
+                      '(neutrally buoyant: its dry mass equals the displaced water mass), so an EI=0 line of it is '// &
+                      'weightless and slack: its static shape is indeterminate (every slack shape balances). '// &
+                      'Give the line type weight (a larger MassDenInAir), or a finite EI with a tension that '// &
+                      'holds it taut'); RETURN
+          END IF
           CALL fail(ErrStat, ErrMsg, 'LINE TYPE "'//TRIM(types(idx)%name)// &
                     '" is net-buoyant (dry mass <= displaced water mass): buoyant / lazy-wave '// &
                     'sections require a dynamic finite-EI deck'); RETURN
@@ -14784,7 +14949,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: unit, ios, i, nch, li, line_id, comp, es
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     REAL(wp) :: val
     TYPE(CD_RangeSet) :: ranges
     ErrStat = 0; ErrMsg = ''
@@ -15005,7 +15170,7 @@ CONTAINS
 
     INTEGER :: i, ios, ndof, nnode, ne, node, seg, es
     CHARACTER(LEN(out_root) + 32) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -15067,7 +15232,7 @@ CONTAINS
 
     INTEGER :: i, ios, ndof, nnode, ne, node, seg, es
     CHARACTER(LEN(out_root) + 32) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -15129,7 +15294,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, ndof, nnode, ne, es
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -15239,7 +15404,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, ndof, nnode, ne, es
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -15354,7 +15519,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, nnode, ndof, ne, es
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -15516,7 +15681,7 @@ CONTAINS
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     INTEGER :: recovery_event_count, recovery_max_substeps_used
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: step_converged, stalled
     REAL(wp) :: t, first_miss_time, last_miss_time
     TYPE(MotionTable) :: motion
@@ -15691,7 +15856,7 @@ CONTAINS
     INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: step_converged, stalled
     REAL(wp) :: t, first_miss_time, last_miss_time
     TYPE(HydroUpdateWorkspace) :: hydro_work
@@ -15868,7 +16033,7 @@ CONTAINS
 
     INTEGER :: k, j, li, i, es, maxid
     INTEGER, ALLOCATABLE :: model_lines(:)
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -15930,7 +16095,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: tension(:)
     REAL(wp) :: ten_end
     LOGICAL :: fire
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -16065,7 +16230,7 @@ CONTAINS
     INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: step_converged, stalled
     REAL(wp) :: t, first_miss_time, last_miss_time
     TYPE(HydroUpdateWorkspace) :: hydro_work
@@ -16238,7 +16403,7 @@ CONTAINS
     INTEGER, ALLOCATABLE :: rod_pos_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: step_converged, stalled
     REAL(wp) :: t, first_miss_time, last_miss_time
     TYPE(HydroUpdateWorkspace) :: hydro_work
@@ -16820,7 +16985,7 @@ CONTAINS
     INTEGER :: oid, node, qty, ib, ir, body_of, es
     REAL(wp) :: ang(3), rr(3, 3), axis(3), half, ends(3), f6(6), ten(2), sub, arm(3), phi, beta
     TYPE(RodState) :: rs
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     REAL(wp), PARAMETER :: R2D = 45.0_wp/QUARTER_PI
 
     val = CD_ZERO
@@ -16960,7 +17125,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, c, es
     REAL(wp) :: f_first(3), f_last(3), fl(3)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     f = CD_ZERO
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -17090,7 +17255,7 @@ CONTAINS
     REAL(wp) :: f(3), m(3), f2(3), m2(3), a6(6, 6), d6(6, 6), pa(3), pb(3), fe(3, 2), eta(2), za, zb, s0, s1
     REAL(wp) :: wv(3), wa(3)
     INTEGER :: ip, e, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     f6 = CD_ZERO
     ten = CD_ZERO
@@ -17340,7 +17505,7 @@ CONTAINS
     TYPE(DeckRod), ALLOCATABLE :: own(:)
     INTEGER :: unit, ios, step, nstep, k, es, nsub, isub
     REAL(wp) :: t, acc(3), alpha(3), dv0(6), dts, ts
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     TYPE(DriverProgress) :: progress
 
     converged = .TRUE.
@@ -17669,7 +17834,7 @@ CONTAINS
     LOGICAL :: step_converged, stalled
     REAL(wp) :: t, first_miss_time, last_miss_time, rb(3, 3)
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     TYPE(HydroUpdateWorkspace) :: hydro_work
     TYPE(ModelOutputWorkspace) :: output_work
     TYPE(DriverProgress) :: progress
@@ -17714,7 +17879,13 @@ CONTAINS
       IF (is_fin(i)) THEN
         IF (TRIM(points(pb)%ptype) /= 'fixed') THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//' in a mixed-topology '// &
-                    'deck needs a Fixed End B (the cable is driven at End A)'); RETURN
+                    'deck needs a Fixed End B (the cable is driven at End A), but End B is POINT '// &
+                    TRIM(int_to_str(points(pb)%id))//' ('//TRIM(points(pb)%ptype)//'). A finite-EI cable that '// &
+                    'ends on a Connect/Free/Coupled point (a junction with other lines, a buoy or a pliant-wave '// &
+                    'hang-off) '// &
+                    'is not supported in a deck with Connect/Free points, bodies or rods (the multibody '// &
+                    'march). Anchor the cable on a Fixed point, or run the cable and the lines it joins as '// &
+                    'separate decks'); RETURN
         END IF
         IF (TRIM(points(pa)%ptype) == 'free' .OR. TRIM(points(pa)%ptype) == 'connect' .OR. &
             point_on_point3_body(points(pa), bodies)) THEN
@@ -17723,8 +17894,12 @@ CONTAINS
                     'a rod end or a Fixed point'); RETURN
         END IF
         IF (TRIM(points(pa)%ptype) == 'coupled' .OR. TRIM(points(pa)%ptype) == 'vessel') THEN
-          CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a Coupled End A '// &
-                    'needs motionFile coupling, which a mixed-topology deck does not support'); RETURN
+          CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a Coupled/Vessel End A '// &
+                    '(POINT '//TRIM(int_to_str(points(pa)%id))//') is driven by a motionFile, which a '// &
+                    'mixed-topology deck with Connect/Free points or bodies (marched as one multibody system) '// &
+                    'does not support. '// &
+                    'Remove the Connect/Free points so the deck runs as a coupled mixed deck (EI=0 lines on the '// &
+                    'Coupled point directly), or attach the cable to a Rigid6 body, a rod end or a Fixed point'); RETURN
         END IF
         IF (lines(i)%endconn_mode(1) /= CD_ENDCONN_PINNED .AND. TRIM(points(pa)%ptype) /= 'fixed') THEN
           ! a clamped or elastic End A on a body or rod: implicit (monolithic step) only
@@ -17857,7 +18032,8 @@ CONTAINS
       ALLOCATE (sum_cab(0))
     END IF
     summaries = [sum_sys, sum_cab]
-    CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, summaries)
+    CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, summaries, &
+                                types=types, opts=opts)
 
     ! ---- objects ----
     CALL init_rigid6_states(bodies, points, mb%rigid, ErrStat, ErrMsg, rod_types, rods, allow_no_points=.TRUE.)
@@ -18040,7 +18216,7 @@ CONTAINS
         BLOCK
           REAL(wp) :: ke, se
           INTEGER :: es_p
-          CHARACTER(200) :: em_p
+          CHARACTER(1024) :: em_p
           CALL CD_HermiteCable_Dyn_Energy(mb%cables(1)%line, ke, se, es_p, em_p)
           probe_rec(23, col) = ke + se
           IF (es_p /= CD_HCDYN_OK) probe_rec(23, col) = -HUGE(CD_ONE)
@@ -18215,7 +18391,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: xa(3), va(3), aa(3), dcm(3, 3), wa(3), ala(3)
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     mb%cables(c)%dt = dt
@@ -18240,7 +18416,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     CALL CD_HFMF_CalcOutput(mb%cables(c), f, es, em, y_moment=m)
@@ -18525,7 +18701,7 @@ CONTAINS
     INTEGER :: k, n, o, nb
     REAL(wp) :: p(3), l(3), xk(6)
     REAL(wp), ALLOCATABLE :: amat(:, :), bvec(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -18681,7 +18857,7 @@ CONTAINS
     INTEGER :: es, ir, k, base
     INTEGER :: bases(2)
     REAL(wp) :: arms(3, 2)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     IF (.NOT. mb%has_sys) RETURN
@@ -18712,7 +18888,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es, c
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     IF (mb%has_sys) THEN
@@ -18883,7 +19059,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: ib, ir, c, es
     REAL(wp) :: x(3), v(3), a(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .TRUE.
     stalled = .FALSE.
@@ -19158,7 +19334,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: ib, ir, p, o, es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     DO ib = 1, SIZE(mb%rigid)
@@ -19216,7 +19392,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: ir, k, base, p, es, bases(2)
     REAL(wp) :: arms(3, 2)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     IF (.NOT. mb%has_sys) RETURN
@@ -19584,7 +19760,7 @@ CONTAINS
     INTEGER, PARAMETER :: TAN_MAX_AGE = 20
     REAL(wp) :: rho, am, af, beta_na, gam_na, t_af, h, fac, dth, worst, tol_it, am_p, gam_p, beta_p
     REAL(wp), ALLOCATABLE :: x(:), xp(:), r(:), rp(:), jac(:, :), dx(:), kg(:, :), ga(:, :), rscale(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -20135,7 +20311,7 @@ CONTAINS
     REAL(wp) :: katt(3, 3)
     REAL(wp) :: t(3), chord(3), lc_len, k_ax, ten, el(3), ll, eye(3, 3)
     INTEGER :: i, j, lo, nc, es, node, far, nn, ee
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     katt = CD_ZERO
     eye = CD_ZERO
@@ -20472,7 +20648,7 @@ CONTAINS
 
     INTEGER :: ir, es
     REAL(wp) :: dv0(6), acc(3), alpha(3), arm(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     TYPE(RigidBodyState) :: no_parent(0)
 
     converged = .FALSE.
@@ -20833,7 +21009,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -20881,7 +21057,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -21644,7 +21820,7 @@ CONTAINS
       LOGICAL, INTENT(IN) :: want_pdyn
       INTEGER :: es, ih
       REAL(wp) :: tq
-      CHARACTER(160) :: em
+      CHARACTER(1024) :: em
 
       uq = CD_ZERO
       duq = CD_ZERO
@@ -21971,7 +22147,7 @@ CONTAINS
     INTEGER :: nobj, n, i, j, k, it, inner, info, worst, jk
     LOGICAL :: ok, only_points
     REAL(wp) :: sc, rnorm, rnorm_try, mu, step_cap, len_min, dmax, trust, pred
-    CHARACTER(160) :: lin_msg
+    CHARACTER(1024) :: lin_msg
     CHARACTER(24) :: b1
 
     ErrStat = CD_DECKDRV_OK
@@ -22508,7 +22684,7 @@ CONTAINS
       TYPE(RodState), ALLOCATABLE :: rst(:)
       REAL(wp) :: f(3), m(3), f2(3), m2(3), w6(6, 6), a6(6, 6), d3(3, 3), meff, u(3), xb(3), rb(3, 3)
       INTEGER :: kk, es_l, ib
-      CHARACTER(512) :: em_l
+      CHARACTER(1024) :: em_l
       TYPE(DeckRod) :: rg
 
       good = .FALSE.
@@ -23008,7 +23184,7 @@ CONTAINS
       TYPE(CD_LineSection), ALLOCATABLE :: secs(:)
       REAL(wp), ALLOCATABLE :: mpl(:), diam(:), load(:, :)
       INTEGER :: js, ii, ns, ne, es_l
-      CHARACTER(200) :: em_l
+      CHARACTER(1024) :: em_l
 
       es_out = CD_DECKDRV_OK
       em_out = ''
@@ -23095,7 +23271,7 @@ CONTAINS
       REAL(wp) :: anchor(3), fairlead(3), fa(3), fb(3)
       INTEGER :: nn, ii, es_l, nit
       LOGICAL :: conv, stalled, at_floor
-      CHARACTER(512) :: em_l
+      CHARACTER(1024) :: em_l
 
       es_out = CD_DECKDRV_OK
       em_out = ''
@@ -23224,7 +23400,7 @@ CONTAINS
       INTEGER, ALLOCATABLE :: free(:), ipiv(:)
       REAL(wp) :: kee(6, 6), blk(3, 3), chord(3), tt(3), ll, tens, dfx, eye(3, 3), bp(3, 3)
       INTEGER :: nn, ne, nf, kl, ku, ldab, ee, na, nb, ii, jj, es_l, info, pair, ni, nj, si, sj
-      CHARACTER(200) :: em_l
+      CHARACTER(1024) :: em_l
       EXTERNAL :: dgbsv
 
       ok = .FALSE.
@@ -23349,7 +23525,7 @@ CONTAINS
       REAL(wp), ALLOCATABLE, INTENT(IN) :: zf
       REAL(wp) :: zfl
       INTEGER :: es_b
-      CHARACTER(160) :: em_b
+      CHARACTER(1024) :: em_b
       below = .FALSE.
       IF (PRESENT(bathymetry)) THEN
         CALL CD_Bathymetry_Floor(bathymetry, pos(1), pos(2), zfl, es_b, em_b)
@@ -23518,8 +23694,8 @@ CONTAINS
       TYPE(DeckPoint), ALLOCATABLE :: pc(:)
       REAL(wp) :: rclamp(3, 3), dclamp(3), dtb
       INTEGER :: node, es
-      CHARACTER(512) :: note
-      CHARACTER(300) :: em
+      CHARACTER(1024) :: note
+      CHARACTER(1024) :: em
       fm = CD_ZERO
       km = CD_ZERO
       lnc = lines(jl)
@@ -24871,7 +25047,7 @@ CONTAINS
 
     INTEGER :: ib, es, p, base
     REAL(wp) :: dv0(6), acc(3), alpha(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ! detached: the active free points that are not deck points -- the reserve points a line
     ! FAILURE moved line ends onto. They are integrated on their line-end loads; every other
     ! point follows its body or stays held.
@@ -25038,7 +25214,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -25141,7 +25317,7 @@ CONTAINS
     TYPE(HydroUpdateWorkspace), INTENT(INOUT) :: hydro_work
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -25192,7 +25368,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -25571,7 +25747,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: bathy_ready
 
     ErrStat = CD_DECKDRV_OK
@@ -25611,7 +25787,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
     REAL(wp) :: x_cb(3), eta, u(3), du(3), r_e, h
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -25734,7 +25910,7 @@ CONTAINS
 
     INTEGER :: es
     REAL(wp) :: eta, rel(3), rel_speed, fluid_velocity(3), fluid_acceleration(3), phi, fk
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -25815,7 +25991,7 @@ CONTAINS
     INTEGER :: recovery_events, recovery_max_used
     INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     REAL(wp) :: t, up(3), uv(3), ua(3), tensile_force, tensile_threshold, tensile_xi, tensile_time, turn
     ! Per-step tangent turn [deg] above which the time-step note is printed (see below).
     REAL(wp), PARAMETER :: TURN_NOTE_FORCE_BLEND = 0.25_wp, TURN_NOTE_CONFIG_BLEND = 0.1_wp
@@ -26129,7 +26305,7 @@ CONTAINS
     REAL(wp) :: qr(12), l0, arc_start, arc_end, curvature_peak, u_curvature_internal, &
                 u_curvature_public, arc_peak, moment_peak, minimum_resultant, minimum_u_internal, &
                 minimum_u_public, maximum_resultant, maximum_u_internal, maximum_u_public
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     CHARACTER(LEN(out_root) + 20) :: path
     CHARACTER(1) :: tab
 
@@ -26200,7 +26376,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, pidx, es
     REAL(wp) :: q(3), v(3), a(3)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (SIZE(cables) /= SIZE(lines)) THEN
@@ -26238,7 +26414,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, j, nn, es
     REAL(wp) :: eta, wv(3), wa(3)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (.NOT. (opts%has_current .OR. opts%has_wave)) RETURN
     DO i = 1, SIZE(cables)
@@ -26295,7 +26471,7 @@ CONTAINS
     INTEGER :: i, line_id, li, pidx, comp, pp, mi, k, es
     REAL(wp) :: val, f(3), fl(3)
     CHARACTER(NAMELEN) :: lo
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (PRESENT(ranges)) THEN
       DO li = 1, SIZE(lines)
@@ -26507,7 +26683,7 @@ CONTAINS
     INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: step_converged, stalled
     REAL(wp) :: t, first_miss_time, last_miss_time
     TYPE(MotionTable) :: motion
@@ -26825,7 +27001,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: kmat(:, :), mmat(:, :), floor_z(:)
     LOGICAL, ALLOCATABLE :: free(:)
     INTEGER :: li, n, nm, es, kd
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ALLOCATE (models(0)) ! defined descriptor for the INTENT(OUT) dummy (-Wmaybe-uninitialized at -O0)
     CALL init_deck_models_from_parsed(types, points, lines, sections, opts, models, ErrStat, ErrMsg)
@@ -26887,7 +27063,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: kmat(:, :), mmat(:, :), floor_z(:)
     LOGICAL, ALLOCATABLE :: free(:)
     INTEGER :: li, n, nm, es, kd
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -27146,7 +27322,7 @@ CONTAINS
     INTEGER :: i, es
     REAL(wp) :: eta, wave_velocity(3), wave_acceleration(3)
     REAL(wp) :: fluid_density
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: points_ready
 
     ErrStat = CD_DECKDRV_OK
@@ -27233,7 +27409,7 @@ CONTAINS
     INTEGER :: i, j, ndof, nnode, es
     REAL(wp) :: eta, wave_velocity(3), wave_acceleration(3)
     LOGICAL :: at_initial_condition, changed
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -27333,7 +27509,7 @@ CONTAINS
     INTEGER :: i, j, ndof, nnode, es
     REAL(wp) :: eta, wave_velocity(3), wave_acceleration(3)
     LOGICAL :: at_initial_condition, changed
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -27525,7 +27701,7 @@ CONTAINS
 
     INTEGER :: e, na, nb, worst_elem
     REAL(wp) :: strain, worst_strain
-    CHARACTER(200) :: detail
+    CHARACTER(1024) :: detail
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -27732,7 +27908,7 @@ CONTAINS
     INTEGER :: i, k, n, li, off, nd, ne, nnode, stride, es
     LOGICAL :: has_motion, ok
     REAL(wp) :: val, q_point(3), v_point(3), a_point(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -27835,7 +28011,7 @@ CONTAINS
     SUBROUTINE sample_ranges()
       !! Sample every line with a range file or TDP channel at this row's committed state.
       INTEGER :: il, es_r
-      CHARACTER(512) :: em_r
+      CHARACTER(1024) :: em_r
       DO il = 1, SIZE(lines)
         IF (.NOT. CD_Range_Needs_Sample(work%rset, il)) CYCLE
         IF (PRESENT(models)) THEN
@@ -27890,7 +28066,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: il
       LOGICAL, INTENT(OUT) :: fetched
       INTEGER :: o, m, es
-      CHARACTER(160) :: msg
+      CHARACTER(1024) :: msg
       fetched = work%state_row(il) == work%row
       IF (fetched) RETURN
       o = work%state_off(il)
@@ -27918,7 +28094,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: il, inode, nel
       REAL(wp), INTENT(INOUT) :: v
       INTEGER :: es_o
-      CHARACTER(160) :: msg_o
+      CHARACTER(1024) :: msg_o
       IF (inode /= 1 .AND. inode /= nel + 1) RETURN
       IF (PRESENT(models)) THEN
         CALL line_model_end_tension(models(il), inode, nel + 1, v, es_o, msg_o)
@@ -27938,7 +28114,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: il
       LOGICAL, INTENT(OUT) :: fetched
       INTEGER :: o, m, es
-      CHARACTER(160) :: msg
+      CHARACTER(1024) :: msg
       fetched = work%ten_row(il) == work%row
       IF (fetched) RETURN
       o = work%ten_off(il)
@@ -27963,7 +28139,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: il
       LOGICAL, INTENT(OUT) :: sized, tension_sized
       INTEGER :: es, ndof_l, ne_l
-      CHARACTER(160) :: msg
+      CHARACTER(1024) :: msg
       tension_sized = .FALSE.
       IF (PRESENT(models)) THEN
         ndof_l = CD_Model_NDOF(models(il), es, msg)
@@ -28230,7 +28406,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
-    CHARACTER(512) :: msg_buf
+    CHARACTER(1024) :: msg_buf
     INTEGER :: ios
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -28261,7 +28437,7 @@ CONTAINS
     INTEGER :: li, pidx, comp, kind, node, ndof, nnode, es, ne, inode
     REAL(wp) :: q_point(3), v_point(3), a_point(3)
     CHARACTER(NAMELEN) :: lo
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -28406,7 +28582,7 @@ CONTAINS
 
     INTEGER :: li, pidx, comp, kind, node, nnode, es, inode, ppos, midx
     CHARACTER(NAMELEN) :: lo
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -28543,7 +28719,7 @@ CONTAINS
 
     INTEGER :: e, es, nnode
     REAL(wp) :: xa(3), xb(3), length
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     tension = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -28583,7 +28759,7 @@ CONTAINS
 
     INTEGER :: li, pidx, comp, kind, node, ndof, nnode, es, ne, inode, midx
     CHARACTER(NAMELEN) :: lo
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -28725,7 +28901,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, es, ndof, nnode, internal_node, ppos
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -28778,7 +28954,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: ndof, es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ndof = CD_Model_NDOF(model, es, em)
     IF (es /= CD_MODEL_OK) THEN
@@ -28809,7 +28985,7 @@ CONTAINS
 
     INTEGER :: i, es
     LOGICAL :: use_live_env
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -28882,7 +29058,7 @@ CONTAINS
 
     INTEGER :: i, es, line_iter, active_model
     LOGICAL :: line_converged, line_stalled, use_motion, use_live_env, line_has_live_load
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .TRUE.
     stalled = .FALSE.
@@ -29059,7 +29235,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: ndof, pa, pb, es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     ndof = SIZE(q_ft)
@@ -29089,7 +29265,7 @@ CONTAINS
 
     INTEGER :: i, j, ndof, nc, es, line_iter, line_substeps
     LOGICAL :: line_converged, line_stalled
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .TRUE.
     stalled = .FALSE.
@@ -29160,7 +29336,7 @@ CONTAINS
 
     INTEGER :: i, ndof, es, line_iter, line_substeps
     LOGICAL :: line_converged, line_stalled
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .TRUE.
     stalled = .FALSE.
@@ -29212,7 +29388,7 @@ CONTAINS
     INTEGER :: i, j, ndof, nc, es
     INTEGER, ALLOCATABLE :: coupled_dofs(:)
     REAL(wp), ALLOCATABLE :: qc(:), vc(:), ac(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     TYPE(LineStepWorkspace) :: work
 
     ErrStat = CD_DECKDRV_OK
@@ -29276,7 +29452,7 @@ CONTAINS
     INTEGER :: dofs(6)
     REAL(wp) :: q_vals(6), v_vals(6), a_vals(6)
     LOGICAL :: do_recompute
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -29314,7 +29490,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: ndof, es, pa, pb
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -29451,7 +29627,7 @@ CONTAINS
     CHARACTER(DECK_RECLEN) :: roll_tok
     REAL(wp) :: t, qv(3), vv(3), av(3), tol, row(11), trow(21), rq(3, 3), rp(3)
     CHARACTER(DECK_RECLEN) :: line
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: why
     LOGICAL, ALLOCATABLE :: seen(:, :), turb_seen(:, :)
     LOGICAL :: accept_rod_points, accept_body_points, grid_ok
     INTEGER :: jturb
@@ -29781,7 +29957,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), PARAMETER :: D2R = QUARTER_PI/45.0_wp
     CHARACTER(DECK_RECLEN) :: line
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: why
     INTEGER :: unit, ios, lineno, ntok, nform, row_status, it, off
     REAL(wp) :: row(20), tol, qn
     LOGICAL, ALLOCATABLE :: seen(:)
@@ -29887,7 +30063,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER, PARAMETER :: MAXH = 361, MAXP = 2000
     CHARACTER(DECK_RECLEN) :: line
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: why
     CHARACTER(DECK_RECLEN) :: tok
     INTEGER :: unit, ios, lineno, nh, np, np_first, row_status, i, j, k, es
     INTEGER, ALLOCATABLE :: perm_p(:), perm_h(:)
@@ -29895,7 +30071,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: heads(:), pers(:, :), amp(:, :, :), ph(:, :, :)
     REAL(wp), ALLOCATABLE :: amp_s(:, :, :), ph_s(:, :, :), per_s(:), head_s(:)
     LOGICAL :: found, ok
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     ! read buffers at the table limits (about 75 MB); STAT keeps a failed allocation a clean error
@@ -30046,7 +30222,7 @@ CONTAINS
     REAL(wp) :: cb, sb, r, rd, rdd, x6(6), v6(6), a6(6)
     INTEGER :: nc, i, it, es, nclamp
     LOGICAL :: clamped
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     rref = CD_ZERO; vref = CD_ZERO; aref = CD_ZERO
@@ -30549,7 +30725,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: pidx, comp, k, es
     REAL(wp) :: f(3), f_first(3), f_last(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -30585,7 +30761,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: pidx, comp, k, es
     REAL(wp) :: f(3), f_first(3), f_last(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31024,7 +31200,7 @@ CONTAINS
     INTEGER :: i, es
     REAL(wp) :: tension, declination, azimuth, fair_force(3), f_first(3)
     CHARACTER(NAMELEN) :: cten, cdec, cazi
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31111,7 +31287,7 @@ CONTAINS
     INTEGER :: i, es
     REAL(wp) :: tension, declination, azimuth, f_first(3), fair_force(3)
     CHARACTER(NAMELEN) :: cten, cdec, cazi
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     ALLOCATE (summaries(SIZE(lines)))
@@ -31145,7 +31321,7 @@ CONTAINS
     INTEGER :: i, es
     REAL(wp) :: tension, declination, azimuth, f_first(3), fair_force(3)
     CHARACTER(NAMELEN) :: cten, cdec, cazi
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     ALLOCATE (summaries(SIZE(lines)))
@@ -31220,7 +31396,7 @@ CONTAINS
     END DO
   END SUBROUTINE collect_hermite_init_summaries
 
-  SUBROUTINE print_deck_init_report(deck_path, lines, points, sections, n_finite, summaries)
+  SUBROUTINE print_deck_init_report(deck_path, lines, points, sections, n_finite, summaries, types, opts)
     !! The initialization report goes to stderr (see doc/cli.rst).
     CHARACTER(*), INTENT(IN) :: deck_path
     TYPE(DeckLine), INTENT(IN) :: lines(:)
@@ -31228,8 +31404,11 @@ CONTAINS
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     INTEGER, INTENT(IN) :: n_finite
     TYPE(CD_LineInitSummary), INTENT(IN) :: summaries(:)
+    TYPE(DeckLineType), INTENT(IN), OPTIONAL :: types(:)
+    TYPE(DeckOptions), INTENT(IN), OPTIONAL :: opts
     INTEGER :: i
     REAL(wp) :: f_incl
+    CHARACTER(1024) :: strain_note
 
     WRITE (error_unit, '(A)') '  Parsing CableDyn input file: '//TRIM(deck_path)
     WRITE (error_unit, '(A,I0,A,I0,A,I0,A,I0,A,I0,A)') &
@@ -31255,6 +31434,10 @@ CONTAINS
       WRITE (error_unit, '(A,F9.3,A,F9.3,A,F9.3,A)') '      line tangent: inclination=', &
         summaries(i)%fair_inclination, ' deg, declination=', summaries(i)%fair_declination, &
         ' deg, azimuth=', summaries(i)%fair_azimuth, ' deg'
+      IF (PRESENT(types) .AND. PRESENT(opts)) THEN
+        CALL static_strain_note(summaries(i)%line_id, summaries(i)%fair_tension, sections, types, opts, strain_note)
+        IF (LEN_TRIM(strain_note) > 0) WRITE (error_unit, '(A)') '      Note: '//TRIM(strain_note)//'.'
+      END IF
     END DO
     WRITE (error_unit, '(A)') '  CableDyn initialization completed.'
   END SUBROUTINE print_deck_init_report
@@ -31297,7 +31480,7 @@ CONTAINS
     INTEGER, ALLOCATABLE :: ids(:)
     LOGICAL, ALLOCATABLE :: want_r(:), want_t(:)
     INTEGER :: i, k, n, line_id, comp, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     n = SIZE(nnodes)
     ALLOCATE (ids(n), want_r(n), want_t(n))
@@ -31348,7 +31531,7 @@ CONTAINS
     TYPE(CD_HFMF_ModuleType), INTENT(IN), OPTIONAL :: cables(:)
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: nnodes(SIZE(lines)), il, es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31378,7 +31561,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     CALL CD_Range_Write_Files(rset, out_root, es, em)
     CALL range_status(es, em, ErrStat, ErrMsg)
   END SUBROUTINE range_write
@@ -31420,7 +31603,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nn, es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31472,7 +31655,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nn, ne, e, j, inode, es
     REAL(wp) :: xa(3), xb(3), length, kc(3), kr(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31519,7 +31702,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nn, ne, e, j, k, inode, es
     REAL(wp) :: curv, bend
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31625,7 +31808,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nn, j, k, inode, obj, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31677,7 +31860,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER, ALLOCATABLE :: nnodes(:)
     INTEGER :: k, obj, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31723,7 +31906,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, obj, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -31767,7 +31950,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: line_id, comp, nn, es
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     val = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -31838,7 +32021,7 @@ CONTAINS
     LOGICAL :: found
     INTEGER :: line_id, node, kind, comp, pidx, es, k, c
     REAL(wp) :: qp(3), vp(3), ap(3), f(3), f_first(3), f_last(3), fl(3)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -32014,7 +32197,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: obj, ne, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -32153,7 +32336,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: f_first(3), f_last(3)
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     val = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -32185,7 +32368,7 @@ CONTAINS
 
     CHARACTER(NAMELEN) :: lo
     INTEGER :: line_id, node, kind, comp, ndof, nnode, ne, inode, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -32309,7 +32492,7 @@ CONTAINS
     INTEGER :: line_id, node, kind, comp, nnode, nelem, inode, es
     LOGICAL :: deck_numbering
     REAL(wp) :: sec_ten, sec_curv, sec_bend
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -32505,7 +32688,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: xi
     REAL(wp) :: qr(12), vr(12), l0, viscous
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     t = CD_ZERO
     IF (e < 1 .OR. e > cable%line%ne) RETURN
     l0 = cable%line%l0(e)
@@ -32563,7 +32746,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: force(3)
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -33591,7 +33774,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: host_mask(:)
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     IF (.NOT. PRESENT(host_mask) .OR. nsub <= 1) RETURN
@@ -33919,8 +34102,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: xr(:), yr(:), dr(:), xgrid(:), ygrid(:), depth(:, :)
     LOGICAL, ALLOCATABLE :: filled(:, :)
     CHARACTER(DECK_RECLEN) :: line
-    CHARACTER(200) :: em
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: em
+    CHARACTER(1024) :: why
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -34115,7 +34298,7 @@ CONTAINS
     LOGICAL :: have_owc, have_wc, have_k1, have_k2
     REAL(wp) :: row(2)
     REAL(wp), ALLOCATABLE :: es(:), ts(:)
-    CHARACTER(256) :: why
+    CHARACTER(1024) :: why
 
     ErrStat = 0; ErrMsg = ''
     IF (PRESENT(owc_file)) owc_file = ''

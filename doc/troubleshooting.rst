@@ -61,6 +61,10 @@ Auxiliary files use their own label in place of ``deck`` (for example ``motionFi
 instead: a duplicate or undefined id is quoted in the message (``duplicate POINT id 4``,
 ``LINE 2 references undefined POINT id 9``).
 
+A solver failure message is not cut off by a fixed-size buffer: it can run to several hundred characters (the tensile
+qualification failure of a dynamic step names the element, the force, its limit, and the remedy),
+the driver prints it whole, and the C API retains up to 4096 characters per handle.
+
 .. _deck-rejected:
 
 A deck is rejected (exit 1)
@@ -253,10 +257,38 @@ Model data
      - End A is the fairlead/upper end. A stock anchor-first row (``Fixed`` NodeA, fairlead NodeB)
        is swapped automatically; this message means the fairlead point itself lies below the
        anchor. Check the point coordinates.
-   * - ``LINE End A (NodeA) must be Coupled/Vessel/Body<N> ...`` / ``LINE End B (NodeB) must be a
-       Fixed (anchor) point``
-     - in a deck without dynamic points every line runs from a fairlead to an anchor. Use
-       ``Connect``/``Free`` points for line-to-line junctions.
+   * - ``LINE End A (NodeA) must be Coupled/Vessel/Body<N> ...`` / ``LINE <L> End B (NodeB, POINT
+       <n>, <type>) must be a Fixed (anchor) point``
+     - in a deck without dynamic points every line runs from a fairlead to an anchor. A line
+       between two Coupled points (a shared line) is supported only between two ``Turbine<J>``
+       fairleads of a FAST.Farm deck. Split it into two lines that meet at a ``Connect`` point
+       in the middle; each line then ends on one Coupled point, and the deck becomes dynamic and
+       needs ``dtM`` and ``TMax``.
+   * - ``finite-EI LINE <L> in a mixed-topology deck needs a Fixed End B ... End B is POINT <n>
+       (<type>)``
+     - a deck with ``Connect``/``Free`` points, bodies or rods that also has finite-EI cables drives
+       each cable at End A, so End B must be a ``Fixed`` point. A cable that ends on a ``Connect``/``Free``/``Coupled``
+       point (a junction with other lines, a buoy, a pliant-wave hang-off) is not supported in a
+       deck with ``Connect``/``Free`` points, bodies or rods, which is marched as one multibody
+       system. Anchor the cable on a Fixed point, or run the cable and the lines it joins as
+       separate decks.
+   * - ``finite-EI LINE <L>: a Coupled/Vessel End A (POINT <n>) is driven by a motionFile``
+     - a mixed-topology deck that has ``Connect``/``Free`` points or bodies is marched as one
+       multibody system, which does not take a finite-EI cable on a Coupled End A (that end
+       would need ``motionFile`` coupling). Remove the ``Connect``/``Free`` points so the deck
+       runs as a coupled mixed deck (the ``EI = 0`` lines on the Coupled point directly), or
+       attach the cable to a Rigid6 body, a rod end or a Fixed point.
+   * - ``the deck current OPTION is not supported on this route`` / ``the deck waves OPTION ...``
+     - a mixed ``EI = 0``/finite-EI deck (run standalone, through the C API, OpenFAST or
+       FAST.Farm) runs the mooring in still water: no ambient fluid field covers its span, and
+       a coupled host supplies its own waves and current. Remove the ``waves``/``current``
+       OPTION, run a deck whose lines are all ``EI = 0`` or all finite-EI (those standalone
+       routes evaluate the deck waves and current), or let the OpenFAST host supply them.
+   * - ``POINT <n> (Fixed) lies below the seabed ... by <d> m, more than the <tol> m seabed
+       tolerance``
+     - a Fixed anchor within ``max(1 mm, 1e-5 |z_seabed|)`` of the seabed (``-WtrDpth``, or the
+       bathymetry surface) rests on it and is placed on it. A deeper anchor is never moved
+       silently: set its ``Z`` to the seabed elevation named in the message, or higher.
    * - ``finite-EI section (EI>0) requires a dynamic deck with dtM and TMax``
      - a single-family finite-EI deck is solved by the dynamic finite-EI workflow. Add
        ``dtM``/``TMax`` (``TMax = 0`` gives the static configuration only).
@@ -265,6 +297,12 @@ Model data
        route — a lazy-wave arch needs the finite-EI path. Give the buoyant section an ``EI > 0``
        line type, or specify it by target submerged weight (the ``EQUIVALENT BUOYANCY`` block in
        :doc:`driver_format`).
+   * - ``is net-buoyant to within 1e-6 (neutrally buoyant ...)``
+     - an ``EI = 0`` line type whose dry mass equals the displaced water mass (to a relative
+       1e-6, the precision of a typed mass) has no net weight. A slack line of it is weightless
+       and its static shape is indeterminate (every slack shape balances). Give the line type
+       weight (a larger ``MassDenInAir``), or use a finite ``EI`` with a tension that holds the
+       line taut.
    * - ``the viscoelastic dynamic stiffness Ed (EA = Es|Ed) must be finite and exceed the static
        Es``
      - ``Ed`` must be strictly greater than ``Es``; equal values make the series spring infinite.
@@ -423,6 +461,14 @@ but a few geometries are genuinely hard:
 - **A large grounded touchdown on the** ``EI = 0`` **path.** A long, near-horizontal grounded run can
   make the linear-Lagrange tangent singular regardless of seed. If the case is a lazy-wave or
   bending-dominated cable, use the finite-EI path (``EI > 0``), which is built for it.
+- **A weightless finite-EI line longer than its span.** ``the weightless (neutrally buoyant)
+  line is longer than its span`` means every element has zero net weight (to a relative 1e-6 of
+  its displaced weight, attachments included). Such a line has no catenary: with no weight a
+  tension-only line is straight, and a longer one could only bow by bending under axial
+  compression, which a cable does not carry. Shorten the line to its span, or give it net weight
+  (a larger ``MassDenInAir``, or clumps) or a tension that holds it taut. A line heavier than
+  water with the same symptom gets ``the net-heavy line is too long for its span to hang as a
+  catenary`` instead.
 - **A finite-EI lazy-wave cable at too coarse a mesh.** An under-resolved arch or touchdown
   carries a large element ``h·κ`` and can stall the dynamic Newton. The resolution metric flags
   this; the builder can auto-refine a fragile mesh when the deck opts in (``adaptive_mesh True``).
@@ -532,6 +578,19 @@ Warnings and notes that do not stop a run
 
    * - Message
      - Cause and fix
+   * - ``Note: LINE <L> is stretched to a static strain of ... % at the fairlead``
+     - the fairlead tension over the EA of the End A section exceeds ``maxStrain`` (when the
+       OPTION is given) or 10 % (when it is not). A line far shorter than its span converges at
+       such a strain without failing, because the dynamic ``maxStrain`` guard does not apply to
+       the static solve. Check the line length against the span and the EA. Only a note: the
+       equilibrium and the outputs are unchanged. Types with a Syrope working curve or a
+       load-dependent stiffness are not assessed.
+   * - ``WARNING: LINE <L> section of type "<name>" (... m in <n> segment(s)) has segments of ...
+       m, ... % of the line length``
+     - a section of at most four segments whose segments are longer than 10 % of the line is too
+       coarse to follow the line shape there; a 100 m one-segment top section of a 520 m line shifts the fairlead tension
+       by tens of percent. Refine its ``NumSegs``. (A line with fewer than three segments in all
+       is reported whole.)
    * - ``WARNING: line type ... sinks ... m into the seabed ...; kBot is soft for this line``
      - a grounded run of this type would sink deeper than its own diameter into the penalty
        seabed. Raise ``kBot``; the default ``1.0e5`` embeds a heavy chain by about half its

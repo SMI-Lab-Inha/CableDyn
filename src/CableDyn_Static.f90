@@ -209,7 +209,7 @@ CONTAINS
     ! Smallest Levenberg-Marquardt shift (relative to kappa) of the slack-capable law: keeps
     ! directions without any stiffness (a grounded node between slack elements) solvable.
     REAL(wp), PARAMETER :: LM_MU_MIN_SLACK = 1.0e-12_wp
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
     ! slack-capable law: base assembly flag, compressed-branch ratio, and the second
     ! (compression-capable) assembly the blend needs when 0 < r < 1
     LOGICAL  :: law_to, reg_law, blend
@@ -733,7 +733,7 @@ CONTAINS
       REAL(wp), ALLOCATABLE :: fint_e(:)
       REAL(wp) :: scale_load, scale_drag
       INTEGER  :: es_e
-      CHARACTER(120) :: em_e
+      CHARACTER(1024) :: em_e
       ALLOCATE (fint_e(n_dof))
       CALL CD_Assemble_Cable_Internal_Force(reshape3(qe, n_dof), elem_conn, l0, ea, law_to, &
                                             fint_e, es_e, em_e)
@@ -807,7 +807,7 @@ CONTAINS
       REAL(wp), INTENT(OUT) :: energy, magnitude
       INTEGER :: e, a, b, i, es_e
       REAL(wp) :: ell, eps, w_el, zf, gx, gy, g, s, pot, bl
-      CHARACTER(120) :: em_e
+      CHARACTER(1024) :: em_e
 
       energy = CD_ZERO
       magnitude = CD_ZERO
@@ -1255,7 +1255,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: n_nodes, i, es
     REAL(wp) :: z_floor, dfdx, dfdy, normal, tangent, fvec(3), jac(3, 3), f(2), dfd(2, 2), dfc(2), curv(3)
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_STATIC_OK
     ErrMsg = ''
     n_nodes = SIZE(q)/3
@@ -1658,7 +1658,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_seed(:), q_try(:), q_mid(:), q_best(:), ten(:)
     REAL(wp) :: f_node, t_min, t_max, r_soft, r_firm, floor_a, slope_a, h_cat, g_cat
     LOGICAL :: has_seabed, anchor_grounded, conv, stalled, at_floor, have_seed, done, have_best
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     CHARACTER(64) :: seed_name
     CHARACTER(400) :: notes
     TYPE(CableSolverConfig) :: cfg_adm
@@ -1907,7 +1907,7 @@ CONTAINS
       REAL(wp), INTENT(OUT) :: qo(:)
       LOGICAL, INTENT(OUT) :: ok
       INTEGER :: es_r
-      CHARACTER(200) :: em_r
+      CHARACTER(1024) :: em_r
 
       ok = .FALSE.
       IF (slack_law) THEN
@@ -1969,7 +1969,7 @@ CONTAINS
       REAL(wp), INTENT(IN) :: qe(:)
       REAL(wp), INTENT(OUT) :: tmin, tmax
       INTEGER :: es_t
-      CHARACTER(200) :: em_t
+      CHARACTER(1024) :: em_t
       CALL CD_Compute_Cable_Tension(RESHAPE(qe, [3, n_nodes]), elem_conn, l0, ea, .FALSE., ten, es_t, em_t)
       IF (es_t /= 0) THEN
         tmin = -HUGE(CD_ONE)
@@ -2020,7 +2020,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: which
       LOGICAL, INTENT(OUT) :: ok
       INTEGER :: es_s, i_s
-      CHARACTER(200) :: em_s
+      CHARACTER(1024) :: em_s
       LOGICAL :: hang
       REAL(wp) :: pen
 
@@ -2176,7 +2176,7 @@ CONTAINS
       REAL(wp) :: hd(2), hlen, arc, d, zf, g, p(3), step, arc_prev
       REAL(wp), ALLOCATABLE :: q_sus(:)
       REAL(wp) :: h_s, g_s, u(3)
-      CHARACTER(200) :: em_d
+      CHARACTER(1024) :: em_d
 
       valid = .FALSE.
       mismatch = -HUGE(CD_ONE)
@@ -2232,7 +2232,7 @@ CONTAINS
       REAL(wp) :: hd(2), hlen, zp, c, arc_ap, g, e, a, dmax, total, s_node, pp(3), s_arc, d
       REAL(wp) :: dtab(0:NTAB), atab(0:NTAB)
       INTEGER :: i, j, es_f
-      CHARACTER(200) :: em_f
+      CHARACTER(1024) :: em_f
 
       ok = .FALSE.
       hd = fairlead(1:2) - anchor(1:2)
@@ -2295,7 +2295,7 @@ CONTAINS
       REAL(wp), INTENT(OUT) :: g
       REAL(wp) :: zf, gx, gy
       INTEGER :: es_g
-      CHARACTER(200) :: em_g
+      CHARACTER(1024) :: em_g
       g = CD_ZERO
       IF (.NOT. PRESENT(bathymetry)) RETURN
       CALL CD_Bathymetry_Floor_Gradient(bathymetry, x, y, zf, gx, gy, es_g, em_g)
@@ -2455,7 +2455,7 @@ CONTAINS
     INTEGER :: n_dof, n_nodes, n_elem, k, e, a, b, node, es
     REAL(wp), ALLOCATABLE :: fint(:)
     REAL(wp) :: zf, gx, gy, fvec(3), jac(3, 3), curv(3), f2(6), jq2(6, 6), jv2(6, 6), va(3), vb(3), de, cn, ct, wla, wlb
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     INTEGER :: ends(2)
     LOGICAL :: drag_ends
 

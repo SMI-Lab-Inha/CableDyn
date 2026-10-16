@@ -70,7 +70,7 @@ CONTAINS
     REAL(wp) :: energy_axial, energy_bending, force_axial(12), force_bending(12)
     REAL(wp) :: tangent_axial(12, 12), tangent_bending(12, 12)
     INTEGER :: axial_order, bending_order, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: half_tangent, only_tangent
 
     axial_order = NG
@@ -515,7 +515,7 @@ CONTAINS
       REAL(wp), INTENT(IN) :: u
       REAL(wp), INTENT(OUT) :: curvature
       INTEGER :: es
-      CHARACTER(160) :: em
+      CHARACTER(1024) :: em
       CALL CD_HermiteCable_Curvature(qr, L, u, curvature, es, em)
       IF (es /= CD_HCABLE_OK) THEN
         ErrStat = es
@@ -633,7 +633,7 @@ CONTAINS
       REAL(wp), INTENT(IN) :: u
       REAL(wp), INTENT(OUT) :: resultant
       INTEGER :: es
-      CHARACTER(160) :: em
+      CHARACTER(1024) :: em
       CALL CD_HermiteCable_Axial_Resultant(qr, L, EA, u, resultant, es, em)
       IF (es /= CD_HCABLE_OK) THEN
         ErrStat = es

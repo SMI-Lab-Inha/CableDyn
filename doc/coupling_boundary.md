@@ -96,7 +96,7 @@ Rules shared by every entry point:
   xyz triples; connectivity and fixed-DOF indices are 1-based.
 - Calls with an `err_stat` argument return `CD_C_OK`, `CD_C_BAD_HANDLE`, `CD_C_ALLOC_FAIL`,
   `CD_C_BAD_INPUT`, `CD_C_SOLVE_FAIL`, or `CD_C_NOT_INITIALIZED`. Diagnostics are kept per handle
-  (up to 1024 characters) and copied by `CableDyn_GetLastError`.
+  (up to 4096 characters) and copied by `CableDyn_GetLastError`.
 - `CableDyn_NPoints` returns the column count expected by `CableDyn_UpdatePointFluidFields`; it
   can exceed `NCoupledDOF/3` when a deck has output-only fixed or coupled points.
 - Deck initialisation is transactional: a failed `CableDyn_InitDeck` or `CableDyn_InitDeckAt`

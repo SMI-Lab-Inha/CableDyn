@@ -162,7 +162,7 @@ CONTAINS
     TYPE(CD_FMF_ModuleType) :: candidate
     REAL(wp) :: deck_dt, gravity, rho_water
     INTEGER :: es, n_coupled
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_FMF_OK
     ErrMsg = ''
@@ -221,7 +221,7 @@ CONTAINS
 
     TYPE(CD_FMF_ModuleType) :: candidate
     INTEGER :: es, n_coupled
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_FMF_OK
     ErrMsg = ''
@@ -475,7 +475,7 @@ CONTAINS
 
     INTEGER, ALLOCATABLE :: blocks(:)
     INTEGER :: i, k, n_all, es, istat
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_FMF_OK
     ErrMsg = ''
@@ -666,7 +666,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     CALL CD_System_Snapshot(self%fast%system, es, em)
     IF (es /= CD_SYSTEM_OK) THEN
@@ -694,7 +694,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     CALL CD_System_Restore(self%fast%system, es, em)
     IF (es /= CD_SYSTEM_OK) THEN

@@ -248,7 +248,7 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: ws_elem_f(:, :), ws_elem_K(:, :, :), ws_elem_Kdrag(:, :, :)
     REAL(wp), ALLOCATABLE :: ws_elem_Kv(:, :, :), ws_elem_Kwave(:, :, :), ws_elem_Kheld(:, :, :)
     INTEGER, ALLOCATABLE :: ws_elem_es(:)
-    CHARACTER(200), ALLOCATABLE :: ws_elem_em(:)
+    CHARACTER(512), ALLOCATABLE :: ws_elem_em(:)
     REAL(wp) :: alpha_m = CD_ZERO, alpha_f = CD_ZERO, beta = CD_ZERO, gamma = CD_ZERO
     ! Optional Morison drag (transverse + tangential quadratic drag on the submerged cable, relative
     ! to a uniform fluid velocity). Off by default; wired in via CD_HermiteCable_Dyn_Set_Drag.
@@ -508,7 +508,7 @@ CONTAINS
 
     INTEGER :: ne, nn, ndof, i, e, es, nf, gi
     REAL(wp) :: Me(12, 12), rho
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
@@ -671,7 +671,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: new_kn(:), new_cn(:), old_kn(:), old_cn(:), old_a(:)
     LOGICAL :: old_has_contact, old_has_bathymetry
     TYPE(CD_BathymetryType) :: new_bathymetry, old_bathymetry
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     model%rc_epoch = model%rc_epoch + 1
@@ -840,7 +840,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: a_old(:), anchor_old(:, :)
     LOGICAL :: active_old
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -909,7 +909,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: n, k, d, dof, es
     REAL(wp), ALLOCATABLE :: a_old(:), mgb_old(:, :)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     n = SIZE(node)
@@ -1356,7 +1356,7 @@ CONTAINS
     LOGICAL :: had_conn, snap_was_valid
     LOGICAL, ALLOCATABLE :: solve_mask_old(:)
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     ! A load-configuration change invalidates the cached committed force F_n.
@@ -1824,7 +1824,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: old_BA(:), new_BA(:), old_a(:)
     LOGICAL :: old_has
     INTEGER :: es, istat
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK
     model%rc_epoch = model%rc_epoch + 1
@@ -1991,7 +1991,7 @@ CONTAINS
     REAL(wp) :: h_old, om_old, k_old, dep_old, dir_old, omega, k
     LOGICAL :: had_wave
     INTEGER :: es
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     model%rc_epoch = model%rc_epoch + 1
@@ -2111,7 +2111,7 @@ CONTAINS
     REAL(wp) :: h_old, om_old, k_old, dep_old, dir_old
     LOGICAL :: had_wave
     INTEGER :: i, n, nc_old, es
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     model%rc_epoch = model%rc_epoch + 1
@@ -2249,7 +2249,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: istat, es
     LOGICAL :: had_field
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n. The carried step
@@ -2588,7 +2588,7 @@ CONTAINS
     ! Newton's.
     REAL(wp), PARAMETER :: XS_TOL_FACTOR = 0.3_wp
     INTEGER(INT64) :: pc0, pc1, pcr, pt0, pt1
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
@@ -3403,7 +3403,7 @@ CONTAINS
       ! cache; a failure here only leaves it invalid (a query then evaluates and reports it)
       BLOCK
         INTEGER :: es_tc
-        CHARACTER(200) :: em_tc
+        CHARACTER(1024) :: em_tc
         CALL torsion_cache_fill(model, es_tc, em_tc)
       END BLOCK
     END IF
@@ -3775,7 +3775,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: raw
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     theta = model%torsion%theta
     CALL CD_HermiteTorsion_Line(q_cfg, model%l0, ends, raw, model%tors_gq, es, em, &
                                 quadrature_order=model%torsion%quadrature_order, work=model%tors_work)
@@ -3868,7 +3868,7 @@ CONTAINS
     ! The step-rotation diagnostic must not keep the turn of a step that is rewound.
     REAL(wp) :: rotation_save
     REAL(wp) :: tors_theta0, tors_phi0, tors_phi1, tors_ends0(3, 4), tors_ends1(3, 4), tors_sub(3, 4)
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ! Tensile-qualification failure flag reported by each step (classified by flag, not by
     ! message text, so a short caller buffer cannot change the recovery decision).
     LOGICAL :: tensile_fail
@@ -4392,7 +4392,7 @@ CONTAINS
     REAL(wp), INTENT(OUT), OPTIONAL :: connection
     INTEGER :: e, es
     REAL(wp) :: qe(12), Ee, fe(12), Ke(12, 12), connection_energy, end_energy
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''; kinetic = CD_ZERO; strain = CD_ZERO
     connection_energy = CD_ZERO
     IF (PRESENT(connection)) connection = CD_ZERO
@@ -4484,7 +4484,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: a, es
     REAL(wp) :: qe(12), kL, kR
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: model not initialised'; RETURN
@@ -4538,7 +4538,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es, gi
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''; freac = CD_ZERO
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Reaction: model not initialised'; RETURN
@@ -4590,7 +4590,7 @@ CONTAINS
     REAL(wp) :: curv_e(3), fcrease_e(3), kcrease_e(3, 3)
     INTEGER :: e, i0, iz, zslot, es, k
     LOGICAL :: dry, has_jac
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''; force = CD_ZERO; gap = -HUGE(CD_ONE)
     IF (.NOT. model%initialized) THEN
@@ -5256,7 +5256,7 @@ CONTAINS
 
     INTEGER :: iend, base, es
     REAL(wp) :: f_ec(3), k_ec(3, 3), direction(3), bend_moment(3)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     moment = CD_ZERO
     ErrStat = CD_HCDYN_OK
@@ -5372,7 +5372,7 @@ CONTAINS
     REAL(wp) :: saved_drive_ends(3, 4), saved_drive_phi
     LOGICAL :: saved_snap_valid, saved_drive_set
     INTEGER :: es, iend
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -5492,7 +5492,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: g(:)
     REAL(wp) :: raw, eg(6), c
     INTEGER :: es, nb
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     theta = CD_ZERO
     torque = CD_ZERO
     IF (PRESENT(grad)) grad = CD_ZERO
@@ -5574,7 +5574,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: raw, eg(6), th
     INTEGER :: es, nb, i
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
     model%tors_c_valid = .FALSE.
@@ -5841,7 +5841,7 @@ CONTAINS
     LOGICAL :: dry
     REAL(wp) :: endconn_d0_eval(3, 2), support(3), dsupport(3), nin(3), mend
     INTEGER :: inode, jr, jc
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     ne = model%ne
@@ -6284,7 +6284,7 @@ CONTAINS
     REAL(wp), POINTER :: g(:)
     REAL(wp) :: raw, th, mt, phi
     INTEGER :: es, i
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
     IF (want_tangent) THEN
@@ -6379,7 +6379,7 @@ CONTAINS
     REAL(wp) :: ffr(2), dfr_dd(2, 2), dfr_dc(2)
     REAL(wp) :: curv_g(3), curv_l(3), fcrease(3), kcrease(3, 3)
     LOGICAL :: creased
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (.NOT. model%has_contact .OR. .NOT. ALLOCATED(model%contact_kn) .OR. &
@@ -6517,7 +6517,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: inode
     INTEGER :: node, e, ix, es
     REAL(wp) :: gap, sfac, share, nvec(3), sfac_in, gap_in, normal, normal_gap, elem, delem
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     support = CD_ZERO
     dsupport = CD_ZERO
     nin = [CD_ZERO, CD_ZERO, CD_ONE]
@@ -6590,7 +6590,7 @@ CONTAINS
     INTEGER :: i, ix, iz, es
     REAL(wp) :: xl, yl, xg, yg, z_floor, gxg, gyg, gap, normal, normal_gap, gate, gate_gap
     REAL(wp) :: dxy(2), dlen, cap, mu_d, q_d, gq_d(2), gx, gy, sfac, nvec(3), vn
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     DO i = 1, model%nn
       ix = 6*i - 5; iz = ix + 2
       gx = CD_ZERO
@@ -6660,7 +6660,7 @@ CONTAINS
     REAL(wp) :: djq(12, 12), djv(12, 12), fjq(12, 12)
     REAL(wp) :: hf_mid(3)
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     qe(1:6) = q_cfg(6*(e - 1) + 1:6*e)
@@ -6965,7 +6965,7 @@ CONTAINS
     REAL(wp) :: scale, eta_w, uw(3), aw(3)
     LOGICAL :: has_wv, has_shared, has_trio, has_cmp, any_wv_arg, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, es
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     want_jac = PRESENT(djq)
@@ -7238,7 +7238,7 @@ CONTAINS
     REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha
     LOGICAL :: has_trio, has_cmp, has_held, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, k, es
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     want_jac = PRESENT(fjq)
@@ -7412,7 +7412,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, es
     REAL(wp) :: qe(12), Me(12, 12), wl_e
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     model%ws_Mamb = CD_ZERO
     IF (.NOT. model%has_am) RETURN
@@ -7448,7 +7448,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: iend, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     bases = CD_ZERO
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
@@ -7471,7 +7471,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: iend, base, es
     REAL(wp) :: projected(3)
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
     DO iend = 1, 2
@@ -7658,7 +7658,7 @@ CONTAINS
     INTEGER :: nf, np, i, ip, jp, gdof, es, iend, base
     LOGICAL :: has_pres
     REAL(wp) :: rigid_basis(3, 3, 2), old_acceleration(3), axial_acceleration
-    CHARACTER(200) :: em2
+    CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     ! This solve factors the mass into ws_Keffb: the carried step factor is gone.
     model%tr_valid = .FALSE.

@@ -185,7 +185,7 @@ MODULE CableDyn_System
     ! parallel region so failure selection and mapped-load accumulation stay reproducible.
     INTEGER, ALLOCATABLE :: line_off(:), line_stat(:), line_iter(:)
     LOGICAL, ALLOCATABLE :: line_converged(:), line_stalled(:)
-    CHARACTER(160), ALLOCATABLE :: line_msg(:)
+    CHARACTER(512), ALLOCATABLE :: line_msg(:)
     REAL(wp), ALLOCATABLE :: line_load_work(:)
     ! Snapshot of the COMMITTED system state (every line's q/v/a/f_ext + every point) for
     ! the aggregate stage-then-commit contract. The per-line q_rollback buffers CANNOT
@@ -233,7 +233,7 @@ CONTAINS
 
     TYPE(CD_SystemType) :: candidate
     INTEGER :: i, es, copy_stat, istat, n_local, nc
-    CHARACTER(200) :: em, copy_msg
+    CHARACTER(1024) :: em, copy_msg
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -344,7 +344,7 @@ CONTAINS
     INTEGER, ALLOCATABLE :: map(:), pbase(:)
     INTEGER :: es, istat, i, pidx
     REAL(wp) :: md
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     CALL build_point_coupled_map(models, points, bindings, map, pbase, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -417,7 +417,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, es
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     IF (ALLOCATED(system%lines)) THEN
       DO i = 1, SIZE(system%lines)
@@ -683,7 +683,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, k, es, base
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
     IF (.NOT. system%initialized) THEN
@@ -813,7 +813,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     q = CD_ZERO
     v = CD_ZERO
@@ -849,7 +849,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     dl1 = CD_ZERO
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
@@ -874,7 +874,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -908,7 +908,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     slow = CD_ZERO
     tmax = CD_ZERO
@@ -934,7 +934,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -966,7 +966,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     anchors = CD_ZERO
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -988,7 +988,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
     CALL CD_Set_Model_Friction_Anchors(system%lines(line_index), anchors, es, em)
@@ -1010,7 +1010,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     tension = CD_ZERO
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
@@ -1034,7 +1034,7 @@ CONTAINS
 
     INTEGER :: i, lo, hi, nc, es, local_id, sys_id, dof, n_mapped
     REAL(wp), PARAMETER :: TOL = 1.0e-10_wp
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     q_coupled = CD_ZERO
     v_coupled = CD_ZERO
@@ -1116,7 +1116,7 @@ CONTAINS
 
     INTEGER :: i, lo, hi, nc, es
     LOGICAL :: save_for_rollback
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     save_for_rollback = .TRUE.
     IF (PRESENT(caller_owns_rollback)) save_for_rollback = .NOT. caller_owns_rollback
@@ -1249,7 +1249,7 @@ CONTAINS
     INTEGER :: i, j, lo, hi, nc, es, line_dof, sys_dof, depth, iter2, ntot, nve, nsy, lo_ve, lo_sy, ne, nfr, lo_fr
     INTEGER :: n_team
     LOGICAL :: conv2, stall2
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     REAL(wp), ALLOCATABLE :: q0(:), v0(:), a0(:), qm(:), vm(:), am(:), qs(:), vs(:), as(:)
     REAL(wp), ALLOCATABLE :: dl1s(:), slows(:), tmaxs(:), frs(:, :)
 
@@ -1598,7 +1598,7 @@ CONTAINS
     REAL(wp) :: ma_blk(3, 3), k_blk(3, 3), c_blk(3, 3), rhs3(3), kv_nbr(3)
     LOGICAL :: solve_ok
     LOGICAL, ALLOCATABLE :: integ(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -1801,7 +1801,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, es
     REAL(wp) :: blk(3, 3), kb(3, 3), cb(3, 3), kv(3)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
     ma_block = CD_ZERO
@@ -1875,7 +1875,7 @@ CONTAINS
 
     INTEGER :: k, i, kb, es
     REAL(wp) :: md
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -1927,7 +1927,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, es
     REAL(wp) :: md
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
     system%points(point_index)%line_mass_diag = CD_ZERO
@@ -1961,7 +1961,7 @@ CONTAINS
 
     INTEGER :: i, k, pf, pr, es, local_base, e, nmoved
     REAL(wp) :: md
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -2065,7 +2065,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, lo, hi, es, n_team
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -2135,7 +2135,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, j, k, lo, hi, nc, es, row, col
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -2199,7 +2199,7 @@ CONTAINS
 
     INTEGER :: i, j, k, lo, hi, nc, es, row, col
     LOGICAL :: frozen
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -2269,7 +2269,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: i, es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -2300,7 +2300,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -2389,7 +2389,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: buoyancy_waterline_z(:)
 
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -2422,7 +2422,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: a_interior(:)
 
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
@@ -2484,7 +2484,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     n = 0
     CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
@@ -2507,7 +2507,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: n, es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -2624,7 +2624,7 @@ CONTAINS
     INTEGER :: point_dof_base, local_base
     INTEGER, ALLOCATABLE :: point_base(:)
     LOGICAL, ALLOCATABLE :: bound(:, :), point_bound(:)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
@@ -3167,7 +3167,7 @@ CONTAINS
     IF (ALLOCATED(system%snap_l0)) THEN
       BLOCK
         INTEGER :: le, he, ne_i, es2
-        CHARACTER(240) :: em2
+        CHARACTER(1024) :: em2
         le = 1
         lo = 1
         DO i = 1, system%n_lines

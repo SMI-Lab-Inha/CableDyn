@@ -242,7 +242,7 @@ CONTAINS
 
       character(*), parameter :: RoutineName = 'CableDyn:open_native_outputs'
       INTEGER(IntKi)          :: es, un, ic, nch, owner, ios
-      CHARACTER(512)          :: em, iomsg
+      CHARACTER(ErrMsgLen)          :: em, iomsg
       CHARACTER(ChanLen)      :: hdr, unt
       REAL(wp)                :: value
       LOGICAL                 :: write_static
@@ -465,7 +465,7 @@ CONTAINS
       character(*), parameter   :: RoutineName = 'CD_Init'
       INTEGER(IntKi)            :: ErrStat2, es
       CHARACTER(ErrMsgLen)      :: ErrMsg2
-      CHARACTER(512)            :: em
+      CHARACTER(ErrMsgLen)            :: em
       INTEGER(IntKi)            :: id, ncp, nlines, il, i, ndofl, nstates, ic, nch, nsuper, nglue
       INTEGER(IntKi)            :: nreportlines, npoints, nsections, nei0, nfinite, line_id
       INTEGER(IntKi)            :: clock_count, nT, prof_c0, prof_c1, prof_rate
@@ -1259,7 +1259,7 @@ CONTAINS
       CHARACTER(2100)           :: rst_deck
       INTEGER(IntKi)            :: id, old_id, stale_id, i, es, ncp, nlines, il, ndofl, nin, k, ic, csz, koff
       LOGICAL                   :: use_extf, profile_requested, preserve_profile
-      CHARACTER(512)            :: em
+      CHARACTER(ErrMsgLen)            :: em
       INTEGER(IntKi)            :: ErrStat2
       CHARACTER(ErrMsgLen)      :: ErrMsg2
 
@@ -1510,7 +1510,7 @@ CONTAINS
       INTEGER(IntKi)            :: ErrStat2, es, id, niter, iu_t, i_u
       INTEGER(IntKi)            :: prof_c0, prof_c1, prof_rate, prof_phase0
       CHARACTER(ErrMsgLen)      :: ErrMsg2
-      CHARACTER(512)            :: em
+      CHARACTER(ErrMsgLen)            :: em
       LOGICAL                   :: conv, stalled
 
       ErrStat = ErrID_None
@@ -1711,7 +1711,7 @@ CONTAINS
       REAL(SiKi)                :: wave_fv(3), wave_fa(3), wave_famcf(3)
       REAL(wp)                  :: profile_fv(3), steady_fv_wp(3), grid_z
       REAL(SiKi)                :: steady_fv(3), grid_fv(3), grid_weight
-      CHARACTER(512)            :: em
+      CHARACTER(ErrMsgLen)            :: em
       INTEGER(IntKi)            :: ErrStat2
       CHARACTER(ErrMsgLen)      :: ErrMsg2
 
@@ -1853,7 +1853,7 @@ CONTAINS
       INTEGER(IntKi)            :: ErrStat2, es, id, i
       INTEGER(IntKi)            :: prof_c0, prof_c1, prof_rate, prof_phase0
       CHARACTER(ErrMsgLen)      :: ErrMsg2
-      CHARACTER(512)            :: em
+      CHARACTER(ErrMsgLen)            :: em
       REAL(wp)                  :: cval
       LOGICAL                   :: fresh, state_overlaid
 
@@ -2090,7 +2090,7 @@ CONTAINS
       INTEGER(IntKi), INTENT(OUT) :: ErrStat
       CHARACTER(*), INTENT(OUT) :: ErrMsg
       INTEGER(IntKi) :: es, ErrStat2
-      CHARACTER(512) :: em
+      CHARACTER(ErrMsgLen) :: em
       CHARACTER(ErrMsgLen) :: ErrMsg2
 
       ErrStat = ErrID_None
@@ -2439,7 +2439,7 @@ CONTAINS
          REAL(wp)                :: q_p(3, ncp), v_p(3, ncp), a_p(3, ncp), f_p(3, ncp)
          REAL(wp)                :: cval
          INTEGER(IntKi)          :: es_p, ich
-         CHARACTER(512)          :: em_p
+         CHARACTER(ErrMsgLen)          :: em_p
 
          PErrStat = ErrID_None
          PErrMsg  = ''
@@ -2609,7 +2609,7 @@ CONTAINS
       character(*), parameter   :: RoutineName = 'CD_InitVars'
       INTEGER(IntKi)            :: ErrStat2, es
       CHARACTER(ErrMsgLen)      :: ErrMsg2
-      CHARACTER(512)            :: em
+      CHARACTER(ErrMsgLen)            :: em
       INTEGER(IntKi)            :: il, i, j, N, ndofl, nin, ic, csz, nf, koff, nve
       CHARACTER(32)             :: LinStr
       CHARACTER(ChanLen)        :: whdr, wunt
@@ -3082,7 +3082,7 @@ CONTAINS
 
       character(*), parameter :: RoutineName = 'CableDyn:reload_interiors'
       INTEGER(IntKi)          :: es, il, ndofl, nin, k, ic, csz, koff, npd, ncd, nfl, nve
-      CHARACTER(512)          :: em
+      CHARACTER(ErrMsgLen)          :: em
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -3322,7 +3322,7 @@ CONTAINS
 
       character(*), parameter :: RoutineName = 'CableDyn:reload_cable_mirrors'
       INTEGER(IntKi)          :: es, ic, csz
-      CHARACTER(512)          :: em
+      CHARACTER(ErrMsgLen)          :: em
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -3367,7 +3367,7 @@ CONTAINS
       !! every line on a frictional seabed (0 without such lines).
       TYPE(CD_OF_Instance), INTENT(IN) :: inst_
       INTEGER(IntKi) :: il, es
-      CHARACTER(256) :: em
+      CHARACTER(ErrMsgLen) :: em
       n = 0
       IF (.NOT. inst_%agg%has_sys) RETURN
       DO il = 1, inst_%nlines
@@ -3396,7 +3396,7 @@ CONTAINS
 
       character(*), parameter :: RoutineName = 'CableDyn:pack_state_mirror'
       INTEGER(IntKi)          :: es, il, ndofl, nin, k, ic, csz, koff, npd, ncd, nfl, nve
-      CHARACTER(512)          :: em
+      CHARACTER(ErrMsgLen)          :: em
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -3608,7 +3608,7 @@ CONTAINS
 
       character(*), parameter   :: RoutineName = 'CableDyn:build_farm_meshes'
       INTEGER(IntKi)            :: es, s, J, k, nk, ErrStat2
-      CHARACTER(512)            :: em
+      CHARACTER(ErrMsgLen)            :: em
       CHARACTER(ErrMsgLen)      :: ErrMsg2
       REAL(R8Ki)                :: OrMatJ(3,3), OrientIdent(3,3), refp(3), ptfmJ(6), ploc(3)
       LOGICAL                   :: hasp
@@ -3793,7 +3793,7 @@ CONTAINS
       INTEGER(IntKi), OPTIONAL, INTENT(OUT) :: ErrStat
       CHARACTER(*),   OPTIONAL, INTENT(OUT) :: ErrMsg
       INTEGER(IntKi)       :: es, ErrStat2
-      CHARACTER(512)       :: em
+      CHARACTER(ErrMsgLen)       :: em
       CHARACTER(ErrMsgLen) :: ErrMsg2
       IF (PRESENT(ErrStat)) ErrStat = ErrID_None
       IF (PRESENT(ErrMsg)) ErrMsg = ''

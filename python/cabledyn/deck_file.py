@@ -294,6 +294,9 @@ _NATIVE_MAX_DIAMETER = 1.0e3
 _NATIVE_MAX_COORDINATE = 1.0e6
 _NATIVE_MAX_COEFFICIENT = 1.0e15
 _NATIVE_MAX_SMALL_COEFFICIENT = 1.0e3
+# Relative band around the displaced water mass within which a line type is neutrally buoyant
+# (the native NEUTRAL_BUOYANCY_REL_TOL).
+_NATIVE_NEUTRAL_BUOYANCY_REL_TOL = 1.0e-6
 _NATIVE_MIN_EA = 1.0e-3
 _NATIVE_MIN_DIAMETER = 1.0e-6
 _NATIVE_MAX_GRAVITY = 1.0e3
@@ -3575,9 +3578,18 @@ class DeckFile:
             # Native net-buoyancy gate: an EI=0 route cannot build a buoyant
             # (lazy-wave) arch, so a used section whose dry mass does not exceed
             # its displaced water mass needs a dynamic finite-EI line type.
-            if mass <= water_density * (math.pi / 4.0) * diameter**2 and (
+            displaced_mass = water_density * (math.pi / 4.0) * diameter**2
+            if mass <= displaced_mass * (1.0 + _NATIVE_NEUTRAL_BUOYANCY_REL_TOL) and (
                 ei <= 0.0 or not (has_dtm or self.caller_driven or mixed_static)
             ):
+                if ei <= 0.0 and mass > displaced_mass * (1.0 - _NATIVE_NEUTRAL_BUOYANCY_REL_TOL):
+                    raise DeckFormatError(
+                        f"{self._label}: used LINE TYPE {line_type!r} is net-buoyant to within "
+                        "1e-6 (neutrally buoyant: its dry mass equals the displaced water mass), "
+                        "so an EI=0 line of it is weightless and slack: its static shape is "
+                        "indeterminate (every slack shape balances). Give the line type weight "
+                        "(a larger MassDenInAir), or a finite EI with a tension that holds it taut"
+                    )
                 raise DeckFormatError(
                     f"{self._label}: used LINE TYPE {line_type!r} is net-buoyant (dry mass <= "
                     "displaced water mass): buoyant / lazy-wave sections require a dynamic "
