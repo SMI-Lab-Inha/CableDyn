@@ -186,8 +186,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   taut to slack within a step carries at most its discrete energy gradient (the strain energy it
   releases over the shortening), so a release can no longer create energy; the viscoelastic and
   Syrope segments are capped the same way with the tension of their law (the same cable made
-  lightly damped viscoelastic peaks at 0.081 MN at the anchor at `dtM` 0.1 s, against 0.145 MN
-  without the cap on its segments and 0.076 to 0.094 MN at 0.5 to 2.5 ms). The seabed contact of
+  lightly damped viscoelastic peaks at 0.056 to 0.081 MN at the anchor at `dtM` 0.1 s, a snap
+  that step does not resolve, against 0.145 MN without the cap on its segments and 0.076 to
+  0.094 MN at 0.5 to 2.5 ms). The seabed contact of
   a node that lifts off within a step is not capped (see the manual's theory page). At the
   default `rhoInf` the reproducers now give 0.14 / 0.08 MN, 0.092 / 0.096 MN, 0.075 / 0.043 MN
   and 1.80 MN, as their references, and the stiff-seabed line runs to completion; the

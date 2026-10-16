@@ -991,7 +991,10 @@ CONTAINS
     REAL(wp) :: fair, anch, seg_min
     ! the light cable as a lightly damped viscoelastic line, 3 m heave at dtM 0.1 s: anchor
     ! 7.6e4 to 9.4e4 N and fairlead 0.97e5 to 1.08e5 N at dtM 0.5 to 2.5 ms; without the cap
-    ! on its law segments 1.45e5 N at the anchor
+    ! on its law segments 1.45e5 N at the anchor. At 0.1 s the anchor snap is not resolved in
+    ! time (the run notes it), so its peak depends on round-off: 8.1e4 N with gfortran on
+    ! Windows, 5.6e4 N on Linux. The upper bound is the check of the cap; the lower bound only
+    ! asks that the snap reaches the anchor.
     CALL write_motion('ei0slack_heave_ve.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 3, 3.0_wp, 10.0_wp, 10.0_wp, &
                       0.1_wp, 40.0_wp)
     opts(1) = '0.1 dtM'
@@ -1008,7 +1011,7 @@ CONTAINS
     WRITE (*, '(A,ES10.3,A,ES10.3,A,ES10.3,A)') '  viscoelastic light cable, dtM 0.1 s: FairTen1 max ', fair, &
       ' N, AnchTen1 max ', anch, ' N, smallest segment tension ', seg_min, ' N'
     CALL require(seg_min <= 0.0_wp, 've-slack:goes-slack')
-    CALL require(anch > 6.5e4_wp .AND. anch < 1.0e5_wp, 've-slack:anchor-peak')
+    CALL require(anch > 4.0e4_wp .AND. anch < 1.0e5_wp, 've-slack:anchor-peak')
     CALL require(fair > 8.0e4_wp .AND. fair < 1.2e5_wp, 've-slack:fairlead-peak')
     CALL require(.NOT. file_contains('ei0slack_ve_light.log', 'Warning: line'), 've-slack:no-spike-warning')
     ! a taut Syrope line in 4 m surge that goes slack, dtM 0.1 s: fairlead 1.78 MN at dtM 1 and

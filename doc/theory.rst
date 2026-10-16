@@ -1358,8 +1358,9 @@ curve from above. So the :math:`\alpha_f` share of every segment of a tension-on
 at most :math:`\tfrac{1}{2} T_n e_n` in a release (a release that ends above :math:`l_0` returns
 at most :math:`\alpha_f T_n e_n`, and :math:`\alpha_f \le \tfrac{1}{2}`). With the light cable
 above made lightly damped viscoelastic (EA 8e8 | 1.6e9 N, BA 1e8 | 1e6 N s) the anchor peaks at
-0.081 MN at :math:`\Delta t` = 0.1 s with the cap on its segments and at 0.145 MN without it,
-against 0.076 to 0.094 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
+0.056 to 0.081 MN at :math:`\Delta t` = 0.1 s with the cap on its segments (the snap is not
+resolved at that step, so the peak depends on round-off: Linux and Windows builds differ) and
+at 0.145 MN without it, against 0.076 to 0.094 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
 surge that goes slack peaks at 1.64 MN at 0.1 s, against 1.78 MN at 1 and 2.5 ms, with or
 without the cap.
 
