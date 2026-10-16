@@ -61,7 +61,8 @@ PROGRAM test_openfast_aggregate
                              CD_SystemType, CD_End_System, CD_System_Line_Has_Friction, &
                              CD_Get_System_Line_Friction_Anchors, CD_Set_System_Line_Friction_Anchors
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_System
-  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_FrictionMirrorSize
+  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_FrictionMirrorSize, CD_HFMF_ModuleType, CD_HFMF_End
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE, IEEE_VALUE, IEEE_QUIET_NAN
   USE, INTRINSIC :: IEEE_EXCEPTIONS, ONLY: IEEE_USUAL, IEEE_GET_HALTING_MODE, IEEE_SET_HALTING_MODE, IEEE_SET_FLAG
   IMPLICIT NONE
@@ -3107,9 +3108,12 @@ CONTAINS
     CALL require(es == CD_AGG_OK, 'aggctrl: control init: '//TRIM(em))
     CALL require(CD_AGG_NCtrlChans(aggc) == 1 .AND. CD_AGG_NCtrlChans(agg) == 0, 'aggctrl: channel counts')
 
-    ! (a) zero command == never applied, bit-identical loads after one step
-    CALL CD_AGG_Apply_LineControl(aggc, [0.0_wp], [0.0_wp], es, em)
+    ! (a) zero command == never applied, bit-identical loads after one step; the rate is -0
+    ! (a host's negated zero), which must count as +0
+    CALL CD_AGG_Apply_LineControl(aggc, [0.0_wp], [SIGN(0.0_wp, -1.0_wp)], es, em)
     CALL require(es == CD_AGG_OK, 'aggctrl: zero apply: '//TRIM(em))
+    CALL require(TRANSFER(aggc%sys%fast%system%lines(aggc%ctrl_line(1))%l0_dot(aggc%ctrl_elem(1)), 0_INT64) == &
+                 0_INT64, 'aggctrl: a rate of -0 is stored as +0')
     CALL CD_AGG_GetMovingPointMesh(agg, q0, v0, a0, lf, es, em)
     v0 = 0.0_wp
     a0 = 0.0_wp
@@ -3179,11 +3183,11 @@ CONTAINS
       CALL CD_AGG_End(aggd, es, em)
     END BLOCK
 
-    ! (b3) ATOMIC command validation: with one channel driving BOTH lines
-    ! (bases 0.98 and 0.48 on the composite deck), a command invalid only for the
-    ! SECOND row (-0.3 m is within half of 0.98 m but not of 0.48 m) must leave the
-    ! FIRST line untouched -- pre-fix the loop had already updated it before hitting
-    ! the bad row.
+    ! (b3) ATOMIC command validation: with one channel driving BOTH lines (line 1 of
+    ! 0.98 m in one segment, line 2 of 0.50 + 0.48 m in two, MoorDyn-F's UnstrLen/N 0.98 and
+    ! 0.49 m), a command invalid only for the SECOND row (-0.3 m is within half of 0.98 m
+    ! but not of 0.49 m) must leave the FIRST line untouched -- pre-fix the loop had
+    ! already updated it before hitting the bad row.
     BLOCK
       TYPE(CD_AGG_ModuleType) :: agga
       REAL(wp), ALLOCATABLE :: t1b(:), t1a(:)
@@ -3200,7 +3204,34 @@ CONTAINS
       CALL CD_Get_System_Line_Tension(agga%sys%fast%system, 1, t1a, es, em)
       CALL require(nan_max_abs(t1a - t1b) <= 0.0_wp, &
                    'aggctrl: a rejected command leaves every line bit-identical (no partial apply)')
+      ! MoorDyn-F bounds the command by UnstrLen/N of the whole line, not by the controlled
+      ! segment: on line 2 (controlled segment 0.48 m, UnstrLen/N = 0.49 m) a pay-out of
+      ! 0.49 m is accepted, as MoorDyn-F accepts it
+      CALL require(agga%ctrl_nsegs(2) == 2 .AND. ABS(agga%ctrl_unstr_len(2) - 0.98_wp) <= 1.0e-15_wp .AND. &
+                   ABS(agga%ctrl_base_l0(2) - 0.48_wp) <= 1.0e-15_wp, 'aggctrl: line 2 is 0.98 m in two segments')
+      CALL CD_AGG_Apply_LineControl(agga, [agga%ctrl_unstr_len(2)/REAL(agga%ctrl_nsegs(2), wp)], [0.0_wp], es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: a pay-out of UnstrLen/N > S is accepted, as in MoorDyn-F: '//TRIM(em))
       CALL CD_AGG_End(agga, es, em)
+    END BLOCK
+
+    ! (b3') a controlled segment shorter than half of UnstrLen/N: a haul-in within MoorDyn-F's
+    ! bounds that would make it non-positive fails closed by name and writes nothing
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: aggn
+      REAL(wp), ALLOCATABLE :: keep(:)
+      CALL write_agg_failure_deck('agg_ctrl_short.dat', control_row='1 2', composite_line2=.TRUE., &
+                                  short_tail2=.TRUE.)
+      CALL CD_AGG_Init_From_Deck(aggn, 'agg_ctrl_short.dat', DT, es, em)
+      CALL require(es == CD_AGG_OK, 'aggctrl: short-segment deck init: '//TRIM(em))
+      IF (es == CD_AGG_OK) THEN
+        keep = aggn%sys%fast%system%lines(2)%l0
+        CALL require(ABS(aggn%ctrl_base_l0(1) - 0.08_wp) <= 1.0e-15_wp, 'aggctrl: the controlled segment is 0.08 m')
+        CALL CD_AGG_Apply_LineControl(aggn, [-0.2_wp], [0.0_wp], es, em)
+        CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'EI = 0 line 2') > 0 .AND. INDEX(em, 'non-positive') > 0, &
+                     'aggctrl: a haul-in that would make the segment non-positive fails closed by name')
+        CALL require(ALL(aggn%sys%fast%system%lines(2)%l0 == keep), 'aggctrl: the refused haul-in writes nothing')
+      END IF
+      CALL CD_AGG_End(aggn, es, em)
     END BLOCK
 
     ! (b4) REWIND: a command applied after a snapshot must roll back WITH the
@@ -3323,23 +3354,25 @@ CONTAINS
     CALL CD_AGG_Apply_LineControl(aggc, [-1.0_wp], [0.0_wp], es, em)
     CALL require(es /= CD_AGG_OK, 'aggctrl: non-positive segment length fails closed')
 
-    ! (d) MoorDyn-F's bounds (MoorDyn.f90, ErrID_Fatal): an increase of more than one base
-    ! segment length or a reduction of more than half of one stops the run by line, command
-    ! and bound, and writes nothing; the bounds themselves are allowed, as in MoorDyn-F.
+    ! (d) MoorDyn-F's bounds (MoorDyn.f90, ErrID_Fatal): an increase of more than UnstrLen/N
+    ! or a reduction of more than half of it stops the run by line, command and bound, and
+    ! writes nothing; the bounds themselves are allowed, as in MoorDyn-F.
     BLOCK
       REAL(wp) :: s_base, l_keep
       INTEGER :: il, ie
       il = aggc%ctrl_line(1)
       ie = aggc%ctrl_elem(1)
-      s_base = aggc%ctrl_base_l0(1)
+      s_base = aggc%ctrl_unstr_len(1)/REAL(aggc%ctrl_nsegs(1), wp)
+      CALL require(s_base == aggc%ctrl_base_l0(1), 'aggctrl: on a uniform line UnstrLen/N is the segment length')
       CALL CD_AGG_Apply_LineControl(aggc, [s_base], [0.0_wp], es, em)
       CALL require(es == CD_AGG_OK, 'aggctrl: a pay-out of one segment length is within the bounds: '//TRIM(em))
-      CALL CD_AGG_Apply_LineControl(aggc, [-0.5_wp*s_base], [0.0_wp], es, em)
+      CALL CD_AGG_Apply_LineControl(aggc, [-0.5_wp*aggc%ctrl_unstr_len(1)/REAL(aggc%ctrl_nsegs(1), wp)], [0.0_wp], &
+                                    es, em)
       CALL require(es == CD_AGG_OK, 'aggctrl: a haul-in of half a segment length is within the bounds: '//TRIM(em))
       l_keep = aggc%sys%fast%system%lines(il)%l0(ie)
       CALL CD_AGG_Apply_LineControl(aggc, [1.01_wp*s_base], [0.0_wp], es, em)
       CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'EI = 0 line 2') > 0 .AND. INDEX(em, 'MoorDyn-F') > 0 .AND. &
-                   INDEX(em, '-S/2 <= DeltaL <= S') > 0, &
+                   INDEX(em, '-S/2 <= DeltaL <= S') > 0 .AND. INDEX(em, 'UnstrLen/N') > 0, &
                    'aggctrl: a pay-out beyond one segment length stops by line and bound')
       CALL require(aggc%sys%fast%system%lines(il)%l0(ie) == l_keep, 'aggctrl: a refused pay-out writes nothing')
       CALL CD_AGG_Apply_LineControl(aggc, [-0.51_wp*s_base], [0.0_wp], es, em)
@@ -3360,8 +3393,10 @@ CONTAINS
     !!       over a driven march;
     !!   (b) a pay-out scales every span element by (S + DeltaL)/S, leaves the rest, and the
     !!       next step converges;
-    !!   (c) a command outside [0.5, 2] of the segment fails closed, naming the line, and
-    !!       writes nothing;
+    !!   (c) a command outside MoorDyn-F's bounds -UnstrLen/N/2 <= DeltaL <= UnstrLen/N (145 m
+    !!       in 47 segments; the controlled segment is 40/13 m) fails closed, naming the line,
+    !!       and writes nothing; the bounds themselves are accepted, as in MoorDyn-F, even
+    !!       where they scale the segment by more than 2;
     !!   (d) an aggregate snapshot rewinds a command with the cable's caches;
     !!   (e) MIXED deck (cable = deck line 1, chain = deck line 2): the chain resolves to EI = 0
     !!       system line 1 -- its rank among the EI = 0 lines, not its deck position -- and one
@@ -3424,7 +3459,8 @@ CONTAINS
       t = REAL(k, wp)*DT
       tgt(1, 1) = r0(1, 1) + 0.2_wp*(1.0_wp - COS(2.0_wp*PI*t/2.0_wp))
       v0(1, 1) = 0.2_wp*(2.0_wp*PI/2.0_wp)*SIN(2.0_wp*PI*t/2.0_wp)
-      CALL CD_AGG_Apply_LineControl(aggc, [0.0_wp], [0.0_wp], es, em)
+      ! the rate alternates between +0 and -0 (a host's negated zero): both are inert
+      CALL CD_AGG_Apply_LineControl(aggc, [0.0_wp], [SIGN(0.0_wp, REAL(1 - 2*MOD(k, 2), wp))], es, em)
       CALL require(es == CD_AGG_OK, 'cablectrl: zero apply: '//TRIM(em))
       CALL CD_AGG_Step_Moving(agg, DT, tgt, v0, a0, cv, st, ni, es, em)
       CALL require(es == CD_AGG_OK .AND. cv, 'cablectrl: plain step: '//TRIM(em))
@@ -3455,15 +3491,30 @@ CONTAINS
     CALL CD_AGG_Step_Moving(aggc, DT, tgt, v0, a0, cv, st, ni, es, em)
     CALL require(es == CD_AGG_OK .AND. cv, 'cablectrl: the step after a pay-out converges: '//TRIM(em))
 
-    ! (c) fail closed outside [0.5, 2], writing nothing
-    l0_keep = aggc%cables(1)%line%l0
-    CALL CD_AGG_Apply_LineControl(aggc, [-0.55_wp*s_span], [0.0_wp], es, em)
-    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'finite-EI line 1') > 0 .AND. INDEX(em, '[0.5, 2]') > 0, &
-                 'cablectrl: scaling below half the segment fails closed by line')
-    CALL CD_AGG_Apply_LineControl(aggc, [1.05_wp*s_span], [0.0_wp], es, em)
-    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'finite-EI line 1') > 0, &
-                 'cablectrl: scaling beyond twice the segment fails closed by line')
-    CALL require(ALL(aggc%cables(1)%line%l0 == l0_keep), 'cablectrl: a refused command writes nothing')
+    ! (c) MoorDyn-F's bounds: refused outside, writing nothing; accepted on them
+    BLOCK
+      REAL(wp) :: bound
+      CALL require(aggc%ctrl_nsegs(1) == 47 .AND. ABS(aggc%ctrl_unstr_len(1) - 145.0_wp) <= 1.0e-12_wp, &
+                   'cablectrl: UnstrLen and N of the line')
+      bound = aggc%ctrl_unstr_len(1)/REAL(aggc%ctrl_nsegs(1), wp)
+      l0_keep = aggc%cables(1)%line%l0
+      CALL CD_AGG_Apply_LineControl(aggc, [-0.51_wp*bound], [0.0_wp], es, em)
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'finite-EI line 1') > 0 .AND. INDEX(em, 'MoorDyn-F') > 0, &
+                   'cablectrl: a haul-in beyond half of UnstrLen/N fails closed by line')
+      CALL CD_AGG_Apply_LineControl(aggc, [1.01_wp*bound], [0.0_wp], es, em)
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'finite-EI line 1') > 0, &
+                   'cablectrl: a pay-out beyond UnstrLen/N fails closed by line')
+      CALL require(ALL(aggc%cables(1)%line%l0 == l0_keep), 'cablectrl: a refused command writes nothing')
+      CALL CD_AGG_Apply_LineControl(aggc, [bound], [0.0_wp], es, em)
+      CALL require(es == CD_AGG_OK .AND. bound > s_span, &
+                   'cablectrl: a pay-out of UnstrLen/N (> S) is accepted, as in MoorDyn-F: '//TRIM(em))
+      CALL CD_AGG_Apply_LineControl(aggc, [-0.5_wp*aggc%ctrl_unstr_len(1)/REAL(aggc%ctrl_nsegs(1), wp)], [0.0_wp], &
+                                    es, em)
+      CALL require(es == CD_AGG_OK, 'cablectrl: a haul-in of half of UnstrLen/N is accepted: '//TRIM(em))
+      ! back to the pay-out of (b), which (d) restores to
+      CALL CD_AGG_Apply_LineControl(aggc, [0.4_wp], [0.1_wp], es, em)
+      CALL require(es == CD_AGG_OK .AND. ALL(aggc%cables(1)%line%l0 == l0_keep), 'cablectrl: back to the pay-out')
+    END BLOCK
 
     ! (d) an aggregate snapshot rewinds a command, caches included
     l0_keep = aggc%cables(1)%line%l0
@@ -3517,6 +3568,72 @@ CONTAINS
                      'cablectrl: one channel drives the cable span and the chain segment')
       END IF
       CALL CD_AGG_End(aggm, es, em)
+      ! a row that fails after the earlier rows changed their lines (a fault injected into the
+      ! table, past the prevalidation) takes those lines back bit for bit: the cable row first
+      ! (rows cable, chain), then the chain row first (rows chain, cable)
+      BLOCK
+        TYPE(CD_HFMF_ModuleType) :: cab_keep
+        REAL(wp), ALLOCATABLE :: l0c(:), ldc(:), fc(:), tc(:), tc2(:)
+        INTEGER :: keep_elem
+        CALL CD_AGG_Init_From_Deck(aggm, 'agg_mixed_ctrl2.dat', DT, es, em)
+        CALL require(es == CD_AGG_OK, 'cablectrl: injected-fault deck init: '//TRIM(em))
+        IF (es == CD_AGG_OK) THEN
+          cab_keep = aggm%cables(1)
+          keep_elem = aggm%ctrl_elem(2)
+          aggm%ctrl_elem(2) = 0
+          CALL CD_AGG_Apply_LineControl(aggm, [0.3_wp], [0.1_wp], es, em)
+          aggm%ctrl_elem(2) = keep_elem
+          CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'line-control update failed') > 0, &
+                       'cablectrl: the injected chain-row fault fails the command')
+          CALL require(.NOT. aggm%cables(1)%line%has_ctrl .AND. .NOT. ALLOCATED(aggm%cables(1)%line%l0_dot) .AND. &
+                       ALL(aggm%cables(1)%line%l0 == cab_keep%line%l0) .AND. &
+                       ALL(aggm%cables(1)%line%Mgb == cab_keep%line%Mgb) .AND. &
+                       ALL(aggm%cables(1)%line%trib == cab_keep%line%trib) .AND. &
+                       (aggm%cables(1)%line%tr_valid .EQV. cab_keep%line%tr_valid), &
+                       'cablectrl: the cable the failed command had changed is taken back bit for bit')
+          CALL CD_HFMF_End(cab_keep)
+        END IF
+        CALL CD_AGG_End(aggm, es, em)
+        CALL write_mixed_deck('agg_mixed_ctrl3.dat', control_row='1 2,1')
+        CALL CD_AGG_Init_From_Deck(aggm, 'agg_mixed_ctrl3.dat', DT, es, em)
+        CALL require(es == CD_AGG_OK, 'cablectrl: chain-first deck init: '//TRIM(em))
+        IF (es == CD_AGG_OK) THEN
+          CALL require(.NOT. aggm%ctrl_is_cable(1) .AND. aggm%ctrl_is_cable(2), 'cablectrl: rows chain, cable')
+          ! one command to give the chain a committed rate and length to come back to
+          CALL CD_AGG_Apply_LineControl(aggm, [0.2_wp], [0.05_wp], es, em, restored=.TRUE.)
+          CALL require(es == CD_AGG_OK, 'cablectrl: chain-first first command: '//TRIM(em))
+          ASSOCIATE (chain => aggm%sys%fast%system%lines(1))
+            l0c = chain%l0
+            ldc = chain%l0_dot
+            fc = chain%f_ext
+            nec = SIZE(chain%l0)
+            ALLOCATE (tc(nec), tc2(nec))
+            CALL CD_Get_System_Line_Tension(aggm%sys%fast%system, 1, tc, es, em)
+            keep_elem = aggm%ctrl_elem(2)
+            aggm%ctrl_elem(2) = 0
+            CALL CD_AGG_Apply_LineControl(aggm, [0.4_wp], [0.1_wp], es, em)
+            aggm%ctrl_elem(2) = keep_elem
+            CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'line-control update failed') > 0, &
+                         'cablectrl: the injected cable-row fault fails the command')
+            CALL CD_Get_System_Line_Tension(aggm%sys%fast%system, 1, tc2, es, em)
+            CALL require(ALL(chain%l0 == l0c) .AND. &
+                         ALL(TRANSFER(chain%l0_dot, 0_INT64, nec) == TRANSFER(ldc, 0_INT64, nec)) .AND. &
+                         ALL(chain%l0_c == l0c) .AND. ALL(chain%f_ext == fc) .AND. ALL(tc2 == tc), &
+                         'cablectrl: the chain the failed command had changed is taken back bit for bit')
+          END ASSOCIATE
+        END IF
+        CALL CD_AGG_End(aggm, es, em)
+      END BLOCK
+    END BLOCK
+
+    ! a finite-EI line on the configuration-blended generalised-alpha cannot be controlled
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: aggb
+      CALL write_cable_only_deck('agg_cable_ctrl_cfgblend.dat', control_row='1 1', config_blend=.TRUE.)
+      CALL CD_AGG_Init_From_Deck(aggb, 'agg_cable_ctrl_cfgblend.dat', DT, es, em)
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'CONTROL line 1') > 0 .AND. INDEX(em, 'force-blended') > 0, &
+                   'cablectrl: CONTROL of a finite-EI line under the configuration blend fails closed by name')
+      CALL CD_AGG_End(aggb, es, em)
     END BLOCK
 
     ! (g) a mesh the static initialisation refined: the fairlead-side deck segment is now
@@ -3740,18 +3857,20 @@ CONTAINS
     END IF
   END SUBROUTINE control_drive
 
-  SUBROUTINE write_agg_failure_deck(path, failure_row, control_row, composite_line2, composite_line1, stock_line2)
+  SUBROUTINE write_agg_failure_deck(path, failure_row, control_row, composite_line2, composite_line1, stock_line2, &
+                                    short_tail2)
     !! Vessel fairlead + massy Connect junction + Fixed anchor, two 0.98 m lines --
     !! the connect rig behind the coupled facade, with optional FAILURE/CONTROL rows.
     !! composite_line2 splits line 2 into two sections with DIFFERENT segment
     !! lengths (0.50 then 0.48) -- the control-base composite regression; composite_line1
     !! splits line 1 (Connect -> Vessel, kept in deck order) the same way. stock_line2
     !! writes line 2 anchor first (Fixed NodeA, sections reversed), which the anchor-first
-    !! swap turns into the same line.
+    !! swap turns into the same line. short_tail2 (with composite_line2) makes line 2's
+    !! sections 0.90 and 0.08 m, a controlled segment shorter than half of UnstrLen/N.
     CHARACTER(*), INTENT(IN) :: path
     CHARACTER(*), INTENT(IN), OPTIONAL :: failure_row, control_row
-    LOGICAL, INTENT(IN), OPTIONAL :: composite_line2, composite_line1, stock_line2
-    LOGICAL :: comp2, comp1, stock2
+    LOGICAL, INTENT(IN), OPTIONAL :: composite_line2, composite_line1, stock_line2, short_tail2
+    LOGICAL :: comp2, comp1, stock2, short2
     INTEGER :: u, ios
     comp1 = .FALSE.
     IF (PRESENT(composite_line1)) comp1 = composite_line1
@@ -3789,7 +3908,12 @@ CONTAINS
     END IF
     comp2 = .FALSE.
     IF (PRESENT(composite_line2)) comp2 = composite_line2
-    IF (comp2 .AND. stock2) THEN
+    short2 = .FALSE.
+    IF (PRESENT(short_tail2)) short2 = short_tail2
+    IF (comp2 .AND. short2) THEN
+      WRITE (u, '(A)') '2 line 0.90 1'
+      WRITE (u, '(A)') '2 line 0.08 1'
+    ELSE IF (comp2 .AND. stock2) THEN
       WRITE (u, '(A)') '2 line 0.48 1'
       WRITE (u, '(A)') '2 line 0.50 1'
     ELSE IF (comp2) THEN
@@ -5147,16 +5271,17 @@ CONTAINS
   END SUBROUTINE write_mooring_channels_deck
 
   SUBROUTINE write_cable_only_deck(path, modified_newton, cable_load_feedback, control_row, adaptive_mesh, &
-                                   stock_order)
+                                   stock_order, config_blend)
     !! A finite-EI lazy-wave power cable, coupled at the fairlead -- no EI=0 line. Bare +
     !! buoyancy-module properties from the Humboldt / GoMex 15 MW reference (the l3_lazywave
     !! and deck_hermite_cable convention). Purely SUSPENDED (no WtrDpth). modified_newton
     !! adds the OPTIONS row (the tangent-reuse plumbing gate's twin-deck knob); control_row
     !! a CONTROL section; adaptive_mesh the OPTIONS row that lets the static solve refine
     !! the 47 deck segments; stock_order writes the line anchor first (MoorDyn order, Fixed
-    !! NodeA, sections reversed), which the anchor-first swap turns into the same cable.
+    !! NodeA, sections reversed), which the anchor-first swap turns into the same cable;
+    !! config_blend the OPTIONS row that selects the configuration-blended generalised-alpha.
     CHARACTER(*), INTENT(IN) :: path
-    LOGICAL, INTENT(IN), OPTIONAL :: modified_newton
+    LOGICAL, INTENT(IN), OPTIONAL :: modified_newton, config_blend
     LOGICAL, INTENT(IN), OPTIONAL :: cable_load_feedback
     CHARACTER(*), INTENT(IN), OPTIONAL :: control_row
     LOGICAL, INTENT(IN), OPTIONAL :: adaptive_mesh
@@ -5205,6 +5330,9 @@ CONTAINS
     WRITE (u, '(A)') '1025.0 rhoW'
     WRITE (u, '(A)') '0.5 rhoInf'
     IF (mn) WRITE (u, '(A)') 'true modified_newton'
+    IF (PRESENT(config_blend)) THEN
+      IF (config_blend) WRITE (u, '(A)') 'false alpha_force_blend'
+    END IF
     IF (PRESENT(adaptive_mesh)) THEN
       IF (adaptive_mesh) WRITE (u, '(A)') 'true adaptive_mesh'
     END IF

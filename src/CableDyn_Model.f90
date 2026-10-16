@@ -94,6 +94,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Set_Model_EndQuery
   PUBLIC :: CD_Get_Model_EndQuery
   PUBLIC :: CD_Update_Model_SegmentLength
+  PUBLIC :: CD_ModelControlSaveType, CD_Save_Model_Control, CD_Restore_Model_Control
   PUBLIC :: CD_Calc_Model_CoupledLoads
   PUBLIC :: CD_Calc_Model_CoupledKinematicDerivatives
   PUBLIC :: CD_Calc_Model_CoupledAccelDerivative, CD_Update_Model_CoupledAccelDerivative
@@ -112,6 +113,12 @@ MODULE CableDyn_Model
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_NOT_INITIALIZED = 3
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_ALLOCFAIL = 4
   INTEGER, PARAMETER :: MODEL_DEFAULT_MAX_SUBSTEPS = 1024
+
+  TYPE :: CD_ModelControlSaveType
+    !! What CD_Update_Model_SegmentLength writes, as CD_Save_Model_Control found it.
+    LOGICAL :: valid = .FALSE.
+    REAL(wp), ALLOCATABLE :: l0(:), l0_dot(:), l0_c(:), l0_dot_c(:), f_ext(:), seabed_kn(:), seabed_cn(:)
+  END TYPE CD_ModelControlSaveType
 
   TYPE :: CD_ModelType
     !! Persistent positions-only EI=0 model state and immutable mesh/properties.
@@ -2423,6 +2430,16 @@ CONTAINS
     same = TRANSFER(x, 0_INT64) == TRANSFER(y, 0_INT64)
   END FUNCTION bits_equal
 
+  ELEMENTAL REAL(wp) FUNCTION positive_zero(x) RESULT(y)
+    !! x with a negative zero replaced by +0, on the bits (so no floating-point mode can keep
+    !! the sign); every other value is returned unchanged.
+    REAL(wp), INTENT(IN) :: x
+    INTEGER(INT64) :: bits
+    bits = TRANSFER(x, 0_INT64)
+    IF (bits == -HUGE(0_INT64) - 1_INT64) bits = 0_INT64
+    y = TRANSFER(bits, y)
+  END FUNCTION positive_zero
+
   SUBROUTINE save_recovery_state(model)
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     model%recovery_q0 = model%q
@@ -3574,7 +3591,9 @@ CONTAINS
     !! The committed state keeps its acceleration and the lengths it was reached with
     !! (l0_c, l0_dot_c): the next step blends them into its alpha-level terms
     !! (CD_Step_Model). restored = .TRUE. (a checkpoint restart re-applying the command of
-    !! the committed state) makes the new length and rate the committed ones as well.
+    !! the committed state) makes the new length and rate the committed ones as well. A rate
+    !! of -0 is stored as +0, so a zero command of either sign leaves an uncontrolled model
+    !! bit-identical (the committed-length test compares bits).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: elem
     REAL(wp), INTENT(IN) :: l0_new, l0_dot
@@ -3582,9 +3601,11 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: restored
     INTEGER :: es
+    REAL(wp) :: rate
     CHARACTER(160) :: em
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
+    rate = positive_zero(l0_dot)
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_MODEL_NOT_INITIALIZED
       ErrMsg = 'CableDyn_Model: model is not initialized'
@@ -3666,7 +3687,7 @@ CONTAINS
       ! Commit. The consistent mass follows l0 implicitly (it is applied element by
       ! element from the present lengths, and the step rebuilds its mass band when they change).
       model%l0(elem) = l0_new
-      model%l0_dot(elem) = l0_dot
+      model%l0_dot(elem) = rate
       IF (ALLOCATED(model%dist_load)) model%f_ext = model%f_ext_dist_base + f_dist
       IF (model%has_seabed .AND. model%has_seabed_recompute) THEN
         CALL MOVE_ALLOC(kn_new, model%seabed_kn)
@@ -3678,11 +3699,65 @@ CONTAINS
       IF (PRESENT(restored)) THEN
         IF (restored) THEN
           model%l0_c(elem) = l0_new
-          model%l0_dot_c(elem) = l0_dot
+          model%l0_dot_c(elem) = rate
         END IF
       END IF
     END BLOCK
   END SUBROUTINE CD_Update_Model_SegmentLength
+
+  SUBROUTINE CD_Save_Model_Control(model, saved)
+    !! Save what CD_Update_Model_SegmentLength writes (the lengths and rates, the committed
+    !! lengths and rates, the external load and the seabed coefficients), so that a caller
+    !! applying one command to several lines can take back the ones it already changed when
+    !! a later one fails (CD_Restore_Model_Control).
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    TYPE(CD_ModelControlSaveType), INTENT(INOUT) :: saved
+    saved%valid = model%initialized
+    IF (.NOT. saved%valid) RETURN
+    saved%l0 = model%l0
+    saved%l0_dot = model%l0_dot
+    saved%l0_c = model%l0_c
+    saved%l0_dot_c = model%l0_dot_c
+    saved%f_ext = model%f_ext
+    IF (ALLOCATED(model%seabed_kn)) THEN
+      saved%seabed_kn = model%seabed_kn
+    ELSE IF (ALLOCATED(saved%seabed_kn)) THEN
+      DEALLOCATE (saved%seabed_kn)
+    END IF
+    IF (ALLOCATED(model%seabed_cn)) THEN
+      saved%seabed_cn = model%seabed_cn
+    ELSE IF (ALLOCATED(saved%seabed_cn)) THEN
+      DEALLOCATE (saved%seabed_cn)
+    END IF
+  END SUBROUTINE CD_Save_Model_Control
+
+  SUBROUTINE CD_Restore_Model_Control(model, saved, ErrStat, ErrMsg)
+    !! Put back, bit for bit, what CD_Save_Model_Control saved. Fails closed, writing nothing,
+    !! when the save does not belong to the model.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    TYPE(CD_ModelControlSaveType), INTENT(IN) :: saved
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. (model%initialized .AND. saved%valid)) THEN
+      CALL fail(ErrStat, ErrMsg, 'control restore: no saved control state')
+      RETURN
+    END IF
+    IF (SIZE(saved%l0) /= SIZE(model%l0) .OR. SIZE(saved%f_ext) /= SIZE(model%f_ext) .OR. &
+        (ALLOCATED(saved%seabed_kn) .NEQV. ALLOCATED(model%seabed_kn)) .OR. &
+        (ALLOCATED(saved%seabed_cn) .NEQV. ALLOCATED(model%seabed_cn))) THEN
+      CALL fail(ErrStat, ErrMsg, 'control restore: the saved state belongs to another model')
+      RETURN
+    END IF
+    model%l0 = saved%l0
+    model%l0_dot = saved%l0_dot
+    model%l0_c = saved%l0_c
+    model%l0_dot_c = saved%l0_dot_c
+    model%f_ext = saved%f_ext
+    IF (ALLOCATED(saved%seabed_kn)) model%seabed_kn = saved%seabed_kn
+    IF (ALLOCATED(saved%seabed_cn)) model%seabed_cn = saved%seabed_cn
+  END SUBROUTINE CD_Restore_Model_Control
 
   SUBROUTINE CD_Get_Model_EndNodeMassDiag(model, coupled_slot, mass_diag, ErrStat, ErrMsg)
     !! The coupled end node's OWN diagonal share of the consistent structural mass:

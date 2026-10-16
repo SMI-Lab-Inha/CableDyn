@@ -406,17 +406,21 @@ FAILURE and CONTROL sections
    * - ``CONTROL row has trailing content`` / ``line L is assigned to more than one CONTROL
        channel``
      - write ``ChannelID Lines`` with a comma list without spaces, and assign each line once.
-   * - ``control channel C commands DeltaL = ... m on EI = 0 line L; its controlled segment
-       (S = ... m) may only change within MoorDyn-F's bounds -S/2 <= DeltaL <= S``
-     - the command lengthens the line's fairlead-side segment by more than one initial segment
-       length or shortens it by more than half of one, where MoorDyn-F also stops. Keep
-       ``CableDeltaL`` within the bounds, or mesh the line with fewer, longer segments so the
-       command is a smaller fraction of one.
-   * - ``control channel C would scale the controlled segment of finite-EI line L by ...``
-     - the command lies outside half to twice the initial length of the cable's fairlead-side
-       segment, the range its static mesh resolves. Keep ``CableDeltaL`` within it, or mesh the
-       fairlead-side section with fewer, longer segments so the command is a smaller fraction of
-       one.
+   * - ``control channel C commands DeltaL = ... m on EI = 0 line L, outside MoorDyn-F's
+       bounds -S/2 <= DeltaL <= S (S = UnstrLen/N = ... m)`` (or ``on finite-EI line L``)
+     - the command lengthens the line's fairlead-side segment by more than ``UnstrLen``/N (the
+       line's unstretched length over its number of segments) or shortens it by more than half
+       of that, where MoorDyn-F also stops. Keep ``CableDeltaL`` within the bounds, or mesh the
+       line with fewer, longer segments so the command is a smaller fraction of one.
+   * - ``control channel C commands DeltaL = ... m on ... line L, which would make its controlled
+       segment (... m long) non-positive``
+     - on a line of several sections the controlled segment is shorter than half of
+       ``UnstrLen``/N, so a haul-in within MoorDyn-F's bounds would consume it. Keep the
+       haul-in shorter than the segment, or make the fairlead-side section's segments longer.
+   * - ``CONTROL line L: active line control of a finite-EI line needs the force-blended
+       generalised-alpha (OPTION alpha_force_blend True)``
+     - the configuration blend has no committed-length treatment, so a ramp would lag; remove
+       ``False alpha_force_blend`` from a deck that controls a finite-EI cable.
 
 .. _non-convergence:
 

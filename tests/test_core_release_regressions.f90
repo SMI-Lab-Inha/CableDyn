@@ -5,7 +5,8 @@ PROGRAM test_core_release_regressions
   !! Failure-path contracts of the numerical core:
   !!   1. The system subdivision fallback restores the complete committed line state
   !!      (kinematics AND viscoelastic / Syrope history) when it cannot complete an
-  !!      interval, so its best-effort result equals one plain full-dt step.
+  !!      interval, so its best-effort result equals one plain full-dt step; after an
+  !!      active-line-control length change that includes the committed lengths.
   !!   2. A segment-length update whose acceleration recompute fails leaves the model
   !!      exactly as it was (lengths, rates, loads, mass, acceleration).
   !!   3. An ElasticMod 3 rope whose alphaMBL does not exceed the static EA fails at
@@ -27,7 +28,8 @@ PROGRAM test_core_release_regressions
   USE CableDyn_System, ONLY: CD_SystemType, CD_Init_System_From_Models, CD_End_System, CD_Step_System, &
                              CD_Get_System_CoupledMotion, CD_System_NCoupledDOF, CD_Get_System_Line_State, &
                              CD_Get_System_Line_VE_Dl1, CD_Get_System_Line_Syrope_State, &
-                             CD_System_Fallback_Count, CD_System_Fallback_Reset, CD_SYSTEM_OK
+                             CD_System_Fallback_Count, CD_System_Fallback_Reset, CD_SYSTEM_OK, &
+                             CD_Update_System_Line_SegmentLength
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_HYDRO_OK, CD_HYDRO_BADINPUT
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve, CD_HermiteCable_Static_Solve_AutoMesh, &
                                          CD_HermiteCable_Trivial_Seed, CD_HermiteResolutionType, &
@@ -58,6 +60,7 @@ PROGRAM test_core_release_regressions
   nfail = 0
 
   CALL case_fallback_restores_constitutive_state()
+  CALL case_fallback_restores_committed_lengths()
   CALL case_segment_length_update_is_atomic()
   CALL case_mode3_premise_over_slack_range()
   CALL case_short_error_buffers()
@@ -208,6 +211,79 @@ CONTAINS
     CALL CD_Syrope_End(stype(2))
     CALL CD_Syrope_End(td)
   END SUBROUTINE case_fallback_restores_constitutive_state
+
+  SUBROUTINE case_fallback_restores_committed_lengths()
+    !! Active line control: a length and rate change, then a step that stalls at every
+    !! subdivision level. The first half-step commits the new lengths as those of the
+    !! committed state, so the fallback's restore must bring back the committed lengths of
+    !! the entry state as well: the plain full-dt re-run then blends the old and new lengths
+    !! and equals one plain step of the same line bit for bit.
+    REAL(wp), PARAMETER :: DT = 0.02_wp
+    TYPE(CD_ModelType) :: models(1), ref
+    TYPE(CD_SystemType) :: system
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, 2), fixed(6), es, n_iter, nc, j
+    REAL(wp) :: l0(2), q0(9), v0(9), f_ext(9), eav(2), rho_a(2)
+    REAL(wp), ALLOCATABLE :: qc(:), vc(:), ac(:)
+    REAL(wp) :: qs(9), vs(9), as(9), qr(9), vr(9), ar(9), pq(9), pv(9), pa(9)
+    LOGICAL :: conv, stalled
+    CHARACTER(240) :: em
+
+    cfg%max_iter = 1
+    cfg%rel_tol = 1.0e-15_wp
+    cfg%abs_tol = 1.0e-300_wp
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    f_ext(6) = -2.0e3_wp
+    rho_a = 22.42_wp
+    eav = 1.0e8_wp
+    CALL two_element_chain(1.01_wp, conn, l0, q0, fixed)
+    CALL CD_Init_Model(models(1), q0, v0, conn, l0, eav, rho_a, .FALSE., f_ext, fixed, cfg, es, em)
+    CALL require(es == CD_MODEL_OK, 'fallback-lengths:init '//TRIM(em))
+    CALL CD_Init_Model(ref, q0, v0, conn, l0, eav, rho_a, .FALSE., f_ext, fixed, cfg, es, em)
+    CALL require(es == CD_MODEL_OK, 'fallback-lengths:reference-init '//TRIM(em))
+    CALL CD_Init_System_From_Models(system, models, es, em)
+    CALL require(es == CD_SYSTEM_OK, 'fallback-lengths:system-init '//TRIM(em))
+    ! pay out the second element: a new length and rate the committed state was not reached with
+    CALL CD_Update_System_Line_SegmentLength(system, 1, 2, 1.004_wp, 0.2_wp, es, em)
+    CALL require(es == CD_SYSTEM_OK, 'fallback-lengths:system-update '//TRIM(em))
+    CALL CD_Update_Model_SegmentLength(ref, 2, 1.004_wp, 0.2_wp, es, em)
+    CALL require(es == CD_MODEL_OK, 'fallback-lengths:reference-update '//TRIM(em))
+    nc = CD_System_NCoupledDOF(system, es, em)
+    CALL require(es == CD_SYSTEM_OK .AND. nc == 6, 'fallback-lengths:coupled-dof-count')
+    ALLOCATE (qc(nc), vc(nc), ac(nc))
+    CALL CD_Get_System_CoupledMotion(system, qc, vc, ac, es, em)
+    CALL require(es == CD_SYSTEM_OK, 'fallback-lengths:coupled-motion')
+    qc(4) = qc(4) + 0.004_wp
+    vc(4) = 0.2_wp
+    ac = 0.0_wp
+
+    CALL CD_System_Fallback_Reset()
+    CALL CD_Step_System(system, DT, qc, vc, ac, conv, stalled, n_iter, es, em)
+    CALL require(es == CD_SYSTEM_OK, 'fallback-lengths:system-step '//TRIM(em))
+    CALL require(.NOT. conv, 'fallback-lengths:step-stalls-at-every-depth')
+    CALL require(CD_System_Fallback_Count() > 0, 'fallback-lengths:subdivision-entered')
+    CALL CD_System_Fallback_Reset()
+
+    CALL CD_Get_Model_State(ref, pq, pv, pa, es, em)
+    DO j = 1, 6
+      pq(fixed(j)) = qc(j)
+      pv(fixed(j)) = vc(j)
+      pa(fixed(j)) = ac(j)
+    END DO
+    CALL CD_Step_Model(ref, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+    CALL require(es == CD_MODEL_OK, 'fallback-lengths:reference-step')
+    CALL CD_Get_System_Line_State(system, 1, qs, vs, as, es, em)
+    CALL CD_Get_Model_State(ref, qr, vr, ar, es, em)
+    CALL require(same(qs, qr) .AND. same(vs, vr) .AND. same(as, ar), &
+                 'fallback-lengths:kinematics-equal-one-blended-plain-step')
+    CALL require(same(system%lines(1)%l0_c, ref%l0_c) .AND. same(system%lines(1)%l0_dot_c, ref%l0_dot_c), &
+                 'fallback-lengths:committed-lengths-advanced-once')
+
+    CALL CD_End_System(system, es, em)
+    CALL CD_End_Model(models(1), es, em)
+    CALL CD_End_Model(ref, es, em)
+  END SUBROUTINE case_fallback_restores_committed_lengths
 
   SUBROUTINE case_segment_length_update_is_atomic()
     !! A length so large that the reassembled distributed load overflows makes the

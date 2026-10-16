@@ -113,22 +113,27 @@ All notable changes to CableDyn are recorded in this file. The format follows
   segment becomes S + `DeltaL` long. The cable's mass, attachment masses, tributary lengths and
   seabed contact coefficients follow the new lengths, and the axial damping acts on the rate of
   the strain the elastic force uses, so a segment paid out at constant strain carries no damping
-  force. The generalised-α step takes its committed force at the lengths of the preceding step,
-  so a pay-out ramp follows the quasi-static tension at any `rhoInf`. A command outside half to
-  twice the segment's initial length stops the run with a message that names the line, and
-  FAST.Farm decks still reject `CONTROL`. A zero command leaves the run bit-identical to an
-  uncontrolled one, and a checkpoint restart continues bit-identically. See the manual's deck
-  format page (CONTROL).
+  force. The force-blended generalised-α step takes its committed force at the lengths of the
+  preceding step, so a pay-out ramp follows the quasi-static tension at any `rhoInf`; a deck
+  that controls a finite-EI cable under `False alpha_force_blend` fails at initialisation with
+  a message that names the line, as that blend has no such treatment. A command outside
+  MoorDyn-F's bounds stops the run as for `EI = 0` lines (see Changed), and FAST.Farm decks
+  still reject `CONTROL`. A zero command, with a `DeltaLdot` of either sign, leaves the run
+  bit-identical to an uncontrolled one, and a checkpoint restart continues bit-identically. See
+  the manual's deck format page (CONTROL).
 
 ### Changed
 
 - Active tensioning (`CONTROL`) of an `EI = 0` line now stops the run when a command leaves
-  MoorDyn-F's bounds, as MoorDyn-F does: an increase of the controlled segment by more than its
-  initial length, or a reduction by more than half of it. The message names the channel, the
-  line, the command and the segment length. A command beyond these bounds had printed a one-time
-  warning and been applied. The bounds are those a finite-EI cable already enforced (a scaling
-  of its segment within [0.5, 2]), so both line kinds now share them, and every row is checked
-  before any line changes.
+  MoorDyn-F's bounds, as MoorDyn-F does: with `UnstrLen` the line's unstretched length and N its
+  number of segments, a `DeltaL` above `UnstrLen`/N or below −0.5 `UnstrLen`/N, the comparisons
+  MoorDyn-F makes, so a command MoorDyn-F accepts is accepted (on a line of one section
+  `UnstrLen`/N is the controlled segment's initial length). The message names the channel, the
+  line, the command and the bound. A command beyond these bounds had printed a one-time warning
+  and been applied. A command within the bounds that would make the controlled segment of a
+  line of several sections non-positive also stops the run. Finite-EI cables take the same
+  bounds. Every row is checked before any line changes, and a row that still fails takes back
+  the lines the command had already changed, so a refused command changes nothing.
 - Faster wave kinematics of directional and multi-train seas (`wavetrain` rows, spectral
   `waves` rows, `WaveSpreading`). Each component's phase cosine is now computed once for the
   surface elevation and the kinematics, and its depth profile with one exponential instead of
