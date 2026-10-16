@@ -160,7 +160,7 @@ holds the grounded run toward the position in which the line was laid, as OrcaFl
 policy does: then decide how the line was laid (``layAzimuth``, by default from the anchor
 toward the fairlead) and at what tension (``asLaidTension``, by default slack), because the
 anchor tension depends on it: a run laid slack and pulled taut is held back by friction. See
-:ref:`static-friction`.
+:ref:`friction in statics <static-friction>`.
 
 7. Configure dynamics and forcing
 ----------------------------------

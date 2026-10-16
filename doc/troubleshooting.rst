@@ -468,7 +468,7 @@ but a few geometries are genuinely hard:
   (``staticsFriction none``) the static solve is frictionless in still water, so a grounded run
   on a slope slides down it whatever ``frictionMu`` is, and a line longer than its span folds or
   is rejected. ``asLaid staticsFriction`` holds every grounded node toward its as-laid position
-  (see :ref:`static-friction`), so the run rests where it was laid. A line laid slack
+  (see :ref:`friction in statics <static-friction>`), so the run rests where it was laid. A line laid slack
   (``asLaidTension 0``) and pulled taut by its fairlead is then held back by friction along its
   grounded run, and its anchor tension is lower than the frictionless static's by up to
   ``mu w`` times the grounded length (an 850 m chain in 200 m of water with ``frictionMu 0.35``:

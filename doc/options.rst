@@ -147,7 +147,7 @@ Environment and seabed
        known. Used only with ``frictionMu > 0`` and a seabed; rejected, like ``frictionMu``,
        on decks with ``Connect``/``Free`` points, bodies or rods (and on mixed-topology
        decks), whose static equilibrium solves the lines without seabed friction. See
-       :ref:`static-friction`
+       :ref:`friction in statics <static-friction>`
      - both
      - ``asLaid staticsFriction``
    * - ``layAzimuth`` / ``lay_azimuth``, and ``layAzimuth<ID>``

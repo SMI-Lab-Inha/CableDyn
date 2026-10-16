@@ -956,7 +956,7 @@ beyond a :math:`10^{-6}` relative round-off band; a slack element reports zero t
    where the seabed keeps falling past the fairlead the excess slides down the frictionless
    slope and folds back, with zero tension at the fold; otherwise it lies slack); the other
    catenary variant; and a two-leg polyline of the line length that never compresses the line.
-   With static seabed friction the as-laid seed (:ref:`static-friction`) is tried first.
+   With static seabed friction the as-laid seed (:ref:`friction in statics <static-friction>`) is tried first.
    Seed nodes deeper below the seabed than their static penetration are lifted onto it.
 2. **Compression-capable Newton** at the full load (Armijo line search on
    :math:`\tfrac{1}{2}\lVert\mathbf{R}\rVert^2`, :ref:`Armijo, 1966 <ref-armijo1966>`). A converged
