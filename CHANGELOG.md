@@ -12,8 +12,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 - Seabed friction in the static solve, toward the as-laid position (OrcaFlex's *as laid*
   statics seabed friction policy, opt-in): `asLaid staticsFriction`. Every grounded node is
-  held by a friction spring toward the position at which the line was laid from its anchor
-  along the lay azimuth on the seabed, with the regularised Coulomb law of the dynamics
+  held by a friction spring toward the position at which the line was laid from its lower end
+  (the anchor, or the fairlead when that is lower) along the lay azimuth on the seabed, with the regularised Coulomb law of the dynamics
   (isotropic or axial/lateral, capped at `mu N`), in still water and in a current, on `EI = 0`
   and finite-EI lines, standalone, coupled OpenFAST and through the C API; the march continues
   the static springs, so a held run stays at rest. New OPTIONS `staticsFriction none|asLaid`,
@@ -38,9 +38,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   fairlead lies below its other end is laid, and seeded, from the fairlead. With discrete
   `ATTACHMENTS` the reference sinks each node under its discrete load (its share of the line's
   weight plus the attachment's net weight), so a module node rests on the laid path like the rest
-  of the run instead of taking its sink for a friction deflection. The
-  policy is rejected, as `frictionMu` is, on decks with `Connect`/`Free` points, bodies or rods,
-  and on mixed-topology decks. The Python `DeckFile`, `DeckWriter` and `DeckModel` take the new
+  of the run instead of taking its sink for a friction deflection. On a mesh the finite-EI
+  statics refines (adaptive refinement, the bending-length and stability refinements) or
+  coarsens, the reference is laid on that mesh itself, under its own lumped weights and nodal
+  seabed stiffnesses, and the march takes it on the final mesh: a run refined 16x on a seabed
+  curved along it and sloping across it, with a section change on the grounded run, rests where
+  its twin declared on the refined mesh does (to solver precision), where a reference
+  interpolated from the deck nodes moved it by up to 1 mm and reversed its lateral anchor force. The policy is rejected
+  where the statics carry no seabed friction: on decks with bodies, rods or dynamic
+  (`Connect`/`Free`) points (`frictionMu` itself is rejected on the latter and accepted on the
+  default monolithic body and rod march), and on a finite-EI deck whose line has a moving End B
+  (a line shared between two turbines, which takes the compatibility route). The Python `DeckFile`, `DeckWriter` and `DeckModel` take the new
   rows. See the theory page (Friction in statics).
 - Run-time profile of the standalone driver. With the environment variable
   `CABLEDYN_PROFILE=1`, the driver prints at the end of the run how its wall time divides

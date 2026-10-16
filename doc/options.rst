@@ -133,28 +133,35 @@ Environment and seabed
      - ``none``
      - ``none`` or ``asLaid`` (also ``as_laid``, ``as-laid``), case-insensitive; OrcaFlex's
        statics seabed friction policy. ``none``: the static solve is frictionless in still water
-       (in a deck current, friction springs from the still-water equilibrium hold the line), and
-       the friction anchors of the march start at the static node positions. ``asLaid``: the
+       and the friction anchors of the march start at the static node positions; in a deck
+       current friction springs from the still-water equilibrium hold the line, and the anchors
+       continue their static forces. ``asLaid``: the
        static solve resists the horizontal displacement of every grounded node from its as-laid
-       position (the line laid from its anchor along ``layAzimuth`` on the seabed at
-       ``asLaidTension``, its top end then moved to the fairlead) with the regularised Coulomb
+       position (the line laid from its lower end, the anchor or the fairlead when that is lower,
+       along ``layAzimuth`` on the seabed at ``asLaidTension``, its top end then moved to its
+       position; on a mesh the finite-EI statics refines, laid on the refined mesh) with the
+       regularised Coulomb
        law of the dynamics, capped at ``mu N``, in still water and in a current, so a run on a
        slope with ``tan(slope) < mu`` holds and surplus length rests where it was laid; the
        march continues the springs. ``none`` is the default, as in MoorDyn: a run laid slack
        and pulled taut is held back by its friction, so the as-laid statics lowers anchor
        tensions (by up to ``mu w`` times the grounded length), and the frictionless statics is
        the conservative choice for anchor loads unless the as-laid layout and tension are
-       known. Used only with ``frictionMu > 0`` and a seabed; rejected, like ``frictionMu``,
-       on decks with ``Connect``/``Free`` points, bodies or rods (and on mixed-topology
-       decks), whose static equilibrium solves the lines without seabed friction. See
+       known. Used only with ``frictionMu > 0`` and a seabed; rejected where the static
+       equilibrium solves the lines without seabed friction: on decks with bodies, rods or
+       ``Connect``/``Free`` points (``frictionMu`` itself is accepted on the default monolithic
+       body and rod march), and on the finite-EI two-moving-end route (a line whose End B is
+       not ``Fixed``, as a line shared between two turbines). See
        :ref:`friction in statics <static-friction>`
      - both
      - ``asLaid staticsFriction``
    * - ``layAzimuth`` / ``lay_azimuth``, and ``layAzimuth<ID>``
      - real, deg
-     - absent: each line's chord direction, from its lower end (anchor → fairlead)
-     - finite. Horizontal direction, from global +x toward +y, in which the line was laid from
-       its anchor (its lower end): the as-laid reference of ``staticsFriction asLaid``.
+     - absent: each line's chord direction, from its lower end (anchor → fairlead, or
+       fairlead → anchor when the fairlead is lower)
+     - finite. Horizontal direction, from global +x toward +y, in which the line was laid away
+       from its lower end (the anchor, or the fairlead when that is lower): the as-laid
+       reference of ``staticsFriction asLaid``.
        ``layAzimuth`` sets every line; ``layAzimuth<ID>`` (the line ID appended, e.g.
        ``layAzimuth2``) sets line ``ID`` and overrides it. A direction off the vertical plane of
        the line ends puts the finite-EI static solve in 3D, as does a bathymetry sloping across
@@ -165,8 +172,8 @@ Environment and seabed
      - real, N
      - ``0``
      - finite, ≥ 0. Effective tension with which the line was laid: the as-laid node spacing is
-       the unstretched one times ``1 + asLaidTension/EA``, so a run whose static tension equals
-       it carries no friction force. ``asLaidTension<ID>`` sets line ``ID`` alone, as for
+       the unstretched one times ``1 + asLaidTension/EA``, so a run on a level seabed whose
+       static tension equals it carries no friction force. ``asLaidTension<ID>`` sets line ``ID`` alone, as for
        ``layAzimuth<ID>``
      - both
      - ``2.0e5 asLaidTension1``

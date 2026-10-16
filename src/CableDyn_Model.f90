@@ -1353,7 +1353,9 @@ CONTAINS
     ! CD_Static_As_Laid_Reference. As laid, the static solve resists every grounded node's
     ! horizontal displacement from its as-laid position with the friction springs, and the
     ! stick-slip anchors of the dynamics continue their forces; with none the static solve
-    ! is frictionless and the anchors start at the static node positions.
+    ! is frictionless in still water and the anchors start at the static node positions,
+    ! while in a current the friction springs hold the line from its still-water equilibrium
+    ! and the anchors continue their forces likewise.
     INTEGER, INTENT(IN), OPTIONAL :: static_friction
     REAL(wp), INTENT(IN), OPTIONAL :: lay_azimuth, as_laid_tension
 
@@ -1574,9 +1576,10 @@ CONTAINS
       cur%drag = .FALSE.
     END IF
     ! Static seabed friction (the OrcaFlex "as laid" policy): every grounded node is held
-    ! by a friction spring toward its as-laid position -- the line laid from the anchor
-    ! along the lay azimuth on the seabed at the as-laid tension -- capped at mu N; the
-    ! spring forces then seed the stick-slip anchors of the march below.
+    ! by a friction spring toward its as-laid position -- the line laid from its lower end
+    ! (the anchor, or the fairlead when that is lower) along the lay azimuth on the seabed at
+    ! the as-laid tension -- capped at mu N; the spring forces then seed the stick-slip
+    ! anchors of the march below.
     IF (friction_static) THEN
       cur%friction_mu = seabed_mu
       cur%friction_as_laid = .TRUE.

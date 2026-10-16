@@ -777,11 +777,11 @@ the static solve is frictionless in still water, and in a deck current the frict
 below hold the line from its still-water equilibrium (the same line solved without the current
 first). It is conservative for anchor loads, since an as-laid run pulled taut is held back by
 its friction (below). With ``asLaid`` the reference of
-node :math:`i` is the as-laid position: the line is laid from its anchor (its lower end) along
-the azimuth :math:`\alpha` (``layAzimuth``; by default the horizontal anchor → fairlead
-direction, the vertical plane through the line ends) on the seabed at the tension
-:math:`T_\text{laid}` (``asLaidTension``, default 0), so that the seabed path from the anchor
-to node :math:`i` is :math:`s_i = \sum_{e<i} l_{0,e}(1 + T_\text{laid}/EA_e)` long; on a
+node :math:`i` is the as-laid position: the line is laid from its lower end (the anchor, or the
+fairlead when that is lower) along the azimuth :math:`\alpha` away from it (``layAzimuth``; by
+default the horizontal direction of the chord from that end, the vertical plane through the
+line ends) on the seabed at the tension :math:`T_\text{laid}` (``asLaidTension``, default 0),
+so that the seabed path from that end to node :math:`i` is :math:`s_i = \sum_{e<i} l_{0,e}(1 + T_\text{laid}/EA_e)` long; on a
 bathymetry the horizontal distance follows from integrating
 :math:`\mathrm{d}s = \sqrt{1 + z_{,\alpha}^2}\,\mathrm{d}d` in sub-steps of at most 1 m. A
 laid node sinks into the penalty seabed along its normal by its static penetration, which on a
@@ -795,9 +795,16 @@ normal load (it presses the line into a crest and lifts it from a hollow), with
 :math:`\mathbf{t}_{i}^{\pm}` the unit tangents of the laid path on either side of the node and
 :math:`\mathbf{n}_i` the upward normal; a normal load :math:`P` deepens the normal penetration by
 :math:`P/k_i` and so moves the node horizontally by :math:`P\,(z_{,x}, z_{,y})/(k_i s)`, with
-:math:`s = \sqrt{1 + z_{,x}^2 + z_{,y}^2}`. The reference moves with the node,
-so the line laid at rest carries no friction force (a deflection normal to the seabed is not a
-friction deflection, as in OrcaFlex's in-plane law). The static solve then holds every node in
+:math:`s = \sqrt{1 + z_{,x}^2 + z_{,y}^2}`. The reference moves with the node, so the normal
+sink adds no spurious friction deflection (a deflection normal to the seabed is not a friction
+deflection, as in OrcaFlex's in-plane law): the spring of a node laid at rest carries only the
+load along the seabed that friction holds there, the slope component of its load (none on a
+level seabed). The sink and the turning force depend on the element lengths (a node at a
+section change carries a share of either section), so the reference is laid on the mesh of each
+static solve, under that mesh's lumped loads and nodal stiffnesses: a mesh the finite-EI statics
+refines (adaptive refinement, the bending-length and stability refinements) or coarsens (the
+mesh-sequenced and coarse-current passes) has the reference of its own nodes, and the march
+takes it on the final mesh. The static solve then holds every node in
 contact with a friction spring toward its reference, capped smoothly at :math:`\mu N`,
 
 .. math::

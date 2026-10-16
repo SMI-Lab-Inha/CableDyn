@@ -1330,14 +1330,16 @@ CONTAINS
     !! sink (optional, per node, on a bathymetry): the static penalty penetration factor
     !! w_i/k_i of each node (its submerged weight over its seabed stiffness). A laid node
     !! sinks into the penalty seabed along the surface normal, which on a slope moves it
-    !! horizontally by w_i (z_x, z_y)/k_i; its reference moves with it, so the line laid at
-    !! rest on a slope carries no friction force (a deflection normal to the seabed is not a
-    !! friction deflection, as in OrcaFlex's in-plane friction).
+    !! horizontally by w_i (z_x, z_y)/k_i; its reference moves with it, so the normal sink
+    !! adds no spurious friction deflection (a deflection normal to the seabed is not a
+    !! friction deflection, as in OrcaFlex's in-plane friction): the spring of a node laid at
+    !! rest on a slope carries only the slope load that friction holds there.
     !! kn (optional, per node, with sink): the nodal seabed stiffness. With a positive
     !! laid_tension on a bathymetry whose slope varies, the tension turns at every node of
     !! the laid path and presses it into the seabed (over a crest) or lifts it (in a hollow);
     !! the normal component of that turning force over kn is added to the node's sink, so
-    !! the line laid at its as-laid tension rests at its reference without friction.
+    !! the line laid at its as-laid tension rests on its laid path, its springs carrying
+    !! only the slope and turning loads along the seabed.
     REAL(wp), INTENT(IN) :: origin(2), azimuth, l0(:), ea(:), laid_tension
     REAL(wp), INTENT(OUT) :: ref(:, :)
     INTEGER, INTENT(OUT) :: ErrStat

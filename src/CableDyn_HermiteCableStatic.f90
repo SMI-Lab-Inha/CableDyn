@@ -48,6 +48,7 @@ MODULE CableDyn_HermiteCableStatic
                                  CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, CD_BATHY_OK, &
                                  CD_Bathymetry_Rotate_Curvature
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
+  USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK
   USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_HYDRO_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
                                      CD_HermiteTorsion_Accept, CD_HermiteTorsion_Compliance, &
@@ -70,7 +71,7 @@ MODULE CableDyn_HermiteCableStatic
   PUBLIC :: CD_HermiteCable_Prolong_Arc
   PUBLIC :: CD_HermiteCable_Static_Solve_AutoMesh
   PUBLIC :: CD_HermiteCable_Current_Load
-  PUBLIC :: CD_HermiteCable_Friction_Anchors, CD_HermiteCable_Friction_Reference
+  PUBLIC :: CD_HermiteCable_Friction_Anchors, CD_HermiteCable_Friction_Reference, CD_HermiteCable_As_Laid_Offsets
   PUBLIC :: CD_HermiteCable_Mean_Axial_Extremes
   PUBLIC :: CD_Arclength_Dot, CD_Arclength_Unit_Tangent, CD_Arclength_Bordered_Update
   INTEGER, PARAMETER, PUBLIC :: CD_HCSTAT_OK = 0, CD_HCSTAT_BADINPUT = 1, CD_HCSTAT_NOCONVERGE = 2
@@ -169,7 +170,8 @@ MODULE CableDyn_HermiteCableStatic
   ! position, capped at mu times the normal contact force. The reference is a profile
   ! along the unstretched arc length (ref_s ascending; ref_xy(1:2, :) the solve-frame
   ! offsets from node 1, the held first end), interpolated at each node, so it survives
-  ! mesh refinement and a translated solve origin: the as-laid position of the line.
+  ! mesh refinement and a translated solve origin: the as-laid position of the line, which
+  ! is instead rebuilt on the mesh itself when its lay is given (laid_on_mesh, below).
   ! frozen_capacity (optional, one entry per node of the solved mesh) holds the capacities
   ! fixed: the springs are then conservative (the energy-minimising step applies), as the
   ! frozen drag of a fixed-point pass.
@@ -184,6 +186,20 @@ MODULE CableDyn_HermiteCableStatic
     ! the reference is the as-laid position (staticsFriction asLaid; otherwise the still-water
     ! equilibrium of a current deck)
     LOGICAL :: as_laid = .FALSE.
+    ! The lay of an as-laid reference that is rebuilt on every mesh it is applied to
+    ! (laid_on_mesh, CD_HermiteCable_As_Laid_Offsets): the nodes of a refined or coarsened
+    ! mesh are laid and sink as the deck nodes are, under their own lumped weights and nodal
+    ! seabed stiffnesses, which no interpolation of the deck-mesh profile gives at a section
+    ! change or on a varying slope. The line is laid from laid_origin (global x, y of its
+    ! lower end, node 1 or, laid_from_top, the last node) along laid_azimuth [rad, global] at
+    ! laid_tension [N], over the bathymetry when laid_bathymetry; the offsets are taken from
+    ! laid_node1 (global x, y of node 1) in the solve frame laid_frame_cs = (cos, sin). With
+    ! laid_in_plane only the sink of the nodes leaves the vertical plane of the chord.
+    LOGICAL :: laid_on_mesh = .FALSE.
+    LOGICAL :: laid_from_top = .FALSE., laid_in_plane = .FALSE., laid_bathymetry = .FALSE.
+    REAL(wp) :: laid_origin(2) = 0.0_wp, laid_node1(2) = 0.0_wp
+    REAL(wp) :: laid_azimuth = 0.0_wp, laid_tension = 0.0_wp
+    REAL(wp) :: laid_frame_cs(2) = [1.0_wp, 0.0_wp]
   END TYPE CD_HermiteStaticFrictionType
 
   TYPE, PUBLIC :: CD_HermiteStaticCurrentType
@@ -2152,7 +2168,9 @@ CONTAINS
       ELSE
         fr_k = kn*trib
       END IF
-      CALL CD_HermiteCable_Friction_Reference(fr, l0, q(1:2), fr_ref, ecs, ecm)
+      ! an as-laid reference is laid on this mesh, with its nodal loads and stiffnesses
+      CALL CD_HermiteCable_Friction_Reference(fr, l0, q(1:2), fr_ref, ecs, ecm, EA=EA, w=w, node_kn=fr_k, &
+                                              bathymetry=bathymetry)
       IF (ecs /= CD_HCSTAT_OK) RETURN
       IF (ALLOCATED(fr%frozen_capacity)) THEN
         IF (SIZE(fr%frozen_capacity) /= nn) THEN
@@ -2606,20 +2624,140 @@ CONTAINS
 
   END SUBROUTINE CD_HermiteCable_Static_Solve
 
-  SUBROUTINE CD_HermiteCable_Friction_Reference(fr, l0, origin, ref, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_As_Laid_Offsets(fr, l0, EA, node_load, node_kn, offsets, ErrStat, ErrMsg, bathymetry)
+    !! As-laid friction reference of the nodes of mesh l0 (the lay of fr, laid_* above;
+    !! CD_Static_As_Laid_Reference): node i at the stretched arc length of the elements
+    !! l0 (1 + laid_tension/EA) along the seabed from the lower end, and on a bathymetry
+    !! moved with its sink into the penalty seabed under its nodal load node_load(i) [N,
+    !! downward positive] over its nodal seabed stiffness node_kn(i) [N/m] (with the
+    !! turning force of the laid tension). offsets(1:2, i) is the reference of node i less
+    !! the global position laid_node1 of node 1, in the solve frame laid_frame_cs; with
+    !! laid_in_plane on a bathymetry only the sink offset across the chord leaves its plane.
+    TYPE(CD_HermiteStaticFrictionType), INTENT(IN) :: fr
+    REAL(wp), INTENT(IN) :: l0(:), EA(:), node_load(:), node_kn(:)
+    REAL(wp), INTENT(OUT) :: offsets(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), ALLOCATABLE :: ref_g(:, :), ref_0(:, :), wn(:), sn(:), kn_o(:), l0_r(:), ea_r(:)
+    REAL(wp) :: dg(2), dg0(2), cs(2)
+    INTEGER :: k, ne, es
+    CHARACTER(200) :: em
+    ErrStat = CD_HCSTAT_OK
+    ErrMsg = ''
+    ne = SIZE(l0)
+    IF (ne < 1 .OR. SIZE(EA) /= ne .OR. SIZE(node_load) /= ne + 1 .OR. SIZE(node_kn) /= ne + 1 .OR. &
+        SIZE(offsets, 1) /= 2 .OR. SIZE(offsets, 2) /= ne + 1) THEN
+      ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'as-laid friction reference: inconsistent array sizes'; RETURN
+    END IF
+    IF (.NOT. CD_All_Finite(node_load) .OR. .NOT. CD_All_Finite(node_kn)) THEN
+      ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'as-laid friction reference: nodal loads and stiffnesses must be finite'
+      RETURN
+    END IF
+    offsets = CD_ZERO
+    ALLOCATE (ref_g(2, ne + 1))
+    IF (PRESENT(bathymetry)) THEN
+      ! the static penalty penetration factor w_i/k_i of every node
+      ALLOCATE (wn(ne + 1))
+      WHERE (node_kn > CD_ZERO)
+        wn = MAX(node_load, CD_ZERO)/node_kn
+      ELSEWHERE
+        wn = CD_ZERO
+      END WHERE
+      IF (fr%laid_from_top) THEN
+        sn = wn(ne + 1:1:-1)
+        kn_o = node_kn(ne + 1:1:-1)
+      ELSE
+        sn = wn
+        kn_o = node_kn
+      END IF
+    END IF
+    IF (fr%laid_from_top) THEN
+      ! the line is laid from its bottom end, here the last node
+      l0_r = l0(ne:1:-1)
+      ea_r = EA(ne:1:-1)
+    ELSE
+      l0_r = l0
+      ea_r = EA
+    END IF
+    ! sn and kn_o are unallocated (absent) without a bathymetry
+    CALL CD_Static_As_Laid_Reference(fr%laid_origin, fr%laid_azimuth, l0_r, ea_r, fr%laid_tension, ref_g, es, em, &
+                                     bathymetry=bathymetry, sink=sn, kn=kn_o)
+    IF (es /= CD_STATIC_OK) THEN
+      ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = TRIM(em); RETURN
+    END IF
+    IF (fr%laid_from_top) ref_g = ref_g(:, ne + 1:1:-1)
+    ! the laid line without the sink of its nodes: its cross-plane offset is geometric
+    ref_0 = ref_g
+    IF (fr%laid_in_plane .AND. PRESENT(bathymetry)) THEN
+      CALL CD_Static_As_Laid_Reference(fr%laid_origin, fr%laid_azimuth, l0_r, ea_r, fr%laid_tension, ref_0, es, em, &
+                                       bathymetry=bathymetry)
+      IF (es /= CD_STATIC_OK) THEN
+        ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = TRIM(em); RETURN
+      END IF
+      IF (fr%laid_from_top) ref_0 = ref_0(:, ne + 1:1:-1)
+    END IF
+    cs = fr%laid_frame_cs
+    DO k = 1, ne + 1
+      dg = ref_g(:, k) - fr%laid_node1
+      offsets(:, k) = [cs(1)*dg(1) + cs(2)*dg(2), -cs(2)*dg(1) + cs(1)*dg(2)]
+      IF (fr%laid_in_plane) THEN
+        ! the laid line lies in the vertical plane of the chord: only the sink offset of the
+        ! nodes on a cross slope (zero on a flat floor) leaves it
+        dg0 = ref_0(:, k) - fr%laid_node1
+        offsets(2, k) = (-cs(2)*dg(1) + cs(1)*dg(2)) - (-cs(2)*dg0(1) + cs(1)*dg0(2))
+      END IF
+    END DO
+  END SUBROUTINE CD_HermiteCable_As_Laid_Offsets
+
+  SUBROUTINE CD_HermiteCable_Friction_Reference(fr, l0, origin, ref, ErrStat, ErrMsg, EA, w, node_kn, bathymetry)
     !! Reference position (x, y) of every node of mesh l0: origin (the position of node 1,
     !! the held first end, in the caller's frame) plus the friction reference offset
     !! profile interpolated linearly in unstretched arc length (constant past its ends).
+    !! An as-laid reference whose lay is given (fr%laid_on_mesh) is instead rebuilt on mesh
+    !! l0 itself (CD_HermiteCable_As_Laid_Offsets) when the mesh's axial stiffnesses EA,
+    !! submerged weights per length w (lumped to the nodes) and nodal seabed stiffnesses
+    !! node_kn are given, and the bathymetry it was laid on (fr%laid_bathymetry).
     TYPE(CD_HermiteStaticFrictionType), INTENT(IN) :: fr
     REAL(wp), INTENT(IN) :: l0(:), origin(2)
     REAL(wp), INTENT(OUT) :: ref(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: EA(:), w(:), node_kn(:)
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), ALLOCATABLE :: node_load(:)
     INTEGER :: node, k, np
     REAL(wp) :: s, t
+    LOGICAL :: on_mesh
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
     ref = CD_ZERO
+    on_mesh = fr%as_laid .AND. fr%laid_on_mesh .AND. PRESENT(EA) .AND. PRESENT(w) .AND. PRESENT(node_kn)
+    IF (on_mesh .AND. fr%laid_bathymetry) on_mesh = PRESENT(bathymetry)
+    IF (on_mesh) THEN
+      IF (SIZE(w) /= SIZE(l0) .OR. SIZE(ref, 1) /= 2 .OR. SIZE(ref, 2) /= SIZE(l0) + 1 .OR. &
+          .NOT. CD_Is_Finite(fr%mu) .OR. .NOT. CD_All_Finite(w)) THEN
+        ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'friction: as-laid reference inputs inconsistent or non-finite'; RETURN
+      END IF
+      ! the element weights lumped to the nodes
+      ALLOCATE (node_load(SIZE(l0) + 1))
+      node_load = CD_ZERO
+      DO k = 1, SIZE(l0)
+        node_load(k:k + 1) = node_load(k:k + 1) + 0.5_wp*w(k)*l0(k)
+      END DO
+      IF (fr%laid_bathymetry) THEN
+        CALL CD_HermiteCable_As_Laid_Offsets(fr, l0, EA, node_load, node_kn, ref, ErrStat, ErrMsg, bathymetry)
+      ELSE
+        CALL CD_HermiteCable_As_Laid_Offsets(fr, l0, EA, node_load, node_kn, ref, ErrStat, ErrMsg)
+      END IF
+      IF (ErrStat /= CD_HCSTAT_OK) THEN
+        ErrMsg = 'friction: '//TRIM(ErrMsg); RETURN
+      END IF
+      DO node = 1, SIZE(l0) + 1
+        ref(:, node) = origin + ref(:, node)
+      END DO
+      RETURN
+    END IF
     IF (.NOT. (ALLOCATED(fr%ref_s) .AND. ALLOCATED(fr%ref_xy))) THEN
       ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'friction: reference profile required'; RETURN
     END IF
@@ -2647,19 +2785,22 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Friction_Reference
 
   SUBROUTINE CD_HermiteCable_Friction_Anchors(l0, q, fr, contact_kn, seabed_z, anchors, force, &
-                                              ErrStat, ErrMsg, bathymetry, contact_frame_cs)
+                                              ErrStat, ErrMsg, bathymetry, contact_frame_cs, EA, w)
     !! Elastic-plastic friction anchors that continue a static equilibrium solved with
     !! seabed friction fr into the dynamics: the static spring force f_s of every node
     !! (CD_Seabed_Friction_Spring at its normal force in state q) and the anchor
     !! x - f_s/k at which a linear spring of the same stiffness k (contact_kn) gives f_s.
     !! force(1:2, node) returns f_s (the force the seabed exerts is -f_s).
+    !! EA, w (optional, per element): the axial stiffnesses and submerged weights per length
+    !! of the static solve, with which an as-laid reference is laid on mesh l0 as it was
+    !! there (CD_HermiteCable_Friction_Reference).
     REAL(wp), INTENT(IN) :: l0(:), q(:), contact_kn(:), seabed_z
     TYPE(CD_HermiteStaticFrictionType), INTENT(IN) :: fr
     REAL(wp), INTENT(OUT) :: anchors(:, :), force(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
-    REAL(wp), INTENT(IN), OPTIONAL :: contact_frame_cs(2)
+    REAL(wp), INTENT(IN), OPTIONAL :: contact_frame_cs(2), EA(:), w(:)
     REAL(wp), ALLOCATABLE :: ref(:, :)
     REAL(wp) :: z_floor, gxg, gyg, xg, yg, normal, normal_gap, dfd(2, 2), dfc(2), cs(2)
     INTEGER :: node, ix, nn, es
@@ -2686,7 +2827,8 @@ CONTAINS
       END IF
     END IF
     ALLOCATE (ref(2, nn))
-    CALL CD_HermiteCable_Friction_Reference(fr, l0, q(1:2), ref, ErrStat, ErrMsg)
+    CALL CD_HermiteCable_Friction_Reference(fr, l0, q(1:2), ref, ErrStat, ErrMsg, EA=EA, w=w, node_kn=contact_kn, &
+                                            bathymetry=bathymetry)
     IF (ErrStat /= CD_HCSTAT_OK) THEN
       ErrMsg = 'CD_HermiteCable_Friction_Anchors: '//TRIM(ErrMsg); RETURN
     END IF
@@ -3088,7 +3230,7 @@ CONTAINS
       picard_ok = ErrStat == CD_HCSTAT_OK
       IF (picard_ok) THEN
         CALL full_fixed_point(picard_ok)
-        IF (.NOT. picard_ok) first_msg = 'current drag fixed point not reached: '// &
+        IF (.NOT. picard_ok) first_msg = TRIM(fixed_point_name())//' not reached: '// &
                                          TRIM(compression_note(q))//TRIM(em)
       ELSE
         first_msg = ErrMsg
@@ -3139,15 +3281,21 @@ CONTAINS
           ! Formatted into a short buffer: the assembled message may exceed ErrMsg and is
           ! truncated by the assignment (an internal WRITE past the record length aborts).
           WRITE (frac_txt, '(F6.3)') cur_frac
-          ErrMsg = 'CD_HermiteCable_Static_Solve_Continuation: current load stepping stopped at drag '// &
-                   'fraction '//TRIM(ADJUSTL(frac_txt))//': '//TRIM(compression_note(q))//TRIM(em)// &
-                   ' (with the current along the homotopy: '//TRIM(first_msg)//')'
+          IF (current_has_drag(current)) THEN
+            ErrMsg = 'CD_HermiteCable_Static_Solve_Continuation: current load stepping stopped at drag '// &
+                     'fraction '//TRIM(ADJUSTL(frac_txt))//': '//TRIM(compression_note(q))//TRIM(em)// &
+                     ' (with the current along the homotopy: '//TRIM(first_msg)//')'
+          ELSE
+            ErrMsg = 'CD_HermiteCable_Static_Solve_Continuation: seabed friction load stepping stopped at '// &
+                     'load fraction '//TRIM(ADJUSTL(frac_txt))//': '//TRIM(em)// &
+                     ' (with the friction along the homotopy: '//TRIM(first_msg)//')'
+          END IF
           q_out = q; RETURN
         END IF
         CALL full_fixed_point(picard_ok)
         IF (.NOT. picard_ok) THEN
           ErrStat = CD_HCSTAT_NOCONVERGE
-          ErrMsg = 'CD_HermiteCable_Static_Solve_Continuation: current drag fixed point not reached: '// &
+          ErrMsg = 'CD_HermiteCable_Static_Solve_Continuation: '//TRIM(fixed_point_name())//' not reached: '// &
                    TRIM(compression_note(q))//TRIM(em)
           q_out = q; RETURN
         END IF
@@ -3352,6 +3500,25 @@ CONTAINS
       note = current_compression_note(l0, EA, qx, seabed_z, flat, use_fric)
     END FUNCTION compression_note
 
+    FUNCTION fixed_point_name() RESULT(name)
+      !! The frozen-load fixed point of this solve in its messages: the current drag, or the
+      !! seabed friction a zero-velocity carrier holds in still water.
+      CHARACTER(40) :: name
+      name = 'seabed friction fixed point'
+      IF (PRESENT(current)) THEN
+        IF (current_has_drag(current)) name = 'current drag fixed point'
+      END IF
+    END FUNCTION fixed_point_name
+
+    FUNCTION fraction_name() RESULT(name)
+      !! The continuation parameter of the load steps in messages (see fixed_point_name).
+      CHARACTER(16) :: name
+      name = 'load fraction'
+      IF (PRESENT(current)) THEN
+        IF (current_has_drag(current)) name = 'drag fraction'
+      END IF
+    END FUNCTION fraction_name
+
     SUBROUTINE drag_arclength(ok)
       !! Pseudo-arclength continuation of F(q, lambda) = R(q; lambda * drag) = 0 in the drag
       !! fraction lambda, from the last converged state (q, cur_frac) to lambda = 1, passing
@@ -3426,7 +3593,8 @@ CONTAINS
         IF (.NOT. conv) THEN
           ds = 0.5_wp*ds
           IF (ds < DS_MIN .OR. iters_out >= iteration_budget) THEN
-            WRITE (em, '(A,F6.3,A)') 'stalled at drag fraction ', lam, ' (arclength step below its minimum)'
+            WRITE (em, '(A,F6.3,A)') 'stalled at '//TRIM(fraction_name())//' ', lam, &
+              ' (arclength step below its minimum)'
             RETURN
           END IF
           CYCLE
@@ -3468,11 +3636,11 @@ CONTAINS
         tl = tl_new
         IF (n_corr <= 4) ds = MIN(DS_MAX, 1.5_wp*ds)
         IF (iters_out >= iteration_budget) THEN
-          WRITE (em, '(A,F6.3)') 'iteration budget exhausted at drag fraction ', lam
+          WRITE (em, '(A,F6.3)') 'iteration budget exhausted at '//TRIM(fraction_name())//' ', lam
           RETURN
         END IF
       END DO
-      WRITE (em, '(A,F6.3)') 'step limit reached at drag fraction ', lam
+      WRITE (em, '(A,F6.3)') 'step limit reached at '//TRIM(fraction_name())//' ', lam
     END SUBROUTINE drag_arclength
 
     SUBROUTINE arc_assemble(qx, lamx, resx, esx)
@@ -3633,14 +3801,27 @@ CONTAINS
       REAL(wp), INTENT(IN) :: qx(:)
       REAL(wp), INTENT(OUT) :: cap(:)
       REAL(wp) :: z_floor, gxg, gyg, xg, yg, normal, normal_gap, trib_k, cs(2), mu_c, q_c, gq_c(2)
-      REAL(wp), ALLOCATABLE :: fr_ref_c(:, :)
+      REAL(wp), ALLOCATABLE :: fr_ref_c(:, :), kn_c(:)
       INTEGER :: k, es_c
       CHARACTER(200) :: em_c
       cs = [CD_ONE, CD_ZERO]
       IF (PRESENT(contact_frame_cs)) cs = contact_frame_cs
       IF (current%friction%mu_axial > CD_ZERO .AND. ABS(current%friction%mu_axial - current%friction%mu) > CD_ZERO) THEN
         ALLOCATE (fr_ref_c(2, nn))
-        CALL CD_HermiteCable_Friction_Reference(current%friction, l0, qx(1:2), fr_ref_c, es_c, em_c)
+        ! an as-laid reference laid on this mesh, as the solve lays it (with its nodal
+        ! seabed stiffnesses: contact_kn, or kn times the tributary length)
+        ALLOCATE (kn_c(nn))
+        IF (PRESENT(contact_kn)) THEN
+          kn_c = contact_kn
+        ELSE
+          kn_c = CD_ZERO
+          DO k = 1, ne
+            kn_c(k:k + 1) = kn_c(k:k + 1) + 0.5_wp*l0(k)
+          END DO
+          kn_c = kn*kn_c
+        END IF
+        CALL CD_HermiteCable_Friction_Reference(current%friction, l0, qx(1:2), fr_ref_c, es_c, em_c, EA=EA, w=w, &
+                                                node_kn=kn_c, bathymetry=bathymetry)
         IF (es_c /= CD_HCSTAT_OK) DEALLOCATE (fr_ref_c)
       END IF
       DO k = 1, nn
@@ -6017,7 +6198,7 @@ CONTAINS
     LOGICAL, ALLOCATABLE :: axial_marks(:)
     CHARACTER(LEN(ErrMsg)) :: emloc
     LOGICAL :: contact_active, polish_initial, must_resolve, must_be_tensile, refine_other
-    LOGICAL :: needs_refinement, local_axial
+    LOGICAL :: needs_refinement, local_axial, in_drag
     REAL(wp) :: contact_cs(2)
     ! Local axial refinement guards: an element budget and a no-progress stop, so a
     ! genuinely compressive equilibrium cannot grow the mesh geometrically.
@@ -6238,7 +6419,10 @@ CONTAINS
       CALL solve_level(l0r, EAr, EIr, wr, qr, fixedr, contact_diam_r, dry_r, &
                        qnew, curvnew, res_out, it, es, emloc, .TRUE.)
       iters_out = iters_out + it
-      IF (es /= CD_HCSTAT_OK .AND. local_axial .AND. .NOT. PRESENT(current)) THEN
+      ! (a still-water carrier of the as-laid friction is no current here)
+      in_drag = .FALSE.
+      IF (PRESENT(current)) in_drag = current_has_drag(current)
+      IF (es /= CD_HCSTAT_OK .AND. local_axial .AND. .NOT. in_drag) THEN
         ! The tensile refinement of a compressive state could not be carried further: the
         ! last converged (parent-mesh) state keeps its compression, which is what the
         ! tensile contract rejects below (or returns, when advisory).

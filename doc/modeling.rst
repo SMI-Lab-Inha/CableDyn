@@ -157,8 +157,8 @@ tension gradient, penetrated seabed, broken symmetry, or unresolved curvature pe
 With seabed friction (``frictionMu``) the static solve is frictionless in still water by
 default, as in MoorDyn, which is conservative for anchor loads. ``asLaid staticsFriction``
 holds the grounded run toward the position in which the line was laid, as OrcaFlex's *as laid*
-policy does: then decide how the line was laid (``layAzimuth``, by default from the anchor
-toward the fairlead) and at what tension (``asLaidTension``, by default slack), because the
+policy does: then decide how the line was laid (``layAzimuth``, by default along the chord
+from its lower end, normally the anchor) and at what tension (``asLaidTension``, by default slack), because the
 anchor tension depends on it: a run laid slack and pulled taut is held back by friction. See
 :ref:`friction in statics <static-friction>`.
 

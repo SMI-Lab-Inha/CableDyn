@@ -40,9 +40,14 @@ driver:
   ``asLaidTension<ID>`` over ``asLaidTension``, in either order), and a row for line 2 leaves
   line 1 alone; ``aniso_*``: the axial coefficient rules the friction along a laid run;
   ``multi``: a three-section line of different weights keeps every grounded node within mu N;
+* ``refined`` (a finite-EI line of two sections laid at a tension on a seabed curved along it and
+  sloping across it, on a deck mesh the adaptive refinement takes 16x finer): the reference is laid
+  on the refined mesh, so the run rests where its twin declared on that mesh does (positions to
+  1e-6 m, end forces) and a march from it stays at rest;
 * input checks: ``layAzimuth<ID>`` of a line that does not exist (also one too large for an
   integer), an unknown suffix and an unknown policy are rejected, and the ``<ID>`` rows take
-  effect.
+  effect; a finite-EI line shared between two turbines (End B not Fixed, the compatibility route,
+  whose statics have no seabed friction) rejects asLaid by name and runs with none.
 
 usage: test_static_friction_as_laid.py --exe <cabledyn> --output <dir>
 """
@@ -605,6 +610,51 @@ def main() -> int:
               "multi: friction mobilised to mu N in the light section and beyond in the heavy (%.3f, %.3f)"
               % (by_sec[1][0], by_sec[2][0]))
 
+    # --- a refined mesh is laid as its own deck would be ---
+    # A finite-EI line of two sections (the light one grounded at the anchor end) laid at a
+    # tension on a seabed curved along the line and sloping across it, on a 20 m deck mesh that
+    # the adaptive refinement takes to 1.25 m (16x). The friction reference of the refined solve
+    # is laid on the refined mesh itself (path, sink under each node's lumped weight over its
+    # seabed stiffness, turning force of the laid tension), so the run reaches the equilibrium
+    # of its twin declared on that 1.25 m mesh to solver precision. A reference interpolated
+    # from the 20 m deck nodes misplaces the sink of the refined nodes next to the section
+    # change (about 1 mm across the slope) and the turning force along the curved floor, which
+    # moves the run (the lateral anchor force changes sign, AnchTen moves by about 8 N). The
+    # refined run marched for 1 s stays at rest.
+    cdir = root / "refined"
+    cdir.mkdir(parents=True, exist_ok=True)
+    rows = ["%.1f %.1f %.12g" % (x, y, 200.0 + 1.0e-4 * x * x + 0.05 * y)
+            for x in range(-300, 1000, 10) for y in (-300.0, 300.0)]
+    (cdir / "bathy.txt").write_text("\n".join(rows) + "\n", encoding="utf-8", newline="\n")
+    rtypes = (f"chain {d} {m} {ea} -1 1.0e4 1.37 0.64 1 0\n"
+              f"light {light[0]} {light[1]} {light[2]} -1 1.0e4 1.2 0.6 1 0\n")
+    rpos = {}
+    for tag, nseg, extra in (("coarse", 20, "True adaptive_mesh\n"), ("fine", 320, "")):
+        rd = dict(ei=1.0e4, length=400.0, nseg=nseg, fair=(300, 0, -10), anch=(0, 0, -200), seabed=sb, mu=0.5,
+                  types=rtypes, sections="1 chain 300 %d\n1 light 100 %d\n" % (nseg * 3 // 4, nseg // 4))
+        ex = extra + "50000 asLaidTension\n"
+        rc, log = run(a.exe, cdir, tag, deck("refined " + tag, **rd, extra=ex))
+        check(rc == 0, "refined %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+        if rc != 0:
+            continue
+        p = first_row(cdir / (tag + ".Line1.p.out"))
+        rpos[tag] = ([p[3 * i:3 * i + 3] for i in range(len(p) // 3)], table(cdir / (tag + ".out"))[0])
+        if tag == "coarse":
+            check(len(rpos[tag][0]) == 321, "refined: the 20-element deck mesh is refined to 320 elements (%d nodes)"
+                  % len(rpos[tag][0]))
+            rc, _ = run(a.exe, cdir, "coarse_rest", deck("refined rest", **rd, extra=ex, tmax=1.0))
+            check(rc == 0, "refined at-rest march runs (rc %d)" % rc)
+            if rc == 0:
+                drift = at_rest(cdir, "coarse", "coarse_rest")
+                check(drift <= REST_TOL, "refined stays at rest from the static state (drift %.2e)" % drift)
+    if len(rpos) == 2 and len(rpos["coarse"][0]) == len(rpos["fine"][0]):
+        dpos = max(abs(u[k] - v[k]) for u, v in zip(rpos["coarse"][0], rpos["fine"][0]) for k in range(3))
+        check(dpos < 1.0e-6, "refined: the refined run rests where its twin on the refined mesh does (%.1e m)" % dpos)
+        rc_, rf_ = rpos["coarse"][1], rpos["fine"][1]
+        check(same(rc_, rf_, ("FairTen1", "AnchTen1", "Point2Fx"), 1.0e-7) and abs(rc_["Point2Fy"] - rf_["Point2Fy"]) < 0.1,
+              "refined: end forces as on the refined mesh (AnchTen %.6g / %.6g N, anchor Fy %.4g / %.4g N)"
+              % (rc_["AnchTen1"], rf_["AnchTen1"], rc_["Point2Fy"], rf_["Point2Fy"]))
+
     # --- input checks ---
     cdir = root / "inputs"
     rc, log = run(a.exe, cdir, "badid", deck("bad id", **flat, extra="30.0 layAzimuth9\n"))
@@ -641,6 +691,22 @@ def main() -> int:
     rc, log = run(a.exe, cdir, "shadowaz", deck("shadowed azimuth", **flat,
                                               extra="nan layAzimuth1\n30.0 layAzimuth1\n"))
     check(rc != 0 and "layAzimuth1" in log, "a NaN layAzimuth1 shadowed by a valid row is rejected")
+
+    # a finite-EI line shared between two turbines (End B not Fixed) runs the compatibility route,
+    # whose statics carry no seabed friction: asLaid fails closed there by name, none runs
+    shared = dict(ei=1.0e4, length=600.0, nseg=60, fair=(0, 0, -10), anch=(0, 0, -10), seabed="200.0 WtrDpth", mu=0.5)
+    for tag, extra in (("shared", ""), ("shared_none", "none staticsFriction\n")):
+        txt = deck("shared " + tag, **shared, extra=extra, tmax=0.2)
+        txt = txt.replace("1 Coupled", "1 Turbine1").replace("2 Fixed", "2 Turbine2")
+        txt = txt.replace("--------------------- LINES ---",
+                          "--------------------- TURBINES ---\nJ X0 Y0 Z0\n(-) (m) (m) (m)\n1 0 0 0\n2 300 0 0\n"
+                          "--------------------- LINES ---")
+        txt = txt.replace('"Point1Fx"\n"Point1Fy"\n"Point1Fz"\n"Point2Fx"\n"Point2Fy"\n"Point2Fz"\n', "")
+        rc, log = run(a.exe, cdir, tag, txt)
+        if tag == "shared":
+            check(rc != 0 and "moving End B" in log, "asLaid on a line with a moving End B (shared line) is rejected")
+        else:
+            check(rc == 0, "the shared line runs with staticsFriction none (rc %d)" % rc)
 
     print("static friction as laid: %d failure(s)" % len(FAILURES))
     return 1 if FAILURES else 0
