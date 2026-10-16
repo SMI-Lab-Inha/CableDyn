@@ -267,24 +267,35 @@ CONTAINS
   END SUBROUTINE CD_Cable_Morison_Drag_Force
 
   SUBROUTINE CD_Morison_Drag_Element_Load(qa, qb, va, vb, l0, fluid_a, fluid_b, wl_a, wl_b, &
-                                          rho, diameter, cdn, cdt, force, jac_q, jac_v, ErrStat, ErrMsg)
+                                          rho, diameter, cdn, cdt, force, jac_q, jac_v, ErrStat, ErrMsg, &
+                                          inputs_validated)
     !! Two-node Morison drag element kernel for performance-critical model assembly.
     !!
     !! This routine is formula-identical to the one-element path of
     !! CD_Cable_Morison_Drag_Load, but avoids cable-wide shape validation and
     !! reshape/scatter work inside Newton iterations.
+    !! `inputs_validated` is an internal hot-path contract (as in CD_Component_Wave_Kinematics),
+    !! shared by the element kernels below: a caller that already guarantees finite state,
+    !! fields and waterlines, a positive l0 and valid section scalars skips the per-element
+    !! input scan. The default remains full validation for public/direct calls.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), va(3), vb(3), l0, fluid_a(3), fluid_b(3), wl_a, wl_b
     REAL(wp), INTENT(IN) :: rho, diameter, cdn, cdt
     REAL(wp), INTENT(OUT) :: force(6), jac_q(6, 6), jac_v(6, 6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated
     INTEGER :: k
     REAL(wp) :: za, zb, frac, dfrac_da, dfrac_db, chord(3), length, tangent(3)
     REAL(wp) :: wa, wb, dwa_da, dwa_db, dwb_da, dwb_db, rel(3), f_per_len(3), Jrel(3, 3)
     REAL(wp) :: ga(3), gb(3), scale, dscale, drel(3), df(3), proj(3, 3)
 
-    CALL validate_drag_element_inputs(qa, qb, va, vb, l0, fluid_a, fluid_b, wl_a, wl_b, &
-                                      rho, diameter, cdn, cdt, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_drag_element_inputs(qa, qb, va, vb, l0, fluid_a, fluid_b, wl_a, wl_b, &
+                                        rho, diameter, cdn, cdt, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     jac_q = CD_ZERO
     jac_v = CD_ZERO
@@ -374,18 +385,24 @@ CONTAINS
   END SUBROUTINE CD_Morison_Drag_Element_Load
 
   SUBROUTINE CD_Morison_Drag_Element_Force(qa, qb, va, vb, l0, fluid_a, fluid_b, wl_a, wl_b, &
-                                           rho, diameter, cdn, cdt, force, ErrStat, ErrMsg)
+                                           rho, diameter, cdn, cdt, force, ErrStat, ErrMsg, inputs_validated)
     !! Two-node Morison drag force kernel for residual-only trial evaluations.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), va(3), vb(3), l0, fluid_a(3), fluid_b(3), wl_a, wl_b
     REAL(wp), INTENT(IN) :: rho, diameter, cdn, cdt
     REAL(wp), INTENT(OUT) :: force(6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
     REAL(wp) :: za, zb, frac, chord(3), length, tangent(3), wa, wb, lower, higher
     REAL(wp) :: fluid_e(3), rel(3), f_per_len(3)
 
-    CALL validate_drag_element_inputs(qa, qb, va, vb, l0, fluid_a, fluid_b, wl_a, wl_b, &
-                                      rho, diameter, cdn, cdt, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_drag_element_inputs(qa, qb, va, vb, l0, fluid_a, fluid_b, wl_a, wl_b, &
+                                        rho, diameter, cdn, cdt, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     IF (ErrStat /= CD_HYDRO_OK) RETURN
 
@@ -550,21 +567,29 @@ CONTAINS
   END SUBROUTINE CD_Cable_Froude_Krylov_Force
 
   SUBROUTINE CD_Froude_Krylov_Element_Load(qa, qb, va, vb, l0, accel_a, accel_b, wl_a, wl_b, &
-                                           rho, diameter, can, cat, force, jac_q, jac_v, ErrStat, ErrMsg)
+                                           rho, diameter, can, cat, force, jac_q, jac_v, ErrStat, ErrMsg, &
+                                           inputs_validated)
     !! Two-node Froude-Krylov/fluid-inertia load and residual Jacobian.
+    !! The load is velocity-independent: jac_v is identically zero.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), va(3), vb(3), l0, accel_a(3), accel_b(3), wl_a, wl_b
     REAL(wp), INTENT(IN) :: rho, diameter, can, cat
     REAL(wp), INTENT(OUT) :: force(6), jac_q(6, 6), jac_v(6, 6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
     INTEGER :: k, lo0, hi0, col_a, col_b
     REAL(wp) :: za, zb, frac, df_da, df_db, chord(3), length, tangent(3), proj(3, 3), dt(3), zero_dt(3)
     REAL(wp) :: f_lo(3), f_hi(3), df_lo(3), df_hi(3), df_node_lo(3), df_node_hi(3)
     REAL(wp) :: c_lolo, c_lohi, c_hihi, dc_lolo, dc_lohi, dc_hihi, df_frac, eye(3, 3)
     REAL(wp) :: acc_lo(3), acc_hi(3)
 
-    CALL validate_fk_element_inputs(qa, qb, va, vb, l0, accel_a, accel_b, wl_a, wl_b, &
-                                    rho, diameter, can, cat, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_fk_element_inputs(qa, qb, va, vb, l0, accel_a, accel_b, wl_a, wl_b, &
+                                      rho, diameter, can, cat, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     jac_q = CD_ZERO
     jac_v = CD_ZERO
@@ -629,19 +654,28 @@ CONTAINS
   END SUBROUTINE CD_Froude_Krylov_Element_Load
 
   SUBROUTINE CD_Froude_Krylov_Element_Force(qa, qb, va, vb, l0, accel_a, accel_b, wl_a, wl_b, &
-                                            rho, diameter, can, cat, force, ErrStat, ErrMsg)
-    !! Two-node Froude-Krylov/fluid-inertia force.
+                                            rho, diameter, can, cat, force, ErrStat, ErrMsg, inputs_validated)
+    !! Two-node Froude-Krylov/fluid-inertia force. The per-length force is
+    !! CD_Froude_Krylov_Per_Length evaluated with its shared statements: the section scalars
+    !! and accelerations are validated once (or by the caller) and only the tangent checks of
+    !! unit_tangent can still fail, so the unit tangent is formed once for both end nodes.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), va(3), vb(3), l0, accel_a(3), accel_b(3), wl_a, wl_b
     REAL(wp), INTENT(IN) :: rho, diameter, can, cat
     REAL(wp), INTENT(OUT) :: force(6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
     INTEGER :: lo0, hi0
     REAL(wp) :: za, zb, frac, chord(3), length, tangent(3), acc_lo(3), acc_hi(3), f_lo(3), f_hi(3)
-    REAL(wp) :: c_lolo, c_lohi, c_hihi, f
+    REAL(wp) :: c_lolo, c_lohi, c_hihi, f, unit(3), normal(3), tangential(3)
 
-    CALL validate_fk_element_inputs(qa, qb, va, vb, l0, accel_a, accel_b, wl_a, wl_b, &
-                                    rho, diameter, can, cat, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_fk_element_inputs(qa, qb, va, vb, l0, accel_a, accel_b, wl_a, wl_b, &
+                                      rho, diameter, can, cat, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     IF (ErrStat /= CD_HYDRO_OK) RETURN
     za = qa(3) - wl_a
@@ -666,10 +700,12 @@ CONTAINS
       acc_lo = accel_b
       acc_hi = accel_a
     END IF
-    CALL CD_Froude_Krylov_Per_Length(acc_lo, tangent, rho, diameter, can, cat, f_lo, ErrStat, ErrMsg)
+    CALL unit_tangent(tangent, unit, ErrStat, ErrMsg)
     IF (ErrStat /= CD_HYDRO_OK) RETURN
-    CALL CD_Froude_Krylov_Per_Length(acc_hi, tangent, rho, diameter, can, cat, f_hi, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_HYDRO_OK) RETURN
+    CALL split_about_unit(acc_lo, unit, normal, tangential)
+    CALL fk_force_from_split(normal, tangential, rho, diameter, can, cat, f_lo)
+    CALL split_about_unit(acc_hi, unit, normal, tangential)
+    CALL fk_force_from_split(normal, tangential, rho, diameter, can, cat, f_hi)
     f = frac
     c_lolo = l0*(f - f*f + f**3/3.0_wp)
     c_lohi = l0*(0.5_wp*f*f - f**3/3.0_wp)
@@ -757,15 +793,22 @@ CONTAINS
   END SUBROUTINE CD_Cable_Buoyancy_Recovery_Force
 
   SUBROUTINE CD_Buoyancy_Recovery_Element_Load(qa, qb, l0, wl_a, wl_b, rho, diameter, gravity, &
-                                               force, jac_q, jac_v, ErrStat, ErrMsg)
+                                               force, jac_q, jac_v, ErrStat, ErrMsg, inputs_validated)
     !! Two-node wetting-dependent buoyancy recovery force and residual Jacobian.
+    !! The load is velocity-independent: jac_v is identically zero.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), l0, wl_a, wl_b, rho, diameter, gravity
     REAL(wp), INTENT(OUT) :: force(6), jac_q(6, 6), jac_v(6, 6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
     REAL(wp) :: za, zb, frac, df_da, df_db, half_g, recovery, buoyancy, drec_da, drec_db
 
-    CALL validate_buoyancy_element_inputs(qa, qb, l0, wl_a, wl_b, rho, diameter, gravity, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_buoyancy_element_inputs(qa, qb, l0, wl_a, wl_b, rho, diameter, gravity, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     jac_q = CD_ZERO
     jac_v = CD_ZERO
@@ -787,15 +830,21 @@ CONTAINS
   END SUBROUTINE CD_Buoyancy_Recovery_Element_Load
 
   SUBROUTINE CD_Buoyancy_Recovery_Element_Force(qa, qb, l0, wl_a, wl_b, rho, diameter, gravity, &
-                                                force, ErrStat, ErrMsg)
+                                                force, ErrStat, ErrMsg, inputs_validated)
     !! Two-node wetting-dependent buoyancy recovery force.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), l0, wl_a, wl_b, rho, diameter, gravity
     REAL(wp), INTENT(OUT) :: force(6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
     REAL(wp) :: za, zb, frac, half_g, recovery, buoyancy
 
-    CALL validate_buoyancy_element_inputs(qa, qb, l0, wl_a, wl_b, rho, diameter, gravity, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_buoyancy_element_inputs(qa, qb, l0, wl_a, wl_b, rho, diameter, gravity, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     IF (ErrStat /= CD_HYDRO_OK) RETURN
     za = qa(3) - wl_a
@@ -1026,20 +1075,26 @@ CONTAINS
   END SUBROUTINE CD_Cable_Added_Mass_Force
 
   SUBROUTINE CD_Added_Mass_Element(qa, qb, accel_a, accel_b, l0, wl_a, wl_b, rho, diameter, can, cat, &
-                                   M_add, dMa_a_dq, ErrStat, ErrMsg)
+                                   M_add, dMa_a_dq, ErrStat, ErrMsg, inputs_validated)
     !! Two-node added-mass matrix and directional derivative kernel.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), accel_a(3), accel_b(3), l0, wl_a, wl_b
     REAL(wp), INTENT(IN) :: rho, diameter, can, cat
     REAL(wp), INTENT(OUT) :: M_add(6, 6), dMa_a_dq(6, 6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
     INTEGER :: lo0, hi0
     REAL(wp) :: za, zb, frac, df_da, df_db, chord(3), length, tangent(3), proj(3, 3), zero_dt(3)
     REAL(wp) :: Me(3, 3), dMe(3, 3), acc_lo(3), acc_hi(3)
     REAL(wp) :: c_lolo, c_lohi, c_hihi, dc_lolo, dc_lohi, dc_hihi, eye(3, 3)
 
-    CALL validate_added_mass_element_inputs(qa, qb, accel_a, accel_b, l0, wl_a, wl_b, &
-                                            rho, diameter, can, cat, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_added_mass_element_inputs(qa, qb, accel_a, accel_b, l0, wl_a, wl_b, &
+                                              rho, diameter, can, cat, ErrStat, ErrMsg)
+    END IF
     M_add = CD_ZERO
     dMa_a_dq = CD_ZERO
     IF (ErrStat /= CD_HYDRO_OK) RETURN
@@ -1115,34 +1170,40 @@ CONTAINS
     END BLOCK
   END SUBROUTINE CD_Added_Mass_Element
 
-  SUBROUTINE CD_Added_Mass_Element_Matrix(qa, qb, l0, wl_a, wl_b, rho, diameter, can, cat, M_add, ErrStat, ErrMsg)
+  SUBROUTINE CD_Added_Mass_Element_Matrix(qa, qb, l0, wl_a, wl_b, rho, diameter, can, cat, M_add, ErrStat, ErrMsg, &
+                                          inputs_validated)
     !! Two-node configuration-dependent Morison added-mass matrix without
     !! d(M*a)/dq work. Used by initial-acceleration solves where the supplied
-    !! acceleration is exactly zero but the mass matrix is still needed.
+    !! acceleration is exactly zero but the mass matrix is still needed. The per-length
+    !! matrix is CD_Morison_Added_Mass_Per_Length evaluated with its shared statements once
+    !! the section scalars are validated (only the tangent checks of unit_tangent remain).
     REAL(wp), INTENT(IN) :: qa(3), qb(3), l0, wl_a, wl_b
     REAL(wp), INTENT(IN) :: rho, diameter, can, cat
     REAL(wp), INTENT(OUT) :: M_add(6, 6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
 
     INTEGER :: lo0, hi0
-    REAL(wp) :: za, zb, frac, chord(3), length, tangent(3), Me(3, 3)
+    REAL(wp) :: za, zb, frac, chord(3), length, tangent(3), Me(3, 3), unit(3)
     REAL(wp) :: c_lolo, c_lohi, c_hihi
 
     M_add = CD_ZERO
     ErrStat = CD_HYDRO_OK
     ErrMsg = ''
-    IF (.NOT. (CD_All_Finite(qa) .AND. CD_All_Finite(qb) .AND. &
-               CD_Is_Finite(l0) .AND. l0 > CD_ZERO .AND. CD_Is_Finite(wl_a) .AND. &
-               CD_Is_Finite(wl_b))) THEN
-      CALL fail(ErrStat, ErrMsg, 'added-mass element matrix geometry must be finite')
-      RETURN
-    END IF
-    CALL validate_hydro_scalars(rho, diameter, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_HYDRO_OK) RETURN
-    IF (.NOT. (CD_Is_Finite(can) .AND. CD_Is_Finite(cat) .AND. can >= CD_ZERO .AND. cat >= CD_ZERO)) THEN
-      CALL fail(ErrStat, ErrMsg, 'added-mass coefficients must be finite and non-negative')
-      RETURN
+    IF (.NOT. trusted(inputs_validated)) THEN
+      IF (.NOT. (CD_All_Finite(qa) .AND. CD_All_Finite(qb) .AND. &
+                 CD_Is_Finite(l0) .AND. l0 > CD_ZERO .AND. CD_Is_Finite(wl_a) .AND. &
+                 CD_Is_Finite(wl_b))) THEN
+        CALL fail(ErrStat, ErrMsg, 'added-mass element matrix geometry must be finite')
+        RETURN
+      END IF
+      CALL validate_hydro_scalars(rho, diameter, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HYDRO_OK) RETURN
+      IF (.NOT. (CD_Is_Finite(can) .AND. CD_Is_Finite(cat) .AND. can >= CD_ZERO .AND. cat >= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'added-mass coefficients must be finite and non-negative')
+        RETURN
+      END IF
     END IF
 
     za = qa(3) - wl_a
@@ -1163,8 +1224,9 @@ CONTAINS
       lo0 = 4
       hi0 = 1
     END IF
-    CALL CD_Morison_Added_Mass_Per_Length(tangent, rho, diameter, can, cat, Me, ErrStat, ErrMsg)
+    CALL unit_tangent(tangent, unit, ErrStat, ErrMsg)
     IF (ErrStat /= CD_HYDRO_OK) RETURN
+    CALL added_mass_about_unit(unit, rho, diameter, can, cat, Me)
     CALL wet_consistent_coefficients(l0, frac, c_lolo, c_lohi, c_hihi)
     M_add(lo0:lo0 + 2, lo0:lo0 + 2) = M_add(lo0:lo0 + 2, lo0:lo0 + 2) + c_lolo*Me
     M_add(lo0:lo0 + 2, hi0:hi0 + 2) = M_add(lo0:lo0 + 2, hi0:hi0 + 2) + c_lohi*Me
@@ -1173,19 +1235,26 @@ CONTAINS
   END SUBROUTINE CD_Added_Mass_Element_Matrix
 
   SUBROUTINE CD_Added_Mass_Element_Force(qa, qb, accel_a, accel_b, l0, wl_a, wl_b, rho, diameter, can, cat, &
-                                         force, ErrStat, ErrMsg)
-    !! Two-node added-mass product M_add(q)*accel for residual-only evaluations.
+                                         force, ErrStat, ErrMsg, inputs_validated)
+    !! Two-node added-mass product M_add(q)*accel for residual-only evaluations. The
+    !! per-length matrix is formed as in CD_Added_Mass_Element_Matrix.
     REAL(wp), INTENT(IN) :: qa(3), qb(3), accel_a(3), accel_b(3), l0, wl_a, wl_b
     REAL(wp), INTENT(IN) :: rho, diameter, can, cat
     REAL(wp), INTENT(OUT) :: force(6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated   !! see CD_Morison_Drag_Element_Load
     INTEGER :: lo0, hi0
-    REAL(wp) :: za, zb, frac, chord(3), length, tangent(3), Me(3, 3)
+    REAL(wp) :: za, zb, frac, chord(3), length, tangent(3), Me(3, 3), unit(3)
     REAL(wp) :: c_lolo, c_lohi, c_hihi, acc_lo(3), acc_hi(3)
 
-    CALL validate_added_mass_element_inputs(qa, qb, accel_a, accel_b, l0, wl_a, wl_b, &
-                                            rho, diameter, can, cat, ErrStat, ErrMsg)
+    IF (trusted(inputs_validated)) THEN
+      ErrStat = CD_HYDRO_OK
+      ErrMsg = ''
+    ELSE
+      CALL validate_added_mass_element_inputs(qa, qb, accel_a, accel_b, l0, wl_a, wl_b, &
+                                              rho, diameter, can, cat, ErrStat, ErrMsg)
+    END IF
     force = CD_ZERO
     IF (ErrStat /= CD_HYDRO_OK) RETURN
 
@@ -1211,8 +1280,9 @@ CONTAINS
       acc_lo = accel_b
       acc_hi = accel_a
     END IF
-    CALL CD_Morison_Added_Mass_Per_Length(tangent, rho, diameter, can, cat, Me, ErrStat, ErrMsg)
+    CALL unit_tangent(tangent, unit, ErrStat, ErrMsg)
     IF (ErrStat /= CD_HYDRO_OK) RETURN
+    CALL added_mass_about_unit(unit, rho, diameter, can, cat, Me)
     CALL wet_consistent_coefficients(l0, frac, c_lolo, c_lohi, c_hihi)
     force(lo0:lo0 + 2) = c_lolo*MATMUL(Me, acc_lo) + c_lohi*MATMUL(Me, acc_hi)
     force(hi0:hi0 + 2) = c_lohi*MATMUL(Me, acc_lo) + c_hihi*MATMUL(Me, acc_hi)
@@ -1225,7 +1295,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: normal(3), tangential(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: unit(3), dot_vt
+    REAL(wp) :: unit(3)
 
     normal = CD_ZERO
     tangential = CD_ZERO
@@ -1237,9 +1307,7 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'vector must be finite')
       RETURN
     END IF
-    dot_vt = DOT_PRODUCT(vector, unit)
-    tangential = dot_vt*unit
-    normal = vector - tangential
+    CALL split_about_unit(vector, unit, normal, tangential)
   END SUBROUTINE CD_Split_Normal_Tangential
 
   SUBROUTINE CD_Morison_Drag_Per_Length(rel_velocity, tangent, rho, diameter, cdn, cdt, &
@@ -1366,7 +1434,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: M_a(3, 3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: unit(3), q_outer(3, 3), eye(3, 3), area
+    REAL(wp) :: unit(3)
 
     M_a = CD_ZERO
     ErrStat = CD_HYDRO_OK
@@ -1379,10 +1447,7 @@ CONTAINS
     END IF
     CALL unit_tangent(tangent, unit, ErrStat, ErrMsg)
     IF (ErrStat /= CD_HYDRO_OK) RETURN
-    eye = identity3()
-    q_outer = outer3(unit, unit)
-    area = 0.25_wp*PI*diameter*diameter
-    M_a = rho*area*(can*(eye - q_outer) + cat*q_outer)
+    CALL added_mass_about_unit(unit, rho, diameter, can, cat, M_a)
   END SUBROUTINE CD_Morison_Added_Mass_Per_Length
 
   SUBROUTINE CD_Froude_Krylov_Per_Length(fluid_acceleration, tangent, rho, diameter, can, cat, &
@@ -1393,7 +1458,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: force(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: normal(3), tangential(3), area
+    REAL(wp) :: normal(3), tangential(3)
 
     force = CD_ZERO
     ErrStat = CD_HYDRO_OK
@@ -1406,8 +1471,7 @@ CONTAINS
     END IF
     CALL CD_Split_Normal_Tangential(fluid_acceleration, tangent, normal, tangential, ErrStat, ErrMsg)
     IF (ErrStat /= CD_HYDRO_OK) RETURN
-    area = 0.25_wp*PI*diameter*diameter
-    force = rho*area*((CD_ONE + can)*normal + (CD_ONE + cat)*tangential)
+    CALL fk_force_from_split(normal, tangential, rho, diameter, can, cat, force)
   END SUBROUTINE CD_Froude_Krylov_Per_Length
 
   SUBROUTINE CD_Solve_Dispersion_Wavenumber(omega, depth, gravity, k, ErrStat, ErrMsg)
@@ -2363,13 +2427,15 @@ CONTAINS
 
   SUBROUTINE assemble_added_mass_matrix_only(q, elem_conn, l0, waterline_z, rho, diameter, can, cat, &
                                              M_add, ErrStat, ErrMsg)
+    !! The callers validate the section scalars first, so the per-length matrix is formed with
+    !! the statements of CD_Morison_Added_Mass_Per_Length after its tangent checks alone.
     REAL(wp), INTENT(IN) :: q(:), l0(:), waterline_z(:), rho, diameter, can, cat
     INTEGER, INTENT(IN) :: elem_conn(:, :)
     REAL(wp), INTENT(OUT) :: M_add(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, a, b, lo, hi, n_nodes
-    REAL(wp) :: frac, za, zb, chord(3), length, tangent(3), Me(3, 3)
+    REAL(wp) :: frac, za, zb, chord(3), length, tangent(3), Me(3, 3), unit(3)
     REAL(wp) :: c_lolo, c_lohi, c_hihi, f
 
     M_add = CD_ZERO
@@ -2402,8 +2468,9 @@ CONTAINS
         lo = b
         hi = a
       END IF
-      CALL CD_Morison_Added_Mass_Per_Length(tangent, rho, diameter, can, cat, Me, ErrStat, ErrMsg)
+      CALL unit_tangent(tangent, unit, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HYDRO_OK) RETURN
+      CALL added_mass_about_unit(unit, rho, diameter, can, cat, Me)
       f = frac
       c_lolo = l0(e)*(f - f*f + f**3/3.0_wp)
       c_lohi = l0(e)*(0.5_wp*f*f - f**3/3.0_wp)
@@ -2646,14 +2713,14 @@ CONTAINS
   END SUBROUTINE profile_ratios
 
   SUBROUTINE unit_tangent(tangent, unit, ErrStat, ErrMsg)
+    !! Writes ErrMsg only on failure: every caller has cleared it.
     REAL(wp), INTENT(IN) :: tangent(3)
     REAL(wp), INTENT(OUT) :: unit(3)
     INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(*), INTENT(INOUT) :: ErrMsg
     REAL(wp) :: norm
     unit = CD_ZERO
     ErrStat = CD_HYDRO_OK
-    ErrMsg = ''
     IF (.NOT. CD_All_Finite(tangent)) THEN
       CALL fail(ErrStat, ErrMsg, 'tangent must be finite')
       RETURN
@@ -2665,6 +2732,43 @@ CONTAINS
     END IF
     unit = tangent/norm
   END SUBROUTINE unit_tangent
+
+  PURE SUBROUTINE split_about_unit(vector, unit, normal, tangential)
+    !! Normal and tangential parts of vector about a unit tangent from unit_tangent.
+    REAL(wp), INTENT(IN) :: vector(3), unit(3)
+    REAL(wp), INTENT(OUT) :: normal(3), tangential(3)
+    REAL(wp) :: dot_vt
+    dot_vt = DOT_PRODUCT(vector, unit)
+    tangential = dot_vt*unit
+    normal = vector - tangential
+  END SUBROUTINE split_about_unit
+
+  PURE SUBROUTINE fk_force_from_split(normal, tangential, rho, diameter, can, cat, force)
+    !! Froude-Krylov plus fluid-inertia force per unit length from the split fluid acceleration.
+    REAL(wp), INTENT(IN) :: normal(3), tangential(3), rho, diameter, can, cat
+    REAL(wp), INTENT(OUT) :: force(3)
+    REAL(wp) :: area
+    area = 0.25_wp*PI*diameter*diameter
+    force = rho*area*((CD_ONE + can)*normal + (CD_ONE + cat)*tangential)
+  END SUBROUTINE fk_force_from_split
+
+  PURE SUBROUTINE added_mass_about_unit(unit, rho, diameter, can, cat, M_a)
+    !! Morison added-mass matrix per unit length about a unit tangent from unit_tangent.
+    REAL(wp), INTENT(IN) :: unit(3), rho, diameter, can, cat
+    REAL(wp), INTENT(OUT) :: M_a(3, 3)
+    REAL(wp) :: q_outer(3, 3), eye(3, 3), area
+    eye = identity3()
+    q_outer = outer3(unit, unit)
+    area = 0.25_wp*PI*diameter*diameter
+    M_a = rho*area*(can*(eye - q_outer) + cat*q_outer)
+  END SUBROUTINE added_mass_about_unit
+
+  PURE LOGICAL FUNCTION trusted(inputs_validated) RESULT(trust)
+    !! The value of an optional inputs_validated flag (.FALSE. when absent).
+    LOGICAL, INTENT(IN), OPTIONAL :: inputs_validated
+    trust = .FALSE.
+    IF (PRESENT(inputs_validated)) trust = inputs_validated
+  END FUNCTION trusted
 
   SUBROUTINE validate_hydro_scalars(rho, diameter, ErrStat, ErrMsg)
     REAL(wp), INTENT(IN) :: rho, diameter

@@ -3467,7 +3467,7 @@ CONTAINS
         END IF
       END IF
       ! Commit. The consistent mass follows l0 implicitly (it is applied element by
-      ! element from the committed lengths, never stored).
+      ! element from the committed lengths, and the step rebuilds its mass band when they change).
       l0_entry = model%l0(elem)
       l0_dot_entry = model%l0_dot(elem)
       f_ext_entry = model%f_ext
@@ -5884,12 +5884,18 @@ CONTAINS
       END DO
     END IF
 
+    ! q and v are finite (checked above) and every element input the kernels validate -- l0,
+    ! the damping coefficients, the nodal fluid fields and waterlines, and the section scalars --
+    ! is validated wherever the model sets it (CD_Init_Model, CD_Update_Model_Hydro_Fields,
+    ! CD_Update_Model_SegmentLength): the kernels skip their per-element input scan. Every
+    ! writer of these fields must validate them (the snapshot restore and the model copies
+    ! assign only previously validated states).
     DO e = 1, model%n_elem
       CALL extract_element_state(model, e, q, v, idx, q2, v2)
       IF (model%has_damping) THEN
         CALL CD_Axial_Damping_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                            model%ba_dyn(e), f2, jq2, jv2, ErrStat, ErrMsg, &
-                                           l0_dot=model%l0_dot(e))
+                                           l0_dot=model%l0_dot(e), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
         CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
@@ -5930,7 +5936,8 @@ CONTAINS
         CALL CD_Morison_Drag_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                           fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
                                           model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
-                                          model%drag_cdt_elem(e), f2, jq2, jv2, ErrStat, ErrMsg)
+                                          model%drag_cdt_elem(e), f2, jq2, jv2, ErrStat, ErrMsg, &
+                                          inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
         CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
@@ -5944,25 +5951,28 @@ CONTAINS
         CALL CD_Froude_Krylov_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                            accel2(:, 1), accel2(:, 2), wl2(1), wl2(2), model%fk_rho, &
                                            model%fk_diameter_elem(e), model%fk_can_elem(e), &
-                                           model%fk_cat_elem(e), f2, jq2, jv2, ErrStat, ErrMsg)
+                                           model%fk_cat_elem(e), f2, jq2, jv2, ErrStat, ErrMsg, &
+                                           inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
         CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg)
-        IF (ErrStat /= CD_MODEL_OK) RETURN
+        ! jv2 is identically zero (a velocity-independent load), and adding zeros changes no
+        ! entry of a band that starts at +0 and only accumulates: its scatter is skipped. The
+        ! index and bandwidth checks of this element ran in the jac_q scatter above (the step
+        ! passes both bands with the same shape).
       END IF
       IF (model%has_buoyancy_recovery) THEN
         CALL extract_nodal_scalar(model%buoyancy_waterline_z, model, e, wl2)
         CALL CD_Buoyancy_Recovery_Element_Load(q2(1:3), q2(4:6), model%l0(e), wl2(1), wl2(2), &
                                                model%buoyancy_rho, model%buoyancy_diameter_elem(e), &
-                                               model%buoyancy_gravity, f2, jq2, jv2, ErrStat, ErrMsg)
+                                               model%buoyancy_gravity, f2, jq2, jv2, ErrStat, ErrMsg, &
+                                               inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
         CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg)
-        IF (ErrStat /= CD_MODEL_OK) RETURN
+        ! jv2 is identically zero: no scatter (as for Froude-Krylov above)
       END IF
     END DO
 
@@ -6083,6 +6093,7 @@ CONTAINS
       END DO
     END IF
 
+    ! validated element inputs: see model_contributor_load_banded
     DO e = 1, model%n_elem
       IF (ends) THEN
         IF (ALL(model%elem_conn(:, e) /= 1) .AND. ALL(model%elem_conn(:, e) /= nn)) CYCLE
@@ -6092,7 +6103,7 @@ CONTAINS
       IF (model%has_damping) THEN
         CALL CD_Axial_Damping_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                             model%ba_dyn(e), f2, ErrStat, ErrMsg, &
-                                            l0_dot=model%l0_dot(e))
+                                            l0_dot=model%l0_dot(e), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
       END IF
@@ -6121,7 +6132,7 @@ CONTAINS
         CALL CD_Morison_Drag_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                            fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
                                            model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
-                                           model%drag_cdt_elem(e), f2, ErrStat, ErrMsg)
+                                           model%drag_cdt_elem(e), f2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
       END IF
@@ -6131,7 +6142,7 @@ CONTAINS
         CALL CD_Froude_Krylov_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                             accel2(:, 1), accel2(:, 2), wl2(1), wl2(2), model%fk_rho, &
                                             model%fk_diameter_elem(e), model%fk_can_elem(e), &
-                                            model%fk_cat_elem(e), f2, ErrStat, ErrMsg)
+                                            model%fk_cat_elem(e), f2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
       END IF
@@ -6139,7 +6150,8 @@ CONTAINS
         CALL extract_nodal_scalar(model%buoyancy_waterline_z, model, e, wl2)
         CALL CD_Buoyancy_Recovery_Element_Force(q2(1:3), q2(4:6), model%l0(e), wl2(1), wl2(2), &
                                                 model%buoyancy_rho, model%buoyancy_diameter_elem(e), &
-                                                model%buoyancy_gravity, f2, ErrStat, ErrMsg)
+                                                model%buoyancy_gravity, f2, ErrStat, ErrMsg, &
+                                                inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
       END IF
@@ -6756,6 +6768,7 @@ CONTAINS
       END DO
     END IF
 
+    ! validated element inputs (q and accel checked above): see model_contributor_load_banded
     DO e = 1, model%n_elem
       CALL extract_element_state(model, e, q, accel, idx, q2, a2)
       CALL extract_nodal_scalar(model%added_mass_waterline_z, model, e, wl2)
@@ -6764,14 +6777,14 @@ CONTAINS
           CALL CD_Added_Mass_Element_Matrix(q2(1:3), q2(4:6), model%l0(e), wl2(1), wl2(2), &
                                             model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                             model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
-                                            m2, ErrStat, ErrMsg)
+                                            m2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
           IF (ErrStat /= 0) RETURN
           ma2 = CD_ZERO
         ELSE
           CALL CD_Added_Mass_Element(q2(1:3), q2(4:6), a2(1:3), a2(4:6), model%l0(e), wl2(1), wl2(2), &
                                      model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                      model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
-                                     m2, dm2, ErrStat, ErrMsg)
+                                     m2, dm2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
           IF (ErrStat /= 0) RETURN
           ma2 = MATMUL(m2, a2)
         END IF
@@ -6779,7 +6792,7 @@ CONTAINS
         CALL CD_Added_Mass_Element_Force(q2(1:3), q2(4:6), a2(1:3), a2(4:6), model%l0(e), wl2(1), wl2(2), &
                                          model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                          model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
-                                         ma2, ErrStat, ErrMsg)
+                                         ma2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
       END IF
       CALL scatter_element_vector(M_add_a, idx, ma2)

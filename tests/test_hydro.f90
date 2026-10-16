@@ -42,6 +42,7 @@ PROGRAM test_hydro
   CALL test_added_mass_element_matches_cable_path()
   CALL test_added_mass_element_matrix_matches_cable_path()
   CALL test_cable_added_mass_derivative_matches_fd()
+  CALL test_element_kernels_validated_path()
   CALL test_added_mass_and_fk()
   CALL test_current_profile()
   CALL test_seastate_steady_current()
@@ -757,6 +758,133 @@ CONTAINS
     cosh_ratio = (e_kz + e_neg)/denom
     sinh_ratio = (e_kz - e_neg)/denom
   END SUBROUTINE reference_profile_ratios
+
+  SUBROUTINE test_element_kernels_validated_path()
+    !! inputs_validated (the model hot path) skips only the per-element input scan: on valid
+    !! inputs every output, status and message of each element kernel is bit-for-bit the
+    !! default call's, including the failures that remain possible -- a collapsed element and
+    !! finite end nodes whose chord length overflows (the tangent check of the Froude-Krylov
+    !! and added-mass per-length forms).
+    CHARACTER(*), PARAMETER :: NO_DIRECTION = 'CableDyn_Hydro: tangent must be a non-zero direction'
+    INTEGER :: icase, es1, es2
+    REAL(wp) :: q(6), v(6), accel(3, 2), fluid(3, 2), acc6(6), wl(2), l0
+    REAL(wp) :: f1(6), f2(6), jq1(6, 6), jq2(6, 6), jv1(6, 6), jv2(6, 6)
+    CHARACTER(160) :: em1, em2
+    CHARACTER(40) :: label
+
+    fluid(:, 1) = [0.8_wp, 0.1_wp, -0.2_wp]
+    fluid(:, 2) = [0.3_wp, 0.6_wp, 0.1_wp]
+    accel(:, 1) = [0.5_wp, -0.2_wp, 0.4_wp]
+    accel(:, 2) = [-0.1_wp, 0.6_wp, 0.2_wp]
+    acc6 = [0.3_wp, -0.1_wp, 0.2_wp, -0.4_wp, 0.5_wp, -0.2_wp]
+    v = [0.14_wp, -0.23_wp, 0.04_wp, -0.07_wp, 0.19_wp, -0.11_wp]
+    wl = [0.05_wp, -0.02_wp]
+    l0 = 1.7_wp
+    ! case 4 overflows the chord length on purpose: must not halt a trapping build
+    CALL IEEE_GET_HALTING_MODE(IEEE_USUAL, fp_halt)
+    CALL IEEE_SET_HALTING_MODE(IEEE_USUAL, .FALSE.)
+    DO icase = 1, 4
+      SELECT CASE (icase)
+      CASE (1)   ! surface-piercing
+        q = [-0.2_wp, 0.1_wp, -0.8_wp, 1.4_wp, -0.3_wp, 0.2_wp]
+      CASE (2)   ! fully wet
+        q = [0.1_wp, -0.2_wp, -2.6_wp, 1.2_wp, 0.4_wp, -1.25_wp]
+      CASE (3)   ! collapsed
+        q = [0.3_wp, 0.3_wp, -1.0_wp, 0.3_wp, 0.3_wp, -1.0_wp]
+      CASE DEFAULT   ! finite ends, overflowing chord length
+        q = [-1.0e300_wp, 0.0_wp, -1.0_wp, 1.0e300_wp, 0.0_wp, -1.0_wp]
+      END SELECT
+      WRITE (label, '(A,I0,A)') 'validated-path case ', icase, ': '
+
+      CALL CD_Morison_Drag_Element_Load(q(1:3), q(4:6), v(1:3), v(4:6), l0, fluid(:, 1), fluid(:, 2), &
+                                        wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.05_wp, 0.32_wp, f1, jq1, jv1, es1, em1)
+      CALL CD_Morison_Drag_Element_Load(q(1:3), q(4:6), v(1:3), v(4:6), l0, fluid(:, 1), fluid(:, 2), &
+                                        wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.05_wp, 0.32_wp, f2, jq2, jv2, es2, em2, &
+                                        inputs_validated=.TRUE.)
+      CALL require(same_bits(f1, f2) .AND. same_bits(jq1, jq2) .AND. same_bits(jv1, jv2) .AND. &
+                   es1 == es2 .AND. em1 == em2, TRIM(label)//'drag load')
+      CALL CD_Morison_Drag_Element_Force(q(1:3), q(4:6), v(1:3), v(4:6), l0, fluid(:, 1), fluid(:, 2), &
+                                         wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.05_wp, 0.32_wp, f1, es1, em1)
+      CALL CD_Morison_Drag_Element_Force(q(1:3), q(4:6), v(1:3), v(4:6), l0, fluid(:, 1), fluid(:, 2), &
+                                         wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.05_wp, 0.32_wp, f2, es2, em2, &
+                                         inputs_validated=.TRUE.)
+      CALL require(same_bits(f1, f2) .AND. es1 == es2 .AND. em1 == em2, TRIM(label)//'drag force')
+
+      CALL CD_Froude_Krylov_Element_Load(q(1:3), q(4:6), v(1:3), v(4:6), l0, accel(:, 1), accel(:, 2), &
+                                         wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, f1, jq1, jv1, es1, em1)
+      CALL CD_Froude_Krylov_Element_Load(q(1:3), q(4:6), v(1:3), v(4:6), l0, accel(:, 1), accel(:, 2), &
+                                         wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, f2, jq2, jv2, es2, em2, &
+                                         inputs_validated=.TRUE.)
+      CALL require(same_bits(f1, f2) .AND. same_bits(jq1, jq2) .AND. same_bits(jv1, jv2) .AND. &
+                   es1 == es2 .AND. em1 == em2, TRIM(label)//'FK load')
+      CALL require(nan_max_abs(jv2) <= CD_ZERO, TRIM(label)//'FK load has no velocity Jacobian')
+      CALL CD_Froude_Krylov_Element_Force(q(1:3), q(4:6), v(1:3), v(4:6), l0, accel(:, 1), accel(:, 2), &
+                                          wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, f1, es1, em1)
+      CALL CD_Froude_Krylov_Element_Force(q(1:3), q(4:6), v(1:3), v(4:6), l0, accel(:, 1), accel(:, 2), &
+                                          wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, f2, es2, em2, &
+                                          inputs_validated=.TRUE.)
+      CALL require(same_bits(f1, f2) .AND. es1 == es2 .AND. em1 == em2, TRIM(label)//'FK force')
+      IF (icase == 4) CALL require(es2 == CD_HYDRO_BADINPUT .AND. em2 == NO_DIRECTION, &
+                                   TRIM(label)//'FK force tangent check')
+
+      CALL CD_Buoyancy_Recovery_Element_Load(q(1:3), q(4:6), l0, wl(1), wl(2), 1025.0_wp, 0.24_wp, 9.80665_wp, &
+                                             f1, jq1, jv1, es1, em1)
+      CALL CD_Buoyancy_Recovery_Element_Load(q(1:3), q(4:6), l0, wl(1), wl(2), 1025.0_wp, 0.24_wp, 9.80665_wp, &
+                                             f2, jq2, jv2, es2, em2, inputs_validated=.TRUE.)
+      CALL require(same_bits(f1, f2) .AND. same_bits(jq1, jq2) .AND. same_bits(jv1, jv2) .AND. &
+                   es1 == es2 .AND. em1 == em2, TRIM(label)//'buoyancy load')
+      CALL require(nan_max_abs(jv2) <= CD_ZERO, TRIM(label)//'buoyancy load has no velocity Jacobian')
+      CALL CD_Buoyancy_Recovery_Element_Force(q(1:3), q(4:6), l0, wl(1), wl(2), 1025.0_wp, 0.24_wp, 9.80665_wp, &
+                                              f1, es1, em1)
+      CALL CD_Buoyancy_Recovery_Element_Force(q(1:3), q(4:6), l0, wl(1), wl(2), 1025.0_wp, 0.24_wp, 9.80665_wp, &
+                                              f2, es2, em2, inputs_validated=.TRUE.)
+      CALL require(same_bits(f1, f2) .AND. es1 == es2 .AND. em1 == em2, TRIM(label)//'buoyancy force')
+
+      CALL CD_Added_Mass_Element(q(1:3), q(4:6), acc6(1:3), acc6(4:6), l0, wl(1), wl(2), &
+                                 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, jq1, jv1, es1, em1)
+      CALL CD_Added_Mass_Element(q(1:3), q(4:6), acc6(1:3), acc6(4:6), l0, wl(1), wl(2), &
+                                 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, jq2, jv2, es2, em2, inputs_validated=.TRUE.)
+      CALL require(same_bits(jq1, jq2) .AND. same_bits(jv1, jv2) .AND. es1 == es2 .AND. em1 == em2, &
+                   TRIM(label)//'added mass')
+      CALL CD_Added_Mass_Element_Matrix(q(1:3), q(4:6), l0, wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, &
+                                        jq1, es1, em1)
+      CALL CD_Added_Mass_Element_Matrix(q(1:3), q(4:6), l0, wl(1), wl(2), 1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, &
+                                        jq2, es2, em2, inputs_validated=.TRUE.)
+      CALL require(same_bits(jq1, jq2) .AND. es1 == es2 .AND. em1 == em2, TRIM(label)//'added-mass matrix')
+      IF (icase == 4) CALL require(es2 == CD_HYDRO_BADINPUT .AND. em2 == NO_DIRECTION, &
+                                   TRIM(label)//'added-mass matrix tangent check')
+      CALL CD_Added_Mass_Element_Force(q(1:3), q(4:6), acc6(1:3), acc6(4:6), l0, wl(1), wl(2), &
+                                       1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, f1, es1, em1)
+      CALL CD_Added_Mass_Element_Force(q(1:3), q(4:6), acc6(1:3), acc6(4:6), l0, wl(1), wl(2), &
+                                       1025.0_wp, 0.24_wp, 1.1_wp, 0.2_wp, f2, es2, em2, inputs_validated=.TRUE.)
+      CALL require(same_bits(f1, f2) .AND. es1 == es2 .AND. em1 == em2, TRIM(label)//'added-mass force')
+      IF (icase == 4) CALL require(es2 == CD_HYDRO_BADINPUT .AND. em2 == NO_DIRECTION, &
+                                   TRIM(label)//'added-mass force tangent check')
+    END DO
+    CALL IEEE_SET_FLAG(IEEE_USUAL, .FALSE.)
+    CALL IEEE_SET_HALTING_MODE(IEEE_USUAL, fp_halt)
+  END SUBROUTINE test_element_kernels_validated_path
+
+  PURE LOGICAL FUNCTION same_bits(a, b) RESULT(same)
+    !! a and b hold the same binary64 values bit for bit (signed zeros and NaNs included).
+    REAL(wp), INTENT(IN) :: a(..), b(..)
+    INTEGER, PARAMETER :: I8 = SELECTED_INT_KIND(18)
+    same = .FALSE.
+    SELECT RANK (a)
+    RANK (1)
+      SELECT RANK (b)
+      RANK (1)
+        same = SIZE(a) == SIZE(b)
+        IF (same) same = ALL(TRANSFER(a, [0_I8]) == TRANSFER(b, [0_I8]))
+      END SELECT
+    RANK (2)
+      SELECT RANK (b)
+      RANK (2)
+        same = SIZE(a) == SIZE(b)
+        IF (same) same = ALL(TRANSFER(a, [0_I8]) == TRANSFER(b, [0_I8]))
+      END SELECT
+    END SELECT
+  END FUNCTION same_bits
 
   SUBROUTINE test_fail_closed()
     REAL(wp) :: force(3), jac_rel(3, 3), jac_tan(3, 3)

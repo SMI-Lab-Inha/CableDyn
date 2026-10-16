@@ -139,6 +139,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   at 0.109 1/m instead of 0.075 1/m, and the anchor tension stays at its static 1.23 kN, where
   the coarse mesh showed stick-slip peaks up to 4.1 kN. The validation record and the tutorials
   are updated.
+- Faster tension-only (`EI = 0`) line steps. In every Newton evaluation the element kernels of
+  the line loads (axial damping, Morison drag, Froude-Krylov, buoyancy recovery, added mass) no
+  longer re-check, element by element, data the line model validates when it is set; the
+  Froude-Krylov and added-mass kernels check their section data once instead of three times;
+  the velocity Jacobians of the Froude-Krylov and buoyancy loads, which are zero, are no longer
+  added into the band; a step reuses the consistent-mass band of the previous one while the
+  lengths and masses are unchanged; and the Newton solve no longer rescans a matrix already
+  checked finite. With the release build, `examples/als_volturnus_line_break_time.dat` runs
+  13 % faster and `examples/spar_pinned_rods.dat` 13 %. Every input error is reported as
+  before. With gfortran the results are bit-identical. With the Intel compiler of the release
+  they can differ in the last printed digit, and by more where a deck amplifies round-off.
 
 ### Fixed
 
@@ -258,6 +269,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   on the rounded surface. When the anchor walk of a finite-EI line over a non-planar bathymetry
   reaches a state that is rejected, the failure no longer states that the line is too long for
   its span to hang as a catenary, which is proven over a planar seabed only.
+- Junction end tangent of a tension-only line step that ends right after a fresh tangent
+  evaluation. In the monolithic body and point coupling, a line step accepted within the
+  near-tolerance allowance at its Newton iteration limit (or converged on a freshly evaluated
+  tangent) still marked its last factorization as current, although the new tangent had
+  overwritten it. The condensed end tangent, and the warm start of a re-solve of the same step,
+  were then back-solved with the unfactored matrix: in a unit test the end tangent was wrong by
+  five orders of magnitude, which can slow or misdirect the outer junction iteration. The step
+  now clears the factorization flags whenever it overwrites the band without factoring it, so
+  the end query factors the current tangent (one more tangent assembly and factorization for
+  such a step of a junction solve). The outputs of the example decks and of the other tests
+  are unchanged.
 
 ## [0.1.1] - 2026-10-09
 
