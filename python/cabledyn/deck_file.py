@@ -2894,6 +2894,26 @@ class DeckFile:
         )
         mixed_route = any(finite_lines) and not all(finite_lines) and not has_objects
         mixed_static = mixed_route and not has_tmax
+        finite_line_ids = [
+            line_id
+            for line_id, section_types in section_types_by_line.items()
+            if any(line_type_meta[line_type][3] > 0.0 for line_type in section_types)
+        ]
+        # Native build_one_hermite_cable, which builds every finite-EI line of the coupled
+        # aggregate (OpenFAST, FAST.Farm, the C API and the standalone mixed deck): the cable
+        # is held at a Fixed End B (the anchor) and driven at End A. A finite-EI line shared by
+        # two turbines is refused here, before its end-force channels (AnchFz, AnchFH) could be
+        # accepted for an end the aggregate cannot hold. (A standalone line's moving End B is
+        # refused by the static LINE checks above.)
+        if self.caller_driven or mixed_route:
+            for line_id in finite_line_ids:
+                end_b = normalized_line_endpoints[line_id][1]
+                end_b_type = point_types.get(end_b, end_b)
+                if end_b_type != "fixed":
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id}: finite-EI coupled cable requires End B "
+                        f'(the anchor) to be a Fixed point; got "{end_b_type}"'
+                    )
         for line_type in used_type_names:
             _, _, ea_static, ei = line_type_meta[line_type]
             if ea_static <= 0.0:
