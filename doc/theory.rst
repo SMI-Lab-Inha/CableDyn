@@ -185,7 +185,7 @@ on a fine mesh among them.
 :math:`\lvert\mathbf{r}'\rvert` constant where the line must bend over an element (a nodal
 seabed reaction, a section junction): the pointwise axial resultant oscillates about the element
 mean by several times the tension, and the element means alternate between neighbours. On that
-cable as meshed in the example (87 elements, 10 m on the grounded run, tension 1.2 kN) the
+cable on the example's former 87-element mesh (10 m on the grounded run, tension 1.2 kN) the
 pointwise resultant spans -41.5 to +91.8 kN and the length-weighted element means at the nodes
 reach -173 N; at 1 m elements the pointwise field still spans -5.9 to +11.9 kN.
 
@@ -226,12 +226,16 @@ consistent-load moment :math:`w L_0^2/12` of an element (a section junction leav
 order between the two one-sided moments), so over a soft section dividing by :math:`EI` amplifies
 it. A section whose :math:`EI` is below :math:`\max_e(\lvert w_e\rvert L_{0,e}^2)/12` times 1 m,
 the stiffness whose elastic moment at a 1 m bend radius equals that error, takes its curvature
-from the exact geometric trace instead, as an element with :math:`EI = 0` does (on the lazy-wave
-cable of ``iea15mw_umaine_mixed_cabledyn.dat`` with :math:`EI` lowered to 100 N m\ :sup:`2` the
+from the exact geometric trace instead, as an element with :math:`EI = 0` does (on the 87-element
+lazy-wave cable with :math:`EI` lowered to 100 N m\ :sup:`2` the
 recovered curvature reaches 6.9 1/m against a geometric peak of 0.12 1/m; the bend moment of such a
 section remains the recovered one, with that error). The
 difference of the two one-sided forces is the point load left at the node (seabed friction, an
-attachment). At the converged static state the nodal section forces satisfy the discrete
+attachment) plus, where the nodal seabed reaction varies from node to node (the touchdown, a
+rounded crease of the bathymetry), the difference between its spread and its nodal form, about
+0.094 times its second difference along the line. The seabed reaction spread here is the one the
+residual applies, with the crease increment of the penalty potential inside a rounded crease. At
+the converged static state the nodal section forces satisfy the discrete
 equilibrium exactly. In a dynamic run the recovery is the balance at the output time
 :math:`t_{n+1}`, with the position, velocity and acceleration the step committed there: the
 inertia term :math:`\mathbf{M}_e\mathbf{a}_e` uses the step's acceleration

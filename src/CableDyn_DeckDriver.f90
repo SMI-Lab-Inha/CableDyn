@@ -30985,7 +30985,8 @@ CONTAINS
       RETURN
     END IF
 
-    ! TDP<L>{s,x,y,z,Lay,Exc}: the touchdown point of the current configuration.
+    ! TDP<L>{s,x,y,z,Lay,Exc,Grd}: the touchdown point of the current configuration and the
+    ! grounded length behind it.
     IF (CD_Is_TDP_Channel(lo)) THEN
       IF (.NOT. PRESENT(ranges)) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": touchdown channels are not available here'); RETURN
@@ -31060,8 +31061,10 @@ CONTAINS
                                                 tension, ErrStat, ErrMsg)
     !! Segment (element) tensions of deck line line_id in public order End A -> End B, the
     !! values the standalone driver writes to .Line<L>.t.out: the EI=0 element tensions of
-    !! CD_Get_Model_Tension, or the Hermite element-midpoint axial tension of a finite-EI cable.
-    !! tension must hold exactly the line's element count.
+    !! CD_Get_Model_Tension, or the segment tensions of a finite-EI cable (cable_segment_tensions:
+    !! the mean axial component of the element's two equilibrium end forces, or under OPTIONS
+    !! OutputRecovery element the axial resultant at the element midpoint). tension must hold
+    !! exactly the line's element count.
     INTEGER, INTENT(IN) :: line_id
     LOGICAL, INTENT(IN) :: has_sys
     TYPE(CD_SystemType), INTENT(IN) :: system

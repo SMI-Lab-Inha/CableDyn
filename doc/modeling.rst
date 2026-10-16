@@ -92,10 +92,13 @@ section change, keep the element length at most half the bending length
 power cable with :math:`EI = 2\times10^4` N m² and :math:`w = 158` N/m that is 2.5 m. A longer
 element cannot follow the bend: it stays stiff in bending, and its stiff axial term absorbs the
 mismatch, so the pointwise axial force oscillates about the element mean, by tens of kN on a
-lazy wave of 1–2 kN tension at 10 m elements. The ``.t.out`` segment tensions, evaluated at the
-element midpoints, show these spikes and negative values near touchdown and at section changes;
-they shrink as the mesh is refined, and the element-mean force (what enters equilibrium, see
-``tensile_safety`` in :doc:`theory`) is far smoother. The compressed Gauss points also lower the
+lazy wave of 1–2 kN tension at 10 m elements. The tension outputs (node ``Ten`` channels,
+``.t.out`` segment tensions) are recovered from the element end forces and do not carry it (see
+Node tension, curvature and bend moment in :doc:`theory`); under ``OutputRecovery element`` the
+``.t.out`` segment tensions, evaluated at the element midpoints, show these spikes and negative
+values near touchdown and at section changes. They shrink as the mesh is refined, and the
+element-mean force (what the material-strain checks judge, see ``tensile_safety`` in
+:doc:`theory`) is far smoother. The compressed Gauss points also lower the
 out-of-plane stiffness: a line solved in 3D (restrained in torsion, or with an end connection
 direction or a current out of its vertical plane) can read as an unstable equilibrium on such a
 mesh. The static solve then refines that state to the rule above, whichever route reached it and

@@ -1888,7 +1888,7 @@ CONTAINS
                                 note)
     !! Return one line's unconditional converged-static fairlead result in deck order, and
     !! (optional note) the static-initialisation notes of a finite-EI line ('' if none).
-    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
     INTEGER, INTENT(IN) :: i
     INTEGER, INTENT(OUT) :: line_id
     REAL(wp), INTENT(OUT) :: tension, force(3), inclination, declination, azimuth
@@ -1925,7 +1925,7 @@ CONTAINS
   SUBROUTINE CD_AGG_ChannelHeader(self, i, hdr, unt, ErrStat, ErrMsg)
     !! Header token and OrcaFlex unit label for channel i (1 .. CD_AGG_NumChannels), for the
     !! OpenFAST InitOut%WriteOutputHdr / WriteOutputUnt registration.
-    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
     INTEGER, INTENT(IN) :: i
     CHARACTER(*), INTENT(OUT) :: hdr, unt
     INTEGER, INTENT(OUT) :: ErrStat

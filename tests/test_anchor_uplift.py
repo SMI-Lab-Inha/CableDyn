@@ -97,6 +97,14 @@ def set_outputs(text: str, names: list[str]) -> str:
     return "\n".join(lines[: start + 1] + [f'"{n}"' for n in names] + lines[end:]) + "\n"
 
 
+def line_sections(text: str, line_id: int) -> list[tuple[str, float, int]]:
+    """(type, length, segments) of each SECTIONS row of one line, End A first."""
+    lines = text.splitlines()
+    a, b = table_rows(text, "SECTIONS")
+    rows = [lines[i].split() for i in range(a, b)]
+    return [(tok[1], float(tok[2]), int(tok[3])) for tok in rows if tok and tok[0] == str(line_id)]
+
+
 def anchor_channels(line_id: int, point_id: int) -> list[str]:
     return [f"AnchTen{line_id}", f"AnchFz{line_id}", f"AnchFH{line_id}", f"Point{point_id}Fz",
             f"Point{point_id}FH"]
@@ -415,8 +423,14 @@ def main() -> int:
 
     src = (examples / "iea15mw_umaine_mixed_cabledyn.dat").read_text(encoding="utf-8")
     deck = set_option(src, "TMax", "0.5")
+    # the cable's anchor (End B) node and its laid end section, from the example's own mesh
+    sections = line_sections(src, 4)
+    n_anchor = sum(nseg for _, _, nseg in sections) + 1
+    end_type, end_length, end_nseg = sections[-1]
+    check(end_type == "bare", f"mixed example: the cable's anchor section is the bare type ({end_type})")
+    l0_end = end_length / end_nseg
     names = ["TDP1s", "TDP1Grd", "TDP4s", "TDP4Grd", *anchor_channels(1, 2), *anchor_channels(4, 8),
-             "BendMom4N88", "BendMom4N87", "Curv4N88"]
+             f"BendMom4N{n_anchor}", f"BendMom4N{n_anchor - 1}", f"Curv4N{n_anchor}"]
     deck = set_outputs(deck, names)
     (out / "mixed.dat").write_text(deck, encoding="utf-8", newline="\n")
     run(args.exe, out / "mixed.dat", out / "mixed", env)
@@ -427,15 +441,22 @@ def main() -> int:
           bool(np.all(hist.column("TDP4Grd") > 0.0)),
           f"mixed aggregate: laid chain (TDP1Grd {hist.column('TDP1Grd')[0]:.1f} m, AnchFz1 "
           f"{hist.column('AnchFz1')[0] / 1e3:.2f} kN) and laid cable (TDP4Grd {hist.column('TDP4Grd')[0]:.1f} m)")
-    # the cable's 'bare' type laid on the seabed (10 m elements): the recovered bend moment at the Fixed
-    # anchor node and its neighbour carries no fixed-end moment of the element's weight w l0^2 / 12
+    # the cable's 'bare' type laid on the seabed: the recovered bend moment at the Fixed anchor node and
+    # its neighbour carries no fixed-end moment of the element's weight w l0^2 / 12. The line does bend
+    # there: the anchor node is held at the seabed depth and the laid run sinks delta = w/(kBot d) into
+    # the penalty seabed, a bend of about 2 delta / l0^2 over the anchor element (EI 2 delta / l0^2 =
+    # 2.1 N.m on 2.5 m elements), which the bound allows on top of 2 % of the weight moment
     w_bare = (36.70 - RHO * math.pi / 4.0 * 0.16**2) * G
-    m_end = w_bare * 10.0**2 / 12.0
-    bm_anchor, bm_next = hist.column("BendMom4N88"), hist.column("BendMom4N87")
-    check(bool(np.all(np.abs(bm_anchor) < 0.02 * m_end)) and bool(np.all(np.abs(bm_next) < 0.02 * m_end)) and
-          bool(np.all(hist.column("Curv4N88") < 0.02 * m_end / 1.99e4)),
+    ei_bare, kbot = 1.99e4, 3.0e6
+    m_end = w_bare * l0_end**2 / 12.0
+    m_sink = ei_bare * 2.0 * w_bare / (kbot * 0.16) / l0_end**2
+    bound = 0.02 * m_end + m_sink
+    bm_anchor, bm_next = hist.column(f"BendMom4N{n_anchor}"), hist.column(f"BendMom4N{n_anchor - 1}")
+    check(bool(np.all(np.abs(bm_anchor) < bound)) and bool(np.all(np.abs(bm_next) < bound)) and
+          bool(np.all(hist.column(f"Curv4N{n_anchor}") < bound / ei_bare)) and bound < 0.1 * m_end,
           f"mixed aggregate, laid anchor: end-node BendMom4 {np.max(np.abs(bm_anchor)):.2e} N.m and next node "
-          f"{np.max(np.abs(bm_next)):.2e} N.m, well below the element weight moment w l0^2/12 = {m_end:.0f} N.m")
+          f"{np.max(np.abs(bm_next)):.2e} N.m, below {bound:.1f} N.m and far below the element weight moment "
+          f"w l0^2/12 = {m_end:.0f} N.m")
 
     src = (examples / "rigid6_buoy.dat").read_text(encoding="utf-8")
     deck = set_outputs(set_option(src, "TMax", "0.2"), [*anchor_channels(1, 4), *anchor_channels(2, 5)])

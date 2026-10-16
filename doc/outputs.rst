@@ -531,17 +531,24 @@ Anchor uplift
 
 A drag-embedment anchor is designed for a horizontal pull and loses holding capacity under a
 vertical one, so design practice for catenary moorings (DNV-OS-E301, API RP 2SK) requires no
-vertical uplift at the anchor in the intact condition: some chain stays laid on the seabed. Two
-channels give the check for line ``L`` directly:
+vertical uplift at the anchor in the intact condition: some chain stays laid on the seabed. The
+primary check for line ``L`` is the grounded length:
 
-* the maximum of ``AnchFz<L>`` over the run is at most 0;
 * the minimum of ``TDP<L>Grd`` (`Touchdown channels`_) over the run is greater than a small
-  tolerance (0.01 m is a centimetre, far below an element).
+  tolerance (0.01 m is a centimetre, far below an element). ``TDP<L>Grd`` is continuous with
+  the touchdown point, so an anchor node held on the seabed beside a node a few millimetres
+  clear of it reads micrometres to millimetres, not exactly 0. ``AnchIncl<L>`` departing from 0
+  (the anchor segment rising from the seabed) shows the same onset.
 
-The two agree: while chain is laid at the anchor the line pulls it horizontally, and once the
-grounded length falls to the tolerance the line lifts its anchor and ``AnchFz`` turns positive.
-``TDP<L>Grd`` is continuous with the touchdown point, so an anchor node held on the seabed beside a
-node a few millimetres clear of it reads micrometres to millimetres, not exactly 0.
+``AnchFz<L>`` is the anchor reaction itself (equal to ``Point<P>Fz`` of a one-line anchor), the
+quantity to compare with the anchor's vertical capacity. It is not an exact uplift indicator on
+an ``EI = 0`` line: the reaction includes the anchor node's lumped weight (below), so it stays
+negative for a while after the anchor segment starts to lift and turns positive only once the
+line's pull exceeds that weight. When a surge pulls the chain off its anchor the sign change
+lags the grounded length reaching 0 (by under a second in the regression suite's surge case),
+so ``max AnchFz <= 0`` alone can pass a run in which the anchor segment already lifts by an
+angle of order :math:`w\,\Delta L/(2H)`. Use ``TDP<L>Grd`` (or ``AnchIncl<L>``) for the
+no-uplift criterion and ``AnchFz<L>`` for the vertical load.
 
 On a laid ``EI = 0`` line ``AnchFz`` is a small negative value, not 0. The anchor node of a
 ``Fixed`` point at the seabed depth is held at the seabed elevation, while the penalty seabed
@@ -560,8 +567,8 @@ In :doc:`tutorial_catenary` (:math:`w` = 3.18 kN/m, :math:`\Delta L` = 10 m,
 beside ``AnchFH1`` = 191.5 kN (the horizontal tension) and ``AnchTen1`` = 192.4 kN. The share
 belongs to the lumped anchor node: it scales with the anchor segment length, vanishes as the mesh
 is refined, and is not uplift. A finite-EI (cubic-Hermite) end resting on the seabed leaves its
-end node's weight to the floor and reads ``AnchFz`` = 0 there. Check the sign of ``AnchFz``, not
-the difference between ``AnchTen`` and ``AnchFH``.
+end node's weight to the floor and reads ``AnchFz`` = 0 there. Read the vertical anchor load from
+``AnchFz``, not from the difference between ``AnchTen`` and ``AnchFH``.
 
 Line-node channels
 ~~~~~~~~~~~~~~~~~~

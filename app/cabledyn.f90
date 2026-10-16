@@ -692,7 +692,7 @@ CONTAINS
   END FUNCTION ascii_lower
 
   SUBROUTINE print_mixed_initialization(aggregate, stat, msg)
-    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: aggregate
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: aggregate
     INTEGER, INTENT(OUT) :: stat
     CHARACTER(*), INTENT(OUT) :: msg
     INTEGER :: n_lines, n_points, n_sections, n_ei0, n_finite, i, line_id, es
@@ -743,7 +743,7 @@ CONTAINS
 
   SUBROUTINE write_mixed_header(unit, aggregate, stat, msg)
     INTEGER, INTENT(IN) :: unit
-    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: aggregate
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: aggregate
     INTEGER, INTENT(OUT) :: stat
     CHARACTER(*), INTENT(OUT) :: msg
     INTEGER :: i, ios

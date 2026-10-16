@@ -119,7 +119,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `AnchFz`/`AnchFH` by name. The Python deck reader and builder accept the new names. See the
   manual's outputs page (Anchor uplift), which also states the end-node weight share that a laid
   `Fixed` anchor carries (slightly negative `AnchFz` on an `EI = 0` line, not uplift; exactly 0
-  on a finite-EI line, whose grounded end leaves its node weight to the floor).
+  on a finite-EI line, whose grounded end leaves its node weight to the floor). Because of that
+  share, `AnchFz` on an `EI = 0` line turns positive only after the anchor segment has started
+  to lift, so `TDP<L>Grd` is the primary no-uplift check and `AnchFz` the vertical anchor load.
 - `OutputRecovery` option (`equilibrium`, the default, or `element`): the definition of the
   finite-EI node tension, curvature, bend moment and segment tension (see Changed). `element`
   restores the definitions of 0.1.1. The Python deck reader accepts and checks it.
@@ -140,16 +142,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   distributed loads and inertia: the effective tension is the axial component of the section
   force, the bend moment the moment the neighbouring elements carry, and the curvature that
   moment over `EI`. The derivation is in the manual's theory page (Node tension, curvature and
-  bend moment). On the lazy-wave cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` (87
-  elements) the static interior node tension now stays between 1217 N and the 11.9 kN fairlead
-  tension instead of dropping to -173 N. Against the equilibrium of the converged line, the
-  largest error falls from 1552 N to 60 N at the example's mesh, from 2059 N to 12 N, 1921 N to
-  1 N and 516 N to 0.3 N at twice, four times and ten times the mesh density, and from 164 N to
+  bend moment). On the lazy-wave cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` on its
+  former 87-element mesh the static interior node tension now stays between 1217 N and the
+  11.9 kN fairlead tension instead of dropping to -173 N. Against the equilibrium of the
+  converged line, the largest error falls from 1552 N to 60 N at that mesh, from 2059 N to
+  12 N, 1921 N to 1 N and 516 N to 0.3 N at twice, four times and ten times the mesh density, and from 164 N to
   1 N at 0.25 m elements. The largest curvature error falls from 64 % to 30 %, 44 % to 7 %, 19
   % to 4 % and 2.1 % to 0.8 % of the peak. Under an 8 m surge and 2 m heave of the hang-off,
   the error of the maximum-tension envelope against a 1 m mesh falls from 2164 N to 857 N, 1488
   N to 283 N and 3049 N to 31 N, and the minimum tension of the run from -719 N to +610 N at
-  the example's mesh. A `.t.out` segment tension is now the mean of the axial components of the
+  that mesh. A `.t.out` segment tension is now the mean of the axial components of the
   element's two end forces instead of the axial resultant at its midpoint. The library
   curvature (`CD_HermiteCable_Dyn_Curvature`, `CD_HFMF_Curvature`) follows the same definition
   as the channels. A section softer than `max(|w| L0^2)/12` times 1 m (about 1.3 kN m^2 for the
@@ -161,15 +163,22 @@ All notable changes to CableDyn are recorded in this file. The format follows
   nodes include), positions and the material-strain checks (`tensile_safety`, the static
   compression notes) are unchanged. At a `Fixed` anchor resting on the seabed the end element
   carries the floor-support share of its weight, as in the residual, so the end node reports
-  the bend moment of the line (0.02 N m, not 903 N m, at the anchor of the cable of
-  `examples/iea15mw_umaine_mixed_cabledyn.dat`, and 0.1 N m, not 205 N m, at the next node). On
+  the bend moment of the line (0.02 N m, not 903 N m, at the anchor of the 87-element cable of
+  `examples/iea15mw_umaine_mixed_cabledyn.dat`, and 0.1 N m, not 205 N m, at the next node; on
+  the example's 248-element mesh 0.1 N m and 1.5 N m, the bend of the laid run sinking into the
+  penalty seabed beside the anchor held at the seabed depth). On
   a line restrained in torsion the condensed torque is left out of the recovery; it moves the
   tension by at most 0.45 N of 9.4 kN on `examples/torsion_lazy_wave_hangoff_twist.dat`. Range
   graphs and `.t.out` files written every step cost 4 % more run time, plain channels under 2
   %. `OutputRecovery element` restores the previous definitions. The T-6 record of
   `VALIDATION.md` (twisted lazy wave against OrcaFlex), which reads the static-profile
-  curvature, moves from 0.056 % to 0.049 %; the other records use end tensions or the exact
-  geometric curvature (`CD_HermiteCable_Dyn_Curvature_Exact`) and are unchanged.
+  curvature, moves from 0.056 % to 0.049 %. The curvatures of the one-hour coupled full-turbine
+  run in its coupled finite-EI touchdown row (0.156 1/m at the sag bend, 0.109 1/m at the
+  touchdown) were recorded with the previous definition and are marked as such, as is the
+  static sag-bend curvature of the Hs = 11 power-cable case of
+  `validation/OPENFAST_DLC_VERIFICATION.md`, which now also gives the recovered values. The other
+  records use end tensions or the exact geometric curvature
+  (`CD_HermiteCable_Dyn_Curvature_Exact`) and are unchanged.
 - The touchdown point (`TDP<L>` channels and `cabledyn.touchdown_history`) is located inside
   the element by the parabola through the last grounded node and the next two nodes instead of
   the linear clearance between the last grounded node and the next. On a stiff seabed the
@@ -219,12 +228,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the static state, solved in the vertical plane of the cable, was unstable out of that plane.
   The static fairlead tension of the cable changes from 11 898 N to 11 922 N (11 921 N on a
   1 m mesh), its anchor tension from 1218 N to 1230 N, and the touchdown curvature from
-  0.058 1/m to 0.079 1/m (0.080 1/m on the 1 m mesh). The curvature output moves with the
-  mesh: `Curv4N20`/`BendMom4N20` (76 m from the hang-off) become `Curv4N38`/`BendMom4N38`
-  (74 m, the peak of the sag bend). In the one-hour full-turbine run of the validation record
-  the hang-off tension statistics are unchanged (11.5 ± 1.1 kN), the touchdown curvature peaks
-  at 0.109 1/m instead of 0.075 1/m, and the anchor tension stays at its static 1.23 kN, where
-  the coarse mesh showed stick-slip peaks up to 4.1 kN. The validation record and the tutorials
+  0.058 1/m to 0.079 1/m (0.080 1/m on the 1 m mesh; the geometric curvature, which
+  `OutputRecovery element` reports, while the curvature recovered from nodal equilibrium reads
+  0.100 1/m on the 87-element mesh and 0.081 1/m on the 248-element one). The curvature output
+  moves with the mesh: `Curv4N20`/`BendMom4N20` (76 m from the hang-off) become
+  `Curv4N38`/`BendMom4N38` (74 m, the peak of the sag bend). In the one-hour full-turbine run of
+  the validation record the hang-off tension statistics are unchanged (11.5 ± 1.1 kN), the
+  touchdown curvature (geometric) peaks at 0.109 1/m instead of 0.075 1/m, and the anchor
+  tension stays at its static 1.23 kN, where the coarse mesh showed stick-slip peaks up to 4.1 kN. The validation record and the tutorials
   are updated.
 - Faster tension-only (`EI = 0`) line steps. In every Newton evaluation the element kernels of
   the line loads (axial damping, Morison drag, Froude-Krylov, buoyancy recovery, added mass) no

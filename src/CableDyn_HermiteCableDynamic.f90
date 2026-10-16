@@ -424,14 +424,17 @@ MODULE CableDyn_HermiteCableDynamic
     ! from nodal equilibrium carries an error of that order, independent of EI, so over a softer
     ! section it cannot give the curvature (node_values then takes the exact geometric trace).
     REAL(wp) :: ei_resolve = CD_ZERO
-    ! Cache of the element end residuals behind the node outputs (CD_HermiteCable_Dyn_Node_Values),
-    ! valid for the state t, q, v, a and the configuration epoch it was filled at: the channels of
-    ! one output row share one evaluation per element. Allocated once at initialisation; rc_epoch
-    ! counts the loads configured after it (drag, waves, added mass, held fluid, contact).
+    ! Cache of the element end residuals behind the node outputs (CD_HermiteCable_Dyn_Node_Values).
+    ! Element e's entry rc_g(:, e) is valid for the time and configuration epoch the cache was
+    ! keyed at (rc_t, rc_key_epoch) and for the element's own 12 q, v and a DOFs it was evaluated
+    ! at (rc_q/rc_v/rc_a(:, e)), the only state its residual depends on, so a node query costs two
+    ! element comparisons and the channels of one output row share one evaluation per element.
+    ! Allocated once at initialisation; rc_epoch counts the loads configured after it (drag,
+    ! waves, added mass, held fluid, contact).
     INTEGER :: rc_epoch = 0, rc_key_epoch = -1
     LOGICAL :: rc_key_ok = .FALSE.
     REAL(wp) :: rc_t = CD_ZERO
-    REAL(wp), ALLOCATABLE :: rc_q(:), rc_v(:), rc_a(:), rc_g(:, :)
+    REAL(wp), ALLOCATABLE :: rc_q(:, :), rc_v(:, :), rc_a(:, :), rc_g(:, :)
     LOGICAL, ALLOCATABLE :: rc_have(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HermiteCableDynType
@@ -622,7 +625,7 @@ CONTAINS
 
     ! state: at-rest seed, v = 0, consistent a0
     ALLOCATE (model%q(ndof), model%v(ndof), model%a(ndof))
-    ALLOCATE (model%rc_q(ndof), model%rc_v(ndof), model%rc_a(ndof), model%rc_g(12, ne), model%rc_have(ne))
+    ALLOCATE (model%rc_q(12, ne), model%rc_v(12, ne), model%rc_a(12, ne), model%rc_g(12, ne), model%rc_have(ne))
     model%rc_have = .FALSE.
     model%rc_key_ok = .FALSE.
     model%q = seed
@@ -4752,10 +4755,11 @@ CONTAINS
   SUBROUTINE CD_HermiteCable_Dyn_Node_Values(model, node, tension, curvature, bend_moment, ErrStat, ErrMsg)
     !! Equilibrium node values at one node (internal order), from the two adjacent elements;
     !! the same values as CD_HermiteCable_Dyn_Node_Recovery returns for that node. The element end
-    !! residuals are kept in the model for the state they were evaluated at (see the rc_ fields),
-    !! so the tension, curvature and bend moment of a node, and of neighbouring nodes, share one
-    !! evaluation per element; a changed state or load configuration refreshes them. No
-    !! allocation.
+    !! residuals are kept in the model for the element state they were evaluated at (see the rc_
+    !! fields), so the tension, curvature and bend moment of a node, and of neighbouring nodes,
+    !! share one evaluation per element; a changed time, load configuration or element state
+    !! refreshes them. A query compares the two adjacent elements' states only, so a loop over
+    !! every node of a line costs O(nn). No allocation.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
@@ -4771,12 +4775,9 @@ CONTAINS
     IF (node < 1 .OR. node > model%nn) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Node_Values: node out of range'; RETURN
     END IF
-    ! the cached residuals belong to the state they were computed at (exact comparison; a NaN
-    ! state never matches and is recomputed)
-    IF (.NOT. (model%rc_key_ok .AND. model%rc_key_epoch == model%rc_epoch .AND. model%rc_t == model%t .AND. &
-               ALL(model%rc_q == model%q) .AND. ALL(model%rc_v == model%v) .AND. &
-               ALL(model%rc_a == model%a))) THEN
-      model%rc_q = model%q; model%rc_v = model%v; model%rc_a = model%a
+    ! the cached residuals belong to the time and load configuration they were computed at, and
+    ! each to its element's state (exact comparisons; a NaN never matches and is recomputed)
+    IF (.NOT. (model%rc_key_ok .AND. model%rc_key_epoch == model%rc_epoch .AND. model%rc_t == model%t)) THEN
       model%rc_t = model%t; model%rc_key_epoch = model%rc_epoch
       model%rc_key_ok = .TRUE.
       model%rc_have = .FALSE.
@@ -4800,15 +4801,26 @@ CONTAINS
       INTEGER, INTENT(IN) :: e
       REAL(wp), INTENT(OUT) :: ge(12)
       REAL(wp) :: gl(12)
-      IF (.NOT. model%rc_have(e)) THEN
-        CALL element_end_residual(model, e, gl, ErrStat, ErrMsg)
-        IF (ErrStat /= CD_HCDYN_OK) THEN
-          ge = CD_ZERO; RETURN
+      INTEGER :: i0
+      ! the element's residual depends on its own two nodes' q, v and a only (element_end_residual)
+      i0 = 6*(e - 1)
+      IF (model%rc_have(e)) THEN
+        IF (ALL(model%rc_q(:, e) == model%q(i0 + 1:i0 + 12)) .AND. ALL(model%rc_v(:, e) == model%v(i0 + 1:i0 + 12)) &
+            .AND. ALL(model%rc_a(:, e) == model%a(i0 + 1:i0 + 12))) THEN
+          ge = model%rc_g(:, e); RETURN
         END IF
-        model%rc_g(:, e) = gl
-        model%rc_have(e) = .TRUE.
       END IF
-      ge = model%rc_g(:, e)
+      model%rc_have(e) = .FALSE.
+      CALL element_end_residual(model, e, gl, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ge = CD_ZERO; RETURN
+      END IF
+      model%rc_q(:, e) = model%q(i0 + 1:i0 + 12)
+      model%rc_v(:, e) = model%v(i0 + 1:i0 + 12)
+      model%rc_a(:, e) = model%a(i0 + 1:i0 + 12)
+      model%rc_g(:, e) = gl
+      model%rc_have(e) = .TRUE.
+      ge = gl
     END SUBROUTINE cached_end_residual
   END SUBROUTINE CD_HermiteCable_Dyn_Node_Values
 
@@ -4960,15 +4972,18 @@ CONTAINS
   END FUNCTION unit_tangent
 
   SUBROUTINE node_contact_normal(model, node, fc, ErrStat, ErrMsg)
-    !! Frictionless seabed normal force (with its damping) on a node at the committed state, as
-    !! assemble_contact applies it.
+    !! Frictionless seabed contact force on a node at the committed state, exactly as
+    !! assemble_contact applies it: the normal force with its damping and, in a rounded crease
+    !! of the bathymetry, the elastic increment of the penalty potential (crease_contact_increment).
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(OUT) :: fc(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: z_floor, gx, gy, xg, yg, gxg, gyg, sfac, nvec(3), gap, normal, normal_gap, vn, gate, gate_gap
+    REAL(wp) :: curv_g(3), fcrease(3), kcrease(3, 3)
     INTEGER :: iz, es
+    LOGICAL :: creased
     CHARACTER(200) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     fc = CD_ZERO
@@ -4976,26 +4991,35 @@ CONTAINS
     IF (model%has_contact) THEN
       z_floor = model%seabed_z
       gx = CD_ZERO; gy = CD_ZERO
+      creased = .FALSE.
       IF (model%has_contact_bathymetry) THEN
         xg = model%contact_frame_c*model%q(iz - 2) - model%contact_frame_s*model%q(iz - 1)
         yg = model%contact_frame_s*model%q(iz - 2) + model%contact_frame_c*model%q(iz - 1)
-        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em2)
+        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gxg, gyg, es, em2, &
+                                          crease_curvature=curv_g)
         IF (es /= CD_BATHY_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'node_contact_normal: '//TRIM(em2); RETURN
         END IF
         gx = model%contact_frame_c*gxg + model%contact_frame_s*gyg
         gy = -model%contact_frame_s*gxg + model%contact_frame_c*gyg
+        creased = ANY(ABS(curv_g) > CD_ZERO)
       END IF
       sfac = SQRT(CD_ONE + gx*gx + gy*gy)
       nvec = [-gx, -gy, CD_ONE]/sfac
       gap = (z_floor - model%q(iz))/sfac
       CALL CD_Seabed_Normal_Law(gap, model%contact_kn(node), normal, normal_gap)
+      CALL CD_Seabed_Contact_Gate(gap, gate, gate_gap)
+      IF (normal <= CD_ZERO .AND. gate <= CD_ZERO) RETURN
       vn = DOT_PRODUCT(model%v(iz - 2:iz), nvec)
-      IF (ALLOCATED(model%contact_cn) .AND. vn < CD_ZERO) THEN
-        CALL CD_Seabed_Contact_Gate(gap, gate, gate_gap)
-        normal = normal - model%contact_cn(node)*gate*vn
+      IF (ALLOCATED(model%contact_cn) .AND. vn < CD_ZERO) normal = normal - model%contact_cn(node)*gate*vn
+      fc = normal*nvec
+      IF (creased) THEN
+        CALL crease_contact_increment(z_floor - model%q(iz), gx, gy, model%contact_kn(node), &
+                                      CD_Bathymetry_Rotate_Curvature(curv_g, [model%contact_frame_c, &
+                                                                              model%contact_frame_s]), &
+                                      fcrease, kcrease)
+        fc = fc + fcrease
       END IF
-      IF (normal > CD_ZERO) fc = normal*nvec
     ELSE IF (model%kn > CD_ZERO) THEN
       gap = model%seabed_z - model%q(iz)
       IF (gap > CD_ZERO) fc(3) = model%kn*gap*model%trib(node)

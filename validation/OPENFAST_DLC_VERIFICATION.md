@@ -177,9 +177,13 @@ with 248 elements to resolve its bending length, and the one-hour full-turbine r
 coupled finite-EI touchdown row in [`VALIDATION.md`](../VALIDATION.md) uses that mesh. The run
 completed (exit 0, all 2400 steps, 0 NaN/Inf), and its output contains the finite-EI curvature
 and bending-moment channels of the sag bend, which confirms that the cable ran on the finite-EI
-element. At the static initial state the standalone driver gives 0.0915 1/m and 1821 N·m on
-that mesh (`Curv4N20`, `BendMom4N20`), and 0.0906 1/m and 1803 N·m on the current one
-(`Curv4N38`, `BendMom4N38`). This case has no MoorDyn-F twin and establishes completion only; cable accuracy is established against OrcaFlex in cases L3-4, L3-5, L3-6 and
+element. With the geometric curvature of the centreline, which these channels reported when the
+case was run and which `OutputRecovery element` reproduces, the standalone driver gives at the
+static initial state 0.0915 1/m and 1821 N·m on that mesh (`Curv4N20`, `BendMom4N20`) and
+0.0906 1/m and 1803 N·m on the current one (`Curv4N38`, `BendMom4N38`). The curvature and bend moment
+recovered from nodal equilibrium, the channels' definition now, are 0.0838 1/m and 1667 N·m at
+node 20 of the former mesh (0.0914 1/m at node 19, the recovered peak) and 0.0902 1/m and
+1795 N·m at node 38 of the current one. This case has no MoorDyn-F twin and establishes completion only; cable accuracy is established against OrcaFlex in cases L3-4, L3-5, L3-6 and
 L4-1c of [`VALIDATION.md`](../VALIDATION.md).
 
 ### Coupled rod between two fairleads, still water

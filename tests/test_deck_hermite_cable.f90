@@ -12,7 +12,8 @@ PROGRAM test_deck_hermite_cable
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_HermiteCable, CD_DECKDRV_OK, CD_DECKDRV_BADINPUT
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, &
-                                          CD_HFMF_Curvature, CD_HFMF_GetCoupledKinematics, &
+                                          CD_HFMF_Curvature, CD_HFMF_Curvature_Exact, &
+                                          CD_HFMF_GetCoupledKinematics, &
                                           CD_HFMF_MinSpanZ, CD_HFMF_Snapshot, CD_HFMF_Restore, &
                                           CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
@@ -112,7 +113,9 @@ CONTAINS
     ! Curvature must stay SMOOTH: a lazy-wave sag/arch bend is O(0.1 /m); a value near 1 /m would
     ! be a sub-element kink (the slack-catenary buckling mode this lazy-wave gate avoids). Bound
     ! well below that so the gate actually fails on a kinked response, not just a non-finite one.
-    CALL CD_HFMF_Curvature(cable, curv, es, em)
+    ! A kink is a defect of the centreline shape, so the gate reads its geometric trace
+    ! (CD_HFMF_Curvature_Exact), not the Curv channel's equilibrium moment over EI.
+    CALL CD_HFMF_Curvature_Exact(cable, curv, es, em)
     CALL require(es == CD_HFMF_OK .AND. .NOT. ANY(IEEE_IS_NAN(curv)) .AND. nan_max_abs(curv) < 1.0_wp, &
                  'curvature finite, bounded, and smooth (no kink)')
     WRITE (*, '(A,F9.1,A,F9.2,A,ES10.3)') 'deck-Hermite cable: steady |Fair| = ', ymag*1.0e-3_wp, &
@@ -189,7 +192,7 @@ CONTAINS
     END DO
     IF (stepped_ok) THEN
       ALLOCATE (curv(nn_adapt))
-      CALL CD_HFMF_Curvature(adapt, curv, es, em)
+      CALL CD_HFMF_Curvature_Exact(adapt, curv, es, em)   ! geometric trace: a kink is a shape defect
       CALL require(es == CD_HFMF_OK .AND. .NOT. ANY(IEEE_IS_NAN(curv)) .AND. nan_max_abs(curv) < 1.0_wp, &
                    'adaptive-mesh: refined cable curvature finite, bounded, smooth')
       WRITE (*, '(A,I0,A,I0,A)') 'adaptive-mesh: coupled cable refined ', nn_plain, ' -> ', nn_adapt, ' nodes'

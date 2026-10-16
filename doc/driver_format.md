@@ -1270,9 +1270,10 @@ bending moment. None of these channels is mandatory.
   seabed at exactly one end in its initial state; otherwise the run stops with exit code 1
   naming the line. They are available on every route, OpenFAST included.
 - The anchor uplift check of a drag-embedment anchor (no vertical load at the anchor in the
-  intact condition) reads `AnchFz<L>` (its maximum over the run at most 0) or `TDP<L>Grd`
-  (greater than a small tolerance such as 0.01 m throughout); see [Outputs](outputs.rst) for the end-node weight share that a
-  grounded `Fixed` anchor carries.
+  intact condition) reads `TDP<L>Grd` (greater than a small tolerance such as 0.01 m
+  throughout); `AnchFz<L>` is the vertical anchor load. On an `EI = 0` line it includes the
+  anchor node's lumped weight, so its sign change lags the anchor segment's lift-off; see
+  [Outputs](outputs.rst) (Anchor uplift).
 - In an OpenFAST `CompMooring = 5` run, channel headers in the OpenFAST output and in
   `<OpenFASTRoot>.CD.out` use OpenFAST's 20-character width (`ChanLen`). A longer channel name
   stops coupled initialisation with an error naming the channel; keep coupled channel names
