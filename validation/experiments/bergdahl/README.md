@@ -70,11 +70,11 @@ committed summary file (`sha256sum`, or `Get-FileHash` in PowerShell).
 
 `comparison_summary.csv`, `aggregate_metrics.json` and `provenance.json` hold the compact
 results and the checksum of the executable used. The calculated force is `FairTen1`, the force
-at the upper line end. Across the 30 conditions, the cycle maxima have an RMSE of 1.59 N, a
-mean absolute percentage error of 3.12%, a mean bias of +0.45 N, a Pearson correlation of 0.993
+at the upper line end. Across the 30 conditions, the cycle maxima have an RMSE of 1.58 N, a
+mean absolute percentage error of 3.13%, a mean bias of +0.46 N, a Pearson correlation of 0.993
 and a Lin concordance coefficient of 0.989. For the two waveform conditions, halving the nominal
-element length and the time step changes the mean cycle maximum by no more than 0.34% and
-0.22%, respectively, and the phase-averaged force histories have RMSEs of 5.95% and 2.54% of
+element length and the time step changes the mean cycle maximum by no more than 0.52% and
+0.19%, respectively, and the phase-averaged force histories have RMSEs of 5.95% and 2.54% of
 the measured force range (computed with the executable of the 2026-10-09 record; see
 `provenance.json`). The waveform CSVs carry the measured phase averages computed from the
 supplement's `expData.dat`.
@@ -86,7 +86,7 @@ modes up to about 2c/l ≈ 3500 rad/s. The force maxima are snap loads, which co
 step only once the step resolves these modes, roughly dtM ≲ l/(2c) ≈ 0.29 ms (see "Snap loads
 on slack lines" in the [modelling guide](https://cabledyn.readthedocs.io/en/latest/modeling.html)).
 At a coarser step the maxima do not settle: at the T = 1.25 s, 0.20 m condition they are
-71.7 N at 0.625 ms, against 68.0 N at 0.3125 ms and 67.9 N at 0.15625 ms. Coarse steps also
+72.2 N at 0.625 ms, against 68.0 N at 0.3125 ms and 67.8 N at 0.15625 ms. Coarse steps also
 leave the maxima sensitive to the Newton tolerance and to small changes in the solver's
 iteration path. With a 1.25 ms step and a relative tolerance of 1e-5, the five cycle maxima of
 a condition have standard deviations of up to 1.6 N, their means are 2–15% above the converged

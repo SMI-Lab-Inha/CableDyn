@@ -13,7 +13,7 @@ MODULE CableDyn_Dynamic
   !! over dt by solving the force-blended residual (GenAlphaConfig%force_blend, default)
   !!   R(q) = M a_alpha + (1 - alpha_f) r(q_{n+1}, v_{n+1}) + alpha_f r(q_n, v_n) = 0,
   !!   r = f_int - f_ext - f_load,
-  !! with a release cap on tension-only elements that go slack within the step (see
+  !! with a release cap on tension-only elements that release within the step (see
   !! apply_release_cap), or the configuration-blended R(q) = M a_alpha + f_int(q_alpha) - ...,
   !! for the Newton variable q = q_{n+1} with a Newton + Armijo line search on the
   !! 1/2||R||^2 merit. Optional callbacks add dynamic loads, force-only residual
@@ -661,7 +661,7 @@ CONTAINS
     !! elements (ea = 0 there; the viscoelastic and Syrope elements of a line model): the
     !! step-start tension of each element (n_elem), the along-chord force of that law in
     !! start_load (or in the step-start load the step evaluates). The release cap then bounds
-    !! the alpha_f share of those elements as it bounds that of the elastic ones; entries of
+    !! the force blend of those elements as it bounds that of the elastic ones; entries of
     !! elements with ea > 0 are ignored. Absent: the cap covers the elastic elements only.
     REAL(wp), INTENT(IN), OPTIONAL :: start_tension(:)
     !! TEST HOOK (unit tests of the tangent; production callers omit it). With probe_q (full
@@ -1978,50 +1978,83 @@ CONTAINS
 
     SUBROUTINE apply_release_cap(q_eval, Rout, effout, effbandout)
       !! Release cap of the force blend. A tension-only element taut at t_n (tension T_0,
-      !! stretch e_0 = l_n - l0 > 0) and slack at t_{n+1} (e_1 < 0) carries alpha_f T_0 along
-      !! its step-start chord in the blended residual. While the element shortens by
-      !! e_0 - e_1 that force returns the work alpha_f T_0 (e_0 - e_1) to the motion, but the
-      !! element only released its strain energy W_0 = T_0 e_0/2: a release deeper than
-      !! e_0 (1/(2 alpha_f) - 1) within one step would create energy. Such an element instead
-      !! carries the discrete energy gradient W_0/(e_0 - e_1), which returns exactly W_0 (the
-      !! smaller of the two is kept, so the blend is continuous in e_1). Every other element,
-      !! and every taut one, keeps the force blend. The residual and the tangent are corrected
-      !! by the difference. An element whose axial law a load callback carries (ea = 0, T_0
-      !! from start_tension) is capped the same way with the same W_0 = T_0 e_0/2: the energy
-      !! of the viscoelastic springs at rest, and an upper bound of the energy below a
-      !! stiffening loading curve such as Syrope's, so the alpha_f share of every
-      !! tension-only element returns at most T_0 e_0/2 over a release.
+      !! stretch e_0 = l_n - l0 > 0, chord d_0 = l_n t_0) carries alpha_f T_0 along its
+      !! step-start chord t_0 in the blended residual, a constant force over the step. Over the
+      !! relative displacement d_1 - d_0 of its ends it returns the work alpha_f T_0 p to the
+      !! motion, with the projected shortening p = l_n - t_0 . d_1, not the shortening
+      !! e_0 - e_1 = l_n - |d_1|: a segment that turns as it releases has p well above e_0 - e_1
+      !! (up to l_n + |d_1| for a reversed chord). The end share (1 - alpha_f) T_1 t_1, T_1 the
+      !! tension at t_{n+1}, returns -(1 - alpha_f) T_1 p_1 with p_1 = |d_1| - t_1 . d_0. The
+      !! element itself only released its strain energy W_0 = T_0 e_0/2, so the blend of an
+      !! element that releases (deeply, or turning) within one step can create energy. The cap
+      !! bounds the work of the blended force by W_0: when alpha_f T_0 p exceeds
+      !! N = W_0 + (1 - alpha_f) T_1 p_1 the element carries N/p instead of alpha_f T_0 along t_0
+      !! (the smaller of the two is kept, so the blend is continuous in d_1). An element slack at
+      !! t_{n+1} (T_1 = 0) carries the discrete energy gradient W_0/p and returns exactly W_0.
+      !! For e_1 > 0, T_1 = T_0 e_1/e_0, the tension of an elastic element, so the cap fades out
+      !! continuously as the end state crosses the rest length (a cap on slack end states alone
+      !! would jump there by up to alpha_f T_0). It acts on a taut end state only when the
+      !! element turned and T_1 < alpha_f/(1 - alpha_f) T_0; an element slack at t_n keeps the
+      !! force blend. N >= W_0/2 always, so 4 alpha_f p <= e_0 is a sufficient test of an
+      !! inactive cap. The residual and the tangent are corrected by the difference. An element
+      !! whose axial law a load callback carries (ea = 0, T_0 from start_tension) is capped the
+      !! same way with the same W_0 = T_0 e_0/2 (the energy of the viscoelastic springs at
+      !! rest, an upper bound of the energy below a stiffening loading curve such as Syrope's)
+      !! and the same secant T_1, so the blend of every tension-only element that ends slack
+      !! returns at most T_0 e_0/2 (an elastic one also when it ends taut).
       REAL(wp), INTENT(IN) :: q_eval(:)
       REAL(wp), INTENT(INOUT) :: Rout(:)
       REAL(wp), INTENT(INOUT), OPTIONAL :: effout(:, :), effbandout(:, :)
       INTEGER :: e, na, nb, i, j, gi(6), fi, fj
-      REAL(wp) :: d1(3), l1, e1, e0, t0, den, dg, delta, ddg, t1(3), blk(3, 3), sgn
+      REAL(wp) :: d1(3), l1, e1, e0, t0, p, p1, num, ln, k0, ten1, cosang, dg, delta, t1(3), g(3), blk(3, 3), sgn
+      LOGICAL :: taut_end
       DO e = 1, n_elem
         t0 = tension_n(e)
         IF (.NOT. t0 > CD_ZERO) CYCLE
         na = elem_conn(1, e)
         nb = elem_conn(2, e)
         d1 = q_eval(3*nb - 2:3*nb) - q_eval(3*na - 2:3*na)
-        ! a taut end state (the common case) is decided on the squared length, without a root
-        IF (d1(1)*d1(1) + d1(2)*d1(2) + d1(3)*d1(3) >= l0(e)*l0(e)) CYCLE
-        l1 = NORM2(d1)
-        e1 = l1 - l0(e)
-        IF (e1 >= CD_ZERO) CYCLE
         e0 = stretch_n(e)
-        den = e0 - e1
-        dg = 0.5_wp*t0*e0/den
+        ! projected shortening p = l_n - t_0 . d_1 (l_n = l0 + e_0); the common case, an element
+        ! that does not release, is decided here without a root
+        p = e0 + (l0(e) - (chord_n(1, e)*d1(1) + chord_n(2, e)*d1(2) + chord_n(3, e)*d1(3)))
+        IF (.NOT. 4.0_wp*alpha_f*p > e0) CYCLE
+        num = 0.5_wp*t0*e0
+        taut_end = d1(1)*d1(1) + d1(2)*d1(2) + d1(3)*d1(3) > l0(e)*l0(e)
+        l1 = CD_ZERO
+        e1 = CD_ZERO
+        ten1 = CD_ZERO
+        IF (taut_end) THEN
+          ! the end share's work: p_1 = |d_1| - t_1 . d_0 = (e_1 - e_0) + l_n (1 - t_1 . t_0),
+          ! with 1 - t_1 . t_0 = |t_1 - t_0|^2/2 (no cancellation at small turns)
+          l1 = NORM2(d1)
+          e1 = l1 - l0(e)
+          taut_end = e1 > CD_ZERO
+        END IF
+        IF (taut_end) THEN
+          ln = l0(e) + e0
+          k0 = t0/e0
+          ten1 = k0*e1
+          t1 = d1/l1
+          cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
+          p1 = (e1 - e0) + 0.5_wp*ln*((t1(1) - chord_n(1, e))**2 + (t1(2) - chord_n(2, e))**2 + &
+                                      (t1(3) - chord_n(3, e))**2)
+          num = num + (CD_ONE - alpha_f)*ten1*p1
+        END IF
+        dg = num/p
         IF (dg >= alpha_f*t0) CYCLE
         delta = dg - alpha_f*t0
         Rout(3*na - 2:3*na) = Rout(3*na - 2:3*na) - delta*chord_n(:, e)
         Rout(3*nb - 2:3*nb) = Rout(3*nb - 2:3*nb) + delta*chord_n(:, e)
         IF (.NOT. (PRESENT(effout) .OR. PRESENT(effbandout))) CYCLE
-        ! d(delta)/d(x_b) = ddg t1, d(delta)/d(x_a) = -ddg t1
-        IF (.NOT. l1 > CD_ZERO) CYCLE
-        t1 = d1/l1
-        ddg = 0.5_wp*t0*e0/(den*den)
+        ! d(delta)/d(x_b) = g, d(delta)/d(x_a) = -g, with dp/dd_1 = -t_0,
+        ! dT_1/dd_1 = k0 t_1 and dp_1/dd_1 = t_1 - (l_n/|d_1|)(t_0 - (t_1 . t_0) t_1)
+        g = (num/(p*p))*chord_n(:, e)
+        IF (taut_end) g = g + ((CD_ONE - alpha_f)/p)*((k0*p1 + ten1)*t1 - &
+                                                      ten1*(ln/l1)*(chord_n(:, e) - cosang*t1))
         DO j = 1, 3
           DO i = 1, 3
-            blk(i, j) = ddg*chord_n(i, e)*t1(j)
+            blk(i, j) = chord_n(i, e)*g(j)
           END DO
         END DO
         DO i = 1, 3
@@ -2030,7 +2063,7 @@ CONTAINS
         END DO
         DO j = 1, 6
           DO i = 1, 6
-            ! rows of node a carry -delta t0, columns of node a d(delta)/d(x_a) = -ddg t1
+            ! rows of node a carry -delta t_0, columns of node a d(delta)/d(x_a) = -g
             sgn = MERGE(-CD_ONE, CD_ONE, i <= 3)*MERGE(-CD_ONE, CD_ONE, j <= 3)
             IF (PRESENT(effout)) THEN
               effout(gi(i), gi(j)) = effout(gi(i), gi(j)) + sgn*blk(MOD(i - 1, 3) + 1, MOD(j - 1, 3) + 1)

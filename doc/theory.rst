@@ -1329,38 +1329,57 @@ was 0.2 m slack reports about 30 MN. A mass dropped 1 m onto a tension-only spri
 blend, against the resolved 0.35 MN; the force blend gives 5.7 kN, the under-resolved impact
 dissipated as at :math:`\rho_\infty = 0`.
 
-**Release cap.** The force blend alone still creates energy when a taut element goes slack
-within one step. An element with tension :math:`T_n` and stretch :math:`e_n = l_n - l_0 > 0` at
-:math:`t_n` and :math:`e_{n+1} < 0` at :math:`t_{n+1}` carries :math:`\alpha_f T_n` along its
-step-start chord while it shortens by :math:`e_n - e_{n+1}`. That force returns the work
-:math:`\alpha_f T_n (e_n - e_{n+1})` to the motion, but the element released only its strain
-energy :math:`W_n = \tfrac{1}{2} T_n e_n`: a release deeper than
-:math:`e_n (1/(2\alpha_f) - 1)` (0.75 :math:`e_n` at :math:`\rho_\infty = 0.4`) creates energy.
-On a slack light cable this feeds a sustained rattle of single-step tension spikes. Such an
-element carries instead the discrete energy gradient :math:`W_n/(e_n - e_{n+1})`, which returns
-exactly :math:`W_n`; the smaller of the two is kept, so the blend is continuous in
-:math:`e_{n+1}`, and the residual and the tangent take the difference. Every taut element, every
-element going taut (where the force blend dissipates), and every line that allows compression
-keep the force blend. In the slack-cable case above the internal forces created 2.7e8 J over
-20 s with the configuration blend and 6.7e7 J with the force blend alone, and 0.2 J (round-off)
-with the cap; the fairlead peak is 0.14 MN, against 0.13 to 0.19 MN at
-:math:`\rho_\infty = 0` and at :math:`\Delta t` down to 0.25 ms. For a linear element the force
-blend and the cap reduce to the configuration blend, so the linear spectral properties and the
-second-order accuracy are unchanged.
+**Release cap.** The force blend alone still creates energy when a taut element releases
+within one step. An element with tension :math:`T_n`, stretch :math:`e_n = l_n - l_0 > 0` and
+chord :math:`\mathbf{d}_n = l_n \mathbf{t}_n` at :math:`t_n` keeps :math:`\alpha_f T_n` along
+:math:`\mathbf{t}_n` for the whole step, a constant force. Over the relative displacement
+:math:`\mathbf{d}_{n+1} - \mathbf{d}_n` of its ends it returns the work :math:`\alpha_f T_n p` to
+the motion, with the projected shortening :math:`p = l_n - \mathbf{t}_n \cdot \mathbf{d}_{n+1}`.
+This is not the shortening :math:`e_n - e_{n+1}` of the element: since
+:math:`p = (e_n - e_{n+1}) + l_{n+1}(1 - \mathbf{t}_n \cdot \mathbf{t}_{n+1})`, a segment that
+turns as it releases moves much further against that force than it shortens. The end share
+:math:`(1 - \alpha_f) T_{n+1} \mathbf{t}_{n+1}` returns :math:`-(1 - \alpha_f) T_{n+1} p_{n+1}`,
+with :math:`p_{n+1} = l_{n+1} - \mathbf{t}_{n+1} \cdot \mathbf{d}_n`. The element released only
+its strain energy :math:`W_n = \tfrac{1}{2} T_n e_n`. An element that ends slack
+(:math:`T_{n+1} = 0`) therefore creates energy once :math:`p > e_n/(2\alpha_f)`: along a fixed
+chord, a release deeper than :math:`e_n (1/(2\alpha_f) - 1)` (0.75 :math:`e_n` at
+:math:`\rho_\infty = 0.4`); a nearly unstretched segment that turns by 90° returns about
+:math:`\alpha_f T_n l_n`, hundreds of times :math:`W_n`. On a slack light cable this feeds a
+sustained rattle of single-step tension spikes. The cap bounds the work of the element's blended
+force by :math:`W_n`: along :math:`\mathbf{t}_n` the element carries the smaller of
+:math:`\alpha_f T_n` and :math:`(W_n + (1 - \alpha_f) T_{n+1} p_{n+1})/p`, which is the discrete
+energy gradient :math:`W_n/p` when it ends slack, and the residual and the tangent take the
+difference (:math:`\partial p/\partial \mathbf{d}_{n+1} = -\mathbf{t}_n`). With
+:math:`T_{n+1} = T_n e_{n+1}/e_n`, the tension of a linear element, the cap fades out as the end
+state crosses the rest length, so the residual stays continuous in :math:`\mathbf{q}_{n+1}`. A
+cap on the slack end states alone would jump there, by up to :math:`\alpha_f T_n` for a turned
+element. The cap does not act on an element that ends above :math:`\alpha_f/(1 - \alpha_f)\,T_n`
+(0.4 :math:`T_n`), nor on one that keeps its direction and ends taut, nor on one slack at
+:math:`t_n`: those elements, every element going taut (where the force blend dissipates), and
+every line that allows compression keep the force blend. In the slack-cable case above the
+internal forces created 2.7e8 J over 20 s with the configuration blend, 6.7e7 J with the force
+blend alone, 0.19 J with a cap on :math:`e_n - e_{n+1}` (the turn of the releasing segments) and
+4e-4 J (round-off) with the projected cap. The fairlead peak is 0.10 MN. The snap is not
+resolved in time: with the cap the peak ranges from 0.10 to 0.18 MN over :math:`\Delta t` from
+2.5 to 0.25 ms, against 0.13 to 0.19 MN at :math:`\rho_\infty = 0`. For a linear element the
+force blend and the cap reduce to the configuration blend, so the linear spectral properties and
+the second-order accuracy are unchanged.
 
 The segments whose tension comes from a constitutive law, the viscoelastic and Syrope segments
 (whose law enters the step as a dynamic load), are capped in the same way: :math:`T_n` is the
 law's tension at the committed state, the force :math:`\mathbf{r}_n` carries, with the same
-:math:`e_n` and :math:`W_n = \tfrac{1}{2} T_n e_n`. For the viscoelastic law at rest this is the
-energy of its two springs, which both carry :math:`T_n` and whose stretches add up to
-:math:`e_n`; for the Syrope law, whose loading curve stiffens, it bounds the energy below the
-curve from above. So the :math:`\alpha_f` share of every segment of a tension-only line returns
-at most :math:`\tfrac{1}{2} T_n e_n` in a release (a release that ends above :math:`l_0` returns
-at most :math:`\alpha_f T_n e_n`, and :math:`\alpha_f \le \tfrac{1}{2}`). With the light cable
-above made lightly damped viscoelastic (EA 8e8 | 1.6e9 N, BA 1e8 | 1e6 N s) the anchor peaks at
-0.056 to 0.081 MN at :math:`\Delta t` = 0.1 s with the cap on its segments (the snap is not
-resolved at that step, so the peak depends on round-off: Linux and Windows builds differ) and
-at 0.145 MN without it, against 0.076 to 0.094 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
+:math:`e_n`, :math:`W_n = \tfrac{1}{2} T_n e_n` and secant end tension
+:math:`T_{n+1} = T_n e_{n+1}/e_n`. For the viscoelastic law at rest :math:`W_n` is the energy of
+its two springs, which both carry :math:`T_n` and whose stretches add up to :math:`e_n`; for the
+Syrope law, whose loading curve stiffens, it bounds the energy below the curve from above. So the
+blend of every segment of a tension-only line that ends slack returns at most
+:math:`\tfrac{1}{2} T_n e_n` over the step, and so does that of an elastic segment that ends
+taut; for a law segment that ends taut the bound holds with the secant end tension in place of
+the law's. With the light cable above made lightly damped viscoelastic (EA 8e8 | 1.6e9 N,
+BA 1e8 | 1e6 N s) the anchor peaks at 0.072 MN at :math:`\Delta t` = 0.1 s with the cap on its
+segments (the snap is not resolved at that step, so the peak depends on round-off: other
+compilers and platforms give other values) and at 0.145 MN without it, against 0.087 to
+0.095 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
 surge that goes slack peaks at 1.64 MN at 0.1 s, against 1.78 MN at 1 and 2.5 ms, with or
 without the cap.
 
@@ -1467,7 +1486,7 @@ partly subdivided state is ever committed.
 **Step size.** Being implicit, the scheme is not bound by the explicit axial-wave limit. In the
 snap-load verification a slack line snapping to about 10 MN integrates stably at
 :math:`\Delta t = 20\,\mathrm{ms}`, well above the explicit limit of 3.2 ms, with the peak
-within 1.6% of a 0.5 ms reference (:doc:`validation`). The time step must still resolve the
+within 1.5% of a 0.5 ms reference (:doc:`validation`). The time step must still resolve the
 response of interest and, for explicitly integrated points and bodies (below), their own
 stability limit. The standalone driver audits every ``EI = 0`` line on the initial state and at
 each output step, and reports at the end of the run:

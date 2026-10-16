@@ -21,12 +21,18 @@ PROGRAM test_ei0_slack_dynamics
   !!      residual (the step's probe_q hook), on a three-segment tension-only chain with one fixed
   !!      node: all segments taut at t_n and at the trial state (release cap inactive), a segment
   !!      taut at t_n and deeply slack at the trial state (cap active, its energy-gradient force
-  !!      W_n/(e_n - e_{n+1}) and tangent), and a segment slack at both states; each on the
-  !!      banded and the dense path. The cap's residual is also checked against the closed form.
+  !!      W_n/p on the projected shortening p and tangent), a segment slack at both states, and a
+  !!      segment that turns by 45 degrees and ends slack (capped), taut at a tenth of its
+  !!      tension (capped with the work of the end share) or taut at 3/4 of it (not capped);
+  !!      each on the banded and the dense path. The residual is also checked against the closed
+  !!      form. The blend of a segment that turns by 0 to 180 degrees within the step and ends
+  !!      slack or taut returns at most its step-start strain energy W_n (up to 1100 W_n before
+  !!      the cap took the projected shortening), and its force is continuous across the rest
+  !!      length.
   !!   6. The same chain with a segment whose tension-only law a load callback carries (ea = 0,
   !!      as the viscoelastic and Syrope segments of a line model): with its step-start tension
-  !!      (start_tension) its deep release is capped like an elastic one, closed form and finite
-  !!      difference tangent; without it the segment keeps the plain force blend.
+  !!      (start_tension) its release, deep or turning, is capped like an elastic one, closed
+  !!      form and finite difference tangent; without it the segment keeps the plain force blend.
   !!   7. The finite-difference tangent of the step with nonzero dynamic loads (a quadratic drag
   !!      and a cubic position load, plus a position-dependent added mass on the dense path), and
   !!      the closed form of the blended load (1 - alpha_f) f(q_{n+1}, v_{n+1}) + alpha_f f(q_n, v_n).
@@ -62,6 +68,7 @@ PROGRAM test_ei0_slack_dynamics
   driver = ''
   IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, driver)
   CALL case_tangent_consistency()
+  CALL case_release_energy()
   CALL case_law_release_cap()
   CALL case_load_share_tangent()
   CALL case_warm_resolve_reuse()
@@ -324,12 +331,15 @@ CONTAINS
 
   SUBROUTINE blended_force(qn, q1, l0, ea, alpha_f, capped, f)
     !! Closed form of the blended internal force (1 - alpha_f) f(q1) + alpha_f f(qn) of the
-    !! tension-only chain, with the release cap (capped) or without it.
+    !! tension-only chain, with the release cap (capped) or without it: the retained share
+    !! alpha_f T_n along the step-start chord t_n is at most
+    !! (W_n + (1 - alpha_f) T_1 p_1)/p, W_n = T_n e_n/2, with the projected shortening
+    !! p = |d_n| - t_n . d_1 and p_1 = |d_1| - t_1 . d_n, so that the blend returns at most W_n.
     REAL(wp), INTENT(IN) :: qn(12), q1(12), l0(3), ea(3), alpha_f
     LOGICAL, INTENT(IN) :: capped
     REAL(wp), INTENT(OUT) :: f(12)
     INTEGER :: e
-    REAL(wp) :: dn(3), d1(3), ln, l1, t0, t1, e0, e1, dg, share(3)
+    REAL(wp) :: dn(3), d1(3), ln, l1, t0, t1, e0, dg, p, p1, share(3)
     f = 0.0_wp
     DO e = 1, 3
       dn = qn(3*e + 1:3*e + 3) - qn(3*e - 2:3*e)
@@ -339,9 +349,10 @@ CONTAINS
       t0 = MAX(0.0_wp, ea(e)*(ln/l0(e) - 1.0_wp))
       t1 = MAX(0.0_wp, ea(e)*(l1/l0(e) - 1.0_wp))
       e0 = ln - l0(e)
-      e1 = l1 - l0(e)
       dg = alpha_f*t0
-      IF (capped .AND. t0 > 0.0_wp .AND. e1 < 0.0_wp) dg = MIN(dg, 0.5_wp*t0*e0/(e0 - e1))
+      p = ln - DOT_PRODUCT(dn/ln, d1)
+      p1 = l1 - DOT_PRODUCT(d1/l1, dn)
+      IF (capped .AND. t0 > 0.0_wp .AND. p > 0.0_wp) dg = MIN(dg, (0.5_wp*t0*e0 + (1.0_wp - alpha_f)*t1*p1)/p)
       share = (1.0_wp - alpha_f)*t1*d1/l1 + dg*dn/ln
       f(3*e - 2:3*e) = f(3*e - 2:3*e) - share
       f(3*e + 1:3*e + 3) = f(3*e + 1:3*e + 3) + share
@@ -378,12 +389,14 @@ CONTAINS
     END IF
   END SUBROUTINE probe_step
 
-  SUBROUTINE tangent_config(label, strain_n, strain_1, expect_cap)
+  SUBROUTINE tangent_config(label, strain_n, strain_1, expect_cap, dirs_trial)
     !! One configuration of the three-segment chain (node 1 fixed): segment strains at t_n and
     !! at the trial state of the step, t_n at rest but for a small velocity and acceleration.
+    !! dirs_trial: the segment directions at the trial state (default: turned a few degrees).
     CHARACTER(*), INTENT(IN) :: label
     REAL(wp), INTENT(IN) :: strain_n(3), strain_1(3)
     LOGICAL, INTENT(IN) :: expect_cap
+    REAL(wp), INTENT(IN), OPTIONAL :: dirs_trial(3, 3)
     REAL(wp), PARAMETER :: L0(3) = [1.0_wp, 1.2_wp, 0.8_wp], EA(3) = [1.0e6_wp, 1.5e6_wp, 0.8e6_wp]
     REAL(wp), PARAMETER :: DIRS_N(3, 3) = RESHAPE([1.0_wp, 0.2_wp, 0.1_wp, 0.3_wp, 1.0_wp, -0.2_wp, &
                                                    -0.2_wp, 0.4_wp, 1.0_wp], [3, 3])
@@ -396,7 +409,11 @@ CONTAINS
     LOGICAL :: dense
     free = [(i + 3, i=1, 9)]
     CALL chain_nodes(DIRS_N, strain_n, L0, qn)
-    CALL chain_nodes(DIRS_1, strain_1, L0, q1)
+    IF (PRESENT(dirs_trial)) THEN
+      CALL chain_nodes(dirs_trial, strain_1, L0, q1)
+    ELSE
+      CALL chain_nodes(DIRS_1, strain_1, L0, q1)
+    END IF
     vn = 0.0_wp
     an = 0.0_wp
     DO i = 4, 12
@@ -431,11 +448,14 @@ CONTAINS
       scale = MAXVAL(ABS(K))
       err = MAXVAL(ABS(K - Kfd))/scale
       WRITE (*, '(A,A,A,L1,A,ES9.2)') '  tangent ', label, ' dense=', dense, ': max |K - K_fd|/max|K| = ', err
-      CALL require(err < 1.0e-6_wp, 'tangent:'//label//TRIM(MERGE(':dense ', ':banded', dense))//':fd-tangent')
+      CALL require(err < 1.0e-8_wp, 'tangent:'//label//TRIM(MERGE(':dense ', ':banded', dense))//':fd-tangent')
     END DO
   END SUBROUTINE tangent_config
 
   SUBROUTINE case_tangent_consistency()
+    ! segment 1 turned by 45 degrees from (1, 0.2, 0.1), the others as in DIRS_1
+    REAL(wp), PARAMETER :: DIRS_TURN(3, 3) = RESHAPE([0.6_wp, 0.9_wp, 0.1_wp, 0.36_wp, 1.0_wp, -0.12_wp, &
+                                                      -0.12_wp, 0.46_wp, 1.0_wp], [3, 3])
     ! (a) all segments taut at t_n and at the trial state: the cap is inactive
     CALL tangent_config('taut-taut', [0.010_wp, 0.020_wp, 0.010_wp], [0.020_wp, 0.015_wp, 0.020_wp], .FALSE.)
     ! (b) segment 1 taut at t_n and deeply slack at the trial state (release deeper than
@@ -443,7 +463,72 @@ CONTAINS
     CALL tangent_config('release-cap', [0.010_wp, 0.020_wp, 0.010_wp], [-0.050_wp, 0.015_wp, 0.020_wp], .TRUE.)
     ! (c) segment 2 slack at both states
     CALL tangent_config('slack-slack', [0.010_wp, -0.020_wp, 0.010_wp], [0.020_wp, -0.030_wp, 0.015_wp], .FALSE.)
+    ! (d) segment 1 turns by 45 degrees and ends 0.05 % slack, a quarter of its stretch e_n
+    !     below the rest length (the former cap on e_n - e_{n+1} left it uncapped), but shortens
+    !     by about 150 e_n along its step-start chord: capped at W_n/p
+    CALL tangent_config('turning-release', [0.002_wp, 0.020_wp, 0.010_wp], [-0.0005_wp, 0.015_wp, 0.020_wp], &
+                        .TRUE., DIRS_TURN)
+    ! (e) the same turn ending taut at a tenth of its step-start tension: capped with the work
+    !     of the end share, (W_n + (1 - alpha_f) T_1 p_1)/p
+    CALL tangent_config('turning-taut-release', [0.002_wp, 0.020_wp, 0.010_wp], [0.0002_wp, 0.015_wp, 0.020_wp], &
+                        .TRUE., DIRS_TURN)
+    ! (f) the same turn ending at 3/4 of its step-start tension: the force blend is kept
+    CALL tangent_config('turning-taut', [0.002_wp, 0.020_wp, 0.010_wp], [0.0015_wp, 0.015_wp, 0.020_wp], &
+                        .FALSE., DIRS_TURN)
   END SUBROUTINE case_tangent_consistency
+
+  SUBROUTINE case_release_energy()
+    !! Energy of the force blend over one step of a segment that turns while it releases: the
+    !! end segment of the chain (l0 0.8 m, EA 0.8e6 N, stretch e_n = 0.8 mm, W_n = 0.32 J) turns
+    !! by theta about an axis normal to its chord and ends at the strain s1, slack or taut, the
+    !! rest of the chain held. The blended force on its free node returns the work
+    !! W = -f . (x_{n+1} - x_n) to the motion; the retained share alone (slack end) or with the
+    !! end share (taut end) must return at most W_n. Before the projected cap the 90 degree turn
+    !! of a segment that ends 0.1 % slack returned 160 J.
+    REAL(wp), PARAMETER :: L0(3) = [1.0_wp, 1.2_wp, 0.8_wp], EA(3) = [1.0e6_wp, 1.5e6_wp, 0.8e6_wp]
+    REAL(wp), PARAMETER :: DIRS(3, 3) = RESHAPE([1.0_wp, 0.2_wp, 0.1_wp, 0.3_wp, 1.0_wp, -0.2_wp, &
+                                                 -0.2_wp, 0.4_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: THETA(8) = [0.0_wp, 2.0_wp, 5.0_wp, 20.0_wp, 45.0_wp, 90.0_wp, 135.0_wp, 180.0_wp]
+    REAL(wp), PARAMETER :: S1(11) = [-0.5_wp, -0.01_wp, -1.0e-3_wp, -1.0e-4_wp, -1.0e-12_wp, 1.0e-12_wp, &
+                                     1.0e-4_wp, 2.0e-4_wp, 5.0e-4_wp, 1.0e-3_wp, 2.0e-3_wp]
+    REAL(wp) :: qn(12), q1(12), z(12), R(12), Rm(12), K(9, 9), tn(3), u(3), dir(3), w0, wk, wmax, ratio, jump
+    INTEGER :: i, j
+    CALL chain_nodes(DIRS, [0.010_wp, 0.020_wp, 0.001_wp], L0, qn)
+    z = 0.0_wp
+    tn = (qn(10:12) - qn(7:9))/NORM2(qn(10:12) - qn(7:9))
+    u = [tn(2), -tn(1), 0.0_wp]
+    u = u/NORM2(u)
+    w0 = 0.5_wp*(EA(3)*0.001_wp)*(L0(3)*0.001_wp)
+    wmax = -HUGE(1.0_wp)
+    DO i = 1, SIZE(THETA)
+      DO j = 1, SIZE(S1)
+        dir = COS(THETA(i)*PI/180.0_wp)*tn + SIN(THETA(i)*PI/180.0_wp)*u
+        q1 = qn
+        q1(10:12) = qn(7:9) + L0(3)*(1.0_wp + S1(j))*dir
+        ! a nearly massless chain at rest at t_n: the residual is the blended force
+        CALL probe_step(qn, z, z, q1, L0, EA, [1.0e-12_wp, 1.0e-12_wp, 1.0e-12_wp], .FALSE., R, K)
+        wk = -DOT_PRODUCT(R(10:12), q1(10:12) - qn(10:12))
+        wmax = MAX(wmax, wk/w0)
+        IF (.NOT. wk <= w0*(1.0_wp + 1.0e-9_wp)) THEN
+          WRITE (*, '(A,F6.1,A,ES10.2,A,ES10.3,A,ES10.3,A)') '  release energy: theta ', THETA(i), ' s1 ', S1(j), &
+            ': returned ', wk, ' J, W_n ', w0, ' J'
+          CALL require(.FALSE., 'release-energy:bounded')
+        END IF
+      END DO
+    END DO
+    WRITE (*, '(A,ES10.3)') '  release energy: largest returned work / W_n over the turns = ', wmax
+    ! the retained force is continuous where the end state crosses the rest length (turned 45 deg)
+    dir = COS(PI/4.0_wp)*tn + SIN(PI/4.0_wp)*u
+    q1 = qn
+    q1(10:12) = qn(7:9) + L0(3)*(1.0_wp + 1.0e-12_wp)*dir
+    CALL probe_step(qn, z, z, q1, L0, EA, [1.0e-12_wp, 1.0e-12_wp, 1.0e-12_wp], .FALSE., R, K)
+    q1(10:12) = qn(7:9) + L0(3)*(1.0_wp - 1.0e-12_wp)*dir
+    CALL probe_step(qn, z, z, q1, L0, EA, [1.0e-12_wp, 1.0e-12_wp, 1.0e-12_wp], .FALSE., Rm, K)
+    jump = MAXVAL(ABS(R(10:12) - Rm(10:12)))
+    ratio = jump/(EA(3)*0.001_wp)
+    WRITE (*, '(A,ES10.3)') '  release energy: force jump across the rest length / T_n = ', ratio
+    CALL require(ratio < 1.0e-6_wp, 'release-energy:continuous-at-rest-length')
+  END SUBROUTINE case_release_energy
 
   SUBROUTINE case_light_cable_coarse_step()
     LOGICAL :: conv
@@ -718,21 +803,26 @@ CONTAINS
     END DO
     err = MAXVAL(ABS(K - Kfd))/MAXVAL(ABS(K))
     WRITE (*, '(A,A,A,L1,A,ES9.2)') '  tangent ', label, ' banded=', banded, ': max |K - K_fd|/max|K| = ', err
-    CALL require(err < 1.0e-6_wp, label//TRIM(MERGE(':banded', ':dense ', banded))//':fd-tangent')
+    CALL require(err < 1.0e-8_wp, label//TRIM(MERGE(':banded', ':dense ', banded))//':fd-tangent')
   END SUBROUTINE fd_tangent_check
 
-  SUBROUTINE chain_states(strain_n, strain_1, l0, qn, vn, an, q1)
+  SUBROUTINE chain_states(strain_n, strain_1, l0, qn, vn, an, q1, dirs_trial)
     !! The chain of case 5 at t_n and at the trial state, with a small velocity and
-    !! acceleration at t_n.
+    !! acceleration at t_n (dirs_trial: the segment directions at the trial state).
     REAL(wp), INTENT(IN) :: strain_n(3), strain_1(3), l0(3)
     REAL(wp), INTENT(OUT) :: qn(12), vn(12), an(12), q1(12)
+    REAL(wp), INTENT(IN), OPTIONAL :: dirs_trial(3, 3)
     REAL(wp), PARAMETER :: DIRS_N(3, 3) = RESHAPE([1.0_wp, 0.2_wp, 0.1_wp, 0.3_wp, 1.0_wp, -0.2_wp, &
                                                    -0.2_wp, 0.4_wp, 1.0_wp], [3, 3])
     REAL(wp), PARAMETER :: DIRS_1(3, 3) = RESHAPE([1.0_wp, 0.27_wp, 0.04_wp, 0.36_wp, 1.0_wp, -0.12_wp, &
                                                    -0.12_wp, 0.46_wp, 1.0_wp], [3, 3])
     INTEGER :: i
     CALL chain_nodes(DIRS_N, strain_n, l0, qn)
-    CALL chain_nodes(DIRS_1, strain_1, l0, q1)
+    IF (PRESENT(dirs_trial)) THEN
+      CALL chain_nodes(dirs_trial, strain_1, l0, q1)
+    ELSE
+      CALL chain_nodes(DIRS_1, strain_1, l0, q1)
+    END IF
     vn = 0.0_wp
     an = 0.0_wp
     DO i = 4, 12
@@ -753,7 +843,21 @@ CONTAINS
 
   SUBROUTINE case_law_release_cap()
     !! Segment 3 carries a tension-only law through the load callback (ea(3) = 0) and
-    !! releases deeply within the step.
+    !! releases within the step: deeply, turning by about 50 degrees as it goes slack, and
+    !! turning as it ends taut at a tenth of its step-start tension.
+    REAL(wp), PARAMETER :: DIRS_TURN(3, 3) = RESHAPE([1.0_wp, 0.27_wp, 0.04_wp, 0.36_wp, 1.0_wp, -0.12_wp, &
+                                                      0.6_wp, 0.4_wp, 0.6_wp], [3, 3])
+    CALL law_cap_config('law-cap', [0.010_wp, 0.020_wp, 0.010_wp], [0.020_wp, 0.015_wp, -0.050_wp])
+    CALL law_cap_config('law-cap-turning', [0.010_wp, 0.020_wp, 0.002_wp], [0.020_wp, 0.015_wp, -0.0005_wp], &
+                        DIRS_TURN)
+    CALL law_cap_config('law-cap-turning-taut', [0.010_wp, 0.020_wp, 0.002_wp], [0.020_wp, 0.015_wp, 0.0002_wp], &
+                        DIRS_TURN)
+  END SUBROUTINE case_law_release_cap
+
+  SUBROUTINE law_cap_config(label, strain_n, strain_1, dirs_trial)
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), INTENT(IN) :: strain_n(3), strain_1(3)
+    REAL(wp), INTENT(IN), OPTIONAL :: dirs_trial(3, 3)
     REAL(wp), PARAMETER :: L0(3) = [1.0_wp, 1.2_wp, 0.8_wp], EA(3) = [1.0e6_wp, 1.5e6_wp, 0.0_wp]
     REAL(wp), PARAMETER :: EA_LAW = 0.8e6_wp, ALPHA_F = 0.4_wp/1.4_wp
     REAL(wp) :: qn(12), vn(12), an(12), q1(12), R(12), Rnone(12), Rel(12), K(9, 9), f_cap(12), f_raw(12)
@@ -763,8 +867,8 @@ CONTAINS
     cb_law_elem = 3
     cb_ea_law = EA_LAW
     cb_l0_law = L0(3)
-    CALL chain_states([0.010_wp, 0.020_wp, 0.010_wp], [0.020_wp, 0.015_wp, -0.050_wp], L0, qn, vn, an, q1)
-    t0 = EA_LAW*0.010_wp
+    CALL chain_states(strain_n, strain_1, L0, qn, vn, an, q1, dirs_trial)
+    t0 = EA_LAW*(NORM2(qn(10:12) - qn(7:9))/L0(3) - 1.0_wp)
     ! nearly massless chain at rest at t_n: the residual is the blended force
     CALL probe_chain(qn, 0.0_wp*vn, 0.0_wp*an, q1, L0, EA, [1.0e-9_wp, 1.0e-9_wp, 1.0e-9_wp], .TRUE., R, K, &
                      start_tension=[0.0_wp, 0.0_wp, t0])
@@ -775,17 +879,17 @@ CONTAINS
     CALL blended_force(qn, q1, L0, [EA(1), EA(2), EA_LAW], ALPHA_F, .TRUE., f_cap)
     CALL blended_force(qn, q1, L0, [EA(1), EA(2), EA_LAW], ALPHA_F, .FALSE., f_raw)
     scale = MAXVAL(ABS(f_raw))
-    CALL require(MAXVAL(ABS(f_cap - f_raw)) > 1.0e-2_wp*scale, 'law-cap:cap-active')
-    CALL require(MAXVAL(ABS(R(4:12) - f_cap(4:12))) < 1.0e-6_wp*scale, 'law-cap:residual-closed-form')
-    CALL require(MAXVAL(ABS(Rnone(4:12) - f_raw(4:12))) < 1.0e-6_wp*scale, 'law-cap:no-start-tension-uncapped')
-    CALL require(ALL(TRANSFER(Rel, [0_I8]) == TRANSFER(R, [0_I8])), 'law-cap:elastic-entries-ignored')
+    CALL require(MAXVAL(ABS(f_cap - f_raw)) > 1.0e-2_wp*scale, label//':cap-active')
+    CALL require(MAXVAL(ABS(R(4:12) - f_cap(4:12))) < 1.0e-6_wp*scale, label//':residual-closed-form')
+    CALL require(MAXVAL(ABS(Rnone(4:12) - f_raw(4:12))) < 1.0e-6_wp*scale, label//':no-start-tension-uncapped')
+    CALL require(ALL(TRANSFER(Rel, [0_I8]) == TRANSFER(R, [0_I8])), label//':elastic-entries-ignored')
     ! the tangent with inertia, on both paths
-    CALL fd_tangent_check('law-cap', qn, vn, an, q1, L0, EA, [2.0_wp, 3.0_wp, 1.5_wp], .TRUE., &
+    CALL fd_tangent_check(label, qn, vn, an, q1, L0, EA, [2.0_wp, 3.0_wp, 1.5_wp], .TRUE., &
                           start_tension=[0.0_wp, 0.0_wp, t0])
-    CALL fd_tangent_check('law-cap', qn, vn, an, q1, L0, EA, [2.0_wp, 3.0_wp, 1.5_wp], .FALSE., &
+    CALL fd_tangent_check(label, qn, vn, an, q1, L0, EA, [2.0_wp, 3.0_wp, 1.5_wp], .FALSE., &
                           start_tension=[0.0_wp, 0.0_wp, t0])
     CALL reset_chain_load()
-  END SUBROUTINE case_law_release_cap
+  END SUBROUTINE law_cap_config
 
   SUBROUTINE case_load_share_tangent()
     !! All segments elastic and taut; the callback load carries a quadratic drag and a cubic
@@ -1017,11 +1121,11 @@ CONTAINS
     CHARACTER(64) :: opts(4)
     REAL(wp) :: fair, anch, seg_min
     ! the light cable as a lightly damped viscoelastic line, 3 m heave at dtM 0.1 s: anchor
-    ! 7.6e4 to 9.4e4 N and fairlead 0.97e5 to 1.08e5 N at dtM 0.5 to 2.5 ms; without the cap
+    ! 8.7e4 to 9.5e4 N and fairlead 0.97e5 to 1.11e5 N at dtM 0.5 to 2.5 ms; without the cap
     ! on its law segments 1.45e5 N at the anchor. At 0.1 s the anchor snap is not resolved in
-    ! time (the run notes it), so its peak depends on round-off: 8.1e4 N with gfortran on
-    ! Windows, 5.6e4 N on Linux. The upper bound is the check of the cap; the lower bound only
-    ! asks that the snap reaches the anchor.
+    ! time (the run notes it), so its peak depends on round-off: 7.2e4 N with gfortran on
+    ! Windows, other values on other platforms. The upper bound is the check of the cap; the
+    ! lower bound only asks that the snap reaches the anchor.
     CALL write_motion('ei0slack_heave_ve.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 3, 3.0_wp, 10.0_wp, 10.0_wp, &
                       0.1_wp, 40.0_wp)
     opts(1) = '0.1 dtM'

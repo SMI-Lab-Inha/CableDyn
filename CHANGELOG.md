@@ -182,22 +182,25 @@ All notable changes to CableDyn are recorded in this file. The format follows
   forces, `(1 − α_f) r(q_{n+1}, v_{n+1}) + α_f r(q_n, v_n)`, as the finite-EI path does, for the
   axial force and every dynamic load (damping, viscoelastic and Syrope laws, seabed, drag,
   Froude–Krylov, buoyancy; added mass stays at `q_α`). The step-start force is evaluated afresh
-  at the committed state, so no state is added and restarts stay exact. An element going from
-  taut to slack within a step carries at most its discrete energy gradient (the strain energy it
-  releases over the shortening), so a release can no longer create energy; the viscoelastic and
-  Syrope segments are capped the same way with the tension of their law (the same cable made
-  lightly damped viscoelastic peaks at 0.056 to 0.081 MN at the anchor at `dtM` 0.1 s, a snap
-  that step does not resolve, against 0.145 MN without the cap on its segments and 0.076 to
-  0.094 MN at 0.5 to 2.5 ms). The seabed contact of
+  at the committed state, so no state is added and restarts stay exact. An element that
+  releases within a step returns at most its strain energy over the step, so a release can no
+  longer create energy. Its step-start force acts along its step-start chord for the whole step,
+  so the cap takes the shortening projected on that chord, which a segment that turns as it goes
+  slack exceeds by far (a nearly unstretched segment turning by 90° would otherwise return
+  hundreds of times its strain energy), and it fades out continuously as the end state crosses
+  the rest length. The viscoelastic and Syrope segments are capped the same way with the tension
+  of their law (the same cable made lightly damped viscoelastic peaks at 0.072 MN at the anchor
+  at `dtM` 0.1 s, a snap that step does not resolve, against 0.145 MN without the cap on its
+  segments and 0.087 to 0.095 MN at 0.5 to 2.5 ms). The seabed contact of
   a node that lifts off within a step is not capped (see the manual's theory page). At the
-  default `rhoInf` the reproducers now give 0.14 / 0.08 MN, 0.092 / 0.096 MN, 0.075 / 0.043 MN
+  default `rhoInf` the reproducers now give 0.10 / 0.09 MN, 0.092 / 0.106 MN, 0.075 / 0.043 MN
   and 1.80 MN, as their references, and the stiff-seabed line runs to completion; the
   chain–polyester anchor snap peaks at 5.8 MN at `dtM` 0.05 s, a single-step peak (4.6 MN at
   0.0025 s) that the new snap note reports. On a linear element the scheme is unchanged, so taut
   lines keep their accuracy: every MoorDyn-C, OrcaFlex, analytic and experimental comparison that
   runs locally still passes, and its reported error moves by at most 0.35 percentage points (the
   minimum fairlead tension of the one-hour VolturnUS-S record, 0.15 % to 0.50 %; the snap-load
-  peak at 20 ms improves from 2.76 %, published as 2.7 %, to 1.6 %; see VALIDATION.md). Every
+  peak at 20 ms improves from 2.76 %, published as 2.7 %, to 1.5 %; see VALIDATION.md). Every
   `EI = 0` dynamic output changes. Over the shipped examples the statistics of the tensions
   change by at most 0.23 % (mean) and 0.9 % (maximum), except the two `als_volturnus` decks,
   whose pre-failure anchor snap at 250 s is resolved by one or two samples and peaks 10 % lower.
