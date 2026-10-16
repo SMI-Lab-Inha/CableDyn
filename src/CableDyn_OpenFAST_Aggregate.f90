@@ -1894,7 +1894,8 @@ CONTAINS
   SUBROUTINE CD_AGG_GetInitLine(self, i, line_id, tension, force, inclination, declination, azimuth, ErrStat, ErrMsg, &
                                 note)
     !! Return one line's unconditional converged-static fairlead result in deck order, and
-    !! (optional note) the static-initialisation notes of a finite-EI line ('' if none).
+    !! (optional note) its static-initialisation notes, one per text line: those of a finite-EI
+    !! cable, or the fold note of an EI = 0 line ('' if none).
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
     INTEGER, INTENT(IN) :: i
     INTEGER, INTENT(OUT) :: line_id

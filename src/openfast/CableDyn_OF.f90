@@ -477,7 +477,8 @@ CONTAINS
       REAL(wp)                  :: fair_ten, fair_force(3), fair_incl, fair_decl, fair_azi, force_incl
       LOGICAL                   :: has_dtm, has_ptfm, use_extf
       CHARACTER(ChanLen)        :: chan_hdr, chan_unt
-      CHARACTER(1024)           :: native_root
+      CHARACTER(1024)           :: native_root, init_note
+      INTEGER(IntKi)            :: note_at, note_end
       REAL(wp), PARAMETER       :: DTM_DEFAULT = 0.1_wp
 
       ErrStat = ErrID_None
@@ -1162,7 +1163,7 @@ CONTAINS
       CALL WrScr( '   Fairlead convention: force is on End A toward End B; inclinations are signed below horizontal.' )
       DO il = 1, nreportlines
          CALL CD_AGG_GetInitLine( Inst(id)%agg, il, line_id, fair_ten, fair_force, fair_incl, fair_decl, &
-                                  fair_azi, es, em )
+                                  fair_azi, es, em, note=init_note )
          IF (es /= CD_AGG_OK) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
             RETURN
@@ -1179,6 +1180,18 @@ CONTAINS
          CALL WrScr( '      line tangent: inclination='//TRIM(Num2LStr(REAL(fair_incl, DbKi)))// &
                      ' deg, declination='//TRIM(Num2LStr(REAL(fair_decl, DbKi)))// &
                      ' deg, azimuth='//TRIM(Num2LStr(REAL(fair_azi, DbKi)))//' deg' )
+         ! The line's static-initialisation notes (a folded EI = 0 layout, the notes of a
+         ! finite-EI cable), one per text line, as the standalone driver prints them.
+         note_at = 1
+         DO WHILE (LEN_TRIM(init_note(note_at:)) > 0)
+            note_end = INDEX(init_note(note_at:), NEW_LINE('a'))
+            IF (note_end == 0) THEN
+               CALL WrScr( '   Note: '//TRIM(init_note(note_at:))//'.' )
+               EXIT
+            END IF
+            CALL WrScr( '   Note: '//init_note(note_at:note_at + note_end - 2)//'.' )
+            note_at = note_at + note_end
+         END DO
       END DO
       CALL WrScr( '  CableDyn initialization completed.' )
 

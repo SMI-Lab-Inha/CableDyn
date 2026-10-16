@@ -1,9 +1,12 @@
 --------------------- CableDyn Input File ------------------------------------
 CableDyn driver deck -- chain with a clump weight at a Free line end, dynamic run
 -- A single chain hangs from a fairlead at the surface down to a heavy clump weight modelled as a
--- Free point (a 1-line terminal): Mass 20 t, Vol 1 m^3, so a net downward load (Mass - rhoW*Vol)*g
--- pulls the line end down and sets the pretension. Free points carry Mass/Vol only on the dynamic
--- point-system path, so the deck sets dtM/TMax; the static IC seeds the march, held here for 2 s.
+-- Free point (a 1-line terminal): Mass 20 t, Vol 1 m^3, a net downward load (Mass - rhoW*Vol)*g of
+-- 186 kN. The 250 m chain reaches the 250 m seabed, so the clump rests on it below the fairlead, on
+-- its own footprint Vol^(2/3) = 1 m^2 (kBot*A = 2e6 N/m), about 5 cm deep: the seabed carries half
+-- its net weight and the chain the other half (AnchTen 92 kN). Free points carry Mass/Vol only on
+-- the dynamic point-system path, so the deck sets dtM/TMax; the static IC seeds the march, held
+-- here for 2 s.
 -- Chain: R4 studless 155 mm, volume-equivalent diam 0.2791 m, dry mass 480.93 kg/m, EA 2.058e9 N.
 --------------------- LINE TYPES ---------------------------------------
 TypeName   Diam     MassDenInAir   EA         BA/-zeta   EI       Cd_n  Cd_t  Ca_n  Ca_t
