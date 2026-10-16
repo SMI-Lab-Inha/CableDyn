@@ -2210,12 +2210,17 @@ endfunction()
 cabledyn_msg_test(weightless_finite_ei msg_weightless_finite_ei.dat 2
   "weightless .neutrally buoyant. line is longer than its span;shorten the line to its span, or give it net weight"
   "net-heavy")
-# An EI=0 line whose mass equals the displaced water mass to seven digits is weightless and slack.
+# An EI=0 line type rejected as net-buoyant whose mass is a relative 4e-9 below the displaced water
+# mass is named weightless and slack; one a relative 2e-6 below it keeps the plain message.
 cabledyn_msg_test(weightless_ei0 msg_weightless_ei0.dat 1
-  "is net-buoyant to within 1e-6;weightless and slack: its static shape is indeterminate" "")
+  "is neutrally buoyant .its dry mass equals the displaced water mass to within a relative 1e-6.;weightless and slack: its static shape is indeterminate"
+  "")
+cabledyn_msg_test(net_buoyant_ei0 msg_net_buoyant_ei0.dat 1
+  "is net-buoyant .dry mass <= displaced water mass.: buoyant / lazy-wave sections require a dynamic finite-EI deck"
+  "weightless")
 # A line half the length of its span converges at 100 % strain; the static solve says so.
 cabledyn_msg_test(static_strain msg_static_strain.dat 0
-  "Note: LINE 1 is stretched to a static strain of 100.0 % at the fairlead;the static default" "")
+  "Note: LINE 1 is stretched to a static strain of 100.0 % at the fairlead;above 10.0 % .the note level used without maxStrain." "")
 # A 100 m one-segment top section of a 520 m line.
 cabledyn_msg_test(coarse_section msg_coarse_section.dat 0
   "WARNING: LINE 1 section of type \"chain\" .100.00 m in 1 segment.s.. has segments of 100.00 m, 19.2 %" "")
@@ -2223,7 +2228,12 @@ cabledyn_msg_test(coarse_section msg_coarse_section.dat 0
 cabledyn_msg_test(quiet_catenary ../../examples/chain_catenary_r3_100m.dat 0 ""
   "static strain;too coarse to follow")
 cabledyn_msg_test(shared_line msg_shared_line.dat 1
-  "LINE 1 End B .NodeB, POINT 2, coupled. must be a Fixed .anchor. point;split it into two lines that meet at a Connect point" "")
+  "LINE 1 End B .NodeB, POINT 2, coupled. must be a Fixed .anchor. point;Workaround for this EI=0 line: split it into two lines that meet at a Connect point"
+  "cannot be split")
+# A finite-EI shared line cannot be split at a Connect point: that advice is not given.
+cabledyn_msg_test(shared_line_finite_ei msg_shared_line_finite_ei.dat 1
+  "finite-EI LINE 1 End B .NodeB, POINT 2, coupled. must be a Fixed .anchor. point;A finite-EI line cannot be split at a Connect point either;anchor it on a Fixed point"
+  "Workaround")
 cabledyn_msg_test(pliant_connect_end_b msg_pliant_connect_end_b.dat 1
   "finite-EI LINE 1 in a mixed-topology deck needs a Fixed End B;End B is POINT 2 .connect.;Anchor the cable on a Fixed point"
   "")
@@ -2231,7 +2241,12 @@ cabledyn_msg_test(mixed_current msg_mixed_current.dat 1
   "the deck current OPTION is not supported on this route;a standalone mixed deck;runs the mooring in STILL WATER"
   "this coupled mode")
 cabledyn_msg_test(mixed_connect_coupled_cable msg_mixed_connect_coupled_cable.dat 1
-  "finite-EI LINE 3: a Coupled/Vessel End A .POINT 1. is driven by a motionFile;Remove the Connect/Free points" "")
+  "finite-EI LINE 3: a Coupled/Vessel End A .POINT 1. would need motionFile coupling to drive it;remove the Connect/Free points;held still .that route takes no motionFile either."
+  "is driven by a motionFile")
+# The standalone mixed route warns about a coarse section and notes a static strain above maxStrain.
+cabledyn_msg_test(mixed_coarse_strain msg_mixed_coarse_strain.dat 0
+  "WARNING: LINE 1 section of type \"chain\" .150.00 m in 1 segment.s.. has segments of 150.00 m, 17.6 %;Note: LINE 1 is stretched to a static strain of;above 1.00E-02 % .OPTION maxStrain."
+  "LINE 2 section of type")
 # The tensile qualification failure of a dynamic step names the remedy to the end (the message was
 # cut at 256 characters: "... at element 64, xi= 0.5000; increase").
 cabledyn_msg_test(tensile_safety_whole msg_tensile_safety_truncated.dat 2

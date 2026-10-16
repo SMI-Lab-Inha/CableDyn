@@ -515,7 +515,7 @@ CONTAINS
     REAL(wp) :: end_share_last(2), end_share_pi(2)
     LOGICAL :: end_share_held, end_share_caller
     INTEGER :: end_es
-    CHARACTER(200) :: end_em
+    CHARACTER(1024) :: end_em
 
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
@@ -1714,7 +1714,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: ecm
       REAL(wp) :: raw, th, e_t
       INTEGER :: ks
-      CHARACTER(200) :: km
+      CHARACTER(1024) :: km
       ecs = CD_HCSTAT_OK
       ecm = ''
       IF (skip_tangent) THEN
@@ -1781,7 +1781,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: ecm
       REAL(wp) :: sfac, raw, th
       INTEGER :: k, ks
-      CHARACTER(200) :: km
+      CHARACTER(1024) :: km
       tors_q = q
       sfac = scale
       km = ''
@@ -1819,7 +1819,7 @@ CONTAINS
       REAL(wp) :: raw, phi0, total, lam, lam_try, dlam, dlam_max, th_keep, res_untwisted
       INTEGER :: ks, cuts, wios
       LOGICAL :: ok
-      CHARACTER(200) :: km
+      CHARACTER(1024) :: km
       CHARACTER(1024) :: why
       CHARACTER(1024) :: wbuf
       ecs = CD_HCSTAT_OK
@@ -1913,7 +1913,7 @@ CONTAINS
       INTEGER :: it2, ks, wios
       REAL(wp) :: rn
       LOGICAL :: st
-      CHARACTER(512) :: km
+      CHARACTER(1024) :: km
       CHARACTER(1024) :: wbuf
       ok = .FALSE.
       why = ''
@@ -1970,7 +1970,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: ecm
       REAL(wp) :: rn, ztol
       INTEGER :: ks, kin, nb, nk
-      CHARACTER(512) :: km
+      CHARACTER(1024) :: km
       st = .FALSE.
       ecs = CD_HCSTAT_OK
       ecm = ''
@@ -2039,7 +2039,7 @@ CONTAINS
       REAL(wp) :: e0, amp, a, rn, vscale, th0
       INTEGER :: attempt, k, j, ks, it2
       LOGICAL :: saved_energy, st, moved
-      CHARACTER(512) :: km
+      CHARACTER(1024) :: km
       ok = .FALSE.
       why = ''
       km = ''
@@ -2642,7 +2642,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ref_g(:, :), ref_0(:, :), wn(:), sn(:), kn_o(:), l0_r(:), ea_r(:)
     REAL(wp) :: dg(2), dg0(2), cs(2)
     INTEGER :: k, ne, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HCSTAT_OK
     ErrMsg = ''
     ne = SIZE(l0)
@@ -3171,12 +3171,12 @@ CONTAINS
     REAL(wp) :: cur_frac
     LOGICAL :: picard_ok, drag_homotopy, planar_run_limit
     INTEGER :: iters_first
-    CHARACTER(512) :: arc_msg
+    CHARACTER(1024) :: arc_msg
     ! Arclength workspace: residual, banded tangent (and a copy to factor), drag load, free DOFs.
     REAL(wp), ALLOCATABLE :: fres(:), kband(:, :), kwork(:, :), dvec(:)
     LOGICAL, ALLOCATABLE :: free(:)
     REAL(wp) :: wq
-    CHARACTER(512) :: first_msg
+    CHARACTER(1024) :: first_msg
     CHARACTER(16) :: frac_txt
     ! Seabed friction of the current (active in every stage after the still-water one).
     LOGICAL :: use_fric
@@ -4517,7 +4517,7 @@ CONTAINS
     CHARACTER(1024) :: em_l
     ! The level solve failed only on its final residual (a finite best iterate to continue from).
     LOGICAL :: unmet_l
-    CHARACTER(200) :: diagnostic_msg
+    CHARACTER(1024) :: diagnostic_msg
     CHARACTER(240) :: level_context
     LOGICAL :: contact_active, use_level_nodal_contact, rebuild_coarse_tangents, coarse_seed_ready
     LOGICAL :: use_gentle_hierarchy, use_fine_hierarchy
@@ -4970,7 +4970,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: msg
       INTEGER :: node, gi, bathy_stat
       REAL(wp) :: z_floor, xg, yg
-      CHARACTER(200) :: bathy_msg
+      CHARACTER(1024) :: bathy_msg
 
       stat = CD_HCSTAT_OK
       msg = ''
@@ -6614,7 +6614,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: emx
       INTEGER :: bstat
       REAL(wp) :: xg, yg
-      CHARACTER(200) :: bmsg
+      CHARACTER(1024) :: bmsg
       esx = CD_HCSTAT_OK
       emx = ''
       z_floor = seabed_z

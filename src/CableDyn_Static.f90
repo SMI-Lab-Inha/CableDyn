@@ -114,7 +114,7 @@ MODULE CableDyn_Static
     !! equilibrium (or the last failure), for diagnostics and fail-closed error messages.
     CHARACTER(64)  :: seed = ''          !! seed of the accepted (or last attempted) solve
     CHARACTER(64)  :: stage = ''         !! solver stage of the accepted (or last failed) solve
-    CHARACTER(400) :: message = ''       !! human-readable outcome / failure reason
+    CHARACTER(560) :: message = ''       !! outcome / failure reason (holds the bounded seed notes whole)
     INTEGER  :: n_iter = 0               !! Newton iterations over every attempt
     REAL(wp) :: min_tension = CD_ZERO    !! smallest element tension of the reported state [N]
     LOGICAL  :: slack_branch = .FALSE.   !! .TRUE. when the tension-only (slack-capable) solve was needed
@@ -1349,7 +1349,7 @@ CONTAINS
     INTEGER :: n_elem, e, j, nsub, es
     REAL(wp) :: dir(2), d, ds, step, x, y, zf, gx, gy, g, dshort, sink_j, p(3, 3), t_in(3), t_out(3), nrm(3)
     REAL(wp), ALLOCATABLE :: ref0(:, :)
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_STATIC_OK
     ErrMsg = ''
@@ -1519,7 +1519,7 @@ CONTAINS
       INTEGER :: i, es_d
       REAL(wp) :: zf, gx, gy, g, p(3), h_s, g_s, u(3), uh
       REAL(wp), ALLOCATABLE :: q_sus(:)
-      CHARACTER(200) :: em_d
+      CHARACTER(1024) :: em_d
 
       valid = .FALSE.
       mismatch = -HUGE(CD_ONE)
@@ -1555,7 +1555,7 @@ CONTAINS
       REAL(wp), INTENT(IN) :: x, y
       REAL(wp), INTENT(OUT) :: zf, gx, gy
       INTEGER, INTENT(OUT) :: es_f
-      CHARACTER(120) :: em_f
+      CHARACTER(1024) :: em_f
       es_f = 0
       gx = CD_ZERO
       gy = CD_ZERO
@@ -1660,7 +1660,11 @@ CONTAINS
     LOGICAL :: has_seabed, anchor_grounded, conv, stalled, at_floor, have_seed, done, have_best
     CHARACTER(1024) :: em
     CHARACTER(64) :: seed_name
-    CHARACTER(400) :: notes
+    ! The seed notes of a failed solve (report%message holds them after a fixed prefix). Up to
+    ! seven seeds note up to three stages each, more than this holds: add_note ends the list with
+    ! an omission marker instead of cutting a note.
+    CHARACTER(480) :: notes
+    LOGICAL :: notes_full
     TYPE(CableSolverConfig) :: cfg_adm
 
     converged = .FALSE.
@@ -1766,6 +1770,7 @@ CONTAINS
     END IF
 
     notes = ''
+    notes_full = .FALSE.
     q_best = CD_ZERO
     have_best = .FALSE.
     DO iorder = 1, SIZE(order)
@@ -1890,12 +1895,27 @@ CONTAINS
     END SUBROUTINE accept
 
     SUBROUTINE add_note(txt)
+      !! Append one seed note while the notes keep room for it and the omission marker;
+      !! otherwise end them with the marker, so a note is never cut.
       CHARACTER(*), INTENT(IN) :: txt
-      IF (LEN_TRIM(notes) == 0) THEN
-        notes = txt
+      CHARACTER(*), PARAMETER :: OMITTED = '; further seed notes omitted'
+      INTEGER :: n
+      IF (notes_full) RETURN
+      n = LEN_TRIM(notes)
+      IF (n == 0) THEN
+        IF (LEN_TRIM(txt) + LEN(OMITTED) <= LEN(notes)) THEN
+          notes = TRIM(txt)
+          RETURN
+        END IF
+        notes = OMITTED(3:)
       ELSE
-        notes = TRIM(notes)//'; '//txt
+        IF (n + 2 + LEN_TRIM(txt) + LEN(OMITTED) <= LEN(notes)) THEN
+          notes = notes(1:n)//'; '//TRIM(txt)
+          RETURN
+        END IF
+        notes = notes(1:n)//OMITTED
       END IF
+      notes_full = .TRUE.
     END SUBROUTINE add_note
 
     SUBROUTINE run_solve(qs, factors, slack_law, ratio, cfg_use, qo, ok)
@@ -2112,7 +2132,7 @@ CONTAINS
       INTEGER :: es_r, i_r
       REAL(wp) :: floor_n
       REAL(wp), ALLOCATABLE :: q_rev(:)
-      CHARACTER(200) :: em_r
+      CHARACTER(1024) :: em_r
       ok = .FALSE.
       floor_n = seabed_floor_at(fairlead(1), fairlead(2), es_r, em_r)
       IF (es_r /= 0) RETURN

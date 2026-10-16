@@ -1979,7 +1979,7 @@ surges ±0.05 m with a 10 s period. The program needs no input file.
 
    static int report(void *h, const char *where, int err)
    {
-       char msg[1024];
+       char msg[4097]; /* a message is at most 4096 characters, plus the NUL */
        CableDyn_GetLastError(h, msg, (int)sizeof msg);
        fprintf(stderr, "%s failed (status %d): %s\n", where, err, msg);
        return 1;
@@ -2066,7 +2066,7 @@ host writes its own motion into the blocks of the points it drives before each s
        int major, minor, patch, abi, err = CD_C_OK, status = 1;
        void *h = NULL;
        double *q = NULL, *v = NULL, *a = NULL, *loads = NULL;
-       char msg[1024];
+       char msg[4097]; /* a message is at most 4096 characters, plus the NUL */
 
        CableDyn_GetVersion(&major, &minor, &patch, &abi);
        if (abi != CABLEDYN_CAPI_ABI_VERSION) {

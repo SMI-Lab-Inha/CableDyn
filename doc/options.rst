@@ -317,11 +317,11 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
        strain of steel, polyester, and nylon lines), stops the run with exit code 2 and a message
        naming the line, element, strain, estimated elastic tension, and time. It catches a
        numerically unstable march whose Newton residual still converges; a physical run never
-       reaches the default. Finite-EI cables are guarded by ``tensile_safety`` instead. The static solve is not
-       stopped by it: when the static fairlead strain (tension over the EA of the End A section)
-       exceeds this value, or 10 % when the OPTION is not given, the run prints a ``Note`` and
-       continues
-     - both (``EI = 0`` lines)
+       reaches the default. Finite-EI cables are guarded by ``tensile_safety`` instead. The static
+       solve is not stopped by it: when the static fairlead strain of any line, ``EI = 0`` or
+       finite-EI (tension over the EA of the End A section), exceeds this value, or 10 % when the
+       OPTION is not given or is ``0``, the run prints a ``Note`` and continues
+     - both for the dynamic guard (``EI = 0`` lines); standalone for the static note (every line)
      - ``0.5 maxStrain``
    * - ``dynamic_solver rel abs max_iter backtracks [rhoInf]``
      - keyword-first record: two reals, two integers, optional real

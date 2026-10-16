@@ -2973,14 +2973,41 @@ def test_net_buoyant_ei0_line_type_fails_like_native(tmp_path, mass):
         DeckFile.read(path)
 
 
-@pytest.mark.parametrize("scale", [1.0, 1.0 + 1.0e-7, 1.0 - 1.0e-7])
-def test_neutrally_buoyant_ei0_line_type_is_weightless_and_slack(tmp_path, scale):
-    # A mass typed to seven digits does not cancel the displaced mass exactly; the gate treats
-    # the 1e-6 band around it as neutral and says the slack line is indeterminate.
+@pytest.mark.parametrize(
+    ("scale", "ei", "message"),
+    [
+        # inside the neutral band below the displaced mass: named weightless (EI = 0 only)
+        (1.0 - 1.0e-7, "0.0", "neutrally buoyant .* weightless and slack"),
+        (1.0 - 9.0e-7, "0.0", "neutrally buoyant .* weightless and slack"),
+        # below the band: the net-buoyant rejection
+        (1.0 - 2.0e-6, "0.0", r"net-buoyant \(dry mass <="),
+        # above the displaced mass the gate admits the type, as it always did
+        (1.0 + 1.0e-7, "0.0", None),
+        # a dynamic finite-EI type is admitted on either side of the displaced mass
+        (1.0 - 1.0e-7, "1.0e4", None),
+        (1.0 + 1.0e-7, "1.0e4", None),
+    ],
+)
+def test_neutral_buoyancy_band_keeps_the_rejection_rule(tmp_path, scale, ei, message):
+    # The gate rejects mass <= displaced mass, unchanged; only the wording of an EI=0 type
+    # within a relative 1e-6 below the displaced mass says it is weightless.
     mass = 1025.0 * math.pi / 4.0 * 0.2466**2 * scale
-    path = _chain_variant(tmp_path, ("0.2466   373.5 ", f"0.2466   {mass:.9f} "))
-    with pytest.raises(DeckFormatError, match="weightless and slack"):
+    replacements = [
+        (
+            "0.2466   373.5          1.607e9    -1.0       0.0 ",
+            f"0.2466   {mass:.9f}          1.607e9    -1.0       {ei} ",
+        )
+    ]
+    if ei != "0.0":
+        replacements.append((_OPTIONS_HEADER, _OPTIONS_HEADER + "0.1 dtM\n1.0 TMax\n"))
+    path = _chain_variant(tmp_path, *replacements)
+    if message is None:
         DeckFile.read(path)
+        return
+    with pytest.raises(DeckFormatError, match=message) as caught:
+        DeckFile.read(path)
+    if "dry mass <=" in message:
+        assert "weightless" not in str(caught.value)
 
 
 @pytest.mark.parametrize(("weight", "buoyant"), [("100.0", False), ("-100.0", True)])

@@ -163,15 +163,17 @@ MODULE CableDyn_DeckDriver
   INTEGER, PARAMETER :: INSTALLED_SEQUENCE_COARSE_FLOOR = 24
   ! Deepest mesh hierarchy CD_HermiteCable_Sequence_* accepts (levels including the user mesh).
   INTEGER, PARAMETER :: SEQUENCE_MAX_LEVELS = 20
-  ! A line type whose dry mass is within this relative band of the displaced water mass is
-  ! neutrally buoyant: its net weight is zero to within the precision of a typed mass
-  ! (a mass written to seven digits against a diameter does not cancel exactly).
+  ! Relative band within which a net weight counts as zero (neutrally buoyant) to the precision
+  ! of a typed mass (a mass written to seven digits against a diameter does not cancel exactly).
+  ! It only selects the wording of a diagnosis -- an EI=0 line type rejected as net-buoyant
+  ! whose mass lies within it below the displaced water mass, a finite-EI line whose every
+  ! element weighs within it of nothing -- and changes no acceptance rule.
   REAL(wp), PARAMETER :: NEUTRAL_BUOYANCY_REL_TOL = 1.0e-6_wp
-  ! A section of at most COARSE_SECTION_MAX_SEGS segments, each longer than COARSE_SECTION_FRACTION of its
-  ! line, is warned about as too coarse (warn_coarse_sections). A static strain above
-  ! STATIC_STRAIN_NOTE_DEFAULT is noted (static_strain_note) when OPTION maxStrain is not given.
-  REAL(wp), PARAMETER :: COARSE_SECTION_FRACTION = 0.1_wp
-  INTEGER, PARAMETER :: COARSE_SECTION_MAX_SEGS = 4
+  ! A section whose segments are longer than COARSE_SECTION_FRACTION of its line (coarser than a
+  ! uniform eight-segment line) is warned about as too coarse (warn_coarse_sections). A static
+  ! strain above STATIC_STRAIN_NOTE_DEFAULT is noted (static_strain_note) when OPTION maxStrain
+  ! is not positive.
+  REAL(wp), PARAMETER :: COARSE_SECTION_FRACTION = 0.125_wp
   REAL(wp), PARAMETER :: STATIC_STRAIN_NOTE_DEFAULT = 0.1_wp
 
   PUBLIC :: CD_Run_Deck_Driver
@@ -973,9 +975,10 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: fair_declination = CD_ZERO
     REAL(wp) :: fair_azimuth = CD_ZERO
     LOGICAL :: force_is_total = .TRUE.
-    ! Static-initialisation notes of a finite-EI line (compression, mesh refinement,
-    ! accepted residual floor), one per text line; empty when there is nothing to report.
-    CHARACTER(1024) :: note = ''
+    ! Static-initialisation notes of the line (finite-EI compression, mesh refinement, accepted
+    ! residual floor; the static strain note of any line), one per text line (append_note_line);
+    ! empty when there is nothing to report. It holds a whole cable note (1024) and a strain note.
+    CHARACTER(2048) :: note = ''
   END TYPE CD_LineInitSummary
 
   TYPE :: CD_DeckAggregateType
@@ -4045,7 +4048,7 @@ CONTAINS
       REAL(wp) :: az, laid_t, o_xy(2), dir(2), e_cross(2), span, ds, zf, gx, gy
       INTEGER :: k, n_s, es_c
       LOGICAL :: from_top
-      CHARACTER(200) :: em_c
+      CHARACTER(1024) :: em_c
       cross = .FALSE.
       IF (.NOT. (contact_enabled .AND. opts%has_friction .AND. &
                  opts%static_friction == CD_STATIC_FRICTION_AS_LAID)) RETURN
@@ -4221,13 +4224,7 @@ CONTAINS
       !! One initialisation note: printed on a standalone run, appended to init_note.
       CHARACTER(*), INTENT(IN) :: text
       IF (standalone_mode) WRITE (error_unit, '(A)') '   Note: '//TRIM(text)//'.'
-      IF (PRESENT(init_note)) THEN
-        IF (LEN_TRIM(init_note) > 0) THEN
-          init_note = TRIM(init_note)//NEW_LINE('a')//TRIM(text)
-        ELSE
-          init_note = TRIM(text)
-        END IF
-      END IF
+      IF (PRESENT(init_note)) CALL append_note_line(init_note, text)
     END SUBROUTINE report_note
 
   END SUBROUTINE build_one_hermite_cable
@@ -4979,7 +4976,7 @@ CONTAINS
       REAL(wp) :: c, s, a_g(3), f_g(3), xl_, yl_
       INTEGER :: e_, k_, es_ld
       LOGICAL :: conv_ld
-      CHARACTER(512) :: em_ld
+      CHARACTER(1024) :: em_ld
       ok = .FALSE.
       c = frame_cs(1)
       s = frame_cs(2)
@@ -6723,11 +6720,7 @@ CONTAINS
         CALL static_strain_note(agg%init_lines(il)%line_id, agg%init_lines(il)%fair_tension, sections, types, opts, &
                                 strain_note)
         IF (LEN_TRIM(strain_note) == 0) CYCLE
-        IF (LEN_TRIM(agg%init_lines(il)%note) > 0) THEN
-          agg%init_lines(il)%note = TRIM(agg%init_lines(il)%note)//NEW_LINE('a')//TRIM(strain_note)
-        ELSE
-          agg%init_lines(il)%note = strain_note
-        END IF
+        CALL append_note_line(agg%init_lines(il)%note, strain_note)
       END DO
       IF (PRESENT(range_files)) THEN
         IF (range_files) CALL warn_coarse_sections(lines, sections)
@@ -9597,12 +9590,14 @@ CONTAINS
   END SUBROUTINE print_static_input_warnings
 
   SUBROUTINE warn_coarse_sections(lines, sections)
-    !! Standard-output WARNINGS for a section too coarse for the line it belongs to: a section of at
-    !! most COARSE_SECTION_MAX_SEGS segments whose segments (section length / NumSegs) are longer
-    !! than COARSE_SECTION_FRACTION of the line's total length (a short line of eight segments is
-    !! a deliberate coarse model and is not reported). Each segment of an EI=0 line is
-    !! a straight chord and each element of a finite-EI line a cubic-Hermite span, so a one-element
-    !! 100 m top section on a 520 m line cannot follow the line shape there and shifts the fairlead tension by tens of percent. The
+    !! Standard-output WARNINGS for a section too coarse for the line it belongs to: a section whose
+    !! segments (section length / NumSegs) are longer than COARSE_SECTION_FRACTION (1/8) of the
+    !! line's total length, i.e. coarser than a uniform eight-segment line. The rule looks only at
+    !! the segment length relative to the whole line, so it does not depend on how the line is
+    !! split into sections (an eight-segment uniform line written as two four-segment sections is
+    !! not reported). Each segment of an EI=0 line is a straight chord and each element of a
+    !! finite-EI line a cubic-Hermite span, so a one-element 100 m top section on a 520 m line
+    !! cannot follow the line shape there and shifts the fairlead tension by tens of percent. The
     !! whole-line check of print_static_input_warnings (fewer than three segments) does not see a
     !! coarse section inside a finely meshed line, and a line with fewer than three segments is
     !! reported whole by that check, not here.
@@ -9624,7 +9619,8 @@ CONTAINS
       DO j = 1, SIZE(sections)
         IF (sections(j)%line_id /= lines(i)%id .OR. sections(j)%nsegs < 1) CYCLE
         seg_len = sections(j)%length/REAL(sections(j)%nsegs, wp)
-        IF (seg_len <= COARSE_SECTION_FRACTION*total .OR. sections(j)%nsegs > COARSE_SECTION_MAX_SEGS) CYCLE
+        ! (the relative 1e-9 keeps a uniform eight-segment line, split in any way, below the bound)
+        IF (seg_len <= COARSE_SECTION_FRACTION*total*(CD_ONE + 1.0e-9_wp)) CYCLE
         WRITE (b1, '(F12.2)') sections(j)%length
         WRITE (b2, '(F12.2)') seg_len
         WRITE (b3, '(F6.1)') 100.0_wp*seg_len/total
@@ -9632,14 +9628,42 @@ CONTAINS
           TRIM(sections(j)%ltype_name)//'" ('//TRIM(ADJUSTL(b1))//' m in '//TRIM(int_to_str(sections(j)%nsegs))// &
           ' segment(s)) has segments of '//TRIM(ADJUSTL(b2))//' m, '//TRIM(ADJUSTL(b3))// &
           ' % of the line length: too coarse to follow the line shape there, which can shift the tensions '// &
-          'by tens of percent; refine its NumSegs (aim for segments under 10 % of the line length)'
+          'by tens of percent; refine its NumSegs (this warning applies above 1/8 = 12.5 % of the line length, '// &
+          'and a converged tension usually needs finer segments)'
       END DO
     END DO
   END SUBROUTINE warn_coarse_sections
 
+  SUBROUTINE append_note_line(buffer, text)
+    !! Append one initialisation note as a new text line of buffer. A note that does not fit
+    !! with room left for the omission marker is replaced by the marker, which ends the buffer,
+    !! so no note is ever cut short.
+    CHARACTER(*), INTENT(INOUT) :: buffer
+    CHARACTER(*), INTENT(IN) :: text
+    CHARACTER(*), PARAMETER :: OMITTED = 'further initialisation notes omitted'
+    INTEGER :: n
+    IF (LEN_TRIM(text) == 0) RETURN
+    n = LEN_TRIM(buffer)
+    IF (n > 0) THEN
+      IF (n >= LEN(OMITTED)) THEN
+        IF (buffer(n - LEN(OMITTED) + 1:n) == OMITTED) RETURN
+      END IF
+      IF (n + 1 + LEN_TRIM(text) + 1 + LEN(OMITTED) <= LEN(buffer)) THEN
+        buffer = buffer(1:n)//NEW_LINE('a')//TRIM(text)
+      ELSE IF (n + 1 + LEN(OMITTED) <= LEN(buffer)) THEN
+        buffer = buffer(1:n)//NEW_LINE('a')//OMITTED
+      END IF
+    ELSE IF (LEN_TRIM(text) + 1 + LEN(OMITTED) <= LEN(buffer)) THEN
+      buffer = TRIM(text)
+    ELSE IF (LEN(OMITTED) <= LEN(buffer)) THEN
+      buffer = OMITTED
+    END IF
+  END SUBROUTINE append_note_line
+
   SUBROUTINE static_strain_note(line_id, tension, sections, types, opts, note)
-    !! The static initial state of a line stretched beyond STATIC_STRAIN_NOTE_DEFAULT (or OPTION
-    !! maxStrain when it is given): the fairlead tension over the EA of the section at End A. A
+    !! The static initial state of a line stretched beyond OPTION maxStrain when it is given and
+    !! positive, or else STATIC_STRAIN_NOTE_DEFAULT (10 %; maxStrain 0 disables the dynamic guard,
+    !! not this note): the fairlead tension over the EA of the section at End A. A
     !! line far shorter than its span converges at such a strain without any message, because
     !! the dynamic strain guard (maxStrain) does not apply to the static solve. Only a note --
     !! the equilibrium and every output are unchanged. Types whose tension is not EA times
@@ -9653,7 +9677,7 @@ CONTAINS
     INTEGER :: j, k
     REAL(wp) :: strain, limit
     CHARACTER(32) :: b1, b2, b3
-    CHARACTER(40) :: source
+    CHARACTER(64) :: source
 
     note = ''
     IF (.NOT. (tension > CD_ZERO .AND. tension < HUGE(CD_ONE))) RETURN
@@ -9664,14 +9688,17 @@ CONTAINS
       IF (types(k)%is_syrope .OR. types(k)%elastic_mod == 3 .OR. .NOT. (types(k)%ea > CD_ZERO)) RETURN
       strain = tension/types(k)%ea
       limit = STATIC_STRAIN_NOTE_DEFAULT
-      source = 'the static default'
       IF (opts%has_max_strain .AND. opts%max_strain > CD_ZERO) THEN
         limit = opts%max_strain
         source = 'OPTION maxStrain'
+      ELSE IF (opts%has_max_strain) THEN
+        source = 'the note level used when maxStrain is 0'
+      ELSE
+        source = 'the note level used without maxStrain'
       END IF
       IF (.NOT. (strain > limit)) RETURN
-      WRITE (b1, '(F10.1)') 100.0_wp*strain
-      WRITE (b2, '(F10.1)') 100.0_wp*limit
+      CALL percent_text(100.0_wp*strain, b1)
+      CALL percent_text(100.0_wp*limit, b2)
       WRITE (b3, '(ES10.3)') tension
       note = 'LINE '//TRIM(int_to_str(line_id))//' is stretched to a static strain of '//TRIM(ADJUSTL(b1))// &
              ' % at the fairlead (tension '//TRIM(ADJUSTL(b3))//' N over the EA of section type '// &
@@ -9680,6 +9707,19 @@ CONTAINS
              'not apply to the static solve'
       RETURN
     END DO
+
+  CONTAINS
+
+    SUBROUTINE percent_text(percent, text)
+      !! One decimal from 0.1 % up; a smaller value (a small maxStrain) keeps its leading digits.
+      REAL(wp), INTENT(IN) :: percent
+      CHARACTER(*), INTENT(OUT) :: text
+      IF (percent >= 0.1_wp) THEN
+        WRITE (text, '(F10.1)') percent
+      ELSE
+        WRITE (text, '(ES9.2)') percent
+      END IF
+    END SUBROUTINE percent_text
   END SUBROUTINE static_strain_note
 
   SUBROUTINE warn_line_below_anchor(lines, points, sections, q_all, q_off)
@@ -14926,12 +14966,34 @@ CONTAINS
           IF (.NOT. ((tb == 'coupled' .OR. tb == 'vessel') .AND. &
                      points(find_point(points, lines(i)%nodeA))%turbine_id > 0 .AND. &
                      points(find_point(points, lines(i)%nodeB))%turbine_id > 0)) THEN
+            ! The Connect-point split is a workaround only for an EI=0 line: in a deck with
+            ! Connect points a finite-EI cable needs a Fixed End B and cannot end on a Connect point.
+            BLOCK
+              INTEGER :: js, ks
+              LOGICAL :: shared_finite
+              shared_finite = .FALSE.
+              DO js = 1, SIZE(sections)
+                IF (sections(js)%line_id /= lines(i)%id) CYCLE
+                ks = find_type(types, sections(js)%ltype_name)
+                IF (ks < 1) CYCLE
+                IF (types(ks)%ei > CD_ZERO) shared_finite = .TRUE.
+              END DO
+              IF (shared_finite) THEN
+                CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//' End B (NodeB, '// &
+                          'POINT '//TRIM(int_to_str(lines(i)%nodeB))//', '//TRIM(tb)//') must be a Fixed '// &
+                          '(anchor) point: a line between two moving points (a shared line) is not supported, '// &
+                          'except a FAST.Farm shared line between two Turbine<J> fairleads. A finite-EI line '// &
+                          'cannot be split at a Connect point either (beside Connect points a finite-EI cable '// &
+                          'needs a Fixed End B and cannot end on a Connect point): anchor it on a Fixed point, '// &
+                          'or model the shared span with EI=0 line types split at a Connect point'); RETURN
+              END IF
+            END BLOCK
             CALL fail(ErrStat, ErrMsg, 'LINE '//TRIM(int_to_str(lines(i)%id))//' End B (NodeB, POINT '// &
                       TRIM(int_to_str(lines(i)%nodeB))//', '//TRIM(tb)//') must be a Fixed (anchor) point: a line '// &
                       'between two moving points (a shared line) is not supported, except a FAST.Farm shared line '// &
-                      'between two Turbine<J> fairleads. Workaround: split it into two lines that meet at a '// &
-                      'Connect point in the middle (each line then ends on one Coupled point; the deck becomes '// &
-                      'dynamic and needs dtM and TMax)'); RETURN
+                      'between two Turbine<J> fairleads. Workaround for this EI=0 line: split it into two lines '// &
+                      'that meet at a Connect point in the middle (each line then ends on one Coupled point; the '// &
+                      'deck becomes dynamic and needs dtM and TMax)'); RETURN
           END IF
         ELSE
           IF (points(find_point(points, lines(i)%nodeA))%pos(3) < &
@@ -15013,15 +15075,16 @@ CONTAINS
       ! route has the cubic-Hermite arch seed and may proceed. A dynamic standalone
       ! run gets its clock from dtM; the executable's metadata scan also admits a
       ! clock-free static aggregate solve. Unsupported endpoint coupling is rejected
-      ! before initialization.
+      ! before initialization. The rejection condition is mass <= displaced mass; within it, an
+      ! EI=0 type whose mass lies in the neutral band just below the displaced mass is named weightless.
       displaced_mass = opts%rhoW*QUARTER_PI*types(idx)%diam**2
-      IF (types(idx)%mass <= displaced_mass*(CD_ONE + NEUTRAL_BUOYANCY_REL_TOL)) THEN
+      IF (types(idx)%mass <= displaced_mass) THEN
         IF (types(idx)%ei <= CD_ZERO .OR. &
             (.NOT. opts%has_dtm .AND. .NOT. caller_driven .AND. &
              .NOT. (allow_static_finite_ei .AND. .NOT. opts%has_tmax))) THEN
           IF (types(idx)%ei <= CD_ZERO .AND. types(idx)%mass > displaced_mass*(CD_ONE - NEUTRAL_BUOYANCY_REL_TOL)) THEN
-            CALL fail(ErrStat, ErrMsg, 'LINE TYPE "'//TRIM(types(idx)%name)//'" is net-buoyant to within 1e-6 '// &
-                      '(neutrally buoyant: its dry mass equals the displaced water mass), so an EI=0 line of it is '// &
+            CALL fail(ErrStat, ErrMsg, 'LINE TYPE "'//TRIM(types(idx)%name)//'" is neutrally buoyant (its dry '// &
+                      'mass equals the displaced water mass to within a relative 1e-6), so an EI=0 line of it is '// &
                       'weightless and slack: its static shape is indeterminate (every slack shape balances). '// &
                       'Give the line type weight (a larger MassDenInAir), or a finite EI with a tension that '// &
                       'holds it taut'); RETURN
@@ -18148,11 +18211,13 @@ CONTAINS
         END IF
         IF (TRIM(points(pa)%ptype) == 'coupled' .OR. TRIM(points(pa)%ptype) == 'vessel') THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a Coupled/Vessel End A '// &
-                    '(POINT '//TRIM(int_to_str(points(pa)%id))//') is driven by a motionFile, which a '// &
-                    'mixed-topology deck with Connect/Free points or bodies (marched as one multibody system) '// &
-                    'does not support. '// &
-                    'Remove the Connect/Free points so the deck runs as a coupled mixed deck (EI=0 lines on the '// &
-                    'Coupled point directly), or attach the cable to a Rigid6 body, a rod end or a Fixed point'); RETURN
+                    '(POINT '//TRIM(int_to_str(points(pa)%id))//') would need motionFile coupling to drive it, '// &
+                    'which a mixed-topology deck with Connect/Free points or bodies (marched as one multibody '// &
+                    'system) does not support. Attach the cable to a Rigid6 body, a rod end or a Fixed point; or '// &
+                    'remove the Connect/Free points so the deck becomes a coupled mixed deck (EI=0 lines on the '// &
+                    'Coupled point directly), which a host (OpenFAST CompMooring=5 or the C API) drives and the '// &
+                    'standalone driver runs with its Coupled points held still (that route takes no motionFile '// &
+                    'either)'); RETURN
         END IF
         IF (lines(i)%endconn_mode(1) /= CD_ENDCONN_PINNED .AND. TRIM(points(pa)%ptype) /= 'fixed') THEN
           ! a clamped or elastic End A on a body or rod: implicit (monolithic step) only

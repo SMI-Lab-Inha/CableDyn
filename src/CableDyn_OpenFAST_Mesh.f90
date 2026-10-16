@@ -296,7 +296,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: fast_stat, n_coupled
-    CHARACTER(240) :: fast_msg
+    CHARACTER(1024) :: fast_msg
 
     matches = .FALSE.
     ErrStat = CD_FAST_MESH_OK
