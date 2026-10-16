@@ -694,6 +694,9 @@ CONTAINS
       CALL set_point_line_map(h, [1])
       CALL store_status(h, err_stat, '')
     ELSE
+      ! the raw-array route builds the point system in place: after a failure the previous
+      ! model is gone, and with it the state saved for it
+      CALL drop_saved_state(h)
       CALL store_status(h, err_stat, 'CableDyn_InitLine: '//TRIM(fast_em))
     END IF
   END SUBROUTINE init_line_serialised
@@ -890,6 +893,9 @@ CONTAINS
       CALL set_point_line_map(h, [(i, i=1, INT(n_lines))])
       CALL store_status(h, err_stat, '')
     ELSE
+      ! the raw-array route builds the point system in place: after a failure the previous
+      ! model is gone, and with it the state saved for it
+      CALL drop_saved_state(h)
       CALL store_status(h, err_stat, 'CableDyn_InitLines: '//TRIM(em))
     END IF
   END SUBROUTINE init_lines_serialised
@@ -1742,6 +1748,9 @@ CONTAINS
     INTEGER :: stat
 
     IF (.NOT. query_ready(handle, h, 'CableDyn_SaveState', err_stat)) RETURN
+    ! the slot is invalid while it is overwritten (an allocation failure inside the copy
+    ! must not leave a half-written slot marked valid)
+    h%has_saved = .FALSE.
     IF (h%use_agg) THEN
       IF (.NOT. ALLOCATED(h%saved_agg)) THEN
         ! On the heap, as the live aggregate: the host chooses this thread's stack size.

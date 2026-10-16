@@ -333,10 +333,12 @@ These rules apply to every entry point. The Python package uses the same array o
   ``CD_C_BAD_HANDLE`` and is never dereferenced. One limitation is inherent to a pointer ABI: if
   a stale copy's address has been reused by a new ``Create``, the copy cannot be told apart from
   the new handle.
-* **Re-initialisation is atomic.** Calling any ``Init*`` function on an initialised handle
-  replaces the model only on success. If the new initialisation fails, the previous model is
-  kept unchanged, and so is the state saved by ``CableDyn_SaveState``; a successful one
-  discards that save.
+* **Re-initialisation is atomic for decks.** Calling ``CableDyn_InitDeck`` or
+  ``CableDyn_InitDeckAt`` on an initialised handle replaces the model only on success. If the
+  new initialisation fails, the previous model is kept unchanged, and so is the state saved by
+  ``CableDyn_SaveState``; a successful one discards that save. ``CableDyn_InitLine`` and
+  ``CableDyn_InitLines`` build the model in place: after a failure the handle must be
+  initialised again, and the saved state is discarded.
 * **Time.** The library keeps no clock. Only ``dt`` enters ``CableDyn_Step``, and the host owns
   the time line.
 

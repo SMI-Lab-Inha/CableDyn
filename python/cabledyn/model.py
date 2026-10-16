@@ -230,13 +230,20 @@ class CableDyn:
         (``n_coupled_dof`` values, the layout of :meth:`step`; the Fixed, Free and
         Connect blocks are not read) or the Coupled/Vessel blocks alone, in
         coupled-vector order (the ``MoorDyn_Init`` layout of a points-only deck),
-        flat or column-per-point ``(3, n)``. See :meth:`coupled_layout`. A failed
+        flat or column-per-point ``(3, n)`` (a ``(3, 3)`` array is rejected as
+        ambiguous: pass three points flat). See :meth:`coupled_layout`. A failed
         initialization keeps any previously initialized model.
         """
         _encode_path(deck)  # rejects a NUL before any file-system call
         resolved = Path(deck).expanduser().resolve()
         path = _encode_path(resolved)
         q = _as_real_array(q0, "q0")
+        if q.ndim == 2 and q.shape == (3, 3):
+            # three points: column-per-point and row-per-point look alike
+            raise ValueError(
+                "q0 of shape (3, 3) is ambiguous (column-per-point or row-per-point); "
+                "pass it flat, x1 y1 z1 x2 y2 z2 ..."
+            )
         if q.ndim == 2 and q.shape[0] == 3:
             q = np.ascontiguousarray(q.reshape(-1, order="F"))
         if q.ndim != 1 or q.size % 3 != 0:

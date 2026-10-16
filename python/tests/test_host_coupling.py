@@ -92,10 +92,36 @@ def test_init_deck_at_host_positions_has_no_transient():
         assert peak > 1.0e-2
 
 
+def test_point_route_order_follows_the_points_table(tmp_path):
+    """Coupled rows listed before the Fixed ones: the blocks follow the POINTS table order."""
+    lines = BOX.read_text(encoding="utf-8").splitlines()
+    rows = [i for i, ln in enumerate(lines) if ln.split()[:2] in (["1", "Fixed"], ["5", "Coupled"])]
+    fixed_at, coupled_at = rows[0], rows[1]
+    reordered = (
+        lines[:fixed_at]
+        + lines[coupled_at : coupled_at + 4]
+        + lines[fixed_at : fixed_at + 4]
+        + lines[coupled_at + 4 :]
+    )
+    deck = tmp_path / "box_reordered.dat"
+    deck.write_text("\n".join(reordered) + "\n", encoding="utf-8")
+    with CableDyn() as model:
+        model.init_deck_at(deck, BOX_FAIRLEADS)
+        assert model.coupled_layout() == tuple((p, "coupled") for p in (5, 6, 7, 8)) + tuple(
+            (p, "fixed") for p in (1, 2, 3, 4)
+        )
+        assert model.host_dofs().tolist() == list(range(12))
+        f = model.calc_output()
+        # line 4's fairlead (point 8) is block 3 now
+        np.testing.assert_allclose(f[9:12], [0.3026, -0.0761, -0.4114], atol=1.0e-4)
+
+
 def test_init_deck_at_rejections_keep_the_model():
     with CableDyn(BOX) as model:
         before = model.calc_output()
         with pytest.raises(CableDynError, match="coupled_positions"):
+            model.init_deck_at(BOX, BOX_FAIRLEADS[:, :3].reshape(-1, order="F"))
+        with pytest.raises(ValueError, match="ambiguous"):
             model.init_deck_at(BOX, BOX_FAIRLEADS[:, :3])
         with pytest.raises(ValueError, match="finite"):
             model.init_deck_at(BOX, np.full(12, np.nan))
