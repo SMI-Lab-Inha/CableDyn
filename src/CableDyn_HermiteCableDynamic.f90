@@ -5842,6 +5842,10 @@ CONTAINS
     REAL(wp) :: endconn_d0_eval(3, 2), support(3), dsupport(3), nin(3), mend
     INTEGER :: inode, jr, jc
     CHARACTER(1024) :: em2
+    ! The per-element kernels (element, axial damping, drag, wave load) report fixed messages of
+    ! under 200 characters, nested ones included; em_e takes them. Each kernel resets its message
+    ! buffer at every call, so this one is kept small (a 1024-character one costs 2-3 % of a step).
+    CHARACTER(256) :: em_e
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     ne = model%ne
@@ -5888,17 +5892,17 @@ CONTAINS
         qe(7:9) = q_cfg(6*e + 1:6*e + 3)
         qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         IF (want_tangent) THEN
-          CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), Ee, fe, Ke, es, em2, &
+          CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), Ee, fe, Ke, es, em_e, &
                                        symmetric_half=.TRUE., &
                                        axial_quadrature_order=model%axial_quadrature_order, &
                                        bending_quadrature_order=model%bending_quadrature_order)
         ELSE
-          CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), Ee, fe, ErrStat=es, ErrMsg=em2, &
+          CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), Ee, fe, ErrStat=es, ErrMsg=em_e, &
                                        axial_quadrature_order=model%axial_quadrature_order, &
                                        bending_quadrature_order=model%bending_quadrature_order)
         END IF
         IF (es /= CD_HCABLE_OK) THEN
-          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'element: '//TRIM(em2); RETURN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'element: '//TRIM(em_e); RETURN
         END IF
         IF (want_residual) THEN
           DO a = 1, 12
@@ -6037,15 +6041,15 @@ CONTAINS
         ve(7:9) = v_cfg(6*e + 1:6*e + 3); ve(10:12) = v_cfg(6*e + 4:6*e + 6)
         IF (want_tangent) THEN
           CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
-                                                     fdamp, kdq, kdv, es, em2, &
+                                                     fdamp, kdq, kdv, es, em_e, &
                                                      model%axial_quadrature_order)
         ELSE
           CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
-                                                     fdamp, ErrStat=es, ErrMsg=em2, &
+                                                     fdamp, ErrStat=es, ErrMsg=em_e, &
                                                      quadrature_order=model%axial_quadrature_order)
         END IF
         IF (es /= CD_HCDYN_OK) THEN
-          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(em2); RETURN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(em_e); RETURN
         END IF
         IF (want_residual) THEN
           DO a = 1, 12
@@ -6075,7 +6079,7 @@ CONTAINS
           IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, djq, djv, es, em2, &
+                                              fdrag, djq, djv, es, em_e, &
                                               wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
                                               wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
                                               wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
@@ -6083,7 +6087,7 @@ CONTAINS
           ELSE IF (model%has_wave) THEN
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, djq, djv, es, em2, &
+                                              fdrag, djq, djv, es, em_e, &
                                               wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
                                               wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval)
           ELSE IF (model%has_held_field) THEN
@@ -6094,17 +6098,17 @@ CONTAINS
                                               model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
                                               0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, djq, djv, es, em2)
+                                              fdrag, djq, djv, es, em_e)
           ELSE
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, djq, djv, es, em2)
+                                              fdrag, djq, djv, es, em_e)
           END IF
         ELSE
           IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em2, &
+                                              fdrag, ErrStat=es, ErrMsg=em_e, &
                                               wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
                                               wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
                                               wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
@@ -6112,7 +6116,7 @@ CONTAINS
           ELSE IF (model%has_wave) THEN
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em2, &
+                                              fdrag, ErrStat=es, ErrMsg=em_e, &
                                               wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
                                               wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval)
           ELSE IF (model%has_held_field) THEN
@@ -6120,15 +6124,15 @@ CONTAINS
                                               model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
                                               0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em2)
+                                              fdrag, ErrStat=es, ErrMsg=em_e)
           ELSE
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em2)
+                                              fdrag, ErrStat=es, ErrMsg=em_e)
           END IF
         END IF
         IF (es /= CD_HCDYN_OK) THEN
-          ErrStat = es; ErrMsg = TRIM(em2); RETURN
+          ErrStat = es; ErrMsg = TRIM(em_e); RETURN
         END IF
         IF (want_residual) THEN
           DO a = 1, 12
@@ -6177,7 +6181,7 @@ CONTAINS
             CALL CD_HermiteCable_FK_Element(qe, model%l0(e), model%am_wl, model%am_rho, model%am_diam(e), &
                                             model%am_can(e), model%am_cat(e), &
                                             wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
-                                            ffk=ffk, fjq=fjq, ErrStat=es, ErrMsg=em2, &
+                                            ffk=ffk, fjq=fjq, ErrStat=es, ErrMsg=em_e, &
                                             wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
                                             wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
                                             wvc_e2kd=model%wv_e2kd)
@@ -6185,7 +6189,7 @@ CONTAINS
             CALL CD_HermiteCable_FK_Element(qe, model%l0(e), model%am_wl, model%am_rho, model%am_diam(e), &
                                             model%am_can(e), model%am_cat(e), &
                                             wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
-                                            ffk=ffk, ErrStat=es, ErrMsg=em2, &
+                                            ffk=ffk, ErrStat=es, ErrMsg=em_e, &
                                             wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
                                             wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
                                             wvc_e2kd=model%wv_e2kd)
@@ -6196,17 +6200,17 @@ CONTAINS
                                             model%am_can(e), model%am_cat(e), &
                                             wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
                                             wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
-                                            ffk=ffk, fjq=fjq, ErrStat=es, ErrMsg=em2)
+                                            ffk=ffk, fjq=fjq, ErrStat=es, ErrMsg=em_e)
           ELSE
             CALL CD_HermiteCable_FK_Element(qe, model%l0(e), model%am_wl, model%am_rho, model%am_diam(e), &
                                             model%am_can(e), model%am_cat(e), &
                                             wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
                                             wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
-                                            ffk=ffk, ErrStat=es, ErrMsg=em2)
+                                            ffk=ffk, ErrStat=es, ErrMsg=em_e)
           END IF
         END IF
         IF (es /= CD_HCDYN_OK) THEN
-          ErrStat = es; ErrMsg = TRIM(em2); RETURN
+          ErrStat = es; ErrMsg = TRIM(em_e); RETURN
         END IF
         IF (want_residual) THEN
           DO a = 1, 12
@@ -6234,7 +6238,7 @@ CONTAINS
                                           model%am_rho, model%am_diam(e), &
                                           model%am_can(e), model%am_cat(e), &
                                           wv_depth=CD_ZERO, wv_dir=CD_ZERO, wv_t=CD_ZERO, &
-                                          ffk=ffk, fjq=fjq, ErrStat=es, ErrMsg=em2, &
+                                          ffk=ffk, fjq=fjq, ErrStat=es, ErrMsg=em_e, &
                                           hf_a=hf_mid)
         ELSE
           hf_mid(1) = 0.5_wp*(model%hf_ud(1, e) + model%hf_ud(1, e + 1))
@@ -6245,11 +6249,11 @@ CONTAINS
                                           model%am_rho, model%am_diam(e), &
                                           model%am_can(e), model%am_cat(e), &
                                           wv_depth=CD_ZERO, wv_dir=CD_ZERO, wv_t=CD_ZERO, &
-                                          ffk=ffk, ErrStat=es, ErrMsg=em2, &
+                                          ffk=ffk, ErrStat=es, ErrMsg=em_e, &
                                           hf_a=hf_mid)
         END IF
         IF (es /= CD_HCDYN_OK) THEN
-          ErrStat = es; ErrMsg = TRIM(em2); RETURN
+          ErrStat = es; ErrMsg = TRIM(em_e); RETURN
         END IF
         IF (want_residual) THEN
           DO a = 1, 12
@@ -6660,9 +6664,13 @@ CONTAINS
     REAL(wp) :: djq(12, 12), djv(12, 12), fjq(12, 12)
     REAL(wp) :: hf_mid(3)
     INTEGER :: es
-    CHARACTER(1024) :: em
+    ! The element kernels report fixed messages of under 200 characters (nested ones included),
+    ! which fit em and the 512-character per-element buffer (ws_elem_em) this fills. Each kernel
+    ! resets em at every call, so em is kept small; ErrMsg is written only on a failure (the
+    ! caller reads it only when ErrStat says so).
+    CHARACTER(256) :: em
 
-    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    ErrStat = CD_HCDYN_OK
     qe(1:6) = q_cfg(6*(e - 1) + 1:6*e)
     qe(7:12) = q_cfg(6*e + 1:6*(e + 1))
     ve(1:6) = v_cfg(6*(e - 1) + 1:6*e)
@@ -6965,7 +6973,9 @@ CONTAINS
     REAL(wp) :: scale, eta_w, uw(3), aw(3)
     LOGICAL :: has_wv, has_shared, has_trio, has_cmp, any_wv_arg, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, es
-    CHARACTER(1024) :: em2
+    ! the message of a per-Gauss-point CableDyn_Hydro kinematics or Morison call (each is under 200
+    ! characters): a small buffer, as these calls reset it at every Gauss point
+    CHARACTER(256) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     want_jac = PRESENT(djq)
@@ -7238,7 +7248,9 @@ CONTAINS
     REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha
     LOGICAL :: has_trio, has_cmp, has_held, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, k, es
-    CHARACTER(1024) :: em2
+    ! the message of a per-Gauss-point CableDyn_Hydro kinematics call (each is under 200 characters):
+    ! a small buffer, as these calls reset it at every Gauss point
+    CHARACTER(256) :: em2
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     want_jac = PRESENT(fjq)

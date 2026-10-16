@@ -261,9 +261,12 @@ Model data
        <n>, <type>) must be a Fixed (anchor) point``
      - in a deck without dynamic points every line runs from a fairlead to an anchor. A line
        between two Coupled points (a shared line) is supported only between two ``Turbine<J>``
-       fairleads of a FAST.Farm deck. Split it into two lines that meet at a ``Connect`` point
-       in the middle; each line then ends on one Coupled point, and the deck becomes dynamic and
-       needs ``dtM`` and ``TMax``.
+       fairleads of a FAST.Farm deck. An ``EI = 0`` line can be split into two lines that meet at
+       a ``Connect`` point in the middle; each line then ends on one Coupled point, and the deck
+       becomes dynamic and needs ``dtM`` and ``TMax``. A finite-EI line cannot be split that way
+       (beside ``Connect`` points a finite-EI cable needs a Fixed End B and cannot end on a
+       ``Connect`` point; the message then starts ``finite-EI LINE <L>``): anchor it on a Fixed
+       point, or model the shared span with ``EI = 0`` line types split at a ``Connect`` point.
    * - ``finite-EI LINE <L> in a mixed-topology deck needs a Fixed End B ... End B is POINT <n>
        (<type>)``
      - a deck with ``Connect``/``Free`` points, bodies or rods that also has finite-EI cables drives
@@ -272,12 +275,15 @@ Model data
        deck with ``Connect``/``Free`` points, bodies or rods, which is marched as one multibody
        system. Anchor the cable on a Fixed point, or run the cable and the lines it joins as
        separate decks.
-   * - ``finite-EI LINE <L>: a Coupled/Vessel End A (POINT <n>) is driven by a motionFile``
+   * - ``finite-EI LINE <L>: a Coupled/Vessel End A (POINT <n>) would need motionFile coupling
+       to drive it``
      - a mixed-topology deck that has ``Connect``/``Free`` points or bodies is marched as one
-       multibody system, which does not take a finite-EI cable on a Coupled End A (that end
-       would need ``motionFile`` coupling). Remove the ``Connect``/``Free`` points so the deck
-       runs as a coupled mixed deck (the ``EI = 0`` lines on the Coupled point directly), or
-       attach the cable to a Rigid6 body, a rod end or a Fixed point.
+       multibody system, which does not take ``motionFile`` coupling, so nothing would drive a
+       finite-EI cable on a Coupled End A. Attach the cable to a Rigid6 body, a rod end or a
+       Fixed point. Or remove the ``Connect``/``Free`` points so the deck becomes a coupled mixed
+       deck (the ``EI = 0`` lines on the Coupled point directly): a host (OpenFAST
+       ``CompMooring = 5`` or the C API) drives its Coupled points, and the standalone driver
+       runs it with them held still (that route takes no ``motionFile`` either).
    * - ``the deck current OPTION is not supported on this route`` / ``the deck waves OPTION ...``
      - a mixed ``EI = 0``/finite-EI deck (run standalone, through the C API, OpenFAST or
        FAST.Farm) runs the mooring in still water: no ambient fluid field covers its span, and
@@ -297,12 +303,14 @@ Model data
        route — a lazy-wave arch needs the finite-EI path. Give the buoyant section an ``EI > 0``
        line type, or specify it by target submerged weight (the ``EQUIVALENT BUOYANCY`` block in
        :doc:`driver_format`).
-   * - ``is net-buoyant to within 1e-6 (neutrally buoyant ...)``
-     - an ``EI = 0`` line type whose dry mass equals the displaced water mass (to a relative
-       1e-6, the precision of a typed mass) has no net weight. A slack line of it is weightless
-       and its static shape is indeterminate (every slack shape balances). Give the line type
-       weight (a larger ``MassDenInAir``), or use a finite ``EI`` with a tension that holds the
-       line taut.
+   * - ``is neutrally buoyant (its dry mass equals the displaced water mass to within a
+       relative 1e-6)``
+     - the net-buoyant rejection above (dry mass ≤ displaced mass, unchanged) of an ``EI = 0``
+       line type whose dry mass lies less than a relative 1e-6 (the precision of a typed mass)
+       below the displaced water mass: it has no net weight, so a slack line of it is
+       weightless and its static shape is indeterminate (every slack shape balances). Give the
+       line type weight (a larger ``MassDenInAir``), or use a finite ``EI`` with a tension that
+       holds the line taut.
    * - ``the viscoelastic dynamic stiffness Ed (EA = Es|Ed) must be finite and exceed the static
        Es``
      - ``Ed`` must be strictly greater than ``Es``; equal values make the series spring infinite.
@@ -580,17 +588,22 @@ Warnings and notes that do not stop a run
      - Cause and fix
    * - ``Note: LINE <L> is stretched to a static strain of ... % at the fairlead``
      - the fairlead tension over the EA of the End A section exceeds ``maxStrain`` (when the
-       OPTION is given) or 10 % (when it is not). A line far shorter than its span converges at
+       OPTION is given and positive) or 10 % (when it is not given or is ``0``, which disables
+       only the dynamic guard). Any line, ``EI = 0`` or finite-EI, is assessed on every
+       standalone route. A line far shorter than its span converges at
        such a strain without failing, because the dynamic ``maxStrain`` guard does not apply to
        the static solve. Check the line length against the span and the EA. Only a note: the
        equilibrium and the outputs are unchanged. Types with a Syrope working curve or a
        load-dependent stiffness are not assessed.
    * - ``WARNING: LINE <L> section of type "<name>" (... m in <n> segment(s)) has segments of ...
        m, ... % of the line length``
-     - a section of at most four segments whose segments are longer than 10 % of the line is too
-       coarse to follow the line shape there; a 100 m one-segment top section of a 520 m line shifts the fairlead tension
-       by tens of percent. Refine its ``NumSegs``. (A line with fewer than three segments in all
-       is reported whole.)
+     - a section whose segments are longer than 1/8 (12.5 %) of the line, i.e. coarser than a
+       uniform eight-segment line, is too coarse to follow the line shape there; a 100 m
+       one-segment top section of a 520 m line shifts the fairlead tension by tens of percent.
+       The rule compares the segment length with the whole line, so it does not depend on how
+       the line is split into sections. Refine its ``NumSegs``; a converged tension usually needs
+       segments well below this bound. (A line with fewer than three segments in all is reported
+       whole.)
    * - ``WARNING: line type ... sinks ... m into the seabed ...; kBot is soft for this line``
      - a grounded run of this type would sink deeper than its own diameter into the penalty
        seabed. Raise ``kBot``; the default ``1.0e5`` embeds a heavy chain by about half its

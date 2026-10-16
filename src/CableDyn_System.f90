@@ -185,7 +185,7 @@ MODULE CableDyn_System
     ! parallel region so failure selection and mapped-load accumulation stay reproducible.
     INTEGER, ALLOCATABLE :: line_off(:), line_stat(:), line_iter(:)
     LOGICAL, ALLOCATABLE :: line_converged(:), line_stalled(:)
-    CHARACTER(512), ALLOCATABLE :: line_msg(:)
+    CHARACTER(1024), ALLOCATABLE :: line_msg(:)
     REAL(wp), ALLOCATABLE :: line_load_work(:)
     ! Snapshot of the COMMITTED system state (every line's q/v/a/f_ext + every point) for
     ! the aggregate stage-then-commit contract. The per-line q_rollback buffers CANNOT

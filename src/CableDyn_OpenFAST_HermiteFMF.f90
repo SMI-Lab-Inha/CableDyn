@@ -828,7 +828,7 @@ CONTAINS
         REAL(wp), ALLOCATABLE :: qc(:), g(:)
         REAL(wp) :: ends(3, 4), raw, th
         INTEGER :: ks, k
-        CHARACTER(200) :: km
+        CHARACTER(1024) :: km
         ends = coupled_torsion_ends(self, target_dcm)
         DO k = 1, 3, 2
           IF (ABS(NORM2(ends(:, k)) - CD_ONE) > 1.0e-8_wp .OR. ABS(NORM2(ends(:, k + 1)) - CD_ONE) > 1.0e-8_wp &
@@ -996,7 +996,7 @@ CONTAINS
     REAL(wp) :: target_direction_rate(3), target_direction_acceleration(3)
     REAL(wp) :: omega_local(3), alpha_local(3), rotation_check(3, 3)
     INTEGER :: base, ecstat
-    CHARACTER(200) :: ecmsg
+    CHARACTER(1024) :: ecmsg
 
     ErrStat = CD_HFMF_OK
     ErrMsg = ''

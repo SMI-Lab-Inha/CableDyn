@@ -64,8 +64,8 @@ PROGRAM cabledyn
   LOGICAL :: converged, has_dtm, has_tmax, has_motion_file, has_line_outputs, has_objects
   ! the run-time profile includes the finite-EI cable step counters (not on the mixed route)
   LOGICAL :: profile_cable_detail = .FALSE.
-  ! Sized for the aggregate and deck-driver messages it relays (512-character buffers
-  ! plus deck-line context), so no diagnostic is cut short.
+  ! Sized for the aggregate and deck-driver messages it relays (built in buffers of up to
+  ! 2048 characters, plus deck-line context), so no diagnostic is cut short.
   CHARACTER(4096) :: ErrMsg
 
   nargs = COMMAND_ARGUMENT_COUNT()
@@ -450,7 +450,7 @@ CONTAINS
     INTEGER :: es, n_moving, nstep, step, n_iter, miss_count, consecutive_miss, max_consecutive_miss
     INTEGER :: unit, ios
     LOGICAL :: step_converged, stalled, file_open
-    CHARACTER(512) :: em
+    CHARACTER(4096) :: em
     CHARACTER(4096) :: static_path, dynamic_path
     TYPE(StandaloneProgress) :: progress
 
@@ -697,8 +697,8 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: msg
     INTEGER :: n_lines, n_points, n_sections, n_ei0, n_finite, i, line_id, es
     REAL(wp) :: tension, force(3), inclination, declination, azimuth
-    CHARACTER(512) :: em
-    CHARACTER(1024) :: note
+    CHARACTER(4096) :: em
+    CHARACTER(2048) :: note
 
     CALL CD_AGG_GetInitMetadata(aggregate, n_lines, n_points, n_sections, n_ei0, n_finite, es, em)
     IF (es /= CD_AGG_OK) THEN

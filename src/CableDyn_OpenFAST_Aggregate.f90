@@ -147,7 +147,7 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! Per-cable status staging lets independent finite-EI cables advance concurrently while
     ! preserving deterministic, cable-order error reporting after the parallel region.
     INTEGER, ALLOCATABLE :: cable_stat(:)
-    CHARACTER(512), ALLOCATABLE :: cable_msg(:)
+    CHARACTER(1024), ALLOCATABLE :: cable_msg(:)
     ! Host-driven ambient-fluid surface over the EI=0 system's LINE NODES (the sampling
     ! points a coupled host feeds with wave kinematics): nfluid = total line-node count,
     ! fl_off(li) = the node offset of system line li in the flat (3, nfluid) arrays, and
