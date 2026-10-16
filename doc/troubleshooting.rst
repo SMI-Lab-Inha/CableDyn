@@ -507,12 +507,14 @@ but a few geometries are genuinely hard:
   load fraction ...`` means the homotopy from the smeared modules to the lumped ones (see
   *Discrete attachments* in :doc:`theory`) did not reach the discrete equilibrium: the damped
   Newton solve of a load step did not converge, nor did its pseudo-transient and line-search
-  repetitions, down to steps of 1/1024 of the module loads (or 32 load steps failed in all).
+  repetitions, down to steps of 1/1024 of the module loads (or 64 load steps failed in all).
   The message names the load fraction of the first failed solve and the load fraction the
   homotopy reached. A discrete state reached by those repetitions or smaller steps is checked as
   the smeared one was; ``... the discrete equilibrium reached after a failed Newton solve ...``
-  names the check it failed (the kink limit, the tensile contract, the physical-branch audit
-  or the stability test). Check that the deck with the modules replaced by the equivalent
+  names the check it failed (the kink limit away from the attachment nodes, the tensile
+  contract, the physical-branch audit or the stability test), and a state that passes them is
+  reported in the note ``... was reached after a failed Newton solve ... and passed the
+  acceptance checks of the smeared state``. Check that the deck with the modules replaced by the equivalent
   smeared buoyancy section solves; if it does, the discrete layout itself is the difficulty.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
