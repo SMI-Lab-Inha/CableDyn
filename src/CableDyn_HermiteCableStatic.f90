@@ -6241,6 +6241,8 @@ CONTAINS
     INTEGER, PARAMETER :: MAX_LOCAL_RESOLUTION_PASSES = 12
     LOGICAL :: local_mode, nothing_to_split
     INTEGER :: kcap, local_res_passes
+    ! What stopped the local refinement short of its targets, other than the per-element cap.
+    CHARACTER(160) :: local_stop
     INTEGER, ALLOCATABLE :: level_out(:), level_r(:)
     REAL(wp), ALLOCATABLE :: elem_hk(:)
     LOGICAL, ALLOCATABLE :: chatter_nodes(:)
@@ -6301,6 +6303,7 @@ CONTAINS
     local_mode = .FALSE.
     IF (PRESENT(local_refinement)) local_mode = local_refinement
     local_res_passes = 0
+    local_stop = ''
 
     IF (max_scale < 1) THEN
       ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'CD_HermiteCable_Static_Solve_AutoMesh: max_scale >= 1 required'; RETURN
@@ -6575,6 +6578,14 @@ CONTAINS
         EXIT
       END IF
     END DO
+    ! In the local mode, name a pass limit that stopped the refinement (the element limit is
+    ! named by local_resolution_mesh; a refinement that stops at the per-element cap keeps
+    ! the cap wording below).
+    IF (local_mode .AND. LEN_TRIM(local_stop) == 0 .AND. local_res_passes >= MAX_LOCAL_RESOLUTION_PASSES) &
+      WRITE (local_stop, '(A,I0,A)', IOSTAT=wios) 'the limit of ', MAX_LOCAL_RESOLUTION_PASSES, &
+      ' refinement passes was reached'
+    IF (local_mode .AND. LEN_TRIM(axial_stop) == 0 .AND. local_passes >= MAX_LOCAL_AXIAL_PASSES) &
+      WRITE (axial_stop, '(A,I0,A)', IOSTAT=wios) 'the limit of ', MAX_LOCAL_AXIAL_PASSES, ' passes was reached'
 
     ! A residual-converged, element-localized fold is not a usable equilibrium.
     ! Enforce this numerical-safety bound for every AutoMesh caller, including
@@ -6589,6 +6600,7 @@ CONTAINS
         'CD_HermiteCable_Static_Solve_AutoMesh: unresolved/kinked equilibrium: max(h*kappa)=', &
         diag_out%h_kappa_peak, ' > safety limit=', CD_HC_KINK_LIMIT, &
         ' at element ', diag_out%h_kappa_elem
+      IF (LEN_TRIM(local_stop) > 0) wbuf = TRIM(wbuf)//' (local refinement stopped: '//TRIM(local_stop)//')'
       ErrMsg = wbuf
       RETURN
     END IF
@@ -6603,6 +6615,13 @@ CONTAINS
           'CD_HermiteCable_Static_Solve_AutoMesh: local axial refinement stopped after ', local_passes, &
           ' passes ('//TRIM(axial_stop)//') with compressive axial resultant=', &
           diag_out%axial_strain_min_resultant, &
+          ' N below tolerance=', diag_out%axial_tolerance, ' N at element ', &
+          diag_out%axial_strain_min_elem, ', xi=', diag_out%axial_strain_min_xi, &
+          ', strain=', diag_out%axial_strain_min
+      ELSE IF (LEN_TRIM(local_stop) > 0) THEN
+        WRITE (wbuf, '(A,ES12.5,A,ES12.5,A,I0,A,F8.5,A,ES12.5)', IOSTAT=wios) &
+          'CD_HermiteCable_Static_Solve_AutoMesh: local refinement stopped ('//TRIM(local_stop)// &
+          ') with compressive axial resultant=', diag_out%axial_strain_min_resultant, &
           ' N below tolerance=', diag_out%axial_tolerance, ' N at element ', &
           diag_out%axial_strain_min_elem, ', xi=', diag_out%axial_strain_min_xi, &
           ', strain=', diag_out%axial_strain_min
@@ -6635,11 +6654,19 @@ CONTAINS
         (diag_out%h_kappa_peak > h_kappa_target .OR. diag_out%contact_chatter)) THEN
       ErrStat = CD_HCSTAT_NOCONVERGE
       wbuf = ''
-      WRITE (wbuf, '(A,I0,A,ES12.5,A,ES12.5,A,L1,A,I0)', IOSTAT=wios) &
-        'CD_HermiteCable_Static_Solve_AutoMesh: refinement cap ', max_scale, &
-        ' exhausted with unresolved h*kappa=', diag_out%h_kappa_peak, ' (target ', h_kappa_target, &
-        '), contact chatter=', diag_out%contact_chatter, &
-        ', contact islands=', diag_out%n_islands
+      IF (LEN_TRIM(local_stop) > 0) THEN
+        WRITE (wbuf, '(A,ES12.5,A,ES12.5,A,L1,A,I0)', IOSTAT=wios) &
+          'CD_HermiteCable_Static_Solve_AutoMesh: local refinement stopped ('//TRIM(local_stop)// &
+          ') with unresolved h*kappa=', diag_out%h_kappa_peak, ' (target ', h_kappa_target, &
+          '), contact chatter=', diag_out%contact_chatter, &
+          ', contact islands=', diag_out%n_islands
+      ELSE
+        WRITE (wbuf, '(A,I0,A,ES12.5,A,ES12.5,A,L1,A,I0)', IOSTAT=wios) &
+          'CD_HermiteCable_Static_Solve_AutoMesh: refinement cap ', max_scale, &
+          ' exhausted with unresolved h*kappa=', diag_out%h_kappa_peak, ' (target ', h_kappa_target, &
+          '), contact chatter=', diag_out%contact_chatter, &
+          ', contact islands=', diag_out%n_islands
+      END IF
       ErrMsg = wbuf
       RETURN
     END IF
@@ -6853,7 +6880,12 @@ CONTAINS
         n_new = SUM(2_I8**need)
         fits = n_new <= INT(AUTO_MAX_ELEMENTS, I8)
       END DO
-      IF (.NOT. fits .OR. ALL(need == 0)) RETURN
+      IF (.NOT. fits .OR. ALL(need == 0)) THEN
+        ! A need was given up to the limit (with no need at all the early return above names
+        ! the per-element cap).
+        WRITE (local_stop, '(A,I0,A)') 'the element limit ', AUTO_MAX_ELEMENTS, ' was reached'
+        RETURN
+      END IF
       none = .FALSE.
 
       ! Bisect level by level: the children of a split cubic-Hermite element carry the same

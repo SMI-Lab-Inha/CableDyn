@@ -2333,9 +2333,15 @@ load in warm-started Newton solves; in a deck current the drag at rest is added 
 solve is repeated with the drag of its own solution until the nodes stop moving. The load moves
 in eighths; a step whose damped Newton solve does not converge is repeated from the last
 converged state with pseudo-transient continuation and then with a residual-merit line search,
-and is halved (down to 1/1024, with at most 32 failed steps in all) when neither converges; a
-discrete state reached this way passes the kink, tensile, physical-branch and stability checks
-of the smeared state before it is accepted. The smeared state carries no
+and is halved (down to 1/1024) when neither converges. A halved step doubles again (up to 1/8)
+after two consecutive converged steps of its size; each time a doubled step fails, the number
+of converged steps a doubling waits for doubles, so a homotopy that converges steadily at one
+size and fails at twice it keeps advancing and tries the larger size about ten times at most.
+At most 64 load steps may fail in all. A discrete state reached this way passes the kink,
+tensile, physical-branch and stability checks of the smeared state before it is accepted, the
+kink limit :math:`L_0\kappa \le 0.7` applied away from the attachment nodes: a lumped load
+turns the line by a slope jump :math:`\theta` at its node, which the :math:`C^1` elements
+beside the node carry as :math:`L_0\kappa \approx 2\theta` at any mesh size. The smeared state carries no
 attachment drag, and on a frictional seabed, whose regularised friction force turns from its
 sticking stiffness to its sliding capacity over a short slip, the Newton update for a
 cross-flow drag can overshoot and diverge from the first step (a lazy wave with 25 modules in a

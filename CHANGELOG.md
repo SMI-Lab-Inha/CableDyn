@@ -689,7 +689,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   deck mesh has a larger ratio there). The cap of 16 per deck element, the element limit, the
   acceptance checks and the fail-closed messages are unchanged; where a pass would exceed the
   element limit, the bending-length splits give way first, then the grading, and only then the
-  curvature, end-layer and contact splits. The two decks above now solve
+  curvature, end-layer and contact splits, and a refinement that stops short of its target
+  names what stopped it (the cap, the element limit or the limit of 12 passes, 16 for the
+  axial passes). The two decks above now solve
   on 492 and 436 elements in 0.30 s and 0.27 s, with end tensions within 4e-7 and 2e-6 of the
   whole-line refinement and nodes within 0.7 mm and 4 mm. In the finite-EI statics matrix 61
   of the 123 decks refine: their CPU time falls from 76 s to 34 s, the end tensions change by
@@ -711,10 +713,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   diverged from the first step, even in steps of 1/64 of the load; the seed and the step size
   were not the cause. A step whose damped Newton solve does not converge is now repeated from
   the last converged state with pseudo-transient continuation and then with a residual-merit
-  line search, and halved (down to 1/1024, with at most 32 failed steps in all) when neither
-  converges. A discrete state reached this way must pass the checks the smeared state passed
-  (the kink limit, the tensile contract under `tensile_safety True`, the physical-branch audit
-  and the stability test), or the solve fails closed naming the check. The deck now solves in
+  line search, and halved (down to 1/1024) when neither converges. A halved step doubles
+  again (up to 1/8) after two consecutive converged steps of its size, and each time a
+  doubled step fails, the number of converged steps a doubling waits for doubles; at most 64
+  load steps may fail in all. A discrete state reached this way must pass the checks the
+  smeared state passed (the kink limit, except on the elements beside an attachment node,
+  which carry its slope jump as curvature at any mesh size; the tensile contract under
+  `tensile_safety True`; the physical-branch audit; the stability test), or the solve fails
+  closed naming the check; a state that passes them is reported in a note. The deck now solves in
   1.8 s, its fairlead and anchor tensions within 0.04 % and 0.2 % of the deck with the
   equivalent smeared buoyancy section; in 0.6 m/s, and on the coarse mesh, it solved before
   and its results are unchanged. A polish whose Newton steps all converge takes the same
