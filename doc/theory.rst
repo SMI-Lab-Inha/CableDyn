@@ -1346,7 +1346,10 @@ seeded with the CableDyn shape converge to the same layout, and a dynamic run fr
 rest and returns to it after a disturbance. The standalone driver prints a note when the
 grounded run of the static layout lies past its anchor (``the static layout carries the
 grounded run ... m past its anchor``), because the layout differs from the usual one and a
-real seabed with friction, or a shorter line, would not reach it. When the 3D solve also
+real seabed with friction, or a shorter line, would not reach it. The note names static
+seabed friction (``frictionMu`` with ``staticsFriction asLaid``) or a shorter line as the
+remedy, only the shorter line when ``asLaid`` is already on, and is not made when ``asLaid``
+with a ``layAzimuth`` away from the fairlead lays the run past the anchor itself. When the 3D solve also
 fails, the solve stops with
 the diagnosis (the element-mean compression, where it sits, and its height above the seabed)
 and suggests ``frictionMu``; neither the pseudo-arclength continuation of the planar path

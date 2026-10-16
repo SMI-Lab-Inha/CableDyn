@@ -195,7 +195,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   applies friction against a deck current only), or a shorter line where friction already acts
   or the route rejects it. A run that `staticsFriction asLaid` lays past its anchor along
   `layAzimuth` is not noted, nor is a near-vertical line (horizontal span under a tenth of the
-  water depth) past its end. It is printed on the static, `TMax = 0`, point-system and
+  water depth) past its end. The finite-EI note now names the same remedy and skips the same
+  as-laid run. It is printed on the static, `TMax = 0`, point-system and
   multibody routes and in the OpenFAST initialisation report, which now also prints the
   initialisation notes of finite-EI cables, and returned in the line report of the OpenFAST
   aggregate. No example deck prints it, and no result changes. See the manual's theory page

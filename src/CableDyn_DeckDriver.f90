@@ -4204,14 +4204,26 @@ CONTAINS
       !! from the fairlead: the line is carried past its anchor and folds back to it (a
       !! hairpin). A strong current on a frictionless seabed holds such an equilibrium; it
       !! is reported so that it is not mistaken for the usual layout. Node 1 is the anchor
-      !! and q_static is in the solve frame, where anchor and fairlead are also given.
+      !! and q_static is in the solve frame, where anchor and fairlead are also given. With
+      !! staticsFriction asLaid and a layAzimuth that lays the run from the anchor away from
+      !! the fairlead, the deck itself lays the run past the anchor, and no note is made.
       REAL(wp), PARAMETER :: GROUNDED_TOL = 0.05_wp
-      REAL(wp) :: e_h(2), span, past, floor_z, xg, yg, pos(3)
+      REAL(wp) :: e_h(2), e_g(2), span, past, floor_z, xg, yg, pos(3), laid_t_n
+      REAL(wp), ALLOCATABLE :: lay_az_n
       INTEGER :: k, esb
       CHARACTER(1024) :: emb
+      CHARACTER(120) :: remedy
       span = NORM2(fairlead(1:2) - anchor(1:2))
       IF (span <= 1.0e-9_wp*MAX(CD_ONE, SUM(l0))) RETURN
       e_h = (fairlead(1:2) - anchor(1:2))/span
+      IF (as_laid) THEN
+        CALL line_static_friction(opts, ln%id, lay_az_n, laid_t_n)
+        IF (ALLOCATED(lay_az_n)) THEN
+          ! the anchor-to-fairlead direction in the global frame of the lay azimuth
+          e_g = [frame_cs(1)*e_h(1) - frame_cs(2)*e_h(2), frame_cs(2)*e_h(1) + frame_cs(1)*e_h(2)]
+          IF (DOT_PRODUCT([COS(lay_az_n), SIN(lay_az_n)], e_g) < -1.0e-3_wp) RETURN
+        END IF
+      END IF
       past = CD_ZERO
       DO k = 1, SIZE(q_static)/6
         pos = q_static(6*(k - 1) + 1:6*(k - 1) + 3)
@@ -4228,10 +4240,15 @@ CONTAINS
         past = MAX(past, -DOT_PRODUCT(pos(1:2) - anchor(1:2), e_h))
       END DO
       IF (past <= 0.01_wp*span + 0.5_wp) RETURN
+      IF (as_laid) THEN
+        remedy = 'a shorter line prevents it'
+      ELSE
+        remedy = 'static seabed friction (frictionMu with staticsFriction asLaid) or a shorter line '// &
+                 'prevents it'
+      END IF
       WRITE (note_text, '(A,I0,A,F0.2,A)') 'line ', ln%id, ': the static layout carries the grounded run ', &
         past, ' m past its anchor, where it folds back (a hairpin); a strong current on a frictionless '// &
-        'seabed can hold this equilibrium, but check that it is the intended layout (seabed friction or '// &
-        'a shorter line prevents it)'
+        'seabed can hold this equilibrium, but check that it is the intended layout ('//TRIM(remedy)//')'
       CALL report_note(note_text)
     END SUBROUTINE anchor_overshoot_note
 
