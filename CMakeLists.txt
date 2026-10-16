@@ -1442,6 +1442,19 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # Discrete buoyancy modules on a lazy wave in a cross current (the attachment polish falls
+  # back from diverging Newton steps on the frictional seabed): the static solve converges and
+  # its end tensions match the equivalent smeared section.
+  add_test(NAME attachment_cross_current
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_attachment_cross_current.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --data ${CMAKE_CURRENT_SOURCE_DIR}/tests/data
+                   --output ${CMAKE_BINARY_DIR}/attachment_cross_current)
+  set_tests_properties(attachment_cross_current PROPERTIES
+    LABELS "python;hermite;static;robustness;attachments"
+    TIMEOUT 600
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # Finite-EI generalised-alpha blends: force-blend dtM convergence under prescribed surge.
   add_test(NAME hermite_force_blend_dt
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hermite_force_blend_dt.py

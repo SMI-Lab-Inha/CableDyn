@@ -19,6 +19,10 @@ PROGRAM test_hermite_automesh
   !!   5. Physical multi-island contact is accepted at the refinement cap.
   !!   6. Tension-controlled end layers trigger refinement through the EI-aware diagnosis.
   !!   7. FAIL-CLOSED: max_scale < 1 is rejected.
+  !!   8. LOCAL refinement (local_refinement): a line with one coarse section is refined where its
+  !!      h*kappa fails, graded into the fine section, within the per-element cap, and agrees with
+  !!      the global refinement; a resolved mesh, max_scale = 1 and the end-layer rig behave as
+  !!      in the global mode; the per-element diagnosis outputs are consistent.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve, &
                                          CD_HermiteCable_Static_Solve_AutoMesh, &
@@ -41,6 +45,10 @@ PROGRAM test_hermite_automesh
   CALL case_required_resolution_cap()
   CALL case_resolved_multi_island_cap()
   CALL case_fail_closed()
+  CALL case_local_refinement()
+  CALL case_local_unchanged()
+  CALL case_local_boundary_layer()
+  CALL case_metrics_element_outputs()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -344,6 +352,194 @@ CONTAINS
                                                l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, res, its, es, em)
     CALL check(es == CD_HCSTAT_BADINPUT, 'fail: EA size /= SIZE(l0) rejected (no OOB copy)')
   END SUBROUTINE case_fail_closed
+
+  !> The rig of build_rig on a two-section mesh: NC coarse elements over the first 30 m and NF
+  !> fine 1 m elements over the remaining 70 m (the deck mesh of a line with one coarse section).
+  SUBROUTINE build_two_section_rig(nc, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
+    INTEGER, INTENT(IN) :: nc
+    REAL(wp), ALLOCATABLE, INTENT(OUT) :: l0(:), EA(:), EI(:), w(:), seed(:)
+    INTEGER, ALLOCATABLE, INTENT(OUT) :: fixed(:)
+    INTEGER, INTENT(OUT) :: nfix
+    REAL(wp), INTENT(OUT) :: seabed_z
+    INTEGER, PARAMETER :: NF = 70
+    INTEGER :: ne
+    CALL build_rig(nc + NF, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
+    ne = nc + NF
+    l0(1:nc) = 30.0_wp/REAL(nc, wp)
+    l0(nc + 1:ne) = 1.0_wp
+    BLOCK
+      INTEGER :: es
+      CHARACTER(160) :: em
+      CALL CD_HermiteCable_Trivial_Seed([0.0_wp, 0.0_wp, 0.0_wp], [90.0_wp, 0.0_wp, 0.0_wp], l0, seabed_z, &
+                                        seed, es, em)
+      IF (es /= CD_HCSTAT_OK) WRITE (*, '(A)') '  (seed error) '//TRIM(em)
+    END BLOCK
+  END SUBROUTINE build_two_section_rig
+
+  SUBROUTINE case_local_refinement()
+    !! Three coarse 10 m elements beside seventy 1 m elements. The local mode refines the coarse
+    !! section (and grades into the fine one) instead of multiplying the whole line, keeps every
+    !! element a power-of-two child of its caller element within the cap, meets the target, and
+    !! reaches the equilibrium of the global refinement.
+    REAL(wp), ALLOCATABLE :: l0(:), EA(:), EI(:), w(:), seed(:)
+    REAL(wp), ALLOCATABLE :: l0o(:), EAo(:), EIo(:), wo(:), qo(:), curvo(:)
+    REAL(wp), ALLOCATABLE :: l0g(:), EAg(:), EIg(:), wg(:), qg(:), curvg(:), sg(:), so(:)
+    INTEGER, ALLOCATABLE :: fixed(:), fixo(:), fixg(:)
+    TYPE(CD_HermiteResolutionType) :: dg, dgg
+    INTEGER :: nfix, scale, scaleg, its, es, e, k, ng, no
+    REAL(wp) :: seabed_z, res, ratio, dmax, xg
+    LOGICAL :: dyadic
+    CHARACTER(240) :: em
+    CALL build_two_section_rig(3, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
+    CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
+                                               8, 120, 1.0e-8_wp, 0.7_wp, 0.12_wp, 0.0_wp, 16, [2, 5], &
+                                               l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, res, its, es, em, &
+                                               local_refinement=.TRUE.)
+    IF (es /= CD_HCSTAT_OK) WRITE (*, '(A)') '  (local automesh error) '//TRIM(em)
+    CALL check(es == CD_HCSTAT_OK, 'local: solve ok')
+    IF (es /= CD_HCSTAT_OK) RETURN
+    CALL check(scale > 1, 'local: refined')
+    CALL check(dg%h_kappa_peak <= 0.12_wp, 'local: h*kappa target met')
+    CALL check(ABS(SUM(l0o) - SUM(l0)) <= 1.0e-12_wp*SUM(l0), 'local: rest length preserved')
+    ! Every element is a 2^-k child (k <= 4) of the caller element that contains it.
+    dyadic = .TRUE.
+    xg = 0.0_wp
+    DO e = 1, SIZE(l0o)
+      ratio = MERGE(10.0_wp, 1.0_wp, xg + 0.5_wp*l0o(e) < 30.0_wp)/l0o(e)
+      k = NINT(LOG(ratio)/LOG(2.0_wp))
+      IF (k < 0 .OR. k > 4 .OR. ABS(ratio - 2.0_wp**k) > 1.0e-9_wp*ratio) dyadic = .FALSE.
+      xg = xg + l0o(e)
+    END DO
+    CALL check(dyadic, 'local: elements are power-of-two children within the cap')
+    ! Graded: neighbours differ by at most twice, except across the deck's own 10:1 jump.
+    ratio = 0.0_wp
+    DO e = 1, SIZE(l0o) - 1
+      ratio = MAX(ratio, MAX(l0o(e)/l0o(e + 1), l0o(e + 1)/l0o(e)))
+    END DO
+    CALL check(ratio <= 10.0_wp*(1.0_wp + 1.0e-12_wp), 'local: no new size jump beyond the deck one')
+    ! The far end of the fine section is not touched.
+    CALL check(ALL(ABS(l0o(SIZE(l0o) - 19:) - 1.0_wp) < 1.0e-12_wp), 'local: resolved fine section unchanged')
+    ! Same equilibrium as the global refinement, on far fewer elements.
+    CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
+                                               8, 120, 1.0e-8_wp, 0.7_wp, 0.12_wp, 0.0_wp, 16, [2, 5], &
+                                               l0g, EAg, EIg, wg, qg, curvg, fixg, scaleg, dgg, res, its, es, em)
+    CALL check(es == CD_HCSTAT_OK, 'local: global reference ok')
+    IF (es /= CD_HCSTAT_OK) RETURN
+    CALL check(SIZE(l0o) < SIZE(l0g), 'local: fewer elements than the global refinement')
+    ng = SIZE(l0g) + 1
+    no = SIZE(l0o) + 1
+    ALLOCATE (sg(ng), so(no))
+    sg(1) = 0.0_wp
+    DO e = 2, ng
+      sg(e) = sg(e - 1) + l0g(e - 1)
+    END DO
+    so(1) = 0.0_wp
+    DO e = 2, no
+      so(e) = so(e - 1) + l0o(e - 1)
+    END DO
+    dmax = 0.0_wp
+    DO e = 1, no
+      DO k = 1, 3, 2
+        dmax = MAX(dmax, ABS(qo(6*(e - 1) + k) - interp(so(e), sg, qg(k::6))))
+      END DO
+    END DO
+    CALL check(dmax < 1.0e-3_wp*SUM(l0), 'local: equilibrium within 1e-3 of the line length of the global one')
+  END SUBROUTINE case_local_refinement
+
+  REAL(wp) FUNCTION interp(x, xs, ys)
+    !! Piecewise-linear interpolation of ys(xs) at x (xs ascending).
+    REAL(wp), INTENT(IN) :: x, xs(:), ys(:)
+    INTEGER :: i
+    interp = ys(SIZE(ys))
+    DO i = 2, SIZE(xs)
+      IF (x <= xs(i)) THEN
+        interp = ys(i - 1) + (ys(i) - ys(i - 1))*(x - xs(i - 1))/(xs(i) - xs(i - 1))
+        RETURN
+      END IF
+    END DO
+  END FUNCTION interp
+
+  SUBROUTINE case_local_unchanged()
+    !! The local mode changes nothing when no refinement runs: a resolved mesh is returned
+    !! bit-identical to the global mode, and max_scale = 1 disables the local passes too.
+    REAL(wp), ALLOCATABLE :: l0(:), EA(:), EI(:), w(:), seed(:)
+    REAL(wp), ALLOCATABLE :: l0o(:), EAo(:), EIo(:), wo(:), qo(:), curvo(:)
+    REAL(wp), ALLOCATABLE :: l0g(:), EAg(:), EIg(:), wg(:), qg(:), curvg(:)
+    INTEGER, ALLOCATABLE :: fixed(:), fixo(:), fixg(:)
+    TYPE(CD_HermiteResolutionType) :: dg
+    INTEGER :: nfix, scale, its, es
+    REAL(wp) :: seabed_z, res
+    CHARACTER(200) :: em
+    CALL build_rig(64, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
+    EI = 1.0e6_wp
+    CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
+                                               8, 120, 1.0e-8_wp, 0.7_wp, 0.2_wp, 0.5_wp, 8, [2, 5], &
+                                               l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, res, its, es, em, &
+                                               local_refinement=.TRUE.)
+    CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
+                                               8, 120, 1.0e-8_wp, 0.7_wp, 0.2_wp, 0.5_wp, 8, [2, 5], &
+                                               l0g, EAg, EIg, wg, qg, curvg, fixg, scale, dg, res, its, es, em)
+    CALL check(es == CD_HCSTAT_OK .AND. scale == 1 .AND. SIZE(qo) == SIZE(qg), 'local unchanged: resolved mesh kept')
+    IF (SIZE(qo) == SIZE(qg)) &
+      CALL check(nan_max_abs(qo - qg) <= 0.0_wp, 'local unchanged: bit-identical to the global mode')
+    CALL build_rig(10, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
+    CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
+                                               8, 120, 1.0e-8_wp, 0.7_wp, 0.05_wp, 0.5_wp, 1, [2, 5], &
+                                               l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, res, its, es, em, &
+                                               local_refinement=.TRUE.)
+    CALL check(es == CD_HCSTAT_OK .AND. scale == 1 .AND. SIZE(l0o) == 10, &
+               'local unchanged: no refinement with max_scale = 1')
+  END SUBROUTINE case_local_unchanged
+
+  SUBROUTINE case_local_boundary_layer()
+    !! The end-layer rig of case_boundary_layer_refinement in the local mode: the single
+    !! element is split once and the layer is resolved.
+    INTEGER, PARAMETER :: NE = 1, NN = 2, NDOF = 6*NN
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(NDOF)
+    REAL(wp), ALLOCATABLE :: l0o(:), EAo(:), EIo(:), wo(:), qo(:), curvo(:)
+    INTEGER :: fixed(NDOF), i, scale, its, es
+    INTEGER, ALLOCATABLE :: fixo(:)
+    TYPE(CD_HermiteResolutionType) :: dg
+    REAL(wp) :: res
+    CHARACTER(240) :: em
+    l0 = 2.0_wp; EA = 1.0e6_wp; EI = 1.21e4_wp; w = 0.0_wp
+    seed = 0.0_wp
+    seed(4) = 1.01_wp; seed(7) = 2.02_wp; seed(10) = 1.01_wp
+    DO i = 1, NDOF
+      fixed(i) = i
+    END DO
+    CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed, -1.0e4_wp, 0.0_wp, &
+                                               1, 5, 1.0e-10_wp, 1.0_wp, 1.0_wp, 0.0_wp, 2, &
+                                               [1, 2, 3, 4, 5, 6], &
+                                               l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, &
+                                               res, its, es, em, require_resolved=.TRUE., local_refinement=.TRUE.)
+    CALL check(es == CD_HCSTAT_OK .AND. scale == 2 .AND. SIZE(l0o) == 2, 'local boundary: end layer split once')
+    CALL check(.NOT. dg%boundary_unresolved, 'local boundary: end layer resolved')
+  END SUBROUTINE case_local_boundary_layer
+
+  SUBROUTINE case_metrics_element_outputs()
+    !! The per-element outputs of the resolution diagnosis: the h*kappa field peaks at
+    !! h_kappa_peak, and its length is checked.
+    REAL(wp), ALLOCATABLE :: l0(:), EA(:), EI(:), w(:), seed(:), q(:), curv(:), hk(:)
+    INTEGER, ALLOCATABLE :: fixed(:)
+    LOGICAL, ALLOCATABLE :: chat(:)
+    TYPE(CD_HermiteResolutionType) :: dg
+    INTEGER :: nfix, its, es
+    REAL(wp) :: seabed_z, res
+    CHARACTER(200) :: em
+    CALL build_rig(10, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
+    ALLOCATE (q(SIZE(seed)), curv(11), hk(10), chat(11))
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
+                                      8, 120, 1.0e-8_wp, 0.7_wp, q, curv, res, its, es, em)
+    CALL CD_HermiteCable_Resolution_Metrics(l0, q, seabed_z, 0.5_wp, 0.12_wp, dg, es, em, EA=EA, EI=EI, &
+                                            elem_h_kappa=hk, chatter_node=chat)
+    CALL check(es == CD_HCSTAT_OK, 'metrics outputs: ok')
+    CALL check(ABS(MAXVAL(hk) - dg%h_kappa_peak) <= 0.0_wp .AND. MAXLOC(hk, 1) == dg%h_kappa_elem, &
+               'metrics outputs: element h*kappa peaks at h_kappa_peak')
+    CALL check(.NOT. ANY(chat) .AND. .NOT. dg%contact_chatter, 'metrics outputs: no chatter off the seabed')
+    CALL CD_HermiteCable_Resolution_Metrics(l0, q, seabed_z, 0.5_wp, 0.12_wp, dg, es, em, elem_h_kappa=hk(1:9))
+    CALL check(es == CD_HCSTAT_BADINPUT, 'metrics outputs: short elem_h_kappa rejected')
+  END SUBROUTINE case_metrics_element_outputs
 
   SUBROUTINE check(cond, label)
     LOGICAL, INTENT(IN) :: cond

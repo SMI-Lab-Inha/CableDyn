@@ -401,6 +401,46 @@ All notable changes to CableDyn are recorded in this file. The format follows
   than a factor four, as the manual states; it had kept the first tangent for the whole step,
   which a slow linear contraction could exhaust (30 iterations at the start of the 5 m heave
   cells of the L2-2 parity test with the force blend).
+- A finite-EI deck mesh that cannot resolve the curvature of its static equilibrium (an
+  element folded beyond `L0*kappa = 0.7`), and a fragile mesh under `adaptive_mesh True`, are
+  now refined locally instead of as a whole. The static solve had multiplied every element by
+  the power of two that the worst one needed, up to 16, even when only one section was coarse:
+  a 462-element lazy wave whose 180 m top section had two elements was solved on 7392 elements
+  in 6.6 s, and a 410-element lazy wave with a rigid horizontal hang-off on 6560 elements in
+  6.0 s. A refinement pass now splits into 2, 4, 8 or 16 equal elements only the elements whose
+  `L0*kappa` exceeds 0.12 (or the stricter `adaptive_mesh` target), that are longer than half
+  their bending length `(EI/|w|)^(1/3)`, or, at a line end, longer than the boundary layer
+  `sqrt(EI/T)`, and the elements about an isolated seabed-contact change, and grades the mesh
+  into the neighbouring elements (no element more than twice as long as the next, unless the
+  deck mesh has a larger ratio there). The cap of 16 per deck element, the element limit, the
+  acceptance checks and the fail-closed messages are unchanged. The two decks above now solve
+  on 492 and 436 elements in 0.30 s and 0.27 s, with end tensions within 4e-7 and 2e-6 of the
+  whole-line refinement and nodes within 0.7 mm and 4 mm. In the finite-EI statics matrix 61
+  of the 123 decks refine: their CPU time falls from 76 s to 34 s, the end tensions change by
+  at most 0.21 % of the line's peak end tension (a 58 m line on 2 m end elements, whose
+  hang-off tension moves from 1157.5 N to 1155.1 N; 1157.5 N on a mesh 16 times finer) and the
+  nodes by at most 6.4e-4 of the line length. In a 761-deck statics robustness campaign 57
+  decks refine: they solve in 18 s instead of 63 s, with the same outcomes and notes (two no
+  longer need the static residual floor note), end tensions within 1e-5 of the peak end tension and nodes within 3.2e-5 of the line length.
+  Decks that do not refine, including every shipped example, give identical output. On a
+  deck that refines, the dynamics run on the new mesh, and node output channels (`L<n>N<k>`)
+  name its nodes.
+- A finite-EI line with discrete buoyancy modules (`ATTACHMENTS`) in a cross current on a
+  frictional seabed no longer fails its static solve. The lazy wave of
+  `tests/data/lazy_wave_touchdown_planar_refined_att.dat` (25 modules on 2 m elements) in a
+  0.3 m/s current across its plane stopped with `finite-EI static solve with discrete
+  ATTACHMENTS failed at load fraction 0.125 (relative residual 1.304E+02)`. The homotopy from
+  the smeared to the lumped modules adds the module drag, which the smeared equilibrium does
+  not carry, and on the frictional seabed the damped Newton update for it overshot and
+  diverged from the first step, even in steps of 1/64 of the load; the seed and the step size
+  were not the cause. A step whose damped Newton solve does not converge is now repeated from
+  the last converged state with pseudo-transient continuation and then with a residual-merit
+  line search, and halved (down to 1/1024) when neither converges. The deck now solves in
+  1.8 s, its fairlead and anchor tensions within 0.04 % and 0.2 % of the deck with the
+  equivalent smeared buoyancy section; in 0.6 m/s, and on the coarse mesh, it solved before
+  and its results are unchanged. A polish whose Newton steps all converge takes the same
+  solves as before, so every other deck is unchanged. A new test (`attachment_cross_current`)
+  checks the four cases against their smeared twins.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

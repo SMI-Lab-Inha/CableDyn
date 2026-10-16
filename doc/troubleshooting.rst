@@ -503,6 +503,13 @@ but a few geometries are genuinely hard:
   the mesh-sequenced state is prolongated and polished there. If the message names that refined
   mesh as well (``still unstable on the refined mesh``), the instability is physical: check the
   layout, the line length and the buoyancy.
+- **Discrete buoyancy modules.** ``finite-EI static solve with discrete ATTACHMENTS failed at
+  load fraction ...`` means the homotopy from the smeared modules to the lumped ones (see
+  *Discrete attachments* in :doc:`theory`) did not reach the discrete equilibrium: the damped
+  Newton solve of a load step did not converge, nor did its pseudo-transient and line-search
+  repetitions, down to steps of 1/1024 of the module loads. The message names the load fraction
+  of the first failed solve. Check that the deck with the modules replaced by the equivalent
+  smeared buoyancy section solves; if it does, the discrete layout itself is the difficulty.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
   from the catenary/arch seed.
@@ -601,6 +608,14 @@ Warnings and notes that do not stop a run
        :math:`(EI/|w|)^{1/3}` (see :doc:`modeling`, step 5). The run uses
        the refined mesh, statics and dynamics alike, and its outputs have that many segments.
        Mesh the touchdown and section changes to that rule to keep the deck mesh.
+   * - ``Note: line ...: the deck mesh (... elements) could not resolve the curvature of the
+       equilibrium; refined to ... elements``
+     - an element of the deck mesh folded beyond :math:`L_0\kappa = 0.7` (a bend shorter than the
+       element). The static solve refined the mesh locally where the bend is, and where elements
+       are longer than half the bending length, at most 16-fold per deck element and graded into
+       the neighbouring elements (see :doc:`theory`, Static equilibrium); the run uses that mesh,
+       statics and dynamics alike, and its outputs have that many segments. Mesh the reported
+       section finer to keep the deck mesh.
    * - ``Note: line ... starts the dynamics from a static state solved in its vertical plane that
        is unstable out of that plane on its mesh of ... elements, the coarsest ... m long where
        half the bending length (EI/|w|)^(1/3) is ... m; ...``

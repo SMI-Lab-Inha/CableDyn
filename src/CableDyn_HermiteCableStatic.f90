@@ -5103,7 +5103,8 @@ CONTAINS
 
   SUBROUTINE CD_HermiteCable_Resolution_Metrics(l0, q, seabed_z, contact_band, &
                                                 h_kappa_target, diag, ErrStat, ErrMsg, &
-                                                bathymetry, contact_frame_cs, EA, EI, compression_mode)
+                                                bathymetry, contact_frame_cs, EA, EI, compression_mode, &
+                                                elem_h_kappa, chatter_node)
     !! Diagnose the mesh resolution of a converged finite-EI static IC and recommend a global
     !! refinement factor. This is the preflight trigger for the adaptive mesh policy: a lazy-wave
     !! arch or touchdown transition resolved with too few elements carries a large h*kappa and
@@ -5125,6 +5126,10 @@ CONTAINS
     !!                  element force tolerance of diag%axial_compression (see the constants).
     !!                  STRICT judges the three-element mean of the element-mean axial force
     !!                  (smoothed_element_means) instead of the pointwise resultant.
+    !! elem_h_kappa(ne) (optional out): l0(e) * peak |kappa| of every element, the field whose
+    !!                  maximum is h_kappa_peak (the local refinement of AutoMesh marks from it).
+    !! chatter_node(ne+1) (optional out): every interior node whose contact state differs from
+    !!                  both of its neighbours (the nodes behind diag%contact_chatter).
     REAL(wp), INTENT(IN) :: l0(:), q(:), seabed_z, contact_band, h_kappa_target
     TYPE(CD_HermiteResolutionType), INTENT(OUT) :: diag
     INTEGER, INTENT(OUT) :: ErrStat
@@ -5133,6 +5138,8 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: contact_frame_cs(2)
     REAL(wp), INTENT(IN), OPTIONAL :: EA(:), EI(:)
     INTEGER, INTENT(IN), OPTIONAL :: compression_mode
+    REAL(wp), INTENT(OUT), OPTIONAL :: elem_h_kappa(:)
+    LOGICAL, INTENT(OUT), OPTIONAL :: chatter_node(:)
 
     INTEGER :: ne, nn, e, a, es3, mode
     REAL(wp) :: qe(12), ke, ke_prev, hk, u_peak, z, z_floor, xg, yg, contact_cs(2), &
@@ -5164,6 +5171,20 @@ CONTAINS
     IF (SIZE(q) /= 6*nn) THEN
       ErrStat = CD_HCSTAT_BADINPUT
       ErrMsg = 'CD_HermiteCable_Resolution_Metrics: q must be 6*(ne+1)'; RETURN
+    END IF
+    IF (PRESENT(elem_h_kappa)) THEN
+      IF (SIZE(elem_h_kappa) /= ne) THEN
+        ErrStat = CD_HCSTAT_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Resolution_Metrics: elem_h_kappa must have length ne'; RETURN
+      END IF
+      elem_h_kappa = CD_ZERO
+    END IF
+    IF (PRESENT(chatter_node)) THEN
+      IF (SIZE(chatter_node) /= nn) THEN
+        ErrStat = CD_HCSTAT_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Resolution_Metrics: chatter_node must have length ne+1'; RETURN
+      END IF
+      chatter_node = .FALSE.
     END IF
     IF (PRESENT(EA)) THEN
       IF (SIZE(EA) /= ne .OR. .NOT. CD_All_Finite(EA) .OR. ANY(EA < CD_ZERO)) THEN
@@ -5247,6 +5268,7 @@ CONTAINS
       END IF
       diag%kappa_peak = MAX(diag%kappa_peak, ke)
       hk = l0(e)*ke
+      IF (PRESENT(elem_h_kappa)) elem_h_kappa(e) = hk
       IF (hk > diag%h_kappa_peak) THEN
         diag%h_kappa_peak = hk
         diag%h_kappa_elem = e
@@ -5398,6 +5420,12 @@ CONTAINS
         EXIT
       END IF
     END DO
+    IF (PRESENT(chatter_node)) THEN
+      DO a = 2, nn - 1
+        chatter_node(a) = (contact_node(a) .NEQV. contact_node(a - 1)) .AND. &
+                          (contact_node(a) .NEQV. contact_node(a + 1))
+      END DO
+    END IF
 
     ! Recommended global refinement: the smallest power-of-two factor that brings h_kappa_peak
     ! at or below the target, capped so a pathological IC cannot ask for an unbounded mesh.
@@ -6128,7 +6156,7 @@ CONTAINS
                                                    require_tensile, refine_non_axial, endconn_stiffness, &
                                                    endconn_direction, endconn_mode, waterline_z, dry_buoyancy, &
                                                    compression_mode, energy_polish_in, tensile_advisory, water_weight, &
-                                                   current)
+                                                   current, local_refinement)
     !! Solve the finite-EI static equilibrium and AUTOMATICALLY select the minimum safe mesh: the
     !! metric-gated mesh-economics entry. Solve at the caller's (coarse) mesh; if
     !! CD_HermiteCable_Resolution_Metrics flags it fragile, refine by the recommended power-of-two
@@ -6165,6 +6193,21 @@ CONTAINS
     !! energy_polish_in (optional, default false): polish the initial state and every
     !!                prolongated refinement with the trust-region energy minimization of
     !!                CD_HermiteCable_Static_Solve instead of the damped Newton update.
+    !! local_refinement (optional, default false): refine for the curvature, end boundary-layer
+    !!                and contact-topology screens element by element instead of globally. A
+    !!                pass runs when the same screens fail as for the global refinement; it
+    !!                splits into the power-of-two number of equal children that meets its
+    !!                criterion every element whose h*kappa exceeds min(h_kappa_target,
+    !!                CD_HC_HKAPPA_TARGET), every element longer than half its bending length
+    !!                (EI/|w|)^(1/3), each end element for its boundary-layer ratio, and the
+    !!                elements about an isolated contact or gap node once (local_resolution_mesh);
+    !!                the neighbours are then split until the mesh is graded (grade). Every
+    !!                element keeps the cumulative cap max_scale relative to its caller element,
+    !!                the mesh keeps the element limit of the global refinement, and the split
+    !!                elements are cubic-Hermite prolongated exactly as there. The pass repeats
+    !!                on the re-solved state while a screen fails and an element can still be
+    !!                split. applied_scale then reports the largest factor of any element. The
+    !!                axial (tensile) refinement is local in either mode and unchanged.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping, h_kappa_target, contact_band
@@ -6186,11 +6229,20 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: waterline_z, dry_buoyancy(:), water_weight
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: current
     INTEGER, INTENT(IN), OPTIONAL :: compression_mode
-    LOGICAL, INTENT(IN), OPTIONAL :: energy_polish_in, tensile_advisory
+    LOGICAL, INTENT(IN), OPTIONAL :: energy_polish_in, tensile_advisory, local_refinement
 
     INTEGER :: ne, nn, it, scale, parent, j, es, axial_order, bending_order, local_passes, cmode
     LOGICAL :: energy_polish, advisory
     INTEGER, PARAMETER :: MAX_LOCAL_AXIAL_PASSES = 16
+    ! Local resolution refinement (local_refinement): passes, the per-element level cap
+    ! (log2 of max_scale), every element's number of bisections from its caller element,
+    ! and the per-element h*kappa and isolated contact/gap nodes of the last diagnosis.
+    INTEGER, PARAMETER :: MAX_LOCAL_RESOLUTION_PASSES = 12
+    LOGICAL :: local_mode, nothing_to_split
+    INTEGER :: kcap, local_res_passes
+    INTEGER, ALLOCATABLE :: level_out(:), level_r(:)
+    REAL(wp), ALLOCATABLE :: elem_hk(:)
+    LOGICAL, ALLOCATABLE :: chatter_nodes(:)
     REAL(wp), ALLOCATABLE :: l0r(:), qr(:), EAr(:), EIr(:), wr(:), qnew(:), curvnew(:)
     REAL(wp), ALLOCATABLE :: contact_diam_out(:), contact_diam_r(:)
     ! Current-mesh dry buoyancy; unallocated (an absent optional) without a free surface.
@@ -6245,6 +6297,9 @@ CONTAINS
     max_axial_stall_passes = MERGE(4, 2, cmode == CD_HC_COMPRESSION_STRICT)
     energy_polish = .FALSE.
     IF (PRESENT(energy_polish_in)) energy_polish = energy_polish_in
+    local_mode = .FALSE.
+    IF (PRESENT(local_refinement)) local_mode = local_refinement
+    local_res_passes = 0
 
     IF (max_scale < 1) THEN
       ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'CD_HermiteCable_Static_Solve_AutoMesh: max_scale >= 1 required'; RETURN
@@ -6280,6 +6335,12 @@ CONTAINS
       ErrStat = CD_HCSTAT_BADINPUT
       ErrMsg = 'CD_HermiteCable_Static_Solve_AutoMesh: l0/EA/EI/w/seed sizes inconsistent'; RETURN
     END IF
+    kcap = 0
+    DO WHILE (2_I8**(kcap + 1) <= INT(max_scale, I8))
+      kcap = kcap + 1
+    END DO
+    ALLOCATE (level_out(ne))
+    level_out = 0
     axial_budget = MAX(max_scale, CD_HC_REFINE_CAP)
     IF (axial_budget > HUGE(axial_budget)/ne) THEN
       axial_budget = HUGE(axial_budget)
@@ -6323,15 +6384,7 @@ CONTAINS
     END IF
 
     ! Diagnose; refine and re-solve while fragile and under the cap.
-    IF (PRESENT(bathymetry)) THEN
-      CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
-                                              diag_out, es, ErrMsg, bathymetry=bathymetry, &
-                                              contact_frame_cs=contact_cs, EA=EA_out, EI=EI_out, &
-                                              compression_mode=cmode)
-    ELSE
-      CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
-                                              diag_out, es, ErrMsg, EA=EA_out, EI=EI_out, compression_mode=cmode)
-    END IF
+    CALL diagnose(es)
     IF (es /= CD_HCSTAT_OK) THEN
       ErrStat = es; RETURN
     END IF
@@ -6345,8 +6398,12 @@ CONTAINS
                                   (diag_out%axial_strain_min_elem == SIZE(l0_out) .AND. &
                                    diag_out%axial_strain_min_xi >= CD_ONE - 1.0e-6_wp))
     end_res_prev = diag_out%axial_strain_min_resultant
+    ! A local resolution pass runs while an element can still be split (local_resolution_mesh
+    ! says when none can); the global and axial passes keep their cumulative-factor bound.
     DO WHILE (needs_refinement .AND. &
-              (applied_scale < max_scale .OR. (local_axial .AND. local_passes < MAX_LOCAL_AXIAL_PASSES)))
+              (applied_scale < max_scale .OR. (local_axial .AND. local_passes < MAX_LOCAL_AXIAL_PASSES) .OR. &
+               (local_mode .AND. .NOT. local_axial .AND. kcap > 0 .AND. &
+                local_res_passes < MAX_LOCAL_RESOLUTION_PASSES)))
       ! A signed axial oscillation is local, usually at a section interface or the
       ! touchdown transition.  Split every offending element and its immediate
       ! neighbours rather than multiplying the whole installed line.  Curvature or
@@ -6369,6 +6426,18 @@ CONTAINS
           END IF
         END IF
         scale = 2
+        IF (es == CD_HCSTAT_OK) THEN
+          ALLOCATE (level_r(SIZE(l0r)))
+          DO j = 1, SIZE(l0r)
+            level_r(j) = level_out(parent_map(j)) + MERGE(1, 0, axial_marks(parent_map(j)))
+          END DO
+        END IF
+      ELSE IF (local_mode) THEN
+        ! Split the elements whose screen fails, graded into their neighbours.
+        local_res_passes = local_res_passes + 1
+        CALL local_resolution_mesh(nothing_to_split, es, emloc)
+        IF (es == CD_HCSTAT_OK .AND. nothing_to_split) EXIT
+        scale = 2
       ELSE
         ! Mesh-scale contact chatter can report rec_scale = 1 (a topology signal), so
         ! force at least one doubling; never exceed the cumulative cap.
@@ -6380,9 +6449,10 @@ CONTAINS
         CALL CD_HermiteCable_Refine_Mesh(l0_out, q_out, fixed_out, scale, l0r, qr, fixedr, es, emloc, &
                                          inherit_dofs=inherit_dofs)
         IF (es == CD_HCSTAT_OK) THEN
-          ALLOCATE (parent_map(SIZE(l0r)))
+          ALLOCATE (parent_map(SIZE(l0r)), level_r(SIZE(l0r)))
           DO j = 1, SIZE(l0r)
             parent_map(j) = (j - 1)/scale + 1
+            level_r(j) = level_out(parent_map(j)) + NINT(LOG(REAL(scale, wp))/LOG(2.0_wp))
           END DO
         END IF
       END IF
@@ -6452,21 +6522,17 @@ CONTAINS
       CALL MOVE_ALLOC(qnew, q_out)
       CALL MOVE_ALLOC(curvnew, curv_out)
       DEALLOCATE (qr)
+      CALL MOVE_ALLOC(level_r, level_out)
       IF (local_axial) THEN
         applied_scale = MIN(max_scale, applied_scale*scale)
+      ELSE IF (local_mode) THEN
+        ! The largest factor of any element (its level is at most kcap here).
+        applied_scale = MAX(applied_scale, MIN(max_scale, 2**MIN(MAXVAL(level_out), 30)))
       ELSE
         applied_scale = applied_scale*scale
       END IF
 
-      IF (PRESENT(bathymetry)) THEN
-        CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
-                                                diag_out, es, ErrMsg, bathymetry=bathymetry, &
-                                                contact_frame_cs=contact_cs, EA=EA_out, EI=EI_out, &
-                                                compression_mode=cmode)
-      ELSE
-        CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
-                                                diag_out, es, ErrMsg, EA=EA_out, EI=EI_out, compression_mode=cmode)
-      END IF
+      CALL diagnose(es)
       IF (es /= CD_HCSTAT_OK) THEN
         ErrStat = es; RETURN
       END IF
@@ -6633,10 +6699,210 @@ CONTAINS
       !! topology, and for an unresolved end boundary layer only while the remaining
       !! refinement cap can still bring h/sqrt(EI/T) to its target.
       TYPE(CD_HermiteResolutionType), INTENT(IN) :: dg
+      IF (local_mode) THEN
+        ! As below, with the factor still open to the end element of the larger ratio (on
+        ! the caller mesh exactly the global test, so the same meshes refine).
+        refinable = dg%h_kappa_peak > h_kappa_target .OR. dg%contact_chatter .OR. &
+                    (dg%boundary_unresolved .AND. &
+                     dg%boundary_ratio_peak <= CD_HC_BOUNDARY_TARGET*REAL(max_scale, wp)/ &
+                     2.0_wp**MERGE(level_out(1), level_out(SIZE(level_out)), &
+                                   dg%hop_boundary_ratio >= dg%end_boundary_ratio))
+        RETURN
+      END IF
       refinable = dg%h_kappa_peak > h_kappa_target .OR. dg%contact_chatter .OR. &
                   (dg%boundary_unresolved .AND. &
                    dg%boundary_ratio_peak <= CD_HC_BOUNDARY_TARGET*REAL(max_scale, wp)/REAL(applied_scale, wp))
     END FUNCTION refinable
+
+    INTEGER FUNCTION end_layer_levels(ratio, level) RESULT(k)
+      !! Bisections of an end element (at level bisections from its caller element) that bring
+      !! its boundary-layer ratio h/sqrt(EI/T) to CD_HC_BOUNDARY_TARGET, within the cap; zero
+      !! when the ratio is met. A layer the cap cannot reach is an accuracy limit (reported by
+      !! diag%boundary_unresolved) that does not by itself start a pass (refinable), but a
+      !! pass that runs refines it as far as the cap allows -- as the global factor rec_scale
+      !! does.
+      REAL(wp), INTENT(IN) :: ratio
+      INTEGER, INTENT(IN) :: level
+      k = 0
+      IF (.NOT. (ratio > CD_HC_BOUNDARY_TARGET*(CD_ONE + 1.0e-10_wp))) RETURN
+      DO WHILE (ratio > CD_HC_BOUNDARY_TARGET*2.0_wp**k*(CD_ONE + 1.0e-10_wp) .AND. level + k < kcap)
+        k = k + 1
+      END DO
+    END FUNCTION end_layer_levels
+
+    SUBROUTINE diagnose(esx)
+      !! Resolution diagnosis of the current mesh and state (diag_out); in local mode also the
+      !! per-element h*kappa and the isolated contact/gap nodes the local refinement marks from.
+      INTEGER, INTENT(OUT) :: esx
+      IF (local_mode) THEN
+        IF (ALLOCATED(elem_hk)) DEALLOCATE (elem_hk, chatter_nodes)
+        ALLOCATE (elem_hk(SIZE(l0_out)), chatter_nodes(SIZE(l0_out) + 1))
+        IF (PRESENT(bathymetry)) THEN
+          CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
+                                                  diag_out, esx, ErrMsg, bathymetry=bathymetry, &
+                                                  contact_frame_cs=contact_cs, EA=EA_out, EI=EI_out, &
+                                                  compression_mode=cmode, elem_h_kappa=elem_hk, &
+                                                  chatter_node=chatter_nodes)
+        ELSE
+          CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
+                                                  diag_out, esx, ErrMsg, EA=EA_out, EI=EI_out, &
+                                                  compression_mode=cmode, elem_h_kappa=elem_hk, &
+                                                  chatter_node=chatter_nodes)
+        END IF
+      ELSE IF (PRESENT(bathymetry)) THEN
+        CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
+                                                diag_out, esx, ErrMsg, bathymetry=bathymetry, &
+                                                contact_frame_cs=contact_cs, EA=EA_out, EI=EI_out, &
+                                                compression_mode=cmode)
+      ELSE
+        CALL CD_HermiteCable_Resolution_Metrics(l0_out, q_out, seabed_z, contact_band, h_kappa_target, &
+                                                diag_out, esx, ErrMsg, EA=EA_out, EI=EI_out, compression_mode=cmode)
+      END IF
+    END SUBROUTINE diagnose
+
+    SUBROUTINE local_resolution_mesh(none, esx, emx)
+      !! The locally refined mesh of a local resolution pass, in l0r/qr/fixedr with parent_map
+      !! (the current element each new one lies in) and level_r. Levels needed per element:
+      !!   h*kappa  -- the smallest k with h*kappa / 2^k <= min(h_kappa_target,
+      !!               CD_HC_HKAPPA_TARGET). A pass runs only while the caller's target fails,
+      !!               but it refines every element to the accuracy target (a looser caller
+      !!               target, such as the safety-driven half kink limit, would leave the bends
+      !!               of a locally refined line at a much coarser resolution than the global
+      !!               factor, which refines every element by the factor of the worst one);
+      !!   bending   -- the smallest k with h / 2^k <= half the bending length (EI/|w|)^(1/3),
+      !!               the element-length rule of the finite-EI meshing guide: an element longer
+      !!               than that cannot follow a bend (a grounded run over an uneven bed, a
+      !!               touchdown) whose curvature it therefore does not show, and on such a mesh
+      !!               a planar state can read as unstable out of its plane;
+      !!   end layer -- end_layer_levels of each end element (as far as the cap allows);
+      !!   contact   -- one level on the two elements at an isolated contact or gap node and
+      !!                one more on each side;
+      !! each limited to kcap bisections from the caller element. The levels are then graded:
+      !! an element is split further while it is longer than max(2, its length ratio to the
+      !! neighbour before the pass) times that neighbour's new length. A pass that would exceed
+      !! the element limit AUTO_MAX_ELEMENTS takes one level less everywhere, as the global
+      !! refinement halves its factor. none is set when no element can be split.
+      LOGICAL, INTENT(OUT) :: none
+      INTEGER, INTENT(OUT) :: esx
+      CHARACTER(*), INTENT(OUT) :: emx
+      INTEGER, ALLOCATABLE :: base(:), need(:), need_n(:), lev_c(:), lev_n(:), par_c(:), par_n(:)
+      INTEGER, ALLOCATABLE :: fix_c(:), fix_n(:)
+      REAL(wp), ALLOCATABLE :: l0_c(:), q_c(:), l0_n(:), q_n(:)
+      LOGICAL, ALLOCATABLE :: split(:)
+      INTEGER :: nec, e, a, k, red
+      INTEGER(I8) :: n_new
+      REAL(wp) :: hk_local, half_bend
+      none = .TRUE.
+      esx = CD_HCSTAT_OK
+      emx = ''
+      nec = SIZE(l0_out)
+      ALLOCATE (base(nec), need(nec))
+      hk_local = MIN(h_kappa_target, CD_HC_HKAPPA_TARGET)
+      base = 0
+      DO e = 1, nec
+        IF (.NOT. (elem_hk(e) > hk_local)) CYCLE
+        k = 0
+        DO WHILE (elem_hk(e) > hk_local*2.0_wp**k .AND. level_out(e) + k < kcap)
+          k = k + 1
+        END DO
+        base(e) = MAX(base(e), k)
+      END DO
+      DO e = 1, nec
+        IF (.NOT. (EI_out(e) > CD_ZERO .AND. ABS(w_out(e)) > CD_ZERO)) CYCLE
+        half_bend = 0.5_wp*(EI_out(e)/ABS(w_out(e)))**(CD_ONE/3.0_wp)
+        k = 0
+        DO WHILE (l0_out(e) > half_bend*2.0_wp**k*(CD_ONE + 1.0e-12_wp) .AND. level_out(e) + k < kcap)
+          k = k + 1
+        END DO
+        base(e) = MAX(base(e), k)
+      END DO
+      base(1) = MAX(base(1), end_layer_levels(diag_out%hop_boundary_ratio, level_out(1)))
+      base(nec) = MAX(base(nec), end_layer_levels(diag_out%end_boundary_ratio, level_out(nec)))
+      DO a = 2, nec
+        IF (.NOT. chatter_nodes(a)) CYCLE
+        DO e = MAX(1, a - 2), MIN(nec, a + 1)
+          IF (level_out(e) < kcap) base(e) = MAX(base(e), 1)
+        END DO
+      END DO
+      IF (ALL(base == 0)) RETURN
+      DO red = 0, MAXVAL(base)
+        need = MAX(base - red, 0)
+        CALL grade(need)
+        n_new = SUM(2_I8**need)
+        IF (n_new <= INT(AUTO_MAX_ELEMENTS, I8)) EXIT
+      END DO
+      IF (n_new > INT(AUTO_MAX_ELEMENTS, I8) .OR. ALL(need == 0)) RETURN
+      none = .FALSE.
+
+      ! Bisect level by level: the children of a split cubic-Hermite element carry the same
+      ! cubic, so k bisections are the 2^k-fold uniform prolongation of the element.
+      l0_c = l0_out
+      q_c = q_out
+      fix_c = fixed_out
+      lev_c = level_out
+      ALLOCATE (par_c(nec))
+      par_c = [(e, e=1, nec)]
+      DO WHILE (ANY(need > 0))
+        split = need > 0
+        CALL refine_marked_elements(l0_c, q_c, fix_c, split, l0_n, q_n, fix_n, par_n, esx, emx, inherit_dofs)
+        IF (esx /= CD_HCSTAT_OK) RETURN
+        ALLOCATE (need_n(SIZE(l0_n)), lev_n(SIZE(l0_n)))
+        DO e = 1, SIZE(l0_n)
+          need_n(e) = need(par_n(e)) - MERGE(1, 0, split(par_n(e)))
+          lev_n(e) = lev_c(par_n(e)) + MERGE(1, 0, split(par_n(e)))
+          par_n(e) = par_c(par_n(e))
+        END DO
+        CALL MOVE_ALLOC(l0_n, l0_c)
+        CALL MOVE_ALLOC(q_n, q_c)
+        CALL MOVE_ALLOC(fix_n, fix_c)
+        CALL MOVE_ALLOC(par_n, par_c)
+        CALL MOVE_ALLOC(need_n, need)
+        CALL MOVE_ALLOC(lev_n, lev_c)
+      END DO
+      CALL MOVE_ALLOC(l0_c, l0r)
+      CALL MOVE_ALLOC(q_c, qr)
+      CALL MOVE_ALLOC(fix_c, fixedr)
+      CALL MOVE_ALLOC(par_c, parent_map)
+      CALL MOVE_ALLOC(lev_c, level_r)
+    END SUBROUTINE local_resolution_mesh
+
+    SUBROUTINE grade(need)
+      !! Raise need until no element of the refined mesh is longer than max(2, its length
+      !! ratio to the neighbour on the current mesh) times that neighbour's refined length,
+      !! within the per-element cap, and no element left longer than both of its neighbours
+      !! is split fewer times (from its caller element) than both: such an element is split
+      !! until it is no longer than the longer neighbour or as often as the less split one.
+      !! (A single coarser element between finer ones carries a spurious axial oscillation
+      !! and can read as a compressed stretch.)
+      INTEGER, INTENT(INOUT) :: need(:)
+      LOGICAL :: changed
+      INTEGER :: e, side, f, g, lm
+      REAL(wp) :: allow, lnb
+      changed = .TRUE.
+      DO WHILE (changed)
+        changed = .FALSE.
+        DO e = 2, SIZE(need) - 1
+          lm = MIN(level_out(e - 1) + need(e - 1), level_out(e + 1) + need(e + 1), kcap)
+          lnb = MAX(l0_out(e - 1)/2.0_wp**need(e - 1), l0_out(e + 1)/2.0_wp**need(e + 1))
+          DO WHILE (l0_out(e)/2.0_wp**need(e) > lnb*(CD_ONE + 1.0e-12_wp) .AND. level_out(e) + need(e) < lm)
+            need(e) = need(e) + 1
+            changed = .TRUE.
+          END DO
+        END DO
+        DO e = 1, SIZE(need) - 1
+          DO side = 0, 1
+            f = e + side
+            g = e + 1 - side
+            allow = MAX(2.0_wp, l0_out(f)/l0_out(g))*(CD_ONE + 1.0e-12_wp)
+            DO WHILE (l0_out(f)/2.0_wp**need(f) > allow*l0_out(g)/2.0_wp**need(g) .AND. &
+                      level_out(f) + need(f) < kcap)
+              need(f) = need(f) + 1
+              changed = .TRUE.
+            END DO
+          END DO
+        END DO
+      END DO
+    END SUBROUTINE grade
 
     SUBROUTINE solve_level(l0x, EAx, EIx, wx, seedx, fixedx, diamx, dryx, qx, curvx, resx, itx, esx, emx, polish)
       REAL(wp), INTENT(IN) :: l0x(:), EAx(:), EIx(:), wx(:), seedx(:)

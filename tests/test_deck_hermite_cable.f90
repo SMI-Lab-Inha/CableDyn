@@ -129,8 +129,9 @@ CONTAINS
     !! h*kappa target; adaptive_mesh true lets the coupled builder refine it (warm-started
     !! cubic-Hermite prolongation of the converged IC) before the dynamic run. Gate: (a) OFF keeps
     !! the deck's mesh EXACTLY (the default, so every other deck stays bit-for-bit); (b) ON yields
-    !! MORE nodes, a whole element multiple (uniform refinement -- the replicated hydro/property
-    !! arrays stay aligned with the refined solution); (c) the coupled node still tracks the
+    !! MORE nodes, every declared element split into a power of two of equal children (local
+    !! refinement keeps the declared element partition, so the hydro/property arrays mapped by
+    !! reference arc stay aligned with the refined solution); (c) the coupled node still tracks the
     !! refined fairlead; (d) the refined cable steps stably with smooth, bounded curvature (the
     !! prolongation produced a valid finer equilibrium, not a kink).
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: plain, adapt   ! see DEVELOPMENT.md (gfortran 16 -Wuninitialized)
@@ -141,7 +142,10 @@ CONTAINS
     REAL(wp), PARAMETER :: DT = 0.05_wp, AMP = 1.0_wp, PER = 12.0_wp
     REAL(wp), PARAMETER :: PI = 3.141592653589793_wp
     INTEGER, PARAMETER :: NSTEP = 30
-    LOGICAL :: stepped_ok
+    LOGICAL :: stepped_ok, nested
+    REAL(wp), ALLOCATABLE :: l_deck(:)
+    REAL(wp) :: acc, ratio
+    INTEGER :: i, j, k
 
     ALLOCATE (plain, adapt)
     CALL write_cable_deck('hcab_deck_hc_plain.dat')
@@ -149,6 +153,7 @@ CONTAINS
     CALL require(es == CD_DECKDRV_OK, 'adaptive-mesh: plain deck init: '//TRIM(em))
     IF (es /= CD_DECKDRV_OK) RETURN
     nn_plain = SIZE(plain%line%q)/6
+    l_deck = plain%line%l0
     CALL CD_HFMF_End(plain)
 
     CALL write_cable_deck('hcab_deck_hc_adapt.dat', extra_option='true adaptive_mesh', ba_value=-0.005_wp)
@@ -158,8 +163,22 @@ CONTAINS
     nn_adapt = SIZE(adapt%line%q)/6
 
     CALL require(nn_adapt > nn_plain, 'adaptive-mesh: accuracy policy refines the declared mesh')
-    CALL require(MOD(nn_adapt - 1, nn_plain - 1) == 0, &
-                 'adaptive-mesh: uniform refinement preserves the declared element partition')
+    ! Every declared element is tiled by refined elements of its length / 2^k (k <= 4).
+    nested = .TRUE.
+    j = 1
+    DO i = 1, SIZE(l_deck)
+      acc = 0.0_wp
+      DO WHILE (acc < l_deck(i)*(1.0_wp - 1.0e-12_wp) .AND. j <= SIZE(adapt%line%l0))
+        ratio = l_deck(i)/adapt%line%l0(j)
+        k = NINT(LOG(ratio)/LOG(2.0_wp))
+        IF (k < 0 .OR. k > 4 .OR. ABS(ratio - 2.0_wp**k) > 1.0e-9_wp*ratio) nested = .FALSE.
+        acc = acc + adapt%line%l0(j)
+        j = j + 1
+      END DO
+      IF (ABS(acc - l_deck(i)) > 1.0e-9_wp*l_deck(i)) nested = .FALSE.
+    END DO
+    IF (j /= SIZE(adapt%line%l0) + 1) nested = .FALSE.
+    CALL require(nested, 'adaptive-mesh: refinement preserves the declared element partition')
     CALL require(cn == nn_adapt, 'adaptive-mesh: coupled node tracks the refined fairlead')
     CALL require(adapt%line%has_axial_damping .AND. ALLOCATED(adapt%line%BA), &
                  'adaptive-mesh: deck BA is installed on the finite-EI dynamic cable')
