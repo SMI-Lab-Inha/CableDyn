@@ -1718,7 +1718,8 @@ CONTAINS
       REAL(SiKi)                :: steady_fv(3), grid_fv(3), grid_weight
       ! the SeaState free-surface elevation as sampled at each node (kept also when the host
       ! waves are off and fx_wl takes the still-water level): SeaState's Wheeler stretching
-      ! interpolates the current at the depth mapped with it
+      ! interpolates the current at the depth mapped with it. Only the grid check reads it, so
+      ! it exists only until that check has warned.
       REAL(wp), ALLOCATABLE     :: wl_sampled(:)
       CHARACTER(512)            :: em
       INTEGER(IntKi)            :: ErrStat2
@@ -1745,7 +1746,7 @@ CONTAINS
                           ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
-      ALLOCATE (wl_sampled(inst_e%nfluid))
+      IF (.NOT. inst_e%grid_warned) ALLOCATE (wl_sampled(inst_e%nfluid))
       DO i = 1, inst_e%nfluid
          IF (.NOT. inst_e%agg%host_wave_enabled .AND. .NOT. inst_e%agg%host_current_enabled) THEN
             ! An explicit WaterKin file may disable both host components even
@@ -1762,7 +1763,7 @@ CONTAINS
             CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
             IF (ErrStat >= AbortErrLev) RETURN
          END IF
-         wl_sampled(i) = REAL(zeta, wp)
+         IF (ALLOCATED(wl_sampled)) wl_sampled(i) = REAL(zeta, wp)
          steady_fv = 0.0_SiKi
          IF (nodeInWater /= 0_IntKi .AND. &
              (.NOT. inst_e%agg%host_wave_enabled .OR. .NOT. inst_e%agg%host_current_enabled)) THEN
