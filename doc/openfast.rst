@@ -78,7 +78,7 @@ Time step
 ``DT`` is the OpenFAST glue step; ``dtM`` is CableDyn's committed step. With no deck ``dtM``,
 CableDyn targets 0.1 s rounded to a whole number of glue steps and holds its loads (zero-order
 hold) between commits. ``dtM = DT`` solves every glue step. The console reports the result, for
-example ``CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM )``. A deck ``dtM``
+example ``CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)``. A deck ``dtM``
 larger than ``DT`` but not a whole multiple of it is never coarsened: CableDyn uses the largest
 multiple of ``DT`` that does not exceed it and reports a warning with both values (``dtM = 0.025``
 with ``DT = 0.01`` runs at 0.02 s), matching MoorDyn, which only ever shortens its step to fit the

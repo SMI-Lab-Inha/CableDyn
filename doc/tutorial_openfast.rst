@@ -10,8 +10,8 @@ CableDyn results, compare against stock MoorDyn in the same binary, and add a la
 cable.
 
 **Needs:** ``openfast.exe`` from the release, the ``examples`` folder, and Git (or a browser) to
-fetch the turbine model · **Run time:** under half a minute for 70 s of simulation, most of it
-SeaState generating the wave grid (the MoorDyn comparison run takes a few minutes)
+fetch the turbine model · **Run time:** under half a minute for 70 s of simulation, about a
+third of it SeaState generating the wave grid (the MoorDyn comparison run takes a few minutes)
 
 .. contents::
    :local:
@@ -170,7 +170,7 @@ The CableDyn part of the console (other modules' lines trimmed):
     Running CableDyn (v0.1.1, 2026-10-09).
       CableDyn: geometrically nonlinear cable & mooring dynamics for floating wind.
       ...
-      CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM    )
+      CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)
      Parsing CableDyn input file: .\CableDyn_UMaine.dat
       CableDyn: SeaState wave/current kinematics drive the mooring hydro (153 sampling nodes,
       refreshed every mooring step).
@@ -360,7 +360,7 @@ Exercises
    ``MD_Shared`` InflowWind and AeroDyn files are already present) and compare the mean surge and
    line-1 tension with the parked case.
 2. **Supercycling.** Remove the ``dtM`` row from ``CableDyn_UMaine.dat``. The console now
-   reports ``dtM = 0.1 s (4 x glue DT; the default )``, CableDyn solves once per four glue steps,
+   reports ``dtM = 0.1 s (4 x glue DT; the default)``, CableDyn solves once per four glue steps,
    and ``.CD.out`` has one row per 0.1 s. Here the line-1 tension statistics over 10–70 s barely
    move (mean 2.456 MN, std 0.116 MN, against 2.456 and 0.115 MN); verify that for your own
    quantities before adopting a coarser step.
