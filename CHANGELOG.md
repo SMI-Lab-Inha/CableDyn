@@ -99,7 +99,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   tension, or that of its viscoelastic or Syrope law) at one step exceeds four times its own one
   step before and after, ten times the largest tension anywhere on the line one step before and
   after, and the largest tension of the initial state. The first spike of a line is reported as
-  a warning, once per line, and the run summary counts them. The run ends with a note when a
+  a warning, once per line, naming its segment from End A as `.Line<L>.t.out` numbers it, and
+  the run summary counts them. The run ends with a note when a
   taut segment turned by more than 1° in one step (the mean and standard deviation of the
   tension err by about 1 % and more above it; 1.3 % at 2.9° on a heaving chain), and when
   segments snapped taut while the axial wave crosses a segment more than once per step, so the
@@ -155,7 +156,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the grounded run of a tension-only line past its anchor where no seabed friction holds it,
   and it folds back with zero tension at the fold: a 2 m/s current carried a chain 20 m past its
   anchor, a 5° slope 24 m, without a word. The equilibrium is kept, and one note per line names
-  the fold (the distance past the anchor, or a turn above 150° of the grounded run), its cause
+  the fold (the distance past the anchor, or a turn above 150° of the grounded run at a deck
+  node, numbered from End A as the node channels), its cause
   (a deck current on the line, a seabed steeper than 0.5° at the fold, or a slack run) and the
   remedy that fits the deck's static friction: `frictionMu` against a current,
   `staticsFriction asLaid` on a slope (with the default `staticsFriction none` the static solve
