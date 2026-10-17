@@ -406,8 +406,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   now refined locally instead of as a whole. The static solve had multiplied every element by
   the power of two that the worst one needed, up to 16, even when only one section was coarse:
   a 462-element lazy wave whose 180 m top section had two elements was solved on 7392 elements
-  in 6.6 s, and a 410-element lazy wave with a rigid horizontal hang-off on 6560 elements in
-  6.0 s. A refinement pass now splits into 2, 4, 8 or 16 equal elements only the elements whose
+  in 10.0 s, and a 410-element lazy wave with a rigid horizontal hang-off on 6560 elements in
+  9.2 s. A refinement pass now splits into 2, 4, 8 or 16 equal elements only the elements whose
   `L0*kappa` exceeds 0.12 (or the stricter `adaptive_mesh` target), that are longer than half
   their bending length `(EI/|w|)^(1/3)`, or, at a line end, longer than the boundary layer
   `sqrt(EI/T)`, and the elements about an isolated seabed-contact change, and grades the mesh
@@ -417,18 +417,22 @@ All notable changes to CableDyn are recorded in this file. The format follows
   element limit, the bending-length splits give way first, then the grading, and only then the
   curvature, end-layer and contact splits, and a refinement that stops short of its target
   names what stopped it (the cap, the element limit or the limit of 12 passes, 16 for the
-  axial passes). The two decks above now solve
-  on 492 and 436 elements in 0.30 s and 0.27 s, with end tensions within 4e-7 and 2e-6 of the
-  whole-line refinement and nodes within 0.7 mm and 4 mm. In the finite-EI statics matrix 61
-  of the 123 decks refine: their CPU time falls from 76 s to 34 s, the end tensions change by
+  axial passes). The two decks above now solve on 492 and 436 elements in 0.33 s and 0.28 s,
+  with end tensions within 4e-7 and 2e-6 of the whole-line refinement and nodes within 0.7 mm
+  and 4 mm. The lazy wave of the node-channel entry above (its top section on 4 elements) now
+  refines to 269 elements instead of 1136, with node tensions within 0.9 N (of 1.2 to 12 kN)
+  of the same line on 1560 elements of 0.25 to 0.5 m. In the finite-EI statics matrix 61
+  of the 123 decks refine: their CPU time falls from 65 s to 33 s, the end tensions change by
   at most 0.21 % of the line's peak end tension (a 58 m line on 2 m end elements, whose
   hang-off tension moves from 1157.5 N to 1155.1 N; 1157.5 N on a mesh 16 times finer) and the
   nodes by at most 6.4e-4 of the line length. In a 761-deck statics robustness campaign 57
   decks refine: they solve in 18 s instead of 63 s, with the same outcomes and notes (two no
-  longer need the static residual floor note), end tensions within 1e-5 of the peak end tension and nodes within 3.2e-5 of the line length.
+  longer need the static residual floor note), end tensions within 1e-5 of the peak end
+  tension and nodes within 3.2e-5 of the line length.
   Decks that do not refine, including every shipped example, give identical output. On a
-  deck that refines, the dynamics run on the new mesh, and node output channels (`L<n>N<k>`)
-  name its nodes.
+  deck that refines, the dynamics run on the new mesh; the local refinement only splits deck
+  elements, so every deck node is a node of the new mesh and the node output channels still
+  name deck nodes (see the node-channel entry above).
 - A finite-EI line with discrete buoyancy modules (`ATTACHMENTS`) in a cross current on a
   frictional seabed no longer fails its static solve. The lazy wave of
   `tests/data/lazy_wave_touchdown_planar_refined_att.dat` (25 modules on 2 m elements) in a
