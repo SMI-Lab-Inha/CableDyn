@@ -1922,8 +1922,17 @@ update is explicit. Each coupled step is therefore divided into equal sub-steps 
 body-mooring frequency. Each attached line acts as the directional spring
 :math:`k_a\mathbf{t}\mathbf{t}^T + (T/L)(\mathbf{I} - \mathbf{t}\mathbf{t}^T)` (:math:`\mathbf{t}`
 the chord direction, :math:`L` the chord length, :math:`k_a = 1/\sum l_0/EA`, :math:`T` the end
-tension), carried to the reference point and added to the hydrostatic restoring; the inertia is
-the structural plus added mass. The estimate omits the line-end inertia and the coupling between
+tension), carried to the reference point and added to the hydrostatic restoring and to the
+seabed contact; the inertia is the structural plus added mass. The contact springs are the
+penalty springs of the seabed model (:math:`k_\text{Bot}\,d\,\mathrm{d}l` at each contact station
+of a rod, :math:`k_\text{Bot}` over 1 m² at a body's reference point) that act within the coming
+step: a station counts when its penetration plus its reach over the step,
+:math:`\Delta t|v_z| + \tfrac{1}{2}\Delta t^2\max(|a_z|, g)`, is positive, so an object about to
+land is resolved as well as one at rest on the bed. A spring :math:`k` at arm :math:`\mathbf{a}`
+adds :math:`k` in heave and :math:`k a_y^2`, :math:`k a_x^2` in roll and pitch. The normal seabed
+damping is applied implicitly and sets no limit; the monolithic scheme carries the contact in
+its Jacobian, and its accuracy sub-steps (above) leave the contact out. The estimate omits the
+line-end inertia and the coupling between
 the diagonal terms, so it can understate the coupled frequency by about a factor 1.6; stability
 alone (the central-difference bound :math:`\omega\,\Delta t < 2`) would allow a limit near 1.
 The limit of 0.4 is set by accuracy: a rod released out of balance at :math:`\Delta t = 0.1` s
@@ -1960,7 +1969,10 @@ the rod's orientation and with the surface held over the step, every slice's cle
 surface then changes monotonically and in the same sense, so the wetting, the moment
 :math:`W d_g - B d_b` and the added mass are bounded by their values at the two ends, and a step
 whose pin crosses the free surface (a light rod lifted out of the water, or a heavy one lowered
-into it) is sub-stepped for the stiffer of its wet states. In a sub-cycled step the host pin's
+into it) is sub-stepped for the stiffer of its wet states. The seabed contact adds its angular
+stiffness about the pin, :math:`\sum k\,|\mathbf{a}\times\mathbf{e}_z|^2` over the contact
+stations within reach (at both pin poses for a ``CoupledPinned`` rod), so a rod whose far end
+rests on the bed is sub-stepped for its contact mode. In a sub-cycled step the host pin's
 position,
 velocity and acceleration are each interpolated linearly between their step-start values (the End
 A motion of the committed rod) and the end-of-step host input, as the host fairleads of the lines

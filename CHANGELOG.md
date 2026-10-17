@@ -273,6 +273,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- Seabed contact in the explicit object sub-step estimate. The staggered march of free and
+  pinned rods and Rigid6 bodies (the coupled OpenFAST and C API routes, standalone rod decks and
+  `bodyScheme staggered`) applies the seabed penalty springs explicitly, but sized its sub-steps
+  from the lines, hydrostatics and (pinned rods) the swing only, so a rod or body resting on a
+  stiff seabed at a large coupling step could exceed the central-difference limit and be thrown
+  off the bed. The estimate now adds the contact springs that act within the step
+  (`kBot d dl` per rod contact station, `kBot` over 1 m² at a body's reference point; a station
+  counts when its penetration plus its reach `dt |v_z| + dt² max(|a_z|, g)/2` is positive), in
+  heave, roll and pitch about the reference point, or about the pin of a pinned rod at both pin
+  poses. The monolithic scheme, which carries the contact in its Jacobian, is unchanged. No
+  shipped example or existing test changes its sub-step count.
+
 - Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated
   the axial force and the dynamic loads at the blended configuration
   `q_α = (1 − α_f) q_{n+1} + α_f q_n`. A segment that was slack at the start of a step and

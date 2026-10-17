@@ -31,7 +31,9 @@ PROGRAM test_openfast_pinned_rod
   !!  13) a short Pinned rod without a line (dry and hanging, or buoyant and upright) sub-cycles
   !!      a coupling step beyond the explicit limit of its own swing and keeps its period;
   !!  14) a CoupledPinned rod whose pin crosses the free surface within one coupling step
-  !!      (submerged to dry, or dry to submerged) sub-cycles it for the stiffer of its wet states.
+  !!      (submerged to dry, or dry to submerged) sub-cycles it for the stiffer of its wet states;
+  !!  15) a Pinned rod whose far end rests on a stiff seabed, and a Free rod lying on it, sub-cycle
+  !!      the contact mode of a large coupling step and stay at rest on the bed.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Rod_SetHostKinematics, CD_Step_Aggregate_Rod
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -62,6 +64,7 @@ PROGRAM test_openfast_pinned_rod
   CALL case_bare_rod_ends()
   CALL case_lineless_swing_substep()
   CALL case_surface_crossing_pin()
+  CALL case_seabed_contact_substep()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -1301,6 +1304,127 @@ CONTAINS
       CALL CD_AGG_End(fine, es, em)
     END DO
   END SUBROUTINE case_surface_crossing_pin
+
+  ! --------------------------------------------------------------------------------------------- !
+  ! 15: seabed contact at a large coupling step                                                   !
+  ! --------------------------------------------------------------------------------------------- !
+
+  SUBROUTINE write_seabed_rod_deck(path, rod_type)
+    !! A rod (D = 0.2 m, 50 kg/m, no drag or added mass) on a stiff seabed at z = -10 m (kBot
+    !! 1e7 N/m^3): a 1 m Pinned rod from a pin at (0, 0, -9.5) whose End B rests on the bed at
+    !! 30 degrees below the horizontal, or a 2 m Free rod lying on the bed from x = 0 to 2, held
+    !! by two lightly taut tethers to anchors 1 m above the bed. The fairlead line of
+    !! write_pendulum_deck keeps a mooring system in the deck.
+    CHARACTER(*), INTENT(IN) :: path, rod_type
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'rod on a stiff seabed on the coupled aggregate'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'line 0.10 80.0 1.0e6 0.0 0.0 1.0 0.0 1.0 0.0'
+    WRITE (u, '(A)') 'tether 0.05 4.0 2.0e5 0.0 0.0 1.0 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'bar 0.2 50 0 0 0 0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    IF (rod_type == 'Free') THEN
+      WRITE (u, '(A)') '1 bar Free 0 0 -10 2 0 -10 4 -'
+    ELSE
+      WRITE (u, '(A,ES24.16,A)') '1 bar Pinned 0 0 -9.5 ', SQRT(0.75_wp), ' 0 -10 4 -'
+    END IF
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Coupled 0.0 30.0 -1.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Fixed 6.0 30.0 -8.0 0 0 0 0'
+    IF (rod_type == 'Free') THEN
+      WRITE (u, '(A)') '3 Fixed -5.0 0 -9 0 0 0 0'
+      WRITE (u, '(A)') '4 Fixed 7.0 0 -9 0 0 0 0'
+    END IF
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    IF (rod_type == 'Free') THEN
+      WRITE (u, '(A)') '2 R1A 3 -'
+      WRITE (u, '(A)') '3 R1B 4 -'
+    END IF
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 line 9.5 6'
+    IF (rod_type == 'Free') THEN
+      WRITE (u, '(A)') '2 tether 5.09 10'
+      WRITE (u, '(A)') '3 tether 5.09 10'
+    END IF
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '10.0 WtrDpth'
+    WRITE (u, '(A)') '1.0e7 kBot'
+    WRITE (u, '(A)') 'deck bodyIC'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_seabed_rod_deck
+
+  SUBROUTINE case_seabed_contact_substep()
+    !! The contact springs kBot d dl of the rod stations on the bed are far stiffer than the rod's
+    !! other restoring: (1) the Pinned rod's End B station alone, 5e4 N/m at 0.87 m horizontally
+    !! from the pin, gives omega^2 about 2e3 rad^2/s^2 about the pin (omega dt about 4.7 at a
+    !! 0.1 s step; the stations within reach of the bed over the step ask for 20 to 25
+    !! sub-steps) against 5 from its submerged weight; (2) the Free rod's 21 stations, 4e6 N/m in
+    !! all on 100 kg, give omega^2 about 4e4 in heave (omega dt about 10 at a 0.05 s step, 26
+    !! sub-steps) against about 800 from its tethers (4 sub-steps). The march must sub-cycle the
+    !! contact mode: over 5 s each rod stays at rest on the bed (its static settlement is below
+    !! 2 mm) and ends where a run at a tenth of the step ends; with the sub-steps of its other
+    !! restoring alone it is thrown off the bed.
+    TYPE(CD_AGG_ModuleType) :: coarse, fine
+    REAL(wp), ALLOCATABLE :: angc(:), tc(:), angf(:), tf(:)
+    REAL(wp) :: sc(24), sf(24), dtc, dev, err_end
+    INTEGER :: es, kase, nc
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    CHARACTER(8) :: kind
+
+    DO kase = 1, 2
+      IF (kase == 1) THEN
+        kind = 'Pinned'
+        dtc = 0.1_wp
+      ELSE
+        kind = 'Free'
+        dtc = 0.05_wp
+      END IF
+      nc = NINT(5.0_wp/dtc)
+      CALL write_seabed_rod_deck('pinrod_seabed.dat', TRIM(kind))
+      CALL CD_AGG_Init_From_Deck(coarse, 'pinrod_seabed.dat', dtc, es, em)
+      CALL require(es == CD_AGG_OK, 'seabed:coarse-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      CALL CD_AGG_Init_From_Deck(fine, 'pinrod_seabed.dat', 0.1_wp*dtc, es, em)
+      CALL require(es == CD_AGG_OK, 'seabed:fine-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      ALLOCATE (angc(0:nc), tc(0:nc), angf(0:10*nc), tf(0:10*nc))
+      CALL march(coarse, dtc, nc, host_rest, angc, tc, ok, s_end=sc)
+      CALL require(ok, 'seabed:'//TRIM(kind)//' coarse march finite (the contact mode is sub-cycled)')
+      IF (.NOT. ok) RETURN
+      CALL march(fine, 0.1_wp*dtc, 10*nc, host_rest, angf, tf, ok, s_end=sf)
+      CALL require(ok, 'seabed:'//TRIM(kind)//' fine march finite')
+      IF (.NOT. ok) RETURN
+      dev = nan_max_abs(angc - angc(0))
+      err_end = MAX(ABS(angc(nc) - angf(10*nc)), nan_max_abs(sc(1:3) - sf(1:3)))
+      WRITE (*, '(A,A,A,ES10.3,A,ES10.3,A,ES10.3)') 'rod on a stiff seabed (', TRIM(kind), &
+        '): max angle change ', dev, ' rad; centre depth ', sc(3), '; end state vs dt/10 ', err_end
+      CALL require(dev <= 1.0e-2_wp .AND. ABS(sc(3) - MERGE(-9.75_wp, -10.0_wp, kase == 1)) <= 1.0e-2_wp, &
+                   'seabed:'//TRIM(kind)//' rod stays at rest on the bed')
+      CALL require(err_end <= 1.0e-4_wp, 'seabed:'//TRIM(kind)//' ends as the dt/10 run')
+      DEALLOCATE (angc, tc, angf, tf)
+      CALL CD_AGG_End(coarse, es, em)
+      CALL CD_AGG_End(fine, es, em)
+    END DO
+  END SUBROUTINE case_seabed_contact_substep
 
   SUBROUTINE case_bare_rod_ends()
     !! On the coupled route only a Pinned or CoupledPinned rod may leave an end without a line or
