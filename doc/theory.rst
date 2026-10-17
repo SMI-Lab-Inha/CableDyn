@@ -1951,9 +1951,17 @@ about the pin, :math:`m d_g` for a dry rod; for the hanging dry rod this is the 
 bound :math:`g + |\mathbf{a}_p| \ge |\mathbf{g} - \mathbf{a}_p|`, taken with the larger of the
 step-start and end-of-step pin accelerations. The swing stiffness over the smaller rotational
 inertia about the pin across the rod axis, about :math:`3g/(2L)` for a dry uniform rod of length
-:math:`L`, adds to the line estimate of :math:`\omega^2`. The buoyancy is that of the current
-wet length, so the change in a surface-piercing rod's waterline with its tilt is left out. In a
-sub-cycled step the host pin's position,
+:math:`L`, adds to the line estimate of :math:`\omega^2`. The buoyancy is that of the wet
+length at the evaluated pose, so the change in a surface-piercing rod's waterline with its tilt
+is left out. The host places a ``CoupledPinned`` pin at :math:`t_{n+1}` before the estimate, so
+the swing is evaluated with the rod at both its step-start and its end-of-step pin, taking the
+larger stiffness and the smaller inertia. The sub-steps move the pin along a straight line; at
+the rod's orientation and with the surface held over the step, every slice's clearance to the
+surface then changes monotonically and in the same sense, so the wetting, the moment
+:math:`W d_g - B d_b` and the added mass are bounded by their values at the two ends, and a step
+whose pin crosses the free surface (a light rod lifted out of the water, or a heavy one lowered
+into it) is sub-stepped for the stiffer of its wet states. In a sub-cycled step the host pin's
+position,
 velocity and acceleration are each interpolated linearly between their step-start values (the End
 A motion of the committed rod) and the end-of-step host input, as the host fairleads of the lines
 and the ``Coupled`` rods are, so points on one platform keep their relative positions under a

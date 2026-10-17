@@ -141,8 +141,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   every other host node, the sub-step count resolves the rod's own swing about its pin under
   its weight, buoyancy and pin acceleration (`|W d_g - B d_b|` and the pin-acceleration load
   over the inertia about the pin) as well as its lines, so a short pinned rod that carries no
-  line stays stable at a coupling step beyond its explicit limit, and checkpoint restarts and correction iterations reproduce the run bit
-  for bit with the existing rod state mirror. An end of a `Pinned` or `CoupledPinned` rod that
+  line stays stable at a coupling step beyond its explicit limit (a `CoupledPinned` rod takes
+  the stiffer of its step-start and end-of-step wetting, so a pin that crosses the free surface
+  within a step is covered), and checkpoint restarts and correction iterations reproduce the
+  run bit for bit with the existing rod state mirror. An end of a `Pinned` or `CoupledPinned` rod that
   carries no line needs no `Rod<N>A`/`Rod<N>B` POINT row on the coupled route; other rods still
   need one at both ends. The C API runs `Pinned` rods, as its manual page already stated. The
   standalone driver and the C API refuse `CoupledPinned` rods by name; FAST.Farm decks still

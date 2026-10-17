@@ -20037,7 +20037,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: hk_end(:, :)
     LOGICAL :: conv_s, stall_s, host_pins
     REAL(wp) :: omega2, arms(3, 2), mass6(6), added6(6, 6), drag6(6, 6), f_dummy(3), m_dummy(3), mp(3, 3)
-    REAL(wp) :: buoy(4), w2_pin
+    REAL(wp) :: buoy(4), w2_pin, buoy0(4), added0(6, 6)
+    TYPE(RodState) :: rod0
     REAL(wp), ALLOCATABLE :: q0h(:), v0h(:), a0h(:)
 
     converged = .TRUE.
@@ -20062,7 +20063,21 @@ CONTAINS
         ! buoyancy and pin acceleration make it a compound pendulum even without a line
         ! (pinned_swing_omega2), whose squared frequency adds to that of the lines.
         mp = pinned_rotational_inertia(rod_state(ir), added6)
-        w2_pin = pinned_swing_omega2(rod_state(ir), opts, mp, added6, buoy)
+        IF (rod_state(ir)%is_host_pinned) THEN
+          ! the host has already placed the pin at t + dt: the swing is also evaluated with the
+          ! rod at its step-start pin (pin0), so that a step whose pin crosses the free surface
+          ! keeps the restoring of the wetting it starts from
+          rod0 = rod_state(ir)
+          rod0%r = rod0%r + (rod0%pin0 - rod0%pin)
+          rod0%pin = rod0%pin0
+          CALL rod_environment_force(rod0, opts, time - dt, f_dummy, m_dummy, added0, drag6, ErrStat, ErrMsg, &
+                                     buoyancy=buoy0)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          w2_pin = pinned_swing_omega2(rod_state(ir), opts, mp, added6, buoy, &
+                                       pinned_rotational_inertia(rod0, added0), added0, buoy0)
+        ELSE
+          w2_pin = pinned_swing_omega2(rod_state(ir), opts, mp, added6, buoy)
+        END IF
         arms(:, 1) = arms(:, 1) + (rod_state(ir)%r - rod_state(ir)%pin)
         arms(:, 2) = arms(:, 2) + (rod_state(ir)%r - rod_state(ir)%pin)
         mass6(1:3) = CD_ZERO
@@ -20535,7 +20550,7 @@ CONTAINS
     mp = MATMUL(TRANSPOSE(t63), MATMUL(m6, t63))
   END FUNCTION pinned_rotational_inertia
 
-  FUNCTION pinned_swing_omega2(rod, opts, mp, added6, buoyancy) RESULT(omega2)
+  FUNCTION pinned_swing_omega2(rod, opts, mp, added6, buoyancy, mp_start, added_start, buoy_start) RESULT(omega2)
     !! Squared frequency of a pinned rod swinging about its pin under its weight, its buoyancy
     !! and the pin acceleration, for the sub-step estimate of step_rod_system (added there to
     !! the line estimate). Vertical loads f_i at p_i from the pin turn with the rod; the moment
@@ -20543,38 +20558,68 @@ CONTAINS
     !! whose length |P| does not depend on the pose for a fixed load distribution and is the
     !! swing stiffness at the bottom of the compound pendulum: |W d_g - B d_b| for a weight W and
     !! a buoyancy B on the axis at d_g and d_b from the pin (omega^2 about 3 g/(2 L) for a dry
-    !! uniform rod). The buoyancy is the current wet distribution (rod_environment_force), so the
-    !! change of a surface-piercing rod's wet length with its tilt is not included. The pin
-    !! acceleration a_p loads the rod with -M_t a_p, whose stiffness is |a_p| |G|, G = [r]x M_tt +
-    !! M_rt the first moment of the translational inertia (structural and added) about the pin:
-    !! c [q]x for a rod (c = m d_g when dry), so |G| = ||G||_F/sqrt(2), and the hanging dry rod
-    !! sees the effective gravity bound g + |a_p| >= |g - a_p|. |a_p| is the larger of the
-    !! step-start and end-of-step host pin accelerations (zero for a fixed pin). The inertia is the
-    !! smaller principal rotational inertia about the pin across the rod axis (mp: structural and
-    !! added mass).
+    !! uniform rod). The buoyancy is the wet distribution of the evaluated pose
+    !! (rod_environment_force), so the change of a surface-piercing rod's wet length with its
+    !! tilt is not included. The pin acceleration a_p loads the rod with -M_t a_p, whose
+    !! stiffness is |a_p| |G|, G = [r]x M_tt + M_rt the first moment of the translational inertia
+    !! (structural and added) about the pin: c [q]x for a rod (c = m d_g when dry), so
+    !! |G| = ||G||_F/sqrt(2), and the hanging dry rod sees the effective gravity bound
+    !! g + |a_p| >= |g - a_p|. |a_p| is the larger of the step-start and end-of-step host pin
+    !! accelerations (zero for a fixed pin). The inertia is the smaller principal rotational
+    !! inertia about the pin across the rod axis (mp: structural and added mass).
+    !!
+    !! mp_start, added_start and buoy_start (a host-pinned rod) are the inertia, added mass and
+    !! buoyancy of the same rod at its step-start pin: the stiffness is then the larger and the
+    !! inertia the smaller of the two poses. The sub-steps move the pin along a straight line, so
+    !! at the rod's orientation, with the surface held over the step, every slice's clearance to
+    !! the surface changes monotonically and in the same sense: each slice's wet area, and with
+    !! it the net first moment W d_g - B d_b about the pin and the added mass, change
+    !! monotonically, and the two ends bound the path, a step whose pin crosses the free surface
+    !! included.
     TYPE(RodState), INTENT(IN) :: rod
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(IN) :: mp(3, 3), added6(6, 6), buoyancy(4)
+    REAL(wp), INTENT(IN), OPTIONAL :: mp_start(3, 3), added_start(6, 6), buoy_start(4)
     REAL(wp) :: omega2
-    REAL(wp) :: arm(3), p(3), g3(3, 3), e1(3), e2(3), m11, m22, m12, i_min, k_swing, a_pin
+    REAL(wp) :: arm(3), a_pin, k_swing, i_min
 
     omega2 = CD_ZERO
     arm = rod%r - rod%pin
-    ! weight at the centre, buoyancy at its first moment about the centre
-    p = (buoyancy(1) - rod%mass*opts%g)*arm + buoyancy(2:4)
-    k_swing = NORM2(p)
     a_pin = MAX(NORM2(rod%pin_a), NORM2(rod%pin0_a))
-    IF (a_pin > CD_ZERO) THEN
-      g3 = rod%mass*skew3(arm) + MATMUL(skew3(arm), added6(1:3, 1:3)) + added6(4:6, 1:3)
-      k_swing = k_swing + a_pin*NORM2(g3)/SQRT(2.0_wp)
+    k_swing = swing_stiffness(added6, buoyancy)
+    i_min = cross_inertia(mp)
+    IF (PRESENT(mp_start) .AND. PRESENT(added_start) .AND. PRESENT(buoy_start)) THEN
+      k_swing = MAX(k_swing, swing_stiffness(added_start, buoy_start))
+      i_min = MIN(i_min, cross_inertia(mp_start))
     END IF
-    e1 = rod%rot_mat(:, 2)
-    e2 = rod%rot_mat(:, 3)
-    m11 = DOT_PRODUCT(e1, MATMUL(mp, e1))
-    m22 = DOT_PRODUCT(e2, MATMUL(mp, e2))
-    m12 = DOT_PRODUCT(e1, MATMUL(mp, e2))
-    i_min = 0.5_wp*(m11 + m22) - SQRT(0.25_wp*(m11 - m22)**2 + m12**2)
     IF (i_min > CD_ZERO) omega2 = k_swing/i_min
+
+  CONTAINS
+
+    REAL(wp) FUNCTION swing_stiffness(added, buoy) RESULT(k)
+      !! |P| plus the pin-acceleration term for one pose's added mass and buoyancy.
+      REAL(wp), INTENT(IN) :: added(6, 6), buoy(4)
+      REAL(wp) :: p(3), g3(3, 3)
+      ! weight at the centre, buoyancy at its first moment about the centre
+      p = (buoy(1) - rod%mass*opts%g)*arm + buoy(2:4)
+      k = NORM2(p)
+      IF (a_pin > CD_ZERO) THEN
+        g3 = rod%mass*skew3(arm) + MATMUL(skew3(arm), added(1:3, 1:3)) + added(4:6, 1:3)
+        k = k + a_pin*NORM2(g3)/SQRT(2.0_wp)
+      END IF
+    END FUNCTION swing_stiffness
+
+    REAL(wp) FUNCTION cross_inertia(m3) RESULT(i)
+      !! The smaller principal value of m3 in the plane across the rod axis.
+      REAL(wp), INTENT(IN) :: m3(3, 3)
+      REAL(wp) :: e1(3), e2(3), m11, m22, m12
+      e1 = rod%rot_mat(:, 2)
+      e2 = rod%rot_mat(:, 3)
+      m11 = DOT_PRODUCT(e1, MATMUL(m3, e1))
+      m22 = DOT_PRODUCT(e2, MATMUL(m3, e2))
+      m12 = DOT_PRODUCT(e1, MATMUL(m3, e2))
+      i = 0.5_wp*(m11 + m22) - SQRT(0.25_wp*(m11 - m22)**2 + m12**2)
+    END FUNCTION cross_inertia
   END FUNCTION pinned_swing_omega2
 
   SUBROUTINE step_prescribed_rod_system(system, points, opts, motion, rod_state, time_index, time, dt, &

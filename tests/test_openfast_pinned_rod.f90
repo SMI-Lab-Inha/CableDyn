@@ -29,7 +29,9 @@ PROGRAM test_openfast_pinned_rod
   !!      step-start pin): a step without one is bit-identical;
   !!  12) only a Pinned or CoupledPinned rod may leave an end without a line or POINT row;
   !!  13) a short Pinned rod without a line (dry and hanging, or buoyant and upright) sub-cycles
-  !!      a coupling step beyond the explicit limit of its own swing and keeps its period.
+  !!      a coupling step beyond the explicit limit of its own swing and keeps its period;
+  !!  14) a CoupledPinned rod whose pin crosses the free surface within one coupling step
+  !!      (submerged to dry, or dry to submerged) sub-cycles it for the stiffer of its wet states.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Rod_SetHostKinematics, CD_Step_Aggregate_Rod
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -59,6 +61,7 @@ PROGRAM test_openfast_pinned_rod
   CALL case_unstaged_step()
   CALL case_bare_rod_ends()
   CALL case_lineless_swing_substep()
+  CALL case_surface_crossing_pin()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -141,16 +144,20 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_pendulum_deck
 
-  SUBROUTINE write_short_pendulum_deck(path, mass_pm, zpin, upright, theta_deg)
-    !! A 1 m Pinned rod (D = 0.2 m, mass_pm kg/m, no drag or added mass) pinned at End A at
-    !! (0, 0, zpin) and released at theta_deg in the x-z plane from the downward vertical (from
-    !! the upward one with upright), deck pose; no line touches it. The fairlead line of
-    !! write_pendulum_deck keeps a mooring system in the deck.
+  SUBROUTINE write_short_pendulum_deck(path, mass_pm, zpin, upright, theta_deg, rod_type)
+    !! A 1 m Pinned rod (rod_type replaces Pinned; D = 0.2 m, mass_pm kg/m, no drag or added
+    !! mass) pinned at End A at (0, 0, zpin) and released at theta_deg in the x-z plane from the
+    !! downward vertical (from the upward one with upright), deck pose; no line touches it. The
+    !! fairlead line of write_pendulum_deck keeps a mooring system in the deck.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: mass_pm, zpin, theta_deg
     LOGICAL, INTENT(IN) :: upright
+    CHARACTER(*), INTENT(IN), OPTIONAL :: rod_type
+    CHARACTER(16) :: rt
     REAL(wp) :: th, xb, zb
     INTEGER :: u
+    rt = 'Pinned'
+    IF (PRESENT(rod_type)) rt = rod_type
     th = theta_deg*PI/180.0_wp
     xb = SIN(th)
     zb = zpin - COS(th)
@@ -168,7 +175,7 @@ CONTAINS
     WRITE (u, '(A)') '--- RODS ---'
     WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
-    WRITE (u, '(A,ES24.16,A,ES24.16,A,ES24.16,A)') '1 pend Pinned 0 0 ', zpin, ' ', xb, ' 0 ', zb, ' 4 -'
+    WRITE (u, '(A,ES24.16,A,ES24.16,A,ES24.16,A)') '1 pend '//TRIM(rt)//' 0 0 ', zpin, ' ', xb, ' 0 ', zb, ' 4 -'
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
@@ -1215,6 +1222,85 @@ CONTAINS
       CALL CD_AGG_End(fine, es, em)
     END DO
   END SUBROUTINE case_lineless_swing_substep
+
+  ! --------------------------------------------------------------------------------------------- !
+  ! 14: a host pin crossing the free surface within one coupling step                             !
+  ! --------------------------------------------------------------------------------------------- !
+
+  FUNCTION host_rise(time) RESULT(k)
+    !! The pin rising at a constant 12 m/s from t = 0.
+    REAL(wp), INTENT(IN) :: time
+    REAL(wp) :: k(9)
+    k = 0.0_wp
+    k(3) = 12.0_wp*time
+    k(6) = 12.0_wp
+  END FUNCTION host_rise
+
+  FUNCTION host_sink(time) RESULT(k)
+    !! The pin sinking at a constant 2 m/s from t = 0.
+    REAL(wp), INTENT(IN) :: time
+    REAL(wp) :: k(9)
+    k = 0.0_wp
+    k(3) = -2.0_wp*time
+    k(6) = -2.0_wp
+  END FUNCTION host_sink
+
+  SUBROUTINE case_surface_crossing_pin()
+    !! A 1 m CoupledPinned rod without a line whose host pin crosses the free surface in one
+    !! coupling step at constant velocity, which the linear interpolation of the pin inside the
+    !! step represents exactly. The march sizes its sub-steps after the host has placed the pin at
+    !! the end of the step, so the swing estimate must also take the step-start wetting:
+    !!   (1) a light rod (1 kg/m against 32.2 kg/m of displaced water) standing up from a pin at
+    !!       z = -1.1 m that rises at 12 m/s, fully submerged at the start of a 0.1 s step and dry
+    !!       at its end: omega^2 = (B - W)(L/2)/I_p = 456 rad^2/s^2 at the start (omega dt = 2.13,
+    !!       beyond the explicit limit of 2) but 14.6 at the end, which alone asks for one
+    !!       sub-step; the start wetting asks for 6 (omega dt/0.4 = 5.34);
+    !!   (2) a rod just heavier than water (33 kg/m) hanging from a pin at z = 1 m that sinks at
+    !!       2 m/s, dry at the start of a 0.6 s step and submerged at its end: 14.6 rad^2/s^2 at the
+    !!       start (omega dt = 2.29) against 0.354 at the end; the start asks for 6 (5.73).
+    !! The crossing step must equal six steps at the sub-step size (the wetting along the step is
+    !! bounded by its two ends).
+    TYPE(CD_AGG_ModuleType) :: coarse, fine
+    INTEGER, PARAMETER :: NSUB = 6
+    REAL(wp) :: angc(0:1), tc(0:1), angf(0:NSUB), tf(0:NSUB), sc(24), sf(24), dtc, err_ang, err_s
+    INTEGER :: es, kase
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+
+    DO kase = 1, 2
+      IF (kase == 1) THEN
+        dtc = 0.1_wp
+        CALL write_short_pendulum_deck('pinrod_cross.dat', 1.0_wp, -1.1_wp, .TRUE., 10.0_wp, 'CoupledPinned')
+      ELSE
+        dtc = 0.6_wp
+        CALL write_short_pendulum_deck('pinrod_cross.dat', 33.0_wp, 1.0_wp, .FALSE., 30.0_wp, 'CoupledPinned')
+      END IF
+      CALL CD_AGG_Init_From_Deck(coarse, 'pinrod_cross.dat', dtc, es, em)
+      CALL require(es == CD_AGG_OK, 'cross:coarse-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      CALL CD_AGG_Init_From_Deck(fine, 'pinrod_cross.dat', dtc/REAL(NSUB, wp), es, em)
+      CALL require(es == CD_AGG_OK, 'cross:fine-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      IF (kase == 1) THEN
+        CALL march(coarse, dtc, 1, host_rise, angc, tc, ok, s_end=sc)
+        CALL require(ok, 'cross:coarse march finite')
+        CALL march(fine, dtc/REAL(NSUB, wp), NSUB, host_rise, angf, tf, ok, s_end=sf)
+      ELSE
+        CALL march(coarse, dtc, 1, host_sink, angc, tc, ok, s_end=sc)
+        CALL require(ok, 'cross:coarse march finite')
+        CALL march(fine, dtc/REAL(NSUB, wp), NSUB, host_sink, angf, tf, ok, s_end=sf)
+      END IF
+      CALL require(ok, 'cross:fine march finite')
+      IF (.NOT. ok) RETURN
+      err_ang = ABS(angc(1) - angf(NSUB))
+      err_s = nan_max_abs(sc - sf)/MAX(1.0_wp, nan_max_abs(sf))
+      WRITE (*, '(A,I0,A,ES10.3,A,F9.5,A,ES10.3)') 'surface-crossing pin (', kase, &
+        '): crossing step vs sub-step run: angle ', err_ang, ' of ', angf(NSUB), ' rad; rod state ', err_s
+      CALL require(err_ang <= 1.0e-9_wp .AND. err_s <= 1.0e-9_wp, 'cross:crossing step equals its sub-step run')
+      CALL CD_AGG_End(coarse, es, em)
+      CALL CD_AGG_End(fine, es, em)
+    END DO
+  END SUBROUTINE case_surface_crossing_pin
 
   SUBROUTINE case_bare_rod_ends()
     !! On the coupled route only a Pinned or CoupledPinned rod may leave an end without a line or
