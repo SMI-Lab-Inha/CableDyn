@@ -4223,9 +4223,8 @@ CONTAINS
       !! staticsFriction asLaid no note is made when the as-laid reference itself reaches past
       !! the anchor (as_laid_reference_past): the deck lays the run there.
       REAL(wp), PARAMETER :: GROUNDED_TOL = 0.05_wp
-      REAL(wp) :: e_h(2), e_g(2), span, past, d, floor_z, xg, yg, pos(3), gx, gy, slope_at, laid_t_n
+      REAL(wp) :: e_h(2), span, past, d, floor_z, xg, yg, pos(3), gx, gy, slope_at
       REAL(wp) :: z_nodes(SIZE(q_static)/6)
-      REAL(wp), ALLOCATABLE :: lay_az_n
       INTEGER :: k, esb, support
       CHARACTER(1024) :: emb
       CHARACTER(200) :: cause
@@ -28472,12 +28471,14 @@ CONTAINS
   END FUNCTION audited_line_id
 
   SUBROUTINE warn_line_spike(model, line_id)
-    !! The once-per-line warning of the run audit's first implausible tension spike.
+    !! The once-per-line warning of the run audit's first implausible tension spike. The
+    !! segment is numbered in deck order, from End A, as the segment tension outputs and the
+    !! fold note's nodes are (audit_spike_elem is in internal order, End B first).
     TYPE(CD_ModelType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: line_id
     INTEGER :: ios
     WRITE (output_unit, '(A,I0,A,I0,A,ES10.3,A,F10.3,A,F0.1,A)', IOSTAT=ios) '  Warning: line ', line_id, &
-      ': segment ', model%audit_spike_elem, ' carried ', model%audit_spike_tension, ' N at t =', &
+      ': segment ', model%n_elem + 1 - model%audit_spike_elem, ' carried ', model%audit_spike_tension, ' N at t =', &
       model%audit_spike_time, ' s for a single step, ', model%audit_spike_ratio, &
       ' times the largest tension on the line one step before and after: a non-physical tension spike '// &
       '(an under-resolved slack-taut transition). Check the result with a smaller dtM (doc: troubleshooting).'

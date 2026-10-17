@@ -1180,7 +1180,9 @@ at least a tenth of the water depth at that end, or of the height of the other e
 that is larger, so that a near-vertical line, whose side away from its other end is not
 defined, is left to the next test), or ``the static layout folds the grounded run back on
 itself (a ... deg turn at node ...)`` when the run turns by more than 150°
-at a node whose two neighbours are also grounded (within 5 cm of the floor). The note names the
+at a node whose two neighbours are also grounded (within 5 cm of the floor); the node is the
+deck node, numbered as the ``<J>`` of the node channels (1 = End A; an ``EI = 0`` line is never
+refined, so its deck nodes are its mesh nodes). The note names the
 cause: a deck current acting on the line (a current profile that vanishes at the seabed still
 pulls the run through the suspended span), a seabed steeper than 0.5° at the fold, or neither
 (a slack run). Its remedy follows the deck's static friction. Without ``frictionMu``: friction
@@ -1865,9 +1867,12 @@ Deck ``POINTS``, ``BODIES``, and ``RODS`` records follow the MoorDyn object mode
   with added mass :math:`\rho V C_a`. Points are advanced around the implicit line step with
   implicit-Euler kinematics, and the attached line ends' own blocks are linearly implicit: the
   structural mass diagonal, the Morison added-mass block, and the end-segment elastic tangent
-  and axial damping. A light or massless connector is therefore stable at any
-  :math:`\Delta t`, including under added mass that exceeds the structural mass, and the end
-  segments impose no :math:`\sqrt{k_\text{line}/m_\text{point}}` limit. The coupling to the
+  and axial damping, and so is the point's own seabed contact (its stiffness
+  :math:`k_\text{Bot} A` and damping :math:`c_\text{Bot} A`). A light or massless connector is
+  therefore stable at any :math:`\Delta t`, including under added mass that exceeds the
+  structural mass, and neither the end segments nor the footprint impose a
+  :math:`\sqrt{k/m_\text{point}}` limit, so the sub-step estimate of the explicit object march
+  (below) leaves the points out. The coupling to the
   first interior node, drag, and seabed contact at the end node stay at the step-start
   state; the step fails with a named error if a point's motion becomes non-finite.
 - **Rigid6 bodies** have six DOFs, a diagonal inertia about the centre of gravity, and the
@@ -2111,7 +2116,9 @@ the added mass changes as it crosses. A finite-EI cable on a body or rod of the 
 whose end force the march returns explicitly, adds the directional spring above with
 :math:`k_a = 1/\sum l_0/EA` and its current end tension. The normal seabed damping and the
 regularised friction (a damper :math:`\mu N/\sqrt{v^2 + v_\text{reg}^2}`, :math:`\mu N/v_\text{reg}`
-at rest) are applied implicitly, the friction as that secant coefficient, so they set no limit;
+at rest) are applied implicitly, the friction as that secant coefficient, so they set no limit,
+nor does the seabed contact of a ``Free``/``Connect`` point or a Point3 buoy, which its point
+step treats as linearly implicit (see Free points above), so the estimate leaves it out;
 the monolithic scheme carries the contact and the hydrostatics in its Jacobian, and its accuracy
 sub-steps (above) leave them out. A step that would need more than 256 sub-steps is warned about
 once per run. The estimate omits the line-end inertia and the coupling between

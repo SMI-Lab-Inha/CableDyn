@@ -2129,6 +2129,17 @@ add_test(NAME driver_ei0_fold_note_slope
     -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_fold_note_slope
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_ei0_fold_note_slope PROPERTIES LABELS "fortran;driver;integration;static")
+# ... and a fold of the grounded run onto itself between two grounded ends, named at its deck
+# node (driver_ei0_fold_layouts checks that it is the node of the fold).
+add_test(NAME driver_ei0_fold_note_turn
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ei0_fold_turn_current.dat|turn"
+    "-DONCE=Note: line 1: the static layout folds the grounded run back on itself \\(a 180 deg turn at node 49, a hairpin\\);the current drives the run along the seabed, which holds it only by friction"
+    "-DMUST_MATCH=seabed friction \\(frictionMu\\) or a shorter line prevents it"
+    "-DMUST_NOT=past its anchor"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_fold_note_turn
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_ei0_fold_note_turn PROPERTIES LABELS "fortran;driver;integration;static")
 foreach(_deck IN ITEMS examples/chain_catenary_shallow_30m tests/data/ei0_hairpin_current_friction
                        tests/data/ei0_fold_slope_aslaid tests/data/ei0_aslaid_behind_anchor
                        tests/data/ei0_clump_no_fold)

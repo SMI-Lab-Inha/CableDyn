@@ -667,7 +667,8 @@ Warnings and notes that do not stop a run
        at node ..., a hairpin) ...``
      - an ``EI = 0`` line whose grounded run turns back by more than 150° at a node, away from
        its ends (for example a slack line whose excess length the static solve lays out and back
-       on the seabed). As above, the layout is an equilibrium of the deck as written; check the
+       on the seabed). The node is a deck node, numbered as the ``<J>`` of the node channels
+       (1 = End A). As above, the layout is an equilibrium of the deck as written; check the
        line length before using it.
    * - ``Note: line ...: the equilibrium in the current is held in the vertical plane of the line; it
        is unstable out of that plane ...``
@@ -725,7 +726,7 @@ Warnings and notes that do not stop a run
    * - ``Warning: line ...: segment ... carried ... N at t = ... s for a single step, ... times
        the largest tension on the line one step before and after``
      - a non-physical tension spike: the tension of one segment (elastic, viscoelastic or
-       Syrope) rose and fell within one step to ten times anything the line carried one step
+       Syrope; numbered from End A, as in ``.Line<L>.t.out``) rose and fell within one step to ten times anything the line carried one step
        before and after, which no physical
        snap or tension wave does. It is the signature of an under-resolved slack–taut
        transition integrated without energy control, for example with
