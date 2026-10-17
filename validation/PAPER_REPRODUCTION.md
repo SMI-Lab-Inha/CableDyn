@@ -6,26 +6,29 @@ This record is for readers of the CableDyn journal article (Seo et al., *Ocean E
 368 (Part 2), 128332, 2026) who want to know whether the current release reproduces its numbers. The article
 records the formulation as published. CableDyn keeps developing, and its defaults follow the
 most accurate and robust methods available. The article's methods stay selectable. The table
-lists every quantitative result in the article that CableDyn computes, re-run with the v0.1.0
-release in two modes.
+lists every quantitative result in the article that CableDyn computes, re-run in two modes, first
+with the v0.1.0 release and again with the development source at revision 71158d5; the table
+gives the 71158d5 values.
 
 | Mode | Settings |
 | --- | --- |
 | Paper mode | `False alpha_force_blend`: forces evaluated at the generalised-α blended configuration, as in the article. `sequenced cable_statics`: the mesh-sequenced static route runs first. `element OutputRecovery`: node tensions are element-mean axial forces and curvatures the geometric Hermite curvature, as in the article. End tensions are the end element's axial tension. |
 | Defaults | Force-blended generalised-α (`True alpha_force_blend`). Static route starts from a catenary with continuation of the bending stiffness (`continuation cable_statics`). `FairTen`/`AnchTen` report the end force: the end element's force including axial damping, plus the end node's share of weight, seabed contact and drag at the actual velocity, without the end node's inertia. |
 
-The two options apply to finite-EI cables only. Tension-only (EI = 0) lines use the same
-solver in both modes, so for moorings the two columns differ only in the reported end
-tension. Reference values from OrcaFlex, MoorDyn and closed-form solutions are the fixed values
-used in the article; they were not re-run. The source revision recorded in the article's
-provenance files, built with the same toolchain, regenerates the article's data files exactly,
-so any difference in the paper-mode column comes from a change in CableDyn itself.
+`alpha_force_blend` also selects the generalised-α scheme of tension-only (EI = 0) lines, so
+moorings differ between the modes as well; `False alpha_force_blend` gives the article's EI = 0
+scheme. In paper mode every EI = 0 and finite-EI result at 71158d5 equals the v0.1.0 one in every
+printed digit, except the two-point axial rule row. Reference values from OrcaFlex, MoorDyn and
+closed-form solutions are the fixed values used in the article; they were not re-run. The
+source revision recorded in the article's provenance files, built with the same toolchain,
+regenerates the article's data files exactly, so any difference in the paper-mode column comes
+from a change in CableDyn itself.
 
 **Outcome.** Of the 58 results, paper mode reproduces 53 within the article's printed
 precision. Three differ because of later robustness fixes, one of them only in the last
 printed digit. Two cannot be reproduced from the
 recorded inputs, even with the article's own source: the 800 m pretension and the count of
-subdivided mooring motions. With the defaults, 16 results change because of a changed
+subdivided mooring motions. With the defaults, 20 results change because of a changed
 default. One robustness result is worse with the defaults; see
 [Known difference](#known-difference). For moorings, the defaults column also shows the
 end-force channel where the article reported the end element's tension. For the dynamic
@@ -55,8 +58,8 @@ inputs; **W** worse agreement or robustness with the defaults.
 | 200 m pretension; four-way band | 1206.2 kN; 1.1 % | 1206.2 kN; 1.1 % | 1206.2 kN; example-deck `FairTen` 1205.4 kN | design 1205, OrcaFlex 1199.2, MoorDyn-F 1212.0 kN | R |
 | 800 m pretension; three-solver spread; above design | 1868.8 kN; 0.7 %; ≈ 10 % | 1875.6 kN; 0.3 %; 10.1 % | `FairTen` 1881.5 kN; 0.3 %; 10.4 % | OrcaFlex 1881.5, MoorDyn-F 1875.9, design 1704 kN | X: the article's value came from an earlier, unrecorded mesh; the article's own source gives 1875.6 kN on the published deck; the conclusion is unchanged |
 | Mooring equilibrium profiles (Fig. 9) | — | identical geometry and element tensions | end node reports the end force | — | R |
-| One-hour VolturnUS-S mean / SD / min / max | 1.41 / 0.26 / 1.81 / 1.04 % | 1.41 / 0.26 / 1.81 / 1.04 % | same; end force 0.28 / 0.25 / 0.15 / 0.43 % | OrcaFlex 2439.39 / 206.08 / 2057.86 / 2850.91 kN | R |
-| One-hour Fourier amplitude, 90 s / 12 s | 0.83 / 2.10 % | 0.83 / 2.10 % | same; end force 0.27 / 1.13 % | OrcaFlex 228.57 / 178.80 kN | R |
+| One-hour VolturnUS-S mean / SD / min / max | 1.41 / 0.26 / 1.81 / 1.04 % | 1.41 / 0.26 / 1.81 / 1.04 % | 1.41 / 0.27 / 1.46 / 1.05 %; end force 0.27 / 0.26 / 0.50 / 0.43 % | OrcaFlex 2439.39 / 206.08 / 2057.86 / 2850.91 kN | D: force-blended EI = 0 step; the mean is unchanged |
+| One-hour Fourier amplitude, 90 s / 12 s | 0.83 / 2.10 % | 0.83 / 2.10 % | same; end force 0.27 / 1.14 % | OrcaFlex 228.57 / 178.80 kN | R |
 | Series-Kelvin cases | 12 recover stiffness; derivatives within 5e-6 | pass | pass | analytical, central differences | R |
 | Series-Kelvin 0.30 MBL ramp differences | 0.121 / 0.053 / 0.026 / 0.009 / < 0.001 % | same | same | MoorDyn | R |
 | Syrope residual, 14 cases | 0.70–1.16e-9 N | 0.70–1.16e-9 N | 0.70–1.16e-9 N | independent NumPy implementation | R |
@@ -69,7 +72,7 @@ inputs; **W** worse agreement or robustness with the defaults.
 | 800 m cable solved directly on the final mesh | folded equilibria | mesh sequencing reaches the branch | continuation on the final mesh reaches the same branch | — | D: continuation-first static route |
 | Equal-order quadrature curvature change | ≤ 0.0020 % | 0.0020 % | 0.0020 % | six-point rule | R |
 | Three-point axial rule, negative minimum 80 / 800 m | 56.15 / 5.81 kN | 56.15 / 5.81 kN | 56.15 / 5.81 kN | — | R |
-| Two-point axial rule | 937 / 820 kN; 800 m fails | 937 / 820 kN; 800 m converges (−280.5 kN) | same | — | F: the continuation route, also the fallback in paper mode, establishes the 800 m equilibrium |
+| Two-point axial rule | 937 / 820 kN; 800 m fails | −922.7 / −810.3 kN; 800 m converges (−264.4 kN) | same | — | F: the continuation route, also the fallback in paper mode, establishes the 800 m equilibrium; the values moved with the seabed anchor-end weight-moment fix (v0.1.0: −937 / −820 / −280.5 kN). The large spurious compression under under-integration stands |
 | Converged dynamic meshes, 80/200/800 m | 240 / 480 / 960 | 240 / 480 / 960 | 480 / 480 / 960 | tensile | D: with the force blend the 240-element 80 m mesh reaches −0.15 kN |
 | Dynamic continuous axial minima | 0.037 / 0.562 / 1.76 kN | 0.037 / 0.563 / 1.76 kN | 0.94 / 0.54 / 1.24 kN | tensile | F at 200 m (same fix as the 200 m subdivision row); D with the defaults |
 | Dynamic peak curvature | 0.10254 / 0.08844 / 0.03899 /m | 0.10254 / 0.08844 / 0.03899 /m | 0.10247 / 0.08844 / 0.03899 /m | OrcaFlex 0.10279 / 0.08823 / 0.03881 /m | D (80 m) |
@@ -92,11 +95,16 @@ inputs; **W** worse agreement or robustness with the defaults.
 | Regular-wave chain, mean / swing | 0.30 / 8.41 % | 0.30 / 8.41 % | same; `FairTen` 1.20 / 10.6 % | OrcaFlex effective tension | R |
 | Irregular-wave cable peak curvature | 0.215 % | 0.215 % | 0.215 % | OrcaFlex | R |
 | Irregular-wave hang-off tension mean/min/max | 0.192 / 0.186 / 0.108 % | 0.192 / 0.186 / 0.108 % | 0.214 / 0.198 / 0.158 % | OrcaFlex | D |
-| Slack-to-taut Δt_CFL; peaks at 0.5–20 ms | 3.155 ms; 10.2248 … 10.5068 MN | same | same | 0.5 ms solution | R |
-| Slack-to-taut changes; apparent order; 20 ms | 0.0048–2.7576 %; 2.69; 6.34 Δt_CFL | same | same | 0.5 ms solution | R |
+| Slack-to-taut Δt_CFL; peaks at 0.5–20 ms | 3.155 ms; 10.2248 … 10.5068 MN | same | 3.155 ms; 10.2246 … 10.3821 MN | 0.5 ms solution | D: force-blended EI = 0 step |
+| Slack-to-taut changes; apparent order; 20 ms | 0.0048–2.7576 %; 2.69; 6.34 Δt_CFL | same | 0.0010–1.5410 %; not defined; 6.34 Δt_CFL | 0.5 ms solution | D: see below the table |
 | 800 m curvature at 50 ms | 0.03899 /m | 0.03899 /m | 0.03899 /m | OrcaFlex 0.03881 /m | R |
 | Cable motion envelope at 0.05 s, 30 gated cases | all complete | 30 of 30 complete | 28 of 30 with plain steps; 30 of 30 with subdivision | — | W: see [Known difference](#known-difference) |
-| Mooring motion envelope at 0.1 s | subdivision only for the two most severe semitaut motions | subdivision for three semitaut motions (6 m/12 s, 10 m/14 s, 5 m/7 s) | same | — | X: the article's source gives the same three; all-chain needs none |
+| Mooring motion envelope at 0.1 s | subdivision only for the two most severe semitaut motions | subdivision for three semitaut motions (6 m/12 s, 10 m/14 s, 5 m/7 s) | a different set; severe-motion peaks changed | — | X: the article's source gives the same three; all-chain needs none. D with the defaults: see [Known difference](#known-difference) |
+
+With the default force blend the slack-to-taut peaks lie within 1.55 % of the 0.5 ms solution at
+every step from 0.5 to 20 ms (within 0.05 % up to 5 ms), without a monotone trend; both blends
+converge to the same 0.25 ms peak (10.2246 MN); the article's convergence order (2.69) refers to
+the configuration blend (paper mode).
 
 The table covers every result the article prints from a CableDyn calculation. Values derived
 only from reference codes are not listed: the MoorDyn-F native-mesh difference, its refinement
@@ -123,6 +131,22 @@ formerly NREL) subdivides such intervals. With it, all 30 gated cases and all
 six margin probes complete in both modes. The defaults subdivide 6 intervals in 5 cases, and
 paper mode 4 intervals in 4 cases. The solver is not broken, but under the article's
 single-step protocol the default scheme has less convergence margin.
+
+**Mooring motion envelope with the default force blend.** With the defaults, a different set of
+mooring motions needs step subdivision at the article's 0.1 s envelope step, and the peaks of the
+severe motions changed. Against converged 0.5 / 0.25 ms references (configuration blend = paper
+mode, force blend = defaults, both at 0.1 s):
+
+| Case | Reference | Configuration blend | Force blend |
+| --- | --- | --- | --- |
+| 200 m semitaut surge 10 m/14 s, anchor max | 2950–2975 kN | 8084 kN (+173 %) | 3584 kN (+21 %) |
+| 200 m semitaut surge 5 m/7 s, anchor max | 4208–4277 kN | 9042 kN (+113 %) | 5799 kN (+36 %) |
+| 80 m all-chain heave 5 m/7 s, fairlead max | 1724–1787 kN | 1723 kN (−2 %) | 1538 kN (−13 %) |
+| 80 m all-chain heave 5 m/7 s, anchor max | 1494–1585 kN | 1468 kN (−4 %) | 1246 kN (−19 %) |
+
+The snap is not resolved at 0.1 s, which the run notes. The force blend removes the spurious
+semitaut spikes but underestimates the all-chain heave peaks at that step. Confirm peak tensions
+with a smaller `dtM`.
 
 **Hang-off curvature near an unresolved boundary layer.** This is not an article result. At
 the 800 m hang-off node, where the article reports η_b = 1.63 and omits the bend moment, the
@@ -184,6 +208,18 @@ dynamic test programs use the default force blend. For paper mode, add
 `test_l3_lazywave_3d_dynamic`, `test_l3_lazywave_touchdown_dynamic`,
 `test_l4_lazywave_coupled`, `test_l1_hermite_beam_vibration` and
 `test_l1_hermite_energy_stability`.
+
+The tension-only (EI = 0) test programs use the default force blend as well. For paper mode, set
+`force_blend = .FALSE.` in the `GenAlphaConfig` passed to the EI = 0 step (for example
+`dcfg%force_blend = .FALSE.`, or `cfg%force_blend = .FALSE.`) before the march. This applies to
+`test_snap_load`, `test_l3_orcaflex_wave_dynamic`, `test_l3_longduration_mooring`,
+`test_l2_2_dynamic_parity`, `test_viscoelastic`, `test_syrope`, `test_l1_string` and
+`test_l1_energy_stability`. Deck runs (`test_l2_lozon80_mooring`, `test_l2_lozon200_semitaut`
+and the driver) take `False alpha_force_blend` from `OPTIONS`.
+
+**Toolchain.** Built with gfortran, the development source gives the same paper-mode values as
+v0.1.0 built with gfortran. One count depends on the toolchain: with gfortran the 800 m paper-mode
+run subdivides 0 of 1200 intervals (v0.1.0 as well), where the table records 1 of 1200.
 
 **Deck runs.** The static cable profiles use the example decks, which carry the article's
 refined meshes (1024, 952 and 1024 elements):
