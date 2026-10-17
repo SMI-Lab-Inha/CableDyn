@@ -426,7 +426,8 @@ Finite-EI cable controls
        earlier. On ``EI = 0`` lines ``False`` lets a segment that turns taut within a step carry
        the stretch extrapolated past the blended state, and lets a release create energy: on a
        light, axially stiff cable (80 kg/m, EA 8e8 N) under 3 m heave the fairlead peaks at
-       4.2 MN against 0.10 MN with ``True`` (see :doc:`theory`). On finite-EI lines the blended
+       4.2 MN against 0.10 MN with ``True`` at ``dtM = 2.5`` ms (converged finite-EI runs give
+       0.093 MN; see :doc:`theory`). On finite-EI lines the blended
        tangent vectors are shortened while the line rotates and raise the mean tension at large
        ``dtM``: on the Lozon Gulf of
        Mexico 80 m cable in 3 m surge the mean hang-off tension is 12511 / 10097 / 9507 / 9360 N at

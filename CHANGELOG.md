@@ -214,10 +214,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   polyester at 1.80 MN as before; the light cable stays at 0.092 / 0.106 MN at `dtM` 0.1 s and
   its largest segment tension at `dtM` 0.01 s moves from 0.107 to 0.095 MN. Its fairlead and
   anchor peaks at `dtM` 2.5 ms move from 0.099 / 0.091 to 0.102 / 0.119 MN, and on the stiff
-  seabed at `dtM` 0.05 s from 0.52 / 0.67 to 0.62 / 0.86 MN; the snap peaks of this light,
-  stiff cable keep rising as the step is refined (0.14 to 0.23 / 0.14 to 0.19 MN over seven
-  runs at 0.125 ms and 0.26 to 0.31 / 0.29 to 0.34 MN over four at 0.05 ms, with plain steps),
-  so none of these is a converged peak. Validation: the
+  seabed at `dtM` 0.05 s from 0.52 / 0.67 to 0.62 / 0.86 MN. None of these is a converged
+  peak: the undamped `EI = 0` cable has no converged snap peak (see the force-blend entry
+  below; converged finite-EI runs give 0.093 / 0.057 MN). On this undamped cable the sub-steps
+  resolve more of the segment rattle and can raise isolated spikes: at `dtM` 0.5 ms the anchor
+  peaks at 0.16 to 0.52 MN, depending on `rhoInf`, and its 5 ms averages at 0.12 to 0.21 MN
+  against 0.09 MN converged. With physical axial damping (`BA` 5.06e5 N·s) `auto` sub-steps
+  3 to 4 steps of that run and changes nothing; `ei0_substep_max` and `ei0_substep_angle` do
+  not change these runs. Validation: the
   Bergdahl matrix gives RMSE 1.59 N (1.58 N), MAPE 3.13 %, Pearson 0.993 and Lin concordance
   0.989, with mesh and time-step halving moving the cycle maxima by at most 0.53 % and 0.13 %
   (0.52 % and 0.19 %); the WD0050/A2 cell of the L2-2 parity moves within its recorded range
@@ -425,8 +429,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   work to the motion than its strain energy. Both happened silently at the default
   `rhoInf = 0.4`, at every `dtM` from 0.002 to 0.2 s, on realistic input: a light, axially stiff
   cable (80 kg/m, EA 8e8 N) under 3 m heave reported 4.2 MN at the fairlead and 3.4 MN at the
-  anchor (`dtM` 0.0025 s) and 20 MN at the anchor (`dtM` 0.1 s), against 0.1 to 0.18 MN at
-  `rhoInf = 0`, at `dtM` down to 0.25 ms and with a finite-EI model; the same cable in an `Hs`
+  anchor (`dtM` 0.0025 s) and 20 MN at the anchor (`dtM` 0.1 s), where converged finite-EI
+  runs of the same cable give 0.093 MN at the fairlead and 0.057 MN at the anchor; the same
+  cable in an `Hs`
   8 m JONSWAP sea 0.41 MN at the anchor against 0.043 MN; the shipped viscoelastic polyester in
   15 m surge 2.69 MN against 1.80 MN; a semi-taut chain–polyester leg 9.5 MN at the anchor
   against 4.6 MN; and a line on a stiff seabed failed the plausibility guard. The step now blends
@@ -452,8 +457,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   2750 times that with only the elastic share capped); a damped segment that ends taut beyond
   that band keeps the plain force blend. The seabed contact of
   a node that lifts off within a step is not capped (see the manual's theory page). At the
-  default `rhoInf` the reproducers now give 0.10 / 0.09 MN, 0.092 / 0.106 MN, 0.075 / 0.043 MN
-  and 1.80 MN, as their references, and the stiff-seabed line runs to completion; the
+  default `rhoInf` the light cable now peaks at 0.10 / 0.09 MN at `dtM` 0.0025 s and at 0.092 /
+  0.106 MN at 0.1 s, the same cable in the JONSWAP sea at 0.075 / 0.043 MN and the
+  viscoelastic polyester at 1.80 MN, as at 0.0025 s; the stiff-seabed line runs to completion.
+  The light-cable figures are not converged peaks. The undamped `EI = 0` deck has no converged
+  snap peak: the peak rises as `dtM` falls (0.32 to 0.46 MN at microsecond steps, also with an
+  explicit lumped-mass solver), as single segments rattle, and falls with mesh refinement at a
+  fixed `dtM`; its 20 ms averages converge to 0.083 / 0.047 MN, the slack-to-taut event, and
+  converged finite-EI runs give 0.093 MN at the fairlead and 0.057 MN at the anchor. On the
+  stiff seabed the `EI = 0` peak does not converge either (0.74 to 0.95 MN at coarse steps,
+  1.2 to 1.4 MN at 0.025 to 0.05 ms). The
   chain–polyester anchor snap peaks at 5.7 MN at `dtM` 0.05 s, a single-step peak (4.6 MN at
   0.0025 s) that the new snap note reports. On a linear element the scheme is unchanged, so taut
   lines keep their accuracy: every MoorDyn-C, OrcaFlex, analytic and experimental comparison that

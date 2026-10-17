@@ -598,7 +598,12 @@ Warnings and notes that do not stop a run
        over a segment: the peak is set by a single step. A 15 m surge of a semi-taut
        chain–polyester line peaks at 4.65 MN at ``dtM`` 0.05 s with the default sub-steps
        (5.7 MN with ``off ei0_substeps``) against 4.6 MN at 0.0025 s. The run is valid; confirm
-       design peaks with a smaller ``dtM``.
+       design peaks with a smaller ``dtM``. On a line without axial damping (``BA = 0``) the
+       snap peaks do not converge in time or mesh, as single segments rattle; a smaller ``dtM``
+       raises them, and the sub-steps of ``ei0_substeps auto`` can raise isolated spikes. Give
+       the line physical axial damping (``BA`` in N·s, not the per-segment damping-ratio form,
+       which changes with the mesh) or finite ``EI`` to obtain converged peaks (see
+       :doc:`modeling`).
    * - ``Warning: line ...: segment ... carried ... N at t = ... s for a single step, ... times
        the largest tension on the line one step before and after``
      - a non-physical tension spike: the tension of one segment (elastic, viscoelastic or

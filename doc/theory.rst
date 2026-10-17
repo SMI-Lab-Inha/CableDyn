@@ -1492,9 +1492,14 @@ element. The cap does not act on an element that ends above :math:`\alpha_f/(1 -
 every line that allows compression keep the force blend. In the slack-cable case above the
 internal forces created 2.7e8 J over 20 s with the configuration blend, 6.7e7 J with the force
 blend alone, 0.19 J with a cap on :math:`e_n - e_{n+1}` (the turn of the releasing segments) and
-4e-4 J (round-off) with the projected cap. The fairlead peak is 0.10 MN. The snap is not
-resolved in time: with the cap the peak ranges from 0.10 to 0.18 MN over :math:`\Delta t` from
-2.5 to 0.25 ms, against 0.13 to 0.19 MN at :math:`\rho_\infty = 0`. For a linear element the
+4e-4 J (round-off) with the projected cap. The fairlead peak is 0.10 MN at
+:math:`\Delta t` = 2.5 ms, which is not a converged peak. The undamped ``EI = 0`` deck has no
+converged snap peak: the peak rises as :math:`\Delta t` falls (0.32 to 0.46 MN at microsecond
+steps, also with an explicit lumped-mass solver), as single segments rattle, and falls with
+mesh refinement at a fixed step; its 20 ms averages converge to 0.083 MN at the fairlead and
+0.047 MN at the anchor, the slack-to-taut event, and converged finite-EI runs give 0.093 MN at
+the fairlead and 0.057 MN at the anchor (see :doc:`modeling`, snap loads on slack lines). For
+a linear element the
 force blend and the cap reduce to the configuration blend, so the linear spectral properties and
 the second-order accuracy are unchanged.
 

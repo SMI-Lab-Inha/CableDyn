@@ -5,8 +5,10 @@ PROGRAM test_ei0_slack_dynamics
   !! Tension-only (EI = 0) lines that go slack and snap taut, at the default rhoInf = 0.4:
   !!   1. A light, axially stiff cable (80 kg/m, EA 8e8 N, 115 x 2 m segments) under 3 m / 10 s
   !!      heave at dtM 0.1 s. The configuration-blended step reported 0.61 MN at the fairlead and
-  !!      20 MN at the anchor against about 0.1 MN (rhoInf 0 and small-step references); the
-  !!      force blend stays below 0.2 MN.
+  !!      20 MN at the anchor; the force blend stays below 0.2 MN. This undamped EI = 0 deck has
+  !!      no converged snap peak (it rises as dtM falls, to 0.32-0.46 MN at microsecond steps, as
+  !!      single segments rattle); converged finite-EI runs give 0.093 MN at the fairlead and
+  !!      0.057 MN at the anchor, so the bounds catch a spike or a lost snap, not a reference.
   !!   2. The same cable at dtM 0.01 s, where the force blend alone still fed a rattle of
   !!      single-step segment spikes (2.3 MN by 24 s) through the energy a release creates;
   !!      with the release cap every segment stays below 0.2 MN.
