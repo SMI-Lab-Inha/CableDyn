@@ -4154,7 +4154,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em ! a per-element law message (the kernels' bound)
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4825,7 +4825,7 @@ CONTAINS
     REAL(wp) :: d(3), ell, strain, u(3), c, line_max, tn
     REAL(wp), ALLOCATABLE :: law(:)
     LOGICAL :: fresh, laws
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     new_spike = .FALSE.
     IF (.NOT. model%initialized .OR. model%n_elem < 1) RETURN
