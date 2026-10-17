@@ -75,7 +75,7 @@ MODULE CableDyn
                                           CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_GetMovingPointMesh, &
                                           CD_AGG_Snapshot, CD_AGG_Restore, &
                                           CD_AGG_NMovingPoints, CD_AGG_NDynamicPoints, CD_AGG_Refresh_PointMesh, &
-                                          CD_AGG_NFailures, &
+                                          CD_AGG_NFailures, CD_AGG_Get_Substep_Counts, &
                                           CD_AGG_HasRigid6, CD_AGG_HasRod, &
                                           CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
                                           CD_AGG_Set_Rigid6_States, &
@@ -2147,6 +2147,7 @@ CONTAINS
       character(*), parameter :: RoutineName = 'CD_End'
       INTEGER(IntKi)          :: ErrStat2
       INTEGER                 :: hn_step, hn_resid, hn_solve, hn_am, hn_alloc, hn_tan
+      INTEGER                 :: sb_calls, sb_events, sb_max, sb_capped, sb_fallbacks
       REAL(wp)                :: ht_step, ht_resid, ht_eff, ht_solve, ht_am, ht_tan
       CHARACTER(ErrMsgLen)    :: ErrMsg2
 
@@ -2156,6 +2157,17 @@ CONTAINS
       IF (ALLOCATED(Inst)) THEN
          IF (m%CDInst >= 1 .AND. m%CDInst <= SIZE(Inst)) THEN
             IF (Inst(m%CDInst)%active) THEN
+               ! the rotation- and snap-resolved sub-steps of the EI=0 lines (ei0_substeps), as the
+               ! standalone driver reports them
+               CALL CD_AGG_Get_Substep_Counts( Inst(m%CDInst)%agg, sb_calls, sb_events, sb_max, sb_capped, &
+                                               sb_fallbacks )
+               IF (sb_events > 0 .OR. sb_fallbacks > 0) THEN
+                  CALL WrScr( '   CableDyn: ei0_substeps auto solved '//TRIM(Num2LStr(sb_events))//' of '// &
+                              TRIM(Num2LStr(sb_calls))//' EI = 0 line step(s) in sub-steps (at most '// &
+                              TRIM(Num2LStr(sb_max))//' per step); '//TRIM(Num2LStr(sb_capped))// &
+                              ' needed more than ei0_substep_max; '//TRIM(Num2LStr(sb_fallbacks))// &
+                              ' kept the whole step after a sub-step did not converge.' )
+               END IF
                IF (Inst(m%CDInst)%prof_enabled) THEN
                   CALL WrScr( '    CableDyn profile: init_s='// &
                               TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_init, DbKi)))// &

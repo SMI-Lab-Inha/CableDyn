@@ -21,6 +21,7 @@ MODULE CableDyn_System
                             CD_Get_Model_EndNodeTangent, CD_Set_Model_EndQuery, CD_Get_Model_EndQuery, &
                             CD_Update_Model_SegmentLength, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Interior_State, CD_Step_Model, &
+                            CD_Get_Model_Substep_Counts, &
                             CD_Calc_Model_CoupledLoads, CD_Recompute_Model_Acceleration, &
                             CD_Calc_Model_CoupledKinematicDerivatives, &
                             CD_Calc_Model_CoupledAccelDerivative, CD_Update_Model_CoupledAccelDerivative, &
@@ -46,6 +47,7 @@ MODULE CableDyn_System
   PUBLIC :: CD_SystemPointType
   PUBLIC :: CD_LineEndpointBinding
   PUBLIC :: CD_System_Fallback_Count
+  PUBLIC :: CD_Get_System_Substep_Counts
   PUBLIC :: CD_System_Fallback_Reset
   PUBLIC :: CD_System_Snapshot
   PUBLIC :: CD_System_Restore
@@ -1311,11 +1313,13 @@ CONTAINS
     CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
     !$OMP DO SCHEDULE(STATIC)
     DO i = 1, system%n_lines
+      ! the halves of a stall recovery (depth > 0) take their steps as given, as the rungs of
+      ! CD_Step_Model_Recovering do: no rotation- and snap-resolved sub-steps of sub-steps
       CALL CD_Step_Model(system%lines(i), dt, system%line_converged(i), system%line_stalled(i), &
                          system%line_iter(i), system%line_stat(i), system%line_msg(i), &
                          prescribed_q=system%lines(i)%q_prescribed_work, &
                          prescribed_v=system%lines(i)%v_prescribed_work, &
-                         prescribed_a=system%lines(i)%a_prescribed_work)
+                         prescribed_a=system%lines(i)%a_prescribed_work, as_given=depth > 0)
     END DO
     !$OMP END DO
     !$OMP END PARALLEL
@@ -2914,6 +2918,9 @@ CONTAINS
       system%lines(i)%q_rollback = system%lines(i)%q
       system%lines(i)%v_rollback = system%lines(i)%v
       system%lines(i)%a_rollback = system%lines(i)%a
+      ! the run audit's largest solver step rolls back too: a rolled-back (stalled) full step
+      ! must not count when its halves are what the line commits
+      system%lines(i)%audit_hmax_rollback = system%lines(i)%audit_hmax
       ! the viscoelastic dl_1 state advances with every committed line step, so
       ! it must roll back with q/v/a (a line that stepped can be rolled back
       ! when a sibling line or the coupled point solve fails)
@@ -2941,6 +2948,7 @@ CONTAINS
       system%lines(i)%q = system%lines(i)%q_rollback
       system%lines(i)%v = system%lines(i)%v_rollback
       system%lines(i)%a = system%lines(i)%a_rollback
+      system%lines(i)%audit_hmax = system%lines(i)%audit_hmax_rollback
       IF (system%lines(i)%has_viscoelastic) &
         system%lines(i)%ve_dl_1 = system%lines(i)%ve_dl_1_rollback
       IF (system%lines(i)%has_syrope) THEN
@@ -3179,6 +3187,24 @@ CONTAINS
       END BLOCK
     END IF
   END SUBROUTINE CD_System_Restore
+
+  SUBROUTINE CD_Get_System_Substep_Counts(system, calls, events, max_used, capped, fallbacks)
+    !! The rotation- and snap-resolved sub-stepping diagnostics of the EI=0 lines
+    !! (CD_Get_Model_Substep_Counts) summed over the lines (max_used: the largest count).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(OUT) :: calls, events, max_used, capped, fallbacks
+    INTEGER :: i, c, e, m, k, f
+    calls = 0; events = 0; max_used = 1; capped = 0; fallbacks = 0
+    IF (.NOT. ALLOCATED(system%lines)) RETURN
+    DO i = 1, SIZE(system%lines)
+      CALL CD_Get_Model_Substep_Counts(system%lines(i), c, e, m, k, f)
+      calls = calls + c
+      events = events + e
+      max_used = MAX(max_used, m)
+      capped = capped + k
+      fallbacks = fallbacks + f
+    END DO
+  END SUBROUTINE CD_Get_System_Substep_Counts
 
   PURE FUNCTION CD_System_Fallback_Count() RESULT(n)
     !! Subdivision-retry entries since the last CD_System_Fallback_Reset (see the

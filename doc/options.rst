@@ -356,7 +356,8 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
      - word
      - ``auto``; ``off`` with ``False alpha_force_blend``
      - ``auto`` or ``off``. ``auto``: a converged step of an ``EI = 0`` line in which a segment
-       that ends the step taut turned by more than ``ei0_substep_angle``, or a segment slack at
+       that ends the step taut (above 0.1 % of the largest step-start tension) turned by more
+       than ``ei0_substep_angle``, or a segment slack at
        the start of the step ended it above a quarter of the largest step-start tension, is
        solved again from the same committed state in ``max(4, ceil(turn/ei0_substep_angle))``
        equal sub-steps (at most ``ei0_substep_max``). The end motion inside the step follows
@@ -365,11 +366,13 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
        Lozon 80 m all-chain mooring turns by up to 6 deg per step in 5 m / 7 s heave, and both
        generalised-α blends then give snap-load peaks 10 to 20 % low; with ``auto`` they are 4 %
        and 8 % low on average, within 4 % of the converged run sampled at the same 0.1 s output
-       times, at 2 to 2.5 times the wall time of the plain steps on the severe cases (1.65 times
-       over the 20-case Lozon mooring envelope). ``off`` takes every step as given, as before
-       this option. Steps of the monolithic body
-       and point coupling (``monolithic bodyScheme``) are never sub-stepped. The standalone
-       driver reports the sub-stepped steps per line. See :doc:`theory`
+       times, at 1.6 to 2.5 times the wall time of the plain steps on the 5 m / 7 s and
+       10 m / 14 s motions (1.63 times over the 20-case Lozon mooring envelope). If a sub-step
+       does not converge, the plain step's own result is kept. ``off`` takes every step as
+       given, as before this option. Steps of the monolithic body and point coupling
+       (``monolithic bodyScheme``) are never sub-stepped, and the standalone driver notes it
+       once per run. The standalone driver reports the sub-stepped steps per line, and OpenFAST
+       and FAST.Farm runs report them at the end of the run. See :doc:`theory`
      - both (``EI = 0`` lines)
      - ``off ei0_substeps``
    * - ``ei0_substep_angle`` / ``ei0substepangle``

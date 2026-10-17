@@ -17862,6 +17862,14 @@ CONTAINS
     IF (mb%implicit .AND. mb%n_steps_imp > 0) THEN
       WRITE (*, '(A,F6.2,A,I0,A,I0)') '  Monolithic body/point step: mean outer iterations ', &
         REAL(mb%n_outer, wp)/REAL(mb%n_steps_imp, wp), ', max ', mb%max_outer, ', step halvings ', mb%n_subdiv
+      ! the junction Newton needs the nominal step's end reaction and tangent, so ei0_substeps
+      ! auto leaves these line steps whole (noted once per run)
+      IF (mb%has_sys) THEN
+        IF (ANY(mb%system%lines(:)%cfg%ei0_substeps == CD_EI0_SUBSTEPS_AUTO)) &
+          WRITE (*, '(A)') '  Note: ei0_substeps auto does not sub-step the EI = 0 lines of the monolithic '// &
+          'body/point step (it needs the end reaction and tangent of the whole step); reduce dtM to resolve '// &
+          'their rotation and snaps.'
+      END IF
     END IF
     CALL CD_Classify_Dynamic_Completion('multibody dynamic run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)

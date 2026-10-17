@@ -193,7 +193,14 @@ The effective tangent is `(1 − α_m)/(β Δt²) M + (1 − α_f) K_q +
 1e-14, 30 iterations, 12 backtracks. A non-converged step, or on the Hermite path
 an under-resolved one, is repeated by internal subdivision (4, 16, … up to
 `recovery_max_substeps`) along a C² quintic boundary trajectory that ends on the
-host time.
+host time. On `EI = 0` lines `CD_Step_Model` also re-solves a converged step in
+`max(4, ceil(turn/ei0_substep_angle))` sub-steps on the same trajectory when a
+taut segment turned by more than `ei0_substep_angle` or a slack segment snapped
+taut (`ei0_substeps auto`, the default; at most `ei0_substep_max`). It restores
+the committed kinematics and constitutive and friction states first and keeps
+the plain step when a sub-step fails. The sub-steps of a recovered step, the
+halves of a line-system step halved by `CD_Step_System`, and the monolithic
+body/point step are taken as given.
 
 ### Bodies, rods, and points
 

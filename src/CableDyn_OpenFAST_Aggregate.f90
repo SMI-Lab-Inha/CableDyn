@@ -72,7 +72,8 @@ MODULE CableDyn_OpenFAST_Aggregate
                                  CD_Rod_ScatterHostPoints, CD_Rod_HostWrench, CD_Rod_Stage, CD_Rod_Unstage, &
                                  CD_Deck_Range_Sample_Aggregate, CD_Deck_Range_Write
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
-  USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_Get_System_Line_State, &
+  USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
+                             CD_Get_System_Line_State, &
                              CD_Update_System_Line_SegmentLength, &
                              CD_Update_System_Line_Hydro_Fields, CD_SYSTEM_OK, &
                              CD_System_NHydroPoints, CD_Get_System_HydroPoint_Positions, &
@@ -102,6 +103,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   PUBLIC :: CD_AGG_CalcOutput
   PUBLIC :: CD_AGG_End
   PUBLIC :: CD_AGG_NFailures
+  PUBLIC :: CD_AGG_Get_Substep_Counts
   PUBLIC :: CD_AGG_Get_Failure_Flags, CD_AGG_Set_Failure_Flags
   PUBLIC :: CD_AGG_NCtrlChans, CD_AGG_Apply_LineControl
   PUBLIC :: CD_AGG_IsInitialized
@@ -1759,6 +1761,18 @@ CONTAINS
     n = 0
     IF (ALLOCATED(self%failures)) n = SIZE(self%failures)
   END FUNCTION CD_AGG_NFailures
+
+  SUBROUTINE CD_AGG_Get_Substep_Counts(self, calls, events, max_used, capped, fallbacks)
+    !! The rotation- and snap-resolved sub-stepping diagnostics of the EI=0 lines of the
+    !! aggregate (CD_Get_System_Substep_Counts; all zero without EI=0 lines): line steps
+    !! examined, solved in sub-steps (max_used the largest count), beyond ei0_substep_max, and
+    !! kept the plain step's result after a sub-step failed.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    INTEGER, INTENT(OUT) :: calls, events, max_used, capped, fallbacks
+    calls = 0; events = 0; max_used = 1; capped = 0; fallbacks = 0
+    IF (self%has_sys) CALL CD_Get_System_Substep_Counts(self%sys%fast%system, calls, events, max_used, capped, &
+                                                        fallbacks)
+  END SUBROUTINE CD_AGG_Get_Substep_Counts
 
   SUBROUTINE CD_AGG_End(self, ErrStat, ErrMsg)
     !! Release all owned resources. Idempotent by design (CD_FMF_End / CD_HFMF_End are safe

@@ -1658,19 +1658,23 @@ partly subdivided state is ever committed.
 
 **Rotation- and snap-resolved sub-steps** (``ei0_substeps auto``, the default). A converged
 ``EI = 0`` step is measured against its committed start: the largest chord turn
-:math:`\theta` of a segment that ends the step taut, and whether a segment slack at the start
-ends above a quarter of the largest step-start tension :math:`T_\text{max}` (tensions from the
-static ``EA``). When :math:`\theta` exceeds ``ei0_substep_angle``
+:math:`\theta` of a segment that ends the step above :math:`10^{-3}\,T_\text{max}`, the
+largest step-start tension (tensions from the static ``EA`` and the step's unstretched
+lengths), and whether a segment slack at the start ends above :math:`T_\text{max}/4`. A
+segment slack at the step start counts for the turn: counting only segments taut at both ends
+of the step left the Lozon semitaut anchor peaks (below) up to 5 % high on average and up to
+25 % high in single runs. When :math:`\theta` exceeds ``ei0_substep_angle``
 :math:`\theta_s` (default 1°), or such a snap occurred, the interval is solved again from the
 same committed state, constitutive and friction states included, in
 :math:`n = \max(4, \lceil\theta/\theta_s\rceil)` equal sub-steps, at most ``ei0_substep_max``
 (default 16), with the prescribed motion on the quintic trajectory of the recovery above and
 the last sub-step on the target state. The trial step under-turns a line whose rotation it does
 not resolve, so the sub-stepped interval is measured again; when its turn needs more sub-steps
-it is solved once more with them. If a sub-step does not converge, the plain step is solved
-again and kept. The decision uses only the committed state and the step inputs, so a restart
-repeats it, and the host time grid, output and coupling times are unchanged. Every route that
-steps ``EI = 0`` lines uses it (standalone lines and line systems, OpenFAST, FAST.Farm and the
+it is solved once more with them. If a sub-step does not converge, the plain step's own
+result is kept. A step recovered after a stall (above) and the halves of a line-system step
+halved after a failure take their sub-steps as given. The decision uses only the committed
+state and the step inputs, so a restart repeats it, and the host time grid, output and
+coupling times are unchanged. Every route that steps ``EI = 0`` lines uses it (standalone lines and line systems, OpenFAST, FAST.Farm and the
 C API), except the monolithic body and point coupling, whose junction Newton needs the end
 reaction and condensed end tangent of the nominal step; ``off`` takes every step as given, and
 ``False alpha_force_blend`` turns it off unless the deck sets it.
@@ -1690,7 +1694,8 @@ Two or three sub-steps of a step that turned by 1 to 3° left those anchor peaks
 average (up to 22 %); four bring them within 3 %, hence the minimum. Resolving the sub-steps
 of a step recovered after a stall as well left them 9 % high, so the recovery takes its sub-steps
 as given. Over the 20 motions of the Lozon mooring envelope at ``dtM`` 0.1 s the march takes
-1.65 times as long as with plain steps, 2 to 2.5 times on the severe motions.
+1.63 times as long as with plain steps, 1.6 to 2.5 times on the 5 m / 7 s and 10 m / 14 s
+motions.
 
 **Step size.** Being implicit, the scheme is not bound by the explicit axial-wave limit. In the
 snap-load verification a slack line snapping to about 10 MN integrates stably at
