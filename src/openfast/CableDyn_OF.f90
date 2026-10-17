@@ -1716,6 +1716,10 @@ CONTAINS
       REAL(SiKi)                :: wave_fv(3), wave_fa(3), wave_famcf(3)
       REAL(wp)                  :: profile_fv(3), steady_fv_wp(3), grid_z
       REAL(SiKi)                :: steady_fv(3), grid_fv(3), grid_weight
+      ! the SeaState free-surface elevation as sampled at each node (kept also when the host
+      ! waves are off and fx_wl takes the still-water level): SeaState's Wheeler stretching
+      ! interpolates the current at the depth mapped with it
+      REAL(wp), ALLOCATABLE     :: wl_sampled(:)
       CHARACTER(512)            :: em
       INTEGER(IntKi)            :: ErrStat2
       CHARACTER(ErrMsgLen)      :: ErrMsg2
@@ -1741,6 +1745,7 @@ CONTAINS
                           ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
+      ALLOCATE (wl_sampled(inst_e%nfluid))
       DO i = 1, inst_e%nfluid
          IF (.NOT. inst_e%agg%host_wave_enabled .AND. .NOT. inst_e%agg%host_current_enabled) THEN
             ! An explicit WaterKin file may disable both host components even
@@ -1757,6 +1762,7 @@ CONTAINS
             CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
             IF (ErrStat >= AbortErrLev) RETURN
          END IF
+         wl_sampled(i) = REAL(zeta, wp)
          steady_fv = 0.0_SiKi
          IF (nodeInWater /= 0_IntKi .AND. &
              (.NOT. inst_e%agg%host_wave_enabled .OR. .NOT. inst_e%agg%host_current_enabled)) THEN
@@ -1839,7 +1845,7 @@ CONTAINS
       ! elevations), at Init (the static equilibrium) and then every mooring step until the one
       ! warning has been issued.
       IF (.NOT. inst_e%grid_warned) THEN
-         CALL check_wavefield_grid( inst_e, p%WaveField, t_sample, init_call, ErrStat2, ErrMsg2 )
+         CALL check_wavefield_grid( inst_e, p%WaveField, t_sample, init_call, wl_sampled, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       END IF
       CALL CD_AGG_SetFluidFields( inst_e%agg, inst_e%fx_vel, inst_e%fx_acc, inst_e%fx_wl, es, em, &
@@ -1850,7 +1856,7 @@ CONTAINS
    END SUBROUTINE sample_wavefield
 
 !----------------------------------------------------------------------------------------------------------------------------------
-   SUBROUTINE check_wavefield_grid( inst_e, wf, t_sample, at_init, ErrStat, ErrMsg )
+   SUBROUTINE check_wavefield_grid( inst_e, wf, t_sample, at_init, wl_sampled, ErrStat, ErrMsg )
       !! Warn, once per run, when sampling nodes lie outside the SeaState wave-kinematics grid.
       !! The volume grid spans X_HalfWidth and Y_HalfWidth about the origin of the global frame
       !! the nodes are sampled in (FAST.Farm runs in still water and never samples) and Z_Depth
@@ -1882,6 +1888,7 @@ CONTAINS
       TYPE(SeaSt_WaveFieldType), INTENT(IN   ) :: wf
       REAL(DbKi),                INTENT(IN   ) :: t_sample
       LOGICAL,                   INTENT(IN   ) :: at_init
+      REAL(wp),                  INTENT(IN   ) :: wl_sampled(:)   !< SeaState elevation as sampled per node
       INTEGER(IntKi),            INTENT(  OUT) :: ErrStat
       CHARACTER(*),              INTENT(  OUT) :: ErrMsg
 
@@ -1936,11 +1943,13 @@ CONTAINS
          END DO
          IF (check_z) THEN
             ! SeaState interpolates at the node depth, or under Wheeler stretching (WaveStMod 3) at
-            ! the depth mapped linearly from [-EffWtrDpth, wave elevation] to [-EffWtrDpth, 0]
+            ! the depth mapped linearly from [-EffWtrDpth, wave elevation] to [-EffWtrDpth, 0] with
+            ! the elevation it sampled -- also for the current of a current-only host mode, whose
+            ! fx_wl is the still-water level
             zq = inst_e%fx_xyz(3, i)
-            IF (waves .AND. wf%WaveStMod == 3_IntKi) THEN
+            IF (wf%WaveMod /= WaveMod_None .AND. wf%WaveStMod == 3_IntKi) THEN
                dep = REAL(wf%EffWtrDpth, wp)
-               IF (dep + inst_e%fx_wl(i) > 0.0_wp) zq = MIN(dep*(dep + zq)/(dep + inst_e%fx_wl(i)) - dep, 0.0_wp)
+               IF (dep + wl_sampled(i) > 0.0_wp) zq = MIN(dep*(dep + zq)/(dep + wl_sampled(i)) - dep, 0.0_wp)
             END IF
             ex = zbot - zq
             IF (ex > tol_z) THEN
