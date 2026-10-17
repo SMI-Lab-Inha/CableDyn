@@ -666,6 +666,13 @@ def test_unknown_scalar_option_keyword_fails_closed(tmp_path):
         ("maybe", "alpha_force_blend", "native boolean"),
         ("relaxed", "cable_statics", "continuation or sequenced"),
         ("nodal", "OutputRecovery", "equilibrium or element"),
+        ("on", "ei0_substeps", "auto or off"),
+        ("0", "ei0_substep_angle", r"\(0, 90\] deg"),
+        ("91", "ei0SubstepAngle", r"\(0, 90\] deg"),
+        ("NaN", "ei0_substep_angle", r"\(0, 90\] deg"),
+        ("1", "ei0_substep_max", r"integer in \[2, 1024\]"),
+        ("2.5", "ei0_substep_max", r"integer in \[2, 1024\]"),
+        ("1025", "ei0SubstepMax", r"integer in \[2, 1024\]"),
     ],
 )
 def test_invalid_scalar_option_values_fail_closed(tmp_path, value, keyword, message):
@@ -741,6 +748,12 @@ def test_zero_e_exponent_waterkin_mode_is_accepted(tmp_path):
         "sequenced cableStatics",
         "equilibrium OutputRecovery",
         "element output_recovery",
+        "auto ei0_substeps",
+        "off ei0Substeps",
+        "0.5 ei0_substep_angle",
+        "90 ei0SubstepAngle",
+        "2 ei0_substep_max",
+        "1024 ei0SubstepMax",
     ],
 )
 def test_native_scalar_option_vocabulary_is_accepted(tmp_path, row):

@@ -353,6 +353,40 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
        recovered intervals and the largest subdivision count used
      - both
      - ``1024 recovery_max_substeps``
+   * - ``ei0_substeps`` / ``ei0substeps``
+     - word
+     - ``auto``; ``off`` with ``False alpha_force_blend``
+     - ``auto`` or ``off``. ``auto``: a converged step of an ``EI = 0`` line in which a segment
+       that ends the step taut turned by more than ``ei0_substep_angle``, or a segment slack at
+       the start of the step ended it above a quarter of the largest step-start tension, is
+       solved again from the same committed state in ``max(4, ceil(turn/ei0_substep_angle))``
+       equal sub-steps (at most ``ei0_substep_max``). The end motion inside the step follows
+       the C2 quintic of the recovering step and the last sub-step lands on the given end state;
+       the output and coupling times are unchanged. At ``dtM = 0.1`` s a taut segment of the
+       Lozon 80 m all-chain mooring turns by up to 6 deg per step in 5 m / 7 s heave, and both
+       generalised-α blends then give snap-load peaks 10 to 20 % low; with ``auto`` they are 4 %
+       and 8 % low on average, within 4 % of the converged run sampled at the same 0.1 s output
+       times, at 2 to 2.5 times the wall time of the plain steps on the severe cases (1.65 times
+       over the 20-case Lozon mooring envelope). ``off`` takes every step as given, as before
+       this option. Steps of the monolithic body
+       and point coupling (``monolithic bodyScheme``) are never sub-stepped. The standalone
+       driver reports the sub-stepped steps per line. See :doc:`theory`
+     - both (``EI = 0`` lines)
+     - ``off ei0_substeps``
+   * - ``ei0_substep_angle`` / ``ei0substepangle``
+     - real, deg
+     - ``1.0``
+     - finite, in ``(0, 90]``. Largest chord turn of a taut segment in one step before
+       ``ei0_substeps auto`` sub-steps it
+     - both (``EI = 0`` lines)
+     - ``1.0 ei0_substep_angle``
+   * - ``ei0_substep_max`` / ``ei0substepmax``
+     - integer, –
+     - ``16``
+     - integer from 2 to 1024. Most sub-steps ``ei0_substeps auto`` takes for one step; a step
+       whose turn needs more is solved in this many, and the run notes it
+     - both (``EI = 0`` lines)
+     - ``16 ei0_substep_max``
 
 Finite-EI cable controls
 ------------------------
@@ -398,7 +432,8 @@ Finite-EI cable controls
        (``True``) or 0.1 deg (``False``) in one step. A dynamic run with a torsional line
        (``END CONNECTIONS`` ``TorsStiffness`` at both ends) needs ``True``. The lines the raw C
        API builds without a deck (``CableDyn_InitLine``, ``CableDyn_InitLines``) always use
-       ``True``: their only integrator setting is ``rho_inf`` (:doc:`capi`)
+       ``True``: their only integrator setting is ``rho_inf`` (:doc:`capi`). ``False`` also
+       turns ``ei0_substeps`` off unless the deck sets it
      - standalone and coupled (finite-EI and ``EI = 0`` lines)
      - ``False alpha_force_blend``
    * - ``cable_statics`` / ``cablestatics``

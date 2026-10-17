@@ -168,6 +168,51 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- Tension-only (`EI = 0`) lines resolve fast segment rotation and slack-to-taut snaps by
+  sub-stepping, on by default (new OPTIONS `ei0_substeps auto|off`, `ei0_substep_angle`
+  (default 1°) and `ei0_substep_max` (default 16)). A converged step in which a segment that
+  ends it taut turned by more than `ei0_substep_angle`, or a segment slack at its start ends it
+  above a quarter of the largest step-start tension, is solved again from the same committed
+  state in `max(4, ceil(turn/angle))` equal sub-steps, at most `ei0_substep_max`, with the end
+  motion on the quintic of the recovering step and the last sub-step on the given end state;
+  output and coupling times are unchanged. At `dtM` 0.1 s a taut segment of the Lozon 80 m
+  all-chain mooring turns by up to 6° per step in 5 m / 7 s heave, and the snap-load peaks of
+  both generalised-α blends came out 10 to 20 % low. The release cap was not the cause: it acts
+  in 0.3 % of the element steps, never within 0.5 s of a peak, and the cycle maxima with and
+  without it agree to within 1 %; the peaks followed the algorithmic damping (28 and 31 % low at
+  `rhoInf` 0, 10 and 40 % high at 0.6). Over seven runs whose amplitude differs by up to 3e-4,
+  against 0.5 and 0.25 ms runs, the fairlead and anchor maxima move from 15 and 17 % low to 4 and
+  8 % low (the configuration blend of 0.1.1 gave 10 and 18 % low), and the anchor maxima of
+  the 200 m semitaut mooring in 10 m / 14 s and 5 m / 7 s surge from 16 and 26 % high to 1.4
+  and 2.6 % low. A single run at that step varies by 15 to 20 points, so a single comparison
+  can make either blend look accurate. The decision depends only on the committed state and the
+  step inputs, so restarts repeat it; a sub-step that does not converge returns the plain
+  step. It applies on every route that steps `EI = 0` lines (standalone lines and line systems,
+  OpenFAST, FAST.Farm and the C API, whose raw lines always take it) except the monolithic body
+  and point coupling, which needs the end reaction and tangent of the nominal step. `False
+  alpha_force_blend` (paper mode) turns it off unless the deck sets it, so the paper
+  reproduction is unchanged. The standalone driver reports the sub-stepped steps per line, and
+  its segment-turn note now measures the turn per solver step and states that peaks come out 10
+  to 20 % low near 6° per step. Over the shipped examples 19 of the 21 `EI = 0` dynamic decks
+  are unchanged bit for bit; in the two `als_volturnus` line-break decks the pre-failure anchor
+  snap at 250 s, a single-step peak at `dtM` 0.05 s, moves from 2.145 to 1.918 MN (1.963 MN
+  converged) and from 2.262 to 2.158 MN (2.334 MN converged), with the other tension
+  statistics within 0.02 %. The 20-run Lozon mooring envelope at `dtM` 0.1 s takes 1.65 times
+  as long (at most 2.6 times; the steps that do not trigger cost nothing extra), and the
+  examples whose steps never trigger run as before. Of the reproducers of the force-blend
+  entry below, the semi-taut chain–polyester leg in 15 m surge now peaks at 4.65 MN at the
+  anchor at `dtM` 0.05 s (5.74 MN before, 4.6 MN at 0.0025 s), the Syrope line at 1.82 MN
+  (1.64 MN before, 1.78 MN at 1 and 2.5 ms), the lightly damped viscoelastic light cable at
+  0.092 MN (0.085 MN before, 0.082 to 0.095 MN at 0.5 to 2.5 ms) and the shipped viscoelastic
+  polyester at 1.80 MN as before; the light cable stays at 0.092 / 0.106 MN at `dtM` 0.1 s and
+  its largest segment tension at `dtM` 0.01 s moves from 0.107 to 0.095 MN. Validation: the
+  Bergdahl matrix gives RMSE 1.59 N (1.58 N), MAPE 3.13 %, Pearson 0.993 and Lin concordance
+  0.989, with mesh and time-step halving moving the cycle maxima by at most 0.53 % and 0.13 %
+  (0.52 % and 0.19 %); the WD0050/A2 cell of the L2-2 parity moves within its recorded range
+  (largest OrcaFlex summary difference 0.091 to 0.093, MoorDyn-C metric 0.078 to 0.076); the
+  other L2-2 cells, the one-hour VolturnUS-S record, the L3-2 regular-wave comparison and the
+  snap-load verification are unchanged bit for bit (the latter two step the generalised-α
+  kernel directly). `off ei0_substeps` gives the previous results bit for bit.
 - Finite-EI node tension, curvature and bend moment are recovered from nodal equilibrium. The
   `Ten<L>N<J>`, `Curv<L>N<J>` and `BendMom<L>N<J>` channels, the `Tension`, `Curvature` and
   `BendMoment` columns of the static profile and the range graph, and the `.t.out` segment

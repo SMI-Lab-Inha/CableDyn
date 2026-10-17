@@ -1524,7 +1524,9 @@ segments (the snap is not resolved at that step, so the peak depends on round-of
 compilers and platforms give other values) and at 0.145 MN without it, against 0.082 to
 0.095 MN at :math:`\Delta t` from 0.5 to 2.5 ms. A taut Syrope line in 4 m
 surge that goes slack peaks at 1.64 MN at 0.1 s, against 1.78 MN at 1 and 2.5 ms, with or
-without the cap.
+without the cap. These figures take every step as given (``off ei0_substeps``); with the
+rotation- and snap-resolved sub-steps of the default (below) the two lines peak at 0.092 MN and
+1.82 MN.
 
 An elastic segment with axial damping (``BA``) also keeps :math:`\alpha_f T_{d,n}` along
 :math:`\mathbf{t}_n`, :math:`T_{d,n}` the tension of its dashpot at :math:`t_n`. A segment that
@@ -1654,6 +1656,42 @@ the interval-start and target position, velocity, and acceleration. If the halve
 complete the interval, the interval-start state is restored and the full step is re-run, so no
 partly subdivided state is ever committed.
 
+**Rotation- and snap-resolved sub-steps** (``ei0_substeps auto``, the default). A converged
+``EI = 0`` step is measured against its committed start: the largest chord turn
+:math:`\theta` of a segment that ends the step taut, and whether a segment slack at the start
+ends above a quarter of the largest step-start tension :math:`T_\text{max}` (tensions from the
+static ``EA``). When :math:`\theta` exceeds ``ei0_substep_angle``
+:math:`\theta_s` (default 1°), or such a snap occurred, the interval is solved again from the
+same committed state, constitutive and friction states included, in
+:math:`n = \max(4, \lceil\theta/\theta_s\rceil)` equal sub-steps, at most ``ei0_substep_max``
+(default 16), with the prescribed motion on the quintic trajectory of the recovery above and
+the last sub-step on the target state. The trial step under-turns a line whose rotation it does
+not resolve, so the sub-stepped interval is measured again; when its turn needs more sub-steps
+it is solved once more with them. If a sub-step does not converge, the plain step is solved
+again and kept. The decision uses only the committed state and the step inputs, so a restart
+repeats it, and the host time grid, output and coupling times are unchanged. Every route that
+steps ``EI = 0`` lines uses it (standalone lines and line systems, OpenFAST, FAST.Farm and the
+C API), except the monolithic body and point coupling, whose junction Newton needs the end
+reaction and condensed end tangent of the nominal step; ``off`` takes every step as given, and
+``False alpha_force_blend`` turns it off unless the deck sets it.
+
+At ``dtM`` 0.1 s a taut segment of the Lozon 80 m all-chain mooring turns by up to 6° per step
+under 5 m / 7 s heave. Over seven runs whose heave amplitude differs by up to
+:math:`3\times10^{-4}` (the snap peaks at that step vary by 15 to 20 points from one run to the
+next), the fairlead and anchor maxima are then 15 % and 17 % below a 0.25 ms run with the force
+blend and 10 % and 18 % below it with the configuration blend; the release cap acts in 0.3 % of
+the element steps, never within 0.5 s of a peak, and removing it changes the cycle maxima by less
+than 1 %. The peaks follow the algorithmic damping instead: 28 % and 31 % low at
+:math:`\rho_\infty = 0`, 10 % and 40 % high at 0.6. With ``auto`` they are 4 % and 8 % low
+(1 % high and 4 % low against the reference sampled on the same 0.1 s output grid), and the
+anchor maxima of the 200 m semitaut mooring in 10 m / 14 s and 5 m / 7 s surge, 16 % and 26 %
+high taken as given, are within 3 %.
+Two or three sub-steps of a step that turned by 1 to 3° left those anchor peaks 8 % high on
+average (up to 22 %); four bring them within 3 %, hence the minimum. Resolving the sub-steps
+of a step recovered after a stall as well left them 9 % high, so the recovery takes its sub-steps
+as given. Over the 20 motions of the Lozon mooring envelope at ``dtM`` 0.1 s the march takes
+1.65 times as long as with plain steps, 2 to 2.5 times on the severe motions.
+
 **Step size.** Being implicit, the scheme is not bound by the explicit axial-wave limit. In the
 snap-load verification a slack line snapping to about 10 MN integrates stably at
 :math:`\Delta t = 20\,\mathrm{ms}`, well above the explicit limit of 3.2 ms, with the peak
@@ -1662,13 +1700,18 @@ response of interest and, for explicitly integrated points and bodies (below), t
 stability limit. The standalone driver audits every ``EI = 0`` line on the initial state and at
 each output step, and reports at the end of the run:
 
-- the largest turn of the chord of a taut segment in one step. Above 1 deg it prints a note:
-  against a 3.125 ms reference on chain catenaries under 5 m heave, 10 m surge and 15 m sway
-  and on a light laid cable under 10 m sway, the mean and standard deviation of the fairlead
-  tension err by 0.9 % at 1.2 deg per step (sway, standard deviation), and by 0.6 % at
-  1.4 deg and 1.3 % at 2.9 deg (heave, mean), in proportion with the turn;
+- the steps ``ei0_substeps auto`` solved in sub-steps, with the largest count, those that needed
+  more than ``ei0_substep_max``, and those that kept the plain step;
+- the largest turn of the chord of a taut segment in one solver step (the sub-steps of a
+  sub-stepped or recovered step count as steps). Above 1 deg it prints a note (with ``auto``
+  above 1.1 times the larger of 1 deg and ``ei0_substep_angle``): against a 3.125 ms reference
+  on chain catenaries under 5 m heave, 10 m surge and 15 m sway and on a light laid cable under
+  10 m sway, the mean and standard deviation of the fairlead tension err by 0.9 % at 1.2 deg per
+  step (sway, standard deviation), and by 0.6 % at 1.4 deg and 1.3 % at 2.9 deg (heave, mean),
+  in proportion with the turn, and at about 6 deg per step snap-load peaks come out 10 to 20 %
+  low (above);
 - segments that go from slack to taut above the initial tension in one step while the axial
-  wave crosses a segment more than once per step (:math:`\Delta t\,c/l_0 > 1`,
+  wave crosses a segment more than once per solver step (:math:`\Delta t\,c/l_0 > 1`,
   :math:`c = \sqrt{EA/m}` with the dynamic stiffness of the segment, :math:`EA_D` of a viscoelastic
   segment and :math:`\alpha + \beta T` of a Syrope one): the snap peaks are then not resolved in
   time, and the note asks for a confirmation at a smaller ``dtM``;

@@ -45,6 +45,9 @@ True      alpha_force_blend - Generalised-alpha force blend, finite-EI and EI=0 
 False     tensile_safety   - Element-mean axial-force audit {False; warn; True=reject} [default: False]
 2.0e-6    tensile_strain_tolerance - Dynamic audit strain band [default: 2.0e-6]
 1024      recovery_max_substeps - Internal dynamic-step recovery ceiling {4..65536} [default: 1024]
+auto      ei0_substeps     - EI=0 sub-steps for segment rotation and slack-taut snaps {auto; off} [default: auto; off with False alpha_force_blend]
+1.0       ei0_substep_angle - Largest taut-segment turn per EI=0 step before sub-stepping (deg) {0<angle<=90} [default: 1.0]
+16        ei0_substep_max  - Largest number of EI=0 rotation sub-steps per step {integer 2..1024} [default: 16]
 4         axial_quadrature_order   - Finite-EI axial Gauss order {integer 1..6} [default: 4]
 4         bending_quadrature_order - Finite-EI bending Gauss order {integer 1..6} [default: 4]
 dynamic_solver 1.0e-8 1.0e-14 30 12 - Relative tolerance, absolute tolerance, max iterations, backtracks [defaults shown]
@@ -106,6 +109,7 @@ none      waves             - Wave model and parameters (m, s, deg) {none; airy;
 --   RangeStart = range_start
 --   cable_load_feedback = cableLoadFeedback; tensile_safety = tensileSafety
 --   tensile_strain_tolerance = tensileStrainTolerance; recovery_max_substeps = recoveryMaxSubsteps
+--   ei0_substeps = ei0Substeps; ei0_substep_angle = ei0SubstepAngle; ei0_substep_max = ei0SubstepMax
 --   axial_quadrature_order = axialQuadratureOrder = axial_quadrature
 --   bending_quadrature_order = bendingQuadratureOrder = bending_quadrature
 --   waves = wave; WaterKin = WaveKin

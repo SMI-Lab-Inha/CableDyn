@@ -51,7 +51,7 @@ MODULE CableDyn_DeckDriver
   USE CableDyn_Syrope, ONLY: CD_SYROPE_WC_LINEAR, CD_SYROPE_WC_QUADRATIC, CD_SYROPE_WC_EXP, &
                              CD_SyropeType, CD_Syrope_Init, CD_Syrope_End, &
                              CD_Syrope_Static_Tension, CD_Syrope_Slow_For_Tension, CD_SYROPE_OK
-  USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_DYN_OK
+  USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_DYN_OK, CD_EI0_SUBSTEPS_OFF, CD_EI0_SUBSTEPS_AUTO
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Init_Line_Model, CD_End_Model, CD_Model_NCoupledDOF, CD_Model_NDOF, &
                             CD_Get_Model_CoupledDofs, CD_Get_Model_State, CD_Get_Model_Tension, &
                             CD_Get_Model_EndForces, &
@@ -606,6 +606,12 @@ MODULE CableDyn_DeckDriver
     ! Generalised-alpha blend of the finite-EI dynamics (alpha_force_blend): force blend
     ! (default) or the configuration blend f_int(q_alpha_f).
     LOGICAL  :: alpha_force_blend = CD_HC_FORCE_BLEND_DEFAULT
+    ! Rotation- and snap-resolved sub-stepping of the EI=0 lines (ei0_substeps): -1 not set
+    ! (auto with the force blend, off with False alpha_force_blend), else CD_EI0_SUBSTEPS_OFF
+    ! or CD_EI0_SUBSTEPS_AUTO; the turn per step it allows (deg) and its sub-step cap.
+    INTEGER  :: ei0_substeps = -1
+    REAL(wp) :: ei0_substep_angle = 1.0_wp
+    INTEGER  :: ei0_substep_max = 16
     ! Finite-EI static route order (cable_statics): 'continuation' (default) solves the
     ! catenary-seeded EI continuation first and the mesh-sequenced route as its fallback;
     ! 'sequenced' runs the mesh-sequenced route first.
@@ -7632,6 +7638,13 @@ CONTAINS
     dynamic_cfg%armijo_max_backtracks = opts%dynamic_backtracks
     dynamic_cfg%modified_newton = opts%dynamic_modified_newton
     dynamic_cfg%force_blend = opts%alpha_force_blend
+    ! ei0_substeps not set: auto with the force blend; the configuration blend (paper mode)
+    ! takes every step as given, as the article did
+    dynamic_cfg%ei0_substeps = opts%ei0_substeps
+    IF (opts%ei0_substeps < 0) dynamic_cfg%ei0_substeps = MERGE(CD_EI0_SUBSTEPS_AUTO, CD_EI0_SUBSTEPS_OFF, &
+                                                                opts%alpha_force_blend)
+    dynamic_cfg%ei0_substep_angle = opts%ei0_substep_angle
+    dynamic_cfg%ei0_substep_max = opts%ei0_substep_max
     CALL CD_Build_Line_Mesh(secs, lts, .TRUE., conn, l0, ea, mpl, diam, es, em)
     IF (es /= CD_LINE_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'line mesh for model init: '//TRIM(em)); RETURN
@@ -13041,6 +13054,34 @@ CONTAINS
       CALL rd_bool(val, opts%adaptive_mesh, ErrStat, ErrMsg)
     CASE ('alpha_force_blend', 'alphaforceblend')
       CALL rd_bool(val, opts%alpha_force_blend, ErrStat, ErrMsg)
+    CASE ('ei0_substeps', 'ei0substeps')
+      SELECT CASE (TRIM(to_lower(val)))
+      CASE ('auto')
+        opts%ei0_substeps = CD_EI0_SUBSTEPS_AUTO
+      CASE ('off')
+        opts%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+      CASE DEFAULT
+        CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substeps "'//TRIM(val)//'" must be auto or off')
+      END SELECT
+    CASE ('ei0_substep_angle', 'ei0substepangle')
+      CALL rd(val, x1, ErrStat, ErrMsg)
+      IF (ErrStat == 0) THEN
+        IF (.NOT. (IEEE_IS_FINITE(x1) .AND. x1 > CD_ZERO .AND. x1 <= 90.0_wp)) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substep_angle must lie in (0, 90] deg'); RETURN
+        END IF
+        opts%ei0_substep_angle = x1
+      END IF
+    CASE ('ei0_substep_max', 'ei0substepmax')
+      CALL rd(val, x1, ErrStat, ErrMsg)
+      IF (ErrStat == 0) THEN
+        IF (.NOT. IEEE_IS_FINITE(x1) .OR. x1 < 2.0_wp .OR. x1 > 1024.0_wp) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substep_max must be in [2,1024]'); RETURN
+        END IF
+        IF (ABS(x1 - REAL(NINT(x1), wp)) > 16.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, ABS(x1))) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substep_max must be an integer'); RETURN
+        END IF
+        opts%ei0_substep_max = NINT(x1)
+      END IF
     CASE ('cable_statics', 'cablestatics')
       SELECT CASE (TRIM(to_lower(val)))
       CASE ('continuation')
@@ -27468,16 +27509,43 @@ CONTAINS
     REAL(wp), INTENT(IN) :: dt
     REAL(wp), PARAMETER :: EI0_TURN_NOTE = 1.0_wp
     INTEGER :: ios
-    IF (model%audit_max_turn > EI0_TURN_NOTE) THEN
+    LOGICAL :: auto
+    CHARACTER(200) :: remedy
+    REAL(wp) :: turn_note
+    auto = model%cfg%ei0_substeps == CD_EI0_SUBSTEPS_AUTO
+    IF (auto .AND. model%sub_events > 0) THEN
+      WRITE (output_unit, '(A,I0,A,I0,A,I0,A,I0,A)', IOSTAT=ios) '  Note: line ', line_id, &
+        ': ei0_substeps auto solved ', model%sub_events, ' of ', model%sub_calls, &
+        ' solver step(s) in sub-steps to resolve segment rotation and slack-to-taut snaps (at most ', &
+        model%sub_max_used, ' per step).'
+      IF (model%sub_capped > 0) WRITE (output_unit, '(A,I0,A,I0,A,I0,A)', IOSTAT=ios) '  Note: line ', line_id, &
+        ': ', model%sub_capped, ' step(s) needed more than ei0_substep_max = ', model%cfg%ei0_substep_max, &
+        ' sub-steps; raise it or reduce dtM.'
+    END IF
+    IF (auto .AND. model%sub_fallbacks > 0) WRITE (output_unit, '(A,I0,A,I0,A)', IOSTAT=ios) '  Note: line ', &
+      line_id, ': ', model%sub_fallbacks, ' step(s) kept the whole step because a resolving sub-step did not converge.'
+    ! with ei0_substeps auto a step is solved in sub-steps whose average turn is at most
+    ! ei0_substep_angle; a single sub-step can turn slightly more
+    turn_note = EI0_TURN_NOTE
+    IF (auto) turn_note = 1.1_wp*MAX(EI0_TURN_NOTE, model%cfg%ei0_substep_angle)
+    IF (model%audit_max_turn > turn_note) THEN
+      ! per solver step: the sub-steps of a resolved or recovered step count as steps
+      IF (auto) THEN
+        remedy = 'steps ei0_substeps auto did not resolve (beyond ei0_substep_max, recovered after a '// &
+                 'stall, or in a monolithic body or point coupling step): reduce dtM.'
+      ELSE
+        remedy = 'set ei0_substeps auto (the default) or reduce dtM.'
+      END IF
       WRITE (output_unit, '(A,I0,A,F7.3,A)', IOSTAT=ios) '  Note: line ', line_id, ': a taut segment turned up to ', &
-        model%audit_max_turn, ' deg in one step; a smaller dtM would resolve the line''s rotation (tension '// &
-        'mean and standard-deviation errors of about 1 % and more above 1 deg per step).'
+        model%audit_max_turn, ' deg in one solver step. Above about 1 deg per step the tension mean and '// &
+        'standard deviation err by about 1 % and more, and at about 6 deg per step snap-load peaks come out '// &
+        '10 to 20 % low with either generalised-alpha blend: '//TRIM(remedy)
     END IF
     IF (model%audit_snaps > 0 .AND. model%audit_snap_courant > CD_ONE) THEN
       WRITE (output_unit, '(A,I0,A,I0,A,ES9.2,A,F0.1,A)', IOSTAT=ios) '  Note: line ', line_id, ': ', &
         model%audit_snaps, ' segment step(s) went from slack to taut above the initial tension; at dtM =', &
         dt, ' s the axial wave crosses a segment up to ', model%audit_snap_courant, &
-        ' times per step, so the snap-load peaks are not resolved in time: confirm peak tensions with a '// &
+        ' times per solver step, so the snap-load peaks are not resolved in time: confirm peak tensions with a '// &
         'smaller dtM.'
     END IF
     IF (model%audit_spikes > 1) THEN

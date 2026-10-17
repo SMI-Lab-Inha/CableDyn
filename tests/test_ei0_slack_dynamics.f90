@@ -14,8 +14,10 @@ PROGRAM test_ei0_slack_dynamics
   !!      1.80 MN at the fairlead (2.69 MN configuration-blended), as at dtM 0.0025 s.
   !!   4. The run audit of the driver (stdout of the executable given as the first argument):
   !!      the configuration blend (False alpha_force_blend) of case 1 warns of a non-physical
-  !!      tension spike, the force blend does not; rhoInf above 0.95 prints its note; a 10 m
-  !!      sway at dtM 0.2 s prints the segment-turn advisory; the unresolved slack-to-taut
+  !!      tension spike and is not sub-stepped, the force blend does not warn; rhoInf above
+  !!      0.95 prints its note; a 10 m sway at dtM 0.2 s prints the segment-turn advisory with
+  !!      off ei0_substeps, and with the default auto is sub-stepped instead (reported; the turn
+  !!      per solver step drops from about 6 deg to below 2 deg); the unresolved slack-to-taut
   !!      snaps of case 1 print the snap note.
   !!   5. The Newton tangent of the force-blended step against a central finite difference of its
   !!      residual (the step's probe_q hook), on a three-segment tension-only chain with one fixed
@@ -287,6 +289,28 @@ CONTAINS
     END DO
     CLOSE (u)
   END FUNCTION file_contains
+
+  REAL(wp) FUNCTION noted_turn(path) RESULT(turn)
+    !! The turn (deg) of the run audit's segment-turn note in a driver log, 0 without the note.
+    CHARACTER(*), INTENT(IN) :: path
+    CHARACTER(*), PARAMETER :: KEY = 'a taut segment turned up to'
+    INTEGER :: u, ios, i
+    CHARACTER(4096) :: line
+    turn = 0.0_wp
+    OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    IF (ios /= 0) RETURN
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      i = INDEX(line, KEY)
+      IF (i > 0) THEN
+        READ (line(i + LEN(KEY):), *, IOSTAT=ios) turn
+        IF (ios /= 0) turn = -1.0_wp
+        EXIT
+      END IF
+    END DO
+    CLOSE (u)
+  END FUNCTION noted_turn
 
   SUBROUTINE echo_tail(path, n)
     !! Print the last n lines of a log (the reason a driver run stopped).
@@ -606,6 +630,7 @@ CONTAINS
 
   SUBROUTINE case_run_audit()
     LOGICAL :: ok
+    REAL(wp) :: turn_off, turn_auto
     CHARACTER(64) :: opts(4)
     ! the configuration blend of case 1: its spikes are reported once, as a warning. Its
     ! non-physical spikes make the run chaotic: whether it completes or a later spike stops it
@@ -648,20 +673,40 @@ CONTAINS
     CALL require(ok, 'audit:rhoinf-run')
     CALL require(file_contains('ei0slack_audit_rho.log', 'Note: rhoInf = 0.990 leaves almost no numerical'), &
                  'audit:rhoinf-note')
-    ! a 10 m sway at dtM 0.2 s turns the segments by several degrees per step
+    ! a 10 m sway at dtM 0.2 s turns the segments by several degrees per step: taken as given
+    ! (off ei0_substeps) the run notes the turn
     CALL write_motion('ei0slack_sway.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 2, 10.0_wp, 10.0_wp, 10.0_wp, &
                       0.2_wp, 20.0_wp)
     opts(1) = '0.2 dtM'
     opts(2) = '20.0 TMax'
     opts(3) = 'ei0slack_sway.txt motionFile'
-    opts(4) = ''
+    opts(4) = 'off ei0_substeps'
     CALL write_deck('ei0slack_audit_sway.dat', CABLE, [205.0_wp, 0.0_wp, -80.0_wp], [5.0_wp, 0.0_wp, -14.0_wp], &
                     230.0_wp, 115, 80.0_wp, '-', opts)
     CALL run_driver_logged('ei0slack_audit_sway.dat', 'ei0slack_audit_sway', 'ei0slack_audit_sway.log', ok)
     CALL require(ok, 'audit:sway-run')
     CALL require(file_contains('ei0slack_audit_sway.log', 'Note: line 1: a taut segment turned up to'), &
                  'audit:segment-turn-note')
+    CALL require(file_contains('ei0slack_audit_sway.log', 'set ei0_substeps auto'), 'audit:segment-turn-remedy')
     CALL require(.NOT. file_contains('ei0slack_audit_sway.log', 'Warning: line'), 'audit:sway-no-warning')
+    ! the default (auto) sub-steps those steps: the run reports the sub-stepping, and the turn
+    ! per solver step drops to about 1 deg (the steps recovered after a stall take their four
+    ! sub-steps as given, so a note may remain for them)
+    opts(4) = ''
+    CALL write_deck('ei0slack_audit_sway_auto.dat', CABLE, [205.0_wp, 0.0_wp, -80.0_wp], &
+                    [5.0_wp, 0.0_wp, -14.0_wp], 230.0_wp, 115, 80.0_wp, '-', opts)
+    CALL run_driver_logged('ei0slack_audit_sway_auto.dat', 'ei0slack_audit_sway_auto', &
+                           'ei0slack_audit_sway_auto.log', ok)
+    CALL require(ok, 'audit:sway-auto-run')
+    CALL require(file_contains('ei0slack_audit_sway_auto.log', 'ei0_substeps auto solved'), 'audit:substep-note')
+    turn_off = noted_turn('ei0slack_audit_sway.log')
+    turn_auto = noted_turn('ei0slack_audit_sway_auto.log')
+    WRITE (*, '(A,F7.3,A,F7.3,A)') '  sway at dtM 0.2 s: largest turn per solver step ', turn_off, ' deg (off), ', &
+      turn_auto, ' deg (auto)'
+    CALL require(turn_off > 4.0_wp .AND. turn_auto >= 0.0_wp .AND. turn_auto < 2.0_wp, 'audit:sway-auto-resolved-turn')
+    ! the configuration blend (paper mode) takes every step as given
+    CALL require(.NOT. file_contains('ei0slack_audit_cfg.log', 'ei0_substeps auto solved'), &
+                 'audit:configuration-blend-not-sub-stepped')
   END SUBROUTINE case_run_audit
 
   ! ------------------------------------------------------------------------------------------
