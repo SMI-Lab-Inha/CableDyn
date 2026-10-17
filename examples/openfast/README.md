@@ -131,7 +131,7 @@ stays within −2.5 to 3.6 m. After it the platform drifts down-wave: `PtfmSurge
 t = 400 s and is still growing, because the two remaining anchors lie down-wave of the platform.
 The intact lines slacken as it approaches them (`FairTen2` mean 1.29 MN over 300–400 s, no peak
 above the 2.51 MN at the break). Run longer (`TMax`) to reach the new equilibrium. The 400 s run
-takes about 30 s.
+takes about 60 s.
 
 ## Notes
 

@@ -126,7 +126,7 @@ IEA-15MW case of :doc:`tutorial_openfast` (Hs 6 m, Tp 12 s, ``WaveTMax = 4800 s`
 ``WaveDT = 0.2 s``), ``X_HalfWidth = Y_HalfWidth = 900``, the default ``Z_Depth``, ``NX = 37``
 (25 m spacing), ``NY = 2`` and ``NZ = 11`` needs about 4.6 GB. Halving the spacing (``NX = 73``)
 or using ``NZ = 16`` changes the 10–70 s platform and fairlead-tension statistics by less than
-0.05 %. The ``MD_Shared`` grid gives a line-1 fairlead tension standard deviation 18 % too high
+0.1 %. The ``MD_Shared`` grid gives a line-1 fairlead tension standard deviation 18 % too high
 (0.136 MN instead of 0.115 MN).
 
 CableDyn compares its nodes with the grid at the static equilibrium and at every CableDyn step.
