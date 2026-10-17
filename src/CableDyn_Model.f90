@@ -69,6 +69,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Init_Line_Model
   PUBLIC :: CD_Step_Model
   PUBLIC :: CD_Step_Model_Recovering
+  PUBLIC :: CD_Get_Model_Substep_Counts
   PUBLIC :: CD_End_Model
   PUBLIC :: CD_Model_NCoupledDOF
   PUBLIC :: CD_Model_NDOF
@@ -113,12 +114,16 @@ MODULE CableDyn_Model
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_NOT_INITIALIZED = 3
   INTEGER, PARAMETER, PUBLIC :: CD_MODEL_ALLOCFAIL = 4
   INTEGER, PARAMETER :: MODEL_DEFAULT_MAX_SUBSTEPS = 1024
-  ! Rotation- and snap-resolved sub-stepping (CD_Step_Model, cfg%ei0_substeps): every segment
-  ! that ends the step taut counts for the turn; one slack at the step start that ends above
-  ! SUB_SNAP_FRACTION of the largest step-start tension is a snap. A step solved in sub-steps takes at least SUB_SNAP_STEPS of them: on the Lozon
-  ! semitaut line two or three sub-steps of a step that turned 1 to 3 deg left the anchor snap
-  ! peaks 8 % high on average (up to 22 %), four brought them within 3 % of the converged run.
-  REAL(wp), PARAMETER :: SUB_SNAP_FRACTION = 0.25_wp
+  ! Rotation- and snap-resolved sub-stepping (CD_Step_Model, cfg%ei0_substeps): a segment that
+  ! ends the step taut above SUB_TAUT_FRACTION of the largest step-start tension counts for the
+  ! turn (the run audit's floor, relative to the step-start tension because only the standalone
+  ! driver knows the initial one), also when it was slack at the start: counting only segments
+  ! taut at both ends left the Lozon semitaut anchor snap peaks up to 25 % high. One slack at
+  ! the step start that ends above SUB_SNAP_FRACTION of that tension is a snap. A step solved
+  ! in sub-steps takes at least SUB_SNAP_STEPS of them: on the Lozon semitaut line two or three
+  ! sub-steps of a step that turned 1 to 3 deg left the anchor snap peaks 8 % high on average
+  ! (up to 22 %), four brought them within 3 % of the converged run.
+  REAL(wp), PARAMETER :: SUB_TAUT_FRACTION = 1.0e-3_wp, SUB_SNAP_FRACTION = 0.25_wp
   INTEGER, PARAMETER :: SUB_SNAP_STEPS = 4
 
   TYPE :: CD_ModelType
@@ -327,8 +332,21 @@ MODULE CableDyn_Model
     ! sub_fallbacks those that returned to the plain step after a sub-step failed. The sub_*
     ! arrays are scratch: the step-start snapshot and the sub-step boundary motion.
     INTEGER :: sub_calls = 0, sub_events = 0, sub_max_used = 1, sub_capped = 0, sub_fallbacks = 0
-    REAL(wp), ALLOCATABLE :: sub_q0(:), sub_v0(:), sub_a0(:), sub_pq(:), sub_pv(:), sub_pa(:)
-    REAL(wp), ALLOCATABLE :: sub_ve_dl_1(:), sub_syrope_slow(:), sub_syrope_tmax(:), sub_fr_anchor(:, :)
+    ! sub_remeasured: steps whose sub-stepped interval needed more sub-steps and was solved again
+    INTEGER :: sub_remeasured = 0
+    ! audit_hmax at the last save of the system-rollback state (CableDyn_System)
+    REAL(wp) :: audit_hmax_rollback = CD_ZERO
+    ! slot 1: the committed state at the step start; slot 2: the state the plain step reached
+    REAL(wp), ALLOCATABLE :: sub_q(:, :), sub_v(:, :), sub_a(:, :), sub_pq(:), sub_pv(:), sub_pa(:)
+    REAL(wp), ALLOCATABLE :: sub_ve_dl_1(:, :), sub_syrope_slow(:, :), sub_syrope_tmax(:, :)
+    REAL(wp), ALLOCATABLE :: sub_fr_anchor(:, :, :)
+    ! TEST-ONLY hooks of the sub-stepping, never set by a production caller: sub_test_fail > 0
+    ! makes sub-step number sub_test_fail of every sub-stepped pass report a failure, and
+    ! sub_test_repeat solves the first sub-stepped pass twice (the second from the restored
+    ! committed state), which must not change the result; sub_test_more makes the re-measure of
+    ! every sub-stepped interval ask for one more sub-step.
+    INTEGER :: sub_test_fail = 0
+    LOGICAL :: sub_test_repeat = .FALSE., sub_test_more = .FALSE.
   END TYPE CD_ModelType
 
 CONTAINS
@@ -1863,7 +1881,7 @@ CONTAINS
   END SUBROUTINE CD_Init_Line_Model
 
   SUBROUTINE CD_Step_Model(model, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
-                           prescribed_q, prescribed_v, prescribed_a)
+                           prescribed_q, prescribed_v, prescribed_a, as_given)
     !! Advance the persistent model over dt. Optional prescribed_q/v/a arrays are full
     !! model-sized vectors at the end of the step; only entries in model%fixed_dofs are
     !! consumed by CableDyn_Dynamic. On successful or stalled dynamics returns, the model owns
@@ -1872,30 +1890,34 @@ CONTAINS
     !!
     !! Rotation- and snap-resolved sub-stepping (cfg%ei0_substeps = CD_EI0_SUBSTEPS_AUTO, the
     !! default): the step is solved as given; when it converges and a segment that ends it taut
-    !! turned by more than cfg%ei0_substep_angle degrees, or a segment slack at its start ends
-    !! it above SUB_SNAP_FRACTION of the largest step-start tension, the interval is solved
-    !! again from the same committed state in n = max(SUB_SNAP_STEPS, ceil(turn/angle)) equal
-    !! sub-steps, at most cfg%ei0_substep_max. The trial step under-turns a line whose rotation
-    !! it does not resolve, so the sub-stepped interval is measured again and, when its turn
-    !! needs more sub-steps, solved once more with them. The prescribed end motion inside the
-    !! interval follows the C2 quintic of CD_Step_Model_Recovering and the last sub-step lands
-    !! on the given end state exactly. The decision depends only on the committed state and the
-    !! step's inputs, so a run restarted from a checkpoint repeats it. If a sub-step fails, the
-    !! plain step is solved again and returned. A step of the
-    !! monolithic junction coupling (the end query armed, CD_Set_Model_EndQuery) is never
-    !! sub-stepped: its caller needs the end reaction and tangent of the nominal step.
+    !! turned by more than cfg%ei0_substep_angle degrees, or a segment slack at its start ends it
+    !! above SUB_SNAP_FRACTION of the largest step-start tension, the interval is
+    !! solved again from the same committed state in n = max(SUB_SNAP_STEPS, ceil(turn/angle))
+    !! equal sub-steps, at most cfg%ei0_substep_max. The trial step under-turns a line whose
+    !! rotation it does not resolve, so the sub-stepped interval is measured again and, when its
+    !! turn needs more sub-steps, solved once more with them. The prescribed end motion inside
+    !! the interval follows the C2 quintic of CD_Step_Model_Recovering and the last sub-step
+    !! lands on the given end state exactly. The decision depends only on the committed state
+    !! and the step's inputs, so a run restarted from a checkpoint repeats it. If a sub-step
+    !! fails, the plain step's own result is returned. A step of the monolithic junction
+    !! coupling (the end query armed, CD_Set_Model_EndQuery) is never sub-stepped: its caller
+    !! needs the end reaction and tangent of the nominal step. as_given = .TRUE. takes the step
+    !! as given as well: the stall recoveries of CD_Step_Model_Recovering and CD_Step_System,
+    !! whose sub-steps are themselves part of a recovery, pass it.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
     LOGICAL, INTENT(OUT) :: converged, stalled
     INTEGER, INTENT(OUT) :: n_iter, ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: prescribed_q(:), prescribed_v(:), prescribed_a(:)
-    INTEGER :: nsub, nsub2
+    LOGICAL, INTENT(IN), OPTIONAL :: as_given
+    INTEGER :: nsub, nsub2, iter_trial
     LOGICAL :: has_pres, resolve, capped, capped2, ok
 
     has_pres = PRESENT(prescribed_q) .AND. PRESENT(prescribed_v) .AND. PRESENT(prescribed_a)
     resolve = model%initialized .AND. model%cfg%ei0_substeps == CD_EI0_SUBSTEPS_AUTO .AND. &
               .NOT. model%dynamic_workspace%end_request
+    IF (resolve .AND. PRESENT(as_given)) resolve = .NOT. as_given
     ! partial prescribed motion: the plain step reports the input error
     IF (resolve) resolve = has_pres .OR. .NOT. (PRESENT(prescribed_q) .OR. PRESENT(prescribed_v) .OR. &
                                                 PRESENT(prescribed_a))
@@ -1910,7 +1932,8 @@ CONTAINS
                   'ei0_substep_max in [2, 1024]')
         RETURN
       END IF
-      resolve = sub_snapshot(model, has_pres)
+      resolve = sub_alloc(model, has_pres)
+      IF (resolve) CALL sub_store(model, 1)
     END IF
     IF (.NOT. resolve) THEN
       ! absent optional arguments stay absent
@@ -1931,15 +1954,21 @@ CONTAINS
       model%audit_hmax = MAX(model%audit_hmax, dt)
       RETURN
     END IF
+    ! keep the plain step's result: it is returned should a sub-step fail
+    CALL sub_store(model, 2)
+    iter_trial = n_iter
 
     ! Solve the interval again from the committed state in nsub sub-steps. The trial step
     ! under-turns a line whose rotation it does not resolve, so the sub-stepped interval is
     ! measured again: when its turn needs more sub-steps, it is solved once more with them (and
     ! the first count is kept should that fail).
     CALL run_substeps(nsub, ok)
+    IF (ok .AND. model%sub_test_repeat) CALL run_substeps(nsub, ok)
     IF (ok) THEN
       CALL sub_count(model, nsub2, capped2)
+      IF (model%sub_test_more) nsub2 = MAX(nsub2, MIN(model%cfg%ei0_substep_max, nsub + 1))
       IF (nsub2 > nsub) THEN
+        IF (model%sub_remeasured < HUGE(model%sub_remeasured)) model%sub_remeasured = model%sub_remeasured + 1
         CALL run_substeps(nsub2, ok)
         IF (ok) THEN
           nsub = nsub2
@@ -1960,17 +1989,20 @@ CONTAINS
       model%audit_hmax = MAX(model%audit_hmax, dt/REAL(nsub, wp))
       RETURN
     END IF
-    ! a sub-step failed: return the plain step, solved again from the committed state
-    CALL sub_restore(model)
-    CALL step_model_plain(model, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
-                          prescribed_q=prescribed_q, prescribed_v=prescribed_v, prescribed_a=prescribed_a)
+    ! a sub-step failed: return the plain step's own (converged) result
+    CALL sub_load(model, 2)
+    converged = .TRUE.
+    stalled = .FALSE.
+    n_iter = iter_trial
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
     IF (model%sub_fallbacks < HUGE(model%sub_fallbacks)) model%sub_fallbacks = model%sub_fallbacks + 1
-    IF (ErrStat == CD_MODEL_OK) model%audit_hmax = MAX(model%audit_hmax, dt)
+    model%audit_hmax = MAX(model%audit_hmax, dt)
 
   CONTAINS
 
     SUBROUTINE run_substeps(n, ok_run)
-      !! The interval from the committed state (sub_q0) in n equal sub-steps, the prescribed
+      !! The interval from the committed state (slot 1) in n equal sub-steps, the prescribed
       !! end motion on the C2 quintic of the interval, the last sub-step on the given end state.
       INTEGER, INTENT(IN) :: n
       LOGICAL, INTENT(OUT) :: ok_run
@@ -1978,7 +2010,7 @@ CONTAINS
       LOGICAL :: conv_k, stall_k
       REAL(wp) :: h
       CHARACTER(300) :: em_k
-      CALL sub_restore(model)
+      CALL sub_load(model, 1)
       h = dt/REAL(n, wp)
       ok_run = .TRUE.
       DO k = 1, n
@@ -1988,15 +2020,16 @@ CONTAINS
             model%sub_pv = prescribed_v
             model%sub_pa = prescribed_a
           ELSE
-            CALL quintic_model_boundary_state(model%sub_q0, model%sub_v0, model%sub_a0, prescribed_q, &
-                                              prescribed_v, prescribed_a, dt, REAL(k, wp)/REAL(n, wp), &
-                                              model%sub_pq, model%sub_pv, model%sub_pa)
+            CALL quintic_model_boundary_state(model%sub_q(:, 1), model%sub_v(:, 1), model%sub_a(:, 1), &
+                                              prescribed_q, prescribed_v, prescribed_a, dt, &
+                                              REAL(k, wp)/REAL(n, wp), model%sub_pq, model%sub_pv, model%sub_pa)
           END IF
           CALL step_model_plain(model, h, conv_k, stall_k, it_k, es_k, em_k, prescribed_q=model%sub_pq, &
                                 prescribed_v=model%sub_pv, prescribed_a=model%sub_pa)
         ELSE
           CALL step_model_plain(model, h, conv_k, stall_k, it_k, es_k, em_k)
         END IF
+        IF (k == model%sub_test_fail) conv_k = .FALSE.
         IF (es_k /= CD_MODEL_OK .OR. .NOT. conv_k) THEN
           ok_run = .FALSE.
           RETURN
@@ -2006,84 +2039,99 @@ CONTAINS
     END SUBROUTINE run_substeps
   END SUBROUTINE CD_Step_Model
 
-  LOGICAL FUNCTION sub_snapshot(model, has_pres) RESULT(ok)
-    !! Snapshot the committed state into the sub-stepping scratch (allocated on first use):
-    !! the kinematics and the viscoelastic, Syrope and friction states a step commits. .FALSE.
-    !! when the scratch cannot be allocated (the step is then taken as given).
+  LOGICAL FUNCTION sub_alloc(model, has_pres) RESULT(ok)
+    !! Allocate the sub-stepping scratch on first use: two slots of the state a step commits
+    !! (the kinematics and the viscoelastic, Syrope and friction states) and the sub-step
+    !! boundary motion. .FALSE. when it cannot be allocated (the step is then taken as given).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     LOGICAL, INTENT(IN) :: has_pres
     INTEGER :: istat
     ok = .FALSE.
     istat = 0
-    IF (.NOT. sized1(model%sub_q0, model%n_dof)) THEN
-      IF (ALLOCATED(model%sub_q0)) DEALLOCATE (model%sub_q0, model%sub_v0, model%sub_a0)
-      ALLOCATE (model%sub_q0(model%n_dof), model%sub_v0(model%n_dof), model%sub_a0(model%n_dof), STAT=istat)
+    IF (.NOT. sized2(model%sub_q, model%n_dof)) THEN
+      IF (ALLOCATED(model%sub_q)) DEALLOCATE (model%sub_q, model%sub_v, model%sub_a)
+      ALLOCATE (model%sub_q(model%n_dof, 2), model%sub_v(model%n_dof, 2), model%sub_a(model%n_dof, 2), STAT=istat)
       IF (istat /= 0) RETURN
     END IF
-    IF (has_pres .AND. .NOT. sized1(model%sub_pq, model%n_dof)) THEN
-      IF (ALLOCATED(model%sub_pq)) DEALLOCATE (model%sub_pq, model%sub_pv, model%sub_pa)
-      ALLOCATE (model%sub_pq(model%n_dof), model%sub_pv(model%n_dof), model%sub_pa(model%n_dof), STAT=istat)
-      IF (istat /= 0) RETURN
+    IF (has_pres) THEN
+      IF (ALLOCATED(model%sub_pq)) THEN
+        IF (SIZE(model%sub_pq) /= model%n_dof) DEALLOCATE (model%sub_pq, model%sub_pv, model%sub_pa)
+      END IF
+      IF (.NOT. ALLOCATED(model%sub_pq)) THEN
+        ALLOCATE (model%sub_pq(model%n_dof), model%sub_pv(model%n_dof), model%sub_pa(model%n_dof), STAT=istat)
+        IF (istat /= 0) RETURN
+      END IF
     END IF
-    IF (model%has_viscoelastic .AND. .NOT. sized1(model%sub_ve_dl_1, SIZE(model%ve_dl_1))) THEN
+    IF (model%has_viscoelastic .AND. .NOT. sized2(model%sub_ve_dl_1, SIZE(model%ve_dl_1))) THEN
       IF (ALLOCATED(model%sub_ve_dl_1)) DEALLOCATE (model%sub_ve_dl_1)
-      ALLOCATE (model%sub_ve_dl_1(SIZE(model%ve_dl_1)), STAT=istat)
+      ALLOCATE (model%sub_ve_dl_1(SIZE(model%ve_dl_1), 2), STAT=istat)
       IF (istat /= 0) RETURN
     END IF
-    IF (model%has_syrope .AND. .NOT. sized1(model%sub_syrope_slow, SIZE(model%syrope_slow))) THEN
+    IF (model%has_syrope .AND. .NOT. sized2(model%sub_syrope_slow, SIZE(model%syrope_slow))) THEN
       IF (ALLOCATED(model%sub_syrope_slow)) DEALLOCATE (model%sub_syrope_slow, model%sub_syrope_tmax)
-      ALLOCATE (model%sub_syrope_slow(SIZE(model%syrope_slow)), model%sub_syrope_tmax(SIZE(model%syrope_tmax)), &
-                STAT=istat)
+      ALLOCATE (model%sub_syrope_slow(SIZE(model%syrope_slow), 2), &
+                model%sub_syrope_tmax(SIZE(model%syrope_tmax), 2), STAT=istat)
       IF (istat /= 0) RETURN
     END IF
     IF (model%has_seabed_friction) THEN
       IF (ALLOCATED(model%sub_fr_anchor)) THEN
-        IF (ANY(SHAPE(model%sub_fr_anchor) /= SHAPE(model%fr_anchor))) DEALLOCATE (model%sub_fr_anchor)
+        IF (SIZE(model%sub_fr_anchor, 1) /= SIZE(model%fr_anchor, 1) .OR. &
+            SIZE(model%sub_fr_anchor, 2) /= SIZE(model%fr_anchor, 2)) DEALLOCATE (model%sub_fr_anchor)
       END IF
       IF (.NOT. ALLOCATED(model%sub_fr_anchor)) THEN
-        ALLOCATE (model%sub_fr_anchor(SIZE(model%fr_anchor, 1), SIZE(model%fr_anchor, 2)), STAT=istat)
+        ALLOCATE (model%sub_fr_anchor(SIZE(model%fr_anchor, 1), SIZE(model%fr_anchor, 2), 2), STAT=istat)
         IF (istat /= 0) RETURN
       END IF
     END IF
-    model%sub_q0 = model%q
-    model%sub_v0 = model%v
-    model%sub_a0 = model%a
-    IF (model%has_viscoelastic) model%sub_ve_dl_1 = model%ve_dl_1
-    IF (model%has_syrope) THEN
-      model%sub_syrope_slow = model%syrope_slow
-      model%sub_syrope_tmax = model%syrope_tmax
-    END IF
-    IF (model%has_seabed_friction) model%sub_fr_anchor = model%fr_anchor
     ok = .TRUE.
   CONTAINS
-    LOGICAL FUNCTION sized1(x, n) RESULT(yes)
-      REAL(wp), ALLOCATABLE, INTENT(IN) :: x(:)
+    LOGICAL FUNCTION sized2(x, n) RESULT(yes)
+      REAL(wp), ALLOCATABLE, INTENT(IN) :: x(:, :)
       INTEGER, INTENT(IN) :: n
       yes = ALLOCATED(x)
-      IF (yes) yes = SIZE(x) == n
-    END FUNCTION sized1
-  END FUNCTION sub_snapshot
+      IF (yes) yes = SIZE(x, 1) == n .AND. SIZE(x, 2) == 2
+    END FUNCTION sized2
+  END FUNCTION sub_alloc
 
-  SUBROUTINE sub_restore(model)
-    !! Return the model to the state sub_snapshot saved.
+  SUBROUTINE sub_store(model, slot)
+    !! Save the state a step commits into slot 1 (the step start) or 2 (the plain step's result).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
-    model%q = model%sub_q0
-    model%v = model%sub_v0
-    model%a = model%sub_a0
-    IF (model%has_viscoelastic) model%ve_dl_1 = model%sub_ve_dl_1
+    INTEGER, INTENT(IN) :: slot
+    model%sub_q(:, slot) = model%q
+    model%sub_v(:, slot) = model%v
+    model%sub_a(:, slot) = model%a
+    IF (model%has_viscoelastic) model%sub_ve_dl_1(:, slot) = model%ve_dl_1
     IF (model%has_syrope) THEN
-      model%syrope_slow = model%sub_syrope_slow
-      model%syrope_tmax = model%sub_syrope_tmax
+      model%sub_syrope_slow(:, slot) = model%syrope_slow
+      model%sub_syrope_tmax(:, slot) = model%syrope_tmax
     END IF
-    IF (model%has_seabed_friction) model%fr_anchor = model%sub_fr_anchor
-  END SUBROUTINE sub_restore
+    IF (model%has_seabed_friction) model%sub_fr_anchor(:, :, slot) = model%fr_anchor
+  END SUBROUTINE sub_store
+
+  SUBROUTINE sub_load(model, slot)
+    !! Return the model to the state saved in slot (sub_store).
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    INTEGER, INTENT(IN) :: slot
+    model%q = model%sub_q(:, slot)
+    model%v = model%sub_v(:, slot)
+    model%a = model%sub_a(:, slot)
+    IF (model%has_viscoelastic) model%ve_dl_1 = model%sub_ve_dl_1(:, slot)
+    IF (model%has_syrope) THEN
+      model%syrope_slow = model%sub_syrope_slow(:, slot)
+      model%syrope_tmax = model%sub_syrope_tmax(:, slot)
+    END IF
+    IF (model%has_seabed_friction) model%fr_anchor = model%sub_fr_anchor(:, :, slot)
+  END SUBROUTINE sub_load
 
   SUBROUTINE sub_count(model, nsub, capped)
-    !! The sub-step count of a converged step (model%q) from the committed state (sub_q0): 1, or
-    !! max(SUB_SNAP_STEPS, ceil(turn/angle)) when turn > angle, at most cfg%ei0_substep_max
-    !! (capped when the turn needs more), turn the largest chord turn of a segment that ends
-    !! taut; at least SUB_SNAP_STEPS when a segment slack at the start ends above
-    !! SUB_SNAP_FRACTION of the largest step-start tension (the static EA times the strain).
+    !! The sub-step count of a converged step (model%q) from the committed state (slot 1): 1,
+    !! or max(SUB_SNAP_STEPS, ceil(turn/angle)) when turn > angle, at most cfg%ei0_substep_max
+    !! (capped when the turn needs more), turn the largest chord turn of a segment that ends the
+    !! step taut above SUB_TAUT_FRACTION of the largest step-start tension; at least
+    !! SUB_SNAP_STEPS when a segment slack at the start ends above SUB_SNAP_FRACTION of it. The
+    !! tension measure is the static EA times the strain. The strains use model%l0, the lengths
+    !! the step itself uses (CD_Update_Model_SegmentLength sets them before the step); a length
+    !! that changes within the step would need its step-start value for the start state here.
     TYPE(CD_ModelType), INTENT(IN) :: model
     INTEGER, INTENT(OUT) :: nsub
     LOGICAL, INTENT(OUT) :: capped
@@ -2097,7 +2145,7 @@ CONTAINS
     DO e = 1, model%n_elem
       na = model%elem_conn(1, e)
       nb = model%elem_conn(2, e)
-      d0 = model%sub_q0(3*nb - 2:3*nb) - model%sub_q0(3*na - 2:3*na)
+      d0 = model%sub_q(3*nb - 2:3*nb, 1) - model%sub_q(3*na - 2:3*na, 1)
       t0max = MAX(t0max, model%ea(e)*(NORM2(d0)/model%l0(e) - CD_ONE))
     END DO
     turn = CD_ZERO
@@ -2109,10 +2157,10 @@ CONTAINS
       l_e = NORM2(d1)
       IF (.NOT. l_e > model%l0(e)) CYCLE
       te = model%ea(e)*(l_e/model%l0(e) - CD_ONE)
-      d0 = model%sub_q0(3*nb - 2:3*nb) - model%sub_q0(3*na - 2:3*na)
+      d0 = model%sub_q(3*nb - 2:3*nb, 1) - model%sub_q(3*na - 2:3*na, 1)
       l_s = NORM2(d0)
       IF (l_s <= model%l0(e) .AND. te > SUB_SNAP_FRACTION*t0max) snap = .TRUE.
-      IF (l_s > CD_ZERO) THEN
+      IF (te > SUB_TAUT_FRACTION*t0max .AND. l_s > CD_ZERO) THEN
         c = DOT_PRODUCT(d0, d1)/(l_s*l_e)
         turn = MAX(turn, ACOS(MAX(-CD_ONE, MIN(CD_ONE, c)))*DEG)
       END IF
@@ -2129,6 +2177,19 @@ CONTAINS
     END IF
     IF (snap) nsub = MAX(nsub, MIN(SUB_SNAP_STEPS, nmax))
   END SUBROUTINE sub_count
+
+  SUBROUTINE CD_Get_Model_Substep_Counts(model, calls, events, max_used, capped, fallbacks)
+    !! Diagnostics of the rotation- and snap-resolved sub-stepping (CD_Step_Model): the steps it
+    !! examined, those it solved in sub-steps (the largest count used), those whose turn needed
+    !! more than cfg%ei0_substep_max, and those that kept the plain step after a sub-step failed.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(OUT) :: calls, events, max_used, capped, fallbacks
+    calls = model%sub_calls
+    events = model%sub_events
+    max_used = model%sub_max_used
+    capped = model%sub_capped
+    fallbacks = model%sub_fallbacks
+  END SUBROUTINE CD_Get_Model_Substep_Counts
 
   SUBROUTINE step_model_plain(model, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
                               prescribed_q, prescribed_v, prescribed_a)
@@ -2582,8 +2643,9 @@ CONTAINS
       CALL restore_recovery_state(model)
       ! the audit measures the solver steps of the rung that completes
       model%audit_hmax = hmax0
-      ! the rungs take their sub-steps as given: resolving them as well (sub-steps of sub-steps)
-      ! left the anchor snap peaks of the Lozon semitaut line 9 % high on average
+      ! the rungs take their sub-steps as given (step_model_plain, as CD_Step_System's halving
+      ! does with as_given): resolving them as well (sub-steps of sub-steps) left the anchor snap
+      ! peaks of the Lozon semitaut line 9 % high on average
       subdt = dt/REAL(nsub, wp)
       rung_ok = .TRUE.
       es = CD_MODEL_OK
@@ -5265,6 +5327,17 @@ CONTAINS
     model%audit_spike_tension = CD_ZERO
     model%audit_spike_ratio = CD_ZERO
     model%audit_hmax = CD_ZERO
+    model%audit_hmax_rollback = CD_ZERO
+    ! the sub-stepping diagnostics and test hooks start afresh with the model
+    model%sub_calls = 0
+    model%sub_events = 0
+    model%sub_max_used = 1
+    model%sub_capped = 0
+    model%sub_fallbacks = 0
+    model%sub_remeasured = 0
+    model%sub_test_fail = 0
+    model%sub_test_repeat = .FALSE.
+    model%sub_test_more = .FALSE.
   END SUBROUTINE clear_model_audit
 
   SUBROUTINE CD_End_Model(model, ErrStat, ErrMsg)
@@ -5302,9 +5375,9 @@ CONTAINS
     IF (ALLOCATED(model%v_rollback)) DEALLOCATE (model%v_rollback)
     IF (ALLOCATED(model%a_rollback)) DEALLOCATE (model%a_rollback)
     IF (ALLOCATED(model%recovery_q0)) DEALLOCATE (model%recovery_q0)
-    IF (ALLOCATED(model%sub_q0)) DEALLOCATE (model%sub_q0)
-    IF (ALLOCATED(model%sub_v0)) DEALLOCATE (model%sub_v0)
-    IF (ALLOCATED(model%sub_a0)) DEALLOCATE (model%sub_a0)
+    IF (ALLOCATED(model%sub_q)) DEALLOCATE (model%sub_q)
+    IF (ALLOCATED(model%sub_v)) DEALLOCATE (model%sub_v)
+    IF (ALLOCATED(model%sub_a)) DEALLOCATE (model%sub_a)
     IF (ALLOCATED(model%sub_pq)) DEALLOCATE (model%sub_pq)
     IF (ALLOCATED(model%sub_pv)) DEALLOCATE (model%sub_pv)
     IF (ALLOCATED(model%sub_pa)) DEALLOCATE (model%sub_pa)

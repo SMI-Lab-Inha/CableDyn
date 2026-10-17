@@ -578,14 +578,21 @@ Warnings and notes that do not stop a run
        snap-load peaks come out 10 to 20 % low with either generalised-α blend. With
        ``off ei0_substeps`` set ``auto`` (the default) or reduce ``dtM``; with ``auto`` the note
        means steps it did not resolve (more than ``ei0_substep_max`` needed, a step recovered
-       after a stall, whose recovery sub-steps are taken as given, or the monolithic body and
-       point coupling, which is not sub-stepped): reduce ``dtM``.
+       after a stall or a half of a line-system step halved after a failure, whose sub-steps
+       are taken as given, a step that kept its plain result because a sub-step failed, or the
+       monolithic body and point coupling, which is not sub-stepped): reduce ``dtM``.
    * - ``Note: line ...: ei0_substeps auto solved ... of ... solver step(s) in sub-steps``
      - information: the steps in which a taut segment turned by more than ``ei0_substep_angle``
        or a segment snapped from slack to taut were solved in sub-steps (see
        ``ei0_substeps``). A companion note counts the steps that needed more than
-       ``ei0_substep_max`` sub-steps, and another the steps that kept the whole step because a
-       sub-step did not converge.
+       ``ei0_substep_max`` sub-steps, and another the steps that kept the plain step's result
+       because a sub-step did not converge. OpenFAST and FAST.Farm print the same counts, summed
+       over the lines, as ``CableDyn: ei0_substeps auto solved ...`` at the end of the run.
+   * - ``Note: ei0_substeps auto does not sub-step the EI = 0 lines of the monolithic body/point step``
+     - information, once per run of a deck with ``monolithic bodyScheme`` coupling: the lines
+       stepped inside the body and point junction are taken at ``dtM`` as given, so their
+       rotation and snaps are resolved only as far as ``dtM`` resolves them. Reduce ``dtM`` when
+       the segment-turn note above appears for them.
    * - ``Note: line ...: ... segment step(s) went from slack to taut above the initial tension``
      - snap loads on an ``EI = 0`` line at a solver step that does not resolve the axial wave
        over a segment: the peak is set by a single step. A 15 m surge of a semi-taut

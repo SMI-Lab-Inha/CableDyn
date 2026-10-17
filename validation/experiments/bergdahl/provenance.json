@@ -2,7 +2,7 @@
   "CableDyn_release": "v0.1.1+dev (unreleased)",
   "validation_date": "2026-10-17",
   "executable_name": "cabledyn.exe",
-  "executable_sha256": "51f17f4bee5253961d6b36bd8404d948e815470abff64491deeb99a7e77708b7",
+  "executable_sha256": "c0504813c19ac8683d6f31cac56063da519cd8867c0facd3fddaef4e70469886",
   "compiler": "GNU Fortran 16.2.0",
   "build_type": "Release",
   "platform": "Windows 11 x86-64",

@@ -688,10 +688,11 @@ feedback re-converge each step (three-seed DLC-1.1, L4-1b, <0.6%).
 chain–polyester moorings are driven through the same surge-and-heave envelope at
 `dtM = 0.1 s` (72 s each). All 20 runs complete. With the default `ei0_substeps auto`,
 the steps in which a taut segment turns by more than 1° or a segment snaps taut are
-solved in 4 to 8 sub-steps: none to 3% of the steps in the 3 m / 10 s and 8 m / 20 s
-motions, 31–74% in the 5 m / 7 s and 10 m / 14 s ones. The march takes 0.25–1.0 ms of
-wall time per 0.1 s step for the all-chain mooring and 0.35–1.3 ms for the composite,
-1.65 times the plain steps over the 20 runs (at most 2.6 times), and the recovering step
+solved in 4 to 7 sub-steps: none to 3% of the steps in the 3 m / 10 s and 8 m / 20 s
+motions, 31–74% in the 5 m / 7 s and 10 m / 14 s ones. The march takes 0.24–0.94 ms of
+wall time per 0.1 s step for the all-chain mooring and 0.32–1.2 ms for the composite,
+1.63 times the plain steps over the 20 runs (1.6 to 2.5 times on the 5 m / 7 s and
+10 m / 14 s motions), and the recovering step
 subdivides at most 12 of the 720 intervals of a run.
 
 **Coupled OpenFAST sea states.** In the full IEA-15 MW VolturnUS-S model with

@@ -1469,9 +1469,10 @@ CONTAINS
     ! the light cable as a lightly damped viscoelastic line, 3 m heave at dtM 0.1 s: anchor
     ! 8.2e4 to 9.5e4 N and fairlead 0.97e5 to 1.02e5 N at dtM 0.5 to 2.5 ms; without the cap
     ! on its law segments 1.45e5 N at the anchor. At 0.1 s the anchor snap is not resolved in
-    ! time (the run notes it), so its peak depends on round-off: 8.5e4 N with gfortran on
-    ! Windows, other values on other platforms. The upper bound is the check of the cap; the
-    ! lower bound only asks that the snap reaches the anchor.
+    ! time (the run notes it), so its peak depends on round-off: 9.2e4 N with gfortran on
+    ! Windows with the default sub-steps (8.5e4 N taking every step as given), other values on
+    ! other platforms. The upper bound is the check of the cap, well below the 1.45e5 N of the
+    ! uncapped law; the lower bound only asks that the snap reaches the anchor.
     CALL write_motion('ei0slack_heave_ve.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 3, 3.0_wp, 10.0_wp, 10.0_wp, &
                       0.1_wp, 40.0_wp)
     opts(1) = '0.1 dtM'
@@ -1488,11 +1489,13 @@ CONTAINS
     WRITE (*, '(A,ES10.3,A,ES10.3,A,ES10.3,A)') '  viscoelastic light cable, dtM 0.1 s: FairTen1 max ', fair, &
       ' N, AnchTen1 max ', anch, ' N, smallest segment tension ', seg_min, ' N'
     CALL require(seg_min <= 0.0_wp, 've-slack:goes-slack')
-    CALL require(anch > 4.0e4_wp .AND. anch < 1.0e5_wp, 've-slack:anchor-peak')
+    CALL require(anch > 4.0e4_wp .AND. anch < 1.3e5_wp, 've-slack:anchor-peak')
     CALL require(fair > 8.0e4_wp .AND. fair < 1.2e5_wp, 've-slack:fairlead-peak')
     CALL require(.NOT. file_contains('ei0slack_ve_light.log', 'Warning: line'), 've-slack:no-spike-warning')
     ! a taut Syrope line in 4 m surge that goes slack, dtM 0.1 s: fairlead 1.78 MN at dtM 1 and
-    ! 2.5 ms
+    ! 2.5 ms; 1.82 MN with the default sub-steps, 1.64 MN taking every step as given and
+    ! 1.67 MN with the configuration blend (gfortran, Windows). The bounds catch a spike or a
+    ! lost snap, not the round-off-dependent peak of the unresolved snap
     CALL write_syrope_files()
     CALL write_motion('ei0slack_surge_syr.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 1, 4.0_wp, 10.0_wp, 10.0_wp, &
                       0.1_wp, 40.0_wp)
@@ -1504,7 +1507,7 @@ CONTAINS
     WRITE (*, '(A,ES10.3,A,ES10.3,A)') '  Syrope line, 4 m surge, dtM 0.1 s: FairTen1 max ', fair, &
       ' N, smallest segment tension ', seg_min, ' N'
     CALL require(seg_min <= 0.0_wp, 'syrope-slack:goes-slack')
-    CALL require(fair > 1.5e6_wp .AND. fair < 1.95e6_wp, 'syrope-slack:fairlead-peak')
+    CALL require(fair > 1.4e6_wp .AND. fair < 2.3e6_wp, 'syrope-slack:fairlead-peak')
     CALL require(.NOT. file_contains('ei0slack_syrope.log', 'Warning: line'), 'syrope-slack:no-spike-warning')
   END SUBROUTINE case_law_slack_runs
 

@@ -48,6 +48,8 @@ PROGRAM test_model
   CALL case_recovery_common_path()
   CALL case_recovery_subdivision_path()
   CALL case_resolved_substeps()
+  CALL case_substep_paths()
+  CALL case_substep_snap_only()
   CALL case_coupled_load_sign()
   CALL case_coupled_motion_update()
   CALL case_external_load_update()
@@ -618,9 +620,145 @@ CONTAINS
     CALL CD_End_Model(bad_m, es, em)
   END SUBROUTINE case_resolved_substeps
 
+  SUBROUTINE case_substep_paths()
+    !! The paths of the resolved sub-stepping on a line that carries viscoelastic segments and
+    !! seabed friction (the 8-segment line of case_resolved_substeps resting 1 cm into a flat
+    !! seabed, End B on the 0.6 m circle): (1) solving the first sub-stepped pass twice, the
+    !! second from the restored committed state (TEST-ONLY sub_test_repeat), changes nothing bit
+    !! for bit, so the restore covers the kinematics, the viscoelastic dl_1 state and the
+    !! friction anchors; (2) a sub-step that fails (TEST-ONLY sub_test_fail) returns the plain
+    !! step's own result, the run then equals the run with ei0_substeps off bit for bit; (3) a
+    !! cap of four sub-steps at a 0.05 deg angle is reached and counted; (4) a re-measured
+    !! interval that needs more sub-steps (TEST-ONLY sub_test_more: one more) is solved again
+    !! with them and lands on the prescribed end state.
+    INTEGER, PARAMETER :: NE = 8, NN = NE + 1, NDOF = 3*NN, NSTEP = 30
+    REAL(wp), PARAMETER :: DT = 0.1_wp
+    INTEGER, PARAMETER :: SUB_MIN = 4   ! the fewest sub-steps of a sub-stepped step
+    TYPE(CD_ModelType) :: auto_m, rep_m, fb_m, off_m, cap_m, more_m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, k
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), q0(NDOF), v0(NDOF), f_ext(NDOF), kn(NN), cn(NN)
+    REAL(wp) :: ve_ead(NE), ve_ba(NE), ve_bad(NE), pq(NDOF), pv(NDOF), pa(NDOF), dl1_0(NE), fr_0(2, NN)
+    LOGICAL :: conv, stalled, all_conv, more_lands
+    CHARACTER(240) :: em
+
+    more_lands = .TRUE.
+    CALL straight_cable(NE, conn, l0, ea, rho_a, q0, fixed)
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    kn = 1.0e4_wp
+    cn = 1.0e2_wp
+    ! the even segments are viscoelastic (Es | Ed, Bs | Bd)
+    ve_ead = 0.0_wp
+    ve_ba = 0.0_wp
+    ve_bad = 0.0_wp
+    ve_ead(2:NE:2) = 2.0e6_wp
+    ve_ba(2:NE:2) = 1.0e5_wp
+    ve_bad(2:NE:2) = 1.0e3_wp
+    CALL CD_Init_Model(auto_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, cfg, es, em, &
+                       seabed_z_floor=0.01_wp, seabed_kn=kn, seabed_cn=cn, seabed_mu=0.5_wp, &
+                       ve_ea_d=ve_ead, ve_ba=ve_ba, ve_ba_d=ve_bad)
+    CALL require(es == CD_MODEL_OK, 'substep-paths:init: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    dl1_0 = auto_m%ve_dl_1
+    fr_0 = auto_m%fr_anchor
+    CALL CD_Copy_Model(auto_m, rep_m, es, em)
+    rep_m%sub_test_repeat = .TRUE.
+    CALL CD_Copy_Model(auto_m, fb_m, es, em)
+    fb_m%sub_test_fail = 2
+    CALL CD_Copy_Model(auto_m, off_m, es, em)
+    off_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+    CALL CD_Copy_Model(auto_m, cap_m, es, em)
+    cap_m%cfg%ei0_substep_angle = 0.05_wp
+    cap_m%cfg%ei0_substep_max = 4
+    CALL CD_Copy_Model(auto_m, more_m, es, em)
+    more_m%sub_test_more = .TRUE.
+    all_conv = .TRUE.
+    DO k = 1, NSTEP
+      CALL circle_end_motion(q0, pq, pv, pa, REAL(k, wp)*DT)
+      CALL CD_Step_Model(auto_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(rep_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(fb_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(off_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(cap_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(more_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, &
+                         prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      more_lands = more_lands .AND. ALL(more_m%q(fixed) == pq(fixed))
+    END DO
+    WRITE (*, '(A,I0,A,I0,A,I0,A,I0,A,I0,A)') '  sub-step paths: ', auto_m%sub_events, ' of ', auto_m%sub_calls, &
+      ' steps sub-stepped, ', auto_m%sub_remeasured, ' re-measured; fallback ', fb_m%sub_fallbacks, &
+      ', capped ', cap_m%sub_capped, ' steps'
+    CALL require(all_conv, 'substep-paths:converged')
+    CALL require(auto_m%sub_events > 0, 'substep-paths:sub-stepped')
+    CALL require(ANY(auto_m%ve_dl_1 /= dl1_0) .AND. ANY(auto_m%fr_anchor /= fr_0), 'substep-paths:states-move')
+    CALL require(ALL(rep_m%q == auto_m%q) .AND. ALL(rep_m%v == auto_m%v) .AND. ALL(rep_m%a == auto_m%a) .AND. &
+                 ALL(rep_m%ve_dl_1 == auto_m%ve_dl_1) .AND. ALL(rep_m%fr_anchor == auto_m%fr_anchor), &
+                 'substep-paths:restore-is-complete')
+    CALL require(fb_m%sub_events == 0 .AND. fb_m%sub_fallbacks > 0, 'substep-paths:fallback-counted')
+    CALL require(ALL(fb_m%q == off_m%q) .AND. ALL(fb_m%v == off_m%v) .AND. ALL(fb_m%a == off_m%a) .AND. &
+                 ALL(fb_m%ve_dl_1 == off_m%ve_dl_1) .AND. ALL(fb_m%fr_anchor == off_m%fr_anchor), &
+                 'substep-paths:fallback-is-the-plain-step')
+    CALL require(cap_m%sub_capped > 0 .AND. cap_m%sub_max_used == 4, 'substep-paths:cap')
+    CALL require(more_m%sub_remeasured == more_m%sub_events .AND. more_m%sub_events > 0 .AND. &
+                 more_m%sub_max_used >= SUB_MIN + 1 .AND. more_lands .AND. &
+                 ANY(more_m%q /= auto_m%q), 'substep-paths:re-measured')
+    CALL CD_End_Model(auto_m, es, em)
+    CALL CD_End_Model(rep_m, es, em)
+    CALL CD_End_Model(fb_m, es, em)
+    CALL CD_End_Model(off_m, es, em)
+    CALL CD_End_Model(cap_m, es, em)
+    CALL CD_End_Model(more_m, es, em)
+  END SUBROUTINE case_substep_paths
+
+  SUBROUTINE case_substep_snap_only()
+    !! The snap trigger alone: a straight 4-segment line 5 % slack (no turn in any step) whose
+    !! End B is pulled 0.5 m along the line in one 0.05 s step snaps taut. The step is solved in
+    !! four sub-steps; with ei0_substeps off it is taken as given.
+    INTEGER, PARAMETER :: NE = 4, NN = NE + 1, NDOF = 3*NN
+    REAL(wp), PARAMETER :: DT = 0.05_wp
+    TYPE(CD_ModelType) :: auto_m, off_m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), q0(NDOF), v0(NDOF), f_ext(NDOF), pq(NDOF), pv(NDOF), pa(NDOF)
+    LOGICAL :: conv, stalled, ok
+    CHARACTER(240) :: em
+
+    CALL straight_cable(NE, conn, l0, ea, rho_a, q0, fixed)
+    l0 = 1.05_wp
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    CALL CD_Init_Model(auto_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, cfg, es, em)
+    CALL require(es == CD_MODEL_OK, 'snap-only:init: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    CALL CD_Copy_Model(auto_m, off_m, es, em)
+    off_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+    pq = q0
+    pv = 0.0_wp
+    pa = 0.0_wp
+    pq(NDOF - 2) = q0(NDOF - 2) + 0.5_wp
+    CALL CD_Step_Model(auto_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+    ok = es == CD_MODEL_OK .AND. conv
+    CALL CD_Step_Model(off_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+    ok = ok .AND. es == CD_MODEL_OK .AND. conv
+    WRITE (*, '(A,I0,A,I0,A)') '  snap-only trigger: ', auto_m%sub_events, ' step(s) sub-stepped, at most ', &
+      auto_m%sub_max_used, ' sub-steps'
+    CALL require(ok, 'snap-only:converged')
+    CALL require(auto_m%sub_events == 1 .AND. auto_m%sub_max_used == 4, 'snap-only:four-sub-steps')
+    CALL require(ALL(auto_m%q(fixed) == pq(fixed)), 'snap-only:lands-on-end-state')
+    CALL require(off_m%sub_events == 0 .AND. ANY(off_m%q /= auto_m%q), 'snap-only:off-takes-the-step')
+    CALL CD_End_Model(auto_m, es, em)
+    CALL CD_End_Model(off_m, es, em)
+  END SUBROUTINE case_substep_snap_only
+
   SUBROUTINE circle_end_motion(q0, pq, pv, pa, t)
     !! End A held, End B (the last node) on the circle x_B + R r(t) (0, sin wt, 1 - cos wt),
-    !! R = 0.3 m, period 2 s, r the C2 quintic ramp over the first second, so the motion starts
+    !! R = 0.6 m, period 2 s, r the C2 quintic ramp over the first second, so the motion starts
     !! from rest (case_resolved_substeps).
     REAL(wp), INTENT(IN) :: q0(:), t
     REAL(wp), INTENT(OUT) :: pq(:), pv(:), pa(:)
