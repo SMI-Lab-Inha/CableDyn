@@ -17272,7 +17272,8 @@ CONTAINS
                                        ErrStat, ErrMsg, bathymetry)
     !! March the bodies (with the rods fixed to them) and the free and pinned rods of a deck
     !! without lines: each object is advanced by the staggered central-difference scheme of the
-    !! line-coupled routes (Newmark gamma = 1/2, beta = 0, drag implicit), with no line loads. With
+    !! line-coupled routes (Newmark gamma = 1/2, beta = 0, drag implicit), with no line loads,
+    !! sub-cycled for the objects' own restoring (objects_substep_count). With
     !! bodyIC static a floating body starts at its hydrostatic equilibrium (float_body_equilibrium).
     CHARACTER(*), INTENT(IN) :: out_root
     CHARACTER(NAMELEN), INTENT(IN) :: channels(:)
@@ -17289,8 +17290,8 @@ CONTAINS
     TYPE(RigidBodyState), ALLOCATABLE :: rigid(:), old_rigid(:)
     TYPE(RodState), ALLOCATABLE :: rst(:), old_rst(:)
     TYPE(DeckRod), ALLOCATABLE :: own(:)
-    INTEGER :: unit, ios, step, nstep, k, es
-    REAL(wp) :: t, acc(3), alpha(3), dv0(6)
+    INTEGER :: unit, ios, step, nstep, k, es, nsub, isub
+    REAL(wp) :: t, acc(3), alpha(3), dv0(6), dts, ts
     CHARACTER(160) :: em
     TYPE(DriverProgress) :: progress
 
@@ -17345,53 +17346,62 @@ CONTAINS
     DO step = 1, nstep
       CALL CD_Profile_Enter(CD_PROF_SOLVE)
       t = REAL(step, wp)*opts%dtM
-      old_rigid = rigid
-      old_rst = rst
-      DO k = 1, SIZE(rigid)
-        CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, rigid(k)%a, &
-                                      rigid(k)%alpha, rigid(k)%a, rigid(k)%alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
-                                      CD_RIGID_NEWMARK_BETA, es, em)
-        IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
-        IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rigid(k)%a
-        dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rigid(k)%alpha
-        CALL objects_acceleration(opts, t, opts%dtM, dv0, acc, alpha, ErrStat, ErrMsg, body=rigid(k), &
-                                  bathymetry=bathymetry)
-        IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        rigid(k) = old_rigid(k)
-        CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, old_rigid(k)%a, &
-                                      old_rigid(k)%alpha, acc, alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
-                                      CD_RIGID_NEWMARK_BETA, es, em)
-        IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
-        IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        rigid(k)%a = acc
-        rigid(k)%alpha = alpha
-      END DO
-      IF (ErrStat == CD_DECKDRV_OK) THEN
-        DO k = 1, SIZE(rst)
-          IF (.NOT. (rst(k)%is_free .OR. rst(k)%is_pinned)) CYCLE
-          CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, rst(k)%a, rst(k)%alpha, &
-                                        rst(k)%a, rst(k)%alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
+      ! sub-steps that resolve the objects' own restoring (objects_substep_count)
+      CALL objects_substep_count(rigid, rst, opts, t - opts%dtM, opts%dtM, nsub, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) nsub = 0
+      dts = opts%dtM/REAL(MAX(1, nsub), wp)
+      DO isub = 1, nsub
+        ts = t - opts%dtM + REAL(isub, wp)*dts
+        IF (isub == nsub) ts = t
+        old_rigid = rigid
+        old_rst = rst
+        DO k = 1, SIZE(rigid)
+          CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, rigid(k)%a, &
+                                        rigid(k)%alpha, rigid(k)%a, rigid(k)%alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
                                         CD_RIGID_NEWMARK_BETA, es, em)
-          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
-          CALL pin_rod(rst(k))
-          dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rst(k)%a
-          dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rst(k)%alpha
-          CALL objects_acceleration(opts, t, opts%dtM, dv0, acc, alpha, ErrStat, ErrMsg, rod=rst(k), &
+          dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rigid(k)%a
+          dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rigid(k)%alpha
+          CALL objects_acceleration(opts, ts, dts, dv0, acc, alpha, ErrStat, ErrMsg, body=rigid(k), &
                                     bathymetry=bathymetry)
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
-          rst(k) = old_rst(k)
-          CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, old_rst(k)%a, &
-                                        old_rst(k)%alpha, acc, alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
+          rigid(k) = old_rigid(k)
+          CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, old_rigid(k)%a, &
+                                        old_rigid(k)%alpha, acc, alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
                                         CD_RIGID_NEWMARK_BETA, es, em)
-          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
-          rst(k)%a = acc
-          rst(k)%alpha = alpha
-          CALL pin_rod(rst(k))
+          rigid(k)%a = acc
+          rigid(k)%alpha = alpha
         END DO
-      END IF
+        IF (ErrStat == CD_DECKDRV_OK) THEN
+          DO k = 1, SIZE(rst)
+            IF (.NOT. (rst(k)%is_free .OR. rst(k)%is_pinned)) CYCLE
+            CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, rst(k)%a, rst(k)%alpha, &
+                                          rst(k)%a, rst(k)%alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
+                                          CD_RIGID_NEWMARK_BETA, es, em)
+            IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+            CALL pin_rod(rst(k))
+            dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rst(k)%a
+            dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rst(k)%alpha
+            CALL objects_acceleration(opts, ts, dts, dv0, acc, alpha, ErrStat, ErrMsg, rod=rst(k), &
+                                      bathymetry=bathymetry)
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+            rst(k) = old_rst(k)
+            CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, old_rst(k)%a, &
+                                          old_rst(k)%alpha, acc, alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
+                                          CD_RIGID_NEWMARK_BETA, es, em)
+            IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+            rst(k)%a = acc
+            rst(k)%alpha = alpha
+            CALL pin_rod(rst(k))
+          END DO
+        END IF
+        IF (ErrStat /= CD_DECKDRV_OK) EXIT
+      END DO
       IF (ErrStat == CD_DECKDRV_OK) THEN
         CALL CD_Profile_Step()
         CALL CD_Profile_Enter(CD_PROF_OUTPUT)
@@ -17434,6 +17444,67 @@ CONTAINS
       WRITE (unit, ROW_VALUES_FMT) time, (char_tab(), vals(i), i=1, SIZE(channels))
     END SUBROUTINE write_row
   END SUBROUTINE write_objects_dynamic_out
+
+  SUBROUTINE objects_substep_count(rigid, rst, opts, time, dt, nsub, ErrStat, ErrMsg, bathymetry)
+    !! Sub-steps of a step of length dt of the march of a deck without lines
+    !! (write_objects_dynamic_out), from the estimate of the line-coupled routes without its line
+    !! springs (rigid_substep_count): a body's hydrostatic restoring and seabed contact
+    !! (rigid6_contact_stiffness) over its structural mass and inertia plus the submerged
+    !! translational added mass, as in step_rigid6_system; a free rod's seabed contact over its
+    !! structural plus added mass; a pinned rod's swing about its pin with its seabed contact
+    !! (pinned_swing_omega2), as in step_rod_system.
+    TYPE(RigidBodyState), INTENT(IN) :: rigid(:)
+    TYPE(RodState), INTENT(IN) :: rst(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: time, dt
+    INTEGER, INTENT(OUT) :: nsub
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: k, j
+    REAL(wp) :: omega2, mass6(6), k6(6), f(3), m(3), added6(6, 6), drag6(6, 6), buoy(4), mp(3, 3)
+
+    nsub = 1
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    omega2 = CD_ZERO
+    DO k = 1, SIZE(rigid)
+      IF (rigid(k)%is_prescribed) CYCLE
+      mass6(1:3) = rigid(k)%mass
+      IF (rigid(k)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*rigid(k)%vol*MAX(CD_ZERO, rigid(k)%ca)
+      mass6(4:6) = global_inertia_diag(rigid(k)%rot_mat, rigid(k)%inertia)
+      k6 = [CD_ZERO, CD_ZERO, rigid(k)%c33, rigid(k)%c44, rigid(k)%c55, CD_ZERO]
+      CALL rigid6_contact_stiffness(rigid(k), opts, dt, k6, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      DO j = 1, 6
+        IF (mass6(j) > CD_ZERO) omega2 = MAX(omega2, k6(j)/mass6(j))
+      END DO
+    END DO
+    DO k = 1, SIZE(rst)
+      IF (.NOT. (rst(k)%is_free .OR. rst(k)%is_pinned)) CYCLE
+      CALL rod_environment_force(rst(k), opts, time, f, m, added6, drag6, ErrStat, ErrMsg, buoyancy=buoy)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      k6 = CD_ZERO
+      IF (rst(k)%is_pinned) THEN
+        mp = pinned_rotational_inertia(rst(k), added6)
+        CALL rod_contact_stiffness(rst(k), opts, rst(k)%pin, dt, k6, ErrStat, ErrMsg, bathymetry)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        omega2 = MAX(omega2, pinned_swing_omega2(rst(k), opts, mp, added6, buoy, k_extra=k6(4) + k6(5)))
+      ELSE
+        mass6(1:3) = rst(k)%mass
+        mass6(4:6) = global_inertia_diag(rst(k)%rot_mat, rst(k)%inertia)
+        DO j = 1, 6
+          mass6(j) = mass6(j) + MAX(CD_ZERO, added6(j, j))
+        END DO
+        CALL rod_contact_stiffness(rst(k), opts, rst(k)%r, dt, k6, ErrStat, ErrMsg, bathymetry)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        DO j = 1, 6
+          IF (mass6(j) > CD_ZERO) omega2 = MAX(omega2, k6(j)/mass6(j))
+        END DO
+      END IF
+    END DO
+    nsub = rigid_substep_count(omega2, dt)
+  END SUBROUTINE objects_substep_count
 
   ! --------------------------------------------------------------------------- !
   ! multibody march: Rigid6 bodies (with fixed and pinned rods), free, pinned    !
@@ -18568,7 +18639,8 @@ CONTAINS
 
   SUBROUTINE mb_step(mb, points, opts, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, bathymetry)
     !! Advance the multibody march from time - dt to time, sub-cycled so that the explicit object
-    !! positions resolve the stiffest object-mooring mode of the EI=0 lines (rigid_substep_count).
+    !! positions resolve the stiffest object-mooring mode of the EI=0 lines and the objects' own
+    !! restoring, with or without lines (rigid_substep_count).
     TYPE(MultibodyMarch), INTENT(INOUT) :: mb
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -18579,7 +18651,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: ib, ir, ip, nsub, isub, it, k, bases(2)
     LOGICAL :: conv_s, stall_s
-    REAL(wp) :: omega2, mass6(6), arms(3, 2), f_d(3), m_d(3), added6(6, 6), drag6(6, 6), k6c(6)
+    REAL(wp) :: omega2, mass6(6), arms(3, 2), f_d(3), m_d(3), added6(6, 6), drag6(6, 6), k6c(6), buoy(4), w2_pin
 
     converged = .TRUE.
     stalled = .FALSE.
@@ -18612,43 +18684,43 @@ CONTAINS
       END IF
     END IF
     omega2 = CD_ZERO
-    ! a body-only monolithic deck still resolves its hydrostatic restoring
-    IF (mb%has_sys .OR. mb%implicit) THEN
-      DO ib = 1, SIZE(mb%rigid)
-        BLOCK
-          INTEGER :: att_base(SIZE(mb%rigid(ib)%point_indices))
-          REAL(wp) :: att_arm(3, SIZE(mb%rigid(ib)%point_indices))
-          DO ip = 1, SIZE(mb%rigid(ib)%point_indices)
-            att_base(ip) = -1
-            IF (mb%has_sys) att_base(ip) = system_point_base(mb%system, &
-                                                             points(mb%rigid(ib)%point_indices(ip))%id)
-            att_arm(:, ip) = MATMUL(mb%rigid(ib)%rot_mat, points(mb%rigid(ib)%point_indices(ip))%body_offset)
+    ! the bodies' own restoring enters with or without lines (a body-only deck still resolves it)
+    DO ib = 1, SIZE(mb%rigid)
+      BLOCK
+        INTEGER :: att_base(SIZE(mb%rigid(ib)%point_indices))
+        REAL(wp) :: att_arm(3, SIZE(mb%rigid(ib)%point_indices))
+        DO ip = 1, SIZE(mb%rigid(ib)%point_indices)
+          att_base(ip) = -1
+          IF (mb%has_sys) att_base(ip) = system_point_base(mb%system, &
+                                                           points(mb%rigid(ib)%point_indices(ip))%id)
+          att_arm(:, ip) = MATMUL(mb%rigid(ib)%rot_mat, points(mb%rigid(ib)%point_indices(ip))%body_offset)
+        END DO
+        mass6(1:3) = mb%rigid(ib)%mass
+        IF (mb%rigid(ib)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*mb%rigid(ib)%vol* &
+                                                      MAX(CD_ZERO, mb%rigid(ib)%ca)
+        mass6(4:6) = global_inertia_diag(mb%rigid(ib)%rot_mat, mb%rigid(ib)%inertia)
+        IF (ALLOCATED(mb%rigid(ib)%att_rods)) THEN
+          DO k = 1, SIZE(mb%rigid(ib)%att_rods)
+            mass6(1:3) = mass6(1:3) + mb%rigid(ib)%att_rods(k)%mass
           END DO
-          mass6(1:3) = mb%rigid(ib)%mass
-          IF (mb%rigid(ib)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*mb%rigid(ib)%vol* &
-                                                        MAX(CD_ZERO, mb%rigid(ib)%ca)
-          mass6(4:6) = global_inertia_diag(mb%rigid(ib)%rot_mat, mb%rigid(ib)%inertia)
-          IF (ALLOCATED(mb%rigid(ib)%att_rods)) THEN
-            DO k = 1, SIZE(mb%rigid(ib)%att_rods)
-              mass6(1:3) = mass6(1:3) + mb%rigid(ib)%att_rods(k)%mass
-            END DO
-          END IF
-          ! hydrostatic restoring; the staggered scheme's explicit positions also meet the seabed
-          ! contact that acts within the step (the monolithic scheme carries it in its Jacobian)
-          k6c = [CD_ZERO, CD_ZERO, mb%rigid(ib)%c33, mb%rigid(ib)%c44, mb%rigid(ib)%c55, CD_ZERO]
-          IF (.NOT. mb%implicit) THEN
-            CALL rigid6_contact_stiffness(mb%rigid(ib), opts, dt, k6c, ErrStat, ErrMsg, bathymetry)
-            IF (ErrStat /= CD_DECKDRV_OK) RETURN
-          END IF
-          omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, att_base, att_arm, mass6, k6c))
-        END BLOCK
-      END DO
-    END IF
-    IF (mb%has_sys) THEN
+        END IF
+        ! hydrostatic restoring; the staggered scheme's explicit positions also meet the seabed
+        ! contact that acts within the step (the monolithic scheme carries it in its Jacobian)
+        k6c = [CD_ZERO, CD_ZERO, mb%rigid(ib)%c33, mb%rigid(ib)%c44, mb%rigid(ib)%c55, CD_ZERO]
+        IF (.NOT. mb%implicit) THEN
+          CALL rigid6_contact_stiffness(mb%rigid(ib), opts, dt, k6c, ErrStat, ErrMsg, bathymetry)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        END IF
+        omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, att_base, att_arm, mass6, k6c))
+      END BLOCK
+    END DO
+    ! the rods' own terms enter the staggered scheme with or without lines
+    IF (mb%has_sys .OR. .NOT. mb%implicit) THEN
       DO ir = 1, SIZE(mb%rods)
         IF (.NOT. (mb%rods(ir)%is_free .OR. mb%rods(ir)%is_pinned)) CYCLE
         CALL mb_rod_bases(mb, points, mb%rods(ir), bases, arms)
-        CALL rod_environment_force(mb%rods(ir), opts, time - dt, f_d, m_d, added6, drag6, ErrStat, ErrMsg)
+        CALL rod_environment_force(mb%rods(ir), opts, time - dt, f_d, m_d, added6, drag6, ErrStat, ErrMsg, &
+                                   buoyancy=buoy)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
         mass6(1:3) = mb%rods(ir)%mass
         mass6(4:6) = global_inertia_diag(mb%rods(ir)%rot_mat, mb%rods(ir)%inertia)
@@ -18656,11 +18728,23 @@ CONTAINS
           mass6(k) = mass6(k) + MAX(CD_ZERO, added6(k, k))
         END DO
         k6c = CD_ZERO
+        w2_pin = CD_ZERO
         IF (.NOT. mb%implicit) THEN
-          CALL rod_contact_stiffness(mb%rods(ir), opts, mb%rods(ir)%r, dt, k6c, ErrStat, ErrMsg, bathymetry)
-          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          ! the staggered scheme's explicit positions also meet the seabed contact that acts within
+          ! the step (the monolithic scheme carries it in its Jacobian) and, for a pinned rod, its
+          ! swing about the pin with that contact (pinned_swing_omega2, as in step_rod_system)
+          IF (mb%rods(ir)%is_pinned) THEN
+            CALL rod_contact_stiffness(mb%rods(ir), opts, mb%rods(ir)%pin, dt, k6c, ErrStat, ErrMsg, bathymetry)
+            IF (ErrStat /= CD_DECKDRV_OK) RETURN
+            w2_pin = pinned_swing_omega2(mb%rods(ir), opts, pinned_rotational_inertia(mb%rods(ir), added6), added6, &
+                                         buoy, k_extra=k6c(4) + k6c(5))
+            k6c = CD_ZERO
+          ELSE
+            CALL rod_contact_stiffness(mb%rods(ir), opts, mb%rods(ir)%r, dt, k6c, ErrStat, ErrMsg, bathymetry)
+            IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          END IF
         END IF
-        omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, bases, arms, mass6, k6c))
+        omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, bases, arms, mass6, k6c) + w2_pin)
       END DO
     END IF
     IF (mb%implicit) THEN

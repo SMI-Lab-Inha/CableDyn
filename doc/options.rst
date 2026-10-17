@@ -234,8 +234,9 @@ Clock and initial condition
        ``Free``/``Connect`` points step in one implicit generalised-alpha step with their
        ``EI = 0`` lines (a Newton iteration on the object accelerations around the line steps);
        no sub-stepping is needed for stability. A deck without lines keeps its explicit
-       central-difference march unless it names ``monolithic bodyScheme``. ``staggered``: the
-       staggered predictor-corrector, sub-stepped for the stiffest body-mooring mode. Decks with
+       central-difference march, sub-stepped for the objects' own restoring, unless it names
+       ``monolithic bodyScheme``. ``staggered``: the staggered predictor-corrector, sub-stepped
+       for the stiffest body-mooring mode and the objects' own restoring. Decks with
        a ``motionFile`` or a ``FAILURE`` section, and coupled runs, use ``staggered`` whatever
        the value. See :doc:`theory`
      - standalone

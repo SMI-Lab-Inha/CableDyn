@@ -284,6 +284,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   heave, roll and pitch about the reference point, or about the pin of a pinned rod at both pin
   poses. The monolithic scheme, which carries the contact in its Jacobian, is unchanged. No
   shipped example or existing test changes its sub-step count.
+- Line-free explicit object marches without a sub-step estimate. A standalone deck without lines
+  marched its bodies and rods by the explicit central difference at `dtM` with no sub-steps, and
+  the `bodyScheme staggered` multibody march skipped the bodies (and rods) when no `EI = 0` line
+  was present (finite-EI cables only), so a short pinned rod or a body on a stiff seabed could
+  exceed the explicit limit there. Both now take the estimate from the objects' own terms
+  (hydrostatic restoring, seabed contact, a pinned rod's swing about its pin), and the staggered
+  multibody march adds a pinned rod's swing and its contact about the pin as the coupled route
+  does. A 1 m dry pinned rod at `dtM = 0.6 s` (`omega0 dt = 2.29`) now takes 6 sub-steps on
+  both routes and equals a `dtM = 0.1 s` run at every row, where it previously turned over. No
+  shipped example or existing test changes its sub-step count.
 
 - Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated
   the axial force and the dynamic loads at the blended configuration

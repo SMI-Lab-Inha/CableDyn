@@ -10,7 +10,9 @@ PROGRAM test_bodies_rods
   !!      rhoW A draft = m_total and heaves with 2 pi sqrt(m_total/(rhoW g A)) (CaEnd = 0);
   !!   3. the same spar on a light vertical tether: the tether carries the net buoyancy, and the
   !!      Body<N>/Rod<N> channels report the body and rod on the line-coupled route;
-  !!   4. a LINES row written with R1A/R1B equals the same deck with Rod1A/Rod1B POINT rows.
+  !!   4. a LINES row written with R1A/R1B equals the same deck with Rod1A/Rod1B POINT rows;
+  !!   5. a short pinned rod at a step beyond its explicit swing limit sub-cycles it on a deck
+  !!      without lines and on the staggered multibody march without an EI=0 line.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
@@ -31,6 +33,7 @@ PROGRAM test_bodies_rods
   CALL check_pinned_rod_with_line()
   CALL check_zero_length_rod()
   CALL check_mixed_rest()
+  CALL check_lineless_substep()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' body/rod topology check(s) failed'
     ERROR STOP 1
@@ -703,4 +706,93 @@ CONTAINS
                  'cable anchor Point<P>F equals AnchTen')
     CALL require(ABS(dat(14, 1) - dat(15, 1)) <= 1.0e-9_wp*dat(15, 1), 'Rod2TenB is the tether''s FairTen')
   END SUBROUTINE check_mixed_rest
+
+  SUBROUTINE write_short_pendulum(path, dt, with_cable)
+    !! A dry 1 m rod (50 kg/m) pinned at End A at (0, 0, 20) and released at 30 degrees, on a deck
+    !! without lines, or (with_cable) on the staggered multibody march beside an independent
+    !! finite-EI cable hung from a Fixed rod to an anchor (no EI=0 line, so no line spring reaches
+    !! the pinned rod).
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: dt
+    LOGICAL, INTENT(IN) :: with_cable
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Short dry rod pendulum pinned at End A'
+    IF (with_cable) THEN
+      WRITE (u, '(A)') '--- LINE TYPES ---'
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+      WRITE (u, '(A)') 'cable 0.15 30 5.0e8 -0.8 1.0e4 1.2 0.01 1.0 0'
+    END IF
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'pend 0.2 50 0 0 0 0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    WRITE (u, '(A,ES22.14,A,ES22.14,A)') '1 pend Pinned 0 0 20 ', 0.5_wp, ' 0 ', 20.0_wp - SQRT(0.75_wp), ' 4 -'
+    IF (with_cable) WRITE (u, '(A)') '2 pend Fixed 10 0 -55 10 0 -57 2 -'
+    IF (with_cable) THEN
+      WRITE (u, '(A)') '--- POINTS ---'
+      WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+      WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+      WRITE (u, '(A)') '1 Fixed 40 0 -60 0 0 0 0'
+      WRITE (u, '(A)') '--- LINES ---'
+      WRITE (u, '(A)') 'ID LineType AttachA AttachB UnstrLen NumSegs Outputs'
+      WRITE (u, '(A)') '(-) (-) (-) (-) (m) (-) (-)'
+      WRITE (u, '(A)') '1 cable R2B 1 35 10 -'
+    END IF
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '70 WtrDpth'
+    WRITE (u, '(A)') 'deck bodyIC'
+    IF (with_cable) WRITE (u, '(A)') 'staggered bodyScheme'
+    WRITE (u, '(ES22.14,A)') dt, ' dtM'
+    WRITE (u, '(A)') '18 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Rod1N4Px Rod1N4Pz'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_short_pendulum
+
+  SUBROUTINE check_lineless_substep()
+    !! A 1 m dry pinned rod swings with omega0^2 = m g (L/2)/I_A, about 14.6 rad^2/s^2, so a 0.6 s
+    !! step (omega0 dt = 2.29) is beyond the explicit limit of 2 for any line-free march: the deck
+    !! without lines, and the staggered multibody march whose only line is a finite-EI cable,
+    !! must take 6 sub-steps (omega0 dt/0.4 = 5.73) from the rod's own swing. Each run must
+    !! reproduce a run at the sub-step size at every 0.6 s output row (to the printed digits),
+    !! stay within its release angle and keep the elliptic-integral period to the accuracy of
+    !! omega0 dt_sub of about 0.38 (near (omega dt)^2/24 = 0.6 %).
+    REAL(wp), PARAMETER :: TH0 = 30.0_wp
+    REAL(wp), ALLOCATABLE :: dc(:, :), df(:, :)
+    REAL(wp) :: ia, t_ref, got, err, amp
+    INTEGER :: kase, i, nc
+    LOGICAL :: ok
+    CHARACTER(16) :: tag
+
+    ia = 50.0_wp*(1.0_wp/3.0_wp + 0.2_wp**2/16.0_wp)
+    t_ref = 4.0_wp*SQRT(ia/(50.0_wp*GRAV*0.5_wp))*ellip_k(SIN(0.5_wp*TH0*PI/180.0_wp))
+    DO kase = 1, 2
+      tag = MERGE('no lines        ', 'staggered, cable', kase == 1)
+      CALL write_short_pendulum('bodrod_short_c.dat', 0.6_wp, kase == 2)
+      CALL run('bodrod_short_c.dat', 'bodrod_short_c', 3, dc, ok)
+      IF (.NOT. ok) RETURN
+      CALL write_short_pendulum('bodrod_short_f.dat', 0.1_wp, kase == 2)
+      CALL run('bodrod_short_f.dat', 'bodrod_short_f', 3, df, ok)
+      IF (.NOT. ok) RETURN
+      nc = SIZE(dc, 2)
+      err = 0.0_wp
+      DO i = 1, nc
+        err = MAX(err, nan_max_abs(dc(2:3, i) - df(2:3, 6*(i - 1) + 1)))
+      END DO
+      amp = MAX(nan_max_abs(dc(2, :)), nan_max_abs(df(2, :)))
+      got = crossing_period(df(1, :), df(2, :))
+      WRITE (*, '(A,A,A,ES10.3,A,F8.5,A,2F10.6)') 'short pinned rod at a 0.6 s step (', TRIM(tag), &
+        '): vs 0.1 s run ', err, ' m; max End B x/release ', amp/0.5_wp, '; period got/analytic [s] ', got, t_ref
+      CALL require(nc == 31 .AND. SIZE(df, 2) == 181, 'short pendulum: output rows ('//TRIM(tag)//')')
+      CALL require(err <= 1.0e-6_wp, 'short pendulum: 0.6 s step equals its 0.1 s sub-step run ('//TRIM(tag)//')')
+      CALL require(amp <= 1.02_wp*0.5_wp, 'short pendulum: the swing stays within its release ('//TRIM(tag)//')')
+      CALL require(ABS(got - t_ref) <= 1.5e-2_wp*t_ref, 'short pendulum: period ('//TRIM(tag)//')')
+    END DO
+  END SUBROUTINE check_lineless_substep
 END PROGRAM test_bodies_rods

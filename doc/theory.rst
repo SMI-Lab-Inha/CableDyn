@@ -1937,6 +1937,10 @@ the diagonal terms, so it can understate the coupled frequency by about a factor
 alone (the central-difference bound :math:`\omega\,\Delta t < 2`) would allow a limit near 1.
 The limit of 0.4 is set by accuracy: a rod released out of balance at :math:`\Delta t = 0.1` s
 follows the fairlead-tension transient of a :math:`\Delta t = 0.005` s run within 1.5 %.
+The objects' own terms (hydrostatic restoring, seabed contact, and the swing of a pinned rod
+below) enter whether or not a line is attached: a deck without lines, which marches its
+objects by the same explicit scheme, and a staggered deck whose only lines are finite-EI cables
+are sub-stepped for them as well.
 Both schemes start from the instantaneous acceleration of the initial state.
 
 On the coupled route a ``Pinned`` or ``CoupledPinned`` rod advances only its rotation in this
