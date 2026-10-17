@@ -865,11 +865,16 @@ class LineNodeHistory(TimeHistory):
     are those of :class:`cabledyn.OutputTable`, with ``values`` of shape
     ``(n_samples, 1 + 3 * n_nodes)``; positions are in metres.
 
+    The file lists every node of the line's final mesh. On a finite-EI line
+    whose mesh the static solve refined, a ``# DeckNode`` comment line names
+    the deck node of each (:attr:`deck_nodes`).
+
     Raises
     ------
     OutputFormatError
         If the node channels are malformed, not contiguous from ``Node1``, or
-        not in metres, or time does not strictly increase.
+        not in metres, time does not strictly increase, or a ``# DeckNode``
+        line does not number the deck nodes of the file's nodes.
     """
 
     def __post_init__(self) -> None:
@@ -888,6 +893,31 @@ class LineNodeHistory(TimeHistory):
         units = {match.group(3) for match in parsed if match is not None}
         if units != {"m"}:
             raise OutputFormatError(f"{self.path}: line-node position channels must use metres")
+        deck = self.deck_nodes
+        if deck is not None:
+            named = deck[deck > 0]
+            if (
+                deck.size != node_count
+                or np.any(deck < 0)
+                or deck[0] != 1
+                or deck[-1] <= 0
+                or not np.array_equal(named, np.arange(1, named.size + 1))
+            ):
+                raise OutputFormatError(
+                    f"{self.path}: the DeckNode line does not number the deck nodes of the "
+                    f"{node_count} nodes 1, 2, ... from End A to End B"
+                )
+
+    @property
+    def deck_nodes(self) -> npt.NDArray[np.int64] | None:
+        """Deck node of each node of the file, or ``None`` for the deck mesh.
+
+        ``(n_nodes,)`` deck node numbers (the ``<J>`` of the node channels of
+        a main output) from the file's ``# DeckNode`` line, 0 for a node a mesh
+        refinement added; ``None`` when the file has no such line (the line was
+        not refined, so its nodes are the deck nodes).
+        """
+        return _deck_node_comment(self.title, self.path)
 
     @property
     def node_ids(self) -> tuple[int, ...]:
@@ -1546,6 +1576,18 @@ def _check_not_device(table_path: Path) -> None:
         raise OutputFormatError(
             f"{table_path}: {device!r} is a reserved Windows device name, not a file"
         )
+
+
+def _deck_node_comment(title: str, path: Path | None = None) -> npt.NDArray[np.int64] | None:
+    """Deck node numbers of a ``# DeckNode`` comment line of a result title, if any."""
+    for line in title.splitlines():
+        tokens = line.split()
+        if len(tokens) >= 2 and tokens[0] == "#" and tokens[1] == "DeckNode":
+            try:
+                return np.asarray([int(token) for token in tokens[2:]], dtype=np.int64)
+            except ValueError as exc:
+                raise OutputFormatError(f"{path}: malformed DeckNode line") from exc
+    return None
 
 
 def _read_lines(table_path: Path) -> list[str]:

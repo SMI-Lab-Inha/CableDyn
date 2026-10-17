@@ -16,7 +16,7 @@ MODULE CableDyn_CAPI
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_System, CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, &
                                  CD_Deck_Query_dtM, CD_DECK_NAMELEN, CD_Eval_Aggregate_Channel, &
                                  CD_Eval_Aggregate_Segment_Tensions, CD_Rigid6_Inventory, CD_Rod_Inventory, &
-                                 CD_Channel_Token_Parses
+                                 CD_Channel_Token_Parses, CD_Cable_Deck_Node
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_End, CD_AGG_IsInitialized, CD_AGG_OK, &
@@ -90,7 +90,7 @@ MODULE CableDyn_CAPI
                                CD_C_LINE_TENSION = 3_C_INT, CD_C_LINE_ACCELERATION = 4_C_INT, &
                                CD_C_LINE_CURVATURE = 5_C_INT, CD_C_LINE_BEND_MOMENT = 6_C_INT, &
                                CD_C_LINE_DECLINATION = 7_C_INT, CD_C_LINE_AZIMUTH = 8_C_INT, &
-                               CD_C_LINE_SEGMENT_TENSION = 9_C_INT
+                               CD_C_LINE_SEGMENT_TENSION = 9_C_INT, CD_C_LINE_DECK_NODE = 10_C_INT
   !> Capacity of the per-handle diagnostic retained for CableDyn_GetLastError.
   INTEGER, PARAMETER :: CD_C_MSG_LEN = 1024
 
@@ -1463,7 +1463,9 @@ CONTAINS
     !! One quantity along line `index` (0-based) in public node order End A -> End B.
     !! quantity: CD_C_LINE_POSITION / VELOCITY / ACCELERATION (3 per node, xyz interleaved),
     !! TENSION / CURVATURE / BEND_MOMENT / DECLINATION / AZIMUTH (1 per node), or
-    !! SEGMENT_TENSION (1 per segment). n_out must equal the value count exactly.
+    !! SEGMENT_TENSION (1 per segment), or DECK_NODE (1 per node: the deck node of each node of the
+    !! line's final mesh, the J of the node channels; 0 for a node a refinement added). Every quantity
+    !! covers every node of the final mesh. n_out must equal the value count exactly.
     TYPE(C_PTR), VALUE :: handle, out_ptr
     INTEGER(C_INT), VALUE :: index, quantity, n_out
     INTEGER(C_INT), INTENT(OUT) :: err_stat
@@ -1493,7 +1495,7 @@ CONTAINS
       IF (quantity == CD_C_LINE_VELOCITY) field = 'v'
       IF (quantity == CD_C_LINE_ACCELERATION) field = 'a'
     CASE (CD_C_LINE_TENSION, CD_C_LINE_CURVATURE, CD_C_LINE_BEND_MOMENT, CD_C_LINE_DECLINATION, &
-          CD_C_LINE_AZIMUTH)
+          CD_C_LINE_AZIMUTH, CD_C_LINE_DECK_NODE)
       nvals = nnode
     CASE (CD_C_LINE_SEGMENT_TENSION)
       nvals = nnode - 1
@@ -1507,6 +1509,20 @@ CONTAINS
       RETURN
     END IF
     CALL C_F_POINTER(out_ptr, out_c, [nvals])
+
+    IF (quantity == CD_C_LINE_DECK_NODE) THEN
+      ! deck node of each mesh node: a refined finite-EI cable maps them; any other line is meshed
+      ! as the deck
+      DO node = 1, nnode
+        out_c(node) = REAL(node, C_DOUBLE)
+        IF (h%use_agg) THEN
+          IF (h%agg%line_is_cable(line_id)) out_c(node) = &
+            REAL(CD_Cable_Deck_Node(h%agg%cables(h%agg%line_obj_index(line_id)), node), C_DOUBLE)
+        END IF
+      END DO
+      CALL store_status(h, CD_C_OK, '')
+      RETURN
+    END IF
 
     IF (quantity == CD_C_LINE_SEGMENT_TENSION) THEN
       BLOCK

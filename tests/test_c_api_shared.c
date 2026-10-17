@@ -169,6 +169,9 @@ static int check_deck_step(const char *deck)
         CHECK(err == CD_C_BAD_INPUT, "mis-sized line buffer accepted");
         CableDyn_GetLineValues(m, 0, CD_C_LINE_SEGMENT_TENSION, seg, nn - 1, &err);
         CHECK(err == CD_C_OK && seg[0] > 0.0, "segment tensions");
+        /* an EI = 0 line is meshed as the deck: mesh node k is deck node k */
+        CableDyn_GetLineValues(m, 0, CD_C_LINE_DECK_NODE, xyz, nn, &err);
+        CHECK(err == CD_C_OK && xyz[0] == 1.0 && xyz[nn - 1] == (double)nn, "deck nodes of a line");
         CableDyn_GetLineValues(m, 0, CD_C_LINE_TENSION, xyz, nn, &err);
         ten0 = xyz[0];
         CableDyn_EvalChannel(m, token, (int)strlen(token), &fair, &err);

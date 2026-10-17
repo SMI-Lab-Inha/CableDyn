@@ -1770,8 +1770,11 @@ handle numbers its lines 1..n).
        ``_VELOCITY`` (2), ``_ACCELERATION`` (4), 3 values per node, xyz interleaved;
        ``_TENSION`` (3, the ``Ten<L>N<k>`` node tension), ``_CURVATURE`` (5),
        ``_BEND_MOMENT`` (6, zero on an EI = 0 line), ``_DECLINATION`` (7), ``_AZIMUTH`` (8),
-       one value per node; ``_SEGMENT_TENSION`` (9), one value per segment. ``n_out`` must
-       equal the value count.
+       one value per node; ``_SEGMENT_TENSION`` (9), one value per segment;
+       ``_DECK_NODE`` (10), one value per node: the deck node ``J`` of the node (the ``<J>``
+       of the node channels), 0 for a node a mesh refinement added, ``1 … n_nodes`` on a line
+       meshed as the deck. ``n_out`` must equal the value count. A library without code 10
+       rejects it with ``CD_C_BAD_INPUT``.
    * - ``CableDyn_GetPointState``
      - position, velocity and the resultant force of the attached lines (``Point<P>F``),
        3 doubles each
@@ -1790,7 +1793,8 @@ handle numbers its lines 1..n).
 On a finite-EI line whose mesh the static solve refined, ``n_nodes`` and the
 ``CableDyn_GetLineValues`` arrays cover every node of the refined mesh, while a node token of
 ``CableDyn_EvalChannel`` (``Ten1N5``, ``L1N5px``) names deck node 5 at its node of that mesh
-(:ref:`outputs-refined-nodes`).
+(:ref:`outputs-refined-nodes`); ``CD_C_LINE_DECK_NODE`` locates it: the array row whose value is
+5.
 
 A ``NULL`` output pointer skips that output, except for the ``out`` array of
 ``CableDyn_GetLineValues`` and the ``value`` of ``CableDyn_EvalChannel``; the latter is not

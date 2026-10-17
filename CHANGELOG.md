@@ -336,10 +336,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `EI = 0` + finite-EI, multibody, OpenFAST and the C API `CableDyn_EvalChannel`. `.static.out`,
   the range graphs, the per-line files and `CableDyn_GetLineValues` still list every node of the
   refined mesh; `.static.out` then carries a `DeckNode` column naming the deck node of each row
-  (0 for a node the refinement added). The Python `StaticProfile.deck_node_arc_lengths`,
-  `node_range_graph`, `profile_at`/`profiles_at` and `line_range_graph` place main-output node
-  channels at their deck node, also from a per-line position file beside a refined
-  `.static.out`. `EI = 0` lines are never refined, and every output of a deck whose meshes are
+  (0 for a node the refinement added), `.Line<L>.p.out` a `# DeckNode` comment line (also on the
+  multibody march, which writes no `.static.out`), and the new C API quantity
+  `CD_C_LINE_DECK_NODE` (10) of `CableDyn_GetLineValues`, Python `Line.deck_nodes`, gives the
+  same numbering in process. The Python `StaticProfile.deck_node_arc_lengths`,
+  `LineNodeHistory.deck_nodes`, `node_range_graph`, `profile_at`/`profiles_at` and
+  `line_range_graph` place main-output node channels at their deck node, from a static profile,
+  a per-line position file or `LinePositions` read from one. `EI = 0` lines are never refined, and every output of a deck whose meshes are
   not refined is unchanged. See the manual's output reference (Node channels on a refined line).
 
 - Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated

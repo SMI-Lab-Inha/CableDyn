@@ -141,16 +141,18 @@ def check_anchor_point(label: str, root: Path, line_id: int, point_id: int) -> N
 
 def line_lengths(path: Path) -> np.ndarray:
     """Deformed chord length of a line at every row of a dynamic .Line<L>.p.out file."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    data = np.array([[float(v) for v in row.split()] for row in lines[2:] if row.strip()])
+    # skip the comment lines (a refined line adds "# DeckNode") and the header row
+    lines = [row for row in path.read_text(encoding="utf-8").splitlines() if not row.startswith("#")]
+    data = np.array([[float(v) for v in row.split()] for row in lines[1:] if row.strip()])
     xyz = data[:, 1:].reshape(data.shape[0], -1, 3)
     return np.linalg.norm(np.diff(xyz, axis=1), axis=2).sum(axis=1)
 
 
 def static_line_length(path: Path) -> float:
     """Deformed chord length of a line from a static .Line<L>.p.out table (Node X Y Z)."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    data = np.array([[float(v) for v in row.split()] for row in lines[2:] if row.strip()])
+    # skip the comment lines (a refined line adds "# DeckNode") and the header row
+    lines = [row for row in path.read_text(encoding="utf-8").splitlines() if not row.startswith("#")]
+    data = np.array([[float(v) for v in row.split()] for row in lines[1:] if row.strip()])
     return float(np.linalg.norm(np.diff(data[:, 1:4], axis=0), axis=1).sum())
 
 

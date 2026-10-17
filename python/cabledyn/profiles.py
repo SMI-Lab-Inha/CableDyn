@@ -36,8 +36,13 @@ total ``NumSegs`` of the line's sections at End B); a static profile and the
 per-line files list every node of the line's final mesh. The two differ on a
 finite-EI line whose mesh the static solve refined: a static profile then
 places main-output node channels at the rows its ``DeckNode`` column names,
-and a per-line position file ``<root>.Line<L>.p.out`` at the nodes that column
-names in the static profile ``<root>.static.out`` beside it.
+and a per-line position file ``<root>.Line<L>.p.out`` (also as the ``source``
+of :class:`~cabledyn.LinePositions`) at the nodes its ``# DeckNode`` line names. Plain
+position arrays carry no such map: they are taken as numbered by deck node, so
+pass the in-process mesh positions of a refined line
+(:meth:`cabledyn.objects.Line.values`) together with
+:attr:`cabledyn.objects.Line.deck_nodes`, for example as a ``{node: arc}``
+mapping.
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ from cabledyn.results import (
     OutputTable,
     StaticProfile,
     TimeHistory,
+    _deck_node_comment,
     read_output,
 )
 
@@ -997,45 +1003,84 @@ def _node_arc(
 def _deck_node_positions(
     locate: LocationSource, node_ids: npt.NDArray[Any], arc: npt.NDArray[Any]
 ) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
-    """Deck node ids and arc lengths of a per-line file's nodes.
+    """Deck node ids and arc lengths of the nodes of a position source.
 
-    A per-line file ``<root>.Line<L>.<kind>.out`` lists every node of the
-    line's final mesh. When the static profile ``<root>.static.out`` of the
-    same run has a ``DeckNode`` column for the line (its mesh was refined),
-    the deck nodes are taken from it; otherwise the file's nodes are the deck
-    nodes.
+    A per-line file ``<root>.Line<L>.p.out`` and a static profile list every
+    node of the line's final mesh. On a line whose mesh the static solve
+    refined, the file's ``# DeckNode`` line (or the ``DeckNode`` column of the
+    static profile ``<root>.static.out`` beside it) names the deck nodes among
+    them; without either the file's nodes are the deck nodes. Position arrays
+    carry no such map and are taken as numbered by deck node.
     """
-    if not isinstance(locate, OutputTable):
+    mesh_node = _deck_node_rows(locate)
+    if mesh_node is None:
         return node_ids, arc
-    if not (isinstance(locate, LineNodeHistory) or _is_static_node_table(locate)):
-        return node_ids, arc
-    path = locate.path
-    match = _FILE_LINE.search(path.name)
-    if match is None:
-        return node_ids, arc
-    static = path.with_name(path.name[: match.start()] + ".static.out")
-    if not static.is_file():
-        return node_ids, arc
-    profile = read_output(static)
-    line_id = int(match.group(1))
-    if (
-        not isinstance(profile, StaticProfile)
-        or "DeckNode" not in profile.channels
-        or line_id not in profile.line_ids
-    ):
-        return node_ids, arc
-    rows = profile.line(line_id)
-    mesh_node = {
-        int(deck): int(node)
-        for deck, node in zip(rows.column("DeckNode"), rows.column("Node"), strict=True)
-        if deck > 0.0
-    }
     position = dict(zip(node_ids.tolist(), arc.tolist(), strict=True))
     deck = [j for j in sorted(mesh_node) if mesh_node[j] in position]
     return (
         np.asarray(deck, dtype=np.int64),
         np.asarray([position[mesh_node[j]] for j in deck], dtype=np.float64),
     )
+
+
+def _deck_node_rows(locate: LocationSource) -> dict[int, int] | None:
+    """Deck node -> node id of a position source's file; ``None`` when they coincide."""
+    path: Path | None
+    deck: npt.NDArray[Any] | None = None
+    if isinstance(locate, LineNodeHistory):
+        path, deck = locate.path, locate.deck_nodes
+    elif isinstance(locate, OutputTable) and _is_static_node_table(locate):
+        path, deck = locate.path, _deck_node_comment(locate.title, locate.path)
+    elif isinstance(locate, LinePositions) and locate.source is not None:
+        path = locate.source
+        if path.name.lower().endswith(".static.out"):
+            return _static_profile_rows(path, None)
+        if path.is_file():
+            deck = _deck_node_comment(_comment_head(path), path)
+    else:
+        return None
+    if deck is not None:
+        return {int(j): k + 1 for k, j in enumerate(deck.tolist()) if j > 0}
+    match = _FILE_LINE.search(path.name)
+    if match is None:
+        return None
+    static = path.with_name(path.name[: match.start()] + ".static.out")
+    if not static.is_file():
+        return None
+    return _static_profile_rows(static, int(match.group(1)))
+
+
+def _static_profile_rows(path: Path, line_id: int | None) -> dict[int, int] | None:
+    """Deck node -> ``Node`` of one line of a static profile with a ``DeckNode`` column."""
+    profile = read_output(path)
+    if not isinstance(profile, StaticProfile) or "DeckNode" not in profile.channels:
+        return None
+    if line_id is None:
+        if len(profile.line_ids) != 1:
+            raise ValueError(
+                f"{path.name} lists several lines with a refined mesh; place deck-node "
+                "channels with the StaticProfile itself"
+            )
+        line_id = profile.line_ids[0]
+    if line_id not in profile.line_ids:
+        return None
+    rows = profile.line(line_id)
+    return {
+        int(deck): int(node)
+        for deck, node in zip(rows.column("DeckNode"), rows.column("Node"), strict=True)
+        if deck > 0.0
+    }
+
+
+def _comment_head(path: Path) -> str:
+    """The leading ``#`` comment lines of a result file."""
+    lines: list[str] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.startswith("#"):
+                break
+            lines.append(line.rstrip("\n"))
+    return "\n".join(lines)
 
 
 def _cumulative_arc(xyz: npt.NDArray[Any]) -> npt.NDArray[Any]:

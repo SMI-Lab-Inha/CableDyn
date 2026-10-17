@@ -40,7 +40,7 @@ Status codes in the notes: **R** reproduced; **D** changed by an intentional def
 mode reproduces); **F** changed by a robustness fix; **X** not reproducible from the recorded
 inputs; **W** worse agreement or robustness with the defaults.
 
-| Quantity | Paper | Release, paper mode | Release, defaults | Reference | Note |
+| Quantity | Paper | 71158d5, paper mode | 71158d5, defaults | Reference | Note |
 | --- | --- | --- | --- | --- | --- |
 | Axial patch force error | 1.10e-13 | 1.10e-13 | 1.10e-13 | closed form | R |
 | Circular-arc energy convergence order | 4.00 | 4.00 | 4.00 | 4 | R |

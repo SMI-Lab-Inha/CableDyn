@@ -42,7 +42,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
-from cabledyn import node_range_graph, profile_at, read_output  # noqa: E402
+from cabledyn import line_positions, node_range_graph, profile_at, read_output  # noqa: E402
 
 FAILURES: list[str] = []
 LINE = 4
@@ -239,6 +239,26 @@ def dynamic_gates(exe: Path, source: Path, out: Path, rows: dict[int, int]) -> N
         np.allclose(placed.location, expected, rtol=0.0, atol=1.0e-9),
         "profile_at places deck-node channels with a per-line position file at their mesh nodes",
     )
+    # the per-line file names its deck nodes itself, so it places them without the profile
+    deck = positions.deck_nodes
+    check(
+        deck is not None
+        and deck.size == rows[72] + 1
+        and all(int(deck[rows[j]]) == j for j in rows)
+        and int(np.count_nonzero(deck)) == 72,
+        "the .p.out DeckNode line names the deck node of every mesh node",
+    )
+    alone = out / "alone"
+    alone.mkdir()
+    shutil.copy(out / f"dynamic.Line{LINE}.p.out", alone / f"dynamic.Line{LINE}.p.out")
+    lone = read_output(alone / f"dynamic.Line{LINE}.p.out")
+    by_file = profile_at(history, "tension", 0.1, line_id=LINE, positions=lone)
+    by_positions = profile_at(history, "tension", 0.1, line_id=LINE, positions=line_positions(lone))
+    check(
+        np.allclose(by_file.location, expected, rtol=0.0, atol=1.0e-9)
+        and np.allclose(by_positions.location, expected, rtol=0.0, atol=1.0e-9),
+        "a per-line position file (or LinePositions read from it) places deck nodes on its own",
+    )
 
 
 def mixed_gates(exe: Path, source: Path, out: Path, rows: dict[int, int]) -> None:
@@ -296,6 +316,13 @@ def capi_gates(library: Path, source: Path, out: Path, rows: dict[int, int]) -> 
         except CableDynError:
             rejected = True
         check(rejected, "a node past the deck node count is rejected")
+        deck = line.deck_nodes
+        check(
+            deck.size == line.n_nodes
+            and all(int(deck[rows[j]]) == j for j in rows)
+            and int(np.count_nonzero(deck)) == 72,
+            "Line.deck_nodes (CD_C_LINE_DECK_NODE) locates the deck nodes among the mesh nodes",
+        )
 
 
 def main() -> int:
@@ -314,10 +341,12 @@ def main() -> int:
     rows = static_gates(exe, source, out)
     dynamic_gates(exe, source, out, rows)
     mixed_gates(exe, source, out, rows)
-    if args.library is not None and args.library.is_file():
+    if args.library is None:
+        print("SKIP: C API gates (no --library)")
+    elif args.library.is_file():
         capi_gates(args.library.resolve(), source, out, rows)
     else:
-        print("SKIP: C API gates (no --library)")
+        check(False, f"--library {args.library} is not a file")
     if FAILURES:
         print(f"{len(FAILURES)} gate(s) failed")
         return 1

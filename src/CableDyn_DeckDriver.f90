@@ -26397,6 +26397,15 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'cannot open Hermite line position output: '//TRIM(path)); RETURN
         END IF
         WRITE (pos_units(i), '(A)') '# CableDyn finite-EI Hermite line node positions; public node order EndA -> EndB'
+        IF (ALLOCATED(cables(i)%deck_node)) THEN
+          ! A line whose mesh the static solve refined lists every node of its final mesh: name the
+          ! deck node of each (0: a node the refinement added), as the static-profile DeckNode column
+          WRITE (pos_units(i), '(A)', ADVANCE='NO') '# DeckNode'
+          DO node = 1, cables(i)%line%nn
+            WRITE (pos_units(i), '(A,I0)', ADVANCE='NO') char_tab(), CD_Cable_Deck_Node(cables(i), node)
+          END DO
+          WRITE (pos_units(i), '(A)') ''
+        END IF
         WRITE (pos_units(i), '(A)', ADVANCE='NO') 'Time(s)'
         DO node = 1, cables(i)%line%nn
           WRITE (pos_units(i), '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'X(m)'

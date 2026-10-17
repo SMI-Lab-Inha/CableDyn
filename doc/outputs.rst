@@ -348,7 +348,9 @@ channels instead) and accept ``r``.
 also on a finite-EI line whose mesh the static solve refined (:ref:`outputs-refined-nodes`).
 Each file starts with a ``#`` comment line (e.g.
 ``# CableDyn static line node positions; public node order EndA -> EndB``) and a header row;
-there is no units row — units are in the column names.
+there is no units row — units are in the column names. On a refined line the ``.p.out`` file
+has a second comment line, ``# DeckNode`` followed by one tab-separated integer per node: the
+deck node of that node, 0 for a node the refinement added.
 
 .. list-table::
    :header-rows: 1
@@ -491,7 +493,9 @@ graphs, the per-line files and the C API ``CableDyn_GetLineValues`` list every n
 refined mesh instead, and ``.elements.out`` every element. To find deck node ``J`` among them,
 take the ``.static.out`` row whose ``DeckNode`` is ``J``: its ``Node`` is the node number in the
 range graph and the per-line files (and the array row + 1 of ``CableDyn_GetLineValues``), its
-``ArcLength`` the node's deformed arc length. The deck node also lies
+``ArcLength`` the node's deformed arc length. The ``# DeckNode`` line of ``.Line<L>.p.out`` gives
+the same numbering on routes that write no ``.static.out`` (the multibody march), and the C API
+quantity ``CD_C_LINE_DECK_NODE`` (Python ``Line.deck_nodes``) in process. The deck node also lies
 where the ``ReferenceArcStart`` of ``.elements.out`` equals its unstretched arc length from End A
 (``ReferenceArcEnd`` of the last element for End B). ``EI = 0`` lines are never refined.
 
