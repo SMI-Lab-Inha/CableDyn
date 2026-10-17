@@ -1889,6 +1889,7 @@ CONTAINS
       LOGICAL                   :: waves, grid_current, check_xy(2), check_z, outside
       INTEGER(IntKi)            :: i, k, nout, nin, nwet, room
       REAL(wp)                  :: lo(2), hi(2), tol(2), zbot, tol_z, ex, ex_max(3), at_max(3), surface
+      REAL(wp)                  :: zq, dep
       CHARACTER(11)             :: inp(3), res(3)
       CHARACTER(1024)           :: farthest, enlarge, refine
       CHARACTER(:), ALLOCATABLE :: head, msg
@@ -1934,7 +1935,14 @@ CONTAINS
             END IF
          END DO
          IF (check_z) THEN
-            ex = zbot - inst_e%fx_xyz(3, i)
+            ! SeaState interpolates at the node depth, or under Wheeler stretching (WaveStMod 3) at
+            ! the depth mapped linearly from [-EffWtrDpth, wave elevation] to [-EffWtrDpth, 0]
+            zq = inst_e%fx_xyz(3, i)
+            IF (waves .AND. wf%WaveStMod == 3_IntKi) THEN
+               dep = REAL(wf%EffWtrDpth, wp)
+               IF (dep + inst_e%fx_wl(i) > 0.0_wp) zq = MIN(dep*(dep + zq)/(dep + inst_e%fx_wl(i)) - dep, 0.0_wp)
+            END IF
+            ex = zbot - zq
             IF (ex > tol_z) THEN
                outside = .TRUE.
                IF (ex > ex_max(3)) THEN

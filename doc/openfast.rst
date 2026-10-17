@@ -149,7 +149,10 @@ for it, which also decides its wetting in CableDyn (the still-water level when t
 are off), and, without wave stretching (``WaveStMod = 0``), at or below the still-water level,
 above which SeaState gives zero kinematics without reading the grid. Only the directions in
 which nodes leave the grid are listed. Waves are checked in all three
-directions and a SeaState current (uniform in x and y) only in depth. Excursions smaller than
+directions and a SeaState current (uniform in x and y) only in depth; under Wheeler stretching
+(``WaveStMod = 3``) the depth checked is the one SeaState interpolates at, the node depth mapped
+linearly from the range between the seabed and the local wave elevation onto the range between
+the seabed and the still-water level. Excursions smaller than
 1 % of the grid spacing at the boundary are ignored, and so are nodes below a grid that reaches
 the seabed (``Z_Depth = WtrDpth + MSL2SWL``): they are in the seabed, where the kinematics of the
 grid bottom are the right ones. FAST.Farm runs, which use still water, and SeaState fields
