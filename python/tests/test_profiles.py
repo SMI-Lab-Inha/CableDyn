@@ -505,6 +505,34 @@ def test_main_output_node_channels_are_deck_nodes_on_a_refined_line(tmp_path):
     np.testing.assert_allclose(by_alone.location, [0.0, 2.0 * _chord(1.0)])
 
 
+def test_line_positions_of_a_multi_line_refined_profile_keep_their_line(tmp_path):
+    # line 2 is meshed as the deck; line 1 is refined (deck nodes 1, 2, 3 are mesh nodes 1, 3, 5)
+    path = tmp_path / "run.static.out"
+    rows = [
+        "CableDyn standalone static configuration (deformed arc; public node order End A -> End B)",
+        "LineID\tNode\tArcLength\tX\tY\tZ\tTension\tCurvature\tBendMoment\tDeckNode",
+        "(-)\t(-)\t(m)\t(m)\t(m)\t(m)\t(N)\t(1/m)\t(N.m)\t(-)",
+    ]
+    for node in range(1, 6):
+        deck = (node + 1) // 2 if node % 2 else 0
+        arc = 25.0 * (node - 1)
+        rows.append(f"1\t{node}\t{arc}\t{arc}\t0\t-50\t{1.0e5 * node}\t0\t0\t{deck}")
+    for node in range(1, 4):
+        arc = 50.0 * (node - 1)
+        rows.append(f"2\t{node}\t{arc}\t{arc}\t10\t-50\t1e5\t0\t0\t{node}")
+    path.write_text("\n".join(rows) + "\n", encoding="ascii")
+    profile = read_output(path)
+    main = _write_main_output(tmp_path / "run.out")
+    positions = line_positions(profile, line_id=1)
+    assert positions.line_id == 1
+    placed = profile_at(main, "tension", 10.0, line_id=1, positions=positions)
+    np.testing.assert_allclose(placed.location, [0.0, 100.0])
+    # without the selected line the multi-line profile cannot name one map
+    ambiguous = LinePositions(None, positions.positions, positions.node_ids, positions.source)
+    with pytest.raises(ValueError, match="several lines"):
+        profile_at(main, "tension", 10.0, line_id=1, positions=ambiguous)
+
+
 def test_per_line_range_graph_takes_its_line_id_from_the_file_name(tmp_path):
     nodes = _write_nodes(tmp_path / "run.Line3.p.out")
     assert line_range_graph(nodes, "z").line_id == 3

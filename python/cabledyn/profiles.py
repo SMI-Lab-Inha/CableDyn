@@ -217,6 +217,9 @@ class LinePositions:
         CableDyn, ``0`` for End A of a MoorDyn line).
     source : pathlib.Path | None
         Result file the positions were read from, if any.
+    line_id : int | None
+        Line of a multi-line ``source`` (a static profile) the positions were
+        taken from, if any; it selects that line's deck-node map.
 
     Raises
     ------
@@ -229,6 +232,7 @@ class LinePositions:
     positions: npt.NDArray[Any]
     node_ids: npt.NDArray[Any]
     source: Path | None = None
+    line_id: int | None = None
 
     def __post_init__(self) -> None:
         positions = _readonly(self.positions)
@@ -323,7 +327,9 @@ class LinePositions:
         if self.time is None or (start is None and stop is None):
             return self
         mask = _window(self.time, start, stop)
-        return LinePositions(self.time[mask], self.positions[mask], self.node_ids, self.source)
+        return LinePositions(
+            self.time[mask], self.positions[mask], self.node_ids, self.source, self.line_id
+        )
 
 
 def _at(
@@ -909,7 +915,9 @@ def line_positions(
     if isinstance(source, StaticProfile):
         line = _static_line(source, identifier)
         xyz = np.column_stack([line.column(axis) for axis in "XYZ"])
-        return LinePositions(None, xyz[None], line.column("Node").astype(np.int64), line.path)
+        return LinePositions(
+            None, xyz[None], line.column("Node").astype(np.int64), line.path, line.line_ids[0]
+        )
     data: npt.NDArray[Any]
     if isinstance(source, LineNodeHistory):
         _no_line_id(identifier, source)
@@ -1034,7 +1042,7 @@ def _deck_node_rows(locate: LocationSource) -> dict[int, int] | None:
     elif isinstance(locate, LinePositions) and locate.source is not None:
         path = locate.source
         if path.name.lower().endswith(".static.out"):
-            return _static_profile_rows(path, None)
+            return _static_profile_rows(path, locate.line_id)
         if path.is_file():
             deck = _deck_node_comment(_comment_head(path), path)
     else:
