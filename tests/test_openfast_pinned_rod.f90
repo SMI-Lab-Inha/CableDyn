@@ -1375,7 +1375,7 @@ CONTAINS
     !! The contact springs kBot d dl of the rod stations on the bed are far stiffer than the rod's
     !! other restoring: (1) the Pinned rod's End B station alone, 5e4 N/m at 0.87 m horizontally
     !! from the pin, gives omega^2 about 2e3 rad^2/s^2 about the pin (omega dt about 4.7 at a
-    !! 0.1 s step; the stations within reach of the bed over the step ask for 20 to 25
+    !! 0.1 s step; the stations within reach of the bed over the step ask for 34 to 36
     !! sub-steps) against 5 from its submerged weight; (2) the Free rod's 21 stations, 4e6 N/m in
     !! all on 100 kg, give omega^2 about 4e4 in heave (omega dt about 10 at a 0.05 s step, 26
     !! sub-steps) against about 800 from its tethers (4 sub-steps). The march must sub-cycle the

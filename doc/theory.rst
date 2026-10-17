@@ -1925,10 +1925,19 @@ the chord direction, :math:`L` the chord length, :math:`k_a = 1/\sum l_0/EA`, :m
 tension), carried to the reference point and added to the hydrostatic restoring and to the
 seabed contact; the inertia is the structural plus added mass. The contact springs are the
 penalty springs of the seabed model (:math:`k_\text{Bot}\,d\,\mathrm{d}l` at each contact station
-of a rod, :math:`k_\text{Bot}` over 1 m² at a body's reference point) that act within the coming
-step: a station counts when its penetration plus its reach over the step,
-:math:`\Delta t|v_z| + \tfrac{1}{2}\Delta t^2\max(|a_z|, g)`, is positive, so an object about to
-land is resolved as well as one at rest on the bed. A spring :math:`k` at arm :math:`\mathbf{a}`
+of a rod, :math:`k_\text{Bot}` over 1 m² at a body's reference point) that can act within the
+coming step. A station at arm :math:`\mathbf{s}` from the rod centre moves with
+:math:`\mathbf{v} + \boldsymbol{\omega}\times\mathbf{s}`, and its acceleration is bounded by
+:math:`a_s = |\mathbf{a}| + |\boldsymbol{\alpha}\times\mathbf{s}| + |\boldsymbol{\omega}|^2|\mathbf{s}| + g`
+(:math:`\mathbf{a}`, :math:`\boldsymbol{\alpha}` the committed accelerations, the free fall added
+so that a first step without them counts); its reach
+:math:`\rho = \Delta t\,|\mathbf{v} + \boldsymbol{\omega}\times\mathbf{s}| + \tfrac{1}{2}\Delta t^2 a_s`
+bounds its travel in every direction, vertical and horizontal. The station counts when its height
+above the highest floor within the horizontal distance :math:`\rho` (the depth on a flat seabed;
+on a bathymetry grid the highest node of the cells the surrounding box overlaps, raised by
+:math:`0.05` of their range for the crease rounding) is at most :math:`\rho` plus the rod radius.
+An object about to land, sliding towards a shallower bed or turning a station onto it is thus
+resolved as well as one at rest on the bed. A spring :math:`k` at arm :math:`\mathbf{a}`
 adds :math:`k` in heave and :math:`k a_y^2`, :math:`k a_x^2` in roll and pitch. The normal seabed
 damping is applied implicitly and sets no limit; the monolithic scheme carries the contact in
 its Jacobian, and its accuracy sub-steps (above) leave the contact out. The estimate omits the

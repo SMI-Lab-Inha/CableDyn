@@ -278,12 +278,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `bodyScheme staggered`) applies the seabed penalty springs explicitly, but sized its sub-steps
   from the lines, hydrostatics and (pinned rods) the swing only, so a rod or body resting on a
   stiff seabed at a large coupling step could exceed the central-difference limit and be thrown
-  off the bed. The estimate now adds the contact springs that act within the step
-  (`kBot d dl` per rod contact station, `kBot` over 1 m² at a body's reference point; a station
-  counts when its penetration plus its reach `dt |v_z| + dt² max(|a_z|, g)/2` is positive), in
+  off the bed. The estimate now adds the contact springs that can act within the step
+  (`kBot d dl` per rod contact station, `kBot` over 1 m² at a body's reference point), in
   heave, roll and pitch about the reference point, or about the pin of a pinned rod at both pin
-  poses. The monolithic scheme, which carries the contact in its Jacobian, is unchanged. No
-  shipped example or existing test changes its sub-step count.
+  poses. A station counts from its complete rigid-body motion: its reach
+  `dt |v + w x s| + dt² (|a| + |alpha x s| + |w|² |s| + g)/2` bounds its travel in every
+  direction, and it counts when its height above the highest floor within that horizontal
+  distance (the depth on a flat seabed; on a `bathymetryFile` grid the highest node of the
+  overlapped cells, raised for the crease rounding by the new `CD_Bathymetry_Max_Floor`) is at
+  most the reach plus the rod radius, so a rod sliding or turning towards a shallower bed is
+  covered as well as one landing. The monolithic scheme, which carries the contact in its
+  Jacobian, is unchanged. No shipped example or existing test changes its sub-step count.
 - Line-free explicit object marches without a sub-step estimate. A standalone deck without lines
   marched its bodies and rods by the explicit central difference at `dtM` with no sub-steps, and
   the `bodyScheme staggered` multibody march skipped the bodies (and rods) when no `EI = 0` line

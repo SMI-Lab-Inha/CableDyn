@@ -41,7 +41,8 @@ MODULE CableDyn_DeckDriver
                              CD_STATIC_FRICTION_AS_LAID, CD_STATIC_FRICTION_NONE
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, &
                                  CD_Bathymetry_Is_Initialized, CD_Bathymetry_Floor, &
-                                 CD_Bathymetry_Floor_Gradient, CD_Bathymetry_Grid_Floor, CD_BATHY_OK
+                                 CD_Bathymetry_Floor_Gradient, CD_Bathymetry_Grid_Floor, CD_Bathymetry_Max_Floor, &
+                                 CD_BATHY_OK
   USE CableDyn_Line, ONLY: CD_LineType, CD_LineSection, CD_Build_Line_Mesh, &
                            CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Catenary, ONLY: CD_Catenary_Seed, CD_CAT_OK, CD_CAT_NOSEED
@@ -20953,15 +20954,15 @@ CONTAINS
 
   SUBROUTINE rod_contact_stiffness(rod, opts, ref, dt, k6, ErrStat, ErrMsg, bathymetry)
     !! Add to k6 the diagonal stiffness, about the point ref in global axes, of the seabed contact
-    !! springs of rod_seabed_contact (kBot d dl at each of its stations) that act within the
-    !! coming step of length dt: a station counts when its penetration plus its reach over the
-    !! step, dt |v_z| + dt^2 max(|a_z|, g)/2 from its current velocity and acceleration (at least
-    !! a free fall, so that a first step without a committed acceleration counts), is positive, so
-    !! a rod about to land is covered as well as one already on the bed. A vertical spring k at
-    !! arm a from ref adds k to the heave entry and k a_y^2, k a_x^2 to the roll and pitch
-    !! entries (the bound k |a x e_z|^2 of its rotational stiffness about any axis is their sum).
-    !! The normal damper and the friction are left out: the step applies the damper implicitly,
-    !! and the regularised friction is bounded by mu times the normal load.
+    !! springs of rod_seabed_contact (kBot d dl at each of its stations) that can act within the
+    !! coming step of length dt (contact_within_reach, with the station's rigid-body velocity
+    !! v + w x s, the bound |a| + |alpha x s| + |w|^2 |s| + g of its acceleration and the rod
+    !! radius), so a rod about to land, sliding towards a shallower bed or turning a station
+    !! onto it is covered as well as one already on the bed. A vertical spring k at arm a from
+    !! ref adds k to the heave entry and k a_y^2, k a_x^2 to the roll and pitch entries (the bound
+    !! k |a x e_z|^2 of its rotational stiffness about any axis is their sum). The normal damper
+    !! and the friction are left out: the step applies the damper implicitly, and the
+    !! regularised friction is bounded by mu times the normal load.
     TYPE(RodState), INTENT(IN) :: rod
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(IN) :: ref(3), dt
@@ -20970,8 +20971,8 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: i, ncontact
-    REAL(wp) :: s, dl, arm(3), r_eval(3), v_z, a_z, z_floor, k, a_ref(3)
-    LOGICAL :: has_floor
+    REAL(wp) :: s, dl, arm(3), r_eval(3), k, a_ref(3), a_rigid
+    LOGICAL :: within
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -20983,32 +20984,63 @@ CONTAINS
       IF (i == 0 .OR. i == ncontact) dl = 0.5_wp*dl
       arm = MATMUL(rod%rot_mat, [s, CD_ZERO, CD_ZERO])
       r_eval = rod%r + arm
-      CALL deck_seabed_floor_at(r_eval(1), r_eval(2), opts, has_floor, z_floor, ErrStat, ErrMsg, bathymetry)
+      a_rigid = NORM2(rod%a) + NORM2(cross3(rod%alpha, arm)) + SUM(rod%omega**2)*ABS(s)
+      CALL contact_within_reach(r_eval, rod%v + cross3(rod%omega, arm), a_rigid, 0.5_wp*rod%diam, dt, opts, &
+                                within, ErrStat, ErrMsg, bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      IF (.NOT. has_floor) CYCLE
-      v_z = rod%v(3) + cross3_z(rod%omega, arm)
-      a_z = rod%a(3) + cross3_z(rod%alpha, arm)
-      IF (.NOT. (z_floor - r_eval(3) + dt*ABS(v_z) + 0.5_wp*dt*dt*MAX(ABS(a_z), opts%g) > CD_ZERO)) CYCLE
+      IF (.NOT. within) CYCLE
       k = opts%kbot*rod%diam*dl
       a_ref = r_eval - ref
       k6(3) = k6(3) + k
       k6(4) = k6(4) + k*a_ref(2)**2
       k6(5) = k6(5) + k*a_ref(1)**2
     END DO
-
-  CONTAINS
-
-    PURE REAL(wp) FUNCTION cross3_z(x, y) RESULT(z)
-      REAL(wp), INTENT(IN) :: x(3), y(3)
-      z = x(1)*y(2) - x(2)*y(1)
-    END FUNCTION cross3_z
   END SUBROUTINE rod_contact_stiffness
+
+  SUBROUTINE contact_within_reach(x, v, a_rigid, radius, dt, opts, within, ErrStat, ErrMsg, bathymetry)
+    !! Whether a contact point at x (velocity v, acceleration bounded by a_rigid, the free fall
+    !! g added) of a body of the given radius about it can meet the seabed within a step dt: its
+    !! reach dt |v| + dt^2 (a_rigid + g)/2 bounds its travel in every direction, and it counts when
+    !! its height above the highest floor within that horizontal distance (the depth on a flat
+    !! seabed, CD_Bathymetry_Max_Floor over the box around the disk on a bathymetry grid) is at
+    !! most the reach plus the radius.
+    REAL(wp), INTENT(IN) :: x(3), v(3), a_rigid, radius, dt
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    LOGICAL, INTENT(OUT) :: within
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: es
+    REAL(wp) :: reach, z_max
+    LOGICAL :: bathy_ready
+    CHARACTER(160) :: em
+
+    within = .FALSE.
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    reach = dt*NORM2(v) + 0.5_wp*dt*dt*(a_rigid + opts%g)
+    ! see deck_seabed_floor_at: no short-circuit on the absent OPTIONAL bathymetry
+    bathy_ready = .FALSE.
+    IF (PRESENT(bathymetry)) bathy_ready = CD_Bathymetry_Is_Initialized(bathymetry)
+    IF (bathy_ready) THEN
+      CALL CD_Bathymetry_Max_Floor(bathymetry, x(1) - reach, x(1) + reach, x(2) - reach, x(2) + reach, z_max, es, em)
+      IF (es /= CD_BATHY_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'deck bathymetry floor bound failed: '//TRIM(em))
+        RETURN
+      END IF
+    ELSE IF (opts%has_wtrdpth) THEN
+      z_max = -opts%wtrdpth
+    ELSE
+      RETURN
+    END IF
+    within = x(3) - z_max <= reach + radius
+  END SUBROUTINE contact_within_reach
 
   SUBROUTINE rigid6_contact_stiffness(body, opts, dt, k6, ErrStat, ErrMsg, bathymetry)
     !! Add to k6 the diagonal seabed contact stiffness of a Rigid6 body about its reference point
-    !! within the coming step (the reach rule of rod_contact_stiffness): the reference-point
-    !! penalty of rigid6_seabed_contact (kBot over 1 m^2, heave only) and the stations of the rods
-    !! fixed to the body, posed as rigid6_rod_loads poses them.
+    !! that can act within the coming step (contact_within_reach): the reference-point penalty of
+    !! rigid6_seabed_contact (kBot over 1 m^2, heave only) and the stations of the rods fixed to
+    !! the body, posed as rigid6_rod_loads poses them, with the body's rigid-body motion.
     TYPE(RigidBodyState), INTENT(IN) :: body
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(IN) :: dt
@@ -21017,19 +21049,16 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: k
-    REAL(wp) :: z_floor, r(3)
-    LOGICAL :: has_floor
+    REAL(wp) :: r(3)
+    LOGICAL :: within
     TYPE(RodState) :: rs
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     IF (.NOT. (opts%kbot > CD_ZERO)) RETURN
-    CALL deck_seabed_floor_at(body%r(1), body%r(2), opts, has_floor, z_floor, ErrStat, ErrMsg, bathymetry)
+    CALL contact_within_reach(body%r, body%v, NORM2(body%a), CD_ZERO, dt, opts, within, ErrStat, ErrMsg, bathymetry)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    IF (has_floor) THEN
-      IF (z_floor - body%r(3) + dt*ABS(body%v(3)) + 0.5_wp*dt*dt*MAX(ABS(body%a(3)), opts%g) > CD_ZERO) &
-        k6(3) = k6(3) + opts%kbot
-    END IF
+    IF (within) k6(3) = k6(3) + opts%kbot
     IF (.NOT. ALLOCATED(body%att_rods)) RETURN
     DO k = 1, SIZE(body%att_rods)
       rs = body%att_rods(k)
@@ -21038,7 +21067,7 @@ CONTAINS
       rs%rot_mat = MATMUL(body%rot_mat, body%att_rot(:, :, k))
       rs%v = body%v + cross3(body%omega, r)
       rs%omega = body%omega
-      rs%a = body%a + cross3(body%alpha, r)
+      rs%a = body%a + cross3(body%alpha, r) + cross3(body%omega, cross3(body%omega, r))
       rs%alpha = body%alpha
       CALL rod_contact_stiffness(rs, opts, body%r, dt, k6, ErrStat, ErrMsg, bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN

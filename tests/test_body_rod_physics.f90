@@ -25,6 +25,8 @@ PROGRAM test_body_rod_physics
   !!      buoy on an overstretched line, bodies and rods displaced and turned) reach the same
   !!      stable equilibrium, never an unstable one. The rigs of 1-4
   !!      release a body from its deck pose (bodyIC deck).
+  !!   7. a rod carried horizontally (drifting, or turning about its pin) onto a bathymetry step
+  !!      up is sub-stepped for the contact it reaches within a step.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Deck_Equilibrium_Jacobian_Check, CD_DECKDRV_OK
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
@@ -49,6 +51,7 @@ PROGRAM test_body_rod_physics
   CALL check_equilibrium_jacobian()
   CALL check_equilibrium_seed_robustness()
   CALL check_static_body_start()
+  CALL check_bathymetry_reach_substep()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' body/rod physics check(s) failed'
     ERROR STOP 1
@@ -1441,5 +1444,125 @@ CONTAINS
     WRITE (u, '(A)') '--- end ---'
     CLOSE (u)
   END SUBROUTINE write_connect_deck
+
+  ! ------------------------------------------------------------------------------------------
+  ! 7. Contact reach over a bathymetry step
+  ! ------------------------------------------------------------------------------------------
+
+  REAL(wp) FUNCTION step_floor(x) RESULT(z)
+    !! The seabed of write_step_bathy: z = -10 m up to x = X0, a linear ramp to -9.2 m at
+    !! x = X0 + 0.8 (a 45 degree slope), and -9.2 m beyond.
+    REAL(wp), INTENT(IN) :: x
+    REAL(wp), PARAMETER :: X0 = 0.3_wp
+    z = -10.0_wp + 0.8_wp*MIN(1.0_wp, MAX(0.0_wp, (x - X0)/0.8_wp))
+  END FUNCTION step_floor
+
+  SUBROUTINE write_step_bathy(path)
+    CHARACTER(*), INTENT(IN) :: path
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') '-20.0 -20.0 10.0'
+    WRITE (u, '(A)') '0.3 -20.0 10.0'
+    WRITE (u, '(A)') '1.1 -20.0 9.2'
+    WRITE (u, '(A)') '20.0 -20.0 9.2'
+    WRITE (u, '(A)') '-20.0 20.0 10.0'
+    WRITE (u, '(A)') '0.3 20.0 10.0'
+    WRITE (u, '(A)') '1.1 20.0 9.2'
+    WRITE (u, '(A)') '20.0 20.0 9.2'
+    CLOSE (u)
+  END SUBROUTINE write_step_bathy
+
+  SUBROUTINE write_reach_deck(path, rod_type, x_a, dt)
+    !! A neutrally buoyant 2 m rod (D = 0.2 m, Cd = 1.2, Ca = 1) along y with its axis 0.5 m above
+    !! the 10 m bed of write_step_bathy, on a deck without lines, carried towards the 0.8 m step
+    !! up by a 2 m/s current along x: a Free rod at x = x_a drifts over it; a Pinned rod
+    !! (End A at the origin) weathervanes about its pin and sweeps its stations into it.
+    CHARACTER(*), INTENT(IN) :: path, rod_type
+    REAL(wp), INTENT(IN) :: x_a, dt
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Rod carried over a bathymetry step by a current'
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+    WRITE (u, '(A,ES24.16,A)') 'float 0.2 ', RHO_W*0.25_wp*PI*0.2_wp**2, ' 1.2 1.0 0 0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    WRITE (u, '(A,A,A,ES24.16,A,ES24.16,A)') '1 float ', rod_type, ' ', x_a, ' 0 -9.5 ', x_a, ' 2 -9.5 4 -'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') 'reach_step.xyz bathymetryFile'
+    WRITE (u, '(A)') '1.0e7 kBot'
+    WRITE (u, '(A)') 'uniform 2.0 0 0 current'
+    WRITE (u, '(A)') 'deck bodyIC'
+    WRITE (u, '(ES22.14,A)') dt, ' dtM'
+    WRITE (u, '(A)') '4.0 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Rod1N0Px Rod1N0Pz Rod1N2Px Rod1N2Pz Rod1N4Px Rod1N4Pz'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_reach_deck
+
+  SUBROUTINE check_bathymetry_reach_substep()
+    !! The contact reach must look along the station's whole path over the step. A neutrally
+    !! buoyant rod 0.5 m above a 10 m bed, carried by a 2 m/s current towards an 0.8 m step up (a
+    !! 45 degree ramp), meets the higher bed only by moving horizontally: (1) a Free rod drifting
+    !! over the step, (2) a Pinned rod turning about its pin (its stations move horizontally,
+    !! with no vertical velocity and an acceleration towards the pin). At dtM = 0.2 s the bed
+    !! below each station is out of vertical reach (0.5 m against g dt^2/2 = 0.2 m plus the
+    !! radius), so only the horizontal reach dt |v + w x s| + dt^2 (|a| + |alpha x s| +
+    !! |w|^2 |s| + g)/2 and the highest floor within it bring the contact springs (kBot 1e7)
+    !! into the sub-step estimate before a station is driven into the ramp. The run must stay
+    !! finite, keep every output node out of the bed (at most 8 cm below the floor under it, the
+    !! penalty set against the drag that presses the rod onto the slope)
+    !! and below z = -8 m, and end within 0.2 m of a run at dtM = 0.05 s (the rod meets a 45
+    !! degree slope at about 2 m/s). With the vertical reach and the floor under each station
+    !! alone, the Free rod ends 3 m from the dtM = 0.05 s run and the Pinned rod sinks 14 cm into
+    !! the slope and is thrown up to z = -7.7 m.
+    REAL(wp), ALLOCATABLE :: dc(:, :), df(:, :)
+    REAL(wp) :: worst, zmax, err
+    INTEGER :: kase, i, j
+    LOGICAL :: ok
+    CHARACTER(8) :: kind
+
+    CALL write_step_bathy('reach_step.xyz')
+    DO kase = 1, 2
+      IF (kase == 1) THEN
+        kind = 'Free'
+        CALL write_reach_deck('reach_c.dat', 'Free', -3.0_wp, 0.2_wp)
+        CALL write_reach_deck('reach_f.dat', 'Free', -3.0_wp, 0.05_wp)
+      ELSE
+        kind = 'Pinned'
+        CALL write_reach_deck('reach_c.dat', 'Pinned', 0.0_wp, 0.2_wp)
+        CALL write_reach_deck('reach_f.dat', 'Pinned', 0.0_wp, 0.05_wp)
+      END IF
+      CALL run_deck('reach_c.dat', 'reach_c', ok)
+      IF (.NOT. ok) CYCLE
+      CALL read_out('reach_c.out', 7, dc, ok)
+      IF (.NOT. ok) CYCLE
+      CALL run_deck('reach_f.dat', 'reach_f', ok)
+      IF (.NOT. ok) CYCLE
+      CALL read_out('reach_f.out', 7, df, ok)
+      IF (.NOT. ok) CYCLE
+      worst = HUGE(1.0_wp)
+      zmax = -HUGE(1.0_wp)
+      DO i = 1, SIZE(dc, 2)
+        DO j = 2, 6, 2
+          worst = MIN(worst, dc(j + 1, i) - step_floor(dc(j, i)))
+          zmax = MAX(zmax, dc(j + 1, i))
+        END DO
+      END DO
+      err = nan_max_abs(dc(2:7, SIZE(dc, 2)) - df(2:7, SIZE(df, 2)))
+      WRITE (*, '(A,A,A,F8.4,A,F8.4,A,F8.4,A,ES10.3)') 'rod over a bathymetry step (', TRIM(kind), &
+        '): end x ', dc(6, SIZE(dc, 2)), ' m; least clearance ', worst, ' m; highest node ', zmax, &
+        ' m; end vs dtM/4 ', err
+      CALL require(ALL(IEEE_IS_FINITE(dc)), 'reach: '//TRIM(kind)//' run finite')
+      CALL require(dc(6, SIZE(dc, 2)) > 0.6_wp, 'reach: '//TRIM(kind)//' rod carried over the step')
+      CALL require(worst >= -0.08_wp .AND. zmax <= -8.0_wp, 'reach: '//TRIM(kind)//' rod kept out of the bed')
+      CALL require(err <= 0.2_wp, 'reach: '//TRIM(kind)//' ends as the dtM/4 run')
+    END DO
+  END SUBROUTINE check_bathymetry_reach_substep
 
 END PROGRAM test_body_rod_physics
