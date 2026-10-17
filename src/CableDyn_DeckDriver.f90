@@ -20011,8 +20011,9 @@ CONTAINS
   SUBROUTINE step_rod_system(system, points, opts, rod_state, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
                              work, bathymetry, host_mask, host_q, host_v, host_a, host_start)
     !! Advance rods and lines from time - dt to time: step_rod_once, sub-cycled so that the
-    !! explicit central-difference rod position resolves the stiffest rod-mooring mode
-    !! (rigid_substep_count). converged is the AND and stalled the OR over the sub-steps.
+    !! explicit central-difference rod position resolves the stiffest rod-mooring mode and the
+    !! swing of a pinned rod about its pin (rigid_substep_count). converged is the AND and
+    !! stalled the OR over the sub-steps.
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -20036,6 +20037,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: hk_end(:, :)
     LOGICAL :: conv_s, stall_s, host_pins
     REAL(wp) :: omega2, arms(3, 2), mass6(6), added6(6, 6), drag6(6, 6), f_dummy(3), m_dummy(3), mp(3, 3)
+    REAL(wp) :: buoy(4), w2_pin
     REAL(wp), ALLOCATABLE :: q0h(:), v0h(:), a0h(:)
 
     converged = .TRUE.
@@ -20049,13 +20051,18 @@ CONTAINS
       base_a = rod_end_base(system, points, rod_state(ir)%point_a_index)
       base_b = rod_end_base(system, points, rod_state(ir)%point_b_index)
       ! structural inertia plus the rod's wet added mass (its 6x6 added-mass diagonal)
-      CALL rod_environment_force(rod_state(ir), opts, time - dt, f_dummy, m_dummy, added6, drag6, ErrStat, ErrMsg)
+      CALL rod_environment_force(rod_state(ir), opts, time - dt, f_dummy, m_dummy, added6, drag6, ErrStat, ErrMsg, &
+                                 buoyancy=buoy)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      w2_pin = CD_ZERO
       IF (rod_state(ir)%is_pinned) THEN
         ! a pinned rod only turns about its pin: the line ends act through their arms from the
         ! pin on its rotational inertia about the pin (structural and added mass); the
-        ! translational entries stay zero, so rigid_omega2_estimate skips them
+        ! translational entries stay zero, so rigid_omega2_estimate skips them. Its weight,
+        ! buoyancy and pin acceleration make it a compound pendulum even without a line
+        ! (pinned_swing_omega2), whose squared frequency adds to that of the lines.
         mp = pinned_rotational_inertia(rod_state(ir), added6)
+        w2_pin = pinned_swing_omega2(rod_state(ir), opts, mp, added6, buoy)
         arms(:, 1) = arms(:, 1) + (rod_state(ir)%r - rod_state(ir)%pin)
         arms(:, 2) = arms(:, 2) + (rod_state(ir)%r - rod_state(ir)%pin)
         mass6(1:3) = CD_ZERO
@@ -20069,7 +20076,7 @@ CONTAINS
           mass6(k) = mass6(k) + MAX(CD_ZERO, added6(k, k))
         END DO
       END IF
-      omega2 = MAX(omega2, rigid_omega2_estimate(system, [base_a, base_b], arms, mass6))
+      omega2 = MAX(omega2, rigid_omega2_estimate(system, [base_a, base_b], arms, mass6) + w2_pin)
     END DO
     nsub = rigid_substep_count(omega2, dt)
     CALL host_substep_start(system, nsub, q0h, v0h, a0h, ErrStat, ErrMsg, host_mask)
@@ -20528,6 +20535,48 @@ CONTAINS
     mp = MATMUL(TRANSPOSE(t63), MATMUL(m6, t63))
   END FUNCTION pinned_rotational_inertia
 
+  FUNCTION pinned_swing_omega2(rod, opts, mp, added6, buoyancy) RESULT(omega2)
+    !! Squared frequency of a pinned rod swinging about its pin under its weight, its buoyancy
+    !! and the pin acceleration, for the sub-step estimate of step_rod_system (added there to
+    !! the line estimate). Vertical loads f_i at p_i from the pin turn with the rod; the moment
+    !! of the loads about the pin has the rotational stiffness -[e_z]x [P]x with P = sum f_i p_i,
+    !! whose length |P| does not depend on the pose for a fixed load distribution and is the
+    !! swing stiffness at the bottom of the compound pendulum: |W d_g - B d_b| for a weight W and
+    !! a buoyancy B on the axis at d_g and d_b from the pin (omega^2 about 3 g/(2 L) for a dry
+    !! uniform rod). The buoyancy is the current wet distribution (rod_environment_force), so the
+    !! change of a surface-piercing rod's wet length with its tilt is not included. The pin
+    !! acceleration a_p loads the rod with -M_t a_p, whose stiffness is |a_p| |G|, G = [r]x M_tt +
+    !! M_rt the first moment of the translational inertia (structural and added) about the pin:
+    !! c [q]x for a rod (c = m d_g when dry), so |G| = ||G||_F/sqrt(2), and the hanging dry rod
+    !! sees the effective gravity bound g + |a_p| >= |g - a_p|. |a_p| is the larger of the
+    !! step-start and end-of-step host pin accelerations (zero for a fixed pin). The inertia is the
+    !! smaller principal rotational inertia about the pin across the rod axis (mp: structural and
+    !! added mass).
+    TYPE(RodState), INTENT(IN) :: rod
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: mp(3, 3), added6(6, 6), buoyancy(4)
+    REAL(wp) :: omega2
+    REAL(wp) :: arm(3), p(3), g3(3, 3), e1(3), e2(3), m11, m22, m12, i_min, k_swing, a_pin
+
+    omega2 = CD_ZERO
+    arm = rod%r - rod%pin
+    ! weight at the centre, buoyancy at its first moment about the centre
+    p = (buoyancy(1) - rod%mass*opts%g)*arm + buoyancy(2:4)
+    k_swing = NORM2(p)
+    a_pin = MAX(NORM2(rod%pin_a), NORM2(rod%pin0_a))
+    IF (a_pin > CD_ZERO) THEN
+      g3 = rod%mass*skew3(arm) + MATMUL(skew3(arm), added6(1:3, 1:3)) + added6(4:6, 1:3)
+      k_swing = k_swing + a_pin*NORM2(g3)/SQRT(2.0_wp)
+    END IF
+    e1 = rod%rot_mat(:, 2)
+    e2 = rod%rot_mat(:, 3)
+    m11 = DOT_PRODUCT(e1, MATMUL(mp, e1))
+    m22 = DOT_PRODUCT(e2, MATMUL(mp, e2))
+    m12 = DOT_PRODUCT(e1, MATMUL(mp, e2))
+    i_min = 0.5_wp*(m11 + m22) - SQRT(0.25_wp*(m11 - m22)**2 + m12**2)
+    IF (i_min > CD_ZERO) omega2 = k_swing/i_min
+  END FUNCTION pinned_swing_omega2
+
   SUBROUTINE step_prescribed_rod_system(system, points, opts, motion, rod_state, time_index, time, dt, &
                                         converged, stalled, n_iter, ErrStat, ErrMsg, work, hydro_work, bathymetry)
     !! Impose the motionFile rows on prescribed rods, then march the free rods and lines. The
@@ -20764,7 +20813,7 @@ CONTAINS
     mat(4:6, 4:6) = mat(4:6, 4:6) - MATMUL(s, b_s)
   END SUBROUTINE add_arm_block6
 
-  SUBROUTINE rod_environment_force(rod, opts, time, force, moment, added_mass, drag_dv, ErrStat, ErrMsg)
+  SUBROUTINE rod_environment_force(rod, opts, time, force, moment, added_mass, drag_dv, ErrStat, ErrMsg, buoyancy)
     !! Distributed hydrostatic and Morison loads of a rigid rod about its centre, the rod's 6x6
     !! hydrodynamic added-mass matrix about the same point (global frame) and the 6x6 derivative
     !! drag_dv of the drag force/moment w.r.t. the rod (velocity, angular velocity), which the
@@ -20799,12 +20848,15 @@ CONTAINS
     !! and no host dynamic pressure the side keeps 1 + CaAx. Host-held fluid is sampled at the NumSegs + 1
     !! segment stations and interpolated linearly along the rod; when the host also supplies the
     !! dynamic pressure the end caps carry it as with deck waves (side axial term CaAx only).
+    !! buoyancy (optional) returns the slice buoyancy alone: its upward total and its first
+    !! moment about the rod centre, the sum of rhoW g V_i (s_i q + c_i p) over the stations.
     TYPE(RodState), INTENT(IN) :: rod
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(IN) :: time
     REAL(wp), INTENT(OUT) :: force(3), moment(3), added_mass(6, 6), drag_dv(6, 6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: buoyancy(4)
 
     REAL(wp), PARAMETER :: gp2(2) = [-0.57735026918962576451_wp, 0.57735026918962576451_wp]
     REAL(wp), PARAMETER :: gx10(10) = [-0.97390652851717174343_wp, -0.86506336668898453635_wp, &
@@ -20824,6 +20876,7 @@ CONTAINS
     REAL(wp) :: r0, area, lseg, sphi, rs, eta_mean, ax_fk, s_a, h_a, h_b, dh, tlo, thi, tmp, th1, th2, th
     REAL(wp) :: f_end(2), eta_end(2), h_st(0:MAX(1, rod%nsegs))
     REAL(wp) :: vol_end, kq, vq, u(3), du(3), eta, pd, x(3), v_end(3), arm(3), n_e(3), eta_star, f_c(3)
+    REAL(wp) :: buoy(4)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -20831,6 +20884,8 @@ CONTAINS
     moment = CD_ZERO
     added_mass = CD_ZERO
     drag_dv = CD_ZERO
+    buoy = CD_ZERO
+    IF (PRESENT(buoyancy)) buoyancy = CD_ZERO
     nseg = MAX(1, rod%nsegs)
     axis = rod%rot_mat(:, 1)
     r0 = 0.5_wp*rod%diam
@@ -20919,6 +20974,7 @@ CONTAINS
       END IF
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
+    IF (PRESENT(buoyancy)) buoyancy = buoy
 
     ! rodHydro moordyn: MoorDyn's waterplane moment (pi d^4/16) rho g sin(phi) cos(phi) with its
     ! end-cap moment, whose net exceeds the exact displaced-volume moment by (pi d^4/32) rho g
@@ -21015,6 +21071,8 @@ CONTAINS
       fb = [CD_ZERO, CD_ZERO, opts%rhoW*vol*opts%g]
       force = force + fb
       moment = moment + cross3(arm_s + c*pvec, fb)
+      buoy(1) = buoy(1) + fb(3)
+      buoy(2:4) = buoy(2:4) + fb(3)*(arm_s + c*pvec)
       rel = us - vs
       acc_axial = DOT_PRODUCT(dus, axis)*axis
       rel_axial = DOT_PRODUCT(rel, axis)*axis

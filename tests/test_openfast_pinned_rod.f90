@@ -27,7 +27,9 @@ PROGRAM test_openfast_pinned_rod
   !!  10) a CoupledPinned rod outside a coupled host is refused by name;
   !!  11) the rod march needs no staged copy of the step-start rods (the rod carries its
   !!      step-start pin): a step without one is bit-identical;
-  !!  12) only a Pinned or CoupledPinned rod may leave an end without a line or POINT row.
+  !!  12) only a Pinned or CoupledPinned rod may leave an end without a line or POINT row;
+  !!  13) a short Pinned rod without a line (dry and hanging, or buoyant and upright) sub-cycles
+  !!      a coupling step beyond the explicit limit of its own swing and keeps its period.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Rod_SetHostKinematics, CD_Step_Aggregate_Rod
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -56,6 +58,7 @@ PROGRAM test_openfast_pinned_rod
   CALL case_standalone_refusal()
   CALL case_unstaged_step()
   CALL case_bare_rod_ends()
+  CALL case_lineless_swing_substep()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -137,6 +140,57 @@ CONTAINS
     WRITE (u, '(A)') '--- end ---'
     CLOSE (u)
   END SUBROUTINE write_pendulum_deck
+
+  SUBROUTINE write_short_pendulum_deck(path, mass_pm, zpin, upright, theta_deg)
+    !! A 1 m Pinned rod (D = 0.2 m, mass_pm kg/m, no drag or added mass) pinned at End A at
+    !! (0, 0, zpin) and released at theta_deg in the x-z plane from the downward vertical (from
+    !! the upward one with upright), deck pose; no line touches it. The fairlead line of
+    !! write_pendulum_deck keeps a mooring system in the deck.
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: mass_pm, zpin, theta_deg
+    LOGICAL, INTENT(IN) :: upright
+    REAL(wp) :: th, xb, zb
+    INTEGER :: u
+    th = theta_deg*PI/180.0_wp
+    xb = SIN(th)
+    zb = zpin - COS(th)
+    IF (upright) zb = zpin + COS(th)
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'short pinned rod pendulum on the coupled aggregate'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'line 0.10 80.0 1.0e6 0.0 0.0 1.0 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+    WRITE (u, '(A,ES24.16,A)') 'pend 0.2 ', mass_pm, ' 0 0 0 0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    WRITE (u, '(A,ES24.16,A,ES24.16,A,ES24.16,A)') '1 pend Pinned 0 0 ', zpin, ' ', xb, ' 0 ', zb, ' 4 -'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Coupled 0.0 30.0 -1.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Fixed 6.0 30.0 -8.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 line 9.5 6'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '10.0 WtrDpth'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') 'deck bodyIC'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_short_pendulum_deck
 
   SUBROUTINE write_tethered_deck(path, rod_type, body_ic)
     !! A submerged rod (2 m, 0.2 m diameter, Cd = Ca = 1) hanging from End A at (0, 0, -10), held
@@ -1079,6 +1133,88 @@ CONTAINS
     CALL CD_AGG_End(staged, es, em)
     CALL CD_AGG_End(bare, es, em)
   END SUBROUTINE case_unstaged_step
+
+  ! --------------------------------------------------------------------------------------------- !
+  ! 13: a pinned rod without a line sub-cycles its own swing                                      !
+  ! --------------------------------------------------------------------------------------------- !
+
+  FUNCTION host_rest(time) RESULT(k)
+    !! A host node held at its initial position.
+    REAL(wp), INTENT(IN) :: time
+    REAL(wp) :: k(9)
+    k = 0.0_wp*time
+  END FUNCTION host_rest
+
+  SUBROUTINE case_lineless_swing_substep()
+    !! A 1 m Pinned rod that carries no line, released at 30 degrees: (1) dry, hanging from a pin
+    !! above the water, omega0^2 = m g (L/2)/I_p, about 14.6 rad^2/s^2; (2) submerged and buoyant
+    !! (10 kg/m against 32.2 kg/m of displaced water), standing up from a pin at z = -5 m,
+    !! omega0^2 = (B - W)(L/2)/I_p, about 32.4 rad^2/s^2. At a 0.6 s coupling step omega0 dt is
+    !! 2.29 and 3.42, beyond the explicit limit of 2, and the sub-step estimate (the swing
+    !! stiffness |W d_g - B d_b| over the inertia about the pin) asks for 6 and 9 sub-steps
+    !! (omega0 dt/0.4 = 5.73 and 8.54). The coarse run must equal a run at that sub-step size at
+    !! every coupling step (so it took those sub-steps; taking each step whole, it departs by
+    !! radians and turns over), stay within its release angle, and swing
+    !! with the elliptic-integral period of the compound pendulum to the accuracy of
+    !! omega0 dt_sub, about 0.38 (a central-difference period error near (omega dt)^2/24 = 0.6 %).
+    TYPE(CD_AGG_ModuleType) :: coarse, fine
+    REAL(wp), PARAMETER :: DTC = 0.6_wp, TH0 = 30.0_wp, ZW = -5.0_wp
+    INTEGER, PARAMETER :: NC = 30, NSUBS(2) = [6, 9]
+    REAL(wp), ALLOCATABLE :: angc(:), tc(:), angf(:), tf(:)
+    REAL(wp) :: mpm, ip, kswing, t_ref, period, mean, err_ang, amp, rel
+    INTEGER :: es, i, kase, nsub
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+
+    DO kase = 1, 2
+      nsub = NSUBS(kase)
+      IF (kase == 1) THEN
+        mpm = 50.0_wp
+        CALL write_short_pendulum_deck('pinrod_short.dat', mpm, ZPIN, .FALSE., TH0)
+        kswing = mpm*G*0.5_wp
+      ELSE
+        mpm = 10.0_wp
+        CALL write_short_pendulum_deck('pinrod_short.dat', mpm, ZW, .TRUE., TH0)
+        kswing = (1025.0_wp*0.25_wp*PI*DP*DP - mpm)*G*0.5_wp
+      END IF
+      ip = mpm*(1.0_wp/3.0_wp + DP*DP/16.0_wp)
+      t_ref = 4.0_wp*SQRT(ip/kswing)*ellip_k(SIN(0.5_wp*TH0*PI/180.0_wp))
+      CALL CD_AGG_Init_From_Deck(coarse, 'pinrod_short.dat', DTC, es, em)
+      CALL require(es == CD_AGG_OK, 'lineless:coarse-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      CALL CD_AGG_Init_From_Deck(fine, 'pinrod_short.dat', DTC/REAL(nsub, wp), es, em)
+      CALL require(es == CD_AGG_OK, 'lineless:fine-init: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      ALLOCATE (angc(0:NC), tc(0:NC), angf(0:NC*nsub), tf(0:NC*nsub))
+      CALL march(coarse, DTC, NC, host_rest, angc, tc, ok)
+      CALL require(ok, 'lineless:coarse march finite (the swing is sub-cycled)')
+      CALL march(fine, DTC/REAL(nsub, wp), NC*nsub, host_rest, angf, tf, ok)
+      CALL require(ok, 'lineless:fine march finite')
+      IF (.NOT. ok) RETURN
+      ! rod_angle is measured from the downward vertical: the upright rod's angle from the
+      ! upward one is pi - rod_angle, wrapped to (-pi, pi]
+      IF (kase == 2) THEN
+        angc = MODULO(2.0_wp*PI - angc, 2.0_wp*PI) - PI
+        angf = MODULO(2.0_wp*PI - angf, 2.0_wp*PI) - PI
+      END IF
+      err_ang = 0.0_wp
+      DO i = 0, NC
+        err_ang = MAX(err_ang, ABS(angc(i) - angf(nsub*i)))
+      END DO
+      amp = MAX(nan_max_abs(angc), nan_max_abs(angf))
+      CALL crossings(tf, angf, 0.0_wp, period, mean)
+      rel = ABS(period - t_ref)/t_ref
+      WRITE (*, '(A,I0,A,ES10.3,A,F8.5,A,2F10.6,A,ES10.3)') 'lineless pinned swing (', kase, &
+        '): coarse vs sub-step run ', err_ang, ' rad; max angle/release ', amp/(TH0*PI/180.0_wp), &
+        '; period got/analytic [s] ', period, t_ref, '; rel. error ', rel
+      CALL require(err_ang <= 1.0e-8_wp*amp, 'lineless:coarse step equals its sub-step run')
+      CALL require(amp <= 1.02_wp*TH0*PI/180.0_wp, 'lineless:the swing stays within its release angle')
+      CALL require(rel <= 1.5e-2_wp, 'lineless:period (elliptic integral)')
+      DEALLOCATE (angc, tc, angf, tf)
+      CALL CD_AGG_End(coarse, es, em)
+      CALL CD_AGG_End(fine, es, em)
+    END DO
+  END SUBROUTINE case_lineless_swing_substep
 
   SUBROUTINE case_bare_rod_ends()
     !! On the coupled route only a Pinned or CoupledPinned rod may leave an end without a line or

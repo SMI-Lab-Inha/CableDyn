@@ -1939,7 +1939,21 @@ so the pin acceleration :math:`\mathbf{a}_p` loads the rotation through the rod'
 the implicit drag acts on the velocity change
 :math:`\tfrac{1}{2}\Delta t(\boldsymbol{\alpha}_{n+1} - \boldsymbol{\alpha}_n)\times\mathbf{r}` of the
 pinned centre. The sub-step estimate takes the line springs through their arms from the pin
-against the rotational inertia about the pin. In a sub-cycled step the host pin's position,
+against the rotational inertia about the pin, and adds the rod's own swing about the pin, so a
+pinned rod that carries no line is still sub-stepped as the compound pendulum it is. Its weight
+and buoyancy act vertically at points :math:`\mathbf{p}_i` from the pin; the first moment
+:math:`\mathbf{P} = \sum_i f_i\,\mathbf{p}_i` of these loads turns with the rod, and its length
+:math:`|\mathbf{P}| = |W d_g - B d_b|` (weight :math:`W` and buoyancy :math:`B` on the axis at
+:math:`d_g` and :math:`d_b` from the pin) is the swing stiffness at the bottom of the swing,
+whatever the current pose. The pin acceleration adds :math:`|\mathbf{a}_p|\,|\mathbf{G}|`, with
+:math:`|\mathbf{G}|` the first moment of the rod's translational inertia (structural and added)
+about the pin, :math:`m d_g` for a dry rod; for the hanging dry rod this is the effective gravity
+bound :math:`g + |\mathbf{a}_p| \ge |\mathbf{g} - \mathbf{a}_p|`, taken with the larger of the
+step-start and end-of-step pin accelerations. The swing stiffness over the smaller rotational
+inertia about the pin across the rod axis, about :math:`3g/(2L)` for a dry uniform rod of length
+:math:`L`, adds to the line estimate of :math:`\omega^2`. The buoyancy is that of the current
+wet length, so the change in a surface-piercing rod's waterline with its tilt is left out. In a
+sub-cycled step the host pin's position,
 velocity and acceleration are each interpolated linearly between their step-start values (the End
 A motion of the committed rod) and the end-of-step host input, as the host fairleads of the lines
 and the ``Coupled`` rods are, so points on one platform keep their relative positions under a
