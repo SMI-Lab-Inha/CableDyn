@@ -3687,7 +3687,7 @@ CONTAINS
     !! they agree; the host fields then act from t = 0 and change the t = 0 channel, while the
     !! summary keeps the equilibrium value. The OpenFAST shell prints the summary, writes the
     !! static profile before it seeds the t = 0 fields and labels the t = 0 outputs; in the
-    !! IEA-15MW JONSWAP example the summary reads 2.43712 MN and the t = 0 FairTen1 2.43621 MN.
+    !! IEA-15MW JONSWAP example the summary reads 2.43712 MN and the t = 0 FairTen1 2.43752 MN.
     TYPE(CD_AGG_ModuleType) :: agg
     REAL(wp), PARAMETER :: DT = 0.05_wp
     REAL(wp), ALLOCATABLE :: fu(:, :), fud(:, :), wl(:)
