@@ -485,9 +485,9 @@ Node channels on a refined line
 ``<J>`` is always a node of the **deck** mesh. The static solve of a finite-EI line can refine
 its mesh (``OPTIONS adaptive_mesh``, or the automatic refinement after a failed stability test
 or an unresolved curvature, which a note of the initialization report names). A refinement splits
-deck elements, so each deck node is a node of the refined mesh at the same unstretched arc length
-from End A, and ``Ten<L>N<J>``, ``Curv<L>N<J>``, ``BendMom<L>N<J>``, ``L<L>N<J>…``,
-``Torq<L>N<J>`` and ``Twist<L>N<J>`` report deck node ``J`` there, on every route (standalone,
+deck elements (along the whole line or only where the state needs it), so each deck node is a
+node of the refined mesh at the same unstretched arc length from End A, and ``Ten<L>N<J>``,
+``Curv<L>N<J>``, ``BendMom<L>N<J>``, ``L<L>N<J>…``, ``Torq<L>N<J>`` and ``Twist<L>N<J>`` report deck node ``J`` there, on every route (standalone,
 mixed, multibody, OpenFAST and the C API ``CableDyn_EvalChannel``). ``.static.out``, the range
 graphs, the per-line files and the C API ``CableDyn_GetLineValues`` list every node of the
 refined mesh instead, and ``.elements.out`` every element. To find deck node ``J`` among them,

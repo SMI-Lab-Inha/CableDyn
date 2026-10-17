@@ -2877,7 +2877,8 @@ CONTAINS
     IF (.NOT. has_att) CALL handoff_lateral_note(l0, l0_am, ea_am, ei_am, w_am, w_am, diam, dry_b, fixed_am, .FALSE.)
     ! Build the coarse Morison arrays, then map every per-element quantity onto the
     ! refined reference-arc mesh.  This covers both global refinement and the local
-    ! axial-oscillation refinement used by tensile safety.  Every child inherits the
+    ! refinements (the resolution screens, and the axial-oscillation refinement used by
+    ! tensile safety).  Every child inherits the
     ! property of the original element containing its reference-arc midpoint.
     ALLOCATE (cdn(SIZE(l0)), cdt(SIZE(l0)), can(SIZE(l0)), cat(SIZE(l0)))
     CALL finite_hydro_arrays(ln, sections, types, diam, cdn, cdt, can, cat)

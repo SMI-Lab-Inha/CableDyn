@@ -779,8 +779,10 @@ Warnings and notes that do not stop a run
        that length (or, at a rotationally
        restrained end, on end elements halved toward the end down to its boundary layer). See
        :doc:`theory`, Static equilibrium. The run uses the refined mesh, statics and dynamics
-       alike, and its outputs have that many segments (node channels number its nodes, see
-       :doc:`outputs`). Mesh the line to the bending-length rule to keep the deck mesh.
+       alike, and its profile and per-line outputs have that many segments; the refinement
+       only splits deck elements, so the node channels still name deck nodes (see
+       :ref:`outputs-refined-nodes`). Mesh the line to the bending-length rule to keep the deck
+       mesh.
    * - ``Note: line ... starts the dynamics from a static state solved in its vertical plane that
        is unstable out of that plane on its mesh of ... elements, the coarsest ... m long where
        half the bending length (EI/|w|)^(1/3) is ... m; ...``
