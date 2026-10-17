@@ -561,15 +561,27 @@ Warnings and notes that do not stop a run
    * - ``Note: line ...: a nodal tangent turned up to ... deg in one step``
      - the time-step audit of a finite-EI line: above 0.25° per step (0.1° with
        ``False alpha_force_blend``) the mean tension can err by about 1 %. Reduce ``dtM``.
-   * - ``Note: line ...: a taut segment turned up to ... deg in one step``
-     - the time-step audit of an ``EI = 0`` line: above 1° per step the mean and standard
-       deviation of the tension can err by about 1 % (1.3 % at 2.9° on a heaving chain). Reduce
-       ``dtM`` if that matters for the result.
+   * - ``Note: line ...: a taut segment turned up to ... deg in one solver step``
+     - the time-step audit of an ``EI = 0`` line, per solver step (the sub-steps of a
+       sub-stepped step count as steps): above 1° per step the mean and standard deviation of
+       the tension can err by about 1 % (1.3 % at 2.9° on a heaving chain), and near 6° per step
+       snap-load peaks come out 10 to 20 % low with either generalised-α blend. With
+       ``off ei0_substeps`` set ``auto`` (the default) or reduce ``dtM``; with ``auto`` the note
+       means steps it did not resolve (more than ``ei0_substep_max`` needed, a step recovered
+       after a stall, whose recovery sub-steps are taken as given, or the monolithic body and
+       point coupling, which is not sub-stepped): reduce ``dtM``.
+   * - ``Note: line ...: ei0_substeps auto solved ... of ... solver step(s) in sub-steps``
+     - information: the steps in which a taut segment turned by more than ``ei0_substep_angle``
+       or a segment snapped from slack to taut were solved in sub-steps (see
+       ``ei0_substeps``). A companion note counts the steps that needed more than
+       ``ei0_substep_max`` sub-steps, and another the steps that kept the whole step because a
+       sub-step did not converge.
    * - ``Note: line ...: ... segment step(s) went from slack to taut above the initial tension``
-     - snap loads on an ``EI = 0`` line at a ``dtM`` that does not resolve the axial wave over a
-       segment: the peak is set by a single step (a 15 m surge of a semi-taut chain–polyester
-       line peaks at 5.7 MN at ``dtM`` 0.05 s against 4.6 MN at 0.0025 s). The run is valid;
-       confirm design peaks with a smaller ``dtM``.
+     - snap loads on an ``EI = 0`` line at a solver step that does not resolve the axial wave
+       over a segment: the peak is set by a single step. A 15 m surge of a semi-taut
+       chain–polyester line peaks at 4.65 MN at ``dtM`` 0.05 s with the default sub-steps
+       (5.7 MN with ``off ei0_substeps``) against 4.6 MN at 0.0025 s. The run is valid; confirm
+       design peaks with a smaller ``dtM``.
    * - ``Warning: line ...: segment ... carried ... N at t = ... s for a single step, ... times
        the largest tension on the line one step before and after``
      - a non-physical tension spike: the tension of one segment (elastic, viscoelastic or

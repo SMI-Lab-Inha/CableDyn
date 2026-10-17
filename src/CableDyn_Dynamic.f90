@@ -82,6 +82,15 @@ MODULE CableDyn_Dynamic
                                                   !! + alpha_f r(q_n, v_n); .FALSE. evaluates them at the
                                                   !! blended configuration (q_alpha, v_alpha). The finite-EI
                                                   !! paths have their own setting.
+    ! Rotation- and snap-resolved sub-stepping of an EI=0 line model (CD_Step_Model of
+    ! CableDyn_Model; the kernel step here does not read these). With CD_EI0_SUBSTEPS_AUTO a
+    ! converged step whose taut segments turned by more than ei0_substep_angle degrees, or in
+    ! which a segment went from slack to taut with a large tension, is solved again from the
+    ! same committed state in max(4, ceil(turn/ei0_substep_angle)) equal sub-steps, at most
+    ! ei0_substep_max; CD_EI0_SUBSTEPS_OFF takes every step as given.
+    INTEGER  :: ei0_substeps = 1                  !! CD_EI0_SUBSTEPS_AUTO (1) or CD_EI0_SUBSTEPS_OFF (0)
+    REAL(wp) :: ei0_substep_angle = 1.0_wp        !! largest turn of a taut segment per step, deg, (0, 90]
+    INTEGER  :: ei0_substep_max = 16              !! sub-step cap per step, [2, 1024]
   END TYPE GenAlphaConfig
 
   TYPE :: CD_CableGenAlphaWorkspace
@@ -224,6 +233,9 @@ MODULE CableDyn_Dynamic
   INTEGER, PARAMETER, PUBLIC :: CD_DYN_BADINPUT = 1
   INTEGER, PARAMETER, PUBLIC :: CD_DYN_SINGULAR = 2
   INTEGER, PARAMETER, PUBLIC :: CD_DYN_ALLOCFAIL = 3
+  ! GenAlphaConfig%ei0_substeps
+  INTEGER, PARAMETER, PUBLIC :: CD_EI0_SUBSTEPS_OFF = 0
+  INTEGER, PARAMETER, PUBLIC :: CD_EI0_SUBSTEPS_AUTO = 1
 
   ABSTRACT INTERFACE
     SUBROUTINE CD_Cable_Dynamic_Load_Proc(q, v, force, jac_q, jac_v, ErrStat, ErrMsg)

@@ -76,7 +76,7 @@ article's methods, are compared in
 | **L3-6e** | Out-of-plane / 3D whirl response | OrcaFlex 11.6d | 3D curv 0.52%, interior Y env ≤1.0 mm, sag ≤22 mm, tension 0.14/0.17/0.12% | curv <3%, env <5 cm, tension <2–3% | Pass |
 | **L3-7** | 1-hour VolturnUS-S mooring dynamic | OrcaFlex 11.6d | `FairTen` mean 0.27%, std 0.26%, min/max 0.50/0.43%, Fourier 0.27/1.14% | ≤5% | Pass |
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
-| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.13%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
+| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.59 N; MAPE 3.13%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -259,7 +259,8 @@ initialisation.
   mean, 0.26% in std, 0.50 / 0.43% in minimum / maximum, and 0.27% (90 s) / 1.14%
   (12 s) in Fourier amplitude**. The end-element tension carries the 1.28% static
   offset of L2-V in its mean and extremes. The force-blended `EI = 0` step moved the
-  minimum by +7 kN (0.15% before) and the other statistics by at most 0.01%.
+  minimum by +7 kN (0.15% before) and the other statistics by at most 0.01%; no step of this
+  drive needs the rotation- and snap-resolved sub-steps, so they leave it unchanged bit for bit.
 - **L-fig curvature overlay**: `l3_lazywave_dynamic` writes each site's along-arc
   curvature profile.
   [`validation/scripts/curvature_profile_overlay.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/curvature_profile_overlay.py)
@@ -288,15 +289,17 @@ scripts, results, and source provenance are in
 - **L3-B Bergdahl dynamic chain test**
   ([Bergdahl et al., 2016](https://cabledyn.readthedocs.io/en/latest/references.html#ref-bergdahl2016)):
   over the full 30-condition period-radius matrix, cycle-maximum upper-end force
-  has RMSE 1.58 N, mean absolute percentage error 3.13%, Pearson correlation
+  has RMSE 1.59 N, mean absolute percentage error 3.13%, Pearson correlation
   0.993, and Lin concordance 0.989. Two phase-averaged measured histories have
   waveform RMSEs of 5.95% and 2.54% of their force ranges; these two were computed with the
-  executable of the 2026-10-09 record (the configuration-blended `EI = 0` step), because the
+  executable of the 2026-10-09 record (the configuration-blended `EI = 0` step, without
+  sub-steps), because the
   article supplement's `expData.dat` they need was not available for the rerun (see the
   experiment's README and `provenance.json`). Halving the mesh length
-  and the time step changes the mean cycle maximum by at most 0.52% and 0.19%. The
+  and the time step changes the mean cycle maximum by at most 0.53% and 0.13%. The
   0.3125 ms step resolves the segment axial modes that the snap loads excite; at
-  1.25 ms the maxima are 2–15% higher and vary from cycle to cycle.
+  0.625 ms the T = 1.25 s maxima are 2.3% higher (6.5% with every step taken as given), and
+  at 1.25 ms they are 2–15% higher and vary from cycle to cycle.
 
 ## L4 coupled OpenFAST
 
@@ -380,6 +383,16 @@ scripts, results, and source provenance are in
   30 ms in a sweep); the peak is within **1.5%** of the 0.5 ms sub-CFL reference
   (1.1% at 10 ms, 0.05% at 5 ms). Before the force-blended `EI = 0` step these were
   2.76 / 0.62 / 0.16%; the 2.76% at 20 ms is the value published as 2.7% (truncated).
+  The test steps the generalised-α kernel itself, without the rotation- and snap-resolved
+  sub-steps of the line models (next item).
+- **Snap-load peaks at a coarse step** (Lozon moorings, `dtM = 0.1 s`): over seven runs whose
+  motion amplitude differs by up to 3e-4 (the snap peaks of a single run vary by 15–20
+  points at this step), against 0.5 and 0.25 ms runs, the fairlead and anchor maxima of the
+  80 m all-chain mooring in 5 m / 7 s heave are 15% and 17% low when every step is taken as
+  given (`off ei0_substeps`) and 4% and 8% low with the default `auto`; the anchor maxima of
+  the 200 m semitaut mooring in 10 m / 14 s and 5 m / 7 s surge are 16% and 26% high and
+  1.4% and 2.6% low. In 5 m / 7 s surge the 80 m maxima are within 2.5% either way. On the
+  0.1 s output grid the converged run itself reads the 80 m heave maxima 5% low.
 - **Implicit and explicit steps**: on the matched near-taut snap, MoorDyn-C's
   explicit RK2 needs `dtM ≲ 1 ms`, as expected of an explicit scheme at this line
   stiffness; CableDyn's implicit step remains stable at **20 ms**.
@@ -673,10 +686,13 @@ feedback re-converge each step (three-seed DLC-1.1, L4-1b, <0.6%).
 
 **Prescribed-motion moorings.** The Lozon all-chain catenary and semitaut
 chain–polyester moorings are driven through the same surge-and-heave envelope at
-`dtM = 0.1 s`. The all-chain mooring needs no step subdivision and takes 0.7–1.1 ms
-of wall time per 0.1 s step with at most 16 Newton iterations; the stiffer composite
-subdivides about 1.4% of steps at the severe and extreme excursions and takes less
-than 3.3 ms per step.
+`dtM = 0.1 s` (72 s each). All 20 runs complete. With the default `ei0_substeps auto`,
+the steps in which a taut segment turns by more than 1° or a segment snaps taut are
+solved in 4 to 8 sub-steps: none to 3% of the steps in the 3 m / 10 s and 8 m / 20 s
+motions, 31–74% in the 5 m / 7 s and 10 m / 14 s ones. The march takes 0.25–1.0 ms of
+wall time per 0.1 s step for the all-chain mooring and 0.35–1.3 ms for the composite,
+1.65 times the plain steps over the 20 runs (at most 2.6 times), and the recovering step
+subdivides at most 12 of the 720 intervals of a run.
 
 **Coupled OpenFAST sea states.** In the full IEA-15 MW VolturnUS-S model with
 SeaState JONSWAP waves, the all-chain mooring completes `Hs = 10 m`, `Tp = 14 s`

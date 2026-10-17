@@ -1,8 +1,8 @@
 {
   "CableDyn_release": "v0.1.1+dev (unreleased)",
-  "validation_date": "2026-10-16",
+  "validation_date": "2026-10-17",
   "executable_name": "cabledyn.exe",
-  "executable_sha256": "78a3fed9390fd77392a1dcaec244f79f9174d9e2e94e4b3032fb53c7b8bd4395",
+  "executable_sha256": "51f17f4bee5253961d6b36bd8404d948e815470abff64491deeb99a7e77708b7",
   "compiler": "GNU Fortran 16.2.0",
   "build_type": "Release",
   "platform": "Windows 11 x86-64",
@@ -12,14 +12,14 @@
   "completed_cases": 30,
   "nonlinear_misses": 0,
   "refinement_cases": 8,
-  "maximum_spatial_refinement_difference_percent": 0.5236270564721716,
-  "maximum_temporal_refinement_difference_percent": 0.18888172026785752,
-  "force_maxima_sha256": "978889378964c6d6749bc27c11d99d6584956e3c8eac146ae79bf5f7a05e2e95",
-  "aggregate_metrics_sha256": "35d800fa34137a3a1500cbd0081a490bc1b61cf636cfef5a923b5c18947ba1a7",
+  "maximum_spatial_refinement_difference_percent": 0.5265703061372087,
+  "maximum_temporal_refinement_difference_percent": 0.12568365771083198,
+  "force_maxima_sha256": "83df076fba89f1e759e084b78956283f6f08c7300b93b30576447f11c34fed3c",
+  "aggregate_metrics_sha256": "ffbd4c82f8191dc67f18b53717afd4d521f8f172612e8d11bffc1d50d233d03c",
   "case_manifest_sha256": "8da5e7b4a8a92755363807902aba48e0ff42abab04ac44912041853db9e56604",
   "waveform_T1p25_sha256": "65c8c846636c378b800bb3c7a95ccd2bde766d789af3cdffce26a2e688e1a134",
   "waveform_T3p50_sha256": "b3ca65ebfc1d61b5510e54876fc11d1604fc18ffcca3eab523dc7d67f50da4d8",
   "waveform_metrics_sha256": "2803a57cb7726f966a00e00bf6eb070231b9c702ae67a81685da50991d0adb11",
-  "waveform_note": "Waveform metrics were computed with the executable of the 2026-10-09 validation (sha256 71090e2e28c9e1d99c5180d05a395ebcc891a77cc5294d315a57c691904745ac); the force-blended EI = 0 step of this development build was not rerun on them because the article supplement's expData.dat, which reduce_bergdahl_waveforms.py reads, was not available. The measured phase averages are those of expData.dat, as carried in the waveform CSVs.",
-  "refinement_summary_sha256": "b3ef33659ba852ce8b6667032a9f2c44bf0336d988c29c2a80fddc2ab4053859"
+  "waveform_note": "Waveform metrics were computed with the executable of the 2026-10-09 validation (sha256 71090e2e28c9e1d99c5180d05a395ebcc891a77cc5294d315a57c691904745ac); the development builds since then (the force-blended EI = 0 step and its rotation- and snap-resolved sub-steps) were not rerun on them because the article supplement's expData.dat, which reduce_bergdahl_waveforms.py reads, was not available. The measured phase averages are those of expData.dat, as carried in the waveform CSVs.",
+  "refinement_summary_sha256": "8b5c2665ca10154ac0abf9c737971f7c02bf74029ac9898ab065bc785071670c"
 }

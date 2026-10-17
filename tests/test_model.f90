@@ -10,7 +10,7 @@ PROGRAM test_model
   !! End releases the model cleanly.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, CD_BATHY_OK
-  USE CableDyn_Dynamic, ONLY: GenAlphaConfig
+  USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_EI0_SUBSTEPS_OFF
   USE CableDyn_SeabedContact, ONLY: CD_SEABED_CONTACT_BLEND
   USE CableDyn_Line, ONLY: CD_LineType, CD_LineSection, CD_Build_Line_Mesh, CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Static, ONLY: CableSolverConfig
@@ -27,7 +27,7 @@ PROGRAM test_model
                             CD_Recompute_Model_Acceleration, &
                             CD_Copy_Model, &
                             CD_MODEL_OK, CD_MODEL_BADINPUT, CD_MODEL_SOLVEFAIL, CD_MODEL_NOT_INITIALIZED, &
-                            CD_Update_Model_SegmentLength
+                            CD_Update_Model_SegmentLength, CD_Set_Model_EndQuery
   USE CableDyn_Loads, ONLY: CD_Assemble_Distributed_Load
   USE CableDyn_Assemble, ONLY: CD_Assemble_Cable_Mass
   USE CableDyn_Hydro, ONLY: CD_Cable_Added_Mass_Matrix
@@ -47,6 +47,7 @@ PROGRAM test_model
   CALL case_prescribed_step_updates_state()
   CALL case_recovery_common_path()
   CALL case_recovery_subdivision_path()
+  CALL case_resolved_substeps()
   CALL case_coupled_load_sign()
   CALL case_coupled_motion_update()
   CALL case_external_load_update()
@@ -520,6 +521,132 @@ CONTAINS
     CALL CD_End_Model(recovering, es, em)
     CALL CD_End_Model(plain, es, em)
   END SUBROUTINE case_recovery_common_path
+
+  SUBROUTINE case_resolved_substeps()
+    !! Rotation-resolved sub-stepping of CD_Step_Model (cfg%ei0_substeps auto, the default): a
+    !! pretensioned 8-segment line whose End B moves on a 0.6 m circle at 2 s (from rest, after a 1 s ramp) turns its
+    !! segments by several degrees per 0.1 s step. The resolved march solves those steps in
+    !! sub-steps, lands on the prescribed end state exactly, is closer to a plain march at dt/8
+    !! than the plain march at dt, and repeats bit for bit from a copy of its state (a restart).
+    !! With off, or with an angle no step reaches, every step is the plain step bit for bit; a
+    !! junction step (end query armed) is never sub-stepped (it matches the plain march to the
+    !! Newton tolerance: its warm start differs); an invalid angle fails closed.
+    INTEGER, PARAMETER :: NE = 8, NN = NE + 1, NDOF = 3*NN, NSTEP = 30, NFINE = 8
+    REAL(wp), PARAMETER :: DT = 0.1_wp
+    TYPE(CD_ModelType) :: auto_m, off_m, wide_m, twin_m, junc_m, fine_m, bad_m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, k, j
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), q0(NDOF), v0(NDOF), f_ext(NDOF)
+    REAL(wp) :: pq(NDOF), pv(NDOF), pa(NDOF), err_auto, err_off
+    LOGICAL :: conv, stalled, all_conv, lands, twin_ok
+    CHARACTER(240) :: em
+
+    CALL straight_cable(NE, conn, l0, ea, rho_a, q0, fixed)
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    CALL CD_Init_Model(auto_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, cfg, es, em)
+    CALL require(es == CD_MODEL_OK, 'resolved:init: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    CALL CD_Copy_Model(auto_m, off_m, es, em)
+    off_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+    CALL CD_Copy_Model(auto_m, wide_m, es, em)
+    wide_m%cfg%ei0_substep_angle = 90.0_wp
+    CALL CD_Copy_Model(auto_m, junc_m, es, em)
+    CALL CD_Copy_Model(off_m, fine_m, es, em)
+    CALL CD_Copy_Model(auto_m, bad_m, es, em)
+    bad_m%cfg%ei0_substep_angle = 0.0_wp
+
+    all_conv = .TRUE.
+    lands = .TRUE.
+    twin_ok = .FALSE.
+    DO k = 1, NSTEP
+      CALL circle_end_motion(q0, pq, pv, pa, REAL(k, wp)*DT)
+      CALL CD_Step_Model(auto_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      lands = lands .AND. ALL(auto_m%q(fixed) == pq(fixed)) .AND. ALL(auto_m%v(fixed) == pv(fixed)) .AND. &
+              ALL(auto_m%a(fixed) == pa(fixed))
+      CALL CD_Step_Model(off_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(wide_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Set_Model_EndQuery(junc_m, .TRUE.)
+      CALL CD_Step_Model(junc_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      CALL CD_Set_Model_EndQuery(junc_m, .FALSE.)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      DO j = 1, NFINE
+        CALL circle_end_motion(q0, pq, pv, pa, (REAL(k - 1, wp) + REAL(j, wp)/REAL(NFINE, wp))*DT)
+        CALL CD_Step_Model(fine_m, DT/REAL(NFINE, wp), conv, stalled, n_iter, es, em, prescribed_q=pq, &
+                           prescribed_v=pv, prescribed_a=pa)
+        all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      END DO
+      IF (k == NSTEP/2) THEN
+        ! a restart: a copy of the committed state continues the march
+        CALL CD_Copy_Model(auto_m, twin_m, es, em)
+        CALL require(es == CD_MODEL_OK, 'resolved:copy: '//TRIM(em))
+      ELSE IF (k > NSTEP/2) THEN
+        CALL circle_end_motion(q0, pq, pv, pa, REAL(k, wp)*DT)
+        CALL CD_Step_Model(twin_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, &
+                           prescribed_a=pa)
+        all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      END IF
+    END DO
+    twin_ok = ALL(twin_m%q == auto_m%q) .AND. ALL(twin_m%v == auto_m%v) .AND. ALL(twin_m%a == auto_m%a)
+    err_auto = MAXVAL(ABS(auto_m%q - fine_m%q))
+    err_off = MAXVAL(ABS(off_m%q - fine_m%q))
+    WRITE (*, '(A,I0,A,I0,A,I0,A,ES10.3,A,ES10.3,A)') '  resolved sub-steps: ', auto_m%sub_events, ' of ', &
+      auto_m%sub_calls, ' steps (at most ', auto_m%sub_max_used, '); position error against dt/8 ', err_auto, &
+      ' m (plain ', err_off, ' m)'
+    CALL require(all_conv, 'resolved:converged')
+    CALL require(auto_m%sub_events > 0 .AND. auto_m%sub_max_used >= 4, 'resolved:sub-stepped')
+    CALL require(lands, 'resolved:lands-on-prescribed-end')
+    CALL require(err_auto < 0.75_wp*err_off, 'resolved:closer-to-fine-march')
+    CALL require(twin_ok, 'resolved:restart-bit-identical')
+    CALL require(off_m%sub_calls == 0 .AND. off_m%sub_events == 0, 'resolved:off-not-examined')
+    CALL require(wide_m%sub_events == 0 .AND. ALL(wide_m%q == off_m%q) .AND. ALL(wide_m%v == off_m%v) .AND. &
+                 ALL(wide_m%a == off_m%a), 'resolved:untriggered-is-plain')
+    CALL require(junc_m%sub_calls == 0 .AND. MAXVAL(ABS(junc_m%q - off_m%q)) < 1.0e-6_wp, &
+                 'resolved:junction-not-sub-stepped')
+    CALL circle_end_motion(q0, pq, pv, pa, DT)
+    CALL CD_Step_Model(bad_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+    CALL require(es == CD_MODEL_BADINPUT .AND. INDEX(em, 'ei0_substep_angle') > 0, 'resolved:invalid-angle')
+    CALL CD_End_Model(auto_m, es, em)
+    CALL CD_End_Model(off_m, es, em)
+    CALL CD_End_Model(wide_m, es, em)
+    CALL CD_End_Model(twin_m, es, em)
+    CALL CD_End_Model(junc_m, es, em)
+    CALL CD_End_Model(fine_m, es, em)
+    CALL CD_End_Model(bad_m, es, em)
+  END SUBROUTINE case_resolved_substeps
+
+  SUBROUTINE circle_end_motion(q0, pq, pv, pa, t)
+    !! End A held, End B (the last node) on the circle x_B + R r(t) (0, sin wt, 1 - cos wt),
+    !! R = 0.3 m, period 2 s, r the C2 quintic ramp over the first second, so the motion starts
+    !! from rest (case_resolved_substeps).
+    REAL(wp), INTENT(IN) :: q0(:), t
+    REAL(wp), INTENT(OUT) :: pq(:), pv(:), pa(:)
+    REAL(wp), PARAMETER :: RADIUS = 0.6_wp, PERIOD = 2.0_wp, RAMP = 1.0_wp
+    REAL(wp) :: w, u, r, rd, rdd, g(2), gd(2), gdd(2)
+    INTEGER :: n
+    n = SIZE(q0)
+    w = 2.0_wp*ACOS(-1.0_wp)/PERIOD
+    u = MIN(t/RAMP, 1.0_wp)
+    r = 10.0_wp*u**3 - 15.0_wp*u**4 + 6.0_wp*u**5
+    rd = 0.0_wp
+    rdd = 0.0_wp
+    IF (t < RAMP) THEN
+      rd = (30.0_wp*u**2 - 60.0_wp*u**3 + 30.0_wp*u**4)/RAMP
+      rdd = (60.0_wp*u - 180.0_wp*u**2 + 120.0_wp*u**3)/RAMP**2
+    END IF
+    g = RADIUS*[SIN(w*t), 1.0_wp - COS(w*t)]
+    gd = RADIUS*w*[COS(w*t), SIN(w*t)]
+    gdd = RADIUS*w*w*[-SIN(w*t), COS(w*t)]
+    pq = q0
+    pv = 0.0_wp
+    pa = 0.0_wp
+    pq(n - 1:n) = q0(n - 1:n) + r*g
+    pv(n - 1:n) = rd*g + r*gd
+    pa(n - 1:n) = rdd*g + 2.0_wp*rd*gd + r*gdd
+  END SUBROUTINE circle_end_motion
 
   SUBROUTINE case_recovery_subdivision_path()
     !! Find a bounded, deterministic prescribed-motion increment for which the

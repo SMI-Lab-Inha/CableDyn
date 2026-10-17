@@ -238,6 +238,12 @@ _OPTION_ALIASES = {
     "modes": "n_modes",
     "alpha_force_blend": "alpha_force_blend",
     "alphaforceblend": "alpha_force_blend",
+    "ei0_substeps": "ei0_substeps",
+    "ei0substeps": "ei0_substeps",
+    "ei0_substep_angle": "ei0_substep_angle",
+    "ei0substepangle": "ei0_substep_angle",
+    "ei0_substep_max": "ei0_substep_max",
+    "ei0substepmax": "ei0_substep_max",
     "cable_statics": "cable_statics",
     "cablestatics": "cable_statics",
     "staticsfriction": "statics_friction",
@@ -1232,6 +1238,28 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
             if value.lower() in {"equilibrium", "element"}
             else "must be equilibrium or element"
         )
+    if key == "ei0_substeps":
+        return None if value.lower() in {"auto", "off"} else "must be auto or off"
+    if key == "ei0_substep_angle":
+        try:
+            numeric = _native_float(value)
+        except ValueError:
+            return "must lie in (0, 90] deg"
+        return (
+            None if math.isfinite(numeric) and 0.0 < numeric <= 90.0 else "must lie in (0, 90] deg"
+        )
+    if key == "ei0_substep_max":
+        try:
+            numeric = _native_float(value)
+        except ValueError:
+            return "must be an integer in [2, 1024]"
+        if not math.isfinite(numeric):
+            return "must be an integer in [2, 1024]"
+        nearest = round(numeric)
+        integer_tolerance = 16.0 * math.ulp(1.0) * max(1.0, abs(numeric))
+        if abs(numeric - nearest) > integer_tolerance or not 2 <= nearest <= 1024:
+            return "must be an integer in [2, 1024]"
+        return None
     if key in {"axial_quadrature_order", "bending_quadrature_order"}:
         try:
             numeric = _native_float(value)
