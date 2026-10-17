@@ -729,11 +729,42 @@ def test_static_summary_without_curvature_and_with_zero_curvature(tmp_path):
             [[1, 1, 0.0], [2, 1, 0.0], [1, 2, 1.0]],
             "LineID 1 rows are not contiguous",
         ),
+        (
+            ("LineID", "Node", "ArcLength", "DeckNode"),
+            [[1, 1, 0.0, 1], [1, 2, 1.0, 0.5]],
+            "DeckNode values must be non-negative integers",
+        ),
+        (
+            ("LineID", "Node", "ArcLength", "DeckNode"),
+            [[1, 1, 0.0, 1], [1, 2, 1.0, 0], [1, 3, 2.0, 3]],
+            "LineID 1 DeckNode does not number the deck nodes",
+        ),
+        (
+            ("LineID", "Node", "ArcLength", "DeckNode"),
+            [[1, 1, 0.0, 1], [1, 2, 1.0, 2], [1, 3, 2.0, 0]],
+            "LineID 1 DeckNode does not number the deck nodes",
+        ),
     ],
 )
 def test_static_profile_validation(tmp_path, channels, rows, message):
     with pytest.raises(OutputFormatError, match=message):
         StaticProfile(tmp_path / "s.out", "", channels, None, np.asarray(rows, dtype=float))
+
+
+def test_static_profile_deck_node_arc_lengths(tmp_path):
+    # line 1 refined twice: deck nodes 1, 2, 3 are mesh nodes 1, 3, 5; line 2 is the deck mesh
+    channels = ("LineID", "Node", "ArcLength", "DeckNode")
+    rows = [[1, n, 10.0 * (n - 1), (n + 1) // 2 if n % 2 else 0] for n in range(1, 6)]
+    rows += [[2, 1, 0.0, 1], [2, 2, 4.0, 2]]
+    profile = StaticProfile(tmp_path / "s.out", "", channels, None, np.asarray(rows, dtype=float))
+    assert profile.deck_node_arc_lengths(1) == {1: 0.0, 2: 20.0, 3: 40.0}
+    assert profile.deck_node_arc_lengths(2) == {1: 0.0, 2: 4.0}
+    plain = StaticProfile(
+        tmp_path / "p.out", "", channels[:3], None, np.asarray([[1, 1, 0.0], [1, 2, 3.0]])
+    )
+    assert plain.deck_node_arc_lengths(1) == {1: 0.0, 2: 3.0}
+    with pytest.raises(KeyError, match="LineID 3"):
+        profile.deck_node_arc_lengths(3)
 
 
 # ---------------------------------------------------------------------------- plots and data frames

@@ -376,7 +376,8 @@ Finite-EI cable controls
        keeps the declared ``NumSegs`` authoritative but does not disable the folded-element
        safety check, nor the automatic refinement of a deck mesh that cannot resolve the
        curvature of the equilibrium (reported). When ``True``, reaching the refinement cap while
-       the mesh remains fragile is reported
+       the mesh remains fragile is reported. Node output channels keep naming the deck nodes
+       on a refined mesh (:ref:`outputs-refined-nodes`)
      - both (finite-EI lines)
      - ``True adaptive_mesh``
    * - ``alpha_force_blend`` / ``alphaforceblend``

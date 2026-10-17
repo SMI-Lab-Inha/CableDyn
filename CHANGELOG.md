@@ -321,6 +321,29 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `vreg F/(mu N)`) where it slid back and forth at a few mm/s. This changes the results of decks
   with rods or bodies on a frictional seabed; none of the shipped examples or existing tests has
   one.
+- Node output channels of a finite-EI line whose mesh the static solve refined read the wrong
+  node, silently. `Ten<L>N<J>`, `Curv<L>N<J>`, `BendMom<L>N<J>`, `L<L>N<J>p/v/a{x,y,z}`,
+  `L<L>N<J>Dec`/`Azi`, `Torq<L>N<J>` and `Twist<L>N<J>` name a deck node (1 + the total
+  `NumSegs` of the line's sections) and are checked against that count, but after an automatic
+  refinement (adaptive, stability or curvature refinement) they reported node `J` of the refined
+  mesh. On the lazy-wave cable of `tests/data/lazy_wave_touchdown_planar_coarse.dat` with its top
+  section cut from 20 to 4 elements (refined from 71 to 1136 elements), `Ten4N34`, the deck node
+  at the 220 m touchdown, reported 5488 N, the tension at 41 m from End A, against 1544 N, and
+  `BendMom4N54`, on the seabed at 420 m, 1214 N·m against 0. Each refined line now maps its deck
+  nodes onto the final mesh by their unstretched arc length from End A (an exact match, which
+  does not assume a uniform refinement; a deck node not on the mesh fails closed), and the node
+  channels read deck nodes on every route: standalone static and dynamic cubic-Hermite, mixed
+  `EI = 0` + finite-EI, multibody, OpenFAST and the C API `CableDyn_EvalChannel`. `.static.out`,
+  the range graphs, the per-line files and `CableDyn_GetLineValues` still list every node of the
+  refined mesh; `.static.out` then carries a `DeckNode` column naming the deck node of each row
+  (0 for a node the refinement added), `.Line<L>.p.out` a `# DeckNode` comment line (also on the
+  multibody march, which writes no `.static.out`), and the new C API quantity
+  `CD_C_LINE_DECK_NODE` (10) of `CableDyn_GetLineValues`, Python `Line.deck_nodes`, gives the
+  same numbering in process. The Python `StaticProfile.deck_node_arc_lengths`,
+  `LineNodeHistory.deck_nodes`, `node_range_graph`, `profile_at`/`profiles_at` and
+  `line_range_graph` place main-output node channels at their deck node, from a static profile,
+  a per-line position file or `LinePositions` read from one. `EI = 0` lines are never refined, and every output of a deck whose meshes are
+  not refined is unchanged. See the manual's output reference (Node channels on a refined line).
 
 - Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated
   the axial force and the dynamic loads at the blended configuration

@@ -56,6 +56,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Profile_Enabled
   USE CableDyn_DeckDriver, ONLY: CD_DeckAggregateType, CD_Init_Deck_Aggregate, CD_End_Deck_Aggregate, &
                                  CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_Eval_Aggregate_Channel, &
+                                 CD_Cable_Deck_Node, &
                                  CD_Channel_Unit, CD_DECK_NAMELEN, CD_LineInitSummary, &
                                  DeckFailure, DeckLine, DeckPoint, CD_Fire_Deck_Failures, &
                                  CD_Replay_Deck_Failures, CD_Check_System_Plausibility, &
@@ -2055,6 +2056,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: unit, ios, line_id, object_index, nnode, node, ndof, es
+    LOGICAL :: refined
     REAL(wp) :: s, xyz(3), xyz_prev(3), tension, curvature, bend_moment, declination, azimuth
     CHARACTER(CD_DECK_NAMELEN) :: ch
     CHARACTER(512) :: em
@@ -2076,11 +2078,21 @@ CONTAINS
     END IF
 
     tab = CHAR(9)
+    ! A cable whose mesh the static solve refined lists every node of its final mesh; the DeckNode
+    ! column then names the deck node of each row (0: a node the refinement added).
+    refined = .FALSE.
+    IF (ALLOCATED(self%cables)) THEN
+      DO object_index = 1, SIZE(self%cables)
+        refined = refined .OR. ALLOCATED(self%cables(object_index)%deck_node)
+      END DO
+    END IF
     WRITE (unit, '(A)') 'CableDyn coupled static configuration (deformed arc; public node order End A -> End B)'
     WRITE (unit, '(A)') 'LineID'//tab//'Node'//tab//'ArcLength'//tab//'X'//tab//'Y'//tab//'Z'//tab// &
-      'Tension'//tab//'Curvature'//tab//'BendMoment'//tab//'Declination'//tab//'Inclination'//tab//'Azimuth'
+      'Tension'//tab//'Curvature'//tab//'BendMoment'//tab//'Declination'//tab//'Inclination'//tab//'Azimuth'// &
+      TRIM(MERGE(tab//'DeckNode', REPEAT(' ', 9), refined))
     WRITE (unit, '(A)') '(-)'//tab//'(-)'//tab//'(m)'//tab//'(m)'//tab//'(m)'//tab//'(m)'//tab// &
-      '(N)'//tab//'(1/m)'//tab//'(N.m)'//tab//'(deg)'//tab//'(deg)'//tab//'(deg)'
+      '(N)'//tab//'(1/m)'//tab//'(N.m)'//tab//'(deg)'//tab//'(deg)'//tab//'(deg)'// &
+      TRIM(MERGE(tab//'(-)', REPEAT(' ', 4), refined))
 
     DO line_id = 1, SIZE(self%line_obj_index)
       object_index = self%line_obj_index(line_id)
@@ -2120,9 +2132,15 @@ CONTAINS
         CALL eval_node('Dec', declination); IF (ErrStat /= CD_AGG_OK) RETURN
         CALL eval_node('Azi', azimuth); IF (ErrStat /= CD_AGG_OK) RETURN
         IF (node > 1) s = s + NORM2(xyz - xyz_prev)
-        WRITE (unit, '(I0,A,I0,10(A,ES15.7E3))') line_id, tab, node, tab, s, tab, xyz(1), tab, xyz(2), &
-          tab, xyz(3), tab, tension, tab, curvature, tab, bend_moment, tab, declination, &
-          tab, declination - 90.0_wp, tab, azimuth
+        IF (refined) THEN
+          WRITE (unit, '(I0,A,I0,10(A,ES15.7E3),A,I0)') line_id, tab, node, tab, s, tab, xyz(1), tab, xyz(2), &
+            tab, xyz(3), tab, tension, tab, curvature, tab, bend_moment, tab, declination, &
+            tab, declination - 90.0_wp, tab, azimuth, tab, profile_deck_node()
+        ELSE
+          WRITE (unit, '(I0,A,I0,10(A,ES15.7E3))') line_id, tab, node, tab, s, tab, xyz(1), tab, xyz(2), &
+            tab, xyz(3), tab, tension, tab, curvature, tab, bend_moment, tab, declination, &
+            tab, declination - 90.0_wp, tab, azimuth
+        END IF
         xyz_prev = xyz
       END DO
     END DO
@@ -2138,10 +2156,17 @@ CONTAINS
       ELSE
         WRITE (ch, '(A,I0,A,I0)') TRIM(kind), line_id, 'N', node
       END IF
+      ! every node of the line's final mesh, also on a refined cable
       CALL CD_Eval_Aggregate_Channel(TRIM(ch), self%has_sys, self%sys%fast%system, self%cables, &
-                                     self%line_is_cable, self%line_obj_index, value, es, em)
+                                     self%line_is_cable, self%line_obj_index, value, es, em, mesh_node=.TRUE.)
       IF (es /= CD_DECKDRV_OK) CALL profile_fail('channel '//TRIM(ch)//' failed: '//TRIM(em))
     END SUBROUTINE eval_node
+
+    INTEGER FUNCTION profile_deck_node() RESULT(deck_node)
+      !! The deck node of the current row (an EI = 0 line is meshed as the deck).
+      deck_node = node
+      IF (self%line_is_cable(line_id)) deck_node = CD_Cable_Deck_Node(self%cables(object_index), node)
+    END FUNCTION profile_deck_node
 
     SUBROUTINE profile_fail(message)
       CHARACTER(*), INTENT(IN) :: message

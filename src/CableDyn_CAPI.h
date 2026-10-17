@@ -135,16 +135,21 @@ int CableDyn_NLines(void *handle, int *err_stat);
 #define CD_C_OBJ_BODY 3
 #define CD_C_OBJ_ROD 4
 
-/* Line quantities (the codes of the line-node output channels). */
+/* Line quantities (the codes of the line-node output channels). Every quantity covers every
+ * node of the line's final mesh; the node channels of CableDyn_EvalChannel (Ten<L>N<J>, ...)
+ * name deck nodes, which CD_C_LINE_DECK_NODE locates on a refined finite-EI line. */
 #define CD_C_LINE_POSITION 1        /* 3 per node, xyz interleaved [m] */
 #define CD_C_LINE_VELOCITY 2        /* 3 per node [m/s] */
-#define CD_C_LINE_TENSION 3         /* 1 per node, Ten<L>N<k> [N] */
+#define CD_C_LINE_TENSION 3         /* 1 per mesh node, as Ten<L>N<J> [N] */
 #define CD_C_LINE_ACCELERATION 4    /* 3 per node [m/s^2] */
 #define CD_C_LINE_CURVATURE 5       /* 1 per node [1/m] */
 #define CD_C_LINE_BEND_MOMENT 6     /* 1 per node [N.m], 0 when EI=0 */
 #define CD_C_LINE_DECLINATION 7     /* 1 per node [deg] */
 #define CD_C_LINE_AZIMUTH 8         /* 1 per node [deg] */
 #define CD_C_LINE_SEGMENT_TENSION 9 /* 1 per segment, .t.out order [N] */
+#define CD_C_LINE_DECK_NODE 10      /* 1 per mesh node: its deck node J, 0 if added by a
+                                     * refinement (an earlier library rejects the
+                                     * code with CD_C_BAD_INPUT) */
 
 int CableDyn_GetAbiMinor(void);
 int CableDyn_NObjects(void *handle, int kind, int *err_stat);
@@ -152,7 +157,8 @@ int CableDyn_NObjects(void *handle, int kind, int *err_stat);
  * 2 Coupled, 3 Free, 4 Connect. Bodies: n_nodes 1. Rods: n_nodes = NumSegs+1. */
 void CableDyn_GetObjectInfo(void *handle, int kind, int index, int *id,
                             int *n_nodes, int *subtype, int *err_stat);
-/* Nodes run End A -> End B; n_out must equal the value count exactly. */
+/* Every node of the line's final mesh, End A -> End B (node channels name deck nodes; see
+ * CD_C_LINE_DECK_NODE); n_out must equal the value count exactly. */
 void CableDyn_GetLineValues(void *handle, int index, int quantity, double *out,
                             int n_out, int *err_stat);
 /* pos, vel, force: 3 doubles each (NULL skips). force is the resultant of

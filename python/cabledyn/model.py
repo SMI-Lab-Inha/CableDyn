@@ -394,7 +394,9 @@ class CableDyn:
 
         ``token`` uses the deck OUTPUTS vocabulary (``FairTen1``, ``L2N5px``,
         ``Curv1N3``, ``Point4Fz``, ``Body1Pz``, ``Rod2TenA``, ...) and returns the
-        value the standalone driver writes for that channel at the same state.
+        value the standalone driver writes for that channel at the same state. A
+        node channel names a deck node, also on a finite-EI line whose mesh the
+        static solve refined.
         """
         with self._lock:
             self._object_views()

@@ -135,16 +135,27 @@ END
     subprocess.run(
         [str(exe), "modules.dat", "modules"], cwd=work, check=True, capture_output=True
     )
+    # columns by header name: a refined line adds a DeckNode column
+    header: list[str] = []
     rows = []
     for line in (work / "modules.static.out").read_text(encoding="utf-8").splitlines():
+        fields = line.split()
+        if fields[:1] == ["LineID"]:
+            header = fields
+            continue
         try:
-            values = [float(v) for v in line.split()]
+            values = [float(v) for v in fields]
         except ValueError:
             continue
-        if len(values) == 12:
-            rows.append(values)
-    rows.sort(key=lambda r: r[1])
-    return [r[3] for r in rows], [r[5] for r in rows], [r[7] for r in rows], rows[0][6]
+        if header and len(values) == len(header):
+            rows.append(dict(zip(header, values, strict=True)))
+    rows.sort(key=lambda r: r["Node"])
+    return (
+        [r["X"] for r in rows],
+        [r["Z"] for r in rows],
+        [r["Curvature"] for r in rows],
+        rows[0]["Tension"],
+    )
 
 
 def compare(

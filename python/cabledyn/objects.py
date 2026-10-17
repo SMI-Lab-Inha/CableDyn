@@ -67,6 +67,9 @@ _LINE_QUANTITIES: dict[str, tuple[int, int]] = {
     "segment_tension": (9, 1),
 }
 
+#: C ABI code of the deck node of each mesh node (``CD_C_LINE_DECK_NODE``).
+_LINE_DECK_NODE = 10
+
 PointKind = Literal["fixed", "coupled", "free", "connect"]
 _POINT_KINDS: dict[int, PointKind] = {1: "fixed", 2: "coupled", 3: "free", 4: "connect"}
 
@@ -147,9 +150,12 @@ class _View:
 class Line(_View):
     """One line (mooring line or cable) of an in-process model.
 
-    Nodes run from End A (index 0) to End B, the order of the ``L<L>N<k>`` output
-    channels (node ``k`` is array row ``k - 1``) and of the ``.Line<L>.p.out``
-    files. Segments run in the same order.
+    Nodes run from End A (index 0) to End B, the order of the ``.Line<L>.p.out``
+    files; segments run in the same order. The arrays hold every node of the
+    line's final mesh. The output channels (:meth:`~cabledyn.CableDyn.channel`,
+    ``Ten<L>N<J>``, ``L<L>N<J>px``, ...) name deck nodes: on the deck mesh deck
+    node ``J`` is array row ``J - 1``; on a finite-EI line whose mesh the static
+    solve refined, :attr:`deck_nodes` locates them among the mesh nodes.
     """
 
     _kind = OBJ_LINE
@@ -164,6 +170,30 @@ class Line(_View):
     def n_segments(self) -> int:
         """Segment (element) count, ``n_nodes - 1``."""
         return self._info.n_nodes - 1
+
+    @property
+    def deck_nodes(self) -> npt.NDArray[np.int64]:
+        """Deck node of each node of the final mesh ``(n_nodes,)``.
+
+        Entry ``k`` is the deck node ``J`` (the ``<J>`` of the node output
+        channels) at array row ``k``, or 0 for a node a mesh refinement added.
+        On the deck mesh it is ``1 .. n_nodes``. Rows of the line arrays at deck
+        node ``J`` are ``numpy.flatnonzero(line.deck_nodes == J)``.
+
+        Raises
+        ------
+        CableDynError
+            If the library predates this query (``CD_C_LINE_DECK_NODE``).
+        """
+        buf = _buffer(None, (self.n_nodes,))
+        with self._model._lock:
+            handle = self._handle()
+            status = c_int()
+            self._model._lib.CableDyn_GetLineValues(
+                handle, self.index, _LINE_DECK_NODE, _dbl(buf), buf.size, byref(status)
+            )
+            self._check("CableDyn_GetLineValues", status.value)
+        return np.rint(buf).astype(np.int64)
 
     @property
     def finite_ei(self) -> bool:

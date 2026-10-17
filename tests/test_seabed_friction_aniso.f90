@@ -446,7 +446,7 @@ CONTAINS
     END IF
     WRITE (u, '(A)') '--- OUTPUTS ---'
     IF (long) THEN
-      WRITE (u, '(A)') 'FairTen1 AnchTen1 L1N5px L1N5py L1N5pz L1N30px L1N30py L1N30pz L1N34py L1N38py L1N42py'
+      WRITE (u, '(A)') 'FairTen1 AnchTen1 L1N5px L1N5py L1N5pz L1N30px L1N30py L1N30pz L1N17py L1N20py L1N21py'
     ELSE
       WRITE (u, '(A)') 'FairTen1 AnchTen1 L1N5px L1N5py L1N5pz'
     END IF
@@ -523,8 +523,8 @@ CONTAINS
     CALL read_out('franiso_pull_highlat.out', db, nb)
     CALL require(na == nb .AND. na > 10, 'hermite-pull:rows')
     IF (na /= nb .OR. na <= 10) RETURN
-    ! grounded nodes 38 and 42 (of 45, node 0 at the fairlead)
-    WRITE (*, '(A,4ES14.6)') 'hermite sideways pull: grounded-node sway N38, N42 at low / high lateral mu (m): ', &
+    ! grounded deck nodes 20 and 21 (of 46, node 1 at the fairlead), 38 and 40 m along the line
+    WRITE (*, '(A,4ES14.6)') 'hermite sideways pull: grounded-node sway N20, N21 at low / high lateral mu (m): ', &
       da(11, na), da(12, na), db(11, nb), db(12, nb)
     CALL require(da(11, na) > 1.1_wp*db(11, nb) .AND. da(12, na) > 1.1_wp*db(12, nb) .AND. db(12, nb) > 0.0_wp, &
                  'hermite-pull:low-lateral-friction-lets-the-grounded-run-sway-more')

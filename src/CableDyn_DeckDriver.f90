@@ -208,6 +208,8 @@ MODULE CableDyn_DeckDriver
   ! Both reuse the same private evaluators the standalone .out writers use, so a coupled run
   ! and the standalone driver report identical channel values on a shared configuration.
   PUBLIC :: CD_Eval_Aggregate_Channel, CD_Channel_Unit
+  ! The deck node of a node of a finite-EI cable's final mesh (the static-profile DeckNode column).
+  PUBLIC :: CD_Cable_Deck_Node
   ! In-process object queries of the C API (CableDyn_CAPI): segment tensions in the .t.out
   ! convention, and the body/rod inventories the Body<N>/Rod<N> channels resolve on.
   PUBLIC :: CD_Eval_Aggregate_Segment_Tensions, CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses
@@ -1627,6 +1629,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: l0_am(:), ea_am(:), ei_am(:), w_am(:)
     INTEGER, ALLOCATABLE :: fixed_am(:)
     TYPE(CD_HermiteResolutionType) :: diag
+    ! Deck node -> final-mesh node map of the node output channels (deck_node_mesh_map).
+    INTEGER, ALLOCATABLE :: deck_map(:)
     ! ATTACHMENTS: the deck-mesh bare submerged weight and mesh (the static solve runs on the
     ! smeared equivalent first), and the attachment nodes on the final mesh.
     LOGICAL :: has_att
@@ -2781,6 +2785,9 @@ CONTAINS
       CALL remap_elem_by_reference_arc(cat, l0, l0_am)
       CALL remap_elem_by_reference_arc(ba_raw, l0, l0_am)
     END IF
+    ! The node output channels read deck nodes: map each onto the final mesh (set on the cable
+    ! once it is built below).
+    CALL deck_node_mesh_map(l0, l0_am, deck_map)
     CALL MOVE_ALLOC(l0_am, l0)
     CALL MOVE_ALLOC(ea_am, ea)
     CALL MOVE_ALLOC(ei_am, ei)
@@ -2864,6 +2871,7 @@ CONTAINS
     IF (es /= CD_HFMF_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable coupled-shell init failed: '//TRIM(em)); RETURN
     END IF
+    IF (ALLOCATED(deck_map)) CALL MOVE_ALLOC(deck_map, cable%deck_node)
     IF (ANY(ba > CD_ZERO)) THEN
       CALL CD_HFMF_Set_Axial_Damping(cable, ba, es, em)
       IF (es /= CD_HFMF_OK) THEN
@@ -8441,6 +8449,42 @@ CONTAINS
     END DO
     CALL MOVE_ALLOC(b, a)
   END SUBROUTINE remap_elem_by_reference_arc
+
+  SUBROUTINE deck_node_mesh_map(l0_deck, l0_mesh, map)
+    !! The public node (End A = 1) of a finite-EI line's final mesh at each deck node, matched on
+    !! the reference arc from End A: map(J) = k when mesh node k lies within 1e-9 of the line length
+    !! of deck node J, else 0. l0_deck and l0_mesh are the element lengths of the deck mesh and of
+    !! the final mesh in internal order (End B first). The match uses the arc positions alone, so
+    !! any refinement that keeps the deck nodes, uniform or local, maps exactly. The map is left
+    !! unallocated when the final mesh is the deck mesh.
+    REAL(wp), INTENT(IN) :: l0_deck(:), l0_mesh(:)
+    INTEGER, ALLOCATABLE, INTENT(OUT) :: map(:)
+    REAL(wp) :: s_mesh(SIZE(l0_mesh) + 1), s_deck, tol
+    INTEGER :: nd, nm, j, k
+
+    nd = SIZE(l0_deck)
+    nm = SIZE(l0_mesh)
+    IF (nd == nm) THEN
+      IF (.NOT. (MAXVAL(ABS(l0_deck - l0_mesh)) > CD_ZERO)) RETURN
+    END IF
+    s_mesh(1) = CD_ZERO
+    DO k = 1, nm
+      s_mesh(k + 1) = s_mesh(k) + l0_mesh(nm - k + 1)
+    END DO
+    tol = 1.0e-9_wp*MAX(SUM(l0_deck), s_mesh(nm + 1))
+    ALLOCATE (map(nd + 1))
+    map = 0
+    k = 1
+    s_deck = CD_ZERO
+    DO j = 1, nd + 1
+      ! public deck element j - 1 is internal element nd - j + 2
+      IF (j > 1) s_deck = s_deck + l0_deck(nd - j + 2)
+      DO WHILE (k < nm + 1 .AND. s_mesh(k) < s_deck - tol)
+        k = k + 1
+      END DO
+      IF (ABS(s_mesh(k) - s_deck) <= tol) map(j) = k
+    END DO
+  END SUBROUTINE deck_node_mesh_map
 
   SUBROUTINE finite_section_closure(ea, ei, mpl, diam, gas_in, gj_in, i_rt_in, i_rn_in, &
                                     gas, gj, rho_a, i_rt, i_rn, ErrStat, ErrMsg)
@@ -25990,6 +26034,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: unit, ios, li, node, nn
+    LOGICAL :: refined
     REAL(wp) :: s, xyz(3), xyz_prev(3), tension, curvature, bend_moment, declination, azimuth
     CHARACTER(NAMELEN) :: channel
     CHARACTER(LEN(out_root) + 16) :: path
@@ -26005,11 +26050,19 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'cannot open Hermite static profile: '//TRIM(path)); RETURN
     END IF
     tab = CHAR(9)
+    ! A line whose mesh the static solve refined lists every node of its final mesh; the DeckNode
+    ! column then names the deck node of each row (0: a node the refinement added).
+    refined = .FALSE.
+    DO li = 1, SIZE(cables)
+      refined = refined .OR. ALLOCATED(cables(li)%deck_node)
+    END DO
     WRITE (unit, '(A)') 'CableDyn standalone static configuration (deformed arc; public node order End A -> End B)'
     WRITE (unit, '(A)') 'LineID'//tab//'Node'//tab//'ArcLength'//tab//'X'//tab//'Y'//tab//'Z'//tab// &
-      'Tension'//tab//'Curvature'//tab//'BendMoment'//tab//'Declination'//tab//'Inclination'//tab//'Azimuth'
+      'Tension'//tab//'Curvature'//tab//'BendMoment'//tab//'Declination'//tab//'Inclination'//tab//'Azimuth'// &
+      TRIM(MERGE(tab//'DeckNode', REPEAT(' ', 9), refined))
     WRITE (unit, '(A)') '(-)'//tab//'(-)'//tab//'(m)'//tab//'(m)'//tab//'(m)'//tab//'(m)'//tab// &
-      '(N)'//tab//'(1/m)'//tab//'(N.m)'//tab//'(deg)'//tab//'(deg)'//tab//'(deg)'
+      '(N)'//tab//'(1/m)'//tab//'(N.m)'//tab//'(deg)'//tab//'(deg)'//tab//'(deg)'// &
+      TRIM(MERGE(tab//'(-)', REPEAT(' ', 4), refined))
 
     DO li = 1, SIZE(lines)
       nn = CD_HFMF_NNodes(cables(li))
@@ -26028,9 +26081,15 @@ CONTAINS
         CALL eval_node('Dec', declination); IF (ErrStat /= CD_DECKDRV_OK) RETURN
         CALL eval_node('Azi', azimuth); IF (ErrStat /= CD_DECKDRV_OK) RETURN
         IF (node > 1) s = s + NORM2(xyz - xyz_prev)
-        WRITE (unit, '(I0,A,I0,10(A,ES15.7E3))') lines(li)%id, tab, node, tab, s, tab, xyz(1), tab, xyz(2), &
-          tab, xyz(3), tab, tension, tab, curvature, tab, bend_moment, tab, declination, &
-          tab, declination - 90.0_wp, tab, azimuth
+        IF (refined) THEN
+          WRITE (unit, '(I0,A,I0,10(A,ES15.7E3),A,I0)') lines(li)%id, tab, node, tab, s, tab, xyz(1), tab, xyz(2), &
+            tab, xyz(3), tab, tension, tab, curvature, tab, bend_moment, tab, declination, &
+            tab, declination - 90.0_wp, tab, azimuth, tab, CD_Cable_Deck_Node(cables(li), node)
+        ELSE
+          WRITE (unit, '(I0,A,I0,10(A,ES15.7E3))') lines(li)%id, tab, node, tab, s, tab, xyz(1), tab, xyz(2), &
+            tab, xyz(3), tab, tension, tab, curvature, tab, bend_moment, tab, declination, &
+            tab, declination - 90.0_wp, tab, azimuth
+        END IF
         xyz_prev = xyz
       END DO
     END DO
@@ -26047,7 +26106,7 @@ CONTAINS
       ELSE
         WRITE (channel, '(A,I0,A,I0)') TRIM(kind), lines(li)%id, 'N', node
       END IF
-      CALL eval_cable_channel(cables(li), TRIM(channel), value, ErrStat, eval_msg)
+      CALL eval_cable_channel(cables(li), TRIM(channel), value, ErrStat, eval_msg, mesh_node=.TRUE.)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit, STATUS='DELETE')
         ErrMsg = 'CableDyn_DeckDriver: Hermite static-profile channel '//TRIM(channel)//' failed: '//TRIM(eval_msg)
@@ -26338,6 +26397,15 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'cannot open Hermite line position output: '//TRIM(path)); RETURN
         END IF
         WRITE (pos_units(i), '(A)') '# CableDyn finite-EI Hermite line node positions; public node order EndA -> EndB'
+        IF (ALLOCATED(cables(i)%deck_node)) THEN
+          ! A line whose mesh the static solve refined lists every node of its final mesh: name the
+          ! deck node of each (0: a node the refinement added), as the static-profile DeckNode column
+          WRITE (pos_units(i), '(A)', ADVANCE='NO') '# DeckNode'
+          DO node = 1, cables(i)%line%nn
+            WRITE (pos_units(i), '(A,I0)', ADVANCE='NO') char_tab(), CD_Cable_Deck_Node(cables(i), node)
+          END DO
+          WRITE (pos_units(i), '(A)') ''
+        END IF
         WRITE (pos_units(i), '(A)', ADVANCE='NO') 'Time(s)'
         DO node = 1, cables(i)%line%nn
           WRITE (pos_units(i), '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'X(m)'
@@ -31737,7 +31805,7 @@ CONTAINS
   ! -------------------------------------------------------------------------- !
 
   SUBROUTINE CD_Eval_Aggregate_Channel(ch, has_sys, system, cables, line_is_cable, line_obj_index, val, ErrStat, &
-                                       ErrMsg, cable_points, rigid_rt, rod_rt, ranges)
+                                       ErrMsg, cable_points, rigid_rt, rod_rt, ranges, mesh_node)
     !! Evaluate ONE deck OUTPUTS channel token against a built aggregate. The token's deck line
     !! id is resolved through the map to either an EI=0 system line (eval_system_line_channel) or
     !! a finite-EI cable (eval_cable_channel); Point<P> channels read the EI=0 system point state.
@@ -31762,6 +31830,9 @@ CONTAINS
     TYPE(CD_RodRuntimeType), INTENT(IN), OPTIONAL :: rod_rt
     ! TDP<L> channels: the touchdown references fixed at initialization
     TYPE(CD_RangeSet), INTENT(IN), OPTIONAL :: ranges
+    ! A node channel names a deck node; mesh_node = .TRUE. reads it as a node of the line's final
+    ! mesh instead (eval_cable_channel), as the static profile and the C API line arrays do
+    LOGICAL, INTENT(IN), OPTIONAL :: mesh_node
 
     CHARACTER(NAMELEN) :: lo
     LOGICAL :: found
@@ -31914,7 +31985,7 @@ CONTAINS
       IF (line_obj_index(line_id) > SIZE(cables)) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": cable index out of range'); RETURN
       END IF
-      CALL eval_cable_channel(cables(line_obj_index(line_id)), ch, val, ErrStat, ErrMsg)
+      CALL eval_cable_channel(cables(line_obj_index(line_id)), ch, val, ErrStat, ErrMsg, mesh_node=mesh_node)
     ELSE
       IF (.NOT. has_sys) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line maps to the EI=0 system but no system '// &
@@ -32215,22 +32286,28 @@ CONTAINS
     ErrMsg = 'CableDyn_DeckDriver: OUTPUT "'//TRIM(ch)//'": '//TRIM(em)
   END SUBROUTINE sys_solvefail
 
-  SUBROUTINE eval_cable_channel(cable, ch, val, ErrStat, ErrMsg)
+  SUBROUTINE eval_cable_channel(cable, ch, val, ErrStat, ErrMsg, mesh_node)
     !! Evaluate one channel for a finite-EI Hermite power cable (CD_HFMF). Mirrors the driver's
     !! finite_model_channel_value but reads the cable's committed state directly from the CD_HFMF
     !! line (stride-6 DOFs: r at 6*(n-1)+1..3, tangent m at +4..6) and recovers the
     !! complete elastic plus Kelvin-Voigt axial resultant. Node ordering runs anchor (node 1, held)
     !! -> fairlead (node nn, the coupled endpoint), so deck End A = internal node nn. Bend moment is
     !! EI(node) * |kvec_current - kvec_reference|; the built cable's reference is straight
-    !! (kvec_reference = 0), so it reduces to EI * geometric curvature magnitude.
+    !! (kvec_reference = 0), so it reduces to EI * geometric curvature magnitude. A node channel
+    !! names a deck node (1 + the total NumSegs of the line's sections, End A first), read at its
+    !! node of the final mesh on a refined line (cable%deck_node); mesh_node = .TRUE. reads the
+    !! token's node as a node of the final mesh instead (the static profile and the C API line
+    !! arrays list every mesh node).
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     CHARACTER(*), INTENT(IN) :: ch
     REAL(wp), INTENT(OUT) :: val
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: mesh_node
 
     CHARACTER(NAMELEN) :: lo
     INTEGER :: line_id, node, kind, comp, nnode, nelem, inode, es
+    LOGICAL :: deck_numbering
     REAL(wp) :: sec_ten, sec_curv, sec_bend
     CHARACTER(200) :: em
 
@@ -32272,6 +32349,19 @@ CONTAINS
       RETURN
     END IF
     CALL parse_line_node_channel(ch, line_id, node, kind, comp)
+    deck_numbering = ALLOCATED(cable%deck_node)
+    IF (PRESENT(mesh_node)) deck_numbering = deck_numbering .AND. .NOT. mesh_node
+    IF (deck_numbering) THEN
+      ! a refined line: the deck node's node of the final mesh
+      IF (node < 1 .OR. node > SIZE(cable%deck_node)) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node index out of range'); RETURN
+      END IF
+      IF (cable%deck_node(node) < 1) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": deck node '//TRIM(int_to_str(node))// &
+                        ' is not a node of the refined mesh of the line'); RETURN
+      END IF
+      node = cable%deck_node(node)
+    END IF
     IF (node < 1 .OR. node > nnode) THEN
       CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node index out of range'); RETURN
     END IF
@@ -32356,6 +32446,24 @@ CONTAINS
     LOGICAL :: is_id
     is_id = .NOT. (ABS(cable%frame_s) > CD_ZERO .OR. ABS(cable%frame_c - CD_ONE) > CD_ZERO)
   END FUNCTION cable_frame_is_identity
+
+  PURE INTEGER FUNCTION CD_Cable_Deck_Node(cable, node) RESULT(deck_node)
+    !! The deck node at public node `node` (End A = 1) of a finite-EI cable's final mesh: the
+    !! node itself when the mesh is the deck mesh, 0 for a node the refinement added (the
+    !! DeckNode column of the static profile).
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    INTEGER, INTENT(IN) :: node
+    INTEGER :: j
+    deck_node = node
+    IF (.NOT. ALLOCATED(cable%deck_node)) RETURN
+    deck_node = 0
+    DO j = 1, SIZE(cable%deck_node)
+      IF (cable%deck_node(j) == node) THEN
+        deck_node = j
+        RETURN
+      END IF
+    END DO
+  END FUNCTION CD_Cable_Deck_Node
 
   PURE FUNCTION cable_global_component(cable, v_local, comp) RESULT(val)
     !! One component of a cable-local vector expressed in the deck's global frame (the

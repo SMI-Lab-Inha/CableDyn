@@ -17,10 +17,13 @@ one, and these functions build it from the kinds of CableDyn result:
   cubic-Hermite element table (``.elements.out``).
 
 Node channels are written only for the nodes named in the deck ``OUTPUTS``
-section. Their positions along the line come from ``arc_length``: a static
-profile of the same run (the node's static deformed arc length), an explicit
-mapping from node number to arc length, or nothing, in which case the graph is
-plotted against node number.
+section and number deck nodes (1 at End A to 1 + the total ``NumSegs`` of the
+line's sections at End B). Their positions along the line come from
+``arc_length``: a static profile of the same run (the node's static deformed arc
+length; on a line whose mesh the static solve refined, the deck node's row of
+the profile, see :meth:`~cabledyn.StaticProfile.deck_node_arc_lengths`), an
+explicit mapping from node number to arc length, or nothing, in which case the
+graph is plotted against node number.
 """
 
 from __future__ import annotations
@@ -130,14 +133,8 @@ def node_locations(
     if arc_length is None:
         return "Node", np.asarray(node_ids, dtype=np.float64)
     if isinstance(arc_length, StaticProfile):
-        line = arc_length.line(line_id)
-        lookup = dict(
-            zip(
-                (int(node) for node in line.column("Node")),
-                (float(arc) for arc in line.column("ArcLength")),
-                strict=True,
-            )
-        )
+        # node channels number deck nodes; a refined line's profile locates them (DeckNode)
+        lookup = arc_length.deck_node_arc_lengths(line_id)
     elif isinstance(arc_length, Mapping):
         lookup = {int(node): float(arc) for node, arc in arc_length.items()}
     else:
