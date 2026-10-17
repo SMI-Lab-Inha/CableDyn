@@ -12,7 +12,9 @@ PROGRAM test_bodies_rods
   !!      Body<N>/Rod<N> channels report the body and rod on the line-coupled route;
   !!   4. a LINES row written with R1A/R1B equals the same deck with Rod1A/Rod1B POINT rows;
   !!   5. a short pinned rod at a step beyond its explicit swing limit sub-cycles it on a deck
-  !!      without lines and on the staggered multibody march without an EI=0 line.
+  !!      without lines and on the staggered multibody march without an EI=0 line;
+  !!   6. a pinned rod held by a stiff finite-EI cable on the staggered march sub-cycles the cable
+  !!      spring, whose end force the march applies explicitly.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
@@ -34,6 +36,7 @@ PROGRAM test_bodies_rods
   CALL check_zero_length_rod()
   CALL check_mixed_rest()
   CALL check_lineless_substep()
+  CALL check_cable_rod_substep()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' body/rod topology check(s) failed'
     ERROR STOP 1
@@ -795,4 +798,69 @@ CONTAINS
       CALL require(ABS(got - t_ref) <= 1.5e-2_wp*t_ref, 'short pendulum: period ('//TRIM(tag)//')')
     END DO
   END SUBROUTINE check_lineless_substep
+
+  SUBROUTINE write_cable_rod(path, dt)
+    !! A heavy 1 m rod (D = 0.3 m, 500 kg/m) hanging from a pin at (0, 0, -20), its End B held by
+    !! a 20 m neutrally buoyant finite-EI cable (EA 1e7 N, EI 10 N m^2) to an anchor along x at
+    !! 100 N of pretension, on the staggered multibody march (no EI=0 line).
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: dt
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Pinned rod held by a stiff finite-EI cable'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A,ES24.16,A)') 'tcable 0.05 ', RHO_W*0.25_wp*PI*0.05_wp**2, ' 1.0e7 -0.8 10.0 1.2 0.01 1.0 0'
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'heavy 0.3 500 0 0 0 0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    WRITE (u, '(A)') '1 heavy Pinned 0 0 -20 0 0 -21 4 -'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Fixed 20 0 -21 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID LineType AttachA AttachB UnstrLen NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-) (m) (-) (-)'
+    WRITE (u, '(A,ES24.16,A)') '1 tcable R1B 1 ', 20.0_wp*(1.0_wp - 1.0e-5_wp), ' 10 -'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '70 WtrDpth'
+    WRITE (u, '(A)') 'deck bodyIC'
+    WRITE (u, '(A)') 'staggered bodyScheme'
+    WRITE (u, '(ES22.14,A)') dt, ' dtM'
+    WRITE (u, '(A)') '2 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Rod1N4Px Rod1N4Pz'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_cable_rod
+
+  SUBROUTINE check_cable_rod_substep()
+    !! The cable's axial stiffness EA/L = 5e5 N/m acts at the 1 m arm against the rod's inertia
+    !! about its pin (about 170 kg m^2): omega^2 about 3e3 rad^2/s^2, against about 14 from the
+    !! rod's net weight, so a 0.05 s step (omega dt = 2.7) needs sub-steps that only the cable
+    !! spring of the estimate asks for (the staggered march returns the cable end force
+    !! explicitly). The rod must stay near its pose (End B within 0.1 m) and end within 1 cm of
+    !! a run at dtM = 0.005 s.
+    REAL(wp), ALLOCATABLE :: dc(:, :), df(:, :)
+    REAL(wp) :: dev, err
+    LOGICAL :: ok
+    CALL write_cable_rod('bodrod_cable_c.dat', 0.05_wp)
+    CALL run('bodrod_cable_c.dat', 'bodrod_cable_c', 3, dc, ok)
+    IF (.NOT. ok) RETURN
+    CALL write_cable_rod('bodrod_cable_f.dat', 0.005_wp)
+    CALL run('bodrod_cable_f.dat', 'bodrod_cable_f', 3, df, ok)
+    IF (.NOT. ok) RETURN
+    dev = nan_max_abs(dc(2, :))
+    err = nan_max_abs(dc(2:3, SIZE(dc, 2)) - df(2:3, SIZE(df, 2)))
+    WRITE (*, '(A,ES10.3,A,ES10.3)') 'pinned rod on a stiff cable at a 0.05 s step: max |End B x| ', dev, &
+      ' m; end vs dtM/10 ', err
+    CALL require(dev <= 0.1_wp, 'cable rod: End B stays near its pose (cable spring sub-steps)')
+    CALL require(err <= 1.0e-2_wp, 'cable rod: ends as the dtM/10 run')
+  END SUBROUTINE check_cable_rod_substep
 END PROGRAM test_bodies_rods

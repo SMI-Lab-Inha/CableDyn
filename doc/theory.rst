@@ -1938,16 +1938,27 @@ on a bathymetry grid the highest node of the cells the surrounding box overlaps,
 :math:`0.05` of their range for the crease rounding) is at most :math:`\rho` plus the rod radius.
 An object about to land, sliding towards a shallower bed or turning a station onto it is thus
 resolved as well as one at rest on the bed. A spring :math:`k` at arm :math:`\mathbf{a}`
-adds :math:`k` in heave and :math:`k a_y^2`, :math:`k a_x^2` in roll and pitch. The normal seabed
-damping is applied implicitly and sets no limit; the monolithic scheme carries the contact in
-its Jacobian, and its accuracy sub-steps (above) leave the contact out. The estimate omits the
-line-end inertia and the coupling between
+adds :math:`k` in heave and :math:`k a_y^2`, :math:`k a_x^2` in roll and pitch. A rod near the
+free surface adds its waterplane stiffness in the same way: :math:`\rho_w g\,d\,\mathrm{d}l` at each
+station whose cross-section can cross the (held or wave) surface within the step, and
+:math:`\rho_w g\,\pi d^2/4` between each pair of stations whose axis can cross it, which together
+bound the elliptical waterplane of any crossing; its inertia is then the structural one, since
+the added mass changes as it crosses. A finite-EI cable on a body or rod of the staggered march,
+whose end force the march returns explicitly, adds the directional spring above with
+:math:`k_a = 1/\sum l_0/EA` and its current end tension. The normal seabed damping and the
+regularised friction (a damper :math:`\mu N/\sqrt{v^2 + v_\text{reg}^2}`, :math:`\mu N/v_\text{reg}`
+at rest) are applied implicitly, the friction as that secant coefficient, so they set no limit;
+the monolithic scheme carries the contact and the hydrostatics in its Jacobian, and its accuracy
+sub-steps (above) leave them out. A step that would need more than 256 sub-steps is warned about
+once per run. The estimate omits the line-end inertia and the coupling between
 the diagonal terms, so it can understate the coupled frequency by about a factor 1.6; stability
 alone (the central-difference bound :math:`\omega\,\Delta t < 2`) would allow a limit near 1.
 The limit of 0.4 is set by accuracy: a rod released out of balance at :math:`\Delta t = 0.1` s
 follows the fairlead-tension transient of a :math:`\Delta t = 0.005` s run within 1.5 %.
-The objects' own terms (hydrostatic restoring, seabed contact, and the swing of a pinned rod
-below) enter whether or not a line is attached: a deck without lines, which marches its
+The objects' own terms (hydrostatic restoring, a rod's waterplane, seabed contact, and the
+swing of a pinned rod below, about its pin on every route, with its parent body's pin
+acceleration and the reduced mass :math:`m m_b/(m + m_b)` for a rod pinned to a body) enter
+whether or not a line is attached: a deck without lines, which marches its
 objects by the same explicit scheme, and a staggered deck whose only lines are finite-EI cables
 are sub-stepped for them as well.
 Both schemes start from the instantaneous acceleration of the initial state.
@@ -1974,8 +1985,9 @@ bound :math:`g + |\mathbf{a}_p| \ge |\mathbf{g} - \mathbf{a}_p|`, taken with the
 step-start and end-of-step pin accelerations. The swing stiffness over the smaller rotational
 inertia about the pin across the rod axis, about :math:`3g/(2L)` for a dry uniform rod of length
 :math:`L`, adds to the line estimate of :math:`\omega^2`. The buoyancy is that of the wet
-length at the evaluated pose, so the change in a surface-piercing rod's waterline with its tilt
-is left out. The host places a ``CoupledPinned`` pin at :math:`t_{n+1}` before the estimate, so
+length at the evaluated pose; the change of a surface-piercing rod's waterline with its tilt
+(an articulated column) enters through the rod's waterplane stiffness about the pin (above).
+The host places a ``CoupledPinned`` pin at :math:`t_{n+1}` before the estimate, so
 the swing is evaluated with the rod at both its step-start and its end-of-step pin, taking the
 larger stiffness and the smaller inertia. The sub-steps move the pin along a straight line; at
 the rod's orientation and with the surface held over the step, every slice's clearance to the

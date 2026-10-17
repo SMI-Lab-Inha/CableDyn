@@ -27,6 +27,8 @@ PROGRAM test_body_rod_physics
   !!      release a body from its deck pose (bodyIC deck).
   !!   7. a rod carried horizontally (drifting, or turning about its pin) onto a bathymetry step
   !!      up is sub-stepped for the contact it reaches within a step.
+  !!   8. a floating rod is sub-stepped for its waterplane stiffness, and a rod held by seabed
+  !!      friction holds still at a coarse step (the friction damper is implicit).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Deck_Equilibrium_Jacobian_Check, CD_DECKDRV_OK
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
@@ -52,6 +54,8 @@ PROGRAM test_body_rod_physics
   CALL check_equilibrium_seed_robustness()
   CALL check_static_body_start()
   CALL check_bathymetry_reach_substep()
+  CALL check_floating_rod_substep()
+  CALL check_rod_friction_hold()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' body/rod physics check(s) failed'
     ERROR STOP 1
@@ -1564,5 +1568,102 @@ CONTAINS
       CALL require(err <= 0.2_wp, 'reach: '//TRIM(kind)//' ends as the dtM/4 run')
     END DO
   END SUBROUTINE check_bathymetry_reach_substep
+
+  ! ------------------------------------------------------------------------------------------
+  ! 8. A floating rod and a rod held by seabed friction at a coarse step
+  ! ------------------------------------------------------------------------------------------
+
+  SUBROUTINE check_floating_rod_substep()
+    !! A horizontal 1 m rod (D = 0.05 m, no drag or added mass) floating half submerged on a deck
+    !! without lines, released 5 mm below its waterline: its waterplane rhoW g D L against its
+    !! mass rhoW pi D^2 L/8 gives omega^2 = 8 g/(pi D), about 500 rad^2/s^2, so a 0.1 s step
+    !! (omega dt = 2.2) is beyond the explicit limit. The waterplane stiffness of the sub-step
+    !! estimate must keep the undamped heave within its release amplitude over 3 s.
+    REAL(wp), ALLOCATABLE :: dat(:, :)
+    REAL(wp) :: amp
+    INTEGER :: u
+    LOGICAL :: ok
+    OPEN (NEWUNIT=u, FILE='float_rod.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Floating horizontal rod released below its waterline'
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+    WRITE (u, '(A,ES24.16,A)') 'stick 0.05 ', RHO_W*PI*0.05_wp**2/8.0_wp, ' 0 0 0 0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    WRITE (u, '(A)') '1 stick Free 0 0 -0.005 1 0 -0.005 4 -'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '50 WtrDpth'
+    WRITE (u, '(A)') 'deck bodyIC'
+    WRITE (u, '(A)') '0.1 dtM'
+    WRITE (u, '(A)') '3.0 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Rod1N2Pz'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+    CALL run_deck('float_rod.dat', 'float_rod', ok)
+    IF (.NOT. ok) RETURN
+    CALL read_out('float_rod.out', 2, dat, ok)
+    IF (.NOT. ok) RETURN
+    amp = nan_max_abs(dat(2, :))
+    WRITE (*, '(A,ES10.3,A)') 'floating rod at a 0.1 s step: max |heave| ', amp, ' m (released at 5.0e-3 m)'
+    CALL require(amp <= 5.5e-3_wp, 'floating rod: the heave stays within its release (waterplane sub-steps)')
+  END SUBROUTINE check_floating_rod_substep
+
+  SUBROUTINE check_rod_friction_hold()
+    !! A heavy rod (D = 0.2 m, 50 kg/m) lying on a frictional bed (mu = 0.5, kBot 1e5) in a
+    !! 0.3 m/s cross current, on a deck without lines at dtM = 0.1 s: the drag (about 11 N/m)
+    !! is far below mu N (about 87 N/m), so the rod holds. The regularised friction is a damper
+    !! mu N/vreg (vreg = 1e-3 m/s); applied explicitly it would flip the friction by mu N each
+    !! step. Implicit, the rod must hold still after the first second (|End A velocity| below
+    !! 5e-3 m/s) and its net cross load (drag less friction, Rod1Fy) stay below 5 % of mu N L.
+    REAL(wp), ALLOCATABLE :: dat(:, :)
+    REAL(wp) :: vmax, fmax, mun
+    INTEGER :: u, i
+    LOGICAL :: ok
+    OPEN (NEWUNIT=u, FILE='fric_rod.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Heavy rod held by seabed friction in a cross current'
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'bar 0.2 50 1.2 1.0 0 0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    WRITE (u, '(A)') '1 bar Free 0 0 -20 1 0 -20 4 -'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '20 WtrDpth'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') '0.5 frictionMu'
+    WRITE (u, '(A)') 'uniform 0 0.3 0 current'
+    WRITE (u, '(A)') 'deck bodyIC'
+    WRITE (u, '(A)') '0.1 dtM'
+    WRITE (u, '(A)') '4.0 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Rod1Vy Rod1Fy'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+    CALL run_deck('fric_rod.dat', 'fric_rod', ok)
+    IF (.NOT. ok) RETURN
+    CALL read_out('fric_rod.out', 3, dat, ok)
+    IF (.NOT. ok) RETURN
+    mun = 0.5_wp*(50.0_wp - RHO_W*0.25_wp*PI*0.2_wp**2)*GRAV
+    vmax = 0.0_wp
+    fmax = 0.0_wp
+    DO i = 1, SIZE(dat, 2)
+      IF (dat(1, i) < 1.0_wp) CYCLE
+      vmax = MAX(vmax, ABS(dat(2, i)))
+      fmax = MAX(fmax, ABS(dat(3, i)))
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3,A,ES10.3,A)') 'rod held by friction at a 0.1 s step: max |v| ', vmax, &
+      ' m/s; max |net cross load| ', fmax, ' N against mu N L ', mun, ' N'
+    CALL require(vmax <= 5.0e-3_wp, 'friction: the rod holds still (implicit friction damper)')
+    CALL require(fmax <= 0.05_wp*mun, 'friction: the net cross load stays balanced')
+  END SUBROUTINE check_rod_friction_hold
 
 END PROGRAM test_body_rod_physics

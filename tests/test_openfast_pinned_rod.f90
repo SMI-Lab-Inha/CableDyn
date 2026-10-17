@@ -195,7 +195,7 @@ CONTAINS
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
-    WRITE (u, '(A)') '10.0 WtrDpth'
+    WRITE (u, '(A)') '30.0 WtrDpth'
     WRITE (u, '(A)') '1.0e5 kBot'
     WRITE (u, '(A)') 'deck bodyIC'
     WRITE (u, '(A)') '--- end ---'
@@ -1158,7 +1158,8 @@ CONTAINS
   SUBROUTINE case_lineless_swing_substep()
     !! A 1 m Pinned rod that carries no line, released at 30 degrees: (1) dry, hanging from a pin
     !! above the water, omega0^2 = m g (L/2)/I_p, about 14.6 rad^2/s^2; (2) submerged and buoyant
-    !! (10 kg/m against 32.2 kg/m of displaced water), standing up from a pin at z = -5 m,
+    !! (10 kg/m against 32.2 kg/m of displaced water), standing up from a pin at z = -15 m (out of
+    !! the surface's reach),
     !! omega0^2 = (B - W)(L/2)/I_p, about 32.4 rad^2/s^2. At a 0.6 s coupling step omega0 dt is
     !! 2.29 and 3.42, beyond the explicit limit of 2, and the sub-step estimate (the swing
     !! stiffness |W d_g - B d_b| over the inertia about the pin) asks for 6 and 9 sub-steps
@@ -1168,7 +1169,7 @@ CONTAINS
     !! with the elliptic-integral period of the compound pendulum to the accuracy of
     !! omega0 dt_sub, about 0.38 (a central-difference period error near (omega dt)^2/24 = 0.6 %).
     TYPE(CD_AGG_ModuleType) :: coarse, fine
-    REAL(wp), PARAMETER :: DTC = 0.6_wp, TH0 = 30.0_wp, ZW = -5.0_wp
+    REAL(wp), PARAMETER :: DTC = 0.6_wp, TH0 = 30.0_wp, ZW = -15.0_wp
     INTEGER, PARAMETER :: NC = 30, NSUBS(2) = [6, 9]
     REAL(wp), ALLOCATABLE :: angc(:), tc(:), angf(:), tf(:)
     REAL(wp) :: mpm, ip, kswing, t_ref, period, mean, err_ang, amp, rel
@@ -1261,10 +1262,11 @@ CONTAINS
     !!   (2) a rod just heavier than water (33 kg/m) hanging from a pin at z = 1 m that sinks at
     !!       2 m/s, dry at the start of a 0.6 s step and submerged at its end: 14.6 rad^2/s^2 at the
     !!       start (omega dt = 2.29) against 0.354 at the end; the start asks for 6 (5.73).
-    !! The crossing step must equal six steps at the sub-step size (the wetting along the step is
-    !! bounded by its two ends).
+    !! The crossing step must stay within 5e-3 rad and 1 % of the rod state of a run at a sixtieth
+    !! of the step (the wetting along the step is bounded by its two ends; near the surface the
+    !! waterplane term of the estimate adds sub-steps beyond these).
     TYPE(CD_AGG_ModuleType) :: coarse, fine
-    INTEGER, PARAMETER :: NSUB = 6
+    INTEGER, PARAMETER :: NSUB = 60
     REAL(wp) :: angc(0:1), tc(0:1), angf(0:NSUB), tf(0:NSUB), sc(24), sf(24), dtc, err_ang, err_s
     INTEGER :: es, kase
     LOGICAL :: ok
@@ -1298,8 +1300,8 @@ CONTAINS
       err_ang = ABS(angc(1) - angf(NSUB))
       err_s = nan_max_abs(sc - sf)/MAX(1.0_wp, nan_max_abs(sf))
       WRITE (*, '(A,I0,A,ES10.3,A,F9.5,A,ES10.3)') 'surface-crossing pin (', kase, &
-        '): crossing step vs sub-step run: angle ', err_ang, ' of ', angf(NSUB), ' rad; rod state ', err_s
-      CALL require(err_ang <= 1.0e-9_wp .AND. err_s <= 1.0e-9_wp, 'cross:crossing step equals its sub-step run')
+        '): crossing step vs dt/60 run: angle ', err_ang, ' of ', angf(NSUB), ' rad; rod state ', err_s
+      CALL require(err_ang <= 5.0e-3_wp .AND. err_s <= 1.0e-2_wp, 'cross:crossing step follows the fine run')
       CALL CD_AGG_End(coarse, es, em)
       CALL CD_AGG_End(fine, es, em)
     END DO

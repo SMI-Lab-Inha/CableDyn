@@ -295,10 +295,32 @@ All notable changes to CableDyn are recorded in this file. The format follows
   was present (finite-EI cables only), so a short pinned rod or a body on a stiff seabed could
   exceed the explicit limit there. Both now take the estimate from the objects' own terms
   (hydrostatic restoring, seabed contact, a pinned rod's swing about its pin), and the staggered
-  multibody march adds a pinned rod's swing and its contact about the pin as the coupled route
-  does. A 1 m dry pinned rod at `dtM = 0.6 s` (`omega0 dt = 2.29`) now takes 6 sub-steps on
-  both routes and equals a `dtM = 0.1 s` run at every row, where it previously turned over. No
-  shipped example or existing test changes its sub-step count.
+  multibody march sizes a pinned rod as the coupled route does: its line springs through their
+  arms from the pin on its inertia about the pin, plus its swing and contact about the pin. A 1 m
+  dry pinned rod at `dtM = 0.6 s` (`omega0 dt = 2.29`) now takes 6 sub-steps on both routes and
+  equals a `dtM = 0.1 s` run at every row, where it previously turned over. No shipped example
+  or existing test changes its sub-step count.
+- Further terms of the explicit object sub-step estimate (coupled and C API routes, standalone
+  rod decks, decks without lines and `bodyScheme staggered`; the monolithic scheme is
+  unchanged): a rod near the free surface adds its waterplane stiffness (`rhoW g D dl` at each
+  station whose section can cross the surface within the step, `rhoW g pi D^2/4` where its axis
+  can cross it) and takes its dry inertia, for free and pinned rods and the rods fixed to a
+  Rigid6 body, so a floating rod (a 5 cm rod at `omega dt = 2.2`) no longer grows; a finite-EI
+  cable on a body or rod of the staggered march adds its attachment spring (`EA/L` along its end
+  force, `T/L` across), as the explicit cable end force needs; a rod pinned to a body takes the
+  body's pin acceleration and a reduced-mass lower bound of its inertia about the pin; a step
+  that would need more than the 256-sub-step cap is warned about once per run. Of the existing
+  tests, only the staggered pinned-cable deck of `clamped_cable_ends` changes (10 steps now
+  sub-cycled 2 to 5 times; printed results unchanged); no shipped example changes.
+- Seabed friction of rods and Rigid6 bodies is applied implicitly. The regularised friction
+  `-mu N v/sqrt(v^2 + vreg^2)` (`vreg = 1e-3 m/s`) is a damper of up to `mu N/vreg`, far stiffer
+  than any practical step, and was evaluated explicitly, so a rod or body resting on a
+  frictional bed chattered (velocity and friction flipping every step). It now enters the
+  implicit velocity derivative of the step as its secant coefficient `mu N/sqrt(v^2 + vreg^2)`,
+  as the line nodes treat it implicitly: a rod held in a cross current holds still (creep at
+  `vreg F/(mu N)`) where it slid back and forth at a few mm/s. This changes the results of decks
+  with rods or bodies on a frictional seabed; none of the shipped examples or existing tests has
+  one.
 
 - Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated
   the axial force and the dynamic loads at the blended configuration
