@@ -862,9 +862,9 @@ Newton settings are taken from the deck. The deck's ``OUTPUTS`` section is parse
 but the C ABI writes no output files.
 
 **Finite-EI lines, bodies and rods.** A deck with finite-EI (``EI > 0``) lines or with a
-``BODIES`` or ``RODS`` table (``Point3`` buoys, free ``Rigid6`` bodies, free, fixed or pinned
-rods, with their lines) runs on the same coupled aggregate as the OpenFAST module, with these
-differences from the point-system decks:
+``BODIES`` or ``RODS`` table (``Point3`` buoys, free ``Rigid6`` bodies, or free, fixed and
+``Pinned`` rods, with their lines; a ``Pinned`` rod turns about its fixed End A) runs on the same
+coupled aggregate as the OpenFAST module, with these differences from the point-system decks:
 
 * the coupled DOFs are the ``x, y, z`` of the deck's ``Coupled``/``Vessel`` points only, in
   the order of `Coupled DOF layout`_ (anchors are not part of the vector); the bodies and
@@ -893,6 +893,8 @@ The deck is validated under the standalone-deck rules:
      - Where it is supported
    * - ``Coupled``/``Vessel`` bodies or rods (6-DOF host nodes)
      - the OpenFAST module; the standalone driver with a ``motionFile``
+   * - ``CoupledPinned``/``VesselPinned`` rods (a pin the host moves)
+     - the OpenFAST module
    * - a ``motionFile`` option
      - the standalone driver (prescribe motion through ``CableDyn_Step`` instead)
    * - a ``FAILURE`` section (line failures)

@@ -392,8 +392,23 @@ row. On this route:
   like those of `Coupled` points, are given at the undisplaced platform and moved by
   `PtfmInit`), and returns to the platform the force and moment about End A of its attached
   lines, weight, buoyancy, Morison loads, seabed contact and its own and added-mass inertia
-  (MoorDyn-F's coupled rod). `CoupledPinned` and `VesselPinned` rods are rejected by name, and on the OpenFAST route
-  `Pinned` rods fail closed as well (the coupled rod march does not turn a rod about its pin);
+  (MoorDyn-F's coupled rod);
+- `CoupledPinned`/`VesselPinned` rods are pinned to the platform: each is a node of the OpenFAST
+  mesh at its End A (moved by `PtfmInit` with the rod, like a `Coupled` rod) that takes the
+  platform position only. The rod turns about the node with its own three rotations, the node
+  orientation and angular rates are ignored, and the node returns a force and no moment: the
+  rod's lines, weight, buoyancy, Morison loads and seabed contact less its own and added-mass
+  inertia (MoorDyn-F's coupled pinned rod). The angular acceleration in that inertia is solved
+  for the node's current acceleration, so the rotation feels the platform acceleration and a
+  CalcOutput at an off-step acceleration returns the rod's effective inertia about the pin.
+  `Pinned` rods turn about their fixed End A. With `bodyIC static` both start balanced about
+  their pins; a pinned rod that carries no line is not part of the static solve and starts at
+  rest in its deck orientation, turned by `PtfmInit` for a `CoupledPinned` rod (a dry pendulum
+  given at an angle starts at that angle). An end
+  of a `Pinned` or `CoupledPinned` rod that carries no line needs no `Rod<ID>A`/`Rod<ID>B` POINT
+  row on this route; every other rod needs a line or a POINT row at both ends. Outside a
+  coupled host a `CoupledPinned` rod is rejected by name ("requires a coupled host"),
+  zero-length ones included;
 - `Coupled`/`Vessel` bodies are platform-borne the same way: a mesh node at the body reference
   point, the body frame turning with the platform, returning the force and moment about the
   reference point of its `Body<ID>` lines, weight, buoyancy and restoring, Morison and
@@ -579,10 +594,10 @@ rod lying on the bed along its whole length.
 |--------|---------|
 | `ID` | unique rod id ≥ 1 |
 | `RodType` | a `ROD TYPES` key |
-| `Type` | `Free`, `Fixed`, `Pinned`, `Coupled`, `Vessel`, `Body<N>`, or `Body<N>Pinned` (MoorDyn aliases `Anchor`/`Fix`, `Pin`, `Point`/`Con`, `Ves`, `Cpld`, `Body<N>Pin`). `Coupled`/`Vessel` rods are prescribed by `motionFile` rows for both `Rod<N>A` and `Rod<N>B`, which must preserve the rod length; in OpenFAST (`CompMooring = 5`) they follow the platform instead (see the OpenFAST route below). `Free` rods are integrated dynamically and may coexist with prescribed rods. A `Pinned` rod turns about its End A, which stays fixed; it may carry lines. A `Body<N>` rod is fixed to Rigid6 body N: its end coordinates are in the body frame from the body reference point, and its mass, inertia, hydrostatic, Morison, and seabed loads and added mass are lumped into the body about that point. A `Body<N>Pinned` rod has its end coordinates in the body frame too, but only its End A is held, on the body: the rod has its own three rotations, its loads reach the body as the pin force (no moment), and it may carry lines. |
+| `Type` | `Free`, `Fixed`, `Pinned`, `Coupled`, `Vessel`, `CoupledPinned`, `VesselPinned`, `Body<N>`, or `Body<N>Pinned` (MoorDyn aliases `Anchor`/`Fix`, `Pin`, `Point`/`Con`, `Ves`, `Cpld`, `CpldPin`, `VesPin`, `Body<N>Pin`). `Coupled`/`Vessel` rods are prescribed by `motionFile` rows for both `Rod<N>A` and `Rod<N>B`, which must preserve the rod length; in OpenFAST (`CompMooring = 5`) they follow the platform instead (see the OpenFAST route above). `CoupledPinned`/`VesselPinned` rods run only in OpenFAST, pinned at End A to a node that follows the platform position. `Free` rods are integrated dynamically and may coexist with prescribed rods. A `Pinned` rod turns about its End A, which stays fixed; it may carry lines. A `Body<N>` rod is fixed to Rigid6 body N: its end coordinates are in the body frame from the body reference point, and its mass, inertia, hydrostatic, Morison, and seabed loads and added mass are lumped into the body about that point. A `Body<N>Pinned` rod has its end coordinates in the body frame too, but only its End A is held, on the body: the rod has its own three rotations, its loads reach the body as the pin force (no moment), and it may carry lines. |
 | `XA,YA,ZA` | rod End A coordinates [m] |
 | `XB,YB,ZB` | rod End B coordinates [m]; distinct from End A (ignored for a zero-length rod) |
-| `NumSegs` | ≥ 1; hydrodynamic segments of the rod (loads integrated per segment); seabed contact uses max(20, `NumSegs`) segments. `0` declares a zero-length rod (MoorDyn): a point-like connector at End A with no mass, volume or side loads and, having no axis, no end loads either. It becomes one point that both of its ends resolve to: `Free` for a free rod, `Fixed` for a fixed or pinned rod, `Coupled` for a coupled rod, `Body<N>` for a rod on body N. A free zero-length rod therefore moves with the end-node mass of its lines, as a `Mass = 0` `Free` point, and `Rod<N>` output channels of it are rejected by name (use `Point<P>` channels) |
+| `NumSegs` | ≥ 1; hydrodynamic segments of the rod (loads integrated per segment); seabed contact uses max(20, `NumSegs`) segments. `0` declares a zero-length rod (MoorDyn): a point-like connector at End A with no mass, volume or side loads and, having no axis, no end loads either. It becomes one point that both of its ends resolve to: `Free` for a free rod, `Fixed` for a fixed or pinned rod, `Coupled` for a coupled rod or, in OpenFAST, a `CoupledPinned` rod, `Body<N>` for a rod on body N. A free zero-length rod therefore moves with the end-node mass of its lines, as a `Mass = 0` `Free` point, and `Rod<N>` output channels of it are rejected by name (use `Point<P>` channels) |
 | `Outputs` | `-` or `p`; `p` writes the end positions as a time series to `<out_root>.Rod<ID>.p.out`, End A first |
 
 ### POINTS

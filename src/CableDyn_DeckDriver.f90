@@ -41,7 +41,8 @@ MODULE CableDyn_DeckDriver
                              CD_STATIC_FRICTION_AS_LAID, CD_STATIC_FRICTION_NONE
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, &
                                  CD_Bathymetry_Is_Initialized, CD_Bathymetry_Floor, &
-                                 CD_Bathymetry_Floor_Gradient, CD_Bathymetry_Grid_Floor, CD_BATHY_OK
+                                 CD_Bathymetry_Floor_Gradient, CD_Bathymetry_Grid_Floor, CD_Bathymetry_Max_Floor, &
+                                 CD_BATHY_OK
   USE CableDyn_Line, ONLY: CD_LineType, CD_LineSection, CD_Build_Line_Mesh, &
                            CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Catenary, ONLY: CD_Catenary_Seed, CD_CAT_OK, CD_CAT_NOSEED
@@ -715,6 +716,18 @@ MODULE CableDyn_DeckDriver
     ! Pinned rod: End A held at pin, the rod turns about it (three rotational DOFs)
     LOGICAL :: is_pinned = .FALSE.
     REAL(wp) :: pin(3) = CD_ZERO
+    ! CoupledPinned/VesselPinned rod (coupled aggregate): a pinned rod whose pin is a host node;
+    ! the host prescribes pin, pin_v and pin_a (zero for a fixed pin), and the rod's rotation
+    ! about it stays its own degree of freedom
+    LOGICAL :: is_host_pinned = .FALSE.
+    REAL(wp) :: pin_v(3) = CD_ZERO, pin_a(3) = CD_ZERO
+    ! pin0, pin0_v, pin0_a (host-pinned rod): the pin kinematics at the start of the coming step,
+    ! i.e. the End A motion of the committed rod state (set_rod_pin_start). They are set where
+    ! the committed state is (Init, the end of every step, a mirror restore, a host transfer
+    ! that does not advance) and not by the transfer of the t + dt host kinematics before a
+    ! step, so the step's start-acceleration solve and its sub-steps have the step-start pin
+    ! without a staged copy of the rods.
+    REAL(wp) :: pin0(3) = CD_ZERO, pin0_v(3) = CD_ZERO, pin0_a(3) = CD_ZERO
     ! Rod pinned to a body (Body<N>Pinned): the index of the parent body in the march's body
     ! states and the pin (End A) in the body frame; pin then follows the body
     INTEGER :: parent = 0
@@ -810,6 +823,9 @@ MODULE CableDyn_DeckDriver
     ! 2 rod end (cab_obj rod index, cab_off(1) = -1 End A, +1 End B), 0 held point
     INTEGER, ALLOCATABLE :: cab_kind(:), cab_obj(:), cable_points(:, :)
     REAL(wp), ALLOCATABLE :: cab_off(:, :), cab_force(:, :)
+    ! cab_kax, cab_len: a cable's static axial stiffness 1/sum(l0/EA) and unstretched length, for the
+    ! sub-step estimate of the staggered march (mb_cable_k6)
+    REAL(wp), ALLOCATABLE :: cab_kax(:), cab_len(:)
     ! cab_clamp: End A carries a Rigid or elastic END CONNECTION on its body or rod; its end
     ! tangent then follows the object orientation, the cable is re-stepped at every outer
     ! iteration of the monolithic step (implicit coupling, its end stiffness in the Jacobian) and
@@ -5934,9 +5950,10 @@ CONTAINS
     !! the cables are both built under the environment the host owns (host overrides deck).
     !!
     !! Scope: EI=0 lines with Fixed/Coupled/Vessel/Connect/Free points, Point3 buoys, Rigid6
-    !! bodies and RODs (host-coupled or free), CONTROL, FAILURE and FAST.Farm turbines, plus
-    !! finite-EI cables. Fails closed with a clear message on: a motionFile (the host drives the
-    !! coupled boundary); deck waves (the host supplies wave kinematics); a deck current on
+    !! bodies and RODs (free, fixed, pinned, host-coupled or host-pinned), CONTROL, FAILURE and
+    !! FAST.Farm turbines, plus finite-EI cables. Fails closed with a clear message on: a
+    !! motionFile (the host drives the coupled boundary); deck waves (the host supplies wave
+    !! kinematics); a deck current on
     !! a deck with a finite-EI cable, a Rigid6 body or a rod, under a host fluid field, or in
     !! FAST.Farm mode; a deck with a finite-EI cable that also carries Free/Connect dynamic
     !! points. A deck current on any other deck is a steady field applied through the lines.
@@ -6048,8 +6065,9 @@ CONTAINS
       END IF
       IF (MAXVAL(ABS(ptfm_init)) > CD_ZERO) THEN
         CALL apply_ptfm_init(points, ptfm_init)
-        ! Coupled/Vessel RODS are platform-borne like Coupled points: their ends and their
-        ! Rod<N>A/B attachment points move rigidly with the initial platform displacement.
+        ! Coupled/Vessel and CoupledPinned RODS are platform-borne like Coupled points: their ends
+        ! and their Rod<N>A/B attachment points move rigidly with the initial platform
+        ! displacement (MoorDyn-F also turns a coupled pinned rod's axis with PtfmInit).
         CALL apply_ptfm_host_rods(rods, points, ptfm_init)
         CALL apply_ptfm_host_bodies(bodies, points, ptfm_init)
         host_dcm = ptfm_zyx_dcm(ptfm_init(4:6))
@@ -6264,7 +6282,8 @@ CONTAINS
     ! below (n_rod block) and built into agg%rod. A rod deck mixed with Rigid6 bodies fails closed
     ! there (the aggregate marches one body/rod family per step).
     n_rod = SIZE(rods)
-    n_host_rod = COUNT(rods%rod_type == 'coupled' .OR. rods%rod_type == 'vessel')
+    n_host_rod = COUNT(rods%rod_type == 'coupled' .OR. rods%rod_type == 'vessel' .OR. &
+                       rods%rod_type == 'coupledpinned')
     n_host_body = COUNT(bodies%host_coupled)
     IF (opts%has_motion_file) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the coupled boundary is driven by the host, '// &
@@ -6361,12 +6380,9 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a coupled ROD with a finite-EI cable in the '// &
                   'same deck is not supported'); RETURN
       END IF
-      ! The aggregate rod march integrates Free rods and prescribes Coupled/Vessel ones; any other
-      ! rod would be held at its pose, so a Pinned rod (which must turn about its pin) is refused.
-      IF (ANY(rods%rod_type == 'pinned')) THEN
-        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a Pinned ROD is not supported on the coupled '// &
-                  'route (the coupled rod march does not turn rods about a pin); use the standalone driver'); RETURN
-      END IF
+      ! The aggregate rod march integrates Free rods, turns Pinned and CoupledPinned rods about
+      ! their pins (a fixed point, or a host node that moves the pin), prescribes Coupled/Vessel
+      ! rods and holds Fixed ones.
       IF (nturb > 0) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: coupled RODs in a FAST.Farm deck are not '// &
                   'supported'); RETURN
@@ -6389,11 +6405,13 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: line FAILURE on a coupled ROD deck is not '// &
                   'supported (the failure trigger is not evaluated against the post-rod-march state)'); RETURN
       END IF
-      ! Coupled/Vessel rods become 6-DOF host nodes (End A position + platform orientation). The
-      ! linearization probe places translational moving points only, so it cannot carry them.
+      ! Coupled/Vessel rods become 6-DOF host nodes (End A position + platform orientation),
+      ! CoupledPinned ones translational host nodes with a rotation of their own. The
+      ! linearization probe places translational moving points only and holds every rod, so it
+      ! carries neither.
       IF (n_host_rod > 0 .AND. PRESENT(coupled_positions)) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: coupled_positions (the linearization probe) '// &
-                  'does not support Coupled/Vessel RODS'); RETURN
+                  'does not support Coupled/Vessel or CoupledPinned RODS'); RETURN
       END IF
     END IF
 
@@ -11541,10 +11559,9 @@ CONTAINS
       r%rod_type = 'vessel'
     CASE ('cpld')
       r%rod_type = 'coupled'
-    CASE ('coupledpinned', 'cpldpin', 'vesselpinned', 'vespin')
-      ! rejected here, before a NumSegs 0 rod collapses to an unknown point type
-      CALL fail(ErrStat, ErrMsg, 'CoupledPinned/VesselPinned RODS are not supported (use Coupled, Vessel, '// &
-                'Pinned or Body<N>Pinned)'); RETURN
+    CASE ('cpldpin', 'vesselpinned', 'vespin')
+      ! MoorDyn-F treats the four spellings alike: End A pinned to a host node
+      r%rod_type = 'coupledpinned'
     CASE DEFAULT
       IF (starts_with(TRIM(r%rod_type), 'body') .AND. LEN_TRIM(r%rod_type) > 7) THEN
         IF (r%rod_type(LEN_TRIM(r%rod_type) - 2:LEN_TRIM(r%rod_type)) == 'pin' .AND. &
@@ -11985,8 +12002,9 @@ CONTAINS
     !! the rod axis, which a zero-length rod does not have (zero for lines without bending
     !! stiffness), so it carries no hydrodynamic load either. Each one becomes one POINT at End A
     !! that both of its ends (R<N>A/R<N>B tokens and Rod<N>A/B POINT rows) resolve to: Free for a
-    !! free rod, Fixed for a fixed or pinned rod, Coupled for a coupled rod and Body<M> for a rod
-    !! fixed or pinned to body M. The rod leaves the rod list; opts%zl_rod/zl_point keep the map
+    !! free rod, Fixed for a fixed or pinned rod, Coupled for a coupled or (coupled host only)
+    !! CoupledPinned rod and Body<M> for a rod fixed or pinned to body M. The rod leaves the rod
+    !! list; opts%zl_rod/zl_point keep the map
     !! so that a Rod<N> output channel on it can be refused by name.
     TYPE(DeckRod), ALLOCATABLE, INTENT(INOUT) :: rods(:)
     TYPE(DeckPoint), ALLOCATABLE, INTENT(INOUT) :: points(:)
@@ -12009,13 +12027,17 @@ CONTAINS
     drop = .FALSE.
     DO i = 1, SIZE(rods)
       IF (rods(i)%nsegs /= 0) CYCLE
+      ! a CoupledPinned rod needs a coupled host; elsewhere it stays a rod and is refused by name
+      IF (TRIM(rods(i)%rod_type) == 'coupledpinned' .AND. .NOT. opts%host_coupled_objects) CYCLE
       keep(i) = .FALSE.
       SELECT CASE (TRIM(rods(i)%rod_type))
       CASE ('free')
         ptype = 'free'
       CASE ('fixed', 'pinned')
         ptype = 'fixed'
-      CASE ('coupled', 'vessel')
+      CASE ('coupled', 'vessel', 'coupledpinned')
+        ! a point at End A has no rotation to pin: a zero-length CoupledPinned rod transmits the
+        ! force of its lines to the host, as a Coupled point does
         ptype = 'coupled'
       CASE DEFAULT
         bid = MAX(body_id_of_rod_type(rods(i)%rod_type), pinned_body_of_rod_type(rods(i)%rod_type))
@@ -14217,14 +14239,23 @@ CONTAINS
         END IF
       ELSE IF (TRIM(rods(i)%rod_type) /= 'free' .AND. TRIM(rods(i)%rod_type) /= 'fixed' .AND. &
                TRIM(rods(i)%rod_type) /= 'coupled' .AND. TRIM(rods(i)%rod_type) /= 'vessel' .AND. &
-               TRIM(rods(i)%rod_type) /= 'pinned') THEN
+               TRIM(rods(i)%rod_type) /= 'pinned' .AND. TRIM(rods(i)%rod_type) /= 'coupledpinned') THEN
         CALL fail(ErrStat, ErrMsg, 'ROD type "'//TRIM(rods(i)%rod_type)// &
-                  '" is not supported (supported: Free, Fixed, Pinned, Coupled, Vessel, Body<N>, Body<N>Pinned)')
+                  '" is not supported (supported: Free, Fixed, Pinned, Coupled, Vessel, CoupledPinned, '// &
+                  'VesselPinned, Body<N>, Body<N>Pinned)')
         RETURN
       END IF
       IF ((TRIM(rods(i)%rod_type) == 'coupled' .OR. TRIM(rods(i)%rod_type) == 'vessel') .AND. &
           .NOT. (opts%has_motion_file .OR. opts%host_coupled_objects)) THEN
         CALL fail(ErrStat, ErrMsg, 'Coupled/Vessel ROD requires a motionFile (or a coupled host)')
+        RETURN
+      END IF
+      ! The host moves the pin of a CoupledPinned rod and takes its force; a motionFile cannot
+      ! stand in for it (it prescribes both rod ends), so the rod needs the coupled aggregate.
+      IF (TRIM(rods(i)%rod_type) == 'coupledpinned' .AND. .NOT. opts%host_coupled_objects) THEN
+        CALL fail(ErrStat, ErrMsg, 'CoupledPinned/VesselPinned ROD requires a coupled host (OpenFAST '// &
+                  'CompMooring = 5); in a standalone deck use Pinned, Body<N>Pinned, or a Coupled rod with a '// &
+                  'motionFile')
         RETURN
       END IF
       IF (.NOT. valid_rod_output_flags(rods(i)%outputs)) THEN
@@ -16358,7 +16389,8 @@ CONTAINS
       rod_state(i)%rod_id = rods(i)%id
       rod_state(i)%is_free = TRIM(rods(i)%rod_type) == 'free'
       rod_state(i)%is_prescribed = TRIM(rods(i)%rod_type) == 'coupled' .OR. TRIM(rods(i)%rod_type) == 'vessel'
-      rod_state(i)%is_pinned = TRIM(rods(i)%rod_type) == 'pinned'
+      rod_state(i)%is_host_pinned = TRIM(rods(i)%rod_type) == 'coupledpinned'
+      rod_state(i)%is_pinned = TRIM(rods(i)%rod_type) == 'pinned' .OR. rod_state(i)%is_host_pinned
       rod_state(i)%pin = rods(i)%end_a
       rod_state(i)%point_a_index = rod_point_index(points, rods(i)%id, 1)
       rod_state(i)%point_b_index = rod_point_index(points, rods(i)%id, 2)
@@ -16387,8 +16419,30 @@ CONTAINS
       rod_state(i)%inertia(1) = 0.5_wp*rod_state(i)%mass*radius*radius
       rod_state(i)%inertia(2) = rod_state(i)%mass*(3.0_wp*radius*radius + rod_state(i)%length**2)/12.0_wp
       rod_state(i)%inertia(3) = rod_state(i)%inertia(2)
+      ! a host-pinned rod starts its first step from its pin at rest in the deck pose
+      IF (rod_state(i)%is_host_pinned) CALL set_rod_pin_start(rod_state(i))
     END DO
   END SUBROUTINE init_rod_states
+
+  SUBROUTINE rod_end_a_motion(rod, p, v, a)
+    !! Position, velocity and acceleration of a rod's End A from its rigid motion (centre, frame,
+    !! angular rates).
+    TYPE(RodState), INTENT(IN) :: rod
+    REAL(wp), INTENT(OUT) :: p(3), v(3), a(3)
+    REAL(wp) :: arm(3)
+    arm = MATMUL(rod%rot_mat, [-rod%half_length, CD_ZERO, CD_ZERO])
+    p = rod%r + arm
+    v = rod%v + cross3(rod%omega, arm)
+    a = rod%a + cross3(rod%alpha, arm) + cross3(rod%omega, cross3(rod%omega, arm))
+  END SUBROUTINE rod_end_a_motion
+
+  SUBROUTINE set_rod_pin_start(rod)
+    !! Record the committed End A motion of a host-pinned rod as the pin kinematics its next step
+    !! starts from (RodState%pin0). Derived from the rod state, which the checkpoint mirror
+    !! carries, so a restored run takes the same values bit for bit.
+    TYPE(RodState), INTENT(INOUT) :: rod
+    CALL rod_end_a_motion(rod, rod%pin0, rod%pin0_v, rod%pin0_a)
+  END SUBROUTINE set_rod_pin_start
 
   SUBROUTINE ensure_rod_step_workspace(work, ncoupled, nrod, npoint)
     TYPE(RodStepWorkspace), INTENT(INOUT) :: work
@@ -16461,7 +16515,7 @@ CONTAINS
 
   SUBROUTINE rigid_coupled_acceleration(dload_da, dt, a_points, bases, arms, mass_eff, added6, inertia_body, &
                                         rot_mat, omega, f_global, m_global, dv0, dfo_dv, acc, alpha, &
-                                        ErrStat, ErrMsg, pin_arm, m6_out, rhs_out)
+                                        ErrStat, ErrMsg, pin_arm, m6_out, rhs_out, pin_acc, pin_load)
     !! End-of-step rigid-body (rod or Rigid6) accelerations x = (acc, alpha) of the staggered
     !! central-difference corrector of step_rigid6_system / step_rod_system. The loads were
     !! evaluated at the predictor, whose position is the final position (Newmark beta = 0) and
@@ -16500,13 +16554,18 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: acc(3), alpha(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    ! pin_arm: the reference point turns about a fixed pin at -pin_arm from it (a pinned rod):
-    ! with x = T y + b, T = [-[r]x; I], b = [w x (w x r); 0], the rotational acceleration y solves
-    ! T^T m6 T y = T^T (rhs - m6 b)
-    REAL(wp), INTENT(IN), OPTIONAL :: pin_arm(3)
+    ! pin_arm: the reference point turns about a pin at -pin_arm from it (a pinned rod): with
+    ! x = T y + b, T = [-[r]x; I], b = [a_p + w x (w x r); 0], the rotational acceleration y
+    ! solves T^T m6 T y = T^T (rhs - m6 b). a_p is pin_acc, the pin acceleration (zero when
+    ! absent: a fixed pin); a moving pin (a CoupledPinned rod) thus loads the rotation with the
+    ! inertia of its acceleration.
+    REAL(wp), INTENT(IN), OPTIONAL :: pin_arm(3), pin_acc(3)
     ! m6_out/rhs_out: return the assembled system m6 x = rhs instead of solving it (the pinned-
     ! child group solve of mb_group_solve); acc and alpha are then zero
     REAL(wp), INTENT(OUT), OPTIONAL :: m6_out(6, 6), rhs_out(6)
+    ! pin_load (with pin_arm): the force the body exerts on its pin, rhs(1:3) - m6(1:3, :) x, i.e.
+    ! its net load less its inertia (line-end inertia at the solved attachment accelerations)
+    REAL(wp), INTENT(OUT), OPTIONAL :: pin_load(3)
 
     INTEGER :: i, j, k, bi, bj
     REAL(wp) :: m6(6, 6), rhs(6), inertia_g(3, 3), s_i(3, 3), s_j(3, 3), d_ij(3, 3), g(3), c_j(3)
@@ -16573,6 +16632,7 @@ CONTAINS
       END DO
       b6 = CD_ZERO
       b6(1:3) = cross3(omega, cross3(omega, pin_arm))
+      IF (PRESENT(pin_acc)) b6(1:3) = pin_acc + b6(1:3)
       CALL solve_sym3(MATMUL(TRANSPOSE(t63), MATMUL(m6, t63)), MATMUL(TRANSPOSE(t63), rhs - MATMUL(m6, b6)), y, ok)
       IF (.NOT. ok) THEN
         ErrStat = CD_DECKDRV_SOLVEFAIL
@@ -16581,6 +16641,7 @@ CONTAINS
       END IF
       alpha = y
       acc = MATMUL(t63(1:3, :), y) + b6(1:3)
+      IF (PRESENT(pin_load)) pin_load = rhs(1:3) - MATMUL(m6(1:3, 1:3), acc) - MATMUL(m6(1:3, 4:6), alpha)
       RETURN
     END IF
     CALL solve_rigid6x6(m6, rhs, ErrStat, ErrMsg)
@@ -17215,7 +17276,8 @@ CONTAINS
                                        ErrStat, ErrMsg, bathymetry)
     !! March the bodies (with the rods fixed to them) and the free and pinned rods of a deck
     !! without lines: each object is advanced by the staggered central-difference scheme of the
-    !! line-coupled routes (Newmark gamma = 1/2, beta = 0, drag implicit), with no line loads. With
+    !! line-coupled routes (Newmark gamma = 1/2, beta = 0, drag implicit), with no line loads,
+    !! sub-cycled for the objects' own restoring (objects_substep_count). With
     !! bodyIC static a floating body starts at its hydrostatic equilibrium (float_body_equilibrium).
     CHARACTER(*), INTENT(IN) :: out_root
     CHARACTER(NAMELEN), INTENT(IN) :: channels(:)
@@ -17232,8 +17294,8 @@ CONTAINS
     TYPE(RigidBodyState), ALLOCATABLE :: rigid(:), old_rigid(:)
     TYPE(RodState), ALLOCATABLE :: rst(:), old_rst(:)
     TYPE(DeckRod), ALLOCATABLE :: own(:)
-    INTEGER :: unit, ios, step, nstep, k, es
-    REAL(wp) :: t, acc(3), alpha(3), dv0(6)
+    INTEGER :: unit, ios, step, nstep, k, es, nsub, isub
+    REAL(wp) :: t, acc(3), alpha(3), dv0(6), dts, ts
     CHARACTER(160) :: em
     TYPE(DriverProgress) :: progress
 
@@ -17288,53 +17350,62 @@ CONTAINS
     DO step = 1, nstep
       CALL CD_Profile_Enter(CD_PROF_SOLVE)
       t = REAL(step, wp)*opts%dtM
-      old_rigid = rigid
-      old_rst = rst
-      DO k = 1, SIZE(rigid)
-        CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, rigid(k)%a, &
-                                      rigid(k)%alpha, rigid(k)%a, rigid(k)%alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
-                                      CD_RIGID_NEWMARK_BETA, es, em)
-        IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
-        IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rigid(k)%a
-        dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rigid(k)%alpha
-        CALL objects_acceleration(opts, t, opts%dtM, dv0, acc, alpha, ErrStat, ErrMsg, body=rigid(k), &
-                                  bathymetry=bathymetry)
-        IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        rigid(k) = old_rigid(k)
-        CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, old_rigid(k)%a, &
-                                      old_rigid(k)%alpha, acc, alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
-                                      CD_RIGID_NEWMARK_BETA, es, em)
-        IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
-        IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        rigid(k)%a = acc
-        rigid(k)%alpha = alpha
-      END DO
-      IF (ErrStat == CD_DECKDRV_OK) THEN
-        DO k = 1, SIZE(rst)
-          IF (.NOT. (rst(k)%is_free .OR. rst(k)%is_pinned)) CYCLE
-          CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, rst(k)%a, rst(k)%alpha, &
-                                        rst(k)%a, rst(k)%alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
+      ! sub-steps that resolve the objects' own restoring (objects_substep_count)
+      CALL objects_substep_count(rigid, rst, opts, t - opts%dtM, opts%dtM, nsub, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) nsub = 0
+      dts = opts%dtM/REAL(MAX(1, nsub), wp)
+      DO isub = 1, nsub
+        ts = t - opts%dtM + REAL(isub, wp)*dts
+        IF (isub == nsub) ts = t
+        old_rigid = rigid
+        old_rst = rst
+        DO k = 1, SIZE(rigid)
+          CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, rigid(k)%a, &
+                                        rigid(k)%alpha, rigid(k)%a, rigid(k)%alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
                                         CD_RIGID_NEWMARK_BETA, es, em)
-          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
-          CALL pin_rod(rst(k))
-          dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rst(k)%a
-          dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*opts%dtM*old_rst(k)%alpha
-          CALL objects_acceleration(opts, t, opts%dtM, dv0, acc, alpha, ErrStat, ErrMsg, rod=rst(k), &
+          dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rigid(k)%a
+          dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rigid(k)%alpha
+          CALL objects_acceleration(opts, ts, dts, dv0, acc, alpha, ErrStat, ErrMsg, body=rigid(k), &
                                     bathymetry=bathymetry)
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
-          rst(k) = old_rst(k)
-          CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, old_rst(k)%a, &
-                                        old_rst(k)%alpha, acc, alpha, opts%dtM, CD_RIGID_NEWMARK_GAMMA, &
+          rigid(k) = old_rigid(k)
+          CALL CD_Rigid_Advance_Newmark(rigid(k)%r, rigid(k)%v, rigid(k)%rot_mat, rigid(k)%omega, old_rigid(k)%a, &
+                                        old_rigid(k)%alpha, acc, alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
                                         CD_RIGID_NEWMARK_BETA, es, em)
-          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+          IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'body finite-rotation update failed: '//TRIM(em))
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
-          rst(k)%a = acc
-          rst(k)%alpha = alpha
-          CALL pin_rod(rst(k))
+          rigid(k)%a = acc
+          rigid(k)%alpha = alpha
         END DO
-      END IF
+        IF (ErrStat == CD_DECKDRV_OK) THEN
+          DO k = 1, SIZE(rst)
+            IF (.NOT. (rst(k)%is_free .OR. rst(k)%is_pinned)) CYCLE
+            CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, rst(k)%a, rst(k)%alpha, &
+                                          rst(k)%a, rst(k)%alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
+                                          CD_RIGID_NEWMARK_BETA, es, em)
+            IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+            CALL pin_rod(rst(k))
+            dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rst(k)%a
+            dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*dts*old_rst(k)%alpha
+            CALL objects_acceleration(opts, ts, dts, dv0, acc, alpha, ErrStat, ErrMsg, rod=rst(k), &
+                                      bathymetry=bathymetry)
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+            rst(k) = old_rst(k)
+            CALL CD_Rigid_Advance_Newmark(rst(k)%r, rst(k)%v, rst(k)%rot_mat, rst(k)%omega, old_rst(k)%a, &
+                                          old_rst(k)%alpha, acc, alpha, dts, CD_RIGID_NEWMARK_GAMMA, &
+                                          CD_RIGID_NEWMARK_BETA, es, em)
+            IF (es /= CD_RIGID_OK) CALL fail_solve(ErrStat, ErrMsg, 'rod finite-rotation update failed: '//TRIM(em))
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+            rst(k)%a = acc
+            rst(k)%alpha = alpha
+            CALL pin_rod(rst(k))
+          END DO
+        END IF
+        IF (ErrStat /= CD_DECKDRV_OK) EXIT
+      END DO
       IF (ErrStat == CD_DECKDRV_OK) THEN
         CALL CD_Profile_Step()
         CALL CD_Profile_Enter(CD_PROF_OUTPUT)
@@ -17377,6 +17448,54 @@ CONTAINS
       WRITE (unit, ROW_VALUES_FMT) time, (char_tab(), vals(i), i=1, SIZE(channels))
     END SUBROUTINE write_row
   END SUBROUTINE write_objects_dynamic_out
+
+  SUBROUTINE objects_substep_count(rigid, rst, opts, time, dt, nsub, ErrStat, ErrMsg, bathymetry)
+    !! Sub-steps of a step of length dt of the march of a deck without lines
+    !! (write_objects_dynamic_out), from the estimate of the line-coupled routes without its line
+    !! springs (rigid_substep_count): a body's hydrostatic restoring and seabed contact, with the
+    !! contact and waterplane of the rods fixed to it (rigid6_contact_stiffness), over its
+    !! structural mass and inertia plus the submerged translational added mass, as in
+    !! step_rigid6_system; a free or pinned rod's own terms (rod_estimate_terms), as in
+    !! step_rod_system.
+    TYPE(RigidBodyState), INTENT(IN) :: rigid(:)
+    TYPE(RodState), INTENT(IN) :: rst(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: time, dt
+    INTEGER, INTENT(OUT) :: nsub
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: k, j
+    REAL(wp) :: omega2, om2, mass6(6), k6(6), w2, shift(3)
+
+    nsub = 1
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    omega2 = CD_ZERO
+    DO k = 1, SIZE(rigid)
+      IF (rigid(k)%is_prescribed) CYCLE
+      mass6(1:3) = rigid(k)%mass
+      IF (rigid(k)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*rigid(k)%vol*MAX(CD_ZERO, rigid(k)%ca)
+      mass6(4:6) = global_inertia_diag(rigid(k)%rot_mat, rigid(k)%inertia)
+      k6 = [CD_ZERO, CD_ZERO, rigid(k)%c33, rigid(k)%c44, rigid(k)%c55, CD_ZERO]
+      CALL rigid6_contact_stiffness(rigid(k), opts, time, dt, k6, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      DO j = 1, 6
+        IF (mass6(j) > CD_ZERO) omega2 = MAX(omega2, k6(j)/mass6(j))
+      END DO
+    END DO
+    DO k = 1, SIZE(rst)
+      IF (.NOT. (rst(k)%is_free .OR. rst(k)%is_pinned)) CYCLE
+      CALL rod_estimate_terms(rst(k), opts, time, dt, mass6, k6, w2, shift, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      om2 = CD_ZERO
+      DO j = 1, 6
+        IF (mass6(j) > CD_ZERO) om2 = MAX(om2, k6(j)/mass6(j))
+      END DO
+      omega2 = MAX(omega2, om2 + w2)
+    END DO
+    nsub = rigid_substep_count(omega2, dt)
+  END SUBROUTINE objects_substep_count
 
   ! --------------------------------------------------------------------------- !
   ! multibody march: Rigid6 bodies (with fixed and pinned rods), free, pinned    !
@@ -17625,7 +17744,8 @@ CONTAINS
     ALLOCATE (mb%cables(SIZE(cab_lines)), mb%cab_kind(SIZE(cab_lines)), mb%cab_obj(SIZE(cab_lines)), &
               mb%cab_off(3, SIZE(cab_lines)), mb%cab_force(3, SIZE(cab_lines)), &
               mb%cab_clamp(SIZE(cab_lines)), mb%cab_moment(3, SIZE(cab_lines)), mb%cab_fend(3, SIZE(cab_lines)), &
-              mb%cab_mend(3, SIZE(cab_lines)), mb%cab_f0(3, SIZE(cab_lines)), mb%cab_m0(3, SIZE(cab_lines)))
+              mb%cab_mend(3, SIZE(cab_lines)), mb%cab_f0(3, SIZE(cab_lines)), mb%cab_m0(3, SIZE(cab_lines)), &
+              mb%cab_kax(SIZE(cab_lines)), mb%cab_len(SIZE(cab_lines)))
     mb%cab_age = HUGE(1)
     mb%cab_kind = 0
     mb%cab_obj = 0
@@ -17637,6 +17757,25 @@ CONTAINS
     mb%cab_mend = CD_ZERO
     mb%cab_f0 = CD_ZERO
     mb%cab_m0 = CD_ZERO
+    ! static axial stiffness and length of each cable (its sections, the dynamic modulus when it
+    ! has one), for the sub-step estimate of the staggered march
+    DO c = 1, SIZE(cab_lines)
+      BLOCK
+        REAL(wp) :: compl, clen, ea_s
+        INTEGER :: js
+        compl = CD_ZERO
+        clen = CD_ZERO
+        DO js = 1, SIZE(sections)
+          IF (sections(js)%line_id /= cab_lines(c)%id .OR. sections(js)%ltype < 1) CYCLE
+          clen = clen + sections(js)%length
+          ea_s = MAX(types(sections(js)%ltype)%ea, types(sections(js)%ltype)%ea_d)
+          IF (ea_s > CD_ZERO) compl = compl + sections(js)%length/ea_s
+        END DO
+        mb%cab_len(c) = clen
+        mb%cab_kax(c) = CD_ZERO
+        IF (compl > CD_ZERO) mb%cab_kax(c) = CD_ONE/compl
+      END BLOCK
+    END DO
     DO c = 1, SIZE(cab_lines)
       pc = points
       pa = find_point(points, cab_lines(c)%nodeA)
@@ -17944,14 +18083,17 @@ CONTAINS
   END SUBROUTINE CD_Multibody_Probe_Get
 
   SUBROUTINE mb_snap_pinned(rod, rigid)
-    !! A pinned rod keeps End A on its pin: a fixed point, or the pin point of its parent body.
+    !! A pinned rod keeps End A on its pin: a fixed point, a host node (a CoupledPinned rod on
+    !! the coupled aggregate, whose pin, pin_v and pin_a the host sets) or the pin point of its
+    !! parent body.
     !! Its centre, velocity and acceleration follow the pin motion and the rod's own rotation.
     TYPE(RodState), INTENT(INOUT) :: rod
     TYPE(RigidBodyState), INTENT(IN) :: rigid(:)
     REAL(wp) :: p(3), v_pin(3), a_pin(3), arm(3)
     IF (.NOT. rod%is_pinned) RETURN
-    v_pin = CD_ZERO
-    a_pin = CD_ZERO
+    ! zero for a fixed pin
+    v_pin = rod%pin_v
+    a_pin = rod%pin_a
     IF (rod%parent > 0) THEN
       ASSOCIATE (b => rigid(rod%parent))
         p = MATMUL(b%rot_mat, rod%pin_body)
@@ -18075,6 +18217,44 @@ CONTAINS
       arm = mb%cab_off(1, c)*mb%rods(mb%cab_obj(c))%half_length*mb%rods(mb%cab_obj(c))%rot_mat(:, 1)
     END SELECT
   END SUBROUTINE mb_cable_arm
+
+  SUBROUTINE mb_cable_k6(mb, kind, obj, shift, k6)
+    !! Add to k6 the diagonal stiffness of the finite-EI cables attached to object obj (cab_kind
+    !! kind) at their arms (mb_cable_arm, plus shift: from a pinned rod's centre to its pin): the
+    !! directional spring k_ax t t^T + (T/L)(I - t t^T) of line_attachment_stiffness, t along the
+    !! cable's current end force, T its magnitude, L its unstretched length and k_ax = 1/sum(l0/EA).
+    !! The staggered march returns the cable end force explicitly, so this spring bounds its step.
+    TYPE(MultibodyMarch), INTENT(IN) :: mb
+    INTEGER, INTENT(IN) :: kind, obj
+    REAL(wp), INTENT(IN) :: shift(3)
+    REAL(wp), INTENT(INOUT) :: k6(6)
+    INTEGER :: c, k
+    REAL(wp) :: arm(3), t(3), ten, katt(3, 3), s(3, 3), krot(3, 3), eye(3, 3)
+    IF (.NOT. ALLOCATED(mb%cables)) RETURN
+    eye = CD_ZERO
+    DO k = 1, 3
+      eye(k, k) = CD_ONE
+    END DO
+    DO c = 1, SIZE(mb%cables)
+      IF (mb%cab_kind(c) /= kind .OR. mb%cab_obj(c) /= obj) CYCLE
+      CALL mb_cable_arm(mb, c, arm)
+      arm = arm + shift
+      ten = NORM2(mb%cab_force(:, c))
+      IF (ten > CD_ZERO .AND. mb%cab_len(c) > CD_ZERO) THEN
+        t = mb%cab_force(:, c)/ten
+        katt = mb%cab_kax(c)*SPREAD(t, 2, 3)*SPREAD(t, 1, 3) + &
+               ten/mb%cab_len(c)*(eye - SPREAD(t, 2, 3)*SPREAD(t, 1, 3))
+      ELSE
+        katt = mb%cab_kax(c)*eye
+      END IF
+      s = skew3(arm)
+      krot = -MATMUL(s, MATMUL(katt, s))
+      DO k = 1, 3
+        k6(k) = k6(k) + katt(k, k)
+        k6(3 + k) = k6(3 + k) + krot(k, k)
+      END DO
+    END DO
+  END SUBROUTINE mb_cable_k6
 
   SUBROUTINE mb_rod_bases(mb, points, rod, bases, arms)
     !! System coupled-DOF bases (-1: no EI=0 line) and arms of a rod's End A and End B points.
@@ -18508,7 +18688,8 @@ CONTAINS
 
   SUBROUTINE mb_step(mb, points, opts, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, bathymetry)
     !! Advance the multibody march from time - dt to time, sub-cycled so that the explicit object
-    !! positions resolve the stiffest object-mooring mode of the EI=0 lines (rigid_substep_count).
+    !! positions resolve the stiffest object-mooring mode of the EI=0 lines and the objects' own
+    !! restoring, with or without lines (rigid_substep_count).
     TYPE(MultibodyMarch), INTENT(INOUT) :: mb
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -18519,7 +18700,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     INTEGER :: ib, ir, ip, nsub, isub, it, k, bases(2)
     LOGICAL :: conv_s, stall_s
-    REAL(wp) :: omega2, mass6(6), arms(3, 2), f_d(3), m_d(3), added6(6, 6), drag6(6, 6)
+    REAL(wp) :: omega2, mass6(6), arms(3, 2), f_d(3), m_d(3), added6(6, 6), drag6(6, 6), k6c(6), w2_pin, shift(3)
 
     converged = .TRUE.
     stalled = .FALSE.
@@ -18552,45 +18733,73 @@ CONTAINS
       END IF
     END IF
     omega2 = CD_ZERO
-    ! a body-only monolithic deck still resolves its hydrostatic restoring
-    IF (mb%has_sys .OR. mb%implicit) THEN
-      DO ib = 1, SIZE(mb%rigid)
-        BLOCK
-          INTEGER :: att_base(SIZE(mb%rigid(ib)%point_indices))
-          REAL(wp) :: att_arm(3, SIZE(mb%rigid(ib)%point_indices))
-          DO ip = 1, SIZE(mb%rigid(ib)%point_indices)
-            att_base(ip) = -1
-            IF (mb%has_sys) att_base(ip) = system_point_base(mb%system, &
-                                                             points(mb%rigid(ib)%point_indices(ip))%id)
-            att_arm(:, ip) = MATMUL(mb%rigid(ib)%rot_mat, points(mb%rigid(ib)%point_indices(ip))%body_offset)
+    ! the bodies' own restoring enters with or without lines (a body-only deck still resolves it)
+    DO ib = 1, SIZE(mb%rigid)
+      BLOCK
+        INTEGER :: att_base(SIZE(mb%rigid(ib)%point_indices))
+        REAL(wp) :: att_arm(3, SIZE(mb%rigid(ib)%point_indices))
+        DO ip = 1, SIZE(mb%rigid(ib)%point_indices)
+          att_base(ip) = -1
+          IF (mb%has_sys) att_base(ip) = system_point_base(mb%system, &
+                                                           points(mb%rigid(ib)%point_indices(ip))%id)
+          att_arm(:, ip) = MATMUL(mb%rigid(ib)%rot_mat, points(mb%rigid(ib)%point_indices(ip))%body_offset)
+        END DO
+        mass6(1:3) = mb%rigid(ib)%mass
+        IF (mb%rigid(ib)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*mb%rigid(ib)%vol* &
+                                                      MAX(CD_ZERO, mb%rigid(ib)%ca)
+        mass6(4:6) = global_inertia_diag(mb%rigid(ib)%rot_mat, mb%rigid(ib)%inertia)
+        IF (ALLOCATED(mb%rigid(ib)%att_rods)) THEN
+          DO k = 1, SIZE(mb%rigid(ib)%att_rods)
+            mass6(1:3) = mass6(1:3) + mb%rigid(ib)%att_rods(k)%mass
           END DO
-          mass6(1:3) = mb%rigid(ib)%mass
-          IF (mb%rigid(ib)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*mb%rigid(ib)%vol* &
-                                                        MAX(CD_ZERO, mb%rigid(ib)%ca)
-          mass6(4:6) = global_inertia_diag(mb%rigid(ib)%rot_mat, mb%rigid(ib)%inertia)
-          IF (ALLOCATED(mb%rigid(ib)%att_rods)) THEN
-            DO k = 1, SIZE(mb%rigid(ib)%att_rods)
-              mass6(1:3) = mass6(1:3) + mb%rigid(ib)%att_rods(k)%mass
-            END DO
-          END IF
-          omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, att_base, att_arm, mass6, &
-                                                     [CD_ZERO, CD_ZERO, mb%rigid(ib)%c33, mb%rigid(ib)%c44, &
-                                                      mb%rigid(ib)%c55, CD_ZERO]))
-        END BLOCK
-      END DO
-    END IF
-    IF (mb%has_sys) THEN
+        END IF
+        ! hydrostatic restoring; the staggered scheme's explicit positions also meet the seabed
+        ! contact that acts within the step (the monolithic scheme carries it in its Jacobian)
+        k6c = [CD_ZERO, CD_ZERO, mb%rigid(ib)%c33, mb%rigid(ib)%c44, mb%rigid(ib)%c55, CD_ZERO]
+        IF (.NOT. mb%implicit) THEN
+          CALL rigid6_contact_stiffness(mb%rigid(ib), opts, time - dt, dt, k6c, ErrStat, ErrMsg, bathymetry)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          CALL mb_cable_k6(mb, 1, ib, [CD_ZERO, CD_ZERO, CD_ZERO], k6c)
+        END IF
+        omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, att_base, att_arm, mass6, k6c))
+      END BLOCK
+    END DO
+    ! the rods' own terms enter the staggered scheme with or without lines
+    IF (mb%has_sys .OR. .NOT. mb%implicit) THEN
       DO ir = 1, SIZE(mb%rods)
         IF (.NOT. (mb%rods(ir)%is_free .OR. mb%rods(ir)%is_pinned)) CYCLE
         CALL mb_rod_bases(mb, points, mb%rods(ir), bases, arms)
-        CALL rod_environment_force(mb%rods(ir), opts, time - dt, f_d, m_d, added6, drag6, ErrStat, ErrMsg)
+        IF (mb%implicit) THEN
+          ! monolithic accuracy sub-steps: the line springs over the structural plus added mass
+          CALL rod_environment_force(mb%rods(ir), opts, time - dt, f_d, m_d, added6, drag6, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          mass6(1:3) = mb%rods(ir)%mass
+          mass6(4:6) = global_inertia_diag(mb%rods(ir)%rot_mat, mb%rods(ir)%inertia)
+          DO k = 1, 6
+            mass6(k) = mass6(k) + MAX(CD_ZERO, added6(k, k))
+          END DO
+          omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, bases, arms, mass6))
+          CYCLE
+        END IF
+        ! the staggered scheme's explicit positions also meet the rod's own terms
+        ! (rod_estimate_terms, as in step_rod_system: a pinned rod about its pin, with the pin
+        ! acceleration of its parent body) and its finite-EI cables (mb_cable_k6), whose end
+        ! forces it applies explicitly; the monolithic scheme carries the contact and the
+        ! hydrostatics in its Jacobian
+        IF (mb%rods(ir)%is_pinned .AND. mb%rods(ir)%parent > 0) THEN
+          CALL rod_estimate_terms(mb%rods(ir), opts, time - dt, dt, mass6, k6c, w2_pin, shift, ErrStat, ErrMsg, &
+                                  bathymetry, parent=mb%rigid(mb%rods(ir)%parent))
+        ELSE
+          CALL rod_estimate_terms(mb%rods(ir), opts, time - dt, dt, mass6, k6c, w2_pin, shift, ErrStat, ErrMsg, &
+                                  bathymetry)
+        END IF
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        mass6(1:3) = mb%rods(ir)%mass
-        mass6(4:6) = global_inertia_diag(mb%rods(ir)%rot_mat, mb%rods(ir)%inertia)
-        DO k = 1, 6
-          mass6(k) = mass6(k) + MAX(CD_ZERO, added6(k, k))
-        END DO
-        omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, bases, arms, mass6))
+        IF (mb%rods(ir)%is_pinned) THEN
+          arms(:, 1) = arms(:, 1) + shift
+          arms(:, 2) = arms(:, 2) + shift
+        END IF
+        CALL mb_cable_k6(mb, 2, ir, shift, k6c)
+        omega2 = MAX(omega2, rigid_omega2_estimate(mb%system, bases, arms, mass6, k6c) + w2_pin)
       END DO
     END IF
     IF (mb%implicit) THEN
@@ -19922,7 +20131,7 @@ CONTAINS
     END DO
   END FUNCTION line_attachment_stiffness
 
-  PURE INTEGER FUNCTION rigid_substep_count(omega2, dt, omega_dt_max) RESULT(nsub)
+  INTEGER FUNCTION rigid_substep_count(omega2, dt, omega_dt_max) RESULT(nsub)
     !! Sub-steps per coupled step so that omega*dt_sub stays at or below RIGID_OMEGA_DT_MAX,
     !! capped at RIGID_MAX_SUBSTEPS. The explicit central-difference stability limit is
     !! omega*dt < 2, and omega from rigid_omega2_estimate (directional line stiffness, added
@@ -19930,11 +20139,14 @@ CONTAINS
     !! on short lines goes unstable at an estimated omega*dt of 1.27). The limit 0.4 is set by
     !! accuracy, not stability: a rod released out of equilibrium at dt 0.1 s keeps its
     !! fairlead-tension transient within 1.5% of a dt 0.005 s run. omega_dt_max replaces the
-    !! limit (bodySubstep accuracy of the monolithic scheme).
+    !! limit (bodySubstep accuracy of the monolithic scheme). A step that needs more than the
+    !! cap is warned about once per run (process): its sub-steps then exceed the limit, and
+    !! beyond omega*dt_sub = 2 the explicit step is unstable, so dtM must come down.
     REAL(wp), INTENT(IN) :: omega2, dt
     REAL(wp), INTENT(IN), OPTIONAL :: omega_dt_max
     REAL(wp), PARAMETER :: RIGID_OMEGA_DT_MAX = 0.4_wp
     INTEGER, PARAMETER :: RIGID_MAX_SUBSTEPS = 256
+    LOGICAL, SAVE :: warned = .FALSE.
     REAL(wp) :: ratio, lim
     nsub = 1
     IF (.NOT. (omega2 > CD_ZERO .AND. dt > CD_ZERO)) RETURN
@@ -19943,6 +20155,14 @@ CONTAINS
     ratio = SQRT(omega2)*dt/lim
     IF (.NOT. (ratio < REAL(RIGID_MAX_SUBSTEPS, wp))) THEN
       nsub = RIGID_MAX_SUBSTEPS
+      !$OMP CRITICAL (cd_substep_cap_warning)
+      IF (.NOT. warned) THEN
+        warned = .TRUE.
+        WRITE (output_unit, '(A,I0,A,ES10.3,A)') '  Warning: an object step needs more than ', RIGID_MAX_SUBSTEPS, &
+          ' sub-steps (estimated omega dt_sub at the cap ', SQRT(omega2)*dt/REAL(RIGID_MAX_SUBSTEPS, wp), &
+          '; the explicit step is unstable above 2): reduce dtM.'
+      END IF
+      !$OMP END CRITICAL (cd_substep_cap_warning)
     ELSE IF (ratio > CD_ONE) THEN
       nsub = CEILING(ratio)
     END IF
@@ -19951,8 +20171,9 @@ CONTAINS
   SUBROUTINE step_rod_system(system, points, opts, rod_state, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
                              work, bathymetry, host_mask, host_q, host_v, host_a, host_start)
     !! Advance rods and lines from time - dt to time: step_rod_once, sub-cycled so that the
-    !! explicit central-difference rod position resolves the stiffest rod-mooring mode
-    !! (rigid_substep_count). converged is the AND and stalled the OR over the sub-steps.
+    !! explicit central-difference rod position resolves the stiffest rod-mooring mode and the
+    !! swing of a pinned rod about its pin (rigid_substep_count). converged is the AND and
+    !! stalled the OR over the sub-steps.
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -19969,12 +20190,14 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: host_mask(:)
     REAL(wp), INTENT(IN), OPTIONAL :: host_q(:), host_v(:), host_a(:)
 
-    INTEGER :: ir, nsub, isub, it, base_a, base_b, k
-    ! host_start: step-start state of the host-driven rods (see step_rigid6_system)
+    INTEGER :: ir, nsub, isub, it, base_a, base_b
+    ! host_start: step-start state of the Coupled/Vessel rods (see step_rigid6_system); a
+    ! host-pinned rod carries its step-start pin itself (RodState%pin0)
     TYPE(RodState), INTENT(IN), OPTIONAL :: host_start(:)
     REAL(wp), ALLOCATABLE :: hk_end(:, :)
-    LOGICAL :: conv_s, stall_s
-    REAL(wp) :: omega2, arms(3, 2), mass6(6), added6(6, 6), drag6(6, 6), f_dummy(3), m_dummy(3)
+    LOGICAL :: conv_s, stall_s, host_pins
+    REAL(wp) :: omega2, arms(3, 2), mass6(6), k6c(6), w2_pin, shift(3)
+    TYPE(RodState) :: rod0
     REAL(wp), ALLOCATABLE :: q0h(:), v0h(:), a0h(:)
 
     converged = .TRUE.
@@ -19982,28 +20205,57 @@ CONTAINS
     n_iter = 0
     omega2 = CD_ZERO
     DO ir = 1, SIZE(rod_state)
-      IF (.NOT. rod_state(ir)%is_free) CYCLE
+      IF (.NOT. (rod_state(ir)%is_free .OR. rod_state(ir)%is_pinned)) CYCLE
       arms(:, 1) = MATMUL(rod_state(ir)%rot_mat, [-rod_state(ir)%half_length, CD_ZERO, CD_ZERO])
       arms(:, 2) = -arms(:, 1)
-      base_a = system_point_base(system, points(rod_state(ir)%point_a_index)%id)
-      base_b = system_point_base(system, points(rod_state(ir)%point_b_index)%id)
-      ! structural inertia plus the rod's wet added mass (its 6x6 added-mass diagonal)
-      CALL rod_environment_force(rod_state(ir), opts, time - dt, f_dummy, m_dummy, added6, drag6, ErrStat, ErrMsg)
+      base_a = rod_end_base(system, points, rod_state(ir)%point_a_index)
+      base_b = rod_end_base(system, points, rod_state(ir)%point_b_index)
+      ! the rod's own terms (rod_estimate_terms): a free rod's structural plus added mass with its
+      ! seabed contact and waterplane stiffness; a pinned rod only turns about its pin, so its line
+      ! ends act through their arms from the pin on its rotational inertia about the pin (the
+      ! translational entries stay zero, so rigid_omega2_estimate skips them), and its weight,
+      ! buoyancy, pin acceleration, seabed contact and waterplane make it a compound pendulum even
+      ! without a line, whose squared frequency w2_pin adds to that of the lines
+      IF (rod_state(ir)%is_host_pinned) THEN
+        ! the host has already placed the pin at t + dt: the rod at its step-start pin (pin0) is
+        ! bounded with it, so that a step whose pin crosses the free surface keeps the restoring
+        ! of the wetting it starts from (and of its seabed contact)
+        rod0 = rod_state(ir)
+        rod0%r = rod0%r + (rod0%pin0 - rod0%pin)
+        rod0%pin = rod0%pin0
+        CALL rod_estimate_terms(rod_state(ir), opts, time - dt, dt, mass6, k6c, w2_pin, shift, ErrStat, ErrMsg, &
+                                bathymetry, rod_start=rod0)
+      ELSE
+        CALL rod_estimate_terms(rod_state(ir), opts, time - dt, dt, mass6, k6c, w2_pin, shift, ErrStat, ErrMsg, &
+                                bathymetry)
+      END IF
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      mass6(1:3) = rod_state(ir)%mass
-      mass6(4:6) = global_inertia_diag(rod_state(ir)%rot_mat, rod_state(ir)%inertia)
-      DO k = 1, 6
-        mass6(k) = mass6(k) + MAX(CD_ZERO, added6(k, k))
-      END DO
-      omega2 = MAX(omega2, rigid_omega2_estimate(system, [base_a, base_b], arms, mass6))
+      IF (rod_state(ir)%is_pinned) THEN
+        arms(:, 1) = arms(:, 1) + shift
+        arms(:, 2) = arms(:, 2) + shift
+      END IF
+      omega2 = MAX(omega2, rigid_omega2_estimate(system, [base_a, base_b], arms, mass6, k6c) + w2_pin)
     END DO
     nsub = rigid_substep_count(omega2, dt)
     CALL host_substep_start(system, nsub, q0h, v0h, a0h, ErrStat, ErrMsg, host_mask)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    ! A host-pinned rod without a committed acceleration (the first step) takes its starting
+    ! acceleration with its pin at the step start: the host has already placed the pin at
+    ! t + dt, so the rods go back to their step-start pin (pin0, which the rod state carries;
+    ! no staged copy is needed) for it and return to t + dt after it.
+    host_pins = ANY(rod_state%is_host_pinned)
+    IF (ANY(rod_state%is_host_pinned .AND. .NOT. rod_state%accel_valid)) THEN
+      CALL save_host_end_rod(rod_state, hk_end)
+      CALL interp_host_pins(rod_state, hk_end, CD_ZERO)
+      CALL rod_start_accelerations(system, points, opts, rod_state, time - dt, work, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL interp_host_pins(rod_state, hk_end, CD_ONE)
+    END IF
     DO isub = 1, nsub
-      IF (nsub > 1 .AND. PRESENT(host_start)) THEN
+      IF (nsub > 1 .AND. (PRESENT(host_start) .OR. host_pins)) THEN
         IF (isub == 1) CALL save_host_end_rod(rod_state, hk_end)
-        CALL interp_host_rod(rod_state, host_start, hk_end, REAL(isub, wp)/REAL(nsub, wp))
+        IF (PRESENT(host_start)) CALL interp_host_rod(rod_state, host_start, hk_end, REAL(isub, wp)/REAL(nsub, wp))
+        IF (host_pins) CALL interp_host_pins(rod_state, hk_end, REAL(isub, wp)/REAL(nsub, wp))
       END IF
       IF (.NOT. PRESENT(host_mask)) THEN
         CALL step_rod_once(system, points, opts, rod_state, time - dt + REAL(isub, wp)*dt/REAL(nsub, wp), &
@@ -20023,6 +20275,10 @@ CONTAINS
       stalled = stalled .OR. stall_s
       n_iter = n_iter + it
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    END DO
+    ! the committed pin of a host-pinned rod starts its next step
+    DO ir = 1, SIZE(rod_state)
+      IF (rod_state(ir)%is_host_pinned) CALL set_rod_pin_start(rod_state(ir))
     END DO
   END SUBROUTINE step_rod_system
 
@@ -20073,20 +20329,22 @@ CONTAINS
   END SUBROUTINE interp_host_rigid
 
   SUBROUTINE save_host_end_rod(rods, hk)
-    !! Rod twin of save_host_end_rigid.
+    !! Rod twin of save_host_end_rigid; rows 25 to 33 hold the pin, pin velocity and pin
+    !! acceleration (the host kinematics of a host-pinned rod).
     TYPE(RodState), INTENT(IN) :: rods(:)
     REAL(wp), ALLOCATABLE, INTENT(INOUT) :: hk(:, :)
     INTEGER :: ir
     IF (ALLOCATED(hk)) DEALLOCATE (hk)
-    ALLOCATE (hk(24, SIZE(rods)))
+    ALLOCATE (hk(33, SIZE(rods)))
     DO ir = 1, SIZE(rods)
       hk(:, ir) = [rods(ir)%r, rods(ir)%v, rods(ir)%a, rods(ir)%omega, rods(ir)%alpha, &
-                   RESHAPE(rods(ir)%rot_mat, [9])]
+                   RESHAPE(rods(ir)%rot_mat, [9]), rods(ir)%pin, rods(ir)%pin_v, rods(ir)%pin_a]
     END DO
   END SUBROUTINE save_host_end_rod
 
   SUBROUTINE interp_host_rod(rods, start, hk, s)
-    !! Rod twin of interp_host_rigid (the rod centre and frame of each host-driven rod).
+    !! Rod twin of interp_host_rigid (the rod centre and frame of each Coupled/Vessel rod; a
+    !! host-pinned rod moves its pin in interp_host_pins).
     TYPE(RodState), INTENT(INOUT) :: rods(:)
     TYPE(RodState), INTENT(IN) :: start(:)
     REAL(wp), INTENT(IN) :: hk(:, :), s
@@ -20114,10 +20372,43 @@ CONTAINS
     END DO
   END SUBROUTINE interp_host_rod
 
+  SUBROUTINE interp_host_pins(rods, hk, s)
+    !! Place the pin of every host-pinned rod at fraction s of its step and move the rod with it
+    !! (mb_snap_pinned); the rod keeps its own rotation. Position, velocity and acceleration are
+    !! each linear between the step-start pin (pin0, the End A motion of the committed rod state,
+    !! as the line ends see it) and the t + dt host values in hk (rows 25 to 33); s = 1 restores
+    !! the t + dt pin. This is the interpolation the sub-steps give every other host node (the
+    !! host fairleads of the lines and the Coupled rods), so points on one platform keep their
+    !! relative positions under a translation inside the step. It is second order: between exact
+    !! end values a linear position deviates from the host path by at most dt^2 max|a|/8, the
+    !! velocity by dt^2 max|da/dt|/8 and the acceleration by dt^2 max|d2a/dt2|/8, and the
+    !! interpolated velocity is not the derivative of the interpolated position (the two differ
+    !! by O(dt max|a|)). A constant-velocity pin is reproduced exactly.
+    TYPE(RodState), INTENT(INOUT) :: rods(:)
+    REAL(wp), INTENT(IN) :: hk(:, :), s
+    INTEGER :: ir
+    TYPE(RigidBodyState) :: no_parent(0)
+    DO ir = 1, SIZE(rods)
+      IF (.NOT. rods(ir)%is_host_pinned) CYCLE
+      IF (s >= CD_ONE) THEN
+        rods(ir)%pin = hk(25:27, ir)
+        rods(ir)%pin_v = hk(28:30, ir)
+        rods(ir)%pin_a = hk(31:33, ir)
+      ELSE
+        rods(ir)%pin = rods(ir)%pin0 + s*(hk(25:27, ir) - rods(ir)%pin0)
+        rods(ir)%pin_v = rods(ir)%pin0_v + s*(hk(28:30, ir) - rods(ir)%pin0_v)
+        rods(ir)%pin_a = rods(ir)%pin0_a + s*(hk(31:33, ir) - rods(ir)%pin0_a)
+      END IF
+      CALL mb_snap_pinned(rods(ir), no_parent)
+    END DO
+  END SUBROUTINE interp_host_pins
+
   SUBROUTINE step_rod_once(system, points, opts, rod_state, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
                            work, bathymetry, host_mask, host_q, host_v, host_a)
-    !! One staggered central-difference step of the free rods and their lines (the scheme of
-    !! step_rigid6_once; the rod adds its 6x6 added-mass matrix and distributed drag).
+    !! One staggered central-difference step of the free and pinned rods and their lines (the
+    !! scheme of step_rigid6_once; the rod adds its 6x6 added-mass matrix and distributed drag).
+    !! A pinned rod (fixed pin, or a host-pinned rod whose pin the host has placed at t + dt)
+    !! integrates its rotation about the pin only.
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -20136,8 +20427,9 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: host_q(:), host_v(:), host_a(:)
 
     INTEGER :: ir, es
-    REAL(wp) :: dv0(6), acc(3), alpha(3)
+    REAL(wp) :: dv0(6), acc(3), alpha(3), arm(3)
     CHARACTER(160) :: em
+    TYPE(RigidBodyState) :: no_parent(0)
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -20145,24 +20437,10 @@ CONTAINS
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     CALL ensure_rod_step_workspace(work, system%n_system_coupled_dof, SIZE(rod_state), SIZE(system%points))
-    ! 0. a free rod without a committed acceleration (the first step) gets the instantaneous
-    ! one from the current line loads, so the predictor starts from the actual a_0
-    IF (.NOT. ALL(rod_state%accel_valid .OR. .NOT. rod_state%is_free)) THEN
-      CALL rigid_start_loads(system, work%q(1:system%n_system_coupled_dof), work%v(1:system%n_system_coupled_dof), &
-                             work%a(1:system%n_system_coupled_dof), work%loads(1:system%n_system_coupled_dof), &
-                             work%dload_da, ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      DO ir = 1, SIZE(rod_state)
-        IF (rod_state(ir)%accel_valid .OR. .NOT. rod_state(ir)%is_free) CYCLE
-        CALL rod_body_acceleration(system, points, opts, rod_state(ir), time - dt, CD_ZERO, &
-                                   [CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO], work, acc, alpha, &
-                                   ErrStat, ErrMsg, bathymetry)
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        rod_state(ir)%a = acc
-        rod_state(ir)%alpha = alpha
-        rod_state(ir)%accel_valid = .TRUE.
-      END DO
-    END IF
+    ! 0. a free or pinned rod without a committed acceleration (the first step) gets the
+    ! instantaneous one from the current line loads, so the predictor starts from the actual a_0
+    CALL rod_start_accelerations(system, points, opts, rod_state, time - dt, work, ErrStat, ErrMsg, bathymetry)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
     work%old_rods = rod_state
     work%old_points = system%points
     CALL CD_Get_System_CoupledMotion(system, work%q(1:system%n_system_coupled_dof), &
@@ -20175,10 +20453,12 @@ CONTAINS
     END IF
     CALL overlay_host_motion(work%q(1:system%n_system_coupled_dof), work%v(1:system%n_system_coupled_dof), &
                              work%a(1:system%n_system_coupled_dof), host_mask, host_q, host_v, host_a)
-    ! 1. predictor for the free rods (central difference; see step_rigid6_once for the
-    ! staggered predictor-corrector) and the line step to t + dt
+    ! 1. predictor for the free and pinned rods (central difference; see step_rigid6_once for
+    ! the staggered predictor-corrector) and the line step to t + dt. A pinned rod advances its
+    ! rotation only: its centre then follows the pin at t + dt (mb_snap_pinned), so End A
+    ! drives its lines with the pin motion exactly.
     DO ir = 1, SIZE(rod_state)
-      IF (.NOT. rod_state(ir)%is_free) THEN
+      IF (.NOT. (rod_state(ir)%is_free .OR. rod_state(ir)%is_pinned)) THEN
         IF (.NOT. rod_state(ir)%is_prescribed) THEN
           rod_state(ir)%v = CD_ZERO
           rod_state(ir)%a = CD_ZERO
@@ -20196,6 +20476,7 @@ CONTAINS
         ErrMsg = 'CableDyn_DeckDriver: rod finite-rotation update failed: '//TRIM(em)
         RETURN
       END IF
+      CALL mb_snap_pinned(rod_state(ir), no_parent)
     END DO
     CALL scatter_rod_point_motion(system, points, rod_state, work%q(1:system%n_system_coupled_dof), &
                                   work%v(1:system%n_system_coupled_dof), &
@@ -20220,7 +20501,7 @@ CONTAINS
       ErrMsg = 'CableDyn_DeckDriver: rod line-system step failed: '//TRIM(em)
       RETURN
     END IF
-    IF (.NOT. ANY(rod_state%is_free)) RETURN
+    IF (.NOT. ANY(rod_state%is_free .OR. rod_state%is_pinned)) RETURN
     ! 2. corrector from the end-of-step line loads at the predictor
     CALL CD_Calc_System_CoupledLoads(system, work%loads(1:system%n_system_coupled_dof), es, em)
     IF (es /= CD_SYSTEM_OK) THEN
@@ -20240,9 +20521,18 @@ CONTAINS
     END IF
 
     DO ir = 1, SIZE(rod_state)
-      IF (.NOT. rod_state(ir)%is_free) CYCLE
-      dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dt*work%old_rods(ir)%a
+      IF (.NOT. (rod_state(ir)%is_free .OR. rod_state(ir)%is_pinned)) CYCLE
       dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*dt*work%old_rods(ir)%alpha
+      IF (rod_state(ir)%is_pinned) THEN
+        ! The predictor centre velocity is the pin's plus w x r, so the final one differs from it
+        ! by gamma dt (alpha_{n+1} - alpha_n) x r only: with x = T y + b (rigid_coupled_acceleration)
+        ! that is dv0 + gamma dt x for dv0 = -gamma dt (alpha_n x r + b), b = a_p + w x (w x r).
+        arm = rod_state(ir)%r - rod_state(ir)%pin
+        dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dt*(cross3(work%old_rods(ir)%alpha, arm) + rod_state(ir)%pin_a + &
+                                               cross3(rod_state(ir)%omega, cross3(rod_state(ir)%omega, arm)))
+      ELSE
+        dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dt*work%old_rods(ir)%a
+      END IF
       CALL rod_body_acceleration(system, points, opts, rod_state(ir), time, dt, dv0, work, acc, alpha, &
                                  ErrStat, ErrMsg, bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
@@ -20264,6 +20554,7 @@ CONTAINS
       END IF
       rod_state(ir)%a = acc
       rod_state(ir)%alpha = alpha
+      CALL mb_snap_pinned(rod_state(ir), no_parent)
     END DO
     ! the Rod<N>A/B point records follow the corrected rods
     CALL scatter_rod_point_motion(system, points, rod_state, work%q(1:system%n_system_coupled_dof), &
@@ -20282,12 +20573,13 @@ CONTAINS
   END SUBROUTINE step_rod_once
 
   SUBROUTINE rod_body_acceleration(system, points, opts, rod, time, dt, dv0, work, acc, alpha, ErrStat, ErrMsg, &
-                                   bathymetry)
-    !! The acceleration of a free rod at its current state and time from its weight, the
-    !! distributed Morison / buoyancy loads (rod_environment_force), the seabed contact and the
-    !! line loads in work%loads (evaluated with the attachment accelerations work%a, end-node
+                                   bathymetry, pin_load)
+    !! The acceleration of a free or pinned rod at its current state and time from its weight,
+    !! the distributed Morison / buoyancy loads (rod_environment_force), the seabed contact and
+    !! the line loads in work%loads (evaluated with the attachment accelerations work%a, end-node
     !! inertia derivative work%dload_da): rigid_coupled_acceleration with the step dt and
-    !! velocity offset dv0 (dt = 0, dv0 = 0: the instantaneous acceleration).
+    !! velocity offset dv0 (dt = 0, dv0 = 0: the instantaneous acceleration). A pinned rod turns
+    !! about its pin, which moves with rod%pin_a (zero for a fixed pin).
     TYPE(CD_SystemType), INTENT(IN) :: system
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -20298,6 +20590,8 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    ! pin_load (a pinned rod): the force the rod exerts on its pin (rigid_coupled_acceleration)
+    REAL(wp), INTENT(OUT), OPTIONAL :: pin_load(3)
 
     INTEGER :: base_a, base_b
     REAL(wp) :: f_body(3), f_env(3), f_seabed(3), m_env(3), m_seabed(3), m_global(3)
@@ -20307,8 +20601,8 @@ CONTAINS
     alpha = CD_ZERO
     att_arm(:, 1) = MATMUL(rod%rot_mat, [-rod%half_length, CD_ZERO, CD_ZERO])
     att_arm(:, 2) = -att_arm(:, 1)
-    base_a = system_point_base(system, points(rod%point_a_index)%id)
-    base_b = system_point_base(system, points(rod%point_b_index)%id)
+    base_a = rod_end_base(system, points, rod%point_a_index)
+    base_b = rod_end_base(system, points, rod%point_b_index)
     f_a = CD_ZERO
     f_b = CD_ZERO
     IF (base_a >= 0) f_a = work%loads(base_a + 1:base_a + 3)
@@ -20323,10 +20617,157 @@ CONTAINS
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     f_body = f_body + f_env + f_seabed
     m_global = m_global + m_env + m_seabed
-    CALL rigid_coupled_acceleration(work%dload_da, dt, work%a(1:system%n_system_coupled_dof), [base_a, base_b], &
-                                    att_arm, rod%mass, added6, rod%inertia, rod%rot_mat, rod%omega, f_body, &
-                                    m_global, dv0, drag6 + contact_dv, acc, alpha, ErrStat, ErrMsg)
+    IF (rod%is_pinned) THEN
+      CALL rigid_coupled_acceleration(work%dload_da, dt, work%a(1:system%n_system_coupled_dof), [base_a, base_b], &
+                                      att_arm, rod%mass, added6, rod%inertia, rod%rot_mat, rod%omega, f_body, &
+                                      m_global, dv0, drag6 + contact_dv, acc, alpha, ErrStat, ErrMsg, &
+                                      pin_arm=rod%r - rod%pin, pin_acc=rod%pin_a, pin_load=pin_load)
+    ELSE
+      CALL rigid_coupled_acceleration(work%dload_da, dt, work%a(1:system%n_system_coupled_dof), [base_a, base_b], &
+                                      att_arm, rod%mass, added6, rod%inertia, rod%rot_mat, rod%omega, f_body, &
+                                      m_global, dv0, drag6 + contact_dv, acc, alpha, ErrStat, ErrMsg)
+    END IF
   END SUBROUTINE rod_body_acceleration
+
+  SUBROUTINE rod_start_accelerations(system, points, opts, rod_state, time, work, ErrStat, ErrMsg, bathymetry)
+    !! The instantaneous acceleration of every free or pinned rod without a committed one (the
+    !! first step) from the current line loads at time, so the predictor starts from the
+    !! actual a_0 (rod_body_acceleration at dt = 0).
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(RodState), INTENT(INOUT) :: rod_state(:)
+    REAL(wp), INTENT(IN) :: time
+    TYPE(RodStepWorkspace), INTENT(INOUT) :: work
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: ir
+    REAL(wp) :: acc(3), alpha(3)
+    TYPE(RigidBodyState) :: no_parent(0)
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (ALL(rod_state%accel_valid .OR. .NOT. (rod_state%is_free .OR. rod_state%is_pinned))) RETURN
+    CALL ensure_rod_step_workspace(work, system%n_system_coupled_dof, SIZE(rod_state), SIZE(system%points))
+    CALL rigid_start_loads(system, work%q(1:system%n_system_coupled_dof), work%v(1:system%n_system_coupled_dof), &
+                           work%a(1:system%n_system_coupled_dof), work%loads(1:system%n_system_coupled_dof), &
+                           work%dload_da, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    DO ir = 1, SIZE(rod_state)
+      IF (rod_state(ir)%accel_valid .OR. .NOT. (rod_state(ir)%is_free .OR. rod_state(ir)%is_pinned)) CYCLE
+      CALL rod_body_acceleration(system, points, opts, rod_state(ir), time, CD_ZERO, &
+                                 [CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO], work, acc, alpha, &
+                                 ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      rod_state(ir)%a = acc
+      rod_state(ir)%alpha = alpha
+      rod_state(ir)%accel_valid = .TRUE.
+      CALL mb_snap_pinned(rod_state(ir), no_parent)
+    END DO
+  END SUBROUTINE rod_start_accelerations
+
+  FUNCTION pinned_rotational_inertia(rod, added6) RESULT(mp)
+    !! The 3x3 rotational inertia of a pinned rod about its pin (global axes): the structural
+    !! and added mass about the centre, T^T M T with T = [-[r]x; I] and r from the pin to the
+    !! centre (the reduction of rigid_coupled_acceleration).
+    TYPE(RodState), INTENT(IN) :: rod
+    REAL(wp), INTENT(IN) :: added6(6, 6)
+    REAL(wp) :: mp(3, 3)
+    REAL(wp) :: m6(6, 6), t63(6, 3), ig(3, 3)
+    INTEGER :: k
+    ig = CD_ZERO
+    DO k = 1, 3
+      ig(k, k) = rod%inertia(k)
+    END DO
+    m6 = added6
+    DO k = 1, 3
+      m6(k, k) = m6(k, k) + rod%mass
+    END DO
+    m6(4:6, 4:6) = m6(4:6, 4:6) + MATMUL(rod%rot_mat, MATMUL(ig, TRANSPOSE(rod%rot_mat)))
+    t63 = CD_ZERO
+    t63(1:3, :) = -skew3(rod%r - rod%pin)
+    DO k = 1, 3
+      t63(3 + k, k) = CD_ONE
+    END DO
+    mp = MATMUL(TRANSPOSE(t63), MATMUL(m6, t63))
+  END FUNCTION pinned_rotational_inertia
+
+  FUNCTION pinned_swing_omega2(rod, opts, mp, added6, buoyancy, mp_start, added_start, buoy_start, k_extra) &
+    RESULT(omega2)
+    !! Squared frequency of a pinned rod swinging about its pin under its weight, its buoyancy
+    !! and the pin acceleration, for the sub-step estimate of step_rod_system (added there to
+    !! the line estimate). Vertical loads f_i at p_i from the pin turn with the rod; the moment
+    !! of the loads about the pin has the rotational stiffness -[e_z]x [P]x with P = sum f_i p_i,
+    !! whose length |P| does not depend on the pose for a fixed load distribution and is the
+    !! swing stiffness at the bottom of the compound pendulum: |W d_g - B d_b| for a weight W and
+    !! a buoyancy B on the axis at d_g and d_b from the pin (omega^2 about 3 g/(2 L) for a dry
+    !! uniform rod). The buoyancy is the wet distribution of the evaluated pose
+    !! (rod_environment_force); the change of a surface-piercing rod's wet length with its tilt
+    !! enters through k_extra (rod_hydrostatic_stiffness). The pin acceleration a_p loads the
+    !! rod with -M_t a_p, whose
+    !! stiffness is |a_p| |G|, G = [r]x M_tt + M_rt the first moment of the translational inertia
+    !! (structural and added) about the pin: c [q]x for a rod (c = m d_g when dry), so
+    !! |G| = ||G||_F/sqrt(2), and the hanging dry rod sees the effective gravity bound
+    !! g + |a_p| >= |g - a_p|. |a_p| is the larger of the step-start and end-of-step host pin
+    !! accelerations (zero for a fixed pin). The inertia is the smaller principal rotational
+    !! inertia about the pin across the rod axis (mp: structural and added mass).
+    !!
+    !! mp_start, added_start and buoy_start (a host-pinned rod) are the inertia, added mass and
+    !! buoyancy of the same rod at its step-start pin: the stiffness is then the larger and the
+    !! inertia the smaller of the two poses. The sub-steps move the pin along a straight line, so
+    !! at the rod's orientation, with the surface held over the step, every slice's clearance to
+    !! the surface changes monotonically and in the same sense: each slice's wet area, and with
+    !! it the net first moment W d_g - B d_b about the pin and the added mass, change
+    !! monotonically, and the two ends bound the path, a step whose pin crosses the free surface
+    !! included. k_extra adds a further angular stiffness about the pin (the seabed contact of
+    !! rod_contact_stiffness).
+    TYPE(RodState), INTENT(IN) :: rod
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: mp(3, 3), added6(6, 6), buoyancy(4)
+    REAL(wp), INTENT(IN), OPTIONAL :: mp_start(3, 3), added_start(6, 6), buoy_start(4), k_extra
+    REAL(wp) :: omega2
+    REAL(wp) :: arm(3), a_pin, k_swing, i_min
+
+    omega2 = CD_ZERO
+    arm = rod%r - rod%pin
+    a_pin = MAX(NORM2(rod%pin_a), NORM2(rod%pin0_a))
+    k_swing = swing_stiffness(added6, buoyancy)
+    i_min = cross_inertia(mp)
+    IF (PRESENT(mp_start) .AND. PRESENT(added_start) .AND. PRESENT(buoy_start)) THEN
+      k_swing = MAX(k_swing, swing_stiffness(added_start, buoy_start))
+      i_min = MIN(i_min, cross_inertia(mp_start))
+    END IF
+    IF (PRESENT(k_extra)) k_swing = k_swing + k_extra
+    IF (i_min > CD_ZERO) omega2 = k_swing/i_min
+
+  CONTAINS
+
+    REAL(wp) FUNCTION swing_stiffness(added, buoy) RESULT(k)
+      !! |P| plus the pin-acceleration term for one pose's added mass and buoyancy.
+      REAL(wp), INTENT(IN) :: added(6, 6), buoy(4)
+      REAL(wp) :: p(3), g3(3, 3)
+      ! weight at the centre, buoyancy at its first moment about the centre
+      p = (buoy(1) - rod%mass*opts%g)*arm + buoy(2:4)
+      k = NORM2(p)
+      IF (a_pin > CD_ZERO) THEN
+        g3 = rod%mass*skew3(arm) + MATMUL(skew3(arm), added(1:3, 1:3)) + added(4:6, 1:3)
+        k = k + a_pin*NORM2(g3)/SQRT(2.0_wp)
+      END IF
+    END FUNCTION swing_stiffness
+
+    REAL(wp) FUNCTION cross_inertia(m3) RESULT(i)
+      !! The smaller principal value of m3 in the plane across the rod axis.
+      REAL(wp), INTENT(IN) :: m3(3, 3)
+      REAL(wp) :: e1(3), e2(3), m11, m22, m12
+      e1 = rod%rot_mat(:, 2)
+      e2 = rod%rot_mat(:, 3)
+      m11 = DOT_PRODUCT(e1, MATMUL(m3, e1))
+      m22 = DOT_PRODUCT(e2, MATMUL(m3, e2))
+      m12 = DOT_PRODUCT(e1, MATMUL(m3, e2))
+      i = 0.5_wp*(m11 + m22) - SQRT(0.25_wp*(m11 - m22)**2 + m12**2)
+    END FUNCTION cross_inertia
+  END FUNCTION pinned_swing_omega2
 
   SUBROUTINE step_prescribed_rod_system(system, points, opts, motion, rod_state, time_index, time, dt, &
                                         converged, stalled, n_iter, ErrStat, ErrMsg, work, hydro_work, bathymetry)
@@ -20495,8 +20936,9 @@ CONTAINS
     !! force and a moment about the rod centre, so a rod lying on the bed is supported along
     !! its whole length with the distributed rotational stiffness. load_dv returns the 6x6
     !! derivative of (force, moment) w.r.t. the rod (velocity, angular velocity) from the
-    !! active normal dampers, which the rigid-body step applies implicitly; the springs and the
-    !! regularized friction act at the evaluated position and velocity.
+    !! active normal dampers and the regularised friction (as a damper of its secant coefficient
+    !! mu N/sqrt(v^2 + vreg^2)), which the
+    !! rigid-body step applies implicitly; the springs act at the evaluated position.
     TYPE(RodState), INTENT(IN) :: rod
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(OUT) :: force(3), moment(3), load_dv(6, 6)
@@ -20541,12 +20983,318 @@ CONTAINS
         denom = SQRT(v_eval(1)**2 + v_eval(2)**2 + vreg**2)
         f_i(1) = -opts%friction_mu*normal*v_eval(1)/denom
         f_i(2) = -opts%friction_mu*normal*v_eval(2)/denom
+        ! the regularised friction is a damper c = mu N/sqrt(v^2 + vreg^2), mu N/vreg at rest, far
+        ! stiffer than the step allows explicitly: it enters the implicit velocity derivative as
+        ! that secant coefficient, f = -c v at the end-of-step velocity (exact at the evaluated
+        ! velocity; the tangent would vanish where the trapezoidal acceleration rings)
+        blk = CD_ZERO
+        blk(1, 1) = -opts%friction_mu*normal/denom
+        blk(2, 2) = blk(1, 1)
+        CALL add_arm_block6(load_dv, blk, arm)
       END IF
       f_i(3) = normal
       force = force + f_i
       moment = moment + cross3(arm, f_i)
     END DO
   END SUBROUTINE rod_seabed_contact
+
+  SUBROUTINE rod_contact_stiffness(rod, opts, ref, dt, k6, ErrStat, ErrMsg, bathymetry)
+    !! Add to k6 the diagonal stiffness, about the point ref in global axes, of the seabed contact
+    !! springs of rod_seabed_contact (kBot d dl at each of its stations) that can act within the
+    !! coming step of length dt (contact_within_reach, with the station's rigid-body velocity
+    !! v + w x s, the bound |a| + |alpha x s| + |w|^2 |s| + g of its acceleration and the rod
+    !! radius), so a rod about to land, sliding towards a shallower bed or turning a station
+    !! onto it is covered as well as one already on the bed. A vertical spring k at arm a from
+    !! ref adds k to the heave entry and k a_y^2, k a_x^2 to the roll and pitch entries (the bound
+    !! k |a x e_z|^2 of its rotational stiffness about any axis is their sum). The normal damper
+    !! and the friction are left out: the step applies the damper implicitly, and the
+    !! regularised friction is bounded by mu times the normal load.
+    TYPE(RodState), INTENT(IN) :: rod
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: ref(3), dt
+    REAL(wp), INTENT(INOUT) :: k6(6)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: i, ncontact
+    REAL(wp) :: s, dl, arm(3), r_eval(3), k, a_ref(3), a_rigid
+    LOGICAL :: within
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (.NOT. (opts%kbot > CD_ZERO .AND. rod%diam > CD_ZERO)) RETURN
+    ncontact = MAX(20, rod%nsegs)
+    DO i = 0, ncontact
+      s = -rod%half_length + rod%length*REAL(i, wp)/REAL(ncontact, wp)
+      dl = rod%length/REAL(ncontact, wp)
+      IF (i == 0 .OR. i == ncontact) dl = 0.5_wp*dl
+      arm = MATMUL(rod%rot_mat, [s, CD_ZERO, CD_ZERO])
+      r_eval = rod%r + arm
+      a_rigid = NORM2(rod%a) + NORM2(cross3(rod%alpha, arm)) + SUM(rod%omega**2)*ABS(s)
+      CALL contact_within_reach(r_eval, rod%v + cross3(rod%omega, arm), a_rigid, 0.5_wp*rod%diam, dt, opts, &
+                                within, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (.NOT. within) CYCLE
+      k = opts%kbot*rod%diam*dl
+      a_ref = r_eval - ref
+      k6(3) = k6(3) + k
+      k6(4) = k6(4) + k*a_ref(2)**2
+      k6(5) = k6(5) + k*a_ref(1)**2
+    END DO
+  END SUBROUTINE rod_contact_stiffness
+
+  SUBROUTINE contact_within_reach(x, v, a_rigid, radius, dt, opts, within, ErrStat, ErrMsg, bathymetry)
+    !! Whether a contact point at x (velocity v, acceleration bounded by a_rigid, the free fall
+    !! g added) of a body of the given radius about it can meet the seabed within a step dt: its
+    !! reach dt |v| + dt^2 (a_rigid + g)/2 bounds its travel in every direction, and it counts when
+    !! its height above the highest floor within that horizontal distance (the depth on a flat
+    !! seabed, CD_Bathymetry_Max_Floor over the box around the disk on a bathymetry grid) is at
+    !! most the reach plus the radius.
+    REAL(wp), INTENT(IN) :: x(3), v(3), a_rigid, radius, dt
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    LOGICAL, INTENT(OUT) :: within
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: es
+    REAL(wp) :: reach, z_max
+    LOGICAL :: bathy_ready
+    CHARACTER(160) :: em
+
+    within = .FALSE.
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    reach = dt*NORM2(v) + 0.5_wp*dt*dt*(a_rigid + opts%g)
+    ! see deck_seabed_floor_at: no short-circuit on the absent OPTIONAL bathymetry
+    bathy_ready = .FALSE.
+    IF (PRESENT(bathymetry)) bathy_ready = CD_Bathymetry_Is_Initialized(bathymetry)
+    IF (bathy_ready) THEN
+      CALL CD_Bathymetry_Max_Floor(bathymetry, x(1) - reach, x(1) + reach, x(2) - reach, x(2) + reach, z_max, es, em)
+      IF (es /= CD_BATHY_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'deck bathymetry floor bound failed: '//TRIM(em))
+        RETURN
+      END IF
+    ELSE IF (opts%has_wtrdpth) THEN
+      z_max = -opts%wtrdpth
+    ELSE
+      RETURN
+    END IF
+    within = x(3) - z_max <= reach + radius
+  END SUBROUTINE contact_within_reach
+
+  SUBROUTINE rod_hydrostatic_stiffness(rod, opts, time, ref, dt, k6, near, ErrStat, ErrMsg)
+    !! Add to k6 a bound of the waterplane (hydrostatic) stiffness of a rod near the free surface
+    !! within the coming step, about ref in global axes, as rod_contact_stiffness adds its contact:
+    !! rhoW g D dl at each station (those of rod_contact_stiffness) whose cross-section can cross
+    !! the surface within the step (its height above the surface within r sin(phi) plus its reach,
+    !! phi the axis angle from the vertical), and rhoW g pi D^2/4 at each pair of neighbouring
+    !! stations between which the axis can cross it; together they bound the elliptical
+    !! waterplane pi r^2/cos(phi) of any crossing. The surface is the host-held or deck wave
+    !! elevation at the station, still water otherwise. near returns whether any term was added
+    !! (the rod's added mass then changes within the step and the estimate takes its dry inertia).
+    TYPE(RodState), INTENT(IN) :: rod
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: time, ref(3), dt
+    REAL(wp), INTENT(INOUT) :: k6(6)
+    LOGICAL, INTENT(OUT) :: near
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: i, ncontact, es, ih
+    REAL(wp) :: reach(0:MAX(20, rod%nsegs)), h(0:MAX(20, rod%nsegs)), xs(3, 0:MAX(20, rod%nsegs))
+    REAL(wp) :: s, dl, arm(3), x(3), eta, u(3), du(3), tq, lseg, sphi, k, kpair, rmax
+    CHARACTER(160) :: em
+
+    near = .FALSE.
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (.NOT. (rod%diam > CD_ZERO .AND. opts%rhoW > CD_ZERO)) RETURN
+    ncontact = MAX(20, rod%nsegs)
+    lseg = rod%length/REAL(MAX(1, rod%nsegs), wp)
+    sphi = SQRT(MAX(CD_ZERO, CD_ONE - rod%rot_mat(3, 1)**2))
+    DO i = 0, ncontact
+      s = -rod%half_length + rod%length*REAL(i, wp)/REAL(ncontact, wp)
+      arm = MATMUL(rod%rot_mat, [s, CD_ZERO, CD_ZERO])
+      x = rod%r + arm
+      eta = CD_ZERO
+      IF (rod%has_held) THEN
+        tq = (s + rod%half_length)/lseg
+        ih = MIN(MAX(1, rod%nsegs) - 1, MAX(0, INT(tq)))
+        tq = MIN(CD_ONE, MAX(CD_ZERO, tq - REAL(ih, wp)))
+        eta = (CD_ONE - tq)*rod%held_eta(ih) + tq*rod%held_eta(ih + 1)
+      ELSE IF (opts%has_wave) THEN
+        CALL deck_wave_kinematics(opts, x(1), x(2), x(3), time, eta, u, du, es, em)
+        IF (es /= CD_HYDRO_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'rod waterplane estimate: wave kinematics failed: '//TRIM(em))
+          RETURN
+        END IF
+      END IF
+      xs(:, i) = x
+      h(i) = x(3) - eta
+      reach(i) = dt*NORM2(rod%v + cross3(rod%omega, arm)) + 0.5_wp*dt*dt* &
+                 (NORM2(rod%a) + NORM2(cross3(rod%alpha, arm)) + SUM(rod%omega**2)*ABS(s) + opts%g)
+    END DO
+    k = opts%rhoW*opts%g*rod%diam
+    kpair = opts%rhoW*opts%g*QUARTER_PI*rod%diam**2
+    DO i = 0, ncontact
+      dl = rod%length/REAL(ncontact, wp)
+      IF (i == 0 .OR. i == ncontact) dl = 0.5_wp*dl
+      IF (ABS(h(i)) <= 0.5_wp*rod%diam*sphi + reach(i)) CALL add_spring(k*dl, xs(:, i))
+      IF (i < ncontact) THEN
+        rmax = MAX(reach(i), reach(i + 1))
+        IF (MIN(h(i), h(i + 1)) - rmax <= CD_ZERO .AND. MAX(h(i), h(i + 1)) + rmax >= CD_ZERO) &
+          CALL add_spring(kpair, 0.5_wp*(xs(:, i) + xs(:, i + 1)))
+      END IF
+    END DO
+
+  CONTAINS
+
+    SUBROUTINE add_spring(kv, xp)
+      REAL(wp), INTENT(IN) :: kv, xp(3)
+      REAL(wp) :: a(3)
+      a = xp - ref
+      k6(3) = k6(3) + kv
+      k6(4) = k6(4) + kv*a(2)**2
+      k6(5) = k6(5) + kv*a(1)**2
+      near = .TRUE.
+    END SUBROUTINE add_spring
+  END SUBROUTINE rod_hydrostatic_stiffness
+
+  SUBROUTINE rod_estimate_terms(rod, opts, time, dt, mass6, k6, w2, shift, ErrStat, ErrMsg, bathymetry, &
+                                rod_start, parent)
+    !! A free or pinned rod's own terms of the sub-step estimate, shared by step_rod_system, the
+    !! staggered multibody march and the deck without lines. A free rod: its seabed contact
+    !! (rod_contact_stiffness) and waterplane stiffness (rod_hydrostatic_stiffness) about its
+    !! centre in k6, over its structural plus added mass in mass6 (structural only near the
+    !! surface, whose crossing changes the added mass within the step). A pinned rod: its swing
+    !! about the pin (pinned_swing_omega2, with its contact and waterplane stiffness about the
+    !! pin) in w2, its rotational inertia about the pin in mass6(4:6) with mass6(1:3) = 0, and
+    !! shift = r - pin, which carries the arms of its line springs from its centre to its pin.
+    !! rod_start (a host-pinned rod) is the rod at its step-start pin, bounded together with it.
+    !! parent (a rod pinned to a body) gives the pin acceleration and, through the reduced mass
+    !! m m_b/(m + m_b) with the translational added mass left out, a lower bound of the inertia
+    !! about the pin when the body moves with the swing.
+    TYPE(RodState), INTENT(IN) :: rod
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: time, dt
+    REAL(wp), INTENT(OUT) :: mass6(6), k6(6), w2, shift(3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    TYPE(RodState), INTENT(IN), OPTIONAL :: rod_start
+    TYPE(RigidBodyState), INTENT(IN), OPTIONAL :: parent
+    REAL(wp) :: f(3), m(3), added6(6, 6), drag6(6, 6), buoy(4), mp(3, 3), kh(6), kc, a6(6, 6)
+    REAL(wp) :: added0(6, 6), buoy0(4), a60(6, 6), p(3)
+    LOGICAL :: near, near0
+    INTEGER :: k
+    TYPE(RodState) :: rc
+
+    mass6 = CD_ZERO
+    k6 = CD_ZERO
+    w2 = CD_ZERO
+    shift = CD_ZERO
+    CALL rod_environment_force(rod, opts, time, f, m, added6, drag6, ErrStat, ErrMsg, buoyancy=buoy)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    IF (rod%is_pinned) THEN
+      rc = rod
+      a6 = added6
+      IF (PRESENT(parent)) THEN
+        p = rod%pin - parent%r
+        rc%pin_a = parent%a + cross3(parent%alpha, p) + cross3(parent%omega, cross3(parent%omega, p))
+        rc%pin0_a = rc%pin_a
+        IF (parent%mass > CD_ZERO) rc%mass = rod%mass*parent%mass/(rod%mass + parent%mass)
+        a6(1:3, :) = CD_ZERO
+        a6(:, 1:3) = CD_ZERO
+      END IF
+      kh = CD_ZERO
+      CALL rod_contact_stiffness(rod, opts, rod%pin, dt, kh, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL rod_hydrostatic_stiffness(rod, opts, time, rod%pin, dt, kh, near, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      kc = kh(4) + kh(5)
+      IF (PRESENT(rod_start)) THEN
+        CALL rod_environment_force(rod_start, opts, time, f, m, added0, drag6, ErrStat, ErrMsg, buoyancy=buoy0)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        kh = CD_ZERO
+        CALL rod_contact_stiffness(rod_start, opts, rod_start%pin, dt, kh, ErrStat, ErrMsg, bathymetry)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        CALL rod_hydrostatic_stiffness(rod_start, opts, time, rod_start%pin, dt, kh, near0, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        kc = MAX(kc, kh(4) + kh(5))
+        near = near .OR. near0
+        a60 = added0
+        IF (near) THEN
+          a6 = CD_ZERO
+          a60 = CD_ZERO
+        END IF
+        mp = pinned_rotational_inertia(rc, a6)
+        w2 = pinned_swing_omega2(rc, opts, mp, added6, buoy, pinned_rotational_inertia(rod_start, a60), added0, &
+                                 buoy0, k_extra=kc)
+      ELSE
+        IF (near) a6 = CD_ZERO
+        mp = pinned_rotational_inertia(rc, a6)
+        w2 = pinned_swing_omega2(rc, opts, mp, added6, buoy, k_extra=kc)
+      END IF
+      DO k = 1, 3
+        mass6(3 + k) = mp(k, k)
+      END DO
+      shift = rod%r - rod%pin
+    ELSE
+      CALL rod_contact_stiffness(rod, opts, rod%r, dt, k6, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL rod_hydrostatic_stiffness(rod, opts, time, rod%r, dt, k6, near, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      mass6(1:3) = rod%mass
+      mass6(4:6) = global_inertia_diag(rod%rot_mat, rod%inertia)
+      IF (.NOT. near) THEN
+        DO k = 1, 6
+          mass6(k) = mass6(k) + MAX(CD_ZERO, added6(k, k))
+        END DO
+      END IF
+    END IF
+  END SUBROUTINE rod_estimate_terms
+
+  SUBROUTINE rigid6_contact_stiffness(body, opts, time, dt, k6, ErrStat, ErrMsg, bathymetry)
+    !! Add to k6 the diagonal seabed contact stiffness of a Rigid6 body about its reference point
+    !! that can act within the coming step (contact_within_reach): the reference-point penalty of
+    !! rigid6_seabed_contact (kBot over 1 m^2, heave only) and the stations of the rods fixed to
+    !! the body, posed as rigid6_rod_loads poses them, with the body's rigid-body motion; and the
+    !! waterplane stiffness of those rods near the surface (rod_hydrostatic_stiffness).
+    TYPE(RigidBodyState), INTENT(IN) :: body
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: time, dt
+    REAL(wp), INTENT(INOUT) :: k6(6)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: k
+    REAL(wp) :: r(3)
+    LOGICAL :: within, near
+    TYPE(RodState) :: rs
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (opts%kbot > CD_ZERO) THEN
+      CALL contact_within_reach(body%r, body%v, NORM2(body%a), CD_ZERO, dt, opts, within, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (within) k6(3) = k6(3) + opts%kbot
+    END IF
+    IF (.NOT. ALLOCATED(body%att_rods)) RETURN
+    DO k = 1, SIZE(body%att_rods)
+      rs = body%att_rods(k)
+      r = MATMUL(body%rot_mat, body%att_c(:, k))
+      rs%r = body%r + r
+      rs%rot_mat = MATMUL(body%rot_mat, body%att_rot(:, :, k))
+      rs%v = body%v + cross3(body%omega, r)
+      rs%omega = body%omega
+      rs%a = body%a + cross3(body%alpha, r) + cross3(body%omega, cross3(body%omega, r))
+      rs%alpha = body%alpha
+      rs%has_held = .FALSE.
+      CALL rod_contact_stiffness(rs, opts, body%r, dt, k6, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL rod_hydrostatic_stiffness(rs, opts, time, body%r, dt, k6, near, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    END DO
+  END SUBROUTINE rigid6_contact_stiffness
 
   PURE SUBROUTINE add_arm_block6(mat, blk, arm)
     !! Add T^T blk T to a 6x6 rigid-body matrix about the reference point, T = [I, -[arm]x]
@@ -20564,7 +21312,7 @@ CONTAINS
     mat(4:6, 4:6) = mat(4:6, 4:6) - MATMUL(s, b_s)
   END SUBROUTINE add_arm_block6
 
-  SUBROUTINE rod_environment_force(rod, opts, time, force, moment, added_mass, drag_dv, ErrStat, ErrMsg)
+  SUBROUTINE rod_environment_force(rod, opts, time, force, moment, added_mass, drag_dv, ErrStat, ErrMsg, buoyancy)
     !! Distributed hydrostatic and Morison loads of a rigid rod about its centre, the rod's 6x6
     !! hydrodynamic added-mass matrix about the same point (global frame) and the 6x6 derivative
     !! drag_dv of the drag force/moment w.r.t. the rod (velocity, angular velocity), which the
@@ -20599,12 +21347,15 @@ CONTAINS
     !! and no host dynamic pressure the side keeps 1 + CaAx. Host-held fluid is sampled at the NumSegs + 1
     !! segment stations and interpolated linearly along the rod; when the host also supplies the
     !! dynamic pressure the end caps carry it as with deck waves (side axial term CaAx only).
+    !! buoyancy (optional) returns the slice buoyancy alone: its upward total and its first
+    !! moment about the rod centre, the sum of rhoW g V_i (s_i q + c_i p) over the stations.
     TYPE(RodState), INTENT(IN) :: rod
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(IN) :: time
     REAL(wp), INTENT(OUT) :: force(3), moment(3), added_mass(6, 6), drag_dv(6, 6)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: buoyancy(4)
 
     REAL(wp), PARAMETER :: gp2(2) = [-0.57735026918962576451_wp, 0.57735026918962576451_wp]
     REAL(wp), PARAMETER :: gx10(10) = [-0.97390652851717174343_wp, -0.86506336668898453635_wp, &
@@ -20624,6 +21375,7 @@ CONTAINS
     REAL(wp) :: r0, area, lseg, sphi, rs, eta_mean, ax_fk, s_a, h_a, h_b, dh, tlo, thi, tmp, th1, th2, th
     REAL(wp) :: f_end(2), eta_end(2), h_st(0:MAX(1, rod%nsegs))
     REAL(wp) :: vol_end, kq, vq, u(3), du(3), eta, pd, x(3), v_end(3), arm(3), n_e(3), eta_star, f_c(3)
+    REAL(wp) :: buoy(4)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -20631,6 +21383,8 @@ CONTAINS
     moment = CD_ZERO
     added_mass = CD_ZERO
     drag_dv = CD_ZERO
+    buoy = CD_ZERO
+    IF (PRESENT(buoyancy)) buoyancy = CD_ZERO
     nseg = MAX(1, rod%nsegs)
     axis = rod%rot_mat(:, 1)
     r0 = 0.5_wp*rod%diam
@@ -20719,6 +21473,7 @@ CONTAINS
       END IF
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
+    IF (PRESENT(buoyancy)) buoyancy = buoy
 
     ! rodHydro moordyn: MoorDyn's waterplane moment (pi d^4/16) rho g sin(phi) cos(phi) with its
     ! end-cap moment, whose net exceeds the exact displaced-volume moment by (pi d^4/32) rho g
@@ -20815,6 +21570,8 @@ CONTAINS
       fb = [CD_ZERO, CD_ZERO, opts%rhoW*vol*opts%g]
       force = force + fb
       moment = moment + cross3(arm_s + c*pvec, fb)
+      buoy(1) = buoy(1) + fb(3)
+      buoy(2:4) = buoy(2:4) + fb(3)*(arm_s + c*pvec)
       rel = us - vs
       acc_axial = DOT_PRODUCT(dus, axis)*axis
       rel_axial = DOT_PRODUCT(rel, axis)*axis
@@ -21208,12 +21965,14 @@ CONTAINS
         okind(nobj) = OBJ_ROD
         idx(nobj) = i
       END DO
-      ! pinned rods (to a fixed pin or to a body) with a line, or on a moving body: two
-      ! rotations about the pin; the pin force acts on the parent body
+      ! pinned rods (to a fixed pin, to a body, or to a host node held at its initial pose: a
+      ! CoupledPinned rod) with a line, or on a moving body: two rotations about the pin; the
+      ! pin force acts on the parent body
       IF (.NOT. opts%has_motion_file) THEN
         DO i = 1, SIZE(rods)
           ibp = pinned_body_of_rod_type(rods(i)%rod_type)
-          IF (TRIM(rods(i)%rod_type) /= 'pinned' .AND. ibp < 1) CYCLE
+          IF (TRIM(rods(i)%rod_type) /= 'pinned' .AND. TRIM(rods(i)%rod_type) /= 'coupledpinned' .AND. &
+              ibp < 1) CYCLE
           k = rod_point_index(points, rods(i)%id, 1)
           j = rod_point_index(points, rods(i)%id, 2)
           ok = point_has_line(k)
@@ -23136,10 +23895,11 @@ CONTAINS
   SUBROUTINE CD_Init_Deck_Aggregate_Rod(rod_types, rods, points, opts, rt, ErrStat, ErrMsg, host_dcm)
     !! Populate the opaque rod runtime for the coupled aggregate: build the rod states and retain
     !! the deck options + points the per-step marcher needs (the aggregate keeps neither). The rod
-    !! twin of CD_Init_Deck_Aggregate_Rigid6. Coupled/Vessel rods become host nodes (one per rod,
-    !! in deck ROD order) at their End A; host_dcm is the host orientation at Init (the ZYX
-    !! global-to-platform DCM of PtfmInit, identity when absent), so the rod frame in platform
-    !! axes is host_dcm R0 and follows the host orientation afterwards.
+    !! twin of CD_Init_Deck_Aggregate_Rigid6. Coupled/Vessel and CoupledPinned/VesselPinned rods
+    !! become host nodes (one per rod, in deck ROD order) at their End A; host_dcm is the host
+    !! orientation at Init (the ZYX global-to-platform DCM of PtfmInit, identity when absent), so
+    !! the frame of a Coupled rod in platform axes is host_dcm R0 and follows the host orientation
+    !! afterwards. A CoupledPinned rod takes only the position of its node: it turns about it.
     TYPE(DeckRodType), INTENT(IN) :: rod_types(:)
     TYPE(DeckRod), INTENT(IN) :: rods(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
@@ -23150,8 +23910,21 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: host_dcm(3, 3)
     INTEGER :: ir, k, nh
 
-    CALL init_rod_states(rod_types, rods, points, rt%rods, ErrStat, ErrMsg)
+    ! An end of a Pinned or CoupledPinned rod that no line attaches to needs no Rod<N>A/B point
+    ! (a CoupledPinned rod often carries its line at End B only, and a pendulum none): its
+    ! pin holds the rod. Every other rod keeps the rule that both ends have a point.
+    CALL init_rod_states(rod_types, rods, points, rt%rods, ErrStat, ErrMsg, no_points=.TRUE.)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    DO ir = 1, SIZE(rt%rods)
+      IF (rt%rods(ir)%is_pinned) CYCLE
+      IF (rt%rods(ir)%point_a_index == 0 .OR. rt%rods(ir)%point_b_index == 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'Rod state initialization requires Rod<N>A and Rod<N>B points: ROD '// &
+                  TRIM(int_to_str(rt%rods(ir)%rod_id))//' ('//TRIM(rods(ir)%rod_type)//') has no line or Rod'// &
+                  TRIM(int_to_str(rt%rods(ir)%rod_id))//MERGE('A', 'B', rt%rods(ir)%point_a_index == 0)// &
+                  ' POINT at that end; on the coupled route only a Pinned or CoupledPinned rod may leave an end free')
+        RETURN
+      END IF
+    END DO
     rt%opts = opts
     rt%points = points
     rt%host_o0 = CD_ZERO
@@ -23159,43 +23932,54 @@ CONTAINS
     rt%host_o0(2, 2) = CD_ONE
     rt%host_o0(3, 3) = CD_ONE
     IF (PRESENT(host_dcm)) rt%host_o0 = host_dcm
-    nh = COUNT(rt%rods%is_prescribed)
+    nh = COUNT(rt%rods%is_prescribed .OR. rt%rods%is_host_pinned)
     ALLOCATE (rt%host_rod(nh), rt%host_rrel(3, 3, nh))
     k = 0
     DO ir = 1, SIZE(rt%rods)
-      IF (.NOT. rt%rods(ir)%is_prescribed) CYCLE
+      IF (.NOT. (rt%rods(ir)%is_prescribed .OR. rt%rods(ir)%is_host_pinned)) CYCLE
       k = k + 1
       rt%host_rod(k) = ir
       rt%host_rrel(:, :, k) = MATMUL(rt%host_o0, rt%rods(ir)%rot_mat)
-      ! a host-driven rod starts at rest in the host's Init pose; its a/alpha are the host's
-      rt%rods(ir)%accel_valid = .TRUE.
+      ! a host-driven rod starts at rest in the host's Init pose; its a/alpha are the host's (a
+      ! host-pinned rod solves its own at the first step, like a free rod)
+      IF (rt%rods(ir)%is_prescribed) rt%rods(ir)%accel_valid = .TRUE.
     END DO
     rt%snap_rods = rt%rods
     rt%stage_rods = rt%rods
   END SUBROUTINE CD_Init_Deck_Aggregate_Rod
 
   PURE INTEGER FUNCTION CD_Rod_NHost(rt) RESULT(n)
-    !! Number of host-driven (Coupled/Vessel) rods, i.e. the rod host nodes (0 if unpopulated).
+    !! Number of host-driven (Coupled/Vessel and CoupledPinned/VesselPinned) rods, i.e. the rod
+    !! host nodes (0 if unpopulated).
     TYPE(CD_RodRuntimeType), INTENT(IN) :: rt
     n = 0
     IF (ALLOCATED(rt%host_rod)) n = SIZE(rt%host_rod)
   END FUNCTION CD_Rod_NHost
 
   SUBROUTINE CD_Rod_SetHostKinematics(rt, position, velocity, acceleration, ErrStat, ErrMsg, orientation, &
-                                      angular_velocity, angular_acceleration)
+                                      angular_velocity, angular_acceleration, step_start)
     !! Impose the host node kinematics (End A position/velocity/acceleration, the host
     !! orientation and angular rates, all global; arrays shaped (3[,3], NHost)) on every
     !! Coupled/Vessel rod: R = O^T (O0 R0), centre = End A + (L/2) R e1 with the rigid
     !! velocity/acceleration transfer. Without an orientation the Init orientation is held;
-    !! without angular rates they are zero. Atomic: validates everything before any change.
+    !! without angular rates they are zero. A CoupledPinned rod takes the node translation as
+    !! its pin kinematics and ignores the orientation and angular rates: it keeps its own
+    !! rotation and follows the pin (mb_snap_pinned, with its committed angular acceleration).
+    !! Atomic: validates everything before any change.
+    !!
+    !! step_start: the kinematics are those of the committed time (a transfer that does not
+    !! advance, CD_AGG_UpdateStates_Moving), not the t + dt input of a coming step; the next step
+    !! of a CoupledPinned rod then starts from this pin (RodState%pin0). Default .FALSE.
     TYPE(CD_RodRuntimeType), INTENT(INOUT) :: rt
     REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: step_start
     INTEGER :: k, ir, nh
     REAL(wp) :: o(3, 3), rot(3, 3), arm(3), w(3), al(3)
+    TYPE(RigidBodyState) :: no_parent(0)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -23221,6 +24005,16 @@ CONTAINS
     END IF
     DO k = 1, nh
       ir = rt%host_rod(k)
+      IF (rt%rods(ir)%is_host_pinned) THEN
+        rt%rods(ir)%pin = position(:, k)
+        rt%rods(ir)%pin_v = velocity(:, k)
+        rt%rods(ir)%pin_a = acceleration(:, k)
+        CALL mb_snap_pinned(rt%rods(ir), no_parent)
+        IF (PRESENT(step_start)) THEN
+          IF (step_start) CALL set_rod_pin_start(rt%rods(ir))
+        END IF
+        CYCLE
+      END IF
       o = rt%host_o0
       IF (PRESENT(orientation)) o = orientation(:, :, k)
       w = CD_ZERO
@@ -23245,6 +24039,8 @@ CONTAINS
                                       angular_acceleration)
     !! The committed kinematics of host node k (End A of the k-th Coupled/Vessel rod) and the
     !! host orientation O = (O0 R0) R^T it implies -- the inverse of CD_Rod_SetHostKinematics.
+    !! A CoupledPinned rod implies no host orientation or angular rates: its node reports the
+    !! Init orientation and zero rates, which CD_Rod_SetHostKinematics ignores for it.
     TYPE(CD_RodRuntimeType), INTENT(IN) :: rt
     INTEGER, INTENT(IN) :: k
     REAL(wp), INTENT(OUT) :: position(3), velocity(3), acceleration(3), orientation(3, 3)
@@ -23270,15 +24066,19 @@ CONTAINS
     velocity = rt%rods(ir)%v - cross3(rt%rods(ir)%omega, arm)
     acceleration = rt%rods(ir)%a - cross3(rt%rods(ir)%alpha, arm) - &
                    cross3(rt%rods(ir)%omega, cross3(rt%rods(ir)%omega, arm))
+    IF (rt%rods(ir)%is_host_pinned) THEN
+      orientation = rt%host_o0
+      RETURN
+    END IF
     orientation = MATMUL(rt%host_rrel(:, :, k), TRANSPOSE(rt%rods(ir)%rot_mat))
     angular_velocity = rt%rods(ir)%omega
     angular_acceleration = rt%rods(ir)%alpha
   END SUBROUTINE CD_Rod_GetHostKinematics
 
   SUBROUTINE CD_Rod_ScatterHostPoints(system, rt, q, v, a)
-    !! Write the Rod<N>A/B attachment-point kinematics of every Coupled/Vessel rod into the
-    !! full coupled-block arrays (3, n_system_coupled_dof/3) of the EI=0 system; every other
-    !! block is left untouched.
+    !! Write the Rod<N>A/B attachment-point kinematics of every host-driven rod (Coupled/Vessel
+    !! and CoupledPinned) into the full coupled-block arrays (3, n_system_coupled_dof/3) of the
+    !! EI=0 system; every other block is left untouched.
     TYPE(CD_SystemType), INTENT(IN) :: system
     TYPE(CD_RodRuntimeType), INTENT(IN) :: rt
     REAL(wp), INTENT(INOUT) :: q(:, :), v(:, :), a(:, :)
@@ -23295,7 +24095,7 @@ CONTAINS
           pidx = rt%rods(ir)%point_b_index
           arm = rt%rods(ir)%half_length*rt%rods(ir)%rot_mat(:, 1)
         END IF
-        base = system_point_base(system, rt%points(pidx)%id)
+        base = rod_end_base(system, rt%points, pidx)
         IF (base < 0 .OR. base/3 + 1 > SIZE(q, 2)) CYCLE
         q(:, base/3 + 1) = rt%rods(ir)%r + arm
         v(:, base/3 + 1) = rt%rods(ir)%v + cross3(rt%rods(ir)%omega, arm)
@@ -23313,16 +24113,41 @@ CONTAINS
     !! rod_environment_force (held host fluid when set), seabed contact, and the rigid-body and
     !! added-mass inertia -M a of the rod at its host-prescribed acceleration, including the
     !! gyroscopic term w x (I w).
-    TYPE(CD_SystemType), INTENT(IN) :: system
-    TYPE(CD_RodRuntimeType), INTENT(IN) :: rt
+    !!
+    !! A CoupledPinned rod returns a force and no moment (MoorDyn-F's coupled pinned rod): the
+    !! load it exerts on its pin, its net load less its inertia -M a. This is the direct
+    !! feedthrough of the pin acceleration, evaluated at the rod's current state:
+    !!  * the pin position, velocity and acceleration are the End A motion of the rod state,
+    !!    which CD_Rod_SetHostKinematics has moved with the host node (an output probe's
+    !!    off-step kinematics included). They are re-derived from the rod state here (equal to
+    !!    the host's values to round-off) so that the force depends on the checkpointed rod
+    !!    state only: a restored run evaluates it bit for bit, also between steps;
+    !!  * the rotation and the angular velocity are the rod's committed states (a probe moves
+    !!    the pin, not the rotation), and the fluid is the step's held host fluid, as for every
+    !!    other object a CalcOutput evaluates;
+    !!  * the angular acceleration is solved again for the current pin acceleration
+    !!    (rod_body_acceleration at dt = 0); the committed one is not used, so a probe sees the
+    !!    rod's effective inertia about the pin;
+    !!  * the attached lines keep their committed interior state, accelerations included (as
+    !!    every output evaluation does), and their end loads are taken at the end accelerations
+    !!    of the re-solved rotation: the loads come with the end accelerations the system holds
+    !!    (the probe overlay places the Rod<N>A/B ends with the probe pin and the committed
+    !!    angular acceleration), and the solve moves their end-node inertia to the re-solved
+    !!    ones with the lines' coupled mass block, D = -M_cc (frozen_interior; the step's
+    !!    corrector instead lets the interior follow). The coupled loads are linear in the end
+    !!    accelerations at a held interior, so this is exact: the force does not depend on
+    !!    which end accelerations the line loads were evaluated with.
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    TYPE(CD_RodRuntimeType), INTENT(INOUT) :: rt
     REAL(wp), INTENT(IN) :: loads(:, :)
     INTEGER, INTENT(IN) :: k
     REAL(wp), INTENT(OUT) :: force(3), moment(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: ir, base, j
+    INTEGER :: ir, base, j, n, es
     REAL(wp) :: arm(3), f_end(3, 2), f_env(3), m_env(3), f_sb(3), m_sb(3), added6(6, 6), drag6(6, 6)
-    REAL(wp) :: dv(6, 6), acc6(6), ig(3, 3), mc(3)
+    REAL(wp) :: dv(6, 6), acc6(6), ig(3, 3), mc(3), acc(3), alpha(3), pin_host(9)
+    CHARACTER(160) :: em
 
     force = CD_ZERO
     moment = CD_ZERO
@@ -23332,13 +24157,41 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'CD_Rod_HostWrench: host node index out of range'); RETURN
     END IF
     ir = rt%host_rod(k)
+    IF (rt%rods(ir)%is_host_pinned) THEN
+      n = system%n_system_coupled_dof
+      IF (3*SIZE(loads, 2) /= n .OR. SIZE(loads, 1) /= 3) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Rod_HostWrench: load array does not cover the coupled points'); RETURN
+      END IF
+      ! the step workspace serves as scratch between steps (a step refills it before use)
+      CALL ensure_rod_step_workspace(rt%work, n, SIZE(rt%rods), SIZE(system%points))
+      rt%work%loads(1:n) = RESHAPE(loads, [n])
+      CALL CD_Get_System_CoupledMotion(system, rt%work%q(1:n), rt%work%v(1:n), rt%work%a(1:n), es, em)
+      ! the end-node inertia moves with the line interior held (an output evaluation keeps the
+      ! committed interior state, accelerations included)
+      IF (es == CD_SYSTEM_OK) CALL CD_Calc_System_CoupledAccelDerivative(system, rt%work%dload_da, es, em, &
+                                                                         frozen_interior=.TRUE.)
+      IF (es /= CD_SYSTEM_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'CD_Rod_HostWrench: pinned-rod line query failed: '//TRIM(em)); RETURN
+      END IF
+      ! evaluate with the pin re-derived from the rod state, then put the host's values back
+      ! (state-const)
+      pin_host = [rt%rods(ir)%pin, rt%rods(ir)%pin_v, rt%rods(ir)%pin_a]
+      CALL rod_end_a_motion(rt%rods(ir), rt%rods(ir)%pin, rt%rods(ir)%pin_v, rt%rods(ir)%pin_a)
+      CALL rod_body_acceleration(system, rt%points, rt%opts, rt%rods(ir), CD_ZERO, CD_ZERO, &
+                                 [CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO], rt%work, acc, alpha, &
+                                 ErrStat, ErrMsg, pin_load=force)
+      rt%rods(ir)%pin = pin_host(1:3)
+      rt%rods(ir)%pin_v = pin_host(4:6)
+      rt%rods(ir)%pin_a = pin_host(7:9)
+      RETURN
+    END IF
     arm = rt%rods(ir)%half_length*rt%rods(ir)%rot_mat(:, 1)
     f_end = CD_ZERO
     DO j = 1, 2
       IF (j == 1) THEN
-        base = system_point_base(system, rt%points(rt%rods(ir)%point_a_index)%id)
+        base = rod_end_base(system, rt%points, rt%rods(ir)%point_a_index)
       ELSE
-        base = system_point_base(system, rt%points(rt%rods(ir)%point_b_index)%id)
+        base = rod_end_base(system, rt%points, rt%rods(ir)%point_b_index)
       END IF
       IF (base < 0) CYCLE
       IF (base/3 + 1 > SIZE(loads, 2)) THEN
@@ -23760,6 +24613,15 @@ CONTAINS
       rt%rods(ir)%alpha = states(k + 13:k + 15)
       rt%rods(ir)%rot_mat = RESHAPE(states(k + 16:k + 24), [3, 3])
       rt%rods(ir)%accel_valid = .TRUE.
+      ! A CoupledPinned rod's pin is its End A: its kinematics follow from the restored state
+      ! (the End A motion the line ends carry), so the mirror needs no pin entries. The
+      ! continuing run derives its step-start pin from the same committed state with the same
+      ! arithmetic (set_rod_pin_start), so the restored pin0 is bit-identical to it; pin, pin_v
+      ! and pin_a are replaced by the host transfer before the next step or output evaluation.
+      IF (rt%rods(ir)%is_host_pinned) THEN
+        CALL rod_end_a_motion(rt%rods(ir), rt%rods(ir)%pin, rt%rods(ir)%pin_v, rt%rods(ir)%pin_a)
+        CALL set_rod_pin_start(rt%rods(ir))
+      END IF
     END DO
   END SUBROUTINE CD_Rod_Set_States
 
@@ -23873,7 +24735,7 @@ CONTAINS
     INTEGER :: ib, ip, nsub, isub, it
     REAL(wp), ALLOCATABLE :: hk_end(:, :)
     LOGICAL :: conv_s, stall_s
-    REAL(wp) :: omega2, mass6(6)
+    REAL(wp) :: omega2, mass6(6), k6c(6)
 
     converged = .TRUE.
     stalled = .FALSE.
@@ -23892,9 +24754,11 @@ CONTAINS
         mass6(1:3) = rigid(ib)%mass
         IF (rigid(ib)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*rigid(ib)%vol*MAX(CD_ZERO, rigid(ib)%ca)
         mass6(4:6) = global_inertia_diag(rigid(ib)%rot_mat, rigid(ib)%inertia)
-        omega2 = MAX(omega2, rigid_omega2_estimate(system, att_base, att_arm, mass6, &
-                                                   [CD_ZERO, CD_ZERO, rigid(ib)%c33, rigid(ib)%c44, &
-                                                    rigid(ib)%c55, CD_ZERO]))
+        ! hydrostatic restoring plus the seabed contact that acts within the step
+        k6c = [CD_ZERO, CD_ZERO, rigid(ib)%c33, rigid(ib)%c44, rigid(ib)%c55, CD_ZERO]
+        CALL rigid6_contact_stiffness(rigid(ib), opts, time - dt, dt, k6c, ErrStat, ErrMsg, bathymetry)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        omega2 = MAX(omega2, rigid_omega2_estimate(system, att_base, att_arm, mass6, k6c))
       END BLOCK
     END DO
     nsub = rigid_substep_count(omega2, dt)
@@ -24612,9 +25476,9 @@ CONTAINS
     !! kBot/cBot (N/m^3, N.s/m^3) act over a fixed reference contact area
     !! RIGID6_CONTACT_AREA = 1 m^2: k = kBot*1 m^2 [N/m], c = cBot*1 m^2 [N.s/m]. This is a
     !! penalty that keeps the reference point out of the bed, not a footprint model.
-    !! load_dv returns the 6x6 derivative of the normal damping force w.r.t. the body
-    !! (velocity, angular velocity), which the rigid-body step applies implicitly; the spring
-    !! and the regularized friction act at the evaluated position and velocity.
+    !! load_dv returns the 6x6 derivative of the normal damping force and the friction damper (its
+    !! secant coefficient, see rod_seabed_contact) w.r.t. the body velocity, which the rigid-body
+    !! step applies implicitly; the spring acts at the evaluated position.
     TYPE(RigidBodyState), INTENT(IN) :: body
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(OUT) :: force(3), moment(3), load_dv(6, 6)
@@ -24645,6 +25509,9 @@ CONTAINS
       denom = SQRT(body%v(1)**2 + body%v(2)**2 + vreg**2)
       force(1) = -opts%friction_mu*normal*body%v(1)/denom
       force(2) = -opts%friction_mu*normal*body%v(2)/denom
+      ! the friction damper as its secant coefficient, applied implicitly (rod_seabed_contact)
+      load_dv(1, 1) = -opts%friction_mu*normal/denom
+      load_dv(2, 2) = load_dv(1, 1)
     END IF
     force(3) = normal
   END SUBROUTINE rigid6_seabed_contact
@@ -32124,8 +32991,8 @@ CONTAINS
   END SUBROUTINE apply_ptfm_host_bodies
 
   SUBROUTINE apply_ptfm_host_rods(rods, points, ptfm_init)
-    !! Rigid-transform every Coupled/Vessel ROD (its End A/B and its Rod<N>A/B attachment
-    !! points) by the initial platform displacement, p' = r + M^T p (apply_ptfm_init).
+    !! Rigid-transform every Coupled/Vessel and CoupledPinned ROD (its End A/B and its Rod<N>A/B
+    !! attachment points) by the initial platform displacement, p' = r + M^T p (apply_ptfm_init).
     TYPE(DeckRod), INTENT(INOUT) :: rods(:)
     TYPE(DeckPoint), INTENT(INOUT) :: points(:)
     REAL(wp), INTENT(IN) :: ptfm_init(6)
@@ -32133,7 +33000,8 @@ CONTAINS
     INTEGER :: i, j, k
     dcm = ptfm_zyx_dcm(ptfm_init(4:6))
     DO i = 1, SIZE(rods)
-      IF (TRIM(rods(i)%rod_type) /= 'coupled' .AND. TRIM(rods(i)%rod_type) /= 'vessel') CYCLE
+      IF (TRIM(rods(i)%rod_type) /= 'coupled' .AND. TRIM(rods(i)%rod_type) /= 'vessel' .AND. &
+          TRIM(rods(i)%rod_type) /= 'coupledpinned') CYCLE
       rods(i)%end_a = ptfm_init(1:3) + MATMUL(TRANSPOSE(dcm), rods(i)%end_a)
       rods(i)%end_b = ptfm_init(1:3) + MATMUL(TRANSPOSE(dcm), rods(i)%end_b)
       DO j = 1, 2
@@ -32649,7 +33517,7 @@ CONTAINS
     REAL(wp) :: arm(3)
 
     DO ir = 1, SIZE(rod_state)
-      base = system_point_base(system, points(rod_state(ir)%point_a_index)%id)
+      base = rod_end_base(system, points, rod_state(ir)%point_a_index)
       IF (base >= 0) THEN
         arm = MATMUL(rod_state(ir)%rot_mat, [-rod_state(ir)%half_length, CD_ZERO, CD_ZERO])
         q(base + 1:base + 3) = rod_state(ir)%r + arm
@@ -32657,7 +33525,7 @@ CONTAINS
         a(base + 1:base + 3) = rod_state(ir)%a + cross3(rod_state(ir)%alpha, arm) + &
                                cross3(rod_state(ir)%omega, cross3(rod_state(ir)%omega, arm))
       END IF
-      base = system_point_base(system, points(rod_state(ir)%point_b_index)%id)
+      base = rod_end_base(system, points, rod_state(ir)%point_b_index)
       IF (base >= 0) THEN
         arm = MATMUL(rod_state(ir)%rot_mat, [rod_state(ir)%half_length, CD_ZERO, CD_ZERO])
         q(base + 1:base + 3) = rod_state(ir)%r + arm
@@ -32791,6 +33659,16 @@ CONTAINS
       RETURN
     END DO
   END FUNCTION system_point_base
+
+  INTEGER FUNCTION rod_end_base(system, points, pidx) RESULT(base)
+    !! system_point_base of a rod end point; -1 for a rod end without a point (pidx = 0: no line
+    !! attaches there, a coupled-aggregate rod).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    INTEGER, INTENT(IN) :: pidx
+    base = -1
+    IF (pidx > 0) base = system_point_base(system, points(pidx)%id)
+  END FUNCTION rod_end_base
 
   PURE FUNCTION cross3(a, b) RESULT(c)
     REAL(wp), INTENT(IN) :: a(3), b(3)

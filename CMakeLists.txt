@@ -1044,6 +1044,17 @@ set_tests_properties(openfast_aggregate_touchdown PROPERTIES
 set_tests_properties(openfast_aggregate openfast_aggregate_touchdown PROPERTIES
                      RESOURCE_LOCK openfast_aggregate_files)
 
+# Pinned and CoupledPinned rods on the coupled aggregate: the compound-pendulum period, a held
+# host equal to a fixed pin, constant and harmonic pin accelerations against closed forms,
+# sub-cycling, snapshot/restore, the output probe, restart, PtfmInit with the static start, a
+# step without the staged rods, and rod ends without a line.
+add_executable(test_openfast_pinned_rod tests/test_openfast_pinned_rod.f90)
+target_link_libraries(test_openfast_pinned_rod PRIVATE cabledyn_core)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/openfast_pinned_rod)
+add_test(NAME openfast_pinned_rod COMMAND test_openfast_pinned_rod
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/openfast_pinned_rod)
+set_tests_properties(openfast_pinned_rod PROPERTIES LABELS "fortran;dynamic;openfast;validation")
+
 # Maintained IEA-15 MW mixed deck: the finite-EI power cable has a genuine multi-node
 # grounded run and marches through the OpenFAST aggregate at 40 Hz with host current.
 add_executable(test_openfast_touchdown tests/test_openfast_touchdown.f90)
@@ -2395,6 +2406,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_openfast_shell
       test_hermite_fmf
       test_openfast_aggregate
+      test_openfast_pinned_rod
       test_of_mooring_counters
       test_ei0_mesh_scaling_counters
       test_c_api

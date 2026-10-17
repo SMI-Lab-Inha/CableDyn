@@ -128,6 +128,28 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - `CD_HermiteCable_Dyn_Curvature_Exact` and `CD_HFMF_Curvature_Exact`: the exact geometric
   nodal curvature of the cubic-Hermite centreline, the larger one-sided trace at a node, which
   `CD_HermiteCable_Dyn_Curvature` and `CD_HFMF_Curvature` returned up to 0.1.1.
+- `Pinned` and `CoupledPinned`/`VesselPinned` rods in coupled OpenFAST (`CompMooring = 5`) runs.
+  A `Pinned` rod turns about its fixed End A, which the coupled route previously refused. A
+  `CoupledPinned` rod (MoorDyn-F's coupled pinned rod) is a node of the coupling mesh at its
+  End A that takes the platform position only: the rod turns about it with its own rotation,
+  the pin acceleration loading that rotation through the rod's inertia, and the node returns
+  the rod's net force less its inertia with zero moment. The angular acceleration in that force
+  is solved for the node's current acceleration, so an output probe sees the rod's effective
+  inertia about the pin. `PtfmInit` moves the rod with the platform, the static initial
+  condition balances it about its pin (a pinned rod that carries no line keeps its deck
+  orientation), sub-cycled steps move the pin along the host path interpolated linearly as for
+  every other host node, the sub-step count resolves the rod's own swing about its pin under
+  its weight, buoyancy and pin acceleration (`|W d_g - B d_b|` and the pin-acceleration load
+  over the inertia about the pin) as well as its lines, so a short pinned rod that carries no
+  line stays stable at a coupling step beyond its explicit limit (a `CoupledPinned` rod takes
+  the stiffer of its step-start and end-of-step wetting, so a pin that crosses the free surface
+  within a step is covered), and checkpoint restarts and correction iterations reproduce the
+  run bit for bit with the existing rod state mirror. An end of a `Pinned` or `CoupledPinned` rod that
+  carries no line needs no `Rod<N>A`/`Rod<N>B` POINT row on the coupled route; other rods still
+  need one at both ends. The C API runs `Pinned` rods, as its manual page already stated. The
+  standalone driver and the C API refuse `CoupledPinned` rods by name; FAST.Farm decks still
+  refuse rods, OpenFAST linearisation still refuses rods, and `CoupledPinned` bodies remain
+  unsupported. See the manual's OpenFAST page (Lifecycle features).
 
 ### Changed
 
@@ -250,6 +272,55 @@ All notable changes to CableDyn are recorded in this file. The format follows
   they can differ in the last printed digit, and by more where a deck amplifies round-off.
 
 ### Fixed
+
+- Seabed contact in the explicit object sub-step estimate. The staggered march of free and
+  pinned rods and Rigid6 bodies (the coupled OpenFAST and C API routes, standalone rod decks and
+  `bodyScheme staggered`) applies the seabed penalty springs explicitly, but sized its sub-steps
+  from the lines, hydrostatics and (pinned rods) the swing only, so a rod or body resting on a
+  stiff seabed at a large coupling step could exceed the central-difference limit and be thrown
+  off the bed. The estimate now adds the contact springs that can act within the step
+  (`kBot d dl` per rod contact station, `kBot` over 1 m² at a body's reference point), in
+  heave, roll and pitch about the reference point, or about the pin of a pinned rod at both pin
+  poses. A station counts from its complete rigid-body motion: its reach
+  `dt |v + w x s| + dt² (|a| + |alpha x s| + |w|² |s| + g)/2` bounds its travel in every
+  direction, and it counts when its height above the highest floor within that horizontal
+  distance (the depth on a flat seabed; on a `bathymetryFile` grid the highest node of the
+  overlapped cells, raised for the crease rounding by the new `CD_Bathymetry_Max_Floor`) is at
+  most the reach plus the rod radius, so a rod sliding or turning towards a shallower bed is
+  covered as well as one landing. The monolithic scheme, which carries the contact in its
+  Jacobian, is unchanged. No shipped example or existing test changes its sub-step count.
+- Line-free explicit object marches without a sub-step estimate. A standalone deck without lines
+  marched its bodies and rods by the explicit central difference at `dtM` with no sub-steps, and
+  the `bodyScheme staggered` multibody march skipped the bodies (and rods) when no `EI = 0` line
+  was present (finite-EI cables only), so a short pinned rod or a body on a stiff seabed could
+  exceed the explicit limit there. Both now take the estimate from the objects' own terms
+  (hydrostatic restoring, seabed contact, a pinned rod's swing about its pin), and the staggered
+  multibody march sizes a pinned rod as the coupled route does: its line springs through their
+  arms from the pin on its inertia about the pin, plus its swing and contact about the pin. A 1 m
+  dry pinned rod at `dtM = 0.6 s` (`omega0 dt = 2.29`) now takes 6 sub-steps on both routes and
+  equals a `dtM = 0.1 s` run at every row, where it previously turned over. No shipped example
+  or existing test changes its sub-step count.
+- Further terms of the explicit object sub-step estimate (coupled and C API routes, standalone
+  rod decks, decks without lines and `bodyScheme staggered`; the monolithic scheme is
+  unchanged): a rod near the free surface adds its waterplane stiffness (`rhoW g D dl` at each
+  station whose section can cross the surface within the step, `rhoW g pi D^2/4` where its axis
+  can cross it) and takes its dry inertia, for free and pinned rods and the rods fixed to a
+  Rigid6 body, so a floating rod (a 5 cm rod at `omega dt = 2.2`) no longer grows; a finite-EI
+  cable on a body or rod of the staggered march adds its attachment spring (`EA/L` along its end
+  force, `T/L` across), as the explicit cable end force needs; a rod pinned to a body takes the
+  body's pin acceleration and a reduced-mass lower bound of its inertia about the pin; a step
+  that would need more than the 256-sub-step cap is warned about once per run. Of the existing
+  tests, only the staggered pinned-cable deck of `clamped_cable_ends` changes (10 steps now
+  sub-cycled 2 to 5 times; printed results unchanged); no shipped example changes.
+- Seabed friction of rods and Rigid6 bodies is applied implicitly. The regularised friction
+  `-mu N v/sqrt(v^2 + vreg^2)` (`vreg = 1e-3 m/s`) is a damper of up to `mu N/vreg`, far stiffer
+  than any practical step, and was evaluated explicitly, so a rod or body resting on a
+  frictional bed chattered (velocity and friction flipping every step). It now enters the
+  implicit velocity derivative of the step as its secant coefficient `mu N/sqrt(v^2 + vreg^2)`,
+  as the line nodes treat it implicitly: a rod held in a cross current holds still (creep at
+  `vreg F/(mu N)`) where it slid back and forth at a few mm/s. This changes the results of decks
+  with rods or bodies on a frictional seabed; none of the shipped examples or existing tests has
+  one.
 
 - Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated
   the axial force and the dynamic loads at the blended configuration

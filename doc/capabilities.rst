@@ -179,8 +179,11 @@ and ``RODS`` are MoorDyn-compatible deck records that the driver translates; the
 alternative discretisation of the line. Supported translations include fixed/coupled/vessel
 attachments, free or connecting masses and clumps, ``Point3`` buoys, ``Rigid6`` bodies, and coupled
 rigid rods. In OpenFAST, ``Coupled``/``Vessel`` bodies and rods are platform-borne 6-DOF nodes that
-return a force and a moment; the C API and Python run free bodies and rods in still water. The
-coupled body/rod routes carry checkpoint state and SeaState drag, Froude–Krylov, and added mass.
+return a force and a moment, ``CoupledPinned``/``VesselPinned`` rods turn about a platform-borne
+node that takes the platform position only and returns a force with zero moment, and ``Pinned``
+rods turn about a fixed End A; ``CoupledPinned`` bodies are not supported. The C API and Python
+run free, fixed and pinned rods and free bodies in still water. The coupled body/rod routes carry
+checkpoint state and SeaState drag, Froude–Krylov, and added mass.
 ``Rigid6`` also carries the documented hydrostatic restoring terms. Consult :doc:`driver_format`
 before using an imported object because unsupported fields fail closed.
 

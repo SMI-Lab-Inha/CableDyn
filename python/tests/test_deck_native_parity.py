@@ -298,6 +298,31 @@ def test_rod_channel_quantities_follow_the_native_vocabulary():
 # --------------------------------------------------------------------------- rods
 
 
+@pytest.mark.parametrize("kind", ["CoupledPinned", "CpldPin", "VesselPinned", "VesPin"])
+def test_coupled_pinned_rods_need_a_coupled_host(kind):
+    # native finalize_checks: the host moves the pin, so the standalone driver refuses the rod
+    # (zero-length ones too) and the coupled route takes it
+    pinned = _spar((_SPAR_ROD, _SPAR_ROD.replace("Free", kind)))
+    _rejects(pinned, "requires a coupled host")
+    zero_length = _spar(
+        (_SPAR_ROD, _SPAR_ROD.replace("Free", kind).replace("-20.0   1", "-20.0   0"))
+    )
+    _rejects(zero_length, "requires a coupled host")
+    still = ("uniform 0.5 0.0 0.0  current", "none current")
+    DeckFile.from_text(
+        _spar((_SPAR_ROD, _SPAR_ROD.replace("Free", kind)), still), caller_driven=True
+    )
+    # a zero-length one is a Coupled point at End A that its End B point merges into
+    DeckFile.from_text(
+        _spar(
+            (_SPAR_ROD, _SPAR_ROD.replace("Free", kind).replace("-20.0   1", "-20.0   0")),
+            still,
+            ('"Point2px"\n"Point2pz"', '"Point3px"\n"Point3pz"'),
+        ),
+        caller_driven=True,
+    )
+
+
 def test_rod_endpoints_have_an_admissible_magnitude():
     text = _spar((_SPAR_ROD, _SPAR_ROD.replace("0.0   0.0   -30.0", "2.0e6   0.0   -30.0")))
     _rejects(text, "ROD endpoint coordinates must be at most 1e6 m")
@@ -643,8 +668,6 @@ def test_named_rejections_of_moordyn_only_rows():
     _rejects(_options(_HELD, "airy 2 8 0 waves regular"), "is a positional")
     _rejects(_options(_HELD, "200 WaveComponents", "600 WaveDirections"), "at most 100000")
     DeckFile.from_text(_options(_HELD, "200 WaveComponents", "500 WaveDirections"))
-    coupled_pinned = _SPAR_ROD.replace("Free", "CoupledPinned")
-    _rejects(_spar((_SPAR_ROD, coupled_pinned)), "CoupledPinned/VesselPinned RODS")
     _rejects(_edit(_HELD, ("0.252 390.0", "0.252 39+1")), "is not a plain number")
     turbine = _edit(_HELD, ("2 Coupled 0.0", "2 Turbine1 0.0"))
     _rejects(turbine, "Turbine<J> points need a TURBINES section")

@@ -32,7 +32,8 @@ checkpoint-restart, quasi-static linearisation (``dYdu``), FAST.Farm farm-level 
 ``C33``/``C44``/``C55`` hydrostatic restoring, restart state, and SeaState drag / Froude-Krylov /
 added-mass), coupled ``Point3`` buoys (buoyancy and SeaState drag / Froude-Krylov / added-mass), and
 coupled rigid rods with host-driven endpoints, correction rewind, checkpoint state, and two-point
-Gauss SeaState sampling.
+Gauss SeaState sampling, including MoorDyn-F's coupled pinned rods (``CoupledPinned``, force only)
+and rods pinned to a fixed point.
 
 The input/output Jacobian has two deliberately different contracts. During an ordinary nonlinear
 OpenFAST run, CableDyn returns the partial direct-feedthrough derivative at fixed committed internal

@@ -325,6 +325,9 @@ _ROD_ATTACHMENT_ALIASES = {
     "con": "free",
     "ves": "vessel",
     "cpld": "coupled",
+    "cpldpin": "coupledpinned",
+    "vesselpinned": "coupledpinned",
+    "vespin": "coupledpinned",
 }
 _RIGID_END_CONNECTIONS = frozenset({"rigid", "infinity", "inf"})
 # TorsStiffness keywords of an end free to twist (a numeric 0 is free too)
@@ -1866,7 +1869,8 @@ class DeckFile:
         end points of a rod fixed to a body (RODS type ``Body<M>``) into ``Body<M>``
         points. Native ``collapse_zero_length_rods`` first merges both ends of a
         zero-length rod (NumSegs 0) into one connector point typed after the rod:
-        Free, Fixed (fixed or pinned rod), Coupled, or ``Body<M>``. ``point_types``,
+        Free, Fixed (fixed or pinned rod), Coupled (coupled or CoupledPinned rod), or
+        ``Body<M>``. ``point_types``,
         ``point_ids`` and ``point_z`` are updated in place.
         """
         merged: dict[str, str] = {}
@@ -1904,7 +1908,9 @@ class DeckFile:
                     resolved = kind
                 elif kind == "pinned":
                     resolved = "fixed"
-                elif kind == "vessel":
+                elif kind in {"vessel", "coupledpinned"}:
+                    # a zero-length CoupledPinned rod is a Coupled point on the coupled
+                    # route (and refused elsewhere, see the RODS checks)
                     resolved = "coupled"
                 elif body is not None:
                     resolved = f"body{_native_id_suffix(body.group(1))}"
@@ -3230,10 +3236,13 @@ class DeckFile:
                     f"{self._at(row)}: rod references missing rod type {row.tokens[1]}"
                 )
             rod_kind = _ROD_ATTACHMENT_ALIASES.get(row.tokens[2].lower(), row.tokens[2].lower())
-            if rod_kind in {"coupledpinned", "cpldpin", "vesselpinned", "vespin"}:
+            # native finalize_checks: the host moves the pin of a CoupledPinned rod, so only the
+            # coupled route (a caller-driven deck) takes one, zero-length ones included
+            if rod_kind == "coupledpinned" and not self.caller_driven:
                 raise DeckFormatError(
-                    f"{self._at(row)}: CoupledPinned/VesselPinned RODS are not supported (use "
-                    "Coupled, Vessel, Pinned or Body<N>Pinned)"
+                    f"{self._at(row)}: CoupledPinned/VesselPinned ROD requires a coupled host "
+                    "(OpenFAST CompMooring = 5); in a standalone deck use Pinned, Body<N>Pinned, "
+                    "or a Coupled rod with a motionFile"
                 )
             # Body<N> (fixed to the body) or Body<N>Pinned / Body<N>Pin (End A pinned to it)
             body_kind = re.fullmatch(r"body([0-9]+)(?:pin|pinned)?", rod_kind)
@@ -3242,10 +3251,10 @@ class DeckFile:
                     raise DeckFormatError(
                         f"{self._at(row)}: ROD attachment must name a Rigid6 (Free) BODY"
                     )
-            elif rod_kind not in {"free", "fixed", "coupled", "vessel", "pinned"}:
+            elif rod_kind not in {"free", "fixed", "coupled", "vessel", "pinned", "coupledpinned"}:
                 raise DeckFormatError(
                     f"{self._at(row)}: ROD type must be Free, Fixed, Pinned, Coupled, Vessel, "
-                    "Body<N>, or Body<N>Pinned"
+                    "CoupledPinned, VesselPinned, Body<N>, or Body<N>Pinned"
                 )
             if (
                 not zero_length

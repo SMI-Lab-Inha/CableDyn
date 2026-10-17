@@ -538,14 +538,16 @@ CONTAINS
   END SUBROUTINE case_stale_double_close_copied_handle
 
   SUBROUTINE case_deck_bodies_rods()
-    !! A deck with a free rod (and one with a free Rigid6 body) initializes through the aggregate:
-    !! the coupled DOFs are its Coupled points, the step is the deck dtM, and 20 driven steps
-    !! reproduce CD_AGG driven directly bit-for-bit (loads and coupled motion), also across a
-    !! SaveState / three trial steps / RestoreState rewind half way. A mismatched dt,
-    !! load derivatives and point fluid fields fail closed by name; a Coupled rod (a 6-DOF host
-    !! node) is rejected by the standalone deck rules.
+    !! A deck with a free rod (and one with a free Rigid6 body, and one with a Pinned rod)
+    !! initializes through the aggregate: the coupled DOFs are its Coupled points, the step is the
+    !! deck dtM, and 20 driven steps reproduce CD_AGG driven directly bit-for-bit (loads and
+    !! coupled motion), also across a SaveState / three trial steps / RestoreState rewind half
+    !! way. A mismatched dt, load derivatives and point fluid fields fail closed by name; a
+    !! Coupled rod (a 6-DOF host node) and a CoupledPinned rod (a host-driven pin) are rejected
+    !! by the standalone deck rules.
     CHARACTER(*), PARAMETER :: ROD_DECK = 'capi_rod_deck.dat', BODY_DECK = 'capi_body_deck.dat', &
-                               HOST_DECK = 'capi_hostrod_deck.dat'
+                               HOST_DECK = 'capi_hostrod_deck.dat', PIN_DECK = 'capi_pinrod_deck.dat', &
+                               HOST_PIN_DECK = 'capi_hostpin_deck.dat'
     CHARACTER(KIND=C_CHAR), TARGET :: c_path(64)
     CHARACTER(KIND=C_CHAR), TARGET :: msg(300)
     TYPE(C_PTR) :: handle
@@ -562,12 +564,17 @@ CONTAINS
     CALL write_capi_object_deck(ROD_DECK, 1)
     CALL write_capi_object_deck(BODY_DECK, 2)
     CALL write_capi_object_deck(HOST_DECK, 3)
-    DO ideck = 1, 2
-      IF (ideck == 1) THEN
+    CALL write_capi_object_deck(PIN_DECK, 4)
+    CALL write_capi_object_deck(HOST_PIN_DECK, 5)
+    DO ideck = 1, 3
+      SELECT CASE (ideck)
+      CASE (1)
         path = ROD_DECK
-      ELSE
+      CASE (2)
         path = BODY_DECK
-      END IF
+      CASE DEFAULT
+        path = PIN_DECK
+      END SELECT
       c_path = C_NULL_CHAR
       DO i = 1, LEN_TRIM(path)
         c_path(i) = path(i:i)
@@ -651,11 +658,24 @@ CONTAINS
     CALL CableDyn_GetLastError(handle, C_LOC(msg), INT(SIZE(msg), C_INT))
     CALL require(es == 3_C_INT .AND. INDEX(c_text(msg), 'Coupled/Vessel ROD') > 0, 'c-api-objects:host-rod-rejected')
     CALL CableDyn_Close(handle, es)
+    ! so is a CoupledPinned rod, whose pin a coupled host moves
+    path = HOST_PIN_DECK
+    c_path = C_NULL_CHAR
+    DO i = 1, LEN_TRIM(path)
+      c_path(i) = path(i:i)
+    END DO
+    CALL CableDyn_Create(handle, es)
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN_TRIM(path), C_INT), es)
+    CALL CableDyn_GetLastError(handle, C_LOC(msg), INT(SIZE(msg), C_INT))
+    CALL require(es == 3_C_INT .AND. INDEX(c_text(msg), 'requires a coupled host') > 0, &
+                 'c-api-objects:host-pinned-rod-rejected')
+    CALL CableDyn_Close(handle, es)
   END SUBROUTINE case_deck_bodies_rods
 
   SUBROUTINE write_capi_object_deck(path, kind)
     !! kind 1: a submerged free rod between a Fixed anchor and a Coupled fairlead; kind 2: the same
-    !! with a free Rigid6 body; kind 3: a Coupled rod (a 6-DOF host node).
+    !! with a free Rigid6 body; kind 3: a Coupled rod (a 6-DOF host node); kind 4: a Pinned rod
+    !! (End A on a fixed pin); kind 5: a CoupledPinned rod (its pin a host node).
     CHARACTER(*), INTENT(IN) :: path
     INTEGER, INTENT(IN) :: kind
     INTEGER :: u
@@ -679,11 +699,16 @@ CONTAINS
       WRITE (u, '(A)') '--- RODS ---'
       WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
       WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
-      IF (kind == 1) THEN
+      SELECT CASE (kind)
+      CASE (1)
         WRITE (u, '(A)') '1 rodmat Free 0.0 0.0 -4.0 0.0 0.0 -2.0 2 -'
-      ELSE
+      CASE (3)
         WRITE (u, '(A)') '1 rodmat Coupled 0.0 0.0 -4.0 0.0 0.0 -2.0 2 -'
-      END IF
+      CASE (4)
+        WRITE (u, '(A)') '1 rodmat Pinned 0.0 0.0 -4.0 0.0 0.0 -2.0 2 -'
+      CASE DEFAULT
+        WRITE (u, '(A)') '1 rodmat CoupledPinned 0.0 0.0 -4.0 0.0 0.0 -2.0 2 -'
+      END SELECT
     END IF
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
@@ -723,6 +748,8 @@ CONTAINS
     WRITE (u, '(A)') '1.0e5 kBot'
     WRITE (u, '(A)') '0.005 dtM'
     WRITE (u, '(A)') '1.0 TMax'
+    ! the rod pinned at its lower end has no stable static balance: start from the deck pose
+    IF (kind == 4) WRITE (u, '(A)') 'deck bodyIC'
     WRITE (u, '(A)') '--- end ---'
     CLOSE (u)
   END SUBROUTINE write_capi_object_deck

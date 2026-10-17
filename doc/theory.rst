@@ -1781,9 +1781,9 @@ Deck ``POINTS``, ``BODIES``, and ``RODS`` records follow the MoorDyn object mode
   and :math:`\mathbf{G}_{c,k}^T(\mathbf{M}_k\mathbf{X}_k - \mathbf{F}_k) = \mathbf{0}` for each pinned rod
   :math:`k`: the pin passes the rod's force to the body and no moment, and the rod's rotation
   feels the pin acceleration. (MoorDyn adds every body-attached rod, pinned or not, to the body's
-  equations with its full force, moment and mass, and its pinned-rod rotation does not include
-  the pin acceleration, so the two formulations can differ for a pinned rod on an accelerating
-  body.)
+  equations with its full force, moment and mass; its pinned-rod rotation includes the pin
+  acceleration, taken from the body acceleration the rod's kinematics were last set with, so the
+  two formulations can differ by that lag for a pinned rod on an accelerating body.)
 - A **zero-length rod** (``NumSegs`` 0) is a point-like connector: it has no mass, volume or side
   loads, and its end terms act along an axis it does not have, so it reduces to a massless point
   at End A (``Free``, ``Fixed``, ``Coupled`` or on a body).
@@ -1793,7 +1793,10 @@ static equilibrium, solved jointly with the ``Free``/``Connect`` points. The unk
 body's position and a rotation-vector increment on SO(3) (for a free rod only the two rotations
 normal to its axis), each pinned rod's two rotations about its pin, and each point's position.
 A pinned rod's residual rows are its moment about the pin; its net force acts on its parent body
-at the pin (a rod pinned to a fixed point has none). A deck with pinned rods takes the
+at the pin (a rod pinned to a fixed point has none, and a ``CoupledPinned`` rod in OpenFAST is
+balanced about its pin at the platform's initial pose). A free or pinned rod that no line
+attaches to (nor, for a rod pinned to a body, any line of its body) is not an unknown: it keeps
+its deck pose and starts at rest there. A deck with pinned rods takes the
 central-difference Jacobian of the full residual. A finite-EI line enters with its axial
 stiffness and weight only. The residual is the net force and moment of the loads the
 dynamic step applies at rest: weight, buoyancy and hydrostatic restoring, steady-current drag,
@@ -1919,13 +1922,114 @@ update is explicit. Each coupled step is therefore divided into equal sub-steps 
 body-mooring frequency. Each attached line acts as the directional spring
 :math:`k_a\mathbf{t}\mathbf{t}^T + (T/L)(\mathbf{I} - \mathbf{t}\mathbf{t}^T)` (:math:`\mathbf{t}`
 the chord direction, :math:`L` the chord length, :math:`k_a = 1/\sum l_0/EA`, :math:`T` the end
-tension), carried to the reference point and added to the hydrostatic restoring; the inertia is
-the structural plus added mass. The estimate omits the line-end inertia and the coupling between
+tension), carried to the reference point and added to the hydrostatic restoring and to the
+seabed contact; the inertia is the structural plus added mass. The contact springs are the
+penalty springs of the seabed model (:math:`k_\text{Bot}\,d\,\mathrm{d}l` at each contact station
+of a rod, :math:`k_\text{Bot}` over 1 m² at a body's reference point) that can act within the
+coming step. A station at arm :math:`\mathbf{s}` from the rod centre moves with
+:math:`\mathbf{v} + \boldsymbol{\omega}\times\mathbf{s}`, and its acceleration is bounded by
+:math:`a_s = |\mathbf{a}| + |\boldsymbol{\alpha}\times\mathbf{s}| + |\boldsymbol{\omega}|^2|\mathbf{s}| + g`
+(:math:`\mathbf{a}`, :math:`\boldsymbol{\alpha}` the committed accelerations, the free fall added
+so that a first step without them counts); its reach
+:math:`\rho = \Delta t\,|\mathbf{v} + \boldsymbol{\omega}\times\mathbf{s}| + \tfrac{1}{2}\Delta t^2 a_s`
+bounds its travel in every direction, vertical and horizontal. The station counts when its height
+above the highest floor within the horizontal distance :math:`\rho` (the depth on a flat seabed;
+on a bathymetry grid the highest node of the cells the surrounding box overlaps, raised by
+:math:`0.05` of their range for the crease rounding) is at most :math:`\rho` plus the rod radius.
+An object about to land, sliding towards a shallower bed or turning a station onto it is thus
+resolved as well as one at rest on the bed. A spring :math:`k` at arm :math:`\mathbf{a}`
+adds :math:`k` in heave and :math:`k a_y^2`, :math:`k a_x^2` in roll and pitch. A rod near the
+free surface adds its waterplane stiffness in the same way: :math:`\rho_w g\,d\,\mathrm{d}l` at each
+station whose cross-section can cross the (held or wave) surface within the step, and
+:math:`\rho_w g\,\pi d^2/4` between each pair of stations whose axis can cross it, which together
+bound the elliptical waterplane of any crossing; its inertia is then the structural one, since
+the added mass changes as it crosses. A finite-EI cable on a body or rod of the staggered march,
+whose end force the march returns explicitly, adds the directional spring above with
+:math:`k_a = 1/\sum l_0/EA` and its current end tension. The normal seabed damping and the
+regularised friction (a damper :math:`\mu N/\sqrt{v^2 + v_\text{reg}^2}`, :math:`\mu N/v_\text{reg}`
+at rest) are applied implicitly, the friction as that secant coefficient, so they set no limit;
+the monolithic scheme carries the contact and the hydrostatics in its Jacobian, and its accuracy
+sub-steps (above) leave them out. A step that would need more than 256 sub-steps is warned about
+once per run. The estimate omits the line-end inertia and the coupling between
 the diagonal terms, so it can understate the coupled frequency by about a factor 1.6; stability
 alone (the central-difference bound :math:`\omega\,\Delta t < 2`) would allow a limit near 1.
 The limit of 0.4 is set by accuracy: a rod released out of balance at :math:`\Delta t = 0.1` s
 follows the fairlead-tension transient of a :math:`\Delta t = 0.005` s run within 1.5 %.
+The objects' own terms (hydrostatic restoring, a rod's waterplane, seabed contact, and the
+swing of a pinned rod below, about its pin on every route, with its parent body's pin
+acceleration and the reduced mass :math:`m m_b/(m + m_b)` for a rod pinned to a body) enter
+whether or not a line is attached: a deck without lines, which marches its
+objects by the same explicit scheme, and a staggered deck whose only lines are finite-EI cables
+are sub-stepped for them as well.
 Both schemes start from the instantaneous acceleration of the initial state.
+
+On the coupled route a ``Pinned`` or ``CoupledPinned`` rod advances only its rotation in this
+way; its centre then follows the pin at :math:`t_{n+1}` (fixed, or placed by the host), so End A
+drives its lines with the pin motion exactly. The end-of-step angular acceleration solves the
+reduced pinned-rod equation with
+:math:`\mathbf{a} = \mathbf{a}_p + \boldsymbol{\alpha}\times\mathbf{r} + \boldsymbol{\omega}\times(\boldsymbol{\omega}\times\mathbf{r})`,
+so the pin acceleration :math:`\mathbf{a}_p` loads the rotation through the rod's inertia, and
+the implicit drag acts on the velocity change
+:math:`\tfrac{1}{2}\Delta t(\boldsymbol{\alpha}_{n+1} - \boldsymbol{\alpha}_n)\times\mathbf{r}` of the
+pinned centre. The sub-step estimate takes the line springs through their arms from the pin
+against the rotational inertia about the pin, and adds the rod's own swing about the pin, so a
+pinned rod that carries no line is still sub-stepped as the compound pendulum it is. Its weight
+and buoyancy act vertically at points :math:`\mathbf{p}_i` from the pin; the first moment
+:math:`\mathbf{P} = \sum_i f_i\,\mathbf{p}_i` of these loads turns with the rod, and its length
+:math:`|\mathbf{P}| = |W d_g - B d_b|` (weight :math:`W` and buoyancy :math:`B` on the axis at
+:math:`d_g` and :math:`d_b` from the pin) is the swing stiffness at the bottom of the swing,
+whatever the current pose. The pin acceleration adds :math:`|\mathbf{a}_p|\,|\mathbf{G}|`, with
+:math:`|\mathbf{G}|` the first moment of the rod's translational inertia (structural and added)
+about the pin, :math:`m d_g` for a dry rod; for the hanging dry rod this is the effective gravity
+bound :math:`g + |\mathbf{a}_p| \ge |\mathbf{g} - \mathbf{a}_p|`, taken with the larger of the
+step-start and end-of-step pin accelerations. The swing stiffness over the smaller rotational
+inertia about the pin across the rod axis, about :math:`3g/(2L)` for a dry uniform rod of length
+:math:`L`, adds to the line estimate of :math:`\omega^2`. The buoyancy is that of the wet
+length at the evaluated pose; the change of a surface-piercing rod's waterline with its tilt
+(an articulated column) enters through the rod's waterplane stiffness about the pin (above).
+The host places a ``CoupledPinned`` pin at :math:`t_{n+1}` before the estimate, so
+the swing is evaluated with the rod at both its step-start and its end-of-step pin, taking the
+larger stiffness and the smaller inertia. The sub-steps move the pin along a straight line; at
+the rod's orientation and with the surface held over the step, every slice's clearance to the
+surface then changes monotonically and in the same sense, so the wetting, the moment
+:math:`W d_g - B d_b` and the added mass are bounded by their values at the two ends, and a step
+whose pin crosses the free surface (a light rod lifted out of the water, or a heavy one lowered
+into it) is sub-stepped for the stiffer of its wet states. The seabed contact adds its angular
+stiffness about the pin, :math:`\sum k\,|\mathbf{a}\times\mathbf{e}_z|^2` over the contact
+stations within reach (at both pin poses for a ``CoupledPinned`` rod), so a rod whose far end
+rests on the bed is sub-stepped for its contact mode. In a sub-cycled step the host pin's
+position,
+velocity and acceleration are each interpolated linearly between their step-start values (the End
+A motion of the committed rod) and the end-of-step host input, as the host fairleads of the lines
+and the ``Coupled`` rods are, so points on one platform keep their relative positions under a
+translation within the step. This is second order: between exact end values the interpolated
+position departs from the host path by at most :math:`\Delta t^2 \max|\mathbf{a}_p|/8`, the
+interpolated velocity is not the derivative of the interpolated position (they differ by
+:math:`O(\Delta t\,|\mathbf{a}_p|)`), and a pin moving at constant velocity is reproduced exactly.
+A first step without a committed angular acceleration (the aggregate and the C API) takes its
+starting one with the pin at its step-start pose; under OpenFAST the rod state mirror reloaded
+at the initial output call carries the committed accelerations of the initial condition, zero
+for the static start, so a start out of equilibrium (``bodyIC deck``) begins its first step
+from rest acceleration, an error of order :math:`\Delta t` in that step's velocity, as for a
+free rod.
+
+The host receives the rod's net load less its inertia at the pin, and no moment. It is the
+direct feedthrough of the pin acceleration at the rod's current state: the pin position,
+velocity and acceleration are those the host last set (re-derived from the rod's End A motion,
+so that a checkpoint restart reproduces the force between steps bit for bit), the rotation, the
+angular velocity and the held fluid are the committed ones, and the angular acceleration is
+solved again for the pin's current acceleration. A CalcOutput at an off-step pin acceleration
+therefore returns the rod's effective inertia about the pin. The attached lines keep their
+committed interior state, accelerations included, as in every output evaluation, and their end
+loads are taken at the end accelerations of the re-solved rotation: the solve moves the end-node
+inertia from the end accelerations the system holds with the lines' coupled mass block
+:math:`\mathbf{M}_{cc}` (structural and added mass; the step's corrector instead lets the line
+interior follow, :math:`\mathbf{M}_{cc} - \mathbf{M}_{cf}\mathbf{M}_{ff}^{-1}\mathbf{M}_{fc}`). At a
+held interior the end loads are linear in the end accelerations, so the force does not depend on
+the end accelerations the line loads were evaluated with. MoorDyn-F's coupled pinned rod keeps
+the same pin acceleration term in its rotation equation and returns the same force: its output
+call evaluates the rod's state derivative at the current input first (its lumped line mass has
+no interior coupling).
 
 **Mixed topologies.** One step marches every object of a deck together: bodies with their fixed
 and pinned rods, free and pinned rods, the ``EI = 0`` lines with their ``Free``/``Connect``

@@ -28,6 +28,7 @@ MODULE CableDyn_Bathymetry
   PUBLIC :: CD_Bathymetry_Floor
   PUBLIC :: CD_Bathymetry_Floor_Gradient
   PUBLIC :: CD_Bathymetry_Grid_Floor
+  PUBLIC :: CD_Bathymetry_Max_Floor
   PUBLIC :: CD_Bathymetry_Rotate_Curvature
   PUBLIC :: CD_Bathymetry_Seabed_Load
   INTEGER, PARAMETER, PUBLIC :: CD_BATHY_OK = 0, CD_BATHY_BADINPUT = 1, CD_BATHY_ALLOCFAIL = 2
@@ -186,6 +187,42 @@ CONTAINS
     REAL(wp) :: dfdx, dfdy
     CALL floor_eval(bathy, xq, yq, z_floor, dfdx, dfdy, ErrStat, ErrMsg, rounded=.FALSE.)
   END SUBROUTINE CD_Bathymetry_Grid_Floor
+
+  SUBROUTINE CD_Bathymetry_Max_Floor(bathy, x_lo, x_hi, y_lo, y_hi, z_max, ErrStat, ErrMsg)
+    !! An upper bound of the seabed elevation (CD_Bathymetry_Floor) over the horizontal box
+    !! [x_lo, x_hi] x [y_lo, y_hi]: the highest grid node of the cells the box overlaps (the
+    !! bilinear surface of a cell lies within its node range, and outside the grid the floor
+    !! is clamped to its edge cells), raised by CD_BATHY_CREASE_FRACTION times the node range,
+    !! which bounds the crease rounding (it moves the surface by at most |J| delta/6 per
+    !! direction, below a thirtieth of the node range for both directions together).
+    TYPE(CD_BathymetryType), INTENT(IN) :: bathy
+    REAL(wp), INTENT(IN) :: x_lo, x_hi, y_lo, y_hi
+    REAL(wp), INTENT(OUT) :: z_max
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: i0, i1, j0, j1
+    REAL(wp) :: t, z_min
+    LOGICAL :: clamped
+
+    z_max = CD_ZERO
+    ErrStat = CD_BATHY_OK
+    ErrMsg = ''
+    IF (.NOT. CD_Bathymetry_Is_Initialized(bathy)) THEN
+      CALL fail(ErrStat, ErrMsg, 'bathymetry object is not initialized')
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite([x_lo, x_hi, y_lo, y_hi]) .AND. x_lo <= x_hi .AND. y_lo <= y_hi)) THEN
+      CALL fail(ErrStat, ErrMsg, 'bathymetry box bounds must be finite and ordered')
+      RETURN
+    END IF
+    CALL locate_axis(bathy%x, x_lo, i0, t, clamped)
+    CALL locate_axis(bathy%x, x_hi, i1, t, clamped)
+    CALL locate_axis(bathy%y, y_lo, j0, t, clamped)
+    CALL locate_axis(bathy%y, y_hi, j1, t, clamped)
+    z_max = -MINVAL(bathy%depth(i0:i1 + 1, j0:j1 + 1))
+    z_min = -MAXVAL(bathy%depth(i0:i1 + 1, j0:j1 + 1))
+    z_max = z_max + CD_BATHY_CREASE_FRACTION*(z_max - z_min)
+  END SUBROUTINE CD_Bathymetry_Max_Floor
 
   SUBROUTINE CD_Bathymetry_Floor_Gradient(bathy, xq, yq, z_floor, dfdx, dfdy, ErrStat, ErrMsg, crease_curvature)
     !! Return seabed elevation and horizontal gradients dz_floor/dx, dz_floor/dy.

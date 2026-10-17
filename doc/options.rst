@@ -234,8 +234,9 @@ Clock and initial condition
        ``Free``/``Connect`` points step in one implicit generalised-alpha step with their
        ``EI = 0`` lines (a Newton iteration on the object accelerations around the line steps);
        no sub-stepping is needed for stability. A deck without lines keeps its explicit
-       central-difference march unless it names ``monolithic bodyScheme``. ``staggered``: the
-       staggered predictor-corrector, sub-stepped for the stiffest body-mooring mode. Decks with
+       central-difference march, sub-stepped for the objects' own restoring, unless it names
+       ``monolithic bodyScheme``. ``staggered``: the staggered predictor-corrector, sub-stepped
+       for the stiffest body-mooring mode and the objects' own restoring. Decks with
        a ``motionFile`` or a ``FAILURE`` section, and coupled runs, use ``staggered`` whatever
        the value. See :doc:`theory`
      - standalone
@@ -701,10 +702,10 @@ These names exist so a migrated MoorDyn deck fails less often at the syntax boun
        ``frictionMu``, ``frictionMuLateral`` and ``frictionMuAxial``, with no static-to-kinetic
        ratio or friction damping. Remove the row.
 
-Other MoorDyn constructs that fail by name rather than as unknown input: ``CoupledPinned`` and
-``VesselPinned`` rods, and ``CoupledPinned`` bodies. Line-node output channels start at node 1
-(``N0`` is rejected), and a number with a sign inside its mantissa (such as ``1+2``) is rejected
-instead of being read up to the sign.
+Other MoorDyn constructs that fail by name rather than as unknown input: ``CoupledPinned`` bodies,
+and ``CoupledPinned``/``VesselPinned`` rods outside a coupled host (they run in OpenFAST, see
+:doc:`openfast`). Line-node output channels start at node 1 (``N0`` is rejected), and a number
+with a sign inside its mantissa (such as ``1+2``) is rejected instead of being read up to the sign.
 
 Water-kinematics sources
 ------------------------
