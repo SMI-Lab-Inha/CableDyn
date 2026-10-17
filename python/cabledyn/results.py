@@ -1180,12 +1180,21 @@ class StaticProfile(OutputTable):
     :class:`cabledyn.OutputTable`, with ``values`` of shape
     ``(n_rows, n_channels)``.
 
+    A finite-EI line whose mesh the static solve refined lists every node of
+    its final mesh. The file then has a ``DeckNode`` column: the deck node of
+    each row (deck nodes run from 1 at End A to 1 + the total ``NumSegs`` of the
+    line's sections at End B), or 0 for a node the refinement added. The node
+    channels of a main output (``Ten<L>N<J>``, ``L<L>N<J>px``, ...) number deck
+    nodes; :meth:`deck_node_arc_lengths` places them.
+
     Raises
     ------
     OutputFormatError
         If a required column is missing, ``LineID`` or ``Node`` values are not
-        positive integers, a line's rows are not contiguous, or a line's arc
-        length or node order is not increasing.
+        positive integers, a line's rows are not contiguous, a line's arc
+        length or node order is not increasing, or a ``DeckNode`` column does
+        not number the deck nodes of a line in increasing order from 1 at its
+        first row to its last row.
     """
 
     def __post_init__(self) -> None:
@@ -1225,6 +1234,24 @@ class StaticProfile(OutputTable):
                 raise OutputFormatError(
                     f"{self.path}: LineID {line_id} node order is not increasing"
                 )
+        if "DeckNode" in self.channels:
+            deck = self.column("DeckNode")
+            if np.any(deck < 0.0) or np.any(deck != np.floor(deck)):
+                raise OutputFormatError(
+                    f"{self.path}: DeckNode values must be non-negative integers"
+                )
+            for line_id in self.line_ids:
+                numbered = deck[self.column("LineID") == line_id]
+                named = numbered[numbered > 0.0]
+                if (
+                    numbered[0] != 1.0
+                    or numbered[-1] <= 0.0
+                    or np.any(named != np.arange(1, named.size + 1))
+                ):
+                    raise OutputFormatError(
+                        f"{self.path}: LineID {line_id} DeckNode does not number the deck nodes "
+                        "1, 2, ... from End A to End B"
+                    )
 
     @property
     def line_ids(self) -> tuple[int, ...]:
@@ -1257,6 +1284,40 @@ class StaticProfile(OutputTable):
         return StaticProfile(
             self.path, self.title, self.channels, self.units, self.values[mask].copy()
         )
+
+    def deck_node_arc_lengths(self, line_id: int) -> dict[int, float]:
+        """Return the static arc length of each deck node of one line.
+
+        The node channels of a main output number deck nodes, from 1 at End A
+        to 1 + the total ``NumSegs`` of the line's sections at End B. On a line
+        whose mesh the static solve refined, the profile lists every node of the
+        final mesh and its ``DeckNode`` column locates the deck nodes among
+        them; otherwise the profile nodes are the deck nodes.
+
+        Parameters
+        ----------
+        line_id : int
+            One-based line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        dict[int, float]
+            Deck node number to its deformed arc length from End A, in metres.
+
+        Raises
+        ------
+        KeyError
+            If the profile has no rows for ``line_id``.
+        """
+        line = self.line(line_id)
+        arc = line.column("ArcLength")
+        if "DeckNode" not in line.channels:
+            nodes = line.column("Node")
+            return {int(node): float(value) for node, value in zip(nodes, arc, strict=True)}
+        deck = line.column("DeckNode")
+        return {
+            int(node): float(value) for node, value in zip(deck, arc, strict=True) if node > 0.0
+        }
 
     def summary(self, line_id: int) -> StaticLineSummary:
         """Return core geometry and demand extrema for one line.

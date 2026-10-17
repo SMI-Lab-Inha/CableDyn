@@ -1534,7 +1534,7 @@ CONTAINS
       SELECT CASE (quantity)
       CASE (CD_C_LINE_POSITION, CD_C_LINE_VELOCITY, CD_C_LINE_ACCELERATION)
         DO c = 1, 3
-          CALL eval_token(h, 'L'//TRIM(stem)//field//xyz(c), val, err_stat)
+          CALL eval_token(h, 'L'//TRIM(stem)//field//xyz(c), val, err_stat, mesh_node=.TRUE.)
           IF (err_stat /= CD_C_OK) RETURN
           out_c(3*(node - 1) + c) = REAL(val, C_DOUBLE)
         END DO
@@ -1550,7 +1550,7 @@ CONTAINS
       CASE DEFAULT
         token = 'L'//TRIM(stem)//'Azi'
       END SELECT
-      CALL eval_token(h, token, val, err_stat)
+      CALL eval_token(h, token, val, err_stat, mesh_node=.TRUE.)
       IF (err_stat /= CD_C_OK) RETURN
       out_c(node) = REAL(val, C_DOUBLE)
     END DO
@@ -2027,12 +2027,15 @@ CONTAINS
     END SUBROUTINE collect_points
   END SUBROUTINE object_inventory
 
-  SUBROUTINE eval_token(h, token, val, err_stat)
-    !! Evaluate one channel token on the handle's model (aggregate or point route).
+  SUBROUTINE eval_token(h, token, val, err_stat, mesh_node)
+    !! Evaluate one channel token on the handle's model (aggregate or point route). A node token
+    !! names a deck node; mesh_node = .TRUE. reads it as a node of the line's final mesh instead
+    !! (CableDyn_GetLineValues lists every mesh node of a refined finite-EI line).
     TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
     CHARACTER(*), INTENT(IN) :: token
     REAL(wp), INTENT(OUT) :: val
     INTEGER(C_INT), INTENT(OUT) :: err_stat
+    LOGICAL, INTENT(IN), OPTIONAL :: mesh_node
     INTEGER :: es
     CHARACTER(CD_C_MSG_LEN) :: em
 
@@ -2041,15 +2044,18 @@ CONTAINS
       IF (h%agg%has_rigid6) THEN
         CALL CD_Eval_Aggregate_Channel(token, h%agg%has_sys, h%agg%sys%fast%system, h%agg%cables, &
                                        h%agg%line_is_cable, h%agg%line_obj_index, val, es, em, &
-                                       cable_points=h%agg%cable_points, rigid_rt=h%agg%rigid6, ranges=h%agg%ranges)
+                                       cable_points=h%agg%cable_points, rigid_rt=h%agg%rigid6, ranges=h%agg%ranges, &
+                                       mesh_node=mesh_node)
       ELSE IF (h%agg%has_rod) THEN
         CALL CD_Eval_Aggregate_Channel(token, h%agg%has_sys, h%agg%sys%fast%system, h%agg%cables, &
                                        h%agg%line_is_cable, h%agg%line_obj_index, val, es, em, &
-                                       cable_points=h%agg%cable_points, rod_rt=h%agg%rod, ranges=h%agg%ranges)
+                                       cable_points=h%agg%cable_points, rod_rt=h%agg%rod, ranges=h%agg%ranges, &
+                                       mesh_node=mesh_node)
       ELSE
         CALL CD_Eval_Aggregate_Channel(token, h%agg%has_sys, h%agg%sys%fast%system, h%agg%cables, &
                                        h%agg%line_is_cable, h%agg%line_obj_index, val, es, em, &
-                                       cable_points=h%agg%cable_points, ranges=h%agg%ranges)
+                                       cable_points=h%agg%cable_points, ranges=h%agg%ranges, &
+                                       mesh_node=mesh_node)
       END IF
     ELSE
       IF (.NOT. (ALLOCATED(h%pt_obj) .AND. ALLOCATED(h%pt_is_cable))) THEN

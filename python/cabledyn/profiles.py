@@ -30,6 +30,14 @@ source has no time axis: its fields hold a single sample and ``time`` is
 Arc length is the deformed arc length from End A: the ``ArcLength`` column of
 a static profile, otherwise the cumulative straight node-to-node distance at
 the requested time.
+
+The node channels of a main output number deck nodes (1 at End A to 1 + the
+total ``NumSegs`` of the line's sections at End B); a static profile and the
+per-line files list every node of the line's final mesh. The two differ on a
+finite-EI line whose mesh the static solve refined: a static profile then
+places main-output node channels at the rows its ``DeckNode`` column names,
+and a per-line position file ``<root>.Line<L>.p.out`` at the nodes that column
+names in the static profile ``<root>.static.out`` beside it.
 """
 
 from __future__ import annotations
@@ -54,6 +62,7 @@ from cabledyn.results import (
     OutputTable,
     StaticProfile,
     TimeHistory,
+    read_output,
 )
 
 __all__ = [
@@ -352,6 +361,12 @@ class LineField:
         ``(n_samples, n_locations)`` values.
     source : pathlib.Path | None
         Result file the field was read from, if any.
+    deck_nodes : bool
+        True when :attr:`ids` are deck node numbers, as the node channels of a
+        main output name them (1 at End A to 1 + the total ``NumSegs`` of the
+        line's sections at End B); false when they number the nodes of the
+        source's own mesh, as a static profile and the per-line files do. The
+        two differ on a finite-EI line whose mesh the static solve refined.
 
     Raises
     ------
@@ -367,6 +382,7 @@ class LineField:
     time: npt.NDArray[Any] | None
     values: npt.NDArray[Any]
     source: Path | None = None
+    deck_nodes: bool = False
 
     def __post_init__(self) -> None:
         if self.location_kind not in {"Node", "Segment"}:
@@ -437,6 +453,7 @@ class LineField:
             self.time[mask],
             self.values[mask],
             self.source,
+            self.deck_nodes,
         )
 
 
@@ -649,7 +666,12 @@ def _unit(table: OutputTable, channel: str, default: str | None) -> str | None:
 
 
 def _history_field(
-    history: TimeHistory, quantity: str, kind: str, channels: Mapping[int, str], default: str | None
+    history: TimeHistory,
+    quantity: str,
+    kind: str,
+    channels: Mapping[int, str],
+    default: str | None,
+    deck_nodes: bool = False,
 ) -> LineField:
     names = list(channels.values())
     return LineField(
@@ -660,6 +682,7 @@ def _history_field(
         time=history.time,
         values=np.column_stack([history.column(name) for name in names]),
         source=history.path,
+        deck_nodes=deck_nodes,
     )
 
 
@@ -691,7 +714,7 @@ def _catalog(source: Any, line_id: int | None) -> dict[str, Callable[[], LineFie
     elif isinstance(source, StaticProfile):
         line = _static_line(source, identifier)
         for column in line.channels:
-            if column in {"LineID", "Node", "ArcLength"}:
+            if column in {"LineID", "Node", "ArcLength", "DeckNode"}:
                 continue
 
             def static_build(column: str = column) -> LineField:
@@ -730,7 +753,8 @@ def _catalog(source: Any, line_id: int | None) -> dict[str, Callable[[], LineFie
             def main_build(
                 name: str = name, channels: Any = channels, unit: str = default
             ) -> LineField:
-                return _history_field(source, name, "Node", channels, unit)
+                # main-output node channels number deck nodes
+                return _history_field(source, name, "Node", channels, unit, deck_nodes=True)
 
             catalog[name] = main_build
     elif isinstance(source, OutputTable) and _is_static_node_table(source):
@@ -941,10 +965,20 @@ def _node_arc(
     time: float | None,
     interpolation: Interpolation,
     line_id: int | None,
+    deck_nodes: bool = False,
 ) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
-    """Return node ids and their arc lengths from End A at ``time``."""
+    """Return node ids and their arc lengths from End A at ``time``.
+
+    ``deck_nodes`` asks for deck node numbers (main-output node channels): a
+    static profile then gives the rows its ``DeckNode`` column names on a line
+    whose mesh the static solve refined.
+    """
     if isinstance(locate, StaticProfile):
         line = _static_line(locate, line_id)
+        if deck_nodes:
+            lookup = line.deck_node_arc_lengths(line.line_ids[0])
+            ids = np.asarray(sorted(lookup), dtype=np.int64)
+            return ids, np.asarray([lookup[int(node)] for node in ids], dtype=np.float64)
         return line.column("Node").astype(np.int64), np.asarray(line.column("ArcLength"))
     if isinstance(locate, Mapping):
         ids = np.asarray(sorted(int(node) for node in locate), dtype=np.int64)
@@ -955,7 +989,53 @@ def _node_arc(
         line_id=line_id if isinstance(locate, TimeHistory) and not _per_line(locate) else None,
     )
     xyz = positions.at(None if positions.static else time, interpolation=interpolation)
+    if deck_nodes:
+        return _deck_node_positions(locate, positions.node_ids, _cumulative_arc(xyz))
     return positions.node_ids, _cumulative_arc(xyz)
+
+
+def _deck_node_positions(
+    locate: LocationSource, node_ids: npt.NDArray[Any], arc: npt.NDArray[Any]
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
+    """Deck node ids and arc lengths of a per-line file's nodes.
+
+    A per-line file ``<root>.Line<L>.<kind>.out`` lists every node of the
+    line's final mesh. When the static profile ``<root>.static.out`` of the
+    same run has a ``DeckNode`` column for the line (its mesh was refined),
+    the deck nodes are taken from it; otherwise the file's nodes are the deck
+    nodes.
+    """
+    if not isinstance(locate, OutputTable):
+        return node_ids, arc
+    if not (isinstance(locate, LineNodeHistory) or _is_static_node_table(locate)):
+        return node_ids, arc
+    path = locate.path
+    match = _FILE_LINE.search(path.name)
+    if match is None:
+        return node_ids, arc
+    static = path.with_name(path.name[: match.start()] + ".static.out")
+    if not static.is_file():
+        return node_ids, arc
+    profile = read_output(static)
+    line_id = int(match.group(1))
+    if (
+        not isinstance(profile, StaticProfile)
+        or "DeckNode" not in profile.channels
+        or line_id not in profile.line_ids
+    ):
+        return node_ids, arc
+    rows = profile.line(line_id)
+    mesh_node = {
+        int(deck): int(node)
+        for deck, node in zip(rows.column("DeckNode"), rows.column("Node"), strict=True)
+        if deck > 0.0
+    }
+    position = dict(zip(node_ids.tolist(), arc.tolist(), strict=True))
+    deck = [j for j in sorted(mesh_node) if mesh_node[j] in position]
+    return (
+        np.asarray(deck, dtype=np.int64),
+        np.asarray([position[mesh_node[j]] for j in deck], dtype=np.float64),
+    )
 
 
 def _cumulative_arc(xyz: npt.NDArray[Any]) -> npt.NDArray[Any]:
@@ -991,7 +1071,7 @@ def _place(
     """Return the location kind and location of each field value."""
     if locate is None:
         return field.location_kind, field.ids.astype(np.float64)
-    node_ids, arc = _node_arc(locate, time, interpolation, line_id)
+    node_ids, arc = _node_arc(locate, time, interpolation, line_id, field.deck_nodes)
     return "ArcLength", _assign(field, isinstance(locate, Mapping), node_ids, arc)
 
 
@@ -1016,15 +1096,23 @@ def _assign(
 
 
 def _mean_node_arc(
-    locate: LocationSource, line_id: int | None, start: float | None, stop: float | None
+    locate: LocationSource,
+    line_id: int | None,
+    start: float | None,
+    stop: float | None,
+    deck_nodes: bool = False,
 ) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
     """Node ids and their arc length, time-averaged over a window for a history."""
     if isinstance(locate, (StaticProfile, Mapping)):
-        return _node_arc(locate, None, "linear", line_id)
+        return _node_arc(locate, None, "linear", line_id, deck_nodes)
     positions = line_positions(
         locate,  # type: ignore[arg-type]
         line_id=line_id if isinstance(locate, TimeHistory) and not _per_line(locate) else None,
     ).period(start, stop)
+    if deck_nodes:
+        return _deck_node_positions(
+            locate, positions.node_ids, np.mean(positions.arc_length, axis=0)
+        )
     return positions.node_ids, np.mean(positions.arc_length, axis=0)
 
 
@@ -1085,7 +1173,7 @@ def line_range_graph(
             raise ValueError("a segment range graph needs node positions to place the segments")
         kind, location = "Node", field.ids.astype(np.float64)
     else:
-        node_ids, arc = _mean_node_arc(locate, line_id, start, stop)
+        node_ids, arc = _mean_node_arc(locate, line_id, start, stop, field.deck_nodes)
         kind, location = "ArcLength", _assign(field, isinstance(locate, Mapping), node_ids, arc)
     order = np.argsort(location, kind="stable")
     values = field.values[:, order]

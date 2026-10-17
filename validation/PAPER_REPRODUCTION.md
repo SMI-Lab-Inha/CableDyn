@@ -11,7 +11,7 @@ release in two modes.
 
 | Mode | Settings |
 | --- | --- |
-| Paper mode | `False alpha_force_blend`: forces evaluated at the generalised-α blended configuration, as in the article. `sequenced cable_statics`: the mesh-sequenced static route runs first. End tensions are the end element's axial tension. |
+| Paper mode | `False alpha_force_blend`: forces evaluated at the generalised-α blended configuration, as in the article. `sequenced cable_statics`: the mesh-sequenced static route runs first. `element OutputRecovery`: node tensions are element-mean axial forces and curvatures the geometric Hermite curvature, as in the article. End tensions are the end element's axial tension. |
 | Defaults | Force-blended generalised-α (`True alpha_force_blend`). Static route starts from a catenary with continuation of the bending stiffness (`continuation cable_statics`). `FairTen`/`AnchTen` report the end force: the end element's force including axial damping, plus the end node's share of weight, seabed contact and drag at the actual velocity, without the end node's inertia. |
 
 The two options apply to finite-EI cables only. Tension-only (EI = 0) lines use the same
@@ -201,9 +201,15 @@ For paper mode, add these rows to `OPTIONS`:
 ```text
 sequenced cable_statics
 False     alpha_force_blend
+element   OutputRecovery
 ```
 
-`alpha_force_blend` matters only for dynamic runs. For the quadrature and refinement study, use
+`alpha_force_blend` matters only for dynamic runs. The finite-EI node tension, curvature and
+bend moment of the deck channels, `.static.out` and the range graphs are recovered from nodal
+equilibrium by default; the article reported the element-mean axial force and the geometric
+Hermite curvature, which `element OutputRecovery` restores. The test programs of this record
+read the geometric curvature (`CD_HermiteCable_Dyn_Curvature_Exact`), so their numbers do not
+depend on this option. For the quadrature and refinement study, use
 the article's starting meshes:
 
 | Cable | Segments per section | Multiples run |

@@ -133,6 +133,11 @@ MODULE CableDyn_OpenFAST_HermiteFMF
     LOGICAL :: tors_parent = .FALSE.
     INTEGER :: tors_index = 0
     REAL(wp) :: tors_frame_parent(3, 2) = CD_ZERO
+    ! Deck node -> model node map of a line whose mesh the static solve refined: deck_node(J) is
+    ! the public node (End A = 1) of the final mesh at the reference arc of deck node J (1 + the
+    ! total NumSegs of the deck sections, End A first), 0 if no mesh node lies there. Unallocated
+    ! when the mesh is the deck mesh. The node output channels (Ten<L>N<J>, ...) read deck nodes.
+    INTEGER, ALLOCATABLE :: deck_node(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HFMF_ModuleType
 
@@ -1723,6 +1728,7 @@ CONTAINS
     self%tors_parent = .FALSE.
     self%tors_index = 0
     self%tors_frame_parent = CD_ZERO
+    IF (ALLOCATED(self%deck_node)) DEALLOCATE (self%deck_node)
     self%initialized = .FALSE.
   END SUBROUTINE CD_HFMF_End
 

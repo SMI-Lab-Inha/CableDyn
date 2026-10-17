@@ -1760,11 +1760,13 @@ handle numbers its lines 1..n).
    * - ``CableDyn_NObjects``
      - number of objects of ``kind``
    * - ``CableDyn_GetObjectInfo``
-     - ``id``; ``n_nodes`` (lines: node count; rods: ``NumSegs + 1``; points and bodies: 1);
+     - ``id``; ``n_nodes`` (lines: node count of the final mesh; rods: ``NumSegs + 1``; points and
+       bodies: 1);
        ``subtype`` (lines: 1 finite-EI, 0 EI = 0; points: 1 Fixed, 2 Coupled, 3 Free,
        4 Connect)
    * - ``CableDyn_GetLineValues``
-     - one quantity along the line, End A first: ``CD_C_LINE_POSITION`` (1),
+     - one quantity at every node of the line's final mesh, End A first:
+       ``CD_C_LINE_POSITION`` (1),
        ``_VELOCITY`` (2), ``_ACCELERATION`` (4), 3 values per node, xyz interleaved;
        ``_TENSION`` (3, the ``Ten<L>N<k>`` node tension), ``_CURVATURE`` (5),
        ``_BEND_MOMENT`` (6, zero on an EI = 0 line), ``_DECLINATION`` (7), ``_AZIMUTH`` (8),
@@ -1782,7 +1784,13 @@ handle numbers its lines 1..n).
        of End A with the axis roll and pitch from vertical; velocity and wrench about End A
    * - ``CableDyn_EvalChannel``
      - the value of one ``OUTPUTS`` token (:doc:`outputs`), for example ``FairTen1``,
-       ``L2N5px``, ``Curv1N3``, ``Point4Fz``, ``Body1Pz`` or ``Rod2TenA``
+       ``L2N5px``, ``Curv1N3``, ``Point4Fz``, ``Body1Pz`` or ``Rod2TenA``; a line-node token
+       names a deck node
+
+On a finite-EI line whose mesh the static solve refined, ``n_nodes`` and the
+``CableDyn_GetLineValues`` arrays cover every node of the refined mesh, while a node token of
+``CableDyn_EvalChannel`` (``Ten1N5``, ``L1N5px``) names deck node 5 at its node of that mesh
+(:ref:`outputs-refined-nodes`).
 
 A ``NULL`` output pointer skips that output, except for the ``out`` array of
 ``CableDyn_GetLineValues`` and the ``value`` of ``CableDyn_EvalChannel``; the latter is not

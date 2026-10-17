@@ -183,7 +183,9 @@ Example (static route)::
 ----------------------------------------------
 
 The along-arc static configuration, one row per node of every line (a *range graph* of the static
-state). It is independent of the ``OUTPUTS`` selection. On a dynamic cubic-Hermite or mixed
+state): every node of the line's final mesh, so a finite-EI line whose mesh the static solve
+refined has more rows than deck nodes (see :ref:`outputs-refined-nodes`). It is independent of
+the ``OUTPUTS`` selection. On a dynamic cubic-Hermite or mixed
 run it records the converged initial state that the march starts from.
 
 Layout: title line, header row, **units row**, then data. The title reads
@@ -191,7 +193,8 @@ Layout: title line, header row, **units row**, then data. The title reads
 (static route), ``CableDyn standalone static configuration (deformed arc; public node order
 End A -> End B)`` (cubic-Hermite route) or ``CableDyn coupled static configuration (deformed
 arc; public node order End A -> End B)`` (mixed route and OpenFAST). The columns are identical
-on every route:
+on every route; the ``DeckNode`` column follows only when the static solve refined the mesh of a
+finite-EI line of the run:
 
 .. list-table::
    :header-rows: 1
@@ -231,6 +234,12 @@ on every route:
    * - ``Azimuth``
      - ``(deg)``
      - axial-tangent azimuth from +X toward +Y, in [0, 360)
+   * - ``DeckNode``
+     - ``(-)``
+     - the deck node of the row, the ``<J>`` of the node channels (1 = End A … 1 + the total
+       ``NumSegs`` of the line's sections = End B); 0 for a node the refinement added. An
+       ``EI = 0`` line, never refined, numbers its rows as the deck. Written only when a line's
+       mesh was refined
 
 Plot ``Curvature`` or ``Tension`` against ``ArcLength`` for a fatigue or strength check.
 
@@ -335,7 +344,9 @@ channels instead) and accept ``r``.
        moment, declination and seabed clearance (and torque and twist on a line with torsion),
        one row per node (see below)
 
-``<L>`` is the deck line id. Each file starts with a ``#`` comment line (e.g.
+``<L>`` is the deck line id. The files list every node and segment of the line's final mesh,
+also on a finite-EI line whose mesh the static solve refined (:ref:`outputs-refined-nodes`).
+Each file starts with a ``#`` comment line (e.g.
 ``# CableDyn static line node positions; public node order EndA -> EndB``) and a header row;
 there is no units row — units are in the column names.
 
@@ -381,7 +392,8 @@ End A -> End B)``.
      - Meaning
    * - ``Node``
      - ``(-)``
-     - node number, 1 = End A … N = End B
+     - node number of the line's final mesh, 1 = End A … N = End B (the ``Node`` of
+       ``.static.out``)
    * - ``ArcLength``
      - ``(m)``
      - cumulative deformed chord length from End A at the first sample (``t = 0``, the static
@@ -462,6 +474,26 @@ numeric id written with leading zeros (``Ten1N02`` = ``Ten1N2``), or an alias sp
 ``AnchAngle<L>`` = ``AnchDecl<L>``). ``<L>`` and ``<P>`` are deck
 ``LINES`` and ``POINTS`` ids (not array positions); ``<J>`` is a node number on line ``<L>``,
 1 = End A to ``N`` = End B, where ``N`` = 1 + the total ``NumSegs`` of the line's sections.
+
+.. _outputs-refined-nodes:
+
+Node channels on a refined line
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``<J>`` is always a node of the **deck** mesh. The static solve of a finite-EI line can refine
+its mesh (``OPTIONS adaptive_mesh``, or the automatic refinement after a failed stability test
+or an unresolved curvature, which a note of the initialization report names). A refinement splits
+deck elements, so each deck node is a node of the refined mesh at the same unstretched arc length
+from End A, and ``Ten<L>N<J>``, ``Curv<L>N<J>``, ``BendMom<L>N<J>``, ``L<L>N<J>…``,
+``Torq<L>N<J>`` and ``Twist<L>N<J>`` report deck node ``J`` there, on every route (standalone,
+mixed, multibody, OpenFAST and the C API ``CableDyn_EvalChannel``). ``.static.out``, the range
+graphs, the per-line files and the C API ``CableDyn_GetLineValues`` list every node of the
+refined mesh instead, and ``.elements.out`` every element. To find deck node ``J`` among them,
+take the ``.static.out`` row whose ``DeckNode`` is ``J``: its ``Node`` is the node number in the
+range graph and the per-line files (and the array row + 1 of ``CableDyn_GetLineValues``), its
+``ArcLength`` the node's deformed arc length. The deck node also lies
+where the ``ReferenceArcStart`` of ``.elements.out`` equals its unstretched arc length from End A
+(``ReferenceArcEnd`` of the last element for End B). ``EI = 0`` lines are never refined.
 
 Line-end channels
 ~~~~~~~~~~~~~~~~~

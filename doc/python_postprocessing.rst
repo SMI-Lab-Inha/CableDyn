@@ -329,7 +329,9 @@ moment along a line, with ``plot()`` and ``export()``:
   functions below rebuild envelopes from other files.
 * :func:`cabledyn.node_range_graph` builds it from the ``Ten<L>N<J>``, ``Curv<L>N<J>``, or
   ``BendMom<L>N<J>`` channels of a main output over a time window. Node positions come from a
-  static profile of the run, a ``{node: arc}`` mapping, or the node numbers.
+  static profile of the run, a ``{node: arc}`` mapping, or the node numbers. The channels name
+  deck nodes; on a line whose mesh the static solve refined, the profile's ``DeckNode`` column
+  places them (:ref:`outputs-refined-nodes`).
 * :func:`cabledyn.static_range_graph` builds it from a ``.static.out`` profile.
 * :func:`cabledyn.element_range_graph` builds it from a cubic-Hermite ``.elements.out`` table:
   the peak curvature or bend moment of each element, where it occurs between the nodes, or the

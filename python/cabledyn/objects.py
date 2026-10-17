@@ -147,9 +147,13 @@ class _View:
 class Line(_View):
     """One line (mooring line or cable) of an in-process model.
 
-    Nodes run from End A (index 0) to End B, the order of the ``L<L>N<k>`` output
-    channels (node ``k`` is array row ``k - 1``) and of the ``.Line<L>.p.out``
-    files. Segments run in the same order.
+    Nodes run from End A (index 0) to End B, the order of the ``.Line<L>.p.out``
+    files; segments run in the same order. The arrays hold every node of the
+    line's final mesh. On the deck mesh node ``k`` (array row ``k - 1``) is the
+    node of the ``L<L>N<k>`` output channels; on a finite-EI line whose mesh the
+    static solve refined, the channels name the deck nodes among the mesh nodes
+    (``Ten<L>N<J>`` is deck node ``J``), which the ``DeckNode`` column of the
+    run's ``.static.out`` locates.
     """
 
     _kind = OBJ_LINE
