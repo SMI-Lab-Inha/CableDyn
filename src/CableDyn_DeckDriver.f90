@@ -24717,7 +24717,7 @@ CONTAINS
     INTEGER :: ir, base, j, n, es
     REAL(wp) :: arm(3), f_end(3, 2), f_env(3), m_env(3), f_sb(3), m_sb(3), added6(6, 6), drag6(6, 6)
     REAL(wp) :: dv(6, 6), acc6(6), ig(3, 3), mc(3), acc(3), alpha(3), pin_host(9)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     force = CD_ZERO
     moment = CD_ZERO
@@ -31040,7 +31040,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: f_first(3), f_last(3)
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     val = CD_ZERO
     ErrStat = CD_DECKDRV_OK
@@ -32082,6 +32082,7 @@ CONTAINS
     INTEGER :: nn, ne, e, j, k, inode, es
     REAL(wp) :: curv, bend
     CHARACTER(200) :: em ! per-element curvature messages (at most 55 characters)
+    CHARACTER(1024) :: em_rec ! the one node-value recovery message of the sample
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -32110,11 +32111,11 @@ CONTAINS
       ! equilibrium node values, one pass over the elements straight into the public-order rows
       ! (internal node i is public node nn + 1 - i); the segment tensions (internal order) stay
       ! in rl%ten_e for the .t.out row
-      CALL CD_HermiteCable_Dyn_Node_Recovery(cable%line, es, em, tension=rl%val(CD_RQ_TENSION, nn:1:-1), &
+      CALL CD_HermiteCable_Dyn_Node_Recovery(cable%line, es, em_rec, tension=rl%val(CD_RQ_TENSION, nn:1:-1), &
                                              curvature=rl%val(CD_RQ_CURVATURE, nn:1:-1), &
                                              bend_moment=rl%val(CD_RQ_BEND, nn:1:-1), segment_tension=rl%ten_e)
       IF (es /= CD_HCDYN_OK) THEN
-        CALL fail_solve(ErrStat, ErrMsg, 'range-graph node-value recovery failed: '//TRIM(em)); RETURN
+        CALL fail_solve(ErrStat, ErrMsg, 'range-graph node-value recovery failed: '//TRIM(em_rec)); RETURN
       END IF
     ELSE
       CALL range_sample_cable_element(ErrStat, ErrMsg)
@@ -33154,7 +33155,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     CALL CD_HermiteCable_Dyn_Node_Values(cable%line, inode, tension, curvature, bend_moment, es, em)
     IF (es /= CD_HCDYN_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI node-value recovery failed: '//TRIM(em))
@@ -33170,7 +33171,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: ne, e, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     ne = cable%line%ne
     IF (cable%line%output_element_recovery) THEN

@@ -1435,7 +1435,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(300) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Curvature_Exact: module not initialised'; RETURN
