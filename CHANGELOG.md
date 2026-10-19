@@ -483,7 +483,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the dashpot's end share, so that the whole blend of a segment ending slack returns at most its
   strain energy unless that end share alone returns more (in the test chain it returned up to
   2750 times that with only the elastic share capped); a damped segment that ends taut beyond
-  that band keeps the plain force blend. The seabed contact of
+  that band keeps the plain force blend. A damped segment slack at the step start keeps its
+  step-start dashpot force under a cap too, so that this kept share returns at most the
+  dashpot's own one-step dissipation `T_d,n |l̇_n| Δt` plus the end share's credit (up to 46
+  times that in the test chain before). The seabed contact of
   a node that lifts off within a step is not capped (see the manual's theory page). At the
   default `rhoInf` the light cable now peaks at 0.10 / 0.09 MN at `dtM` 0.0025 s and at 0.092 /
   0.106 MN at 0.1 s, the same cable in the JONSWAP sea at 0.075 / 0.043 MN and the

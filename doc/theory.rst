@@ -1487,8 +1487,8 @@ difference (:math:`\partial p/\partial \mathbf{d}_{n+1} = -\mathbf{t}_n`). With
 state crosses the rest length, so the residual stays continuous in :math:`\mathbf{q}_{n+1}`. A
 cap on the slack end states alone would jump there, by up to :math:`\alpha_f T_n` for a turned
 element. The cap does not act on an element that ends above :math:`\alpha_f/(1 - \alpha_f)\,T_n`
-(0.4 :math:`T_n`), nor on one that keeps its direction and ends taut, nor on one slack at
-:math:`t_n`: those elements, every element going taut (where the force blend dissipates), and
+(0.4 :math:`T_n`), nor on one that keeps its direction and ends taut, nor (but for the share of
+its dashpot, below) on one slack at :math:`t_n`: those elements, every element going taut (where the force blend dissipates), and
 every line that allows compression keep the force blend. In the slack-cable case above the
 internal forces created 2.7e8 J over 20 s with the configuration blend, 6.7e7 J with the force
 blend alone, 0.19 J with a cap on :math:`e_n - e_{n+1}` (the turn of the releasing segments) and
@@ -1562,6 +1562,26 @@ and below :math:`l_0` that is :math:`W_n`. Above :math:`l_0 + c\,e_n` the cap is
 so the force-blended dashpot of a taut segment keeps the standard generalised-α treatment, under
 which a linear dashpot is dissipative; :math:`\phi` is continuous, and so is the capped force.
 The viscoelastic law keeps its total tension, dashpots included, as :math:`T_n` (above).
+
+A damped segment slack at :math:`t_n` (:math:`T_n = 0`, :math:`e_n \le 0`) whose ends separate
+there keeps :math:`\alpha_f T_{d,n}` along :math:`\mathbf{t}_n` with no strain energy behind it,
+and returns :math:`\alpha_f T_{d,n} p` when the step turns or reverses its ends. It has no
+:math:`W_n` (and an empty band, :math:`\phi = 1`); its budget is the dashpot's own one-step
+dissipation :math:`W_d = T_{d,n}\,|\dot l_n|\,\Delta t`, :math:`\dot l_n` the dashpot's
+elongation rate at :math:`t_n` (the axial rate, less :math:`l_n \dot l_0/l_0` while the line
+pays out), so that :math:`T_{d,n} = (BA/l_0)\,\dot l_n` and :math:`W_d > 0` whenever
+:math:`T_{d,n} \ne 0`. When :math:`p > 0` the kept force :math:`\alpha_f T_{d,n}` is replaced by
+:math:`(W_d + N_d)/p` when that is smaller, with the end share's credit
+:math:`N_d = \max((1 - \alpha_f) T_{d,n+1} p_{n+1}, 0)`, and the tangent takes the difference as
+above (a compressive :math:`T_{d,n}` is capped alike when :math:`p < 0`). The kept dashpot share
+of an element slack at the step start returns at most its own one-step dissipation
+:math:`T_{d,n} |\dot l_n| \Delta t` plus the end share's credit. The capped force grows without
+bound as :math:`p \to 0^+`, so it is continuous there; it acts only where
+:math:`\alpha_f |p| > |\dot l_n| \Delta t`, a turn or reversal well beyond the step-start motion
+whose end share does little work (a reversal along the chord feeds the end share's dashpot,
+whose credit covers it). In the test chain the kept share returned up to 46 times
+:math:`W_d + N_d` before the cap covered slack starts. Taut-start and undamped segments are
+unchanged.
 
 The one-sided seabed contact is not capped. A node that leaves the floor within a step keeps
 :math:`\alpha_f` of its step-start contact force :math:`N_n` for the whole step: over a lift-off

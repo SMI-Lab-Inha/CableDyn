@@ -57,6 +57,12 @@ PROGRAM test_ei0_slack_dynamics
   !!   9. A lightly damped viscoelastic version of the light cable at dtM 0.1 s (the cap on its
   !!      law segments) and a long taut Syrope line in 4 m surge that goes slack: no spike
   !!      warning, and peaks within the band of small-step references.
+  !!  10. An elastic segment with an axial dashpot that is slack at t_n and whose ends separate
+  !!      (or approach) there, then turn or reverse within the step: the kept dashpot share
+  !!      returns at most the dashpot's one-step dissipation T_d,n |ldot_n| dt plus the end
+  !!      share's credit (it returned many times that before the cap covered slack starts), a
+  !!      slack segment with no step-start dashpot force keeps the plain blend, and the tangent
+  !!      of a capped row matches the finite difference on the banded and the dense path.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Cable_Gen_Alpha_Step, CD_DYN_OK
@@ -91,6 +97,7 @@ PROGRAM test_ei0_slack_dynamics
   CALL case_law_release_cap()
   CALL case_law_damped_release()
   CALL case_damped_elastic_release()
+  CALL case_slack_dashpot_release()
   CALL case_load_share_tangent()
   CALL case_warm_resolve_reuse()
   CALL case_light_cable_coarse_step()
@@ -1205,6 +1212,141 @@ CONTAINS
     CALL fd_tangent_check(label, qn, vn, z, q1, l0, ea, [2.0_wp, 3.0_wp, 1.5_wp], .TRUE., axial_damping=ad)
     CALL fd_tangent_check(label, qn, vn, z, q1, l0, ea, [2.0_wp, 3.0_wp, 1.5_wp], .FALSE., axial_damping=ad)
   END SUBROUTINE damped_tangent_case
+
+  SUBROUTINE case_slack_dashpot_release()
+    !! The dashpot segment of case_damped_elastic_release slack at t_n (e_n = -1.6 mm), its far
+    !! end moving at +-0.05, 0.5 or 2 m/s along the chord (dashpot tension T_d,n = BA rate/l0, a
+    !! compressive one for the negative rate), turning by 0 to 180 degrees within the step and
+    !! ending slack or taut. The kept share alpha_f T_d,n t_n returns T_k p (T_k the kept
+    !! tension the residual carries, p the projected shortening): at most
+    !! W_d + N_d, W_d = T_d,n ldot_n dt the dashpot's one-step dissipation and
+    !! N_d = max((1 - alpha_f) T_d,n+1 p_n+1, 0) the end share's credit. Without the cap (no
+    !! axial_damping) it returns alpha_f T_d,n p, up to 46 times W_d + N_d on these rows (the cap
+    !! acts where the end share does little work: turns that end near the projection of the
+    !! step-start chord; a reversal along the chord feeds the end share's dashpot instead).
+    !! A slack segment with no step-start dashpot
+    !! force keeps the plain blend, and the tangent matches the finite difference where the
+    !! cap acts.
+    REAL(wp), PARAMETER :: L0(3) = [1.0_wp, 1.2_wp, 0.8_wp], EA(3) = [1.0e6_wp, 1.5e6_wp, 0.8e6_wp]
+    REAL(wp), PARAMETER :: DIRS(3, 3) = RESHAPE([1.0_wp, 0.2_wp, 0.1_wp, 0.3_wp, 1.0_wp, -0.2_wp, &
+                                                 -0.2_wp, 0.4_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: THETA(8) = [0.0_wp, 2.0_wp, 5.0_wp, 20.0_wp, 45.0_wp, 90.0_wp, 135.0_wp, 180.0_wp]
+    REAL(wp), PARAMETER :: S1(9) = [-0.5_wp, -0.1_wp, -0.01_wp, -2.0e-3_wp, -1.0e-4_wp, 1.0e-4_wp, &
+                                    1.0e-3_wp, 0.01_wp, 0.05_wp]
+    REAL(wp), PARAMETER :: OFS(5) = [-0.02_wp, -0.003_wp, 0.0_wp, 0.003_wp, 0.02_wp]
+    REAL(wp), PARAMETER :: RATE(4) = [0.05_wp, 0.5_wp, 2.0_wp, -0.5_wp], DT = 0.05_wp, RHO = 0.4_wp
+    REAL(wp), PARAMETER :: BA = 2.0e4_wp, AD(3) = [0.0_wp, 0.0_wp, BA]
+    REAL(wp), PARAMETER :: RHO_TINY(3) = [1.0e-12_wp, 1.0e-12_wp, 1.0e-12_wp]
+    REAL(wp) :: qn(12), q1(12), vn(12), z(12), v1(12), R(12), Rp(12), K(9, 9), tn(3), u(3), dir(3)
+    REAL(wp) :: d0(3), d1(3), t1(3), l1, td0, td1, p, p1, am, af, beta, gamma, wd, nd, tk, wk, wu
+    REAL(wp) :: worst, unc_ratio, unc_excess, dev
+    INTEGER :: i, j, ir, nact, nrow
+    CALL reset_chain_load()
+    cb_dash_elem = 3
+    cb_ba_dash = BA
+    cb_l0_dash = L0(3)
+    am = (2.0_wp*RHO - 1.0_wp)/(RHO + 1.0_wp)
+    af = RHO/(RHO + 1.0_wp)
+    beta = 0.25_wp*(1.0_wp - am + af)**2
+    gamma = 0.5_wp - am + af
+    CALL chain_nodes(DIRS, [0.010_wp, 0.020_wp, -0.002_wp], L0, qn)
+    z = 0.0_wp
+    d0 = qn(10:12) - qn(7:9)
+    tn = d0/NORM2(d0)
+    u = [tn(2), -tn(1), 0.0_wp]
+    u = u/NORM2(u)
+    worst = -HUGE(1.0_wp)
+    unc_ratio = 0.0_wp
+    unc_excess = 0.0_wp
+    nact = 0
+    nrow = 0
+    DO ir = 1, SIZE(RATE)
+      vn = 0.0_wp
+      vn(10:12) = RATE(ir)*tn
+      td0 = BA*RATE(ir)/L0(3)
+      wd = td0*RATE(ir)*DT
+      DO i = 1, SIZE(THETA)
+        DO j = 1, SIZE(S1) + SIZE(OFS)
+          dir = COS(THETA(i)*PI/180.0_wp)*tn + SIN(THETA(i)*PI/180.0_wp)*u
+          IF (j <= SIZE(S1)) THEN
+            l1 = L0(3)*(1.0_wp + S1(j))
+          ELSE
+            ! the end near the projection of the step-start chord (p_n+1 ~ OFS): a turn whose
+            ! end share does little work, where the cap acts
+            l1 = MAX(NORM2(d0)*COS(THETA(i)*PI/180.0_wp) + OFS(j - SIZE(S1)), 0.05_wp*L0(3))
+          END IF
+          q1 = qn
+          q1(10:12) = qn(7:9) + l1*dir
+          CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., R, K, axial_damping=AD)
+          CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., Rp, K)
+          v1 = gamma/(beta*DT)*(q1 - qn) + (1.0_wp - gamma/beta)*vn
+          v1(1:3) = 0.0_wp
+          d1 = q1(10:12) - q1(7:9)
+          l1 = NORM2(d1)
+          t1 = d1/l1
+          p = NORM2(d0) - DOT_PRODUCT(tn, d1)
+          p1 = l1 - DOT_PRODUCT(t1, d0)
+          td1 = BA*DOT_PRODUCT(t1, v1(10:12) - v1(7:9))/L0(3)
+          nd = MAX((1.0_wp - af)*td1*p1, 0.0_wp)
+          ! the kept tension: alpha_f T_d,n plus the cap's correction along t_n at node b
+          tk = af*td0 + DOT_PRODUCT(R(10:12) - Rp(10:12), tn)
+          wk = tk*p
+          wu = af*td0*p
+          nrow = nrow + 1
+          IF (MAXVAL(ABS(R(10:12) - Rp(10:12))) > 1.0e-9_wp*ABS(td0)) nact = nact + 1
+          worst = MAX(worst, (wk - (wd + nd))/wd)
+          unc_ratio = MAX(unc_ratio, wu/(wd + nd))
+          unc_excess = MAX(unc_excess, (wu - (wd + nd))/wd)
+          IF (j > SIZE(S1)) CYCLE
+          IF (THETA(i) == 0.0_wp .AND. S1(j)*RATE(ir) > 0.0_wp) THEN
+            ! a segment that keeps its direction and moves on at its step-start sense: uncapped
+            CALL require(MAXVAL(ABS(R(10:12) - Rp(10:12))) == 0.0_wp, 'slack-dashpot:same-sense-uncapped')
+          END IF
+        END DO
+      END DO
+    END DO
+    WRITE (*, '(A,I0,A,I0,A,ES10.3,A,ES10.3,A,ES10.3)') '  slack dashpot: cap active at ', nact, ' of ', nrow, &
+      ' rows; kept-share work over W_d + N_d, / W_d: ', worst, ' (uncapped ', unc_excess, &
+      '; uncapped / (W_d + N_d) up to ', unc_ratio
+    CALL require(nact >= 20, 'slack-dashpot:cap-active')
+    CALL require(unc_ratio > 10.0_wp, 'slack-dashpot:uncapped-exceeds')
+    CALL require(worst <= 1.0e-9_wp, 'slack-dashpot:bound')
+    ! a slack segment with no step-start dashpot force (ends at rest along the chord) keeps the
+    ! plain blend bit for bit, reversed or not
+    vn = 0.0_wp
+    vn(10:12) = 0.5_wp*u
+    q1 = qn
+    q1(10:12) = qn(7:9) - 0.9_wp*L0(3)*tn
+    CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., R, K, axial_damping=AD)
+    CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., Rp, K)
+    dev = MAXVAL(ABS(R - Rp))
+    CALL require(dev == 0.0_wp, 'slack-dashpot:no-start-dashpot-uncapped')
+    ! the tangent where the cap acts: turning 60 degrees with the end at p_n+1 = 3 mm (end
+    ! share pushing, no credit) and 20 mm (a positive credit), extending at 0.5 m/s at t_n
+    vn = 0.0_wp
+    vn(10:12) = 0.5_wp*tn
+    dir = COS(PI/3.0_wp)*tn + SIN(PI/3.0_wp)*u
+    q1 = qn
+    q1(10:12) = qn(7:9) + (0.5_wp*NORM2(d0) + 3.0e-3_wp)*dir
+    CALL slack_tangent_case('slack-dashpot-no-credit', qn, vn, q1, L0, EA, AD, BA*0.5_wp/L0(3))
+    q1(10:12) = qn(7:9) + (0.5_wp*NORM2(d0) + 2.0e-2_wp)*dir
+    CALL slack_tangent_case('slack-dashpot-credit', qn, vn, q1, L0, EA, AD, BA*0.5_wp/L0(3))
+    CALL reset_chain_load()
+  END SUBROUTINE case_slack_dashpot_release
+
+  SUBROUTINE slack_tangent_case(label, qn, vn, q1, l0, ea, ad, td0)
+    !! A capped row of case_slack_dashpot_release: the cap is active, and the tangent matches
+    !! the finite difference on both paths.
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), INTENT(IN) :: qn(12), vn(12), q1(12), l0(3), ea(3), ad(3), td0
+    REAL(wp) :: Ra(12), Rb(12), Kd(9, 9), z(12)
+    z = 0.0_wp
+    CALL probe_chain(qn, vn, z, q1, l0, ea, [1.0e-12_wp, 1.0e-12_wp, 1.0e-12_wp], .TRUE., Ra, Kd, axial_damping=ad)
+    CALL probe_chain(qn, vn, z, q1, l0, ea, [1.0e-12_wp, 1.0e-12_wp, 1.0e-12_wp], .TRUE., Rb, Kd)
+    CALL require(MAXVAL(ABS(Ra(10:12) - Rb(10:12))) > 1.0e-2_wp*ABS(td0), label//':cap-active')
+    CALL fd_tangent_check(label, qn, vn, z, q1, l0, ea, [2.0_wp, 3.0_wp, 1.5_wp], .TRUE., axial_damping=ad)
+    CALL fd_tangent_check(label, qn, vn, z, q1, l0, ea, [2.0_wp, 3.0_wp, 1.5_wp], .FALSE., axial_damping=ad)
+  END SUBROUTINE slack_tangent_case
 
   SUBROUTINE law_cap_config(label, strain_n, strain_1, dirs_trial)
     CHARACTER(*), INTENT(IN) :: label

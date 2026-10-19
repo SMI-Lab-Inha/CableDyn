@@ -2089,7 +2089,8 @@ CONTAINS
       !! For an elastic element T^_1 = T_1: its blend returns at most W_0 over every step (an
       !! element that ends slack carries the discrete energy gradient W_0/p and returns exactly
       !! W_0), and the cap acts on a taut end state only when the element turned and
-      !! T_1 < alpha_f/(1 - alpha_f) T_0. An element slack at t_n keeps the force blend.
+      !! T_1 < alpha_f/(1 - alpha_f) T_0. An element slack at t_n keeps the force blend, but for
+      !! the kept share of its dashpot (below).
       !! N >= W_0/2 always (k e_0 <= T_0), so 4 alpha_f p <= e_0 is a sufficient test of an
       !! inactive cap. The residual and the tangent are corrected by the difference.
       !! An element whose axial law a load callback carries (ea = 0, T_0 from start_tension) is
@@ -2119,17 +2120,34 @@ CONTAINS
       !! dashpot, the cap is the one above, so the force-blended dashpot of a taut line keeps the
       !! standard generalised-alpha treatment. The weight is continuous, so is the capped force;
       !! the tangent carries dT_d,1/dq_{n+1} through v_{n+1} (gamma/(beta dt)).
+      !! An element with a dashpot that is slack at t_n (T_0 = 0, e_0 <= 0) keeps only
+      !! alpha_f T_d,0 along t_0, which returns alpha_f T_d,0 p, with no strain energy behind it,
+      !! when the step reverses or turns its ends against the step-start rate. Its budget is the
+      !! dashpot's own one-step dissipation W_d = T_d,0 ldot_0 dt, ldot_0 = l0 T_d,0/BA the
+      !! dashpot's elongation rate at t_n (the axial rate less the paid-out rate l_n l0_dot/l0;
+      !! the axial rate itself without payout), so W_d > 0 whenever T_d,0 /= 0. When
+      !! alpha_f T_d,0 p > 0 exceeds W_d + N_d, N_d = max((1 - alpha_f) T_d,1 p_1, 0) the end
+      !! share's credit (phi = 1: the band of a slack start is empty), the element carries
+      !! (W_d + N_d)/p instead of alpha_f T_d,0 along t_0, so the kept dashpot share of an
+      !! element slack at the step start returns at most its own one-step dissipation
+      !! T_d,0 |ldot_0| dt plus the end share's credit. The capped force grows without bound as
+      !! p -> 0 (W_d > 0), so the force is continuous there; alpha_f |p| <= |ldot_0| dt is a
+      !! sufficient test of an inactive cap. The same law covers a compressive T_d,0 (p < 0).
       REAL(wp), INTENT(IN) :: q_eval(:)
       REAL(wp), INTENT(INOUT) :: Rout(:)
       REAL(wp), INTENT(INOUT), OPTIONAL :: effout(:, :), effbandout(:, :)
       INTEGER :: e, na, nb, i, j, gi(6), fi, fj
       REAL(wp) :: d1(3), l1, e1, e0, t0, p, p1, num, ln, k0, ten1, cosang, dg, delta, t1(3), g(3), blk(3, 3), sgn
-      REAL(wp) :: band, phi, dphi, td1, dv(3), dp1(3), dtd1(3), kc
-      LOGICAL :: taut_end, damped
+      REAL(wp) :: band, phi, dphi, td1, dv(3), dp1(3), dtd1(3), kc, credit
+      LOGICAL :: taut_end, damped, slack
       band = alpha_f/(CD_ONE - alpha_f)
       DO e = 1, n_elem
         t0 = tension_n(e)
-        IF (.NOT. t0 > CD_ZERO) CYCLE
+        ! an element slack at t_n is capped only for the kept share of a step-start dashpot force
+        slack = .NOT. t0 > CD_ZERO
+        IF (slack) THEN
+          IF (.NOT. (dcoef_n(e) > CD_ZERO .AND. ABS(damp_n(e)) > CD_ZERO)) CYCLE
+        END IF
         na = elem_conn(1, e)
         nb = elem_conn(2, e)
         d1 = q_eval(3*nb - 2:3*nb) - q_eval(3*na - 2:3*na)
@@ -2137,10 +2155,43 @@ CONTAINS
         ! projected shortening p = l_n - t_0 . d_1 (l_n = l0 + e_0); the common case, an element
         ! that does not release, is decided here without a root
         p = e0 + (l0(e) - (chord_n(1, e)*d1(1) + chord_n(2, e)*d1(2) + chord_n(3, e)*d1(3)))
-        ! a damped element whose end state lies below the band edge l0 + band e_0
-        damped = dcoef_n(e) > CD_ZERO
-        IF (damped) damped = d1(1)*d1(1) + d1(2)*d1(2) + d1(3)*d1(3) < (l0(e) + band*e0)**2
-        IF (damped) THEN
+        ! a damped element taut at t_n whose end state lies below the band edge l0 + band e_0
+        damped = .FALSE.
+        IF (.NOT. slack) THEN
+          damped = dcoef_n(e) > CD_ZERO
+          IF (damped) damped = d1(1)*d1(1) + d1(2)*d1(2) + d1(3)*d1(3) < (l0(e) + band*e0)**2
+        END IF
+        IF (slack) THEN
+          ! the kept dashpot share alpha_f T_d,0 returns work only when T_d,0 p > 0, and stays
+          ! within W_d = T_d,0^2 dt/(BA/l0) while alpha_f |p| <= |ldot_0| dt
+          IF (.NOT. damp_n(e)*p > CD_ZERO) CYCLE
+          IF (alpha_f*ABS(p)*dcoef_n(e) <= ABS(damp_n(e))*dt) CYCLE
+          l1 = NORM2(d1)
+          IF (.NOT. l1 > CD_ZERO) CYCLE
+          ln = l0(e) + e0
+          t1 = d1/l1
+          cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
+          p1 = (l1 - ln) + 0.5_wp*ln*((t1(1) - chord_n(1, e))**2 + (t1(2) - chord_n(2, e))**2 + &
+                                      (t1(3) - chord_n(3, e))**2)
+          dv = v_eval(3*nb - 2:3*nb) - v_eval(3*na - 2:3*na)
+          td1 = dcoef_n(e)*(DOT_PRODUCT(t1, dv) - l1*rl0dot_n(e))
+          credit = (CD_ONE - alpha_f)*td1*p1
+          num = damp_n(e)*damp_n(e)*dt/dcoef_n(e) + MAX(credit, CD_ZERO)
+          dg = num/p
+          IF (ABS(dg) >= alpha_f*ABS(damp_n(e))) CYCLE
+          delta = dg - alpha_f*damp_n(e)
+          Rout(3*na - 2:3*na) = Rout(3*na - 2:3*na) - delta*chord_n(:, e)
+          Rout(3*nb - 2:3*nb) = Rout(3*nb - 2:3*nb) + delta*chord_n(:, e)
+          IF (.NOT. (PRESENT(effout) .OR. PRESENT(effbandout))) CYCLE
+          ! d(delta)/d(x_b) = g, d(delta)/d(x_a) = -g: dp/dd_1 = -t_0, and while the credit is
+          ! positive dp_1/dd_1 and dT_d,1/dx_b as on the taut damped path
+          g = (num/(p*p))*chord_n(:, e)
+          IF (credit > CD_ZERO) THEN
+            dp1 = t1 - (ln/l1)*(chord_n(:, e) - cosang*t1)
+            dtd1 = dcoef_n(e)*((dv - DOT_PRODUCT(t1, dv)*t1)/l1 + (gamma/(beta*dt) - rl0dot_n(e))*t1)
+            g = g + ((CD_ONE - alpha_f)/p)*(td1*dp1 + p1*dtd1)
+          END IF
+        ELSE IF (damped) THEN
           IF (.NOT. p > CD_ZERO) CYCLE
           l1 = NORM2(d1)
           IF (.NOT. l1 > CD_ZERO) CYCLE
