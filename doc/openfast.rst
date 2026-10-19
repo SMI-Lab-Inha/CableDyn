@@ -156,7 +156,8 @@ the seabed and the still-water level (with the elevation SeaState sampled, also 
 host current is used). A dynamic current field (an InflowWind-driven current) is read on its
 own grid and is not checked. SeaState measures its field from the still-water level, and the
 mooring samples it at positions relative to the mean sea level, so a run with host waves or
-current refuses a nonzero ``MSL2SWL`` at initialisation. Excursions smaller than
+current from SeaState refuses a nonzero ``MSL2SWL`` at initialisation (a deck that takes
+both from WaterKin does not query SeaState and is not affected). Excursions smaller than
 1 % of the grid spacing at the boundary are ignored, and so are nodes below a grid that reaches
 the seabed (``Z_Depth = WtrDpth + MSL2SWL``): they are in the seabed, where the kinematics of the
 grid bottom are the right ones. FAST.Farm runs, which use still water, and SeaState fields

@@ -677,16 +677,6 @@ CONTAINS
                                 RoutineName )
                RETURN
             END IF
-            ! SeaState measures its wave field and grid from the still-water level, and its
-            ! node queries take SWL-relative positions; the mooring samples it at global
-            ! positions, which coincide only when the still-water level is the mean sea level
-            IF (ABS(InitInp%WaveField%MSL2SWL) > 0.0_ReKi) THEN
-               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: SeaState MSL2SWL = '// &
-                                TRIM(Num2LStr(InitInp%WaveField%MSL2SWL))//' m is not supported with '// &
-                                'host waves or current: the mooring samples SeaState at positions relative '// &
-                                'to the mean sea level. Set MSL2SWL = 0.', ErrStat, ErrMsg, RoutineName )
-               RETURN
-            END IF
          END IF
       END IF
 
@@ -1747,6 +1737,19 @@ CONTAINS
       CALL CD_AGG_GetFluidNodePositions( inst_e%agg, inst_e%fx_xyz, es, em )
       IF (es /= CD_AGG_OK) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+         RETURN
+      END IF
+      ! SeaState measures its wave field and grid from the still-water level, and its node
+      ! queries take SWL-relative positions; the mooring samples it at positions relative to the
+      ! mean sea level, which coincide only for MSL2SWL = 0. Checked here, where the deck's
+      ! WaterKin policy has decided whether SeaState is queried at all.
+      IF ((inst_e%agg%host_wave_enabled .OR. inst_e%agg%host_current_enabled) .AND. &
+          ABS(p%WaveField%MSL2SWL) > 0.0_ReKi) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: SeaState MSL2SWL = '// &
+                          TRIM(Num2LStr(p%WaveField%MSL2SWL))//' m is not supported with host waves or '// &
+                          'current: the mooring samples SeaState at positions relative to the mean sea '// &
+                          'level. Set MSL2SWL = 0, or take the waves and current from the deck (WaterKin).', &
+                          ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
       IF ((inst_e%agg%host_wave_enabled .NEQV. inst_e%agg%host_current_enabled) .AND. &
