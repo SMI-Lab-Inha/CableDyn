@@ -140,6 +140,27 @@ only because its stability limit forces a step of that size; the implicit solver
 (Orcina) shows a
 similar plateau (about 0.5 %). When snap-tension histories matter, use the coarsest mesh that
 resolves the line shape and refine ``dtM`` toward :math:`l/(2c)`, rather than refining both.
+At a much coarser ``dtM`` the step no longer resolves the rotation of the line during a snap,
+and the peaks follow the algorithmic damping (10 to 20 % low at 6° of segment turn per step).
+By default (``ei0_substeps auto``) such steps of an ``EI = 0`` line are solved in sub-steps,
+which brings the Lozon mooring snap peaks at ``dtM = 0.1 s`` within 8 % on average; single
+peaks at that step still vary by 15 to 20 points with tiny changes of the motion, so compare
+ensembles or refine ``dtM`` before drawing conclusions from one peak. The driver reports the
+sub-stepped steps per line and notes a turn per step it did not resolve (see
+:doc:`options`, ``ei0_substeps``).
+
+The snap peaks of an undamped tension-only line do not converge in time or mesh: its single
+segments rattle against the stiff axial spring, and the peak rises as ``dtM`` falls. On a light,
+axially stiff cable (80 kg/m, EA 8e8 N, 2 m segments) in 3 m heave it rises from about 0.1 MN at
+``dtM = 2.5 ms`` to 0.32 to 0.46 MN at microsecond steps, also with an explicit lumped-mass
+solver, while converged finite-EI runs give 0.093 MN at the fairlead and 0.057 MN at the anchor.
+To obtain converged peaks, give such lines physical axial damping, ``BA`` as a material
+property in N·s (the negative, per-segment damping-ratio form changes with the mesh: it halves
+with each halving of the segment length), or model them with finite ``EI``. With ``BA = 0`` and
+a ``dtM`` that does not resolve the axial wave over a segment, the sub-steps of
+``ei0_substeps auto`` resolve more of the segment rattle and can raise isolated spikes (at
+``dtM = 2.5 ms`` the anchor peak of that cable rises from 0.091 to 0.119 MN); at a ``dtM`` that
+resolves the wave a snap does not trigger them, and at 0.5 ms the cable takes no sub-step.
 
 6. Establish the static initial condition
 -----------------------------------------

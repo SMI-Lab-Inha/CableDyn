@@ -16,7 +16,7 @@ PROGRAM test_syrope
                              CD_Syrope_Slow_At_Mean, CD_Syrope_Check_Range, CD_Syrope_Branch_Divider, &
                              CD_SYROPE_OK, CD_SYROPE_NWC, &
                              CD_SYROPE_WC_LINEAR, CD_SYROPE_WC_QUADRATIC, CD_SYROPE_WC_EXP
-  USE CableDyn_Dynamic, ONLY: GenAlphaConfig
+  USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_EI0_SUBSTEPS_OFF
   USE CableDyn_Static, ONLY: CableSolverConfig
   USE CableDyn_Line, ONLY: CD_LineType, CD_LineSection
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Init_Model, CD_Init_Line_Model, CD_Step_Model, CD_End_Model, &
@@ -73,6 +73,7 @@ PROGRAM test_syrope
   CALL case_model_held()
   CALL case_syrope_accessor_roundtrip()
   CALL case_model_mixed_ve_syrope()
+  CALL case_substeps_restore_law_states()
   CALL case_line_model_syrope()
   CALL case_admissibility()
   CALL case_ic_rest_point()
@@ -684,6 +685,121 @@ CONTAINS
     CALL CD_End_Model(model, es, em)
     CALL CD_Syrope_End(td)
   END SUBROUTINE case_model_mixed_ve_syrope
+
+  SUBROUTINE case_substeps_restore_law_states()
+    !! The rotation-resolved sub-stepping of a model carrying a Syrope and a viscoelastic
+    !! element (case_model_mixed_ve_syrope, the viscoelastic element 1000 times stiffer so that
+    !! its law tension counts as taut against the 0.8 MN of the Syrope element), node 2 free and
+    !! node 3 driven on a 0.4 m circle at 2 s, so the chords turn by more than a degree per
+    !! 0.02 s step: solving the first
+    !! sub-stepped pass twice, the second from the restored committed state (TEST-ONLY
+    !! sub_test_repeat), changes nothing bit for bit, Syrope slow strain and running maximum and
+    !! viscoelastic dl_1 included; a failing sub-step (TEST-ONLY sub_test_fail) returns the plain
+    !! step, the run then equals the run with ei0_substeps off bit for bit.
+    REAL(wp), PARAMETER :: L0E = 1.0_wp, EPS = 0.026_wp, DL = 0.03_wp, DT = 0.02_wp, R = 0.4_wp
+    INTEGER, PARAMETER :: NSTEP = 40
+    TYPE(CD_SyropeType) :: td, stype(2)
+    TYPE(CD_ModelType) :: auto_m, rep_m, fb_m, off_m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, 2), fixed(6), es, k, n_iter
+    REAL(wp) :: l0(2), eav(2), rho_a(2), q0(9), v0(9), f_ext(9), pq(9), pv(9), pa(9)
+    REAL(wp) :: ve_ead(2), ve_ba(2), ve_bad(2), sslow(2), stmax(2), w, t, slow0(2), dl0(2)
+    LOGICAL :: sis(2), conv, stalled, all_conv
+    CHARACTER(200) :: em
+    CALL CD_Syrope_Init(td, OWC_EPS, OWC_TEN, CD_SYROPE_WC_LINEAR, 0.6_wp, 0.0_wp, &
+                        ALPHA, BETA, C1, C2, es, em)
+    CALL require(es == CD_SYROPE_OK, 'substep-law:type-init')
+    conn(:, 1) = [1, 2]
+    conn(:, 2) = [2, 3]
+    l0 = L0E
+    eav = [1.0e8_wp, 1.0e5_wp]
+    rho_a = 50.0_wp
+    q0 = 0.0_wp
+    q0(4) = L0E*(1.0_wp + EPS)
+    q0(7) = q0(4) + L0E*(1.0_wp + DL)
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    fixed = [1, 2, 3, 7, 8, 9]
+    sis = [.TRUE., .FALSE.]
+    stype(1) = td
+    stype(2) = td
+    sslow = [0.021_wp, 0.0_wp]
+    stmax = [2.0e6_wp, 0.0_wp]
+    ve_ead = [0.0_wp, 4.0e5_wp]
+    ve_ba = [0.0_wp, 7.0_wp]
+    ve_bad = [0.0_wp, 3.0_wp]
+    CALL CD_Init_Model(auto_m, q0, v0, conn, l0, eav, rho_a, .TRUE., f_ext, fixed, cfg, es, em, &
+                       ve_ea_d=ve_ead, ve_ba=ve_ba, ve_ba_d=ve_bad, &
+                       syrope_is=sis, syrope_type=stype, syrope_slow0=sslow, syrope_tmax0=stmax)
+    CALL require(es == CD_MODEL_OK, 'substep-law:init: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    slow0 = auto_m%syrope_slow
+    dl0 = auto_m%ve_dl_1
+    CALL CD_Copy_Model(auto_m, rep_m, es, em)
+    rep_m%sub_test_repeat = .TRUE.
+    CALL CD_Copy_Model(auto_m, fb_m, es, em)
+    fb_m%sub_test_fail = 1
+    CALL CD_Copy_Model(auto_m, off_m, es, em)
+    off_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+    w = 2.0_wp*ACOS(-1.0_wp)/2.0_wp
+    all_conv = .TRUE.
+    DO k = 1, NSTEP
+      ! node 3 on the circle q0(7:9) + R ramp(t) (0, sin wt, 1 - cos wt), ramped over the first second
+      t = REAL(k, wp)*DT
+      CALL ramped_circle(t, q0, w, R, pq, pv, pa)
+      CALL CD_Step_Model(auto_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(rep_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(fb_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(off_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+    END DO
+    WRITE (*, '(A,I0,A,I0,A,I0,A)') '  sub-steps with Syrope and viscoelastic states: ', auto_m%sub_stats%events, &
+      ' of ', auto_m%sub_stats%calls, ' steps sub-stepped, ', fb_m%sub_stats%fallbacks, ' failing-sub-step fallbacks'
+    CALL require(all_conv, 'substep-law:converged')
+    CALL require(auto_m%sub_stats%events > 0, 'substep-law:sub-stepped')
+    CALL require(ANY(auto_m%syrope_slow /= slow0) .AND. ANY(auto_m%ve_dl_1 /= dl0), 'substep-law:states-move')
+    CALL require(ALL(rep_m%q == auto_m%q) .AND. ALL(rep_m%v == auto_m%v) .AND. ALL(rep_m%a == auto_m%a) .AND. &
+                 ALL(rep_m%syrope_slow == auto_m%syrope_slow) .AND. &
+                 ALL(rep_m%syrope_tmax == auto_m%syrope_tmax) .AND. ALL(rep_m%ve_dl_1 == auto_m%ve_dl_1), &
+                 'substep-law:restore-is-complete')
+    CALL require(fb_m%sub_stats%fallbacks > 0 .AND. ALL(fb_m%q == off_m%q) .AND. ALL(fb_m%v == off_m%v) .AND. &
+                 ALL(fb_m%a == off_m%a) .AND. ALL(fb_m%syrope_slow == off_m%syrope_slow) .AND. &
+                 ALL(fb_m%syrope_tmax == off_m%syrope_tmax) .AND. ALL(fb_m%ve_dl_1 == off_m%ve_dl_1), &
+                 'substep-law:fallback-is-the-plain-step')
+    CALL CD_End_Model(auto_m, es, em)
+    CALL CD_End_Model(rep_m, es, em)
+    CALL CD_End_Model(fb_m, es, em)
+    CALL CD_End_Model(off_m, es, em)
+    CALL CD_Syrope_End(td)
+  END SUBROUTINE case_substeps_restore_law_states
+
+  SUBROUTINE ramped_circle(time, q0, w, R, pq, pv, pa)
+      !! Node 3 (DOFs 7:9) on the circle q0 + R ramp(t) (0, sin wt, 1 - cos wt), the C2 quintic
+      !! ramp over the first second (case_substeps_restore_law_states).
+    REAL(wp), INTENT(IN) :: time, q0(:), w, R
+    REAL(wp), INTENT(OUT) :: pq(:), pv(:), pa(:)
+    REAL(wp) :: u, r5, rd, rdd, g(2), gd(2), gdd(2)
+    u = MIN(time, 1.0_wp)
+    r5 = 10.0_wp*u**3 - 15.0_wp*u**4 + 6.0_wp*u**5
+    rd = 0.0_wp
+    rdd = 0.0_wp
+    IF (time < 1.0_wp) THEN
+      rd = 30.0_wp*u**2 - 60.0_wp*u**3 + 30.0_wp*u**4
+      rdd = 60.0_wp*u - 180.0_wp*u**2 + 120.0_wp*u**3
+    END IF
+    g = R*[SIN(w*time), 1.0_wp - COS(w*time)]
+    gd = R*w*[COS(w*time), SIN(w*time)]
+    gdd = R*w*w*[-SIN(w*time), COS(w*time)]
+    pq = q0
+    pv = 0.0_wp
+    pa = 0.0_wp
+    pq(8:9) = q0(8:9) + r5*g
+    pv(8:9) = rd*g + r5*gd
+    pa(8:9) = rdd*g + 2.0_wp*rd*gd + r5*gdd
+  END SUBROUTINE ramped_circle
 
   SUBROUTINE case_line_model_syrope()
     !! The line-object build path with the Syrope pass-through: a straight,
