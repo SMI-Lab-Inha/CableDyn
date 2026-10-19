@@ -2121,7 +2121,7 @@ CONTAINS
       INTEGER :: k, it_k, es_k
       LOGICAL :: conv_k, stall_k
       REAL(wp) :: h
-      CHARACTER(300) :: em_k
+      CHARACTER(1024) :: em_k ! a plain step's message (discarded: the step falls back)
       CALL sub_load(model, 1)
       h = dt/REAL(n, wp)
       ok_run = .TRUE.
@@ -2391,7 +2391,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: tension(:)
     INTEGER :: e, na, nb, es
     REAL(wp) :: strain
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em ! model_law_tensions: a law message with its prefix
     DO e = 1, model%n_elem
       na = model%elem_conn(1, e)
       nb = model%elem_conn(2, e)
@@ -2445,7 +2445,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: tension
     REAL(wp) :: ea_d_eff, ea_1_eff
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em ! a per-element law message (the kernels' bound)
     stiff = model%ea_dyn(e)
     IF (stiff > CD_ZERO) RETURN
     stiff = model%ea(e)
