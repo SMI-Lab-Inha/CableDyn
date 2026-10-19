@@ -1431,9 +1431,10 @@ CONTAINS
       !! end tangent K_E = dR_E/dq_E|_{R_F = 0} (the implicit-function derivative the outer
       !! junction Newton needs), by forward differences of the step residual: column j of
       !! S_FE/S_EE from a perturbation of end DOF j, X_j = S_FF^-1 S_FE e_j with the step's
-      !! factored effective band, and K = S_EE - S_EF X with S_EF taken as S_FE^T (the effective
-      !! tangent's mass, stiffness and drag-velocity blocks are symmetric; the small asymmetric
-      !! load terms only slow the outer Newton, never its converged result). A step that
+      !! factored effective band, and K = S_EE - S_EF X with S_EF taken as S_FE^T (the mass,
+      !! material-stiffness and drag-velocity blocks are symmetric; the asymmetric parts, from
+      !! the load terms and, on EI = 0 lines, the force blend's release cap and dashpot share,
+      !! only slow the outer Newton, never its converged result). A step that
       !! converged from its warm start without factoring keeps the previous map and tangent
       !! (the end moved by a Newton correction of the same step); a cold step without a factor
       !! factors the tangent at qk once.
