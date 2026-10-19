@@ -677,6 +677,16 @@ CONTAINS
                                 RoutineName )
                RETURN
             END IF
+            ! SeaState measures its wave field and grid from the still-water level, and its
+            ! node queries take SWL-relative positions; the mooring samples it at global
+            ! positions, which coincide only when the still-water level is the mean sea level
+            IF (ABS(InitInp%WaveField%MSL2SWL) > 0.0_ReKi) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: SeaState MSL2SWL = '// &
+                                TRIM(Num2LStr(InitInp%WaveField%MSL2SWL))//' m is not supported with '// &
+                                'host waves or current: the mooring samples SeaState at positions relative '// &
+                                'to the mean sea level. Set MSL2SWL = 0.', ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
          END IF
       END IF
 
