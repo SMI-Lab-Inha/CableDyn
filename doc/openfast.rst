@@ -154,7 +154,8 @@ directions and a SeaState current (uniform in x and y) only in depth; under Whee
 linearly from the range between the seabed and the local wave elevation onto the range between
 the seabed and the still-water level (with the elevation SeaState sampled, also when only the
 host current is used). A dynamic current field (an InflowWind-driven current) is read on its
-own grid and is not checked. SeaState measures its field from the still-water level, and the
+own grid; when that field is gridded, a separate one-time warning reports nodes outside its
+vertical extent or lateral half-width. SeaState measures its field from the still-water level, and the
 mooring samples it at positions relative to the mean sea level, so a run with host waves or
 current from SeaState refuses a nonzero ``MSL2SWL`` at initialisation (a deck that takes
 both from WaterKin does not query SeaState and is not affected). Excursions smaller than

@@ -111,6 +111,7 @@ MODULE CableDyn
                               CD_Recompute_System_Acceleration, CD_SYSTEM_OK
    USE SeaSt_WaveField, ONLY: WaveField_GetNodeWaveKin
    USE SeaSt_WaveField_Types, ONLY: WaveMod_None
+   USE IfW_FlowField_Types, ONLY: Grid3D_FieldType
 
    IMPLICIT NONE
 
@@ -194,6 +195,7 @@ MODULE CableDyn
       ! TRUE once the warning that sampling nodes lie outside the SeaState wave-kinematics
       ! grid has been issued: one warning per run (check_wavefield_grid).
       LOGICAL                 :: grid_warned = .FALSE.
+      LOGICAL                 :: curr_grid_warned = .FALSE.   !< the dynamic current-field grid check has warned
       ! CHECKPOINT-RESTART identity: serial is the generation stamp minted at
       ! Init/rebuild and mirrored into other%restart_serial; t_commit is the time of the
       ! last committed mooring advance, mirrored into other%t_commit. A restored
@@ -1862,6 +1864,7 @@ CONTAINS
          CALL check_wavefield_grid( inst_e, p%WaveField, t_sample, init_call, wl_sampled, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       END IF
+      IF (.NOT. inst_e%curr_grid_warned) CALL check_current_field_grid( inst_e, p%WaveField, t_sample )
       CALL CD_AGG_SetFluidFields( inst_e%agg, inst_e%fx_vel, inst_e%fx_acc, inst_e%fx_wl, es, em, &
                                   dynamic_pressure=inst_e%fx_pd )
       IF (es /= CD_AGG_OK) THEN
@@ -2033,6 +2036,60 @@ CONTAINS
       ! during the time march reaches the screen through the glue's error check.
       IF (at_init) CALL WrScr( '   WARNING: '//msg )
    END SUBROUTINE check_wavefield_grid
+
+   SUBROUTINE check_current_field_grid( inst_e, wf, t_sample )
+      !! A dynamically populated current field (an InflowWind-driven MHK current, hasCurrField) is
+      !! not read on the SeaState grid: InflowWind reads it on its own field at the node position
+      !! shifted up by the water depth (the field's z = 0 is the seabed). For a gridded (Grid3D)
+      !! field, warn once when submerged sampling nodes lie outside its vertical extent
+      !! [GridBase, GridBase + 2 ZHWid] or its lateral half-width YHWid (in the field's frame,
+      !! rotated about its reference position when the box is rotated), where InflowWind
+      !! extrapolates or stops. Other field types have no extent to check.
+      TYPE(CD_OF_Instance),      INTENT(INOUT) :: inst_e
+      TYPE(SeaSt_WaveFieldType), INTENT(IN   ) :: wf
+      REAL(DbKi),                INTENT(IN   ) :: t_sample
+      INTEGER(IntKi) :: i, nout
+      REAL(wp)       :: zlo, zhi, yhw, dep, tol, pos(3), rel(3), yw, zw, surface, ez, ey
+      CHARACTER(1024):: msg
+
+      IF (.NOT. (inst_e%agg%host_current_enabled .AND. wf%hasCurrField)) RETURN
+      IF (wf%CurrField%FieldType /= Grid3D_FieldType) RETURN
+      dep = REAL(wf%EffWtrDpth, wp)
+      zlo = REAL(wf%CurrField%Grid3D%GridBase, wp)
+      zhi = zlo + 2.0_wp*REAL(wf%CurrField%Grid3D%ZHWid, wp)
+      yhw = REAL(wf%CurrField%Grid3D%YHWid, wp)
+      tol = 1.0E-6_wp*MAX(1.0_wp, dep)
+      nout = 0_IntKi
+      ez = 0.0_wp
+      ey = 0.0_wp
+      DO i = 1, inst_e%nfluid
+         surface = MIN(inst_e%fx_wl(i), 0.0_wp)
+         IF (inst_e%fx_xyz(3, i) > MAX(inst_e%fx_wl(i), surface)) CYCLE
+         pos = [inst_e%fx_xyz(1, i), inst_e%fx_xyz(2, i), inst_e%fx_xyz(3, i) + dep]
+         IF (wf%CurrField%RotateWindBox) THEN
+            rel = MATMUL(REAL(wf%CurrField%RotToWind, wp), pos - REAL(wf%CurrField%RefPosition, wp)) + &
+                  REAL(wf%CurrField%RefPosition, wp)
+         ELSE
+            rel = pos
+         END IF
+         yw = rel(2)
+         zw = rel(3)
+         IF (zw < zlo - tol .OR. zw > zhi + tol .OR. ABS(yw) > yhw + tol) THEN
+            nout = nout + 1_IntKi
+            ez = MAX(ez, zlo - zw, zw - zhi)
+            ey = MAX(ey, ABS(yw) - yhw)
+         END IF
+      END DO
+      IF (nout == 0_IntKi) RETURN
+      inst_e%curr_grid_warned = .TRUE.
+      WRITE (msg, '(A,I0,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A)') &
+         'CableDyn mooring module: ', nout, ' submerged CableDyn sampling node(s) lie outside the '// &
+         'InflowWind current-field grid at t = ', REAL(t_sample, wp), ' s (warned once): the field covers '// &
+         'z = ', zlo, ' to ', zhi, ' m above the seabed and |y| <= ', yhw, ' m; the farthest node is ', &
+         MAX(ez, 0.0_wp), ' m outside in z and ', MAX(ey, 0.0_wp), &
+         ' m in y. InflowWind extrapolates or stops there; enlarge the current-field grid to cover the lines.'
+      CALL WrScr( TRIM(msg) )
+   END SUBROUTINE check_current_field_grid
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_CalcOutput( t, u, p, x, xd, z, other, y, m, ErrStat, ErrMsg )
@@ -4016,6 +4073,7 @@ CONTAINS
       Inst(k)%use_extfluid = .FALSE.
       Inst(k)%nfluid = 0
       Inst(k)%grid_warned = .FALSE.
+      Inst(k)%curr_grid_warned = .FALSE.
       ! close the CableDyn-owned committed-step record (flushes the final rows)
       IF (Inst(k)%native_un > 0) THEN
          CLOSE (Inst(k)%native_un)
