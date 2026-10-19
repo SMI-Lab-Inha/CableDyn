@@ -44,6 +44,7 @@ PROGRAM test_model
   CALL case_lifecycle_static_step()
   CALL case_segment_length_update()
   CALL case_segment_payout_ramp()
+  CALL case_segment_payout_substeps()
   CALL case_segment_force_blend_committed_side()
   CALL case_copy_model_preserves_state()
   CALL case_prescribed_step_updates_state()
@@ -475,6 +476,109 @@ CONTAINS
     CALL require(diff <= 1.0e-4_wp*d_step, 'payout:rho_inf-0.4-equals-rho_inf-0')
     CALL require(err(3) <= 5.0e-3_wp*d_step .AND. diff_cfg <= 1.0e-4_wp*d_step, 'payout:configuration-blend')
   END SUBROUTINE case_segment_payout_ramp
+
+  SUBROUTINE case_segment_payout_substeps()
+    !! A pay-out on a turning EI = 0 line, solved in sub-steps. A 10-segment line, End A fixed
+    !! at the origin and End B on a circle of radius H = 10.1 m at OMEGA = 2 rad/s (starting in
+    !! rigid rotation), turns its segments by 2.3 deg per 0.02 s step, so with ei0_substeps auto
+    !! (the default angle of 1 deg, at most 4 sub-steps) every step is solved again in four
+    !! sub-steps; its end element is paid out at LDOT = 0.05 m/s with a Kelvin-Voigt dashpot.
+    !! The sub-steps take the committed lengths at their start and the lengths interpolated in
+    !! time at their end, so the march equals a march with ei0_substeps off at dt/4 that sets
+    !! the length at every fine step, to the quintic of the end motion inside a step (3e-8 N
+    !! against the per-step tension change d_step = 9.9 N). Taking the whole length change in
+    !! the first sub-step departs from it by 22 N (2.2 d_step) and 5e-3 m.
+    INTEGER, PARAMETER :: NE = 10, NN = NE + 1, NDOF = 3*NN, NSUB = 4
+    REAL(wp), PARAMETER :: L = 10.0_wp, H = 10.1_wp, EAV = 1.0e5_wp, RHOA = 1.0_wp, BAV = 1.0e3_wp
+    REAL(wp), PARAMETER :: LDOT = 0.05_wp, OMEGA = 2.0_wp, TEND = 2.0_wp, DT = 0.02_wp
+    TYPE(CD_ModelType) :: sub_m, fine_m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, i, k, j
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), ba(NE), q0(NDOF), v0(NDOF), f_ext(NDOF)
+    REAL(wp) :: pq(NDOF), pv(NDOF), pa(NDOF), ten_s(NE), ten_f(NE), t, d_step, err_t, err_q
+    LOGICAL :: conv, stalled, all_conv
+    CHARACTER(200) :: em
+
+    DO i = 1, NE
+      conn(:, i) = [i, i + 1]
+    END DO
+    l0 = L/REAL(NE, wp)
+    ea = EAV
+    rho_a = RHOA
+    ba = BAV
+    DO i = 1, NN
+      q0(3*i - 2:3*i) = [REAL(i - 1, wp)*H/REAL(NE, wp), 0.0_wp, 0.0_wp]
+      v0(3*i - 2:3*i) = [0.0_wp, OMEGA*q0(3*i - 2), 0.0_wp]
+    END DO
+    fixed = [1, 2, 3, NDOF - 2, NDOF - 1, NDOF]
+    f_ext = 0.0_wp
+    cfg%rel_tol = 1.0e-10_wp
+    cfg%ei0_substep_max = NSUB
+    CALL CD_Init_Model(sub_m, q0, v0, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, cfg, es, em, ba=ba)
+    CALL require(es == CD_MODEL_OK, 'payout-substeps:init: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    ! the pay-out rate is the committed one from the start (a constant command)
+    CALL CD_Update_Model_SegmentLength(sub_m, NE, l0(NE), LDOT, es, em, restored=.TRUE.)
+    CALL require(es == CD_MODEL_OK, 'payout-substeps:rate: '//TRIM(em))
+    ! End B starts with its centripetal acceleration, so the quintic of the end motion inside a
+    ! step (the sub-step boundaries) follows the circle to (OMEGA DT)**6
+    CALL payout_end_on_circle(H, OMEGA, 0.0_wp, pq, pv, pa)
+    sub_m%a(NDOF - 2:NDOF) = pa(NDOF - 2:NDOF)
+    CALL CD_Copy_Model(sub_m, fine_m, es, em)
+    CALL require(es == CD_MODEL_OK, 'payout-substeps:copy: '//TRIM(em))
+    fine_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+    d_step = EAV*H*LDOT*DT/(L + LDOT*TEND)**2
+    all_conv = .TRUE.
+    err_t = 0.0_wp
+    err_q = 0.0_wp
+    DO k = 1, NINT(TEND/DT)
+      t = REAL(k, wp)*DT
+      CALL CD_Update_Model_SegmentLength(sub_m, NE, l0(NE) + LDOT*t, LDOT, es, em)
+      all_conv = all_conv .AND. es == CD_MODEL_OK
+      CALL payout_end_on_circle(H, OMEGA, t, pq, pv, pa)
+      CALL CD_Step_Model(sub_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      DO j = 1, NSUB
+        t = (REAL(k - 1, wp) + REAL(j, wp)/REAL(NSUB, wp))*DT
+        CALL CD_Update_Model_SegmentLength(fine_m, NE, l0(NE) + LDOT*t, LDOT, es, em)
+        all_conv = all_conv .AND. es == CD_MODEL_OK
+        CALL payout_end_on_circle(H, OMEGA, t, pq, pv, pa)
+        CALL CD_Step_Model(fine_m, DT/REAL(NSUB, wp), conv, stalled, n_iter, es, em, prescribed_q=pq, &
+                           prescribed_v=pv, prescribed_a=pa)
+        all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      END DO
+      IF (.NOT. all_conv) EXIT
+      CALL CD_Get_Model_Tension(sub_m, ten_s, es, em)
+      CALL CD_Get_Model_Tension(fine_m, ten_f, es, em)
+      err_t = MAX(err_t, MAXVAL(ABS(ten_s - ten_f)))
+      err_q = MAX(err_q, MAXVAL(ABS(sub_m%q - fine_m%q)))
+    END DO
+    CALL require(all_conv, 'payout-substeps:march: '//TRIM(em))
+    WRITE (*, '(A,I0,A,I0,A,I0,A,ES10.3,A,ES10.3,A,ES10.3,A)') '  payout sub-steps: ', sub_m%sub_stats%events, &
+      ' of ', sub_m%sub_stats%calls, ' steps in ', sub_m%sub_stats%max_used, ' sub-steps; tension against dt/4 ', &
+      err_t, ' N (d_step ', d_step, ' N), position ', err_q, ' m'
+    CALL require(sub_m%sub_stats%events == NINT(TEND/DT) .AND. sub_m%sub_stats%max_used == NSUB .AND. &
+                 sub_m%sub_stats%fallbacks == 0, 'payout-substeps:every-step-sub-stepped')
+    CALL require(ALL(sub_m%l0 == fine_m%l0) .AND. ALL(sub_m%l0_c == sub_m%l0), 'payout-substeps:lengths')
+    CALL require(err_t <= 1.0e-4_wp*d_step .AND. err_q <= 1.0e-9_wp, 'payout-substeps:equals-the-dt/4-march')
+    CALL CD_End_Model(sub_m, es, em)
+    CALL CD_End_Model(fine_m, es, em)
+  END SUBROUTINE case_segment_payout_substeps
+
+  SUBROUTINE payout_end_on_circle(h, omega, tt, pq, pv, pa)
+    !! End B (the last node) on a circle of radius h about the origin at angular speed omega,
+    !! at time tt, as full prescribed vectors (End A at the origin).
+    REAL(wp), INTENT(IN) :: h, omega, tt
+    REAL(wp), INTENT(OUT) :: pq(:), pv(:), pa(:)
+    INTEGER :: n
+    n = SIZE(pq)
+    pq = 0.0_wp
+    pv = 0.0_wp
+    pa = 0.0_wp
+    pq(n - 2:n) = h*[COS(omega*tt), SIN(omega*tt), 0.0_wp]
+    pv(n - 2:n) = h*omega*[-SIN(omega*tt), COS(omega*tt), 0.0_wp]
+    pa(n - 2:n) = -h*omega**2*[COS(omega*tt), SIN(omega*tt), 0.0_wp]
+  END SUBROUTINE payout_end_on_circle
 
   SUBROUTINE case_segment_force_blend_committed_side()
     !! Under the force blend (the default) the committed side of the first step after a length

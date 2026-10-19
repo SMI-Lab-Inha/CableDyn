@@ -2302,6 +2302,21 @@ rates, and evaluated as the step evaluates its committed side: with the force bl
 external load and seabed coefficients of :math:`L_{0,c}` as well, with the configuration blend at
 the present ones.
 
+A step that the rotation- and snap-resolved sub-steps (``ei0_substeps auto``, above) solve
+again spreads a pending length change over its sub-steps. The committed lengths and rates are
+part of the state each pass starts from; sub-step :math:`k` of :math:`n` ends at the lengths and
+rates interpolated linearly in time between :math:`L_{0,c}` and :math:`L_0` at :math:`k/n`, with
+the external load and seabed coefficients rebuilt at them, and the last on the new ones bit for
+bit. Each sub-step treats its start and end lengths as the step above treats :math:`L_{0,c}` and
+:math:`L_0`, so the first starts at :math:`L_{0,c}`, and the trigger takes the step-start
+tensions at :math:`L_{0,c}`. A constant command rate makes the interpolated lengths those the
+rate integrates to: on a line turning by 2.3° per step whose end segment is paid out at
+0.05 m/s, every step solved in four sub-steps, the march equals one taken as given at a quarter
+of the step to 3e-8 N, where applying the whole change in the first sub-step departs from it by
+22 N (2.2 times the tension change per step). A step recovered after a stall and the halves of a
+line-system step halved after a failure, which take their sub-steps as given, apply the whole
+change in their first part.
+
 On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
 up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by
 :math:`\lambda = (S + \Delta L)/S`, :math:`L_{0,e} = \lambda L_{0,e,\text{base}}`, with rate

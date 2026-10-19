@@ -586,7 +586,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   comparison scores, move by less than 0.01 %, and the scorer now also gates the ramps.
   This change leaves runs without `CONTROL`, and a zero command, bit-identical. A checkpoint restart
   re-applies the restored command as the committed state's, so a restart during a ramp
-  continues bit-identically.
+  continues bit-identically. A step that `ei0_substeps auto` solves in sub-steps spreads the
+  length change over them: the committed lengths are part of the state each pass starts from,
+  each sub-step ends at the lengths and rates interpolated linearly in time (the last at the
+  new ones), and the trigger takes the step-start tensions at the committed lengths. On a line
+  turning by 2.3° per step and paid out at 0.05 m/s, the sub-stepped march equals one taken as
+  given at a quarter of the step to 3e-8 N; applying the whole change in the first sub-step
+  departs from it by 22 N.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

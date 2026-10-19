@@ -389,13 +389,16 @@ MODULE CableDyn_Model
     ! parameter of the line, copied with the model). The other sub_* arrays are scratch:
     ! sub_slot(1) the committed state at the step start, sub_slot(2) the state the plain step
     ! reached, sub_t0 and sub_t1 the segment tensions at the step start and end, and
-    ! sub_pq/pv/pa the sub-step boundary motion.
+    ! sub_pq/pv/pa the sub-step boundary motion, sub_target the lengths, rates, external load
+    ! and seabed coefficients a pending length change (active line control) sets for the end of
+    ! the step (CD_Save_Model_Control).
     TYPE(CD_SubstepStats) :: sub_stats, sub_stats_rollback
     REAL(wp) :: sub_t_init = CD_ZERO
     ! audit_hmax at the last save of the system-rollback state (CableDyn_System)
     REAL(wp) :: audit_hmax_rollback = CD_ZERO
     TYPE(CD_ModelCommitSlot) :: sub_slot(2)
     REAL(wp), ALLOCATABLE :: sub_t0(:), sub_t1(:), sub_pq(:), sub_pv(:), sub_pa(:)
+    TYPE(CD_ModelControlSaveType) :: sub_target
     ! TEST-ONLY hooks of the sub-stepping, never set by a production caller: sub_test_fail > 0
     ! makes sub-step number sub_test_fail of every sub-stepped pass report a failure, and
     ! sub_test_repeat solves the first sub-stepped pass twice (the second from the restored
@@ -1983,6 +1986,19 @@ CONTAINS
     !! needs the end reaction and tangent of the nominal step. as_given = .TRUE. takes the step
     !! as given as well: the stall recoveries of CD_Step_Model_Recovering and CD_Step_System,
     !! whose sub-steps are themselves part of a recovery, pass it.
+    !!
+    !! A pending length change (active line control: CD_Update_Model_SegmentLength set lengths
+    !! or rates that differ from those the committed state was reached with, l0_c and l0_dot_c)
+    !! is spread over the sub-steps. The committed lengths are part of the state each pass
+    !! starts from (commit_state_copy). Sub-step k of n ends at the lengths and rates
+    !! interpolated linearly in time between the committed ones and the new ones at k/n, with
+    !! the external load and seabed coefficients rebuilt at those lengths as
+    !! CD_Update_Model_SegmentLength builds them, and the last sub-step ends at the new lengths,
+    !! rates, external load and seabed coefficients bit for bit. Each sub-step treats its own
+    !! start and end lengths as the plain step treats the committed and new ones, so the first
+    !! starts at the committed lengths. (A constant pay-out rate, the usual command, makes the
+    !! interpolated lengths those its rate integrates to.) The trigger takes the step-start
+    !! tensions and slack classification at the committed lengths.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
     LOGICAL, INTENT(OUT) :: converged, stalled
@@ -1991,9 +2007,10 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: prescribed_q(:), prescribed_v(:), prescribed_a(:)
     LOGICAL, INTENT(IN), OPTIONAL :: as_given
     INTEGER :: nsub, nsub2, iter_trial
-    LOGICAL :: has_pres, resolve, capped, capped2, ok
+    LOGICAL :: has_pres, resolve, capped, capped2, ok, pending
 
     has_pres = PRESENT(prescribed_q) .AND. PRESENT(prescribed_v) .AND. PRESENT(prescribed_a)
+    pending = .FALSE.
     resolve = model%initialized .AND. model%cfg%ei0_substeps == CD_EI0_SUBSTEPS_AUTO .AND. &
               .NOT. model%dynamic_workspace%end_request
     IF (resolve .AND. PRESENT(as_given)) resolve = .NOT. as_given
@@ -2004,8 +2021,23 @@ CONTAINS
       resolve = sub_alloc(model, has_pres)
       IF (resolve) THEN
         CALL sub_store(model, 1)
-        ! the segment tensions at the step start, for the trigger (sub_count)
-        CALL sub_tensions_scratch(model, 0)
+        ! the segment tensions at the step start, for the trigger (sub_count), at the lengths
+        ! the committed state was reached with
+        pending = .NOT. model_lengths_committed(model)
+        IF (pending) THEN
+          CALL CD_Save_Model_Control(model, model%sub_target)
+          BLOCK
+            TYPE(model_lengths_aside) :: aside
+            INTEGER :: es_c
+            CHARACTER(160) :: em_c
+            ! without the loads nothing is rebuilt, so this cannot fail
+            CALL enter_committed_lengths(model, aside, .FALSE., es_c, em_c)
+            CALL sub_tensions_scratch(model, 0)
+            CALL leave_committed_lengths(model, aside)
+          END BLOCK
+        ELSE
+          CALL sub_tensions_scratch(model, 0)
+        END IF
       END IF
     END IF
     IF (.NOT. resolve) THEN
@@ -2064,6 +2096,7 @@ CONTAINS
     END IF
     ! a sub-step failed: return the plain step's own (converged) result
     CALL sub_load(model, 2)
+    IF (pending) CALL sub_lengths_target(model)
     converged = .TRUE.
     stalled = .FALSE.
     n_iter = iter_trial
@@ -2087,6 +2120,19 @@ CONTAINS
       h = dt/REAL(n, wp)
       ok_run = .TRUE.
       DO k = 1, n
+        ! a pending length change: the lengths at the sub-step end (the new ones at the last)
+        IF (pending) THEN
+          IF (k == n) THEN
+            CALL sub_lengths_target(model)
+          ELSE
+            CALL sub_lengths_at(model, REAL(k, wp)/REAL(n, wp), es_k)
+            IF (es_k /= CD_MODEL_OK) THEN
+              CALL sub_lengths_target(model)
+              ok_run = .FALSE.
+              RETURN
+            END IF
+          END IF
+        END IF
         IF (has_pres) THEN
           IF (k == n) THEN
             model%sub_pq = prescribed_q
@@ -2104,6 +2150,7 @@ CONTAINS
         END IF
         IF (k == model%sub_test_fail) conv_k = .FALSE.
         IF (es_k /= CD_MODEL_OK .OR. .NOT. conv_k) THEN
+          IF (pending) CALL sub_lengths_target(model)
           ok_run = .FALSE.
           RETURN
         END IF
@@ -2256,6 +2303,79 @@ CONTAINS
                            model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c)
   END SUBROUTINE sub_load
 
+  SUBROUTINE sub_lengths_target(model)
+    !! Put back the lengths, rates, external load and seabed coefficients a pending length
+    !! change set for the end of the step (sub_target, saved by CD_Step_Model), bit for bit; the
+    !! committed lengths are left as they are.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    model%l0 = model%sub_target%l0
+    model%l0_dot = model%sub_target%l0_dot
+    model%f_ext = model%sub_target%f_ext
+    IF (ALLOCATED(model%sub_target%seabed_kn)) model%seabed_kn = model%sub_target%seabed_kn
+    IF (ALLOCATED(model%sub_target%seabed_cn)) model%seabed_cn = model%sub_target%seabed_cn
+  END SUBROUTINE sub_lengths_target
+
+  SUBROUTINE sub_lengths_at(model, frac, ErrStat)
+    !! The lengths and rates at the fraction frac of a sub-stepped interval with a pending length
+    !! change: interpolated linearly in time between those of the committed state at the
+    !! interval start (sub_slot(1)) and the new ones (sub_target), an element whose length or
+    !! rate does not change keeping it bit for bit; the external load and the seabed
+    !! coefficients that follow the lengths are rebuilt at them with the helpers
+    !! CD_Update_Model_SegmentLength uses (those of the new lengths when no length changes).
+    !! On failure the model is left as it was.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: frac
+    INTEGER, INTENT(OUT) :: ErrStat
+    REAL(wp) :: l0_k(model%n_elem), l0_dot_k(model%n_elem), f_dist(model%n_dof)
+    REAL(wp), ALLOCATABLE :: kn_k(:)
+    REAL(wp) :: a, b
+    INTEGER :: e, es
+    LOGICAL :: moved
+    CHARACTER(160) :: em
+    ErrStat = CD_MODEL_OK
+    moved = .FALSE.
+    DO e = 1, model%n_elem
+      a = model%sub_slot(1)%l0_c(e)
+      b = model%sub_target%l0(e)
+      l0_k(e) = b
+      IF (.NOT. bits_equal(a, b)) THEN
+        l0_k(e) = a + frac*(b - a)
+        moved = .TRUE.
+      END IF
+      a = model%sub_slot(1)%l0_dot_c(e)
+      b = model%sub_target%l0_dot(e)
+      l0_dot_k(e) = b
+      IF (.NOT. bits_equal(a, b)) l0_dot_k(e) = positive_zero(a + frac*(b - a))
+    END DO
+    IF (moved .AND. ALLOCATED(model%dist_load)) THEN
+      CALL CD_Assemble_Distributed_Load(model%elem_conn, l0_k, model%dist_load, f_dist, es, em)
+      IF (es /= 0) THEN
+        ErrStat = CD_MODEL_BADINPUT
+        RETURN
+      END IF
+      f_dist = model%f_ext_dist_base + f_dist
+      IF (.NOT. CD_All_Finite(f_dist)) THEN
+        ErrStat = CD_MODEL_BADINPUT
+        RETURN
+      END IF
+    END IF
+    IF (moved .AND. model%has_seabed .AND. model%has_seabed_recompute) THEN
+      CALL CD_Nodal_Seabed_Stiffness(model%seabed_kbot, model%seabed_diameter_elem, l0_k, kn_k, es, em)
+      IF (es /= 0) THEN
+        ErrStat = CD_MODEL_BADINPUT
+        RETURN
+      END IF
+    END IF
+    CALL sub_lengths_target(model)
+    model%l0 = l0_k
+    model%l0_dot = l0_dot_k
+    IF (moved .AND. ALLOCATED(model%dist_load)) model%f_ext = f_dist
+    IF (ALLOCATED(kn_k)) THEN
+      CALL MOVE_ALLOC(kn_k, model%seabed_kn)
+      IF (ALLOCATED(model%seabed_cn)) model%seabed_cn = model%seabed_kn*model%seabed_cn_over_kn
+    END IF
+  END SUBROUTINE sub_lengths_at
+
   SUBROUTINE sub_tensions(model, tension)
     !! The segment tensions at the model's committed state as the run audit takes them
     !! (CD_Audit_Model_Step): the dynamic EA times the strain of an elastic segment, the law's
@@ -2344,9 +2464,9 @@ CONTAINS
     !! scale (the largest step-start tension, at least SUB_TAUT_FRACTION of sub_t_init); at least
     !! SUB_SNAP_STEPS when a segment slack at the start ends above SUB_SNAP_FRACTION of the scale
     !! and its axial wave crosses it more than once in dt. The tensions are those of
-    !! sub_tensions. The strains use model%l0, the lengths the step itself uses
-    !! (CD_Update_Model_SegmentLength sets them before the step); a length that changes within
-    !! the step would need its step-start value for the start state here.
+    !! sub_tensions. The end state takes the present lengths model%l0, the start state the
+    !! lengths it was reached with (slot 1's l0_c; the same bits unless a length change is
+    !! pending, see CD_Step_Model).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
     INTEGER, INTENT(OUT) :: nsub
@@ -2371,7 +2491,7 @@ CONTAINS
       te = model%sub_t1(e)
       d0 = model%sub_slot(1)%q(3*nb - 2:3*nb) - model%sub_slot(1)%q(3*na - 2:3*na)
       l_s = NORM2(d0)
-      IF (.NOT. snap .AND. l_s <= model%l0(e) .AND. te > SUB_SNAP_FRACTION*scale) THEN
+      IF (.NOT. snap .AND. l_s <= model%sub_slot(1)%l0_c(e) .AND. te > SUB_SNAP_FRACTION*scale) THEN
         courant = dt*SQRT(segment_wave_stiffness(model, e, te)/model%rho_a(e))/model%l0(e)
         IF (courant > CD_ONE) snap = .TRUE.
       END IF
@@ -5860,6 +5980,7 @@ CONTAINS
     IF (ALLOCATED(model%recovery_q0)) DEALLOCATE (model%recovery_q0)
     model%sub_slot(1) = CD_ModelCommitSlot()
     model%sub_slot(2) = CD_ModelCommitSlot()
+    model%sub_target = CD_ModelControlSaveType()
     IF (ALLOCATED(model%sub_t0)) DEALLOCATE (model%sub_t0)
     IF (ALLOCATED(model%sub_t1)) DEALLOCATE (model%sub_t1)
     IF (ALLOCATED(model%sub_pq)) DEALLOCATE (model%sub_pq)
