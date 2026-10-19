@@ -111,6 +111,7 @@ MODULE CableDyn
                               CD_Recompute_System_Acceleration, CD_SYSTEM_OK
    USE SeaSt_WaveField, ONLY: WaveField_GetNodeWaveKin
    USE SeaSt_WaveField_Types, ONLY: WaveMod_None
+   USE IfW_FlowField_Types, ONLY: Grid3D_FieldType
 
    IMPLICIT NONE
 
@@ -191,6 +192,10 @@ MODULE CableDyn
       LOGICAL                 :: use_extfluid = .FALSE.
       INTEGER(IntKi)          :: nfluid = 0
       REAL(wp), ALLOCATABLE   :: fx_xyz(:,:), fx_vel(:,:), fx_acc(:,:), fx_wl(:), fx_pd(:)
+      ! TRUE once the warning that sampling nodes lie outside the SeaState wave-kinematics
+      ! grid has been issued: one warning per run (check_wavefield_grid).
+      LOGICAL                 :: grid_warned = .FALSE.
+      LOGICAL                 :: curr_grid_warned = .FALSE.   !< the dynamic current-field grid check has warned
       ! CHECKPOINT-RESTART identity: serial is the generation stamp minted at
       ! Init/rebuild and mirrored into other%restart_serial; t_commit is the time of the
       ! last committed mooring advance, mirrored into other%t_commit. A restored
@@ -804,7 +809,7 @@ CONTAINS
          ! wave-capable-at-ZERO-fields build -- a still-water start under a declared sea
          ! state. Seeding after the static solve matches the stock-MoorDyn convention:
          ! the IC is the still-water equilibrium, wave kinematics act from t = 0.
-         CALL sample_wavefield( Inst(id), p, m, 0.0_DbKi, ErrStat2, ErrMsg2 )
+         CALL sample_wavefield( Inst(id), p, m, 0.0_DbKi, ErrStat2, ErrMsg2, at_init=.TRUE. )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) RETURN
       END IF
@@ -1690,7 +1695,7 @@ CONTAINS
    END SUBROUTINE CD_UpdateStates
 
 !----------------------------------------------------------------------------------------------------------------------------------
-   SUBROUTINE sample_wavefield( inst_e, p, m, t_sample, ErrStat, ErrMsg )
+   SUBROUTINE sample_wavefield( inst_e, p, m, t_sample, ErrStat, ErrMsg, at_init )
       !! Sample the SeaState WaveField at every mooring line node's committed position --
       !! fluid velocity (waves + current), fluid acceleration, and the local free-surface
       !! elevation -- and prescribe them to the aggregate for the coming advance. Nodes
@@ -1703,20 +1708,29 @@ CONTAINS
       REAL(DbKi),               INTENT(IN   ) :: t_sample
       INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
       CHARACTER(*),             INTENT(  OUT) :: ErrMsg
+      LOGICAL, OPTIONAL,        INTENT(IN   ) :: at_init   !< the Init seeding call (see check_wavefield_grid)
 
       character(*), parameter   :: RoutineName = 'sample_wavefield'
       INTEGER(IntKi)            :: i, l, es, nodeInWater, n_current_nodes
+      LOGICAL                   :: init_call
       REAL(SiKi)                :: zeta1, zeta2, zeta, pdyn, fv(3), fa(3), famcf(3)
       REAL(SiKi)                :: wave_zeta1, wave_zeta2, wave_zeta, wave_pdyn
       REAL(SiKi)                :: wave_fv(3), wave_fa(3), wave_famcf(3)
       REAL(wp)                  :: profile_fv(3), steady_fv_wp(3), grid_z
       REAL(SiKi)                :: steady_fv(3), grid_fv(3), grid_weight
+      ! the SeaState free-surface elevation as sampled at each node (kept also when the host
+      ! waves are off and fx_wl takes the still-water level): SeaState's Wheeler stretching
+      ! interpolates the current at the depth mapped with it. Only the grid check reads it, so
+      ! it exists only until that check has warned.
+      REAL(wp), ALLOCATABLE     :: wl_sampled(:)
       CHARACTER(512)            :: em
       INTEGER(IntKi)            :: ErrStat2
       CHARACTER(ErrMsgLen)      :: ErrMsg2
 
       ErrStat = ErrID_None
       ErrMsg  = ''
+      init_call = .FALSE.
+      IF (PRESENT(at_init)) init_call = at_init
       IF (.NOT. ASSOCIATED(p%WaveField)) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the WaveField pointer is null but '// &
                           'SeaState kinematics were requested at Init.', ErrStat, ErrMsg, RoutineName )
@@ -1727,6 +1741,19 @@ CONTAINS
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
+      ! SeaState measures its wave field and grid from the still-water level, and its node
+      ! queries take SWL-relative positions; the mooring samples it at positions relative to the
+      ! mean sea level, which coincide only for MSL2SWL = 0. Checked here, where the deck's
+      ! WaterKin policy has decided whether SeaState is queried at all.
+      IF ((inst_e%agg%host_wave_enabled .OR. inst_e%agg%host_current_enabled) .AND. &
+          ABS(p%WaveField%MSL2SWL) > 0.0_ReKi) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: SeaState MSL2SWL = '// &
+                          TRIM(Num2LStr(p%WaveField%MSL2SWL))//' m is not supported with host waves or '// &
+                          'current: the mooring samples SeaState at positions relative to the mean sea '// &
+                          'level. Set MSL2SWL = 0, or take the waves and current from the deck (WaterKin).', &
+                          ErrStat, ErrMsg, RoutineName )
+         RETURN
+      END IF
       IF ((inst_e%agg%host_wave_enabled .NEQV. inst_e%agg%host_current_enabled) .AND. &
           p%WaveField%Current_InitInput%CurrMod == 2_IntKi) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: WaterKin requests separate host wave/current '// &
@@ -1734,6 +1761,7 @@ CONTAINS
                           ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
+      IF (.NOT. inst_e%grid_warned) ALLOCATE (wl_sampled(inst_e%nfluid))
       DO i = 1, inst_e%nfluid
          IF (.NOT. inst_e%agg%host_wave_enabled .AND. .NOT. inst_e%agg%host_current_enabled) THEN
             ! An explicit WaterKin file may disable both host components even
@@ -1750,6 +1778,7 @@ CONTAINS
             CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
             IF (ErrStat >= AbortErrLev) RETURN
          END IF
+         IF (ALLOCATED(wl_sampled)) wl_sampled(i) = REAL(zeta, wp)
          steady_fv = 0.0_SiKi
          IF (nodeInWater /= 0_IntKi .AND. &
              (.NOT. inst_e%agg%host_wave_enabled .OR. .NOT. inst_e%agg%host_current_enabled)) THEN
@@ -1828,12 +1857,239 @@ CONTAINS
          inst_e%fx_pd(i) = 0.0_wp
          IF (inst_e%agg%host_wave_enabled) inst_e%fx_pd(i) = REAL(pdyn, wp)
       END DO
+      ! Grid coverage: checked on the positions just sampled (with their free-surface
+      ! elevations), at Init (the static equilibrium) and then every mooring step until the one
+      ! warning has been issued.
+      IF (.NOT. inst_e%grid_warned) THEN
+         CALL check_wavefield_grid( inst_e, p%WaveField, t_sample, init_call, wl_sampled, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      END IF
+      IF (.NOT. inst_e%curr_grid_warned) CALL check_current_field_grid( inst_e, p%WaveField, t_sample )
       CALL CD_AGG_SetFluidFields( inst_e%agg, inst_e%fx_vel, inst_e%fx_acc, inst_e%fx_wl, es, em, &
                                   dynamic_pressure=inst_e%fx_pd )
       IF (es /= CD_AGG_OK) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
       END IF
    END SUBROUTINE sample_wavefield
+
+!----------------------------------------------------------------------------------------------------------------------------------
+   SUBROUTINE check_wavefield_grid( inst_e, wf, t_sample, at_init, wl_sampled, ErrStat, ErrMsg )
+      !! Warn, once per run, when sampling nodes lie outside the SeaState wave-kinematics grid.
+      !! The volume grid spans X_HalfWidth and Y_HalfWidth about the origin of the global frame
+      !! the nodes are sampled in (FAST.Farm runs in still water and never samples) and Z_Depth
+      !! below the SWL. Beyond it SeaState clamps the position to the grid boundary (GridInterp
+      !! SetIndex horizontally, the depth mapping of WaveField_Interp_Setup4D vertically), so
+      !! the node receives the kinematics of the nearest boundary point -- out of phase
+      !! horizontally, too strong below Z_Depth. SeaState's own clamping notice is generic, names
+      !! no node, and is issued once, at the Init sample, where the glue drops it. The extents are
+      !! read from the WaveField's volume-grid parameters, i.e. exactly the grid the sampler
+      !! interpolates. Excursions below 1 % of the boundary grid spacing are ignored. Below a
+      !! grid that reaches the seabed (Z_Depth = WtrDpth + MSL2SWL, the SeaState maximum) a node
+      !! is in the seabed and the seabed kinematics are the right ones. SeaState's current is
+      !! uniform in x and y, so the horizontal check applies to waves only.
+      !!
+      !! Only nodes in the water are checked: a node above the free surface carries no fluid
+      !! load whatever kinematics it is given, so a suspended cable or jumper above the water
+      !! outside the grid is no error. A node is in the water at or below the free-surface
+      !! elevation just sampled for it (fx_wl; the still-water level when the host waves are
+      !! off), which decides its wetting in CableDyn, and, without wave stretching
+      !! (WaveStMod = 0), at or below the still-water level too, above which SeaState gives a
+      !! node zero kinematics without reading the grid. Called after the nodes' sampling, on the
+      !! positions just sampled. Cost: a few comparisons per node per mooring step until the
+      !! warning. at_init marks the Init call, at the static equilibrium (t = 0).
+      !!
+      !! The message states first that it is given once, so that a caller's message buffer that
+      !! cuts its tail keeps that; the farthest-node details are left out if the message would not
+      !! fit the remaining length of ErrMsg.
+      TYPE(CD_OF_Instance),      INTENT(INOUT) :: inst_e
+      TYPE(SeaSt_WaveFieldType), INTENT(IN   ) :: wf
+      REAL(DbKi),                INTENT(IN   ) :: t_sample
+      LOGICAL,                   INTENT(IN   ) :: at_init
+      REAL(wp),                  INTENT(IN   ) :: wl_sampled(:)   !< SeaState elevation as sampled per node
+      INTEGER(IntKi),            INTENT(  OUT) :: ErrStat
+      CHARACTER(*),              INTENT(  OUT) :: ErrMsg
+
+      character(*), parameter   :: RoutineName = 'check_wavefield_grid'
+      LOGICAL                   :: waves, grid_current, check_xy(2), check_z, outside
+      INTEGER(IntKi)            :: i, k, nout, nin, nwet, room
+      REAL(wp)                  :: lo(2), hi(2), tol(2), zbot, tol_z, ex, ex_max(3), at_max(3), surface
+      REAL(wp)                  :: zq, dep
+      CHARACTER(11)             :: inp(3), res(3)
+      CHARACTER(1024)           :: farthest, enlarge, refine
+      CHARACTER(:), ALLOCATABLE :: head, msg
+
+      ErrStat = ErrID_None
+      ErrMsg  = ''
+      waves = inst_e%agg%host_wave_enabled .AND. wf%WaveMod /= WaveMod_None
+      grid_current = inst_e%agg%host_current_enabled .AND. wf%Current_InitInput%CurrMod /= 0_IntKi
+      IF (.NOT. (waves .OR. grid_current)) RETURN
+      DO k = 1, 2
+         check_xy(k) = waves .AND. wf%VolGridParams%n(k + 1) > 1_IntKi
+         lo(k)  = REAL(wf%VolGridParams%pZero(k + 1), wp)
+         hi(k)  = lo(k) + REAL(wf%VolGridParams%n(k + 1) - 1_IntKi, wp)*REAL(wf%VolGridParams%delta(k + 1), wp)
+         tol(k) = 0.01_wp*REAL(wf%VolGridParams%delta(k + 1), wp)
+      END DO
+      ! the vertical grid is cosine-spaced in delta(4); its bottom interval is Z_Depth*sin(delta(4))
+      zbot  = -REAL(wf%GridDepth, wp)
+      tol_z = 0.01_wp*REAL(wf%GridDepth, wp)*SIN(REAL(wf%VolGridParams%delta(4), wp))
+      check_z = wf%VolGridParams%n(4) > 1_IntKi .AND. &
+                REAL(wf%GridDepth, wp) < REAL(wf%EffWtrDpth, wp) - tol_z
+      IF (.NOT. (ANY(check_xy) .OR. check_z)) RETURN
+
+      nout   = 0_IntKi
+      nwet   = 0_IntKi
+      ex_max = 0.0_wp
+      at_max = 0.0_wp
+      DO i = 1, inst_e%nfluid
+         ! nodes above the free surface carry no fluid load (see above)
+         surface = inst_e%fx_wl(i)
+         IF (wf%WaveStMod == 0_IntKi) surface = MIN(surface, 0.0_wp)
+         IF (inst_e%fx_xyz(3, i) > surface) CYCLE
+         nwet = nwet + 1_IntKi
+         outside = .FALSE.
+         DO k = 1, 2
+            IF (.NOT. check_xy(k)) CYCLE
+            ex = MAX(lo(k) - inst_e%fx_xyz(k, i), inst_e%fx_xyz(k, i) - hi(k))
+            IF (ex > tol(k)) THEN
+               outside = .TRUE.
+               IF (ex > ex_max(k)) THEN
+                  ex_max(k) = ex
+                  at_max(k) = inst_e%fx_xyz(k, i)
+               END IF
+            END IF
+         END DO
+         IF (check_z) THEN
+            ! SeaState interpolates at the node depth, or under Wheeler stretching (WaveStMod 3) at
+            ! the depth mapped linearly from [-EffWtrDpth, wave elevation] to [-EffWtrDpth, 0] with
+            ! the elevation it sampled -- also for the current of a current-only host mode, whose
+            ! fx_wl is the still-water level
+            zq = inst_e%fx_xyz(3, i)
+            IF (wf%WaveMod /= WaveMod_None .AND. wf%WaveStMod == 3_IntKi) THEN
+               dep = REAL(wf%EffWtrDpth, wp)
+               IF (dep + wl_sampled(i) > 0.0_wp) zq = MIN(dep*(dep + zq)/(dep + wl_sampled(i)) - dep, 0.0_wp)
+            END IF
+            ex = zbot - zq
+            IF (ex > tol_z) THEN
+               outside = .TRUE.
+               IF (ex > ex_max(3)) THEN
+                  ex_max(3) = ex
+                  at_max(3) = inst_e%fx_xyz(3, i)
+               END IF
+            END IF
+         END IF
+         IF (outside) nout = nout + 1_IntKi
+      END DO
+      IF (nout == 0_IntKi) RETURN
+
+      ! the farthest node per direction, and the SeaState inputs that would cover it
+      nin = 0_IntKi
+      farthest = ''
+      IF (ex_max(1) > 0.0_wp) THEN
+         farthest = TRIM(farthest)//'; x = '//TRIM(Num2LStr(at_max(1)))//' m (grid |x| <= X_HalfWidth = '// &
+                    TRIM(Num2LStr(0.5_wp*(hi(1) - lo(1))))//' m)'
+         nin = nin + 1_IntKi
+         inp(nin) = 'X_HalfWidth'
+         res(nin) = 'NX'
+      END IF
+      IF (ex_max(2) > 0.0_wp) THEN
+         farthest = TRIM(farthest)//'; y = '//TRIM(Num2LStr(at_max(2)))//' m (grid |y| <= Y_HalfWidth = '// &
+                    TRIM(Num2LStr(0.5_wp*(hi(2) - lo(2))))//' m)'
+         nin = nin + 1_IntKi
+         inp(nin) = 'Y_HalfWidth'
+         res(nin) = 'NY'
+      END IF
+      IF (ex_max(3) > 0.0_wp) THEN
+         farthest = TRIM(farthest)//'; z = '//TRIM(Num2LStr(at_max(3)))//' m (grid z >= -Z_Depth = '// &
+                    TRIM(Num2LStr(zbot))//' m)'
+         nin = nin + 1_IntKi
+         inp(nin) = 'Z_Depth'
+         res(nin) = 'NZ'
+      END IF
+      enlarge = TRIM(inp(1))
+      refine  = TRIM(res(1))
+      DO k = 2, nin
+         IF (k == nin) THEN
+            enlarge = TRIM(enlarge)//' and '//TRIM(inp(k))
+            refine  = TRIM(refine)//' and '//TRIM(res(k))
+         ELSE
+            enlarge = TRIM(enlarge)//', '//TRIM(inp(k))
+            refine  = TRIM(refine)//', '//TRIM(res(k))
+         END IF
+      END DO
+      IF (ex_max(3) > 0.0_wp) enlarge = TRIM(enlarge)//' (Z_Depth at most WtrDpth + MSL2SWL, its default)'
+
+      inst_e%grid_warned = .TRUE.
+      head = 'CableDyn mooring module: '//TRIM(Num2LStr(nout))//' of the '//TRIM(Num2LStr(nwet))// &
+             ' CableDyn sampling nodes in the water lie outside the SeaState wave-kinematics grid at t = '// &
+             TRIM(Num2LStr(t_sample))//' s (warned once). SeaState clamps them to the grid boundary, so '// &
+             'their fluid kinematics and loads are not physical.'
+      msg = head//' Farthest: '//TRIM(farthest(3:))//'. In the SeaState input file enlarge '//TRIM(enlarge)// &
+            ' to cover the lines with margin for their motion, and raise '//TRIM(refine)// &
+            ' to keep the grid spacing.'
+      ! SetErrStat appends the message to ErrMsg after a line break and the routine name
+      room = LEN(ErrMsg) - LEN_TRIM(ErrMsg) - LEN(RoutineName) - 2
+      IF (LEN(msg) > room) msg = head//' Enlarge '//TRIM(enlarge)//' in the SeaState input file.'
+      CALL SetErrStat( ErrID_Warn, msg, ErrStat, ErrMsg, RoutineName )
+      ! The OpenFAST glue does not print module initialization warnings (FAST_InitializeAll_T
+      ! passes its status on to FAST_InitMappings, which resets it), so the Init check also
+      ! writes the warning to the screen, as the deck dtM warning does. A warning raised
+      ! during the time march reaches the screen through the glue's error check.
+      IF (at_init) CALL WrScr( '   WARNING: '//msg )
+   END SUBROUTINE check_wavefield_grid
+
+   SUBROUTINE check_current_field_grid( inst_e, wf, t_sample )
+      !! A dynamically populated current field (an InflowWind-driven MHK current, hasCurrField) is
+      !! not read on the SeaState grid: InflowWind reads it on its own field at the node position
+      !! shifted up by the water depth (the field's z = 0 is the seabed). For a gridded (Grid3D)
+      !! field, warn once when submerged sampling nodes lie outside its vertical extent
+      !! [GridBase, GridBase + 2 ZHWid] or its lateral half-width YHWid (in the field's frame,
+      !! rotated about its reference position when the box is rotated), where InflowWind
+      !! extrapolates or stops. Other field types have no extent to check.
+      TYPE(CD_OF_Instance),      INTENT(INOUT) :: inst_e
+      TYPE(SeaSt_WaveFieldType), INTENT(IN   ) :: wf
+      REAL(DbKi),                INTENT(IN   ) :: t_sample
+      INTEGER(IntKi) :: i, nout
+      REAL(wp)       :: zlo, zhi, yhw, dep, tol, pos(3), rel(3), yw, zw, surface, ez, ey
+      CHARACTER(1024):: msg
+
+      IF (.NOT. (inst_e%agg%host_current_enabled .AND. wf%hasCurrField)) RETURN
+      IF (wf%CurrField%FieldType /= Grid3D_FieldType) RETURN
+      dep = REAL(wf%EffWtrDpth, wp)
+      zlo = REAL(wf%CurrField%Grid3D%GridBase, wp)
+      zhi = zlo + 2.0_wp*REAL(wf%CurrField%Grid3D%ZHWid, wp)
+      yhw = REAL(wf%CurrField%Grid3D%YHWid, wp)
+      tol = 1.0E-6_wp*MAX(1.0_wp, dep)
+      nout = 0_IntKi
+      ez = 0.0_wp
+      ey = 0.0_wp
+      DO i = 1, inst_e%nfluid
+         surface = MIN(inst_e%fx_wl(i), 0.0_wp)
+         IF (inst_e%fx_xyz(3, i) > MAX(inst_e%fx_wl(i), surface)) CYCLE
+         pos = [inst_e%fx_xyz(1, i), inst_e%fx_xyz(2, i), inst_e%fx_xyz(3, i) + dep]
+         IF (wf%CurrField%RotateWindBox) THEN
+            rel = MATMUL(REAL(wf%CurrField%RotToWind, wp), pos - REAL(wf%CurrField%RefPosition, wp)) + &
+                  REAL(wf%CurrField%RefPosition, wp)
+         ELSE
+            rel = pos
+         END IF
+         yw = rel(2)
+         zw = rel(3)
+         IF (zw < zlo - tol .OR. zw > zhi + tol .OR. ABS(yw) > yhw + tol) THEN
+            nout = nout + 1_IntKi
+            ez = MAX(ez, zlo - zw, zw - zhi)
+            ey = MAX(ey, ABS(yw) - yhw)
+         END IF
+      END DO
+      IF (nout == 0_IntKi) RETURN
+      inst_e%curr_grid_warned = .TRUE.
+      WRITE (msg, '(A,I0,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A)') &
+         'CableDyn mooring module: ', nout, ' submerged CableDyn sampling node(s) lie outside the '// &
+         'InflowWind current-field grid at t = ', REAL(t_sample, wp), ' s (warned once): the field covers '// &
+         'z = ', zlo, ' to ', zhi, ' m above the seabed and |y| <= ', yhw, ' m; the farthest node is ', &
+         MAX(ez, 0.0_wp), ' m outside in z and ', MAX(ey, 0.0_wp), &
+         ' m in y. InflowWind extrapolates or stops there; enlarge the current-field grid to cover the lines.'
+      CALL WrScr( TRIM(msg) )
+   END SUBROUTINE check_current_field_grid
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_CalcOutput( t, u, p, x, xd, z, other, y, m, ErrStat, ErrMsg )
@@ -3816,6 +4072,8 @@ CONTAINS
                                                  Inst(k)%fx_wl, Inst(k)%fx_pd)
       Inst(k)%use_extfluid = .FALSE.
       Inst(k)%nfluid = 0
+      Inst(k)%grid_warned = .FALSE.
+      Inst(k)%curr_grid_warned = .FALSE.
       ! close the CableDyn-owned committed-step record (flushes the final rows)
       IF (Inst(k)%native_un > 0) THEN
          CLOSE (Inst(k)%native_un)

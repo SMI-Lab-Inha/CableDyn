@@ -10,8 +10,8 @@ CableDyn results, compare against stock MoorDyn in the same binary, and add a la
 cable.
 
 **Needs:** ``openfast.exe`` from the release, the ``examples`` folder, and Git (or a browser) to
-fetch the turbine model · **Run time:** about 5 s for 70 s of simulation (the MoorDyn comparison run
-takes a few minutes)
+fetch the turbine model · **Run time:** under half a minute for 70 s of simulation, about a
+third of it SeaState generating the wave grid (the MoorDyn comparison run takes a few minutes)
 
 .. contents::
    :local:
@@ -75,8 +75,8 @@ The folder now holds, among others:
        ``HydroData\``, ``Airfoils\``, …
      - the turbine and platform model from ``MD_Shared``
 
-3. Make the model a single turbine at the origin
-------------------------------------------------
+3. Prepare the turbine model
+----------------------------
 
 ``MD_Shared`` is a two-turbine FAST.Farm case. Its turbine-1 files start the platform at its farm
 pose (20.3 m surge, 180° yaw, small roll/pitch/heave) and set HydroDyn's reference yaw
@@ -101,6 +101,28 @@ This sets ``PtfmSurge``, ``PtfmSway``, ``PtfmHeave``, ``PtfmRoll``, ``PtfmPitch`
    far beyond its 850 m length: CableDyn and MoorDyn then both report a physically meaningless
    321 MN fairlead tension. Always read the initial fairlead tensions before trusting a coupled
    run.
+
+``MD_Shared``'s ``SeaState.dat`` computes the wave kinematics on a grid that covers only the
+platform: ``X_HalfWidth = Y_HalfWidth = 100 m``, ``Z_Depth = 40 m``, ``NX = NY = NZ = 2``. The
+mooring lines reach anchors 838 m away on the 200 m seabed, and SeaState gives every line node
+outside the grid the kinematics of the grid boundary. Enlarge the grid to cover the lines:
+
+.. code-block:: powershell
+
+   $ss = 'SeaState.dat'
+   (Get-Content $ss) -replace '^\s*\S+(\s+[XY]_HalfWidth\s)', '           900$1' `
+                     -replace '^\s*\S+(\s+Z_Depth\s)', '     "default"$1' `
+                     -replace '^\s*\S+(\s+NX\s)', '            37$1' `
+                     -replace '^\s*\S+(\s+NZ\s)', '            11$1' |
+       Set-Content $ss -Encoding ascii
+
+This sets ``X_HalfWidth`` and ``Y_HalfWidth`` to 900 m, ``Z_Depth`` to the water depth, 37 grid
+points along each half of x (25 m spacing) and 11 in depth. ``NY`` stays 2 because the
+long-crested sea travels along x and does not vary in y. SeaState then needs about 4.6 GB of
+memory and several seconds to generate the grid. Without this step the run still completes, but
+CableDyn warns that 147 of its 153 line nodes lie outside the SeaState wave-kinematics grid, and
+the line-1 fairlead tension standard deviation comes out 18 % too high. Grid sizing is
+described in :ref:`openfast:SeaState grid`.
 
 4. How CableDyn is wired in
 ---------------------------
@@ -148,7 +170,7 @@ The CableDyn part of the console (other modules' lines trimmed):
     Running CableDyn (v0.1.1, 2026-10-09).
       CableDyn: geometrically nonlinear cable & mooring dynamics for floating wind.
       ...
-      CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM    )
+      CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)
      Parsing CableDyn input file: .\CableDyn_UMaine.dat
       CableDyn: SeaState wave/current kinematics drive the mooring hydro (153 sampling nodes,
       refreshed every mooring step).
@@ -163,16 +185,14 @@ The CableDyn part of the console (other modules' lines trimmed):
          ...
      CableDyn initialization completed.
        Requested CableDyn OUTPUTS at t = 0 s (equilibrium pose, SeaState kinematics at t = 0):
-         FairTen1 = 2.43621E+06 (N)
-         AnchTen1 = 1.35173E+06 (N)
+         FairTen1 = 2.43752E+06 (N)
+         AnchTen1 = 1.35164E+06 (N)
          FairIncl1 = 55.685 (deg)
          ...
        These values are also the t = 0 CableDyn columns in the OpenFAST output file.
     Time: 0 of 70 seconds.
     ...
-    Total Real Time:       4.63 seconds
     Simulated Time:        70 seconds
-    Time Ratio (Sim/CPU):  15.887
 
     OpenFAST terminated normally.
 
@@ -180,13 +200,14 @@ Check, in order:
 
 #. ``Running CableDyn (`` — the CableDyn-enabled executable is in use. A stock OpenFAST rejects
    ``CompMooring = 5`` during input validation.
-#. The line inventory (3 lines, 6 points) and ``dtM``.
+#. The line inventory (3 lines, 6 points) and ``dtM``, and no ``WARNING: CableDyn mooring module:
+   ... lie outside the SeaState wave-kinematics grid`` line (step 3).
 #. The initial fairlead tensions: 2.437 MN per line, with the line tangent 55.7° below
    horizontal, as in the standalone ``spread_3line_chain.dat`` of :doc:`tutorial_spread`. The
    tension is the magnitude of the line-end force, which includes the fairlead node's share of
    the chain weight, so the force points slightly steeper, 56.3° below horizontal, with a
    horizontal component of 1.351 MN.
-#. The ``OUTPUTS`` at t = 0: ``FairTen1`` reads 2.436 MN, 0.04 % below the equilibrium value
+#. The ``OUTPUTS`` at t = 0: ``FairTen1`` reads 2.4375 MN, 0.02 % above the equilibrium value
    above. The equilibrium is solved before the SeaState kinematics act, and at t = 0 the wave
    kinematics add their hydrodynamic load on the fairlead end node. In still water
    (``WaveMod = 0``) the two values are equal. ``.CD.static.out`` holds the equilibrium, and the
@@ -218,8 +239,8 @@ Check, in order:
 
    Time           FairTen1         AnchTen1         FairIncl1       AnchIncl1       FairTen2 ...
    (s)            (N)              (N)              (deg)           (deg)           (N)      ...
-     0.0000000E+00   2.436210E+06   1.351729E+06    5.568478E+01   -1.961023E-02   2.435610E+06 ...
-     2.5000000E-02   2.434498E+06   1.352272E+06    5.568418E+01   -1.957846E-02   2.433048E+06 ...
+     0.0000000E+00   2.437520E+06   1.351636E+06    5.568478E+01   -1.961023E-02   2.436576E+06 ...
+     2.5000000E-02   2.438082E+06   1.351645E+06    5.568463E+01   -1.961023E-02   2.435530E+06 ...
 
 CableDyn channels are chosen in the deck's ``OUTPUTS`` section (keep its closing ``END``), not in
 the ``.fst`` ``OutList``. Channel names and units: :doc:`outputs`; sign and angle conventions:
@@ -254,30 +275,30 @@ the main ``.out``. Statistics over 10–70 s from the two main output files:
      - CableDyn std
      - MoorDyn std
    * - ``PtfmSurge`` (m)
-     - 0.893
-     - 0.893
-     - 1.364
-     - 1.363
+     - 0.899
+     - 0.899
+     - 1.380
+     - 1.378
    * - ``PtfmHeave`` (m)
      - −1.030
      - −1.030
-     - 1.216
-     - 1.215
+     - 1.221
+     - 1.221
    * - ``PtfmPitch`` (deg)
-     - 1.497
-     - 1.497
-     - 1.382
-     - 1.381
+     - 1.496
+     - 1.496
+     - 1.390
+     - 1.390
    * - fairlead tension, line 1 (MN)
-     - 2.452
-     - 2.452
-     - 0.136
-     - 0.136
+     - 2.456
+     - 2.456
+     - 0.115
+     - 0.116
    * - fairlead tension, line 2 (MN)
-     - 2.376
-     - 2.376
-     - 0.069
-     - 0.069
+     - 2.372
+     - 2.372
+     - 0.064
+     - 0.064
 
 The platform motions agree to within 0.2 %, the mean fairlead tensions to within 0.01 % and
 their standard deviations to within 0.5 %. Both codes report the fairlead tension as the force
@@ -319,7 +340,7 @@ seabed. Copy it into the case folder and point a copy of the ``.fst`` at it:
          force [Fx, Fy, Fz]: [1230, 0, -11858] N, inclination=84.078 deg
          line tangent: inclination=83.943 deg, declination=173.94 deg, azimuth=0 deg
       ...
-         Curv4N38 = 9.01821E-02 (1/m)
+         Curv4N38 = 9.01822E-02 (1/m)
          BendMom4N38 = 1794.6 (N.m)
 
 CableDyn found the cable's touchdown and lazy-wave shape by itself: in
@@ -339,9 +360,9 @@ Exercises
    ``MD_Shared`` InflowWind and AeroDyn files are already present) and compare the mean surge and
    line-1 tension with the parked case.
 2. **Supercycling.** Remove the ``dtM`` row from ``CableDyn_UMaine.dat``. The console now
-   reports ``dtM = 0.1 s (4 x glue DT; the default )``, the run takes about 3 s instead of 5 s,
+   reports ``dtM = 0.1 s (4 x glue DT; the default)``, CableDyn solves once per four glue steps,
    and ``.CD.out`` has one row per 0.1 s. Here the line-1 tension statistics over 10–70 s barely
-   move (mean 2.453 MN, std 0.136 MN, against 2.452 and 0.136 MN); verify that for your own
+   move (mean 2.456 MN, std 0.116 MN, against 2.456 and 0.115 MN); verify that for your own
    quantities before adopting a coarser step.
 3. **Still water.** Set ``WaveMod = 0`` in ``SeaState.dat``. Without waves the platform settles
    toward its still-water pose (mean heave −1.1 m, pitch 1.5°) with a decaying heave–pitch
