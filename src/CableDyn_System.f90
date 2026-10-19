@@ -10,6 +10,7 @@ MODULE CableDyn_System
   !! bypassing it. Rigid6 bodies and rods are marched over a system by the deck driver.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_All_Finite, CD_Is_Finite
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Model_Is_Initialized, CD_End_Model, &
                             CD_Model_NCoupledDOF, CD_Model_NDOF, CD_Model_NElem, &
                             CD_Get_Model_CoupledDofs, CD_Get_Model_CoupledMotion, &
@@ -21,7 +22,7 @@ MODULE CableDyn_System
                             CD_Get_Model_EndNodeTangent, CD_Set_Model_EndQuery, CD_Get_Model_EndQuery, &
                             CD_Update_Model_SegmentLength, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Interior_State, CD_Step_Model, &
-                            CD_Get_Model_Substep_Counts, &
+                            CD_Get_Model_Substep_Counts, CD_SubstepStats, &
                             CD_Calc_Model_CoupledLoads, CD_Recompute_Model_Acceleration, &
                             CD_Calc_Model_CoupledKinematicDerivatives, &
                             CD_Calc_Model_CoupledAccelDerivative, CD_Update_Model_CoupledAccelDerivative, &
@@ -220,6 +221,9 @@ MODULE CableDyn_System
     ! Stick-slip seabed friction anchors join the snapshot ((x, y) per node, concatenated
     ! over the friction lines; sized like snap_q, of which it uses two thirds at most).
     REAL(wp), ALLOCATABLE :: snap_fr_anchor(:)
+    ! the sub-stepping diagnostics of every line (CD_SubstepStats): they roll back with the
+    ! states, so a restored and re-advanced step counts once
+    TYPE(CD_SubstepStats), ALLOCATABLE :: snap_sub(:)
     LOGICAL :: snap_valid = .FALSE.
   END TYPE CD_SystemType
 
@@ -455,6 +459,7 @@ CONTAINS
     IF (ALLOCATED(system%snap_ve_dl_1)) DEALLOCATE (system%snap_ve_dl_1)
     IF (ALLOCATED(system%snap_syrope_slow)) DEALLOCATE (system%snap_syrope_slow, system%snap_syrope_tmax)
     IF (ALLOCATED(system%snap_fr_anchor)) DEALLOCATE (system%snap_fr_anchor)
+    IF (ALLOCATED(system%snap_sub)) DEALLOCATE (system%snap_sub)
     system%snap_valid = .FALSE.
     system%initialized = .FALSE.
     system%n_lines = 0
@@ -1253,7 +1258,8 @@ CONTAINS
     LOGICAL :: conv2, stall2
     CHARACTER(160) :: em
     REAL(wp), ALLOCATABLE :: q0(:), v0(:), a0(:), qm(:), vm(:), am(:), qs(:), vs(:), as(:)
-    REAL(wp), ALLOCATABLE :: dl1s(:), slows(:), tmaxs(:), frs(:, :)
+    REAL(wp), ALLOCATABLE :: dl1s(:), slows(:), tmaxs(:), frs(:, :), hmaxs(:)
+    TYPE(CD_SubstepStats), ALLOCATABLE :: subs(:)
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -1312,15 +1318,22 @@ CONTAINS
     n_team = line_team_size(system)
     !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i) NUM_THREADS(n_team) IF(n_team > 1)
     CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
-    !$OMP DO SCHEDULE(STATIC)
+    ! DYNAMIC: a line that is sub-stepped (CD_Step_Model) costs several of its plain steps, so the
+    ! lines take unequal times; each line's result does not depend on the thread that steps it
+    !$OMP DO SCHEDULE(DYNAMIC)
     DO i = 1, system%n_lines
-      ! the halves of a stall recovery (depth > 0) take their steps as given, as the rungs of
-      ! CD_Step_Model_Recovering do: no rotation- and snap-resolved sub-steps of sub-steps
+      ! the halves of a stall recovery (0 < depth < MAX_SUBDIV) take their steps as given, as the
+      ! rungs of CD_Step_Model_Recovering do: no rotation- and snap-resolved sub-steps of
+      ! sub-steps. The plain full-dt rerun at the depth floor (depth = MAX_SUBDIV) steps every line
+      ! as the nominal step (depth 0) does, so its result is that of the step without the
+      ! fallback; the junction step (JUNCTION_NO_SUBDIV = MAX_SUBDIV) likewise, its armed lines
+      ! being taken as given by CD_Step_Model itself
       CALL CD_Step_Model(system%lines(i), dt, system%line_converged(i), system%line_stalled(i), &
                          system%line_iter(i), system%line_stat(i), system%line_msg(i), &
                          prescribed_q=system%lines(i)%q_prescribed_work, &
                          prescribed_v=system%lines(i)%v_prescribed_work, &
-                         prescribed_a=system%lines(i)%a_prescribed_work, as_given=depth > 0)
+                         prescribed_a=system%lines(i)%a_prescribed_work, &
+                         as_given=depth > 0 .AND. depth < MAX_SUBDIV)
     END DO
     !$OMP END DO
     !$OMP END PARALLEL
@@ -1379,7 +1392,8 @@ CONTAINS
         IF (system%lines(i)%has_syrope) nsy = nsy + SIZE(system%lines(i)%syrope_slow)
         IF (CD_Model_Has_Friction(system%lines(i))) nfr = nfr + SIZE(system%lines(i)%fr_anchor, 2)
       END DO
-      ALLOCATE (qs(ntot), vs(ntot), as(ntot), dl1s(nve), slows(nsy), tmaxs(nsy), frs(2, nfr))
+      ALLOCATE (qs(ntot), vs(ntot), as(ntot), dl1s(nve), slows(nsy), tmaxs(nsy), frs(2, nfr), &
+                hmaxs(system%n_lines), subs(system%n_lines))
       lo = 1
       lo_ve = 1
       lo_sy = 1
@@ -1389,6 +1403,10 @@ CONTAINS
         qs(lo:hi) = system%lines(i)%q
         vs(lo:hi) = system%lines(i)%v
         as(lo:hi) = system%lines(i)%a
+        ! the run audit's largest solver step and the sub-stepping diagnostics restore with the
+        ! states, so the halves of a fallback that does not complete leave no trace
+        hmaxs(i) = system%lines(i)%audit_hmax
+        subs(i) = system%lines(i)%sub_stats
         lo = hi + 1
         IF (CD_Model_Has_Friction(system%lines(i))) THEN
           ne = SIZE(system%lines(i)%fr_anchor, 2)
@@ -1431,6 +1449,8 @@ CONTAINS
           system%lines(i)%q = qs(lo:hi)
           system%lines(i)%v = vs(lo:hi)
           system%lines(i)%a = as(lo:hi)
+          system%lines(i)%audit_hmax = hmaxs(i)
+          system%lines(i)%sub_stats = subs(i)
           lo = hi + 1
           IF (CD_Model_Has_Friction(system%lines(i))) THEN
             ne = SIZE(system%lines(i)%fr_anchor, 2)
@@ -1495,7 +1515,7 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: level_dofs(:)
     INTEGER :: i, j, k, lo, nc, nf
     LOGICAL :: valid, fresh
-    LOGICAL, ALLOCATABLE :: act(:), lev(:)
+    LOGICAL, ALLOCATABLE :: act(:), lev(:), armed(:)
     REAL(wp), ALLOCATABLE :: r(:), kl(:, :)
 
     loads = CD_ZERO
@@ -1513,6 +1533,11 @@ CONTAINS
     END IF
     fresh = .TRUE.
     IF (PRESENT(refresh)) fresh = refresh
+    ! A line with no active junction DOF (both ends on fixed or anchored points) adds nothing to
+    ! the junction loads and tangent: its end query stays unarmed, so CD_Step_Model sub-steps
+    ! it as on any other route (its loads at the inactive DOFs are not returned). Every other
+    ! line is armed and taken as given.
+    ALLOCATE (armed(system%n_lines))
     DO i = 1, system%n_lines
       lo = system%line_off(i)
       nc = system%line_off(i + 1) - lo
@@ -1524,7 +1549,10 @@ CONTAINS
         act(j) = active(system%coupled_dof_map(lo + j - 1))
         IF (PRESENT(level_dofs)) lev(j) = level_dofs(system%coupled_dof_map(lo + j - 1))
       END DO
-      IF (PRESENT(levels)) THEN
+      armed(i) = ANY(act)
+      IF (.NOT. armed(i)) THEN
+        CALL CD_Set_Model_EndQuery(system%lines(i), .FALSE.)
+      ELSE IF (PRESENT(levels)) THEN
         CALL CD_Set_Model_EndQuery(system%lines(i), .TRUE., act, warm, fresh, levels, lev)
       ELSE
         CALL CD_Set_Model_EndQuery(system%lines(i), .TRUE., act, warm, fresh)
@@ -1535,6 +1563,7 @@ CONTAINS
                         JUNCTION_NO_SUBDIV)
     IF (ErrStat == CD_SYSTEM_OK .AND. converged) THEN
       DO i = 1, system%n_lines
+        IF (.NOT. armed(i)) CYCLE
         lo = system%line_off(i)
         nc = system%line_off(i + 1) - lo
         nf = SIZE(system%lines(i)%fixed_dofs)
@@ -2947,6 +2976,8 @@ CONTAINS
       ! the run audit's largest solver step rolls back too: a rolled-back (stalled) full step
       ! must not count when its halves are what the line commits
       system%lines(i)%audit_hmax_rollback = system%lines(i)%audit_hmax
+      ! the sub-stepping diagnostics likewise: a rolled-back step is not counted
+      system%lines(i)%sub_stats_rollback = system%lines(i)%sub_stats
       ! the viscoelastic dl_1 state advances with every committed line step, so
       ! it must roll back with q/v/a (a line that stepped can be rolled back
       ! when a sibling line or the coupled point solve fails)
@@ -2975,6 +3006,7 @@ CONTAINS
       system%lines(i)%v = system%lines(i)%v_rollback
       system%lines(i)%a = system%lines(i)%a_rollback
       system%lines(i)%audit_hmax = system%lines(i)%audit_hmax_rollback
+      system%lines(i)%sub_stats = system%lines(i)%sub_stats_rollback
       IF (system%lines(i)%has_viscoelastic) &
         system%lines(i)%ve_dl_1 = system%lines(i)%ve_dl_1_rollback
       IF (system%lines(i)%has_syrope) THEN
@@ -3100,6 +3132,10 @@ CONTAINS
         RESHAPE(system%lines(i)%fr_anchor, [2*SIZE(system%lines(i)%fr_anchor, 2)])
       lo = hi + 1
     END DO
+    IF (.NOT. ALLOCATED(system%snap_sub)) ALLOCATE (system%snap_sub(system%n_lines))
+    DO i = 1, system%n_lines
+      system%snap_sub(i) = system%lines(i)%sub_stats
+    END DO
     IF (ALLOCATED(system%points)) system%snap_points = system%points
     IF (ALLOCATED(system%bindings)) system%snap_bindings = system%bindings
     IF (ALLOCATED(system%coupled_dof_map)) system%snap_map = system%coupled_dof_map
@@ -3163,6 +3199,11 @@ CONTAINS
                                             [2, SIZE(system%lines(i)%fr_anchor, 2)])
       lo = hi + 1
     END DO
+    IF (ALLOCATED(system%snap_sub)) THEN
+      DO i = 1, system%n_lines
+        system%lines(i)%sub_stats = system%snap_sub(i)
+      END DO
+    END IF
     IF (ALLOCATED(system%snap_points)) system%points = system%snap_points
     ! Roll the detach topology back with the states: a failure fired after the
     ! snapshot un-fires (its row will re-trigger on the re-advance).
@@ -3218,8 +3259,10 @@ CONTAINS
     !! The rotation- and snap-resolved sub-stepping diagnostics of the EI=0 lines
     !! (CD_Get_Model_Substep_Counts) summed over the lines (max_used: the largest count).
     TYPE(CD_SystemType), INTENT(IN) :: system
-    INTEGER, INTENT(OUT) :: calls, events, max_used, capped, fallbacks
-    INTEGER :: i, c, e, m, k, f
+    INTEGER(int64), INTENT(OUT) :: calls, events, capped, fallbacks
+    INTEGER, INTENT(OUT) :: max_used
+    INTEGER(int64) :: c, e, k, f
+    INTEGER :: i, m
     calls = 0; events = 0; max_used = 1; capped = 0; fallbacks = 0
     IF (.NOT. ALLOCATED(system%lines)) RETURN
     DO i = 1, SIZE(system%lines)

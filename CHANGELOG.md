@@ -100,10 +100,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   step before and after, ten times the largest tension anywhere on the line one step before and
   after, and the largest tension of the initial state. The first spike of a line is reported as
   a warning, once per line, and the run summary counts them. The run ends with a note when a
-  taut segment turned by more than 1° in one step (the mean and standard deviation of the
-  tension err by about 1 % and more above it; 1.3 % at 2.9° on a heaving chain), and when
-  segments snapped taut while the axial wave crosses a segment more than once per step, so the
-  snap peaks are not resolved in time. The standalone driver also prints a note for a dynamic
+  taut segment turned by more than 1° in one solver step (with `ei0_substeps auto`, see Changed,
+  1.1 times the larger of 1° and `ei0_substep_angle`; the sub-steps of a sub-stepped or
+  recovered step count as steps; the mean and standard deviation of the tension err by about
+  1 % and more above it, 1.3 % at 2.9° on a heaving chain, and near 6° per step snap-load peaks
+  come out 10 to 20 % low with either generalised-α blend), and when segments snapped taut
+  while the axial wave crosses a segment more than once per solver step, so the snap peaks are
+  not resolved in time. The standalone driver also prints a note for a dynamic
   deck with `rhoInf` above 0.95, on the missing numerical dissipation. See the manual's
   troubleshooting page.
 - Anchor uplift channels for the drag-anchor check of a catenary mooring (no vertical load at
@@ -170,13 +173,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 - Tension-only (`EI = 0`) lines resolve fast segment rotation and slack-to-taut snaps by
   sub-stepping, on by default (new OPTIONS `ei0_substeps auto|off`, `ei0_substep_angle`
-  (default 1°) and `ei0_substep_max` (default 16)). A converged step in which a segment that
-  ends it taut (above 0.1 % of the largest step-start tension) turned by more than
-  `ei0_substep_angle`, or a segment slack at its start ends it above a quarter of that
-  tension, is solved again from the same committed
-  state in `max(4, ceil(turn/angle))` equal sub-steps, at most `ei0_substep_max`, with the end
-  motion on the quintic of the recovering step and the last sub-step on the given end state;
-  output and coupling times are unchanged. At `dtM` 0.1 s a taut segment of the Lozon 80 m
+  (default 1°) and `ei0_substep_max` (default 16), checked when the line is initialised; the
+  Python deck reader applies the same rules). A converged step in which a segment that ends it
+  taut (above 0.1 % of the largest step-start tension) turned by more than
+  `ei0_substep_angle`, or a segment slack at its start ends it above a quarter of that tension
+  while the step does not resolve the axial wave over it (the wave crosses the segment more
+  than once per step), is solved again from the same committed state in
+  `max(4, ceil(turn/angle))` equal sub-steps, at most `ei0_substep_max`, with the end motion on
+  the quintic of the recovering step and the last sub-step on the given end state; output and
+  coupling times are unchanged. The tensions are those of the run audit (the elastic tension,
+  or that of the viscoelastic or Syrope law), and the step-start tension is taken as at least
+  0.1 % of the line's initial tension, so a line slack all over does not count barely taut
+  segments. At `dtM` 0.1 s a taut segment of the Lozon 80 m
   all-chain mooring turns by up to 6° per step in 5 m / 7 s heave, and the snap-load peaks of
   both generalised-α blends came out 10 to 20 % low. The release cap was not the cause: it acts
   in 0.3 % of the element steps, never within 0.5 s of a peak, and the cycle maxima with and
@@ -184,51 +192,71 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `rhoInf` 0, 10 and 40 % high at 0.6). Over seven runs whose amplitude differs by up to 3e-4,
   against 0.5 and 0.25 ms runs, the fairlead and anchor maxima move from 15 and 17 % low to 4 and
   8 % low (the configuration blend of 0.1.1 gave 10 and 18 % low), and the anchor maxima of
-  the 200 m semitaut mooring in 10 m / 14 s and 5 m / 7 s surge from 16 and 26 % high to 1.4
-  and 2.6 % low. A single run at that step varies by 15 to 20 points, so a single comparison
-  can make either blend look accurate. The decision depends only on the committed state and the
-  step inputs, so restarts repeat it; when a sub-step does not converge the plain step's own
-  result is kept, and a step recovered after a stall or a half of a line-system step halved
-  after a failure takes its sub-steps as given. It applies on every route that steps `EI = 0`
-  lines (standalone lines and line systems, OpenFAST, FAST.Farm and the C API, whose raw lines
-  always take it) except the monolithic body and point coupling, which needs the end reaction
-  and tangent of the nominal step; the standalone driver notes that exclusion once per run.
+  the 200 m semitaut mooring in 10 m / 14 s and 5 m / 7 s surge from 16 and 26 % high to 4 %
+  high and 2 % low (over thirteen runs 5 % high and 0.3 % low, single runs from 4 % low to
+  21 % high). A single run at that step varies by 15 to 20 points, so a single comparison
+  can make either blend look accurate. The decision depends only on the committed state, the
+  step inputs and the line's initial tension, so restarts repeat it; when a sub-step does not
+  converge the plain step's own result is kept, and a step recovered after a stall or a half
+  of a line-system step halved after a failure takes its sub-steps as given (when the halves
+  fail too, the full step is re-run as the nominal step, sub-steps included). It applies on
+  every route that steps `EI = 0` lines (standalone lines and line systems, OpenFAST,
+  FAST.Farm and the C API, whose raw lines always take it) except the lines attached to the
+  bodies, rods and points of the monolithic body and point coupling, which needs the end
+  reaction and tangent of the nominal step. `monolithic bodyScheme` is the default of every
+  standalone deck with `Rigid6` bodies, `Point3` buoys, rods or `Free`/`Connect` points on
+  `EI = 0` lines, so those lines are not sub-stepped there: 7 of the 21 shipped `EI = 0`
+  dynamic example decks run this way, and none of them notes an unresolved segment turn. A
+  line of such a deck whose ends are all fixed or anchored is sub-stepped, `staggered
+  bodyScheme` sub-steps them all, and the standalone driver notes the exclusion once per run.
   `False alpha_force_blend` (paper mode) turns it off unless the deck sets it, so the paper
-  reproduction is unchanged. The standalone driver reports the sub-stepped steps per line,
-  OpenFAST and FAST.Farm print the counts (steps sub-stepped, largest count, steps that needed
-  more than `ei0_substep_max`, steps that kept the plain step) at the end of the run, and
-  `CD_AGG_Get_Substep_Counts` returns them to an aggregate host. The segment-turn note now
-  measures the turn per solver step and states that peaks come out 10 to 20 % low near 6° per
-  step. Over the shipped examples 19 of the 21 `EI = 0` dynamic decks
-  are unchanged bit for bit; in the two `als_volturnus` line-break decks the pre-failure anchor
-  snap at 250 s, a single-step peak at `dtM` 0.05 s, moves from 2.145 to 1.918 MN (1.963 MN
-  converged) and from 2.262 to 2.158 MN (2.334 MN converged), with the other tension
-  statistics within 0.02 %. The 20-run Lozon mooring envelope at `dtM` 0.1 s takes 1.63 times
-  as long (1.6 to 2.5 times on the 5 m / 7 s and 10 m / 14 s motions; the steps that do not
-  trigger cost only the measurement), and the
+  reproduction is unchanged. A step that triggers costs its plain step and usually four
+  sub-steps, at most the plain step and three passes of `ei0_substep_max` sub-steps (49 line
+  solves at the default), and that once for every sub-step where bodies or rods sub-cycle the
+  lines (`staggered bodyScheme`, coupled runs); the OpenMP loop over the lines of a system
+  hands them out dynamically, which leaves every line's result unchanged. The standalone
+  driver reports the sub-stepped steps per line ("solved N of the M line step(s) it
+  examined"), OpenFAST and FAST.Farm print the counts (steps sub-stepped, largest count, steps
+  that needed more than `ei0_substep_max`, steps that kept the plain step) at the end of the
+  run, and `CD_AGG_Get_Substep_Counts` returns them to an aggregate host as 64-bit integers.
+  Only committed steps count: a step rolled back and taken again (a line-system halving, a
+  stall recovery, a corrector or a junction iteration) counts once. Over the shipped examples
+  19 of the 21 `EI = 0` dynamic decks are unchanged bit for bit; in the two `als_volturnus`
+  line-break decks the pre-failure anchor snap at 250 s, a single-step peak at `dtM` 0.05 s,
+  moves from 2.145 to 1.918 MN (1.963 MN converged) and from 2.262 to 2.158 MN (2.334 MN
+  converged), with the other tension statistics within 0.02 %. The 20-run Lozon mooring
+  envelope at `dtM` 0.1 s takes 1.67 times as long (1.6 to 2.5 times on the 5 m / 7 s and
+  10 m / 14 s motions; the steps that do not trigger cost only the measurement), and the
   examples whose steps never trigger run as before. Of the reproducers of the force-blend
   entry below, the semi-taut chain–polyester leg in 15 m surge now peaks at 4.65 MN at the
-  anchor at `dtM` 0.05 s (5.74 MN before, 4.6 MN at 0.0025 s), the Syrope line at 1.82 MN
+  anchor at `dtM` 0.05 s (5.74 MN before, 4.6 MN at 0.0025 s), the Syrope line at 1.81 MN
   (1.64 MN before, 1.78 MN at 1 and 2.5 ms), the lightly damped viscoelastic light cable at
-  0.092 MN (0.085 MN before, 0.082 to 0.095 MN at 0.5 to 2.5 ms) and the shipped viscoelastic
-  polyester at 1.80 MN as before; the light cable stays at 0.092 / 0.106 MN at `dtM` 0.1 s and
-  its largest segment tension at `dtM` 0.01 s moves from 0.107 to 0.095 MN. Its fairlead and
-  anchor peaks at `dtM` 2.5 ms move from 0.099 / 0.091 to 0.102 / 0.119 MN, and on the stiff
-  seabed at `dtM` 0.05 s from 0.52 / 0.67 to 0.62 / 0.86 MN. None of these is a converged
-  peak: the undamped `EI = 0` cable has no converged snap peak (see the force-blend entry
-  below; converged finite-EI runs give 0.093 / 0.057 MN). On this undamped cable the sub-steps
-  resolve more of the segment rattle and can raise isolated spikes: at `dtM` 0.5 ms the anchor
-  peaks at 0.16 to 0.52 MN, depending on `rhoInf`, and its 5 ms averages at 0.12 to 0.21 MN
-  against 0.09 MN converged. With physical axial damping (`BA` 5.06e5 N·s) `auto` sub-steps
-  3 to 4 steps of that run and changes nothing; `ei0_substep_max` and `ei0_substep_angle` do
-  not change these runs. Validation: the
-  Bergdahl matrix gives RMSE 1.59 N (1.58 N), MAPE 3.13 %, Pearson 0.993 and Lin concordance
-  0.989, with mesh and time-step halving moving the cycle maxima by at most 0.53 % and 0.13 %
-  (0.52 % and 0.19 %); the WD0050/A2 cell of the L2-2 parity moves within its recorded range
-  (largest OrcaFlex summary difference 0.091 to 0.093, MoorDyn-C metric 0.078 to 0.076); the
-  other L2-2 cells, the one-hour VolturnUS-S record, the L3-2 regular-wave comparison and the
-  snap-load verification are unchanged bit for bit (the latter two step the generalised-α
-  kernel directly). `off ei0_substeps` gives the previous results bit for bit.
+  0.062 MN at the anchor (0.085 MN before, 0.082 to 0.095 MN at 0.5 to 2.5 ms; its snap is not
+  resolved at 0.1 s, and over seven runs whose amplitude differs by up to 3e-4 it peaks at
+  0.056 to 0.079 MN with the sub-steps and 0.056 to 0.085 MN without) and the shipped
+  viscoelastic polyester at 1.80 MN as before (in its steps recovered after a stall, taken as
+  given, a segment now turns by up to 2.0° per solver step, which the run notes); the light
+  cable stays at 0.092 / 0.106 MN at `dtM` 0.1 s and its largest segment tension at `dtM`
+  0.01 s moves from 0.107 to 0.095 MN. Its fairlead and anchor peaks at `dtM` 2.5 ms move from
+  0.099 / 0.091 to 0.102 / 0.119 MN, and on the stiff seabed at `dtM` 0.05 s from 0.52 / 0.67
+  to 0.62 / 0.86 MN. None of these is a converged peak: the undamped `EI = 0` cable has no
+  converged snap peak (see the force-blend entry below; converged finite-EI runs give 0.093 /
+  0.057 MN). At a step that does not resolve the axial wave the sub-steps resolve more of the
+  segment rattle of this undamped cable and can raise isolated spikes, as its anchor peak at
+  2.5 ms shows. At `dtM` 0.5 ms, where the step resolves the wave, the cable takes no sub-step,
+  with or without physical axial damping (`BA` 5.06e5 N·s), and its results equal those taken
+  as given bit for bit; without the axial-wave condition on the snap trigger `auto` sub-stepped
+  8081 of the 60000 steps of that run and raised its anchor peak from 0.116 to 0.52 MN. `ei0_substep_max` and `ei0_substep_angle` do not change these runs. Validation:
+  the Bergdahl matrix at its 0.3125 ms step resolves the axial wave over a segment and takes no
+  sub-step, so its maxima are unchanged bit for bit (RMSE 1.58 N, MAPE 3.13 %, Pearson 0.993,
+  Lin concordance 0.989); of its refinement runs the 0.1 m mesh moves the T = 1.25 s mean
+  cycle maximum from 68.33 to 68.35 N (largest mesh-halving change 0.52 % to 0.56 %) and the
+  0.625 ms step from 72.2 to 69.5 N. The WD0050/A2 cell of the L2-2 parity moves within its
+  recorded range (largest OrcaFlex summary difference 0.091 to 0.093, MoorDyn-C metric 0.078
+  to 0.076); the other L2-2 cells, the one-hour VolturnUS-S record, the L3-2 regular-wave
+  comparison and the snap-load verification are unchanged bit for bit (the latter two step
+  the generalised-α kernel directly). `off ei0_substeps` gives the previous results bit for
+  bit.
 - Finite-EI node tension, curvature and bend moment are recovered from nodal equilibrium. The
   `Ten<L>N<J>`, `Curv<L>N<J>` and `BendMom<L>N<J>` channels, the `Tension`, `Curvature` and
   `BendMoment` columns of the static profile and the range graph, and the `.t.out` segment
@@ -483,7 +511,7 @@ All notable changes to CableDyn are recorded in this file. The format follows
   deck (`CableDyn_InitLine`, `CableDyn_InitLines`) always take the force blend. The figures
   of this entry take every step as given, as `off ei0_substeps` now does; the rotation- and
   snap-resolved sub-steps of the default (under Changed) move the snap peaks among them, for
-  example the chain–polyester anchor to 4.65 MN and the viscoelastic light cable to 0.092 MN.
+  example the chain–polyester anchor to 4.65 MN and the viscoelastic light cable to 0.062 MN.
 - `modified_newton` on `EI = 0` lines (with or without the force blend, so also under
   `False alpha_force_blend`) rebuilds the tangent when an iterate reduces the residual by less
   than a factor four, as the manual states; it had kept the first tangent for the whole step,

@@ -2390,6 +2390,7 @@ CONTAINS
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_End(u, p, x, xd, z, other, y, m, ErrStat , ErrMsg)
+      USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
       TYPE(CD_InputType) ,            INTENT(INOUT) :: u
       TYPE(CD_ParameterType) ,        INTENT(INOUT) :: p
       TYPE(CD_ContinuousStateType) ,  INTENT(INOUT) :: x
@@ -2404,7 +2405,9 @@ CONTAINS
       character(*), parameter :: RoutineName = 'CD_End'
       INTEGER(IntKi)          :: ErrStat2
       INTEGER                 :: hn_step, hn_resid, hn_solve, hn_am, hn_alloc, hn_tan
-      INTEGER                 :: sb_calls, sb_events, sb_max, sb_capped, sb_fallbacks
+      INTEGER(int64)          :: sb_calls, sb_events, sb_capped, sb_fallbacks
+      INTEGER                 :: sb_max, sb_ios
+      CHARACTER(24)           :: sb_txt(5)
       REAL(wp)                :: ht_step, ht_resid, ht_eff, ht_solve, ht_am, ht_tan
       CHARACTER(ErrMsgLen)    :: ErrMsg2
 
@@ -2419,10 +2422,16 @@ CONTAINS
                CALL CD_AGG_Get_Substep_Counts( Inst(m%CDInst)%agg, sb_calls, sb_events, sb_max, sb_capped, &
                                                sb_fallbacks )
                IF (sb_events > 0 .OR. sb_fallbacks > 0) THEN
-                  CALL WrScr( '   CableDyn: ei0_substeps auto solved '//TRIM(Num2LStr(sb_events))//' of '// &
-                              TRIM(Num2LStr(sb_calls))//' EI = 0 line step(s) in sub-steps (at most '// &
-                              TRIM(Num2LStr(sb_max))//' per step); '//TRIM(Num2LStr(sb_capped))// &
-                              ' needed more than ei0_substep_max; '//TRIM(Num2LStr(sb_fallbacks))// &
+                  ! 64-bit counts, written here (Num2LStr takes the default integer kind)
+                  WRITE (sb_txt(1), '(I0)', IOSTAT=sb_ios) sb_events
+                  WRITE (sb_txt(2), '(I0)', IOSTAT=sb_ios) sb_calls
+                  WRITE (sb_txt(3), '(I0)', IOSTAT=sb_ios) sb_max
+                  WRITE (sb_txt(4), '(I0)', IOSTAT=sb_ios) sb_capped
+                  WRITE (sb_txt(5), '(I0)', IOSTAT=sb_ios) sb_fallbacks
+                  CALL WrScr( '   CableDyn: ei0_substeps auto solved '//TRIM(sb_txt(1))//' of the '// &
+                              TRIM(sb_txt(2))//' EI = 0 line step(s) it examined in sub-steps (at most '// &
+                              TRIM(sb_txt(3))//' sub-steps per step); '//TRIM(sb_txt(4))// &
+                              ' needed more than ei0_substep_max; '//TRIM(sb_txt(5))// &
                               ' kept the whole step after a sub-step did not converge.' )
                END IF
                IF (Inst(m%CDInst)%prof_enabled) THEN

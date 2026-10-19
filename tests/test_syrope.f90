@@ -688,8 +688,10 @@ CONTAINS
 
   SUBROUTINE case_substeps_restore_law_states()
     !! The rotation-resolved sub-stepping of a model carrying a Syrope and a viscoelastic
-    !! element (case_model_mixed_ve_syrope), node 2 free and node 3 driven on a 0.4 m circle at
-    !! 2 s, so the chords turn by more than a degree per 0.02 s step: solving the first
+    !! element (case_model_mixed_ve_syrope, the viscoelastic element 1000 times stiffer so that
+    !! its law tension counts as taut against the 0.8 MN of the Syrope element), node 2 free and
+    !! node 3 driven on a 0.4 m circle at 2 s, so the chords turn by more than a degree per
+    !! 0.02 s step: solving the first
     !! sub-stepped pass twice, the second from the restored committed state (TEST-ONLY
     !! sub_test_repeat), changes nothing bit for bit, Syrope slow strain and running maximum and
     !! viscoelastic dl_1 included; a failing sub-step (TEST-ONLY sub_test_fail) returns the plain
@@ -710,7 +712,7 @@ CONTAINS
     conn(:, 1) = [1, 2]
     conn(:, 2) = [2, 3]
     l0 = L0E
-    eav = [1.0e8_wp, 100.0_wp]
+    eav = [1.0e8_wp, 1.0e5_wp]
     rho_a = 50.0_wp
     q0 = 0.0_wp
     q0(4) = L0E*(1.0_wp + EPS)
@@ -723,7 +725,7 @@ CONTAINS
     stype(2) = td
     sslow = [0.021_wp, 0.0_wp]
     stmax = [2.0e6_wp, 0.0_wp]
-    ve_ead = [0.0_wp, 400.0_wp]
+    ve_ead = [0.0_wp, 4.0e5_wp]
     ve_ba = [0.0_wp, 7.0_wp]
     ve_bad = [0.0_wp, 3.0_wp]
     CALL CD_Init_Model(auto_m, q0, v0, conn, l0, eav, rho_a, .TRUE., f_ext, fixed, cfg, es, em, &
@@ -754,16 +756,16 @@ CONTAINS
       CALL CD_Step_Model(off_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
       all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
     END DO
-    WRITE (*, '(A,I0,A,I0,A,I0,A)') '  sub-steps with Syrope and viscoelastic states: ', auto_m%sub_events, &
-      ' of ', auto_m%sub_calls, ' steps sub-stepped, ', fb_m%sub_fallbacks, ' failing-sub-step fallbacks'
+    WRITE (*, '(A,I0,A,I0,A,I0,A)') '  sub-steps with Syrope and viscoelastic states: ', auto_m%sub_stats%events, &
+      ' of ', auto_m%sub_stats%calls, ' steps sub-stepped, ', fb_m%sub_stats%fallbacks, ' failing-sub-step fallbacks'
     CALL require(all_conv, 'substep-law:converged')
-    CALL require(auto_m%sub_events > 0, 'substep-law:sub-stepped')
+    CALL require(auto_m%sub_stats%events > 0, 'substep-law:sub-stepped')
     CALL require(ANY(auto_m%syrope_slow /= slow0) .AND. ANY(auto_m%ve_dl_1 /= dl0), 'substep-law:states-move')
     CALL require(ALL(rep_m%q == auto_m%q) .AND. ALL(rep_m%v == auto_m%v) .AND. ALL(rep_m%a == auto_m%a) .AND. &
                  ALL(rep_m%syrope_slow == auto_m%syrope_slow) .AND. &
                  ALL(rep_m%syrope_tmax == auto_m%syrope_tmax) .AND. ALL(rep_m%ve_dl_1 == auto_m%ve_dl_1), &
                  'substep-law:restore-is-complete')
-    CALL require(fb_m%sub_fallbacks > 0 .AND. ALL(fb_m%q == off_m%q) .AND. ALL(fb_m%v == off_m%v) .AND. &
+    CALL require(fb_m%sub_stats%fallbacks > 0 .AND. ALL(fb_m%q == off_m%q) .AND. ALL(fb_m%v == off_m%v) .AND. &
                  ALL(fb_m%a == off_m%a) .AND. ALL(fb_m%syrope_slow == off_m%syrope_slow) .AND. &
                  ALL(fb_m%syrope_tmax == off_m%syrope_tmax) .AND. ALL(fb_m%ve_dl_1 == off_m%ve_dl_1), &
                  'substep-law:fallback-is-the-plain-step')

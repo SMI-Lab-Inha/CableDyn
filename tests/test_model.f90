@@ -532,11 +532,11 @@ CONTAINS
     !! than the plain march at dt, and repeats bit for bit from a copy of its state (a restart).
     !! With off, or with an angle no step reaches, every step is the plain step bit for bit; a
     !! junction step (end query armed) is never sub-stepped (it matches the plain march to the
-    !! Newton tolerance: its warm start differs); an invalid angle fails closed.
+    !! Newton tolerance: its warm start differs); invalid settings fail at CD_Init_Model.
     INTEGER, PARAMETER :: NE = 8, NN = NE + 1, NDOF = 3*NN, NSTEP = 30, NFINE = 8
     REAL(wp), PARAMETER :: DT = 0.1_wp
     TYPE(CD_ModelType) :: auto_m, off_m, wide_m, twin_m, junc_m, fine_m, bad_m
-    TYPE(GenAlphaConfig) :: cfg
+    TYPE(GenAlphaConfig) :: cfg, bad_cfg
     INTEGER :: conn(2, NE), fixed(6), es, n_iter, k, j
     REAL(wp) :: l0(NE), ea(NE), rho_a(NE), q0(NDOF), v0(NDOF), f_ext(NDOF)
     REAL(wp) :: pq(NDOF), pv(NDOF), pa(NDOF), err_auto, err_off
@@ -555,8 +555,6 @@ CONTAINS
     wide_m%cfg%ei0_substep_angle = 90.0_wp
     CALL CD_Copy_Model(auto_m, junc_m, es, em)
     CALL CD_Copy_Model(off_m, fine_m, es, em)
-    CALL CD_Copy_Model(auto_m, bad_m, es, em)
-    bad_m%cfg%ei0_substep_angle = 0.0_wp
 
     all_conv = .TRUE.
     lands = .TRUE.
@@ -595,22 +593,32 @@ CONTAINS
     twin_ok = ALL(twin_m%q == auto_m%q) .AND. ALL(twin_m%v == auto_m%v) .AND. ALL(twin_m%a == auto_m%a)
     err_auto = MAXVAL(ABS(auto_m%q - fine_m%q))
     err_off = MAXVAL(ABS(off_m%q - fine_m%q))
-    WRITE (*, '(A,I0,A,I0,A,I0,A,ES10.3,A,ES10.3,A)') '  resolved sub-steps: ', auto_m%sub_events, ' of ', &
-      auto_m%sub_calls, ' steps (at most ', auto_m%sub_max_used, '); position error against dt/8 ', err_auto, &
+    WRITE (*, '(A,I0,A,I0,A,I0,A,ES10.3,A,ES10.3,A)') '  resolved sub-steps: ', auto_m%sub_stats%events, ' of ', &
+   auto_m%sub_stats%calls, ' steps (at most ', auto_m%sub_stats%max_used, '); position error against dt/8 ', err_auto, &
       ' m (plain ', err_off, ' m)'
     CALL require(all_conv, 'resolved:converged')
-    CALL require(auto_m%sub_events > 0 .AND. auto_m%sub_max_used >= 4, 'resolved:sub-stepped')
+    CALL require(auto_m%sub_stats%events > 0 .AND. auto_m%sub_stats%max_used >= 4, 'resolved:sub-stepped')
     CALL require(lands, 'resolved:lands-on-prescribed-end')
     CALL require(err_auto < 0.75_wp*err_off, 'resolved:closer-to-fine-march')
     CALL require(twin_ok, 'resolved:restart-bit-identical')
-    CALL require(off_m%sub_calls == 0 .AND. off_m%sub_events == 0, 'resolved:off-not-examined')
-    CALL require(wide_m%sub_events == 0 .AND. ALL(wide_m%q == off_m%q) .AND. ALL(wide_m%v == off_m%v) .AND. &
+    CALL require(off_m%sub_stats%calls == 0 .AND. off_m%sub_stats%events == 0, 'resolved:off-not-examined')
+    CALL require(wide_m%sub_stats%events == 0 .AND. ALL(wide_m%q == off_m%q) .AND. ALL(wide_m%v == off_m%v) .AND. &
                  ALL(wide_m%a == off_m%a), 'resolved:untriggered-is-plain')
-    CALL require(junc_m%sub_calls == 0 .AND. MAXVAL(ABS(junc_m%q - off_m%q)) < 1.0e-6_wp, &
+    CALL require(junc_m%sub_stats%calls == 0 .AND. MAXVAL(ABS(junc_m%q - off_m%q)) < 1.0e-6_wp, &
                  'resolved:junction-not-sub-stepped')
-    CALL circle_end_motion(q0, pq, pv, pa, DT)
-    CALL CD_Step_Model(bad_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+    ! the settings are checked once, at CD_Init_Model
+    bad_cfg = cfg
+    bad_cfg%ei0_substep_angle = 0.0_wp
+    CALL CD_Init_Model(bad_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, bad_cfg, es, em)
     CALL require(es == CD_MODEL_BADINPUT .AND. INDEX(em, 'ei0_substep_angle') > 0, 'resolved:invalid-angle')
+    bad_cfg = cfg
+    bad_cfg%ei0_substep_max = 1025
+    CALL CD_Init_Model(bad_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, bad_cfg, es, em)
+    CALL require(es == CD_MODEL_BADINPUT .AND. INDEX(em, 'ei0_substep_max') > 0, 'resolved:invalid-max')
+    bad_cfg = cfg
+    bad_cfg%ei0_substeps = 7
+    CALL CD_Init_Model(bad_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, bad_cfg, es, em)
+    CALL require(es == CD_MODEL_BADINPUT .AND. INDEX(em, 'ei0_substeps') > 0, 'resolved:invalid-mode')
     CALL CD_End_Model(auto_m, es, em)
     CALL CD_End_Model(off_m, es, em)
     CALL CD_End_Model(wide_m, es, em)
@@ -691,22 +699,22 @@ CONTAINS
       all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
       more_lands = more_lands .AND. ALL(more_m%q(fixed) == pq(fixed))
     END DO
-    WRITE (*, '(A,I0,A,I0,A,I0,A,I0,A,I0,A)') '  sub-step paths: ', auto_m%sub_events, ' of ', auto_m%sub_calls, &
-      ' steps sub-stepped, ', auto_m%sub_remeasured, ' re-measured; fallback ', fb_m%sub_fallbacks, &
-      ', capped ', cap_m%sub_capped, ' steps'
+    WRITE (*, '(A,I0,A,I0,A,I0,A,I0,A,I0,A)') '  sub-step paths: ', auto_m%sub_stats%events, ' of ', auto_m%sub_stats%calls, &
+      ' steps sub-stepped, ', auto_m%sub_stats%remeasured, ' re-measured; fallback ', fb_m%sub_stats%fallbacks, &
+      ', capped ', cap_m%sub_stats%capped, ' steps'
     CALL require(all_conv, 'substep-paths:converged')
-    CALL require(auto_m%sub_events > 0, 'substep-paths:sub-stepped')
+    CALL require(auto_m%sub_stats%events > 0, 'substep-paths:sub-stepped')
     CALL require(ANY(auto_m%ve_dl_1 /= dl1_0) .AND. ANY(auto_m%fr_anchor /= fr_0), 'substep-paths:states-move')
     CALL require(ALL(rep_m%q == auto_m%q) .AND. ALL(rep_m%v == auto_m%v) .AND. ALL(rep_m%a == auto_m%a) .AND. &
                  ALL(rep_m%ve_dl_1 == auto_m%ve_dl_1) .AND. ALL(rep_m%fr_anchor == auto_m%fr_anchor), &
                  'substep-paths:restore-is-complete')
-    CALL require(fb_m%sub_events == 0 .AND. fb_m%sub_fallbacks > 0, 'substep-paths:fallback-counted')
+    CALL require(fb_m%sub_stats%events == 0 .AND. fb_m%sub_stats%fallbacks > 0, 'substep-paths:fallback-counted')
     CALL require(ALL(fb_m%q == off_m%q) .AND. ALL(fb_m%v == off_m%v) .AND. ALL(fb_m%a == off_m%a) .AND. &
                  ALL(fb_m%ve_dl_1 == off_m%ve_dl_1) .AND. ALL(fb_m%fr_anchor == off_m%fr_anchor), &
                  'substep-paths:fallback-is-the-plain-step')
-    CALL require(cap_m%sub_capped > 0 .AND. cap_m%sub_max_used == 4, 'substep-paths:cap')
-    CALL require(more_m%sub_remeasured == more_m%sub_events .AND. more_m%sub_events > 0 .AND. &
-                 more_m%sub_max_used >= SUB_MIN + 1 .AND. more_lands .AND. &
+    CALL require(cap_m%sub_stats%capped > 0 .AND. cap_m%sub_stats%max_used == 4, 'substep-paths:cap')
+    CALL require(more_m%sub_stats%remeasured == more_m%sub_stats%events .AND. more_m%sub_stats%events > 0 .AND. &
+                 more_m%sub_stats%max_used >= SUB_MIN + 1 .AND. more_lands .AND. &
                  ANY(more_m%q /= auto_m%q), 'substep-paths:re-measured')
     CALL CD_End_Model(auto_m, es, em)
     CALL CD_End_Model(rep_m, es, em)
@@ -717,44 +725,101 @@ CONTAINS
   END SUBROUTINE case_substep_paths
 
   SUBROUTINE case_substep_snap_only()
-    !! The snap trigger alone: a straight 4-segment line 5 % slack (no turn in any step) whose
-    !! End B is pulled 0.5 m along the line in one 0.05 s step snaps taut. The step is solved in
-    !! four sub-steps; with ei0_substeps off it is taken as given.
+    !! The snap trigger alone, on straight 4-segment lines whose End B is pulled along the line in
+    !! one 0.05 s step (no turn in any step; the axial wave crosses a segment 15 times per step):
+    !! (1) a line 5 % slack all over (step-start and initial tension 0) snaps taut and is solved
+    !! in four sub-steps, and with ei0_substeps off it is taken as given; (2) on a line whose
+    !! End A half is taut (52.6 kN) and End B half 20 % slack, the taut half recoils and snaps the
+    !! slack half taut: with End B pulled 0.2 m its segments end at 0.42 of the step-start tension,
+    !! above a quarter of it (a snap, four sub-steps), with End B held at 0.22, below it (the plain
+    !! step, bit for bit); (3) on the 5 % slack line made 1000 times heavier
+    !! the axial wave crosses a segment 0.48 times per step, so the step resolves the snap as
+    !! given and is not sub-stepped.
     INTEGER, PARAMETER :: NE = 4, NN = NE + 1, NDOF = 3*NN
     REAL(wp), PARAMETER :: DT = 0.05_wp
     TYPE(CD_ModelType) :: auto_m, off_m
-    TYPE(GenAlphaConfig) :: cfg
-    INTEGER :: conn(2, NE), fixed(6), es, n_iter
-    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), q0(NDOF), v0(NDOF), f_ext(NDOF), pq(NDOF), pv(NDOF), pa(NDOF)
-    LOGICAL :: conv, stalled, ok
+    INTEGER :: conn(2, NE), fixed(6), es
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), q0(NDOF), pq(NDOF)
+    REAL(wp) :: t_start, t_end_big, t_end_small
+    LOGICAL :: ok, auto_ok, off_ok
     CHARACTER(240) :: em
 
     CALL straight_cable(NE, conn, l0, ea, rho_a, q0, fixed)
+    ! (1) slack all over
     l0 = 1.05_wp
-    v0 = 0.0_wp
-    f_ext = 0.0_wp
-    CALL CD_Init_Model(auto_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, cfg, es, em)
+    CALL snap_pull(conn, l0, ea, rho_a, q0, fixed, DT, 0.5_wp, auto_m, off_m, pq, auto_ok, off_ok)
+    WRITE (*, '(A,I0,A,I0,A)') '  snap-only trigger, slack line: ', auto_m%sub_stats%events, &
+      ' step(s) sub-stepped, at most ', auto_m%sub_stats%max_used, ' sub-steps'
+    CALL require(auto_ok .AND. off_ok, 'snap-only:converged')
+    CALL require(auto_m%sub_stats%events == 1 .AND. auto_m%sub_stats%max_used == 4, 'snap-only:four-sub-steps')
+    CALL require(ALL(auto_m%q(fixed) == pq(fixed)), 'snap-only:lands-on-end-state')
+    CALL require(off_m%sub_stats%events == 0 .AND. ANY(off_m%q /= auto_m%q), 'snap-only:off-takes-the-step')
+    ! (2) partly taut: the floor is the step-start tension of the taut half
+    l0(1:2) = 0.95_wp
+    l0(3:4) = 1.20_wp
+    t_start = ea(1)*(1.0_wp/0.95_wp - 1.0_wp)
+    CALL snap_pull(conn, l0, ea, rho_a, q0, fixed, DT, 0.2_wp, auto_m, off_m, pq, auto_ok, off_ok)
+    t_end_big = slack_half_tension(off_m, ea, l0)
+    ok = auto_ok .AND. off_ok .AND. auto_m%sub_stats%events == 1 .AND. auto_m%sub_stats%max_used == 4
+    CALL snap_pull(conn, l0, ea, rho_a, q0, fixed, DT, 0.0_wp, auto_m, off_m, pq, auto_ok, off_ok)
+    t_end_small = slack_half_tension(off_m, ea, l0)
+    WRITE (*, '(A,F6.3,A,F6.3,A)') '  snap-only trigger, partly taut line: the slack half ends at ', &
+      t_end_big/t_start, ' (End B pulled 0.2 m) and ', t_end_small/t_start, ' (held) of the step-start tension'
+    CALL require(t_end_big > 0.25_wp*t_start .AND. t_end_small > 0.0_wp .AND. t_end_small < 0.25_wp*t_start, &
+                 'snap-partly-taut:pulls-cross-the-threshold')
+    CALL require(ok, 'snap-partly-taut:above-threshold-sub-stepped')
+    CALL require(auto_ok .AND. off_ok .AND. auto_m%sub_stats%calls == 1 .AND. auto_m%sub_stats%events == 0 .AND. &
+                 ALL(auto_m%q == off_m%q) .AND. ALL(auto_m%v == off_m%v) .AND. ALL(auto_m%a == off_m%a), &
+                 'snap-partly-taut:below-threshold-plain')
+    ! (3) a step that resolves the axial wave takes the snap as given
+    l0 = 1.05_wp
+    rho_a = 1.0e3_wp*rho_a
+    CALL snap_pull(conn, l0, ea, rho_a, q0, fixed, DT, 0.5_wp, auto_m, off_m, pq, auto_ok, off_ok)
+    CALL require(auto_ok .AND. off_ok .AND. auto_m%sub_stats%calls == 1 .AND. auto_m%sub_stats%events == 0 .AND. &
+                 ALL(auto_m%q == off_m%q) .AND. slack_half_tension(off_m, ea, l0) > 0.0_wp, 'snap-resolved-wave:plain')
+    CALL CD_End_Model(auto_m, es, em)
+    CALL CD_End_Model(off_m, es, em)
+  END SUBROUTINE case_substep_snap_only
+
+  SUBROUTINE snap_pull(conn, l0, ea, rho_a, q0, fixed, dt, dx, auto_m, off_m, pq, ok_auto, ok_off)
+    !! case_substep_snap_only: a fresh pair of models (auto, off) of the straight line at rest,
+    !! End B pulled along the line by dx in one step of dt.
+    INTEGER, INTENT(IN) :: conn(:, :), fixed(:)
+    REAL(wp), INTENT(IN) :: l0(:), ea(:), rho_a(:), q0(:), dt, dx
+    TYPE(CD_ModelType), INTENT(INOUT) :: auto_m, off_m
+    REAL(wp), INTENT(OUT) :: pq(:)
+    LOGICAL, INTENT(OUT) :: ok_auto, ok_off
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: n_it, es, n
+    LOGICAL :: conv, stalled
+    REAL(wp) :: pv(SIZE(q0)), pa(SIZE(q0)), zero(SIZE(q0))
+    CHARACTER(240) :: em
+    n = SIZE(q0)
+    zero = 0.0_wp
+    CALL CD_Init_Model(auto_m, q0, zero, conn, l0, ea, rho_a, .TRUE., zero, fixed, cfg, es, em)
     CALL require(es == CD_MODEL_OK, 'snap-only:init: '//TRIM(em))
-    IF (es /= CD_MODEL_OK) RETURN
     CALL CD_Copy_Model(auto_m, off_m, es, em)
     off_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
     pq = q0
     pv = 0.0_wp
     pa = 0.0_wp
-    pq(NDOF - 2) = q0(NDOF - 2) + 0.5_wp
-    CALL CD_Step_Model(auto_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
-    ok = es == CD_MODEL_OK .AND. conv
-    CALL CD_Step_Model(off_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
-    ok = ok .AND. es == CD_MODEL_OK .AND. conv
-    WRITE (*, '(A,I0,A,I0,A)') '  snap-only trigger: ', auto_m%sub_events, ' step(s) sub-stepped, at most ', &
-      auto_m%sub_max_used, ' sub-steps'
-    CALL require(ok, 'snap-only:converged')
-    CALL require(auto_m%sub_events == 1 .AND. auto_m%sub_max_used == 4, 'snap-only:four-sub-steps')
-    CALL require(ALL(auto_m%q(fixed) == pq(fixed)), 'snap-only:lands-on-end-state')
-    CALL require(off_m%sub_events == 0 .AND. ANY(off_m%q /= auto_m%q), 'snap-only:off-takes-the-step')
-    CALL CD_End_Model(auto_m, es, em)
-    CALL CD_End_Model(off_m, es, em)
-  END SUBROUTINE case_substep_snap_only
+    pq(n - 2) = q0(n - 2) + dx
+    CALL CD_Step_Model(auto_m, dt, conv, stalled, n_it, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+    ok_auto = es == CD_MODEL_OK .AND. conv
+    CALL CD_Step_Model(off_m, dt, conv, stalled, n_it, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+    ok_off = es == CD_MODEL_OK .AND. conv
+  END SUBROUTINE snap_pull
+
+  REAL(wp) FUNCTION slack_half_tension(m, ea, l0) RESULT(t_max)
+    !! case_substep_snap_only: the largest tension of segments 3 and 4 (EA times the strain).
+    TYPE(CD_ModelType), INTENT(IN) :: m
+    REAL(wp), INTENT(IN) :: ea(:), l0(:)
+    INTEGER :: e
+    t_max = 0.0_wp
+    DO e = 3, 4
+      t_max = MAX(t_max, ea(e)*(NORM2(m%q(3*e + 1:3*e + 3) - m%q(3*e - 2:3*e))/l0(e) - 1.0_wp))
+    END DO
+  END FUNCTION slack_half_tension
 
   SUBROUTINE circle_end_motion(q0, pq, pv, pa, t)
     !! End A held, End B (the last node) on the circle x_B + R r(t) (0, sin wt, 1 - cos wt),

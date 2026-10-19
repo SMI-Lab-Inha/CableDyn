@@ -76,7 +76,7 @@ article's methods, are compared in
 | **L3-6e** | Out-of-plane / 3D whirl response | OrcaFlex 11.6d | 3D curv 0.52%, interior Y env ≤1.0 mm, sag ≤22 mm, tension 0.14/0.17/0.12% | curv <3%, env <5 cm, tension <2–3% | Pass |
 | **L3-7** | 1-hour VolturnUS-S mooring dynamic | OrcaFlex 11.6d | `FairTen` mean 0.27%, std 0.26%, min/max 0.50/0.43%, Fourier 0.27/1.14% | ≤5% | Pass |
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
-| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.59 N; MAPE 3.13%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
+| **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.13%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -289,16 +289,18 @@ scripts, results, and source provenance are in
 - **L3-B Bergdahl dynamic chain test**
   ([Bergdahl et al., 2016](https://cabledyn.readthedocs.io/en/latest/references.html#ref-bergdahl2016)):
   over the full 30-condition period-radius matrix, cycle-maximum upper-end force
-  has RMSE 1.59 N, mean absolute percentage error 3.13%, Pearson correlation
+  has RMSE 1.58 N, mean absolute percentage error 3.13%, Pearson correlation
   0.993, and Lin concordance 0.989. Two phase-averaged measured histories have
   waveform RMSEs of 5.95% and 2.54% of their force ranges; these two were computed with the
   executable of the 2026-10-09 record (the configuration-blended `EI = 0` step, without
   sub-steps), because the
   article supplement's `expData.dat` they need was not available for the rerun (see the
   experiment's README and `provenance.json`). Halving the mesh length
-  and the time step changes the mean cycle maximum by at most 0.53% and 0.13%. The
-  0.3125 ms step resolves the segment axial modes that the snap loads excite; at
-  0.625 ms the T = 1.25 s maxima are 2.3% higher (6.5% with every step taken as given), and
+  and the time step changes the mean cycle maximum by at most 0.56% and 0.19%. The
+  0.3125 ms step resolves the segment axial modes that the snap loads excite (and the axial
+  wave over a segment, so the matrix takes no rotation- and snap-resolved sub-step and equals
+  the run taken as given bit for bit); at
+  0.625 ms the T = 1.25 s maxima are 2.4% higher (6.5% with every step taken as given), and
   at 1.25 ms they are 2–15% higher and vary from cycle to cycle.
 
 ## L4 coupled OpenFAST
@@ -391,7 +393,8 @@ scripts, results, and source provenance are in
   80 m all-chain mooring in 5 m / 7 s heave are 15% and 17% low when every step is taken as
   given (`off ei0_substeps`) and 4% and 8% low with the default `auto`; the anchor maxima of
   the 200 m semitaut mooring in 10 m / 14 s and 5 m / 7 s surge are 16% and 26% high and
-  1.4% and 2.6% low. In 5 m / 7 s surge the 80 m maxima are within 2.5% either way. On the
+  4% high and 2% low (over thirteen runs 5% high and 0.3% low; single runs from 4% low to 21%
+  high). In 5 m / 7 s surge the 80 m maxima are within 2.5% either way. On the
   0.1 s output grid the converged run itself reads the 80 m heave maxima 5% low.
 - **Implicit and explicit steps**: on the matched near-taut snap, MoorDyn-C's
   explicit RK2 needs `dtM ≲ 1 ms`, as expected of an explicit scheme at this line
@@ -689,9 +692,9 @@ chain–polyester moorings are driven through the same surge-and-heave envelope 
 `dtM = 0.1 s` (72 s each). All 20 runs complete. With the default `ei0_substeps auto`,
 the steps in which a taut segment turns by more than 1° or a segment snaps taut are
 solved in 4 to 7 sub-steps: none to 3% of the steps in the 3 m / 10 s and 8 m / 20 s
-motions, 31–74% in the 5 m / 7 s and 10 m / 14 s ones. The march takes 0.24–0.94 ms of
+motions, 31–75% in the 5 m / 7 s and 10 m / 14 s ones. The march takes 0.24–0.94 ms of
 wall time per 0.1 s step for the all-chain mooring and 0.32–1.2 ms for the composite,
-1.63 times the plain steps over the 20 runs (1.6 to 2.5 times on the 5 m / 7 s and
+1.67 times the plain steps over the 20 runs (1.6 to 2.5 times on the 5 m / 7 s and
 10 m / 14 s motions), and the recovering step
 subdivides at most 12 of the 720 intervals of a run.
 

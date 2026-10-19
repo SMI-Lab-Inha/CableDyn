@@ -13074,11 +13074,14 @@ CONTAINS
     CASE ('ei0_substep_max', 'ei0substepmax')
       CALL rd(val, x1, ErrStat, ErrMsg)
       IF (ErrStat == 0) THEN
-        IF (.NOT. IEEE_IS_FINITE(x1) .OR. x1 < 2.0_wp .OR. x1 > 1024.0_wp) THEN
-          CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substep_max must be in [2,1024]'); RETURN
+        ! the rule of the Python deck reader: an integer to within 16 ulp, whose nearest integer
+        ! lies in [2, 1024] (a value beyond 2048 in magnitude fails either test there)
+        IF (.NOT. IEEE_IS_FINITE(x1) .OR. ABS(x1) > 2048.0_wp) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substep_max must be an integer in [2, 1024]'); RETURN
         END IF
-        IF (ABS(x1 - REAL(NINT(x1), wp)) > 16.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, ABS(x1))) THEN
-          CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substep_max must be an integer'); RETURN
+        IF (ABS(x1 - REAL(NINT(x1), wp)) > 16.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, ABS(x1)) .OR. &
+            NINT(x1) < 2 .OR. NINT(x1) > 1024) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION ei0_substep_max must be an integer in [2, 1024]'); RETURN
         END IF
         opts%ei0_substep_max = NINT(x1)
       END IF
@@ -18045,13 +18048,14 @@ CONTAINS
     IF (mb%implicit .AND. mb%n_steps_imp > 0) THEN
       WRITE (*, '(A,F6.2,A,I0,A,I0)') '  Monolithic body/point step: mean outer iterations ', &
         REAL(mb%n_outer, wp)/REAL(mb%n_steps_imp, wp), ', max ', mb%max_outer, ', step halvings ', mb%n_subdiv
-      ! the junction Newton needs the nominal step's end reaction and tangent, so ei0_substeps
-      ! auto leaves these line steps whole (noted once per run)
+      ! the junction Newton needs the nominal step's end reaction and tangent of every line
+      ! attached to a body, rod or point it solves, so ei0_substeps auto leaves those line steps
+      ! whole (noted once per run); a line with no such end is sub-stepped as usual
       IF (mb%has_sys) THEN
         IF (ANY(mb%system%lines(:)%cfg%ei0_substeps == CD_EI0_SUBSTEPS_AUTO)) &
-          WRITE (*, '(A)') '  Note: ei0_substeps auto does not sub-step the EI = 0 lines of the monolithic '// &
-          'body/point step (it needs the end reaction and tangent of the whole step); reduce dtM to resolve '// &
-          'their rotation and snaps.'
+          WRITE (*, '(A)') '  Note: ei0_substeps auto does not sub-step the EI = 0 lines attached to the '// &
+          'bodies, rods and points of the monolithic body/point step (it needs the end reaction and tangent '// &
+          'of the whole step); reduce dtM to resolve their rotation and snaps.'
       END IF
     END IF
     CALL CD_Classify_Dynamic_Completion('multibody dynamic run', nstep, miss_count, max_consecutive_miss, &
@@ -27521,17 +27525,18 @@ CONTAINS
     CHARACTER(200) :: remedy
     REAL(wp) :: turn_note
     auto = model%cfg%ei0_substeps == CD_EI0_SUBSTEPS_AUTO
-    IF (auto .AND. model%sub_events > 0) THEN
+    IF (auto .AND. model%sub_stats%events > 0) THEN
       WRITE (output_unit, '(A,I0,A,I0,A,I0,A,I0,A)', IOSTAT=ios) '  Note: line ', line_id, &
-        ': ei0_substeps auto solved ', model%sub_events, ' of ', model%sub_calls, &
-        ' solver step(s) in sub-steps to resolve segment rotation and slack-to-taut snaps (at most ', &
-        model%sub_max_used, ' per step).'
-      IF (model%sub_capped > 0) WRITE (output_unit, '(A,I0,A,I0,A,I0,A)', IOSTAT=ios) '  Note: line ', line_id, &
-        ': ', model%sub_capped, ' step(s) needed more than ei0_substep_max = ', model%cfg%ei0_substep_max, &
-        ' sub-steps; raise it or reduce dtM.'
+        ': ei0_substeps auto solved ', model%sub_stats%events, ' of the ', model%sub_stats%calls, &
+        ' line step(s) it examined in sub-steps to resolve segment rotation and slack-to-taut snaps (at most ', &
+        model%sub_stats%max_used, ' sub-steps per step).'
+      IF (model%sub_stats%capped > 0) WRITE (output_unit, '(A,I0,A,I0,A,I0,A)', IOSTAT=ios) '  Note: line ', &
+        line_id, ': ', model%sub_stats%capped, ' step(s) needed more than ei0_substep_max = ', &
+        model%cfg%ei0_substep_max, ' sub-steps; raise it or reduce dtM.'
     END IF
-    IF (auto .AND. model%sub_fallbacks > 0) WRITE (output_unit, '(A,I0,A,I0,A)', IOSTAT=ios) '  Note: line ', &
-      line_id, ': ', model%sub_fallbacks, ' step(s) kept the whole step because a resolving sub-step did not converge.'
+    IF (auto .AND. model%sub_stats%fallbacks > 0) WRITE (output_unit, '(A,I0,A,I0,A)', IOSTAT=ios) &
+      '  Note: line ', line_id, ': ', model%sub_stats%fallbacks, &
+      ' step(s) kept the whole step because a resolving sub-step did not converge.'
     ! with ei0_substeps auto a step is solved in sub-steps whose average turn is at most
     ! ei0_substep_angle; a single sub-step can turn slightly more
     turn_note = EI0_TURN_NOTE

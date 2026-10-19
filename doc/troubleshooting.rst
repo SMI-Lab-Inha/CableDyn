@@ -579,20 +579,30 @@ Warnings and notes that do not stop a run
        ``off ei0_substeps`` set ``auto`` (the default) or reduce ``dtM``; with ``auto`` the note
        means steps it did not resolve (more than ``ei0_substep_max`` needed, a step recovered
        after a stall or a half of a line-system step halved after a failure, whose sub-steps
-       are taken as given, a step that kept its plain result because a sub-step failed, or the
-       monolithic body and point coupling, which is not sub-stepped): reduce ``dtM``.
-   * - ``Note: line ...: ei0_substeps auto solved ... of ... solver step(s) in sub-steps``
+       are taken as given, a step that kept its plain result because a sub-step failed, or a
+       line attached to a body, rod or point of the monolithic body and point coupling, which
+       is not sub-stepped): reduce ``dtM``.
+   * - ``Note: line ...: ei0_substeps auto solved ... of the ... line step(s) it examined in sub-steps``
      - information: the steps in which a taut segment turned by more than ``ei0_substep_angle``
        or a segment snapped from slack to taut were solved in sub-steps (see
-       ``ei0_substeps``). A companion note counts the steps that needed more than
-       ``ei0_substep_max`` sub-steps, and another the steps that kept the plain step's result
-       because a sub-step did not converge. OpenFAST and FAST.Farm print the same counts, summed
-       over the lines, as ``CableDyn: ei0_substeps auto solved ...`` at the end of the run.
-   * - ``Note: ei0_substeps auto does not sub-step the EI = 0 lines of the monolithic body/point step``
-     - information, once per run of a deck with ``monolithic bodyScheme`` coupling: the lines
-       stepped inside the body and point junction are taken at ``dtM`` as given, so their
-       rotation and snaps are resolved only as far as ``dtM`` resolves them. Reduce ``dtM`` when
-       the segment-turn note above appears for them.
+       ``ei0_substeps``). Only committed steps count: a step that is rolled back and taken
+       again (a line-system step halved after a stall, a step recovered after a stall, a
+       corrector or a re-solved coupling step) counts once, as it is finally taken, so the
+       steps examined can be fewer than the line's steps. A companion note counts the steps
+       that needed more than ``ei0_substep_max`` sub-steps, and another the steps that kept the
+       plain step's result because a sub-step did not converge. OpenFAST and FAST.Farm print the
+       same counts, summed over the lines, as ``CableDyn: ei0_substeps auto solved ...`` at the
+       end of the run.
+   * - ``Note: ei0_substeps auto does not sub-step the EI = 0 lines attached to the bodies, rods and points of the monolithic body/point step``
+     - information, once per run of a deck with ``monolithic bodyScheme`` coupling, the default
+       of every standalone deck with ``Rigid6`` bodies, ``Point3`` buoys, rods or
+       ``Free``/``Connect`` points on ``EI = 0`` lines (7 of the shipped example decks): the
+       lines attached to those objects and points are stepped inside the junction Newton and
+       taken whole at each monolithic step (``dtM``, divided by ``accuracy bodySubstep``, the
+       default, to resolve the body-mooring modes), so their rotation and snaps are resolved
+       only as far as that step resolves them; a line whose ends are all fixed or anchored is
+       sub-stepped as usual. Reduce ``dtM`` when the segment-turn note above appears for them,
+       or select ``staggered bodyScheme``, which sub-steps them.
    * - ``Note: line ...: ... segment step(s) went from slack to taut above the initial tension``
      - snap loads on an ``EI = 0`` line at a solver step that does not resolve the axial wave
        over a segment: the peak is set by a single step. A 15 m surge of a semi-taut
@@ -600,7 +610,8 @@ Warnings and notes that do not stop a run
        (5.7 MN with ``off ei0_substeps``) against 4.6 MN at 0.0025 s. The run is valid; confirm
        design peaks with a smaller ``dtM``. On a line without axial damping (``BA = 0``) the
        snap peaks do not converge in time or mesh, as single segments rattle; a smaller ``dtM``
-       raises them, and the sub-steps of ``ei0_substeps auto`` can raise isolated spikes. Give
+       raises them, and at a ``dtM`` that does not resolve the axial wave the sub-steps of
+       ``ei0_substeps auto`` can raise isolated spikes. Give
        the line physical axial damping (``BA`` in N·s, not the per-segment damping-ratio form,
        which changes with the mesh) or finite ``EI`` to obtain converged peaks (see
        :doc:`modeling`).

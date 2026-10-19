@@ -40,6 +40,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   !! generalised-alpha step carries the Init dt, from the mooring columns).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_OpenFAST_FMF, ONLY: CD_FMF_ModuleType, CD_FMF_Init_From_System, CD_FMF_NMovingPoints, &
                                    CD_FMF_GetPointMesh, CD_FMF_UpdateStates, &
@@ -1775,7 +1776,8 @@ CONTAINS
     !! examined, solved in sub-steps (max_used the largest count), beyond ei0_substep_max, and
     !! kept the plain step's result after a sub-step failed.
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
-    INTEGER, INTENT(OUT) :: calls, events, max_used, capped, fallbacks
+    INTEGER(int64), INTENT(OUT) :: calls, events, capped, fallbacks
+    INTEGER, INTENT(OUT) :: max_used
     calls = 0; events = 0; max_used = 1; capped = 0; fallbacks = 0
     IF (self%has_sys) CALL CD_Get_System_Substep_Counts(self%sys%fast%system, calls, events, max_used, capped, &
                                                         fallbacks)

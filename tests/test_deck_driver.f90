@@ -1655,6 +1655,13 @@ PROGRAM test_deck_driver
   CALL expect_badinput('deck_badtentol.dat', deck_with_bad_tensile_tolerance(), 'negative tensile tolerance')
   CALL expect_badinput('deck_badrecovery.dat', deck_with_bad_recovery_cap(), 'non-finite recovery cap')
   CALL expect_badinput('deck_fracrecovery.dat', deck_with_fractional_recovery_cap(), 'fractional recovery cap')
+  ! the ei0 sub-stepping options take the Python deck reader's rules: ei0_substep_max is an integer
+  ! to within 16 ulp whose nearest integer lies in [2, 1024]
+  CALL expect_badinput('deck_ei0mode.dat', deck_with_ei0_option('on ei0_substeps'), 'invalid ei0_substeps')
+  CALL expect_badinput('deck_ei0angle.dat', deck_with_ei0_option('0 ei0_substep_angle'), 'zero ei0_substep_angle')
+  CALL expect_badinput('deck_ei0max.dat', deck_with_ei0_option('1025 ei0_substep_max'), 'ei0_substep_max above 1024')
+  CALL expect_badinput('deck_ei0maxfr.dat', deck_with_ei0_option('2.5 ei0_substep_max'), 'fractional ei0_substep_max')
+  CALL expect_badinput('deck_ei0maxbig.dat', deck_with_ei0_option('2048.5 ei0_substep_max'), 'large ei0_substep_max')
   CALL expect_badinput('deck_body.dat', deck_with_bodies(), 'Rigid6 BODY')
   CALL expect_badinput('deck_ei.dat', deck_with_finite_ei(), 'finite-EI section')
   CALL expect_badinput('deck_badgj.dat', deck_with_bad_native_finite_ei(), 'explicit finite-EI')
@@ -7169,5 +7176,10 @@ CONTAINS
     s = 'fracrecovery'//NEW_LINE('a')//'--- OPTIONS ---'//NEW_LINE('a')// &
         '4.5 recovery_max_substeps'
   END FUNCTION deck_with_fractional_recovery_cap
+
+  CHARACTER(900) FUNCTION deck_with_ei0_option(row) RESULT(s)
+    CHARACTER(*), INTENT(IN) :: row
+    s = 'badei0'//NEW_LINE('a')//'--- OPTIONS ---'//NEW_LINE('a')//row
+  END FUNCTION deck_with_ei0_option
 
 END PROGRAM test_deck_driver

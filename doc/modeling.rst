@@ -156,9 +156,11 @@ axially stiff cable (80 kg/m, EA 8e8 N, 2 m segments) in 3 m heave it rises from
 solver, while converged finite-EI runs give 0.093 MN at the fairlead and 0.057 MN at the anchor.
 To obtain converged peaks, give such lines physical axial damping, ``BA`` as a material
 property in N·s (the negative, per-segment damping-ratio form changes with the mesh: it halves
-with each halving of the segment length), or model them with finite ``EI``. With ``BA = 0`` the
-sub-steps of ``ei0_substeps auto`` resolve more of the segment rattle and can raise isolated
-spikes.
+with each halving of the segment length), or model them with finite ``EI``. With ``BA = 0`` and
+a ``dtM`` that does not resolve the axial wave over a segment, the sub-steps of
+``ei0_substeps auto`` resolve more of the segment rattle and can raise isolated spikes (at
+``dtM = 2.5 ms`` the anchor peak of that cable rises from 0.091 to 0.119 MN); at a ``dtM`` that
+resolves the wave a snap does not trigger them, and at 0.5 ms the cable takes no sub-step.
 
 6. Establish the static initial condition
 -----------------------------------------

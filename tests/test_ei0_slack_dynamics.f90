@@ -19,7 +19,7 @@ PROGRAM test_ei0_slack_dynamics
   !!      tension spike and is not sub-stepped, the force blend does not warn; rhoInf above
   !!      0.95 prints its note; a 10 m sway at dtM 0.2 s prints the segment-turn advisory with
   !!      off ei0_substeps, and with the default auto is sub-stepped instead (reported; the turn
-  !!      per solver step drops from about 6 deg to below 2 deg); the unresolved slack-to-taut
+  !!      per solver step drops from about 6 deg to about 1.3 deg); the unresolved slack-to-taut
   !!      snaps of case 1 print the snap note.
   !!   5. The Newton tangent of the force-blended step against a central finite difference of its
   !!      residual (the step's probe_q hook), on a three-segment tension-only chain with one fixed
@@ -693,7 +693,10 @@ CONTAINS
     CALL require(.NOT. file_contains('ei0slack_audit_sway.log', 'Warning: line'), 'audit:sway-no-warning')
     ! the default (auto) sub-steps those steps: the run reports the sub-stepping, and the turn
     ! per solver step drops to about 1 deg (the steps recovered after a stall take their four
-    ! sub-steps as given, so a note may remain for them)
+    ! sub-steps as given, so a note may remain for them): 1.27 deg against 6.21 deg taken as
+    ! given (gfortran, Windows). A step left unresolved turns by the full step's turn, a
+    ! recovered one by a quarter of it, so half the turn taken as given separates the two
+    ! without depending on which steps round-off makes stall
     opts(4) = ''
     CALL write_deck('ei0slack_audit_sway_auto.dat', CABLE, [205.0_wp, 0.0_wp, -80.0_wp], &
                     [5.0_wp, 0.0_wp, -14.0_wp], 230.0_wp, 115, 80.0_wp, '-', opts)
@@ -705,7 +708,8 @@ CONTAINS
     turn_auto = noted_turn('ei0slack_audit_sway_auto.log')
     WRITE (*, '(A,F7.3,A,F7.3,A)') '  sway at dtM 0.2 s: largest turn per solver step ', turn_off, ' deg (off), ', &
       turn_auto, ' deg (auto)'
-    CALL require(turn_off > 4.0_wp .AND. turn_auto >= 0.0_wp .AND. turn_auto < 2.0_wp, 'audit:sway-auto-resolved-turn')
+    CALL require(turn_off > 4.0_wp .AND. turn_auto >= 0.0_wp .AND. turn_auto < 0.5_wp*turn_off, &
+                 'audit:sway-auto-resolved-turn')
     ! the configuration blend (paper mode) takes every step as given
     CALL require(.NOT. file_contains('ei0slack_audit_cfg.log', 'ei0_substeps auto solved'), &
                  'audit:configuration-blend-not-sub-stepped')
@@ -1470,17 +1474,18 @@ CONTAINS
     REAL(wp) :: fair, anch, seg_min
     ! the light cable as a lightly damped viscoelastic line, 3 m heave at dtM 0.1 s: anchor
     ! 8.2e4 to 9.5e4 N and fairlead 0.97e5 to 1.02e5 N at dtM 0.5 to 2.5 ms; without the cap
-    ! on its law segments 1.45e5 N at the anchor. At 0.1 s the anchor snap is not resolved in
-    ! time (the run notes it), so its peak depends on round-off: 9.2e4 N with gfortran on
-    ! Windows with the default sub-steps (8.5e4 N taking every step as given), other values on
-    ! other platforms. The upper bound is the check of the cap, well below the 1.45e5 N of the
-    ! uncapped law; the lower bound only asks that the snap reaches the anchor.
+    ! on its law segments 1.45e5 N at the anchor, both taking every step as given. At 0.1 s the
+    ! anchor snap is not resolved in time (the run notes it), so its peak depends on round-off:
+    ! 8.5e4 N with gfortran on Windows, other values on other platforms. The run takes every
+    ! step as given (off ei0_substeps), as the 1.45e5 N without the cap was measured, so the
+    ! upper bound checks the cap against that figure; the lower bound only asks that the snap
+    ! reaches the anchor. The sub-steps of the default are checked on this law by test_syrope.
     CALL write_motion('ei0slack_heave_ve.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 3, 3.0_wp, 10.0_wp, 10.0_wp, &
                       0.1_wp, 40.0_wp)
     opts(1) = '0.1 dtM'
     opts(2) = '40.0 TMax'
     opts(3) = 'ei0slack_heave_ve.txt motionFile'
-    opts(4) = ''
+    opts(4) = 'off ei0_substeps'
     CALL write_deck('ei0slack_ve_light.dat', CABLE_VE, [205.0_wp, 0.0_wp, -80.0_wp], [5.0_wp, 0.0_wp, -14.0_wp], &
                     230.0_wp, 115, 80.0_wp, 't', opts)
     CALL run_driver_logged('ei0slack_ve_light.dat', 'ei0slack_ve_light', 'ei0slack_ve_light.log', ok)
@@ -1491,11 +1496,11 @@ CONTAINS
     WRITE (*, '(A,ES10.3,A,ES10.3,A,ES10.3,A)') '  viscoelastic light cable, dtM 0.1 s: FairTen1 max ', fair, &
       ' N, AnchTen1 max ', anch, ' N, smallest segment tension ', seg_min, ' N'
     CALL require(seg_min <= 0.0_wp, 've-slack:goes-slack')
-    CALL require(anch > 4.0e4_wp .AND. anch < 1.3e5_wp, 've-slack:anchor-peak')
+    CALL require(anch > 4.0e4_wp .AND. anch < 1.0e5_wp, 've-slack:anchor-peak')
     CALL require(fair > 8.0e4_wp .AND. fair < 1.2e5_wp, 've-slack:fairlead-peak')
     CALL require(.NOT. file_contains('ei0slack_ve_light.log', 'Warning: line'), 've-slack:no-spike-warning')
     ! a taut Syrope line in 4 m surge that goes slack, dtM 0.1 s: fairlead 1.78 MN at dtM 1 and
-    ! 2.5 ms; 1.82 MN with the default sub-steps, 1.64 MN taking every step as given and
+    ! 2.5 ms; 1.81 MN with the default sub-steps, 1.64 MN taking every step as given and
     ! 1.67 MN with the configuration blend (gfortran, Windows). The bounds catch a spike or a
     ! lost snap, not the round-off-dependent peak of the unresolved snap
     CALL write_syrope_files()
