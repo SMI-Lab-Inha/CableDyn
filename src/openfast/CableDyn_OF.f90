@@ -2082,7 +2082,7 @@ CONTAINS
       END DO
       IF (nout == 0_IntKi) RETURN
       inst_e%curr_grid_warned = .TRUE.
-      WRITE (msg, '(A,I0,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A)') &
+      WRITE (msg, '(A,I0,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A)') &
          'CableDyn mooring module: ', nout, ' submerged CableDyn sampling node(s) lie outside the '// &
          'InflowWind current-field grid at t = ', REAL(t_sample, wp), ' s (warned once): the field covers '// &
          'z = ', zlo, ' to ', zhi, ' m above the seabed and |y| <= ', yhw, ' m; the farthest node is ', &
