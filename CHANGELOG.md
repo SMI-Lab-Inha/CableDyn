@@ -6,6 +6,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [0.2.0] - 2026-10-20
 
 ### Added
@@ -534,6 +536,7 @@ Corrections made during the pre-release review.
   values of the shipped example decks and states which tension (end element or
   `FairTen` end force) each comparison uses.
 
+[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.2.0
 [0.1.1]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.0
