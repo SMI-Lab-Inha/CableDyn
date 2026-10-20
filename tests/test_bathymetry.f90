@@ -8,7 +8,7 @@ PROGRAM test_bathymetry
   !! C2 rounding of the creases of a non-planar grid.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, &
-                                 CD_Bathymetry_Depth, CD_Bathymetry_Floor, &
+                                 CD_Bathymetry_Depth, CD_Bathymetry_Floor, CD_Bathymetry_Max_Floor, &
                                  CD_Bathymetry_Floor_Gradient, CD_Bathymetry_Seabed_Load, &
                                  CD_Bathymetry_Is_Initialized, CD_BATHY_OK, CD_BATHY_BADINPUT, &
                                  CD_Bathymetry_Grid_Floor, CD_Bathymetry_Rotate_Curvature, &
@@ -31,6 +31,7 @@ PROGRAM test_bathymetry
   CALL case_crease_contact_tangent_fd()
   CALL case_as_laid_tension_sink()
   CALL case_as_laid_seed_from_last()
+  CALL case_max_floor_crease_band()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -264,6 +265,35 @@ CONTAINS
 
     CALL CD_End_Bathymetry(bathy)
   END SUBROUTINE case_fail_closed_inputs
+
+  SUBROUTINE case_max_floor_crease_band()
+    !! The maximum-floor bound covers the crease rounding of a neighbouring cell: a box inside a
+    !! flat cell next to a crease (x = 0, 1, 2 with depths 100, 100, 90) lies in the rounding band
+    !! of the crease at x = 1, where the floor rises above the flat cell's nodes.
+    TYPE(CD_BathymetryType) :: bathy
+    REAL(wp) :: z_floor, z_max, xq
+    INTEGER :: es, k
+    CHARACTER(160) :: em
+    CALL CD_Init_Bathymetry(bathy, [0.0_wp, 1.0_wp, 2.0_wp], [0.0_wp, 1.0_wp], &
+                            RESHAPE([100.0_wp, 100.0_wp, 90.0_wp, 100.0_wp, 100.0_wp, 90.0_wp], [3, 2]), es, em)
+    CALL expect_es(es, CD_BATHY_OK, 'maxfloor:init')
+    CALL CD_Bathymetry_Floor(bathy, 0.99_wp, 0.5_wp, z_floor, es, em)
+    CALL require(es == CD_BATHY_OK .AND. z_floor > -100.0_wp, 'maxfloor:the crease rounding raises the flat cell')
+    CALL CD_Bathymetry_Max_Floor(bathy, 0.989_wp, 0.991_wp, 0.49_wp, 0.51_wp, z_max, es, em)
+CALL require(es == CD_BATHY_OK .AND. z_max >= z_floor, 'maxfloor:a box in the band of a neighbouring crease is bounded')
+    ! the bound holds at every point of a box sweeping across both cells
+    DO k = 0, 200
+      xq = 0.01_wp*REAL(k, wp)
+      CALL CD_Bathymetry_Floor(bathy, xq, 0.5_wp, z_floor, es, em)
+      CALL CD_Bathymetry_Max_Floor(bathy, MAX(0.0_wp, xq - 1.0e-3_wp), MIN(2.0_wp, xq + 1.0e-3_wp), &
+                                   0.49_wp, 0.51_wp, z_max, es, em)
+      IF (.NOT. (z_max >= z_floor)) THEN
+        CALL require(.FALSE., 'maxfloor:sweep bound fails')
+        EXIT
+      END IF
+    END DO
+    CALL CD_End_Bathymetry(bathy)
+  END SUBROUTINE case_max_floor_crease_band
 
   SUBROUTINE init_creased_bathy(bathy)
     !! A non-planar grid with creases along every interior line (non-uniform spacing).

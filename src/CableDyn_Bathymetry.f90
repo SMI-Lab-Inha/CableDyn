@@ -192,15 +192,18 @@ CONTAINS
     !! An upper bound of the seabed elevation (CD_Bathymetry_Floor) over the horizontal box
     !! [x_lo, x_hi] x [y_lo, y_hi]: the highest grid node of the cells the box overlaps (the
     !! bilinear surface of a cell lies within its node range, and outside the grid the floor
-    !! is clamped to its edge cells), raised by CD_BATHY_CREASE_FRACTION times the node range,
-    !! which bounds the crease rounding (it moves the surface by at most |J| delta/6 per
-    !! direction, below a thirtieth of the node range for both directions together).
+    !! is clamped to its edge cells), raised by CD_BATHY_CREASE_FRACTION times the node range
+    !! of those cells widened by one node on every side, which bounds the crease rounding (it
+    !! moves the surface by at most |J| delta/6 per direction, below a thirtieth of the node
+    !! range for both directions together). The rounding band of a grid line reaches into the
+    !! cells on both sides and its slope jump J depends on the nodes one beyond them, so a box
+    !! inside a flat cell next to a crease takes the crease's rise from the widened range.
     TYPE(CD_BathymetryType), INTENT(IN) :: bathy
     REAL(wp), INTENT(IN) :: x_lo, x_hi, y_lo, y_hi
     REAL(wp), INTENT(OUT) :: z_max
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i0, i1, j0, j1
+    INTEGER :: i0, i1, j0, j1, iw0, iw1, jw0, jw1
     REAL(wp) :: t, z_min
     LOGICAL :: clamped
 
@@ -220,8 +223,11 @@ CONTAINS
     CALL locate_axis(bathy%y, y_lo, j0, t, clamped)
     CALL locate_axis(bathy%y, y_hi, j1, t, clamped)
     z_max = -MINVAL(bathy%depth(i0:i1 + 1, j0:j1 + 1))
-    z_min = -MAXVAL(bathy%depth(i0:i1 + 1, j0:j1 + 1))
-    z_max = z_max + CD_BATHY_CREASE_FRACTION*(z_max - z_min)
+    ! the crease allowance: the node range of the cells widened by one node on every side
+    iw0 = MAX(1, i0 - 1); iw1 = MIN(SIZE(bathy%x), i1 + 2)
+    jw0 = MAX(1, j0 - 1); jw1 = MIN(SIZE(bathy%y), j1 + 2)
+    z_min = -MAXVAL(bathy%depth(iw0:iw1, jw0:jw1))
+    z_max = z_max + CD_BATHY_CREASE_FRACTION*(-MINVAL(bathy%depth(iw0:iw1, jw0:jw1)) - z_min)
   END SUBROUTINE CD_Bathymetry_Max_Floor
 
   SUBROUTINE CD_Bathymetry_Floor_Gradient(bathy, xq, yq, z_floor, dfdx, dfdy, ErrStat, ErrMsg, crease_curvature)
