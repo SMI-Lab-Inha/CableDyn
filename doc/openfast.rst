@@ -89,6 +89,18 @@ two ``dtM`` values (for example 0.1, 0.05, and 0.025 s) and demonstrate converge
 peaks, and damage. If CableDyn needs a smaller step than the glue step, reduce ``DT`` as well.
 ``DT_Out`` changes only the sampling of the main OpenFAST table.
 
+.. note::
+
+   Between commits CableDyn holds its loads, so the platform receives the mooring load on
+   average half a ``dtM`` late. A spring force delayed this way acts on the platform as a
+   negative damping of about the mooring stiffness times ``dtM/2``. For a catenary mooring this
+   is small: in the three-seed DLC-1.1 comparison of :doc:`validation` the platform motions at
+   the default ``dtM`` agree with MoorDyn within 0.6 % in mean and standard deviation, but the
+   fairlead tension's standard deviation differs by about 3 % from CableDyn's own solution at
+   every glue step. For stiff taut, semi-taut or tension-leg moorings the lag can be comparable
+   to the system's own damping. Check such systems, and any fatigue or tension-range result, at
+   a smaller ``dtM`` (down to ``dtM = DT``) before relying on them.
+
 Fluid source
 ~~~~~~~~~~~~
 
@@ -174,7 +186,7 @@ Run and confirm
 
 Before trusting a run, confirm in the console:
 
-#. ``Running CableDyn (v0.1.1, ...)`` and ``Parsing CableDyn input file: <deck>``;
+#. ``Running CableDyn (v0.2.0, ...)`` and ``Parsing CableDyn input file: <deck>``;
 #. the ``dtM`` line and the model inventory (``Created CableDyn model: ... line object(s)``);
 #. for every line, the converged fairlead effective tension, force vector, inclination,
    declination, and azimuth at the static equilibrium — printed unconditionally, whether or not

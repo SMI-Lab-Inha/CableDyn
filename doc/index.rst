@@ -12,8 +12,9 @@ with MoorDyn-C, MoorDyn-F, and OrcaFlex on common reference cases.
 .. admonition:: Release status
    :class: note
 
-   CableDyn ``v0.1.1`` is the current stable release. It adds torsion of finite-EI cables to
-   the first public release and makes the Windows builds more robust.
+   CableDyn ``v0.2.0`` is the current stable release. It adds active tensioning and coupled
+   torsion of finite-EI cables, sub-stepping of tension-only lines through snaps and seabed
+   friction in the static solve, and recovers node results from nodal equilibrium.
    Every comparative-accuracy statement is linked to a passing benchmark in :doc:`validation`.
    The project remains below ``1.0.0``, so public APIs may evolve between minor releases.
 
@@ -49,8 +50,8 @@ Download to first result in five minutes
 ----------------------------------------
 
 #. Download ``CableDyn_driver.exe``, ``SHA256SUMS.txt``, and **Source code (zip)** (for the
-   ``examples`` folder) from the `v0.1.1 release
-   <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.1>`_ and verify the checksum —
+   ``examples`` folder) from the `v0.2.0 release
+   <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.2.0>`_ and verify the checksum —
    :doc:`installation`. No installer and no runtime DLLs.
 #. Put ``CableDyn_driver.exe`` in a working folder, unzip the source archive, and copy its
    ``examples`` folder next to the executable.
@@ -160,6 +161,15 @@ How to cite
 
 If CableDyn contributes to published work, cite the method article and the software release
 as described in :doc:`citing`.
+
+Name
+----
+
+This software is developed independently at the Department of Naval Architecture and Ocean
+Engineering, Inha University. It is not affiliated with, derived from, or endorsed by the
+EPSRC-funded research project (2022--2025) of the same name led by the University of Edinburgh,
+"CableDyn: Subsea Power Cable Dynamics Under Complex Ocean Environment"
+(`cabledyn.eng.ed.ac.uk <https://cabledyn.eng.ed.ac.uk>`_).
 
 .. toctree::
    :hidden:
