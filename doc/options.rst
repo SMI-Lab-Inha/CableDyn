@@ -481,7 +481,7 @@ Finite-EI cable controls
        curvature = moment / ``EI`` (see :ref:`theory-output-recovery`). ``element`` reports the
        length-weighted element-mean axial force :math:`EA(\lvert\mathbf r'\rvert - 1)`, the
        larger one-sided exact curvature, and the axial resultant at the element midpoint as the
-       segment tension, the definitions up to CableDyn 0.1.1. End forces, positions, ``TDP``
+       segment tension, the definitions of the releases before 0.2.0. End forces, positions, ``TDP``
        channels and the material-strain checks (``tensile_safety``, compression notes) are the
        same under both
      - both (finite-EI lines)

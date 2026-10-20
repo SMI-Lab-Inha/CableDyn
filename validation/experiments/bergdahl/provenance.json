@@ -1,8 +1,8 @@
 {
-  "CableDyn_release": "v0.1.1+dev (unreleased)",
-  "validation_date": "2026-10-19",
+  "CableDyn_release": "v0.2.0",
+  "validation_date": "2026-10-20",
   "executable_name": "cabledyn.exe",
-  "executable_sha256": "88d2bba2da6fb0801656d4bacd30e9d0e916f768c7047161457edea324274c66",
+  "executable_sha256": "55fe625602eaef9c3bdb7bbee889858d3a50fa4baa66437801d9c102dc2424a3",
   "compiler": "GNU Fortran 16.2.0",
   "build_type": "Release",
   "platform": "Windows 11 x86-64",
@@ -17,9 +17,8 @@
   "force_maxima_sha256": "978889378964c6d6749bc27c11d99d6584956e3c8eac146ae79bf5f7a05e2e95",
   "aggregate_metrics_sha256": "35d800fa34137a3a1500cbd0081a490bc1b61cf636cfef5a923b5c18947ba1a7",
   "case_manifest_sha256": "8da5e7b4a8a92755363807902aba48e0ff42abab04ac44912041853db9e56604",
-  "waveform_T1p25_sha256": "65c8c846636c378b800bb3c7a95ccd2bde766d789af3cdffce26a2e688e1a134",
-  "waveform_T3p50_sha256": "b3ca65ebfc1d61b5510e54876fc11d1604fc18ffcca3eab523dc7d67f50da4d8",
-  "waveform_metrics_sha256": "2803a57cb7726f966a00e00bf6eb070231b9c702ae67a81685da50991d0adb11",
-  "waveform_note": "Waveform metrics were computed with the executable of the 2026-10-09 validation (sha256 71090e2e28c9e1d99c5180d05a395ebcc891a77cc5294d315a57c691904745ac); the development builds since then (the force-blended EI = 0 step and its rotation- and snap-resolved sub-steps) were not rerun on them because the article supplement's expData.dat, which reduce_bergdahl_waveforms.py reads, was not available. The measured phase averages are those of expData.dat, as carried in the waveform CSVs.",
+  "waveform_T1p25_sha256": "e6fad502f89d8796f2f7868dc9c9ca8e2ebc6969f4ebc3aa36e2bf30498a4522",
+  "waveform_T3p50_sha256": "a21956ee9d7c0a41c0948eb2cae7fa1f25c0b8dc26714a4dce95fa0236e5434e",
+  "waveform_metrics_sha256": "0fb6015cb30aa2bbb1cd8951b603f9201af50372ee6d3633a72fc70ea5280d1a",
   "refinement_summary_sha256": "9039f6c9b91ed2d15d7c609dd8d2300eef34d0363700487a8dfc0a8f15be1087"
 }

@@ -74,9 +74,8 @@ at the upper line end. Across the 30 conditions, the cycle maxima have an RMSE o
 mean absolute percentage error of 3.13%, a mean bias of +0.46 N, a Pearson correlation of 0.993
 and a Lin concordance coefficient of 0.989. For the two waveform conditions, halving the nominal
 element length and the time step changes the mean cycle maximum by no more than 0.56% and
-0.19%, respectively, and the phase-averaged force histories have RMSEs of 5.95% and 2.54% of
-the measured force range (computed with the executable of the 2026-10-09 record; see
-`provenance.json`). The waveform CSVs carry the measured phase averages computed from the
+0.19%, respectively, and the phase-averaged force histories have RMSEs of 5.93% and 2.56% of
+the measured force range. The waveform CSVs carry the measured phase averages computed from the
 supplement's `expData.dat`.
 
 ## Time step

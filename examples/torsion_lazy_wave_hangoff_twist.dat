@@ -43,7 +43,7 @@ LineID  End  Stiffness  EzX      EzY  EzZ       TorsStiffness  NxX  NxY  NxZ  Pr
 1.0e4    cBot             - Seabed normal damping base (Pa-s/m) [default: 1.0e4]
 0.4      rhoInf           - Generalised-alpha spectral radius {0<=rhoInf<=1} [default: 0.4]
 False    modified_newton  - Tangent-reuse mode {False=full Newton; True=guarded reuse} [default: False]
-0.1      dtM              - CableDyn internal time step (s) [default: omitted standalone; 0.1 s target OpenFAST]
+0.1      dtM              - CableDyn internal time step (s) [default: omitted standalone; the glue DT in OpenFAST]
 90.0     TMax             - Standalone simulation duration (s): 60 s twist ramp, 30 s hold
 data/torsion/hangoff_roll_2turns_60s_dt01.txt motionFile - Held hang-off with the roll history (12th column, deg)
 False    adaptive_mesh    - Automatic finite-EI refinement {False; True} [default: False]

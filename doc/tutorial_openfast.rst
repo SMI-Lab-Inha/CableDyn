@@ -150,9 +150,10 @@ Division of responsibility:
   settings, its own time step ``dtM``, and the ``OUTPUTS`` list. Fairlead ``Coupled`` points are
   given in platform axes; ``Fixed`` anchors in global axes.
 * **The time step.** ``CableDyn_UMaine.dat`` sets ``dtM = 0.025`` = ``DT``, so CableDyn solves
-  every glue step. Without a deck ``dtM``, CableDyn targets 0.1 s rounded to a whole number of
-  glue steps and holds its loads between solves. For fatigue, snap, or touchdown work use
-  ``dtM = DT`` or prove that a coarser value converges.
+  every glue step, which is also the default without a deck ``dtM``. A larger ``dtM`` solves
+  once per several glue steps and holds the loads between solves, which is faster but delays
+  them. For fatigue, snap, or touchdown work keep ``dtM = DT`` or prove that a coarser value
+  converges.
 
 The complete ownership table is in :doc:`options`; the coupling contract in :doc:`openfast`.
 
@@ -167,7 +168,7 @@ The CableDyn part of the console (other modules' lines trimmed):
 
 .. code-block:: text
 
-    Running CableDyn (v0.1.1, 2026-10-09).
+    Running CableDyn (v0.2.0, 2026-10-20).
       CableDyn: geometrically nonlinear cable & mooring dynamics for floating wind.
       ...
       CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)

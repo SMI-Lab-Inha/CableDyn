@@ -29,7 +29,7 @@ LineID  LineType  Length   NumSegs
 1.0e4    cBot            - Seabed normal damping base (Pa-s/m) [default: 1.0e4]
 0.4      rhoInf          - Generalised-alpha spectral radius {0<=rhoInf<=1} [default: 0.4]
 False    modified_newton - Tangent-reuse mode {False=full Newton; True=guarded reuse} [default: False]
-0.05     dtM             - CableDyn internal time step (s) [default: omitted standalone; 0.1 s target OpenFAST]
+0.05     dtM             - CableDyn internal time step (s) [default: omitted standalone; the glue DT in OpenFAST]
 0.0      TMax            - Standalone simulation duration (s); 0 selects static initialisation only [default: omitted standalone; host-owned OpenFAST]
 False     adaptive_mesh    - Automatic finite-EI refinement {False; True} [default: False]
 warn      tensile_safety   - Count and report resolved compression without aborting the dynamic run

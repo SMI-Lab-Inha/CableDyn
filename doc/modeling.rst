@@ -199,8 +199,9 @@ performance comparisons keep the default.
 
 Choose ``dtM`` by convergence of peaks, phase, rainflow ranges, and accumulated damage—not only by
 solver success. Numerical stability at a large implicit step is not evidence of fatigue accuracy.
-In OpenFAST the default target is ``dtM = 0.1 s``; loads and assembled OpenFAST channels are
-zero-order-held between CableDyn solves. The separate ``.CD.out`` contains only genuine committed
+In OpenFAST the default is ``dtM = DT`` (a solve every glue step); with a larger deck ``dtM``,
+loads and assembled OpenFAST channels are zero-order-held between CableDyn solves, which delays
+the loads by about ``dtM/2`` (see :doc:`openfast`). The separate ``.CD.out`` contains only genuine committed
 ``dtM`` samples, while ``DT_Out`` changes the assembled OpenFAST recording cadence only. Neither
 file convention substitutes for a time-step convergence study, which should cover the forcing
 bandwidth, the shortest element transit time, contact switching, and constitutive relaxation

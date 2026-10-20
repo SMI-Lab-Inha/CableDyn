@@ -1595,6 +1595,12 @@ CONTAINS
     same = TRANSFER(a, 0_INT64) == TRANSFER(b, 0_INT64)
   END FUNCTION bits_equal
 
+  ELEMENTAL LOGICAL FUNCTION reals_equal(a, b) RESULT(same)
+    !! a == b, written so that gfortran does not warn: a NaN never matches, +0 matches -0.
+    REAL(wp), INTENT(IN) :: a, b
+    same = a <= b .AND. a >= b
+  END FUNCTION reals_equal
+
   ELEMENTAL REAL(wp) FUNCTION positive_zero(x) RESULT(y)
     !! x with a negative zero replaced by +0, on the bits (so no floating-point mode can keep
     !! the sign); every other value is returned unchanged.
@@ -5310,7 +5316,7 @@ CONTAINS
     END IF
     ! the cached residuals belong to the time and load configuration they were computed at, and
     ! each to its element's state (exact comparisons; a NaN never matches and is recomputed)
-    IF (.NOT. (model%rc_key_ok .AND. model%rc_key_epoch == model%rc_epoch .AND. model%rc_t == model%t)) THEN
+    IF (.NOT. (model%rc_key_ok .AND. model%rc_key_epoch == model%rc_epoch .AND. reals_equal(model%rc_t, model%t))) THEN
       model%rc_t = model%t; model%rc_key_epoch = model%rc_epoch
       model%rc_key_ok = .TRUE.
       model%rc_have = .FALSE.
@@ -5338,8 +5344,9 @@ CONTAINS
       ! the element's residual depends on its own two nodes' q, v and a only (element_end_residual)
       i0 = 6*(e - 1)
       IF (model%rc_have(e)) THEN
-        IF (ALL(model%rc_q(:, e) == model%q(i0 + 1:i0 + 12)) .AND. ALL(model%rc_v(:, e) == model%v(i0 + 1:i0 + 12)) &
-            .AND. ALL(model%rc_a(:, e) == model%a(i0 + 1:i0 + 12))) THEN
+        IF (ALL(reals_equal(model%rc_q(:, e), model%q(i0 + 1:i0 + 12))) .AND. &
+            ALL(reals_equal(model%rc_v(:, e), model%v(i0 + 1:i0 + 12))) .AND. &
+            ALL(reals_equal(model%rc_a(:, e), model%a(i0 + 1:i0 + 12)))) THEN
           ge = model%rc_g(:, e); RETURN
         END IF
       END IF

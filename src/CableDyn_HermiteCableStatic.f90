@@ -2557,7 +2557,7 @@ CONTAINS
       IF (.NOT. (elem > CD_ZERO)) RETURN
       R(base + 1:base + 3) = R(base + 1:base + 3) + (mom*elem)*end_support(:, iend)
       ! d(gap)/d(r_inner) = -n_in (floor gradient held over the node)
-      IF (delem /= CD_ZERO) THEN
+      IF (.NOT. (delem <= CD_ZERO .AND. delem >= CD_ZERO)) THEN
         DO j = 1, 3
           DO i = 1, 3
             ab(KL_H + KU_H + 1 + base + i - bin - j, bin + j) = ab(KL_H + KU_H + 1 + base + i - bin - j, bin + j) - &

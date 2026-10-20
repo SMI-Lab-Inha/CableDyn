@@ -70,7 +70,7 @@ Grid sizing is described in the manual's OpenFAST page (SeaState grid).
 .\openfast.exe IEA-15-UMaine_CompMooring3_MoorDyn.fst    # MoorDyn
 ```
 
-The CableDyn run log identifies the module with `Running CableDyn (v0.1.1, 2026-10-09)` and
+The CableDyn run log identifies the module with `Running CableDyn (v0.2.0, 2026-10-20)` and
 prints the converged fairlead state of each line, as the standalone driver does:
 
 ```text

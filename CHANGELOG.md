@@ -6,857 +6,101 @@ All notable changes to CableDyn are recorded in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-20
 
 ### Added
 
-- Seabed friction in the static solve, toward the as-laid position (OrcaFlex's *as laid*
-  statics seabed friction policy, opt-in): `asLaid staticsFriction`. Every grounded node is
-  held by a friction spring toward the position at which the line was laid from its lower end
-  (the anchor, or the fairlead when that is lower) along the lay azimuth on the seabed, with the regularised Coulomb law of the dynamics
-  (isotropic or axial/lateral, capped at `mu N`), in still water and in a current, on `EI = 0`
-  and finite-EI lines, standalone, coupled OpenFAST and through the C API; the march continues
-  the static springs, so a held run stays at rest. New OPTIONS `staticsFriction none|asLaid`,
-  `layAzimuth` and `layAzimuth<ID>` (default: the horizontal direction of each line's chord,
-  from its lower end),
-  `asLaidTension` and `asLaidTension<ID>` (default 0). The default stays `none`, as in MoorDyn:
-  frictionless statics in still water (friction from the still-water equilibrium in a current),
-  conservative for anchor loads, and every deck without the new rows runs as before. With
-  `asLaid`, a 700 m chain on a 5° slope with `frictionMu 1`, which the frictionless static
-  folds 24.0 m back past its anchor, holds where it was laid (friction up to 0.087 `mu N`, the
-  slope; FairTen 714.2 → 622.9 kN; held for 2 s to 1.5e-10 of FairTen), and a 650 m finite-EI
-  cable on a 10° slope, rejected as too long for its span, solves. As an illustration of the
-  effect on anchor loads, `asLaid` in `iea15mw_umaine_mixed_cabledyn.dat` lowers the chains'
-  AnchTen from 1351.6 to 368.2 kN (FairTen +0.16 %) and the laid cable's from 1230 N to 0.36 N:
-  runs laid slack and pulled taut are held back by friction. A run laid at the tension it
-  carries (`asLaidTension`) mobilises none: on a flat seabed FairTen equals the frictionless
-  one to 6e-6 and AnchTen to 0.4 %. A finite-EI line laid past the point under its fairlead has
-  no static solution yet (its touchdown hook is not reached); a lay azimuth across the span
-  solves it. A lay azimuth across the vertical plane of the chord, or a bathymetry sloping across
-  it under the laid run, solves a finite-EI line in 3D from the start (so a march from it stays
-  at rest), and a finite-EI line is laid from its lower end like an `EI = 0` one; a line whose
-  fairlead lies below its other end is laid, and seeded, from the fairlead. With discrete
-  `ATTACHMENTS` the reference sinks each node under its discrete load (its share of the line's
-  weight plus the attachment's net weight), so a module node rests on the laid path like the rest
-  of the run instead of taking its sink for a friction deflection. On a mesh the finite-EI
-  statics refines (adaptive refinement, the bending-length and stability refinements) or
-  coarsens, the reference is laid on that mesh itself, under its own lumped weights and nodal
-  seabed stiffnesses, and the march takes it on the final mesh: a run refined 16x on a seabed
-  curved along it and sloping across it, with a section change on the grounded run, rests where
-  its twin declared on the refined mesh does (to solver precision), where a reference
-  interpolated from the deck nodes moved it by up to 1 mm and reversed its lateral anchor force. The policy is rejected
-  where the statics carry no seabed friction: on decks with bodies, rods or dynamic
-  (`Connect`/`Free`) points (`frictionMu` itself is rejected on the latter and accepted on the
-  default monolithic body and rod march), and on a finite-EI deck whose line has a moving End B
-  (a line shared between two turbines, which takes the compatibility route). The Python `DeckFile`, `DeckWriter` and `DeckModel` take the new
-  rows. See the theory page (Friction in statics).
-- Run-time profile of the standalone driver. With the environment variable
-  `CABLEDYN_PROFILE=1`, the driver prints at the end of the run how its wall time divides
-  between input parsing, initialisation and statics, and the dynamic march. The march is split
-  into the fluid sampled by the driver, the line, cable and object steps, the checks, the
-  outputs, and the progress report. The profile also gives the committed steps and the time per
-  step, the tension-only line steps and their Newton iterations, and (outside the mixed
-  `EI = 0` + finite-EI route) the finite-EI cable steps with their residual, tangent and solve
-  counts and times. Every output file is the same with and without it. See the manual's
-  command-line page (Run-time profile).
-- A note when a finite-EI line starts its dynamics from a static state that is unstable out of
-  its vertical plane. A line solved in that plane (free in torsion, no current or end direction
-  across it) has its out-of-plane DOFs held in the statics and released in the dynamics. On
-  elements longer than half the bending length the touchdown can make that state unstable out of
-  the plane, which the planar solve does not see. One stability test with the dynamic
-  constraints now runs at the hand-off (0.35 ms on an 87-element lazy wave, 6 ms on 2048
-  elements; on a line with `ATTACHMENTS`, on the discrete equilibrium after the attachment
-  polish) and the note names the line, its mesh and the factor that meets the bending length,
-  and recommends a finer mesh or `adaptive_mesh True`. Results do not change.
-- Torsion of finite-EI lines in coupled OpenFAST (`CompMooring = 5`) and FAST.Farm runs. The
-  End A frame of a line restrained in torsion turns with the platform orientation, the torque
-  moment is returned to the platform, `PtfmInit` twists the line in the static initialisation,
-  the `Torq`/`Twist` channels are written, and the unwrapped twist is restored on a checkpoint
-  restart. The C API and the standalone deck that mixes `EI = 0` and finite-EI lines without a
-  body, which move the line ends by translation only, still refuse torsion columns by name, and
-  so does OpenFAST linearisation of a line restrained in torsion. See the manual's OpenFAST page
-  (Line torsion).
-- C ABI 1 minor extension 2 (`CableDyn_GetAbiMinor() == 2`) for hosts that drive the
-  `Coupled` points of a deck, such as CFD solvers. Every existing function is unchanged.
-  `CableDyn_InitDeckAt` solves the statics with the `Coupled`/`Vessel` points at the host's
-  positions, the counterpart of `MoorDyn_Init(X, XD)` (the statics start at rest), so a body
-  that starts away from the deck coordinates starts without a transient: for foamMooring's
-  `EsfLOWC` box, whose fairleads start 15 mm below the deck, the fairlead load of
-  `CableDyn_InitDeck` followed by held fairleads deviates by up to 0.38 N of 0.52 N, and stays
-  constant to round-off after `CableDyn_InitDeckAt`. `CableDyn_SaveState` and
-  `CableDyn_RestoreState` keep one in-memory copy of the whole model for outer correctors
-  (PIMPLE); a restore followed by a step is bit-identical to stepping from the saved state, on
-  both routes and across any number of steps. `CableDyn_GetCoupledLayout` returns the deck point
-  id and type of every block of the coupled vector, which on the point route includes the
-  `Fixed` anchors. The Python `CableDyn` class gains `init_deck_at`, `save_state`,
-  `restore_state`, `coupled_layout` and `host_dofs`. The manual's C API page has a new section,
-  Coupling a host (CFD) solver, that compares the call sequence step by step with MoorDyn's C
-  API: initialisation, vector layout, end-of-step motion, outer correctors, load summation,
-  the fixed step of the aggregate route, and units.
-- Run audit of tension-only (`EI = 0`) lines in the standalone driver. On the initial state and
-  at every output step it tracks the largest turn of a taut segment's chord, the segments that
-  snap from slack to taut, and non-physical tension spikes: a segment whose tension (the elastic
-  tension, or that of its viscoelastic or Syrope law) at one step exceeds four times its own one
-  step before and after, ten times the largest tension anywhere on the line one step before and
-  after, and the largest tension of the initial state. The first spike of a line is reported as
-  a warning, once per line, naming its segment from End A as `.Line<L>.t.out` numbers it, and
-  the run summary counts them. The run ends with a note when a
-  taut segment turned by more than 1° in one solver step (with `ei0_substeps auto`, see Changed,
-  1.1 times the larger of 1° and `ei0_substep_angle`; the sub-steps of a sub-stepped or
-  recovered step count as steps; the mean and standard deviation of the tension err by about
-  1 % and more above it, 1.3 % at 2.9° on a heaving chain, and near 6° per step snap-load peaks
-  come out 10 to 20 % low with either generalised-α blend), and when segments snapped taut
-  while the axial wave crosses a segment more than once per solver step, so the snap peaks are
-  not resolved in time. The standalone driver also prints a note for a dynamic
-  deck with `rhoInf` above 0.95, on the missing numerical dissipation. See the manual's
-  troubleshooting page.
-- Anchor uplift channels for the drag-anchor check of a catenary mooring (no vertical load at
-  the anchor in the intact condition). `AnchFz<L>` and `AnchFH<L>` are the vertical component
-  (positive upward, the line lifting its anchor) and the horizontal magnitude of the `AnchTen<L>`
-  end force; for an anchor that holds one line they equal `Point<P>Fz` and `Point<P>FH`.
-  `TDP<L>Grd` is the grounded length, the deformed chord length from the grounded end to the
-  touchdown point; it varies continuously with the touchdown point and is 0 only when nothing
-  touches (an anchor node on the seabed beside a node a few millimetres clear of it reads
-  micrometres to millimetres, so test it against a small tolerance such as 0.01 m). The
-  channels are available on the static, `EI = 0`, finite-EI, mixed and multibody routes, in the C
-  API and in coupled OpenFAST and FAST.Farm runs; the two-moving-end finite-EI route rejects
-  `AnchFz`/`AnchFH` by name. The Python deck reader and builder accept the new names. See the
-  manual's outputs page (Anchor uplift), which also states the end-node weight share that a laid
-  `Fixed` anchor carries (slightly negative `AnchFz` on an `EI = 0` line, not uplift; exactly 0
-  on a finite-EI line, whose grounded end leaves its node weight to the floor). Because of that
-  share, `AnchFz` on an `EI = 0` line turns positive only after the anchor segment has started
-  to lift, so `TDP<L>Grd` is the primary no-uplift check and `AnchFz` the vertical anchor load.
-- `OutputRecovery` option (`equilibrium`, the default, or `element`): the definition of the
-  finite-EI node tension, curvature, bend moment and segment tension (see Changed). `element`
-  restores the definitions of 0.1.1. The Python deck reader accepts and checks it.
-- `CD_HermiteCable_Dyn_Curvature_Exact` and `CD_HFMF_Curvature_Exact`: the exact geometric
-  nodal curvature of the cubic-Hermite centreline, the larger one-sided trace at a node, which
-  `CD_HermiteCable_Dyn_Curvature` and `CD_HFMF_Curvature` returned up to 0.1.1.
-- `Pinned` and `CoupledPinned`/`VesselPinned` rods in coupled OpenFAST (`CompMooring = 5`) runs.
-  A `Pinned` rod turns about its fixed End A, which the coupled route previously refused. A
-  `CoupledPinned` rod (MoorDyn-F's coupled pinned rod) is a node of the coupling mesh at its
-  End A that takes the platform position only: the rod turns about it with its own rotation,
-  the pin acceleration loading that rotation through the rod's inertia, and the node returns
-  the rod's net force less its inertia with zero moment. The angular acceleration in that force
-  is solved for the node's current acceleration, so an output probe sees the rod's effective
-  inertia about the pin. `PtfmInit` moves the rod with the platform, the static initial
-  condition balances it about its pin (a pinned rod that carries no line keeps its deck
-  orientation), sub-cycled steps move the pin along the host path interpolated linearly as for
-  every other host node, the sub-step count resolves the rod's own swing about its pin under
-  its weight, buoyancy and pin acceleration (`|W d_g - B d_b|` and the pin-acceleration load
-  over the inertia about the pin) as well as its lines, so a short pinned rod that carries no
-  line stays stable at a coupling step beyond its explicit limit (a `CoupledPinned` rod takes
-  the stiffer of its step-start and end-of-step wetting, so a pin that crosses the free surface
-  within a step is covered), and checkpoint restarts and correction iterations reproduce the
-  run bit for bit with the existing rod state mirror. An end of a `Pinned` or `CoupledPinned` rod that
-  carries no line needs no `Rod<N>A`/`Rod<N>B` POINT row on the coupled route; other rods still
-  need one at both ends. The C API runs `Pinned` rods, as its manual page already stated. The
-  standalone driver and the C API refuse `CoupledPinned` rods by name; FAST.Farm decks still
-  refuse rods, OpenFAST linearisation still refuses rods, and `CoupledPinned` bodies remain
-  unsupported. See the manual's OpenFAST page (Lifecycle features).
-- A warning when line nodes of a coupled OpenFAST run (`CompMooring = 5`) lie outside the
-  SeaState wave-kinematics grid (`X_HalfWidth`, `Y_HalfWidth`, `Z_Depth`). SeaState gives such a
-  node the kinematics of the grid boundary: waves out of phase beyond a half-width, and
-  kinematics that are too strong below `Z_Depth`. Its fluid load was therefore wrong without
-  any message. CableDyn now checks its nodes at the static equilibrium and at every CableDyn
-  step. At the first node outside the grid it prints one warning with the number of nodes,
-  the farthest node in each direction and the SeaState inputs to enlarge. Only nodes in the
-  water are checked (a cable or jumper above the free surface carries no fluid load), and
-  nodes below a grid that reaches the seabed (`Z_Depth` equal to the water depth, its
-  default) are not reported.
-  The OpenFAST tutorial and `examples/openfast/README.md` now enlarge the r-test `MD_Shared`
-  grid (`X_HalfWidth = 100 m`, `Z_Depth = 40 m`), which covers the platform but not the
-  moorings, and quote their results for the enlarged grid. With the `MD_Shared` grid, the
-  line-1 fairlead tension standard deviation of the tutorial was 18 % too high. See the
-  manual's OpenFAST page (SeaState grid).
-- Active tensioning of finite-EI cables in OpenFAST (`CompMooring = 5`). A `CONTROL` row may
-  now name a finite-EI (cubic-Hermite) cable, alone or in a deck with `EI = 0` lines. Before
-  each mooring step, ServoDyn's `CableDeltaL` and `CableDeltaLdot` scale every cable element of
-  the line's fairlead-side deck segment by (S + `DeltaL`)/S, with the matching rate, so the
-  segment becomes S + `DeltaL` long. The cable's mass, attachment masses, tributary lengths and
-  seabed contact coefficients follow the new lengths, and the axial damping acts on the rate of
-  the strain the elastic force uses, so a segment paid out at constant strain carries no damping
-  force. The force-blended generalised-α step takes its committed force at the lengths of the
-  preceding step, so a pay-out ramp follows the quasi-static tension at any `rhoInf`; a deck
-  that controls a finite-EI cable under `False alpha_force_blend` fails at initialisation with
-  a message that names the line, as that blend has no such treatment. A command outside
-  MoorDyn-F's bounds stops the run as for `EI = 0` lines (see Changed), and FAST.Farm decks
-  still reject `CONTROL`. A zero command, with a `DeltaLdot` of either sign, leaves the run
-  bit-identical to an uncontrolled one, and a checkpoint restart continues bit-identically. See
-  the manual's deck format page (CONTROL).
-- A note when the static layout of an `EI = 0` line folds back on the seabed (a hairpin), the
-  twin of the finite-EI note. A current toward the anchor or a seabed falling past it can carry
-  the grounded run of a tension-only line past its anchor where no seabed friction holds it,
-  and it folds back with zero tension at the fold: a 2 m/s current carried a chain 20 m past its
-  anchor, a 5° slope 24 m, without a word. The equilibrium is kept, and one note per line names
-  the fold (the distance past the anchor, or a turn above 150° of the grounded run at a deck
-  node, numbered from End A as the node channels), its cause
-  (a deck current on the line, a seabed steeper than 0.5° at the fold, or a slack run) and the
-  remedy that fits the deck's static friction: `frictionMu` against a current,
-  `staticsFriction asLaid` on a slope (with the default `staticsFriction none` the static solve
-  applies friction against a deck current only), or a shorter line where friction already acts
-  or the route rejects it; a run without `dtM` and `TMax` is told that friction needs them,
-  since the static-only line solve carries none. A run that the `staticsFriction asLaid`
-  reference itself lays past its end (laid from the lower end along `layAzimuth`) is not
-  noted, nor is a near-vertical line (horizontal span under a tenth of the water depth) past
-  its end. The finite-EI note on a run past its anchor, which named "seabed friction or a
-  shorter line" whatever the deck, now names the same cause and remedy by the same rule and
-  skips the same as-laid run. It is printed on the static, `TMax = 0`, point-system and
-  multibody routes and in the OpenFAST initialisation report, which now also prints the
-  initialisation notes of finite-EI cables, and returned in the line report of the OpenFAST
-  aggregate. No example deck prints it, and no result changes. See the manual's theory page
-  (EI = 0 path) and Troubleshooting.
+- Seabed friction in the static solve toward the as-laid position (`staticsFriction asLaid`,
+  with `layAzimuth` and `asLaidTension`), as in OrcaFlex. The default stays `none`, so existing
+  decks run as before. A 700 m chain on a 5° slope that the frictionless statics folds 24 m past
+  its anchor now holds where it was laid.
+- Active tensioning (`CONTROL`) of finite-EI cables in OpenFAST, alone or in a deck with
+  `EI = 0` lines.
+- Sub-stepping of tension-only (`EI = 0`) lines through fast segment rotation and slack-to-taut
+  snaps, on by default (`ei0_substeps auto|off`, `ei0_substep_angle`, `ei0_substep_max`).
+  It brings snap-load peaks at coarse time steps closer to converged runs; `off` restores the
+  previous results.
+- Torsion of finite-EI lines in coupled OpenFAST (`CompMooring = 5`) and FAST.Farm runs.
+- `Pinned` and `CoupledPinned`/`VesselPinned` rods in coupled OpenFAST runs.
+- Seabed contact for `Free`/`Connect` points and `Point3` buoys: a heavy clump no longer sinks
+  through the seabed.
+- Anchor uplift channels `AnchFz<L>`, `AnchFH<L>` and `TDP<L>Grd` for drag-anchor checks.
+- C ABI 1 minor extension 2 for hosts that drive `Coupled` points (for example CFD solvers):
+  `CableDyn_InitDeckAt`, `CableDyn_SaveState`/`CableDyn_RestoreState` and
+  `CableDyn_GetCoupledLayout`, with matching Python methods. Existing functions are unchanged.
+- `OutputRecovery equilibrium|element` option and the `CD_HermiteCable_Dyn_Curvature_Exact` and
+  `CD_HFMF_Curvature_Exact` functions (see Changed).
+- Run-time profile of the standalone driver (`CABLEDYN_PROFILE=1`).
+- New diagnostics, none of which changes results:
+  - run audit of `EI = 0` lines in the standalone driver: tension spikes, fast segment turns
+    and unresolved snaps, and a note for `rhoInf` above 0.95;
+  - a note when the static state of a finite-EI line is unstable out of its vertical plane;
+  - a note when the static layout of an `EI = 0` line folds back on the seabed, naming the
+    cause and the remedy;
+  - notes for a line stretched far beyond its elastic range and for a section too coarse for
+    its line;
+  - a warning when line nodes of a coupled OpenFAST run lie outside the SeaState
+    wave-kinematics grid.
 
 ### Changed
 
-- Tension-only (`EI = 0`) lines resolve fast segment rotation and slack-to-taut snaps by
-  sub-stepping, on by default (new OPTIONS `ei0_substeps auto|off`, `ei0_substep_angle`
-  (default 1°) and `ei0_substep_max` (default 16), checked when the line is initialised; the
-  Python deck reader applies the same rules). A converged step in which a segment that ends it
-  taut (above 0.1 % of the largest step-start tension) turned by more than
-  `ei0_substep_angle`, or a segment slack at its start ends it above a quarter of that tension
-  while the step does not resolve the axial wave over it (the wave crosses the segment more
-  than once per step), is solved again from the same committed state in
-  `max(4, ceil(turn/angle))` equal sub-steps, at most `ei0_substep_max`, with the end motion on
-  the quintic of the recovering step and the last sub-step on the given end state; output and
-  coupling times are unchanged. The tensions are those of the run audit (the elastic tension,
-  or that of the viscoelastic or Syrope law), and the step-start tension is taken as at least
-  0.1 % of the line's initial tension, so a line slack all over does not count barely taut
-  segments. At `dtM` 0.1 s a taut segment of the Lozon 80 m
-  all-chain mooring turns by up to 6° per step in 5 m / 7 s heave, and the snap-load peaks of
-  both generalised-α blends came out 10 to 20 % low. The release cap was not the cause: it acts
-  in 0.3 % of the element steps, never within 0.5 s of a peak, and the cycle maxima with and
-  without it agree to within 1 %; the peaks followed the algorithmic damping (28 and 31 % low at
-  `rhoInf` 0, 10 and 40 % high at 0.6). Over seven runs whose amplitude differs by up to 3e-4,
-  against 0.5 and 0.25 ms runs, the fairlead and anchor maxima move from 15 and 17 % low to 4 and
-  8 % low (the configuration blend of 0.1.1 gave 10 and 18 % low), and the anchor maxima of
-  the 200 m semitaut mooring in 10 m / 14 s and 5 m / 7 s surge from 16 and 26 % high to 4 %
-  high and 2 % low (over thirteen runs 5 % high and 0.3 % low, single runs from 4 % low to
-  21 % high). A single run at that step varies by 15 to 20 points, so a single comparison
-  can make either blend look accurate. The decision depends only on the committed state, the
-  step inputs and the line's initial tension, so restarts repeat it; when a sub-step does not
-  converge the plain step's own result is kept, and a step recovered after a stall or a half
-  of a line-system step halved after a failure takes its sub-steps as given (when the halves
-  fail too, the full step is re-run as the nominal step, sub-steps included). It applies on
-  every route that steps `EI = 0` lines (standalone lines and line systems, OpenFAST,
-  FAST.Farm and the C API, whose raw lines always take it) except the lines attached to the
-  bodies, rods and points of the monolithic body and point coupling, which needs the end
-  reaction and tangent of the nominal step. `monolithic bodyScheme` is the default of every
-  standalone deck with `Rigid6` bodies, `Point3` buoys, rods or `Free`/`Connect` points on
-  `EI = 0` lines, so those lines are not sub-stepped there: 7 of the 21 shipped `EI = 0`
-  dynamic example decks run this way, and none of them notes an unresolved segment turn. A
-  line of such a deck whose ends are all fixed or anchored is sub-stepped, `staggered
-  bodyScheme` sub-steps them all, and the standalone driver notes the exclusion once per run.
-  `False alpha_force_blend` (paper mode) turns it off unless the deck sets it, so the paper
-  reproduction is unchanged. A step that triggers costs its plain step and usually four
-  sub-steps, at most the plain step and three passes of `ei0_substep_max` sub-steps (49 line
-  solves at the default), and that once for every sub-step where bodies or rods sub-cycle the
-  lines (`staggered bodyScheme`, coupled runs); the OpenMP loop over the lines of a system
-  hands them out dynamically, which leaves every line's result unchanged. The standalone
-  driver reports the sub-stepped steps per line ("solved N of the M line step(s) it
-  examined"), OpenFAST and FAST.Farm print the counts (steps sub-stepped, largest count, steps
-  that needed more than `ei0_substep_max`, steps that kept the plain step) at the end of the
-  run, and `CD_AGG_Get_Substep_Counts` returns them to an aggregate host as 64-bit integers.
-  Only committed steps count: a step rolled back and taken again (a line-system halving, a
-  stall recovery, a corrector or a junction iteration) counts once. Over the shipped examples
-  19 of the 21 `EI = 0` dynamic decks are unchanged bit for bit; in the two `als_volturnus`
-  line-break decks the pre-failure anchor snap at 250 s, a single-step peak at `dtM` 0.05 s,
-  moves from 2.145 to 1.918 MN (1.963 MN converged) and from 2.262 to 2.158 MN (2.334 MN
-  converged), with the other tension statistics within 0.02 %. The 20-run Lozon mooring
-  envelope at `dtM` 0.1 s takes 1.67 times as long (1.6 to 2.5 times on the 5 m / 7 s and
-  10 m / 14 s motions; the steps that do not trigger cost only the measurement), and the
-  examples whose steps never trigger run as before. Of the reproducers of the force-blend
-  entry below, the semi-taut chain–polyester leg in 15 m surge now peaks at 4.65 MN at the
-  anchor at `dtM` 0.05 s (5.74 MN before, 4.6 MN at 0.0025 s), the Syrope line at 1.81 MN
-  (1.64 MN before, 1.78 MN at 1 and 2.5 ms), the lightly damped viscoelastic light cable at
-  0.062 MN at the anchor (0.085 MN before, 0.082 to 0.095 MN at 0.5 to 2.5 ms; its snap is not
-  resolved at 0.1 s, and over seven runs whose amplitude differs by up to 3e-4 it peaks at
-  0.056 to 0.079 MN with the sub-steps and 0.056 to 0.085 MN without) and the shipped
-  viscoelastic polyester at 1.80 MN as before (in its steps recovered after a stall, taken as
-  given, a segment now turns by up to 2.0° per solver step, which the run notes); the light
-  cable stays at 0.092 / 0.106 MN at `dtM` 0.1 s and its largest segment tension at `dtM`
-  0.01 s moves from 0.107 to 0.095 MN. Its fairlead and anchor peaks at `dtM` 2.5 ms move from
-  0.099 / 0.091 to 0.102 / 0.119 MN, and on the stiff seabed at `dtM` 0.05 s from 0.52 / 0.67
-  to 0.62 / 0.86 MN. None of these is a converged peak: the undamped `EI = 0` cable has no
-  converged snap peak (see the force-blend entry below; converged finite-EI runs give 0.093 /
-  0.057 MN). At a step that does not resolve the axial wave the sub-steps resolve more of the
-  segment rattle of this undamped cable and can raise isolated spikes, as its anchor peak at
-  2.5 ms shows. At `dtM` 0.5 ms, where the step resolves the wave, the cable takes no sub-step,
-  with or without physical axial damping (`BA` 5.06e5 N·s), and its results equal those taken
-  as given bit for bit; without the axial-wave condition on the snap trigger `auto` sub-stepped
-  8081 of the 60000 steps of that run and raised its anchor peak from 0.116 to 0.52 MN. `ei0_substep_max` and `ei0_substep_angle` do not change these runs. Validation:
-  the Bergdahl matrix at its 0.3125 ms step resolves the axial wave over a segment and takes no
-  sub-step, so its maxima are unchanged bit for bit (RMSE 1.58 N, MAPE 3.13 %, Pearson 0.993,
-  Lin concordance 0.989); of its refinement runs the 0.1 m mesh moves the T = 1.25 s mean
-  cycle maximum from 68.33 to 68.35 N (largest mesh-halving change 0.52 % to 0.56 %) and the
-  0.625 ms step from 72.2 to 69.5 N. The WD0050/A2 cell of the L2-2 parity moves within its
-  recorded range (largest OrcaFlex summary difference 0.091 to 0.093, MoorDyn-C metric 0.078
-  to 0.076); the other L2-2 cells, the one-hour VolturnUS-S record, the L3-2 regular-wave
-  comparison and the snap-load verification are unchanged bit for bit (the latter two step
-  the generalised-α kernel directly). `off ei0_substeps` gives the previous results bit for
-  bit.
-- Finite-EI node tension, curvature and bend moment are recovered from nodal equilibrium. The
-  `Ten<L>N<J>`, `Curv<L>N<J>` and `BendMom<L>N<J>` channels, the `Tension`, `Curvature` and
-  `BendMoment` columns of the static profile and the range graph, and the `.t.out` segment
-  tensions of a finite-EI line had used the element-mean axial force `EA(|r'| - 1)` and the
-  exact one-sided curvature of the element interpolation. With a stiff `EA` that axial force
-  oscillates between elements wherever the line bends over an element (the nodal seabed
-  reaction near touchdown, a section junction), and it exceeds the tension by `EI kappa^2` on
-  any mesh. The outputs now come from the element end forces, each element with its own
-  distributed loads and inertia: the effective tension is the axial component of the section
-  force, the bend moment the moment the neighbouring elements carry, and the curvature that
-  moment over `EI`. The derivation is in the manual's theory page (Node tension, curvature and
-  bend moment). On the lazy-wave cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` on its
-  former 87-element mesh the static interior node tension now stays between 1217 N and the
-  11.9 kN fairlead tension instead of dropping to -173 N. Against the equilibrium of the
-  converged line, the largest error falls from 1552 N to 60 N at that mesh, from 2059 N to
-  12 N, 1921 N to 1 N and 516 N to 0.3 N at twice, four times and ten times the mesh density, and from 164 N to
-  1 N at 0.25 m elements. The largest curvature error falls from 64 % to 30 %, 44 % to 7 %, 19
-  % to 4 % and 2.1 % to 0.8 % of the peak. Under an 8 m surge and 2 m heave of the hang-off,
-  the error of the maximum-tension envelope against a 1 m mesh falls from 2164 N to 857 N, 1488
-  N to 283 N and 3049 N to 31 N, and the minimum tension of the run from -719 N to +610 N at
-  that mesh. A `.t.out` segment tension is now the mean of the axial components of the
-  element's two end forces instead of the axial resultant at its midpoint. The library
-  curvature (`CD_HermiteCable_Dyn_Curvature`, `CD_HFMF_Curvature`) follows the same definition
-  as the channels. A section softer than `max(|w| L0^2)/12` times 1 m (about 1.3 kN m^2 for the
-  10 m elements of that cable) takes its curvature from the exact geometric trace, as an
-  `EI = 0` section does: the recovered moment carries an error of that order whatever `EI` is,
-  which `Curv = BendMom/EI` would amplify (6.9 1/m against 0.12 1/m at `EI` = 100 N m^2).
-  Line-end values (`FairTen`, `AnchTen`, the end-node tension; the end reaction, without the
-  inertia, added mass and seabed friction that the recovered section forces of the interior
-  nodes include), positions and the material-strain checks (`tensile_safety`, the static
-  compression notes) are unchanged. At a `Fixed` anchor resting on the seabed the end element
-  carries the floor-support share of its weight, as in the residual, so the end node reports
-  the bend moment of the line (0.02 N m, not 903 N m, at the anchor of the 87-element cable of
-  `examples/iea15mw_umaine_mixed_cabledyn.dat`, and 0.1 N m, not 205 N m, at the next node; on
-  the example's 248-element mesh 0.1 N m and 1.5 N m, the bend of the laid run sinking into the
-  penalty seabed beside the anchor held at the seabed depth). On
-  a line restrained in torsion the condensed torque is left out of the recovery; it moves the
-  tension by at most 0.45 N of 9.4 kN on `examples/torsion_lazy_wave_hangoff_twist.dat`. Range
-  graphs and `.t.out` files written every step cost 4 % more run time, plain channels under 2
-  %. `OutputRecovery element` restores the previous definitions. The T-6 record of
-  `VALIDATION.md` (twisted lazy wave against OrcaFlex), which reads the static-profile
-  curvature, moves from 0.056 % to 0.049 %. The curvatures of the one-hour coupled full-turbine
-  run in its coupled finite-EI touchdown row (0.156 1/m at the sag bend, 0.109 1/m at the
-  touchdown) were recorded with the previous definition and are marked as such, as is the
-  static sag-bend curvature of the Hs = 11 power-cable case of
-  `validation/OPENFAST_DLC_VERIFICATION.md`, which now also gives the recovered values. The other
-  records use end tensions or the exact geometric curvature
-  (`CD_HermiteCable_Dyn_Curvature_Exact`) and are unchanged.
-- The touchdown point (`TDP<L>` channels and `cabledyn.touchdown_history`) is located inside
-  the element by the parabola through the last grounded node and the next two nodes instead of
-  the linear clearance between the last grounded node and the next. On a stiff seabed the
-  linear interpolation held the TDP on the last grounded node until the next one grounded, so
-  the TDP moved in steps of one element and, under a small motion, jumped by an element and
-  back. The parabola reaches a node exactly when the node grounds or lifts off, so the TDP moves
-  continuously. On a 450 m finite-EI cable under a 10 m fairlead surge, the largest step between
-  output rows falls from 4.64 m to 0.08 m with 5 m elements and from 1.98 m to 0.08 m with
-  2.5 m elements, and the largest error against a 1 m mesh from 2.96 m to 1.92 m and from
-  1.39 m to 1.18 m; under a 0.5 m surge the quasi-static TDP excursion with 1 m elements is
-  0.63 m against 0.64 m converged, where the linear interpolation gave 0.23 m. On the
-  `EI = 0` chain of `examples/chain_range_tdp.dat` the largest step falls from 2.59 m to 1.33 m.
-  The TDP now lies on the contact-onset height, and `TDP<L>Grd` uses the same location.
-- Active tensioning (`CONTROL`) of an `EI = 0` line now stops the run when a command leaves
-  MoorDyn-F's bounds, as MoorDyn-F does: with `UnstrLen` the line's unstretched length and N its
-  number of segments, a `DeltaL` above `UnstrLen`/N or below −0.5 `UnstrLen`/N, the comparisons
-  MoorDyn-F makes, so a command MoorDyn-F accepts is accepted (on a line of one section
-  `UnstrLen`/N is the controlled segment's initial length). The message names the channel, the
-  line, the command and the bound. A command beyond these bounds had printed a one-time warning
-  and been applied. A command within the bounds that would make the controlled segment of a
-  line of several sections non-positive also stops the run. Finite-EI cables take the same
-  bounds. Every row is checked before any line changes, and a row that still fails takes back
-  the lines the command had already changed, so a refused command changes nothing.
-- Faster wave kinematics of directional and multi-train seas (`wavetrain` rows, spectral
-  `waves` rows, `WaveSpreading`). Each component's phase cosine is now computed once for the
-  surface elevation and the kinematics, and its depth profile with one exponential instead of
-  two. `examples/chain_two_train_sea.dat` runs 17 % faster with the release build. The formulas
-  are unchanged. With gfortran the results are bit-identical. With the Intel compiler of the
-  release, which had computed the second cosine through a fused sine/cosine evaluation, they
-  can differ in the last printed digit.
-- Faster monolithic body steps with a finite-EI cable clamped or elastically connected to a
-  body or rod. The cable's finite-difference columns of the junction Jacobian, each of which
-  re-steps the whole cable, are now kept and reused across steps like the mooring lines'
-  condensed tangent. They are rebuilt when 20 steps old, after a step that needed more than two
-  outer iterations, when the step size changes, and from the third outer iteration of a step.
-  `examples/buoy_clamped_cable.dat` runs 66 % faster with the release build, with the same
-  outer iterations per step. The junction converges to the same tolerance, so results differ
-  only within it, and by no more than the tolerance already allowed against a tightly converged
-  run: tensions by about 2e-6 relative and the body position by under 1 µm.
-- The OpenFAST linearisation check (`validation/scripts/openfast_lin_ab.py`) now compares
-  CableDyn's quasi-static mooring stiffness entry by entry with stock MoorDyn's zero-frequency
-  reduction `D - C A^-1 B`, and fails above 0.5 %. It writes the `.lin` files with the
-  full-precision `OutFmt` `ES24.15E3`, lets MoorDyn settle its initial condition, and
-  linearises at t = 0. Its default case is the `examples/openfast` IEA-15 UMaine twin. On
-  that case the per-fairlead stiffness agrees to 0.07–0.10 % (0.29 % for the transverse
-  term), and the platform 6 × 6 diagonals agree to 0.10 % or better. The earlier record had
-  called MoorDyn's reduction unusable; with the 4-digit default `OutFmt` the same case
-  reproduces that asymmetric reduction, so the check now refuses a reference written below
-  full precision. VALIDATION.md and the OpenFAST page of the manual are updated.
-- The FAST.Farm shared-mooring comparison with stock MoorDyn now covers 600 s of the r-test
-  `MD_Shared` farm (`validation/scripts/fastfarm_shared_ab.py`): tension means agree to 0.02 %,
-  extremes to 0.25 %, and platform motions to millimetres. The migration guide now says that on
-  a line with no `Fixed` end `FairTen` and `AnchTen` name the opposite ends from MoorDyn's.
-- The power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` is meshed to the
-  half-bending-length rule: 248 elements (2 m, 2.5 m and 2.5 m in its three sections) instead
-  of 87 (4 m, 4 m and 10 m). On the 10 m grounded elements the touchdown was under-resolved and
-  the static state, solved in the vertical plane of the cable, was unstable out of that plane.
-  The static fairlead tension of the cable changes from 11 898 N to 11 922 N (11 921 N on a
-  1 m mesh), its anchor tension from 1218 N to 1230 N, and the touchdown curvature from
-  0.058 1/m to 0.079 1/m (0.080 1/m on the 1 m mesh; the geometric curvature, which
-  `OutputRecovery element` reports, while the curvature recovered from nodal equilibrium reads
-  0.100 1/m on the 87-element mesh and 0.081 1/m on the 248-element one). The curvature output
-  moves with the mesh: `Curv4N20`/`BendMom4N20` (76 m from the hang-off) become
-  `Curv4N38`/`BendMom4N38` (74 m, the peak of the sag bend). In the one-hour full-turbine run of
-  the validation record the hang-off tension statistics are unchanged (11.5 ± 1.1 kN), the
-  touchdown curvature (geometric) peaks at 0.109 1/m instead of 0.075 1/m, and the anchor
-  tension stays at its static 1.23 kN, where the coarse mesh showed stick-slip peaks up to 4.1 kN. The validation record and the tutorials
-  are updated.
-- Faster tension-only (`EI = 0`) line steps. In every Newton evaluation the element kernels of
-  the line loads (axial damping, Morison drag, Froude-Krylov, buoyancy recovery, added mass) no
-  longer re-check, element by element, data the line model validates when it is set; the
-  Froude-Krylov and added-mass kernels check their section data once instead of three times;
-  the velocity Jacobians of the Froude-Krylov and buoyancy loads, which are zero, are no longer
-  added into the band; a step reuses the consistent-mass band of the previous one while the
-  lengths and masses are unchanged; and the Newton solve no longer rescans a matrix already
-  checked finite. With the release build, `examples/als_volturnus_line_break_time.dat` runs
-  13 % faster and `examples/spar_pinned_rods.dat` 13 %. Every input error is reported as
-  before. With gfortran the results are bit-identical. With the Intel compiler of the release
-  they can differ in the last printed digit, and by more where a deck amplifies round-off.
+- Finite-EI node tension, curvature and bend moment (and `.t.out` segment tensions) are now
+  recovered from nodal equilibrium. On the lazy-wave example the largest tension error falls from
+  1552 N to 60 N on its former 87-element mesh, and oscillations near touchdown on a coarse mesh
+  are removed. End tensions and positions are unchanged. `OutputRecovery element` restores the
+  previous definitions.
+- `EI = 0` lines step with a generalised-α force blend, as finite-EI lines do. Tension spikes of
+  lines that go slack are gone: a light cable under 3 m heave reported 4.2 MN where converged
+  runs give 0.093 MN. Tension statistics of the shipped examples change by at most 0.23 % (mean)
+  and 0.9 % (maximum). `False alpha_force_blend` selects the former scheme.
+- Active tensioning of `EI = 0` lines follows MoorDyn-F through length ramps: fairlead tensions
+  within 0.13 % instead of up to 6.3 %. A command outside MoorDyn-F's bounds stops the run
+  instead of printing a warning, and the command acts on the segment at the host-driven
+  (fairlead-side) end, as in MoorDyn-F.
+- In OpenFAST, a deck without `dtM` now solves every glue step (`dtM = DT`) instead of about
+  every 0.1 s, so the mooring loads reach the platform without delay. A deck `dtM` that is a
+  multiple of `DT` still trades this for speed (see Known issues).
+- The touchdown point (`TDP<L>`) now moves continuously instead of in steps of one element.
+- Finite-EI statics refine the mesh locally instead of as a whole, which cuts solve time (for
+  example 10.0 s to 0.33 s on a 462-element lazy wave). Decks that do not refine are unchanged.
+- The power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` is re-meshed from 87 to 248
+  elements. Its static fairlead tension changes by 0.2 %.
+- Faster runs: directional and multi-train wave kinematics (17 %), finite-EI cables clamped to
+  bodies or rods (66 %), and decks of `EI = 0` lines (13 %). Results can differ in the last digit
+  with the Intel compiler.
+- The OpenFAST linearisation check and the FAST.Farm shared-mooring comparison against MoorDyn
+  are extended: per-fairlead stiffness agrees to 0.1 % (0.29 % for the transverse term) and
+  shared-mooring tension means to 0.02 %.
 
 ### Fixed
 
-- Seabed contact in the explicit object sub-step estimate. The staggered march of free and
-  pinned rods and Rigid6 bodies (the coupled OpenFAST and C API routes, standalone rod decks and
-  `bodyScheme staggered`) applies the seabed penalty springs explicitly, but sized its sub-steps
-  from the lines, hydrostatics and (pinned rods) the swing only, so a rod or body resting on a
-  stiff seabed at a large coupling step could exceed the central-difference limit and be thrown
-  off the bed. The estimate now adds the contact springs that can act within the step
-  (`kBot d dl` per rod contact station, `kBot` over 1 m² at a body's reference point), in
-  heave, roll and pitch about the reference point, or about the pin of a pinned rod at both pin
-  poses. A station counts from its complete rigid-body motion: its reach
-  `dt |v + w x s| + dt² (|a| + |alpha x s| + |w|² |s| + g)/2` bounds its travel in every
-  direction, and it counts when its height above the highest floor within that horizontal
-  distance (the depth on a flat seabed; on a `bathymetryFile` grid the highest node of the
-  overlapped cells, raised for the crease rounding by the new `CD_Bathymetry_Max_Floor`) is at
-  most the reach plus the rod radius, so a rod sliding or turning towards a shallower bed is
-  covered as well as one landing. The monolithic scheme, which carries the contact in its
-  Jacobian, is unchanged. No shipped example or existing test changes its sub-step count.
-- Line-free explicit object marches without a sub-step estimate. A standalone deck without lines
-  marched its bodies and rods by the explicit central difference at `dtM` with no sub-steps, and
-  the `bodyScheme staggered` multibody march skipped the bodies (and rods) when no `EI = 0` line
-  was present (finite-EI cables only), so a short pinned rod or a body on a stiff seabed could
-  exceed the explicit limit there. Both now take the estimate from the objects' own terms
-  (hydrostatic restoring, seabed contact, a pinned rod's swing about its pin), and the staggered
-  multibody march sizes a pinned rod as the coupled route does: its line springs through their
-  arms from the pin on its inertia about the pin, plus its swing and contact about the pin. A 1 m
-  dry pinned rod at `dtM = 0.6 s` (`omega0 dt = 2.29`) now takes 6 sub-steps on both routes and
-  equals a `dtM = 0.1 s` run at every row, where it previously turned over. No shipped example
-  or existing test changes its sub-step count.
-- Further terms of the explicit object sub-step estimate (coupled and C API routes, standalone
-  rod decks, decks without lines and `bodyScheme staggered`; the monolithic scheme is
-  unchanged): a rod near the free surface adds its waterplane stiffness (`rhoW g D dl` at each
-  station whose section can cross the surface within the step, `rhoW g pi D^2/4` where its axis
-  can cross it) and takes its dry inertia, for free and pinned rods and the rods fixed to a
-  Rigid6 body, so a floating rod (a 5 cm rod at `omega dt = 2.2`) no longer grows; a finite-EI
-  cable on a body or rod of the staggered march adds its attachment spring (`EA/L` along its end
-  force, `T/L` across), as the explicit cable end force needs; a rod pinned to a body takes the
-  body's pin acceleration and a reduced-mass lower bound of its inertia about the pin; a step
-  that would need more than the 256-sub-step cap is warned about once per run. Of the existing
-  tests, only the staggered pinned-cable deck of `clamped_cable_ends` changes (10 steps now
-  sub-cycled 2 to 5 times; printed results unchanged); no shipped example changes.
-- Seabed friction of rods and Rigid6 bodies is applied implicitly. The regularised friction
-  `-mu N v/sqrt(v^2 + vreg^2)` (`vreg = 1e-3 m/s`) is a damper of up to `mu N/vreg`, far stiffer
-  than any practical step, and was evaluated explicitly, so a rod or body resting on a
-  frictional bed chattered (velocity and friction flipping every step). It now enters the
-  implicit velocity derivative of the step as its secant coefficient `mu N/sqrt(v^2 + vreg^2)`,
-  as the line nodes treat it implicitly: a rod held in a cross current holds still (creep at
-  `vreg F/(mu N)`) where it slid back and forth at a few mm/s. This changes the results of decks
-  with rods or bodies on a frictional seabed; none of the shipped examples or existing tests has
-  one.
-- Node output channels of a finite-EI line whose mesh the static solve refined read the wrong
-  node, silently. `Ten<L>N<J>`, `Curv<L>N<J>`, `BendMom<L>N<J>`, `L<L>N<J>p/v/a{x,y,z}`,
-  `L<L>N<J>Dec`/`Azi`, `Torq<L>N<J>` and `Twist<L>N<J>` name a deck node (1 + the total
-  `NumSegs` of the line's sections) and are checked against that count, but after an automatic
-  refinement (adaptive, stability or curvature refinement) they reported node `J` of the refined
-  mesh. On the lazy-wave cable of `tests/data/lazy_wave_touchdown_planar_coarse.dat` with its top
-  section cut from 20 to 4 elements (refined from 71 to 1136 elements), `Ten4N34`, the deck node
-  at the 220 m touchdown, reported 5488 N, the tension at 41 m from End A, against 1544 N, and
-  `BendMom4N54`, on the seabed at 420 m, 1214 N·m against 0. Each refined line now maps its deck
-  nodes onto the final mesh by their unstretched arc length from End A (an exact match, which
-  does not assume a uniform refinement; a deck node not on the mesh fails closed), and the node
-  channels read deck nodes on every route: standalone static and dynamic cubic-Hermite, mixed
-  `EI = 0` + finite-EI, multibody, OpenFAST and the C API `CableDyn_EvalChannel`. `.static.out`,
-  the range graphs, the per-line files and `CableDyn_GetLineValues` still list every node of the
-  refined mesh; `.static.out` then carries a `DeckNode` column naming the deck node of each row
-  (0 for a node the refinement added), `.Line<L>.p.out` a `# DeckNode` comment line (also on the
-  multibody march, which writes no `.static.out`), and the new C API quantity
-  `CD_C_LINE_DECK_NODE` (10) of `CableDyn_GetLineValues`, Python `Line.deck_nodes`, gives the
-  same numbering in process. The Python `StaticProfile.deck_node_arc_lengths`,
-  `LineNodeHistory.deck_nodes`, `node_range_graph`, `profile_at`/`profiles_at` and
-  `line_range_graph` place main-output node channels at their deck node, from a static profile,
-  a per-line position file or `LinePositions` read from one. `EI = 0` lines are never refined, and every output of a deck whose meshes are
-  not refined is unchanged. See the manual's output reference (Node channels on a refined line).
-
-- Tension spikes of tension-only (`EI = 0`) lines that go slack. The generalised-α step evaluated
-  the axial force and the dynamic loads at the blended configuration
-  `q_α = (1 − α_f) q_{n+1} + α_f q_n`. A segment that was slack at the start of a step and
-  carries tension at `q_α` then ends the step stretched beyond it,
-  `q_{n+1} = (q_α − α_f q_n)/(1 − α_f)`, and a segment going slack within a step returned more
-  work to the motion than its strain energy. Both happened silently at the default
-  `rhoInf = 0.4`, at every `dtM` from 0.002 to 0.2 s, on realistic input: a light, axially stiff
-  cable (80 kg/m, EA 8e8 N) under 3 m heave reported 4.2 MN at the fairlead and 3.4 MN at the
-  anchor (`dtM` 0.0025 s) and 20 MN at the anchor (`dtM` 0.1 s), where converged finite-EI
-  runs of the same cable give 0.093 MN at the fairlead and 0.057 MN at the anchor; the same
-  cable in an `Hs`
-  8 m JONSWAP sea 0.41 MN at the anchor against 0.043 MN; the shipped viscoelastic polyester in
-  15 m surge 2.69 MN against 1.80 MN; a semi-taut chain–polyester leg 9.5 MN at the anchor
-  against 4.6 MN; and a line on a stiff seabed failed the plausibility guard. The step now blends
-  forces, `(1 − α_f) r(q_{n+1}, v_{n+1}) + α_f r(q_n, v_n)`, as the finite-EI path does, for the
-  axial force and every dynamic load (damping, viscoelastic and Syrope laws, seabed, drag,
-  Froude–Krylov, buoyancy; added mass stays at `q_α`). The step-start force is evaluated afresh
-  at the committed state, so no state is added and restarts stay exact. An element that
-  releases within a step returns at most its strain energy over the step, so a release can no
-  longer create energy. Its step-start force acts along its step-start chord for the whole step,
-  so the cap takes the shortening projected on that chord, which a segment that turns as it goes
-  slack exceeds by far (a nearly unstretched segment turning by 90° would otherwise return
-  hundreds of times its strain energy), and it fades out continuously as the end state crosses
-  the rest length. The viscoelastic and Syrope segments are capped the same way with the tension
-  of their law, their end tension estimated with a secant stiffness bounded by the law's axial
-  stiffness, so that damping carried at a vanishing stretch does not make the cap switch
-  abruptly (the same cable made lightly damped viscoelastic peaks at 0.085 MN at the anchor at
-  `dtM` 0.1 s, a snap that step does not resolve, against 0.145 MN without the cap on its
-  segments and 0.082 to 0.095 MN at 0.5 to 2.5 ms). An elastic segment with axial damping
-  keeps the step-start dashpot force along its old chord too; where its end state is slack, or
-  taut by less than `α_f/(1 − α_f)` of its stretch, the cap covers that force as well, crediting
-  the dashpot's end share, so that the whole blend of a segment ending slack returns at most its
-  strain energy unless that end share alone returns more (in the test chain it returned up to
-  2750 times that with only the elastic share capped); a damped segment that ends taut beyond
-  that band keeps the plain force blend. A damped segment slack at the step start keeps its
-  step-start dashpot force under a cap too, so that this kept share returns at most the
-  dashpot's own one-step dissipation `T_d,n |l̇_n| Δt` plus the end share's credit (up to 46
-  times that in the test chain before). The seabed contact of
-  a node that lifts off within a step is not capped (see the manual's theory page). At the
-  default `rhoInf` the light cable now peaks at 0.10 / 0.09 MN at `dtM` 0.0025 s and at 0.092 /
-  0.106 MN at 0.1 s, the same cable in the JONSWAP sea at 0.075 / 0.043 MN and the
-  viscoelastic polyester at 1.80 MN, as at 0.0025 s; the stiff-seabed line runs to completion.
-  The light-cable figures are not converged peaks. The undamped `EI = 0` deck has no converged
-  snap peak: the peak rises as `dtM` falls (0.32 to 0.46 MN at microsecond steps, also with an
-  explicit lumped-mass solver), as single segments rattle, and falls with mesh refinement at a
-  fixed `dtM`; its 20 ms averages converge to 0.083 / 0.047 MN, the slack-to-taut event, and
-  converged finite-EI runs give 0.093 MN at the fairlead and 0.057 MN at the anchor. On the
-  stiff seabed the `EI = 0` peak does not converge either (0.74 to 0.95 MN at coarse steps,
-  1.2 to 1.4 MN at 0.025 to 0.05 ms). The
-  chain–polyester anchor snap peaks at 5.7 MN at `dtM` 0.05 s, a single-step peak (4.6 MN at
-  0.0025 s) that the new snap note reports. On a linear element the scheme is unchanged, so taut
-  lines keep their accuracy: every MoorDyn-C, OrcaFlex, analytic and experimental comparison that
-  runs locally still passes, and its reported error moves by at most 0.35 percentage points (the
-  minimum fairlead tension of the one-hour VolturnUS-S record, 0.15 % to 0.50 %; the snap-load
-  peak at 20 ms improves from 2.76 %, published as 2.7 %, to 1.5 %; see VALIDATION.md). Every
-  `EI = 0` dynamic output changes. Over the shipped examples the statistics of the tensions
-  change by at most 0.23 % (mean) and 0.9 % (maximum), except the two `als_volturnus` decks,
-  whose pre-failure anchor snap at 250 s is resolved by one or two samples and peaks 10 % lower.
-  Static runs and finite-EI lines are unchanged. The step costs up to 6 % more wall time on
-  `EI = 0` dynamic decks (one more force evaluation per step and about 4 % more Newton
-  iterations). `False alpha_force_blend`, which until now applied to finite-EI lines only,
-  selects the former scheme for `EI = 0` lines as well. Lines that the C API builds without a
-  deck (`CableDyn_InitLine`, `CableDyn_InitLines`) always take the force blend. The figures
-  of this entry take every step as given, as `off ei0_substeps` now does; the rotation- and
-  snap-resolved sub-steps of the default (under Changed) move the snap peaks among them, for
-  example the chain–polyester anchor to 4.65 MN and the viscoelastic light cable to 0.062 MN.
-- `modified_newton` on `EI = 0` lines (with or without the force blend, so also under
-  `False alpha_force_blend`) rebuilds the tangent when an iterate reduces the residual by less
-  than a factor four, as the manual states; it had kept the first tangent for the whole step,
-  which a slow linear contraction could exhaust (30 iterations at the start of the 5 m heave
-  cells of the L2-2 parity test with the force blend).
-- Active tensioning (`CONTROL`) of an `EI = 0` line now changes the segment at the line's
-  fairlead-side end, the end on a host-driven point (`Coupled`, `Vessel`, `Turbine<J>`,
-  `Body<N>` or a `Coupled`/`Vessel` rod end), and the segment at the `NodeB` written in the
-  deck when both or neither ends are host-driven, as MoorDyn-F does for a deck in its own order.
-  It had always changed the segment at CableDyn's End A, the `NodeA` of a line that the
-  automatic anchor-first swap leaves in deck order. Two kinds of line change: a line kept in
-  deck order whose only host-driven end is its `NodeB`, such as a stock-order
-  `Connect`-to-`Vessel` clump leg or a line from a `Fixed` anchor to a coupled rod end, now
-  controls the segment at the host-driven end instead of the one at its `NodeA`; and a line
-  with both or no host-driven ends that the swap leaves in deck order, such as a
-  `Connect`-to-`Fixed` or `Connect`-to-`Connect` line, a `Fixed` hang-off above a
-  `Free`/`Connect` point, or a line between two vessel points, now controls the segment at its
-  `NodeB`. Lines from a `Fixed` anchor to a `Coupled`, `Vessel` or `Body<N>` point,
-  written in either order, and lines written fairlead first from a host-driven `NodeA` control
-  the same segment as before.
-- Active tensioning (`CONTROL`) of `EI = 0` lines no longer lags behind the commanded length
-  on a pay-out or haul-in ramp. A length update had re-derived the committed acceleration
-  under the new length, and the next generalised-α step evaluated its blended configuration
-  with the new length only, so the force of each length change entered the committed side of
-  the blend. The committed state now keeps its acceleration and the lengths and rates it was
-  reached with, and each share of the step after a change takes the lengths of its own time
-  level. With the force-blended step (the default), the step-start force is evaluated at the
-  committed lengths and rates: the internal force, every dynamic load, every step-start
-  quantity of the release cap (stretch, tension, secant and law stiffness, dashpot tension, and
-  the one-step dissipation budget of a dashpot slack at the step start),
-  and the distributed external load and seabed coefficients those lengths give; the cap's
-  end-state quantities take the new lengths; the end-of-step force takes the new lengths, and the inertia (the
-  structural and added mass, which the force blend keeps at the α level) the blended ones.
-  Under `False alpha_force_blend` the step blends the old and new lengths with the
-  configuration. An acceleration re-derived between a command and the next step, as a host
-  state update does, is solved at the committed lengths, as the step evaluates its committed
-  side, and leaves them committed. On a taut line paid out at a tension change of 1 N per step,
-  the tension follows the closed form to 1.8 mN at `rhoInf` 0.4 and 0 alike (the start-up
-  transient), where a step-start force at the new lengths lags by 2.6 N. In
-  the coupled OpenFAST comparison with stock MoorDyn (`validation/scripts/activetension/`), the
-  controlled fairlead tensions had run up to 97 kN (4.1 %) above MoorDyn during the pay-out and
-  148 kN (6.3 %) below it during the haul-in, at `rhoInf` 0.4 and still 58 kN and 89 kN at
-  `rhoInf` 0; they now stay within 3 kN (0.13 %). The hold tensions, which the published
-  comparison scores, move by less than 0.01 %, and the scorer now also gates the ramps.
-  This change leaves runs without `CONTROL`, and a zero command, bit-identical. A checkpoint restart
-  re-applies the restored command as the committed state's, so a restart during a ramp
-  continues bit-identically. A step that `ei0_substeps auto` solves in sub-steps spreads the
-  length change over them: the committed lengths are part of the state each pass starts from,
-  each sub-step ends at the lengths and rates interpolated linearly in time (the last at the
-  new ones), and the trigger takes the step-start tensions at the committed lengths. On a line
-  turning by 2.3° per step and paid out at 0.05 m/s, the sub-stepped march equals one taken as
-  given at a quarter of the step to 3e-8 N; applying the whole change in the first sub-step
-  departs from it by 22 N.
-- Failure messages are no longer cut off by fixed-size buffers. The tensile qualification
-  failure of a dynamic step ended mid-advice (`... at element 64, xi= 0.5000; increase`) because
-  the buffers that carried it from the Hermite cable through the OpenFAST module and the deck
-  driver held 200, 300 and 256 characters. Every message buffer of the solver chain, the
-  C API handle (now 4096 characters; `CableDyn_GetLastError` still truncates to the caller's
-  buffer, and the Python binding reads 4097 bytes), the standalone driver and the OpenFAST
-  glue is now long enough for the longest diagnostic. A list that can outgrow its buffer (the
-  seed notes of a failed `EI = 0` static solve, the initialisation notes of a line) ends with
-  "further ... notes omitted" instead of stopping mid-note. Results do not change.
-- A neutrally buoyant line is named as such. A finite-EI line whose net weight is zero and that
-  is longer than its span was reported as "the net-heavy line is too long for its span to hang
-  as a catenary", which is not the cause; the message now says the line is weightless, has no
-  catenary, and could only bow under axial compression, and advises shortening it to its span
-  or giving it weight or tension. An `EI = 0` line type rejected as net-buoyant (dry mass not
-  above the displaced water mass, the unchanged rule) whose mass lies within a relative 1e-6 below
-  the displaced mass is now named neutrally buoyant, "weightless and slack: its static shape is
-  indeterminate", with the advice to give it weight or a finite EI and a tension. The Python deck
-  reader words it the same way. No line type is accepted or rejected differently.
-- A line stretched far beyond its elastic range now says so. A line 50 % shorter than its span
-  converged at 100 % strain and 1.2 GN with no message, because `maxStrain` guards only the
-  dynamics. The initialisation report notes the static fairlead strain (tension over the EA of
-  the End A section) of every line, `EI = 0` or finite-EI, above `maxStrain` when the option
-  is given and positive, and above 10 % otherwise (`0 maxStrain` disables only the dynamic
-  guard). Only a note: the equilibrium and the outputs are unchanged.
-- A section too coarse for its line is warned about. The coarse-mesh warning fired only for a line
-  with fewer than three segments in all, so a 100 m one-segment top section on a 520 m line
-  (fairlead tension off by 50 %) passed silently. Every section whose segments are longer than
-  1/8 of the line (coarser than a uniform eight-segment line, however the line is split into
-  sections) now gets a warning, for `EI = 0` and finite-EI lines, in the single-topology driver
-  and in the standalone mixed route. No example deck is affected.
-- Rejection messages name the unsupported capability and the workaround. An `EI = 0` line
-  between two Coupled points suggests splitting it at a `Connect` point, and a finite-EI one,
-  which that split does not admit, says to anchor it or model the span with `EI = 0` lines; a
-  finite-EI cable ending on a `Connect`/`Free`/`Coupled` point, or on a Coupled End A that a deck
-  with `Connect`/`Free` points cannot drive (it would need `motionFile` coupling), names the point
-  and what the route supports; the "this coupled mode runs the mooring in
-  STILL WATER" rejection of deck waves or current now names the route that rejects it (a
-  standalone mixed deck, which is not coupled, or FAST.Farm) and gives that route's remedy (an
-  all-`EI = 0` or all-finite-EI deck, or OpenFAST with SeaState; in FAST.Farm, removing the
-  OPTION); an anchor below the seabed by more than the
-  tolerance gives the depth, the tolerance rule, and the Z to use. These messages change no
-  acceptance rule.
-- `Free` and `Connect` points (clump weights, buoys) and `Point3` buoys now have their own
-  seabed contact. Until now only the end nodes of the attached lines held a point on the
-  seabed, over their tributary length, so a heavy clump sank silently into it: a 50 t clump
-  between two polyester lines ended 2.8 m below the seabed, a 20 t clump on chain 1.0 m. A
-  point with `Mass` or `Vol` (a `Point3` buoy: its BODY `Mass` and `Vol`) now rests on a
-  footprint `A = V^(2/3)` (`V` = `Vol`, or `Mass`/7850 kg/m³ for a clump declared by its mass
-  alone), the face area of a cube of its volume, with the line contact law, stiffness `kBot·A`
-  and damping `cBot·A`, along the surface normal on a bathymetry, in the point static
-  equilibrium (which does not place a `Point3` buoy) and in the monolithic, staggered and
-  OpenFAST/C API point steps. The 50 t clump now rests 0.95 m deep (its weight alone presses
-  its 3.44 m² footprint in by 1.43 m) and the 20 t clump 0.67 m. The point routes still reject
-  `frictionMu`, so the contact is frictionless. Formal OpenFAST linearisation of a deck with a
-  `Point3` buoy now fails closed by name, like a deck with Rigid6 bodies or rods: its
-  quasi-static re-solve held the buoy at its deck position. Results change only where a point touches the seabed: of the examples only
-  `clump_weight_free_point.dat`, whose clump now rests 4.7 cm deep instead of 6.6 cm and whose
-  anchor tension falls from 186 kN to 92 kN; decks whose points stay clear of the seabed give
-  identical output. See the manual's theory page (Seabed contact).
-- A finite-EI deck mesh that cannot resolve the curvature of its static equilibrium (an
-  element folded beyond `L0*kappa = 0.7`), and a fragile mesh under `adaptive_mesh True`, are
-  now refined locally instead of as a whole. The static solve had multiplied every element by
-  the power of two that the worst one needed, up to 16, even when only one section was coarse:
-  a 462-element lazy wave whose 180 m top section had two elements was solved on 7392 elements
-  in 10.0 s, and a 410-element lazy wave with a rigid horizontal hang-off on 6560 elements in
-  9.2 s. A refinement pass now splits into 2, 4, 8 or 16 equal elements only the elements whose
-  `L0*kappa` exceeds 0.12 (or the stricter `adaptive_mesh` target), that are longer than half
-  their bending length `(EI/|w|)^(1/3)`, or, at a line end, longer than the boundary layer
-  `sqrt(EI/T)`, and the elements about an isolated seabed-contact change, and grades the mesh
-  into the neighbouring elements (no element more than twice as long as the next, unless the
-  deck mesh has a larger ratio there). The cap of 16 per deck element, the element limit, the
-  acceptance checks and the fail-closed messages are unchanged; where a pass would exceed the
-  element limit, the bending-length splits give way first, then the grading, and only then the
-  curvature, end-layer and contact splits, and a refinement that stops short of its target
-  names what stopped it (the cap, the element limit or the limit of 12 passes, 16 for the
-  axial passes). The two decks above now solve on 492 and 436 elements in 0.33 s and 0.28 s,
-  with end tensions within 4e-7 and 2e-6 of the whole-line refinement and nodes within 0.7 mm
-  and 4 mm. The lazy wave of the node-channel entry above (its top section on 4 elements) now
-  refines to 269 elements instead of 1136, with node tensions within 0.9 N (of 1.2 to 12 kN)
-  of the same line on 1560 elements of 0.25 to 0.5 m. In the finite-EI statics matrix 61
-  of the 123 decks refine: their CPU time falls from 65 s to 33 s, the end tensions change by
-  at most 0.21 % of the line's peak end tension (a 58 m line on 2 m end elements, whose
-  hang-off tension moves from 1157.5 N to 1155.1 N; 1157.5 N on a mesh 16 times finer) and the
-  nodes by at most 6.4e-4 of the line length. In a 761-deck statics robustness campaign 57
-  decks refine: they solve in 18 s instead of 63 s, with the same outcomes and notes (two no
-  longer need the static residual floor note), end tensions within 1e-5 of the peak end
-  tension and nodes within 3.2e-5 of the line length.
-  Decks that do not refine, including every shipped example, give identical output. On a
-  deck that refines, the dynamics run on the new mesh; the local refinement only splits deck
-  elements, so every deck node is a node of the new mesh and the node output channels still
-  name deck nodes (see the node-channel entry above).
-- A finite-EI line with discrete buoyancy modules (`ATTACHMENTS`) in a cross current on a
-  frictional seabed no longer fails its static solve. The lazy wave of
-  `tests/data/lazy_wave_touchdown_planar_refined_att.dat` (25 modules on 2 m elements) in a
-  0.3 m/s current across its plane stopped with `finite-EI static solve with discrete
-  ATTACHMENTS failed at load fraction 0.125 (relative residual 1.304E+02)`. The homotopy from
-  the smeared to the lumped modules adds the module drag, which the smeared equilibrium does
-  not carry, and on the frictional seabed the damped Newton update for it overshot and
-  diverged from the first step, even in steps of 1/64 of the load; the seed and the step size
-  were not the cause. A step whose damped Newton solve does not converge is now repeated from
-  the last converged state with pseudo-transient continuation and then with a residual-merit
-  line search, and halved (down to 1/1024) when neither converges. A halved step doubles
-  again (up to 1/8) after two consecutive converged steps of its size, and each time a
-  doubled step fails, the number of converged steps a doubling waits for doubles; at most 64
-  load steps may fail in all. A discrete state reached this way must pass the checks the
-  smeared state passed (the kink limit, except on the elements beside an attachment node,
-  which carry its slope jump as curvature at any mesh size; the tensile contract under
-  `tensile_safety True`; the physical-branch audit; the stability test), or the solve fails
-  closed naming the check; a state that passes them is reported in a note. The deck now solves in
-  1.8 s, its fairlead and anchor tensions within 0.04 % and 0.2 % of the deck with the
-  equivalent smeared buoyancy section; in 0.6 m/s, and on the coarse mesh, it solved before
-  and its results are unchanged. A polish whose Newton steps all converge takes the same
-  solves as before, so every other deck is unchanged. A new test (`attachment_cross_current`)
-  checks the four cases against their smeared twins.
-- The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
-  access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
-  Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,
-  and its Zen and Haswell DGEMM kernels then overrun their stack buffer for an inner
-  dimension above 128. This happens in builds without the AVX-512 kernels, such as the
-  conda-forge Windows package, and in any build when `OPENBLAS_CORETYPE` forces one of these
-  kernels (OpenMathLib/OpenBLAS#6013 and #6021). The dense reference eigensolve
-  (`DSYGV`) of the modal tests reached it. On hosted CI runners the fault appeared only on
-  those runners whose AMD CPU exposed AVX-512. The solver itself calls only banded LAPACK
-  routines and a 4 × 4 eigensolve, none of which passes DGEMM an inner dimension above 128,
-  and the released Windows executables use reference LAPACK, so results are unchanged. An existing environment takes the exclusion with
-  `conda env update -f environment.yml`, followed by a fresh build directory.
-- The anchor tension of a finite-EI cable laid on the seabed no longer jumps when the line moves
-  out of its plane. The seabed contact acts at the nodes, which carry no moment, so at an
-  anchor resting on the floor the end moment of the end element's weight turned the free end
-  tangent into the floor: the element dipped below the seabed between its nodes (27 mm for the
-  power cable of `examples/iea15mw_umaine_mixed_cabledyn.dat` on its former 10 m grounded
-  elements) and carried axial forces from −47 kN to +127 kN about a line tension of 1.2 kN.
-  Once the hang-off swayed, the element buckled sideways; with seabed friction the anchor tension then locked at about 2.5 times its
-  static value for the rest of the run (1.22 kN to 3.1 kN in a coupled OpenFAST run while the
-  platform drifted toward the anchor), and without friction the end nodes wandered by up to
-  0.18 m. The seabed now carries the end element's weight with its end moment at a held line end
-  resting on the floor (along the floor normal on a sloped bathymetry), in the statics and the
-  dynamics alike, in the share in which the element lies on the floor: the contact force of
-  its inner node against half the element's weight, through a smooth step that is zero when
-  that node is clear of the floor and one from half the weight up. Lines whose held end does
-  not rest on the seabed, or whose end element rises from it (a taut line anchored on the
-  floor), are unchanged. In the
-  shipped finite-EI examples with an anchor on the seabed the end tensions change by at most
-  0.34 N (0.004 %). Two decks of the statics robustness matrix change outcome. A lazy wave
-  in a 1 m/s current on a frictional bed (`LW_1015__cur_fr`) had been reported as a hairpin
-  past its anchor only at its exact seabed stiffness. It now fails closed: the friction-held
-  touchdown goes into compression at about 0.33 m/s, before any tension-only equilibrium is
-  reached from the still-water layout, and a slow current ramp in the dynamics with
-  `tensile_safety` stops at the same point. A short line in a 1.9 m/s current on a
-  frictionless bed (`CUR_1013`) had failed closed. It now finds the equilibrium with the
-  grounded run turned sideways on the seabed: when the refinement of the catenary
-  continuation stops on a compression in a current, its failure now names the current limit,
-  so the driver retries out of the plane.
-- A finite-EI line solved in 3D (restrained in torsion, or with an end connection direction or
-  a current out of the vertical plane of its chord) on a deck mesh too coarse at touchdown or at a section
-  change no longer stops with "the converged state is an unstable equilibrium". The stable
-  equilibrium had read as a saddle: elements longer than the bending length cannot follow
-  the bend, the axial force at their Gauss points oscillates into compression, and that
-  compression lowered the out-of-plane stiffness until the stability test failed. Such a
-  state is now refined, from the mesh the route returned, to the mesh whose elements are at
-  most half the bending length: the catenary-continuation route is repeated there, as for a
-  failed polish, and the state of the mesh-sequenced route is prolongated there and polished.
-  This also covers a mesh that an adaptive or safety refinement left too coarse; a mesh that
-  already meets the rule is not refined again. A note names both meshes. An equilibrium that
-  is still unstable on the refined mesh stops as before. Decks that solved before give the
-  same results. `tests/data/lazy_wave_touchdown_torsion_coarse.dat` is the regression case,
-  solved with each route first.
-- A finite-EI line over a bathymetry that is not a plane along its chord no longer fails its
-  statics on a few centimetres of roughness. The catenary seed is laid on the plane fitted to
-  the bathymetry along the chord, which need not pass through the anchor, and it was rejected
-  as soon as a node dipped about 1e-6 of the line length below that plane. The
-  catenary-continuation route then stopped at once, and the mesh-sequenced fallback often ended
-  on a kinked branch ("unresolved/kinked equilibrium"). In a sweep of a chain on a rough
-  seabed, 39 of 96 runs on a 25 m survey grid failed this way, at every roughness from 2 cm to
-  0.5 m. The seed is now measured against the actual bed: a node deeper below it than its
-  static penalty penetration (submerged weight over `kBot` × `Diam` × length) is lifted onto
-  the bed, a shallower one is left to the contact solve, and the continuation, which queries
-  the full surface, settles the contact. The equilibrium is audited, tested for stability and
-  checked for kinks as before. A line too long for the fitted plane is also walked into place
-  from a retreated anchor over such a bathymetry (the moved anchor kept at its height above
-  the bed under it); as the bed can hold the excess length in its dips, a failed walk there
-  is not reported as proof that the line is too long, and the mesh-sequenced route still runs.
-  All 192 finite-EI runs of the sweep now solve, within 1 % of the fairlead force on a mesh
-  four times finer and 0.8 % of the `EI = 0` line. Decks over a flat seabed or a planar
-  bathymetry are unchanged, and so are all shipped examples and test decks. A deck over a
-  non-planar bathymetry that solved before can now take the catenary-continuation route
-  instead of the mesh-sequenced one, or start from a seed lifted out of a bump: in the sweep
-  29 of 153 such runs changed, the fairlead force by at most 0.03 % and the anchor tension by
-  at most 2.2 % (on 0.5 m roughness, where the anchor tension of the same deck differs by up
-  to 13 % on a mesh four times finer). The decks `ROUGH_1001` to `ROUGH_1003` of the cable
-  statics matrix (with mesh twins) are the regression cases.
-- A line resting in a trench, a valley or a pit of a gridded bathymetry now has a static
-  equilibrium. Along every interior grid line the bilinear surface has a crease, and a node on
-  it took the normal of one adjacent cell, so a node that had to rest in a concave crease was
-  pushed back across it from either side and had no equilibrium. An `EI = 0` chain whose
-  frictionless tension falls to zero inside a trench (its excess length resting slack at the
-  bottom) failed with "no admissible static equilibrium", and so did a grounded run on a
-  two-dimensional rough seabed, which slides sideways into a valley along a grid line; a
-  finite-EI line on such a seabed could fail its first dynamic step. Each crease is now
-  rounded within a band of half-width 5 % of the smaller grid spacing next to its line, by
-  the cubic fillet `J (d - |u|)^3 / (6 d^2)` of the slope jump `J` across the line, applied as
-  a tensor product in both directions, so that the surface is twice continuously
-  differentiable. It moves the surface by at most `|J| d / 6` along one line (1.7 cm for a
-  slope jump of 0.2 on a 10 m grid; at a crossing of two lines the two roundings add), and a
-  grid that is exactly planar, and every patch without a crease (one that would move the
-  surface by less than 1 µm), keep the bilinear surface bit for bit; the rounding errors of a
-  plane written to two or three decimals are themselves creases and are rounded by a fraction
-  of a millimetre. In a band the elastic contact force is the gradient of the penalty
-  potential of the normal penetration (up to the twist of a bilinear cell, which the tangent
-  leaves out as before), with its Hessian as the tangent, in the statics and the dynamics
-  alike. Every bathymetry query uses
-  this surface, the Python `Bathymetry` and its seabed clearance included. A `Fixed` point at
-  the tabulated depth of a creased grid node rests on the seabed and is placed on the rounded
-  surface. In the statics campaign the `EI = 0` decks on bathymetry solve 40 of 43 (32
-  before; the three left have anchors below the seabed), a 30 m trench now solves at every
-  depth from 2 m to 30 m (5 of 11 before), with the anchor tension `w` times the trench depth
-  as for a chain piled at the bottom (the fairlead tension within 0.15 % of the same trench
-  sampled with a level bottom cell, on a mesh four times finer), and the `EI = 0` rough-seabed
-  sweep solves 192 of 192 (191). Decks over a flat seabed or a planar bathymetry are unchanged, and so are all shipped
-  examples and test decks. Decks over creased bathymetries that solved before change: the
-  fairlead tension by at most 0.04 % (0.4 % for an `EI = 0` run that settles in another valley
-  of a two-dimensional rough seabed), the anchor tension by up to 8.5 %. The rounding removes
-  horizontal reactions of the one-sided normals: on a 2 m trench the two ends' horizontal
-  forces now agree to 0.02 % (1.2 % before), and the anchor tension of a finite-EI line on a
-  rough two-dimensional seabed is half as far from the one on a mesh four times finer. The
-  decks `trench_touchdown_pile`, `trench_grounded_run_pile` and `rough2d_seabed` of the `EI = 0`
-  statics robustness matrix are the regression cases, with an independent nodal force balance
-  on the rounded surface. When the anchor walk of a finite-EI line over a non-planar bathymetry
-  reaches a state that is rejected, the failure no longer states that the line is too long for
-  its span to hang as a catenary, which is proven over a planar seabed only.
+- Node output channels of a finite-EI line whose mesh the static solve refined now read the
+  deck node named, not the same index on the refined mesh.
+- Static solves that failed or gave the wrong answer:
+  - creased gridded bathymetry (trenches, valleys) now has a static equilibrium;
+  - a finite-EI line over a rough, non-planar bathymetry no longer fails on a few centimetres
+    of roughness;
+  - a 3D finite-EI solve on a coarse mesh no longer stops with "unstable equilibrium";
+  - a finite-EI line with `ATTACHMENTS` in a cross current on a frictional seabed now solves.
+- The anchor tension of a finite-EI cable laid on the seabed no longer jumps when the line
+  moves out of its plane.
+- Explicit sub-stepping of free and pinned rods and Rigid6 bodies now accounts for seabed
+  contact, free-surface crossing and decks without lines, and seabed friction of rods and
+  bodies is applied implicitly (no more chatter on a frictional bed).
+- `modified_newton` on `EI = 0` lines rebuilds the tangent as documented.
 - Junction end tangent of a tension-only line step that ends right after a fresh tangent
-  evaluation. In the monolithic body and point coupling, a line step accepted within the
-  near-tolerance allowance at its Newton iteration limit (or converged on a freshly evaluated
-  tangent) still marked its last factorization as current, although the new tangent had
-  overwritten it. The condensed end tangent, and the warm start of a re-solve of the same step,
-  were then back-solved with the unfactored matrix: in a unit test the end tangent was wrong by
-  five orders of magnitude, which can slow or misdirect the outer junction iteration. The step
-  now clears the factorization flags whenever it overwrites the band without factoring it, so
-  the end query factors the current tangent (one more tangent assembly and factorization for
-  such a step of a junction solve). The outputs of the example decks and of the other tests
-  are unchanged.
+  evaluation.
+- Error messages are no longer truncated, and now name the cause and workaround for neutral
+  buoyancy, unsupported couplings and anchors below the seabed.
+- The development environment excludes OpenBLAS 0.3.34, which crashed the modal tests on some
+  AMD CPUs. Results are unchanged.
+
+### Known issues
+
+- In OpenFAST, a deck `dtM` larger than `DT` holds the loads between CableDyn's steps, so they
+  reach the platform about `dtM/2` late. The lag matters for stiff (taut or tension-leg)
+  moorings and for tension statistics; check such results at a smaller `dtM`. See the note on
+  the manual's OpenFAST page.
 
 ## [0.1.1] - 2026-10-09
 
@@ -1290,6 +534,6 @@ Corrections made during the pre-release review.
   values of the shipped example decks and states which tension (end element or
   `FairTen` end force) each comparison uses.
 
-[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.1.1...HEAD
+[0.2.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.2.0
 [0.1.1]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.0

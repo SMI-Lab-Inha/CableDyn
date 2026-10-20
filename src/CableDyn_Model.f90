@@ -5348,7 +5348,8 @@ CONTAINS
     ! (enter_committed_lengths); a failed recompute restores f_ext, the remainder and a.
     BLOCK
       REAL(wp) :: f_dist(SIZE(model%f_ext))
-      REAL(wp), ALLOCATABLE :: base_entry(:)
+      ! the remainder on entry (f_ext_dist_base has the size of f_ext wherever dist_load exists)
+      REAL(wp) :: base_entry(SIZE(model%f_ext))
       INTEGER :: es2
       CHARACTER(1024) :: em2
       IF (ALLOCATED(model%dist_load)) THEN
@@ -5367,7 +5368,7 @@ CONTAINS
       IF (ErrStat /= CD_MODEL_OK) THEN
         model%f_ext = model%f_ext_rollback
         model%a = model%a_rollback
-        IF (ALLOCATED(base_entry)) model%f_ext_dist_base = base_entry
+        IF (ALLOCATED(model%dist_load)) model%f_ext_dist_base = base_entry
         RETURN
       END IF
     END BLOCK
