@@ -235,6 +235,10 @@ CONTAINS
     CALL require(unchanged(a, ref) .AND. same_bits(a%l0_dot, ref%l0_dot) .AND. same_bits(a%q, ref%q) .AND. &
                  same_bits(a%v, ref%v) .AND. same_bits(a%a, ref%a) .AND. same_bits2(a%fr_anchor, ref%fr_anchor), &
                  'A: restore brings back the lengths, rates, caches and state bit for bit')
+    ! Restore clears the carried Newton factor, which ref still holds, and where a step stops
+    ! depends on the factor's age: a restart is exact only with tangent reuse off (both models)
+    a%tangent_reuse = .FALSE.
+    ref%tangent_reuse = .FALSE.
     DO k = 1, 3
       CALL CD_HermiteCable_Dyn_Step(a, DT, 50, 1.0e-10_wp, es, em)
       CALL CD_HermiteCable_Dyn_Step(ref, DT, 50, 1.0e-10_wp, es, em)
