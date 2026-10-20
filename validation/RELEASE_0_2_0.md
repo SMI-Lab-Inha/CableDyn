@@ -12,7 +12,7 @@ LAPACK are those of [v0.1.1](RELEASE_0_1_1.md).
 | Item | Value |
 | --- | --- |
 | CableDyn | `0.2.0` (2026-10-20), C ABI 1, minor extension 2 |
-| Source | The `v0.2.0` tag. The assets and the Windows gates were produced from this tree before this record was completed; every other file is identical. The GNU gates below ran on the release-preparation tree (#30). The later changes (#31, the seabed recompute check; and, on the release branch, the crease bound of `CD_Bathymetry_Max_Floor` and the per-line friction options of the Python `DeckModel`) passed the CI matrix (Linux and Windows, Release and Debug; Python on three platforms with coverage and strict type checks) and the GNU Release and Python suites |
+| Source | The `v0.2.0` tag. The assets and the Windows gates were produced from this tree before this record was completed; every other file is identical. The GNU gates below ran on the release-preparation tree (#30). The later changes (#31, the seabed recompute check; and, on the release branch, the crease bound of `CD_Bathymetry_Max_Floor`, the per-line friction options of the Python `DeckModel`, and the monotone touchdown parabola) passed the CI matrix (Linux and Windows, Release and Debug; Python on three platforms with coverage and strict type checks) and the GNU Release and Python suites |
 | OpenFAST base | `2895884d2be01862173c88d70f86b358d2f1a50a`; the 20 patches of [`integration/openfast/patches`](../integration/openfast/patches) applied to a clean checkout by `prepare_openfast_source.ps1` |
 | OpenFAST r-test | `dd5feaaaa500ba7283140107806300d551cff0a7` |
 | Reference LAPACK/BLAS | 3.12.1, release-tag archive with SHA-256 `2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422` |
@@ -36,7 +36,7 @@ LAPACK are those of [v0.1.1](RELEASE_0_1_1.md).
 | GNU Debug build (`-fcheck=all`) | 0 compiler warnings in the library, driver and module |
 | GNU Debug CTest | 293 of 293 passed |
 | GNU Debug CTest with `-finit-real=snan -finit-integer=-2147483647 -fcheck=all` | 293 of 293 passed |
-| Python package tests, native library and driver included | 2104 passed; 99.02% branch coverage (minimum 95%), on the release head |
+| Python package tests, native library and driver included | 2105 passed; 99.01% branch coverage (minimum 95%), on the release head |
 | Ruff, Ruff format and mypy (strict) | passed |
 | Sphinx documentation, HTML and EPUB (`-W -n`) | built with no warnings |
 | pre-commit, all files | passed |
@@ -53,7 +53,7 @@ exact real comparisons in bit-identity assertions.
 ## Windows executable gates
 
 Every gate of `build_static_windows.ps1` passed in the release workflow (`release-windows-static.yml`,
-run 39457117645). The smoke runs used a system-only `PATH`.
+run 39484701335). The smoke runs used a system-only `PATH`.
 
 | Gate | Result |
 | --- | --- |
@@ -80,16 +80,18 @@ passed. Every shipped example deck (51) also runs to completion with the release
 The first build of the assets stopped `examples/buoy_clamped_cable.dat` in this check: the
 setup check of the seabed recompute inputs compared two products that the optimised Intel
 build rounds differently. The fix (#31) accepts agreement within 8 units in the last place. The
-review of the release found two more defects, fixed on the release branch: the seabed bound of the
-explicit object sub-step estimate left out the crease rounding of neighbouring cells, and the
-Python `DeckModel` did not rename or remove the per-line friction options with their line. The
-assets above were built from the final tree.
+review of the release found three more defects, fixed on the release branch: the seabed bound
+of the explicit object sub-step estimate left out the crease rounding of neighbouring cells, the
+Python `DeckModel` did not rename or remove the per-line friction options with their line, and the
+touchdown point could jump by almost an element as a node grounded on a steep stencil (its
+parabola is now limited to rise monotonically over the element). The assets above were built from
+the final tree.
 
 ## Assets
 
 | File | SHA-256 |
 | --- | --- |
-| `CableDyn_driver.exe` | `f68a7279723abfa400a3e49ce90490eaa41fd84409273868887f51fd835a45c1` |
-| `openfast.exe` | `380ce2249fe4f52511281160e9a6d48141d380d10abb3a87764a0d3777036e73` |
-| `cabledyn-0.2.0-py3-none-any.whl` | `f1e754acd6a53b019ef805aace11d0a7d1606ef6703cf92fe6c03592b919060c` |
-| `cabledyn-0.2.0.tar.gz` | `5b292b1043dc1e8d9503a3cae1fcf1ff5b3b4e70b02485eb40b3444c5844afaa` |
+| `CableDyn_driver.exe` | `3eb0727e9a329f155de8aad2dd68ba280985b35a2c9482236930ee007ddbcc89` |
+| `openfast.exe` | `1ba18e46d4b00e7c5340534add6d6c179b8e3e2dd9645b553fcc9035dece77f9` |
+| `cabledyn-0.2.0-py3-none-any.whl` | `8bc843121685e6a9e0af877765f6d1d0a9e7de47c6ab0c5361a2f644eeb0ac73` |
+| `cabledyn-0.2.0.tar.gz` | `b1034bcd4fff0e690f9635121807f0f41693c16be0de1caf9af4426af127dc7b` |
