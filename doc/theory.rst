@@ -1276,9 +1276,28 @@ mesh-sequenced route described below first and this route as its fallback):
    does not converge is restarted at full ``EI``.
 3. **Polish and diagnosis** on the deck mesh at the static tolerance. A residual floor above it
    is accepted at :math:`10^{-6}` (or, for a line on the seabed, :math:`10^{-5}`, nodes
-   alternating across the 1 µm contact blend) and reported. A deck mesh too coarse for the
-   bending length (continuation or polish failing, or an element folded beyond
-   :math:`L_0\kappa = 0.7`) repeats the route on a mesh refined until the elements are at most
+   alternating across the 1 µm contact blend) and reported. An element folded beyond
+   :math:`L_0\kappa = 0.7` on the deck mesh is refined locally, from the polished state, until
+   no element exceeds :math:`L_0\kappa = 0.35`; ``adaptive_mesh`` refines the same way, to its
+   own target. A refinement pass splits into :math:`2^k` equal elements every element whose
+   sampled :math:`L_0\kappa` exceeds 0.12 (or the requested target, when stricter), that is
+   longer than half its bending length :math:`(EI/|w|)^{1/3}`, or, at a line end, longer than
+   its boundary layer :math:`\sqrt{EI/T}`, and the elements about a node whose seabed contact
+   differs from both neighbours; :math:`k` is the smallest that meets the criterion, at most 4
+   (16 elements per deck element). The neighbours are then split until no element is more than
+   twice as long as the next one (or than the ratio the deck mesh already has there) and none
+   is left longer than both of its neighbours with fewer splits than either (a single coarser
+   element between finer ones carries a spurious axial oscillation), the state is carried to
+   the new mesh by the Hermite interpolant of each element and polished, and the pass is
+   repeated on the polished state while the target is not met and an element can still be
+   split (at most 12 passes), within 8192 elements: a pass that would exceed them gives up the
+   bending-length splits first, then the grading, and only then the curvature, end-layer and
+   contact splits. Elements the criteria leave alone keep their deck length, so
+   a single coarse section costs only its own refinement (a 462-element lazy
+   wave whose 180 m top section has two elements: 492 elements, where refining the whole line
+   by the factor of its worst element gave 7392). A deck mesh too coarse for the bending length
+   whose continuation or polish fails, or whose folded element the local refinement does not
+   resolve, repeats the route on a mesh refined until the elements are at most
    half the bending length (when the continuation on that mesh runs out of its iteration
    budget, on the coarser powers of two down to twice the deck mesh); a rotationally
    restrained end whose boundary layer :math:`\sqrt{EI/T}` is shorter than its element, which
@@ -2311,7 +2330,24 @@ the nodal tangent :math:`\mathbf{m}_j/\lvert\mathbf{m}_j\rvert` (the line's Mori
 and, through :math:`\mathbf{m}_j`, the position tangent exactly. The statics start from the
 equilibrium with the net weight smeared over the node's two elements and continue to the lumped
 load in warm-started Newton solves; in a deck current the drag at rest is added and the final
-solve is repeated with the drag of its own solution until the nodes stop moving. As the pitch :math:`p` of identical modules shrinks, the discrete equilibrium
+solve is repeated with the drag of its own solution until the nodes stop moving. The load moves
+in eighths; a step whose damped Newton solve does not converge is repeated from the last
+converged state with pseudo-transient continuation and then with a residual-merit line search,
+and is halved (down to 1/1024) when neither converges. A halved step doubles again (up to 1/8)
+after two consecutive converged steps of its size; each time a doubled step fails, the number
+of converged steps a doubling waits for doubles, so a homotopy that converges steadily at one
+size and fails at twice it keeps advancing and tries the larger size about ten times at most.
+At most 64 load steps may fail in all. A discrete state reached this way passes the kink,
+tensile, physical-branch and stability checks of the smeared state before it is accepted, the
+kink limit :math:`L_0\kappa \le 0.7` applied away from the attachment nodes: a lumped load
+turns the line by a slope jump :math:`\theta` at its node, which the :math:`C^1` elements
+beside the node carry as :math:`L_0\kappa \approx 2\theta` at any mesh size. The smeared state carries no
+attachment drag, and on a frictional seabed, whose regularised friction force turns from its
+sticking stiffness to its sliding capacity over a short slip, the Newton update for a
+cross-flow drag can overshoot and diverge from the first step (a lazy wave with 25 modules in a
+0.3 m/s cross current on 2 m elements, even in steps of 1/64), which the pseudo-transient
+regularisation avoids.
+As the pitch :math:`p` of identical modules shrinks, the discrete equilibrium
 converges to the smeared section at :math:`O(p^2)`.
 
 **Line failure.** A ``FAILURE`` row detaches a line end from its point at a prescribed time or

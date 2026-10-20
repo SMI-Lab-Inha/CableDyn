@@ -17,8 +17,12 @@ PROGRAM test_line_attachments
   !!   5. Deck current (uniform, profile): convergence to EQUIVALENT BUOYANCY and no drift at rest.
   !!   6. Coupled route (the OpenFAST aggregate): held SeaState-style kinematics at the
   !!      attachment nodes, and a bit-identical checkpoint restart.
+  !!   7. Acceptance of a fallback attachment state (CD_Attachment_Discrete_Verdict): a slope
+  !!      jump beside an attachment node passes the kink limit; the same bend away from it, a
+  !!      compressed state under tensile_safety and an unstable state fail closed by name.
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
+  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Attachment_Discrete_Verdict
+  USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
                                          CD_AGG_End, CD_AGG_NFluidNodes, CD_AGG_GetFluidNodePositions, &
@@ -42,6 +46,7 @@ PROGRAM test_line_attachments
   CALL case_current('profile', 'profile -60.0 0.2 0.3 0.0 0.0 0.5 0.4 0.0 current')
   CALL case_grammar()
   CALL case_coupled()
+  CALL case_fallback_verdict()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -52,6 +57,55 @@ PROGRAM test_line_attachments
 CONTAINS
 
   INCLUDE 'nan_max_abs.inc'
+
+  SUBROUTINE case_fallback_verdict()
+    !! A straight 10 m line on 1 m elements whose tangent at node 6 is turned by 0.6 rad: the
+    !! two elements beside node 6 carry h*kappa of about 2.3, beyond the kink limit 0.7, as the
+    !! elements beside a lumped attachment load carry its slope jump. With the attachment at
+    !! node 6 the verdict accepts the state; with it at node 3 it rejects the kink; a uniformly
+    !! compressed straight line is rejected under tensile_safety True; and an unstable state
+    !! (the caller's stability test) is rejected.
+    INTEGER, PARAMETER :: NE = 10
+    REAL(wp), PARAMETER :: THETA = 0.6_wp
+    REAL(wp) :: l0(NE), ea(NE), ei(NE), w(NE), diam(NE), q(6*(NE + 1)), qc(6*(NE + 1))
+    INTEGER :: i
+    LOGICAL :: accepted
+    CHARACTER(1024) :: msg
+    l0 = 1.0_wp
+    ea = 1.0e8_wp
+    ei = 1.0e4_wp
+    w = 100.0_wp
+    diam = 0.1_wp
+    q = 0.0_wp
+    qc = 0.0_wp
+    DO i = 1, NE + 1
+      q(6*(i - 1) + 1:6*(i - 1) + 3) = [REAL(i - 1, wp), 0.0_wp, -50.0_wp]
+      q(6*(i - 1) + 4:6*(i - 1) + 6) = [1.0_wp, 0.0_wp, 0.0_wp]
+      qc(6*(i - 1) + 1:6*(i - 1) + 3) = [0.99_wp*REAL(i - 1, wp), 0.0_wp, -50.0_wp]
+      qc(6*(i - 1) + 4:6*(i - 1) + 6) = [0.99_wp, 0.0_wp, 0.0_wp]
+    END DO
+    q(6*5 + 4:6*5 + 6) = [COS(THETA), 0.0_wp, SIN(THETA)]
+    CALL CD_Attachment_Discrete_Verdict(l0, q, ea, ei, w, diam, [CD_ENDCONN_PINNED, CD_ENDCONN_PINNED], [6], &
+                                        -1000.0_wp, .FALSE., .TRUE., accepted, msg)
+    CALL require(accepted, 'fallback verdict: a slope jump beside the attachment node is accepted ('// &
+                 TRIM(msg)//')')
+    CALL CD_Attachment_Discrete_Verdict(l0, q, ea, ei, w, diam, [CD_ENDCONN_PINNED, CD_ENDCONN_PINNED], [3], &
+                                        -1000.0_wp, .FALSE., .TRUE., accepted, msg)
+    CALL require(.NOT. accepted .AND. INDEX(msg, 'discrete ATTACHMENTS') > 0 .AND. &
+                 INDEX(msg, 'is unresolved/kinked') > 0 .AND. INDEX(msg, 'away from the attachment nodes') > 0, &
+                 'fallback verdict: the bend away from the attachment fails the kink limit ('//TRIM(msg)//')')
+    CALL CD_Attachment_Discrete_Verdict(l0, qc, ea, ei, w, diam, [CD_ENDCONN_PINNED, CD_ENDCONN_PINNED], [6], &
+                                        -1000.0_wp, .TRUE., .TRUE., accepted, msg)
+    CALL require(.NOT. accepted .AND. INDEX(msg, 'carries axial compression under tensile_safety True') > 0, &
+                 'fallback verdict: a compressed state fails the tensile contract ('//TRIM(msg)//')')
+    CALL CD_Attachment_Discrete_Verdict(l0, qc, ea, ei, w, diam, [CD_ENDCONN_PINNED, CD_ENDCONN_PINNED], [6], &
+                                        -1000.0_wp, .FALSE., .TRUE., accepted, msg)
+    CALL require(accepted, 'fallback verdict: compression alone passes without tensile_safety ('//TRIM(msg)//')')
+    CALL CD_Attachment_Discrete_Verdict(l0, q, ea, ei, w, diam, [CD_ENDCONN_PINNED, CD_ENDCONN_PINNED], [6], &
+                                        -1000.0_wp, .FALSE., .FALSE., accepted, msg)
+    CALL require(.NOT. accepted .AND. INDEX(msg, 'is an unstable equilibrium') > 0, &
+                 'fallback verdict: an unstable state is rejected ('//TRIM(msg)//')')
+  END SUBROUTINE case_fallback_verdict
 
   SUBROUTINE require(cond, msg)
     LOGICAL, INTENT(IN) :: cond

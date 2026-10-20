@@ -209,6 +209,8 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_Rigid6_Get_States, CD_Rigid6_Set_States
   PUBLIC :: DeckFailure, DeckLine, DeckPoint
   PUBLIC :: CD_Fire_Deck_Failures
+  ! Acceptance of a fallback attachment equilibrium (public for its unit test).
+  PUBLIC :: CD_Attachment_Discrete_Verdict
   PUBLIC :: CD_Check_System_Plausibility
   PUBLIC :: CD_Replay_Deck_Failures
   PUBLIC :: CD_Classify_Dynamic_Completion
@@ -1670,6 +1672,8 @@ CONTAINS
     INTEGER, PARAMETER :: FALLBACK_SEQUENCE_BUDGET = 2000
     LOGICAL :: standalone_mode, contact_enabled, used_trivial_seed, anchor_on_flat_bed, allow_extra_sequence
     LOGICAL :: polish_ready
+    ! Set when the attachment polish needed its fallbacks (attachment_fallback_checks).
+    LOGICAL :: att_fell_back
     LOGICAL :: bathymetry_flat, require_3d_static, sym_broken, planar_unstable, saddle_kept
     ! A planar equilibrium in a current that is a saddle out of its plane (see route_pass).
     REAL(wp), ALLOCATABLE :: l0_saddle(:), ea_saddle(:), ei_saddle(:), w_saddle(:), q_saddle(:), curv_saddle(:)
@@ -2094,8 +2098,9 @@ CONTAINS
     ! n_cont = 8 load steps and damping = 0.7. When the deck opts in to
     ! adaptive_mesh AND CD_HermiteCable_Resolution_Metrics flags the mesh FRAGILE (an
     ! under-resolved arch/touchdown that would stall the coupled dynamic Newton), AutoMesh
-    ! refines by WARM-STARTED cubic-Hermite prolongation of the converged IC
-    ! (CD_HermiteCable_Refine_Mesh) up to CD_HC_REFINE_CAP. Prolongation -- not a
+    ! refines by WARM-STARTED cubic-Hermite prolongation of the converged IC, element by
+    ! element where the resolution screens fail (local_refinement), up to CD_HC_REFINE_CAP
+    ! bisection factor per deck element. Prolongation -- not a
     ! cold re-solve at the finer mesh -- is essential: a cold fine solve kinks (mesh-sequencing is
     ! the documented practice). inherit_dofs [2,5] carries the planar out-of-plane hold (y
     ! position + y tangent) onto inserted nodes. max_scale = 1 (adaptive_mesh off, the DEFAULT)
@@ -2319,7 +2324,8 @@ CONTAINS
                                                            endconn_direction=endconn_d0_local, &
                                                            endconn_mode=endconn_mode, &
                                                            waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                           water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                           water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                           local_refinement=.TRUE.)
               ELSE IF (contact_enabled) THEN
                 CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_sequence, fixed_dofs, &
                                                            contact_z, CD_ZERO, 8, 80, static_tol, 0.7_wp, &
@@ -2340,7 +2346,8 @@ CONTAINS
                                                            endconn_direction=endconn_d0_local, &
                                                            endconn_mode=endconn_mode, &
                                                            waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                           water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                           water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                           local_refinement=.TRUE.)
               ELSE
                 CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_sequence, fixed_dofs, &
                                                            contact_z, CD_ZERO, 8, 80, static_tol, 0.7_wp, &
@@ -2360,7 +2367,8 @@ CONTAINS
                                                            endconn_direction=endconn_d0_local, &
                                                            endconn_mode=endconn_mode, &
                                                            waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                           water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                           water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                           local_refinement=.TRUE.)
               END IF
               iters = sequence_total + adaptive_iters
             ELSE
@@ -2389,7 +2397,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, &
                                                        waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                       water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                       water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           ELSE IF (contact_enabled) THEN
             CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q0, fixed_dofs, contact_z, CD_ZERO, &
                                                        8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
@@ -2409,7 +2418,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, &
                                                        waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                       water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                       water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           ELSE
             CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q0, fixed_dofs, -2000.0_wp, CD_ZERO, &
                                                        8, 80, static_tol, 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
@@ -2427,7 +2437,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, &
                                                        waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                       water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                       water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           END IF
           IF (es == CD_HCSTAT_OK .OR. es == CD_HCSTAT_BADINPUT) EXIT static_attempt
           IF (static_tol >= COUPLED_STATIC_TOL) EXIT static_attempt
@@ -2469,7 +2480,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, &
                                                        waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                       water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                       water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           ELSE IF (contact_enabled) THEN
             CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_coupled_tol, fixed_dofs, &
                                                        contact_z, CD_ZERO, 8, 80, static_tol_target, 0.7_wp, &
@@ -2488,7 +2500,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, &
                                                        waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                       water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                       water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           ELSE
             CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_coupled_tol, fixed_dofs, &
                                                        -2000.0_wp, CD_ZERO, 8, 80, static_tol_target, 0.7_wp, &
@@ -2506,7 +2519,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, &
                                                        waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                       water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                       water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           END IF
           iters = iters + polish_iters
         END IF
@@ -2863,7 +2877,8 @@ CONTAINS
     IF (.NOT. has_att) CALL handoff_lateral_note(l0, l0_am, ea_am, ei_am, w_am, w_am, diam, dry_b, fixed_am, .FALSE.)
     ! Build the coarse Morison arrays, then map every per-element quantity onto the
     ! refined reference-arc mesh.  This covers both global refinement and the local
-    ! axial-oscillation refinement used by tensile safety.  Every child inherits the
+    ! refinements (the resolution screens, and the axial-oscillation refinement used by
+    ! tensile safety).  Every child inherits the
     ! property of the original element containing its reference-arc midpoint.
     ALLOCATE (cdn(SIZE(l0)), cdt(SIZE(l0)), can(SIZE(l0)), cat(SIZE(l0)))
     CALL finite_hydro_arrays(ln, sections, types, diam, cdn, cdt, can, cat)
@@ -2939,8 +2954,23 @@ CONTAINS
       END IF
       CALL attachment_static_polish(l0, ea, ei, w_bare, w, diam, att_node, ln%att, q_static, fixed_dofs, &
                                     contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
-                                    endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj)
+                                    endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj, &
+                                    fell_back=att_fell_back)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      ! A discrete state the damped Newton solves did not reach alone (pseudo-transient
+      ! continuation, line search or smaller load steps) passes the acceptance checks the
+      ! smeared state passed above: the kink limit (away from the attachment nodes, whose
+      ! slope jump the elements beside them carry as curvature), the tensile contract, the
+      ! physical-branch audit and the stability test (CD_Attachment_Discrete_Verdict). A
+      ! polish whose Newton solves all converge is a small warm-started correction of an
+      ! accepted state and is not checked again.
+      IF (att_fell_back) THEN
+        CALL attachment_fallback_checks()
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        CALL report_note('line '//TRIM(int_to_str(ln%id))//': the discrete attachment equilibrium was reached '// &
+                         'after a failed Newton solve (pseudo-transient continuation, line search or smaller '// &
+                         'load steps) and passed the acceptance checks of the smeared state')
+      END IF
       ! On the final mesh, with the bare weights the polished state carries; the bending-length
       ! rule of the note uses the smeared section weights w.
       CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, fixed_dofs, &
@@ -3337,7 +3367,8 @@ CONTAINS
                                                      refine_non_axial=opts%adaptive_mesh, &
                                                      endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
                                                      endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
-                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, &
+                                                     current=cur_obj, local_refinement=.TRUE.)
         ELSE IF (contact_enabled) THEN
           CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
                                                      8, 80, tol_r(k_tol), 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
@@ -3353,7 +3384,8 @@ CONTAINS
                                                      refine_non_axial=opts%adaptive_mesh, &
                                                      endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
                                                      endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
-                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, &
+                                                     current=cur_obj, local_refinement=.TRUE.)
         ELSE
           CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_r, ea_r, ei_r, w_r, q_r, fixed_r, contact_z, CD_ZERO, &
                                                      8, 80, tol_r(k_tol), 0.7_wp, CD_HC_HKAPPA_TARGET, CD_ZERO, &
@@ -3368,7 +3400,8 @@ CONTAINS
                                                      refine_non_axial=opts%adaptive_mesh, &
                                                      endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
                                                      endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
-                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                     dry_buoyancy=dry_r, water_weight=opts%rhoW*opts%g, &
+                                                     current=cur_obj, local_refinement=.TRUE.)
         END IF
         iters = iters + it_r
         IF (es_r == CD_HCSTAT_OK) THEN
@@ -3601,7 +3634,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
                                                        dry_buoyancy=dry_s, water_weight=opts%rhoW*opts%g, &
-                                                       current=cur_obj)
+                                                       current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           ELSE
             CALL CD_HermiteCable_Static_Solve_AutoMesh(l0_s, ea_s, ei_s, w_s, q_s, fixed_s, -2000.0_wp, CD_ZERO, &
                                                        8, 80, tol_s(k_tol), 0.7_wp, h_t, &
@@ -3616,7 +3650,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
                                                        dry_buoyancy=dry_s, water_weight=opts%rhoW*opts%g, &
-                                                       current=cur_obj)
+                                                       current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           END IF
           iters = iters + it_s
           IF (es_s == CD_HCSTAT_OK) THEN
@@ -3790,6 +3825,41 @@ CONTAINS
       CALL report_note(text_h)
     END SUBROUTINE handoff_lateral_note
 
+    SUBROUTINE attachment_fallback_checks()
+      !! Acceptance of a discrete attachment equilibrium the polish reached with its fallbacks
+      !! (attachment_static_polish, fell_back), on the final mesh, by
+      !! CD_Attachment_Discrete_Verdict: the stability test with the static constraints is
+      !! evaluated here (the tangent takes the bare weights; the lumped attachment loads are
+      !! dead loads), the rest there. Fails closed with the verdict's message.
+      LOGICAL :: stable_f, accepted_f
+      CHARACTER(1024) :: msg_f
+      IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_dofs, &
+                                   contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, &
+                                   opts, stable_f, ErrStat, ErrMsg, bathymetry=bathymetry, cur_obj=cur_obj)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        CALL CD_Attachment_Discrete_Verdict(l0, q_static, ea, ei, w, diam, endconn_mode, att_node, contact_z, &
+                                            opts%tensile_mode == CD_HCDYN_TENSILE_ERROR, stable_f, accepted_f, msg_f, &
+                                            bathymetry=bathymetry, frame_cs=frame_cs)
+      ELSE
+        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_dofs, &
+                                   contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, &
+                                   opts, stable_f, ErrStat, ErrMsg, cur_obj=cur_obj)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        CALL CD_Attachment_Discrete_Verdict(l0, q_static, ea, ei, w, diam, endconn_mode, att_node, contact_z, &
+                                            opts%tensile_mode == CD_HCDYN_TENSILE_ERROR, stable_f, accepted_f, msg_f)
+      END IF
+      IF (.NOT. accepted_f) THEN
+        CALL fail_solve(ErrStat, ErrMsg, TRIM(msg_f)); RETURN
+      END IF
+    END SUBROUTINE attachment_fallback_checks
+
+    FUNCTION dry_b_final() RESULT(dry)
+      !! Dry buoyancy per length on the final mesh (as dry_b on the deck mesh).
+      REAL(wp), ALLOCATABLE :: dry(:)
+      dry = opts%rhoW*opts%g*QUARTER_PI*diam**2
+    END FUNCTION dry_b_final
+
     LOGICAL FUNCTION coarse_current_eligible() RESULT(ok)
       !! coarse_current_first applies to an in-plane current (in_plane_current) without
       !! seabed friction or attachments, on a deck build that is not itself the coarse one,
@@ -3922,7 +3992,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
                                                        dry_buoyancy=dry_b, water_weight=opts%rhoW*opts%g, &
-                                                       current=cur_obj)
+                                                       current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           ELSE
             CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_p, fixed_3d, -2000.0_wp, CD_ZERO, &
                                                        8, 80, tol_c(k_tol), 0.7_wp, h_t, &
@@ -3939,7 +4010,8 @@ CONTAINS
                                                        endconn_direction=endconn_d0_local, &
                                                        endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
                                                        dry_buoyancy=dry_b, water_weight=opts%rhoW*opts%g, &
-                                                       current=cur_obj)
+                                                       current=cur_obj, &
+                                                       local_refinement=.TRUE.)
           END IF
           iters = iters + it_c
           IF (esc == CD_HCSTAT_OK) THEN
@@ -4339,14 +4411,36 @@ CONTAINS
 
   SUBROUTINE attachment_static_polish(l0, ea, ei, w_bare, w_smear, diam, node, att, q, fixed_dofs, &
                                       contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, &
-                                      opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj)
-    !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in NSTEP
-    !! warm-started Newton solves the element weights move from w_smear to w_bare while the
-    !! lumped nodal forces -(m - rho V) g e_z and, in a deck current, the attachment current
-    !! drag grow from zero to full, with the contact, dry-buoyancy, end-connection and line
-    !! current terms of the builder's static problem. The drag depends on the node's depth
-    !! (profile current) and line tangent, so the full-load solve is repeated with the drag
-    !! of the last solution until the solution stops moving (fixed point).
+                                      opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj, fell_back)
+    !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in warm-started
+    !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
+    !! forces -(m - rho V) g e_z and, in a deck current, the attachment current drag grow from
+    !! zero to full, with the contact, dry-buoyancy, end-connection and line current terms of
+    !! the builder's static problem. The drag depends on the node's depth (profile current)
+    !! and line tangent, so the full-load solve is repeated with the drag of the last solution
+    !! until the solution stops moving (fixed point).
+    !!
+    !! The load fraction advances in steps of 1/NSTEP. A step whose damped Newton solve does
+    !! not converge is repeated from the last converged state with pseudo-transient
+    !! continuation and then with a residual-merit line search; when neither converges, the
+    !! step is halved (down to MIN_STEP). A step doubles again (up to 1/NSTEP) once grow_after
+    !! consecutive steps of its size have converged; grow_after starts at 2 and doubles each
+    !! time a doubled step fails, so a homotopy that converges steadily at one size and fails
+    !! at twice it tries the larger size ever more rarely (about log2(1/MIN_STEP) times in all)
+    !! and still advances at the smaller size. At most MAX_FAILED_STEPS load steps may fail in
+    !! all, a backstop that a steady homotopy does not reach (16 failures at worst, at
+    !! MIN_STEP); with at most 1/MIN_STEP converged steps this bounds the polish.
+    !! The smeared state carries no attachment drag, and on a frictional seabed, whose
+    !! regularised friction force turns from its sticking stiffness to its sliding capacity
+    !! over a short slip, the Newton update for a cross-flow drag can overshoot far from the
+    !! equilibrium and diverge (even in load steps of 1/64), which the pseudo-transient
+    !! regularisation avoids. Once a damped Newton solve has failed, the
+    !! later ones get NEWTON_RETRY_ITER iterations before the fallbacks take over. A polish
+    !! whose damped Newton solves all converge takes exactly the solves it took before.
+    !! fell_back (optional out) reports that a damped Newton solve failed, so that the state
+    !! was reached with the fallbacks (and the caller re-runs its acceptance checks on it).
+    !! A failure names the load fraction of the first failed solve and, when the homotopy
+    !! stops, the load fraction it reached.
     REAL(wp), INTENT(IN) :: l0(:), ea(:), ei(:), w_bare(:), w_smear(:), diam(:), att(:, :)
     INTEGER, INTENT(IN) :: node(:), fixed_dofs(:), endconn_mode(2)
     REAL(wp), INTENT(INOUT) :: q(:)
@@ -4357,14 +4451,29 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
+    LOGICAL, INTENT(OUT), OPTIONAL :: fell_back
     INTEGER, PARAMETER :: NSTEP = 8, MAX_FIXED_POINT = 60
+    ! Smallest load-fraction step: 1/NSTEP halved seven times. Newton budget once a damped
+    ! Newton solve of this polish has failed (a converging one takes well under it). Budget
+    ! of failed load steps: each takes at most NEWTON_RETRY_ITER + 400 Newton iterations
+    ! (the first failed solve 600, its damped Newton solve having the full 200).
+    REAL(wp), PARAMETER :: MIN_STEP = 1.0_wp/1024.0_wp
+    INTEGER, PARAMETER :: NEWTON_RETRY_ITER = 40, MAX_FAILED_STEPS = 64
     REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
     REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), dry(:), knnode(:), wl(:), q_out(:), curv(:)
-    REAL(wp) :: lam, res, change
-    INTEGER :: i, k, ne, step, fp
-    LOGICAL :: has_drag
+    REAL(wp) :: lam, lam_done, dlam, res, change
+    INTEGER :: i, k, ne, fp, n_failed, n_ok, grow_after
+    LOGICAL :: has_drag, converged, newton_failed, grown
+    ! The damped Newton failure of the first failed solve, and of the last one.
+    CHARACTER(1024) :: first_msg, last_msg
+    CHARACTER(48) :: step_buf, lam_buf
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
+    IF (PRESENT(fell_back)) fell_back = .FALSE.
+    first_msg = ''
+    last_msg = ''
+    newton_failed = .FALSE.
+    n_failed = 0
     ne = SIZE(l0)
     ALLOCATE (f_att(6*(ne + 1)), f_drag(6*(ne + 1)), dry(ne), q_out(SIZE(q)), curv(ne + 1))
     f_att = CD_ZERO
@@ -4381,29 +4490,78 @@ CONTAINS
         knnode(i + 1) = knnode(i + 1) + 0.5_wp*opts%kbot*diam(i)*l0(i)
       END DO
     END IF
-    DO step = 1, NSTEP
-      lam = REAL(step, wp)/REAL(NSTEP, wp)
+    lam_done = CD_ZERO
+    dlam = CD_ONE/REAL(NSTEP, wp)
+    n_ok = 0
+    grow_after = 2
+    grown = .FALSE.
+    DO WHILE (lam_done < CD_ONE)
+      lam = MIN(CD_ONE, lam_done + dlam)
       wl = w_bare + (CD_ONE - lam)*(w_smear - w_bare)
-      CALL solve_with(lam)
+      CALL solve_with(lam, converged)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (converged) THEN
+        lam_done = lam
+        grown = .FALSE.
+        n_ok = n_ok + 1
+        IF (dlam < CD_ONE/REAL(NSTEP, wp) .AND. n_ok >= grow_after) THEN
+          dlam = MIN(2.0_wp*dlam, CD_ONE/REAL(NSTEP, wp))
+          n_ok = 0
+          grown = .TRUE.
+        END IF
+      ELSE
+        n_failed = n_failed + 1
+        ! A doubled step that fails was premature: wait twice as long before the next.
+        ! (Capped past the 1/MIN_STEP steps a homotopy can take.)
+        IF (grown) grow_after = MIN(2*grow_after, 2*NINT(CD_ONE/MIN_STEP))
+        grown = .FALSE.
+        n_ok = 0
+        dlam = 0.5_wp*dlam
+        IF (dlam < MIN_STEP .OR. n_failed >= MAX_FAILED_STEPS) THEN
+          WRITE (lam_buf, '(F8.6)') lam_done
+          IF (dlam < MIN_STEP) THEN
+            WRITE (step_buf, '(ES9.2)') MIN_STEP
+            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
+                            TRIM(ADJUSTL(lam_buf))//', where load steps down to '//TRIM(ADJUSTL(step_buf))// &
+                            ' did not converge either')
+          ELSE
+            WRITE (step_buf, '(I0)') MAX_FAILED_STEPS
+            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
+                            TRIM(ADJUSTL(lam_buf))//' after '//TRIM(step_buf)//' load steps had failed')
+          END IF
+          RETURN
+        END IF
+      END IF
     END DO
     IF (.NOT. has_drag) RETURN
     DO fp = 1, MAX_FIXED_POINT
-      CALL solve_with(CD_ONE, change)
+      CALL solve_with(CD_ONE, converged, change)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (.NOT. converged) THEN
+        CALL fail_solve(ErrStat, ErrMsg, TRIM(last_msg)//' (attachment current drag fixed point)'); RETURN
+      END IF
       IF (change <= FIXED_POINT_TOL) RETURN
     END DO
     CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static solve with discrete ATTACHMENTS: the attachment '// &
                     'current drag did not settle to a fixed point')
   CONTAINS
-    SUBROUTINE solve_with(scale, dq_max)
-      !! One warm-started Newton solve at load fraction scale, with the attachment current
-      !! drag evaluated on the incoming state; dq_max is the resulting largest DOF change.
+    SUBROUTINE solve_with(scale, ok, dq_max)
+      !! One warm-started solve at load fraction scale, with the attachment current drag
+      !! evaluated on the incoming state: the damped Newton iteration and, when it does not
+      !! converge, the pseudo-transient continuation and the residual-merit line search, each
+      !! from the incoming state. ok reports convergence; q is updated only then, and dq_max
+      !! is the resulting largest DOF change. Otherwise last_msg (and, the first time,
+      !! first_msg) names the load fraction and the damped Newton failure. A failed drag
+      !! evaluation or a rejected input sets ErrStat.
       REAL(wp), INTENT(IN) :: scale
+      LOGICAL, INTENT(OUT) :: ok
       REAL(wp), INTENT(OUT), OPTIONAL :: dq_max
-      INTEGER :: it, es
+      INTEGER, PARAMETER :: NEWTON = 1, PSEUDO_TRANSIENT = 2, MERIT = 3
+      INTEGER :: it, es, mode, max_it(3)
       CHARACTER(1024) :: em
       CHARACTER(48) :: num_buf
+      ok = .FALSE.
+      max_it = [MERGE(NEWTON_RETRY_ITER, 200, newton_failed), 200, 200]
       f_drag = CD_ZERO
       IF (has_drag) THEN
         CALL attachment_static_drag(q, node, att, opts, frame_cs, f_drag, es, em)
@@ -4411,35 +4569,51 @@ CONTAINS
           CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static attachment drag failed: '//TRIM(em)); RETURN
         END IF
       END IF
-      IF (contact_enabled) THEN
-        CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, 200, &
-                                          tol, 0.7_wp, q_out, curv, res, it, es, em, &
-                                          f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, contact_kn=knnode, &
-                                          bathymetry=bathymetry, contact_frame_cs=frame_cs, &
-                                          axial_quadrature_order=opts%axial_quadrature_order, &
-                                          bending_quadrature_order=opts%bending_quadrature_order, &
-                                          endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
-                                          endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                          water_weight=opts%rhoW*opts%g, current=cur_obj)
-      ELSE
-        CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, 200, &
-                                          tol, 0.7_wp, q_out, curv, res, it, es, em, &
-                                          f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, &
-                                          axial_quadrature_order=opts%axial_quadrature_order, &
-                                          bending_quadrature_order=opts%bending_quadrature_order, &
-                                          endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
-                                          endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                          water_weight=opts%rhoW*opts%g, current=cur_obj)
-      END IF
-      IF (es /= CD_HCSTAT_OK .OR. .NOT. (res <= tol)) THEN
-        ! numbers into a local buffer: an internal WRITE into the caller's ErrMsg would abort
-        ! on a short buffer
-        WRITE (num_buf, '(F5.3,A,ES10.3)') scale, ' (relative residual ', res
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI static solve with discrete ATTACHMENTS failed at load '// &
-                 'fraction '//TRIM(num_buf)//'): '//TRIM(em)
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        RETURN
-      END IF
+      DO mode = NEWTON, MERIT
+        IF (contact_enabled) THEN
+          CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, max_it(mode), &
+                                            tol, 0.7_wp, q_out, curv, res, it, es, em, &
+                                            f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, contact_kn=knnode, &
+                                            bathymetry=bathymetry, contact_frame_cs=frame_cs, &
+                                            axial_quadrature_order=opts%axial_quadrature_order, &
+                                            bending_quadrature_order=opts%bending_quadrature_order, &
+                                            endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
+                                            endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
+                                            water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                            backtracking=mode == MERIT, merit_line_search=mode == MERIT, &
+                                            pseudo_transient=mode == PSEUDO_TRANSIENT)
+        ELSE
+          CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, max_it(mode), &
+                                            tol, 0.7_wp, q_out, curv, res, it, es, em, &
+                                            f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, &
+                                            axial_quadrature_order=opts%axial_quadrature_order, &
+                                            bending_quadrature_order=opts%bending_quadrature_order, &
+                                            endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
+                                            endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
+                                            water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                            backtracking=mode == MERIT, merit_line_search=mode == MERIT, &
+                                            pseudo_transient=mode == PSEUDO_TRANSIENT)
+        END IF
+        IF (es == CD_HCSTAT_OK .AND. res <= tol) THEN
+          ok = .TRUE.
+          EXIT
+        END IF
+        IF (mode == NEWTON) THEN
+          ! numbers into a local buffer: an internal WRITE into the caller's ErrMsg would abort
+          ! on a short buffer
+          WRITE (num_buf, '(F5.3,A,ES10.3)') scale, ' (relative residual ', res
+          last_msg = 'finite-EI static solve with discrete ATTACHMENTS failed at load '// &
+                     'fraction '//TRIM(num_buf)//'): '//TRIM(em)
+          IF (.NOT. newton_failed) first_msg = last_msg
+          newton_failed = .TRUE.
+          IF (PRESENT(fell_back)) fell_back = .TRUE.
+        END IF
+        ! A rejected input is rejected by every update rule.
+        IF (es == CD_HCSTAT_BADINPUT) THEN
+          CALL fail_solve(ErrStat, ErrMsg, TRIM(last_msg)); RETURN
+        END IF
+      END DO
+      IF (.NOT. ok) RETURN
       IF (PRESENT(dq_max)) dq_max = MAXVAL(ABS(q_out - q))
       q = q_out
     END SUBROUTINE solve_with
@@ -4975,7 +5149,7 @@ CONTAINS
       END IF
     END IF
 
-    ! 3. caller-mesh polish, diagnosis and opt-in refinement (adaptive_mesh: uniform
+    ! 3. caller-mesh polish, diagnosis and opt-in refinement (adaptive_mesh: local
     ! refinement of a fragile resolution screen). A coarse mesh whose axial resultant
     ! oscillates is kept and reported by the audit. With tensile_safety True
     ! compression beyond the tighter of the strain band and the tension-relative band is
@@ -4987,9 +5161,10 @@ CONTAINS
     refine_all = opts%adaptive_mesh
     CALL polish_with_floor()
     ! Safety-driven refinement: an element-localized fold on the deck mesh means the
-    ! mesh cannot represent the bends of this equilibrium. Refine globally (power of two,
-    ! capped) until max(h*kappa) is half the kink limit, whatever adaptive_mesh says; the
-    ! alternative is no result at all. The caller reports the refined mesh.
+    ! mesh cannot represent the bends of this equilibrium. Refine locally (power-of-two
+    ! splits of the elements that fail the resolution screens, graded into their
+    ! neighbours, capped) until max(h*kappa) is half the kink limit, whatever adaptive_mesh
+    ! says; the alternative is no result at all. The caller reports the refined mesh.
     IF (ErrStat == CD_HCSTAT_NOCONVERGE .AND. INDEX(ErrMsg, 'unresolved/kinked') > 0) THEN
 
       h_target = 0.5_wp*CD_HC_KINK_LIMIT
@@ -5626,7 +5801,8 @@ CONTAINS
                                                    refine_non_axial=refine_all, &
                                                    endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                    endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                   water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                   water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                   local_refinement=.TRUE.)
       ELSE IF (contact_enabled) THEN
         CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_cont, fixed_dofs, contact_z, CD_ZERO, &
                                                    8, 200, tol_polish, 0.7_wp, h_target, CD_ZERO, &
@@ -5644,7 +5820,8 @@ CONTAINS
                                                    refine_non_axial=refine_all, &
                                                    endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                    endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                   water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                   water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                   local_refinement=.TRUE.)
       ELSE
         CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_cont, fixed_dofs, contact_z, CD_ZERO, &
                                                    8, 200, tol_polish, 0.7_wp, h_target, CD_ZERO, &
@@ -5660,7 +5837,8 @@ CONTAINS
                                                    refine_non_axial=refine_all, &
                                                    endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                    endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                   water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                   water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                   local_refinement=.TRUE.)
       END IF
       iters = iters + polish_iters
     END SUBROUTINE polish
@@ -5834,8 +6012,97 @@ CONTAINS
     q = q_out
   END SUBROUTINE hermite_static_torsion
 
-  SUBROUTINE audit_hermite_static(l0, q, ea, ei, w, diam, endconn_mode, physical, message, compression_note)
+  SUBROUTINE CD_Attachment_Discrete_Verdict(l0, q, ea, ei, w, diam, endconn_mode, att_node, contact_z, &
+                                            tensile_error, stable, accepted, message, bathymetry, frame_cs)
+    !! Acceptance of a discrete attachment equilibrium that the attachment polish reached
+    !! with its fallbacks (pseudo-transient continuation, line search or smaller load steps),
+    !! on its mesh l0 with state q: the checks the smeared state passed before the polish.
+    !!  1. The kink limit (h*kappa <= CD_HC_KINK_LIMIT), except on the elements beside an
+    !!     attachment node att_node: the lumped load turns the line there by a slope jump,
+    !!     which the C1 Hermite elements beside the node carry as curvature (h*kappa of about
+    !!     twice the jump) at any mesh size; a polish whose Newton solves converge accepts it.
+    !!  2. With tensile_error (tensile_safety True), no axial compression in the mesh safety
+    !!     diagnosis (the strict, smoothed compression mode of the smeared-state check).
+    !!  3. The physical-branch audit (audit_hermite_static: no fold, loop or self-contact),
+    !!     with its kink test left to 1.
+    !!  4. stable: the stability test with the static constraints, evaluated by the caller.
+    !! accepted is false when a check fails, and message names it in full. w are the section
+    !! weights (smeared over the attachments) of the audit's compression allowance, diam the
+    !! element diameters on l0. Public for its unit test.
+    REAL(wp), INTENT(IN) :: l0(:), q(:), ea(:), ei(:), w(:), diam(:), contact_z
+    INTEGER, INTENT(IN) :: endconn_mode(2), att_node(:)
+    LOGICAL, INTENT(IN) :: tensile_error, stable
+    LOGICAL, INTENT(OUT) :: accepted
+    CHARACTER(*), INTENT(OUT) :: message
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), INTENT(IN), OPTIONAL :: frame_cs(2)
+    CHARACTER(*), PARAMETER :: WHAT = 'finite-EI static solve with discrete ATTACHMENTS: the discrete '// &
+                               'equilibrium reached after a failed Newton solve (pseudo-transient '// &
+                               'continuation, line search or smaller load steps) '
+    TYPE(CD_HermiteResolutionType) :: diag
+    REAL(wp), ALLOCATABLE :: hk(:)
+    LOGICAL, ALLOCATABLE :: beside(:)
+    REAL(wp) :: hk_peak
+    INTEGER :: ne, e, k, es, e_peak
+    LOGICAL :: physical
+    CHARACTER(1024) :: em
+    accepted = .FALSE.
+    message = ''
+    ne = SIZE(l0)
+    ALLOCATE (hk(ne), beside(ne))
+    IF (PRESENT(bathymetry) .AND. PRESENT(frame_cs)) THEN
+      CALL CD_HermiteCable_Resolution_Metrics(l0, q, contact_z, CD_ZERO, CD_HC_KINK_LIMIT, diag, es, em, &
+                                              bathymetry=bathymetry, contact_frame_cs=frame_cs, EA=ea, EI=ei, &
+                                              compression_mode=CD_HC_COMPRESSION_STRICT, elem_h_kappa=hk)
+    ELSE
+      CALL CD_HermiteCable_Resolution_Metrics(l0, q, contact_z, CD_ZERO, CD_HC_KINK_LIMIT, diag, es, em, &
+                                              EA=ea, EI=ei, compression_mode=CD_HC_COMPRESSION_STRICT, elem_h_kappa=hk)
+    END IF
+    IF (es /= CD_HCSTAT_OK) THEN
+      message = WHAT//'could not be diagnosed: '//TRIM(em); RETURN
+    END IF
+    beside = .FALSE.
+    DO k = 1, SIZE(att_node)
+      DO e = att_node(k) - 1, att_node(k)
+        IF (e >= 1 .AND. e <= ne) beside(e) = .TRUE.
+      END DO
+    END DO
+    hk_peak = CD_ZERO
+    e_peak = 0
+    DO e = 1, ne
+      IF (beside(e)) CYCLE
+      IF (hk(e) > hk_peak) THEN
+        hk_peak = hk(e)
+        e_peak = e
+      END IF
+    END DO
+    IF (hk_peak > CD_HC_KINK_LIMIT) THEN
+      WRITE (em, '(A,ES12.5,A,ES12.5,A,I0,A)') 'is unresolved/kinked: max(h*kappa)=', hk_peak, &
+        ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', e_peak, ' (away from the attachment nodes)'
+      message = WHAT//TRIM(em); RETURN
+    END IF
+    IF (tensile_error .AND. diag%axial_compression) THEN
+      WRITE (em, '(A,ES12.5,A,ES12.5,A,I0,A,F8.5,A,ES12.5)') &
+        'carries axial compression under tensile_safety True: element-mean axial force=', &
+        diag%axial_strain_min_resultant, ' N below tolerance=', diag%axial_tolerance, ' N at element ', &
+        diag%axial_strain_min_elem, ', xi=', diag%axial_strain_min_xi, ', strain=', diag%axial_strain_min
+      message = WHAT//TRIM(em); RETURN
+    END IF
+    CALL audit_hermite_static(l0, q, ea, ei, w, diam, endconn_mode, physical, em, ignore_kink=.TRUE.)
+    IF (.NOT. physical) THEN
+      message = WHAT//'is rejected: '//TRIM(em); RETURN
+    END IF
+    IF (.NOT. stable) THEN
+      message = WHAT//'is an unstable equilibrium (tangent stiffness not positive definite)'; RETURN
+    END IF
+    accepted = .TRUE.
+  END SUBROUTINE CD_Attachment_Discrete_Verdict
+
+  SUBROUTINE audit_hermite_static(l0, q, ea, ei, w, diam, endconn_mode, physical, message, compression_note, &
+                                  ignore_kink)
     !! Physical-branch audit of a converged deck cable (CD_HermiteCable_Branch_Audit).
+    !! ignore_kink (optional, default false): accept a state that fails only the audit's kink
+    !! test (the last it applies), for a caller that judges the kink limit itself.
     !! A rotationally restrained end (Finite/Rigid connection) may turn the centreline
     !! against the chord heading inside its bending boundary layer, of length
     !! sqrt(EI/T) at the end tension; five such lengths (at most a quarter of the line)
@@ -5848,6 +6115,7 @@ CONTAINS
     LOGICAL, INTENT(OUT) :: physical
     CHARACTER(*), INTENT(OUT) :: message
     CHARACTER(*), INTENT(OUT), OPTIONAL :: compression_note
+    LOGICAL, INTENT(IN), OPTIONAL :: ignore_kink
     TYPE(CD_HermiteBranchAuditType) :: audit
     REAL(wp) :: zone(2), qe(12), t_end, total, allowance, hl_max, excess, denom
     LOGICAL :: report_c
@@ -5881,6 +6149,9 @@ CONTAINS
       RETURN
     END IF
     physical = audit%physical
+    IF (PRESENT(ignore_kink)) THEN
+      IF (ignore_kink .AND. audit%failed_check == CD_HC_AUDIT_KINK) physical = .TRUE.
+    END IF
     IF (PRESENT(compression_note)) THEN
       ! Mesh adequacy: a cubic-Hermite element longer than the bending length
       ! lambda = (EI/|w|)^(1/3) cannot follow the bends of the line (touchdown, arch,
@@ -5935,6 +6206,7 @@ CONTAINS
       WRITE (message, '(A,ES10.3,A,ES10.3,A,I0)') 'unresolved/kinked equilibrium: max(h*kappa)=', &
         audit%h_kappa_peak, ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', audit%h_kappa_elem
     END SELECT
+    IF (physical) message = ''
   END SUBROUTINE audit_hermite_static
 
   FUNCTION diam_on(l0_deck, l0, diam_deck) RESULT(diam)

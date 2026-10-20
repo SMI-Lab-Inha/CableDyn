@@ -3694,8 +3694,12 @@ CONTAINS
         fr = aggr%ctrl_elem(1)
         WRITE (*, '(A,I0,A,I0,A)') '  cable control span on the refined mesh: ', ner - fr + 1, ' of ', ner, &
           ' elements'
-        CALL require(ner > 47 .AND. MOD(ner, 47) == 0 .AND. ner - fr + 1 == ner/47, &
+        ! static refinement is local, so the children of a segment are not a fixed count: the
+        ! span is the trailing elements that make up the fairlead-side segment and no more
+        CALL require(ner > 47 .AND. fr > 1 .AND. fr <= ner, &
                      'cablectrl: the span is the children of the refined fairlead-side segment')
+        IF (fr > 1) CALL require(SUM(aggr%cables(1)%line%l0(fr - 1:ner)) > 40.0_wp/13.0_wp*(1.0_wp + 1.0e-9_wp), &
+                                 'cablectrl: the span stops at the fairlead-side segment')
         CALL require(ABS(SUM(aggr%cables(1)%line%l0(fr:ner)) - 40.0_wp/13.0_wp) <= 1.0e-12_wp*40.0_wp, &
                      'cablectrl: the refined span is the 40/13 m segment')
         base = aggr%cables(1)%line%l0

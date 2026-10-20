@@ -576,6 +576,19 @@ but a few geometries are genuinely hard:
   the mesh-sequenced state is prolongated and polished there. If the message names that refined
   mesh as well (``still unstable on the refined mesh``), the instability is physical: check the
   layout, the line length and the buoyancy.
+- **Discrete buoyancy modules.** ``finite-EI static solve with discrete ATTACHMENTS failed at
+  load fraction ...`` means the homotopy from the smeared modules to the lumped ones (see
+  *Discrete attachments* in :doc:`theory`) did not reach the discrete equilibrium: the damped
+  Newton solve of a load step did not converge, nor did its pseudo-transient and line-search
+  repetitions, down to steps of 1/1024 of the module loads (or 64 load steps failed in all).
+  The message names the load fraction of the first failed solve and the load fraction the
+  homotopy reached. A discrete state reached by those repetitions or smaller steps is checked as
+  the smeared one was; ``... the discrete equilibrium reached after a failed Newton solve ...``
+  names the check it failed (the kink limit away from the attachment nodes, the tensile
+  contract, the physical-branch audit or the stability test), and a state that passes them is
+  reported in the note ``... was reached after a failed Newton solve ... and passed the
+  acceptance checks of the smeared state``. Check that the deck with the modules replaced by the equivalent
+  smeared buoyancy section solves; if it does, the discrete layout itself is the difficulty.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
   from the catenary/arch seed.
@@ -754,6 +767,22 @@ Warnings and notes that do not stop a run
        :math:`(EI/|w|)^{1/3}` (see :doc:`modeling`, step 5). The run uses
        the refined mesh, statics and dynamics alike, and its outputs have that many segments.
        Mesh the touchdown and section changes to that rule to keep the deck mesh.
+   * - ``Note: line ...: the deck mesh (... elements) could not resolve the curvature of the
+       equilibrium; refined to ... elements``
+     - the deck mesh is too coarse for the bends of the static state. Either an element folded
+       beyond :math:`L_0\kappa = 0.7` (a bend shorter than the element), and the static solve
+       refined the mesh locally where the bend is, and where elements are longer than half the
+       bending length, at most 16-fold per deck element and graded into the neighbouring
+       elements; or the continuation or polish failed on a deck mesh with elements longer than
+       half the bending length :math:`(EI/|w|)^{1/3}`, and the route was repeated on the whole
+       line refined uniformly by a power of two, up to the factor at which every element meets
+       that length (or, at a rotationally
+       restrained end, on end elements halved toward the end down to its boundary layer). See
+       :doc:`theory`, Static equilibrium. The run uses the refined mesh, statics and dynamics
+       alike, and its profile and per-line outputs have that many segments; the refinement
+       only splits deck elements, so the node channels still name deck nodes (see
+       :ref:`outputs-refined-nodes`). Mesh the line to the bending-length rule to keep the deck
+       mesh.
    * - ``Note: line ... starts the dynamics from a static state solved in its vertical plane that
        is unstable out of that plane on its mesh of ... elements, the coarsest ... m long where
        half the bending length (EI/|w|)^(1/3) is ... m; ...``
