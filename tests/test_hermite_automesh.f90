@@ -532,7 +532,9 @@ CONTAINS
     !! level less everywhere (8x) would leave the sag at h*kappa about 4e-4 with no pass able to
     !! split it further within the limit; keeping its h*kappa levels and giving the
     !! bending-length rule one level meets the target in one pass. (The tolerance is the
-    !! round-off floor of the 6000-element polish.)
+    !! round-off floor of the 6000-element polish. The near-cable line, EI = 1e-2 on 7000
+    !! elements, takes about 106 Newton iterations on one platform and ran past a cap of 120 on
+    !! another, so the cap is 400: the case checks the level allocation, not the iteration count.)
     INTEGER, PARAMETER :: NE = 520
     REAL(wp), PARAMETER :: TARGET = 3.0e-4_wp
     REAL(wp), ALLOCATABLE :: l0(:), EA(:), EI(:), w(:), seed(:)
@@ -546,10 +548,11 @@ CONTAINS
     EI = 1.0e-2_wp
     h = l0(1)
     CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
-                                               8, 120, 1.0e-6_wp, 0.7_wp, TARGET, 0.0_wp, 16, [2, 5], &
+                                               8, 400, 1.0e-6_wp, 0.7_wp, TARGET, 0.0_wp, 16, [2, 5], &
                                                l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, res, its, es, em, &
                                                local_refinement=.TRUE.)
     IF (es /= CD_HCSTAT_OK) WRITE (*, '(A)') '  (local limit automesh error) '//TRIM(em)
+    WRITE (*, '(A,I0,A,I0,A,ES10.3)') '  local limit: ', SIZE(l0o), ' elements, ', its, ' Newton iterations, |R| ', res
     CALL check(es == CD_HCSTAT_OK, 'local limit: solve ok')
     IF (es /= CD_HCSTAT_OK) RETURN
     CALL check(SIZE(l0o) <= 8192 .AND. SIZE(l0o) > 8*NE, 'local limit: within the limit, beyond 8x')
