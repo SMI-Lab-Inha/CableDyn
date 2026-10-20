@@ -10,7 +10,8 @@ redistributed.
 
 | Path | Contents |
 | --- | --- |
-| [`RELEASE_0_1_1.md`](RELEASE_0_1_1.md) | Toolchains, test results, dependency revisions and asset hashes for v0.1.1 |
+| [`RELEASE_0_2_0.md`](RELEASE_0_2_0.md) | Toolchains, test results, dependency revisions and asset hashes for v0.2.0 |
+| [`RELEASE_0_1_1.md`](RELEASE_0_1_1.md) | The same for v0.1.1 |
 | [`RELEASE_0_1_0.md`](RELEASE_0_1_0.md) | The same for v0.1.0 |
 | [`bodies/`](bodies/README.md) | Rigid-body, rod and shared-anchor cases with MoorDyn-C twins, stored references and pass limits |
 | [`experiments/`](experiments/README.md) | Holcombe et al. (2025) static lazy-wave and Bergdahl et al. (2016) dynamic-chain comparisons |
