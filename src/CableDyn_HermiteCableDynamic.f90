@@ -6618,7 +6618,7 @@ CONTAINS
         ve(7:9) = v_cfg(6*e + 1:6*e + 3); ve(10:12) = v_cfg(6*e + 4:6*e + 6)
         IF (want_tangent .AND. model%has_ctrl) THEN
           CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
-                                                     fdamp, kdq, kdv, es, em2, &
+                                                     fdamp, kdq, kdv, es, em_e, &
                                                      model%axial_quadrature_order, model%l0_dot(e))
         ELSE IF (want_tangent) THEN
           CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
@@ -6626,7 +6626,7 @@ CONTAINS
                                                      model%axial_quadrature_order)
         ELSE IF (model%has_ctrl) THEN
           CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), &
-                                                     fdamp, ErrStat=es, ErrMsg=em2, &
+                                                     fdamp, ErrStat=es, ErrMsg=em_e, &
                                                      quadrature_order=model%axial_quadrature_order, &
                                                      l0_dot=model%l0_dot(e))
         ELSE
