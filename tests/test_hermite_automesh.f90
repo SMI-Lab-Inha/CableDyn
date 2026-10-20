@@ -525,18 +525,18 @@ CONTAINS
   END SUBROUTINE case_local_boundary_layer
 
   SUBROUTINE case_local_element_limit()
-    !! A pass that would exceed the element limit (8192) gives up bending-length levels before
-    !! h*kappa levels. 520 elements of 0.19 m with EI = 1e-2 (half the bending length is
-    !! 2.3 cm) all ask for 16 children by the bending-length rule (8320 elements), and with the
-    !! h*kappa target 3e-4 the elements about the sag ask for 16 by h*kappa as well. Taking one
-    !! level less everywhere (8x) would leave the sag at h*kappa about 4e-4 with no pass able to
-    !! split it further within the limit; keeping its h*kappa levels and giving the
-    !! bending-length rule one level meets the target in one pass. (The tolerance is the
-    !! round-off floor of the 6000-element polish. The near-cable line, EI = 1e-2 on 7000
-    !! elements, takes about 106 Newton iterations on one platform and ran past a cap of 120 on
-    !! another, so the cap is 400: the case checks the level allocation, not the iteration count.)
-    INTEGER, PARAMETER :: NE = 520
-    REAL(wp), PARAMETER :: TARGET = 3.0e-4_wp
+    !! A pass that would exceed the element limit gives up bending-length levels before h*kappa
+    !! levels. The limit is lowered to 900 (max_elements) so that a small, well-conditioned line
+    !! reaches it: 60 elements of 1.67 m with EI = 5 (half the bending length is 18 cm) all ask
+    !! for 16 children by the bending-length rule (960 elements), and with the h*kappa target
+    !! 3e-3 the elements about the sag ask for 16 by h*kappa as well. Taking one level less
+    !! everywhere (8x) would leave the sag above the target with no pass able to split it
+    !! further within the limit; keeping its h*kappa levels and giving the bending-length rule
+    !! one level meets the target in one pass. (At the default limit of 8192 the same test needs
+    !! a string-like line on about 7000 elements, whose polish can settle on a folded
+    !! equilibrium depending on round-off.)
+    INTEGER, PARAMETER :: NE = 60, LIMIT = 900
+    REAL(wp), PARAMETER :: TARGET = 3.0e-3_wp
     REAL(wp), ALLOCATABLE :: l0(:), EA(:), EI(:), w(:), seed(:)
     REAL(wp), ALLOCATABLE :: l0o(:), EAo(:), EIo(:), wo(:), qo(:), curvo(:)
     INTEGER, ALLOCATABLE :: fixed(:), fixo(:)
@@ -545,17 +545,17 @@ CONTAINS
     REAL(wp) :: seabed_z, res, h
     CHARACTER(240) :: em
     CALL build_rig(NE, l0, EA, EI, w, seed, fixed, nfix, seabed_z)
-    EI = 1.0e-2_wp
+    EI = 5.0_wp
     h = l0(1)
     CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, EA, EI, w, seed, fixed(1:nfix), seabed_z, 0.0_wp, &
-                                               8, 400, 1.0e-6_wp, 0.7_wp, TARGET, 0.0_wp, 16, [2, 5], &
+                                               8, 300, 1.0e-8_wp, 0.7_wp, TARGET, 0.0_wp, 16, [2, 5], &
                                                l0o, EAo, EIo, wo, qo, curvo, fixo, scale, dg, res, its, es, em, &
-                                               local_refinement=.TRUE.)
+                                               local_refinement=.TRUE., max_elements=LIMIT)
     IF (es /= CD_HCSTAT_OK) WRITE (*, '(A)') '  (local limit automesh error) '//TRIM(em)
     WRITE (*, '(A,I0,A,I0,A,ES10.3)') '  local limit: ', SIZE(l0o), ' elements, ', its, ' Newton iterations, |R| ', res
     CALL check(es == CD_HCSTAT_OK, 'local limit: solve ok')
     IF (es /= CD_HCSTAT_OK) RETURN
-    CALL check(SIZE(l0o) <= 8192 .AND. SIZE(l0o) > 8*NE, 'local limit: within the limit, beyond 8x')
+    CALL check(SIZE(l0o) <= LIMIT .AND. SIZE(l0o) > 8*NE, 'local limit: within the limit, beyond 8x')
     CALL check(ABS(MINVAL(l0o) - h/16.0_wp) <= 1.0e-12_wp*h, 'local limit: h*kappa needs keep 16 children')
     CALL check(ABS(MAXVAL(l0o) - h/8.0_wp) <= 1.0e-12_wp*h, 'local limit: bending-length needs give a level')
     CALL check(dg%h_kappa_peak <= TARGET, 'local limit: h*kappa target met')

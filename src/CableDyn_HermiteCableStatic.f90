@@ -6157,7 +6157,7 @@ CONTAINS
                                                    require_tensile, refine_non_axial, endconn_stiffness, &
                                                    endconn_direction, endconn_mode, waterline_z, dry_buoyancy, &
                                                    compression_mode, energy_polish_in, tensile_advisory, water_weight, &
-                                                   current, local_refinement)
+                                                   current, local_refinement, max_elements)
     !! Solve the finite-EI static equilibrium and AUTOMATICALLY select the minimum safe mesh: the
     !! metric-gated mesh-economics entry. Solve at the caller's (coarse) mesh; if
     !! CD_HermiteCable_Resolution_Metrics flags it fragile, refine by the recommended power-of-two
@@ -6194,6 +6194,9 @@ CONTAINS
     !! energy_polish_in (optional, default false): polish the initial state and every
     !!                prolongated refinement with the trust-region energy minimization of
     !!                CD_HermiteCable_Static_Solve instead of the damped Newton update.
+    !! max_elements (optional): a lower element limit than AUTO_MAX_ELEMENTS (8192), the most
+    !!                elements a refinement may produce; values outside [1, 8192] use 8192. It lets
+    !!                a test reach the limit on a small, well-conditioned line.
     !! local_refinement (optional, default false): refine for the curvature, end boundary-layer
     !!                and contact-topology screens element by element instead of globally. A
     !!                pass runs when the same screens fail as for the global refinement; it
@@ -6231,6 +6234,7 @@ CONTAINS
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: current
     INTEGER, INTENT(IN), OPTIONAL :: compression_mode
     LOGICAL, INTENT(IN), OPTIONAL :: energy_polish_in, tensile_advisory, local_refinement
+    INTEGER, INTENT(IN), OPTIONAL :: max_elements
 
     INTEGER :: ne, nn, it, scale, parent, j, es, axial_order, bending_order, local_passes, cmode
     LOGICAL :: energy_polish, advisory
@@ -6240,7 +6244,7 @@ CONTAINS
     ! and the per-element h*kappa and isolated contact/gap nodes of the last diagnosis.
     INTEGER, PARAMETER :: MAX_LOCAL_RESOLUTION_PASSES = 12
     LOGICAL :: local_mode, nothing_to_split
-    INTEGER :: kcap, local_res_passes
+    INTEGER :: kcap, local_res_passes, element_limit
     ! What stopped the local refinement short of its targets, other than the per-element cap.
     CHARACTER(160) :: local_stop
     INTEGER, ALLOCATABLE :: level_out(:), level_r(:)
@@ -6302,6 +6306,10 @@ CONTAINS
     IF (PRESENT(energy_polish_in)) energy_polish = energy_polish_in
     local_mode = .FALSE.
     IF (PRESENT(local_refinement)) local_mode = local_refinement
+    element_limit = AUTO_MAX_ELEMENTS
+    IF (PRESENT(max_elements)) THEN
+      IF (max_elements >= 1 .AND. max_elements < AUTO_MAX_ELEMENTS) element_limit = max_elements
+    END IF
     local_res_passes = 0
     local_stop = ''
 
@@ -6450,7 +6458,7 @@ CONTAINS
         ! Mesh-scale contact chatter can report rec_scale = 1 (a topology signal), so
         ! force at least one doubling; never exceed the cumulative cap.
         scale = MAX(2, diag_out%rec_scale)
-        DO WHILE ((applied_scale*scale > max_scale .OR. SIZE(l0_out)*scale > AUTO_MAX_ELEMENTS) .AND. scale > 1)
+        DO WHILE ((applied_scale*scale > max_scale .OR. SIZE(l0_out)*scale > element_limit) .AND. scale > 1)
           scale = scale/2
         END DO
         IF (scale < 2) EXIT
@@ -6813,7 +6821,7 @@ CONTAINS
       !! each limited to kcap bisections from the caller element. The levels are then graded:
       !! an element is split further while it is longer than max(2, its length ratio to the
       !! neighbour before the pass) times that neighbour's new length. A pass that would exceed
-      !! the element limit AUTO_MAX_ELEMENTS gives up first the bending-length levels (one
+      !! the element limit (element_limit) gives up first the bending-length levels (one
       !! level at a time, graded), then the grading, and only then takes one level less of the
       !! h*kappa, end-layer and contact needs at a time: those name a bend or a boundary layer
       !! the state shows, where the bending-length rule is a mesh-quality rule. none is set
@@ -6871,19 +6879,19 @@ CONTAINS
         need = MAX(base, bend - red)
         CALL grade(need)
         n_new = SUM(2_I8**need)
-        fits = n_new <= INT(AUTO_MAX_ELEMENTS, I8)
+        fits = n_new <= INT(element_limit, I8)
         IF (fits) EXIT
       END DO
       DO red = 0, MAXVAL(base)
         IF (fits) EXIT
         need = MAX(base - red, 0)
         n_new = SUM(2_I8**need)
-        fits = n_new <= INT(AUTO_MAX_ELEMENTS, I8)
+        fits = n_new <= INT(element_limit, I8)
       END DO
       IF (.NOT. fits .OR. ALL(need == 0)) THEN
         ! A need was given up to the limit (with no need at all the early return above names
         ! the per-element cap).
-        WRITE (local_stop, '(A,I0,A)') 'the element limit ', AUTO_MAX_ELEMENTS, ' was reached'
+        WRITE (local_stop, '(A,I0,A)') 'the element limit ', element_limit, ' was reached'
         RETURN
       END IF
       none = .FALSE.
