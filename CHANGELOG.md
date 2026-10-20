@@ -168,6 +168,21 @@ All notable changes to CableDyn are recorded in this file. The format follows
   moorings, and quote their results for the enlarged grid. With the `MD_Shared` grid, the
   line-1 fairlead tension standard deviation of the tutorial was 18 % too high. See the
   manual's OpenFAST page (SeaState grid).
+- Active tensioning of finite-EI cables in OpenFAST (`CompMooring = 5`). A `CONTROL` row may
+  now name a finite-EI (cubic-Hermite) cable, alone or in a deck with `EI = 0` lines. Before
+  each mooring step, ServoDyn's `CableDeltaL` and `CableDeltaLdot` scale every cable element of
+  the line's fairlead-side deck segment by (S + `DeltaL`)/S, with the matching rate, so the
+  segment becomes S + `DeltaL` long. The cable's mass, attachment masses, tributary lengths and
+  seabed contact coefficients follow the new lengths, and the axial damping acts on the rate of
+  the strain the elastic force uses, so a segment paid out at constant strain carries no damping
+  force. The force-blended generalised-α step takes its committed force at the lengths of the
+  preceding step, so a pay-out ramp follows the quasi-static tension at any `rhoInf`; a deck
+  that controls a finite-EI cable under `False alpha_force_blend` fails at initialisation with
+  a message that names the line, as that blend has no such treatment. A command outside
+  MoorDyn-F's bounds stops the run as for `EI = 0` lines (see Changed), and FAST.Farm decks
+  still reject `CONTROL`. A zero command, with a `DeltaLdot` of either sign, leaves the run
+  bit-identical to an uncontrolled one, and a checkpoint restart continues bit-identically. See
+  the manual's deck format page (CONTROL).
 
 ### Changed
 
@@ -318,6 +333,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   0.63 m against 0.64 m converged, where the linear interpolation gave 0.23 m. On the
   `EI = 0` chain of `examples/chain_range_tdp.dat` the largest step falls from 2.59 m to 1.33 m.
   The TDP now lies on the contact-onset height, and `TDP<L>Grd` uses the same location.
+- Active tensioning (`CONTROL`) of an `EI = 0` line now stops the run when a command leaves
+  MoorDyn-F's bounds, as MoorDyn-F does: with `UnstrLen` the line's unstretched length and N its
+  number of segments, a `DeltaL` above `UnstrLen`/N or below −0.5 `UnstrLen`/N, the comparisons
+  MoorDyn-F makes, so a command MoorDyn-F accepts is accepted (on a line of one section
+  `UnstrLen`/N is the controlled segment's initial length). The message names the channel, the
+  line, the command and the bound. A command beyond these bounds had printed a one-time warning
+  and been applied. A command within the bounds that would make the controlled segment of a
+  line of several sections non-positive also stops the run. Finite-EI cables take the same
+  bounds. Every row is checked before any line changes, and a row that still fails takes back
+  the lines the command had already changed, so a refused command changes nothing.
 - Faster wave kinematics of directional and multi-train seas (`wavetrain` rows, spectral
   `waves` rows, `WaveSpreading`). Each component's phase cosine is now computed once for the
   surface elevation and the kinematics, and its depth profile with one exponential instead of
@@ -520,6 +545,54 @@ All notable changes to CableDyn are recorded in this file. The format follows
   than a factor four, as the manual states; it had kept the first tangent for the whole step,
   which a slow linear contraction could exhaust (30 iterations at the start of the 5 m heave
   cells of the L2-2 parity test with the force blend).
+- Active tensioning (`CONTROL`) of an `EI = 0` line now changes the segment at the line's
+  fairlead-side end, the end on a host-driven point (`Coupled`, `Vessel`, `Turbine<J>`,
+  `Body<N>` or a `Coupled`/`Vessel` rod end), and the segment at the `NodeB` written in the
+  deck when both or neither ends are host-driven, as MoorDyn-F does for a deck in its own order.
+  It had always changed the segment at CableDyn's End A, the `NodeA` of a line that the
+  automatic anchor-first swap leaves in deck order. Two kinds of line change: a line kept in
+  deck order whose only host-driven end is its `NodeB`, such as a stock-order
+  `Connect`-to-`Vessel` clump leg or a line from a `Fixed` anchor to a coupled rod end, now
+  controls the segment at the host-driven end instead of the one at its `NodeA`; and a line
+  with both or no host-driven ends that the swap leaves in deck order, such as a
+  `Connect`-to-`Fixed` or `Connect`-to-`Connect` line, a `Fixed` hang-off above a
+  `Free`/`Connect` point, or a line between two vessel points, now controls the segment at its
+  `NodeB`. Lines from a `Fixed` anchor to a `Coupled`, `Vessel` or `Body<N>` point,
+  written in either order, and lines written fairlead first from a host-driven `NodeA` control
+  the same segment as before.
+- Active tensioning (`CONTROL`) of `EI = 0` lines no longer lags behind the commanded length
+  on a pay-out or haul-in ramp. A length update had re-derived the committed acceleration
+  under the new length, and the next generalised-α step evaluated its blended configuration
+  with the new length only, so the force of each length change entered the committed side of
+  the blend. The committed state now keeps its acceleration and the lengths and rates it was
+  reached with, and each share of the step after a change takes the lengths of its own time
+  level. With the force-blended step (the default), the step-start force is evaluated at the
+  committed lengths and rates: the internal force, every dynamic load, every step-start
+  quantity of the release cap (stretch, tension, secant and law stiffness, dashpot tension, and
+  the one-step dissipation budget of a dashpot slack at the step start),
+  and the distributed external load and seabed coefficients those lengths give; the cap's
+  end-state quantities take the new lengths; the end-of-step force takes the new lengths, and the inertia (the
+  structural and added mass, which the force blend keeps at the α level) the blended ones.
+  Under `False alpha_force_blend` the step blends the old and new lengths with the
+  configuration. An acceleration re-derived between a command and the next step, as a host
+  state update does, is solved at the committed lengths, as the step evaluates its committed
+  side, and leaves them committed. On a taut line paid out at a tension change of 1 N per step,
+  the tension follows the closed form to 1.8 mN at `rhoInf` 0.4 and 0 alike (the start-up
+  transient), where a step-start force at the new lengths lags by 2.6 N. In
+  the coupled OpenFAST comparison with stock MoorDyn (`validation/scripts/activetension/`), the
+  controlled fairlead tensions had run up to 97 kN (4.1 %) above MoorDyn during the pay-out and
+  148 kN (6.3 %) below it during the haul-in, at `rhoInf` 0.4 and still 58 kN and 89 kN at
+  `rhoInf` 0; they now stay within 3 kN (0.13 %). The hold tensions, which the published
+  comparison scores, move by less than 0.01 %, and the scorer now also gates the ramps.
+  This change leaves runs without `CONTROL`, and a zero command, bit-identical. A checkpoint restart
+  re-applies the restored command as the committed state's, so a restart during a ramp
+  continues bit-identically. A step that `ei0_substeps auto` solves in sub-steps spreads the
+  length change over them: the committed lengths are part of the state each pass starts from,
+  each sub-step ends at the lengths and rates interpolated linearly in time (the last at the
+  new ones), and the trigger takes the step-start tensions at the committed lengths. On a line
+  turning by 2.3° per step and paid out at 0.05 m/s, the sub-stepped march equals one taken as
+  given at a quarter of the step to 3e-8 N; applying the whole change in the first sub-step
+  departs from it by 22 N.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

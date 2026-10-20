@@ -43,6 +43,9 @@ PROGRAM test_model
 
   CALL case_lifecycle_static_step()
   CALL case_segment_length_update()
+  CALL case_segment_payout_ramp()
+  CALL case_segment_payout_substeps()
+  CALL case_segment_force_blend_committed_side()
   CALL case_copy_model_preserves_state()
   CALL case_prescribed_step_updates_state()
   CALL case_recovery_common_path()
@@ -163,10 +166,14 @@ CONTAINS
 
   SUBROUTINE case_segment_length_update()
     !! Active line control (the CtrlChan mechanism): CD_Update_Model_SegmentLength
-    !! must leave the model INDISTINGUISHABLE from one BUILT with the new length --
-    !! the stale-cache killer (any l0-derived quantity cached at init and not
-    !! refreshed breaks the bitwise step equivalence). Also: paying out a taut
-    !! segment drops its tension (sign), and the validation battery fails closed.
+    !! keeps the committed acceleration and the lengths the committed state was reached
+    !! with (a re-derived acceleration keeps them too); once the new length is committed
+    !! (restored = .TRUE., the checkpoint-restart re-application) and the acceleration
+    !! re-derived (CD_Recompute_Model_Acceleration) the model must be INDISTINGUISHABLE from one
+    !! BUILT with the new length -- the stale-cache killer (any l0-derived quantity
+    !! cached at init and not refreshed breaks the bitwise step equivalence). Also:
+    !! paying out a taut segment drops its tension (sign), and the validation battery
+    !! fails closed.
     INTEGER, PARAMETER :: NE = 4, NN = NE + 1, NDOF = 3*NN
     TYPE(CD_ModelType) :: ma, mb
     TYPE(GenAlphaConfig) :: cfg
@@ -194,16 +201,25 @@ CONTAINS
     ! sign: paying out the taut end segment drops its tension, others unchanged
     CALL CD_Get_Model_Tension(ma, ten0, es, em)
     CALL require(es == CD_MODEL_OK, 'seglen:tension-0')
+    aa = ma%a
     CALL CD_Update_Model_SegmentLength(ma, NE, l0b(NE), 0.0_wp, es, em)
     CALL require(es == CD_MODEL_OK, 'seglen:update: '//TRIM(em))
+    CALL require(nan_max_abs(ma%a - aa) <= 0.0_wp .AND. nan_max_abs(ma%l0_c - l0) <= 0.0_wp, &
+                 'seglen:update-keeps-the-committed-acceleration-and-lengths')
     CALL CD_Get_Model_Tension(ma, ten1, es, em)
     CALL require(es == CD_MODEL_OK, 'seglen:tension-1')
     CALL require(ten1(NE) < ten0(NE), 'seglen:payout-drops-end-tension')
     CALL require(nan_max_abs(ten1(1:NE - 1) - ten0(1:NE - 1)) <= 0.0_wp, 'seglen:other-segments-untouched')
 
-    ! equivalence: the updated model matches the fresh-built twin bitwise --
-    ! tensions, coupled loads (the re-assembled mass cache), and a full dynamic
-    ! step under the same trajectory
+    ! equivalence: committed at the new length, the updated model matches the fresh-built
+    ! twin bitwise -- tensions, coupled loads (the re-assembled mass cache), and a full
+    ! dynamic step under the same trajectory
+    CALL CD_Recompute_Model_Acceleration(ma, es, em)
+    CALL require(es == CD_MODEL_OK .AND. nan_max_abs(ma%l0_c - l0) <= 0.0_wp .AND. nan_max_abs(ma%a - aa) <= 0.0_wp, &
+                 'seglen:recompute-keeps-the-committed-lengths')
+    CALL CD_Update_Model_SegmentLength(ma, NE, l0b(NE), 0.0_wp, es, em, restored=.TRUE.)
+    CALL CD_Recompute_Model_Acceleration(ma, es, em)
+    CALL require(es == CD_MODEL_OK .AND. nan_max_abs(ma%l0_c - l0b) <= 0.0_wp, 'seglen:commit-at-new-length')
     CALL CD_Get_Model_Tension(mb, tenb, es, em)
     CALL require(nan_max_abs(ten1 - tenb) <= 0.0_wp, 'seglen:tension-equals-fresh-build')
     CALL CD_Calc_Model_CoupledLoads(ma, loads_a, es, em)
@@ -243,8 +259,10 @@ CONTAINS
       CALL CD_Init_Model(mw1, q0, v0, conn, l0b, ea, rho_a, .FALSE., fw1, fixed, cfg, es, em, &
                          dist_load_per_length=wpl)
       CALL require(es == CD_MODEL_OK, 'seglen:init-weighted-fresh')
-      CALL CD_Update_Model_SegmentLength(mw0, NE, l0b(NE), 0.0_wp, es, em)
+      CALL CD_Update_Model_SegmentLength(mw0, NE, l0b(NE), 0.0_wp, es, em, restored=.TRUE.)
       CALL require(es == CD_MODEL_OK, 'seglen:weighted-update: '//TRIM(em))
+      CALL CD_Recompute_Model_Acceleration(mw0, es, em)
+      CALL require(es == CD_MODEL_OK, 'seglen:weighted-commit: '//TRIM(em))
       CALL require(nan_max_abs(mw0%f_ext - mw1%f_ext) <= 0.0_wp, 'seglen:weighted-fext-bitwise')
       CALL require(nan_max_abs(mw0%l0 - mw1%l0) <= 0.0_wp, 'seglen:weighted-l0-bitwise')
       CALL require(nan_max_abs(mw0%a - mw1%a) <= 0.0_wp, 'seglen:weighted-accel-bitwise')
@@ -282,8 +300,10 @@ CONTAINS
       fx0(3*2 - 1) = fx0(3*2 - 1) + 3.0_wp
       CALL CD_Update_Model_External_Loads(mx0, fx0, es, em)
       CALL require(es == CD_MODEL_OK, 'seglen:extload-update: '//TRIM(em))
-      CALL CD_Update_Model_SegmentLength(mx0, NE, l0b(NE), 0.0_wp, es, em)
+      CALL CD_Update_Model_SegmentLength(mx0, NE, l0b(NE), 0.0_wp, es, em, restored=.TRUE.)
       CALL require(es == CD_MODEL_OK, 'seglen:extload-control: '//TRIM(em))
+      CALL CD_Recompute_Model_Acceleration(mx0, es, em)
+      CALL require(es == CD_MODEL_OK, 'seglen:extload-commit: '//TRIM(em))
       ! fresh twin: assembled at the NEW length plus the same bump
       CALL CD_Assemble_Distributed_Load(conn, l0b, wplx, fx1, es, em)
       CALL require(es == 0, 'seglen:extload-assemble-fresh')
@@ -381,6 +401,300 @@ CONTAINS
     CALL CD_Update_Model_SegmentLength(ma, 1, 1.0_wp, 0.0_wp, es, em)
     CALL require(es /= CD_MODEL_OK, 'seglen:uninitialized-fails')
   END SUBROUTINE case_segment_length_update
+
+  SUBROUTINE case_segment_payout_ramp()
+    !! A weightless EI = 0 line between fixed ends H = 10.1 m apart (initial strain 1 %),
+    !! its end element paid out at Ldot = 0.01 m/s from t = 0, marched with rho_inf = 0.4
+    !! and rho_inf = 0. The strain stays uniform, eps = H/L' - 1, so the reported tension
+    !! (elastic plus Kelvin-Voigt) is EA (H/L' - 1) - BA H Ldot/L'**2. The committed state
+    !! keeps the lengths it was reached with: re-deriving the committed acceleration under
+    !! the new length, or evaluating the step-start force of the force blend (the default;
+    !! under False alpha_force_blend the blended configuration) with the new length, lags the
+    !! tension by a fixed fraction of its change per step, dT = EA H Ldot dt/L'**2 (the
+    !! pay-out ramp artifact this check guards against).
+    INTEGER, PARAMETER :: NE = 10, NN = NE + 1, NDOF = 3*NN
+    REAL(wp), PARAMETER :: L = 10.0_wp, H = 10.1_wp, EAV = 1.0e5_wp, RHOA = 1.0_wp, BAV = 1.0e5_wp
+    REAL(wp), PARAMETER :: LDOT = 0.01_wp, TEND = 4.0_wp, DT = 0.01_wp
+    TYPE(CD_ModelType) :: m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, i, k, pass
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), ba(NE), q0(NDOF), v0(NDOF), f_ext(NDOF), ten(NE)
+    REAL(wp) :: t, lp, expect, err(3), d_step, hist(NINT(TEND/DT), 3), diff, diff_cfg
+    LOGICAL :: conv, stalled
+    CHARACTER(200) :: em
+
+    DO i = 1, NE
+      conn(:, i) = [i, i + 1]
+    END DO
+    l0 = L/REAL(NE, wp)
+    ea = EAV
+    rho_a = RHOA
+    ba = BAV
+    DO i = 1, NN
+      q0(3*i - 2:3*i) = [REAL(i - 1, wp)*H/REAL(NE, wp), 0.0_wp, 0.0_wp]
+    END DO
+    fixed = [1, 2, 3, NDOF - 2, NDOF - 1, NDOF]
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    d_step = EAV*H*LDOT*DT/(L + LDOT*TEND)**2
+    err = 0.0_wp
+    ! pass 1: rho_inf 0.4, 2: rho_inf 0, 3: rho_inf 0.4 with the configuration blend
+    DO pass = 1, 3
+      cfg%rho_inf = MERGE(0.0_wp, 0.4_wp, pass == 2)
+      cfg%force_blend = pass /= 3
+      cfg%rel_tol = 1.0e-10_wp
+      CALL CD_Init_Model(m, q0, v0, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, cfg, es, em, ba=ba)
+      CALL require(es == CD_MODEL_OK, 'payout:init: '//TRIM(em))
+      IF (es /= CD_MODEL_OK) RETURN
+      DO k = 1, NINT(TEND/DT)
+        t = REAL(k, wp)*DT
+        CALL CD_Update_Model_SegmentLength(m, NE, l0(NE) + LDOT*t, LDOT, es, em)
+        CALL require(es == CD_MODEL_OK, 'payout:update: '//TRIM(em))
+        CALL CD_Step_Model(m, DT, conv, stalled, n_iter, es, em)
+        CALL require(es == CD_MODEL_OK .AND. conv, 'payout:step: '//TRIM(em))
+        IF (es /= CD_MODEL_OK) EXIT
+        CALL CD_Get_Model_Tension(m, ten, es, em)
+        hist(k, pass) = ten(1)
+        IF (t < 1.0_wp) CYCLE
+        lp = L + LDOT*t
+        expect = EAV*(H/lp - 1.0_wp) - BAV*H*LDOT/(lp*lp)
+        err(pass) = MAX(err(pass), ABS(ten(1) - expect), ABS(ten(NE) - expect))
+      END DO
+      CALL CD_End_Model(m, es, em)
+    END DO
+    diff = MAXVAL(ABS(hist(NINT(1.0_wp/DT):, 1) - hist(NINT(1.0_wp/DT):, 2)))
+    diff_cfg = MAXVAL(ABS(hist(NINT(1.0_wp/DT):, 3) - hist(NINT(1.0_wp/DT):, 2)))
+    WRITE (*, '(A,ES10.3,A,ES12.5,A,ES12.5,A,ES12.5)') '  payout ramp: per-step tension change ', d_step, &
+      ' N; max error vs the closed form at rho_inf = 0.4 ', err(1), ' N, at 0 ', err(2), ' N; difference ', diff
+    WRITE (*, '(A,ES12.5,A,ES12.5)') '  payout ramp, False alpha_force_blend at rho_inf = 0.4: max error ', err(3), &
+      ' N; difference to rho_inf = 0 ', diff_cfg
+    ! the error is the start-up transient (1.8e-3 d_step at either rho_inf); a step-start force at
+    ! blended or new lengths under the force blend leaves 7e-3 and 2.6 d_step, and a difference
+    ! between the two rho_inf of 9e-4 d_step and more
+    CALL require(err(1) <= 5.0e-3_wp*d_step, 'payout:rho_inf-0.4-follows-the-closed-form')
+    CALL require(err(2) <= 5.0e-3_wp*d_step, 'payout:rho_inf-0-follows-the-closed-form')
+    CALL require(diff <= 1.0e-4_wp*d_step, 'payout:rho_inf-0.4-equals-rho_inf-0')
+    CALL require(err(3) <= 5.0e-3_wp*d_step .AND. diff_cfg <= 1.0e-4_wp*d_step, 'payout:configuration-blend')
+  END SUBROUTINE case_segment_payout_ramp
+
+  SUBROUTINE case_segment_payout_substeps()
+    !! A pay-out on a turning EI = 0 line, solved in sub-steps. A 10-segment line, End A fixed
+    !! at the origin and End B on a circle of radius H = 10.1 m at OMEGA = 2 rad/s (starting in
+    !! rigid rotation), turns its segments by 2.3 deg per 0.02 s step, so with ei0_substeps auto
+    !! (the default angle of 1 deg, at most 4 sub-steps) every step is solved again in four
+    !! sub-steps; its end element is paid out at LDOT = 0.05 m/s with a Kelvin-Voigt dashpot.
+    !! The sub-steps take the committed lengths at their start and the lengths interpolated in
+    !! time at their end, so the march equals a march with ei0_substeps off at dt/4 that sets
+    !! the length at every fine step, to the quintic of the end motion inside a step (3e-8 N
+    !! against the per-step tension change d_step = 9.9 N). Taking the whole length change in
+    !! the first sub-step departs from it by 22 N (2.2 d_step) and 5e-3 m.
+    INTEGER, PARAMETER :: NE = 10, NN = NE + 1, NDOF = 3*NN, NSUB = 4
+    REAL(wp), PARAMETER :: L = 10.0_wp, H = 10.1_wp, EAV = 1.0e5_wp, RHOA = 1.0_wp, BAV = 1.0e3_wp
+    REAL(wp), PARAMETER :: LDOT = 0.05_wp, OMEGA = 2.0_wp, TEND = 2.0_wp, DT = 0.02_wp
+    TYPE(CD_ModelType) :: sub_m, fine_m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, i, k, j
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), ba(NE), q0(NDOF), v0(NDOF), f_ext(NDOF)
+    REAL(wp) :: pq(NDOF), pv(NDOF), pa(NDOF), ten_s(NE), ten_f(NE), t, d_step, err_t, err_q
+    LOGICAL :: conv, stalled, all_conv
+    CHARACTER(200) :: em
+
+    DO i = 1, NE
+      conn(:, i) = [i, i + 1]
+    END DO
+    l0 = L/REAL(NE, wp)
+    ea = EAV
+    rho_a = RHOA
+    ba = BAV
+    DO i = 1, NN
+      q0(3*i - 2:3*i) = [REAL(i - 1, wp)*H/REAL(NE, wp), 0.0_wp, 0.0_wp]
+      v0(3*i - 2:3*i) = [0.0_wp, OMEGA*q0(3*i - 2), 0.0_wp]
+    END DO
+    fixed = [1, 2, 3, NDOF - 2, NDOF - 1, NDOF]
+    f_ext = 0.0_wp
+    cfg%rel_tol = 1.0e-10_wp
+    cfg%ei0_substep_max = NSUB
+    CALL CD_Init_Model(sub_m, q0, v0, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, cfg, es, em, ba=ba)
+    CALL require(es == CD_MODEL_OK, 'payout-substeps:init: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    ! the pay-out rate is the committed one from the start (a constant command)
+    CALL CD_Update_Model_SegmentLength(sub_m, NE, l0(NE), LDOT, es, em, restored=.TRUE.)
+    CALL require(es == CD_MODEL_OK, 'payout-substeps:rate: '//TRIM(em))
+    ! End B starts with its centripetal acceleration, so the quintic of the end motion inside a
+    ! step (the sub-step boundaries) follows the circle to (OMEGA DT)**6
+    CALL payout_end_on_circle(H, OMEGA, 0.0_wp, pq, pv, pa)
+    sub_m%a(NDOF - 2:NDOF) = pa(NDOF - 2:NDOF)
+    CALL CD_Copy_Model(sub_m, fine_m, es, em)
+    CALL require(es == CD_MODEL_OK, 'payout-substeps:copy: '//TRIM(em))
+    fine_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+    d_step = EAV*H*LDOT*DT/(L + LDOT*TEND)**2
+    all_conv = .TRUE.
+    err_t = 0.0_wp
+    err_q = 0.0_wp
+    DO k = 1, NINT(TEND/DT)
+      t = REAL(k, wp)*DT
+      CALL CD_Update_Model_SegmentLength(sub_m, NE, l0(NE) + LDOT*t, LDOT, es, em)
+      all_conv = all_conv .AND. es == CD_MODEL_OK
+      CALL payout_end_on_circle(H, OMEGA, t, pq, pv, pa)
+      CALL CD_Step_Model(sub_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      DO j = 1, NSUB
+        t = (REAL(k - 1, wp) + REAL(j, wp)/REAL(NSUB, wp))*DT
+        CALL CD_Update_Model_SegmentLength(fine_m, NE, l0(NE) + LDOT*t, LDOT, es, em)
+        all_conv = all_conv .AND. es == CD_MODEL_OK
+        CALL payout_end_on_circle(H, OMEGA, t, pq, pv, pa)
+        CALL CD_Step_Model(fine_m, DT/REAL(NSUB, wp), conv, stalled, n_iter, es, em, prescribed_q=pq, &
+                           prescribed_v=pv, prescribed_a=pa)
+        all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      END DO
+      IF (.NOT. all_conv) EXIT
+      CALL CD_Get_Model_Tension(sub_m, ten_s, es, em)
+      CALL CD_Get_Model_Tension(fine_m, ten_f, es, em)
+      err_t = MAX(err_t, MAXVAL(ABS(ten_s - ten_f)))
+      err_q = MAX(err_q, MAXVAL(ABS(sub_m%q - fine_m%q)))
+    END DO
+    CALL require(all_conv, 'payout-substeps:march: '//TRIM(em))
+    WRITE (*, '(A,I0,A,I0,A,I0,A,ES10.3,A,ES10.3,A,ES10.3,A)') '  payout sub-steps: ', sub_m%sub_stats%events, &
+      ' of ', sub_m%sub_stats%calls, ' steps in ', sub_m%sub_stats%max_used, ' sub-steps; tension against dt/4 ', &
+      err_t, ' N (d_step ', d_step, ' N), position ', err_q, ' m'
+    CALL require(sub_m%sub_stats%events == NINT(TEND/DT) .AND. sub_m%sub_stats%max_used == NSUB .AND. &
+                 sub_m%sub_stats%fallbacks == 0, 'payout-substeps:every-step-sub-stepped')
+    CALL require(ALL(sub_m%l0 == fine_m%l0) .AND. ALL(sub_m%l0_c == sub_m%l0), 'payout-substeps:lengths')
+    CALL require(err_t <= 1.0e-4_wp*d_step .AND. err_q <= 1.0e-9_wp, 'payout-substeps:equals-the-dt/4-march')
+    CALL CD_End_Model(sub_m, es, em)
+    CALL CD_End_Model(fine_m, es, em)
+  END SUBROUTINE case_segment_payout_substeps
+
+  SUBROUTINE payout_end_on_circle(h, omega, tt, pq, pv, pa)
+    !! End B (the last node) on a circle of radius h about the origin at angular speed omega,
+    !! at time tt, as full prescribed vectors (End A at the origin).
+    REAL(wp), INTENT(IN) :: h, omega, tt
+    REAL(wp), INTENT(OUT) :: pq(:), pv(:), pa(:)
+    INTEGER :: n
+    n = SIZE(pq)
+    pq = 0.0_wp
+    pv = 0.0_wp
+    pa = 0.0_wp
+    pq(n - 2:n) = h*[COS(omega*tt), SIN(omega*tt), 0.0_wp]
+    pv(n - 2:n) = h*omega*[-SIN(omega*tt), COS(omega*tt), 0.0_wp]
+    pa(n - 2:n) = -h*omega**2*[COS(omega*tt), SIN(omega*tt), 0.0_wp]
+  END SUBROUTINE payout_end_on_circle
+
+  SUBROUTINE case_segment_force_blend_committed_side()
+    !! Under the force blend (the default) the committed side of the first step after a length
+    !! and rate command is the committed state's own: a weighted, damped, grounded tension-only
+    !! line paid out at its end element gives, bit for bit, the acceleration recompute, the
+    !! step-start load (damping at the committed rate, seabed contact with the committed
+    !! tributary lengths), the step-start internal force and the release-cap data of its
+    !! uncommanded twin, while the force at t_{n+1}, the present external load and seabed
+    !! coefficients are the new lengths' and the inertia takes the blended lengths.
+    INTEGER, PARAMETER :: NE = 4, NN = NE + 1, NDOF = 3*NN
+    REAL(wp), PARAMETER :: KBOT = 1.0e5_wp, CN_RATIO = 0.05_wp, DL = 0.02_wp, LDOT = 0.3_wp
+    TYPE(CD_ModelType) :: a, b
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, n_iter, i
+    REAL(wp) :: l0(NE), l1(NE), ea(NE), rho_a(NE), ba(NE), diam(NE), q0(NDOF), v0(NDOF), wpl(3, NE)
+    REAL(wp) :: fw(NDOF), fw1(NDOF), lm(NE), af
+    REAL(wp), ALLOCATABLE :: kn(:), kn1(:)
+    LOGICAL :: conv, stalled
+    CHARACTER(200) :: em
+
+    CALL straight_cable(NE, conn, l0, ea, rho_a, q0, fixed)
+    v0 = 0.0_wp
+    DO i = 4, NDOF - 3
+      v0(i) = 0.05_wp*SIN(1.3_wp*REAL(i, wp))
+    END DO
+    wpl = 0.0_wp
+    wpl(3, :) = -7.5_wp
+    ba = 50.0_wp
+    diam = 0.1_wp
+    l1 = l0
+    l1(NE) = l0(NE) + DL
+    CALL CD_Assemble_Distributed_Load(conn, l0, wpl, fw, es, em)
+    CALL CD_Assemble_Distributed_Load(conn, l1, wpl, fw1, es, em)
+    CALL CD_Nodal_Seabed_Stiffness(KBOT, diam, l0, kn, es, em)
+    CALL CD_Nodal_Seabed_Stiffness(KBOT, diam, l1, kn1, es, em)
+    CALL require(es == 0, 'committed-side:seabed-helper')
+    af = cfg%rho_inf/(cfg%rho_inf + 1.0_wp)
+    lm = l0
+    lm(NE) = (1.0_wp - af)*l1(NE) + af*l0(NE)
+    CALL CD_Init_Model(a, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                       dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                       seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+    CALL require(es == CD_MODEL_OK, 'committed-side:init-a: '//TRIM(em))
+    CALL CD_Init_Model(b, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                       dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                       seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+    CALL require(es == CD_MODEL_OK, 'committed-side:init-b: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    CALL CD_Update_Model_SegmentLength(a, NE, l1(NE), LDOT, es, em)
+    CALL require(es == CD_MODEL_OK, 'committed-side:update: '//TRIM(em))
+    CALL require(nan_max_abs(a%f_ext - fw1) <= 0.0_wp .AND. nan_max_abs(a%seabed_kn - kn1) <= 0.0_wp, &
+                 'committed-side:present-load-is-the-new-lengths')
+    ! the committed acceleration, re-derived, is the twin's
+    CALL CD_Recompute_Model_Acceleration(a, es, em)
+    CALL require(es == CD_MODEL_OK, 'committed-side:recompute-a: '//TRIM(em))
+    CALL CD_Recompute_Model_Acceleration(b, es, em)
+    CALL require(es == CD_MODEL_OK, 'committed-side:recompute-b: '//TRIM(em))
+    CALL require(nan_max_abs(a%a - b%a) <= 0.0_wp, 'committed-side:recompute-equals-twin')
+    CALL require(nan_max_abs(a%f_ext - fw1) <= 0.0_wp .AND. nan_max_abs(a%seabed_kn - kn1) <= 0.0_wp .AND. &
+                 nan_max_abs(a%seabed_cn - CN_RATIO*kn1) <= 0.0_wp .AND. nan_max_abs(a%l0 - l1) <= 0.0_wp .AND. &
+                 a%l0_dot(NE) == LDOT .AND. nan_max_abs(a%l0_c - l0) <= 0.0_wp, 'committed-side:recompute-restores')
+    ! the step: the committed side bit for bit the twin's
+    CALL CD_Step_Model(a, 0.02_wp, conv, stalled, n_iter, es, em)
+    CALL require(es == CD_MODEL_OK .AND. conv, 'committed-side:step-a: '//TRIM(em))
+    CALL CD_Step_Model(b, 0.02_wp, conv, stalled, n_iter, es, em)
+    CALL require(es == CD_MODEL_OK .AND. conv, 'committed-side:step-b: '//TRIM(em))
+    IF (.NOT. (ALLOCATED(a%load_start_work) .AND. ALLOCATED(b%load_start_work))) THEN
+      CALL require(.FALSE., 'committed-side:start-load-allocated')
+      RETURN
+    END IF
+    CALL require(nan_max_abs(a%load_start_work - b%load_start_work) <= 0.0_wp, 'committed-side:start-load-equals-twin')
+    CALL require(nan_max_abs(a%dynamic_workspace%fint_n - b%dynamic_workspace%fint_n) <= 0.0_wp .AND. &
+                 nan_max_abs(a%dynamic_workspace%tension_n - b%dynamic_workspace%tension_n) <= 0.0_wp .AND. &
+                 nan_max_abs(a%dynamic_workspace%stretch_n - b%dynamic_workspace%stretch_n) <= 0.0_wp .AND. &
+                 nan_max_abs(a%dynamic_workspace%damp_n - b%dynamic_workspace%damp_n) <= 0.0_wp, &
+                 'committed-side:start-force-and-cap-data-equal-twin')
+    CALL require(MAXVAL(ABS(b%dynamic_workspace%damp_n)) > 0.0_wp, 'committed-side:start-dashpot-nonzero')
+    CALL require(MAXVAL(ABS(b%load_start_work)) > 0.0_wp .AND. MAXVAL(b%dynamic_workspace%tension_n) > 0.0_wp, &
+                 'committed-side:start-data-nonzero')
+    CALL require(nan_max_abs(a%dynamic_workspace%mb_l0 - lm) <= 0.0_wp, 'committed-side:inertia-at-blended-lengths')
+    CALL require(nan_max_abs(a%q - b%q) > 0.0_wp, 'committed-side:command-moves-the-line')
+    CALL require(nan_max_abs(a%f_ext - fw1) <= 0.0_wp .AND. nan_max_abs(a%l0 - l1) <= 0.0_wp .AND. &
+                 nan_max_abs(a%l0_c - l1) <= 0.0_wp .AND. a%l0_dot_c(NE) == LDOT, 'committed-side:step-commits')
+    CALL CD_End_Model(a, es, em)
+    CALL CD_End_Model(b, es, em)
+
+    ! An external-load update between the command and the step: the committed acceleration it
+    ! re-derives carries the new load (the distributed-load remainder is refreshed before the
+    ! committed external load is rebuilt from it), as the uncommanded twin given the same load.
+    BLOCK
+      REAL(wp) :: bump(NDOF), scale_a
+      bump = 0.0_wp
+      bump(3*2 - 1) = 3.0_wp
+      bump(3*3) = -4.0_wp
+      CALL CD_Init_Model(a, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                         dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                         seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+      CALL CD_Init_Model(b, q0, v0, conn, l0, ea, rho_a, .TRUE., fw, fixed, cfg, es, em, ba=ba, &
+                         dist_load_per_length=wpl, seabed_z_floor=1.0e-3_wp, seabed_kn=kn, seabed_cn=CN_RATIO*kn, &
+                         seabed_kbot=KBOT, seabed_contact_diameter=diam, seabed_cn_over_kn=CN_RATIO)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-init: '//TRIM(em))
+      CALL CD_Update_Model_SegmentLength(a, NE, l1(NE), LDOT, es, em)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-command: '//TRIM(em))
+      CALL CD_Update_Model_External_Loads(a, fw1 + bump, es, em)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-update-a: '//TRIM(em))
+      CALL CD_Update_Model_External_Loads(b, fw + bump, es, em)
+      CALL require(es == CD_MODEL_OK, 'committed-side:extload-update-b: '//TRIM(em))
+      scale_a = MAXVAL(ABS(b%a))
+      CALL require(scale_a > 0.0_wp .AND. nan_max_abs(a%a - b%a) <= 1.0e-12_wp*scale_a, &
+                   'committed-side:extload-recompute-equals-twin')
+      CALL require(nan_max_abs(a%f_ext - (fw1 + bump)) <= 0.0_wp .AND. nan_max_abs(a%l0_c - l0) <= 0.0_wp, &
+                   'committed-side:extload-keeps-present-load-and-committed-lengths')
+      CALL CD_End_Model(a, es, em)
+      CALL CD_End_Model(b, es, em)
+    END BLOCK
+  END SUBROUTINE case_segment_force_blend_committed_side
 
   SUBROUTINE case_copy_model_preserves_state()
     !! Checked model copies preserve persistent state and leave transient solver

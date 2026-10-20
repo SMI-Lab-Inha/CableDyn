@@ -48,8 +48,10 @@ solve is mathematically incorrect; changing ``NumCrctn`` does not change that de
    Outside that surface the module fails closed — a clear fatal error, never a silent wrong
    answer — on:
 
-   - active ServoDyn control (``CableDeltaL``) of a finite-EI cable, or any ``CONTROL`` section
-     in FAST.Farm (``EI = 0`` line control is supported in a single-turbine model),
+   - any ``CONTROL`` section in FAST.Farm (active ServoDyn control, ``CableDeltaL``, of
+     ``EI = 0`` lines and finite-EI cables is supported in a single-turbine model), a
+     command outside MoorDyn-F's bounds or one that would make a controlled segment
+     non-positive, and ``CONTROL`` of a finite-EI cable under ``False alpha_force_blend``,
    - coupled ``Rigid6`` bodies and rods in a FAST.Farm deck,
    - deck ``waves``/``wavetrain`` OPTIONS (the host SeaState supplies the waves), and a deck
      ``current`` except as a steady current on a single-turbine, pure ``EI = 0`` deck without

@@ -53,8 +53,12 @@ MODULE CableDyn_OpenFAST_Aggregate
                                           CD_HFMF_SetCoupledKinematics, CD_HFMF_GetCoupledKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK, CD_HFMF_BADINPUT, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, &
-                                          CD_HFMF_Set_Held_Fluid, CD_HFMF_NNodes, CD_HFMF_GetNodePositions
-  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Profile_Enabled
+                                          CD_HFMF_Set_Held_Fluid, CD_HFMF_NNodes, CD_HFMF_GetNodePositions, &
+                                          CD_HFMF_Set_SegmentLength
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Profile_Enabled, CD_HermiteCableControlSaveType, &
+                                          CD_HermiteCable_Dyn_Save_Control, CD_HermiteCable_Dyn_Restore_Control, &
+                                          CD_HCDYN_OK
+  USE CableDyn_Model, ONLY: CD_ModelControlSaveType
   USE CableDyn_DeckDriver, ONLY: CD_DeckAggregateType, CD_Init_Deck_Aggregate, CD_End_Deck_Aggregate, &
                                  CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_Eval_Aggregate_Channel, &
                                  CD_Cable_Deck_Node, &
@@ -78,7 +82,8 @@ MODULE CableDyn_OpenFAST_Aggregate
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
   USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
                              CD_Get_System_Line_State, &
-                             CD_Update_System_Line_SegmentLength, &
+                             CD_Update_System_Line_SegmentLength, CD_Save_System_Line_Control, &
+                             CD_Restore_System_Line_Control, &
                              CD_Update_System_Line_Hydro_Fields, CD_SYSTEM_OK, &
                              CD_System_NHydroPoints, CD_Get_System_HydroPoint_Positions, &
                              CD_Set_System_HydroPoint_Fluid
@@ -190,13 +195,23 @@ MODULE CableDyn_OpenFAST_Aggregate
     TYPE(DeckLine), ALLOCATABLE :: fail_lines(:)
     TYPE(DeckPoint), ALLOCATABLE :: fail_points(:)
     TYPE(DeckFailure), ALLOCATABLE :: snap_failures(:)
-    ! Active line control (CONTROL section): flattened channel -> (line, last
-    ! element, base length) table; ctrl_warned suppresses the MoorDyn bound
-    ! warnings after the first exceedance per row.
+    ! Active line control (CONTROL section): flattened channel -> (line, controlled
+    ! element, base length) table. The controlled segment is the deck segment at the line's
+    ! fairlead-side end (see CD_DeckAggregateType). A finite-EI row (ctrl_is_cable) holds
+    ! the cable index, the first of the ctrl_nelem cable elements of that segment and its
+    ! base length S; their base lengths sit at ctrl_span_l0(ctrl_span_off + 1:).
     INTEGER :: n_ctrl_chans = 0
-    INTEGER, ALLOCATABLE :: ctrl_chan(:), ctrl_line(:), ctrl_elem(:)
+    INTEGER, ALLOCATABLE :: ctrl_chan(:), ctrl_line(:), ctrl_elem(:), ctrl_nelem(:)
     REAL(wp), ALLOCATABLE :: ctrl_base_l0(:)
-    LOGICAL, ALLOCATABLE :: ctrl_warned(:)
+    ! the deck line's unstretched length and segment count, MoorDyn-F's UnstrLen and N
+    REAL(wp), ALLOCATABLE :: ctrl_unstr_len(:)
+    INTEGER, ALLOCATABLE :: ctrl_nsegs(:)
+    ! per row, the object it changes as it was before the change (CD_AGG_Apply_LineControl)
+    TYPE(CD_HermiteCableControlSaveType), ALLOCATABLE :: ctrl_cable_saved(:)
+    TYPE(CD_ModelControlSaveType), ALLOCATABLE :: ctrl_line_saved(:)
+    LOGICAL, ALLOCATABLE :: ctrl_is_cable(:)
+    INTEGER, ALLOCATABLE :: ctrl_line_id(:), ctrl_span_off(:)
+    REAL(wp), ALLOCATABLE :: ctrl_span_l0(:)
     ! Coupled Rigid6 bodies (pure EI=0 deck): the opaque runtime the facade marches over the
     ! EI=0 system each mooring step, in place of the plain moving step. has_rigid6 selects the
     ! body-march branch; the runtime's own snapshot buffer joins the aggregate snapshot/restore.
@@ -345,9 +360,14 @@ CONTAINS
       CALL MOVE_ALLOC(parts%ctrl_chan, candidate%ctrl_chan)
       CALL MOVE_ALLOC(parts%ctrl_line, candidate%ctrl_line)
       CALL MOVE_ALLOC(parts%ctrl_elem, candidate%ctrl_elem)
+      CALL MOVE_ALLOC(parts%ctrl_nelem, candidate%ctrl_nelem)
       CALL MOVE_ALLOC(parts%ctrl_base_l0, candidate%ctrl_base_l0)
-      ALLOCATE (candidate%ctrl_warned(SIZE(candidate%ctrl_chan)))
-      candidate%ctrl_warned = .FALSE.
+      CALL MOVE_ALLOC(parts%ctrl_unstr_len, candidate%ctrl_unstr_len)
+      CALL MOVE_ALLOC(parts%ctrl_nsegs, candidate%ctrl_nsegs)
+      CALL MOVE_ALLOC(parts%ctrl_is_cable, candidate%ctrl_is_cable)
+      CALL MOVE_ALLOC(parts%ctrl_line_id, candidate%ctrl_line_id)
+      CALL MOVE_ALLOC(parts%ctrl_span_off, candidate%ctrl_span_off)
+      CALL MOVE_ALLOC(parts%ctrl_span_l0, candidate%ctrl_span_l0)
     END IF
     ! Coupled Rigid6 decks: take over the opaque body runtime (deep-copied by the intrinsic
     ! assignment; the deck bundle is released in CD_End_Deck_Aggregate below).
@@ -1700,30 +1720,45 @@ CONTAINS
     n = self%n_ctrl_chans
   END FUNCTION CD_AGG_NCtrlChans
 
-  SUBROUTINE CD_AGG_Apply_LineControl(self, delta_l, delta_l_dot, ErrStat, ErrMsg)
-    !! Apply the host's cable-control command BEFORE an advance: for every
-    !! controlled line, the LAST (fairlead-side) segment's unstretched length
-    !! becomes base + delta_l(chan) with rate delta_l_dot(chan) -- the MoorDyn
-    !! convention, applied unclamped with the MoorDyn warning bounds (an increase
-    !! beyond one base segment length or a reduction past half of it warns once
-    !! per row and proceeds).
+  SUBROUTINE CD_AGG_Apply_LineControl(self, delta_l, delta_l_dot, ErrStat, ErrMsg, restored)
+    !! Apply the host's cable-control command BEFORE an advance to the deck segment at the
+    !! fairlead-side end of each controlled line: the end on a host-driven point, else the
+    !! written NodeB (MoorDyn's AttachB, its segment N). On an EI = 0 line that element's
+    !! unstretched length becomes base + delta_l(chan) with rate delta_l_dot(chan) -- the
+    !! MoorDyn convention. On a finite-EI cable every cable element of that segment (base
+    !! length S) scales by (S + delta_l)/S, with rate delta_l_dot*l_e/S, so the segment takes
+    !! the same length and rate.
+    !! A command outside MoorDyn-F's bounds fails closed by channel and line, as MoorDyn-F
+    !! stops the run there (ErrID_Fatal): with UnstrLen and N the deck line's unstretched
+    !! length and segment count (summed over its sections), MoorDyn-F refuses
+    !! DeltaL > UnstrLen/N and DeltaL < -0.5*UnstrLen/N (MoorDyn.f90, the active-tension
+    !! bounds check), the same comparisons in the same precision, so a command MoorDyn-F
+    !! accepts is accepted here. On a uniform line UnstrLen/N is the controlled segment's
+    !! base length S. On a line of several sections the controlled segment can be shorter
+    !! than UnstrLen/N/2, so a command within the bounds can still make it non-positive;
+    !! that fails closed as well.
+    !! Every row is checked before any line changes, and the objects the loop already
+    !! changed are put back, bit for bit, if a later row fails after all (a capability the
+    !! initialisation could not verify, an allocation): a refused command writes nothing.
+    !! On both kinds the committed state keeps the lengths it was reached with until the
+    !! next advance commits the new ones. restored = .TRUE. is the checkpoint-restart
+    !! re-application of the command the committed state was reached with: the lengths
+    !! become the committed ones at once.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: delta_l(:), delta_l_dot(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: restored
 
-    INTEGER :: c, ch, es
+    INTEGER :: c, ch, es, nspan, k, nrow
+    REAL(wp) :: lambda, mean_seg
     CHARACTER(512) :: em
+    CHARACTER(16) :: line_kind
 
     ErrStat = CD_AGG_OK
     ErrMsg = ''
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (.NOT. ALLOCATED(self%ctrl_chan)) RETURN
-    IF (.NOT. self%has_sys) THEN
-      ErrStat = CD_AGG_BADINPUT
-      ErrMsg = 'CableDyn_OpenFAST_Aggregate: line control requires the EI=0 system'
-      RETURN
-    END IF
     IF (SIZE(delta_l) < self%n_ctrl_chans .OR. SIZE(delta_l_dot) < self%n_ctrl_chans) THEN
       ErrStat = CD_AGG_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: the control command must cover every declared channel'
@@ -1734,33 +1769,114 @@ CONTAINS
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: the control command must be finite'
       RETURN
     END IF
-    ! PREVALIDATE every row before mutating any line: a bad later row must not
-    ! leave the aggregate at mixed lengths (the caller may treat BADINPUT as
-    ! recoverable).
-    DO c = 1, SIZE(self%ctrl_chan)
-      IF (delta_l(self%ctrl_chan(c)) <= -self%ctrl_base_l0(c)) THEN
-        ErrStat = CD_AGG_BADINPUT
-        ErrMsg = 'CableDyn_OpenFAST_Aggregate: DeltaL reduces a controlled segment to a non-positive length'
-        RETURN
-      END IF
-    END DO
-    DO c = 1, SIZE(self%ctrl_chan)
+    nrow = SIZE(self%ctrl_chan)
+    ! PREVALIDATE every row before mutating any line
+    DO c = 1, nrow
       ch = self%ctrl_chan(c)
-      IF (.NOT. self%ctrl_warned(c)) THEN
-        IF (delta_l(ch) > self%ctrl_base_l0(c) .OR. delta_l(ch) < -0.5_wp*self%ctrl_base_l0(c)) THEN
-          WRITE (*, '(A,I0,A)') 'CableDyn: WARNING -- control channel ', ch, &
-            ' DeltaL exceeds the MoorDyn advisory bounds (+1/-0.5 segment lengths); applying unclamped'
-          self%ctrl_warned(c) = .TRUE.
+      IF (self%ctrl_is_cable(c)) THEN
+        line_kind = 'finite-EI'
+        IF (self%ctrl_line(c) < 1 .OR. self%ctrl_line(c) > self%ncable) THEN
+          ErrStat = CD_AGG_BADINPUT
+          ErrMsg = 'CableDyn_OpenFAST_Aggregate: line control addresses a cable the aggregate does not own'
+          RETURN
+        END IF
+      ELSE
+        line_kind = 'EI = 0'
+        IF (.NOT. self%has_sys) THEN
+          ErrStat = CD_AGG_BADINPUT
+          ErrMsg = 'CableDyn_OpenFAST_Aggregate: line control requires the EI=0 system'
+          RETURN
         END IF
       END IF
-      CALL CD_Update_System_Line_SegmentLength(self%sys%fast%system, self%ctrl_line(c), self%ctrl_elem(c), &
-                                               self%ctrl_base_l0(c) + delta_l(ch), delta_l_dot(ch), es, em)
-      IF (es /= CD_SYSTEM_OK) THEN
+      ! MoorDyn-F's bounds, written as MoorDyn-F evaluates them
+      mean_seg = self%ctrl_unstr_len(c)/REAL(self%ctrl_nsegs(c), wp)
+      IF (delta_l(ch) > self%ctrl_unstr_len(c)/REAL(self%ctrl_nsegs(c), wp) .OR. &
+          delta_l(ch) < -0.5_wp*self%ctrl_unstr_len(c)/REAL(self%ctrl_nsegs(c), wp)) THEN
         ErrStat = CD_AGG_BADINPUT
-        ErrMsg = 'CableDyn_OpenFAST_Aggregate: line-control update failed: '//TRIM(em)
+        WRITE (em, '(A,I0,A,ES12.5,A,I0,A,ES12.5,A)') 'CableDyn_OpenFAST_Aggregate: control channel ', ch, &
+          ' commands DeltaL = ', delta_l(ch), ' m on '//TRIM(line_kind)//' line ', self%ctrl_line_id(c), &
+          ', outside MoorDyn-F''s bounds -S/2 <= DeltaL <= S (S = UnstrLen/N = ', mean_seg, ' m)'
+        ErrMsg = TRIM(em)
+        RETURN
+      END IF
+      IF (.NOT. (self%ctrl_base_l0(c) + delta_l(ch) > CD_ZERO)) THEN
+        ErrStat = CD_AGG_BADINPUT
+        WRITE (em, '(A,I0,A,ES12.5,A,I0,A,ES12.5,A)') 'CableDyn_OpenFAST_Aggregate: control channel ', ch, &
+          ' commands DeltaL = ', delta_l(ch), ' m on '//TRIM(line_kind)//' line ', self%ctrl_line_id(c), &
+          ', which would make its controlled segment (', self%ctrl_base_l0(c), ' m long) non-positive'
+        ErrMsg = TRIM(em)
         RETURN
       END IF
     END DO
+    ! The objects each row changes, as they are before its change (kept from step to step,
+    ! so the saves allocate once)
+    IF (ALLOCATED(self%ctrl_cable_saved)) THEN
+      IF (SIZE(self%ctrl_cable_saved) /= nrow) DEALLOCATE (self%ctrl_cable_saved, self%ctrl_line_saved)
+    END IF
+    IF (.NOT. ALLOCATED(self%ctrl_cable_saved)) ALLOCATE (self%ctrl_cable_saved(nrow), self%ctrl_line_saved(nrow))
+    DO c = 1, nrow
+      ch = self%ctrl_chan(c)
+      IF (self%ctrl_is_cable(c)) THEN
+        CALL CD_HermiteCable_Dyn_Save_Control(self%cables(self%ctrl_line(c))%line, self%ctrl_cable_saved(c))
+        nspan = self%ctrl_nelem(c)
+        BLOCK
+          INTEGER :: elems(nspan)
+          REAL(wp) :: l0_new(nspan), l0_rate(nspan), base
+          lambda = (self%ctrl_base_l0(c) + delta_l(ch))/self%ctrl_base_l0(c)
+          DO k = 1, nspan
+            base = self%ctrl_span_l0(self%ctrl_span_off(c) + k)
+            elems(k) = self%ctrl_elem(c) + k - 1
+            l0_new(k) = base*lambda
+            l0_rate(k) = delta_l_dot(ch)*base/self%ctrl_base_l0(c)
+          END DO
+          CALL CD_HFMF_Set_SegmentLength(self%cables(self%ctrl_line(c)), elems, l0_new, l0_rate, es, em, &
+                                         restored=restored)
+        END BLOCK
+        IF (es /= CD_HFMF_OK) THEN
+          CALL take_back(c - 1, 'CableDyn_OpenFAST_Aggregate: line-control update failed: '//TRIM(em))
+          RETURN
+        END IF
+      ELSE
+        CALL CD_Save_System_Line_Control(self%sys%fast%system, self%ctrl_line(c), self%ctrl_line_saved(c), es, em)
+        IF (es == CD_SYSTEM_OK) &
+          CALL CD_Update_System_Line_SegmentLength(self%sys%fast%system, self%ctrl_line(c), self%ctrl_elem(c), &
+                                                   self%ctrl_base_l0(c) + delta_l(ch), delta_l_dot(ch), es, em, &
+                                                   restored=restored)
+        IF (es /= CD_SYSTEM_OK) THEN
+          CALL take_back(c - 1, 'CableDyn_OpenFAST_Aggregate: line-control update failed: '//TRIM(em))
+          RETURN
+        END IF
+      END IF
+    END DO
+
+  CONTAINS
+
+    SUBROUTINE take_back(last, msg)
+      !! A row failed after the rows 1..last were applied: put their objects back, the latest
+      !! first (a line named in two rows ends at its state before the first), and report msg.
+      INTEGER, INTENT(IN) :: last
+      CHARACTER(*), INTENT(IN) :: msg
+      INTEGER :: r, es2
+      CHARACTER(512) :: em2, em_undo
+      em_undo = ''
+      DO r = last, 1, -1
+        IF (self%ctrl_is_cable(r)) THEN
+          CALL CD_HermiteCable_Dyn_Restore_Control(self%cables(self%ctrl_line(r))%line, self%ctrl_cable_saved(r), &
+                                                   es2, em2)
+          IF (es2 /= CD_HCDYN_OK) em_undo = em2
+        ELSE
+          CALL CD_Restore_System_Line_Control(self%sys%fast%system, self%ctrl_line(r), self%ctrl_line_saved(r), &
+                                              es2, em2)
+          IF (es2 /= CD_SYSTEM_OK) em_undo = em2
+        END IF
+      END DO
+      ErrStat = CD_AGG_BADINPUT
+      IF (LEN_TRIM(em_undo) == 0) THEN
+        ErrMsg = msg
+      ELSE
+        ErrMsg = msg//'; the lines it had already changed could not all be put back: '//TRIM(em_undo)
+      END IF
+    END SUBROUTINE take_back
   END SUBROUTINE CD_AGG_Apply_LineControl
 
   INTEGER FUNCTION CD_AGG_NFailures(self) RESULT(n)
@@ -1851,8 +1967,16 @@ CONTAINS
     IF (ALLOCATED(self%ctrl_chan)) DEALLOCATE (self%ctrl_chan)
     IF (ALLOCATED(self%ctrl_line)) DEALLOCATE (self%ctrl_line)
     IF (ALLOCATED(self%ctrl_elem)) DEALLOCATE (self%ctrl_elem)
+    IF (ALLOCATED(self%ctrl_nelem)) DEALLOCATE (self%ctrl_nelem)
     IF (ALLOCATED(self%ctrl_base_l0)) DEALLOCATE (self%ctrl_base_l0)
-    IF (ALLOCATED(self%ctrl_warned)) DEALLOCATE (self%ctrl_warned)
+    IF (ALLOCATED(self%ctrl_unstr_len)) DEALLOCATE (self%ctrl_unstr_len)
+    IF (ALLOCATED(self%ctrl_nsegs)) DEALLOCATE (self%ctrl_nsegs)
+    IF (ALLOCATED(self%ctrl_cable_saved)) DEALLOCATE (self%ctrl_cable_saved)
+    IF (ALLOCATED(self%ctrl_line_saved)) DEALLOCATE (self%ctrl_line_saved)
+    IF (ALLOCATED(self%ctrl_is_cable)) DEALLOCATE (self%ctrl_is_cable)
+    IF (ALLOCATED(self%ctrl_line_id)) DEALLOCATE (self%ctrl_line_id)
+    IF (ALLOCATED(self%ctrl_span_off)) DEALLOCATE (self%ctrl_span_off)
+    IF (ALLOCATED(self%ctrl_span_l0)) DEALLOCATE (self%ctrl_span_l0)
     CALL CD_Rigid6_End(self%rigid6)
     self%has_rigid6 = .FALSE.
     CALL CD_Rod_End(self%rod)

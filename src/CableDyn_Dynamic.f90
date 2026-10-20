@@ -627,7 +627,7 @@ CONTAINS
                                      load_band_proc, prescribed_q, prescribed_v, prescribed_a, structural_mass, &
                                      workspace, added_mass_band_proc, start_load, start_tension, &
                                      probe_q, probe_R, probe_K, start_stiffness, axial_damping, &
-                                     axial_l0_rate)
+                                     axial_l0_rate, start_l0, mass_l0, start_l0_rate)
     !! One generalized-alpha step: the constant load f_ext plus the optional load,
     !! banded-load, force-only and added-mass callbacks (hydrodynamics, damping, contact).
     !! On a singular effective tangent returns CD_DYN_SINGULAR; on a line-search
@@ -708,6 +708,18 @@ CONTAINS
     !! are passed together; the state outputs are the t_n state, converged = .FALSE.
     REAL(wp), INTENT(IN), OPTIONAL :: probe_q(:)
     REAL(wp), INTENT(OUT), OPTIONAL :: probe_R(:), probe_K(:, :)
+    !! Unstretched lengths changed between t_n and t_{n+1} (active line control; n_elem each,
+    !! finite and positive). l0 is then the length at t_{n+1}, which r(q_{n+1}, v_{n+1}) and
+    !! the release cap's end stretch use. start_l0 (force blend only, ignored without it): the
+    !! lengths the step-start state was reached with, which the step-start internal force
+    !! r(q_n) and the release cap's step-start quantities use: e_n, T_n, W_n and the
+    !! step-start dashpot tension T_d,n (start_load, start_tension and start_stiffness must
+    !! then be those of these lengths). mass_l0: the lengths of the structural consistent mass
+    !! (ignored with structural_mass). Absent: l0. start_l0_rate (force blend with
+    !! axial_damping only): the unstretched-length rates the step-start state was reached
+    !! with, for T_d,n; axial_l0_rate stays the rate at t_{n+1}, for T_d,n+1. Absent:
+    !! axial_l0_rate.
+    REAL(wp), INTENT(IN), OPTIONAL :: start_l0(:), mass_l0(:), start_l0_rate(:)
 
     INTEGER  :: n_dof, n_elem, n_free, bt, kl, ku, ldab
     INTEGER, POINTER :: free(:), fixed(:), ipiv(:)
@@ -844,6 +856,36 @@ CONTAINS
     CALL check_config(cfg, ErrStat, ErrMsg)
     IF (ErrStat /= 0) RETURN
     n_elem = SIZE(elem_conn, 2)
+    IF (PRESENT(start_l0)) THEN
+      IF (SIZE(start_l0) /= n_elem) THEN
+        CALL fail(ErrStat, ErrMsg, 'start_l0 must have shape (n_elem)')
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(start_l0) .OR. ANY(start_l0 <= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'start_l0 must be finite and positive')
+        RETURN
+      END IF
+    END IF
+    IF (PRESENT(mass_l0)) THEN
+      IF (SIZE(mass_l0) /= n_elem) THEN
+        CALL fail(ErrStat, ErrMsg, 'mass_l0 must have shape (n_elem)')
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(mass_l0) .OR. ANY(mass_l0 <= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'mass_l0 must be finite and positive')
+        RETURN
+      END IF
+    END IF
+    IF (PRESENT(start_l0_rate)) THEN
+      IF (SIZE(start_l0_rate) /= n_elem) THEN
+        CALL fail(ErrStat, ErrMsg, 'start_l0_rate must have shape (n_elem)')
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(start_l0_rate)) THEN
+        CALL fail(ErrStat, ErrMsg, 'start_l0_rate must be finite')
+        RETURN
+      END IF
+    END IF
     IF (PRESENT(workspace)) THEN
       work => workspace
     ELSE
@@ -907,7 +949,11 @@ CONTAINS
       END IF
       M = structural_mass
     ELSE IF (.NOT. use_element_mass_band) THEN
-      CALL CD_Assemble_Cable_Mass(elem_conn, l0, rho_a, M, es, em)
+      IF (PRESENT(mass_l0)) THEN
+        CALL CD_Assemble_Cable_Mass(elem_conn, mass_l0, rho_a, M, es, em)
+      ELSE
+        CALL CD_Assemble_Cable_Mass(elem_conn, l0, rho_a, M, es, em)
+      END IF
       IF (es /= 0) THEN
         CALL fail(ErrStat, ErrMsg, 'mass assembly failed: '//TRIM(em))
         RETURN
@@ -1050,16 +1096,26 @@ CONTAINS
       IF (use_element_mass_band) THEN
         ! The element mass band depends only on the connectivity, the free list, l0 and
         ! rho_a: a step with the inputs of the remembered band (bw_hit: same connectivity and
-        ! free list) reuses it, which is the band the assembly would build again.
+        ! free list) reuses it, which is the band the assembly would build again. Its lengths
+        ! are mass_l0 when present.
         mb_hit = .FALSE.
-        IF (bw_hit) mb_hit = mass_band_matches(work, l0, rho_a)
-        IF (.NOT. mb_hit) THEN
-          work%mb_valid = .FALSE.
-          CALL assemble_mass_band_free(elem_conn, l0, rho_a, work%dof_marker(1:n_dof), kl, ku, M_band, es, em)
-          IF (es == 0 .AND. work%bw_valid) CALL remember_mass_band(work, l0, rho_a)
-        ELSE IF (work%mb_hits < HUGE(work%mb_hits)) THEN
-          work%mb_hits = work%mb_hits + 1
+        IF (PRESENT(mass_l0)) THEN
+          IF (bw_hit) mb_hit = mass_band_matches(work, mass_l0, rho_a)
+          IF (.NOT. mb_hit) THEN
+            work%mb_valid = .FALSE.
+            CALL assemble_mass_band_free(elem_conn, mass_l0, rho_a, work%dof_marker(1:n_dof), kl, ku, M_band, &
+                                         es, em)
+            IF (es == 0 .AND. work%bw_valid) CALL remember_mass_band(work, mass_l0, rho_a)
+          END IF
+        ELSE
+          IF (bw_hit) mb_hit = mass_band_matches(work, l0, rho_a)
+          IF (.NOT. mb_hit) THEN
+            work%mb_valid = .FALSE.
+            CALL assemble_mass_band_free(elem_conn, l0, rho_a, work%dof_marker(1:n_dof), kl, ku, M_band, es, em)
+            IF (es == 0 .AND. work%bw_valid) CALL remember_mass_band(work, l0, rho_a)
+          END IF
         END IF
+        IF (mb_hit .AND. work%mb_hits < HUGE(work%mb_hits)) work%mb_hits = work%mb_hits + 1
       ELSE
         work%mb_valid = .FALSE.
         CALL pack_dense_free_band(M, free, kl, ku, CD_ONE, M_band, es, em)
@@ -1508,14 +1564,21 @@ CONTAINS
 
     SUBROUTINE start_forces(es_s, em_s)
       !! fint_n = f_int(q_n) and load_n = the dynamic load at (q_n, v_n): start_load when the
-      !! caller supplies it, else the force-only callback (or load_proc) evaluated there.
+      !! caller supplies it, else the force-only callback (or load_proc) evaluated there. The
+      !! internal force and the release-cap data take the lengths the step-start state was
+      !! reached with (start_l0 when present).
       INTEGER, INTENT(OUT) :: es_s
       CHARACTER(*), INTENT(OUT) :: em_s
       INTEGER :: i
       es_s = 0
       em_s = ''
-      CALL CD_Assemble_Cable_Internal_Force(q_n_nodes, elem_conn, l0, ea, tension_only, fint_n, es_s, em_s, &
-                                            topology_validated=topo_ok)
+      IF (PRESENT(start_l0)) THEN
+        CALL CD_Assemble_Cable_Internal_Force(q_n_nodes, elem_conn, start_l0, ea, tension_only, fint_n, es_s, &
+                                              em_s, topology_validated=topo_ok)
+      ELSE
+        CALL CD_Assemble_Cable_Internal_Force(q_n_nodes, elem_conn, l0, ea, tension_only, fint_n, es_s, em_s, &
+                                              topology_validated=topo_ok)
+      END IF
       IF (es_s /= 0) THEN
         es_s = CD_DYN_BADINPUT
         em_s = 'step-start internal-force assembly failed: '//TRIM(em_s)
@@ -1577,11 +1640,13 @@ CONTAINS
       IF (release_cap) THEN
         DO i = 1, n_elem
           BLOCK
-            REAL(wp) :: d(3), ell
+            REAL(wp) :: d(3), ell, l0s
             d = q_n_nodes(:, elem_conn(2, i)) - q_n_nodes(:, elem_conn(1, i))
             ell = NORM2(d)
+            l0s = l0(i)
+            IF (PRESENT(start_l0)) l0s = start_l0(i)
             chord_n(:, i) = d/ell
-            stretch_n(i) = ell - l0(i)
+            stretch_n(i) = ell - l0s
             tension_n(i) = CD_ZERO
             stiff_n(i) = HUGE(CD_ONE)
             dcoef_n(i) = CD_ZERO
@@ -1589,16 +1654,34 @@ CONTAINS
             damp_n(i) = CD_ZERO
             IF (ea(i) > CD_ZERO .AND. PRESENT(axial_damping)) THEN
               IF (axial_damping(i) > CD_ZERO) THEN
-                ! the dashpot tension the start load carries, as the callback evaluates it
+                ! the dashpot coefficient and payout rate of the end share (lengths at t_{n+1})
                 dcoef_n(i) = axial_damping(i)/l0(i)
                 IF (PRESENT(axial_l0_rate)) rl0dot_n(i) = axial_l0_rate(i)/l0(i)
-                damp_n(i) = dcoef_n(i)*(DOT_PRODUCT(chord_n(:, i), v_n(3*elem_conn(2, i) - 2:3*elem_conn(2, i)) - &
-                                                    v_n(3*elem_conn(1, i) - 2:3*elem_conn(1, i))) - ell*rl0dot_n(i))
+                IF (PRESENT(start_l0) .OR. PRESENT(start_l0_rate)) THEN
+                  ! after a length change the start load's dashpot has the step-start lengths
+                  ! and rates
+                  BLOCK
+                    REAL(wp) :: dcs, rrs
+                    dcs = axial_damping(i)/l0s
+                    rrs = CD_ZERO
+                    IF (PRESENT(start_l0_rate)) THEN
+                      rrs = start_l0_rate(i)/l0s
+                    ELSE IF (PRESENT(axial_l0_rate)) THEN
+                      rrs = axial_l0_rate(i)/l0s
+                    END IF
+                    damp_n(i) = dcs*(DOT_PRODUCT(chord_n(:, i), v_n(3*elem_conn(2, i) - 2:3*elem_conn(2, i)) - &
+                                                 v_n(3*elem_conn(1, i) - 2:3*elem_conn(1, i))) - ell*rrs)
+                  END BLOCK
+                ELSE
+                  ! the dashpot tension the start load carries, as the callback evaluates it
+                  damp_n(i) = dcoef_n(i)*(DOT_PRODUCT(chord_n(:, i), v_n(3*elem_conn(2, i) - 2:3*elem_conn(2, i)) - &
+                                                      v_n(3*elem_conn(1, i) - 2:3*elem_conn(1, i))) - ell*rl0dot_n(i))
+                END IF
               END IF
             END IF
             IF (stretch_n(i) > CD_ZERO) THEN
               IF (ea(i) > CD_ZERO) THEN
-                tension_n(i) = ea(i)*(ell/l0(i) - CD_ONE)
+                tension_n(i) = ea(i)*(ell/l0s - CD_ONE)
               ELSE IF (PRESENT(start_tension)) THEN
                 tension_n(i) = MAX(start_tension(i), CD_ZERO)
                 IF (PRESENT(start_stiffness)) stiff_n(i) = start_stiffness(i)
@@ -2026,13 +2109,13 @@ CONTAINS
         ! (= structural_mass when supplied). Recomputing from elem_conn/l0/rho_a here
         ! would ignore a supplied structural_mass while the Jacobian honored it.
         IF (use_element_mass_band) THEN
-          CALL consistent_mass_matvec(elem_conn, l0, rho_a, a_alpha, Rout)
+          CALL structural_inertia(Rout)
         ELSE
           Rout = MATMUL(M, a_alpha)
         END IF
         Rout = Rout + M_add_a_eval + fint_eval - f_ext - load_eval
       ELSE IF (use_element_mass_band) THEN
-        CALL consistent_mass_matvec(elem_conn, l0, rho_a, a_alpha, Rout)
+        CALL structural_inertia(Rout)
         Rout = Rout + fint_eval - f_ext - load_eval
       ELSE
         Rout = MATMUL(M, a_alpha) + fint_eval - f_ext - load_eval
@@ -2067,6 +2150,17 @@ CONTAINS
         END IF
       END IF
     END SUBROUTINE eval_dynamic
+
+    SUBROUTINE structural_inertia(Rout)
+      !! Rout = M a_alpha with the element consistent mass (of mass_l0 when present, the lengths
+      !! the mass band was built from).
+      REAL(wp), INTENT(OUT) :: Rout(:)
+      IF (PRESENT(mass_l0)) THEN
+        CALL consistent_mass_matvec(elem_conn, mass_l0, rho_a, a_alpha, Rout)
+      ELSE
+        CALL consistent_mass_matvec(elem_conn, l0, rho_a, a_alpha, Rout)
+      END IF
+    END SUBROUTINE structural_inertia
 
     SUBROUTINE apply_release_cap(q_eval, Rout, effout, effbandout)
       !! Release cap of the force blend. A tension-only element taut at t_n (tension T_0,
@@ -2133,12 +2227,24 @@ CONTAINS
       !! T_d,0 |ldot_0| dt plus the end share's credit. The capped force grows without bound as
       !! p -> 0 (W_d > 0), so the force is continuous there; alpha_f |p| <= |ldot_0| dt is a
       !! sufficient test of an inactive cap. The same law covers a compressive T_d,0 (p < 0).
+      !! After a length change W_d and ldot_0 take the step-start lengths and rates (BA/l0_c,
+      !! l_n l0_dot_c/l0_c), as T_d,0 does, and the end share's T_d,1 the new ones.
+      !! After a length change (start_l0) every step-start quantity takes the lengths and rates
+      !! the step-start state was reached with: e_0 = l_n - l0_c, T_0, W_0, the secant T_0/e_0,
+      !! the law stiffness k_n and the dashpot tension T_d,0 (start_l0_rate); the end-state
+      !! quantities take those at t_{n+1}: e_1 = |d_1| - l0, T^_1 = k e_1, T_d,1 and the
+      !! dashpot weight phi, whose band runs from l0 to l0 + c e_0 (the end stretch against the
+      !! new length, the band width set by the step-start stretch, as without a change). p and
+      !! p_1 are the geometric projections above (l_n = l0_c + e_0). A haul-in (l0 < l0_c) can
+      !! make p_1 more negative, so N is bounded below by zero there too, and the inactive-cap
+      !! test uses the bound N >= W_0 - (1 - alpha_f) T_0 (l_n - l0)^2/(4 e_0), which is W_0/2
+      !! without a change.
       REAL(wp), INTENT(IN) :: q_eval(:)
       REAL(wp), INTENT(INOUT) :: Rout(:)
       REAL(wp), INTENT(INOUT), OPTIONAL :: effout(:, :), effbandout(:, :)
       INTEGER :: e, na, nb, i, j, gi(6), fi, fj
       REAL(wp) :: d1(3), l1, e1, e0, t0, p, p1, num, ln, k0, ten1, cosang, dg, delta, t1(3), g(3), blk(3, 3), sgn
-      REAL(wp) :: band, phi, dphi, td1, dv(3), dp1(3), dtd1(3), kc, credit
+      REAL(wp) :: band, phi, dphi, td1, dv(3), dp1(3), dtd1(3), kc, credit, ls, nlb, dcs
       LOGICAL :: taut_end, damped, slack
       band = alpha_f/(CD_ONE - alpha_f)
       DO e = 1, n_elem
@@ -2152,9 +2258,12 @@ CONTAINS
         nb = elem_conn(2, e)
         d1 = q_eval(3*nb - 2:3*nb) - q_eval(3*na - 2:3*na)
         e0 = stretch_n(e)
-        ! projected shortening p = l_n - t_0 . d_1 (l_n = l0 + e_0); the common case, an element
+        ! the rest length of the step-start state (the committed one after a length change)
+        ls = l0(e)
+        IF (PRESENT(start_l0)) ls = start_l0(e)
+        ! projected shortening p = l_n - t_0 . d_1 (l_n = ls + e_0); the common case, an element
         ! that does not release, is decided here without a root
-        p = e0 + (l0(e) - (chord_n(1, e)*d1(1) + chord_n(2, e)*d1(2) + chord_n(3, e)*d1(3)))
+        p = e0 + (ls - (chord_n(1, e)*d1(1) + chord_n(2, e)*d1(2) + chord_n(3, e)*d1(3)))
         ! a damped element taut at t_n whose end state lies below the band edge l0 + band e_0
         damped = .FALSE.
         IF (.NOT. slack) THEN
@@ -2163,12 +2272,15 @@ CONTAINS
         END IF
         IF (slack) THEN
           ! the kept dashpot share alpha_f T_d,0 returns work only when T_d,0 p > 0, and stays
-          ! within W_d = T_d,0^2 dt/(BA/l0) while alpha_f |p| <= |ldot_0| dt
+          ! within W_d = T_d,0^2 dt/(BA/l0) while alpha_f |p| <= |ldot_0| dt (BA/l0_c after a
+          ! length change: the dashpot coefficient T_d,0 was evaluated with)
           IF (.NOT. damp_n(e)*p > CD_ZERO) CYCLE
-          IF (alpha_f*ABS(p)*dcoef_n(e) <= ABS(damp_n(e))*dt) CYCLE
+          dcs = dcoef_n(e)
+          IF (PRESENT(start_l0)) dcs = axial_damping(e)/ls
+          IF (alpha_f*ABS(p)*dcs <= ABS(damp_n(e))*dt) CYCLE
           l1 = NORM2(d1)
           IF (.NOT. l1 > CD_ZERO) CYCLE
-          ln = l0(e) + e0
+          ln = ls + e0
           t1 = d1/l1
           cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
           p1 = (l1 - ln) + 0.5_wp*ln*((t1(1) - chord_n(1, e))**2 + (t1(2) - chord_n(2, e))**2 + &
@@ -2176,7 +2288,7 @@ CONTAINS
           dv = v_eval(3*nb - 2:3*nb) - v_eval(3*na - 2:3*na)
           td1 = dcoef_n(e)*(DOT_PRODUCT(t1, dv) - l1*rl0dot_n(e))
           credit = (CD_ONE - alpha_f)*td1*p1
-          num = damp_n(e)*damp_n(e)*dt/dcoef_n(e) + MAX(credit, CD_ZERO)
+          num = damp_n(e)*damp_n(e)*dt/dcs + MAX(credit, CD_ZERO)
           dg = num/p
           IF (ABS(dg) >= alpha_f*ABS(damp_n(e))) CYCLE
           delta = dg - alpha_f*damp_n(e)
@@ -2196,11 +2308,13 @@ CONTAINS
           l1 = NORM2(d1)
           IF (.NOT. l1 > CD_ZERO) CYCLE
           e1 = l1 - l0(e)
-          ln = l0(e) + e0
+          ln = ls + e0
           t1 = d1/l1
           cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
           p1 = (e1 - e0) + 0.5_wp*ln*((t1(1) - chord_n(1, e))**2 + (t1(2) - chord_n(2, e))**2 + &
                                       (t1(3) - chord_n(3, e))**2)
+          ! |d_1| - l_n = (e_1 - e_0) + (l0 - ls) after a length change
+          IF (PRESENT(start_l0)) p1 = p1 + (l0(e) - ls)
           k0 = MIN(t0/e0, stiff_n(e))
           ten1 = k0*MAX(e1, CD_ZERO)
           ! the dashpot weight and its slope along t_1 (zero at and below l0)
@@ -2233,7 +2347,14 @@ CONTAINS
             IF (e1 > CD_ZERO) g = g + ((CD_ONE - alpha_f)/p)*k0*p1*t1
           END IF
         ELSE
-          IF (.NOT. 4.0_wp*alpha_f*p > e0) CYCLE
+          IF (PRESENT(start_l0)) THEN
+            ! N >= W_0 - (1 - alpha_f) T_0 (l_n - l0)^2/(4 e_0), l_n - l0 = e_0 + ls - l0
+            nlb = 0.5_wp*t0*e0 - (CD_ONE - alpha_f)*t0*MAX(e0 + (ls - l0(e)), CD_ZERO)**2/(4.0_wp*e0)
+            ! (p > 0 as well: the bound can be negative after a haul-in)
+            IF (.NOT. (p > CD_ZERO .AND. alpha_f*t0*p > nlb)) CYCLE
+          ELSE
+            IF (.NOT. 4.0_wp*alpha_f*p > e0) CYCLE
+          END IF
           num = 0.5_wp*t0*e0
           taut_end = d1(1)*d1(1) + d1(2)*d1(2) + d1(3)*d1(3) > l0(e)*l0(e)
           l1 = CD_ZERO
@@ -2247,7 +2368,7 @@ CONTAINS
             taut_end = e1 > CD_ZERO
           END IF
           IF (taut_end) THEN
-            ln = l0(e) + e0
+            ln = ls + e0
             ! the secant stiffness, bounded for a law element by its step-start axial stiffness
             k0 = MIN(t0/e0, stiff_n(e))
             ten1 = k0*e1
@@ -2255,9 +2376,11 @@ CONTAINS
             cosang = t1(1)*chord_n(1, e) + t1(2)*chord_n(2, e) + t1(3)*chord_n(3, e)
             p1 = (e1 - e0) + 0.5_wp*ln*((t1(1) - chord_n(1, e))**2 + (t1(2) - chord_n(2, e))**2 + &
                                         (t1(3) - chord_n(3, e))**2)
+            IF (PRESENT(start_l0)) p1 = p1 + (l0(e) - ls)
             num = num + (CD_ONE - alpha_f)*ten1*p1
           END IF
-          dg = num/p
+          ! num >= W_0/2 > 0 without a length change; a haul-in can drive it below zero
+          dg = MAX(num, CD_ZERO)/p
           IF (dg >= alpha_f*t0) CYCLE
           delta = dg - alpha_f*t0
           Rout(3*na - 2:3*na) = Rout(3*na - 2:3*na) - delta*chord_n(:, e)
@@ -2265,9 +2388,12 @@ CONTAINS
           IF (.NOT. (PRESENT(effout) .OR. PRESENT(effbandout))) CYCLE
           ! d(delta)/d(x_b) = g, d(delta)/d(x_a) = -g, with dp/dd_1 = -t_0,
           ! dT_1/dd_1 = k0 t_1 and dp_1/dd_1 = t_1 - (l_n/|d_1|)(t_0 - (t_1 . t_0) t_1)
-          g = (num/(p*p))*chord_n(:, e)
-          IF (taut_end) g = g + ((CD_ONE - alpha_f)/p)*((k0*p1 + ten1)*t1 - &
-                                                        ten1*(ln/l1)*(chord_n(:, e) - cosang*t1))
+          g = CD_ZERO
+          IF (num > CD_ZERO) THEN
+            g = (num/(p*p))*chord_n(:, e)
+            IF (taut_end) g = g + ((CD_ONE - alpha_f)/p)*((k0*p1 + ten1)*t1 - &
+                                                          ten1*(ln/l1)*(chord_n(:, e) - cosang*t1))
+          END IF
         END IF
         DO j = 1, 3
           DO i = 1, 3

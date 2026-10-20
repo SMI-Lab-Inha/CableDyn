@@ -386,7 +386,8 @@ row. On this route:
   field;
 - a finite-EI cable cannot share a coupled deck with Rigid6 bodies, rods, or `Connect`/`Free`
   points;
-- CONTROL and FAILURE rows are rejected on decks that contain finite-EI cables;
+- FAILURE rows are rejected on decks that contain finite-EI cables; CONTROL rows may name
+  finite-EI cables (see [CONTROL](#control-optional-openfast-line-control));
 - `Coupled`/`Vessel` rods are platform-borne and need no `motionFile`: each is a node of the
   OpenFAST mesh at its End A, turns rigidly with the platform orientation (its deck coordinates,
   like those of `Coupled` points, are given at the undisplaced platform and moved by
@@ -980,17 +981,53 @@ ChannelID  Line(s)
 | `Line(s)` | one line id or a comma list without spaces (`1,2`) |
 
 Each line belongs to at most one channel. Before every advance, the channel's `DeltaL` sets the
-unstretched length of each assigned line's **last (fairlead-side) segment** to its initial length
-plus `DeltaL`; `DeltaLdot` supplies the matching rate. Axial damping on that segment acts on the
-strain rate, as in MoorDyn-F, so a segment paid out at constant strain carries no damping tension.
-A command that makes that segment length
-zero or negative is rejected. A command above one initial segment length, or below minus half of
-it, prints a one-time warning and is applied unclamped. The host input arrays are sized to the
-highest channel id.
+unstretched length of each assigned line's **fairlead-side segment** to its initial length plus
+`DeltaL`; `DeltaLdot` supplies the matching rate. The fairlead-side segment is the one at the
+line's end on a host-driven point: `Coupled`, `Vessel`, `Turbine<J>`, `Body<N>`, or an end of a
+`Coupled` or `Vessel` rod. When both ends or neither end are on such points, it is the segment at
+the `NodeB` written in the deck. A line written in the stock MoorDyn order, with its host-driven
+end at `NodeB`, is therefore controlled where MoorDyn-F controls it, at its last segment N at
+`AttachB`; so is a line with both or no host-driven ends. A line written fairlead first, with its
+only host-driven end at `NodeA`, is controlled at that end. The length is held over the advance.
+Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment paid out at
+constant strain carries no damping tension.
 
-CONTROL is supported only on the OpenFAST `CompMooring = 5` route, for pure `EI = 0`,
-non-FAST.Farm decks, without OpenFAST linearisation. The standalone driver rejects a CONTROL
-section, as does a coupled deck containing a finite-EI cable.
+A command outside MoorDyn-F's bounds stops the run with a message that names the channel, the
+line, the command and the bound, as MoorDyn-F stops there. With `UnstrLen` the line's unstretched
+length and N its number of segments, both summed over its `SECTIONS` rows, MoorDyn-F refuses
+`DeltaL` > `UnstrLen`/N and `DeltaL` < −0.5 `UnstrLen`/N; CableDyn makes the same comparisons, so
+a command MoorDyn-F accepts is accepted. On a line of one section `UnstrLen`/N is the controlled
+segment's initial length S, and the bounds read −S/2 ≤ `DeltaL` ≤ S. On a line of several
+sections the controlled segment can be shorter or longer than `UnstrLen`/N; a command within the
+bounds that would make it zero or negative (possible when it is shorter than half of
+`UnstrLen`/N) also stops the run, with a message that names the line.
+
+- On an `EI = 0` line the segment is the end element on that side, of initial length S. The
+  step evaluates the committed side of its generalised-α blend at the lengths of the previous
+  advance (with the force blend, the default, the step-start force; under
+  `False alpha_force_blend`, lengths blended with the configuration), so a length ramp is
+  followed without lag at any `rhoInf`.
+- On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
+  is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
+  its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that
+  make up that segment. Each of them scales by (S + `DeltaL`)/S, S being the segment's initial
+  length, with rate `DeltaLdot` l/S for an element of initial length l, so the segment becomes
+  S + `DeltaL` long. The structural and attachment mass, the seabed contact coefficients and the
+  tributary lengths follow the new lengths; `BA` keeps its initial resolution. The step blends
+  the force of the committed state, taken at the lengths of the previous advance, with the force
+  at the new lengths, so a length ramp is followed without lag at any `rhoInf`. This needs the
+  force-blended generalised-α, the default: a deck that controls a finite-EI cable under
+  `False alpha_force_blend` fails at initialisation with a message that names the line. Within
+  the bounds above, a cable of one section scales each element within [0.5, 2] of its initial
+  length; on a cable of several sections the scaling can leave that range, beyond the
+  resolution its static mesh was built for, so keep large commands on a fairlead section whose
+  segments are at least `UnstrLen`/N long. A cable restrained in torsion cannot be controlled
+  (the coupled route rejects torsion stiffness in END CONNECTIONS).
+
+The host input arrays are sized to the highest channel id.
+
+CONTROL is supported only on the OpenFAST `CompMooring = 5` route, for non-FAST.Farm decks,
+without OpenFAST linearisation. The standalone driver rejects a CONTROL section.
 
 ### OPTIONS (`value keyword` order, case-insensitive keyword)
 

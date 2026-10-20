@@ -20,7 +20,8 @@ MODULE CableDyn_System
                             CD_Model_Has_Friction, CD_Get_Model_Friction_Anchors, CD_Set_Model_Friction_Anchors, &
                             CD_Get_Model_EndNodeMassDiag, CD_Get_Model_EndNodeAddedMass, &
                             CD_Get_Model_EndNodeTangent, CD_Set_Model_EndQuery, CD_Get_Model_EndQuery, &
-                            CD_Update_Model_SegmentLength, &
+                            CD_Update_Model_SegmentLength, CD_ModelControlSaveType, CD_Save_Model_Control, &
+                            CD_Restore_Model_Control, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Interior_State, CD_Step_Model, &
                             CD_Get_Model_Substep_Counts, CD_SubstepStats, &
                             CD_Calc_Model_CoupledLoads, CD_Recompute_Model_Acceleration, &
@@ -98,6 +99,7 @@ MODULE CableDyn_System
   PUBLIC :: CD_System_Point_Environment
   PUBLIC :: CD_Detach_System_LineEnds
   PUBLIC :: CD_Update_System_Line_SegmentLength
+  PUBLIC :: CD_Save_System_Line_Control, CD_Restore_System_Line_Control
   PUBLIC :: CD_System_Is_Initialized
   PUBLIC :: CD_System_Has_DynamicPoints
 
@@ -210,7 +212,7 @@ MODULE CableDyn_System
     ! init helpers (bitwise-deterministic), and the distributed-load remainder
     ! restores with f_ext -- the documented bit-identical restore must hold
     ! WITHOUT the caller re-applying its command.
-    REAL(wp), ALLOCATABLE :: snap_l0(:), snap_l0_dot(:), snap_fbase(:)
+    REAL(wp), ALLOCATABLE :: snap_l0(:), snap_l0_dot(:), snap_fbase(:), snap_l0_c(:), snap_l0_dot_c(:)
     ! Viscoelastic dl_1 joins the snapshot (per-element, concatenated like
     ! snap_l0): the state advances with every committed line step, so the
     ! aggregate stage-then-commit restore must rewind it with q/v/a.
@@ -455,6 +457,7 @@ CONTAINS
     IF (ALLOCATED(system%snap_bindings)) DEALLOCATE (system%snap_bindings)
     IF (ALLOCATED(system%snap_map)) DEALLOCATE (system%snap_map)
     IF (ALLOCATED(system%snap_l0)) DEALLOCATE (system%snap_l0, system%snap_l0_dot)
+    IF (ALLOCATED(system%snap_l0_c)) DEALLOCATE (system%snap_l0_c, system%snap_l0_dot_c)
     IF (ALLOCATED(system%snap_fbase)) DEALLOCATE (system%snap_fbase)
     IF (ALLOCATED(system%snap_ve_dl_1)) DEALLOCATE (system%snap_ve_dl_1)
     IF (ALLOCATED(system%snap_syrope_slow)) DEALLOCATE (system%snap_syrope_slow, system%snap_syrope_tmax)
@@ -1254,11 +1257,11 @@ CONTAINS
 
     INTEGER, PARAMETER :: MAX_SUBDIV = 6   ! floor dt/64: resolves any benign line-search stall
     INTEGER :: i, j, lo, hi, nc, es, line_dof, sys_dof, depth, iter2, ntot, nve, nsy, lo_ve, lo_sy, ne, nfr, lo_fr
-    INTEGER :: n_team
+    INTEGER :: n_team, nel, lo_el
     LOGICAL :: conv2, stall2
     CHARACTER(160) :: em
     REAL(wp), ALLOCATABLE :: q0(:), v0(:), a0(:), qm(:), vm(:), am(:), qs(:), vs(:), as(:)
-    REAL(wp), ALLOCATABLE :: dl1s(:), slows(:), tmaxs(:), frs(:, :), hmaxs(:)
+    REAL(wp), ALLOCATABLE :: dl1s(:), slows(:), tmaxs(:), frs(:, :), hmaxs(:), l0cs(:), l0dcs(:)
     TYPE(CD_SubstepStats), ALLOCATABLE :: subs(:)
 
     converged = .FALSE.
@@ -1380,24 +1383,29 @@ CONTAINS
         lo = lo + nc
       END DO
       CALL restore_line_states(system)
-      ! The frame snapshot covers every state a line step commits: the kinematics and the
-      ! viscoelastic / Syrope history variables.
+      ! The frame snapshot covers every state a line step commits: the kinematics, the
+      ! viscoelastic / Syrope history variables and the lengths and rates the committed state
+      ! was reached with (active line control: a converged first half commits the new
+      ! lengths, so a restore without them would re-run the full step unblended).
       ntot = 0
       nve = 0
       nsy = 0
       nfr = 0
+      nel = 0
       DO i = 1, system%n_lines
         ntot = ntot + SIZE(system%lines(i)%q)
+        nel = nel + SIZE(system%lines(i)%l0_c)
         IF (system%lines(i)%has_viscoelastic) nve = nve + SIZE(system%lines(i)%ve_dl_1)
         IF (system%lines(i)%has_syrope) nsy = nsy + SIZE(system%lines(i)%syrope_slow)
         IF (CD_Model_Has_Friction(system%lines(i))) nfr = nfr + SIZE(system%lines(i)%fr_anchor, 2)
       END DO
       ALLOCATE (qs(ntot), vs(ntot), as(ntot), dl1s(nve), slows(nsy), tmaxs(nsy), frs(2, nfr), &
-                hmaxs(system%n_lines), subs(system%n_lines))
+                hmaxs(system%n_lines), subs(system%n_lines), l0cs(nel), l0dcs(nel))
       lo = 1
       lo_ve = 1
       lo_sy = 1
       lo_fr = 1
+      lo_el = 1
       DO i = 1, system%n_lines
         hi = lo + SIZE(system%lines(i)%q) - 1
         qs(lo:hi) = system%lines(i)%q
@@ -1408,6 +1416,10 @@ CONTAINS
         hmaxs(i) = system%lines(i)%audit_hmax
         subs(i) = system%lines(i)%sub_stats
         lo = hi + 1
+        ne = SIZE(system%lines(i)%l0_c)
+        l0cs(lo_el:lo_el + ne - 1) = system%lines(i)%l0_c
+        l0dcs(lo_el:lo_el + ne - 1) = system%lines(i)%l0_dot_c
+        lo_el = lo_el + ne
         IF (CD_Model_Has_Friction(system%lines(i))) THEN
           ne = SIZE(system%lines(i)%fr_anchor, 2)
           frs(:, lo_fr:lo_fr + ne - 1) = system%lines(i)%fr_anchor
@@ -1444,6 +1456,7 @@ CONTAINS
         lo_ve = 1
         lo_sy = 1
         lo_fr = 1
+        lo_el = 1
         DO i = 1, system%n_lines
           hi = lo + SIZE(system%lines(i)%q) - 1
           system%lines(i)%q = qs(lo:hi)
@@ -1452,6 +1465,10 @@ CONTAINS
           system%lines(i)%audit_hmax = hmaxs(i)
           system%lines(i)%sub_stats = subs(i)
           lo = hi + 1
+          ne = SIZE(system%lines(i)%l0_c)
+          system%lines(i)%l0_c = l0cs(lo_el:lo_el + ne - 1)
+          system%lines(i)%l0_dot_c = l0dcs(lo_el:lo_el + ne - 1)
+          lo_el = lo_el + ne
           IF (CD_Model_Has_Friction(system%lines(i))) THEN
             ne = SIZE(system%lines(i)%fr_anchor, 2)
             system%lines(i)%fr_anchor = frs(:, lo_fr:lo_fr + ne - 1)
@@ -1893,18 +1910,21 @@ CONTAINS
     IF (.NOT. ok) x = CD_ZERO
   END SUBROUTINE solve_spd3
 
-  SUBROUTINE CD_Update_System_Line_SegmentLength(system, line_index, elem, l0_new, l0_dot, ErrStat, ErrMsg)
+  SUBROUTINE CD_Update_System_Line_SegmentLength(system, line_index, elem, l0_new, l0_dot, ErrStat, ErrMsg, &
+                                                 restored)
     !! Active line control at the system level: update one element's unstretched
     !! length/rate on a contained line (CD_Update_Model_SegmentLength does the model
     !! work) and RECOMPUTE the end-node consistent-mass diagonal shares of every
     !! point bound to that line -- the implicit share a Free/Connect point carries
     !! (see the massless-point step) reads rho_a*l0/3, so a length change on an end
-    !! element moves it.
+    !! element moves it. restored = .TRUE. marks the length and rate as the committed
+    !! state's (a checkpoint restart re-applying the restored command).
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     INTEGER, INTENT(IN) :: line_index, elem
     REAL(wp), INTENT(IN) :: l0_new, l0_dot
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: restored
 
     INTEGER :: k, i, kb, es
     REAL(wp) :: md
@@ -1934,7 +1954,7 @@ CONTAINS
         END DO
       END DO
     END IF
-    CALL CD_Update_Model_SegmentLength(system%lines(line_index), elem, l0_new, l0_dot, es, em)
+    CALL CD_Update_Model_SegmentLength(system%lines(line_index), elem, l0_new, l0_dot, es, em, restored=restored)
     IF (es /= CD_MODEL_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'segment-length update failed: '//TRIM(em))
       RETURN
@@ -1950,6 +1970,49 @@ CONTAINS
       IF (ErrStat /= CD_SYSTEM_OK) RETURN
     END DO
   END SUBROUTINE CD_Update_System_Line_SegmentLength
+
+  SUBROUTINE CD_Save_System_Line_Control(system, line_index, saved, ErrStat, ErrMsg)
+    !! Save what CD_Update_System_Line_SegmentLength writes on one contained line
+    !! (CD_Save_Model_Control), for CD_Restore_System_Line_Control.
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    TYPE(CD_ModelControlSaveType), INTENT(INOUT) :: saved
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    CALL CD_Save_Model_Control(system%lines(line_index), saved)
+  END SUBROUTINE CD_Save_System_Line_Control
+
+  SUBROUTINE CD_Restore_System_Line_Control(system, line_index, saved, ErrStat, ErrMsg)
+    !! Take one contained line back to what CD_Save_System_Line_Control saved, bit for bit,
+    !! and re-accumulate the end-node mass-diagonal shares of the Free/Connect points bound to
+    !! it from the restored lengths (the accumulation the update and initialisation perform).
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    INTEGER, INTENT(IN) :: line_index
+    TYPE(CD_ModelControlSaveType), INTENT(IN) :: saved
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k, i, es
+    CHARACTER(240) :: em
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    CALL CD_Restore_Model_Control(system%lines(line_index), saved, es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      CALL fail(ErrStat, ErrMsg, TRIM(em))
+      RETURN
+    END IF
+    IF (.NOT. (ALLOCATED(system%points) .AND. ALLOCATED(system%bindings))) RETURN
+    DO k = 1, SIZE(system%bindings)
+      IF (system%bindings(k)%line_index /= line_index) CYCLE
+      i = find_point_index(system%points, system%bindings(k)%point_id)
+      IF (i < 1) CYCLE
+      IF (system%points(i)%point_type /= CD_POINT_FREE .AND. &
+          system%points(i)%point_type /= CD_POINT_CONNECT) CYCLE
+      CALL recompute_point_line_mass_diag(system, i, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    END DO
+  END SUBROUTINE CD_Restore_System_Line_Control
 
   SUBROUTINE recompute_point_line_mass_diag(system, point_index, ErrStat, ErrMsg)
     !! Re-accumulate one point's attached end-node consistent-mass diagonal share
@@ -2978,6 +3041,9 @@ CONTAINS
       system%lines(i)%audit_hmax_rollback = system%lines(i)%audit_hmax
       ! the sub-stepping diagnostics likewise: a rolled-back step is not counted
       system%lines(i)%sub_stats_rollback = system%lines(i)%sub_stats
+      ! the committed lengths and rates (active line control) advance with a step too
+      system%lines(i)%l0_c_rollback = system%lines(i)%l0_c
+      system%lines(i)%l0_dot_c_rollback = system%lines(i)%l0_dot_c
       ! the viscoelastic dl_1 state advances with every committed line step, so
       ! it must roll back with q/v/a (a line that stepped can be rolled back
       ! when a sibling line or the coupled point solve fails)
@@ -3007,6 +3073,8 @@ CONTAINS
       system%lines(i)%a = system%lines(i)%a_rollback
       system%lines(i)%audit_hmax = system%lines(i)%audit_hmax_rollback
       system%lines(i)%sub_stats = system%lines(i)%sub_stats_rollback
+      system%lines(i)%l0_c = system%lines(i)%l0_c_rollback
+      system%lines(i)%l0_dot_c = system%lines(i)%l0_dot_c_rollback
       IF (system%lines(i)%has_viscoelastic) &
         system%lines(i)%ve_dl_1 = system%lines(i)%ve_dl_1_rollback
       IF (system%lines(i)%has_syrope) THEN
@@ -3115,6 +3183,7 @@ CONTAINS
           netot = netot + SIZE(system%lines(i)%l0)
         END DO
         ALLOCATE (system%snap_l0(netot), system%snap_l0_dot(netot), system%snap_fbase(ntot), &
+                  system%snap_l0_c(netot), system%snap_l0_dot_c(netot), &
                   system%snap_ve_dl_1(netot), system%snap_syrope_slow(netot), &
                   system%snap_syrope_tmax(netot), system%snap_fr_anchor(ntot))
       END BLOCK
@@ -3152,6 +3221,8 @@ CONTAINS
         he = le + ne_i - 1
         system%snap_l0(le:he) = system%lines(i)%l0
         system%snap_l0_dot(le:he) = system%lines(i)%l0_dot
+        system%snap_l0_c(le:he) = system%lines(i)%l0_c
+        system%snap_l0_dot_c(le:he) = system%lines(i)%l0_dot_c
         IF (system%lines(i)%has_viscoelastic) &
           system%snap_ve_dl_1(le:he) = system%lines(i)%ve_dl_1
         IF (system%lines(i)%has_syrope) THEN
@@ -3224,6 +3295,8 @@ CONTAINS
           he = le + ne_i - 1
           hi = lo + SIZE(system%lines(i)%q) - 1
           system%lines(i)%l0_dot = system%snap_l0_dot(le:he)
+          system%lines(i)%l0_c = system%snap_l0_c(le:he)
+          system%lines(i)%l0_dot_c = system%snap_l0_dot_c(le:he)
           IF (system%lines(i)%has_viscoelastic) &
             system%lines(i)%ve_dl_1 = system%snap_ve_dl_1(le:he)
           IF (system%lines(i)%has_syrope) THEN

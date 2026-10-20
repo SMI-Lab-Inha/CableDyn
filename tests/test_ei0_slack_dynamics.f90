@@ -63,6 +63,14 @@ PROGRAM test_ei0_slack_dynamics
   !!      share's credit (it returned many times that before the cap covered slack starts), a
   !!      slack segment with no step-start dashpot force keeps the plain blend, and the tangent
   !!      of a capped row matches the finite difference on the banded and the dense path.
+  !!  11. A length change over the step (active line control) on the chain of case 5: the
+  !!      step-start force and the release cap's step-start data at the lengths the step-start
+  !!      state was reached with (start_l0), the inertia at the blended lengths (mass_l0); the
+  !!      residual against the closed form and the tangent against the finite difference, also
+  !!      for turning releases (the projected cap) and a haul-in whose end share alone returns more
+  !!      than W_n; and, on the chain with a callback load, the dashpot share and the law bound of
+  !!      the cap and the kept dashpot share of a segment slack at the step-start length (case 10)
+  !!      under a length and rate change, against their closed forms.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Cable_Gen_Alpha_Step, CD_DYN_OK
@@ -85,6 +93,8 @@ PROGRAM test_ei0_slack_dynamics
   ! a two-sided axial dashpot (BA cb_ba_dash, force cb_ba_dash (dl/dt)/l0 along the chord, as the
   ! line model's axial damping) on segment cb_dash_elem (0: none) of rest length cb_l0_dash
   REAL(wp) :: cb_ba_dash = 0.0_wp, cb_l0_dash = 1.0_wp
+  ! the dashpot's unstretched-length rate (its force is then (BA/l0) (t . w - (l/l0) l0_dot) t)
+  REAL(wp) :: cb_l0dot_dash = 0.0_wp
   INTEGER :: cb_dash_elem = 0
   REAL(wp) :: cb_q0(12) = 0.0_wp
   INTEGER :: cb_law_elem = 0
@@ -94,6 +104,8 @@ PROGRAM test_ei0_slack_dynamics
   IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, driver)
   CALL case_tangent_consistency()
   CALL case_release_energy()
+  CALL case_length_change_step()
+  CALL case_length_change_cap_terms()
   CALL case_law_release_cap()
   CALL case_law_damped_release()
   CALL case_damped_elastic_release()
@@ -379,41 +391,54 @@ CONTAINS
     END DO
   END SUBROUTINE chain_nodes
 
-  SUBROUTINE blended_force(qn, q1, l0, ea, alpha_f, capped, f)
+  SUBROUTINE blended_force(qn, q1, l0, ea, alpha_f, capped, f, l0s)
     !! Closed form of the blended internal force (1 - alpha_f) f(q1) + alpha_f f(qn) of the
     !! tension-only chain, with the release cap (capped) or without it: the retained share
     !! alpha_f T_n along the step-start chord t_n is at most
-    !! (W_n + (1 - alpha_f) T_1 p_1)/p, W_n = T_n e_n/2, with the projected shortening
-    !! p = |d_n| - t_n . d_1 and p_1 = |d_1| - t_1 . d_n, so that the blend returns at most W_n.
+    !! (W_n + (1 - alpha_f) T^_1 p_1)/p, W_n = T_n e_n/2, with the projected shortening
+    !! p = |d_n| - t_n . d_1 and p_1 = |d_1| - t_1 . d_n, so that the blend returns at most W_n
+    !! (T^_1 = T_1 without a length change). l0s: the lengths of the step-start state (f(qn),
+    !! T_n and e_n) when they differ from the lengths l0 at t_{n+1}; the cap's end-tension
+    !! estimate is then the step-start secant times the end stretch, T^_1 = (T_n/e_n) e_1,
+    !! and N is bounded below by zero.
     REAL(wp), INTENT(IN) :: qn(12), q1(12), l0(3), ea(3), alpha_f
     LOGICAL, INTENT(IN) :: capped
     REAL(wp), INTENT(OUT) :: f(12)
+    REAL(wp), INTENT(IN), OPTIONAL :: l0s(3)
     INTEGER :: e
-    REAL(wp) :: dn(3), d1(3), ln, l1, t0, t1, e0, dg, p, p1, share(3)
+    REAL(wp) :: dn(3), d1(3), ln, l1, t0, t1, t1h, e0, e1, dg, p, p1, share(3), ls(3)
+    ls = l0
+    IF (PRESENT(l0s)) ls = l0s
     f = 0.0_wp
     DO e = 1, 3
       dn = qn(3*e + 1:3*e + 3) - qn(3*e - 2:3*e)
       d1 = q1(3*e + 1:3*e + 3) - q1(3*e - 2:3*e)
       ln = NORM2(dn)
       l1 = NORM2(d1)
-      t0 = MAX(0.0_wp, ea(e)*(ln/l0(e) - 1.0_wp))
+      t0 = MAX(0.0_wp, ea(e)*(ln/ls(e) - 1.0_wp))
       t1 = MAX(0.0_wp, ea(e)*(l1/l0(e) - 1.0_wp))
-      e0 = ln - l0(e)
+      e0 = ln - ls(e)
+      e1 = l1 - l0(e)
       dg = alpha_f*t0
       p = ln - DOT_PRODUCT(dn/ln, d1)
       p1 = l1 - DOT_PRODUCT(d1/l1, dn)
-      IF (capped .AND. t0 > 0.0_wp .AND. p > 0.0_wp) dg = MIN(dg, (0.5_wp*t0*e0 + (1.0_wp - alpha_f)*t1*p1)/p)
+      t1h = t1
+      IF (PRESENT(l0s) .AND. e0 > 0.0_wp) t1h = t0/e0*MAX(e1, 0.0_wp)
+      IF (capped .AND. t0 > 0.0_wp .AND. p > 0.0_wp) &
+        dg = MIN(dg, MAX(0.5_wp*t0*e0 + (1.0_wp - alpha_f)*t1h*p1, 0.0_wp)/p)
       share = (1.0_wp - alpha_f)*t1*d1/l1 + dg*dn/ln
       f(3*e - 2:3*e) = f(3*e - 2:3*e) - share
       f(3*e + 1:3*e + 3) = f(3*e + 1:3*e + 3) + share
     END DO
   END SUBROUTINE blended_force
 
-  SUBROUTINE probe_step(qn, vn, an, q1, l0, ea, rho_a, dense, R, K)
-    !! Residual and effective tangent of the force-blended step at q1 (the probe_q hook).
+  SUBROUTINE probe_step(qn, vn, an, q1, l0, ea, rho_a, dense, R, K, start_l0, mass_l0)
+    !! Residual and effective tangent of the force-blended step at q1 (the probe_q hook);
+    !! start_l0 and mass_l0 are passed on to the step (a length change over the step).
     REAL(wp), INTENT(IN) :: qn(12), vn(12), an(12), q1(12), l0(3), ea(3), rho_a(3)
     LOGICAL, INTENT(IN) :: dense
     REAL(wp), INTENT(OUT) :: R(12), K(9, 9)
+    REAL(wp), INTENT(IN), OPTIONAL :: start_l0(3), mass_l0(3)
     INTEGER :: conn(2, 3), n_iter, es
     REAL(wp) :: qo(12), vo(12), ao(12)
     LOGICAL :: converged, stalled
@@ -425,11 +450,13 @@ CONTAINS
     IF (dense) THEN
       CALL CD_Cable_Gen_Alpha_Step(qn, vn, an, conn, l0, ea, rho_a, .TRUE., 0.0_wp*qn, [1, 2, 3], 0.05_wp, cfg, &
                                    qo, vo, ao, converged, stalled, n_iter, es, em, load_proc=zero_load, &
-                                   workspace=work, probe_q=q1, probe_R=R, probe_K=K)
+                                   workspace=work, probe_q=q1, probe_R=R, probe_K=K, start_l0=start_l0, &
+                                   mass_l0=mass_l0)
     ELSE
       CALL CD_Cable_Gen_Alpha_Step(qn, vn, an, conn, l0, ea, rho_a, .TRUE., 0.0_wp*qn, [1, 2, 3], 0.05_wp, cfg, &
                                    qo, vo, ao, converged, stalled, n_iter, es, em, &
-                                   workspace=work, probe_q=q1, probe_R=R, probe_K=K)
+                                   workspace=work, probe_q=q1, probe_R=R, probe_K=K, start_l0=start_l0, &
+                                   mass_l0=mass_l0)
     END IF
     IF (es /= CD_DYN_OK) THEN
       WRITE (*, '(A)') 'MISMATCH [tangent:probe '//TRIM(em)//']'
@@ -587,6 +614,113 @@ CONTAINS
     WRITE (*, '(A,ES10.3)') '  release energy: force jump across the rest length / T_n = ', ratio
     CALL require(ratio < 1.0e-6_wp, 'release-energy:continuous-at-rest-length')
   END SUBROUTINE case_release_energy
+
+  SUBROUTINE case_length_change_step()
+    !! A length change over the step (active line control): segment 1 paid out (0.97 to 1.0 m),
+    !! segment 3 hauled in (0.83 to 0.8 m). The step-start force and the release cap's
+    !! step-start tension and stretch take the lengths the step-start state was reached with
+    !! (start_l0), the force at t_{n+1} and the cap's end stretch the new ones (l0), and the
+    !! structural inertia the blended ones (mass_l0): residual against the closed form (force
+    !! and inertia) and tangent against the central difference of the residual, with all
+    !! segments taut, segment 1 released deeply (cap active), segment 1 turning by 45 degrees
+    !! as it ends just slack (projected cap), the hauled-in segment 3 turning by about 50
+    !! degrees and ending taut (capped with the end share at the secant estimate
+    !! T^_1 = (T_n/e_n) e_1), and segment 3 shortening along its chord while it stretches
+    !! against its new length (the end share alone returns more than W_n: kept force zero), on
+    !! both paths.
+    REAL(wp), PARAMETER :: L0(3) = [1.0_wp, 1.2_wp, 0.8_wp], L0S(3) = [0.97_wp, 1.2_wp, 0.83_wp]
+    REAL(wp), PARAMETER :: EA(3) = [1.0e6_wp, 1.5e6_wp, 0.8e6_wp], RHO_A(3) = [2.0_wp, 3.0_wp, 1.5_wp]
+    REAL(wp), PARAMETER :: DIRS_N(3, 3) = RESHAPE([1.0_wp, 0.2_wp, 0.1_wp, 0.3_wp, 1.0_wp, -0.2_wp, &
+                                                   -0.2_wp, 0.4_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: DIRS_1(3, 3) = RESHAPE([1.0_wp, 0.27_wp, 0.04_wp, 0.36_wp, 1.0_wp, -0.12_wp, &
+                                                   -0.12_wp, 0.46_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: H = 1.0e-6_wp, RHO = 0.4_wp, DT = 0.05_wp
+    REAL(wp), PARAMETER :: ALPHA_F = RHO/(RHO + 1.0_wp), ALPHA_M = (2.0_wp*RHO - 1.0_wp)/(RHO + 1.0_wp)
+    REAL(wp), PARAMETER :: BETA = 0.25_wp*(1.0_wp - ALPHA_M + ALPHA_F)**2
+    REAL(wp), PARAMETER :: DIRS_T1(3, 3) = RESHAPE([0.6_wp, 0.9_wp, 0.1_wp, 0.36_wp, 1.0_wp, -0.12_wp, &
+                                                    -0.12_wp, 0.46_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: DIRS_T3(3, 3) = RESHAPE([1.0_wp, 0.27_wp, 0.04_wp, 0.36_wp, 1.0_wp, -0.12_wp, &
+                                                    0.6_wp, 1.2_wp, 0.4_wp], [3, 3])
+    REAL(wp) :: dirs(3, 3, 5), strain_1(3, 5), qn(12), vn(12), an(12), q1(12), qp(12), lm(3), R(12), Rp(12), Rm(12)
+    REAL(wp) :: K(9, 9), Kfd(9, 9), Kdump(9, 9), f_cap(12), f_new(12), f_raw(12), acc(12), inertia(12), m
+    REAL(wp) :: scale, err
+    INTEGER :: c, p, j, i, e, free(9)
+    LOGICAL :: dense
+    CHARACTER(16) :: label
+    free = [(i + 3, i=1, 9)]
+    lm = L0
+    lm(1) = (1.0_wp - ALPHA_F)*L0(1) + ALPHA_F*L0S(1)
+    lm(3) = (1.0_wp - ALPHA_F)*L0(3) + ALPHA_F*L0S(3)
+    strain_1(:, 1) = [0.020_wp, 0.015_wp, 0.020_wp]
+    strain_1(:, 2) = [-0.050_wp, 0.015_wp, 0.020_wp]
+    strain_1(:, 3) = [-0.0005_wp, 0.015_wp, 0.020_wp]
+    strain_1(:, 4) = [0.020_wp, 0.015_wp, 0.0002_wp]
+    strain_1(:, 5) = [0.020_wp, 0.015_wp, 0.025_wp]
+    dirs(:, :, 1) = DIRS_1
+    dirs(:, :, 2) = DIRS_1
+    dirs(:, :, 3) = DIRS_T1
+    dirs(:, :, 4) = DIRS_T3
+    dirs(:, :, 5) = DIRS_N
+    vn = 0.0_wp
+    an = 0.0_wp
+    DO i = 4, 12
+      vn(i) = 0.01_wp*SIN(1.7_wp*REAL(i, wp))
+      an(i) = 0.02_wp*COS(2.3_wp*REAL(i, wp))
+    END DO
+    CALL chain_nodes(DIRS_N, [0.010_wp, 0.020_wp, 0.010_wp], L0S, qn)
+    DO c = 1, 5
+      SELECT CASE (c)
+      CASE (1)
+        label = 'taut-taut'
+      CASE (2)
+        label = 'release-cap'
+      CASE (3)
+        label = 'turning-release'
+      CASE (4)
+        label = 'haul-in-turning'
+      CASE DEFAULT
+        label = 'haul-in-negative'
+      END SELECT
+      CALL chain_nodes(dirs(:, :, c), strain_1(:, c), L0, q1)
+      CALL blended_force(qn, q1, L0, EA, ALPHA_F, .TRUE., f_cap, l0s=L0S)
+      CALL blended_force(qn, q1, L0, EA, ALPHA_F, .FALSE., f_raw, l0s=L0S)
+      ! the same with the step-start force at the new lengths: what start_l0 must avoid
+      CALL blended_force(qn, q1, L0, EA, ALPHA_F, .TRUE., f_new)
+      scale = MAXVAL(ABS(f_raw))
+      CALL require(MAXVAL(ABS(f_new - f_cap)) > 1.0e-2_wp*scale, 'lengths:'//TRIM(label)//':start-lengths-matter')
+      IF (c >= 2) CALL require(MAXVAL(ABS(f_cap - f_raw)) > 1.0e-3_wp*scale, 'lengths:'//TRIM(label)//':cap-active')
+      ! inertia M(mass_l0) a_alpha of the generalised-alpha relations, the fixed node held
+      acc = 0.0_wp
+      DO i = 4, 12
+        acc(i) = (1.0_wp - ALPHA_M)*(q1(i) - qn(i) - DT*vn(i) - DT*DT*(0.5_wp - BETA)*an(i))/(BETA*DT*DT) + &
+                 ALPHA_M*an(i)
+      END DO
+      inertia = 0.0_wp
+      DO e = 1, 3
+        m = RHO_A(e)*lm(e)/6.0_wp
+        inertia(3*e - 2:3*e) = inertia(3*e - 2:3*e) + m*(2.0_wp*acc(3*e - 2:3*e) + acc(3*e + 1:3*e + 3))
+        inertia(3*e + 1:3*e + 3) = inertia(3*e + 1:3*e + 3) + m*(acc(3*e - 2:3*e) + 2.0_wp*acc(3*e + 1:3*e + 3))
+      END DO
+      DO p = 1, 2
+        dense = p == 2
+        CALL probe_step(qn, vn, an, q1, L0, EA, RHO_A, dense, R, K, start_l0=L0S, mass_l0=lm)
+        err = MAXVAL(ABS(R(4:12) - f_cap(4:12) - inertia(4:12)))/MAX(scale, MAXVAL(ABS(inertia)))
+        WRITE (*, '(A,A,A,L1,A,ES9.2)') '  lengths ', TRIM(label), ' dense=', dense, ': residual vs closed form ', err
+        CALL require(err < 1.0e-9_wp, 'lengths:'//TRIM(label)//TRIM(MERGE(':dense ', ':banded', dense))//':residual')
+        DO j = 1, 9
+          qp = q1
+          qp(free(j)) = q1(free(j)) + H
+          CALL probe_step(qn, vn, an, qp, L0, EA, RHO_A, dense, Rp, Kdump, start_l0=L0S, mass_l0=lm)
+          qp(free(j)) = q1(free(j)) - H
+          CALL probe_step(qn, vn, an, qp, L0, EA, RHO_A, dense, Rm, Kdump, start_l0=L0S, mass_l0=lm)
+          Kfd(:, j) = (Rp(4:12) - Rm(4:12))/(2.0_wp*H)
+        END DO
+        err = MAXVAL(ABS(K - Kfd))/MAXVAL(ABS(K))
+        WRITE (*, '(A,A,A,L1,A,ES9.2)') '  lengths ', TRIM(label), ' dense=', dense, ': max |K - K_fd|/max|K| = ', err
+        CALL require(err < 1.0e-6_wp, 'lengths:'//TRIM(label)//TRIM(MERGE(':dense ', ':banded', dense))//':fd-tangent')
+      END DO
+    END DO
+  END SUBROUTINE case_length_change_step
 
   SUBROUTINE case_light_cable_coarse_step()
     LOGICAL :: conv
@@ -791,10 +925,11 @@ CONTAINS
       ell = NORM2(c)
       t = c/ell
       w = v(3*b - 2:3*b) - v(3*a - 2:3*a)
-      ten = cb_ba_dash*DOT_PRODUCT(t, w)/cb_l0_dash
+      ten = cb_ba_dash*(DOT_PRODUCT(t, w) - ell*cb_l0dot_dash/cb_l0_dash)/cb_l0_dash
       force(3*a - 2:3*a) = force(3*a - 2:3*a) + ten*t
       force(3*b - 2:3*b) = force(3*b - 2:3*b) - ten*t
-      kb = ten*(eye - outer3(t, t))/ell + (cb_ba_dash/cb_l0_dash)*outer3(t, MATMUL(eye - outer3(t, t), w)/ell)
+      kb = ten*(eye - outer3(t, t))/ell + (cb_ba_dash/cb_l0_dash)*outer3(t, MATMUL(eye - outer3(t, t), w)/ell) - &
+           (cb_ba_dash*cb_l0dot_dash/cb_l0_dash**2)*outer3(t, t)
       kv = (cb_ba_dash/cb_l0_dash)*outer3(t, t)
       jac_q(3*a - 2:3*a, 3*a - 2:3*a) = jac_q(3*a - 2:3*a, 3*a - 2:3*a) + kb
       jac_q(3*a - 2:3*a, 3*b - 2:3*b) = jac_q(3*a - 2:3*a, 3*b - 2:3*b) - kb
@@ -871,7 +1006,7 @@ CONTAINS
   END SUBROUTINE cb_added_mass
 
   SUBROUTINE probe_chain(qn, vn, an, q1, l0, ea, rho_a, banded, R, K, start_tension, start_stiffness, &
-                         axial_damping)
+                         axial_damping, start_load, start_l0, axial_l0_rate, start_l0_rate)
     !! Residual and effective tangent at q1 of the force-blended step of the chain with the
     !! callback load: banded (load_band_proc + load_force_proc) or dense (load_proc, with the
     !! added mass when cb_madd > 0).
@@ -879,6 +1014,9 @@ CONTAINS
     LOGICAL, INTENT(IN) :: banded
     REAL(wp), INTENT(OUT) :: R(12), K(9, 9)
     REAL(wp), INTENT(IN), OPTIONAL :: start_tension(:), start_stiffness(:), axial_damping(:)
+    !! a length change over the step: the step-start load, lengths and rates, and the rates at
+    !! t_{n+1} (passed on to the step)
+    REAL(wp), INTENT(IN), OPTIONAL :: start_load(:), start_l0(:), axial_l0_rate(:), start_l0_rate(:)
     INTEGER :: conn(2, 3), n_iter, es
     REAL(wp) :: qo(12), vo(12), ao(12)
     LOGICAL :: converged, stalled
@@ -892,19 +1030,22 @@ CONTAINS
                                    qo, vo, ao, converged, stalled, n_iter, es, em, load_band_proc=cb_load_band, &
                                    load_force_proc=cb_force, workspace=work, start_tension=start_tension, &
                                    start_stiffness=start_stiffness, axial_damping=axial_damping, &
-                                   probe_q=q1, probe_R=R, probe_K=K)
+                                   start_load=start_load, start_l0=start_l0, axial_l0_rate=axial_l0_rate, &
+                                   start_l0_rate=start_l0_rate, probe_q=q1, probe_R=R, probe_K=K)
     ELSE IF (cb_madd > 0.0_wp) THEN
       CALL CD_Cable_Gen_Alpha_Step(qn, vn, an, conn, l0, ea, rho_a, .TRUE., 0.0_wp*qn, [1, 2, 3], 0.05_wp, cfg, &
                                    qo, vo, ao, converged, stalled, n_iter, es, em, load_proc=cb_load, &
                                    added_mass_proc=cb_added_mass, workspace=work, start_tension=start_tension, &
                                    start_stiffness=start_stiffness, axial_damping=axial_damping, &
-                                   probe_q=q1, probe_R=R, probe_K=K)
+                                   start_load=start_load, start_l0=start_l0, axial_l0_rate=axial_l0_rate, &
+                                   start_l0_rate=start_l0_rate, probe_q=q1, probe_R=R, probe_K=K)
     ELSE
       CALL CD_Cable_Gen_Alpha_Step(qn, vn, an, conn, l0, ea, rho_a, .TRUE., 0.0_wp*qn, [1, 2, 3], 0.05_wp, cfg, &
                                    qo, vo, ao, converged, stalled, n_iter, es, em, load_proc=cb_load, &
                                    workspace=work, start_tension=start_tension, &
                                    start_stiffness=start_stiffness, axial_damping=axial_damping, &
-                                   probe_q=q1, probe_R=R, probe_K=K)
+                                   start_load=start_load, start_l0=start_l0, axial_l0_rate=axial_l0_rate, &
+                                   start_l0_rate=start_l0_rate, probe_q=q1, probe_R=R, probe_K=K)
     END IF
     IF (es /= CD_DYN_OK) THEN
       WRITE (*, '(A)') 'MISMATCH [chain:probe '//TRIM(em)//']'
@@ -915,24 +1056,26 @@ CONTAINS
   END SUBROUTINE probe_chain
 
   SUBROUTINE fd_tangent_check(label, qn, vn, an, q1, l0, ea, rho_a, banded, start_tension, start_stiffness, &
-                              axial_damping)
+                              axial_damping, start_load, start_l0, axial_l0_rate, start_l0_rate)
     !! The step's tangent against the central difference of its residual.
     CHARACTER(*), INTENT(IN) :: label
     REAL(wp), INTENT(IN) :: qn(12), vn(12), an(12), q1(12), l0(3), ea(3), rho_a(3)
     LOGICAL, INTENT(IN) :: banded
     REAL(wp), INTENT(IN), OPTIONAL :: start_tension(:), start_stiffness(:), axial_damping(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: start_load(:), start_l0(:), axial_l0_rate(:), start_l0_rate(:)
     REAL(wp), PARAMETER :: H = 1.0e-6_wp
     INTEGER :: j
     REAL(wp) :: qp(12), R(12), Rp(12), Rm(12), K(9, 9), Kfd(9, 9), Kdump(9, 9), err
-    CALL probe_chain(qn, vn, an, q1, l0, ea, rho_a, banded, R, K, start_tension, start_stiffness, axial_damping)
+    CALL probe_chain(qn, vn, an, q1, l0, ea, rho_a, banded, R, K, start_tension, start_stiffness, axial_damping, &
+                     start_load, start_l0, axial_l0_rate, start_l0_rate)
     DO j = 1, 9
       qp = q1
       qp(3 + j) = q1(3 + j) + H
       CALL probe_chain(qn, vn, an, qp, l0, ea, rho_a, banded, Rp, Kdump, start_tension, start_stiffness, &
-                       axial_damping)
+                       axial_damping, start_load, start_l0, axial_l0_rate, start_l0_rate)
       qp(3 + j) = q1(3 + j) - H
       CALL probe_chain(qn, vn, an, qp, l0, ea, rho_a, banded, Rm, Kdump, start_tension, start_stiffness, &
-                       axial_damping)
+                       axial_damping, start_load, start_l0, axial_l0_rate, start_l0_rate)
       Kfd(:, j) = (Rp(4:12) - Rm(4:12))/(2.0_wp*H)
     END DO
     err = MAXVAL(ABS(K - Kfd))/MAXVAL(ABS(K))
@@ -976,6 +1119,7 @@ CONTAINS
     cb_ba_law = 0.0_wp
     cb_ba_dash = 0.0_wp
     cb_l0_dash = 1.0_wp
+    cb_l0dot_dash = 0.0_wp
     cb_dash_elem = 0
   END SUBROUTINE reset_chain_load
 
@@ -1198,6 +1342,252 @@ CONTAINS
     CALL damped_tangent_case('damped-release-band', qn, vn, q1, L0, EA, AD, t0)
     CALL reset_chain_load()
   END SUBROUTINE case_damped_elastic_release
+
+  SUBROUTINE case_length_change_cap_terms()
+    !! The release cap under a length change of the end segment (active line control), hauled
+    !! in (0.82 to 0.8 m) and paid out (0.78 to 0.8 m), its rate changing too. Its step-start
+    !! quantities take the step-start length and rate (start_l0, start_l0_rate): e_n, T_n, W_n,
+    !! the secant T_n/e_n, the law stiffness k_n and the dashpot tension T_d,n; its end-state
+    !! quantities the new ones: e_{n+1}, T^_{n+1} = min(T_n/e_n, k_n) e_{n+1}, T_d,n+1 and the
+    !! dashpot weight phi (band l0 to l0 + c e_n). (a) An elastic segment with a two-sided
+    !! dashpot turning by 5 and 45 degrees and ending slack, in the band or above it: the change
+    !! the dashpot share makes to the cap against the closed form. (b) A damped law segment
+    !! (ea = 0) with a damping-dominated start: the cap against the closed form with the
+    !! bounded secant. (c) The elastic segment with a dashpot slack at the step-start length
+    !! (e_n = -2 mm against l0_c; on the haul-in pass taut against the new length), extending at
+    !! 0.5 m/s and turning by 5 to 135 degrees: the kept dashpot share against the closed form
+    !! (W_d + N_d)/p, W_d = T_d,n^2 dt l0_c/BA with T_d,n at l0_c and l0_dot_c, N_d from
+    !! T_d,n+1 at the new length and rate. The tangent against the finite difference on both
+    !! paths.
+    REAL(wp), PARAMETER :: L0(3) = [1.0_wp, 1.2_wp, 0.8_wp], EA(3) = [1.0e6_wp, 1.5e6_wp, 0.8e6_wp]
+    REAL(wp), PARAMETER :: DIRS(3, 3) = RESHAPE([1.0_wp, 0.2_wp, 0.1_wp, 0.3_wp, 1.0_wp, -0.2_wp, &
+                                                 -0.2_wp, 0.4_wp, 1.0_wp], [3, 3])
+    REAL(wp), PARAMETER :: THETA(2) = [5.0_wp, 45.0_wp]
+    REAL(wp), PARAMETER :: S1(6) = [-1.0e-3_wp, -1.0e-5_wp, 2.0e-4_wp, 6.0e-4_wp, 1.5e-3_wp, 3.0e-3_wp]
+    REAL(wp), PARAMETER :: DT = 0.05_wp, RHO = 0.4_wp, BA = 2.0e4_wp, EA_LAW = 0.8e6_wp, BA_LAW = 2.0e5_wp
+    REAL(wp), PARAMETER :: RHO_TINY(3) = [1.0e-12_wp, 1.0e-12_wp, 1.0e-12_wp]
+    REAL(wp) :: ls3, rs, rn, ls(3), qn(12), vn(12), z(12), q1(12), v1(12), sl(12), jq(12, 12), jv(12, 12)
+    REAL(wp) :: Ra(12), Rb(12), K(9, 9), tn(3), u(3), dir(3), d0(3), d1(3), t1(3), ln, l1, e0, e1, t0, w0
+    REAL(wp) :: p, p1, k0, that, td0, td1, phi, kc, num, dg, du, dd, am, af, beta, gamma, band, err, worst
+    REAL(wp) :: kn, wd, nd, best, qbest(12)
+    REAL(wp), PARAMETER :: THETA_S(4) = [5.0_wp, 45.0_wp, 90.0_wp, 135.0_wp]
+    REAL(wp), PARAMETER :: OFS_S(7) = [-0.02_wp, -0.003_wp, 0.0_wp, 0.003_wp, 0.02_wp, 0.1_wp, 0.3_wp]
+    INTEGER :: ip, i, j, nact
+    LOGICAL :: damped
+    am = (2.0_wp*RHO - 1.0_wp)/(RHO + 1.0_wp)
+    af = RHO/(RHO + 1.0_wp)
+    beta = 0.25_wp*(1.0_wp - am + af)**2
+    gamma = 0.5_wp - am + af
+    band = af/(1.0_wp - af)
+    z = 0.0_wp
+    DO ip = 1, 2
+      ! pass 1 hauls in, pass 2 pays out
+      ls3 = MERGE(0.82_wp, 0.78_wp, ip == 1)
+      rs = MERGE(-0.02_wp, 0.02_wp, ip == 1)
+      rn = MERGE(-0.03_wp, 0.03_wp, ip == 1)
+      ls = [L0(1), L0(2), ls3]
+      ! (a) the elastic segment with a dashpot
+      CALL reset_chain_load()
+      cb_dash_elem = 3
+      cb_ba_dash = BA
+      CALL chain_nodes(DIRS, [0.010_wp, 0.020_wp, 0.001_wp], ls, qn)
+      d0 = qn(10:12) - qn(7:9)
+      ln = NORM2(d0)
+      tn = d0/ln
+      u = [tn(2), -tn(1), 0.0_wp]
+      u = u/NORM2(u)
+      vn = 0.0_wp
+      vn(10:12) = 0.5_wp*tn
+      ! the step-start load at the step-start length and rate, then the dashpot at the new ones
+      cb_l0_dash = ls3
+      cb_l0dot_dash = rs
+      CALL chain_load(qn, vn, sl, jq, jv)
+      cb_l0_dash = L0(3)
+      cb_l0dot_dash = rn
+      e0 = ln - ls3
+      t0 = EA(3)*(ln/ls3 - 1.0_wp)
+      w0 = 0.5_wp*t0*e0
+      td0 = BA*(DOT_PRODUCT(tn, vn(10:12) - vn(7:9)) - ln*rs/ls3)/ls3
+      worst = 0.0_wp
+      nact = 0
+      DO i = 1, SIZE(THETA)
+        DO j = 1, SIZE(S1)
+          dir = COS(THETA(i)*PI/180.0_wp)*tn + SIN(THETA(i)*PI/180.0_wp)*u
+          q1 = qn
+          q1(10:12) = qn(7:9) + L0(3)*(1.0_wp + S1(j))*dir
+          CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., Ra, K, axial_damping=[0.0_wp, 0.0_wp, BA], &
+                           start_load=sl, start_l0=ls, axial_l0_rate=[0.0_wp, 0.0_wp, rn], &
+                           start_l0_rate=[0.0_wp, 0.0_wp, rs])
+          CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., Rb, K, start_load=sl, start_l0=ls)
+          ! the closed form of the two caps on the end segment
+          v1 = gamma/(beta*DT)*(q1 - qn) + (1.0_wp - gamma/beta)*vn
+          v1(1:3) = 0.0_wp
+          d1 = q1(10:12) - q1(7:9)
+          l1 = NORM2(d1)
+          t1 = d1/l1
+          e1 = l1 - L0(3)
+          p = ln - DOT_PRODUCT(tn, d1)
+          p1 = l1 - DOT_PRODUCT(t1, d0)
+          k0 = t0/e0
+          that = k0*MAX(e1, 0.0_wp)
+          du = 0.0_wp
+          IF (p > 0.0_wp) du = MIN(MAX(w0 + (1.0_wp - af)*that*p1, 0.0_wp)/p - af*t0, 0.0_wp)
+          dd = du
+          damped = l1 < L0(3) + band*e0
+          IF (damped) THEN
+            dd = 0.0_wp
+            IF (p > 0.0_wp) THEN
+              phi = MIN(1.0_wp, MAX(0.0_wp, 1.0_wp - e1/(band*e0)))
+              td1 = BA*(DOT_PRODUCT(t1, v1(10:12) - v1(7:9)) - l1*rn/L0(3))/L0(3)
+              num = w0 + (1.0_wp - af)*(that + phi*td1)*p1
+              kc = t0 + phi*td0
+              dg = MAX(num, 0.0_wp)/p
+              dd = MIN(dg - af*kc, 0.0_wp)
+            END IF
+          END IF
+          IF (ABS(dd - du) > 1.0e-6_wp*t0) nact = nact + 1
+          err = MAX(MAXVAL(ABS(Ra(10:12) - Rb(10:12) - (dd - du)*tn)), MAXVAL(ABS(Ra(7:9) - Rb(7:9) + (dd - du)*tn)))
+          worst = MAX(worst, err/(t0 + ABS(td0)))
+        END DO
+      END DO
+      WRITE (*, '(A,I0,A,I0,A,ES10.3)') '  length change, pass ', ip, ': dashpot share of the cap active at ', nact, &
+        ' states; largest deviation from the closed form / (T_n + |T_d,n|) ', worst
+      CALL require(nact >= 2, 'lengths-cap:dashpot-share-active')
+      CALL require(worst < 1.0e-9_wp, 'lengths-cap:dashpot-closed-form')
+      dir = COS(THETA(1)*PI/180.0_wp)*tn + SIN(THETA(1)*PI/180.0_wp)*u
+      q1 = qn
+      q1(10:12) = qn(7:9) + L0(3)*(1.0_wp + 2.0e-4_wp)*dir
+      DO i = 1, 2
+        CALL fd_tangent_check('lengths-cap-dashpot', qn, vn, z, q1, L0, EA, [2.0_wp, 3.0_wp, 1.5_wp], i == 1, &
+                              axial_damping=[0.0_wp, 0.0_wp, BA], start_load=sl, start_l0=ls, &
+                              axial_l0_rate=[0.0_wp, 0.0_wp, rn], start_l0_rate=[0.0_wp, 0.0_wp, rs])
+      END DO
+      ! (c) the dashpot segment slack at the step-start length
+      CALL reset_chain_load()
+      cb_dash_elem = 3
+      cb_ba_dash = BA
+      CALL chain_nodes(DIRS, [0.010_wp, 0.020_wp, -2.0e-3_wp/ls3], ls, qn)
+      d0 = qn(10:12) - qn(7:9)
+      ln = NORM2(d0)
+      tn = d0/ln
+      u = [tn(2), -tn(1), 0.0_wp]
+      u = u/NORM2(u)
+      vn = 0.0_wp
+      vn(10:12) = 0.5_wp*tn
+      cb_l0_dash = ls3
+      cb_l0dot_dash = rs
+      CALL chain_load(qn, vn, sl, jq, jv)
+      cb_l0_dash = L0(3)
+      cb_l0dot_dash = rn
+      CALL require(ln < ls3, 'lengths-cap:slack-start')
+      td0 = BA*(DOT_PRODUCT(tn, vn(10:12) - vn(7:9)) - ln*rs/ls3)/ls3
+      wd = td0*td0*DT*ls3/BA
+      worst = 0.0_wp
+      nact = 0
+      best = 0.0_wp
+      qbest = qn
+      DO i = 1, SIZE(THETA_S)
+        DO j = 1, SIZE(OFS_S)
+          dir = COS(THETA_S(i)*PI/180.0_wp)*tn + SIN(THETA_S(i)*PI/180.0_wp)*u
+          q1 = qn
+          q1(10:12) = qn(7:9) + MAX(ln*COS(THETA_S(i)*PI/180.0_wp) + OFS_S(j), 0.05_wp*L0(3))*dir
+          CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., Ra, K, axial_damping=[0.0_wp, 0.0_wp, BA], &
+                           start_load=sl, start_l0=ls, axial_l0_rate=[0.0_wp, 0.0_wp, rn], &
+                           start_l0_rate=[0.0_wp, 0.0_wp, rs])
+          CALL probe_chain(qn, vn, z, q1, L0, EA, RHO_TINY, .TRUE., Rb, K, start_load=sl, start_l0=ls)
+          v1 = gamma/(beta*DT)*(q1 - qn) + (1.0_wp - gamma/beta)*vn
+          v1(1:3) = 0.0_wp
+          d1 = q1(10:12) - q1(7:9)
+          l1 = NORM2(d1)
+          t1 = d1/l1
+          p = ln - DOT_PRODUCT(tn, d1)
+          p1 = l1 - DOT_PRODUCT(t1, d0)
+          td1 = BA*(DOT_PRODUCT(t1, v1(10:12) - v1(7:9)) - l1*rn/L0(3))/L0(3)
+          nd = MAX((1.0_wp - af)*td1*p1, 0.0_wp)
+          dd = 0.0_wp
+          dg = 0.0_wp
+          IF (td0*p > 0.0_wp) THEN
+            dg = (wd + nd)/p
+            IF (ABS(dg) < af*ABS(td0)) dd = dg - af*td0
+          END IF
+          IF (ABS(dd) > 1.0e-6_wp*ABS(td0)) nact = nact + 1
+          IF (ABS(dd) > best .AND. ABS(dg) < 0.5_wp*af*ABS(td0) .AND. &
+              ABS((1.0_wp - af)*td1*p1) > 0.1_wp*wd) THEN
+            best = ABS(dd)
+            qbest = q1
+          END IF
+          err = MAX(MAXVAL(ABS(Ra(10:12) - Rb(10:12) - dd*tn)), MAXVAL(ABS(Ra(7:9) - Rb(7:9) + dd*tn)))
+          worst = MAX(worst, err/ABS(td0))
+        END DO
+      END DO
+      WRITE (*, '(A,I0,A,I0,A,I0,A,ES10.3)') '  length change, pass ', ip, ': slack-start dashpot cap active at ', &
+        nact, ' of ', SIZE(THETA_S)*SIZE(OFS_S), ' states; largest deviation from the closed form / |T_d,n| ', worst
+      CALL require(nact >= 4 .AND. best > 0.0_wp, 'lengths-cap:slack-dashpot-active')
+      CALL require(worst < 1.0e-9_wp, 'lengths-cap:slack-dashpot-closed-form')
+      DO i = 1, 2
+        CALL fd_tangent_check('lengths-cap-slack-dashpot', qn, vn, z, qbest, L0, EA, [2.0_wp, 3.0_wp, 1.5_wp], &
+                              i == 1, axial_damping=[0.0_wp, 0.0_wp, BA], start_load=sl, start_l0=ls, &
+                              axial_l0_rate=[0.0_wp, 0.0_wp, rn], start_l0_rate=[0.0_wp, 0.0_wp, rs])
+      END DO
+      ! (b) the damped law segment (ea = 0): T_n mostly damping at e_n = 1 um
+      CALL reset_chain_load()
+      cb_law_elem = 3
+      cb_ea_law = EA_LAW
+      cb_ba_law = BA_LAW
+      CALL chain_nodes(DIRS, [0.010_wp, 0.020_wp, 1.0e-6_wp/ls3], ls, qn)
+      d0 = qn(10:12) - qn(7:9)
+      ln = NORM2(d0)
+      tn = d0/ln
+      u = [tn(2), -tn(1), 0.0_wp]
+      u = u/NORM2(u)
+      vn = 0.0_wp
+      vn(10:12) = 0.05_wp*tn
+      cb_l0_law = ls3
+      CALL chain_load(qn, vn, sl, jq, jv)
+      cb_l0_law = L0(3)
+      t0 = DOT_PRODUCT(sl(7:9), tn)
+      e0 = ln - ls3
+      w0 = 0.5_wp*t0*e0
+      kn = EA_LAW/ls3
+      k0 = MIN(t0/e0, kn)
+      CALL require(t0/e0 > 1.0e3_wp*kn, 'lengths-cap:law-damping-dominated-start')
+      worst = 0.0_wp
+      nact = 0
+      dir = COS(PI/4.0_wp)*tn + SIN(PI/4.0_wp)*u
+      DO j = 1, SIZE(S1)
+        q1 = qn
+        q1(10:12) = qn(7:9) + L0(3)*(1.0_wp + S1(j))*dir
+        CALL probe_chain(qn, vn, z, q1, L0, [EA(1), EA(2), 0.0_wp], RHO_TINY, .TRUE., Ra, K, &
+                         start_tension=[0.0_wp, 0.0_wp, t0], start_stiffness=[0.0_wp, 0.0_wp, kn], start_load=sl, &
+                         start_l0=ls)
+        CALL probe_chain(qn, vn, z, q1, L0, [EA(1), EA(2), 0.0_wp], RHO_TINY, .TRUE., Rb, K, start_load=sl, start_l0=ls)
+        d1 = q1(10:12) - q1(7:9)
+        l1 = NORM2(d1)
+        t1 = d1/l1
+        e1 = l1 - L0(3)
+        p = ln - DOT_PRODUCT(tn, d1)
+        p1 = l1 - DOT_PRODUCT(t1, d0)
+        that = k0*MAX(e1, 0.0_wp)
+        dd = 0.0_wp
+        IF (p > 0.0_wp) dd = MIN(MAX(w0 + (1.0_wp - af)*that*p1, 0.0_wp)/p - af*t0, 0.0_wp)
+        IF (ABS(dd) > 1.0e-6_wp*t0) nact = nact + 1
+        err = MAX(MAXVAL(ABS(Ra(10:12) - Rb(10:12) - dd*tn)), MAXVAL(ABS(Ra(7:9) - Rb(7:9) + dd*tn)))
+        worst = MAX(worst, err/t0)
+      END DO
+      WRITE (*, '(A,I0,A,I0,A,ES10.3)') '  length change, pass ', ip, ': law cap active at ', nact, &
+        ' states; largest deviation from the closed form / T_n ', worst
+      CALL require(nact >= 4, 'lengths-cap:law-active')
+      CALL require(worst < 1.0e-9_wp, 'lengths-cap:law-closed-form')
+      q1 = qn
+      q1(10:12) = qn(7:9) + L0(3)*(1.0_wp + 6.0e-4_wp)*dir
+      DO i = 1, 2
+        CALL fd_tangent_check('lengths-cap-law', qn, vn, z, q1, L0, [EA(1), EA(2), 0.0_wp], [2.0_wp, 3.0_wp, 1.5_wp], &
+                              i == 1, start_tension=[0.0_wp, 0.0_wp, t0], start_stiffness=[0.0_wp, 0.0_wp, kn], &
+                              start_load=sl, start_l0=ls)
+      END DO
+    END DO
+    CALL reset_chain_load()
+  END SUBROUTINE case_length_change_cap_terms
 
   SUBROUTINE damped_tangent_case(label, qn, vn, q1, l0, ea, ad, t0)
     !! The damped chain of case_damped_elastic_release at one trial state where the cap acts:

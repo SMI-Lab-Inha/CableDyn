@@ -1439,7 +1439,9 @@ dynamic load: axial damping, the viscoelastic and Syrope laws, seabed contact, d
 friction, Morison drag, Froude–Krylov and buoyancy loads. Added mass stays at
 :math:`(\mathbf{q}_\alpha, \mathbf{a}_{\alpha_m})`. :math:`\mathbf{r}_n` is evaluated afresh at
 the committed state of every step, with the viscoelastic and Syrope elements at their committed
-internal state, so the scheme carries no extra state and a restart is exact; a re-solve of the
+internal state (and, after a length change by active line control, at the lengths the committed
+state was reached with; see Active line control), so the scheme carries no extra state and a
+restart is exact; a re-solve of the
 same step from the same state (the junction coupling) reuses it. The fluid fields of an
 ``EI = 0`` line (current, wave velocity and acceleration, and the waterline) are held over the
 step: before the step the host (the standalone driver, or the coupling host) samples them for
@@ -2239,11 +2241,115 @@ pre-allocated reserve free point that then moves with the attached line ends. On
 the bodies keep their staggered step with the remaining lines, and the reserve point is
 integrated on its line-end loads within the same line step.
 
-**Active line control.** A ``CONTROL`` row assigns a control channel to an ``EI = 0`` line. The
-commanded :math:`\Delta L` and :math:`\Delta\dot L` change the unstretched length and its rate
-of the End-A element, :math:`L_0 = L_{0,\text{base}} + \Delta L`; the structural mass and the
-point mass shares are updated consistently, while ``BA`` keeps its initial resolution.
-Commands that would make the element length non-positive are rejected.
+**Active line control.** A ``CONTROL`` row assigns a control channel to a line. The command
+acts on the segment at the line's fairlead-side end, the end on a host-driven point (coupled,
+vessel, turbine or body point, or an end of a coupled or vessel rod); when both or neither ends
+are host-driven, it acts on the segment at the ``NodeB`` written in the deck (MoorDyn-F's
+segment :math:`N` at ``AttachB``). On an ``EI = 0`` line the commanded :math:`\Delta L` and
+:math:`\Delta\dot L` change the unstretched length and its rate of that end element,
+:math:`L_0 = L_{0,\text{base}} + \Delta L`; the structural mass and the point mass shares are
+updated consistently, while ``BA`` keeps its initial resolution. Commands outside MoorDyn-F's
+bounds, :math:`-\bar L/2 \le \Delta L \le \bar L` with :math:`\bar L` the line's unstretched
+length over its number of segments (``UnstrLen``/N, the base length of the controlled segment
+on a line of one section), are rejected with the same comparisons MoorDyn-F makes, on both line
+kinds; so is a command that would make the controlled segment non-positive, which only a line
+of several sections allows.
+
+On an ``EI = 0`` line the length is applied before a step and held over it, and the
+committed state keeps the lengths and rates it was reached with, :math:`L_{0,c}` and
+:math:`\dot L_{0,c}`, together with its acceleration. Each share of the generalised-:math:`\alpha`
+residual takes the lengths of its own time level, and the step commits the new lengths with the
+new state. With the force blend (the default) the step-start force
+:math:`\mathbf{r}(\mathbf{q}_n, \mathbf{v}_n)` is the committed state's: its internal force, axial
+damping, viscoelastic and Syrope laws, seabed contact, damping and friction, Morison drag,
+Froude–Krylov and buoyancy loads are evaluated with :math:`L_{0,c}` and :math:`\dot L_{0,c}`, with
+the distributed external load and the nodal seabed coefficients those lengths give, and so is
+every step-start quantity of the release cap: the stretch :math:`e_n = l_n - L_{0,c}`, the
+tension :math:`T_n` (the elastic one, or that of the viscoelastic or Syrope law at the committed
+state), :math:`W_n`, the secant :math:`T_n/e_n`, the law stiffness :math:`k_n` (:math:`EA_D/L_{0,c}`,
+:math:`K_1/L_{0,c}`) and the dashpot tension :math:`T_{d,n}` (with :math:`\dot L_{0,c}`).
+:math:`\mathbf{r}(\mathbf{q}_{n+1}, \mathbf{v}_{n+1})` and the cap's end-state quantities take the new
+lengths and rates: the stretch :math:`e_{n+1} = l_{n+1} - L_0`, the estimate
+:math:`\hat T_{n+1} = \min(T_n/e_n, k_n)\,e_{n+1}` and :math:`T_{d,n+1}`; the projections :math:`p` and
+:math:`p_{n+1}` are geometric. The dashpot weight :math:`\phi` measures the end stretch against the new
+length, so its band runs from :math:`L_0` to :math:`L_0 + c\,e_n`, the width set by the step-start
+stretch as without a change. For an elastic element the secant estimate then differs from its end
+tension :math:`EA\,e_{n+1}/L_0` by the factor :math:`L_0/L_{0,c}`, that is by the relative length change
+of the step. A haul-in can make :math:`p_{n+1}` more negative than without a change; the
+capped force is then bounded below by zero, and the cap's quick inactivity test uses the bound
+:math:`N \ge W_n - (1-\alpha_f)\,T_n (l_n - L_0)^2/(4 e_n)`. The external load of the step,
+constant over it, is :math:`(1-\alpha_f)\,\mathbf{f}_\text{ext}(L_0) + \alpha_f\,\mathbf{f}_\text{ext}(L_{0,c})`.
+The inertia, which the force blend keeps at the :math:`\alpha` level (the structural mass applied
+to :math:`\mathbf{a}_{n+1-\alpha_m}` and the added mass at :math:`\mathbf{q}_\alpha`), takes the
+blended lengths :math:`(1-\alpha_f) L_0 + \alpha_f L_{0,c}` of the changed elements, as
+:math:`\mathbf{q}_\alpha` blends the configuration. With the configuration blend
+(``False alpha_force_blend``) the residual evaluates the internal force, the damping and the
+hydrodynamic loads at the blended configuration :math:`\mathbf{q}_{n+1-\alpha_f}`; for an element
+whose length changed it also blends the lengths, :math:`(1-\alpha_f) L_0 + \alpha_f L_{0,c}` (and
+the rates likewise, the structural and added mass included), so that the configuration and the
+lengths are blended consistently and the new length belongs to :math:`t_{n+1}`; the external load
+and the seabed coefficients are then the new lengths'. Evaluating the committed side with the
+new lengths (the step-start force, or a configuration blended without its lengths), or
+re-deriving the committed acceleration under the new length, would add the force of the length
+change to the committed side of the blend, weighted by :math:`\alpha_m` and :math:`\alpha_f`; on a
+pay-out or haul-in ramp the tension would then lag the quasi-static value by a fixed fraction of
+its change per step, at any :math:`\rho_\infty` (on a taut line paid out at a tension change of
+1 N per step, 2.6 N with the step-start force at the new lengths, against 1.8 mN, the start-up
+transient that :math:`\rho_\infty = 0` shows as well). An acceleration re-derived between the
+command and the step (a host state update or a boundary commit) belongs to the committed state,
+so it is solved with :math:`L_{0,c}` and :math:`\dot L_{0,c}`, which stay the committed lengths and
+rates, and evaluated as the step evaluates its committed side: with the force blend at the
+external load and seabed coefficients of :math:`L_{0,c}` as well, with the configuration blend at
+the present ones.
+
+A step that the rotation- and snap-resolved sub-steps (``ei0_substeps auto``, above) solve
+again spreads a pending length change over its sub-steps. The committed lengths and rates are
+part of the state each pass starts from; sub-step :math:`k` of :math:`n` ends at the lengths and
+rates interpolated linearly in time between :math:`L_{0,c}` and :math:`L_0` at :math:`k/n`, with
+the external load and seabed coefficients rebuilt at them, and the last on the new ones bit for
+bit. Each sub-step treats its start and end lengths as the step above treats :math:`L_{0,c}` and
+:math:`L_0`, so the first starts at :math:`L_{0,c}`, and the trigger takes the step-start
+tensions at :math:`L_{0,c}`. A constant command rate makes the interpolated lengths those the
+rate integrates to: on a line turning by 2.3° per step whose end segment is paid out at
+0.05 m/s, every step solved in four sub-steps, the march equals one taken as given at a quarter
+of the step to 3e-8 N, where applying the whole change in the first sub-step departs from it by
+22 N (2.2 times the tension change per step). A step recovered after a stall and the halves of a
+line-system step halved after a failure, which take their sub-steps as given, apply the whole
+change in their first part.
+
+On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
+up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by
+:math:`\lambda = (S + \Delta L)/S`, :math:`L_{0,e} = \lambda L_{0,e,\text{base}}`, with rate
+:math:`\dot L_{0,e} = \Delta\dot L\, L_{0,e,\text{base}}/S`. The length is applied before a
+step and held over it. The
+consistent mass, the attachment masses, the tributary lengths and the nodal seabed coefficients
+are rebuilt from the new lengths in the order initialisation used, so the model is the one a
+build with those lengths would give; the mass of the new lengths acts over the step and its rate
+term :math:`\dot{\mathbf{M}}\mathbf{v}` is not modelled (as in MoorDyn), and the committed
+acceleration is kept as the history of the preceding step. The committed state keeps the lengths
+and rates it was reached with: in the force-blended residual the committed force
+:math:`\mathbf{F}_n = \mathbf{R}(\mathbf{q}_n, \mathbf{v}_n, t_n)` is the force at those
+lengths, and only :math:`\mathbf{R}(\mathbf{q}_{n+1}, \mathbf{v}_{n+1}, t_{n+1})` takes the new
+ones; an acceleration re-derived between the command and the step (a boundary commit) is solved
+at those lengths too, since it belongs to the committed state. The configuration-blended form
+(``False alpha_force_blend``) has no such treatment and is refused for a controlled cable. Evaluating :math:`\mathbf{F}_n` at the new lengths would add the force of the length change
+to the committed state, which the blend weighs by :math:`\alpha_f`; on a pay-out ramp the
+tension would then lag the quasi-static value by a fixed fraction of its change per step. A step
+that follows a change starts its Newton iteration from the Newmark predictor, not from the
+constant-acceleration one, since the change is a step in the load. The axial damping acts on
+the rate of the strain :math:`\varepsilon = |\mathbf{r}_{,\xi}|/L_0 - 1` along the motion and
+the length change. The tangent terms of :math:`\mathbf{r}_{,\xi}` carry the
+factor :math:`L_0` and cancel, so with :math:`\mathbf{p} = H'_1 \mathbf{r}_1 + H'_3 \mathbf{r}_2`
+the end-position part,
+
+.. math::
+
+   \dot\varepsilon = \frac{\mathbf{t}\cdot\left(\mathbf{v}_{,\xi}
+   - (\dot L_0/L_0)\,\mathbf{p}\right)}{L_0},
+
+and a segment paid out at constant strain carries no damping force. The position Jacobian of the
+damping force gains :math:`-BA\, H'_a H'_b\, (\dot L_0/L_0^2)\, \mathbf{t}\mathbf{t}^\mathsf{T}` on
+the end-position columns.
 
 Tension and coupled loads
 -------------------------

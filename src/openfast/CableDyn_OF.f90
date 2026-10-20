@@ -1418,6 +1418,24 @@ CONTAINS
                           ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
+      ! Active line control: the rebuild re-initialized at the BASE segment lengths;
+      ! apply the restored command HERE, on the rebuild transition itself, so every
+      ! entry that can trigger a rebuild (UpdateStates -- including its supercycle
+      ! early-return substeps -- and CalcOutput) resumes at the checkpointed lengths.
+      ! The restored command is the one the committed state was reached with, so the
+      ! lengths are re-applied as committed (the next advance blends them into its
+      ! generalised-alpha terms exactly as the uninterrupted run does). It runs before the
+      ! line interiors and cable mirrors reload below, which bring back the committed state
+      ! of the uninterrupted run, a cable's committed force included.
+      IF (ALLOCATED(u1%DeltaL)) THEN
+         CALL CD_AGG_Apply_LineControl( Inst(id)%agg, REAL(u1%DeltaL, wp), REAL(u1%DeltaLdot, wp), es, em, &
+                                        restored=.TRUE. )
+         IF (es /= CD_AGG_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: line-control apply after the '// &
+                             'checkpoint rebuild failed: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+            RETURN
+         END IF
+      END IF
       ! ...line interiors + cable free-DOF mirrors, exactly (committed accelerations
       ! reload from the mirror -- shared helper with the state-const CalcOutput)
       CALL reload_interiors_ary( Inst(id), m, x%states, REAL(t, wp), ErrStat2, ErrMsg2 )
@@ -1434,20 +1452,6 @@ CONTAINS
          CALL sample_wavefield( Inst(id), p, m, t, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) THEN
-            CALL release_instance( id )
-            RETURN
-         END IF
-      END IF
-
-      ! Active line control: the rebuild re-initialized at the BASE segment lengths;
-      ! apply the restored command HERE, on the rebuild transition itself, so every
-      ! entry that can trigger a rebuild (UpdateStates -- including its supercycle
-      ! early-return substeps -- and CalcOutput) resumes at the checkpointed lengths.
-      IF (ALLOCATED(u1%DeltaL)) THEN
-         CALL CD_AGG_Apply_LineControl( Inst(id)%agg, REAL(u1%DeltaL, wp), REAL(u1%DeltaLdot, wp), es, em )
-         IF (es /= CD_AGG_OK) THEN
-            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: line-control apply after the '// &
-                             'checkpoint rebuild failed: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
             CALL release_instance( id )
             RETURN
          END IF
@@ -1637,7 +1641,8 @@ CONTAINS
                IF (ErrStat >= AbortErrLev) RETURN
             END IF
             ! Active line control: apply the interpolated DeltaL/DeltaLdot command to
-            ! the controlled segments BEFORE the advance (the MoorDyn placement).
+            ! the controlled segments (EI=0 line segments and finite-EI cable spans)
+            ! BEFORE the advance (the MoorDyn placement).
             ! Runs AFTER the snapshot so a correction re-entry restores the
             ! step-start lengths and re-applies the corrected command.
             IF (ALLOCATED(Inst(id)%u_interp%DeltaL)) THEN
