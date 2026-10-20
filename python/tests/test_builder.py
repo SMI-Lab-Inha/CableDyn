@@ -15,6 +15,7 @@ from cabledyn.builder import (
     DeckReferenceError,
     Line,
     MoorDynBody,
+    Option,
     Point,
     RodEnd,
     SyropeEA,
@@ -280,6 +281,35 @@ def test_rename_propagates_to_rows_and_output_channels() -> None:
         model.rename(model.line_types["spare"], 3)
     with pytest.raises(DeckReferenceError):
         model.rename(Point(1, "Fixed", 0.0, 0.0, 0.0), 3)
+
+
+def test_per_line_options_follow_rename_and_removal() -> None:
+    model = _chain_model()
+    model.options.set("layAzimuth1", 30)
+    model.options.set("asLaidTension01", 5.0e3)
+    model.options.set("layAzimuth", 10)
+
+    def friction_keywords() -> list[str]:
+        return [
+            row.keyword
+            for row in model.options
+            if row.keyword.lower().startswith(("layazimuth", "aslaidtension"))
+        ]
+
+    model.rename(model.lines[1], 2)
+    assert friction_keywords() == ["layAzimuth2", "asLaidTension2", "layAzimuth"]
+    text = model.to_text()
+    assert "layAzimuth2" in text and "asLaidTension2" in text
+    line = model.lines[2]
+    assert [ref.keyword for ref in model.references(line) if isinstance(ref, Option)] == [
+        "layAzimuth2",
+        "asLaidTension2",
+    ]
+    with pytest.raises(DeckReferenceError) as caught:
+        model.remove(line)
+    assert "OPTION layAzimuth2" in str(caught.value)
+    model.remove(line, cascade=True)
+    assert friction_keywords() == ["layAzimuth"]
 
 
 def test_remove_reports_referential_integrity_and_cascades() -> None:

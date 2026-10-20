@@ -36,6 +36,7 @@ from typing import Any, Generic, TypeVar, Union
 
 from cabledyn.deck import _check_free_text
 from cabledyn.deck_file import (
+    _LINE_OPTION_PATTERN,
     _PINNED_END_CONNECTIONS,
     _RIGID_END_CONNECTIONS,
     _ROD_ATTACHMENT_ALIASES,
@@ -2168,6 +2169,15 @@ class DeckModel:
         items = self._registry(obj)
         return items is not None and any(item is obj for item in items)
 
+    def _line_options(self, line_id: int) -> list[Option]:
+        """The ``layAzimuth<L>``/``asLaidTension<L>`` rows that name LINE ``line_id``."""
+        rows: list[Option] = []
+        for row in self.options:
+            match = _LINE_OPTION_PATTERN.match(row.keyword.lower())
+            if match is not None and int(match.group(2)) == line_id:
+                rows.append(row)
+        return rows
+
     def _section_owner(self, section: Section) -> Line | None:
         for line in self._lines:
             if any(item is section for item in line.sections):
@@ -2185,8 +2195,9 @@ class DeckModel:
         Returns
         -------
         tuple[object, ...]
-            Referring objects (lines, sections, points, rows, ...) and output
-            channel names, in deck order.
+            Referring objects (lines, sections, points, rows, the per-line
+            ``layAzimuth<L>``/``asLaidTension<L>`` options of a line, ...) and
+            output channel names, in deck order.
 
         Raises
         ------
@@ -2225,6 +2236,7 @@ class DeckModel:
             found.extend(row for row in self._attachments if row.line is obj)
             for rows in (self._syrope_ic, self._failures, self._controls):
                 found.extend(row for row in rows if any(line is obj for line in row.lines))
+            found.extend(self._line_options(obj.id))
         kind = _object_kind(obj)
         if kind is not None:
             object_id = getattr(obj, "id")  # noqa: B009 (every referenced kind has an id)
@@ -2245,9 +2257,9 @@ class DeckModel:
         cascade : bool
             Also remove what uses ``obj``: lines on a removed point, the rows
             of a removed line (a line is dropped from multi-line rows, and a
-            row left without lines is removed), output channels that name it,
-            and so on recursively. A line left without sections by a removed
-            line type is removed too.
+            row left without lines is removed), the per-line options and output
+            channels that name it, and so on recursively. A line left without
+            sections by a removed line type is removed too.
 
         Raises
         ------
@@ -2264,6 +2276,9 @@ class DeckModel:
                 referrers,
             )
         for ref in referrers:
+            if isinstance(ref, Option):
+                self.options._rows[:] = [row for row in self.options._rows if row is not ref]
+                continue
             if not self._is_member(ref):
                 continue
             if isinstance(ref, (SyropeIC, Failure, Control)) and isinstance(obj, Line):
@@ -2300,7 +2315,8 @@ class DeckModel:
 
         Rows that use the object follow it automatically; output channels that
         name the object by id (``FairTen<L>``, ``Point<P>pz``, ``Body<N>Px``,
-        ``Rod<N>Pz``, ...) are rewritten.
+        ``Rod<N>Pz``, ...) and the per-line options of a line
+        (``layAzimuth<L>``, ``asLaidTension<L>``) are rewritten.
 
         Parameters
         ----------
@@ -2340,11 +2356,16 @@ class DeckModel:
         if any(item is not obj and getattr(item, "id") == new for item in registry):  # noqa: B009
             raise ValueError(f"id {new} is already used by another {type(obj).__name__}")
         old = obj.id
+        line_options = self._line_options(old) if isinstance(obj, Line) else []
         if isinstance(obj, Turbine):
             for point in self._points:
                 if point.turbine == old:
                     point.turbine = new
         obj.id = new
+        for row in line_options:
+            match = _LINE_OPTION_PATTERN.match(row.keyword.lower())
+            assert match is not None
+            row.keyword = f"{row.keyword[: len(match.group(1))]}{new}"
         if kind is None:
             return
         for index, channel in enumerate(self.outputs):
@@ -2818,6 +2839,8 @@ class DeckModel:
 def _describe(obj: object) -> str:
     if isinstance(obj, str):
         return f"output channel {obj!r}"
+    if isinstance(obj, Option):
+        return f"OPTION {obj.keyword}"
     name = getattr(obj, "name", None)
     if isinstance(name, str):
         return f"{type(obj).__name__} {name!r}"
