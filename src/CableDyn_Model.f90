@@ -170,6 +170,7 @@ MODULE CableDyn_Model
     LOGICAL :: active = .FALSE.
     REAL(wp), ALLOCATABLE :: l0(:), l0_dot(:), f_ext(:), kn(:), cn(:)
   END TYPE model_lengths_aside
+
   ! The per-element and per-node kernels of the load and added-mass assemblies write messages of
   ! at most 187 characters (Hydro, Damping, Viscoelastic, Syrope, bathymetry and band-scatter texts,
   ! with their prefixes) and blank their message on entry, also when inputs_validated skips their
@@ -2035,7 +2036,7 @@ CONTAINS
           BLOCK
             TYPE(model_lengths_aside) :: aside
             INTEGER :: es_c
-            CHARACTER(160) :: em_c
+            CHARACTER(1024) :: em_c
             ! without the loads nothing is rebuilt, so this cannot fail
             CALL enter_committed_lengths(model, aside, .FALSE., es_c, em_c)
             CALL sub_tensions_scratch(model, 0)
@@ -2337,7 +2338,7 @@ CONTAINS
     REAL(wp) :: a, b
     INTEGER :: e, es
     LOGICAL :: moved
-    CHARACTER(160) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em
     ErrStat = CD_MODEL_OK
     moved = .FALSE.
     DO e = 1, model%n_elem
@@ -2879,7 +2880,7 @@ CONTAINS
       !! committed lengths entered after a length change).
       INTEGER, INTENT(OUT) :: es_s
       CHARACTER(*), INTENT(OUT) :: em_s
-      CHARACTER(160) :: em_c
+      CHARACTER(1024) :: em_c
       es_s = CD_MODEL_OK
       em_s = ''
       IF (.NOT. (has_load .AND. model%cfg%force_blend)) THEN
@@ -3202,7 +3203,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: f_c(:), kn_c(:)
     LOGICAL :: rebuild
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''

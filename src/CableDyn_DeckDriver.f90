@@ -6825,7 +6825,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: l0_deck(:), ea(:), mpl(:), diam(:), ei(:), gas(:), gj(:), i_rt(:), i_rn(:)
     REAL(wp) :: span
     CHARACTER(24) :: lid
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''

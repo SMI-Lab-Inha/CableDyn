@@ -1557,7 +1557,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(committed_lengths_aside) :: aside
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     CALL enter_committed_lengths(model, aside, es, em)
     IF (es /= CD_HCDYN_OK) THEN
@@ -1579,7 +1579,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: pres_a(:)
     TYPE(committed_lengths_aside) :: aside
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     CALL enter_committed_lengths(model, aside, es, em)
     IF (es /= CD_HCDYN_OK) THEN

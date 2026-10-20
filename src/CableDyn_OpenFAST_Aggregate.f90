@@ -1857,7 +1857,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: last
       CHARACTER(*), INTENT(IN) :: msg
       INTEGER :: r, es2
-      CHARACTER(512) :: em2, em_undo
+      CHARACTER(1024) :: em2, em_undo
       em_undo = ''
       DO r = last, 1, -1
         IF (self%ctrl_is_cable(r)) THEN
