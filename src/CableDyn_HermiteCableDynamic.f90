@@ -1377,9 +1377,11 @@ CONTAINS
     !! per-area penalty kbot [N/m^3], the per-element contact diameter [m] and the ratio
     !! cn/kn, the inputs from which the deck built the installed nodal coefficients with
     !! CD_Nodal_Seabed_Stiffness. Call after CD_HermiteCable_Dyn_Set_Contact. The inputs
-    !! must reproduce the installed contact_kn and contact_cn bit for bit at the present
-    !! lengths, so a length change rebuilds exactly the coefficients a model built with the
-    !! new lengths would carry; otherwise the call fails and changes nothing.
+    !! must reproduce the installed contact_kn and contact_cn at the present lengths to within
+    !! a few units in the last place, so a length change rebuilds the coefficients a model
+    !! built with the new lengths would carry; otherwise the call fails and changes nothing.
+    !! (Not bit for bit: an optimising compiler may evaluate the caller's kn*(cBot/kBot) and
+    !! the same product here with different rounding, as the Intel release build does.)
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: kbot, diameter_elem(:), cn_over_kn
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1405,10 +1407,10 @@ CONTAINS
     IF (es /= CD_LINE_OK) THEN
       CALL fail(TRIM(em)); RETURN
     END IF
-    IF (.NOT. ALL(bits_equal(kn_check, model%contact_kn))) THEN
+    IF (.NOT. ALL(within_ulps(kn_check, model%contact_kn))) THEN
       CALL fail('the inputs do not reproduce the installed nodal contact stiffness'); RETURN
     END IF
-    IF (.NOT. ALL(bits_equal(kn_check*cn_over_kn, model%contact_cn))) THEN
+    IF (.NOT. ALL(within_ulps(kn_check*cn_over_kn, model%contact_cn))) THEN
       CALL fail('the inputs do not reproduce the installed nodal contact damping'); RETURN
     END IF
     model%seabed_kbot = kbot
@@ -1422,6 +1424,11 @@ CONTAINS
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Set_Control_Seabed: '//msg
     END SUBROUTINE fail
+    ELEMENTAL LOGICAL FUNCTION within_ulps(x, y) RESULT(close)
+      !! |x - y| within 8 units in the last place of the larger magnitude (false for a NaN).
+      REAL(wp), INTENT(IN) :: x, y
+      close = ABS(x - y) <= 8.0_wp*SPACING(MAX(ABS(x), ABS(y)))
+    END FUNCTION within_ulps
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Control_Seabed
 
   SUBROUTINE rebuild_length_caches(model, l0_new, ErrStat, ErrMsg)

@@ -221,6 +221,15 @@ CONTAINS
     CALL CD_HermiteCable_Dyn_Set_Control_Seabed(a, 2.0_wp*KBOT, diam, CBOT/KBOT, es, em)
     CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'do not reproduce') > 0 .AND. a%seabed_kbot == KBOT, &
                  'A: seabed recompute inputs that do not reproduce the installed coefficients fail')
+    ! a ratio that differs only by rounding (an optimising compiler may evaluate the deck's
+    ! kn*(cBot/kBot) differently) is accepted; one that differs by 1e-9 is not
+    CALL CD_HermiteCable_Dyn_Set_Control_Seabed(a, KBOT, diam, NEAREST(CBOT/KBOT, 1.0_wp), es, em)
+    CALL require(es == CD_HCDYN_OK, 'A: seabed recompute inputs equal to rounding are accepted: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Set_Control_Seabed(a, KBOT, diam, CBOT/KBOT, es, em)
+    CALL require(es == CD_HCDYN_OK .AND. a%seabed_cn_over_kn == CBOT/KBOT, 'A: the exact inputs are set again')
+    CALL CD_HermiteCable_Dyn_Set_Control_Seabed(a, KBOT, diam, (CBOT/KBOT)*(1.0_wp + 1.0e-9_wp), es, em)
+    CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'contact damping') > 0, &
+                 'A: a damping ratio off by 1e-9 does not reproduce the installed coefficients')
 
     ! snapshot/restore: a later command and step roll back exactly, caches included
     ref = a
