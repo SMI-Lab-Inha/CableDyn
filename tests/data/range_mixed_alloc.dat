@@ -46,7 +46,7 @@ False    modified_newton  - Tangent-reuse mode {False=full Newton; True=modified
 3.0e5    cBot             - Seabed normal damping base (Pa-s/m) [default: 1.0e4]
 0.35     frictionMu       - Coulomb seabed-friction coefficient [default: none]
 200.0    WtrDpth          - Water depth; flat seabed elevation is z=-WtrDpth (m)
-0.025    dtM              - CableDyn internal time step (s) [default: omitted standalone; 0.1 s target OpenFAST]
+0.025    dtM              - CableDyn internal time step (s) [default: omitted standalone; the glue DT in OpenFAST]
 0.0      TMax             - Standalone simulation duration (s); 0 writes the initialized mixed statics
 False     adaptive_mesh    - Automatic finite-EI refinement {False; True} [default: False]
 dynamic_solver 1.0e-8 1.0e-14 30 12 - Relative/absolute tolerance, max iterations, backtracks [defaults]

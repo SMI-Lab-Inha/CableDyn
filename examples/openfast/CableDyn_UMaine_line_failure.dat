@@ -46,7 +46,7 @@ none      frictionMu       - Seabed friction coefficient {none; value>=0} [defau
 False     modified_newton  - Tangent-reuse mode {False=full Newton; True=guarded reuse} [default: False]
 False     adaptive_mesh    - Automatic finite-EI refinement {False; True} [default: False]
 dynamic_solver 1.0e-8 1.0e-14 30 12 - Relative tolerance, absolute tolerance, max iterations, backtracks [defaults shown]
-0.025     dtM              - CableDyn internal time step (s); set equal to the example glue DT [default: 0.1 s target]
+0.025     dtM              - CableDyn internal time step (s); set equal to the example glue DT [default: the glue DT]
 none      current           - Current model and velocity (m/s) {none; uniform; profile} [default: SeaState host field]
 none      waves             - Wave model, height, period, and direction (m, s, deg) {none; airy; jonswap} [default: SeaState host field]
 0         WaterKin          - Water-kinematics source {0/none; file; SEASTATE coupled only} [default: no policy/full host field]

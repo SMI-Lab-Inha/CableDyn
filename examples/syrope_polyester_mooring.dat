@@ -38,7 +38,7 @@ LineID   LineType   Length   NumSegs
 1025.0       rhoW      - Water density (kg/m^3) [default: 1025]
 30.0         WtrDpth   - Water depth (m) [default: absent standalone; host-owned OpenFAST]
 1.0e5        kBot      - Seabed penalty stiffness base (Pa/m) [default: 1.0e5]
-0.01         dtM       - CableDyn internal time step (s) [default: omitted standalone; 0.1 s target OpenFAST]
+0.01         dtM       - CableDyn internal time step (s) [default: omitted standalone; the glue DT in OpenFAST]
 2.0          TMax      - Standalone simulation duration (s) [default: omitted standalone; host-owned OpenFAST]
 0.4          rhoInf    - Generalised-alpha spectral radius {0<=rhoInf<=1} [default: 0.4]
 1.0e4    cBot              - Seabed normal damping base (Pa-s/m) [default: 1.0e4]

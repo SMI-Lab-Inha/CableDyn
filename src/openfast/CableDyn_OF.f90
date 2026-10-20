@@ -132,8 +132,8 @@ MODULE CableDyn
       ! CableDyn's OWN time step (supercycling): the implicit mooring solve advances at
       ! dt_moor = nsuper * (glue DT), ONE step per nsuper glue steps, instead of being
       ! chained to the turbine's small DT. The deck's OPTIONS dtM sets it (clamped to at
-      ! least the glue DT); absent a deck dtM the default target is 0.1 s. Between mooring
-      ! solves CD_CalcOutput returns the last
+      ! least the glue DT); absent a deck dtM the mooring solves every glue step. Between
+      ! mooring solves CD_CalcOutput returns the last
       ! committed load state as a zero-order hold; feeding instantaneous endpoints into a
       ! lagged mooring interior creates artificial stiff-EA load chatter.
       INTEGER(IntKi)          :: nsuper  = 1        ! glue steps per mooring step
@@ -484,7 +484,6 @@ CONTAINS
       CHARACTER(ChanLen)        :: chan_hdr, chan_unt
       CHARACTER(1024)           :: native_root, init_note
       INTEGER(IntKi)            :: note_at, note_end
-      REAL(wp), PARAMETER       :: DTM_DEFAULT = 0.1_wp
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -582,13 +581,14 @@ CONTAINS
 
       ! ------------------------------------------------------------------------------
       ! CableDyn's OWN time step. The implicit generalised-alpha solve can remain stable at a
-      ! large mooring step, but stability does not establish time-domain or fatigue accuracy.
-      ! The practical default targets 0.1 s, advancing at
-      ! dt_moor = nsuper * DT (one implicit step per nsuper glue steps): the deck's OPTIONS
-      ! dtM is the author's intent (rounded to the nearest integer multiple of the glue DT
-      ! and clamped to at least one glue step -- a MoorDyn-migrated deck's explicit-RK4
-      ! dtM like 0.001 s does not transfer to an implicit solver); absent a deck dtM, the
-      ! target is DTM_DEFAULT. The CableDyn-owned .CD.out records only committed dtM rows;
+      ! large mooring step, but stability does not establish time-domain or fatigue accuracy,
+      ! and the loads held between solves reach the platform about dtM/2 late (a negative
+      ! damping of about the mooring stiffness times dtM/2). The default therefore solves
+      ! every glue step; a deck may advance at dt_moor = nsuper * DT (one implicit step per
+      ! nsuper glue steps): the deck's OPTIONS dtM is the author's intent (rounded down to an
+      ! integer multiple of the glue DT and clamped to at least one glue step -- a
+      ! MoorDyn-migrated deck's explicit-RK4 dtM like 0.001 s does not transfer to an
+      ! implicit solver). The CableDyn-owned .CD.out records only committed dtM rows;
       ! OpenFAST's assembled output still receives zero-order-held module channels at DT_Out.
       ! Between coarse mooring steps, CD_CalcOutput returns the last committed mooring load
       ! state as a zero-order hold; injecting instantaneous
@@ -624,15 +624,17 @@ CONTAINS
                         ' x glue DT = '//TRIM(Num2LStr(dtC))//' s).' )
          END IF
       ELSE
-         nsuper = MAX(1_IntKi, NINT(DTM_DEFAULT/dtC, IntKi))
+         nsuper = 1_IntKi
       END IF
       dt_moor = REAL(nsuper, wp)*dtC
       CALL WrScr( '   CableDyn time step dtM = '//TRIM(Num2LStr(dt_moor))//' s ('//TRIM(Num2LStr(nsuper))// &
                   ' x glue DT'//TRIM(MERGE('; deck dtM   ', '; the default', has_dtm))//')' )
       IF (nsuper > 1_IntKi) THEN
-         CALL WrScr( '   CableDyn: coupled loads use a zero-order hold between dtM solves; the separate .CD.out '// &
-                     'records committed CableDyn samples only. Verify dtM convergence for fatigue, snap, contact, '// &
-                     'or local cable-response calculations; set deck dtM = DT for glue-rate solves.' )
+         CALL WrScr( '   CableDyn: coupled loads are held between dtM solves and reach the platform about dtM/2 '// &
+                     'late, which matters for stiff (taut or tension-leg) moorings and for tension statistics; '// &
+                     'the separate .CD.out records committed CableDyn samples only. Verify dtM convergence for '// &
+                     'fatigue, snap, contact, or local cable-response calculations; omit dtM or set it to DT for '// &
+                     'glue-rate solves.' )
       END IF
       ! The run must END on a mooring boundary: with supercycling, a trailing partial
       ! interval would take only skipped glue steps, leaving the committed mooring state --

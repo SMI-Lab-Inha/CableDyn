@@ -54,7 +54,7 @@ ID    LineType   AttachA   AttachB   UnstrLen   NumSegs   Outputs
 150.0                WtrDpth   - Water depth (m) [default: absent standalone; host-owned OpenFAST]
 3.0e5                kBot      - Seabed penalty stiffness base (Pa/m) [default: 1.0e5]
 1.0e4                cBot      - Seabed normal damping base (Pa-s/m) [default: 1.0e4]
-0.02                 dtM       - CableDyn internal time step (s) [default: omitted standalone; 0.1 s target OpenFAST]
+0.02                 dtM       - CableDyn internal time step (s) [default: omitted standalone; the glue DT in OpenFAST]
 60.0                 TMax      - Standalone simulation duration (s) [default: omitted standalone; host-owned OpenFAST]
 airy 4.0 8.0 0.0     waves     - Wave model, height, period, and direction (m, s, deg) {none; airy; jonswap} [default: none]
 20.0                 rampTime  - Half-cosine start-up ramp of the waves (s) {>=0; 0=off} [default: 0]

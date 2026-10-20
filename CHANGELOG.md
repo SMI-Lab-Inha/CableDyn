@@ -57,6 +57,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   within 0.13 % instead of up to 6.3 %. A command outside MoorDyn-F's bounds stops the run
   instead of printing a warning, and the command acts on the segment at the host-driven
   (fairlead-side) end, as in MoorDyn-F.
+- In OpenFAST, a deck without `dtM` now solves every glue step (`dtM = DT`) instead of about
+  every 0.1 s, so the mooring loads reach the platform without delay. A deck `dtM` that is a
+  multiple of `DT` still trades this for speed (see Known issues).
 - The touchdown point (`TDP<L>`) now moves continuously instead of in steps of one element.
 - Finite-EI statics refine the mesh locally instead of as a whole, which cuts solve time (for
   example 10.0 s to 0.33 s on a 462-element lazy wave). Decks that do not refine are unchanged.
@@ -94,9 +97,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Known issues
 
-- In OpenFAST, CableDyn holds its loads between its own steps (`dtM`, by default about 0.1 s).
-  The lag matters for stiff (taut or tension-leg) moorings and for tension statistics; check
-  such results at a smaller `dtM`. See the note on the manual's OpenFAST page.
+- In OpenFAST, a deck `dtM` larger than `DT` holds the loads between CableDyn's steps, so they
+  reach the platform about `dtM/2` late. The lag matters for stiff (taut or tension-leg)
+  moorings and for tension statistics; check such results at a smaller `dtM`. See the note on
+  the manual's OpenFAST page.
 
 ## [0.1.1] - 2026-10-09
 

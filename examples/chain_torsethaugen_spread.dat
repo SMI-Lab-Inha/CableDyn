@@ -30,7 +30,7 @@ LineID   LineType   Length   NumSegs
 50.0                 WtrDpth   - Water depth (m) [default: absent standalone; host-owned OpenFAST]
 1.0e5                kBot      - Seabed penalty stiffness base (Pa/m) [default: 1.0e5]
 1.0e4                cBot      - Seabed normal damping base (Pa-s/m) [default: 1.0e4]
-0.1                  dtM       - CableDyn internal time step (s) [default: omitted standalone; 0.1 s target OpenFAST]
+0.1                  dtM       - CableDyn internal time step (s) [default: omitted standalone; the glue DT in OpenFAST]
 300.0                TMax      - Standalone simulation duration (s) [default: omitted standalone; host-owned OpenFAST]
 torsethaugen 5.0 11.0 30.0 waves - Wave model, Hs, Tp, and mean direction (m, s, deg) {none; airy; jonswap} and pm, torsethaugen, ochihubble, stream [default: none]
 4.0       WaveSpreading    - cos-2s spreading exponent s of a spectral waves row {0=long-crested; 0<s<=1000} [default: 0]

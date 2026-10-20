@@ -327,7 +327,7 @@ def main() -> int:
     static_mixed_text = mixed_text
     for option_row in (
         "0.025    dtM              - CableDyn internal time step (s) "
-        "[default: omitted standalone; 0.1 s target OpenFAST]\n",
+        "[default: omitted standalone; the glue DT in OpenFAST]\n",
         "0.0      TMax             - Standalone simulation duration (s); 0 writes the initialized mixed statics "
         "[default: host-owned OpenFAST]\n",
         "0.35     frictionMu       - Coulomb seabed-friction coefficient [default: none]\n",
