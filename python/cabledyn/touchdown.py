@@ -15,9 +15,10 @@ A node is grounded when ``z <= seabed_z + tolerance``, and the grounded run
 must start at one end of the line (as for :meth:`cabledyn.LineGeometry.touchdown`).
 Between the last grounded node and the next one the touchdown point (TDP) is
 placed where the parabola through the last grounded node and the next two
-nodes (height against chord arc) crosses ``seabed_z + tolerance``, the crossing
-nearest the suspended node; with fewer than two suspended nodes, or no crossing
-inside the element, where the chord crosses that height. The crossing reaches a
+nodes (height against chord arc), its curvature limited so that it rises
+monotonically over the element, crosses ``seabed_z + tolerance``; with fewer than
+two suspended nodes, or no crossing inside the element, where the chord crosses
+that height. The crossing reaches a
 node exactly when the node reaches that height, so the TDP moves continuously as
 nodes ground and lift off, and the parabola follows a tangential lift-off between
 nodes instead of holding the TDP at the last grounded node (the behaviour of the
@@ -311,8 +312,12 @@ def _locate(
 
 def _quadratic_fraction(xyz: npt.NDArray[Any], last: int, level: float, linear: float) -> float:
     """Crossing of ``level`` by the quadratic height through the last grounded node and the
-    first two suspended nodes, nearest the suspended node, as a fraction of the first chord
-    (the linear fraction when the quadratic has no crossing in the element)."""
+    first two suspended nodes, as a fraction of the first chord (the linear fraction when the
+    quadratic has no crossing in the element). The curvature is limited to ``|qa| <= d1/l1``
+    so that the height rises monotonically over the element and the crossing is unique: an
+    unlimited parabola can dip below ``level`` when the line rises sharply beyond the element,
+    and its crossing then jumps by almost an element as the next node grounds. The monotone
+    crossing reaches a node exactly when the node reaches ``level``, from either side."""
     g0, g1, g2 = (xyz[last + k, 2] - level for k in range(3))
     l1 = float(np.linalg.norm(xyz[last + 1] - xyz[last]))
     l2 = float(np.linalg.norm(xyz[last + 2] - xyz[last + 1]))
@@ -320,6 +325,8 @@ def _quadratic_fraction(xyz: npt.NDArray[Any], last: int, level: float, linear: 
         return linear
     d1 = (g1 - g0) / l1
     qa = ((g2 - g1) / l2 - d1) / (l1 + l2)
+    if d1 > 0.0:  # monotone over the element: q'(0) >= 0 and q'(l1) >= 0
+        qa = min(max(qa, -d1 / l1), d1 / l1)
     qb = d1 - qa * l1
     if abs(qa) * l1 <= 1e-12 * max(abs(qb), np.finfo(float).tiny):
         return float(np.clip(-g0 / qb / l1, 0.0, 1.0)) if qb != 0.0 else linear

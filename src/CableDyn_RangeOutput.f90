@@ -16,8 +16,9 @@ MODULE CableDyn_RangeOutput
   !! the normal contact law activates). The grounded end is the end grounded in the
   !! initial state; walking from it, the TDP lies between the last grounded node and the
   !! next one, where the parabola through the last grounded node and the next two (clearance
-  !! against chord arc) crosses that height, the crossing nearest the suspended node; it
-  !! reaches a node exactly when the node does, so the TDP moves continuously as nodes ground
+  !! against chord arc), its curvature limited so that it rises monotonically over the
+  !! element, crosses that height; it reaches a node exactly when the node does, from either
+  !! side, so the TDP moves continuously as nodes ground
   !! and lift off (linear clearance when there is no such crossing). The TDP sits on that
   !! height. Arc length is the deformed chord
   !! length from End A, layback the horizontal distance from the TDP to the suspended end,
@@ -365,11 +366,15 @@ CONTAINS
 
     PURE SUBROUTINE quadratic_fraction(f)
       !! Quadratic clearance g(x) through the last grounded node (x = 0) and the first two
-      !! suspended nodes (x = l1, l1 + l2), g measured from the contact-onset height; the
-      !! touchdown is its crossing nearest the suspended node inside the element [0, l1]. The
-      !! crossing reaches a node exactly when that node reaches the onset height, so the
-      !! location is continuous as nodes ground and lift off. Keeps f (linear) when the line
-      !! has fewer than two suspended nodes or the quadratic has no crossing in the element.
+      !! suspended nodes (x = l1, l1 + l2), g measured from the contact-onset height, with its
+      !! curvature limited to |qa| <= d1/l1 so that it rises monotonically over the element
+      !! [0, l1]; the touchdown is its crossing inside the element, which is then unique. An
+      !! unlimited parabola can dip below the onset height inside the element when the line
+      !! rises sharply beyond it, and its crossing then lies near the suspended node: the
+      !! location jumped by almost an element when the next node grounded. The monotone
+      !! crossing reaches a node exactly when that node reaches the onset height, from either
+      !! side, so the location is continuous as nodes ground and lift off. Keeps f (linear) when
+      !! the line has fewer than two suspended nodes or the quadratic has no crossing.
       REAL(wp), INTENT(INOUT) :: f
       REAL(wp) :: g0, g1, g2, l1, l2, d1, qa, qb, disc, x1, x2, xc
       IF (last + 2 > nn) RETURN
@@ -381,6 +386,8 @@ CONTAINS
       IF (.NOT. (l1 > CD_ZERO) .OR. .NOT. (l2 > CD_ZERO)) RETURN
       d1 = (g1 - g0)/l1
       qa = ((g2 - g1)/l2 - d1)/(l1 + l2)
+      ! monotone over the element: q'(0) = d1 - qa l1 >= 0 and q'(l1) = d1 + qa l1 >= 0
+      IF (d1 > CD_ZERO) qa = MAX(-d1/l1, MIN(d1/l1, qa))
       qb = d1 - qa*l1
       ! qa x^2 + qb x + g0 = 0
       IF (ABS(qa)*l1 <= 1.0e-12_wp*MAX(ABS(qb), TINY(CD_ONE))) THEN

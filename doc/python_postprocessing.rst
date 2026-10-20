@@ -398,9 +398,9 @@ Touchdown time histories
 every output time, from a CableDyn ``.Line<L>.p.out`` file, a MoorDyn-F line file, or the
 ``L<L>N<J>px``/``py``/``pz`` channels of a main output. A node is grounded as in
 :meth:`~cabledyn.LineGeometry.touchdown`. Between the last grounded node and the next, the TDP is
-placed where the parabola through the last grounded node and the next two nodes crosses
-``seabed_z + tolerance`` (the crossing nearest the suspended node; the chord crossing when there
-is none), so it moves continuously as nodes ground and lift off. The :class:`~cabledyn.TouchdownHistory`
+placed where the parabola through the last grounded node and the next two nodes, its curvature
+limited so that it rises monotonically over the element, crosses ``seabed_z + tolerance`` (the
+chord crossing when there is none), so it moves continuously as nodes ground and lift off. The :class:`~cabledyn.TouchdownHistory`
 holds the TDP arc length from End A, its coordinates, the layback, and two excursions from a
 reference TDP (a static profile, or the first sample): the horizontal excursion, positive towards
 the suspended end, and the arc-length excursion. Samples without a touchdown are ``nan``.

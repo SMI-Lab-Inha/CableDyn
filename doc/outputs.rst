@@ -691,14 +691,15 @@ A node is grounded when its centreline is at most 1e-6 m (the height at which th
 law engages) above the seabed; the grounded end is the end grounded in the initial state. Walking
 from that end, the TDP lies between the last grounded node and the next one, where the parabola
 through the last grounded node and the next two nodes (clearance against chord arc) crosses that
-height, the crossing nearest the suspended node; the TDP sits on that height. With fewer than two
-suspended nodes, or no crossing inside the element, the clearance is interpolated linearly. The
-crossing reaches a node exactly when the node reaches the onset height, so the TDP moves
-continuously as nodes ground and lift off, and between nodes it follows the lift-off of the line
-instead of resting on the last grounded node until the next one grounds: on a 450 m cable with
-5 m elements in a 10 m surge the largest step between output rows falls from 4.6 m (a whole
-element) to 0.08 m, and the error against a 1 m mesh from 3.0 m to 1.9 m. The definitions are
-those of :func:`cabledyn.touchdown_history` with ``tolerance = 1e-6``.
+height; the TDP sits on that height. The parabola's curvature is limited so that it rises
+monotonically over the element, so it crosses once: where the line rises sharply beyond the
+element, an unlimited parabola would dip below the onset height and put the crossing near the
+suspended node. With fewer than two suspended nodes, or no crossing inside the element, the
+clearance is interpolated linearly. The crossing reaches a node exactly when the node reaches
+the onset height, from either side, so the TDP moves continuously as nodes ground and lift off,
+and between nodes it follows the lift-off of the line instead of resting on the last grounded
+node until the next one grounds. The definitions are those of :func:`cabledyn.touchdown_history`
+with ``tolerance = 1e-6``.
 
 .. list-table::
    :header-rows: 1
