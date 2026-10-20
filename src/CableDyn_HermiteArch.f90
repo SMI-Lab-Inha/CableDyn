@@ -230,7 +230,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_trial(:), nodes_trial(:, :), arc_trial(:), curvature_trial(:)
     REAL(wp) :: total_l, lo, hi, mid, trial_len, tol
     INTEGER :: n_elem, n_nodes, iter, es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_HARCH_OK
     ErrMsg = ''

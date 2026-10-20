@@ -434,7 +434,7 @@ CONTAINS
     TYPE(CD_CableGenAlphaWorkspace), TARGET :: local_workspace
     TYPE(CD_CableGenAlphaWorkspace), POINTER :: work
     INTEGER  :: es
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: use_element_mass_band
 
     a0 = CD_ZERO
@@ -758,7 +758,7 @@ CONTAINS
     LOGICAL  :: factored_now, guess_used, prev_end_ok, reuse_factor, reused, warm_call, r_at_qk
     LOGICAL  :: scales_stale, trial_is_iterate
     INTEGER  :: es
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     q_new = CD_ZERO
     v_new = CD_ZERO
@@ -1431,15 +1431,16 @@ CONTAINS
       !! end tangent K_E = dR_E/dq_E|_{R_F = 0} (the implicit-function derivative the outer
       !! junction Newton needs), by forward differences of the step residual: column j of
       !! S_FE/S_EE from a perturbation of end DOF j, X_j = S_FF^-1 S_FE e_j with the step's
-      !! factored effective band, and K = S_EE - S_EF X with S_EF taken as S_FE^T (the effective
-      !! tangent's mass, stiffness and drag-velocity blocks are symmetric; the small asymmetric
-      !! load terms only slow the outer Newton, never its converged result). A step that
+      !! factored effective band, and K = S_EE - S_EF X with S_EF taken as S_FE^T (the mass,
+      !! material-stiffness and drag-velocity blocks are symmetric; the asymmetric parts, from
+      !! the load terms and, on EI = 0 lines, the force blend's release cap and dashpot share,
+      !! only slow the outer Newton, never its converged result). A step that
       !! converged from its warm start without factoring keeps the previous map and tangent
       !! (the end moved by a Newton correction of the same step); a cold step without a factor
       !! factors the tangent at qk once.
       INTEGER :: nfx, j, i, k2, es2
       REAL(wp) :: h, acc
-      CHARACTER(120) :: em2
+      CHARACTER(1024) :: em2
       LOGICAL :: keep
       LOGICAL :: act(SIZE(fixed))
       REAL(wp), ALLOCATABLE :: sfe(:, :)
@@ -2586,7 +2587,7 @@ CONTAINS
     INTEGER, INTENT(IN) :: elem_conn(:, :), n_nodes
     LOGICAL, INTENT(OUT) :: validated
     INTEGER :: es, istat
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     validated = work%topo_valid
     IF (validated) validated = work%topo_n_nodes == n_nodes

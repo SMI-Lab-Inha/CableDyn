@@ -237,7 +237,7 @@ CONTAINS
     REAL(wp) :: sigma, eta, knorm
     INTEGER :: n, ldab, attempt, refine
     LOGICAL :: ok, finite_fail
-    CHARACTER(160) :: why
+    CHARACTER(1024) :: why
 
     x = CD_ZERO
     IF (PRESENT(backward_error)) backward_error = HUGE(CD_ONE)
@@ -329,7 +329,7 @@ CONTAINS
       LOGICAL, INTENT(OUT) :: success
       REAL(wp), ALLOCATABLE :: kd(:, :)
       INTEGER :: i, j, info
-      CHARACTER(200) :: lmsg
+      CHARACTER(1024) :: lmsg
       ALLOCATE (kd(n, n))
       DO j = 1, n
         DO i = 1, n

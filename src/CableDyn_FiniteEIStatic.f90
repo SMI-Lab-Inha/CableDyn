@@ -344,7 +344,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: R_free(:), dq(:), dq_global(:), q_trial(:), R_trial(:)
     REAL(wp) :: f_ext_base, conv_scale, scale_trial, rnorm, merit, merit_trial, alpha
     INTEGER :: n_free, iteration, bt, nd, zdof, es
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.; stalled = .FALSE.
     ErrStat = CD_FEI_OK; ErrMsg = ''
@@ -422,7 +422,7 @@ CONTAINS
       REAL(wp), INTENT(IN) :: qe(:)
       REAL(wp), INTENT(OUT) :: Rf(:), sc
       INTEGER :: ndl, zdofl, es_e
-      CHARACTER(120) :: em_e
+      CHARACTER(1024) :: em_e
       CALL CD_Assemble_Cosserat_Internal_Force(nodes_ref, elem_conn, ea, gas, ei, gj, qe, &
                                                .TRUE., fint, es_e, em_e)
       IF (es_e /= 0) THEN

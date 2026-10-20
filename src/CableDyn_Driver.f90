@@ -73,7 +73,7 @@ CONTAINS
     LOGICAL  :: tension_only, has_seabed, stalled, at_floor
     INTEGER  :: n_iter, es, i
     REAL(wp), ALLOCATABLE :: kn_arr(:)
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
     TYPE(CableSolverConfig) :: cfg
 
     converged = .FALSE.
@@ -206,7 +206,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mass_pl(:), diam(:), w(:), load(:, :)
     REAL(wp), ALLOCATABLE :: f_ext(:), q0(:), q(:), tension(:), kn(:)
     INTEGER  :: n_elem, n_nodes, n_dof, es, i, n_iter, n_stages
-    CHARACTER(256) :: em
+    CHARACTER(1024) :: em
 
     converged = .FALSE.
     ErrStat = CD_DRIVER_OK

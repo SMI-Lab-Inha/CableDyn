@@ -2195,6 +2195,64 @@ add_test(NAME driver_lazy_wave_planar_refined_att_quiet
 set_tests_properties(driver_lazy_wave_planar_refined_att_quiet PROPERTIES
   LABELS "fortran;driver;integration;static")
 
+# Diagnostics that name the cause and the remedy. Each deck below was rejected by a message that
+# named the wrong cause or none, or ran with no warning, before the message was written.
+function(cabledyn_msg_test name deck rc must_match must_not)
+  add_test(NAME driver_msg_${name}
+    COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=${rc}
+      "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/${deck}|msg"
+      "-DMUST_MATCH=${must_match}" "-DMUST_NOT=${must_not}"
+      -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_msg_${name}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+  set_tests_properties(driver_msg_${name} PROPERTIES LABELS "fortran;driver;integration;static")
+endfunction()
+# A neutrally buoyant finite-EI line longer than its span has no catenary and no tension-only bow.
+cabledyn_msg_test(weightless_finite_ei msg_weightless_finite_ei.dat 2
+  "weightless .neutrally buoyant. line is longer than its span;shorten the line to its span, or give it net weight"
+  "net-heavy")
+# An EI=0 line type rejected as net-buoyant whose mass is a relative 4e-9 below the displaced water
+# mass is named weightless and slack; one a relative 2e-6 below it keeps the plain message.
+cabledyn_msg_test(weightless_ei0 msg_weightless_ei0.dat 1
+  "is neutrally buoyant .its dry mass equals the displaced water mass to within a relative 1e-6.;weightless and slack: its static shape is indeterminate"
+  "")
+cabledyn_msg_test(net_buoyant_ei0 msg_net_buoyant_ei0.dat 1
+  "is net-buoyant .dry mass <= displaced water mass.: buoyant / lazy-wave sections require a dynamic finite-EI deck"
+  "weightless")
+# A line half the length of its span converges at 100 % strain; the static solve says so.
+cabledyn_msg_test(static_strain msg_static_strain.dat 0
+  "Note: LINE 1 is stretched to a static strain of 100.0 % at the fairlead;above 10.0 % .the note level used without maxStrain." "")
+# A 100 m one-segment top section of a 520 m line.
+cabledyn_msg_test(coarse_section msg_coarse_section.dat 0
+  "WARNING: LINE 1 section of type \"chain\" .100.00 m in 1 segment.s.. has segments of 100.00 m, 19.2 %" "")
+# A well-meshed line with a modest stretch raises neither.
+cabledyn_msg_test(quiet_catenary ../../examples/chain_catenary_r3_100m.dat 0 ""
+  "static strain;too coarse to follow")
+cabledyn_msg_test(shared_line msg_shared_line.dat 1
+  "LINE 1 End B .NodeB, POINT 2, coupled. must be a Fixed .anchor. point;Workaround for this EI=0 line: split it into two lines that meet at a Connect point"
+  "cannot be split")
+# A finite-EI shared line cannot be split at a Connect point: that advice is not given.
+cabledyn_msg_test(shared_line_finite_ei msg_shared_line_finite_ei.dat 1
+  "finite-EI LINE 1 End B .NodeB, POINT 2, coupled. must be a Fixed .anchor. point;A finite-EI line cannot be split at a Connect point either;anchor it on a Fixed point"
+  "Workaround")
+cabledyn_msg_test(pliant_connect_end_b msg_pliant_connect_end_b.dat 1
+  "finite-EI LINE 1 in a mixed-topology deck needs a Fixed End B;End B is POINT 2 .connect.;Anchor the cable on a Fixed point"
+  "")
+cabledyn_msg_test(mixed_current msg_mixed_current.dat 1
+  "the deck current OPTION is not supported for a standalone mixed EI=0/finite-EI deck;runs the mooring in STILL WATER;couple the deck to OpenFAST .CompMooring = 5. with SeaState"
+  "this coupled mode;the C API;FAST.Farm")
+cabledyn_msg_test(mixed_connect_coupled_cable msg_mixed_connect_coupled_cable.dat 1
+  "finite-EI LINE 3: a Coupled/Vessel End A .POINT 1. would need motionFile coupling to drive it;remove the Connect/Free points;held still .that route takes no motionFile either."
+  "is driven by a motionFile")
+# The standalone mixed route warns about a coarse section and notes a static strain above maxStrain.
+cabledyn_msg_test(mixed_coarse_strain msg_mixed_coarse_strain.dat 0
+  "WARNING: LINE 1 section of type \"chain\" .150.00 m in 1 segment.s.. has segments of 150.00 m, 17.6 %;Note: LINE 1 is stretched to a static strain of;above 1.00E-02 % .OPTION maxStrain."
+  "LINE 2 section of type")
+# The tensile qualification failure of a dynamic step names the remedy to the end (the message was
+# cut at 256 characters: "... at element 64, xi= 0.5000; increase").
+cabledyn_msg_test(tensile_safety_whole msg_tensile_safety_truncated.dat 2
+  "tensile qualification failed;at element 64, xi= 0.5000; increase tensile_strain_tolerance only with an engineering basis, or use warn mode" "")
+cabledyn_msg_test(anchor_below_seabed msg_anchor_below_seabed.dat 1
+  "POINT 2 .Fixed. lies below the seabed;by 1.00E-02 m, more than the 1.00E-03 m seabed tolerance;Set the anchor Z to -100.00000 m" "")
 if(WIN32 AND CABLEDYN_RUNTIME_DLLS)
   add_test(
     NAME windows_install_runtime

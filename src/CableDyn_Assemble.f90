@@ -104,9 +104,12 @@ CONTAINS
     Kt = CD_ZERO
     fint = CD_ZERO
     tension = CD_ZERO
-    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg, topology_validated)
+    ! the input checks write messages of at most 80 characters into a 120-character share
+    ErrMsg = ''
+    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)), &
+                        topology_validated)
     IF (ErrStat /= 0) RETURN
-    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg)
+    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)))
     IF (ErrStat /= 0) RETURN
     IF (.NOT. shape_ok_2d(Kt, 3*n_nodes) .OR. SIZE(fint) /= 3*n_nodes &
         .OR. SIZE(tension) /= n_elem) THEN
@@ -233,9 +236,12 @@ CONTAINS
     Kb = CD_ZERO
     fint = CD_ZERO
     tension = CD_ZERO
-    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg, topology_validated)
+    ! the input checks write messages of at most 80 characters into a 120-character share
+    ErrMsg = ''
+    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)), &
+                        topology_validated)
     IF (ErrStat /= 0) RETURN
-    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg)
+    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)))
     IF (ErrStat /= 0) RETURN
     ndof = 3*n_nodes
     ldab = 2*kl + ku + 1
@@ -345,9 +351,12 @@ CONTAINS
     CHARACTER(120) :: em
 
     fint = CD_ZERO
-    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg, topology_validated)
+    ! the input checks write messages of at most 80 characters into a 120-character share
+    ErrMsg = ''
+    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)), &
+                        topology_validated)
     IF (ErrStat /= 0) RETURN
-    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg)
+    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)))
     IF (ErrStat /= 0) RETURN
     IF (SIZE(fint) /= 3*n_nodes) THEN
       CALL fail(ErrStat, ErrMsg, 'fint must have shape (3 n_nodes)')
@@ -431,9 +440,12 @@ CONTAINS
     CHARACTER(120) :: em
 
     tension = CD_ZERO
-    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg, topology_validated)
+    ! the input checks write messages of at most 80 characters into a 120-character share
+    ErrMsg = ''
+    CALL check_topology(nodes, elem_conn, n_nodes, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)), &
+                        topology_validated)
     IF (ErrStat /= 0) RETURN
-    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg)
+    CALL check_props(l0, ea, n_elem, ErrStat, ErrMsg(1:MIN(LEN(ErrMsg), 120)))
     IF (ErrStat /= 0) RETURN
     IF (SIZE(tension) /= n_elem) THEN
       CALL fail(ErrStat, ErrMsg, 'tension must have shape (n_elem)')

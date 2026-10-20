@@ -184,7 +184,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: seabed_kn(:), floor_z(:)
     INTEGER :: n, nn, ne, e, a, b, ia, ib, i, j, conn1(2, 1), gd(6)
     REAL(wp) :: d(3), l, t, ke(3, 3), mm, ke6(6, 6), me6(6, 6), ma(6, 6), q2(6), wl2(2), l02(1), f, df
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODAL_OK
     ErrMsg = ''
@@ -298,7 +298,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: contact_kn(:), floor_z(:)
     INTEGER :: n, nn, ne, e, i0, i, ao, bo, gd(12)
     REAL(wp) :: qe(12), energy, fint(12), kt(12, 12), me(12, 12), ma(12, 12), f, df
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODAL_OK
     ErrMsg = ''
@@ -441,7 +441,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: vec(:, :), bvec(:, :)
     REAL(wp) :: qdum(1, 1), zdum(1, 1), anorm, bnorm, shift, scale, nrm, res, rq, noise
     LOGICAL :: converged
-    CHARACTER(512) :: em
+    CHARACTER(1024) :: em
     EXTERNAL :: dsbgvx
 
     ErrStat = CD_MODAL_OK

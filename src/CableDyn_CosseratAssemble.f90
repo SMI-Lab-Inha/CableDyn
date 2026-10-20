@@ -112,7 +112,7 @@ CONTAINS
     fe = 0.0_wp
     Ke = 0.0_wp
     elem_es = 0
-    elem_em = ''
+    ! elem_em(e) is written with elem_es(e) and read only where elem_es(e) /= 0: no blank fill
     !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, fe, Ke, elem_es, elem_em) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
@@ -315,7 +315,7 @@ CONTAINS
     work%fe(:, 1:n_elem) = 0.0_wp
     work%Ke(:, :, 1:n_elem) = 0.0_wp
     work%elem_es(1:n_elem) = 0
-    work%elem_em(1:n_elem) = ''
+    ! elem_em(e) is written with elem_es(e) and read only where elem_es(e) /= 0: no blank fill
     !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, Kte, es, em)
@@ -431,7 +431,7 @@ CONTAINS
     IF (ErrStat /= 0) RETURN
     work%fe(:, 1:n_elem) = 0.0_wp
     work%elem_es(1:n_elem) = 0
-    work%elem_em(1:n_elem) = ''
+    ! elem_em(e) is written with elem_es(e) and read only where elem_es(e) /= 0: no blank fill
     !$OMP PARALLEL DEFAULT(NONE) &
     !$OMP SHARED(n_elem, elem_conn, nodes_ref, q, ea, gas, ei, gj, reduced_shear, work) &
     !$OMP PRIVATE(e, a, b, Lam0, L0, qe, finte, es, em)

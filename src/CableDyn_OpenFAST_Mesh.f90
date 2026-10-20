@@ -197,7 +197,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_FAST_MESH_OK
     ErrMsg = ''
@@ -266,7 +266,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(240) :: em
+    CHARACTER(1024) :: em
 
     body_wrench = CD_ZERO
     ErrStat = CD_FAST_MESH_OK
@@ -296,7 +296,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: fast_stat, n_coupled
-    CHARACTER(240) :: fast_msg
+    CHARACTER(1024) :: fast_msg
 
     matches = .FALSE.
     ErrStat = CD_FAST_MESH_OK

@@ -235,10 +235,20 @@ CONTAINS
     CALL require(unchanged(a, ref) .AND. same_bits(a%l0_dot, ref%l0_dot) .AND. same_bits(a%q, ref%q) .AND. &
                  same_bits(a%v, ref%v) .AND. same_bits(a%a, ref%a) .AND. same_bits2(a%fr_anchor, ref%fr_anchor), &
                  'A: restore brings back the lengths, rates, caches and state bit for bit')
+    ! Restore clears the carried Newton factor and the cached committed force, which ref still
+    ! holds. Where a step stops depends on the factor's age, so a restart is exact only with
+    ! tangent reuse off; and ref's next step would take its committed force from the cache
+    ! while a evaluates it afresh. Both models march with reuse off from an uncached
+    ! committed force, so they take the same path.
+    a%tangent_reuse = .FALSE.
+    ref%tangent_reuse = .FALSE.
+    ref%fc_valid = .FALSE.
     DO k = 1, 3
       CALL CD_HermiteCable_Dyn_Step(a, DT, 50, 1.0e-10_wp, es, em)
       CALL CD_HermiteCable_Dyn_Step(ref, DT, 50, 1.0e-10_wp, es, em)
     END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3)') '  A: restored vs untouched after 3 steps, max |dq| ', &
+      MAXVAL(ABS(a%q - ref%q)), ', max |dv| ', MAXVAL(ABS(a%v - ref%v))
     CALL require(es == CD_HCDYN_OK .AND. same_bits(a%q, ref%q) .AND. same_bits(a%v, ref%v), &
                  'A: the restored model marches bit-identically to an untouched copy')
     CALL CD_HermiteCable_Dyn_End(ref)

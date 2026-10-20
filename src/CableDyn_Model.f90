@@ -171,6 +171,13 @@ MODULE CableDyn_Model
     REAL(wp), ALLOCATABLE :: l0(:), l0_dot(:), f_ext(:), kn(:), cn(:)
   END TYPE model_lengths_aside
 
+  ! The per-element and per-node kernels of the load and added-mass assemblies write messages of
+  ! at most 187 characters (Hydro, Damping, Viscoelastic, Syrope, bathymetry and band-scatter texts,
+  ! with their prefixes) and blank their message on entry, also when inputs_validated skips their
+  ! input scan. They receive the first KERNEL_MSG_LEN characters of the caller's message buffer,
+  ! so each call resets that much and not the whole (up to 1024-character) buffer.
+  INTEGER, PARAMETER :: KERNEL_MSG_LEN = 200
+
   TYPE :: CD_ModelType
     !! Persistent positions-only EI=0 model state and immutable mesh/properties.
     LOGICAL :: initialized = .FALSE.
@@ -485,7 +492,7 @@ CONTAINS
     INTEGER :: n_dof, n_elem, n_nodes, es, istat, e
     INTEGER, ALLOCATABLE :: free(:)
     TYPE(CD_ModelType) :: old_model
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: use_seabed, use_seabed_damping, use_seabed_friction
     LOGICAL :: use_damping, use_drag, use_fk, use_buoyancy, use_added_mass, has_load
     LOGICAL :: use_viscoelastic, use_syrope
@@ -1518,7 +1525,7 @@ CONTAINS
     REAL(wp) :: laid_az, laid_t
     LOGICAL :: reverse_line, converged, use_current
     LOGICAL :: use_seabed, use_seabed_damping, use_seabed_friction, use_damping
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
     TYPE(CableCurrentLoad) :: cur
     TYPE(CD_StaticLineReport) :: report
 
@@ -2029,7 +2036,7 @@ CONTAINS
           BLOCK
             TYPE(model_lengths_aside) :: aside
             INTEGER :: es_c
-            CHARACTER(160) :: em_c
+            CHARACTER(1024) :: em_c
             ! without the loads nothing is rebuilt, so this cannot fail
             CALL enter_committed_lengths(model, aside, .FALSE., es_c, em_c)
             CALL sub_tensions_scratch(model, 0)
@@ -2115,7 +2122,7 @@ CONTAINS
       INTEGER :: k, it_k, es_k
       LOGICAL :: conv_k, stall_k
       REAL(wp) :: h
-      CHARACTER(300) :: em_k
+      CHARACTER(1024) :: em_k ! a plain step's message (discarded: the step falls back)
       CALL sub_load(model, 1)
       h = dt/REAL(n, wp)
       ok_run = .TRUE.
@@ -2331,7 +2338,7 @@ CONTAINS
     REAL(wp) :: a, b
     INTEGER :: e, es
     LOGICAL :: moved
-    CHARACTER(160) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em
     ErrStat = CD_MODEL_OK
     moved = .FALSE.
     DO e = 1, model%n_elem
@@ -2385,7 +2392,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: tension(:)
     INTEGER :: e, na, nb, es
     REAL(wp) :: strain
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em ! model_law_tensions: a law message with its prefix
     DO e = 1, model%n_elem
       na = model%elem_conn(1, e)
       nb = model%elem_conn(2, e)
@@ -2439,7 +2446,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: tension
     REAL(wp) :: ea_d_eff, ea_1_eff
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em ! a per-element law message (the kernels' bound)
     stiff = model%ea_dyn(e)
     IF (stiff > CD_ZERO) RETURN
     stiff = model%ea(e)
@@ -2540,7 +2547,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: prescribed_q(:), prescribed_v(:), prescribed_a(:)
 
     INTEGER :: es, e
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: has_load, blend, force_lengths
     REAL(wp) :: af
     REAL(wp), ALLOCATABLE :: l0_new(:), l0_dot_new(:), l0_start(:), l0_mass(:), f_ext_new(:), f_ext_c(:)
@@ -2873,7 +2880,7 @@ CONTAINS
       !! committed lengths entered after a length change).
       INTEGER, INTENT(OUT) :: es_s
       CHARACTER(*), INTENT(OUT) :: em_s
-      CHARACTER(160) :: em_c
+      CHARACTER(1024) :: em_c
       es_s = CD_MODEL_OK
       em_s = ''
       IF (.NOT. (has_load .AND. model%cfg%force_blend)) THEN
@@ -2998,7 +3005,7 @@ CONTAINS
     REAL(wp) :: subdt, fraction, hmax0
     TYPE(CD_SubstepStats) :: stats0
     REAL(wp), ALLOCATABLE :: pq(:), pv(:), pa(:)
-    CHARACTER(300) :: em, first_em
+    CHARACTER(1024) :: em, first_em
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -3196,7 +3203,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: f_c(:), kn_c(:)
     LOGICAL :: rebuild
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -3287,13 +3294,14 @@ CONTAINS
     LOGICAL, INTENT(IN) :: commit
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, ix
+    INTEGER :: i, ix, lk
     REAL(wp) :: normal, cap, d(2), dlen, k, mu_d, q_d, gq_d(2)
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
+    lk = MIN(LEN(ErrMsg), KERNEL_MSG_LEN) ! the per-node query's share of ErrMsg
     DO i = 1, SIZE(model%fr_anchor, 2)
       ix = 3*i - 2
-      normal = seabed_normal_reaction(model, q(ix), q(ix + 1), q(ix + 2), v(ix:ix + 2), i, ErrStat, ErrMsg)
+      normal = seabed_normal_reaction(model, q(ix), q(ix + 1), q(ix + 2), v(ix:ix + 2), i, ErrStat, ErrMsg(1:lk))
       IF (ErrStat /= CD_MODEL_OK) RETURN
       IF (.NOT. commit) CYCLE
       IF (model%seabed_friction_aniso) THEN
@@ -3711,7 +3719,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, es
     REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -3871,7 +3879,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es, istat, k
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -3955,7 +3963,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es, nc, n_free, i, j, row, col
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4105,7 +4113,7 @@ CONTAINS
     INTEGER :: idx(6), conn1(2, 1)
     REAL(wp) :: coeff, s, q2(6), l02(1), wl2(2), m2(6, 6)
     LOGICAL :: hit, ok
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4454,7 +4462,7 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: restored
     INTEGER :: es
     REAL(wp) :: rate
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     rate = positive_zero(l0_dot)
@@ -4674,7 +4682,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, node, d0, idx(6), es
     REAL(wp) :: q2(6), wl2(2), m2(6, 6)
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     ma_block = CD_ZERO
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4979,7 +4987,7 @@ CONTAINS
     REAL(wp) :: load(9)
     REAL(wp) :: fint_first(3), fint_last(3), nodes6(6), Kt6(6, 6), fint6(6), Te
     INTEGER :: es, n, nn, e, a, b
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     force_first = CD_ZERO
     force_last = CD_ZERO
@@ -5035,7 +5043,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     tension = CD_ZERO
     ErrStat = CD_MODEL_OK
@@ -5096,7 +5104,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(KERNEL_MSG_LEN) :: em ! a per-element law message (the kernels' bound)
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -5340,7 +5348,7 @@ CONTAINS
       REAL(wp) :: f_dist(SIZE(model%f_ext))
       REAL(wp), ALLOCATABLE :: base_entry(:)
       INTEGER :: es2
-      CHARACTER(160) :: em2
+      CHARACTER(1024) :: em2
       IF (ALLOCATED(model%dist_load)) THEN
         CALL CD_Assemble_Distributed_Load(model%elem_conn, model%l0, model%dist_load, f_dist, es2, em2)
         IF (es2 /= 0) THEN
@@ -5489,7 +5497,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
     LOGICAL :: has_load
     INTEGER :: nc
     LOGICAL :: prescribed_workspace_ready
@@ -5559,7 +5567,7 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: ErrMsg
 
       INTEGER :: es, n_free, i, j, row, col
-      CHARACTER(160) :: em
+      CHARACTER(1024) :: em
 
       ErrStat = CD_MODEL_OK
       ErrMsg = ''
@@ -5795,7 +5803,7 @@ CONTAINS
     REAL(wp) :: d(3), ell, strain, u(3), c, line_max, tn, h
     REAL(wp), ALLOCATABLE :: law(:)
     LOGICAL :: fresh, laws
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     new_spike = .FALSE.
     IF (.NOT. model%initialized .OR. model%n_elem < 1) RETURN
@@ -6093,7 +6101,7 @@ CONTAINS
 
     TYPE(CD_ModelType) :: work
     INTEGER :: es
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -6497,7 +6505,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: istat, e, es2
-    CHARACTER(160) :: em2
+    CHARACTER(1024) :: em2
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -6589,7 +6597,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: es
-    CHARACTER(160) :: em
+    CHARACTER(1024) :: em
 
     CALL CD_End_Model(model, es, em)
     model = old_model
@@ -7084,7 +7092,9 @@ CONTAINS
     REAL(wp) :: q2(6), v2(6), f2(6), jq2(6, 6), jv2(6, 6), ea_d_eff, ea_1_eff, syr_tm, syr_ds
     LOGICAL :: free_map_ready
     REAL(wp) :: fluid2(3, 2), accel2(3, 2), wl2(2), dfdv(2, 2)
+    INTEGER :: lk ! the kernels' share of ErrMsg (KERNEL_MSG_LEN)
 
+    lk = MIN(LEN(ErrMsg), KERNEL_MSG_LEN)
     force = CD_ZERO
     jac_q_band = CD_ZERO
     jac_v_band = CD_ZERO
@@ -7131,7 +7141,7 @@ CONTAINS
         iy = 3*i - 1
         iz = 3*i
         IF (model%has_bathymetry) THEN
-          CALL model_floor_gradient(model, q(ix), q(iy), z_floor, dfdx, dfdy, ErrStat, ErrMsg, curvature=curv_n)
+          CALL model_floor_gradient(model, q(ix), q(iy), z_floor, dfdx, dfdy, ErrStat, ErrMsg(1:lk), curvature=curv_n)
           IF (ErrStat /= CD_MODEL_OK) RETURN
         ELSE
           z_floor = model%seabed_z_floor
@@ -7151,7 +7161,7 @@ CONTAINS
             DO cb = 1, 3
               DO ra = 1, 3
                 CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ix + ra - 1, ix + cb - 1, &
-                                         jac3(ra, cb), ErrStat, ErrMsg)
+                                         jac3(ra, cb), ErrStat, ErrMsg(1:lk))
                 IF (ErrStat /= CD_MODEL_OK) RETURN
               END DO
             END DO
@@ -7161,7 +7171,7 @@ CONTAINS
         CALL CD_Seabed_Normal_Law(gap, model%seabed_kn(i), normal, tangent)
         force(iz) = force(iz) + normal
         CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, iz, iz, tangent, &
-                                 ErrStat, ErrMsg)
+                                 ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
       END DO
     END IF
@@ -7172,16 +7182,16 @@ CONTAINS
         iy = 3*i - 1
         iz = 3*i
         ! damping along the floor normal, at the normal penetration and normal velocity
-        CALL node_contact_normal(model, q(ix), q(iy), q(iz), v(ix:iz), gap, vn, nvec, sloped, ErrStat, ErrMsg)
+        CALL node_contact_normal(model, q(ix), q(iy), q(iz), v(ix:iz), gap, vn, nvec, sloped, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         CALL seabed_normal_damping_terms(gap, vn, model%seabed_cn(i), damp_force, damp_dgap, damp_dvz)
         IF (.NOT. sloped) THEN
           force(iz) = force(iz) + damp_force
           CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, iz, iz, damp_dgap, &
-                                   ErrStat, ErrMsg)
+                                   ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, iz, iz, -damp_dvz, &
-                                   ErrStat, ErrMsg)
+                                   ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CYCLE
         END IF
@@ -7192,10 +7202,10 @@ CONTAINS
           DO cb = 1, 3
             DO ra = 1, 3
               CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ix + ra - 1, ix + cb - 1, &
-                                       damp_dgap*nvec(ra)*nvec(cb), ErrStat, ErrMsg)
+                                       damp_dgap*nvec(ra)*nvec(cb), ErrStat, ErrMsg(1:lk))
               IF (ErrStat /= CD_MODEL_OK) RETURN
               CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ix + ra - 1, ix + cb - 1, &
-                                       -damp_dvz*nvec(ra)*nvec(cb), ErrStat, ErrMsg)
+                                       -damp_dvz*nvec(ra)*nvec(cb), ErrStat, ErrMsg(1:lk))
               IF (ErrStat /= CD_MODEL_OK) RETURN
             END DO
           END DO
@@ -7208,7 +7218,7 @@ CONTAINS
         ix = 3*i - 2
         iy = 3*i - 1
         iz = 3*i
-        normal = seabed_normal_reaction(model, q(ix), q(iy), q(iz), v(ix:iz), i, ErrStat, ErrMsg)
+        normal = seabed_normal_reaction(model, q(ix), q(iy), q(iz), v(ix:iz), i, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         IF (normal <= CD_ZERO) CYCLE
         ! stick-slip spring to the committed anchor; the load on the node is -f
@@ -7226,23 +7236,23 @@ CONTAINS
         END IF
         force(ix) = force(ix) - g(1)
         force(iy) = force(iy) - g(2)
-        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ix, ix, dfdv(1, 1), ErrStat, ErrMsg)
+        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ix, ix, dfdv(1, 1), ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ix, iy, dfdv(1, 2), ErrStat, ErrMsg)
+        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ix, iy, dfdv(1, 2), ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, iy, ix, dfdv(2, 1), ErrStat, ErrMsg)
+        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, iy, ix, dfdv(2, 1), ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, iy, iy, dfdv(2, 2), ErrStat, ErrMsg)
+        CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, iy, iy, dfdv(2, 2), ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         IF (ABS(dfc(1)) + ABS(dfc(2)) <= CD_ZERO) CYCLE
         ! sliding: the capacity follows the normal reaction
         CALL scatter_seabed_friction_position_band(model, q(ix), q(iy), q(iz), v(ix:iz), i, ix, dfc(1), jac_q_band, &
-                                                   model%free_map_work, kl, ku, ErrStat, ErrMsg, mu_c)
+                                                   model%free_map_work, kl, ku, ErrStat, ErrMsg(1:lk), mu_c)
         IF (ErrStat /= CD_MODEL_OK) RETURN
         CALL scatter_seabed_friction_position_band(model, q(ix), q(iy), q(iz), v(ix:iz), i, iy, dfc(2), jac_q_band, &
-                                                   model%free_map_work, kl, ku, ErrStat, ErrMsg, mu_c)
+                                                   model%free_map_work, kl, ku, ErrStat, ErrMsg(1:lk), mu_c)
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL seabed_normal_velocity_gradient(model, q(ix), q(iy), q(iz), v(ix:iz), i, dn_dv, ErrStat, ErrMsg)
+        CALL seabed_normal_velocity_gradient(model, q(ix), q(iy), q(iz), v(ix:iz), i, dn_dv, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         BLOCK
           INTEGER :: rr, cc
@@ -7251,7 +7261,7 @@ CONTAINS
               ! a level floor has dn_dv = (0, 0, d): skip its structural zeros
               IF (cc < 3 .AND. .NOT. (ABS(dn_dv(cc)) > CD_ZERO)) CYCLE
               CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ix + rr - 1, ix + cc - 1, &
-                                       mu_c*dn_dv(cc)*dfc(rr), ErrStat, ErrMsg)
+                                       mu_c*dn_dv(cc)*dfc(rr), ErrStat, ErrMsg(1:lk))
               IF (ErrStat /= CD_MODEL_OK) RETURN
             END DO
           END DO
@@ -7269,39 +7279,39 @@ CONTAINS
       CALL extract_element_state(model, e, q, v, idx, q2, v2)
       IF (model%has_damping) THEN
         CALL CD_Axial_Damping_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
-                                           model%ba_dyn(e), f2, jq2, jv2, ErrStat, ErrMsg, &
+                                           model%ba_dyn(e), f2, jq2, jv2, ErrStat, ErrMsg(1:lk), &
                                            l0_dot=model%l0_dot(e), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
-        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
+        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg)
+        CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
       END IF
       IF (model%has_viscoelastic) THEN
         IF (model%ve_mode(e) /= 0) THEN
-          CALL model_viscoelastic_coeffs(model, e, ea_d_eff, ea_1_eff, ErrStat, ErrMsg)
+          CALL model_viscoelastic_coeffs(model, e, ea_d_eff, ea_1_eff, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL CD_Viscoelastic_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                             ea_d_eff, ea_1_eff, model%ve_ba(e), &
                                             model%ve_ba_d(e), model%ve_dl_1(e), model%ve_dt, &
-                                            f2, jq2, jv2, ErrStat, ErrMsg)
+                                            f2, jq2, jv2, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= 0) RETURN
           CALL scatter_element_vector(force, idx, f2)
-          CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
+          CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
-          CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg)
+          CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
         END IF
       END IF
       IF (model%has_syrope) THEN
         IF (model%syrope_is(e)) THEN
-          CALL model_syrope_element(model, e, q2, v2, f2, jq2, jv2, syr_tm, syr_ds, ErrStat, ErrMsg)
+          CALL model_syrope_element(model, e, q2, v2, f2, jq2, jv2, syr_tm, syr_ds, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL scatter_element_vector(force, idx, f2)
-          CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
+          CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
-          CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg)
+          CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
         END IF
       END IF
@@ -7311,13 +7321,13 @@ CONTAINS
         CALL CD_Morison_Drag_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                           fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
                                           model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
-                                          model%drag_cdt_elem(e), f2, jq2, jv2, ErrStat, ErrMsg, &
+                                          model%drag_cdt_elem(e), f2, jq2, jv2, ErrStat, ErrMsg(1:lk), &
                                           inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
-        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
+        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
-        CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg)
+        CALL scatter_element_matrix_band(jac_v_band, model%free_map_work, kl, ku, idx, jv2, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
       END IF
       IF (model%has_froude_krylov) THEN
@@ -7326,11 +7336,11 @@ CONTAINS
         CALL CD_Froude_Krylov_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                            accel2(:, 1), accel2(:, 2), wl2(1), wl2(2), model%fk_rho, &
                                            model%fk_diameter_elem(e), model%fk_can_elem(e), &
-                                           model%fk_cat_elem(e), f2, jq2, jv2, ErrStat, ErrMsg, &
+                                           model%fk_cat_elem(e), f2, jq2, jv2, ErrStat, ErrMsg(1:lk), &
                                            inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
-        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
+        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         ! jv2 is identically zero (a velocity-independent load), and adding zeros changes no
         ! entry of a band that starts at +0 and only accumulates: its scatter is skipped. The
@@ -7341,11 +7351,11 @@ CONTAINS
         CALL extract_nodal_scalar(model%buoyancy_waterline_z, model, e, wl2)
         CALL CD_Buoyancy_Recovery_Element_Load(q2(1:3), q2(4:6), model%l0(e), wl2(1), wl2(2), &
                                                model%buoyancy_rho, model%buoyancy_diameter_elem(e), &
-                                               model%buoyancy_gravity, f2, jq2, jv2, ErrStat, ErrMsg, &
+                                               model%buoyancy_gravity, f2, jq2, jv2, ErrStat, ErrMsg(1:lk), &
                                                inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
-        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg)
+        CALL scatter_element_matrix_band(jac_q_band, model%free_map_work, kl, ku, idx, jq2, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         ! jv2 is identically zero: no scatter (as for Froude-Krylov above)
       END IF
@@ -7386,7 +7396,9 @@ CONTAINS
     REAL(wp) :: d_fr(2)
     REAL(wp) :: q2(6), v2(6), f2(6), ea_d_eff, ea_1_eff, syr_tm, syr_ds, syr_jac(6, 6), syr_jac_v(6, 6)
     REAL(wp) :: fluid2(3, 2), accel2(3, 2), wl2(2)
+    INTEGER :: lk ! the kernels' share of ErrMsg (KERNEL_MSG_LEN)
 
+    lk = MIN(LEN(ErrMsg), KERNEL_MSG_LEN)
     force = CD_ZERO
     n = SIZE(q)
     ends = .FALSE.
@@ -7430,7 +7442,7 @@ CONTAINS
           ! sloped seabed: frictionless contact along the surface normal
           BLOCK
             REAL(wp) :: fvec(3), jac3(3, 3), gx, gy, curv(3)
-            CALL model_floor_gradient(model, q(ix), q(iy), z_floor, gx, gy, ErrStat, ErrMsg, curvature=curv)
+            CALL model_floor_gradient(model, q(ix), q(iy), z_floor, gx, gy, ErrStat, ErrMsg(1:lk), curvature=curv)
             IF (ErrStat /= CD_MODEL_OK) RETURN
             IF (ABS(gx) > CD_ZERO .OR. ABS(gy) > CD_ZERO .OR. ANY(ABS(curv) > CD_ZERO)) THEN
               CALL CD_Seabed_Normal_Contact(z_floor - q(iz), gx, gy, model%seabed_kn(i), fvec, jac3, curvature=curv)
@@ -7456,7 +7468,7 @@ CONTAINS
         BLOCK
           REAL(wp) :: vn, nvec(3)
           LOGICAL :: sloped
-          CALL node_contact_normal(model, q(ix), q(iy), q(iz), v(ix:iz), gap, vn, nvec, sloped, ErrStat, ErrMsg)
+          CALL node_contact_normal(model, q(ix), q(iy), q(iz), v(ix:iz), gap, vn, nvec, sloped, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL seabed_normal_damping_terms(gap, vn, model%seabed_cn(i), damp_force, damp_dgap, damp_dvz)
           IF (sloped) THEN
@@ -7474,7 +7486,7 @@ CONTAINS
         ix = 3*i - 2
         iy = 3*i - 1
         iz = 3*i
-        normal = seabed_normal_reaction(model, q(ix), q(iy), q(iz), v(ix:iz), i, ErrStat, ErrMsg)
+        normal = seabed_normal_reaction(model, q(ix), q(iy), q(iz), v(ix:iz), i, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         IF (normal <= CD_ZERO) CYCLE
         d_fr(1) = q(ix) - model%fr_anchor(1, i)
@@ -7501,19 +7513,19 @@ CONTAINS
       IF (ends) idx = [(slot(idx(i)), i=1, 6)]
       IF (model%has_damping) THEN
         CALL CD_Axial_Damping_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
-                                            model%ba_dyn(e), f2, ErrStat, ErrMsg, &
+                                            model%ba_dyn(e), f2, ErrStat, ErrMsg(1:lk), &
                                             l0_dot=model%l0_dot(e), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
       END IF
       IF (model%has_viscoelastic) THEN
         IF (model%ve_mode(e) /= 0) THEN
-          CALL model_viscoelastic_coeffs(model, e, ea_d_eff, ea_1_eff, ErrStat, ErrMsg)
+          CALL model_viscoelastic_coeffs(model, e, ea_d_eff, ea_1_eff, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL CD_Viscoelastic_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                              ea_d_eff, ea_1_eff, model%ve_ba(e), &
                                              model%ve_ba_d(e), model%ve_dl_1(e), model%ve_dt, &
-                                             f2, ErrStat, ErrMsg)
+                                             f2, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= 0) RETURN
           CALL scatter_element_vector(force, idx, f2)
           IF (PRESENT(law_tension)) law_tension(e) = element_law_tension()
@@ -7522,7 +7534,7 @@ CONTAINS
       END IF
       IF (model%has_syrope) THEN
         IF (model%syrope_is(e)) THEN
-          CALL model_syrope_element(model, e, q2, v2, f2, syr_jac, syr_jac_v, syr_tm, syr_ds, ErrStat, ErrMsg)
+          CALL model_syrope_element(model, e, q2, v2, f2, syr_jac, syr_jac_v, syr_tm, syr_ds, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
           CALL scatter_element_vector(force, idx, f2)
           IF (PRESENT(law_tension)) law_tension(e) = element_law_tension()
@@ -7536,7 +7548,7 @@ CONTAINS
         CALL CD_Morison_Drag_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                            fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
                                            model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
-                                           model%drag_cdt_elem(e), f2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
+                                           model%drag_cdt_elem(e), f2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
       END IF
@@ -7546,7 +7558,7 @@ CONTAINS
         CALL CD_Froude_Krylov_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                             accel2(:, 1), accel2(:, 2), wl2(1), wl2(2), model%fk_rho, &
                                             model%fk_diameter_elem(e), model%fk_can_elem(e), &
-                                            model%fk_cat_elem(e), f2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
+                                            model%fk_cat_elem(e), f2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
       END IF
@@ -7554,7 +7566,7 @@ CONTAINS
         CALL extract_nodal_scalar(model%buoyancy_waterline_z, model, e, wl2)
         CALL CD_Buoyancy_Recovery_Element_Force(q2(1:3), q2(4:6), model%l0(e), wl2(1), wl2(2), &
                                                 model%buoyancy_rho, model%buoyancy_diameter_elem(e), &
-                                                model%buoyancy_gravity, f2, ErrStat, ErrMsg, &
+                                                model%buoyancy_gravity, f2, ErrStat, ErrMsg(1:lk), &
                                                 inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
@@ -8134,7 +8146,9 @@ CONTAINS
     INTEGER :: e, i, n, ldab, idx(6)
     REAL(wp) :: q2(6), a2(6), wl2(2), m2(6, 6), dm2(6, 6), ma2(6), le
     LOGICAL :: want_tangent, zero_accel, free_map_ready
+    INTEGER :: lk ! the kernels' share of ErrMsg (KERNEL_MSG_LEN)
 
+    lk = MIN(LEN(ErrMsg), KERNEL_MSG_LEN)
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     want_tangent = .TRUE.
@@ -8204,14 +8218,14 @@ CONTAINS
           CALL CD_Added_Mass_Element_Matrix(q2(1:3), q2(4:6), le, wl2(1), wl2(2), &
                                             model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                             model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
-                                            m2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
+                                            m2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
           IF (ErrStat /= 0) RETURN
           ma2 = CD_ZERO
         ELSE
           CALL CD_Added_Mass_Element(q2(1:3), q2(4:6), a2(1:3), a2(4:6), le, wl2(1), wl2(2), &
                                      model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                      model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
-                                     m2, dm2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
+                                     m2, dm2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
           IF (ErrStat /= 0) RETURN
           ma2 = MATMUL(m2, a2)
         END IF
@@ -8219,15 +8233,15 @@ CONTAINS
         CALL CD_Added_Mass_Element_Force(q2(1:3), q2(4:6), a2(1:3), a2(4:6), le, wl2(1), wl2(2), &
                                          model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                          model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
-                                         ma2, ErrStat, ErrMsg, inputs_validated=.TRUE.)
+                                         ma2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
       END IF
       CALL scatter_element_vector(M_add_a, idx, ma2)
       IF (want_tangent) THEN
-        CALL scatter_element_matrix_band(M_add_band, model%free_map_work, kl, ku, idx, m2, ErrStat, ErrMsg)
+        CALL scatter_element_matrix_band(M_add_band, model%free_map_work, kl, ku, idx, m2, ErrStat, ErrMsg(1:lk))
         IF (ErrStat /= CD_MODEL_OK) RETURN
         IF (.NOT. zero_accel) THEN
-          CALL scatter_element_matrix_band(dMa_a_dq_band, model%free_map_work, kl, ku, idx, dm2, ErrStat, ErrMsg)
+          CALL scatter_element_matrix_band(dMa_a_dq_band, model%free_map_work, kl, ku, idx, dm2, ErrStat, ErrMsg(1:lk))
           IF (ErrStat /= CD_MODEL_OK) RETURN
         END IF
       END IF
@@ -8270,7 +8284,10 @@ CONTAINS
 
     INTEGER :: e, idx(6)
     REAL(wp) :: q2(6), a2(6), wl2(2), ma2(6)
+    INTEGER :: lk ! the kernels' share of ErrMsg (KERNEL_MSG_LEN)
 
+    lk = MIN(LEN(ErrMsg), KERNEL_MSG_LEN)
+    ErrMsg = '' ! the part past lk stays blank when a kernel fails
     M_add_a = CD_ZERO
     DO e = 1, model%n_elem
       CALL extract_element_positions(model, e, q, idx, q2)
@@ -8279,7 +8296,7 @@ CONTAINS
       CALL CD_Added_Mass_Element_Force(q2(1:3), q2(4:6), a2(1:3), a2(4:6), model%l0(e), wl2(1), wl2(2), &
                                        model%added_mass_rho, model%added_mass_diameter_elem(e), &
                                        model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
-                                       ma2, ErrStat, ErrMsg)
+                                       ma2, ErrStat, ErrMsg(1:lk))
       IF (ErrStat /= 0) RETURN
       CALL scatter_element_vector(M_add_a, idx, ma2)
     END DO

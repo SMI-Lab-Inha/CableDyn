@@ -860,7 +860,7 @@ CONTAINS
     TYPE(CD_CosseratGenAlphaWorkspace), POINTER :: work
     INTEGER, POINTER :: free(:)
     REAL(wp), POINTER :: fint(:), rhs(:), M_band(:, :), support_accel(:), support_force(:)
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
     a0 = CD_ZERO; ErrStat = CD_DYN_OK; ErrMsg = ''
     n_dof = SIZE(q)
     IF (MOD(n_dof, 6) /= 0 .OR. n_dof < 12 .OR. SIZE(f_ext) /= n_dof .OR. SIZE(a0) /= n_dof) THEN
@@ -1023,7 +1023,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: theta_n_abs(:, :)   ! absolute t_n nodal rotations (multiplicative path)
     REAL(wp), ALLOCATABLE :: rot_chain(:, :, :)  ! per-node consistent-tangent chain Jacobian J_c
     REAL(wp), ALLOCATABLE :: q_cand(:)           ! composed end-of-step candidate pose (validation)
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     q_new = CD_ZERO; v_new = CD_ZERO; a_new = CD_ZERO
     converged = .FALSE.; stalled = .FALSE.; n_iter = 0

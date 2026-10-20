@@ -382,7 +382,7 @@ A step that finishes without meeting the Newton tolerance still returns ``CD_C_O
 Diagnostics
 ~~~~~~~~~~~
 
-Each handle keeps the text of its last failure, up to 1024 characters. The message is set by a
+Each handle keeps the text of its last failure, up to 4096 characters. The message is set by a
 failing call on a valid handle and cleared by a successful one. ``CableDyn_GetLastError`` does
 not change it, and neither does ``CableDyn_IsInitialized``. A call rejected with
 ``CD_C_BAD_HANDLE`` has no handle to store a message in. ``CableDyn_GetLastError`` on such a
@@ -1688,7 +1688,7 @@ before the copy and stay zero if the call fails. The model is not changed.
      - --
      - --
      - buffer capacity in bytes. A value below 1 makes the call a no-op. A message is at most
-       1024 characters, so a buffer of 1025 bytes always holds the full message and its
+       4096 characters, so a buffer of 4097 bytes always holds the full message and its
        terminating ``NUL``.
 
 State and size queries
@@ -1979,7 +1979,7 @@ surges ±0.05 m with a 10 s period. The program needs no input file.
 
    static int report(void *h, const char *where, int err)
    {
-       char msg[1024];
+       char msg[4097]; /* a message is at most 4096 characters, plus the NUL */
        CableDyn_GetLastError(h, msg, (int)sizeof msg);
        fprintf(stderr, "%s failed (status %d): %s\n", where, err, msg);
        return 1;
@@ -2066,7 +2066,7 @@ host writes its own motion into the blocks of the points it drives before each s
        int major, minor, patch, abi, err = CD_C_OK, status = 1;
        void *h = NULL;
        double *q = NULL, *v = NULL, *a = NULL, *loads = NULL;
-       char msg[1024];
+       char msg[4097]; /* a message is at most 4096 characters, plus the NUL */
 
        CableDyn_GetVersion(&major, &minor, &patch, &abi);
        if (abi != CABLEDYN_CAPI_ABI_VERSION) {

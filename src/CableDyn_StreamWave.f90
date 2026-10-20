@@ -56,7 +56,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: z(:), zprev(:), zprev2(:), res(:), jac(:, :), dz(:), zt(:), rt(:)
     REAL(wp) :: hs, ts, k0, omega, h_step, rnorm, a, h, ch
     LOGICAL :: ok
-    CHARACTER(200) :: em
+    CHARACTER(1024) :: em
 
     ErrStat = CD_STREAM_OK
     ErrMsg = ''

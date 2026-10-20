@@ -92,7 +92,7 @@ MODULE CableDyn_CAPI
                                CD_C_LINE_DECLINATION = 7_C_INT, CD_C_LINE_AZIMUTH = 8_C_INT, &
                                CD_C_LINE_SEGMENT_TENSION = 9_C_INT, CD_C_LINE_DECK_NODE = 10_C_INT
   !> Capacity of the per-handle diagnostic retained for CableDyn_GetLastError.
-  INTEGER, PARAMETER :: CD_C_MSG_LEN = 1024
+  INTEGER, PARAMETER :: CD_C_MSG_LEN = 4096
 
   ! Live-handle integrity. A handle is valid only if its C_PTR is in the registry of
   ! handles this module created and has not closed (so a foreign, stale, or
@@ -2682,7 +2682,7 @@ CONTAINS
   SUBROUTINE end_temp_models(models)
     TYPE(CD_ModelType), INTENT(INOUT) :: models(:)
     INTEGER :: i, es
-    CHARACTER(120) :: em
+    CHARACTER(1024) :: em
 
     DO i = 1, SIZE(models)
       CALL CD_End_Model(models(i), es, em)

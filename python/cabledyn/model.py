@@ -37,8 +37,8 @@ __all__ = ["Body", "CableDyn", "CableDynError", "ConvergenceError", "Line", "Poi
 FloatArray = npt.NDArray[np.float64]
 ArrayInput = npt.ArrayLike
 
-# The C library retains up to 1024 characters per handle; +1 for the NUL.
-_MESSAGE_BUFFER = 1025
+# The C library retains up to 4096 characters per handle; +1 for the NUL.
+_MESSAGE_BUFFER = 4097
 
 
 def _as_real_array(x: ArrayInput, name: str) -> FloatArray:

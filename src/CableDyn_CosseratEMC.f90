@@ -170,7 +170,7 @@ CONTAINS
     REAL(wp) :: th(3), om(3), Om0(3), eps, rnorm, r0, denom
     INTEGER :: n3
     LOGICAL :: cmass
-    CHARACTER(160) :: em2
+    CHARACTER(1024) :: em2
     LOGICAL :: ok
 
     ErrStat = CD_DYN_OK; ErrMsg = ''; converged = .FALSE.; n_iter = 0
@@ -440,7 +440,7 @@ CONTAINS
       REAL(wp) :: ph(3), pih(3), Oh(3), psi(3), dr(3), thn(3), thh(3), Rdn(3, 3), ejw(3)
       REAL(wp) :: Wn, W1, dWlin, dq2, corr, KG(6, 6), blk(6, 6), Gg(3, 3), I3(3, 3), I6(6, 6)
       INTEGER :: a, c, jj, es, k
-      CHARACTER(240) :: em
+      CHARACTER(1024) :: em
       okout = .TRUE.; I3 = diag3([CD_ONE, CD_ONE, CD_ONE])
       I6 = CD_ZERO
       DO k = 1, 6
@@ -587,7 +587,7 @@ CONTAINS
       REAL(wp) :: dw3(n3), mdw(n3)
       INTEGER :: b, es
       LOGICAL :: okl
-      CHARACTER(160) :: em
+      CHARACTER(1024) :: em
       okout = .TRUE.
       ! velocity translational momentum balance uses M3 (w - v_n): assemble the increment matvec
       IF (cmass) THEN
@@ -717,7 +717,7 @@ CONTAINS
       LOGICAL, INTENT(INOUT) :: okout
       REAL(wp) :: se, ke, vv(ndof)
       INTEGER :: es
-      CHARACTER(160) :: em
+      CHARACTER(1024) :: em
       vv = CD_ZERO
       CALL CD_Cosserat_Mechanical_Energy(nodes_ref, elem_conn, ea, gas, ei, gj, rho_a, i_rho_t, i_rho_n, &
                                          reduced_shear, qq, vv, se, ke, es, em, multiplicative=.TRUE.)

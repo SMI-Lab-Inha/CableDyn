@@ -593,6 +593,48 @@ All notable changes to CableDyn are recorded in this file. The format follows
   turning by 2.3° per step and paid out at 0.05 m/s, the sub-stepped march equals one taken as
   given at a quarter of the step to 3e-8 N; applying the whole change in the first sub-step
   departs from it by 22 N.
+- Failure messages are no longer cut off by fixed-size buffers. The tensile qualification
+  failure of a dynamic step ended mid-advice (`... at element 64, xi= 0.5000; increase`) because
+  the buffers that carried it from the Hermite cable through the OpenFAST module and the deck
+  driver held 200, 300 and 256 characters. Every message buffer of the solver chain, the
+  C API handle (now 4096 characters; `CableDyn_GetLastError` still truncates to the caller's
+  buffer, and the Python binding reads 4097 bytes), the standalone driver and the OpenFAST
+  glue is now long enough for the longest diagnostic. A list that can outgrow its buffer (the
+  seed notes of a failed `EI = 0` static solve, the initialisation notes of a line) ends with
+  "further ... notes omitted" instead of stopping mid-note. Results do not change.
+- A neutrally buoyant line is named as such. A finite-EI line whose net weight is zero and that
+  is longer than its span was reported as "the net-heavy line is too long for its span to hang
+  as a catenary", which is not the cause; the message now says the line is weightless, has no
+  catenary, and could only bow under axial compression, and advises shortening it to its span
+  or giving it weight or tension. An `EI = 0` line type rejected as net-buoyant (dry mass not
+  above the displaced water mass, the unchanged rule) whose mass lies within a relative 1e-6 below
+  the displaced mass is now named neutrally buoyant, "weightless and slack: its static shape is
+  indeterminate", with the advice to give it weight or a finite EI and a tension. The Python deck
+  reader words it the same way. No line type is accepted or rejected differently.
+- A line stretched far beyond its elastic range now says so. A line 50 % shorter than its span
+  converged at 100 % strain and 1.2 GN with no message, because `maxStrain` guards only the
+  dynamics. The initialisation report notes the static fairlead strain (tension over the EA of
+  the End A section) of every line, `EI = 0` or finite-EI, above `maxStrain` when the option
+  is given and positive, and above 10 % otherwise (`0 maxStrain` disables only the dynamic
+  guard). Only a note: the equilibrium and the outputs are unchanged.
+- A section too coarse for its line is warned about. The coarse-mesh warning fired only for a line
+  with fewer than three segments in all, so a 100 m one-segment top section on a 520 m line
+  (fairlead tension off by 50 %) passed silently. Every section whose segments are longer than
+  1/8 of the line (coarser than a uniform eight-segment line, however the line is split into
+  sections) now gets a warning, for `EI = 0` and finite-EI lines, in the single-topology driver
+  and in the standalone mixed route. No example deck is affected.
+- Rejection messages name the unsupported capability and the workaround. An `EI = 0` line
+  between two Coupled points suggests splitting it at a `Connect` point, and a finite-EI one,
+  which that split does not admit, says to anchor it or model the span with `EI = 0` lines; a
+  finite-EI cable ending on a `Connect`/`Free`/`Coupled` point, or on a Coupled End A that a deck
+  with `Connect`/`Free` points cannot drive (it would need `motionFile` coupling), names the point
+  and what the route supports; the "this coupled mode runs the mooring in
+  STILL WATER" rejection of deck waves or current now names the route that rejects it (a
+  standalone mixed deck, which is not coupled, or FAST.Farm) and gives that route's remedy (an
+  all-`EI = 0` or all-finite-EI deck, or OpenFAST with SeaState; in FAST.Farm, removing the
+  OPTION); an anchor below the seabed by more than the
+  tolerance gives the depth, the tolerance rule, and the Z to use. These messages change no
+  acceptance rule.
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

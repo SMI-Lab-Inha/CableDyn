@@ -205,7 +205,7 @@ CONTAINS
     td%scan_hi = owc_tension(n)
     BLOCK
       INTEGER :: k, es
-      CHARACTER(200) :: em, first_em
+      CHARACTER(1024) :: em, first_em
       REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
       first_em = ''
       DO k = 1, CD_SYROPE_NSCAN
