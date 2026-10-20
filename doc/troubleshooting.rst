@@ -648,11 +648,28 @@ Warnings and notes that do not stop a run
        over one or two periods, as ``examples/data/lozon/generate_gomex80_heave.py`` does.
    * - ``Note: line ...: the static layout carries the grounded run ... m past its anchor, where
        it folds back (a hairpin) ...``
-     - a very strong current on a frictionless seabed has pushed the line past its anchor, and
-       it folds back to it (see :doc:`theory`). The layout is a valid, stable equilibrium of the
-       deck as written, but not the usual one. If the real seabed holds the line, declare
-       ``frictionMu``; otherwise check the line length and the current, and inspect
-       ``<out_root>.static.out`` before using the layout.
+     - a current, or a seabed sloping down past the anchor, has pushed the grounded run past its
+       anchor where no seabed friction holds it, and it folds back to it (see :doc:`theory`).
+       The layout is a valid, stable equilibrium of the deck as written, but not the usual one.
+       Check the line length, the current and the seabed, and inspect
+       ``<out_root>.static.out`` before using the layout. The note, finite-EI or ``EI = 0``,
+       names the cause (the current, the slope, or on an ``EI = 0`` line neither: a slack line
+       laid out and back, which a shorter line removes) and the remedy that fits the deck: with
+       the default ``staticsFriction none`` the static solve applies ``frictionMu`` against a
+       deck current only, so a current points to ``frictionMu`` and a slope to
+       ``staticsFriction asLaid``, which holds the run toward its as-laid position; a run without
+       ``dtM`` and ``TMax`` has no seabed friction in its static solve at all; where friction
+       already acts, or the deck's route rejects it (``frictionMu`` beside ``Connect``/``Free``
+       points or ``Point3`` buoys, ``asLaid`` on the multibody march), it points to a shorter
+       line. A run that the ``staticsFriction asLaid`` reference itself lays past the anchor is
+       the deck's own layout and is not noted.
+   * - ``Note: line ...: the static layout folds the grounded run back on itself (a ... deg turn
+       at node ..., a hairpin) ...``
+     - an ``EI = 0`` line whose grounded run turns back by more than 150° at a node, away from
+       its ends (for example a slack line whose excess length the static solve lays out and back
+       on the seabed). The node is a deck node, numbered as the ``<J>`` of the node channels
+       (1 = End A). As above, the layout is an equilibrium of the deck as written; check the
+       line length before using it.
    * - ``Note: line ...: the equilibrium in the current is held in the vertical plane of the line; it
        is unstable out of that plane ...``
      - in a current along the plane of the line the static state is a planar equilibrium that a
@@ -709,7 +726,7 @@ Warnings and notes that do not stop a run
    * - ``Warning: line ...: segment ... carried ... N at t = ... s for a single step, ... times
        the largest tension on the line one step before and after``
      - a non-physical tension spike: the tension of one segment (elastic, viscoelastic or
-       Syrope) rose and fell within one step to ten times anything the line carried one step
+       Syrope; numbered from End A, as in ``.Line<L>.t.out``) rose and fell within one step to ten times anything the line carried one step
        before and after, which no physical
        snap or tension wave does. It is the signature of an under-resolved slack–taut
        transition integrated without energy control, for example with

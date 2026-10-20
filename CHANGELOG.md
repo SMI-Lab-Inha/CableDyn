@@ -99,7 +99,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   tension, or that of its viscoelastic or Syrope law) at one step exceeds four times its own one
   step before and after, ten times the largest tension anywhere on the line one step before and
   after, and the largest tension of the initial state. The first spike of a line is reported as
-  a warning, once per line, and the run summary counts them. The run ends with a note when a
+  a warning, once per line, naming its segment from End A as `.Line<L>.t.out` numbers it, and
+  the run summary counts them. The run ends with a note when a
   taut segment turned by more than 1° in one solver step (with `ei0_substeps auto`, see Changed,
   1.1 times the larger of 1° and `ei0_substep_angle`; the sub-steps of a sub-stepped or
   recovered step count as steps; the mean and standard deviation of the tension err by about
@@ -183,6 +184,28 @@ All notable changes to CableDyn are recorded in this file. The format follows
   still reject `CONTROL`. A zero command, with a `DeltaLdot` of either sign, leaves the run
   bit-identical to an uncontrolled one, and a checkpoint restart continues bit-identically. See
   the manual's deck format page (CONTROL).
+- A note when the static layout of an `EI = 0` line folds back on the seabed (a hairpin), the
+  twin of the finite-EI note. A current toward the anchor or a seabed falling past it can carry
+  the grounded run of a tension-only line past its anchor where no seabed friction holds it,
+  and it folds back with zero tension at the fold: a 2 m/s current carried a chain 20 m past its
+  anchor, a 5° slope 24 m, without a word. The equilibrium is kept, and one note per line names
+  the fold (the distance past the anchor, or a turn above 150° of the grounded run at a deck
+  node, numbered from End A as the node channels), its cause
+  (a deck current on the line, a seabed steeper than 0.5° at the fold, or a slack run) and the
+  remedy that fits the deck's static friction: `frictionMu` against a current,
+  `staticsFriction asLaid` on a slope (with the default `staticsFriction none` the static solve
+  applies friction against a deck current only), or a shorter line where friction already acts
+  or the route rejects it; a run without `dtM` and `TMax` is told that friction needs them,
+  since the static-only line solve carries none. A run that the `staticsFriction asLaid`
+  reference itself lays past its end (laid from the lower end along `layAzimuth`) is not
+  noted, nor is a near-vertical line (horizontal span under a tenth of the water depth) past
+  its end. The finite-EI note on a run past its anchor, which named "seabed friction or a
+  shorter line" whatever the deck, now names the same cause and remedy by the same rule and
+  skips the same as-laid run. It is printed on the static, `TMax = 0`, point-system and
+  multibody routes and in the OpenFAST initialisation report, which now also prints the
+  initialisation notes of finite-EI cables, and returned in the line report of the OpenFAST
+  aggregate. No example deck prints it, and no result changes. See the manual's theory page
+  (EI = 0 path) and Troubleshooting.
 
 ### Changed
 
@@ -635,6 +658,23 @@ All notable changes to CableDyn are recorded in this file. The format follows
   OPTION); an anchor below the seabed by more than the
   tolerance gives the depth, the tolerance rule, and the Z to use. These messages change no
   acceptance rule.
+- `Free` and `Connect` points (clump weights, buoys) and `Point3` buoys now have their own
+  seabed contact. Until now only the end nodes of the attached lines held a point on the
+  seabed, over their tributary length, so a heavy clump sank silently into it: a 50 t clump
+  between two polyester lines ended 2.8 m below the seabed, a 20 t clump on chain 1.0 m. A
+  point with `Mass` or `Vol` (a `Point3` buoy: its BODY `Mass` and `Vol`) now rests on a
+  footprint `A = V^(2/3)` (`V` = `Vol`, or `Mass`/7850 kg/m³ for a clump declared by its mass
+  alone), the face area of a cube of its volume, with the line contact law, stiffness `kBot·A`
+  and damping `cBot·A`, along the surface normal on a bathymetry, in the point static
+  equilibrium (which does not place a `Point3` buoy) and in the monolithic, staggered and
+  OpenFAST/C API point steps. The 50 t clump now rests 0.95 m deep (its weight alone presses
+  its 3.44 m² footprint in by 1.43 m) and the 20 t clump 0.67 m. The point routes still reject
+  `frictionMu`, so the contact is frictionless. Formal OpenFAST linearisation of a deck with a
+  `Point3` buoy now fails closed by name, like a deck with Rigid6 bodies or rods: its
+  quasi-static re-solve held the buoy at its deck position. Results change only where a point touches the seabed: of the examples only
+  `clump_weight_free_point.dat`, whose clump now rests 4.7 cm deep instead of 6.6 cm and whose
+  anchor tension falls from 186 kN to 92 kN; decks whose points stay clear of the seabed give
+  identical output. See the manual's theory page (Seabed contact).
 - The development environment (`environment.yml`) excludes OpenBLAS 0.3.34, which caused the
   access violation in the modal analysis tests listed under Known issues for 0.1.1. On AMD
   Zen 4 and Zen 5 CPUs that expose AVX-512, OpenBLAS 0.3.34 enlarges the GEMM blocking,

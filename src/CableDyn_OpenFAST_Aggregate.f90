@@ -96,6 +96,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   PUBLIC :: CD_AGG_NDynamicPoints
   PUBLIC :: CD_AGG_HasRigid6
   PUBLIC :: CD_AGG_HasRod
+  PUBLIC :: CD_AGG_HasPoint3
   PUBLIC :: CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, CD_AGG_Set_Rigid6_States
   PUBLIC :: CD_AGG_Rod_MirrorSize, CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States
   PUBLIC :: CD_AGG_Refresh_PointMesh
@@ -215,6 +216,8 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! Coupled Rigid6 bodies (pure EI=0 deck): the opaque runtime the facade marches over the
     ! EI=0 system each mooring step, in place of the plain moving step. has_rigid6 selects the
     ! body-march branch; the runtime's own snapshot buffer joins the aggregate snapshot/restore.
+    ! Point3 buoys among the Free points of the EI=0 system (CD_AGG_HasPoint3).
+    LOGICAL :: has_point3 = .FALSE.
     LOGICAL :: has_rigid6 = .FALSE.
     TYPE(CD_Rigid6RuntimeType) :: rigid6
     ! Coupled rigid RODS: the rod twin of the Rigid6 runtime above. has_rod selects the rod-march
@@ -374,6 +377,7 @@ CONTAINS
     candidate%has_rigid6 = parts%has_rigid6
     IF (parts%has_rigid6) candidate%rigid6 = parts%rigid6
     candidate%has_rod = parts%has_rod
+    candidate%has_point3 = parts%has_point3
     IF (parts%has_rod) candidate%rod = parts%rod
     candidate%nhost_rod = 0
     IF (parts%has_rod) candidate%nhost_rod = CD_Rod_NHost(candidate%rod)
@@ -1981,6 +1985,7 @@ CONTAINS
     self%has_rigid6 = .FALSE.
     CALL CD_Rod_End(self%rod)
     self%has_rod = .FALSE.
+    self%has_point3 = .FALSE.
     CALL CD_Range_End(self%ranges)
     self%nhost_rod = 0
     self%nhost_body = 0
@@ -2034,7 +2039,8 @@ CONTAINS
   SUBROUTINE CD_AGG_GetInitLine(self, i, line_id, tension, force, inclination, declination, azimuth, ErrStat, ErrMsg, &
                                 note)
     !! Return one line's unconditional converged-static fairlead result in deck order, and
-    !! (optional note) the static-initialisation notes of a finite-EI line ('' if none).
+    !! (optional note) its static-initialisation notes, one per text line: those of a finite-EI
+    !! cable, or the fold note of an EI = 0 line ('' if none).
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
     INTEGER, INTENT(IN) :: i
     INTEGER, INTENT(OUT) :: line_id
@@ -2586,6 +2592,14 @@ CONTAINS
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
     has = self%has_rod .AND. CD_Rod_NRods(self%rod) > 0
   END FUNCTION CD_AGG_HasRod
+
+  LOGICAL FUNCTION CD_AGG_HasPoint3(self) RESULT(has)
+    !! True iff the deck has a Point3 buoy, which the EI=0 system steps as a Free point but
+    !! the static solve does not place: it starts, and a static re-solve holds it, at its deck
+    !! position.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    has = self%has_point3
+  END FUNCTION CD_AGG_HasPoint3
 
   INTEGER FUNCTION CD_AGG_Rigid6_MirrorSize(self) RESULT(n)
     !! Reals the checkpoint mirror must reserve for the aggregate's Rigid6 bodies (0 if none).

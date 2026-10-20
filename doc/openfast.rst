@@ -178,7 +178,8 @@ Before trusting a run, confirm in the console:
 #. the ``dtM`` line and the model inventory (``Created CableDyn model: ... line object(s)``);
 #. for every line, the converged fairlead effective tension, force vector, inclination,
    declination, and azimuth at the static equilibrium — printed unconditionally, whether or not
-   ``OUTPUTS`` is present;
+   ``OUTPUTS`` is present — followed by the line's static-initialisation notes, if any
+   (``Note: line ...``, for example a folded ``EI = 0`` layout; see :doc:`troubleshooting`);
 #. ``Requested CableDyn OUTPUTS at t = 0 s``, the deck's channels in the first output row. With
    SeaState waves or current the header adds ``SeaState kinematics at t = 0``: the equilibrium is
    solved before the kinematics act, so a line-end tension at t = 0 can differ slightly from the
@@ -328,8 +329,9 @@ without an auxiliary process:
   the ``.lin`` matrices in the ``.fst`` ``OutFmt``; to compare them with MoorDyn's
   ``D - C A^-1 B``, use a full-precision format such as ``"ES24.15E3"``, because the usual
   4-digit format cannot resolve that reduction. A deck with
-  Rigid6 bodies or rods is rejected at initialisation: the quasi-static reduction would hold
-  them at their deck pose instead of re-solving their equilibrium.
+  Rigid6 bodies, rods or ``Point3`` buoys is rejected at initialisation: the quasi-static
+  reduction would hold them at their deck pose instead of re-solving their equilibrium (a
+  ``Free`` point with the buoy's ``Mass``, ``Vol``, ``CdA`` and ``Ca`` is re-solved).
 * **FAST.Farm** selects CableDyn with ``Mod_SharedMooring = 5`` for shared lines and
   connections. Gravity, water density, depth, and ``TMax`` are host-owned and must agree across
   turbines, otherwise initialisation fails.

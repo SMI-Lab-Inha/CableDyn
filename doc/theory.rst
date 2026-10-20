@@ -1070,6 +1070,33 @@ component :math:`w\sin\theta` per unit length, and a run pushed down the slope i
 is compressed there. On the Hermite path the contact acts on the nodal position DOFs only, not
 on the tangent DOFs.
 
+**Free and Connect points.** A clump weight or a buoy (a ``Free`` or ``Connect`` point with
+``Mass`` or ``Vol``, or a ``Point3`` buoy, whose ``Body<N>`` attachment point steps as a free
+point with the BODY ``Mass`` and ``Vol``) has its own seabed contact, the line law above with
+the stiffness :math:`k_p = k_\text{Bot} A` and the damping :math:`c_p = c_\text{Bot} A` over its
+contact footprint
+
+.. math::
+
+   A = V^{2/3}, \qquad V = \begin{cases} \text{Vol}, & \text{Vol} > 0, \\
+   \text{Mass}/\rho_s, & \text{otherwise}, \end{cases}
+
+the face area of a cube of the point's volume, CableDyn's own area-equivalent of a compact
+body (a point carries no shape), with :math:`\rho_s = 7850\ \mathrm{kg/m^3}`: a clump declared
+by its mass alone, its buoyancy left out, takes the volume of solid steel of that mass. A point
+with neither (a massless line junction) has no footprint. Without it only the end nodes of the
+attached lines held a point on the bed, over their tributary length: a 50 t clump between two
+polyester lines (``kBot = 1e5``) sank 2.8 m into the seabed; on its 3.44 m² footprint it rests
+0.95 m deep, within the 1.43 m that its weight alone would press it in, and the lines no longer
+hang it from the seabed. The contact acts along the surface normal of a sloped or rounded
+bathymetry, in the point static equilibrium and in the monolithic and staggered point steps
+alike (in the staggered step its stiffness and damping are linearly implicit, like the end
+blocks of the attached lines), so a grounded point starts at rest. A ``Point3`` buoy is not
+placed by the static solve (it starts at its deck position) but carries the same contact in
+every march, the monolithic and staggered steps and the coupled point step of the OpenFAST
+aggregate and the C API. The contact is frictionless: the point routes reject ``frictionMu``. A
+point clear of the seabed sees exactly no contact load, and its results are unchanged.
+
 Static equilibrium
 ------------------
 
@@ -1135,8 +1162,47 @@ march) enters the static equilibrium as Morison drag on the line at rest, so the
 offset is part of the initial condition. ``Connect`` and ``Free`` points are then placed at
 their static force balance: a trust-region Newton iteration on the point positions whose
 residual sums the attached lines' end forces (each line re-solved for the moving ends), the
-point's weight and buoyancy, and its current drag. It is the rigid-body equilibrium solve
-described under *Rigid-body initial condition* below, with points as the only unknowns.
+point's weight and buoyancy, its current drag, and its own seabed contact (see Seabed
+contact above). It is the rigid-body equilibrium solve described under *Rigid-body initial
+condition* below, with points as the only unknowns.
+
+A tension-only line on a seabed that does not hold it can reach a folded (hairpin)
+equilibrium: a current toward the anchor, or a seabed falling past it, drives the grounded run
+beyond the anchor, and the run folds back to it with zero tension at the fold; a slack line can
+likewise be laid out and back. The equilibrium is kept, and the driver prints one note per such
+line, on every ``EI = 0`` route (static, ``TMax = 0`` and the dynamic initial condition, the
+point and multibody systems, and the OpenFAST aggregate, whose line report returns it and whose
+OpenFAST initialisation report prints it): ``the static layout carries the grounded run ... m
+past its anchor, where it folds back (a hairpin)`` when grounded nodes lie more than 1 % of the
+horizontal span plus 0.5 m beyond a grounded end whose other end is suspended, measured along
+the horizontal chord (the criterion of the finite-EI note below; only for a horizontal span of
+at least a tenth of the water depth at that end, or of the height of the other end above it if
+that is larger, so that a near-vertical line, whose side away from its other end is not
+defined, is left to the next test), or ``the static layout folds the grounded run back on
+itself (a ... deg turn at node ...)`` when the run turns by more than 150°
+at a node whose two neighbours are also grounded (within 5 cm of the floor); the node is the
+deck node, numbered as the ``<J>`` of the node channels (1 = End A; an ``EI = 0`` line is never
+refined, so its deck nodes are its mesh nodes). The note names the
+cause: a deck current acting on the line (a current profile that vanishes at the seabed still
+pulls the run through the suspended span), a seabed steeper than 0.5° at the fold, or neither
+(a slack run). Its remedy follows the deck's static friction. Without ``frictionMu``: friction
+against a current, or friction toward the as-laid position (``staticsFriction asLaid``) on a
+slope, since with the default ``staticsFriction none`` the static solve applies friction against
+a deck current only. With ``frictionMu`` and ``staticsFriction none`` on a slope:
+``staticsFriction asLaid``. With friction that already acts and still does not hold the run, or
+on a deck whose route rejects ``frictionMu`` (``Connect``/``Free`` points, ``Point3`` buoys) or
+``staticsFriction asLaid`` (the multibody march): a shorter line. A run without ``dtM`` and
+``TMax`` takes the static-only line solve, which carries no seabed friction at all, so there
+the note adds that friction needs ``dtM`` and ``TMax`` (``TMax = 0`` for the statics alone).
+Under ``staticsFriction asLaid`` no note is made when the as-laid reference itself (the line
+laid on the seabed from its lower end, the anchor or the fairlead when that is lower, along
+``layAzimuth`` or by default toward the other end, over its length) reaches past the grounded
+end by more than the threshold above: the deck lays the run there, for example from the anchor
+away from the fairlead, or from a lower fairlead toward the anchor and beyond it. The same rule
+and the same causes and remedies apply to the finite-EI note below. The note never changes a
+result. No
+example deck and no ``EI = 0`` line of the statics test matrices prints it except the folded
+layouts it describes.
 
 Hermite path
 ~~~~~~~~~~~~
@@ -1289,7 +1355,14 @@ seeded with the CableDyn shape converge to the same layout, and a dynamic run fr
 rest and returns to it after a disturbance. The standalone driver prints a note when the
 grounded run of the static layout lies past its anchor (``the static layout carries the
 grounded run ... m past its anchor``), because the layout differs from the usual one and a
-real seabed with friction, or a shorter line, would not reach it. When the 3D solve also
+real seabed with friction, or a shorter line, would not reach it. The note names the same
+cause and remedy as the ``EI = 0`` fold note above (one rule for both): the finite-EI static
+solve also applies ``frictionMu`` against a deck current under ``staticsFriction none``, so
+``frictionMu`` answers a current and ``staticsFriction asLaid`` a slope, and a shorter line
+remains where that friction already acts or the route rejects it (the multibody march rejects
+``asLaid``, and a deck with ``Connect``/``Free`` points or ``Point3`` buoys ``frictionMu``).
+Under ``asLaid`` no note is made when the as-laid reference itself, the line laid from its
+lower end along ``layAzimuth``, reaches past the anchor. When the 3D solve also
 fails, the solve stops with
 the diagnosis (the element-mean compression, where it sits, and its height above the seabed)
 and suggests ``frictionMu``; neither the pseudo-arclength continuation of the planar path
@@ -1787,15 +1860,19 @@ Deck ``POINTS``, ``BODIES``, and ``RODS`` records follow the MoorDyn object mode
 - **Fixed, coupled, and vessel points** prescribe the position, velocity, and acceleration of
   line ends.
 - **Free points** (``Point3`` buoys, clump weights, connectors) have three translational DOFs.
-  Each carries its weight and buoyancy :math:`(\rho V - m)\,g\,\mathbf{e}_z`, point loads, and,
+  Each carries its weight and buoyancy :math:`(\rho V - m)\,g\,\mathbf{e}_z`, point loads, its
+  own seabed contact (with ``Mass`` or ``Vol``, see Seabed contact above), and,
   while below the surface, lumped Morison terms
   :math:`\tfrac{1}{2}\rho\,C_dA\,\lvert\mathbf{u}_r\rvert\mathbf{u}_r + \rho V(1 + C_a)\,\dot{\mathbf{u}}_f`
   with added mass :math:`\rho V C_a`. Points are advanced around the implicit line step with
   implicit-Euler kinematics, and the attached line ends' own blocks are linearly implicit: the
   structural mass diagonal, the Morison added-mass block, and the end-segment elastic tangent
-  and axial damping. A light or massless connector is therefore stable at any
-  :math:`\Delta t`, including under added mass that exceeds the structural mass, and the end
-  segments impose no :math:`\sqrt{k_\text{line}/m_\text{point}}` limit. The coupling to the
+  and axial damping, and so is the point's own seabed contact (its stiffness
+  :math:`k_\text{Bot} A` and damping :math:`c_\text{Bot} A`). A light or massless connector is
+  therefore stable at any :math:`\Delta t`, including under added mass that exceeds the
+  structural mass, and neither the end segments nor the footprint impose a
+  :math:`\sqrt{k/m_\text{point}}` limit, so the sub-step estimate of the explicit object march
+  (below) leaves the points out. The coupling to the
   first interior node, drag, and seabed contact at the end node stay at the step-start
   state; the step fails with a named error if a point's motion becomes non-finite.
 - **Rigid6 bodies** have six DOFs, a diagonal inertia about the centre of gravity, and the
@@ -2039,7 +2116,9 @@ the added mass changes as it crosses. A finite-EI cable on a body or rod of the 
 whose end force the march returns explicitly, adds the directional spring above with
 :math:`k_a = 1/\sum l_0/EA` and its current end tension. The normal seabed damping and the
 regularised friction (a damper :math:`\mu N/\sqrt{v^2 + v_\text{reg}^2}`, :math:`\mu N/v_\text{reg}`
-at rest) are applied implicitly, the friction as that secant coefficient, so they set no limit;
+at rest) are applied implicitly, the friction as that secant coefficient, so they set no limit,
+nor does the seabed contact of a ``Free``/``Connect`` point or a Point3 buoy, which its point
+step treats as linearly implicit (see Free points above), so the estimate leaves it out;
 the monolithic scheme carries the contact and the hydrostatics in its Jacobian, and its accuracy
 sub-steps (above) leave them out. A step that would need more than 256 sub-steps is warned about
 once per run. The estimate omits the line-end inertia and the coupling between

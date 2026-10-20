@@ -607,7 +607,8 @@ def evaluate(case, exe):
 
 
 def check_points(case, row):
-    """Every Free/Connect point is at rest: the line-end forces balance its weight/buoyancy."""
+    """Every Free/Connect point is at rest: the line-end forces and its own seabed contact balance its
+    weight/buoyancy."""
     for p in case["points"]:
         if p["type"] not in ("Free", "Connect"):
             continue
@@ -633,6 +634,13 @@ def check_points(case, row):
             if P[end][2] < zf:
                 net[2] += 0.5 * case["kbot"] * t["d"] * l0 * (zf - P[end][2])
             scale = max(scale, te)
+        # ... and by its own contact over its footprint A = V^(2/3) (V = Vol, or Mass/7850 kg/m^3),
+        # the line law along the floor normal
+        vol = p.get("vol", 0.0) if p.get("vol", 0.0) > 0.0 else p.get("mass", 0.0) / 7850.0
+        zf, gx, gy = case["floor"](*pos[:2])
+        if vol > 0.0 and pos[2] < zf:
+            s = math.sqrt(1.0 + gx * gx + gy * gy)
+            net += case["kbot"] * vol ** (2.0 / 3.0) * (zf - pos[2]) / s * np.array([-gx, -gy, 1.0]) / s
         check(np.linalg.norm(net) < 1e-3 * scale,
               "%s: point %d force balance %.3g of %.3g N" % (case["name"], p["id"], np.linalg.norm(net), scale))
 

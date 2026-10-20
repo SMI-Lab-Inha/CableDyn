@@ -77,7 +77,7 @@ MODULE CableDyn
                                           CD_AGG_Snapshot, CD_AGG_Restore, &
                                           CD_AGG_NMovingPoints, CD_AGG_NDynamicPoints, CD_AGG_Refresh_PointMesh, &
                                           CD_AGG_NFailures, CD_AGG_Get_Substep_Counts, &
-                                          CD_AGG_HasRigid6, CD_AGG_HasRod, &
+                                          CD_AGG_HasRigid6, CD_AGG_HasRod, CD_AGG_HasPoint3, &
                                           CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
                                           CD_AGG_Set_Rigid6_States, &
                                           CD_AGG_Rod_MirrorSize, CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States, &
@@ -482,7 +482,8 @@ CONTAINS
       REAL(wp)                  :: fair_ten, fair_force(3), fair_incl, fair_decl, fair_azi, force_incl
       LOGICAL                   :: has_dtm, has_ptfm, use_extf
       CHARACTER(ChanLen)        :: chan_hdr, chan_unt
-      CHARACTER(1024)           :: native_root
+      CHARACTER(1024)           :: native_root, init_note
+      INTEGER(IntKi)            :: note_at, note_end
       REAL(wp), PARAMETER       :: DTM_DEFAULT = 0.1_wp
 
       ErrStat = ErrID_None
@@ -738,6 +739,15 @@ CONTAINS
                           'with Rigid6 bodies or RODs is not supported; the quasi-static reduction '// &
                           'holds them at their deck pose instead of re-solving their equilibrium '// &
                           '(linearize a deck without BODIES/RODS).', ErrStat, ErrMsg, RoutineName )
+         RETURN
+      END IF
+      ! A Point3 buoy steps as a Free point, but the static solve holds it at its deck position:
+      ! each perturbed re-solve would leave it there and omit its compliance as well.
+      IF (InitInp%Linearize .AND. CD_AGG_HasPoint3( Inst(id)%agg )) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                          'with Point3 buoys is not supported; the quasi-static reduction holds a '// &
+                          'Point3 buoy at its deck position instead of re-solving its equilibrium '// &
+                          '(model the buoy as a Free point to linearize).', ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
       IF (InitInp%Linearize .AND. Inst(id)%agg%ncable > 0) THEN
@@ -1167,7 +1177,7 @@ CONTAINS
       CALL WrScr( '   Fairlead convention: force is on End A toward End B; inclinations are signed below horizontal.' )
       DO il = 1, nreportlines
          CALL CD_AGG_GetInitLine( Inst(id)%agg, il, line_id, fair_ten, fair_force, fair_incl, fair_decl, &
-                                  fair_azi, es, em )
+                                  fair_azi, es, em, note=init_note )
          IF (es /= CD_AGG_OK) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
             RETURN
@@ -1184,6 +1194,18 @@ CONTAINS
          CALL WrScr( '      line tangent: inclination='//TRIM(Num2LStr(REAL(fair_incl, DbKi)))// &
                      ' deg, declination='//TRIM(Num2LStr(REAL(fair_decl, DbKi)))// &
                      ' deg, azimuth='//TRIM(Num2LStr(REAL(fair_azi, DbKi)))//' deg' )
+         ! The line's static-initialisation notes (a folded EI = 0 layout, the notes of a
+         ! finite-EI cable), one per text line, as the standalone driver prints them.
+         note_at = 1
+         DO WHILE (LEN_TRIM(init_note(note_at:)) > 0)
+            note_end = INDEX(init_note(note_at:), NEW_LINE('a'))
+            IF (note_end == 0) THEN
+               CALL WrScr( '   Note: '//TRIM(init_note(note_at:))//'.' )
+               EXIT
+            END IF
+            CALL WrScr( '   Note: '//init_note(note_at:note_at + note_end - 2)//'.' )
+            note_at = note_at + note_end
+         END DO
       END DO
       CALL WrScr( '  CableDyn initialization completed.' )
 

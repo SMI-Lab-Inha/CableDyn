@@ -986,6 +986,14 @@ target_link_libraries(test_deck_massless_connect PRIVATE cabledyn_core)
 add_test(NAME deck_massless_connect COMMAND test_deck_massless_connect WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(deck_massless_connect PROPERTIES LABELS "fortran;driver;integration;dynamic")
 
+# Seabed contact of Free/Connect points: a clump weight rests on its own footprint in the
+# statics and stays at rest in the monolithic and staggered marches, on a flat and a sloped
+# seabed; the fold note of an EI = 0 line reaches the OpenFAST aggregate's line report.
+add_executable(test_point_seabed_contact tests/test_point_seabed_contact.f90)
+target_link_libraries(test_point_seabed_contact PRIVATE cabledyn_core)
+add_test(NAME point_seabed_contact COMMAND test_point_seabed_contact WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(point_seabed_contact PROPERTIES LABELS "fortran;driver;integration;dynamic;static")
+
 add_executable(test_openfast_shell tests/test_openfast_shell.f90)
 target_link_libraries(test_openfast_shell PRIVATE cabledyn_core)
 add_test(NAME openfast_shell COMMAND test_openfast_shell)
@@ -2098,6 +2106,78 @@ add_test(NAME driver_advisories
     -DSEABED_DECK=${CMAKE_CURRENT_SOURCE_DIR}/examples/chain_catenary_shallow_30m.dat
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_advisories.cmake)
 set_tests_properties(driver_advisories PROPERTIES LABELS "fortran;driver;integration")
+# The fold note of an EI = 0 line, once per folded line and never on a usual layout: a current
+# that pushes the grounded run 20 m past its anchor (TMax = 0, the line-model route), a seabed
+# sloping down past the anchor (static run over a bathymetry), each with the remedy that fits
+# the deck's friction, and no note on a grounded chain that does not fold, on the same current
+# deck with frictionMu, on the same slope with as-laid friction, on a run the deck itself lays
+# past its anchor (staticsFriction asLaid along layAzimuth), or on two lines through a clump
+# resting on the seabed.
+add_test(NAME driver_ei0_fold_note_current
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ei0_hairpin_current.dat|hairpin"
+    "-DONCE=Note: line 1: the static layout carries the grounded run 20\\.[0-9]+ m past its anchor, where it folds back;the current drives the run along the seabed, which holds it only by friction"
+    "-DMUST_MATCH=seabed friction \\(frictionMu\\) or a shorter line prevents it"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_fold_note_current
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_ei0_fold_note_current PROPERTIES LABELS "fortran;driver;integration;static")
+add_test(NAME driver_ei0_fold_note_slope
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ei0_fold_slope.dat|slope"
+    "-DONCE=Note: line 1: the static layout carries the grounded run 2[0-9]\\.[0-9]+ m past its anchor, where it folds back;the seabed slope drives the run downhill"
+    "-DMUST_MATCH=frictionMu with staticsFriction asLaid, which need dtM and TMax: the static-only solve carries no seabed friction\\) or a shorter line prevents it"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_fold_note_slope
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_ei0_fold_note_slope PROPERTIES LABELS "fortran;driver;integration;static")
+# ... and a fold of the grounded run onto itself between two grounded ends, named at its deck
+# node (driver_ei0_fold_layouts checks that it is the node of the fold).
+add_test(NAME driver_ei0_fold_note_turn
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ei0_fold_turn_current.dat|turn"
+    "-DONCE=Note: line 1: the static layout folds the grounded run back on itself \\(a 180 deg turn at node 49, a hairpin\\);the current drives the run along the seabed, which holds it only by friction"
+    "-DMUST_MATCH=seabed friction \\(frictionMu\\) or a shorter line prevents it"
+    "-DMUST_NOT=past its anchor"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_ei0_fold_note_turn
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_ei0_fold_note_turn PROPERTIES LABELS "fortran;driver;integration;static")
+foreach(_deck IN ITEMS examples/chain_catenary_shallow_30m tests/data/ei0_hairpin_current_friction
+                       tests/data/ei0_fold_slope_aslaid tests/data/ei0_aslaid_behind_anchor
+                       tests/data/ei0_clump_no_fold)
+  get_filename_component(_name "${_deck}" NAME)
+  if(_name STREQUAL "chain_catenary_shallow_30m")
+    set(_test driver_ei0_no_fold_note)
+  else()
+    set(_test driver_ei0_no_fold_note_${_name})
+  endif()
+  add_test(NAME ${_test}
+    COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+      "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/${_deck}.dat|${_name}"
+      "-DONCE=converged run written"
+      "-DMUST_NOT=folds back|a hairpin"
+      -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/${_test}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+  set_tests_properties(${_test} PROPERTIES LABELS "fortran;driver;integration;static")
+endforeach()
+# The finite-EI twin of the current note: the same cause and remedy (fold_cause_remedy).
+add_test(NAME driver_fei_fold_note_current
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/fei_hairpin_current.dat|fei_hairpin"
+    "-DONCE=Note: line 1: the static layout carries the grounded run [0-9.]+ m past its anchor, where it folds back;the current drives the run along the seabed, which holds it only by friction"
+    "-DMUST_MATCH=seabed friction \\(frictionMu\\) or a shorter line prevents it"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_fei_fold_note_current
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_fei_fold_note_current PROPERTIES LABELS "fortran;driver;integration;static")
+# ... and the layouts behind those notes: the frictionless current carries the run past its
+# anchor, frictionMu holds it short of the note threshold, and the as-laid run the note skips
+# does lie past the anchor (so the no-note tests cannot pass on a layout that never got there).
+if(Python3_Interpreter_FOUND)
+  add_test(NAME driver_ei0_fold_layouts
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_fold_layout.py
+                   $<TARGET_FILE:cabledyn> ${CMAKE_CURRENT_SOURCE_DIR}/tests/data)
+  set_tests_properties(driver_ei0_fold_layouts PROPERTIES
+    LABELS "python;driver;integration;static"
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+endif()
 # A clamped finite-EI cable with a buoyant section on a Rigid6 body: the body static solve
 # holds the objects at their deck poses, warns once, and reports no balanced clamped end loads.
 add_test(NAME driver_clamped_buoyant_held

@@ -65,7 +65,7 @@ MODULE CableDyn_DeckDriver
                              CD_Get_System_CoupledMotion, CD_Update_System_Point_States, &
                              CD_Calc_System_CoupledLoads, CD_Step_System, CD_Step_System_DynamicPoints, &
                              CD_Step_System_Junction, CD_System_Junction_Rewind, CD_System_Point_Base, &
-                             CD_System_Point_Environment, &
+                             CD_System_Point_Environment, CD_System_Point_Seabed, &
                              CD_Calc_System_CoupledAccelDerivative, &
                              CD_Detach_System_LineEnds, &
                              CD_SYSTEM_OK, CD_POINT_FIXED, CD_POINT_COUPLED, CD_POINT_FREE, CD_POINT_CONNECT, &
@@ -132,7 +132,8 @@ MODULE CableDyn_DeckDriver
                             CD_Morison_Drag_Element_Load, &
                             CD_Morison_Drag_Element_Force, CD_Froude_Krylov_Element_Load, &
                             CD_Froude_Krylov_Element_Force, CD_HYDRO_OK
-  USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Contact_Gate
+  USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Normal_Contact, CD_Seabed_Contact_Gate, &
+                                    CD_SEABED_CONTACT_BLEND
   USE CableDyn_Modal, ONLY: CD_Modal_Bar_Band, CD_Modal_Hermite_Band, CD_Modal_Solve_Band, &
                             CD_Modal_Write_Header, CD_Modal_Write_Line, CD_MODAL_OK
   USE CableDyn_StreamWave, ONLY: CD_StreamWaveType, CD_Stream_Solve, CD_Stream_Kinematics
@@ -298,6 +299,14 @@ MODULE CableDyn_DeckDriver
   REAL(wp), PARAMETER :: MAX_WAVE_SAMPLES = 1.0e6_wp
   ! a wave record above this many samples prints a setup-time note before its O(N^2) reduction
   INTEGER, PARAMETER :: LONG_WAVE_RECORD = 100000
+  ! The static seabed friction a route accepts, for the remedy of a fold note (fold_cause_remedy):
+  ! none (decks with Connect/Free points or Point3 buoys reject frictionMu), frictionMu but not
+  ! staticsFriction asLaid (the multibody march), both (line decks), or both only with dtM and
+  ! TMax (the static-only line solve, which carries no seabed friction).
+  INTEGER, PARAMETER :: FOLD_FRICTION_NONE = 0, FOLD_FRICTION_NO_AS_LAID = 1, FOLD_FRICTION_FULL = 2, &
+                        FOLD_FRICTION_NEEDS_MARCH = 3
+  ! A fold note names the seabed slope as a cause above this gradient, TAN(0.5 deg).
+  REAL(wp), PARAMETER :: FOLD_SLOPE_MIN = 8.7268677907587893e-3_wp
   ! real_value_defect classes of an input number
   INTEGER, PARAMETER :: REAL_OK = 0, REAL_NONFINITE = 1, REAL_SUBNORMAL = 2
   ! Admissible input magnitudes (documented in driver_format.md, "Admissible input ranges").
@@ -369,6 +378,9 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: turb_local(3) = CD_ZERO
     REAL(wp) :: body_offset(3) = CD_ZERO
     REAL(wp) :: mass = CD_ZERO, vol = CD_ZERO, cda = CD_ZERO, ca = CD_ZERO
+    ! the Body<N> attachment of a Point3 BODY: stepped as a Free point with the BODY Mass/Vol/CdA/Ca
+    ! (copied into mass, vol, cda, ca above), its seabed contact included
+    LOGICAL :: point3 = .FALSE.
     INTEGER :: deck_line = 0              ! deck file line of the row, for error messages
   END TYPE
 
@@ -975,9 +987,11 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: fair_declination = CD_ZERO
     REAL(wp) :: fair_azimuth = CD_ZERO
     LOGICAL :: force_is_total = .TRUE.
-    ! Static-initialisation notes of the line (finite-EI compression, mesh refinement, accepted
-    ! residual floor; the static strain note of any line), one per text line (append_note_line);
-    ! empty when there is nothing to report. It holds a whole cable note (1024) and a strain note.
+    ! Static-initialisation notes of the line, one per text line (append_note_line): those of a
+    ! finite-EI line (compression, mesh refinement, accepted residual floor, a run past its
+    ! anchor), the fold note of an EI = 0 line (ei0_fold_note) and the static strain note of any
+    ! line; empty when there is nothing to report. It holds a whole cable note (1024) and a
+    ! strain note.
     CHARACTER(2048) :: note = ''
   END TYPE CD_LineInitSummary
 
@@ -1069,6 +1083,8 @@ MODULE CableDyn_DeckDriver
     ! `sys` each mooring step. Populated only when the deck declares RODs (has_rod).
     LOGICAL :: has_rod = .FALSE.
     TYPE(CD_RodRuntimeType) :: rod
+    ! Point3 buoys: stepped as Free points of the EI=0 system, but not placed by the static solve
+    LOGICAL :: has_point3 = .FALSE.
     ! Range graphs (LINES flag r, standalone only) and the touchdown references of the
     ! TDP<L> channels, keyed by deck line id and fixed at the converged initial state.
     TYPE(CD_RangeSet) :: ranges
@@ -1355,6 +1371,15 @@ CONTAINS
       sys_points(i)%cda = pts(i)%cda
       sys_points(i)%ca = pts(i)%ca
       sys_points(i)%force = [CD_ZERO, CD_ZERO, (opts%rhoW*pts(i)%vol - pts(i)%mass)*opts%g]
+      ! a deck Free/Connect point's own seabed contact over its footprint (point_contact_area),
+      ! with the line contact coefficients kBot and cBot per unit area, and so a Point3 buoy's,
+      ! which is the Free point of its Body<N> attachment with the BODY Mass/Vol. Rigid6 body
+      ! and rod attachment points also step as system Free points, but their object carries
+      ! the contact.
+      IF (TRIM(pts(i)%ptype) == 'free' .OR. TRIM(pts(i)%ptype) == 'connect' .OR. pts(i)%point3) THEN
+        sys_points(i)%seabed_k = opts%kbot*point_contact_area(pts(i))
+        sys_points(i)%seabed_c = opts%cbot*point_contact_area(pts(i))
+      END IF
     END DO
     IF (nres > 0) THEN
       maxid = 0
@@ -1586,7 +1611,7 @@ CONTAINS
 
   RECURSIVE SUBROUTINE build_one_hermite_cable(ln, sections, types, points, opts, dt, cable, coupled_node, &
                                                ErrStat, ErrMsg, standalone_controls, bathymetry, &
-                                               fairlead_orientation, init_note, coarse_pass)
+                                               fairlead_orientation, init_note, coarse_pass, fold_support)
     !! Build one COUPLED cubic-Hermite lazy-wave cable (CD_HFMF) from a finite-EI deck
     !! LINE -- the production Hermite bending path shared by the coupled route and
     !! standalone and coupled finite-EI dynamics, including flat/structured seabed contact.
@@ -1614,6 +1639,9 @@ CONTAINS
     CHARACTER(*), INTENT(OUT), OPTIONAL :: init_note
     ! Set on the coarsened build of coarse_current_first (see there): no further coarsening.
     LOGICAL, INTENT(IN), OPTIONAL :: coarse_pass
+    ! The static seabed friction the calling route accepts (FOLD_FRICTION_*, default
+    ! FOLD_FRICTION_FULL), for the remedy of the note on a run past the anchor.
+    INTEGER, INTENT(IN), OPTIONAL :: fold_support
 
     INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:), dynamic_fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), ei(:), gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
@@ -4187,38 +4215,74 @@ CONTAINS
     SUBROUTINE anchor_overshoot_note()
       !! Note a static layout whose grounded run lies beyond the anchor, on the side away
       !! from the fairlead: the line is carried past its anchor and folds back to it (a
-      !! hairpin). A strong current on a frictionless seabed holds such an equilibrium; it
-      !! is reported so that it is not mistaken for the usual layout. Node 1 is the anchor
-      !! and q_static is in the solve frame, where anchor and fairlead are also given.
+      !! hairpin). A current or a seabed slope where no seabed friction holds the run reaches
+      !! such an equilibrium; it is reported so that it is not mistaken for the usual layout,
+      !! with the cause and remedy of the EI = 0 fold note (fold_cause_remedy, with the route's
+      !! fold_support). Node 1 is the anchor and q_static is in the solve frame, where anchor
+      !! and fairlead are also given (a rotation of the global frame by frame_cs). Under
+      !! staticsFriction asLaid no note is made when the as-laid reference itself reaches past
+      !! the anchor (as_laid_reference_past): the deck lays the run there.
       REAL(wp), PARAMETER :: GROUNDED_TOL = 0.05_wp
-      REAL(wp) :: e_h(2), span, past, floor_z, xg, yg, pos(3)
-      INTEGER :: k, esb
+      REAL(wp) :: e_h(2), span, past, d, floor_z, xg, yg, pos(3), gx, gy, slope_at
+      REAL(wp) :: z_nodes(SIZE(q_static)/6)
+      INTEGER :: k, esb, support
       CHARACTER(1024) :: emb
+      CHARACTER(200) :: cause
+      CHARACTER(320) :: remedy
+      support = FOLD_FRICTION_FULL
+      IF (PRESENT(fold_support)) support = fold_support
       span = NORM2(fairlead(1:2) - anchor(1:2))
       IF (span <= 1.0e-9_wp*MAX(CD_ONE, SUM(l0))) RETURN
       e_h = (fairlead(1:2) - anchor(1:2))/span
+      IF (as_laid .AND. support == FOLD_FRICTION_FULL) THEN
+        ! the reference is laid from the lower end: the fairlead when it lies below the anchor
+        IF (fairlead(3) < anchor(3)) THEN
+          d = as_laid_reference_past(opts, ln%id, to_global(fairlead(1:2)), to_global(anchor(1:2)), &
+                                     to_global(anchor(1:2)), to_global(e_h), SUM(l0))
+        ELSE
+          d = as_laid_reference_past(opts, ln%id, to_global(anchor(1:2)), to_global(fairlead(1:2)), &
+                                     to_global(anchor(1:2)), to_global(e_h), SUM(l0))
+        END IF
+        IF (d > 0.01_wp*span + 0.5_wp) RETURN
+      END IF
       past = CD_ZERO
+      slope_at = CD_ZERO
       DO k = 1, SIZE(q_static)/6
         pos = q_static(6*(k - 1) + 1:6*(k - 1) + 3)
+        z_nodes(k) = pos(3)
         floor_z = contact_z
+        gx = CD_ZERO
+        gy = CD_ZERO
         IF (PRESENT(bathymetry)) THEN
           IF (.NOT. bathymetry_flat) THEN
             xg = frame_cs(1)*pos(1) - frame_cs(2)*pos(2)
             yg = frame_cs(2)*pos(1) + frame_cs(1)*pos(2)
-            CALL CD_Bathymetry_Floor(bathymetry, xg, yg, floor_z, esb, emb)
+            CALL CD_Bathymetry_Floor_Gradient(bathymetry, xg, yg, floor_z, gx, gy, esb, emb)
             IF (esb /= CD_BATHY_OK) RETURN
           END IF
         END IF
         IF (pos(3) > floor_z + GROUNDED_TOL) CYCLE
-        past = MAX(past, -DOT_PRODUCT(pos(1:2) - anchor(1:2), e_h))
+        d = -DOT_PRODUCT(pos(1:2) - anchor(1:2), e_h)
+        IF (d > past) THEN
+          past = d
+          slope_at = SQRT(gx*gx + gy*gy)
+        END IF
       END DO
       IF (past <= 0.01_wp*span + 0.5_wp) RETURN
+      CALL fold_cause_remedy(opts, deck_current_on_line(opts, z_nodes), slope_at > FOLD_SLOPE_MIN, support, &
+                             cause, remedy)
       WRITE (note_text, '(A,I0,A,F0.2,A)') 'line ', ln%id, ': the static layout carries the grounded run ', &
-        past, ' m past its anchor, where it folds back (a hairpin); a strong current on a frictionless '// &
-        'seabed can hold this equilibrium, but check that it is the intended layout (seabed friction or '// &
-        'a shorter line prevents it)'
+        past, ' m past its anchor, where it folds back (a hairpin); '//TRIM(cause)//'. Check that it is the '// &
+        'intended layout ('//TRIM(remedy)//')'
       CALL report_note(note_text)
     END SUBROUTINE anchor_overshoot_note
+
+    PURE FUNCTION to_global(v) RESULT(g)
+      !! A horizontal vector of the solve frame in the global frame (frame_cs, a rotation).
+      REAL(wp), INTENT(IN) :: v(2)
+      REAL(wp) :: g(2)
+      g = [frame_cs(1)*v(1) - frame_cs(2)*v(2), frame_cs(2)*v(1) + frame_cs(1)*v(2)]
+    END FUNCTION to_global
 
     SUBROUTINE report_note(text)
       !! One initialisation note: printed on a standalone run, appended to init_note.
@@ -6607,6 +6671,7 @@ CONTAINS
       END IF
       agg%has_sys = .TRUE.
     END IF
+    agg%has_point3 = n_point3 > 0
     ! Coupled Rigid6 runtime: build the body states + retain the deck options/points the
     ! per-step marcher needs (scope validated above -- pure EI=0, non-farm; CdA/Ca only with a
     ! host fluid field).
@@ -6670,10 +6735,14 @@ CONTAINS
           IF (opts%has_bathymetry_file) THEN
             CALL build_one_hermite_cable(lines(i), sections, types, points, opts, dt, agg%cables(c), cn, es, em, &
                                          bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, &
-                                         init_note=agg%cable_note(c))
+                                         init_note=agg%cable_note(c), &
+                                         fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
+                                                            deck_has_dynamic_points(points)))
           ELSE
             CALL build_one_hermite_cable(lines(i), sections, types, points, opts, dt, agg%cables(c), cn, es, em, &
-                                         fairlead_orientation=fairlead_dcm, init_note=agg%cable_note(c))
+                                         fairlead_orientation=fairlead_dcm, init_note=agg%cable_note(c), &
+                                         fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
+                                                            deck_has_dynamic_points(points)))
           END IF
           IF (es /= CD_DECKDRV_OK) THEN
             ErrStat = es
@@ -6719,6 +6788,22 @@ CONTAINS
     CALL collect_aggregate_init_summaries(lines, agg, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CALL CD_End_Deck_Aggregate(agg); RETURN
+    END IF
+    ! the static fold note of each EI = 0 line (the finite-EI cables carry their own notes),
+    ! appended to the notes the line already has; the system rejects frictionMu beside
+    ! Connect/Free, Point3, body or rod points
+    IF (agg%has_sys) THEN
+      BLOCK
+        CHARACTER(1024) :: fold_note
+        DO c = 1, SIZE(lines)
+          IF (agg%line_is_cable(lines(c)%id)) CYCLE
+          CALL ei0_fold_note(lines(c), points, opts, agg%sys%lines(agg%line_obj_index(lines(c)%id))%q, &
+                             fold_note, model=agg%sys%lines(agg%line_obj_index(lines(c)%id)), &
+                             friction_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
+                                                    deck_has_dynamic_points(points)))
+          IF (LEN_TRIM(fold_note) > 0) CALL append_note_line(agg%init_lines(c)%note, fold_note)
+        END DO
+      END BLOCK
     END IF
     ! A static strain above the note level is named in the line's initialisation note (every route that
     ! prints the notes of this summary shows it), and the standalone mixed route -- the caller that
@@ -7319,6 +7404,7 @@ CONTAINS
     agg%has_rigid6 = .FALSE.
     CALL CD_Rod_End(agg%rod)
     agg%has_rod = .FALSE.
+    agg%has_point3 = .FALSE.
     CALL CD_Range_End(agg%ranges)
     agg%gravity = CD_ZERO
     agg%rho_water = CD_ZERO
@@ -7612,7 +7698,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL collect_system_init_summaries(lines, points, point_system, init_summaries, ErrStat, ErrMsg)
+        CALL collect_system_init_summaries(lines, points, point_system, init_summaries, ErrStat, ErrMsg, &
+                                           opts=opts)
         IF (ErrStat /= CD_DECKDRV_OK) THEN
           CALL CD_End_System(point_system, es, em)
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
@@ -7646,7 +7733,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL collect_system_init_summaries(lines, points, point_system, init_summaries, ErrStat, ErrMsg)
+        CALL collect_system_init_summaries(lines, points, point_system, init_summaries, ErrStat, ErrMsg, &
+                                           opts=opts)
         IF (ErrStat /= CD_DECKDRV_OK) THEN
           CALL CD_End_System(point_system, es, em)
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
@@ -7680,7 +7768,8 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL collect_system_init_summaries(lines, points, point_system, init_summaries, ErrStat, ErrMsg)
+        CALL collect_system_init_summaries(lines, points, point_system, init_summaries, ErrStat, ErrMsg, &
+                                           opts=opts)
         IF (ErrStat /= CD_DECKDRV_OK) THEN
           CALL CD_End_System(point_system, es, em)
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
@@ -7702,7 +7791,7 @@ CONTAINS
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           RETURN
         END IF
-        CALL collect_model_init_summaries(lines, points, models, init_summaries, ErrStat, ErrMsg)
+        CALL collect_model_init_summaries(lines, points, models, init_summaries, ErrStat, ErrMsg, opts=opts)
         IF (ErrStat /= CD_DECKDRV_OK) THEN
           CALL end_models(models)
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
@@ -7771,6 +7860,15 @@ CONTAINS
     IF (converged) THEN
       CALL collect_raw_init_summaries(lines, points, ne, q_all, q_off, ten_all, ten_off, init_summaries, &
                                       end_ten=end_all, end_force=end_vec)
+      BLOCK
+        CHARACTER(1024) :: fold_note
+        DO li = 1, nl
+          IF (line_is_finite_ei(lines(li), types, sections)) CYCLE
+          CALL ei0_fold_note(lines(li), points, opts, q_all(q_off(li) + 1:q_off(li + 1)), fold_note, &
+                             bathymetry=bathymetry, friction_support=FOLD_FRICTION_NEEDS_MARCH)
+          IF (LEN_TRIM(fold_note) > 0) CALL append_note_line(init_summaries(li)%note, fold_note)
+        END DO
+      END BLOCK
       CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
                                   types=types, opts=opts)
       IF (.NOT. (opts%has_wtrdpth .OR. opts%has_bathymetry_file)) &
@@ -9786,6 +9884,309 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE warn_line_below_anchor
+
+  SUBROUTINE ei0_fold_note(ln, points, opts, q, note, model, bathymetry, friction_support)
+    !! Initialisation note for an EI = 0 line whose static layout folds its grounded run back
+    !! on itself (a hairpin), the twin of the finite-EI anchor_overshoot_note: a current or a
+    !! seabed slope drives the run past its anchor where no seabed friction holds it, or a
+    !! slack run that carries no tension is laid out and back. Such a layout is an equilibrium
+    !! of the tension-only line and is kept; the note names it so that it is not mistaken for
+    !! the usual one. q is the line's static state in the internal node order (node 1 = End B).
+    !! A node is grounded within GROUNDED_TOL of the floor: model's floor when model is
+    !! present, otherwise the deck's (bathymetry, else WtrDpth). The layout folds when
+    !!  (a) the grounded run lies beyond a grounded line end whose other end is suspended, on
+    !!      the side away from that other end, by more than 1 % of the horizontal span plus
+    !!      0.5 m (anchor_overshoot_note); only for a horizontal span of at least SPAN_MIN_FRAC
+    !!      of the water depth at that end (or of the height of the other end above it), so
+    !!      that the direction away from the other end is well defined; or
+    !!  (b) the run turns by more than FOLD_TURN_DEG at a node whose neighbours are grounded too.
+    !! The cause (a deck current on the line, a seabed steeper than 0.5 deg at the
+    !! fold, or a slack run) and the remedy come from fold_cause_remedy, shared with the
+    !! finite-EI note; friction_support (FOLD_FRICTION_*, default FOLD_FRICTION_FULL) is the
+    !! static seabed friction the route accepts. Under staticsFriction asLaid no note is made
+    !! when the as-laid reference itself reaches past the grounded end (as_laid_reference_past):
+    !! the deck lays the run there.
+    !! note is empty otherwise, and on a line without a floor.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: q(:)
+    CHARACTER(*), INTENT(OUT) :: note
+    TYPE(CD_ModelType), INTENT(IN), OPTIONAL :: model
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER, INTENT(IN), OPTIONAL :: friction_support
+    REAL(wp), PARAMETER :: GROUNDED_TOL = 0.05_wp, FOLD_TURN_DEG = 150.0_wp
+    REAL(wp), PARAMETER :: SPAN_MIN_FRAC = 0.1_wp
+    LOGICAL, ALLOCATABLE :: grounded(:)
+    REAL(wp), ALLOCATABLE :: slope(:), zfl(:), znode(:)
+    REAL(wp) :: total, span, e_h(2), past, past_e, d, u1(3), u2(3), l1, l2, turn, turn_max, zf, dfdx, dfdy
+    INTEGER :: n, k, ie, k_end, k_oth, k_past, k_turn, k_at, k_lay, end_id, jp, support
+    LOGICAL :: has_floor, by_current, by_slope, as_laid
+    CHARACTER(200) :: what, cause
+    CHARACTER(320) :: remedy
+
+    note = ''
+    support = FOLD_FRICTION_FULL
+    IF (PRESENT(friction_support)) support = friction_support
+    as_laid = opts%has_friction .AND. opts%static_friction == CD_STATIC_FRICTION_AS_LAID .AND. &
+              support == FOLD_FRICTION_FULL
+    n = SIZE(q)/3
+    IF (n < 3) RETURN
+    ALLOCATE (grounded(n), slope(n), zfl(n), znode(n))
+    DO k = 1, n
+      CALL floor_at(q(3*k - 2), q(3*k - 1), has_floor, zf, dfdx, dfdy)
+      IF (.NOT. has_floor) RETURN
+      grounded(k) = q(3*k) <= zf + GROUNDED_TOL
+      slope(k) = SQRT(dfdx*dfdx + dfdy*dfdy)
+      zfl(k) = zf
+      znode(k) = q(3*k)
+    END DO
+    IF (COUNT(grounded) < 2) RETURN
+    total = CD_ZERO
+    DO k = 1, n - 1
+      total = total + NORM2(q(3*k + 1:3*k + 3) - q(3*k - 2:3*k))
+    END DO
+    ! (a) the grounded run beyond a grounded end (node 1 is End B, node n End A)
+    past = CD_ZERO
+    k_past = 0
+    k_at = 0
+    end_id = 0
+    DO ie = 1, 2
+      k_end = MERGE(1, n, ie == 1)
+      k_oth = MERGE(n, 1, ie == 1)
+      ! A grounded end below a suspended span: the span pulls the run toward the other end, so
+      ! on a frictionless seabed a run past the end is folded back to it. (Between two
+      ! grounded ends a slack run may bow behind an end without folding; (b) covers those.)
+      IF (.NOT. grounded(k_end) .OR. grounded(k_oth)) CYCLE
+      span = NORM2(q(3*k_oth - 2:3*k_oth - 1) - q(3*k_end - 2:3*k_end - 1))
+      ! a near-vertical line has no well-defined side away from its other end
+      IF (span < SPAN_MIN_FRAC*MAX(-zfl(k_end), q(3*k_oth) - q(3*k_end)) .OR. &
+          span <= 1.0e-6_wp*MAX(CD_ONE, total)) CYCLE
+      e_h = (q(3*k_oth - 2:3*k_oth - 1) - q(3*k_end - 2:3*k_end - 1))/span
+      ! staticsFriction asLaid holds the run toward its as-laid position: where that reference
+      ! itself reaches past this end, the deck lays the run there (as_laid_reference_past)
+      IF (as_laid) THEN
+        k_lay = MERGE(n, 1, q(3*n) < q(3))
+        IF (as_laid_reference_past(opts, ln%id, q(3*k_lay - 2:3*k_lay - 1), &
+                                   q(3*(n + 1 - k_lay) - 2:3*(n + 1 - k_lay) - 1), &
+                                   q(3*k_end - 2:3*k_end - 1), e_h, total) > 0.01_wp*span + 0.5_wp) RETURN
+      END IF
+      past_e = CD_ZERO
+      DO k = 1, n
+        IF (.NOT. grounded(k)) CYCLE
+        d = -DOT_PRODUCT(q(3*k - 2:3*k - 1) - q(3*k_end - 2:3*k_end - 1), e_h)
+        IF (d > past_e) THEN
+          past_e = d
+          k_at = k
+        END IF
+      END DO
+      IF (past_e > 0.01_wp*span + 0.5_wp .AND. past_e > past) THEN
+        past = past_e
+        k_past = k_at
+        end_id = MERGE(ln%nodeB, ln%nodeA, ie == 1)
+      END IF
+    END DO
+    ! (b) a fold of the grounded run onto itself
+    turn_max = CD_ZERO
+    k_turn = 0
+    DO k = 2, n - 1
+      IF (.NOT. ALL(grounded(k - 1:k + 1))) CYCLE
+      u1 = q(3*k - 2:3*k) - q(3*k - 5:3*k - 3)
+      u2 = q(3*k + 1:3*k + 3) - q(3*k - 2:3*k)
+      l1 = NORM2(u1)
+      l2 = NORM2(u2)
+      IF (l1 <= 1.0e-9_wp*MAX(CD_ONE, total) .OR. l2 <= 1.0e-9_wp*MAX(CD_ONE, total)) CYCLE
+      turn = ACOS(MAX(-CD_ONE, MIN(CD_ONE, DOT_PRODUCT(u1, u2)/(l1*l2))))*CD_RAD2DEG
+      IF (turn > turn_max) THEN
+        turn_max = turn
+        k_turn = k
+      END IF
+    END DO
+    IF (k_past == 0 .AND. turn_max <= FOLD_TURN_DEG) RETURN
+    IF (k_past > 0) THEN
+      jp = find_point(points, end_id)
+      IF (jp > 0) THEN
+        IF (TRIM(points(jp)%ptype) == 'fixed') THEN
+          WRITE (what, '(A,F0.2,A)') 'the static layout carries the grounded run ', past, &
+            ' m past its anchor, where it folds back (a hairpin)'
+        ELSE
+          WRITE (what, '(A,F0.2,A,I0,A)') 'the static layout carries the grounded run ', past, &
+            ' m past its end at point ', end_id, ', where it folds back (a hairpin)'
+        END IF
+      ELSE
+        WRITE (what, '(A,F0.2,A)') 'the static layout carries the grounded run ', past, &
+          ' m past its end, where it folds back (a hairpin)'
+      END IF
+      k_at = k_past
+    ELSE
+      WRITE (what, '(A,I0,A,I0,A)') 'the static layout folds the grounded run back on itself (a ', &
+        NINT(turn_max), ' deg turn at node ', n + 1 - k_turn, ', a hairpin)'
+      k_at = k_turn
+    END IF
+    ! the cause: a deck current on the line (its drag on the suspended span pulls the run as
+    ! well as the drag on the run itself, so a profile still at the seabed counts), a seabed
+    ! sloping at the fold, or neither (a slack run)
+    by_current = deck_current_on_line(opts, znode)
+    by_slope = slope(k_at) > FOLD_SLOPE_MIN
+    CALL fold_cause_remedy(opts, by_current, by_slope, support, cause, remedy)
+    note = 'line '//TRIM(int_to_str(ln%id))//': '//TRIM(what)//'; '//TRIM(cause)//'. Check that it is the '// &
+           'intended layout ('//TRIM(remedy)//')'
+
+  CONTAINS
+
+    SUBROUTINE floor_at(x, y, ok, z, gx, gy)
+      !! The floor elevation and gradient at (x, y); ok is .FALSE. without a floor (or on a
+      !! failed bathymetry query, where no note is made).
+      REAL(wp), INTENT(IN) :: x, y
+      LOGICAL, INTENT(OUT) :: ok
+      REAL(wp), INTENT(OUT) :: z, gx, gy
+      LOGICAL :: ready
+      INTEGER :: esb
+      CHARACTER(160) :: emb
+      ok = .FALSE.
+      z = CD_ZERO
+      gx = CD_ZERO
+      gy = CD_ZERO
+      IF (PRESENT(model)) THEN
+        IF (.NOT. model%has_seabed) RETURN
+        IF (model%has_bathymetry) THEN
+          CALL CD_Bathymetry_Floor_Gradient(model%bathymetry, x, y, z, gx, gy, esb, emb)
+          ok = esb == CD_BATHY_OK
+        ELSE
+          z = model%seabed_z_floor
+          ok = .TRUE.
+        END IF
+        RETURN
+      END IF
+      ready = .FALSE.
+      IF (PRESENT(bathymetry)) ready = CD_Bathymetry_Is_Initialized(bathymetry)
+      IF (ready) THEN
+        CALL CD_Bathymetry_Floor_Gradient(bathymetry, x, y, z, gx, gy, esb, emb)
+        ok = esb == CD_BATHY_OK
+      ELSE IF (opts%has_wtrdpth) THEN
+        z = -opts%wtrdpth
+        ok = .TRUE.
+      END IF
+    END SUBROUTINE floor_at
+  END SUBROUTINE ei0_fold_note
+
+  SUBROUTINE add_model_fold_notes(lines, points, opts, models, summaries, friction_support)
+    !! ei0_fold_note of every EI = 0 line model (index-aligned with lines), appended to the notes
+    !! of its summary; friction_support as in ei0_fold_note.
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(CD_ModelType), INTENT(IN) :: models(:)
+    TYPE(CD_LineInitSummary), INTENT(INOUT) :: summaries(:)
+    INTEGER, INTENT(IN) :: friction_support
+    INTEGER :: i
+    CHARACTER(1024) :: fold_note
+    DO i = 1, MIN(SIZE(lines), SIZE(models), SIZE(summaries))
+      IF (.NOT. ALLOCATED(models(i)%q)) CYCLE
+      CALL ei0_fold_note(lines(i), points, opts, models(i)%q, fold_note, model=models(i), &
+                         friction_support=friction_support)
+      IF (LEN_TRIM(fold_note) > 0) CALL append_note_line(summaries(i)%note, fold_note)
+    END DO
+  END SUBROUTINE add_model_fold_notes
+
+  LOGICAL FUNCTION deck_current_on_line(opts, z) RESULT(on)
+    !! Whether the deck current is non-zero at any of the node elevations z: its drag on the
+    !! suspended span pulls a grounded run as well as its drag on the run itself, so a current
+    !! profile that vanishes at the seabed still counts.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: z(:)
+    REAL(wp) :: u(3)
+    INTEGER :: k, es
+    CHARACTER(512) :: em
+    on = .FALSE.
+    IF (.NOT. opts%has_current) RETURN
+    DO k = 1, SIZE(z)
+      u = deck_current_velocity(opts, z(k), es, em)
+      IF (es /= CD_HYDRO_OK) CYCLE
+      IF (NORM2(u) > CD_ZERO) THEN
+        on = .TRUE.
+        RETURN
+      END IF
+    END DO
+  END FUNCTION deck_current_on_line
+
+  SUBROUTINE fold_cause_remedy(opts, by_current, by_slope, support, cause, remedy)
+    !! The cause and the remedy named by a note on a grounded run folded past its end (the
+    !! EI = 0 ei0_fold_note and the finite-EI anchor_overshoot_note). The cause is the deck
+    !! current, the seabed slope at the fold, both, or neither (a slack run). The remedy
+    !! follows the deck's static seabed friction and support, the friction the route accepts
+    !! (FOLD_FRICTION_*): with staticsFriction none the static solve applies frictionMu against
+    !! a deck current only, so frictionMu answers a current and staticsFriction asLaid a slope;
+    !! where that friction already acts, or the route rejects it, a shorter line remains; the
+    !! static-only line solve carries no friction at all, so there friction needs dtM and TMax.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    LOGICAL, INTENT(IN) :: by_current, by_slope
+    INTEGER, INTENT(IN) :: support
+    CHARACTER(*), INTENT(OUT) :: cause, remedy
+    LOGICAL :: as_laid
+    as_laid = opts%has_friction .AND. opts%static_friction == CD_STATIC_FRICTION_AS_LAID
+    IF (by_current .AND. by_slope) THEN
+      cause = 'the current and the seabed slope drive the run along the seabed, which holds it only by friction'
+    ELSE IF (by_current) THEN
+      cause = 'the current drives the run along the seabed, which holds it only by friction'
+    ELSE IF (by_slope) THEN
+      cause = 'the seabed slope drives the run downhill, which the seabed holds only by friction'
+    ELSE
+      cause = 'the run carries no tension, so nothing sets its layout on the seabed'
+    END IF
+    IF (.NOT. (by_current .OR. by_slope)) THEN
+      remedy = 'a shorter line prevents it'
+    ELSE IF (support == FOLD_FRICTION_NEEDS_MARCH .AND. by_slope) THEN
+      remedy = 'seabed friction toward the as-laid position (frictionMu with staticsFriction asLaid, which need '// &
+               'dtM and TMax: the static-only solve carries no seabed friction) or a shorter line prevents it'
+    ELSE IF (support == FOLD_FRICTION_NEEDS_MARCH) THEN
+      remedy = 'seabed friction (frictionMu, which needs dtM and TMax: the static-only solve carries no seabed '// &
+               'friction) or a shorter line prevents it'
+    ELSE IF (support == FOLD_FRICTION_NONE) THEN
+      remedy = 'a shorter line prevents it; seabed friction (frictionMu) is not supported on this deck'
+    ELSE IF (as_laid .AND. support == FOLD_FRICTION_FULL) THEN
+      remedy = 'a shorter line prevents it; the as-laid seabed friction (staticsFriction asLaid) does not hold '// &
+               'the run there'
+    ELSE IF (by_slope .AND. support == FOLD_FRICTION_FULL .AND. opts%has_friction) THEN
+      remedy = 'staticsFriction asLaid or a shorter line prevents it; with staticsFriction none the static solve '// &
+               'applies frictionMu against a deck current only'
+    ELSE IF (by_slope .AND. support == FOLD_FRICTION_FULL) THEN
+      remedy = 'seabed friction toward the as-laid position (frictionMu with staticsFriction asLaid) or a shorter '// &
+               'line prevents it'
+    ELSE IF (by_slope) THEN
+      remedy = 'a shorter line prevents it; the static solve of this deck applies seabed friction against a deck '// &
+               'current only'
+    ELSE IF (opts%has_friction) THEN
+      remedy = 'a shorter line prevents it; frictionMu does not hold the run against this current'
+    ELSE
+      remedy = 'seabed friction (frictionMu) or a shorter line prevents it'
+    END IF
+  END SUBROUTINE fold_cause_remedy
+
+  REAL(wp) FUNCTION as_laid_reference_past(opts, line_id, lay_xy, other_xy, end_xy, e_h, laid_len) RESULT(past)
+    !! How far [m] the staticsFriction asLaid reference of a line reaches past one of its ends,
+    !! on the side away from the other end: the line laid on the seabed from its lower end
+    !! lay_xy (the anchor, or the fairlead when that is lower; other_xy is the other end) along
+    !! layAzimuth, by default toward the other end, over its length laid_len. end_xy is the
+    !! end tested and e_h the unit horizontal direction from it toward the line's other end;
+    !! global coordinates. The laid run is straight in plan, so its farthest point past the end
+    !! is one of its two ends; on a sloped seabed its plan length is shorter than laid_len, so
+    !! the distance is an upper bound. Zero for a reference that stays on the near side.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    INTEGER, INTENT(IN) :: line_id
+    REAL(wp), INTENT(IN) :: lay_xy(2), other_xy(2), end_xy(2), e_h(2), laid_len
+    REAL(wp), ALLOCATABLE :: lay_az
+    REAL(wp) :: laid_t, dir(2), h
+    CALL line_static_friction(opts, line_id, lay_az, laid_t)
+    IF (ALLOCATED(lay_az)) THEN
+      dir = [COS(lay_az), SIN(lay_az)]
+    ELSE
+      h = NORM2(other_xy - lay_xy)
+      dir = [CD_ONE, CD_ZERO]
+      IF (h > 1.0e-9_wp*MAX(CD_ONE, laid_len)) dir = (other_xy - lay_xy)/h
+    END IF
+    past = MAX(CD_ZERO, -DOT_PRODUCT(lay_xy - end_xy, e_h), -DOT_PRODUCT(lay_xy + laid_len*dir - end_xy, e_h))
+  END FUNCTION as_laid_reference_past
 
   SUBROUTINE solve_one_line(ln, sections, types, points, opts, q, tension, converged, ErrStat, ErrMsg, bathymetry, &
                             end_ten, end_force)
@@ -14877,6 +15278,7 @@ CONTAINS
           points(i)%vol = bodies(body_idx)%vol
           points(i)%cda = bodies(body_idx)%cda
           points(i)%ca = bodies(body_idx)%ca
+          points(i)%point3 = TRIM(bodies(body_idx)%btype) == 'point3'
           CYCLE
         ELSE IF (is_rod_point_type(points(i)%ptype)) THEN
           CALL parse_rod_point_type(points(i)%ptype, rod_id, idx)
@@ -18292,7 +18694,11 @@ CONTAINS
       CALL init_deck_system_from_parsed(types, pc, sys_lines, sections, opts, mb%system, ErrStat, ErrMsg, &
                                         bathymetry=bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      CALL collect_system_init_summaries(sys_lines, points, mb%system, sum_sys, ErrStat, ErrMsg)
+      ! frictionMu is rejected beside Connect/Free points and Point3 buoys, and staticsFriction asLaid
+      ! on every multibody deck
+      CALL collect_system_init_summaries(sys_lines, points, mb%system, sum_sys, ErrStat, ErrMsg, opts=opts, &
+                                         friction_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                                deck_has_non_rigid6_dynamic_points(points, bodies)))
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
     ELSE
       ALLOCATE (sum_sys(0))
@@ -18353,14 +18759,18 @@ CONTAINS
           lnc%endconn_ez_ref(:, 1) = dclamp
           CALL build_one_hermite_cable(lnc, sections, types, pc, opts, opts%dtM, mb%cables(c), node, &
                                        ErrStat, ErrMsg, standalone_controls=.TRUE., bathymetry=bathymetry, &
-                                       fairlead_orientation=TRANSPOSE(rclamp))
+                                       fairlead_orientation=TRANSPOSE(rclamp), &
+                                       fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                          deck_has_non_rigid6_dynamic_points(points, bodies)))
         END BLOCK
         ! re-stepped inside the outer Newton of the monolithic step: its end loads must be
         ! converged well inside the junction tolerance
         mb%cables(c)%tol = MIN(mb%cables(c)%tol, CLAMPED_CABLE_TOL)
       ELSE
         CALL build_one_hermite_cable(cab_lines(c), sections, types, pc, opts, opts%dtM, mb%cables(c), node, &
-                                     ErrStat, ErrMsg, standalone_controls=.TRUE., bathymetry=bathymetry)
+                                     ErrStat, ErrMsg, standalone_controls=.TRUE., bathymetry=bathymetry, &
+                                     fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                        deck_has_non_rigid6_dynamic_points(points, bodies)))
       END IF
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
     END DO
@@ -19889,6 +20299,8 @@ CONTAINS
     INTEGER :: lo, hi, idx, nc, k, ir, base, n
     INTEGER, ALLOCATABLE :: kids(:)
     REAL(wp) :: fx(3), mx(3), m6b(6, 6), rhsb(6), x6(6), fenv(3), meff, arm(3), z6(6)
+    REAL(wp) :: fsea(3), ksea(3, 3), csea(3, 3)
+    LOGICAL :: sea_contact
     REAL(wp), ALLOCATABLE :: m6c(:, :, :), rhsc(:, :), pinw(:, :), rc(:, :), wc(:, :), amat(:, :), bvec(:), xg(:)
 
     ErrStat = CD_DECKDRV_OK
@@ -19958,7 +20370,19 @@ CONTAINS
         CALL fail_solve(ErrStat, ErrMsg, 'Free/Connect point load failed: '//TRIM(ErrMsg)); RETURN
       END IF
       ErrStat = CD_DECKDRV_OK
-      res(lo:hi) = meff*mb%pt_af(idx)%a - (mb%pt_af(idx)%force + fenv + mb%loads(base + 1:base + 3))
+      ! the point's own seabed contact at the alpha-level state (the finite-difference
+      ! Jacobian of this residual carries its stiffness and damping)
+      CALL CD_System_Point_Seabed(mb%system, idx, mb%pt_af(idx)%q, mb%pt_af(idx)%v, sea_contact, fsea, ksea, &
+                                  csea, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_SYSTEM_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'Free/Connect point seabed contact failed: '//TRIM(ErrMsg)); RETURN
+      END IF
+      ErrStat = CD_DECKDRV_OK
+      IF (sea_contact) THEN
+        res(lo:hi) = meff*mb%pt_af(idx)%a - (mb%pt_af(idx)%force + fenv + fsea + mb%loads(base + 1:base + 3))
+      ELSE
+        res(lo:hi) = meff*mb%pt_af(idx)%a - (mb%pt_af(idx)%force + fenv + mb%loads(base + 1:base + 3))
+      END IF
     END SELECT
   CONTAINS
     SUBROUTINE cable_load(kind, obj, f, m)
@@ -23036,6 +23460,7 @@ CONTAINS
       INTEGER :: kk, es_l, ib
       CHARACTER(1024) :: em_l
       TYPE(DeckRod) :: rg
+      LOGICAL :: ok_sea
 
       good = .FALSE.
       sc_out = TINY(CD_ONE)**0.25_wp
@@ -23123,6 +23548,11 @@ CONTAINS
             END IF
             fk(:, kk) = fk(:, kk) + 0.5_wp*opts%rhoW*pts(idx(kk))%cda*NORM2(u)*u
           END IF
+          ! the point's own seabed contact (a grounded clump weight), as in the dynamics
+          CALL deck_point_seabed_force(pts(idx(kk))%pos, point_contact_area(pts(idx(kk))), opts, f2, ok_sea, &
+                                       ErrStat, ErrMsg, bathymetry)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          IF (ok_sea) fk(:, kk) = fk(:, kk) + f2
         END SELECT
       END DO
       ! the extra (clamped-end correction) loads, at their points carried by the objects
@@ -24059,7 +24489,9 @@ CONTAINS
       IF (opts%dtM > CD_ZERO) dtb = opts%dtM
       CALL build_one_hermite_cable(lnc, sections, types, pc, opts, dtb, cab, node, ErrStat, ErrMsg, &
                                    standalone_controls=.TRUE., bathymetry=bathymetry, &
-                                   fairlead_orientation=TRANSPOSE(rclamp), init_note=note)
+                                   fairlead_orientation=TRANSPOSE(rclamp), init_note=note, &
+                                   fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                      deck_has_non_rigid6_dynamic_points(points, bodies)))
       IF (ErrStat == CD_DECKDRV_OK) THEN
         CALL CD_HFMF_CalcOutput(cab, fm(1:3), es, em, y_moment=fm(4:6))
         IF (es /= CD_HFMF_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lnc%id))// &
@@ -26122,6 +26554,74 @@ CONTAINS
     END IF
   END SUBROUTINE deck_seabed_floor_at
 
+  PURE REAL(wp) FUNCTION point_contact_area(pt) RESULT(area)
+    !! Seabed contact footprint [m^2] of a Free/Connect point or a Point3 buoy (a clump weight
+    !! or a buoy): the face area of a cube of the point's volume, V^(2/3), CableDyn's own
+    !! area-equivalent of a compact body, with V the displaced volume Vol or, for a point
+    !! declared with Mass only (a clump weight whose buoyancy is left out), the volume of
+    !! solid steel of that mass, Mass/7850 kg/m^3. A point with neither (a massless line
+    !! junction) has no footprint: its lines' end nodes carry its contact.
+    TYPE(DeckPoint), INTENT(IN) :: pt
+    REAL(wp), PARAMETER :: STEEL_DENSITY = 7850.0_wp
+    REAL(wp) :: vol
+    area = CD_ZERO
+    vol = pt%vol
+    IF (.NOT. (vol > CD_ZERO)) vol = pt%mass/STEEL_DENSITY
+    IF (vol > CD_ZERO) area = vol**(2.0_wp/3.0_wp)
+  END FUNCTION point_contact_area
+
+  SUBROUTINE deck_point_seabed_force(pos, area, opts, force, in_contact, ErrStat, ErrMsg, bathymetry)
+    !! Static seabed reaction on a Free/Connect point at pos with contact footprint area: the
+    !! line nodes' normal penalty law (C1 touchdown blend, along the surface normal on a
+    !! slope, with the bathymetry crease rounding) with stiffness kBot*area, the static twin of
+    !! CD_System_Point_Seabed (no velocity, so no damping). in_contact is .FALSE., with force
+    !! exactly zero, without a seabed or footprint or clear of the floor.
+    REAL(wp), INTENT(IN) :: pos(3), area
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(OUT) :: force(3)
+    LOGICAL, INTENT(OUT) :: in_contact
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp) :: z_floor, dfdx, dfdy, curv(3), gap, kp, normal, tangent, jac3(3, 3)
+    LOGICAL :: bathy_ready
+    INTEGER :: es
+    CHARACTER(160) :: em
+
+    force = CD_ZERO
+    in_contact = .FALSE.
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    kp = opts%kbot*area
+    IF (.NOT. (kp > CD_ZERO)) RETURN
+    bathy_ready = .FALSE.
+    IF (PRESENT(bathymetry)) bathy_ready = CD_Bathymetry_Is_Initialized(bathymetry)
+    dfdx = CD_ZERO
+    dfdy = CD_ZERO
+    curv = CD_ZERO
+    IF (bathy_ready) THEN
+      CALL CD_Bathymetry_Floor_Gradient(bathymetry, pos(1), pos(2), z_floor, dfdx, dfdy, es, em, &
+                                        crease_curvature=curv)
+      IF (es /= CD_BATHY_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'point seabed contact: bathymetry query failed: '//TRIM(em))
+        RETURN
+      END IF
+    ELSE IF (opts%has_wtrdpth) THEN
+      z_floor = -opts%wtrdpth
+    ELSE
+      RETURN
+    END IF
+    gap = z_floor - pos(3)
+    IF (gap <= -CD_SEABED_CONTACT_BLEND*SQRT(CD_ONE + dfdx*dfdx + dfdy*dfdy)) RETURN
+    IF (ABS(dfdx) > CD_ZERO .OR. ABS(dfdy) > CD_ZERO .OR. ANY(ABS(curv) > CD_ZERO)) THEN
+      CALL CD_Seabed_Normal_Contact(gap, dfdx, dfdy, kp, force, jac3, curvature=curv)
+    ELSE
+      CALL CD_Seabed_Normal_Law(gap, kp, normal, tangent)
+      force(3) = normal
+    END IF
+    in_contact = .TRUE.
+  END SUBROUTINE deck_point_seabed_force
+
   SUBROUTINE rigid6_wet_fraction(body, opts, time, phi, ErrStat, ErrMsg)
     !! Submerged fraction phi of a Rigid6 body. bodyWetting sphere (default): an equivalent
     !! sphere of the body volume, r_e = (3 V/(4 pi))^(1/3), centred at the centre of buoyancy,
@@ -27971,12 +28471,14 @@ CONTAINS
   END FUNCTION audited_line_id
 
   SUBROUTINE warn_line_spike(model, line_id)
-    !! The once-per-line warning of the run audit's first implausible tension spike.
+    !! The once-per-line warning of the run audit's first implausible tension spike. The
+    !! segment is numbered in deck order, from End A, as the segment tension outputs and the
+    !! fold note's nodes are (audit_spike_elem is in internal order, End B first).
     TYPE(CD_ModelType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: line_id
     INTEGER :: ios
     WRITE (output_unit, '(A,I0,A,I0,A,ES10.3,A,F10.3,A,F0.1,A)', IOSTAT=ios) '  Warning: line ', line_id, &
-      ': segment ', model%audit_spike_elem, ' carried ', model%audit_spike_tension, ' N at t =', &
+      ': segment ', model%n_elem + 1 - model%audit_spike_elem, ' carried ', model%audit_spike_tension, ' N at t =', &
       model%audit_spike_time, ' s for a single step, ', model%audit_spike_ratio, &
       ' times the largest tension on the line one step before and after: a non-physical tension spike '// &
       '(an under-resolved slack-taut transition). Check the result with a smaller dtM (doc: troubleshooting).'
@@ -31655,13 +32157,15 @@ CONTAINS
     END DO
   END SUBROUTINE collect_raw_init_summaries
 
-  SUBROUTINE collect_model_init_summaries(lines, points, models, summaries, ErrStat, ErrMsg)
+  SUBROUTINE collect_model_init_summaries(lines, points, models, summaries, ErrStat, ErrMsg, opts)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(CD_ModelType), INTENT(IN) :: models(:)
     TYPE(CD_LineInitSummary), ALLOCATABLE, INTENT(OUT) :: summaries(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    !! opts (optional): add each line's static fold note (ei0_fold_note)
+    TYPE(DeckOptions), INTENT(IN), OPTIONAL :: opts
     TYPE(ModelOutputWorkspace) :: work
     INTEGER :: i, es
     REAL(wp) :: tension, declination, azimuth, f_first(3), fair_force(3)
@@ -31687,15 +32191,21 @@ CONTAINS
       END IF
       CALL set_init_summary(lines(i)%id, tension, declination, azimuth, summaries(i), fair_force=fair_force)
     END DO
+    IF (PRESENT(opts)) CALL add_model_fold_notes(lines, points, opts, models, summaries, FOLD_FRICTION_FULL)
   END SUBROUTINE collect_model_init_summaries
 
-  SUBROUTINE collect_system_init_summaries(lines, points, system, summaries, ErrStat, ErrMsg)
+  SUBROUTINE collect_system_init_summaries(lines, points, system, summaries, ErrStat, ErrMsg, opts, friction_support)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(CD_SystemType), INTENT(IN) :: system
     TYPE(CD_LineInitSummary), ALLOCATABLE, INTENT(OUT) :: summaries(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    !! opts (optional): add each line's static fold note (ei0_fold_note), with the route's
+    !! friction_support (default FOLD_FRICTION_NONE: a system of Connect/Free, Point3, body or
+    !! rod points, whose deck rejects frictionMu)
+    TYPE(DeckOptions), INTENT(IN), OPTIONAL :: opts
+    INTEGER, INTENT(IN), OPTIONAL :: friction_support
     TYPE(ModelOutputWorkspace) :: work
     INTEGER :: i, es
     REAL(wp) :: tension, declination, azimuth, f_first(3), fair_force(3)
@@ -31721,6 +32231,13 @@ CONTAINS
       END IF
       CALL set_init_summary(lines(i)%id, tension, declination, azimuth, summaries(i), fair_force=fair_force)
     END DO
+    IF (PRESENT(opts)) THEN
+      IF (PRESENT(friction_support)) THEN
+        CALL add_model_fold_notes(lines, points, opts, system%lines, summaries, friction_support)
+      ELSE
+        CALL add_model_fold_notes(lines, points, opts, system%lines, summaries, FOLD_FRICTION_NONE)
+      END IF
+    END IF
   END SUBROUTINE collect_system_init_summaries
 
   SUBROUTINE collect_finite_init_summaries(lines, points, models, summaries, ErrStat, ErrMsg)
@@ -31785,7 +32302,7 @@ CONTAINS
     TYPE(CD_LineInitSummary), INTENT(IN) :: summaries(:)
     TYPE(DeckLineType), INTENT(IN), OPTIONAL :: types(:)
     TYPE(DeckOptions), INTENT(IN), OPTIONAL :: opts
-    INTEGER :: i
+    INTEGER :: i, a, b
     REAL(wp) :: f_incl
     CHARACTER(1024) :: strain_note
 
@@ -31813,6 +32330,19 @@ CONTAINS
       WRITE (error_unit, '(A,F9.3,A,F9.3,A,F9.3,A)') '      line tangent: inclination=', &
         summaries(i)%fair_inclination, ' deg, declination=', summaries(i)%fair_declination, &
         ' deg, azimuth=', summaries(i)%fair_azimuth, ' deg'
+      ! the line's static-initialisation notes (ei0_fold_note), one per text line
+      IF (LEN_TRIM(summaries(i)%note) > 0) THEN
+        a = 1
+        DO
+          b = INDEX(summaries(i)%note(a:), NEW_LINE('a'))
+          IF (b == 0) THEN
+            WRITE (error_unit, '(A)') '      Note: '//TRIM(summaries(i)%note(a:))//'.'
+            EXIT
+          END IF
+          WRITE (error_unit, '(A)') '      Note: '//summaries(i)%note(a:a + b - 2)//'.'
+          a = a + b
+        END DO
+      END IF
       IF (PRESENT(types) .AND. PRESENT(opts)) THEN
         CALL static_strain_note(summaries(i)%line_id, summaries(i)%fair_tension, sections, types, opts, strain_note)
         IF (LEN_TRIM(strain_note) > 0) WRITE (error_unit, '(A)') '      Note: '//TRIM(strain_note)//'.'

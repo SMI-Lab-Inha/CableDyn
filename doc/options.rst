@@ -89,14 +89,17 @@ Environment and seabed
      - real, Pa/m (N/m³)
      - ``1.0e5``
      - finite, > 0 when a seabed is present. Mapped to each line node and rod contact station by
-       local diameter × tributary length; a Rigid6 reference point uses a fixed 1 m² area
+       local diameter × tributary length; a Free/Connect point with Mass or Vol, and a Point3
+       buoy, over its footprint (Vol, or Mass/7850 kg/m³, to the power 2/3); a Rigid6 reference
+       point uses a fixed 1 m² area
      - both
      - ``1.0e5 kBot``
    * - ``cBot`` / ``cb``
      - real, Pa·s/m (N·s/m³)
      - ``1.0e4``
-     - finite, ≥ 0 when a seabed is present; scaled like ``kBot`` and acts only on contacted
-       nodes moving downward
+     - finite, ≥ 0 when a seabed is present; scaled like ``kBot`` (per line node and rod contact
+       station, and over the footprint of a Free/Connect point with Mass or Vol or a Point3
+       buoy) and acts only on contacting nodes and points moving downward
      - both
      - ``1.0e4 cBot``
    * - ``frictionMu`` / ``mu`` / ``frictionCoefficient``
