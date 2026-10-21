@@ -97,6 +97,8 @@ MODULE CableDyn
                                             CD_HermiteCable_Dyn_Get_Profile, &
                                             CD_HermiteCable_Dyn_Recovery_Count, &
                                             CD_HermiteCable_Dyn_Recovery_Reset
+   USE CableDyn_Profile, ONLY: CD_Profile_Arm, CD_Profile_Disarm, CD_Profile_Kernels, CD_PROF_K_RESIDUAL, &
+                               CD_PROF_K_TANGENT, CD_PROF_K_FACTOR, CD_PROF_K_SOLVE, CD_PROF_NKERNEL
    USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_System_Line_NElem, &
                               CD_Get_System_DynamicPoint_States, CD_Set_System_DynamicPoint_States, &
                               CD_System_NSystemCoupledDOF, CD_Get_System_CoupledMotion, &
@@ -494,6 +496,7 @@ CONTAINS
          ! Disarm before any static/dynamic initialization work. This also covers an
          ! initialization that later fails and never reaches the live-instance setup.
          CALL CD_HermiteCable_Dyn_Disable_Profile()
+         CALL CD_Profile_Disarm()
       END IF
 
       ! ------------------------------------------------------------------------------
@@ -2433,8 +2436,12 @@ CONTAINS
 
       character(*), parameter :: RoutineName = 'CD_End'
       INTEGER(IntKi)          :: ErrStat2
-      INTEGER                 :: hn_step, hn_resid, hn_solve, hn_am, hn_alloc, hn_tan
+      INTEGER                 :: hn_step, hn_resid, hn_solve, hn_am, hn_alloc, hn_tan, hn_factor, hn_correct
       INTEGER(int64)          :: sb_calls, sb_events, sb_capped, sb_fallbacks
+      INTEGER(int64)          :: k_calls(CD_PROF_NKERNEL)
+      REAL(wp)                :: k_seconds(CD_PROF_NKERNEL), ht_factor
+      CHARACTER(24)           :: k_txt(CD_PROF_NKERNEL)
+      INTEGER                 :: k_i
       INTEGER                 :: sb_max, sb_ios
       CHARACTER(24)           :: sb_txt(5)
       REAL(wp)                :: ht_step, ht_resid, ht_eff, ht_solve, ht_am, ht_tan
@@ -2479,20 +2486,39 @@ CONTAINS
                               ' wave='//TRIM(Num2LStr(Inst(m%CDInst)%prof_n_wave))// &
                               ' calcout='//TRIM(Num2LStr(Inst(m%CDInst)%prof_n_calcout))// &
                               ' fresh='//TRIM(Num2LStr(Inst(m%CDInst)%prof_n_fresh)) )
+                  ! the kernels of the EI = 0 line steps (summed over the lines)
+                  CALL CD_Profile_Kernels(k_calls, k_seconds)
+                  IF (SUM(k_calls) > 0_int64) THEN
+                     DO k_i = 1, CD_PROF_NKERNEL
+                        WRITE (k_txt(k_i), '(I0)', IOSTAT=sb_ios) k_calls(k_i)
+                     END DO
+                     CALL WrScr( '    CableDyn EI = 0 profile: residual_s='// &
+                                 TRIM(Num2LStr(REAL(k_seconds(CD_PROF_K_RESIDUAL), DbKi)))// &
+                                 ' tangent_s='//TRIM(Num2LStr(REAL(k_seconds(CD_PROF_K_TANGENT), DbKi)))// &
+                                 ' factor_s='//TRIM(Num2LStr(REAL(k_seconds(CD_PROF_K_FACTOR), DbKi)))// &
+                                 ' backsolve_s='//TRIM(Num2LStr(REAL(k_seconds(CD_PROF_K_SOLVE), DbKi))) )
+                     CALL WrScr( '    CableDyn EI = 0 counts: residual='//TRIM(k_txt(CD_PROF_K_RESIDUAL))// &
+                                 ' tangent='//TRIM(k_txt(CD_PROF_K_TANGENT))// &
+                                 ' factor='//TRIM(k_txt(CD_PROF_K_FACTOR))// &
+                                 ' backsolve='//TRIM(k_txt(CD_PROF_K_SOLVE)) )
+                  END IF
                   IF (Inst(m%CDInst)%agg%ncable > 0) THEN
                      CALL CD_HermiteCable_Dyn_Get_Profile(hn_step, hn_resid, hn_solve, hn_am, hn_alloc, &
                                                           ht_step, ht_resid, ht_eff, ht_solve, ht_am, &
-                                                          hn_tan, ht_tan)
+                                                          hn_tan, ht_tan, hn_factor, ht_factor, hn_correct)
                      CALL WrScr( '    CableDyn Hermite profile: step_s='//TRIM(Num2LStr(REAL(ht_step, DbKi)))// &
                                  ' residual_s='//TRIM(Num2LStr(REAL(ht_resid, DbKi)))// &
                                  ' tangent_s='//TRIM(Num2LStr(REAL(ht_tan, DbKi)))// &
                                  ' effective_s='//TRIM(Num2LStr(REAL(ht_eff, DbKi)))// &
-                                 ' solve_s='//TRIM(Num2LStr(REAL(ht_solve, DbKi)))// &
+                                 ' factor_s='//TRIM(Num2LStr(REAL(ht_factor, DbKi)))// &
+                                 ' backsolve_s='//TRIM(Num2LStr(REAL(ht_solve, DbKi)))// &
                                  ' added_mass_s='//TRIM(Num2LStr(REAL(ht_am, DbKi))) )
                      CALL WrScr( '    CableDyn Hermite counts: step='//TRIM(Num2LStr(hn_step))// &
                                  ' residual='//TRIM(Num2LStr(hn_resid))// &
                                  ' tangent='//TRIM(Num2LStr(hn_tan))// &
+                                 ' factor='//TRIM(Num2LStr(hn_factor))// &
                                  ' solve='//TRIM(Num2LStr(hn_solve))// &
+                                 ' correction='//TRIM(Num2LStr(hn_correct))// &
                                  ' added_mass='//TRIM(Num2LStr(hn_am))// &
                                  ' alloc='//TRIM(Num2LStr(hn_alloc)) )
                      CALL WrScr( '    CableDyn Hermite recoveries: intervals='// &
@@ -4235,8 +4261,11 @@ CONTAINS
          CALL CD_HermiteCable_Dyn_Recovery_Reset()
          IF (enabled) THEN
             CALL CD_HermiteCable_Dyn_Reset_Profile()
+            ! the EI = 0 line-step kernels (CableDyn_Profile, process-global like the above)
+            CALL CD_Profile_Arm()
          ELSE
             CALL CD_HermiteCable_Dyn_Disable_Profile()
+            CALL CD_Profile_Disarm()
          END IF
       END IF
    END SUBROUTINE reset_instance_profile

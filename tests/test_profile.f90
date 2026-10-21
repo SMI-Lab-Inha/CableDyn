@@ -12,6 +12,10 @@ PROGRAM test_profile
   !!      finalisation of such a run) stays exactly zero.
   !!   4. The EI = 0 line-step counters are exact when the lines of an OpenMP team update them
   !!      at once.
+  !!   5. The EI = 0 kernel counters: unarmed, a kernel records nothing; armed, the calls of each
+  !!      kernel are exact under an OpenMP team and their times add up; a kernel that began
+  !!      before the profile was armed is not counted; disarmed, nothing more is recorded and
+  !!      the counts so far stay readable; arming again zeroes them.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Profile
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
@@ -23,6 +27,7 @@ PROGRAM test_profile
   CALL case_unarmed()
   CALL case_partition_and_failure()
   CALL case_concurrent_counts()
+  CALL case_kernels()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'test_profile: ', nfail, ' failure(s)'
     ERROR STOP 1
@@ -122,5 +127,53 @@ CONTAINS
     CALL require(iterations == SUM([(INT(MOD(i, 7), int64), i=1, N)]), 'counts:newton-iterations-exact')
     CALL require(max_iterations == 6, 'counts:most-iterations')
   END SUBROUTINE case_concurrent_counts
+
+  SUBROUTINE case_kernels()
+    INTEGER, PARAMETER :: N = 20000
+    INTEGER(int64) :: calls(CD_PROF_NKERNEL), c0
+    REAL(wp) :: seconds(CD_PROF_NKERNEL)
+    INTEGER :: i, kernel
+    ! unarmed: nothing is recorded
+    CALL CD_Profile_Disarm()
+    CALL CD_Profile_Kernel_Begin(c0)
+    CALL require(c0 == 0_int64, 'kernels:unarmed-begin-has-no-start')
+    CALL CD_Profile_Arm()
+    CALL CD_Profile_Disarm()
+    CALL CD_Profile_Kernel_End(CD_PROF_K_FACTOR, 1_int64)
+    CALL CD_Profile_Kernels(calls, seconds)
+    CALL require(ALL(calls == 0_int64) .AND. .NOT. ANY(seconds > 0.0_wp), 'kernels:unarmed-records-nothing')
+    ! armed: exact calls of each kernel from an OpenMP team, and a measurable time
+    CALL CD_Profile_Arm()
+    !$OMP PARALLEL NUM_THREADS(4) DEFAULT(SHARED) PRIVATE(i, kernel, c0)
+    CALL CD_Fatal_Thread_Init()
+    !$OMP DO SCHEDULE(STATIC)
+    DO i = 1, N
+      kernel = 1 + MOD(i, CD_PROF_NKERNEL)
+      CALL CD_Profile_Kernel_Begin(c0)
+      CALL CD_Profile_Kernel_End(kernel, c0)
+    END DO
+    !$OMP END DO
+    !$OMP END PARALLEL
+    CALL CD_Profile_Kernel_Begin(c0)
+    CALL busy(0.01_wp)
+    CALL CD_Profile_Kernel_End(CD_PROF_K_TANGENT, c0)
+    ! a kernel that began unarmed (start 0) and an unknown kernel are not counted
+    CALL CD_Profile_Kernel_End(CD_PROF_K_SOLVE, 0_int64)
+    CALL CD_Profile_Kernel_End(CD_PROF_NKERNEL + 1, c0)
+    CALL CD_Profile_Kernels(calls, seconds)
+    CALL require(calls(CD_PROF_K_RESIDUAL) == N/CD_PROF_NKERNEL, 'kernels:residual-calls-exact')
+    CALL require(calls(CD_PROF_K_TANGENT) == N/CD_PROF_NKERNEL + 1, 'kernels:tangent-calls-exact')
+    CALL require(calls(CD_PROF_K_FACTOR) == N/CD_PROF_NKERNEL, 'kernels:factor-calls-exact')
+    CALL require(calls(CD_PROF_K_SOLVE) == N/CD_PROF_NKERNEL, 'kernels:solve-calls-exact')
+    CALL require(seconds(CD_PROF_K_TANGENT) >= 0.009_wp .AND. ALL(seconds >= 0.0_wp), 'kernels:times')
+    ! disarmed: nothing more is recorded, the counts stay readable; arming again zeroes them
+    CALL CD_Profile_Disarm()
+    CALL CD_Profile_Kernel_End(CD_PROF_K_FACTOR, c0)
+    CALL CD_Profile_Kernels(calls, seconds)
+    CALL require(calls(CD_PROF_K_FACTOR) == N/CD_PROF_NKERNEL, 'kernels:disarmed-keeps-counts')
+    CALL CD_Profile_Arm()
+    CALL CD_Profile_Kernels(calls, seconds)
+    CALL require(ALL(calls == 0_int64), 'kernels:arm-zeroes')
+  END SUBROUTINE case_kernels
 
 END PROGRAM test_profile

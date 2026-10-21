@@ -157,20 +157,21 @@ breakdown such as:
 .. code-block:: text
 
      Run-time profile (CABLEDYN_PROFILE), wall-clock time:
-       input parsing                             0.002 s    0.0 %
-       initialisation and statics                0.233 s    3.1 %
-       dynamic march                             7.232 s   96.8 %
-         fluid sampled by the driver             0.050 s    0.7 %
-         line, cable and object steps            7.168 s   96.0 %
-         checks and line failures                0.001 s    0.0 %
-         outputs                                 0.013 s    0.2 %
+       input parsing                             0.002 s    0.1 %
+       initialisation and statics                0.237 s    8.8 %
+       dynamic march                             2.444 s   91.1 %
+         fluid sampled by the driver             0.050 s    1.9 %
+         line, cable and object steps            2.379 s   88.6 %
+         checks and line failures                0.002 s    0.1 %
+         outputs                                 0.012 s    0.5 %
          progress and bookkeeping                0.000 s    0.0 %
        finalisation                              0.000 s    0.0 %
-       total                                     7.467 s  100.0 %
-       March: 600 committed step(s), 12.0528 ms per step.
-       EI = 0 line steps: 3621 (substeps and retries included), Newton iterations: 4661 (1.287 per line step, at most 2).
-       Finite-EI cable steps: 4849, residual evaluations: 21255, tangent assemblies: 10391, linear solves: 10391, intervals recovered by substeps: 0.
-       Finite-EI cable step time (s): residual 1.416, tangent 2.674, effective matrix 0.136, linear solve 0.943, added mass 0.167, other 0.457.
+       total                                     2.684 s  100.0 %
+       March: 600 committed step(s), 4.0735 ms per step.
+       EI = 0 line steps: 3621 (substeps and retries included), Newton iterations: 4739 (1.309 per line step, at most 2).
+       EI = 0 line step kernels: residual 6947 (0.039 s), residual and tangent 3322 (0.064 s), factorisation 3322 (0.013 s), back-substitution 5126 (0.009 s).
+       Finite-EI cable steps: 1423, residual evaluations: 6140, tangent assemblies: 2914, factorisations: 2914, linear solves: 2914, force-blend corrections: 1423, intervals recovered by substeps: 0.
+       Finite-EI cable step time (s): residual 0.412, tangent 0.883, effective matrix 0.039, factorisation 0.211, back-substitution 0.075, added mass 0.049, other 0.085.
 
 The phases add up to the total, which runs from the start of the deck parse to the report. If the
 run stops with an error, the time up to the stop counts to the phase in which it stopped, and
@@ -193,9 +194,18 @@ The counts follow the march:
 * **EI = 0 line steps** counts every step of every tension-only line, including recovery
   substeps, retries and, on the body marches, each re-step of a line within the body
   iterations. **Newton iterations** is their total.
+* **EI = 0 line step kernels** splits the work inside those steps: the residual-only
+  evaluations (predictor tests and line-search trials), the evaluations that also assemble the
+  effective tangent, the LU factorisations of that tangent, and the back-substitutions with it
+  (Newton updates, a reused factor and the end tangent of a body junction). Each count is
+  followed by its time, summed over the lines: it can exceed the wall time when lines step
+  concurrently, so set ``OMP_NUM_THREADS=1`` to compare it with the phase rows.
 * **Finite-EI cable steps** counts the same for the cubic-Hermite cables. A cable clamped to a
   body is re-stepped in every body iteration, so the count can exceed the number of march
-  steps.
+  steps. Its step time is split into the residual and tangent assemblies, the effective
+  matrix, the factorisations, the back-substitutions (of the Newton solves and of the
+  force-blend correction that ends each step), the added mass and the rest; the rarely used
+  torsion and consistent-acceleration solves count to the rest.
 
 An unset or empty variable, or ``0``, leaves the profile off. The driver reads the variable once,
 when it starts.

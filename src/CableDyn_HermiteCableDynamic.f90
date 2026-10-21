@@ -169,6 +169,8 @@ MODULE CableDyn_HermiteCableDynamic
   INTEGER, SAVE :: prof_n_resid = 0       ! eval_res calls (predictor + accepted iterates + line-search trials)
   INTEGER, SAVE :: prof_n_tan = 0         ! tangent assemblies (once per continuing solve iteration)
   INTEGER, SAVE :: prof_n_solve = 0       ! effective-tangent linear solves (= Newton iterations)
+  INTEGER, SAVE :: prof_n_factor = 0      ! LU factorisations of the effective tangent
+  INTEGER, SAVE :: prof_n_correct = 0     ! force-blend corrections after convergence (one back-substitution)
   INTEGER, SAVE :: prof_n_am = 0          ! frozen added-mass assemblies (once per step when enabled)
   ! Arrays heap-allocated on the step path: the plain Step allocates none; the recovery
   ! rewind of CD_HermiteCable_Dyn_Step_Recovering allocates its interval buffers.
@@ -177,7 +179,8 @@ MODULE CableDyn_HermiteCableDynamic
   REAL(wp), SAVE :: prof_t_resid = 0.0_wp ! eval_res wall: element/drag/FK/contact assembly + inertia band matvec
   REAL(wp), SAVE :: prof_t_tan = 0.0_wp   ! tangent-assembly wall (element Hessian + drag/FK Jacobians + band scatters)
   REAL(wp), SAVE :: prof_t_eff = 0.0_wp   ! banded Keff triad + in-band Dirichlet wall
-  REAL(wp), SAVE :: prof_t_solve = 0.0_wp ! banded linear-solve wall
+  REAL(wp), SAVE :: prof_t_solve = 0.0_wp ! back-substitution wall (Newton solves and force-blend corrections)
+  REAL(wp), SAVE :: prof_t_factor = 0.0_wp ! LU factorisation wall of the effective tangent
   REAL(wp), SAVE :: prof_t_am = 0.0_wp    ! frozen added-mass assembly wall (band)
 
   ! Number of coupling intervals completed by internal generalised-alpha substeps after the nominal
@@ -499,9 +502,9 @@ CONTAINS
     !! the SYSTEM_CLOCK overhead in the step/residual hot path.
     prof_enabled = .TRUE.
     prof_n_step = 0; prof_n_resid = 0; prof_n_solve = 0; prof_n_am = 0; prof_n_alloc = 0
-    prof_n_tan = 0
+    prof_n_tan = 0; prof_n_factor = 0; prof_n_correct = 0
     prof_t_step = 0.0_wp; prof_t_resid = 0.0_wp; prof_t_eff = 0.0_wp
-    prof_t_tan = 0.0_wp
+    prof_t_tan = 0.0_wp; prof_t_factor = 0.0_wp
     prof_t_solve = 0.0_wp; prof_t_am = 0.0_wp
   END SUBROUTINE CD_HermiteCable_Dyn_Reset_Profile
 
@@ -513,23 +516,31 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Disable_Profile
 
   SUBROUTINE CD_HermiteCable_Dyn_Get_Profile(n_step, n_resid, n_solve, n_am, n_alloc, &
-                                             t_step, t_resid, t_eff, t_solve, t_am, n_tan, t_tan)
+                                             t_step, t_resid, t_eff, t_solve, t_am, n_tan, t_tan, &
+                                             n_factor, t_factor, n_correct)
     !! Read the diagnostic step-profile counters accumulated since the last reset.
-    !! t_step is the total wall inside CD_HermiteCable_Dyn_Step; t_resid + t_eff +
-    !! t_solve + t_am partition its instrumented interior (the remainder is
-    !! predictor/commit bookkeeping and workspace allocation).
+    !! t_step is the total wall inside CD_HermiteCable_Dyn_Step; t_resid + t_tan + t_eff +
+    !! t_factor + t_solve + t_am partition its instrumented interior (the remainder is
+    !! predictor/commit bookkeeping and workspace allocation). t_solve is the back-substitution
+    !! time of the n_solve Newton solves and the n_correct force-blend corrections; t_factor the
+    !! time of the n_factor LU factorisations.
     INTEGER, INTENT(OUT) :: n_step, n_resid, n_solve, n_am, n_alloc
     REAL(wp), INTENT(OUT) :: t_step, t_resid, t_eff, t_solve, t_am
     ! n_tan/t_tan report the tangent assemblies separately from the residual evaluations,
     ! so the eval_res averages stay honest (OPTIONAL so callers may omit them).
     INTEGER, INTENT(OUT), OPTIONAL :: n_tan
     REAL(wp), INTENT(OUT), OPTIONAL :: t_tan
+    INTEGER, INTENT(OUT), OPTIONAL :: n_factor, n_correct
+    REAL(wp), INTENT(OUT), OPTIONAL :: t_factor
     n_step = prof_n_step; n_resid = prof_n_resid; n_solve = prof_n_solve
     n_am = prof_n_am; n_alloc = prof_n_alloc
     t_step = prof_t_step; t_resid = prof_t_resid; t_eff = prof_t_eff
     t_solve = prof_t_solve; t_am = prof_t_am
     IF (PRESENT(n_tan)) n_tan = prof_n_tan
     IF (PRESENT(t_tan)) t_tan = prof_t_tan
+    IF (PRESENT(n_factor)) n_factor = prof_n_factor
+    IF (PRESENT(t_factor)) t_factor = prof_t_factor
+    IF (PRESENT(n_correct)) n_correct = prof_n_correct
   END SUBROUTINE CD_HermiteCable_Dyn_Get_Profile
 
   SUBROUTINE CD_HermiteCable_Dyn_Init(model, l0, EA, EI, rho_a, w, seed, fixed_dofs, &
@@ -3502,7 +3513,8 @@ CONTAINS
         CALL CD_Factor_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, es, em2, matrix_validated=.TRUE.)
         IF (prof_enabled) THEN
           CALL SYSTEM_CLOCK(pc1)
-          prof_t_solve = prof_t_solve + REAL(pc1 - pc0, wp)/REAL(pcr, wp)
+          prof_n_factor = prof_n_factor + 1
+          prof_t_factor = prof_t_factor + REAL(pc1 - pc0, wp)/REAL(pcr, wp)
         END IF
         IF (es /= CD_LINALG_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Step: tangent factor: '//TRIM(em2)
@@ -3733,8 +3745,14 @@ CONTAINS
       DO i = 1, ndof
         IF (.NOT. model%solve_mask(i)) model%ws_dq(i) = CD_ZERO
       END DO
+      IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
       CALL CD_Solve_Factored_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, model%ws_dq, es, em2, &
                                     factor_validated=.TRUE.)
+      IF (prof_enabled) THEN
+        CALL SYSTEM_CLOCK(pc1)
+        prof_n_correct = prof_n_correct + 1
+        prof_t_solve = prof_t_solve + REAL(pc1 - pc0, wp)/REAL(pcr, wp)
+      END IF
       IF (es == CD_LINALG_OK) THEN
         IF (model%torsion%active) CALL torsion_sm_correct()
         CALL transform_rigid_vector_to_global(model, step_rigid_basis, model%ws_dq)

@@ -37,6 +37,9 @@ MODULE CableDyn_Dynamic
                                CD_Cable_Free_Bandwidth
   USE CableDyn_Linalg, ONLY: CD_Factor_Banded, CD_Solve_Banded, CD_Solve_Dense_As_Banded, &
                              CD_Solve_Factored_Banded
+  USE CableDyn_Profile, ONLY: CD_Profile_Kernel_Begin, CD_Profile_Kernel_End, CD_PROF_K_RESIDUAL, &
+                              CD_PROF_K_TANGENT, CD_PROF_K_FACTOR, CD_PROF_K_SOLVE
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
   IMPLICIT NONE
   PRIVATE
 
@@ -755,6 +758,8 @@ CONTAINS
     LOGICAL  :: accepted, has_load_proc, has_load_band_proc, has_added_mass_proc, has_added_mass_band_proc
     LOGICAL  :: has_load_force_proc
     LOGICAL  :: has_prescribed, direct_banded, have_eff, tangent_fresh, use_element_mass_band
+    ! clock at the start of a profiled kernel (CABLEDYN_PROFILE; zero when not profiling)
+    INTEGER(int64) :: prof_k0
     LOGICAL  :: factored_now, guess_used, prev_end_ok, reuse_factor, reused, warm_call, r_at_qk
     LOGICAL  :: scales_stale, trial_is_iterate
     INTEGER  :: es
@@ -1239,8 +1244,10 @@ CONTAINS
           END DO
           ! eval_dynamic has just checked this band finite when a banded load or added-mass
           ! callback contributes to it; the factorization then skips repeating that scan.
+          CALL CD_Profile_Kernel_Begin(prof_k0)
           CALL CD_Factor_Banded(eff_band, kl, ku, ipiv, es, em, &
                                 matrix_validated=has_load_band_proc .OR. has_added_mass_band_proc)
+          CALL CD_Profile_Kernel_End(CD_PROF_K_FACTOR, prof_k0)
           factored_now = es == 0
           work%step_factor = factored_now .AND. work%end_request
           IF (es /= 0) THEN
@@ -1256,10 +1263,15 @@ CONTAINS
       IF (direct_banded) THEN
         ! A tangent factored in this iteration is the finite LU CD_Factor_Banded returned; a
         ! reused one keeps the full check.
+        CALL CD_Profile_Kernel_Begin(prof_k0)
         CALL CD_Solve_Factored_Banded(eff_band, kl, ku, ipiv, dq, es, em, factor_validated=tangent_fresh)
+        CALL CD_Profile_Kernel_End(CD_PROF_K_SOLVE, prof_k0)
       ELSE
         eff_free = eff(free, free)
+        ! the dense path factors and solves in one call: profiled as a factorisation
+        CALL CD_Profile_Kernel_Begin(prof_k0)
         CALL CD_Solve_Dense_As_Banded(eff_free, dq, es, em)
+        CALL CD_Profile_Kernel_End(CD_PROF_K_FACTOR, prof_k0)
       END IF
       IF (es /= 0 .OR. .NOT. CD_All_Finite(dq)) THEN
         ErrStat = CD_DYN_SINGULAR
@@ -1497,7 +1509,9 @@ CONTAINS
               eff_band_unfactored(i, j) = eff_band(i, j)
             END DO
           END DO
+          CALL CD_Profile_Kernel_Begin(prof_k0)
           CALL CD_Factor_Banded(eff_band, kl, ku, ipiv, es2, em2)
+          CALL CD_Profile_Kernel_End(CD_PROF_K_FACTOR, prof_k0)
         END IF
         work%step_factor = es2 == 0
         IF (es2 /= 0) THEN
@@ -1539,7 +1553,9 @@ CONTAINS
         DO i = 1, nfx
           work%end_k(i, j) = (R_trial(fixed(i)) - R(fixed(i)))/h
         END DO
+        CALL CD_Profile_Kernel_Begin(prof_k0)
         CALL CD_Solve_Factored_Banded(eff_band, kl, ku, ipiv, dq, es2, em2)
+        CALL CD_Profile_Kernel_End(CD_PROF_K_SOLVE, prof_k0)
         IF (es2 /= 0 .OR. .NOT. CD_All_Finite(dq)) THEN
           ErrStat = CD_DYN_SINGULAR
           ErrMsg = 'CableDyn_Dynamic: junction end tangent back-solve failed: '//TRIM(em2)
@@ -1912,6 +1928,25 @@ CONTAINS
     END SUBROUTINE form_trial
 
     SUBROUTINE eval_dynamic(q_eval, Rout, es_e, em_e, effout, effbandout)
+      !! eval_dynamic_core, timed by the run-time profile (CABLEDYN_PROFILE) as a residual-only
+      !! evaluation or, with an effective tangent requested, as a residual and tangent one.
+      REAL(wp), INTENT(IN)  :: q_eval(:)
+      REAL(wp), INTENT(OUT) :: Rout(:)
+      INTEGER, INTENT(OUT) :: es_e
+      CHARACTER(*), INTENT(OUT) :: em_e
+      REAL(wp), INTENT(OUT), OPTIONAL :: effout(:, :)
+      REAL(wp), INTENT(OUT), OPTIONAL :: effbandout(:, :)
+      INTEGER(int64) :: clock0
+      CALL CD_Profile_Kernel_Begin(clock0)
+      CALL eval_dynamic_core(q_eval, Rout, es_e, em_e, effout, effbandout)
+      IF (PRESENT(effout) .OR. PRESENT(effbandout)) THEN
+        CALL CD_Profile_Kernel_End(CD_PROF_K_TANGENT, clock0)
+      ELSE
+        CALL CD_Profile_Kernel_End(CD_PROF_K_RESIDUAL, clock0)
+      END IF
+    END SUBROUTINE eval_dynamic
+
+    SUBROUTINE eval_dynamic_core(q_eval, Rout, es_e, em_e, effout, effbandout)
       !! R = M a_alpha + (1-af) r(q_eval, v_eval) + af r(q_n, v_n) with the force blend, else
       !! M a_alpha + f_int(q_alpha) - f_ext - load(q_alpha, v_alpha) (f_ext constant). When
       !! the OPTIONAL effout is present it also returns the effective tangent
@@ -2150,7 +2185,7 @@ CONTAINS
           CALL apply_release_cap(q_eval, Rout)
         END IF
       END IF
-    END SUBROUTINE eval_dynamic
+    END SUBROUTINE eval_dynamic_core
 
     SUBROUTINE structural_inertia(Rout)
       !! Rout = M a_alpha with the element consistent mass (of mass_l0 when present, the lengths
