@@ -2055,7 +2055,7 @@ add_test(
     -DDRIVER=$<TARGET_FILE:cabledyn>
     -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/held_start_gomex80_power_cable.dat
     -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_finite_ei
-    "-DEXPECT=\n    Finite-EI cable steps: [1-9][0-9]*, residual evaluations: [1-9][0-9]*, tangent assemblies: [1-9][0-9]*, factorisations: [1-9][0-9]*, linear solves: [1-9][0-9]*, force-blend corrections: [0-9]+[^\n]*\n    Finite-EI cable step time \\(s\\): residual [0-9.]+, tangent [0-9.]+, effective matrix [0-9.]+, factorisation [0-9.]+, back-substitution [0-9.]+, added mass [0-9.]+, other [0-9.]+\\."
+    "-DEXPECT=\n    Finite-EI cable steps: [1-9][0-9]*, residual evaluations: [1-9][0-9]*, tangent assemblies: [1-9][0-9]*, factorisations: [1-9][0-9]*, linear solves: [1-9][0-9]*, force-blend corrections: [0-9]+[^\n]*\n    Finite-EI cable step time \\(s\\): residual [0-9.]+, tangent [0-9.]+, effective matrix [0-9.]+, factorisation [0-9.]+, back-substitution [0-9.]+, added mass [0-9.]+, other [0-9.]+\\.\n    Finite-EI cable assembly time \\(s\\): band zeroing [0-9.]+, tangent element kernels [0-9.]+, tangent scatter [0-9.]+, structural residual [0-9.]+, weight [0-9.]+, attachments [0-9.]+, dry buoyancy [0-9.]+, seabed contact [0-9.]+, axial damping [0-9.]+, drag [0-9.]+, end connections [0-9.]+, wave Froude-Krylov [0-9.]+, held Froude-Krylov [0-9.]+, torsion [0-9.]+\\."
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile.cmake)
 add_test(
   NAME driver_profile_failure

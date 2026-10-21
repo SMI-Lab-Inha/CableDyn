@@ -41,7 +41,8 @@ PROGRAM cabledyn
                               CD_Profile_Kernels, CD_PROF_K_RESIDUAL, CD_PROF_K_TANGENT, CD_PROF_K_FACTOR, &
                               CD_PROF_K_SOLVE, CD_PROF_NKERNEL
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, CD_HermiteCable_Dyn_Get_Profile, &
-                                          CD_HermiteCable_Dyn_Recovery_Reset, CD_HermiteCable_Dyn_Recovery_Count
+                                          CD_HermiteCable_Dyn_Recovery_Reset, CD_HermiteCable_Dyn_Recovery_Count, &
+                                          CD_HermiteCable_Dyn_Get_Assembly_Profile, HC_ASM_NSEC, HC_ASM_NAMES
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
   IMPLICIT NONE
   TYPE :: StandaloneProgress
@@ -860,7 +861,8 @@ CONTAINS
     !! the finite-EI cable steps. Printed once, on stdout, at the end of the run.
     LOGICAL, SAVE :: printed = .FALSE.
     REAL(wp) :: seconds(CD_PROF_NPHASE), total, march, t_step, t_resid, t_eff, t_solve, t_am, t_tan, t_factor
-    REAL(wp) :: kernel_seconds(CD_PROF_NKERNEL)
+    REAL(wp) :: kernel_seconds(CD_PROF_NKERNEL), asm_seconds(HC_ASM_NSEC)
+    CHARACTER(:), ALLOCATABLE :: asm_line
     INTEGER(int64) :: march_steps, line_steps, line_iterations, kernel_calls(CD_PROF_NKERNEL)
     INTEGER :: line_max_iterations, n_step, n_resid, n_solve, n_am, n_alloc, n_tan, n_factor, n_correct, k
     IF (printed .OR. .NOT. CD_Profile_Armed()) RETURN
@@ -908,6 +910,13 @@ CONTAINS
         ', tangent ', fixed(t_tan, 3), ', effective matrix ', fixed(t_eff, 3), ', factorisation ', &
         fixed(t_factor, 3), ', back-substitution ', fixed(t_solve, 3), ', added mass ', fixed(t_am, 3), ', other ', &
         fixed(MAX(0.0_wp, t_step - (t_resid + t_tan + t_eff + t_factor + t_solve + t_am)), 3), '.'
+      CALL CD_HermiteCable_Dyn_Get_Assembly_Profile(asm_seconds)
+      asm_line = '    Finite-EI cable assembly time (s):'
+      DO k = 1, HC_ASM_NSEC
+        asm_line = asm_line//' '//TRIM(HC_ASM_NAMES(k))//' '//fixed(asm_seconds(k), 3)
+        IF (k < HC_ASM_NSEC) asm_line = asm_line//','
+      END DO
+      WRITE (output_unit, '(A)') asm_line//'.'
     ELSE IF (.NOT. profile_cable_detail .AND. n_finite_ei > 0) THEN
       WRITE (output_unit, '(A)') '    Finite-EI cable steps: not counted on the mixed EI = 0 + finite-EI route, '// &
         'whose cables step concurrently.'

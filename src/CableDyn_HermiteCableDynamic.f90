@@ -136,7 +136,7 @@ MODULE CableDyn_HermiteCableDynamic
   LOGICAL, PARAMETER, PUBLIC :: CD_HC_FORCE_BLEND_DEFAULT = .TRUE.
   PUBLIC :: CD_HermiteCable_Dyn_End
   PUBLIC :: CD_HermiteCable_Dyn_Reset_Profile, CD_HermiteCable_Dyn_Disable_Profile, &
-            CD_HermiteCable_Dyn_Get_Profile
+            CD_HermiteCable_Dyn_Get_Profile, CD_HermiteCable_Dyn_Get_Assembly_Profile
   PUBLIC :: CD_HermiteCable_Dyn_Profile_Enabled
   INTEGER, PARAMETER, PUBLIC :: CD_HCDYN_OK = 0, CD_HCDYN_BADINPUT = 1, CD_HCDYN_NOCONVERGE = 2
   INTEGER, PARAMETER, PUBLIC :: CD_HCDYN_TENSILE_OFF = 0
@@ -182,6 +182,29 @@ MODULE CableDyn_HermiteCableDynamic
   REAL(wp), SAVE :: prof_t_solve = 0.0_wp ! back-substitution wall (Newton solves and force-blend corrections)
   REAL(wp), SAVE :: prof_t_factor = 0.0_wp ! LU factorisation wall of the effective tangent
   REAL(wp), SAVE :: prof_t_am = 0.0_wp    ! frozen added-mass assembly wall (band)
+  ! assemble_residual split into its sections (asm_mark), summed over every assembly while the
+  ! profile is armed: the residual and tangent assemblies above, and those made outside the step
+  ! (committed force, reactions, end moments, consistent accelerations). The tangent element
+  ! kernels evaluate the structural, damping, drag and wave tangents of each element together,
+  ! in parallel.
+  INTEGER, PARAMETER, PUBLIC :: HC_ASM_ZERO = 1, HC_ASM_TAN_KERNELS = 2, HC_ASM_SCATTER = 3, &
+                                HC_ASM_STRUCT = 4, HC_ASM_WEIGHT = 5, HC_ASM_ATTACH = 6, HC_ASM_BUOY = 7, &
+                                HC_ASM_CONTACT = 8, HC_ASM_DAMP = 9, HC_ASM_DRAG = 10, HC_ASM_ENDCONN = 11, &
+                                HC_ASM_WAVE = 12, HC_ASM_HELD = 13, HC_ASM_TORSION = 14, HC_ASM_NSEC = 14
+  CHARACTER(*), PARAMETER, PUBLIC :: HC_ASM_NAMES(HC_ASM_NSEC) = [CHARACTER(24) :: &
+                                                                  'band zeroing', 'tangent element kernels', &
+                                                                  'tangent scatter', 'structural residual', &
+                                                                  'weight', 'attachments', 'dry buoyancy', &
+                                                                  'seabed contact', 'axial damping', 'drag', &
+                                                                  'end connections', 'wave Froude-Krylov', &
+                                                                  'held Froude-Krylov', 'torsion']
+  ! the same sections as one-word report keys (the OpenFAST module's key=value profile lines)
+  CHARACTER(*), PARAMETER, PUBLIC :: HC_ASM_KEYS(HC_ASM_NSEC) = [CHARACTER(12) :: &
+                                                                 'zero', 'tan_kernels', 'tan_scatter', &
+                                                                 'structural', 'weight', 'attachments', &
+                                                                 'buoyancy', 'contact', 'damping', 'drag', &
+                                                                 'end_conn', 'wave_fk', 'held_fk', 'torsion']
+  REAL(wp), SAVE :: prof_t_asm(HC_ASM_NSEC) = 0.0_wp
 
   ! Number of coupling intervals completed by internal generalised-alpha substeps after the nominal
   ! interval was too large for the prescribed boundary motion or environmental load. This counter is
@@ -506,6 +529,7 @@ CONTAINS
     prof_t_step = 0.0_wp; prof_t_resid = 0.0_wp; prof_t_eff = 0.0_wp
     prof_t_tan = 0.0_wp; prof_t_factor = 0.0_wp
     prof_t_solve = 0.0_wp; prof_t_am = 0.0_wp
+    prof_t_asm = 0.0_wp
   END SUBROUTINE CD_HermiteCable_Dyn_Reset_Profile
 
   SUBROUTINE CD_HermiteCable_Dyn_Disable_Profile()
@@ -514,6 +538,26 @@ CONTAINS
     !! timing overhead or serial multi-cable policy from an earlier profiled case.
     prof_enabled = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Disable_Profile
+
+  SUBROUTINE CD_HermiteCable_Dyn_Get_Assembly_Profile(seconds)
+    !! Time of each assemble_residual section (HC_ASM_*, names HC_ASM_NAMES) since the last
+    !! CD_HermiteCable_Dyn_Reset_Profile; zero unless the profile is armed.
+    REAL(wp), INTENT(OUT) :: seconds(HC_ASM_NSEC)
+    seconds = prof_t_asm
+  END SUBROUTINE CD_HermiteCable_Dyn_Get_Assembly_Profile
+
+  SUBROUTINE asm_mark(section, last)
+    !! Add the time since last to section and restart from now (profiled runs only). Called on
+    !! the thread that runs assemble_residual, outside its parallel loop; a profiled run steps
+    !! its cables one at a time, so the plain update is safe.
+    INTEGER, INTENT(IN) :: section
+    INTEGER(INT64), INTENT(INOUT) :: last
+    INTEGER(INT64) :: now, rate
+    IF (.NOT. prof_enabled) RETURN
+    CALL SYSTEM_CLOCK(now, rate)
+    IF (rate > 0_INT64) prof_t_asm(section) = prof_t_asm(section) + REAL(now - last, wp)/REAL(rate, wp)
+    last = now
+  END SUBROUTINE asm_mark
 
   SUBROUTINE CD_HermiteCable_Dyn_Get_Profile(n_step, n_resid, n_solve, n_am, n_alloc, &
                                              t_step, t_resid, t_eff, t_solve, t_am, n_tan, t_tan, &
@@ -6439,6 +6483,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: endconn_direction_eval(3, 2)
     REAL(wp), POINTER :: R(:), Kb(:, :), Kvb(:, :)
     INTEGER :: ne, e, a, gi, es, omp_threads
+    INTEGER(INT64) :: asm_t  ! clock at the last section mark (asm_mark; profiled runs only)
     LOGICAL :: tangent_only
     REAL(wp) :: qe(12), ve(12), Ee, fe(12), Ke(12, 12), pen
     REAL(wp) :: fdrag(12), djq(12, 12), djv(12, 12), ffk(12), fjq(12, 12)
@@ -6467,10 +6512,13 @@ CONTAINS
     Kvb => model%ws_Kvb
     endconn_d0_eval = model%endconn_d0
     IF (PRESENT(endconn_direction_eval)) endconn_d0_eval = endconn_direction_eval
+    asm_t = 0_INT64
+    IF (prof_enabled) CALL SYSTEM_CLOCK(asm_t)
     IF (want_residual) R = CD_ZERO
     IF (want_tangent) THEN
       Kb = CD_ZERO; Kvb = CD_ZERO
     END IF
+    CALL asm_mark(HC_ASM_ZERO, asm_t)
 
     ! Tangent-only element kernels are independent. Evaluate them in parallel into persistent
     ! buffers, then validate and scatter serially in the original element order. Residual and
@@ -6488,12 +6536,14 @@ CONTAINS
       END DO
       !$OMP END DO
       !$OMP END PARALLEL
+      CALL asm_mark(HC_ASM_TAN_KERNELS, asm_t)
       DO e = 1, ne
         IF (model%ws_elem_es(e) /= CD_HCABLE_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'element: '//TRIM(model%ws_elem_em(e)); RETURN
         END IF
         CALL scatter12_band(Kb, model%ws_elem_K(:, :, e), e)
       END DO
+      CALL asm_mark(HC_ASM_SCATTER, asm_t)
     ELSE
       DO e = 1, ne
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3)
@@ -6521,6 +6571,7 @@ CONTAINS
         END IF
         IF (want_tangent) CALL scatter12_band(Kb, Ke, e)
       END DO
+      CALL asm_mark(HC_ASM_STRUCT, asm_t)
     END IF
 
     IF (want_residual) THEN
@@ -6541,12 +6592,14 @@ CONTAINS
           R(6*ne + 4:6*ne + 6) = R(6*ne + 4:6*ne + 6) + (model%w(ne)*model%l0(ne)*model%l0(ne)/12.0_wp)*support
       END IF
     END IF
+    CALL asm_mark(HC_ASM_WEIGHT, asm_t)
     IF (model%has_attach) THEN
       CALL assemble_attachments(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(em2); RETURN
       END IF
     END IF
+    CALL asm_mark(HC_ASM_ATTACH, asm_t)
 
     ! Dry-part buoyancy recovery. w is the submerged weight; the part of an element above the
     ! free surface of the drag configuration regains its displaced-water buoyancy. The surface
@@ -6582,6 +6635,7 @@ CONTAINS
       END DO
     END IF
 
+    CALL asm_mark(HC_ASM_BUOY, asm_t)
     ! Standalone production contact uses the same nodal C1 normal/damper/friction
     ! law as the deck compatibility path, including structured-bed slope terms.
     ! Retain the scalar flat penalty for existing direct API callers.
@@ -6621,6 +6675,7 @@ CONTAINS
       END IF
     END IF
 
+    CALL asm_mark(HC_ASM_CONTACT, asm_t)
     ! Scatter the element-private hydrodynamic tangents in the same phase and element
     ! order as the serial formulation, retaining its floating-point accumulation order.
     IF (tangent_only .AND. (model%has_drag .OR. model%has_axial_damping)) THEN
@@ -6640,6 +6695,7 @@ CONTAINS
       END DO
     END IF
 
+    CALL asm_mark(HC_ASM_SCATTER, asm_t)
     ! Axial Kelvin-Voigt damping is an internal constitutive force. It uses the same
     ! reference-arc Hermite interpolation and axial quadrature as the elastic resultant.
     IF (model%has_axial_damping .AND. .NOT. tangent_only) THEN
@@ -6682,6 +6738,7 @@ CONTAINS
       END DO
     END IF
 
+    CALL asm_mark(HC_ASM_DAMP, asm_t)
     ! Consistent Morison quadratic drag on the submerged cable, distributed over the full cubic-
     ! Hermite shape functions (so the material-tangent DOFs, which move the element interior, also
     ! carry drag). The element returns the 12-DOF generalized drag LOAD fdrag (f_ext) and its force
@@ -6765,6 +6822,7 @@ CONTAINS
       END DO
     END IF
 
+    CALL asm_mark(HC_ASM_DRAG, asm_t)
     ! ---- rotational line-end connections ----
     ! A node-local generalized load on the end tangents: the 3x3 tangent block sits on the
     ! band diagonal (|gi - gj| <= 2 against KU_D = 11), so it cannot widen the band. The
@@ -6787,6 +6845,7 @@ CONTAINS
       END IF
     END IF
 
+    CALL asm_mark(HC_ASM_ENDCONN, asm_t)
     ! Froude-Krylov + fluid-inertia wave load (from the wave ACCELERATION), with the added-mass
     ! configuration's coefficients. An external load: R -= ffk, K -= fjq (geometric tangent chain;
     ! the wave-field spatial gradient is neglected in K -- see the element note).
@@ -6840,6 +6899,7 @@ CONTAINS
       END DO
     END IF
 
+    CALL asm_mark(HC_ASM_WAVE, asm_t)
     ! HELD-FIELD Froude-Krylov + fluid-inertia load: the host-sampled fluid acceleration
     ! (per-element two-node average, frozen over the step) with the added-mass
     ! configuration's coefficients -- the held-mode twin of the wave FK block above.
@@ -6883,6 +6943,7 @@ CONTAINS
       END DO
     END IF
 
+    CALL asm_mark(HC_ASM_HELD, asm_t)
     ! Condensed torsion: R <- R - M_t dTheta/dq and Kb <- Kb - M_t d2Theta/dq2 at q_cfg (the
     ! rank-one g g^T / C joins the solve by Sherman-Morrison; g is kept in tors_g).
     IF (model%torsion%active .AND. (want_residual .OR. want_tangent)) THEN
@@ -6891,6 +6952,7 @@ CONTAINS
         ErrStat = es; ErrMsg = TRIM(em2); RETURN
       END IF
     END IF
+    CALL asm_mark(HC_ASM_TORSION, asm_t)
   END SUBROUTINE assemble_residual
 
   SUBROUTINE assemble_torsion(model, q_cfg, want_residual, want_tangent, ErrStat, ErrMsg)

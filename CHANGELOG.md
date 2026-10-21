@@ -15,6 +15,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   factorisations and back-substitutions, with their counts and times, and separates the
   factorisations of finite-EI cables from their back-substitutions (which now include the
   force-blend correction that ends each step). Results do not change.
+- The run-time profile also splits the residual and tangent assemblies of finite-EI cables into
+  their sections and, in OpenFAST, `CalcOutput` into the kinematics overlay, the output channels
+  and the restore, and the SeaState sampling into the node queries, the grid checks and the
+  hand-over of the fields. Results do not change.
 
 ## [0.2.0] - 2026-10-20
 
