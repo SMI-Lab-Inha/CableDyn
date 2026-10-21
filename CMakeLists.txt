@@ -1084,6 +1084,17 @@ set_tests_properties(openfast_touchdown PROPERTIES
                      # Other BLAS implementations ignore this environment variable.
                      ENVIRONMENT "OPENBLAS_CORETYPE=Sandybridge")
 
+# The reaction of a finite-EI cable assembles only the rows of its node: bit-identical to the
+# full assembly at every node, with every load section, on hand-built cables and along a
+# coupled trajectory of the same deck, and without touching the model's scratch.
+add_executable(test_hermite_node_reaction tests/test_hermite_node_reaction.f90)
+target_link_libraries(test_hermite_node_reaction PRIVATE cabledyn_core)
+add_test(NAME hermite_node_reaction
+         COMMAND test_hermite_node_reaction ${CMAKE_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat)
+set_tests_properties(hermite_node_reaction PROPERTIES
+                     LABELS "fortran;unit;dynamic;openfast;contact"
+                     ENVIRONMENT "OPENBLAS_CORETYPE=Sandybridge")
+
 # The same deck initialises without a static compression/mesh note: the touchdown
 # contact kink is element-local, the smoothed element-mean axial force is tensile.
 add_executable(test_flagship_compression_note tests/test_flagship_compression_note.f90)
