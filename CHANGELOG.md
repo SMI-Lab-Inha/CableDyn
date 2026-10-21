@@ -19,6 +19,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   their sections and, in OpenFAST, `CalcOutput` into the kinematics overlay, the output channels
   and the restore, and the SeaState sampling into the node queries, the grid checks and the
   hand-over of the fields. Results do not change.
+- dtM advisory: at initialisation, a line whose axial period (twice its length over
+  `sqrt(EA/m)`) the time step `dtM` resolves in fewer than six steps gets a note with the
+  period and a `dtM` that resolves it, on the standalone, mixed and OpenFAST routes. Results do
+  not change.
 
 ### Changed
 
@@ -30,6 +34,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   is assembled from the one or two elements that reach the node instead of the whole line,
   bit-identical to the full assembly (lines with torsion keep the full assembly). In the same
   run this cuts `CalcOutput` to 9 s and the run to 194 s. Results do not change.
+
+### Fixed
+
+- The FAQ and the OpenFAST tutorial still gave 0.1 s as the default `dtM` in OpenFAST; since
+  0.2.0 it is the glue `DT`.
 
 ## [0.2.0] - 2026-10-20
 
