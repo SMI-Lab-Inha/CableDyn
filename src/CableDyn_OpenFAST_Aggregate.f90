@@ -561,7 +561,7 @@ CONTAINS
   END SUBROUTINE CD_AGG_TurbineOfMoving
 
   SUBROUTINE CD_AGG_GetMovingPointMesh(self, position, velocity, acceleration, load, ErrStat, ErrMsg, &
-                                       orientation, moment, angular_velocity, angular_acceleration)
+                                       orientation, moment, angular_velocity, angular_acceleration, cable_loads)
     !! Copy the moving-point state and loads out. System columns come from
     !! CD_FMF_GetMovingPointMesh; each cable column carries its coupled-node
     !! position/velocity/acceleration (committed state) and its fairlead reaction from
@@ -581,11 +581,19 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: orientation(:, :, :), moment(:, :)
     REAL(wp), INTENT(OUT), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    ! .FALSE. skips the reactions of the finite-EI cables (one full residual assembly each) and
+    ! returns their load and moment columns as zero: for a caller that wants only the
+    ! kinematics, such as the OpenFAST CalcOutput saving the committed kinematics. The
+    ! reactions write only the cable's scratch, so the other outputs are unchanged.
+    LOGICAL, INTENT(IN), OPTIONAL :: cable_loads
 
     INTEGER :: c, col, es
     REAL(wp) :: y_fair(3)
+    LOGICAL :: want_cable_loads
     CHARACTER(1024) :: em
 
+    want_cable_loads = .TRUE.
+    IF (PRESENT(cable_loads)) want_cable_loads = cable_loads
     position = CD_ZERO
     velocity = CD_ZERO
     acceleration = CD_ZERO
@@ -664,6 +672,7 @@ CONTAINS
         CALL map_hfmf_status(es, em, ErrStat, ErrMsg)
         RETURN
       END IF
+      IF (.NOT. want_cable_loads) CYCLE
       IF (PRESENT(moment)) THEN
         CALL CD_HFMF_CalcOutput(self%cables(c), y_fair, es, em, moment(:, col))
       ELSE

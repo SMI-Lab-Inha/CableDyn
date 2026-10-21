@@ -20,6 +20,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and the restore, and the SeaState sampling into the node queries, the grid checks and the
   hand-over of the fields. Results do not change.
 
+### Changed
+
+- OpenFAST: `CalcOutput` no longer evaluates the reactions of the finite-EI cables when it saves
+  the committed kinematics before transferring the current ones; it discarded them. With a
+  248-element power cable in the IEA-15 VolturnUS-S mooring this cuts `CalcOutput` from 41 s to
+  25 s and the 600 s run from 227 s to 212 s. Results do not change.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added
