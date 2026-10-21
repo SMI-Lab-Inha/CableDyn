@@ -216,7 +216,7 @@ with the period, the number of steps and a ``dtM`` that resolves it, on the stan
 OpenFAST routes. The threshold comes from the IEA-15 MW mixed example in a turbulent 600 s
 OpenFAST run: its power cable (:math:`T_\text{ax} = 0.351` s) matches the ``dtM = DT``
 fairlead tension within 0.3 % of its standard deviation at 7 steps (``dtM = 0.05 s``), while at
-3.5 steps (0.1 s) its axial dynamics are damped and its peak tension is 35 % high; the chains
+3.5 steps (0.1 s) its axial dynamics are damped and its peak tension is about 35 % high; the chains
 (0.78 s) keep their tension statistics within 0.3 % at 7.8 steps. The estimate leaves out added
 mass and the catenary compliance, and types whose stiffness depends on the load (``ElasticMod``
 3, Syrope) are not assessed. The note is a lower bound, not a convergence study: segment-scale

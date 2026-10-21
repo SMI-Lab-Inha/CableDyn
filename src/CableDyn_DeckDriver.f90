@@ -10124,7 +10124,7 @@ CONTAINS
     !! constant dynamic stiffness, its dynamic EA (the stiffness a fast load sees). Added mass
     !! is left out, so the estimate errs short. Coarser steps damp the line's axial dynamics
     !! (the generalised-alpha rhoInf) and misstate its tension peaks: with the IEA-15 MW mixed
-    !! example the cable (0.35 s) is converged at 7 steps per period and 35 % high in peak
+    !! example the cable (0.35 s) is converged at 7 steps per period and about 35 % high in peak
     !! tension at 3.5. Types whose stiffness depends on the load (ElasticMod 3, Syrope) are not
     !! assessed. Only a note: nothing is changed.
     INTEGER, INTENT(IN) :: line_id
