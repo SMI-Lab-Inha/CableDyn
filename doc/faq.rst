@@ -106,7 +106,11 @@ OpenFAST coupling
    ``CABLEDYN_PROFILE=1`` before running ``openfast.exe`` to separate CableDyn solve, SeaState
    sampling, output-probe, and native-I/O time, and to split the steps of ``EI = 0`` lines and
    finite-EI cables into residual, tangent, factorisation and back-substitution time (with
-   ``OMP_NUM_THREADS=1`` the line times add up to the solve time); the standalone driver reads
+   ``OMP_NUM_THREADS=1`` the line times add up to the solve time). The ``profile parts`` line
+   splits ``CalcOutput`` further, into the overlay and restore of the current kinematics (at
+   ``nsuper = 1``) and the output channels, and splits the SeaState sampling into the node
+   queries, the grid checks and the hand-over of the fields; the ``Hermite assembly`` line splits
+   the cable assemblies into their sections (:ref:`cli-profile`). The standalone driver reads
    the same variable and prints its own breakdown (:ref:`cli-profile`). Keep ``ModCoupling`` fixed while
    comparing configurations. Do not switch to loose coupling merely to meet a wall-clock target; on
    the IEA-15MW reference model it materially changed platform and tension responses. Test

@@ -95,6 +95,7 @@ MODULE CableDyn
    USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, &
                                             CD_HermiteCable_Dyn_Disable_Profile, &
                                             CD_HermiteCable_Dyn_Get_Profile, &
+                                            CD_HermiteCable_Dyn_Get_Assembly_Profile, HC_ASM_NSEC, HC_ASM_KEYS, &
                                             CD_HermiteCable_Dyn_Recovery_Count, &
                                             CD_HermiteCable_Dyn_Recovery_Reset
    USE CableDyn_Profile, ONLY: CD_Profile_Arm, CD_Profile_Disarm, CD_Profile_Kernels, CD_PROF_K_RESIDUAL, &
@@ -216,6 +217,13 @@ MODULE CableDyn
       REAL(wp)                :: prof_t_wave = 0.0_wp, prof_t_step = 0.0_wp
       REAL(wp)                :: prof_t_calcout = 0.0_wp, prof_t_loads = 0.0_wp
       REAL(wp)                :: prof_t_native = 0.0_wp
+      ! parts of calcout_s (the overlay and restore of the current kinematics, at nsuper = 1, and
+      ! the channels of a fresh evaluation) and of wave_s (the SeaState node queries with the
+      ! current decomposition, the grid checks, the hand-over of the fields to the aggregate)
+      REAL(wp)                :: prof_t_overlay = 0.0_wp, prof_t_channels = 0.0_wp
+      REAL(wp)                :: prof_t_restore = 0.0_wp
+      REAL(wp)                :: prof_t_wave_kin = 0.0_wp, prof_t_wave_check = 0.0_wp
+      REAL(wp)                :: prof_t_wave_set = 0.0_wp
    END TYPE CD_OF_Instance
 
    TYPE(CD_OF_Instance), ALLOCATABLE, SAVE :: Inst(:)
@@ -1744,7 +1752,8 @@ CONTAINS
 
       character(*), parameter   :: RoutineName = 'sample_wavefield'
       INTEGER(IntKi)            :: i, l, es, nodeInWater, n_current_nodes
-      LOGICAL                   :: init_call
+      INTEGER(IntKi)            :: prof_c0, prof_c1, prof_rate
+      LOGICAL                   :: init_call, timed
       REAL(SiKi)                :: zeta1, zeta2, zeta, pdyn, fv(3), fa(3), famcf(3)
       REAL(SiKi)                :: wave_zeta1, wave_zeta2, wave_zeta, wave_pdyn
       REAL(SiKi)                :: wave_fv(3), wave_fa(3), wave_famcf(3)
@@ -1763,6 +1772,9 @@ CONTAINS
       ErrMsg  = ''
       init_call = .FALSE.
       IF (PRESENT(at_init)) init_call = at_init
+      ! the parts of wave_s, timed like it outside the Init seeding call (a checkpoint restart
+      ! re-sampling once is counted in the parts only)
+      timed = inst_e%prof_enabled .AND. .NOT. init_call
       IF (.NOT. ASSOCIATED(p%WaveField)) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the WaveField pointer is null but '// &
                           'SeaState kinematics were requested at Init.', ErrStat, ErrMsg, RoutineName )
@@ -1794,6 +1806,7 @@ CONTAINS
          RETURN
       END IF
       IF (.NOT. inst_e%grid_warned) ALLOCATE (wl_sampled(inst_e%nfluid))
+      IF (timed) CALL SYSTEM_CLOCK(prof_c0, prof_rate)
       DO i = 1, inst_e%nfluid
          IF (.NOT. inst_e%agg%host_wave_enabled .AND. .NOT. inst_e%agg%host_current_enabled) THEN
             ! An explicit WaterKin file may disable both host components even
@@ -1889,6 +1902,11 @@ CONTAINS
          inst_e%fx_pd(i) = 0.0_wp
          IF (inst_e%agg%host_wave_enabled) inst_e%fx_pd(i) = REAL(pdyn, wp)
       END DO
+      IF (timed) THEN
+         CALL SYSTEM_CLOCK(prof_c1)
+         inst_e%prof_t_wave_kin = inst_e%prof_t_wave_kin + REAL(prof_c1 - prof_c0, wp)/REAL(prof_rate, wp)
+         prof_c0 = prof_c1
+      END IF
       ! Grid coverage: checked on the positions just sampled (with their free-surface
       ! elevations), at Init (the static equilibrium) and then every mooring step until the one
       ! warning has been issued.
@@ -1897,8 +1915,17 @@ CONTAINS
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       END IF
       IF (.NOT. inst_e%curr_grid_warned) CALL check_current_field_grid( inst_e, p%WaveField, t_sample )
+      IF (timed) THEN
+         CALL SYSTEM_CLOCK(prof_c1)
+         inst_e%prof_t_wave_check = inst_e%prof_t_wave_check + REAL(prof_c1 - prof_c0, wp)/REAL(prof_rate, wp)
+         prof_c0 = prof_c1
+      END IF
       CALL CD_AGG_SetFluidFields( inst_e%agg, inst_e%fx_vel, inst_e%fx_acc, inst_e%fx_wl, es, em, &
                                   dynamic_pressure=inst_e%fx_pd )
+      IF (timed) THEN
+         CALL SYSTEM_CLOCK(prof_c1)
+         inst_e%prof_t_wave_set = inst_e%prof_t_wave_set + REAL(prof_c1 - prof_c0, wp)/REAL(prof_rate, wp)
+      END IF
       IF (es /= CD_AGG_OK) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
       END IF
@@ -2228,6 +2255,10 @@ CONTAINS
             CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
             RETURN
          END IF
+         IF (Inst(id)%prof_enabled) THEN
+            CALL SYSTEM_CLOCK(prof_c1)
+            Inst(id)%prof_t_overlay = Inst(id)%prof_t_overlay + REAL(prof_c1 - prof_c0, wp)/REAL(prof_rate, wp)
+         END IF
       ELSE
          ! Supercycled: the committed state changes only when a mooring step completes, so the
          ! held loads/channels are re-evaluated only then (serving the cache is bit-identical
@@ -2277,6 +2308,7 @@ CONTAINS
          ! Deck OUTPUTS channels are evaluated at the same aggregate state as the returned
          ! loads: with supercycling the last committed zero-order-hold mooring state, at
          ! nsuper = 1 the state including the current coupled kinematics.
+         IF (Inst(id)%prof_enabled) CALL SYSTEM_CLOCK(prof_phase0)
          DO i = 1, p%NumOuts
             CALL CD_AGG_EvalChannel( Inst(id)%agg, i, cval, es, em )
             IF (es /= CD_AGG_OK) THEN
@@ -2290,6 +2322,11 @@ CONTAINS
             END IF
             Inst(id)%ws_chan(i) = cval
          END DO
+         IF (Inst(id)%prof_enabled) THEN
+            CALL SYSTEM_CLOCK(prof_c1)
+            Inst(id)%prof_t_channels = Inst(id)%prof_t_channels + &
+               REAL(prof_c1 - prof_phase0, wp)/REAL(prof_rate, wp)
+         END IF
          Inst(id)%loads_cached = .TRUE.
          Inst(id)%loads_at_n = Inst(id)%last_solve_n
       END IF
@@ -2299,7 +2336,13 @@ CONTAINS
       ! re-derived interior accelerations, and only the mirror carries the committed
       ! gen-alpha values.
       IF (state_overlaid) THEN
+         IF (Inst(id)%prof_enabled) CALL SYSTEM_CLOCK(prof_phase0)
          CALL restore_calcoutput_probe( Inst(id), m, ErrStat2, ErrMsg2 )
+         IF (Inst(id)%prof_enabled) THEN
+            CALL SYSTEM_CLOCK(prof_c1)
+            Inst(id)%prof_t_restore = Inst(id)%prof_t_restore + &
+               REAL(prof_c1 - prof_phase0, wp)/REAL(prof_rate, wp)
+         END IF
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) RETURN
       END IF
@@ -2441,6 +2484,8 @@ CONTAINS
       INTEGER(int64)          :: k_calls(CD_PROF_NKERNEL)
       REAL(wp)                :: k_seconds(CD_PROF_NKERNEL), ht_factor
       CHARACTER(24)           :: k_txt(CD_PROF_NKERNEL)
+      REAL(wp)                :: ht_asm(HC_ASM_NSEC)
+      CHARACTER(:), ALLOCATABLE :: asm_txt
       INTEGER                 :: k_i
       INTEGER                 :: sb_max, sb_ios
       CHARACTER(24)           :: sb_txt(5)
@@ -2480,6 +2525,13 @@ CONTAINS
                               TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_calcout, DbKi)))// &
                               ' loads_s='//TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_loads, DbKi)))// &
                               ' native_io_s='//TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_native, DbKi))) )
+                  CALL WrScr( '    CableDyn profile parts: overlay_s='// &
+                              TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_overlay, DbKi)))// &
+                              ' channels_s='//TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_channels, DbKi)))// &
+                              ' restore_s='//TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_restore, DbKi)))// &
+                              ' wave_kin_s='//TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_wave_kin, DbKi)))// &
+                              ' wave_check_s='//TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_wave_check, DbKi)))// &
+                              ' wave_set_s='//TRIM(Num2LStr(REAL(Inst(m%CDInst)%prof_t_wave_set, DbKi))) )
                   CALL WrScr( '    CableDyn profile counts: update='// &
                               TRIM(Num2LStr(Inst(m%CDInst)%prof_n_update))// &
                               ' solve='//TRIM(Num2LStr(Inst(m%CDInst)%prof_n_solve))// &
@@ -2523,6 +2575,14 @@ CONTAINS
                                  ' alloc='//TRIM(Num2LStr(hn_alloc)) )
                      CALL WrScr( '    CableDyn Hermite recoveries: intervals='// &
                                  TRIM(Num2LStr(CD_HermiteCable_Dyn_Recovery_Count())) )
+                     ! the residual and tangent assemblies split into their sections
+                     CALL CD_HermiteCable_Dyn_Get_Assembly_Profile(ht_asm)
+                     asm_txt = '    CableDyn Hermite assembly:'
+                     DO k_i = 1, HC_ASM_NSEC
+                        asm_txt = asm_txt//' '//TRIM(HC_ASM_KEYS(k_i))//'_s='// &
+                                  TRIM(Num2LStr(REAL(ht_asm(k_i), DbKi)))
+                     END DO
+                     CALL WrScr( asm_txt )
                   END IF
                END IF
                ! Propagate a teardown failure as SEVERE (not fatal): the glue's End path
@@ -4257,6 +4317,12 @@ CONTAINS
       Inst(id)%prof_t_calcout = 0.0_wp
       Inst(id)%prof_t_loads = 0.0_wp
       Inst(id)%prof_t_native = 0.0_wp
+      Inst(id)%prof_t_overlay = 0.0_wp
+      Inst(id)%prof_t_channels = 0.0_wp
+      Inst(id)%prof_t_restore = 0.0_wp
+      Inst(id)%prof_t_wave_kin = 0.0_wp
+      Inst(id)%prof_t_wave_check = 0.0_wp
+      Inst(id)%prof_t_wave_set = 0.0_wp
       IF (reset_global) THEN
          CALL CD_HermiteCable_Dyn_Recovery_Reset()
          IF (enabled) THEN
@@ -4286,6 +4352,12 @@ CONTAINS
       Inst(destination)%prof_t_calcout = Inst(source)%prof_t_calcout
       Inst(destination)%prof_t_loads = Inst(source)%prof_t_loads
       Inst(destination)%prof_t_native = Inst(source)%prof_t_native
+      Inst(destination)%prof_t_overlay = Inst(source)%prof_t_overlay
+      Inst(destination)%prof_t_channels = Inst(source)%prof_t_channels
+      Inst(destination)%prof_t_restore = Inst(source)%prof_t_restore
+      Inst(destination)%prof_t_wave_kin = Inst(source)%prof_t_wave_kin
+      Inst(destination)%prof_t_wave_check = Inst(source)%prof_t_wave_check
+      Inst(destination)%prof_t_wave_set = Inst(source)%prof_t_wave_set
    END SUBROUTINE copy_instance_profile
 
    !> Validate an instance handle (fails closed on 0 / stale handles, e.g. after a

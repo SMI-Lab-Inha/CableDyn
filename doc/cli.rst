@@ -158,20 +158,21 @@ breakdown such as:
 
      Run-time profile (CABLEDYN_PROFILE), wall-clock time:
        input parsing                             0.002 s    0.1 %
-       initialisation and statics                0.237 s    8.8 %
-       dynamic march                             2.444 s   91.1 %
-         fluid sampled by the driver             0.050 s    1.9 %
-         line, cable and object steps            2.379 s   88.6 %
+       initialisation and statics                0.238 s    8.7 %
+       dynamic march                             2.496 s   91.2 %
+         fluid sampled by the driver             0.051 s    1.9 %
+         line, cable and object steps            2.430 s   88.8 %
          checks and line failures                0.002 s    0.1 %
-         outputs                                 0.012 s    0.5 %
+         outputs                                 0.013 s    0.5 %
          progress and bookkeeping                0.000 s    0.0 %
        finalisation                              0.000 s    0.0 %
-       total                                     2.684 s  100.0 %
-       March: 600 committed step(s), 4.0735 ms per step.
+       total                                     2.736 s  100.0 %
+       March: 600 committed step(s), 4.1596 ms per step.
        EI = 0 line steps: 3621 (substeps and retries included), Newton iterations: 4739 (1.309 per line step, at most 2).
-       EI = 0 line step kernels: residual 6947 (0.039 s), residual and tangent 3322 (0.064 s), factorisation 3322 (0.013 s), back-substitution 5126 (0.009 s).
+       EI = 0 line step kernels: residual 6947 (0.040 s), residual and tangent 3322 (0.064 s), factorisation 3322 (0.013 s), back-substitution 5126 (0.009 s).
        Finite-EI cable steps: 1423, residual evaluations: 6140, tangent assemblies: 2914, factorisations: 2914, linear solves: 2914, force-blend corrections: 1423, intervals recovered by substeps: 0.
-       Finite-EI cable step time (s): residual 0.412, tangent 0.883, effective matrix 0.039, factorisation 0.211, back-substitution 0.075, added mass 0.049, other 0.085.
+       Finite-EI cable step time (s): residual 0.420, tangent 0.913, effective matrix 0.039, factorisation 0.213, back-substitution 0.076, added mass 0.050, other 0.086.
+       Finite-EI cable assembly time (s): band zeroing 0.033, tangent element kernels 0.809, tangent scatter 0.065, structural residual 0.173, weight 0.003, attachments 0.000, dry buoyancy 0.024, seabed contact 0.007, axial damping 0.147, drag 0.240, end connections 0.001, wave Froude-Krylov 0.000, held Froude-Krylov 0.126, torsion 0.000.
 
 The phases add up to the total, which runs from the start of the deck parse to the report. If the
 run stops with an error, the time up to the stop counts to the phase in which it stopped, and
@@ -206,6 +207,13 @@ The counts follow the march:
   matrix, the factorisations, the back-substitutions (of the Newton solves and of the
   force-blend correction that ends each step), the added mass and the rest; the rarely used
   torsion and consistent-acceleration solves count to the rest.
+* **Finite-EI cable assembly time** splits the residual and tangent assemblies into their
+  sections. The tangent element kernels evaluate the structural, damping, drag and wave
+  tangents of each element together; the other sections are the element residuals, the weight
+  and supports, the attachments, the dry-part buoyancy, the seabed contact, the axial damping,
+  the drag, the end connections, the wave and held Froude-Krylov loads and the torsion. The
+  sections also count the assemblies made outside the step (reactions, end moments and
+  consistent accelerations), so they can add up to more than the residual and tangent times.
 
 An unset or empty variable, or ``0``, leaves the profile off. The driver reads the variable once,
 when it starts.
