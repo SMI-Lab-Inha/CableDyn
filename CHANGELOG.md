@@ -44,6 +44,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- OpenFAST with `dtM` larger than `DT`: an `openfast -restart` re-sampled the SeaState fields of the
+  committed step at its end positions instead of restoring the fields the step held (sampled at
+  its start positions), so the loads served until the next solve, and the run after them,
+  differed slightly from the uninterrupted run (up to 2e-3 of a tension's standard deviation).
+  The checkpoint now carries the held fields, and a restart continues the run bit for bit at any
+  `dtM`; checkpoints written before this change re-sample as before.
 - The FAQ and the OpenFAST tutorial still gave 0.1 s as the default `dtM` in OpenFAST; since
   0.2.0 it is the glue `DT`.
 

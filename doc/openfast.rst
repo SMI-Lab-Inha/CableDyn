@@ -343,7 +343,9 @@ The same module takes part in OpenFAST's checkpoint, linearisation, farm and con
 without an auxiliary process:
 
 * **Checkpoint/restart** serialises the committed line, constitutive, connection, body, and rod
-  state needed to continue the trajectory. A checkpoint is accepted only on a committed CableDyn
+  state needed to continue the trajectory, with the SeaState fields the committed step holds and,
+  with ``dtM`` larger than ``DT``, the loads of the solve before it (the load predictor), so a
+  restart continues the run bit for bit at any ``dtM``. A checkpoint is accepted only on a committed CableDyn
   step, so choose ``ChkptTime`` as a whole multiple of ``dtM``; a checkpoint written between two
   commits stops the restart with a message that says so. On restart the module writes a
   temporary deck copy, ``<RootName>.CD.rst.dat``, beside the ``MooringFile``, rebuilds the model

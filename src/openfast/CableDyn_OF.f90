@@ -848,6 +848,7 @@ CONTAINS
          ! state. Seeding after the static solve matches the stock-MoorDyn convention:
          ! the IC is the still-water equilibrium, wave kinematics act from t = 0.
          CALL sample_wavefield( Inst(id), p, m, 0.0_DbKi, ErrStat2, ErrMsg2, at_init=.TRUE. )
+         IF (ErrStat2 < AbortErrLev) CALL save_held_fluid( Inst(id), other )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) RETURN
       END IF
@@ -1315,6 +1316,7 @@ CONTAINS
       CHARACTER(2100)           :: rst_deck
       INTEGER(IntKi)            :: id, old_id, stale_id, i, es, ncp, nlines, il, ndofl, nin, k, ic, csz, koff
       LOGICAL                   :: use_extf, profile_requested, preserve_profile
+      LOGICAL                   :: restored   ! held fluid fields restored from the checkpoint
       CHARACTER(ErrMsgLen)            :: em
       INTEGER(IntKi)            :: ErrStat2
       CHARACTER(ErrMsgLen)      :: ErrMsg2
@@ -1493,14 +1495,18 @@ CONTAINS
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) RETURN
 
-      ! restore the ambient-fluid fields the reference's committed state carried: the
-      ! last pre-checkpoint solve sampled the WaveField at ITS interval end (= the
-      ! restart time), so sampling here reproduces those fields on the restored
-      ! positions. Without this the first post-restart load evaluations would see still
-      ! water and ring for a few steps.
+      ! restore the ambient-fluid fields the reference's committed state carried. The last
+      ! pre-checkpoint solve sampled the WaveField at ITS interval end (= the restart time) at
+      ! the node positions of its START, and held them: the checkpoint carries them, and with
+      ! supercycling they act on the loads served until the next solve. A checkpoint without
+      ! them (written before they were saved) re-samples at the restored, end-of-step
+      ! positions, which matches only at dtM = DT, where the next solve re-samples before any
+      ! load is served. Without either the first post-restart load evaluations would see
+      ! still water and ring for a few steps.
       Inst(id)%active = .TRUE.       ! sample_wavefield reads through the live instance
       IF (use_extf) THEN
-         CALL sample_wavefield( Inst(id), p, m, t, ErrStat2, ErrMsg2 )
+         CALL restore_held_fluid( Inst(id), other, restored, ErrStat2, ErrMsg2 )
+         IF (ErrStat2 < AbortErrLev .AND. .NOT. restored) CALL sample_wavefield( Inst(id), p, m, t, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) THEN
             CALL release_instance( id )
@@ -1700,6 +1706,7 @@ CONTAINS
             IF (Inst(id)%use_extfluid) THEN
                IF (Inst(id)%prof_enabled) CALL SYSTEM_CLOCK(prof_phase0)
                CALL sample_wavefield( Inst(id), p, m, t + p%dtCoupling, ErrStat2, ErrMsg2 )
+               IF (ErrStat2 < AbortErrLev) CALL save_held_fluid( Inst(id), other )
                IF (Inst(id)%prof_enabled) THEN
                   CALL SYSTEM_CLOCK(prof_c1)
                   Inst(id)%prof_n_wave = Inst(id)%prof_n_wave + 1_IntKi
@@ -2476,6 +2483,55 @@ CONTAINS
    END SUBROUTINE CD_CalcOutput
 
 !----------------------------------------------------------------------------------------------------------------------------------
+   SUBROUTINE save_held_fluid( inst_e, other )
+      !! Mirror the held ambient-fluid fields of the committed step (fx_vel, fx_acc, fx_wl,
+      !! fx_pd, as last handed to the aggregate by sample_wavefield) into the OtherState, so a
+      !! restart serves its loads from the same fields (restore_held_fluid).
+      TYPE(CD_OF_Instance),     INTENT(IN   ) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(INOUT) :: other
+      INTEGER(IntKi) :: nf
+      nf = inst_e%nfluid
+      IF (ALLOCATED(other%fluid_held)) THEN
+         IF (SIZE(other%fluid_held) /= 8*nf) DEALLOCATE (other%fluid_held)
+      END IF
+      IF (.NOT. ALLOCATED(other%fluid_held)) ALLOCATE (other%fluid_held(8*nf))
+      other%fluid_held(1:3*nf) = RESHAPE(REAL(inst_e%fx_vel, DbKi), [3*nf])
+      other%fluid_held(3*nf + 1:6*nf) = RESHAPE(REAL(inst_e%fx_acc, DbKi), [3*nf])
+      other%fluid_held(6*nf + 1:7*nf) = REAL(inst_e%fx_wl, DbKi)
+      other%fluid_held(7*nf + 1:8*nf) = REAL(inst_e%fx_pd, DbKi)
+   END SUBROUTINE save_held_fluid
+
+   SUBROUTINE restore_held_fluid( inst_e, other, restored, ErrStat, ErrMsg )
+      !! Hand the held ambient-fluid fields of a checkpoint (save_held_fluid) back to the
+      !! aggregate; restored is .FALSE. when the checkpoint does not carry them for this
+      !! instance's fluid nodes.
+      TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(IN   ) :: other
+      LOGICAL,                  INTENT(  OUT) :: restored
+      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
+      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
+      INTEGER(IntKi) :: nf, es
+      CHARACTER(ErrMsgLen) :: em
+      ErrStat = ErrID_None
+      ErrMsg = ''
+      restored = .FALSE.
+      nf = inst_e%nfluid
+      IF (.NOT. ALLOCATED(other%fluid_held)) RETURN
+      IF (SIZE(other%fluid_held) /= 8*nf) RETURN
+      inst_e%fx_vel = RESHAPE(REAL(other%fluid_held(1:3*nf), wp), [3, nf])
+      inst_e%fx_acc = RESHAPE(REAL(other%fluid_held(3*nf + 1:6*nf), wp), [3, nf])
+      inst_e%fx_wl = REAL(other%fluid_held(6*nf + 1:7*nf), wp)
+      inst_e%fx_pd = REAL(other%fluid_held(7*nf + 1:8*nf), wp)
+      CALL CD_AGG_SetFluidFields( inst_e%agg, inst_e%fx_vel, inst_e%fx_acc, inst_e%fx_wl, es, em, &
+                                  dynamic_pressure=inst_e%fx_pd )
+      IF (es /= CD_AGG_OK) THEN
+         ErrStat = ErrID_Fatal
+         ErrMsg = 'CableDyn mooring module: restoring the held fluid fields: '//TRIM(em)
+         RETURN
+      END IF
+      restored = .TRUE.
+   END SUBROUTINE restore_held_fluid
+
    SUBROUTINE shift_predictor_loads( inst_e, other )
       !! The load predictor's previous commit when a new mooring step starts: the loads served
       !! since the last commit, when CalcOutput evaluated them there (its committed loads), and
