@@ -11,17 +11,23 @@ MODULE CableDyn_Profile
   !! a run that stops with an error has its time up to the stop in the phase it stopped in.
   !! Each time march enters its fluid update, its step, its checks, its output and its
   !! progress report in turn; CD_Profile_Step counts the committed steps. CD_Step_Model counts
-  !! the EI = 0 line steps and their Newton iterations. Unarmed, every entry point returns after
-  !! one test, so a run that does not ask for the profile, and a host that loads the library,
-  !! are not affected. The state is process-global and serves one run: the phase marks are
-  !! taken on the driver's thread, and the line-step counters are updated atomically because
-  !! lines step concurrently.
+  !! the EI = 0 line steps and their Newton iterations, and the step of an EI = 0 line times its
+  !! kernels between CD_Profile_Kernel_Begin and CD_Profile_Kernel_End: the residual-only
+  !! evaluations, the evaluations that also assemble the effective tangent, the factorisations of
+  !! that tangent and the back-substitutions with it (CD_Profile_Kernels reads them; their times
+  !! are summed over the lines, so they exceed the wall time when lines step concurrently).
+  !! Unarmed, every entry point returns after one test, so a run that does not ask for the
+  !! profile, and a host that loads the library, are not affected. The state is process-global
+  !! and serves one run: the phase marks are taken on the driver's thread, and the line-step and
+  !! kernel counters are updated atomically because lines step concurrently. The OpenFAST module
+  !! arms it with its own profiler and disarms it (CD_Profile_Disarm) when the host does not ask.
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
   USE CableDyn_Precision, ONLY: wp
   IMPLICIT NONE
   PRIVATE
-  PUBLIC :: CD_Profile_Requested, CD_Profile_Arm, CD_Profile_Armed, CD_Profile_Enter, CD_Profile_Flush, &
-            CD_Profile_Step, CD_Profile_Count_Line_Step, CD_Profile_Seconds, CD_Profile_Counts
+  PUBLIC :: CD_Profile_Requested, CD_Profile_Arm, CD_Profile_Disarm, CD_Profile_Armed, CD_Profile_Enter, &
+            CD_Profile_Flush, CD_Profile_Step, CD_Profile_Count_Line_Step, CD_Profile_Seconds, CD_Profile_Counts, &
+            CD_Profile_Kernel_Begin, CD_Profile_Kernel_End, CD_Profile_Kernels
 
   INTEGER, PARAMETER, PUBLIC :: CD_PROF_INPUT = 1     ! deck parsing and auxiliary input files
   INTEGER, PARAMETER, PUBLIC :: CD_PROF_INIT = 2      ! model build, static equilibrium, initial outputs
@@ -33,12 +39,20 @@ MODULE CableDyn_Profile
   INTEGER, PARAMETER, PUBLIC :: CD_PROF_FINAL = 8     ! after the march: closing files, range files
   INTEGER, PARAMETER, PUBLIC :: CD_PROF_NPHASE = 8
 
+  ! Kernels of the EI = 0 line step (CD_Cable_Gen_Alpha_Step)
+  INTEGER, PARAMETER, PUBLIC :: CD_PROF_K_RESIDUAL = 1  ! residual-only evaluation
+  INTEGER, PARAMETER, PUBLIC :: CD_PROF_K_TANGENT = 2   ! residual and effective-tangent evaluation
+  INTEGER, PARAMETER, PUBLIC :: CD_PROF_K_FACTOR = 3    ! LU factorisation of the effective tangent
+  INTEGER, PARAMETER, PUBLIC :: CD_PROF_K_SOLVE = 4     ! back-substitution with a factored tangent
+  INTEGER, PARAMETER, PUBLIC :: CD_PROF_NKERNEL = 4
+
   LOGICAL, SAVE :: armed = .FALSE.
   INTEGER, SAVE :: current = CD_PROF_INPUT
   INTEGER(int64), SAVE :: rate = 0_int64, last = 0_int64
   INTEGER(int64), SAVE :: ticks(CD_PROF_NPHASE) = 0_int64
   INTEGER(int64), SAVE :: n_march_steps = 0_int64, n_line_steps = 0_int64, n_line_iter = 0_int64
   INTEGER, SAVE :: max_line_iter = 0
+  INTEGER(int64), SAVE :: k_ticks(CD_PROF_NKERNEL) = 0_int64, k_calls(CD_PROF_NKERNEL) = 0_int64
 
 CONTAINS
 
@@ -58,10 +72,17 @@ CONTAINS
     n_line_steps = 0_int64
     n_line_iter = 0_int64
     max_line_iter = 0
+    k_ticks = 0_int64
+    k_calls = 0_int64
     current = CD_PROF_INPUT
     CALL SYSTEM_CLOCK(last, rate)
     armed = rate > 0_int64
   END SUBROUTINE CD_Profile_Arm
+
+  SUBROUTINE CD_Profile_Disarm()
+    !! Stop recording; the counts and times so far stay readable until the next CD_Profile_Arm.
+    armed = .FALSE.
+  END SUBROUTINE CD_Profile_Disarm
 
   LOGICAL FUNCTION CD_Profile_Armed() RESULT(is_armed)
     is_armed = armed
@@ -106,6 +127,39 @@ CONTAINS
     !$OMP ATOMIC UPDATE
     max_line_iter = MAX(max_line_iter, n_iter)
   END SUBROUTINE CD_Profile_Count_Line_Step
+
+  SUBROUTINE CD_Profile_Kernel_Begin(start)
+    !! The clock at the start of a kernel (zero when the profile is not armed).
+    INTEGER(int64), INTENT(OUT) :: start
+    start = 0_int64
+    IF (.NOT. armed) RETURN
+    CALL SYSTEM_CLOCK(start)
+  END SUBROUTINE CD_Profile_Kernel_Begin
+
+  SUBROUTINE CD_Profile_Kernel_End(kernel, start)
+    !! Count one call of kernel (a CD_PROF_K_* value) and add the time since start, taken by
+    !! CD_Profile_Kernel_Begin. Lines step concurrently, so the updates are atomic.
+    INTEGER, INTENT(IN) :: kernel
+    INTEGER(int64), INTENT(IN) :: start
+    INTEGER(int64) :: now
+    IF (.NOT. armed) RETURN
+    ! a kernel that began before the profile was armed has no start time
+    IF (start == 0_int64 .OR. kernel < 1 .OR. kernel > CD_PROF_NKERNEL) RETURN
+    CALL SYSTEM_CLOCK(now)
+    !$OMP ATOMIC UPDATE
+    k_calls(kernel) = k_calls(kernel) + 1_int64
+    !$OMP ATOMIC UPDATE
+    k_ticks(kernel) = k_ticks(kernel) + MAX(0_int64, now - start)
+  END SUBROUTINE CD_Profile_Kernel_End
+
+  SUBROUTINE CD_Profile_Kernels(calls, seconds)
+    !! Calls and summed time [s] of each CD_PROF_K_* kernel since the profile was armed.
+    INTEGER(int64), INTENT(OUT) :: calls(CD_PROF_NKERNEL)
+    REAL(wp), INTENT(OUT) :: seconds(CD_PROF_NKERNEL)
+    calls = k_calls
+    seconds = 0.0_wp
+    IF (rate > 0_int64) seconds = REAL(k_ticks, wp)/REAL(rate, wp)
+  END SUBROUTINE CD_Profile_Kernels
 
   REAL(wp) FUNCTION CD_Profile_Seconds(phase) RESULT(seconds)
     !! Wall time attributed to phase so far [s]; zero when the profile is not armed.

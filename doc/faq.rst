@@ -104,8 +104,10 @@ OpenFAST coupling
    benchmark does **not** imply a fast coupled run: OpenFAST may call ``CalcOutput`` several times
    per physical step with different trial kinematics. Set the environment variable
    ``CABLEDYN_PROFILE=1`` before running ``openfast.exe`` to separate CableDyn solve, SeaState
-   sampling, output-probe, and native-I/O time; the standalone driver reads the same variable
-   and prints its own breakdown (:ref:`cli-profile`). Keep ``ModCoupling`` fixed while
+   sampling, output-probe, and native-I/O time, and to split the steps of ``EI = 0`` lines and
+   finite-EI cables into residual, tangent, factorisation and back-substitution time (with
+   ``OMP_NUM_THREADS=1`` the line times add up to the solve time); the standalone driver reads
+   the same variable and prints its own breakdown (:ref:`cli-profile`). Keep ``ModCoupling`` fixed while
    comparing configurations. Do not switch to loose coupling merely to meet a wall-clock target; on
    the IEA-15MW reference model it materially changed platform and tension responses. Test
    ``OMP_NUM_THREADS=1`` as well as the intended threaded setting: three short lines can be too

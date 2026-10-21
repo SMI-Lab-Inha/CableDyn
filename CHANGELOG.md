@@ -8,6 +8,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The run-time profile (`CABLEDYN_PROFILE=1`, standalone driver and OpenFAST) splits the steps
+  of `EI = 0` lines into residual-only evaluations, residual and tangent evaluations, LU
+  factorisations and back-substitutions, with their counts and times, and separates the
+  factorisations of finite-EI cables from their back-substitutions (which now include the
+  force-blend correction that ends each step). Results do not change.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added

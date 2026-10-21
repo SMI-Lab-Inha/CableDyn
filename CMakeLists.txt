@@ -2047,7 +2047,7 @@ add_test(
     -DDRIVER=$<TARGET_FILE:cabledyn>
     -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/examples/dynamic_chain_waves.dat
     -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_ei0
-    "-DEXPECT=\n    EI = 0 line steps: [1-9][0-9]* \\(substeps and retries included\\), Newton iterations: [1-9]"
+    "-DEXPECT=\n    EI = 0 line steps: [1-9][0-9]* \\(substeps and retries included\\), Newton iterations: [1-9][^\n]*\n    EI = 0 line step kernels: residual [0-9]+ \\([0-9.]+ s\\), residual and tangent [1-9][0-9]* \\([0-9.]+ s\\), factorisation [1-9][0-9]* \\([0-9.]+ s\\), back-substitution [1-9][0-9]* \\([0-9.]+ s\\)\\."
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile.cmake)
 add_test(
   NAME driver_profile_finite_ei
@@ -2055,7 +2055,7 @@ add_test(
     -DDRIVER=$<TARGET_FILE:cabledyn>
     -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/held_start_gomex80_power_cable.dat
     -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/driver_profile_finite_ei
-    "-DEXPECT=\n    Finite-EI cable steps: [1-9][0-9]*, residual evaluations: [1-9]"
+    "-DEXPECT=\n    Finite-EI cable steps: [1-9][0-9]*, residual evaluations: [1-9][0-9]*, tangent assemblies: [1-9][0-9]*, factorisations: [1-9][0-9]*, linear solves: [1-9][0-9]*, force-blend corrections: [0-9]+[^\n]*\n    Finite-EI cable step time \\(s\\): residual [0-9.]+, tangent [0-9.]+, effective matrix [0-9.]+, factorisation [0-9.]+, back-substitution [0-9.]+, added mass [0-9.]+, other [0-9.]+\\."
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_profile.cmake)
 add_test(
   NAME driver_profile_failure

@@ -37,7 +37,9 @@ PROGRAM cabledyn
   USE CableDyn_Profile, ONLY: CD_Profile_Requested, CD_Profile_Arm, CD_Profile_Armed, CD_Profile_Enter, &
                               CD_Profile_Flush, CD_Profile_Step, CD_Profile_Seconds, CD_Profile_Counts, &
                               CD_PROF_INPUT, CD_PROF_INIT, CD_PROF_FLUID, CD_PROF_SOLVE, CD_PROF_CHECK, &
-                              CD_PROF_OUTPUT, CD_PROF_PROGRESS, CD_PROF_FINAL, CD_PROF_NPHASE
+                              CD_PROF_OUTPUT, CD_PROF_PROGRESS, CD_PROF_FINAL, CD_PROF_NPHASE, &
+                              CD_Profile_Kernels, CD_PROF_K_RESIDUAL, CD_PROF_K_TANGENT, CD_PROF_K_FACTOR, &
+                              CD_PROF_K_SOLVE, CD_PROF_NKERNEL
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, CD_HermiteCable_Dyn_Get_Profile, &
                                           CD_HermiteCable_Dyn_Recovery_Reset, CD_HermiteCable_Dyn_Recovery_Count
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
@@ -857,9 +859,10 @@ CONTAINS
     !! of each phase of the run, the step counts and the Newton iterations, and the interior of
     !! the finite-EI cable steps. Printed once, on stdout, at the end of the run.
     LOGICAL, SAVE :: printed = .FALSE.
-    REAL(wp) :: seconds(CD_PROF_NPHASE), total, march, t_step, t_resid, t_eff, t_solve, t_am, t_tan
-    INTEGER(int64) :: march_steps, line_steps, line_iterations
-    INTEGER :: line_max_iterations, n_step, n_resid, n_solve, n_am, n_alloc, n_tan, k
+    REAL(wp) :: seconds(CD_PROF_NPHASE), total, march, t_step, t_resid, t_eff, t_solve, t_am, t_tan, t_factor
+    REAL(wp) :: kernel_seconds(CD_PROF_NKERNEL)
+    INTEGER(int64) :: march_steps, line_steps, line_iterations, kernel_calls(CD_PROF_NKERNEL)
+    INTEGER :: line_max_iterations, n_step, n_resid, n_solve, n_am, n_alloc, n_tan, n_factor, n_correct, k
     IF (printed .OR. .NOT. CD_Profile_Armed()) RETURN
     printed = .TRUE.
     ! the running phase up to now: the finalisation of a completed run, or the phase in which a
@@ -887,16 +890,24 @@ CONTAINS
     IF (line_steps > 0_int64) WRITE (output_unit, '(A,I0,A,I0,A,A,A,I0,A)') '    EI = 0 line steps: ', &
       line_steps, ' (substeps and retries included), Newton iterations: ', line_iterations, ' (', &
       fixed(REAL(line_iterations, wp)/REAL(line_steps, wp), 3), ' per line step, at most ', line_max_iterations, ').'
+    CALL CD_Profile_Kernels(kernel_calls, kernel_seconds)
+    IF (line_steps > 0_int64) WRITE (output_unit, '(A,I0,3A,I0,3A,I0,3A,I0,3A)') &
+      '    EI = 0 line step kernels: residual ', kernel_calls(CD_PROF_K_RESIDUAL), ' (', &
+      fixed(kernel_seconds(CD_PROF_K_RESIDUAL), 3), ' s), residual and tangent ', kernel_calls(CD_PROF_K_TANGENT), &
+      ' (', fixed(kernel_seconds(CD_PROF_K_TANGENT), 3), ' s), factorisation ', kernel_calls(CD_PROF_K_FACTOR), &
+      ' (', fixed(kernel_seconds(CD_PROF_K_FACTOR), 3), ' s), back-substitution ', kernel_calls(CD_PROF_K_SOLVE), &
+      ' (', fixed(kernel_seconds(CD_PROF_K_SOLVE), 3), ' s).'
     CALL CD_HermiteCable_Dyn_Get_Profile(n_step, n_resid, n_solve, n_am, n_alloc, t_step, t_resid, t_eff, &
-                                         t_solve, t_am, n_tan, t_tan)
+                                         t_solve, t_am, n_tan, t_tan, n_factor, t_factor, n_correct)
     IF (n_step > 0) THEN
-      WRITE (output_unit, '(A,I0,A,I0,A,I0,A,I0,A,I0,A)') '    Finite-EI cable steps: ', n_step, &
-        ', residual evaluations: ', n_resid, ', tangent assemblies: ', n_tan, ', linear solves: ', n_solve, &
+      WRITE (output_unit, '(A,I0,A,I0,A,I0,A,I0,A,I0,A,I0,A,I0,A)') '    Finite-EI cable steps: ', n_step, &
+        ', residual evaluations: ', n_resid, ', tangent assemblies: ', n_tan, ', factorisations: ', n_factor, &
+        ', linear solves: ', n_solve, ', force-blend corrections: ', n_correct, &
         ', intervals recovered by substeps: ', CD_HermiteCable_Dyn_Recovery_Count(), '.'
-      WRITE (output_unit, '(13A)') '    Finite-EI cable step time (s): residual ', fixed(t_resid, 3), &
-        ', tangent ', fixed(t_tan, 3), ', effective matrix ', fixed(t_eff, 3), ', linear solve ', &
-        fixed(t_solve, 3), ', added mass ', fixed(t_am, 3), ', other ', &
-        fixed(MAX(0.0_wp, t_step - (t_resid + t_tan + t_eff + t_solve + t_am)), 3), '.'
+      WRITE (output_unit, '(15A)') '    Finite-EI cable step time (s): residual ', fixed(t_resid, 3), &
+        ', tangent ', fixed(t_tan, 3), ', effective matrix ', fixed(t_eff, 3), ', factorisation ', &
+        fixed(t_factor, 3), ', back-substitution ', fixed(t_solve, 3), ', added mass ', fixed(t_am, 3), ', other ', &
+        fixed(MAX(0.0_wp, t_step - (t_resid + t_tan + t_eff + t_factor + t_solve + t_am)), 3), '.'
     ELSE IF (.NOT. profile_cable_detail .AND. n_finite_ei > 0) THEN
       WRITE (output_unit, '(A)') '    Finite-EI cable steps: not counted on the mixed EI = 0 + finite-EI route, '// &
         'whose cables step concurrently.'
