@@ -1222,6 +1222,16 @@ CONTAINS
     CALL require(NORM2(l1(:, 1) - l0m(:, 1)) < 1.0e-6_wp, 'transfer:mooring-load-unchanged')
     WRITE (*, '(A,ES12.4,A,ES12.4)') 'no-advance transfer: cable |dLoad| = ', &
       NORM2(l1(:, ccol) - l0m(:, ccol)), ' N;  mooring |dLoad| = ', NORM2(l1(:, 1) - l0m(:, 1))
+    ! A kinematics-only read (cable_loads = .FALSE., the OpenFAST CalcOutput save) returns the
+    ! same kinematics and mooring load bit for bit, zero cable load, and leaves the cable's next
+    ! reaction unchanged.
+    CALL CD_AGG_GetMovingPointMesh(agg, pos, vel, acc, l0m, es, em, cable_loads=.FALSE.)
+    CALL require(es == CD_AGG_OK, 'transfer:mesh-kinematics-only: '//TRIM(em))
+    CALL require(ALL(pos == p1) .AND. ALL(vel == v1) .AND. ALL(acc == a1), 'transfer:kinematics-only-same-kinematics')
+    CALL require(ALL(l0m(:, 1) == l1(:, 1)), 'transfer:kinematics-only-mooring-load')
+    CALL require(ALL(l0m(:, ccol) == 0.0_wp), 'transfer:kinematics-only-cable-load-zero')
+    CALL CD_AGG_GetMovingPointMesh(agg, pos, vel, acc, l0m, es, em)
+    CALL require(es == CD_AGG_OK .AND. ALL(l0m == l1), 'transfer:kinematics-only-leaves-reaction')
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_cable_no_advance_transfer
 

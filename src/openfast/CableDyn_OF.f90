@@ -2224,10 +2224,13 @@ CONTAINS
          ! evaluations, probes), and committing those boundary kinematics would move the
          ! module's committed state. Save the committed coupled kinematics, transfer,
          ! evaluate, restore: the direct-feedthrough loads keep their semantics and the
-         ! committed state is untouched on exit.
+         ! committed state is untouched on exit. The save needs only the kinematics: the
+         ! cable reactions (a full cable assembly each) are skipped, and ws_fld is overwritten
+         ! by the loads evaluated below.
          CALL CD_AGG_GetMovingPointMesh( Inst(id)%agg, Inst(id)%sv_pos, Inst(id)%sv_vel, Inst(id)%sv_acc, &
                                          Inst(id)%ws_fld, es, em, orientation=Inst(id)%sv_orient, &
-                                         angular_velocity=Inst(id)%sv_omega, angular_acceleration=Inst(id)%sv_alpha )
+                                         angular_velocity=Inst(id)%sv_omega, angular_acceleration=Inst(id)%sv_alpha, &
+                                         cable_loads=.FALSE. )
          IF (es /= CD_AGG_OK) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
          END IF
