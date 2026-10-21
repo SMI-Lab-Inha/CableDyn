@@ -1498,11 +1498,13 @@ CONTAINS
       ! restore the ambient-fluid fields the reference's committed state carried. The last
       ! pre-checkpoint solve sampled the WaveField at ITS interval end (= the restart time) at
       ! the node positions of its START, and held them: the checkpoint carries them, and with
-      ! supercycling they act on the loads served until the next solve. A checkpoint without
-      ! them (written before they were saved) re-samples at the restored, end-of-step
-      ! positions, which matches only at dtM = DT, where the next solve re-samples before any
-      ! load is served. Without either the first post-restart load evaluations would see
-      ! still water and ring for a few steps.
+      ! supercycling they act on the loads served until the next solve. Init saves the first
+      ! fields, so a checkpoint of an instance that takes host fluid always carries them;
+      ! re-sampling at the restored, end-of-step positions remains only as a defensive
+      ! fallback (it matches only at dtM = DT, where the next solve re-samples before any load
+      ! is served). Without either the first post-restart load evaluations would see still
+      ! water and ring for a few steps. (OpenFAST checkpoints are not versioned: one written by
+      ! an earlier CableDyn, without these fields, cannot be restarted with this one.)
       Inst(id)%active = .TRUE.       ! sample_wavefield reads through the live instance
       IF (use_extf) THEN
          CALL restore_held_fluid( Inst(id), other, restored, ErrStat2, ErrMsg2 )

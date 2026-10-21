@@ -49,7 +49,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   its start positions), so the loads served until the next solve, and the run after them,
   differed slightly from the uninterrupted run (up to 2e-3 of a tension's standard deviation).
   The checkpoint now carries the held fields, and a restart continues the run bit for bit at any
-  `dtM`; checkpoints written before this change re-sample as before.
+  `dtM`. The checkpoint layout changes with this and with the load predictor's fields: a
+  checkpoint written by an earlier CableDyn cannot be restarted with this one (OpenFAST
+  checkpoints are not versioned; restart with the executable that wrote them).
 - The FAQ and the OpenFAST tutorial still gave 0.1 s as the default `dtM` in OpenFAST; since
   0.2.0 it is the glue `DT`.
 
