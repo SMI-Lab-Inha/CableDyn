@@ -98,6 +98,7 @@ MODULE CableDyn
                                             CD_HermiteCable_Dyn_Get_Assembly_Profile, HC_ASM_NSEC, HC_ASM_KEYS, &
                                             CD_HermiteCable_Dyn_Recovery_Count, &
                                             CD_HermiteCable_Dyn_Recovery_Reset
+   USE CableDyn_LoadPredictor, ONLY: CD_Predictor_Ready, CD_Predictor_Fraction, CD_Predict_Loads
    USE CableDyn_Profile, ONLY: CD_Profile_Arm, CD_Profile_Disarm, CD_Profile_Kernels, CD_PROF_K_RESIDUAL, &
                                CD_PROF_K_TANGENT, CD_PROF_K_FACTOR, CD_PROF_K_SOLVE, CD_PROF_NKERNEL
    USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_System_Line_NElem, &
@@ -136,9 +137,10 @@ MODULE CableDyn
       ! dt_moor = nsuper * (glue DT), ONE step per nsuper glue steps, instead of being
       ! chained to the turbine's small DT. The deck's OPTIONS dtM sets it (clamped to at
       ! least the glue DT); absent a deck dtM the mooring solves every glue step. Between
-      ! mooring solves CD_CalcOutput returns the last
-      ! committed load state as a zero-order hold; feeding instantaneous endpoints into a
-      ! lagged mooring interior creates artificial stiff-EA load chatter.
+      ! mooring solves CD_CalcOutput returns the last committed load state, extrapolated from
+      ! the solve before it (deck OPTION predictLoads, the default) or held; feeding
+      ! instantaneous endpoints into a lagged mooring interior creates artificial stiff-EA
+      ! load chatter.
       INTEGER(IntKi)          :: nsuper  = 1        ! glue steps per mooring step
       REAL(wp)                :: dt_moor = 0.0_wp   ! the mooring step frozen into the aggregate
       LOGICAL                 :: active  = .FALSE.
@@ -157,6 +159,12 @@ MODULE CableDyn
       LOGICAL                 :: loads_cached = .FALSE.
       INTEGER(IntKi)          :: loads_at_n = -1
       REAL(wp), ALLOCATABLE   :: ws_chan(:)
+      ! Load predictor (nsuper > 1 with predictLoads; CableDyn_LoadPredictor): the coupled
+      ! loads and moments of the committed solve before the last and its time (pred_t < 0:
+      ! none), shifted in by CD_UpdateStates when a mooring step starts and mirrored into the
+      ! OtherState for restarts; ws_pfld/ws_pmom hold the extrapolated loads CalcOutput serves.
+      REAL(wp), ALLOCATABLE   :: pred_fld(:,:), pred_mom(:,:), ws_pfld(:,:), ws_pmom(:,:)
+      REAL(DbKi)              :: pred_t = -1.0_DbKi
       ! Persistent interpolated-input container: CD_UpdateStates interpolates the coupled
       ! kinematics to the mooring interval end; the mesh copy is built ONCE and reused
       ! (ExtrapInterp overwrites the fields in place), never created/destroyed per step.
@@ -640,13 +648,6 @@ CONTAINS
       dt_moor = REAL(nsuper, wp)*dtC
       CALL WrScr( '   CableDyn time step dtM = '//TRIM(Num2LStr(dt_moor))//' s ('//TRIM(Num2LStr(nsuper))// &
                   ' x glue DT'//TRIM(MERGE('; deck dtM   ', '; the default', has_dtm))//')' )
-      IF (nsuper > 1_IntKi) THEN
-         CALL WrScr( '   CableDyn: coupled loads are held between dtM solves and reach the platform about dtM/2 '// &
-                     'late, which matters for stiff (taut or tension-leg) moorings and for tension statistics; '// &
-                     'the separate .CD.out records committed CableDyn samples only. Verify dtM convergence for '// &
-                     'fatigue, snap, contact, or local cable-response calculations; omit dtM or set it to DT for '// &
-                     'glue-rate solves.' )
-      END IF
       ! The run must END on a mooring boundary: with supercycling, a trailing partial
       ! interval would take only skipped glue steps, leaving the committed mooring state --
       ! and the held (zero-order-hold) loads -- up to dtM stale at TMax, silently. Fail
@@ -793,6 +794,20 @@ CONTAINS
       Inst(id)%nsuper = nsuper
       Inst(id)%dt_moor = dt_moor
       Inst(id)%use_extfluid = use_extf
+      IF (nsuper > 1_IntKi) THEN
+         IF (Inst(id)%agg%predict_loads) THEN
+            CALL WrScr( '   CableDyn: between dtM solves the coupled loads are extrapolated from the last two '// &
+                        'solves (OPTIONS predictLoads); the output channels and the .CD.out record the committed '// &
+                        'samples. Verify dtM convergence for fatigue, snap, contact, or local cable-response '// &
+                        'calculations; omit dtM or set it to DT for glue-rate solves.' )
+         ELSE
+            CALL WrScr( '   CableDyn: coupled loads are held between dtM solves (OPTIONS predictLoads False) and '// &
+                        'reach the platform about dtM/2 late, which matters for stiff (taut or tension-leg) '// &
+                        'moorings and for tension statistics; the separate .CD.out records committed CableDyn '// &
+                        'samples only. Verify dtM convergence for fatigue, snap, contact, or local cable-response '// &
+                        'calculations; omit dtM or set it to DT for glue-rate solves.' )
+         END IF
+      END IF
       ! CableDyn-owned result files. Single-turbine names use p%RootName =
       ! <OpenFASTRoot>.CD; FAST.Farm preserves its established FarmCD root.
       IF (nT > 0) THEN
@@ -1118,6 +1133,7 @@ CONTAINS
       Inst(id)%t_commit = 0.0_DbKi          ! committed at the static IC (t = 0)
       other%restart_serial = g_serial
       other%t_commit = Inst(id)%t_commit
+      other%pred_t = -1.0_DbKi   ! no previous commit yet (load predictor)
 
       ! ------------------------------------------------------------------------------
       ! Output channels: the deck OUTPUTS list in the OrcaFlex vocabulary, emitted through
@@ -1529,6 +1545,20 @@ CONTAINS
       Inst(id)%last_n = -1_IntKi
       Inst(id)%last_solve_n = -1_IntKi
       Inst(id)%loads_cached = .FALSE.
+      ! the load predictor's previous commit (shift_predictor_loads)
+      Inst(id)%pred_t = other%pred_t
+      IF (Inst(id)%pred_t >= 0.0_DbKi) THEN
+         IF (ALLOCATED(other%pred_loads)) THEN
+            IF (SIZE(other%pred_loads) == 6*ncp) THEN
+               Inst(id)%pred_fld = RESHAPE(REAL(other%pred_loads(1:3*ncp), wp), [3, ncp])
+               Inst(id)%pred_mom = RESHAPE(REAL(other%pred_loads(3*ncp + 1:6*ncp), wp), [3, ncp])
+            ELSE
+               Inst(id)%pred_t = -1.0_DbKi
+            END IF
+         ELSE
+            Inst(id)%pred_t = -1.0_DbKi
+         END IF
+      END IF
       m%CDInst = id
       CALL WrScr( '   CableDyn: rebuilt the solver instance from the checkpoint at t = '// &
                   TRIM(Num2LStr(t))//' s ('//TRIM(Num2LStr(ncp))//' coupled points, '// &
@@ -1645,6 +1675,10 @@ CONTAINS
          END IF
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat < AbortErrLev) THEN
+            ! Load predictor: a new mooring step (not a correction re-entry over the same n)
+            ! makes the loads served since the last commit the previous ones.
+            IF (Inst(id)%nsuper > 1_IntKi .AND. Inst(id)%agg%predict_loads .AND. &
+                Inst(id)%last_solve_n /= n) CALL shift_predictor_loads( Inst(id), other )
             ! Snapshot the step-start state before advancing: a later correction re-entry
             ! over this same n restores it and re-advances. Idempotent (buffers reused),
             ! and on the corrected re-advance it re-captures the SAME restored state.
@@ -2170,6 +2204,7 @@ CONTAINS
       CHARACTER(ErrMsgLen)      :: ErrMsg2
       CHARACTER(ErrMsgLen)            :: em
       REAL(wp)                  :: cval
+      REAL(wp)                  :: tau_pred   ! load predictor: fraction of the mooring step elapsed
       LOGICAL                   :: fresh, state_overlaid
 
       ! Report this call's OWN status: clear at entry (ErrStat is INTENT(INOUT) and
@@ -2403,6 +2438,31 @@ CONTAINS
          y%CoupledLoads(1)%Moment(:, i) = REAL(Inst(id)%ws_moment(:, i), ReKi)
       END DO
       END IF
+      ! Load predictor (supercycled, predictLoads): the committed loads extrapolated from the
+      ! solve before, at the fraction of the mooring step elapsed (CableDyn_LoadPredictor). The
+      ! output channels keep the committed samples.
+      IF (Inst(id)%nsuper > 1_IntKi .AND. Inst(id)%agg%predict_loads) THEN
+         IF (CD_Predictor_Ready(REAL(Inst(id)%t_commit, wp), REAL(Inst(id)%pred_t, wp), Inst(id)%dt_moor)) THEN
+            IF (.NOT. ALLOCATED(Inst(id)%ws_pfld)) &
+               ALLOCATE (Inst(id)%ws_pfld(3, Inst(id)%ncp), Inst(id)%ws_pmom(3, Inst(id)%ncp))
+            tau_pred = CD_Predictor_Fraction(REAL(t, wp), REAL(Inst(id)%t_commit, wp), Inst(id)%dt_moor)
+            CALL CD_Predict_Loads(Inst(id)%ws_fld, Inst(id)%pred_fld, tau_pred, Inst(id)%ws_pfld)
+            CALL CD_Predict_Loads(Inst(id)%ws_moment, Inst(id)%pred_mom, tau_pred, Inst(id)%ws_pmom)
+            IF (Inst(id)%nT > 0) THEN
+               DO i = 1, Inst(id)%ncp
+                  y%CoupledLoads(Inst(id)%tmap(i))%Force(:, Inst(id)%node_of_slot(i)) = &
+                     REAL(Inst(id)%ws_pfld(:, i), ReKi)
+                  y%CoupledLoads(Inst(id)%tmap(i))%Moment(:, Inst(id)%node_of_slot(i)) = &
+                     REAL(Inst(id)%ws_pmom(:, i), ReKi)
+               END DO
+            ELSE
+               DO i = 1, Inst(id)%ncp
+                  y%CoupledLoads(1)%Force(:, i) = REAL(Inst(id)%ws_pfld(:, i), ReKi)
+                  y%CoupledLoads(1)%Moment(:, i) = REAL(Inst(id)%ws_pmom(:, i), ReKi)
+               END DO
+            END IF
+         END IF
+      END IF
       DO i = 1, p%NumOuts
          y%WriteOutput(i) = REAL(Inst(id)%ws_chan(i), ReKi)
       END DO
@@ -2416,6 +2476,31 @@ CONTAINS
    END SUBROUTINE CD_CalcOutput
 
 !----------------------------------------------------------------------------------------------------------------------------------
+   SUBROUTINE shift_predictor_loads( inst_e, other )
+      !! The load predictor's previous commit when a new mooring step starts: the loads served
+      !! since the last commit, when CalcOutput evaluated them there (its committed loads), and
+      !! that commit's time; none otherwise. Mirrored into the OtherState, so a restart
+      !! continues the extrapolation from the same two commits.
+      TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(INOUT) :: other
+      INTEGER(IntKi) :: nl
+      IF (inst_e%loads_cached .AND. inst_e%loads_at_n == inst_e%last_solve_n) THEN
+         inst_e%pred_fld = inst_e%ws_fld
+         inst_e%pred_mom = inst_e%ws_moment
+         inst_e%pred_t = inst_e%t_commit
+         nl = 3_IntKi*inst_e%ncp
+         IF (ALLOCATED(other%pred_loads)) THEN
+            IF (SIZE(other%pred_loads) /= 2*nl) DEALLOCATE (other%pred_loads)
+         END IF
+         IF (.NOT. ALLOCATED(other%pred_loads)) ALLOCATE (other%pred_loads(2*nl))
+         other%pred_loads(1:nl) = RESHAPE(REAL(inst_e%ws_fld, DbKi), [nl])
+         other%pred_loads(nl + 1:2*nl) = RESHAPE(REAL(inst_e%ws_moment, DbKi), [nl])
+      ELSE
+         inst_e%pred_t = -1.0_DbKi
+      END IF
+      other%pred_t = inst_e%pred_t
+   END SUBROUTINE shift_predictor_loads
+
    SUBROUTINE restore_calcoutput_probe( inst_e, m, ErrStat, ErrMsg )
       !! Restore every state surface after the output-probe
       !! overlay. This is used on both success and every post-overlay error exit.

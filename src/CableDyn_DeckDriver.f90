@@ -634,6 +634,9 @@ MODULE CableDyn_DeckDriver
     ! channels remain available; FALSE suppresses only its reaction at the host
     ! moving-point boundary. The default preserves ordinary two-way coupling.
     LOGICAL  :: cable_load_feedback = .TRUE.
+    ! OpenFAST supercycling (dtM > DT): extrapolate the coupled loads between dtM solves from the
+    ! last two (CableDyn_LoadPredictor); FALSE holds the last solve's loads
+    LOGICAL  :: predict_loads = .TRUE.
     ! Opt-in adaptive mesh for COUPLED finite-EI cables: when set, a cable whose static IC is
     ! diagnosed under-resolved (CD_HermiteCable_Resolution_Metrics fragile) is refined by
     ! warm-started cubic-Hermite prolongation before the coupled dynamic run. Default FALSE keeps
@@ -1018,6 +1021,8 @@ MODULE CableDyn_DeckDriver
     LOGICAL :: host_wave_enabled = .FALSE.
     LOGICAL :: host_current_enabled = .FALSE.
     LOGICAL :: cable_load_feedback = .TRUE.
+    ! Deck OPTION predictLoads (the OpenFAST shell; see CD_AGG_ModuleType%predict_loads)
+    LOGICAL :: predict_loads = .TRUE.
     ! OPTION maxStrain, for the per-step plausibility guard of the coupled EI=0 lines.
     REAL(wp) :: max_strain = 0.5_wp
     REAL(wp), ALLOCATABLE :: host_current_profile_z(:)
@@ -6540,6 +6545,7 @@ CONTAINS
     END IF
     agg%n_turbines = nturb
     agg%cable_load_feedback = opts%cable_load_feedback
+    agg%predict_loads = opts%predict_loads
     agg%max_strain = opts%max_strain
 
     ! The standalone driver retains DeckOptions and evaluates a WaveKinMod-1 Fourier
@@ -7636,6 +7642,7 @@ CONTAINS
     agg%host_wave_enabled = .FALSE.
     agg%host_current_enabled = .FALSE.
     agg%cable_load_feedback = .TRUE.
+    agg%predict_loads = .TRUE.
     agg%max_strain = 0.5_wp
     IF (ALLOCATED(agg%host_current_profile_z)) DEALLOCATE (agg%host_current_profile_z)
     IF (ALLOCATED(agg%host_current_profile_velocity)) DEALLOCATE (agg%host_current_profile_velocity)
@@ -14244,6 +14251,8 @@ CONTAINS
       END SELECT
     CASE ('cable_load_feedback', 'cableloadfeedback')
       CALL rd_bool(val, opts%cable_load_feedback, ErrStat, ErrMsg)
+    CASE ('predict_loads', 'predictloads')
+      CALL rd_bool(val, opts%predict_loads, ErrStat, ErrMsg)
     CASE ('tensile_safety', 'tensilesafety')
       CALL rd_tensile_mode(val, opts%tensile_mode, ErrStat, ErrMsg)
     CASE ('tensile_strain_tolerance', 'tensilestraintolerance')

@@ -84,7 +84,8 @@ OpenFAST coupling
    :class: note
 
    CableDyn solves on ``dtM`` (the glue ``DT`` unless the deck sets a larger ``dtM``) and, with a
-   larger ``dtM``, holds its committed loads/channels between solves on the faster glue clock of
+   larger ``dtM``, holds its committed channels between solves (its coupled loads are
+   extrapolated from the last two solves) on the faster glue clock of
    OpenFAST (maintained by NLR, the National Laboratory of the Rockies, formerly NREL). A smaller
    ``DT_Out`` records more copies of the held value; it does not add physical bandwidth. Plot
    ``<OpenFASTRoot>.CD.out`` for the solver-native record containing one row per genuine CableDyn

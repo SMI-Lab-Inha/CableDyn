@@ -393,6 +393,8 @@ IMPLICIT NONE
   TYPE, PUBLIC :: CD_OtherStateType
     INTEGER(IntKi)  :: restart_serial = -1      !< instance-generation stamp minted at Init/rebuild; a restored OtherState whose stamp does not match the live instance's (a fresh process) triggers the checkpoint rebuild from p + the x state mirror [-]
     REAL(DbKi)  :: t_commit = -1      !< time of the last committed mooring advance; a live instance whose committed clock is AHEAD of a restored OtherState's (a same-process checkpoint rewind) also triggers the rebuild [-]
+    REAL(DbKi)  :: pred_t = -1      !< load predictor: time of the committed solve before the last (negative: none), from which the coupled loads between supercycled solves are extrapolated [-]
+    REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: pred_loads      !< load predictor: the coupled forces (3 x ncp) and then moments (3 x ncp) of that solve [-]
   END TYPE CD_OtherStateType
 ! =======================
 ! =========  CD_ParameterType  =======
@@ -2969,11 +2971,26 @@ subroutine CD_CopyOtherState(SrcOtherStateData, DstOtherStateData, CtrlCode, Err
    integer(IntKi),  intent(in   ) :: CtrlCode
    integer(IntKi),  intent(  out) :: ErrStat
    character(*),    intent(  out) :: ErrMsg
+   integer(B4Ki)                  :: LB(1), UB(1)
+   integer(IntKi)                 :: ErrStat2
    character(*), parameter        :: RoutineName = 'CD_CopyOtherState'
    ErrStat = ErrID_None
    ErrMsg  = ''
    DstOtherStateData%restart_serial = SrcOtherStateData%restart_serial
    DstOtherStateData%t_commit = SrcOtherStateData%t_commit
+   DstOtherStateData%pred_t = SrcOtherStateData%pred_t
+   if (allocated(SrcOtherStateData%pred_loads)) then
+      LB(1:1) = lbound(SrcOtherStateData%pred_loads)
+      UB(1:1) = ubound(SrcOtherStateData%pred_loads)
+      if (.not. allocated(DstOtherStateData%pred_loads)) then
+         allocate(DstOtherStateData%pred_loads(LB(1):UB(1)), stat=ErrStat2)
+         if (ErrStat2 /= 0) then
+            call SetErrStat(ErrID_Fatal, 'Error allocating DstOtherStateData%pred_loads.', ErrStat, ErrMsg, RoutineName)
+            return
+         end if
+      end if
+      DstOtherStateData%pred_loads = SrcOtherStateData%pred_loads
+   end if
 end subroutine
 
 subroutine CD_DestroyOtherState(OtherStateData, ErrStat, ErrMsg)
@@ -2983,6 +3000,9 @@ subroutine CD_DestroyOtherState(OtherStateData, ErrStat, ErrMsg)
    character(*), parameter        :: RoutineName = 'CD_DestroyOtherState'
    ErrStat = ErrID_None
    ErrMsg  = ''
+   if (allocated(OtherStateData%pred_loads)) then
+      deallocate(OtherStateData%pred_loads)
+   end if
 end subroutine
 
 subroutine CD_PackOtherState(RF, Indata)
@@ -2992,6 +3012,8 @@ subroutine CD_PackOtherState(RF, Indata)
    if (RF%ErrStat >= AbortErrLev) return
    call RegPack(RF, InData%restart_serial)
    call RegPack(RF, InData%t_commit)
+   call RegPack(RF, InData%pred_t)
+   call RegPackAlloc(RF, InData%pred_loads)
    if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
@@ -2999,9 +3021,14 @@ subroutine CD_UnPackOtherState(RF, OutData)
    type(RegFile), intent(inout)    :: RF
    type(CD_OtherStateType), intent(inout) :: OutData
    character(*), parameter            :: RoutineName = 'CD_UnPackOtherState'
+   integer(B4Ki)   :: LB(1), UB(1)
+   integer(IntKi)  :: stat
+   logical         :: IsAllocAssoc
    if (RF%ErrStat /= ErrID_None) return
    call RegUnpack(RF, OutData%restart_serial); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%t_commit); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpack(RF, OutData%pred_t); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpackAlloc(RF, OutData%pred_loads); if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
 subroutine CD_CopyParam(SrcParamData, DstParamData, CtrlCode, ErrStat, ErrMsg)

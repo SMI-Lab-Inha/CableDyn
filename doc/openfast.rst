@@ -77,8 +77,10 @@ Time step
 
 ``DT`` is the OpenFAST glue step; ``dtM`` is CableDyn's committed step. With no deck ``dtM``,
 CableDyn solves every glue step (``dtM = DT``). A deck ``dtM`` that is a whole multiple of ``DT``
-solves once per that many glue steps and holds its loads (zero-order hold) between commits, which
-is faster but delays the loads (see the note below). The console reports the result, for
+solves once per that many glue steps, which is faster. Between commits the coupled loads are
+extrapolated from the last two commits (deck ``OPTIONS predictLoads``, the default) or, with
+``predictLoads False``, held at the last commit, which delays them (see the note below). The
+console reports the result, for
 example ``CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)``. A deck ``dtM``
 larger than ``DT`` but not a whole multiple of it is never coarsened: CableDyn uses the largest
 multiple of ``DT`` that does not exceed it and reports a warning with both values (``dtM = 0.025``
@@ -92,15 +94,29 @@ peaks, and damage. If CableDyn needs a smaller step than the glue step, reduce `
 
 .. note::
 
-   With ``dtM`` larger than ``DT``, CableDyn holds its loads between commits, so the platform
-   receives the mooring load on average half a ``dtM`` late. A spring force delayed this way
-   acts on the platform as a negative damping of about the mooring stiffness times ``dtM/2``. For a catenary mooring this
-   is small: in the three-seed DLC-1.1 comparison of :doc:`validation` the platform motions with
-   ``dtM`` above ``DT`` agree with MoorDyn within 0.6 % in mean and standard deviation, but the
-   fairlead tension's standard deviation differs by about 3 % from CableDyn's own solution at
-   every glue step. For stiff taut, semi-taut or tension-leg moorings the lag can be comparable
-   to the system's own damping. Check such systems, and any fatigue or tension-range result, at
-   a smaller ``dtM`` (down to ``dtM = DT``) before relying on them.
+   With ``dtM`` larger than ``DT``, the loads CableDyn returns at a glue step a fraction
+   :math:`\tau = (t - t_c)/\mathrm{dtM}` past its last commit :math:`t_c` are extrapolated from
+   that commit and the one before, :math:`F = F_c + \tau\,(F_c - F_p)`. Their error is of
+   second order in ``dtM`` (:math:`\tau(1+\tau)\,\mathrm{dtM}^2 \ddot F/2`). Held instead
+   (``predictLoads False``), the platform receives the mooring load on average half a ``dtM``
+   late, and a spring force delayed this way acts on the platform as a negative damping of about
+   the mooring stiffness times ``dtM/2``.
+
+   On the IEA-15 MW VolturnUS-S in a turbulent 600 s DLC-1.6 environment at ``dtM = 0.1 s``
+   (four glue steps of 0.025 s), the platform surge, sway, roll and pitch time series differ from
+   the ``dtM = DT`` run by at most 0.12 % of their standard deviation with the extrapolation, on
+   the chain mooring as on the chain and power-cable mooring, where the held loads give up to
+   0.42 %. The chain-only run took a fifth less time (116 s against 141 s for ``dtM = DT``
+   on the same machine). In the three-seed DLC-1.1 comparison
+   of :doc:`validation`, made with held loads, the platform motions with ``dtM`` above ``DT``
+   agree with MoorDyn within 0.6 % in mean and standard deviation, but the fairlead tension's
+   standard deviation differs by about 3 % from CableDyn's own solution at every glue step.
+
+   The extrapolation does not change how the lines themselves are integrated: each line still
+   steps on ``dtM``, so its own resolution (see the ``dtM`` advisory in :doc:`modeling`) decides
+   its tension accuracy, and the output channels and the ``.CD.out`` record the committed
+   samples. For stiff taut, semi-taut or tension-leg moorings, and for any fatigue or
+   tension-range result, check a smaller ``dtM`` (down to ``dtM = DT``) before relying on it.
 
 Fluid source
 ~~~~~~~~~~~~

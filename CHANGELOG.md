@@ -23,6 +23,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `sqrt(EA/m)`) the time step `dtM` resolves in fewer than six steps gets a note with the
   period and a `dtM` that resolves it, on the standalone, mixed and OpenFAST routes. Results do
   not change.
+- OpenFAST with `dtM` larger than `DT`: between CableDyn solves the coupled loads are
+  extrapolated from the last two solves instead of held (deck `OPTIONS predictLoads`, default
+  `True`; `False` keeps the hold). The error drops from first to second order in `dtM`: on the
+  IEA-15 MW VolturnUS-S at `dtM = 0.1 s` and `DT = 0.025 s` the platform motions differ from a
+  `dtM = DT` run by at most 0.12 % of their standard deviation, against 0.42 % held. Runs at
+  `dtM = DT` (the default) do not change; the previous solve's loads are checkpointed, so a restart
+  continues the extrapolation.
 
 ### Changed
 
