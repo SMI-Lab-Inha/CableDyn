@@ -26,6 +26,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the committed kinematics before transferring the current ones; it discarded them. With a
   248-element power cable in the IEA-15 VolturnUS-S mooring this cuts `CalcOutput` from 41 s to
   25 s and the 600 s run from 227 s to 212 s. Results do not change.
+- The reaction of a finite-EI cable at a node (the fairlead load the OpenFAST module returns)
+  is assembled from the one or two elements that reach the node instead of the whole line,
+  bit-identical to the full assembly (lines with torsion keep the full assembly). In the same
+  run this cuts `CalcOutput` to 9 s and the run to 194 s. Results do not change.
 
 ## [0.2.0] - 2026-10-20
 

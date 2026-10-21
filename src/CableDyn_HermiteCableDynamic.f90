@@ -1110,7 +1110,8 @@ CONTAINS
     END IF
   END SUBROUTINE CD_HermiteCable_Attachment_Drag
 
-  SUBROUTINE assemble_attachments(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, ErrStat, ErrMsg)
+  SUBROUTINE assemble_attachments(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, n_lo, n_hi, &
+                                  ErrStat, ErrMsg)
     !! Attachment loads into R = f_int - f_ext, with the velocity tangent dR/dv and the
     !! drag's dependence on the nodal line tangent in dR/dq. The held fluid field is
     !! constant over the step.
@@ -1118,6 +1119,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
     LOGICAL, INTENT(IN) :: want_residual, want_tangent
     REAL(wp), INTENT(INOUT) :: R(:), Kb(:, :), Kvb(:, :)
+    INTEGER, INTENT(IN) :: n_lo, n_hi  ! only the attachments at nodes n_lo..n_hi
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, base, a, b
@@ -1125,6 +1127,7 @@ CONTAINS
     REAL(wp) :: rk(3), jrel(3, 3), jtan(3, 3)
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     DO k = 1, SIZE(model%att_node)
+      IF (model%att_node(k) < n_lo .OR. model%att_node(k) > n_hi) CYCLE
       base = 6*(model%att_node(k) - 1)
       CALL attachment_residual(model, k, q_cfg, v_cfg, want_tangent, rk, has_jac, jrel, jtan, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCDYN_OK) RETURN
@@ -5118,7 +5121,7 @@ CONTAINS
     END DO
   END SUBROUTINE CD_HermiteCable_Dyn_Curvature_Exact
 
-  SUBROUTINE CD_HermiteCable_Dyn_Reaction(model, node, freac, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_Dyn_Reaction(model, node, freac, ErrStat, ErrMsg, full_assembly)
     !! Constraint reaction at a fixed/prescribed node: the force the LINE exerts ON its
     !! support (fairlead/anchor) at the current committed state, in global coordinates.
     !!
@@ -5139,14 +5142,29 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: freac(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ! .TRUE.: evaluate from the full assembly, the reference the node's rows reproduce bit for bit
+    LOGICAL, INTENT(IN), OPTIONAL :: full_assembly
     INTEGER :: es, gi
+    LOGICAL :: full
     CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''; freac = CD_ZERO
+    full = .FALSE.
+    IF (PRESENT(full_assembly)) full = full_assembly
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Reaction: model not initialised'; RETURN
     END IF
     IF (node < 1 .OR. node > model%nn) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Reaction: node out of range'; RETURN
+    END IF
+    ! Only the node's rows are needed: assemble them from the elements that reach the node
+    ! (bit-identical to the full assembly below, which torsion still needs).
+    IF (.NOT. (model%torsion%active .OR. full)) THEN
+      CALL node_reaction(model, node, freac, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        freac = CD_ZERO
+        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Reaction: '//TRIM(em2)
+      END IF
+      RETURN
     END IF
     ! Residual-only assembly at the committed state: no tangent buffer is touched, so the
     ! committed K/Kv (which callers may still hold between steps) are preserved.
@@ -5167,6 +5185,65 @@ CONTAINS
     gi = 6*(node - 1)
     freac = -(model%ws_inert(gi + 1:gi + 3) + model%ws_R(gi + 1:gi + 3))
   END SUBROUTINE CD_HermiteCable_Dyn_Reaction
+
+  SUBROUTINE node_reaction(model, node, freac, ErrStat, ErrMsg)
+    !! CD_HermiteCable_Dyn_Reaction from the node's rows only: the residual of the one or two
+    !! elements that reach the node and of its nodal terms (assemble_residual node_only), and
+    !! the node's rows of the total mass times the acceleration, with the added mass of those
+    !! elements. Every row term is formed and summed in the order of the full assembly and of
+    !! band_matvec, so the reaction is bit-identical, at the cost of one or two elements
+    !! instead of the line, and the model's scratch is not touched. Not for a line with
+    !! torsion, which couples every element.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER, INTENT(IN) :: node
+    REAL(wp), INTENT(OUT) :: freac(3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: Rn(SIZE(model%ws_R)), Me(12, 12), mam(3, -KL_D:KU_D), inert(3), m
+    INTEGER :: e, a, b, k, gi, gj, j, n, es
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''; freac = CD_ZERO
+    CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em, node_only=node, R_out=Rn)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = es; ErrMsg = TRIM(em); RETURN
+    END IF
+    gi = 6*(node - 1)
+    n = SIZE(model%a)
+    ! the node's rows of the added mass, mam(k, j - (gi + k)) = Mamb(gi + k, j), summed element
+    ! by element from zero as assemble_added_mass scatters them
+    mam = CD_ZERO
+    IF (model%has_am) THEN
+      DO e = MAX(1, node - 1), MIN(model%ne, node)
+        CALL added_mass_element(model, model%q, e, Me, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          ErrStat = es; ErrMsg = TRIM(em); RETURN
+        END IF
+        DO a = 1, 12
+          k = elem_gdof(e, a) - gi
+          IF (k < 1 .OR. k > 3) CYCLE
+          DO b = 1, 12
+            gj = elem_gdof(e, b)
+            mam(k, gj - (gi + k)) = mam(k, gj - (gi + k)) + Me(a, b)
+          END DO
+        END DO
+      END DO
+      IF (.NOT. CD_All_Finite(mam)) THEN
+        ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'assemble_added_mass: non-finite global added-mass matrix'; RETURN
+      END IF
+    END IF
+    ! (Mgb + Mamb) a on the node's rows, column by column as band_matvec accumulates them
+    inert = CD_ZERO
+    DO j = MAX(1, gi + 1 - KL_D), MIN(n, gi + 3 + KU_D)
+      DO k = 1, 3
+        IF (j < gi + k - KL_D .OR. j > gi + k + KU_D) CYCLE
+        m = model%Mgb(KL_D + KU_D + 1 + gi + k - j, j)
+        IF (model%has_am) m = m + mam(k, j - (gi + k))
+        inert(k) = inert(k) + m*model%a(j)
+      END DO
+    END DO
+    freac = -(inert + Rn(gi + 1:gi + 3))
+  END SUBROUTINE node_reaction
 
   SUBROUTINE CD_HermiteCable_Dyn_End_Force(model, node, force, ErrStat, ErrMsg)
     !! Force the line exerts on the point holding its end node (node = 1 or nn) at the
@@ -6456,7 +6533,7 @@ CONTAINS
   ! ------------------------------------------------------------------------------------------
 
   SUBROUTINE assemble_residual(model, q_cfg, v_cfg, t_eval, want_residual, want_tangent, ErrStat, ErrMsg, &
-                               endconn_direction_eval)
+                               endconn_direction_eval, node_only, R_out)
     !! Residual R = f_int(q) - f_ext(q, v, t), banded position tangent Kb = dR/dq, and banded
     !! velocity tangent Kvb = dR/dv at configuration q_cfg with nodal velocity v_cfg at time
     !! t_eval (LAPACK band layout, see the module note), written into the MODEL'S OWN
@@ -6481,8 +6558,16 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: endconn_direction_eval(3, 2)
+    ! node_only: assemble only the residual rows of that node, into R_out (sized like the
+    ! residual) instead of the model's residual: the elements that reach the node and its own
+    ! nodal terms, each added in the order of the full assembly, so those rows are bit-identical
+    ! and the model's scratch is untouched (node_reaction). Residual only, without torsion
+    ! (which couples every element). The other rows of R_out are partial.
+    INTEGER, INTENT(IN), OPTIONAL :: node_only
+    REAL(wp), INTENT(INOUT), TARGET, OPTIONAL :: R_out(:)
     REAL(wp), POINTER :: R(:), Kb(:, :), Kvb(:, :)
     INTEGER :: ne, e, a, gi, es, omp_threads
+    INTEGER :: e_lo, e_hi, n_lo, n_hi  ! the elements and nodes assembled (all unless node_only)
     INTEGER(INT64) :: asm_t  ! clock at the last section mark (asm_mark; profiled runs only)
     LOGICAL :: tangent_only
     REAL(wp) :: qe(12), ve(12), Ee, fe(12), Ke(12, 12), pen
@@ -6510,6 +6595,25 @@ CONTAINS
     R => model%ws_R
     Kb => model%ws_Kb
     Kvb => model%ws_Kvb
+    e_lo = 1; e_hi = ne; n_lo = 1; n_hi = model%nn
+    IF (PRESENT(node_only)) THEN
+      IF (want_tangent .OR. model%torsion%active .OR. .NOT. PRESENT(R_out)) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'a single-node assembly is residual-only, without torsion, into a caller residual'
+        RETURN
+      END IF
+      IF (node_only < 1 .OR. node_only > model%nn) THEN
+        ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'single-node assembly: node out of range'; RETURN
+      END IF
+      e_lo = MAX(1, node_only - 1); e_hi = MIN(ne, node_only)
+      n_lo = node_only; n_hi = node_only
+    END IF
+    IF (PRESENT(R_out)) THEN
+      IF (SIZE(R_out) /= SIZE(model%ws_R)) THEN
+        ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'assemble_residual: R_out must be sized like the residual'; RETURN
+      END IF
+      R => R_out
+    END IF
     endconn_d0_eval = model%endconn_d0
     IF (PRESENT(endconn_direction_eval)) endconn_d0_eval = endconn_direction_eval
     asm_t = 0_INT64
@@ -6545,7 +6649,7 @@ CONTAINS
       END DO
       CALL asm_mark(HC_ASM_SCATTER, asm_t)
     ELSE
-      DO e = 1, ne
+      DO e = e_lo, e_hi
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3)
         qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3)
@@ -6576,7 +6680,7 @@ CONTAINS
 
     IF (want_residual) THEN
       ! consistent cubic-Hermite self-weight on z DOFs (R = fint - fext => -fext adds +w)
-      DO e = 1, ne
+      DO e = e_lo, e_hi
         R(6*(e - 1) + 3) = R(6*(e - 1) + 3) + model%w(e)*0.5_wp*model%l0(e)
         R(6*(e - 1) + 6) = R(6*(e - 1) + 6) + model%w(e)*model%l0(e)*model%l0(e)/12.0_wp
         R(6*e + 3) = R(6*e + 3) + model%w(e)*0.5_wp*model%l0(e)
@@ -6594,7 +6698,7 @@ CONTAINS
     END IF
     CALL asm_mark(HC_ASM_WEIGHT, asm_t)
     IF (model%has_attach) THEN
-      CALL assemble_attachments(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, es, em2)
+      CALL assemble_attachments(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, n_lo, n_hi, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(em2); RETURN
       END IF
@@ -6608,7 +6712,7 @@ CONTAINS
     ! drag configuration the added-mass configuration defines the surface and section, so
     ! the buoyancy is restored whenever either hydrodynamic configuration is present.
     IF (model%has_drag .OR. model%has_am) THEN
-      DO e = 1, ne
+      DO e = e_lo, e_hi
         IF (model%has_drag) THEN
           dry_wl = model%waterline_z
           dry_b = model%rho_w*model%gravity*0.25_wp*PI_L*model%diam(e)**2
@@ -6640,12 +6744,12 @@ CONTAINS
     ! law as the deck compatibility path, including structured-bed slope terms.
     ! Retain the scalar flat penalty for existing direct API callers.
     IF (model%has_contact) THEN
-      CALL assemble_contact(model, q_cfg, v_cfg, want_residual, want_tangent, es, em2)
+      CALL assemble_contact(model, q_cfg, v_cfg, want_residual, want_tangent, R, n_lo, n_hi, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = 'contact: '//TRIM(em2); RETURN
       END IF
     ELSE IF (model%kn > CD_ZERO) THEN
-      DO a = 1, model%nn
+      DO a = n_lo, n_hi
         gi = 6*(a - 1) + 3
         pen = model%seabed_z - q_cfg(gi)
         IF (pen > CD_ZERO) THEN
@@ -6699,7 +6803,7 @@ CONTAINS
     ! Axial Kelvin-Voigt damping is an internal constitutive force. It uses the same
     ! reference-arc Hermite interpolation and axial quadrature as the elastic resultant.
     IF (model%has_axial_damping .AND. .NOT. tangent_only) THEN
-      DO e = 1, ne
+      DO e = e_lo, e_hi
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         ve(1:3) = v_cfg(6*(e - 1) + 1:6*(e - 1) + 3); ve(4:6) = v_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
@@ -6745,7 +6849,7 @@ CONTAINS
     ! Jacobians djq = d(fdrag)/dq, djv = d(fdrag)/dv. R = f_int - f_ext, so R -= fdrag, K -= djq,
     ! Kv -= djv over all 12 element DOFs.
     IF (model%has_drag .AND. .NOT. tangent_only) THEN
-      DO e = 1, ne
+      DO e = e_lo, e_hi
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         ve(1:3) = v_cfg(6*(e - 1) + 1:6*(e - 1) + 3); ve(4:6) = v_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
@@ -6829,19 +6933,23 @@ CONTAINS
     ! spring is a potential, so it enters the residual with the same sign as the internal
     ! force, and f . d == 0 keeps it off the stretch component by construction.
     IF (model%has_endconn) THEN
-      CALL add_endconn_band(R, Kb, q_cfg, 1, model%endconn_k(1), endconn_d0_eval(:, 1), &
-                            want_residual, want_tangent, es, em2)
-      IF (es /= CD_ENDCONN_OK) THEN
-        ErrStat = CD_HCDYN_NOCONVERGE
-        ErrMsg = 'end connection at node 1: '//TRIM(em2)
-        RETURN
+      IF (n_lo == 1) THEN
+        CALL add_endconn_band(R, Kb, q_cfg, 1, model%endconn_k(1), endconn_d0_eval(:, 1), &
+                              want_residual, want_tangent, es, em2)
+        IF (es /= CD_ENDCONN_OK) THEN
+          ErrStat = CD_HCDYN_NOCONVERGE
+          ErrMsg = 'end connection at node 1: '//TRIM(em2)
+          RETURN
+        END IF
       END IF
-      CALL add_endconn_band(R, Kb, q_cfg, ne + 1, model%endconn_k(2), endconn_d0_eval(:, 2), &
-                            want_residual, want_tangent, es, em2)
-      IF (es /= CD_ENDCONN_OK) THEN
-        ErrStat = CD_HCDYN_NOCONVERGE
-        ErrMsg = 'end connection at final node: '//TRIM(em2)
-        RETURN
+      IF (n_hi == ne + 1) THEN
+        CALL add_endconn_band(R, Kb, q_cfg, ne + 1, model%endconn_k(2), endconn_d0_eval(:, 2), &
+                              want_residual, want_tangent, es, em2)
+        IF (es /= CD_ENDCONN_OK) THEN
+          ErrStat = CD_HCDYN_NOCONVERGE
+          ErrMsg = 'end connection at final node: '//TRIM(em2)
+          RETURN
+        END IF
       END IF
     END IF
 
@@ -6850,7 +6958,7 @@ CONTAINS
     ! configuration's coefficients. An external load: R -= ffk, K -= fjq (geometric tangent chain;
     ! the wave-field spatial gradient is neglected in K -- see the element note).
     IF (model%has_wave .AND. model%has_am .AND. .NOT. tangent_only) THEN
-      DO e = 1, ne
+      DO e = e_lo, e_hi
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         IF (model%wv_ncomp > 0) THEN
@@ -6904,7 +7012,7 @@ CONTAINS
     ! (per-element two-node average, frozen over the step) with the added-mass
     ! configuration's coefficients -- the held-mode twin of the wave FK block above.
     IF (model%has_held_field .AND. model%has_am .AND. .NOT. tangent_only) THEN
-      DO e = 1, ne
+      DO e = e_lo, e_hi
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         IF (want_tangent) THEN
@@ -7043,12 +7151,15 @@ CONTAINS
     END IF
   END SUBROUTINE add_endconn_band
 
-  SUBROUTINE assemble_contact(model, q_cfg, v_cfg, want_residual, want_tangent, ErrStat, ErrMsg)
-    !! Assemble nodal contact directly into the model-owned residual bands. The
-    !! Jacobians are d(f_int-f_ext)/dq and d(f_int-f_ext)/dv.
+  SUBROUTINE assemble_contact(model, q_cfg, v_cfg, want_residual, want_tangent, R, n_lo, n_hi, ErrStat, ErrMsg)
+    !! Assemble the nodal contact of nodes n_lo..n_hi into the residual R (assemble_residual's;
+    !! the model's own residual is touched only through R) and the model-owned tangent bands.
+    !! The Jacobians are d(f_int-f_ext)/dq and d(f_int-f_ext)/dv.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
     LOGICAL, INTENT(IN) :: want_residual, want_tangent
+    REAL(wp), INTENT(INOUT) :: R(:)
+    INTEGER, INTENT(IN) :: n_lo, n_hi
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
@@ -7070,7 +7181,7 @@ CONTAINS
         .NOT. ALLOCATED(model%contact_cn)) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'contact configuration is incomplete'; RETURN
     END IF
-    DO i = 1, model%nn
+    DO i = n_lo, n_hi
       ix = 6*i - 5; iy = ix + 1; iz = ix + 2
       gx = CD_ZERO; gy = CD_ZERO
       IF (model%has_contact_bathymetry) THEN
@@ -7116,7 +7227,7 @@ CONTAINS
       dnormal_dq = -dnormal_dgap*nvec
       dnormal_dv = dnormal_dvz*nvec
 
-      IF (want_residual) model%ws_R(ix:iz) = model%ws_R(ix:iz) - normal*nvec
+      IF (want_residual) R(ix:iz) = R(ix:iz) - normal*nvec
       IF (want_tangent) THEN
         DO jc = 1, 3
           DO jr = 1, 3
@@ -7126,7 +7237,7 @@ CONTAINS
         END DO
       END IF
       IF (creased) THEN
-        IF (want_residual) model%ws_R(ix:iz) = model%ws_R(ix:iz) - fcrease
+        IF (want_residual) R(ix:iz) = R(ix:iz) - fcrease
         IF (want_tangent) THEN
           DO jc = 1, 3
             DO jr = 1, 3
@@ -7152,7 +7263,7 @@ CONTAINS
                                            model%contact_mu*normal, ffr, dfr_dd, dfr_dc)
         mu_c = model%contact_mu
       END IF
-      IF (want_residual) model%ws_R(ix:iy) = model%ws_R(ix:iy) + ffr
+      IF (want_residual) R(ix:iy) = R(ix:iy) + ffr
       IF (want_tangent) THEN
         DO jr = 1, 2
           CALL scatter_contact_band(model%ws_Kb, ix + jr - 1, ix, dfr_dd(jr, 1) + &
@@ -8142,22 +8253,13 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, es
-    REAL(wp) :: qe(12), Me(12, 12), wl_e
+    REAL(wp) :: Me(12, 12)
     CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     model%ws_Mamb = CD_ZERO
     IF (.NOT. model%has_am) RETURN
     DO e = 1, model%ne
-      qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
-      qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
-      ! Held-field mode: the inertia matrix must wet against the SAME free surface the
-      ! drag and Froude-Krylov use (the host-sampled elevation, node-averaged per
-      ! element) -- against the init-time still-water am_wl a surface-piercing element
-      ! would carry the wrong added mass exactly when the host drives waves.
-      wl_e = model%am_wl
-      IF (model%has_held_field) wl_e = 0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1))
-      CALL CD_HermiteCable_AddedMass_Element(qe, model%l0(e), wl_e, model%am_rho, &
-                                             model%am_diam(e), model%am_can(e), model%am_cat(e), Me, es, em2)
+      CALL added_mass_element(model, q_cfg, e, Me, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = TRIM(em2); RETURN
       END IF
@@ -8171,6 +8273,28 @@ CONTAINS
       ErrMsg = 'assemble_added_mass: non-finite global added-mass matrix'
     END IF
   END SUBROUTINE assemble_added_mass
+
+  SUBROUTINE added_mass_element(model, q_cfg, e, Me, ErrStat, ErrMsg)
+    !! Consistent added-mass matrix of element e at configuration q_cfg (assemble_added_mass,
+    !! node_reaction).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: q_cfg(:)
+    INTEGER, INTENT(IN) :: e
+    REAL(wp), INTENT(OUT) :: Me(12, 12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: qe(12), wl_e
+    qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
+    qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
+    ! Held-field mode: the inertia matrix must wet against the SAME free surface the
+    ! drag and Froude-Krylov use (the host-sampled elevation, node-averaged per
+    ! element) -- against the init-time still-water am_wl a surface-piercing element
+    ! would carry the wrong added mass exactly when the host drives waves.
+    wl_e = model%am_wl
+    IF (model%has_held_field) wl_e = 0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1))
+    CALL CD_HermiteCable_AddedMass_Element(qe, model%l0(e), wl_e, model%am_rho, &
+                                           model%am_diam(e), model%am_can(e), model%am_cat(e), Me, ErrStat, ErrMsg)
+  END SUBROUTINE added_mass_element
 
   SUBROUTINE build_rigid_bases(model, directions, bases, ErrStat, ErrMsg)
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
