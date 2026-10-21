@@ -360,8 +360,8 @@ Exercises
 1. **Wind.** Set ``CompInflow = 1`` and ``CompAero = 2`` in a copy of the ``.fst`` (the
    ``MD_Shared`` InflowWind and AeroDyn files are already present) and compare the mean surge and
    line-1 tension with the parked case.
-2. **Supercycling.** Remove the ``dtM`` row from ``CableDyn_UMaine.dat``. The console now
-   reports ``dtM = 0.1 s (4 x glue DT; the default)``, CableDyn solves once per four glue steps,
+2. **Supercycling.** Set ``dtM`` to 0.1 in ``CableDyn_UMaine.dat``. The console now
+   reports ``dtM = 0.1 s (4 x glue DT; deck dtM)``, CableDyn solves once per four glue steps,
    and ``.CD.out`` has one row per 0.1 s. Here the line-1 tension statistics over 10–70 s barely
    move (mean 2.456 MN, std 0.116 MN, against 2.456 and 0.115 MN); verify that for your own
    quantities before adopting a coarser step.

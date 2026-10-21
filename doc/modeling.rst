@@ -208,6 +208,21 @@ bandwidth, the shortest element transit time, contact switching, and constitutiv
 times. For prescribed motion, row 1 defines the actual :math:`t=0` position, velocity, and
 acceleration and must be consistent with the intended initial state.
 
+**dtM advisory.** At initialisation each line's axial period is estimated as that of a bar fixed
+at both ends, :math:`T_\text{ax} = 2\sum_j l_j/\sqrt{EA_j/m_j}` over its sections (unstretched
+lengths, dry mass per length, and the dynamic ``EA`` of a viscoelastic type with constant dynamic
+stiffness). A line that ``dtM`` resolves in fewer than six steps gets an initialisation note
+with the period, the number of steps and a ``dtM`` that resolves it, on the standalone, mixed and
+OpenFAST routes. The threshold comes from the IEA-15 MW mixed example in a turbulent 600 s
+OpenFAST run: its power cable (:math:`T_\text{ax} = 0.351` s) matches the ``dtM = DT``
+fairlead tension within 0.3 % of its standard deviation at 7 steps (``dtM = 0.05 s``), while at
+3.5 steps (0.1 s) its axial dynamics are damped and its peak tension is 35 % high; the chains
+(0.78 s) keep their tension statistics within 0.3 % at 7.8 steps. The estimate leaves out added
+mass and the catenary compliance, and types whose stiffness depends on the load (``ElasticMod``
+3, Syrope) are not assessed. The note is a lower bound, not a convergence study: segment-scale
+snap waves need a far smaller step (above), and the platform side of a larger ``dtM`` is
+discussed in :doc:`openfast`.
+
 8. Request auditable outputs
 -----------------------------
 

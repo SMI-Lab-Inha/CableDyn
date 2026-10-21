@@ -2049,7 +2049,8 @@ CONTAINS
                                 note)
     !! Return one line's unconditional converged-static fairlead result in deck order, and
     !! (optional note) its static-initialisation notes, one per text line: those of a finite-EI
-    !! cable, or the fold note of an EI = 0 line ('' if none).
+    !! cable or the fold note of an EI = 0 line, the static strain note and the dtM advisory
+    !! ('' if none).
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
     INTEGER, INTENT(IN) :: i
     INTEGER, INTENT(OUT) :: line_id

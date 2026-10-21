@@ -3,7 +3,9 @@
 #   * a prescribed motion that starts moving (a harmonic started at t = 0 is at its peak
 #     velocity) prints a start-up shock note; one that starts from rest does not;
 #   * a slack anchored line on a deck with no seabed (an OpenFAST MooringFile run
-#     standalone) prints a no-seabed warning; a deck with a water depth does not.
+#     standalone) prints a no-seabed warning; a deck with a water depth does not;
+#   * a dtM that resolves a line's axial period (2 x 410 m / sqrt(1.674e9 / 390) = 0.396 s) in
+#     fewer than 6 steps prints the dtM advisory: 4.0 steps at 0.1 s, none at 0.05 s (7.9).
 foreach(_required DRIVER WORK NO_SEABED_DECK SEABED_DECK)
   if(NOT DEFINED ${_required} OR "${${_required}}" STREQUAL "")
     message(FATAL_ERROR "check_driver_advisories: missing ${_required}")
@@ -93,6 +95,16 @@ require_text("sine start" "${_sine_log}" "Note: motionFile point 2 starts moving
 require_text("sine start" "${_sine_log}" "Start the motion from rest")
 run_driver("start from rest" "${WORK}/rest.dat" "${WORK}/rest" _rest_log)
 forbid_text("start from rest" "${_rest_log}" "starts moving at")
+forbid_text("start from rest" "${_rest_log}" "axial period")
+
+string(REPLACE "0.05 dtM" "0.1 dtM" _coarse_head "${_deck_head}")
+# the motion record on the coarser dtM grid
+file(WRITE "${WORK}/coarse.txt" "0.0 2 0.0 0.0 0.000 0.0 0.0 0.0 0.0 0.0 0.0\n0.1 2 0.0 0.0 0.000 0.0 0.0 0.0 0.0 0.0 0.0\n0.2 2 0.0 0.0 0.000 0.0 0.0 0.0 0.0 0.0 0.0\n")
+file(WRITE "${WORK}/coarse.dat" "${_coarse_head}coarse.txt motionFile\n${_deck_tail}")
+run_driver("coarse dtM" "${WORK}/coarse.dat" "${WORK}/coarse" _coarse_log)
+require_text("coarse dtM" "${_coarse_log}"
+             "Note: LINE 1: dtM = 0.1000 s resolves its axial period of 0.396 s (twice its length over sqrt(EA/m)) in 4.0 steps, fewer than 6")
+require_text("coarse dtM" "${_coarse_log}" "A dtM of at most 0.0660 s resolves them.")
 
 run_driver("no seabed" "${NO_SEABED_DECK}" "${WORK}/no_seabed" _no_seabed_log)
 require_text("no seabed" "${_no_seabed_log}" "below its Fixed anchor and the deck has no seabed")

@@ -1095,6 +1095,14 @@ set_tests_properties(hermite_node_reaction PROPERTIES
                      LABELS "fortran;unit;dynamic;openfast;contact"
                      ENVIRONMENT "OPENBLAS_CORETYPE=Sandybridge")
 
+# The dtM advisor on the coupled route: the mixed example's power cable (axial period 0.351 s)
+# is noted at dtM = 0.1 s with a dtM that resolves it; nothing is noted at 0.05 s.
+add_executable(test_dtm_advisor tests/test_dtm_advisor.f90)
+target_link_libraries(test_dtm_advisor PRIVATE cabledyn_core)
+add_test(NAME dtm_advisor
+         COMMAND test_dtm_advisor ${CMAKE_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat)
+set_tests_properties(dtm_advisor PROPERTIES LABELS "fortran;unit;openfast")
+
 # The same deck initialises without a static compression/mesh note: the touchdown
 # contact kink is element-local, the smoothed element-mean axial force is tensile.
 add_executable(test_flagship_compression_note tests/test_flagship_compression_note.f90)

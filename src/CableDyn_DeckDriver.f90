@@ -176,6 +176,8 @@ MODULE CableDyn_DeckDriver
   ! is not positive.
   REAL(wp), PARAMETER :: COARSE_SECTION_FRACTION = 0.125_wp
   REAL(wp), PARAMETER :: STATIC_STRAIN_NOTE_DEFAULT = 0.1_wp
+  ! dtM advisor (axial_period_note): the fewest steps of dtM per axial period of a line
+  REAL(wp), PARAMETER :: AXIAL_STEPS_PER_PERIOD = 6.0_wp
 
   PUBLIC :: CD_Run_Deck_Driver
   PUBLIC :: CD_Deck_Equilibrium_Jacobian_Check
@@ -991,9 +993,9 @@ MODULE CableDyn_DeckDriver
     LOGICAL :: force_is_total = .TRUE.
     ! Static-initialisation notes of the line, one per text line (append_note_line): those of a
     ! finite-EI line (compression, mesh refinement, accepted residual floor, a run past its
-    ! anchor), the fold note of an EI = 0 line (ei0_fold_note) and the static strain note of any
-    ! line; empty when there is nothing to report. It holds a whole cable note (1024) and a
-    ! strain note.
+    ! anchor), the fold note of an EI = 0 line (ei0_fold_note), and the static strain note and
+    ! the dtM advisory (axial_period_note) of any line; empty when there is nothing to report.
+    ! It holds a whole cable note (1024) and the two others.
     CHARACTER(2048) :: note = ''
   END TYPE CD_LineInitSummary
 
@@ -7086,8 +7088,9 @@ CONTAINS
       DO il = 1, SIZE(agg%init_lines)
         CALL static_strain_note(agg%init_lines(il)%line_id, agg%init_lines(il)%fair_tension, sections, types, opts, &
                                 strain_note)
-        IF (LEN_TRIM(strain_note) == 0) CYCLE
-        CALL append_note_line(agg%init_lines(il)%note, strain_note)
+        IF (LEN_TRIM(strain_note) > 0) CALL append_note_line(agg%init_lines(il)%note, strain_note)
+        CALL axial_period_note(agg%init_lines(il)%line_id, dt, sections, types, strain_note)
+        IF (LEN_TRIM(strain_note) > 0) CALL append_note_line(agg%init_lines(il)%note, strain_note)
       END DO
       IF (PRESENT(range_files)) THEN
         IF (range_files) CALL warn_coarse_sections(lines, sections)
@@ -10112,6 +10115,51 @@ CONTAINS
       END IF
     END SUBROUTINE percent_text
   END SUBROUTINE static_strain_note
+
+  SUBROUTINE axial_period_note(line_id, dt, sections, types, note)
+    !! The dtM advisor: a line whose axial period is resolved by fewer than
+    !! AXIAL_STEPS_PER_PERIOD steps of dt. The period is that of a bar fixed at both ends,
+    !! twice the axial-wave transit time sum(l / sqrt(EA / m)) over the line's sections, with
+    !! the unstretched lengths, the dry mass per length and, for a viscoelastic type of
+    !! constant dynamic stiffness, its dynamic EA (the stiffness a fast load sees). Added mass
+    !! is left out, so the estimate errs short. Coarser steps damp the line's axial dynamics
+    !! (the generalised-alpha rhoInf) and misstate its tension peaks: with the IEA-15 MW mixed
+    !! example the cable (0.35 s) is converged at 7 steps per period and 35 % high in peak
+    !! tension at 3.5. Types whose stiffness depends on the load (ElasticMod 3, Syrope) are not
+    !! assessed. Only a note: nothing is changed.
+    INTEGER, INTENT(IN) :: line_id
+    REAL(wp), INTENT(IN) :: dt
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    CHARACTER(*), INTENT(OUT) :: note
+    INTEGER :: j, k
+    REAL(wp) :: transit, ea, period
+    CHARACTER(32) :: b1, b2, b3, b4
+
+    note = ''
+    IF (.NOT. (dt > CD_ZERO)) RETURN
+    transit = CD_ZERO
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= line_id) CYCLE
+      k = find_type(types, sections(j)%ltype_name)
+      IF (k < 1) RETURN
+      IF (types(k)%is_syrope .OR. types(k)%elastic_mod == 3) RETURN
+      ea = types(k)%ea
+      IF (types(k)%elastic_mod == 2) ea = MAX(ea, types(k)%ea_d)
+      IF (.NOT. (ea > CD_ZERO .AND. types(k)%mass > CD_ZERO .AND. sections(j)%length > CD_ZERO)) RETURN
+      transit = transit + sections(j)%length/SQRT(ea/types(k)%mass)
+    END DO
+    period = 2.0_wp*transit
+    IF (.NOT. (period > CD_ZERO) .OR. period >= AXIAL_STEPS_PER_PERIOD*dt) RETURN
+    WRITE (b1, '(F12.4)') dt
+    WRITE (b2, '(F12.3)') period
+    WRITE (b3, '(F12.1)') period/dt
+    WRITE (b4, '(F12.4)') period/AXIAL_STEPS_PER_PERIOD
+    note = 'LINE '//TRIM(int_to_str(line_id))//': dtM = '//TRIM(ADJUSTL(b1))//' s resolves its axial period of '// &
+           TRIM(ADJUSTL(b2))//' s (twice its length over sqrt(EA/m)) in '//TRIM(ADJUSTL(b3))//' steps, fewer than '// &
+           TRIM(int_to_str(NINT(AXIAL_STEPS_PER_PERIOD)))//': its axial dynamics are damped and its tension peaks '// &
+           'can be wrong. A dtM of at most '//TRIM(ADJUSTL(b4))//' s resolves them'
+  END SUBROUTINE axial_period_note
 
   SUBROUTINE warn_line_below_anchor(lines, points, sections, q_all, q_off)
     !! Standard-output WARNING for a deck with no seabed (no WtrDpth or bathymetryFile) on
@@ -32618,6 +32666,10 @@ CONTAINS
       IF (PRESENT(types) .AND. PRESENT(opts)) THEN
         CALL static_strain_note(summaries(i)%line_id, summaries(i)%fair_tension, sections, types, opts, strain_note)
         IF (LEN_TRIM(strain_note) > 0) WRITE (error_unit, '(A)') '      Note: '//TRIM(strain_note)//'.'
+        IF (opts%has_dtm .AND. opts%tmax > CD_ZERO) THEN
+          CALL axial_period_note(summaries(i)%line_id, opts%dtM, sections, types, strain_note)
+          IF (LEN_TRIM(strain_note) > 0) WRITE (error_unit, '(A)') '      Note: '//TRIM(strain_note)//'.'
+        END IF
       END IF
     END DO
     WRITE (error_unit, '(A)') '  CableDyn initialization completed.'

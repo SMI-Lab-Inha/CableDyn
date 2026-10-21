@@ -83,18 +83,20 @@ OpenFAST coupling
 .. admonition:: Why do CableDyn channels look stepped in an OpenFAST plot?
    :class: note
 
-   CableDyn solves on ``dtM`` (0.1 s by default) and holds its committed loads/channels between
-   solves on the faster glue clock of OpenFAST (maintained by NLR, the National Laboratory of the
-   Rockies, formerly NREL). A smaller ``DT_Out`` records more copies of the held
-   value; it does not add physical bandwidth. Plot ``<OpenFASTRoot>.CD.out`` for the solver-native
-   record containing one row per genuine CableDyn solve. Set deck ``dtM = DT`` only when glue-rate
-   solves are required, and demonstrate damage/range convergence by reducing ``dtM``.
+   CableDyn solves on ``dtM`` (the glue ``DT`` unless the deck sets a larger ``dtM``) and, with a
+   larger ``dtM``, holds its committed loads/channels between solves on the faster glue clock of
+   OpenFAST (maintained by NLR, the National Laboratory of the Rockies, formerly NREL). A smaller
+   ``DT_Out`` records more copies of the held value; it does not add physical bandwidth. Plot
+   ``<OpenFASTRoot>.CD.out`` for the solver-native record containing one row per genuine CableDyn
+   solve. A larger ``dtM`` is faster; demonstrate damage/range convergence by reducing it, and
+   heed the initialisation note on a line whose axial period it does not resolve
+   (:doc:`modeling`).
 
 .. admonition:: Why did ``dtM = 0.025 s`` make my coupled run much slower?
    :class: note
 
-   Equal ``dtM`` and OpenFAST ``DT`` intentionally request a nonlinear CableDyn solve on every glue
-   step, four times as many as the 0.1 s default. The release executables are serial; the
+   Equal ``dtM`` and OpenFAST ``DT`` (the default) request a nonlinear CableDyn solve on every glue
+   step, four times as many as ``dtM = 0.1 s`` at ``DT = 0.025 s``. The release executables are serial; the
    threading advice in this answer applies only to source builds configured with OpenMP. On such
    builds an ``EI = 0`` line evaluates its elements in parallel only from 8192 elements and a
    finite-EI cable from 32 elements, while separate lines can still run concurrently; nested
