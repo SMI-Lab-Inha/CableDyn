@@ -141,6 +141,9 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! cable march, environmental loading, and output channels active but zeros
     ! its moving-point load and moment for a controlled one-way comparison.
     LOGICAL :: cable_load_feedback = .TRUE.
+    ! Deck OPTION predictLoads: the OpenFAST shell extrapolates the coupled loads between
+    ! supercycled solves (TRUE) or holds the last solve's (FALSE)
+    LOGICAL :: predict_loads = .TRUE.
     ! Deck OPTION maxStrain: the per-step plausibility bound on the EI=0 system lines.
     REAL(wp) :: max_strain = 0.5_wp
     INTEGER :: ncp_sys = 0                               ! moving points owned by sys
@@ -330,6 +333,7 @@ CONTAINS
     candidate%host_wave_enabled = parts%host_wave_enabled
     candidate%host_current_enabled = parts%host_current_enabled
     candidate%cable_load_feedback = parts%cable_load_feedback
+    candidate%predict_loads = parts%predict_loads
     candidate%max_strain = parts%max_strain
     IF (ALLOCATED(parts%host_current_profile_z)) THEN
       candidate%host_current_profile_z = parts%host_current_profile_z

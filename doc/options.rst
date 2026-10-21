@@ -527,6 +527,15 @@ Finite-EI cable controls
        controlled one-way comparison, not a physical operating configuration
      - OpenFAST (coupled finite-EI cables)
      - ``True cable_load_feedback``
+   * - ``predictLoads`` / ``predict_loads``
+     - logical
+     - ``True``
+     - with ``dtM`` larger than the glue ``DT``: ``True`` extrapolates the coupled loads between
+       CableDyn solves from the last two, ``False`` holds the last solve's loads (about ``dtM/2``
+       late). No effect at ``dtM = DT``; the output channels hold the committed samples either way
+       (see :doc:`openfast`)
+     - OpenFAST
+     - ``False predictLoads``
 
 Ambient fluid and prescribed motion
 -----------------------------------

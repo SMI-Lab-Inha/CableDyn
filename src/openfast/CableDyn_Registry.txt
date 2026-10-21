@@ -359,6 +359,8 @@ typedef   ^       ConstraintStateType  SiKi                dummy            -   
 ## ============================== Define Other states here: =====================================================================================================================================
 typedef   ^       OtherStateType       IntKi               restart_serial    -  -1 -   "instance-generation stamp minted at Init/rebuild; a restored OtherState whose stamp does not match the live instance's (a fresh process) triggers the checkpoint rebuild from p + the x state mirror" -
 typedef   ^       ^                    DbKi                t_commit          -  -1 -   "time of the last committed mooring advance; a live instance whose committed clock is AHEAD of a restored OtherState's (a same-process checkpoint rewind) also triggers the rebuild" -
+typedef   ^       ^                    DbKi                pred_t            -  -1 -   "load predictor: time of the committed solve before the last (negative: none), from which the coupled loads between supercycled solves are extrapolated" -
+typedef   ^       ^                    DbKi                pred_loads        {:} - -   "load predictor: the coupled forces (3 x ncp) and then moments (3 x ncp) of that solve" -
 
 ## ============================== Parameters ============================================================================================================================================
 typedef   ^       ParameterType        IntKi               nLineTypes     -     0    -   "number of line types"                       ""

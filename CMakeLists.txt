@@ -333,6 +333,7 @@ add_library(cabledyn_obj OBJECT
   src/CableDyn_Precision.f90
   src/CableDyn_FatalReport.f90
   src/CableDyn_Profile.f90
+  src/CableDyn_LoadPredictor.f90
   src/CableDyn_PathIO.f90
   src/CableDyn_Banner.f90
   src/CableDyn_Linalg.f90
@@ -1102,6 +1103,13 @@ target_link_libraries(test_dtm_advisor PRIVATE cabledyn_core)
 add_test(NAME dtm_advisor
          COMMAND test_dtm_advisor ${CMAKE_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat)
 set_tests_properties(dtm_advisor PROPERTIES LABELS "fortran;unit;openfast")
+
+# The load predictor between supercycled OpenFAST solves: used only between consecutive commits,
+# exact at the commit and for loads linear in time, second order otherwise.
+add_executable(test_load_predictor tests/test_load_predictor.f90)
+target_link_libraries(test_load_predictor PRIVATE cabledyn_core)
+add_test(NAME load_predictor COMMAND test_load_predictor)
+set_tests_properties(load_predictor PROPERTIES LABELS "fortran;unit;openfast")
 
 # The same deck initialises without a static compression/mesh note: the touchdown
 # contact kink is element-local, the smoothed element-mean axial force is tensile.
