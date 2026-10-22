@@ -15,6 +15,9 @@ option(CABLEDYN_ENABLE_COVERAGE "Instrument the GNU Fortran core for gcov/gcovr 
 option(CABLEDYN_ENABLE_OPENMP "Enable OpenMP acceleration when the compiler provides it" ON)
 option(CABLEDYN_STATIC_WINDOWS_RELEASE
        "Build a single-file non-OpenMP Windows release with Intel IFX/MSVC" OFF)
+option(CABLEDYN_TARGET_AVX2
+       "Compile the Fortran core for x86-64-v3 (AVX2, FMA, BMI1/2); programs then stop with a message on older processors"
+       OFF)
 
 if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   if(NOT WIN32 OR NOT CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM" OR NOT MSVC)
@@ -25,6 +28,8 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   # static MSVC CRT, and no OpenMP runtime dependency (IFX has no static OpenMP
   # runtime on Windows).
   set(CABLEDYN_ENABLE_OPENMP OFF CACHE BOOL "" FORCE)
+  # The release executables target x86-64-v3 (CABLEDYN_TARGET_AVX2 below).
+  set(CABLEDYN_TARGET_AVX2 ON CACHE BOOL "" FORCE)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded" CACHE STRING "" FORCE)
   # Large finite-EI meshes create compiler-generated array temporaries in deeply
   # nested residual/assembly calls. Keep those temporaries off the process stack;
@@ -61,6 +66,39 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
       message(FATAL_ERROR "CABLEDYN_STATIC_LAPACK_LIBRARIES entry not found: ${_cabledyn_static_lib}")
     endif()
   endforeach()
+endif()
+
+# x86-64-v3 (Intel Haswell, AMD Excavator and newer): the vector maths of the wave
+# kinematics and the element kernels run four doubles wide instead of two. On the release
+# benchmark decks the IFX driver is 13-33% faster; results change at round-off (the wider
+# vector maths), identically on every x86-64-v3 processor. Contraction into fused
+# multiply-adds stays off: the compiler would fuse the same expression differently where it
+# is inlined, so a restored or re-entered state would no longer continue a run bit for bit
+# (test_line_attachments), for 2-5% more speed. IFX takes the /arch form, documented for
+# any processor with these instructions (the /Qx form is documented for Intel processors;
+# both gave the same code and speed on the benchmarks).
+# Only the Fortran sources take it: src/cabledyn_cpu_guard.c stays baseline x86-64 and
+# stops a program on an older processor with a message before any Fortran code runs.
+if(CABLEDYN_TARGET_AVX2)
+  if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
+    message(FATAL_ERROR "CABLEDYN_TARGET_AVX2 needs an x86-64 target (found ${CMAKE_SYSTEM_PROCESSOR})")
+  endif()
+  if(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
+    if(WIN32)
+      string(APPEND CMAKE_Fortran_FLAGS " /arch:CORE-AVX2 /Qfma-")
+    else()
+      string(APPEND CMAKE_Fortran_FLAGS " -march=core-avx2 -no-fma")
+    endif()
+  elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+    if(CMAKE_Fortran_COMPILER_VERSION VERSION_LESS 11)
+      message(FATAL_ERROR "CABLEDYN_TARGET_AVX2 needs GNU Fortran 11 or newer (-march=x86-64-v3)")
+    endif()
+    string(APPEND CMAKE_Fortran_FLAGS " -march=x86-64-v3 -ffp-contract=off")
+  else()
+    message(FATAL_ERROR "CABLEDYN_TARGET_AVX2 supports Intel IFX and GNU Fortran")
+  endif()
+  set_source_files_properties(src/cabledyn_cpu_guard.c PROPERTIES
+    COMPILE_DEFINITIONS CABLEDYN_REQUIRE_X86_64_V3)
 endif()
 
 # src/cabledyn_mutex.c uses C11 <stdatomic.h>, which the MSVC C compiler provides only
@@ -328,6 +366,7 @@ add_library(cabledyn_obj OBJECT
   src/cabledyn_mutex.c
   src/cabledyn_blas.c
   src/cabledyn_crt_locale.c
+  src/cabledyn_cpu_guard.c
   src/cabledyn_path.c
   src/cabledyn_fatal.c
   src/CableDyn_Precision.f90
@@ -1996,6 +2035,21 @@ add_executable(test_crt_locale_guard tests/test_crt_locale_guard.f90 tests/crt_l
 target_link_libraries(test_crt_locale_guard PRIVATE cabledyn_core)
 add_test(NAME crt_locale_guard COMMAND test_crt_locale_guard $<IF:$<BOOL:${MINGW}>,1,0>)
 set_tests_properties(crt_locale_guard PROPERTIES LABELS "fortran;unit")
+# The x86-64-v3 start-up processor check is armed exactly in CABLEDYN_TARGET_AVX2 builds.
+add_executable(test_cpu_guard tests/test_cpu_guard.f90)
+target_link_libraries(test_cpu_guard PRIVATE cabledyn_core)
+add_test(NAME cpu_guard COMMAND test_cpu_guard $<IF:$<BOOL:${CABLEDYN_TARGET_AVX2}>,1,0>)
+set_tests_properties(cpu_guard PROPERTIES LABELS "fortran;unit")
+if(CABLEDYN_TARGET_AVX2)
+  # The armed check stops the driver before any Fortran code runs, with the message naming
+  # what is missing (a simulated feature, so the stop is exercised on any processor).
+  add_test(NAME cpu_guard_stop
+           COMMAND ${CMAKE_COMMAND} -E env CABLEDYN_CPU_GUARD_SIMULATE=SIMULATED-FEATURE
+                   $<TARGET_FILE:cabledyn> --version)
+  set_tests_properties(cpu_guard_stop PROPERTIES LABELS "fortran;unit"
+    PASS_REGULAR_EXPRESSION "This computer lacks: SIMULATED-FEATURE"
+    FAIL_REGULAR_EXPRESSION "CableDyn  v")
+endif()
 # An abnormal end of the driver process is never silent: a stack overflow (on a 1 MiB stack
 # in Windows GNU builds), an access violation and, off Windows, SIGTERM each end the process
 # with a report on stderr of the cause and the simulated time reached; the march records the

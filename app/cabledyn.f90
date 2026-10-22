@@ -44,6 +44,7 @@ PROGRAM cabledyn
                                           CD_HermiteCable_Dyn_Recovery_Reset, CD_HermiteCable_Dyn_Recovery_Count, &
                                           CD_HermiteCable_Dyn_Get_Assembly_Profile, HC_ASM_NSEC, HC_ASM_NAMES
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: error_unit, output_unit, int64
+  USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT
   IMPLICIT NONE
   TYPE :: StandaloneProgress
     INTEGER :: nstep = 0, stride = 1
@@ -56,6 +57,14 @@ PROGRAM cabledyn
   CHARACTER(*), PARAMETER :: PROG = 'CableDyn_driver'
   ! Lock file beside the outputs that keeps a second run off the same output root.
   CHARACTER(*), PARAMETER :: LOCK_SUFFIX = '.cabledyn.lock'
+  INTERFACE
+    ! 1 when this build targets x86-64-v3 and carries the start-up processor check of
+    ! src/cabledyn_cpu_guard.c (the reference also keeps that check in the static link)
+    FUNCTION cpu_guard_armed() BIND(C, name='cabledyn_cpu_guard_armed') RESULT(armed)
+      IMPORT :: C_INT
+      INTEGER(C_INT) :: armed
+    END FUNCTION cpu_guard_armed
+  END INTERFACE
   ! Longest suffix a run appends to the output root (".Line<id>.range.out" with a 10-digit id).
   INTEGER, PARAMETER :: MAX_OUTPUT_SUFFIX = 25
   ! Command-line paths as UTF-8; the native spellings are what the Fortran runtime opens.
@@ -80,6 +89,11 @@ PROGRAM cabledyn
     SELECT CASE (TRIM(deck_path))
     CASE ('-v', '-V', '-version', '-VERSION', '--version')
       CALL CD_Print_Banner()
+      IF (cpu_guard_armed() /= 0) THEN
+        WRITE (output_unit, '(A)') '   Build     x86-64-v3 (AVX2)'
+      ELSE
+        WRITE (output_unit, '(A)') '   Build     baseline'
+      END IF
       STOP 0, QUIET = .TRUE.
     CASE ('-h', '-H', '-help', '-HELP', '--help', '-?', '/?')
       CALL CD_Print_Banner()

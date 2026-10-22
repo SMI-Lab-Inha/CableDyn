@@ -43,6 +43,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- The Windows release executables (`CableDyn_driver.exe`, `openfast.exe`) are compiled for
+  processors with AVX2 (x86-64-v3: Intel Haswell and AMD Excavator or newer; CMake option
+  `CABLEDYN_TARGET_AVX2`), which makes the driver 13-33% faster on the benchmark decks
+  (`lazy_wave_vessel_rao` 11.9 s to 8.8 s, `als_volturnus_line_break_time` 35.5 s to 23.9 s).
+  On an older processor they stop at start with a message naming the missing instructions.
+  Results change at round-off: in the last printed digit on the lazy-wave and buoy decks; in the
+  line-break deck the platform's slow drift after the break amplifies the round-off past 900 s,
+  with the same peaks and standard deviations to four digits.
 - OpenFAST: `CalcOutput` no longer evaluates the reactions of the finite-EI cables when it saves
   the committed kinematics before transferring the current ones; it discarded them. With a
   248-element power cable in the IEA-15 VolturnUS-S mooring this cuts `CalcOutput` from 41 s to

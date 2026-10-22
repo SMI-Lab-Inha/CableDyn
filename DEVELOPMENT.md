@@ -44,6 +44,18 @@ The Debug configuration (`-DCMAKE_BUILD_TYPE=Debug`) adds `-fcheck=all
 conda OpenBLAS through `CONDA_PREFIX`. `cmake --install build --prefix stage`
 installs the driver, the shared library, and `CableDyn_CAPI.h`.
 
+`-DCABLEDYN_TARGET_AVX2=ON` compiles the Fortran core for x86-64-v3 (AVX2, FMA,
+BMI1/2: Intel Haswell and AMD Excavator or newer) with IFX (`/arch:CORE-AVX2`) or
+gfortran 11+ (`-march=x86-64-v3`), with contraction into fused multiply-adds off
+(`/Qfma-`, `-ffp-contract=off`) so a restored state still continues a run bit for
+bit. The static Windows release always sets it: its IFX driver runs the benchmark
+decks 13-33% faster, and the results change at round-off. Such a build checks the
+processor when it starts
+(`src/cabledyn_cpu_guard.c`, compiled for baseline x86-64) and stops with a
+message naming the missing instructions instead of crashing on the first one;
+the driver's `--version` output and the OpenFAST module's start-up lines report the
+x86-64-v3 build. The default (`OFF`) runs on any x86-64 processor.
+
 A Windows build with gfortran links every executable with a 64 MiB stack reserve
 (the MinGW default is 2 MiB). With OpenMP enabled, gfortran keeps fixed-size local
 arrays on the stack, and the stack depth of the OpenBLAS kernels differs between

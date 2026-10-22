@@ -123,6 +123,7 @@ $common = '-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_Fortran_COMPILER=ifx ' +
 # so both executables link the netlib reference LAPACK/BLAS, compiled here with the
 # release IFX from a pinned, checksummed source archive. /fp:precise keeps IEEE
 # semantics inside LAPACK; the upstream CMake applies a strict model only on Unix.
+# /arch:CORE-AVX2 is the x86-64-v3 target of the CableDyn core (CABLEDYN_TARGET_AVX2).
 $lapackVersion = '3.12.1'
 $lapackSha256 = '2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422'
 $lapackUrl = "https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v$lapackVersion.tar.gz"
@@ -160,7 +161,7 @@ Invoke-StaticToolchain ("cmake -S `"$lapackSource`" -B `"$lapackBuild`" $common 
     '-DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DBUILD_SINGLE=OFF -DBUILD_DOUBLE=ON ' +
     '-DBUILD_COMPLEX=OFF -DBUILD_COMPLEX16=OFF -DBUILD_INDEX64_EXT_API=OFF ' +
     '-DUSE_OPTIMIZED_BLAS=OFF -DUSE_OPTIMIZED_LAPACK=OFF ' +
-    '"-DCMAKE_Fortran_FLAGS=/nologo /libs:static /fp:precise" ' +
+    '"-DCMAKE_Fortran_FLAGS=/nologo /libs:static /fp:precise /arch:CORE-AVX2" ' +
     "`"-DCMAKE_INSTALL_PREFIX=$lapackInstall`"")
 Invoke-StaticToolchain "cmake --build `"$lapackBuild`" --target blas lapack -j $Jobs"
 Invoke-StaticToolchain "cmake --install `"$lapackBuild`""
@@ -220,8 +221,28 @@ Copy-Item -LiteralPath $vsOpenFAST -Destination $openfast -Force
 $savedPath = $env:PATH
 $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
 try {
-    & $driver --version
-    if ($LASTEXITCODE -ne 0) { throw 'CableDyn_driver.exe --version failed in isolated PATH' }
+    $versionRun = Invoke-NativeCapture $driver @('--version')
+    Write-Host $versionRun.Text
+    if ($versionRun.ExitCode -ne 0) { throw 'CableDyn_driver.exe --version failed in isolated PATH' }
+    # the release targets x86-64-v3 and carries the start-up processor check
+    if ($versionRun.Text -notmatch 'Build\s+x86-64-v3') {
+        throw "CableDyn_driver.exe is not the x86-64-v3 build with the processor check`n$($versionRun.Text)"
+    }
+    # On a processor without x86-64-v3 both executables stop at start with the message
+    # (simulated here): exit 3 before any CableDyn or OpenFAST code prints.
+    $env:CABLEDYN_CPU_GUARD_SIMULATE = 'SIMULATED-FEATURE'
+    try {
+        foreach ($stopCase in @(@($driver, '--version'), @($openfast, '-h'))) {
+            $stopRun = Invoke-NativeCapture $stopCase[0] @($stopCase[1])
+            if ($stopRun.ExitCode -ne 3 -or $stopRun.Text -notmatch 'This computer lacks: SIMULATED-FEATURE' -or
+                $stopRun.Text -match 'CableDyn  v|OpenFAST') {
+                throw "$($stopCase[0]) did not stop at start on a processor without x86-64-v3 " +
+                      "(exit $($stopRun.ExitCode))`n$($stopRun.Text)"
+            }
+        }
+    } finally {
+        Remove-Item Env:CABLEDYN_CPU_GUARD_SIMULATE -ErrorAction SilentlyContinue
+    }
     $driverRoot = Join-Path $cdBuild 'driver_static_smoke'
     & $driver (Join-Path $CableDynRoot 'examples\chain_catenary_shallow_30m.dat') $driverRoot
     if ($LASTEXITCODE -ne 0) { throw 'CableDyn_driver.exe static smoke case failed' }
@@ -398,6 +419,9 @@ try {
         if ($run.ExitCode -ne 0) { throw "openfast.exe smoke case failed`n$runLog" }
         if ($runLog -notmatch 'Running CableDyn \(' -or $runLog -notmatch 'OpenFAST terminated normally') {
             throw "openfast.exe did not prove CableDyn identity and normal termination`n$runLog"
+        }
+        if ($runLog -notmatch 'CableDyn build: x86-64-v3') {
+            throw "openfast.exe does not carry the x86-64-v3 CableDyn core with the processor check`n$runLog"
         }
         if ($runLog -notmatch 'Created CableDyn model:' -or
             $runLog -notmatch 'Line 1 fairlead effective tension:' -or
