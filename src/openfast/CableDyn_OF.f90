@@ -122,6 +122,15 @@ MODULE CableDyn
    PRIVATE
 
    TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.2.0', '2026-10-20' )
+   INTERFACE
+      ! 1 when the CableDyn core targets x86-64-v3 (CABLEDYN_TARGET_AVX2) and carries the
+      ! start-up processor check of src/cabledyn_cpu_guard.c; the reference also keeps that
+      ! check in a static link of the core into the OpenFAST executable
+      FUNCTION cd_cpu_guard_armed() BIND(C, name='cabledyn_cpu_guard_armed') RESULT(armed)
+         USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT
+         INTEGER(C_INT) :: armed
+      END FUNCTION cd_cpu_guard_armed
+   END INTERFACE
 
    !> Module-level instance registry: the CableDyn solver objects cannot live inside the
    !> registry-generated types, so each initialized module holds an integer handle
@@ -528,6 +537,7 @@ CONTAINS
       CALL WrScr( '   Author Prof. Jae Hoon Seo, Inha University.  License Apache-2.0.' )
       CALL WrScr( '   CompMooring = 5: mooring and dynamic power-cable loads are computed by CableDyn,' )
       CALL WrScr( '   an OpenFAST mooring module alongside MoorDyn (CompMooring = 3) in this binary.' )
+      IF (cd_cpu_guard_armed() /= 0) CALL WrScr( '   CableDyn build: x86-64-v3 (AVX2).' )
 
       ! ------------------------------------------------------------------------------
       ! Scope guards (named fail-closed messages; see the module header)

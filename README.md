@@ -46,7 +46,7 @@ a named error rather than running approximately.
 
    | Asset | Contents |
    |---|---|
-   | `CableDyn_driver.exe` | Standalone solver for Windows x64 |
+   | `CableDyn_driver.exe` | Standalone solver for Windows x64 (AVX2 processor) |
    | `openfast.exe` | OpenFAST with CableDyn available as `CompMooring = 5` |
    | `cabledyn-0.2.0-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
    | `cabledyn-0.2.0.tar.gz` | Python source distribution |

@@ -52,6 +52,14 @@ What is on the release page
    the ``examples/`` folder of the **Source code (zip)** archive on the same release page.
    Download it once and unzip it next to the executables.
 
+.. note::
+
+   The executables need a 64-bit processor with AVX2 (the x86-64-v3 level: Intel Haswell,
+   2013, and AMD Excavator, 2015, or newer), for which they are compiled. On an older processor
+   they stop at start with a message that names the missing instructions; there, build CableDyn
+   from source as `DEVELOPMENT.md
+   <https://github.com/SMI-Lab-Inha/CableDyn/blob/main/DEVELOPMENT.md>`_ describes.
+
 Download and verify
 ~~~~~~~~~~~~~~~~~~~
 
