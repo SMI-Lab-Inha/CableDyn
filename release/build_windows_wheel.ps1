@@ -129,9 +129,20 @@ if (-not $wheel) { throw "no win_amd64 wheel in $OutputDir" }
 # Only Windows system DLLs may be imported by the library and the driver.
 $inspect = Join-Path $env:TEMP ("cabledyn-wheel-{0}" -f [guid]::NewGuid().ToString('N'))
 try {
-    Expand-Archive -LiteralPath $wheel.FullName -DestinationPath $inspect
-    $binaries = Get-ChildItem -LiteralPath (Join-Path $inspect 'cabledyn') -Recurse -Include '*.dll', '*.exe'
-    if ($binaries.Count -lt 2) { throw "the wheel carries $($binaries.Count) binaries; expected the library and the driver" }
+    # A wheel is a ZIP archive, but Windows PowerShell 5.1's Expand-Archive refuses any
+    # extension other than .zip; the .NET extractor reads it by content.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($wheel.FullName, $inspect)
+    # Filter on the extension explicitly: with -LiteralPath, Windows PowerShell 5.1 ignores
+    # -Include and would list every file of the package.
+    $binaries = @(Get-ChildItem -LiteralPath (Join-Path $inspect 'cabledyn') -Recurse -File |
+        Where-Object { $_.Extension -in @('.dll', '.exe') })
+    $libraries = @($binaries | Where-Object { $_.Extension -eq '.dll' })
+    $drivers = @($binaries | Where-Object { $_.Extension -eq '.exe' -and $_.Directory.Name -eq 'bin' })
+    if ($libraries.Count -ne 1 -or $drivers.Count -ne 1 -or $binaries.Count -ne 2) {
+        throw "the wheel carries $($binaries.Count) binaries ($($binaries.Name -join ', ')); " +
+              'expected the library beside the package and the driver in cabledyn/bin'
+    }
     foreach ($binary in $binaries) {
         $listing = Join-Path $env:TEMP ("cabledyn-deps-{0}.txt" -f [guid]::NewGuid().ToString('N'))
         Invoke-Toolchain "dumpbin /nologo /dependents `"$($binary.FullName)`" > `"$listing`""
