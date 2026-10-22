@@ -107,7 +107,9 @@ peaks, and damage. If CableDyn needs a smaller step than the glue step, reduce `
    the ``dtM = DT`` run by at most 0.12 % of their standard deviation with the extrapolation, on
    the chain mooring as on the chain and power-cable mooring, where the held loads give up to
    0.42 %. The chain-only run took a fifth less time (116 s against 141 s for ``dtM = DT``
-   on the same machine). In the three-seed DLC-1.1 comparison
+   on the same machine). Over a one-hour run in the same environment the fairlead and
+   anchor tension statistics stay within 0.16 % and their fatigue damage-equivalent loads
+   within 1.5 % (see :doc:`validation`). In the three-seed DLC-1.1 comparison
    of :doc:`validation`, made with held loads, the platform motions with ``dtM`` above ``DT``
    agree with MoorDyn within 0.6 % in mean and standard deviation, but the fairlead tension's
    standard deviation differs by about 3 % from CableDyn's own solution at every glue step.

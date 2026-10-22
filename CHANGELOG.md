@@ -31,6 +31,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `dtM = DT` (the default) do not change; the previous solve's loads are checkpointed, so a restart
   continues the extrapolation.
 
+- `validation/scripts/openfast_supercycle_ab.py`: compares coupled runs at a coarser `dtM` with
+  the same model at `dtM = DT` (platform time series, tension statistics, rainflow
+  damage-equivalent loads); `VALIDATION.md` records the supercycling verification it scores.
+
 ### Changed
 
 - OpenFAST: `CalcOutput` no longer evaluates the reactions of the finite-EI cables when it saves
