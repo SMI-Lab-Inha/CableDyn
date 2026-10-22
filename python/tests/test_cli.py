@@ -515,9 +515,46 @@ def test_driver_discovery_reports_every_candidate(monkeypatch):
 
     monkeypatch.delenv("CABLEDYN_DRIVER", raising=False)
     monkeypatch.setattr("shutil.which", lambda name: None)
-    with pytest.raises(DriverNotFoundError, match="CABLEDYN_DRIVER or PATH") as caught:
+    with pytest.raises(
+        DriverNotFoundError, match="CABLEDYN_DRIVER, the bundled driver or PATH"
+    ) as caught:
         CableDynDriver()
     assert "CableDyn_driver.exe" in str(caught.value) and "cabledyn" in str(caught.value)
+    assert str(Path("bin") / "CableDyn_driver") in str(caught.value)
+
+
+def _fake_driver(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("")
+    path.chmod(0o755)
+    return path
+
+
+def test_bundled_driver_comes_before_path(monkeypatch, tmp_path):
+    # a wheel's own driver (matching its bundled library) wins over one on PATH
+    from cabledyn import driver as driver_module
+
+    bundled = _fake_driver(tmp_path / "pkg" / "bin" / "CableDyn_driver.exe")
+    on_path = _fake_driver(tmp_path / "path" / "CableDyn_driver.exe")
+    monkeypatch.delenv("CABLEDYN_DRIVER", raising=False)
+    monkeypatch.setattr(driver_module, "bundled_driver", lambda: bundled)
+    monkeypatch.setattr("shutil.which", lambda name: str(on_path))
+    assert driver_module._resolve_executable(None) == bundled
+    # without a bundled driver, PATH is searched as before
+    monkeypatch.setattr(
+        driver_module, "bundled_driver", lambda: tmp_path / "missing" / "CableDyn_driver.exe"
+    )
+    assert driver_module._resolve_executable(None) == on_path.resolve()
+
+
+def test_cabledyn_driver_variable_comes_before_the_bundled_driver(monkeypatch, tmp_path):
+    from cabledyn import driver as driver_module
+
+    bundled = _fake_driver(tmp_path / "pkg" / "bin" / "CableDyn_driver.exe")
+    chosen = _fake_driver(tmp_path / "chosen" / "CableDyn_driver.exe")
+    monkeypatch.setenv("CABLEDYN_DRIVER", str(chosen))
+    monkeypatch.setattr(driver_module, "bundled_driver", lambda: bundled)
+    assert driver_module._resolve_executable(None) == chosen.resolve()
 
 
 def test_posix_environment_merge_keeps_case_distinct_names(monkeypatch):
@@ -547,3 +584,15 @@ def test_version_timeout_decodes_byte_captures(fake_driver, monkeypatch):
         CableDynDriver(fake_driver).version(timeout=1.0)
     assert caught.value.stdout == "partial �"
     assert caught.value.stderr == ""
+
+
+def test_bundled_driver_accepts_both_toolchain_names(tmp_path):
+    from cabledyn import driver as driver_module
+
+    suffix = ".exe" if os.name == "nt" else ""
+    package = tmp_path / "cabledyn"
+    assert driver_module.bundled_driver(package) == package / "bin" / f"CableDyn_driver{suffix}"
+    gnu = _fake_driver(package / "bin" / f"cabledyn{suffix}")
+    assert driver_module.bundled_driver(package) == gnu
+    msvc = _fake_driver(package / "bin" / f"CableDyn_driver{suffix}")
+    assert driver_module.bundled_driver(package) == msvc

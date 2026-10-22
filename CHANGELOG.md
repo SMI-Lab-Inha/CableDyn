@@ -35,6 +35,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the same model at `dtM = DT` (platform time series, tension statistics, rainflow
   damage-equivalent loads); `VALIDATION.md` records the supercycling verification it scores.
 
+- Packaging for PyPI: a root `pyproject.toml` (scikit-build-core) builds an sdist of the sources
+  and a `py3-none-<platform>` wheel that carries the compiled library and the standalone driver
+  inside the `cabledyn` package, so the package needs no separate library; the driver search
+  takes the bundled driver after `CABLEDYN_DRIVER` and before `PATH`. `python/pyproject.toml`
+  remains the pure package for development against a build tree.
+
 ### Changed
 
 - OpenFAST: `CalcOutput` no longer evaluates the reactions of the finite-EI cables when it saves

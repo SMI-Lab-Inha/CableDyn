@@ -322,6 +322,16 @@ class DriverResult:
         return table
 
 
+def bundled_driver(package_directory: Path | None = None) -> Path:
+    """The driver a wheel carries in the package's ``bin`` folder: ``CableDyn_driver`` (the name
+    the MSVC-style toolchains give it) or ``cabledyn`` (GNU), each with ``.exe`` on Windows. Returns
+    the first that exists, else the ``CableDyn_driver`` path (to report)."""
+    package = Path(__file__).resolve().parent if package_directory is None else package_directory
+    suffix = ".exe" if os.name == "nt" else ""
+    candidates = [package / "bin" / f"{stem}{suffix}" for stem in ("CableDyn_driver", "cabledyn")]
+    return next((c for c in candidates if c.is_file()), candidates[0])
+
+
 def _resolve_executable(executable: str | os.PathLike[str] | None) -> Path:
     direct_candidates: list[str | os.PathLike[str]] = []
     if executable is not None:
@@ -338,12 +348,21 @@ def _resolve_executable(executable: str | os.PathLike[str] | None) -> Path:
         if resolved.is_file() and (os.name == "nt" or os.access(resolved, os.X_OK)):
             return resolved
     if executable is None:
+        # the driver a wheel carries in the package (matching its bundled library) before PATH
+        bundled = bundled_driver()
+        tried.append(str(bundled))
+        if bundled.is_file() and (os.name == "nt" or os.access(bundled, os.X_OK)):
+            return bundled
         for name in ("CableDyn_driver.exe", "CableDyn_driver", "cabledyn"):
             found = shutil.which(name)
             tried.append(name)
             if found:
                 return Path(found).resolve()
-    source = "the explicit path" if executable is not None else "CABLEDYN_DRIVER or PATH"
+    source = (
+        "the explicit path"
+        if executable is not None
+        else "CABLEDYN_DRIVER, the bundled driver or PATH"
+    )
     raise DriverNotFoundError(
         f"could not locate CableDyn_driver using {source}. Tried: {', '.join(tried)}"
     )

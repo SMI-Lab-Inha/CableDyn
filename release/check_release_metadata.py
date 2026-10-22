@@ -115,6 +115,7 @@ def main() -> int:
     checks = {
         "CITATION.cff version": citation_version == version,
         "Python project version": f'version = "{version}"' in read("python/pyproject.toml"),
+        "Published distribution version": f'version = "{version}"' in read("pyproject.toml"),
         "Python runtime version": f'__version__ = "{version}"' in read("python/cabledyn/__init__.py"),
         "Fortran banner version": f"CableDyn  v{version}" in read("src/CableDyn_Banner.f90"),
         "C ABI version string": f"CableDyn {version} C-ABI {abi_version}" in read(
@@ -174,6 +175,9 @@ def main() -> int:
             "python/pyproject.toml"
         ),
         "Python licence file": (ROOT / "python" / "LICENSE").is_file(),
+        "Published distribution licence metadata": 'license-files = ["LICENSE", "NOTICE"]' in read(
+            "pyproject.toml"
+        ),
     }
     failures = [label for label, passed in checks.items() if not passed]
     failures += [f"stale version reference {where}" for where in stale_version_references(version)]
