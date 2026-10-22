@@ -137,8 +137,10 @@ A wheel built this way still needs the toolchain's runtime and LAPACK libraries 
 search path; the release wheels bundle them (or link them statically on Windows).
 
 The release wheels come from `.github/workflows/wheels.yml` (manual runs, published
-releases, and pull requests that touch the packaging), as workflow artifacts; publishing
-them is a separate step. It builds the sdist (checked with `twine`) and three wheels:
+releases, and pull requests that touch the packaging), as workflow artifacts, which only
+its publish jobs upload (TestPyPI from a manual run with **upload = testpypi**, PyPI from a
+published release; see [RELEASE.md](RELEASE.md)). It builds the sdist (checked with
+`twine`) and three wheels:
 
 | Wheel | Toolchain | Runtime and LAPACK | Build |
 |---|---|---|---|
