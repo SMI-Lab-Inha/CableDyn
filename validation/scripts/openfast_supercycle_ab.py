@@ -14,7 +14,10 @@ samples (--grid, default 0.1 s), the script reports per channel:
     damage-equivalent load DEL = (sum n_i S_i^m / T)^(1/m) from a rainflow count (ASTM E1049,
     four-point method, residue counted as half cycles; a plateau of equal samples at the
     output precision counts as one turning point), slope m (--slope, default 3 for steel chain),
-    1 Hz equivalent count, and its change against the reference.
+    1 Hz equivalent count, and its change against the reference DEL over the same samples.
+
+Every statistic of a run is taken over the samples it shares with the reference; a run that
+covers fewer of them (a shorter run, missing rows) is flagged in the report.
 
 It also reports the reference DEL at its native sampling against the common grid, the part of
 a DEL difference that is sampling alone. It reports; it does not gate.
@@ -106,6 +109,26 @@ def mean_std(x: list[float]) -> tuple[float, float]:
     return m, math.sqrt(sum((v - m) ** 2 for v in x) / len(x))
 
 
+def compare_channel(grid: dict[int, list[float]], j: int, ref_grid: dict[int, list[float]], jr: int,
+                    step: float, slope: float | None) -> dict[str, float]:
+    """One channel of a run against the reference over the samples BOTH have: mean, std and max of
+    the run, the RMS of the difference over the reference std, and (slope given) the run's DEL and
+    its change against the reference DEL over the same samples and duration. covered is the
+    fraction of the reference samples the run has."""
+    keys = sorted(set(grid) & set(ref_grid))
+    x = [grid[k][j] for k in keys]
+    xr = [ref_grid[k][jr] for k in keys]
+    m, s = mean_std(x)
+    _, sr = mean_std(xr)
+    out = {"mean": m, "std": s, "max": max(x), "covered": len(keys) / len(ref_grid),
+           "rel": math.sqrt(sum((p - q) ** 2 for p, q in zip(x, xr)) / len(x)) / max(sr, 1e-30)}
+    if slope is not None:
+        duration = (keys[-1] - keys[0]) * step
+        out["del"] = damage_equivalent_load(x, duration, slope)
+        out["ddel"] = 100.0 * (out["del"] / damage_equivalent_load(xr, duration, slope) - 1.0)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ref", help="root of the dtM = DT run (<root>.out and <root>.CD.out)")
@@ -134,23 +157,16 @@ def main() -> int:
         if ch not in rnames:
             continue
         jr = rnames.index(ch)
-        del_ref = None
         for label, tab in tables.items():
             names, grid = tab[kind], tab[kind + 1]
             if ch not in names:
                 continue
-            j = names.index(ch)
-            keys = sorted(set(grid) & set(rgrid))
-            x = [grid[k][j] for k in keys]
-            xr = [rgrid[k][jr] for k in keys]
-            m, s = mean_std(x)
-            _, sr = mean_std(xr)
-            rel = math.sqrt(sum((p - q) ** 2 for p, q in zip(x, xr)) / len(x)) / max(sr, 1e-30)
-            line = f"{ch:<11} {label:<28} {m:12.5e} {s:11.4e} {max(x):12.5e} {rel:11.4f}"
+            c = compare_channel(grid, names.index(ch), rgrid, jr, a.grid, a.slope if kind == 2 else None)
+            line = f"{ch:<11} {label:<28} {c['mean']:12.5e} {c['std']:11.4e} {c['max']:12.5e} {c['rel']:11.4f}"
             if kind == 2:
-                d = damage_equivalent_load(x, (keys[-1] - keys[0]) * a.grid, a.slope)
-                del_ref = d if del_ref is None else del_ref
-                line += f" {d:11.4e} {100.0 * (d / del_ref - 1.0):7.2f}%"
+                line += f" {c['del']:11.4e} {c['ddel']:7.2f}%"
+            if c["covered"] < 1.0:
+                line += f"  (covers {100.0 * c['covered']:.1f} % of the reference samples; compared over those)"
             print(line)
         print()
     print("reference DEL at its native sampling against the common grid (sampling alone):")

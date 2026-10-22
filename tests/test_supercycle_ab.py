@@ -43,5 +43,26 @@ class RainflowTest(unittest.TestCase):
         self.assertAlmostEqual(ab.damage_equivalent_load(history, t, 3.0), expected, places=12)
 
 
+class CompareChannelTest(unittest.TestCase):
+    @staticmethod
+    def _grid(values):
+        return {k: [0.1 * k, v] for k, v in enumerate(values)}
+
+    def test_truncated_twin_is_compared_over_its_overlap(self):
+        # a run identical to the reference but ending at a tenth of it: no difference at all,
+        # and the partial coverage is reported (the DEL is not set against the whole reference)
+        ref = [3.0 * ((-1.0) ** k) * (1.0 + 0.01 * k) for k in range(1000)]
+        c = ab.compare_channel(self._grid(ref[:100]), 1, self._grid(ref), 1, 0.1, 3.0)
+        self.assertEqual(c["rel"], 0.0)
+        self.assertEqual(c["ddel"], 0.0)
+        self.assertAlmostEqual(c["covered"], 0.1)
+
+    def test_a_scaled_run_changes_its_del_by_the_scale(self):
+        ref = [3.0 * ((-1.0) ** k) for k in range(400)]
+        c = ab.compare_channel(self._grid([1.02 * v for v in ref]), 1, self._grid(ref), 1, 0.1, 3.0)
+        self.assertAlmostEqual(c["ddel"], 2.0, places=9)
+        self.assertEqual(c["covered"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
