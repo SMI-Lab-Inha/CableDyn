@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -62,6 +63,22 @@ class CompareChannelTest(unittest.TestCase):
         c = ab.compare_channel(self._grid([1.02 * v for v in ref]), 1, self._grid(ref), 1, 0.1, 3.0)
         self.assertAlmostEqual(c["ddel"], 2.0, places=9)
         self.assertEqual(c["covered"], 1.0)
+
+    def test_zero_damage_reference(self):
+        # a constant tension has no cycles: identical constant histories change by 0 %, and a run
+        # with cycles against a constant reference has an undefined change (not a crash)
+        flat = [1000.0] * 200
+        same = ab.compare_channel(self._grid(flat), 1, self._grid(flat), 1, 0.1, 3.0)
+        self.assertEqual(same["del"], 0.0)
+        self.assertEqual(same["ddel"], 0.0)
+        wavy = ab.compare_channel(self._grid([1000.0 + (-1.0) ** k for k in range(200)]), 1,
+                                  self._grid(flat), 1, 0.1, 3.0)
+        self.assertGreater(wavy["del"], 0.0)
+        self.assertTrue(math.isnan(wavy["ddel"]))
+
+    def test_no_common_samples(self):
+        self.assertIsNone(ab.compare_channel({0: [0.0, 1.0]}, 1, self._grid([1.0, 2.0, 3.0]), 1, 0.1, 3.0))
+        self.assertEqual(ab.damage_equivalent_load([1.0, 2.0], 0.0, 3.0), 0.0)
 
 
 if __name__ == "__main__":

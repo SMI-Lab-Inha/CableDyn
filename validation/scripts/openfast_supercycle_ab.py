@@ -99,9 +99,19 @@ def rainflow(x: list[float]) -> list[tuple[float, float]]:
 
 
 def damage_equivalent_load(x: list[float], duration: float, slope: float) -> float:
-    """DEL at a 1 Hz equivalent count over duration seconds."""
+    """DEL at a 1 Hz equivalent count over duration seconds; zero for a history without cycles
+    or without duration."""
     total = sum(n * r ** slope for r, n in rainflow(x))
+    if total <= 0.0 or duration <= 0.0:
+        return 0.0
     return (total / duration) ** (1.0 / slope)
+
+
+def relative_change(value: float, reference: float) -> float:
+    """100 (value/reference - 1); 0 when both are zero, NaN (undefined) when only the reference is."""
+    if reference == 0.0:
+        return 0.0 if value == 0.0 else math.nan
+    return 100.0 * (value / reference - 1.0)
 
 
 def mean_std(x: list[float]) -> tuple[float, float]:
@@ -110,12 +120,15 @@ def mean_std(x: list[float]) -> tuple[float, float]:
 
 
 def compare_channel(grid: dict[int, list[float]], j: int, ref_grid: dict[int, list[float]], jr: int,
-                    step: float, slope: float | None) -> dict[str, float]:
+                    step: float, slope: float | None) -> dict[str, float] | None:
     """One channel of a run against the reference over the samples BOTH have: mean, std and max of
     the run, the RMS of the difference over the reference std, and (slope given) the run's DEL and
-    its change against the reference DEL over the same samples and duration. covered is the
-    fraction of the reference samples the run has."""
+    its change against the reference DEL over the same samples and duration (relative_change).
+    covered is the fraction of the reference samples the run has; None when the two share fewer
+    than two samples."""
     keys = sorted(set(grid) & set(ref_grid))
+    if len(keys) < 2:
+        return None
     x = [grid[k][j] for k in keys]
     xr = [ref_grid[k][jr] for k in keys]
     m, s = mean_std(x)
@@ -125,7 +138,7 @@ def compare_channel(grid: dict[int, list[float]], j: int, ref_grid: dict[int, li
     if slope is not None:
         duration = (keys[-1] - keys[0]) * step
         out["del"] = damage_equivalent_load(x, duration, slope)
-        out["ddel"] = 100.0 * (out["del"] / damage_equivalent_load(xr, duration, slope) - 1.0)
+        out["ddel"] = relative_change(out["del"], damage_equivalent_load(xr, duration, slope))
     return out
 
 
@@ -162,9 +175,13 @@ def main() -> int:
             if ch not in names:
                 continue
             c = compare_channel(grid, names.index(ch), rgrid, jr, a.grid, a.slope if kind == 2 else None)
+            if c is None:
+                print(f"{ch:<11} {label:<28} no common samples with the reference")
+                continue
             line = f"{ch:<11} {label:<28} {c['mean']:12.5e} {c['std']:11.4e} {c['max']:12.5e} {c['rel']:11.4f}"
             if kind == 2:
-                line += f" {c['del']:11.4e} {c['ddel']:7.2f}%"
+                change = "    n/a" if math.isnan(c["ddel"]) else f"{c['ddel']:7.2f}%"
+                line += f" {c['del']:11.4e} {change}"
             if c["covered"] < 1.0:
                 line += f"  (covers {100.0 * c['covered']:.1f} % of the reference samples; compared over those)"
             print(line)
@@ -172,6 +189,9 @@ def main() -> int:
     print("reference DEL at its native sampling against the common grid (sampling alone):")
     names, grid, rows = ref[2], ref[3], ref[4]
     window = [r for r in rows if r[0] >= a.t_start - 1e-9]
+    if len(window) < 2 or len(grid) < 2:
+        print("  (fewer than two reference samples in the window)")
+        return 0
     for ch in tension:
         j = names.index(ch)
         native = damage_equivalent_load([r[j] for r in window], window[-1][0] - window[0][0], a.slope)
