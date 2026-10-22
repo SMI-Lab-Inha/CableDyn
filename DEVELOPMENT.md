@@ -136,6 +136,26 @@ python -m pip wheel . --no-deps --no-build-isolation -w dist `
 A wheel built this way still needs the toolchain's runtime and LAPACK libraries on the
 search path; the release wheels bundle them (or link them statically on Windows).
 
+The release wheels come from `.github/workflows/wheels.yml` (manual runs, published
+releases, and pull requests that touch the packaging), as workflow artifacts; publishing
+them is a separate step. It builds the sdist (checked with `twine`) and three wheels:
+
+| Wheel | Toolchain | Runtime and LAPACK | Build |
+|---|---|---|---|
+| Linux x86-64 (`manylinux_2_28`) | cibuildwheel, image GCC toolset | OpenBLAS and the Fortran runtime bundled by auditwheel | x86-64-v3 |
+| macOS arm64 (14.0+) | cibuildwheel, Homebrew gfortran | OpenBLAS and the Fortran runtime bundled by delocate | baseline |
+| Windows x86-64 | `release/build_windows_wheel.ps1`: IFX and MSVC, static runtime | the release's reference LAPACK, linked statically | x86-64-v3 |
+
+The Windows wheel uses the static release configuration and the same pinned reference
+LAPACK as `release/build_static_windows.ps1` (`tests/test_packaging_metadata.py` keeps
+the version, checksum and flags equal), and the script checks with `dumpbin` that the
+library and the driver import only Windows system DLLs. Each wheel is installed into a
+clean environment and checked by `release/smoke_test_wheel.py`: the package loads the
+library it carries, selects the driver it carries, the driver reports the expected build
+(`--expect-build`), and a standalone deck runs. On a processor without AVX2 the x86-64
+wheels' driver stops with the start-up message, and so does a Python process when it
+loads the library.
+
 On Windows, run Python from the activated `cabledyn` environment and point
 `CABLEDYN_LIBRARY` at the DLL. Do not prepend compiler or OpenBLAS runtime
 directories to `PATH` before importing NumPy: mixed runtime DLLs can terminate

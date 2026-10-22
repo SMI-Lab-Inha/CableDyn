@@ -6,6 +6,7 @@ systems and Fortran; the pure package is OS independent)."""
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -59,6 +60,33 @@ class PackagingMetadataTest(unittest.TestCase):
                 "Programming Language :: Fortran",
             },
         )
+
+
+def _lapack_pins(script: Path) -> dict:
+    """The reference LAPACK version, archive checksum and Fortran flags a build script pins."""
+    text = script.read_text(encoding="utf-8")
+    pins = {}
+    for key, pattern in (
+        ("version", r"\$lapackVersion = '([^']+)'"),
+        ("sha256", r"\$lapackSha256 = '([0-9a-f]{64})'"),
+        ("flags", r'"-DCMAKE_Fortran_FLAGS=([^"]+)"'),
+    ):
+        found = re.findall(pattern, text)
+        if len(found) != 1:
+            raise AssertionError(f"{script.name}: expected one {key} pin, found {found}")
+        pins[key] = found[0]
+    return pins
+
+
+class WindowsWheelLapackTest(unittest.TestCase):
+    """The Windows wheel links the same reference LAPACK as the static release executables:
+    one version, one archive checksum, one set of Fortran flags (x86-64-v3 included)."""
+
+    def test_the_wheel_and_the_release_pin_the_same_lapack(self):
+        release = _lapack_pins(ROOT / "release" / "build_static_windows.ps1")
+        wheel = _lapack_pins(ROOT / "release" / "build_windows_wheel.ps1")
+        self.assertEqual(wheel, release)
+        self.assertIn("/arch:CORE-AVX2", release["flags"])
 
 
 if __name__ == "__main__":
