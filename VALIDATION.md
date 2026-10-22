@@ -321,6 +321,23 @@ scripts, results, and source provenance are in
     tension statistics match CableDyn's own per-glue-step solution to 0.01% mean /
     ~3% std. Tension agreement with MoorDyn is scored in the settled case above and
     in the DLC matrix below.
+  - *Supercycling* (`dtM` = 4 `DT` = 0.1 s): the chain mooring in a DLC-1.6
+    environment (NTM 10.6 m/s turbulent wind, JONSWAP Hs 8 m / Tp 12 s, 3800 s), scored
+    over 200–3800 s on the common 0.1 s grid against the same model at `dtM = DT`
+    (`validation/scripts/openfast_supercycle_ab.py`). With the coupled loads
+    extrapolated between CableDyn solves (the default), every platform DOF's time series
+    differs by at most 0.14 % of its standard deviation (0.41 % with held loads); the
+    fairlead and anchor tensions keep their mean within 0.01 %, std within 0.12 % and
+    maximum within 0.16 %; their damage-equivalent loads (rainflow, slope 3) change by
+    at most 0.21 % at the fairleads and 1.5 % at the anchors (held: 0.27 % / 1.1 %), the
+    anchor changes being of the order of the reference's own sampling effect (its DEL
+    from 0.025 s against 0.1 s samples, up to 0.94 %). Against stock MoorDyn (same
+    seeds, 200–1200 s) the in-plane platform standard deviations agree within 0.03 %
+    (0.04 % at `dtM = DT`, 0.14 % held). The tension time series differ from those at
+    `dtM = DT` by 5–7 % of their standard deviation on the leeward lines, because the
+    lines step on the coarser `dtM`; statistics and damage are unaffected. A finite-EI
+    cable needs a finer `dtM` (the initialisation advisory; 0.05 s for the mixed
+    example's power cable).
   - *Mixed deck*: the shipped example `iea15mw_umaine_mixed_cabledyn.dat` (three
     chain moorings and a 248-element finite-EI power cable that touches down on the
     200 m seabed) runs to completion under full coupled physics with finite, bounded
