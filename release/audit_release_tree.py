@@ -49,6 +49,7 @@ REQUIRED_PATHS = {
     "SECURITY.md",
     "VALIDATION.md",
     "doc/index.rst",
+    "pyproject.toml",
     "python/pyproject.toml",
     "src/CableDyn_CAPI.f90",
     "validation/README.md",

@@ -93,6 +93,37 @@ the shared library. They compare against independent references (the ASTM E1049
 cycle table and analytical sinusoids); do not replace these with snapshots of
 CableDyn output.
 
+### Distribution: sdist and platform wheels
+
+The root `pyproject.toml` builds the published distribution with scikit-build-core: an
+sdist of the sources and a platform wheel that carries the compiled library beside the
+package modules and the standalone driver in `cabledyn/bin`. Only the `cabledyn_shared`
+and `cabledyn` targets are built and installed (CMake install component `python`, active
+under scikit-build only), serially (`CABLEDYN_ENABLE_OPENMP` off). The wheel is tagged
+`py3-none-<platform>`: the package reaches the library through `ctypes`, so one wheel
+serves every supported Python version. `python/pyproject.toml` stays the pure package for
+development against a build tree; `tests/test_packaging_metadata.py` keeps the two
+`[project]` tables identical except for the readme, licence files and platform
+classifiers.
+
+To build both locally from the activated `cabledyn` environment (Ninja, the conda GNU
+toolchain, and forward slashes in the archiver paths):
+
+```powershell
+python -m pip install "scikit-build-core>=0.10" build
+python -m build --sdist --no-isolation --outdir dist .
+$ar = "$env:CONDA_PREFIX/Library/bin/x86_64-w64-mingw32-ar.exe" -replace '\\','/'
+$rl = "$env:CONDA_PREFIX/Library/bin/x86_64-w64-mingw32-ranlib.exe" -replace '\\','/'
+python -m pip wheel . --no-deps --no-build-isolation -w dist `
+  "--config-settings=cmake.args=-GNinja" `
+  --config-settings=cmake.define.CMAKE_C_COMPILER=gcc `
+  --config-settings=cmake.define.CMAKE_Fortran_COMPILER=gfortran `
+  --config-settings=cmake.define.CMAKE_AR=$ar --config-settings=cmake.define.CMAKE_RANLIB=$rl
+```
+
+A wheel built this way still needs the toolchain's runtime and LAPACK libraries on the
+search path; the release wheels bundle them (or link them statically on Windows).
+
 On Windows, run Python from the activated `cabledyn` environment and point
 `CABLEDYN_LIBRARY` at the DLL. Do not prepend compiler or OpenBLAS runtime
 directories to `PATH` before importing NumPy: mixed runtime DLLs can terminate

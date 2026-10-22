@@ -1800,6 +1800,16 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   target_link_options(cabledyn PRIVATE "LINKER:/STACK:268435456")
 endif()
 install(TARGETS cabledyn RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(SKBUILD)
+  # A Python wheel (pyproject.toml, scikit-build-core, install component `python`) carries the
+  # C-ABI library beside the package modules, where cabledyn._discovery looks first, and the
+  # driver in the package's bin folder, where cabledyn.driver looks after CABLEDYN_DRIVER. The
+  # wheel repair tools bundle the runtime and LAPACK libraries they need.
+  install(TARGETS cabledyn_shared
+    RUNTIME DESTINATION cabledyn COMPONENT python
+    LIBRARY DESTINATION cabledyn COMPONENT python)
+  install(TARGETS cabledyn RUNTIME DESTINATION cabledyn/bin COMPONENT python)
+endif()
 if(WIN32 AND CABLEDYN_RUNTIME_DLLS)
   # A conventional GNU/conda Windows install must be usable outside the build
   # environment, not only from the separately assembled release bundle.
