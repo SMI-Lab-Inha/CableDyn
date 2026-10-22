@@ -46,8 +46,11 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   # driver below, or the OpenFAST Release|x64 project, which enables whole-program
   # optimisation).
   string(APPEND CMAKE_Fortran_FLAGS " /libs:static /heap-arrays:1024 /Qipo")
-  # CMake does not pass the compile flags to an IFX executable link on Windows.
+  # CMake does not pass the compile flags to an IFX executable link on Windows. The shared
+  # library (the Windows wheel's cabledyn.dll) links the same IPO objects, so it needs the
+  # flag as well: without it IFX hands the intermediate objects to link.exe (LNK1107).
   string(APPEND CMAKE_EXE_LINKER_FLAGS " /Qipo")
+  string(APPEND CMAKE_SHARED_LINKER_FLAGS " /Qipo")
   # LAPACK/BLAS: the netlib reference implementation compiled with this IFX
   # (release/build_static_windows.ps1 builds it), not MKL. Every CableDyn system is
   # banded with a small bandwidth, and MKL's sequential DGBTRF/DGBTRS/DTBSV spend
