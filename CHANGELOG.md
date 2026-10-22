@@ -40,6 +40,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   inside the `cabledyn` package, so the package needs no separate library; the driver search
   takes the bundled driver after `CABLEDYN_DRIVER` and before `PATH`. `python/pyproject.toml`
   remains the pure package for development against a build tree.
+- Release wheels built in CI (`.github/workflows/wheels.yml`): Linux x86-64 (`manylinux_2_28`,
+  x86-64-v3), macOS arm64 and Windows x86-64 (IFX, static, the release's reference LAPACK), plus
+  the sdist. Each wheel is installed into a clean environment and smoke-tested
+  (`release/smoke_test_wheel.py`); publishing is a separate step.
 
 ### Changed
 
