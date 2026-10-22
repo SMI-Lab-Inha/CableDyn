@@ -119,6 +119,19 @@ manually (`workflow_dispatch`) as a preflight. Download its
 `CableDyn-release-assets` artifact, verify every checksum (on a second machine
 where practical), and keep the workflow URL with the release record.
 
+The PyPI distribution (the sdist and the Linux, macOS and Windows wheels that carry
+the library and the driver) comes from `.github/workflows/wheels.yml`. As its
+preflight, run that workflow manually with **upload = testpypi**: it builds and
+smoke-tests the four distributions and uploads them to TestPyPI (a version already
+there is skipped). Then, in a clean environment on each platform you can reach:
+
+```powershell
+python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "cabledyn==MAJOR.MINOR.PATCH"
+python release/smoke_test_wheel.py examples/dynamic_chain_current.dat --expect-build x86-64-v3
+```
+
+(`--expect-build baseline` on macOS arm64.)
+
 ## 5. Tag and publish
 
 Tag only the commit that passed every check:
@@ -141,9 +154,16 @@ partial release or invalid manifest fails without replacing any file. If assets 
 not match, withdraw the release and investigate; never replace a file without a
 documented correction.
 
+Publishing also starts `.github/workflows/wheels.yml`, which rebuilds and smoke-tests
+the PyPI distributions from the tag, checks that every file carries the tag's
+version, and then waits for approval of the `pypi` environment. Approve it only
+after the release assets above check out: a version uploaded to PyPI can be yanked
+but never replaced.
+
 ## 6. Close the release
 
-Confirm that the release page lists all five assets, the documentation builds from
+Confirm that the release page lists all five assets, <https://pypi.org/project/cabledyn/>
+lists the sdist and the three wheels of the release, the documentation builds from
 the tag, the GitHub source archives contain no credentials or run output, and a
 fresh clone passes the fast test tier. Then add an empty `[Unreleased]` section to
 the changelog.
@@ -162,6 +182,12 @@ Before the first release is published from a new GitHub repository:
 - [ ] **Actions**: allow GitHub-hosted runners; the workflows need no secrets
       beyond the automatic `GITHUB_TOKEN`, and only the release job writes
       (`contents: write`).
+- [ ] **PyPI**: on <https://pypi.org> and <https://test.pypi.org>, register a
+      (pending) Trusted Publisher for the project `cabledyn`: this repository, the
+      workflow `wheels.yml`, and the environments `pypi` and `testpypi`
+      respectively. Create both environments in the repository settings and make
+      a maintainer a required reviewer of `pypi`. The publish jobs then need no
+      token (`id-token: write` only).
 - [ ] **Branch protection** on `main` and `dev`: require pull requests, the `fortran` and
       `python` workflow checks, and linear history.
 - [ ] **Read the Docs**: import the repository as project `cabledyn`, build

@@ -43,7 +43,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Release wheels built in CI (`.github/workflows/wheels.yml`): Linux x86-64 (`manylinux_2_28`,
   x86-64-v3), macOS arm64 and Windows x86-64 (IFX, static, the release's reference LAPACK), plus
   the sdist. Each wheel is installed into a clean environment and smoke-tested
-  (`release/smoke_test_wheel.py`); publishing is a separate step.
+  (`release/smoke_test_wheel.py`). The same workflow publishes them through PyPI Trusted
+  Publishing: to TestPyPI on request from a manual run, and to PyPI when a GitHub release is
+  published (after checking the release tag's version and approval of the `pypi` environment).
 
 ### Changed
 
