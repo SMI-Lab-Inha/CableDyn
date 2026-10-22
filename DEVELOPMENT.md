@@ -139,8 +139,9 @@ search path; the release wheels bundle them (or link them statically on Windows)
 The release wheels come from `.github/workflows/wheels.yml` (manual runs, published
 releases, and pull requests that touch the packaging), as workflow artifacts, which only
 its publish jobs upload (TestPyPI from a manual run with **upload = testpypi**, PyPI from a
-published release; see [RELEASE.md](RELEASE.md)). It builds the sdist (checked with
-`twine`) and three wheels:
+published release; see
+[RELEASE.md](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/RELEASE.md)). It builds
+the sdist (checked with `twine`) and three wheels:
 
 | Wheel | Toolchain | Runtime and LAPACK | Build |
 |---|---|---|---|
