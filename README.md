@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/SMI-Lab-Inha/CableDyn?sort=semver)](https://github.com/SMI-Lab-Inha/CableDyn/releases/latest)
 [![Fortran CI](https://github.com/SMI-Lab-Inha/CableDyn/actions/workflows/fortran.yml/badge.svg)](https://github.com/SMI-Lab-Inha/CableDyn/actions/workflows/fortran.yml)
 [![Python CI](https://github.com/SMI-Lab-Inha/CableDyn/actions/workflows/python.yml/badge.svg)](https://github.com/SMI-Lab-Inha/CableDyn/actions/workflows/python.yml)
-[![Documentation](https://readthedocs.org/projects/cabledyn/badge/?version=latest)](https://cabledyn.readthedocs.io/en/latest/)
+[![Documentation](https://img.shields.io/readthedocs/cabledyn/latest?label=docs)](https://cabledyn.readthedocs.io/en/latest/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.oceaneng.2026.128332-blue.svg)](https://doi.org/10.1016/j.oceaneng.2026.128332)
 
