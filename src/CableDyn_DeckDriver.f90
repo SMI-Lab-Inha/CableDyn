@@ -2235,12 +2235,15 @@ CONTAINS
       IF (pass == 3) THEN
         IF (.NOT. symmetric_current_retry()) EXIT route_pass
       END IF
-      ! A catenary-continuation route that stopped on the frictionless grounded-run
-      ! diagnosis (the current drives the run on the seabed into compression) is not
-      ! rescued by the mesh-sequenced route, which reaches the same planar limit after
-      ! up to a minute; only the symmetry-breaking passes can.
+      ! A catenary-continuation route that stopped on a grounded-run diagnosis (the current
+      ! drives the run on the seabed into compression; with friction, the friction holds the
+      ! grounded run while the current pushes the suspended span into the touchdown) is not
+      ! rescued by the mesh-sequenced route, which reaches the same limit only after its
+      ! iteration budget (17 s on a 1000 m lazy wave in 440 m of water); only the
+      ! symmetry-breaking passes can.
       IF (pass == 2 .AND. .NOT. opts%cable_statics_sequenced .AND. &
-          INDEX(primary_msg, 'the run on the seabed') > 0) THEN
+          (INDEX(primary_msg, 'the run on the seabed') > 0 .OR. &
+           INDEX(primary_msg, 'the friction holds the grounded run') > 0)) THEN
         sequence_msg = 'not run: the catenary-continuation route diagnosed the grounded run'
         CYCLE route_pass
       END IF

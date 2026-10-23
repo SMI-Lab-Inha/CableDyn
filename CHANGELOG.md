@@ -59,6 +59,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- A finite-EI static solve in a current that fails because seabed friction holds the grounded
+  run while the current pushes the suspended span into the touchdown now stops after the
+  catenary-continuation route has diagnosed it, as the frictionless grounded-run case already
+  did, instead of also running the mesh-sequenced route to its iteration budget (a 1000 m lazy
+  wave in 440 m of water: 22 s to 17.7 s, same message). Converging decks do not change.
 - The Windows release executables (`CableDyn_driver.exe`, `openfast.exe`) are compiled for
   processors with AVX2 (x86-64-v3: Intel Haswell and AMD Excavator or newer; CMake option
   `CABLEDYN_TARGET_AVX2`), which makes the driver 13-33% faster on the benchmark decks
