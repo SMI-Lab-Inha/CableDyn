@@ -10,6 +10,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Documentation of the negative `BA` (damping ratio) form: it damps each element's own axial
+  mode at the given ratio, so the line's axial modes are damped at `zeta n pi / (2N)` and less on
+  a finer mesh (`BA = -1`: 1.6 % for the first mode on 100 elements, 0.8 % on 200); the manual
+  gives the `BA` in N·s for a mesh-independent material damping ratio.
+- Seabed-friction resolution note: friction acts at the nodes, so on a coarse grounded mesh the
+  tension of the laid part and near touchdown steps by up to mu w L per node as the line lands
+  and lifts (a 10 m lazy-wave mesh swung a grounded segment tension by 1600 N where 1 m elements
+  give 120 N). At initialisation a finite-EI line whose grounded elements lock more than 15 % of
+  the touchdown tension is noted with the grounded element length that resolves it (flat
+  seabed; standalone and OpenFAST). Results do not change.
 - The run-time profile (`CABLEDYN_PROFILE=1`, standalone driver and OpenFAST) splits the steps
   of `EI = 0` lines into residual-only evaluations, residual and tangent evaluations, LU
   factorisations and back-substitutions, with their counts and times, and separates the
@@ -49,6 +59,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- A finite-EI static solve in a current that fails because seabed friction holds the grounded
+  run while the current pushes the suspended span into the touchdown now stops after the
+  catenary-continuation route has diagnosed it, as the frictionless grounded-run case already
+  did, instead of also running the mesh-sequenced route to its iteration budget (a 1000 m lazy
+  wave in 440 m of water: 22 s to 17.7 s, same message). Converging decks do not change.
 - The Windows release executables (`CableDyn_driver.exe`, `openfast.exe`) are compiled for
   processors with AVX2 (x86-64-v3: Intel Haswell and AMD Excavator or newer; CMake option
   `CABLEDYN_TARGET_AVX2`), which makes the driver 13-33% faster on the benchmark decks
@@ -75,6 +90,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   from the step and a fresh evaluation differ slightly; the restore discarded the cache and took
   the fresh path. The snapshot now keeps the cached force with the state, and the restore brings
   it back unless a load setter invalidated it since. Runs without restores do not change.
+- Finite-EI node tension, curvature and bend moment at touchdown (node channels, range graphs):
+  the recovery spread a grounded node's floor reaction over the touchdown element, which is on
+  the floor at one end only, and understated the tension of the last suspended node by the
+  floor reaction of half an element (5.3 % on a 10 m lazy-wave mesh). A node's floor reaction is
+  now shared by the grounded elements beside it; the touchdown element takes none. The same
+  coarse mesh now follows a four times finer one within 3 % through touchdown. Line end forces
+  (`FairTen`, `AnchTen`) and the solution do not change.
 - OpenFAST with `dtM` larger than `DT`: an `openfast -restart` re-sampled the SeaState fields of the
   committed step at its end positions instead of restoring the fields the step held (sampled at
   its start positions), so the loads served until the next solve, and the run after them,

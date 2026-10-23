@@ -5,7 +5,9 @@
 #   * a slack anchored line on a deck with no seabed (an OpenFAST MooringFile run
 #     standalone) prints a no-seabed warning; a deck with a water depth does not;
 #   * a dtM that resolves a line's axial period (2 x 410 m / sqrt(1.674e9 / 390) = 0.396 s) in
-#     fewer than 6 steps prints the dtM advisory: 4.0 steps at 0.1 s, none at 0.05 s (7.9).
+#     fewer than 6 steps prints the dtM advisory: 4.0 steps at 0.1 s, none at 0.05 s (7.9);
+#   * a finite-EI cable whose grounded elements lock more than 15 % of the touchdown tension in
+#     seabed friction prints the friction resolution note; a finer grounded mesh does not.
 foreach(_required DRIVER WORK NO_SEABED_DECK SEABED_DECK)
   if(NOT DEFINED ${_required} OR "${${_required}}" STREQUAL "")
     message(FATAL_ERROR "check_driver_advisories: missing ${_required}")
@@ -111,3 +113,57 @@ require_text("no seabed" "${_no_seabed_log}" "below its Fixed anchor and the dec
 require_text("no seabed" "${_no_seabed_log}" "for a standalone run add WtrDpth")
 run_driver("seabed" "${SEABED_DECK}" "${WORK}/seabed" _seabed_log)
 forbid_text("seabed" "${_seabed_log}" "WARNING")
+
+# The seabed-friction resolution note: a lazy-wave cable whose grounded run has 10 m elements
+# locks up to mu w L = 0.35 x 157.8 N/m x 10 m = 552 N per node, 46 % of the 1204 N tension at
+# touchdown, and is told the grounded element length that resolves it; with 2.5 m elements
+# (11 %, below the 15 % limit) it is not.
+set(_friction_deck [=[--------------------- CableDyn Input File ------------------------------------
+Driver advisory check: lazy-wave cable with seabed friction
+--------------------- LINE TYPES ---------------------------------------------
+Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat
+(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)
+bare 0.16 36.70 4.69e8 0.0 1.99e4 1.0e8 1.5e4 1.0 1.0 1.2 0.1 1.0 0.0
+buoy 0.29 59.53 4.69e8 0.0 1.99e4 1.0e8 1.5e4 1.0 1.0 1.2 0.1 1.0 0.0
+--------------------- POINTS -------------------------------------------------
+ID Type X Y Z
+(-) (-) (m) (m) (m)
+7 Coupled 30.0 0.0 -20.0
+8 Fixed 500.0 0.0 -200.0
+--------------------- LINES --------------------------------------------------
+ID NodeA NodeB Outputs
+(-) (-) (-) (-)
+4 7 8 -
+--------------------- SECTIONS -----------------------------------------------
+LineID LineType Length NumSegs
+(-) (-) (m) (-)
+4 bare 80.0 20
+4 buoy 100.0 25
+4 bare 420.0 42
+--------------------- END CONNECTIONS ----------------------------------------
+LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist
+(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)
+4 A Rigid 0.1058 0 -0.9944 Free 0 1 0 0
+4 B Rigid 1 0 0 Free 0 1 0 0
+--------------------- OPTIONS ------------------------------------------------
+9.80665 g
+1025.0 rhoW
+3.0e6 kBot
+3.0e5 cBot
+0.35 frictionMu
+200.0 WtrDpth
+0.05 dtM
+0.1 TMax
+--------------------- OUTPUTS ------------------------------------------------
+FairTen4
+--------------------- END ----------------------------------------------------
+]=])
+file(WRITE "${WORK}/friction_coarse.dat" "${_friction_deck}")
+string(REPLACE "4 bare 420.0 42" "4 bare 420.0 168" _friction_fine "${_friction_deck}")
+file(WRITE "${WORK}/friction_fine.dat" "${_friction_fine}")
+run_driver("friction coarse" "${WORK}/friction_coarse.dat" "${WORK}/friction_coarse" _fc_log)
+require_text("friction coarse" "${_fc_log}"
+             "Note: line 4: seabed friction acts at the nodes, so a grounded element of 10.0 m locks or releases up to 552 N")
+require_text("friction coarse" "${_fc_log}" "Grounded elements of at most 3.27 m resolve it.")
+run_driver("friction fine" "${WORK}/friction_fine.dat" "${WORK}/friction_fine" _ff_log)
+forbid_text("friction fine" "${_ff_log}" "seabed friction acts at the nodes")

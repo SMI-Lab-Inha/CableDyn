@@ -2235,12 +2235,15 @@ CONTAINS
       IF (pass == 3) THEN
         IF (.NOT. symmetric_current_retry()) EXIT route_pass
       END IF
-      ! A catenary-continuation route that stopped on the frictionless grounded-run
-      ! diagnosis (the current drives the run on the seabed into compression) is not
-      ! rescued by the mesh-sequenced route, which reaches the same planar limit after
-      ! up to a minute; only the symmetry-breaking passes can.
+      ! A catenary-continuation route that stopped on a grounded-run diagnosis (the current
+      ! drives the run on the seabed into compression; with friction, the friction holds the
+      ! grounded run while the current pushes the suspended span into the touchdown) is not
+      ! rescued by the mesh-sequenced route, which reaches the same limit only after its
+      ! iteration budget (17 s on a 1000 m lazy wave in 440 m of water); only the
+      ! symmetry-breaking passes can.
       IF (pass == 2 .AND. .NOT. opts%cable_statics_sequenced .AND. &
-          INDEX(primary_msg, 'the run on the seabed') > 0) THEN
+          (INDEX(primary_msg, 'the run on the seabed') > 0 .OR. &
+           INDEX(primary_msg, 'the friction holds the grounded run') > 0)) THEN
         sequence_msg = 'not run: the catenary-continuation route diagnosed the grounded run'
         CYCLE route_pass
       END IF
@@ -3056,6 +3059,8 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI Hermite seabed recompute wiring failed: '//TRIM(em)); RETURN
       END IF
+      IF (opts%friction_mu > CD_ZERO .AND. .NOT. PRESENT(bathymetry) .AND. &
+          (opts%tmax > CD_ZERO .OR. .NOT. standalone_mode)) CALL friction_resolution_note()
       ! The static friction force of every node becomes the initial force of its
       ! elastic-plastic spring, so the march starts in the static equilibrium.
       IF (static_friction) THEN
@@ -4369,6 +4374,72 @@ CONTAINS
       IF (standalone_mode) WRITE (error_unit, '(A)') '   Note: '//TRIM(text)//'.'
       IF (PRESENT(init_note)) CALL append_note_line(init_note, text)
     END SUBROUTINE report_note
+
+    SUBROUTINE friction_resolution_note()
+      !! Seabed friction acts at the nodes: as the line lands and lifts at touchdown, a grounded
+      !! element locks or releases up to mu w L of friction (mu the axial friction coefficient,
+      !! w its submerged weight per length, L its length), and the tension of the laid part and
+      !! near touchdown steps by that much. A note, on a flat seabed, when a grounded element's mu w L
+      !! exceeds FRICTION_TENSION_FRACTION of the static tension at touchdown, with the element
+      !! length that keeps it below; nothing is changed. On a 600 m lazy wave in 200 m of water
+      !! (mu 0.35) the standard deviation of a grounded segment tension was 491, 136, 42 and 33 N
+      !! with 10, 5, 2.5 and 1 m elements, where mu w L is 46, 22, 11 and 4.5 % of the touchdown
+      !! tension: converged below about 15 %.
+      REAL(wp), PARAMETER :: FRICTION_TENSION_FRACTION = 0.15_wp
+      REAL(wp) :: mu, quantum, q_max, l_max, w_max, t_td, gap_tol, l_res
+      REAL(wp), ALLOCATABLE :: t_nodes(:)
+      INTEGER :: k, nnd, ned, i_td, es_rec
+      LOGICAL, ALLOCATABLE :: grounded(:)
+      CHARACTER(32) :: b1, b2, b3, b4, b5
+      CHARACTER(512) :: text
+      CHARACTER(1024) :: em_rec
+      mu = opts%friction_mu
+      IF (opts%friction_mu_axial > CD_ZERO) mu = opts%friction_mu_axial
+      nnd = cable%line%nn
+      ned = cable%line%ne
+      IF (nnd < 2) RETURN
+      ALLOCATE (grounded(nnd))
+      gap_tol = 0.01_wp*MAXVAL(diam)
+      DO k = 1, nnd
+        grounded(k) = cable%line%q(6*(k - 1) + 3) <= contact_z + gap_tol
+      END DO
+      q_max = CD_ZERO; l_max = CD_ZERO; w_max = CD_ZERO
+      DO k = 1, ned
+        IF (.NOT. (grounded(k) .AND. grounded(k + 1))) CYCLE
+        quantum = mu*MAX(cable%line%w(k), CD_ZERO)*cable%line%l0(k)
+        IF (quantum > q_max) THEN
+          q_max = quantum; l_max = cable%line%l0(k); w_max = cable%line%w(k)
+        END IF
+      END DO
+      IF (.NOT. (q_max > CD_ZERO)) RETURN
+      ! the touchdown node: a grounded node beside a suspended one (the first from End B,
+      ! internal node 1), and its tension from nodal equilibrium, as the tension channels report
+      ! it (the elastic EA (|r'| - 1) of a node is dominated by the discretisation of a stiff EA)
+      i_td = 0
+      DO k = 1, nnd - 1
+        IF (grounded(k) .NEQV. grounded(k + 1)) THEN
+          i_td = MERGE(k, k + 1, grounded(k)); EXIT
+        END IF
+      END DO
+      IF (i_td < 1) RETURN
+      ALLOCATE (t_nodes(nnd))
+      CALL CD_HermiteCable_Dyn_Node_Recovery(cable%line, es_rec, em_rec, tension=t_nodes)
+      IF (es_rec /= CD_HCDYN_OK) RETURN
+      t_td = t_nodes(i_td)
+      IF (.NOT. (t_td > CD_ZERO) .OR. q_max <= FRICTION_TENSION_FRACTION*t_td) RETURN
+      l_res = FRICTION_TENSION_FRACTION*t_td/(mu*w_max)
+      WRITE (b1, '(F12.1)') l_max
+      WRITE (b2, '(I0)') NINT(q_max)
+      WRITE (b3, '(I0)') NINT(100.0_wp*q_max/t_td)
+      WRITE (b4, '(I0)') NINT(t_td)
+      WRITE (b5, '(F12.2)') l_res
+      text = 'line '//TRIM(int_to_str(ln%id))//': seabed friction acts at the nodes, so a grounded element of '// &
+             TRIM(ADJUSTL(b1))//' m locks or releases up to '//TRIM(ADJUSTL(b2))//' N (friction coefficient x '// &
+             'submerged weight x length) as the line lands and lifts, '//TRIM(ADJUSTL(b3))//' % of the '// &
+             TRIM(ADJUSTL(b4))//' N tension at touchdown: on this mesh the tensions of the laid part and near '// &
+             'touchdown step by that much. Grounded elements of at most '//TRIM(ADJUSTL(b5))//' m resolve it'
+      CALL report_note(text)
+    END SUBROUTINE friction_resolution_note
 
   END SUBROUTINE build_one_hermite_cable
 

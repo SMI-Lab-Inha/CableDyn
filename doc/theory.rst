@@ -456,6 +456,24 @@ element as
 using the final element length after any mesh refinement. The damping share is included in
 the reported tension.
 
+**The damping ratio form depends on the mesh.** ``BA`` resolved this way is proportional to the
+element length, so it is a property of the discretisation, not of the material. For a uniform
+line of :math:`N` elements the axial mode :math:`n` (wavenumber :math:`n\pi/L`) has the damping
+ratio
+
+.. math::
+
+   \zeta_n = \frac{BA\,\omega_n}{2\,EA} = \zeta\,\frac{n\pi}{2N} ,
+
+so the element-scale modes (:math:`n \approx N`) are damped at up to :math:`(\pi/2)\,\zeta`, as intended
+(the convention suppresses segment-scale axial noise, the same one as MoorDyn's negative
+``BA``), while the line's global axial modes are damped much less, and less again on a finer
+mesh: ``BA = -1`` on 100 elements gives the first axial mode 1.6 %, and 0.8 % on 200 elements.
+Results that depend on the axial damping (tension peaks of snatch loads, the decay of axial
+oscillations) therefore change with the mesh. For mesh-independent damping give ``BA`` in N·s:
+a material damping ratio :math:`\zeta_1` of the first axial mode of a line of length :math:`L` is
+:math:`BA = 2\,\zeta_1\,EA/\omega_1` with :math:`\omega_1 = (\pi/L)\sqrt{EA/\rho_A}`.
+
 Viscoelastic rope (MoorDyn ``ElasticMod`` 2 and 3)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -883,6 +901,16 @@ leaves the seabed takes its anchor with it. The anchors are state: they roll bac
 failed or subdivided step, join the aggregate snapshot, and are part of the OpenFAST
 checkpoint. The force and its position and velocity Jacobians (through :math:`N`) are exact.
 Unlike a velocity-regularised Coulomb law, the spring holds its force at rest.
+
+**Mesh resolution.** Because friction acts at the nodes, the tension along the laid part changes
+in steps of up to :math:`\mu w L` (:math:`w` the submerged weight per length, :math:`L` the
+element length) instead of continuously, and as the line lands and lifts at touchdown each node
+locks or releases that much. On a coarse grounded mesh the tension of the laid part and near
+touchdown then swings in time by about that amount. On a 600 m lazy-wave cable in 200 m of
+water (:math:`\mu = 0.35`) the standard deviation of a grounded segment tension was 491, 136, 42
+and 33 N with 10, 5, 2.5 and 1 m elements, where :math:`\mu w L` is 46, 22, 11 and 4.5 % of the
+touchdown tension. When a finite-EI line's grounded elements exceed 15 %, the initialisation
+report notes it with the grounded element length that resolves it.
 
 .. _static-friction:
 

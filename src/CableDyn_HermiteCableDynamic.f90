@@ -494,14 +494,16 @@ MODULE CableDyn_HermiteCableDynamic
     ! Cache of the element end residuals behind the node outputs (CD_HermiteCable_Dyn_Node_Values).
     ! Element e's entry rc_g(:, e) is valid for the time and configuration epoch the cache was
     ! keyed at (rc_t, rc_key_epoch) and for the element's own 12 q, v and a DOFs it was evaluated
-    ! at (rc_q/rc_v/rc_a(:, e)), the only state its residual depends on, so a node query costs two
-    ! element comparisons and the channels of one output row share one evaluation per element.
+    ! at (rc_q/rc_v/rc_a(:, e)), and for the positions of the neighbouring nodes e - 1 and e + 2
+    ! (rc_qnb(:, e); their floor contact decides the share of the floor reaction the element
+    ! carries), the only state its residual depends on, so a node query costs two element
+    ! comparisons and the channels of one output row share one evaluation per element.
     ! Allocated once at initialisation; rc_epoch counts the loads configured after it (drag,
     ! axial damping, waves, added mass, held fluid, contact).
     INTEGER :: rc_epoch = 0, rc_key_epoch = -1
     LOGICAL :: rc_key_ok = .FALSE.
     REAL(wp) :: rc_t = CD_ZERO
-    REAL(wp), ALLOCATABLE :: rc_q(:, :), rc_v(:, :), rc_a(:, :), rc_g(:, :)
+    REAL(wp), ALLOCATABLE :: rc_q(:, :), rc_v(:, :), rc_a(:, :), rc_g(:, :), rc_qnb(:, :)
     LOGICAL, ALLOCATABLE :: rc_have(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HermiteCableDynType
@@ -737,7 +739,8 @@ CONTAINS
 
     ! state: at-rest seed, v = 0, consistent a0
     ALLOCATE (model%q(ndof), model%v(ndof), model%a(ndof))
-    ALLOCATE (model%rc_q(12, ne), model%rc_v(12, ne), model%rc_a(12, ne), model%rc_g(12, ne), model%rc_have(ne))
+    ALLOCATE (model%rc_q(12, ne), model%rc_v(12, ne), model%rc_a(12, ne), model%rc_g(12, ne), model%rc_have(ne), &
+              model%rc_qnb(6, ne))
     model%rc_have = .FALSE.
     model%rc_key_ok = .FALSE.
     model%q = seed
@@ -5509,14 +5512,19 @@ CONTAINS
     SUBROUTINE cached_end_residual(e, ge)
       INTEGER, INTENT(IN) :: e
       REAL(wp), INTENT(OUT) :: ge(12)
-      REAL(wp) :: gl(12)
+      REAL(wp) :: gl(12), qnb(6)
       INTEGER :: i0
-      ! the element's residual depends on its own two nodes' q, v and a only (element_end_residual)
+      ! the element's residual depends on its own two nodes' q, v and a and on the floor contact
+      ! of the neighbouring nodes, a function of their positions (element_end_residual)
       i0 = 6*(e - 1)
+      qnb = CD_ZERO
+      IF (e > 1) qnb(1:3) = model%q(i0 - 5:i0 - 3)
+      IF (e + 2 <= model%nn) qnb(4:6) = model%q(i0 + 13:i0 + 15)
       IF (model%rc_have(e)) THEN
         IF (ALL(reals_equal(model%rc_q(:, e), model%q(i0 + 1:i0 + 12))) .AND. &
             ALL(reals_equal(model%rc_v(:, e), model%v(i0 + 1:i0 + 12))) .AND. &
-            ALL(reals_equal(model%rc_a(:, e), model%a(i0 + 1:i0 + 12)))) THEN
+            ALL(reals_equal(model%rc_a(:, e), model%a(i0 + 1:i0 + 12))) .AND. &
+            ALL(reals_equal(model%rc_qnb(:, e), qnb))) THEN
           ge = model%rc_g(:, e); RETURN
         END IF
       END IF
@@ -5528,6 +5536,7 @@ CONTAINS
       model%rc_q(:, e) = model%q(i0 + 1:i0 + 12)
       model%rc_v(:, e) = model%v(i0 + 1:i0 + 12)
       model%rc_a(:, e) = model%a(i0 + 1:i0 + 12)
+      model%rc_qnb(:, e) = qnb
       model%rc_g(:, e) = gl
       model%rc_have(e) = .TRUE.
       ge = gl
@@ -5881,16 +5890,24 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) GOTO 900
       g = g - fx
     END IF
-    ! Seabed contact acts at the nodes; spread over each node's tributary length it is the
+    ! Seabed contact acts at the nodes; spread over the grounded line next to each node it is the
     ! distributed floor reaction it stands for. Its consistent share is taken out of the element,
-    ! so a line resting on the floor carries no fixed-end moment of its own weight.
+    ! so a line resting on the floor carries no fixed-end moment of its own weight. A node's
+    ! reaction is shared by the half-elements beside it whose far node is on the floor as well
+    ! (grounded elements), by length. The touchdown element, on the floor at one end only, is
+    ! mostly suspended and takes none of it; spreading the reaction onto it understated the
+    ! tension of the last suspended node by the floor reaction of half an element (5 % on a
+    ! 10 m lazy-wave mesh). A node with no grounded element beside it (a node just touching
+    ! down, or an isolated contact) shares its reaction by tributary length.
     IF (model%has_contact .OR. model%kn > CD_ZERO) THEN
       CALL node_contact_normal(model, e, fca, es, em2)
       IF (es /= CD_HCDYN_OK) GOTO 900
       CALL node_contact_normal(model, e + 1, fcb, es, em2)
       IF (es /= CD_HCDYN_OK) GOTO 900
-      IF (model%trib(e) > CD_ZERO) fca = fca*l0/model%trib(e)
-      IF (model%trib(e + 1) > CD_ZERO) fcb = fcb*l0/model%trib(e + 1)
+      CALL grounded_share(e, e, fca, es)
+      IF (es /= CD_HCDYN_OK) GOTO 900
+      CALL grounded_share(e + 1, e, fcb, es)
+      IF (es /= CD_HCDYN_OK) GOTO 900
       ! A held end whose end element lies on the floor (assemble_residual): the seabed carries the
       ! element's weight with its consistent end moment, which the held end node's own contact
       ! (a point reaction at an anchor sitting on the floor) cannot. The floor reaction of the
@@ -5937,6 +5954,75 @@ CONTAINS
     RETURN
 900 ErrStat = CD_HCDYN_NOCONVERGE
     ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: element '//TRIM(em2)
+
+  CONTAINS
+
+    SUBROUTINE grounded_share(node, el, fc, esx)
+      !! Scale the floor reaction fc of node (an end of element el) to el's share of it, as the
+      !! factor l0(el)/(grounded length beside the node) that the half-element shape integrals
+      !! below expect: zero when el is not grounded but another element beside the node is, the
+      !! tributary-length share when no element beside the node is grounded.
+      INTEGER, INTENT(IN) :: node, el
+      REAL(wp), INTENT(INOUT) :: fc(3)
+      INTEGER, INTENT(OUT) :: esx
+      REAL(wp) :: grounded_len
+      LOGICAL :: on_el, grounded
+      INTEGER :: k
+      esx = CD_HCDYN_OK
+      IF (.NOT. ANY(ABS(fc) > CD_ZERO)) RETURN
+      grounded_len = CD_ZERO
+      on_el = .FALSE.
+      DO k = MAX(1, node - 1), MIN(model%ne, node)
+        CALL element_on_floor(k, grounded, esx)
+        IF (esx /= CD_HCDYN_OK) RETURN
+        IF (grounded) THEN
+          grounded_len = grounded_len + 0.5_wp*model%l0(k)
+          IF (k == el) on_el = .TRUE.
+        END IF
+      END DO
+      IF (grounded_len > CD_ZERO) THEN
+        IF (on_el) THEN
+          fc = fc*model%l0(el)/grounded_len
+        ELSE
+          fc = CD_ZERO
+        END IF
+      ELSE IF (model%trib(node) > CD_ZERO) THEN
+        fc = fc*model%l0(el)/model%trib(node)
+      END IF
+    END SUBROUTINE grounded_share
+
+    SUBROUTINE element_on_floor(k, grounded, esx)
+      !! Element k is grounded when both its nodes are on the floor (node_on_floor).
+      INTEGER, INTENT(IN) :: k
+      LOGICAL, INTENT(OUT) :: grounded
+      INTEGER, INTENT(OUT) :: esx
+      LOGICAL :: on1
+      grounded = .FALSE.
+      CALL node_on_floor(k, on1, esx)
+      IF (esx /= CD_HCDYN_OK .OR. .NOT. on1) RETURN
+      CALL node_on_floor(k + 1, grounded, esx)
+    END SUBROUTINE element_on_floor
+
+    SUBROUTINE node_on_floor(node, on, esx)
+      !! A node is on the floor when it carries a floor reaction, or when it is a held line end
+      !! whose end element the floor supports (held_end_floor_support): an anchor held exactly
+      !! on the floor has no contact force of its own, yet its laid end element is grounded.
+      INTEGER, INTENT(IN) :: node
+      LOGICAL, INTENT(OUT) :: on
+      INTEGER, INTENT(OUT) :: esx
+      REAL(wp) :: fn(3), sup(3), dsup(3), nn_in(3)
+      INTEGER :: in_node
+      on = .FALSE.
+      CALL node_contact_normal(model, node, fn, esx, em2)
+      IF (esx /= CD_HCDYN_OK) RETURN
+      on = ANY(ABS(fn) > CD_ZERO)
+      IF (on) RETURN
+      IF (node == 1) THEN
+        on = held_end_floor_support(model, model%q, 1, sup, dsup, in_node, nn_in)
+      ELSE IF (node == model%nn) THEN
+        on = held_end_floor_support(model, model%q, 2, sup, dsup, in_node, nn_in)
+      END IF
+    END SUBROUTINE node_on_floor
   END SUBROUTINE element_end_residual
 
   PURE REAL(wp) FUNCTION CD_HermiteCable_Dyn_Max_Step_Rotation(model) RESULT(angle)
@@ -6509,7 +6595,7 @@ CONTAINS
                   model%ws_elem_Kwave, model%ws_elem_Kheld, &
                   model%ws_elem_es, model%ws_elem_em)
     END IF
-    IF (ALLOCATED(model%rc_q)) DEALLOCATE (model%rc_q, model%rc_v, model%rc_a, model%rc_g, model%rc_have)
+    IF (ALLOCATED(model%rc_q)) DEALLOCATE (model%rc_q, model%rc_v, model%rc_a, model%rc_g, model%rc_have, model%rc_qnb)
     model%rc_key_ok = .FALSE.
     IF (ALLOCATED(model%freemask)) DEALLOCATE (model%freemask)
     IF (ALLOCATED(model%solve_mask)) DEALLOCATE (model%solve_mask)

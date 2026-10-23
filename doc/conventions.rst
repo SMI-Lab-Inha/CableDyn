@@ -48,7 +48,9 @@ are in degrees.
      - ``0`` selects the ``EI = 0`` cable path
    * - Axial damping ``BA``
      - N·s
-     - a negative value is a damping ratio :math:`-\zeta` (dimensionless); see :doc:`theory`
+     - a negative value is a damping ratio :math:`-\zeta` (dimensionless) of each element's axial
+       mode, so the damping of the line's own axial modes depends on the mesh; give ``BA`` in
+       N·s for mesh-independent damping (see :doc:`theory`)
    * - End-connection stiffness
      - N·m/rad
      - ``END CONNECTIONS`` table

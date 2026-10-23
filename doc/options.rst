@@ -109,7 +109,10 @@ Environment and seabed
        ``dtM``/``TMax`` in the standalone driver. Line nodes carry stick-slip friction springs; in
        a current the static solve holds the line with friction springs from its still-water laid
        shape, and the march continues them (``staticsFriction asLaid`` holds it toward its
-       as-laid position instead, in still water too). The isotropic shorthand of
+       as-laid position instead, in still water too). Friction acts at the nodes, so a coarse
+       grounded mesh steps the tension of the laid part; the initialisation report notes a
+       finite-EI line whose grounded elements are too long (*Mesh resolution* in :doc:`theory`).
+       The isotropic shorthand of
        ``frictionMuAxial``/``frictionMuLateral``. Not supported (the deck is rejected) with a
        ``FAILURE`` section, on a deck with ``Connect``/``Free`` points or ``Point3`` buoys, or
        on a deck whose lines attach to ``Rigid6`` bodies or rods unless it runs on the default
@@ -346,7 +349,12 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
      - logical
      - ``False``
      - ``True`` enables guarded within-step tangent reuse on every dynamic solver the deck builds.
-       It does not relax convergence tolerances and should be qualified against full Newton
+       It does not relax convergence tolerances and should be qualified against full Newton.
+       Measured against full Newton: 8-12 % faster on free-hanging finite-EI cables (lazy wave,
+       buoyed cable), about 1.5 times slower on finite-EI lines on the seabed (contact fails the
+       reuse contraction test and rebuilds the tangent), 3 % slower to 5 % faster on ``EI = 0``
+       systems;
+       results move at the solver tolerance (Bergdahl mean cycle maxima within 0.16 %)
      - both
      - ``False modified_newton``
    * - ``recovery_max_substeps`` / ``recoverymaxsubsteps``
