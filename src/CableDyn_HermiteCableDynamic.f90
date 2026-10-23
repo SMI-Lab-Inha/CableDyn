@@ -5992,19 +5992,37 @@ CONTAINS
     END SUBROUTINE grounded_share
 
     SUBROUTINE element_on_floor(k, grounded, esx)
-      !! Element k is grounded when both its nodes carry a floor reaction.
+      !! Element k is grounded when both its nodes are on the floor (node_on_floor).
       INTEGER, INTENT(IN) :: k
       LOGICAL, INTENT(OUT) :: grounded
       INTEGER, INTENT(OUT) :: esx
-      REAL(wp) :: f1(3), f2(3)
+      LOGICAL :: on1
       grounded = .FALSE.
-      CALL node_contact_normal(model, k, f1, esx, em2)
-      IF (esx /= CD_HCDYN_OK) RETURN
-      IF (.NOT. ANY(ABS(f1) > CD_ZERO)) RETURN
-      CALL node_contact_normal(model, k + 1, f2, esx, em2)
-      IF (esx /= CD_HCDYN_OK) RETURN
-      grounded = ANY(ABS(f2) > CD_ZERO)
+      CALL node_on_floor(k, on1, esx)
+      IF (esx /= CD_HCDYN_OK .OR. .NOT. on1) RETURN
+      CALL node_on_floor(k + 1, grounded, esx)
     END SUBROUTINE element_on_floor
+
+    SUBROUTINE node_on_floor(node, on, esx)
+      !! A node is on the floor when it carries a floor reaction, or when it is a held line end
+      !! whose end element the floor supports (held_end_floor_support): an anchor held exactly
+      !! on the floor has no contact force of its own, yet its laid end element is grounded.
+      INTEGER, INTENT(IN) :: node
+      LOGICAL, INTENT(OUT) :: on
+      INTEGER, INTENT(OUT) :: esx
+      REAL(wp) :: fn(3), sup(3), dsup(3), nn_in(3)
+      INTEGER :: in_node
+      on = .FALSE.
+      CALL node_contact_normal(model, node, fn, esx, em2)
+      IF (esx /= CD_HCDYN_OK) RETURN
+      on = ANY(ABS(fn) > CD_ZERO)
+      IF (on) RETURN
+      IF (node == 1) THEN
+        on = held_end_floor_support(model, model%q, 1, sup, dsup, in_node, nn_in)
+      ELSE IF (node == model%nn) THEN
+        on = held_end_floor_support(model, model%q, 2, sup, dsup, in_node, nn_in)
+      END IF
+    END SUBROUTINE node_on_floor
   END SUBROUTINE element_end_residual
 
   PURE REAL(wp) FUNCTION CD_HermiteCable_Dyn_Max_Step_Rotation(model) RESULT(angle)

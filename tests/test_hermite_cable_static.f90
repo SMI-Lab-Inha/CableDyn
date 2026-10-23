@@ -18,7 +18,8 @@ PROGRAM test_hermite_cable_static
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Reaction, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, CD_HermiteCable_Dyn_End_Force, &
-                                          CD_HermiteCable_Drag_Element, CD_HermiteCable_Dyn_Step
+                                          CD_HermiteCable_Drag_Element, CD_HermiteCable_Dyn_Step, &
+                                          CD_HermiteCable_Dyn_Node_Recovery
   USE CableDyn_SeabedContact, ONLY: CD_HermiteCable_Friction_Spring => CD_Seabed_Friction_Spring, &
                                     CD_Seabed_End_Element_Share, CD_Seabed_Normal_Law
   USE CableDyn_Line, ONLY: CD_Nodal_Seabed_Stiffness, CD_LINE_OK
@@ -41,6 +42,7 @@ PROGRAM test_hermite_cable_static
   CALL check_seabed_mesh_jump()
   CALL check_scalar_contact_on_slope()
   CALL check_taut_line_anchored_on_floor()
+  CALL check_laid_line_node_recovery()
   CALL check_end_support_energy_gradient()
   CALL check_frictionless_slope_run()
   CALL check_long_sequence_hierarchy()
@@ -384,6 +386,55 @@ CONTAINS
       CALL require(ABS(share - r*r*(3.0_wp - 2.0_wp*r)) <= 1.0e-15_wp, 'end element share: smoothstep')
     END DO
   END SUBROUTINE check_taut_line_anchored_on_floor
+
+  SUBROUTINE check_laid_line_node_recovery()
+    !! A straight line laid on the scalar penalty floor of CD_HermiteCable_Dyn_Init (no contact
+    !! model), both ends held exactly on the floor: the floor carries the weight, so the
+    !! recovered bend moment is only that of the line settling into the floor, at the held
+    !! ends too. An end node on the
+    !! floor has no contact force of its own; its laid end element is still grounded (the
+    !! held-end floor support), so the reaction of the next node stays shared with it. Counted
+    !! as suspended, the end element lost that share and the anchor and its neighbour showed a
+    !! weight moment of order w l0^2/12 (521 N.m on this line, 31 %; the bending of the line
+    !! settling 4 mm into the penalty floor next to its held ends is 4.6 N.m, 0.3 %).
+    INTEGER, PARAMETER :: NE = 20, NN = NE + 1
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), rho_a(NE), seed(6*NN), q(6*NN), curv(NN), res, kn
+    REAL(wp) :: trib(NN), tension(NN), bend(NN), scale
+    INTEGER :: fixed(6 + 2*NN), nfix, i, es, it
+    TYPE(CD_HermiteCableDynType) :: dyn
+    CHARACTER(512) :: em
+    l0 = 5.0_wp; EA = 5.0e8_wp; EI = 2.0e4_wp; w = 800.0_wp; rho_a = 120.0_wp; kn = 2.0e5_wp
+    trib = 0.0_wp
+    DO i = 1, NE
+      trib(i) = trib(i) + 0.5_wp*l0(i); trib(i + 1) = trib(i + 1) + 0.5_wp*l0(i)
+    END DO
+    ! both ends on the 100 m floor, 100 m apart: a 100 m line laid straight
+    CALL CD_HermiteCable_Trivial_Seed([0.0_wp, 0.0_wp, -100.0_wp], [100.0_wp, 0.0_wp, -100.0_wp], l0, -100.0_wp, &
+                                      seed, es, em)
+    CALL require(es == CD_HCSTAT_OK, 'laid line seed: '//TRIM(em))
+    fixed(1:6) = [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3]
+    nfix = 6
+    DO i = 1, NN
+      fixed(nfix + 1:nfix + 2) = [6*i - 4, 6*i - 1]
+      nfix = nfix + 2
+    END DO
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed(1:nfix), -100.0_wp, 0.0_wp, 4, 200, 1.0e-10_wp, &
+                                      1.0_wp, q, curv, res, it, es, em, contact_kn=kn*trib)
+    CALL require(es == CD_HCSTAT_OK, 'laid line on the floor: '//TRIM(em))
+    IF (es /= CD_HCSTAT_OK) RETURN
+    CALL CD_HermiteCable_Dyn_Init(dyn, l0, EA, EI, rho_a, w, q, fixed(1:nfix), -100.0_wp, kn, 0.8_wp, es, em)
+    CALL require(es == CD_HCDYN_OK, 'laid line dynamics: '//TRIM(em))
+    IF (es /= CD_HCDYN_OK) RETURN
+    CALL CD_HermiteCable_Dyn_Node_Recovery(dyn, es, em, tension=tension, bend_moment=bend)
+    CALL require(es == CD_HCDYN_OK, 'laid line node recovery: '//TRIM(em))
+    scale = w(1)*l0(1)**2/12.0_wp
+    WRITE (*, '(A,ES10.3,A,I0,A,ES10.3,A)') '  laid line: max |bend moment| ', MAXVAL(ABS(bend)), &
+      ' N.m at node ', MAXLOC(ABS(bend)), &
+      ' (w l0^2/12 = ', scale, ' N.m)'
+    CALL require(MAXVAL(ABS(bend)) <= 0.02_wp*scale, &
+                 'laid line: no weight moment at the held ends or along the line')
+    CALL CD_HermiteCable_Dyn_End(dyn)
+  END SUBROUTINE check_laid_line_node_recovery
 
   SUBROUTINE check_end_support_energy_gradient()
     !! The energy line search (energy_minimization) tests the potential against R.dq, so the
