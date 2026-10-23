@@ -10,6 +10,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Documentation of the negative `BA` (damping ratio) form: it damps each element's own axial
+  mode at the given ratio, so the line's axial modes are damped at `zeta n pi / (2N)` and less on
+  a finer mesh (`BA = -1`: 1.6 % for the first mode on 100 elements, 0.8 % on 200); the manual
+  gives the `BA` in N·s for a mesh-independent material damping ratio.
+- Seabed-friction resolution note: friction acts at the nodes, so on a coarse grounded mesh the
+  tension of the laid part and near touchdown steps by up to mu w L per node as the line lands
+  and lifts (a 10 m lazy-wave mesh swung a grounded segment tension by 1600 N where 1 m elements
+  give 120 N). At initialisation a finite-EI line whose grounded elements lock more than 15 % of
+  the touchdown tension is noted with the grounded element length that resolves it (flat
+  seabed; standalone and OpenFAST). Results do not change.
 - The run-time profile (`CABLEDYN_PROFILE=1`, standalone driver and OpenFAST) splits the steps
   of `EI = 0` lines into residual-only evaluations, residual and tangent evaluations, LU
   factorisations and back-substitutions, with their counts and times, and separates the
@@ -75,6 +85,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   from the step and a fresh evaluation differ slightly; the restore discarded the cache and took
   the fresh path. The snapshot now keeps the cached force with the state, and the restore brings
   it back unless a load setter invalidated it since. Runs without restores do not change.
+- Finite-EI node tension, curvature and bend moment at touchdown (node channels, range graphs):
+  the recovery spread a grounded node's floor reaction over the touchdown element, which is on
+  the floor at one end only, and understated the tension of the last suspended node by the
+  floor reaction of half an element (5.3 % on a 10 m lazy-wave mesh). A node's floor reaction is
+  now shared by the grounded elements beside it; the touchdown element takes none. The same
+  coarse mesh now follows a four times finer one within 3 % through touchdown. Line end forces
+  (`FairTen`, `AnchTen`) and the solution do not change.
 - OpenFAST with `dtM` larger than `DT`: an `openfast -restart` re-sampled the SeaState fields of the
   committed step at its end positions instead of restoring the fields the step held (sampled at
   its start positions), so the loads served until the next solve, and the run after them,

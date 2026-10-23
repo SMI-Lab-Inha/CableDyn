@@ -2284,6 +2284,15 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(driver_ei0_fold_layouts PROPERTIES
     LABELS "python;driver;integration;static"
     ENVIRONMENT "${_cabledyn_python_test_environment}")
+  # Node tension through touchdown on a coarse mesh (10 m grounded elements) follows a four
+  # times finer reference within 3.5 %: the touchdown element, grounded at one end only, takes
+  # no share of its grounded node's floor reaction.
+  add_test(NAME driver_touchdown_recovery
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_touchdown_recovery.py
+                   $<TARGET_FILE:cabledyn>)
+  set_tests_properties(driver_touchdown_recovery PROPERTIES
+    LABELS "python;driver;integration;static"
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
 endif()
 # A clamped finite-EI cable with a buoyant section on a Rigid6 body: the body static solve
 # holds the objects at their deck poses, warns once, and reports no balanced clamped end loads.
