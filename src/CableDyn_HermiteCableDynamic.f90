@@ -281,12 +281,22 @@ MODULE CableDyn_HermiteCableDynamic
     ! the current iterate (ws_Rk) and of a line-search trial (ws_Rt), and the force at the
     ! committed state F_n = R(q_n, v_n, t_n). F_n is cached from the previous step's converged
     ! evaluation and keyed on the exact state it was evaluated at (fc_q, fc_v, fc_t, fc_d0)
-    ! plus fc_valid, which every load-configuration setter and Restore clears. A key mismatch
-    ! (host-updated boundary, restored or externally written state) recomputes it, so the
-    ! cache only ever replaces a bitwise-identical evaluation.
+    ! plus fc_valid, which every load-configuration setter clears (counting the clears in
+    ! fc_clears). A key mismatch (host-updated boundary, externally written state) recomputes
+    ! it. The cache equals a fresh evaluation in value but not always in its last bits: the
+    ! friction return mapping of the commit moves a sliding node's anchor, and the spring force
+    ! of the moved anchor reproduces the capped force only to rounding. A run is therefore
+    ! bit-reproducible along one path: Snapshot keeps the cache with the state, and Restore
+    ! brings it back unless the cache was invalidated since (fc_clears), so a restored model
+    ! takes the same path as one that was never rolled back.
     REAL(wp), ALLOCATABLE :: ws_Rk(:), ws_Rt(:), fc_R(:), fc_q(:), fc_v(:)
     REAL(wp) :: fc_t = 0.0_wp, fc_d0(3, 2) = 0.0_wp
     LOGICAL :: fc_valid = .FALSE.
+    INTEGER :: fc_clears = 0
+    REAL(wp), ALLOCATABLE :: snap_fc_R(:), snap_fc_q(:), snap_fc_v(:)
+    REAL(wp) :: snap_fc_t = 0.0_wp, snap_fc_d0(3, 2) = 0.0_wp
+    LOGICAL :: snap_fc_valid = .FALSE.
+    INTEGER :: snap_fc_clears = 0
     ! Generalised-alpha blend: .TRUE. blends the forces (the default), .FALSE. evaluates the
     ! forces at the blended configuration q_alpha = (1-af) q_{n+1} + af q_n.
     LOGICAL :: force_blend = CD_HC_FORCE_BLEND_DEFAULT
@@ -713,6 +723,7 @@ CONTAINS
               model%ws_recovery_q0(ndof), model%ws_recovery_v0(ndof), model%ws_recovery_a0(ndof))
     ALLOCATE (model%ws_Rk(ndof), model%ws_Rt(ndof), model%fc_R(ndof), model%fc_q(ndof), model%fc_v(ndof))
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     model%force_blend = CD_HC_FORCE_BLEND_DEFAULT
     model%max_step_rotation = CD_ZERO
@@ -778,6 +789,7 @@ CONTAINS
     model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     IF (.NOT. model%initialized) THEN
       CALL fail_contact('model not initialized'); RETURN
@@ -926,6 +938,7 @@ CONTAINS
     model%contact_fr_aniso = ABS(mu_axial - model%contact_mu) > CD_ZERO
     ! A friction-law change invalidates the cached committed force F_n and the carried factor.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
 
@@ -971,6 +984,7 @@ CONTAINS
     model%fr_anchor = anchors
     model%fr_active = .TRUE.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     CALL solve_consistent_acceleration(model, es, em)
     IF (es /= CD_HCDYN_OK) THEN
@@ -1049,6 +1063,7 @@ CONTAINS
       RETURN
     END IF
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     a_old = model%a
     mgb_old = model%Mgb
@@ -1701,6 +1716,7 @@ CONTAINS
     END IF
     model%force_blend = enabled
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Set_ForceBlend
 
@@ -1924,6 +1940,7 @@ CONTAINS
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT
@@ -2294,6 +2311,7 @@ CONTAINS
     model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_Drag: model not initialised'; RETURN
@@ -2393,6 +2411,7 @@ CONTAINS
     model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -2464,6 +2483,7 @@ CONTAINS
     model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_AddedMass: model not initialised'; RETURN
@@ -2560,6 +2580,7 @@ CONTAINS
     model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_Waves: model not initialised'; RETURN
@@ -2680,6 +2701,7 @@ CONTAINS
     model%rc_epoch = model%rc_epoch + 1
     ! A load-configuration change invalidates the cached committed force F_n.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT
@@ -2819,6 +2841,7 @@ CONTAINS
     ! factor stays usable (a per-step field update only perturbs the drag and inertia tangent;
     ! the first field's consistent-acceleration solve drops it).
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Set_Held_Fluid: model not initialised'; RETURN
@@ -3086,6 +3109,7 @@ CONTAINS
     model%torsion%theta = th
     model%torsion%torque = (model%torsion%phi - th)/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Torsion_Frames
 
@@ -6141,6 +6165,7 @@ CONTAINS
     ! the snapshot predates the new load set (as for CD_HermiteCable_Dyn_Set_EndConnection)
     model%snap_valid = .FALSE.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     CALL CD_HermiteCable_Dyn_Recompute_Acceleration(model, es, em)
     IF (es /= CD_HCDYN_OK) THEN
@@ -6332,6 +6357,16 @@ CONTAINS
     model%snap_torsion_phi = model%torsion%phi
     model%snap_torsion_ends = model%torsion%ends
     IF (model%fr_active) model%snap_fr_anchor = model%fr_anchor
+    ! the cached committed force goes with the state it describes (see fc_clears)
+    model%snap_fc_valid = model%fc_valid .AND. ALLOCATED(model%fc_R)
+    model%snap_fc_clears = model%fc_clears
+    IF (model%snap_fc_valid) THEN
+      model%snap_fc_R = model%fc_R
+      model%snap_fc_q = model%fc_q
+      model%snap_fc_v = model%fc_v
+      model%snap_fc_t = model%fc_t
+      model%snap_fc_d0 = model%fc_d0
+    END IF
     model%snap_na_steps_done = model%na_steps_done
     model%snap_na_iter_sum = model%na_iter_sum
     model%snap_na_mn_active = model%na_mn_active
@@ -6411,7 +6446,21 @@ CONTAINS
     model%max_step_rotation = model%snap_max_step_rotation
     model%recovery_event_count = model%snap_recovery_event_count
     model%recovery_max_substeps_used = model%snap_recovery_max_substeps_used
-    model%fc_valid = .FALSE.
+    ! The snapshot's cached committed force comes back with its state unless a setter has
+    ! invalidated the cache since the snapshot, so the next step takes the path it took after
+    ! the snapshot (the cache differs from a fresh evaluation in the last bits where a
+    ! friction anchor slid). Otherwise the next step evaluates it afresh.
+    IF (model%snap_fc_valid .AND. model%snap_fc_clears == model%fc_clears) THEN
+      model%fc_R = model%snap_fc_R
+      model%fc_q = model%snap_fc_q
+      model%fc_v = model%snap_fc_v
+      model%fc_t = model%snap_fc_t
+      model%fc_d0 = model%snap_fc_d0
+      model%fc_valid = .TRUE.
+    ELSE
+      model%fc_valid = .FALSE.
+      model%fc_clears = model%fc_clears + 1
+    END IF
     model%tr_valid = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Restore
 
@@ -6493,7 +6542,10 @@ CONTAINS
     model%endconn_k = CD_ZERO
     model%endconn_d0 = CD_ZERO
     IF (ALLOCATED(model%snap_q)) DEALLOCATE (model%snap_q, model%snap_v, model%snap_a)
+    IF (ALLOCATED(model%snap_fc_R)) DEALLOCATE (model%snap_fc_R, model%snap_fc_q, model%snap_fc_v)
+    model%snap_fc_valid = .FALSE.
     model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     model%snap_t = CD_ZERO
     model%snap_endconn_d0 = CD_ZERO

@@ -68,6 +68,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- Finite-EI cables with seabed friction: a restored state (the C API `CableDyn_RestoreState`,
+  OpenFAST correction iterations) could continue differently in the last bits from the step taken
+  before the restore, breaking the documented bit-identity. A sliding node's moved friction
+  anchor reproduces the capped friction force only to rounding, so the committed force cached
+  from the step and a fresh evaluation differ slightly; the restore discarded the cache and took
+  the fresh path. The snapshot now keeps the cached force with the state, and the restore brings
+  it back unless a load setter invalidated it since. Runs without restores do not change.
 - OpenFAST with `dtM` larger than `DT`: an `openfast -restart` re-sampled the SeaState fields of the
   committed step at its end positions instead of restoring the fields the step held (sampled at
   its start positions), so the loads served until the next solve, and the run after them,
