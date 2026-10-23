@@ -8,105 +8,54 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
 ### Added
 
-- Documentation of the negative `BA` (damping ratio) form: it damps each element's own axial
-  mode at the given ratio, so the line's axial modes are damped at `zeta n pi / (2N)` and less on
-  a finer mesh (`BA = -1`: 1.6 % for the first mode on 100 elements, 0.8 % on 200); the manual
-  gives the `BA` in N·s for a mesh-independent material damping ratio.
-- Seabed-friction resolution note: friction acts at the nodes, so on a coarse grounded mesh the
-  tension of the laid part and near touchdown steps by up to mu w L per node as the line lands
-  and lifts (a 10 m lazy-wave mesh swung a grounded segment tension by 1600 N where 1 m elements
-  give 120 N). At initialisation a finite-EI line whose grounded elements lock more than 15 % of
-  the touchdown tension is noted with the grounded element length that resolves it (flat
-  seabed; standalone and OpenFAST). Results do not change.
-- The run-time profile (`CABLEDYN_PROFILE=1`, standalone driver and OpenFAST) splits the steps
-  of `EI = 0` lines into residual-only evaluations, residual and tangent evaluations, LU
-  factorisations and back-substitutions, with their counts and times, and separates the
-  factorisations of finite-EI cables from their back-substitutions (which now include the
-  force-blend correction that ends each step). Results do not change.
-- The run-time profile also splits the residual and tangent assemblies of finite-EI cables into
-  their sections and, in OpenFAST, `CalcOutput` into the kinematics overlay, the output channels
-  and the restore, and the SeaState sampling into the node queries, the grid checks and the
-  hand-over of the fields. Results do not change.
-- dtM advisory: at initialisation, a line whose axial period (twice its length over
-  `sqrt(EA/m)`) the time step `dtM` resolves in fewer than six steps gets a note with the
-  period and a `dtM` that resolves it, on the standalone, mixed and OpenFAST routes. Results do
-  not change.
-- OpenFAST with `dtM` larger than `DT`: between CableDyn solves the coupled loads are
-  extrapolated from the last two solves instead of held (deck `OPTIONS predictLoads`, default
-  `True`; `False` keeps the hold). The error drops from first to second order in `dtM`: on the
+- `pip install cabledyn`: the package is on PyPI, with wheels for Windows x64 and Linux x86-64
+  (processors with AVX2) and macOS on Apple silicon that carry the solver library and the
+  standalone driver, so it runs decks without the release executables; other platforms build
+  from the source distribution. The release wheels are built and smoke-tested in CI and published
+  through PyPI Trusted Publishing.
+- OpenFAST with `dtM` larger than `DT`: between CableDyn solves the coupled loads are extrapolated
+  from the last two solves instead of held (deck `OPTIONS predictLoads`, default `True`). On the
   IEA-15 MW VolturnUS-S at `dtM = 0.1 s` and `DT = 0.025 s` the platform motions differ from a
   `dtM = DT` run by at most 0.12 % of their standard deviation, against 0.42 % held. Runs at
-  `dtM = DT` (the default) do not change; the previous solve's loads are checkpointed, so a restart
-  continues the extrapolation.
-
-- `validation/scripts/openfast_supercycle_ab.py`: compares coupled runs at a coarser `dtM` with
-  the same model at `dtM = DT` (platform time series, tension statistics, rainflow
-  damage-equivalent loads); `VALIDATION.md` records the supercycling verification it scores.
-
-- Packaging for PyPI: a root `pyproject.toml` (scikit-build-core) builds an sdist of the sources
-  and a `py3-none-<platform>` wheel that carries the compiled library and the standalone driver
-  inside the `cabledyn` package, so the package needs no separate library; the driver search
-  takes the bundled driver after `CABLEDYN_DRIVER` and before `PATH`. `python/pyproject.toml`
-  remains the pure package for development against a build tree.
-- Release wheels built in CI (`.github/workflows/wheels.yml`): Linux x86-64 (`manylinux_2_28`,
-  x86-64-v3), macOS arm64 and Windows x86-64 (IFX, static, the release's reference LAPACK), plus
-  the sdist. Each wheel is installed into a clean environment and smoke-tested
-  (`release/smoke_test_wheel.py`). The same workflow publishes them through PyPI Trusted
-  Publishing: to TestPyPI on request from a manual run, and to PyPI when a GitHub release is
-  published (after checking the release tag's version and approval of the `pypi` environment).
+  `dtM = DT` (the default) do not change.
+- Initialisation notes, none of which changes results: a `dtM` that resolves a line's axial
+  period in fewer than six steps, with the `dtM` that resolves it; and a finite-EI line whose
+  grounded elements lock more seabed friction than 15 % of the touchdown tension, with the
+  grounded element length that resolves the tension of the laid part.
+- `validation/scripts/openfast_supercycle_ab.py`, which scores coupled runs at a coarser `dtM`
+  against `dtM = DT` (`VALIDATION.md`, supercycling verification).
+- The run-time profile (`CABLEDYN_PROFILE=1`) splits the line and cable steps into their kernels
+  and assembly sections, and the OpenFAST `CalcOutput` and SeaState sampling into their parts.
 
 ### Changed
 
-- A finite-EI static solve in a current that fails because seabed friction holds the grounded
-  run while the current pushes the suspended span into the touchdown now stops after the
-  catenary-continuation route has diagnosed it, as the frictionless grounded-run case already
-  did, instead of also running the mesh-sequenced route to its iteration budget (a 1000 m lazy
-  wave in 440 m of water: 22 s to 17.7 s, same message). Converging decks do not change.
-- The Windows release executables (`CableDyn_driver.exe`, `openfast.exe`) are compiled for
-  processors with AVX2 (x86-64-v3: Intel Haswell and AMD Excavator or newer; CMake option
-  `CABLEDYN_TARGET_AVX2`), which makes the driver 13-33% faster on the benchmark decks
-  (`lazy_wave_vessel_rao` 11.9 s to 8.8 s, `als_volturnus_line_break_time` 35.5 s to 23.9 s).
-  On an older processor they stop at start with a message naming the missing instructions.
-  Results change at round-off: in the last printed digit on the lazy-wave and buoy decks; in the
-  line-break deck the platform's slow drift after the break amplifies the round-off past 900 s,
-  with the same peaks and standard deviations to four digits.
-- OpenFAST: `CalcOutput` no longer evaluates the reactions of the finite-EI cables when it saves
-  the committed kinematics before transferring the current ones; it discarded them. With a
-  248-element power cable in the IEA-15 VolturnUS-S mooring this cuts `CalcOutput` from 41 s to
-  25 s and the 600 s run from 227 s to 212 s. Results do not change.
-- The reaction of a finite-EI cable at a node (the fairlead load the OpenFAST module returns)
-  is assembled from the one or two elements that reach the node instead of the whole line,
-  bit-identical to the full assembly (lines with torsion keep the full assembly). In the same
-  run this cuts `CalcOutput` to 9 s and the run to 194 s. Results do not change.
+- Speed: the Windows release executables are compiled for processors with AVX2 (x86-64-v3:
+  Intel Haswell and AMD Excavator or newer), which makes the driver 13-33 % faster on the
+  benchmark decks; on an older processor they stop at start with a message naming the missing
+  instructions. In OpenFAST, `CalcOutput` no longer evaluates cable reactions it discarded and
+  assembles a fairlead reaction from the elements at its node (a 600 s IEA-15 MW run with a
+  248-element power cable: 227 s to 194 s). Results change at round-off only.
+- A static solve in a current that seabed friction cannot hold fails closed sooner (22 s to
+  17.7 s on a 1000 m lazy wave), with the same message.
+- The manual explains the mesh dependence of the negative `BA` (damping ratio) form and of
+  node-lumped seabed friction, and the measured trade-off of `modified_newton`, which stays off.
 
 ### Fixed
 
-- Finite-EI cables with seabed friction: a restored state (the C API `CableDyn_RestoreState`,
-  OpenFAST correction iterations) could continue differently in the last bits from the step taken
-  before the restore, breaking the documented bit-identity. A sliding node's moved friction
-  anchor reproduces the capped friction force only to rounding, so the committed force cached
-  from the step and a fresh evaluation differ slightly; the restore discarded the cache and took
-  the fresh path. The snapshot now keeps the cached force with the state, and the restore brings
-  it back unless a load setter invalidated it since. Runs without restores do not change.
-- Finite-EI node tension, curvature and bend moment at touchdown (node channels, range graphs):
-  the recovery spread a grounded node's floor reaction over the touchdown element, which is on
-  the floor at one end only, and understated the tension of the last suspended node by the
-  floor reaction of half an element (5.3 % on a 10 m lazy-wave mesh). A node's floor reaction is
-  now shared by the grounded elements beside it; the touchdown element takes none. The same
-  coarse mesh now follows a four times finer one within 3 % through touchdown. Line end forces
-  (`FairTen`, `AnchTen`) and the solution do not change.
-- OpenFAST with `dtM` larger than `DT`: an `openfast -restart` re-sampled the SeaState fields of the
-  committed step at its end positions instead of restoring the fields the step held (sampled at
-  its start positions), so the loads served until the next solve, and the run after them,
-  differed slightly from the uninterrupted run (up to 2e-3 of a tension's standard deviation).
-  The checkpoint now carries the held fields, and a restart continues the run bit for bit at any
-  `dtM`. The checkpoint layout changes with this and with the load predictor's fields: a
-  checkpoint written by an earlier CableDyn cannot be restarted with this one (OpenFAST
-  checkpoints are not versioned; restart with the executable that wrote them).
-- The FAQ and the OpenFAST tutorial still gave 0.1 s as the default `dtM` in OpenFAST; since
-  0.2.0 it is the glue `DT`.
+- Finite-EI node tension, curvature and bend moment at touchdown understated the last suspended
+  node's tension by half an element's floor reaction (5.3 % on a 10 m lazy-wave mesh); the coarse
+  mesh now follows a four times finer one within 3 %. End forces and the solution do not change.
+- OpenFAST restarts with `dtM` larger than `DT` now continue the run bit for bit (the checkpoint
+  carries the held SeaState fields). A checkpoint written by an earlier CableDyn cannot be
+  restarted with this one.
+- A restore (`CableDyn_RestoreState`, OpenFAST correction iterations) of a finite-EI cable with
+  seabed friction now continues bit for bit like the step it repeats.
+- The FAQ and the OpenFAST tutorial gave 0.1 s as the default `dtM` in OpenFAST; it is the glue
+  `DT`.
 
 ## [0.2.0] - 2026-10-20
 
@@ -636,7 +585,8 @@ Corrections made during the pre-release review.
   values of the shipped example decks and states which tension (end element or
   `FairTen` end force) each comparison uses.
 
-[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.2.0
 [0.1.1]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.0

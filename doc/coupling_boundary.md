@@ -108,7 +108,7 @@ Rules shared by every entry point:
 
 The interface ships as the versioned shared library `libcabledyn` (`cabledyn.dll` in an Intel
 Fortran and MSVC build; CMake target `cabledyn_shared`) with the installed header; it reports
-CableDyn 0.2.0 and C ABI version 1, minor extension 2. The Python package uses the same library.
+CableDyn 0.3.0 and C ABI version 1, minor extension 2. The Python package uses the same library.
 
 ### Concurrency
 

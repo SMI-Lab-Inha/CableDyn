@@ -21,7 +21,7 @@ in the MoorDyn v2 format and solves them with two line formulations:
 - **Finite-bending lines** (finite-EI): cubic-Hermite elements for dynamic power
   cables, including lazy-wave configurations, with continuous centreline curvature.
 
-The current stable release is `v0.2.0`. Interfaces are
+The current stable release is `v0.3.0`. Interfaces are
 versioned and may change before `1.0.0`.
 
 ## Capabilities
@@ -48,8 +48,8 @@ a named error rather than running approximately.
    |---|---|
    | `CableDyn_driver.exe` | Standalone solver for Windows x64 (AVX2 processor) |
    | `openfast.exe` | OpenFAST with CableDyn available as `CompMooring = 5` |
-   | `cabledyn-0.2.0-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
-   | `cabledyn-0.2.0.tar.gz` | Python source distribution |
+   | `cabledyn-0.3.0-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
+   | `cabledyn-0.3.0.tar.gz` | Python source distribution |
    | `SHA256SUMS.txt` | Checksums for the assets above |
 
    Both executables are statically linked, need no installer, compiler, or runtime
@@ -76,19 +76,22 @@ a named error rather than running approximately.
    The driver does not create folders: an output root such as `results\wd0050`
    needs `New-Item -ItemType Directory -Force results | Out-Null` first.
 
-4. Optionally, script runs from Python. `cabledyn-run` needs to find the driver:
-   pass `--executable`, set the `CABLEDYN_DRIVER` environment variable, or put the
-   driver on `PATH`. A relative output root is resolved against the deck's folder, so
-   this run writes `examples\wd0050.out`:
+4. Optionally, script runs from Python. The package on PyPI carries the solver
+   library and the driver (wheels for Windows x64 and Linux x86-64 with an AVX2
+   processor, and macOS on Apple silicon), so nothing else is needed. A relative
+   output root is resolved against the deck's folder, so this run writes
+   `examples\wd0050.out`:
 
    ```powershell
-   python -m pip install "cabledyn-0.2.0-py3-none-any.whl[post]"
-   cabledyn-run examples\wd0050_chain.dat wd0050 --executable .\CableDyn_driver.exe
+   python -m pip install "cabledyn[post]"
+   cabledyn-run examples\wd0050_chain.dat wd0050
    ```
 
-   A source build names the driver `cabledyn` (see
-   [Build from source](#build-from-source)); the release executable is
-   `CableDyn_driver.exe`.
+   The pure Python wheel on the release page (`cabledyn-0.3.0-py3-none-any.whl`)
+   carries no driver: `cabledyn-run` then needs `--executable .\CableDyn_driver.exe`,
+   the `CABLEDYN_DRIVER` environment variable, or the driver on `PATH`. A source
+   build names the driver `cabledyn` (see [Build from source](#build-from-source));
+   the release executable is `CableDyn_driver.exe`.
 
 For OpenFAST, set `CompMooring = 5` in the `.fst` file and point `MooringFile` at
 a CableDyn deck; ready-to-run cases are in
@@ -151,7 +154,7 @@ If you use CableDyn in academic work, please cite:
 > offshore wind. *Ocean Engineering* 368 (Part 2), 128332, 2026.
 > <https://doi.org/10.1016/j.oceaneng.2026.128332>
 
-To identify the software version, also cite the release (CableDyn 0.2.0).
+To identify the software version, also cite the release (CableDyn 0.3.0).
 The [citation file](https://cabledyn.readthedocs.io/en/latest/citing.html) contains both entries (GitHub **Cite this
 repository**); BibTeX is on the manual's
 [How to cite](https://cabledyn.readthedocs.io/en/latest/citing.html) page.

@@ -121,7 +121,7 @@ MODULE CableDyn
 
    PRIVATE
 
-   TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.2.0', '2026-10-20' )
+   TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.3.0', '2026-10-23' )
    INTERFACE
       ! 1 when the CableDyn core targets x86-64-v3 (CABLEDYN_TARGET_AVX2) and carries the
       ! start-up processor check of src/cabledyn_cpu_guard.c; the reference also keeps that

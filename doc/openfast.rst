@@ -205,7 +205,7 @@ Run and confirm
 
 Before trusting a run, confirm in the console:
 
-#. ``Running CableDyn (v0.2.0, ...)`` and ``Parsing CableDyn input file: <deck>``;
+#. ``Running CableDyn (v0.3.0, ...)`` and ``Parsing CableDyn input file: <deck>``;
 #. the ``dtM`` line and the model inventory (``Created CableDyn model: ... line object(s)``);
 #. for every line, the converged fairlead effective tension, force vector, inclination,
    declination, and azimuth at the static equilibrium — printed unconditionally, whether or not

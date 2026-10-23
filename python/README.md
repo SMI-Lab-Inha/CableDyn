@@ -10,20 +10,26 @@ The full reference is the
 
 ## Install
 
-The wheel and source distribution are attached to each
-[GitHub release](https://github.com/SMI-Lab-Inha/CableDyn/releases/latest); the
-package is not on PyPI or conda-forge. It requires Python 3.10 or newer and NumPy.
+From PyPI (Python 3.10 or newer; NumPy is the only required dependency):
 
 ```powershell
-py -m pip install .\cabledyn-0.2.0-py3-none-any.whl
-py -m pip install ".\cabledyn-0.2.0-py3-none-any.whl[post]"   # adds pandas and matplotlib
+py -m pip install cabledyn
+py -m pip install "cabledyn[post]"   # adds pandas and matplotlib
 ```
 
-The package does not contain the solver. `CableDynDriver` runs
-`CableDyn_driver.exe`, found from an explicit path, then the `CABLEDYN_DRIVER`
-environment variable, then `PATH`. The in-process `CableDyn` class needs a
-CableDyn shared library built from the same source tag, located through
-`CABLEDYN_LIBRARY` or a source checkout's build tree.
+The wheels for Windows x64, Linux x86-64 (both for processors with AVX2) and macOS
+on Apple silicon carry the solver: the CableDyn shared library for the in-process
+`CableDyn` class and the standalone driver that `CableDynDriver` and `cabledyn-run`
+run. On another platform pip builds from the source distribution, which needs a
+Fortran compiler and LAPACK.
+
+The pure Python wheel attached to each
+[GitHub release](https://github.com/SMI-Lab-Inha/CableDyn/releases/latest)
+(`cabledyn-0.3.0-py3-none-any.whl`) carries no solver. `CableDynDriver` finds the
+driver from an explicit path, then the `CABLEDYN_DRIVER` environment variable,
+then the driver inside the package, then `PATH`; the in-process `CableDyn` class
+uses the library inside the package, or one named by `CABLEDYN_LIBRARY` or found in
+a source checkout's build tree.
 
 ## Components
 
