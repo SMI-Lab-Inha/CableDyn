@@ -1694,6 +1694,7 @@ CONTAINS
     END IF
     ! the force-blend committed force reloads with the state it was evaluated at
     self%line%fc_valid = .FALSE.
+    self%line%fc_clears = self%line%fc_clears + 1
     IF (self%line%force_blend) THEN
       IF (buf(k + 1) > 0.5_wp) THEN
         self%line%fc_R = buf(k + 2:k + 1 + self%line%ndof)
