@@ -720,10 +720,10 @@ The fluid acceleration is the local (Eulerian) acceleration of the wave field.
 Cross-flow vortex-induced vibration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``EI = 0`` lines can carry the cross-flow lift of the synchronisation model of
+Lines can carry the cross-flow lift of the synchronisation model of
 :ref:`Thorsen et al. (2014) <ref-thorsen2014>` and :ref:`(2016) <ref-thorsen2016>` in the form
 MoorDyn v2 implements it: a LINE TYPES row with a lift coefficient :math:`C_L > 0` (see
-:doc:`file_formats`). At an interior node with unit tangent :math:`\mathbf{q}` (the chord of its
+:doc:`file_formats`). On an ``EI = 0`` line, at an interior node with unit tangent :math:`\mathbf{q}` (the chord of its
 neighbours) and normal relative flow :math:`\mathbf{v}_n` of speed :math:`U = \lvert\mathbf{v}_n\rvert`,
 each node carries a vortex-shedding phase :math:`\phi` and the lift
 
@@ -757,8 +757,30 @@ the phase and the velocity in the lift are the node values averaged with the nei
 wavenumber :math:`k` to :math:`\cos^2(k l_0/2)` and removes the mesh-scale zig-zag mode exactly.
 With the node's own kinematics, a step that resolves the zig-zag mode lets the synchronisation
 loop pump it until the line loses lock-in; a coarse step only hides this behind the
-integrator's numerical damping. VIV runs in the standalone driver; the coupled and mixed
-aggregate routes refuse a deck with :math:`C_L > 0`.
+integrator's numerical damping.
+
+On a finite-EI (cubic-Hermite) cable the lift is a distributed load per unit deformed length,
+
+.. math::
+
+   \mathbf{f}_L = \tfrac{1}{2}\rho\,d\,C_L\cos\phi\;U\;\mathbf{t}\times\mathbf{v}_r ,
+
+with :math:`\mathbf{t}` the unit tangent of the centreline, :math:`\mathbf{v}_r` the relative flow
+(its normal part has speed :math:`U`) and :math:`\cos\phi` interpolated linearly between the
+element's end nodes. It is integrated against the Hermite shape functions at the three Gauss
+points of the drag (a point above the surface carries none), and its exact position and
+velocity derivatives enter the tangent. Each node carries a phase, driven as above by the
+node's cross-flow motion along its own tangent, the slope degrees of freedom; :math:`d`,
+:math:`c_F` and :math:`d_F` at a node are the length-weighted averages over its lifting
+elements. The phase is explicit with the Heun commit as on ``EI = 0`` lines, and no smoothing is
+needed: the Hermite tangent and the integrated lift leave no mesh-scale mode for the loop to
+pump, and the response is the same from ``dtM`` 5e-4 to 1e-2 s. A finite-EI line with
+:math:`EI \to 0` reproduces the ``EI = 0`` line's lock-in. The standalone Hermite march
+carries it, including deck waves and current through its held fluid field; a finite-EI line
+with two moving ends, or beside bodies, rods or free points, refuses :math:`C_L > 0`.
+
+VIV runs in the standalone driver; the coupled and mixed aggregate routes refuse a deck with
+:math:`C_L > 0`.
 
 Buoyancy and wetting
 ~~~~~~~~~~~~~~~~~~~~
