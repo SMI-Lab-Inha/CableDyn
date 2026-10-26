@@ -413,6 +413,7 @@ add_library(cabledyn_obj OBJECT
   src/CableDyn_Damping.f90
   src/CableDyn_Viscoelastic.f90
   src/CableDyn_Syrope.f90
+  src/CableDyn_VIV.f90
   src/CableDyn_Dynamic.f90
   src/CableDyn_Model.f90
   src/CableDyn_Modal.f90

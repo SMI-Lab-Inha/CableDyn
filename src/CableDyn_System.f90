@@ -18,6 +18,8 @@ MODULE CableDyn_System
                             CD_Model_Has_Viscoelastic, CD_Get_Model_VE_Dl1, CD_Set_Model_VE_Dl1, &
                             CD_Model_Has_Syrope, CD_Get_Model_Syrope_State, CD_Set_Model_Syrope_State, &
                             CD_Model_Has_Friction, CD_Get_Model_Friction_Anchors, CD_Set_Model_Friction_Anchors, &
+                            CD_Model_Has_VIV, CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, &
+                            CD_Latch_Model_VIV_Window, CD_Get_Model_VIV_Lift, &
                             CD_Get_Model_EndNodeMassDiag, CD_Get_Model_EndNodeAddedMass, &
                             CD_Get_Model_EndNodeTangent, CD_Set_Model_EndQuery, CD_Get_Model_EndQuery, &
                             CD_Model_Seabed_Point_Load, &
@@ -69,6 +71,8 @@ MODULE CableDyn_System
   PUBLIC :: CD_System_Line_NDOF
   PUBLIC :: CD_System_Line_NElem
   PUBLIC :: CD_System_Line_Has_Viscoelastic
+  PUBLIC :: CD_System_Line_VIV_MirrorSize, CD_Get_System_Line_VIV_State, CD_Set_System_Line_VIV_State
+  PUBLIC :: CD_Get_System_Line_VIV_Lift
   PUBLIC :: CD_Get_System_Line_VE_Dl1
   PUBLIC :: CD_Set_System_Line_VE_Dl1
   PUBLIC :: CD_System_Line_Has_Syrope
@@ -235,6 +239,9 @@ MODULE CableDyn_System
     ! the sub-stepping diagnostics of every line (CD_SubstepStats): they roll back with the
     ! states, so a restored and re-advanced step counts once
     TYPE(CD_SubstepStats), ALLOCATABLE :: snap_sub(:)
+    ! VIV shedding phase and cross-flow mean squares join the snapshot (phi then the two
+    ! mean squares per node, 3 per node: sized like snap_q, line by line).
+    REAL(wp), ALLOCATABLE :: snap_viv(:)
     LOGICAL :: snap_valid = .FALSE.
   END TYPE CD_SystemType
 
@@ -469,6 +476,7 @@ CONTAINS
     IF (ALLOCATED(system%snap_l0_c)) DEALLOCATE (system%snap_l0_c, system%snap_l0_dot_c)
     IF (ALLOCATED(system%snap_fbase)) DEALLOCATE (system%snap_fbase)
     IF (ALLOCATED(system%snap_ve_dl_1)) DEALLOCATE (system%snap_ve_dl_1)
+    IF (ALLOCATED(system%snap_viv)) DEALLOCATE (system%snap_viv)
     IF (ALLOCATED(system%snap_syrope_slow)) DEALLOCATE (system%snap_syrope_slow, system%snap_syrope_tmax)
     IF (ALLOCATED(system%snap_fr_anchor)) DEALLOCATE (system%snap_fr_anchor)
     IF (ALLOCATED(system%snap_sub)) DEALLOCATE (system%snap_sub)
@@ -848,6 +856,103 @@ CONTAINS
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
   END SUBROUTINE CD_Get_System_Line_State
+
+  PURE INTEGER FUNCTION CD_System_Line_VIV_MirrorSize(system, line_index) RESULT(n)
+    !! Reals of one contained line's VIV checkpoint block (CD_Get_System_Line_VIV_State):
+    !! 3 per node plus the averaging time, or 0 for a line without VIV.
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    n = 0
+    IF (line_index < 1 .OR. line_index > system%n_lines) RETURN
+    IF (.NOT. CD_Model_Has_VIV(system%lines(line_index))) RETURN
+    n = 3*SIZE(system%lines(line_index)%viv_phi) + 1
+  END FUNCTION CD_System_Line_VIV_MirrorSize
+
+  SUBROUTINE CD_Get_System_Line_VIV_State(system, line_index, buf, ErrStat, ErrMsg)
+    !! One contained line's committed VIV state as a flat checkpoint block: the shedding
+    !! phases (n_nodes), the cross-flow velocity and acceleration mean squares interleaved
+    !! per node (2 n_nodes), then the averaging time.
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    REAL(wp), INTENT(OUT) :: buf(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: nn, es
+    CHARACTER(160) :: em
+    REAL(wp), ALLOCATABLE :: phi(:), ms(:, :)
+
+    buf = CD_ZERO
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    IF (SIZE(buf) /= CD_System_Line_VIV_MirrorSize(system, line_index) .OR. SIZE(buf) == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'line VIV state block has the wrong size')
+      RETURN
+    END IF
+    nn = (SIZE(buf) - 1)/3
+    ALLOCATE (phi(nn), ms(2, nn))
+    CALL CD_Get_Model_VIV_State(system%lines(line_index), phi, ms, buf(3*nn + 1), es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      ErrStat = CD_SYSTEM_SOLVEFAIL
+      ErrMsg = 'CableDyn_System: line VIV state query failed: '//TRIM(em)
+      RETURN
+    END IF
+    buf(1:nn) = phi
+    buf(nn + 1:3*nn) = RESHAPE(ms, [2*nn])
+    ErrStat = CD_SYSTEM_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_Get_System_Line_VIV_State
+
+  SUBROUTINE CD_Set_System_Line_VIV_State(system, line_index, buf, ErrStat, ErrMsg)
+    !! Overwrite one contained line's VIV state from a checkpoint block (see
+    !! CD_Get_System_Line_VIV_State).
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    INTEGER, INTENT(IN) :: line_index
+    REAL(wp), INTENT(IN) :: buf(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: nn, es
+    CHARACTER(160) :: em
+
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    IF (SIZE(buf) /= CD_System_Line_VIV_MirrorSize(system, line_index) .OR. SIZE(buf) == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'line VIV state block has the wrong size')
+      RETURN
+    END IF
+    nn = (SIZE(buf) - 1)/3
+    CALL CD_Set_Model_VIV_State(system%lines(line_index), buf(1:nn), RESHAPE(buf(nn + 1:3*nn), [2, nn]), &
+                                buf(3*nn + 1), es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      ErrStat = CD_SYSTEM_SOLVEFAIL
+      ErrMsg = 'CableDyn_System: line VIV state reload failed: '//TRIM(em)
+      RETURN
+    END IF
+    ErrStat = CD_SYSTEM_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_Set_System_Line_VIV_State
+
+  SUBROUTINE CD_Get_System_Line_VIV_Lift(system, line_index, lift, ErrStat, ErrMsg)
+    !! VIV lift force on every node of one contained line at the committed state (3, n_nodes).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    REAL(wp), INTENT(OUT) :: lift(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(160) :: em
+
+    lift = CD_ZERO
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    CALL CD_Get_Model_VIV_Lift(system%lines(line_index), lift, es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      ErrStat = CD_SYSTEM_SOLVEFAIL
+      ErrMsg = 'CableDyn_System: line VIV lift query failed: '//TRIM(em)
+      RETURN
+    END IF
+    ErrStat = CD_SYSTEM_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_Get_System_Line_VIV_Lift
 
   PURE LOGICAL FUNCTION CD_System_Line_Has_Viscoelastic(system, line_index) RESULT(has)
     !! True if the given contained line carries series-Kelvin viscoelastic state -- the coupled
@@ -1270,7 +1375,7 @@ CONTAINS
     LOGICAL :: conv2, stall2
     CHARACTER(1024) :: em
     REAL(wp), ALLOCATABLE :: q0(:), v0(:), a0(:), qm(:), vm(:), am(:), qs(:), vs(:), as(:)
-    REAL(wp), ALLOCATABLE :: dl1s(:), slows(:), tmaxs(:), frs(:, :), hmaxs(:), l0cs(:), l0dcs(:)
+    REAL(wp), ALLOCATABLE :: dl1s(:), slows(:), tmaxs(:), frs(:, :), hmaxs(:), l0cs(:), l0dcs(:), vivs(:)
     TYPE(CD_SubstepStats), ALLOCATABLE :: subs(:)
 
     converged = .FALSE.
@@ -1290,6 +1395,12 @@ CONTAINS
       RETURN
     END IF
 
+    ! MoorDyn's VIV averaging window counts nominal steps: latch it before any subdivision
+    IF (depth == 0) THEN
+      DO i = 1, system%n_lines
+        CALL CD_Latch_Model_VIV_Window(system%lines(i), dt)
+      END DO
+    END IF
     CALL save_line_states(system, ErrStat, ErrMsg)
     IF (ErrStat /= CD_SYSTEM_OK) RETURN
     converged = .TRUE.
@@ -1409,7 +1520,8 @@ CONTAINS
         IF (CD_Model_Has_Friction(system%lines(i))) nfr = nfr + SIZE(system%lines(i)%fr_anchor, 2)
       END DO
       ALLOCATE (qs(ntot), vs(ntot), as(ntot), dl1s(nve), slows(nsy), tmaxs(nsy), frs(2, nfr), &
-                hmaxs(system%n_lines), subs(system%n_lines), l0cs(nel), l0dcs(nel))
+                hmaxs(system%n_lines), subs(system%n_lines), l0cs(nel), l0dcs(nel), vivs(ntot))
+      vivs = CD_ZERO
       lo = 1
       lo_ve = 1
       lo_sy = 1
@@ -1424,6 +1536,7 @@ CONTAINS
         ! states, so the halves of a fallback that does not complete leave no trace
         hmaxs(i) = system%lines(i)%audit_hmax
         subs(i) = system%lines(i)%sub_stats
+        IF (system%lines(i)%has_viv) CALL pack_viv(system%lines(i), vivs(lo:hi))
         lo = hi + 1
         ne = SIZE(system%lines(i)%l0_c)
         l0cs(lo_el:lo_el + ne - 1) = system%lines(i)%l0_c
@@ -1473,6 +1586,7 @@ CONTAINS
           system%lines(i)%a = as(lo:hi)
           system%lines(i)%audit_hmax = hmaxs(i)
           system%lines(i)%sub_stats = subs(i)
+          IF (system%lines(i)%has_viv) CALL unpack_viv(system%lines(i), vivs(lo:hi))
           lo = hi + 1
           ne = SIZE(system%lines(i)%l0_c)
           system%lines(i)%l0_c = l0cs(lo_el:lo_el + ne - 1)
@@ -3146,6 +3260,11 @@ CONTAINS
       ! the stick-slip friction anchors move with every committed step too
       IF (CD_Model_Has_Friction(system%lines(i))) &
         system%lines(i)%fr_anchor_rollback = system%lines(i)%fr_anchor
+      ! the VIV shedding phase and cross-flow mean squares advance every committed step
+      IF (system%lines(i)%has_viv) THEN
+        system%lines(i)%viv_phi_rollback = system%lines(i)%viv_phi
+        system%lines(i)%viv_ms_rollback = system%lines(i)%viv_ms
+      END IF
     END DO
   END SUBROUTINE save_line_states
 
@@ -3171,8 +3290,35 @@ CONTAINS
       END IF
       IF (CD_Model_Has_Friction(system%lines(i))) &
         system%lines(i)%fr_anchor = system%lines(i)%fr_anchor_rollback
+      IF (system%lines(i)%has_viv) THEN
+        system%lines(i)%viv_phi = system%lines(i)%viv_phi_rollback
+        system%lines(i)%viv_ms = system%lines(i)%viv_ms_rollback
+        system%lines(i)%viv_phi_eval = system%lines(i)%viv_phi
+      END IF
     END DO
   END SUBROUTINE restore_line_states
+
+  PURE SUBROUTINE pack_viv(line, buf)
+    !! A line's committed VIV state as 3 reals per node: the phases, then the two mean
+    !! squares per node (the size of the line's q).
+    TYPE(CD_ModelType), INTENT(IN) :: line
+    REAL(wp), INTENT(OUT) :: buf(:)
+    INTEGER :: nn
+    nn = SIZE(line%viv_phi)
+    buf(1:nn) = line%viv_phi
+    buf(nn + 1:3*nn) = RESHAPE(line%viv_ms, [2*nn])
+  END SUBROUTINE pack_viv
+
+  PURE SUBROUTINE unpack_viv(line, buf)
+    !! Inverse of pack_viv; the in-step phase returns to the committed one.
+    TYPE(CD_ModelType), INTENT(INOUT) :: line
+    REAL(wp), INTENT(IN) :: buf(:)
+    INTEGER :: nn
+    nn = SIZE(line%viv_phi)
+    line%viv_phi = buf(1:nn)
+    line%viv_ms = RESHAPE(buf(nn + 1:3*nn), [2, nn])
+    line%viv_phi_eval = line%viv_phi
+  END SUBROUTINE unpack_viv
 
   SUBROUTINE restore_failed_step(system, failed_stat, msg, converged, stalled, n_iter, ErrStat, ErrMsg)
     TYPE(CD_SystemType), INTENT(INOUT) :: system
@@ -3273,7 +3419,7 @@ CONTAINS
         ALLOCATE (system%snap_l0(netot), system%snap_l0_dot(netot), system%snap_fbase(ntot), &
                   system%snap_l0_c(netot), system%snap_l0_dot_c(netot), &
                   system%snap_ve_dl_1(netot), system%snap_syrope_slow(netot), &
-                  system%snap_syrope_tmax(netot), system%snap_fr_anchor(ntot))
+                  system%snap_syrope_tmax(netot), system%snap_fr_anchor(ntot), system%snap_viv(ntot))
       END BLOCK
     END IF
     lo = 1
@@ -3287,6 +3433,7 @@ CONTAINS
       IF (CD_Model_Has_Friction(system%lines(i))) &
         system%snap_fr_anchor(lo:lo + 2*SIZE(system%lines(i)%fr_anchor, 2) - 1) = &
         RESHAPE(system%lines(i)%fr_anchor, [2*SIZE(system%lines(i)%fr_anchor, 2)])
+      IF (system%lines(i)%has_viv) CALL pack_viv(system%lines(i), system%snap_viv(lo:hi))
       lo = hi + 1
     END DO
     IF (.NOT. ALLOCATED(system%snap_sub)) ALLOCATE (system%snap_sub(system%n_lines))
@@ -3356,6 +3503,7 @@ CONTAINS
       IF (CD_Model_Has_Friction(system%lines(i))) &
         system%lines(i)%fr_anchor = RESHAPE(system%snap_fr_anchor(lo:lo + 2*SIZE(system%lines(i)%fr_anchor, 2) - 1), &
                                             [2, SIZE(system%lines(i)%fr_anchor, 2)])
+      IF (system%lines(i)%has_viv) CALL unpack_viv(system%lines(i), system%snap_viv(lo:hi))
       lo = hi + 1
     END DO
     IF (ALLOCATED(system%snap_sub)) THEN

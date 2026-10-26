@@ -57,7 +57,7 @@ MODULE CableDyn_DeckDriver
                             CD_Get_Model_EndForces, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Hydro_Fields, &
                             CD_Recompute_Model_Acceleration, CD_Step_Model, CD_Step_Model_Recovering, CD_MODEL_OK, &
-                            CD_Audit_Model_Step
+                            CD_Audit_Model_Step, CD_Set_Model_VIV
   USE CableDyn_System, ONLY: CD_SystemType, CD_SystemPointType, CD_LineEndpointBinding, &
                              CD_Init_System_From_Points, CD_End_System, CD_System_Line_NDOF, &
                              CD_System_Line_NElem, CD_Get_System_Point_State, CD_Get_System_Line_State, &
@@ -126,6 +126,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_CalcOutput, CD_HFMF_Snapshot, CD_HFMF_Restore, &
                                           CD_HFMF_SetCoupledKinematics, CD_HFMF_GetCoupledKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK
+  USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Component_Wave_Kinematics, &
                             CD_Current_Profile_Velocity, &
                             CD_JONSWAP_COMPONENTS, CD_JONSWAP_Random_Components, &
@@ -362,6 +363,11 @@ MODULE CableDyn_DeckDriver
     REAL(wp), ALLOCATABLE :: syrope_owc_strain(:), syrope_owc_tension(:)
     ! The OWC table file the settings file names, resolved.
     CHARACTER(CD_DECK_PATHLEN) :: syrope_owc_file = ''
+    ! Cross-flow VIV (MoorDyn's optional LINE TYPES columns Cl dF cF, CableDyn_VIV): the lift
+    ! coefficient (0 = off) and the synchronisation half-range dF and centre cF of the
+    ! non-dimensional shedding frequency. A row with Cl only takes MoorDyn's dF = 0.08 and
+    ! cF = 0.18.
+    REAL(wp) :: cl = CD_ZERO, viv_df = CD_VIV_DEFAULT_DF, viv_cf = CD_VIV_DEFAULT_CF
     ! Deck file line of the row (0 when not read from a file), for error messages.
     INTEGER :: deck_line = 0
   END TYPE
@@ -575,6 +581,10 @@ MODULE CableDyn_DeckDriver
     ! element stretched beyond this strain (or non-finite) fails the run; 0 disables.
     REAL(wp) :: max_strain = 0.5_wp
     LOGICAL :: has_max_strain = .FALSE.
+    ! Cross-flow VIV (LINE TYPES Cl > 0): averaging time of the running cross-flow RMS values
+    ! of the synchronisation model (OPTION VIVrmsWindow, s); 0 = MoorDyn's 500 time steps of
+    ! the deck dtM (or of the run's step when the deck has none).
+    REAL(wp) :: viv_rms_window = CD_ZERO
     ! WaveKinMod-1 elevation history reduced once to its real Fourier components.
     ! These feed the same arbitrary-component Airy kernel used by reference-matched
     ! irregular seas; wave_eta_mean carries the zero-frequency waterline offset.
@@ -8389,6 +8399,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ba(:), fluid_velocity(:, :), fluid_acceleration(:, :), drag_waterline(:)
     REAL(wp), ALLOCATABLE :: hydro_diam(:), hydro_cdn(:), hydro_cdt(:), hydro_can(:), hydro_cat(:)
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
     REAL(wp) :: anchor(3), fairlead(3)
     REAL(wp), PARAMETER :: factors(4) = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
     INTEGER :: j, i, e, es
@@ -8425,7 +8436,11 @@ CONTAINS
     END IF
     ALLOCATE (ba(SIZE(l0)), hydro_diam(SIZE(l0)), hydro_cdn(SIZE(l0)), hydro_cdt(SIZE(l0)), &
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
-              ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)))
+              ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
+              viv_df(SIZE(l0)))
+    viv_cl = CD_ZERO
+    viv_cf = CD_ZERO
+    viv_df = CD_ZERO
     ve_ead = CD_ZERO
     ve_bas = CD_ZERO
     ve_bad = CD_ZERO
@@ -8462,8 +8477,14 @@ CONTAINS
         hydro_cdt(e) = types(line_section_type(sections, ln%id, i))%cdt
         hydro_can(e) = types(line_section_type(sections, ln%id, i))%can
         hydro_cat(e) = types(line_section_type(sections, ln%id, i))%cat
+        viv_cl(e) = types(line_section_type(sections, ln%id, i))%cl
+        viv_cf(e) = types(line_section_type(sections, ln%id, i))%viv_cf
+        viv_df(e) = types(line_section_type(sections, ln%id, i))%viv_df
       END DO
     END DO
+    viv_cl = viv_cl(SIZE(viv_cl):1:-1)
+    viv_cf = viv_cf(SIZE(viv_cf):1:-1)
+    viv_df = viv_df(SIZE(viv_df):1:-1)
     ba = ba(SIZE(ba):1:-1)
     ve_ead = ve_ead(SIZE(ve_ead):1:-1)
     ve_bas = ve_bas(SIZE(ve_bas):1:-1)
@@ -8486,6 +8507,9 @@ CONTAINS
           syt = line_section_type(sections, ln%id, i2)
       END DO
       IF (syt > 0) THEN
+        IF (ANY(viv_cl > CD_ZERO)) THEN
+          CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) does not combine with a Syrope line'); RETURN
+        END IF
         CALL init_one_syrope_model(types, syt, ln, lts, secs, anchor, fairlead, l0, opts, &
                                    static_cfg, dynamic_cfg, factors, bathymetry, model, ErrStat, ErrMsg)
         RETURN
@@ -8712,6 +8736,28 @@ CONTAINS
     IF (ErrStat /= CD_MODEL_OK) THEN
       ErrMsg = 'CableDyn_DeckDriver: model init failed: '//TRIM(ErrMsg)
       IF (ErrStat /= CD_DECKDRV_BADINPUT) ErrStat = CD_DECKDRV_SOLVEFAIL
+      RETURN
+    END IF
+    ! Cross-flow VIV on the Cl > 0 sections (CableDyn_VIV), installed on the initialised line
+    ! (the static equilibrium carries no lift, as MoorDyn's initial-condition generation), and
+    ! the initial acceleration recomputed with the t = 0 lift.
+    IF (ANY(viv_cl > CD_ZERO)) THEN
+      BLOCK
+        REAL(wp) :: tw
+        IF (.NOT. model%has_morison_drag) THEN
+          CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) acts with the line''s Morison drag in water: '// &
+                    'declare WtrDpth (or bathymetryFile), a current or waves'); RETURN
+        END IF
+        tw = opts%viv_rms_window
+        IF (.NOT. (tw > CD_ZERO) .AND. opts%has_dtm) tw = REAL(CD_VIV_NM, wp)*opts%dtM
+        CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em)
+        IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
+        IF (es /= CD_MODEL_OK) THEN
+          ErrStat = CD_DECKDRV_BADINPUT
+          ErrMsg = 'CableDyn_DeckDriver: VIV setup failed: '//TRIM(em)
+          RETURN
+        END IF
+      END BLOCK
     END IF
   END SUBROUTINE init_one_model
 
@@ -12536,9 +12582,10 @@ CONTAINS
     INTEGER :: ios, ntok
     ErrStat = 0; ErrMsg = ''
     ntok = count_tokens(line)
-    IF (ntok /= 10 .AND. ntok /= 14) THEN
+    IF (ntok /= 10 .AND. ntok /= 11 .AND. ntok /= 13 .AND. ntok /= 14) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES row needs 10 cols '// &
-                '(Name Diam MassDenInAir EA BA/-zeta EI Cd_n Cd_t Ca_n Ca_t) or 14 cols '// &
+                '(Name Diam MassDenInAir EA BA/-zeta EI Cd_n Cd_t Ca_n Ca_t), 11 or 13 cols (the same '// &
+                'followed by MoorDyn''s VIV columns Cl [dF cF]) or 14 cols '// &
                 '(Name Diam MassDenInAir EA BA/-zeta EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t)'); RETURN
     END IF
     ! EA and BA read as STRINGS: MoorDyn's viscoelastic syntax carries
@@ -12549,6 +12596,24 @@ CONTAINS
         READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%can, t%cdt, t%cat
       ELSE
         READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%cdt, t%can, t%cat
+      END IF
+    ELSE IF (ntok == 11 .OR. ntok == 13) THEN
+      ! MoorDyn v2's optional cross-flow VIV columns after the ten standard ones: Cl, or
+      ! Cl dF cF (MoorDyn.f90 line-type parse; dF and cF default to 0.08 and 0.18)
+      IF (stock_cols) THEN
+        IF (ntok == 11) THEN
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%can, t%cdt, t%cat, t%cl
+        ELSE
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%can, t%cdt, t%cat, &
+            t%cl, t%viv_df, t%viv_cf
+        END IF
+      ELSE
+        IF (ntok == 11) THEN
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%cdt, t%can, t%cat, t%cl
+        ELSE
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%cdt, t%can, t%cat, &
+            t%cl, t%viv_df, t%viv_cf
+        END IF
       END IF
     ELSE
       IF (stock_cols) THEN
@@ -12569,9 +12634,40 @@ CONTAINS
     END IF
     CALL parse_stiffness_columns(ea_str, ba_str, t, ErrStat, ErrMsg)
     IF (ErrStat /= 0) RETURN
+    IF (ntok == 11 .OR. ntok == 13) THEN
+      CALL check_viv_columns(t, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) RETURN
+    END IF
     CALL grow_types(types, nt)
     nt = nt + 1; types(nt) = t
   END SUBROUTINE append_type
+
+  SUBROUTINE check_viv_columns(t, ErrStat, ErrMsg)
+    !! The VIV columns of a LINE TYPES row: a finite, non-negative Cl; with Cl > 0 a positive
+    !! shedding frequency band (cF > 0, 0 <= dF < cF) on an EI = 0, non-Syrope line type.
+    TYPE(DeckLineType), INTENT(IN) :: t
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ErrStat = 0; ErrMsg = ''
+    IF (.NOT. (IEEE_IS_FINITE(t%cl) .AND. IEEE_IS_FINITE(t%viv_df) .AND. IEEE_IS_FINITE(t%viv_cf))) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES VIV columns (Cl dF cF) must be finite'); RETURN
+    END IF
+    IF (t%cl < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES VIV lift coefficient Cl must be non-negative (0 = VIV off)'); RETURN
+    END IF
+    IF (.NOT. (t%cl > CD_ZERO)) RETURN
+    IF (.NOT. (t%viv_cf > CD_ZERO .AND. t%viv_df >= CD_ZERO .AND. t%viv_df < t%viv_cf)) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES VIV synchronisation band needs cF > 0 and 0 <= dF < cF'); RETURN
+    END IF
+    IF (t%ei > CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES "'//TRIM(t%name)//'": VIV (Cl > 0) is implemented for EI = 0 '// &
+                'line types only; set EI = 0 or Cl = 0 (VIV of finite-EI cables is not available)'); RETURN
+    END IF
+    IF (t%is_syrope) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES "'//TRIM(t%name)//'": VIV (Cl > 0) does not combine with the '// &
+                'Syrope working-curve model'); RETURN
+    END IF
+  END SUBROUTINE check_viv_columns
 
   SUBROUTINE parse_stiffness_columns(ea_str, ba_str, t, ErrStat, ErrMsg)
     !! MoorDyn's bar-separated stiffness/damping columns (MoorDyn.f90 line-type
@@ -14479,6 +14575,8 @@ CONTAINS
     CASE ('maxstrain', 'max_strain')
       CALL rd(val, opts%max_strain, ErrStat, ErrMsg)
       opts%has_max_strain = ErrStat == 0
+    CASE ('vivrmswindow', 'viv_rms_window')
+      CALL rd(val, opts%viv_rms_window, ErrStat, ErrMsg)
     CASE ('streamorder', 'stream_order')
       CALL rd(val, x1, ErrStat, ErrMsg)
       IF (ErrStat == 0) THEN
@@ -14948,7 +15046,7 @@ CONTAINS
     CASE ('g', 'gravity', 'rhow', 'wtrdnsty', 'water_density', 'wtrdpth', 'water_depth', 'dtm', 'dt', 'dtwave')
       rule = 'positive'
     CASE ('tmax', 'tensile_strain_tolerance', 'tensilestraintolerance', 'ramptime', 'ramp_time', 'tramp', &
-          'maxstrain', 'max_strain', 'rangestart', 'range_start')
+          'maxstrain', 'max_strain', 'rangestart', 'range_start', 'vivrmswindow', 'viv_rms_window')
       rule = 'non-negative'
     CASE ('frictionmu', 'mu', 'frictioncoefficient')
       IF (to_lower(TRIM(val)) == 'none') RETURN
