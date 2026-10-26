@@ -3976,7 +3976,6 @@ CONTAINS
     model%has_viv = .TRUE.
   END SUBROUTINE CD_Set_Model_VIV
 
-
   SUBROUTINE CD_Latch_Model_VIV_Window(model, dt)
     !! Fix MoorDyn's default VIV averaging time, 500 steps of the nominal step dt, unless the
     !! model already has one (a deck VIVrmsWindow or an earlier latch). Callers that subdivide
@@ -3988,9 +3987,6 @@ CONTAINS
     IF (.NOT. (CD_Is_Finite(dt) .AND. dt > CD_ZERO)) RETURN
     model%viv_tw = REAL(CD_VIV_NM, wp)*dt
   END SUBROUTINE CD_Latch_Model_VIV_Window
-
-
-
 
   SUBROUTINE viv_node_coef(model, q, nd, coef, uu)
     !! Lift scale of interior node nd at positions q, sum over its two elements of

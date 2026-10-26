@@ -854,10 +854,6 @@ CONTAINS
     ErrMsg = ''
   END SUBROUTINE CD_Get_System_Line_State
 
-
-
-
-
   PURE LOGICAL FUNCTION CD_System_Line_Has_Viscoelastic(system, line_index) RESULT(has)
     !! True if the given contained line carries series-Kelvin viscoelastic state -- the coupled
     !! checkpoint mirror queries this to size and pack the per-line dl_1 block.
