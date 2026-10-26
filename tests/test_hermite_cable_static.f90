@@ -25,7 +25,8 @@ PROGRAM test_hermite_cable_static
   USE CableDyn_Line, ONLY: CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
-  USE, INTRINSIC :: IEEE_EXCEPTIONS, ONLY: IEEE_USUAL, IEEE_GET_HALTING_MODE, IEEE_SET_HALTING_MODE, IEEE_SET_FLAG
+  USE, INTRINSIC :: IEEE_EXCEPTIONS, ONLY: IEEE_USUAL, IEEE_GET_HALTING_MODE, IEEE_SET_HALTING_MODE, IEEE_SET_FLAG, &
+                                                                              IEEE_GET_FLAG, IEEE_DIVIDE_BY_ZERO
   IMPLICIT NONE
   LOGICAL :: fp_halt(3)   ! saved IEEE halting modes around deliberately non-finite inputs
 
@@ -323,6 +324,7 @@ CONTAINS
     !! first 8 m) must converge straight, with the axial strain of the chord, C/L - 1.
     INTEGER, PARAMETER :: NA = 160, NB = 52, NE = NA + NB, NN = NE + 1
     REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(6*NN), q(6*NN), curv(NN), res, chord(3), s, stretch
+    LOGICAL :: divided
     INTEGER :: fixed(6), i, es, it
     CHARACTER(512) :: em
     l0(1:NA) = 8.0_wp/NA; l0(NA + 1:) = 1.0_wp
@@ -344,6 +346,14 @@ CONTAINS
     CALL require(ABS(stretch - NORM2(chord)/60.0_wp) <= 1.0e-9_wp, 'weightless taut line takes the chord strain')
     CALL require(MAXVAL(ABS(curv)) <= 1.0e-8_wp, 'weightless taut line stays straight')
     CALL check_free_end_preload()
+    ! An element with EA = 0 (a valid input) leaves the series stiffness at zero: the bound is
+    ! skipped, not computed as l0/EA (no division by zero on a held taut seed).
+    EA(NA + 1) = 0.0_wp
+    CALL IEEE_SET_FLAG(IEEE_DIVIDE_BY_ZERO, .FALSE.)
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed, -1.0e4_wp, 0.0_wp, 1, 1, 1.0e-6_wp, &
+                                      1.0_wp, q, curv, res, it, es, em)
+    CALL IEEE_GET_FLAG(IEEE_DIVIDE_BY_ZERO, divided)
+    CALL require(.NOT. divided, 'a held taut line with an EA = 0 element raises no division by zero')
   END SUBROUTINE check_weightless_taut_line
 
   SUBROUTINE check_free_end_preload()

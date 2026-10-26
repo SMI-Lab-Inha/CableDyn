@@ -901,8 +901,9 @@ CONTAINS
     ! reached: a neutrally buoyant 60 m cable at 61 kN stopped at ||R|| 1e-4 N against tol x
     ! 1 N. A slack line (chord <= L) keeps its weight scale. The bound holds only while the
     ! solve holds both end positions, which keeps the chord; with an end free to move (a
-    ! cantilever) the seed's chord implies no tension at equilibrium.
-    IF (.NOT. (ANY(freemask(1:3)) .OR. ANY(freemask(6*(nn - 1) + 1:6*(nn - 1) + 3)))) THEN
+    ! cantilever) the seed's chord implies no tension at equilibrium. An element without axial
+    ! stiffness (EA = 0) leaves the series stiffness, and so the bound, at zero.
+    IF (.NOT. (ANY(freemask(1:3)) .OR. ANY(freemask(6*(nn - 1) + 1:6*(nn - 1) + 3))) .AND. ALL(EA > CD_ZERO)) THEN
       chord = NORM2(q(6*(nn - 1) + 1:6*(nn - 1) + 3) - q(1:3))
       IF (chord > SUM(l0)) fscale = MAX(fscale, (chord/SUM(l0) - CD_ONE)*SUM(l0)/SUM(l0/EA))
     END IF
