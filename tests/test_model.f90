@@ -25,7 +25,7 @@ PROGRAM test_model
                             CD_Update_Model_Hydro_Fields, &
                             CD_Update_Model_External_Loads, CD_Update_Model_CoupledMotion, &
                             CD_Recompute_Model_Acceleration, &
-                            CD_Copy_Model, &
+                            CD_Copy_Model, CD_Set_Model_VIV, &
                             CD_MODEL_OK, CD_MODEL_BADINPUT, CD_MODEL_SOLVEFAIL, CD_MODEL_NOT_INITIALIZED, &
                             CD_Update_Model_SegmentLength, CD_Set_Model_EndQuery
   USE CableDyn_Loads, ONLY: CD_Assemble_Distributed_Load
@@ -53,6 +53,7 @@ PROGRAM test_model
   CALL case_resolved_substeps()
   CALL case_substep_paths()
   CALL case_substep_snap_only()
+  CALL case_substeps_restore_viv_state()
   CALL case_coupled_load_sign()
   CALL case_coupled_motion_update()
   CALL case_external_load_update()
@@ -1717,6 +1718,98 @@ CONTAINS
     CALL CD_End_Model(model, es, em)
     CALL require(es == CD_MODEL_OK, 'damping:end')
   END SUBROUTINE case_damping_model_load
+
+  SUBROUTINE case_substeps_restore_viv_state()
+    !! The rotation-resolved sub-stepping of a line carrying VIV: a 10 m taut line in a 0.5 m/s
+    !! cross current with Cl 0.8 on every element, End B heaved by 1 m over 2 s so that its
+    !! chords turn by more than a degree per 0.02 s step. Solving the first sub-stepped pass
+    !! twice, the second from the restored committed state (TEST-ONLY sub_test_repeat), changes
+    !! nothing bit for bit, the shedding phases and running mean squares included; a failing
+    !! sub-step (TEST-ONLY sub_test_fail) returns the plain step, and the run then equals the
+    !! run with ei0_substeps off bit for bit. Without the VIV state in the sub-step slots the
+    !! sub-steps advanced the phase again from the plain step's phase.
+    INTEGER, PARAMETER :: NE = 10, NN = NE + 1, NSTEP = 60
+    REAL(wp), PARAMETER :: DT = 0.02_wp, AMP = 1.0_wp, PER = 2.0_wp
+    TYPE(CD_ModelType) :: auto_m, rep_m, fb_m, off_m
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, k, n_iter
+    REAL(wp) :: q0(3*NN), v0(3*NN), f_ext(3*NN), pq(3*NN), pv(3*NN), pa(3*NN), fluid(3, NN), wl(NN)
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), cl(NE), dia(NE), cf(NE), df(NE), phi0(NN), w, t
+    LOGICAL :: conv, stalled, all_conv
+    CHARACTER(200) :: em
+
+    DO k = 1, NE
+      conn(:, k) = [k, k + 1]
+    END DO
+    q0 = 0.0_wp
+    DO k = 1, NN
+      q0(3*k - 2) = REAL(k - 1, wp)
+      q0(3*k) = -5.0_wp
+    END DO
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    fixed = [1, 2, 3, 3*NN - 2, 3*NN - 1, 3*NN]
+    l0 = 0.99_wp
+    ea = 1.0e6_wp
+    rho_a = 10.0_wp
+    fluid = 0.0_wp
+    fluid(2, :) = 0.5_wp
+    wl = 0.0_wp
+    cl = 0.8_wp
+    dia = 0.1_wp
+    cf = 0.18_wp
+    df = 0.08_wp
+    CALL CD_Init_Model(auto_m, q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, cfg, es, em, &
+                       fluid_velocity=fluid, drag_waterline_z=wl, drag_rho=1025.0_wp, &
+                       drag_diameter=0.1_wp, drag_cdn=1.2_wp, drag_cdt=0.0_wp)
+    CALL require(es == CD_MODEL_OK, 'substep-viv:init: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    CALL CD_Set_Model_VIV(auto_m, 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em)
+    CALL require(es == CD_MODEL_OK, 'substep-viv:viv: '//TRIM(em))
+    IF (es /= CD_MODEL_OK) RETURN
+    phi0 = auto_m%viv_phi
+    CALL CD_Copy_Model(auto_m, rep_m, es, em)
+    rep_m%sub_test_repeat = .TRUE.
+    CALL CD_Copy_Model(auto_m, fb_m, es, em)
+    fb_m%sub_test_fail = 1
+    CALL CD_Copy_Model(auto_m, off_m, es, em)
+    off_m%cfg%ei0_substeps = CD_EI0_SUBSTEPS_OFF
+    w = 2.0_wp*ACOS(-1.0_wp)/PER
+    all_conv = .TRUE.
+    DO k = 1, NSTEP
+      ! End B heaves on z0 + AMP (1 - cos wt) from rest; End A holds
+      t = REAL(k, wp)*DT
+      pq = q0
+      pv = 0.0_wp
+      pa = 0.0_wp
+      pq(3*NN) = q0(3*NN) + AMP*(1.0_wp - COS(w*t))
+      pv(3*NN) = AMP*w*SIN(w*t)
+      pa(3*NN) = AMP*w*w*COS(w*t)
+      CALL CD_Step_Model(auto_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(rep_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(fb_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      CALL CD_Step_Model(off_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+      all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+    END DO
+    WRITE (*, '(A,I0,A,I0,A,I0,A)') '  sub-steps with VIV: ', auto_m%sub_stats%events, ' of ', &
+      auto_m%sub_stats%calls, ' steps sub-stepped, ', fb_m%sub_stats%fallbacks, ' failing-sub-step fallbacks'
+    CALL require(all_conv, 'substep-viv:converged')
+    CALL require(auto_m%sub_stats%events > 0, 'substep-viv:sub-stepped')
+    CALL require(ANY(auto_m%viv_phi /= phi0) .AND. ANY(auto_m%viv_ms /= 0.0_wp), 'substep-viv:states-move')
+    CALL require(ALL(rep_m%q == auto_m%q) .AND. ALL(rep_m%v == auto_m%v) .AND. ALL(rep_m%a == auto_m%a) .AND. &
+                 ALL(rep_m%viv_phi == auto_m%viv_phi) .AND. ALL(rep_m%viv_ms == auto_m%viv_ms), &
+                 'substep-viv:restore-is-complete')
+    CALL require(fb_m%sub_stats%fallbacks > 0 .AND. ALL(fb_m%q == off_m%q) .AND. ALL(fb_m%v == off_m%v) .AND. &
+                 ALL(fb_m%a == off_m%a) .AND. ALL(fb_m%viv_phi == off_m%viv_phi) .AND. &
+                 ALL(fb_m%viv_ms == off_m%viv_ms), 'substep-viv:fallback-is-the-plain-step')
+    CALL CD_End_Model(auto_m, es, em)
+    CALL CD_End_Model(rep_m, es, em)
+    CALL CD_End_Model(fb_m, es, em)
+    CALL CD_End_Model(off_m, es, em)
+  END SUBROUTINE case_substeps_restore_viv_state
 
   SUBROUTINE case_morison_drag_model_load()
     !! Model-owned Morison current drag contributes to the coupled-load boundary.

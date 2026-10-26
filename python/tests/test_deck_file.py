@@ -4406,7 +4406,7 @@ def test_line_free_object_deck_checks_line_type_rows_without_crashing():
         ("1 2 1 -\n", ""),
         ("1 chain 410.0 41\n", ""),
     )
-    with pytest.raises(DeckFormatError, match="LINE TYPES row needs 10, 14 fields"):
+    with pytest.raises(DeckFormatError, match="LINE TYPES row needs 10, 11, 13, 14 fields"):
         DeckFile.from_text(_with_section(no_lines, "BODIES", *body_rows))
     # a header-only LINES section does not make the deck a line deck (the rule counts rows)
     with pytest.raises(DeckFormatError) as caught:
@@ -4543,3 +4543,78 @@ def test_coupled_route_keeps_deck_current_only_on_pure_ei0_decks(tmp_path, old, 
     path.write_text(source.replace(old, new), encoding="utf-8")
     with pytest.raises(DeckFormatError, match="deck current on the coupled route is kept only"):
         DeckFile.read(path, caller_driven=True)
+
+
+# MoorDyn's optional cross-flow VIV columns: Cl, or Cl dF cF, after the ten standard ones.
+_VIV_ROW = "chain 0.252 390.0 1.674e9 -1.0 0.0 1.37 0.64 1.0 0.0"
+
+
+@pytest.mark.parametrize(
+    "columns, expected",
+    [
+        (" 0.8", (0.8, None, None)),
+        (" 0.8 0.05 0.2", (0.8, 0.05, 0.2)),
+        (" 0.0 0.08 0.18", (0.0, 0.08, 0.18)),
+    ],
+)
+def test_line_type_viv_columns_are_read_and_kept(tmp_path, columns, expected):
+    from cabledyn import DeckModel
+
+    text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + columns))
+    DeckFile.from_text(text)
+    path = tmp_path / "viv.dat"
+    path.write_text(text, encoding="utf-8")
+    line_type = DeckModel.load(path).line_types["chain"]
+    assert (line_type.cl, line_type.df, line_type.cf) == expected
+    saved = tmp_path / "saved.dat"
+    DeckModel.load(path).save(saved)
+    reread = DeckModel.load(saved).line_types["chain"]
+    # a saved Cl row always writes the band; MoorDyn's defaults fill a Cl-only row
+    assert (reread.cl, reread.df, reread.cf) == (
+        expected[0],
+        0.08 if expected[1] is None else expected[1],
+        0.18 if expected[2] is None else expected[2],
+    )
+
+
+@pytest.mark.parametrize(
+    "columns, message",
+    [
+        (" -0.1", "Cl must be non-negative"),
+        (" 0.8 0.2 0.18", "needs cF > 0 and 0 <= dF < cF"),
+        (" 0.8 0.05 0.0", "needs cF > 0 and 0 <= dF < cF"),
+        (" 0.8 0.08", "LINE TYPES row needs 10, 11, 13, 14 fields"),
+    ],
+)
+def test_line_type_viv_columns_follow_the_native_checks(columns, message):
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_edit(_STATIC, (_VIV_ROW, _VIV_ROW + columns)))
+
+
+def test_line_type_viv_needs_an_ei0_line_type():
+    row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
+    text = _edit(_DYNAMIC, (row, row + " 0.8"))
+    with pytest.raises(DeckFormatError, match="implemented for EI = 0 line types only"):
+        DeckFile.from_text(text)
+
+
+def test_viv_is_refused_on_the_coupled_route():
+    text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
+    DeckFile.from_text(text)
+    with pytest.raises(DeckFormatError, match="runs in the standalone driver"):
+        DeckFile.from_text(text, caller_driven=True)
+
+
+def test_viv_needs_water_on_an_ei0_line():
+    text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"), ("50.0 WtrDpth\n", ""))
+    with pytest.raises(DeckFormatError, match="acts with the line's Morison drag in water"):
+        DeckFile.from_text(text)
+    # without the lift the same dry deck stays valid
+    DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "")))
+
+
+def test_viv_rms_window_option_is_non_negative():
+    base = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
+    DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n0.25 VIVrmsWindow\n")))
+    with pytest.raises(DeckFormatError, match="VIVrmsWindow"):
+        DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n-1.0 VIVrmsWindow\n")))

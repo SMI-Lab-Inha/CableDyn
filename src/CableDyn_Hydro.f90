@@ -53,6 +53,7 @@ MODULE CableDyn_Hydro
   PUBLIC :: CD_Added_Mass_Element
   PUBLIC :: CD_Added_Mass_Element_Matrix
   PUBLIC :: CD_Added_Mass_Element_Force
+  PUBLIC :: CD_Submerged_Fraction
 
   INTEGER, PARAMETER :: CD_HYDRO_OK = 0
   INTEGER, PARAMETER :: CD_HYDRO_BADINPUT = 1
@@ -2529,6 +2530,14 @@ CONTAINS
       END DO
     END DO
   END SUBROUTINE scatter_mass_block
+
+  SUBROUTINE CD_Submerged_Fraction(za, zb, fraction)
+    !! Wetted fraction of a straight element whose end heights above the local waterline
+    !! are za and zb: the convention every element load of this module uses.
+    REAL(wp), INTENT(IN) :: za, zb
+    REAL(wp), INTENT(OUT) :: fraction
+    CALL submerged_fraction_only(za, zb, fraction)
+  END SUBROUTINE CD_Submerged_Fraction
 
   SUBROUTINE submerged_fraction_only(za, zb, fraction)
     REAL(wp), INTENT(IN) :: za, zb

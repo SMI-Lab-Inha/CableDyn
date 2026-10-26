@@ -1016,7 +1016,8 @@ native reader's rules.
      - ``LINE TYPES`` row ``NAME``; fields ``name``, ``diam``, ``mass``, ``ea``, ``ba``,
        ``ei`` followed by ``cdn``, ``cdt``, ``can``, ``cat`` (CableDyn columns), ``cd``,
        ``ca``, ``cdax``, ``caax`` (MoorDyn-style columns), or ``gas``, ``gj``, ``irt``,
-       ``irn``, ``cdn``, ``cdt``, ``can``, ``cat`` (14-column rows).
+       ``irn``, ``cdn``, ``cdt``, ``can``, ``cat`` (14-column rows); an 11- or 13-column row
+       adds ``cl`` or ``cl``, ``df``, ``cf`` (VIV).
    * - ``section.LINE.OCCURRENCE.FIELD``
      - The ``OCCURRENCE``-th section (1-based, End A to End B) of line ``LINE``; fields
        ``lineid``, ``linetype``, ``length``, ``numsegs``. A 7-column ``LINES`` row counts as a

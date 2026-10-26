@@ -113,9 +113,11 @@ Line and constitutive capability
      - natural frequencies and mode shapes of each line about its static equilibrium (all
        ``EI = 0`` lines, or all finite-EI lines on the Hermite route; flat seabed); a deck with
        torsion is rejected
-   * - VIV (``compVIV``)
-     - Not implemented
-     - use another validated model; CableDyn rejects the request
+   * - Cross-flow VIV (LINE TYPES ``Cl``, ``dF``, ``cF``)
+     - Standalone only
+     - MoorDyn v2's synchronisation model on ``EI = 0`` lines (:ref:`theory-viv`); in-line VIV
+       and finite-EI cables are not provided; the coupled OpenFAST and FAST.Farm routes and
+       mixed ``EI = 0`` / finite-EI decks refuse ``Cl > 0`` by name
 
 Loads and environment
 ---------------------

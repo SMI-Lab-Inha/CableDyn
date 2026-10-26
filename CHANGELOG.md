@@ -10,6 +10,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Cross-flow vortex-induced vibration of `EI = 0` lines in the standalone driver: MoorDyn v2's
+  LINE TYPES columns `Cl` or `Cl dF cF` switch on the synchronisation model of Thorsen et al.,
+  with the same phase start and running-RMS window (`VIVrmsWindow`, default 500 steps of
+  `dtM`). On a taut 100 m line in a uniform current it follows MoorDyn-F's lock-in amplitude
+  and frequency to two to three digits through mode-1 and mode-3 lock-in, at any `dtM` from
+  5e-4 to 1e-2 s. The Python deck tools read and keep the columns. The coupled and mixed
+  routes refuse `Cl > 0` by name.
 - Bend stiffeners (`STIFFENERS` table): a tapered polyurethane sleeve over an end of a finite-EI
   line, given as conical segments from the root outward (outer diameters, bore, modulus,
   density). Each element it covers takes the compliance average of the cable-plus-sleeve

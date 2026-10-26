@@ -227,6 +227,8 @@ _OPTION_ALIASES = {
     "tramp": "ramp_time",
     "maxstrain": "max_strain",
     "max_strain": "max_strain",
+    "vivrmswindow": "viv_rms_window",
+    "viv_rms_window": "viv_rms_window",
     "rangestart": "range_start",
     "range_start": "range_start",
     "waveseed": "wave_seed",
@@ -1124,6 +1126,7 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "ramp_time",
         "max_strain",
         "range_start",
+        "viv_rms_window",
     }:
         if key == "friction" and value.lower() == "none":
             return None
@@ -1153,6 +1156,7 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "ramp_time",
         "max_strain",
         "range_start",
+        "viv_rms_window",
     } or raw in {"dtic", "tmaxic", "cdscaleic", "threshic", "writelog", "dtout", "dtwave"}:
         try:
             numeric = _native_float(value)
@@ -2582,7 +2586,7 @@ class DeckFile:
             raise DeckFormatError(
                 f"{self._label}: standalone OPTION frictionMu requires dtM and TMax"
             )
-        allowed_widths = {"LINE TYPES": {10, 14}, "POINTS": {5, 9}, "LINES": {3, 4, 7}}
+        allowed_widths = {"LINE TYPES": {10, 11, 13, 14}, "POINTS": {5, 9}, "LINES": {3, 4, 7}}
         # Every row present is checked, also in a line-free deck of bodies and rods: the
         # native reader parses each table row whether or not a line uses it.
         for name in sorted(allowed_widths):
@@ -2607,6 +2611,10 @@ class DeckFile:
         line_type_scales: dict[str, tuple[float, float]] = {}  # name -> (BA, max Cd/Ca)
         line_type_meta: dict[str, tuple[float, float, float, float]] = {}
         line_type_gj: dict[str, float] = {}  # name -> explicit GJ of a 14-column row, else 0
+        # Cl > 0 on any LINE TYPES row (native CD_Init_Deck_Aggregate), and on an EI = 0 row
+        # (native init_one_model, which needs the line's Morison drag in water)
+        has_viv = False
+        has_viv_ei0 = False
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
@@ -2658,11 +2666,12 @@ class DeckFile:
                     f"{self._at(row)}: Syrope BA_s and BA_d must be non-negative "
                     "with a positive sum"
                 )
-            # Native append_type: drag and added-mass coefficients (the last four
-            # columns in either column order) must be non-negative.
+            # Native append_type: drag and added-mass coefficients (columns 7-10, the last
+            # four of a 14-column row, in either column order) must be non-negative.
+            hydro_start = len(row.tokens) - 4 if len(row.tokens) == 14 else 6
             hydro = [
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
-                for index in range(len(row.tokens) - 4, len(row.tokens))
+                for index in range(hydro_start, hydro_start + 4)
             ]
             if any(value < 0.0 for value in hydro):
                 raise DeckFormatError(
@@ -2670,6 +2679,35 @@ class DeckFile:
                     "(Cd_n Cd_t Ca_n Ca_t) must be non-negative"
                 )
             ei = numeric(row.tokens[5], row, "EI")
+            if len(row.tokens) in (11, 13):
+                # Native check_viv_columns: MoorDyn's cross-flow VIV columns Cl [dF cF]
+                cl = numeric(row.tokens[10], row, "Cl")
+                d_f, c_f = (
+                    (numeric(row.tokens[11], row, "dF"), numeric(row.tokens[12], row, "cF"))
+                    if len(row.tokens) == 13
+                    else (0.08, 0.18)
+                )
+                if cl < 0.0:
+                    raise DeckFormatError(
+                        f"{self._at(row)}: LINE TYPES VIV lift coefficient Cl must be "
+                        "non-negative (0 = VIV off)"
+                    )
+                if cl > 0.0 and not (c_f > 0.0 and 0.0 <= d_f < c_f):
+                    raise DeckFormatError(
+                        f"{self._at(row)}: LINE TYPES VIV synchronisation band needs cF > 0 "
+                        "and 0 <= dF < cF"
+                    )
+                if cl > 0.0 and ei > 0.0:
+                    raise DeckFormatError(
+                        f"{self._at(row)}: VIV (Cl > 0) is implemented for EI = 0 line types only"
+                    )
+                if cl > 0.0 and is_syrope:
+                    raise DeckFormatError(
+                        f"{self._at(row)}: VIV (Cl > 0) does not combine with the Syrope "
+                        "working-curve model"
+                    )
+                has_viv = has_viv or cl > 0.0
+                has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
             if ei > 0.0 and (is_syrope or len(ea_parts) > 1):
                 model = "Syrope" if is_syrope else "viscoelastic stiffness"
                 raise DeckFormatError(f"{self._at(row)}: {model} is not supported with EI > 0")
@@ -3453,6 +3491,12 @@ class DeckFile:
                 )
             if not line_ids:
                 raise DeckFormatError(f"{self._label}: the coupled route needs at least one line")
+            if has_viv:
+                raise DeckFormatError(
+                    f"{self._label}: VIV (LINE TYPES Cl > 0) runs in the standalone driver of an "
+                    "EI = 0 deck; the coupled OpenFAST and FAST.Farm routes and mixed EI = 0 / "
+                    "finite-EI decks do not carry it yet. Set Cl = 0 for this run"
+                )
         if self.caller_driven:
             # native CD_Init_Deck_Aggregate: nothing on the coupled route evaluates deck
             # waves (the host SeaState supplies them). A deck current is a steady field on a
@@ -3471,6 +3515,24 @@ class DeckFile:
                     f"{self._label}: a deck current on the coupled route is kept only on a "
                     "single-turbine pure EI=0 deck without Rigid6 bodies or rods; remove the "
                     "deck current OPTION (the host SeaState supplies the current)"
+                )
+        if has_viv_ei0 and deck_driver_route:
+            # native init_one_model: the lift acts with the line's Morison drag, which the
+            # deck switches on with water (a depth or bathymetry, a current, or waves)
+            waterkin_option = option_by_key.get("waterkin")
+            waterkin_text = "" if waterkin_option is None else waterkin_option.values[0]
+            has_water = (
+                has_depth
+                or has_bathymetry
+                or has_waves
+                or bool(trains)
+                or (current is not None and current.values[0].lower() != "none")
+                or waterkin_text.lower() not in {"", "0", "none", "seastate"}
+            )
+            if not has_water:
+                raise DeckFormatError(
+                    f"{self._label}: VIV (LINE TYPES Cl > 0) acts with the line's Morison drag "
+                    "in water: declare WtrDpth (or bathymetryFile), a current or waves"
                 )
         if mixed_route and not self.caller_driven:
             n_modes_value = option_by_key.get("n_modes")
@@ -4164,9 +4226,11 @@ class DeckFile:
         fields = _FIELDS["line_type"]
         if len(record.tokens) == 14:
             return (*fields[:6], "gas", "gj", "irt", "irn", "cdn", "cdt", "can", "cat")
+        # MoorDyn's optional cross-flow VIV columns follow the ten standard ones
+        viv = {11: ("cl",), 13: ("cl", "df", "cf")}.get(len(record.tokens), ())
         if self._stock_line_type_columns(record):
-            return (*fields[:6], "cd", "ca", "cdax", "caax")
-        return fields
+            return (*fields[:6], "cd", "ca", "cdax", "caax", *viv)
+        return (*fields, *viv)
 
     def _line_section_records(self, line_id: int) -> list[tuple[DeckRecord, tuple[str, ...], str]]:
         """Return one line's native section sequence in deck (End A to End B) order.

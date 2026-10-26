@@ -413,6 +413,7 @@ add_library(cabledyn_obj OBJECT
   src/CableDyn_Damping.f90
   src/CableDyn_Viscoelastic.f90
   src/CableDyn_Syrope.f90
+  src/CableDyn_VIV.f90
   src/CableDyn_Dynamic.f90
   src/CableDyn_Model.f90
   src/CableDyn_Modal.f90
@@ -1169,6 +1170,11 @@ add_test(NAME flagship_compression_note
          COMMAND test_flagship_compression_note ${CMAKE_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat)
 set_tests_properties(flagship_compression_note PROPERTIES LABELS "fortran;integration;static;contact")
 
+add_executable(test_viv_kernels tests/test_viv_kernels.f90)
+target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
+add_test(NAME viv_kernels COMMAND test_viv_kernels)
+set_tests_properties(viv_kernels PROPERTIES LABELS "fortran;unit;dynamic;viv")
+
 add_executable(test_hfmf_mirror tests/test_hfmf_mirror.f90)
 target_link_libraries(test_hfmf_mirror PRIVATE cabledyn_core)
 add_test(NAME hfmf_mirror COMMAND test_hfmf_mirror WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -1612,6 +1618,21 @@ if(Python3_Interpreter_FOUND)
       ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
     message(STATUS "anchor_uplift_channels: skipped (numpy not importable in ${Python3_EXECUTABLE})")
+  endif()
+
+  # Cross-flow VIV lock-in of a taut line against MoorDyn-F, at a coarse and a zig-zag-resolving
+  # dtM (needs numpy).
+  if(_range_tdp_numpy_rc EQUAL 0)
+    add_test(NAME viv_lockin
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_viv_lockin.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/viv_lockin)
+    set_tests_properties(viv_lockin PROPERTIES
+      LABELS "python;integration;dynamic;viv;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+  else()
+    message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
   # Node channels on a refined finite-EI line name deck nodes: the static profile's DeckNode

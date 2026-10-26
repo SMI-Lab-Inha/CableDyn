@@ -838,8 +838,9 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
      - linearise a pinned-hang-off, uncontrolled variant of the deck; time-domain runs support both
    * - a ``Rigid`` end-connection direction reversed by exactly 180 degrees in one host update
      - drive the platform through intermediate orientations
-   * - VIV (``compVIV``)
-     - use a solver with a separately validated VIV model
+   * - VIV on the coupled or mixed route (``VIV (LINE TYPES Cl > 0) runs in the standalone driver
+       of an EI = 0 deck``)
+     - run the VIV study on a standalone ``EI = 0`` deck, or set ``Cl = 0`` for the coupled run
    * - a host/file fluid combination named as inseparable
      - select host wave/current and file wave/current independently as documented, or place the
        whole field in SeaState

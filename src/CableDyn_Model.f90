@@ -54,7 +54,10 @@ MODULE CableDyn_Model
                             CD_Cable_Buoyancy_Recovery_Load, CD_Cable_Buoyancy_Recovery_Force, &
                             CD_Buoyancy_Recovery_Element_Load, CD_Buoyancy_Recovery_Element_Force, &
                             CD_Cable_Added_Mass, CD_Cable_Added_Mass_Matrix, CD_Cable_Added_Mass_Force, &
-                            CD_Added_Mass_Element, CD_Added_Mass_Element_Matrix, CD_Added_Mass_Element_Force
+                            CD_Added_Mass_Element, CD_Added_Mass_Element_Matrix, CD_Added_Mass_Element_Force, &
+                            CD_Submerged_Fraction
+  USE CableDyn_VIV, ONLY: CD_VIV_Node_Lift, CD_VIV_Crossflow_Motion, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
+                          CD_VIV_Wrap_Phase, CD_VIV_NM, CD_VIV_TWO_PI
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Clear_GenAlpha_Workspace, &
                               CD_Cable_Initial_Acceleration, CD_Cable_Gen_Alpha_Step, CD_DYN_OK, CD_DYN_ALLOCFAIL, &
                               CD_EI0_SUBSTEPS_AUTO, CD_EI0_SUBSTEPS_OFF
@@ -91,6 +94,8 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Set_Model_Friction_Axial
   PUBLIC :: CD_Get_Model_Syrope_State
   PUBLIC :: CD_Set_Model_Syrope_State
+  PUBLIC :: CD_Set_Model_VIV
+  PUBLIC :: CD_Latch_Model_VIV_Window
   PUBLIC :: CD_Get_Model_Tension
   PUBLIC :: CD_Get_Model_EndForces
   PUBLIC :: CD_Get_Model_EndNodeMassDiag
@@ -144,7 +149,7 @@ MODULE CableDyn_Model
   ! slots. commit_state_copy holds the one list of that state.
   TYPE :: CD_ModelCommitSlot
     REAL(wp), ALLOCATABLE :: q(:), v(:), a(:), ve_dl_1(:), syrope_slow(:), syrope_tmax(:)
-    REAL(wp), ALLOCATABLE :: fr_anchor(:, :), l0_c(:), l0_dot_c(:)
+    REAL(wp), ALLOCATABLE :: fr_anchor(:, :), l0_c(:), l0_dot_c(:), viv_phi(:), viv_ms(:, :)
   END TYPE CD_ModelCommitSlot
 
   ! Diagnostics of the rotation- and snap-resolved sub-stepping (CD_Step_Model): calls counts
@@ -369,6 +374,29 @@ MODULE CableDyn_Model
     REAL(wp), ALLOCATABLE :: added_mass_diameter_elem(:)
     REAL(wp), ALLOCATABLE :: added_mass_can_elem(:)
     REAL(wp), ALLOCATABLE :: added_mass_cat_elem(:)
+    ! Cross-flow vortex-induced vibration (CableDyn_VIV; MoorDyn LINE TYPES Cl dF cF),
+    ! installed by CD_Set_Model_VIV after initialisation. Per element: the lift coefficient
+    ! viv_cl (0 = no lift on that element) and diameter viv_d; viv_rho the water density.
+    ! Per node: viv_node marks an interior free node next to a Cl > 0 element, with the
+    ! synchronisation centre/range viv_cf/viv_df and diameter viv_dn (averaged over the
+    ! node's Cl > 0 elements, weighted by unstretched length). The STATE is the shedding
+    ! phase viv_phi and the running mean squares of the cross-flow velocity and
+    ! acceleration viv_ms(1:2, node), with their system-rollback and step-recovery twins.
+    ! viv_tw is the averaging time of the mean squares [s]; 0 until CD_Latch_Model_VIV_Window
+    ! (or the first step) sets MoorDyn's 500 steps. viv_phi_eval is the phase the lift
+    ! contributor uses: the committed phase, except inside CD_Step_Model, where it is the
+    ! explicit generalised-alpha force-level phase. viv_rate (phase rate at the step start)
+    ! and viv_ms_next (mean squares updated with the step-start sample) are step scratch.
+    LOGICAL :: has_viv = .FALSE.
+    REAL(wp) :: viv_rho = CD_ZERO
+    REAL(wp) :: viv_tw = CD_ZERO
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_d(:)
+    LOGICAL, ALLOCATABLE :: viv_node(:)
+    REAL(wp), ALLOCATABLE :: viv_cf(:), viv_df(:), viv_dn(:)
+    REAL(wp), ALLOCATABLE :: viv_phi(:), viv_ms(:, :)
+    REAL(wp), ALLOCATABLE :: viv_phi_rollback(:), viv_ms_rollback(:, :)
+    REAL(wp), ALLOCATABLE :: recovery_viv_phi(:), recovery_viv_ms(:, :)
+    REAL(wp), ALLOCATABLE :: viv_phi_eval(:), viv_rate(:), viv_ms_next(:, :), viv_phi_next(:)
     TYPE(GenAlphaConfig) :: cfg
     ! Run audit of the committed host steps (CD_Audit_Model_Step), diagnostics only: never part
     ! of the state, of a copy, or of a result. audit_t holds the segment tensions of the last two
@@ -2213,6 +2241,13 @@ CONTAINS
             IF (istat /= 0) RETURN
           END IF
         END IF
+        IF (model%has_viv) THEN
+          IF (.NOT. sized(s%viv_phi, SIZE(model%viv_phi))) THEN
+            IF (ALLOCATED(s%viv_phi)) DEALLOCATE (s%viv_phi, s%viv_ms)
+            ALLOCATE (s%viv_phi(SIZE(model%viv_phi)), s%viv_ms(2, SIZE(model%viv_phi)), STAT=istat)
+            IF (istat /= 0) RETURN
+          END IF
+        END IF
       END ASSOCIATE
     END DO
     IF (.NOT. sized(model%sub_t0, model%n_elem)) THEN
@@ -2243,11 +2278,11 @@ CONTAINS
   END FUNCTION sub_alloc
 
   SUBROUTINE commit_state_copy(model, to_model, q, v, a, ve_dl_1, syrope_slow, syrope_tmax, fr_anchor, &
-                               l0_c, l0_dot_c)
+                               l0_c, l0_dot_c, viv_phi, viv_ms)
     !! The one list of the state a line step commits: the kinematics, the viscoelastic dl_1, the
-    !! Syrope slow strain and running maximum tension, the friction anchors, and the unstretched
+    !! Syrope slow strain and running maximum tension, the friction anchors, the unstretched
     !! lengths and rates the committed state was reached with (l0_c, l0_dot_c, active line
-    !! control). to_model =
+    !! control), and the VIV shedding phases and running mean squares. to_model =
     !! .FALSE. saves the model's state into the arrays given, .TRUE. returns the model to them.
     !! Every snapshot of the committed state in this module goes through here (the sub-step
     !! slots of CD_Step_Model, save_recovery_state and restore_recovery_state). A state a step
@@ -2260,7 +2295,7 @@ CONTAINS
     LOGICAL, INTENT(IN) :: to_model
     REAL(wp), INTENT(INOUT) :: q(:), v(:), a(:)
     REAL(wp), INTENT(INOUT), OPTIONAL :: ve_dl_1(:), syrope_slow(:), syrope_tmax(:), fr_anchor(:, :)
-    REAL(wp), INTENT(INOUT), OPTIONAL :: l0_c(:), l0_dot_c(:)
+    REAL(wp), INTENT(INOUT), OPTIONAL :: l0_c(:), l0_dot_c(:), viv_phi(:), viv_ms(:, :)
     IF (to_model) THEN
       model%q = q
       model%v = v
@@ -2274,6 +2309,11 @@ CONTAINS
       IF (PRESENT(l0_c) .AND. PRESENT(l0_dot_c)) THEN
         model%l0_c = l0_c
         model%l0_dot_c = l0_dot_c
+      END IF
+      IF (model%has_viv .AND. PRESENT(viv_phi) .AND. PRESENT(viv_ms)) THEN
+        model%viv_phi = viv_phi
+        model%viv_ms = viv_ms
+        model%viv_phi_eval = viv_phi
       END IF
     ELSE
       q = model%q
@@ -2289,6 +2329,10 @@ CONTAINS
         l0_c = model%l0_c
         l0_dot_c = model%l0_dot_c
       END IF
+      IF (model%has_viv .AND. PRESENT(viv_phi) .AND. PRESENT(viv_ms)) THEN
+        viv_phi = model%viv_phi
+        viv_ms = model%viv_ms
+      END IF
     END IF
   END SUBROUTINE commit_state_copy
 
@@ -2299,7 +2343,8 @@ CONTAINS
     CALL commit_state_copy(model, .FALSE., model%sub_slot(slot)%q, model%sub_slot(slot)%v, model%sub_slot(slot)%a, &
                            model%sub_slot(slot)%ve_dl_1, model%sub_slot(slot)%syrope_slow, &
                            model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor, &
-                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c)
+                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c, &
+                           model%sub_slot(slot)%viv_phi, model%sub_slot(slot)%viv_ms)
   END SUBROUTINE sub_store
 
   SUBROUTINE sub_load(model, slot)
@@ -2309,7 +2354,8 @@ CONTAINS
     CALL commit_state_copy(model, .TRUE., model%sub_slot(slot)%q, model%sub_slot(slot)%v, model%sub_slot(slot)%a, &
                            model%sub_slot(slot)%ve_dl_1, model%sub_slot(slot)%syrope_slow, &
                            model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor, &
-                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c)
+                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c, &
+                           model%sub_slot(slot)%viv_phi, model%sub_slot(slot)%viv_ms)
   END SUBROUTINE sub_load
 
   SUBROUTINE sub_lengths_target(model)
@@ -2584,7 +2630,7 @@ CONTAINS
 
     has_load = model%has_seabed .OR. model%has_seabed_damping .OR. model%has_seabed_friction .OR. &
                model%has_damping .OR. model%has_viscoelastic .OR. model%has_syrope .OR. model%has_morison_drag .OR. &
-               model%has_froude_krylov .OR. model%has_buoyancy_recovery
+               model%has_froude_krylov .OR. model%has_buoyancy_recovery .OR. model%has_viv
     ! Force-blended generalised alpha: the load contributors at the committed state (q_n, v_n)
     ! carry the alpha_f share of the residual. They are evaluated here, in the instantaneous
     ! limit (ve_dt = 0), so the viscoelastic and Syrope elements give their committed force,
@@ -2622,6 +2668,22 @@ CONTAINS
     CALL step_start_load(ErrStat, ErrMsg)
     IF (force_lengths) CALL leave_committed_lengths(model, aside)
     IF (ErrStat /= CD_MODEL_OK) RETURN
+    ! VIV: phase rate and mean squares at the step-start state (after the committed-state
+    ! load above, which takes the committed phase), and the explicit phase for the in-step
+    ! lift (see viv_step_begin). Nothing is
+    ! committed until the step succeeds; viv_phi_eval returns to the committed phase on
+    ! every exit, as ve_dt below.
+    IF (model%has_viv) THEN
+      IF (.NOT. (CD_Is_Finite(dt) .AND. dt > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'dt must be finite and positive')
+        RETURN
+      END IF
+      CALL viv_step_begin(model, dt, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_MODEL_OK) THEN
+        model%viv_phi_eval = model%viv_phi
+        RETURN
+      END IF
+    END IF
     ! arm the viscoelastic contributors with the step size: in-step load
     ! evaluations use the backward-Euler-eliminated dl_1(q, v); it is reset to
     ! the instantaneous limit (0) on EVERY exit below so committed-state queries
@@ -2737,6 +2799,7 @@ CONTAINS
     IF (ALLOCATED(l0_dot_new)) model%l0_dot = l0_dot_new
     IF (ALLOCATED(f_ext_new)) model%f_ext = f_ext_new
     model%ve_dt = CD_ZERO
+    IF (model%has_viv) model%viv_phi_eval = model%viv_phi
     CALL CD_Profile_Count_Line_Step(n_iter)
     IF (es /= CD_DYN_OK) THEN
       ErrStat = model_status_from_dyn(es)
@@ -2806,6 +2869,14 @@ CONTAINS
         RETURN
       END IF
     END IF
+    ! VIV pass 1: the end-of-step phase (Heun) into viv_phi_next; committed below.
+    IF (model%has_viv) THEN
+      CALL viv_step_end(model, dt, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_MODEL_OK) THEN
+        converged = .FALSE.
+        RETURN
+      END IF
+    END IF
     IF (model%has_viscoelastic) THEN
       ! Pass 2 (mutate): commit dl_1 from the SAME lagged coefficients the in-step
       ! loads used (mode 3 reads the still-committed dl_1). Validated above, so no
@@ -2858,6 +2929,13 @@ CONTAINS
           IF (tmean > model%syrope_tmax(e2)) model%syrope_tmax(e2) = tmean
         END DO
       END BLOCK
+    END IF
+    IF (model%has_viv) THEN
+      ! VIV pass 2 (mutate): the phase and the mean squares updated with the step-start
+      ! sample (the next step starts by adding its own sample, the end state of this one)
+      model%viv_phi = model%viv_phi_next
+      model%viv_ms = model%viv_ms_next
+      model%viv_phi_eval = model%viv_phi
     END IF
     model%q = model%q_step
     model%v = model%v_step
@@ -3049,6 +3127,8 @@ CONTAINS
       RETURN
     END IF
 
+    ! MoorDyn's VIV averaging window counts NOMINAL steps: latch it before any subdivision
+    IF (model%has_viv) CALL CD_Latch_Model_VIV_Window(model, dt)
     CALL save_recovery_state(model)
     hmax0 = model%audit_hmax
     stats0 = model%sub_stats
@@ -3272,7 +3352,8 @@ CONTAINS
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     CALL commit_state_copy(model, .FALSE., model%recovery_q0, model%recovery_v0, model%recovery_a0, &
                            model%recovery_ve_dl_1, model%recovery_syrope_slow, model%recovery_syrope_tmax, &
-                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c)
+                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c, &
+                           model%recovery_viv_phi, model%recovery_viv_ms)
   END SUBROUTINE save_recovery_state
 
   SUBROUTINE restore_recovery_state(model)
@@ -3280,7 +3361,8 @@ CONTAINS
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     CALL commit_state_copy(model, .TRUE., model%recovery_q0, model%recovery_v0, model%recovery_a0, &
                            model%recovery_ve_dl_1, model%recovery_syrope_slow, model%recovery_syrope_tmax, &
-                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c)
+                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c, &
+                           model%recovery_viv_phi, model%recovery_viv_ms)
     model%ve_dt = CD_ZERO
   END SUBROUTINE restore_recovery_state
 
@@ -3774,6 +3856,282 @@ CONTAINS
     model%recovery_syrope_slow = slow
     model%recovery_syrope_tmax = tmax
   END SUBROUTINE CD_Set_Model_Syrope_State
+
+  SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg)
+    !! Install the cross-flow VIV model (CableDyn_VIV) on an initialised line. Per element:
+    !! the lift coefficient cl (0 = no lift on that element), hydrodynamic diameter, and the
+    !! synchronisation centre cf and half-range df of the non-dimensional shedding frequency;
+    !! rho is the water density. t_window is the averaging time of the running cross-flow mean
+    !! squares [s]; 0 selects MoorDyn's 500 time steps, latched at the first step. Every
+    !! interior free node next to a cl > 0 element carries a lift and a shedding phase; the
+    !! phases start spread over [0, 2 pi) along the line (MoorDyn-C), the mean squares at 0.
+    !! An all-zero cl leaves the model without VIV. The mesh must be the single chain the
+    !! line builder makes (element e joins nodes e and e+1). The caller recomputes the
+    !! acceleration if the lift should enter the initial state (CD_Recompute_Model_Acceleration).
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: rho, cl(:), diameter(:), cf(:), df(:), t_window
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: n_nodes, n_elem, e, nd, istat, k
+    REAL(wp) :: wsum
+
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_MODEL_NOT_INITIALIZED
+      ErrMsg = 'CableDyn_Model: model is not initialized'
+      RETURN
+    END IF
+    n_elem = model%n_elem
+    n_nodes = model%n_dof/3
+    IF (SIZE(cl) /= n_elem .OR. SIZE(diameter) /= n_elem .OR. SIZE(cf) /= n_elem .OR. SIZE(df) /= n_elem) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV cl, diameter, cf and df must each have shape (n_elem)')
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(cl) .AND. CD_All_Finite(diameter) .AND. CD_All_Finite(cf) .AND. &
+               CD_All_Finite(df))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV coefficients must be finite')
+      RETURN
+    END IF
+    IF (ANY(cl < CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV lift coefficient Cl must be non-negative')
+      RETURN
+    END IF
+    IF (.NOT. (CD_Is_Finite(t_window) .AND. t_window >= CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV averaging time must be finite and non-negative')
+      RETURN
+    END IF
+    CALL clear_viv(model)
+    IF (.NOT. ANY(cl > CD_ZERO)) RETURN
+    IF (.NOT. (CD_Is_Finite(rho) .AND. rho > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV water density must be finite and positive')
+      RETURN
+    END IF
+    DO e = 1, n_elem
+      IF (.NOT. (cl(e) > CD_ZERO)) CYCLE
+      IF (.NOT. (diameter(e) > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV needs a positive diameter on every Cl > 0 element')
+        RETURN
+      END IF
+      IF (.NOT. (cf(e) > CD_ZERO .AND. df(e) >= CD_ZERO .AND. df(e) < cf(e))) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV synchronisation needs cF > 0 and 0 <= dF < cF (a positive '// &
+                  'shedding frequency)')
+        RETURN
+      END IF
+    END DO
+    DO e = 1, n_elem
+      IF (model%elem_conn(1, e) /= e .OR. model%elem_conn(2, e) /= e + 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV needs a single-chain line mesh (element e joining nodes e and e+1)')
+        RETURN
+      END IF
+    END DO
+    ALLOCATE (model%viv_cl(n_elem), model%viv_d(n_elem), model%viv_node(n_nodes), model%viv_cf(n_nodes), &
+              model%viv_df(n_nodes), model%viv_dn(n_nodes), model%viv_phi(n_nodes), model%viv_ms(2, n_nodes), &
+              model%viv_phi_rollback(n_nodes), model%viv_ms_rollback(2, n_nodes), &
+              model%recovery_viv_phi(n_nodes), model%recovery_viv_ms(2, n_nodes), &
+              model%viv_phi_eval(n_nodes), model%viv_rate(n_nodes), model%viv_ms_next(2, n_nodes), &
+              model%viv_phi_next(n_nodes), STAT=istat)
+    IF (istat /= 0) THEN
+      CALL clear_viv(model)
+      CALL alloc_fail(ErrStat, ErrMsg, 'VIV storage allocation failed')
+      RETURN
+    END IF
+    model%viv_rho = rho
+    model%viv_tw = t_window
+    model%viv_cl = MERGE(cl, CD_ZERO, cl > CD_ZERO)
+    model%viv_d = MERGE(diameter, CD_ZERO, cl > CD_ZERO)
+    model%viv_node = .FALSE.
+    model%viv_cf = CD_ZERO
+    model%viv_df = CD_ZERO
+    model%viv_dn = CD_ZERO
+    model%viv_phi = CD_ZERO
+    model%viv_ms = CD_ZERO
+    DO nd = 2, n_nodes - 1
+      IF (.NOT. (cl(nd - 1) > CD_ZERO .OR. cl(nd) > CD_ZERO)) CYCLE
+      IF (ANY(model%fixed_dofs >= 3*nd - 2 .AND. model%fixed_dofs <= 3*nd)) CYCLE
+      model%viv_node(nd) = .TRUE.
+      wsum = CD_ZERO
+      DO k = nd - 1, nd
+        IF (.NOT. (cl(k) > CD_ZERO)) CYCLE
+        wsum = wsum + model%l0(k)
+        model%viv_cf(nd) = model%viv_cf(nd) + model%l0(k)*cf(k)
+        model%viv_df(nd) = model%viv_df(nd) + model%l0(k)*df(k)
+        model%viv_dn(nd) = model%viv_dn(nd) + model%l0(k)*diameter(k)
+      END DO
+      model%viv_cf(nd) = model%viv_cf(nd)/wsum
+      model%viv_df(nd) = model%viv_df(nd)/wsum
+      model%viv_dn(nd) = model%viv_dn(nd)/wsum
+      ! MoorDyn: phi_i = 2 pi i/N at node i = 0..N counted from End A; the model numbers its
+      ! nodes from End B, so node nd is MoorDyn's node n_nodes - nd
+      model%viv_phi(nd) = CD_VIV_TWO_PI*REAL(n_nodes - nd, wp)/REAL(n_elem, wp)
+    END DO
+    model%viv_phi_rollback = model%viv_phi
+    model%viv_ms_rollback = model%viv_ms
+    model%recovery_viv_phi = model%viv_phi
+    model%recovery_viv_ms = model%viv_ms
+    model%viv_phi_eval = model%viv_phi
+    model%viv_rate = CD_ZERO
+    model%viv_ms_next = model%viv_ms
+    model%viv_phi_next = model%viv_phi
+    model%has_viv = .TRUE.
+  END SUBROUTINE CD_Set_Model_VIV
+
+  SUBROUTINE CD_Latch_Model_VIV_Window(model, dt)
+    !! Fix MoorDyn's default VIV averaging time, 500 steps of the nominal step dt, unless the
+    !! model already has one (a deck VIVrmsWindow or an earlier latch). Callers that subdivide
+    !! a step latch with the nominal step before subdividing; otherwise the first step does.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: dt
+    IF (.NOT. model%has_viv) RETURN
+    IF (model%viv_tw > CD_ZERO) RETURN
+    IF (.NOT. (CD_Is_Finite(dt) .AND. dt > CD_ZERO)) RETURN
+    model%viv_tw = REAL(CD_VIV_NM, wp)*dt
+  END SUBROUTINE CD_Latch_Model_VIV_Window
+
+  SUBROUTINE viv_node_coef(model, q, nd, coef, uu)
+    !! Lift scale of interior node nd at positions q, sum over its two elements of
+    !! (1/2 l0_e w_e)(1/2 rho D_e Cl_e) with w_e the wetted fraction under the drag waterline
+    !! (as MoorDyn's 1/4 rho d Cl (F_i l_i + F_i+1 l_i+1)), and the ambient fluid velocity there.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: q(:)
+    INTEGER, INTENT(IN) :: nd
+    REAL(wp), INTENT(OUT) :: coef, uu(3)
+    INTEGER :: e
+    REAL(wp) :: wla, wlb, frac
+    coef = CD_ZERO
+    DO e = nd - 1, nd
+      IF (.NOT. (model%viv_cl(e) > CD_ZERO)) CYCLE
+      wla = CD_ZERO
+      wlb = CD_ZERO
+      IF (ALLOCATED(model%drag_waterline_z)) THEN
+        wla = model%drag_waterline_z(e)
+        wlb = model%drag_waterline_z(e + 1)
+      END IF
+      CALL CD_Submerged_Fraction(q(3*e) - wla, q(3*e + 3) - wlb, frac)
+      coef = coef + 0.25_wp*model%viv_rho*model%viv_d(e)*model%viv_cl(e)*model%l0(e)*frac
+    END DO
+    uu = CD_ZERO
+    IF (ALLOCATED(model%fluid_velocity)) uu = model%fluid_velocity(:, nd)
+  END SUBROUTINE viv_node_coef
+
+  SUBROUTINE viv_step_begin(model, dt, ErrStat, ErrMsg)
+    !! Step-start VIV quantities from the committed state (q_n, v_n, a_n, phi_n): the mean
+    !! squares with the step-start cross-flow sample (viv_ms_next), the phase rate
+    !! (viv_rate), and the explicit phase the in-step lift uses (viv_phi_eval): at t_{n+1},
+    !! phi_n + dt rate_n, under the force blend, whose in-step force is r(q_{n+1}, v_{n+1})
+    !! (the committed-state force F_n keeps phi_n); at the generalised-alpha level,
+    !! phi_n + (1 - alpha_f) dt rate_n, under the configuration blend.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: dt
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: nd, ia
+    REAL(wp) :: w, alpha_f, yd, ydd, un, coef, uu(3)
+    LOGICAL :: ok
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    CALL CD_Latch_Model_VIV_Window(model, dt)
+    w = MIN(CD_ONE, dt/model%viv_tw)
+    alpha_f = model%cfg%rho_inf/(model%cfg%rho_inf + CD_ONE)
+    IF (model%cfg%force_blend) alpha_f = CD_ZERO
+    model%viv_rate = CD_ZERO
+    model%viv_ms_next = model%viv_ms
+    model%viv_phi_eval = model%viv_phi
+    DO nd = 2, model%n_dof/3 - 1
+      IF (.NOT. model%viv_node(nd)) CYCLE
+      CALL viv_node_coef(model, model%q, nd, coef, uu)
+      ia = 3*nd - 2
+      CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), &
+                                   smoothed(model%a, ia), uu, yd, ydd, un, ok)
+      IF (.NOT. ok) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
+        RETURN
+      END IF
+      model%viv_ms_next(1, nd) = CD_VIV_Mean_Square(model%viv_ms(1, nd), yd, w)
+      model%viv_ms_next(2, nd) = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, w)
+      model%viv_rate(nd) = CD_VIV_Phase_Rate(yd, ydd, model%viv_ms_next(1, nd), model%viv_ms_next(2, nd), &
+                                             model%viv_phi(nd), un, model%viv_dn(nd), model%viv_cf(nd), &
+                                             model%viv_df(nd))
+      model%viv_phi_eval(nd) = model%viv_phi(nd) + (CD_ONE - alpha_f)*dt*model%viv_rate(nd)
+    END DO
+  END SUBROUTINE viv_step_begin
+
+  SUBROUTINE viv_step_end(model, dt, ErrStat, ErrMsg)
+    !! End-of-step VIV phase by Heun's rule (the trapezoidal corrector of the explicit Euler
+    !! predictor): phi_n+1 = phi_n + dt/2 (rate_n + rate(state_n+1, phi_n + dt rate_n)), with
+    !! the end-state cross-flow sample added to the mean squares for that rate (not stored:
+    !! the next step adds it itself). Writes viv_phi_next only.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: dt
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: nd, ia
+    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end
+    LOGICAL :: ok
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    w = MIN(CD_ONE, dt/model%viv_tw)
+    model%viv_phi_next = model%viv_phi
+    DO nd = 2, model%n_dof/3 - 1
+      IF (.NOT. model%viv_node(nd)) CYCLE
+      CALL viv_node_coef(model, model%q_step, nd, coef, uu)
+      ia = 3*nd - 2
+      CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
+                                   smoothed(model%v_step, ia), smoothed(model%a_step, ia), uu, yd, ydd, un, ok)
+      IF (.NOT. ok) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
+        RETURN
+      END IF
+      ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, nd), yd, w)
+      ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, nd), ydd, w)
+      rate_end = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(nd) + dt*model%viv_rate(nd), un, &
+                                   model%viv_dn(nd), model%viv_cf(nd), model%viv_df(nd))
+      model%viv_phi_next(nd) = CD_VIV_Wrap_Phase(model%viv_phi(nd) + 0.5_wp*dt*(model%viv_rate(nd) + rate_end))
+    END DO
+    IF (.NOT. CD_All_Finite(model%viv_phi_next)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV phase update produced a non-finite phase')
+    END IF
+  END SUBROUTINE viv_step_end
+
+  PURE FUNCTION smoothed(x, ia) RESULT(xs)
+    !! Node kinematics for the VIV phase and lift: the node value averaged with its two
+    !! neighbours, (x_{i-1} + 2 x_i + x_{i+1})/4, at the node whose x component is ia. Thorsen's
+    !! model follows the cross-flow motion of a continuum. The node's own acceleration weights
+    !! the mesh-scale zig-zag mode (neighbours moving opposite to the node) by omega^2, so at
+    !! steps that resolve that mode it took over the phase, and through the lift the phase
+    !! pumped the mode until the line lost lock-in. The average removes the zig-zag mode
+    !! exactly and keeps a resolved mode of wavenumber k to cos^2(k l0 / 2). The lift takes the
+    !! smoothed velocity as well: through its dependence on the node's own velocity, modulated by
+    !! the phase, the zig-zag mode was pumped even with a smoothed phase.
+    REAL(wp), INTENT(IN) :: x(:)
+    INTEGER, INTENT(IN) :: ia
+    REAL(wp) :: xs(3)
+    xs = 0.25_wp*(x(ia - 3:ia - 1) + 2.0_wp*x(ia:ia + 2) + x(ia + 3:ia + 5))
+  END FUNCTION smoothed
+
+  SUBROUTINE clear_viv(model)
+    !! Release the VIV storage; the model then carries no VIV.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    IF (ALLOCATED(model%viv_cl)) DEALLOCATE (model%viv_cl)
+    IF (ALLOCATED(model%viv_d)) DEALLOCATE (model%viv_d)
+    IF (ALLOCATED(model%viv_node)) DEALLOCATE (model%viv_node)
+    IF (ALLOCATED(model%viv_cf)) DEALLOCATE (model%viv_cf)
+    IF (ALLOCATED(model%viv_df)) DEALLOCATE (model%viv_df)
+    IF (ALLOCATED(model%viv_dn)) DEALLOCATE (model%viv_dn)
+    IF (ALLOCATED(model%viv_phi)) DEALLOCATE (model%viv_phi)
+    IF (ALLOCATED(model%viv_ms)) DEALLOCATE (model%viv_ms)
+    IF (ALLOCATED(model%viv_phi_rollback)) DEALLOCATE (model%viv_phi_rollback)
+    IF (ALLOCATED(model%viv_ms_rollback)) DEALLOCATE (model%viv_ms_rollback)
+    IF (ALLOCATED(model%recovery_viv_phi)) DEALLOCATE (model%recovery_viv_phi)
+    IF (ALLOCATED(model%recovery_viv_ms)) DEALLOCATE (model%recovery_viv_ms)
+    IF (ALLOCATED(model%viv_phi_eval)) DEALLOCATE (model%viv_phi_eval)
+    IF (ALLOCATED(model%viv_rate)) DEALLOCATE (model%viv_rate)
+    IF (ALLOCATED(model%viv_ms_next)) DEALLOCATE (model%viv_ms_next)
+    IF (ALLOCATED(model%viv_phi_next)) DEALLOCATE (model%viv_phi_next)
+    model%has_viv = .FALSE.
+    model%viv_rho = CD_ZERO
+    model%viv_tw = CD_ZERO
+  END SUBROUTINE clear_viv
 
   SUBROUTINE CD_Set_Model_Friction_Axial(model, mu_axial, ErrStat, ErrMsg)
     !! Make the stick-slip seabed friction of a model anisotropic: the model's seabed_mu
@@ -5517,7 +5875,7 @@ CONTAINS
     END IF
     has_load = model%has_seabed .OR. model%has_seabed_damping .OR. model%has_seabed_friction .OR. &
                model%has_damping .OR. model%has_viscoelastic .OR. model%has_syrope .OR. model%has_morison_drag .OR. &
-               model%has_froude_krylov .OR. model%has_buoyancy_recovery
+               model%has_froude_krylov .OR. model%has_buoyancy_recovery .OR. model%has_viv
     nc = SIZE(model%fixed_dofs)
     prescribed_workspace_ready = ALLOCATED(model%a_prescribed_work)
     IF (prescribed_workspace_ready) prescribed_workspace_ready = SIZE(model%a_prescribed_work) >= nc
@@ -6055,6 +6413,7 @@ CONTAINS
     IF (ALLOCATED(model%added_mass_diameter_elem)) DEALLOCATE (model%added_mass_diameter_elem)
     IF (ALLOCATED(model%added_mass_can_elem)) DEALLOCATE (model%added_mass_can_elem)
     IF (ALLOCATED(model%added_mass_cat_elem)) DEALLOCATE (model%added_mass_cat_elem)
+    CALL clear_viv(model)
     model%initialized = .FALSE.
     model%tension_only = .FALSE.
     model%has_seabed = .FALSE.
@@ -6318,6 +6677,41 @@ CONTAINS
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%added_mass_cat_elem, work%added_mass_cat_elem, 'added_mass_cat_elem', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
+    work%has_viv = src%has_viv
+    work%viv_rho = src%viv_rho
+    work%viv_tw = src%viv_tw
+    CALL copy_real1(src%viv_cl, work%viv_cl, 'viv_cl', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_d, work%viv_d, 'viv_d', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_logical1(src%viv_node, work%viv_node, 'viv_node', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_cf, work%viv_cf, 'viv_cf', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_df, work%viv_df, 'viv_df', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_dn, work%viv_dn, 'viv_dn', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_phi, work%viv_phi, 'viv_phi', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real2(src%viv_ms, work%viv_ms, 'viv_ms', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_phi_rollback, work%viv_phi_rollback, 'viv_phi_rollback', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real2(src%viv_ms_rollback, work%viv_ms_rollback, 'viv_ms_rollback', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%recovery_viv_phi, work%recovery_viv_phi, 'recovery_viv_phi', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real2(src%recovery_viv_ms, work%recovery_viv_ms, 'recovery_viv_ms', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_phi_eval, work%viv_phi_eval, 'viv_phi_eval', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_rate, work%viv_rate, 'viv_rate', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real2(src%viv_ms_next, work%viv_ms_next, 'viv_ms_next', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_phi_next, work%viv_phi_next, 'viv_phi_next', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
 
     work%initialized = src%initialized
     ! Commit: release the caller's previous model, then move the fully-built copy in component by
@@ -6453,6 +6847,25 @@ CONTAINS
     CALL MOVE_ALLOC(from%added_mass_diameter_elem, to%added_mass_diameter_elem)
     CALL MOVE_ALLOC(from%added_mass_can_elem, to%added_mass_can_elem)
     CALL MOVE_ALLOC(from%added_mass_cat_elem, to%added_mass_cat_elem)
+    to%has_viv = from%has_viv
+    to%viv_rho = from%viv_rho
+    to%viv_tw = from%viv_tw
+    CALL MOVE_ALLOC(from%viv_cl, to%viv_cl)
+    CALL MOVE_ALLOC(from%viv_d, to%viv_d)
+    CALL MOVE_ALLOC(from%viv_node, to%viv_node)
+    CALL MOVE_ALLOC(from%viv_cf, to%viv_cf)
+    CALL MOVE_ALLOC(from%viv_df, to%viv_df)
+    CALL MOVE_ALLOC(from%viv_dn, to%viv_dn)
+    CALL MOVE_ALLOC(from%viv_phi, to%viv_phi)
+    CALL MOVE_ALLOC(from%viv_ms, to%viv_ms)
+    CALL MOVE_ALLOC(from%viv_phi_rollback, to%viv_phi_rollback)
+    CALL MOVE_ALLOC(from%viv_ms_rollback, to%viv_ms_rollback)
+    CALL MOVE_ALLOC(from%recovery_viv_phi, to%recovery_viv_phi)
+    CALL MOVE_ALLOC(from%recovery_viv_ms, to%recovery_viv_ms)
+    CALL MOVE_ALLOC(from%viv_phi_eval, to%viv_phi_eval)
+    CALL MOVE_ALLOC(from%viv_rate, to%viv_rate)
+    CALL MOVE_ALLOC(from%viv_ms_next, to%viv_ms_next)
+    CALL MOVE_ALLOC(from%viv_phi_next, to%viv_phi_next)
 
     IF (from%has_bathymetry) THEN
       to%bathymetry%nx = from%bathymetry%nx
@@ -7072,6 +7485,31 @@ CONTAINS
         jac_v = jac_v + jv_tmp
       END IF
     END ASSOCIATE
+    IF (model%has_viv) THEN
+      BLOCK
+        INTEGER :: nd, ia
+        REAL(wp) :: fl(3), jv3(3, 3), jp3(3, 3), jn3(3, 3), coef, uu(3)
+        LOGICAL :: ok
+        DO nd = 2, SIZE(q)/3 - 1
+          IF (.NOT. model%viv_node(nd)) CYCLE
+          CALL viv_node_coef(model, q, nd, coef, uu)
+          ia = 3*nd - 2
+          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coef, &
+                                model%viv_phi_eval(nd), fl, ok, jv3, jp3, jn3)
+          IF (.NOT. ok) THEN
+            CALL fail(ErrStat, ErrMsg, 'VIV lift: the neighbours of a node coincide (no line tangent)')
+            RETURN
+          END IF
+          force(ia:ia + 2) = force(ia:ia + 2) + fl
+          ! the lift takes the smoothed velocity (v_{i-1} + 2 v_i + v_{i+1})/4 (smoothed)
+          jac_v(ia:ia + 2, ia:ia + 2) = jac_v(ia:ia + 2, ia:ia + 2) + 0.5_wp*jv3
+          jac_v(ia:ia + 2, ia - 3:ia - 1) = jac_v(ia:ia + 2, ia - 3:ia - 1) + 0.25_wp*jv3
+          jac_v(ia:ia + 2, ia + 3:ia + 5) = jac_v(ia:ia + 2, ia + 3:ia + 5) + 0.25_wp*jv3
+          jac_q(ia:ia + 2, ia - 3:ia - 1) = jac_q(ia:ia + 2, ia - 3:ia - 1) + jp3
+          jac_q(ia:ia + 2, ia + 3:ia + 5) = jac_q(ia:ia + 2, ia + 3:ia + 5) + jn3
+        END DO
+      END BLOCK
+    END IF
   END SUBROUTINE model_contributor_load
 
   SUBROUTINE model_contributor_load_banded(model, q, v, free, kl, ku, force, jac_q_band, jac_v_band, &
@@ -7364,6 +7802,48 @@ CONTAINS
       END IF
     END DO
 
+    IF (model%has_viv) THEN
+      ! cross-flow VIV lift on the interior nodes (CableDyn_VIV), with its velocity Jacobian
+      ! and the position Jacobian through the node tangent (the two neighbours)
+      BLOCK
+        INTEGER :: nd, ia, ra, cb
+        REAL(wp) :: fl(3), jv3(3, 3), jp3(3, 3), jn3(3, 3), coef, uu(3)
+        LOGICAL :: ok
+        DO nd = 2, n/3 - 1
+          IF (.NOT. model%viv_node(nd)) CYCLE
+          CALL viv_node_coef(model, q, nd, coef, uu)
+          ia = 3*nd - 2
+          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coef, &
+                                model%viv_phi_eval(nd), fl, ok, jv3, jp3, jn3)
+          IF (.NOT. ok) THEN
+            CALL fail(ErrStat, ErrMsg, 'VIV lift: the neighbours of a node coincide (no line tangent)')
+            RETURN
+          END IF
+          force(ia:ia + 2) = force(ia:ia + 2) + fl
+          DO cb = 1, 3
+            DO ra = 1, 3
+              ! the lift takes the smoothed velocity (v_{i-1} + 2 v_i + v_{i+1})/4 (smoothed)
+              CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb - 1, &
+                                       0.5_wp*jv3(ra, cb), ErrStat, ErrMsg)
+              IF (ErrStat /= CD_MODEL_OK) RETURN
+              CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb - 4, &
+                                       0.25_wp*jv3(ra, cb), ErrStat, ErrMsg)
+              IF (ErrStat /= CD_MODEL_OK) RETURN
+              CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb + 2, &
+                                       0.25_wp*jv3(ra, cb), ErrStat, ErrMsg)
+              IF (ErrStat /= CD_MODEL_OK) RETURN
+              CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb - 4, &
+                                       jp3(ra, cb), ErrStat, ErrMsg)
+              IF (ErrStat /= CD_MODEL_OK) RETURN
+              CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb + 2, &
+                                       jn3(ra, cb), ErrStat, ErrMsg)
+              IF (ErrStat /= CD_MODEL_OK) RETURN
+            END DO
+          END DO
+        END DO
+      END BLOCK
+    END IF
+
     IF (.NOT. CD_All_Finite(force) .OR. .NOT. CD_All_Finite(jac_q_band) .OR. &
         .NOT. CD_All_Finite(jac_v_band)) THEN
       CALL fail(ErrStat, ErrMsg, 'banded model load returned non-finite force/Jacobian')
@@ -7575,6 +8055,26 @@ CONTAINS
         CALL scatter_element_vector(force, idx, f2)
       END IF
     END DO
+    ! VIV lift acts on interior nodes only, so an end-node recovery carries none of it
+    IF (model%has_viv .AND. .NOT. ends) THEN
+      BLOCK
+        INTEGER :: nd, ia
+        REAL(wp) :: fl(3), coef, uu(3)
+        LOGICAL :: ok
+        DO nd = 2, nn - 1
+          IF (.NOT. model%viv_node(nd)) CYCLE
+          CALL viv_node_coef(model, q, nd, coef, uu)
+          ia = 3*nd - 2
+          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coef, &
+                                model%viv_phi_eval(nd), fl, ok)
+          IF (.NOT. ok) THEN
+            CALL fail(ErrStat, ErrMsg, 'VIV lift: the neighbours of a node coincide (no line tangent)')
+            RETURN
+          END IF
+          force(ia:ia + 2) = force(ia:ia + 2) + fl
+        END DO
+      END BLOCK
+    END IF
     IF (.NOT. CD_All_Finite(force)) CALL fail(ErrStat, ErrMsg, 'model force returned non-finite force')
 
   CONTAINS
