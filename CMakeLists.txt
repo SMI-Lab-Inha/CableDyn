@@ -1174,6 +1174,11 @@ target_link_libraries(test_hfmf_mirror PRIVATE cabledyn_core)
 add_test(NAME hfmf_mirror COMMAND test_hfmf_mirror WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(hfmf_mirror PROPERTIES LABELS "fortran;unit;dynamic;openfast")
 
+add_executable(test_output_formats tests/test_output_formats.f90)
+target_link_libraries(test_output_formats PRIVATE cabledyn_core)
+add_test(NAME output_formats COMMAND test_output_formats)
+set_tests_properties(output_formats PROPERTIES LABELS "fortran;unit;output")
+
 add_executable(test_c_api tests/test_c_api.f90)
 target_link_libraries(test_c_api PRIVATE cabledyn_core)
 add_test(NAME c_api COMMAND test_c_api)

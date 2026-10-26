@@ -19,6 +19,7 @@ PROGRAM cabledyn
   !! exit code <n>" (stop_run); an interrupt or a fatal fault is reported by
   !! CableDyn_FatalReport with the simulated time reached.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO
+  USE CableDyn_Conventions, ONLY: CD_CHANNEL_FMT
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Deck_Query_dtM, &
                                  CD_Classify_Dynamic_Completion, CD_DECKDRV_OK, &
                                  CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, CD_DECK_PATHLEN
@@ -803,7 +804,7 @@ CONTAINS
     DO i = 1, CD_AGG_NumChannels(aggregate)
       CALL CD_AGG_EvalChannel(aggregate, i, value, stat, msg)
       IF (stat /= CD_AGG_OK) RETURN
-      WRITE (unit, '(A,ES15.7)', ADVANCE='NO', IOSTAT=ios) CHAR(9), value
+      WRITE (unit, CD_CHANNEL_FMT, ADVANCE='NO', IOSTAT=ios) CHAR(9), value
       IF (ios /= 0) THEN
         stat = CD_AGG_BADINPUT; msg = 'cannot write mixed output row'; RETURN
       END IF

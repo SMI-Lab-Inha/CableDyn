@@ -70,6 +70,7 @@ MODULE CableDyn
    USE CableDyn_Types
    USE NWTC_Library
    USE CableDyn_Precision, ONLY: wp
+   USE CableDyn_Conventions, ONLY: CD_NATIVE_CHANNEL_FMT
    USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_SeaState_Steady_Current, CD_HYDRO_OK
    USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK
    USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_UpdateStates_Moving, &
@@ -362,7 +363,7 @@ CONTAINS
                              ErrStat, ErrMsg, RoutineName )
             RETURN
          END IF
-         WRITE (un, '(A,ES15.6E2)', ADVANCE='NO') CHAR(9), value
+         WRITE (un, CD_NATIVE_CHANNEL_FMT, ADVANCE='NO') CHAR(9), value
       END DO
       WRITE (un, '(A)') ''
       FLUSH (un)
@@ -2425,7 +2426,7 @@ CONTAINS
                CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: committed-step channel record: '//TRIM(em), &
                                 ErrStat, ErrMsg, RoutineName ); RETURN
             END IF
-            WRITE (Inst(id)%native_un, '(A,ES15.6E2)', ADVANCE='NO') CHAR(9), cval
+            WRITE (Inst(id)%native_un, CD_NATIVE_CHANNEL_FMT, ADVANCE='NO') CHAR(9), cval
          END DO
          WRITE (Inst(id)%native_un, '(A)') ''
          ! keep the record readable during the run (and intact after a crash)

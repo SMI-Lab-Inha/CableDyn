@@ -759,7 +759,7 @@ CONTAINS
         fr = om/TWO_PI
         per = CD_ZERO
         IF (om > CD_ZERO) per = CD_ONE/fr
-        WRITE (unit, '(I0,A,I0,3(A,ES16.8))') line_id, TB, j, TB, fr, TB, per, TB, om
+        WRITE (unit, '(I0,A,I0,3(A,ES16.8E3))') line_id, TB, j, TB, fr, TB, per, TB, om
       ELSE
         dmax = CD_ZERO
         DO i = 1, nn
@@ -770,7 +770,7 @@ CONTAINS
         IF (dmax > CD_ZERO) scl = CD_ONE/dmax
         DO i = 1, nn
           i0 = dof_per_node*(i - 1)
-          WRITE (unit, '(I0,A,I0,A,I0,6(A,ES16.8))') line_id, TB, j, TB, i, TB, q(i0 + 1), TB, q(i0 + 2), TB, &
+          WRITE (unit, '(I0,A,I0,A,I0,6(A,ES16.8E3))') line_id, TB, j, TB, i, TB, q(i0 + 1), TB, q(i0 + 2), TB, &
             q(i0 + 3), TB, scl*shapes(i0 + 1, j), TB, scl*shapes(i0 + 2, j), TB, scl*shapes(i0 + 3, j)
         END DO
       END IF
