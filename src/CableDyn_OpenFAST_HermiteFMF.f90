@@ -84,6 +84,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_MinSpanZ
   PUBLIC :: CD_HFMF_MirrorSize
   PUBLIC :: CD_HFMF_FrictionMirrorSize
+  PUBLIC :: CD_HFMF_BoundaryMirrorSize
   PUBLIC :: CD_HFMF_ForceMirrorSize
   PUBLIC :: CD_HFMF_TorsionMirrorSize
   PUBLIC :: CD_HFMF_PackMirror
@@ -1527,15 +1528,30 @@ CONTAINS
     !! carries the committed acceleration, and unlike the EI=0 side (whose acceleration
     !! is re-derived by CD_Recompute_System_Acceleration) the cable reloads it exactly.
     !! A cable on a frictional seabed appends its stick-slip friction anchors, (x, y) per
-    !! node (CD_HFMF_FrictionMirrorSize slots): they are committed state like q. Zero if
-    !! uninitialised.
+    !! node (CD_HFMF_FrictionMirrorSize slots): they are committed state like q. Then come
+    !! the committed boundary (CD_HFMF_BoundaryMirrorSize), the force-blend state and the
+    !! torsion state. Zero if uninitialised.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
     IF (ALLOCATED(self%line%freemask)) n = 3*COUNT(self%line%freemask)
-    n = n + CD_HFMF_FrictionMirrorSize(self) + CD_HFMF_ForceMirrorSize(self) + &
-        CD_HFMF_TorsionMirrorSize(self)
+    n = n + CD_HFMF_FrictionMirrorSize(self) + CD_HFMF_BoundaryMirrorSize(self) + &
+        CD_HFMF_ForceMirrorSize(self) + CD_HFMF_TorsionMirrorSize(self)
   END FUNCTION CD_HFMF_MirrorSize
+
+  INTEGER FUNCTION CD_HFMF_BoundaryMirrorSize(self) RESULT(n)
+    !! Mirror slots of the committed boundary: [q; v; a] of the held (prescribed or fixed)
+    !! DOFs, the end-connection directions (6) and the parent frame the coupled end was
+    !! committed with (orientation 9, angular velocity 3, angular acceleration 3). A restart
+    !! rebuild moves the coupled end to the host's restored input mesh, the glue's input at
+    !! the restart time, which need not carry the bits the uninterrupted run committed (with
+    !! NumCrctn = 0 that run stepped with the extrapolated input); reloading this block after
+    !! the move continues from exactly the committed state.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
+    n = 0
+    IF (.NOT. self%initialized) RETURN
+    n = 3*(self%line%ndof - COUNT(self%line%freemask)) + 21
+  END FUNCTION CD_HFMF_BoundaryMirrorSize
 
   INTEGER FUNCTION CD_HFMF_TorsionMirrorSize(self) RESULT(n)
     !! Mirror slots of the condensed torsion, last: the accepted (unwrapped) Theta, Phi and the
@@ -1547,15 +1563,14 @@ CONTAINS
   END FUNCTION CD_HFMF_TorsionMirrorSize
 
   INTEGER FUNCTION CD_HFMF_ForceMirrorSize(self) RESULT(n)
-    !! Mirror slots of the force-blended generalised-alpha integrator state beyond [v; q; a] of
-    !! the free DOFs: a validity flag and the committed force F_n (ndof values), then the
-    !! committed accelerations of the held DOFs; zero with the configuration blend. The
-    !! force blend carries F_n and a_n of the prescribed end into the next step, so a restart
-    !! reloads them instead of re-evaluating F_n and taking a_n from the host input mesh.
+    !! Mirror slots of the force-blended generalised-alpha integrator state beyond the free
+    !! and boundary blocks: a validity flag and the committed force F_n (ndof values); zero
+    !! with the configuration blend. The force blend carries F_n into the next step, so a
+    !! restart reloads it instead of re-evaluating it.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
-    IF (self%line%force_blend) n = 1 + self%line%ndof + (self%line%ndof - COUNT(self%line%freemask))
+    IF (self%line%force_blend) n = 1 + self%line%ndof
   END FUNCTION CD_HFMF_ForceMirrorSize
 
   INTEGER FUNCTION CD_HFMF_FrictionMirrorSize(self) RESULT(n)
@@ -1567,21 +1582,23 @@ CONTAINS
   END FUNCTION CD_HFMF_FrictionMirrorSize
 
   SUBROUTINE CD_HFMF_PackMirror(self, buf, ErrStat, ErrMsg)
-    !! Write the cable's continuous state into buf as [v_free; q_free; a_free] -- the
-    !! layout CD_HFMF_MirrorSize sizes. The mirror is written every mooring step and
-    !! reloaded ONLY by a checkpoint-restart rebuild (CD_HFMF_UnpackMirror); the module
-    !! stays self-authoritative in normal marching.
+    !! Write the cable's continuous state into buf as [v_free; q_free; a_free], then the
+    !! friction, boundary, force-blend and torsion blocks -- the layout CD_HFMF_MirrorSize
+    !! sizes. The mirror is written every mooring step and reloaded ONLY by a
+    !! checkpoint-restart rebuild or the state-const CalcOutput restore
+    !! (CD_HFMF_UnpackMirror); the module stays self-authoritative in normal marching.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     REAL(wp), INTENT(OUT) :: buf(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, nf, k
+    INTEGER :: i, nf, nh, k
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     buf = CD_ZERO
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_PackMirror: module not initialised'; RETURN
     END IF
     nf = COUNT(self%line%freemask)
+    nh = self%line%ndof - nf
     IF (SIZE(buf) /= CD_HFMF_MirrorSize(self)) THEN
       ErrStat = CD_HFMF_BADINPUT
       ErrMsg = 'CD_HFMF_PackMirror: buffer must be sized CD_HFMF_MirrorSize'
@@ -1602,6 +1619,20 @@ CONTAINS
       buf(k + 1:k + 2*self%line%nn) = RESHAPE(self%line%fr_anchor, [2*self%line%nn])
       k = k + 2*self%line%nn
     END IF
+    ! committed boundary: [q; v; a] of the held DOFs, end-connection directions, parent frame
+    DO i = 1, self%line%ndof
+      IF (self%line%freemask(i)) CYCLE
+      k = k + 1
+      buf(k) = self%line%q(i)
+      buf(nh + k) = self%line%v(i)
+      buf(2*nh + k) = self%line%a(i)
+    END DO
+    k = k + 2*nh
+    buf(k + 1:k + 6) = RESHAPE(self%line%endconn_d0, [6])
+    buf(k + 7:k + 15) = RESHAPE(self%parent_dcm, [9])
+    buf(k + 16:k + 18) = self%parent_omega
+    buf(k + 19:k + 21) = self%parent_alpha
+    k = k + 21
     ! force-blend committed force: flag (1 when the cache holds F at the committed state)
     IF (self%line%force_blend) THEN
       IF (self%line%fc_valid .AND. .NOT. (ABS(self%line%fc_t - self%line%t) > CD_ZERO)) THEN
@@ -1609,11 +1640,6 @@ CONTAINS
         buf(k + 2:k + 1 + self%line%ndof) = self%line%fc_R
       END IF
       k = k + 1 + self%line%ndof
-      DO i = 1, self%line%ndof
-        IF (self%line%freemask(i)) CYCLE
-        k = k + 1
-        buf(k) = self%line%a(i)
-      END DO
     END IF
     IF (self%line%torsion%active) THEN
       buf(k + 1) = self%line%torsion%theta
@@ -1623,18 +1649,19 @@ CONTAINS
   END SUBROUTINE CD_HFMF_PackMirror
 
   SUBROUTINE CD_HFMF_UnpackMirror(self, buf, t, ErrStat, ErrMsg)
-    !! CHECKPOINT-RESTART reload: overwrite the cable's free-DOF state from a mirror
-    !! written by CD_HFMF_PackMirror ([v_free; q_free; a_free]) and set the line clock
-    !! to the restart time. The prescribed (coupled) and fixed DOFs are untouched -- the
-    !! caller re-prescribes the coupled endpoint from the host mesh
-    !! (CD_HFMF_SetCoupledKinematics) around this call. The module must already be
-    !! initialised from the SAME deck (the rebuild re-runs the static build first).
+    !! CHECKPOINT-RESTART reload: overwrite the cable's committed state from a mirror
+    !! written by CD_HFMF_PackMirror and set the line clock to the restart time. The held
+    !! DOFs, end-connection directions and parent frame reload from the boundary block, so
+    !! a caller that first moved the coupled endpoint to the host's restored input mesh
+    !! (CD_HFMF_SetCoupledKinematics) continues from the committed boundary bit for bit. The
+    !! module must already be initialised from the SAME deck (the rebuild re-runs the
+    !! static build first).
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: buf(:)
     REAL(wp), INTENT(IN) :: t
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, nf, k
+    INTEGER :: i, nf, nh, k, kb
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_UnpackMirror: module not initialised'; RETURN
@@ -1666,6 +1693,14 @@ CONTAINS
         END ASSOCIATE
       END DO
     END IF
+    ! the boundary block's parent orientation, checked before anything is written as well
+    nh = self%line%ndof - nf
+    kb = 3*nf + CD_HFMF_FrictionMirrorSize(self) + 3*nh
+    IF (.NOT. valid_parent_dcm(RESHAPE(buf(kb + 7:kb + 15), [3, 3]))) THEN
+      ErrStat = CD_HFMF_BADINPUT
+      ErrMsg = 'CD_HFMF_UnpackMirror: the parent orientation must be a proper orthogonal DCM'
+      RETURN
+    END IF
     k = 0
     DO i = 1, self%line%ndof
       IF (self%line%freemask(i)) THEN
@@ -1681,6 +1716,19 @@ CONTAINS
       self%line%ws_recovery_fr = self%line%fr_anchor
       k = k + 2*self%line%nn
     END IF
+    DO i = 1, self%line%ndof
+      IF (self%line%freemask(i)) CYCLE
+      k = k + 1
+      self%line%q(i) = buf(k)
+      self%line%v(i) = buf(nh + k)
+      self%line%a(i) = buf(2*nh + k)
+    END DO
+    k = k + 2*nh
+    self%line%endconn_d0 = RESHAPE(buf(k + 1:k + 6), [3, 2])
+    self%parent_dcm = RESHAPE(buf(k + 7:k + 15), [3, 3])
+    self%parent_omega = buf(k + 16:k + 18)
+    self%parent_alpha = buf(k + 19:k + 21)
+    k = k + 21
     self%line%t = t
     ! The reloaded acceleration is committed history: a first held fluid field after the
     ! reload (the host re-sampling its field on the restored state) must keep it.
@@ -1705,11 +1753,6 @@ CONTAINS
         self%line%fc_valid = .TRUE.
       END IF
       k = k + 1 + self%line%ndof
-      DO i = 1, self%line%ndof
-        IF (self%line%freemask(i)) CYCLE
-        k = k + 1
-        self%line%a(i) = buf(k)
-      END DO
     END IF
     IF (self%line%torsion%active) THEN
       self%line%torsion%theta = buf(k + 1)
@@ -1718,22 +1761,8 @@ CONTAINS
       self%line%torsion%torque = (self%line%torsion%phi - self%line%torsion%theta)/ &
                                  CD_HermiteTorsion_Compliance(self%line%torsion, self%line%l0)
       self%line%tors_drive_set = .FALSE.
-      ! A parent-attached torsion frame without a parent end connection: the parent orientation
-      ! is not in the mirror but follows from the restored end frame (its director and normal
-      ! in parent axes, tors_frame_parent, and in global axes), so a later step without
-      ! u_orientation holds it instead of turning the frame back to the static orientation.
-      IF (self%tors_parent .AND. .NOT. self%has_parent_endconn) THEN
-        BLOCK
-          REAL(wp) :: fp(3, 3), gg(3, 3)
-          fp(:, 1) = self%tors_frame_parent(:, 1)
-          fp(:, 2) = self%tors_frame_parent(:, 2)
-          fp(:, 3) = cross3(fp(:, 1), fp(:, 2))
-          gg(:, 1) = frame_to_global(self, self%line%torsion%ends(:, 2*self%tors_index - 1))
-          gg(:, 2) = frame_to_global(self, self%line%torsion%ends(:, 2*self%tors_index))
-          gg(:, 3) = cross3(gg(:, 1), gg(:, 2))
-          self%parent_dcm = MATMUL(fp, TRANSPOSE(gg))
-        END BLOCK
-      END IF
+      ! (a parent-attached torsion frame turns with the parent orientation, which the boundary
+      ! block restored as committed, so a later step without u_orientation holds it)
     END IF
   END SUBROUTINE CD_HFMF_UnpackMirror
 

@@ -91,8 +91,8 @@ MODULE CableDyn
                                           CD_AGG_GetInitMetadata, CD_AGG_GetInitLine, &
                                           CD_AGG_WriteStaticProfile
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
-                                           CD_HFMF_FrictionMirrorSize, CD_HFMF_ForceMirrorSize, &
-                                           CD_HFMF_TorsionMirrorSize, CD_HFMF_OK
+                                           CD_HFMF_FrictionMirrorSize, CD_HFMF_BoundaryMirrorSize, &
+                                           CD_HFMF_ForceMirrorSize, CD_HFMF_TorsionMirrorSize, CD_HFMF_OK
    USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, &
                                             CD_HermiteCable_Dyn_Disable_Profile, &
                                             CD_HermiteCable_Dyn_Get_Profile, &
@@ -1102,14 +1102,14 @@ CONTAINS
       ! (1e-10) if any bound ends ever disagree. The same gather runs inside every
       ! normal step, so a state violating the invariant cannot even advance, let alone
       ! be packed. The vector's real payload is the COMMITTED boundary kinematics: the
-      ! vessel-end accelerations the last advance committed differ at round-off from the
-      ! restored input mesh, and on a point deck that round-off is amplified through the
-      ! explicit-point window. Pure coupled decks keep the interiors-only mirror (their
-      ! restart is exact from the host-restored boundary alone at output precision).
+      ! vessel-end kinematics the last advance committed differ in the last bits from the
+      ! restored input mesh (the glue's input at the restart time, not the extrapolated one
+      ! the advance used), and on a point deck that round-off is amplified through the
+      ! explicit-point window. A finite-EI cable carries its committed boundary in its own
+      ! mirror block (CD_HFMF_BoundaryMirrorSize).
       IF (Inst(id)%agg%has_sys) THEN
-         ! the committed boundary kinematics of the EI=0 lines: a restart takes the coupled
-         ! endpoints' q/v from the restored input mesh, but their committed accelerations
-         ! (the generalised-alpha a_n) only from here
+         ! the committed boundary kinematics [q; v; a] of the EI=0 lines' coupled endpoints:
+         ! the rebuild moves them to the restored input mesh, then reloads them from here
          nstates = nstates + 3*CD_System_NSystemCoupledDOF( Inst(id)%agg%sys%fast%system )
       END IF
       IF (CD_AGG_NDynamicPoints( Inst(id)%agg ) > 0 .AND. Inst(id)%agg%has_sys) THEN
@@ -3332,8 +3332,9 @@ CONTAINS
          csz = CD_HFMF_MirrorSize( inst_%agg%cables(ic) )
          IF (csz <= 0) CYCLE                 ! uninitialised cable contributes no states
          ! free DOFs; mirror = [v_free; q_free; a_free] then the friction anchors, the
-         ! force-blend state and the torsion state (if any)
+         ! committed boundary, the force-blend state and the torsion state (if any)
          nf = (csz - CD_HFMF_FrictionMirrorSize( inst_%agg%cables(ic) ) - &
+               CD_HFMF_BoundaryMirrorSize( inst_%agg%cables(ic) ) - &
                CD_HFMF_ForceMirrorSize( inst_%agg%cables(ic) ) - &
                CD_HFMF_TorsionMirrorSize( inst_%agg%cables(ic) ))/3
          LinStr = 'Cable '//TRIM(Num2LStr(ic))
@@ -3789,7 +3790,7 @@ CONTAINS
       npd = 9*CD_AGG_NDynamicPoints( inst_%agg )
       IF (npd == 0 .AND. inst_%agg%has_sys) THEN
          ! no dynamic points: restore the committed boundary kinematics (the restored input
-         ! mesh carries the coupled positions and velocities, not the committed accelerations)
+         ! mesh carries the glue's input at the restart time, not the committed kinematics)
          ncd = CD_System_NSystemCoupledDOF( inst_%agg%sys%fast%system )
          IF (koff + 3*ncd > SIZE(states)) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the coupled-motion mirror extends '// &
