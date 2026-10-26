@@ -6711,6 +6711,15 @@ CONTAINS
                 'EI=0/finite-EI decks reject deck water kinematics)')
       RETURN
     END IF
+    ! Cross-flow VIV runs in the standalone EI = 0 driver: the aggregate route (OpenFAST, FAST.Farm,
+    ! mixed EI = 0 / finite-EI decks) neither checkpoints its shedding phase nor feeds it the host's
+    ! fluid field yet.
+    IF (ANY(types%cl > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) runs in the standalone driver of an EI = 0 deck; '// &
+                'the coupled OpenFAST and FAST.Farm routes and mixed EI = 0 / finite-EI decks do not carry it '// &
+                'yet. Set Cl = 0 for this run')
+      RETURN
+    END IF
 
     IF (opts%waterkin_seastate) THEN
       IF (.NOT. PRESENT(external_fluid)) THEN
