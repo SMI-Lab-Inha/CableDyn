@@ -114,7 +114,8 @@ PROGRAM test_viv_kernels
     CALL CD_VIV_Lift_Per_Length(u - rd, rpv - h*unit(j), kk, fm, ok)
     fd(:, j) = (fp - fm)/(2.0_wp*h)
   END DO
-  CALL require(MAXVAL(ABS(jt - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), 'per-length lift: tangent Jacobian matches differences')
+  CALL require(MAXVAL(ABS(jt - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), &
+               'per-length lift: tangent Jacobian matches differences')
   CALL CD_VIV_Lift_Per_Length(u - rd, 3.0_wp*rpv, kk, fp, ok)
   CALL require(NORM2(fp - fl) <= 1.0e-12_wp*NORM2(fl), 'per-length lift does not depend on |dr/dxi|')
 
