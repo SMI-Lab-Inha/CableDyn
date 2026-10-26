@@ -9148,7 +9148,7 @@ CONTAINS
         i_rn(e) = types(tidx)%i_rn
       END DO
     END DO
-    IF (ALLOCATED(ln%stf)) CALL CD_Stiffener_Overlay(ln%stf, l0, diam, ei=ei, mpl=mpl, volume_diameter=.TRUE.)
+    IF (ALLOCATED(ln%stf)) CALL CD_Stiffener_Overlay(ln%stf, l0, diam, ei=ei, mpl=mpl)
     l0 = l0(n_elem:1:-1)
     ea = ea(n_elem:1:-1)
     mpl = mpl(n_elem:1:-1)
@@ -9225,8 +9225,8 @@ CONTAINS
         cat(e) = types(tidx)%cat
       END DO
     END DO
-    ! a stiffener widens the line to its outer diameter for drag and added mass
-    IF (ALLOCATED(ln%stf)) CALL CD_Stiffener_Overlay(ln%stf, l0, diam, volume_diameter=.FALSE.)
+    ! a stiffener widens the line: the same displaced-area diameter as its weight and buoyancy
+    IF (ALLOCATED(ln%stf)) CALL CD_Stiffener_Overlay(ln%stf, l0, diam)
     diam = diam(SIZE(diam):1:-1)
     cdn = cdn(SIZE(cdn):1:-1)
     cdt = cdt(SIZE(cdt):1:-1)
@@ -9234,7 +9234,7 @@ CONTAINS
     cat = cat(SIZE(cat):1:-1)
   END SUBROUTINE finite_hydro_arrays
 
-  SUBROUTINE CD_Stiffener_Overlay(stf, l0, diam, ei, mpl, volume_diameter)
+  SUBROUTINE CD_Stiffener_Overlay(stf, l0, diam, ei, mpl)
     !! Add the bend stiffeners of a finite-EI line (ln%stf columns) to its element properties,
     !! in public element order (End A first). A stiffener is a polyurethane sleeve bonded to the
     !! cable in bending: over its length the section has the bending stiffness of the cable plus
@@ -9245,17 +9245,17 @@ CONTAINS
     !!        uniform moment, so a stiff root next to a soft tip is not over-stiffened;
     !!   mpl  the cable mass plus the mean sleeve mass, rho pi/4 (OD^2 - ID^2);
     !!   diam the diameter of the mean displaced area, cable plus solid sleeve, sqrt(d^2 + mean
-    !!        (OD^2 - ID^2)) (volume_diameter: weight and buoyancy), or the mean outer diameter,
-    !!        mean max(OD, d) (otherwise: drag and added mass).
+    !!        (OD^2 - ID^2)): one diameter, like a line type's, for the weight and buoyancy (dry
+    !!        part above the surface included), the added mass, Froude-Krylov force and drag. With
+    !!        the bore equal to the cable diameter it is the sleeve's outer diameter.
     !! The integrals use 6-point Gauss-Legendre on each part of the element a segment covers.
     !! An element no stiffener reaches is left untouched.
     REAL(wp), INTENT(IN) :: stf(:, :), l0(:)
     REAL(wp), INTENT(INOUT) :: diam(:)
     REAL(wp), INTENT(INOUT), OPTIONAL :: ei(:), mpl(:)
-    LOGICAL, INTENT(IN) :: volume_diameter
     REAL(wp), PARAMETER :: PI_64 = 0.0490873852123405193_wp   ! pi/64
     REAL(wp) :: gp(6), gw(6), s_end(0:SIZE(l0)), line_len, a, b, lo, hi, x, t, od, d_line
-    REAL(wp) :: compliance, sleeve_mass, sleeve_area, outer, covered, ei_line
+    REAL(wp) :: compliance, sleeve_mass, sleeve_area, covered, ei_line
     INTEGER :: e, k, g
 
     CALL CD_HermiteCable_Gauss_Rule(6, gp, gw)
@@ -9270,7 +9270,7 @@ CONTAINS
       d_line = diam(e)
       ei_line = CD_ZERO
       IF (PRESENT(ei)) ei_line = ei(e)
-      compliance = CD_ZERO; sleeve_mass = CD_ZERO; sleeve_area = CD_ZERO; outer = CD_ZERO; covered = CD_ZERO
+      compliance = CD_ZERO; sleeve_mass = CD_ZERO; sleeve_area = CD_ZERO; covered = CD_ZERO
       DO k = 1, SIZE(stf, 2)
         ! the segment's span on the public arc
         IF (NINT(stf(1, k)) == 1) THEN
@@ -9294,7 +9294,6 @@ CONTAINS
           compliance = compliance + gw(g)*(hi - lo)/(ei_line + stf(7, k)*PI_64*(od**4 - stf(6, k)**4))
           sleeve_mass = sleeve_mass + gw(g)*(hi - lo)*stf(8, k)*QUARTER_PI*(od**2 - stf(6, k)**2)
           sleeve_area = sleeve_area + gw(g)*(hi - lo)*(od**2 - stf(6, k)**2)
-          outer = outer + gw(g)*(hi - lo)*MAX(od, d_line)
         END DO
       END DO
       IF (.NOT. (covered > CD_ZERO)) CYCLE
@@ -9309,11 +9308,7 @@ CONTAINS
         END IF
       END IF
       IF (PRESENT(mpl)) mpl(e) = mpl(e) + sleeve_mass/l0(e)
-      IF (volume_diameter) THEN
-        diam(e) = SQRT(d_line**2 + sleeve_area/l0(e))
-      ELSE
-        diam(e) = (outer + (l0(e) - covered)*d_line)/l0(e)
-      END IF
+      diam(e) = SQRT(d_line**2 + sleeve_area/l0(e))
     END DO
   END SUBROUTINE CD_Stiffener_Overlay
 

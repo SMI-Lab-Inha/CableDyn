@@ -969,8 +969,9 @@ Behaviour:
   `EI(s) = EI_cable + E π/64 (OD(s)⁴ − InnerD⁴)`. The sleeve carries no axial load and no
   torque, so `EA` and `GJ` are the cable's. Each element takes the compliance average of
   `EI(s)` over its length, `L / ∫ ds/EI(s)`, the cable mass plus the mean sleeve mass, a
-  displaced area of cable plus solid sleeve, and the mean outer diameter for drag and added mass
-  (see [theory](theory.rst), *Bend stiffeners*). Elements the stiffener does not reach keep
+  diameter of the displaced area of cable plus solid sleeve, `√(d² + OD² − InnerD²)`, for its
+  buoyancy, added mass and drag alike, as a line type has one diameter (the sleeve's outer
+  diameter when `InnerD` is the cable diameter; see [theory](theory.rst), *Bend stiffeners*). Elements the stiffener does not reach keep
   their line type's values exactly.
 - The element properties are piecewise constant, one value per deck element, so the deck mesh
   must resolve the taper: an initialisation note names a stiffener that spans fewer than 10

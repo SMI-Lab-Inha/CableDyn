@@ -168,10 +168,11 @@ root of a tapered sleeve is not allowed to stiffen a whole element that only par
 On an ``EI = 0`` section of the line the bare part of an element has an infinite compliance,
 so only an element the sleeve covers completely gains bending stiffness.
 The element mass per length is the cable's plus :math:`\rho_s \tfrac{\pi}{4}\,
-\overline{D^2 - d_i^2}`; buoyancy acts on the displaced area of cable and solid sleeve,
-:math:`\tfrac{\pi}{4}\,(d^2 + \overline{D^2 - d_i^2})`, and drag and added mass on the mean outer
-diameter :math:`\overline{\max(D, d)}`, where the bar is the mean over the element and
-:math:`d` the cable diameter. The integrals use six-point Gauss–Legendre quadrature on each
+\overline{D^2 - d_i^2}`, where the bar is the mean over the element. Like a line type, the
+element has one diameter, that of the displaced area of cable and solid sleeve,
+:math:`\sqrt{d^2 + \overline{D^2 - d_i^2}}` with :math:`d` the cable diameter, for its
+buoyancy (the dry part above the surface included), added mass, Froude–Krylov force and drag;
+with the bore equal to the cable diameter it is the sleeve's outer diameter. The integrals use six-point Gauss–Legendre quadrature on each
 part of the element a segment covers. With these one-per-element values the taper is resolved
 by the mesh, as in a segmented line model; the driver notes a stiffener that spans fewer than
 ten elements.

@@ -5,7 +5,8 @@ PROGRAM test_bend_stiffener
   !! Gates for bend stiffeners (STIFFENERS) on a finite-EI line:
   !!   1. Element properties (CD_Stiffener_Overlay) against closed forms: a cylindrical sleeve
   !!      over half an element gives the compliance average of the bending stiffness, the mean
-  !!      sleeve mass, the displaced-area diameter and the mean outer diameter; the same sleeve
+  !!      sleeve mass and the displaced-area diameter (the outer one when the bore is the
+  !!      cable's); the same sleeve
   !!      at End B lands on the mirrored element; elements it does not reach are unchanged bit
   !!      for bit.
   !!   2. A cone: the element values follow a 20 000-interval midpoint integration of the same
@@ -59,7 +60,7 @@ CONTAINS
     !! half of element 2 from End A (or from End B: elements 4 and 3).
     REAL(wp), PARAMETER :: EI_C = 2.0e4_wp, M_C = 60.0_wp, D_C = 0.2_wp
     REAL(wp), PARAMETER :: OD = 0.5_wp, ID = 0.2_wp, EMOD = 5.0e7_wp, RHO = 1150.0_wp
-    REAL(wp) :: stf(8, 1), l0(4), ei(4), mpl(4), dv(4), dh(4), ei_s, ei_half, m_s
+    REAL(wp) :: stf(8, 1), l0(4), ei(4), mpl(4), dv(4), ei_s, ei_half, m_s
     INTEGER :: iend, e_full, e_half, e_far(2)
     l0 = 1.0_wp
     ei_s = EMOD*PI/64.0_wp*(OD**4 - ID**4)
@@ -67,9 +68,8 @@ CONTAINS
     ei_half = 1.0_wp/(0.5_wp/EI_C + 0.5_wp/(EI_C + ei_s))
     DO iend = 1, 2
       stf(:, 1) = [REAL(iend, wp), 0.0_wp, 1.5_wp, OD, OD, ID, EMOD, RHO]
-      ei = EI_C; mpl = M_C; dv = D_C; dh = D_C
-      CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl, volume_diameter=.TRUE.)
-      CALL CD_Stiffener_Overlay(stf, l0, dh, volume_diameter=.FALSE.)
+      ei = EI_C; mpl = M_C; dv = D_C
+      CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl)
       IF (iend == 1) THEN
         e_full = 1; e_half = 2; e_far = [3, 4]
       ELSE
@@ -84,14 +84,14 @@ CONTAINS
                    'cylinder: displaced-area diameter of cable plus solid sleeve')
       CALL require(close_rel(dv(e_half), SQRT(D_C**2 + 0.5_wp*(OD**2 - ID**2)), 1.0e-13_wp), &
                    'cylinder: half-covered displaced-area diameter')
-      CALL require(close_rel(dh(e_full), OD, 1.0e-13_wp), 'cylinder: outer diameter for drag')
-      CALL require(close_rel(dh(e_half), 0.5_wp*(OD + D_C), 1.0e-13_wp), 'cylinder: half-covered outer diameter')
-      CALL require(ALL(ei(e_far) == EI_C) .AND. ALL(mpl(e_far) == M_C) .AND. ALL(dv(e_far) == D_C) .AND. &
-                   ALL(dh(e_far) == D_C), 'cylinder: elements the sleeve does not reach are unchanged')
+      CALL require(close_rel(dv(e_full), OD, 1.0e-13_wp), &
+                   'cylinder: with the bore equal to the cable diameter the diameter is the outer one')
+      CALL require(ALL(ei(e_far) == EI_C) .AND. ALL(mpl(e_far) == M_C) .AND. ALL(dv(e_far) == D_C), &
+                   'cylinder: elements the sleeve does not reach are unchanged')
       ! an EI = 0 section: the covered element bends with the sleeve alone; the half-covered one
       ! keeps EI = 0, its bare half having an infinite compliance
       ei = 0.0_wp; mpl = M_C; dv = D_C
-      CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl, volume_diameter=.TRUE.)
+      CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl)
       CALL require(close_rel(ei(e_full), ei_s, 1.0e-13_wp), 'cylinder: covered EI = 0 element takes the sleeve')
       CALL require(ei(e_half) == 0.0_wp, 'cylinder: half-covered EI = 0 element keeps EI = 0')
     END DO
@@ -103,17 +103,16 @@ CONTAINS
     REAL(wp), PARAMETER :: EI_C = 2.0e4_wp, M_C = 60.0_wp, D_C = 0.2_wp
     REAL(wp), PARAMETER :: OD0 = 0.6_wp, OD1 = 0.22_wp, ID = 0.2_wp, EMOD = 5.0e7_wp, RHO = 1150.0_wp
     INTEGER, PARAMETER :: NQ = 20000
-    REAL(wp) :: stf(8, 1), l0(5), ei(5), mpl(5), dv(5), dh(5), a, s, od, comp, mass, area, outer, h, tol
+    REAL(wp) :: stf(8, 1), l0(5), ei(5), mpl(5), dv(5), a, s, od, comp, mass, area, h, tol
     INTEGER :: e, k
     l0 = 0.7_wp
     stf(:, 1) = [1.0_wp, 0.0_wp, 2.5_wp, OD0, OD1, ID, EMOD, RHO]
-    ei = EI_C; mpl = M_C; dv = D_C; dh = D_C
-    CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl, volume_diameter=.TRUE.)
-    CALL CD_Stiffener_Overlay(stf, l0, dh, volume_diameter=.FALSE.)
+    ei = EI_C; mpl = M_C; dv = D_C
+    CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl)
     DO e = 1, 4
       a = 0.7_wp*REAL(e - 1, wp)
       h = 0.7_wp/REAL(NQ, wp)
-      comp = 0.0_wp; mass = 0.0_wp; area = 0.0_wp; outer = 0.0_wp
+      comp = 0.0_wp; mass = 0.0_wp; area = 0.0_wp
       DO k = 1, NQ
         s = a + (REAL(k, wp) - 0.5_wp)*h
         IF (s < 2.5_wp) THEN
@@ -121,10 +120,8 @@ CONTAINS
           comp = comp + h/(EI_C + EMOD*PI/64.0_wp*(od**4 - ID**4))
           mass = mass + h*RHO*PI/4.0_wp*(od**2 - ID**2)
           area = area + h*(od**2 - ID**2)
-          outer = outer + h*MAX(od, D_C)
         ELSE
           comp = comp + h/EI_C
-          outer = outer + h*D_C
         END IF
       END DO
       ! the cone tip inside element 4 limits the midpoint rule there to O(h/l) = 5e-5
@@ -132,11 +129,10 @@ CONTAINS
       CALL require(close_rel(ei(e), 0.7_wp/comp, tol), 'cone: compliance-average EI of element')
       CALL require(close_rel(mpl(e), M_C + mass/0.7_wp, tol), 'cone: mean mass of element')
       CALL require(close_rel(dv(e), SQRT(D_C**2 + area/0.7_wp), tol), 'cone: displaced-area diameter')
-      CALL require(close_rel(dh(e), outer/0.7_wp, tol), 'cone: mean outer diameter')
       IF (e < 4) CALL require(close_rel(ei(e), 0.7_wp/comp, 1.0e-10_wp), &
                               'cone: Gauss average matches the fine integration inside the cone')
     END DO
-    CALL require(ei(5) == EI_C .AND. mpl(5) == M_C .AND. dv(5) == D_C .AND. dh(5) == D_C, &
+    CALL require(ei(5) == EI_C .AND. mpl(5) == M_C .AND. dv(5) == D_C, &
                  'cone: bare elements unchanged')
   END SUBROUTINE case_cone
 
