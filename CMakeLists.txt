@@ -1632,9 +1632,15 @@ if(Python3_Interpreter_FOUND)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_viv_lockin.py
                      --exe $<TARGET_FILE:cabledyn>
                      --output ${CMAKE_BINARY_DIR}/viv_lockin)
+    # eight benchmark runs; a checked Debug build is about ten times slower than Release
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+      set(_viv_lockin_timeout 2400)
+    else()
+      set(_viv_lockin_timeout 600)
+    endif()
     set_tests_properties(viv_lockin PROPERTIES
       LABELS "python;integration;dynamic;viv;validation"
-      TIMEOUT 600
+      TIMEOUT ${_viv_lockin_timeout}
       ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
     message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")

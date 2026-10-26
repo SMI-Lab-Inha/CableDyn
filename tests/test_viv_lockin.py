@@ -32,9 +32,11 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -152,10 +154,19 @@ def main() -> int:
     for u in (0.21, 0.30):
         runs.append((("stiff", u), f"viv_stiff_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **stiff)))
         runs.append((("string", u), f"viv_string_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **string)))
-    results = {}
-    for key, name, text in runs:
+    for _, name, text in runs:
         (out / f"{name}.dat").write_text(text, encoding="utf-8", newline="\n")
-        proc = subprocess.run([args.exe, f"{name}.dat", name], cwd=out, capture_output=True, text=True)
+    env = dict(os.environ, OMP_NUM_THREADS="1")
+
+    def run(name: str) -> subprocess.CompletedProcess[str]:
+        cmd = [args.exe, f"{name}.dat", name]
+        return subprocess.run(cmd, cwd=out, capture_output=True, text=True, env=env)
+
+    # the decks are independent: run them side by side (a checked Debug build is ~10x slower)
+    with ThreadPoolExecutor(max_workers=max(1, min(4, os.cpu_count() or 1))) as pool:
+        procs = list(pool.map(run, [name for _, name, _ in runs]))
+    results = {}
+    for (key, name, _), proc in zip(runs, procs):
         if proc.returncode != 0:
             print(proc.stdout[-2000:], proc.stderr[-2000:])
             check(False, f"{name}: the run completes (exit {proc.returncode})")

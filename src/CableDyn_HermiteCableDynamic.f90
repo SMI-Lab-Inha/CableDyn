@@ -280,7 +280,7 @@ MODULE CableDyn_HermiteCableDynamic
     ! ws_recovery_viv_* is the step-start copy of the recovering step, snap_viv_* the snapshot.
     LOGICAL :: has_viv = .FALSE.
     REAL(wp) :: viv_tw = CD_ZERO
-    REAL(wp), ALLOCATABLE :: viv_k(:), viv_cf(:), viv_df(:), viv_dn(:), viv_phi(:), viv_phi_eval(:)
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_k(:), viv_cf(:), viv_df(:), viv_dn(:), viv_phi(:), viv_phi_eval(:)
     REAL(wp), ALLOCATABLE :: viv_rate(:), viv_ms(:, :), viv_ms_next(:, :)
     REAL(wp), ALLOCATABLE :: ws_recovery_viv_phi(:), ws_recovery_viv_ms(:, :), snap_viv_phi(:), snap_viv_ms(:, :)
     LOGICAL, ALLOCATABLE :: viv_node(:)
@@ -1015,14 +1015,14 @@ CONTAINS
     model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
     IF (.NOT. ANY(cl > CD_ZERO)) RETURN
-    ALLOCATE (model%viv_k(ne), model%viv_cf(nn), model%viv_df(nn), model%viv_dn(nn), model%viv_phi(nn), &
+    ALLOCATE (model%viv_cl(ne), model%viv_k(ne), model%viv_cf(nn), model%viv_df(nn), model%viv_dn(nn), &
+              model%viv_phi(nn), &
               model%viv_phi_eval(nn), model%viv_rate(nn), model%viv_ms(2, nn), model%viv_ms_next(2, nn), &
               model%ws_recovery_viv_phi(nn), model%ws_recovery_viv_ms(2, nn), model%snap_viv_phi(nn), &
               model%snap_viv_ms(2, nn), model%viv_node(nn))
-    model%viv_k = 0.5_wp*model%rho_w*model%diam*cl
+    model%viv_cl = cl
     model%viv_cf = CD_ZERO
     model%viv_df = CD_ZERO
-    model%viv_dn = CD_ZERO
     model%viv_node = .FALSE.
     model%viv_phi = CD_ZERO
     model%viv_ms = CD_ZERO
@@ -1034,15 +1034,14 @@ CONTAINS
         wsum = wsum + model%l0(e)
         model%viv_cf(k) = model%viv_cf(k) + model%l0(e)*cf(e)
         model%viv_df(k) = model%viv_df(k) + model%l0(e)*df(e)
-        model%viv_dn(k) = model%viv_dn(k) + model%l0(e)*model%diam(e)
       END DO
       IF (.NOT. (wsum > CD_ZERO)) CYCLE
       model%viv_node(k) = .TRUE.
       model%viv_cf(k) = model%viv_cf(k)/wsum
       model%viv_df(k) = model%viv_df(k)/wsum
-      model%viv_dn(k) = model%viv_dn(k)/wsum
       model%viv_phi(k) = CD_VIV_TWO_PI*REAL(nn - k, wp)/REAL(ne, wp)
     END DO
+    CALL viv_drag_terms(model)
     model%viv_phi_eval = model%viv_phi
     model%viv_rate = CD_ZERO
     model%viv_ms_next = model%viv_ms
@@ -1057,7 +1056,7 @@ CONTAINS
   SUBROUTINE clear_viv(model)
     !! Release the VIV storage; the model then carries no lift.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
-    IF (ALLOCATED(model%viv_k)) DEALLOCATE (model%viv_k)
+    IF (ALLOCATED(model%viv_k)) DEALLOCATE (model%viv_cl, model%viv_k)
     IF (ALLOCATED(model%viv_cf)) DEALLOCATE (model%viv_cf, model%viv_df, model%viv_dn, model%viv_phi, &
                                              model%viv_phi_eval, model%viv_rate, model%viv_ms, &
                                              model%viv_ms_next, model%ws_recovery_viv_phi, &
@@ -1066,6 +1065,27 @@ CONTAINS
     model%has_viv = .FALSE.
     model%viv_tw = CD_ZERO
   END SUBROUTINE clear_viv
+
+  SUBROUTINE viv_drag_terms(model)
+    !! The VIV quantities taken from the drag configuration, set with VIV and again whenever the
+    !! drag is reconfigured: the lift scale viv_k = 1/2 rho D Cl of each element and the node
+    !! diameter viv_dn, the length-weighted average over the node's lifting elements.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER :: e, k
+    REAL(wp) :: wsum
+    model%viv_k = 0.5_wp*model%rho_w*model%diam*model%viv_cl
+    model%viv_dn = CD_ZERO
+    DO k = 1, model%nn
+      IF (.NOT. model%viv_node(k)) CYCLE
+      wsum = CD_ZERO
+      DO e = MAX(1, k - 1), MIN(model%ne, k)
+        IF (.NOT. (model%viv_cl(e) > CD_ZERO)) CYCLE
+        wsum = wsum + model%l0(e)
+        model%viv_dn(k) = model%viv_dn(k) + model%l0(e)*model%diam(e)
+      END DO
+      model%viv_dn(k) = model%viv_dn(k)/wsum
+    END DO
+  END SUBROUTINE viv_drag_terms
 
   SUBROUTINE viv_node_motion(model, k, yd, ydd, un, ok)
     !! Cross-flow velocity and acceleration of node k at the committed state, along its own
@@ -2613,6 +2633,8 @@ CONTAINS
     model%rho_w = rho_w; model%waterline_z = waterline_z; model%current = current
     model%gravity = grav_new
     model%has_drag = .TRUE.
+    ! the lift scale and the shedding diameter follow the drag's density and diameters
+    IF (model%has_viv) CALL viv_drag_terms(model)
 
     ! Refresh the consistent acceleration now that the load set includes drag: at v = 0 a current
     ! exerts a non-zero rest drag, so the predictor for the first step must see it.
@@ -2628,6 +2650,8 @@ CONTAINS
         DEALLOCATE (model%diam, model%cdn, model%cdt)
       END IF
       model%has_drag = had_drag
+      ! VIV needs drag, so a VIV model had it: back to the restored configuration
+      IF (model%has_viv) CALL viv_drag_terms(model)
     END IF
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Drag
 

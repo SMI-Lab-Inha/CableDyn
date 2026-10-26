@@ -12,7 +12,8 @@ PROGRAM test_hermite_viv
   !!
   !! Gates:
   !! * the setter refuses a model without drag, mismatched sizes, a band with dF >= cF, a negative
-  !!   averaging time, and an internal wave family afterwards; all-zero Cl installs nothing;
+  !!   averaging time, and an internal wave family afterwards; all-zero Cl installs nothing; a
+  !!   drag reconfigured afterwards carries the lift scale and the shedding diameter with it;
   !! * at 60 s the mid-span cross-flow amplitude is above 0.3 D with the lift and below 0.01 D
   !!   without it;
   !! * a snapshot taken mid-run and restored replays the following steps bit for bit (state and
@@ -63,6 +64,21 @@ PROGRAM test_hermite_viv
   CALL require(es /= CD_HCDYN_OK, 'an internal wave family is refused on a VIV cable')
   CALL require(ABS(model%viv_phi(NE + 1)) < TINY(1.0_wp) .AND. &
                ABS(model%viv_phi(1) - 2.0_wp*PI) < 1.0e-12_wp, 'the phases start at 2 pi i/N from End A')
+  ! a drag reconfigured after VIV carries the lift scale and shedding diameter with it
+  BLOCK
+    REAL(wp) :: k0(NE), dn0(NE + 1), hd(NE), hn(NE), ht(NE)
+    k0 = model%viv_k
+    dn0 = model%viv_dn
+    hd = 2.0_wp*D; hn = 1.2_wp; ht = 0.0_wp
+    CALL CD_HermiteCable_Dyn_Set_Drag(model, RHOW, hd, hn, ht, 0.0_wp, [0.0_wp, U, 0.0_wp], es, em)
+    CALL require(es == CD_HCDYN_OK .AND. ALL(ABS(model%viv_k - 2.0_wp*k0) <= 1.0e-12_wp*k0) .AND. &
+                 ALL(ABS(model%viv_dn - 2.0_wp*dn0) <= 1.0e-12_wp*dn0), &
+                 'a drag reconfiguration updates the VIV lift scale and shedding diameter')
+    hd = D
+    CALL CD_HermiteCable_Dyn_Set_Drag(model, RHOW, hd, hn, ht, 0.0_wp, [0.0_wp, U, 0.0_wp], es, em)
+    CALL require(es == CD_HCDYN_OK .AND. ALL(model%viv_k == k0) .AND. ALL(model%viv_dn == dn0), &
+                 'the original drag restores them exactly')
+  END BLOCK
 
   ! ---- lock-in, and the same line without lift ----
   amp_lift = run_amplitude(model)
