@@ -12,8 +12,10 @@ PROGRAM test_hermite_viv
   !!
   !! Gates:
   !! * the setter refuses a model without drag, mismatched sizes, a band with dF >= cF, a negative
-  !!   averaging time, and an internal wave family afterwards; all-zero Cl installs nothing; a
-  !!   drag reconfigured afterwards carries the lift scale and the shedding diameter with it;
+  !!   averaging time, and an internal wave family afterwards; all-zero Cl installs nothing;
+  !!   installing the lift in the cross current changes the committed acceleration and removing
+  !!   it brings the no-lift acceleration back; a drag reconfigured afterwards carries the lift
+  !!   scale and the shedding diameter with it;
   !! * at 60 s the mid-span cross-flow amplitude is above 0.3 D with the lift and below 0.01 D
   !!   without it;
   !! * a snapshot taken mid-run and restored replays the following steps bit for bit (state and
@@ -34,7 +36,7 @@ PROGRAM test_hermite_viv
   INTEGER, PARAMETER :: NE = 20
 
   TYPE(CD_HermiteCableDynType) :: model
-  REAL(wp), ALLOCATABLE :: cl(:), cf(:), df(:), q_ref(:, :), phi_ref(:, :)
+  REAL(wp), ALLOCATABLE :: cl(:), cf(:), df(:), q_ref(:, :), phi_ref(:, :), a_none(:)
   REAL(wp) :: amp_lift, amp_none
   INTEGER :: es, nfail, k, mid
   CHARACTER(1024) :: em
@@ -58,8 +60,17 @@ PROGRAM test_hermite_viv
   CALL require(es /= CD_HCDYN_OK, 'a negative averaging time is refused')
   CALL CD_HermiteCable_Dyn_Set_VIV(model, 0.0_wp*cl, cf, df, 0.25_wp, es, em)
   CALL require(es == CD_HCDYN_OK .AND. .NOT. model%has_viv, 'all-zero Cl installs no VIV')
+  a_none = model%a
   CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 0.25_wp, es, em)
   CALL require(es == CD_HCDYN_OK .AND. model%has_viv, 'VIV installs: '//TRIM(em))
+  ! at rest in the cross current the lift (about 0.9 N/m) moves the committed acceleration
+  CALL require(MAXVAL(ABS(model%a - a_none)) > 1.0e-3_wp, 'installing the lift refreshes the acceleration')
+  CALL CD_HermiteCable_Dyn_Set_VIV(model, 0.0_wp*cl, cf, df, 0.25_wp, es, em)
+  CALL require(es == CD_HCDYN_OK .AND. .NOT. model%has_viv .AND. &
+               MAXVAL(ABS(model%a - a_none)) <= 1.0e-12_wp*MAXVAL(ABS(a_none)), &
+               'removing the lift brings the no-lift acceleration back')
+  CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 0.25_wp, es, em)
+  CALL require(es == CD_HCDYN_OK .AND. model%has_viv, 'VIV installs again: '//TRIM(em))
   CALL CD_HermiteCable_Dyn_Set_Waves(model, 1.0_wp, 8.0_wp, 0.0_wp, 100.0_wp, GACC, es, em)
   CALL require(es /= CD_HCDYN_OK, 'an internal wave family is refused on a VIV cable')
   CALL require(ABS(model%viv_phi(NE + 1)) < TINY(1.0_wp) .AND. &

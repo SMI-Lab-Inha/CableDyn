@@ -972,13 +972,21 @@ CONTAINS
     !! wetted Gauss points of every element with cl > 0, its phase lives on the nodes of those
     !! elements; the phases start at 2 pi i/N with node i counted from End A (the model's last
     !! node), as MoorDyn's. The phase follows the drag's current and a held host field (which
-    !! carries any waves); the internal wave families (Set_Waves) are refused with VIV.
+    !! carries any waves); the internal wave families (Set_Waves) are refused with VIV. The
+    !! committed acceleration is refreshed with the new lift; if that fails, the previous VIV
+    !! configuration, its state and the acceleration are restored.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: e, k, ne, nn
-    REAL(wp) :: wsum
+    INTEGER :: e, k, ne, nn, es
+    REAL(wp) :: wsum, tw_old
+    LOGICAL :: had_viv
+    CHARACTER(LEN=1024) :: em
+    REAL(wp), ALLOCATABLE :: a_old(:), o_cl(:), o_k(:), o_cf(:), o_df(:), o_dn(:), o_phi(:), o_phi_eval(:), &
+                             o_rate(:), o_ms(:, :), o_ms_next(:, :), o_rec_phi(:), o_rec_ms(:, :), &
+                             o_snap_phi(:), o_snap_ms(:, :)
+    LOGICAL, ALLOCATABLE :: o_node(:)
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -1009,12 +1017,20 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: internal waves are configured; VIV takes waves as a held '// &
                'host fluid field (CD_HermiteCable_Dyn_Set_Held_Fluid)'; RETURN
     END IF
+    ! the previous configuration and state, kept for a rollback
+    had_viv = model%has_viv
+    tw_old = model%viv_tw
+    a_old = model%a
+    CALL move_viv(.FALSE.)
     CALL clear_viv(model)
     model%rc_epoch = model%rc_epoch + 1
     model%fc_valid = .FALSE.
     model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
-    IF (.NOT. ANY(cl > CD_ZERO)) RETURN
+    IF (.NOT. ANY(cl > CD_ZERO)) THEN
+      IF (had_viv) CALL refresh_acceleration()
+      RETURN
+    END IF
     ALLOCATE (model%viv_cl(ne), model%viv_k(ne), model%viv_cf(nn), model%viv_df(nn), model%viv_dn(nn), &
               model%viv_phi(nn), &
               model%viv_phi_eval(nn), model%viv_rate(nn), model%viv_ms(2, nn), model%viv_ms_next(2, nn), &
@@ -1051,6 +1067,45 @@ CONTAINS
     model%snap_viv_ms = model%viv_ms
     model%viv_tw = t_window
     model%has_viv = .TRUE.
+    ! the lift is part of the committed load: the first step's predictor and phase rate need it
+    CALL refresh_acceleration()
+
+  CONTAINS
+    SUBROUTINE refresh_acceleration()
+      CALL solve_consistent_acceleration(model, es, em)
+      IF (es == CD_HCDYN_OK) RETURN
+      CALL clear_viv(model)
+      CALL move_viv(.TRUE.)
+      model%has_viv = had_viv
+      model%viv_tw = tw_old
+      model%a = a_old
+      ErrStat = es
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: acceleration refresh failed: '//TRIM(em)
+    END SUBROUTINE refresh_acceleration
+
+    SUBROUTINE move_viv(back)
+      !! Move the VIV arrays from the model into the o_ copies (back = .FALSE.) or back.
+      LOGICAL, INTENT(IN) :: back
+      IF (back) THEN
+        CALL MOVE_ALLOC(o_cl, model%viv_cl); CALL MOVE_ALLOC(o_k, model%viv_k)
+        CALL MOVE_ALLOC(o_cf, model%viv_cf); CALL MOVE_ALLOC(o_df, model%viv_df)
+        CALL MOVE_ALLOC(o_dn, model%viv_dn); CALL MOVE_ALLOC(o_phi, model%viv_phi)
+        CALL MOVE_ALLOC(o_phi_eval, model%viv_phi_eval); CALL MOVE_ALLOC(o_rate, model%viv_rate)
+        CALL MOVE_ALLOC(o_ms, model%viv_ms); CALL MOVE_ALLOC(o_ms_next, model%viv_ms_next)
+        CALL MOVE_ALLOC(o_rec_phi, model%ws_recovery_viv_phi); CALL MOVE_ALLOC(o_rec_ms, model%ws_recovery_viv_ms)
+        CALL MOVE_ALLOC(o_snap_phi, model%snap_viv_phi); CALL MOVE_ALLOC(o_snap_ms, model%snap_viv_ms)
+        CALL MOVE_ALLOC(o_node, model%viv_node)
+      ELSE
+        CALL MOVE_ALLOC(model%viv_cl, o_cl); CALL MOVE_ALLOC(model%viv_k, o_k)
+        CALL MOVE_ALLOC(model%viv_cf, o_cf); CALL MOVE_ALLOC(model%viv_df, o_df)
+        CALL MOVE_ALLOC(model%viv_dn, o_dn); CALL MOVE_ALLOC(model%viv_phi, o_phi)
+        CALL MOVE_ALLOC(model%viv_phi_eval, o_phi_eval); CALL MOVE_ALLOC(model%viv_rate, o_rate)
+        CALL MOVE_ALLOC(model%viv_ms, o_ms); CALL MOVE_ALLOC(model%viv_ms_next, o_ms_next)
+        CALL MOVE_ALLOC(model%ws_recovery_viv_phi, o_rec_phi); CALL MOVE_ALLOC(model%ws_recovery_viv_ms, o_rec_ms)
+        CALL MOVE_ALLOC(model%snap_viv_phi, o_snap_phi); CALL MOVE_ALLOC(model%snap_viv_ms, o_snap_ms)
+        CALL MOVE_ALLOC(model%viv_node, o_node)
+      END IF
+    END SUBROUTINE move_viv
   END SUBROUTINE CD_HermiteCable_Dyn_Set_VIV
 
   SUBROUTINE clear_viv(model)
