@@ -2697,10 +2697,6 @@ class DeckFile:
                         f"{self._at(row)}: LINE TYPES VIV synchronisation band needs cF > 0 "
                         "and 0 <= dF < cF"
                     )
-                if cl > 0.0 and ei > 0.0:
-                    raise DeckFormatError(
-                        f"{self._at(row)}: VIV (Cl > 0) is implemented for EI = 0 line types only"
-                    )
                 if cl > 0.0 and is_syrope:
                     raise DeckFormatError(
                         f"{self._at(row)}: VIV (Cl > 0) does not combine with the Syrope "

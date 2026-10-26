@@ -40,7 +40,9 @@ MODULE CableDyn_VIV
   PRIVATE
 
   PUBLIC :: CD_VIV_Node_Lift
+  PUBLIC :: CD_VIV_Lift_Per_Length
   PUBLIC :: CD_VIV_Crossflow_Motion
+  PUBLIC :: CD_VIV_Crossflow_Along
   PUBLIC :: CD_VIV_Phase_Rate
   PUBLIC :: CD_VIV_Mean_Square
   PUBLIC :: CD_VIV_Wrap_Phase
@@ -171,6 +173,93 @@ CONTAINS
     yd = rd(1)*e(1) + rd(2)*e(2) + rd(3)*e(3)
     ydd = rdd(1)*e(1) + rdd(2)*e(2) + rdd(3)*e(3)
   END SUBROUTINE CD_VIV_Crossflow_Motion
+
+  PURE SUBROUTINE CD_VIV_Lift_Per_Length(urel, rp, k, f, ok, jrel, jtan)
+    !! Lift per unit length of a cable centreline point (the finite-EI cable's Gauss points),
+    !! f = k U (t x v_r), with k = 1/2 rho D Cl cos(phi), the unit tangent t = rp/|rp| of the raw
+    !! centreline derivative rp = dr/dxi, the relative flow v_r = urel and its normal speed U.
+    !! Optionally (both or neither) its Jacobians jrel = df/dv_r and jtan = df/drp, for chaining
+    !! through the shape functions as the drag primitive is. ok = .FALSE. (and f = 0) for a
+    !! degenerate centreline; f and its derivatives vanish with the normal flow.
+    REAL(wp), INTENT(IN) :: urel(3), rp(3), k
+    REAL(wp), INTENT(OUT) :: f(3)
+    LOGICAL, INTENT(OUT) :: ok
+    REAL(wp), INTENT(OUT), OPTIONAL :: jrel(3, 3), jtan(3, 3)
+    REAL(wp) :: speed, t(3), alpha, vn(3), un, w(3), dfdt(3, 3), proj(3, 3)
+    INTEGER :: i, j
+
+    f = CD_ZERO
+    IF (PRESENT(jrel)) THEN
+      jrel = CD_ZERO
+      jtan = CD_ZERO
+    END IF
+    speed = SQRT(rp(1)*rp(1) + rp(2)*rp(2) + rp(3)*rp(3))
+    ok = speed > TINY_CHORD
+    IF (.NOT. ok) RETURN
+    t = rp/speed
+    alpha = t(1)*urel(1) + t(2)*urel(2) + t(3)*urel(3)
+    vn = urel - alpha*t
+    un = SQRT(vn(1)*vn(1) + vn(2)*vn(2) + vn(3)*vn(3))
+    w = cross3(t, urel)                ! = t x v_n
+    f = (k*un)*w
+    IF (.NOT. PRESENT(jrel)) RETURN
+    IF (.NOT. (un > CD_ZERO)) RETURN
+    ! df/dv_r = k [w (x) v_n/U + U [t]x]
+    DO j = 1, 3
+      DO i = 1, 3
+        jrel(i, j) = k*w(i)*vn(j)/un
+      END DO
+    END DO
+    jrel(1, 2) = jrel(1, 2) - k*un*t(3)
+    jrel(1, 3) = jrel(1, 3) + k*un*t(2)
+    jrel(2, 1) = jrel(2, 1) + k*un*t(3)
+    jrel(2, 3) = jrel(2, 3) - k*un*t(1)
+    jrel(3, 1) = jrel(3, 1) - k*un*t(2)
+    jrel(3, 2) = jrel(3, 2) + k*un*t(1)
+    ! df/dt = k [-(alpha/U) w (x) v_r - U [v_r]x], chained through dt/drp = (I - t t^T)/|rp|
+    DO j = 1, 3
+      DO i = 1, 3
+        dfdt(i, j) = -k*(alpha/un)*w(i)*urel(j)
+      END DO
+    END DO
+    dfdt(1, 2) = dfdt(1, 2) + k*un*urel(3)
+    dfdt(1, 3) = dfdt(1, 3) - k*un*urel(2)
+    dfdt(2, 1) = dfdt(2, 1) - k*un*urel(3)
+    dfdt(2, 3) = dfdt(2, 3) + k*un*urel(1)
+    dfdt(3, 1) = dfdt(3, 1) + k*un*urel(2)
+    dfdt(3, 2) = dfdt(3, 2) - k*un*urel(1)
+    DO j = 1, 3
+      DO i = 1, 3
+        proj(i, j) = -t(i)*t(j)/speed
+      END DO
+      proj(j, j) = proj(j, j) + CD_ONE/speed
+    END DO
+    jtan = MATMUL(dfdt, proj)
+  END SUBROUTINE CD_VIV_Lift_Per_Length
+
+  PURE SUBROUTINE CD_VIV_Crossflow_Along(tdir, rd, rdd, u, yd, ydd, un, ok)
+    !! CD_VIV_Crossflow_Motion with the line tangent given directly (tdir, any length: the
+    !! slope DOFs of a finite-EI node) instead of the chord of two neighbours.
+    REAL(wp), INTENT(IN) :: tdir(3), rd(3), rdd(3), u(3)
+    REAL(wp), INTENT(OUT) :: yd, ydd, un
+    LOGICAL, INTENT(OUT) :: ok
+    REAL(wp) :: speed, t(3), vr(3), vn(3), e(3)
+
+    yd = CD_ZERO
+    ydd = CD_ZERO
+    un = CD_ZERO
+    speed = SQRT(tdir(1)*tdir(1) + tdir(2)*tdir(2) + tdir(3)*tdir(3))
+    ok = speed > TINY_CHORD
+    IF (.NOT. ok) RETURN
+    t = tdir/speed
+    vr = u - rd
+    vn = vr - (t(1)*vr(1) + t(2)*vr(2) + t(3)*vr(3))*t
+    un = SQRT(vn(1)*vn(1) + vn(2)*vn(2) + vn(3)*vn(3))
+    IF (.NOT. (un > CD_ZERO)) RETURN
+    e = cross3(t, vn)/un
+    yd = rd(1)*e(1) + rd(2)*e(2) + rd(3)*e(3)
+    ydd = rdd(1)*e(1) + rdd(2)*e(2) + rdd(3)*e(3)
+  END SUBROUTINE CD_VIV_Crossflow_Along
 
   ELEMENTAL REAL(wp) FUNCTION CD_VIV_Mean_Square(ms_old, sample, weight) RESULT(ms)
     !! One step of the running mean square, ms_old + weight (sample^2 - ms_old); weight =

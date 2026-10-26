@@ -13,7 +13,10 @@ locks in. MoorDyn-F (OpenFAST v5 moordyn_driver, dtM 5e-4 s) gives a mid-span A/
   one spectral bin (1/60 Hz) of it, with the quarter-span amplitude of the first mode;
 * at dtM 0.002 s, a step that resolves the mesh zig-zag mode, the line stays locked in with the
   same amplitude (within 2 %): with the nodes' own kinematics in the synchronisation model the
-  zig-zag mode was pumped there and the line lost lock-in after about 70 s.
+  zig-zag mode was pumped there and the line lost lock-in after about 70 s;
+* the same line as a finite-EI cable (EI 1 N m^2, a string to within 1e-6 of its geometric
+  stiffness: the cubic-Hermite route with the Gauss-integrated lift) locks in with the EI = 0
+  line's mid-span and quarter-span amplitudes (within 1 %) and frequency.
 
 usage: test_viv_lockin.py --exe <cabledyn> --output <dir>
 """
@@ -66,14 +69,14 @@ z-depth     x-current      y-current
 """
 
 
-def deck(dtm: float) -> str:
+def deck(dtm: float, ei: float = 0.0) -> str:
     length = 100.0 / (1.0 + 5.0e4 / 5.0e7)
     return f"""--------------------- CableDyn Input File ---------------------------------
 VIV lock-in gate: taut line in a uniform cross current
 ----------------------- LINE TYPES ------------------------------------------
 TypeName   Diam   Mass/m   EA        BA/-zeta  EI   Cd    Ca    CdAx  CaAx  Cl   dF    cF
 (name)     (m)    (kg/m)   (N)       (N-s/-)   (-)  (-)   (-)   (-)   (-)   (-)  (-)   (-)
-riser      0.10   10.0     5.0e7     -0.8      0.0  1.2   1.0   0.0   0.0   0.8  0.08  0.18
+riser      0.10   10.0     5.0e7     -0.8      {ei}  1.2   1.0   0.0   0.0   0.8  0.08  0.18
 ----------------------- POINTS ----------------------------------------------
 ID   Attachment   X       Y     Z      M    V     CdA   CA
 (#)  (-)          (m)     (m)   (m)    (kg) (m^3) (m^2) (-)
@@ -128,15 +131,15 @@ def main() -> int:
     out.mkdir(parents=True)
     (out / "current.dat").write_text(CURRENT, encoding="utf-8", newline="\n")
     results = {}
-    for dtm in (0.01, 0.002):
-        name = f"viv_dt{dtm}"
-        (out / f"{name}.dat").write_text(deck(dtm), encoding="utf-8", newline="\n")
+    for key, dtm, ei in ((0.01, 0.01, 0.0), (0.002, 0.002, 0.0), ("fei", 0.01, 1.0)):
+        name = f"viv_dt{dtm}" if ei == 0.0 else f"viv_fei_dt{dtm}"
+        (out / f"{name}.dat").write_text(deck(dtm, ei), encoding="utf-8", newline="\n")
         proc = subprocess.run([args.exe, f"{name}.dat", name], cwd=out, capture_output=True, text=True)
         if proc.returncode != 0:
             print(proc.stdout[-2000:], proc.stderr[-2000:])
-            check(False, f"dtM {dtm}: the run completes (exit {proc.returncode})")
+            check(False, f"{name}: the run completes (exit {proc.returncode})")
             continue
-        results[dtm] = response(out / f"{name}.out")
+        results[key] = response(out / f"{name}.out")
     if 0.01 in results:
         ad, f, qtr = results[0.01]
         check(abs(ad - MD_AD) <= 0.03 * MD_AD,
@@ -150,6 +153,12 @@ def main() -> int:
         a1, a2 = results[0.01][0], results[0.002][0]
         check(abs(a2 - a1) <= 0.02 * a1,
               f"dtM 0.002 s stays locked in: mid-span A/D {a2:.3f} against {a1:.3f} at 0.01 s (within 2 %)")
+    if 0.01 in results and "fei" in results:
+        (a0, f0, q0), (a1, f1, q1) = results[0.01], results["fei"]
+        check(abs(a1 - a0) <= 0.01 * a0 and abs(q1 - q0) <= 0.01 * q0,
+              f"finite-EI cable: mid/quarter A/D {a1:.3f}/{q1:.3f}, EI = 0 line {a0:.3f}/{q0:.3f} (within 1 %)")
+        check(abs(f1 - f0) <= 1.0 / 60.0,
+              f"finite-EI cable: response frequency {f1:.3f} Hz, EI = 0 line {f0:.3f} Hz (within 1/60 Hz)")
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
 

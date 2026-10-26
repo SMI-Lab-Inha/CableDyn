@@ -194,7 +194,7 @@ class LineType:
         inertias). All four set writes the 14-column row; all ``None`` writes
         the 10-column row.
     cl, df, cf : float | None
-        Optional cross-flow VIV columns of an ``EI = 0`` type (MoorDyn's lift
+        Optional cross-flow VIV columns of a type (MoorDyn's lift
         coefficient and the half-range and centre of the synchronisation band
         in non-dimensional frequency). ``cl`` set writes the 13-column row, with
         MoorDyn's ``df = 0.08`` and ``cf = 0.18`` where they are ``None``.
