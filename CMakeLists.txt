@@ -1620,6 +1620,21 @@ if(Python3_Interpreter_FOUND)
     message(STATUS "anchor_uplift_channels: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
+  # Cross-flow VIV lock-in of a taut line against MoorDyn-F, at a coarse and a zig-zag-resolving
+  # dtM (needs numpy).
+  if(_range_tdp_numpy_rc EQUAL 0)
+    add_test(NAME viv_lockin
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_viv_lockin.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/viv_lockin)
+    set_tests_properties(viv_lockin PROPERTIES
+      LABELS "python;integration;dynamic;viv;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+  else()
+    message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")
+  endif()
+
   # Node channels on a refined finite-EI line name deck nodes: the static profile's DeckNode
   # column, the standalone static and dynamic cubic-Hermite routes, the mixed route (the OpenFAST
   # aggregate evaluator) and the C API on the coarse lazy-wave deck the static solve refines
