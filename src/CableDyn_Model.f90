@@ -4083,7 +4083,7 @@ CONTAINS
       IF (.NOT. model%viv_node(nd)) CYCLE
       CALL viv_node_coef(model, model%q, nd, coef, uu)
       ia = 3*nd - 2
-      CALL CD_VIV_Node_Lift(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), model%v(ia:ia + 2), uu, coef, &
+      CALL CD_VIV_Node_Lift(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), uu, coef, &
                             model%viv_phi(nd), lift(:, nd), ok)
     END DO
   END SUBROUTINE CD_Get_Model_VIV_Lift
@@ -4117,8 +4117,10 @@ CONTAINS
   SUBROUTINE viv_step_begin(model, dt, ErrStat, ErrMsg)
     !! Step-start VIV quantities from the committed state (q_n, v_n, a_n, phi_n): the mean
     !! squares with the step-start cross-flow sample (viv_ms_next), the phase rate
-    !! (viv_rate), and the explicit phase at the generalised-alpha force level,
-    !! phi_n + (1 - alpha_f) dt rate_n (viv_phi_eval), which the in-step lift uses.
+    !! (viv_rate), and the explicit phase the in-step lift uses (viv_phi_eval): at t_{n+1},
+    !! phi_n + dt rate_n, under the force blend, whose in-step force is r(q_{n+1}, v_{n+1})
+    !! (the committed-state force F_n keeps phi_n); at the generalised-alpha level,
+    !! phi_n + (1 - alpha_f) dt rate_n, under the configuration blend.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4131,6 +4133,7 @@ CONTAINS
     CALL CD_Latch_Model_VIV_Window(model, dt)
     w = MIN(CD_ONE, dt/model%viv_tw)
     alpha_f = model%cfg%rho_inf/(model%cfg%rho_inf + CD_ONE)
+    IF (model%cfg%force_blend) alpha_f = CD_ZERO
     model%viv_rate = CD_ZERO
     model%viv_ms_next = model%viv_ms
     model%viv_phi_eval = model%viv_phi
@@ -4138,8 +4141,8 @@ CONTAINS
       IF (.NOT. model%viv_node(nd)) CYCLE
       CALL viv_node_coef(model, model%q, nd, coef, uu)
       ia = 3*nd - 2
-      CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), model%v(ia:ia + 2), &
-                                   model%a(ia:ia + 2), uu, yd, ydd, un, ok)
+      CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), &
+                                   smoothed(model%a, ia), uu, yd, ydd, un, ok)
       IF (.NOT. ok) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
         RETURN
@@ -4174,7 +4177,7 @@ CONTAINS
       CALL viv_node_coef(model, model%q_step, nd, coef, uu)
       ia = 3*nd - 2
       CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
-                                   model%v_step(ia:ia + 2), model%a_step(ia:ia + 2), uu, yd, ydd, un, ok)
+                                   smoothed(model%v_step, ia), smoothed(model%a_step, ia), uu, yd, ydd, un, ok)
       IF (.NOT. ok) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
         RETURN
@@ -4189,6 +4192,22 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'VIV phase update produced a non-finite phase')
     END IF
   END SUBROUTINE viv_step_end
+
+  PURE FUNCTION smoothed(x, ia) RESULT(xs)
+    !! Node kinematics for the VIV phase and lift: the node value averaged with its two
+    !! neighbours, (x_{i-1} + 2 x_i + x_{i+1})/4, at the node whose x component is ia. Thorsen's
+    !! model follows the cross-flow motion of a continuum. The node's own acceleration weights
+    !! the mesh-scale zig-zag mode (neighbours moving opposite to the node) by omega^2, so at
+    !! steps that resolve that mode it took over the phase, and through the lift the phase
+    !! pumped the mode until the line lost lock-in. The average removes the zig-zag mode
+    !! exactly and keeps a resolved mode of wavenumber k to cos^2(k l0 / 2). The lift takes the
+    !! smoothed velocity as well: through its dependence on the node's own velocity, modulated by
+    !! the phase, the zig-zag mode was pumped even with a smoothed phase.
+    REAL(wp), INTENT(IN) :: x(:)
+    INTEGER, INTENT(IN) :: ia
+    REAL(wp) :: xs(3)
+    xs = 0.25_wp*(x(ia - 3:ia - 1) + 2.0_wp*x(ia:ia + 2) + x(ia + 3:ia + 5))
+  END FUNCTION smoothed
 
   SUBROUTINE clear_viv(model)
     !! Release the VIV storage; the model then carries no VIV.
@@ -7575,14 +7594,17 @@ CONTAINS
           IF (.NOT. model%viv_node(nd)) CYCLE
           CALL viv_node_coef(model, q, nd, coef, uu)
           ia = 3*nd - 2
-          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), v(ia:ia + 2), uu, coef, &
+          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coef, &
                                 model%viv_phi_eval(nd), fl, ok, jv3, jp3, jn3)
           IF (.NOT. ok) THEN
             CALL fail(ErrStat, ErrMsg, 'VIV lift: the neighbours of a node coincide (no line tangent)')
             RETURN
           END IF
           force(ia:ia + 2) = force(ia:ia + 2) + fl
-          jac_v(ia:ia + 2, ia:ia + 2) = jac_v(ia:ia + 2, ia:ia + 2) + jv3
+          ! the lift takes the smoothed velocity (v_{i-1} + 2 v_i + v_{i+1})/4 (smoothed)
+          jac_v(ia:ia + 2, ia:ia + 2) = jac_v(ia:ia + 2, ia:ia + 2) + 0.5_wp*jv3
+          jac_v(ia:ia + 2, ia - 3:ia - 1) = jac_v(ia:ia + 2, ia - 3:ia - 1) + 0.25_wp*jv3
+          jac_v(ia:ia + 2, ia + 3:ia + 5) = jac_v(ia:ia + 2, ia + 3:ia + 5) + 0.25_wp*jv3
           jac_q(ia:ia + 2, ia - 3:ia - 1) = jac_q(ia:ia + 2, ia - 3:ia - 1) + jp3
           jac_q(ia:ia + 2, ia + 3:ia + 5) = jac_q(ia:ia + 2, ia + 3:ia + 5) + jn3
         END DO
@@ -7891,7 +7913,7 @@ CONTAINS
           IF (.NOT. model%viv_node(nd)) CYCLE
           CALL viv_node_coef(model, q, nd, coef, uu)
           ia = 3*nd - 2
-          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), v(ia:ia + 2), uu, coef, &
+          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coef, &
                                 model%viv_phi_eval(nd), fl, ok, jv3, jp3, jn3)
           IF (.NOT. ok) THEN
             CALL fail(ErrStat, ErrMsg, 'VIV lift: the neighbours of a node coincide (no line tangent)')
@@ -7900,8 +7922,15 @@ CONTAINS
           force(ia:ia + 2) = force(ia:ia + 2) + fl
           DO cb = 1, 3
             DO ra = 1, 3
+              ! the lift takes the smoothed velocity (v_{i-1} + 2 v_i + v_{i+1})/4 (smoothed)
               CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb - 1, &
-                                       jv3(ra, cb), ErrStat, ErrMsg)
+                                       0.5_wp*jv3(ra, cb), ErrStat, ErrMsg)
+              IF (ErrStat /= CD_MODEL_OK) RETURN
+              CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb - 4, &
+                                       0.25_wp*jv3(ra, cb), ErrStat, ErrMsg)
+              IF (ErrStat /= CD_MODEL_OK) RETURN
+              CALL scatter_scalar_band(jac_v_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb + 2, &
+                                       0.25_wp*jv3(ra, cb), ErrStat, ErrMsg)
               IF (ErrStat /= CD_MODEL_OK) RETURN
               CALL scatter_scalar_band(jac_q_band, model%free_map_work, kl, ku, ia + ra - 1, ia + cb - 4, &
                                        jp3(ra, cb), ErrStat, ErrMsg)
@@ -8136,7 +8165,7 @@ CONTAINS
           IF (.NOT. model%viv_node(nd)) CYCLE
           CALL viv_node_coef(model, q, nd, coef, uu)
           ia = 3*nd - 2
-          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), v(ia:ia + 2), uu, coef, &
+          CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coef, &
                                 model%viv_phi_eval(nd), fl, ok)
           IF (.NOT. ok) THEN
             CALL fail(ErrStat, ErrMsg, 'VIV lift: the neighbours of a node coincide (no line tangent)')
