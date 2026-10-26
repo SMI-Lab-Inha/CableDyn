@@ -1087,6 +1087,14 @@ file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/line_attachments)
 add_test(NAME line_attachments COMMAND test_line_attachments WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/line_attachments)
 set_tests_properties(line_attachments PROPERTIES LABELS "fortran;static;dynamic;validation")
 
+# Bend stiffeners (STIFFENERS): element properties against closed forms and a fine integration,
+# the deck grammar, and the stiffener's end on a stock-order LINES row.
+add_executable(test_bend_stiffener tests/test_bend_stiffener.f90)
+target_link_libraries(test_bend_stiffener PRIVATE cabledyn_core)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/bend_stiffener)
+add_test(NAME bend_stiffener COMMAND test_bend_stiffener WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bend_stiffener)
+set_tests_properties(bend_stiffener PROPERTIES LABELS "fortran;driver;static")
+
 # OpenFAST CompMooring=5 aggregate: one deck carrying BOTH EI=0 mooring lines AND finite-EI
 # Hermite cables composed behind the same FMF moving-point facade. Proves pure-mooring
 # equivalence to CD_FMF (bit-for-bit), mixed-deck composition + column routing, pure-cable
@@ -2293,6 +2301,15 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(driver_touchdown_recovery PROPERTIES
     LABELS "python;driver;integration;static"
     ENVIRONMENT "${_cabledyn_python_test_environment}")
+  # A hang-off through a tapered bend stiffener follows the planar elastica (scipy solve_bvp)
+  # within 2 % of the root moment and 1 cm; skipped where scipy is not installed.
+  add_test(NAME driver_bend_stiffener
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_bend_stiffener.py
+                   $<TARGET_FILE:cabledyn>)
+  set_tests_properties(driver_bend_stiffener PROPERTIES
+    LABELS "python;driver;integration;static;validation"
+    SKIP_RETURN_CODE 77
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
 endif()
 # A clamped finite-EI cable with a buoyant section on a Rigid6 body: the body static solve
 # holds the objects at their deck poses, warns once, and reports no balanced clamped end loads.
@@ -2772,7 +2789,7 @@ endforeach()
 # spectra, stream waves, anisotropic friction, modal analysis, clamped ends on bodies, MoorDyn-C
 # kinematics files, bodies and rods, line failure): every shipped deck must run to completion.
 foreach(_feature_example IN ITEMS
-    lazy_wave_vessel_motion lazy_wave_vessel_rao lazy_wave_buoyancy_modules lazy_wave_buoyancy_smeared
+    lazy_wave_vessel_motion lazy_wave_vessel_rao lazy_wave_bend_stiffener lazy_wave_buoyancy_modules lazy_wave_buoyancy_smeared
     chain_range_tdp chain_torsethaugen_spread chain_two_train_sea stream_wave_shallow_chain
     airy_wave_shallow_chain laid_cable_cross_current chain_modes lazy_wave_modes buoy_clamped_cable
     moordynC_wavekin/chain_wavekin7_currents1 spar_pinned_rods mixed_body_rods_points

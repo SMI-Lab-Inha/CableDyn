@@ -335,6 +335,12 @@ touchdown and lazy-wave shape from the geometry alone; there is no initial-shape
        cable — :doc:`tutorial_motion`
      - Hermite, dynamic
      - ~9 s
+   * - ``lazy_wave_bend_stiffener.dat``
+     - the RAO-driven cable with a 4 m polyurethane bend stiffener (a cylindrical root and a cone,
+       ``STIFFENERS``) at its clamped hang-off; ``BendMom1N1`` is the stiffener root moment and the
+       curvature channels sample the stiffener and the cable past its tip — :doc:`modeling`
+     - Hermite, dynamic
+     - ~9 s
    * - ``lazy_wave_buoyancy_modules.dat``
      - the 80 m cable in a 0.5 m/s current with its buoyant stretch built from ten discrete
        buoyancy modules (``ATTACHMENTS`` series ``first:pitch:last``) — :doc:`tutorial_lazywave`

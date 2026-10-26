@@ -102,6 +102,12 @@ Line and constitutive capability
      - Supported
      - lumped at nodes of a finite-EI cable, standalone and coupled; rejected on the two-moving-end
        compatibility solver
+   * - Bend stiffeners (``STIFFENERS``)
+     - Supported with limits
+     - tapered linear-elastic sleeve over a finite-EI line end, adding bending stiffness, mass,
+       buoyancy and drag per element, standalone and coupled; nonlinear (moment–curvature)
+       materials and bend restrictors are not provided; rejected on the two-moving-end
+       compatibility solver
    * - Modal analysis (``nModes``)
      - Standalone only
      - natural frequencies and mode shapes of each line about its static equilibrium (all

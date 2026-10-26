@@ -140,6 +140,59 @@ The element follows the geometrically exact Kirchhoff-rod formulation of
 interpolation of :ref:`Meier, Popp & Wall (2015) <ref-meier2015>`, reduced to a torsion-free
 cable. Torsion enters only through the condensed line term below.
 
+.. _theory-bend-stiffeners:
+
+Bend stiffeners
+~~~~~~~~~~~~~~~
+
+A bend stiffener (``STIFFENERS``) is a sleeve of outer diameter :math:`D(s)`, bore :math:`d_i`,
+modulus :math:`E_s` and density :math:`\rho_s` over a line end, made of conical segments in
+which :math:`D` varies linearly with the arc length. Cable and sleeve bend together, as in the
+stiffener design model of :ref:`Boef & Out (1990) <ref-boef1990>`, so over the stiffener
+
+.. math::
+
+   EI(s) = EI_c + E_s \frac{\pi}{64}\left(D(s)^4 - d_i^4\right),
+
+with :math:`EI_c` the cable's bending stiffness. The sleeve carries no axial load and no torque
+(:math:`EA` and :math:`GJ` are the cable's), and its material is linear elastic. The element
+energy above takes one :math:`EI` per element, so an element over the arc :math:`[a, b]` of
+length :math:`L` takes the compliance average
+
+.. math::
+
+   EI_e = L \left( \int_a^b \frac{\mathrm{d}s}{EI(s)} \right)^{-1},
+
+which gives the exact relative end rotation of the element under a uniform moment: the stiff
+root of a tapered sleeve is not allowed to stiffen a whole element that only partly lies on it.
+The element mass per length is the cable's plus :math:`\rho_s \tfrac{\pi}{4}\,
+\overline{D^2 - d_i^2}`; buoyancy acts on the displaced area of cable and solid sleeve,
+:math:`\tfrac{\pi}{4}\,(d^2 + \overline{D^2 - d_i^2})`, and drag and added mass on the mean outer
+diameter :math:`\overline{\max(D, d)}`, where the bar is the mean over the element and
+:math:`d` the cable diameter. The integrals use six-point Gauss–Legendre quadrature on each
+part of the element a segment covers. With these one-per-element values the taper is resolved
+by the mesh, as in a segmented line model; the driver notes a stiffener that spans fewer than
+ten elements.
+
+The recovered section moment :math:`M` (:ref:`theory-output-recovery`) is shared in proportion
+to the stiffnesses, since cable and sleeve take the same curvature :math:`\kappa = M/EI_e`: the
+cable carries :math:`EI_c\,\kappa`, reported as ``BendMom``, and the sleeve
+:math:`(EI_e - EI_c)\,\kappa`, reported as ``StfMom``. At a node between a covered and a bare
+element the side of the larger curvature, the bare one, gives the values. The deflection angle
+``FairDefl``/``AnchDefl`` is :math:`\arccos(\hat{\mathbf F}\cdot\hat{\mathbf d})` between the
+end force :math:`\mathbf F` and the direction :math:`\mathbf d` the end connection holds (into
+the line), the angle through which the stiffener turns the cable.
+
+The planar check ``driver_bend_stiffener`` compares a hang-off clamped through a 5 m stiffener
+(a cylindrical root and a cone, 16 times the cable's stiffness at the root) with an independent
+collocation solution of the extensible elastica
+:math:`\theta' = M/EI(s)`, :math:`M' = -(1 + \varepsilon)(\cos\theta\,n_z - \sin\theta\,n_x)`,
+:math:`\mathbf n' = (0, w(s))`: on 0.05 m elements the cable's moment over the stiffener and
+3 m beyond follows the elastica within 0.8 % of its root value, cable and sleeve moments add up
+to the section moment within 0.2 % at the root, the deflection angle agrees within 0.003°, and
+the node positions within 1 mm. On the same hang-off, the curvature along the stiffener follows
+OrcaFlex 11.6d with its stiffener given as a line attachment within 0.8 % of the root curvature.
+
 .. _theory-output-recovery:
 
 Node tension, curvature and bend moment

@@ -28,6 +28,12 @@ Element formulation
   element formulation for geometrically exact curved Kirchhoff rods. *Computer Methods in
   Applied Mechanics and Engineering* **278**, 445–478. https://doi.org/10.1016/j.cma.2014.05.017
 
+.. _ref-boef1990:
+
+- **Boef, W. J. C. & Out, J. M. M. (1990).** Analysis of a flexible-riser top connection with
+  bend restrictor. *Offshore Technology Conference*, Houston, OTC-6436-MS.
+  https://doi.org/10.4043/6436-MS
+
 .. _ref-bergou2008:
 
 - **Bergou, M., Wardetzky, M., Robinson, S., Audoly, B. & Grinspun, E. (2008).** Discrete

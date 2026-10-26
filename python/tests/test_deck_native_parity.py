@@ -202,6 +202,63 @@ def test_attachment_arc_length_lies_on_the_line(arc, accepted):
         _rejects(text, "ATTACHMENTS ArcLength lies beyond the end of line 1")
 
 
+_STIFFENER_ROOT = "1       A    0.4     0.45    0.45   0.17    5.0e7   1150"
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        ("1 A 0.4 0.45 0.45 0.17 5.0e7", "STIFFENERS rows must be: LineID End Length"),
+        ("x A 0.4 0.45 0.45 0.17 5.0e7 1150", "STIFFENERS LineID must be an integer"),
+        ("2 A 0.4 0.45 0.45 0.17 5.0e7 1150", "STIFFENERS row references undefined LINE id 2"),
+        ("1 C 0.4 0.45 0.45 0.17 5.0e7 1150", "STIFFENERS End must be A or B"),
+        ("1 A 0.4 0.45 0.45 0.17 5.0e7 dense", "must be plain numbers"),
+        ("1 A 0.4 0.45 0.45 0.17 2.0e15 1150", "must be finite and at most 1e15"),
+        ("1 A 0.0 0.45 0.45 0.17 5.0e7 1150", "Length, RootOD, TipOD and E must be > 0"),
+        ("1 A 0.4 0.45 0.45 -0.1 5.0e7 1150", "InnerD and Density must be >= 0"),
+        ("1 A 0.4 0.45 0.15 0.17 5.0e7 1150", "InnerD must be smaller than RootOD and TipOD"),
+        ("1 B 167.0 0.45 0.45 0.17 5.0e7 1150", "are longer than the line"),
+    ],
+)
+def test_stiffener_rows_are_native(row, message):
+    _rejects(_example("lazy_wave_bend_stiffener.dat", (_STIFFENER_ROOT, row)), message)
+
+
+def test_stiffener_needs_a_finite_ei_line():
+    text = _section(_HELD, "STIFFENERS", "1 A 1.0 0.5 0.5 0.3 5.0e7 1150")
+    _rejects(text, "STIFFENERS name line 1, which is not a finite-EI line")
+
+
+@pytest.mark.parametrize(
+    ("channel", "message"),
+    [
+        ("StfMom1N3", None),
+        ("FairDefl1", None),
+        ("AnchDefl1", "needs a Rigid or rotational-spring END CONNECTIONS row at End B of line 1"),
+    ],
+)
+def test_stiffener_and_deflection_channels_are_native(channel, message):
+    text = _example("lazy_wave_bend_stiffener.dat", ('"TDP1s"', f'"TDP1s"\n"{channel}"'))
+    if message is None:
+        DeckFile.from_text(text)
+    else:
+        _rejects(text, message)
+
+
+def test_stiffener_moment_needs_a_stiffener():
+    text = _example("lazy_wave_vessel_rao.dat", ('"TDP1s"', '"TDP1s"\n"StfMom1N3"'))
+    _rejects(text, "line 1 has no STIFFENERS, so no stiffener moment")
+
+
+def test_stiffener_aliases_and_end_spellings_are_native():
+    text = _example(
+        "lazy_wave_bend_stiffener.dat",
+        ("STIFFENERS ---", "BEND STIFFENERS ---"),
+        (_STIFFENER_ROOT, "1 enda 0.4 0.45 0.45 0.17 5.0e7 1150"),
+    )
+    DeckFile.from_text(text)
+
+
 # --------------------------------------------------------------------------- output channels
 
 

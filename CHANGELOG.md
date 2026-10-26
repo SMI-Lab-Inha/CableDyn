@@ -8,6 +8,26 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Bend stiffeners (`STIFFENERS` table): a tapered polyurethane sleeve over an end of a finite-EI
+  line, given as conical segments from the root outward (outer diameters, bore, modulus,
+  density). Each element it covers takes the compliance average of the cable-plus-sleeve
+  bending stiffness and the sleeve's mass, buoyancy and drag; standalone and coupled, with the
+  Python reader and builder. A hang-off clamped through a 5 m stiffener follows an independent
+  solution of the planar elastica within 0.2 % of the root moment, and its curvature follows
+  OrcaFlex 11.6d within 0.8 %. Initialisation notes name a stiffener spanning fewer than 10
+  elements and one at a pinned end. Example `lazy_wave_bend_stiffener.dat`.
+- Output channels `StfMom<L>N<J>`, the share of the section moment a bend stiffener carries,
+  and `FairDefl<L>`/`AnchDefl<L>`, the deflection of the end force from the direction a held
+  END CONNECTIONS row declares (with the end tension, a stiffener's load case).
+
+### Changed
+
+- Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
+  range graphs and element file) report the cable's own moment, the line type's EI times the
+  curvature; lines without stiffeners are unchanged.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added

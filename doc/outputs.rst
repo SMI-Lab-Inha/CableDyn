@@ -223,8 +223,8 @@ finite-EI line of the run:
      - nodal curvature (same definition as ``Curv<L>N<J>``)
    * - ``BendMoment``
      - ``(N.m)``
-     - bend moment (same definition as ``BendMom<L>N<J>``); written as 0 by the ``EI = 0``
-       static route
+     - bend moment (same definition as ``BendMom<L>N<J>``: the cable's own share under a bend
+       stiffener); written as 0 by the ``EI = 0`` static route
    * - ``Declination``
      - ``(deg)``
      - axial-tangent angle from +Z (0 = up, 90 = horizontal, 180 = down)
@@ -301,7 +301,8 @@ B)``, header row, units row, data (12 columns):
      - maximum curvature over the element
    * - ``BendMomentAtPeak``
      - ``(N.m)``
-     - ``EI × PeakCurvature``
+     - ``EI × PeakCurvature``, with the line type's ``EI`` (the cable's share under a bend
+       stiffener)
    * - ``MinimumAxialResultant``
      - ``(N)``
      - minimum axial force resultant over the element (negative = compression)
@@ -558,6 +559,13 @@ Line-end channels
    * - ``FairAngle<L>`` / ``AnchAngle<L>``
      - aliases of ``FairDecl<L>`` / ``AnchDecl<L>``
      - deg
+   * - ``FairDefl<L>`` / ``AnchDefl<L>``
+     - deflection of the End-A / End-B end force (``FairTen`` / ``AnchTen``) from the direction
+       a ``Rigid`` or rotational-spring ``END CONNECTIONS`` row holds at that end, turning with
+       the body or vessel it is on: 0 when the line leaves the connection along that direction.
+       With the end force, the load case of a bend stiffener or hang-off design. Only at an end
+       with such a row
+     - deg
 
 A grounded anchor segment reads ``AnchIncl ≈ 0``; the small non-zero value reports the actual
 orientation of the last element, which CableDyn does not force to horizontal.
@@ -648,7 +656,14 @@ Line-node channels
        of the moment recovered from nodal equilibrium, the mean of the two neighbouring elements
        (one-sided at a line end, where it is the end connection moment);
        ``OutputRecovery element``: ``EI`` times the larger one-sided exact curvature. 0 on
-       ``EI = 0`` lines
+       ``EI = 0`` lines. Under a bend stiffener (``STIFFENERS``) it is the cable's own share,
+       the line type's ``EI`` times the curvature; the stiffener's share is ``StfMom<L>N<J>``
+       and the two add up to the section moment
+     - N·m
+   * - ``StfMom<L>N<J>``
+     - the share of the section moment a bend stiffener carries at node ``J``, the section
+       moment less ``BendMom<L>N<J>``; 0 where no stiffener covers the node. Only on a line with
+       ``STIFFENERS``
      - N·m
    * - ``L<L>N<J>px`` / ``py`` / ``pz``
      - node position component

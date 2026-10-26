@@ -133,16 +133,17 @@ except that `SYROPE IC` must come **after** `LINES`, because its rows name lines
 exist. A conventional layout is:
 
 LINE TYPES → BODIES → EXTERNAL LOADS → ROD TYPES → RODS → POINTS → TURBINES → LINES → SYROPE IC →
-SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / FAILURE / CONTROL → OPTIONS →
-OUTPUTS
+SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / STIFFENERS / FAILURE / CONTROL →
+OPTIONS → OUTPUTS
 
 Within LINE TYPES, the header row must precede the data rows because it selects their column
 order.
 
 A **line is one object spanning two end points** (End A = `NodeA`, End B = `NodeB`), built from
 an ordered list of **sections**, each with its own line type and mesh density (the same
-line-and-section arrangement OrcaFlex uses): a bare cable, a bend stiffener, and a buoyancy
-stretch are sections of one line. A single-material line is one section. MoorDyn composites written
+line-and-section arrangement OrcaFlex uses): a bare cable and a buoyancy stretch are sections of
+one line, and a bend stiffener over its end is a [STIFFENERS](#stiffeners-optional-finite-ei-lines)
+row. A single-material line is one section. MoorDyn composites written
 as separate lines
 joined at a `Connect` point are also valid.
 
@@ -208,6 +209,7 @@ are collapsed. It must match one of the spellings below; any other name fails wi
 | END CONNECTIONS | `END CONNECTIONS`, `END CONNECTION` |
 | EQUIVALENT BUOYANCY | `EQUIVALENT BUOYANCY`, `EQUIVALENT SECTIONS`, `BUOYANCY SECTIONS` |
 | ATTACHMENTS | `ATTACHMENTS`, `LINE ATTACHMENTS`, `CLUMPS` |
+| STIFFENERS | `STIFFENERS`, `STIFFENER`, `BEND STIFFENERS`, `BEND STIFFENER` |
 | FAILURE | `FAILURE`, `FAILURES` |
 | CONTROL | `CONTROL`, `CONTROLS` |
 | TURBINES | `TURBINES`, `TURBINE` |
@@ -687,8 +689,9 @@ as written.
 | `Length` | section unstretched length [m]; > 0 and at most 1e6, with `Length/NumSegs` at least 1e-6 |
 | `NumSegs` | section element count, 1 to 1 000 000. A finite-EI line needs far fewer: its static solve is verified up to 20 480 elements on the 80 m reference cable (elements of about 8 mm) and does not converge at 40 960 (about 4 mm). Keep finite-EI elements longer than about `sqrt(EI/EA)`, and refine only where the curvature needs it |
 
-A single-material line is one `SECTIONS` row; a bare cable with a buoyancy stretch and a bend
-stiffener is three sections of one line.
+A single-material line is one `SECTIONS` row; a bare cable with a buoyancy stretch is three sections
+of one line (bare, buoyant, bare). A bend stiffener over a line end is a
+[STIFFENERS](#stiffeners-optional-finite-ei-lines) row, not a section.
 
 - A standalone deck with a finite-EI section needs `dtM`/`TMax`, unless it is a mixed
   `EI = 0` + finite-EI deck, which may be static-only.
@@ -760,7 +763,8 @@ Behaviour:
   with `vesselMotion` or `vesselRAO` it is stored in vessel axes (equal to global axes at the
   reference pose) and turns with the vessel.
 - The connection moment equals the bending moment of the line at its end node, so
-  `BendMom<L>N1` (End A) and `BendMom<L>N<NumSegs+1>` (End B) report it.
+  `BendMom<L>N1` (End A) and `BendMom<L>N<NumSegs+1>` (End B) report it; under a bend stiffener
+  it is `BendMom` plus `StfMom` at that node.
 - On a `Body<N>` point the direction is given in the body frame, like the point offset, and
   turns with the body. On a rod end it must be parallel to the rod axis (either sense, in the
   frame of the rod's deck coordinates); another direction is rejected by name. The connection
@@ -930,6 +934,64 @@ Behaviour:
   Python), where the SeaState kinematics the host samples at every cable node reach the
   attachments at theirs; a checkpoint restart is bit-identical. They are rejected on the
   two-moving-end compatibility route.
+
+### STIFFENERS (optional, finite-EI lines)
+
+A bend stiffener: a tapered polyurethane sleeve over a line end, usually at a hang-off, that
+spreads the bending of the cable over its length. The sleeve is not a separate object; it adds
+its bending stiffness, mass, buoyancy and drag to the elements it covers. Each row is one
+conical segment, and the rows of one line end follow each other outward from the stiffener
+root, each starting where the previous one ends. A cylindrical root, a cone and a tip are three
+rows.
+
+```text
+--------------------- STIFFENERS ------------------------------------
+LineID  End  Length  RootOD  TipOD  InnerD  E       Density
+(-)     (-)  (m)     (m)     (m)    (m)     (Pa)    (kg/m^3)
+1       A    0.4     0.45    0.45   0.17    5.0e7   1150
+1       A    3.6     0.45    0.18   0.17    5.0e7   1150
+```
+
+| Column | Meaning |
+|--------|---------|
+| `LineID` | existing `LINES` id of a finite-EI line |
+| `End` | the end the stiffener sleeves: `A` or `B` (also `EndA`, `EndB`) |
+| `Length` | length of the segment along the line [m] |
+| `RootOD` | outer diameter at the segment's root side [m] |
+| `TipOD` | outer diameter at the segment's tip side [m]; the diameter varies linearly in between |
+| `InnerD` | inner (bore) diameter [m], smaller than both outer diameters |
+| `E` | Young's modulus of the sleeve material [Pa] |
+| `Density` | density of the sleeve material [kg/m³] |
+
+Behaviour:
+
+- Over the stiffener the section bends as cable and sleeve together:
+  `EI(s) = EI_cable + E π/64 (OD(s)⁴ − InnerD⁴)`. The sleeve carries no axial load and no
+  torque, so `EA` and `GJ` are the cable's. Each element takes the compliance average of
+  `EI(s)` over its length, `L / ∫ ds/EI(s)`, the cable mass plus the mean sleeve mass, a
+  displaced area of cable plus solid sleeve, and the mean outer diameter for drag and added mass
+  (see [theory](theory.rst), *Bend stiffeners*). Elements the stiffener does not reach keep
+  their line type's values exactly.
+- The element properties are piecewise constant, one value per deck element, so the deck mesh
+  must resolve the taper: an initialisation note names a stiffener that spans fewer than 10
+  elements and the element length that resolves it. Split the section at the stiffener tip and
+  mesh the part under it finely (about 0.1–0.2 m elements for a typical 3–8 m stiffener).
+- The stiffener root takes the moment only where the end is held in rotation: declare the end
+  `Rigid`, or a rotational spring, in [END CONNECTIONS](#end-connections-optional-finite-ei-lines).
+  A stiffener at a pinned end prints a note.
+- Outputs: `Curv<L>N<J>` is the curvature cable and sleeve share; `BendMom<L>N<J>` the cable's
+  own moment (the line type's `EI` × curvature, the value to check against the cable's limits);
+  `StfMom<L>N<J>` the sleeve's share, so that the two add up to the section moment the root
+  connection carries. `FairDefl<L>`/`AnchDefl<L>` give the angle between the end force and the
+  held direction, which with `FairTen`/`AnchTen` is the stiffener's load case. Keep the fine
+  mesh a couple of metres past the stiffener tip, where the cable's curvature can peak.
+- The material is linear elastic. A row fails if the line is not finite-EI, a value is
+  non-finite, above 1e15 or out of range (`Length`, `RootOD`, `TipOD` and `E` must be positive,
+  `InnerD` and `Density` non-negative, `InnerD` below both outer diameters), or the stiffeners
+  of End A and End B together are longer than the line. On a stock-order line (anchor as
+  `NodeA`) the `End` column follows the written row, so the stiffener stays on the same physical
+  end. Stiffeners run wherever the cubic-Hermite cable does, standalone and coupled; they are
+  rejected on the two-moving-end compatibility route.
 
 ### FAILURE (optional, EI = 0 decks)
 
@@ -1295,13 +1357,15 @@ bending moment. None of these channels is mandatory.
 | `FairDecl<L>` | line L fairlead (End A) declination from +GZ (0 = up, 90 = horizontal, 180 = down) | deg |
 | `AnchDecl<L>` | line L anchor (End B) declination from +GZ (0 = up, 90 = horizontal, 180 = down) | deg |
 | `FairAngle<L>` / `AnchAngle<L>` | aliases of `FairDecl<L>` / `AnchDecl<L>` | deg |
+| `FairDefl<L>` / `AnchDefl<L>` | line L deflection of the End-A / End-B end force from the direction a `Rigid` or rotational-spring END CONNECTIONS row holds there (0 when the line leaves along it); only at such an end | deg |
 | `Point<P>p{x,y,z}` | point P position component | m |
 | `Con<P>p{x,y,z}` | alias of `Point<P>p{x,y,z}` (MoorDyn v1 spelling) | m |
 | `Body<N>…`, `Rod<N>…` | Rigid6 body and rod channels in the MoorDyn-F names: position, attitude, velocity and acceleration (`P`, `R`, `V`, `RV`, `A`, `RA`), net force and moment (`F`, `M`), rod end tensions (`TenA`, `TenB`), submerged fraction (`Sub`) and rod node positions (`Rod<N>N<k>P`). Available on every route that carries bodies or rods, OpenFAST included; the full list and units are in [Outputs](outputs.rst) | see Outputs |
 | `Point<P>F{x,y,z}`, `Point<P>FH` | resultant of the line-end and cable end forces on point P (each the `FairTen`/`AnchTen` end force): the anchor load of a Fixed point shared by several lines, the line load a free point balances; `FH` is its horizontal magnitude. Available on every route (static, `EI = 0`, finite-EI, multibody and OpenFAST) except the two-moving-end finite-EI route, which rejects it by name | N |
 | `Ten<L>N<J>` | line L effective tension at node J. EI = 0 lines: the mean of the two adjacent segment tensions. Finite-EI lines: the axial component of the section force recovered from nodal equilibrium (`OutputRecovery element`: the length-weighted mean of the adjacent element-mean axial forces). End nodes report the line-end force of `FairTen`/`AnchTen` | N |
 | `Curv<L>N<J>` | line L curvature at node J. `EI = 0` lines: geometric curvature of the circle through the node and its two neighbours (end nodes take the adjacent interior value). Cubic-Hermite lines: `BendMom<L>N<J>` / EI, the larger of the two sides at a section junction (`OutputRecovery element`: exact curvature of the continuous centreline, the larger one-sided element value at an interior node) | 1/m |
-| `BendMom<L>N<J>` | line L bend moment = EI × curvature **relative to the stress-free reference shape** (≈ 0 at the reference; the finite-EI reference is straight). Finite-EI lines: recovered from nodal equilibrium, the moment the neighbouring elements carry (`OutputRecovery element`: EI × the larger one-sided exact curvature); 0 on EI = 0 lines | N·m |
+| `BendMom<L>N<J>` | line L bend moment = EI × curvature **relative to the stress-free reference shape** (≈ 0 at the reference; the finite-EI reference is straight). Finite-EI lines: recovered from nodal equilibrium, the moment the neighbouring elements carry (`OutputRecovery element`: EI × the larger one-sided exact curvature); 0 on EI = 0 lines. Under a bend stiffener: the cable's own share, the line type's EI × curvature | N·m |
+| `StfMom<L>N<J>` | line L share of the section moment a bend stiffener carries at node J (the section moment less `BendMom<L>N<J>`; 0 outside the stiffener); only on a line with STIFFENERS | N·m |
 | `L<L>N<J>p{x,y,z}` | line L node J position component | m |
 | `L<L>N<J>v{x,y,z}` | line L node J velocity component (0 in static-only runs) | m/s |
 | `L<L>N<J>a{x,y,z}` | line L node J acceleration component (0 in static-only runs) | m/s² |
