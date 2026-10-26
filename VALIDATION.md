@@ -62,6 +62,7 @@ article's methods, are compared in
 | **L2-V** | VolturnUS-S anchor tension | closed-form catenary | 0.77% | <3% | Pass |
 | **L2-80** | Lozon 80 m all-chain mooring | catenary (H) / MoorDyn-F (fairlead) | 0.03% / 1.8% | <2% / <5% | Pass |
 | **L2-arb** | Closed-form catenary reference check | OrcaFlex VolturnUS-S ref | 0.69% | <2% | Pass |
+| **L2-VIV** | Cross-flow VIV lock-in of a taut 100 m line, U = 0.06–0.42 m/s | MoorDyn-F (OpenFAST v5 `moordyn_driver`, `dtM` 5e-4 s) | mode-1 and mode-3 lock-in (U ≤ 0.18 and ≥ 0.36 m/s): mid-span A/D within 1.2%, frequency within one spectral bin; same response at `dtM` 5e-4 to 1e-2 s; at 0.21–0.33 m/s the codes settle on different modes (MoorDyn-F mode 1, CableDyn mode 2) | A/D <3%, frequency within one spectral bin (`viv_lockin`) | Pass scoped |
 | **L3-1** | WD0050 static | OrcaFlex | 0.15 / 0.85% | <2% | Pass |
 | **L3-2** | Regular-wave dynamic | OrcaFlex (pinned, dt-converged) | mean 0.30%, swing 8.4% | <2% / <15% | Pass |
 | **L3-3** | Current-deflected static | OrcaFlex | 0.07–0.67% | <2% | Pass |
