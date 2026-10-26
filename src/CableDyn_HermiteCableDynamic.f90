@@ -216,6 +216,10 @@ MODULE CableDyn_HermiteCableDynamic
     INTEGER :: ne = 0, nn = 0, ndof = 0
     INTEGER :: axial_quadrature_order = 4, bending_quadrature_order = 4
     REAL(wp), ALLOCATABLE :: l0(:), EA(:), EI(:), rho_a(:), w(:)   ! per element
+    ! The cable's own bending stiffness per element, for the outputs: EI less the sleeve of a
+    ! bend stiffener (STIFFENERS), and equal to EI on every element without one. The bend
+    ! moment outputs report the cable's share EI_line kappa and the sleeve's the rest.
+    REAL(wp), ALLOCATABLE :: EI_line(:)
     ! Optional axial Kelvin-Voigt damping. BA is the axial constitutive dashpot
     ! coefficient [N s] after resolving the deck's direct-BA / negative-zeta convention.
     ! It is integrated over reference arc length with the same Hermite kinematics and
@@ -671,8 +675,9 @@ CONTAINS
 
     model%ne = ne; model%nn = nn; model%ndof = ndof
     model%seabed_z = seabed_z; model%kn = kn
-    ALLOCATE (model%l0(ne), model%EA(ne), model%EI(ne), model%rho_a(ne), model%w(ne))
+    ALLOCATE (model%l0(ne), model%EA(ne), model%EI(ne), model%EI_line(ne), model%rho_a(ne), model%w(ne))
     model%l0 = l0; model%EA = EA; model%EI = EI; model%rho_a = rho_a; model%w = w
+    model%EI_line = EI
     model%ei_resolve = MAXVAL(ABS(w)*l0*l0)/12.0_wp
 
     ! gen-alpha constants
@@ -5464,7 +5469,8 @@ CONTAINS
     model%output_element_recovery = element_recovery
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Output_Recovery
 
-  SUBROUTINE CD_HermiteCable_Dyn_Node_Values(model, node, tension, curvature, bend_moment, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_Dyn_Node_Values(model, node, tension, curvature, bend_moment, ErrStat, ErrMsg, &
+                                             sleeve_moment)
     !! Equilibrium node values at one node (internal order), from the two adjacent elements;
     !! the same values as CD_HermiteCable_Dyn_Node_Recovery returns for that node. The element end
     !! residuals are kept in the model for the element state they were evaluated at (see the rc_
@@ -5477,10 +5483,12 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment
     REAL(wp) :: g(12), fm(3), mm(3), fp(3), mp(3)
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     tension = CD_ZERO; curvature = CD_ZERO; bend_moment = CD_ZERO
+    IF (PRESENT(sleeve_moment)) sleeve_moment = CD_ZERO
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Node_Values: model not initialised'; RETURN
     END IF
@@ -5505,7 +5513,8 @@ CONTAINS
       IF (ErrStat /= CD_HCDYN_OK) RETURN
       fp = -g(1:3); mp = -g(4:6)
     END IF
-    CALL node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg)
+    CALL node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg, &
+                     sleeve_moment)
 
   CONTAINS
 
@@ -5561,8 +5570,10 @@ CONTAINS
     !! oscillation of the stiff-EA axial strain.
     !!
     !! tension(j) = t_j . F_j (t_j the unit nodal tangent; a line end reports the end force
-    !! magnitude of CD_HermiteCable_Dyn_End_Force), bend_moment(j) = |m_j - (m_j . t_j) t_j|,
-    !! curvature(j) = bend_moment(j)/EI, the larger of the two sides at a section junction (the
+    !! magnitude of CD_HermiteCable_Dyn_End_Force), the section moment M_j = |m_j - (m_j . t_j) t_j|,
+    !! curvature(j) = M_j/EI, the larger of the two sides at a section junction, and
+    !! bend_moment(j) the cable's own share EI_line curvature (M_j itself where no bend stiffener
+    !! sleeves the element; see node_values) (the
     !! exact geometric trace on an element without bending stiffness, or with EI below ei_resolve,
     !! where the recovered moment error w L0^2/12 exceeds the elastic moment of a 1 m bend radius).
     !! segment_tension(e) is the
@@ -5629,16 +5640,21 @@ CONTAINS
     END FUNCTION size_ok
   END SUBROUTINE CD_HermiteCable_Dyn_Node_Recovery
 
-  SUBROUTINE node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg)
+  SUBROUTINE node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg, &
+                         sleeve_moment)
     !! Node values from the one-sided section force and moment before (fm, mm) and after
     !! (fp, mp) the node; a line end uses its only side (see CD_HermiteCable_Dyn_Node_Recovery).
+    !! bend_moment is the cable's own share of the section moment, EI_line kappa on the side of
+    !! the larger value (the whole section moment on a side without a bend stiffener), and
+    !! sleeve_moment the rest, the share a stiffener sleeve carries.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(IN) :: fm(3), mm(3), fp(3), mp(3)
     REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace
+    REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment
+    REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace, section_moment, cable_moment
     INTEGER :: e, side
     CHARACTER(200) :: em2
 
@@ -5658,13 +5674,19 @@ CONTAINS
     ELSE
       tension = DOT_PRODUCT(t, f)
     END IF
-    bend_moment = NORM2(m - DOT_PRODUCT(m, t)*t)
+    section_moment = NORM2(m - DOT_PRODUCT(m, t)*t)
     curvature = CD_ZERO
+    cable_moment = CD_ZERO
     DO side = 0, 1
       e = node - 1 + side
       IF (e < 1 .OR. e > model%ne) CYCLE
       IF (model%EI(e) > CD_ZERO .AND. model%EI(e) >= model%ei_resolve) THEN
-        curvature = MAX(curvature, bend_moment/model%EI(e))
+        curvature = MAX(curvature, section_moment/model%EI(e))
+        IF (model%EI_line(e) == model%EI(e)) THEN
+          cable_moment = MAX(cable_moment, section_moment)
+        ELSE
+          cable_moment = MAX(cable_moment, model%EI_line(e)*(section_moment/model%EI(e)))
+        END IF
       ELSE
         CALL gather_elem(model, e, qe)
         CALL CD_HermiteCable_Curvature(qe, model%l0(e), REAL(1 - side, wp), trace, ErrStat, em2)
@@ -5672,8 +5694,15 @@ CONTAINS
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: '//TRIM(em2); RETURN
         END IF
         curvature = MAX(curvature, trace)
+        IF (model%EI_line(e) == model%EI(e)) THEN
+          cable_moment = MAX(cable_moment, section_moment)
+        ELSE
+          cable_moment = MAX(cable_moment, model%EI_line(e)*trace)
+        END IF
       END IF
     END DO
+    bend_moment = cable_moment
+    IF (PRESENT(sleeve_moment)) sleeve_moment = MAX(CD_ZERO, section_moment - cable_moment)
   END SUBROUTINE node_values
 
   PURE FUNCTION unit_tangent(model, node) RESULT(t)
@@ -6569,6 +6598,7 @@ CONTAINS
     IF (ALLOCATED(model%l0)) DEALLOCATE (model%l0)
     IF (ALLOCATED(model%EA)) DEALLOCATE (model%EA)
     IF (ALLOCATED(model%EI)) DEALLOCATE (model%EI)
+    IF (ALLOCATED(model%EI_line)) DEALLOCATE (model%EI_line)
     IF (ALLOCATED(model%rho_a)) DEALLOCATE (model%rho_a)
     IF (ALLOCATED(model%w)) DEALLOCATE (model%w)
     IF (ALLOCATED(model%BA)) DEALLOCATE (model%BA)

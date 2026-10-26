@@ -84,6 +84,7 @@ __all__ = [
     "RodEnd",
     "RodType",
     "Section",
+    "Stiffener",
     "SyropeEA",
     "SyropeIC",
     "Turbine",
@@ -104,13 +105,14 @@ _CHANNEL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "line",
         re.compile(
-            r"(fairten|anchten|anchfz|anchfh|fairangle|anchangle|fairdecl|anchdecl|fairincl|anchincl)"
+            r"(fairten|anchten|anchfz|anchfh|fairangle|anchangle|fairdecl|anchdecl|fairincl|anchincl"
+            r"|fairdefl|anchdefl)"
             r"([0-9]+)()",
             re.IGNORECASE,
         ),
     ),
     ("line", re.compile(r"(tdp)([0-9]+)(s|x|y|z|lay|exc|grd)", re.IGNORECASE)),
-    ("line", re.compile(r"(ten|curv|bendmom|torq)([0-9]+)(n[0-9]+)", re.IGNORECASE)),
+    ("line", re.compile(r"(ten|curv|bendmom|stfmom|torq)([0-9]+)(n[0-9]+)", re.IGNORECASE)),
     ("line", re.compile(r"(twist)([0-9]+)(n[0-9]+|)", re.IGNORECASE)),
     ("line", re.compile(r"(l)([0-9]+)(n[0-9]+(?:[pva][xyz]|dec|azi))", re.IGNORECASE)),
     ("point", re.compile(r"(point|con)([0-9]+)(p[xyz])", re.IGNORECASE)),
@@ -613,6 +615,43 @@ class Attachment:
     cda: float = 0.0
     ca: float = 0.0
     cdax: float | None = None
+
+
+@dataclass(eq=False)
+class Stiffener:
+    """One ``STIFFENERS`` row: a conical segment of a bend stiffener on a finite-EI line.
+
+    The rows of one line end follow each other outward from the stiffener root, each starting
+    where the previous one ends; a cylindrical root, a cone and a tip are three rows.
+
+    Attributes
+    ----------
+    line : Line
+        The finite-EI line.
+    end : str
+        The end the stiffener sleeves, ``A`` or ``B``.
+    length : float
+        Length of the segment, in m.
+    root_od : float
+        Outer diameter at the segment's root side, in m.
+    tip_od : float
+        Outer diameter at the segment's tip side, in m.
+    inner_d : float
+        Inner diameter, in m.
+    modulus : float
+        Young's modulus of the stiffener material, in Pa.
+    density : float
+        Density of the stiffener material, in kg/m^3.
+    """
+
+    line: Line
+    end: str
+    length: float
+    root_od: float
+    tip_od: float
+    inner_d: float
+    modulus: float
+    density: float
 
 
 @dataclass(eq=False)
@@ -1257,6 +1296,7 @@ class DeckModel:
         self._end_connections: list[EndConnection] = []
         self._equivalent_buoyancy: list[EquivalentBuoyancy] = []
         self._attachments: list[Attachment] = []
+        self._stiffeners: list[Stiffener] = []
         self._syrope_ic: list[SyropeIC] = []
         self._failures: list[Failure] = []
         self._controls: list[Control] = []
@@ -1425,6 +1465,11 @@ class DeckModel:
     def attachments(self) -> tuple[Attachment, ...]:
         """``ATTACHMENTS`` rows."""
         return tuple(self._attachments)
+
+    @property
+    def stiffeners(self) -> tuple[Stiffener, ...]:
+        """``STIFFENERS`` rows."""
+        return tuple(self._stiffeners)
 
     @property
     def syrope_ic(self) -> tuple[SyropeIC, ...]:
@@ -2005,6 +2050,28 @@ class DeckModel:
         self._attachments.append(item)
         return item
 
+    def add_stiffener(
+        self,
+        line: Line | int,
+        end: str,
+        length: float,
+        root_od: float,
+        tip_od: float,
+        inner_d: float,
+        modulus: float,
+        density: float,
+    ) -> Stiffener:
+        """Add a ``STIFFENERS`` row (one conical segment); see :class:`Stiffener`.
+
+        Returns
+        -------
+        Stiffener
+            The new row.
+        """
+        item = Stiffener(self._line(line), end, length, root_od, tip_od, inner_d, modulus, density)
+        self._stiffeners.append(item)
+        return item
+
     def add_syrope_ic(
         self, lines: Line | int | Iterable[Line | int], tmax0: float, tmean0: float
     ) -> SyropeIC:
@@ -2151,6 +2218,7 @@ class DeckModel:
             (EndConnection, self._end_connections),
             (EquivalentBuoyancy, self._equivalent_buoyancy),
             (Attachment, self._attachments),
+            (Stiffener, self._stiffeners),
             (SyropeIC, self._syrope_ic),
             (Failure, self._failures),
             (Control, self._controls),
@@ -2234,6 +2302,7 @@ class DeckModel:
         elif isinstance(obj, Line):
             found.extend(row for row in self._end_connections if row.line is obj)
             found.extend(row for row in self._attachments if row.line is obj)
+            found.extend(row for row in self._stiffeners if row.line is obj)
             for rows in (self._syrope_ic, self._failures, self._controls):
                 found.extend(row for row in rows if any(line is obj for line in row.lines))
             found.extend(self._line_options(obj.id))
@@ -2397,7 +2466,11 @@ class DeckModel:
                 self._member(point.body, self._bodies, "body")
             if point.rod_end is not None:
                 self._member(point.rod_end.rod, self._rods, "rod")
-        owners: list[EndConnection | Attachment] = [*self._end_connections, *self._attachments]
+        owners: list[EndConnection | Attachment | Stiffener] = [
+            *self._end_connections,
+            *self._attachments,
+            *self._stiffeners,
+        ]
         for owned in owners:
             self._member(owned.line, self._lines, "line")
         for eq in self._equivalent_buoyancy:
@@ -2453,6 +2526,7 @@ class DeckModel:
         _emit(out, "END CONNECTIONS", *self._end_connection_table())
         _emit(out, "EQUIVALENT BUOYANCY", *self._equivalent_table())
         _emit(out, "ATTACHMENTS", *self._attachment_table())
+        _emit(out, "STIFFENERS", *self._stiffener_table())
         _emit(out, "FAILURE", *self._failure_table())
         _emit(out, "CONTROL", *self._control_table())
         _emit(out, "EXTERNAL LOADS", *self._external_load_table())
@@ -2785,6 +2859,16 @@ class DeckModel:
         header = "LineID ArcLength Mass Volume CdA Ca CdAx"
         return header, "(-) (m) (kg) (m^3) (m^2) (-) (m^2)", rows
 
+    def _stiffener_table(self) -> tuple[str, str, list[list[str]]]:
+        rows: list[list[str]] = []
+        for row in self._stiffeners:
+            what = f"line {row.line.id} stiffener"
+            values = (row.length, row.root_od, row.tip_od, row.inner_d, row.modulus, row.density)
+            cells = [_int(row.line.id, what), _end_letter(row.end)]
+            rows.append([*cells, *(_num(value, what) for value in values)])
+        header = "LineID End Length RootOD TipOD InnerD E Density"
+        return header, "(-) (-) (m) (m) (m) (m) (Pa) (kg/m^3)", rows
+
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
             [_line_list(row.lines), _num(row.tmax0, "SYROPE IC"), _num(row.tmean0, "SYROPE IC")]
@@ -2980,6 +3064,9 @@ class _Loader:
         for row in self.rows("EQUIVALENT BUOYANCY"):
             t = row.tokens
             model.add_equivalent_buoyancy(t[0], _f(t[1]), _f(t[2]))
+        for row in self.rows("STIFFENERS"):
+            t = row.tokens
+            model.add_stiffener(_native_int(t[0]), t[1][-1], *(_f(token) for token in t[2:8]))
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]

@@ -77,7 +77,8 @@ MODULE CableDyn_DeckDriver
   USE CableDyn_HermiteArch, ONLY: CD_FiniteEI_Hermite_Arch_Seed_LengthMatched, CD_HARCH_OK
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Curvature, &
                                    CD_HermiteCable_Peak_Curvature, CD_HermiteCable_Axial_Resultant, &
-                                   CD_HermiteCable_Axial_Resultant_Range, CD_HermiteCable_Element, CD_HCABLE_OK
+                                   CD_HermiteCable_Axial_Resultant_Range, CD_HermiteCable_Element, CD_HCABLE_OK, &
+                                   CD_HermiteCable_Gauss_Rule
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve_AutoMesh, CD_HermiteCable_Static_Solve, &
                                          CD_HermiteCable_Prolong_Arc, &
                                          CD_HC_OSCILLATION_REL_TOL, &
@@ -184,6 +185,7 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_Init_Deck_Models
   PUBLIC :: CD_Init_Deck_System
   PUBLIC :: CD_Init_Deck_HermiteCable
+  PUBLIC :: CD_Stiffener_Overlay
   PUBLIC :: CD_Init_Deck_Aggregate
   PUBLIC :: CD_Deck_Query_dtM
   PUBLIC :: CD_End_Deck_Aggregate
@@ -475,6 +477,11 @@ MODULE CableDyn_DeckDriver
     ! End A [m], mass [kg], displaced volume [m^3], drag area CdA [m^2], added-mass Ca [-],
     ! axial drag area CdAx [m^2] (rows 1-6).
     REAL(wp), ALLOCATABLE :: att(:, :)
+    ! STIFFENERS (finite-EI lines): one column per conical segment of a bend stiffener -- the end
+    ! it sleeves (1 = End A, 2 = End B), the segment's arc from that end to its root side and to
+    ! its tip side [m], outer diameter at the root side and at the tip side [m], inner diameter
+    ! [m], Young's modulus [Pa] and density [kg/m^3] (rows 1-8).
+    REAL(wp), ALLOCATABLE :: stf(:, :)
   END TYPE
 
   TYPE :: DeckEndConnection
@@ -1504,6 +1511,10 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI two-moving-end compatibility solver does not support '// &
                 'ATTACHMENTS; use a Fixed End B'); RETURN
     END IF
+    IF (ALLOCATED(ln%stf)) THEN
+      CALL fail(ErrStat, ErrMsg, 'finite-EI two-moving-end compatibility solver does not support '// &
+                'STIFFENERS; use a Fixed End B'); RETURN
+    END IF
     IF (opts%friction_mu_axial > CD_ZERO) THEN
       CALL fail(ErrStat, ErrMsg, 'the finite-EI two-moving-end compatibility solver has isotropic seabed '// &
                 'friction only; remove frictionMuAxial/frictionMuLateral')
@@ -1725,6 +1736,9 @@ CONTAINS
     LOGICAL :: has_att
     REAL(wp), ALLOCATABLE :: w_bare_deck(:), l0_deck_att(:), w_bare(:)
     INTEGER, ALLOCATABLE :: att_node(:)
+    ! STIFFENERS: the cable's own bending stiffness per element (internal order), without the
+    ! sleeve, for the cable's share of the bend moment (allocated only on a stiffened line)
+    REAL(wp), ALLOCATABLE :: ei_cable(:)
     REAL(wp) :: att_offset
     ! Condensed torsion (both END CONNECTIONS rows torsionally restrained): solved as the last
     ! static load stage on the final mesh, then installed in the cable.
@@ -1891,6 +1905,10 @@ CONTAINS
     CALL build_finite_section_mesh(ln, sections, types, conn, l0, ea, mpl, diam, ei, &
                                    gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    IF (ALLOCATED(ln%stf)) THEN
+      ALLOCATE (ei_cable(SIZE(l0)))
+      CALL finite_line_type_ei(ln, sections, types, ei_cable)
+    END IF
     ! A seabed sloping across that plane under the as-laid run pushes the grounded nodes out
     ! of it against their friction: solved in 3D as well, so the march starts at rest.
     IF (.NOT. require_3d_static) require_3d_static = as_laid_cross_slope()
@@ -2837,6 +2855,7 @@ CONTAINS
         'dynamic tolerance ', static_tol_target, '; equilibrium accepted at the relative residual ', res
       CALL report_note(note_text)
     END IF
+    IF (ALLOCATED(ln%stf)) CALL stiffener_notes()
     IF (saddle_kept) THEN
       WRITE (note_text, '(A,I0,A)') 'line ', ln%id, ': the equilibrium in the current is held in the '// &
         'vertical plane of the line; it is unstable out of that plane and no out-of-plane equilibrium was '// &
@@ -2900,6 +2919,7 @@ CONTAINS
       CALL remap_elem_by_reference_arc(can, l0, l0_am)
       CALL remap_elem_by_reference_arc(cat, l0, l0_am)
       CALL remap_elem_by_reference_arc(ba_raw, l0, l0_am)
+      IF (ALLOCATED(ei_cable)) CALL remap_elem_by_reference_arc(ei_cable, l0, l0_am)
     END IF
     ! The node output channels read deck nodes: map each onto the final mesh (set on the cable
     ! once it is built below).
@@ -3003,6 +3023,8 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable coupled-shell init failed: '//TRIM(em)); RETURN
     END IF
     IF (ALLOCATED(deck_map)) CALL MOVE_ALLOC(deck_map, cable%deck_node)
+    ! a stiffened line: the outputs report the cable's own share of the bend moment
+    IF (ALLOCATED(ei_cable)) cable%line%EI_line = ei_cable
     IF (ANY(ba > CD_ZERO)) THEN
       CALL CD_HFMF_Set_Axial_Damping(cable, ba, es, em)
       IF (es /= CD_HFMF_OK) THEN
@@ -4374,6 +4396,50 @@ CONTAINS
       IF (standalone_mode) WRITE (error_unit, '(A)') '   Note: '//TRIM(text)//'.'
       IF (PRESENT(init_note)) CALL append_note_line(init_note, text)
     END SUBROUTINE report_note
+
+    SUBROUTINE stiffener_notes()
+      !! Notes on each bend stiffener of the line, nothing changed: a stiffener spanning fewer than
+      !! STIFFENER_MIN_ELEMENTS deck elements, whose taper the element properties (one value per
+      !! deck element) cannot follow, with the element length that resolves it; and a stiffener at
+      !! a pinned end, where the root moment it is built to carry cannot develop.
+      INTEGER, PARAMETER :: STIFFENER_MIN_ELEMENTS = 10
+      CHARACTER(1), PARAMETER :: END_NAME(2) = ['A', 'B']
+      REAL(wp) :: s_end, len_stf, lo, hi
+      INTEGER :: iend, n_cov, e
+      CHARACTER(32) :: b1, b2
+      CHARACTER(512) :: text
+      DO iend = 1, 2
+        IF (.NOT. ANY(NINT(ln%stf(1, :)) == iend)) CYCLE
+        len_stf = MAXVAL(ln%stf(3, :), MASK=NINT(ln%stf(1, :)) == iend)
+        ! deck elements in internal order run from End B; count those the stiffener reaches
+        n_cov = 0
+        s_end = CD_ZERO
+        DO e = 1, SIZE(l0)
+          IF (iend == 2) THEN
+            lo = s_end; hi = s_end + l0(e)
+          ELSE
+            lo = SUM(l0) - s_end - l0(e); hi = SUM(l0) - s_end
+          END IF
+          IF (lo < len_stf*(CD_ONE - 1.0e-12_wp)) n_cov = n_cov + 1
+          s_end = s_end + l0(e)
+        END DO
+        WRITE (b1, '(F12.2)') len_stf
+        IF (n_cov < STIFFENER_MIN_ELEMENTS) THEN
+          WRITE (b2, '(F12.3)') len_stf/REAL(STIFFENER_MIN_ELEMENTS, wp)
+          text = 'line '//TRIM(int_to_str(ln%id))//': the '//TRIM(ADJUSTL(b1))//' m stiffener at End '// &
+                 END_NAME(iend)//' spans '//TRIM(int_to_str(n_cov))//' elements, too few to follow its taper '// &
+                 '(one stiffness per element): give the section there elements of at most '// &
+                 TRIM(ADJUSTL(b2))//' m over the stiffener'
+          CALL report_note(text)
+        END IF
+        IF (ln%endconn_mode(iend) == CD_ENDCONN_PINNED) THEN
+          text = 'line '//TRIM(int_to_str(ln%id))//': the stiffener at End '//END_NAME(iend)//' sleeves a '// &
+                 'pinned end, which carries no moment, so the stiffener root takes none; declare that end '// &
+                 'Rigid or a rotational spring in END CONNECTIONS to model a stiffener clamped at its root'
+          CALL report_note(text)
+        END IF
+      END DO
+    END SUBROUTINE stiffener_notes
 
     SUBROUTINE friction_resolution_note()
       !! Seabed friction acts at the nodes: as the line lands and lifts at touchdown, a grounded
@@ -9082,6 +9148,7 @@ CONTAINS
         i_rn(e) = types(tidx)%i_rn
       END DO
     END DO
+    IF (ALLOCATED(ln%stf)) CALL CD_Stiffener_Overlay(ln%stf, l0, diam, ei=ei, mpl=mpl)
     l0 = l0(n_elem:1:-1)
     ea = ea(n_elem:1:-1)
     mpl = mpl(n_elem:1:-1)
@@ -9115,12 +9182,33 @@ CONTAINS
     ba_raw = ba_raw(SIZE(ba_raw):1:-1)
   END SUBROUTINE finite_raw_ba_array
 
+  SUBROUTINE finite_line_type_ei(ln, sections, types, ei)
+    !! The line types' own bending stiffness on the deck elements (internal order), without
+    !! any STIFFENERS sleeve.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: ei(:)
+    INTEGER :: i, j, e
+
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        ei(e) = types(sections(i)%ltype)%ei
+      END DO
+    END DO
+    ei = ei(SIZE(ei):1:-1)
+  END SUBROUTINE finite_line_type_ei
+
   SUBROUTINE finite_hydro_arrays(ln, sections, types, diam, cdn, cdt, can, cat)
     !! Expand section hydro coefficients to finite-EI element arrays.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     REAL(wp), INTENT(OUT) :: diam(:), cdn(:), cdt(:), can(:), cat(:)
+    REAL(wp) :: l0(SIZE(diam))
     INTEGER :: i, j, e, tidx
 
     e = 0
@@ -9129,6 +9217,7 @@ CONTAINS
       tidx = sections(i)%ltype
       DO j = 1, sections(i)%nsegs
         e = e + 1
+        l0(e) = sections(i)%length/REAL(sections(i)%nsegs, wp)
         diam(e) = types(tidx)%diam
         cdn(e) = types(tidx)%cdn
         cdt(e) = types(tidx)%cdt
@@ -9136,12 +9225,92 @@ CONTAINS
         cat(e) = types(tidx)%cat
       END DO
     END DO
+    ! a stiffener widens the line: the same displaced-area diameter as its weight and buoyancy
+    IF (ALLOCATED(ln%stf)) CALL CD_Stiffener_Overlay(ln%stf, l0, diam)
     diam = diam(SIZE(diam):1:-1)
     cdn = cdn(SIZE(cdn):1:-1)
     cdt = cdt(SIZE(cdt):1:-1)
     can = can(SIZE(can):1:-1)
     cat = cat(SIZE(cat):1:-1)
   END SUBROUTINE finite_hydro_arrays
+
+  SUBROUTINE CD_Stiffener_Overlay(stf, l0, diam, ei, mpl)
+    !! Add the bend stiffeners of a finite-EI line (ln%stf columns) to its element properties,
+    !! in public element order (End A first). A stiffener is a polyurethane sleeve bonded to the
+    !! cable in bending: over its length the section has the bending stiffness of the cable plus
+    !! that of the sleeve, EI_c + E pi/64 (OD^4 - ID^4), with the outer diameter OD varying
+    !! linearly along each conical segment; it carries no axial load and no torque. An element it
+    !! covers, wholly or in part, takes
+    !!   ei   the compliance average  l / int ds/EI(s), exact for the element's rotation under a
+    !!        uniform moment, so a stiff root next to a soft tip is not over-stiffened;
+    !!   mpl  the cable mass plus the mean sleeve mass, rho pi/4 (OD^2 - ID^2);
+    !!   diam the diameter of the mean displaced area, cable plus solid sleeve, sqrt(d^2 + mean
+    !!        (OD^2 - ID^2)): one diameter, like a line type's, for the weight and buoyancy (dry
+    !!        part above the surface included), the added mass, Froude-Krylov force and drag. With
+    !!        the bore equal to the cable diameter it is the sleeve's outer diameter.
+    !! The integrals use 6-point Gauss-Legendre on each part of the element a segment covers.
+    !! An element no stiffener reaches is left untouched.
+    REAL(wp), INTENT(IN) :: stf(:, :), l0(:)
+    REAL(wp), INTENT(INOUT) :: diam(:)
+    REAL(wp), INTENT(INOUT), OPTIONAL :: ei(:), mpl(:)
+    REAL(wp), PARAMETER :: PI_64 = 0.0490873852123405193_wp   ! pi/64
+    REAL(wp) :: gp(6), gw(6), s_end(0:SIZE(l0)), line_len, a, b, lo, hi, x, t, od, d_line
+    REAL(wp) :: compliance, sleeve_mass, sleeve_area, covered, ei_line
+    INTEGER :: e, k, g
+
+    CALL CD_HermiteCable_Gauss_Rule(6, gp, gw)
+    s_end(0) = CD_ZERO
+    DO e = 1, SIZE(l0)
+      s_end(e) = s_end(e - 1) + l0(e)
+    END DO
+    line_len = s_end(SIZE(l0))
+    DO e = 1, SIZE(l0)
+      a = s_end(e - 1)
+      b = s_end(e)
+      d_line = diam(e)
+      ei_line = CD_ZERO
+      IF (PRESENT(ei)) ei_line = ei(e)
+      compliance = CD_ZERO; sleeve_mass = CD_ZERO; sleeve_area = CD_ZERO; covered = CD_ZERO
+      DO k = 1, SIZE(stf, 2)
+        ! the segment's span on the public arc
+        IF (NINT(stf(1, k)) == 1) THEN
+          lo = stf(2, k); hi = stf(3, k)
+        ELSE
+          lo = line_len - stf(3, k); hi = line_len - stf(2, k)
+        END IF
+        lo = MAX(lo, a); hi = MIN(hi, b)
+        IF (.NOT. (hi > lo)) CYCLE
+        covered = covered + (hi - lo)
+        DO g = 1, 6
+          x = lo + gp(g)*(hi - lo)
+          ! fraction of the way from the segment's root side to its tip side
+          IF (NINT(stf(1, k)) == 1) THEN
+            t = (x - stf(2, k))/(stf(3, k) - stf(2, k))
+          ELSE
+            t = (line_len - x - stf(2, k))/(stf(3, k) - stf(2, k))
+          END IF
+          t = MIN(CD_ONE, MAX(CD_ZERO, t))
+          od = stf(4, k) + t*(stf(5, k) - stf(4, k))
+          compliance = compliance + gw(g)*(hi - lo)/(ei_line + stf(7, k)*PI_64*(od**4 - stf(6, k)**4))
+          sleeve_mass = sleeve_mass + gw(g)*(hi - lo)*stf(8, k)*QUARTER_PI*(od**2 - stf(6, k)**2)
+          sleeve_area = sleeve_area + gw(g)*(hi - lo)*(od**2 - stf(6, k)**2)
+        END DO
+      END DO
+      IF (.NOT. (covered > CD_ZERO)) CYCLE
+      IF (PRESENT(ei)) THEN
+        IF (ei_line > CD_ZERO) THEN
+          compliance = compliance + (l0(e) - covered)/ei_line
+          ei(e) = l0(e)/compliance
+        ELSE IF (covered >= l0(e)*(CD_ONE - 1.0e-12_wp)) THEN
+          ! an EI = 0 element bends only where the sleeve covers all of it; a bare part has an
+          ! infinite compliance and leaves the element without bending stiffness
+          ei(e) = l0(e)/compliance
+        END IF
+      END IF
+      IF (PRESENT(mpl)) mpl(e) = mpl(e) + sleeve_mass/l0(e)
+      diam(e) = SQRT(d_line**2 + sleeve_area/l0(e))
+    END DO
+  END SUBROUTINE CD_Stiffener_Overlay
 
   SUBROUTINE remap_elem_by_reference_arc(a, l0_parent, l0_child)
     !! Map a piecewise-constant per-element field from a parent reference mesh to
@@ -10871,6 +11040,9 @@ CONTAINS
     CHARACTER(DECK_RECLEN), ALLOCATABLE :: att_rows(:)
     INTEGER, ALLOCATABLE :: att_lines(:)
     INTEGER :: n_att
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: stf_rows(:)
+    INTEGER, ALLOCATABLE :: stf_lines(:)
+    INTEGER :: n_stf
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
     LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
@@ -10887,7 +11059,8 @@ CONTAINS
     INTEGER, PARAMETER :: SEC_NONE = 0, SEC_TYPES = 1, SEC_BODIES = 2, SEC_POINTS = 3, SEC_LINES = 4, &
                           SEC_SECTIONS = 5, SEC_OPTIONS = 6, SEC_OUTPUTS = 7, SEC_RODTYPES = 8, SEC_RODS = 9, &
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
-                          SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17
+                          SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
+                          SEC_STIFF = 18
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -10907,6 +11080,8 @@ CONTAINS
     next_ext = 0
     ALLOCATE (att_rows(0), att_lines(0))
     n_att = 0
+    ALLOCATE (stf_rows(0), stf_lines(0))
+    n_stf = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
     section = SEC_NONE
     ALLOCATE (channel_lines(0))
@@ -11023,6 +11198,15 @@ CONTAINS
         END IF
         att_rows(n_att) = line(1:MIN(LEN(line), DECK_RECLEN))
         att_lines(n_att) = lineno
+      CASE (SEC_STIFF)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_stf = n_stf + 1
+        IF (n_stf > SIZE(stf_rows)) THEN
+          stf_rows = [stf_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          stf_lines = [stf_lines, [(0, i_ch=1, 8)]]
+        END IF
+        stf_rows(n_stf) = line(1:MIN(LEN(line), DECK_RECLEN))
+        stf_lines(n_stf) = lineno
       CASE (SEC_OPTIONS)
         CALL apply_option(line, opts, ErrStat, ErrMsg)
       CASE (SEC_OUTPUTS)
@@ -11110,6 +11294,13 @@ CONTAINS
       CALL append_line_attachment(att_rows(i_ch), lines, ErrStat, ErrMsg)
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', att_lines(i_ch), att_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_stf
+      CALL append_line_stiffener(stf_rows(i_ch), lines, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', stf_lines(i_ch), stf_rows(i_ch), ErrMsg)
         RETURN
       END IF
     END DO
@@ -12302,6 +12493,8 @@ CONTAINS
       section = 16
     CASE ('ATTACHMENTS', 'LINE ATTACHMENTS', 'CLUMPS')
       section = 17
+    CASE ('STIFFENERS', 'STIFFENER', 'BEND STIFFENERS', 'BEND STIFFENER')
+      section = 18
     CASE DEFAULT
       IF (LEN_TRIM(secname) > NAMELEN) THEN
         CALL fail(ErrStat, ErrMsg, 'unknown deck section "'//secname(1:NAMELEN)//'..."')
@@ -13637,6 +13830,81 @@ CONTAINS
     CALL MOVE_ALLOC(grown, lines(li)%att)
   END SUBROUTINE append_line_attachment
 
+  SUBROUTINE append_line_stiffener(row, lines, ErrStat, ErrMsg)
+    !! One STIFFENERS row: LineID End Length RootOD TipOD InnerD E Density -- a conical segment of
+    !! the bend stiffener sleeving End A or End B of a finite-EI line. The rows of one line end
+    !! follow each other outward from the root, each starting where the previous one ends, so a
+    !! cylindrical root, a cone and a tip are three rows. RootOD and TipOD are the outer diameters
+    !! of the segment at its root side and at its tip side. Stored columns: end (1 = A, 2 = B),
+    !! arc of the root side and of the tip side from that end, RootOD, TipOD, InnerD, E, Density.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLine), INTENT(INOUT) :: lines(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: li, lid, k, iend, nold
+    REAL(wp) :: vals(6), s0
+    REAL(wp), ALLOCATABLE :: grown(:, :)
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    IF (count_tokens(row) /= 8) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS rows must be: LineID End Length RootOD TipOD InnerD E Density'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    CALL parse_int_token(tok, lid, ok)
+    IF (.NOT. ok) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS LineID must be an integer'); RETURN
+    END IF
+    li = find_line(lines, lid)
+    IF (li == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS row references undefined LINE id '//TRIM(int_to_str(lid))); RETURN
+    END IF
+    CALL get_token(row, 2, tok, found)
+    SELECT CASE (to_lower(TRIM(tok)))
+    CASE ('a', 'enda')
+      iend = 1
+    CASE ('b', 'endb')
+      iend = 2
+    CASE DEFAULT
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS End must be A or B'); RETURN
+    END SELECT
+    DO k = 1, 6
+      CALL get_token(row, k + 2, tok, found)
+      CALL parse_real_token(tok, vals(k), ok)
+      IF (.NOT. ok) THEN
+        CALL fail(ErrStat, ErrMsg, 'STIFFENERS Length, RootOD, TipOD, InnerD, E and Density must be plain numbers')
+        RETURN
+      END IF
+    END DO
+    IF (.NOT. ALL(IEEE_IS_FINITE(vals)) .OR. ANY(vals > MAX_COEFFICIENT)) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS Length, RootOD, TipOD, InnerD, E and Density must be finite '// &
+                'and at most 1e15'); RETURN
+    END IF
+    IF (.NOT. (vals(1) > CD_ZERO .AND. vals(2) > CD_ZERO .AND. vals(3) > CD_ZERO .AND. vals(5) > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS Length, RootOD, TipOD and E must be > 0'); RETURN
+    END IF
+    IF (vals(4) < CD_ZERO .OR. vals(6) < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS InnerD and Density must be >= 0'); RETURN
+    END IF
+    IF (.NOT. (vals(4) < MIN(vals(2), vals(3)))) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS InnerD must be smaller than RootOD and TipOD'); RETURN
+    END IF
+    ! a segment starts where the previous segment of the same line end stops
+    s0 = CD_ZERO
+    nold = 0
+    IF (ALLOCATED(lines(li)%stf)) THEN
+      nold = SIZE(lines(li)%stf, 2)
+      DO k = 1, nold
+        IF (NINT(lines(li)%stf(1, k)) == iend) s0 = MAX(s0, lines(li)%stf(3, k))
+      END DO
+    END IF
+    ALLOCATE (grown(8, nold + 1))
+    IF (nold > 0) grown(:, 1:nold) = lines(li)%stf
+    grown(:, nold + 1) = [REAL(iend, wp), s0, s0 + vals(1), vals(2:6)]
+    CALL MOVE_ALLOC(grown, lines(li)%stf)
+  END SUBROUTINE append_line_stiffener
+
   SUBROUTINE trim_end_connections(endconns, nec)
     TYPE(DeckEndConnection), ALLOCATABLE, INTENT(INOUT) :: endconns(:)
     INTEGER, INTENT(IN) :: nec
@@ -14804,6 +15072,9 @@ CONTAINS
       ELSE
         key = lo(1:4)//'decl:'//TRIM(int_to_str(a))
       END IF
+    ELSE IF (is_end_deflection_channel(lo)) THEN
+      a = int_suffix(ch, 9)
+      IF (a > 0) key = lo(1:8)//':'//TRIM(int_to_str(a))
     ELSE IF (is_point_force_channel(lo)) THEN
       CALL parse_point_force_channel(ch, a, b)
       IF (a > 0 .AND. b > 0) key = 'pointf:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))
@@ -14814,7 +15085,8 @@ CONTAINS
       CALL parse_point_channel(ch, a, b)
       IF (a > 0 .AND. b > 0) key = 'point:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))
     ELSE IF (starts_with(lo, 'ten') .OR. starts_with(lo, 'curv') .OR. starts_with(lo, 'bendmom') .OR. &
-             starts_with(lo, 'l') .OR. starts_with(lo, 'torq') .OR. starts_with(lo, 'twist')) THEN
+             starts_with(lo, 'stfmom') .OR. starts_with(lo, 'l') .OR. starts_with(lo, 'torq') .OR. &
+             starts_with(lo, 'twist')) THEN
       CALL parse_line_node_channel(ch, a, b, c, d)
       IF (a > 0 .AND. b > 0 .AND. c > 0) key = 'node:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))// &
                                                ':'//TRIM(int_to_str(c))//':'//TRIM(int_to_str(d))
@@ -14935,6 +15207,8 @@ CONTAINS
         ! attachment arcs are measured from End A, which is now the other end
         IF (ALLOCATED(lines(i)%att)) &
           lines(i)%att(1, :) = SUM(sections%length, MASK=sections%line_id == lines(i)%id) - lines(i)%att(1, :)
+        ! a stiffener sleeves the same physical end, which is now the other end index
+        IF (ALLOCATED(lines(i)%stf)) lines(i)%stf(1, :) = 3.0_wp - lines(i)%stf(1, :)
         CALL reverse_line_sections(sections, lines(i)%id)
       END IF
     END DO
@@ -15916,6 +16190,23 @@ CONTAINS
                     '" is net-buoyant (dry mass <= displaced water mass): buoyant / lazy-wave '// &
                     'sections require a dynamic finite-EI deck'); RETURN
         END IF
+      END IF
+    END DO
+
+    ! STIFFENERS: bend stiffeners sleeving the ends of a finite-EI line
+    DO j = 1, SIZE(lines)
+      IF (.NOT. ALLOCATED(lines(j)%stf)) CYCLE
+      at_line = lines(j)%deck_line
+      IF (.NOT. line_is_finite_ei(lines(j), types, sections)) THEN
+        CALL fail(ErrStat, ErrMsg, 'STIFFENERS name line '//TRIM(int_to_str(lines(j)%id))// &
+                  ', which is not a finite-EI line: a stiffener adds bending stiffness, which an EI = 0 line '// &
+                  'does not have'); RETURN
+      END IF
+      IF (MAX(CD_ZERO, MAXVAL(lines(j)%stf(3, :), MASK=NINT(lines(j)%stf(1, :)) == 1)) + &
+          MAX(CD_ZERO, MAXVAL(lines(j)%stf(3, :), MASK=NINT(lines(j)%stf(1, :)) == 2)) > &
+          SUM(sections%length, MASK=sections%line_id == lines(j)%id)*(CD_ONE + 1.0e-12_wp)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the STIFFENERS of line '//TRIM(int_to_str(lines(j)%id))// &
+                  ' are longer than the line (End A and End B stiffeners together)'); RETURN
       END IF
     END DO
 
@@ -27602,7 +27893,7 @@ CONTAINS
         minimum_u_public = CD_ONE - minimum_u_internal
         maximum_u_public = CD_ONE - maximum_u_internal
         arc_peak = arc_start + u_curvature_public*l0
-        moment_peak = cables(li)%line%EI(internal_element)*curvature_peak
+        moment_peak = cables(li)%line%EI_line(internal_element)*curvature_peak
         WRITE (unit, '(I0,A,I0,10(A,ES15.7E3))') lines(li)%id, tab, public_element, &
           tab, arc_start, tab, arc_end, tab, u_curvature_public, tab, arc_peak, tab, curvature_peak, &
           tab, moment_peak, tab, minimum_resultant, tab, minimum_u_public, tab, maximum_resultant, &
@@ -27787,6 +28078,8 @@ CONTAINS
           line_id = anchor_force_line_id(channels(i))
         ELSE IF (is_endpoint_angle_channel(lo)) THEN
           line_id = endpoint_angle_line_id(channels(i))
+        ELSE IF (is_end_deflection_channel(lo)) THEN
+          line_id = int_suffix(channels(i), 9)
         ELSE
           CALL parse_line_node_channel(channels(i), line_id, pidx, pp, comp)
         END IF
@@ -31647,6 +31940,13 @@ CONTAINS
                starts_with(lo, 'fairincl') .OR. starts_with(lo, 'anchincl')
   END FUNCTION is_endpoint_angle_channel
 
+  LOGICAL FUNCTION is_end_deflection_channel(lo) RESULT(is_defl)
+    !! FairDefl<L>/AnchDefl<L>: the angle between the end force and the direction a Rigid or
+    !! rotational-spring END CONNECTIONS row holds at End A / End B [deg].
+    CHARACTER(*), INTENT(IN) :: lo
+    is_defl = starts_with(lo, 'fairdefl') .OR. starts_with(lo, 'anchdefl')
+  END FUNCTION is_end_deflection_channel
+
   LOGICAL FUNCTION is_fair_endpoint_angle(lo) RESULT(is_fair)
     CHARACTER(*), INTENT(IN) :: lo
     is_fair = starts_with(lo, 'fairangle') .OR. starts_with(lo, 'fairdecl') .OR. &
@@ -31814,6 +32114,17 @@ CONTAINS
       IF (find_line(lines, endpoint_angle_line_id(ch)) == 0) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": unknown line id'); RETURN
       END IF
+    ELSE IF (is_end_deflection_channel(lo)) THEN
+      li = find_line(lines, int_suffix(ch, 9))
+      IF (li == 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": unknown line id'); RETURN
+      END IF
+      ! the angle is measured from the direction a held end connection declares
+      IF (lines(li)%endconn_mode(MERGE(1, 2, starts_with(lo, 'fairdefl'))) == CD_ENDCONN_PINNED) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": the deflection angle needs a Rigid or '// &
+                  'rotational-spring END CONNECTIONS row at End '//MERGE('A', 'B', starts_with(lo, 'fairdefl'))// &
+                  ' of line '//TRIM(int_to_str(lines(li)%id))); RETURN
+      END IF
     ELSE IF (is_point_force_channel(lo)) THEN
       CALL parse_point_force_channel(ch, pidx, comp)
       IF (comp < 1 .OR. point_index(points, pidx) == 0) THEN
@@ -31854,7 +32165,7 @@ CONTAINS
                   'torque'); RETURN
       END IF
     ELSE IF (starts_with(lo, 'ten') .OR. starts_with(lo, 'curv') .OR. &
-             starts_with(lo, 'bendmom') .OR. starts_with(lo, 'l')) THEN
+             starts_with(lo, 'bendmom') .OR. starts_with(lo, 'stfmom') .OR. starts_with(lo, 'l')) THEN
       CALL parse_line_node_channel(ch, line_id, node, kind, comp)
       li = find_line(lines, line_id)
       IF (li /= 0 .AND. node == 0 .AND. names_node_zero(lo)) THEN
@@ -31868,12 +32179,16 @@ CONTAINS
       IF (node > nelem + 1) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node index exceeds line node count'); RETURN
       END IF
+      IF (kind == 12 .AND. .NOT. ALLOCATED(lines(li)%stf)) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line '//TRIM(int_to_str(line_id))//' has no '// &
+                  'STIFFENERS, so no stiffener moment'); RETURN
+      END IF
     ELSE
       CALL fail(ErrStat, ErrMsg, 'OUTPUT channel "'//TRIM(ch)// &
                 '" not supported (use FairTen<L>, AnchTen<L>, AnchFz<L>, AnchFH<L>, FairIncl<L>, AnchIncl<L>, '// &
-                'FairDecl<L>, AnchDecl<L> (FairAngle/AnchAngle aliases), '// &
+                'FairDecl<L>, AnchDecl<L> (FairAngle/AnchAngle aliases), FairDefl<L>, AnchDefl<L>, '// &
                 'Point<P>p{x,y,z} (alias Con<P>p{x,y,z}), Point<P>F{x,y,z,H}, '// &
-                'Ten<L>N<J>, Curv<L>N<J>, BendMom<L>N<J>, Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
+                'Ten<L>N<J>, Curv<L>N<J>, BendMom<L>N<J>, StfMom<L>N<J>, Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
                 'L<L>N<J>p{x,y,z}, L<L>N<J>v{x,y,z}, L<L>N<J>a{x,y,z}, L<L>N<J>Dec, L<L>N<J>Azi, '// &
                 'TDP<L>{s,x,y,z,Lay,Exc,Grd}, or the Body<N>/Rod<N> channels)'); RETURN
     END IF
@@ -32107,7 +32422,8 @@ CONTAINS
     !! Parse supported line-node output channels (kind codes shared with the writers):
     !!   Ten<L>N<J>        -> kind=3, comp=0    nodal tension       [N]
     !!   Curv<L>N<J>       -> kind=5, comp=0    curvature           [1/m]
-    !!   BendMom<L>N<J>    -> kind=6, comp=0    bend moment         [N.m]
+    !!   BendMom<L>N<J>    -> kind=6, comp=0    cable bend moment   [N.m]
+    !!   StfMom<L>N<J>     -> kind=12, comp=0   stiffener moment    [N.m]
     !!   L<L>N<J>p{x,y,z}  -> kind=1, comp=1..3 position            [m]
     !!   L<L>N<J>v{x,y,z}  -> kind=2, comp=1..3 velocity            [m/s]
     !!   L<L>N<J>a{x,y,z}  -> kind=4, comp=1..3 acceleration        [m/s^2]
@@ -32159,6 +32475,10 @@ CONTAINS
     ELSE IF (starts_with(lo, 'bendmom')) THEN
       CALL parse_keyword_line_node(lo, 7, last, line_id, node_id)
       IF (line_id > 0 .AND. node_id > 0) kind = 6
+      RETURN
+    ELSE IF (starts_with(lo, 'stfmom')) THEN
+      CALL parse_keyword_line_node(lo, 6, last, line_id, node_id)
+      IF (line_id > 0 .AND. node_id > 0) kind = 12
       RETURN
     END IF
     ! L<L>N<J>... channels: p/v/a{x,y,z} (component) or Dec/Azi (scalar).
@@ -33099,11 +33419,11 @@ CONTAINS
         bend = CD_ZERO
         IF (inode > 1) THEN
           curv = MAX(curv, rl%as(inode - 1))
-          bend = MAX(bend, cable%line%EI(inode - 1)*rl%as(inode - 1))
+          bend = MAX(bend, cable%line%EI_line(inode - 1)*rl%as(inode - 1))
         END IF
         IF (inode <= ne) THEN
           curv = MAX(curv, rl%vs(inode))
-          bend = MAX(bend, cable%line%EI(inode)*rl%vs(inode))
+          bend = MAX(bend, cable%line%EI_line(inode)*rl%vs(inode))
         END IF
         rl%val(CD_RQ_CURVATURE, j) = curv
         rl%val(CD_RQ_BEND, j) = bend
@@ -33465,6 +33785,8 @@ CONTAINS
       line_id = anchor_force_line_id(ch)
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       line_id = endpoint_angle_line_id(ch)
+    ELSE IF (is_end_deflection_channel(lo)) THEN
+      line_id = int_suffix(ch, 9)
     ELSE
       CALL parse_line_node_channel(ch, line_id, node, kind, comp)
     END IF
@@ -33632,6 +33954,8 @@ CONTAINS
       ok = anchor_force_line_id(ch) > 0
     ELSE IF (is_endpoint_angle_channel(lo)) THEN
       ok = endpoint_angle_line_id(ch) > 0
+    ELSE IF (is_end_deflection_channel(lo)) THEN
+      ok = int_suffix(ch, 9) > 0
     ELSE
       CALL parse_line_node_channel(ch, line_id, node, kind, comp)
       ok = line_id > 0 .AND. node > 0 .AND. kind > 0
@@ -33844,6 +34168,27 @@ CONTAINS
       END IF
       val = endpoint_angle_from_declination(lo, val)
       RETURN
+    ELSE IF (is_end_deflection_channel(lo)) THEN
+      ! the angle between the force on the end's support and the held direction: internally End
+      ! A is node nn and End B node 1, and the held direction follows the internal tangent (out
+      ! of the line at End A, into it at End B), while the end force points into the line
+      BLOCK
+        REAL(wp) :: force(3), axis(3), cosine
+        INTEGER :: inode_end
+        inode_end = MERGE(nnode, 1, starts_with(lo, 'fairdefl'))
+        CALL CD_HermiteCable_Dyn_End_Force(cable%line, inode_end, force, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": finite-EI end-force recovery failed: '// &
+                          TRIM(em)); RETURN
+        END IF
+        axis = MERGE(-cable%line%endconn_d0(:, 2), cable%line%endconn_d0(:, 1), inode_end == nnode)
+        val = CD_ZERO
+        IF (NORM2(force) > CD_ZERO .AND. NORM2(axis) > CD_ZERO) THEN
+          cosine = DOT_PRODUCT(force, axis)/(NORM2(force)*NORM2(axis))
+          val = ACOS(MAX(-CD_ONE, MIN(CD_ONE, cosine)))*CD_RAD2DEG
+        END IF
+      END BLOCK
+      RETURN
     END IF
     CALL parse_line_node_channel(ch, line_id, node, kind, comp)
     deck_numbering = ALLOCATED(cable%deck_node)
@@ -33902,6 +34247,15 @@ CONTAINS
         RETURN
       END IF
       CALL cable_nodal_bend_moment(cable, inode, val, es, em)
+      IF (es /= CD_HCABLE_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+      END IF
+    CASE (12)   ! the bend stiffener's share of the section moment (zero outside a stiffener)
+      IF (.NOT. cable%line%output_element_recovery) THEN
+        CALL cable_node_values(cable, inode, sec_ten, sec_curv, sec_bend, ErrStat, ErrMsg, sleeve_moment=val)
+        RETURN
+      END IF
+      CALL cable_nodal_bend_moment(cable, inode, sec_bend, es, em, sleeve_moment=val)
       IF (es /= CD_HCABLE_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
       END IF
@@ -34080,18 +34434,20 @@ CONTAINS
     tension = NORM2(force)
   END SUBROUTINE cable_end_tension
 
-  SUBROUTINE cable_node_values(cable, inode, tension, curvature, bend_moment, ErrStat, ErrMsg)
+  SUBROUTINE cable_node_values(cable, inode, tension, curvature, bend_moment, ErrStat, ErrMsg, sleeve_moment)
     !! Equilibrium node values of a finite-EI cable at internal node inode
-    !! (CD_HermiteCable_Dyn_Node_Values): effective tension, curvature and bend moment.
+    !! (CD_HermiteCable_Dyn_Node_Values): effective tension, curvature, the cable's bend moment and
+    !! (optional) the share a bend stiffener carries.
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     INTEGER, INTENT(IN) :: inode
     REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment
     INTEGER :: es
     CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
-    CALL CD_HermiteCable_Dyn_Node_Values(cable%line, inode, tension, curvature, bend_moment, es, em)
+    CALL CD_HermiteCable_Dyn_Node_Values(cable%line, inode, tension, curvature, bend_moment, es, em, sleeve_moment)
     IF (es /= CD_HCDYN_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI node-value recovery failed: '//TRIM(em))
   END SUBROUTINE cable_node_values
 
@@ -34147,31 +34503,39 @@ CONTAINS
     END IF
   END SUBROUTINE cable_nodal_curvature
 
-  SUBROUTINE cable_nodal_bend_moment(cable, inode, bend_moment, ErrStat, ErrMsg)
+  SUBROUTINE cable_nodal_bend_moment(cable, inode, bend_moment, ErrStat, ErrMsg, sleeve_moment)
     !! Magnitudes of the two one-sided EI*kappa traces at a node.  Taking their
-    !! maximum avoids inventing an averaged EI at a stepped section interface.
+    !! maximum avoids inventing an averaged EI at a stepped section interface. bend_moment is the
+    !! cable's own share EI_line kappa; sleeve_moment (optional) the share of a bend stiffener,
+    !! (EI - EI_line) kappa.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
     INTEGER, INTENT(IN) :: inode
     REAL(wp), INTENT(OUT) :: bend_moment
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment
     REAL(wp) :: curvature
 
     ErrStat = CD_HCABLE_OK
     ErrMsg = ''
     bend_moment = CD_ZERO
+    IF (PRESENT(sleeve_moment)) sleeve_moment = CD_ZERO
     IF (inode < 1 .OR. inode > cable%line%nn) THEN
       ErrStat = 1; ErrMsg = 'cable_nodal_bend_moment: node index out of range'; RETURN
     END IF
     IF (inode > 1) THEN
       CALL cable_element_curvature(cable, inode - 1, CD_ONE, curvature, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCABLE_OK) RETURN
-      bend_moment = MAX(bend_moment, cable%line%EI(inode - 1)*curvature)
+      bend_moment = MAX(bend_moment, cable%line%EI_line(inode - 1)*curvature)
+      IF (PRESENT(sleeve_moment)) sleeve_moment = MAX(sleeve_moment, &
+                                                   (cable%line%EI(inode - 1) - cable%line%EI_line(inode - 1))*curvature)
     END IF
     IF (inode <= cable%line%ne) THEN
       CALL cable_element_curvature(cable, inode, CD_ZERO, curvature, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCABLE_OK) RETURN
-      bend_moment = MAX(bend_moment, cable%line%EI(inode)*curvature)
+      bend_moment = MAX(bend_moment, cable%line%EI_line(inode)*curvature)
+      IF (PRESENT(sleeve_moment)) sleeve_moment = MAX(sleeve_moment, &
+                                                      (cable%line%EI(inode) - cable%line%EI_line(inode))*curvature)
     END IF
   END SUBROUTINE cable_nodal_bend_moment
 
@@ -34219,7 +34583,7 @@ CONTAINS
       END SELECT
     ELSE IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten') .OR. is_anchor_force_channel(lo)) THEN
       unit = '(N)'
-    ELSE IF (is_endpoint_angle_channel(lo)) THEN
+    ELSE IF (is_endpoint_angle_channel(lo) .OR. is_end_deflection_channel(lo)) THEN
       unit = '(deg)'
     ELSE IF (is_point_force_channel(lo)) THEN
       unit = '(N)'
@@ -34230,7 +34594,7 @@ CONTAINS
       SELECT CASE (kind)
       CASE (3); unit = '(N)'
       CASE (5); unit = '(1/m)'
-      CASE (6); unit = '(N.m)'
+      CASE (6, 12); unit = '(N.m)'
       CASE (7, 8); unit = '(deg)'
       CASE (9); unit = '(N.m)'
       CASE (10, 11); unit = '(deg)'

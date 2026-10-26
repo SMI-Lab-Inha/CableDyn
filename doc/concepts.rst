@@ -61,8 +61,8 @@ line type and its own mesh density:
    1       buoy        50.0   16
    1       bare        55.0   18      <- End B (anchor) side
 
-A bare cable + a buoyancy stretch + a bend stiffener is **three sections of one line**, not
-three lines. A single-material chain is **one section**. The unstretched length is the sum of
+A bare cable + a buoyancy stretch + more bare cable is **three sections of one line**, not
+three lines; a bend stiffener over its end is a ``STIFFENERS`` row on that line. A single-material chain is **one section**. The unstretched length is the sum of
 the section lengths; the mesh is refined per section.
 
 .. admonition:: Porting from MoorDyn

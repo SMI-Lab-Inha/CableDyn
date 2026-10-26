@@ -62,8 +62,8 @@ When to use SECTIONS instead
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The 7-column row can describe only a single-type line. A composite (chain–polyester–chain, or a
-power cable with bare, buoyancy, and bend-stiffener zones) is, in MoorDyn, several lines joined at
-``Connect`` points; in CableDyn it is **one line with several ordered sections**:
+power cable with bare and buoyancy zones) is, in MoorDyn, several lines joined at ``Connect``
+points; in CableDyn it is **one line with several ordered sections**:
 
 .. code-block:: text
 

@@ -70,6 +70,10 @@ _SECTION_ALIASES = {
     "ATTACHMENTS": "ATTACHMENTS",
     "LINE ATTACHMENTS": "ATTACHMENTS",
     "CLUMPS": "ATTACHMENTS",
+    "STIFFENERS": "STIFFENERS",
+    "STIFFENER": "STIFFENERS",
+    "BEND STIFFENERS": "STIFFENERS",
+    "BEND STIFFENER": "STIFFENERS",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -91,7 +95,9 @@ _LIST_DIRECTED_SECTIONS = frozenset(
 )
 # Table sections the native reader splits on whitespace and parses column by
 # column (their comma-separated line lists are valid there).
-_WHITESPACE_TABLE_SECTIONS = frozenset({"FAILURE", "CONTROL", "SYROPE IC", "ATTACHMENTS"})
+_WHITESPACE_TABLE_SECTIONS = frozenset(
+    {"FAILURE", "CONTROL", "SYROPE IC", "ATTACHMENTS", "STIFFENERS"}
+)
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
 _NATIVE_RECORD_LENGTH = 512
 _INT32_MAX = 2**31 - 1
@@ -691,7 +697,14 @@ def _parse_line_node_channel(lowered: str) -> tuple[int, int, int, int]:
         # Twist<L>: the line's total twist (node 1)
         line_id = _native_positive_int(lowered, 6, last)
         return (line_id, 1, 11, 0) if line_id > 0 else (line_id, 0, 0, 0)
-    for keyword, code in (("torq", 9), ("twist", 10), ("ten", 3), ("curv", 5), ("bendmom", 6)):
+    for keyword, code in (
+        ("torq", 9),
+        ("twist", 10),
+        ("ten", 3),
+        ("curv", 5),
+        ("bendmom", 6),
+        ("stfmom", 12),
+    ):
         if lowered.startswith(keyword):
             prefix = len(keyword)
             separator = lowered.find("n", prefix)
@@ -745,6 +758,9 @@ def _channel_identity_key(channel: str) -> str:
         if lowered.startswith(("fairincl", "anchincl")):
             return f"{lowered[:8]}:{line_id}"
         return f"{lowered[:4]}decl:{line_id}"
+    if lowered.startswith(("fairdefl", "anchdefl")):
+        line_id = _native_id_suffix(lowered[8:])
+        return f"{lowered[:8]}:{line_id}" if line_id > 0 else lowered
     if lowered.startswith("point") or (
         lowered.startswith("con") and lowered[3:4].isascii() and lowered[3:4].isdigit()
     ):
@@ -761,7 +777,7 @@ def _channel_identity_key(channel: str) -> str:
     if touchdown is not None and int(touchdown.group(1)) > 0:
         component = ("s", "x", "y", "z", "lay", "exc", "grd").index(touchdown.group(2)) + 1
         return f"tdp:{int(touchdown.group(1))}:{component}"
-    if lowered.startswith(("ten", "curv", "bendmom", "l", "torq", "twist")):
+    if lowered.startswith(("ten", "curv", "bendmom", "stfmom", "l", "torq", "twist")):
         line_id, node_id, kind, component = _parse_line_node_channel(lowered)
         if line_id > 0 and node_id > 0 and kind > 0:
             return f"node:{line_id}:{node_id}:{kind}:{component}"
@@ -2034,6 +2050,83 @@ class DeckFile:
                     f"(unstretched length {line_lengths[line_id]:.10g} m)"
                 )
 
+    def _check_stiffeners(
+        self,
+        line_ids: set[str],
+        section_types_by_line: dict[str, list[str]],
+        line_type_meta: dict[str, tuple[float, float, float, float]],
+        line_lengths: dict[str, float],
+    ) -> None:
+        """Native ``append_line_stiffener`` and its finalize checks for STIFFENERS rows.
+
+        A row ``LineID End Length RootOD TipOD InnerD E Density`` is one conical segment of the
+        bend stiffener sleeving End A or End B; the rows of one line end follow each other
+        outward from the root. The stiffeners of both ends together must fit on the line.
+        """
+        extent: dict[tuple[str, str], float] = {}
+        for row in self._rows("STIFFENERS"):
+            where = self._at(row)
+            if len(row.tokens) != 8:
+                raise DeckFormatError(
+                    f"{where}: STIFFENERS rows must be: "
+                    "LineID End Length RootOD TipOD InnerD E Density"
+                )
+            try:
+                line_id = str(_native_int(row.tokens[0]))
+            except ValueError as exc:
+                raise DeckFormatError(f"{where}: STIFFENERS LineID must be an integer") from exc
+            if line_id not in line_ids:
+                raise DeckFormatError(
+                    f"{where}: STIFFENERS row references undefined LINE id {line_id}"
+                )
+            end = {"a": "a", "enda": "a", "b": "b", "endb": "b"}.get(row.tokens[1].lower())
+            if end is None:
+                raise DeckFormatError(f"{where}: STIFFENERS End must be A or B")
+            try:
+                length, root_od, tip_od, inner_d, modulus, density = (
+                    _native_float(token) for token in row.tokens[2:]
+                )
+            except ValueError as exc:
+                raise DeckFormatError(
+                    f"{where}: STIFFENERS Length, RootOD, TipOD, InnerD, E and Density must be "
+                    "plain numbers"
+                ) from exc
+            values = (length, root_od, tip_od, inner_d, modulus, density)
+            if not all(
+                math.isfinite(value) and value <= _NATIVE_MAX_COEFFICIENT for value in values
+            ):
+                raise DeckFormatError(
+                    f"{where}: STIFFENERS Length, RootOD, TipOD, InnerD, E and Density must be "
+                    "finite and at most 1e15"
+                )
+            if not (length > 0.0 and root_od > 0.0 and tip_od > 0.0 and modulus > 0.0):
+                raise DeckFormatError(
+                    f"{where}: STIFFENERS Length, RootOD, TipOD and E must be > 0"
+                )
+            if inner_d < 0.0 or density < 0.0:
+                raise DeckFormatError(f"{where}: STIFFENERS InnerD and Density must be >= 0")
+            if not inner_d < min(root_od, tip_od):
+                raise DeckFormatError(
+                    f"{where}: STIFFENERS InnerD must be smaller than RootOD and TipOD"
+                )
+            extent[(line_id, end)] = extent.get((line_id, end), 0.0) + length
+        for line_id in sorted({key[0] for key in extent}, key=int):
+            if not any(
+                line_type_meta[name][3] > 0.0
+                for name in section_types_by_line.get(line_id, [])
+                if name in line_type_meta
+            ):
+                raise DeckFormatError(
+                    f"{self._label}: STIFFENERS name line {line_id}, which is not a finite-EI "
+                    "line: a stiffener adds bending stiffness, which an EI = 0 line does not have"
+                )
+            total = extent.get((line_id, "a"), 0.0) + extent.get((line_id, "b"), 0.0)
+            if total > line_lengths[line_id] * (1.0 + 1.0e-12):
+                raise DeckFormatError(
+                    f"{self._label}: the STIFFENERS of line {line_id} are longer than the line "
+                    "(End A and End B stiffeners together)"
+                )
+
     def _legacy_rod_type_columns(self, record: DeckRecord) -> bool:
         """Return whether ``record`` sits under a legacy CableDyn ROD TYPES header.
 
@@ -2763,6 +2856,8 @@ class DeckFile:
         line_nelems: dict[str, int] = dict.fromkeys(line_ids, 0)
         line_lengths: dict[str, float] = dict.fromkeys(line_ids, 0.0)
         normalized_line_endpoints: dict[str, tuple[str, str]] = {}
+        # lines whose stock anchor-first row the native reader turns around (its ends swap)
+        swapped_lines: set[str] = set()
         range_lines = 0
         series_lines = 0  # lines with per-line time-series files (flags p, t)
         for row in self.lines:
@@ -2845,6 +2940,7 @@ class DeckFile:
             if type_a == "fixed" and upper_b:
                 node_a, node_b = node_b, node_a
                 type_a, type_b = type_b, type_a
+                swapped_lines.add(str(_native_int(row.tokens[0])))
             normalized_line_endpoints[str(_native_int(row.tokens[0]))] = (node_a, node_b)
             if not has_dynamic_points:
                 type_a_is_coupled = type_a in {"coupled", "vessel"} or _is_turbine_point_type(
@@ -2978,9 +3074,12 @@ class DeckFile:
                 "to run the dynamic working-curve path"
             )
 
+        self._check_stiffeners(line_ids, section_types_by_line, line_type_meta, line_lengths)
         self._check_attachments(line_ids, section_types_by_line, line_type_meta, line_lengths)
 
         assigned_end_connections: set[tuple[str, str]] = set()
+        # (line, end) held by a Rigid or rotational-spring row, in native End A/B order
+        held_ends: set[tuple[str, str]] = set()
         # line id -> {end: torsionally restrained} from the optional torsion columns
         torsion_ends: dict[str, dict[str, bool]] = {}
         torsion_pretwist: dict[str, dict[str, float]] = {}
@@ -3076,6 +3175,8 @@ class DeckFile:
                     self._check_torsion_normal(where, row, normal, direction, norm)
                 torsion_ends.setdefault(line_id, {})[end] = restrained
             if non_pinned:
+                swapped = line_id in swapped_lines
+                held_ends.add((line_id, {"a": "b", "b": "a"}[end] if swapped else end))
                 has_finite_ei = any(
                     line_type_meta[line_type][3] > 0.0
                     for line_type in section_types_by_line[line_id]
@@ -3762,6 +3863,7 @@ class DeckFile:
 
         # Native check_channel: ids are digit strings compared by value, so leading zeros
         # are accepted (FairTen01 is FairTen1).
+        stiffened_lines = {str(_native_int(row.tokens[0])) for row in self._rows("STIFFENERS")}
         for channel in channels:
             lowered = channel.lower()
             endpoint_channel = re.fullmatch(
@@ -3818,6 +3920,22 @@ class DeckFile:
                         f"{self._label}: OUTPUT {channel!r} references an unknown line"
                     )
                 continue
+            # FairDefl<L>/AnchDefl<L>: deflection of the end force from a held end's direction
+            deflection_channel = re.fullmatch(r"(fair|anch)defl([0-9]+)", lowered)
+            if deflection_channel:
+                line_id = _channel_id(deflection_channel.group(2))
+                if line_id not in line_ids:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r} references an unknown line"
+                    )
+                end = "a" if deflection_channel.group(1) == "fair" else "b"
+                if (line_id, end) not in held_ends:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: the deflection angle needs a Rigid or "
+                        "rotational-spring END CONNECTIONS row at End "
+                        f"{end.upper()} of line {line_id}"
+                    )
+                continue
             if point_channel:
                 # (a POINT row merged into a zero-length rod's connector no longer exists)
                 point_id = _channel_id(point_channel.group(1))
@@ -3864,8 +3982,8 @@ class DeckFile:
                         "no torque"
                     )
                 continue
-            if lowered.startswith(("ten", "curv", "bendmom", "l")):
-                # native parse_line_node_channel: Ten/Curv/BendMom<L>N<J>, L<L>N<J>...
+            if lowered.startswith(("ten", "curv", "bendmom", "stfmom", "l")):
+                # native parse_line_node_channel: Ten/Curv/BendMom/StfMom<L>N<J>, L<L>N<J>...
                 line_number, node_id, kind, _ = _parse_line_node_channel(lowered)
                 if (
                     node_id == 0
@@ -3885,6 +4003,11 @@ class DeckFile:
                     if node_id > line_nelems[line_id] + 1:
                         raise DeckFormatError(
                             f"{self._label}: OUTPUT {channel!r} node exceeds the line node count"
+                        )
+                    if kind == 12 and line_id not in stiffened_lines:
+                        raise DeckFormatError(
+                            f"{self._label}: OUTPUT {channel!r}: line {line_id} has no STIFFENERS, "
+                            "so no stiffener moment"
                         )
                     continue
             raise DeckFormatError(f"{self._label}: unsupported OUTPUT channel {channel!r}")

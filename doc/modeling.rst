@@ -78,6 +78,37 @@ viscoelastic model is a four-parameter series-Kelvin solid that reduces to a sta
 solid only when ``BA_D = 0``). Preserve
 the units shown in the ``LINE TYPES`` table; the parser does not infer or convert vendor units.
 
+.. _modeling-bend-stiffeners:
+
+**Bend stiffeners.** Give a bend stiffener as a ``STIFFENERS`` table on the cable, not as a
+section of its own: one row per conical segment from the root outward (outer diameter at each
+side, bore, modulus and density of the polyurethane), at End A or End B. The driver adds the
+sleeve's bending stiffness, mass, buoyancy and drag to the elements it covers
+(:ref:`theory-bend-stiffeners`). Three choices decide the result:
+
+- **the root connection.** The stiffener root is clamped to the hang-off or I-tube: declare that
+  end ``Rigid`` (or a rotational spring for a compliant connection) in ``END CONNECTIONS``, along
+  the hang-off direction. A pinned end carries no moment, so the stiffener then takes none;
+- **the mesh under the stiffener.** One stiffness per element: split the section at the
+  stiffener tip and mesh the part under it with elements of about 0.1–0.2 m, at least ten over
+  the stiffener (the driver notes fewer);
+- **the material.** The sleeve is linear elastic. Polyurethane stiffness depends on temperature
+  and strain rate; use the modulus for the design temperature and check the result at the
+  ends of its range.
+
+The design checks are the curvature of the cable against its minimum bend radius along the
+stiffener and just past its tip (``Curv<L>N<J>`` channels and the range graphs; keep the fine
+mesh a couple of metres beyond the tip), the cable's own moment (``BendMom<L>N<J>``), and the
+stiffener's load case, the end force with its deflection from the hang-off direction
+(``FairTen<L>`` with ``FairDefl<L>``). ``StfMom<L>N<J>`` is the sleeve's share of the moment;
+at the root, ``BendMom<L>N1`` plus ``StfMom<L>N1`` is the moment the hang-off takes.
+
+A sleeve that can slide or rattle on the cable, a steel root section and friction between
+sleeve and cable are not modelled: the sleeve is bonded to the cable in bending.
+
+``lazy_wave_bend_stiffener.dat`` shows a 4 m stiffener at a clamped hang-off on a vessel in
+waves.
+
 5. Choose and converge the mesh
 -------------------------------
 
@@ -125,9 +156,10 @@ two- or four-fold local refinement. When end curvature matters:
 - report the curvature 1–2 m from a pinned end, never the value at the pinned node: a pinned end
   carries no moment, so the exact curvature there is zero, and the computed nodal value is a
   discretisation residue (at ``dtM = 0.05 s`` up to 37 times the converged value 1 m away);
-- for bend-stiffener or hang-off design, model the stiffener as a section and the end as a
-  clamped or rotational-spring ``END CONNECTIONS`` row (see :doc:`driver_format`); a pinned end
-  does not represent the moment a stiffener carries.
+- for bend-stiffener or hang-off design, give the stiffener as a ``STIFFENERS`` table (see
+  :ref:`bend stiffeners <modeling-bend-stiffeners>`) and the end as a clamped or rotational-spring
+  ``END CONNECTIONS`` row (see :doc:`driver_format`); a pinned end does not represent the moment
+  a stiffener carries.
 
 **Snap loads on slack lines.** When a slack line snaps taut it excites axial waves up to the
 segment scale, near :math:`2c/l` with :math:`c = \sqrt{EA/m}` and :math:`l` the segment length.

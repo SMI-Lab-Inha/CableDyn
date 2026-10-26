@@ -107,6 +107,7 @@ def _semantic(deck: DeckFile) -> dict[str, object]:
             "TURBINES",
             "EQUIVALENT BUOYANCY",
             "ATTACHMENTS",
+            "STIFFENERS",
             "CONTROL",
             "EXTERNAL LOADS",
         )
@@ -425,6 +426,26 @@ def test_end_connections_attachments_and_equivalent_buoyancy() -> None:
     round_trip = DeckModel.from_deck_file(deck)
     assert round_trip.attachments[0].arc_length == (42.5, 5.0, 87.5)
     assert round_trip.end_connections[1].stiffness == "Rigid"
+    # a bend stiffener: a cylindrical root and a cone at End A
+    model.add_stiffener(1, "a", 0.4, 0.45, 0.45, 0.17, 5.0e7, 1150.0)
+    model.add_stiffener(model.lines[1], "EndA", 3.6, 0.45, 0.18, 0.17, 5.0e7, 1150.0)
+    deck = model.to_deck_file()
+    assert [row.tokens[:3] for row in deck._rows("STIFFENERS")] == [
+        ("1", "A", "0.4"),
+        ("1", "A", "3.6"),
+    ]
+    round_trip = DeckModel.from_deck_file(deck)
+    assert [(row.end, row.length, row.tip_od) for row in round_trip.stiffeners] == [
+        ("A", 0.4, 0.45),
+        ("A", 3.6, 0.18),
+    ]
+    refs = round_trip.references(round_trip.lines[1])
+    assert all(any(ref is row for ref in refs) for row in round_trip.stiffeners)
+    with pytest.raises(ValueError, match="end must be A or B"):
+        model.add_stiffener(1, "C", 1.0, 0.4, 0.4, 0.2, 5.0e7, 1150.0)
+        model.to_text(validate=False)
+    model.remove(model.stiffeners[-1])
+    assert len(model.stiffeners) == 2
     # an end connection on an EI = 0 line is a native error
     model.line_types["cable"].ei = 0.0
     with pytest.raises(DeckFormatError):
