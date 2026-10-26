@@ -57,7 +57,7 @@ solve is mathematically incorrect; changing ``NumCrctn`` does not change that de
      ``current`` except as a steady current on a single-turbine, pure ``EI = 0`` deck without
      Rigid6 bodies or rods in a SeaState without waves or current (a WaterKin ``CurrentMod 1``
      table remains available),
-   - VIV (``compVIV``), and
+   - cross-flow VIV (a LINE TYPES ``Cl > 0``), which runs in the standalone driver only, and
    - fluid-source combinations that the nodewise SeaState field cannot separate without double
      counting.
 

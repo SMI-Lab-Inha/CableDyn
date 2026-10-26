@@ -715,6 +715,51 @@ fluid acceleration :math:`\dot{\mathbf{u}}_f = \dot{\mathbf{u}}_{f,n} + \dot{\ma
 
 The fluid acceleration is the local (Eulerian) acceleration of the wave field.
 
+.. _theory-viv:
+
+Cross-flow vortex-induced vibration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``EI = 0`` lines can carry the cross-flow lift of the synchronisation model of
+:ref:`Thorsen et al. (2014) <ref-thorsen2014>` and :ref:`(2016) <ref-thorsen2016>` in the form
+MoorDyn v2 implements it: a LINE TYPES row with a lift coefficient :math:`C_L > 0` (see
+:doc:`file_formats`). At an interior node with unit tangent :math:`\mathbf{q}` (the chord of its
+neighbours) and normal relative flow :math:`\mathbf{v}_n` of speed :math:`U = \lvert\mathbf{v}_n\rvert`,
+each node carries a vortex-shedding phase :math:`\phi` and the lift
+
+.. math::
+
+   \mathbf{F}_L = \tfrac{1}{4}\rho\,d\,C_L\,(l_{i} + l_{i+1})\,U\cos\phi\;\mathbf{q}\times\mathbf{v}_n ,
+
+the per-length :math:`\tfrac{1}{2}\rho d C_L U^2\cos\phi` over the node's half elements (wetted
+fraction included). The phase follows the cross-flow motion
+:math:`\dot y = \dot{\mathbf{r}}\cdot\mathbf{e}`, :math:`\ddot y = \ddot{\mathbf{r}}\cdot\mathbf{e}`
+along :math:`\mathbf{e} = \mathbf{q}\times\mathbf{v}_n/U`:
+
+.. math::
+
+   \dot\phi = 2\pi\,\hat f\,\frac{U}{d}, \qquad
+   \hat f = c_F + d_F \sin(\phi_{\dot y} - \phi), \qquad
+   \phi_{\dot y} = \operatorname{atan2}\!\left(-\frac{\ddot y}{\ddot y_\text{rms}},\,
+                   \frac{\dot y}{\dot y_\text{rms}}\right),
+
+so the shedding frequency locks onto the cross-flow motion inside the band
+:math:`c_F \pm d_F` (MoorDyn's defaults 0.18 and 0.08). The running RMS values average over
+``VIVrmsWindow`` seconds, by default 500 steps of ``dtM`` as in MoorDyn, and the phases start at
+:math:`2\pi i/N` along the line from End A. The static equilibrium carries no lift.
+
+In the implicit step the phase is explicit: the step's lift takes the phase predicted at
+:math:`t_{n+1}` from the step-start rate (the generalised-α level under the configuration blend),
+and the committed phase is the trapezoidal (Heun) update with the rate at the converged end
+state. The lift's position and velocity derivatives enter the tangent. The cross-flow motion of
+the phase and the velocity in the lift are the node values averaged with the neighbours,
+:math:`(\mathbf{x}_{i-1} + 2\mathbf{x}_i + \mathbf{x}_{i+1})/4`. That keeps a resolved mode of
+wavenumber :math:`k` to :math:`\cos^2(k l_0/2)` and removes the mesh-scale zig-zag mode exactly.
+With the node's own kinematics, a step that resolves the zig-zag mode lets the synchronisation
+loop pump it until the line loses lock-in; a coarse step only hides this behind the
+integrator's numerical damping. VIV runs in the standalone driver; the coupled and mixed
+aggregate routes refuse a deck with :math:`C_L > 0`.
+
 Buoyancy and wetting
 ~~~~~~~~~~~~~~~~~~~~
 

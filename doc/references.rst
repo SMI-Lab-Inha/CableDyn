@@ -77,6 +77,18 @@ Time integration and nonlinear solution
 Hydrodynamics and ocean environment
 -----------------------------------
 
+.. _ref-thorsen2014:
+
+- **Thorsen, M. J., Sævik, S. & Larsen, C. M. (2014).** A simplified method for time domain
+  simulation of cross-flow vortex-induced vibrations. *Journal of Fluids and Structures*
+  **49**, 135–148. https://doi.org/10.1016/j.jfluidstructs.2014.04.006
+
+.. _ref-thorsen2016:
+
+- **Thorsen, M. J., Sævik, S. & Larsen, C. M. (2016).** Time domain simulation of
+  vortex-induced vibrations in stationary and oscillating flows. *Journal of Fluids and
+  Structures* **61**, 1–19. https://doi.org/10.1016/j.jfluidstructs.2015.11.006
+
 .. _ref-morison1950:
 
 - **Morison, J. R., O'Brien, M. P., Johnson, J. W. & Schaaf, S. A. (1950).** The force

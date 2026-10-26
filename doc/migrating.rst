@@ -92,6 +92,10 @@ Keyword map
    * - ``LINE TYPES`` ``Name Diam MassDen EA BA/-zeta EI Cd Ca CdAx CaAx``
      - same row; the native order is ``Cd_n Cd_t Ca_n Ca_t`` and the header decides which is
        meant. ``EI > 0`` switches the line to the bending element.
+   * - ``LINE TYPES`` VIV columns ``Cl`` or ``Cl dF cF``
+     - same columns and the same synchronisation model on ``EI = 0`` types in the standalone
+       driver (:ref:`theory-viv`); the running-RMS window is ``VIVrmsWindow`` seconds, by default
+       500 steps of ``dtM`` as MoorDyn's
    * - ``ElasticMod 2/3`` viscoelastic ``EA``/``BA``
      - ``Es|Ed`` / ``Es|alphaMBL|vbeta`` in ``EA`` and ``BA_s|BA_d`` in ``BA``
    * - Syrope line type and ``SYROPE IC``
