@@ -467,7 +467,7 @@ CONTAINS
     TYPE(CD_HermiteTorsionType), INTENT(INOUT), OPTIONAL :: torsion
 
     INTEGER :: ne, nn, ndof, c, it, es, i, b, nci, n_buoy, omp_threads, axial_order, bending_order
-    REAL(wp) :: eifac, rnorm, fscale, bfac, rmerit, ptc_tau, ptc_rprev, pi_total, pi_abs, lm_mu
+    REAL(wp) :: eifac, rnorm, fscale, bfac, rmerit, ptc_tau, ptc_rprev, pi_total, pi_abs, lm_mu, chord
     REAL(wp), ALLOCATABLE :: q(:), trib(:), w_cur(:), q_base(:)
     REAL(wp) :: endconn_k(2), endconn_d0(3, 2), direction_norm
     REAL(wp) :: rigid_basis(3, 3, 2), projected_tangent(3)
@@ -891,6 +891,21 @@ CONTAINS
         fscale = MAX(fscale, MAXVAL(ABS(f_nodal(6*(i - 1) + 1:6*(i - 1) + 3))))
         fscale = MAX(fscale, MAXVAL(ABS(f_nodal(6*(i - 1) + 4:6*(i - 1) + 6)))/trib(i))
       END DO
+    END IF
+    ! The tension a taut line must carry: with its ends farther apart than its length L, a line
+    ! is stretched by at least chord/L - 1 over its series axial stiffness, so it carries at
+    ! least that force whatever its weight. A line that carries little weight for its tension
+    ! -- a weightless or near-neutral taut line, a tendon -- otherwise had a weight scale far
+    ! below the round-off of its axial forces (EA (|r'| - 1) is formed from coordinate
+    ! differences), and Newton stagnated at the round-off floor of an equilibrium it had
+    ! reached: a neutrally buoyant 60 m cable at 61 kN stopped at ||R|| 1e-4 N against tol x
+    ! 1 N. A slack line (chord <= L) keeps its weight scale. The bound holds only while the
+    ! solve holds both end positions, which keeps the chord; with an end free to move (a
+    ! cantilever) the seed's chord implies no tension at equilibrium. An element without axial
+    ! stiffness (EA = 0) leaves the series stiffness, and so the bound, at zero.
+    IF (.NOT. (ANY(freemask(1:3)) .OR. ANY(freemask(6*(nn - 1) + 1:6*(nn - 1) + 3))) .AND. ALL(EA > CD_ZERO)) THEN
+      chord = NORM2(q(6*(nn - 1) + 1:6*(nn - 1) + 3) - q(1:3))
+      IF (chord > SUM(l0)) fscale = MAX(fscale, (chord/SUM(l0) - CD_ONE)*SUM(l0)/SUM(l0/EA))
     END IF
 
     ! Buoyancy load continuation. A net-buoyant section (w < 0, e.g. a lazy-wave buoyancy
