@@ -16,7 +16,13 @@ locks in. MoorDyn-F (OpenFAST v5 moordyn_driver, dtM 5e-4 s) gives a mid-span A/
   zig-zag mode was pumped there and the line lost lock-in after about 70 s;
 * the same line as a finite-EI cable (EI 1 N m^2, a string to within 1e-6 of its geometric
   stiffness: the cubic-Hermite route with the Gauss-integrated lift) locks in with the EI = 0
-  line's mid-span and quarter-span amplitudes (within 1 %) and frequency.
+  line's mid-span and quarter-span amplitudes (within 1 %) and frequency;
+* a bending-stiff, neutrally buoyant cable (8.1 kg/m, EA 5e9 N, EI 5e7 N m^2, about 51 kN:
+  beta = pi^2 EI/(T L^2) ~ 1) against the EI = 0 string tensioned to T (1 + beta), which has
+  the same first-mode frequency and shape: at U 0.21 m/s both lock into mode 1 with the same
+  mid-span A/D (within 3 %) and frequency; at U 0.30 m/s the string jumps to mode 2 (mid-span
+  A/D below 0.15) while the cable, whose bending raises f2/f1 to about 3.15, stays in mode 1
+  (mid-span A/D above 0.6).
 
 usage: test_viv_lockin.py --exe <cabledyn> --output <dir>
 """
@@ -63,20 +69,21 @@ uniform cross-flow current for the VIV lock-in gate
 1                    CurrentMod  - type of current input
 z-depth     x-current      y-current
 (m)           (m/s)         (m/s)
-0.0    0.0  0.15
--100.0 0.0  0.15
+0.0    0.0  {u}
+-100.0 0.0  {u}
 --------------------- need this line ------------------
 """
 
 
-def deck(dtm: float, ei: float = 0.0) -> str:
-    length = 100.0 / (1.0 + 5.0e4 / 5.0e7)
+def deck(dtm: float, ei: float = 0.0, ea: float = 5.0e7, mass: float = 10.0, tension: float = 5.0e4,
+         waterkin: str = "current.dat") -> str:
+    length = 100.0 / (1.0 + tension / ea)
     return f"""--------------------- CableDyn Input File ---------------------------------
 VIV lock-in gate: taut line in a uniform cross current
 ----------------------- LINE TYPES ------------------------------------------
 TypeName   Diam   Mass/m   EA        BA/-zeta  EI   Cd    Ca    CdAx  CaAx  Cl   dF    cF
 (name)     (m)    (kg/m)   (N)       (N-s/-)   (-)  (-)   (-)   (-)   (-)   (-)  (-)   (-)
-riser      0.10   10.0     5.0e7     -0.8      {ei}  1.2   1.0   0.0   0.0   0.8  0.08  0.18
+riser      0.10   {mass}     {ea}     -0.8      {ei}  1.2   1.0   0.0   0.0   0.8  0.08  0.18
 ----------------------- POINTS ----------------------------------------------
 ID   Attachment   X       Y     Z      M    V     CdA   CA
 (#)  (-)          (m)     (m)   (m)    (kg) (m^3) (m^2) (-)
@@ -91,7 +98,7 @@ ID   LineType   AttachA  AttachB  UnstrLen  NumSegs  Outputs
 100.0    WtrDpth
 1025.0   rhoW
 9.80665  g
-current.dat  WaterKin
+{waterkin}  WaterKin
 0.25     VIVrmsWindow
 120.0    TMax
 ---------------------- OUTPUTS -----------------------------------------------
@@ -129,11 +136,23 @@ def main() -> int:
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    (out / "current.dat").write_text(CURRENT, encoding="utf-8", newline="\n")
+    for u in (0.15, 0.21, 0.30):
+        (out / f"current_{u}.dat").write_text(CURRENT.format(u=u), encoding="utf-8", newline="\n")
+    # the stiff cable and its equal-frequency string (neutrally buoyant: no sag stiffening)
+    beta = math.pi**2 * 5.0e7 / (5.0e4 * 100.0**2)
+    stiff = {"ei": 5.0e7, "ea": 5.0e9, "mass": 8.1}
+    string = {"ea": 5.0e7, "mass": 8.1, "tension": 5.0e4 * (1.0 + beta)}
+    runs = [
+        (0.01, "viv_dt0.01", deck(0.01, waterkin="current_0.15.dat")),
+        (0.002, "viv_dt0.002", deck(0.002, waterkin="current_0.15.dat")),
+        ("fei", "viv_fei", deck(0.01, ei=1.0, waterkin="current_0.15.dat")),
+    ]
+    for u in (0.21, 0.30):
+        runs.append((("stiff", u), f"viv_stiff_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **stiff)))
+        runs.append((("string", u), f"viv_string_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **string)))
     results = {}
-    for key, dtm, ei in ((0.01, 0.01, 0.0), (0.002, 0.002, 0.0), ("fei", 0.01, 1.0)):
-        name = f"viv_dt{dtm}" if ei == 0.0 else f"viv_fei_dt{dtm}"
-        (out / f"{name}.dat").write_text(deck(dtm, ei), encoding="utf-8", newline="\n")
+    for key, name, text in runs:
+        (out / f"{name}.dat").write_text(text, encoding="utf-8", newline="\n")
         proc = subprocess.run([args.exe, f"{name}.dat", name], cwd=out, capture_output=True, text=True)
         if proc.returncode != 0:
             print(proc.stdout[-2000:], proc.stderr[-2000:])
@@ -159,6 +178,16 @@ def main() -> int:
               f"finite-EI cable: mid/quarter A/D {a1:.3f}/{q1:.3f}, EI = 0 line {a0:.3f}/{q0:.3f} (within 1 %)")
         check(abs(f1 - f0) <= 1.0 / 60.0,
               f"finite-EI cable: response frequency {f1:.3f} Hz, EI = 0 line {f0:.3f} Hz (within 1/60 Hz)")
+    if ("stiff", 0.21) in results and ("string", 0.21) in results:
+        (a1, f1, _), (a0, f0, _) = results[("stiff", 0.21)], results[("string", 0.21)]
+        check(abs(a1 - a0) <= 0.03 * a0 and abs(f1 - f0) <= 1.0 / 60.0,
+              f"U 0.21 m/s: stiff cable A/D {a1:.3f} at {f1:.3f} Hz, equal-frequency string {a0:.3f} "
+              f"at {f0:.3f} Hz (mode 1, within 3 % and one bin)")
+    if ("stiff", 0.30) in results and ("string", 0.30) in results:
+        a1, a0 = results[("stiff", 0.30)][0], results[("string", 0.30)][0]
+        check(a1 > 0.6 and a0 < 0.15,
+              f"U 0.30 m/s: stiff cable stays in mode 1 (mid-span A/D {a1:.3f}), the string jumps to "
+              f"mode 2 (mid-span A/D {a0:.3f})")
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
 
