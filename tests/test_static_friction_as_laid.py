@@ -29,8 +29,8 @@ driver:
   plane of the chord (45 degrees) is solved in 3D from the start, so the state is consistent
   (friction within mu N, a march from it stays at rest), while 180 degrees keeps the planar solve
   and flips the reference (the anchor tension falls below the default one);
-* ``fei_cross`` (a cable on a cross slope, EI = 0 and finite EI): the lateral anchor force stays a
-  small fraction of the one a reference without the sink offset of the laid nodes would give, and
+* ``fei_cross`` (a cable on a cross slope, EI = 0 and finite EI): the lateral anchor force stays
+  below the one a reference without the sink offset of the laid nodes would give, and
   the finite-EI line, solved in 3D because the seabed slopes across its chord, stays at rest when
   marched;
 * ``att_cross`` (a finite-EI line with discrete buoyancy modules on a cross slope): the reference
@@ -413,9 +413,11 @@ def main() -> int:
     # the friction reference keeps that offset. A reference without it would leave the run shifted
     # down the slope by the sink, about w tan(slope)/(kBot d) = 1 cm, which the anchor would carry
     # as a lateral force of AnchTen times that shift over an element (about +0.4 kN, down the slope).
-    # With it the lateral anchor force is a small fraction of that, up the slope, for the EI = 0
-    # line and for the finite-EI one (whose end force follows the cable's end tangent where the
-    # EI = 0 line's follows the chord of its first element). The seabed slope across the chord
+    # With it the lateral anchor force stays below that: up the slope for the EI = 0 line, whose end
+    # force follows the chord of its first element, and in the plane of the floor for the finite-EI
+    # one, whose end force follows the cable's end tangent less the part pressing into the floor and
+    # the along-floor part of its end node's weight, which the friction holds.
+    # The seabed slope across the chord
     # pushes the run out of its vertical plane against its friction, so the finite-EI line is solved
     # in 3D and a march from its static state stays at rest.
     cdir = root / "fei_cross"
@@ -428,12 +430,22 @@ def main() -> int:
         check(rc == 0, "fei_cross %s converges (rc %d)%s" % (tag, rc, "" if rc == 0 else ": " + log.strip()[-300:]))
         if rc == 0:
             r0 = table(cdir / (tag + ".out"))[0]
-            # the anchor force of a run shifted down the slope by its sink, half of it
-            bound = 0.5 * r0["AnchTen1"] * w / (1.0e5 * d) * math.tan(math.radians(5.0)) / 5.0
+            # the anchor force of a run shifted down the slope by its sink
+            ref = r0["AnchTen1"] * w / (1.0e5 * d) * math.tan(math.radians(5.0)) / 5.0
             fy[tag] = r0["Point2Fy"]
-            check(-bound < fy[tag] < 0.0,
-                  "fei_cross %s: lateral anchor force %.4g N up the slope, within half the %.4g N of a reference "
-                  "without the sink" % (tag, fy[tag], 2.0 * bound))
+            if tag == "ei0":
+                check(-0.5 * ref < fy[tag] < 0.0,
+                      "fei_cross ei0: lateral anchor force %.4g N up the slope, within half the %.4g N of a "
+                      "reference without the sink" % (fy[tag], ref))
+            else:
+                # A finite-EI end resting on the floor leaves the part of its end force pressing into
+                # the floor to it, here the pull of the run sunk into the penalty seabed along the
+                # slope's normal (about AnchTen delta / l0, whose lateral part the EI = 0 line keeps),
+                # and the friction holds its end node's weight across the slope: what is left is the
+                # run's pull in the plane of the floor, below the reference.
+                check(abs(fy[tag]) < ref,
+                      "fei_cross fei: lateral anchor force %.4g N in the plane of the floor, below the %.4g N of a "
+                      "reference without the sink" % (fy[tag], ref))
         if rc == 0 and tag == "fei":
             rc, _ = run(a.exe, cdir, "fei_rest", deck("fei cross rest", **cd, tmax=1.0))
             check(rc == 0, "fei_cross fei at-rest march runs (rc %d)" % rc)

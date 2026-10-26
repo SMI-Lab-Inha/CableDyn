@@ -34,6 +34,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   its static solve, even straight along its chord: the convergence test scaled the residual by
   the line's weight alone, far below the round-off of its axial forces. A taut line's scale now
   includes the tension its stretched chord implies; slack lines are unchanged.
+- The anchor force of a finite-EI line resting on a sloped seabed (`bathymetryFile`). The floor
+  took the whole downward part of the end force, so a cable laid down the slope from its anchor
+  lost the down-slope pull: on a 10° slope `AnchTen` read 1.5 % low and `AnchFz`/`Point<P>Fz`
+  read 0. The floor now takes only the part pressing into it along its normal, and on a
+  frictional seabed the along-floor part of the end node's weight up to the friction it can
+  hold; flat seabeds are unchanged.
 
 ## [0.3.0] - 2026-10-23
 
