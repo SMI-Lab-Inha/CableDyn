@@ -3954,8 +3954,9 @@ CONTAINS
       model%viv_cf(nd) = model%viv_cf(nd)/wsum
       model%viv_df(nd) = model%viv_df(nd)/wsum
       model%viv_dn(nd) = model%viv_dn(nd)/wsum
-      ! MoorDyn-C: phi_i = 2 pi i/N at node i = 0..N
-      model%viv_phi(nd) = CD_VIV_TWO_PI*REAL(nd - 1, wp)/REAL(n_elem, wp)
+      ! MoorDyn: phi_i = 2 pi i/N at node i = 0..N counted from End A; the model numbers its
+      ! nodes from End B, so node nd is MoorDyn's node n_nodes - nd
+      model%viv_phi(nd) = CD_VIV_TWO_PI*REAL(n_nodes - nd, wp)/REAL(n_elem, wp)
     END DO
     model%viv_phi_rollback = model%viv_phi
     model%viv_ms_rollback = model%viv_ms
