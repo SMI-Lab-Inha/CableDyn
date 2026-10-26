@@ -165,6 +165,8 @@ length :math:`L` takes the compliance average
 
 which gives the exact relative end rotation of the element under a uniform moment: the stiff
 root of a tapered sleeve is not allowed to stiffen a whole element that only partly lies on it.
+On an ``EI = 0`` section of the line the bare part of an element has an infinite compliance,
+so only an element the sleeve covers completely gains bending stiffness.
 The element mass per length is the cable's plus :math:`\rho_s \tfrac{\pi}{4}\,
 \overline{D^2 - d_i^2}`; buoyancy acts on the displaced area of cable and solid sleeve,
 :math:`\tfrac{\pi}{4}\,(d^2 + \overline{D^2 - d_i^2})`, and drag and added mass on the mean outer

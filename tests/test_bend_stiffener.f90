@@ -88,6 +88,12 @@ CONTAINS
       CALL require(close_rel(dh(e_half), 0.5_wp*(OD + D_C), 1.0e-13_wp), 'cylinder: half-covered outer diameter')
       CALL require(ALL(ei(e_far) == EI_C) .AND. ALL(mpl(e_far) == M_C) .AND. ALL(dv(e_far) == D_C) .AND. &
                    ALL(dh(e_far) == D_C), 'cylinder: elements the sleeve does not reach are unchanged')
+      ! an EI = 0 section: the covered element bends with the sleeve alone; the half-covered one
+      ! keeps EI = 0, its bare half having an infinite compliance
+      ei = 0.0_wp; mpl = M_C; dv = D_C
+      CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl, volume_diameter=.TRUE.)
+      CALL require(close_rel(ei(e_full), ei_s, 1.0e-13_wp), 'cylinder: covered EI = 0 element takes the sleeve')
+      CALL require(ei(e_half) == 0.0_wp, 'cylinder: half-covered EI = 0 element keeps EI = 0')
     END DO
   END SUBROUTINE case_cylinder
 

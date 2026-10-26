@@ -9299,8 +9299,14 @@ CONTAINS
       END DO
       IF (.NOT. (covered > CD_ZERO)) CYCLE
       IF (PRESENT(ei)) THEN
-        IF (ei_line > CD_ZERO) compliance = compliance + (l0(e) - covered)/ei_line
-        ei(e) = l0(e)/compliance
+        IF (ei_line > CD_ZERO) THEN
+          compliance = compliance + (l0(e) - covered)/ei_line
+          ei(e) = l0(e)/compliance
+        ELSE IF (covered >= l0(e)*(CD_ONE - 1.0e-12_wp)) THEN
+          ! an EI = 0 element bends only where the sleeve covers all of it; a bare part has an
+          ! infinite compliance and leaves the element without bending stiffness
+          ei(e) = l0(e)/compliance
+        END IF
       END IF
       IF (PRESENT(mpl)) mpl(e) = mpl(e) + sleeve_mass/l0(e)
       IF (volume_diameter) THEN
