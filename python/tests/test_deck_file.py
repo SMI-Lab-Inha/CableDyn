@@ -4618,6 +4618,13 @@ def test_viv_needs_water_on_an_ei0_line():
     DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "")))
 
 
+def test_finite_ei_viv_is_refused_beside_free_points():
+    row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
+    base = _edit(_DYNAMIC, ("2 Coupled 0.0 0.0 0.0 0 0 0 0", "2 Free 0.0 0.0 0.0 1000 0 0 0"))
+    with pytest.raises(DeckFormatError, match="does not run with bodies, rods or free points"):
+        DeckFile.from_text(_edit(base, (row, row + " 0.8")))
+
+
 def test_viv_rms_window_option_is_non_negative():
     base = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
     DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n0.25 VIVrmsWindow\n")))
