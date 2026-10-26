@@ -193,6 +193,11 @@ class LineType:
         Optional finite-EI columns (shear and torsional stiffness, rotary
         inertias). All four set writes the 14-column row; all ``None`` writes
         the 10-column row.
+    cl, df, cf : float | None
+        Optional cross-flow VIV columns of an ``EI = 0`` type (MoorDyn's lift
+        coefficient and the half-range and centre of the synchronisation band
+        in non-dimensional frequency). ``cl`` set writes the 13-column row, with
+        MoorDyn's ``df = 0.08`` and ``cf = 0.18`` where they are ``None``.
     """
 
     name: str
@@ -209,6 +214,9 @@ class LineType:
     gj: float | None = None
     irt: float | None = None
     irn: float | None = None
+    cl: float | None = None
+    df: float | None = None
+    cf: float | None = None
 
 
 @dataclass(eq=False)
@@ -1622,6 +1630,9 @@ class DeckModel:
         gj: float | None = None,
         irt: float | None = None,
         irn: float | None = None,
+        cl: float | None = None,
+        df: float | None = None,
+        cf: float | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1637,7 +1648,9 @@ class DeckModel:
         """
         _text(name, "line-type name")
         self._check_new_key(self.line_types, name)
-        item = LineType(name, diam, mass, ea, ba, ei, cdn, cdt, can, cat, gas, gj, irt, irn)
+        item = LineType(
+            name, diam, mass, ea, ba, ei, cdn, cdt, can, cat, gas, gj, irt, irn, cl, df, cf
+        )
         self._line_types.append(item)
         return item
 
@@ -2631,7 +2644,7 @@ class DeckModel:
 
     def _line_type_table(self) -> tuple[str, str, list[list[str]]]:
         rows: list[list[str]] = []
-        wide = False
+        wide = viv = False
         for item in self._line_types:
             what = f"line type {item.name!r}"
             row = [_text(item.name, what), _num(item.diam, what), _num(item.mass, what)]
@@ -2649,10 +2662,20 @@ class DeckModel:
             elif any(value is not None for value in extra):
                 raise ValueError(f"{what}: give all of gas, gj, irt, irn or none")
             row += [_num(v, what) for v in (item.cdn, item.cdt, item.can, item.cat)]
+            if item.cl is not None:
+                viv = True
+                df = 0.08 if item.df is None else item.df
+                cf = 0.18 if item.cf is None else item.cf
+                row += [_num(v, what) for v in (item.cl, df, cf)]
+            elif item.df is not None or item.cf is not None:
+                raise ValueError(f"{what}: df and cf need the VIV lift coefficient cl")
             rows.append(row)
         if wide:
             header = "Name Diam Mass EA BA EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t"
             units = "(-) (m) (kg/m) (N) (N-s) (N-m^2) (N) (N-m^2) (kg-m) (kg-m) (-) (-) (-) (-)"
+        elif viv:
+            header = "Name Diam Mass EA BA EI Cd_n Cd_t Ca_n Ca_t Cl dF cF"
+            units = "(-) (m) (kg/m) (N) (N-s) (N-m^2) (-) (-) (-) (-) (-) (-) (-)"
         else:
             header = "Name Diam Mass EA BA EI Cd_n Cd_t Ca_n Ca_t"
             units = "(-) (m) (kg/m) (N) (N-s) (N-m^2) (-) (-) (-) (-)"
@@ -3142,6 +3165,9 @@ class _Loader:
             gj=_f(values["gj"]) if wide else None,
             irt=_f(values["irt"]) if wide else None,
             irn=_f(values["irn"]) if wide else None,
+            cl=_f(values["cl"]) if "cl" in values else None,
+            df=_f(values["df"]) if "df" in values else None,
+            cf=_f(values["cf"]) if "cf" in values else None,
         )
 
     def body(self, row: DeckRecord) -> None:
