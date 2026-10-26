@@ -343,7 +343,39 @@ CONTAINS
     stretch = NORM2(q(6*(NE/2) + 4:6*(NE/2) + 6))
     CALL require(ABS(stretch - NORM2(chord)/60.0_wp) <= 1.0e-9_wp, 'weightless taut line takes the chord strain')
     CALL require(MAXVAL(ABS(curv)) <= 1.0e-8_wp, 'weightless taut line stays straight')
+    CALL check_free_end_preload()
   END SUBROUTINE check_weightless_taut_line
+
+  SUBROUTINE check_free_end_preload()
+    !! The taut-chord tension enters the force scale only while both end positions are held. A
+    !! cantilever (clamped End A, free End B; EA 1e12 N, EI 1e8 N m^2, 100 N/m over 10 m) seeded
+    !! 1 % overstretched would otherwise take a 1e10 N scale from its seed, and its 1000 N weight
+    !! would read as converged before the line bent; it must reach the beam deflection
+    !! w L^4/(8 EI) = 1.25 mm, as from an unstretched seed.
+    INTEGER, PARAMETER :: NE = 10, NN = NE + 1
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed_a(6*NN), seed_b(6*NN), qa(6*NN), qb(6*NN), curv(NN), res
+    REAL(wp) :: tip
+    INTEGER :: i, es, it
+    CHARACTER(512) :: em
+    l0 = 1.0_wp; EA = 1.0e12_wp; EI = 1.0e8_wp; w = 100.0_wp
+    tip = 100.0_wp*10.0_wp**4/(8.0_wp*1.0e8_wp)
+    seed_a = 0.0_wp; seed_b = 0.0_wp
+    DO i = 1, NN
+      seed_a(6*(i - 1) + 1) = REAL(i - 1, wp)
+      seed_b(6*(i - 1) + 1) = 1.01_wp*REAL(i - 1, wp)
+      seed_a(6*(i - 1) + 4) = 1.0_wp
+      seed_b(6*(i - 1) + 4) = 1.0_wp
+    END DO
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed_a, [1, 2, 3, 4, 5, 6], -1.0e4_wp, 0.0_wp, 4, 200, &
+                                      1.0e-6_wp, 1.0_wp, qa, curv, res, it, es, em)
+    CALL require(es == CD_HCSTAT_OK, 'cantilever from an unstretched seed converges: '//TRIM(em))
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed_b, [1, 2, 3, 4, 5, 6], -1.0e4_wp, 0.0_wp, 4, 200, &
+                                      1.0e-6_wp, 1.0_wp, qb, curv, res, it, es, em)
+    CALL require(es == CD_HCSTAT_OK, 'cantilever from an overstretched seed converges: '//TRIM(em))
+    CALL require(ABS(-qa(6*NE + 3) - tip) <= 1.0e-3_wp*tip, 'cantilever from an unstretched seed: w L^4/(8 EI)')
+    CALL require(ABS(-qb(6*NE + 3) - tip) <= 1.0e-3_wp*tip, &
+                 'cantilever from an overstretched seed: w L^4/(8 EI) (no seed preload in the force scale)')
+  END SUBROUTINE check_free_end_preload
 
   SUBROUTINE check_taut_line_anchored_on_floor()
     !! The floor carries the end element's weight moment only where the element lies on it.
