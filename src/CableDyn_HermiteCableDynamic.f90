@@ -5297,13 +5297,13 @@ CONTAINS
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
     REAL(wp) :: qe(12), ve(12), fe(12), fdrag(12), fdamp(12), energy, fdry(4), kdry(4, 4), r3(3), gate, gate_gap
     REAL(wp) :: dry_wl, dry_b, dry_r, gap, normal, normal_gap, z_floor, xg, yg, gxg, gyg
-    REAL(wp) :: gx, gy, sfac, nvec(3), vn, rk(3), jrel(3, 3), jtan(3, 3)
+    REAL(wp) :: gx, gy, sfac, nvec(3), vn, rk(3), jrel(3, 3), jtan(3, 3), fn, wt(3)
     REAL(wp) :: curv_e(3), fcrease_e(3), kcrease_e(3, 3)
     INTEGER :: e, i0, iz, zslot, es, k
     LOGICAL :: dry, has_jac
     CHARACTER(1024) :: em2
 
-    ErrStat = CD_HCDYN_OK; ErrMsg = ''; force = CD_ZERO; gap = -HUGE(CD_ONE)
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''; force = CD_ZERO; gap = -HUGE(CD_ONE); nvec = [CD_ZERO, CD_ZERO, CD_ONE]
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: model not initialised'; RETURN
     END IF
@@ -5451,12 +5451,25 @@ CONTAINS
         force = force + mt*gend(:, MERGE(1, 2, node == 1))
       END BLOCK
     END IF
-    ! An end resting on the seabed (at or inside the contact blend) does not carry the end
-    ! node's weight: the floor does, as it does for the grounded nodes beside it. The
-    ! downward part of the end force is left to the seabed, so a grounded end reports the
-    ! horizontal (grounded-run) tension.
-    IF ((model%has_contact .OR. model%kn > CD_ZERO) .AND. .NOT. (gap <= -CD_SEABED_CONTACT_BLEND)) &
-      force(3) = MAX(force(3), CD_ZERO)
+    ! An end resting on the seabed (at or inside the contact blend) leaves to the floor the part
+    ! of its end force pressing into it along the upward normal nvec (the end node's weight on a
+    ! flat floor), as the floor carries the grounded nodes beside it: a grounded end on a flat
+    ! floor reports the horizontal (grounded-run) tension, and one on a slope keeps the line's
+    ! along-floor pull, down-slope component included. On a frictional seabed the floor also
+    ! holds the along-floor part of the end node's own weight, up to mu times that normal load
+    ! (the line's pull stays with the anchor); without friction it stays with the line, as in
+    ! the floor's end-element support (held_end_floor_support).
+    IF ((model%has_contact .OR. model%kn > CD_ZERO) .AND. .NOT. (gap <= -CD_SEABED_CONTACT_BLEND)) THEN
+      fn = DOT_PRODUCT(force, nvec)
+      IF (fn < CD_ZERO) THEN
+        force = force - fn*nvec
+        IF (model%fr_active .AND. model%w(e) > CD_ZERO) THEN
+          wt = -model%w(e)*0.5_wp*model%l0(e)*([CD_ZERO, CD_ZERO, CD_ONE] - nvec(3)*nvec)
+          IF (NORM2(wt) > CD_ZERO) &
+            force = force - MIN(CD_ONE, MIN(model%contact_mu, model%contact_mu_axial)*(-fn)/NORM2(wt))*wt
+        END IF
+      END IF
+    END IF
   END SUBROUTINE CD_HermiteCable_Dyn_End_Force
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Output_Recovery(model, element_recovery)

@@ -19,6 +19,8 @@ Gates, each on the driver's own output files:
 * dynamics: a fairlead surge lifts the anchor of a catenary; at every output time the channels
   are finite and consistent, ``TDP<L>Grd > 0`` implies ``AnchFz < 0`` and ``AnchFz > 0`` implies
   ``TDP<L>Grd = 0``, and the held end state is the suspended elastic catenary;
+* sloped seabed: a finite-EI cable laid down a slope from its anchor keeps the down-slope pull,
+  so its anchor force runs along the floor and ``AnchTen`` continues the line tension;
 * fail-closed contracts: unknown lines and the two-moving-end finite-EI route reject the names.
 
 usage: test_anchor_uplift.py --exe <cabledyn> --examples <examples dir> --output <dir>
@@ -471,6 +473,63 @@ def main() -> int:
     run(args.exe, out / "rigid6.dat", out / "rigid6", env)
     check_anchor_point("multibody march, line 1", out / "rigid6", 1, 4)
     check_anchor_point("multibody march, line 2", out / "rigid6", 2, 5)
+
+    # --- (d) sloped seabed: a finite-EI cable laid down a 10 deg slope from its anchor. The floor
+    # takes only the part of the end force pressing into it, so the anchor keeps the down-slope pull:
+    # the anchor force lies along the floor and AnchTen continues the line tension, where dropping
+    # the whole downward part read cos(10 deg) of it. Up the end element the tension grows by its
+    # along-slope weight w l0 sin(10 deg): on this frictionless floor the along-floor part of the
+    # end node's weight stays with the line.
+    slope = math.radians(10.0)
+    bathy = "".join(f"{x:.1f} {y:.1f} {200.0 + (300.0 - x) * math.tan(slope)!r}\n"
+                    for x in range(-200, 701, 100) for y in (-300.0, 300.0))
+    (out / "slope_bathy.txt").write_text(bathy, encoding="utf-8", newline="\n")
+    d_pc, m_pc, l0_pc = 0.16, 36.7, 2.0
+    w_pc = (m_pc - RHO * math.pi / 4.0 * d_pc**2) * G
+    deck = f"""finite-EI cable laid down a 10 deg slope from its anchor
+--- LINE TYPES ---
+TypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t
+(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)
+pc {d_pc} {m_pc} 4.69e8 -1 19900 1.2 0.1 1 0
+--- POINTS ---
+ID Type X Y Z Mass Vol CdA Ca
+(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)
+1 Coupled 0 0 -20 0 0 0 0
+2 Fixed 300 0 -200 0 0 0 0
+--- LINES ---
+ID NodeA NodeB Outputs
+(-) (-) (-) (-)
+1 1 2 -
+--- SECTIONS ---
+LineID LineType Length NumSegs
+(-) (-) (m) (-)
+1 pc 410 {int(410 / l0_pc)}
+--- OPTIONS ---
+9.80665 g
+1025.0 rhoW
+slope_bathy.txt bathymetryFile
+100000.0 kBot
+1.0e4 cBot
+0.05 dtM
+0.0 TMax
+--- OUTPUTS ---
+{" ".join(anchor_channels(1, 2))}
+--- need this line ---
+"""
+    (out / "slope.dat").write_text(deck, encoding="utf-8", newline="\n")
+    run(args.exe, out / "slope.dat", out / "slope", env)
+    check_anchor_point("finite-EI cable on a sloped seabed", out / "slope", 1, 2)
+    hist = read_output(out / "slope.out")
+    ten, fz, fh = (float(hist.column(c)[0]) for c in ("AnchTen1", "AnchFz1", "AnchFH1"))
+    rows = [row.split() for row in (out / "slope.static.out").read_text(encoding="utf-8").splitlines()[3:]]
+    t_next = float(rows[-2][6])
+    angle = math.degrees(math.atan2(-fz, fh))
+    check(abs(angle - 10.0) < 0.2, f"sloped seabed: the anchor force runs {angle:.2f} deg below horizontal, along "
+          "the 10 deg floor (AnchFz < 0: the down-slope pull)")
+    expect = t_next + w_pc * l0_pc * math.sin(slope)
+    check(abs(ten - expect) < 0.05 * w_pc * l0_pc,
+          f"sloped seabed: AnchTen1 {ten:.1f} N continues the next node's tension {t_next:.1f} N plus the end "
+          f"element's along-slope weight (expected {expect:.1f} N)")
 
     # --- fail-closed contracts
     bad = set_outputs(chain_deck(R3, 550.0, 55, 500.0, 100.0, 0.0, "1.0e5"), ["AnchFz2"])

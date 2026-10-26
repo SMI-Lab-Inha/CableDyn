@@ -610,9 +610,14 @@ In :doc:`tutorial_catenary` (:math:`w` = 3.18 kN/m, :math:`\Delta L` = 10 m,
 :math:`\delta` = 0.13 m) this estimate is −18.4 kN, and the run reports ``AnchFz1`` = −18.2 kN
 beside ``AnchFH1`` = 191.5 kN (the horizontal tension) and ``AnchTen1`` = 192.4 kN. The share
 belongs to the lumped anchor node: it scales with the anchor segment length, vanishes as the mesh
-is refined, and is not uplift. A finite-EI (cubic-Hermite) end resting on the seabed leaves its
-end node's weight to the floor and reads ``AnchFz`` = 0 there. Read the vertical anchor load from
-``AnchFz``, not from the difference between ``AnchTen`` and ``AnchFH``.
+is refined, and is not uplift. A finite-EI (cubic-Hermite) end resting on the seabed leaves the
+part of its end force pressing into the floor (along the floor normal) to the floor: on a flat
+seabed that is the end node's weight, and ``AnchFz`` reads 0 there. On a sloped seabed
+(``bathymetryFile``) the anchor keeps the line's along-floor pull, so a line laid down the slope
+from its anchor reads a negative ``AnchFz``, the down-slope component of its tension; on a
+frictional seabed (``frictionMu``) the floor also holds the along-floor part of the end node's
+own weight, up to the friction coefficient times that normal load. Read the vertical anchor load
+from ``AnchFz``, not from the difference between ``AnchTen`` and ``AnchFH``.
 
 Line-node channels
 ~~~~~~~~~~~~~~~~~~
