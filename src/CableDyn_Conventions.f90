@@ -12,6 +12,8 @@ MODULE CableDyn_Conventions
   !!                            (azimuth / declination / gamma) [deg] -> R in SO(3).
   !!   - CD_Body_Rotation     : 6D-body attitude, intrinsic x-y'-z''
   !!                            (rotation1 / 2 / 3) [deg] -> R in SO(3).
+  !!   - CD_CHANNEL_FMT, CD_NATIVE_CHANNEL_FMT : the channel-value formats of the
+  !!                            time-series files (three-digit exponent).
   !!
   !! These are the OrcaFlex 11.5 conventions (frames right-handed, GZ up; azimuth
   !! +GX->+GY; declination from +GZ). The two Euler sequences are deliberately
@@ -24,6 +26,15 @@ MODULE CableDyn_Conventions
   PRIVATE
   PUBLIC :: CD_Direction_Vector, CD_LineEnd_Rotation, CD_Body_Rotation
   PUBLIC :: CD_Deg2Rad, CD_Rad2Deg
+  PUBLIC :: CD_CHANNEL_FMT, CD_NATIVE_CHANNEL_FMT
+
+  ! One TAB-separated channel value of a time-series row: the standalone .out files (8
+  ! significant digits) and OpenFAST's native <root>.CD.out (7). The exponent field has three
+  ! digits: with two, a magnitude below 1e-99 or at 1e100 and above (the round-off noise of a
+  ! component that is zero, such as the y position of a line in the x-z plane) fills the field
+  ! with asterisks, and without a stated width the exponent letter is dropped.
+  CHARACTER(*), PARAMETER :: CD_CHANNEL_FMT = '(A,ES15.7E3)'
+  CHARACTER(*), PARAMETER :: CD_NATIVE_CHANNEL_FMT = '(A,ES15.6E3)'
 
   REAL(wp), PARAMETER :: CD_PI = 3.14159265358979323846_wp
   REAL(wp), PARAMETER :: CD_RAD_PER_DEG = CD_PI/180.0_wp

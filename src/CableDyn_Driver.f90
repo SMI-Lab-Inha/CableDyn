@@ -756,11 +756,11 @@ CONTAINS
       ' stalled=', stalled, ' at_floor=', at_floor
     WRITE (unit, '(A)') 'section,node,x,y,z'
     DO i = 1, n_nodes
-      WRITE (unit, '(A,I0,3(A,ES23.15))') 'node,', i, ',', q(3*i - 2), ',', q(3*i - 1), ',', q(3*i)
+      WRITE (unit, '(A,I0,3(A,ES23.15E3))') 'node,', i, ',', q(3*i - 2), ',', q(3*i - 1), ',', q(3*i)
     END DO
     WRITE (unit, '(A)') 'section,elem,node_a,node_b,tension_N'
     DO i = 1, n_elem
-      WRITE (unit, '(A,I0,2(A,I0),A,ES23.15)') 'elem,', i, ',', conn(1, i), ',', conn(2, i), &
+      WRITE (unit, '(A,I0,2(A,I0),A,ES23.15E3)') 'elem,', i, ',', conn(1, i), ',', conn(2, i), &
         ',', tension(i)
     END DO
     CLOSE (unit)

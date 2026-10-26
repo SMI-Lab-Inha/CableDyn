@@ -97,9 +97,8 @@ All standalone files are plain ASCII tables:
   three-digit exponent, e.g. ``  1.2500000000000000E+001``) so that time stamps survive long
   runs with small ``dtM`` without rounding;
 * every other real value is Fortran ``ES15.7E3`` (15 characters, 8 significant digits, e.g.
-  `` 5.0988032E+005``, three-digit exponent). The one exception is the channel columns of the
-  mixed ``EI = 0`` + finite-EI route's ``.out``, written as ``ES15.7`` (the same 8 significant
-  digits with a two-digit exponent, e.g. `` 5.0988032E+05``);
+  `` 5.0988032E+005``, three-digit exponent, so round-off noise below 1e-99 in a component that
+  is zero still prints as a number);
 * integer key columns (``LineID``, ``Node``, ``Element``, ``Segment``) are written without
   padding (``I0``);
 * a non-finite channel value is never written: a dynamic row that would contain ``NaN`` or
@@ -946,7 +945,8 @@ output root:
   ``(deg)`` angles, ``(m)`` positions, ``(m/s)`` velocities, ``(m/s2)`` accelerations,
   ``(deg/s)`` / ``(deg/s2)`` body and rod angular rates, ``(1/m)`` curvature, ``(N.m)`` bend
   moment and body/rod moments, ``(-)`` ``Rod<N>Sub``;
-* data rows: time as ``ES25.16E3`` (full double precision), values as ``ES15.6E2``, TAB-separated.
+* data rows: time as ``ES25.16E3`` (full double precision), values as ``ES15.6E3`` (7 significant
+  digits, three-digit exponent), TAB-separated.
 
 The first data row is the static initialisation at ``t = 0``; every further row is written after
 each committed CableDyn step, at every ``dtM`` boundary. It is independent of OpenFAST's ``DT_Out``

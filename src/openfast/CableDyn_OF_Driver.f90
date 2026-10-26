@@ -44,6 +44,7 @@ PROGRAM CableDyn_OF_Driver
    USE NWTC_Library
    USE CableDyn_Types
    USE CableDyn, ONLY: CD_Init, CD_UpdateStates, CD_CalcOutput, CD_End
+   USE CableDyn_Conventions, ONLY: CD_NATIVE_CHANNEL_FMT
    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
    IMPLICIT NONE
 
@@ -165,7 +166,7 @@ PROGRAM CableDyn_OF_Driver
       IF (.NOT. ALL(IEEE_IS_FINITE(y%CoupledLoads(1)%Moment))) CALL fail_out('non-finite coupled moment')
       WRITE (un_out, '(F12.4)', ADVANCE='NO') t + dtc
       DO ic = 1, nch
-         WRITE (un_out, '(A,ES15.6)', ADVANCE='NO') TAB, y%WriteOutput(ic)
+         WRITE (un_out, CD_NATIVE_CHANNEL_FMT, ADVANCE='NO') TAB, y%WriteOutput(ic)
       END DO
       WRITE (un_out, '()')
    END DO

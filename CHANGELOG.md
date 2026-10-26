@@ -40,6 +40,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   read 0. The floor now takes only the part pressing into it along its normal, and on a
   frictional seabed the along-floor part of the end node's weight up to the friction it can
   hold; flat seabeds are unchanged.
+- OpenFAST's native `<root>.CD.out` wrote a channel value below 1e-99 or from 1e100 on as a
+  field of asterisks (`ES15.6E2`): the round-off noise of a zero component, such as the y
+  position or tangent azimuth of a line in the x-z plane, broke every reader. Channel values now
+  have a three-digit exponent (`ES15.6E3`, same width). The mixed `EI = 0` + finite-EI `.out`,
+  the modal results, the static driver's mesh file and the OpenFAST module driver, which wrote
+  such values without the exponent letter, do too.
 
 ## [0.3.0] - 2026-10-23
 
