@@ -46,6 +46,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   have a three-digit exponent (`ES15.6E3`, same width). The mixed `EI = 0` + finite-EI `.out`,
   the modal results, the static driver's mesh file and the OpenFAST module driver, which wrote
   such values without the exponent letter, do too.
+- `openfast -restart` with a finite-EI cable continues the run bit for bit. The rebuild moved the
+  cable's fairlead to the restored input mesh, whose last bits differ from the boundary the
+  uninterrupted run committed, and the cable's `.CD.out` channels drifted by up to 1e-6
+  (relative) within seconds. The checkpoint now carries the cable's committed boundary.
 
 ## [0.3.0] - 2026-10-23
 

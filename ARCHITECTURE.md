@@ -360,10 +360,11 @@ the exchange buildable and testable without OpenFAST.
   committed positions and holds them for the step.
 - **State mirror.** The authoritative state lives in the module instance, and
   `x%states` carries a mirror of it: line node velocities and positions, finite-EI
-  cable DOFs, constitutive states (`dl_1`, Syrope), friction anchors, and body and
-  rod states. Checkpoint/restart, correction iterations, and the framework
-  metadata use the mirror; a restart rebuilds the model from the packed deck and
-  the mirror.
+  cable DOFs, constitutive states (`dl_1`, Syrope), friction anchors, the committed
+  boundary kinematics of the coupled ends, and body and rod states.
+  Checkpoint/restart, correction iterations, and the framework metadata use the
+  mirror; a restart rebuilds the model from the packed deck and the mirror, which
+  then overrides the restored input mesh at the coupled ends.
 - **Scope.** Correction iterations, quasi-static linearisation, FAST.Farm shared
   moorings (`MooringMod = 5`), line failures, and active line-length control are
   supported. Combinations that are not supported coupled stop with a named error;
