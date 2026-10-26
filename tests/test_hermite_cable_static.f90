@@ -42,6 +42,7 @@ PROGRAM test_hermite_cable_static
   CALL check_seabed_mesh_jump()
   CALL check_scalar_contact_on_slope()
   CALL check_taut_line_anchored_on_floor()
+  CALL check_weightless_taut_line()
   CALL check_laid_line_node_recovery()
   CALL check_end_support_energy_gradient()
   CALL check_frictionless_slope_run()
@@ -313,6 +314,36 @@ CONTAINS
     END DO
     CALL require(dev < 0.1_wp*pen0, 'mesh-jump penetration stays near w/(kBot d)')
   END SUBROUTINE check_seabed_mesh_jump
+
+  SUBROUTINE check_weightless_taut_line()
+    !! A weightless taut line converges. The relative residual took its force scale from the
+    !! line's weight alone (1 N floor), far below the round-off of the 61 kN axial force of a
+    !! stiff line (EA 5e8 N), and Newton stagnated at ||R|| ~ 1e-4 N of an equilibrium it had
+    !! reached. A 60 m line stretched over a 60.0073 m chord on 212 elements (0.05 m over its
+    !! first 8 m) must converge straight, with the axial strain of the chord, C/L - 1.
+    INTEGER, PARAMETER :: NA = 160, NB = 52, NE = NA + NB, NN = NE + 1
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(6*NN), q(6*NN), curv(NN), res, chord(3), s, stretch
+    INTEGER :: fixed(6), i, es, it
+    CHARACTER(512) :: em
+    l0(1:NA) = 8.0_wp/NA; l0(NA + 1:) = 1.0_wp
+    EA = 5.0e8_wp; EI = 2.0e4_wp; w = 0.0_wp
+    chord = [51.97_wp, 0.0_wp, -30.0_wp]
+    ! a straight seed along the chord, unit tangents
+    s = 0.0_wp
+    DO i = 1, NN
+      IF (i > 1) s = s + l0(i - 1)
+      seed(6*(i - 1) + 1:6*(i - 1) + 3) = chord*s/60.0_wp
+      seed(6*(i - 1) + 4:6*(i - 1) + 6) = chord/NORM2(chord)
+    END DO
+    fixed = [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3]
+    CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, seed, fixed, -1.0e4_wp, 0.0_wp, 4, 200, 1.0e-6_wp, &
+                                      1.0_wp, q, curv, res, it, es, em)
+    CALL require(es == CD_HCSTAT_OK, 'weightless taut line converges: '//TRIM(em))
+    IF (es /= CD_HCSTAT_OK) RETURN
+    stretch = NORM2(q(6*(NE/2) + 4:6*(NE/2) + 6))
+    CALL require(ABS(stretch - NORM2(chord)/60.0_wp) <= 1.0e-9_wp, 'weightless taut line takes the chord strain')
+    CALL require(MAXVAL(ABS(curv)) <= 1.0e-8_wp, 'weightless taut line stays straight')
+  END SUBROUTINE check_weightless_taut_line
 
   SUBROUTINE check_taut_line_anchored_on_floor()
     !! The floor carries the end element's weight moment only where the element lies on it.

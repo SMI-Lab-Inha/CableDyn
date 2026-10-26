@@ -28,6 +28,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   range graphs and element file) report the cable's own moment, the line type's EI times the
   curvature; lines without stiffeners are unchanged.
 
+### Fixed
+
+- A weightless or near-neutral taut finite-EI line (a neutrally buoyant cable, a tendon) failed
+  its static solve, even straight along its chord: the convergence test scaled the residual by
+  the line's weight alone, far below the round-off of its axial forces. A taut line's scale now
+  includes the tension its stretched chord implies; slack lines are unchanged.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added
