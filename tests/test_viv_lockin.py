@@ -16,7 +16,8 @@ locks in. MoorDyn-F (OpenFAST v5 moordyn_driver, dtM 5e-4 s) gives a mid-span A/
   zig-zag mode was pumped there and the line lost lock-in after about 70 s;
 * the same line as a finite-EI cable (EI 1 N m^2, a string to within 1e-6 of its geometric
   stiffness: the cubic-Hermite route with the Gauss-integrated lift) locks in with the EI = 0
-  line's mid-span and quarter-span amplitudes (within 1 %) and frequency;
+  line's mid-span and quarter-span amplitudes (within 1 %) and frequency, at dtM 0.01 s and at
+  0.002 s (no smoothing needed on the Hermite route);
 * a bending-stiff, neutrally buoyant cable (8.1 kg/m, EA 5e9 N, EI 5e7 N m^2, about 51 kN:
   beta = pi^2 EI/(T L^2) ~ 1) against the EI = 0 string tensioned to T (1 + beta), which has
   the same first-mode frequency and shape: at U 0.21 m/s both lock into mode 1 with the same
@@ -146,6 +147,7 @@ def main() -> int:
         (0.01, "viv_dt0.01", deck(0.01, waterkin="current_0.15.dat")),
         (0.002, "viv_dt0.002", deck(0.002, waterkin="current_0.15.dat")),
         ("fei", "viv_fei", deck(0.01, ei=1.0, waterkin="current_0.15.dat")),
+        ("fei_fine", "viv_fei_dt0.002", deck(0.002, ei=1.0, waterkin="current_0.15.dat")),
     ]
     for u in (0.21, 0.30):
         runs.append((("stiff", u), f"viv_stiff_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **stiff)))
@@ -178,6 +180,11 @@ def main() -> int:
               f"finite-EI cable: mid/quarter A/D {a1:.3f}/{q1:.3f}, EI = 0 line {a0:.3f}/{q0:.3f} (within 1 %)")
         check(abs(f1 - f0) <= 1.0 / 60.0,
               f"finite-EI cable: response frequency {f1:.3f} Hz, EI = 0 line {f0:.3f} Hz (within 1/60 Hz)")
+    if 0.01 in results and "fei_fine" in results:
+        (a0, f0, q0), (a1, f1, q1) = results[0.01], results["fei_fine"]
+        check(abs(a1 - a0) <= 0.01 * a0 and abs(q1 - q0) <= 0.01 * q0 and abs(f1 - f0) <= 1.0 / 60.0,
+              f"finite-EI cable at dtM 0.002 s: mid/quarter A/D {a1:.3f}/{q1:.3f} at {f1:.3f} Hz, EI = 0 "
+              f"line at 0.01 s {a0:.3f}/{q0:.3f} at {f0:.3f} Hz (within 1 % and one bin)")
     if ("stiff", 0.21) in results and ("string", 0.21) in results:
         (a1, f1, _), (a0, f0, _) = results[("stiff", 0.21)], results[("string", 0.21)]
         check(abs(a1 - a0) <= 0.03 * a0 and abs(f1 - f0) <= 1.0 / 60.0,

@@ -1119,37 +1119,34 @@ CONTAINS
     END DO
   END SUBROUTINE viv_step_begin
 
-  SUBROUTINE viv_step_end(model, dt, ErrStat, ErrMsg)
+  SUBROUTINE viv_step_end(model, dt)
     !! Commit the VIV state at the converged end state (q, v, a just committed): the phase by
     !! Heun's rule phi_n + dt/2 (rate_n + rate(state_n+1, phi_n + dt rate_n)), with the end-state
     !! sample added to the mean squares for that rate only, and the step-start mean squares. The
-    !! lift then takes the committed phase again.
+    !! lift then takes the committed phase again. It cannot fail, so the step it ends is never
+    !! left half committed: a node whose end tangent is degenerate, or whose end rate is not
+    !! finite, takes the step-start rate over the step (phi_n + dt rate_n).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k
     REAL(wp) :: w, yd, ydd, un, ms1, ms2, rate_end
     LOGICAL :: ok
-    ErrStat = CD_HCDYN_OK; ErrMsg = ''
     w = MIN(CD_ONE, dt/model%viv_tw)
     DO k = 1, model%nn
       IF (.NOT. model%viv_node(k)) CYCLE
+      rate_end = model%viv_rate(k)
       CALL viv_node_motion(model, k, yd, ydd, un, ok)
-      IF (.NOT. ok) THEN
-        ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'VIV phase: degenerate node tangent'; RETURN
+      IF (ok) THEN
+        ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, k), yd, w)
+        ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, k), ydd, w)
+        rate_end = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(k) + dt*model%viv_rate(k), un, &
+                                     model%viv_dn(k), model%viv_cf(k), model%viv_df(k))
+        IF (.NOT. CD_Is_Finite(rate_end)) rate_end = model%viv_rate(k)
       END IF
-      ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, k), yd, w)
-      ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, k), ydd, w)
-      rate_end = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(k) + dt*model%viv_rate(k), un, &
-                                   model%viv_dn(k), model%viv_cf(k), model%viv_df(k))
       model%viv_phi(k) = CD_VIV_Wrap_Phase(model%viv_phi(k) + 0.5_wp*dt*(model%viv_rate(k) + rate_end))
     END DO
     model%viv_ms = model%viv_ms_next
     model%viv_phi_eval = model%viv_phi
-    IF (.NOT. CD_All_Finite(model%viv_phi)) THEN
-      ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'VIV phase update produced a non-finite phase'
-    END IF
   END SUBROUTINE viv_step_end
 
   SUBROUTINE viv_element_lift(model, q_cfg, v_cfg, e, flift, ErrStat, ErrMsg, djq, djv)
@@ -4255,12 +4252,7 @@ CONTAINS
     END IF
     IF (has_endconn_motion) CALL impose_step_rigid_kinematics(model%q, model%v, model%a)
     IF (model%fr_active) CALL commit_friction_anchors(model)
-    IF (model%has_viv) THEN
-      CALL viv_step_end(model, dt, es, em2)
-      IF (es /= CD_HCDYN_OK) THEN
-        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
-      END IF
-    END IF
+    IF (model%has_viv) CALL viv_step_end(model, dt)
     model%t = model%t + dt
     IF (has_endconn_motion) model%endconn_d0 = step_endconn_target
     IF (model%torsion%active) THEN
