@@ -4598,6 +4598,21 @@ def test_line_type_viv_needs_an_ei0_line_type():
         DeckFile.from_text(text)
 
 
+def test_viv_is_refused_on_the_coupled_route():
+    text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
+    DeckFile.from_text(text)
+    with pytest.raises(DeckFormatError, match="runs in the standalone driver"):
+        DeckFile.from_text(text, caller_driven=True)
+
+
+def test_viv_needs_water_on_an_ei0_line():
+    text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"), ("50.0 WtrDpth\n", ""))
+    with pytest.raises(DeckFormatError, match="acts with the line's Morison drag in water"):
+        DeckFile.from_text(text)
+    # without the lift the same dry deck stays valid
+    DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "")))
+
+
 def test_viv_rms_window_option_is_non_negative():
     base = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
     DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n0.25 VIVrmsWindow\n")))

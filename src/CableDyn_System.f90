@@ -18,8 +18,7 @@ MODULE CableDyn_System
                             CD_Model_Has_Viscoelastic, CD_Get_Model_VE_Dl1, CD_Set_Model_VE_Dl1, &
                             CD_Model_Has_Syrope, CD_Get_Model_Syrope_State, CD_Set_Model_Syrope_State, &
                             CD_Model_Has_Friction, CD_Get_Model_Friction_Anchors, CD_Set_Model_Friction_Anchors, &
-                            CD_Model_Has_VIV, CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, &
-                            CD_Latch_Model_VIV_Window, CD_Get_Model_VIV_Lift, &
+                            CD_Latch_Model_VIV_Window, &
                             CD_Get_Model_EndNodeMassDiag, CD_Get_Model_EndNodeAddedMass, &
                             CD_Get_Model_EndNodeTangent, CD_Set_Model_EndQuery, CD_Get_Model_EndQuery, &
                             CD_Model_Seabed_Point_Load, &
@@ -71,8 +70,6 @@ MODULE CableDyn_System
   PUBLIC :: CD_System_Line_NDOF
   PUBLIC :: CD_System_Line_NElem
   PUBLIC :: CD_System_Line_Has_Viscoelastic
-  PUBLIC :: CD_System_Line_VIV_MirrorSize, CD_Get_System_Line_VIV_State, CD_Set_System_Line_VIV_State
-  PUBLIC :: CD_Get_System_Line_VIV_Lift
   PUBLIC :: CD_Get_System_Line_VE_Dl1
   PUBLIC :: CD_Set_System_Line_VE_Dl1
   PUBLIC :: CD_System_Line_Has_Syrope
@@ -857,102 +854,9 @@ CONTAINS
     ErrMsg = ''
   END SUBROUTINE CD_Get_System_Line_State
 
-  PURE INTEGER FUNCTION CD_System_Line_VIV_MirrorSize(system, line_index) RESULT(n)
-    !! Reals of one contained line's VIV checkpoint block (CD_Get_System_Line_VIV_State):
-    !! 3 per node plus the averaging time, or 0 for a line without VIV.
-    TYPE(CD_SystemType), INTENT(IN) :: system
-    INTEGER, INTENT(IN) :: line_index
-    n = 0
-    IF (line_index < 1 .OR. line_index > system%n_lines) RETURN
-    IF (.NOT. CD_Model_Has_VIV(system%lines(line_index))) RETURN
-    n = 3*SIZE(system%lines(line_index)%viv_phi) + 1
-  END FUNCTION CD_System_Line_VIV_MirrorSize
 
-  SUBROUTINE CD_Get_System_Line_VIV_State(system, line_index, buf, ErrStat, ErrMsg)
-    !! One contained line's committed VIV state as a flat checkpoint block: the shedding
-    !! phases (n_nodes), the cross-flow velocity and acceleration mean squares interleaved
-    !! per node (2 n_nodes), then the averaging time.
-    TYPE(CD_SystemType), INTENT(IN) :: system
-    INTEGER, INTENT(IN) :: line_index
-    REAL(wp), INTENT(OUT) :: buf(:)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: nn, es
-    CHARACTER(160) :: em
-    REAL(wp), ALLOCATABLE :: phi(:), ms(:, :)
 
-    buf = CD_ZERO
-    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_SYSTEM_OK) RETURN
-    IF (SIZE(buf) /= CD_System_Line_VIV_MirrorSize(system, line_index) .OR. SIZE(buf) == 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'line VIV state block has the wrong size')
-      RETURN
-    END IF
-    nn = (SIZE(buf) - 1)/3
-    ALLOCATE (phi(nn), ms(2, nn))
-    CALL CD_Get_Model_VIV_State(system%lines(line_index), phi, ms, buf(3*nn + 1), es, em)
-    IF (es /= CD_MODEL_OK) THEN
-      ErrStat = CD_SYSTEM_SOLVEFAIL
-      ErrMsg = 'CableDyn_System: line VIV state query failed: '//TRIM(em)
-      RETURN
-    END IF
-    buf(1:nn) = phi
-    buf(nn + 1:3*nn) = RESHAPE(ms, [2*nn])
-    ErrStat = CD_SYSTEM_OK
-    ErrMsg = ''
-  END SUBROUTINE CD_Get_System_Line_VIV_State
 
-  SUBROUTINE CD_Set_System_Line_VIV_State(system, line_index, buf, ErrStat, ErrMsg)
-    !! Overwrite one contained line's VIV state from a checkpoint block (see
-    !! CD_Get_System_Line_VIV_State).
-    TYPE(CD_SystemType), INTENT(INOUT) :: system
-    INTEGER, INTENT(IN) :: line_index
-    REAL(wp), INTENT(IN) :: buf(:)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: nn, es
-    CHARACTER(160) :: em
-
-    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_SYSTEM_OK) RETURN
-    IF (SIZE(buf) /= CD_System_Line_VIV_MirrorSize(system, line_index) .OR. SIZE(buf) == 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'line VIV state block has the wrong size')
-      RETURN
-    END IF
-    nn = (SIZE(buf) - 1)/3
-    CALL CD_Set_Model_VIV_State(system%lines(line_index), buf(1:nn), RESHAPE(buf(nn + 1:3*nn), [2, nn]), &
-                                buf(3*nn + 1), es, em)
-    IF (es /= CD_MODEL_OK) THEN
-      ErrStat = CD_SYSTEM_SOLVEFAIL
-      ErrMsg = 'CableDyn_System: line VIV state reload failed: '//TRIM(em)
-      RETURN
-    END IF
-    ErrStat = CD_SYSTEM_OK
-    ErrMsg = ''
-  END SUBROUTINE CD_Set_System_Line_VIV_State
-
-  SUBROUTINE CD_Get_System_Line_VIV_Lift(system, line_index, lift, ErrStat, ErrMsg)
-    !! VIV lift force on every node of one contained line at the committed state (3, n_nodes).
-    TYPE(CD_SystemType), INTENT(IN) :: system
-    INTEGER, INTENT(IN) :: line_index
-    REAL(wp), INTENT(OUT) :: lift(:, :)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: es
-    CHARACTER(160) :: em
-
-    lift = CD_ZERO
-    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_SYSTEM_OK) RETURN
-    CALL CD_Get_Model_VIV_Lift(system%lines(line_index), lift, es, em)
-    IF (es /= CD_MODEL_OK) THEN
-      ErrStat = CD_SYSTEM_SOLVEFAIL
-      ErrMsg = 'CableDyn_System: line VIV lift query failed: '//TRIM(em)
-      RETURN
-    END IF
-    ErrStat = CD_SYSTEM_OK
-    ErrMsg = ''
-  END SUBROUTINE CD_Get_System_Line_VIV_Lift
 
   PURE LOGICAL FUNCTION CD_System_Line_Has_Viscoelastic(system, line_index) RESULT(has)
     !! True if the given contained line carries series-Kelvin viscoelastic state -- the coupled

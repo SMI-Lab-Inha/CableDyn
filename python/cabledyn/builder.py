@@ -2663,6 +2663,9 @@ class DeckModel:
                 raise ValueError(f"{what}: give all of gas, gj, irt, irn or none")
             row += [_num(v, what) for v in (item.cdn, item.cdt, item.can, item.cat)]
             if item.cl is not None:
+                if all(value is not None for value in extra):
+                    # a LINE TYPES row has 10, 11, 13 or 14 columns: no VIV on the wide row
+                    raise ValueError(f"{what}: cl, df and cf do not combine with gas, gj, irt, irn")
                 viv = True
                 df = 0.08 if item.df is None else item.df
                 cf = 0.18 if item.cf is None else item.cf

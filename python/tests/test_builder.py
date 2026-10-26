@@ -185,6 +185,24 @@ def test_build_single_catenary_validates_and_saves(tmp_path: Path) -> None:
     assert model.save(target, overwrite=True) == target
 
 
+def test_viv_columns_do_not_combine_with_the_wide_finite_ei_row(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "cable",
+        diam=0.2,
+        mass=40.0,
+        ea=5.0e8,
+        ei=1.0e4,
+        gas=1.0e8,
+        gj=1.0e3,
+        irt=0.1,
+        irn=0.05,
+        cl=0.0,
+    )
+    with pytest.raises(ValueError, match="do not combine with gas, gj, irt, irn"):
+        model.to_text(validate=False)
+
+
 def test_build_spread_mooring_with_multi_section_lines() -> None:
     import math
 

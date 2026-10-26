@@ -95,11 +95,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Get_Model_Syrope_State
   PUBLIC :: CD_Set_Model_Syrope_State
   PUBLIC :: CD_Set_Model_VIV
-  PUBLIC :: CD_Model_Has_VIV
   PUBLIC :: CD_Latch_Model_VIV_Window
-  PUBLIC :: CD_Get_Model_VIV_State
-  PUBLIC :: CD_Set_Model_VIV_State
-  PUBLIC :: CD_Get_Model_VIV_Lift
   PUBLIC :: CD_Get_Model_Tension
   PUBLIC :: CD_Get_Model_EndForces
   PUBLIC :: CD_Get_Model_EndNodeMassDiag
@@ -153,7 +149,7 @@ MODULE CableDyn_Model
   ! slots. commit_state_copy holds the one list of that state.
   TYPE :: CD_ModelCommitSlot
     REAL(wp), ALLOCATABLE :: q(:), v(:), a(:), ve_dl_1(:), syrope_slow(:), syrope_tmax(:)
-    REAL(wp), ALLOCATABLE :: fr_anchor(:, :), l0_c(:), l0_dot_c(:)
+    REAL(wp), ALLOCATABLE :: fr_anchor(:, :), l0_c(:), l0_dot_c(:), viv_phi(:), viv_ms(:, :)
   END TYPE CD_ModelCommitSlot
 
   ! Diagnostics of the rotation- and snap-resolved sub-stepping (CD_Step_Model): calls counts
@@ -2245,6 +2241,13 @@ CONTAINS
             IF (istat /= 0) RETURN
           END IF
         END IF
+        IF (model%has_viv) THEN
+          IF (.NOT. sized(s%viv_phi, SIZE(model%viv_phi))) THEN
+            IF (ALLOCATED(s%viv_phi)) DEALLOCATE (s%viv_phi, s%viv_ms)
+            ALLOCATE (s%viv_phi(SIZE(model%viv_phi)), s%viv_ms(2, SIZE(model%viv_phi)), STAT=istat)
+            IF (istat /= 0) RETURN
+          END IF
+        END IF
       END ASSOCIATE
     END DO
     IF (.NOT. sized(model%sub_t0, model%n_elem)) THEN
@@ -2275,11 +2278,11 @@ CONTAINS
   END FUNCTION sub_alloc
 
   SUBROUTINE commit_state_copy(model, to_model, q, v, a, ve_dl_1, syrope_slow, syrope_tmax, fr_anchor, &
-                               l0_c, l0_dot_c)
+                               l0_c, l0_dot_c, viv_phi, viv_ms)
     !! The one list of the state a line step commits: the kinematics, the viscoelastic dl_1, the
-    !! Syrope slow strain and running maximum tension, the friction anchors, and the unstretched
+    !! Syrope slow strain and running maximum tension, the friction anchors, the unstretched
     !! lengths and rates the committed state was reached with (l0_c, l0_dot_c, active line
-    !! control). to_model =
+    !! control), and the VIV shedding phases and running mean squares. to_model =
     !! .FALSE. saves the model's state into the arrays given, .TRUE. returns the model to them.
     !! Every snapshot of the committed state in this module goes through here (the sub-step
     !! slots of CD_Step_Model, save_recovery_state and restore_recovery_state). A state a step
@@ -2292,7 +2295,7 @@ CONTAINS
     LOGICAL, INTENT(IN) :: to_model
     REAL(wp), INTENT(INOUT) :: q(:), v(:), a(:)
     REAL(wp), INTENT(INOUT), OPTIONAL :: ve_dl_1(:), syrope_slow(:), syrope_tmax(:), fr_anchor(:, :)
-    REAL(wp), INTENT(INOUT), OPTIONAL :: l0_c(:), l0_dot_c(:)
+    REAL(wp), INTENT(INOUT), OPTIONAL :: l0_c(:), l0_dot_c(:), viv_phi(:), viv_ms(:, :)
     IF (to_model) THEN
       model%q = q
       model%v = v
@@ -2306,6 +2309,11 @@ CONTAINS
       IF (PRESENT(l0_c) .AND. PRESENT(l0_dot_c)) THEN
         model%l0_c = l0_c
         model%l0_dot_c = l0_dot_c
+      END IF
+      IF (model%has_viv .AND. PRESENT(viv_phi) .AND. PRESENT(viv_ms)) THEN
+        model%viv_phi = viv_phi
+        model%viv_ms = viv_ms
+        model%viv_phi_eval = viv_phi
       END IF
     ELSE
       q = model%q
@@ -2321,6 +2329,10 @@ CONTAINS
         l0_c = model%l0_c
         l0_dot_c = model%l0_dot_c
       END IF
+      IF (model%has_viv .AND. PRESENT(viv_phi) .AND. PRESENT(viv_ms)) THEN
+        viv_phi = model%viv_phi
+        viv_ms = model%viv_ms
+      END IF
     END IF
   END SUBROUTINE commit_state_copy
 
@@ -2331,7 +2343,8 @@ CONTAINS
     CALL commit_state_copy(model, .FALSE., model%sub_slot(slot)%q, model%sub_slot(slot)%v, model%sub_slot(slot)%a, &
                            model%sub_slot(slot)%ve_dl_1, model%sub_slot(slot)%syrope_slow, &
                            model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor, &
-                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c)
+                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c, &
+                           model%sub_slot(slot)%viv_phi, model%sub_slot(slot)%viv_ms)
   END SUBROUTINE sub_store
 
   SUBROUTINE sub_load(model, slot)
@@ -2341,7 +2354,8 @@ CONTAINS
     CALL commit_state_copy(model, .TRUE., model%sub_slot(slot)%q, model%sub_slot(slot)%v, model%sub_slot(slot)%a, &
                            model%sub_slot(slot)%ve_dl_1, model%sub_slot(slot)%syrope_slow, &
                            model%sub_slot(slot)%syrope_tmax, model%sub_slot(slot)%fr_anchor, &
-                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c)
+                           model%sub_slot(slot)%l0_c, model%sub_slot(slot)%l0_dot_c, &
+                           model%sub_slot(slot)%viv_phi, model%sub_slot(slot)%viv_ms)
   END SUBROUTINE sub_load
 
   SUBROUTINE sub_lengths_target(model)
@@ -3338,11 +3352,8 @@ CONTAINS
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     CALL commit_state_copy(model, .FALSE., model%recovery_q0, model%recovery_v0, model%recovery_a0, &
                            model%recovery_ve_dl_1, model%recovery_syrope_slow, model%recovery_syrope_tmax, &
-                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c)
-    IF (model%has_viv) THEN
-      model%recovery_viv_phi = model%viv_phi
-      model%recovery_viv_ms = model%viv_ms
-    END IF
+                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c, &
+                           model%recovery_viv_phi, model%recovery_viv_ms)
   END SUBROUTINE save_recovery_state
 
   SUBROUTINE restore_recovery_state(model)
@@ -3350,12 +3361,8 @@ CONTAINS
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     CALL commit_state_copy(model, .TRUE., model%recovery_q0, model%recovery_v0, model%recovery_a0, &
                            model%recovery_ve_dl_1, model%recovery_syrope_slow, model%recovery_syrope_tmax, &
-                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c)
-    IF (model%has_viv) THEN
-      model%viv_phi = model%recovery_viv_phi
-      model%viv_ms = model%recovery_viv_ms
-      model%viv_phi_eval = model%viv_phi
-    END IF
+                           model%recovery_fr_anchor, model%recovery_l0_c, model%recovery_l0_dot_c, &
+                           model%recovery_viv_phi, model%recovery_viv_ms)
     model%ve_dt = CD_ZERO
   END SUBROUTINE restore_recovery_state
 
@@ -3969,11 +3976,6 @@ CONTAINS
     model%has_viv = .TRUE.
   END SUBROUTINE CD_Set_Model_VIV
 
-  PURE LOGICAL FUNCTION CD_Model_Has_VIV(model) RESULT(has)
-    !! True if the model carries the cross-flow VIV phase state.
-    TYPE(CD_ModelType), INTENT(IN) :: model
-    has = model%has_viv
-  END FUNCTION CD_Model_Has_VIV
 
   SUBROUTINE CD_Latch_Model_VIV_Window(model, dt)
     !! Fix MoorDyn's default VIV averaging time, 500 steps of the nominal step dt, unless the
@@ -3987,107 +3989,8 @@ CONTAINS
     model%viv_tw = REAL(CD_VIV_NM, wp)*dt
   END SUBROUTINE CD_Latch_Model_VIV_Window
 
-  SUBROUTINE CD_Get_Model_VIV_State(model, phi, ms, t_window, ErrStat, ErrMsg)
-    !! Copy the committed VIV state for a checkpoint: the shedding phase per node (n_nodes),
-    !! the running mean squares of the cross-flow velocity and acceleration (2, n_nodes), and
-    !! the averaging time (0 while unlatched). A model without VIV returns zeros.
-    TYPE(CD_ModelType), INTENT(IN) :: model
-    REAL(wp), INTENT(OUT) :: phi(:), ms(:, :), t_window
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    phi = CD_ZERO
-    ms = CD_ZERO
-    t_window = CD_ZERO
-    ErrStat = CD_MODEL_OK
-    ErrMsg = ''
-    IF (.NOT. model%initialized) THEN
-      ErrStat = CD_MODEL_NOT_INITIALIZED
-      ErrMsg = 'CableDyn_Model: model is not initialized'
-      RETURN
-    END IF
-    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= 2 .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV state outputs must have shapes (n_nodes) and (2, n_nodes)')
-      RETURN
-    END IF
-    IF (.NOT. model%has_viv) RETURN
-    phi = model%viv_phi
-    ms = model%viv_ms
-    t_window = model%viv_tw
-  END SUBROUTINE CD_Get_Model_VIV_State
 
-  SUBROUTINE CD_Set_Model_VIV_State(model, phi, ms, t_window, ErrStat, ErrMsg)
-    !! Overwrite the committed VIV state from a checkpoint (see CD_Get_Model_VIV_State).
-    !! Fails closed on a model without VIV, a shape mismatch, non-finite values, a negative
-    !! mean square or averaging time.
-    TYPE(CD_ModelType), INTENT(INOUT) :: model
-    REAL(wp), INTENT(IN) :: phi(:), ms(:, :), t_window
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    ErrStat = CD_MODEL_OK
-    ErrMsg = ''
-    IF (.NOT. model%initialized) THEN
-      ErrStat = CD_MODEL_NOT_INITIALIZED
-      ErrMsg = 'CableDyn_Model: model is not initialized'
-      RETURN
-    END IF
-    IF (.NOT. model%has_viv) THEN
-      CALL fail(ErrStat, ErrMsg, 'model carries no VIV state to set')
-      RETURN
-    END IF
-    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= 2 .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV state inputs must have shapes (n_nodes) and (2, n_nodes)')
-      RETURN
-    END IF
-    IF (.NOT. (CD_All_Finite(phi) .AND. CD_All_Finite(ms) .AND. CD_Is_Finite(t_window))) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV state mirror must be finite')
-      RETURN
-    END IF
-    IF (ANY(ms < CD_ZERO) .OR. t_window < CD_ZERO) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV mean squares and averaging time must be non-negative')
-      RETURN
-    END IF
-    model%viv_phi = phi
-    model%viv_ms = ms
-    model%viv_tw = t_window
-    ! the rollback and recovery twins follow (see CD_Set_Model_VE_Dl1)
-    model%viv_phi_rollback = phi
-    model%viv_ms_rollback = ms
-    model%recovery_viv_phi = phi
-    model%recovery_viv_ms = ms
-    model%viv_phi_eval = phi
-  END SUBROUTINE CD_Set_Model_VIV_State
 
-  SUBROUTINE CD_Get_Model_VIV_Lift(model, lift, ErrStat, ErrMsg)
-    !! The VIV lift force on every node at the committed state [N] (3, n_nodes); zero on the
-    !! end nodes, on nodes without VIV, and on a model without VIV.
-    TYPE(CD_ModelType), INTENT(IN) :: model
-    REAL(wp), INTENT(OUT) :: lift(:, :)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: nd, ia
-    REAL(wp) :: coef, uu(3)
-    LOGICAL :: ok
-    lift = CD_ZERO
-    ErrStat = CD_MODEL_OK
-    ErrMsg = ''
-    IF (.NOT. model%initialized) THEN
-      ErrStat = CD_MODEL_NOT_INITIALIZED
-      ErrMsg = 'CableDyn_Model: model is not initialized'
-      RETURN
-    END IF
-    IF (SIZE(lift, 1) /= 3 .OR. SIZE(lift, 2) /= model%n_dof/3) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV lift output must have shape (3, n_nodes)')
-      RETURN
-    END IF
-    IF (.NOT. model%has_viv) RETURN
-    DO nd = 2, model%n_dof/3 - 1
-      IF (.NOT. model%viv_node(nd)) CYCLE
-      CALL viv_node_coef(model, model%q, nd, coef, uu)
-      ia = 3*nd - 2
-      CALL CD_VIV_Node_Lift(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), uu, coef, &
-                            model%viv_phi(nd), lift(:, nd), ok)
-    END DO
-  END SUBROUTINE CD_Get_Model_VIV_Lift
 
   SUBROUTINE viv_node_coef(model, q, nd, coef, uu)
     !! Lift scale of interior node nd at positions q, sum over its two elements of
