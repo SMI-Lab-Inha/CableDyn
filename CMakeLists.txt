@@ -1170,6 +1170,11 @@ add_test(NAME flagship_compression_note
          COMMAND test_flagship_compression_note ${CMAKE_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat)
 set_tests_properties(flagship_compression_note PROPERTIES LABELS "fortran;integration;static;contact")
 
+add_executable(test_viv_kernels tests/test_viv_kernels.f90)
+target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
+add_test(NAME viv_kernels COMMAND test_viv_kernels)
+set_tests_properties(viv_kernels PROPERTIES LABELS "fortran;unit;dynamic;viv")
+
 add_executable(test_hfmf_mirror tests/test_hfmf_mirror.f90)
 target_link_libraries(test_hfmf_mirror PRIVATE cabledyn_core)
 add_test(NAME hfmf_mirror COMMAND test_hfmf_mirror WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
