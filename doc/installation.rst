@@ -121,8 +121,8 @@ Check that it runs
 
     ===================================================================
       CableDyn  v0.3.0
-      Geometrically nonlinear cable & mooring dynamics for floating wind
-      (lazy-wave power cables and taut / semi-taut / catenary moorings)
+      Geometrically exact finite-element statics and dynamics of
+      mooring lines and dynamic power cables for floating offshore wind
     -------------------------------------------------------------------
       Author    Prof. Jae Hoon Seo
       Affil.    Inha University, Republic of Korea

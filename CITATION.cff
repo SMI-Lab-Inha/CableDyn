@@ -3,11 +3,12 @@ message: >-
   If you use CableDyn in academic work, please cite the journal article given
   as the preferred citation. To identify the exact software release used, also
   cite this software entry with its version.
-title: "CableDyn: A cable and mooring dynamics solver for floating offshore wind"
+title: "CableDyn: Geometrically exact finite-element statics and dynamics of mooring lines and dynamic power cables for floating offshore wind"
 type: software
 abstract: >-
-  CableDyn is an open-source finite-element solver for the static and dynamic
-  analysis of offshore mooring lines and dynamic power cables. It combines
+  CableDyn is an open-source, geometrically exact finite-element solver for the
+  static and dynamic analysis of offshore mooring lines and dynamic power cables.
+  Its strain and curvature are the exact large-deformation measures. It combines
   tension-only elements for moorings with cubic-Hermite finite-bending elements
   for power cables, solves the static equilibrium by Newton's method, and
   integrates the dynamics with the implicit generalised-alpha scheme. It runs as

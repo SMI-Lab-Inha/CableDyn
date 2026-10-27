@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Python interfaces for the CableDyn cable and mooring dynamics solver.
+"""Python interfaces for CableDyn, the geometrically exact cable and mooring solver.
 
 The standalone-driver API works with the statically linked release executable.
 The in-process :class:`CableDyn` class, and the ``abi_version``, ``abi_minor``,

@@ -36,14 +36,16 @@ Incheon, Republic of Korea.
 Software release
 ----------------
 
-Seo, J. H. (2026). *CableDyn: A cable and mooring dynamics solver for floating offshore
-wind* (version 0.3.0) [Computer software]. https://github.com/SMI-Lab-Inha/CableDyn
+Seo, J. H. (2026). *CableDyn: Geometrically exact finite-element statics and dynamics of
+mooring lines and dynamic power cables for floating offshore wind* (version 0.3.0) [Computer
+software]. https://github.com/SMI-Lab-Inha/CableDyn
 
 .. code-block:: bibtex
 
-   @software{CableDyn_0_1_1,
+   @software{CableDyn_0_3_0,
      author  = {Seo, Jae Hoon},
-     title   = {{CableDyn}: A cable and mooring dynamics solver for floating offshore wind},
+     title   = {{CableDyn}: Geometrically exact finite-element statics and dynamics of mooring
+                lines and dynamic power cables for floating offshore wind},
      version = {0.3.0},
      year    = {2026},
      url     = {https://github.com/SMI-Lab-Inha/CableDyn},

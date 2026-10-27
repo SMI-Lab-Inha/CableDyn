@@ -3,9 +3,11 @@
 CableDyn
 ========
 
-**CableDyn** is an open-source (`Apache-2.0 <https://www.apache.org/licenses/LICENSE-2.0>`_)
-cable and mooring dynamics solver for floating offshore wind turbines and substations, written
-in modern **Fortran 2018**. It targets dynamic power cables in the lazy-wave configuration and
+**CableDyn** is an open-source (`Apache-2.0 <https://www.apache.org/licenses/LICENSE-2.0>`_),
+geometrically exact finite-element solver for the statics and dynamics of mooring lines and
+dynamic power cables of floating offshore wind turbines and substations, written in modern
+**Fortran 2018**. Its strain and curvature are the exact large-deformation measures, never
+linearised (:doc:`theory`). It targets dynamic power cables in the lazy-wave configuration and
 taut, semi-taut, and catenary moorings. It reads MoorDyn v2 input decks and has been compared
 with MoorDyn-C, MoorDyn-F, and OrcaFlex on common reference cases.
 
