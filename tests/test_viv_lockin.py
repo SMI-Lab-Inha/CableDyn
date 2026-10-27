@@ -18,6 +18,9 @@ locks in. MoorDyn-F (OpenFAST v5 moordyn_driver, dtM 5e-4 s) gives a mid-span A/
   stiffness: the cubic-Hermite route with the Gauss-integrated lift) locks in with the EI = 0
   line's mid-span and quarter-span amplitudes (within 1 %) and frequency, at dtM 0.01 s and at
   0.002 s (no smoothing needed on the Hermite route);
+* the same finite-EI cable on the multibody march (End A Fixed, and a weighted Connect point on
+  two chains 300 m away, which puts the deck on that march) locks in as on the Hermite route
+  (within 1 % and one bin);
 * a bending-stiff, neutrally buoyant cable (8.1 kg/m, EA 5e9 N, EI 5e7 N m^2, about 51 kN:
   beta = pi^2 EI/(T L^2) ~ 1) against the EI = 0 string tensioned to T (1 + beta), which has
   the same first-mode frequency and shape: at U 0.21 m/s both lock into mode 1 with the same
@@ -112,6 +115,26 @@ END
 """
 
 
+def multibody(text: str) -> str:
+    """The deck with End A Fixed and, 300 m away, a 5 t Connect point hung on two chains: a deck
+    with a dynamic point runs on the multibody march."""
+    for old, new in (
+        ("1    Coupled      0.0     0.0   -50.0", "1    Fixed        0.0     0.0   -50.0"),
+        ("riser      0.10", "chain      0.20   250.0    1.0e9     -1.0      0.0   1.2   1.0   0.0   0.0"
+                           "   0.0  0.08  0.18\nriser      0.10"),
+        ("2    Fixed        100.0   0.0   -50.0  0    0     0     0",
+         "2    Fixed        100.0   0.0   -50.0  0    0     0     0\n"
+         "3    Fixed        0.0     300.0 -20.0  0    0     0     0\n"
+         "4    Connect      50.0    300.0 -60.0  5000 0     0     0\n"
+         "5    Fixed        100.0   300.0 -20.0  0    0     0     0"),
+        ("  50       -\n", "  50       -\n2    chain      3        4        70.0  20       -\n"
+                                "3    chain      5        4        70.0  20       -\n"),
+    ):
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    return text
+
+
 def response(path: Path) -> tuple[float, float, float]:
     """Mid A/D, mid peak frequency, quarter A/D over 60-120 s."""
     hist = read_output(path)
@@ -150,6 +173,7 @@ def main() -> int:
         (0.002, "viv_dt0.002", deck(0.002, waterkin="current_0.15.dat")),
         ("fei", "viv_fei", deck(0.01, ei=1.0, waterkin="current_0.15.dat")),
         ("fei_fine", "viv_fei_dt0.002", deck(0.002, ei=1.0, waterkin="current_0.15.dat")),
+        ("fei_mb", "viv_fei_multibody", multibody(deck(0.01, ei=1.0, waterkin="current_0.15.dat"))),
     ]
     for u in (0.21, 0.30):
         runs.append((("stiff", u), f"viv_stiff_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **stiff)))
@@ -196,6 +220,11 @@ def main() -> int:
         check(abs(a1 - a0) <= 0.01 * a0 and abs(q1 - q0) <= 0.01 * q0 and abs(f1 - f0) <= 1.0 / 60.0,
               f"finite-EI cable at dtM 0.002 s: mid/quarter A/D {a1:.3f}/{q1:.3f} at {f1:.3f} Hz, EI = 0 "
               f"line at 0.01 s {a0:.3f}/{q0:.3f} at {f0:.3f} Hz (within 1 % and one bin)")
+    if "fei" in results and "fei_mb" in results:
+        (a0, f0, q0), (a1, f1, q1) = results["fei"], results["fei_mb"]
+        check(abs(a1 - a0) <= 0.01 * a0 and abs(q1 - q0) <= 0.01 * q0 and abs(f1 - f0) <= 1.0 / 60.0,
+              f"finite-EI cable on the multibody march: mid/quarter A/D {a1:.3f}/{q1:.3f} at {f1:.3f} Hz, "
+              f"Hermite route {a0:.3f}/{q0:.3f} at {f0:.3f} Hz (within 1 % and one bin)")
     if ("stiff", 0.21) in results and ("string", 0.21) in results:
         (a1, f1, _), (a0, f0, _) = results[("stiff", 0.21)], results[("string", 0.21)]
         check(abs(a1 - a0) <= 0.03 * a0 and abs(f1 - f0) <= 1.0 / 60.0,

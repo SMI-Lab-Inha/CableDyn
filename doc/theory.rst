@@ -776,8 +776,9 @@ elements. The phase is explicit with the Heun commit as on ``EI = 0`` lines, and
 needed: the Hermite tangent and the integrated lift leave no mesh-scale mode for the loop to
 pump, and the response is the same from ``dtM`` 5e-4 to 1e-2 s. A finite-EI line with
 :math:`EI \to 0` reproduces the ``EI = 0`` line's lock-in. The standalone Hermite march
-carries it, including deck waves and current through its held fluid field; a finite-EI line
-with two moving ends, or beside bodies, rods or free points, refuses :math:`C_L > 0`.
+and the multibody march (a cable on a body or rod, or beside free points) carry it, including
+deck waves and current through the held fluid field; a finite-EI line with two moving ends
+refuses :math:`C_L > 0`.
 
 VIV runs on every route that carries the line: the standalone driver, the coupled OpenFAST
 and FAST.Farm routes and the standalone runner of a mixed ``EI = 0`` / finite-EI deck. On the

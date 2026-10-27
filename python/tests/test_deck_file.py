@@ -4619,11 +4619,10 @@ def test_viv_needs_water_on_an_ei0_line():
     DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "")))
 
 
-def test_finite_ei_viv_is_refused_beside_free_points():
-    row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
-    base = _edit(_DYNAMIC, ("2 Coupled 0.0 0.0 0.0 0 0 0 0", "2 Free 0.0 0.0 0.0 1000 0 0 0"))
-    with pytest.raises(DeckFormatError, match="does not run with bodies, rods or free points"):
-        DeckFile.from_text(_edit(base, (row, row + " 0.8")))
+def test_finite_ei_viv_is_accepted_on_the_multibody_march():
+    # the clamped cable of a moored Rigid6 buoy (native multibody march)
+    row = "cable      0.20     60.0           5.0e8      -1.0       2.0e4    1.2   0.0   1.0   0.0"
+    DeckFile.from_text(_example("buoy_clamped_cable.dat", (row, row + "   0.8")))
 
 
 def test_viv_rms_window_option_is_non_negative():
