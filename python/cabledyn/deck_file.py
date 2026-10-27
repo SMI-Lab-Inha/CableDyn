@@ -2734,11 +2734,6 @@ class DeckFile:
                         f"{self._at(row)}: LINE TYPES VIV synchronisation band needs cF > 0 "
                         "and 0 <= dF < cF"
                     )
-                if cl > 0.0 and is_syrope:
-                    raise DeckFormatError(
-                        f"{self._at(row)}: VIV (Cl > 0) does not combine with the Syrope "
-                        "working-curve model"
-                    )
                 has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
                 if cl > 0.0:
                     viv_type_names.add(row.tokens[0].lower())

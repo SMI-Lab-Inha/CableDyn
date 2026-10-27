@@ -1196,15 +1196,24 @@ PROGRAM test_deck_driver
 
     CALL write_syrope_deck('deck_syrope_current.dat', 'SYROPE:syrope.dat|1.53e8|23.12', &
                            '5.0e10|1.0e5', option_row='uniform 1.0 0.0 0.0 current')
+    ! a Syrope line takes the hydrodynamics of any EI = 0 line (MoorDyn's): current and waves
     CALL CD_Init_Deck_Models('deck_syrope_current.dat', smodels, es, em)
-    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'current hydro') > 0, &
-                 'current-loaded Syrope fails closed by name: '//TRIM(em))
+    CALL require(es == CD_DECKDRV_OK, 'current-loaded Syrope builds: '//TRIM(em))
+    IF (es == CD_DECKDRV_OK) THEN
+      CALL require(smodels(1)%has_syrope .AND. smodels(1)%has_morison_drag, &
+                   'current-loaded Syrope keeps its working curve and takes the Morison drag')
+      CALL CD_End_Model(smodels(1), es, em)
+    END IF
 
     CALL write_syrope_deck('deck_syrope_wave.dat', 'SYROPE:syrope.dat|1.53e8|23.12', &
                            '5.0e10|1.0e5', wtrdpth=10.0_wp, option_row='airy 1.0 8.0 0.0 waves')
     CALL CD_Init_Deck_Models('deck_syrope_wave.dat', smodels, es, em)
-    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'wave hydro') > 0, &
-                 'wave-loaded Syrope fails closed by name: '//TRIM(em))
+    CALL require(es == CD_DECKDRV_OK, 'wave-loaded Syrope builds: '//TRIM(em))
+    IF (es == CD_DECKDRV_OK) THEN
+      CALL require(smodels(1)%has_syrope .AND. smodels(1)%has_morison_drag, &
+                   'wave-loaded Syrope keeps its working curve and takes the Morison drag')
+      CALL CD_End_Model(smodels(1), es, em)
+    END IF
   END BLOCK
   ! end-to-end Syrope deck build: a single-section taut line (no seabed/hydro)
   ! builds the DYNAMIC model through the OWC-secant static solve, initializes

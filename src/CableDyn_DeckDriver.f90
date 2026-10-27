@@ -8754,8 +8754,12 @@ CONTAINS
     END IF
   END SUBROUTINE line_static_friction
 
-  SUBROUTINE init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry)
-    !! Initialize one persistent model from a validated deck LINE.
+  RECURSIVE SUBROUTINE init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry, &
+                                      syrope_secant, syrope_is, syrope_type, syrope_slow0, syrope_tmax0)
+    !! Initialize one persistent model from a validated deck LINE. A Syrope line is built by
+    !! init_one_syrope_model, which calls back here with syrope_secant (the secant EA of its
+    !! static solve) and, for the final build, the per-element Syrope states: the line then
+    !! takes the same seabed, hydrodynamics and fluid fields as any EI = 0 line.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
@@ -8765,6 +8769,10 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), INTENT(IN), OPTIONAL :: syrope_secant
+    LOGICAL, INTENT(IN), OPTIONAL :: syrope_is(:)
+    TYPE(CD_SyropeType), INTENT(IN), OPTIONAL :: syrope_type(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: syrope_slow0(:), syrope_tmax0(:)
 
     TYPE(CD_LineType), ALLOCATABLE :: lts(:)
     TYPE(CD_LineSection), ALLOCATABLE :: secs(:)
@@ -8872,9 +8880,8 @@ CONTAINS
     hydro_cdt = hydro_cdt(SIZE(hydro_cdt):1:-1)
     hydro_can = hydro_can(SIZE(hydro_can):1:-1)
     hydro_cat = hydro_cat(SIZE(hydro_cat):1:-1)
-    ! Syrope line: a dedicated basic build path (single section, taut, no seabed
-    ! or hydro). Detected here and handled separately from the hydro variants
-    ! below, which do not carry the working-curve state.
+    ! Syrope line: init_one_syrope_model solves its working-curve initial state and builds it
+    ! back through this routine (syrope_secant present), with the hydro variants below
     BLOCK
       INTEGER :: syt, i2
       syt = 0
@@ -8882,13 +8889,16 @@ CONTAINS
         IF (types(line_section_type(sections, ln%id, i2))%is_syrope) &
           syt = line_section_type(sections, ln%id, i2)
       END DO
-      IF (syt > 0) THEN
-        IF (ANY(viv_cl > CD_ZERO)) THEN
-          CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) does not combine with a Syrope line'); RETURN
-        END IF
-        CALL init_one_syrope_model(types, syt, ln, lts, secs, anchor, fairlead, l0, opts, &
-                                   static_cfg, dynamic_cfg, factors, bathymetry, model, ErrStat, ErrMsg)
+      IF (syt > 0 .AND. .NOT. PRESENT(syrope_secant)) THEN
+        CALL init_one_syrope_model(types, syt, ln, sections, points, l0, opts, model, ErrStat, ErrMsg, &
+                                   bathymetry=bathymetry)
         RETURN
+      END IF
+      IF (PRESENT(syrope_secant)) THEN
+        ! the static solve's single secant EA; the working curve carries the rope's damping
+        ! (BA_s|BA_d), so the line takes no legacy BA on top of it
+        lts(secs(1)%line_type)%ea = syrope_secant
+        ba = CD_ZERO
       END IF
     END BLOCK
     ! external_fluid: the host prescribes per-node fluid kinematics each step, so the
@@ -8936,7 +8946,8 @@ CONTAINS
       ! MoorDyn's, whose deck dialect this parser reads.
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., &
                               anchor_is_end_b=.TRUE., seabed_kn=kn, bathymetry=bathymetry, seabed_cn=cn, &
                               seabed_kbot=opts%kbot, seabed_contact_diameter=diam, &
                               seabed_cn_over_kn=opts%cbot/opts%kbot, &
@@ -8965,7 +8976,8 @@ CONTAINS
       cn = kn*(opts%cbot/opts%kbot)
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., &
                               anchor_is_end_b=.TRUE., seabed_kn=kn, bathymetry=bathymetry, seabed_cn=cn, &
                               seabed_kbot=opts%kbot, seabed_contact_diameter=diam, &
                               seabed_cn_over_kn=opts%cbot/opts%kbot, &
@@ -8992,7 +9004,8 @@ CONTAINS
       cn = kn*(opts%cbot/opts%kbot)
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., &
                               anchor_is_end_b=.TRUE., seabed_kn=kn, bathymetry=bathymetry, seabed_cn=cn, &
                               seabed_kbot=opts%kbot, seabed_contact_diameter=diam, &
                               seabed_cn_over_kn=opts%cbot/opts%kbot, &
@@ -9019,7 +9032,8 @@ CONTAINS
       cn = kn*(opts%cbot/opts%kbot)
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., &
                               anchor_is_end_b=.TRUE., &
                               seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, seabed_cn=cn, &
                               seabed_kbot=opts%kbot, seabed_contact_diameter=diam, &
@@ -9049,7 +9063,8 @@ CONTAINS
       cn = kn*(opts%cbot/opts%kbot)
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., &
                               anchor_is_end_b=.TRUE., &
                               seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, seabed_cn=cn, &
                               seabed_kbot=opts%kbot, seabed_contact_diameter=diam, &
@@ -9077,7 +9092,8 @@ CONTAINS
       cn = kn*(opts%cbot/opts%kbot)
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., &
                               anchor_is_end_b=.TRUE., &
                               seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, seabed_cn=cn, &
                               seabed_kbot=opts%kbot, seabed_contact_diameter=diam, &
@@ -9097,7 +9113,8 @@ CONTAINS
     ELSE IF (opts%has_current) THEN
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., ba=ba, &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., ba=ba, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
                               current_profile_velocity=opts%current_profile_velocity, &
@@ -9106,7 +9123,8 @@ CONTAINS
     ELSE
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., ba=ba, &
+                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
+                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., ba=ba, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet)
     END IF
     IF (ErrStat /= CD_MODEL_OK) THEN
@@ -9148,13 +9166,14 @@ CONTAINS
     END IF
   END SUBROUTINE init_one_model
 
-  SUBROUTINE init_one_syrope_model(types, syt, ln, lts, secs, anchor, fairlead, l0, opts, &
-                                   static_cfg, dynamic_cfg, factors, bathymetry, model, ErrStat, ErrMsg)
-    !! Build one Syrope line model. The supported scope is a single-section taut line with
-    !! no hydro. Builds the working-curve constitutive from the parse-resolved OWC data and
-    !! solves the static equilibrium on the rest curve of the initial load history (the OWC
-    !! for a virgin rope; with SYROPE IC, the Tmax0 working curve below its top strain and
-    !! the OWC above): the secant EA of that curve at the solved mean strain. Each element
+  RECURSIVE SUBROUTINE init_one_syrope_model(types, syt, ln, sections, points, l0, opts, model, ErrStat, ErrMsg, &
+                                             bathymetry)
+    !! Build one Syrope line model: a single-section line, taut at init, with the seabed,
+    !! hydrodynamics and fluid fields of any EI = 0 line (init_one_model builds it). Builds the
+    !! working-curve constitutive from the parse-resolved OWC data and solves the static
+    !! equilibrium on the rest curve of the initial load history (the OWC for a virgin rope;
+    !! with SYROPE IC, the Tmax0 working curve below its top strain and the OWC above): the
+    !! secant EA of that curve at the solved mean strain, current drag included. Each element
     !! then gets the running maximum of that history and the slow strain whose t = 0 kernel
     !! force equals its static tension, so the dynamic state starts in the static
     !! equilibrium. Tmean0 is not a state input (the fixed-end geometry and Tmax0 set the
@@ -9162,55 +9181,37 @@ CONTAINS
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     INTEGER, INTENT(IN) :: syt
     TYPE(DeckLine), INTENT(IN) :: ln
-    TYPE(CD_LineType), INTENT(INOUT) :: lts(:)
-    TYPE(CD_LineSection), INTENT(IN) :: secs(:)
-    REAL(wp), INTENT(IN) :: anchor(3), fairlead(3), l0(:), factors(:)
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    REAL(wp), INTENT(IN) :: l0(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
-    TYPE(CableSolverConfig), INTENT(IN) :: static_cfg
-    TYPE(GenAlphaConfig), INTENT(IN) :: dynamic_cfg
-    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     TYPE(CD_SyropeType) :: td
     TYPE(CD_SyropeType), ALLOCATABLE :: stype(:)
     LOGICAL, ALLOCATABLE :: sis(:)
-    REAL(wp), ALLOCATABLE :: sslow(:), stmax(:), kn(:), diam(:), cn(:), t_static(:)
-    REAL(wp) :: eps0, t_ref, secant, total_l0, t_hist, eps_bar, t_mean_static
-    INTEGER :: ne, e, es, n_owc, iter
+    REAL(wp), ALLOCATABLE :: sslow(:), stmax(:), t_static(:)
+    REAL(wp) :: anchor(3), fairlead(3), eps0, t_ref, secant, total_l0, t_hist, eps_bar, t_mean_static
+    INTEGER :: ne, e, es, n_owc, iter, nsec
     CHARACTER(1024) :: em
     CHARACTER(24) :: s_eps, s_lo, s_hi
-    ! static seabed friction of this line: lay azimuth override [rad] and as-laid tension
-    REAL(wp), ALLOCATABLE :: lay_az_opt
-    REAL(wp) :: laid_t
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
-    CALL line_static_friction(opts, ln%id, lay_az_opt, laid_t)
-    IF (SIZE(secs) /= 1) THEN
+    nsec = COUNT(sections%line_id == ln%id)
+    IF (nsec /= 1) THEN
       CALL fail(ErrStat, ErrMsg, 'a Syrope line must be a single section (composite Syrope lines are '// &
                 'not supported yet)'); RETURN
     END IF
     IF (types(syt)%ei > CD_ZERO) THEN
       CALL fail(ErrStat, ErrMsg, 'a Syrope line does not support finite-EI bending'); RETURN
     END IF
-    ! A flat WtrDpth seabed floor IS supported (a taut Syrope mooring clears it, so the
-    ! penalty contact stays inactive and the OWC-secant taut IC below is unchanged).
-    ! Structured bathymetry and hydro loads (current/waves/host fluid) are not supported.
-    IF (PRESENT(bathymetry)) THEN
-      CALL fail(ErrStat, ErrMsg, 'a Syrope line does not support a structured seabed (bathymetryFile); '// &
-                'use WtrDpth'); RETURN
-    END IF
-    IF (opts%has_current) THEN
-      CALL fail(ErrStat, ErrMsg, 'a Syrope line does not support current hydro loads'); RETURN
-    END IF
-    IF (opts%has_wave) THEN
-      CALL fail(ErrStat, ErrMsg, 'a Syrope line does not support wave hydro loads'); RETURN
-    END IF
-    IF (opts%external_fluid) THEN
-      CALL fail(ErrStat, ErrMsg, 'a Syrope line does not support host-driven hydro loads'); RETURN
-    END IF
+    ! internal order anchor (End B) -> fairlead (End A), as gather_line_inputs
+    anchor = points(find_point(points, ln%nodeB))%pos
+    fairlead = points(find_point(points, ln%nodeA))%pos
     ! the working-curve constitutive from the parse-resolved OWC data
     CALL CD_Syrope_Init(td, types(syt)%syrope_owc_strain, types(syt)%syrope_owc_tension, &
                         types(syt)%syrope_wc_mod, types(syt)%syrope_p1, types(syt)%syrope_p2, &
@@ -9264,30 +9265,14 @@ CONTAINS
     DO e = 1, ne
       stype(e) = td
     END DO
-    IF (opts%has_wtrdpth) THEN
-      ! flat seabed floor at -WtrDpth: build the nodal penalty stiffness (inactive for a
-      ! taut line clearing the floor) so a coupled Syrope mooring inits like the EI=0 path
-      ALLOCATE (diam(ne))
-      diam = types(syt)%diam
-      CALL CD_Nodal_Seabed_Stiffness(opts%kbot, diam, l0, kn, es, em)
-      IF (es /= CD_LINE_OK) THEN
-        CALL release_syrope()
-        CALL fail(ErrStat, ErrMsg, 'Syrope seabed stiffness: '//TRIM(em)); RETURN
-      END IF
-      ! carry the SAME contact physics the EI=0 WtrDpth branch does: normal damping cn
-      ! from cBot and Coulomb friction from frictionMu, so a Syrope node that reaches the
-      ! floor behaves identically to a plain EI=0 line (not just the spring alone)
-      ALLOCATE (cn(SIZE(kn)))
-      cn = kn*(opts%cbot/opts%kbot)
-    END IF
-    ! Static solve with a single secant EA (the line-local type's EA: lts is rebuilt
-    ! line-local by gather_line_inputs; secs(1)%line_type indexes it, NOT the global syt).
-    ! The secant is iterated to the rest curve at the solved mean strain, so the static
-    ! line carries the curve tension on average (a chord-strain secant misses it by the sag).
+    ! Static solve with a single secant EA, the line otherwise built as any EI = 0 line (seabed,
+    ! drag in the deck current, buoyancy). The secant is iterated to the rest curve at the solved
+    ! mean strain, so the static line carries the curve tension on average (a chord-strain
+    ! secant misses it by the sag and the current's deflection).
     DO iter = 1, 6
-      lts(secs(1)%line_type)%ea = secant
-      CALL build_model(.FALSE.)
-      IF (ErrStat /= CD_MODEL_OK) EXIT
+      CALL init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry=bathymetry, &
+                          syrope_secant=secant)
+      IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL CD_Get_Model_Tension(model, t_static, es, em)
       CALL CD_End_Model(model, ErrStat, ErrMsg)
       IF (es /= CD_MODEL_OK) THEN
@@ -9330,15 +9315,16 @@ CONTAINS
           ln%syrope_tmean0, ' N is superseded (the line starts at the equilibrium)'
       END IF
     END IF
-    CALL build_model(.TRUE.)
+    CALL init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry=bathymetry, &
+                        syrope_secant=secant, syrope_is=sis, syrope_type=stype, syrope_slow0=sslow, &
+                        syrope_tmax0=stmax)
     CALL release_syrope()
-    IF (ErrStat /= CD_MODEL_OK) THEN
+    IF (ErrStat /= CD_DECKDRV_OK) THEN
       ErrMsg = 'CableDyn_DeckDriver: Syrope model init failed: '//TRIM(ErrMsg)
       IF (ErrStat /= CD_DECKDRV_BADINPUT) ErrStat = CD_DECKDRV_SOLVEFAIL
     END IF
 
   CONTAINS
-
     SUBROUTINE rest_tension(eps, tension, es_out, em_out)
       !! The static curve of the initial load history at strain eps: the OWC for a virgin
       !! rope (no SYROPE IC), the Tmax0 working curve / OWC (CD_Syrope_Static_Tension) with it.
@@ -9354,44 +9340,6 @@ CONTAINS
         tension = owc_table_interp(types(syt)%syrope_owc_strain, types(syt)%syrope_owc_tension, eps)
       END IF
     END SUBROUTINE rest_tension
-
-    SUBROUTINE build_model(with_syrope)
-      !! The line build (static solve + model init) at the current secant EA; with_syrope
-      !! passes the per-element Syrope states, without it the build is the plain-EA probe
-      !! whose element tensions are the static solution.
-      LOGICAL, INTENT(IN) :: with_syrope
-      IF (opts%has_wtrdpth .AND. with_syrope) THEN
-        CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
-                                static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                                dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., &
-                                seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, seabed_cn=cn, &
-                                seabed_cn_over_kn=opts%cbot/opts%kbot, seabed_mu=opts%friction_mu, &
-                                seabed_mu_axial=opts%friction_mu_axial, &
-                                static_friction=opts%static_friction, lay_azimuth=lay_az_opt, &
-                                as_laid_tension=laid_t, &
-                                seabed_kbot=opts%kbot, seabed_contact_diameter=diam, &
-                                syrope_is=sis, syrope_type=stype, syrope_slow0=sslow, syrope_tmax0=stmax)
-      ELSE IF (opts%has_wtrdpth) THEN
-        CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
-                                static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                                dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., &
-                                seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, seabed_cn=cn, &
-                                seabed_cn_over_kn=opts%cbot/opts%kbot, seabed_mu=opts%friction_mu, &
-                                seabed_mu_axial=opts%friction_mu_axial, &
-                                static_friction=opts%static_friction, lay_azimuth=lay_az_opt, &
-                                as_laid_tension=laid_t, &
-                                seabed_kbot=opts%kbot, seabed_contact_diameter=diam)
-      ELSE IF (with_syrope) THEN
-        CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
-                                static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                                dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., &
-                                syrope_is=sis, syrope_type=stype, syrope_slow0=sslow, syrope_tmax0=stmax)
-      ELSE
-        CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
-                                static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                                dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE.)
-      END IF
-    END SUBROUTINE build_model
 
     SUBROUTINE release_syrope()
       !! Free the constitutive copies (the model deep-copies what it keeps).
@@ -13117,10 +13065,6 @@ CONTAINS
     IF (.NOT. (t%cl > CD_ZERO)) RETURN
     IF (.NOT. (t%viv_cf > CD_ZERO .AND. t%viv_df >= CD_ZERO .AND. t%viv_df < t%viv_cf)) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES VIV synchronisation band needs cF > 0 and 0 <= dF < cF'); RETURN
-    END IF
-    IF (t%is_syrope) THEN
-      CALL fail(ErrStat, ErrMsg, 'LINE TYPES "'//TRIM(t%name)//'": VIV (Cl > 0) does not combine with the '// &
-                'Syrope working-curve model'); RETURN
     END IF
   END SUBROUTINE check_viv_columns
 

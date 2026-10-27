@@ -87,6 +87,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   current, the lazy-wave cable starts 29 m across at its deepest monitored node and moves less
   than 0.6 m over the first 30 s, where the still-water start has reached a third of that offset.
   `CurrMod 2` and InflowWind currents keep the still-water start, with a note.
+- Syrope polyester lines take the seabed, Morison drag and added mass, deck current and waves,
+  a coupled host's fluid field, a `bathymetryFile` and VIV, as every `EI = 0` line does and as
+  MoorDyn's do; before, they ran without hydrodynamics and refused current, waves, host fluid
+  and bathymetry. The static initial condition includes the current's drag. A taut polyester
+  line whose fairlead sways 2 m in water matches MoorDyn-C's fairlead tension within 11 N on a
+  45 kN range (1.03 MN mean); without drag and added mass the range is 5 % larger.
 - Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
   range graphs and element file) report the cable's own moment, the line type's EI times the
   curvature; lines without stiffeners are unchanged.

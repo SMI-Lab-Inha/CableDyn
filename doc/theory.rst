@@ -682,7 +682,8 @@ ratchets and regenerates the working curve when the mean tension exceeds it.
 OWC for a virgin rope, or, with ``SYROPE IC``, the working curve regenerated at
 :math:`T_\text{max,0}` (zero tension below its zero-tension strain, the OWC above its top
 strain :math:`\varepsilon_\text{OWC}(T_\text{max,0})`). A single secant axial stiffness of that
-curve is iterated to the solved mean strain. Each element then starts with the running maximum
+curve is iterated to the solved mean strain, the line otherwise built as any ``EI = 0`` line
+(its drag in a deck current included). Each element then starts with the running maximum
 :math:`\max(T_\text{max,0}, T_e)` (:math:`T_e` for a virgin rope), where :math:`T_e` is its
 static tension, and with the slow strain whose kernel tension at the static strain and zero
 strain rate equals :math:`T_e`. The dynamic state therefore starts in the static equilibrium,
@@ -707,7 +708,9 @@ the next admissible :math:`T_\text{max}`.
 
 An optional ``SYROPE IC`` row supplies the prior history
 :math:`(T_\text{max,0}, T_\text{mean,0})`; see the initial condition above. The model applies
-to single-section ``EI = 0`` taut lines; see :doc:`capabilities` for the supported combinations.
+to single-section ``EI = 0`` taut lines, which take the seabed, the Morison loads below, current,
+waves, a host's fluid field and VIV as any ``EI = 0`` line does (MoorDyn's line hydrodynamics); see
+:doc:`capabilities` for the supported combinations.
 
 Hydrodynamic loads
 ------------------

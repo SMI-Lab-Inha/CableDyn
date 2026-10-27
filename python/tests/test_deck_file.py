@@ -4022,6 +4022,16 @@ def test_syrope_line_needs_the_dynamic_clock():
     DeckFile.from_text(static, caller_driven=True)
 
 
+def test_syrope_line_takes_viv_and_a_current():
+    # a Syrope line takes the hydrodynamics of any EI = 0 line, VIV included (MoorDyn's)
+    source = (ROOT / "examples/syrope_polyester_mooring.dat").read_text(encoding="utf-8")
+    row = '"SYROPE:data/syrope/syrope_settings.dat|1.53e8|23.12"  5.0e10|1.0e5'
+    row += "  0.0  1.0  0.0  1.0  0.0"
+    assert source.count(row) == 1
+    text = source.replace(row, row + "  0.8")
+    DeckFile.from_text(re.sub(r"none(\s+)current", r"uniform 0 0.5 0\1current", text))
+
+
 @pytest.mark.parametrize("column", [6, 7, 8, 9])
 def test_negative_drag_or_added_mass_coefficient_is_rejected(column):
     row = "chainR3    0.2466   373.5          1.607e9    -1.0       0.0      1.37  0.64  1.0   0.0"

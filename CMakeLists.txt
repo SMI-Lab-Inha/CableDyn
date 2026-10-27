@@ -1661,6 +1661,15 @@ if(Python3_Interpreter_FOUND)
       PROCESSORS 4
       TIMEOUT ${_viv_lockin_timeout}
       ENVIRONMENT "${_cabledyn_python_test_environment}")
+    # Syrope polyester with hydrodynamics against MoorDyn-C (a fairlead swaying in water)
+    add_test(NAME syrope_hydro
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syrope_hydro.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/syrope_hydro)
+    set_tests_properties(syrope_hydro PROPERTIES
+      LABELS "python;integration;dynamic;validation"
+      TIMEOUT ${_viv_lockin_timeout}
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
     # MoorDyn-C's VIV test case: the catenary riser of Thorsen et al. in a uniform current
     add_test(NAME viv_riser
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_viv_riser.py
