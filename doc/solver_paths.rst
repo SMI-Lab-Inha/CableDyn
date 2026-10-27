@@ -94,6 +94,17 @@ Every attempt uses the same physical inputs, tolerance, and acceptance checks. N
 contact hierarchy are projected to the declared floor before polishing; this changes only the
 prolonged seed, never the contact law or the final equations.
 
+**Weight continuation** (a light slack line). A line longer than its span with too little net
+weight for its bending stiffness (:math:`|w| < 100\,EI/L^3`) has no catenary to start from, and
+both routes can end on the compressed straight strut or stall at the round-off of its axial
+forces. When both fail, the line is solved heavier, with :math:`100\,EI/L^3` of the sign of its
+net weight added (downward for a weightless line), and that equilibrium is carried back to its
+own weight in the vertical plane of its chord, accepting the round-off floor of the axial
+forces. It applies to a planar line in still water over a level seabed, without attachments or
+``tensile_safety True``, whose chord is not vertical. A weightless line bows as the Euler
+elastica; nothing in the deck chooses the plane or the side of the bow, and a note says how it
+was solved (:doc:`theory`).
+
 **Acceptance checks.** A residual-converged state is rejected when the sampled
 :math:`\max(L_0\,\kappa)` of any element exceeds 0.7 (an unresolved fold). With
 ``adaptive_mesh = True``, exhausting the refinement cap while curvature resolution or

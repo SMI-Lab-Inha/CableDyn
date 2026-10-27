@@ -2458,9 +2458,14 @@ function(cabledyn_msg_test name deck rc must_match must_not)
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
   set_tests_properties(driver_msg_${name} PROPERTIES LABELS "fortran;driver;integration;static")
 endfunction()
-# A neutrally buoyant finite-EI line longer than its span has no catenary and no tension-only bow.
-cabledyn_msg_test(weightless_finite_ei msg_weightless_finite_ei.dat 2
-  "weightless .neutrally buoyant. line is longer than its span;shorten the line to its span, or give it net weight"
+# A neutrally buoyant finite-EI line longer than its span has no catenary: it bows under the
+# compression its bending stiffness carries, and the run says that nothing chose the bow's side.
+cabledyn_msg_test(weightless_finite_ei msg_weightless_finite_ei.dat 0
+  "line 1 is weightless and longer than its span, so it bows;solved bowed downward in the vertical plane"
+  "net-heavy")
+# With its ends one above the other nothing chooses the side of the bow either: refused, by name.
+cabledyn_msg_test(weightless_finite_ei_vertical msg_weightless_finite_ei_vertical.dat 2
+  "weightless .neutrally buoyant. line is longer than its vertical span;nothing chooses the side of the bow;offset its ends horizontally"
   "net-heavy")
 # An EI=0 line type rejected as net-buoyant whose mass is a relative 4e-9 below the displaced water
 # mass is named weightless and slack; one a relative 2e-6 below it keeps the plain message.
@@ -2600,6 +2605,21 @@ if(Python3_Interpreter_FOUND)
       ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
     message(STATUS "statics_robustness_matrix: skipped (numpy/scipy not importable in ${Python3_EXECUTABLE})")
+  endif()
+  # A finite-EI line longer than its span with little or no net weight: the weightless bow is the
+  # pinned-pinned elastica, light lines bow toward their weight, and a march from the bow stays at rest.
+  if(_statics_matrix_deps_rc EQUAL 0)
+    add_test(
+      NAME light_slack_statics
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_light_slack_statics.py
+        --exe $<TARGET_FILE:cabledyn>
+        --output ${CMAKE_CURRENT_BINARY_DIR}/light_slack_statics)
+    set_tests_properties(light_slack_statics PROPERTIES
+      LABELS "python;driver;integration;static;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+  else()
+    message(STATUS "light_slack_statics: skipped (numpy/scipy not importable in ${Python3_EXECUTABLE})")
   endif()
 endif()
 

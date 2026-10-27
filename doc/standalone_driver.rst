@@ -142,8 +142,9 @@ force inclination differs slightly from the tangent inclination because the end 
 the end node's share of the distributed load (and, on a finite-EI line, the end shear).
 ``declination`` is the angle from global ``+Z`` (the convention also used by OrcaFlex): 0 degrees
 up, 90 degrees
-horizontal, and 180 degrees down. ``azimuth`` is measured from global ``+X`` toward ``+Y`` in
-``[0, 360)``. Therefore ``inclination = declination - 90 degrees``; the two values are printed
+horizontal, and 180 degrees down. ``azimuth`` is measured from global ``+X`` toward ``+Y``, in
+``(-180, 180]`` on a line heading within 45 degrees of ``+X`` and in ``[0, 360)`` otherwise
+(:ref:`outputs-azimuth-range`). Therefore ``inclination = declination - 90 degrees``; the two values are printed
 together deliberately so the convention is auditable.
 
 For the production Hermite finite-EI route, the reported vector is the complete fairlead reaction,

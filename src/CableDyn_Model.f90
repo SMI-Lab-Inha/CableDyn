@@ -189,6 +189,9 @@ MODULE CableDyn_Model
     !! Persistent positions-only EI=0 model state and immutable mesh/properties.
     LOGICAL :: initialized = .FALSE.
     LOGICAL :: tension_only = .FALSE.
+    ! The range of the line's tangent azimuth channels: (-180, 180] when set, otherwise
+    ! [0, 360) (the deck line's, set by the deck driver that builds the model).
+    LOGICAL :: azimuth_signed = .FALSE.
     INTEGER :: n_dof = 0
     INTEGER :: n_elem = 0
     INTEGER, ALLOCATABLE :: elem_conn(:, :)
@@ -6473,6 +6476,7 @@ CONTAINS
     ! released automatically on every early return. The final assignment is the single commit point.
 
     work%tension_only = src%tension_only
+    work%azimuth_signed = src%azimuth_signed
     work%n_dof = src%n_dof
     work%n_elem = src%n_elem
     work%has_seabed = src%has_seabed
