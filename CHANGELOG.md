@@ -15,7 +15,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   with the same phase start and running-RMS window (`VIVrmsWindow`, default 500 steps of
   `dtM`). On a taut 100 m line in a uniform current it follows MoorDyn-F's lock-in amplitude
   and frequency to two to three digits through mode-1 and mode-3 lock-in, at any `dtM` from
-  5e-4 to 1e-2 s. The Python deck tools read and keep the columns.
+  5e-4 to 1e-2 s. The phases start from the deck's End A as MoorDyn's do, also on a line
+  written anchor first, which the reader turns around, and at the deck nodes of a refined
+  finite-EI mesh. MoorDyn-C's own VIV case, the catenary riser of Thorsen et al., reproduces
+  its mean tension and tension range and the measured lock-in frequency (period within 1 %).
+  The Python deck tools read and keep the columns.
 - Cross-flow VIV of finite-EI cables in the standalone driver: the same LINE TYPES columns on an
   `EI > 0` type give a distributed lift, Gauss-integrated over each cubic-Hermite element with
   exact tangents, and a shedding phase at each node driven along the node's own tangent. A taut

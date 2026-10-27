@@ -746,7 +746,10 @@ along :math:`\mathbf{e} = \mathbf{q}\times\mathbf{v}_n/U`:
 so the shedding frequency locks onto the cross-flow motion inside the band
 :math:`c_F \pm d_F` (MoorDyn's defaults 0.18 and 0.08). The running RMS values average over
 ``VIVrmsWindow`` seconds, by default 500 steps of ``dtM`` as in MoorDyn, and the phases start at
-:math:`2\pi i/N` along the line from End A. The static equilibrium carries no lift.
+:math:`2\pi i/N` at node :math:`i` counted from the deck's End A (MoorDyn's ``AttachA``), also on
+a line written anchor first, which the reader turns around. On a finite-EI mesh the static solve
+refined, the deck nodes keep that seed and the nodes it added take the seed interpolated in
+arc length. The static equilibrium carries no lift.
 
 In the implicit step the phase is explicit: the step's lift takes the phase predicted at
 :math:`t_{n+1}` from the step-start rate (the generalised-α level under the configuration blend),

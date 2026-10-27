@@ -20,7 +20,10 @@ PROGRAM test_viv_coupled
   !!   lands on the same state, phases included, bit for bit;
   !! * averaging window: without VIVrmsWindow both line kinds average over MoorDyn's 500 steps
   !!   of the deck dtM, also when the coupling step differs from it (dtM 0.001 s at a 0.01 s
-  !!   step: 0.5 s), and over 500 coupling steps when the deck has no dtM (5 s).
+  !!   step: 0.5 s), and over 500 coupling steps when the deck has no dtM (5 s);
+  !! * phase seed: MoorDyn's 2 pi i/N with node i counted from the deck's End A, also on a deck
+  !!   written anchor first (which the reader turns around) and, through CD_Deck_VIV_Phase_Seed,
+  !!   at the deck nodes of a refined mesh (added nodes interpolated in arc length).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK, &
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, &
@@ -28,6 +31,7 @@ PROGRAM test_viv_coupled
                                          CD_AGG_SetFluidFields, CD_AGG_Snapshot, CD_AGG_Restore
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_VIVMirrorSize, CD_HFMF_PackMirror, &
                                           CD_HFMF_UnpackMirror, CD_HFMF_OK
+  USE CableDyn_DeckDriver, ONLY: CD_Deck_VIV_Phase_Seed
   USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_Get_System_Line_State, &
                              CD_Update_System_Line_Interior_State, CD_System_Line_VIV_MirrorSize, &
                              CD_Get_System_Line_VIV_State, CD_Set_System_Line_VIV_State, CD_SYSTEM_OK
@@ -45,6 +49,7 @@ PROGRAM test_viv_coupled
   CALL case_restart()
   CALL case_rewind()
   CALL case_window()
+  CALL case_seed()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' coupled VIV check(s) failed'
     ERROR STOP 1
@@ -161,6 +166,45 @@ CONTAINS
       CALL finish(agg)
     END DO
   END SUBROUTINE case_window
+
+  SUBROUTINE case_seed()
+    !! MoorDyn's phase seed on a refined mesh and on an anchor-first deck.
+    REAL(wp), PARAMETER :: TWO_PI = 8.0_wp*ATAN(1.0_wp)
+    TYPE(CD_AGG_ModuleType) :: agg
+    REAL(wp) :: seed(5), want(5), worst_line, worst_cable
+    INTEGER :: k, pass, nn
+    ! four mesh elements (internal order, End B first) over two deck segments: deck nodes at public
+    ! nodes 1, 3 and 5, so public node 4 lies 3/4 of the way along the second deck segment
+    CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .FALSE., seed, deck_map=[1, 3, 5])
+    want = [1.0_wp, 0.875_wp, 0.5_wp, 0.25_wp, 0.0_wp]
+    CALL check(MAXVAL(ABS(seed - want)) < 1.0e-14_wp, 'refined mesh: deck nodes keep i/N, added nodes interpolate')
+    CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .TRUE., seed, deck_map=[1, 3, 5])
+    CALL check(MAXVAL(ABS(seed - (1.0_wp - want))) < 1.0e-14_wp, 'a turned-around line counts from its End B')
+    CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .FALSE., seed)
+    CALL check(MAXVAL(ABS(seed - [4.0_wp, 3.0_wp, 2.0_wp, 1.0_wp, 0.0_wp]/4.0_wp)) < 1.0e-14_wp, &
+               'the deck mesh keeps the node index')
+    CALL write_deck('viv_coupled_stock.dat', 0.8_wp, anchor_first=.TRUE.)
+    DO pass = 1, 2
+      IF (.NOT. start(agg, MERGE('viv_coupled.dat      ', 'viv_coupled_stock.dat', pass == 1))) RETURN
+      nn = SIZE(agg%sys%fast%system%lines(1)%viv_phi)
+      worst_line = 0.0_wp
+      worst_cable = 0.0_wp
+      DO k = 2, nn - 1
+        ! internal node k (k = 1 at the anchor); MoorDyn's node from the deck's End A
+        IF (pass == 1) THEN
+          worst_line = MAX(worst_line, ABS(agg%sys%fast%system%lines(1)%viv_phi(k) - TWO_PI*REAL(nn - k, wp)/50.0_wp))
+          worst_cable = MAX(worst_cable, ABS(agg%cables(1)%line%viv_phi(k) - TWO_PI*REAL(nn - k, wp)/50.0_wp))
+        ELSE
+          worst_line = MAX(worst_line, ABS(agg%sys%fast%system%lines(1)%viv_phi(k) - TWO_PI*REAL(k - 1, wp)/50.0_wp))
+          worst_cable = MAX(worst_cable, ABS(agg%cables(1)%line%viv_phi(k) - TWO_PI*REAL(k - 1, wp)/50.0_wp))
+        END IF
+      END DO
+      CALL check(worst_line < 1.0e-12_wp .AND. worst_cable < 1.0e-12_wp, &
+                 MERGE('fairlead-first deck: the seed counts from the fairlead', &
+                       'anchor-first deck: the seed counts from the anchor    ', pass == 1))
+      CALL finish(agg)
+    END DO
+  END SUBROUTINE case_seed
 
   LOGICAL FUNCTION start(agg, path) RESULT(ok)
     !! A host-fluid build of the deck at dt.
@@ -291,13 +335,15 @@ CONTAINS
     IF (n > 1) f = REAL(n - 1, wp)/(t1 - t0)
   END SUBROUTINE response
 
-  SUBROUTINE write_deck(path, cl, window, dtm)
+  SUBROUTINE write_deck(path, cl, window, dtm, anchor_first)
     !! The EI = 0 riser (line 1) and the finite-EI cable (line 2), 20 m apart across the current;
     !! VIVrmsWindow 0.25 s unless window is given (0: none), and a deck dtM when dtm is given.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: cl
     REAL(wp), INTENT(IN), OPTIONAL :: window, dtm
+    LOGICAL, INTENT(IN), OPTIONAL :: anchor_first
     INTEGER :: u
+    LOGICAL :: stock
     REAL(wp) :: tw
     CHARACTER(32) :: len_txt, cl_txt
     WRITE (len_txt, '(F12.6)') 100.0_wp/(1.0_wp + 5.0e4_wp/5.0e7_wp)
@@ -320,8 +366,16 @@ CONTAINS
     WRITE (u, '(A)') '--------------------- LINES ---'
     WRITE (u, '(A)') 'ID LineType AttachA AttachB UnstrLen NumSegs Outputs'
     WRITE (u, '(A)') '(#) (name) (#) (#) (m) (-) (-)'
-    WRITE (u, '(A)') '1 riser 1 2 '//TRIM(ADJUSTL(len_txt))//' 50 -'
-    WRITE (u, '(A)') '2 cable 3 4 '//TRIM(ADJUSTL(len_txt))//' 50 -'
+    stock = .FALSE.
+    IF (PRESENT(anchor_first)) stock = anchor_first
+    IF (stock) THEN
+      ! MoorDyn's common row order, AttachA the anchor: the reader turns the lines around
+      WRITE (u, '(A)') '1 riser 2 1 '//TRIM(ADJUSTL(len_txt))//' 50 -'
+      WRITE (u, '(A)') '2 cable 4 3 '//TRIM(ADJUSTL(len_txt))//' 50 -'
+    ELSE
+      WRITE (u, '(A)') '1 riser 1 2 '//TRIM(ADJUSTL(len_txt))//' 50 -'
+      WRITE (u, '(A)') '2 cable 3 4 '//TRIM(ADJUSTL(len_txt))//' 50 -'
+    END IF
     WRITE (u, '(A)') '--------------------- OPTIONS ---'
     WRITE (u, '(A)') '100.0 WtrDpth'
     WRITE (u, '(A)') '1025.0 rhoW'

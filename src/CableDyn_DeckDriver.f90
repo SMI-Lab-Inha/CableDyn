@@ -193,6 +193,7 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_Init_Deck_Models
   PUBLIC :: CD_Init_Deck_System
   PUBLIC :: CD_Init_Deck_HermiteCable
+  PUBLIC :: CD_Deck_VIV_Phase_Seed
   PUBLIC :: CD_Stiffener_Overlay
   PUBLIC :: CD_Init_Deck_Aggregate
   PUBLIC :: CD_Deck_Query_dtM
@@ -3189,10 +3190,27 @@ CONTAINS
     ! coupled host may step the cable at a dt adjusted from the deck dtM.
     IF (PRESENT(install_viv)) THEN
       IF (install_viv .AND. ANY(viv_cl > CD_ZERO)) THEN
-        CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
-                                         MERGE(opts%viv_rms_window, &
-                                               REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
-                                               opts%viv_rms_window > CD_ZERO), es, em)
+        ! MoorDyn's phase seed counts the deck nodes from the deck's End A: a line the reader turned
+        ! around, or a mesh the static solve refined, takes it node by node (CD_Deck_VIV_Phase_Seed)
+        IF (ln%ends_swapped .OR. ALLOCATED(cable%deck_node)) THEN
+          BLOCK
+            REAL(wp) :: seed(cable%line%nn)
+            IF (ALLOCATED(cable%deck_node)) THEN
+              CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, deck_map=cable%deck_node)
+            ELSE
+              CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed)
+            END IF
+            CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
+                                             MERGE(opts%viv_rms_window, &
+                                                   REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
+                                                   opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed)
+          END BLOCK
+        ELSE
+          CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
+                                           MERGE(opts%viv_rms_window, &
+                                                 REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
+                                                 opts%viv_rms_window > CD_ZERO), es, em)
+        END IF
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI cable VIV wiring failed: '//TRIM(em)); RETURN
         END IF
@@ -9043,7 +9061,17 @@ CONTAINS
         END IF
         tw = opts%viv_rms_window
         IF (.NOT. (tw > CD_ZERO) .AND. opts%has_dtm) tw = REAL(CD_VIV_NM, wp)*opts%dtM
-        CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em)
+        IF (ln%ends_swapped) THEN
+          ! MoorDyn counts the phase seed from the deck's End A, which the reader turned around
+          BLOCK
+            REAL(wp) :: seed(model%n_dof/3)
+            CALL CD_Deck_VIV_Phase_Seed(model%l0, .TRUE., seed)
+            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
+                                  phase_seed=seed)
+          END BLOCK
+        ELSE
+          CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em)
+        END IF
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
         IF (es /= CD_MODEL_OK) THEN
           ErrStat = CD_DECKDRV_BADINPUT
@@ -34965,6 +34993,45 @@ CONTAINS
     LOGICAL :: is_id
     is_id = .NOT. (ABS(cable%frame_s) > CD_ZERO .OR. ABS(cable%frame_c - CD_ONE) > CD_ZERO)
   END FUNCTION cable_frame_is_identity
+
+  PURE SUBROUTINE CD_Deck_VIV_Phase_Seed(l0, swapped, seed, deck_map)
+    !! MoorDyn's VIV phase seed i/N (phase 2 pi i/N at node i = 0 .. N counted from the deck's
+    !! End A, N the deck's segment count) at every node of a line, in the model's internal node
+    !! order (node 1 = End B; element e of length l0(e) joins nodes e and e + 1). swapped: the
+    !! reader turned the line's ends around, so the deck's End A is the model's End B. deck_map:
+    !! the mesh node (public order, End A = 1) of each deck node, on a mesh the static solve
+    !! refined; a node it added takes the seed interpolated linearly in unstretched arc length
+    !! between its two deck nodes. Without deck_map the mesh is the deck's.
+    REAL(wp), INTENT(IN) :: l0(:)
+    LOGICAL, INTENT(IN) :: swapped
+    REAL(wp), INTENT(OUT) :: seed(:)
+    INTEGER, INTENT(IN), OPTIONAL :: deck_map(:)
+    REAL(wp) :: s(SIZE(l0) + 1), f
+    INTEGER :: ne, nn, p, j, nd
+    ne = SIZE(l0)
+    nn = ne + 1
+    ! unstretched arc length from End A at public node p (internal element ne + 1 - p follows it)
+    s(1) = CD_ZERO
+    DO p = 1, ne
+      s(p + 1) = s(p) + l0(ne + 1 - p)
+    END DO
+    DO p = 1, nn
+      IF (PRESENT(deck_map)) THEN
+        nd = SIZE(deck_map) - 1
+        f = CD_ONE
+        DO j = 1, nd
+          IF (p >= deck_map(j) .AND. p <= deck_map(j + 1)) THEN
+            f = (REAL(j - 1, wp) + (s(p) - s(deck_map(j)))/(s(deck_map(j + 1)) - s(deck_map(j))))/REAL(nd, wp)
+            EXIT
+          END IF
+        END DO
+      ELSE
+        f = REAL(p - 1, wp)/REAL(ne, wp)
+      END IF
+      IF (swapped) f = CD_ONE - f
+      seed(nn + 1 - p) = f
+    END DO
+  END SUBROUTINE CD_Deck_VIV_Phase_Seed
 
   PURE INTEGER FUNCTION CD_Cable_Deck_Node(cable, node) RESULT(deck_node)
     !! The deck node at public node `node` (End A = 1) of a finite-EI cable's final mesh: the

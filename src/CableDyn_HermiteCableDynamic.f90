@@ -966,13 +966,15 @@ CONTAINS
     model%tr_valid = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
 
-  SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg, phase_seed)
     !! Install the cross-flow VIV synchronisation model (CableDyn_VIV) on a cable with drag:
     !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
     !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
     !! wetted Gauss points of every element with cl > 0, its phase lives on the nodes of those
     !! elements; the phases start at 2 pi i/N with node i counted from End A (the model's last
-    !! node), as MoorDyn's. The phase follows the drag's current and a held host field (which
+    !! node), as MoorDyn's; phase_seed, per node, gives i/N instead (a line whose deck End A the
+    !! reader turned around, or a mesh refined from the deck's). The phase follows the drag's
+    !! current and a held host field (which
     !! carries any waves); the internal wave families (Set_Waves) are refused with VIV. The
     !! committed acceleration is refreshed with the new lift; if that fails, the previous VIV
     !! configuration, its state and the acceleration are restored.
@@ -980,6 +982,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: phase_seed(:)
     INTEGER :: e, k, ne, nn, es
     REAL(wp) :: wsum, tw_old
     LOGICAL :: had_viv
@@ -1012,6 +1015,12 @@ CONTAINS
     IF (.NOT. model%has_drag) THEN
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: VIV needs the cable''s drag in water (set the drag first)'; RETURN
+    END IF
+    IF (PRESENT(phase_seed)) THEN
+      IF (SIZE(phase_seed) /= nn .OR. .NOT. CD_All_Finite(phase_seed)) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: the phase seed must be finite with one value per node'; RETURN
+      END IF
     END IF
     IF (model%has_wave) THEN
       ErrStat = CD_HCDYN_BADINPUT
@@ -1057,6 +1066,7 @@ CONTAINS
       model%viv_cf(k) = model%viv_cf(k)/wsum
       model%viv_df(k) = model%viv_df(k)/wsum
       model%viv_phi(k) = CD_VIV_TWO_PI*REAL(nn - k, wp)/REAL(ne, wp)
+      IF (PRESENT(phase_seed)) model%viv_phi(k) = CD_VIV_TWO_PI*phase_seed(k)
     END DO
     CALL viv_drag_terms(model)
     model%viv_phi_eval = model%viv_phi

@@ -3861,14 +3861,16 @@ CONTAINS
     model%recovery_syrope_tmax = tmax
   END SUBROUTINE CD_Set_Model_Syrope_State
 
-  SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg)
+  SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg, phase_seed)
     !! Install the cross-flow VIV model (CableDyn_VIV) on an initialised line. Per element:
     !! the lift coefficient cl (0 = no lift on that element), hydrodynamic diameter, and the
     !! synchronisation centre cf and half-range df of the non-dimensional shedding frequency;
     !! rho is the water density. t_window is the averaging time of the running cross-flow mean
     !! squares [s]; 0 selects MoorDyn's 500 time steps, latched at the first step. Every
     !! interior free node next to a cl > 0 element carries a lift and a shedding phase; the
-    !! phases start spread over [0, 2 pi) along the line (MoorDyn-C), the mean squares at 0.
+    !! phases start spread over [0, 2 pi) along the line (MoorDyn-C: 2 pi i/N at node i from
+    !! End A; phase_seed, per node, gives i/N instead, for a line whose deck End A the reader
+    !! turned around), the mean squares at 0.
     !! An all-zero cl leaves the model without VIV. The mesh must be the single chain the
     !! line builder makes (element e joins nodes e and e+1). The caller recomputes the
     !! acceleration if the lift should enter the initial state (CD_Recompute_Model_Acceleration).
@@ -3876,6 +3878,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: rho, cl(:), diameter(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: phase_seed(:)
     INTEGER :: n_nodes, n_elem, e, nd, istat, k
     REAL(wp) :: wsum
 
@@ -3904,6 +3907,12 @@ CONTAINS
     IF (.NOT. (CD_Is_Finite(t_window) .AND. t_window >= CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV averaging time must be finite and non-negative')
       RETURN
+    END IF
+    IF (PRESENT(phase_seed)) THEN
+      IF (SIZE(phase_seed) /= n_nodes .OR. .NOT. CD_All_Finite(phase_seed)) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV phase seed must be finite with shape (n_nodes)')
+        RETURN
+      END IF
     END IF
     CALL clear_viv(model)
     IF (.NOT. ANY(cl > CD_ZERO)) RETURN
@@ -3968,6 +3977,7 @@ CONTAINS
       ! MoorDyn: phi_i = 2 pi i/N at node i = 0..N counted from End A; the model numbers its
       ! nodes from End B, so node nd is MoorDyn's node n_nodes - nd
       model%viv_phi(nd) = CD_VIV_TWO_PI*REAL(n_nodes - nd, wp)/REAL(n_elem, wp)
+      IF (PRESENT(phase_seed)) model%viv_phi(nd) = CD_VIV_TWO_PI*phase_seed(nd)
     END DO
     model%viv_phi_rollback = model%viv_phi
     model%viv_ms_rollback = model%viv_ms

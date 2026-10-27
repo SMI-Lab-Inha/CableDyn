@@ -1649,6 +1649,15 @@ if(Python3_Interpreter_FOUND)
       PROCESSORS 4
       TIMEOUT ${_viv_lockin_timeout}
       ENVIRONMENT "${_cabledyn_python_test_environment}")
+    # MoorDyn-C's VIV test case: the catenary riser of Thorsen et al. in a uniform current
+    add_test(NAME viv_riser
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_viv_riser.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/viv_riser)
+    set_tests_properties(viv_riser PROPERTIES
+      LABELS "python;integration;dynamic;viv;validation"
+      TIMEOUT ${_viv_lockin_timeout}
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
     message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
