@@ -2891,7 +2891,7 @@ class DeckFile:
         # lines whose stock anchor-first row the native reader turns around (its ends swap)
         swapped_lines: set[str] = set()
         range_lines = 0
-        series_lines = 0  # lines with per-line time-series files (flags p, t)
+        series_lines = 0  # lines with per-line time-series files (flags p, t, V)
         for row in self.lines:
             if len(row.tokens) not in {3, 4, 7}:
                 raise DeckFormatError(f"{self._at(row)}: LINES row needs 3, 4, or 7 fields")
@@ -2900,13 +2900,14 @@ class DeckFile:
                 if len(row.tokens) == 7
                 else (row.tokens[3] if len(row.tokens) == 4 else "-")
             )
-            if output_flags != "-" and not re.fullmatch(r"[pPtTrR]+", output_flags):
+            # V (the VIV lift) is case-sensitive, as MoorDyn's v (node velocities) is not written
+            if output_flags != "-" and not re.fullmatch(r"[pPtTrRV]+", output_flags):
                 raise DeckFormatError(
-                    f"{self._at(row)}: LINE Outputs accepts only '-', 'p', 't', and 'r'"
+                    f"{self._at(row)}: LINE Outputs accepts only '-', 'p', 't', 'r', and 'V'"
                 )
             if "r" in output_flags.lower():
                 range_lines += 1
-            if "p" in output_flags.lower() or "t" in output_flags.lower():
+            if "p" in output_flags.lower() or "t" in output_flags.lower() or "V" in output_flags:
                 series_lines += 1
             if len(row.tokens) == 7:
                 line_type = row.tokens[1]
@@ -3546,7 +3547,7 @@ class DeckFile:
             if series_lines:
                 raise DeckFormatError(
                     f"{self._label}: a mixed EI=0/finite-EI deck writes no per-line files; "
-                    "use OUTPUTS channels instead of the LINES Outputs flags p and t"
+                    "use OUTPUTS channels instead of the LINES Outputs flags p, t and V"
                 )
 
         # Native deck_needs_multibody: a dynamic deck that no single-family march covers

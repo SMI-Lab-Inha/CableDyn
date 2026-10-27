@@ -938,6 +938,19 @@ def test_attachments_accept_an_axial_drag_area_and_a_deck_current(tmp_path):
         DeckFile.from_text(text)
 
 
+def test_viv_lift_flag_is_upper_case_and_standalone():
+    # V writes the VIV lift file; as MoorDyn's line flags it is case-sensitive (v, MoorDyn's
+    # node velocities, is not written)
+    deck = DeckFile.from_text(_edit(_DYNAMIC, ("1 2 1 -\n", "1 2 1 pV\n")))
+    assert deck.lines[0].tokens[3] == "pV"
+    with pytest.raises(DeckFormatError, match="accepts only '-', 'p', 't', 'r', and 'V'"):
+        DeckFile.from_text(_edit(_DYNAMIC, ("1 2 1 -\n", "1 2 1 pv\n")))
+    # a mixed EI=0/finite-EI deck writes no per-line files
+    mixed = _ATTACHMENT_DECK.format(rows="1 60.0 100 0.1 0.1 1.0", options="")
+    with pytest.raises(DeckFormatError, match="flags p, t and V"):
+        DeckFile.from_text(mixed.replace("1 2 1 -\n", "1 2 1 V\n"))
+
+
 def test_attachments_are_accepted_on_the_coupled_route(tmp_path):
     path = tmp_path / "attachments-coupled.dat"
     path.write_text(
@@ -2467,7 +2480,7 @@ def test_range_flag_and_range_start_follow_native_rules():
                 ("50.0 WtrDpth\n", "50.0 WtrDpth\n0 RangeStart\n"),
             )
         )
-    with pytest.raises(DeckFormatError, match="accepts only '-', 'p', 't', and 'r'"):
+    with pytest.raises(DeckFormatError, match="accepts only '-', 'p', 't', 'r', and 'V'"):
         DeckFile.from_text(_edit(_STATIC, ("1 2 1 -\n", "1 2 1 rx\n")))
     assert DeckFile.from_text(_edit(_STATIC, ("1 2 1 -\n", "1 2 1 r\n"))).lines[0].tokens[3] == "r"
 

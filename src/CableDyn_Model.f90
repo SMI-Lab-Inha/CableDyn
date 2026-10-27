@@ -96,7 +96,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Set_Model_Syrope_State
   PUBLIC :: CD_Set_Model_VIV
   PUBLIC :: CD_Latch_Model_VIV_Window
-  PUBLIC :: CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Model_Has_VIV
+  PUBLIC :: CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Model_Has_VIV, CD_Get_Model_VIV_Lift
   PUBLIC :: CD_Get_Model_Tension
   PUBLIC :: CD_Get_Model_EndForces
   PUBLIC :: CD_Get_Model_EndNodeMassDiag
@@ -4061,6 +4061,38 @@ CONTAINS
     model%recovery_viv_ms = ms
     model%viv_phi_eval = phi
   END SUBROUTINE CD_Set_Model_VIV_State
+
+  SUBROUTINE CD_Get_Model_VIV_Lift(model, lift, ErrStat, ErrMsg)
+    !! The VIV lift force on every node at the committed state [N] (3, n_nodes); zero on the
+    !! end nodes, on nodes without VIV, and on a model without VIV.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: lift(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: nd, ia
+    REAL(wp) :: coef, uu(3)
+    LOGICAL :: ok
+    lift = CD_ZERO
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_MODEL_NOT_INITIALIZED
+      ErrMsg = 'CableDyn_Model: model is not initialized'
+      RETURN
+    END IF
+    IF (SIZE(lift, 1) /= 3 .OR. SIZE(lift, 2) /= model%n_dof/3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV lift output must have shape (3, n_nodes)')
+      RETURN
+    END IF
+    IF (.NOT. model%has_viv) RETURN
+    DO nd = 2, model%n_dof/3 - 1
+      IF (.NOT. model%viv_node(nd)) CYCLE
+      CALL viv_node_coef(model, model%q, nd, coef, uu)
+      ia = 3*nd - 2
+      CALL CD_VIV_Node_Lift(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), uu, coef, &
+                            model%viv_phi(nd), lift(:, nd), ok)
+    END DO
+  END SUBROUTINE CD_Get_Model_VIV_Lift
 
   PURE LOGICAL FUNCTION CD_Model_Has_VIV(model) RESULT(has)
     !! True if the model carries the cross-flow VIV phase state.

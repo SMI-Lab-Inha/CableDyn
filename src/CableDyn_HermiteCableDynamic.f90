@@ -124,6 +124,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_Friction_Anchors
   PUBLIC :: CD_HermiteCable_Dyn_Set_Friction_Axial
   PUBLIC :: CD_HermiteCable_Dyn_Set_VIV
+  PUBLIC :: CD_HermiteCable_Dyn_VIV_Node_Lift
   PUBLIC :: CD_HermiteCable_Dyn_Restore
   PUBLIC :: CD_HermiteCable_Dyn_Energy
   PUBLIC :: CD_HermiteCable_Dyn_Curvature
@@ -1257,6 +1258,33 @@ CONTAINS
                                             ErrMsg=ErrMsg)
     END IF
   END SUBROUTINE viv_element_lift
+
+  SUBROUTINE CD_HermiteCable_Dyn_VIV_Node_Lift(model, lift, ErrStat, ErrMsg)
+    !! The VIV lift on every node at the committed state [N] (3, nn), in the model frame: the
+    !! translational components of the elements' consistent lift loads, summed at the nodes
+    !! (MoorDyn's nodal lift on a lumped line). Zero on a cable without VIV.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: lift(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: flift(12)
+    INTEGER :: e
+    lift = CD_ZERO
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_VIV_Node_Lift: model not initialised'; RETURN
+    END IF
+    IF (SIZE(lift, 1) /= 3 .OR. SIZE(lift, 2) /= model%nn) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_VIV_Node_Lift: lift must be shaped (3, nn)'; RETURN
+    END IF
+    IF (.NOT. model%has_viv) RETURN
+    DO e = 1, model%ne
+      CALL viv_element_lift(model, model%q, model%v, e, flift, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      lift(:, e) = lift(:, e) + flift(1:3)
+      lift(:, e + 1) = lift(:, e + 1) + flift(7:9)
+    END DO
+  END SUBROUTINE CD_HermiteCable_Dyn_VIV_Node_Lift
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Anchors(model, anchors, ErrStat, ErrMsg)
     !! Switch the seabed friction of a contact model with mu > 0 to elastic-plastic friction

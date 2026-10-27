@@ -17,7 +17,7 @@ MODULE CableDyn_System
                             CD_Get_Model_State, CD_Get_Model_Tension, &
                             CD_Model_Has_Viscoelastic, CD_Get_Model_VE_Dl1, CD_Set_Model_VE_Dl1, &
                             CD_Model_Has_Syrope, CD_Get_Model_Syrope_State, CD_Set_Model_Syrope_State, &
-                            CD_Model_Has_VIV, CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, &
+                            CD_Model_Has_VIV, CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Get_Model_VIV_Lift, &
                             CD_Model_Has_Friction, CD_Get_Model_Friction_Anchors, CD_Set_Model_Friction_Anchors, &
                             CD_Latch_Model_VIV_Window, &
                             CD_Get_Model_EndNodeMassDiag, CD_Get_Model_EndNodeAddedMass, &
@@ -78,7 +78,8 @@ MODULE CableDyn_System
   PUBLIC :: CD_Get_System_Line_Friction_Anchors
   PUBLIC :: CD_Set_System_Line_Friction_Anchors
   PUBLIC :: CD_Get_System_Line_Syrope_State
-  PUBLIC :: CD_System_Line_VIV_MirrorSize, CD_Get_System_Line_VIV_State, CD_Set_System_Line_VIV_State
+  PUBLIC :: CD_System_Line_VIV_MirrorSize, CD_Get_System_Line_VIV_State, CD_Set_System_Line_VIV_State, &
+            CD_Get_System_Line_VIV_Lift
   PUBLIC :: CD_Set_System_Line_Syrope_State
   PUBLIC :: CD_Get_System_PointBlocks
   PUBLIC :: CD_Get_System_Point_State
@@ -1023,6 +1024,29 @@ CONTAINS
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
   END SUBROUTINE CD_Set_System_Line_VIV_State
+
+  SUBROUTINE CD_Get_System_Line_VIV_Lift(system, line_index, lift, ErrStat, ErrMsg)
+    !! VIV lift force on every node of one contained line at the committed state (3, n_nodes).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    REAL(wp), INTENT(OUT) :: lift(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(160) :: em
+
+    lift = CD_ZERO
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    CALL CD_Get_Model_VIV_Lift(system%lines(line_index), lift, es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      ErrStat = CD_SYSTEM_SOLVEFAIL
+      ErrMsg = 'CableDyn_System: line VIV lift query failed: '//TRIM(em)
+      RETURN
+    END IF
+    ErrStat = CD_SYSTEM_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_Get_System_Line_VIV_Lift
 
   SUBROUTINE CD_Set_System_Line_Syrope_State(system, line_index, slow, tmax, ErrStat, ErrMsg)
     !! Overwrite one contained line's per-element Syrope states from a checkpoint mirror

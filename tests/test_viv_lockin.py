@@ -21,6 +21,11 @@ locks in. MoorDyn-F (OpenFAST v5 moordyn_driver, dtM 5e-4 s) gives a mid-span A/
 * the same finite-EI cable on the multibody march (End A Fixed, and a weighted Connect point on
   two chains 300 m away, which puts the deck on that march) locks in as on the Hermite route
   (within 1 % and one bin);
+* the VIV lift files (LINES Outputs flag V) of the EI = 0 line, the cable and the cable on the
+  multibody march: no lift on the EI = 0 line's end nodes (MoorDyn's), and the same cross-flow
+  lift at the interior nodes on all three (standard deviation over 60-120 s within 1 %) but the
+  end nodes' neighbours: the EI = 0 line's end half-segments carry no lift, as MoorDyn's, while
+  a cable element shares its lift between its two nodes;
 * a bending-stiff, neutrally buoyant cable (8.1 kg/m, EA 5e9 N, EI 5e7 N m^2, about 51 kN:
   beta = pi^2 EI/(T L^2) ~ 1) against the EI = 0 string tensioned to T (1 + beta), which has
   the same first-mode frequency and shape: at U 0.21 m/s both lock into mode 1 with the same
@@ -82,7 +87,7 @@ z-depth     x-current      y-current
 
 
 def deck(dtm: float, ei: float = 0.0, ea: float = 5.0e7, mass: float = 10.0, tension: float = 5.0e4,
-         waterkin: str = "current.dat") -> str:
+         waterkin: str = "current.dat", outputs: str = "-") -> str:
     length = 100.0 / (1.0 + tension / ea)
     return f"""--------------------- CableDyn Input File ---------------------------------
 VIV lock-in gate: taut line in a uniform cross current
@@ -98,7 +103,7 @@ ID   Attachment   X       Y     Z      M    V     CdA   CA
 ----------------------- LINES -----------------------------------------------
 ID   LineType   AttachA  AttachB  UnstrLen  NumSegs  Outputs
 (#)  (name)     (#)      (#)      (m)       (-)      (-)
-1    riser      1        2        {length:.6f}  50       -
+1    riser      1        2        {length:.6f}  50       {outputs}
 ---------------------- OPTIONS ----------------------------------------------
 {dtm}    dtM
 100.0    WtrDpth
@@ -127,12 +132,23 @@ def multibody(text: str) -> str:
          "3    Fixed        0.0     300.0 -20.0  0    0     0     0\n"
          "4    Connect      50.0    300.0 -60.0  5000 0     0     0\n"
          "5    Fixed        100.0   300.0 -20.0  0    0     0     0"),
-        ("  50       -\n", "  50       -\n2    chain      3        4        70.0  20       -\n"
-                                "3    chain      5        4        70.0  20       -\n"),
     ):
         assert text.count(old) == 1, old
         text = text.replace(old, new)
-    return text
+    riser = next(line for line in text.splitlines() if line.startswith("1    riser"))
+    return text.replace(riser + "\n", riser + "\n2    chain      3        4        70.0  20       -\n"
+                        "3    chain      5        4        70.0  20       -\n")
+
+
+def lift_std(path: Path) -> np.ndarray:
+    """Standard deviation over 60-120 s of the cross-flow (z) lift at each node of a V file."""
+    lines = path.read_text().splitlines()
+    head = next(i for i, line in enumerate(lines) if line.startswith("Time"))
+    names = lines[head].split("\t")
+    data = np.loadtxt(lines[head + 1:])
+    data = data[data[:, 0] >= 60.0]
+    cols = [j for j, name in enumerate(names) if name.endswith("LiftZ(N)")]
+    return data[:, cols].std(axis=0)
 
 
 def response(path: Path) -> tuple[float, float, float]:
@@ -169,11 +185,12 @@ def main() -> int:
     stiff = {"ei": 5.0e7, "ea": 5.0e9, "mass": 8.1}
     string = {"ea": 5.0e7, "mass": 8.1, "tension": 5.0e4 * (1.0 + beta)}
     runs = [
-        (0.01, "viv_dt0.01", deck(0.01, waterkin="current_0.15.dat")),
+        (0.01, "viv_dt0.01", deck(0.01, waterkin="current_0.15.dat", outputs="V")),
         (0.002, "viv_dt0.002", deck(0.002, waterkin="current_0.15.dat")),
-        ("fei", "viv_fei", deck(0.01, ei=1.0, waterkin="current_0.15.dat")),
+        ("fei", "viv_fei", deck(0.01, ei=1.0, waterkin="current_0.15.dat", outputs="V")),
         ("fei_fine", "viv_fei_dt0.002", deck(0.002, ei=1.0, waterkin="current_0.15.dat")),
-        ("fei_mb", "viv_fei_multibody", multibody(deck(0.01, ei=1.0, waterkin="current_0.15.dat"))),
+        ("fei_mb", "viv_fei_multibody",
+         multibody(deck(0.01, ei=1.0, waterkin="current_0.15.dat", outputs="V"))),
     ]
     for u in (0.21, 0.30):
         runs.append((("stiff", u), f"viv_stiff_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **stiff)))
@@ -225,6 +242,21 @@ def main() -> int:
         check(abs(a1 - a0) <= 0.01 * a0 and abs(q1 - q0) <= 0.01 * q0 and abs(f1 - f0) <= 1.0 / 60.0,
               f"finite-EI cable on the multibody march: mid/quarter A/D {a1:.3f}/{q1:.3f} at {f1:.3f} Hz, "
               f"Hermite route {a0:.3f}/{q0:.3f} at {f0:.3f} Hz (within 1 % and one bin)")
+    lifts = {}
+    for key, name in ((0.01, "viv_dt0.01"), ("fei", "viv_fei"), ("fei_mb", "viv_fei_multibody")):
+        if key in results:
+            lifts[key] = lift_std(out / f"{name}.Line1.V.out")
+    if 0.01 in lifts:
+        ends = lifts[0.01][[0, -1]]
+        check(bool(np.all(ends == 0.0)) and lifts[0.01][25] > 0.5,
+              f"EI = 0 line lift file: no lift on the end nodes, mid-span cross-flow lift std "
+              f"{lifts[0.01][25]:.3f} N")
+    for key, what in (("fei", "cable"), ("fei_mb", "cable on the multibody march")):
+        if 0.01 in lifts and key in lifts:
+            inner0, inner1 = lifts[0.01][2:-2], lifts[key][2:-2]
+            worst = float(np.max(np.abs(inner1 - inner0) / np.maximum(inner0, 1.0e-3)))
+            check(worst <= 0.01, f"{what} lift file: interior cross-flow lift std within {worst:.2%} of the "
+                  "EI = 0 line's (within 1 %)")
     if ("stiff", 0.21) in results and ("string", 0.21) in results:
         (a1, f1, _), (a0, f0, _) = results[("stiff", 0.21)], results[("string", 0.21)]
         check(abs(a1 - a0) <= 0.03 * a0 and abs(f1 - f0) <= 1.0 / 60.0,

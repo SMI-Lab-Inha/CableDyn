@@ -318,10 +318,11 @@ B)``, header row, units row, data (12 columns):
 Per-line files (``LINES`` ``Outputs`` flag)
 -------------------------------------------
 
-Set the ``Outputs`` column of a ``LINES`` row to any combination of the letters below
-(case-insensitive, e.g. ``ptr``); ``-`` or an empty field requests nothing. Any other letter is a
-parse error. Mixed ``EI = 0`` + finite-EI decks reject the ``p`` and ``t`` flags (use main-file
-channels instead) and accept ``r``.
+Set the ``Outputs`` column of a ``LINES`` row to any combination of the letters below (e.g.
+``ptr``); ``-`` or an empty field requests nothing. ``p``, ``t`` and ``r`` are case-insensitive;
+``V`` is upper case, as in MoorDyn, whose lower-case ``v`` (node velocities) CableDyn does not
+write. Any other letter is a parse error. Mixed ``EI = 0`` + finite-EI decks reject the ``p``,
+``t`` and ``V`` flags (use main-file channels instead) and accept ``r``.
 
 .. list-table::
    :header-rows: 1
@@ -338,6 +339,14 @@ channels instead) and accept ``r``.
      - segment (element) tensions, End A → End B; on a finite-EI line the mean of the axial
        components of the element's own two equilibrium end forces (``OutputRecovery element``:
        the axial resultant at the element midpoint)
+   * - ``V``
+     - ``<out_root>.Line<L>.V.out``
+     - cross-flow VIV lift force at the nodes, End A → End B, on dynamic runs (MoorDyn's line
+       flag ``V``; a static run carries no lift and writes no file). On an ``EI = 0`` line the
+       end nodes carry none, as in MoorDyn; on a finite-EI line each element's lift is lumped to
+       its two nodes (the translational part of its consistent load), so the end nodes carry
+       the lift of their half-elements. Zero on a line without VIV (``Cl = 0``); a finite-EI
+       line with two moving ends carries no VIV and refuses the flag
    * - ``r``
      - ``<out_root>.Line<L>.range.out``
      - range graph: minimum, maximum and mean over the run of the node tension, curvature, bend
@@ -365,6 +374,9 @@ deck node of that node, 0 for a node the refinement added.
    * - ``.t.out``
      - ``Segment  Tension(N)``
      - ``Time(s)  Segment1Tension(N)  Segment2Tension(N) …  Segment<N−1>Tension(N)``
+   * - ``.V.out``
+     - (none)
+     - ``Time(s)  Node1LiftX(N)  Node1LiftY(N)  Node1LiftZ(N)  Node2LiftX(N) …  Node<N>LiftZ(N)``
 
 Dynamic per-line rows are written at the same times as ``.out``.
 

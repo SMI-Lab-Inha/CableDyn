@@ -57,11 +57,12 @@ MODULE CableDyn_DeckDriver
                             CD_Get_Model_EndForces, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Hydro_Fields, &
                             CD_Recompute_Model_Acceleration, CD_Step_Model, CD_Step_Model_Recovering, CD_MODEL_OK, &
-                            CD_Audit_Model_Step, CD_Set_Model_VIV
+                            CD_Audit_Model_Step, CD_Set_Model_VIV, CD_Get_Model_VIV_Lift
   USE CableDyn_System, ONLY: CD_SystemType, CD_SystemPointType, CD_LineEndpointBinding, &
                              CD_Init_System_From_Points, CD_End_System, CD_System_Line_NDOF, &
                              CD_System_Line_NElem, CD_Get_System_Point_State, CD_Get_System_Line_State, &
-                             CD_Get_System_Line_Tension, CD_Update_System_Point_Fluid_Fields, &
+                             CD_Get_System_Line_Tension, CD_Get_System_Line_VIV_Lift, &
+                             CD_Update_System_Point_Fluid_Fields, &
                              CD_Get_System_CoupledMotion, CD_Update_System_Point_States, &
                              CD_Calc_System_CoupledLoads, CD_Step_System, CD_Step_System_DynamicPoints, &
                              CD_Step_System_Junction, CD_System_Junction_Rewind, CD_System_Point_Base, &
@@ -104,6 +105,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Set_ForceBlend, CD_HC_FORCE_BLEND_DEFAULT, &
                                           CD_HermiteCable_Dyn_Set_Friction_Anchors, &
                                           CD_HermiteCable_Dyn_Set_Friction_Axial, CD_HermiteCable_Dyn_Set_VIV, &
+                                          CD_HermiteCable_Dyn_VIV_Node_Lift, &
                                           CD_HermiteCable_Dyn_Set_Control_Seabed, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State
@@ -16460,7 +16462,8 @@ CONTAINS
       END DO
       IF (.NOT. valid_line_output_flags(lines(i)%outputs)) THEN
         CALL fail(ErrStat, ErrMsg, 'LINE Outputs "'//TRIM(lines(i)%outputs)// &
-                  '": supported line-output flags are p, t and r'); RETURN
+                  '": supported line-output flags are p, t, r and V (the VIV lift, upper case as MoorDyn''s)')
+        RETURN
       END IF
       IF (find_point(points, lines(i)%nodeA) == 0) THEN
         CALL fail(ErrStat, ErrMsg, 'LINE '//TRIM(int_to_str(lines(i)%id))//' references undefined POINT id '// &
@@ -17033,12 +17036,14 @@ CONTAINS
     CLOSE (unit)
   END SUBROUTINE write_static_line_tension_file
 
-  SUBROUTINE open_dynamic_line_outputs(out_root, lines, models, pos_units, ten_units, ErrStat, ErrMsg)
+  SUBROUTINE open_dynamic_line_outputs(out_root, lines, models, pos_units, ten_units, ErrStat, ErrMsg, lift_units)
     !! Open optional per-line dynamic time-series files requested by LINE Outputs flags.
     CHARACTER(*), INTENT(IN) :: out_root
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_ModelType), INTENT(IN) :: models(:)
     INTEGER, ALLOCATABLE, INTENT(OUT) :: pos_units(:), ten_units(:)
+    ! the VIV lift files (flag V) of the lines, when the caller takes them
+    INTEGER, ALLOCATABLE, INTENT(OUT), OPTIONAL :: lift_units(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
@@ -17051,11 +17056,15 @@ CONTAINS
     ALLOCATE (pos_units(SIZE(lines)), ten_units(SIZE(lines)))
     pos_units = 0
     ten_units = 0
+    IF (PRESENT(lift_units)) THEN
+      ALLOCATE (lift_units(SIZE(lines)))
+      lift_units = 0
+    END IF
     DO i = 1, SIZE(lines)
       IF (.NOT. line_outputs_requested(lines(i)%outputs)) CYCLE
       ndof = CD_Model_NDOF(models(i), es, em)
       IF (es /= CD_MODEL_OK) THEN
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         ErrStat = CD_DECKDRV_SOLVEFAIL
         ErrMsg = 'CableDyn_DeckDriver: dynamic line-output DOF query failed: '//TRIM(em)
         RETURN
@@ -17066,7 +17075,7 @@ CONTAINS
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.p.out'
         OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
         IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open dynamic line position output file: '//TRIM(path)); RETURN
         END IF
         WRITE (pos_units(i), '(A)') '# CableDyn dynamic line node positions; public node order EndA -> EndB'
@@ -17082,7 +17091,7 @@ CONTAINS
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.t.out'
         OPEN (NEWUNIT=ten_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
         IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open dynamic line tension output file: '//TRIM(path)); RETURN
         END IF
         WRITE (ten_units(i), '(A)') '# CableDyn dynamic line segment tensions; public segment order EndA -> EndB'
@@ -17092,15 +17101,26 @@ CONTAINS
         END DO
         WRITE (ten_units(i), '(A)') ''
       END IF
+      IF (PRESENT(lift_units)) THEN
+        IF (line_output_has_lift(lines(i)%outputs)) THEN
+          CALL open_line_lift_file(out_root, lines(i)%id, nnode, lift_units(i), ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) THEN
+            CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units); RETURN
+          END IF
+        END IF
+      END IF
     END DO
   END SUBROUTINE open_dynamic_line_outputs
 
-  SUBROUTINE open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg)
+  SUBROUTINE open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg, &
+                                              lift_units)
     !! Open optional per-line dynamic time-series files for a point-system deck.
     CHARACTER(*), INTENT(IN) :: out_root
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_SystemType), INTENT(IN) :: system
     INTEGER, ALLOCATABLE, INTENT(OUT) :: pos_units(:), ten_units(:)
+    ! the VIV lift files (flag V) of the lines, when the caller takes them
+    INTEGER, ALLOCATABLE, INTENT(OUT), OPTIONAL :: lift_units(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
@@ -17113,11 +17133,15 @@ CONTAINS
     ALLOCATE (pos_units(SIZE(lines)), ten_units(SIZE(lines)))
     pos_units = 0
     ten_units = 0
+    IF (PRESENT(lift_units)) THEN
+      ALLOCATE (lift_units(SIZE(lines)))
+      lift_units = 0
+    END IF
     DO i = 1, SIZE(lines)
       IF (.NOT. line_outputs_requested(lines(i)%outputs)) CYCLE
       ndof = CD_System_Line_NDOF(system, i, es, em)
       IF (es /= CD_SYSTEM_OK) THEN
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         ErrStat = CD_DECKDRV_SOLVEFAIL
         ErrMsg = 'CableDyn_DeckDriver: system dynamic line-output DOF query failed: '//TRIM(em)
         RETURN
@@ -17128,7 +17152,7 @@ CONTAINS
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.p.out'
         OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
         IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open system dynamic line position output file: '//TRIM(path)); RETURN
         END IF
         WRITE (pos_units(i), '(A)') '# CableDyn dynamic line node positions; public node order EndA -> EndB'
@@ -17144,7 +17168,7 @@ CONTAINS
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.t.out'
         OPEN (NEWUNIT=ten_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
         IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open system dynamic line tension output file: '//TRIM(path)); RETURN
         END IF
         WRITE (ten_units(i), '(A)') '# CableDyn dynamic line segment tensions; public segment order EndA -> EndB'
@@ -17154,26 +17178,37 @@ CONTAINS
         END DO
         WRITE (ten_units(i), '(A)') ''
       END IF
+      IF (PRESENT(lift_units)) THEN
+        IF (line_output_has_lift(lines(i)%outputs)) THEN
+          CALL open_line_lift_file(out_root, lines(i)%id, nnode, lift_units(i), ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) THEN
+            CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units); RETURN
+          END IF
+        END IF
+      END IF
     END DO
   END SUBROUTINE open_dynamic_system_line_outputs
 
-  SUBROUTINE write_dynamic_line_outputs(time, lines, models, pos_units, ten_units, work, ErrStat, ErrMsg)
+  SUBROUTINE write_dynamic_line_outputs(time, lines, models, pos_units, ten_units, work, ErrStat, ErrMsg, lift_units)
     !! Append one time row to every requested dynamic per-line output file.
     REAL(wp), INTENT(IN) :: time
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_ModelType), INTENT(IN) :: models(:)
     INTEGER, INTENT(IN) :: pos_units(:), ten_units(:)
+    INTEGER, INTENT(IN), OPTIONAL :: lift_units(:)
     TYPE(ModelOutputWorkspace), INTENT(INOUT) :: work
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
-    INTEGER :: i, ndof, nnode, ne, es
+    INTEGER :: i, ndof, nnode, ne, es, lift_unit
     CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     DO i = 1, SIZE(lines)
-      IF (pos_units(i) == 0 .AND. ten_units(i) == 0) CYCLE
+      lift_unit = 0
+      IF (PRESENT(lift_units)) lift_unit = lift_units(i)
+      IF (pos_units(i) == 0 .AND. ten_units(i) == 0 .AND. lift_unit == 0) CYCLE
       ndof = CD_Model_NDOF(models(i), es, em)
       IF (es /= CD_MODEL_OK) THEN
         ErrStat = CD_DECKDRV_SOLVEFAIL
@@ -17209,6 +17244,22 @@ CONTAINS
           ErrMsg = 'CableDyn_DeckDriver: non-finite dynamic line tension output'
           RETURN
         END IF
+      END IF
+      IF (lift_unit /= 0) THEN
+        BLOCK
+          REAL(wp) :: lift(3, nnode)
+          CALL CD_Get_Model_VIV_Lift(models(i), lift, es, em)
+          IF (es /= CD_MODEL_OK) THEN
+            ErrStat = CD_DECKDRV_SOLVEFAIL
+            ErrMsg = 'CableDyn_DeckDriver: dynamic line VIV lift recovery failed: '//TRIM(em)
+            RETURN
+          END IF
+          CALL write_line_position_row(lift_unit, time, RESHAPE(lift, [3*nnode]), 3, ne, ErrStat)
+          IF (ErrStat /= CD_DECKDRV_OK) THEN
+            ErrMsg = 'CableDyn_DeckDriver: non-finite dynamic line VIV lift output'
+            RETURN
+          END IF
+        END BLOCK
       END IF
     END DO
   END SUBROUTINE write_dynamic_line_outputs
@@ -17267,23 +17318,27 @@ CONTAINS
     END IF
   END SUBROUTINE write_line_tension_row
 
-  SUBROUTINE write_dynamic_system_line_outputs(time, lines, system, pos_units, ten_units, work, ErrStat, ErrMsg)
+  SUBROUTINE write_dynamic_system_line_outputs(time, lines, system, pos_units, ten_units, work, ErrStat, ErrMsg, &
+                                               lift_units)
     !! Append one time row to requested dynamic per-line output files for a point-system deck.
     REAL(wp), INTENT(IN) :: time
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_SystemType), INTENT(IN) :: system
     INTEGER, INTENT(IN) :: pos_units(:), ten_units(:)
+    INTEGER, INTENT(IN), OPTIONAL :: lift_units(:)
     TYPE(ModelOutputWorkspace), INTENT(INOUT) :: work
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
-    INTEGER :: i, ndof, nnode, ne, es
+    INTEGER :: i, ndof, nnode, ne, es, lift_unit
     CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     DO i = 1, SIZE(lines)
-      IF (pos_units(i) == 0 .AND. ten_units(i) == 0) CYCLE
+      lift_unit = 0
+      IF (PRESENT(lift_units)) lift_unit = lift_units(i)
+      IF (pos_units(i) == 0 .AND. ten_units(i) == 0 .AND. lift_unit == 0) CYCLE
       ndof = CD_System_Line_NDOF(system, i, es, em)
       IF (es /= CD_SYSTEM_OK) THEN
         ErrStat = CD_DECKDRV_SOLVEFAIL
@@ -17319,6 +17374,22 @@ CONTAINS
           ErrMsg = 'CableDyn_DeckDriver: non-finite system dynamic line tension output'
           RETURN
         END IF
+      END IF
+      IF (lift_unit /= 0) THEN
+        BLOCK
+          REAL(wp) :: lift(3, nnode)
+          CALL CD_Get_System_Line_VIV_Lift(system, i, lift, es, em)
+          IF (es /= CD_SYSTEM_OK) THEN
+            ErrStat = CD_DECKDRV_SOLVEFAIL
+            ErrMsg = 'CableDyn_DeckDriver: dynamic line VIV lift recovery failed: '//TRIM(em)
+            RETURN
+          END IF
+          CALL write_line_position_row(lift_unit, time, RESHAPE(lift, [3*nnode]), 3, ne, ErrStat)
+          IF (ErrStat /= CD_DECKDRV_OK) THEN
+            ErrMsg = 'CableDyn_DeckDriver: non-finite dynamic line VIV lift output'
+            RETURN
+          END IF
+        END BLOCK
       END IF
     END DO
   END SUBROUTINE write_dynamic_system_line_outputs
@@ -17434,8 +17505,9 @@ CONTAINS
     END DO
   END SUBROUTINE write_dynamic_finite_line_outputs
 
-  SUBROUTINE close_dynamic_line_outputs(pos_units, ten_units)
+  SUBROUTINE close_dynamic_line_outputs(pos_units, ten_units, lift_units)
     INTEGER, ALLOCATABLE, INTENT(INOUT) :: pos_units(:), ten_units(:)
+    INTEGER, ALLOCATABLE, INTENT(INOUT), OPTIONAL :: lift_units(:)
     INTEGER :: i
 
     IF (ALLOCATED(pos_units)) THEN
@@ -17450,7 +17522,52 @@ CONTAINS
       END DO
       DEALLOCATE (ten_units)
     END IF
+    IF (PRESENT(lift_units)) THEN
+      IF (ALLOCATED(lift_units)) THEN
+        DO i = 1, SIZE(lift_units)
+          IF (lift_units(i) /= 0) CLOSE (lift_units(i))
+        END DO
+        DEALLOCATE (lift_units)
+      END IF
+    END IF
   END SUBROUTINE close_dynamic_line_outputs
+
+  SUBROUTINE open_line_lift_file(out_root, line_id, nnode, unit, ErrStat, ErrMsg, deck_nodes)
+    !! Open <out_root>.Line<line_id>.V.out (LINES Outputs flag V) and write its header: the VIV
+    !! lift force at each node, End A -> End B. deck_nodes, on a line whose mesh the static solve
+    !! refined, names the deck node of each node (0: added), as the .p.out file does.
+    CHARACTER(*), INTENT(IN) :: out_root
+    INTEGER, INTENT(IN) :: line_id, nnode
+    INTEGER, INTENT(OUT) :: unit
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, INTENT(IN), OPTIONAL :: deck_nodes(:)
+    CHARACTER(LEN(out_root) + 32) :: path
+    INTEGER :: ios, node
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    path = TRIM(out_root)//'.Line'//TRIM(int_to_str(line_id))//'.V.out'
+    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    IF (ios /= 0) THEN
+      unit = 0
+      CALL fail(ErrStat, ErrMsg, 'cannot open dynamic line VIV lift output file: '//TRIM(path)); RETURN
+    END IF
+    WRITE (unit, '(A)') '# CableDyn dynamic line VIV lift force at the nodes; public node order EndA -> EndB'
+    IF (PRESENT(deck_nodes)) THEN
+      WRITE (unit, '(A)', ADVANCE='NO') '# DeckNode'
+      DO node = 1, nnode
+        WRITE (unit, '(A,I0)', ADVANCE='NO') char_tab(), deck_nodes(node)
+      END DO
+      WRITE (unit, '(A)') ''
+    END IF
+    WRITE (unit, '(A)', ADVANCE='NO') 'Time(s)'
+    DO node = 1, nnode
+      WRITE (unit, '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'LiftX(N)'
+      WRITE (unit, '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'LiftY(N)'
+      WRITE (unit, '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'LiftZ(N)'
+    END DO
+    WRITE (unit, '(A)') ''
+  END SUBROUTINE open_line_lift_file
 
   SUBROUTINE open_dynamic_rod_outputs(out_root, rods, pos_units, ErrStat, ErrMsg)
     !! Open optional per-rod dynamic endpoint-position time-series files.
@@ -17551,7 +17668,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER :: unit, ios, step, nstep, es, n_iter, step_substeps
-    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
+    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:), lift_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     INTEGER :: recovery_event_count, recovery_max_substeps_used
     CHARACTER(LEN(out_root) + 8) :: path
@@ -17596,12 +17713,13 @@ CONTAINS
         RETURN
       END IF
     END IF
-    CALL open_dynamic_line_outputs(out_root, lines, models, pos_units, ten_units, ErrStat, ErrMsg)
+    CALL open_dynamic_line_outputs(out_root, lines, models, pos_units, ten_units, ErrStat, ErrMsg, &
+                                   lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     path = TRIM(out_root)//'.out'
     OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     IF (ios /= 0) THEN
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
     END IF
     WRITE (unit, '(A)') '# CableDyn driver output (dynamic; convergence quality is reported by status message)'
@@ -17613,13 +17731,14 @@ CONTAINS
     END IF
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       RETURN
     END IF
-    CALL write_dynamic_line_outputs(CD_ZERO, lines, models, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+    CALL write_dynamic_line_outputs(CD_ZERO, lines, models, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                    lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       RETURN
     END IF
     ! the run audit starts from the initial state (its tension scale is that of t = 0)
@@ -17631,7 +17750,7 @@ CONTAINS
         CALL update_wave_models(models, opts, t, hydro_work, es, em)
         IF (es /= CD_DECKDRV_OK) THEN
           CLOSE (unit)
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           ErrStat = es
           ErrMsg = em
           RETURN
@@ -17653,7 +17772,7 @@ CONTAINS
       END IF
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         converged = .FALSE.
         ErrStat = es
         ErrMsg = TRIM(em)//INSPECTION_NOTE
@@ -17663,7 +17782,7 @@ CONTAINS
                                              max_consecutive_miss, first_miss_time, last_miss_time)
       IF (.NOT. step_converged .OR. stalled) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL CD_Classify_Dynamic_Completion('dynamic run', nstep, miss_count, max_consecutive_miss, &
                                             first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
         RETURN
@@ -17671,7 +17790,7 @@ CONTAINS
       CALL check_models_plausibility(models, lines, opts%max_strain, t, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         converged = .FALSE.
         ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
         RETURN
@@ -17686,20 +17805,21 @@ CONTAINS
       END IF
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         RETURN
       END IF
-      CALL write_dynamic_line_outputs(t, lines, models, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+      CALL write_dynamic_line_outputs(t, lines, models, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                      lift_units=lift_units)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         RETURN
       END IF
       CALL CD_Profile_Enter(CD_PROF_PROGRESS)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
-    CALL close_dynamic_line_outputs(pos_units, ten_units)
+    CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
     CALL CD_Classify_Dynamic_Completion('dynamic run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
     IF (ErrStat == CD_DECKDRV_OK .AND. recovery_event_count > 0) THEN
@@ -17727,7 +17847,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER :: unit, ios, step, nstep, es, n_iter
-    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
+    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:), lift_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     CHARACTER(LEN(out_root) + 8) :: path
     CHARACTER(1024) :: em
@@ -17749,12 +17869,13 @@ CONTAINS
     max_consecutive_miss = 0
     first_miss_time = CD_ZERO
     last_miss_time = CD_ZERO
-    CALL open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg)
+    CALL open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg, &
+                                          lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     path = TRIM(out_root)//'.out'
     OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     IF (ios /= 0) THEN
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
     END IF
     WRITE (unit, '(A)') '# CableDyn driver output (dynamic points; convergence quality is reported by status message)'
@@ -17762,7 +17883,7 @@ CONTAINS
     CALL update_system_point_hydro(system, points, opts, CD_ZERO, hydro_work, es, em)
     IF (es /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       ErrStat = es
       ErrMsg = em
       RETURN
@@ -17770,7 +17891,7 @@ CONTAINS
     CALL update_system_line_hydro(system, opts, CD_ZERO, hydro_work, es, em, initial_condition=.TRUE.)
     IF (es /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       ErrStat = es
       ErrMsg = em
       RETURN
@@ -17778,13 +17899,14 @@ CONTAINS
     CALL write_system_model_row(unit, CD_ZERO, channels, lines, points, system, output_work, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       RETURN
     END IF
-    CALL write_dynamic_system_line_outputs(CD_ZERO, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+    CALL write_dynamic_system_line_outputs(CD_ZERO, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                           lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       RETURN
     END IF
     ! the run audit starts from the initial state (its tension scale is that of t = 0)
@@ -17795,7 +17917,7 @@ CONTAINS
       CALL update_system_point_hydro(system, points, opts, t, hydro_work, es, em)
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         ErrStat = es
         ErrMsg = em
         RETURN
@@ -17803,7 +17925,7 @@ CONTAINS
       CALL update_system_line_hydro(system, opts, t, hydro_work, es, em)
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         ErrStat = es
         ErrMsg = em
         RETURN
@@ -17813,7 +17935,7 @@ CONTAINS
       CALL CD_Profile_Enter(CD_PROF_CHECK)
       IF (es /= CD_SYSTEM_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         ErrStat = CD_DECKDRV_SOLVEFAIL
         ErrMsg = 'CableDyn_DeckDriver: dynamic point-system step failed: '//TRIM(em)
         RETURN
@@ -17822,7 +17944,7 @@ CONTAINS
                                              max_consecutive_miss, first_miss_time, last_miss_time)
       IF (.NOT. step_converged .OR. stalled) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL CD_Classify_Dynamic_Completion('dynamic point-system run', nstep, miss_count, &
                                             max_consecutive_miss, first_miss_time, last_miss_time, &
                                             converged, ErrStat, ErrMsg)
@@ -17832,7 +17954,7 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         converged = .FALSE.
         RETURN
       END IF
@@ -17841,7 +17963,7 @@ CONTAINS
         CALL check_and_fire_failures(system, lines, points, failures, t, es, em)
         IF (es /= CD_DECKDRV_OK) THEN
           CLOSE (unit)
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           ErrStat = es
           ErrMsg = em
           RETURN
@@ -17852,20 +17974,21 @@ CONTAINS
       CALL write_system_model_row(unit, t, channels, lines, points, system, output_work, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         RETURN
       END IF
-      CALL write_dynamic_system_line_outputs(t, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+      CALL write_dynamic_system_line_outputs(t, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                             lift_units=lift_units)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         RETURN
       END IF
       CALL CD_Profile_Enter(CD_PROF_PROGRESS)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
-    CALL close_dynamic_line_outputs(pos_units, ten_units)
+    CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
     CALL CD_Classify_Dynamic_Completion('dynamic point-system run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
     IF (ErrStat == CD_DECKDRV_OK) CALL report_system_line_audits(system, lines, opts%dtM)
@@ -18101,7 +18224,7 @@ CONTAINS
 
     TYPE(RigidBodyState), ALLOCATABLE :: rigid(:)
     INTEGER :: unit, ios, step, nstep, es, n_iter
-    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
+    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:), lift_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     CHARACTER(LEN(out_root) + 8) :: path
     CHARACTER(1024) :: em
@@ -18145,7 +18268,8 @@ CONTAINS
     END IF
     WRITE (unit, '(A)') '# CableDyn driver output (Rigid6 dynamic; convergence quality is reported by status message)'
     CALL write_header(unit, channels)
-    CALL open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg)
+    CALL open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg, &
+                                          lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
       RETURN
@@ -18153,7 +18277,7 @@ CONTAINS
     CALL update_system_line_hydro(system, opts, CD_ZERO, hydro_work, es, em, initial_condition=.TRUE.)
     IF (es /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       ErrStat = es
       ErrMsg = em
       RETURN
@@ -18162,13 +18286,14 @@ CONTAINS
                                 rigid=rigid, opts=opts, bathymetry=bathymetry)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       RETURN
     END IF
-    CALL write_dynamic_system_line_outputs(CD_ZERO, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+    CALL write_dynamic_system_line_outputs(CD_ZERO, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                           lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       RETURN
     END IF
     ! the run audit starts from the initial state (its tension scale is that of t = 0)
@@ -18184,7 +18309,7 @@ CONTAINS
         CALL update_system_line_hydro(system, opts, t, hydro_work, es, em)
         IF (es /= CD_DECKDRV_OK) THEN
           CLOSE (unit)
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           ErrStat = es
           ErrMsg = em
           RETURN
@@ -18196,7 +18321,7 @@ CONTAINS
       CALL CD_Profile_Enter(CD_PROF_CHECK)
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         ErrStat = es
         ErrMsg = em
         RETURN
@@ -18205,7 +18330,7 @@ CONTAINS
                                              max_consecutive_miss, first_miss_time, last_miss_time)
       IF (.NOT. step_converged .OR. stalled) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL CD_Classify_Dynamic_Completion('Rigid6 dynamic run', nstep, miss_count, max_consecutive_miss, &
                                             first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
         RETURN
@@ -18214,7 +18339,7 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         converged = .FALSE.
         RETURN
       END IF
@@ -18223,7 +18348,7 @@ CONTAINS
         CALL check_and_fire_failures(system, lines, points, failures, t, es, em)
         IF (es /= CD_DECKDRV_OK) THEN
           CLOSE (unit)
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           ErrStat = es
           ErrMsg = em
           RETURN
@@ -18235,20 +18360,21 @@ CONTAINS
                                   rigid=rigid, opts=opts, bathymetry=bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         RETURN
       END IF
-      CALL write_dynamic_system_line_outputs(t, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+      CALL write_dynamic_system_line_outputs(t, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                             lift_units=lift_units)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         RETURN
       END IF
       CALL CD_Profile_Enter(CD_PROF_PROGRESS)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
-    CALL close_dynamic_line_outputs(pos_units, ten_units)
+    CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
     CALL CD_Classify_Dynamic_Completion('Rigid6 dynamic run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
     IF (ErrStat == CD_DECKDRV_OK) CALL report_system_line_audits(system, lines, opts%dtM)
@@ -18273,7 +18399,7 @@ CONTAINS
 
     TYPE(RodState), ALLOCATABLE :: rod_state(:)
     INTEGER :: unit, ios, step, nstep, es, n_iter
-    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
+    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:), lift_units(:)
     INTEGER, ALLOCATABLE :: rod_pos_units(:)
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     CHARACTER(LEN(out_root) + 8) :: path
@@ -18319,7 +18445,8 @@ CONTAINS
     END IF
     WRITE (unit, '(A)') '# CableDyn driver output (rod dynamic; convergence quality is reported by status message)'
     CALL write_header(unit, channels)
-    CALL open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg)
+    CALL open_dynamic_system_line_outputs(out_root, lines, system, pos_units, ten_units, ErrStat, ErrMsg, &
+                                          lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
       RETURN
@@ -18327,13 +18454,13 @@ CONTAINS
     CALL open_dynamic_rod_outputs(out_root, rods, rod_pos_units, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       RETURN
     END IF
     CALL update_system_line_hydro(system, opts, CD_ZERO, hydro_work, es, em, initial_condition=.TRUE.)
     IF (es /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL close_dynamic_rod_outputs(rod_pos_units)
       ErrStat = es
       ErrMsg = em
@@ -18343,21 +18470,22 @@ CONTAINS
                                 rods=rod_state, opts=opts, bathymetry=bathymetry)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL close_dynamic_rod_outputs(rod_pos_units)
       RETURN
     END IF
-    CALL write_dynamic_system_line_outputs(CD_ZERO, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+    CALL write_dynamic_system_line_outputs(CD_ZERO, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                           lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL close_dynamic_rod_outputs(rod_pos_units)
       RETURN
     END IF
     CALL write_dynamic_rod_outputs(CD_ZERO, rods, rod_state, rod_pos_units, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
+      CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL close_dynamic_rod_outputs(rod_pos_units)
       RETURN
     END IF
@@ -18374,7 +18502,7 @@ CONTAINS
         CALL update_system_line_hydro(system, opts, t, hydro_work, es, em)
         IF (es /= CD_DECKDRV_OK) THEN
           CLOSE (unit)
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL close_dynamic_rod_outputs(rod_pos_units)
           ErrStat = es
           ErrMsg = em
@@ -18387,7 +18515,7 @@ CONTAINS
       CALL CD_Profile_Enter(CD_PROF_CHECK)
       IF (es /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL close_dynamic_rod_outputs(rod_pos_units)
         ErrStat = es
         ErrMsg = em
@@ -18397,7 +18525,7 @@ CONTAINS
                                              max_consecutive_miss, first_miss_time, last_miss_time)
       IF (.NOT. step_converged .OR. stalled) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL close_dynamic_rod_outputs(rod_pos_units)
         CALL CD_Classify_Dynamic_Completion('rod dynamic run', nstep, miss_count, max_consecutive_miss, &
                                             first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
@@ -18407,7 +18535,7 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         ErrMsg = TRIM(ErrMsg)//INSPECTION_NOTE
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL close_dynamic_rod_outputs(rod_pos_units)
         converged = .FALSE.
         RETURN
@@ -18419,21 +18547,22 @@ CONTAINS
                                   rods=rod_state, opts=opts, bathymetry=bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL close_dynamic_rod_outputs(rod_pos_units)
         RETURN
       END IF
-      CALL write_dynamic_system_line_outputs(t, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg)
+      CALL write_dynamic_system_line_outputs(t, lines, system, pos_units, ten_units, output_work, ErrStat, ErrMsg, &
+                                             lift_units=lift_units)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL close_dynamic_rod_outputs(rod_pos_units)
         RETURN
       END IF
       CALL write_dynamic_rod_outputs(t, rods, rod_state, rod_pos_units, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
+        CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
         CALL close_dynamic_rod_outputs(rod_pos_units)
         RETURN
       END IF
@@ -18441,7 +18570,7 @@ CONTAINS
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
-    CALL close_dynamic_line_outputs(pos_units, ten_units)
+    CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
     CALL close_dynamic_rod_outputs(rod_pos_units)
     CALL CD_Classify_Dynamic_Completion('rod dynamic run', nstep, miss_count, max_consecutive_miss, &
                                         first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
@@ -19703,6 +19832,7 @@ CONTAINS
     TYPE(CD_LineInitSummary), ALLOCATABLE :: sum_sys(:), sum_cab(:), summaries(:)
     LOGICAL, ALLOCATABLE :: is_fin(:), is_ei0(:)
     INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:), cpos_units(:), cten_units(:), rod_units(:)
+    INTEGER, ALLOCATABLE :: lift_units(:), clift_units(:)
     INTEGER :: i, k, c, ir, ib, pa, pb, node, unit, ios, step, nstep, es, n_iter, bid
     INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
     LOGICAL :: step_converged, stalled
@@ -20004,12 +20134,14 @@ CONTAINS
       'status message)'
     CALL write_header(unit, channels)
     IF (mb%has_sys) THEN
-      CALL open_dynamic_system_line_outputs(out_root, sys_lines, mb%system, pos_units, ten_units, ErrStat, ErrMsg)
+      CALL open_dynamic_system_line_outputs(out_root, sys_lines, mb%system, pos_units, ten_units, ErrStat, ErrMsg, &
+                                            lift_units=lift_units)
     ELSE
       ALLOCATE (pos_units(0), ten_units(0))
     END IF
     IF (ErrStat == CD_DECKDRV_OK) &
-      CALL open_dynamic_hermite_line_outputs(out_root, cab_lines, mb%cables, cpos_units, cten_units, ErrStat, ErrMsg)
+      CALL open_dynamic_hermite_line_outputs(out_root, cab_lines, mb%cables, cpos_units, cten_units, ErrStat, ErrMsg, &
+                                             lift_units=clift_units)
     IF (ErrStat == CD_DECKDRV_OK) CALL open_dynamic_rod_outputs(out_root, own, rod_units, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) GOTO 800
     IF (probe_armed .AND. SIZE(mb%rigid) > 0) THEN
@@ -20081,8 +20213,8 @@ CONTAINS
     IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(mb_ranges, out_root, ErrStat, ErrMsg)
 800 CONTINUE
     CLOSE (unit)
-    IF (ALLOCATED(pos_units)) CALL close_dynamic_line_outputs(pos_units, ten_units)
-    IF (ALLOCATED(cpos_units)) CALL close_dynamic_line_outputs(cpos_units, cten_units)
+    IF (ALLOCATED(pos_units)) CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
+    IF (ALLOCATED(cpos_units)) CALL close_dynamic_line_outputs(cpos_units, cten_units, clift_units)
     IF (ALLOCATED(rod_units)) CALL close_dynamic_rod_outputs(rod_units)
 900 CONTINUE
     IF (ErrStat /= CD_DECKDRV_OK) converged = .FALSE.
@@ -20165,11 +20297,12 @@ CONTAINS
       WRITE (unit, ROW_VALUES_FMT) time, (char_tab(), vals(j), j=1, SIZE(channels))
       IF (mb%has_sys) THEN
         CALL write_dynamic_system_line_outputs(time, sys_lines, mb%system, pos_units, ten_units, output_work, &
-                                               ErrStat, ErrMsg)
+                                               ErrStat, ErrMsg, lift_units=lift_units)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
       END IF
       IF (SIZE(mb%cables) > 0) THEN
-        CALL write_dynamic_hermite_line_outputs(time, cab_lines, mb%cables, cpos_units, cten_units, ErrStat, ErrMsg)
+        CALL write_dynamic_hermite_line_outputs(time, cab_lines, mb%cables, cpos_units, cten_units, ErrStat, ErrMsg, &
+                                                lift_units=clift_units)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
       END IF
       CALL write_dynamic_rod_outputs(time, own, mb%rods, rod_units, ErrStat, ErrMsg)
@@ -27975,7 +28108,7 @@ CONTAINS
 
     INTEGER :: unit, ios, step, nstep, i, es, pidx, tensile_events, tensile_element
     INTEGER :: recovery_events, recovery_max_used
-    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
+    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:), lift_units(:)
     CHARACTER(LEN(out_root) + 8) :: path
     CHARACTER(1024) :: em
     REAL(wp) :: t, up(3), uv(3), ua(3), tensile_force, tensile_threshold, tensile_xi, tensile_time, turn
@@ -28031,7 +28164,8 @@ CONTAINS
     END IF
     WRITE (unit, '(A)') '# CableDyn driver output (finite-EI dynamic; production cubic-Hermite route)'
     CALL write_header(unit, channels)
-    CALL open_dynamic_hermite_line_outputs(out_root, lines, cables, pos_units, ten_units, ErrStat, ErrMsg)
+    CALL open_dynamic_hermite_line_outputs(out_root, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, &
+                                           lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CLOSE (unit); RETURN
     END IF
@@ -28042,9 +28176,9 @@ CONTAINS
       CALL write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
     IF (ErrStat == CD_DECKDRV_OK) &
       CALL write_dynamic_hermite_line_outputs(CD_ZERO, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, &
-                                              ranges=ranges)
+                                              ranges=ranges, lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
-      CLOSE (unit); CALL close_dynamic_line_outputs(pos_units, ten_units); RETURN
+      CLOSE (unit); CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units); RETURN
     END IF
 
     CALL start_driver_progress(progress, nstep, opts%dtM)
@@ -28095,13 +28229,13 @@ CONTAINS
                                    has_motion=opts%has_motion_file, ranges=ranges)
       IF (ErrStat == CD_DECKDRV_OK) &
         CALL write_dynamic_hermite_line_outputs(t, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, &
-                                                ranges=ranges)
+                                                ranges=ranges, lift_units=lift_units)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL CD_Profile_Enter(CD_PROF_PROGRESS)
       CALL update_driver_progress(progress, step, t)
     END DO
     CLOSE (unit)
-    CALL close_dynamic_line_outputs(pos_units, ten_units)
+    CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
     IF (opts%tensile_mode == CD_HCDYN_TENSILE_WARN) THEN
       DO i = 1, SIZE(cables)
         CALL CD_HFMF_Get_Tensile_Diagnostics(cables(i), tensile_events, tensile_force, &
@@ -28540,11 +28674,14 @@ CONTAINS
     WRITE (unit, '(A)') ''
   END SUBROUTINE write_hermite_model_row
 
-  SUBROUTINE open_dynamic_hermite_line_outputs(out_root, lines, cables, pos_units, ten_units, ErrStat, ErrMsg)
+  SUBROUTINE open_dynamic_hermite_line_outputs(out_root, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, &
+                                               lift_units)
     CHARACTER(*), INTENT(IN) :: out_root
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cables(:)
     INTEGER, ALLOCATABLE, INTENT(OUT) :: pos_units(:), ten_units(:)
+    ! the VIV lift files (flag V) of the lines, when the caller takes them
+    INTEGER, ALLOCATABLE, INTENT(OUT), OPTIONAL :: lift_units(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, ios, node, seg
@@ -28552,13 +28689,17 @@ CONTAINS
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     ALLOCATE (pos_units(SIZE(lines)), ten_units(SIZE(lines)))
     pos_units = 0; ten_units = 0
+    IF (PRESENT(lift_units)) THEN
+      ALLOCATE (lift_units(SIZE(lines)))
+      lift_units = 0
+    END IF
     DO i = 1, SIZE(lines)
       IF (.NOT. line_outputs_requested(lines(i)%outputs)) CYCLE
       IF (line_output_has_flag(lines(i)%outputs, 'p')) THEN
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.p.out'
         OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
         IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open Hermite line position output: '//TRIM(path)); RETURN
         END IF
         WRITE (pos_units(i), '(A)') '# CableDyn finite-EI Hermite line node positions; public node order EndA -> EndB'
@@ -28583,7 +28724,7 @@ CONTAINS
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.t.out'
         OPEN (NEWUNIT=ten_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
         IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
+          CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open Hermite line tension output: '//TRIM(path)); RETURN
         END IF
         WRITE (ten_units(i), '(A)') '# CableDyn finite-EI Hermite segment tensions; public order EndA -> EndB'
@@ -28593,10 +28734,24 @@ CONTAINS
         END DO
         WRITE (ten_units(i), '(A)') ''
       END IF
+      IF (PRESENT(lift_units)) THEN
+        IF (line_output_has_lift(lines(i)%outputs)) THEN
+          IF (ALLOCATED(cables(i)%deck_node)) THEN
+            CALL open_line_lift_file(out_root, lines(i)%id, cables(i)%line%nn, lift_units(i), ErrStat, ErrMsg, &
+                                     deck_nodes=[(CD_Cable_Deck_Node(cables(i), node), node=1, cables(i)%line%nn)])
+          ELSE
+            CALL open_line_lift_file(out_root, lines(i)%id, cables(i)%line%nn, lift_units(i), ErrStat, ErrMsg)
+          END IF
+          IF (ErrStat /= CD_DECKDRV_OK) THEN
+            CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units); RETURN
+          END IF
+        END IF
+      END IF
     END DO
   END SUBROUTINE open_dynamic_hermite_line_outputs
 
-  SUBROUTINE write_dynamic_hermite_line_outputs(time, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, ranges)
+  SUBROUTINE write_dynamic_hermite_line_outputs(time, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, ranges, &
+                                                lift_units)
     !! One row of the per-line position and segment-tension files. ranges, when given, is the
     !! range set sampled for this row by write_hermite_model_row: a line with a range graph
     !! then reuses the segment tensions of that sample's recovery pass (range_sample_cable).
@@ -28607,7 +28762,9 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_RangeSet), INTENT(IN), OPTIONAL :: ranges
-    INTEGER :: i, node, inode, seg, k
+    INTEGER, INTENT(IN), OPTIONAL :: lift_units(:)
+    INTEGER :: i, node, inode, seg, k, es
+    CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     DO i = 1, SIZE(lines)
       ! Each row is assembled in deck order and written in one WRITE; a non-finite entry
@@ -28652,6 +28809,27 @@ CONTAINS
           WRITE (ten_units(i), ROW_VALUES_FMT) time, (char_tab(), tension(k), k=1, SIZE(tension))
         END BLOCK
       END IF
+      IF (PRESENT(lift_units)) THEN
+        IF (lift_units(i) /= 0) THEN
+          BLOCK
+            REAL(wp) :: lift(3, cables(i)%line%nn), row(3*cables(i)%line%nn)
+            CALL CD_HermiteCable_Dyn_VIV_Node_Lift(cables(i)%line, lift, es, em)
+            IF (es /= CD_HCDYN_OK) THEN
+              CALL fail_solve(ErrStat, ErrMsg, 'Hermite line VIV lift recovery failed: '//TRIM(em)); RETURN
+            END IF
+            DO node = 1, cables(i)%line%nn
+              inode = deck_to_internal_node(node, cables(i)%line%ne)
+              DO k = 1, 3
+                row(3*node - 3 + k) = cable_global_component(cables(i), lift(:, inode), k)
+              END DO
+            END DO
+            IF (.NOT. ALL(IEEE_IS_FINITE(row))) THEN
+              CALL fail_solve(ErrStat, ErrMsg, 'non-finite Hermite line VIV lift output'); RETURN
+            END IF
+            WRITE (lift_units(i), ROW_VALUES_FMT) time, (char_tab(), row(k), k=1, SIZE(row))
+          END BLOCK
+        END IF
+      END IF
     END DO
   END SUBROUTINE write_dynamic_hermite_line_outputs
 
@@ -28682,6 +28860,11 @@ CONTAINS
     converged = .TRUE.
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
+    ! the two-moving-end finite-EI line carries no VIV (Cl > 0 is refused on it), so no lift
+    IF (ANY([(line_output_has_lift(lines(step)%outputs), step=1, SIZE(lines))])) THEN
+      CALL fail(ErrStat, ErrMsg, 'the LINES Outputs flag V (VIV lift) needs a line that carries VIV, which a '// &
+                'finite-EI line with two moving ends does not'); RETURN
+    END IF
     nstep = NINT(opts%tmax/opts%dtM)
     CALL range_setup_planned(output_work%rset, lines, channels, opts, ErrStat, ErrMsg, fmodels=models, &
                              bathymetry=bathymetry)
@@ -35741,10 +35924,11 @@ CONTAINS
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     INTEGER :: i
 
-    ! the per-line time-series files (p, t); the range graph (r) is not one of them
+    ! the per-line time-series files (p, t, V); the range graph (r) is not one of them
     requested = .FALSE.
     DO i = 1, SIZE(lines)
-      IF (line_output_has_flag(lines(i)%outputs, 'p') .OR. line_output_has_flag(lines(i)%outputs, 't')) THEN
+      IF (line_output_has_flag(lines(i)%outputs, 'p') .OR. line_output_has_flag(lines(i)%outputs, 't') .OR. &
+          line_output_has_lift(lines(i)%outputs)) THEN
         requested = .TRUE.
         RETURN
       END IF
@@ -35760,17 +35944,24 @@ CONTAINS
     has_flag = INDEX(lo, flag(1:1)) > 0
   END FUNCTION line_output_has_flag
 
+  LOGICAL FUNCTION line_output_has_lift(flags) RESULT(has_flag)
+    !! The VIV lift file flag V. Case-sensitive, as MoorDyn's line flags are: there v is the node
+    !! velocities, which CableDyn does not write.
+    CHARACTER(*), INTENT(IN) :: flags
+    has_flag = INDEX(flags, 'V') > 0
+  END FUNCTION line_output_has_lift
+
   LOGICAL FUNCTION valid_line_output_flags(flags) RESULT(ok)
     CHARACTER(*), INTENT(IN) :: flags
     CHARACTER(NAMELEN) :: lo
     INTEGER :: i
 
-    lo = to_lower(TRIM(flags))
+    lo = TRIM(flags)
     ok = .TRUE.
     IF (LEN_TRIM(lo) == 0 .OR. TRIM(lo) == '-') RETURN
     DO i = 1, LEN_TRIM(lo)
       SELECT CASE (lo(i:i))
-      CASE ('p', 't', 'r')
+      CASE ('p', 'P', 't', 'T', 'r', 'R', 'V')
       CASE DEFAULT
         ok = .FALSE.
         RETURN
