@@ -170,8 +170,13 @@ MODULE CableDyn_DeckDriver
   ! of a typed mass (a mass written to seven digits against a diameter does not cancel exactly).
   ! It only selects the wording of a diagnosis -- an EI=0 line type rejected as net-buoyant
   ! whose mass lies within it below the displaced water mass, a finite-EI line whose every
-  ! element weighs within it of nothing -- and changes no acceptance rule.
+  ! element weighs within it of nothing -- and the side a weightless slack line bows to
+  ! (light_aux_weight); it changes no acceptance rule.
   REAL(wp), PARAMETER :: NEUTRAL_BUOYANCY_REL_TOL = 1.0e-6_wp
+  ! An azimuth within AZI_ROUNDOFF_DEG of 0 (mod 360) is reported as exactly 0
+  ! (wrap_azimuth_deg): far above the round-off of a tangent's angle (~1e-12 deg) and far
+  ! below the output resolution (~4e-5 deg at 360).
+  REAL(wp), PARAMETER :: AZI_ROUNDOFF_DEG = 1.0e-9_wp
   ! A section whose segments are longer than COARSE_SECTION_FRACTION of its line (coarser than a
   ! uniform eight-segment line) is warned about as too coarse (warn_coarse_sections). A static
   ! strain above STATIC_STRAIN_NOTE_DEFAULT is noted (static_strain_note) when OPTION maxStrain
@@ -469,6 +474,9 @@ MODULE CableDyn_DeckDriver
     LOGICAL :: stock_row = .FALSE.
     LOGICAL :: has_syrope_ic = .FALSE.
     REAL(wp) :: syrope_tmax0 = CD_ZERO, syrope_tmean0 = CD_ZERO
+    ! The range of the line's tangent azimuths: (-180, 180] when set, otherwise [0, 360)
+    ! (set_azimuth_ranges).
+    LOGICAL :: azi_signed = .FALSE.
     ! Public deck order is End A (column 1) then End B (column 2). The no-moment
     ! Ez vectors follow the A-to-B convention and are expressed in the connected
     ! parent's reference axes (global axes for fixed/anchored ends).
@@ -1651,7 +1659,7 @@ CONTAINS
   RECURSIVE SUBROUTINE build_one_hermite_cable(ln, sections, types, points, opts, dt, cable, coupled_node, &
                                                ErrStat, ErrMsg, standalone_controls, bathymetry, &
                                                fairlead_orientation, init_note, coarse_pass, fold_support, &
-                                               install_viv)
+                                               install_viv, aux_weight)
     !! Build one COUPLED cubic-Hermite lazy-wave cable (CD_HFMF) from a finite-EI deck
     !! LINE -- the production Hermite bending path shared by the coupled route and
     !! standalone and coupled finite-EI dynamics, including flat/structured seabed contact.
@@ -1685,6 +1693,9 @@ CONTAINS
     ! Install the cross-flow VIV of the line's Cl > 0 sections (the standalone finite-EI march;
     ! the other routes refuse such a line before building it).
     LOGICAL, INTENT(IN), OPTIONAL :: install_viv
+    ! An auxiliary weight [N/m] added to every element's net weight (light_line_route: the
+    ! line solved heavier, whose equilibrium is carried back to its own weight).
+    REAL(wp), INTENT(IN), OPTIONAL :: aux_weight
 
     INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:), dynamic_fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), ei(:), gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
@@ -1727,7 +1738,7 @@ CONTAINS
     LOGICAL :: primary_done, primary_inadmissible, tolerance_note, stable, kink_refined, sequence_done
     LOGICAL :: primary_walked, walk_rejected, primary_walk_planar
     ! Why the bow behind the fairlead was not reached (bow_route), blank when not tried.
-    CHARACTER(1024) :: bow_msg, refine_msg
+    CHARACTER(1024) :: bow_msg, refine_msg, light_msg
     ! Set when the deck-mesh equilibrium failed the stability test and the refined one passed.
     LOGICAL :: stability_refined
     ! Elements of the mesh whose equilibrium failed the stability test before that refinement.
@@ -1966,10 +1977,17 @@ CONTAINS
       CALL attachment_nodes(l0, ln%att(1, :), att_node, att_offset)
       CALL smear_attachments(w, l0, att_node, ln%att, opts%rhoW, opts%g)
     END IF
+    IF (PRESENT(aux_weight)) w = w + aux_weight
     ! Zero net weight everywhere (to the neutral-buoyancy band, attachments included): the line has
     ! no catenary, and the net-heavy diagnosis of a line too long for its span does not apply.
     weightless_line = ALL(ABS(w) <= NEUTRAL_BUOYANCY_REL_TOL*opts%rhoW*opts%g*QUARTER_PI*diam**2)
-    IF (weightless_line) THEN
+    IF (weightless_line .AND. .NOT. NORM2(fairlead(1:2) - anchor(1:2)) > 1.0e-6_wp*NORM2(fairlead - anchor)) THEN
+      geom_cause = 'the weightless (neutrally buoyant) line is longer than its vertical span, so it could only '// &
+                   'bow by bending under axial compression, and with its ends one above the other nothing chooses '// &
+                   'the side of the bow'
+      geom_advice = 'shorten the line to its span, or give it net weight (MassDenInAir above the displaced '// &
+                    'water mass, or clumps) or a tension that holds it taut, or offset its ends horizontally'
+    ELSE IF (weightless_line) THEN
       geom_cause = 'the weightless (neutrally buoyant) line is longer than its span, so it cannot hang as a '// &
                    'catenary: with no net weight a tension-only line is straight, and a longer one could only bow '// &
                    'by bending under axial compression'
@@ -2792,6 +2810,13 @@ CONTAINS
       primary_done = .TRUE.
       saddle_kept = .TRUE.
     END IF
+    ! A slack line too light for both routes is solved heavier and carried back to its own
+    ! weight (light_line_route).
+    IF (.NOT. (sequence_done .OR. primary_done) .AND. light_line_eligible()) THEN
+      CALL light_line_route(sequence_done, light_msg)
+      IF (.NOT. sequence_done) sequence_msg = TRIM(short_message(sequence_msg, 240))// &
+                                              '; weight continuation: '//TRIM(light_msg)
+    END IF
     IF (.NOT. (sequence_done .OR. primary_done)) THEN
       ! A mesh below the conditioning limit is the likely cause and is named first.
       IF (LEN_TRIM(fine_note) > 0) THEN
@@ -3052,6 +3077,7 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable coupled-shell init failed: '//TRIM(em)); RETURN
     END IF
     IF (ALLOCATED(deck_map)) CALL MOVE_ALLOC(deck_map, cable%deck_node)
+    cable%azimuth_signed = ln%azi_signed
     ! a stiffened line: the outputs report the cable's own share of the bend moment
     IF (ALLOCATED(ei_cable)) cable%line%EI_line = ei_cable
     IF (ANY(ba > CD_ZERO)) THEN
@@ -3570,6 +3596,208 @@ CONTAINS
       END IF
       CALL CD_HFMF_End(sw_cable)
     END SUBROUTINE still_water_compression
+
+    REAL(wp) FUNCTION light_aux_weight() RESULT(aux)
+      !! The auxiliary weight of light_line_route [N/m]: LIGHT_AUX bending-weight ratios
+      !! w L^3/EI of the stiffest section, heavy enough for the routes. It takes the sign of
+      !! the line's net weight; a weightless line is made heavy (the bow hangs downward).
+      REAL(wp), PARAMETER :: LIGHT_AUX = 100.0_wp
+      aux = LIGHT_AUX*MAXVAL(ei)/SUM(l0)**3
+      IF (.NOT. weightless_line .AND. SUM(w*l0) < CD_ZERO) aux = -aux
+    END FUNCTION light_aux_weight
+
+    LOGICAL FUNCTION light_line_eligible() RESULT(ok)
+      !! light_line_route applies to a slack, planar line (no current, no attachments, a
+      !! level seabed, no tensile_safety) whose weight, of one sign along it, is below the
+      !! auxiliary weight, and whose chord is not vertical (the auxiliary weight then has a
+      !! component across the chord that chooses the side of the bow).
+      REAL(wp) :: chord
+      ok = .FALSE.
+      IF (PRESENT(aux_weight) .OR. PRESENT(coarse_pass)) RETURN
+      IF (opts%has_current .OR. ALLOCATED(cur_obj) .OR. require_3d_static .OR. has_att .OR. tensile_error) RETURN
+      IF (LEN_TRIM(fine_note) > 0) RETURN
+      IF (PRESENT(bathymetry)) THEN
+        IF (.NOT. bathymetry_flat) RETURN
+      END IF
+      IF (.NOT. (ALL(w >= CD_ZERO) .OR. ALL(w <= CD_ZERO))) RETURN
+      IF (MAXVAL(ei) <= CD_ZERO) RETURN
+      chord = NORM2(fairlead - anchor)
+      IF (.NOT. SUM(l0) > chord) RETURN
+      IF (.NOT. NORM2(fairlead(1:2) - anchor(1:2)) > 1.0e-6_wp*chord) RETURN
+      ok = MAXVAL(ABS(w)) < ABS(light_aux_weight())
+    END FUNCTION light_line_eligible
+
+    SUBROUTINE light_line_route(done, why)
+      !! A slack line with too little weight for its bending stiffness: nothing hangs it as a
+      !! catenary, so it bows under the compression its bending stiffness carries (the
+      !! elastica, about pi^2 EI/L^2), and the routes' seeds lead to the compressed straight
+      !! strut (a saddle) or stall at the round-off of its axial forces. The line is solved
+      !! with the auxiliary weight of light_aux_weight (a recursive build: the routes) and that
+      !! equilibrium is carried back to the line's own weight by a continuation in the weight
+      !! (a quarter per step, the last from 1/256 to none, a failed step halved), held in the
+      !! vertical plane of the chord. Below the tolerances of the routes the continuation also
+      !! accepts the round-off floor of the axial forces, ROUNDOFF_RUNG EA eps |r|/h on the
+      !! largest coordinate |r| and shortest element h (EA (|r'| - 1) is formed from
+      !! coordinate differences). done is set with the audited, stable state in the *_am
+      !! outputs; otherwise why says what stopped it.
+      LOGICAL, INTENT(OUT) :: done
+      CHARACTER(*), INTENT(OUT) :: why
+      REAL(wp), PARAMETER :: LAST_FRACTION = 1.0_wp/256.0_wp, ROUNDOFF_RUNG = 8.0_wp
+      INTEGER, PARAMETER :: MAX_HALVINGS = 10
+      TYPE(CD_HFMF_ModuleType) :: aux_cable
+      REAL(wp), ALLOCATABLE :: q_c(:), q_n(:), curv_n(:), w_k(:), knnode(:)
+      REAL(wp) :: aux, f, f_try, res_n, tol_k(3), tol_used
+      INTEGER :: aux_node, es_r, it_r, nfail, k, k_tol
+      LOGICAL :: last, stable_r
+      CHARACTER(1024) :: em_r
+      CHARACTER(2048) :: aux_note
+      done = .FALSE.
+      why = ''
+      aux = light_aux_weight()
+      IF (PRESENT(bathymetry)) THEN
+        CALL build_one_hermite_cable(ln, sections, types, points, opts, dt, aux_cable, aux_node, es_r, em_r, &
+                                     standalone_controls=.FALSE., bathymetry=bathymetry, &
+                                     fairlead_orientation=fairlead_dcm, init_note=aux_note, aux_weight=aux)
+      ELSE
+        CALL build_one_hermite_cable(ln, sections, types, points, opts, dt, aux_cable, aux_node, es_r, em_r, &
+                                     standalone_controls=.FALSE., fairlead_orientation=fairlead_dcm, &
+                                     init_note=aux_note, aux_weight=aux)
+      END IF
+      IF (es_r /= CD_DECKDRV_OK) THEN
+        WRITE (why, '(A,ES10.3,A)') 'the line with an auxiliary weight of ', aux, ' N/m found no equilibrium: '
+        why = TRIM(why)//' '//TRIM(short_message(em_r, 240))
+        CALL CD_HFMF_End(aux_cable)
+        RETURN
+      END IF
+      IF (SIZE(aux_cable%line%l0) /= SIZE(l0)) THEN
+        why = 'the equilibrium with the auxiliary weight was solved on a refined mesh'
+        CALL CD_HFMF_End(aux_cable)
+        RETURN
+      END IF
+      q_c = aux_cable%line%q
+      CALL CD_HFMF_End(aux_cable)
+      ALLOCATE (q_n(ndof), curv_n(nnode), w_k(SIZE(w)))
+      IF (contact_enabled) THEN
+        ALLOCATE (knnode(nnode))
+        knnode = CD_ZERO
+        DO k = 1, SIZE(l0)
+          knnode(k) = knnode(k) + 0.5_wp*opts%kbot*diam(k)*l0(k)
+          knnode(k + 1) = knnode(k + 1) + 0.5_wp*opts%kbot*diam(k)*l0(k)
+        END DO
+      END IF
+      iters = 0
+      f = CD_ONE
+      f_try = 0.25_wp
+      nfail = 0
+      DO
+        last = f_try <= CD_ZERO
+        w_k = w + aux*f_try
+        tol_k = [static_tol_target, MAX(static_tol_target, COUPLED_STATIC_TOL), &
+                 ROUNDOFF_RUNG*EPSILON(CD_ONE)*MAXVAL(ea)*position_magnitude(q_c)/MINVAL(l0)/ &
+                 MAX(CD_ONE, SUM(ABS(w_k)*l0))]
+        ! The continuation steps go straight to the loosest tolerance; the last tries each.
+        IF (.NOT. last) tol_k(1:2) = MAXVAL(tol_k)
+        es_r = CD_HCSTAT_NOCONVERGE
+        tol_used = CD_ZERO
+        DO k_tol = 1, 3
+          IF (k_tol > 1) THEN
+            IF (.NOT. (tol_k(k_tol) > MAXVAL(tol_k(1:k_tol - 1)))) CYCLE
+          END IF
+          IF (contact_enabled) THEN
+            CALL CD_HermiteCable_Static_Solve(l0, ea, ei, w_k, q_c, fixed_dofs, contact_z, CD_ZERO, 1, 80, &
+                                              tol_k(k_tol), 0.7_wp, q_n, curv_n, res_n, it_r, es_r, em_r, &
+                                              n_buoy_steps=1, contact_kn=knnode, contact_frame_cs=frame_cs, &
+                                              axial_quadrature_order=opts%axial_quadrature_order, &
+                                              bending_quadrature_order=opts%bending_quadrature_order, &
+                                              endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                              endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                              dry_buoyancy=dry_b, water_weight=opts%rhoW*opts%g)
+          ELSE
+            CALL CD_HermiteCable_Static_Solve(l0, ea, ei, w_k, q_c, fixed_dofs, contact_z, CD_ZERO, 1, 80, &
+                                              tol_k(k_tol), 0.7_wp, q_n, curv_n, res_n, it_r, es_r, em_r, &
+                                              n_buoy_steps=1, &
+                                              axial_quadrature_order=opts%axial_quadrature_order, &
+                                              bending_quadrature_order=opts%bending_quadrature_order, &
+                                              endconn_stiffness=endconn_k, endconn_direction=endconn_d0_local, &
+                                              endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
+                                              dry_buoyancy=dry_b, water_weight=opts%rhoW*opts%g)
+          END IF
+          iters = iters + it_r
+          IF (es_r == CD_HCSTAT_OK) THEN
+            tol_used = tol_k(k_tol)
+            EXIT
+          END IF
+          IF (es_r == CD_HCSTAT_BADINPUT) EXIT
+        END DO
+        IF (es_r == CD_HCSTAT_OK) THEN
+          q_c = q_n
+          f = f_try
+          IF (last) EXIT
+          f_try = MERGE(CD_ZERO, 0.25_wp*f, 0.25_wp*f < LAST_FRACTION)
+        ELSE
+          nfail = nfail + 1
+          IF (nfail > MAX_HALVINGS .OR. es_r == CD_HCSTAT_BADINPUT) THEN
+            WRITE (why, '(A,ES10.3,A)') 'stopped at ', aux*f, ' N/m above the line''s own weight: '
+            why = TRIM(why)//' '//TRIM(short_message(em_r, 240))
+            RETURN
+          END IF
+          f_try = 0.5_wp*(f + f_try)
+        END IF
+      END DO
+      IF (ALLOCATED(l0_am)) DEALLOCATE (l0_am)
+      IF (ALLOCATED(ea_am)) DEALLOCATE (ea_am)
+      IF (ALLOCATED(ei_am)) DEALLOCATE (ei_am)
+      IF (ALLOCATED(w_am)) DEALLOCATE (w_am)
+      IF (ALLOCATED(fixed_am)) DEALLOCATE (fixed_am)
+      IF (ALLOCATED(q_static)) DEALLOCATE (q_static)
+      IF (ALLOCATED(curv)) DEALLOCATE (curv)
+      l0_am = l0
+      ea_am = ea
+      ei_am = ei
+      w_am = w
+      fixed_am = fixed_dofs
+      CALL MOVE_ALLOC(q_c, q_static)
+      CALL MOVE_ALLOC(curv_n, curv)
+      res = res_n
+      applied_scale = 1
+      compression_note = ''
+      CALL audit_hermite_static(l0_am, q_static, ea_am, ei_am, w_am, diam, endconn_mode, done, why, &
+                                compression_note)
+      IF (done) THEN
+        CALL hermite_static_stable(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, fixed_am, &
+                                   contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
+                                   endconn_mode, opts, stable_r, es_r, em_r)
+        IF (es_r /= CD_DECKDRV_OK) THEN
+          done = .FALSE.
+          why = em_r
+        ELSE IF (.NOT. stable_r) THEN
+          done = .FALSE.
+          why = 'the equilibrium at the line''s own weight is an unstable equilibrium (tangent stiffness '// &
+                'not positive definite)'
+        END IF
+      END IF
+      IF (.NOT. done) THEN
+        compression_note = ''
+        RETURN
+      END IF
+      tolerance_note = tol_used > static_tol_target
+      IF (weightless_line) &
+        CALL report_note('line '//TRIM(int_to_str(ln%id))//' is weightless and longer than its span, so it '// &
+                         'bows under the compression its bending stiffness carries. Nothing in the deck chooses '// &
+                         'the plane or the side of the bow: it is solved bowed downward in the vertical plane '// &
+                         'through its ends, the limit of a vanishing net weight, and the bow can turn about '// &
+                         'the chord at no cost. Give the line its net weight (MassDenInAir) to settle its shape')
+    END SUBROUTINE light_line_route
+
+    PURE REAL(wp) FUNCTION position_magnitude(q) RESULT(r)
+      !! The largest node coordinate magnitude of a Hermite state (6 values per node).
+      REAL(wp), INTENT(IN) :: q(:)
+      INTEGER :: k
+      r = CD_ZERO
+      DO k = 1, SIZE(q)/6
+        r = MAX(r, MAXVAL(ABS(q(6*(k - 1) + 1:6*(k - 1) + 3))))
+      END DO
+    END FUNCTION position_magnitude
 
     LOGICAL FUNCTION symmetric_current_retry() RESULT(retry)
       !! Set up the symmetry-breaking pass (see route_pass): out-of-plane DOFs freed and a
@@ -8796,6 +9024,7 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_BADINPUT) ErrStat = CD_DECKDRV_SOLVEFAIL
       RETURN
     END IF
+    model%azimuth_signed = ln%azi_signed
     ! Cross-flow VIV on the Cl > 0 sections (CableDyn_VIV), installed on the initialised line
     ! (the static equilibrium carries no lift, as MoorDyn's initial-condition generation), and
     ! the initial acceleration recomputed with the t = 0 lift.
@@ -11532,6 +11761,7 @@ CONTAINS
     CALL normalize_stock_endpoint_order(points, lines, sections)
     CALL finalize_and_validate(types, bodies, rod_types, rods, points, lines, sections, opts, channels, ext_march, &
                                static_finite_ok, ErrStat, ErrMsg, channel_lines)
+    IF (ErrStat == 0) CALL set_azimuth_ranges(points, lines)
     IF (ErrStat == 0 .AND. opts%has_motion_file) THEN
       BLOCK
         CHARACTER(:), ALLOCATABLE :: resolved_path
@@ -15331,6 +15561,25 @@ CONTAINS
     END DO
   END SUBROUTINE normalize_turbine_points
 
+  SUBROUTINE set_azimuth_ranges(points, lines)
+    !! The range of each line's tangent azimuths (DeckLine%azi_signed): a line whose chord from
+    !! End A to End B, at the deck positions, heads within 45 deg of +X reports them in
+    !! (-180, 180], every other line in [0, 360). The cut of a line's range then lies at least
+    !! 45 deg from its heading, so a line swaying about its heading reads continuously (a line
+    !! along +X no longer jumps between 0 and 360), and the range is fixed for the run: the
+    !! motion of the line cannot switch it.
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckLine), INTENT(INOUT) :: lines(:)
+    INTEGER :: i, ia, ib
+    DO i = 1, SIZE(lines)
+      ia = find_point(points, lines(i)%nodeA)
+      ib = find_point(points, lines(i)%nodeB)
+      IF (ia == 0 .OR. ib == 0) CYCLE
+      lines(i)%azi_signed = points(ib)%pos(1) - points(ia)%pos(1) > &
+                            ABS(points(ib)%pos(2) - points(ia)%pos(2))
+    END DO
+  END SUBROUTINE set_azimuth_ranges
+
   SUBROUTINE normalize_stock_endpoint_order(points, lines, sections)
     !! Stock MoorDyn decks write lines anchor (End A) -> fairlead (End B); the CableDyn
     !! deck convention is the reverse (End A = fairlead side, End B = anchor). When a
@@ -16688,7 +16937,7 @@ CONTAINS
         END IF
         curv = line_geom_from_r(5, r_line, nnode, node)
         dec = line_geom_from_r(7, r_line, nnode, node)
-        azi = line_geom_from_r(8, r_line, nnode, node)
+        azi = line_geom_from_r(8, r_line, nnode, node, lines(li)%azi_signed)
         WRITE (unit, '(I0,A,I0,10(A,ES15.7E3))') lines(li)%id, tab, node, tab, s, tab, r_node(1), &
           tab, r_node(2), tab, r_node(3), tab, tenv, tab, curv, tab, CD_ZERO, tab, dec, &
           tab, dec - 90.0_wp, tab, azi
@@ -29742,7 +29991,8 @@ CONTAINS
             CASE (4)   ! acceleration
               val = work%line_a(off + k)
             CASE DEFAULT   ! geometric channels (curvature / EI=0 bend moment / declination / azimuth)
-              val = line_geom_value(work%ch_aux(i), work%ch_node(i), nnode, work%line_q(off + 1:off + nd), stride)
+              val = line_geom_value(work%ch_aux(i), work%ch_node(i), nnode, work%line_q(off + 1:off + nd), stride, &
+                                    lines(li)%azi_signed)
             END SELECT
           END IF
         END IF
@@ -30331,7 +30581,7 @@ CONTAINS
         CASE (4)   ! acceleration
           val = work%a(3*(inode - 1) + comp)
         CASE DEFAULT   ! curvature (5) / bend moment (6, EI=0 => 0) / declination (7) / azimuth (8)
-          val = line_geom_value(kind, node, nnode, work%q(1:ndof), 3)
+          val = line_geom_value(kind, node, nnode, work%q(1:ndof), 3, lines(li)%azi_signed)
         END SELECT
       END IF
     END IF
@@ -30471,7 +30721,7 @@ CONTAINS
             val = nodal_ei_value(models(li)%ei, inode)*NORM2(kc - kr)
           END BLOCK
         CASE DEFAULT   ! curvature (5) / declination (7) / azimuth (8) -- geometric
-          val = line_geom_value(kind, node, nnode, work%q(1:6*nnode), 6)
+          val = line_geom_value(kind, node, nnode, work%q(1:6*nnode), 6, lines(li)%azi_signed)
         END SELECT
       END IF
     END IF
@@ -30651,7 +30901,7 @@ CONTAINS
         CASE (4)   ! acceleration
           val = work%a(3*(inode - 1) + comp)
         CASE DEFAULT   ! curvature (5) / bend moment (6, EI=0 => 0) / declination (7) / azimuth (8)
-          val = line_geom_value(kind, node, nnode, work%q(1:ndof), 3)
+          val = line_geom_value(kind, node, nnode, work%q(1:ndof), 3, lines(li)%azi_signed)
         END SELECT
       END IF
     END IF
@@ -32254,7 +32504,7 @@ CONTAINS
       CASE (1)   ! position
         v = q_all(q_off(li) + 3*(deck_to_internal_node(node, ne(li)) - 1) + comp)
       CASE (5, 6, 7, 8)   ! curvature / bend moment / declination / azimuth (static EI=0 => bend moment 0)
-        v = line_geom_value(kind, node, nnode, q_all(q_off(li) + 1:q_off(li + 1)), 3)
+        v = line_geom_value(kind, node, nnode, q_all(q_off(li) + 1:q_off(li + 1)), 3, lines(li)%azi_signed)
       CASE DEFAULT   ! velocity (2) / acceleration (4): zero in a static configuration
         v = CD_ZERO
       END SELECT
@@ -32902,17 +33152,42 @@ CONTAINS
     dec = ACOS(MAX(-CD_ONE, MIN(CD_ONE, t(3)/n)))*CD_RAD2DEG
   END FUNCTION tangent_declination_deg
 
-  PURE REAL(wp) FUNCTION tangent_azimuth_deg(t) RESULT(azi)
-    !! Azimuth [deg] in [0,360): horizontal-plane angle from +GX toward +GY. A
-    !! vertical tangent has no defined azimuth and returns 0.
+  PURE REAL(wp) FUNCTION tangent_azimuth_deg(t, signed) RESULT(azi)
+    !! Azimuth [deg]: horizontal-plane angle from +GX toward +GY, in [0,360), or in
+    !! (-180,180] when signed (the line's range, DeckLine%azi_signed). A vertical tangent has
+    !! no defined azimuth and returns 0.
     REAL(wp), INTENT(IN) :: t(3)
+    LOGICAL, INTENT(IN), OPTIONAL :: signed
     azi = CD_ZERO
     IF (ABS(t(1)) <= TINY(CD_ONE) .AND. ABS(t(2)) <= TINY(CD_ONE)) RETURN
-    azi = ATAN2(t(2), t(1))*CD_RAD2DEG
-    IF (azi < CD_ZERO) azi = azi + 360.0_wp
+    azi = wrap_azimuth_deg(ATAN2(t(2), t(1))*CD_RAD2DEG, signed)
   END FUNCTION tangent_azimuth_deg
 
-  PURE REAL(wp) FUNCTION line_geom_value(kind, deck_node, nnode, q_flat, stride) RESULT(v)
+  PURE REAL(wp) FUNCTION wrap_azimuth_deg(a, signed) RESULT(azi)
+    !! An azimuth [deg] in (-540, 540) wrapped into [0,360), or into (-180,180] when signed.
+    !! An angle within AZI_ROUNDOFF_DEG of the cut of the range is put on its included side
+    !! (0, or 180 when signed), and one within it of 0 is exactly 0: a tangent lying on the
+    !! cut, or along +X, has a round-off component across it whose sign would otherwise
+    !! report it at either end of the range, or at +-1e-13, from one row to the next.
+    REAL(wp), INTENT(IN) :: a
+    LOGICAL, INTENT(IN), OPTIONAL :: signed
+    LOGICAL :: sgn
+    sgn = .FALSE.
+    IF (PRESENT(signed)) sgn = signed
+    azi = a
+    IF (sgn) THEN
+      IF (azi > 180.0_wp) azi = azi - 360.0_wp
+      IF (azi <= -180.0_wp) azi = azi + 360.0_wp
+      IF (azi < -180.0_wp + AZI_ROUNDOFF_DEG) azi = 180.0_wp
+    ELSE
+      IF (azi < CD_ZERO) azi = azi + 360.0_wp
+      IF (azi >= 360.0_wp) azi = azi - 360.0_wp
+      IF (azi > 360.0_wp - AZI_ROUNDOFF_DEG) azi = CD_ZERO
+    END IF
+    IF (ABS(azi) < AZI_ROUNDOFF_DEG) azi = CD_ZERO
+  END FUNCTION wrap_azimuth_deg
+
+  PURE REAL(wp) FUNCTION line_geom_value(kind, deck_node, nnode, q_flat, stride, signed) RESULT(v)
     !! Shared evaluator for the GEOMETRIC output channels so every writer computes them
     !! identically. `q_flat` holds the line node positions in INTERNAL order
     !! (anchor->fairlead) with `stride` reals per node (3 for EI=0, 6 for finite-EI).
@@ -32920,9 +33195,10 @@ CONTAINS
     !! the MATERIAL moment EI*(kappa - kappa_0), computed per path (zero on EI=0 lines;
     !! finite_model_channel_value and range_sample_fmodel on finite-EI lines), so it is not
     !! handled here and
-    !! kind = 6 returns 0.
+    !! kind = 6 returns 0. signed: the line's azimuth range (DeckLine%azi_signed).
     INTEGER, INTENT(IN) :: kind, deck_node, nnode, stride
     REAL(wp), INTENT(IN) :: q_flat(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: signed
     REAL(wp) :: r(3, nnode)
     INTEGER :: j, base
     ! Deck node j (1 = End A) <-> internal node (nnode+1-j); extract deck-ordered positions.
@@ -32930,16 +33206,18 @@ CONTAINS
       base = stride*(nnode - j)
       r(:, j) = q_flat(base + 1:base + 3)
     END DO
-    v = line_geom_from_r(kind, r, nnode, deck_node)
+    v = line_geom_from_r(kind, r, nnode, deck_node, signed)
   END FUNCTION line_geom_value
 
-  PURE REAL(wp) FUNCTION line_geom_from_r(kind, r, nnode, deck_node) RESULT(v)
+  PURE REAL(wp) FUNCTION line_geom_from_r(kind, r, nnode, deck_node, signed) RESULT(v)
     !! Geometric channel value (kind: 5 curvature, 7 declination, 8 azimuth) from the
     !! deck-ordered node positions r(3, nnode). Factored out of line_geom_value so a caller
     !! that writes EVERY node of a line (the .static.out profile) builds r ONCE per line
     !! rather than rebuilding it inside each per-node call -- O(nnode) instead of O(nnode^2).
+    !! signed: the line's azimuth range (DeckLine%azi_signed).
     INTEGER, INTENT(IN) :: kind, nnode, deck_node
     REAL(wp), INTENT(IN) :: r(3, nnode)
+    LOGICAL, INTENT(IN), OPTIONAL :: signed
     v = CD_ZERO
     SELECT CASE (kind)
     CASE (5)   ! curvature [1/m] (OrcaFlex "Curvature" is the geometric centreline curvature)
@@ -32947,7 +33225,7 @@ CONTAINS
     CASE (7)   ! declination [deg]
       v = tangent_declination_deg(deck_node_tangent(r, nnode, deck_node))
     CASE (8)   ! azimuth [deg]
-      v = tangent_azimuth_deg(deck_node_tangent(r, nnode, deck_node))
+      v = tangent_azimuth_deg(deck_node_tangent(r, nnode, deck_node), signed)
     END SELECT
   END FUNCTION line_geom_from_r
 
@@ -34299,7 +34577,7 @@ CONTAINS
       CASE (4)   ! acceleration
         val = a(3*(inode - 1) + comp)
       CASE DEFAULT   ! curvature (5) / bend moment (6, EI=0 => 0) / declination (7) / azimuth (8)
-        val = line_geom_value(kind, node, nnode, q, 3)
+        val = line_geom_value(kind, node, nnode, q, 3, system%lines(li)%azimuth_signed)
       END SELECT
     END BLOCK
   END SUBROUTINE eval_system_line_channel
@@ -34487,9 +34765,10 @@ CONTAINS
         END IF
       END BLOCK
     CASE (8)   ! azimuth: local-frame azimuth plus the cable's frame heading, wrapped
-      val = line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6)
+      val = line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6, cable%azimuth_signed)
       IF (.NOT. cable_frame_is_identity(cable)) THEN
-        val = MODULO(val + ATAN2(cable%frame_s, cable%frame_c)*45.0_wp/QUARTER_PI, 360.0_wp)
+        val = wrap_azimuth_deg(val + ATAN2(cable%frame_s, cable%frame_c)*45.0_wp/QUARTER_PI, &
+                               cable%azimuth_signed)
       END IF
     CASE DEFAULT   ! declination (7) -- rotation-invariant geometric scalar
       val = line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6)

@@ -38,6 +38,7 @@ PROGRAM test_driver_channels
   CALL test_finite_straight_bendmom()
   CALL test_motion_accel_channels()
   CALL test_fail_closed()
+  CALL test_azimuth_ranges()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -57,6 +58,12 @@ CONTAINS
       nfail = nfail + 1
     END IF
   END SUBROUTINE require
+
+  LOGICAL FUNCTION exact(a, b) RESULT(same)
+    !! a equals b bit for bit (order comparisons, which -Wcompare-reals accepts).
+    REAL(wp), INTENT(IN) :: a, b
+    same = .NOT. (a < b .OR. a > b)
+  END FUNCTION exact
 
   ! ---- independent reference geometry (NOT the production code) ----
 
@@ -531,6 +538,128 @@ CONTAINS
   END SUBROUTINE read_out_table
 
   ! ---- deck fixtures ----
+
+  ! ---- Azimuth range of a line: (-180, 180] near +X, [0, 360) otherwise ----
+
+  SUBROUTINE test_azimuth_ranges()
+    !! A line whose static chord (End A -> End B) heads within 45 deg of +X reports its tangent
+    !! azimuths in (-180, 180], every other line in [0, 360), so a line swaying about +X no longer
+    !! jumps between 0 and 360. A round-off component across the cut of the range reads on its
+    !! included side, and one across +X reads exactly 0.
+    INTEGER :: es, ok, u, ios, lineid, node, n1, n2, n3
+    LOGICAL :: conv
+    CHARACTER(256) :: em
+    CHARACTER(2048) :: hdr, buf
+    REAL(wp) :: v(6), a3_min, a3_max, s, x, y, z, tn, cv, bm, dc, inc, az, a1_min, a1_max, a2_min, a2_max
+    REAL(wp), PARAMETER :: HEAD = 2.862405226111748_wp   ! ATAN2(20, 400) [deg]
+
+    CALL require(exact(tangent_azimuth_deg([1.0_wp, -1.0e-17_wp, 0.0_wp]), 0.0_wp), &
+                 'round-off just below +x reads exactly 0, not 360')
+    CALL require(exact(tangent_azimuth_deg([1.0_wp, -1.0e-17_wp, 0.0_wp], .TRUE.), 0.0_wp), &
+                 'round-off just below +x reads exactly 0 in the signed range')
+    CALL require(ABS(tangent_azimuth_deg([1.0_wp, -1.0e-3_wp, 0.0_wp]) - (360.0_wp - 1.0e-3_wp*DEG)) < 1.0e-6_wp, &
+                 'a heading just below +x is 359.94 deg in [0, 360)')
+    CALL require(ABS(tangent_azimuth_deg([1.0_wp, -1.0e-3_wp, 0.0_wp], .TRUE.) + 1.0e-3_wp*DEG) < 1.0e-6_wp, &
+                 'a heading just below +x is -0.057 deg in (-180, 180]')
+    CALL require(ABS(tangent_azimuth_deg([0.0_wp, -1.0_wp, 0.0_wp], .TRUE.) + 90.0_wp) < 1.0e-10_wp, &
+                 'signed azimuth -y = -90 deg')
+    CALL require(exact(tangent_azimuth_deg([-1.0_wp, 0.0_wp, 0.0_wp], .TRUE.), 180.0_wp), 'signed azimuth -x = 180 deg')
+    CALL require(exact(tangent_azimuth_deg([-1.0_wp, -1.0e-17_wp, 0.0_wp], .TRUE.), 180.0_wp), &
+                 'round-off just below -x reads 180 in the signed range, not -180')
+
+    ! Three lines, each from a fairlead (End A) to an anchor 400 m away: line 1 heads 2.86 deg
+    ! below +X (the signed range), line 2 2.86 deg below -X and line 3 at 300 deg (the [0, 360)
+    ! range: 60 deg from +X).
+    CALL write_azimuth_deck('chan_azi.dat')
+    CALL CD_Run_Deck_Driver('chan_azi.dat', 'chan_azi', conv, es, em)
+    CALL require(es == CD_DECKDRV_OK .AND. conv, 'azimuth-range deck converged: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    CALL read_out_table('chan_azi.out', hdr, v, 6, ok)
+    CALL require(ok == 0, 'read azimuth-range .out')
+    IF (ok /= 0) RETURN
+    CALL require(ABS(v(2) + HEAD) < 1.0e-6_wp, 'L1N3Azi = -2.862 deg on a line heading below +X')
+    CALL require(ABS(v(3) + HEAD) < 1.0e-6_wp, 'L1N1Azi = -2.862 deg at End A')
+    CALL require(ABS(v(4) - (180.0_wp + HEAD)) < 2.0e-5_wp, 'L2N3Azi = 182.862 deg on a line heading below -X')
+    CALL require(ABS(v(5) - (180.0_wp + HEAD)) < 2.0e-5_wp, 'L2N1Azi = 182.862 deg at End A')
+    CALL require(ABS(v(6) - 300.0_wp) < 2.0e-5_wp, 'L3N3Azi = 300 deg on a line heading 60 deg below +X')
+    ! The static profile reports every node of each line in the line's range.
+    a1_min = HUGE(1.0_wp); a1_max = -HUGE(1.0_wp); a2_min = HUGE(1.0_wp); a2_max = -HUGE(1.0_wp)
+    a3_min = HUGE(1.0_wp); a3_max = -HUGE(1.0_wp)
+    n1 = 0; n2 = 0; n3 = 0
+    OPEN (NEWUNIT=u, FILE='chan_azi.static.out', STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL require(ios == 0, 'open chan_azi.static.out')
+    IF (ios /= 0) RETURN
+    DO lineid = 1, 3
+      READ (u, '(A)', IOSTAT=ios) buf
+    END DO
+    DO
+      READ (u, '(A)', IOSTAT=ios) buf
+      IF (ios /= 0) EXIT
+      IF (LEN_TRIM(buf) == 0) CYCLE
+      READ (buf, *, IOSTAT=ios) lineid, node, s, x, y, z, tn, cv, bm, dc, inc, az
+      IF (ios /= 0) EXIT
+      IF (lineid == 1) THEN
+        n1 = n1 + 1; a1_min = MIN(a1_min, az); a1_max = MAX(a1_max, az)
+      ELSE IF (lineid == 2) THEN
+        n2 = n2 + 1; a2_min = MIN(a2_min, az); a2_max = MAX(a2_max, az)
+      ELSE
+        n3 = n3 + 1; a3_min = MIN(a3_min, az); a3_max = MAX(a3_max, az)
+      END IF
+    END DO
+    CLOSE (u)
+    CALL require(n1 == 21 .AND. n2 == 21 .AND. n3 == 21, 'static.out lists the three lines')
+    CALL require(ABS(a3_min - 300.0_wp) < 2.0e-5_wp .AND. ABS(a3_max - 300.0_wp) < 2.0e-5_wp, &
+                 'static.out Azimuth of line 3 is 300 deg at every node')
+    CALL require(ABS(a1_min + HEAD) < 1.0e-6_wp .AND. ABS(a1_max + HEAD) < 1.0e-6_wp, &
+                 'static.out Azimuth of line 1 is -2.862 deg at every node')
+    CALL require(ABS(a2_min - (180.0_wp + HEAD)) < 2.0e-5_wp .AND. ABS(a2_max - (180.0_wp + HEAD)) < 2.0e-5_wp, &
+                 'static.out Azimuth of line 2 is 182.862 deg at every node')
+    WRITE (*, '(A,F10.5,A,F10.5)') 'azimuth ranges: L1N3Azi=', v(2), '  L2N3Azi=', v(4)
+  END SUBROUTINE test_azimuth_ranges
+
+  SUBROUTINE write_azimuth_deck(path)
+    !! Three EI = 0 chains on a flat seabed, each from a fairlead at the surface to an anchor 400 m
+    !! away horizontally: lines 1 and 2 toward +X and -X with the anchor 20 m toward -Y, line 3
+    !! at 300 deg.
+    CHARACTER(*), INTENT(IN) :: path
+    INTEGER :: u, ios
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    WRITE (u, '(A)') 'azimuth-range deck'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'chain 0.252 390.0 1.674e9 -1.0 0.0 1.37 0.64 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 10.0 0.0 0.0'
+    WRITE (u, '(A)') '2 Fixed 410.0 -20.0 -50.0'
+    WRITE (u, '(A)') '3 Coupled -10.0 0.0 0.0'
+    WRITE (u, '(A)') '4 Fixed -410.0 -20.0 -50.0'
+    WRITE (u, '(A)') '5 Coupled 0.0 10.0 0.0'
+    WRITE (u, '(A)') '6 Fixed 200.0 -336.41016151377546 -50.0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '2 3 4 -'
+    WRITE (u, '(A)') '3 5 6 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 chain 410.0 20'
+    WRITE (u, '(A)') '2 chain 410.0 20'
+    WRITE (u, '(A)') '3 chain 410.0 20'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '50.0 WtrDpth'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'L1N3Azi L1N1Azi L2N3Azi L2N1Azi L3N3Azi'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_azimuth_deck
 
   SUBROUTINE write_static_channels_deck(path, explicit_decl)
     !! WD0050 grounded chain (EI=0 static) requesting the full geometric channel set.

@@ -109,6 +109,9 @@ MODULE CableDyn_OpenFAST_HermiteFMF
     ! kinematics IN (global -> local) and loads OUT (local -> global), so every caller
     ! works purely in global coordinates. Identity (1, 0) leaves all paths bit-for-bit.
     REAL(wp) :: frame_c = 1.0_wp, frame_s = 0.0_wp
+    ! The range of the cable's tangent azimuth channels: (-180, 180] when set, otherwise
+    ! [0, 360) (the deck line's, set by the deck driver that builds the cable).
+    LOGICAL :: azimuth_signed = .FALSE.
     ! A finite or rigid connection at the coupled endpoint is attached to the host, so its
     ! no-moment direction is expressed in parent axes and rotates with the input
     ! mesh orientation. The DCM convention is OpenFAST's global-to-parent matrix.

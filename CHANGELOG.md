@@ -73,6 +73,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
   cable's fairlead to the restored input mesh, whose last bits differ from the boundary the
   uninterrupted run committed, and the cable's `.CD.out` channels drifted by up to 1e-6
   (relative) within seconds. The checkpoint now carries the cable's committed boundary.
+- A finite-EI line longer than its span with no net weight, or too little for its bending
+  stiffness (0.001 N/m on a 120 m line with `EI` 1e4 N m²), failed its static solve: both routes
+  reached the compressed straight strut or stalled at the round-off of the axial forces. Such a
+  line is now solved heavier and carried back to its own weight in the vertical plane of its
+  chord. A weightless line bows as the Euler elastica (end thrust and bow to 3e-5 of the exact
+  solution); nothing in the deck chooses the side of its bow, so it is solved bowed downward and
+  a note says so. With its ends one above the other it is still refused, by name.
+- A line along +X reported its tangent azimuth (`L<L>N<J>Azi`, the static profile's `Azimuth`)
+  at 0 or about 360 from one row to the next as it swayed a fraction of a degree to either
+  side, or by the sign of a round-off component: in OpenFAST about half the rows of a cable in
+  the x-z plane read 359.9x. A line whose chord heads within 45° of +X now reports its azimuths
+  in (−180, 180], every other line in [0, 360) as before.
 
 ## [0.3.0] - 2026-10-23
 

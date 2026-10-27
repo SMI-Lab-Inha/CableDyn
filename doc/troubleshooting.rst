@@ -488,14 +488,23 @@ but a few geometries are genuinely hard:
 - **A large grounded touchdown on the** ``EI = 0`` **path.** A long, near-horizontal grounded run can
   make the linear-Lagrange tangent singular regardless of seed. If the case is a lazy-wave or
   bending-dominated cable, use the finite-EI path (``EI > 0``), which is built for it.
-- **A weightless finite-EI line longer than its span.** ``the weightless (neutrally buoyant)
-  line is longer than its span`` means every element has zero net weight (to a relative 1e-6 of
-  its displaced weight, attachments included). Such a line has no catenary: with no weight a
-  tension-only line is straight, and a longer one could only bow by bending under axial
-  compression, which a cable does not carry. Shorten the line to its span, or give it net weight
-  (a larger ``MassDenInAir``, or clumps) or a tension that holds it taut. A line heavier than
-  water with the same symptom gets ``the net-heavy line is too long for its span to hang as a
-  catenary`` instead.
+- **A weightless finite-EI line longer than its span.** Every element has zero net weight (to a
+  relative 1e-6 of its displaced weight, attachments included), so the line has no catenary: it
+  bows under the axial compression its bending stiffness carries (the Euler elastica). It is
+  solved, with the note ``line N is weightless and longer than its span``: nothing in the deck
+  chooses the plane or the side of the bow, so it is solved bowed downward in the vertical plane
+  through its ends, the limit of a vanishing net weight, and the bow can turn about the chord at
+  no cost. If the line has a net weight, however small, give it (``MassDenInAir``) to settle
+  the shape; a light line, heavy or buoyant, bows toward its weight
+  (:doc:`solver_paths`, weight continuation). With its ends one above the other nothing chooses
+  the side of the bow: ``the weightless (neutrally buoyant) line is longer than its vertical
+  span`` stops the run. In a current, with attachments, over a non-level seabed, under
+  ``tensile_safety True`` or with an end connection out of the plane of the chord the
+  continuation does not apply, and a line the routes cannot solve stops with ``the weightless
+  (neutrally buoyant) line is longer than its span``. Shorten the line to its span, or give it
+  net weight (a larger ``MassDenInAir``, or clumps) or a tension that holds it taut. A line
+  heavier than water that is too long for its span gets ``the net-heavy line is too long for
+  its span to hang as a catenary`` instead.
 - **A finite-EI lazy-wave cable at too coarse a mesh.** An under-resolved arch or touchdown
   carries a large element ``h·κ`` and can stall the dynamic Newton. The resolution metric flags
   this; the builder can auto-refine a fragile mesh when the deck opts in (``adaptive_mesh True``).

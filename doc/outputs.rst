@@ -232,7 +232,7 @@ finite-EI line of the run:
      - signed inclination below horizontal, ``Declination − 90``
    * - ``Azimuth``
      - ``(deg)``
-     - axial-tangent azimuth from +X toward +Y, in [0, 360)
+     - axial-tangent azimuth from +X toward +Y, in the line's range (:ref:`outputs-azimuth-range`)
    * - ``DeckNode``
      - ``(-)``
      - the deck node of the row, the ``<J>`` of the node channels (1 = End A … 1 + the total
@@ -486,6 +486,21 @@ fairlead) runs from its fairlead here (:doc:`migrating`), so its ``N<J>`` is Moo
 ``N<NumSegs+1-J>``. The per-line files (``Node<J>…`` columns) number the same way. A run whose
 outputs name line nodes says so in a note, and ``N0`` is rejected rather than read as another node.
 
+.. _outputs-azimuth-range:
+
+Azimuth range
+~~~~~~~~~~~~~
+
+The azimuth of a line's tangent (``L<L>N<J>Azi``, the ``Azimuth`` column of the static profile
+and the azimuth of the initialisation summary) is reported in **(−180, 180]** on a line whose
+chord from End A to End B, at the deck positions, heads within 45° of +X, and in **[0, 360)** on
+every other line. The cut of a line's range then lies at least 45° from its heading: a line
+swaying about its heading reads continuously, where a line along +X would otherwise jump
+between 0 and 360 as it moves a fraction of a degree to either side. The range is fixed for
+the run, so the motion of the line cannot switch it. A round-off component across the cut
+reads on its included side (0, or 180 in the signed range), and one across +X reads exactly 0.
+A line a host builds through the C interface without a deck reports [0, 360).
+
 .. _outputs-refined-nodes:
 
 Node channels on a refined line
@@ -691,7 +706,8 @@ Line-node channels
      - declination of the node's axial tangent from +Z (0 = up, 90 = horizontal, 180 = down)
      - deg
    * - ``L<L>N<J>Azi``
-     - azimuth of the node's axial tangent from +X toward +Y, in [0, 360)
+     - azimuth of the node's axial tangent from +X toward +Y, in the line's range
+       (:ref:`outputs-azimuth-range`)
      - deg
    * - ``Torq<L>N<J>``
      - torque (twisting moment) at node ``J`` of a line restrained in torsion at both ends

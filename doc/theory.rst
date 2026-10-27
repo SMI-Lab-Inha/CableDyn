@@ -1479,6 +1479,32 @@ mesh-sequenced route described below first and this route as its fallback):
    mesh-sequenced solve below, audited alike. On the Lozon cables the two routes give the same
    equilibrium to the solver tolerance (positions within 2e-5 m, curvature within 1e-6 1/m).
 
+A line longer than its span with little net weight for its bending stiffness has no catenary
+to start from. With no weight at all it bows under the axial compression its bending stiffness
+carries, the Euler elastica (about :math:`\pi^2 EI/L^2`). Both routes can then end on the
+compressed straight strut, a saddle, or stall at the round-off of the axial forces,
+:math:`EA\,\varepsilon\,|\mathbf r|/h` (the axial strain is formed from coordinate differences over
+an element of length :math:`h`), which a weightless line's unit force scale puts above the
+tolerance. When both routes fail on a slack line with :math:`|w| < 100\,EI/L^3` (largest
+:math:`EI`), the line is solved with the auxiliary weight :math:`w_a = 100\,EI/L^3` added to every
+element, of the sign of its net weight and downward for a weightless one, which the routes
+handle. That equilibrium is carried back to the line's own weight by a continuation in the
+weight, held in the vertical plane of the chord: steps of a quarter of the remaining
+:math:`w_a`, the last from :math:`w_a/256` to none, a failed step halved. The steps accept the
+round-off floor :math:`8\,EA\,\varepsilon\,|\mathbf r|_{\max}/h_{\min}` of the axial forces when it
+lies above the tolerances of the routes, and a floor above the static tolerance is reported as
+for the routes. The result is audited and checked for stability like theirs. The continuation
+runs on a planar line in still water over a level seabed, without attachments or
+``tensile_safety True``, whose chord is not vertical (the auxiliary weight must have a
+component across it). For a weightless line nothing in the deck chooses the plane or the side
+of the bow: the limit of a vanishing weight puts it on the lower side in the vertical plane of
+the chord, and a note says so. Its tangent there has one zero eigenvalue, the bow turning about
+the chord: the planar solve holds that mode, and a dynamic run leaves it free and at rest. On a
+pinned 120 m line
+with its ends 113 m apart the end thrust and the mid-span bow match the inextensible elastica,
+:math:`P = 4K(m)^2EI/L^2` and :math:`\delta = \sqrt{m}\,L/K(m)` with
+:math:`\text{chord}/L = 2E(m)/K(m) - 1`, to :math:`3\times10^{-5}` and :math:`10^{-6}` relative.
+
 A deck current loads the line at rest with its steady Morison drag (the relative velocity is
 the current itself; the element fluid velocity is the mean of the current at its two nodes,
 as in the dynamics). The drag follows the line and is not a potential force: it is carried
