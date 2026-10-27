@@ -245,6 +245,15 @@ MODULE CableDyn_DeckDriver
   REAL(wp), SAVE :: probe_v0(3) = 0.0_wp, probe_w0(3) = 0.0_wp
   REAL(wp), ALLOCATABLE, SAVE :: probe_rec(:, :)
   INTEGER, PARAMETER, PUBLIC :: CD_DECKDRV_OK = 0, CD_DECKDRV_BADINPUT = 1, CD_DECKDRV_SOLVEFAIL = 2
+  ! Printed by a run that reports line nodes (an OUTPUTS channel CD_Is_Line_Node_Channel names, or
+  ! a LINES Outputs flag): CableDyn numbers a line's nodes from 1 = End A, MoorDyn from 0 = its End
+  ! A, and CableDyn runs a line written anchor-first from its fairlead (normalize_stock_endpoint_order),
+  ! so a MoorDyn deck's line-node channels would otherwise name other nodes without notice.
+  CHARACTER(*), PARAMETER, PUBLIC :: CD_LINE_NODE_NUMBERING_NOTE = 'line nodes are numbered from 1 = End '// &
+                                     'A in the channels and line files, MoorDyn''s from 0: N<J> here is '// &
+                                     'MoorDyn''s N<J-1>, or N<NumSegs+1-J> on a line written anchor-first, '// &
+                                     'which CableDyn runs from its fairlead (End A)'
+  PUBLIC :: CD_Is_Line_Node_Channel
 
   ! Deck token / OUTPUTS channel-name length. Public so the aggregate facade can declare its
   ! retained channel-name store with a matching length.
@@ -7924,6 +7933,9 @@ CONTAINS
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, failures=fails)
     IF (ErrStat /= 0) RETURN
+    IF (ANY([(CD_Is_Line_Node_Channel(channels(j)), j=1, SIZE(channels))]) .OR. &
+        ANY([(line_outputs_requested(lines(j)%outputs), j=1, SIZE(lines))])) &
+      WRITE (output_unit, '(A)') '  Note: '//CD_LINE_NODE_NUMBERING_NOTE//'.'
     ! Torsion (both ends of a line torsionally restrained) runs on the standalone cubic-Hermite
     ! route and the multibody march, in statics and dynamics (quasi-static torsion: no torsional
     ! inertia). One restrained end carries no torque (the other end is free to twist), so it is
@@ -32377,6 +32389,16 @@ CONTAINS
                 'TDP<L>{s,x,y,z,Lay,Exc,Grd}, or the Body<N>/Rod<N> channels)'); RETURN
     END IF
   END SUBROUTINE check_channel
+
+  LOGICAL FUNCTION CD_Is_Line_Node_Channel(ch) RESULT(yes)
+    !! True for an OUTPUTS channel that names a node of a line (Ten<L>N<J>, Curv, BendMom, StfMom,
+    !! Torq, Twist<L>N<J>, L<L>N<J>...), whose node numbering differs from MoorDyn's
+    !! (CD_LINE_NODE_NUMBERING_NOTE); the line total Twist<L> names no node.
+    CHARACTER(*), INTENT(IN) :: ch
+    INTEGER :: line_id, node_id, kind, comp
+    CALL parse_line_node_channel(ch, line_id, node_id, kind, comp)
+    yes = kind /= 0 .AND. kind /= 11
+  END FUNCTION CD_Is_Line_Node_Channel
 
   PURE LOGICAL FUNCTION names_node_zero(lo) RESULT(yes)
     !! True when a lower-cased line-node channel names node 0 ("...n0" at the end or before

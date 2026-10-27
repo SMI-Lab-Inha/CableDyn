@@ -477,6 +477,15 @@ numeric id written with leading zeros (``Ten1N02`` = ``Ten1N2``), or an alias sp
 ``LINES`` and ``POINTS`` ids (not array positions); ``<J>`` is a node number on line ``<L>``,
 1 = End A to ``N`` = End B, where ``N`` = 1 + the total ``NumSegs`` of the line's sections.
 
+.. _outputs-moordyn-node-numbers:
+
+This is **not MoorDyn's numbering**. MoorDyn numbers a line's nodes from 0 at its End A
+(``AttachA``) to ``NumSegs``, so on a line kept in the order written ``L<L>N<J>`` here is MoorDyn's
+``L<L>N<J-1>``. A line written anchor-first (``AttachA`` a ``Fixed`` anchor, ``AttachB`` the
+fairlead) runs from its fairlead here (:doc:`migrating`), so its ``N<J>`` is MoorDyn's
+``N<NumSegs+1-J>``. The per-line files (``Node<J>…`` columns) number the same way. A run whose
+outputs name line nodes says so in a note, and ``N0`` is rejected rather than read as another node.
+
 .. _outputs-refined-nodes:
 
 Node channels on a refined line

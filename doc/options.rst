@@ -791,7 +791,8 @@ These names exist so a migrated MoorDyn deck fails less often at the syntax boun
 
 Other MoorDyn constructs that fail by name rather than as unknown input: ``CoupledPinned`` bodies,
 and ``CoupledPinned``/``VesselPinned`` rods outside a coupled host (they run in OpenFAST, see
-:doc:`openfast`). Line-node output channels start at node 1 (``N0`` is rejected), and a number
+:doc:`openfast`). Line-node output channels start at node 1 (``N0`` is rejected; MoorDyn numbers from 0, see
+:ref:`node numbering <outputs-moordyn-node-numbers>`), and a number
 with a sign inside its mantissa (such as ``1+2``) is rejected instead of being read up to the sign.
 
 Water-kinematics sources

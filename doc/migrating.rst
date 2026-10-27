@@ -154,8 +154,13 @@ What differs on purpose
    * - Unsupported input
      - rejected at parse time with a message naming the feature, never silently ignored
    * - Node identity
-     - CableDyn meshes are its own; MoorDyn node numbers and rod-node histories are not
-       reproduced
+     - line nodes are numbered from 1 at End A, MoorDyn's from 0 at its End A, so a MoorDyn
+       deck's ``L<L>N<J>`` names another node here: MoorDyn's ``N<J>`` is CableDyn's ``N<J+1>``
+       on a line kept in the order written, and ``N<NumSegs+1-J>`` on a line written
+       anchor-first, which CableDyn runs from its fairlead (see above and
+       :ref:`node numbering <outputs-moordyn-node-numbers>`). A run reporting line nodes notes
+       the difference. Rod nodes keep MoorDyn's numbering (node 0 = End A); rod-node histories
+       are not reproduced
 
 Inside OpenFAST
 ~~~~~~~~~~~~~~~
