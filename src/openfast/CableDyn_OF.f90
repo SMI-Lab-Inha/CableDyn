@@ -72,7 +72,8 @@ MODULE CableDyn
    USE CableDyn_Precision, ONLY: wp
    USE CableDyn_Conventions, ONLY: CD_NATIVE_CHANNEL_FMT
    USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_SeaState_Steady_Current, CD_HYDRO_OK
-   USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK
+   USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_Is_Line_Node_Channel, &
+                                  CD_LINE_NODE_NUMBERING_NOTE
    USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_UpdateStates_Moving, &
                                           CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_GetMovingPointMesh, &
                                           CD_AGG_Snapshot, CD_AGG_Restore, &
@@ -306,6 +307,14 @@ CONTAINS
 
       nch = CD_AGG_NumChannels(Inst(id)%agg)
       IF (nch <= 0) RETURN
+      ! MoorDyn numbers line nodes from N0, CableDyn from N1: say so as the standalone driver does
+      DO ic = 1, nch
+         CALL CD_AGG_ChannelHeader(Inst(id)%agg, ic, hdr, unt, es, em)
+         IF (es /= CD_AGG_OK) EXIT
+         IF (.NOT. CD_Is_Line_Node_Channel(hdr)) CYCLE
+         CALL WrScr( '   Note: '//CD_LINE_NODE_NUMBERING_NOTE//'.' )
+         EXIT
+      END DO
       ! One run-level path has one owner. A rebuilt state must adopt the existing
       ! unit through restore_native_outputs rather than attempting a second OPEN.
       DO owner = 1, SIZE(Inst)

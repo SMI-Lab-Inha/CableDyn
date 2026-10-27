@@ -41,6 +41,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
   range graphs and element file) report the cable's own moment, the line type's EI times the
   curvature; lines without stiffeners are unchanged.
+- A run whose outputs name line nodes (`L<L>N<J>…`, `Ten<L>N<J>` and the other node channels, or a
+  LINES `Outputs` flag) notes that CableDyn numbers line nodes from 1 at End A while MoorDyn
+  numbers them from 0, so a MoorDyn deck's `N<J>` is CableDyn's `N<J+1>`, or `N<NumSegs+1-J>` on
+  a line written anchor-first. The numbering itself is unchanged; the outputs and migration pages
+  state it.
 
 ### Fixed
 

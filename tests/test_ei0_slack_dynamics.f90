@@ -816,6 +816,14 @@ CONTAINS
     CALL require(ok, 'audit:rhoinf-run')
     CALL require(file_contains('ei0slack_audit_rho.log', 'Note: rhoInf = 0.990 leaves almost no numerical'), &
                  'audit:rhoinf-note')
+    ! line nodes are numbered from 1 = End A, MoorDyn's from 0: noted when a run reports line nodes
+    CALL require(.NOT. file_contains('ei0slack_audit_rho.log', 'line nodes are numbered from 1'), &
+                 'audit:no-node-numbering-note')
+    CALL light_cable_deck('ei0slack_audit_node.dat', 0.1_wp, 1.0_wp, '', 'p')
+    CALL run_driver_logged('ei0slack_audit_node.dat', 'ei0slack_audit_node', 'ei0slack_audit_node.log', ok)
+    CALL require(ok, 'audit:node-run')
+    CALL require(file_contains('ei0slack_audit_node.log', 'Note: line nodes are numbered from 1 = End A'), &
+                 'audit:node-numbering-note')
     ! a 10 m sway at dtM 0.2 s turns the segments by several degrees per step: taken as given
     ! (off ei0_substeps) the run notes the turn
     CALL write_motion('ei0slack_sway.txt', 1, [5.0_wp, 0.0_wp, -14.0_wp], 2, 10.0_wp, 10.0_wp, 10.0_wp, &
