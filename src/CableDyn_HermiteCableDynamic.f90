@@ -63,6 +63,8 @@ MODULE CableDyn_HermiteCableDynamic
                                    CD_HermiteCable_Axial_Strain_Lower_Bound, CD_HermiteCable_Dry_Buoyancy, &
                                    CD_HCABLE_OK
   USE CableDyn_Linalg, ONLY: CD_Factor_Banded, CD_Solve_Factored_Banded, CD_LINALG_OK
+  USE CableDyn_VIV, ONLY: CD_VIV_Lift_Per_Length, CD_VIV_Crossflow_Along, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
+                          CD_VIV_Wrap_Phase, CD_VIV_TWO_PI, CD_VIV_NM
   USE CableDyn_Hydro, ONLY: CD_Morison_Drag_Per_Length_Jac, CD_Airy_Wave_Kinematics_Precomputed, &
                             CD_Component_Wave_Kinematics, CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Contact_Gate, CD_SEABED_CONTACT_BLEND, &
@@ -121,6 +123,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Snapshot
   PUBLIC :: CD_HermiteCable_Dyn_Set_Friction_Anchors
   PUBLIC :: CD_HermiteCable_Dyn_Set_Friction_Axial
+  PUBLIC :: CD_HermiteCable_Dyn_Set_VIV
   PUBLIC :: CD_HermiteCable_Dyn_Restore
   PUBLIC :: CD_HermiteCable_Dyn_Energy
   PUBLIC :: CD_HermiteCable_Dyn_Curvature
@@ -269,6 +272,18 @@ MODULE CableDyn_HermiteCableDynamic
     ! the recovering step, snap_fr_anchor the aggregate snapshot.
     LOGICAL :: fr_active = .FALSE.
     REAL(wp), ALLOCATABLE :: fr_anchor(:, :), fr_k(:), ws_recovery_fr(:, :), snap_fr_anchor(:, :)
+    ! Cross-flow VIV (CD_HermiteCable_Dyn_Set_VIV, CableDyn_VIV): viv_k(e) = 1/2 rho D Cl of each
+    ! element (0: no lift), the synchronisation band and diameter per node, the shedding phase
+    ! and the running mean squares of the cross-flow velocity and acceleration per node. The lift
+    ! of a step takes viv_phi_eval (the committed phase for F_n, the step's predicted phase in
+    ! the Newton iterations); viv_rate/viv_ms_next hold the step-start rate and mean squares.
+    ! ws_recovery_viv_* is the step-start copy of the recovering step, snap_viv_* the snapshot.
+    LOGICAL :: has_viv = .FALSE.
+    REAL(wp) :: viv_tw = CD_ZERO
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_k(:), viv_cf(:), viv_df(:), viv_dn(:), viv_phi(:), viv_phi_eval(:)
+    REAL(wp), ALLOCATABLE :: viv_rate(:), viv_ms(:, :), viv_ms_next(:, :)
+    REAL(wp), ALLOCATABLE :: ws_recovery_viv_phi(:), ws_recovery_viv_ms(:, :), snap_viv_phi(:), snap_viv_ms(:, :)
+    LOGICAL, ALLOCATABLE :: viv_node(:)
     REAL(wp), ALLOCATABLE :: Mgb(:, :)                            ! constant global mass (band)
     LOGICAL, ALLOCATABLE :: freemask(:), solve_mask(:)
     INTEGER, ALLOCATABLE :: fmap(:)                              ! free -> global DOF index
@@ -949,6 +964,299 @@ CONTAINS
     model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
+
+  SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg)
+    !! Install the cross-flow VIV synchronisation model (CableDyn_VIV) on a cable with drag:
+    !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
+    !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
+    !! wetted Gauss points of every element with cl > 0, its phase lives on the nodes of those
+    !! elements; the phases start at 2 pi i/N with node i counted from End A (the model's last
+    !! node), as MoorDyn's. The phase follows the drag's current and a held host field (which
+    !! carries any waves); the internal wave families (Set_Waves) are refused with VIV. The
+    !! committed acceleration is refreshed with the new lift; if that fails, the previous VIV
+    !! configuration, its state and the acceleration are restored.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: e, k, ne, nn, es
+    REAL(wp) :: wsum, tw_old
+    LOGICAL :: had_viv
+    CHARACTER(LEN=1024) :: em
+    REAL(wp), ALLOCATABLE :: a_old(:), o_cl(:), o_k(:), o_cf(:), o_df(:), o_dn(:), o_phi(:), o_phi_eval(:), &
+                             o_rate(:), o_ms(:, :), o_ms_next(:, :), o_rec_phi(:), o_rec_ms(:, :), &
+                             o_snap_phi(:), o_snap_ms(:, :)
+    LOGICAL, ALLOCATABLE :: o_node(:)
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: model not initialised'; RETURN
+    END IF
+    ne = model%ne
+    nn = model%nn
+    IF (SIZE(cl) /= ne .OR. SIZE(cf) /= ne .OR. SIZE(df) /= ne) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: cl, cf and df must each have one value per element'; RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(cl) .AND. CD_All_Finite(cf) .AND. CD_All_Finite(df) .AND. &
+               CD_Is_Finite(t_window))) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: inputs must be finite'; RETURN
+    END IF
+    IF (ANY(cl < CD_ZERO) .OR. t_window < CD_ZERO .OR. &
+        ANY(cl > CD_ZERO .AND. .NOT. (cf > CD_ZERO .AND. df >= CD_ZERO .AND. df < cf))) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: need cl >= 0, t_window >= 0 and 0 <= df < cf where cl > 0'
+      RETURN
+    END IF
+    IF (.NOT. model%has_drag) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: VIV needs the cable''s drag in water (set the drag first)'; RETURN
+    END IF
+    IF (model%has_wave) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: internal waves are configured; VIV takes waves as a held '// &
+               'host fluid field (CD_HermiteCable_Dyn_Set_Held_Fluid)'; RETURN
+    END IF
+    ! the previous configuration and state, kept for a rollback
+    had_viv = model%has_viv
+    tw_old = model%viv_tw
+    a_old = model%a
+    CALL move_viv(.FALSE.)
+    CALL clear_viv(model)
+    model%rc_epoch = model%rc_epoch + 1
+    model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
+    model%tr_valid = .FALSE.
+    IF (.NOT. ANY(cl > CD_ZERO)) THEN
+      IF (had_viv) CALL refresh_acceleration()
+      RETURN
+    END IF
+    ALLOCATE (model%viv_cl(ne), model%viv_k(ne), model%viv_cf(nn), model%viv_df(nn), model%viv_dn(nn), &
+              model%viv_phi(nn), &
+              model%viv_phi_eval(nn), model%viv_rate(nn), model%viv_ms(2, nn), model%viv_ms_next(2, nn), &
+              model%ws_recovery_viv_phi(nn), model%ws_recovery_viv_ms(2, nn), model%snap_viv_phi(nn), &
+              model%snap_viv_ms(2, nn), model%viv_node(nn))
+    model%viv_cl = cl
+    model%viv_cf = CD_ZERO
+    model%viv_df = CD_ZERO
+    model%viv_node = .FALSE.
+    model%viv_phi = CD_ZERO
+    model%viv_ms = CD_ZERO
+    ! node values: the length-weighted average over the node's lifting elements
+    DO k = 1, nn
+      wsum = CD_ZERO
+      DO e = MAX(1, k - 1), MIN(ne, k)
+        IF (.NOT. (cl(e) > CD_ZERO)) CYCLE
+        wsum = wsum + model%l0(e)
+        model%viv_cf(k) = model%viv_cf(k) + model%l0(e)*cf(e)
+        model%viv_df(k) = model%viv_df(k) + model%l0(e)*df(e)
+      END DO
+      IF (.NOT. (wsum > CD_ZERO)) CYCLE
+      model%viv_node(k) = .TRUE.
+      model%viv_cf(k) = model%viv_cf(k)/wsum
+      model%viv_df(k) = model%viv_df(k)/wsum
+      model%viv_phi(k) = CD_VIV_TWO_PI*REAL(nn - k, wp)/REAL(ne, wp)
+    END DO
+    CALL viv_drag_terms(model)
+    model%viv_phi_eval = model%viv_phi
+    model%viv_rate = CD_ZERO
+    model%viv_ms_next = model%viv_ms
+    model%ws_recovery_viv_phi = model%viv_phi
+    model%ws_recovery_viv_ms = model%viv_ms
+    model%snap_viv_phi = model%viv_phi
+    model%snap_viv_ms = model%viv_ms
+    model%viv_tw = t_window
+    model%has_viv = .TRUE.
+    ! the lift is part of the committed load: the first step's predictor and phase rate need it
+    CALL refresh_acceleration()
+
+  CONTAINS
+    SUBROUTINE refresh_acceleration()
+      CALL solve_consistent_acceleration(model, es, em)
+      IF (es == CD_HCDYN_OK) RETURN
+      CALL clear_viv(model)
+      CALL move_viv(.TRUE.)
+      model%has_viv = had_viv
+      model%viv_tw = tw_old
+      model%a = a_old
+      ErrStat = es
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: acceleration refresh failed: '//TRIM(em)
+    END SUBROUTINE refresh_acceleration
+
+    SUBROUTINE move_viv(back)
+      !! Move the VIV arrays from the model into the o_ copies (back = .FALSE.) or back.
+      LOGICAL, INTENT(IN) :: back
+      IF (back) THEN
+        CALL MOVE_ALLOC(o_cl, model%viv_cl); CALL MOVE_ALLOC(o_k, model%viv_k)
+        CALL MOVE_ALLOC(o_cf, model%viv_cf); CALL MOVE_ALLOC(o_df, model%viv_df)
+        CALL MOVE_ALLOC(o_dn, model%viv_dn); CALL MOVE_ALLOC(o_phi, model%viv_phi)
+        CALL MOVE_ALLOC(o_phi_eval, model%viv_phi_eval); CALL MOVE_ALLOC(o_rate, model%viv_rate)
+        CALL MOVE_ALLOC(o_ms, model%viv_ms); CALL MOVE_ALLOC(o_ms_next, model%viv_ms_next)
+        CALL MOVE_ALLOC(o_rec_phi, model%ws_recovery_viv_phi); CALL MOVE_ALLOC(o_rec_ms, model%ws_recovery_viv_ms)
+        CALL MOVE_ALLOC(o_snap_phi, model%snap_viv_phi); CALL MOVE_ALLOC(o_snap_ms, model%snap_viv_ms)
+        CALL MOVE_ALLOC(o_node, model%viv_node)
+      ELSE
+        CALL MOVE_ALLOC(model%viv_cl, o_cl); CALL MOVE_ALLOC(model%viv_k, o_k)
+        CALL MOVE_ALLOC(model%viv_cf, o_cf); CALL MOVE_ALLOC(model%viv_df, o_df)
+        CALL MOVE_ALLOC(model%viv_dn, o_dn); CALL MOVE_ALLOC(model%viv_phi, o_phi)
+        CALL MOVE_ALLOC(model%viv_phi_eval, o_phi_eval); CALL MOVE_ALLOC(model%viv_rate, o_rate)
+        CALL MOVE_ALLOC(model%viv_ms, o_ms); CALL MOVE_ALLOC(model%viv_ms_next, o_ms_next)
+        CALL MOVE_ALLOC(model%ws_recovery_viv_phi, o_rec_phi); CALL MOVE_ALLOC(model%ws_recovery_viv_ms, o_rec_ms)
+        CALL MOVE_ALLOC(model%snap_viv_phi, o_snap_phi); CALL MOVE_ALLOC(model%snap_viv_ms, o_snap_ms)
+        CALL MOVE_ALLOC(model%viv_node, o_node)
+      END IF
+    END SUBROUTINE move_viv
+  END SUBROUTINE CD_HermiteCable_Dyn_Set_VIV
+
+  SUBROUTINE clear_viv(model)
+    !! Release the VIV storage; the model then carries no lift.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    IF (ALLOCATED(model%viv_k)) DEALLOCATE (model%viv_cl, model%viv_k)
+    IF (ALLOCATED(model%viv_cf)) DEALLOCATE (model%viv_cf, model%viv_df, model%viv_dn, model%viv_phi, &
+                                             model%viv_phi_eval, model%viv_rate, model%viv_ms, &
+                                             model%viv_ms_next, model%ws_recovery_viv_phi, &
+                                             model%ws_recovery_viv_ms, model%snap_viv_phi, model%snap_viv_ms, &
+                                             model%viv_node)
+    model%has_viv = .FALSE.
+    model%viv_tw = CD_ZERO
+  END SUBROUTINE clear_viv
+
+  SUBROUTINE viv_drag_terms(model)
+    !! The VIV quantities taken from the drag configuration, set with VIV and again whenever the
+    !! drag is reconfigured: the lift scale viv_k = 1/2 rho D Cl of each element and the node
+    !! diameter viv_dn, the length-weighted average over the node's lifting elements.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER :: e, k
+    REAL(wp) :: wsum
+    model%viv_k = 0.5_wp*model%rho_w*model%diam*model%viv_cl
+    model%viv_dn = CD_ZERO
+    DO k = 1, model%nn
+      IF (.NOT. model%viv_node(k)) CYCLE
+      wsum = CD_ZERO
+      DO e = MAX(1, k - 1), MIN(model%ne, k)
+        IF (.NOT. (model%viv_cl(e) > CD_ZERO)) CYCLE
+        wsum = wsum + model%l0(e)
+        model%viv_dn(k) = model%viv_dn(k) + model%l0(e)*model%diam(e)
+      END DO
+      model%viv_dn(k) = model%viv_dn(k)/wsum
+    END DO
+  END SUBROUTINE viv_drag_terms
+
+  SUBROUTINE viv_node_motion(model, k, yd, ydd, un, ok)
+    !! Cross-flow velocity and acceleration of node k at the committed state, along its own
+    !! tangent (the slope DOFs), in the flow the drag sees there (current plus a held field).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: k
+    REAL(wp), INTENT(OUT) :: yd, ydd, un
+    LOGICAL, INTENT(OUT) :: ok
+    REAL(wp) :: uu(3)
+    INTEGER :: i0
+    i0 = 6*(k - 1)
+    uu = model%current
+    IF (model%has_held_field) uu = uu + model%hf_u(:, k)
+    CALL CD_VIV_Crossflow_Along(model%q(i0 + 4:i0 + 6), model%v(i0 + 1:i0 + 3), model%a(i0 + 1:i0 + 3), uu, &
+                                yd, ydd, un, ok)
+  END SUBROUTINE viv_node_motion
+
+  SUBROUTINE viv_step_begin(model, dt, ErrStat, ErrMsg)
+    !! Step-start VIV quantities from the committed state (q, v, a, phi): the mean squares with
+    !! the step-start cross-flow sample (viv_ms_next), the phase rate (viv_rate) and the phase the
+    !! step's lift takes (viv_phi_eval): the explicit phase at t_{n+1} under the force blend,
+    !! whose in-step force is R(q_{n+1}, v_{n+1}) (F_n keeps phi_n), and at the generalised-alpha
+    !! level under the configuration blend.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: dt
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k
+    REAL(wp) :: w, frac, yd, ydd, un
+    LOGICAL :: ok
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. (model%viv_tw > CD_ZERO)) model%viv_tw = REAL(CD_VIV_NM, wp)*dt
+    w = MIN(CD_ONE, dt/model%viv_tw)
+    frac = CD_ONE
+    IF (.NOT. model%force_blend) frac = CD_ONE - model%alpha_f
+    model%viv_rate = CD_ZERO
+    model%viv_ms_next = model%viv_ms
+    model%viv_phi_eval = model%viv_phi
+    DO k = 1, model%nn
+      IF (.NOT. model%viv_node(k)) CYCLE
+      CALL viv_node_motion(model, k, yd, ydd, un, ok)
+      IF (.NOT. ok) THEN
+        ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'VIV phase: degenerate node tangent'; RETURN
+      END IF
+      model%viv_ms_next(1, k) = CD_VIV_Mean_Square(model%viv_ms(1, k), yd, w)
+      model%viv_ms_next(2, k) = CD_VIV_Mean_Square(model%viv_ms(2, k), ydd, w)
+      model%viv_rate(k) = CD_VIV_Phase_Rate(yd, ydd, model%viv_ms_next(1, k), model%viv_ms_next(2, k), &
+                                            model%viv_phi(k), un, model%viv_dn(k), model%viv_cf(k), &
+                                            model%viv_df(k))
+      model%viv_phi_eval(k) = model%viv_phi(k) + frac*dt*model%viv_rate(k)
+    END DO
+  END SUBROUTINE viv_step_begin
+
+  SUBROUTINE viv_step_end(model, dt)
+    !! Commit the VIV state at the converged end state (q, v, a just committed): the phase by
+    !! Heun's rule phi_n + dt/2 (rate_n + rate(state_n+1, phi_n + dt rate_n)), with the end-state
+    !! sample added to the mean squares for that rate only, and the step-start mean squares. The
+    !! lift then takes the committed phase again. It cannot fail, so the step it ends is never
+    !! left half committed: a node whose end tangent is degenerate, or whose end rate is not
+    !! finite, takes the step-start rate over the step (phi_n + dt rate_n).
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: dt
+    INTEGER :: k
+    REAL(wp) :: w, yd, ydd, un, ms1, ms2, rate_end
+    LOGICAL :: ok
+    w = MIN(CD_ONE, dt/model%viv_tw)
+    DO k = 1, model%nn
+      IF (.NOT. model%viv_node(k)) CYCLE
+      rate_end = model%viv_rate(k)
+      CALL viv_node_motion(model, k, yd, ydd, un, ok)
+      IF (ok) THEN
+        ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, k), yd, w)
+        ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, k), ydd, w)
+        rate_end = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(k) + dt*model%viv_rate(k), un, &
+                                     model%viv_dn(k), model%viv_cf(k), model%viv_df(k))
+        IF (.NOT. CD_Is_Finite(rate_end)) rate_end = model%viv_rate(k)
+      END IF
+      model%viv_phi(k) = CD_VIV_Wrap_Phase(model%viv_phi(k) + 0.5_wp*dt*(model%viv_rate(k) + rate_end))
+    END DO
+    model%viv_ms = model%viv_ms_next
+    model%viv_phi_eval = model%viv_phi
+  END SUBROUTINE viv_step_end
+
+  SUBROUTINE viv_element_lift(model, q_cfg, v_cfg, e, flift, ErrStat, ErrMsg, djq, djv)
+    !! The VIV lift load of element e at the phase viv_phi_eval in the flow the drag sees (current,
+    !! held field), with its Jacobians djq, djv (both or neither).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
+    INTEGER, INTENT(IN) :: e
+    REAL(wp), INTENT(OUT) :: flift(12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: djq(12, 12), djv(12, 12)
+    REAL(wp) :: qe(12), ve(12), uu(3), wl, kn(2)
+    flift = CD_ZERO
+    IF (PRESENT(djq)) THEN
+      djq = CD_ZERO; djv = CD_ZERO
+    END IF
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. (model%viv_k(e) > CD_ZERO)) RETURN
+    qe(1:6) = q_cfg(6*(e - 1) + 1:6*e); qe(7:12) = q_cfg(6*e + 1:6*(e + 1))
+    ve(1:6) = v_cfg(6*(e - 1) + 1:6*e); ve(7:12) = v_cfg(6*e + 1:6*(e + 1))
+    uu = model%current
+    wl = model%waterline_z
+    IF (model%has_held_field) THEN
+      uu = uu + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1))
+      wl = 0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1))
+    END IF
+    kn = model%viv_k(e)*[COS(model%viv_phi_eval(e)), COS(model%viv_phi_eval(e + 1))]
+    IF (PRESENT(djq)) THEN
+      CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, djq, djv, ErrStat, ErrMsg)
+    ELSE
+      CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, ErrStat=ErrStat, &
+                                            ErrMsg=ErrMsg)
+    END IF
+  END SUBROUTINE viv_element_lift
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Anchors(model, anchors, ErrStat, ErrMsg)
     !! Switch the seabed friction of a contact model with mu > 0 to elastic-plastic friction
@@ -2380,6 +2688,8 @@ CONTAINS
     model%rho_w = rho_w; model%waterline_z = waterline_z; model%current = current
     model%gravity = grav_new
     model%has_drag = .TRUE.
+    ! the lift scale and the shedding diameter follow the drag's density and diameters
+    IF (model%has_viv) CALL viv_drag_terms(model)
 
     ! Refresh the consistent acceleration now that the load set includes drag: at v = 0 a current
     ! exerts a non-zero rest drag, so the predictor for the first step must see it.
@@ -2395,6 +2705,8 @@ CONTAINS
         DEALLOCATE (model%diam, model%cdn, model%cdt)
       END IF
       model%has_drag = had_drag
+      ! VIV needs drag, so a VIV model had it: back to the restored configuration
+      IF (model%has_viv) CALL viv_drag_terms(model)
     END IF
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Drag
 
@@ -2593,6 +2905,11 @@ CONTAINS
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_Waves: model not initialised'; RETURN
     END IF
+    IF (model%has_viv) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_Waves: VIV is configured; its phase follows the current and a held host '// &
+               'fluid field, so waves reach a VIV cable as a held field'; RETURN
+    END IF
     IF (model%has_held_field) THEN
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Set_Waves: a held host fluid field is configured; an internal '// &
@@ -2714,6 +3031,11 @@ CONTAINS
     IF (.NOT. model%initialized) THEN
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Set_Irregular_Waves: model not initialised'; RETURN
+    END IF
+    IF (model%has_viv) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_Irregular_Waves: VIV is configured; its phase follows the current and a held host '// &
+               'fluid field, so waves reach a VIV cable as a held field'; RETURN
     END IF
     IF (model%has_held_field) THEN
       ErrStat = CD_HCDYN_BADINPUT
@@ -3038,6 +3360,8 @@ CONTAINS
                        pres_a, residual_history, history_count, endconn_direction, endconn_direction_rate, &
                        endconn_direction_acceleration, tensile_failed)
     model%tors_use_step = .FALSE.
+    ! every evaluation outside a step takes the committed VIV phase
+    IF (model%has_viv) model%viv_phi_eval = model%viv_phi
   END SUBROUTINE CD_HermiteCable_Dyn_Step
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Torsion_Drive(model, ends, phi, ErrStat, ErrMsg)
@@ -3391,6 +3715,13 @@ CONTAINS
       model%fc_t = model%t
       model%fc_d0 = model%endconn_d0
       model%fc_valid = .TRUE.
+    END IF
+    ! VIV: F_n above took the committed phase; the step's evaluations take its predicted phase.
+    IF (model%has_viv) THEN
+      CALL viv_step_begin(model, dt, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
+      END IF
     END IF
     ! Condensed torsion: F_n above used the committed end frames and Phi; every evaluation of the
     ! step from here on uses the step's target (set by CD_HermiteCable_Dyn_Step).
@@ -4000,6 +4331,7 @@ CONTAINS
     END IF
     IF (has_endconn_motion) CALL impose_step_rigid_kinematics(model%q, model%v, model%a)
     IF (model%fr_active) CALL commit_friction_anchors(model)
+    IF (model%has_viv) CALL viv_step_end(model, dt)
     model%t = model%t + dt
     IF (has_endconn_motion) model%endconn_d0 = step_endconn_target
     IF (model%torsion%active) THEN
@@ -4031,8 +4363,11 @@ CONTAINS
     END IF
     model%tr_dt = dt
     ! The converged iterate's unblended force is F at the committed state: cache it, keyed
-    ! on that state, as the next step's F_n.
-    IF (model%force_blend) THEN
+    ! on that state, as the next step's F_n. With VIV it took the step's predicted phase, not
+    ! the committed one, so the next step evaluates F_n afresh.
+    IF (model%has_viv) THEN
+      model%fc_valid = .FALSE.
+    ELSE IF (model%force_blend) THEN
       DO iv = 1, SIZE(model%fc_R)
         model%fc_R(iv) = model%ws_Rk(iv)
       END DO
@@ -4573,6 +4908,10 @@ CONTAINS
     model%ws_recovery_v0 = model%v
     model%ws_recovery_a0 = model%a
     IF (model%fr_active) model%ws_recovery_fr = model%fr_anchor
+    IF (model%has_viv) THEN
+      model%ws_recovery_viv_phi = model%viv_phi
+      model%ws_recovery_viv_ms = model%viv_ms
+    END IF
     IF (model%has_ctrl) THEN
       model%ws_recovery_l0_c = model%l0_c
       model%ws_recovery_l0_dot_c = model%l0_dot_c
@@ -4664,6 +5003,10 @@ CONTAINS
       model%q = q_save; model%v = v_save; model%a = a_save; model%t = t_save
       model%endconn_d0 = d0_save
       IF (model%fr_active) model%fr_anchor = model%ws_recovery_fr
+      IF (model%has_viv) THEN
+        model%viv_phi = model%ws_recovery_viv_phi; model%viv_ms = model%ws_recovery_viv_ms
+        model%viv_phi_eval = model%viv_phi
+      END IF
       IF (model%has_ctrl) model%l0_c = model%ws_recovery_l0_c
       IF (model%has_ctrl) model%l0_dot_c = model%ws_recovery_l0_dot_c
       model%na_steps_done = na_steps_save; model%na_iter_sum = na_sum_save; model%na_mn_active = na_mn_save
@@ -4740,6 +5083,10 @@ CONTAINS
             model%q = q_save; model%v = v_save; model%a = a_save; model%t = t_save
             model%endconn_d0 = d0_save
             IF (model%fr_active) model%fr_anchor = model%ws_recovery_fr
+            IF (model%has_viv) THEN
+              model%viv_phi = model%ws_recovery_viv_phi; model%viv_ms = model%ws_recovery_viv_ms
+              model%viv_phi_eval = model%viv_phi
+            END IF
             IF (model%has_ctrl) model%l0_c = model%ws_recovery_l0_c
             IF (model%has_ctrl) model%l0_dot_c = model%ws_recovery_l0_dot_c
             model%na_steps_done = na_steps_save
@@ -4784,6 +5131,10 @@ CONTAINS
     model%q = q_save; model%v = v_save; model%a = a_save; model%t = t_save
     model%endconn_d0 = d0_save
     IF (model%fr_active) model%fr_anchor = model%ws_recovery_fr
+    IF (model%has_viv) THEN
+      model%viv_phi = model%ws_recovery_viv_phi; model%viv_ms = model%ws_recovery_viv_ms
+      model%viv_phi_eval = model%viv_phi
+    END IF
     IF (model%has_ctrl) model%l0_c = model%ws_recovery_l0_c
     IF (model%has_ctrl) model%l0_dot_c = model%ws_recovery_l0_dot_c
     model%na_steps_done = na_steps_save; model%na_iter_sum = na_sum_save; model%na_mn_active = na_mn_save
@@ -5427,6 +5778,13 @@ CONTAINS
       END IF
       r3 = r3 - fdrag(i0 + 1:i0 + 3)
     END IF
+    IF (model%has_viv) THEN
+      CALL viv_element_lift(model, model%q, model%v, e, fdrag, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
+      END IF
+      r3 = r3 - fdrag(i0 + 1:i0 + 3)
+    END IF
     IF (model%has_attach) THEN
       ! A clump or buoy on the end node loads the point holding it, exactly as it loads the
       ! end node in the residual (assemble_attachments).
@@ -5905,6 +6263,11 @@ CONTAINS
                                           model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
                                           fx, ErrStat=es, ErrMsg=em2)
       END IF
+      IF (es /= CD_HCDYN_OK) GOTO 900
+      g = g - fx
+    END IF
+    IF (model%has_viv) THEN
+      CALL viv_element_lift(model, model%q, model%v, e, fx, es, em2)
       IF (es /= CD_HCDYN_OK) GOTO 900
       g = g - fx
     END IF
@@ -6485,6 +6848,10 @@ CONTAINS
     model%snap_torsion_phi = model%torsion%phi
     model%snap_torsion_ends = model%torsion%ends
     IF (model%fr_active) model%snap_fr_anchor = model%fr_anchor
+    IF (model%has_viv) THEN
+      model%snap_viv_phi = model%viv_phi
+      model%snap_viv_ms = model%viv_ms
+    END IF
     ! the cached committed force goes with the state it describes (see fc_clears)
     model%snap_fc_valid = model%fc_valid .AND. ALLOCATED(model%fc_R)
     model%snap_fc_clears = model%fc_clears
@@ -6562,6 +6929,10 @@ CONTAINS
     model%tors_drive_set = .FALSE.
     model%tors_use_step = .FALSE.
     IF (model%fr_active) model%fr_anchor = model%snap_fr_anchor
+    IF (model%has_viv) THEN
+      model%viv_phi = model%snap_viv_phi; model%viv_ms = model%snap_viv_ms
+      model%viv_phi_eval = model%viv_phi
+    END IF
     model%na_steps_done = model%snap_na_steps_done
     model%na_iter_sum = model%snap_na_iter_sum
     model%na_mn_active = model%snap_na_mn_active
@@ -6622,6 +6993,7 @@ CONTAINS
     IF (ALLOCATED(model%fr_anchor)) DEALLOCATE (model%fr_anchor, model%fr_k, model%ws_recovery_fr, &
                                                 model%snap_fr_anchor)
     model%fr_active = .FALSE.
+    CALL clear_viv(model)
     CALL CD_End_Bathymetry(model%contact_bathymetry)
     model%has_contact = .FALSE.; model%has_contact_bathymetry = .FALSE.
     IF (ALLOCATED(model%Mgb)) DEALLOCATE (model%Mgb)
@@ -7090,6 +7462,29 @@ CONTAINS
                                               model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
                                               fdrag, ErrStat=es, ErrMsg=em_e)
           END IF
+        END IF
+        IF (es /= CD_HCDYN_OK) THEN
+          ErrStat = es; ErrMsg = TRIM(em_e); RETURN
+        END IF
+        IF (want_residual) THEN
+          DO a = 1, 12
+            gi = elem_gdof(e, a)
+            R(gi) = R(gi) - fdrag(a)
+          END DO
+        END IF
+        IF (want_tangent) THEN
+          CALL scatter12_band(Kb, -djq, e)
+          CALL scatter12_band(Kvb, -djv, e)
+        END IF
+      END DO
+    END IF
+    ! Cross-flow VIV lift (an external load like the drag, at the step's phase viv_phi_eval).
+    IF (model%has_viv .AND. .NOT. tangent_only) THEN
+      DO e = e_lo, e_hi
+        IF (want_tangent) THEN
+          CALL viv_element_lift(model, q_cfg, v_cfg, e, fdrag, es, em_e, djq, djv)
+        ELSE
+          CALL viv_element_lift(model, q_cfg, v_cfg, e, fdrag, es, em_e)
         END IF
         IF (es /= CD_HCDYN_OK) THEN
           ErrStat = es; ErrMsg = TRIM(em_e); RETURN
@@ -7704,6 +8099,15 @@ CONTAINS
       Kvel = Kvel - djv
     END IF
 
+    IF (model%has_viv) THEN
+      CALL viv_element_lift(model, q_cfg, v_cfg, e, fload, es, em, djq, djv)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = TRIM(em); RETURN
+      END IF
+      Kdrag = Kdrag - djq
+      Kvel = Kvel - djv
+    END IF
+
     IF (model%has_wave .AND. model%has_am) THEN
       IF (model%wv_ncomp > 0) THEN
         CALL CD_HermiteCable_FK_Element(qe, model%l0(e), model%am_wl, model%am_rho, model%am_diam(e), &
@@ -8132,6 +8536,79 @@ CONTAINS
       END IF
     END IF
   END SUBROUTINE CD_HermiteCable_Drag_Element
+
+  SUBROUTINE CD_HermiteCable_VIV_Lift_Element(qe, ve, l0, fluid, waterline_z, k_node, flift, djq, djv, &
+                                              ErrStat, ErrMsg)
+    !! Consistent Gauss-integrated cross-flow VIV lift on one cubic-Hermite element: the load
+    !! integral N^T f ds of the per-length lift f = k(xi) U (t x v_r) (CD_VIV_Lift_Per_Length),
+    !! with k = 1/2 rho D Cl cos(phi) interpolated linearly between the element's end nodes
+    !! (k_node), and its force Jacobians djq = d flift/d qe, djv = d flift/d ve (both or neither).
+    !! The interpolation, measure and wet/dry culling are the drag element's (still waterline).
+    REAL(wp), INTENT(IN) :: qe(12), ve(12), l0, fluid(3), waterline_z, k_node(2)
+    REAL(wp), INTENT(OUT) :: flift(12)
+    REAL(wp), INTENT(OUT), OPTIONAL :: djq(12, 12), djv(12, 12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, PARAMETER :: NGP = 3
+    REAL(wp), PARAMETER :: G3 = 0.7745966692414834_wp   ! sqrt(3/5)
+    REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4), rpos(3), vvel(3), rp(3), speed, tangent(3), fpl(3)
+    REAL(wp) :: jrel(3, 3), jtan(3, 3), scale, kg
+    LOGICAL :: want_jac, ok
+    INTEGER :: g, s, c, sp, cp, a, b
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    want_jac = PRESENT(djq)
+    flift = CD_ZERO
+    IF (want_jac) THEN
+      djq = CD_ZERO; djv = CD_ZERO
+    END IF
+    gp = [0.5_wp*(CD_ONE - G3), 0.5_wp, 0.5_wp*(CD_ONE + G3)]
+    gw = [5.0_wp/18.0_wp, 8.0_wp/18.0_wp, 5.0_wp/18.0_wp]
+    DO g = 1, NGP
+      CALL CD_HermiteCable_Shapes(gp(g), l0, H, dH)
+      DO c = 1, 3
+        rpos(c) = H(1)*qe(c) + H(2)*qe(3 + c) + H(3)*qe(6 + c) + H(4)*qe(9 + c)
+        vvel(c) = H(1)*ve(c) + H(2)*ve(3 + c) + H(3)*ve(6 + c) + H(4)*ve(9 + c)
+        rp(c) = dH(1)*qe(c) + dH(2)*qe(3 + c) + dH(3)*qe(6 + c) + dH(4)*qe(9 + c)
+      END DO
+      IF (rpos(3) > waterline_z) CYCLE                 ! dry Gauss point: no lift
+      kg = (CD_ONE - gp(g))*k_node(1) + gp(g)*k_node(2)
+      IF (want_jac) THEN
+        CALL CD_VIV_Lift_Per_Length(fluid - vvel, rp, kg, fpl, ok, jrel, jtan)
+      ELSE
+        CALL CD_VIV_Lift_Per_Length(fluid - vvel, rp, kg, fpl, ok)
+      END IF
+      IF (.NOT. ok) THEN
+        ErrStat = CD_HCDYN_NOCONVERGE
+        ErrMsg = 'CD_HermiteCable_VIV_Lift_Element: degenerate centreline (|dr/dxi| ~ 0)'; RETURN
+      END IF
+      speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)
+      tangent = rp/speed
+      scale = gw(g)*speed
+      DO s = 1, 4
+        DO c = 1, 3
+          a = 3*(s - 1) + c
+          flift(a) = flift(a) + scale*H(s)*fpl(c)
+        END DO
+      END DO
+      IF (.NOT. want_jac) CYCLE
+      DO s = 1, 4
+        DO c = 1, 3
+          a = 3*(s - 1) + c
+          DO sp = 1, 4
+            DO cp = 1, 3
+              b = 3*(sp - 1) + cp
+              djv(a, b) = djv(a, b) - scale*H(s)*H(sp)*jrel(c, cp)
+              djq(a, b) = djq(a, b) + gw(g)*H(s)*dH(sp)*(speed*jtan(c, cp) + fpl(c)*tangent(cp))
+            END DO
+          END DO
+        END DO
+      END DO
+    END DO
+    IF (.NOT. CD_All_Finite(flift)) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_VIV_Lift_Element: non-finite lift load'
+    END IF
+  END SUBROUTINE CD_HermiteCable_VIV_Lift_Element
 
   SUBROUTINE CD_HermiteCable_AddedMass_Element(qe, l0, waterline_z, rho, diam, can, cat, Ma, ErrStat, ErrMsg)
     !! Consistent Gauss-integrated Morison ADDED MASS on one cubic-Hermite bending-cable element:

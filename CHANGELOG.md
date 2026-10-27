@@ -17,6 +17,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and frequency to two to three digits through mode-1 and mode-3 lock-in, at any `dtM` from
   5e-4 to 1e-2 s. The Python deck tools read and keep the columns. The coupled and mixed
   routes refuse `Cl > 0` by name.
+- Cross-flow VIV of finite-EI cables in the standalone driver: the same LINE TYPES columns on an
+  `EI > 0` type give a distributed lift, Gauss-integrated over each cubic-Hermite element with
+  exact tangents, and a shedding phase at each node driven along the node's own tangent. A taut
+  line with `EI` near zero reproduces the `EI = 0` lock-in to three digits, at any `dtM` from
+  5e-4 to 1e-2 s without smoothing; a bending-stiff line matches the string of equal first-mode
+  frequency in mode-1 lock-in and stays in mode 1 where that string jumps to mode 2. A finite-EI
+  line with two moving ends, or beside bodies, rods or free points, refuses `Cl > 0`.
 - Bend stiffeners (`STIFFENERS` table): a tapered polyurethane sleeve over an end of a finite-EI
   line, given as conical segments from the root outward (outer diameters, bore, modulus,
   density). Each element it covers takes the compliance average of the cable-plus-sleeve

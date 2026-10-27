@@ -1175,6 +1175,11 @@ target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
 add_test(NAME viv_kernels COMMAND test_viv_kernels)
 set_tests_properties(viv_kernels PROPERTIES LABELS "fortran;unit;dynamic;viv")
 
+add_executable(test_hermite_viv tests/test_hermite_viv.f90)
+target_link_libraries(test_hermite_viv PRIVATE cabledyn_core)
+add_test(NAME hermite_viv COMMAND test_hermite_viv)
+set_tests_properties(hermite_viv PROPERTIES LABELS "fortran;dynamic;viv")
+
 add_executable(test_hfmf_mirror tests/test_hfmf_mirror.f90)
 target_link_libraries(test_hfmf_mirror PRIVATE cabledyn_core)
 add_test(NAME hfmf_mirror COMMAND test_hfmf_mirror WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -1627,9 +1632,17 @@ if(Python3_Interpreter_FOUND)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_viv_lockin.py
                      --exe $<TARGET_FILE:cabledyn>
                      --output ${CMAKE_BINARY_DIR}/viv_lockin)
+    # eight benchmark runs, four at a time (PROCESSORS reserves them, so no other test shares
+    # the cores); a checked Debug build is about ten times slower than Release
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+      set(_viv_lockin_timeout 2400)
+    else()
+      set(_viv_lockin_timeout 600)
+    endif()
     set_tests_properties(viv_lockin PROPERTIES
       LABELS "python;integration;dynamic;viv;validation"
-      TIMEOUT 600
+      PROCESSORS 4
+      TIMEOUT ${_viv_lockin_timeout}
       ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
     message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")

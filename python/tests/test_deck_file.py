@@ -4591,11 +4591,16 @@ def test_line_type_viv_columns_follow_the_native_checks(columns, message):
         DeckFile.from_text(_edit(_STATIC, (_VIV_ROW, _VIV_ROW + columns)))
 
 
-def test_line_type_viv_needs_an_ei0_line_type():
+def test_line_type_viv_is_accepted_on_a_finite_ei_line_type(tmp_path):
+    from cabledyn import DeckModel
+
     row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
     text = _edit(_DYNAMIC, (row, row + " 0.8"))
-    with pytest.raises(DeckFormatError, match="implemented for EI = 0 line types only"):
-        DeckFile.from_text(text)
+    DeckFile.from_text(text)
+    path = tmp_path / "viv_ei.dat"
+    path.write_text(text, encoding="utf-8")
+    line_type = DeckModel.load(path).line_types["chain"]
+    assert (line_type.ei, line_type.cl) == (1.0e4, 0.8)
 
 
 def test_viv_is_refused_on_the_coupled_route():
@@ -4611,6 +4616,13 @@ def test_viv_needs_water_on_an_ei0_line():
         DeckFile.from_text(text)
     # without the lift the same dry deck stays valid
     DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "")))
+
+
+def test_finite_ei_viv_is_refused_beside_free_points():
+    row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
+    base = _edit(_DYNAMIC, ("2 Coupled 0.0 0.0 0.0 0 0 0 0", "2 Free 0.0 0.0 0.0 1000 0 0 0"))
+    with pytest.raises(DeckFormatError, match="does not run with bodies, rods or free points"):
+        DeckFile.from_text(_edit(base, (row, row + " 0.8")))
 
 
 def test_viv_rms_window_option_is_non_negative():

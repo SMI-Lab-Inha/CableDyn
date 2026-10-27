@@ -103,7 +103,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Set_Output_Recovery, &
                                           CD_HermiteCable_Dyn_Set_ForceBlend, CD_HC_FORCE_BLEND_DEFAULT, &
                                           CD_HermiteCable_Dyn_Set_Friction_Anchors, &
-                                          CD_HermiteCable_Dyn_Set_Friction_Axial, &
+                                          CD_HermiteCable_Dyn_Set_Friction_Axial, CD_HermiteCable_Dyn_Set_VIV, &
                                           CD_HermiteCable_Dyn_Set_Control_Seabed, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State
@@ -1641,7 +1641,8 @@ CONTAINS
 
   RECURSIVE SUBROUTINE build_one_hermite_cable(ln, sections, types, points, opts, dt, cable, coupled_node, &
                                                ErrStat, ErrMsg, standalone_controls, bathymetry, &
-                                               fairlead_orientation, init_note, coarse_pass, fold_support)
+                                               fairlead_orientation, init_note, coarse_pass, fold_support, &
+                                               install_viv)
     !! Build one COUPLED cubic-Hermite lazy-wave cable (CD_HFMF) from a finite-EI deck
     !! LINE -- the production Hermite bending path shared by the coupled route and
     !! standalone and coupled finite-EI dynamics, including flat/structured seabed contact.
@@ -1672,12 +1673,16 @@ CONTAINS
     ! The static seabed friction the calling route accepts (FOLD_FRICTION_*, default
     ! FOLD_FRICTION_FULL), for the remedy of the note on a run past the anchor.
     INTEGER, INTENT(IN), OPTIONAL :: fold_support
+    ! Install the cross-flow VIV of the line's Cl > 0 sections (the standalone finite-EI march;
+    ! the other routes refuse such a line before building it).
+    LOGICAL, INTENT(IN), OPTIONAL :: install_viv
 
     INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:), dynamic_fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), ei(:), gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
     REAL(wp), ALLOCATABLE :: gas(:), gj(:), rho_a(:), i_rt(:), i_rn(:), w(:), nodes_ref(:, :), q0(:), q_static(:)
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:)
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
     REAL(wp) :: anchor(3), fairlead(3), res, tvec(3), tnrm, contact_z, seed_z, seed_floor_a, seed_floor_b
@@ -2921,7 +2926,12 @@ CONTAINS
     ! property of the original element containing its reference-arc midpoint.
     ALLOCATE (cdn(SIZE(l0)), cdt(SIZE(l0)), can(SIZE(l0)), cat(SIZE(l0)))
     CALL finite_hydro_arrays(ln, sections, types, diam, cdn, cdt, can, cat)
+    ALLOCATE (viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), viv_df(SIZE(l0)))
+    CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
+      CALL remap_elem_by_reference_arc(viv_cl, l0, l0_am)
+      CALL remap_elem_by_reference_arc(viv_cf, l0, l0_am)
+      CALL remap_elem_by_reference_arc(viv_df, l0, l0_am)
       CALL remap_elem_by_reference_arc(rho_a, l0, l0_am)
       CALL remap_elem_by_reference_arc(diam, l0, l0_am)
       CALL remap_elem_by_reference_arc(cdn, l0, l0_am)
@@ -3122,6 +3132,18 @@ CONTAINS
                           gravity=opts%g)
     IF (es /= CD_HFMF_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable drag wiring failed: '//TRIM(em)); RETURN
+    END IF
+    ! Cross-flow VIV on the Cl > 0 sections, with the drag's diameters (CableDyn_VIV); an
+    ! OPTION VIVrmsWindow of 0 takes MoorDyn's 500 time steps.
+    IF (PRESENT(install_viv)) THEN
+      IF (install_viv .AND. ANY(viv_cl > CD_ZERO)) THEN
+        CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
+                                         MERGE(opts%viv_rms_window, REAL(CD_VIV_NM, wp)*dt, &
+                                               opts%viv_rms_window > CD_ZERO), es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail(ErrStat, ErrMsg, 'finite-EI cable VIV wiring failed: '//TRIM(em)); RETURN
+        END IF
+      END IF
     END IF
     CALL CD_HFMF_Set_AddedMass(cable, opts%rhoW, diam, can, cat, CD_ZERO, es, em)
     IF (es /= CD_HFMF_OK) THEN
@@ -6484,6 +6506,10 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable cannot consume WaveKinMod 2/SEASTATE; '// &
                 'use the aggregate facade with its external SeaState field'); RETURN
     END IF
+    IF (line_has_viv(lines(1), types, sections)) THEN
+      CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: VIV (LINE TYPES Cl > 0) runs in the standalone '// &
+                'deck driver; set Cl = 0 for this entry'); RETURN
+    END IF
     IF (opts%has_bathymetry_file) THEN
       CALL load_bathymetry_file(path_join(deck_dir(deck_path), opts%bathymetry_file), bathymetry, ErrStat, ErrMsg, &
                                 points=points)
@@ -6711,11 +6737,12 @@ CONTAINS
                 'EI=0/finite-EI decks reject deck water kinematics)')
       RETURN
     END IF
-    ! Cross-flow VIV runs in the standalone EI = 0 driver: the aggregate route (OpenFAST, FAST.Farm,
-    ! mixed EI = 0 / finite-EI decks) neither checkpoints its shedding phase nor feeds it the host's
-    ! fluid field yet.
+    ! Cross-flow VIV runs in the standalone driver (EI = 0 decks and finite-EI decks): the aggregate
+    ! route (OpenFAST, FAST.Farm, mixed EI = 0 / finite-EI decks) neither checkpoints its shedding
+    ! phase nor feeds it the host's fluid field yet.
     IF (ANY(types%cl > CD_ZERO)) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) runs in the standalone driver of an EI = 0 deck; '// &
+      CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) runs in the standalone driver of an EI = 0 or '// &
+                'finite-EI deck; '// &
                 'the coupled OpenFAST and FAST.Farm routes and mixed EI = 0 / finite-EI decks do not carry it '// &
                 'yet. Set Cl = 0 for this run')
       RETURN
@@ -8054,16 +8081,26 @@ CONTAINS
         ! dynamic deck, including flat/structured contact, damping, friction, motion,
         ! and deck-owned fluid fields. The compatibility route remains only for the
         ! two-moving-end topology that the HFMF boundary cannot represent.
+        IF (.NOT. hermite_standalone_eligible) THEN
+          DO li = 1, SIZE(lines)
+            IF (.NOT. line_has_viv(lines(li), types, sections)) CYCLE
+            IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
+            CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) of a finite-EI line needs its End B fixed '// &
+                      '(the cubic-Hermite march); set Cl = 0 for a line with two moving ends')
+            RETURN
+          END DO
+        END IF
         IF (hermite_standalone_eligible) THEN
           ALLOCATE (hermite_models(SIZE(lines)))
           DO li = 1, SIZE(lines)
             IF (opts%has_bathymetry_file) THEN
               CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
                                            hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
-                                           bathymetry=bathymetry)
+                                           bathymetry=bathymetry, install_viv=.TRUE.)
             ELSE
               CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
-                                           hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE.)
+                                           hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
+                                           install_viv=.TRUE.)
             END IF
             IF (ErrStat /= CD_DECKDRV_OK) EXIT
           END DO
@@ -9288,6 +9325,45 @@ CONTAINS
     can = can(SIZE(can):1:-1)
     cat = cat(SIZE(cat):1:-1)
   END SUBROUTINE finite_hydro_arrays
+
+  SUBROUTINE finite_viv_arrays(ln, sections, types, cl, cf, df)
+    !! Expand the section VIV columns (Cl dF cF) to finite-EI element arrays, in the element
+    !! order of finite_hydro_arrays.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: cl(:), cf(:), df(:)
+    INTEGER :: i, j, e, tidx
+
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      tidx = sections(i)%ltype
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        cl(e) = types(tidx)%cl
+        cf(e) = types(tidx)%viv_cf
+        df(e) = types(tidx)%viv_df
+      END DO
+    END DO
+    cl = cl(SIZE(cl):1:-1)
+    cf = cf(SIZE(cf):1:-1)
+    df = df(SIZE(df):1:-1)
+  END SUBROUTINE finite_viv_arrays
+
+  LOGICAL FUNCTION line_has_viv(ln, types, sections) RESULT(has)
+    !! Whether a section of the line uses a line type with a VIV lift coefficient Cl > 0.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    INTEGER :: j
+    has = .FALSE.
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= ln%id) CYCLE
+      IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
+      IF (types(sections(j)%ltype)%cl > CD_ZERO) has = .TRUE.
+    END DO
+  END FUNCTION line_has_viv
 
   SUBROUTINE CD_Stiffener_Overlay(stf, l0, diam, ei, mpl)
     !! Add the bend stiffeners of a finite-EI line (ln%stf columns) to its element properties,
@@ -12653,7 +12729,7 @@ CONTAINS
 
   SUBROUTINE check_viv_columns(t, ErrStat, ErrMsg)
     !! The VIV columns of a LINE TYPES row: a finite, non-negative Cl; with Cl > 0 a positive
-    !! shedding frequency band (cF > 0, 0 <= dF < cF) on an EI = 0, non-Syrope line type.
+    !! shedding frequency band (cF > 0, 0 <= dF < cF) on a non-Syrope line type.
     TYPE(DeckLineType), INTENT(IN) :: t
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
@@ -12667,10 +12743,6 @@ CONTAINS
     IF (.NOT. (t%cl > CD_ZERO)) RETURN
     IF (.NOT. (t%viv_cf > CD_ZERO .AND. t%viv_df >= CD_ZERO .AND. t%viv_df < t%viv_cf)) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES VIV synchronisation band needs cF > 0 and 0 <= dF < cF'); RETURN
-    END IF
-    IF (t%ei > CD_ZERO) THEN
-      CALL fail(ErrStat, ErrMsg, 'LINE TYPES "'//TRIM(t%name)//'": VIV (Cl > 0) is implemented for EI = 0 '// &
-                'line types only; set EI = 0 or Cl = 0 (VIV of finite-EI cables is not available)'); RETURN
     END IF
     IF (t%is_syrope) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES "'//TRIM(t%name)//'": VIV (Cl > 0) does not combine with the '// &
@@ -19542,6 +19614,11 @@ CONTAINS
       pc = points
       pa = find_point(points, cab_lines(c)%nodeA)
       IF (TRIM(pc(pa)%ptype) /= 'fixed') pc(pa)%ptype = 'coupled'
+      IF (line_has_viv(cab_lines(c), types, sections)) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) of a finite-EI line does not run with bodies, rods '// &
+                  'or free points yet; set Cl = 0 for the finite-EI lines of this deck')
+        GOTO 900
+      END IF
       mb%cab_clamp(c) = (cab_lines(c)%endconn_mode(1) /= CD_ENDCONN_PINNED .OR. line_torsion_active(cab_lines(c))) &
                         .AND. TRIM(points(pa)%ptype) /= 'fixed'
       IF (mb%cab_clamp(c)) THEN

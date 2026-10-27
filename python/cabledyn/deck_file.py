@@ -2615,6 +2615,7 @@ class DeckFile:
         # (native init_one_model, which needs the line's Morison drag in water)
         has_viv = False
         has_viv_ei0 = False
+        viv_type_names: set[str] = set()
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
@@ -2697,10 +2698,6 @@ class DeckFile:
                         f"{self._at(row)}: LINE TYPES VIV synchronisation band needs cF > 0 "
                         "and 0 <= dF < cF"
                     )
-                if cl > 0.0 and ei > 0.0:
-                    raise DeckFormatError(
-                        f"{self._at(row)}: VIV (Cl > 0) is implemented for EI = 0 line types only"
-                    )
                 if cl > 0.0 and is_syrope:
                     raise DeckFormatError(
                         f"{self._at(row)}: VIV (Cl > 0) does not combine with the Syrope "
@@ -2708,6 +2705,8 @@ class DeckFile:
                     )
                 has_viv = has_viv or cl > 0.0
                 has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
+                if cl > 0.0:
+                    viv_type_names.add(row.tokens[0].lower())
             if ei > 0.0 and (is_syrope or len(ea_parts) > 1):
                 model = "Syrope" if is_syrope else "viscoelastic stiffness"
                 raise DeckFormatError(f"{self._at(row)}: {model} is not supported with EI > 0")
@@ -3494,8 +3493,8 @@ class DeckFile:
             if has_viv:
                 raise DeckFormatError(
                     f"{self._label}: VIV (LINE TYPES Cl > 0) runs in the standalone driver of an "
-                    "EI = 0 deck; the coupled OpenFAST and FAST.Farm routes and mixed EI = 0 / "
-                    "finite-EI decks do not carry it yet. Set Cl = 0 for this run"
+                    "EI = 0 or finite-EI deck; the coupled OpenFAST and FAST.Farm routes and mixed "
+                    "EI = 0 / finite-EI decks do not carry it yet. Set Cl = 0 for this run"
                 )
         if self.caller_driven:
             # native CD_Init_Deck_Aggregate: nothing on the coupled route evaluates deck
@@ -3600,6 +3599,18 @@ class DeckFile:
                 )
             elif has_rigid6:
                 needs_multibody = non_rigid6_points
+        if deck_driver_route and viv_type_names:
+            # native run_deck_driver: the finite-EI lift runs on the cubic-Hermite march, which
+            # builds no bodies, rods or Free/Connect points (a moving End B is refused above)
+            for line_id in finite_line_ids:
+                if not viv_type_names.intersection(section_types_by_line[line_id]):
+                    continue
+                if needs_multibody:
+                    raise DeckFormatError(
+                        f"{self._label}: VIV (LINE TYPES Cl > 0) of a finite-EI line does not run "
+                        "with bodies, rods or free points yet; set Cl = 0 for the finite-EI lines "
+                        "of this deck"
+                    )
         if failures and deck_driver_route:
             # native CD_Run_Deck_Driver: FAILURE runs on the point-system object graph only
             if not has_dtm:

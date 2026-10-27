@@ -14,12 +14,12 @@ PROGRAM test_viv_kernels
   !!   6) the phase wraps to [0, 2 pi), and a node whose neighbours coincide fails closed.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_VIV, ONLY: CD_VIV_Node_Lift, CD_VIV_Crossflow_Motion, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
-                          CD_VIV_Wrap_Phase, CD_VIV_TWO_PI, CD_VIV_NM
+                          CD_VIV_Wrap_Phase, CD_VIV_TWO_PI, CD_VIV_NM, CD_VIV_Lift_Per_Length
   IMPLICIT NONE
   REAL(wp), PARAMETER :: RHO = 1025.0_wp, DIAM = 0.1_wp, CL = 0.8_wp, L1 = 2.0_wp, L2 = 1.5_wp
   REAL(wp) :: rp(3), rn(3), rd(3), u(3), coef, phi, f(3), q(3), vr(3), vn(3), un, w(3), ref(3)
   REAL(wp) :: jv(3, 3), jp(3, 3), jn(3, 3), fd(3, 3), fp(3), fm(3), h, e(3), yd, ydd, un2, rate
-  REAL(wp) :: ms, ms_md
+  REAL(wp) :: ms, ms_md, rpv(3), kk, fl(3), jr(3, 3), jt(3, 3)
   LOGICAL :: ok
   INTEGER :: nfail, j, k
 
@@ -94,6 +94,30 @@ PROGRAM test_viv_kernels
                  'mean square is MoorDyn''s running RMS update')
     ms_md = ms
   END DO
+
+  ! (7) per-length lift at a centreline point (the finite-EI Gauss points): the node formula with
+  ! the exact tangent, scaled to unit length, independent of |dr/dxi|; Jacobians vs differences
+  rpv = 2.5_wp*(rn - rp)
+  kk = 0.5_wp*RHO*DIAM*CL*COS(phi)
+  CALL CD_VIV_Lift_Per_Length(u - rd, rpv, kk, fl, ok, jr, jt)
+  CALL CD_VIV_Node_Lift(rp, rn, rd, u, 1.0_wp, phi, f, ok)
+  CALL require(ok .AND. NORM2(fl - 0.5_wp*RHO*DIAM*CL*f) <= 1.0e-12_wp*NORM2(fl), &
+               'per-length lift = 1/2 rho D Cl cos(phi) U (t x v_n)')
+  DO j = 1, 3
+    CALL CD_VIV_Lift_Per_Length(u - rd + h*unit(j), rpv, kk, fp, ok)
+    CALL CD_VIV_Lift_Per_Length(u - rd - h*unit(j), rpv, kk, fm, ok)
+    fd(:, j) = (fp - fm)/(2.0_wp*h)
+  END DO
+  CALL require(MAXVAL(ABS(jr - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), 'per-length lift: flow Jacobian matches differences')
+  DO j = 1, 3
+    CALL CD_VIV_Lift_Per_Length(u - rd, rpv + h*unit(j), kk, fp, ok)
+    CALL CD_VIV_Lift_Per_Length(u - rd, rpv - h*unit(j), kk, fm, ok)
+    fd(:, j) = (fp - fm)/(2.0_wp*h)
+  END DO
+  CALL require(MAXVAL(ABS(jt - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), &
+               'per-length lift: tangent Jacobian matches differences')
+  CALL CD_VIV_Lift_Per_Length(u - rd, 3.0_wp*rpv, kk, fp, ok)
+  CALL require(NORM2(fp - fl) <= 1.0e-12_wp*NORM2(fl), 'per-length lift does not depend on |dr/dxi|')
 
   ! (6) wrap and degenerate frame
   CALL require(CD_VIV_Wrap_Phase(-1.0e-300_wp) >= 0.0_wp .AND. CD_VIV_Wrap_Phase(-1.0e-300_wp) < CD_VIV_TWO_PI, &
