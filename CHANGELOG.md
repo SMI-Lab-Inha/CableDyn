@@ -46,6 +46,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   numbers them from 0, so a MoorDyn deck's `N<J>` is CableDyn's `N<J+1>`, or `N<NumSegs+1-J>` on
   a line written anchor-first. The numbering itself is unchanged; the outputs and migration pages
   state it.
+- The run banner, README, manual, citation and package descriptions call CableDyn what it is: a
+  geometrically exact finite-element solver for the statics and dynamics of mooring lines and
+  dynamic power cables (its strain and curvature are the exact large-deformation measures), in
+  place of "geometrically nonlinear cable & mooring dynamics".
 
 ### Fixed
 

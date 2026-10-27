@@ -543,7 +543,8 @@ CONTAINS
       ! ------------------------------------------------------------------------------
       CALL DispNVD( CableDyn_ProgDesc )
       InitOut%Ver = CableDyn_ProgDesc
-      CALL WrScr( '   CableDyn: geometrically nonlinear cable & mooring dynamics for floating wind.' )
+      CALL WrScr( '   CableDyn: geometrically exact finite-element statics and dynamics of mooring lines '// &
+                  'and dynamic power cables.' )
       CALL WrScr( '   Author Prof. Jae Hoon Seo, Inha University.  License Apache-2.0.' )
       CALL WrScr( '   CompMooring = 5: mooring and dynamic power-cable loads are computed by CableDyn,' )
       CALL WrScr( '   an OpenFAST mooring module alongside MoorDyn (CompMooring = 3) in this binary.' )

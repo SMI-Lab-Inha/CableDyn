@@ -169,7 +169,7 @@ The CableDyn part of the console (other modules' lines trimmed):
 .. code-block:: text
 
     Running CableDyn (v0.3.0, 2026-10-23).
-      CableDyn: geometrically nonlinear cable & mooring dynamics for floating wind.
+      CableDyn: geometrically exact finite-element statics and dynamics of mooring lines and dynamic power cables.
       ...
       CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)
      Parsing CableDyn input file: .\CableDyn_UMaine.dat

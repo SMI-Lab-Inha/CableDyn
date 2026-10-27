@@ -9,8 +9,11 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.oceaneng.2026.128332-blue.svg)](https://doi.org/10.1016/j.oceaneng.2026.128332)
 
-CableDyn is an open-source finite-element solver for the static and dynamic
-analysis of offshore mooring lines and dynamic power cables. It is written in
+CableDyn is an open-source, geometrically exact finite-element solver for the
+static and dynamic analysis of offshore mooring lines and dynamic power cables.
+Its strain and curvature are the exact large-deformation measures, never
+linearised, so large displacements and rotations, slack and snap, and a line
+lifting off the seabed lie inside the formulation. It is written in
 Fortran 2018 and runs as a standalone program, as a mooring module of OpenFAST,
 maintained by NLR (National Laboratory of the Rockies, formerly NREL)
 (`CompMooring = 5`), through a C interface, or from Python. It reads input decks

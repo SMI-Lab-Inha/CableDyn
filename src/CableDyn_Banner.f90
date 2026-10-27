@@ -27,9 +27,9 @@ CONTAINS
     CASE (2)
       s = '   CableDyn  v0.3.0'
     CASE (3)
-      s = '   Geometrically nonlinear cable & mooring dynamics for floating wind'
+      s = '   Geometrically exact finite-element statics and dynamics of'
     CASE (4)
-      s = '   (lazy-wave power cables and taut / semi-taut / catenary moorings)'
+      s = '   mooring lines and dynamic power cables for floating offshore wind'
     CASE (5)
       s = ' -------------------------------------------------------------------'
     CASE (6)
