@@ -1659,7 +1659,7 @@ CONTAINS
   RECURSIVE SUBROUTINE build_one_hermite_cable(ln, sections, types, points, opts, dt, cable, coupled_node, &
                                                ErrStat, ErrMsg, standalone_controls, bathymetry, &
                                                fairlead_orientation, init_note, coarse_pass, fold_support, &
-                                               install_viv, aux_weight)
+                                               install_viv, aux_weight, fixed_fairlead)
     !! Build one COUPLED cubic-Hermite lazy-wave cable (CD_HFMF) from a finite-EI deck
     !! LINE -- the production Hermite bending path shared by the coupled route and
     !! standalone and coupled finite-EI dynamics, including flat/structured seabed contact.
@@ -1696,6 +1696,9 @@ CONTAINS
     ! An auxiliary weight [N/m] added to every element's net weight (light_line_route: the
     ! line solved heavier, whose equilibrium is carried back to its own weight).
     REAL(wp), INTENT(IN), OPTIONAL :: aux_weight
+    ! Admit a Fixed End A as a standalone build does (the recursive builds of a standalone
+    ! line, which run without its standalone controls).
+    LOGICAL, INTENT(IN), OPTIONAL :: fixed_fairlead
 
     INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:), dynamic_fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), ei(:), gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
@@ -1723,6 +1726,7 @@ CONTAINS
     REAL(wp), PARAMETER :: COUPLED_STATIC_TOL = 1.0e-6_wp
     ! Newton-iteration budget of one mesh-sequenced fallback solve: a bounded failure path.
     INTEGER, PARAMETER :: FALLBACK_SEQUENCE_BUDGET = 2000
+    LOGICAL :: fixed_fairlead_ok, weightless_bow
     LOGICAL :: standalone_mode, contact_enabled, used_trivial_seed, anchor_on_flat_bed, allow_extra_sequence
     LOGICAL :: polish_ready
     ! Set when the attachment polish needed its fallbacks (attachment_fallback_checks).
@@ -1785,6 +1789,7 @@ CONTAINS
     step_max_iter = 200
     step_tol = 5.0e-3_wp
     standalone_mode = .FALSE.
+    weightless_bow = .FALSE.
     contact_enabled = .FALSE.
     anchor_on_flat_bed = .FALSE.
     used_trivial_seed = .FALSE.
@@ -1818,6 +1823,8 @@ CONTAINS
         step_tol = opts%dynamic_rel_tol
       END IF
     END IF
+    fixed_fairlead_ok = standalone_mode
+    IF (PRESENT(fixed_fairlead)) fixed_fairlead_ok = fixed_fairlead_ok .OR. fixed_fairlead
     ! Hand the dynamic integrator an equilibrium converged at least as tightly as
     ! its own Newton stopping criterion.  A looser static tolerance can otherwise
     ! appear as an artificial load impulse on the first nominally stationary step,
@@ -1844,7 +1851,7 @@ CONTAINS
     ! -- ignoring their point mass/load state -- instead of failing closed. (ptype is stored
     ! lower-case; the aggregator inherits this check since it calls build_one_hermite_cable too.)
     IF (TRIM(points(pb)%ptype) /= 'coupled' .AND. TRIM(points(pb)%ptype) /= 'vessel' .AND. &
-        .NOT. (standalone_mode .AND. TRIM(points(pb)%ptype) == 'fixed')) THEN
+        .NOT. (fixed_fairlead_ok .AND. TRIM(points(pb)%ptype) == 'fixed')) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI coupled cable requires End A (the fairlead) to be a '// &
                 'Coupled/Vessel point; got "'//TRIM(points(pb)%ptype)//'"'); RETURN
     END IF
@@ -2871,6 +2878,12 @@ CONTAINS
       init_note = ''
       IF (LEN_TRIM(fine_note) > 0) init_note = TRIM(fine_note)
     END IF
+    IF (weightless_bow) &
+      CALL report_note('line '//TRIM(int_to_str(ln%id))//' is weightless and longer than its span, so it '// &
+                       'bows under the compression its bending stiffness carries. Nothing in the deck chooses '// &
+                       'the plane or the side of the bow: it is solved bowed downward in the vertical plane '// &
+                       'through its ends, the limit of a vanishing net weight, and the bow can turn about '// &
+                       'the chord at no cost. Give the line its net weight (MassDenInAir) to settle its shape')
     ! "line N carries ..." reads as one clause; the mesh variant is a "line N: ..." note
     IF (LEN_TRIM(compression_note) > 0) THEN
       IF (starts_with(compression_note, 'carries')) THEN
@@ -3577,12 +3590,12 @@ CONTAINS
       opts_sw%has_current_profile = .FALSE.
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esw, emw, &
-                                     standalone_controls=.FALSE., bathymetry=bathymetry, &
-                                     fairlead_orientation=fairlead_dcm, init_note=sw_note)
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, init_note=sw_note)
       ELSE
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esw, emw, &
-                                     standalone_controls=.FALSE., fairlead_orientation=fairlead_dcm, &
-                                     init_note=sw_note)
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     fairlead_orientation=fairlead_dcm, init_note=sw_note)
       END IF
       IF (esw == CD_DECKDRV_OK) THEN
         CALL CD_HermiteCable_Mean_Axial_Extremes(sw_cable%line%l0, sw_cable%line%EA, sw_cable%line%q, t_min, &
@@ -3656,12 +3669,13 @@ CONTAINS
       aux = light_aux_weight()
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sections, types, points, opts, dt, aux_cable, aux_node, es_r, em_r, &
-                                     standalone_controls=.FALSE., bathymetry=bathymetry, &
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     bathymetry=bathymetry, &
                                      fairlead_orientation=fairlead_dcm, init_note=aux_note, aux_weight=aux)
       ELSE
         CALL build_one_hermite_cable(ln, sections, types, points, opts, dt, aux_cable, aux_node, es_r, em_r, &
-                                     standalone_controls=.FALSE., fairlead_orientation=fairlead_dcm, &
-                                     init_note=aux_note, aux_weight=aux)
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     fairlead_orientation=fairlead_dcm, init_note=aux_note, aux_weight=aux)
       END IF
       IF (es_r /= CD_DECKDRV_OK) THEN
         WRITE (why, '(A,ES10.3,A)') 'the line with an auxiliary weight of ', aux, ' N/m found no equilibrium: '
@@ -3781,12 +3795,7 @@ CONTAINS
         RETURN
       END IF
       tolerance_note = tol_used > static_tol_target
-      IF (weightless_line) &
-        CALL report_note('line '//TRIM(int_to_str(ln%id))//' is weightless and longer than its span, so it '// &
-                         'bows under the compression its bending stiffness carries. Nothing in the deck chooses '// &
-                         'the plane or the side of the bow: it is solved bowed downward in the vertical plane '// &
-                         'through its ends, the limit of a vanishing net weight, and the bow can turn about '// &
-                         'the chord at no cost. Give the line its net weight (MassDenInAir) to settle its shape')
+      weightless_bow = weightless_line
     END SUBROUTINE light_line_route
 
     PURE REAL(wp) FUNCTION position_magnitude(q) RESULT(r)
@@ -4236,12 +4245,13 @@ CONTAINS
       opts_c%adaptive_mesh = .FALSE.
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sec_c, types, points, opts_c, dt, c_cable, c_node, esc, emc, &
-                                     standalone_controls=.FALSE., bathymetry=bathymetry, &
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     bathymetry=bathymetry, &
                                      fairlead_orientation=fairlead_dcm, init_note=c_note, coarse_pass=.TRUE.)
       ELSE
         CALL build_one_hermite_cable(ln, sec_c, types, points, opts_c, dt, c_cable, c_node, esc, emc, &
-                                     standalone_controls=.FALSE., fairlead_orientation=fairlead_dcm, &
-                                     init_note=c_note, coarse_pass=.TRUE.)
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     fairlead_orientation=fairlead_dcm, init_note=c_note, coarse_pass=.TRUE.)
       END IF
       IF (esc /= CD_DECKDRV_OK) THEN
         CALL CD_HFMF_End(c_cable)
@@ -4372,12 +4382,12 @@ CONTAINS
       opts_sw%has_current_profile = .FALSE.
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esr, emr, &
-                                     standalone_controls=.FALSE., bathymetry=bathymetry, &
-                                     fairlead_orientation=fairlead_dcm, init_note=sw_note)
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, init_note=sw_note)
       ELSE
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esr, emr, &
-                                     standalone_controls=.FALSE., fairlead_orientation=fairlead_dcm, &
-                                     init_note=sw_note)
+                                     standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
+                                     fairlead_orientation=fairlead_dcm, init_note=sw_note)
       END IF
       IF (esr /= CD_DECKDRV_OK) THEN
         CALL CD_HFMF_End(sw_cable)

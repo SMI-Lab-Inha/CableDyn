@@ -18,6 +18,9 @@ PROGRAM test_flagship_compression_note
   !!
   !! A deck whose finite-EI elements are shorter than sqrt(EI/EA) (the conditioning limit
   !! of the static Newton system) carries the fine-mesh note; the flagship does not.
+  !!
+  !! A weightless finite-EI line longer than its span, solved by weight continuation, returns
+  !! the note that its bow was chosen downward to the aggregate caller, which prints nothing.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Branch_Audit, CD_HermiteBranchAuditType, CD_HCSTAT_OK
@@ -133,6 +136,7 @@ PROGRAM test_flagship_compression_note
   CALL CD_AGG_End(agg, es, em)
 
   CALL case_fine_mesh_note()
+  CALL case_weightless_bow_note()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' flagship compression-note check(s) failed'
@@ -184,6 +188,51 @@ CONTAINS
     END IF
     CALL CD_AGG_End(small, es_s, em_s)
   END SUBROUTINE case_fine_mesh_note
+
+  SUBROUTINE case_weightless_bow_note()
+    !! A neutrally buoyant 120 m line, EI 1e4 N m^2, pinned 113 m apart (the elastica of
+    !! tests/test_light_slack_statics.py).
+    TYPE(CD_AGG_ModuleType), SAVE :: light
+    INTEGER :: u, es_l
+    CHARACTER(512) :: em_l
+    OPEN (NEWUNIT=u, FILE='weightless_bow_note.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'weightless finite-EI line longer than its span'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'light 0.2 32.2013247 1.0e8 -1 1.0e4 1.2 0.1 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 0.0 0.0 -20.0'
+    WRITE (u, '(A)') '2 Fixed 80.0 0.0 -100.0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 light 120.0 120'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '200.0 WtrDpth'
+    WRITE (u, '(A)') '--- need this line ---'
+    CLOSE (u)
+    CALL CD_AGG_Init_From_Deck(light, 'weightless_bow_note.dat', 0.025_wp, es_l, em_l)
+    CALL check(es_l == CD_AGG_OK, 'weightless line initialises in the aggregate: '//TRIM(em_l))
+    IF (es_l /= CD_AGG_OK) RETURN
+    IF (ALLOCATED(light%init_lines)) THEN
+      WRITE (*, '(2A)') '  note: ', TRIM(light%init_lines(1)%note)
+      CALL check(INDEX(light%init_lines(1)%note, 'is weightless and longer than its span') > 0 .AND. &
+                 INDEX(light%init_lines(1)%note, 'bowed downward') > 0, &
+                 'the aggregate caller receives the weightless-bow note')
+    ELSE
+      CALL check(.FALSE., 'weightless line records its init summary')
+    END IF
+    CALL CD_AGG_End(light, es_l, em_l)
+  END SUBROUTINE case_weightless_bow_note
 
   SUBROUTINE check(ok, label)
     LOGICAL, INTENT(IN) :: ok
