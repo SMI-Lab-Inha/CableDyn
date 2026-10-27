@@ -3182,11 +3182,14 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable drag wiring failed: '//TRIM(em)); RETURN
     END IF
     ! Cross-flow VIV on the Cl > 0 sections, with the drag's diameters (CableDyn_VIV); an
-    ! OPTION VIVrmsWindow of 0 takes MoorDyn's 500 time steps.
+    ! OPTION VIVrmsWindow of 0 takes MoorDyn's 500 time steps of the deck dtM, as the EI = 0
+    ! lines do (init_one_model), and of the coupling step dt where the deck gives none: a
+    ! coupled host may step the cable at a dt adjusted from the deck dtM.
     IF (PRESENT(install_viv)) THEN
       IF (install_viv .AND. ANY(viv_cl > CD_ZERO)) THEN
         CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
-                                         MERGE(opts%viv_rms_window, REAL(CD_VIV_NM, wp)*dt, &
+                                         MERGE(opts%viv_rms_window, &
+                                               REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                opts%viv_rms_window > CD_ZERO), es, em)
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI cable VIV wiring failed: '//TRIM(em)); RETURN

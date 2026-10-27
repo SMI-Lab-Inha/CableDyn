@@ -681,10 +681,10 @@ Ambient fluid and prescribed motion
      - ``0``
      - finite, ≥ 0; the averaging time of the running RMS cross-flow velocity and acceleration
        of the VIV synchronisation model (:ref:`theory-viv`). ``0`` takes MoorDyn's 500 steps of
-       ``dtM`` (of the first step when the deck has no ``dtM``); set it to compare runs at
+       the deck ``dtM``, also where OpenFAST steps CableDyn at a ``dtM`` adjusted to its ``DT``
+       (500 steps of the first step when the deck has no ``dtM``); set it to compare runs at
        different ``dtM`` with the same averaging time
-     - standalone lines (``EI = 0``, or finite-EI on the Hermite march) with a LINE TYPES
-       ``Cl > 0``
+     - lines with a LINE TYPES ``Cl > 0``, on every route
      - ``0.25 VIVrmsWindow``
    * - ``motionFile``
      - path, or ``0``/``none``

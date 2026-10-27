@@ -17,7 +17,10 @@ PROGRAM test_viv_coupled
   !!   then the host field): the restarted run continues bit for bit, and a rebuild that skips the
   !!   VIV reload does not;
   !! * correction rewind: a step taken after CD_AGG_Snapshot and repeated after CD_AGG_Restore
-  !!   lands on the same state, phases included, bit for bit.
+  !!   lands on the same state, phases included, bit for bit;
+  !! * averaging window: without VIVrmsWindow both line kinds average over MoorDyn's 500 steps
+  !!   of the deck dtM, also when the coupling step differs from it (dtM 0.001 s at a 0.01 s
+  !!   step: 0.5 s), and over 500 coupling steps when the deck has no dtM (5 s).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK, &
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, &
@@ -41,6 +44,7 @@ PROGRAM test_viv_coupled
   CALL case_lockin()
   CALL case_restart()
   CALL case_rewind()
+  CALL case_window()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' coupled VIV check(s) failed'
     ERROR STOP 1
@@ -133,6 +137,30 @@ CONTAINS
     CALL CD_AGG_End(a, es, em)
     CALL CD_AGG_End(b, es, em)
   END SUBROUTINE case_rewind
+
+  SUBROUTINE case_window()
+    !! The default VIV averaging time of both line kinds, with and without a deck dtM.
+    TYPE(CD_AGG_ModuleType) :: agg
+    REAL(wp) :: tw_line, tw_cable
+    INTEGER :: pass
+    CALL write_deck('viv_coupled_dtm.dat', 0.8_wp, window=0.0_wp, dtm=0.001_wp)
+    CALL write_deck('viv_coupled_nodtm.dat', 0.8_wp, window=0.0_wp)
+    DO pass = 1, 2
+      IF (.NOT. start(agg, MERGE('viv_coupled_dtm.dat  ', 'viv_coupled_nodtm.dat', pass == 1))) RETURN
+      IF (.NOT. advance(agg)) RETURN
+      tw_line = agg%sys%fast%system%lines(1)%viv_tw
+      tw_cable = agg%cables(1)%line%viv_tw
+      WRITE (*, '(A,2F8.4,A)') '  averaging window (line, cable): ', tw_line, tw_cable, ' s'
+      IF (pass == 1) THEN
+        CALL check(ABS(tw_line - 0.5_wp) < 1.0e-12_wp .AND. ABS(tw_cable - 0.5_wp) < 1.0e-12_wp, &
+                   'both line kinds average over 500 steps of the deck dtM at a coarser coupling step')
+      ELSE
+        CALL check(ABS(tw_line - 5.0_wp) < 1.0e-12_wp .AND. ABS(tw_cable - 5.0_wp) < 1.0e-12_wp, &
+                   'both line kinds average over 500 coupling steps without a deck dtM')
+      END IF
+      CALL finish(agg)
+    END DO
+  END SUBROUTINE case_window
 
   LOGICAL FUNCTION start(agg, path) RESULT(ok)
     !! A host-fluid build of the deck at dt.
@@ -263,11 +291,14 @@ CONTAINS
     IF (n > 1) f = REAL(n - 1, wp)/(t1 - t0)
   END SUBROUTINE response
 
-  SUBROUTINE write_deck(path, cl)
-    !! The EI = 0 riser (line 1) and the finite-EI cable (line 2), 20 m apart across the current.
+  SUBROUTINE write_deck(path, cl, window, dtm)
+    !! The EI = 0 riser (line 1) and the finite-EI cable (line 2), 20 m apart across the current;
+    !! VIVrmsWindow 0.25 s unless window is given (0: none), and a deck dtM when dtm is given.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: cl
+    REAL(wp), INTENT(IN), OPTIONAL :: window, dtm
     INTEGER :: u
+    REAL(wp) :: tw
     CHARACTER(32) :: len_txt, cl_txt
     WRITE (len_txt, '(F12.6)') 100.0_wp/(1.0_wp + 5.0e4_wp/5.0e7_wp)
     WRITE (cl_txt, '(F4.2)') cl
@@ -295,7 +326,10 @@ CONTAINS
     WRITE (u, '(A)') '100.0 WtrDpth'
     WRITE (u, '(A)') '1025.0 rhoW'
     WRITE (u, '(A)') '9.80665 g'
-    WRITE (u, '(A)') '0.25 VIVrmsWindow'
+    tw = 0.25_wp
+    IF (PRESENT(window)) tw = window
+    IF (tw > 0.0_wp) WRITE (u, '(F6.3,A)') tw, ' VIVrmsWindow'
+    IF (PRESENT(dtm)) WRITE (u, '(ES12.5,A)') dtm, ' dtM'
     WRITE (u, '(A)') '--------------------- need this line ---'
     CLOSE (u)
   END SUBROUTINE write_deck
