@@ -93,7 +93,8 @@ MODULE CableDyn
                                           CD_AGG_WriteStaticProfile
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
                                            CD_HFMF_FrictionMirrorSize, CD_HFMF_BoundaryMirrorSize, &
-                                           CD_HFMF_ForceMirrorSize, CD_HFMF_TorsionMirrorSize, CD_HFMF_OK
+                                           CD_HFMF_ForceMirrorSize, CD_HFMF_TorsionMirrorSize, CD_HFMF_VIVMirrorSize, &
+                                           CD_HFMF_OK
    USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, &
                                             CD_HermiteCable_Dyn_Disable_Profile, &
                                             CD_HermiteCable_Dyn_Get_Profile, &
@@ -112,6 +113,8 @@ MODULE CableDyn
                               CD_Set_System_Line_VE_Dl1, &
                               CD_System_Line_Has_Syrope, CD_Get_System_Line_Syrope_State, &
                               CD_Set_System_Line_Syrope_State, &
+                              CD_System_Line_VIV_MirrorSize, CD_Get_System_Line_VIV_State, &
+                              CD_Set_System_Line_VIV_State, &
                               CD_System_Line_Has_Friction, CD_Get_System_Line_Friction_Anchors, &
                               CD_Set_System_Line_Friction_Anchors, &
                               CD_Recompute_System_Acceleration, CD_SYSTEM_OK
@@ -1089,6 +1092,9 @@ CONTAINS
                RETURN
             END IF
          END IF
+         ! a line with cross-flow VIV ends its span with the VIV state (the shedding phase and
+         ! the two running mean squares per node, then the averaging time)
+         nstates = nstates + CD_System_Line_VIV_MirrorSize( Inst(id)%agg%sys%fast%system, il )
          m%LineStateIsN(il) = nstates
       END DO
       ! finite-EI cables append their free-DOF [v_free; q_free; a_free] mirror after the mooring block
@@ -3326,6 +3332,26 @@ CONTAINS
          DEALLOCATE (CblLinVel)
       END DO
 
+      ! VIV states: the shedding phase and running mean squares per node and the averaging
+      ! time, the last block of a VIV line's span. Coverage-only, like the Syrope block.
+      DO il = 1, inst_%nlines
+         nve = CD_System_Line_VIV_MirrorSize( inst_%agg%sys%fast%system, il )
+         IF (nve <= 0) CYCLE
+         LinStr = 'Line '//TRIM(Num2LStr(il))
+         ALLOCATE (CblLinVel(nve), STAT=ErrStat2)
+         IF (ErrStat2 /= 0) THEN
+            CALL SetErrStat( ErrID_Fatal, 'Could not allocate line VIV lin-name work array.', &
+                             ErrStat, ErrMsg, RoutineName ); RETURN
+         END IF
+         DO j = 1, nve
+            CblLinVel(j) = TRIM(LinStr)//' VIV state '//TRIM(Num2LStr(j))
+         END DO
+         CALL MV_AddVar( Vars%x, TRIM(LinStr)//' VIV state', FieldScalar, DatLoc(CD_x_states), &
+                         iAry=m%LineStateIsN(il) - nve + 1, Num=nve, Perturb=0.1_R8Ki, &
+                         LinNames=CblLinVel )
+         DEALLOCATE (CblLinVel)
+      END DO
+
       ! finite-EI cable states: pack_state_mirror appends the free-DOF mirror
       ! [v_free; q_free] of each cable AFTER the EI=0 mooring block, at the x%states
       ! offset koff = LineStateIsN(nlines) (0 when there are no mooring lines). Register
@@ -3342,10 +3368,11 @@ CONTAINS
          csz = CD_HFMF_MirrorSize( inst_%agg%cables(ic) )
          IF (csz <= 0) CYCLE                 ! uninitialised cable contributes no states
          ! free DOFs; mirror = [v_free; q_free; a_free] then the friction anchors, the
-         ! committed boundary, the force-blend state and the torsion state (if any)
+         ! committed boundary, the force-blend state, the VIV state and the torsion state (if any)
          nf = (csz - CD_HFMF_FrictionMirrorSize( inst_%agg%cables(ic) ) - &
                CD_HFMF_BoundaryMirrorSize( inst_%agg%cables(ic) ) - &
                CD_HFMF_ForceMirrorSize( inst_%agg%cables(ic) ) - &
+               CD_HFMF_VIVMirrorSize( inst_%agg%cables(ic) ) - &
                CD_HFMF_TorsionMirrorSize( inst_%agg%cables(ic) ))/3
          LinStr = 'Cable '//TRIM(Num2LStr(ic))
          ! Build the per-DOF linearization names in an explicit pre-allocated loop, NOT an
@@ -3379,8 +3406,8 @@ CONTAINS
                          LinNames=CblLinAcc )
          DEALLOCATE (CblLinVel, CblLinPos, CblLinAcc)
          ! stick-slip friction anchors (x, y per node), the force-blend committed force
-         ! (flag + force) and the torsion state (Theta, Phi, end frames) after the acceleration
-         ! block: coverage-only, like the acceleration block
+         ! (flag + force), the VIV state and the torsion state (Theta, Phi, end frames) after
+         ! the acceleration block: coverage-only, like the acceleration block
          IF (csz > 3*nf) THEN
             ALLOCATE (CblLinVel(csz - 3*nf), STAT=ErrStat2)
             IF (ErrStat2 /= 0) THEN
@@ -3721,6 +3748,23 @@ CONTAINS
                END IF
             END BLOCK
          END IF
+         ! VIV state reload: the last block of the line's span (mirrors pack_state_mirror)
+         nve = CD_System_Line_VIV_MirrorSize( inst_%agg%sys%fast%system, il )
+         IF (nve > 0) THEN
+            IF (m%LineStateIsN(il) > SIZE(states)) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: line '//TRIM(Num2LStr(il))// &
+                                ' VIV state mirror extends past the state vector.', ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
+            BLOCK
+               REAL(wp) :: vbuf(nve)
+               vbuf = REAL(states(m%LineStateIsN(il) - nve + 1:m%LineStateIsN(il)), wp)
+               CALL CD_Set_System_Line_VIV_State( inst_%agg%sys%fast%system, il, vbuf, es, em )
+               IF (es /= CD_SYSTEM_OK) THEN
+                  CALL SetErrStat( ErrID_Fatal, TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
+               END IF
+            END BLOCK
+         END IF
       END DO
       CALL reload_cable_mirrors( inst_, m, states, t_clock, .FALSE., koff, ErrStat, ErrMsg )
       IF (ErrStat >= AbortErrLev) RETURN
@@ -4013,6 +4057,18 @@ CONTAINS
                END IF
                states(k + 3*nin:k + 3*nin + nve - 1)             = REAL(slw, DbKi)
                states(k + 3*nin + nve:k + 3*nin + 2*nve - 1)     = REAL(tmx, DbKi)
+            END BLOCK
+         END IF
+         ! VIV state: the last block of the line's span
+         nve = CD_System_Line_VIV_MirrorSize( inst_%agg%sys%fast%system, il )
+         IF (nve > 0) THEN
+            BLOCK
+               REAL(wp) :: vbuf(nve)
+               CALL CD_Get_System_Line_VIV_State( inst_%agg%sys%fast%system, il, vbuf, es, em )
+               IF (es /= CD_SYSTEM_OK) THEN
+                  CALL SetErrStat( ErrID_Fatal, TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
+               END IF
+               states(m%LineStateIsN(il) - nve + 1:m%LineStateIsN(il)) = REAL(vbuf, DbKi)
             END BLOCK
          END IF
       END DO
