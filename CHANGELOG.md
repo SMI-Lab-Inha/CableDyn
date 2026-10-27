@@ -53,6 +53,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- `TMax = 0` checks the static start of any dynamic deck as it stands: a `motionFile` or
+  `vesselMotion` record may run past `TMax` (its later rows are checked on the `dtM` grid and
+  not used, so a long record also serves a shorter run), and `RangeStart` is accepted at
+  `TMax = 0`, where the range graphs hold the `t = 0` row. A standalone deck without `TMax` that
+  asks for the march now says so: its error ends "to check a dynamic deck's static start only,
+  give dtM with TMax = 0".
+
 - Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
   range graphs and element file) report the cable's own moment, the line type's EI times the
   curvature; lines without stiffeners are unchanged.

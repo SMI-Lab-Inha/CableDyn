@@ -269,14 +269,17 @@ Clock and initial condition
      - real, s
      - absent (static-only)
      - finite, ≥ 0 and an integer multiple of ``dtM``. ``TMax = 0`` runs the dynamic
-       initialisation and writes the ``t = 0`` row
+       initialisation and writes the ``t = 0`` row: the static start of a dynamic deck, checked
+       with every other option kept (motion records longer than ``TMax`` and a later
+       ``RangeStart`` included)
      - standalone only; OpenFAST uses the host ``TMax``. Do not copy the host duration into a
        coupled deck
      - ``600.0 TMax``
    * - ``RangeStart`` / ``range_start``
      - real, s
      - ``0``
-     - finite, ≥ 0 and ≤ ``TMax``. First output time accumulated into the range graphs
+     - finite, ≥ 0 and ≤ ``TMax`` (any value at ``TMax = 0``, where the graphs hold the
+       ``t = 0`` row). First output time accumulated into the range graphs
        (``<out_root>.Line<L>.range.out``, ``LINES`` ``Outputs`` flag ``r``), so a start-up
        transient is left out. Needs ``TMax`` and at least one line with the ``r`` flag
      - standalone only

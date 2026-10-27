@@ -210,7 +210,7 @@ CONTAINS
   SUBROUTINE check_turbines_section()
     !! Turbine J at FAIR(:, J) - [0, 0, -10] with its fairlead at local (0, 0, -10); turbine 1
     !! surges as write_motion's fairlead 1, written as a per-turbine record.
-    REAL(wp), ALLOCATABLE :: a(:, :), b(:, :)
+    REAL(wp), ALLOCATABLE :: a(:, :), b(:, :), c(:, :)
     INTEGER :: u, j
     LOGICAL :: ok
 
@@ -268,6 +268,13 @@ CONTAINS
     CALL write_turbine_motion(0)
     CALL run('shared_turbines.dat', 'shared_turbines', 8, a, ok)
     IF (.NOT. ok) RETURN
+    ! a record that runs 2 s past TMax is read to TMax: the same run, bit for bit
+    CALL write_turbine_motion(5)
+    CALL run('shared_turbines.dat', 'shared_turbines_long', 8, c, ok)
+    IF (.NOT. ok) RETURN
+    CALL require(SIZE(c, 2) == SIZE(a, 2), 'TURBINES record longer than TMax: the run has TMax''s rows')
+    IF (SIZE(c, 2) /= SIZE(a, 2)) RETURN
+    CALL require(.NOT. MAXVAL(ABS(c - a)) > 0.0_wp, 'TURBINES record longer than TMax: rows after TMax unused')
     CALL write_deck('shared_anchor_all.dat', [.TRUE., .TRUE., .TRUE.], .FALSE., .TRUE., .TRUE.)
     CALL run('shared_anchor_all.dat', 'shared_anchor_all', 8, b, ok)
     IF (.NOT. ok) RETURN
@@ -281,7 +288,8 @@ CONTAINS
 
   SUBROUTINE write_turbine_motion(variant)
     !! The per-turbine records; variant 1: J = 1.5 on the first row, 2: J = 4 (no such
-    !! TURBINES row), 3: q0 = 0.5 (not a unit quaternion), 4: turbine 2's first row twice.
+    !! TURBINES row), 3: q0 = 0.5 (not a unit quaternion), 4: turbine 2's first row twice,
+    !! 5: the record runs to 12 s, 2 s past the deck's TMax.
     INTEGER, INTENT(IN) :: variant
     CHARACTER(16) :: jtok
     INTEGER :: u, j, k
@@ -289,7 +297,7 @@ CONTAINS
     OPEN (NEWUNIT=u, FILE='shared_turbines.motion', STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') '# time J x y z q0 q1 q2 q3 vx vy vz wx wy wz ax ay az alx aly alz'
     w = 2.0_wp*3.14159265358979323846_wp/20.0_wp
-    DO k = 0, 100
+    DO k = 0, MERGE(120, 100, variant == 5)
       t = 0.1_wp*REAL(k, wp)
       DO j = 1, 3
         x = FAIR(1, j)

@@ -318,6 +318,11 @@ MODULE CableDyn_DeckDriver
   CHARACTER(*), PARAMETER :: ROW_VALUES_FMT = TIME_COLUMN_FMT(1:LEN(TIME_COLUMN_FMT) - 1)//',*(A,ES15.7E3))'
   ! Largest step count a dtM/TMax (or motion-file) grid may index with default INTEGER.
   REAL(wp), PARAMETER :: MAX_GRID_STEPS = REAL(HUGE(1) - 1, wp)
+  ! motion_grid_index of a record row on the dtM grid after TMax (read, then not used)
+  INTEGER, PARAMETER :: MOTION_PAST_TMAX = -1
+  ! appended to the dtM/TMax-required errors of a standalone deck without TMax
+  CHARACTER(*), PARAMETER :: STATIC_CHECK_HINT = &
+                             '; to check a dynamic deck''s static start only, give dtM with TMax = 0'
   INTEGER, PARAMETER :: MOTION_POINT_ROWS = 0, MOTION_VESSEL_FILE = 1, MOTION_VESSEL_RAO = 2
   ! Largest WaterKin WaveKinMod-1 record (TMax/dtWave samples) reduced to Fourier components.
   REAL(wp), PARAMETER :: MAX_WAVE_SAMPLES = 1.0e6_wp
@@ -8222,7 +8227,7 @@ CONTAINS
     ! reserve-point detach machinery. Every other branch fails closed by name.
     IF (SIZE(fails) > 0) THEN
       IF (.NOT. (opts%has_dtm .AND. opts%has_tmax)) THEN
-        CALL fail(ErrStat, ErrMsg, 'FAILURE requires a dynamic deck (dtM and TMax)'); RETURN
+        CALL fail(ErrStat, ErrMsg, 'FAILURE requires a dynamic deck (dtM and TMax)'//STATIC_CHECK_HINT); RETURN
       END IF
       IF (deck_has_finite_ei(types, sections)) THEN
         CALL fail(ErrStat, ErrMsg, 'FAILURE is not supported on finite-EI decks'); RETURN
@@ -11227,7 +11232,7 @@ CONTAINS
       IF (sections(j)%line_id /= ln%id) CYCLE
       IF (types(sections(j)%ltype)%is_syrope) THEN
         CALL fail(ErrStat, ErrMsg, 'a Syrope line has no static output; provide dtM and TMax to run the '// &
-                  'dynamic working-curve path'); RETURN
+                  'dynamic working-curve path'//STATIC_CHECK_HINT); RETURN
       END IF
     END DO
 
@@ -15807,6 +15812,11 @@ CONTAINS
 
     CALL finalize_checks(types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                          caller_driven, allow_static_finite_ei, ErrStat, ErrMsg, channel_lines, at_line)
+    ! a standalone deck without TMax that asks for the march: say how to check its static start
+    IF (ErrStat /= 0 .AND. .NOT. caller_driven .AND. .NOT. opts%has_tmax) THEN
+      IF (INDEX(ErrMsg, 'dtM and TMax') > 0 .OR. INDEX(ErrMsg, 'dynamic deck (TMax)') > 0) &
+        ErrMsg = TRIM(ErrMsg)//STATIC_CHECK_HINT
+    END IF
     IF (ErrStat /= 0) CALL add_deck_line(at_line, ErrMsg)
   END SUBROUTINE finalize_and_validate
 
@@ -15846,7 +15856,8 @@ CONTAINS
       IF (.NOT. opts%has_tmax) THEN
         CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart needs a dynamic deck (TMax)'); RETURN
       END IF
-      IF (opts%range_start > opts%tmax) THEN
+      ! at TMax = 0 (a dynamic deck's static start) the range graphs hold the t = 0 row
+      IF (opts%range_start > opts%tmax .AND. opts%tmax > CD_ZERO) THEN
         CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart exceeds TMax: the range window would hold no output time')
         RETURN
       END IF
@@ -31980,16 +31991,14 @@ CONTAINS
           CALL add_row_context('motionFile', lineno, line, ErrMsg)
           RETURN
         END IF
-        it = 0
-        IF (ABS(trow(1)/opts%dtM) < MAX_GRID_STEPS) it = NINT(trow(1)/opts%dtM) + 1
-        grid_ok = it >= 1 .AND. it <= motion%n_time
-        IF (grid_ok) grid_ok = ABS(motion%time(it) - trow(1)) <= tol
-        IF (.NOT. grid_ok) THEN
+        it = motion_grid_index(trow(1), opts%dtM, motion, tol)
+        IF (it == 0) THEN
           CLOSE (unit)
           CALL fail(ErrStat, ErrMsg, 'time is outside the dtM/TMax grid')
           CALL add_row_context('motionFile', lineno, line, ErrMsg)
           RETURN
         END IF
+        IF (it == MOTION_PAST_TMAX) CYCLE
         IF (.NOT. ALLOCATED(turb_seen)) THEN
           ALLOCATE (turb_seen(SIZE(opts%turb_ref, 2), motion%n_time), STAT=ios)
           IF (ios /= 0) THEN
@@ -32053,13 +32062,8 @@ CONTAINS
         CALL add_row_context('motionFile', lineno, line, ErrMsg)
         RETURN
       END IF
-      ! Nested tests: Fortran does not guarantee short-circuit evaluation, so the time
-      ! index is range-checked before motion%time(it) is referenced.
-      it = 0
-      IF (ABS(t/opts%dtM) < MAX_GRID_STEPS) it = NINT(t/opts%dtM) + 1
-      grid_ok = it >= 1 .AND. it <= motion%n_time
-      IF (grid_ok) grid_ok = ABS(motion%time(it) - t) <= tol
-      IF (.NOT. grid_ok) THEN
+      it = motion_grid_index(t, opts%dtM, motion, tol)
+      IF (it == 0) THEN
         CLOSE (unit)
         CALL fail(ErrStat, ErrMsg, 'time is outside the dtM/TMax grid')
         CALL add_row_context('motionFile', lineno, line, ErrMsg)
@@ -32078,6 +32082,7 @@ CONTAINS
         CALL add_row_context('motionFile', lineno, line, ErrMsg)
         RETURN
       END IF
+      IF (it == MOTION_PAST_TMAX) CYCLE
       IF (seen(ip, it)) THEN
         CLOSE (unit)
         CALL fail(ErrStat, ErrMsg, 'duplicate row for point '//TRIM(int_to_str(pid))// &
@@ -32192,7 +32197,6 @@ CONTAINS
     INTEGER :: unit, ios, lineno, ntok, nform, row_status, it, off
     REAL(wp) :: row(20), tol, qn
     LOGICAL, ALLOCATABLE :: seen(:)
-    LOGICAL :: grid_ok
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     ALLOCATE (seen(motion%n_time))
@@ -32239,16 +32243,14 @@ CONTAINS
         CALL add_row_context('vesselMotion file', lineno, line, ErrMsg)
         RETURN
       END IF
-      it = 0
-      IF (ABS(row(1)/opts%dtM) < MAX_GRID_STEPS) it = NINT(row(1)/opts%dtM) + 1
-      grid_ok = it >= 1 .AND. it <= motion%n_time
-      IF (grid_ok) grid_ok = ABS(motion%time(it) - row(1)) <= tol
-      IF (.NOT. grid_ok) THEN
+      it = motion_grid_index(row(1), opts%dtM, motion, tol)
+      IF (it == 0) THEN
         CLOSE (unit)
         CALL fail(ErrStat, ErrMsg, 'time is outside the dtM/TMax grid')
         CALL add_row_context('vesselMotion file', lineno, line, ErrMsg)
         RETURN
       END IF
+      IF (it == MOTION_PAST_TMAX) CYCLE
       IF (seen(it)) THEN
         CLOSE (unit)
         CALL fail(ErrStat, ErrMsg, 'duplicate row at this time')
@@ -33809,6 +33811,7 @@ CONTAINS
     LOGICAL, ALLOCATABLE :: want_r(:), want_t(:)
     INTEGER :: i, k, n, line_id, comp, es
     CHARACTER(1024) :: em
+    REAL(wp) :: t_start
 
     n = SIZE(nnodes)
     ALLOCATE (ids(n), want_r(n), want_t(n))
@@ -33831,7 +33834,10 @@ CONTAINS
       IF (.NOT. by_id) k = find_line(lines, line_id)
       IF (k >= 1 .AND. k <= n) want_t(k) = .TRUE.
     END DO
-    CALL CD_Range_Setup(rset, ids, nnodes, want_r, want_t, opts%range_start, opts%has_wtrdpth, -opts%wtrdpth, &
+    ! TMax = 0 (a static start check) puts the t = 0 row in the range graphs whatever RangeStart says
+    t_start = opts%range_start
+    IF (opts%has_tmax) t_start = MIN(t_start, opts%tmax)
+    CALL CD_Range_Setup(rset, ids, nnodes, want_r, want_t, t_start, opts%has_wtrdpth, -opts%wtrdpth, &
                         es, em, bathymetry=bathymetry)
     CALL range_status(es, em, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK .OR. .NOT. ALLOCATED(rset%lines)) RETURN
@@ -37505,6 +37511,25 @@ CONTAINS
     nstep = NINT(ratio)
     ok = .TRUE.
   END SUBROUTINE grid_step_count
+
+  INTEGER FUNCTION motion_grid_index(t, dt, motion, tol) RESULT(it)
+    !! Index of a record row's time t on the dtM grid motion%time (within tol), 0 when t is
+    !! off the grid or before 0, and MOTION_PAST_TMAX when t lies on the grid after TMax: a
+    !! record longer than the run is read to TMax, so TMax = 0 checks a dynamic deck's start.
+    REAL(wp), INTENT(IN) :: t, dt, tol
+    TYPE(MotionTable), INTENT(IN) :: motion
+    INTEGER :: k
+    it = 0
+    IF (.NOT. ABS(t/dt) < MAX_GRID_STEPS) RETURN
+    k = NINT(t/dt)
+    IF (k < 0) RETURN
+    ! nested tests: Fortran does not short-circuit, so k is range-checked before motion%time
+    IF (k < motion%n_time) THEN
+      IF (ABS(motion%time(k + 1) - t) <= tol) it = k + 1
+    ELSE IF (ABS(REAL(k, wp)*dt - t) <= 100.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, ABS(t))) THEN
+      it = MOTION_PAST_TMAX
+    END IF
+  END FUNCTION motion_grid_index
 
   INTEGER FUNCTION scan_comment(buf) RESULT(p)
     !! First comment char to strip: `#`/`!` anywhere, or `--` only when it starts
