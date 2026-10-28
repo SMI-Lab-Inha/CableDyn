@@ -97,6 +97,11 @@ Keyword map
        types and as a distributed lift on finite-EI types (:ref:`theory-viv`); the running-RMS
        window is ``VIVrmsWindow`` seconds, by default
        500 steps of ``dtM`` as MoorDyn's
+   * - ``LINES`` ``Outputs`` flags ``p``, ``t``, ``V``
+     - the same quantities, one file per flag where MoorDyn writes one file per line:
+       ``<root>.Line<L>.p.out``, ``.t.out`` and ``.V.out`` (the VIV lift at the nodes), on the
+       standalone routes (:doc:`outputs`); MoorDyn's other line flags (``v``, ``U``, ``D``,
+       ``c``, ``s``, ``d``, ...) are not written and are a parse error
    * - ``ElasticMod 2/3`` viscoelastic ``EA``/``BA``
      - ``Es|Ed`` / ``Es|alphaMBL|vbeta`` in ``EA`` and ``BA_s|BA_d`` in ``BA``
    * - Syrope line type and ``SYROPE IC``

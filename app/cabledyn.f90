@@ -483,7 +483,7 @@ CONTAINS
       RETURN
     END IF
     IF (line_outputs) THEN
-      run_msg = 'CableDyn_driver: mixed-deck LINE Outputs p/t are not supported; '// &
+      run_msg = 'CableDyn_driver: mixed-deck LINE Outputs p/t/V are not supported; '// &
                 'use main OUTPUTS channels or remove the per-line flags'
       RETURN
     END IF

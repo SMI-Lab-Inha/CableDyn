@@ -2472,6 +2472,10 @@ cabledyn_msg_test(weightless_finite_ei msg_weightless_finite_ei.dat 0
 cabledyn_msg_test(weightless_finite_ei_vertical msg_weightless_finite_ei_vertical.dat 2
   "weightless .neutrally buoyant. line is longer than its vertical span;nothing chooses the side of the bow;offset its ends horizontally"
   "net-heavy")
+# MoorDyn's line flag v (node velocities) is not written; V (the VIV lift) is upper case.
+cabledyn_msg_test(line_flag_velocity msg_line_flag_velocity.dat 1
+  "supported line-output flags are p, t, r and V .the VIV lift, upper case as MoorDyn's."
+  "net-heavy")
 # An EI=0 line type rejected as net-buoyant whose mass is a relative 4e-9 below the displaced water
 # mass is named weightless and slack; one a relative 2e-6 below it keeps the plain message.
 cabledyn_msg_test(weightless_ei0 msg_weightless_ei0.dat 1

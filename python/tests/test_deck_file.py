@@ -938,6 +938,19 @@ def test_attachments_accept_an_axial_drag_area_and_a_deck_current(tmp_path):
         DeckFile.from_text(text)
 
 
+def test_viv_lift_flag_is_upper_case_and_standalone():
+    # V writes the VIV lift file; as MoorDyn's line flags it is case-sensitive (v, MoorDyn's
+    # node velocities, is not written)
+    deck = DeckFile.from_text(_edit(_DYNAMIC, ("1 2 1 -\n", "1 2 1 pV\n")))
+    assert deck.lines[0].tokens[3] == "pV"
+    with pytest.raises(DeckFormatError, match="accepts only '-', 'p', 't', 'r', and 'V'"):
+        DeckFile.from_text(_edit(_DYNAMIC, ("1 2 1 -\n", "1 2 1 pv\n")))
+    # a mixed EI=0/finite-EI deck writes no per-line files
+    mixed = _ATTACHMENT_DECK.format(rows="1 60.0 100 0.1 0.1 1.0", options="")
+    with pytest.raises(DeckFormatError, match="flags p, t and V"):
+        DeckFile.from_text(mixed.replace("1 2 1 -\n", "1 2 1 V\n"))
+
+
 def test_attachments_are_accepted_on_the_coupled_route(tmp_path):
     path = tmp_path / "attachments-coupled.dat"
     path.write_text(
@@ -2467,7 +2480,7 @@ def test_range_flag_and_range_start_follow_native_rules():
                 ("50.0 WtrDpth\n", "50.0 WtrDpth\n0 RangeStart\n"),
             )
         )
-    with pytest.raises(DeckFormatError, match="accepts only '-', 'p', 't', and 'r'"):
+    with pytest.raises(DeckFormatError, match="accepts only '-', 'p', 't', 'r', and 'V'"):
         DeckFile.from_text(_edit(_STATIC, ("1 2 1 -\n", "1 2 1 rx\n")))
     assert DeckFile.from_text(_edit(_STATIC, ("1 2 1 -\n", "1 2 1 r\n"))).lines[0].tokens[3] == "r"
 
@@ -4074,6 +4087,25 @@ _TURBINE_DECK = (
     '"Point3FH"\n'
     "--------------------- need this line -----------------------------------\n"
 )
+
+
+def test_viv_and_lift_flag_refused_on_a_finite_ei_line_with_two_moving_ends():
+    # native run_deck_driver: a farm-shared finite-EI line (Turbine1 to Turbine2) runs on the
+    # compatibility route, which carries no VIV: Cl > 0 and the lift file V are refused
+    shared = _edit(
+        _TURBINE_DECK,
+        ("chain 0.1 20.0 1.0e9 -1.0 0.0 1.2", "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2"),
+        ("1 1 3 -\n2 2 3 -\n", "1 1 2 -\n"),
+        ("1 chain 380 20\n2 chain 380 20\n", "1 chain 620 30\n"),
+        ("100 WtrDpth\n", "100 WtrDpth\n0.1 dtM\n10.0 TMax\n"),
+    )
+    DeckFile.from_text(shared)
+    with pytest.raises(DeckFormatError, match="needs its End B fixed"):
+        DeckFile.from_text(_edit(shared, ("1.2 0.2 1.0 0.0\n", "1.2 0.2 1.0 0.0 0.8\n")))
+    with pytest.raises(DeckFormatError, match=r"flag V \(VIV lift\) needs a line that carries VIV"):
+        DeckFile.from_text(_edit(shared, ("1 1 2 -\n", "1 1 2 V\n")))
+    # the same flag on a line with a Fixed End B is accepted
+    DeckFile.from_text(_edit(_DYNAMIC, ("1 2 1 -\n", "1 2 1 V\n")))
 
 
 @pytest.mark.parametrize(

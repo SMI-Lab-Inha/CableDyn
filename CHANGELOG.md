@@ -24,6 +24,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   frequency in mode-1 lock-in and stays in mode 1 where that string jumps to mode 2. The
   multibody march carries it too (a cable on a Rigid6 body or rod, or beside free points), with
   the same lock-in. A finite-EI line with two moving ends refuses `Cl > 0`.
+- LINES Outputs flag `V` (MoorDyn's): the cross-flow VIV lift force at the nodes of a line,
+  written to `<root>.Line<L>.V.out` on dynamic runs of the standalone routes that carry VIV. On
+  a finite-EI line each element's lift is lumped to its nodes; at the interior nodes of a taut
+  line in lock-in it matches the `EI = 0` line's within 0.1 %. Upper case only, as in MoorDyn,
+  whose `v` (node velocities) CableDyn does not write.
 - Cross-flow VIV on the coupled routes: OpenFAST (`CompMooring = 5`), FAST.Farm and the
   standalone runner of a mixed `EI = 0` / finite-EI deck carry the lift on both line kinds, with
   the host's fluid field. The phases, running mean squares and averaging time are part of the
