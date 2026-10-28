@@ -3182,11 +3182,14 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable drag wiring failed: '//TRIM(em)); RETURN
     END IF
     ! Cross-flow VIV on the Cl > 0 sections, with the drag's diameters (CableDyn_VIV); an
-    ! OPTION VIVrmsWindow of 0 takes MoorDyn's 500 time steps.
+    ! OPTION VIVrmsWindow of 0 takes MoorDyn's 500 time steps of the deck dtM, as the EI = 0
+    ! lines do (init_one_model), and of the coupling step dt where the deck gives none: a
+    ! coupled host may step the cable at a dt adjusted from the deck dtM.
     IF (PRESENT(install_viv)) THEN
       IF (install_viv .AND. ANY(viv_cl > CD_ZERO)) THEN
         CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
-                                         MERGE(opts%viv_rms_window, REAL(CD_VIV_NM, wp)*dt, &
+                                         MERGE(opts%viv_rms_window, &
+                                               REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                opts%viv_rms_window > CD_ZERO), es, em)
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI cable VIV wiring failed: '//TRIM(em)); RETURN
@@ -6754,8 +6757,8 @@ CONTAINS
                 'use the aggregate facade with its external SeaState field'); RETURN
     END IF
     IF (line_has_viv(lines(1), types, sections)) THEN
-      CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: VIV (LINE TYPES Cl > 0) runs in the standalone '// &
-                'deck driver; set Cl = 0 for this entry'); RETURN
+      CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: VIV (LINE TYPES Cl > 0) acts with an ambient '// &
+                'fluid field, which this single-cable entry does not apply; use the aggregate facade'); RETURN
     END IF
     IF (opts%has_bathymetry_file) THEN
       CALL load_bathymetry_file(path_join(deck_dir(deck_path), opts%bathymetry_file), bathymetry, ErrStat, ErrMsg, &
@@ -6982,16 +6985,6 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'the MoorDyn-C WaveKin 3/7 and Currents 1 files are not supported on the '// &
                 'aggregate route (coupled runs take water kinematics from the host; standalone mixed '// &
                 'EI=0/finite-EI decks reject deck water kinematics)')
-      RETURN
-    END IF
-    ! Cross-flow VIV runs in the standalone driver (EI = 0 decks and finite-EI decks): the aggregate
-    ! route (OpenFAST, FAST.Farm, mixed EI = 0 / finite-EI decks) neither checkpoints its shedding
-    ! phase nor feeds it the host's fluid field yet.
-    IF (ANY(types%cl > CD_ZERO)) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) runs in the standalone driver of an EI = 0 or '// &
-                'finite-EI deck; '// &
-                'the coupled OpenFAST and FAST.Farm routes and mixed EI = 0 / finite-EI decks do not carry it '// &
-                'yet. Set Cl = 0 for this run')
       RETURN
     END IF
 
@@ -7445,12 +7438,13 @@ CONTAINS
           IF (opts%has_bathymetry_file) THEN
             CALL build_one_hermite_cable(lines(i), sections, types, points, opts, dt, agg%cables(c), cn, es, em, &
                                          bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, &
-                                         init_note=agg%cable_note(c), &
+                                         init_note=agg%cable_note(c), install_viv=.TRUE., &
                                          fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
                                                             deck_has_dynamic_points(points)))
           ELSE
             CALL build_one_hermite_cable(lines(i), sections, types, points, opts, dt, agg%cables(c), cn, es, em, &
                                          fairlead_orientation=fairlead_dcm, init_note=agg%cable_note(c), &
+                                         install_viv=.TRUE., &
                                          fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
                                                             deck_has_dynamic_points(points)))
           END IF

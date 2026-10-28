@@ -1180,6 +1180,11 @@ target_link_libraries(test_hermite_viv PRIVATE cabledyn_core)
 add_test(NAME hermite_viv COMMAND test_hermite_viv)
 set_tests_properties(hermite_viv PROPERTIES LABELS "fortran;dynamic;viv")
 
+add_executable(test_viv_coupled tests/test_viv_coupled.f90)
+target_link_libraries(test_viv_coupled PRIVATE cabledyn_core)
+add_test(NAME viv_coupled COMMAND test_viv_coupled WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_coupled PROPERTIES LABELS "fortran;integration;dynamic;viv;openfast")
+
 add_executable(test_hfmf_mirror tests/test_hfmf_mirror.f90)
 target_link_libraries(test_hfmf_mirror PRIVATE cabledyn_core)
 add_test(NAME hfmf_mirror COMMAND test_hfmf_mirror WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

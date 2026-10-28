@@ -779,8 +779,12 @@ pump, and the response is the same from ``dtM`` 5e-4 to 1e-2 s. A finite-EI line
 carries it, including deck waves and current through its held fluid field; a finite-EI line
 with two moving ends, or beside bodies, rods or free points, refuses :math:`C_L > 0`.
 
-VIV runs in the standalone driver; the coupled and mixed aggregate routes refuse a deck with
-:math:`C_L > 0`.
+VIV runs on every route that carries the line: the standalone driver, the coupled OpenFAST
+and FAST.Farm routes and the standalone runner of a mixed ``EI = 0`` / finite-EI deck. On the
+coupled routes the phase follows the host's fluid field (a SeaState current or waves), and the
+phases, the running mean squares and the averaging time are part of the checkpoint state, so a
+restart continues the uninterrupted run bit for bit. The OpenFAST correction iterations rewind
+them with the rest of the state.
 
 Buoyancy and wetting
 ~~~~~~~~~~~~~~~~~~~~

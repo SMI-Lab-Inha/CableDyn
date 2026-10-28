@@ -2611,9 +2611,8 @@ class DeckFile:
         line_type_scales: dict[str, tuple[float, float]] = {}  # name -> (BA, max Cd/Ca)
         line_type_meta: dict[str, tuple[float, float, float, float]] = {}
         line_type_gj: dict[str, float] = {}  # name -> explicit GJ of a 14-column row, else 0
-        # Cl > 0 on any LINE TYPES row (native CD_Init_Deck_Aggregate), and on an EI = 0 row
-        # (native init_one_model, which needs the line's Morison drag in water)
-        has_viv = False
+        # Cl > 0 on an EI = 0 row (native init_one_model, which needs the line's Morison drag in
+        # water)
         has_viv_ei0 = False
         viv_type_names: set[str] = set()
         for row in self.line_types:
@@ -2703,7 +2702,6 @@ class DeckFile:
                         f"{self._at(row)}: VIV (Cl > 0) does not combine with the Syrope "
                         "working-curve model"
                     )
-                has_viv = has_viv or cl > 0.0
                 has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
                 if cl > 0.0:
                     viv_type_names.add(row.tokens[0].lower())
@@ -3490,12 +3488,6 @@ class DeckFile:
                 )
             if not line_ids:
                 raise DeckFormatError(f"{self._label}: the coupled route needs at least one line")
-            if has_viv:
-                raise DeckFormatError(
-                    f"{self._label}: VIV (LINE TYPES Cl > 0) runs in the standalone driver of an "
-                    "EI = 0 or finite-EI deck; the coupled OpenFAST and FAST.Farm routes and mixed "
-                    "EI = 0 / finite-EI decks do not carry it yet. Set Cl = 0 for this run"
-                )
         if self.caller_driven:
             # native CD_Init_Deck_Aggregate: nothing on the coupled route evaluates deck
             # waves (the host SeaState supplies them). A deck current is a steady field on a
@@ -3515,9 +3507,10 @@ class DeckFile:
                     "single-turbine pure EI=0 deck without Rigid6 bodies or rods; remove the "
                     "deck current OPTION (the host SeaState supplies the current)"
                 )
-        if has_viv_ei0 and deck_driver_route:
+        if has_viv_ei0 and not self.caller_driven:
             # native init_one_model: the lift acts with the line's Morison drag, which the
-            # deck switches on with water (a depth or bathymetry, a current, or waves)
+            # deck switches on with water (a depth or bathymetry, a current, or waves); on the
+            # coupled route the host supplies the water
             waterkin_option = option_by_key.get("waterkin")
             waterkin_text = "" if waterkin_option is None else waterkin_option.values[0]
             has_water = (

@@ -87,6 +87,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_BoundaryMirrorSize
   PUBLIC :: CD_HFMF_ForceMirrorSize
   PUBLIC :: CD_HFMF_TorsionMirrorSize
+  PUBLIC :: CD_HFMF_VIVMirrorSize
   PUBLIC :: CD_HFMF_PackMirror
   PUBLIC :: CD_HFMF_UnpackMirror
   PUBLIC :: CD_HFMF_End
@@ -1532,14 +1533,14 @@ CONTAINS
     !! is re-derived by CD_Recompute_System_Acceleration) the cable reloads it exactly.
     !! A cable on a frictional seabed appends its stick-slip friction anchors, (x, y) per
     !! node (CD_HFMF_FrictionMirrorSize slots): they are committed state like q. Then come
-    !! the committed boundary (CD_HFMF_BoundaryMirrorSize), the force-blend state and the
-    !! torsion state. Zero if uninitialised.
+    !! the committed boundary (CD_HFMF_BoundaryMirrorSize), the force-blend state, the VIV
+    !! state and the torsion state. Zero if uninitialised.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
     IF (ALLOCATED(self%line%freemask)) n = 3*COUNT(self%line%freemask)
     n = n + CD_HFMF_FrictionMirrorSize(self) + CD_HFMF_BoundaryMirrorSize(self) + &
-        CD_HFMF_ForceMirrorSize(self) + CD_HFMF_TorsionMirrorSize(self)
+        CD_HFMF_ForceMirrorSize(self) + CD_HFMF_VIVMirrorSize(self) + CD_HFMF_TorsionMirrorSize(self)
   END FUNCTION CD_HFMF_MirrorSize
 
   INTEGER FUNCTION CD_HFMF_BoundaryMirrorSize(self) RESULT(n)
@@ -1576,6 +1577,16 @@ CONTAINS
     IF (self%line%force_blend) n = 1 + self%line%ndof
   END FUNCTION CD_HFMF_ForceMirrorSize
 
+  INTEGER FUNCTION CD_HFMF_VIVMirrorSize(self) RESULT(n)
+    !! Mirror slots of the cross-flow VIV state, before the torsion block: the shedding phase
+    !! per node, the running mean squares of the cross-flow velocity and acceleration per node
+    !! (interleaved) and the averaging time (3 nn + 1 values); zero without VIV.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
+    n = 0
+    IF (.NOT. self%initialized) RETURN
+    IF (self%line%has_viv) n = 3*self%line%nn + 1
+  END FUNCTION CD_HFMF_VIVMirrorSize
+
   INTEGER FUNCTION CD_HFMF_FrictionMirrorSize(self) RESULT(n)
     !! Mirror slots of the stick-slip friction anchors (2 per node), zero without friction.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
@@ -1586,7 +1597,7 @@ CONTAINS
 
   SUBROUTINE CD_HFMF_PackMirror(self, buf, ErrStat, ErrMsg)
     !! Write the cable's continuous state into buf as [v_free; q_free; a_free], then the
-    !! friction, boundary, force-blend and torsion blocks -- the layout CD_HFMF_MirrorSize
+    !! friction, boundary, force-blend, VIV and torsion blocks -- the layout CD_HFMF_MirrorSize
     !! sizes. The mirror is written every mooring step and reloaded ONLY by a
     !! checkpoint-restart rebuild or the state-const CalcOutput restore
     !! (CD_HFMF_UnpackMirror); the module stays self-authoritative in normal marching.
@@ -1643,6 +1654,12 @@ CONTAINS
         buf(k + 2:k + 1 + self%line%ndof) = self%line%fc_R
       END IF
       k = k + 1 + self%line%ndof
+    END IF
+    IF (self%line%has_viv) THEN
+      buf(k + 1:k + self%line%nn) = self%line%viv_phi
+      buf(k + self%line%nn + 1:k + 3*self%line%nn) = RESHAPE(self%line%viv_ms, [2*self%line%nn])
+      buf(k + 3*self%line%nn + 1) = self%line%viv_tw
+      k = k + 3*self%line%nn + 1
     END IF
     IF (self%line%torsion%active) THEN
       buf(k + 1) = self%line%torsion%theta
@@ -1704,6 +1721,15 @@ CONTAINS
       ErrMsg = 'CD_HFMF_UnpackMirror: the parent orientation must be a proper orthogonal DCM'
       RETURN
     END IF
+    ! and the VIV block's mean squares and averaging time, which cannot be negative
+    IF (self%line%has_viv) THEN
+      kb = SIZE(buf) - CD_HFMF_TorsionMirrorSize(self) - CD_HFMF_VIVMirrorSize(self) + self%line%nn
+      IF (ANY(buf(kb + 1:kb + 2*self%line%nn + 1) < CD_ZERO)) THEN
+        ErrStat = CD_HFMF_BADINPUT
+        ErrMsg = 'CD_HFMF_UnpackMirror: the VIV mean squares and averaging time must be non-negative'
+        RETURN
+      END IF
+    END IF
     k = 0
     DO i = 1, self%line%ndof
       IF (self%line%freemask(i)) THEN
@@ -1756,6 +1782,17 @@ CONTAINS
         self%line%fc_valid = .TRUE.
       END IF
       k = k + 1 + self%line%ndof
+    END IF
+    ! the VIV state, with the step-start copy of a recovering step and the in-step phase
+    IF (self%line%has_viv) THEN
+      self%line%viv_phi = buf(k + 1:k + self%line%nn)
+      self%line%viv_ms = RESHAPE(buf(k + self%line%nn + 1:k + 3*self%line%nn), [2, self%line%nn])
+      self%line%viv_tw = buf(k + 3*self%line%nn + 1)
+      self%line%viv_phi_eval = self%line%viv_phi
+      self%line%viv_ms_next = self%line%viv_ms
+      self%line%ws_recovery_viv_phi = self%line%viv_phi
+      self%line%ws_recovery_viv_ms = self%line%viv_ms
+      k = k + 3*self%line%nn + 1
     END IF
     IF (self%line%torsion%active) THEN
       self%line%torsion%theta = buf(k + 1)

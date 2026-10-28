@@ -15,8 +15,7 @@ All notable changes to CableDyn are recorded in this file. The format follows
   with the same phase start and running-RMS window (`VIVrmsWindow`, default 500 steps of
   `dtM`). On a taut 100 m line in a uniform current it follows MoorDyn-F's lock-in amplitude
   and frequency to two to three digits through mode-1 and mode-3 lock-in, at any `dtM` from
-  5e-4 to 1e-2 s. The Python deck tools read and keep the columns. The coupled and mixed
-  routes refuse `Cl > 0` by name.
+  5e-4 to 1e-2 s. The Python deck tools read and keep the columns.
 - Cross-flow VIV of finite-EI cables in the standalone driver: the same LINE TYPES columns on an
   `EI > 0` type give a distributed lift, Gauss-integrated over each cubic-Hermite element with
   exact tangents, and a shedding phase at each node driven along the node's own tangent. A taut
@@ -24,6 +23,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   5e-4 to 1e-2 s without smoothing; a bending-stiff line matches the string of equal first-mode
   frequency in mode-1 lock-in and stays in mode 1 where that string jumps to mode 2. A finite-EI
   line with two moving ends, or beside bodies, rods or free points, refuses `Cl > 0`.
+- Cross-flow VIV on the coupled routes: OpenFAST (`CompMooring = 5`), FAST.Farm and the
+  standalone runner of a mixed `EI = 0` / finite-EI deck carry the lift on both line kinds, with
+  the host's fluid field. The phases, running mean squares and averaging time are part of the
+  checkpoint state and of the correction rewind, so a restart continues bit for bit. A riser and
+  a cable in a 0.15 m/s host current lock in at A/D 0.665 and 0.292 Hz, MoorDyn-F's 0.662 and
+  0.293 Hz.
 - Bend stiffeners (`STIFFENERS` table): a tapered polyurethane sleeve over an end of a finite-EI
   line, given as conical segments from the root outward (outer diameters, bore, modulus,
   density). Each element it covers takes the compliance average of the cable-plus-sleeve

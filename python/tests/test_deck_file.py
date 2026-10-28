@@ -4603,11 +4603,12 @@ def test_line_type_viv_is_accepted_on_a_finite_ei_line_type(tmp_path):
     assert (line_type.ei, line_type.cl) == (1.0e4, 0.8)
 
 
-def test_viv_is_refused_on_the_coupled_route():
+def test_viv_is_accepted_on_the_coupled_route():
     text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
     DeckFile.from_text(text)
-    with pytest.raises(DeckFormatError, match="runs in the standalone driver"):
-        DeckFile.from_text(text, caller_driven=True)
+    DeckFile.from_text(text, caller_driven=True)
+    # the host supplies the water, so a deck without a depth is not refused there
+    DeckFile.from_text(_edit(text, ("50.0 WtrDpth\n", "")), caller_driven=True)
 
 
 def test_viv_needs_water_on_an_ei0_line():

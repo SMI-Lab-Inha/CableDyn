@@ -114,12 +114,12 @@ Line and constitutive capability
        ``EI = 0`` lines, or all finite-EI lines on the Hermite route; flat seabed); a deck with
        torsion is rejected
    * - Cross-flow VIV (LINE TYPES ``Cl``, ``dF``, ``cF``)
-     - Standalone only
+     - Standalone and coupled
      - MoorDyn v2's synchronisation model on ``EI = 0`` lines and, as a distributed lift, on
-       finite-EI cables of the Hermite march (:ref:`theory-viv`); in-line VIV is not provided;
-       the coupled OpenFAST and FAST.Farm routes, mixed ``EI = 0`` / finite-EI decks, finite-EI
-       lines with two moving ends and finite-EI lines beside bodies, rods or free points refuse
-       ``Cl > 0`` by name
+       finite-EI cables of the Hermite march (:ref:`theory-viv`), with the host's fluid field
+       on the coupled routes and its state in the checkpoint; in-line VIV is not provided;
+       finite-EI lines with two moving ends and finite-EI lines beside bodies, rods or free
+       points refuse ``Cl > 0`` by name
 
 Loads and environment
 ---------------------

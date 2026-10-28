@@ -847,10 +847,6 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
      - linearise a pinned-hang-off, uncontrolled variant of the deck; time-domain runs support both
    * - a ``Rigid`` end-connection direction reversed by exactly 180 degrees in one host update
      - drive the platform through intermediate orientations
-   * - VIV on the coupled or mixed route (``VIV (LINE TYPES Cl > 0) runs in the standalone driver
-       of an EI = 0 or finite-EI deck``)
-     - run the VIV study on a standalone ``EI = 0`` or finite-EI deck, or set ``Cl = 0`` for the
-       coupled run
    * - VIV on a finite-EI line with two moving ends (``needs its End B fixed``) or beside
        bodies, rods or free points (``does not run with bodies, rods or free points yet``)
      - fix End B of the line, or set ``Cl = 0`` for its line type

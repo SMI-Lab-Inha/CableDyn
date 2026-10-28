@@ -96,6 +96,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Set_Model_Syrope_State
   PUBLIC :: CD_Set_Model_VIV
   PUBLIC :: CD_Latch_Model_VIV_Window
+  PUBLIC :: CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Model_Has_VIV
   PUBLIC :: CD_Get_Model_Tension
   PUBLIC :: CD_Get_Model_EndForces
   PUBLIC :: CD_Get_Model_EndNodeMassDiag
@@ -3990,6 +3991,82 @@ CONTAINS
     IF (.NOT. (CD_Is_Finite(dt) .AND. dt > CD_ZERO)) RETURN
     model%viv_tw = REAL(CD_VIV_NM, wp)*dt
   END SUBROUTINE CD_Latch_Model_VIV_Window
+
+  SUBROUTINE CD_Get_Model_VIV_State(model, phi, ms, t_window, ErrStat, ErrMsg)
+    !! Copy the committed VIV state for a checkpoint: the shedding phase per node (n_nodes),
+    !! the running mean squares of the cross-flow velocity and acceleration (2, n_nodes), and
+    !! the averaging time (0 while unlatched). A model without VIV returns zeros.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: phi(:), ms(:, :), t_window
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    phi = CD_ZERO
+    ms = CD_ZERO
+    t_window = CD_ZERO
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_MODEL_NOT_INITIALIZED
+      ErrMsg = 'CableDyn_Model: model is not initialized'
+      RETURN
+    END IF
+    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= 2 .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV state outputs must have shapes (n_nodes) and (2, n_nodes)')
+      RETURN
+    END IF
+    IF (.NOT. model%has_viv) RETURN
+    phi = model%viv_phi
+    ms = model%viv_ms
+    t_window = model%viv_tw
+  END SUBROUTINE CD_Get_Model_VIV_State
+
+  SUBROUTINE CD_Set_Model_VIV_State(model, phi, ms, t_window, ErrStat, ErrMsg)
+    !! Overwrite the committed VIV state from a checkpoint (see CD_Get_Model_VIV_State).
+    !! Fails closed on a model without VIV, a shape mismatch, non-finite values, a negative
+    !! mean square or averaging time.
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: phi(:), ms(:, :), t_window
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_MODEL_NOT_INITIALIZED
+      ErrMsg = 'CableDyn_Model: model is not initialized'
+      RETURN
+    END IF
+    IF (.NOT. model%has_viv) THEN
+      CALL fail(ErrStat, ErrMsg, 'model carries no VIV state to set')
+      RETURN
+    END IF
+    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= 2 .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV state inputs must have shapes (n_nodes) and (2, n_nodes)')
+      RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(phi) .AND. CD_All_Finite(ms) .AND. CD_Is_Finite(t_window))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV state mirror must be finite')
+      RETURN
+    END IF
+    IF (ANY(ms < CD_ZERO) .OR. t_window < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV mean squares and averaging time must be non-negative')
+      RETURN
+    END IF
+    model%viv_phi = phi
+    model%viv_ms = ms
+    model%viv_tw = t_window
+    ! the rollback and recovery twins follow (see CD_Set_Model_VE_Dl1)
+    model%viv_phi_rollback = phi
+    model%viv_ms_rollback = ms
+    model%recovery_viv_phi = phi
+    model%recovery_viv_ms = ms
+    model%viv_phi_eval = phi
+  END SUBROUTINE CD_Set_Model_VIV_State
+
+  PURE LOGICAL FUNCTION CD_Model_Has_VIV(model) RESULT(has)
+    !! True if the model carries the cross-flow VIV phase state.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    has = model%has_viv
+  END FUNCTION CD_Model_Has_VIV
 
   SUBROUTINE viv_node_coef(model, q, nd, coef, uu)
     !! Lift scale of interior node nd at positions q, sum over its two elements of

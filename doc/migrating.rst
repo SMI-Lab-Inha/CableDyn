@@ -93,7 +93,7 @@ Keyword map
      - same row; the native order is ``Cd_n Cd_t Ca_n Ca_t`` and the header decides which is
        meant. ``EI > 0`` switches the line to the bending element.
    * - ``LINE TYPES`` VIV columns ``Cl`` or ``Cl dF cF``
-     - same columns and the same synchronisation model in the standalone driver, on ``EI = 0``
+     - same columns and the same synchronisation model, standalone and coupled, on ``EI = 0``
        types and as a distributed lift on finite-EI types (:ref:`theory-viv`); the running-RMS
        window is ``VIVrmsWindow`` seconds, by default
        500 steps of ``dtM`` as MoorDyn's
