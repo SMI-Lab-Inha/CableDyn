@@ -4089,6 +4089,25 @@ _TURBINE_DECK = (
 )
 
 
+def test_viv_and_lift_flag_refused_on_a_finite_ei_line_with_two_moving_ends():
+    # native run_deck_driver: a farm-shared finite-EI line (Turbine1 to Turbine2) runs on the
+    # compatibility route, which carries no VIV: Cl > 0 and the lift file V are refused
+    shared = _edit(
+        _TURBINE_DECK,
+        ("chain 0.1 20.0 1.0e9 -1.0 0.0 1.2", "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2"),
+        ("1 1 3 -\n2 2 3 -\n", "1 1 2 -\n"),
+        ("1 chain 380 20\n2 chain 380 20\n", "1 chain 620 30\n"),
+        ("100 WtrDpth\n", "100 WtrDpth\n0.1 dtM\n10.0 TMax\n"),
+    )
+    DeckFile.from_text(shared)
+    with pytest.raises(DeckFormatError, match="needs its End B fixed"):
+        DeckFile.from_text(_edit(shared, ("1.2 0.2 1.0 0.0\n", "1.2 0.2 1.0 0.0 0.8\n")))
+    with pytest.raises(DeckFormatError, match=r"flag V \(VIV lift\) needs a line that carries VIV"):
+        DeckFile.from_text(_edit(shared, ("1 1 2 -\n", "1 1 2 V\n")))
+    # the same flag on a line with a Fixed End B is accepted
+    DeckFile.from_text(_edit(_DYNAMIC, ("1 2 1 -\n", "1 2 1 V\n")))
+
+
 @pytest.mark.parametrize(
     ("edit", "message"),
     [

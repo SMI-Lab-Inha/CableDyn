@@ -2614,6 +2614,7 @@ class DeckFile:
         # Cl > 0 on an EI = 0 row (native init_one_model, which needs the line's Morison drag in
         # water)
         has_viv_ei0 = False
+        viv_type_names: set[str] = set()
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
@@ -2702,6 +2703,8 @@ class DeckFile:
                         "working-curve model"
                     )
                 has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
+                if cl > 0.0:
+                    viv_type_names.add(row.tokens[0].lower())
             if ei > 0.0 and (is_syrope or len(ea_parts) > 1):
                 model = "Syrope" if is_syrope else "viscoelastic stiffness"
                 raise DeckFormatError(f"{self._at(row)}: {model} is not supported with EI > 0")
@@ -2891,6 +2894,7 @@ class DeckFile:
         # lines whose stock anchor-first row the native reader turns around (its ends swap)
         swapped_lines: set[str] = set()
         range_lines = 0
+        lift_lines = 0  # lines with the VIV lift file (flag V)
         series_lines = 0  # lines with per-line time-series files (flags p, t, V)
         for row in self.lines:
             if len(row.tokens) not in {3, 4, 7}:
@@ -2909,6 +2913,8 @@ class DeckFile:
                 range_lines += 1
             if "p" in output_flags.lower() or "t" in output_flags.lower() or "V" in output_flags:
                 series_lines += 1
+            if "V" in output_flags:
+                lift_lines += 1
             if len(row.tokens) == 7:
                 line_type = row.tokens[1]
                 endpoints: tuple[str, ...] = row.tokens[2:4]
@@ -3590,6 +3596,24 @@ class DeckFile:
                 )
             elif has_rigid6:
                 needs_multibody = non_rigid6_points
+        if deck_driver_route and has_dtm and has_tmax and line_ids and all(finite_lines):
+            # native run_deck_driver: a finite-EI deck the multibody march does not take, with a
+            # line whose End B moves, runs on the compatibility route, which carries no VIV
+            moving_end_b = not needs_multibody and any(
+                point_types[node_b] != "fixed" for _, node_b in normalized_line_endpoints.values()
+            )
+            if moving_end_b and any(
+                viv_type_names.intersection(types) for types in section_types_by_line.values()
+            ):
+                raise DeckFormatError(
+                    f"{self._label}: VIV (LINE TYPES Cl > 0) of a finite-EI line needs its End B "
+                    "fixed (the cubic-Hermite march); set Cl = 0 for a line with two moving ends"
+                )
+            if moving_end_b and lift_lines:
+                raise DeckFormatError(
+                    f"{self._label}: the LINES Outputs flag V (VIV lift) needs a line that carries "
+                    "VIV, which a finite-EI line with two moving ends does not"
+                )
         if failures and deck_driver_route:
             # native CD_Run_Deck_Driver: FAILURE runs on the point-system object graph only
             if not has_dtm:
