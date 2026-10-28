@@ -1939,7 +1939,7 @@ CONTAINS
   SUBROUTINE CD_Component_Wave_Kinematics(x, y, z, t, depth, direction_deg, stretch, &
                                           omega_comp, k_comp, amplitude, phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated, &
-                                          amplitude_scale, pdyn, exp_m2kd)
+                                          amplitude_scale, pdyn, exp_m2kd, tail_sums)
     !! Evaluate linear irregular-wave kinematics from a CALLER-SUPPLIED component table:
     !! the general (arbitrary length, explicit per-component phase) form of the fixed-size
     !! deterministic-phase JONSWAP evaluator above, sharing its conventions exactly --
@@ -1965,6 +1965,13 @@ CONTAINS
     !! depend on the buffer. exp_m2kd is the caller's table of EXP(-2 k_comp(i) depth) for this
     !! depth (constant for a fixed table): it replaces the per-call exponential with the same
     !! value, so the result is bit-identical.
+    !! tail_sums(:, i) holds the sums over components j >= i of a_j omega_j, a_j omega_j^2 and
+    !! a_j omega_j^2/k_j, for a table whose k_comp does not decrease. On -depth <= z_eval <= 0
+    !! both depth ratios fall as k grows, so the cosh ratio of the last summed component times
+    !! tail_sums bounds the rest of the velocity, acceleration and pressure sums. The sums stop
+    !! once that bound is below half an ulp of the magnitude already summed: a deep point drops
+    !! the short components that have decayed to nothing there, and the result changes at
+    !! round-off only. The elevation always sums every component.
     REAL(wp), INTENT(IN) :: x, y, z, t, depth, direction_deg
     LOGICAL, INTENT(IN) :: stretch
     REAL(wp), INTENT(IN) :: omega_comp(:), k_comp(:), amplitude(:), phase(:)
@@ -1976,14 +1983,17 @@ CONTAINS
     ! the linear dynamic pressure per unit density (sum over the components of
     ! (omega^2/k) a cosh(k(z+h))/sinh(kh) cos(theta)), as in CD_Airy_Wave_Kinematics_Precomputed
     REAL(wp), INTENT(OUT), OPTIONAL :: pdyn
-    REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(:)
-    INTEGER :: i, n, nb, n_small
-    REAL(wp) :: omega, k, amp
-    REAL(wp) :: cb, sb, x_along, theta, z_eval, cosh_ratio, sinh_ratio
-    INTEGER, PARAMETER :: NBUF = 1024
-    REAL(wp) :: scl, c_i, s_i, kd, kz, e_kz, e_neg2kd, e_neg, denom
-    REAL(wp) :: cth(NBUF), sth(NBUF), ch(NBUF), sh(NBUF)
-    LOGICAL :: trust_inputs, at_bed
+    REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(:), tail_sums(:, :)
+    INTEGER :: i, n, nb, n_small, i0, j, nk
+    REAL(wp) :: amp
+    REAL(wp) :: cb, sb, x_along, theta, z_eval
+    ! the elevation keeps the cosines of the first NBUF components; the velocity sums run in
+    ! blocks of NBLK (NBUF a multiple of NBLK, so a block lies wholly inside or past the buffer)
+    INTEGER, PARAMETER :: NBUF = 1024, NBLK = 32
+    REAL(wp), PARAMETER :: HALF_ULP = 0.5_wp*EPSILON(CD_ONE)
+    REAL(wp) :: scl, e_neg, denom
+    REAL(wp) :: cth(NBUF), bc(NBLK), bs(NBLK), ch(NBLK), sh(NBLK), mag(3), rest(3)
+    LOGICAL :: trust_inputs, at_bed, use_tail, small(NBLK)
 
     eta = CD_ZERO
     velocity = CD_ZERO
@@ -2001,6 +2011,12 @@ CONTAINS
     IF (PRESENT(exp_m2kd)) THEN
       IF (SIZE(exp_m2kd) /= n) THEN
         CALL fail(ErrStat, ErrMsg, 'exp_m2kd must match the component-wave arrays')
+        RETURN
+      END IF
+    END IF
+    IF (PRESENT(tail_sums)) THEN
+      IF (SIZE(tail_sums, 1) /= 3 .OR. SIZE(tail_sums, 2) /= n) THEN
+        CALL fail(ErrStat, ErrMsg, 'tail_sums must be shaped (3, n) for the component-wave arrays')
         RETURN
       END IF
     END IF
@@ -2043,13 +2059,9 @@ CONTAINS
     sb = SIN(direction_deg*DEG2RAD)
     x_along = x*cb + y*sb
     nb = MIN(n, NBUF)
-    ! Cosine and sine in separate loops: a compiler fuses COS and SIN of one argument into a
-    ! sincos call, which in the MinGW runtime costs several times a cos plus a sin.
+    ! the elevation sums every component (Wheeler stretching needs the total eta)
     DO i = 1, nb
       cth(i) = COS(k_comp(i)*x_along - omega_comp(i)*t + phase(i))
-    END DO
-    DO i = 1, nb
-      sth(i) = SIN(k_comp(i)*x_along - omega_comp(i)*t + phase(i))
     END DO
     DO i = 1, nb
       eta = eta + (scl*amplitude(i))*cth(i)
@@ -2072,78 +2084,91 @@ CONTAINS
     ELSE
       z_eval = z
     END IF
-    ! Depth-profile ratios of the buffered components: the expressions of profile_ratios,
-    ! with its seabed test (a function of z_eval and depth only) evaluated once.
+    ! Depth-profile ratios: the expressions of profile_ratios, with its seabed test (a function
+    ! of z_eval and depth only) evaluated once.
     at_bed = ABS(z_eval + depth) <= 8.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, depth, ABS(z_eval))
-    IF (PRESENT(exp_m2kd)) THEN
-      DO i = 1, nb
-        ch(i) = EXP(k_comp(i)*z_eval)
-        sh(i) = exp_m2kd(i)
-      END DO
-    ELSE
-      DO i = 1, nb
-        ch(i) = EXP(k_comp(i)*z_eval)
-        sh(i) = EXP(-2.0_wp*(k_comp(i)*depth))
-      END DO
-    END IF
-    IF (at_bed) THEN
-      DO i = 1, nb
-        denom = CD_ONE - sh(i)
-        ch(i) = (ch(i) + ch(i))/denom
-        sh(i) = CD_ZERO
-      END DO
-    ELSE
-      ! an underflowed exponential takes profile_ratios' stable form; those components
-      ! (rare) are redone one at a time below, the rest stay branch-free here
-      n_small = COUNT(ch(1:nb) <= TINY(CD_ONE) .OR. sh(1:nb) <= TINY(CD_ONE))
-      DO i = 1, nb
-        e_neg = sh(i)/MAX(ch(i), TINY(CD_ONE))
-        denom = CD_ONE - sh(i)
-        sh(i) = (ch(i) - e_neg)/denom
-        ch(i) = (ch(i) + e_neg)/denom
-      END DO
-      IF (n_small > 0) THEN
-        DO i = 1, nb
-          kd = k_comp(i)*depth
-          kz = k_comp(i)*z_eval
-          e_kz = EXP(kz)
-          e_neg2kd = EXP(-2.0_wp*kd)
-          IF (e_kz <= TINY(e_kz) .OR. e_neg2kd <= TINY(e_neg2kd)) &
-            CALL profile_ratios(k_comp(i), depth, z_eval, ch(i), sh(i))
+    use_tail = .FALSE.
+    IF (PRESENT(tail_sums)) use_tail = z_eval <= CD_ZERO .AND. z_eval >= -depth
+    mag = CD_ZERO
+    DO i0 = 1, n, NBLK
+      nk = MIN(n - i0 + 1, NBLK)
+      IF (i0 <= nb) THEN
+        bc(1:nk) = cth(i0:i0 + nk - 1)
+      ELSE
+        DO j = 1, nk
+          bc(j) = COS(k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1))
         END DO
       END IF
-    END IF
-    DO i = 1, nb
-      amp = (scl*amplitude(i))*omega_comp(i)
-      velocity(1) = velocity(1) + amp*ch(i)*cth(i)*cb
-      velocity(2) = velocity(2) + amp*ch(i)*cth(i)*sb
-      velocity(3) = velocity(3) + amp*sh(i)*sth(i)
-      amp = (scl*amplitude(i))*omega_comp(i)*omega_comp(i)
-      acceleration(1) = acceleration(1) + amp*ch(i)*sth(i)*cb
-      acceleration(2) = acceleration(2) + amp*ch(i)*sth(i)*sb
-      acceleration(3) = acceleration(3) - amp*sh(i)*cth(i)
-    END DO
-    IF (PRESENT(pdyn)) THEN
-      DO i = 1, nb
-        pdyn = pdyn + (scl*amplitude(i))*omega_comp(i)*omega_comp(i)/k_comp(i)*ch(i)*cth(i)
+      ! the sine in its own loop: a compiler fuses COS and SIN of one argument into a sincos
+      ! call, which in the MinGW runtime costs several times a cos plus a sin
+      DO j = 1, nk
+        bs(j) = SIN(k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1))
       END DO
-    END IF
-    DO i = nb + 1, n
-      omega = omega_comp(i)
-      k = k_comp(i)
-      theta = k*x_along - omega*t + phase(i)
-      c_i = COS(theta)
-      s_i = SIN(theta)
-      CALL profile_ratios(k, depth, z_eval, cosh_ratio, sinh_ratio)
-      amp = (scl*amplitude(i))*omega
-      velocity(1) = velocity(1) + amp*cosh_ratio*c_i*cb
-      velocity(2) = velocity(2) + amp*cosh_ratio*c_i*sb
-      velocity(3) = velocity(3) + amp*sinh_ratio*s_i
-      amp = (scl*amplitude(i))*omega*omega
-      acceleration(1) = acceleration(1) + amp*cosh_ratio*s_i*cb
-      acceleration(2) = acceleration(2) + amp*cosh_ratio*s_i*sb
-      acceleration(3) = acceleration(3) - amp*sinh_ratio*c_i
-      IF (PRESENT(pdyn)) pdyn = pdyn + amp/k*cosh_ratio*c_i
+      IF (PRESENT(exp_m2kd)) THEN
+        DO j = 1, nk
+          ch(j) = EXP(k_comp(i0 + j - 1)*z_eval)
+          sh(j) = exp_m2kd(i0 + j - 1)
+        END DO
+      ELSE
+        DO j = 1, nk
+          ch(j) = EXP(k_comp(i0 + j - 1)*z_eval)
+          sh(j) = EXP(-2.0_wp*(k_comp(i0 + j - 1)*depth))
+        END DO
+      END IF
+      IF (at_bed) THEN
+        DO j = 1, nk
+          denom = CD_ONE - sh(j)
+          ch(j) = (ch(j) + ch(j))/denom
+          sh(j) = CD_ZERO
+        END DO
+      ELSE
+        ! an underflowed exponential (exp(-2kd) of a short component in deep water) takes
+        ! profile_ratios' stable form; those components are redone one at a time below, the
+        ! rest stay branch-free here
+        small(1:nk) = ch(1:nk) <= TINY(CD_ONE) .OR. sh(1:nk) <= TINY(CD_ONE)
+        n_small = COUNT(small(1:nk))
+        DO j = 1, nk
+          e_neg = sh(j)/MAX(ch(j), TINY(CD_ONE))
+          denom = CD_ONE - sh(j)
+          sh(j) = (ch(j) - e_neg)/denom
+          ch(j) = (ch(j) + e_neg)/denom
+        END DO
+        IF (n_small > 0) THEN
+          DO j = 1, nk
+            IF (small(j)) CALL profile_ratios(k_comp(i0 + j - 1), depth, z_eval, ch(j), sh(j))
+          END DO
+        END IF
+      END IF
+      DO j = 1, nk
+        i = i0 + j - 1
+        amp = (scl*amplitude(i))*omega_comp(i)
+        velocity(1) = velocity(1) + amp*ch(j)*bc(j)*cb
+        velocity(2) = velocity(2) + amp*ch(j)*bc(j)*sb
+        velocity(3) = velocity(3) + amp*sh(j)*bs(j)
+        amp = (scl*amplitude(i))*omega_comp(i)*omega_comp(i)
+        acceleration(1) = acceleration(1) + amp*ch(j)*bs(j)*cb
+        acceleration(2) = acceleration(2) + amp*ch(j)*bs(j)*sb
+        acceleration(3) = acceleration(3) - amp*sh(j)*bc(j)
+      END DO
+      IF (PRESENT(pdyn)) THEN
+        DO j = 1, nk
+          i = i0 + j - 1
+          pdyn = pdyn + (scl*amplitude(i))*omega_comp(i)*omega_comp(i)/k_comp(i)*ch(j)*bc(j)
+        END DO
+      END IF
+      IF (use_tail) THEN
+        DO j = 1, nk
+          i = i0 + j - 1
+          mag(1) = mag(1) + amplitude(i)*omega_comp(i)*ch(j)
+          mag(2) = mag(2) + amplitude(i)*omega_comp(i)*omega_comp(i)*ch(j)
+          mag(3) = mag(3) + amplitude(i)*omega_comp(i)*omega_comp(i)/k_comp(i)*ch(j)
+        END DO
+        IF (i0 + nk <= n) THEN
+          rest = ch(nk)*tail_sums(:, i0 + nk)
+          IF (rest(1) <= HALF_ULP*mag(1) .AND. rest(2) <= HALF_ULP*mag(2) .AND. &
+              (.NOT. PRESENT(pdyn) .OR. rest(3) <= HALF_ULP*mag(3))) EXIT
+        END IF
+      END IF
     END DO
   END SUBROUTINE CD_Component_Wave_Kinematics
 

@@ -59,7 +59,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `TMax = 0`, where the range graphs hold the `t = 0` row. A standalone deck without `TMax` that
   asks for the march now says so: its error ends "to check a dynamic deck's static start only,
   give dtM with TMax = 0".
-
+- Deck waves from a WaterKin elevation history (`WaveKinMod 1`) run two to four times faster.
+  Below the surface, the velocity and acceleration sums stop once the components still to come,
+  too short to reach that depth, cannot change them beyond round-off. On a 1024-element lazy-wave
+  cable over 300 s, a record at `dtWave` 0.25 s (600 components) runs in 103 s instead of 226 s,
+  and one at 0.1 s in 189 s instead of about 660 s, with output identical to the printed digits.
+  A `jonswap` sea changes at round-off.
 - Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
   range graphs and element file) report the cable's own moment, the line type's EI times the
   curvature; lines without stiffeners are unchanged.
@@ -75,6 +80,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- Reading a WaterKin `WaveKinFile` no longer slows with the square of its length: the rows grow
+  by doubling instead of copying the whole record per row. A 10 s run on a 168,000-row record
+  took 107 s and now takes 3.5 s.
 - A weightless or near-neutral taut finite-EI line (a neutrally buoyant cable, a tendon) failed
   its static solve, even straight along its chord: the convergence test scaled the residual by
   the line's weight alone, far below the round-off of its axial forces. A taut line's scale now

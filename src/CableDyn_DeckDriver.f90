@@ -581,6 +581,8 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: jonswap_k(CD_JONSWAP_COMPONENTS) = CD_ZERO
     ! exp(-2 jonswap_k wtrdpth), fixed with the table (CD_Component_Wave_Kinematics exp_m2kd)
     REAL(wp) :: jonswap_e2kd(CD_JONSWAP_COMPONENTS) = CD_ZERO
+    ! CD_Component_Wave_Kinematics tail_sums of the table (set_component_tail)
+    REAL(wp), ALLOCATABLE :: jonswap_tail(:, :)
     REAL(wp) :: jonswap_amplitude(CD_JONSWAP_COMPONENTS) = CD_ZERO
     ! Random-phase, bin-jittered JONSWAP synthesis (OPTION WaveSeed, a positive integer;
     ! the same seed always gives the same sea).
@@ -615,6 +617,8 @@ MODULE CableDyn_DeckDriver
     ! irregular seas; wave_eta_mean carries the zero-frequency waterline offset.
     REAL(wp), ALLOCATABLE :: wave_component_omega(:), wave_component_k(:)
     REAL(wp), ALLOCATABLE :: wave_component_amplitude(:), wave_component_phase(:)
+    ! exp(-2 k (wtrdpth + wave_eta_mean)) and the tail_sums of the table (CD_Component_Wave_Kinematics)
+    REAL(wp), ALLOCATABLE :: wave_component_e2kd(:), wave_component_tail(:, :)
     REAL(wp) :: wave_eta_mean = CD_ZERO
     ! N-level vertical current profile (ascending z): from the two-point deck
     ! OPTION row or a MoorDyn WaterKin file's CurrentMod-1 depth table.
@@ -12418,7 +12422,7 @@ CONTAINS
     CHARACTER(1024) :: why
     REAL(wp) :: te_row(2), tr, dt, tol, angle, ca, sa, scale, frac
     REAL(wp) :: cos_step, sin_step, cos_j, sin_j, cos_next, trig_norm
-    REAL(wp), ALLOCATABLE :: times(:), eta_rows(:), sample_eta(:)
+    REAL(wp), ALLOCATABLE :: times(:), eta_rows(:), sample_eta(:), grown(:)
     LOGICAL :: data_started
 
     ErrStat = CD_DECKDRV_OK
@@ -12438,7 +12442,9 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'cannot open the WaterKin WaveKinFile: '//TRIM(path)// &
                 input_open_reason(path, why)); RETURN
     END IF
-    ALLOCATE (times(0), eta_rows(0))
+    ! the rows grow by doubling (appending one row at a time copies the whole record per row)
+    ALLOCATE (times(1024), eta_rows(1024))
+    nraw = 0
     data_started = .FALSE.
     lineno = 0
     DO
@@ -12463,11 +12469,21 @@ CONTAINS
         CYCLE
       END IF
       data_started = .TRUE.
-      times = [times, te_row(1)]
-      eta_rows = [eta_rows, te_row(2)]
+      nraw = nraw + 1
+      IF (nraw > SIZE(times)) THEN
+        ALLOCATE (grown(2*SIZE(times)))
+        grown(1:nraw - 1) = times(1:nraw - 1)
+        CALL MOVE_ALLOC(grown, times)
+        ALLOCATE (grown(2*SIZE(eta_rows)))
+        grown(1:nraw - 1) = eta_rows(1:nraw - 1)
+        CALL MOVE_ALLOC(grown, eta_rows)
+      END IF
+      times(nraw) = te_row(1)
+      eta_rows(nraw) = te_row(2)
     END DO
     CLOSE (unit)
-    nraw = SIZE(times)
+    times = times(1:nraw)
+    eta_rows = eta_rows(1:nraw)
     IF (nraw < 4) THEN
       CALL fail(ErrStat, ErrMsg, 'WaterKin WaveKinFile needs at least four `time elevation` rows'); RETURN
     END IF
@@ -29101,7 +29117,7 @@ CONTAINS
                                         opts%jonswap_omega, opts%jonswap_k, opts%jonswap_amplitude, &
                                         opts%jonswap_phase, eta, velocity, acceleration, ErrStat, ErrMsg, &
                                         inputs_validated=.TRUE., amplitude_scale=ramp, pdyn=pdyn, &
-                                        exp_m2kd=opts%jonswap_e2kd)
+                                        exp_m2kd=opts%jonswap_e2kd, tail_sums=opts%jonswap_tail)
     CASE (WAVE_SEA)
       CALL CD_Sea_Kinematics(opts%sea, x, y, z, time, opts%wtrdpth, ramp, eta, velocity, acceleration, &
                              ErrStat, ErrMsg, pdyn)
@@ -29115,14 +29131,16 @@ CONTAINS
                                           opts%wave_component_omega, opts%wave_component_k, &
                                           opts%wave_component_amplitude, opts%wave_component_phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated=.TRUE., &
-                                          amplitude_scale=ramp, pdyn=pdyn)
+                                          amplitude_scale=ramp, pdyn=pdyn, exp_m2kd=opts%wave_component_e2kd, &
+                                          tail_sums=opts%wave_component_tail)
       ELSE
         CALL CD_Component_Wave_Kinematics(x, y, z - opts%wave_eta_mean, time, &
                                           opts%wtrdpth + opts%wave_eta_mean, opts%wave_direction, .TRUE., &
                                           opts%wave_component_omega, opts%wave_component_k, &
                                           opts%wave_component_amplitude, opts%wave_component_phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated=.TRUE., &
-                                          pdyn=pdyn)
+                                          pdyn=pdyn, exp_m2kd=opts%wave_component_e2kd, &
+                                          tail_sums=opts%wave_component_tail)
       END IF
       eta = eta + opts%wave_eta_mean
     CASE DEFAULT
@@ -29488,6 +29506,7 @@ CONTAINS
                                         opts%wave_seed, opts%jonswap_omega, opts%jonswap_k, opts%jonswap_amplitude, &
                                         opts%jonswap_phase, ErrStat, ErrMsg)
       opts%jonswap_e2kd = EXP(-2.0_wp*(opts%jonswap_k*opts%wtrdpth))
+      CALL set_component_tail(opts%jonswap_omega, opts%jonswap_k, opts%jonswap_amplitude, opts%jonswap_tail)
     CASE (WAVE_SEA)
       CALL CD_Sea_Synthesise(opts%sea, opts%wtrdpth, opts%g, opts%wave_seed, ErrStat, ErrMsg)
     CASE (WAVE_STREAM)
@@ -29509,6 +29528,11 @@ CONTAINS
                                             opts%wave_component_k(k), ErrStat, ErrMsg)
         IF (ErrStat /= CD_DECKDRV_OK) EXIT
       END DO
+      IF (ErrStat == CD_DECKDRV_OK) THEN
+        opts%wave_component_e2kd = EXP(-2.0_wp*(opts%wave_component_k*(opts%wtrdpth + opts%wave_eta_mean)))
+        CALL set_component_tail(opts%wave_component_omega, opts%wave_component_k, opts%wave_component_amplitude, &
+                                opts%wave_component_tail)
+      END IF
     CASE DEFAULT
       CALL fail(ErrStat, ErrMsg, 'unsupported wave kind during deck wave precompute')
       RETURN
@@ -29519,6 +29543,23 @@ CONTAINS
     END IF
     opts%wave_cache_ready = .TRUE.
   END SUBROUTINE precompute_deck_wave
+
+  SUBROUTINE set_component_tail(omega, k, amplitude, tail)
+    !! The tail_sums of CD_Component_Wave_Kinematics: tail(:, i) sums a_j omega_j, a_j omega_j^2
+    !! and a_j omega_j^2/k_j over j >= i. Left unallocated (every component summed) unless k
+    !! does not decrease, which the bound needs.
+    REAL(wp), INTENT(IN) :: omega(:), k(:), amplitude(:)
+    REAL(wp), ALLOCATABLE, INTENT(OUT) :: tail(:, :)
+    INTEGER :: i, n
+    n = SIZE(k)
+    IF (n < 2) RETURN
+    IF (ANY(k(2:n) < k(1:n - 1))) RETURN
+    ALLOCATE (tail(3, n))
+    tail(:, n) = amplitude(n)*[omega(n), omega(n)*omega(n), omega(n)*omega(n)/k(n)]
+    DO i = n - 1, 1, -1
+      tail(:, i) = tail(:, i + 1) + amplitude(i)*[omega(i), omega(i)*omega(i), omega(i)*omega(i)/k(i)]
+    END DO
+  END SUBROUTINE set_component_tail
 
   SUBROUTINE update_system_point_hydro(system, points, opts, time, work, ErrStat, ErrMsg)
     !! Update lumped Free/Connect point fluid kinematics for current and deck waves.

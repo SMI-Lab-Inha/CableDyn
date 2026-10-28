@@ -26,6 +26,10 @@ PROGRAM test_hermite_irregular_waves
   !!      all-zero amplitudes, bad period/phase/depth/gravity, missing hydro config).
   !!   7. IRREGULAR SMOKE: a 12-component JONSWAP-like table on a hanging cable runs
   !!      bounded with every step converged (waves break the at-rest fixed point).
+  !!   8. TAIL SUMS: on a 1500-component table of a 600 s record (the components of a WaterKin
+  !!      elevation file), the kernel with tail_sums gives the same elevation bit for bit and
+  !!      velocity, acceleration and dynamic pressure within round-off of the full sums, from
+  !!      the surface to the seabed; above still water (stretching off) it sums every component.
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   USE CableDyn_Precision, ONLY: wp
@@ -50,6 +54,7 @@ PROGRAM test_hermite_irregular_waves
   CALL model_displacement()
   CALL fail_closed_battery()
   CALL irregular_smoke()
+  CALL kernel_tail_sums()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -150,6 +155,67 @@ CONTAINS
                  'profile underflow: representable lower exponential retained')
     CALL require(ABS(a(3)) <= TINY(1.0_wp), 'profile underflow: seabed sinh ratio remains zero')
   END SUBROUTINE kernel_profile_underflow
+
+  SUBROUTINE kernel_tail_sums()
+    INTEGER, PARAMETER :: N = 1500, NZ = 7
+    ! (z, stretch): near the surface, mid-depth, deep, near and at the seabed; above still water
+    REAL(wp), PARAMETER :: ZS(NZ) = [-0.5_wp, -5.0_wp, -20.0_wp, -45.0_wp, -59.999_wp, -60.0_wp, 0.3_wp]
+    LOGICAL, PARAMETER :: STRETCH(NZ) = [.TRUE., .TRUE., .TRUE., .FALSE., .TRUE., .FALSE., .FALSE.]
+    REAL(wp) :: om(N), k(N), amp(N), ph(N), tail(3, N), e2kd(N), w(3)
+    REAL(wp) :: eta0, u0(3), a0(3), p0, eta1, u1(3), a1(3), p1, mag(3), ratio, ze
+    INTEGER :: i, iz, es
+    CHARACTER(200) :: em
+    ! omega_i = i 2 pi/600 s up to 2 Hz: a peaked sea plus the leakage tail of a finite record
+    DO i = 1, N
+      om(i) = REAL(i, wp)*2.0_wp*PI/600.0_wp
+      amp(i) = 0.3_wp*EXP(-0.5_wp*((om(i) - 0.63_wp)/0.12_wp)**2) + 1.0e-3_wp/REAL(i, wp)
+      ph(i) = MODULO(2.399963_wp*REAL(i, wp)**2, 2.0_wp*PI)
+      CALL CD_Solve_Dispersion_Wavenumber(om(i), DEPTH, GRAV, k(i), es, em)
+      CALL require(es == CD_HYDRO_OK, 'tail sums: dispersion solve: '//TRIM(em))
+      e2kd(i) = EXP(-2.0_wp*(k(i)*DEPTH))
+    END DO
+    tail(:, N) = amp(N)*[om(N), om(N)**2, om(N)**2/k(N)]
+    DO i = N - 1, 1, -1
+      tail(:, i) = tail(:, i + 1) + amp(i)*[om(i), om(i)**2, om(i)**2/k(i)]
+    END DO
+    DO iz = 1, NZ
+      CALL CD_Component_Wave_Kinematics(12.0_wp, 3.0_wp, ZS(iz), 333.3_wp, DEPTH, 20.0_wp, STRETCH(iz), &
+                                        om, k, amp, ph, eta0, u0, a0, es, em, inputs_validated=.TRUE., &
+                                        pdyn=p0, exp_m2kd=e2kd)
+      CALL require(es == CD_HYDRO_OK, 'tail sums: full sum: '//TRIM(em))
+      CALL CD_Component_Wave_Kinematics(12.0_wp, 3.0_wp, ZS(iz), 333.3_wp, DEPTH, 20.0_wp, STRETCH(iz), &
+                                        om, k, amp, ph, eta1, u1, a1, es, em, inputs_validated=.TRUE., &
+                                        pdyn=p1, exp_m2kd=e2kd, tail_sums=tail)
+      CALL require(es == CD_HYDRO_OK, 'tail sums: bounded sum: '//TRIM(em))
+      CALL require(TRANSFER(eta1, 0_INT64) == TRANSFER(eta0, 0_INT64), 'tail sums: the elevation sums every component')
+      IF (ZS(iz) > 0.0_wp) THEN
+        CALL require(ALL(TRANSFER([u1, a1, p1], [0_INT64]) == TRANSFER([u0, a0, p0], [0_INT64])), &
+                     'tail sums: above still water every component is summed')
+        CYCLE
+      END IF
+      ! the magnitudes summed: a omega, a omega^2 and a omega^2/k times the cosh ratio
+      ze = ZS(iz)
+      IF (STRETCH(iz)) ze = (ZS(iz) - eta0)*DEPTH/(DEPTH + eta0)
+      mag = 0.0_wp
+      DO i = 1, N
+        ratio = (EXP(k(i)*ze) + EXP(-k(i)*(ze + 2.0_wp*DEPTH)))/(1.0_wp - e2kd(i))
+        w = amp(i)*[om(i), om(i)**2, om(i)**2/k(i)]
+        mag = mag + w*ratio
+      END DO
+      CALL require(MAXVAL(ABS(u1 - u0)) <= 4.0_wp*EPSILON(1.0_wp)*mag(1) .AND. &
+                   MAXVAL(ABS(a1 - a0)) <= 4.0_wp*EPSILON(1.0_wp)*mag(2) .AND. &
+                   ABS(p1 - p0) <= 4.0_wp*EPSILON(1.0_wp)*mag(3), &
+                   'tail sums: velocity, acceleration and pressure within round-off at z = '//fmt_z(ZS(iz)))
+    END DO
+    CALL CD_Component_Wave_Kinematics(12.0_wp, 3.0_wp, -5.0_wp, 333.3_wp, DEPTH, 20.0_wp, .TRUE., &
+                                      om, k, amp, ph, eta1, u1, a1, es, em, tail_sums=tail(1:2, :))
+    CALL require(es /= CD_HYDRO_OK, 'tail sums: a mis-shaped table fails closed')
+  END SUBROUTINE kernel_tail_sums
+
+  CHARACTER(16) FUNCTION fmt_z(z)
+    REAL(wp), INTENT(IN) :: z
+    WRITE (fmt_z, '(F0.3)') z
+  END FUNCTION fmt_z
 
   SUBROUTINE kernel_total_eta_wheeler()
     INTEGER, PARAMETER :: N = 4

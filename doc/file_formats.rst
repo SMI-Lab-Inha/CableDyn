@@ -564,6 +564,11 @@ two columns:
 * ``TMax / dtWave`` may be at most 10\ :sup:`6` samples; a longer record is rejected
   (``WaterKin TMax/dtWave needs more than 1000000 wave samples``) because the one-time
   reduction grows with the square of the sample count.
+* The record gives about ``TMax / (2 dtWave)`` components, 600 for a 300 s run at
+  ``dtWave`` 0.25 s, against the 200 of a ``jonswap`` sea. Every node sums all of them for its
+  surface elevation. Below the surface, the components too short to reach the node's depth
+  are dropped once they cannot change its velocity and acceleration beyond round-off
+  (:ref:`theory-waves`). A coarser ``dtWave`` still shortens the run.
 
 Example
 ~~~~~~~

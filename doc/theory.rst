@@ -828,6 +828,8 @@ configuration derivative in the tangent. The Hermite path evaluates the consiste
 holds it over the step. The spatial gradient of the wave field is omitted from the tangent on
 both paths; the residual is exact, so the converged state is unaffected.
 
+.. _theory-waves:
+
 Waves
 ~~~~~
 
@@ -891,6 +893,17 @@ commensurate, the record does not repeat (an equally spaced comb would repeat af
 :math:`2\pi/\Delta\omega \approx 42\,T_p`). To reproduce a specific external realisation, supply
 its component table (amplitude, frequency, phase), for example a WaterKin ``WaveKinMod`` 1
 elevation history, which is reduced once to its Fourier components on the run time base.
+
+Every point sums every component of the elevation. The velocity, acceleration and dynamic
+pressure sums run in order of increasing :math:`k_i`. For :math:`-h \le z' \le 0` both depth
+ratios :math:`\cosh k(z' + h)/\sinh kh` and :math:`\sinh k(z' + h)/\sinh kh` fall as
+:math:`k` grows, so the cosh ratio of the last summed component times the remaining
+:math:`\sum_{j \ge i} a_j\omega_j`, :math:`\sum a_j\omega_j^2` and :math:`\sum a_j\omega_j^2/k_j`
+bounds the rest of each sum. The sums stop once those bounds are below half an ulp of the
+magnitudes already summed. A deep point therefore skips the short components that have
+decayed to nothing there, and the result changes at round-off only. This matters for an
+elevation history, whose :math:`T_{max}/(2\,\Delta t_{wave})` components reach the Nyquist
+frequency of ``dtWave``.
 
 **Regular nonlinear waves.** A ``stream`` wave is Dean's stream-function wave
 (:ref:`Dean, 1965 <ref-dean1965>`) solved numerically by the Fourier method of
