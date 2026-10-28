@@ -645,6 +645,13 @@ PROGRAM test_deck_driver
                            wave_file='wk_eta_short.dat', dtwave=0.25_wp)
   CALL write_waterkin_file('wk_wave_padded.dat', wavekinmod='1', deepest_first=.FALSE., &
                            wave_file='wk_eta_padded.dat', dtwave=0.25_wp)
+  ! TMax = 0 (a static-start check) reduces the record over its own length: 40 s of a 10 s wave
+  CALL write_wave_elevation_file('wk_eta_t0.dat', 1.0_wp, 10.0_wp, 0.0_wp, nperiods=4)
+  CALL write_waterkin_file('wk_wave_t0.dat', wavekinmod='1', deepest_first=.FALSE., &
+                           wave_file='wk_eta_t0.dat', dtwave=0.25_wp)
+  CALL write_dynamic_connect_deck('deck_wk_wave_t0.dat', option_row='wk_wave_t0.dat WaterKin', run_tmax=0.0_wp)
+  CALL CD_Run_Deck_Driver('deck_wk_wave_t0.dat', 'deck_wk_wave_t0', conv, es, em)
+  CALL require(es == CD_DECKDRV_OK .AND. conv, 'WaveKinMod 1 record at TMax = 0 checks the static start: '//TRIM(em))
   ! a 1 s window has no component at or below the default 0.5 Hz WvHiCOff: refused by name
   CALL write_dynamic_connect_deck('deck_wk_wave_cut.dat', option_row='wk_wave_short.dat WaterKin', &
                                   run_tmax=1.0_wp)

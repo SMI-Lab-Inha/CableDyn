@@ -12424,7 +12424,7 @@ CONTAINS
     INTEGER :: unit, ios, n, n_window, j, k, nc, nraw, bracket, row_status, lineno
     CHARACTER(DECK_RECLEN) :: line
     CHARACTER(1024) :: why
-    REAL(wp) :: te_row(2), tr, dt, tol, angle, ca, sa, scale, frac
+    REAL(wp) :: te_row(2), tr, dt, tol, angle, ca, sa, scale, frac, window
     REAL(wp) :: cos_step, sin_step, cos_j, sin_j, cos_next, trig_norm
     REAL(wp), ALLOCATABLE :: times(:), eta_rows(:), sample_eta(:), grown(:)
     LOGICAL :: data_started
@@ -12436,8 +12436,8 @@ CONTAINS
                 '(double-counting); keep one')
       RETURN
     END IF
-    IF (.NOT. IEEE_IS_FINITE(fft_tmax) .OR. fft_tmax <= CD_ZERO) THEN
-      CALL fail(ErrStat, ErrMsg, 'WaterKin WaveKinMod 1 requires a finite positive deck or '// &
+    IF (.NOT. IEEE_IS_FINITE(fft_tmax) .OR. fft_tmax < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'WaterKin WaveKinMod 1 requires a finite non-negative deck or '// &
                 'host TMax for its FFT window')
       RETURN
     END IF
@@ -12506,14 +12506,17 @@ CONTAINS
     ! MoorDyn-F sizes the resampled record from the RUN TMax, not from the input
     ! file length, then zero-pads to an efficient even FFT size. A longer file is
     ! truncated to the run window; a shorter file leaves the uncovered tail zero.
+    ! TMax = 0, a check of the static start, takes the record's own length instead.
+    window = fft_tmax
+    IF (.NOT. window > CD_ZERO) window = times(nraw)
     dt = dt_wave
     ! Bound the resampled record before sizing it: CEILING of a ratio beyond the
     ! INTEGER range is undefined, and the one-time DFT setup grows with its square.
-    IF (.NOT. (fft_tmax/dt <= MAX_WAVE_SAMPLES)) THEN
+    IF (.NOT. (window/dt <= MAX_WAVE_SAMPLES)) THEN
       CALL fail(ErrStat, ErrMsg, 'WaterKin TMax/dtWave needs more than '//TRIM(int_to_str(INT(MAX_WAVE_SAMPLES)))// &
                 ' wave samples; increase dtWave or reduce TMax'); RETURN
     END IF
-    n_window = CEILING(fft_tmax/dt)
+    n_window = CEILING(window/dt)
     n = padded_fft_size(n_window)
     IF (n > LONG_WAVE_RECORD) WRITE (error_unit, '(A)') '   Note: reducing the WaterKin wave record ('// &
       TRIM(int_to_str(n))//' samples) to Fourier components; this one-time setup grows with the square '// &

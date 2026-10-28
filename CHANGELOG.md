@@ -87,6 +87,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
+  start, reduces the record over its own length instead of failing for want of a positive
+  `TMax`.
 - Reading a WaterKin `WaveKinFile` no longer slows with the square of its length: the rows grow
   by doubling instead of copying the whole record per row. A 10 s run on a 168,000-row record
   took 107 s and now takes 3.5 s.
