@@ -2614,7 +2614,6 @@ class DeckFile:
         # Cl > 0 on an EI = 0 row (native init_one_model, which needs the line's Morison drag in
         # water)
         has_viv_ei0 = False
-        viv_type_names: set[str] = set()
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
@@ -2703,8 +2702,6 @@ class DeckFile:
                         "working-curve model"
                     )
                 has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
-                if cl > 0.0:
-                    viv_type_names.add(row.tokens[0].lower())
             if ei > 0.0 and (is_syrope or len(ea_parts) > 1):
                 model = "Syrope" if is_syrope else "viscoelastic stiffness"
                 raise DeckFormatError(f"{self._at(row)}: {model} is not supported with EI > 0")
@@ -3592,18 +3589,6 @@ class DeckFile:
                 )
             elif has_rigid6:
                 needs_multibody = non_rigid6_points
-        if deck_driver_route and viv_type_names:
-            # native run_deck_driver: the finite-EI lift runs on the cubic-Hermite march, which
-            # builds no bodies, rods or Free/Connect points (a moving End B is refused above)
-            for line_id in finite_line_ids:
-                if not viv_type_names.intersection(section_types_by_line[line_id]):
-                    continue
-                if needs_multibody:
-                    raise DeckFormatError(
-                        f"{self._label}: VIV (LINE TYPES Cl > 0) of a finite-EI line does not run "
-                        "with bodies, rods or free points yet; set Cl = 0 for the finite-EI lines "
-                        "of this deck"
-                    )
         if failures and deck_driver_route:
             # native CD_Run_Deck_Driver: FAILURE runs on the point-system object graph only
             if not has_dtm:

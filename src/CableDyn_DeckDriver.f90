@@ -19879,11 +19879,6 @@ CONTAINS
       pc = points
       pa = find_point(points, cab_lines(c)%nodeA)
       IF (TRIM(pc(pa)%ptype) /= 'fixed') pc(pa)%ptype = 'coupled'
-      IF (line_has_viv(cab_lines(c), types, sections)) THEN
-        CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) of a finite-EI line does not run with bodies, rods '// &
-                  'or free points yet; set Cl = 0 for the finite-EI lines of this deck')
-        GOTO 900
-      END IF
       mb%cab_clamp(c) = (cab_lines(c)%endconn_mode(1) /= CD_ENDCONN_PINNED .OR. line_torsion_active(cab_lines(c))) &
                         .AND. TRIM(points(pa)%ptype) /= 'fixed'
       IF (mb%cab_clamp(c)) THEN
@@ -19899,7 +19894,7 @@ CONTAINS
           lnc%endconn_ez_ref(:, 1) = dclamp
           CALL build_one_hermite_cable(lnc, sections, types, pc, opts, opts%dtM, mb%cables(c), node, &
                                        ErrStat, ErrMsg, standalone_controls=.TRUE., bathymetry=bathymetry, &
-                                       fairlead_orientation=TRANSPOSE(rclamp), &
+                                       fairlead_orientation=TRANSPOSE(rclamp), install_viv=.TRUE., &
                                        fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
                                                           deck_has_non_rigid6_dynamic_points(points, bodies)))
         END BLOCK
@@ -19909,6 +19904,7 @@ CONTAINS
       ELSE
         CALL build_one_hermite_cable(cab_lines(c), sections, types, pc, opts, opts%dtM, mb%cables(c), node, &
                                      ErrStat, ErrMsg, standalone_controls=.TRUE., bathymetry=bathymetry, &
+                                     install_viv=.TRUE., &
                                      fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
                                                         deck_has_non_rigid6_dynamic_points(points, bodies)))
       END IF

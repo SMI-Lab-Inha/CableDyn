@@ -116,10 +116,9 @@ Line and constitutive capability
    * - Cross-flow VIV (LINE TYPES ``Cl``, ``dF``, ``cF``)
      - Standalone and coupled
      - MoorDyn v2's synchronisation model on ``EI = 0`` lines and, as a distributed lift, on
-       finite-EI cables of the Hermite march (:ref:`theory-viv`), with the host's fluid field
-       on the coupled routes and its state in the checkpoint; in-line VIV is not provided;
-       finite-EI lines with two moving ends and finite-EI lines beside bodies, rods or free
-       points refuse ``Cl > 0`` by name
+       finite-EI cables of the Hermite and multibody marches (:ref:`theory-viv`), with the
+       host's fluid field on the coupled routes and its state in the checkpoint; in-line VIV is
+       not provided; a finite-EI line with two moving ends refuses ``Cl > 0`` by name
 
 Loads and environment
 ---------------------
