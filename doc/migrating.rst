@@ -123,7 +123,9 @@ Keyword map
    * - ``kBot``, ``cBot``, seabed friction coefficient
      - ``kBot``, ``cBot``, ``frictionMu`` (alias ``mu``)
    * - ``WaterKin`` file (``CurrentMod 1``, ``WaveKinMod 1``)
-     - same file; ``WaveKinMod 2`` and ``SEASTATE`` only when coupled to OpenFAST
+     - same file; ``WaveKinMod 2`` and ``SEASTATE`` only when coupled to OpenFAST. An
+       elevation record keeps its components up to ``WvHiCOff`` (default 0.5 Hz); give
+       ``none WvHiCOff`` to keep all of them, as MoorDyn-F does
    * - ``FAILURE``, ``CONTROL`` sections
      - ``FAILURE`` on ``EI = 0`` decks, standalone and in OpenFAST (a deck with a finite-EI
        cable rejects it); ``CONTROL`` on ``EI = 0`` lines and finite-EI cables in OpenFAST, not

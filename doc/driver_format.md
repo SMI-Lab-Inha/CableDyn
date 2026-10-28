@@ -1182,7 +1182,7 @@ them on `water_grid.txt` and interpolates, so that file is not read. Standalone 
 
 | Option | File | Meaning |
 |---|---|---|
-| `WaveKin 3` | `wave_elevation.txt` | `time elevation` rows from `t = 0` (no header rows), resampled linearly at `dtWave` to `floor(t_last/dtWave) + 1` samples (the last dropped when the count is odd) and reduced to its Fourier components; components above 0.5 Hz are dropped and the mean is a mean-level offset, as MoorDyn-C does. Waves travel along +x |
+| `WaveKin 3` | `wave_elevation.txt` | `time elevation` rows from `t = 0` (no header rows), resampled linearly at `dtWave` to `floor(t_last/dtWave) + 1` samples (the last dropped when the count is odd) and reduced to its Fourier components; components above `WvHiCOff` (default 0.5 Hz, MoorDyn-C's fixed cut) are dropped and the mean is a mean-level offset, as MoorDyn-C does. Waves travel along +x |
 | `WaveKin 7` | `wave_frequencies.txt` | `omega Re Im [beta]` rows [rad/s, m, m, rad], the first at `omega = 0`: each row is the component `\|c\| sin(omega t - k d + arg c)`, `d = x cos(beta) + y sin(beta)`; the `omega = 0` row is a mean-level offset. All rows must share one `beta` |
 | `Currents 1` | `current_profile.txt` | `z ux uy uz` rows after its header rows, strictly increasing `z`; linear in `z` and held beyond the end rows |
 
@@ -1208,7 +1208,7 @@ A MoorDyn-F deck may select a WaterKin file (grammar in [Auxiliary file formats]
 | Mode | Meaning |
 |---|---|
 | `WaveKinMod = 0` | no waves |
-| `WaveKinMod = 1` | elevation history resampled at `dtWave` over deck `TMax` (host `TMax` for caller-driven decks), truncated or zero-padded, and Fourier-reduced once on one padded DFT time base |
+| `WaveKinMod = 1` | elevation history resampled at `dtWave` over deck `TMax` (host `TMax` for caller-driven decks), truncated or zero-padded, and Fourier-reduced once on one padded DFT time base, keeping the components up to `WvHiCOff` (default 0.5 Hz; `none` keeps all, as MoorDyn-F) |
 | `WaveKinMod = 2` / `SEASTATE` | waves from the coupled host SeaState field |
 | `CurrentMod = 0` | no current |
 | `CurrentMod = 1` | N-level WaterKin depth table, interpolated at structural nodes |

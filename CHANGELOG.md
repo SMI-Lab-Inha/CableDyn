@@ -65,6 +65,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   cable over 300 s, a record at `dtWave` 0.25 s (600 components) runs in 103 s instead of 226 s,
   and one at 0.1 s in 189 s instead of about 660 s, with output identical to the printed digits.
   A `jonswap` sea changes at round-off.
+- An elevation record (WaterKin `WaveKinMod 1`) keeps only its Fourier components up to the new
+  `WvHiCOff` option, in rad/s as in SeaState, by default 0.5 Hz (MoorDyn-C's fixed cut for
+  `WaveKin 3`, which now follows the option too); `none WvHiCOff` keeps them up to the Nyquist
+  frequency of `dtWave`, as MoorDyn-F and earlier CableDyn did. A one-hour record at `dtWave`
+  0.1 s drops from 18,000 components to 1,800. On the 300 s lazy-wave case both records then run
+  in 72 s, and every output channel's standard deviation moves by at most 0.002 %. A record with
+  no component at or below the cut-off is refused by name.
 - Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
   range graphs and element file) report the cable's own moment, the line type's EI times the
   curvature; lines without stiffeners are unchanged.

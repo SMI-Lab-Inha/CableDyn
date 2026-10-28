@@ -746,6 +746,16 @@ Ambient fluid and prescribed motion
      - the step at which ``WaveKin 3`` resamples ``wave_elevation.txt`` (MoorDyn-C)
      - standalone
      - ``0.1 dtWave``
+   * - ``WvHiCOff``
+     - positive number [rad/s] or ``none``
+     - ``3.14159`` (0.5 Hz)
+     - the high cut-off frequency of an elevation record (WaterKin ``WaveKinMod 1``,
+       ``WaveKin 3``): its Fourier components above it are dropped, as SeaState's ``WvHiCOff``
+       zeroes the spectrum of an elevation series. ``none`` keeps them up to the Nyquist
+       frequency of ``dtWave``, as MoorDyn-F's ``WaveKinMod 1`` does. A record with no
+       component at or below the cut-off is refused
+     - standalone
+     - ``6.2832 WvHiCOff``
    * - ``Currents``
      - ``0`` or ``1``
      - ``0``

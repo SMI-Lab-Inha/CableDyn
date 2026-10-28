@@ -902,7 +902,8 @@ ratios :math:`\cosh k(z' + h)/\sinh kh` and :math:`\sinh k(z' + h)/\sinh kh` fal
 bounds the rest of each sum. The sums stop once those bounds are below half an ulp of the
 magnitudes already summed. A deep point therefore skips the short components that have
 decayed to nothing there, and the result changes at round-off only. This matters for an
-elevation history, whose :math:`T_{max}/(2\,\Delta t_{wave})` components reach the Nyquist
+elevation history, which keeps its components up to the ``WvHiCOff`` cut-off (0.5 Hz by
+default) or, with ``none``, all :math:`T_{max}/(2\,\Delta t_{wave})` of them up to the Nyquist
 frequency of ``dtWave``.
 
 **Regular nonlinear waves.** A ``stream`` wave is Dean's stream-function wave

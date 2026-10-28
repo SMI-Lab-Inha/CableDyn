@@ -276,6 +276,7 @@ _SCALAR_OPTION_KEYWORDS = frozenset(_OPTION_ALIASES) | {
     "bodyscheme",
     "bodysubstep",
     "dtwave",
+    "wvhicoff",
     "bodywetting",
     "bodyhydro",
     "rodhydro",
@@ -1114,8 +1115,15 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         if not value:
             return "requires a non-empty path"
     boolean_values = {"true", "t", "yes", "y", "on", "1", "false", "f", "no", "n", "off", "0"}
-    # native check_option_row_value rule 'positive' (dtWave is the WaveKin 3 resampling step)
-    positive = key in {"gravity", "water_density", "water_depth", "dtm"} or raw == "dtwave"
+    if raw == "wvhicoff" and value.lower() == "none":
+        # native rule: 'none' keeps every component of an elevation record
+        return None
+    # native check_option_row_value rule 'positive' (dtWave is the WaveKin 3 resampling step,
+    # WvHiCOff the high cut-off frequency of an elevation record)
+    positive = key in {"gravity", "water_density", "water_depth", "dtm"} or raw in {
+        "dtwave",
+        "wvhicoff",
+    }
     if positive:
         lower, upper = 0.0, None
     elif key in {"kbot", "cbot"}:
@@ -1161,7 +1169,16 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "max_strain",
         "range_start",
         "viv_rms_window",
-    } or raw in {"dtic", "tmaxic", "cdscaleic", "threshic", "writelog", "dtout", "dtwave"}:
+    } or raw in {
+        "dtic",
+        "tmaxic",
+        "cdscaleic",
+        "threshic",
+        "writelog",
+        "dtout",
+        "dtwave",
+        "wvhicoff",
+    }:
         try:
             numeric = _native_float(value)
         except ValueError:

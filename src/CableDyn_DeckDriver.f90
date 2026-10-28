@@ -669,6 +669,10 @@ MODULE CableDyn_DeckDriver
     INTEGER  :: mdc_wave_kin = 0
     INTEGER  :: mdc_currents = 0
     REAL(wp) :: mdc_dt_wave = 0.25_wp
+    ! WvHiCOff: the components of an elevation record (WaterKin WaveKinMod 1, WaveKin 3) above
+    ! this frequency are dropped (rad/s, as SeaState's WvHiCOff; default 0.5 Hz, MoorDyn-C's
+    ! WaveKin 3 cut); negative ('none') keeps them up to the Nyquist frequency of dtWave
+    REAL(wp) :: wv_hi_cutoff = 0.5_wp*TWO_PI
     LOGICAL  :: waterkin_seastate = .FALSE.
     LOGICAL  :: waterkin_host_wave = .FALSE.
     LOGICAL  :: waterkin_host_current = .FALSE.
@@ -12533,7 +12537,19 @@ CONTAINS
     times = [(REAL(j - 1, wp)*dt, j=1, n)]
     eta_rows = sample_eta
 
-    nc = n/2
+    ! the components up to WvHiCOff (all n/2 with 'none')
+    nc = 0
+    DO k = 1, n/2
+      IF (opts%wv_hi_cutoff >= CD_ZERO .AND. TWO_PI*REAL(k, wp)/(REAL(n, wp)*dt) > opts%wv_hi_cutoff) EXIT
+      nc = k
+    END DO
+    IF (nc < 1) THEN
+      CALL fail(ErrStat, ErrMsg, 'WvHiCOff '//TRIM(ADJUSTL(es_to_str(opts%wv_hi_cutoff)))//' rad/s keeps no '// &
+                'component of the WaterKin WaveKinFile record, whose lowest frequency is '// &
+                TRIM(ADJUSTL(es_to_str(TWO_PI/(REAL(n, wp)*dt))))//' rad/s over the '// &
+                TRIM(ADJUSTL(es_to_str(REAL(n, wp)*dt)))//' s window; lengthen TMax or give none WvHiCOff')
+      RETURN
+    END IF
     IF (ALLOCATED(opts%wave_component_omega)) DEALLOCATE (opts%wave_component_omega)
     IF (ALLOCATED(opts%wave_component_k)) DEALLOCATE (opts%wave_component_k)
     IF (ALLOCATED(opts%wave_component_amplitude)) DEALLOCATE (opts%wave_component_amplitude)
@@ -12562,7 +12578,7 @@ CONTAINS
         END IF
       END DO
       scale = 2.0_wp/REAL(n, wp)
-      IF (MOD(n, 2) == 0 .AND. k == nc) scale = CD_ONE/REAL(n, wp)
+      IF (MOD(n, 2) == 0 .AND. k == n/2) scale = CD_ONE/REAL(n, wp)
       ca = scale*ca
       sa = scale*sa
       ! Coefficients and runtime components must share the padded DFT time base.
@@ -12691,13 +12707,14 @@ CONTAINS
         frac = MIN(CD_ONE, MAX(CD_ZERO, frac))
         eta(j) = tab(2, bracket) + frac*(tab(2, bracket + 1) - tab(2, bracket))
       END DO
-      ! discrete Fourier components on the record's own base (period nt dt); MoorDyn-C zeroes the
-      ! bins above 0.5 Hz and keeps the mean
+      ! discrete Fourier components on the record's own base (period nt dt) up to WvHiCOff (by
+      ! default 0.5 Hz, where MoorDyn-C zeroes the bins); the mean is kept
       mean_level = SUM(eta)/REAL(nt, wp)
-      ALLOCATE (comp_w(0), comp_a(0), comp_p(0))
+      ALLOCATE (comp_w(nt/2), comp_a(nt/2), comp_p(nt/2))
+      nc = 0
       DO k = 1, nt/2
         angle = TWO_PI*REAL(k, wp)/(REAL(nt, wp)*dt)
-        IF (angle > 0.5_wp*TWO_PI) EXIT
+        IF (opts%wv_hi_cutoff >= CD_ZERO .AND. angle > opts%wv_hi_cutoff) EXIT
         ca = CD_ZERO
         sa = CD_ZERO
         DO j = 1, nt
@@ -12710,10 +12727,14 @@ CONTAINS
         IF (k == nt/2) scale = CD_ONE/REAL(nt, wp)
         ca = scale*ca
         sa = scale*sa
-        comp_w = [comp_w, angle]
-        comp_a = [comp_a, SQRT(ca*ca + sa*sa)]
-        comp_p = [comp_p, ATAN2(sa, ca)]
+        nc = k
+        comp_w(nc) = angle
+        comp_a(nc) = SQRT(ca*ca + sa*sa)
+        comp_p(nc) = ATAN2(sa, ca)
       END DO
+      comp_w = comp_w(1:nc)
+      comp_a = comp_a(1:nc)
+      comp_p = comp_p(1:nc)
       CALL install_components()
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     CASE (7)
@@ -12789,7 +12810,7 @@ CONTAINS
       nc = SIZE(comp_w)
       IF (nc < 1) THEN
         CALL fail(ErrStat, ErrMsg, 'WaveKin '//TRIM(int_to_str(opts%mdc_wave_kin))//': '//TRIM(fname)// &
-                  ' gives no wave component at or below 0.5 Hz'); RETURN
+                  ' gives no wave component at or below WvHiCOff'); RETURN
       END IF
       IF (ALLOCATED(opts%wave_component_omega)) DEALLOCATE (opts%wave_component_omega)
       IF (ALLOCATED(opts%wave_component_k)) DEALLOCATE (opts%wave_component_k)
@@ -14948,6 +14969,12 @@ CONTAINS
     CASE ('dtwave')
       ! MoorDyn-C WaveKin 3: the resampling step of wave_elevation.txt
       CALL rd(val, opts%mdc_dt_wave, ErrStat, ErrMsg)
+    CASE ('wvhicoff')
+      IF (to_lower(TRIM(val)) == 'none') THEN
+        opts%wv_hi_cutoff = -CD_ONE
+      ELSE
+        CALL rd(val, opts%wv_hi_cutoff, ErrStat, ErrMsg)
+      END IF
     CASE ('ramptime', 'ramp_time', 'tramp')
       CALL rd(val, opts%ramp_time, ErrStat, ErrMsg)
     CASE ('maxstrain', 'max_strain')
@@ -15429,6 +15456,9 @@ CONTAINS
     CASE ('frictionmu', 'mu', 'frictioncoefficient')
       IF (to_lower(TRIM(val)) == 'none') RETURN
       rule = 'non-negative'
+    CASE ('wvhicoff')
+      IF (to_lower(TRIM(val)) == 'none') RETURN
+      rule = 'positive'
     CASE ('frictionmuaxial', 'frictionmu_axial', 'mu_axial', 'muaxial', 'frictionmulateral', 'frictionmu_lateral', &
           'mu_lateral', 'mulateral', 'frictionmunormal', 'frictionmu_normal')
       rule = 'non-negative'
