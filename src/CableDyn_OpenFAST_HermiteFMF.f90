@@ -154,10 +154,11 @@ MODULE CableDyn_OpenFAST_HermiteFMF
     REAL(wp) :: sect_ref_global(3) = CD_ZERO
     REAL(wp) :: sect_ref_parent(3) = CD_ZERO
     ! the last CD_HFMF_Section_Curvature result and the state it was evaluated at (time, load
-    ! epoch, reference, q, v, a): the channels of one output row share one evaluation
+    ! epoch, reference, q, v, a and, in torsion, the end frames, Theta, Phi and the torque, which
+    ! a host rotation turns without moving q): the channels of one output row share one evaluation
     LOGICAL :: sc_valid = .FALSE.
     INTEGER :: sc_epoch = -1
-    REAL(wp) :: sc_t = CD_ZERO, sc_ref(3) = CD_ZERO
+    REAL(wp) :: sc_t = CD_ZERO, sc_ref(3) = CD_ZERO, sc_tors(15) = CD_ZERO
     REAL(wp), ALLOCATABLE :: sc_q(:), sc_v(:), sc_a(:), sc_kx(:), sc_ky(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HFMF_ModuleType
@@ -1488,7 +1489,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: kx(:), ky(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: r(3)
+    REAL(wp) :: r(3), tors(15)
     INTEGER :: es, nn
     CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
@@ -1508,9 +1509,13 @@ CONTAINS
       r = self%sect_ref_global
     END IF
     r = frame_to_local(self, r)
+    tors = CD_ZERO
+    IF (self%line%torsion%active) tors = [RESHAPE(self%line%torsion%ends, [12]), self%line%torsion%theta, &
+                                          self%line%torsion%phi, self%line%torsion%torque]
     IF (self%sc_valid .AND. self%sc_epoch == self%line%rc_epoch) THEN
       ! exact equality (a NaN never matches)
       IF (ALL(ABS(self%sc_ref - r) <= CD_ZERO) .AND. ABS(self%sc_t - self%line%t) <= CD_ZERO .AND. &
+          ALL(ABS(self%sc_tors - tors) <= CD_ZERO) .AND. &
           ALL(ABS(self%sc_q - self%line%q) <= CD_ZERO) .AND. ALL(ABS(self%sc_v - self%line%v) <= CD_ZERO) .AND. &
           ALL(ABS(self%sc_a - self%line%a) <= CD_ZERO)) THEN
         kx = self%sc_kx
@@ -1524,6 +1529,7 @@ CONTAINS
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Section_Curvature: '//TRIM(em); RETURN
     END IF
     self%sc_ref = r
+    self%sc_tors = tors
     self%sc_t = self%line%t
     self%sc_epoch = self%line%rc_epoch
     self%sc_q = self%line%q

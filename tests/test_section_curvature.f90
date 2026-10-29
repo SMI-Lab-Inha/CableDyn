@@ -14,11 +14,14 @@ PROGRAM test_section_curvature
   !!      (End A clamped): the components rotate by -30 degrees at every node;
   !!   5. on a line restrained in torsion with a 90 degree pretwist at End B, the section axis x
   !!      leaves End A on its torsion normal Nx and reaches End B turned 90 degrees about the
-  !!      tangent, onto End B's own pretwisted normal.
+  !!      tangent, onto End B's own pretwisted normal;
+  !!   6. with End A bending-pinned and restrained in torsion, turning the host about the End A
+  !!      tangent turns the torsion frames only; the next evaluation is not the cached one but the
+  !!      same as a fresh evaluation.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_HermiteCable, CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Curvature, CD_HFMF_Section_Curvature, &
-                                          CD_HFMF_End, CD_HFMF_OK
+                                          CD_HFMF_SetCoupledKinematics, CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Section_Curvature, CD_HCDYN_OK
   IMPLICIT NONE
 
@@ -55,6 +58,8 @@ PROGRAM test_section_curvature
   CALL parent_roll()
   ! 5. torsion
   CALL torsion_frame()
+  ! 6. the torsion frames turned by the host, End A pinned in bending
+  CALL torsion_pinned_rotation()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -157,6 +162,48 @@ CONTAINS
     CALL CD_HFMF_End(cable)
   END SUBROUTINE parent_roll
 
+  SUBROUTINE torsion_pinned_rotation()
+    TYPE(CD_HFMF_ModuleType) :: cable
+    REAL(wp), ALLOCATABLE :: kx0(:), ky0(:), kx1(:), ky1(:), kx2(:), ky2(:)
+    REAL(wp) :: t(3), r(3, 3), ca, sa, pos(3), zero3(3)
+    INTEGER :: es, cn, nn, i, j
+    CHARACTER(1024) :: em
+    CALL write_deck('sc_tpin.dat', 0.0_wp, [0.0_wp, 0.0_wp, 0.0_wp], .TRUE., 90.0_wp, pinned_a=.TRUE.)
+    CALL CD_Init_Deck_HermiteCable('sc_tpin.dat', 0.1_wp, cable, cn, es, em, host_orientation=.TRUE.)
+    CALL require(es == CD_DECKDRV_OK, 'pinned torsion: build: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    CALL require(.NOT. cable%has_parent_endconn, 'pinned torsion: End A carries no bending connection')
+    nn = cable%line%nn
+    ALLOCATE (kx0(nn), ky0(nn), kx1(nn), ky1(nn), kx2(nn), ky2(nn))
+    CALL CD_HFMF_Section_Curvature(cable, kx0, ky0, es, em)
+    CALL require(es == CD_HFMF_OK, 'pinned torsion: section curvature: '//TRIM(em))
+    ! the host turned 30 degrees about the End A -> End B tangent: global-to-parent DCM R^T
+    t = -cable%line%q(6*(nn - 1) + 4:6*(nn - 1) + 6)
+    t = t/NORM2(t)
+    ca = COS(PI/6.0_wp)
+    sa = SIN(PI/6.0_wp)
+    DO i = 1, 3
+      DO j = 1, 3
+        r(i, j) = ca*MERGE(1.0_wp, 0.0_wp, i == j) + (1.0_wp - ca)*t(i)*t(j)
+      END DO
+    END DO
+    r(1, 2) = r(1, 2) - sa*t(3); r(2, 1) = r(2, 1) + sa*t(3)
+    r(1, 3) = r(1, 3) + sa*t(2); r(3, 1) = r(3, 1) - sa*t(2)
+    r(2, 3) = r(2, 3) - sa*t(1); r(3, 2) = r(3, 2) + sa*t(1)
+    pos = cable%line%q(6*(nn - 1) + 1:6*(nn - 1) + 3)
+    zero3 = 0.0_wp
+    CALL CD_HFMF_SetCoupledKinematics(cable, pos, zero3, zero3, es, em, TRANSPOSE(r), zero3, zero3)
+    CALL require(es == CD_HFMF_OK, 'pinned torsion: host rotation: '//TRIM(em))
+    CALL CD_HFMF_Section_Curvature(cable, kx1, ky1, es, em)
+    cable%sc_valid = .FALSE.
+    CALL CD_HFMF_Section_Curvature(cable, kx2, ky2, es, em)
+    CALL require(MAXVAL(ABS(kx1 - kx0)) + MAXVAL(ABS(ky1 - ky0)) > 0.0_wp, &
+                 'pinned torsion: the turned torsion frames turn the components')
+    CALL require(MAXVAL(ABS(kx1 - kx2)) <= 0.0_wp .AND. MAXVAL(ABS(ky1 - ky2)) <= 0.0_wp, &
+                 'pinned torsion: the evaluation after the host rotation is the fresh one, not the cached one')
+    CALL CD_HFMF_End(cable)
+  END SUBROUTINE torsion_pinned_rotation
+
   SUBROUTINE torsion_frame()
     TYPE(CD_HFMF_ModuleType) :: cable
     REAL(wp), ALLOCATABLE :: kx(:), ky(:), fr(:, :), k(:)
@@ -188,7 +235,7 @@ CONTAINS
     CALL CD_HFMF_End(cable)
   END SUBROUTINE torsion_frame
 
-  SUBROUTINE write_deck(path, heading_deg, current, torsion, pretwist_b, node_channels)
+  SUBROUTINE write_deck(path, heading_deg, current, torsion, pretwist_b, node_channels, pinned_a)
     !! A 170 m lazy-wave cable from a hang-off at 14 m depth to an anchor at 80 m, clamped at End A,
     !! turned by heading_deg about the vertical through the origin, in the uniform current
     !! (given before the turn). torsion: both ends restrained in torsion, Nx along +y, Pretwist
@@ -198,6 +245,9 @@ CONTAINS
     LOGICAL, INTENT(IN) :: torsion
     ! node_channels: write Curv, CurvX, CurvY of every eighth node, and run to TMax = 0
     LOGICAL, INTENT(IN), OPTIONAL :: node_channels
+    ! pinned_a: End A pinned in bending (still restrained in torsion)
+    LOGICAL, INTENT(IN), OPTIONAL :: pinned_a
+    CHARACTER(8) :: stiff_a
     REAL(wp) :: c, s, pa(3), pb(3), eza(3), ezb(3), nx(3), cu(3)
     INTEGER :: u, j
     LOGICAL :: nodes
@@ -242,7 +292,11 @@ CONTAINS
     IF (torsion) THEN
       WRITE (u, '(A)') 'LineID  End  Stiffness  EzX      EzY  EzZ       TorsStiffness  NxX  NxY  NxZ  Pretwist'
       WRITE (u, '(A)') '(-)     (-)  (N-m/rad)  (-)      (-)  (-)       (N-m/rad)      (-)  (-)  (-)  (deg)'
-      WRITE (u, '(A,3F12.8,A,3F12.8,A)') '1  A  Rigid ', eza, '  Rigid ', nx, '  0.0'
+      stiff_a = 'Rigid'
+      IF (PRESENT(pinned_a)) THEN
+        IF (pinned_a) stiff_a = 'Pinned'
+      END IF
+      WRITE (u, '(A,3F12.8,A,3F12.8,A)') '1  A  '//TRIM(stiff_a)//' ', eza, '  Rigid ', nx, '  0.0'
       WRITE (u, '(A,3F12.8,A,3F12.8,F8.2)') '1  B  Rigid ', ezb, '  Rigid ', nx, pretwist_b
     ELSE
       WRITE (u, '(A)') 'LineID  End  Stiffness  EzX      EzY  EzZ'
