@@ -1182,7 +1182,7 @@ them on `water_grid.txt` and interpolates, so that file is not read. Standalone 
 
 | Option | File | Meaning |
 |---|---|---|
-| `WaveKin 3` | `wave_elevation.txt` | `time elevation` rows from `t = 0` (no header rows), resampled linearly at `dtWave` to `floor(t_last/dtWave) + 1` samples (the last dropped when the count is odd) and reduced to its Fourier components; components above 0.5 Hz are dropped and the mean is a mean-level offset, as MoorDyn-C does. Waves travel along +x |
+| `WaveKin 3` | `wave_elevation.txt` | `time elevation` rows from `t = 0` (no header rows), resampled linearly at `dtWave` to `floor(t_last/dtWave) + 1` samples (the last dropped when the count is odd) and reduced to its Fourier components; components above `WvHiCOff` (default 0.5 Hz, MoorDyn-C's fixed cut) are dropped and the mean is a mean-level offset, as MoorDyn-C does. Waves travel along +x |
 | `WaveKin 7` | `wave_frequencies.txt` | `omega Re Im [beta]` rows [rad/s, m, m, rad], the first at `omega = 0`: each row is the component `\|c\| sin(omega t - k d + arg c)`, `d = x cos(beta) + y sin(beta)`; the `omega = 0` row is a mean-level offset. All rows must share one `beta` |
 | `Currents 1` | `current_profile.txt` | `z ux uy uz` rows after its header rows, strictly increasing `z`; linear in `z` and held beyond the end rows |
 
@@ -1208,7 +1208,7 @@ A MoorDyn-F deck may select a WaterKin file (grammar in [Auxiliary file formats]
 | Mode | Meaning |
 |---|---|
 | `WaveKinMod = 0` | no waves |
-| `WaveKinMod = 1` | elevation history resampled at `dtWave` over deck `TMax` (host `TMax` for caller-driven decks), truncated or zero-padded, and Fourier-reduced once on one padded DFT time base |
+| `WaveKinMod = 1` | elevation history resampled at `dtWave` over deck `TMax` (host `TMax` for caller-driven decks), truncated or zero-padded, and Fourier-reduced once on one padded DFT time base, keeping the components up to `WvHiCOff` (default 0.5 Hz; `none` keeps all, as MoorDyn-F) |
 | `WaveKinMod = 2` / `SEASTATE` | waves from the coupled host SeaState field |
 | `CurrentMod = 0` | no current |
 | `CurrentMod = 1` | N-level WaterKin depth table, interpolated at structural nodes |
@@ -1261,7 +1261,8 @@ about the line tangent pointing into the line from that end. Either way it impos
 (where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)` at End B (where it is
 `−Ez`). The roll is 0 at
 `t = 0` and is given on every row of the point or on none. Header lines must be comments. `time` must
-lie on the `0, dtM, 2·dtM, …, TMax` grid and `point_id` must be a prescribed point. Each
+lie on the `0, dtM, 2·dtM, …` grid (rows after `TMax` are read and not used) and `point_id` must be
+a prescribed point. Each
 (point, time) pair appears once, every prescribed point needs a row at every grid time, and rows
 may appear in any order. See also [Auxiliary file formats](file_formats.rst).
 
@@ -1287,8 +1288,8 @@ moment follows the vessel rotation.
 Rotations use the OrcaFlex vessel convention: `R = Rz(yaw)·Ry(pitch)·Rx(roll)`, right-handed
 about the vessel x (roll), y (pitch) and z (yaw) axes, applied yaw, then pitch, then roll.
 
-**`vesselMotion` record.** One row per `dtM` grid time from 0 to `TMax`, in any order, in one
-of two forms for the whole file:
+**`vesselMotion` record.** One row per `dtM` grid time from 0 to `TMax`, in any order (rows on
+the grid after `TMax` are read and not used), in one of two forms for the whole file:
 
 ```text
 time x y z roll pitch yaw vx vy vz wx wy wz ax ay az alx aly alz        (19 values)

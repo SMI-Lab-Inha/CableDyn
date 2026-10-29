@@ -276,6 +276,7 @@ _SCALAR_OPTION_KEYWORDS = frozenset(_OPTION_ALIASES) | {
     "bodyscheme",
     "bodysubstep",
     "dtwave",
+    "wvhicoff",
     "bodywetting",
     "bodyhydro",
     "rodhydro",
@@ -321,6 +322,10 @@ _NATIVE_WAVE_PERIOD_RANGE = (0.1, 1.0e5)
 _DISABLED_MOTION_FILE_VALUES = frozenset({"0", "none"})
 # Alternative prescribed-motion sources (native apply_option): only one may be active.
 _MOTION_SOURCE_KEYWORDS = ("motionfile", "vesselmotion", "vesselrao")
+# Native STATIC_CHECK_HINT: appended to the errors that ask a standalone deck without TMax for
+# the march (those naming one of the cues).
+_STATIC_CHECK_HINT = "; to check a dynamic deck's static start only, give dtM with TMax = 0"
+_STATIC_CHECK_CUES = ("dtM and TMax", "requires dtM", "require dtM", "dynamic deck (TMax)")
 _END_CONNECTION_ENDS = {
     "a": "a",
     "enda": "a",
@@ -1110,8 +1115,15 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         if not value:
             return "requires a non-empty path"
     boolean_values = {"true", "t", "yes", "y", "on", "1", "false", "f", "no", "n", "off", "0"}
-    # native check_option_row_value rule 'positive' (dtWave is the WaveKin 3 resampling step)
-    positive = key in {"gravity", "water_density", "water_depth", "dtm"} or raw == "dtwave"
+    if raw == "wvhicoff" and value.lower() == "none":
+        # native rule: 'none' keeps every component of an elevation record
+        return None
+    # native check_option_row_value rule 'positive' (dtWave is the WaveKin 3 resampling step,
+    # WvHiCOff the high cut-off frequency of an elevation record)
+    positive = key in {"gravity", "water_density", "water_depth", "dtm"} or raw in {
+        "dtwave",
+        "wvhicoff",
+    }
     if positive:
         lower, upper = 0.0, None
     elif key in {"kbot", "cbot"}:
@@ -1157,7 +1169,16 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "max_strain",
         "range_start",
         "viv_rms_window",
-    } or raw in {"dtic", "tmaxic", "cdscaleic", "threshic", "writelog", "dtout", "dtwave"}:
+    } or raw in {
+        "dtic",
+        "tmaxic",
+        "cdscaleic",
+        "threshic",
+        "writelog",
+        "dtout",
+        "dtwave",
+        "wvhicoff",
+    }:
         try:
             numeric = _native_float(value)
         except ValueError:
@@ -2335,6 +2356,20 @@ class DeckFile:
         DeckFormatError
             If the deck violates the native deck contract.
         """
+        try:
+            self._validate()
+        except DeckFormatError as exc:
+            if self.caller_driven or not any(cue in str(exc) for cue in _STATIC_CHECK_CUES):
+                raise
+            # native finalize_and_validate: a standalone deck without TMax that asks for the
+            # march is told how to check its static start
+            try:
+                self.option("TMax")
+            except KeyError:
+                raise DeckFormatError(f"{exc}{_STATIC_CHECK_HINT}") from None
+            raise
+
+    def _validate(self) -> None:
         required = {"LINE TYPES", "POINTS", "LINES"}
         if not self._rows("LINES") and (self._rows("RODS") or self._rows("BODIES")):
             # native finalize_and_validate: a deck whose rows declare bodies or rods and
@@ -3929,9 +3964,9 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{self._label}: OPTION RangeStart needs a dynamic deck (TMax)"
                 )
-            if _native_float(range_start.values[0]) > _native_float(
-                option_by_key["tmax"].values[0]
-            ):
+            tmax_value = _native_float(option_by_key["tmax"].values[0])
+            # at TMax = 0 (a dynamic deck's static start) the range graphs hold the t = 0 row
+            if _native_float(range_start.values[0]) > tmax_value and tmax_value > 0.0:
                 raise DeckFormatError(
                     f"{self._label}: OPTION RangeStart exceeds TMax: the range window would hold "
                     "no output time"

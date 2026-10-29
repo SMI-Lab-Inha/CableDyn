@@ -211,10 +211,11 @@ The model grid is ``t_k = k·dtM`` for ``k = 0 … TMax/dtM``, and ``TMax`` must
 whole multiple of ``dtM``. The file is checked against this grid:
 
 * Each ``time`` must match a grid time to within ``100·ε·max(1, TMax)``, where ε is
-  double-precision machine epsilon. Times off the grid, before ``0``, or after
-  ``TMax`` are rejected (``time is outside the dtM/TMax grid``). Write times with
-  enough digits to hit the grid exactly. A file that runs past ``TMax`` must be cut
-  to length.
+  double-precision machine epsilon. Times off the grid or before ``0`` are rejected
+  (``time is outside the dtM/TMax grid``). Write times with enough digits to hit the
+  grid exactly. A file may run past ``TMax``: its rows after ``TMax`` are checked
+  (on the ``dtM`` grid, to within ``100·ε·max(1, time)``) and not used, so a long
+  record serves a shorter run and ``TMax = 0`` checks the static start.
 * Every eligible point needs exactly one row at every grid time. A repeated
   point/time pair is rejected (``duplicate row for point <id> at this time``). A
   missing pair is rejected once the whole file has been read (``motionFile must
@@ -563,6 +564,15 @@ two columns:
 * ``TMax / dtWave`` may be at most 10\ :sup:`6` samples; a longer record is rejected
   (``WaterKin TMax/dtWave needs more than 1000000 wave samples``) because the one-time
   reduction grows with the square of the sample count.
+* The components above the ``WvHiCOff`` option (default :math:`\pi` rad/s, 0.5 Hz) are
+  dropped, as SeaState drops those of an elevation series; ``none WvHiCOff`` keeps them up to
+  the Nyquist frequency of ``dtWave``, as MoorDyn-F does. A record with no component at or
+  below the cut-off, for example a run shorter than 2 s, is refused by name.
+* The record keeps about ``TMax WvHiCOff / (2 pi)`` components (150 for a 300 s run), or
+  ``TMax / (2 dtWave)`` with ``none`` (600 at ``dtWave`` 0.25 s), against the 200 of a
+  ``jonswap`` sea. Every node sums all of them for its surface elevation. Below the surface,
+  the components too short to reach the node's depth are dropped once they cannot change its
+  velocity and acceleration beyond round-off (:ref:`theory-waves`).
 
 Example
 ~~~~~~~

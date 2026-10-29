@@ -651,6 +651,8 @@ def test_unknown_scalar_option_keyword_fails_closed(tmp_path):
         ("implicit", "bodyScheme", "monolithic or staggered"),
         ("fast", "bodySubstep", "none or accuracy"),
         ("x", "dtWave", "must be numeric"),
+        ("0", "WvHiCOff", "must be positive"),
+        ("off", "WvHiCOff", "must be numeric"),
         ("2", "Currents", "supports only mode 0 or 1"),
         ("1.5", "Currents", "supports only mode 0 or 1"),
         ("4", "WaterKin", "numeric mode 0, 3 or 7"),
@@ -713,6 +715,8 @@ def test_zero_e_exponent_waterkin_mode_is_accepted(tmp_path):
         "none bodySubstep",
         "accuracy bodySubstep",
         "0.25 dtWave",
+        "6.283 WvHiCOff",
+        "none WvHiCOff",
         "60 TMax",
         "motion.dat motionFile",
         "RK4 tScheme",
@@ -1825,7 +1829,7 @@ def test_active_friction_clock_dependency_is_route_aware(tmp_path):
     path = tmp_path / "route-friction.dat"
     path.write_text(source, encoding="utf-8")
 
-    with pytest.raises(DeckFormatError, match="frictionMu requires dtM and TMax"):
+    with pytest.raises(DeckFormatError, match=r"frictionMu requires dtM and TMax.*TMax = 0"):
         DeckFile.read(path)
     DeckFile.read(path, caller_driven=True)
 
@@ -1862,8 +1866,10 @@ def test_host_route_does_not_relax_deck_owned_kinematics_clock(tmp_path, option_
     path.write_text(source, encoding="utf-8")
 
     for caller_driven in (False, True):
-        with pytest.raises(DeckFormatError, match=message):
+        with pytest.raises(DeckFormatError, match=message) as err:
             DeckFile.read(path, caller_driven=caller_driven)
+        # the standalone error says how to check the deck's static start; the host route's not
+        assert ("give dtM with TMax = 0" in str(err.value)) is not caller_driven
 
 
 def test_current_needs_the_deck_clock_only_on_the_standalone_route(tmp_path):
@@ -2470,6 +2476,9 @@ def test_range_flag_and_range_start_follow_native_rules():
         DeckFile.from_text(_edit(_DYNAMIC, ("10.0 TMax\n", "10.0 TMax\n2.5 RangeStart\n")))
     with pytest.raises(DeckFormatError, match="exceeds TMax"):
         DeckFile.from_text(_edit(ranged, ("2.5 RangeStart", "12.0 RangeStart")))
+    # TMax = 0 checks the static start of the dynamic deck: its range graphs hold the t = 0 row
+    zero = DeckFile.from_text(_edit(ranged, ("10.0 TMax", "0.0 TMax")))
+    assert zero.option("RangeStart").values == ("2.5",)
     with pytest.raises(DeckFormatError, match="must be >= 0"):
         DeckFile.from_text(_edit(ranged, ("2.5 RangeStart", "-1.0 RangeStart")))
     with pytest.raises(DeckFormatError, match="needs a dynamic deck"):

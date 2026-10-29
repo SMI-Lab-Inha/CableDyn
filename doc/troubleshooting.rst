@@ -199,8 +199,13 @@ Clock, motion, and environment
      - a deck that mixes ``EI = 0`` and finite-EI lines writes no modal files. Run the modal
        analysis on a deck whose lines are all ``EI = 0`` or all finite-EI.
    * - motionFile ``time is outside the dtM/TMax grid``
-     - every row time must be ``k·dtM`` for ``0 ≤ k ≤ TMax/dtM``. Resample the history onto the
-       ``dtM`` grid.
+     - every row time must be ``k·dtM`` with ``k ≥ 0`` (rows after ``TMax`` are not used).
+       Resample the history onto the ``dtM`` grid.
+   * - ``... requires dtM and TMax; to check a dynamic deck's static start only, give dtM with
+       TMax = 0``
+     - the deck asks for the march (motion, current, waves, bodies, rods, finite-EI sections,
+       ``RangeStart`` ...) without ``TMax``. Keep the deck and set ``TMax = 0``: the run solves
+       the static start and writes the ``t = 0`` row.
    * - ``motionFile must provide every Coupled/Vessel point at every dtM time`` (or ``every
        eligible prescribed point``)
      - the file is missing at least one (point, time) pair. Every prescribed point needs a row at

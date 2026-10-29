@@ -199,7 +199,8 @@ resolves the wave a snap does not trigger them, and at 0.5 ms the cable takes no
 
 Begin with the smallest model that should equilibrate:
 
-#. omit ``dtM``/``TMax`` for an ``EI = 0`` static-only checkout;
+#. omit ``dtM``/``TMax`` for an ``EI = 0`` static-only checkout, or set ``TMax = 0`` to check
+   the static start of a dynamic deck with all its other options;
 #. verify endpoint order, length, submerged weight, and seabed elevation;
 #. request endpoint tensions and the static along-arc profile;
 #. inspect contact, touchdown, curvature, and symmetry; then

@@ -14,6 +14,8 @@
 !>    equals the record's two harmonics to 1e-10 m), and velocity and acceleration, which
 !>    MoorDyn-C interpolates in the stretched depth on its 0.25 m grid, within 1e-3 of their
 !>    scale;
+!>  - WvHiCOff: 1 rad/s keeps only the record's 8 s harmonic, exactly; none keeps both, as the
+!>    0.5 Hz default does (the record has nothing above it);
 !>  - Currents 1: identical to 1e-12 m/s;
 !>  - the MoorDyn-C modes CableDyn does not support fail closed by name.
 PROGRAM test_wavekin_modes
@@ -27,6 +29,7 @@ PROGRAM test_wavekin_modes
   CALL check_mode('wavekin_mdc/wavekin3.dat', 'wavekin_mdc/mdc_wavekin3.csv', 'WaveKin 3', 1.0e-6_wp, &
                   1.0e-3_wp, 1.0e-3_wp)
   CALL check_record()
+  CALL check_cutoff()
   CALL check_mode('wavekin_mdc/currents1.dat', 'wavekin_mdc/mdc_currents1.csv', 'Currents 1', 1.0e-12_wp, &
                   1.0e-12_wp, 1.0e-12_wp, absolute=.TRUE.)
   CALL check_rejections()
@@ -137,6 +140,52 @@ CONTAINS
     WRITE (*, '(A,ES10.3,A)') 'WaveKin 3 vs the recorded harmonics: elevation ', err, ' m'
     CALL require(err <= 1.0e-10_wp, 'WaveKin 3 reproduces the recorded elevation')
   END SUBROUTINE check_record
+
+  SUBROUTINE check_cutoff()
+    !! WvHiCOff drops the record's components above it: at 1 rad/s only 0.8 cos(2 pi t/8) of
+    !! wave_elevation.txt is left; with none the record is reproduced as with the default.
+    REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp
+    REAL(wp) :: pos(3, 5), t(5), eta(5), vel(3, 5), acc(3, 5), err_cut, err_none
+    CHARACTER(1024) :: line
+    INTEGER :: es, i, u_in, u_cut, u_none, ios
+    CHARACTER(512) :: em
+    OPEN (NEWUNIT=u_in, FILE='wavekin_mdc/wavekin3.dat', STATUS='OLD', ACTION='READ')
+    OPEN (NEWUNIT=u_cut, FILE='wavekin_mdc/wavekin3_cut.dat', STATUS='REPLACE', ACTION='WRITE')
+    OPEN (NEWUNIT=u_none, FILE='wavekin_mdc/wavekin3_none.dat', STATUS='REPLACE', ACTION='WRITE')
+    DO
+      READ (u_in, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      WRITE (u_cut, '(A)') TRIM(line)
+      WRITE (u_none, '(A)') TRIM(line)
+      IF (INDEX(line, 'dtWave') > 0) THEN
+        WRITE (u_cut, '(A)') '1.0           WvHiCOff'
+        WRITE (u_none, '(A)') 'none          WvHiCOff'
+      END IF
+    END DO
+    CLOSE (u_in); CLOSE (u_cut); CLOSE (u_none)
+    pos = 0.0_wp
+    pos(3, :) = -10.0_wp
+    t = [0.0_wp, 1.23_wp, 5.55_wp, 13.01_wp, 27.7_wp]
+    CALL CD_Deck_Fluid_Probe('wavekin_mdc/wavekin3_cut.dat', pos, t, eta, vel, acc, es, em)
+    CALL require(es == CD_DECKDRV_OK, 'WvHiCOff 1 rad/s evaluated: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    err_cut = 0.0_wp
+    DO i = 1, SIZE(t)
+      err_cut = MAX(err_cut, ABS(eta(i) - 0.8_wp*COS(2.0_wp*PI*t(i)/8.0_wp)))
+    END DO
+    CALL CD_Deck_Fluid_Probe('wavekin_mdc/wavekin3_none.dat', pos, t, eta, vel, acc, es, em)
+    CALL require(es == CD_DECKDRV_OK, 'none WvHiCOff evaluated: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    err_none = 0.0_wp
+    DO i = 1, SIZE(t)
+      err_none = MAX(err_none, ABS(eta(i) - (0.8_wp*COS(2.0_wp*PI*t(i)/8.0_wp) + &
+                                             0.4_wp*SIN(2.0_wp*PI*t(i)/5.0_wp + 0.3_wp))))
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'WvHiCOff: 1 rad/s vs the 8 s harmonic ', err_cut, ' m; none vs the record ', &
+      err_none, ' m'
+    CALL require(err_cut <= 1.0e-10_wp, 'WvHiCOff 1 rad/s keeps only the 8 s harmonic')
+    CALL require(err_none <= 1.0e-10_wp, 'none WvHiCOff reproduces the record')
+  END SUBROUTINE check_cutoff
 
   SUBROUTINE write_fail_deck(path, wavekin, currents, extra_option)
     !! The shared probe deck with the given WaveKin and Currents rows (and an optional extra

@@ -1613,6 +1613,18 @@ if(Python3_Interpreter_FOUND)
     message(STATUS "range_graph_tdp: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
+  # TMax = 0 checks the static start of a dynamic deck: vesselMotion and motionFile records
+  # that outlast TMax, RangeStart at TMax = 0, and the hint of a deck without dtM and TMax.
+  add_test(NAME static_check
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_static_check.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --examples ${CMAKE_CURRENT_SOURCE_DIR}/examples
+                   --output ${CMAKE_BINARY_DIR}/static_check)
+  set_tests_properties(static_check PROPERTIES
+    LABELS "python;driver;integration;static;dynamic"
+    TIMEOUT 600
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # Anchor uplift channels (AnchFz/AnchFH, TDP<L>Grd): the analytic laid and suspended elastic
   # catenaries, the Point<P>F identity on every standalone route, and a surge that lifts the
   # anchor of a catenary (needs numpy).

@@ -98,6 +98,7 @@ none      waves             - Wave model and parameters (m, s, deg) {none; airy;
 -- 0.1     dtOut            - MoorDyn output-cadence compatibility only; accepted and ignored
 -- 0       Currents         - MoorDyn-C current mode {0=none; 1=current_profile.txt} [default: 0]
 -- 0.25    dtWave           - MoorDyn-C WaveKin 3 resampling step (s) [default: 0.25]
+-- 3.14159 WvHiCOff         - High cut-off of an elevation record, WaveKinMod 1 or WaveKin 3 (rad/s) {value; none} [default: 3.14159]
 -- Keyword aliases (equivalent spellings, case-insensitive):
 --   g = gravity; rhoW = WtrDnsty = water_density; WtrDpth = water_depth; kBot = kb; cBot = cb
 --   bathymetryFile = bathymetry_file = seafloorFile = seafloor_file; frictionMu = mu = frictionCoefficient

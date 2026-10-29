@@ -645,10 +645,23 @@ PROGRAM test_deck_driver
                            wave_file='wk_eta_short.dat', dtwave=0.25_wp)
   CALL write_waterkin_file('wk_wave_padded.dat', wavekinmod='1', deepest_first=.FALSE., &
                            wave_file='wk_eta_padded.dat', dtwave=0.25_wp)
+  ! TMax = 0 (a static-start check) reduces the record over its own length: 40 s of a 10 s wave
+  CALL write_wave_elevation_file('wk_eta_t0.dat', 1.0_wp, 10.0_wp, 0.0_wp, nperiods=4)
+  CALL write_waterkin_file('wk_wave_t0.dat', wavekinmod='1', deepest_first=.FALSE., &
+                           wave_file='wk_eta_t0.dat', dtwave=0.25_wp)
+  CALL write_dynamic_connect_deck('deck_wk_wave_t0.dat', option_row='wk_wave_t0.dat WaterKin', run_tmax=0.0_wp)
+  CALL CD_Run_Deck_Driver('deck_wk_wave_t0.dat', 'deck_wk_wave_t0', conv, es, em)
+  CALL require(es == CD_DECKDRV_OK .AND. conv, 'WaveKinMod 1 record at TMax = 0 checks the static start: '//TRIM(em))
+  ! a 1 s window has no component at or below the default 0.5 Hz WvHiCOff: refused by name
+  CALL write_dynamic_connect_deck('deck_wk_wave_cut.dat', option_row='wk_wave_short.dat WaterKin', &
+                                  run_tmax=1.0_wp)
+  CALL CD_Run_Deck_Driver('deck_wk_wave_cut.dat', 'deck_wk_wave_cut', conv, es, em)
+  CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'none WvHiCOff') > 0, &
+               'a record with nothing below WvHiCOff is refused by name: '//TRIM(em))
   CALL write_dynamic_connect_deck('deck_wk_wave_short.dat', option_row='wk_wave_short.dat WaterKin', &
-                                  run_tmax=1.0_wp)
+                                  option_row2='none WvHiCOff', run_tmax=1.0_wp)
   CALL write_dynamic_connect_deck('deck_wk_wave_padded.dat', option_row='wk_wave_padded.dat WaterKin', &
-                                  run_tmax=1.0_wp)
+                                  option_row2='none WvHiCOff', run_tmax=1.0_wp)
   CALL CD_Run_Deck_Driver('deck_wk_wave_short.dat', 'deck_wk_wave_short', conv, es, em)
   CALL require(es == CD_DECKDRV_OK .AND. conv, 'short WaveKinMod 1 record converged: '//TRIM(em))
   CALL CD_Run_Deck_Driver('deck_wk_wave_padded.dat', 'deck_wk_wave_padded', conv, es, em)
@@ -666,7 +679,7 @@ PROGRAM test_deck_driver
   CALL write_waterkin_file('wk_sub/wk_wave_sub.dat', wavekinmod='1', deepest_first=.FALSE., &
                            wave_file='wk_eta_short.dat', dtwave=0.25_wp)
   CALL write_dynamic_connect_deck('deck_wk_wave_sub.dat', option_row='wk_sub/wk_wave_sub.dat WaterKin', &
-                                  run_tmax=1.0_wp)
+                                  option_row2='none WvHiCOff', run_tmax=1.0_wp)
   CALL CD_Run_Deck_Driver('deck_wk_wave_sub.dat', 'deck_wk_wave_sub', conv, es, em)
   CALL require(es == CD_DECKDRV_OK .AND. conv, 'deck-relative WaveKinFile of a nested WaterKin file: '//TRIM(em))
   IF (es == CD_DECKDRV_OK) THEN
@@ -753,15 +766,17 @@ PROGRAM test_deck_driver
   ! WaveKinMod 1: reduce a sampled elevation history to Fourier components. A
   ! pure Airy history must reproduce the equivalent inline wave/current deck.
   ! The source record is twice the run TMax and its second half is deliberately
-  ! contaminated. The FFT window must ignore that tail and match one clean period.
+  ! contaminated. The FFT window must ignore that tail and match one clean period. The 1 Hz wave
+  ! lies above the 0.5 Hz default WvHiCOff, so these decks keep every component.
   CALL write_wave_elevation_file('wk_eta.dat', 1.0_wp, 1.0_wp, 0.0_wp, nperiods=2, tail_bias=0.4_wp)
   CALL write_waterkin_file('wk_wave.dat', wavekinmod='1', deepest_first=.FALSE., &
                            wave_file='wk_eta.dat', dtwave=0.25_wp)
-  CALL write_dynamic_connect_deck('deck_wk_wave.dat', option_row='wk_wave.dat WaterKin', run_tmax=1.0_wp)
+  CALL write_dynamic_connect_deck('deck_wk_wave.dat', option_row='wk_wave.dat WaterKin', &
+                                  option_row2='none WvHiCOff', run_tmax=1.0_wp)
   CALL CD_Run_Deck_Driver('deck_wk_wave.dat', 'deck_wk_wave', conv, es, em)
   CALL require(es == CD_DECKDRV_OK .AND. conv, 'WaveKinMod 1 elevation-history deck converged: '//TRIM(em))
   CALL write_dynamic_connect_deck('deck_wk_wave_host_tmax.dat', option_row='wk_wave.dat WaterKin', &
-                                  omit_tmax=.TRUE.)
+                                  option_row2='none WvHiCOff', omit_tmax=.TRUE.)
   BLOCK
     TYPE(CD_DeckAggregateType) :: wkagg
     CALL CD_Init_Deck_Aggregate('deck_wk_wave_host_tmax.dat', 0.005_wp, wkagg, es, em, &
@@ -812,7 +827,8 @@ PROGRAM test_deck_driver
   END BLOCK
   CALL write_waterkin_file('wk_mixed_hybrid.dat', wavekinmod='1', deepest_first=.FALSE., &
                            wave_file='wk_eta.dat', currentmod='2', dtwave=0.25_wp)
-  CALL write_dynamic_connect_deck('deck_wk_mixed_hybrid.dat', option_row='wk_mixed_hybrid.dat WaterKin')
+  CALL write_dynamic_connect_deck('deck_wk_mixed_hybrid.dat', option_row='wk_mixed_hybrid.dat WaterKin', &
+                                  option_row2='none WvHiCOff')
   CALL CD_Run_Deck_Driver('deck_wk_mixed_hybrid.dat', 'deck_wk_mixed_hybrid', conv, es, em)
   CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'cannot separate') > 0, &
                'WaveKinMod 1 plus CurrentMod 2 fails closed by mixed-source contract')

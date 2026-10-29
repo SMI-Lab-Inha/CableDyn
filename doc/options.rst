@@ -269,14 +269,17 @@ Clock and initial condition
      - real, s
      - absent (static-only)
      - finite, ≥ 0 and an integer multiple of ``dtM``. ``TMax = 0`` runs the dynamic
-       initialisation and writes the ``t = 0`` row
+       initialisation and writes the ``t = 0`` row: the static start of a dynamic deck, checked
+       with every other option kept (motion records longer than ``TMax`` and a later
+       ``RangeStart`` included)
      - standalone only; OpenFAST uses the host ``TMax``. Do not copy the host duration into a
        coupled deck
      - ``600.0 TMax``
    * - ``RangeStart`` / ``range_start``
      - real, s
      - ``0``
-     - finite, ≥ 0 and ≤ ``TMax``. First output time accumulated into the range graphs
+     - finite, ≥ 0 and ≤ ``TMax`` (any value at ``TMax = 0``, where the graphs hold the
+       ``t = 0`` row). First output time accumulated into the range graphs
        (``<out_root>.Line<L>.range.out``, ``LINES`` ``Outputs`` flag ``r``), so a start-up
        transient is left out. Needs ``TMax`` and at least one line with the ``r`` flag
      - standalone only
@@ -743,6 +746,16 @@ Ambient fluid and prescribed motion
      - the step at which ``WaveKin 3`` resamples ``wave_elevation.txt`` (MoorDyn-C)
      - standalone
      - ``0.1 dtWave``
+   * - ``WvHiCOff``
+     - positive number [rad/s] or ``none``
+     - ``3.14159`` (0.5 Hz)
+     - the high cut-off frequency of an elevation record (WaterKin ``WaveKinMod 1``,
+       ``WaveKin 3``): its Fourier components above it are dropped, as SeaState's ``WvHiCOff``
+       zeroes the spectrum of an elevation series. ``none`` keeps them up to the Nyquist
+       frequency of ``dtWave``, as MoorDyn-F's ``WaveKinMod 1`` does. A record with no
+       component at or below the cut-off is refused
+     - standalone
+     - ``6.2832 WvHiCOff``
    * - ``Currents``
      - ``0`` or ``1``
      - ``0``
