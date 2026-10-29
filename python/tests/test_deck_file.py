@@ -1362,7 +1362,7 @@ def test_syrope_ic_accepts_spaces_after_id_commas(tmp_path):
     assert deck.text() == path.read_bytes().decode("utf-8")
 
 
-def test_syrope_ic_requires_a_single_syrope_section(tmp_path):
+def test_syrope_ic_requires_a_syrope_section(tmp_path):
     chain = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
     chain = chain.replace(
         "--------------------- SECTIONS -----------------------------------------",
@@ -1372,9 +1372,10 @@ def test_syrope_ic_requires_a_single_syrope_section(tmp_path):
     )
     non_syrope = tmp_path / "non-syrope-ic.dat"
     non_syrope.write_text(chain, encoding="utf-8")
-    with pytest.raises(DeckFormatError, match="single-section Syrope line"):
+    with pytest.raises(DeckFormatError, match="line with a Syrope section"):
         DeckFile.read(non_syrope)
 
+    # a composite line with a Syrope section takes the history (every Syrope section's)
     syrope = (ROOT / "examples/syrope_polyester_mooring.dat").read_text(encoding="utf-8")
     syrope = syrope.replace(
         "1        rope       20.0     8",
@@ -1382,8 +1383,7 @@ def test_syrope_ic_requires_a_single_syrope_section(tmp_path):
     )
     composite = tmp_path / "composite-syrope-ic.dat"
     composite.write_text(syrope, encoding="utf-8")
-    with pytest.raises(DeckFormatError, match="single-section Syrope line"):
-        DeckFile.read(composite)
+    DeckFile.read(composite)
 
     DeckFile.read(ROOT / "examples/syrope_polyester_mooring.dat")
 

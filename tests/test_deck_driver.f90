@@ -1182,11 +1182,27 @@ PROGRAM test_deck_driver
   ! the placeholder linear EA or to a load path that carries no Syrope state.
   BLOCK
     TYPE(CD_ModelType), ALLOCATABLE :: smodels(:)
-    CALL write_syrope_deck('deck_syrope_composite.dat', 'SYROPE:syrope.dat|1.53e8|23.12', &
-                           '5.0e10|1.0e5', nsections=2)
-    CALL CD_Init_Deck_Models('deck_syrope_composite.dat', smodels, es, em)
-    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'composite Syrope') > 0, &
-                 'composite Syrope fails closed by name')
+    ! a Syrope line split into two Syrope sections (the same mesh) is the same line: the
+    ! composite build's mean-tension secant iteration lands on the single section's equilibrium
+    BLOCK
+      TYPE(CD_ModelType), ALLOCATABLE :: one(:)
+      REAL(wp) :: t1(4), t2(4)
+      CALL write_syrope_deck('deck_syrope_one.dat', 'SYROPE:syrope.dat|1.53e8|23.12', '5.0e10|1.0e5')
+      CALL CD_Init_Deck_Models('deck_syrope_one.dat', one, es, em)
+      CALL require(es == CD_DECKDRV_OK, 'single-section Syrope line builds: '//TRIM(em))
+      CALL write_syrope_deck('deck_syrope_composite.dat', 'SYROPE:syrope.dat|1.53e8|23.12', &
+                             '5.0e10|1.0e5', nsections=2)
+      CALL CD_Init_Deck_Models('deck_syrope_composite.dat', smodels, es, em)
+      CALL require(es == CD_DECKDRV_OK, 'a Syrope line of two Syrope sections builds: '//TRIM(em))
+      IF (ALLOCATED(one) .AND. ALLOCATED(smodels)) THEN
+        CALL CD_Get_Model_Tension(one(1), t1, es, em)
+        CALL CD_Get_Model_Tension(smodels(1), t2, es, em)
+        CALL require(MAXVAL(ABS(t2 - t1)) <= 1.0e-8_wp*MAXVAL(t1), &
+                     'two Syrope sections reach the single section''s static tensions')
+        CALL CD_End_Model(one(1), es, em)
+        CALL CD_End_Model(smodels(1), es, em)
+      END IF
+    END BLOCK
 
     CALL write_syrope_deck('deck_syrope_finite_ei.dat', 'SYROPE:syrope.dat|1.53e8|23.12', &
                            '5.0e10|1.0e5', ei=5.0e3_wp)

@@ -2076,6 +2076,11 @@ target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
 add_test(NAME section_curvature COMMAND test_section_curvature)
 set_tests_properties(section_curvature PROPERTIES LABELS "fortran;driver;integration;static")
 
+add_executable(test_syrope_composite tests/test_syrope_composite.f90)
+target_link_libraries(test_syrope_composite PRIVATE cabledyn_core)
+add_test(NAME syrope_composite COMMAND test_syrope_composite)
+set_tests_properties(syrope_composite PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
+
 add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
 target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)
 add_test(NAME coupled_torsion COMMAND test_coupled_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -2882,7 +2887,8 @@ foreach(_floor_case IN ITEMS held_start_gomex80_power_cable held_start_humboldt8
   set_tests_properties(${_floor_case} PROPERTIES LABELS "fortran;driver;integration;dynamic")
 endforeach()
 foreach(_dyn_example IN ITEMS dynamic_chain_held dynamic_chain_current dynamic_chain_waves
-    ve_polyester_dynamic_waves syrope_polyester_mooring clump_weight_free_point connect_weighted_point)
+    ve_polyester_dynamic_waves syrope_polyester_mooring composite_chain_syrope_chain clump_weight_free_point
+    connect_weighted_point)
   add_test(NAME example_${_dyn_example}
     COMMAND cabledyn "${CMAKE_CURRENT_SOURCE_DIR}/examples/${_dyn_example}.dat"
       "${CMAKE_CURRENT_BINARY_DIR}/example_${_dyn_example}")

@@ -77,9 +77,10 @@ Line and constitutive capability
        including load-dependent dynamic stiffness; ``EI = 0`` lines
    * - Syrope polyester
      - Supported with limits
-     - single-section taut dynamic line with OWC and two history states, with the seabed,
-       Morison loads, current, waves, host fluid fields and VIV of any ``EI = 0`` line;
-       composite and finite-EI combinations fail closed by name
+     - dynamic line with OWC and two history states, single-section and taut or between
+       linear-elastic ``EI = 0`` sections (chain–polyester–chain), with the seabed, Morison loads,
+       current, waves, host fluid fields and VIV of any ``EI = 0`` line; finite-EI combinations
+       fail closed by name
    * - Torsion of finite-EI lines
      - Supported with limits
      - condensed isotropic torsion (uniform torque, quasi-static: no torsional inertia) of a

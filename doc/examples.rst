@@ -158,6 +158,11 @@ for the equations, the viscoelastic (series-Kelvin) and Syrope sections of :doc:
        ``data/syrope/syrope_settings.dat`` and ``data/syrope/syrope_owc.dat``
      - cable, dynamic
      - < 1 s
+   * - ``composite_chain_syrope_chain.dat``
+     - chain–Syrope polyester–chain mooring on a vessel in a 12 s surge, heave and pitch record;
+       needs ``data/syrope/`` and ``data/vessel/vessel_surge_heave_pitch_12s_dt005.txt``
+     - cable, dynamic
+     - < 1 s
 
 Dynamic environment
 -------------------

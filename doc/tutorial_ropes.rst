@@ -121,7 +121,9 @@ The static initial condition is solved on the ``Tmax0`` working curve, and the l
 that equilibrium: ``FairTen1`` is 972.8 kN at t = 0 and stays there over the 2 s run (the fairlead
 is held). With both ends fixed, the geometry and ``Tmax0`` set the mean tension, so ``Tmean0``
 does not enter the state. The driver prints a note because this deck's 1.5 MN differs from the
-972.8 kN equilibrium. Syrope lines are single-section and run dynamically (``dtM``/``TMax``).
+972.8 kN equilibrium. Syrope lines run dynamically (``dtM``/``TMax``). A Syrope section can also
+sit between chains: ``composite_chain_syrope_chain.dat`` is a chain–polyester–chain mooring on a
+moving vessel, every polyester element starting on its working curve.
 
 .. important::
 

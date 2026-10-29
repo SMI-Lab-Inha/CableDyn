@@ -3896,12 +3896,10 @@ class DeckFile:
                     f"{self._at(row)}: SYROPE IC must follow its referenced LINE definitions"
                 )
             if any(
-                len(section_types_by_line[value]) != 1
-                or section_types_by_line[value][0] not in syrope_types
-                for value in ids
+                not any(t in syrope_types for t in section_types_by_line[value]) for value in ids
             ):
                 raise DeckFormatError(
-                    f"{self._at(row)}: SYROPE IC can reference only a single-section Syrope line"
+                    f"{self._at(row)}: SYROPE IC can reference only a line with a Syrope section"
                 )
             if assigned_syrope.intersection(ids):
                 raise DeckFormatError(f"{self._label}: duplicate SYROPE IC line assignment")
