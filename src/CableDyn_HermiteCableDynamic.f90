@@ -93,6 +93,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion
   PUBLIC :: CD_HermiteCable_Dyn_Torsion_State
   PUBLIC :: CD_HermiteCable_Dyn_Element_Twist
+  PUBLIC :: CD_HermiteCable_Dyn_Coupling_Tension
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Drive
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Frames
   PUBLIC :: CD_HermiteCable_Dyn_EndConnection_Moment
@@ -3511,7 +3512,7 @@ CONTAINS
     INTEGER :: ndof, it, es, i, np, ip, ls, gdof, nsolve_step, axial_element, axial_es
     INTEGER :: axial_worst_element, iv, attempt, n_attempt
     REAL(wp) :: c_a, c_v, c_a2, am, af, bt, gm, rnorm, fscale, rnt, lambda, chosen, lam_ok, cw, t_alpha, dth_lin
-    REAL(wp) :: e_bal, e_ma, tors_theta_new
+    REAL(wp) :: e_bal, e_ma, tors_theta_new, tors_mt_new
     REAL(wp) :: axial_qe(12), axial_min
     REAL(wp) :: axial_threshold, axial_margin, axial_worst_margin, axial_worst_force, axial_worst_xi
     REAL(wp) :: axial_worst_threshold
@@ -4233,6 +4234,20 @@ CONTAINS
       END IF
     END IF
 
+    ! Condensed torsion: Theta at q_{n+1} with the step's end frames, unwrapped against the
+    ! committed value (within pi/2: every accepted evaluation already was), before anything is
+    ! committed so that a failure leaves the step-start state; its torque enters the axial
+    ! audit under torque-tension coupling.
+    tors_theta_new = model%torsion%theta
+    tors_mt_new = CD_ZERO
+    IF (model%torsion%active) THEN
+      CALL torsion_theta_at(model, model%ws_qk, model%tors_step_ends, tors_theta_new, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
+      END IF
+      tors_mt_new = (model%tors_step_phi - tors_theta_new)/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+    END IF
+
     ! Axial audit of the converged field. ERROR is the hard gate; WARN commits the converged
     ! state and records one event for this accepted step. The audited force is the one that
     ! enters equilibrium, as in the static branch audit: the element-mean axial force (the
@@ -4243,8 +4258,9 @@ CONTAINS
     ! the element length: judged pointwise, a coarse mesh whose tensions and curvatures are
     ! converged reads as compressed. A compressed span of three or more elements is never
     ! averaged away. The band is tensile_strain_tolerance times the length-weighted EA of the
-    ! same three elements; a window whose elements all have a strain lower bound inside the
-    ! band cannot fall below it and is skipped.
+    ! same three elements; a window whose elements all have a force lower bound inside the
+    ! band cannot fall below it and is skipped. Under torque-tension coupling the element's
+    ! axial force adds (K/GJ) M_t at the converged torque to the kernel's EA - K^2/GJ resultant.
     IF (model%tensile_mode /= CD_HCDYN_TENSILE_OFF) THEN
       axial_worst_margin = HUGE(CD_ONE)
       axial_worst_force = CD_ZERO; axial_worst_threshold = CD_ZERO
@@ -4318,17 +4334,6 @@ CONTAINS
           model%tensile_worst_xi = axial_worst_xi
           model%tensile_worst_time = model%t + dt
         END IF
-      END IF
-    END IF
-
-    ! Condensed torsion: Theta at q_{n+1} with the step's end frames, unwrapped against the
-    ! committed value (within pi/2: every accepted evaluation already was), before anything is
-    ! committed so that a failure leaves the step-start state.
-    tors_theta_new = model%torsion%theta
-    IF (model%torsion%active) THEN
-      CALL torsion_theta_at(model, model%ws_qk, model%tors_step_ends, tors_theta_new, es, em2)
-      IF (es /= CD_HCDYN_OK) THEN
-        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
       END IF
     END IF
 
@@ -4438,18 +4443,32 @@ CONTAINS
   CONTAINS
 
     SUBROUTINE window_load(slot, e)
-      !! Axial audit window slot for element e: whether its strain lower bound lies inside the
-      !! band (its element mean cannot then be below -tolerance*EA); the mean is computed on
-      !! demand (window_mean).
+      !! Axial audit window slot for element e: whether its force lower bound (EA times the
+      !! strain lower bound, plus the coupling force) lies inside the band (its element mean
+      !! cannot then be below -tolerance*EA); the mean is computed on demand (window_mean).
       INTEGER, INTENT(IN) :: slot, e
       win_elem(slot) = e
       win_done(slot) = .FALSE.
       win_mean(slot) = CD_ZERO
       axial_qe(1:6) = model%ws_qk(6*(e - 1) + 1:6*e)
       axial_qe(7:12) = model%ws_qk(6*e + 1:6*(e + 1))
-      win_clear(slot) = CD_HermiteCable_Axial_Strain_Lower_Bound(axial_qe, model%l0(e)) >= &
-        -model%tensile_strain_tolerance
+      IF (.NOT. ABS(audit_coupling(e)) > CD_ZERO) THEN
+        win_clear(slot) = CD_HermiteCable_Axial_Strain_Lower_Bound(axial_qe, model%l0(e)) >= &
+          -model%tensile_strain_tolerance
+      ELSE
+        win_clear(slot) = model%EA(e)*CD_HermiteCable_Axial_Strain_Lower_Bound(axial_qe, model%l0(e)) + &
+                          audit_coupling(e) >= -model%tensile_strain_tolerance*model%EA(e)
+      END IF
     END SUBROUTINE window_load
+
+    REAL(wp) FUNCTION audit_coupling(e) RESULT(tc)
+      !! The torque-tension coupling force (K/GJ) M_t of element e at the converged torque.
+      INTEGER, INTENT(IN) :: e
+      tc = CD_ZERO
+      IF (.NOT. model%torsion%active) RETURN
+      IF (.NOT. ALLOCATED(model%torsion%couple)) RETURN
+      tc = model%torsion%couple(e)*tors_mt_new
+    END FUNCTION audit_coupling
 
     SUBROUTINE window_mean(slot, esx)
       !! Element-mean axial force of the element in window slot: the three-point Gauss mean
@@ -4469,6 +4488,7 @@ CONTAINS
         IF (esx /= CD_HCABLE_OK) RETURN
         win_mean(slot) = win_mean(slot) + GW(kg)*ng
       END DO
+      win_mean(slot) = win_mean(slot) + audit_coupling(e)
       win_done(slot) = .TRUE.
     END SUBROUTINE window_mean
 
@@ -6217,6 +6237,16 @@ CONTAINS
     IF (.NOT. ALLOCATED(model%torsion%couple)) RETURN
     tc = model%torsion%couple(e)*model%torsion%torque
   END FUNCTION coupling_tension
+
+  PURE REAL(wp) FUNCTION CD_HermiteCable_Dyn_Coupling_Tension(model, e) RESULT(tc)
+    !! The axial force of element e (model order, End B first) that torque-tension coupling adds
+    !! to the kernel's EA - K^2/GJ resultant at the committed state, (K/GJ) M_t [N]: a host
+    !! reading the axial resultant of an element (CD_HermiteCable_Axial_Resultant with the
+    !! model's EA) adds it for the section's tension. Zero without coupling or torsion.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    tc = coupling_tension(model, e)
+  END FUNCTION CD_HermiteCable_Dyn_Coupling_Tension
 
   REAL(wp) FUNCTION element_twist(model, e, mt) RESULT(tw)
     !! The twist of element e under the torque mt: mt l0/GJ, less the twist its stretch takes up

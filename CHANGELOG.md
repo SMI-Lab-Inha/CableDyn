@@ -35,7 +35,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.
   A line restrained in torsion adds the stretch's share of the twist, `−Σ (K/GJ)(l − L)`, to its
   condensed torque, in statics and dynamics and on every route that carries torsion. The node
-  tension and the twist channels include the coupling. A stretched straight cable reproduces
+  and element tensions, the element profile, the twist channels and the static and dynamic
+  `tensile_safety` audits include the coupling, so a stretched cable that opposite-sense torsion
+  puts into compression is caught. A stretched straight cable reproduces
   `T = EA ε`, `M = K ε` between rigid ends and `T = (EA − K²/GJ) ε` with a free end. `GJ|0` is the
   uncoupled cable bit for bit. The Python deck reader and builder take `GJ|K` (builder
   `gj=(GJ, K)`).

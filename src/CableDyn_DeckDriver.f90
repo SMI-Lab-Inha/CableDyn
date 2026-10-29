@@ -110,7 +110,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Set_Control_Seabed, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State, &
-                                          CD_HermiteCable_Dyn_Element_Twist
+                                          CD_HermiteCable_Dyn_Element_Twist, CD_HermiteCable_Dyn_Coupling_Tension
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
                                      CD_HTORS_MAX_TWIST
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
@@ -1818,6 +1818,9 @@ CONTAINS
     ! static load stage on the final mesh, then installed in the cable.
     LOGICAL :: tors_line
     TYPE(CD_HermiteTorsionType) :: tors
+    ! the torque-tension coupling force (K/GJ) M_t of every element of the twisted static state
+    ! (allocated by torsion_stage under coupling only), for the final mesh safety diagnosis
+    REAL(wp), ALLOCATABLE :: tors_axial_offset(:)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -2971,16 +2974,19 @@ CONTAINS
     IF (contact_enabled) CALL anchor_overshoot_note()
     ! Safety is independent of the opt-in adaptive accuracy policy. Diagnose the
     ! equilibrium on the FINAL user/refined mesh and reject an element-localized fold
-    ! even when Newton balanced its residual and adaptive_mesh is false.
+    ! even when Newton balanced its residual and adaptive_mesh is false. A twisted line under
+    ! torque-tension coupling is judged on its section tension (the coupling force added).
     IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
       CALL CD_HermiteCable_Resolution_Metrics(l0_am, q_static, contact_z, CD_ZERO, &
                                               CD_HC_KINK_LIMIT, diag, es, em, &
                                               bathymetry=bathymetry, contact_frame_cs=frame_cs, &
-                                              EA=ea_am, EI=ei_am, compression_mode=CD_HC_COMPRESSION_STRICT)
+                                              EA=ea_am, EI=ei_am, compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                              axial_offset=tors_axial_offset)
     ELSE
       CALL CD_HermiteCable_Resolution_Metrics(l0_am, q_static, contact_z, CD_ZERO, &
                                               CD_HC_KINK_LIMIT, diag, es, em, EA=ea_am, EI=ei_am, &
-                                              compression_mode=CD_HC_COMPRESSION_STRICT)
+                                              compression_mode=CD_HC_COMPRESSION_STRICT, &
+                                              axial_offset=tors_axial_offset)
     END IF
     IF (es /= CD_HCSTAT_OK) THEN
       CALL fail_solve(ErrStat, ErrMsg, 'finite-EI mesh safety diagnosis failed: '//TRIM(em)); RETURN
@@ -3372,6 +3378,7 @@ CONTAINS
         CALL report_note(tnote)
       END IF
       IF (est /= CD_DECKDRV_OK) RETURN
+      IF (ALLOCATED(tors%couple)) tors_axial_offset = tors%couple*tors%torque
       WRITE (tnote, '(A,I0,A,ES12.5,A,ES12.5,A,I0,A,I0,A)') 'line ', ln%id, ': torsion solved, imposed twist ', &
         tors%phi*45.0_wp/QUARTER_PI, ' deg, torque ', tors%torque, ' N m (', tors%ramp_steps, &
         ' twist stage(s), ', tors%descents, ' buckling descent(s))'
@@ -28972,6 +28979,10 @@ CONTAINS
           CLOSE (unit, STATUS='DELETE')
           CALL fail_solve(ErrStat, ErrMsg, 'continuous axial-resultant extraction failed: '//TRIM(em)); RETURN
         END IF
+        ! the section's tension under torque-tension coupling: the element's (K/GJ) M_t added
+        ! to the kernel's EA - K^2/GJ resultant (constant along the element)
+        minimum_resultant = minimum_resultant + CD_HermiteCable_Dyn_Coupling_Tension(cables(li)%line, internal_element)
+        maximum_resultant = maximum_resultant + CD_HermiteCable_Dyn_Coupling_Tension(cables(li)%line, internal_element)
         arc_end = arc_start + l0
         u_curvature_public = CD_ONE - u_curvature_internal
         minimum_u_public = CD_ONE - minimum_u_internal
@@ -35620,6 +35631,8 @@ CONTAINS
   REAL(wp) FUNCTION cable_axial_tension(cable, e, xi) RESULT(t)
     !! Constitutive axial force at xi in [0,1].  Hermite tangent DOFs are dr/ds,
     !! while the public shape derivative is with respect to xi, hence division by L.
+    !! Under torque-tension coupling the section's tension adds (K/GJ) M_t to the
+    !! kernel's EA - K^2/GJ resultant.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: xi
@@ -35637,6 +35650,7 @@ CONTAINS
       t = CD_ZERO
       RETURN
     END IF
+    t = t + CD_HermiteCable_Dyn_Coupling_Tension(cable%line, e)
     IF (cable%line%has_axial_damping) THEN
       vr(1:6) = cable%line%v(6*(e - 1) + 1:6*(e - 1) + 6)
       vr(7:12) = cable%line%v(6*e + 1:6*e + 6)

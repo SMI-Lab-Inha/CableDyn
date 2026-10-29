@@ -14,9 +14,19 @@ PROGRAM test_torsion_coupling
   !!   4. Both ends rigid with an imposed twist Phi: tau = Phi/L, so T = EA eps + K Phi/L and
   !!      M = GJ Phi/L + K eps; the twist channel reads the element twists.
   !!   5. K = 0 written as GJ|0 is the uncoupled cable bit for bit; K^2 >= EA GJ fails closed.
+  !!   6. The element recovery (OutputRecovery element) and the static element profile read the
+  !!      section tension EA eps of the rigid-end case, the coupling force included.
+  !!   7. Compression by opposite-sense torsion: a cable stretched by 1e-4 between rigid ends and
+  !!      twisted by -45 deg carries T = EA eps + K Phi/L < 0 although its kernel resultant is
+  !!      tensile; tensile_safety True refuses it in the statics and in a march that rolls the
+  !!      end there, and accepts the march rolled the other way.
+  !!   8. The coupled aggregate: a non-stepping update at the unchanged boundary is accepted (the
+  !!      preflight's twist carries the coupling, -8 rad here).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsion_Line, CD_HTORS_OK, CD_HTORS_KBAND
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
+  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
+                                         CD_AGG_UpdateStates_Moving, CD_AGG_End, CD_AGG_OK
   IMPLICIT NONE
 
   REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp, RHOW = 1025.0_wp
@@ -30,6 +40,9 @@ PROGRAM test_torsion_coupling
   CALL check_pretwist()
   CALL check_zero_and_refusal()
   CALL check_dynamic()
+  CALL check_recovery()
+  CALL check_compression()
+  CALL check_aggregate()
   IF (nfail > 0) THEN
     PRINT '(I0,A)', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -178,13 +191,121 @@ CONTAINS
     CALL require(ABS(last(3) - m_ref) <= 1.0e-6_wp*m_ref, 'march: M at the end of the ramp is the static one')
   END SUBROUTINE check_dynamic
 
-  SUBROUTINE straight_case(root, conn_a, conn_b, k, v, torsion)
+  SUBROUTINE check_recovery()
+    !! The rigid-end case under OutputRecovery element: Ten1N21 and the element profile's axial
+    !! resultant extremes are the section tension EA eps.
+    REAL(wp) :: v(4), eps, row(12), tmin, tmax
+    INTEGER :: u, ios, n
+    CHARACTER(4096) :: buf
+    CALL straight_case('tcpl_rec', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 0', KTT, v, &
+                       option='element OutputRecovery')
+    eps = SPAN/L0 - 1.0_wp
+    PRINT '(A,ES15.7,A,ES15.7)', '  element recovery: Ten1N21 ', v(4), '  expected ', EA*eps
+    CALL require(ABS(v(4) - EA*eps) <= 1.0e-5_wp*EA*eps, 'element recovery: the node tension is EA eps')
+    tmin = HUGE(1.0_wp)
+    tmax = -HUGE(1.0_wp)
+    n = 0
+    OPEN (NEWUNIT=u, FILE='tcpl_rec.elements.out', STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL require(ios == 0, 'the static element profile is written')
+    IF (ios /= 0) RETURN
+    READ (u, '(A)') buf
+    READ (u, '(A)') buf
+    READ (u, '(A)') buf
+    DO
+      READ (u, *, IOSTAT=ios) row
+      IF (ios /= 0) EXIT
+      n = n + 1
+      tmin = MIN(tmin, row(9))
+      tmax = MAX(tmax, row(11))
+    END DO
+    CLOSE (u)
+    PRINT '(A,I0,A,2ES15.7)', '  element profile: ', n, ' elements, axial resultant range ', tmin, tmax
+    CALL require(n == 40 .AND. ABS(tmin - EA*eps) <= 1.0e-5_wp*EA*eps .AND. ABS(tmax - EA*eps) <= 1.0e-5_wp*EA*eps, &
+                 'element profile: the axial resultant is EA eps')
+  END SUBROUTINE check_recovery
+
+  SUBROUTINE check_compression()
+    !! 99.99 m between the ends 100 m apart (eps = 1e-4): T = EA eps + K Phi/L is -2.1 kN at
+    !! Phi = -45 deg, while the kernel's (EA - K^2/GJ) eps stays +680 N.
+    REAL(wp), PARAMETER :: LC = 99.99_wp
+    REAL(wp) :: v(4), eps, phi, t_ref
+    LOGICAL :: conv
+    INTEGER :: es
+    CHARACTER(512) :: em
+    eps = SPAN/LC - 1.0_wp
+    phi = -45.0_wp*PI/180.0_wp
+    t_ref = EA*eps + KTT*phi/LC
+    ! the statics: without tensile_safety the twisted state carries the compression ...
+    CALL straight_case('tcpl_comp', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 -45', KTT, v, length=LC)
+    PRINT '(A,ES15.7,A,ES15.7)', '  twisted into compression: Ten1N21 ', v(4), '  expected ', t_ref
+    CALL require(t_ref < 0.0_wp .AND. ABS(v(4) - t_ref) <= 1.0e-4_wp*ABS(t_ref), &
+                 'opposite-sense torsion: the node tension is EA eps + K Phi/L < 0')
+    ! ... which tensile_safety True refuses
+    CALL write_case('tcpl_comp_ts.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 -45', KTT, &
+                    length=LC, option='True tensile_safety')
+    CALL CD_Run_Deck_Driver('tcpl_comp_ts.dat', 'tcpl_comp_ts', conv, es, em)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'axial compression') > 0, &
+                 'tensile_safety True refuses the static compression of the coupling: '//TRIM(em))
+    ! ... the march from the untwisted state to Phi = -45 deg (End A rolled +45 deg) is refused ...
+    CALL write_roll(45.0_wp)
+    CALL write_case('tcpl_comp_dyn.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 0', KTT, &
+                    dynamic=.TRUE., length=LC, option='True tensile_safety')
+    CALL CD_Run_Deck_Driver('tcpl_comp_dyn.dat', 'tcpl_comp_dyn', conv, es, em)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'axial compression') > 0, &
+                 'tensile_safety True refuses the march into the compression of the coupling: '//TRIM(em))
+    ! ... and the march to Phi = +45 deg, in tension, is not
+    CALL write_roll(-45.0_wp)
+    CALL CD_Run_Deck_Driver('tcpl_comp_dyn.dat', 'tcpl_comp_dyn', conv, es, em)
+    CALL require(es == CD_DECKDRV_OK .AND. conv, 'the march into tension passes tensile_safety True: '//TRIM(em))
+  END SUBROUTINE check_compression
+
+  SUBROUTINE write_roll(roll)
+    !! tcpl_motion.txt: End A held at its place and rolled by roll [deg] over 20 s on a C2
+    !! quintic, then held to 25 s.
+    REAL(wp), INTENT(IN) :: roll
+    INTEGER, PARAMETER :: NSTEP = 500
+    REAL(wp), PARAMETER :: TR = 20.0_wp, DTM = 0.05_wp
+    REAL(wp) :: t, tau, s
+    INTEGER :: u, k
+    OPEN (NEWUNIT=u, FILE='tcpl_motion.txt', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') '# time id x y z vx vy vz ax ay az roll'
+    DO k = 0, NSTEP
+      t = DTM*REAL(k, wp)
+      tau = MIN(t/TR, 1.0_wp)
+      s = 10.0_wp*tau**3 - 15.0_wp*tau**4 + 6.0_wp*tau**5
+      WRITE (u, '(ES16.8,A,ES16.8)') t, ' 1 0.0 0.0 -50.0 0 0 0 0 0 0 ', roll*s
+    END DO
+    CLOSE (u)
+  END SUBROUTINE write_roll
+
+  SUBROUTINE check_aggregate()
+    !! The stretched rigid-end case on the coupled aggregate: its twist carries the coupling's
+    !! -(K/GJ) sum (l - L) = -8 rad; a non-stepping update at the unchanged boundary must pass the
+    !! preflight's pi/2 bound.
+    TYPE(CD_AGG_ModuleType) :: agg
+    REAL(wp) :: pos(3, 1), vel(3, 1), acc(3, 1), load(3, 1), orient(3, 3, 1)
+    INTEGER :: es
+    CHARACTER(512) :: em
+    CALL write_case('tcpl_agg.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 0', KTT)
+    CALL CD_AGG_Init_From_Deck(agg, 'tcpl_agg.dat', 0.1_wp, es, em, host_orientation=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'the coupled cable builds on the aggregate: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetMovingPointMesh(agg, pos, vel, acc, load, es, em, orientation=orient)
+    CALL require(es == CD_AGG_OK, 'aggregate: the moving point mesh: '//TRIM(em))
+    CALL CD_AGG_UpdateStates_Moving(agg, pos, vel, acc, es, em, orientation=orient)
+    CALL require(es == CD_AGG_OK, 'aggregate: an update at the unchanged boundary is accepted: '//TRIM(em))
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE check_aggregate
+
+  SUBROUTINE straight_case(root, conn_a, conn_b, k, v, torsion, length, option)
     !! The straight case at TMax = 0: v = FairTen1, Torq1N1, Twist1, Ten1N21 (Twist and Torq zero
     !! for a line without torsion).
     CHARACTER(*), INTENT(IN) :: root, conn_a, conn_b
     REAL(wp), INTENT(IN) :: k
     REAL(wp), INTENT(OUT) :: v(4)
     LOGICAL, INTENT(IN), OPTIONAL :: torsion
+    REAL(wp), INTENT(IN), OPTIONAL :: length
+    CHARACTER(*), INTENT(IN), OPTIONAL :: option
     LOGICAL :: conv, tors
     INTEGER :: es, u, ios
     CHARACTER(512) :: em
@@ -193,7 +314,7 @@ CONTAINS
     tors = .TRUE.
     IF (PRESENT(torsion)) tors = torsion
     v = 0.0_wp
-    CALL write_case(root//'.dat', conn_a, conn_b, k, tors)
+    CALL write_case(root//'.dat', conn_a, conn_b, k, tors, length=length, option=option)
     CALL CD_Run_Deck_Driver(root//'.dat', root, conv, es, em)
     CALL require(es == CD_DECKDRV_OK .AND. conv, root//' runs: '//TRIM(em))
     IF (es /= CD_DECKDRV_OK) RETURN
@@ -212,14 +333,17 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE straight_case
 
-  SUBROUTINE write_case(path, conn_a, conn_b, k, torsion, dynamic)
-    !! A 99 m neutral cable from a Coupled End A to a Fixed End B 100 m apart along +x, 40 elements, TMax 0; the GJ
-    !! column carries GJ|K (k < 0 writes the plain GJ).
+  SUBROUTINE write_case(path, conn_a, conn_b, k, torsion, dynamic, length, option)
+    !! A 99 m (or length) neutral cable from a Coupled End A to a Fixed End B 100 m apart along +x, 40
+    !! elements, TMax 0; the GJ column carries GJ|K (k < 0 writes the plain GJ); option is one more
+    !! OPTIONS row.
     CHARACTER(*), INTENT(IN) :: path, conn_a, conn_b
     REAL(wp), INTENT(IN) :: k
     LOGICAL, INTENT(IN), OPTIONAL :: torsion, dynamic
+    REAL(wp), INTENT(IN), OPTIONAL :: length
+    CHARACTER(*), INTENT(IN), OPTIONAL :: option
     INTEGER :: u
-    CHARACTER(64) :: gjcol
+    CHARACTER(64) :: gjcol, lcol
     LOGICAL :: tors, dyn
     dyn = .FALSE.
     IF (PRESENT(dynamic)) dyn = dynamic
@@ -231,6 +355,8 @@ CONTAINS
       WRITE (gjcol, '(ES12.5,A,ES12.5)') GJ, '|', k
     END IF
     gjcol = remove_blanks(gjcol)
+    lcol = '99.0'
+    IF (PRESENT(length)) WRITE (lcol, '(F10.4)') length
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'torque-tension coupling gate'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -250,7 +376,7 @@ CONTAINS
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
-    WRITE (u, '(A)') '1 cab 99.0 40'
+    WRITE (u, '(A)') '1 cab '//TRIM(ADJUSTL(lcol))//' 40'
     WRITE (u, '(A)') '--- END CONNECTIONS ---'
     WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
     WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
@@ -259,6 +385,7 @@ CONTAINS
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
+    IF (PRESENT(option)) WRITE (u, '(A)') option
     IF (dyn) THEN
       WRITE (u, '(A)') '0.05 dtM'
       WRITE (u, '(A)') '25.0 TMax'
