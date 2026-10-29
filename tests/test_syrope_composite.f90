@@ -22,6 +22,9 @@ PROGRAM test_syrope_composite
   !!   7. A taut line of two Syrope sections whose first solve, at the placeholder alpha, overshoots
   !!      the top of the table: the update continues from the table's top secant and every
   !!      element lands on its OWC.
+  !!   8. A lightly loaded SYROPE IC rope near its working curve's zero-tension strain, where the
+  !!      plain secant update contracts slowly: the accelerated update lands every element on the
+  !!      Tmax0 working curve.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_Models, CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_Model, ONLY: CD_ModelType, CD_End_Model, CD_Get_Model_Tension
@@ -124,8 +127,12 @@ PROGRAM test_syrope_composite
   CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'above the top of its OWC table') > 0, &
                'a pretension above the OWC table fails closed by name: '//TRIM(em))
 
-  ! 7. an overshooting first solve on a taut two-section rope
-  CALL taut_overshoot()
+  ! 7. an overshooting first solve on a taut two-section rope: alpha (1.53e8 N) at the 3.5 % chord
+  ! strain gives 5.4 MN, above the table's 4.4 MN top, while the OWC there is about 2 MN
+  CALL taut_rope(20.7_wp, '22.42', 'a taut rope whose first solve overshoots the OWC table')
+  ! 8. a lightly loaded, nearly neutrally buoyant rope on the Tmax0 = 2.5 MN working curve, near its
+  ! zero-tension strain (about 53 kN), where the plain secant update contracts slowly
+  CALL taut_rope(20.2_wp, '16.70', 'a lightly loaded preconditioned rope', tmax0=2.5e6_wp)
 
   CALL finish()
 
@@ -160,28 +167,41 @@ CONTAINS
     CALL require(n > 100 .AND. dev <= 1.0e-7_wp*ft0, 'the dynamics start in the static equilibrium')
   END SUBROUTINE still_run
 
-  SUBROUTINE taut_overshoot()
-    !! 20 m of virgin rope in two 10 m Syrope sections between fixed points 20.7 m apart: alpha
-    !! (1.53e8 N) at the 3.5 % chord strain gives 5.4 MN, above the table's 4.4 MN top, while the
-    !! OWC there is about 2 MN.
+  SUBROUTINE taut_rope(span, mass, what, tmax0)
+    !! 20 m of rope in two 10 m Syrope sections between fixed points span apart, of the given mass
+    !! per length, a virgin rope or (tmax0 present) a SYROPE IC history: every element must land on
+    !! its rest curve (the OWC, or the Tmax0 working curve), inside the table.
+    REAL(wp), INTENT(IN) :: span
+    CHARACTER(*), INTENT(IN) :: mass, what
+    REAL(wp), INTENT(IN), OPTIONAL :: tmax0
     TYPE(CD_ModelType), ALLOCATABLE :: mt(:)
-    REAL(wp) :: ten(10), eps_k, wst
+    TYPE(CD_SyropeType) :: td
+    REAL(wp) :: ten(10), eps_k, wst, tcurve
     INTEGER :: u, k
+    CHARACTER(32) :: s_span, s_tmax0
+    WRITE (s_span, '(F8.3)') span
     OPEN (NEWUNIT=u, FILE='csyr_taut.dat', STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'taut two-section Syrope test deck'
     WRITE (u, '(A)') '--- LINE TYPES ---'
     WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
     WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
-    WRITE (u, '(A)') 'poly 0.1438 22.42 "SYROPE:csyr_settings.dat|1.53e8|23.12" 5.0e10|1.0e5 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') 'poly 0.1438 '//mass//' "SYROPE:csyr_settings.dat|1.53e8|23.12" 5.0e10|1.0e5 0.0 1.2 0.2 1.0 0.0'
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
-    WRITE (u, '(A)') '1 Fixed 20.7 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '1 Fixed '//TRIM(ADJUSTL(s_span))//' 0.0 -100.0 0 0 0 0'
     WRITE (u, '(A)') '2 Vessel 0.0 0.0 -100.0 0 0 0 0'
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
     WRITE (u, '(A)') '1 2 1 -'
+    IF (PRESENT(tmax0)) THEN
+      WRITE (s_tmax0, '(ES23.16)') tmax0
+      WRITE (u, '(A)') '--- SYROPE IC ---'
+      WRITE (u, '(A)') 'Line(s) Tmax0 Tmean0'
+      WRITE (u, '(A)') '(-) (N) (N)'
+      WRITE (u, '(A)') '1 '//TRIM(ADJUSTL(s_tmax0))//' 1.0e5'
+    END IF
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
@@ -196,23 +216,34 @@ CONTAINS
     WRITE (u, '(A)') '--- end ---'
     CLOSE (u)
     CALL CD_Init_Deck_Models('csyr_taut.dat', mt, es, em)
-    CALL require(es == CD_DECKDRV_OK, 'a taut rope whose first solve overshoots the OWC table builds: '//TRIM(em))
+    CALL require(es == CD_DECKDRV_OK, what//' builds: '//TRIM(em))
     IF (es /= CD_DECKDRV_OK) RETURN
+    IF (PRESENT(tmax0)) THEN
+      CALL CD_Syrope_Init(td, OWC_EPS, OWC_TEN, CD_SYROPE_WC_EXP, 0.20_wp, 1.50_wp, 1.53e8_wp, 23.12_wp, &
+                          5.0e10_wp, 1.0e5_wp, es, em)
+      CALL require(es == CD_SYROPE_OK, 'reference working curve: '//TRIM(em))
+    END IF
     ASSOCIATE (md => mt(1))
       CALL CD_Get_Model_Tension(md, ten, es, em)
       wst = 0.0_wp
       DO k = 1, md%n_elem
         eps_k = NORM2(md%q(3*md%elem_conn(2, k) - 2:3*md%elem_conn(2, k)) - &
                       md%q(3*md%elem_conn(1, k) - 2:3*md%elem_conn(1, k)))/md%l0(k) - 1.0_wp
-        wst = MAX(wst, ABS(owc(eps_k) - ten(k))/ten(k))
+        IF (PRESENT(tmax0)) THEN
+          CALL CD_Syrope_Static_Tension(td, tmax0, eps_k, tcurve, es, em)
+        ELSE
+          tcurve = owc(eps_k)
+        END IF
+        wst = MAX(wst, ABS(tcurve - ten(k))/ten(k))
       END DO
       PRINT '(A,ES12.5,A,ES12.5,A,ES10.3)', '  taut rope: tensions ', MINVAL(ten), ' to ', MAXVAL(ten), &
-        ' N, elements off their OWC by at most ', wst
+        ' N, elements off their rest curve by at most ', wst
       CALL require(wst <= 1.0e-8_wp .AND. MAXVAL(ten) < OWC_TEN(NOWC), &
-                   'every element of the taut rope sits on its OWC, inside the table')
+                   'every element of '//what//' sits on its rest curve, inside the table')
     END ASSOCIATE
     CALL CD_End_Model(mt(1), es, em)
-  END SUBROUTINE taut_overshoot
+    IF (PRESENT(tmax0)) CALL CD_Syrope_End(td)
+  END SUBROUTINE taut_rope
 
   SUBROUTINE tmax0_curve()
     !! SYROPE IC Tmax0 = 2.5 MN: the polyester's mean tension is the Tmax0 working curve's at its

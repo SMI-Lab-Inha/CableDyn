@@ -9281,9 +9281,9 @@ CONTAINS
     TYPE(CD_SyropeType), ALLOCATABLE :: tds(:), stype(:)
     INTEGER, ALLOCATABLE :: sec_type(:), sec_nseg(:), el_sec(:)
     LOGICAL, ALLOCATABLE :: sec_syr(:), sis(:)
-    REAL(wp), ALLOCATABLE :: sec_el(:), cand_el(:), sslow(:), stmax(:), t_static(:)
+    REAL(wp), ALLOCATABLE :: sec_el(:), cand_el(:), sslow(:), stmax(:), t_static(:), eps_prev(:), t_prev(:)
     REAL(wp) :: anchor(3), fairlead(3), eps0, t_ref, total_l0, t_hist, eps_bar, t_mean_static
-    REAL(wp) :: eps_e, change, secant, cand
+    REAL(wp) :: eps_e, change, secant, cand, eps_now, d_eps, d_t, eps_r, t_r, acc
     INTEGER :: ne, e, es, n_owc, iter, nsec, j, k, isec, st
     LOGICAL :: composite, converged
     CHARACTER(1024) :: em
@@ -9355,7 +9355,8 @@ CONTAINS
     ! finds is the rest state of the SAME constitutive state the dynamics start from.
     t_hist = CD_ZERO
     IF (ln%has_syrope_ic) t_hist = ln%syrope_tmax0
-    ALLOCATE (sec_el(ne), cand_el(ne), stype(ne), sis(ne), sslow(ne), stmax(ne), t_static(ne))
+    ALLOCATE (sec_el(ne), cand_el(ne), stype(ne), sis(ne), sslow(ne), stmax(ne), t_static(ne), eps_prev(ne), &
+              t_prev(ne))
     sis = .FALSE.
     sslow = CD_ZERO
     stmax = CD_ZERO
@@ -9450,7 +9451,31 @@ CONTAINS
           ELSE
             cand_el(e) = t_static(e)/eps_e
           END IF
+          ! the residual: how far the element's (strain, tension) sits off its curve
           change = MAX(change, ABS(cand_el(e) - sec_el(e))/sec_el(e))
+          ! The tension update contracts by 1 - (secant / tangent) of the curve, slowly where the
+          ! secant is far below the tangent (near a working curve's zero-tension strain). The
+          ! last two solves give the line's response at the element, a straight line in
+          ! (strain, tension) that falls as the secant stiffens (the tension rises, the strain
+          ! drops); its crossing with the rising curve is the next secant, a secant step on the
+          ! equilibrium. It is taken only beyond the tension update in the same direction and
+          ! at most 100 times as far, else the tension update stands.
+          eps_now = t_static(e)/sec_el(e)
+          IF (iter > 1) THEN
+            d_eps = eps_now - eps_prev(e)
+            d_t = t_static(e) - t_prev(e)
+            IF (d_eps*d_t < CD_ZERO) THEN
+              CALL response_root(isec, eps_now, t_static(e), d_eps, d_t, eps_r, t_r)
+              IF (eps_r > CD_ZERO .AND. t_r > CD_ZERO) THEN
+                acc = t_r/eps_r
+                IF ((acc - sec_el(e))*(cand_el(e) - sec_el(e)) > CD_ZERO .AND. &
+                    ABS(acc - sec_el(e)) >= ABS(cand_el(e) - sec_el(e)) .AND. &
+                    ABS(acc - sec_el(e)) <= 100.0_wp*ABS(cand_el(e) - sec_el(e))) cand_el(e) = acc
+              END IF
+            END IF
+          END IF
+          eps_prev(e) = eps_now
+          t_prev(e) = t_static(e)
         END DO
         IF (change <= 1.0e-10_wp) THEN
           converged = .TRUE.
@@ -9595,6 +9620,51 @@ CONTAINS
       END DO
       eps = 0.5_wp*(lo + hi)
     END SUBROUTINE rest_strain
+
+    SUBROUTINE response_root(isec_, eps_k, t_k, d_eps_, d_t_, eps_out, t_out)
+      !! The crossing of section isec_'s rest curve with the response line through (eps_k, t_k)
+      !! of direction (d_eps_, d_t_), d_eps_*d_t_ < 0: h(eps) = (T(eps) - t_k) d_eps_ -
+      !! (eps - eps_k) d_t_ is monotone over the table (the curve rises, the line falls), so
+      !! bisection over the table finds it. eps_out = -1 where the crossing lies outside the
+      !! table or the curve fails.
+      INTEGER, INTENT(IN) :: isec_
+      REAL(wp), INTENT(IN) :: eps_k, t_k, d_eps_, d_t_
+      REAL(wp), INTENT(OUT) :: eps_out, t_out
+      REAL(wp) :: lo, hi, h_lo, h_hi, h_mid, t_c
+      INTEGER :: it, n, es_c
+      CHARACTER(256) :: em_c
+      eps_out = -CD_ONE
+      t_out = CD_ZERO
+      n = SIZE(types(sec_type(isec_))%syrope_owc_strain)
+      lo = types(sec_type(isec_))%syrope_owc_strain(1)
+      hi = types(sec_type(isec_))%syrope_owc_strain(n)
+      CALL rest_tension(isec_, lo, t_c, es_c, em_c)
+      IF (es_c /= CD_SYROPE_OK) RETURN
+      h_lo = (t_c - t_k)*d_eps_ - (lo - eps_k)*d_t_
+      CALL rest_tension(isec_, hi, t_c, es_c, em_c)
+      IF (es_c /= CD_SYROPE_OK) RETURN
+      h_hi = (t_c - t_k)*d_eps_ - (hi - eps_k)*d_t_
+      IF (.NOT. (h_lo*h_hi <= CD_ZERO)) RETURN
+      DO it = 1, 200
+        eps_out = 0.5_wp*(lo + hi)
+        CALL rest_tension(isec_, eps_out, t_c, es_c, em_c)
+        IF (es_c /= CD_SYROPE_OK) THEN
+          eps_out = -CD_ONE
+          RETURN
+        END IF
+        h_mid = (t_c - t_k)*d_eps_ - (eps_out - eps_k)*d_t_
+        IF (h_mid*h_lo > CD_ZERO) THEN
+          lo = eps_out
+          h_lo = h_mid
+        ELSE
+          hi = eps_out
+        END IF
+        IF (hi - lo <= 4.0_wp*EPSILON(hi)*hi) EXIT
+      END DO
+      eps_out = 0.5_wp*(lo + hi)
+      CALL rest_tension(isec_, eps_out, t_out, es_c, em_c)
+      IF (es_c /= CD_SYROPE_OK) eps_out = -CD_ONE
+    END SUBROUTINE response_root
 
     LOGICAL FUNCTION strain_in_table(isec_, eps) RESULT(ok)
       !! Whether strain eps lies in section isec_'s OWC table (the interpolation clamps at its end
