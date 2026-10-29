@@ -471,11 +471,38 @@ and the end tangent together), so the virtual work of the body moment is exact; 
 line it is the torque along the line axis. The static body equilibrium uses the same moment and
 its stiffness :math:`\mathbf{a}\mathbf{a}^{\mathsf T}/C`, :math:`\mathbf{a} = \partial\Theta/\partial\boldsymbol{\omega}_A`.
 
+**Torque–tension coupling.** The helical armour of a power cable or a wire rope couples
+stretch and twist. With the coupling :math:`K` of the section (``GJ|K`` in the ``GJ`` column, see
+:doc:`driver_format`), the section laws are
+
+.. math::
+
+   T = EA\,\varepsilon + K\,\tau, \qquad M = GJ\,\tau + K\,\varepsilon ,
+
+with :math:`\tau` the material twist rate and :math:`EA\,GJ > K^2`. The torque is still uniform
+along the line, so the twist rate :math:`\tau = (M - K\varepsilon)/GJ` follows the strain
+pointwise and the condensation stays exact. The cable carries the axial stiffness
+:math:`EA - K^2/GJ` of a section free to twist, and the twist the ends see is
+
+.. math::
+
+   \Theta_{\text{eff}} = \Theta - \sum_e \frac{K_e}{GJ_e}\,(l_e - L_{0,e}), \qquad
+   M = \frac{\Phi - \Theta_{\text{eff}}}{C} ,
+
+where :math:`l_e = \int_e \lvert\mathbf{r}'\rvert\,\mathrm{d}s` is the stretched element
+length, integrated on the bending rule with its gradient and Hessian. Everything else above,
+including the rank-one tangent, the step limit and the stability test, holds with
+:math:`\Theta_{\text{eff}}`. The coupling part has no :math:`2\pi` ambiguity, so the first
+evaluation unwraps the holonomy alone. A line free to twist at one end carries no torque and
+the axial stiffness :math:`EA - K^2/GJ`. Restrained at both ends, a straight stretched line
+cannot twist, so it carries :math:`T = EA\,\varepsilon` and :math:`M = K\varepsilon`. The node
+tension adds the element's :math:`(K/GJ)\,M`, and the twist channels sum the element twists
+:math:`M L_0/GJ - (K/GJ)(l - L_0)`.
+
 **Limits.** Seabed friction does not resist twist, so the laid part of a line twists freely
 (the friction torque of a cable on the seabed can be comparable with the twist torque near
-touchdown). There is no torque–tension coupling of armoured cables or wire ropes, no
-anisotropic or pre-twisted section, and no self-contact: a loop that closes on itself is not
-resolved. The model is that of :ref:`Meier, Popp & Wall (2014) <ref-meier2014>` and
+touchdown). There is no anisotropic or pre-twisted section, and no self-contact: a loop that
+closes on itself is not resolved. The model is that of :ref:`Meier, Popp & Wall (2014) <ref-meier2014>` and
 :ref:`Bergou et al. (2008) <ref-bergou2008>` restricted to the isotropic, torque-free-span case;
 it is not a new formulation.
 

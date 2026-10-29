@@ -102,6 +102,7 @@ article's methods, are compared in
 | **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
 | **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
 | **T-10** | Torsion dynamics, restart and body torque | quasi-static torque, energy, uninterrupted run, pendulum | torque 2.2e-16; energy band 4.9e-4; restart bit-identical; pendulum 6.4e-5 | see [Torsion](#torsion) | Pass |
+| **T-12** | Torque–tension coupling | `T = EA ε + K τ`, `M = GJ τ + K ε` closed forms; kernel FD; march | ≤1e-7 against every closed form; kernel gradient 1.7e-10, Hessian 9.8e-11 | see [Torsion](#torsion) | Pass |
 | **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
 
 **Pass** meets the stated acceptance value. **Pass measured** records a measured
@@ -988,6 +989,16 @@ in parentheses).
   ±0.12°), and
   `openfast -restart` from 30 s reproduces all 1200 later rows of the OpenFAST and CableDyn
   outputs bit for bit. No full FAST.Farm run is part of this record.
+- **T-12 torque–tension coupling** (`torsion_coupling`). The effective twist
+  `Θ − Σ (K/GJ)(l_e − L_e)` of the kernel has the gradient and Hessian of its finite differences on
+  a curved line (1.7e-10, 9.8e-11). A straight neutral 99 m cable (EA 1e7 N, GJ 5e4 N·m², K 4e5 N·m)
+  stretched to 100 m gives the closed forms to the printed digits:
+  - both ends rigid in torsion: `T = EA ε` and `M = K ε`;
+  - free at one end: `T = (EA − K²/GJ) ε`;
+  - with a 90° pretwist: `T = EA ε + K Φ/L`, `M = GJ Φ/L + K ε` and `Twist1 = 90°`.
+
+  A 20 s march that moves End A 0.1 m away and rolls it −90° ends on the static values of that
+  state to 1e-7. `GJ|0` equals the uncoupled cable bit for bit, and `K² ≥ EA GJ` stops by name.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
@@ -998,7 +1009,8 @@ in parentheses).
   errors.
 
 Limits. The torsion model is quasi-static (no torsional inertia), takes no seabed friction
-against twist and no torque–tension coupling, and does not resolve self-contact. Dynamic loop
+against twist, and does not resolve self-contact. The torque–tension coupling is checked against
+closed forms only; there is no cross-code or experimental record of it. Dynamic loop
 formation (hockling) and a twisted slack catenary against OrcaFlex are not part of this record,
 and there is no experimental torsion case.
 

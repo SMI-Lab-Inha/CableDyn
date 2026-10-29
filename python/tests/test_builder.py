@@ -938,3 +938,51 @@ def test_title_is_read_only_after_the_banner() -> None:
     assert DeckModel.from_text(banner_only).title == "CableDyn deck"
     preamble = "preamble" + chr(10) + text
     assert DeckModel.from_text(preamble).title == "single chain catenary"
+
+
+def test_torque_tension_coupling_round_trips_in_the_gj_column(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    cable = model.add_line_type(
+        "cable",
+        diam=0.2,
+        mass=40.0,
+        ea=5.0e8,
+        ei=1.0e4,
+        gas=1.0e8,
+        gj=(1.0e4, 2.0e5),
+        irt=0.1,
+        irn=0.05,
+    )
+    assert cable.gj == (1.0e4, 2.0e5)
+    target = model.save(tmp_path / "coupled.dat")
+    deck = DeckFile.read(target)
+    row = next(r for r in deck.line_types if r.tokens[0] == "cable")
+    assert [float(v) for v in row.tokens[7].split("|")] == [1.0e4, 2.0e5]
+    loaded = DeckModel.load(target)
+    assert next(t for t in loaded.line_types if t.name == "cable").gj == (1.0e4, 2.0e5)
+
+
+@pytest.mark.parametrize(
+    ("gj", "ei", "message"),
+    [
+        ("1.0e4|1.0e7", "1.0e4", r"K\^2 < EA GJ"),
+        ("1.0e4|1.0e3", "0.0", "needs a finite-EI cable"),
+        ("1.0e4|1.0e3|5.0", "1.0e4", r"takes GJ or GJ\|K"),
+    ],
+)
+def test_torque_tension_coupling_refusals(tmp_path: Path, gj: str, ei: str, message: str) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "cable", diam=0.2, mass=40.0, ea=5.0e8, ei=1.0e4, gas=1.0e8, gj=1.0e4, irt=0.1, irn=0.05
+    )
+    text = model.to_text(validate=False)
+    bad = re.sub(
+        r"^cable\s.*$",
+        f"cable 0.2 40.0 5.0e8 0.0 {ei} 1.0e8 {gj} 0.1 0.05 0.0 0.0 0.0 0.0",
+        text,
+        flags=re.M,
+    )
+    path = tmp_path / "bad.dat"
+    path.write_text(bad, encoding="utf-8")
+    with pytest.raises(DeckFormatError, match=message):
+        DeckFile.read(path)

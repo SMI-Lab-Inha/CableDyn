@@ -85,7 +85,7 @@ Line and constitutive capability
      - Supported with limits
      - condensed isotropic torsion (uniform torque, quasi-static: no torsional inertia) of a
        finite-EI line restrained in torsion at both ends (``END CONNECTIONS`` torsion columns,
-       explicit ``GJ``), in statics with a stability check and buckling descent, and in dynamics
+       explicit ``GJ``), with torque–tension coupling (``GJ|K``), in statics with a stability check and buckling descent, and in dynamics
        with turning Rigid6 bodies, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll
        column standalone, and with the platform orientation in coupled OpenFAST and FAST.Farm
        runs (torque returned to the platform, ``PtfmInit``, checkpoints; see

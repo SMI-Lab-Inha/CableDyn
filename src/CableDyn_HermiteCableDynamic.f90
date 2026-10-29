@@ -78,7 +78,8 @@ MODULE CableDyn_HermiteCableDynamic
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
                                      CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Validate, CD_HTORS_OK, &
                                      CD_HTORS_MAX_STEP, CD_HermiteTorsionWorkType, CD_HermiteTorsion_Work_Init, &
-                                     CD_HermiteTorsion_Work_End, CD_HermiteTorsion_Work_Add_Hessian
+                                     CD_HermiteTorsion_Work_End, CD_HermiteTorsion_Work_Add_Hessian, &
+                                     CD_HermiteTorsion_Element_Stretch
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_in_parallel
   IMPLICIT NONE
@@ -91,6 +92,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_EndConnection
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion
   PUBLIC :: CD_HermiteCable_Dyn_Torsion_State
+  PUBLIC :: CD_HermiteCable_Dyn_Element_Twist
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Drive
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Frames
   PUBLIC :: CD_HermiteCable_Dyn_EndConnection_Moment
@@ -4779,7 +4781,8 @@ CONTAINS
     CHARACTER(1024) :: em
     theta = model%torsion%theta
     CALL CD_HermiteTorsion_Line(q_cfg, model%l0, ends, raw, model%tors_gq, es, em, &
-                                quadrature_order=model%torsion%quadrature_order, work=model%tors_work)
+                                couple=model%torsion%couple, quadrature_order=model%torsion%quadrature_order, &
+                                work=model%tors_work)
     IF (es /= CD_HTORS_OK) THEN
       ErrStat = CD_HCDYN_NOCONVERGE
       ErrMsg = 'torsion: '//TRIM(em)
@@ -5632,7 +5635,7 @@ CONTAINS
     IF (model%torsion%active) THEN
       CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCDYN_OK) RETURN
-      comp = model%torsion%end_compliance(2)
+      comp = mt*model%torsion%end_compliance(2)
     END IF
     DO a = model%nn, 1, -1
       IF (a < model%nn) THEN
@@ -5655,9 +5658,9 @@ CONTAINS
         t = -unit_tangent(model, a)
         d1 = d1 - DOT_PRODUCT(d1, t)*t
         d1 = d1/NORM2(d1)
-        IF (model%torsion%active) comp = comp + model%l0(e)/model%torsion%gj(e)
+        IF (model%torsion%active) comp = comp + element_twist(model, e, mt)
       END IF
-      phi = mt*comp
+      phi = comp
       d = COS(phi)*d1 + SIN(phi)*cross3_local(t, d1)
       IF (PRESENT(frame)) frame(:, a) = d
       kx(a) = DOT_PRODUCT(kvec(:, a), d)
@@ -6134,7 +6137,9 @@ CONTAINS
     !!
     !! The condensed torque of a line restrained in torsion is not part of g_e: it adds a shear
     !! normal to the tangent and does no work on bending rotations, so tension and bend moment
-    !! are its axial and normal parts without it. Read-only.
+    !! are its axial and normal parts without it. Under torque-tension coupling the tension adds
+    !! the element's (K/GJ) M_t (coupling_tension), the axial force K tau that the kernel's
+    !! EA - K^2/GJ does not carry. Read-only.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
@@ -6173,7 +6178,7 @@ CONTAINS
       IF (PRESENT(segment_tension)) THEN
         ta = unit_tangent(model, e)
         tb = unit_tangent(model, e + 1)
-        segment_tension(e) = 0.5_wp*(DOT_PRODUCT(ta, fp) + DOT_PRODUCT(tb, g(7:9)))
+        segment_tension(e) = 0.5_wp*(DOT_PRODUCT(ta, fp) + DOT_PRODUCT(tb, g(7:9))) + coupling_tension(model, e)
       END IF
       fm = g(7:9); mm = g(10:12)
     END DO
@@ -6199,6 +6204,58 @@ CONTAINS
       IF (PRESENT(x)) ok = SIZE(x) == n
     END FUNCTION size_ok
   END SUBROUTINE CD_HermiteCable_Dyn_Node_Recovery
+
+  PURE REAL(wp) FUNCTION coupling_tension(model, e) RESULT(tc)
+    !! The axial force (K/GJ) M_t of element e of a line restrained in torsion under torque-tension
+    !! coupling (T = EA eps + K tau with tau = (M_t - K eps)/GJ, the kernel carrying the
+    !! EA - K^2/GJ part); zero without coupling, without torsion, or outside the elements.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    tc = CD_ZERO
+    IF (e < 1 .OR. e > model%ne) RETURN
+    IF (.NOT. model%torsion%active) RETURN
+    IF (.NOT. ALLOCATED(model%torsion%couple)) RETURN
+    tc = model%torsion%couple(e)*model%torsion%torque
+  END FUNCTION coupling_tension
+
+  REAL(wp) FUNCTION element_twist(model, e, mt) RESULT(tw)
+    !! The twist of element e under the torque mt: mt l0/GJ, less the twist its stretch takes up
+    !! under torque-tension coupling, (K/GJ)(l_e - l0) [rad].
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    REAL(wp), INTENT(IN) :: mt
+    REAL(wp) :: qe(12), ls
+    tw = mt*model%l0(e)/model%torsion%gj(e)
+    IF (.NOT. ALLOCATED(model%torsion%couple)) RETURN
+    IF (.NOT. ABS(model%torsion%couple(e)) > CD_ZERO) RETURN
+    CALL gather_elem(model, e, qe)
+    ls = CD_HermiteTorsion_Element_Stretch(qe, model%l0(e), model%torsion%quadrature_order)
+    tw = tw - model%torsion%couple(e)*(ls - model%l0(e))
+  END FUNCTION element_twist
+
+  SUBROUTINE CD_HermiteCable_Dyn_Element_Twist(model, twist, ErrStat, ErrMsg)
+    !! The twist of every element of a line restrained in torsion at the committed state [rad]:
+    !! M_t l0/GJ less, under torque-tension coupling, the twist the element's stretch takes up.
+    !! Element order is the model's (End B first); zero for a line without torsion.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: twist(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: th, mt
+    INTEGER :: e
+    twist = CD_ZERO
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (SIZE(twist) /= model%ne) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Element_Twist: twist must have one entry per element'; RETURN
+    END IF
+    IF (.NOT. model%torsion%active) RETURN
+    CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_HCDYN_OK) RETURN
+    DO e = 1, model%ne
+      twist(e) = element_twist(model, e, mt)
+    END DO
+  END SUBROUTINE CD_HermiteCable_Dyn_Element_Twist
 
   SUBROUTINE node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg, &
                          sleeve_moment, curvature_vector)
@@ -6234,7 +6291,7 @@ CONTAINS
       IF (ErrStat /= CD_HCDYN_OK) RETURN
       tension = NORM2(fend)
     ELSE
-      tension = DOT_PRODUCT(t, f)
+      tension = DOT_PRODUCT(t, f) + 0.5_wp*(coupling_tension(model, node - 1) + coupling_tension(model, node))
     END IF
     m_perp = m - DOT_PRODUCT(m, t)*t
     section_moment = NORM2(m_perp)
@@ -6911,10 +6968,10 @@ CONTAINS
     ALLOCATE (g(model%ndof))
     IF (PRESENT(q_eval)) THEN
       CALL CD_HermiteTorsion_Line(q_eval, model%l0, model%torsion%ends, raw, g, es, em, end_grad=eg, &
-                                  quadrature_order=model%torsion%quadrature_order)
+                                  couple=model%torsion%couple, quadrature_order=model%torsion%quadrature_order)
     ELSE
       CALL CD_HermiteTorsion_Line(model%q, model%l0, model%torsion%ends, raw, g, es, em, end_grad=eg, &
-                                  quadrature_order=model%torsion%quadrature_order)
+                                  couple=model%torsion%couple, quadrature_order=model%torsion%quadrature_order)
     END IF
     IF (es /= CD_HTORS_OK) THEN
       ErrStat = CD_HCDYN_NOCONVERGE
@@ -6980,7 +7037,8 @@ CONTAINS
     IF (.NOT. ALLOCATED(model%tors_c_q) .OR. .NOT. ALLOCATED(model%tors_gq)) RETURN
     IF (SIZE(model%tors_c_q) /= SIZE(model%q) .OR. model%tors_work%nn /= model%nn) RETURN
     CALL CD_HermiteTorsion_Line(model%q, model%l0, model%torsion%ends, raw, model%tors_gq, es, em, end_grad=eg, &
-                                quadrature_order=model%torsion%quadrature_order, work=model%tors_work)
+                                couple=model%torsion%couple, quadrature_order=model%torsion%quadrature_order, &
+                                work=model%tors_work)
     IF (es /= CD_HTORS_OK) THEN
       ErrStat = CD_HCDYN_NOCONVERGE
       ErrMsg = 'torsion: '//TRIM(em)
@@ -7859,12 +7917,14 @@ CONTAINS
     IF (model%tors_use_step) THEN
       phi = model%tors_step_phi
       CALL CD_HermiteTorsion_Line(q_cfg, model%l0, model%tors_step_ends, raw, g, es, em, &
-                                  quadrature_order=model%torsion%quadrature_order, work=model%tors_work, &
+                                  couple=model%torsion%couple, quadrature_order=model%torsion%quadrature_order, &
+                                  work=model%tors_work, &
                                   keep_hessian=want_tangent)
     ELSE
       phi = model%torsion%phi
       CALL CD_HermiteTorsion_Line(q_cfg, model%l0, model%torsion%ends, raw, g, es, em, &
-                                  quadrature_order=model%torsion%quadrature_order, work=model%tors_work, &
+                                  couple=model%torsion%couple, quadrature_order=model%torsion%quadrature_order, &
+                                  work=model%tors_work, &
                                   keep_hessian=want_tangent)
     END IF
     IF (es /= CD_HTORS_OK) THEN

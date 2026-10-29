@@ -51,6 +51,7 @@ MODULE CableDyn_HermiteCableStatic
   USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK
   USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_HYDRO_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
+                                     CD_HermiteTorsion_Coupling_Twist, &
                                      CD_HermiteTorsion_Accept, CD_HermiteTorsion_Compliance, &
                                      CD_HermiteTorsion_Validate, CD_HermiteTorsion_Bordered_Solve, &
                                      CD_HermiteTorsion_Inertia, CD_HermiteTorsion_Lowest_Mode, CD_HTORS_OK, &
@@ -1735,11 +1736,11 @@ CONTAINS
       ecm = ''
       IF (skip_tangent) THEN
         CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, &
-                                    quadrature_order=torsion%quadrature_order)
+                                    couple=torsion%couple, quadrature_order=torsion%quadrature_order)
       ELSE
         tors_h = CD_ZERO
         CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, hband=tors_h, &
-                                    quadrature_order=torsion%quadrature_order)
+                                    couple=torsion%couple, quadrature_order=torsion%quadrature_order)
       END IF
       IF (ks /= CD_HTORS_OK) THEN
         ecs = CD_HCSTAT_NOCONVERGE
@@ -1804,7 +1805,7 @@ CONTAINS
       DO k = 0, 30
         q = tors_q + sfac*dq
         CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_gt, ks, km, &
-                                    quadrature_order=torsion%quadrature_order)
+                                    couple=torsion%couple, quadrature_order=torsion%quadrature_order)
         IF (ks == CD_HTORS_OK) THEN
           CALL CD_HermiteTorsion_Accept(tors_theta_acc, raw, th, ks, km)
           IF (ks == CD_HTORS_OK) THEN
@@ -1846,7 +1847,8 @@ CONTAINS
       torsion%stable = .FALSE.
       torsion%n_negative = 0
       torsion%lambda_min = CD_ZERO
-      CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, quadrature_order=torsion%quadrature_order)
+      CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, &
+                                  couple=torsion%couple, quadrature_order=torsion%quadrature_order)
       IF (ks /= CD_HTORS_OK) THEN
         ecs = CD_HCSTAT_NOCONVERGE
         ecm = 'CD_HermiteCable_Static_Solve: torsion at the untwisted equilibrium: '//TRIM(km)
@@ -1863,6 +1865,11 @@ CONTAINS
                 'state (has_theta false) with theta_hint on the intended branch'
           RETURN
         END IF
+      ELSE IF (ALLOCATED(torsion%couple)) THEN
+        ! the hint is the holonomy's; the coupling twist is unambiguous
+        tors_theta_acc = CD_HermiteTorsion_Unwrap(raw, torsion%theta_hint + &
+                                                  CD_HermiteTorsion_Coupling_Twist(q, l0, torsion%couple, &
+                                                                                   torsion%quadrature_order))
       ELSE
         tors_theta_acc = CD_HermiteTorsion_Unwrap(raw, torsion%theta_hint)
       END IF

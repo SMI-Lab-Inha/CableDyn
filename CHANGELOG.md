@@ -30,6 +30,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and `SYROPE IC` applies to every Syrope section of the line. On a 400 m polyester section
   between chains every element starts on its OWC to 2e-11, and a still run keeps the fairlead
   tension. Example `composite_chain_syrope_chain.dat`, on a moving vessel.
+- Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
+  `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
+  `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.
+  A line restrained in torsion adds the stretch's share of the twist, `−Σ (K/GJ)(l − L)`, to its
+  condensed torque, in statics and dynamics and on every route that carries torsion. The node
+  tension and the twist channels include the coupling. A stretched straight cable reproduces
+  `T = EA ε`, `M = K ε` between rigid ends and `T = (EA − K²/GJ) ε` with a free end. `GJ|0` is the
+  uncoupled cable bit for bit. The Python deck reader and builder take `GJ|K` (builder
+  `gj=(GJ, K)`).
 - Section-frame curvature channels `CurvX<L>N<J>` and `CurvY<L>N<J>` on finite-EI lines: the
   curvature vector on the cable's cross-section axes, for the fatigue of an armour wire or
   conductor at a fixed point of the section. The axes start at End A from the end connection

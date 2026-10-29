@@ -109,7 +109,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_VIV_Node_Lift, &
                                           CD_HermiteCable_Dyn_Set_Control_Seabed, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
-                                          CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State
+                                          CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State, &
+                                          CD_HermiteCable_Dyn_Element_Twist
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
                                      CD_HTORS_MAX_TWIST
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
@@ -362,6 +363,9 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: diam = CD_ZERO, mass = CD_ZERO, ea = CD_ZERO
     REAL(wp) :: ba = CD_ZERO, ei = CD_ZERO
     REAL(wp) :: gas = CD_ZERO, gj = CD_ZERO
+    ! torque-tension coupling K [N m] of the 14-column row's GJ column (GJ|K): the axial force
+    ! T = EA eps + K tau and the torque M = GJ tau + K eps of a finite-EI cable
+    REAL(wp) :: ktt = CD_ZERO
     REAL(wp) :: i_rt = CD_ZERO, i_rn = CD_ZERO
     REAL(wp) :: cdn = CD_ZERO, cdt = CD_ZERO, can = CD_ZERO, cat = CD_ZERO
     ! Viscoelastic stiffness (MoorDyn ElasticMod): the EA column's bar-separated
@@ -1525,7 +1529,8 @@ CONTAINS
   END SUBROUTINE init_finite_deck_models
 
   SUBROUTINE init_one_finite_model(ln, sections, types, points, opts, deck_model, ErrStat, ErrMsg, bathymetry)
-    !! Initialize one finite-EI Cosserat dynamic model from a deck LINE.
+    !! Initialize one finite-EI Cosserat dynamic model from a deck LINE. Torque-tension coupling
+    !! (GJ|K) is a cubic-Hermite cable feature and fails closed here.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
@@ -1570,6 +1575,17 @@ CONTAINS
                 'END CONNECTIONS; use a Fixed End B')
       RETURN
     END IF
+    BLOCK
+      INTEGER :: js
+      DO js = 1, SIZE(sections)
+        IF (sections(js)%line_id /= ln%id) CYCLE
+        IF (ABS(types(sections(js)%ltype)%ktt) > CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'finite-EI two-moving-end compatibility solver does not support '// &
+                    'torque-tension coupling (GJ|K); use a Fixed End B')
+          RETURN
+        END IF
+      END DO
+    END BLOCK
     pa = find_point(points, ln%nodeB)
     pb = find_point(points, ln%nodeA)
     IF (pa < 1 .OR. pb < 1) THEN
@@ -1720,6 +1736,7 @@ CONTAINS
 
     INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:), dynamic_fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), ei(:), gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
+    REAL(wp), ALLOCATABLE :: ktt_in(:)
     REAL(wp), ALLOCATABLE :: gas(:), gj(:), rho_a(:), i_rt(:), i_rn(:), w(:), nodes_ref(:, :), q0(:), q_static(:)
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
@@ -1963,7 +1980,7 @@ CONTAINS
     IF (as_laid_off_plane()) require_3d_static = .TRUE.
 
     CALL build_finite_section_mesh(ln, sections, types, conn, l0, ea, mpl, diam, ei, &
-                                   gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg)
+                                   gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg, ktt=ktt_in)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     IF (ALLOCATED(ln%stf)) THEN
       ALLOCATE (ei_cable(SIZE(l0)))
@@ -3297,6 +3314,11 @@ CONTAINS
       tors%quadrature_order = opts%bending_quadrature_order
       tors%gj = gj_in
       IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%gj, l0, l0_am)
+      ! torque-tension coupling: K/GJ per element (left unallocated without coupling)
+      IF (ANY(ABS(ktt_in) > CD_ZERO)) THEN
+        tors%couple = ktt_in/gj_in
+        IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%couple, l0, l0_am)
+      END IF
       DO k = 1, 2
         dvec = endconn_d0_local(:, k)/NORM2(endconn_d0_local(:, k))
         IF (k == 1) THEN
@@ -9830,10 +9852,12 @@ CONTAINS
   END SUBROUTINE end_hermite_cables
 
   SUBROUTINE build_finite_section_mesh(ln, sections, types, conn, l0, ea, mpl, diam, ei, gas, gj, i_rt, i_rn, &
-                                       ErrStat, ErrMsg)
+                                       ErrStat, ErrMsg, ktt)
     !! Build a sectioned finite-EI mesh directly from deck sections. The EI=0
     !! CableDyn_Line mesh builder intentionally rejects EI>0, so this path owns
-    !! the simple serial connectivity needed by the Cosserat model.
+    !! the simple serial connectivity needed by the Cosserat model. A type with torque-tension
+    !! coupling K gives its elements the axial stiffness EA - K^2/GJ (the stretch twists the
+    !! cable; a line restrained in torsion adds the rest through its torque) and, with ktt, its K.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
@@ -9842,8 +9866,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE, INTENT(OUT) :: gas(:), gj(:), i_rt(:), i_rn(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE, INTENT(OUT), OPTIONAL :: ktt(:)
 
     INTEGER :: n_elem, i, j, e, tidx
+    REAL(wp), ALLOCATABLE :: kc(:)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -9856,7 +9882,7 @@ CONTAINS
       RETURN
     END IF
     ALLOCATE (conn(2, n_elem), l0(n_elem), ea(n_elem), mpl(n_elem), diam(n_elem), ei(n_elem))
-    ALLOCATE (gas(n_elem), gj(n_elem), i_rt(n_elem), i_rn(n_elem))
+    ALLOCATE (gas(n_elem), gj(n_elem), i_rt(n_elem), i_rn(n_elem), kc(n_elem))
     e = 0
     DO i = 1, SIZE(sections)
       IF (sections(i)%line_id /= ln%id) CYCLE
@@ -9873,6 +9899,8 @@ CONTAINS
         gj(e) = types(tidx)%gj
         i_rt(e) = types(tidx)%i_rt
         i_rn(e) = types(tidx)%i_rn
+        kc(e) = types(tidx)%ktt
+        IF (ABS(kc(e)) > CD_ZERO) ea(e) = ea(e) - kc(e)**2/gj(e)
       END DO
     END DO
     IF (ALLOCATED(ln%stf)) CALL CD_Stiffener_Overlay(ln%stf, l0, diam, ei=ei, mpl=mpl)
@@ -9885,6 +9913,7 @@ CONTAINS
     gj = gj(n_elem:1:-1)
     i_rt = i_rt(n_elem:1:-1)
     i_rn = i_rn(n_elem:1:-1)
+    IF (PRESENT(ktt)) ktt = kc(n_elem:1:-1)
   END SUBROUTINE build_finite_section_mesh
 
   SUBROUTINE finite_raw_ba_array(ln, sections, types, ba_raw)
@@ -13321,6 +13350,35 @@ CONTAINS
     END IF
   END SUBROUTINE sniff_types_header
 
+  SUBROUTINE parse_gj_column(gj_str, t, ErrStat, ErrMsg)
+    !! The 14-column row's GJ column: GJ, or GJ|K with K the torque-tension coupling [N m]
+    !! (M = GJ tau + K eps, T = EA eps + K tau; K > 0 when stretching the cable twists it in the
+    !! sense its positive torque turns).
+    CHARACTER(*), INTENT(IN) :: gj_str
+    TYPE(DeckLineType), INTENT(INOUT) :: t
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: bar, ios
+    ErrStat = 0; ErrMsg = ''
+    t%ktt = CD_ZERO
+    bar = INDEX(gj_str, '|')
+    IF (bar == 0) THEN
+      READ (gj_str, *, IOSTAT=ios) t%gj
+    ELSE
+      IF (INDEX(gj_str(bar + 1:), '|') > 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" takes GJ or GJ|K'); RETURN
+      END IF
+      READ (gj_str(1:bar - 1), *, IOSTAT=ios) t%gj
+      IF (ios == 0) READ (gj_str(bar + 1:), *, IOSTAT=ios) t%ktt
+    END IF
+    IF (ios /= 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" is not GJ or GJ|K'); RETURN
+    END IF
+    IF (.NOT. (IEEE_IS_FINITE(t%gj) .AND. IEEE_IS_FINITE(t%ktt))) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" must be finite'); RETURN
+    END IF
+  END SUBROUTINE parse_gj_column
+
   SUBROUTINE append_type(line, types, nt, stock_cols, ErrStat, ErrMsg)
     CHARACTER(*), INTENT(IN) :: line
     TYPE(DeckLineType), ALLOCATABLE, INTENT(INOUT) :: types(:)
@@ -13331,7 +13389,7 @@ CONTAINS
     TYPE(DeckLineType) :: t
     ! EA may hold SYROPE:<settings path>|alpha|beta, so it gets a path-length buffer
     CHARACTER(CD_DECK_PATHLEN) :: ea_str
-    CHARACTER(NAMELEN) :: ba_str
+    CHARACTER(NAMELEN) :: ba_str, gj_str
     INTEGER :: ios, ntok
     ErrStat = 0; ErrMsg = ''
     ntok = count_tokens(line)
@@ -13373,11 +13431,15 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'the 14-column LINE TYPES row is a CableDyn form (... Cd_n Cd_t '// &
                   'Ca_n Ca_t); it does not combine with a stock-order header (Cd Ca CdAx CaAx)'); RETURN
       END IF
-      READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%gas, t%gj, t%i_rt, t%i_rn, &
+      READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%gas, gj_str, t%i_rt, t%i_rn, &
         t%cdn, t%cdt, t%can, t%cat
     END IF
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'malformed LINE TYPES row'); RETURN
+    END IF
+    IF (ntok == 14) THEN
+      CALL parse_gj_column(gj_str, t, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) RETURN
     END IF
     ! Drag and added-mass coefficients are magnitudes; a negative value would inject
     ! energy. Rejected here, with the row, on every route (static decks included).
@@ -13390,6 +13452,21 @@ CONTAINS
     IF (ntok == 11 .OR. ntok == 13) THEN
       CALL check_viv_columns(t, ErrStat, ErrMsg)
       IF (ErrStat /= 0) RETURN
+    END IF
+    IF (ABS(t%ktt) > CD_ZERO) THEN
+      ! the coupled section energy 1/2 (EA eps^2 + 2 K eps tau + GJ tau^2) must stay positive
+      IF (.NOT. (t%ei > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': torque-tension coupling (GJ|K) needs a '// &
+                  'finite-EI cable (EI > 0)'); RETURN
+      END IF
+      IF (t%is_syrope .OR. t%elastic_mod > 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': torque-tension coupling (GJ|K) needs a '// &
+                  'linear-elastic EA'); RETURN
+      END IF
+      IF (.NOT. (t%gj > CD_ZERO .AND. t%ea*t%gj > t%ktt**2)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': torque-tension coupling needs GJ > 0 and '// &
+                  'K^2 < EA GJ'); RETURN
+      END IF
     END IF
     CALL grow_types(types, nt)
     nt = nt + 1; types(nt) = t
@@ -34511,11 +34588,17 @@ CONTAINS
       ! (public node 1, the last internal node), as the Torq<L>N<J> and Twist<L>N<J> channels
       rl%val(CD_RQ_TORQUE, :) = cable%line%torsion%torque
       rl%val(CD_RQ_TWIST, 1) = CD_ZERO
-      DO j = 2, nn
-        inode = nn + 1 - j
-        rl%val(CD_RQ_TWIST, j) = rl%val(CD_RQ_TWIST, j - 1) + cable%line%torsion%torque* &
-                                 cable%line%l0(inode)/cable%line%torsion%gj(inode)*45.0_wp/QUARTER_PI
-      END DO
+      BLOCK
+        REAL(wp) :: etw(cable%line%ne)
+        CALL CD_HermiteCable_Dyn_Element_Twist(cable%line, etw, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'range-graph twist recovery failed: '//TRIM(em)); RETURN
+        END IF
+        DO j = 2, nn
+          inode = nn + 1 - j
+          rl%val(CD_RQ_TWIST, j) = rl%val(CD_RQ_TWIST, j - 1) + etw(inode)*45.0_wp/QUARTER_PI
+        END DO
+      END BLOCK
     END IF
 
   CONTAINS
@@ -35409,15 +35492,22 @@ CONTAINS
         END IF
         IF (kind == 9) THEN
           val = mt
-        ELSE IF (kind == 11) THEN
-          val = mt*CD_HermiteTorsion_Compliance(cable%line%torsion, cable%line%l0)*45.0_wp/QUARTER_PI
         ELSE IF (cable%line%torsion%active) THEN
-          ! End A is the last internal node: the cable's own twist over the elements inode..ne
-          val = CD_ZERO
-          DO e = inode, nelem
-            val = val + cable%line%l0(e)/cable%line%torsion%gj(e)
-          END DO
-          val = mt*val*45.0_wp/QUARTER_PI
+          ! the element twists (M_t l0/GJ, less the stretch's under torque-tension coupling);
+          ! kind 11 the whole line with its end compliances, kind 10 the cable's own twist from
+          ! End A, the last internal node, over the elements inode..ne
+          BLOCK
+            REAL(wp) :: etw(nelem)
+            CALL CD_HermiteCable_Dyn_Element_Twist(cable%line, etw, es, em)
+            IF (es /= CD_HCDYN_OK) THEN
+              CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+            END IF
+            IF (kind == 11) THEN
+              val = (mt*SUM(cable%line%torsion%end_compliance) + SUM(etw))*45.0_wp/QUARTER_PI
+            ELSE
+              val = SUM(etw(inode:nelem))*45.0_wp/QUARTER_PI
+            END IF
+          END BLOCK
         END IF
       END BLOCK
     CASE (8)   ! azimuth: local-frame azimuth plus the cable's frame heading, wrapped

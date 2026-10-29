@@ -2654,6 +2654,8 @@ class DeckFile:
         viv_type_names: set[str] = set()
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
+                if len(row.tokens) == 14 and index == 7:
+                    continue  # the GJ column, GJ or GJ|K, is read below
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
             ea_parts = row.tokens[3].split("|")
             ba_parts = row.tokens[4].split("|")
@@ -2740,10 +2742,21 @@ class DeckFile:
             if ei > 0.0 and (is_syrope or len(ea_parts) > 1):
                 model = "Syrope" if is_syrope else "viscoelastic stiffness"
                 raise DeckFormatError(f"{self._at(row)}: {model} is not supported with EI > 0")
+            gj_value = 0.0
             if len(row.tokens) == 14:
+                # the GJ column is GJ or GJ|K (K the torque-tension coupling, N m)
+                gj_parts = row.tokens[7].split("|")
+                if len(gj_parts) > 2:
+                    raise DeckFormatError(
+                        f'{self._at(row)}: LINE TYPES GJ column "{row.tokens[7]}" takes GJ or GJ|K'
+                    )
+                gj_value = numeric(gj_parts[0], row, "GJ")
+                ktt = numeric(gj_parts[1], row, "GJ|K coupling") if len(gj_parts) == 2 else 0.0
                 finite_ei = [
-                    numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
-                    for index in range(6, 10)
+                    numeric(row.tokens[6], row, "LINE TYPES column 7"),
+                    gj_value,
+                    numeric(row.tokens[8], row, "LINE TYPES column 9"),
+                    numeric(row.tokens[9], row, "LINE TYPES column 10"),
                 ]
                 if any(value != 0.0 for value in finite_ei) and any(
                     value <= 0.0 for value in finite_ei
@@ -2751,15 +2764,30 @@ class DeckFile:
                     raise DeckFormatError(
                         f"{self._at(row)}: explicit GAs/GJ/Irt/Irn must all be positive"
                     )
+                if ktt != 0.0:
+                    name = row.tokens[0]
+                    if not ei > 0.0:
+                        raise DeckFormatError(
+                            f"{self._at(row)}: LINE TYPES {name}: torque-tension coupling (GJ|K) "
+                            "needs a finite-EI cable (EI > 0)"
+                        )
+                    if is_syrope or len(ea_parts) > 1:
+                        raise DeckFormatError(
+                            f"{self._at(row)}: LINE TYPES {name}: torque-tension coupling (GJ|K) "
+                            "needs a linear-elastic EA"
+                        )
+                    if not (gj_value > 0.0 and ea_static * gj_value > ktt * ktt):
+                        raise DeckFormatError(
+                            f"{self._at(row)}: LINE TYPES {name}: torque-tension coupling needs "
+                            "GJ > 0 and K^2 < EA GJ"
+                        )
             line_type_meta[row.tokens[0].lower()] = (
                 numeric(row.tokens[1], row, "Diam"),
                 numeric(row.tokens[2], row, "Mass"),
                 ea_static,
                 ei,
             )
-            line_type_gj[row.tokens[0].lower()] = (
-                numeric(row.tokens[7], row, "GJ") if len(row.tokens) == 14 else 0.0
-            )
+            line_type_gj[row.tokens[0].lower()] = gj_value
             # Syrope keeps its BA_s on the working-curve model (native BA slot = 0)
             line_type_scales[row.tokens[0].lower()] = (
                 0.0 if is_syrope else ba_values[0],

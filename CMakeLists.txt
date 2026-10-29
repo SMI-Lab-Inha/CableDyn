@@ -2081,6 +2081,11 @@ target_link_libraries(test_syrope_composite PRIVATE cabledyn_core)
 add_test(NAME syrope_composite COMMAND test_syrope_composite)
 set_tests_properties(syrope_composite PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+add_executable(test_torsion_coupling tests/test_torsion_coupling.f90)
+target_link_libraries(test_torsion_coupling PRIVATE cabledyn_core)
+add_test(NAME torsion_coupling COMMAND test_torsion_coupling)
+set_tests_properties(torsion_coupling PROPERTIES LABELS "fortran;unit;driver;integration;static")
+
 add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
 target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)
 add_test(NAME coupled_torsion COMMAND test_coupled_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
