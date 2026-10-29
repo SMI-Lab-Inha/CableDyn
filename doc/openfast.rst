@@ -129,6 +129,16 @@ WaterKin file can select file waves, a file depth-dependent current, host waves,
 current independently where the field is separable. Unsupported or double-counted combinations
 fail during initialisation. The selector matrix is in :doc:`options` and :doc:`driver_format`.
 
+The static start includes the steady SeaState current. With ``CurrMod = 1`` and the host
+current in use, CableDyn evaluates that current at the levels of SeaState's vertical wave grid
+and solves the equilibrium of every line, cable, point and body in it. A run therefore starts
+where a standalone deck with the same ``current`` starts, not from the still-water shape. The
+profile is linear in depth between the grid levels, so the start agrees with the first step's
+current at the levels and very nearly between them. The dynamics then take the SeaState field
+alone, and the current is not counted twice. Waves act from t = 0. A ``CurrMod = 2`` current or
+an InflowWind current field is known only through the run's samples: the start is then the
+still-water equilibrium, and the console says so.
+
 SeaState grid
 ~~~~~~~~~~~~~
 
@@ -213,8 +223,8 @@ Before trusting a run, confirm in the console:
    (``Note: line ...``, for example a folded ``EI = 0`` layout; see :doc:`troubleshooting`);
 #. ``Requested CableDyn OUTPUTS at t = 0 s``, the deck's channels in the first output row. With
    SeaState waves or current the header adds ``SeaState kinematics at t = 0``: the equilibrium is
-   solved before the kinematics act, so a line-end tension at t = 0 can differ slightly from the
-   equilibrium value above by the kinematic load on the end node. ``<root>.CD.static.out`` holds
+   solved in the steady current before the waves act, so a line-end tension at t = 0 can differ
+   slightly from the equilibrium value above by the kinematic load on the end node. ``<root>.CD.static.out`` holds
    the equilibrium; and
 #. ``OpenFAST terminated normally.``
 

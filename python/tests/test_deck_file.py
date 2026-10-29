@@ -4022,6 +4022,16 @@ def test_syrope_line_needs_the_dynamic_clock():
     DeckFile.from_text(static, caller_driven=True)
 
 
+def test_syrope_line_takes_viv_and_a_current():
+    # a Syrope line takes the hydrodynamics of any EI = 0 line, VIV included (MoorDyn's)
+    source = (ROOT / "examples/syrope_polyester_mooring.dat").read_text(encoding="utf-8")
+    row = '"SYROPE:data/syrope/syrope_settings.dat|1.53e8|23.12"  5.0e10|1.0e5'
+    row += "  0.0  1.0  0.0  1.0  0.0"
+    assert source.count(row) == 1
+    text = source.replace(row, row + "  0.8")
+    DeckFile.from_text(re.sub(r"none(\s+)current", r"uniform 0 0.5 0\1current", text))
+
+
 @pytest.mark.parametrize("column", [6, 7, 8, 9])
 def test_negative_drag_or_added_mass_coefficient_is_rejected(column):
     row = "chainR3    0.2466   373.5          1.607e9    -1.0       0.0      1.37  0.64  1.0   0.0"
@@ -4096,6 +4106,28 @@ _TURBINE_DECK = (
     '"Point3FH"\n'
     "--------------------- need this line -----------------------------------\n"
 )
+
+
+def test_section_curvature_channels_need_a_finite_ei_line():
+    # CurvX/CurvY<L>N<J>: the curvature on the section axes of a finite-EI line; distinct from
+    # Curv<L>N<J> and from each other
+    with_channels = _edit(_DYNAMIC, ("\nFairTen1\n", "\nFairTen1\nCurvX1N2\nCurvY1N2\nCurv1N2\n"))
+    deck = DeckFile.from_text(with_channels)
+    assert {"CurvX1N2", "CurvY1N2", "Curv1N2"} <= set(deck.outputs)
+    ei0 = _edit(_TIMED, ("\nFairTen1\n", "\nFairTen1\nCurvX1N2\n"))
+    with pytest.raises(DeckFormatError, match="section curvature components need a finite-EI line"):
+        DeckFile.from_text(ei0)
+    # a farm-shared cable (two moving ends) runs on the compatibility route, which has no frame
+    shared = _edit(
+        _TURBINE_DECK,
+        ("chain 0.1 20.0 1.0e9 -1.0 0.0 1.2", "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2"),
+        ("1 1 3 -\n2 2 3 -\n", "1 1 2 -\n"),
+        ("1 chain 380 20\n2 chain 380 20\n", "1 chain 620 30\n"),
+        ("100 WtrDpth\n", "100 WtrDpth\n0.1 dtM\n10.0 TMax\n"),
+        ('"Point3FH"', '"CurvY1N5"'),
+    )
+    with pytest.raises(DeckFormatError, match="Fixed End B"):
+        DeckFile.from_text(shared)
 
 
 def test_viv_and_lift_flag_refused_on_a_finite_ei_line_with_two_moving_ends():

@@ -71,7 +71,7 @@ models:
      - MoorDyn ``ElasticMod = 3`` behaviour
    * - Syrope
      - ``SYROPE:settings|alpha|beta`` and ``BA_s|BA_d``
-     - supported single-section taut dynamic polyester use case
+     - single-section taut dynamic polyester line, with the hydrodynamics of any ``EI = 0`` line
 
 Use :doc:`examples` for runnable instances and :doc:`theory` for the state equations (the
 viscoelastic model is a four-parameter series-Kelvin solid that reduces to a standard linear

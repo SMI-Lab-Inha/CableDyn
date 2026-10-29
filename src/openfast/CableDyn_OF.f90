@@ -521,6 +521,7 @@ CONTAINS
       REAL(wp)                  :: cval, dtC, deck_dtm, dt_moor
       REAL(wp)                  :: fair_ten, fair_force(3), fair_incl, fair_decl, fair_azi, force_incl
       LOGICAL                   :: has_dtm, has_ptfm, use_extf
+      REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static start
       CHARACTER(ChanLen)        :: chan_hdr, chan_unt
       CHARACTER(1024)           :: native_root, init_note
       INTEGER(IntKi)            :: note_at, note_end
@@ -755,11 +756,21 @@ CONTAINS
                                         host_orientation=.TRUE. )
          END IF
       ELSE
+         ! the static start in the host's steady current (seastate_static_current)
+         IF (use_extf) THEN
+            CALL seastate_static_current( InitInp%WaveField, static_cur, ErrStat2, ErrMsg2 )
+            CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+            IF (ErrStat >= AbortErrLev) RETURN
+            IF (InitInp%WaveField%Current_InitInput%CurrMod /= 0_IntKi .AND. &
+                InitInp%WaveField%Current_InitInput%CurrMod /= 1_IntKi .OR. InitInp%WaveField%hasCurrField) &
+               CALL WrScr( '   Note: CableDyn starts from its still-water statics: of the SeaState currents only '// &
+                           'CurrMod 1 enters the static start; this current acts from t = 0.' )
+         END IF
          CALL CD_AGG_Init_From_Deck( Inst(id)%agg, TRIM(InitInp%FileName), dt_moor, es, em, &
                                      env_gravity=REAL(InitInp%g, wp), env_rho_water=REAL(InitInp%rhoW, wp), &
                                      env_wtrdpth=REAL(InitInp%WtrDepth, wp), ptfm_init=REAL(ptfm6, wp), &
                                      external_fluid=use_extf, run_tmax=REAL(InitInp%Tmax, wp), &
-                                     host_orientation=.TRUE. )
+                                     host_orientation=.TRUE., static_current=static_cur )
       END IF
       IF (es /= CD_AGG_OK) THEN
          ! The slot stays inactive (it is activated only after full success, below), so this and
@@ -1343,6 +1354,7 @@ CONTAINS
       CHARACTER(2100)           :: rst_deck
       INTEGER(IntKi)            :: id, old_id, stale_id, i, es, ncp, nlines, il, ndofl, nin, k, ic, csz, koff
       LOGICAL                   :: use_extf, profile_requested, preserve_profile
+      REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static start
       LOGICAL                   :: restored   ! held fluid fields restored from the checkpoint
       CHARACTER(ErrMsgLen)            :: em
       INTEGER(IntKi)            :: ErrStat2
@@ -1405,11 +1417,18 @@ CONTAINS
       END IF
       use_extf = .FALSE.
       IF (ASSOCIATED(p%WaveField)) use_extf = wavefield_is_ambient( p%WaveField )
+      ! the rebuild solves the same static start as the run it continues (the restored state
+      ! then replaces it; a static-shape-driven mesh refinement must match)
+      IF (use_extf) THEN
+         CALL seastate_static_current( p%WaveField, static_cur, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) RETURN
+      END IF
       CALL CD_AGG_Init_From_Deck( Inst(id)%agg, TRIM(rst_deck), REAL(p%dtM0, wp), es, em, &
                                   env_gravity=REAL(p%g, wp), env_rho_water=REAL(p%rhoW, wp), &
                                   env_wtrdpth=REAL(p%WtrDpth, wp), external_fluid=use_extf, &
                                   ptfm_init=REAL(p%PtfmInit, wp), run_tmax=REAL(p%Tmax, wp), &
-                                  host_orientation=.TRUE. )
+                                  host_orientation=.TRUE., static_current=static_cur )
       CALL delete_file( rst_deck )
       IF (es /= CD_AGG_OK) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: checkpoint rebuild: '//TRIM(em), &
@@ -2925,6 +2944,7 @@ CONTAINS
       CHARACTER(2100)           :: lin_deck
       REAL(wp), ALLOCATABLE     :: op_pos(:,:), prb_pos(:,:)
       LOGICAL                   :: use_extf
+      REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static probes
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -2954,6 +2974,12 @@ CONTAINS
 
       use_extf = .FALSE.
       IF (ASSOCIATED(p%WaveField)) use_extf = wavefield_is_ambient( p%WaveField )
+      ! each probe is a static solve in the host's steady current, as the operating point is
+      IF (use_extf) THEN
+         CALL seastate_static_current( p%WaveField, static_cur, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) RETURN
+      END IF
 
       DO i = 1, SIZE(Vars%u)
          IF (Vars%u(i)%Field /= FieldTransDisp) CYCLE   ! vel/acc/orientation: zero columns
@@ -3011,7 +3037,8 @@ CONTAINS
          CALL CD_AGG_Init_From_Deck( agg_p, TRIM(lin_deck), REAL(p%dtM0, wp), es_p, em_p, &
                                      env_gravity=REAL(p%g, wp), env_rho_water=REAL(p%rhoW, wp), &
                                      env_wtrdpth=REAL(p%WtrDpth, wp), external_fluid=use_extf, &
-                                     coupled_positions=pos, run_tmax=REAL(p%Tmax, wp) )
+                                     coupled_positions=pos, run_tmax=REAL(p%Tmax, wp), &
+                                     static_current=static_cur )
          IF (es_p /= CD_AGG_OK) THEN
             PErrStat = ErrID_Fatal
             PErrMsg  = 'linearization static probe init failed: '//TRIM(em_p)
@@ -4453,6 +4480,54 @@ CONTAINS
       TYPE(SeaSt_WaveFieldType), INTENT(IN) :: wf
       ambient = wf%WaveMod /= WaveMod_None .OR. wf%Current_InitInput%CurrMod /= 0_IntKi .OR. wf%hasCurrField
    END FUNCTION wavefield_is_ambient
+
+   !> The host's steady current for the static start (CD_AGG_Init_From_Deck static_current):
+   !> SeaState's CurrMod 1 current (CD_SeaState_Steady_Current) at the levels of its vertical
+   !> wave grid, z ascending. SeaState interpolates between those levels in its own stretched
+   !> coordinate, the profile linearly in z: the start takes the run's current at the levels
+   !> and very nearly between them. Left unallocated -- a still-water start -- without a
+   !> nonzero CurrMod 1 current; a CurrMod 2 current or an InflowWind current field is known
+   !> only through the run's samples (CD_Init notes it).
+   SUBROUTINE seastate_static_current( wf, prof, ErrStat, ErrMsg )
+      TYPE(SeaSt_WaveFieldType), INTENT(IN   ) :: wf
+      REAL(wp), ALLOCATABLE,     INTENT(  OUT) :: prof(:,:)
+      INTEGER(IntKi),            INTENT(  OUT) :: ErrStat
+      CHARACTER(*),              INTENT(  OUT) :: ErrMsg
+      INTEGER(IntKi)  :: k, nz, m, es
+      REAL(wp)        :: zk, v(3)
+      CHARACTER(1024) :: em
+      ErrStat = ErrID_None
+      ErrMsg  = ''
+      IF (wf%Current_InitInput%CurrMod /= 1_IntKi) RETURN
+      nz = wf%VolGridParams%n(4)
+      IF (nz < 2) RETURN
+      ALLOCATE (prof(4, nz))
+      m = 0
+      DO k = 0, nz - 1
+         zk = REAL(wf%GridDepth, wp)*(SIN(REAL(wf%VolGridParams%pZero(4) + k*wf%VolGridParams%delta(4), wp)) - 1.0_wp)
+         IF (m > 0) THEN
+            IF (.NOT. zk > prof(1, m)) CYCLE
+         END IF
+         CALL CD_SeaState_Steady_Current(zk, REAL(wf%EffWtrDpth, wp), 1, &
+              REAL(wf%Current_InitInput%CurrSSV0, wp), REAL(wf%Current_InitInput%CurrSSDir, wp), &
+              REAL(wf%Current_InitInput%CurrNSRef, wp), REAL(wf%Current_InitInput%CurrNSV0, wp), &
+              REAL(wf%Current_InitInput%CurrNSDir, wp), REAL(wf%Current_InitInput%CurrDIV, wp), &
+              REAL(wf%Current_InitInput%CurrDIDir, wp), v, es, em)
+         IF (es /= CD_HYDRO_OK) THEN
+            ErrStat = ErrID_Fatal
+            ErrMsg  = 'CableDyn mooring module: SeaState current for the static start: '//TRIM(em)
+            DEALLOCATE (prof)
+            RETURN
+         END IF
+         m = m + 1
+         prof(:, m) = [zk, v]
+      END DO
+      IF (m < 2 .OR. .NOT. ANY(ABS(prof(2:4, 1:m)) > 0.0_wp)) THEN
+         DEALLOCATE (prof)
+         RETURN
+      END IF
+      prof = prof(:, 1:m)
+   END SUBROUTINE seastate_static_current
 
    !> Write the packed deck copy to <MooringFile folder>/<output root name><suffix>, the
    !> file the checkpoint rebuild and the linearization probes re-parse. In the MooringFile

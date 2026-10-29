@@ -708,6 +708,8 @@ def _parse_line_node_channel(lowered: str) -> tuple[int, int, int, int]:
         ("torq", 9),
         ("twist", 10),
         ("ten", 3),
+        ("curvx", 13),
+        ("curvy", 14),
         ("curv", 5),
         ("bendmom", 6),
         ("stfmom", 12),
@@ -2732,11 +2734,6 @@ class DeckFile:
                         f"{self._at(row)}: LINE TYPES VIV synchronisation band needs cF > 0 "
                         "and 0 <= dF < cF"
                     )
-                if cl > 0.0 and is_syrope:
-                    raise DeckFormatError(
-                        f"{self._at(row)}: VIV (Cl > 0) does not combine with the Syrope "
-                        "working-curve model"
-                    )
                 has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
                 if cl > 0.0:
                     viv_type_names.add(row.tokens[0].lower())
@@ -3649,6 +3646,14 @@ class DeckFile:
                     f"{self._label}: the LINES Outputs flag V (VIV lift) needs a line that carries "
                     "VIV, which a finite-EI line with two moving ends does not"
                 )
+            if moving_end_b:
+                for channel in channels:
+                    if _parse_line_node_channel(channel.lower())[2] in (13, 14):
+                        raise DeckFormatError(
+                            f"{self._label}: OUTPUT {channel!r}: the section curvature components "
+                            "need a finite-EI line with a Fixed End B (the cubic-Hermite march); a "
+                            "line with two moving ends reports Curv<L>N<J>"
+                        )
         if failures and deck_driver_route:
             # native CD_Run_Deck_Driver: FAILURE runs on the point-system object graph only
             if not has_dtm:
@@ -4119,6 +4124,12 @@ class DeckFile:
                         raise DeckFormatError(
                             f"{self._label}: OUTPUT {channel!r}: line {line_id} has no STIFFENERS, "
                             "so no stiffener moment"
+                        )
+                    if kind in (13, 14) and line_id not in finite_line_ids:
+                        raise DeckFormatError(
+                            f"{self._label}: OUTPUT {channel!r}: the section curvature components "
+                            f"need a finite-EI line (a section frame); line {line_id} has EI = 0 "
+                            "(Curv<L>N<J> gives its curvature)"
                         )
                     continue
             raise DeckFormatError(f"{self._label}: unsupported OUTPUT channel {channel!r}")

@@ -1661,6 +1661,15 @@ if(Python3_Interpreter_FOUND)
       PROCESSORS 4
       TIMEOUT ${_viv_lockin_timeout}
       ENVIRONMENT "${_cabledyn_python_test_environment}")
+    # Syrope polyester with hydrodynamics against MoorDyn-C (a fairlead swaying in water)
+    add_test(NAME syrope_hydro
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syrope_hydro.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/syrope_hydro)
+    set_tests_properties(syrope_hydro PROPERTIES
+      LABELS "python;integration;dynamic;validation"
+      TIMEOUT ${_viv_lockin_timeout}
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
     # MoorDyn-C's VIV test case: the catenary riser of Thorsen et al. in a uniform current
     add_test(NAME viv_riser
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_viv_riser.py
@@ -2061,6 +2070,11 @@ add_executable(test_torsion_deck tests/test_torsion_deck.f90)
 target_link_libraries(test_torsion_deck PRIVATE cabledyn_core)
 add_test(NAME torsion_deck COMMAND test_torsion_deck)
 set_tests_properties(torsion_deck PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
+
+add_executable(test_section_curvature tests/test_section_curvature.f90)
+target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
+add_test(NAME section_curvature COMMAND test_section_curvature)
+set_tests_properties(section_curvature PROPERTIES LABELS "fortran;driver;integration;static")
 
 add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
 target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)

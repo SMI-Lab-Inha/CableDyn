@@ -327,11 +327,11 @@ Model data
        ``EI = 0``.
    * - ``a LINE TYPES BA entry cannot have more bar-separated values than its EA entry``
      - write ``BA`` as one value for a plain EA and at most ``Bs|Bd`` for a viscoelastic EA.
-   * - ``a Syrope line does not support ...`` / ``a Syrope line must be a single section`` /
-       ``must be taut at init`` / ``has no static output``
+   * - ``a Syrope line does not support finite-EI bending`` / ``a Syrope line must be a single
+       section`` / ``must be taut at init`` / ``has no static output``
      - a Syrope line is one ``EI = 0`` section, taut at initialisation, marched with
-       ``dtM``/``TMax``, without ``bathymetryFile``, deck current/waves, or host fluid loads (a
-       flat ``WtrDpth`` is accepted). Adjust the model accordingly.
+       ``dtM``/``TMax``; it takes the seabed, Morison loads, current, waves and host fluid of any
+       ``EI = 0`` line. Adjust the model accordingly.
    * - ``Syrope alpha and beta ... must be positive`` / ``the Syrope BA column needs two parts`` /
        ``the Syrope settings file needs OWC, WCType, k1, and k2 rows``
      - see the Syrope column rules in :doc:`driver_format`: ``EA = SYROPE:<file>|alpha|beta``

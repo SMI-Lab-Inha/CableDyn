@@ -690,6 +690,16 @@ Line-node channels
        same value; ``CD_HermiteCable_Dyn_Curvature_Exact`` and ``CD_HFMF_Curvature_Exact`` the
        exact geometric traces
      - 1/m
+   * - ``CurvX<L>N<J>``, ``CurvY<L>N<J>``
+     - the curvature vector at node ``J`` on the cross-section axes x and y of a finite-EI line
+       (:ref:`theory-section-curvature`): the vector points to the centre of curvature, its
+       length is ``Curv<L>N<J>`` (``CurvX² + CurvY² = Curv²``), and a section point at (x, y)
+       has the bending strain ``−(CurvX x + CurvY y)``. The axes start at End A from the end
+       connection, follow the hang-off when End A is clamped, and are carried along the line,
+       turned by the twist when the line is restrained in torsion. ``EI = 0`` lines and
+       finite-EI lines with two moving ends refuse the channels. ``CD_HFMF_Section_Curvature``
+       returns them for every node
+     - 1/m
    * - ``BendMom<L>N<J>``
      - bend moment ``EI × κ`` measured relative to the stress-free reference shape (the
        cubic-Hermite reference is straight). Finite-EI lines: the component normal to the tangent

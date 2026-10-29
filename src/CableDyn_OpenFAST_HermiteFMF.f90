@@ -38,6 +38,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
                                           CD_HermiteCable_Dyn_Reaction, &
                                           CD_HermiteCable_Dyn_EndConnection_Moment, &
                                           CD_HermiteCable_Dyn_Curvature, CD_HermiteCable_Dyn_Curvature_Exact, &
+                                          CD_HermiteCable_Dyn_Section_Curvature, &
                                           CD_HermiteCable_Dyn_Snapshot, CD_HermiteCable_Dyn_Restore, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, &
                                           CD_HermiteCable_Dyn_Set_Torsion, CD_HermiteCable_Dyn_Set_Torsion_Drive, &
@@ -81,6 +82,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_GetCoupledKinematics
   PUBLIC :: CD_HFMF_CalcOutput
   PUBLIC :: CD_HFMF_Curvature, CD_HFMF_Curvature_Exact
+  PUBLIC :: CD_HFMF_Set_Section_Reference, CD_HFMF_Section_Curvature
   PUBLIC :: CD_HFMF_MinSpanZ
   PUBLIC :: CD_HFMF_MirrorSize
   PUBLIC :: CD_HFMF_FrictionMirrorSize
@@ -145,6 +147,19 @@ MODULE CableDyn_OpenFAST_HermiteFMF
     ! total NumSegs of the deck sections, End A first), 0 if no mesh node lies there. Unallocated
     ! when the mesh is the deck mesh. The node output channels (Ten<L>N<J>, ...) read deck nodes.
     INTEGER, ALLOCATABLE :: deck_node(:)
+    ! The cross-section reference of the CurvX/CurvY channels (CD_HFMF_Set_Section_Reference):
+    ! the static start's normal at End A in global axes and, for an End A connected to a parent,
+    ! in the parent's axes, so it turns with the parent.
+    LOGICAL :: has_sect_ref = .FALSE.
+    REAL(wp) :: sect_ref_global(3) = CD_ZERO
+    REAL(wp) :: sect_ref_parent(3) = CD_ZERO
+    ! the last CD_HFMF_Section_Curvature result and the state it was evaluated at (time, load
+    ! epoch, reference, q, v, a and, in torsion, the end frames, Theta, Phi and the torque, which
+    ! a host rotation turns without moving q): the channels of one output row share one evaluation
+    LOGICAL :: sc_valid = .FALSE.
+    INTEGER :: sc_epoch = -1
+    REAL(wp) :: sc_t = CD_ZERO, sc_ref(3) = CD_ZERO, sc_tors(15) = CD_ZERO
+    REAL(wp), ALLOCATABLE :: sc_q(:), sc_v(:), sc_a(:), sc_kx(:), sc_ky(:)
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_HFMF_ModuleType
 
@@ -1432,6 +1447,99 @@ CONTAINS
     END IF
   END SUBROUTINE CD_HFMF_Curvature
 
+  SUBROUTINE CD_HFMF_Set_Section_Reference(self, ErrStat, ErrMsg)
+    !! Freeze the cross-section reference of the CurvX/CurvY channels at the current (static)
+    !! state: the normal at End A of the End A -> End B tangent t nearest global +z, the section's
+    !! upper side (global +x where t is vertical). It is kept in global axes and, when End A is
+    !! connected to a parent (a clamped or finite-stiffness end connection), in the parent's axes,
+    !! in which it then turns with the parent. A line restrained in torsion takes its End A torsion
+    !! normal instead (CD_HermiteCable_Dyn_Section_Curvature).
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: t(3), r(3), up(3), tn
+    INTEGER :: nn
+    ErrStat = CD_HFMF_OK; ErrMsg = ''
+    IF (.NOT. self%initialized) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Section_Reference: module not initialised'; RETURN
+    END IF
+    nn = self%line%nn
+    ! End A is the last internal node; its internal tangent points away from End B
+    t = -frame_to_global(self, self%line%q(6*(nn - 1) + 4:6*(nn - 1) + 6))
+    tn = NORM2(t)
+    IF (.NOT. tn > CD_ZERO) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Section_Reference: degenerate End A tangent'; RETURN
+    END IF
+    t = t/tn
+    up = [CD_ZERO, CD_ZERO, CD_ONE]
+    IF (ABS(t(3)) > CD_ONE - 1.0e-6_wp) up = [CD_ONE, CD_ZERO, CD_ZERO]
+    r = up - DOT_PRODUCT(up, t)*t
+    r = r/NORM2(r)
+    self%sect_ref_global = r
+    self%sect_ref_parent = MATMUL(self%parent_dcm, r)
+    self%has_sect_ref = .TRUE.
+    self%sc_valid = .FALSE.
+  END SUBROUTINE CD_HFMF_Set_Section_Reference
+
+  SUBROUTINE CD_HFMF_Section_Curvature(self, kx, ky, ErrStat, ErrMsg)
+    !! The CurvX/CurvY channels of every node (internal order): the curvature vector on the
+    !! cross-section axes (CD_HermiteCable_Dyn_Section_Curvature), with the reference of
+    !! CD_HFMF_Set_Section_Reference, turned with the parent when End A is connected to one.
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
+    REAL(wp), INTENT(OUT) :: kx(:), ky(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: r(3), tors(15)
+    INTEGER :: es, nn
+    CHARACTER(1024) :: em
+    ErrStat = CD_HFMF_OK; ErrMsg = ''
+    kx = CD_ZERO
+    ky = CD_ZERO
+    IF (.NOT. (self%initialized .AND. self%has_sect_ref)) THEN
+      ErrStat = CD_HFMF_BADINPUT
+      ErrMsg = 'CD_HFMF_Section_Curvature: module not initialised or without a section reference'; RETURN
+    END IF
+    nn = self%line%nn
+    IF (SIZE(kx) /= nn .OR. SIZE(ky) /= nn) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Section_Curvature: kx, ky must be nn'; RETURN
+    END IF
+    IF (self%has_parent_endconn) THEN
+      r = MATMUL(TRANSPOSE(self%parent_dcm), self%sect_ref_parent)
+    ELSE
+      r = self%sect_ref_global
+    END IF
+    r = frame_to_local(self, r)
+    tors = CD_ZERO
+    IF (self%line%torsion%active) tors = [RESHAPE(self%line%torsion%ends, [12]), self%line%torsion%theta, &
+                                          self%line%torsion%phi, self%line%torsion%torque]
+    IF (self%sc_valid .AND. self%sc_epoch == self%line%rc_epoch) THEN
+      ! exact equality (a NaN never matches)
+      IF (ALL(ABS(self%sc_ref - r) <= CD_ZERO) .AND. ABS(self%sc_t - self%line%t) <= CD_ZERO .AND. &
+          ALL(ABS(self%sc_tors - tors) <= CD_ZERO) .AND. &
+          ALL(ABS(self%sc_q - self%line%q) <= CD_ZERO) .AND. ALL(ABS(self%sc_v - self%line%v) <= CD_ZERO) .AND. &
+          ALL(ABS(self%sc_a - self%line%a) <= CD_ZERO)) THEN
+        kx = self%sc_kx
+        ky = self%sc_ky
+        RETURN
+      END IF
+    END IF
+    self%sc_valid = .FALSE.
+    CALL CD_HermiteCable_Dyn_Section_Curvature(self%line, r, kx, ky, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Section_Curvature: '//TRIM(em); RETURN
+    END IF
+    self%sc_ref = r
+    self%sc_tors = tors
+    self%sc_t = self%line%t
+    self%sc_epoch = self%line%rc_epoch
+    self%sc_q = self%line%q
+    self%sc_v = self%line%v
+    self%sc_a = self%line%a
+    self%sc_kx = kx
+    self%sc_ky = ky
+    self%sc_valid = .TRUE.
+  END SUBROUTINE CD_HFMF_Section_Curvature
+
   SUBROUTINE CD_HFMF_Curvature_Exact(self, curv_out, ErrStat, ErrMsg)
     !! Nodal geometric curvature of the cubic-Hermite centreline at the current state, the larger
     !! one-sided trace at an interior node (CD_HermiteCable_Dyn_Curvature_Exact).
@@ -1827,6 +1935,11 @@ CONTAINS
     self%snap_parent_dcm = identity_dcm()
     self%snap_parent_omega = CD_ZERO
     self%snap_parent_alpha = CD_ZERO
+    self%has_sect_ref = .FALSE.
+    self%sect_ref_global = CD_ZERO
+    self%sect_ref_parent = CD_ZERO
+    self%sc_valid = .FALSE.
+    IF (ALLOCATED(self%sc_q)) DEALLOCATE (self%sc_q, self%sc_v, self%sc_a, self%sc_kx, self%sc_ky)
     self%tors_parent = .FALSE.
     self%tors_index = 0
     self%tors_frame_parent = CD_ZERO

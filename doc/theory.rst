@@ -328,6 +328,38 @@ node, the larger one-sided exact curvature, and the midpoint axial resultant as 
 tension. The material-strain checks (``tensile_safety``, the static compression notes) judge
 :math:`EA\varepsilon` under either setting.
 
+.. _theory-section-curvature:
+
+Curvature on the section axes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``CurvX<L>N<J>`` and ``CurvY<L>N<J>`` resolve the nodal curvature vector
+:math:`\kappa\mathbf{n}`, which points to the centre of curvature, on two axes of the cable's
+cross section. The vector is the one whose length is ``Curv<L>N<J>``: the normal part of the
+recovered section moment over :math:`EI` on the side that gives the curvature, or the exact
+trace :math:`(\mathbf{r}' \times \mathbf{r}'') \times \mathbf{r}'/|\mathbf{r}'|^4` where
+the recovery falls back to it (:ref:`theory-output-recovery`).
+
+The section axis :math:`\mathbf{d}_1` (x) starts at End A normal to the End A → End B tangent
+:math:`\mathbf{t}`:
+
+- on a line restrained in torsion, along End A's torsion normal ``Nx``, which turns with the
+  hang-off;
+- otherwise along the static start's upper normal, the projection of global +z normal to the
+  End A tangent (global +x where the tangent is vertical). It is fixed in the hang-off's axes
+  when End A is clamped or held by a finite rotational stiffness, so it turns with the vessel,
+  and fixed in global axes at a pinned End A, where the roll of the section is undefined.
+
+It is carried to every node by parallel transport along the centreline, eight smallest
+rotations between the Hermite tangents per element, which does not twist it about the tangent.
+On a line in torsion it is then turned about :math:`\mathbf{t}` by the twist from End A, the
+torque times the End A compliance plus :math:`\sum l_0/GJ` from End A, right-handed about
+:math:`\mathbf{t}`. With :math:`\mathbf{d}_2 = \mathbf{t} \times \mathbf{d}_1` (y),
+``CurvX`` :math:`= \kappa\mathbf{n} \cdot \mathbf{d}_1` and ``CurvY``
+:math:`= \kappa\mathbf{n} \cdot \mathbf{d}_2`. A fibre at :math:`(x, y)` in the section is
+strained in bending by :math:`-(\kappa_x x + \kappa_y y)`. On a line twisted 90 degrees from
+End A to End B the carried axes reach End B within 3e-6 rad of its own pretwisted normal.
+
 .. _theory-torsion:
 
 Condensed torsion
@@ -650,7 +682,8 @@ ratchets and regenerates the working curve when the mean tension exceeds it.
 OWC for a virgin rope, or, with ``SYROPE IC``, the working curve regenerated at
 :math:`T_\text{max,0}` (zero tension below its zero-tension strain, the OWC above its top
 strain :math:`\varepsilon_\text{OWC}(T_\text{max,0})`). A single secant axial stiffness of that
-curve is iterated to the solved mean strain. Each element then starts with the running maximum
+curve is iterated to the solved mean strain, the line otherwise built as any ``EI = 0`` line
+(its drag in a deck current included). Each element then starts with the running maximum
 :math:`\max(T_\text{max,0}, T_e)` (:math:`T_e` for a virgin rope), where :math:`T_e` is its
 static tension, and with the slow strain whose kernel tension at the static strain and zero
 strain rate equals :math:`T_e`. The dynamic state therefore starts in the static equilibrium,
@@ -675,7 +708,9 @@ the next admissible :math:`T_\text{max}`.
 
 An optional ``SYROPE IC`` row supplies the prior history
 :math:`(T_\text{max,0}, T_\text{mean,0})`; see the initial condition above. The model applies
-to single-section ``EI = 0`` taut lines; see :doc:`capabilities` for the supported combinations.
+to single-section ``EI = 0`` taut lines, which take the seabed, the Morison loads below, current,
+waves, a host's fluid field and VIV as any ``EI = 0`` line does (MoorDyn's line hydrodynamics); see
+:doc:`capabilities` for the supported combinations.
 
 Hydrodynamic loads
 ------------------
