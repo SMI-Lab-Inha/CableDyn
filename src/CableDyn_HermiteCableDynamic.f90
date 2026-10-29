@@ -79,7 +79,10 @@ MODULE CableDyn_HermiteCableDynamic
                                      CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Validate, CD_HTORS_OK, &
                                      CD_HTORS_MAX_STEP, CD_HermiteTorsionWorkType, CD_HermiteTorsion_Work_Init, &
                                      CD_HermiteTorsion_Work_End, CD_HermiteTorsion_Work_Add_Hessian, &
-                                     CD_HermiteTorsion_Element_Stretch
+                                     CD_HermiteTorsion_Element_Stretch, CD_HermiteTorsion_Element, &
+                                     CD_HermiteTorsion_Stretch_Derivatives, CD_HermiteTwist_Reference, &
+                                     CD_HermiteTwist_Carry, CD_HermiteTwist_Angle, CD_HermiteTwist_Omega, &
+                                     CD_HermiteTwist_Omega_Gradient, CD_HTORS_PI
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_in_parallel
   IMPLICIT NONE
@@ -94,6 +97,9 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Torsion_State
   PUBLIC :: CD_HermiteCable_Dyn_Element_Twist
   PUBLIC :: CD_HermiteCable_Dyn_Coupling_Tension
+  PUBLIC :: CD_HermiteCable_Dyn_Element_Torque, CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
+  PUBLIC :: CD_HermiteCable_Dyn_Twist_Mirror_Size, CD_HermiteCable_Dyn_Twist_Pack, CD_HermiteCable_Dyn_Twist_Unpack
+  PUBLIC :: CD_HermiteCable_Dyn_Twist_Check
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Drive
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Frames
   PUBLIC :: CD_HermiteCable_Dyn_EndConnection_Moment
@@ -167,6 +173,8 @@ MODULE CableDyn_HermiteCableDynamic
   ! general-band storage (DGBSV layout: entry (i, j) at ab(KL_D + KU_D + 1 + i - j, j), with
   ! KL_D extra top rows for the factorization fill) -- no dense matrices, no bandwidth scan.
   INTEGER, PARAMETER :: KL_D = 11, KU_D = 11
+  ! Half-bandwidth of the nodal-twist tangent in 7-DOF-per-node order ([r, m, phi] per node).
+  INTEGER, PARAMETER :: KB7 = 13
   INTEGER, PARAMETER :: LDAB_D = 2*KL_D + KU_D + 1
 
   ! Profiling is OFF by default: SYSTEM_CLOCK in the step/residual hot path is measurable
@@ -444,6 +452,46 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp) :: tors_c_ends(3, 4) = CD_ZERO, tors_c_prev = CD_ZERO, tors_c_theta = CD_ZERO
     REAL(wp) :: tors_c_eg(6) = CD_ZERO, tors_c_gend(3, 2) = CD_ZERO
     LOGICAL :: tors_c_valid = .FALSE.
+    ! Nodal twist (the torsion carries the polar inertia irn; CD_HermiteCable_Dyn_Set_Torsion):
+    ! a twist angle phi per node, the angle about the node tangent from the reference director
+    ! u to the material director, replaces the condensed torque in the dynamics. The directors
+    ! follow the node tangents by the smallest rotation over each step (time-parallel
+    ! transport), so the axial angular velocity of a section is phi_dot. Element e twists by
+    ! phi_{e+1} - phi_e + rho_e(q), rho_e = beta_e - h_e + (K/GJ)(l_e - l0) (beta_e the angle
+    ! from u_e carried to node e + 1 to u_{e+1}, h_e the element holonomy), and carries the
+    ! torque M_e = (GJ/l0)(phi_{e+1} - phi_e + rho_e) + (Bt/l0) d/dt(...). An elastic end adds a
+    ! spring k (twist of the end node against its end frame); a rigid end takes the end frame's
+    ! normal carried to the node as its director and holds phi (0 at end 1, Phi at end 2).
+    ! Committed state: tw_phi/tw_w/tw_al (angle, rate, acceleration; nn), tw_u and tw_tn
+    ! (directors and unit tangents; 3 x nn), tw_beta (ne), tw_psi (the end-frame reference of
+    ! an elastic end) and tw_mt (element torques, ne). tw_mass is the lumped polar inertia.
+    ! Step scratch: tw_pn/wn/an (step start), tw_pk/wk/ak (iterate), tw_ptrial, tw_dp, tw_G,
+    ! tw_Gt, tw_Rk, tw_Rt, tw_R (phi residual of the last assembly), tw_fcR (the force cache's
+    ! phi part), tw_pe/tw_we (the angles and rates the assembly reads in a step), the element
+    ! and end-link tangent data of the last tangent assembly (tw_eg, tw_ehv, tw_ek, tw_ed,
+    ! tw_lg, tw_lk), the element torques of the last assembly (tw_me), and the 7-DOF-per-node
+    ! effective tangent tw_K7 with its pivots and solve vector (KL = KU = 13).
+    LOGICAL :: tw_active = .FALSE.
+    LOGICAL :: tw_rigid(2) = .FALSE.
+    REAL(wp), ALLOCATABLE :: tw_phi(:), tw_w(:), tw_al(:), tw_mass(:), tw_u(:, :), tw_tn(:, :)
+    REAL(wp), ALLOCATABLE :: tw_beta(:), tw_mt(:)
+    REAL(wp) :: tw_psi(2) = CD_ZERO
+    LOGICAL, ALLOCATABLE :: tw_free(:)
+    REAL(wp), ALLOCATABLE :: tw_pn(:), tw_wn(:), tw_an(:), tw_pk(:), tw_wk(:), tw_ak(:), tw_ptrial(:), tw_dp(:)
+    REAL(wp), ALLOCATABLE :: tw_G(:), tw_Gt(:), tw_Rk(:), tw_Rt(:), tw_R(:), tw_fcR(:), tw_pe(:), tw_we(:)
+    REAL(wp), ALLOCATABLE :: tw_eg(:, :), tw_ehv(:, :), tw_ek(:), tw_ed(:), tw_me(:)
+    REAL(wp) :: tw_lg(3, 2) = CD_ZERO, tw_lk(2) = CD_ZERO
+    REAL(wp), ALLOCATABLE :: tw_K7(:, :), tw_x7(:)
+    INTEGER, ALLOCATABLE :: tw_ipiv(:)
+    ! tw_tsum: the summed element and end-link twists (Phi less the condensed Theta_eff in a
+    ! quasi-static state) of the last assembly; tw_su/tw_stn/tw_sbeta/tw_spsi: the reference
+    ! state at q_{n+1} (tw_advance_reference) awaiting the commit; tw_tscale: the torque scale of
+    ! the step's residual norm.
+    REAL(wp) :: tw_tsum = CD_ZERO, tw_spsi(2) = CD_ZERO, tw_tscale = CD_ONE
+    REAL(wp), ALLOCATABLE :: tw_su(:, :), tw_stn(:, :), tw_sbeta(:)
+    ! Packed twist state (tw_pack) of the recovering step's interval start and of the snapshot,
+    ! and the snapshot's tw_fcR.
+    REAL(wp), ALLOCATABLE :: ws_recovery_tw(:), snap_tw(:), snap_tw_fcR(:)
     LOGICAL :: snap_valid = .FALSE.
     ! Adaptive-Newton warmup counters are step-history too: a staged step (aggregate
     ! stage-then-commit) that advances them and is then rolled back must restore them, or the
@@ -1927,6 +1975,8 @@ CONTAINS
       CALL MOVE_ALLOC(cn_new, model%contact_cn)
       IF (model%fr_active) model%fr_k = model%contact_kn
     END IF
+    ! the lumped polar inertia of the nodal twist follows the lengths
+    IF (model%tw_active) CALL tw_set_derived(model, model%torsion)
   END SUBROUTINE rebuild_length_caches
 
   SUBROUTINE enter_committed_lengths(model, aside, ErrStat, ErrMsg)
@@ -3343,6 +3393,10 @@ CONTAINS
     !! consistent). Theta is unwrapped against the committed value and may change by at most pi/2
     !! in a step (a larger change fails the evaluation, and the line search or the recovering step
     !! cuts it). It needs the force-blended generalised-alpha.
+    !!
+    !! NODAL TWIST (the torsion carries irn; see the type note): the twist angles join the step
+    !! with the same Newmark scheme and are solved with the cable in one band of [r, m, phi] per
+    !! node; an end frame may turn by at most pi/2 about the line in a step.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT), TARGET :: model
     REAL(wp), INTENT(IN) :: dt, tol
     INTEGER, INTENT(IN) :: max_iter
@@ -3462,6 +3516,44 @@ CONTAINS
     model%tors_drive_ends = drive_ends
     model%tors_drive_phi = drive_phi
     IF (ErrStat /= CD_HCDYN_OK) RETURN
+    IF (model%tw_active) THEN
+      ! Nodal twist: the reference re-based at the committed (or checked) configuration with the
+      ! new frames (tw_advance_reference: a rigid end's element takes the frame's turn, an
+      ! elastic end's spring its psi), then the committed torques and Theta_eff.
+      IF (PRESENT(q_check)) THEN
+        IF (SIZE(q_check) /= model%ndof) THEN
+          ErrStat = CD_HCDYN_BADINPUT
+          ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion_Frames: q_check must have ndof entries'
+          RETURN
+        END IF
+        CALL tw_advance_reference(model, q_check, ends, ErrStat, ErrMsg)
+      ELSE
+        CALL tw_advance_reference(model, model%q, ends, ErrStat, ErrMsg)
+      END IF
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion_Frames: '//TRIM(ErrMsg)
+        RETURN
+      END IF
+      IF (PRESENT(q_check)) RETURN
+      ! a frame turn within one step of the end-frame constants (the wrapped change is unique)
+      model%tors_drive_set = .FALSE.
+      CALL tw_commit_reference(model)
+      model%torsion%ends = ends
+      model%tors_use_step = .FALSE.
+      CALL assemble_twist(model, model%q, model%v, .TRUE., .FALSE., model%ws_R, model%ws_Kb, model%ws_Kvb, &
+                          ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion_Frames: '//TRIM(ErrMsg)
+        RETURN
+      END IF
+      model%tw_mt = model%tw_me
+      model%torsion%theta = model%torsion%phi - model%tw_tsum
+      model%torsion%torque = model%tw_tsum/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+      model%fc_valid = .FALSE.
+      model%fc_clears = model%fc_clears + 1
+      model%tr_valid = .FALSE.
+      RETURN
+    END IF
     IF (PRESENT(q_check)) THEN
       IF (SIZE(q_check) /= model%ndof) THEN
         ErrStat = CD_HCDYN_BADINPUT
@@ -3693,6 +3785,13 @@ CONTAINS
       model%ws_vn(iv) = model%v(iv)
       model%ws_an(iv) = model%a(iv)
     END DO
+    IF (model%tw_active) THEN
+      DO iv = 1, model%nn
+        model%tw_pn(iv) = model%tw_phi(iv)
+        model%tw_wn(iv) = model%tw_w(iv)
+        model%tw_an(iv) = model%tw_al(iv)
+      END DO
+    END IF
     CALL rigid_tangent_scalar_state(model, model%endconn_d0, model%ws_qn, model%ws_vn, model%ws_an, &
                                     step_n0, step_ndot0, step_nddot0)
     ! Total mass for this step: structural + added mass FROZEN at the beginning-of-step
@@ -3751,6 +3850,11 @@ CONTAINS
       DO iv = 1, SIZE(model%fc_R)
         model%fc_R(iv) = model%ws_R(iv)
       END DO
+      IF (model%tw_active) THEN
+        DO iv = 1, model%nn
+          model%tw_fcR(iv) = model%tw_R(iv)
+        END DO
+      END IF
       ! Key the recomputed force on the state it describes.
       model%fc_q = model%q
       model%fc_v = model%v
@@ -3847,6 +3951,18 @@ CONTAINS
       DO ip = 1, np
         model%ws_qk(pres_dofs(ip)) = pres_q(ip)
       END DO
+    END IF
+    ! Nodal twist: the same predictor for the angles; a rigid end holds 0 (end 1) or Phi (end 2).
+    IF (model%tw_active) THEN
+      DO iv = 1, model%nn
+        IF (use_ca) THEN
+          model%tw_pk(iv) = model%tw_pn(iv) + dt*model%tw_wn(iv) + 0.5_wp*dt*dt*model%tw_an(iv)
+        ELSE
+          model%tw_pk(iv) = model%tw_pn(iv) + dt*model%tw_wn(iv) + (0.5_wp - bt)*dt*dt*model%tw_an(iv)
+        END IF
+      END DO
+      IF (model%tw_rigid(1)) model%tw_pk(1) = CD_ZERO
+      IF (model%tw_rigid(2)) model%tw_pk(model%nn) = model%tors_step_phi
     END IF
     CALL project_rigid_tangents(model, step_endconn_target, model%ws_qk, es, em2)
     IF (es /= CD_HCDYN_OK) THEN
@@ -3962,7 +4078,18 @@ CONTAINS
         ! Factor with the model-owned pivot workspace (DGBTRF -- exactly what DGBSV runs
         ! internally, without its per-call pivot allocation).
         IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
-        CALL CD_Factor_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, es, em2, matrix_validated=.TRUE.)
+        IF (model%tw_active) THEN
+          ! nodal twist: the cable's band with the angles interleaved ([r, m, phi] per node)
+          CALL tw_build_K7(model, (CD_ONE - am)*c_a, CD_ONE - af, cw, step_rigid_basis, es, em2)
+          IF (es /= CD_HCDYN_OK) THEN
+            ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2)
+            IF (attempt < n_attempt) CYCLE predict
+            RETURN
+          END IF
+          CALL CD_Factor_Banded(model%tw_K7, KB7, KB7, model%tw_ipiv, es, em2, matrix_validated=.TRUE.)
+        ELSE
+          CALL CD_Factor_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, es, em2, matrix_validated=.TRUE.)
+        END IF
         IF (prof_enabled) THEN
           CALL SYSTEM_CLOCK(pc1)
           prof_n_factor = prof_n_factor + 1
@@ -3973,7 +4100,7 @@ CONTAINS
           IF (attempt < n_attempt) CYCLE predict
           RETURN
         END IF
-        IF (model%torsion%active) THEN
+        IF (model%torsion%active .AND. .NOT. model%tw_active) THEN
           ! Rank-one torsion term (1 - af) g g^T / C of the effective tangent: g in the solve
           ! coordinates (as the residual), its K^-1 image and the Sherman-Morrison denominator,
           ! all kept with this factor.
@@ -4002,8 +4129,15 @@ CONTAINS
         IF (.NOT. model%solve_mask(i)) model%ws_dq(i) = CD_ZERO
       END DO
       IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
-      CALL CD_Solve_Factored_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, model%ws_dq, es, em2, &
-                                    factor_validated=.TRUE.)
+      IF (model%tw_active) THEN
+        DO i = 1, model%nn
+          model%tw_dp(i) = MERGE(-model%tw_G(i), CD_ZERO, model%tw_free(i))
+        END DO
+        CALL tw_solve(model, es, em2)
+      ELSE
+        CALL CD_Solve_Factored_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, model%ws_dq, es, em2, &
+                                      factor_validated=.TRUE.)
+      END IF
       IF (prof_enabled) THEN
         CALL SYSTEM_CLOCK(pc1)
         prof_n_solve = prof_n_solve + 1
@@ -4014,7 +4148,7 @@ CONTAINS
         IF (attempt < n_attempt) CYCLE predict
         RETURN
       END IF
-      IF (model%torsion%active) CALL torsion_sm_correct()
+      IF (model%torsion%active .AND. .NOT. model%tw_active) CALL torsion_sm_correct()
       CALL transform_rigid_vector_to_global(model, step_rigid_basis, model%ws_dq)
       nsolve_step = nsolve_step + 1
       IF (PRESENT(iters_out)) iters_out = nsolve_step
@@ -4027,7 +4161,7 @@ CONTAINS
       lambda = CD_ONE
       ! Condensed torsion: the linearised twist change of a trial stays within pi/4 (the
       ! post-trial unwrap against the committed Theta cannot tell 3 pi/2 from -pi/2)
-      IF (model%torsion%active) THEN
+      IF (model%torsion%active .AND. .NOT. model%tw_active) THEN
         dth_lin = ABS(DOT_PRODUCT(model%tors_g, model%ws_dq))
         IF (dth_lin > 0.5_wp*CD_HTORS_MAX_STEP) lambda = 0.5_wp*CD_HTORS_MAX_STEP/dth_lin
       END IF
@@ -4035,6 +4169,7 @@ CONTAINS
         DO iv = 1, SIZE(model%ws_qtrial)
           model%ws_qtrial(iv) = model%ws_qk(iv) + lambda*model%ws_dq(iv)
         END DO
+        IF (model%tw_active) CALL tw_trial(lambda)
         CALL eval_res(model%ws_qtrial, .TRUE., rnt, es, em2)
         IF (es == CD_HCDYN_OK) THEN
           lam_ok = lambda                                 ! loop shrinks lambda, so this ends smallest
@@ -4127,6 +4262,7 @@ CONTAINS
           DO iv = 1, SIZE(model%ws_qtrial)
             model%ws_qtrial(iv) = model%ws_qk(iv) + lambda*model%ws_dq(iv)
           END DO
+          IF (model%tw_active) CALL tw_trial(lambda)
           CALL eval_res(model%ws_qtrial, .TRUE., rnt, es, em2)
           IF (es == CD_HCDYN_OK) THEN
             ! The fallback step rarely improves the residual, so under modified Newton the
@@ -4181,6 +4317,7 @@ CONTAINS
       DO iv = 1, SIZE(model%ws_Rk)
         model%ws_Rk(iv) = model%ws_Rt(iv)
       END DO
+      IF (model%tw_active) CALL tw_accept()
       rnorm = rnt
     END DO
     EXIT predict
@@ -4198,19 +4335,27 @@ CONTAINS
         IF (.NOT. model%solve_mask(i)) model%ws_dq(i) = CD_ZERO
       END DO
       IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
-      CALL CD_Solve_Factored_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, model%ws_dq, es, em2, &
-                                    factor_validated=.TRUE.)
+      IF (model%tw_active) THEN
+        DO i = 1, model%nn
+          model%tw_dp(i) = MERGE(-model%tw_G(i), CD_ZERO, model%tw_free(i))
+        END DO
+        CALL tw_solve(model, es, em2)
+      ELSE
+        CALL CD_Solve_Factored_Banded(model%ws_Keffb, KL_D, KU_D, model%ws_ipiv, model%ws_dq, es, em2, &
+                                      factor_validated=.TRUE.)
+      END IF
       IF (prof_enabled) THEN
         CALL SYSTEM_CLOCK(pc1)
         prof_n_correct = prof_n_correct + 1
         prof_t_solve = prof_t_solve + REAL(pc1 - pc0, wp)/REAL(pcr, wp)
       END IF
       IF (es == CD_LINALG_OK) THEN
-        IF (model%torsion%active) CALL torsion_sm_correct()
+        IF (model%torsion%active .AND. .NOT. model%tw_active) CALL torsion_sm_correct()
         CALL transform_rigid_vector_to_global(model, step_rigid_basis, model%ws_dq)
         DO iv = 1, SIZE(model%ws_qtrial)
           model%ws_qtrial(iv) = model%ws_qk(iv) + model%ws_dq(iv)
         END DO
+        IF (model%tw_active) CALL tw_trial(CD_ONE)
         CALL eval_res(model%ws_qtrial, .TRUE., rnt, es, em2)
         IF (es == CD_HCDYN_OK .AND. rnt < rnorm) THEN
           DO iv = 1, SIZE(model%ws_qk)
@@ -4222,6 +4367,7 @@ CONTAINS
           DO iv = 1, SIZE(model%ws_Rk)
             model%ws_Rk(iv) = model%ws_Rt(iv)
           END DO
+          IF (model%tw_active) CALL tw_accept()
           rnorm = rnt
           IF (PRESENT(res_out)) res_out = rnorm
         ELSE
@@ -4240,7 +4386,15 @@ CONTAINS
     ! audit under torque-tension coupling.
     tors_theta_new = model%torsion%theta
     tors_mt_new = CD_ZERO
-    IF (model%torsion%active) THEN
+    IF (model%tw_active) THEN
+      ! nodal twist: the reference state at q_{n+1}, and Theta_eff = Phi less the summed twist
+      ! of the converged evaluation, whose element torques (tw_me) enter the audit
+      CALL tw_advance_reference(model, model%ws_qk, model%tors_step_ends, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
+      END IF
+      tors_theta_new = model%tors_step_phi - model%tw_tsum
+    ELSE IF (model%torsion%active) THEN
       CALL torsion_theta_at(model, model%ws_qk, model%tors_step_ends, tors_theta_new, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
@@ -4380,6 +4534,18 @@ CONTAINS
     IF (model%has_viv) CALL viv_step_end(model, dt)
     model%t = model%t + dt
     IF (has_endconn_motion) model%endconn_d0 = step_endconn_target
+    IF (model%tw_active) THEN
+      DO iv = 1, model%nn
+        model%tw_ak(iv) = c_a*(model%tw_pk(iv) - model%tw_pn(iv)) - c_v*model%tw_wn(iv) - c_a2*model%tw_an(iv)
+        model%tw_phi(iv) = model%tw_pk(iv)
+        model%tw_al(iv) = model%tw_ak(iv)
+        model%tw_w(iv) = model%tw_wn(iv) + dt*((CD_ONE - gm)*model%tw_an(iv) + gm*model%tw_ak(iv))
+      END DO
+      CALL tw_commit_reference(model)
+      DO iv = 1, model%ne
+        model%tw_mt(iv) = model%tw_me(iv)
+      END DO
+    END IF
     IF (model%torsion%active) THEN
       model%torsion%ends = model%tors_step_ends
       model%torsion%phi = model%tors_step_phi
@@ -4387,12 +4553,15 @@ CONTAINS
       model%torsion%torque = (model%torsion%phi - tors_theta_new)/ &
                              CD_HermiteTorsion_Compliance(model%torsion, model%l0)
       ! the read-only queries of the committed state (end loads, energy, channels) from the
-      ! cache; a failure here only leaves it invalid (a query then evaluates and reports it)
-      BLOCK
-        INTEGER :: es_tc
-        CHARACTER(1024) :: em_tc
-        CALL torsion_cache_fill(model, es_tc, em_tc)
-      END BLOCK
+      ! cache; a failure here only leaves it invalid (a query then evaluates and reports it).
+      ! The nodal twist answers its queries from its own committed state.
+      IF (.NOT. model%tw_active) THEN
+        BLOCK
+          INTEGER :: es_tc
+          CHARACTER(1024) :: em_tc
+          CALL torsion_cache_fill(model, es_tc, em_tc)
+        END BLOCK
+      END IF
     END IF
     ! Carry the factor of this step's last iteration to the next step.
     model%tr_valid = model%tangent_reuse .AND. factor_ok
@@ -4417,6 +4586,11 @@ CONTAINS
       DO iv = 1, SIZE(model%fc_R)
         model%fc_R(iv) = model%ws_Rk(iv)
       END DO
+      IF (model%tw_active) THEN
+        DO iv = 1, model%nn
+          model%tw_fcR(iv) = model%tw_Rk(iv)
+        END DO
+      END IF
       model%fc_q = model%q
       model%fc_v = model%v
       model%fc_t = model%t
@@ -4462,12 +4636,17 @@ CONTAINS
     END SUBROUTINE window_load
 
     REAL(wp) FUNCTION audit_coupling(e) RESULT(tc)
-      !! The torque-tension coupling force (K/GJ) M_t of element e at the converged torque.
+      !! The torque-tension coupling force (K/GJ) M_t of element e at the converged torque (the
+      !! nodal twist's own element torque, else the condensed uniform one).
       INTEGER, INTENT(IN) :: e
       tc = CD_ZERO
       IF (.NOT. model%torsion%active) RETURN
       IF (.NOT. ALLOCATED(model%torsion%couple)) RETURN
-      tc = model%torsion%couple(e)*tors_mt_new
+      IF (model%tw_active) THEN
+        tc = model%torsion%couple(e)*model%tw_me(e)
+      ELSE
+        tc = model%torsion%couple(e)*tors_mt_new
+      END IF
     END FUNCTION audit_coupling
 
     SUBROUTINE window_mean(slot, esx)
@@ -4537,7 +4716,7 @@ CONTAINS
       REAL(wp), POINTER :: Gout(:)
       INTEGER :: ii, nd
       INTEGER(INT64) :: ec0, ec1
-      REAL(wp) :: xref
+      REAL(wp) :: xref, xd
       REAL(wp), PARAMETER :: RESID_ROUNDOFF = 16.0_wp
       REAL(wp), PARAMETER :: STATE_DIVERGED = 1.0e12_wp
       ec0 = 0_INT64      ! defined even with profiling off (see the step-entry note)
@@ -4590,6 +4769,7 @@ CONTAINS
         END DO
       END IF
       IF (has_endconn_motion) CALL impose_step_rigid_kinematics(qcur, model%ws_vk, model%ws_ak)
+      IF (model%tw_active) CALL tw_stage(use_trial)
       ! Force blend: the configuration the force (and the loop-top tangent) is evaluated at is
       ! the iterate itself; only the inertia uses the alpha_m blend. Configuration blend: the
       ! forces are evaluated at the alpha_f-blended state.
@@ -4616,6 +4796,7 @@ CONTAINS
       ELSE
         CALL vector_copy(model%ws_R, model%ws_Rk)
       END IF
+      IF (model%tw_active) CALL tw_residual(use_trial)
       ! total (structural + frozen added) mass inertia via the band matvec
       CALL band_matvec(model%ws_Msumb, model%ws_aa, model%ws_inert)
       IF (model%force_blend) THEN
@@ -4655,6 +4836,25 @@ CONTAINS
           IF (MOD(ii - 1, 6) < 3) xref = MAX(xref, ABS(qcur(ii)))
         END DO
         fscale = MAX(fscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*MAXVAL(model%EA/model%l0)*xref/tol)
+        ! Nodal twist: the torque scale of the angle rows, frozen with fscale and formed like it
+        ! from the nodal loads (a node's torque imbalance, not the torque the line carries,
+        ! which accumulates the imbalances along the line as the tension does the force's): the
+        ! inertial torques and the predictor's imbalance, at least 1 N m, and the round-off
+        ! floor of an element twist, (GJ/l0 + Bt/l0 gamma/(beta dt)) eps (max|phi| + max|x|/l0)
+        ! (the damping takes the twist rate, whose Newmark rate amplifies the rounding).
+        IF (model%tw_active) THEN
+          model%tw_tscale = CD_ONE
+          DO ii = 1, model%nn
+            IF (.NOT. model%tw_free(ii)) CYCLE
+            model%tw_tscale = MAX(model%tw_tscale, &
+                                  ABS(model%tw_mass(ii)*((CD_ONE - am)*model%tw_ak(ii) + am*model%tw_an(ii))), &
+                                  ABS(model%tw_R(ii)))
+          END DO
+          xd = MAXVAL(model%torsion%gj/model%l0)
+          IF (ALLOCATED(model%torsion%bt)) xd = xd + MAXVAL(model%torsion%bt/model%l0)*gm/(bt*dt)
+          model%tw_tscale = MAX(model%tw_tscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*xd* &
+                                (MAX(CD_ONE, MAXVAL(ABS(model%tw_pe))) + xref/MINVAL(model%l0))/tol)
+        END IF
         scale_set = .TRUE.
       END IF
       rn = CD_ZERO
@@ -4667,6 +4867,16 @@ CONTAINS
           rn = MAX(rn, ABS(Gout(ii))/fscale)
         END IF
       END DO
+      IF (model%tw_active) THEN
+        DO ii = 1, model%nn
+          IF (.NOT. model%tw_free(ii)) CYCLE
+          IF (use_trial) THEN
+            rn = MAX(rn, ABS(model%tw_Gt(ii))/model%tw_tscale)
+          ELSE
+            rn = MAX(rn, ABS(model%tw_G(ii))/model%tw_tscale)
+          END IF
+        END DO
+      END IF
       IF (.NOT. CD_Is_Finite(rn)) THEN
         esx = CD_HCDYN_NOCONVERGE; emx = 'non-finite residual'
       END IF
@@ -4785,6 +4995,65 @@ CONTAINS
         model%ws_dq(ii) = model%ws_dq(ii) - mu*model%tors_zk(ii)
       END DO
     END SUBROUTINE torsion_sm_correct
+
+    SUBROUTINE tw_stage(use_trial)
+      !! Nodal twist: the Newmark rates and accelerations of the iterate's (or the trial's)
+      !! angles, staged in tw_pe/tw_we for the assembly.
+      LOGICAL, INTENT(IN) :: use_trial
+      INTEGER :: ii
+      REAL(wp) :: p
+      DO ii = 1, model%nn
+        IF (use_trial) THEN
+          p = model%tw_ptrial(ii)
+        ELSE
+          p = model%tw_pk(ii)
+        END IF
+        model%tw_ak(ii) = c_a*(p - model%tw_pn(ii)) - c_v*model%tw_wn(ii) - c_a2*model%tw_an(ii)
+        model%tw_wk(ii) = model%tw_wn(ii) + dt*((CD_ONE - gm)*model%tw_an(ii) + gm*model%tw_ak(ii))
+        model%tw_pe(ii) = p
+        model%tw_we(ii) = model%tw_wk(ii)
+      END DO
+    END SUBROUTINE tw_stage
+
+    SUBROUTINE tw_residual(use_trial)
+      !! Nodal twist: the angle rows of the generalised-alpha residual, I ((1 - am) a_{n+1} +
+      !! am a_n) + (1 - af) R_phi(n+1) + af R_phi(n) (zero at a held angle), and the
+      !! unblended R_phi of the evaluation.
+      LOGICAL, INTENT(IN) :: use_trial
+      INTEGER :: ii
+      REAL(wp) :: gv
+      DO ii = 1, model%nn
+        gv = CD_ZERO
+        IF (model%tw_free(ii)) gv = model%tw_mass(ii)*((CD_ONE - am)*model%tw_ak(ii) + am*model%tw_an(ii)) + &
+                                    (CD_ONE - af)*model%tw_R(ii) + af*model%tw_fcR(ii)
+        IF (use_trial) THEN
+          model%tw_Gt(ii) = gv
+          model%tw_Rt(ii) = model%tw_R(ii)
+        ELSE
+          model%tw_G(ii) = gv
+          model%tw_Rk(ii) = model%tw_R(ii)
+        END IF
+      END DO
+    END SUBROUTINE tw_residual
+
+    SUBROUTINE tw_trial(lam)
+      !! Nodal twist: the line-search trial angles tw_pk + lam tw_dp.
+      REAL(wp), INTENT(IN) :: lam
+      INTEGER :: ii
+      DO ii = 1, model%nn
+        model%tw_ptrial(ii) = model%tw_pk(ii) + lam*model%tw_dp(ii)
+      END DO
+    END SUBROUTINE tw_trial
+
+    SUBROUTINE tw_accept()
+      !! Nodal twist: the accepted trial becomes the iterate.
+      INTEGER :: ii
+      DO ii = 1, model%nn
+        model%tw_pk(ii) = model%tw_ptrial(ii)
+        model%tw_G(ii) = model%tw_Gt(ii)
+        model%tw_Rk(ii) = model%tw_Rt(ii)
+      END DO
+    END SUBROUTINE tw_accept
 
   END SUBROUTINE dyn_step_core
 
@@ -4992,6 +5261,7 @@ CONTAINS
     tors_theta0 = model%torsion%theta
     tors_phi0 = model%torsion%phi
     tors_ends0 = model%torsion%ends
+    IF (model%tw_active) CALL tw_pack(model, model%ws_recovery_tw)
     tors_phi1 = tors_phi0
     tors_ends1 = tors_ends0
     IF (model%torsion%active .AND. model%tors_drive_set) THEN
@@ -5236,6 +5506,7 @@ CONTAINS
       model%torsion%theta = tors_theta0
       model%torsion%phi = tors_phi0
       model%torsion%ends = tors_ends0
+      IF (model%tw_active) CALL tw_unpack(model, model%ws_recovery_tw)
       model%torsion%torque = (tors_phi0 - tors_theta0)/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
       model%tors_drive_set = .FALSE.
     END SUBROUTINE restore_torsion
@@ -5487,7 +5758,37 @@ CONTAINS
       END IF
       strain = strain + connection_energy
     END IF
-    IF (model%torsion%active) THEN
+    IF (model%tw_active) THEN
+      ! nodal twist: the element and end-spring energies and the polar kinetic energy
+      BLOCK
+        REAL(wp) :: rho, beta, g(12), h(12, 12), tau, psi, gl(3), hl(3, 3), tw
+        INTEGER :: iend
+        DO e = 1, model%ne
+          CALL twist_reference(model, e, model%q, model%torsion%ends, .FALSE., rho, beta, g, h, ErrStat, em2)
+          IF (ErrStat /= CD_HCDYN_OK) THEN
+            ErrMsg = 'CD_HermiteCable_Dyn_Energy: '//TRIM(em2)
+            RETURN
+          END IF
+          tau = model%tw_phi(e + 1) - model%tw_phi(e) + rho
+          strain = strain + 0.5_wp*model%torsion%gj(e)/model%l0(e)*tau*tau
+        END DO
+        DO iend = 1, 2
+          IF (model%tw_rigid(iend)) CYCLE
+          CALL twist_link(model, iend, model%q, model%torsion%ends, .FALSE., psi, gl, hl, ErrStat, em2)
+          IF (ErrStat /= CD_HCDYN_OK) THEN
+            ErrMsg = 'CD_HermiteCable_Dyn_Energy: '//TRIM(em2)
+            RETURN
+          END IF
+          IF (iend == 1) THEN
+            tw = model%tw_phi(1) - psi
+          ELSE
+            tw = psi + model%torsion%phi - model%tw_phi(model%nn)
+          END IF
+          strain = strain + 0.5_wp*tw*tw/model%torsion%end_compliance(iend)
+        END DO
+        kinetic = kinetic + 0.5_wp*SUM(model%tw_mass*model%tw_w*model%tw_w)
+      END BLOCK
+    ELSE IF (model%torsion%active) THEN
       BLOCK
         REAL(wp) :: th, mt
         CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, ErrStat, em2)
@@ -5650,6 +5951,20 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Section_Curvature: the section reference lies along the End A tangent'; RETURN
     END IF
     d1 = d1/rn
+    IF (model%tw_active) THEN
+      ! Nodal twist: the material director Rot(t_k, phi - Phi) u of every node (t_k the solve
+      ! tangent, End 1 -> End 2), on the frame convention above: End A (node nn) takes the
+      ! reference normal turned by the End A spring twist only.
+      DO a = 1, model%nn
+        t = -unit_tangent(model, a)
+        phi = model%tw_phi(a) - model%torsion%phi
+        d = COS(phi)*model%tw_u(:, a) - SIN(phi)*cross3_local(t, model%tw_u(:, a))
+        IF (PRESENT(frame)) frame(:, a) = d
+        kx(a) = DOT_PRODUCT(kvec(:, a), d)
+        ky(a) = DOT_PRODUCT(kvec(:, a), cross3_local(t, d))
+      END DO
+      RETURN
+    END IF
     mt = CD_ZERO
     comp = CD_ZERO
     IF (model%torsion%active) THEN
@@ -5999,8 +6314,18 @@ CONTAINS
       END DO
     END IF
     force = -r3
-    ! Condensed torsion: R carries -M_t dTheta/dq, so the end force gains +M_t dTheta/dr_end.
-    IF (model%torsion%active) THEN
+    ! Nodal twist: R carries M_e drho_e/dq of the end element (the committed torque M_e).
+    IF (model%tw_active) THEN
+      BLOCK
+        REAL(wp) :: rho, beta, g(12), h(12, 12)
+        CALL twist_reference(model, e, model%q, model%torsion%ends, .FALSE., rho, beta, g, h, es, em2)
+        IF (es /= CD_HCDYN_OK) THEN
+          ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
+        END IF
+        force = force - model%tw_mt(e)*g(i0 + 1:i0 + 3)
+      END BLOCK
+      ! Condensed torsion: R carries -M_t dTheta/dq, so the end force gains +M_t dTheta/dr_end.
+    ELSE IF (model%torsion%active) THEN
       BLOCK
         REAL(wp) :: th, mt, gend(3, 2)
         CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, es, em2, end_dr=gend)
@@ -6235,7 +6560,11 @@ CONTAINS
     IF (e < 1 .OR. e > model%ne) RETURN
     IF (.NOT. model%torsion%active) RETURN
     IF (.NOT. ALLOCATED(model%torsion%couple)) RETURN
-    tc = model%torsion%couple(e)*model%torsion%torque
+    IF (model%tw_active) THEN
+      tc = model%torsion%couple(e)*model%tw_mt(e)
+    ELSE
+      tc = model%torsion%couple(e)*model%torsion%torque
+    END IF
   END FUNCTION coupling_tension
 
   PURE REAL(wp) FUNCTION CD_HermiteCable_Dyn_Coupling_Tension(model, e) RESULT(tc)
@@ -6280,12 +6609,207 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Element_Twist: twist must have one entry per element'; RETURN
     END IF
     IF (.NOT. model%torsion%active) RETURN
+    IF (model%tw_active) THEN
+      ! nodal twist: phi_{e+1} - phi_e + beta_e - h_e at the committed state
+      BLOCK
+        REAL(wp) :: rho, beta, g(12), h(12, 12), qe(12), ls
+        DO e = 1, model%ne
+          CALL twist_reference(model, e, model%q, model%torsion%ends, .FALSE., rho, beta, g, h, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_HCDYN_OK) RETURN
+          twist(e) = model%tw_phi(e + 1) - model%tw_phi(e) + rho
+          IF (ALLOCATED(model%torsion%couple)) THEN
+            IF (ABS(model%torsion%couple(e)) > CD_ZERO) THEN
+              CALL gather_elem(model, e, qe)
+              ls = CD_HermiteTorsion_Element_Stretch(qe, model%l0(e), model%torsion%quadrature_order)
+              twist(e) = twist(e) - model%torsion%couple(e)*(ls - model%l0(e))
+            END IF
+          END IF
+        END DO
+      END BLOCK
+      RETURN
+    END IF
     CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, ErrStat, ErrMsg)
     IF (ErrStat /= CD_HCDYN_OK) RETURN
     DO e = 1, model%ne
       twist(e) = element_twist(model, e, mt)
     END DO
   END SUBROUTINE CD_HermiteCable_Dyn_Element_Twist
+
+  SUBROUTINE CD_HermiteCable_Dyn_Element_Torque(model, torque, ErrStat, ErrMsg)
+    !! The torque of every element at the committed state [N m], positive for a right-handed
+    !! twist about the solve tangent (End 1 -> End 2): with the nodal twist the element torques
+    !! (elastic plus torsional damping), with the condensed torsion the uniform torque, and zero
+    !! for a line without torsion. Element order is the model's (End B first).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: torque(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    torque = CD_ZERO
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (SIZE(torque) /= model%ne) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Element_Torque: torque must have one entry per element'; RETURN
+    END IF
+    IF (.NOT. model%torsion%active) RETURN
+    IF (model%tw_active) THEN
+      torque = model%tw_mt
+    ELSE
+      torque = model%torsion%torque
+    END IF
+  END SUBROUTINE CD_HermiteCable_Dyn_Element_Torque
+
+  SUBROUTINE CD_HermiteCable_Dyn_Node_Torque(model, torque, ErrStat, ErrMsg)
+    !! The torque at every node at the committed state [N m] (the Torq<L>N<J> channels): an end
+    !! node takes its element's torque and an interior node the mean of its two elements' (the
+    !! uniform torque of the condensed torsion everywhere; zero without torsion). Node order is
+    !! the model's (End B first).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: torque(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k
+    torque = CD_ZERO
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (SIZE(torque) /= model%nn) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Node_Torque: torque must have one entry per node'; RETURN
+    END IF
+    IF (.NOT. model%torsion%active) RETURN
+    IF (.NOT. model%tw_active) THEN
+      torque = model%torsion%torque
+      RETURN
+    END IF
+    torque(1) = model%tw_mt(1)
+    torque(model%nn) = model%tw_mt(model%ne)
+    DO k = 2, model%nn - 1
+      torque(k) = 0.5_wp*(model%tw_mt(k - 1) + model%tw_mt(k))
+    END DO
+  END SUBROUTINE CD_HermiteCable_Dyn_Node_Torque
+
+  SUBROUTINE CD_HermiteCable_Dyn_End_Twist(model, twist, ErrStat, ErrMsg)
+    !! The twist of the two torsional end springs at the committed state [rad] (internal ends 1
+    !! and 2; zero at a rigid end): with the nodal twist the end node's against its end frame,
+    !! with the condensed torsion the torque times the end compliance.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: twist(2)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: psi, gl(3), hl(3, 3)
+    INTEGER :: iend
+    twist = CD_ZERO
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%torsion%active) RETURN
+    IF (.NOT. model%tw_active) THEN
+      twist = model%torsion%torque*model%torsion%end_compliance
+      RETURN
+    END IF
+    DO iend = 1, 2
+      IF (model%tw_rigid(iend)) CYCLE
+      CALL twist_link(model, iend, model%q, model%torsion%ends, .FALSE., psi, gl, hl, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_End_Twist: '//TRIM(ErrMsg)
+        RETURN
+      END IF
+      IF (iend == 1) THEN
+        twist(1) = model%tw_phi(1) - psi
+      ELSE
+        twist(2) = psi + model%torsion%phi - model%tw_phi(model%nn)
+      END IF
+    END DO
+  END SUBROUTINE CD_HermiteCable_Dyn_End_Twist
+
+  SUBROUTINE CD_HermiteCable_Dyn_Twist_Check(model, q_check, ends, ErrStat, ErrMsg)
+    !! Read-only check that the nodal twist accepts the configuration q_check with the end
+    !! frames ends (a host about to write them): every element's reference twist and every
+    !! elastic end's spring evaluate (fold guard, an end frame within pi/2 of its committed
+    !! turn). Without the nodal twist it accepts.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: q_check(:), ends(3, 4)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: rho, beta, g(12), h(12, 12), psi, gl(3), hl(3, 3)
+    INTEGER :: e, iend
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    IF (.NOT. model%tw_active) RETURN
+    IF (SIZE(q_check) /= model%ndof) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Check: q_check must have ndof entries'; RETURN
+    END IF
+    DO e = 1, model%ne
+      CALL twist_reference(model, e, q_check, ends, .FALSE., rho, beta, g, h, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Twist_Check: '//TRIM(ErrMsg); RETURN
+      END IF
+    END DO
+    DO iend = 1, 2
+      IF (model%tw_rigid(iend)) CYCLE
+      CALL twist_link(model, iend, q_check, ends, .FALSE., psi, gl, hl, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Twist_Check: '//TRIM(ErrMsg); RETURN
+      END IF
+    END DO
+  END SUBROUTINE CD_HermiteCable_Dyn_Twist_Check
+
+  PURE INTEGER FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size(model) RESULT(n)
+    !! Reals of the nodal-twist checkpoint mirror (CD_HermiteCable_Dyn_Twist_Pack): the
+    !! committed angles, rates and accelerations, directors, reference tangents, reference
+    !! twists, element torques, end-frame references and the force cache's angle part; 0 without
+    !! the nodal twist.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    n = 0
+    IF (model%tw_active) n = tw_pack_size(model) + model%nn
+  END FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size
+
+  SUBROUTINE CD_HermiteCable_Dyn_Twist_Pack(model, buf)
+    !! Write the nodal-twist checkpoint mirror (CD_HermiteCable_Dyn_Twist_Mirror_Size reals).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: buf(:)
+    INTEGER :: n
+    IF (.NOT. model%tw_active) RETURN
+    n = tw_pack_size(model)
+    CALL tw_pack(model, buf(1:n))
+    buf(n + 1:n + model%nn) = model%tw_fcR
+  END SUBROUTINE CD_HermiteCable_Dyn_Twist_Pack
+
+  SUBROUTINE CD_HermiteCable_Dyn_Twist_Unpack(model, buf, ErrStat, ErrMsg, check_only)
+    !! Reload the nodal twist from a mirror of CD_HermiteCable_Dyn_Twist_Pack written by a
+    !! model built from the same input (the caller restores q, v, a and the force cache with
+    !! it). Fails closed on a size mismatch, a non-finite value or a non-unit director; with
+    !! check_only it only checks.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: buf(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: check_only
+    INTEGER :: n, i
+    ErrStat = CD_HCDYN_BADINPUT
+    IF (.NOT. model%tw_active) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: the model has no nodal twist'; RETURN
+    END IF
+    n = tw_pack_size(model)
+    IF (SIZE(buf) /= n + model%nn) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: the mirror does not match this line'; RETURN
+    END IF
+    IF (.NOT. CD_All_Finite(buf)) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: non-finite twist state'; RETURN
+    END IF
+    DO i = 1, model%nn
+      IF (ABS(NORM2(buf(3*model%nn + 3*i - 2:3*model%nn + 3*i)) - CD_ONE) > 1.0e-8_wp .OR. &
+          ABS(NORM2(buf(6*model%nn + 3*i - 2:6*model%nn + 3*i)) - CD_ONE) > 1.0e-8_wp) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: a director or reference tangent is not a unit vector'; RETURN
+      END IF
+    END DO
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    IF (PRESENT(check_only)) THEN
+      IF (check_only) RETURN
+    END IF
+    CALL tw_unpack(model, buf(1:n))
+    model%tw_fcR = buf(n + 1:n + model%nn)
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_HermiteCable_Dyn_Twist_Unpack
 
   SUBROUTINE node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg, &
                          sleeve_moment, curvature_vector)
@@ -6759,7 +7283,42 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_EndConnection_Moment: node must be a cable endpoint'
       RETURN
     END IF
-    IF (model%torsion%active) THEN
+    IF (model%tw_active) THEN
+      ! Nodal twist: -dE/dw of the end frame. A rigid end's element twists by rho(w) through
+      ! the frame (its normal carried to the end node is the node's director): -M_e drho/dw. An
+      ! elastic end's spring twists by -+psi(w): +-k tw dpsi/dw. With f(w) = angle(G(d' -> x) n'
+      ! -> u) of the frame turned by exp(w), G(d' -> x) n' = Rot(x, w . d + Omega(d, d', x))
+      ! G(d -> x) n to first order, so df/dw = -d - d x dOmega/dy(d, d, x), and the frame's
+      ! director in a transport triangle adds d x dOmega/dd. The slaved tangent of a rigid
+      ! bending end adds its share through the constraint reaction below.
+      BLOCK
+        REAL(wp) :: rho, beta, g(12), h(12, 12), ew(3, 2), psi, gl(3), hl(3, 3), lw(3), tw
+        IF (model%tw_rigid(iend)) THEN
+          CALL twist_reference(model, MERGE(1, model%ne, iend == 1), model%q, model%torsion%ends, .FALSE., rho, &
+                               beta, g, h, es, em, end_w=ew)
+          IF (es /= CD_HCDYN_OK) THEN
+            ErrStat = es
+            ErrMsg = 'CD_HermiteCable_Dyn_EndConnection_Moment: '//TRIM(em)
+            RETURN
+          END IF
+          moment = -model%tw_mt(MERGE(1, model%ne, iend == 1))*ew(:, iend)
+        ELSE
+          CALL twist_link(model, iend, model%q, model%torsion%ends, .FALSE., psi, gl, hl, es, em, end_w=lw)
+          IF (es /= CD_HCDYN_OK) THEN
+            ErrStat = es
+            ErrMsg = 'CD_HermiteCable_Dyn_EndConnection_Moment: '//TRIM(em)
+            RETURN
+          END IF
+          IF (iend == 1) THEN
+            tw = model%tw_phi(1) - psi
+            moment = tw/model%torsion%end_compliance(1)*lw
+          ELSE
+            tw = psi + model%torsion%phi - model%tw_phi(model%nn)
+            moment = -tw/model%torsion%end_compliance(2)*lw
+          END IF
+        END IF
+      END BLOCK
+    ELSE IF (model%torsion%active) THEN
       ! Torque of the condensed torsion on the support: the generalised moment
       ! -dE_t/dw = M_t dTheta/dw of the end frame (its axial part is -+M_t d); the slaved
       ! tangent of a rigid end adds its share through the constraint reaction below.
@@ -6845,7 +7404,10 @@ CONTAINS
     !! the torsion. The time step then carries the torsion (see CD_HermiteCable_Dyn_Step); its
     !! scratch is sized here, so a step allocates nothing. Like a new end connection, a change
     !! of the load set invalidates the step snapshot (CD_HermiteCable_Dyn_Restore then fails
-    !! closed); a failed call leaves the model, its snapshot included, as it was.
+    !! closed); a failed call leaves the model, its snapshot included, as it was. A description
+    !! with the polar inertia irn installs the nodal twist instead of the condensed torsion in
+    !! the dynamics (tw_init): the static uniform torque sets the angles, which then carry the
+    !! torsional inertia and the damping bt.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     TYPE(CD_HermiteTorsionType), INTENT(IN) :: torsion
     INTEGER, INTENT(OUT) :: ErrStat
@@ -6854,7 +7416,8 @@ CONTAINS
     REAL(wp) :: th, mt
     REAL(wp) :: saved_step_ends(3, 4), saved_step_phi, saved_snap_theta, saved_snap_phi, saved_snap_ends(3, 4)
     REAL(wp) :: saved_drive_ends(3, 4), saved_drive_phi
-    LOGICAL :: saved_snap_valid, saved_drive_set
+    LOGICAL :: saved_snap_valid, saved_drive_set, saved_tw_active
+    REAL(wp), ALLOCATABLE :: saved_tw(:)
     INTEGER :: es, iend
     CHARACTER(1024) :: em
     ErrStat = CD_HCDYN_OK
@@ -6865,8 +7428,14 @@ CONTAINS
       RETURN
     END IF
     saved = model%torsion
+    saved_tw_active = model%tw_active
+    IF (saved_tw_active) THEN
+      ALLOCATE (saved_tw(tw_pack_size(model)))
+      CALL tw_pack(model, saved_tw)
+    END IF
     model%tors_c_valid = .FALSE.
     IF (.NOT. torsion%active) THEN
+      model%tw_active = .FALSE.
       model%torsion = CD_HermiteTorsionType()
     ELSE
       CALL CD_HermiteTorsion_Validate(torsion, model%l0, es, em)
@@ -6908,10 +7477,12 @@ CONTAINS
       model%tors_gk = CD_ZERO
       model%tors_zk = CD_ZERO
       model%tors_den = CD_ONE
+      model%tw_active = .FALSE.
       model%torsion = torsion
       model%tors_c_valid = .FALSE.
       CALL CD_HermiteCable_Dyn_Torsion_State(model, th, mt, es, em)
       IF (es /= CD_HCDYN_OK) THEN
+        CALL restore_twist()
         model%torsion = saved
         ErrStat = es
         ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: '//TRIM(em)
@@ -6919,6 +7490,17 @@ CONTAINS
       END IF
       model%torsion%theta = th
       model%torsion%torque = mt
+      ! nodal twist dynamics when the torsion carries the polar rotary inertia
+      IF (ALLOCATED(torsion%irn)) THEN
+        CALL tw_init(model, mt, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL restore_twist()
+          model%torsion = saved
+          ErrStat = es
+          ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: '//TRIM(em)
+          RETURN
+        END IF
+      END IF
     END IF
     saved_step_ends = model%tors_step_ends
     saved_step_phi = model%tors_step_phi
@@ -6943,6 +7525,7 @@ CONTAINS
     model%tr_valid = .FALSE.
     CALL CD_HermiteCable_Dyn_Recompute_Acceleration(model, es, em)
     IF (es /= CD_HCDYN_OK) THEN
+      CALL restore_twist()
       model%torsion = saved
       model%tors_c_valid = .FALSE.
       model%tors_step_ends = saved_step_ends
@@ -6957,6 +7540,17 @@ CONTAINS
       ErrStat = es
       ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: '//TRIM(em)
     END IF
+
+  CONTAINS
+
+    SUBROUTINE restore_twist()
+      !! The nodal twist as it was before the call (with the torsion description restored
+      !! after it, from which the derived rigid ends, held angles and inertia follow).
+      model%tw_active = saved_tw_active
+      IF (.NOT. saved_tw_active) RETURN
+      CALL tw_unpack(model, saved_tw)
+      CALL tw_set_derived(model, saved)
+    END SUBROUTINE restore_twist
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Torsion
 
   SUBROUTINE CD_HermiteCable_Dyn_Torsion_State(model, theta, torque, ErrStat, ErrMsg, grad, end_grad, q_eval, &
@@ -6986,6 +7580,14 @@ CONTAINS
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
     IF (.NOT. model%torsion%active) RETURN
+    ! Nodal twist: the committed Theta_eff and mean torque (the condensed kernel answers the
+    ! derivative queries, the quasi-static stiffness a static caller takes)
+    IF (model%tw_active .AND. .NOT. (PRESENT(grad) .OR. PRESENT(end_grad) .OR. PRESENT(q_eval) .OR. &
+                                     PRESENT(end_dr))) THEN
+      theta = model%torsion%theta
+      torque = model%torsion%torque
+      RETURN
+    END IF
     IF (.NOT. (PRESENT(grad) .OR. PRESENT(q_eval))) THEN
       IF (torsion_cache_matches(model)) THEN
         theta = model%tors_c_theta
@@ -7131,6 +7733,11 @@ CONTAINS
     model%snap_torsion_theta = model%torsion%theta
     model%snap_torsion_phi = model%torsion%phi
     model%snap_torsion_ends = model%torsion%ends
+    IF (model%tw_active) THEN
+      IF (.NOT. ALLOCATED(model%snap_tw)) ALLOCATE (model%snap_tw(tw_pack_size(model)), model%snap_tw_fcR(model%nn))
+      CALL tw_pack(model, model%snap_tw)
+      model%snap_tw_fcR = model%tw_fcR
+    END IF
     IF (model%fr_active) model%snap_fr_anchor = model%fr_anchor
     IF (model%has_viv) THEN
       model%snap_viv_phi = model%viv_phi
@@ -7212,6 +7819,7 @@ CONTAINS
                                                      CD_HermiteTorsion_Compliance(model%torsion, model%l0)
     model%tors_drive_set = .FALSE.
     model%tors_use_step = .FALSE.
+    IF (model%tw_active) CALL tw_unpack(model, model%snap_tw)
     IF (model%fr_active) model%fr_anchor = model%snap_fr_anchor
     IF (model%has_viv) THEN
       model%viv_phi = model%snap_viv_phi; model%viv_ms = model%snap_viv_ms
@@ -7234,6 +7842,7 @@ CONTAINS
     ! the snapshot (the cache differs from a fresh evaluation in the last bits where a
     ! friction anchor slid). Otherwise the next step evaluates it afresh.
     IF (model%snap_fc_valid .AND. model%snap_fc_clears == model%fc_clears) THEN
+      IF (model%tw_active) model%tw_fcR = model%snap_tw_fcR
       model%fc_R = model%snap_fc_R
       model%fc_q = model%snap_fc_q
       model%fc_v = model%snap_fc_v
@@ -7354,6 +7963,14 @@ CONTAINS
     model%snap_torsion_theta = CD_ZERO
     model%snap_torsion_phi = CD_ZERO
     model%snap_torsion_ends = CD_ZERO
+    CALL tw_release(model)
+    model%tw_rigid = .FALSE.
+    model%tw_psi = CD_ZERO
+    model%tw_lg = CD_ZERO
+    model%tw_lk = CD_ZERO
+    model%tw_tsum = CD_ZERO
+    model%tw_spsi = CD_ZERO
+    model%tw_tscale = CD_ONE
     model%snap_valid = .FALSE.
     model%require_tensile = .FALSE.
     model%tensile_mode = CD_HCDYN_TENSILE_OFF
@@ -7913,8 +8530,14 @@ CONTAINS
 
     CALL asm_mark(HC_ASM_HELD, asm_t)
     ! Condensed torsion: R <- R - M_t dTheta/dq and Kb <- Kb - M_t d2Theta/dq2 at q_cfg (the
-    ! rank-one g g^T / C joins the solve by Sherman-Morrison; g is kept in tors_g).
-    IF (model%torsion%active .AND. (want_residual .OR. want_tangent)) THEN
+    ! rank-one g g^T / C joins the solve by Sherman-Morrison; g is kept in tors_g). Nodal
+    ! twist: the element torques and end springs (assemble_twist).
+    IF (model%tw_active .AND. (want_residual .OR. want_tangent)) THEN
+      CALL assemble_twist(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es; ErrMsg = TRIM(em2); RETURN
+      END IF
+    ELSE IF (model%torsion%active .AND. (want_residual .OR. want_tangent)) THEN
       CALL assemble_torsion(model, q_cfg, want_residual, want_tangent, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = TRIM(em2); RETURN
@@ -7983,6 +8606,773 @@ CONTAINS
       END IF
     END IF
   END SUBROUTINE assemble_torsion
+
+  ! ------------------------------------------------------------------------------------------
+  ! nodal twist (see the type note)
+  ! ------------------------------------------------------------------------------------------
+
+  PURE INTEGER FUNCTION tw_pack_size(model) RESULT(n)
+    !! Reals of the packed twist state of tw_pack: the angles, rates and accelerations, the
+    !! directors and unit tangents, the reference twists, the element torques and the two
+    !! end-frame references.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    n = 9*model%nn + 2*model%ne + 2
+  END FUNCTION tw_pack_size
+
+  PURE SUBROUTINE tw_pack(model, buf)
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: buf(:)
+    INTEGER :: nn, ne
+    nn = model%nn
+    ne = model%ne
+    buf(1:nn) = model%tw_phi
+    buf(nn + 1:2*nn) = model%tw_w
+    buf(2*nn + 1:3*nn) = model%tw_al
+    buf(3*nn + 1:6*nn) = RESHAPE(model%tw_u, [3*nn])
+    buf(6*nn + 1:9*nn) = RESHAPE(model%tw_tn, [3*nn])
+    buf(9*nn + 1:9*nn + ne) = model%tw_beta
+    buf(9*nn + ne + 1:9*nn + 2*ne) = model%tw_mt
+    buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2) = model%tw_psi
+  END SUBROUTINE tw_pack
+
+  PURE SUBROUTINE tw_unpack(model, buf)
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: buf(:)
+    INTEGER :: nn, ne
+    nn = model%nn
+    ne = model%ne
+    model%tw_phi = buf(1:nn)
+    model%tw_w = buf(nn + 1:2*nn)
+    model%tw_al = buf(2*nn + 1:3*nn)
+    model%tw_u = RESHAPE(buf(3*nn + 1:6*nn), [3, nn])
+    model%tw_tn = RESHAPE(buf(6*nn + 1:9*nn), [3, nn])
+    model%tw_beta = buf(9*nn + 1:9*nn + ne)
+    model%tw_mt = buf(9*nn + ne + 1:9*nn + 2*ne)
+    model%tw_psi = buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2)
+  END SUBROUTINE tw_unpack
+
+  ELEMENTAL REAL(wp) FUNCTION tw_wrap(x) RESULT(y)
+    !! x on (-pi, pi] (an angle change over one step; 0 stays exactly 0).
+    REAL(wp), INTENT(IN) :: x
+    y = x - 2.0_wp*CD_HTORS_PI*ANINT(x/(2.0_wp*CD_HTORS_PI))
+  END FUNCTION tw_wrap
+
+  PURE FUNCTION tw_cross(a, b) RESULT(c)
+    REAL(wp), INTENT(IN) :: a(3), b(3)
+    REAL(wp) :: c(3)
+    c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
+  END FUNCTION tw_cross
+
+  PURE SUBROUTINE tw_frames(model, ends, phi_end)
+    !! The end frames and Phi an evaluation takes: the running step's target, or the committed.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: ends(3, 4), phi_end
+    IF (model%tors_use_step) THEN
+      ends = model%tors_step_ends
+      phi_end = model%tors_step_phi
+    ELSE
+      ends = model%torsion%ends
+      phi_end = model%torsion%phi
+    END IF
+  END SUBROUTINE tw_frames
+
+  SUBROUTINE twist_reference(model, e, q_cfg, ends, want_hess, rho, beta, g, h, ErrStat, ErrMsg, end_w)
+    !! rho_e(q) of element e (the material twist is phi_{e+1} - phi_e + rho_e less the coupling
+    !! term), its gradient g and, with want_hess, Hessian h over the element's 12 DOFs, at q_cfg
+    !! with the end frames ends. beta is the reference-twist part: the committed tw_beta(e) plus
+    !! the change of the end-frame constant and of the transport solid angles since the
+    !! committed state, each formed as a difference so that the committed state and frames give
+    !! tw_beta(e) bit for bit. Interior element: beta = beta^n - Omega(a, b, c) - Omega(a, c, d),
+    !! a, d the committed and b, c the present unit node tangents. An element at a rigid end
+    !! takes the end frame's normal carried to its end node as that node's director (see
+    !! CD_HermiteTwist_Reference). end_w(:, k), when asked for, is d rho/d w_k for an incremental
+    !! rotation w_k of the end frame k (zero unless the element reaches a rigid end).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    REAL(wp), INTENT(IN) :: q_cfg(:), ends(3, 4)
+    LOGICAL, INTENT(IN) :: want_hess
+    REAL(wp), INTENT(OUT) :: rho, beta, g(12), h(12, 12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: end_w(3, 2)
+    REAL(wp) :: qe(12), tri(3, 3, 2), sg(2), fg(3, 3, 2), z(3), a(3), d(3), val, oref, cnow, cref
+    REAL(wp) :: he, ge(12), hk(12, 12), ls, gs(12), hs(12, 12), om, g9(9), cpl
+    REAL(wp) :: dA(3), nA(3), dB(3), nB(3), dAc(3), nAc(3), dBc(3), nBc(3)
+    INTEGER :: slot(3, 2), owner(3, 2), kind, es, k, j
+    CHARACTER(200) :: em
+
+    rho = CD_ZERO
+    beta = CD_ZERO
+    g = CD_ZERO
+    h = CD_ZERO
+    IF (PRESENT(end_w)) end_w = CD_ZERO
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    qe = q_cfg(6*e - 5:6*e + 6)
+    a = model%tw_tn(:, e)
+    d = model%tw_tn(:, e + 1)
+    z = CD_ZERO
+    dA = ends(:, 1)
+    nA = ends(:, 2)
+    dB = ends(:, 3)
+    nB = ends(:, 4)
+    dAc = model%torsion%ends(:, 1)
+    nAc = model%torsion%ends(:, 2)
+    dBc = model%torsion%ends(:, 3)
+    nBc = model%torsion%ends(:, 4)
+    kind = 0
+    IF (e == 1 .AND. model%tw_rigid(1)) kind = 1
+    IF (e == model%ne .AND. model%tw_rigid(2)) kind = kind + 2
+    cnow = CD_ZERO
+    cref = CD_ZERO
+    owner = 0
+    sg = -CD_ONE
+    oref = CD_ZERO
+    SELECT CASE (kind)
+    CASE (0)
+      tri(:, :, 1) = RESHAPE([a, z, z], [3, 3])
+      slot(:, 1) = [0, 1, 2]
+      tri(:, :, 2) = RESHAPE([a, z, d], [3, 3])
+      slot(:, 2) = [0, 2, 0]
+      oref = oref + sg(1)*CD_HermiteTwist_Omega(a, a, d)
+      oref = oref + sg(2)*CD_HermiteTwist_Omega(a, d, d)
+    CASE (1)
+      ! node 1 director G(d_A -> t_1) n_A
+      tri(:, :, 1) = RESHAPE([dA, z, z], [3, 3])
+      slot(:, 1) = [0, 1, 2]
+      owner(1, 1) = 1
+      tri(:, :, 2) = RESHAPE([dA, z, d], [3, 3])
+      slot(:, 2) = [0, 2, 0]
+      owner(1, 2) = 1
+      oref = oref + sg(1)*CD_HermiteTwist_Omega(dAc, a, d)
+      oref = oref + sg(2)*CD_HermiteTwist_Omega(dAc, d, d)
+      cnow = CD_HermiteTwist_Angle(CD_HermiteTwist_Carry(dA, d, nA), model%tw_u(:, e + 1), d)
+      cref = CD_HermiteTwist_Angle(CD_HermiteTwist_Carry(dAc, d, nAc), model%tw_u(:, e + 1), d)
+    CASE (2)
+      ! last-node director G(d_B -> t_N) n_B
+      sg = [CD_ONE, -CD_ONE]
+      tri(:, :, 1) = RESHAPE([dB, z, a], [3, 3])
+      slot(:, 1) = [0, 2, 0]
+      owner(1, 1) = 2
+      tri(:, :, 2) = RESHAPE([a, z, z], [3, 3])
+      slot(:, 2) = [0, 1, 2]
+      oref = oref + sg(1)*CD_HermiteTwist_Omega(dBc, d, a)
+      oref = oref + sg(2)*CD_HermiteTwist_Omega(a, a, d)
+      cnow = CD_HermiteTwist_Angle(model%tw_u(:, e), CD_HermiteTwist_Carry(dB, a, nB), a)
+      cref = CD_HermiteTwist_Angle(model%tw_u(:, e), CD_HermiteTwist_Carry(dBc, a, nBc), a)
+    CASE (3)
+      ! one element, rigid at both ends
+      sg = [CD_ONE, -CD_ONE]
+      tri(:, :, 1) = RESHAPE([dB, z, dA], [3, 3])
+      slot(:, 1) = [0, 2, 0]
+      owner(1, 1) = 2
+      owner(3, 1) = 1
+      tri(:, :, 2) = RESHAPE([dA, z, z], [3, 3])
+      slot(:, 2) = [0, 1, 2]
+      owner(1, 2) = 1
+      oref = oref + sg(1)*CD_HermiteTwist_Omega(dBc, d, dAc)
+      oref = oref + sg(2)*CD_HermiteTwist_Omega(dAc, a, d)
+      cnow = CD_HermiteTwist_Angle(nA, CD_HermiteTwist_Carry(dB, dA, nB), dA)
+      cref = CD_HermiteTwist_Angle(nAc, CD_HermiteTwist_Carry(dBc, dAc, nBc), dAc)
+    END SELECT
+    IF (want_hess) THEN
+      CALL CD_HermiteTwist_Reference(qe, model%l0(e), tri, slot, sg, val, g, es, em, hess=h, holonomy=.FALSE., &
+                                     fixed_grad=fg)
+    ELSE
+      CALL CD_HermiteTwist_Reference(qe, model%l0(e), tri, slot, sg, val, g, es, em, holonomy=.FALSE., fixed_grad=fg)
+    END IF
+    IF (es /= CD_HTORS_OK) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'twist: '//TRIM(em)
+      RETURN
+    END IF
+    ! the wrapped change of the end-frame constant is unique while the frame turns by less than
+    ! pi between two committed states; pi/2 keeps the margin of the condensed torsion
+    IF (ABS(tw_wrap(cnow - cref)) > CD_HTORS_MAX_STEP) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'twist: an end frame turned by more than pi/2 about the line from its committed state'
+      RETURN
+    END IF
+    beta = model%tw_beta(e) + tw_wrap(cnow - cref) + (val - oref)
+    IF (want_hess) THEN
+      CALL CD_HermiteTorsion_Element(qe, model%l0(e), he, ge, es, em, hess=hk, &
+                                     quadrature_order=model%torsion%quadrature_order)
+    ELSE
+      CALL CD_HermiteTorsion_Element(qe, model%l0(e), he, ge, es, em, quadrature_order=model%torsion%quadrature_order)
+    END IF
+    IF (es /= CD_HTORS_OK) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'twist: '//TRIM(em)
+      RETURN
+    END IF
+    rho = beta - he
+    g = g - ge
+    IF (want_hess) h = h - hk
+    cpl = CD_ZERO
+    IF (ALLOCATED(model%torsion%couple)) cpl = model%torsion%couple(e)
+    IF (ABS(cpl) > CD_ZERO) THEN
+      CALL CD_HermiteTorsion_Stretch_Derivatives(qe, model%l0(e), ls, gs, hs, model%torsion%quadrature_order)
+      rho = rho + cpl*(ls - model%l0(e))
+      g = g + cpl*gs
+      IF (want_hess) h = h + cpl*hs
+    END IF
+    IF (PRESENT(end_w) .AND. kind > 0) THEN
+      ! fixed frame vertices turn with their frame: d Omega/d w = d x dOmega/dd
+      DO k = 1, 2
+        DO j = 1, 3
+          IF (owner(j, k) == 0) CYCLE
+          end_w(:, owner(j, k)) = end_w(:, owner(j, k)) + tw_cross(tri(:, j, k), fg(:, j, k))
+        END DO
+      END DO
+      ! the end-frame constants (see the derivation in CD_HermiteCable_Dyn_EndConnection_Moment)
+      SELECT CASE (kind)
+      CASE (1)
+        CALL CD_HermiteTwist_Omega_Gradient(dA, dA, d, om, g9)
+        end_w(:, 1) = end_w(:, 1) - dA - tw_cross(dA, g9(4:6))
+      CASE (2)
+        CALL CD_HermiteTwist_Omega_Gradient(dB, dB, a, om, g9)
+        end_w(:, 2) = end_w(:, 2) + dB + tw_cross(dB, g9(4:6))
+      CASE (3)
+        CALL CD_HermiteTwist_Omega_Gradient(dB, dB, dA, om, g9)
+        end_w(:, 2) = end_w(:, 2) + dB + tw_cross(dB, g9(4:6))
+        CALL CD_HermiteTwist_Omega_Gradient(dB, dA, dA, om, g9)
+        end_w(:, 1) = end_w(:, 1) - dA + tw_cross(dA, g9(4:6))
+      END SELECT
+    END IF
+  END SUBROUTINE twist_reference
+
+  SUBROUTINE twist_link(model, iend, q_cfg, ends, want_hess, psi, gl, hl, ErrStat, ErrMsg, end_w)
+    !! The end-frame reference psi of the elastic end iend: the angle about the end node's
+    !! tangent from its director to the end frame's normal carried to the node, psi = psi^n +
+    !! (change of angle(u^n -> G(d -> t^n) n)) + Omega(d, t, t^n) - Omega(d^n, t^n, t^n), with its
+    !! gradient gl and Hessian hl in the end node's tangent handle m, and, when asked for,
+    !! end_w = d psi/d w of an incremental rotation of the end frame. The end spring twists by
+    !! phi_1 - psi at end 1 and by psi + Phi - phi_N at end 2.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: iend
+    REAL(wp), INTENT(IN) :: q_cfg(:), ends(3, 4)
+    LOGICAL, INTENT(IN) :: want_hess
+    REAL(wp), INTENT(OUT) :: psi, gl(3), hl(3, 3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: end_w(3)
+    REAL(wp) :: qe(12), tri(3, 3, 1), fg(3, 3, 1), g12(12), h12(12, 12), z(3), a(3), u(3), dd(3), nd(3)
+    REAL(wp) :: dc(3), nc(3), val, oref, cnow, cref, om, g9(9)
+    INTEGER :: node, slot(3, 1), es
+    CHARACTER(200) :: em
+    psi = CD_ZERO
+    gl = CD_ZERO
+    hl = CD_ZERO
+    IF (PRESENT(end_w)) end_w = CD_ZERO
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    node = MERGE(1, model%nn, iend == 1)
+    qe = CD_ZERO
+    qe(4:6) = q_cfg(6*node - 2:6*node)
+    a = model%tw_tn(:, node)
+    u = model%tw_u(:, node)
+    z = CD_ZERO
+    dd = ends(:, 2*iend - 1)
+    nd = ends(:, 2*iend)
+    dc = model%torsion%ends(:, 2*iend - 1)
+    nc = model%torsion%ends(:, 2*iend)
+    tri(:, :, 1) = RESHAPE([dd, z, a], [3, 3])
+    slot(:, 1) = [0, 1, 0]
+    oref = CD_ZERO
+    oref = oref + CD_ONE*CD_HermiteTwist_Omega(dc, a, a)
+    cnow = CD_HermiteTwist_Angle(u, CD_HermiteTwist_Carry(dd, a, nd), a)
+    cref = CD_HermiteTwist_Angle(u, CD_HermiteTwist_Carry(dc, a, nc), a)
+    IF (want_hess) THEN
+      CALL CD_HermiteTwist_Reference(qe, model%l0(1), tri, slot, [CD_ONE], val, g12, es, em, hess=h12, &
+                                     holonomy=.FALSE., fixed_grad=fg)
+    ELSE
+      CALL CD_HermiteTwist_Reference(qe, model%l0(1), tri, slot, [CD_ONE], val, g12, es, em, holonomy=.FALSE., &
+                                     fixed_grad=fg)
+    END IF
+    IF (es /= CD_HTORS_OK) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'twist end link: '//TRIM(em)
+      RETURN
+    END IF
+    IF (ABS(tw_wrap(cnow - cref)) > CD_HTORS_MAX_STEP) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE
+      ErrMsg = 'twist end link: the end frame turned by more than pi/2 about the line from its committed state'
+      RETURN
+    END IF
+    psi = model%tw_psi(iend) + tw_wrap(cnow - cref) + (val - oref)
+    gl = g12(4:6)
+    IF (want_hess) hl = h12(4:6, 4:6)
+    IF (PRESENT(end_w)) THEN
+      CALL CD_HermiteTwist_Omega_Gradient(dd, dd, a, om, g9)
+      end_w = dd + tw_cross(dd, g9(4:6)) + tw_cross(dd, fg(:, 1, 1))
+    END IF
+  END SUBROUTINE twist_link
+
+  SUBROUTINE assemble_twist(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, ErrStat, ErrMsg)
+    !! Nodal-twist part of assemble_residual: every element's torque M_e = (GJ/l0) tw_e + (Bt/l0)
+    !! d tw_e/dt (tw_e = phi_{e+1} - phi_e + rho_e(q), d/dt from the nodal rates and g . q_dot)
+    !! and every elastic end's spring, at q_cfg, v_cfg and the angles and rates of the running
+    !! step (tw_pe, tw_we) or of the committed state. R gains M_e drho_e/dq and tw_R the nodal
+    !! torques (want_residual); Kb gains M_e d2rho_e/dq2 + (GJ/l0) g g^T (+ the damping's
+    !! g (H q_dot)^T) and Kvb (Bt/l0) g g^T, and the coupling to the angles is kept per element
+    !! for the solve (tw_eg, tw_ehv, tw_ek, tw_ed, tw_lg, tw_lk; want_tangent). tw_me holds the
+    !! element torques and tw_tsum the summed twist.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT), TARGET :: model
+    REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
+    LOGICAL, INTENT(IN) :: want_residual, want_tangent
+    REAL(wp), INTENT(INOUT) :: R(:), Kb(:, :), Kvb(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), POINTER :: phi(:), w(:)
+    REAL(wp) :: ends(3, 4), phi_end, rho, beta, g(12), h(12, 12), ve(12), hv(12), ke(12, 12), kel, kd
+    REAL(wp) :: tau, rate, mt, psi, gl(3), hl(3, 3), k, tw
+    INTEGER :: e, iend, node, b, i, j, es
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    CALL tw_frames(model, ends, phi_end)
+    IF (model%tors_use_step) THEN
+      phi => model%tw_pe
+      w => model%tw_we
+    ELSE
+      phi => model%tw_phi
+      w => model%tw_w
+    END IF
+    IF (want_residual) model%tw_R = CD_ZERO
+    model%tw_tsum = CD_ZERO
+    DO e = 1, model%ne
+      CALL twist_reference(model, e, q_cfg, ends, want_tangent, rho, beta, g, h, es, em)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es
+        ErrMsg = TRIM(em)
+        RETURN
+      END IF
+      ve = v_cfg(6*e - 5:6*e + 6)
+      kel = model%torsion%gj(e)/model%l0(e)
+      kd = CD_ZERO
+      IF (ALLOCATED(model%torsion%bt)) kd = model%torsion%bt(e)/model%l0(e)
+      tau = phi(e + 1) - phi(e) + rho
+      rate = w(e + 1) - w(e) + DOT_PRODUCT(g, ve)
+      mt = kel*tau + kd*rate
+      model%tw_me(e) = mt
+      model%tw_tsum = model%tw_tsum + tau
+      IF (want_residual) THEN
+        R(6*e - 5:6*e + 6) = R(6*e - 5:6*e + 6) + mt*g
+        model%tw_R(e) = model%tw_R(e) - mt
+        model%tw_R(e + 1) = model%tw_R(e + 1) + mt
+      END IF
+      IF (want_tangent) THEN
+        hv = CD_ZERO
+        IF (kd > CD_ZERO) hv = MATMUL(h, ve)
+        DO j = 1, 12
+          DO i = 1, 12
+            ke(i, j) = mt*h(i, j) + kel*g(i)*g(j) + kd*g(i)*hv(j)
+          END DO
+        END DO
+        CALL scatter12_band(Kb, ke, e)
+        IF (kd > CD_ZERO) THEN
+          DO j = 1, 12
+            DO i = 1, 12
+              ke(i, j) = kd*g(i)*g(j)
+            END DO
+          END DO
+          CALL scatter12_band(Kvb, ke, e)
+        END IF
+        model%tw_eg(:, e) = g
+        model%tw_ehv(:, e) = hv
+        model%tw_ek(e) = kel
+        model%tw_ed(e) = kd
+      END IF
+    END DO
+    IF (want_tangent) THEN
+      model%tw_lg = CD_ZERO
+      model%tw_lk = CD_ZERO
+    END IF
+    DO iend = 1, 2
+      IF (model%tw_rigid(iend)) CYCLE
+      CALL twist_link(model, iend, q_cfg, ends, want_tangent, psi, gl, hl, es, em)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = es
+        ErrMsg = TRIM(em)
+        RETURN
+      END IF
+      k = CD_ONE/model%torsion%end_compliance(iend)
+      node = MERGE(1, model%nn, iend == 1)
+      b = 6*node - 3
+      IF (iend == 1) THEN
+        tw = phi(1) - psi
+      ELSE
+        tw = psi + phi_end - phi(model%nn)
+      END IF
+      mt = k*tw
+      model%tw_tsum = model%tw_tsum + tw
+      IF (want_residual) THEN
+        IF (iend == 1) THEN
+          R(b + 1:b + 3) = R(b + 1:b + 3) - mt*gl
+          model%tw_R(1) = model%tw_R(1) + mt
+        ELSE
+          R(b + 1:b + 3) = R(b + 1:b + 3) + mt*gl
+          model%tw_R(model%nn) = model%tw_R(model%nn) - mt
+        END IF
+      END IF
+      IF (want_tangent) THEN
+        DO j = 1, 3
+          DO i = 1, 3
+            Kb(KL_D + KU_D + 1 + i - j, b + j) = Kb(KL_D + KU_D + 1 + i - j, b + j) + k*gl(i)*gl(j) + &
+                                                 MERGE(-mt, mt, iend == 1)*hl(i, j)
+          END DO
+        END DO
+        model%tw_lg(:, iend) = gl
+        model%tw_lk(iend) = k
+      END IF
+    END DO
+  END SUBROUTINE assemble_twist
+
+  SUBROUTINE tw_build_K7(model, cm, ck, cv, bases, ErrStat, ErrMsg)
+    !! The effective tangent of the nodal-twist step in 7-DOF-per-node order ([r, m, phi] per
+    !! node, KL = KU = 13) from the cable's ws_Keffb (already in the rigid-end basis, Dirichlet
+    !! applied) and the twist data of the last tangent assembly: cm M + ck K + cv Kv for the
+    !! angles' lumped inertia, stiffness and damping and their coupling to q (the q rows and
+    !! columns of a rigid end in its basis, those of fixed DOFs and of held angles zeroed).
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: cm, ck, cv, bases(3, 3, 2)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: i6, j6, i7, j7, e, a, gi, p, iend, node, b
+    REAL(wp) :: colv(12), rowv(12), d, kl3(3)
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    model%tw_K7 = CD_ZERO
+    DO j6 = 1, model%ndof
+      j7 = j6 + (j6 - 1)/6
+      DO i6 = MAX(1, j6 - KU_D), MIN(model%ndof, j6 + KL_D)
+        i7 = i6 + (i6 - 1)/6
+        model%tw_K7(2*KB7 + 1 + i7 - j7, j7) = model%ws_Keffb(KL_D + KU_D + 1 + i6 - j6, j6)
+      END DO
+    END DO
+    DO e = 1, model%ne
+      ! q rows of the angle columns, (ck GJ/l0 + cv Bt/l0) g, and angle rows of the q columns,
+      ! ck (GJ/l0 g + Bt/l0 H q_dot) + cv Bt/l0 g; both + at phi_{e+1} and - at phi_e
+      colv = (ck*model%tw_ek(e) + cv*model%tw_ed(e))*model%tw_eg(:, e)
+      rowv = ck*(model%tw_ek(e)*model%tw_eg(:, e) + model%tw_ed(e)*model%tw_ehv(:, e)) + &
+             cv*model%tw_ed(e)*model%tw_eg(:, e)
+      IF (e == 1) CALL rigid_local(1, colv(4:6), rowv(4:6))
+      IF (e == model%ne) CALL rigid_local(2, colv(10:12), rowv(10:12))
+      d = ck*model%tw_ek(e) + cv*model%tw_ed(e)
+      DO a = 1, 12
+        gi = elem_gdof(e, a)
+        IF (.NOT. model%solve_mask(gi)) CYCLE
+        DO p = e, e + 1
+          IF (.NOT. model%tw_free(p)) CYCLE
+          CALL add7(gi + (gi - 1)/6, 7*p, MERGE(colv(a), -colv(a), p == e + 1))
+          CALL add7(7*p, gi + (gi - 1)/6, MERGE(rowv(a), -rowv(a), p == e + 1))
+        END DO
+      END DO
+      DO p = e, e + 1
+        IF (.NOT. model%tw_free(p)) CYCLE
+        DO i6 = e, e + 1
+          IF (.NOT. model%tw_free(i6)) CYCLE
+          CALL add7(7*p, 7*i6, MERGE(d, -d, p == i6))
+        END DO
+      END DO
+    END DO
+    DO iend = 1, 2
+      IF (.NOT. model%tw_lk(iend) > CD_ZERO) CYCLE
+      node = MERGE(1, model%nn, iend == 1)
+      IF (.NOT. model%tw_free(node)) CYCLE
+      kl3 = -ck*model%tw_lk(iend)*model%tw_lg(:, iend)
+      colv(1:3) = kl3
+      rowv(1:3) = kl3
+      CALL rigid_local(iend, colv(1:3), rowv(1:3))
+      b = 6*node - 3
+      DO a = 1, 3
+        gi = b + a
+        IF (.NOT. model%solve_mask(gi)) CYCLE
+        CALL add7(gi + (gi - 1)/6, 7*node, colv(a))
+        CALL add7(7*node, gi + (gi - 1)/6, rowv(a))
+      END DO
+      CALL add7(7*node, 7*node, ck*model%tw_lk(iend))
+    END DO
+    DO p = 1, model%nn
+      IF (model%tw_free(p)) THEN
+        CALL add7(7*p, 7*p, cm*model%tw_mass(p))
+      ELSE
+        model%tw_K7(2*KB7 + 1, 7*p) = CD_ONE
+      END IF
+    END DO
+    ! column by column (a reshaped copy would be a heap temporary)
+    DO p = 1, SIZE(model%tw_K7, 2)
+      IF (.NOT. CD_All_Finite(model%tw_K7(:, p))) THEN
+        ErrStat = CD_HCDYN_NOCONVERGE
+        ErrMsg = 'twist: non-finite effective tangent'
+        RETURN
+      END IF
+    END DO
+  CONTAINS
+    SUBROUTINE add7(r7, c7, val)
+      INTEGER, INTENT(IN) :: r7, c7
+      REAL(wp), INTENT(IN) :: val
+      model%tw_K7(2*KB7 + 1 + r7 - c7, c7) = model%tw_K7(2*KB7 + 1 + r7 - c7, c7) + val
+    END SUBROUTINE add7
+    SUBROUTINE rigid_local(iend_l, cv3, rv3)
+      !! The tangent-DOF entries of a rigid end in its basis (as transform_rigid_band).
+      INTEGER, INTENT(IN) :: iend_l
+      REAL(wp), INTENT(INOUT) :: cv3(3), rv3(3)
+      IF (model%endconn_mode(iend_l) /= CD_ENDCONN_RIGID) RETURN
+      cv3 = MATMUL(TRANSPOSE(bases(:, :, iend_l)), cv3)
+      rv3 = MATMUL(rv3, bases(:, :, iend_l))
+    END SUBROUTINE rigid_local
+  END SUBROUTINE tw_build_K7
+
+  SUBROUTINE tw_solve(model, ErrStat, ErrMsg)
+    !! Solve the factored tw_K7 for the direction [ws_dq, tw_dp] (right-hand sides on entry,
+    !! the solution on return).
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: i
+    DO i = 1, model%ndof
+      model%tw_x7(i + (i - 1)/6) = model%ws_dq(i)
+    END DO
+    DO i = 1, model%nn
+      model%tw_x7(7*i) = model%tw_dp(i)
+    END DO
+    CALL CD_Solve_Factored_Banded(model%tw_K7, KB7, KB7, model%tw_ipiv, model%tw_x7, ErrStat, ErrMsg, &
+                                  factor_validated=.TRUE.)
+    IF (ErrStat /= CD_LINALG_OK) RETURN
+    DO i = 1, model%ndof
+      model%ws_dq(i) = model%tw_x7(i + (i - 1)/6)
+    END DO
+    DO i = 1, model%nn
+      model%tw_dp(i) = model%tw_x7(7*i)
+    END DO
+  END SUBROUTINE tw_solve
+
+  SUBROUTINE tw_init(model, mt, ErrStat, ErrMsg)
+    !! Install the nodal twist of the committed configuration under the uniform torque mt (the
+    !! condensed torque of the static state): directors carried along the line from the End-1
+    !! frame (each element's own transport, so every interior reference twist is the element
+    !! holonomy), angles accumulated from the element twists mt l0/GJ - rho_e and the end
+    !! compliances, rates zero. A rigid end 2 holds phi = Phi: the last element's reference
+    !! twist takes the multiple of 2 pi the accumulated angle needs, as an elastic end 2's psi
+    !! does; a remainder above STATE_TOL (a static state off equilibrium) fails closed.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: mt
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), PARAMETER :: STATE_TOL = 1.0e-6_wp
+    INTEGER :: nn, ne, i, e, es
+    REAL(wp) :: v(3), t(3), he, ge(12), qe(12), rho, beta, g(12), h(12, 12), diff, kk, ends(3, 4), phi_end, psi
+    REAL(wp) :: tol
+    CHARACTER(200) :: em
+    CHARACTER(1024) :: em2
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    nn = model%nn
+    ne = model%ne
+    IF (ALLOCATED(model%tw_phi)) THEN
+      IF (SIZE(model%tw_phi) /= nn) CALL tw_release(model)
+    END IF
+    IF (.NOT. ALLOCATED(model%tw_phi)) THEN
+      ALLOCATE (model%tw_phi(nn), model%tw_w(nn), model%tw_al(nn), model%tw_mass(nn), model%tw_u(3, nn), &
+                model%tw_tn(3, nn), model%tw_beta(ne), model%tw_mt(ne), model%tw_free(nn))
+      ALLOCATE (model%tw_pn(nn), model%tw_wn(nn), model%tw_an(nn), model%tw_pk(nn), model%tw_wk(nn), &
+                model%tw_ak(nn), model%tw_ptrial(nn), model%tw_dp(nn), model%tw_G(nn), model%tw_Gt(nn), &
+                model%tw_Rk(nn), model%tw_Rt(nn), model%tw_R(nn), model%tw_fcR(nn), model%tw_pe(nn), &
+                model%tw_we(nn))
+      ALLOCATE (model%tw_eg(12, ne), model%tw_ehv(12, ne), model%tw_ek(ne), model%tw_ed(ne), model%tw_me(ne))
+      ALLOCATE (model%tw_K7(3*KB7 + 1, 7*nn), model%tw_x7(7*nn), model%tw_ipiv(7*nn))
+      ALLOCATE (model%tw_su(3, nn), model%tw_stn(3, nn), model%tw_sbeta(ne))
+      ALLOCATE (model%ws_recovery_tw(tw_pack_size(model)))
+    END IF
+    model%tw_pn = CD_ZERO; model%tw_wn = CD_ZERO; model%tw_an = CD_ZERO; model%tw_pk = CD_ZERO
+    model%tw_wk = CD_ZERO; model%tw_ak = CD_ZERO; model%tw_ptrial = CD_ZERO; model%tw_dp = CD_ZERO
+    model%tw_G = CD_ZERO; model%tw_Gt = CD_ZERO; model%tw_Rk = CD_ZERO; model%tw_Rt = CD_ZERO
+    model%tw_R = CD_ZERO; model%tw_fcR = CD_ZERO; model%tw_eg = CD_ZERO; model%tw_ehv = CD_ZERO
+    model%tw_ek = CD_ZERO; model%tw_ed = CD_ZERO; model%tw_me = CD_ZERO
+    CALL tw_set_derived(model, model%torsion)
+    DO i = 1, nn
+      model%tw_tn(:, i) = model%q(6*i - 2:6*i)/NORM2(model%q(6*i - 2:6*i))
+    END DO
+    ends = model%torsion%ends
+    phi_end = model%torsion%phi
+    model%tw_u(:, 1) = unit_perp(CD_HermiteTwist_Carry(ends(:, 1), model%tw_tn(:, 1), ends(:, 2)), model%tw_tn(:, 1))
+    DO e = 1, ne
+      qe = model%q(6*e - 5:6*e + 6)
+      CALL CD_HermiteTorsion_Element(qe, model%l0(e), he, ge, es, em, quadrature_order=model%torsion%quadrature_order)
+      IF (es /= CD_HTORS_OK) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'twist: '//TRIM(em)
+        RETURN
+      END IF
+      t = model%tw_tn(:, e + 1)
+      v = CD_HermiteTwist_Carry(model%tw_tn(:, e), t, model%tw_u(:, e))
+      model%tw_u(:, e + 1) = unit_perp(COS(he)*v + SIN(he)*tw_cross(t, v), t)
+    END DO
+    IF (model%tw_rigid(2)) model%tw_u(:, nn) = unit_perp(CD_HermiteTwist_Carry(ends(:, 3), model%tw_tn(:, nn), &
+                                                                               ends(:, 4)), model%tw_tn(:, nn))
+    DO e = 1, ne
+      model%tw_beta(e) = CD_HermiteTwist_Angle(CD_HermiteTwist_Carry(model%tw_tn(:, e), model%tw_tn(:, e + 1), &
+                                                                     model%tw_u(:, e)), model%tw_u(:, e + 1), &
+                                               model%tw_tn(:, e + 1))
+    END DO
+    ! a rigid end's element takes its end-frame constant in tw_beta: its formula at the
+    ! committed state is tw_beta itself, so take the director angle of the gauge directly
+    model%tw_psi = CD_ZERO
+    IF (.NOT. model%tw_rigid(1)) model%tw_psi(1) = CD_HermiteTwist_Angle(model%tw_u(:, 1), &
+                                                                         CD_HermiteTwist_Carry(ends(:, 1), &
+                                                                                               model%tw_tn(:, 1), &
+                                                                                               ends(:, 2)), &
+                                                                         model%tw_tn(:, 1))
+    ! angles from the uniform torque
+    tol = STATE_TOL*MAX(CD_ONE, ABS(phi_end))
+    model%tw_phi = CD_ZERO
+    IF (.NOT. model%tw_rigid(1)) model%tw_phi(1) = mt*model%torsion%end_compliance(1) + model%tw_psi(1)
+    model%tors_use_step = .FALSE.
+    DO e = 1, ne
+      CALL twist_reference(model, e, model%q, ends, .FALSE., rho, beta, g, h, es, em2)
+      IF (es /= CD_HCDYN_OK) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = TRIM(em2)
+        RETURN
+      END IF
+      model%tw_phi(e + 1) = model%tw_phi(e) + mt*model%l0(e)/model%torsion%gj(e) - rho
+      IF (e == ne .AND. model%tw_rigid(2)) THEN
+        diff = model%tw_phi(nn) - phi_end
+        kk = ANINT(diff/(2.0_wp*CD_HTORS_PI))
+        IF (ABS(diff - 2.0_wp*CD_HTORS_PI*kk) > tol) THEN
+          ErrStat = CD_HCDYN_BADINPUT
+          WRITE (ErrMsg, '(A,ES10.3,A)') 'twist: the static torsion state misses the End-2 twist by ', &
+            ABS(diff - 2.0_wp*CD_HTORS_PI*kk), ' rad (solve the statics with torsion first)'
+          RETURN
+        END IF
+        model%tw_beta(ne) = model%tw_beta(ne) + diff
+        model%tw_phi(nn) = phi_end
+      END IF
+    END DO
+    IF (.NOT. model%tw_rigid(2)) THEN
+      ! the End-2 spring: its psi at the committed state is the director angle itself, on the
+      ! branch that puts the static end twist mt/k_2 on it
+      psi = CD_HermiteTwist_Angle(model%tw_u(:, nn), CD_HermiteTwist_Carry(ends(:, 3), model%tw_tn(:, nn), &
+                                                                           ends(:, 4)), model%tw_tn(:, nn))
+      diff = mt*model%torsion%end_compliance(2) - (psi + phi_end - model%tw_phi(nn))
+      kk = ANINT(diff/(2.0_wp*CD_HTORS_PI))
+      IF (ABS(diff - 2.0_wp*CD_HTORS_PI*kk) > tol) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        WRITE (ErrMsg, '(A,ES10.3,A)') 'twist: the static torsion state misses the End-2 spring twist by ', &
+          ABS(diff - 2.0_wp*CD_HTORS_PI*kk), ' rad (solve the statics with torsion first)'
+        RETURN
+      END IF
+      model%tw_psi(2) = psi + diff
+    END IF
+    model%tw_w = CD_ZERO
+    model%tw_al = CD_ZERO
+    model%tw_mt = mt
+    model%tw_active = .TRUE.
+  CONTAINS
+    PURE FUNCTION unit_perp(x, ax) RESULT(y)
+      REAL(wp), INTENT(IN) :: x(3), ax(3)
+      REAL(wp) :: y(3)
+      y = x - DOT_PRODUCT(x, ax)*ax
+      y = y/NORM2(y)
+    END FUNCTION unit_perp
+  END SUBROUTINE tw_init
+
+  SUBROUTINE tw_set_derived(model, tors)
+    !! The rigid ends, held angles and lumped polar inertia (half of each adjacent element's
+    !! Irn l0) the torsion description tors gives.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    TYPE(CD_HermiteTorsionType), INTENT(IN) :: tors
+    INTEGER :: e
+    model%tw_rigid = .NOT. (tors%end_compliance > CD_ZERO)
+    model%tw_free = .TRUE.
+    IF (model%tw_rigid(1)) model%tw_free(1) = .FALSE.
+    IF (model%tw_rigid(2)) model%tw_free(model%nn) = .FALSE.
+    model%tw_mass = CD_ZERO
+    DO e = 1, model%ne
+      model%tw_mass(e) = model%tw_mass(e) + 0.5_wp*tors%irn(e)*model%l0(e)
+      model%tw_mass(e + 1) = model%tw_mass(e + 1) + 0.5_wp*tors%irn(e)*model%l0(e)
+    END DO
+  END SUBROUTINE tw_set_derived
+
+  SUBROUTINE tw_settle_committed(model)
+    !! After an evaluation of the committed state (solve_consistent_acceleration): the angles'
+    !! accelerations staged in tw_ak, the element torques, and the condensed view Theta_eff =
+    !! Phi - summed twist with its mean torque (Phi - Theta_eff)/C.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    model%tw_al = model%tw_ak
+    model%tw_mt = model%tw_me
+    model%torsion%theta = model%torsion%phi - model%tw_tsum
+    model%torsion%torque = model%tw_tsum/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+  END SUBROUTINE tw_settle_committed
+
+  SUBROUTINE tw_release(model)
+    !! Deallocate the nodal-twist state and scratch.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    model%tw_active = .FALSE.
+    IF (ALLOCATED(model%tw_phi)) DEALLOCATE (model%tw_phi, model%tw_w, model%tw_al, model%tw_mass, model%tw_u, &
+                                             model%tw_tn, model%tw_beta, model%tw_mt, model%tw_free)
+    IF (ALLOCATED(model%tw_pn)) DEALLOCATE (model%tw_pn, model%tw_wn, model%tw_an, model%tw_pk, model%tw_wk, &
+                                            model%tw_ak, model%tw_ptrial, model%tw_dp, model%tw_G, model%tw_Gt, &
+                                            model%tw_Rk, model%tw_Rt, model%tw_R, model%tw_fcR, model%tw_pe, &
+                                            model%tw_we)
+    IF (ALLOCATED(model%tw_eg)) DEALLOCATE (model%tw_eg, model%tw_ehv, model%tw_ek, model%tw_ed, model%tw_me)
+    IF (ALLOCATED(model%tw_K7)) DEALLOCATE (model%tw_K7, model%tw_x7, model%tw_ipiv)
+    IF (ALLOCATED(model%tw_su)) DEALLOCATE (model%tw_su, model%tw_stn, model%tw_sbeta)
+    IF (ALLOCATED(model%ws_recovery_tw)) DEALLOCATE (model%ws_recovery_tw)
+    IF (ALLOCATED(model%snap_tw)) DEALLOCATE (model%snap_tw)
+    IF (ALLOCATED(model%snap_tw_fcR)) DEALLOCATE (model%snap_tw_fcR)
+  END SUBROUTINE tw_release
+
+  SUBROUTINE tw_advance_reference(model, q_new, ends_new, ErrStat, ErrMsg)
+    !! The twist reference at q_new with the frames ends_new, into the commit scratch: the
+    !! reference twists and end-frame references (the step's own formulas, so the committed
+    !! state reproduces the converged iterate bit for bit), the unit tangents and the directors
+    !! carried over by the smallest rotation (a rigid end's: its end frame's normal carried).
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: q_new(:), ends_new(3, 4)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: e, i, iend
+    REAL(wp) :: rho, beta, g(12), h(12, 12), psi, gl(3), hl(3, 3), u(3), t(3)
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    DO e = 1, model%ne
+      CALL twist_reference(model, e, q_new, ends_new, .FALSE., rho, beta, g, h, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      model%tw_sbeta(e) = beta
+    END DO
+    model%tw_spsi = model%tw_psi
+    DO iend = 1, 2
+      IF (model%tw_rigid(iend)) CYCLE
+      CALL twist_link(model, iend, q_new, ends_new, .FALSE., psi, gl, hl, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      model%tw_spsi(iend) = psi
+    END DO
+    DO i = 1, model%nn
+      t = q_new(6*i - 2:6*i)/NORM2(q_new(6*i - 2:6*i))
+      model%tw_stn(:, i) = t
+      IF (i == 1 .AND. model%tw_rigid(1)) THEN
+        u = CD_HermiteTwist_Carry(ends_new(:, 1), t, ends_new(:, 2))
+      ELSE IF (i == model%nn .AND. model%tw_rigid(2)) THEN
+        u = CD_HermiteTwist_Carry(ends_new(:, 3), t, ends_new(:, 4))
+      ELSE
+        u = CD_HermiteTwist_Carry(model%tw_tn(:, i), t, model%tw_u(:, i))
+      END IF
+      u = u - DOT_PRODUCT(u, t)*t
+      model%tw_su(:, i) = u/NORM2(u)
+    END DO
+  END SUBROUTINE tw_advance_reference
+
+  SUBROUTINE tw_commit_reference(model)
+    !! Make the reference state of tw_advance_reference the committed one.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    model%tw_beta = model%tw_sbeta
+    model%tw_psi = model%tw_spsi
+    model%tw_tn = model%tw_stn
+    model%tw_u = model%tw_su
+  END SUBROUTINE tw_commit_reference
 
   SUBROUTINE add_endconn_band(R, Kb, q_cfg, node, k_rot, d0, want_residual, want_tangent, &
                               ErrStat, ErrMsg)
@@ -9511,6 +10901,14 @@ CONTAINS
     IF (es /= CD_HCDYN_OK) THEN
       ErrStat = es; ErrMsg = 'solve_consistent_acceleration: '//TRIM(em2); RETURN
     END IF
+    ! Nodal twist: the angles' accelerations from their lumped inertia (a held angle keeps its
+    ! own), installed with the cable's at the end.
+    IF (model%tw_active) THEN
+      DO i = 1, model%nn
+        model%tw_ak(i) = model%tw_al(i)
+        IF (model%tw_free(i)) model%tw_ak(i) = -model%tw_R(i)/model%tw_mass(i)
+      END DO
+    END IF
     ! Total mass = structural + added (the added-mass matrix at the current configuration).
     model%ws_Msumb = model%Mgb
     IF (model%has_am) THEN
@@ -9542,6 +10940,7 @@ CONTAINS
     END DO
     IF (nf == 0) THEN
       model%a = model%ws_an
+      IF (model%tw_active) CALL tw_settle_committed(model)
       RETURN
     END IF
     ! In-band Dirichlet on a mass copy + full-size banded solve. The free RHS is
@@ -9565,6 +10964,7 @@ CONTAINS
     CALL transform_rigid_vector_to_global(model, rigid_basis, model%ws_dq)
     model%a = model%ws_dq + model%ws_an
     IF (has_pres) model%a(pres_dofs) = pres_a
+    IF (model%tw_active) CALL tw_settle_committed(model)
   END SUBROUTINE solve_consistent_acceleration
 
   SUBROUTINE scatter12_band(abg, Ke, e)

@@ -22,6 +22,9 @@ PROGRAM test_torsion_coupling
   !!      end there, and accepts the march rolled the other way.
   !!   8. The coupled aggregate: a non-stepping update at the unchanged boundary is accepted (the
   !!      preflight's twist carries the coupling, -8 rad here).
+  !!   9. The march with the torsional damping of GJ|K|Bt: a damping ratio (Bt < 0) gives the
+  !!      run of the Bt it resolves to, -Bt l0 sqrt(GJ Irn), bit for bit; a fourth part of the
+  !!      GJ column fails closed.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsion_Line, CD_HTORS_OK, CD_HTORS_KBAND
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
@@ -40,6 +43,7 @@ PROGRAM test_torsion_coupling
   CALL check_pretwist()
   CALL check_zero_and_refusal()
   CALL check_dynamic()
+  CALL check_damping_grammar()
   CALL check_recovery()
   CALL check_compression()
   CALL check_aggregate()
@@ -297,6 +301,65 @@ CONTAINS
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE check_aggregate
 
+  SUBROUTINE check_damping_grammar()
+    !! The march of check_dynamic (its motion file) with Bt as a damping ratio (1e6, visible with
+    !! the negligible Irn of the case) and as the value
+    !! it resolves to on the 40 elements of 99/40 m (Irn 1e-9 kg m): the same outputs, byte for
+    !! byte; GJ|K|Bt|x is refused by name.
+    REAL(wp) :: bt
+    CHARACTER(64) :: gjtxt
+    LOGICAL :: conv
+    INTEGER :: es
+    CHARACTER(512) :: em
+    bt = 1.0e6_wp*(L0/40.0_wp)*SQRT(GJ*1.0e-9_wp)
+    CALL write_case('tcpl_zeta.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 0', KTT, dynamic=.TRUE., &
+                    gj_text='5.0e4|4.0e5|-1.0e6')
+    CALL CD_Run_Deck_Driver('tcpl_zeta.dat', 'tcpl_zeta', conv, es, em)
+    CALL require(es == CD_DECKDRV_OK .AND. conv, 'the march with a torsional damping ratio runs: '//TRIM(em))
+    WRITE (gjtxt, '(A,ES24.16)') '5.0e4|4.0e5|', bt
+    gjtxt = remove_blanks(gjtxt)
+    CALL write_case('tcpl_bt.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 0', KTT, dynamic=.TRUE., &
+                    gj_text=TRIM(gjtxt))
+    CALL CD_Run_Deck_Driver('tcpl_bt.dat', 'tcpl_bt', conv, es, em)
+    CALL require(es == CD_DECKDRV_OK .AND. conv, 'the march with the resolved torsional damping runs: '//TRIM(em))
+    CALL require(same_file('tcpl_zeta.out', 'tcpl_bt.out'), &
+                 'a torsional damping ratio is the Bt it resolves to, -Bt l0 sqrt(GJ Irn), bit for bit')
+    CALL require(.NOT. same_file('tcpl_bt.out', 'tcpl_dyn.out'), 'the torsional damping changes the march')
+    CALL write_case('tcpl_bad4.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 0', KTT, &
+                    gj_text='5.0e4|0|1.0|2.0')
+    CALL CD_Run_Deck_Driver('tcpl_bad4.dat', 'tcpl_bad4', conv, es, em)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'takes GJ, GJ|K or GJ|K|Bt') > 0, &
+                 'a fourth part of the GJ column fails closed: '//TRIM(em))
+  END SUBROUTINE check_damping_grammar
+
+  LOGICAL FUNCTION same_file(a, b) RESULT(same)
+    !! Byte-identical text files.
+    CHARACTER(*), INTENT(IN) :: a, b
+    INTEGER :: ua, ub, ia, ib
+    CHARACTER(4096) :: la, lb
+    same = .FALSE.
+    OPEN (NEWUNIT=ua, FILE=a, STATUS='OLD', ACTION='READ', IOSTAT=ia)
+    IF (ia /= 0) RETURN
+    OPEN (NEWUNIT=ub, FILE=b, STATUS='OLD', ACTION='READ', IOSTAT=ib)
+    IF (ib /= 0) THEN
+      CLOSE (ua)
+      RETURN
+    END IF
+    DO
+      READ (ua, '(A)', IOSTAT=ia) la
+      READ (ub, '(A)', IOSTAT=ib) lb
+      IF (ia /= 0 .OR. ib /= 0) EXIT
+      IF (la /= lb) THEN
+        CLOSE (ua)
+        CLOSE (ub)
+        RETURN
+      END IF
+    END DO
+    same = ia /= 0 .AND. ib /= 0
+    CLOSE (ua)
+    CLOSE (ub)
+  END FUNCTION same_file
+
   SUBROUTINE straight_case(root, conn_a, conn_b, k, v, torsion, length, option)
     !! The straight case at TMax = 0: v = FairTen1, Torq1N1, Twist1, Ten1N21 (Twist and Torq zero
     !! for a line without torsion).
@@ -333,15 +396,15 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE straight_case
 
-  SUBROUTINE write_case(path, conn_a, conn_b, k, torsion, dynamic, length, option)
+  SUBROUTINE write_case(path, conn_a, conn_b, k, torsion, dynamic, length, option, gj_text)
     !! A 99 m (or length) neutral cable from a Coupled End A to a Fixed End B 100 m apart along +x, 40
-    !! elements, TMax 0; the GJ column carries GJ|K (k < 0 writes the plain GJ); option is one more
-    !! OPTIONS row.
+    !! elements, TMax 0; the GJ column carries GJ|K (k < 0 writes the plain GJ), or gj_text as given;
+    !! option is one more OPTIONS row.
     CHARACTER(*), INTENT(IN) :: path, conn_a, conn_b
     REAL(wp), INTENT(IN) :: k
     LOGICAL, INTENT(IN), OPTIONAL :: torsion, dynamic
     REAL(wp), INTENT(IN), OPTIONAL :: length
-    CHARACTER(*), INTENT(IN), OPTIONAL :: option
+    CHARACTER(*), INTENT(IN), OPTIONAL :: option, gj_text
     INTEGER :: u
     CHARACTER(64) :: gjcol, lcol
     LOGICAL :: tors, dyn
@@ -355,6 +418,7 @@ CONTAINS
       WRITE (gjcol, '(ES12.5,A,ES12.5)') GJ, '|', k
     END IF
     gjcol = remove_blanks(gjcol)
+    IF (PRESENT(gj_text)) gjcol = gj_text
     lcol = '99.0'
     IF (PRESENT(length)) WRITE (lcol, '(F10.4)') length
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
@@ -362,8 +426,9 @@ CONTAINS
     WRITE (u, '(A)') '--- LINE TYPES ---'
     WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
     WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    ! Irn 1e-9: the march's quasi-static end state (the nodal twist without polar inertia)
     WRITE (u, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, ' 1.0e7 0.0 1.0e6 1.0e8 '//TRIM(gjcol)// &
-      ' 1.0 1.0 0.0 0.0 0.0 0.0'
+      ' 1.0 1.0e-9 0.0 0.0 0.0 0.0'
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'

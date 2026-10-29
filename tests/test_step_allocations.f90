@@ -21,10 +21,12 @@ PROGRAM test_step_allocations
   !! coupled end swaying while the parent rolls about the line axis and the imposed twist
   !! changes, so every step evaluates the twist kernel, its Hessian and the bordered solve. The
   !! committed-state outputs (CD_HFMF_SetCoupledKinematics, CD_HFMF_CalcOutput with the connection
-  !! moment, both end forces, the energy and the torque query) are gated as well.
+  !! moment, both end forces, the energy and the torque query) are gated as well. With "nodal"
+  !! the same cable carries the nodal twist (polar inertia and torsional damping), with its
+  !! 7-DOF-per-node band and the node-torque and element-twist queries.
   !!
   !! Usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]
-  !!        test_step_allocations torsion
+  !!        test_step_allocations torsion | nodal
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT, C_LONG_LONG
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
@@ -33,7 +35,8 @@ PROGRAM test_step_allocations
                                           CD_HFMF_Set_Torsion, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, CD_HFMF_End, &
                                           CD_HFMF_SetCoupledKinematics
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_End_Force, CD_HermiteCable_Dyn_Energy, &
-                                          CD_HermiteCable_Dyn_Torsion_State
+                                          CD_HermiteCable_Dyn_Torsion_State, CD_HermiteCable_Dyn_Node_Torque, &
+                                          CD_HermiteCable_Dyn_Element_Twist
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_NFluidNodes, CD_AGG_NumChannels, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_Snapshot, CD_AGG_SetFluidFields, CD_AGG_Step_Moving, &
@@ -64,8 +67,8 @@ PROGRAM test_step_allocations
 
   IF (COMMAND_ARGUMENT_COUNT() == 1) THEN
     CALL GET_COMMAND_ARGUMENT(1, arg)
-    IF (TRIM(arg) /= 'torsion') ERROR STOP 'a single argument must be "torsion"'
-    CALL torsion_gate()
+    IF (TRIM(arg) /= 'torsion' .AND. TRIM(arg) /= 'nodal') ERROR STOP 'a single argument must be "torsion" or "nodal"'
+    CALL torsion_gate(TRIM(arg) == 'nodal')
     STOP
   END IF
   IF (COMMAND_ARGUMENT_COUNT() /= 3 .AND. COMMAND_ARGUMENT_COUNT() /= 4) THEN
@@ -169,14 +172,16 @@ CONTAINS
     END DO
   END SUBROUTINE march
 
-  SUBROUTINE torsion_gate()
-    !! Zero heap allocation in CD_HFMF_UpdateStates of a cable with condensed torsion.
+  SUBROUTINE torsion_gate(nodal)
+    !! Zero heap allocation in CD_HFMF_UpdateStates of a cable with condensed torsion, or with the
+    !! nodal twist.
+    LOGICAL, INTENT(IN) :: nodal
     INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NDOF = 6*NN, N_WARM = 40, N_COUNT = 200
     REAL(wp), PARAMETER :: LL = 10.0_wp, DTT = 0.01_wp
     TYPE(CD_HFMF_ModuleType) :: cab
     TYPE(CD_HermiteTorsionType) :: tors
     REAL(wp) :: q(NDOF), l0(NE), eye(3, 3), frame(3, 2), t, x(3), v(3), a(3), dcm(3, 3), f(3), m(3), psi
-    REAL(wp) :: fe(3), ke, se, th, mt
+    REAL(wp) :: fe(3), ke, se, th, mt, ntq(NN), etw(NE)
     INTEGER :: k
     INTEGER(C_LONG_LONG) :: c0, n_alloc, n_out, n_energy
     n_out = 0
@@ -206,6 +211,11 @@ CONTAINS
                          0.0_wp, 0.0_wp, 1.0_wp], [3, 4])
     ALLOCATE (tors%gj(NE))
     tors%gj = 80.0_wp
+    IF (nodal) THEN
+      ALLOCATE (tors%irn(NE), tors%bt(NE))
+      tors%irn = 0.05_wp
+      tors%bt = 0.5_wp
+    END IF
     tors%has_theta = .TRUE.
     frame(:, 1) = [1.0_wp, 0.0_wp, 0.0_wp]
     frame(:, 2) = [0.0_wp, 0.0_wp, 1.0_wp]
@@ -241,6 +251,8 @@ CONTAINS
       IF (es == 0) CALL CD_HermiteCable_Dyn_End_Force(cab%line, 1, fe, es, em)
       IF (es == 0) CALL CD_HermiteCable_Dyn_End_Force(cab%line, NN, fe, es, em)
       IF (es == 0) CALL CD_HermiteCable_Dyn_Torsion_State(cab%line, th, mt, es, em)
+      IF (es == 0 .AND. nodal) CALL CD_HermiteCable_Dyn_Node_Torque(cab%line, ntq, es, em)
+      IF (es == 0 .AND. nodal) CALL CD_HermiteCable_Dyn_Element_Twist(cab%line, etw, es, em)
       CALL cd_test_allocation_counting(0_C_INT)
       CALL check('torsion cable output')
       n_out = n_out + (cd_test_allocation_count() - c0)
@@ -254,6 +266,7 @@ CONTAINS
       CALL check('torsion cable energy')
       IF (k > N_WARM) n_energy = MAX(n_energy, cd_test_allocation_count() - c0)
     END DO
+    IF (nodal .AND. .NOT. cab%line%tw_active) ERROR STOP 'the nodal gate runs without the nodal twist'
     CALL CD_HFMF_End(cab)
     PRINT '(A,I0,A,I0,A,I0,A)', 'torsion cable: ', N_COUNT, ' counted steps, ', n_alloc, &
       ' heap allocations in the steps, ', n_out, ' in the outputs'

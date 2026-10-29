@@ -110,7 +110,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Set_Control_Seabed, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State, &
-                                          CD_HermiteCable_Dyn_Element_Twist, CD_HermiteCable_Dyn_Coupling_Tension
+                                          CD_HermiteCable_Dyn_Element_Twist, CD_HermiteCable_Dyn_Coupling_Tension, &
+                                          CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
                                      CD_HTORS_MAX_TWIST
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
@@ -366,6 +367,10 @@ MODULE CableDyn_DeckDriver
     ! torque-tension coupling K [N m] of the 14-column row's GJ column (GJ|K): the axial force
     ! T = EA eps + K tau and the torque M = GJ tau + K eps of a finite-EI cable
     REAL(wp) :: ktt = CD_ZERO
+    ! torsional damping Bt [N m^2 s] of the GJ column's third part (GJ|K|Bt), the torque Bt dtau/dt
+    ! of the nodal twist; negative: -zeta, the fraction of an element's critical torsional
+    ! damping l0 sqrt(GJ Irn), resolved on the final mesh
+    REAL(wp) :: bt = CD_ZERO
     REAL(wp) :: i_rt = CD_ZERO, i_rn = CD_ZERO
     REAL(wp) :: cdn = CD_ZERO, cdt = CD_ZERO, can = CD_ZERO, cat = CD_ZERO
     ! Viscoelastic stiffness (MoorDyn ElasticMod): the EA column's bar-separated
@@ -1736,7 +1741,7 @@ CONTAINS
 
     INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:), dynamic_fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), ei(:), gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
-    REAL(wp), ALLOCATABLE :: ktt_in(:)
+    REAL(wp), ALLOCATABLE :: ktt_in(:), bt_in(:)
     REAL(wp), ALLOCATABLE :: gas(:), gj(:), rho_a(:), i_rt(:), i_rn(:), w(:), nodes_ref(:, :), q0(:), q_static(:)
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
@@ -1983,7 +1988,7 @@ CONTAINS
     IF (as_laid_off_plane()) require_3d_static = .TRUE.
 
     CALL build_finite_section_mesh(ln, sections, types, conn, l0, ea, mpl, diam, ei, &
-                                   gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg, ktt=ktt_in)
+                                   gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg, ktt=ktt_in, bt=bt_in)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     IF (ALLOCATED(ln%stf)) THEN
       ALLOCATE (ei_cable(SIZE(l0)))
@@ -3324,6 +3329,19 @@ CONTAINS
       IF (ANY(ABS(ktt_in) > CD_ZERO)) THEN
         tors%couple = ktt_in/gj_in
         IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%couple, l0, l0_am)
+      END IF
+      ! the polar rotary inertia Irn per element: the dynamics then carries a twist angle at
+      ! every node (CD_HermiteCable_Dyn_Set_Torsion)
+      tors%irn = i_rn_in
+      IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%irn, l0, l0_am)
+      ! torsional damping (GJ|K|Bt): a negative value is -zeta of an element's critical torsional
+      ! damping l0 sqrt(GJ Irn), on the final mesh
+      IF (ANY(ABS(bt_in) > CD_ZERO)) THEN
+        tors%bt = bt_in
+        IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%bt, l0, l0_am)
+        DO k = 1, SIZE(tors%bt)
+          IF (tors%bt(k) < CD_ZERO) tors%bt(k) = -tors%bt(k)*l0_am(k)*SQRT(tors%gj(k)*tors%irn(k))
+        END DO
       END IF
       DO k = 1, 2
         dvec = endconn_d0_local(:, k)/NORM2(endconn_d0_local(:, k))
@@ -9859,12 +9877,13 @@ CONTAINS
   END SUBROUTINE end_hermite_cables
 
   SUBROUTINE build_finite_section_mesh(ln, sections, types, conn, l0, ea, mpl, diam, ei, gas, gj, i_rt, i_rn, &
-                                       ErrStat, ErrMsg, ktt)
+                                       ErrStat, ErrMsg, ktt, bt)
     !! Build a sectioned finite-EI mesh directly from deck sections. The EI=0
     !! CableDyn_Line mesh builder intentionally rejects EI>0, so this path owns
     !! the simple serial connectivity needed by the Cosserat model. A type with torque-tension
     !! coupling K gives its elements the axial stiffness EA - K^2/GJ (the stretch twists the
-    !! cable; a line restrained in torsion adds the rest through its torque) and, with ktt, its K.
+    !! cable; a line restrained in torsion adds the rest through its torque) and, with ktt, its K;
+    !! bt returns the deck's torsional damping (unresolved: -zeta stays negative).
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
@@ -9873,10 +9892,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE, INTENT(OUT) :: gas(:), gj(:), i_rt(:), i_rn(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp), ALLOCATABLE, INTENT(OUT), OPTIONAL :: ktt(:)
+    REAL(wp), ALLOCATABLE, INTENT(OUT), OPTIONAL :: ktt(:), bt(:)
 
     INTEGER :: n_elem, i, j, e, tidx
-    REAL(wp), ALLOCATABLE :: kc(:)
+    REAL(wp), ALLOCATABLE :: kc(:), bc(:)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -9889,7 +9908,7 @@ CONTAINS
       RETURN
     END IF
     ALLOCATE (conn(2, n_elem), l0(n_elem), ea(n_elem), mpl(n_elem), diam(n_elem), ei(n_elem))
-    ALLOCATE (gas(n_elem), gj(n_elem), i_rt(n_elem), i_rn(n_elem), kc(n_elem))
+    ALLOCATE (gas(n_elem), gj(n_elem), i_rt(n_elem), i_rn(n_elem), kc(n_elem), bc(n_elem))
     e = 0
     DO i = 1, SIZE(sections)
       IF (sections(i)%line_id /= ln%id) CYCLE
@@ -9907,6 +9926,7 @@ CONTAINS
         i_rt(e) = types(tidx)%i_rt
         i_rn(e) = types(tidx)%i_rn
         kc(e) = types(tidx)%ktt
+        bc(e) = types(tidx)%bt
         IF (ABS(kc(e)) > CD_ZERO) ea(e) = ea(e) - kc(e)**2/gj(e)
       END DO
     END DO
@@ -9921,6 +9941,7 @@ CONTAINS
     i_rt = i_rt(n_elem:1:-1)
     i_rn = i_rn(n_elem:1:-1)
     IF (PRESENT(ktt)) ktt = kc(n_elem:1:-1)
+    IF (PRESENT(bt)) bt = bc(n_elem:1:-1)
   END SUBROUTINE build_finite_section_mesh
 
   SUBROUTINE finite_raw_ba_array(ln, sections, types, ba_raw)
@@ -13358,30 +13379,40 @@ CONTAINS
   END SUBROUTINE sniff_types_header
 
   SUBROUTINE parse_gj_column(gj_str, t, ErrStat, ErrMsg)
-    !! The 14-column row's GJ column: GJ, or GJ|K with K the torque-tension coupling [N m]
+    !! The 14-column row's GJ column: GJ, GJ|K with K the torque-tension coupling [N m]
     !! (M = GJ tau + K eps, T = EA eps + K tau; K > 0 when stretching the cable twists it in the
-    !! sense its positive torque turns).
+    !! sense its positive torque turns), or GJ|K|Bt with Bt the torsional damping (DeckLineType).
     CHARACTER(*), INTENT(IN) :: gj_str
     TYPE(DeckLineType), INTENT(INOUT) :: t
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: bar, ios
+    INTEGER :: bar, bar2, ios
     ErrStat = 0; ErrMsg = ''
     t%ktt = CD_ZERO
+    t%bt = CD_ZERO
     bar = INDEX(gj_str, '|')
     IF (bar == 0) THEN
       READ (gj_str, *, IOSTAT=ios) t%gj
     ELSE
-      IF (INDEX(gj_str(bar + 1:), '|') > 0) THEN
-        CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" takes GJ or GJ|K'); RETURN
+      bar2 = INDEX(gj_str(bar + 1:), '|')
+      IF (bar2 > 0) THEN
+        bar2 = bar + bar2
+        IF (INDEX(gj_str(bar2 + 1:), '|') > 0) THEN
+          CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" takes GJ, GJ|K or GJ|K|Bt'); RETURN
+        END IF
       END IF
       READ (gj_str(1:bar - 1), *, IOSTAT=ios) t%gj
-      IF (ios == 0) READ (gj_str(bar + 1:), *, IOSTAT=ios) t%ktt
+      IF (bar2 > 0) THEN
+        IF (ios == 0) READ (gj_str(bar + 1:bar2 - 1), *, IOSTAT=ios) t%ktt
+        IF (ios == 0) READ (gj_str(bar2 + 1:), *, IOSTAT=ios) t%bt
+      ELSE
+        IF (ios == 0) READ (gj_str(bar + 1:), *, IOSTAT=ios) t%ktt
+      END IF
     END IF
     IF (ios /= 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" is not GJ or GJ|K'); RETURN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" is not GJ, GJ|K or GJ|K|Bt'); RETURN
     END IF
-    IF (.NOT. (IEEE_IS_FINITE(t%gj) .AND. IEEE_IS_FINITE(t%ktt))) THEN
+    IF (.NOT. (IEEE_IS_FINITE(t%gj) .AND. IEEE_IS_FINITE(t%ktt) .AND. IEEE_IS_FINITE(t%bt))) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES GJ column "'//TRIM(gj_str)//'" must be finite'); RETURN
     END IF
   END SUBROUTINE parse_gj_column
@@ -13473,6 +13504,12 @@ CONTAINS
       IF (.NOT. (t%gj > CD_ZERO .AND. t%ea*t%gj > t%ktt**2)) THEN
         CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': torque-tension coupling needs GJ > 0 and '// &
                   'K^2 < EA GJ'); RETURN
+      END IF
+    END IF
+    IF (ABS(t%bt) > CD_ZERO) THEN
+      IF (.NOT. (t%ei > CD_ZERO .AND. t%gj > CD_ZERO .AND. t%i_rn > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': torsional damping (GJ|K|Bt) needs a '// &
+                  'finite-EI cable with GJ > 0 and Irn > 0'); RETURN
       END IF
     END IF
     CALL grow_types(types, nt)
@@ -34597,7 +34634,19 @@ CONTAINS
     IF (rl%has_torsion .AND. cable%line%torsion%active) THEN
       ! condensed torsion: the committed torque (uniform) and the cable's own twist from End A
       ! (public node 1, the last internal node), as the Torq<L>N<J> and Twist<L>N<J> channels
-      rl%val(CD_RQ_TORQUE, :) = cable%line%torsion%torque
+      IF (cable%line%tw_active) THEN
+        ! nodal twist: the node torques (public node j is internal node nn + 1 - j)
+        BLOCK
+          REAL(wp) :: ntq(nn)
+          CALL CD_HermiteCable_Dyn_Node_Torque(cable%line, ntq, es, em)
+          IF (es /= CD_HCDYN_OK) THEN
+            CALL fail_solve(ErrStat, ErrMsg, 'range-graph torque recovery failed: '//TRIM(em)); RETURN
+          END IF
+          rl%val(CD_RQ_TORQUE, 1:nn) = ntq(nn:1:-1)
+        END BLOCK
+      ELSE
+        rl%val(CD_RQ_TORQUE, :) = cable%line%torsion%torque
+      END IF
       rl%val(CD_RQ_TWIST, 1) = CD_ZERO
       BLOCK
         REAL(wp) :: etw(cable%line%ne)
@@ -35500,7 +35549,17 @@ CONTAINS
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
         END IF
-        IF (kind == 9) THEN
+        IF (kind == 9 .AND. cable%line%tw_active) THEN
+          ! nodal twist: the torque at the node (its elements' mean; an end node's element)
+          BLOCK
+            REAL(wp) :: ntq(cable%line%nn)
+            CALL CD_HermiteCable_Dyn_Node_Torque(cable%line, ntq, es, em)
+            IF (es /= CD_HCDYN_OK) THEN
+              CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+            END IF
+            val = ntq(inode)
+          END BLOCK
+        ELSE IF (kind == 9) THEN
           val = mt
         ELSE IF (cable%line%torsion%active) THEN
           ! the element twists (M_t l0/GJ, less the stretch's under torque-tension coupling);
@@ -35512,7 +35571,16 @@ CONTAINS
             IF (es /= CD_HCDYN_OK) THEN
               CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
             END IF
-            IF (kind == 11) THEN
+            IF (kind == 11 .AND. cable%line%tw_active) THEN
+              BLOCK
+                REAL(wp) :: etw2(2)
+                CALL CD_HermiteCable_Dyn_End_Twist(cable%line, etw2, es, em)
+                IF (es /= CD_HCDYN_OK) THEN
+                  CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+                END IF
+                val = (SUM(etw2) + SUM(etw))*45.0_wp/QUARTER_PI
+              END BLOCK
+            ELSE IF (kind == 11) THEN
               val = (mt*SUM(cable%line%torsion%end_compliance) + SUM(etw))*45.0_wp/QUARTER_PI
             ELSE
               val = SUM(etw(inode:nelem))*45.0_wp/QUARTER_PI

@@ -43,7 +43,9 @@ MODULE CableDyn_OpenFAST_HermiteFMF
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK, &
                                           CD_HermiteCable_Dyn_Set_Torsion, CD_HermiteCable_Dyn_Set_Torsion_Drive, &
                                           CD_HermiteCable_Dyn_Set_Torsion_Frames, &
-                                          CD_HermiteCable_Dyn_Set_SegmentLength
+                                          CD_HermiteCable_Dyn_Set_SegmentLength, &
+                                          CD_HermiteCable_Dyn_Twist_Mirror_Size, CD_HermiteCable_Dyn_Twist_Pack, &
+                                          CD_HermiteCable_Dyn_Twist_Unpack, CD_HermiteCable_Dyn_Twist_Check
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Line, &
                                      CD_HermiteTorsion_Unwrap, CD_HTORS_OK, CD_HTORS_MAX_STEP
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Shapes
@@ -862,6 +864,15 @@ CONTAINS
         END DO
         ALLOCATE (qc(SIZE(self%line%q)), g(SIZE(self%line%q)))
         CALL coupled_candidate_q(self, u_pos, tangent_q, qc)
+        IF (self%line%tw_active) THEN
+          ! the nodal twist: its own acceptance of the written state (CD_HermiteCable_Dyn_Twist_Check)
+          CALL CD_HermiteCable_Dyn_Twist_Check(self%line, qc, ends, ks, km)
+          IF (ks /= CD_HCDYN_OK) THEN
+            ErrStat = CD_HFMF_SOLVEFAIL
+            ErrMsg = 'CD_HFMF_PreflightCoupledKinematics: '//TRIM(km)
+          END IF
+          RETURN
+        END IF
         CALL CD_HermiteTorsion_Line(qc, self%line%l0, ends, raw, g, ks, km, &
                                     couple=self%line%torsion%couple, &
                                     quadrature_order=self%line%torsion%quadrature_order)
@@ -1667,12 +1678,13 @@ CONTAINS
   END FUNCTION CD_HFMF_BoundaryMirrorSize
 
   INTEGER FUNCTION CD_HFMF_TorsionMirrorSize(self) RESULT(n)
-    !! Mirror slots of the condensed torsion, last: the accepted (unwrapped) Theta, Phi and the
-    !! four end-frame vectors (14 values); zero without torsion.
+    !! Mirror slots of the torsion, last: the accepted (unwrapped) Theta, Phi and the four
+    !! end-frame vectors (14 values), then the nodal twist's state
+    !! (CD_HermiteCable_Dyn_Twist_Mirror_Size); zero without torsion.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
-    IF (self%line%torsion%active) n = 14
+    IF (self%line%torsion%active) n = 14 + CD_HermiteCable_Dyn_Twist_Mirror_Size(self%line)
   END FUNCTION CD_HFMF_TorsionMirrorSize
 
   INTEGER FUNCTION CD_HFMF_ForceMirrorSize(self) RESULT(n)
@@ -1774,6 +1786,9 @@ CONTAINS
       buf(k + 1) = self%line%torsion%theta
       buf(k + 2) = self%line%torsion%phi
       buf(k + 3:k + 14) = RESHAPE(self%line%torsion%ends, [12])
+      IF (self%line%tw_active) &
+        CALL CD_HermiteCable_Dyn_Twist_Pack(self%line, buf(k + 15:k + 14 + CD_HermiteCable_Dyn_Twist_Mirror_Size( &
+                                                           self%line)))
     END IF
   END SUBROUTINE CD_HFMF_PackMirror
 
@@ -1790,7 +1805,8 @@ CONTAINS
     REAL(wp), INTENT(IN) :: t
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, nf, nh, k, kb
+    INTEGER :: i, nf, nh, k, kb, es
+    CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_UnpackMirror: module not initialised'; RETURN
@@ -1808,9 +1824,18 @@ CONTAINS
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_UnpackMirror: mirror must be finite'; RETURN
     END IF
     IF (self%line%torsion%active) THEN
-      ! the torsion block (last 14 values) is checked before anything is written: each end's
-      ! director and reference normal must be orthonormal, as Set_Torsion_Drive requires
-      k = SIZE(buf) - 14
+      ! the torsion block (the last CD_HFMF_TorsionMirrorSize values) is checked before anything
+      ! is written: each end's director and reference normal must be orthonormal, as
+      ! Set_Torsion_Drive requires, and the nodal twist's directors unit vectors
+      k = SIZE(buf) - CD_HFMF_TorsionMirrorSize(self)
+      IF (self%line%tw_active) THEN
+        CALL CD_HermiteCable_Dyn_Twist_Unpack(self%line, buf(k + 15:SIZE(buf)), es, em, check_only=.TRUE.)
+        IF (es /= CD_HCDYN_OK) THEN
+          ErrStat = CD_HFMF_BADINPUT
+          ErrMsg = 'CD_HFMF_UnpackMirror: '//TRIM(em)
+          RETURN
+        END IF
+      END IF
       DO i = 0, 1
         ASSOCIATE (dv => buf(k + 3 + 6*i:k + 5 + 6*i), nv => buf(k + 6 + 6*i:k + 8 + 6*i))
           IF (ABS(NORM2(dv) - CD_ONE) > 1.0e-8_wp .OR. ABS(NORM2(nv) - CD_ONE) > 1.0e-8_wp .OR. &
@@ -1910,6 +1935,8 @@ CONTAINS
       self%line%torsion%torque = (self%line%torsion%phi - self%line%torsion%theta)/ &
                                  CD_HermiteTorsion_Compliance(self%line%torsion, self%line%l0)
       self%line%tors_drive_set = .FALSE.
+      ! the nodal twist, checked above (its force-cache part rides with the cable's)
+      IF (self%line%tw_active) CALL CD_HermiteCable_Dyn_Twist_Unpack(self%line, buf(k + 15:SIZE(buf)), es, em)
       ! (a parent-attached torsion frame turns with the parent orientation, which the boundary
       ! block restored as committed, so a later step without u_orientation holds it)
     END IF

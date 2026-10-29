@@ -193,7 +193,9 @@ class LineType:
         Optional finite-EI columns (shear and torsional stiffness, rotary
         inertias). All four set writes the 14-column row; all ``None`` writes
         the 10-column row. ``gj`` may be ``(GJ, K)``, with ``K`` the
-        torque-tension coupling in N m (written ``GJ|K``).
+        torque-tension coupling in N m (written ``GJ|K``), or ``(GJ, K, Bt)``,
+        with ``Bt`` the torsional damping in N m^2 s, negative for a damping
+        ratio (written ``GJ|K|Bt``).
     cl, df, cf : float | None
         Optional cross-flow VIV columns of a type (MoorDyn's lift
         coefficient and the half-range and centre of the synchronisation band
@@ -212,7 +214,7 @@ class LineType:
     can: float = 0.0
     cat: float = 0.0
     gas: float | None = None
-    gj: float | tuple[float, float] | None = None
+    gj: float | tuple[float, ...] | None = None
     irt: float | None = None
     irn: float | None = None
     cl: float | None = None
@@ -1628,7 +1630,7 @@ class DeckModel:
         can: float = 0.0,
         cat: float = 0.0,
         gas: float | None = None,
-        gj: float | tuple[float, float] | None = None,
+        gj: float | tuple[float, ...] | None = None,
         irt: float | None = None,
         irn: float | None = None,
         cl: float | None = None,
@@ -2659,8 +2661,8 @@ class DeckModel:
             extra = (item.gas, item.gj, item.irt, item.irn)
             if all(value is not None for value in extra):
                 wide = True
-                if isinstance(item.gj, tuple) and len(item.gj) != 2:
-                    raise ValueError(f"{what}: gj is GJ or (GJ, K)")
+                if isinstance(item.gj, tuple) and len(item.gj) not in (2, 3):
+                    raise ValueError(f"{what}: gj is GJ, (GJ, K) or (GJ, K, Bt)")
                 row += [
                     _multi(value, what) if index == 1 else _num(value, what)
                     for index, value in enumerate(extra)

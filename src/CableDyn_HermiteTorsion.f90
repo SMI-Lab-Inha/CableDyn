@@ -56,6 +56,12 @@ MODULE CableDyn_HermiteTorsion
   PUBLIC :: CD_HermiteTorsion_Work_Init
   PUBLIC :: CD_HermiteTorsion_Work_End
   PUBLIC :: CD_HermiteTorsion_Work_Add_Hessian
+  PUBLIC :: CD_HermiteTwist_Reference
+  PUBLIC :: CD_HermiteTwist_Carry
+  PUBLIC :: CD_HermiteTwist_Angle
+  PUBLIC :: CD_HermiteTwist_Omega
+  PUBLIC :: CD_HermiteTwist_Omega_Gradient
+  PUBLIC :: CD_HermiteTorsion_Stretch_Derivatives
 
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_OK = 0
   INTEGER, PARAMETER, PUBLIC :: CD_HTORS_BADINPUT = 1
@@ -109,6 +115,11 @@ MODULE CableDyn_HermiteTorsion
     !! unallocated: no coupling. The line's axial stiffness is then EA - K^2/GJ (the stretch
     !! twists the line) and its twist Theta less sum (K/GJ)(l - l0) (CD_HermiteTorsion_Line).
     REAL(wp), ALLOCATABLE :: couple(:)
+    !! Nodal-twist dynamics (CableDyn_HermiteCableDynamic): the polar rotary inertia Irn
+    !! [kg m^2/m] of every element and, optionally, its internal torsional damping Bt [N m^2 s]
+    !! (torque Bt d tau/dt). With irn unallocated the dynamics keeps the condensed, quasi-static
+    !! torsion; the statics never read them.
+    REAL(wp), ALLOCATABLE :: irn(:), bt(:)
     INTEGER :: quadrature_order = 4
     !! State: the accepted Theta (unwrapped) once has_theta; before that theta_hint selects the
     !! 2 pi branch of the first evaluation (0 for an untwisted start).
@@ -197,6 +208,40 @@ CONTAINS
       IF (.NOT. CD_All_Finite(tors%couple)) THEN
         ErrStat = CD_HTORS_NONFINITE
         ErrMsg = 'torsion: non-finite torque-tension coupling'
+        RETURN
+      END IF
+    END IF
+    IF (ALLOCATED(tors%irn)) THEN
+      IF (SIZE(tors%irn) /= SIZE(l0)) THEN
+        ErrMsg = 'torsion: the polar rotary inertia must have one entry per element'
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(tors%irn)) THEN
+        ErrStat = CD_HTORS_NONFINITE
+        ErrMsg = 'torsion: non-finite polar rotary inertia'
+        RETURN
+      END IF
+      IF (ANY(.NOT. (tors%irn > CD_ZERO))) THEN
+        ErrMsg = 'torsion: the polar rotary inertia must be positive on every element'
+        RETURN
+      END IF
+    END IF
+    IF (ALLOCATED(tors%bt)) THEN
+      IF (.NOT. ALLOCATED(tors%irn)) THEN
+        ErrMsg = 'torsion: torsional damping needs the polar rotary inertia (nodal twist)'
+        RETURN
+      END IF
+      IF (SIZE(tors%bt) /= SIZE(l0)) THEN
+        ErrMsg = 'torsion: the torsional damping must have one entry per element'
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(tors%bt)) THEN
+        ErrStat = CD_HTORS_NONFINITE
+        ErrMsg = 'torsion: non-finite torsional damping'
+        RETURN
+      END IF
+      IF (ANY(tors%bt < CD_ZERO)) THEN
+        ErrMsg = 'torsion: the torsional damping must be non-negative'
         RETURN
       END IF
     END IF
@@ -1254,6 +1299,232 @@ CONTAINS
   END SUBROUTINE CD_HermiteTorsion_Accept
 
   ! ------------------------------------------------------------------------------------------
+  ! nodal twist: reference twist of the time-parallel-transported directors
+  ! ------------------------------------------------------------------------------------------
+
+  PURE SUBROUTINE CD_HermiteTwist_Reference(qe, L, tri, tslot, tsign, value, grad, ErrStat, ErrMsg, hess, &
+                                            holonomy, fixed_grad, quadrature_order)
+    !! The reference twist of the nodal-twist model on one element [r1, m1, r2, m2] of reference
+    !! length L: value = sum_k tsign_k Omega(x_k, y_k, z_k) - h_e (h_e, the element holonomy, only
+    !! when holonomy, the default), with its gradient and optionally its Hessian over the 12 DOFs.
+    !! Each triangle k takes its vertices from tri(:, j, k) where tslot(j, k) = 0 (a vector fixed
+    !! over the step: a committed node tangent or an end director), the unit node-1 tangent
+    !! b = m1/|m1| where tslot(j, k) = 1 and the unit node-2 tangent c = m2/|m2| where it is 2.
+    !! A caller adds the step constant (the committed reference twist). fixed_grad(:, j, k) is the
+    !! gradient in the raw fixed vertex tri(:, j, k) (zero for a node-tangent vertex).
+    !!
+    !! An interior element with committed unit tangents a, d and committed reference twist beta^n
+    !! has the reference twist beta^n - Omega(a, b, c) - Omega(a, c, d) - h_e: its directors are the
+    !! committed ones carried by the smallest rotation from a to b and from d to c, and the
+    !! transport around the quadrilateral a, b, c, d turns a vector by its solid angle. A routine
+    !! of a single node passes no node-2 vertex and holonomy = .FALSE.; then only qe(4:6) is read.
+    !! Every triangle edge must satisfy 1 + x . y >= CD_HTORS_FOLD_MIN (else CD_HTORS_FOLD).
+    REAL(wp), INTENT(IN) :: qe(12), L, tri(:, :, :), tsign(:)
+    INTEGER, INTENT(IN) :: tslot(:, :)
+    REAL(wp), INTENT(OUT) :: value, grad(12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: hess(12, 12), fixed_grad(:, :, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: holonomy
+    INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    INTEGER :: order, k, j, i, ntri, si, sj
+    LOGICAL :: want_hess, with_h, need(2), finite
+    REAL(wp) :: node_t(3, 2), proj(3, 3, 2), x(3, 3), om, g9(9), h9(9, 9), gt(3, 2), htt(3, 3, 2, 2)
+    REAL(wp) :: he, ge(12), hk(12, 12), dmy, blk(3, 3), blk2(3, 3)
+    CHARACTER(200) :: em
+
+    value = CD_ZERO
+    grad = CD_ZERO
+    IF (PRESENT(hess)) hess = CD_ZERO
+    IF (PRESENT(fixed_grad)) fixed_grad = CD_ZERO
+    want_hess = PRESENT(hess)
+    with_h = .TRUE.
+    IF (PRESENT(holonomy)) with_h = holonomy
+    order = NG_DEFAULT
+    IF (PRESENT(quadrature_order)) order = quadrature_order
+    ntri = SIZE(tsign)
+    ErrStat = CD_HTORS_BADINPUT
+    IF (SIZE(tri, 1) /= 3 .OR. SIZE(tri, 2) /= 3 .OR. SIZE(tri, 3) /= ntri .OR. SIZE(tslot, 1) /= 3 .OR. &
+        SIZE(tslot, 2) /= ntri) THEN
+      ErrMsg = 'CD_HermiteTwist_Reference: tri(3, 3, n), tslot(3, n) and tsign(n) must agree'
+      RETURN
+    END IF
+    IF (PRESENT(fixed_grad)) THEN
+      IF (SIZE(fixed_grad, 1) /= 3 .OR. SIZE(fixed_grad, 2) /= 3 .OR. SIZE(fixed_grad, 3) /= ntri) THEN
+        ErrMsg = 'CD_HermiteTwist_Reference: fixed_grad must be shaped as tri'
+        RETURN
+      END IF
+    END IF
+    IF (ANY(tslot < 0) .OR. ANY(tslot > 2)) THEN
+      ErrMsg = 'CD_HermiteTwist_Reference: a vertex slot must be 0, 1 or 2'
+      RETURN
+    END IF
+    IF (order < 1 .OR. order > NG_MAX) THEN
+      ErrMsg = 'CD_HermiteTwist_Reference: quadrature order must lie in [1,6]'
+      RETURN
+    END IF
+    need(1) = ANY(tslot == 1) .OR. with_h
+    need(2) = ANY(tslot == 2) .OR. with_h
+    ! (column by column: a reshaped copy of the assumed-shape tri would be a heap temporary)
+    finite = CD_All_Finite(qe) .AND. CD_Is_Finite(L) .AND. CD_All_Finite(tsign)
+    DO k = 1, ntri
+      DO j = 1, 3
+        finite = finite .AND. CD_All_Finite(tri(:, j, k))
+      END DO
+    END DO
+    IF (.NOT. finite) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTwist_Reference: non-finite input'
+      RETURN
+    END IF
+    IF (with_h .AND. L <= GEOM_TOL) THEN
+      ErrMsg = 'CD_HermiteTwist_Reference: element length must be positive'
+      RETURN
+    END IF
+    node_t = CD_ZERO
+    proj = CD_ZERO
+    DO j = 1, 2
+      IF (.NOT. need(j)) CYCLE
+      IF (NORM2(qe(6*j - 2:6*j)) <= GEOM_TOL) THEN
+        ErrMsg = 'CD_HermiteTwist_Reference: zero tangent handle at a node'
+        RETURN
+      END IF
+      node_t(:, j) = qe(6*j - 2:6*j)/NORM2(qe(6*j - 2:6*j))
+      CALL normalisation_jacobian(qe(6*j - 2:6*j), proj(:, :, j))
+    END DO
+    DO k = 1, ntri
+      DO j = 1, 3
+        IF (tslot(j, k) == 0) THEN
+          IF (ABS(NORM2(tri(:, j, k)) - CD_ONE) > FRAME_TOL) THEN
+            ErrMsg = 'CD_HermiteTwist_Reference: a fixed triangle vertex must be a unit vector'
+            RETURN
+          END IF
+        END IF
+      END DO
+    END DO
+
+    gt = CD_ZERO
+    htt = CD_ZERO
+    DO k = 1, ntri
+      DO j = 1, 3
+        IF (tslot(j, k) == 0) THEN
+          x(:, j) = tri(:, j, k)
+        ELSE
+          x(:, j) = node_t(:, tslot(j, k))
+        END IF
+      END DO
+      DO j = 1, 3
+        IF (CD_ONE + DOT_PRODUCT(x(:, j), x(:, MOD(j, 3) + 1)) < CD_HTORS_FOLD_MIN) THEN
+          ErrStat = CD_HTORS_FOLD
+          ErrMsg = 'CD_HermiteTwist_Reference: a director turned by more than 120 degrees in one step or element'
+          RETURN
+        END IF
+      END DO
+      CALL solid_angle(x(:, 1), x(:, 2), x(:, 3), want_hess, om, g9, h9)
+      value = value + tsign(k)*om
+      DO j = 1, 3
+        si = tslot(j, k)
+        IF (si == 0) THEN
+          IF (PRESENT(fixed_grad)) fixed_grad(:, j, k) = tsign(k)*g9(3*j - 2:3*j)
+          CYCLE
+        END IF
+        gt(:, si) = gt(:, si) + tsign(k)*g9(3*j - 2:3*j)
+        IF (.NOT. want_hess) CYCLE
+        DO i = 1, 3
+          sj = tslot(i, k)
+          IF (sj == 0) CYCLE
+          htt(:, :, si, sj) = htt(:, :, si, sj) + tsign(k)*h9(3*j - 2:3*j, 3*i - 2:3*i)
+        END DO
+      END DO
+    END DO
+    ! chain to the tangent handles m1 (DOFs 4:6) and m2 (DOFs 10:12)
+    DO j = 1, 2
+      IF (.NOT. need(j)) CYCLE
+      grad(6*j - 2:6*j) = MATMUL(proj(:, :, j), gt(:, j))
+      IF (.NOT. want_hess) CYCLE
+      ! (staged in 3 x 3 locals: a result into a run-time section, or a nested product, would
+      ! take a heap temporary)
+      blk2 = htt(:, :, j, j)
+      blk = normalised_hessian(qe(6*j - 2:6*j), gt(:, j), blk2)
+      hess(6*j - 2:6*j, 6*j - 2:6*j) = blk
+    END DO
+    IF (want_hess .AND. need(1) .AND. need(2)) THEN
+      blk2 = MATMUL(htt(:, :, 1, 2), proj(:, :, 2))
+      blk = MATMUL(proj(:, :, 1), blk2)
+      hess(4:6, 10:12) = blk
+      hess(10:12, 4:6) = TRANSPOSE(blk)
+    END IF
+    IF (with_h) THEN
+      CALL element_holonomy(qe, L, order, want_hess, he, ge, hk, dmy, ErrStat, em)
+      IF (ErrStat /= CD_HTORS_OK) THEN
+        ErrMsg = 'CD_HermiteTwist_Reference: '//em
+        value = CD_ZERO
+        grad = CD_ZERO
+        IF (PRESENT(hess)) hess = CD_ZERO
+        IF (PRESENT(fixed_grad)) fixed_grad = CD_ZERO
+        RETURN
+      END IF
+      value = value - he
+      grad = grad - ge
+      IF (want_hess) hess = hess - hk
+    END IF
+    IF (.NOT. (CD_Is_Finite(value) .AND. CD_All_Finite(grad))) THEN
+      ErrStat = CD_HTORS_NONFINITE
+      ErrMsg = 'CD_HermiteTwist_Reference: non-finite twist or derivative'
+      value = CD_ZERO
+      grad = CD_ZERO
+      RETURN
+    END IF
+    IF (want_hess) THEN
+      finite = .TRUE.
+      DO j = 1, 12
+        finite = finite .AND. CD_All_Finite(hess(:, j))
+      END DO
+      IF (.NOT. finite) THEN
+        ErrStat = CD_HTORS_NONFINITE
+        ErrMsg = 'CD_HermiteTwist_Reference: non-finite twist Hessian'
+        value = CD_ZERO
+        grad = CD_ZERO
+        hess = CD_ZERO
+        RETURN
+      END IF
+    END IF
+    ErrStat = CD_HTORS_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_HermiteTwist_Reference
+
+  PURE FUNCTION CD_HermiteTwist_Carry(from, to, v) RESULT(r)
+    !! The smallest rotation taking the unit vector from to the unit vector to, applied to v (the
+    !! parallel transport of the nodal-twist directors; requires 1 + from . to > 0).
+    REAL(wp), INTENT(IN) :: from(3), to(3), v(3)
+    REAL(wp) :: r(3)
+    r = smallest_rotation(from, to, v)
+  END FUNCTION CD_HermiteTwist_Carry
+
+  PURE REAL(wp) FUNCTION CD_HermiteTwist_Angle(x, y, axis) RESULT(ang)
+    !! The angle in (-pi, pi] about axis, right-hand rule, from x to y (both perpendicular to it).
+    REAL(wp), INTENT(IN) :: x(3), y(3), axis(3)
+    ang = ATAN2(DOT_PRODUCT(axis, cross(x, y)), DOT_PRODUCT(x, y))
+  END FUNCTION CD_HermiteTwist_Angle
+
+  PURE REAL(wp) FUNCTION CD_HermiteTwist_Omega(x, y, z) RESULT(om)
+    !! The signed solid angle of the geodesic triangle x, y, z of CD_HermiteTwist_Reference, on
+    !! the same arithmetic: the value a triangle of fixed vertices takes inside that routine.
+    REAL(wp), INTENT(IN) :: x(3), y(3), z(3)
+    REAL(wp) :: g(9), h(9, 9)
+    CALL solid_angle(x, y, z, .FALSE., om, g, h)
+  END FUNCTION CD_HermiteTwist_Omega
+
+  PURE SUBROUTINE CD_HermiteTwist_Omega_Gradient(x, y, z, om, g)
+    !! CD_HermiteTwist_Omega with its gradient g = [dOmega/dx, dOmega/dy, dOmega/dz] in the raw
+    !! vertex vectors.
+    REAL(wp), INTENT(IN) :: x(3), y(3), z(3)
+    REAL(wp), INTENT(OUT) :: om, g(9)
+    REAL(wp) :: h(9, 9)
+    CALL solid_angle(x, y, z, .FALSE., om, g, h)
+  END SUBROUTINE CD_HermiteTwist_Omega_Gradient
+
+  ! ------------------------------------------------------------------------------------------
   ! element holonomy
   ! ------------------------------------------------------------------------------------------
 
@@ -1306,6 +1577,17 @@ CONTAINS
     IF (PRESENT(quadrature_order)) order = quadrature_order
     CALL element_stretch(qe, L, order, .FALSE., ls, g, h)
   END FUNCTION CD_HermiteTorsion_Element_Stretch
+
+  PURE SUBROUTINE CD_HermiteTorsion_Stretch_Derivatives(qe, L, ls, grad, hess, quadrature_order)
+    !! CD_HermiteTorsion_Element_Stretch with its gradient and Hessian over the 12 DOFs.
+    REAL(wp), INTENT(IN) :: qe(12), L
+    REAL(wp), INTENT(OUT) :: ls, grad(12), hess(12, 12)
+    INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    INTEGER :: order
+    order = NG_DEFAULT
+    IF (PRESENT(quadrature_order)) order = quadrature_order
+    CALL element_stretch(qe, L, order, .TRUE., ls, grad, hess)
+  END SUBROUTINE CD_HermiteTorsion_Stretch_Derivatives
 
   PURE SUBROUTINE element_stretch(qe, L, order, want_hess, ls, grad, hess)
     !! The stretched length l_e = L sum_g w_g |a_g| of one cubic-Hermite element (a = dr/ds), its

@@ -632,6 +632,16 @@ add_test(NAME hermite_torsion_kernel
          COMMAND test_hermite_torsion_kernel ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_oracle_reference.txt)
 set_tests_properties(hermite_torsion_kernel PROPERTIES LABELS "fortran;unit;static")
 
+add_executable(test_hermite_twist_kernel tests/test_hermite_twist_kernel.f90)
+target_link_libraries(test_hermite_twist_kernel PRIVATE cabledyn_core)
+add_test(NAME hermite_twist_kernel COMMAND test_hermite_twist_kernel)
+set_tests_properties(hermite_twist_kernel PROPERTIES LABELS "fortran;unit")
+
+add_executable(test_nodal_twist_dynamic tests/test_nodal_twist_dynamic.f90)
+target_link_libraries(test_nodal_twist_dynamic PRIVATE cabledyn_core)
+add_test(NAME nodal_twist_dynamic COMMAND test_nodal_twist_dynamic)
+set_tests_properties(nodal_twist_dynamic PROPERTIES LABELS "fortran;unit;dynamic;openfast")
+
 add_executable(test_hermite_torsion_static tests/test_hermite_torsion_static.f90)
 target_link_libraries(test_hermite_torsion_static PRIVATE cabledyn_core)
 add_test(NAME hermite_torsion_static
@@ -1394,6 +1404,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
   # The same gate on a finite-EI cable with condensed torsion (a turning parent and a changing twist).
   add_test(NAME step_allocations_torsion COMMAND test_step_allocations torsion)
   set_tests_properties(step_allocations_torsion PROPERTIES LABELS "fortran;dynamic;memory")
+  # And with the nodal twist (polar inertia, torsional damping, the 7-DOF-per-node band).
+  add_test(NAME step_allocations_nodal_twist COMMAND test_step_allocations nodal)
+  set_tests_properties(step_allocations_nodal_twist PROPERTIES LABELS "fortran;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)
@@ -2789,6 +2802,8 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_line
       test_hermite_cable
       test_hermite_torsion_kernel
+      test_hermite_twist_kernel
+      test_nodal_twist_dynamic
       test_hermite_torsion_static
       test_hermite_torsion_dynamic
       test_hermite_cable_static

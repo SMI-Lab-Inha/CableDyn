@@ -733,22 +733,26 @@ Line-node channels
      - deg
    * - ``Torq<L>N<J>``
      - torque (twisting moment) at node ``J`` of a line restrained in torsion at both ends
-       (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`). It is uniform along the
-       line, :math:`M = (\Phi - \Theta_{\text{eff}})/C` (:math:`\Theta_{\text{eff}} = \Theta`
-       without torque–tension coupling); positive for a right-handed twist of End B relative
+       (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`). In the statics it is
+       uniform along the line, :math:`M = (\Phi - \Theta_{\text{eff}})/C`
+       (:math:`\Theta_{\text{eff}} = \Theta` without torque–tension coupling); in the dynamics it
+       is the nodal twist's torque at the node, the mean of its two elements' (an end node's
+       element; :ref:`nodal twist <theory-nodal-twist>`). Positive for a right-handed twist of End B relative
        to End A about the End A → End B tangent, as OrcaFlex's ``Torque``
      - N·m
    * - ``Twist<L>N<J>``
      - material twist of the cable itself from End A to node ``J``, the sum of the element
-       twists :math:`M L_e/GJ_e` (less :math:`(K/GJ)(l_e - L_e)` under torque–tension coupling)
-       over the elements between them: 0 at End A, and at End B the
+       twists :math:`M L_e/GJ_e` (less :math:`(K/GJ)(l_e - L_e)` under torque–tension coupling;
+       in the dynamics the nodal twist's element twists) over the elements between them: 0 at
+       End A, and at End B the
        twist of the line without the windup of its torsional end springs. OrcaFlex reports the
        twist rate (``Twist``, deg/m) instead; here it is integrated from End A
      - deg
    * - ``Twist<L>``
      - total twist of the line, :math:`\Phi - \Theta = M C`, including the windup of
        torsional end springs: the imposed twist :math:`\Phi` less the geometric twist
-       :math:`\Theta` the line takes up by writhing out of its plane
+       :math:`\Theta` the line takes up by writhing out of its plane (in the dynamics the
+       element twists plus the end springs' windup)
      - deg
 
 Touchdown channels

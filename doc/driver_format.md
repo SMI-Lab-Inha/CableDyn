@@ -256,18 +256,26 @@ row decides:
 A stock-order header applies only to the 10-column row.
 
 **Optional finite-EI columns.** A 14-column row adds `GAs`, `GJ`, `Irt`, `Irn` (shear stiffness,
-torsional stiffness, transverse and axial rotary inertia per length):
+torsional stiffness, transverse and polar (axial) rotary inertia per length):
 `Name Diam Mass EA BA EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t`. The four extra values must be finite
 and either all `0` or all `> 0`. All zero, or the 10-column row, selects the circular-section
 closure `GAs = EA/(2(1+0.3))`, `GJ = EI/(1+0.3)`, `Irt = m d²/16`, `Irn = m d²/8`. The closure
 serves the secondary Cosserat path only: a finite-EI line restrained in torsion
 ([END CONNECTIONS](#end-connections-optional-finite-ei-lines)) takes `GJ` [N·m²/rad] from the
-14-column row of each of its sections and stops by name without it. `GAs`, `Irt` and `Irn` are
-not used by the cubic-Hermite route, but the all-or-nothing rule still asks for positive values.
+14-column row of each of its sections and stops by name without it. In the dynamics such a line
+carries a twist angle at every node, whose polar rotary inertia is `Irn` [kg·m²/m]
+(`m r²/2` for a solid round section; see [Nodal twist](theory.rst)): give the section's real
+value, as a placeholder `Irn` gives the line a wrong torsional inertia. `GAs` and `Irt` are not
+used by the cubic-Hermite route, but the all-or-nothing rule still asks for positive values.
 The `GJ` column may be written `GJ|K`, with `K` [N·m] the torque–tension coupling of an armoured
 cable or wire rope (`T = EA ε + K τ`, `M = GJ τ + K ε`; see
 [Torque–tension coupling](theory.rst)). It needs a finite-EI, linear-elastic type with
 `K² < EA·GJ`; the two-moving-end compatibility route refuses it. `GJ|0` is the plain `GJ`.
+`GJ|K|Bt` adds the torsional damping `Bt` [N·m²·s] of the nodal twist (the torque
+`Bt dτ/dt`, stiffness-proportional: a torsional mode of frequency `ω` has the damping ratio
+`ω Bt/(2 GJ)`); a negative `Bt` is `-ζ`, the fraction of an element's critical torsional damping
+`l0 √(GJ Irn)` on the final mesh, as `BA` is for the axial damping. It needs a finite-EI type;
+`GJ|0|Bt` is damping without coupling.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:

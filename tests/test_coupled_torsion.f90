@@ -7,9 +7,12 @@ PROGRAM test_coupled_torsion
   !! straight 100 m neutral line of test_torsion_deck (GJ 5e4 N m^2, both ends clamped and
   !! restrained in torsion, no pretwist), its End A on the platform fairlead (0, 0, -50) and
   !! End B on a fixed anchor. Rolling the platform by phi about the line axis (+x) twists the
-  !! line by -phi: Twist1 = -phi and Torq = GJ (-phi) / L, with no torsional inertia.
-  !!   1. feedthrough: a non-stepping update with a rolled orientation gives that twist and
-  !!      torque, and the fairlead moment is the restoring torque about the line axis;
+  !! line by -phi: Twist1 = -phi and, with a negligible polar inertia (Irn 1e-9: the quasi-static
+  !! limit of the nodal twist), Torq = GJ (-phi) / L.
+  !!   1. feedthrough: a non-stepping update with a rolled orientation twists the end element
+  !!      alone against the frozen interior (as the coupled end's translation stretches it):
+  !!      Twist1 = -phi, Torq = GJ (-phi) / l_e at the fairlead and 0 at the anchor until the next
+  !!      step, and the fairlead moment is that restoring torque about the line axis;
   !!   2. march: the platform rolls at 60 deg/s; every step gives Twist1 = -phi(t) and the
   !!      quasi-static torque (the coupled twin of the standalone vessel-roll gate), and the
   !!      single-cable entry driven with the same calls gives the same values bit for bit;
@@ -41,9 +44,11 @@ PROGRAM test_coupled_torsion
   INTEGER :: n_fail = 0
   CHARACTER(160) :: neutral_type
 
-  ! neutral 0.2 m section: mass = rhoW pi d^2 / 4; EA 1e7, EI 1e6, GAs 1e8, GJ 5e4
+  ! neutral 0.2 m section: mass = rhoW pi d^2 / 4; EA 1e7, EI 1e6, GAs 1e8, GJ 5e4, Irn 1e-9 (the
+  ! quasi-static torsion these gates check: the nodal twist's limit of a negligible polar inertia,
+  ! whose inertia test_nodal_twist_dynamic gates)
   WRITE (neutral_type, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, &
-    ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
+    ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-9 0.0 0.0 0.0 0.0'
 
   CALL check_feedthrough()
   CALL check_march()
@@ -210,11 +215,12 @@ CONTAINS
     CALL require(es == CD_AGG_OK, '1: a rolled orientation is accepted: '//TRIM(em))
     CALL CD_AGG_CalcOutput(agg, es, em)
     CALL channels(agg, ta, tb, tw)
-    m_ref = GJ*(-phi)/L
+    ! the end element (of 40) takes the roll
+    m_ref = GJ*(-phi)/(L/40.0_wp)
     WRITE (*, '(A,3ES15.7,A,ES15.7)') '1 feedthrough: Torq A/B, Twist ', ta, tb, tw, '; ref torque ', m_ref
     CALL require(ABS(tw + 20.0_wp) <= 1.0e-6_wp, '1: Twist1 = -roll')
-    CALL require(ABS(ta - m_ref) <= 1.0e-6_wp*ABS(m_ref) .AND. ABS(tb - m_ref) <= 1.0e-6_wp*ABS(m_ref), &
-                 '1: Torq = GJ (-roll) / L at both ends')
+    CALL require(ABS(ta - m_ref) <= 1.0e-6_wp*ABS(m_ref) .AND. ABS(tb) <= 1.0e-9_wp*ABS(m_ref), &
+                 '1: Torq = GJ (-roll) / l_e at the fairlead, 0 at the anchor (the frozen interior)')
     CALL CD_AGG_GetMovingPointMesh(agg, pos, vel, acc, load, es, em, moment=moment)
     WRITE (*, '(A,3ES15.7)') '1 feedthrough: fairlead moment ', moment(:, 1)
     CALL require(ABS(ABS(moment(1, 1)) - ABS(m_ref)) <= 1.0e-6_wp*ABS(m_ref), &

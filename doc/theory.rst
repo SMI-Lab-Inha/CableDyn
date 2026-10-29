@@ -138,7 +138,8 @@ element, with a 2 % criterion relative to the largest local magnitude (at least 
 The element follows the geometrically exact Kirchhoff-rod formulation of
 :ref:`Boyer et al. (2011) <ref-boyer2011>` with the :math:`C^1` Hermite centreline
 interpolation of :ref:`Meier, Popp & Wall (2015) <ref-meier2015>`, reduced to a torsion-free
-cable. Torsion enters only through the condensed line term below.
+cable. Torsion enters through the condensed line term of the statics and the nodal twist of the
+dynamics below.
 
 .. _theory-bend-stiffeners:
 
@@ -354,7 +355,8 @@ It is carried to every node by parallel transport along the centreline, eight sm
 rotations between the Hermite tangents per element, which does not twist it about the tangent.
 On a line in torsion it is then turned about :math:`\mathbf{t}` by the twist from End A, the
 torque times the End A compliance plus :math:`\sum l_0/GJ` from End A, right-handed about
-:math:`\mathbf{t}`. With :math:`\mathbf{d}_2 = \mathbf{t} \times \mathbf{d}_1` (y),
+:math:`\mathbf{t}`. In the dynamics, with the :ref:`nodal twist <theory-nodal-twist>`,
+it is the material director of each node, on the same convention. With :math:`\mathbf{d}_2 = \mathbf{t} \times \mathbf{d}_1` (y),
 ``CurvX`` :math:`= \kappa\mathbf{n} \cdot \mathbf{d}_1` and ``CurvY``
 :math:`= \kappa\mathbf{n} \cdot \mathbf{d}_2`. A fibre at :math:`(x, y)` in the section is
 strained in bending by :math:`-(\kappa_x x + \kappa_y y)`. On a line twisted 90 degrees from
@@ -459,13 +461,12 @@ constant-velocity joint), for which :math:`\tan x = -x/3` and :math:`M_{cr} = 4.
 zero tension, not the :math:`2\pi EI/L` of Greenhill's axial-torque hinge. OrcaFlex's
 bending-free end with a twisting spring gives the same value (see :doc:`validation`).
 
-**Dynamics and loads.** The torsion force enters the force-blended residual like the internal
-force, so a dynamic deck with torsion requires ``True alpha_force_blend`` (the default). Torsion
-carries no inertia: the torque follows the imposed twist within the step, without a torsional
-wave. This is accurate while the first torsional frequency of the line,
-:math:`\sqrt{GJ/I_p}/(2L)` with :math:`I_p` the polar mass moment per length, is well above the
-excitation; it is not for very long or torsionally soft lines. The moment of the torque on the
-object at End A is :math:`M\,\partial\Theta/\partial\boldsymbol{\omega}_A`, the derivative with
+**Dynamics and loads.** A deck line carries the nodal twist below in the dynamics, with the
+condensed torsion as its limit of a negligible polar inertia; a line built through the API
+without the polar inertia keeps the condensed torsion, whose torque follows the imposed twist
+within the step, without a torsional wave. Either enters the force-blended residual like the
+internal force, so a dynamic deck with torsion requires ``True alpha_force_blend`` (the
+default). In the condensed torsion, the moment of the torque on the object at End A is :math:`M\,\partial\Theta/\partial\boldsymbol{\omega}_A`, the derivative with
 respect to a rotation :math:`\boldsymbol{\omega}_A` of that object (for a clamped end, of its frame
 and the end tangent together), so the virtual work of the body moment is exact; for a straight
 line it is the torque along the line axis. The static body equilibrium uses the same moment and
@@ -498,6 +499,64 @@ the axial stiffness :math:`EA - K^2/GJ`. Restrained at both ends, a straight str
 cannot twist, so it carries :math:`T = EA\,\varepsilon` and :math:`M = K\varepsilon`. The node
 tension adds the element's :math:`(K/GJ)\,M`, and the twist channels sum the element twists
 :math:`M L_0/GJ - (K/GJ)(l - L_0)`.
+
+.. _theory-nodal-twist:
+
+**Nodal twist (dynamics).** The dynamics give every node :math:`k` a twist angle
+:math:`\varphi_k`: the angle about the unit node tangent :math:`\mathbf{t}_k` from a reference
+director :math:`\mathbf{u}_k` to the material director. Over each step the reference directors
+follow their tangents by the smallest rotation (time-parallel transport), so the axial angular
+velocity of the section is :math:`\dot\varphi_k`. The material twist of element :math:`e`
+between nodes :math:`k` and :math:`k+1` is :math:`\varphi_{k+1} - \varphi_k + m_e`, with the
+reference twist :math:`m_e = \beta_e - h_e`: :math:`\beta_e` the angle from :math:`\mathbf{u}_k`,
+carried to node :math:`k+1` by the smallest rotation, to :math:`\mathbf{u}_{k+1}`, and :math:`h_e`
+the element holonomy above. Transport around the geodesic quadrilateral of the committed and
+present tangents gives
+
+.. math::
+
+   \beta_e = \beta_e^n - \Omega(\mathbf{t}_k^n, \mathbf{t}_k, \mathbf{t}_{k+1})
+                     - \Omega(\mathbf{t}_k^n, \mathbf{t}_{k+1}, \mathbf{t}_{k+1}^n) ,
+
+local to the element's 12 DOFs, with the closed-form gradient and Hessian of the solid angles.
+The turns of the line live in the angles, so no :math:`2\pi` branch is tracked. This is the
+time-parallel reference frame of discrete elastic rods (:ref:`Bergou et al., 2008
+<ref-bergou2008>`) on the Hermite centreline. The element carries the torque
+
+.. math::
+
+   M_e = \frac{GJ_e}{L_{0,e}}\,\hat\tau_e + \frac{B_{t,e}}{L_{0,e}}\,\dot{\hat\tau}_e, \qquad
+   \hat\tau_e = \varphi_{k+1} - \varphi_k + m_e + \frac{K_e}{GJ_e}\,(l_e - L_{0,e}) ,
+
+the elastic torque of the energy :math:`\tfrac12 (GJ/L_0)\,\hat\tau^2`, which with the cable's
+axial stiffness :math:`EA - K^2/GJ` is the section energy of the torque–tension coupling, and
+the Kelvin–Voigt torsional damping :math:`B_t` (``GJ|K|Bt``), whose rate takes the nodal rates
+and :math:`\nabla\hat\tau\cdot\dot{\mathbf{q}}`. The damping is stiffness-proportional: the
+torsional mode of frequency :math:`\omega` has the damping ratio :math:`\omega B_t/(2GJ)`. The
+polar rotary inertia :math:`I_{rn}` (``Irn``) is lumped at the nodes. An elastic end adds its
+spring between the end node and the end frame's normal carried to the node; a rigid end takes
+that normal as its node's director and holds the node's angle (0 at the first node of the solve
+order, End B, and :math:`\Phi` at End A), so a turn of the frame enters the end element's
+reference twist through the same solid angles. A turn of an end frame by more than
+:math:`\pi/2` about the line within one step is refused, and the step is cut.
+
+In the limit of a negligible inertia the element torques are uniform and equal the condensed
+torque; the test suite holds the two models to 1e-6 on a rolling, swaying, bowed line with
+clamped, bending-pinned and elastic ends, and checks the torque of a driven torsional wave
+against the continuum, the decay of the first torsional mode under :math:`B_t`, and the energy
+of a free vibration (see :doc:`validation`).
+
+The angles join the generalised-α step with the same Newmark scheme. The tangent couples them
+to the tangent DOFs of their elements: the step factorises one band in the order
+:math:`[\mathbf{r}, \mathbf{m}, \varphi]` per node (half-bandwidth 13 instead of 11), into which
+the cable's tangent, the angle rows and columns, the lumped inertia and the damping are
+assembled; the angle rows converge on the nodal torque balance, scaled as the force rows are by
+the nodal loads. The committed reference twists are advanced with the step's own solid angles, so
+the committed state reproduces the converged iterate bit for bit, and the twist state is part of
+the snapshot, the recovering step and the checkpoint mirror. A host write of the coupled end
+between steps (the direct feedthrough) twists the end element against the frozen interior, as
+the end's translation stretches it. The node torque (``Torq<L>N<J>``) is the mean of its two
+elements', and the material twists of the elements sum to the twist channels.
 
 **Limits.** Seabed friction does not resist twist, so the laid part of a line twists freely
 (the friction torque of a cable on the seabed can be comparable with the twist torque near

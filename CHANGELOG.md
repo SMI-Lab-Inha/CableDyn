@@ -30,6 +30,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and `SYROPE IC` applies to every Syrope section of the line. On a 400 m polyester section
   between chains every element starts on its OWC to 2e-11, and a still run keeps the fairlead
   tension. Example `composite_chain_syrope_chain.dat`, on a moving vessel.
+- Torsional inertia and damping of finite-EI lines: in the dynamics a line restrained in torsion
+  carries a twist angle at every node, against directors that follow the node tangents by the
+  smallest rotation over each step, with the polar rotary inertia `Irn` of its LINE TYPES row and
+  the torsional damping `Bt` of a new third part of the `GJ` column (`GJ|K|Bt`, negative for a
+  damping ratio). The torque now varies along the line (`Torq<L>N<J>` is the node's) and
+  travels as a torsional wave; the statics stay condensed, and in the limit of a negligible
+  inertia the dynamics reproduce the condensed torsion. The step solves the angles with the
+  cable in one band of half-width 13; the twist state joins the snapshot, the recovering step
+  and the OpenFAST checkpoint mirror. Decks with torsion whose `Irn` was a placeholder (the
+  column was unused before) need the section's real value. The Python deck reader and builder
+  take `GJ|K|Bt` (builder `gj=(GJ, K, Bt)`).
 - Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
   `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.
