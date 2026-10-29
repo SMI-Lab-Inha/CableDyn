@@ -50,7 +50,8 @@ MODULE CableDyn_DeckDriver
   USE CableDyn_Damping, ONLY: CD_Resolve_Legacy_BA, CD_DAMP_OK
   USE CableDyn_Syrope, ONLY: CD_SYROPE_WC_LINEAR, CD_SYROPE_WC_QUADRATIC, CD_SYROPE_WC_EXP, &
                              CD_SyropeType, CD_Syrope_Init, CD_Syrope_End, &
-                             CD_Syrope_Static_Tension, CD_Syrope_Slow_For_Tension, CD_SYROPE_OK
+                             CD_Syrope_Static_Tension, CD_Syrope_Slow_For_Tension, CD_SYROPE_OK, &
+                             CD_SYROPE_BADINPUT
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_DYN_OK, CD_EI0_SUBSTEPS_OFF, CD_EI0_SUBSTEPS_AUTO
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Init_Line_Model, CD_End_Model, CD_Model_NCoupledDOF, CD_Model_NDOF, &
                             CD_Get_Model_CoupledDofs, CD_Get_Model_State, CD_Get_Model_Tension, &
@@ -8756,10 +8757,11 @@ CONTAINS
 
   RECURSIVE SUBROUTINE init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry, &
                                       syrope_secant, syrope_is, syrope_type, syrope_slow0, syrope_tmax0)
-    !! Initialize one persistent model from a validated deck LINE. A Syrope line is built by
-    !! init_one_syrope_model, which calls back here with syrope_secant (the secant EA of its
-    !! static solve) and, for the final build, the per-element Syrope states: the line then
-    !! takes the same seabed, hydrodynamics and fluid fields as any EI = 0 line.
+    !! Initialize one persistent model from a validated deck LINE. A line with a Syrope section is
+    !! built by init_one_syrope_model, which calls back here with syrope_secant (per element,
+    !! anchor first: the static secant EA of each Syrope element; other elements ignored) and, for
+    !! the final build, the per-element Syrope states: the line then takes the same seabed,
+    !! hydrodynamics and fluid fields as any EI = 0 line.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
@@ -8769,7 +8771,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
-    REAL(wp), INTENT(IN), OPTIONAL :: syrope_secant
+    REAL(wp), INTENT(IN), OPTIONAL :: syrope_secant(:)
     LOGICAL, INTENT(IN), OPTIONAL :: syrope_is(:)
     TYPE(CD_SyropeType), INTENT(IN), OPTIONAL :: syrope_type(:)
     REAL(wp), INTENT(IN), OPTIONAL :: syrope_slow0(:), syrope_tmax0(:)
@@ -8784,6 +8786,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: hydro_diam(:), hydro_cdn(:), hydro_cdt(:), hydro_can(:), hydro_cat(:)
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
+    LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3)
     REAL(wp), PARAMETER :: factors(4) = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
     INTEGER :: j, i, e, es
@@ -8821,7 +8824,7 @@ CONTAINS
     ALLOCATE (ba(SIZE(l0)), hydro_diam(SIZE(l0)), hydro_cdn(SIZE(l0)), hydro_cdt(SIZE(l0)), &
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
-              viv_df(SIZE(l0)))
+              viv_df(SIZE(l0)), syr_el(SIZE(l0)))
     viv_cl = CD_ZERO
     viv_cf = CD_ZERO
     viv_df = CD_ZERO
@@ -8864,8 +8867,10 @@ CONTAINS
         viv_cl(e) = types(line_section_type(sections, ln%id, i))%cl
         viv_cf(e) = types(line_section_type(sections, ln%id, i))%viv_cf
         viv_df(e) = types(line_section_type(sections, ln%id, i))%viv_df
+        syr_el(e) = types(line_section_type(sections, ln%id, i))%is_syrope
       END DO
     END DO
+    syr_el = syr_el(SIZE(syr_el):1:-1)
     viv_cl = viv_cl(SIZE(viv_cl):1:-1)
     viv_cf = viv_cf(SIZE(viv_cf):1:-1)
     viv_df = viv_df(SIZE(viv_df):1:-1)
@@ -8890,15 +8895,20 @@ CONTAINS
           syt = line_section_type(sections, ln%id, i2)
       END DO
       IF (syt > 0 .AND. .NOT. PRESENT(syrope_secant)) THEN
-        CALL init_one_syrope_model(types, syt, ln, sections, points, l0, opts, model, ErrStat, ErrMsg, &
+        CALL init_one_syrope_model(types, ln, sections, points, l0, opts, model, ErrStat, ErrMsg, &
                                    bathymetry=bathymetry)
         RETURN
       END IF
       IF (PRESENT(syrope_secant)) THEN
-        ! the static solve's single secant EA; the working curve carries the rope's damping
-        ! (BA_s|BA_d), so the line takes no legacy BA on top of it
-        lts(secs(1)%line_type)%ea = syrope_secant
-        ba = CD_ZERO
+        ! each Syrope element's static secant EA; the working curve carries the rope's damping
+        ! (BA_s|BA_d), so its elements take no legacy BA on top of it (the other sections keep
+        ! theirs)
+        IF (SIZE(syrope_secant) /= SIZE(l0)) THEN
+          CALL fail(ErrStat, ErrMsg, 'internal: one Syrope secant per element expected'); RETURN
+        END IF
+        CALL syrope_secant_sections(syrope_secant, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        WHERE (syr_el) ba = CD_ZERO
       END IF
     END BLOCK
     ! external_fluid: the host prescribes per-node fluid kinematics each step, so the
@@ -9164,22 +9174,96 @@ CONTAINS
         END IF
       END BLOCK
     END IF
+
+  CONTAINS
+
+    SUBROUTINE syrope_secant_sections(sec_el, es_out, em_out)
+      !! The line's sections and types with the Syrope elements' secant EAs: a Syrope section
+      !! splits into runs of elements of one secant, each its own section and type (the mesh is
+      !! unchanged); a section whose elements share one secant, and every other section, stays
+      !! whole.
+      REAL(wp), INTENT(IN) :: sec_el(:)
+      INTEGER, INTENT(OUT) :: es_out
+      CHARACTER(*), INTENT(OUT) :: em_out
+      TYPE(CD_LineType), ALLOCATABLE :: lts_n(:)
+      TYPE(CD_LineSection), ALLOCATABLE :: secs_n(:)
+      INTEGER :: is, je, d, n, ne_l, j0
+      REAL(wp) :: seg
+      es_out = CD_DECKDRV_OK
+      em_out = ''
+      ne_l = SIZE(sec_el)
+      ALLOCATE (lts_n(ne_l + SIZE(secs)), secs_n(ne_l + SIZE(secs)))
+      n = 0
+      d = 0       ! deck-order element index (End A first); internal index ne_l + 1 - d
+      DO is = 1, SIZE(secs)
+        IF (.NOT. types(line_section_type(sections, ln%id, is))%is_syrope) THEN
+          n = n + 1
+          lts_n(n) = lts(secs(is)%line_type)
+          secs_n(n) = secs(is)
+          secs_n(n)%line_type = n
+          d = d + secs(is)%n_segments
+          CYCLE
+        END IF
+        seg = secs(is)%length/REAL(secs(is)%n_segments, wp)
+        j0 = 1
+        DO je = 1, secs(is)%n_segments
+          IF (je < secs(is)%n_segments) THEN
+            IF (bits_same(sec_el(ne_l + 1 - (d + je)), sec_el(ne_l - (d + je)))) CYCLE
+          END IF
+          ! the run j0..je of this section, one secant
+          n = n + 1
+          lts_n(n) = lts(secs(is)%line_type)
+          lts_n(n)%ea = sec_el(ne_l + 1 - (d + je))
+          secs_n(n)%line_type = n
+          secs_n(n)%n_segments = je - j0 + 1
+          IF (j0 == 1 .AND. je == secs(is)%n_segments) THEN
+            secs_n(n)%length = secs(is)%length
+          ELSE
+            secs_n(n)%length = seg*REAL(je - j0 + 1, wp)
+          END IF
+          j0 = je + 1
+        END DO
+        d = d + secs(is)%n_segments
+      END DO
+      IF (d /= ne_l) THEN
+        es_out = CD_DECKDRV_BADINPUT
+        em_out = 'internal: the Syrope secants do not match the line mesh'
+        RETURN
+      END IF
+      CALL MOVE_ALLOC(lts_n, lts)
+      CALL MOVE_ALLOC(secs_n, secs)
+      lts = lts(1:n)
+      secs = secs(1:n)
+    END SUBROUTINE syrope_secant_sections
+
+    PURE LOGICAL FUNCTION bits_same(a, b)
+      REAL(wp), INTENT(IN) :: a, b
+      bits_same = .NOT. (a < b .OR. a > b)
+    END FUNCTION bits_same
   END SUBROUTINE init_one_model
 
-  RECURSIVE SUBROUTINE init_one_syrope_model(types, syt, ln, sections, points, l0, opts, model, ErrStat, ErrMsg, &
+  RECURSIVE SUBROUTINE init_one_syrope_model(types, ln, sections, points, l0, opts, model, ErrStat, ErrMsg, &
                                              bathymetry)
-    !! Build one Syrope line model: a single-section line, taut at init, with the seabed,
-    !! hydrodynamics and fluid fields of any EI = 0 line (init_one_model builds it). Builds the
-    !! working-curve constitutive from the parse-resolved OWC data and solves the static
-    !! equilibrium on the rest curve of the initial load history (the OWC for a virgin rope;
-    !! with SYROPE IC, the Tmax0 working curve below its top strain and the OWC above): the
-    !! secant EA of that curve at the solved mean strain, current drag included. Each element
-    !! then gets the running maximum of that history and the slow strain whose t = 0 kernel
-    !! force equals its static tension, so the dynamic state starts in the static
-    !! equilibrium. Tmean0 is not a state input (the fixed-end geometry and Tmax0 set the
-    !! mean tension); a disagreement beyond 1 % is reported on the console.
+    !! Build one Syrope line model: a line of one or more Syrope sections, alone (taut at init) or
+    !! between plain EI = 0 sections (a chain-polyester-chain mooring), with the seabed,
+    !! hydrodynamics and fluid fields of any EI = 0 line (init_one_model builds it). Builds each
+    !! Syrope section's working-curve constitutive from the parse-resolved OWC data and solves the
+    !! static equilibrium on the rest curve of the initial load history (the OWC for a virgin rope;
+    !! with SYROPE IC, the Tmax0 working curve below its top strain and the OWC above), current drag
+    !! included. Each Syrope element then gets the running maximum of that history and the slow
+    !! strain whose t = 0 kernel force equals its static tension, so the dynamic state starts in
+    !! the static equilibrium. Tmean0 is not a state input (the fixed-end geometry and Tmax0 set
+    !! the mean tension); a disagreement beyond 1 % is reported on the console.
+    !! The static solve uses secant EAs, iterated to the rest curve. A single-section line, taut
+    !! and of nearly uniform tension, takes one secant from the curve at its mean strain (the
+    !! strain the taut geometry fixes). On a composite line the tension varies along a sagging
+    !! Syrope section, so each Syrope element takes its own secant, from the curve's strain at the
+    !! element's tension: every element then starts on its rest curve, its slow strain at rest
+    !! (one secant per section would leave the elements away from the mean off the curve, and
+    !! their slow strains would settle the line after the start). The tension, which the chains'
+    !! weight and the geometry largely fix, keeps this update a contraction where a strain update
+    !! can overshoot.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
-    INTEGER, INTENT(IN) :: syt
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
@@ -9190,88 +9274,143 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
-    TYPE(CD_SyropeType) :: td
-    TYPE(CD_SyropeType), ALLOCATABLE :: stype(:)
-    LOGICAL, ALLOCATABLE :: sis(:)
-    REAL(wp), ALLOCATABLE :: sslow(:), stmax(:), t_static(:)
-    REAL(wp) :: anchor(3), fairlead(3), eps0, t_ref, secant, total_l0, t_hist, eps_bar, t_mean_static
-    INTEGER :: ne, e, es, n_owc, iter, nsec
+    INTEGER, PARAMETER :: MAX_ITER_COMPOSITE = 50
+    ! per section in deck order (End A first): its line type, element count and, for a Syrope
+    ! section, its constitutive data; per element (internal order, anchor first): its section,
+    ! whether it is a Syrope element and its static secant EA
+    TYPE(CD_SyropeType), ALLOCATABLE :: tds(:), stype(:)
+    INTEGER, ALLOCATABLE :: sec_type(:), sec_nseg(:), el_sec(:)
+    LOGICAL, ALLOCATABLE :: sec_syr(:), sis(:)
+    REAL(wp), ALLOCATABLE :: sec_el(:), cand_el(:), sslow(:), stmax(:), t_static(:)
+    REAL(wp) :: anchor(3), fairlead(3), eps0, t_ref, total_l0, t_hist, eps_bar, t_mean_static
+    REAL(wp) :: eps_e, change, secant, cand
+    INTEGER :: ne, e, es, n_owc, iter, nsec, j, k, isec, st
+    LOGICAL :: composite, converged
     CHARACTER(1024) :: em
     CHARACTER(24) :: s_eps, s_lo, s_hi
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     nsec = COUNT(sections%line_id == ln%id)
-    IF (nsec /= 1) THEN
-      CALL fail(ErrStat, ErrMsg, 'a Syrope line must be a single section (composite Syrope lines are '// &
-                'not supported yet)'); RETURN
+    ALLOCATE (sec_type(nsec), sec_nseg(nsec), sec_syr(nsec), tds(nsec))
+    k = 0
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= ln%id) CYCLE
+      k = k + 1
+      sec_type(k) = sections(j)%ltype
+      sec_nseg(k) = sections(j)%nsegs
+      sec_syr(k) = types(sections(j)%ltype)%is_syrope
+    END DO
+    composite = nsec > 1
+    ne = SIZE(l0)
+    IF (SUM(sec_nseg) /= ne) THEN
+      CALL fail(ErrStat, ErrMsg, 'internal: the Syrope line''s section element counts do not match its mesh')
+      RETURN
     END IF
-    IF (types(syt)%ei > CD_ZERO) THEN
-      CALL fail(ErrStat, ErrMsg, 'a Syrope line does not support finite-EI bending'); RETURN
-    END IF
-    ! internal order anchor (End B) -> fairlead (End A), as gather_line_inputs
+    DO k = 1, nsec
+      st = sec_type(k)
+      IF (types(st)%ei > CD_ZERO) THEN
+        IF (sec_syr(k)) THEN
+          CALL fail(ErrStat, ErrMsg, 'a Syrope line does not support finite-EI bending')
+        ELSE
+          CALL fail(ErrStat, ErrMsg, 'a composite Syrope line''s other sections must have EI = 0 (section '// &
+                    TRIM(int_to_str(k))//' of LINE '//TRIM(int_to_str(ln%id))//')')
+        END IF
+        RETURN
+      END IF
+      IF (.NOT. sec_syr(k) .AND. types(st)%elastic_mod > 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'a composite Syrope line''s other sections must be linear-elastic '// &
+                  '(ElasticMod 1; section '//TRIM(int_to_str(k))//' of LINE '//TRIM(int_to_str(ln%id))//')')
+        RETURN
+      END IF
+    END DO
+    ! internal element order anchor (End B) -> fairlead (End A), as gather_line_inputs: element e
+    ! belongs to deck section el_sec(e)
+    ALLOCATE (el_sec(ne))
+    e = ne
+    DO k = 1, nsec
+      DO j = 1, sec_nseg(k)
+        el_sec(e) = k
+        e = e - 1
+      END DO
+    END DO
     anchor = points(find_point(points, ln%nodeB))%pos
     fairlead = points(find_point(points, ln%nodeA))%pos
-    ! the working-curve constitutive from the parse-resolved OWC data
-    CALL CD_Syrope_Init(td, types(syt)%syrope_owc_strain, types(syt)%syrope_owc_tension, &
-                        types(syt)%syrope_wc_mod, types(syt)%syrope_p1, types(syt)%syrope_p2, &
-                        types(syt)%syrope_alpha, types(syt)%syrope_beta, &
-                        types(syt)%syrope_c1, types(syt)%syrope_c2, es, em)
-    IF (es /= CD_SYROPE_OK) THEN
-      CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
-    END IF
-    ! geometric strain of the taut line; the working-curve tension there and the
-    ! OWC secant EA that makes the static solve land at that strain
-    total_l0 = SUM(l0)
-    eps0 = NORM2(fairlead - anchor)/total_l0 - CD_ONE
-    IF (.NOT. (eps0 > CD_ZERO)) THEN
-      CALL CD_Syrope_End(td)
-      CALL fail(ErrStat, ErrMsg, 'a Syrope line must be taut at init (stretched length > unstretched)'); RETURN
-    END IF
-    ! the OWC table must cover the initial strain: the interpolation would clamp at
-    ! the end rows and the line would start silently mis-tensioned
-    n_owc = SIZE(types(syt)%syrope_owc_strain)
-    IF (eps0 < types(syt)%syrope_owc_strain(1) .OR. eps0 > types(syt)%syrope_owc_strain(n_owc)) THEN
-      WRITE (s_eps, '(ES10.3)') eps0
-      WRITE (s_lo, '(ES10.3)') types(syt)%syrope_owc_strain(1)
-      WRITE (s_hi, '(ES10.3)') types(syt)%syrope_owc_strain(n_owc)
-      CALL CD_Syrope_End(td)
-      CALL fail(ErrStat, ErrMsg, 'the Syrope line''s initial strain '//TRIM(ADJUSTL(s_eps))// &
-                ' lies outside its OWC table strain range ['//TRIM(ADJUSTL(s_lo))//', '// &
-                TRIM(ADJUSTL(s_hi))//']; extend the table or reduce the pretension'); RETURN
-    END IF
+    ! each Syrope section's working-curve constitutive from the parse-resolved OWC data
+    DO k = 1, nsec
+      IF (.NOT. sec_syr(k)) CYCLE
+      st = sec_type(k)
+      CALL CD_Syrope_Init(tds(k), types(st)%syrope_owc_strain, types(st)%syrope_owc_tension, &
+                          types(st)%syrope_wc_mod, types(st)%syrope_p1, types(st)%syrope_p2, &
+                          types(st)%syrope_alpha, types(st)%syrope_beta, &
+                          types(st)%syrope_c1, types(st)%syrope_c2, es, em)
+      IF (es /= CD_SYROPE_OK) THEN
+        CALL release_syrope(.FALSE.)
+        CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
+      END IF
+    END DO
     ! The load history: SYROPE IC Tmax0, or (no IC) a virgin rope loaded along the OWC.
     ! The static solve uses that history's rest curve (CD_Syrope_Static_Tension: the
     ! Tmax0 working curve below its top strain, the OWC above), so the equilibrium it
     ! finds is the rest state of the SAME constitutive state the dynamics start from.
     t_hist = CD_ZERO
     IF (ln%has_syrope_ic) t_hist = ln%syrope_tmax0
-    CALL rest_tension(eps0, t_ref, es, em)
-    IF (es /= CD_SYROPE_OK) THEN
-      CALL CD_Syrope_End(td)
-      CALL fail(ErrStat, ErrMsg, 'SYROPE IC working curve: '//TRIM(em)); RETURN
-    END IF
-    IF (.NOT. (t_ref > CD_ZERO)) THEN
-      WRITE (s_eps, '(ES10.3)') eps0
-      CALL CD_Syrope_End(td)
-      CALL fail(ErrStat, ErrMsg, 'the Syrope line is slack on its SYROPE IC working curve: the initial '// &
-                'strain '//TRIM(ADJUSTL(s_eps))//' is below the zero-tension strain of the Tmax0 curve; '// &
-                'lower Tmax0 or shorten the line'); RETURN
-    END IF
-    secant = t_ref/eps0
-    ne = SIZE(l0)
-    ALLOCATE (stype(ne), sis(ne), sslow(ne), stmax(ne), t_static(ne))
-    sis = .TRUE.
+    ALLOCATE (sec_el(ne), cand_el(ne), stype(ne), sis(ne), sslow(ne), stmax(ne), t_static(ne))
+    sis = .FALSE.
+    sslow = CD_ZERO
+    stmax = CD_ZERO
+    sec_el = CD_ZERO
     DO e = 1, ne
-      stype(e) = td
+      IF (.NOT. sec_syr(el_sec(e))) CYCLE
+      sis(e) = .TRUE.
+      stype(e) = tds(el_sec(e))
     END DO
-    ! Static solve with a single secant EA, the line otherwise built as any EI = 0 line (seabed,
-    ! drag in the deck current, buoyancy). The secant is iterated to the rest curve at the solved
-    ! mean strain, so the static line carries the curve tension on average (a chord-strain
-    ! secant misses it by the sag and the current's deflection).
-    DO iter = 1, 6
+    secant = CD_ZERO
+    IF (.NOT. composite) THEN
+      ! geometric strain of the taut line; the working-curve tension there and the
+      ! OWC secant EA that makes the static solve land at that strain
+      total_l0 = SUM(l0)
+      eps0 = NORM2(fairlead - anchor)/total_l0 - CD_ONE
+      IF (.NOT. (eps0 > CD_ZERO)) THEN
+        CALL release_syrope(.TRUE.)
+        CALL fail(ErrStat, ErrMsg, 'a Syrope line must be taut at init (stretched length > unstretched)'); RETURN
+      END IF
+      ! the OWC table must cover the initial strain: the interpolation would clamp at
+      ! the end rows and the line would start silently mis-tensioned
+      IF (.NOT. strain_in_table(1, eps0)) THEN
+        CALL release_syrope(.TRUE.)
+        RETURN
+      END IF
+      CALL rest_tension(1, eps0, t_ref, es, em)
+      IF (es /= CD_SYROPE_OK) THEN
+        CALL release_syrope(.TRUE.)
+        CALL fail(ErrStat, ErrMsg, 'SYROPE IC working curve: '//TRIM(em)); RETURN
+      END IF
+      IF (.NOT. (t_ref > CD_ZERO)) THEN
+        WRITE (s_eps, '(ES10.3)') eps0
+        CALL release_syrope(.TRUE.)
+        CALL fail(ErrStat, ErrMsg, 'the Syrope line is slack on its SYROPE IC working curve: the initial '// &
+                  'strain '//TRIM(ADJUSTL(s_eps))//' is below the zero-tension strain of the Tmax0 curve; '// &
+                  'lower Tmax0 or shorten the line'); RETURN
+      END IF
+      secant = t_ref/eps0
+      sec_el = secant
+    ELSE
+      ! a first solve with each Syrope element at its placeholder stiffness (the working curve's
+      ! alpha); the tension update below takes it to the curve
+      DO e = 1, ne
+        IF (sis(e)) sec_el(e) = types(sec_type(el_sec(e)))%syrope_alpha
+      END DO
+    END IF
+    ! Static solve with the secant EAs, the line otherwise built as any EI = 0 line (seabed, drag
+    ! in the deck current, buoyancy). The secants are iterated to the rest curves, so the Syrope
+    ! elements carry their curve tensions (a chord-strain secant misses them by the sag and the
+    ! current's deflection). The solve just made belongs to the current secants, which are kept
+    ! once the candidates agree with them.
+    converged = .FALSE.
+    DO iter = 1, MERGE(MAX_ITER_COMPOSITE, 6, composite)
       CALL init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry=bathymetry, &
-                          syrope_secant=secant)
+                          syrope_secant=sec_el)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL CD_Get_Model_Tension(model, t_static, es, em)
       CALL CD_End_Model(model, ErrStat, ErrMsg)
@@ -9280,35 +9419,87 @@ CONTAINS
         ErrMsg = em
       END IF
       IF (ErrStat /= CD_MODEL_OK) EXIT
-      eps_bar = SUM(l0*t_static)/(secant*SUM(l0))
-      CALL rest_tension(eps_bar, t_ref, es, em)
-      IF (es /= CD_SYROPE_OK .OR. .NOT. (t_ref > CD_ZERO .AND. eps_bar > CD_ZERO)) EXIT
-      IF (ABS(t_ref/eps_bar - secant) <= 1.0e-10_wp*secant) EXIT
-      secant = t_ref/eps_bar
+      IF (composite) THEN
+        ! each Syrope element: the curve's strain at its tension
+        change = CD_ZERO
+        cand_el = sec_el
+        DO e = 1, ne
+          IF (.NOT. sis(e)) CYCLE
+          isec = el_sec(e)
+          IF (.NOT. (t_static(e) > CD_ZERO)) THEN
+            CALL release_syrope(.TRUE.)
+            CALL fail(ErrStat, ErrMsg, 'Syrope section '//TRIM(int_to_str(isec))//' of LINE '// &
+                      TRIM(int_to_str(ln%id))//' is slack at init; shorten the line or raise the pretension')
+            RETURN
+          END IF
+          CALL rest_strain(isec, t_static(e), eps_e, es, em)
+          IF (es /= CD_SYROPE_OK) THEN
+            CALL release_syrope(.TRUE.)
+            CALL fail(ErrStat, ErrMsg, 'Syrope section '//TRIM(int_to_str(isec))//' of LINE '// &
+                      TRIM(int_to_str(ln%id))//': '//TRIM(em)); RETURN
+          END IF
+          cand_el(e) = t_static(e)/eps_e
+          change = MAX(change, ABS(cand_el(e) - sec_el(e))/sec_el(e))
+        END DO
+        IF (change <= 1.0e-10_wp) THEN
+          converged = .TRUE.
+          EXIT
+        END IF
+        sec_el = cand_el
+      ELSE
+        eps_bar = SUM(l0*t_static)/(secant*SUM(l0))
+        CALL rest_tension(1, eps_bar, t_ref, es, em)
+        IF (es /= CD_SYROPE_OK .OR. .NOT. (t_ref > CD_ZERO .AND. eps_bar > CD_ZERO)) EXIT
+        cand = t_ref/eps_bar
+        IF (ABS(cand - secant) <= 1.0e-10_wp*secant) EXIT
+        secant = cand
+        sec_el = secant
+      END IF
     END DO
     IF (ErrStat /= CD_MODEL_OK) THEN
-      CALL release_syrope()
+      CALL release_syrope(.TRUE.)
       ErrMsg = 'CableDyn_DeckDriver: Syrope static solve failed: '//TRIM(ErrMsg)
       IF (ErrStat /= CD_DECKDRV_BADINPUT) ErrStat = CD_DECKDRV_SOLVEFAIL
       RETURN
     END IF
-    ! Per element: the running maximum is the history's (raised to the element's static
+    IF (composite) THEN
+      ! a composite line starts only from converged secants, every Syrope element on its
+      ! curve's table
+      IF (.NOT. converged) THEN
+        CALL release_syrope(.TRUE.)
+        CALL fail(ErrStat, ErrMsg, 'the static secant EA of the Syrope elements of LINE '// &
+                  TRIM(int_to_str(ln%id))//' did not converge in '//TRIM(int_to_str(MAX_ITER_COMPOSITE))// &
+                  ' iterations')
+        RETURN
+      END IF
+      DO e = 1, ne
+        IF (.NOT. sis(e)) CYCLE
+        IF (.NOT. strain_in_table(el_sec(e), t_static(e)/sec_el(e))) THEN
+          CALL release_syrope(.TRUE.)
+          RETURN
+        END IF
+      END DO
+    END IF
+    ! Per Syrope element: the running maximum is the history's (raised to the element's static
     ! tension where that exceeds it, i.e. the element sits on the OWC; without SYROPE IC
     ! every element is a virgin rope at its own static tension), and the slow strain
     ! is the state whose t = 0 kernel force at the static strain equals the static element
     ! tension exactly, so t = 0 is the static equilibrium (zero initial transient).
     DO e = 1, ne
+      IF (.NOT. sis(e)) CYCLE
+      isec = el_sec(e)
       stmax(e) = MAX(t_hist, t_static(e))
-      CALL CD_Syrope_Slow_For_Tension(td, stmax(e), t_static(e)/secant, t_static(e), sslow(e), es, em)
+      CALL CD_Syrope_Slow_For_Tension(tds(isec), stmax(e), t_static(e)/sec_el(e), t_static(e), sslow(e), &
+                                      es, em)
       IF (es /= CD_SYROPE_OK) THEN
-        CALL release_syrope()
+        CALL release_syrope(.TRUE.)
         CALL fail(ErrStat, ErrMsg, 'Syrope initial state: '//TRIM(em)); RETURN
       END IF
     END DO
     IF (ln%has_syrope_ic) THEN
       ! Tmean0 does not enter the state: with fixed ends the mean tension follows from the
       ! geometry and the Tmax0 history. Name a disagreement rather than ignore it silently.
-      t_mean_static = SUM(l0*t_static)/SUM(l0)
+      t_mean_static = SUM(l0*t_static, MASK=sis)/SUM(l0, MASK=sis)
       IF (ABS(t_mean_static - ln%syrope_tmean0) > 0.01_wp*MAX(t_mean_static, ln%syrope_tmean0)) THEN
         WRITE (*, '(A,I0,A,ES11.4,A,ES11.4,A)') 'CableDyn: SYROPE IC line ', ln%id, &
           ': static equilibrium mean tension ', t_mean_static, ' N on the Tmax0 working curve; Tmean0 ', &
@@ -9316,18 +9507,20 @@ CONTAINS
       END IF
     END IF
     CALL init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry=bathymetry, &
-                        syrope_secant=secant, syrope_is=sis, syrope_type=stype, syrope_slow0=sslow, &
+                        syrope_secant=sec_el, syrope_is=sis, syrope_type=stype, syrope_slow0=sslow, &
                         syrope_tmax0=stmax)
-    CALL release_syrope()
+    CALL release_syrope(.TRUE.)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       ErrMsg = 'CableDyn_DeckDriver: Syrope model init failed: '//TRIM(ErrMsg)
       IF (ErrStat /= CD_DECKDRV_BADINPUT) ErrStat = CD_DECKDRV_SOLVEFAIL
     END IF
 
   CONTAINS
-    SUBROUTINE rest_tension(eps, tension, es_out, em_out)
-      !! The static curve of the initial load history at strain eps: the OWC for a virgin
-      !! rope (no SYROPE IC), the Tmax0 working curve / OWC (CD_Syrope_Static_Tension) with it.
+    SUBROUTINE rest_tension(isec_, eps, tension, es_out, em_out)
+      !! The static curve of the initial load history of Syrope section isec_ at strain eps: the
+      !! OWC for a virgin rope (no SYROPE IC), the Tmax0 working curve / OWC
+      !! (CD_Syrope_Static_Tension) with it.
+      INTEGER, INTENT(IN) :: isec_
       REAL(wp), INTENT(IN) :: eps
       REAL(wp), INTENT(OUT) :: tension
       INTEGER, INTENT(OUT) :: es_out
@@ -9335,18 +9528,82 @@ CONTAINS
       es_out = CD_SYROPE_OK
       em_out = ''
       IF (ln%has_syrope_ic) THEN
-        CALL CD_Syrope_Static_Tension(td, t_hist, eps, tension, es_out, em_out)
+        CALL CD_Syrope_Static_Tension(tds(isec_), t_hist, eps, tension, es_out, em_out)
       ELSE
-        tension = owc_table_interp(types(syt)%syrope_owc_strain, types(syt)%syrope_owc_tension, eps)
+        tension = owc_table_interp(types(sec_type(isec_))%syrope_owc_strain, &
+                                   types(sec_type(isec_))%syrope_owc_tension, eps)
       END IF
     END SUBROUTINE rest_tension
 
-    SUBROUTINE release_syrope()
+    SUBROUTINE rest_strain(isec_, tension, eps, es_out, em_out)
+      !! The strain of section isec_'s rest curve at a tension, by bisection over its OWC table
+      !! (the curve rises monotonically with strain).
+      INTEGER, INTENT(IN) :: isec_
+      REAL(wp), INTENT(IN) :: tension
+      REAL(wp), INTENT(OUT) :: eps
+      INTEGER, INTENT(OUT) :: es_out
+      CHARACTER(*), INTENT(OUT) :: em_out
+      REAL(wp) :: lo, hi, t_lo, t_hi, t_mid
+      INTEGER :: it, n
+      CHARACTER(24) :: s_t, s_top
+      n = SIZE(types(sec_type(isec_))%syrope_owc_strain)
+      lo = types(sec_type(isec_))%syrope_owc_strain(1)
+      hi = types(sec_type(isec_))%syrope_owc_strain(n)
+      eps = lo
+      CALL rest_tension(isec_, lo, t_lo, es_out, em_out)
+      IF (es_out /= CD_SYROPE_OK) RETURN
+      CALL rest_tension(isec_, hi, t_hi, es_out, em_out)
+      IF (es_out /= CD_SYROPE_OK) RETURN
+      IF (tension > t_hi) THEN
+        WRITE (s_t, '(ES10.3)') tension
+        WRITE (s_top, '(ES10.3)') t_hi
+        es_out = CD_SYROPE_BADINPUT
+        em_out = 'a tension of '//TRIM(ADJUSTL(s_t))//' N lies above the top of its OWC table ('// &
+                 TRIM(ADJUSTL(s_top))//' N); extend the table or reduce the pretension'
+        RETURN
+      END IF
+      IF (.NOT. (tension > t_lo)) RETURN
+      DO it = 1, 200
+        eps = 0.5_wp*(lo + hi)
+        CALL rest_tension(isec_, eps, t_mid, es_out, em_out)
+        IF (es_out /= CD_SYROPE_OK) RETURN
+        IF (t_mid < tension) THEN
+          lo = eps
+        ELSE
+          hi = eps
+        END IF
+        IF (hi - lo <= 4.0_wp*EPSILON(hi)*hi) EXIT
+      END DO
+      eps = 0.5_wp*(lo + hi)
+    END SUBROUTINE rest_strain
+
+    LOGICAL FUNCTION strain_in_table(isec_, eps) RESULT(ok)
+      !! Whether strain eps lies in section isec_'s OWC table (the interpolation clamps at its end
+      !! rows, so a strain outside would start the line silently mis-tensioned); fails otherwise.
+      INTEGER, INTENT(IN) :: isec_
+      REAL(wp), INTENT(IN) :: eps
+      n_owc = SIZE(types(sec_type(isec_))%syrope_owc_strain)
+      ok = .NOT. (eps < types(sec_type(isec_))%syrope_owc_strain(1) .OR. &
+                  eps > types(sec_type(isec_))%syrope_owc_strain(n_owc))
+      IF (ok) RETURN
+      WRITE (s_eps, '(ES10.3)') eps
+      WRITE (s_lo, '(ES10.3)') types(sec_type(isec_))%syrope_owc_strain(1)
+      WRITE (s_hi, '(ES10.3)') types(sec_type(isec_))%syrope_owc_strain(n_owc)
+      CALL fail(ErrStat, ErrMsg, 'the Syrope line''s initial strain '//TRIM(ADJUSTL(s_eps))// &
+                ' lies outside its OWC table strain range ['//TRIM(ADJUSTL(s_lo))//', '// &
+                TRIM(ADJUSTL(s_hi))//']; extend the table or reduce the pretension')
+    END FUNCTION strain_in_table
+
+    SUBROUTINE release_syrope(with_elements)
       !! Free the constitutive copies (the model deep-copies what it keeps).
-      INTEGER :: k
-      CALL CD_Syrope_End(td)
-      DO k = 1, ne
-        CALL CD_Syrope_End(stype(k))
+      LOGICAL, INTENT(IN) :: with_elements
+      INTEGER :: kk
+      DO kk = 1, nsec
+        IF (sec_syr(kk)) CALL CD_Syrope_End(tds(kk))
+      END DO
+      IF (.NOT. with_elements) RETURN
+      DO kk = 1, ne
+        IF (sis(kk)) CALL CD_Syrope_End(stype(kk))
       END DO
     END SUBROUTINE release_syrope
   END SUBROUTINE init_one_syrope_model
@@ -16783,21 +17040,18 @@ CONTAINS
       END IF
     END DO
 
-    ! A history row is meaningful only for a line whose constitutive type is
-    ! Syrope. The current production surface is single-section, so this also
-    ! prevents an IC from being silently attached to a plain/composite line.
+    ! A history row is meaningful only for a line with a Syrope section (alone or in a
+    ! composite line); it sets the load history of every Syrope section of the line.
     DO i = 1, SIZE(lines)
       at_line = lines(i)%deck_line
       IF (.NOT. lines(i)%has_syrope_ic) CYCLE
-      nsec_for_line = 0
       idx = 0
       DO j = 1, SIZE(sections)
         IF (sections(j)%line_id /= lines(i)%id) CYCLE
-        nsec_for_line = nsec_for_line + 1
         IF (types(sections(j)%ltype)%is_syrope) idx = idx + 1
       END DO
-      IF (nsec_for_line /= 1 .OR. idx /= 1) THEN
-        CALL fail(ErrStat, ErrMsg, 'SYROPE IC can reference only a single-section Syrope LINE')
+      IF (idx < 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'SYROPE IC can reference only a LINE with a Syrope section')
         RETURN
       END IF
     END DO

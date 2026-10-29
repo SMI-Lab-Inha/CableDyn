@@ -23,6 +23,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   chain 0.6 % and the polyester 2.9 times too stiff). Free/Connect points, a `Rigid` cable end
   connection, VIV lines, bodies, rods, buoys, torsion and `CONTROL` fail closed with named
   messages. This replaces the quasi-static linearisation without states.
+- Composite Syrope lines: a Syrope polyester section between plain `EI = 0` sections, such as a
+  chain-polyester-chain mooring, in one LINE. The static start puts every Syrope element on the
+  rest curve of its load history with its own secant EA (the tension varies along a sagging
+  section), so the dynamics start in the static equilibrium; the chains keep their `BA` damping,
+  and `SYROPE IC` applies to every Syrope section of the line. On a 400 m polyester section
+  between chains every element starts on its OWC to 2e-11, and a still run keeps the fairlead
+  tension. Example `composite_chain_syrope_chain.dat`, on a moving vessel.
 - Section-frame curvature channels `CurvX<L>N<J>` and `CurvY<L>N<J>` on finite-EI lines: the
   curvature vector on the cable's cross-section axes, for the fatigue of an armour wire or
   conductor at a fixed point of the section. The axes start at End A from the end connection

@@ -43,9 +43,9 @@ Copy a deck under a new name and keep every file it references at the same relat
 | --- | --- |
 | `*.dat` | Standalone decks. `iea15mw_umaine_openfast_cabledyn.dat` is an OpenFAST-only `MooringFile`; `iea15mw_umaine_mixed_cabledyn.dat` runs both standalone and coupled. |
 | `openfast/` | IEA-15MW VolturnUS-S `.fst` pair (`CompMooring = 5` and `3`) with their mooring decks; see [openfast/README.md](openfast/README.md). |
-| `data/syrope/` | Syrope settings and original working-curve table used by `syrope_polyester_mooring.dat`. |
+| `data/syrope/` | Syrope settings and original working-curve table used by `syrope_polyester_mooring.dat` and `composite_chain_syrope_chain.dat`. |
 | `data/lozon/` | Prescribed hang-off heave history for `lozon_gomex80_power_cable_motion.dat` and the script that generates it. |
-| `data/vessel/` | 6-DOF vessel-motion record for `lazy_wave_vessel_motion.dat`, the script that generates it, and the illustrative RAO table for `lazy_wave_vessel_rao.dat` and `lazy_wave_bend_stiffener.dat`. |
+| `data/vessel/` | 6-DOF vessel-motion record for `lazy_wave_vessel_motion.dat` and `composite_chain_syrope_chain.dat`, the script that generates it, and the illustrative RAO table for `lazy_wave_vessel_rao.dat` and `lazy_wave_bend_stiffener.dat`. |
 | `data/torsion/` | Hang-off roll history (motionFile roll column) for `torsion_lazy_wave_hangoff_twist.dat` and the script that generates it. |
 | `data/range_tdp/` | Fairlead surge history for `chain_range_tdp.dat` and the script that generates it. |
 | `moordynC_wavekin/` | A deck with the MoorDyn-C `wave_frequencies.txt` and `current_profile.txt` files it reads from its own folder. |

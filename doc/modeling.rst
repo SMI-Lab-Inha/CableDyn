@@ -308,7 +308,7 @@ Use-case map
      - ``ve_polyester_dynamic_waves.dat``
      - slow/dynamic state, relaxation time, cyclic tension
    * - Syrope polyester
-     - ``syrope_polyester_mooring.dat``
+     - ``syrope_polyester_mooring.dat`` / ``composite_chain_syrope_chain.dat``
      - OWC/settings files, initial history, supported-combination limits
    * - Current/wave-loaded mooring
      - ``dynamic_chain_current.dat`` / ``dynamic_chain_waves.dat``

@@ -54,9 +54,10 @@ rope      0.1438  22.42  "SYROPE:data/syrope/syrope_settings.dat|1.53e8|23.12"  
   initialisation with the offending tension and the next admissible `Tmax`. `EXP` requires
   `k2 > 0`.
 - Viscoelastic and Syrope line types require `EI = 0`; a finite-EI type is rejected.
-- A Syrope line must be a single section and taut at initialisation, and the deck must set
-  `dtM` and `TMax` (there is no static-only output). Current, waves, bathymetry and host-driven
-  hydrodynamic loads on a Syrope line are rejected with an error naming the feature.
+- A Syrope line is a single section, taut at initialisation, or a composite line whose other
+  sections are linear-elastic `EI = 0` sections (`composite_chain_syrope_chain.dat`), and the deck
+  must set `dtM` and `TMax` (there is no static-only output). It takes the seabed, bathymetry,
+  Morison loads, current, waves, host fluid fields and VIV of any `EI = 0` line.
 
 ## Run the Syrope example
 

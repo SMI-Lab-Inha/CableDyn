@@ -669,7 +669,7 @@ class SyropeIC:
     Attributes
     ----------
     lines : list[Line]
-        The single-section Syrope lines.
+        The lines with a Syrope section (alone or in a composite line).
     tmax0 : float
         Running maximum tension, in N.
     tmean0 : float

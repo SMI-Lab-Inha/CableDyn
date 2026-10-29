@@ -286,9 +286,16 @@ and `BA = BA_s|BA_d`:
   or `EXP`), `k1`, and `k2` rows as `value name`. `OWC` names the original-working-curve table,
   resolved relative to the settings file: a `strain tension` table of at least two numeric rows.
 - `BA_d` enters the slow-state rate; the physical damping contribution is `BA_s*d(eps_slow)/dt`.
-- A Syrope type requires `EI = 0`. A Syrope line must be a single section, taut at
-  initialisation, and run on a dynamic deck (`dtM`/`TMax`). It does not support `bathymetryFile`,
-  deck current or waves, or host-driven fluid loads. A flat `WtrDpth` seabed is accepted.
+- A Syrope type requires `EI = 0`. A Syrope line is either a single section, taut at
+  initialisation, or a composite line whose other sections are linear-elastic `EI = 0` sections (a
+  chain–polyester–chain mooring), with every Syrope element in tension at initialisation. It runs
+  on a dynamic deck (`dtM`/`TMax`) and takes the seabed, `bathymetryFile`, Morison loads, current,
+  waves, host fluid fields and VIV of any `EI = 0` line.
+- The static start solves each Syrope element on the rest curve of its load history (the OWC, or
+  the `Tmax0` working curve under `SYROPE IC`). A single-section line takes one secant EA from the
+  curve at its mean strain; on a composite line, where the tension varies along a sagging Syrope
+  section, every Syrope element takes its own secant at its own tension, so every element starts
+  on its curve and the dynamics start in the static equilibrium.
 
 The settings-file grammar is in [Auxiliary file formats](file_formats.rst).
 
@@ -718,8 +725,9 @@ Line(s)   Tmax0    Tmean0
 
 The last two tokens are `Tmax0 Tmean0`; the tokens before them form the line list. Line ids are
 comma-separated (`1,2` or `1, 2`); ids separated only by spaces are rejected. Values must satisfy
-`Tmax0 >= Tmean0 >= 0` and `Tmax0 > 0`, and be finite. Every referenced line must be a
-single-section Syrope line, named in only one row.
+`Tmax0 >= Tmean0 >= 0` and `Tmax0 > 0`, and be finite. Every referenced line must have a
+Syrope section, and be named in only one row. On a composite line the history applies to every
+Syrope section.
 
 `Tmax0` is the rope's running maximum tension. The static initial condition is solved on its
 rest curve, the working curve regenerated at `Tmax0` (the OWC beyond that curve's top strain).
