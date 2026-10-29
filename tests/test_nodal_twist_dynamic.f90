@@ -11,7 +11,9 @@ PROGRAM test_nodal_twist_dynamic
   !!      moves off the end director) and elastic torsional ends;
   !!   W  torsional waves: a straight line, clamped and rigid in torsion at both ends, driven in
   !!      roll at one end below its first torsional mode, carries at the other end the torque of
-  !!      the continuum, GJ A k / sin(kL) with k = Omega sqrt(Irn/GJ);
+  !!      the continuum, GJ A k / sin(kL) with k = Omega sqrt(Irn/GJ); at kL = pi/2 the driven end's
+  !!      reaction moment is zero, GJ A k cot(kL), its held section's polar inertia included,
+  !!      for a roll of the parent and for an imposed twist;
   !!   D  torsional damping: the first torsional mode rings down at zeta_1 = omega_1 Bt/(2 GJ);
   !!      a parent rolling its end frame at a steady rate Omega (negligible Irn) loads the held
   !!      end with (GJ theta + Bt Omega)/L, the damping of the frame's own turn included;
@@ -44,6 +46,8 @@ PROGRAM test_nodal_twist_dynamic
   CALL check_quasi_static('bending-pinned', .TRUE., 0.0_wp)
   CALL check_quasi_static('elastic', .FALSE., 0.05_wp)
   CALL check_waves()
+  CALL check_driven_end('parent roll')
+  CALL check_driven_end('imposed twist')
   CALL check_damping()
   CALL check_frame_damping()
   CALL check_energy()
@@ -300,6 +304,58 @@ CONTAINS
     CALL require(ABS(0.5_wp*(tmax + tmin)) <= 1.0e-2_wp*expect, 'W: the torque swings about zero')
     CALL CD_HFMF_End(cab)
   END SUBROUTINE check_waves
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_driven_end(label)
+    !! W: the drive of check_waves at Omega = omega_1/2 (kL = pi/2), by the parent's roll or by
+    !! the imposed twist: the continuum's torque at the driven end, GJ A k cos(kL)/sin(kL), is
+    !! zero, so the axial reaction moment there swings only by the discretisation; without the
+    !! held end section's inertia (Irn l0/2) it would swing by Irn l0/2 Omega^2 A, 4 % of
+    !! GJ A k here.
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), PARAMETER :: IRN = 0.5_wp, AMPR = 0.2_wp
+    INTEGER, PARAMETER :: NPER_RAMP = 8, NPER = 14, NPP = 200
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab
+    REAL(wp) :: q(NDOF), c, om, dt, t, env, ang, x(3), f(3), m(3), mmax, mmin, scale, ramp_t
+    INTEGER :: k, es
+    CHARACTER(300) :: em
+    ALLOCATE (cab)
+    c = SQRT(GJ/IRN)
+    om = 0.5_wp*PI*c/LL
+    dt = 2.0_wp*PI/om/REAL(NPP, wp)
+    CALL line_seed(0.0_wp, 0.0_wp, q)
+    CALL build_cable(cab, q, 0.0_wp, dt, 1.0e-10_wp, 0.9_wp, .FALSE., IRN, 0.0_wp)
+    x = q(NDOF - 5:NDOF - 3)
+    ramp_t = REAL(NPER_RAMP, wp)*2.0_wp*PI/om
+    mmax = -HUGE(1.0_wp)
+    mmin = HUGE(1.0_wp)
+    DO k = 1, NPER*NPP
+      t = dt*REAL(k, wp)
+      env = MIN(t/ramp_t, 1.0_wp)
+      env = env**3*(10.0_wp - 15.0_wp*env + 6.0_wp*env**2)
+      ang = AMPR*env*SIN(om*t)
+      IF (label == 'parent roll') THEN
+        CALL CD_HFMF_UpdateStates(cab, x, [0.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 0.0_wp, 0.0_wp], es, em, &
+                                  u_orientation=roll_x(ang))
+      ELSE
+        CALL CD_HFMF_UpdateStates(cab, x, [0.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 0.0_wp, 0.0_wp], es, em, &
+                                  u_orientation=roll_x(0.0_wp), u_twist=ang)
+      END IF
+      CALL require(es == CD_HFMF_OK, 'W '//label//': step: '//TRIM(em))
+      IF (es /= CD_HFMF_OK) EXIT
+      IF (t > ramp_t + 2.0_wp*PI/om) THEN
+        CALL CD_HFMF_CalcOutput(cab, f, es, em, y_moment=m)
+        mmax = MAX(mmax, m(1))
+        mmin = MIN(mmin, m(1))
+      END IF
+    END DO
+    scale = GJ*AMPR*(om/c)
+    WRITE (*, '(A,A,A,ES12.4,A,ES12.4)') 'W driven end at kL = pi/2 (', label, '): axial reaction swing ', &
+      0.5_wp*(mmax - mmin), ' of GJ A k ', scale
+    CALL require(0.5_wp*(mmax - mmin) <= 1.0e-2_wp*scale, &
+                 'W '//label//': the driven end reacts with the continuum torque, its section inertia included')
+    CALL CD_HFMF_End(cab)
+  END SUBROUTINE check_driven_end
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE check_damping()

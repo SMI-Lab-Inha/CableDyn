@@ -493,7 +493,9 @@ MODULE CableDyn_HermiteCableDynamic
     ! tw_som(:, k): the angular velocity of end frame k over the running step, log(R_{n+1}
     ! R_n^T)/dt (R = [d n d x n]); tw_om: that of the committed step. A turning frame twists
     ! the element at a rigid end through rho, and the torsional damping takes that rate.
-    REAL(wp) :: tw_som(3, 2) = CD_ZERO, tw_om(3, 2) = CD_ZERO
+    ! tw_oal: the frames' angular acceleration at the committed state, (tw_om - its value one
+    ! step earlier)/dt, which turns the held end section's polar inertia (the support reaction).
+    REAL(wp) :: tw_som(3, 2) = CD_ZERO, tw_om(3, 2) = CD_ZERO, tw_oal(3, 2) = CD_ZERO
     ! Packed twist state (tw_pack) of the recovering step's interval start and of the snapshot,
     ! and the snapshot's tw_fcR.
     REAL(wp), ALLOCATABLE :: ws_recovery_tw(:), snap_tw(:), snap_tw_fcR(:)
@@ -4548,6 +4550,7 @@ CONTAINS
         model%tw_w(iv) = model%tw_wn(iv) + dt*((CD_ONE - gm)*model%tw_an(iv) + gm*model%tw_ak(iv))
       END DO
       CALL tw_commit_reference(model)
+      model%tw_oal = (model%tw_som - model%tw_om)/dt
       model%tw_om = model%tw_som
       DO iv = 1, model%ne
         model%tw_mt(iv) = model%tw_me(iv)
@@ -7297,9 +7300,11 @@ CONTAINS
       ! -> u) of the frame turned by exp(w), G(d' -> x) n' = Rot(x, w . d + Omega(d, d', x))
       ! G(d -> x) n to first order, so df/dw = -d - d x dOmega/dy(d, d, x), and the frame's
       ! director in a transport triangle adds d x dOmega/dd. The slaved tangent of a rigid
-      ! bending end adds its share through the constraint reaction below.
+      ! bending end adds its share through the constraint reaction below. The held end section
+      ! turns with the frame and its held angle, chi_dot = -+drho/dw . omega + phi_dot (End 1,
+      ! End 2): its polar inertia I adds -I chi_ddot dchi/dw.
       BLOCK
-        REAL(wp) :: rho, beta, g(12), h(12, 12), ew(3, 2), psi, gl(3), hl(3, 3), lw(3), tw
+        REAL(wp) :: rho, beta, g(12), h(12, 12), ew(3, 2), psi, gl(3), hl(3, 3), lw(3), tw, sg, chi_dd
         IF (model%tw_rigid(iend)) THEN
           CALL twist_reference(model, MERGE(1, model%ne, iend == 1), model%q, model%torsion%ends, .FALSE., rho, &
                                beta, g, h, es, em, end_w=ew)
@@ -7309,6 +7314,9 @@ CONTAINS
             RETURN
           END IF
           moment = -model%tw_mt(MERGE(1, model%ne, iend == 1))*ew(:, iend)
+          sg = MERGE(-CD_ONE, CD_ONE, iend == 1)
+          chi_dd = sg*DOT_PRODUCT(ew(:, iend), model%tw_oal(:, iend)) + model%tw_al(node)
+          moment = moment - model%tw_mass(node)*chi_dd*sg*ew(:, iend)
         ELSE
           CALL twist_link(model, iend, model%q, model%torsion%ends, .FALSE., psi, gl, hl, es, em, end_w=lw)
           IF (es /= CD_HCDYN_OK) THEN
@@ -7979,6 +7987,7 @@ CONTAINS
     model%tw_spsi = CD_ZERO
     model%tw_som = CD_ZERO
     model%tw_om = CD_ZERO
+    model%tw_oal = CD_ZERO
     model%tw_tscale = CD_ONE
     model%snap_valid = .FALSE.
     model%require_tensile = .FALSE.
@@ -8623,9 +8632,10 @@ CONTAINS
   PURE INTEGER FUNCTION tw_pack_size(model) RESULT(n)
     !! Reals of the packed twist state of tw_pack: the angles, rates and accelerations, the
     !! directors and unit tangents, the reference twists, the element torques, the two
-    !! end-frame references and the end frames' angular velocities of the committed step.
+    !! end-frame references and the end frames' angular velocities and accelerations of the
+    !! committed step.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
-    n = 9*model%nn + 2*model%ne + 8
+    n = 9*model%nn + 2*model%ne + 14
   END FUNCTION tw_pack_size
 
   PURE SUBROUTINE tw_pack(model, buf)
@@ -8643,6 +8653,7 @@ CONTAINS
     buf(9*nn + ne + 1:9*nn + 2*ne) = model%tw_mt
     buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2) = model%tw_psi
     buf(9*nn + 2*ne + 3:9*nn + 2*ne + 8) = RESHAPE(model%tw_om, [6])
+    buf(9*nn + 2*ne + 9:9*nn + 2*ne + 14) = RESHAPE(model%tw_oal, [6])
   END SUBROUTINE tw_pack
 
   PURE SUBROUTINE tw_unpack(model, buf)
@@ -8660,6 +8671,7 @@ CONTAINS
     model%tw_mt = buf(9*nn + ne + 1:9*nn + 2*ne)
     model%tw_psi = buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2)
     model%tw_om = RESHAPE(buf(9*nn + 2*ne + 3:9*nn + 2*ne + 8), [3, 2])
+    model%tw_oal = RESHAPE(buf(9*nn + 2*ne + 9:9*nn + 2*ne + 14), [3, 2])
   END SUBROUTINE tw_unpack
 
   ELEMENTAL REAL(wp) FUNCTION tw_wrap(x) RESULT(y)
@@ -9246,6 +9258,7 @@ CONTAINS
     model%tw_psi = CD_ZERO
     model%tw_som = CD_ZERO
     model%tw_om = CD_ZERO
+    model%tw_oal = CD_ZERO
     IF (.NOT. model%tw_rigid(1)) model%tw_psi(1) = CD_HermiteTwist_Angle(model%tw_u(:, 1), &
                                                                          CD_HermiteTwist_Carry(ends(:, 1), &
                                                                                                model%tw_tn(:, 1), &
