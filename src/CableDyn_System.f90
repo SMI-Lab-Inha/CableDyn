@@ -14,7 +14,7 @@ MODULE CableDyn_System
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Model_Is_Initialized, CD_End_Model, &
                             CD_Model_NCoupledDOF, CD_Model_NDOF, CD_Model_NElem, &
                             CD_Get_Model_CoupledDofs, CD_Get_Model_CoupledMotion, &
-                            CD_Get_Model_State, CD_Get_Model_Tension, &
+                            CD_Get_Model_State, CD_Get_Model_Tension, CD_Get_Model_Internal_Rates, &
                             CD_Model_Has_Viscoelastic, CD_Get_Model_VE_Dl1, CD_Set_Model_VE_Dl1, &
                             CD_Model_Has_Syrope, CD_Get_Model_Syrope_State, CD_Set_Model_Syrope_State, &
                             CD_Model_Has_VIV, CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Get_Model_VIV_Lift, &
@@ -86,6 +86,7 @@ MODULE CableDyn_System
   PUBLIC :: CD_Get_System_Line_State
   PUBLIC :: CD_Get_System_Line_Tension
   PUBLIC :: CD_Get_System_Line_Stretch
+  PUBLIC :: CD_Get_System_Line_Internal_Rates
   PUBLIC :: CD_Get_System_CoupledMotion
   PUBLIC :: CD_Update_System_CoupledMotion
   PUBLIC :: CD_Update_System_Point_States
@@ -1176,6 +1177,32 @@ CONTAINS
       END DO
     END ASSOCIATE
   END SUBROUTINE CD_Get_System_Line_Stretch
+
+  SUBROUTINE CD_Get_System_Line_Internal_Rates(system, line_index, ve_rate, syrope_rate, ErrStat, ErrMsg)
+    !! The per-element constitutive-state rates of one contained line at its current state
+    !! (CD_Get_Model_Internal_Rates).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    REAL(wp), INTENT(OUT) :: ve_rate(:), syrope_rate(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: es
+    CHARACTER(1024) :: em
+
+    ve_rate = CD_ZERO
+    syrope_rate = CD_ZERO
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    CALL CD_Get_Model_Internal_Rates(system%lines(line_index), ve_rate, syrope_rate, es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      ErrStat = CD_SYSTEM_SOLVEFAIL
+      ErrMsg = 'CableDyn_System: line internal-rate query failed: '//TRIM(em)
+      RETURN
+    END IF
+    ErrStat = CD_SYSTEM_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_Get_System_Line_Internal_Rates
 
   SUBROUTINE CD_Get_System_CoupledMotion(system, q_coupled, v_coupled, a_coupled, ErrStat, ErrMsg)
     !! Copy aggregate compact coupled motion, concatenated line by line.

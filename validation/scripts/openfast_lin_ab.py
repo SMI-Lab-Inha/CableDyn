@@ -386,9 +386,13 @@ def driver_point_loads(driver: Path, deck: Path, work: Path, pid: int, xyz: list
     lines[row] = "  ".join(tok[:2] + [f"{v:.10f}" for v in xyz] + tok[5:])
     out: list[str] = []
     in_outputs = False
+    has_tmax = any(re.match(r"^\s*\S+\s+TMax\b", ln) for ln in lines)
     for ln in lines:
         up = ln.strip().upper()
         if ln.lstrip().startswith("-") and "OUTPUTS" in up:
+            if not has_tmax:
+                # a coupled deck leaves TMax to the host: the static start alone
+                out.append("0.0      TMax      - Standalone duration (s); 0 solves the static start")
             in_outputs = True
             out.append(ln)
             out.extend(f'"Point{p}F{c}"' for p in coupled for c in "xyz")

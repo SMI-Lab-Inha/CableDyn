@@ -441,15 +441,21 @@ The zero-frequency reduction ``D − C A⁻¹ B`` is the static mooring stiffnes
 MoorDyn-F and with CableDyn's own static solutions (:doc:`validation`). Quadratic drag has no
 slope at rest, so the 0.1 m/s step gives its equivalent linear damping at that velocity amplitude.
 CableDyn integrates the drag over the element, and a one-node step then gives about half of
-MoorDyn-F's lumped value. The internal states of viscoelastic, Syrope and VIV models and the
-seabed-friction anchors are held at their operating-point values: the linearisation sees the rope's
-instantaneous stiffness and a stuck laid run. Linearise from a settled operating point, such as the
-still-water start at ``t = 0``.
+MoorDyn-F's lumped value.
+
+The constitutive states of the rope models are first-order states, named ``Line 1 segment 3 dl1,
+m`` and ``Line 1 segment 3 slow strain, -`` (elements counted from End B, as the nodes): each
+viscoelastic element's slow-branch stretch and each Syrope element's slow strain, differentiated
+through their own laws. ``D − C A⁻¹ B`` then gives the relaxed static stiffness of these ropes,
+not their instantaneous one. Two load histories are held at their operating-point values: the
+Syrope running maximum (small motions below it stay on its working curve) and the seabed-friction
+stick anchors (a stuck laid run). Linearise from a settled operating point, such as the still-water
+start at ``t = 0``.
 
 Initialisation fails with a named message for Free and Connect points, Point3 buoys, Rigid6 bodies
-and rods, a line restrained in torsion, a ``CONTROL`` section, a cable with a ``Rigid`` end
-connection, and FAST.Farm. These carry states that are not linearisation states. Time-domain runs
-support all of them.
+and rods, a line restrained in torsion, a line with VIV (``Cl > 0``: it oscillates about a lock-in
+cycle, not an equilibrium), a ``CONTROL`` section, a cable with a ``Rigid`` end connection, and
+FAST.Farm. Their states are not linearisation states. Time-domain runs support all of them.
 
 Performance
 -----------

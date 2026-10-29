@@ -390,7 +390,14 @@ scripts, results, and source provenance are in
     Two step sizes had to be small. A millimetre position step lifted the cable's grounded nodes out
     of their 0.3 mm seabed penetration on one side of the difference, and a 5 cm coupled-point step
     slackened the chain's last element. Each halved a stiffness (the cable's sway stiffness read 242
-    instead of 2.6 N/m). States and inputs now take 1 µm. Both 50-segment models sit 7–12% above the continuous elastic catenary
+    instead of 2.6 N/m). States and inputs now take 1 µm. The rope models' constitutive states are
+    first-order states, checked the same way against each deck's static solutions. A viscoelastic
+    variant of the UMaine chains (`EA 3.27e9|6.54e9`, 150 slow-branch stretches) matches to 7e-5;
+    held, the stretches would read the chain 0.6 % too stiff. A taut three-leg Syrope polyester
+    spread with a `SYROPE IC` history (60 slow strains) matches to 6e-6, where held slow strains
+    would read it 2.9 times too stiff. With every element on one segment of the working-curve
+    table, the single-secant static start is exact; legs straddling a table kink differ by 2 %,
+    because that static start takes one secant for the whole line. Both 50-segment models sit 7–12% above the continuous elastic catenary
     because of the touchdown discretisation; refining to 800 segments converges to it within 0.1%.
     MoorDyn's reduction needs the full-precision `OutFmt`. With the usual `ES10.3E2` (4 digits),
     `D ≈ 1e8 N/m` cancels to a ~1e4 N/m result and the block is 57% asymmetric with sign-flipped

@@ -848,10 +848,11 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
        combinations in :doc:`capabilities`
    * - OpenFAST linearisation of a cable with a ``Rigid`` ``END CONNECTIONS`` row (``formal
        OpenFAST linearization of a cable with a rigid end connection is not supported``), of a deck
-       with ``Free`` or ``Connect`` points, or with a ``CONTROL`` section
+       with ``Free`` or ``Connect`` points or a line with VIV (``Cl > 0``), or with a ``CONTROL``
+       section
      - linearise a variant with a numeric rotational stiffness at the hang-off, the lines attached to
-       ``Fixed`` or ``Coupled`` points, and no ``CONTROL`` section; time-domain runs support all of
-       them
+       ``Fixed`` or ``Coupled`` points, ``Cl = 0`` and no ``CONTROL`` section; time-domain runs
+       support all of them
    * - a ``Rigid`` end-connection direction reversed by exactly 180 degrees in one host update
      - drive the platform through intermediate orientations
    * - VIV on a finite-EI line with two moving ends (``needs its End B fixed``)

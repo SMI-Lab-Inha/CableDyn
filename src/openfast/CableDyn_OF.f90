@@ -54,9 +54,10 @@ MODULE CableDyn
    !! deck + state mirror, accepted on committed mooring-interval boundaries),
    !! linearization with the line dynamics (as MoorDyn-F: the continuous states are the
    !! EI=0 lines' interior-node positions and the finite-EI cables' free DOFs, positions
-   !! and tangents, then their velocities; A, B, C and D by central differences of
-   !! lin_eval, the accelerations solved at the perturbed state; Free/Connect points,
-   !! bodies, rods, Point3 buoys, torsion, CONTROL and rigid cable ends fail closed), and
+   !! and tangents, then their velocities, and the rope models' constitutive states; A, B, C
+   !! and D by central differences of lin_eval, the accelerations and state rates evaluated
+   !! at the perturbed state; Free/Connect points, VIV lines, bodies, rods, Point3 buoys,
+   !! torsion, CONTROL and rigid cable ends fail closed), and
    !! FAST.Farm farm-level moorings (FarmSize > 0: Turbine<J> decks,
    !! per-turbine coupled meshes, shared lines; still-water hydro; farm restart and
    !! farm linearization fail closed with named messages). Checkpoint restart re-parses a
@@ -107,7 +108,7 @@ MODULE CableDyn
    USE CableDyn_LoadPredictor, ONLY: CD_Predictor_Ready, CD_Predictor_Fraction, CD_Predict_Loads
    USE CableDyn_Profile, ONLY: CD_Profile_Arm, CD_Profile_Disarm, CD_Profile_Kernels, CD_PROF_K_RESIDUAL, &
                                CD_PROF_K_TANGENT, CD_PROF_K_FACTOR, CD_PROF_K_SOLVE, CD_PROF_NKERNEL
-   USE CableDyn_System, ONLY: CD_Get_System_Line_Stretch
+   USE CableDyn_System, ONLY: CD_Get_System_Line_Stretch, CD_Get_System_Line_Internal_Rates
    USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
    USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_System_Line_NElem, &
                               CD_Get_System_DynamicPoint_States, CD_Set_System_DynamicPoint_States, &
@@ -130,6 +131,9 @@ MODULE CableDyn
    IMPLICIT NONE
 
    PRIVATE
+
+   ! the kinds of first-order linearization state (lin_state_map)
+   INTEGER(IntKi), PARAMETER :: LIN1_VE = 1, LIN1_SYROPE = 2
 
    TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.3.0', '2026-10-23' )
    INTERFACE
@@ -202,6 +206,10 @@ MODULE CableDyn
       ! buffers of lin_eval
       LOGICAL                 :: lin_states = .FALSE.
       INTEGER(IntKi), ALLOCATABLE :: lin_pos(:), lin_vel(:), lin_acc(:)
+      ! the first-order linearization states, the per-element constitutive states of the
+      ! EI = 0 lines: mirror slot, line, element and kind (LIN1_VE: the viscoelastic slow-branch
+      ! stretch dl_1; LIN1_SYROPE: the Syrope slow strain)
+      INTEGER(IntKi), ALLOCATABLE :: lin1_slot(:), lin1_line(:), lin1_elem(:), lin1_kind(:)
       REAL(R8Ki), ALLOCATABLE :: ws_lsave(:), ws_lwork(:)
       ! FAST.Farm: turbine count (0 = plain single-turbine mode), the driving turbine
       ! per flat aggregate moving slot, that slot's node index within its turbine's
@@ -805,6 +813,26 @@ CONTAINS
       ! A Free/Connect point steps with its own state through the implicit point-line coupling;
       ! the linearization states are the line and cable DOFs only, so the point would be held
       ! where it is and its compliance omitted.
+      ! A line with VIV oscillates about a lock-in limit cycle, not about an equilibrium, and its
+      ! shedding phase and running mean squares are not linearization states either.
+      IF (InitInp%Linearize) THEN
+         DO il = 1, Inst(id)%nlines
+            IF (CD_System_Line_VIV_MirrorSize( Inst(id)%agg%sys%fast%system, il ) > 0) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                                'of a line with VIV (LINE TYPES Cl > 0) is not supported; set Cl = 0 to '// &
+                                'linearize.', ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
+         END DO
+         DO ic = 1, Inst(id)%agg%ncable
+            IF (Inst(id)%agg%cables(ic)%line%has_viv) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                                'of a cable with VIV (LINE TYPES Cl > 0) is not supported; set Cl = 0 to '// &
+                                'linearize.', ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
+         END DO
+      END IF
       IF (InitInp%Linearize .AND. CD_AGG_NDynamicPoints( Inst(id)%agg ) > 0) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
                           'with Free or Connect points is not supported; their states are not '// &
@@ -2691,8 +2719,9 @@ CONTAINS
       TYPE(CD_MiscVarType), INTENT(IN)    :: m
       INTEGER(IntKi),       INTENT(OUT)   :: ErrStat
       CHARACTER(*),         INTENT(OUT)   :: ErrMsg
-      INTEGER(IntKi) :: il, ic, ndofl, nin, nf, csz, koff, n, k, j, es
+      INTEGER(IntKi) :: il, ic, ndofl, nin, nf, csz, koff, n, k, j, es, n1, k1, kind
       CHARACTER(ErrMsgLen) :: em
+      LOGICAL, ALLOCATABLE :: mask(:)
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -2707,6 +2736,34 @@ CONTAINS
       DO ic = 1, inst_e%agg%ncable
          IF (CD_HFMF_MirrorSize( inst_e%agg%cables(ic) ) <= 0) CYCLE
          n = n + COUNT(inst_e%agg%cables(ic)%line%freemask)
+      END DO
+      ! the constitutive states: every viscoelastic and Syrope element, the per-element tail
+      ! after the line's interior block (as pack_state_mirror)
+      n1 = 0
+      DO il = 1, inst_e%nlines
+         n1 = n1 + COUNT(lin1_element(il, LIN1_VE)) + COUNT(lin1_element(il, LIN1_SYROPE))
+      END DO
+      IF (ALLOCATED(inst_e%lin1_slot)) DEALLOCATE (inst_e%lin1_slot, inst_e%lin1_line, inst_e%lin1_elem, &
+                                                   inst_e%lin1_kind)
+      ALLOCATE (inst_e%lin1_slot(n1), inst_e%lin1_line(n1), inst_e%lin1_elem(n1), inst_e%lin1_kind(n1), STAT=es)
+      IF (es /= 0) THEN
+         CALL SetErrStat( ErrID_Fatal, 'Could not allocate the linearization state map.', ErrStat, ErrMsg, &
+                          'lin_state_map' ); RETURN
+      END IF
+      k1 = 0
+      DO il = 1, inst_e%nlines
+         nin = CD_System_Line_NDOF( inst_e%agg%sys%fast%system, il, es, em ) - 6
+         DO kind = LIN1_VE, LIN1_SYROPE
+            mask = lin1_element(il, kind)
+            DO j = 1, SIZE(mask)
+               IF (.NOT. mask(j)) CYCLE
+               k1 = k1 + 1
+               inst_e%lin1_slot(k1) = m%LineStateIs1(il) + 3*nin + j - 1
+               inst_e%lin1_line(k1) = il
+               inst_e%lin1_elem(k1) = j
+               inst_e%lin1_kind(k1) = kind
+            END DO
+         END DO
       END DO
       IF (ALLOCATED(inst_e%lin_pos)) DEALLOCATE (inst_e%lin_pos, inst_e%lin_vel, inst_e%lin_acc)
       IF (ALLOCATED(inst_e%ws_lsave)) DEALLOCATE (inst_e%ws_lsave, inst_e%ws_lwork)
@@ -2744,7 +2801,30 @@ CONTAINS
          koff = koff + csz
       END DO
       inst_e%lin_states = .TRUE.
+
+   CONTAINS
+
+      FUNCTION lin1_element(il_, kind_) RESULT(msk)
+         !! The elements of line il_ carrying a constitutive state of kind kind_.
+         INTEGER(IntKi), INTENT(IN) :: il_, kind_
+         LOGICAL, ALLOCATABLE :: msk(:)
+         msk = lin1_mask( inst_e, il_, kind_ )
+      END FUNCTION lin1_element
    END SUBROUTINE lin_state_map
+
+   FUNCTION lin1_mask( inst_, il, kind ) RESULT(msk)
+      !! The elements of EI = 0 line il that carry a first-order linearization state of the kind:
+      !! viscoelastic (ElasticMod 2/3) elements for LIN1_VE, Syrope elements for LIN1_SYROPE.
+      TYPE(CD_OF_Instance), INTENT(IN) :: inst_
+      INTEGER(IntKi),       INTENT(IN) :: il, kind
+      LOGICAL, ALLOCATABLE :: msk(:)
+      ASSOCIATE (ln => inst_%agg%sys%fast%system%lines(il))
+         ALLOCATE (msk(ln%n_elem))
+         msk = .FALSE.
+         IF (kind == LIN1_VE .AND. ln%has_viscoelastic) msk = ln%ve_mode /= 0
+         IF (kind == LIN1_SYROPE .AND. ln%has_syrope) msk = ln%syrope_is
+      END ASSOCIATE
+   END FUNCTION lin1_mask
 
    SUBROUTINE lin_disp_step( inst_, dx, ErrStat, ErrMsg )
       !! The coupled-point displacement step of the linearization, as MoorDyn-F's: half the
@@ -2796,7 +2876,8 @@ CONTAINS
       TYPE(CD_OutputType),            INTENT(INOUT), OPTIONAL :: y_out
 
       character(*), parameter :: RoutineName = 'CableDyn:lin_eval'
-      INTEGER(IntKi)          :: ErrStat2, es, i, ic
+      INTEGER(IntKi)          :: ErrStat2, es, i, ic, il, ne, k
+      REAL(wp), ALLOCATABLE   :: ve_rate(:), syr_rate(:)
       CHARACTER(ErrMsgLen)    :: ErrMsg2, em
       REAL(wp)                :: cval, t_clock
 
@@ -2818,6 +2899,7 @@ CONTAINS
       Inst(id)%ws_lwork = Inst(id)%ws_lsave
       Inst(id)%ws_lwork(Inst(id)%lin_pos) = x_in%states(Inst(id)%lin_pos)
       Inst(id)%ws_lwork(Inst(id)%lin_vel) = x_in%states(Inst(id)%lin_vel)
+      Inst(id)%ws_lwork(Inst(id)%lin1_slot) = x_in%states(Inst(id)%lin1_slot)
       CALL reload_interiors_ary( Inst(id), m, Inst(id)%ws_lwork, t_clock, ErrStat2, ErrMsg2 )
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) THEN
@@ -2856,6 +2938,26 @@ CONTAINS
          dxdt%states = 0.0_R8Ki
          dxdt%states(Inst(id)%lin_pos) = Inst(id)%ws_lwork(Inst(id)%lin_vel)
          dxdt%states(Inst(id)%lin_vel) = Inst(id)%ws_lwork(Inst(id)%lin_acc)
+         ! the constitutive states' rates at this state (the instantaneous element laws)
+         DO il = 1, Inst(id)%nlines
+            IF (.NOT. ANY(Inst(id)%lin1_line == il)) CYCLE
+            ne = CD_System_Line_NElem( Inst(id)%agg%sys%fast%system, il, es, em )
+            ALLOCATE (ve_rate(ne), syr_rate(ne))
+            CALL CD_Get_System_Line_Internal_Rates( Inst(id)%agg%sys%fast%system, il, ve_rate, syr_rate, es, em )
+            IF (es /= CD_SYSTEM_OK) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+               CALL restore; RETURN
+            END IF
+            DO k = 1, SIZE(Inst(id)%lin1_slot)
+               IF (Inst(id)%lin1_line(k) /= il) CYCLE
+               IF (Inst(id)%lin1_kind(k) == LIN1_VE) THEN
+                  dxdt%states(Inst(id)%lin1_slot(k)) = REAL(ve_rate(Inst(id)%lin1_elem(k)), R8Ki)
+               ELSE
+                  dxdt%states(Inst(id)%lin1_slot(k)) = REAL(syr_rate(Inst(id)%lin1_elem(k)), R8Ki)
+               END IF
+            END DO
+            DEALLOCATE (ve_rate, syr_rate)
+         END DO
       END IF
       IF (PRESENT(y_out)) THEN
          CALL CD_AGG_CalcOutput( Inst(id)%agg, es, em )
@@ -3398,6 +3500,11 @@ CONTAINS
       ! rate takes the same amplitude over its mean element length.
       REAL(R8Ki), PARAMETER     :: LIN_DX = 1.0E-6_R8Ki, LIN_DV = 0.1_R8Ki
       REAL(R8Ki), PARAMETER     :: LIN_DT = 1.0E-6_R8Ki
+      ! the constitutive states: a viscoelastic slow-branch stretch (m) takes the position step,
+      ! a Syrope slow strain the strain of a micrometre over a metre
+      REAL(R8Ki), PARAMETER     :: LIN_DSLOW = 1.0E-6_R8Ki
+      LOGICAL, ALLOCATABLE      :: lin1m(:)
+      INTEGER(IntKi)            :: kind1
       INTEGER(IntKi)            :: ipass, nnc, inode, ikind, i0, nrun, icomp, k
       ! the position step of the line states and the coupled-point displacement step of the
       ! inputs under linearization (lin_disp_step), and a cable's tangent-rate step
@@ -3418,8 +3525,9 @@ CONTAINS
          ! Linearization with the line dynamics, as MoorDyn-F: the continuous states are the
          ! positions of every EI = 0 line's interior nodes and of every finite-EI cable's free
          ! DOFs (node positions r and tangents m = dr/ds), then their velocities, held in the
-         ! x%states mirror slots (lin_state_map). The acceleration and the other mirror blocks
-         ! are not registered: the glue would take every registered x as a state.
+         ! x%states mirror slots (lin_state_map), and the per-element constitutive states of the
+         ! viscoelastic and Syrope ropes as first-order states. The acceleration and the other
+         ! mirror blocks are not registered: the glue would take every registered x as a state.
          ALLOCATE (Vars%x(0), STAT=ErrStat2)
          IF (ErrStat2 /= 0) THEN
             CALL SetErrStat( ErrID_Fatal, 'Could not allocate Vars%x.', ErrStat, ErrMsg, RoutineName ); RETURN
@@ -3514,6 +3622,29 @@ CONTAINS
                   k = k + nrun
                END DO
                koff = koff + csz
+            END DO
+         END DO
+         ! the per-element constitutive states of the EI = 0 lines, first-order states: the
+         ! viscoelastic slow-branch stretch dl_1 and the Syrope slow strain (the Syrope running
+         ! maximum is a load history, held as the operating point's)
+         DO il = 1, inst_%nlines
+            ndofl = CD_System_Line_NDOF( inst_%agg%sys%fast%system, il, es, em )
+            nin = ndofl - 6
+            DO kind1 = LIN1_VE, LIN1_SYROPE
+               lin1m = lin1_mask( inst_, il, kind1 )
+               DO j = 1, SIZE(lin1m)
+                  IF (.NOT. lin1m(j)) CYCLE
+                  LinStr = 'Line '//TRIM(Num2LStr(il))//' segment '//TRIM(Num2LStr(j))
+                  IF (kind1 == LIN1_VE) THEN
+                     CALL MV_AddVar( Vars%x, LinStr, FieldScalar, DatLoc(CD_x_states), &
+                                     iAry=m%LineStateIs1(il) + 3*nin + j - 1, Num=1, Flags=VF_DerivOrder1, &
+                                     Perturb=LIN_DX, LinNames=[TRIM(LinStr)//' dl1, m'] )
+                  ELSE
+                     CALL MV_AddVar( Vars%x, LinStr, FieldScalar, DatLoc(CD_x_states), &
+                                     iAry=m%LineStateIs1(il) + 3*nin + j - 1, Num=1, Flags=VF_DerivOrder1, &
+                                     Perturb=LIN_DSLOW, LinNames=[TRIM(LinStr)//' slow strain, -'] )
+                  END IF
+               END DO
             END DO
          END DO
       ELSE
