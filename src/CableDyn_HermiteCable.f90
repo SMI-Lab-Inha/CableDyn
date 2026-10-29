@@ -444,18 +444,22 @@ CONTAINS
     END DO
   END SUBROUTINE CD_HermiteCable_Mass
 
-  SUBROUTINE CD_HermiteCable_Curvature(qr, L, u, curvature, ErrStat, ErrMsg)
-    !! Parametrisation-invariant centreline curvature at station u in [0,1] for output.
+  SUBROUTINE CD_HermiteCable_Curvature(qr, L, u, curvature, ErrStat, ErrMsg, kvec)
+    !! Parametrisation-invariant centreline curvature at station u in [0,1] for output. kvec, when
+    !! asked for, is the curvature vector kappa n, toward the centre of curvature:
+    !! (r' x r'') x r'/|r'|^4, whose length is the curvature.
     REAL(wp), INTENT(IN) :: qr(12), L, u
     REAL(wp), INTENT(OUT) :: curvature
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: kvec(3)
     REAL(wp) :: H(4), dH(4), ddH(4), rp(3), rpp(3), cr(3), sp
     INTEGER :: k
 
     ErrStat = CD_HCABLE_OK
     ErrMsg = ''
     curvature = CD_ZERO
+    IF (PRESENT(kvec)) kvec = CD_ZERO
     IF (.NOT. CD_All_Finite(qr) .OR. .NOT. CD_Is_Finite(L) .OR. .NOT. CD_Is_Finite(u)) THEN
       ErrStat = CD_HCABLE_BADINPUT; ErrMsg = 'CD_HermiteCable_Curvature: inputs must be finite'; RETURN
     END IF
@@ -473,6 +477,7 @@ CONTAINS
     END IF
     cr = [rp(2)*rpp(3) - rp(3)*rpp(2), rp(3)*rpp(1) - rp(1)*rpp(3), rp(1)*rpp(2) - rp(2)*rpp(1)]
     curvature = SQRT(cr(1)**2 + cr(2)**2 + cr(3)**2)/sp**3
+    IF (PRESENT(kvec)) kvec = [cr(2)*rp(3) - cr(3)*rp(2), cr(3)*rp(1) - cr(1)*rp(3), cr(1)*rp(2) - cr(2)*rp(1)]/sp**4
   END SUBROUTINE CD_HermiteCable_Curvature
 
   SUBROUTINE CD_HermiteCable_Peak_Curvature(qr, L, curvature_peak, u_peak, ErrStat, ErrMsg)

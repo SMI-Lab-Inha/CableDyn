@@ -10,6 +10,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Section-frame curvature channels `CurvX<L>N<J>` and `CurvY<L>N<J>` on finite-EI lines: the
+  curvature vector on the cable's cross-section axes, for the fatigue of an armour wire or
+  conductor at a fixed point of the section. The axes start at End A from the end connection
+  (the torsion normal, or the static start's upper normal), turn with a clamped hang-off, are
+  carried along the line by parallel transport and turn with the twist of a line restrained in
+  torsion; `CurvX^2 + CurvY^2 = Curv^2`. On a line twisted 90 degrees the carried axes reach
+  End B within 3e-6 rad of its pretwisted normal. `EI = 0` lines and finite-EI lines with two
+  moving ends refuse the channels.
 - Cross-flow vortex-induced vibration of `EI = 0` lines in the standalone driver: MoorDyn v2's
   LINE TYPES columns `Cl` or `Cl dF cF` switch on the synchronisation model of Thorsen et al.,
   with the same phase start and running-RMS window (`VIVrmsWindow`, default 500 steps of

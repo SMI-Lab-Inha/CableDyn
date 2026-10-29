@@ -4098,6 +4098,28 @@ _TURBINE_DECK = (
 )
 
 
+def test_section_curvature_channels_need_a_finite_ei_line():
+    # CurvX/CurvY<L>N<J>: the curvature on the section axes of a finite-EI line; distinct from
+    # Curv<L>N<J> and from each other
+    with_channels = _edit(_DYNAMIC, ("\nFairTen1\n", "\nFairTen1\nCurvX1N2\nCurvY1N2\nCurv1N2\n"))
+    deck = DeckFile.from_text(with_channels)
+    assert {"CurvX1N2", "CurvY1N2", "Curv1N2"} <= set(deck.outputs)
+    ei0 = _edit(_TIMED, ("\nFairTen1\n", "\nFairTen1\nCurvX1N2\n"))
+    with pytest.raises(DeckFormatError, match="section curvature components need a finite-EI line"):
+        DeckFile.from_text(ei0)
+    # a farm-shared cable (two moving ends) runs on the compatibility route, which has no frame
+    shared = _edit(
+        _TURBINE_DECK,
+        ("chain 0.1 20.0 1.0e9 -1.0 0.0 1.2", "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2"),
+        ("1 1 3 -\n2 2 3 -\n", "1 1 2 -\n"),
+        ("1 chain 380 20\n2 chain 380 20\n", "1 chain 620 30\n"),
+        ("100 WtrDpth\n", "100 WtrDpth\n0.1 dtM\n10.0 TMax\n"),
+        ('"Point3FH"', '"CurvY1N5"'),
+    )
+    with pytest.raises(DeckFormatError, match="Fixed End B"):
+        DeckFile.from_text(shared)
+
+
 def test_viv_and_lift_flag_refused_on_a_finite_ei_line_with_two_moving_ends():
     # native run_deck_driver: a farm-shared finite-EI line (Turbine1 to Turbine2) runs on the
     # compatibility route, which carries no VIV: Cl > 0 and the lift file V are refused

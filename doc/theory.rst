@@ -328,6 +328,38 @@ node, the larger one-sided exact curvature, and the midpoint axial resultant as 
 tension. The material-strain checks (``tensile_safety``, the static compression notes) judge
 :math:`EA\varepsilon` under either setting.
 
+.. _theory-section-curvature:
+
+Curvature on the section axes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``CurvX<L>N<J>`` and ``CurvY<L>N<J>`` resolve the nodal curvature vector
+:math:`\kappa\mathbf{n}`, which points to the centre of curvature, on two axes of the cable's
+cross section. The vector is the one whose length is ``Curv<L>N<J>``: the normal part of the
+recovered section moment over :math:`EI` on the side that gives the curvature, or the exact
+trace :math:`(\mathbf{r}' \times \mathbf{r}'') \times \mathbf{r}'/|\mathbf{r}'|^4` where
+the recovery falls back to it (:ref:`theory-output-recovery`).
+
+The section axis :math:`\mathbf{d}_1` (x) starts at End A normal to the End A → End B tangent
+:math:`\mathbf{t}`:
+
+- on a line restrained in torsion, along End A's torsion normal ``Nx``, which turns with the
+  hang-off;
+- otherwise along the static start's upper normal, the projection of global +z normal to the
+  End A tangent (global +x where the tangent is vertical). It is fixed in the hang-off's axes
+  when End A is clamped or held by a finite rotational stiffness, so it turns with the vessel,
+  and fixed in global axes at a pinned End A, where the roll of the section is undefined.
+
+It is carried to every node by parallel transport along the centreline, eight smallest
+rotations between the Hermite tangents per element, which does not twist it about the tangent.
+On a line in torsion it is then turned about :math:`\mathbf{t}` by the twist from End A, the
+torque times the End A compliance plus :math:`\sum l_0/GJ` from End A, right-handed about
+:math:`\mathbf{t}`. With :math:`\mathbf{d}_2 = \mathbf{t} \times \mathbf{d}_1` (y),
+``CurvX`` :math:`= \kappa\mathbf{n} \cdot \mathbf{d}_1` and ``CurvY``
+:math:`= \kappa\mathbf{n} \cdot \mathbf{d}_2`. A fibre at :math:`(x, y)` in the section is
+strained in bending by :math:`-(\kappa_x x + \kappa_y y)`. On a line twisted 90 degrees from
+End A to End B the carried axes reach End B within 3e-6 rad of its own pretwisted normal.
+
 .. _theory-torsion:
 
 Condensed torsion

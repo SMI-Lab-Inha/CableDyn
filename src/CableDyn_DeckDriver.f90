@@ -116,6 +116,7 @@ MODULE CableDyn_DeckDriver
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
                              CD_Vessel_RAO_Motion, CD_Vessel_Ramp, CD_VESSEL_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Init, CD_HFMF_Set_Drag, &
+                                          CD_HFMF_Set_Section_Reference, CD_HFMF_Section_Curvature, &
                                           CD_HFMF_Set_Axial_Damping, &
                                           CD_HFMF_Set_AddedMass, CD_HFMF_Set_ModifiedNewton, &
                                           CD_HFMF_Set_Tensile_Monitor, CD_HFMF_Get_Tensile_Diagnostics, &
@@ -3268,6 +3269,11 @@ CONTAINS
     END IF
     ! OPTIONS OutputRecovery selects the definition of the node tension, curvature and bend moment.
     CALL CD_HermiteCable_Dyn_Set_Output_Recovery(cable%line, opts%output_element_recovery)
+    ! the cross-section reference of the CurvX/CurvY channels, at the static start
+    CALL CD_HFMF_Set_Section_Reference(cable, es, em)
+    IF (es /= CD_HFMF_OK) THEN
+      CALL fail(ErrStat, ErrMsg, 'finite-EI cable section reference failed: '//TRIM(em)); RETURN
+    END IF
   CONTAINS
 
     SUBROUTINE torsion_stage(est, emt)
@@ -8187,7 +8193,7 @@ CONTAINS
     TYPE(CD_BathymetryType) :: bathymetry
     TYPE(DeckFailure), ALLOCATABLE :: fails(:)
     TYPE(CD_LineInitSummary), ALLOCATABLE :: init_summaries(:)
-    INTEGER :: nl, li, es, j, n_finite
+    INTEGER :: nl, li, es, j, n_finite, node_sc, kind_sc, comp_sc
     LOGICAL :: line_conv, has_line_outputs, has_finite, has_dyn_points, has_rigid6, hermite_standalone_eligible
     CHARACTER(1024) :: em
 
@@ -8364,6 +8370,16 @@ CONTAINS
             IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
             CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) of a finite-EI line needs its End B fixed '// &
                       '(the cubic-Hermite march); set Cl = 0 for a line with two moving ends')
+            RETURN
+          END DO
+          ! the compatibility route carries no section frame for the curvature components
+          DO li = 1, SIZE(channels)
+            CALL parse_line_node_channel(channels(li), j, node_sc, kind_sc, comp_sc)
+            IF (kind_sc /= 13 .AND. kind_sc /= 14) CYCLE
+            IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
+            CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(channels(li))//'": the section curvature components '// &
+                      'need a finite-EI line with a Fixed End B (the cubic-Hermite march); a line with two '// &
+                      'moving ends reports Curv<L>N<J>')
             RETURN
           END DO
         END IF
@@ -16808,7 +16824,7 @@ CONTAINS
     DO i = 1, SIZE(channels)
       at_line = 0
       IF (i <= SIZE(channel_lines)) at_line = channel_lines(i)
-      CALL check_channel(channels(i), lines, points, sections, ErrStat, ErrMsg, bodies, rods, opts%zl_rod)
+      CALL check_channel(channels(i), lines, points, sections, ErrStat, ErrMsg, bodies, rods, opts%zl_rod, types)
       IF (ErrStat /= 0) RETURN
     END DO
     at_line = 0
@@ -32805,7 +32821,7 @@ CONTAINS
     internal_node = nelem + 2 - deck_node
   END FUNCTION deck_to_internal_node
 
-  SUBROUTINE check_channel(ch, lines, points, sections, ErrStat, ErrMsg, bodies, rods, zl_rod)
+  SUBROUTINE check_channel(ch, lines, points, sections, ErrStat, ErrMsg, bodies, rods, zl_rod, types)
     CHARACTER(*), INTENT(IN) :: ch
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
@@ -32816,6 +32832,8 @@ CONTAINS
     TYPE(DeckRod), INTENT(IN), OPTIONAL :: rods(:)
     ! zero-length rods collapsed to connector points (collapse_zero_length_rods)
     INTEGER, INTENT(IN), OPTIONAL :: zl_rod(:)
+    ! the line types, for the channels of finite-EI lines only (CurvX, CurvY)
+    TYPE(DeckLineType), INTENT(IN), OPTIONAL :: types(:)
     CHARACTER(NAMELEN) :: lo
     INTEGER :: pidx, comp, kind, line_id, node, li, nelem
     LOGICAL :: is_body
@@ -32916,12 +32934,20 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line '//TRIM(int_to_str(line_id))//' has no '// &
                   'STIFFENERS, so no stiffener moment'); RETURN
       END IF
+      IF ((kind == 13 .OR. kind == 14) .AND. PRESENT(types)) THEN
+        IF (.NOT. line_is_finite_ei(lines(li), types, sections)) THEN
+          CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": the section curvature components need a '// &
+                    'finite-EI line (a section frame); line '//TRIM(int_to_str(line_id))//' has EI = 0 '// &
+                    '(Curv<L>N<J> gives its curvature)'); RETURN
+        END IF
+      END IF
     ELSE
       CALL fail(ErrStat, ErrMsg, 'OUTPUT channel "'//TRIM(ch)// &
                 '" not supported (use FairTen<L>, AnchTen<L>, AnchFz<L>, AnchFH<L>, FairIncl<L>, AnchIncl<L>, '// &
                 'FairDecl<L>, AnchDecl<L> (FairAngle/AnchAngle aliases), FairDefl<L>, AnchDefl<L>, '// &
                 'Point<P>p{x,y,z} (alias Con<P>p{x,y,z}), Point<P>F{x,y,z,H}, '// &
-                'Ten<L>N<J>, Curv<L>N<J>, BendMom<L>N<J>, StfMom<L>N<J>, Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
+                'Ten<L>N<J>, Curv<L>N<J>, CurvX<L>N<J>, CurvY<L>N<J>, BendMom<L>N<J>, StfMom<L>N<J>, '// &
+                'Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
                 'L<L>N<J>p{x,y,z}, L<L>N<J>v{x,y,z}, L<L>N<J>a{x,y,z}, L<L>N<J>Dec, L<L>N<J>Azi, '// &
                 'TDP<L>{s,x,y,z,Lay,Exc,Grd}, or the Body<N>/Rod<N> channels)'); RETURN
     END IF
@@ -33165,6 +33191,8 @@ CONTAINS
     !! Parse supported line-node output channels (kind codes shared with the writers):
     !!   Ten<L>N<J>        -> kind=3, comp=0    nodal tension       [N]
     !!   Curv<L>N<J>       -> kind=5, comp=0    curvature           [1/m]
+    !!   CurvX<L>N<J>      -> kind=13, comp=0   curvature on section axis x [1/m]
+    !!   CurvY<L>N<J>      -> kind=14, comp=0   curvature on section axis y [1/m]
     !!   BendMom<L>N<J>    -> kind=6, comp=0    cable bend moment   [N.m]
     !!   StfMom<L>N<J>     -> kind=12, comp=0   stiffener moment    [N.m]
     !!   L<L>N<J>p{x,y,z}  -> kind=1, comp=1..3 position            [m]
@@ -33210,6 +33238,10 @@ CONTAINS
     ELSE IF (starts_with(lo, 'ten')) THEN
       CALL parse_keyword_line_node(lo, 3, last, line_id, node_id)
       IF (line_id > 0 .AND. node_id > 0) kind = 3
+      RETURN
+    ELSE IF (starts_with(lo, 'curvx') .OR. starts_with(lo, 'curvy')) THEN
+      CALL parse_keyword_line_node(lo, 5, last, line_id, node_id)
+      IF (line_id > 0 .AND. node_id > 0) kind = MERGE(13, 14, lo(5:5) == 'x')
       RETURN
     ELSE IF (starts_with(lo, 'curv')) THEN
       CALL parse_keyword_line_node(lo, 4, last, line_id, node_id)
@@ -35034,6 +35066,15 @@ CONTAINS
       IF (es /= CD_HCABLE_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
       END IF
+    CASE (13, 14)   ! the curvature vector on the section axes x, y (CD_HFMF_Section_Curvature)
+      BLOCK
+        REAL(wp) :: kxa(cable%line%nn), kya(cable%line%nn)
+        CALL CD_HFMF_Section_Curvature(cable, kxa, kya, es, em)
+        IF (es /= CD_HFMF_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+        END IF
+        val = MERGE(kxa(inode), kya(inode), kind == 13)
+      END BLOCK
     CASE (9, 10, 11)   ! condensed torsion: torque [N m], twist from End A to node J, total twist [deg]
       BLOCK
         REAL(wp) :: th, mt
@@ -35408,7 +35449,7 @@ CONTAINS
       CALL parse_line_node_channel(ch, line_id, node, kind, comp)
       SELECT CASE (kind)
       CASE (3); unit = '(N)'
-      CASE (5); unit = '(1/m)'
+      CASE (5, 13, 14); unit = '(1/m)'
       CASE (6, 12); unit = '(N.m)'
       CASE (7, 8); unit = '(deg)'
       CASE (9); unit = '(N.m)'
