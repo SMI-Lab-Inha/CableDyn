@@ -264,6 +264,10 @@ serves the secondary Cosserat path only: a finite-EI line restrained in torsion
 ([END CONNECTIONS](#end-connections-optional-finite-ei-lines)) takes `GJ` [N·m²/rad] from the
 14-column row of each of its sections and stops by name without it. `GAs`, `Irt` and `Irn` are
 not used by the cubic-Hermite route, but the all-or-nothing rule still asks for positive values.
+The `GJ` column may be written `GJ|K`, with `K` [N·m] the torque–tension coupling of an armoured
+cable or wire rope (`T = EA ε + K τ`, `M = GJ τ + K ε`; see
+[Torque–tension coupling](theory.rst)). It needs a finite-EI, linear-elastic type with
+`K² < EA·GJ`; the two-moving-end compatibility route refuses it. `GJ|0` is the plain `GJ`.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:

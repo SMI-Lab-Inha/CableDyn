@@ -192,7 +192,8 @@ class LineType:
     gas, gj, irt, irn : float | None
         Optional finite-EI columns (shear and torsional stiffness, rotary
         inertias). All four set writes the 14-column row; all ``None`` writes
-        the 10-column row.
+        the 10-column row. ``gj`` may be ``(GJ, K)``, with ``K`` the
+        torque-tension coupling in N m (written ``GJ|K``).
     cl, df, cf : float | None
         Optional cross-flow VIV columns of a type (MoorDyn's lift
         coefficient and the half-range and centre of the synchronisation band
@@ -211,7 +212,7 @@ class LineType:
     can: float = 0.0
     cat: float = 0.0
     gas: float | None = None
-    gj: float | None = None
+    gj: float | tuple[float, float] | None = None
     irt: float | None = None
     irn: float | None = None
     cl: float | None = None
@@ -1627,7 +1628,7 @@ class DeckModel:
         can: float = 0.0,
         cat: float = 0.0,
         gas: float | None = None,
-        gj: float | None = None,
+        gj: float | tuple[float, float] | None = None,
         irt: float | None = None,
         irn: float | None = None,
         cl: float | None = None,
@@ -2658,7 +2659,12 @@ class DeckModel:
             extra = (item.gas, item.gj, item.irt, item.irn)
             if all(value is not None for value in extra):
                 wide = True
-                row += [_num(value, what) for value in extra]
+                if isinstance(item.gj, tuple) and len(item.gj) != 2:
+                    raise ValueError(f"{what}: gj is GJ or (GJ, K)")
+                row += [
+                    _multi(value, what) if index == 1 else _num(value, what)
+                    for index, value in enumerate(extra)
+                ]
             elif any(value is not None for value in extra):
                 raise ValueError(f"{what}: give all of gas, gj, irt, irn or none")
             row += [_num(v, what) for v in (item.cdn, item.cdt, item.can, item.cat)]
@@ -3165,7 +3171,7 @@ class _Loader:
             can=_f(values["can"]),
             cat=_f(values["cat"]),
             gas=_f(values["gas"]) if wide else None,
-            gj=_f(values["gj"]) if wide else None,
+            gj=_fmulti(values["gj"]) if wide else None,
             irt=_f(values["irt"]) if wide else None,
             irn=_f(values["irn"]) if wide else None,
             cl=_f(values["cl"]) if "cl" in values else None,

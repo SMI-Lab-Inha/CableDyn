@@ -863,6 +863,7 @@ CONTAINS
         ALLOCATE (qc(SIZE(self%line%q)), g(SIZE(self%line%q)))
         CALL coupled_candidate_q(self, u_pos, tangent_q, qc)
         CALL CD_HermiteTorsion_Line(qc, self%line%l0, ends, raw, g, ks, km, &
+                                    couple=self%line%torsion%couple, &
                                     quadrature_order=self%line%torsion%quadrature_order)
         IF (ks /= CD_HTORS_OK) THEN
           ErrStat = CD_HFMF_SOLVEFAIL

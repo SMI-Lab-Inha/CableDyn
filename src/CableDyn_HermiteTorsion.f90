@@ -40,6 +40,8 @@ MODULE CableDyn_HermiteTorsion
   PRIVATE
 
   PUBLIC :: CD_HermiteTorsion_Element
+  PUBLIC :: CD_HermiteTorsion_Element_Stretch
+  PUBLIC :: CD_HermiteTorsion_Coupling_Twist
   PUBLIC :: CD_HermiteTorsion_Line
   PUBLIC :: CD_HermiteTorsion_Fold_Check
   PUBLIC :: CD_HermiteTorsion_Unwrap
@@ -103,6 +105,10 @@ MODULE CableDyn_HermiteTorsion
     !! Torsional stiffness GJ of every element [N m^2/rad] (the line compliance is the sum of
     !! l0/GJ over the elements plus the end compliances).
     REAL(wp), ALLOCATABLE :: gj(:)
+    !! Torque-tension coupling K/GJ of every element [1] (M = GJ tau + K eps, T = EA eps + K tau);
+    !! unallocated: no coupling. The line's axial stiffness is then EA - K^2/GJ (the stretch
+    !! twists the line) and its twist Theta less sum (K/GJ)(l - l0) (CD_HermiteTorsion_Line).
+    REAL(wp), ALLOCATABLE :: couple(:)
     INTEGER :: quadrature_order = 4
     !! State: the accepted Theta (unwrapped) once has_theta; before that theta_hint selects the
     !! 2 pi branch of the first evaluation (0 for an untwisted start).
@@ -182,6 +188,17 @@ CONTAINS
     IF (ANY(.NOT. (tors%gj > CD_ZERO))) THEN
       ErrMsg = 'torsion: GJ must be positive on every element'
       RETURN
+    END IF
+    IF (ALLOCATED(tors%couple)) THEN
+      IF (SIZE(tors%couple) /= SIZE(l0)) THEN
+        ErrMsg = 'torsion: the torque-tension coupling must have one entry per element'
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(tors%couple)) THEN
+        ErrStat = CD_HTORS_NONFINITE
+        ErrMsg = 'torsion: non-finite torque-tension coupling'
+        RETURN
+      END IF
     END IF
     IF (ANY(tors%end_compliance < CD_ZERO)) THEN
       ErrMsg = 'torsion: end compliances must be non-negative'
@@ -896,7 +913,7 @@ CONTAINS
 
   PURE SUBROUTINE CD_HermiteTorsion_Line(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, hband, band_scale, &
                                          end_grad, end_hess, end_cross, fold_margin, quadrature_order, work, &
-                                         keep_hessian)
+                                         keep_hessian, couple)
     !! Theta, dTheta/dq and d2Theta/dq2 of one line.
     !!
     !!   q(6 n)          nodal DOFs [r_k, m_k], k = 1..n (n >= 2), as in the cable solvers
@@ -922,6 +939,11 @@ CONTAINS
     !!                   the evaluation then allocates nothing
     !!   keep_hessian    with work: compute d2Theta/dq2 into work (unscaled) for a later
     !!                   CD_HermiteTorsion_Work_Add_Hessian, also without hband
+    !!   couple(n - 1)   optional torque-tension coupling K/GJ per element: theta_raw is then the
+    !!                   effective twist Theta - sum_e (K/GJ)_e (l_e - Le_e), l_e the stretched
+    !!                   element length, with its derivatives. With M = GJ tau + K eps uniform along
+    !!                   the line, the twist the ends see is Theta less the twist the stretch takes
+    !!                   up, so the condensed torque is M = (Phi - Theta_eff)/C.
     !!
     !! On any failure every output is zero and hband is left unchanged.
     REAL(wp), INTENT(IN) :: q(:), Le(:), ends(3, 4)
@@ -935,6 +957,7 @@ CONTAINS
     INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
     TYPE(CD_HermiteTorsionWorkType), INTENT(INOUT), OPTIONAL :: work
     LOGICAL, INTENT(IN), OPTIONAL :: keep_hessian
+    REAL(wp), INTENT(IN), OPTIONAL :: couple(:)
     TYPE(CD_HermiteTorsionWorkType) :: local
     INTEGER :: nn
     LOGICAL :: keep
@@ -957,7 +980,7 @@ CONTAINS
       work%hess_valid = .FALSE.
       CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, work%nn, work%u, work%pole, work%gu, work%huu, &
                      work%huv, work%band, keep, hband, band_scale, end_grad, end_hess, end_cross, fold_margin, &
-                     quadrature_order)
+                     quadrature_order, couple)
       work%hess_valid = keep .AND. ErrStat == CD_HTORS_OK
     ELSE
       nn = MAX(SIZE(q)/6, 2)
@@ -965,12 +988,12 @@ CONTAINS
                 local%huv(3, 3, 0:nn), local%band(2*CD_HTORS_KBAND + 1, 6*nn))
       CALL line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, nn, local%u, local%pole, local%gu, local%huu, &
                      local%huv, local%band, .FALSE., hband, band_scale, end_grad, end_hess, end_cross, &
-                     fold_margin, quadrature_order)
+                     fold_margin, quadrature_order, couple)
     END IF
   END SUBROUTINE CD_HermiteTorsion_Line
 
   PURE SUBROUTINE line_core(q, Le, ends, theta_raw, grad, ErrStat, ErrMsg, nw, u, pole, gu, huu, huv, band, keep, &
-                            hband, band_scale, end_grad, end_hess, end_cross, fold_margin, quadrature_order)
+                            hband, band_scale, end_grad, end_hess, end_cross, fold_margin, quadrature_order, couple)
     !! CD_HermiteTorsion_Line on caller scratch for nw nodes (the scratch is explicit-shape so
     !! that no expression on it needs a heap temporary); keep: compute the Hessian into band
     !! even without hband. A q of another node count fails validation before any use.
@@ -987,6 +1010,7 @@ CONTAINS
     REAL(wp), INTENT(OUT), OPTIONAL :: end_grad(6), end_hess(3, 3, 2), end_cross(3, 3, 2)
     REAL(wp), INTENT(OUT), OPTIONAL :: fold_margin
     INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    REAL(wp), INTENT(IN), OPTIONAL :: couple(:)
 
     INTEGER :: order, nn, n, e, j, k, i0, i, jj, row0
     LOGICAL :: want_hess, finite
@@ -1027,6 +1051,18 @@ CONTAINS
       ErrMsg = 'CD_HermiteTorsion_Line: non-finite band_scale'
       RETURN
     END IF
+    IF (PRESENT(couple)) THEN
+      IF (SIZE(couple) /= nn - 1) THEN
+        ErrStat = CD_HTORS_BADINPUT
+        ErrMsg = 'CD_HermiteTorsion_Line: couple must have one entry per element'
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(couple)) THEN
+        ErrStat = CD_HTORS_NONFINITE
+        ErrMsg = 'CD_HermiteTorsion_Line: non-finite torque-tension coupling'
+        RETURN
+      END IF
+    END IF
 
     row0 = CD_HTORS_KBAND + 1          ! diagonal row of the local band
     IF (want_hess) band(:, 1:n) = CD_ZERO
@@ -1050,6 +1086,21 @@ CONTAINS
             band(row0 + i - jj, i0 + jj) = band(row0 + i - jj, i0 + jj) + hk(i, jj)
           END DO
         END DO
+      END IF
+      ! torque-tension coupling: the twist the element's stretch takes up, -(K/GJ)(l_e - Le)
+      IF (PRESENT(couple)) THEN
+        IF (ABS(couple(e)) > CD_ZERO) THEN
+          CALL element_stretch(q(i0 + 1:i0 + 12), Le(e), order, want_hess, he, ge, hk)
+          sum_h = sum_h - couple(e)*(he - Le(e))
+          grad(i0 + 1:i0 + 12) = grad(i0 + 1:i0 + 12) - couple(e)*ge
+          IF (want_hess) THEN
+            DO jj = 1, 12
+              DO i = 1, 12
+                band(row0 + i - jj, i0 + jj) = band(row0 + i - jj, i0 + jj) - couple(e)*hk(i, jj)
+              END DO
+            END DO
+          END IF
+        END IF
       END IF
     END DO
 
@@ -1229,6 +1280,67 @@ CONTAINS
           L*(-2.0_wp*x + 3.0_wp*x*x)]/L
     ddh = [-6.0_wp + 12.0_wp*x, L*(-4.0_wp + 6.0_wp*x), 6.0_wp - 12.0_wp*x, L*(-2.0_wp + 6.0_wp*x)]/(L*L)
   END SUBROUTINE shape_derivatives
+
+  PURE REAL(wp) FUNCTION CD_HermiteTorsion_Coupling_Twist(q, Le, couple, quadrature_order) RESULT(tw)
+    !! The coupling part of the effective twist, -sum_e (K/GJ)_e (l_e - Le_e) [rad]: unlike the
+    !! holonomy it has no 2 pi ambiguity, so a first evaluation unwraps the holonomy alone about
+    !! its branch hint by passing the hint plus this to CD_HermiteTorsion_Unwrap.
+    REAL(wp), INTENT(IN) :: q(:), Le(:), couple(:)
+    INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    INTEGER :: e
+    tw = CD_ZERO
+    DO e = 1, MIN(SIZE(Le), SIZE(couple), SIZE(q)/6 - 1)
+      IF (.NOT. ABS(couple(e)) > CD_ZERO) CYCLE
+      tw = tw - couple(e)*(CD_HermiteTorsion_Element_Stretch(q(6*e - 5:6*e + 6), Le(e), quadrature_order) - Le(e))
+    END DO
+  END FUNCTION CD_HermiteTorsion_Coupling_Twist
+
+  PURE REAL(wp) FUNCTION CD_HermiteTorsion_Element_Stretch(qe, L, quadrature_order) RESULT(ls)
+    !! The stretched length of one cubic-Hermite element [r1, m1, r2, m2] of reference length L,
+    !! on the quadrature of the torsion kernel (the l_e of the torque-tension coupling).
+    REAL(wp), INTENT(IN) :: qe(12), L
+    INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    REAL(wp) :: g(12), h(12, 12)
+    INTEGER :: order
+    order = NG_DEFAULT
+    IF (PRESENT(quadrature_order)) order = quadrature_order
+    CALL element_stretch(qe, L, order, .FALSE., ls, g, h)
+  END FUNCTION CD_HermiteTorsion_Element_Stretch
+
+  PURE SUBROUTINE element_stretch(qe, L, order, want_hess, ls, grad, hess)
+    !! The stretched length l_e = L sum_g w_g |a_g| of one cubic-Hermite element (a = dr/ds), its
+    !! gradient L sum_g w_g dh_i a/|a| and Hessian L sum_g w_g dh_i dh_j (I - t t^T)/|a| over the
+    !! 12 DOFs [r1, m1, r2, m2].
+    REAL(wp), INTENT(IN) :: qe(12), L
+    INTEGER, INTENT(IN) :: order
+    LOGICAL, INTENT(IN) :: want_hess
+    REAL(wp), INTENT(OUT) :: ls, grad(12), hess(12, 12)
+    REAL(wp) :: gp(NG_MAX), gw(NG_MAX), dh(4), ddh(4), a(3), b(3), sa, t(3), pmat(3, 3)
+    INTEGER :: ig, i, j
+    ls = CD_ZERO
+    grad = CD_ZERO
+    hess = CD_ZERO
+    CALL CD_HermiteCable_Gauss_Rule(order, gp, gw)
+    DO ig = 1, order
+      CALL element_ab(qe, L, gp(ig), a, b)
+      CALL shape_derivatives(L, gp(ig), dh, ddh)
+      sa = NORM2(a)
+      IF (.NOT. (sa > GEOM_TOL)) CYCLE
+      t = a/sa
+      ls = ls + L*gw(ig)*sa
+      DO i = 1, 4
+        grad(3*i - 2:3*i) = grad(3*i - 2:3*i) + L*gw(ig)*dh(i)*t
+      END DO
+      IF (want_hess) THEN
+        pmat = (identity3() - outer(t, t))/sa
+        DO j = 1, 4
+          DO i = 1, 4
+            hess(3*i - 2:3*i, 3*j - 2:3*j) = hess(3*i - 2:3*i, 3*j - 2:3*j) + L*gw(ig)*dh(i)*dh(j)*pmat
+          END DO
+        END DO
+      END IF
+    END DO
+  END SUBROUTINE element_stretch
 
   PURE SUBROUTINE element_holonomy(qe, L, order, want_hess, h, grad, hess, margin, ErrStat, ErrMsg)
     !! h_e = L sum_g w_g f(a_g, b_g, t1), f = t1.(a x b) / (|a|**2 + |a| (t1.a)), t1 = m1/|m1|.

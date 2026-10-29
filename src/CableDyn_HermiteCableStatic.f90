@@ -51,6 +51,7 @@ MODULE CableDyn_HermiteCableStatic
   USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK
   USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_HYDRO_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
+                                     CD_HermiteTorsion_Coupling_Twist, &
                                      CD_HermiteTorsion_Accept, CD_HermiteTorsion_Compliance, &
                                      CD_HermiteTorsion_Validate, CD_HermiteTorsion_Bordered_Solve, &
                                      CD_HermiteTorsion_Inertia, CD_HermiteTorsion_Lowest_Mode, CD_HTORS_OK, &
@@ -1735,11 +1736,11 @@ CONTAINS
       ecm = ''
       IF (skip_tangent) THEN
         CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, &
-                                    quadrature_order=torsion%quadrature_order)
+                                    couple=torsion%couple, quadrature_order=torsion%quadrature_order)
       ELSE
         tors_h = CD_ZERO
         CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, hband=tors_h, &
-                                    quadrature_order=torsion%quadrature_order)
+                                    couple=torsion%couple, quadrature_order=torsion%quadrature_order)
       END IF
       IF (ks /= CD_HTORS_OK) THEN
         ecs = CD_HCSTAT_NOCONVERGE
@@ -1804,7 +1805,7 @@ CONTAINS
       DO k = 0, 30
         q = tors_q + sfac*dq
         CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_gt, ks, km, &
-                                    quadrature_order=torsion%quadrature_order)
+                                    couple=torsion%couple, quadrature_order=torsion%quadrature_order)
         IF (ks == CD_HTORS_OK) THEN
           CALL CD_HermiteTorsion_Accept(tors_theta_acc, raw, th, ks, km)
           IF (ks == CD_HTORS_OK) THEN
@@ -1846,7 +1847,8 @@ CONTAINS
       torsion%stable = .FALSE.
       torsion%n_negative = 0
       torsion%lambda_min = CD_ZERO
-      CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, quadrature_order=torsion%quadrature_order)
+      CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, &
+                                  couple=torsion%couple, quadrature_order=torsion%quadrature_order)
       IF (ks /= CD_HTORS_OK) THEN
         ecs = CD_HCSTAT_NOCONVERGE
         ecm = 'CD_HermiteCable_Static_Solve: torsion at the untwisted equilibrium: '//TRIM(km)
@@ -1863,6 +1865,11 @@ CONTAINS
                 'state (has_theta false) with theta_hint on the intended branch'
           RETURN
         END IF
+      ELSE IF (ALLOCATED(torsion%couple)) THEN
+        ! the hint is the holonomy's; the coupling twist is unambiguous
+        tors_theta_acc = CD_HermiteTorsion_Unwrap(raw, torsion%theta_hint + &
+                                                  CD_HermiteTorsion_Coupling_Twist(q, l0, torsion%couple, &
+                                                                                   torsion%quadrature_order))
       ELSE
         tors_theta_acc = CD_HermiteTorsion_Unwrap(raw, torsion%theta_hint)
       END IF
@@ -5120,7 +5127,7 @@ CONTAINS
   SUBROUTINE CD_HermiteCable_Resolution_Metrics(l0, q, seabed_z, contact_band, &
                                                 h_kappa_target, diag, ErrStat, ErrMsg, &
                                                 bathymetry, contact_frame_cs, EA, EI, compression_mode, &
-                                                elem_h_kappa, chatter_node)
+                                                elem_h_kappa, chatter_node, axial_offset)
     !! Diagnose the mesh resolution of a converged finite-EI static IC and recommend a global
     !! refinement factor. This is the preflight trigger for the adaptive mesh policy: a lazy-wave
     !! arch or touchdown transition resolved with too few elements carries a large h*kappa and
@@ -5146,6 +5153,10 @@ CONTAINS
     !!                  maximum is h_kappa_peak (the local refinement of AutoMesh marks from it).
     !! chatter_node(ne+1) (optional out): every interior node whose contact state differs from
     !!                  both of its neighbours (the nodes behind diag%contact_chatter).
+    !! axial_offset(ne) (optional, with EA): an axial force constant along each element added to
+    !!                  its EA resultant wherever the axial force is judged, such as the
+    !!                  (K/GJ) M_t of torque-tension coupling on a line restrained in torsion (EA
+    !!                  then the kernel's EA - K^2/GJ).
     REAL(wp), INTENT(IN) :: l0(:), q(:), seabed_z, contact_band, h_kappa_target
     TYPE(CD_HermiteResolutionType), INTENT(OUT) :: diag
     INTEGER, INTENT(OUT) :: ErrStat
@@ -5156,6 +5167,7 @@ CONTAINS
     INTEGER, INTENT(IN), OPTIONAL :: compression_mode
     REAL(wp), INTENT(OUT), OPTIONAL :: elem_h_kappa(:)
     LOGICAL, INTENT(OUT), OPTIONAL :: chatter_node(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: axial_offset(:)
 
     INTEGER :: ne, nn, e, a, es3, mode
     REAL(wp) :: qe(12), ke, ke_prev, hk, u_peak, z, z_floor, xg, yg, contact_cs(2), &
@@ -5187,6 +5199,12 @@ CONTAINS
     IF (SIZE(q) /= 6*nn) THEN
       ErrStat = CD_HCSTAT_BADINPUT
       ErrMsg = 'CD_HermiteCable_Resolution_Metrics: q must be 6*(ne+1)'; RETURN
+    END IF
+    IF (PRESENT(axial_offset)) THEN
+      IF (SIZE(axial_offset) /= ne .OR. .NOT. PRESENT(EA)) THEN
+        ErrStat = CD_HCSTAT_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Resolution_Metrics: axial_offset must be ne, with EA'; RETURN
+      END IF
     END IF
     IF (PRESENT(elem_h_kappa)) THEN
       IF (SIZE(elem_h_kappa) /= ne) THEN
@@ -5300,6 +5318,10 @@ CONTAINS
           ErrMsg = 'CD_HermiteCable_Resolution_Metrics: axial-resultant extraction failed: '//TRIM(em3)
           RETURN
         END IF
+        IF (PRESENT(axial_offset)) THEN
+          axial_element_min = axial_element_min + axial_offset(e)
+          axial_element_max = axial_element_max + axial_offset(e)
+        END IF
         elem_min(e) = axial_element_min
         elem_min_xi(e) = axial_element_min_xi
         elem_max(e) = axial_element_max
@@ -5337,7 +5359,7 @@ CONTAINS
         ! dynamic tensile audit does; the others judge the pointwise resultant, whose
         ! oscillation about that mean grows with the element length.
         IF (mode == CD_HC_COMPRESSION_STRICT) THEN
-          CALL smoothed_element_means(l0, q, EA, elem_min, es3, em3)
+          CALL smoothed_element_means(l0, q, EA, elem_min, es3, em3, axial_offset)
           IF (es3 /= CD_HCSTAT_OK) THEN
             ErrStat = CD_HCSTAT_BADINPUT
             ErrMsg = 'CD_HermiteCable_Resolution_Metrics: '//TRIM(em3)
@@ -5382,6 +5404,10 @@ CONTAINS
         ErrStat = CD_HCSTAT_BADINPUT
         ErrMsg = 'CD_HermiteCable_Resolution_Metrics: end axial-resultant extraction failed: '//TRIM(em3)
         RETURN
+      END IF
+      IF (PRESENT(axial_offset)) THEN
+        diag%hop_axial = diag%hop_axial + axial_offset(1)
+        diag%end_axial = diag%end_axial + axial_offset(ne)
       END IF
       IF (EI(1) > CD_ZERO .AND. diag%hop_axial > CD_HC_AXIAL_STRAIN_TOL*EA(1)) &
         diag%hop_boundary_ratio = l0(1)/SQRT(EI(1)/diag%hop_axial)
@@ -5943,16 +5969,18 @@ CONTAINS
 
   END SUBROUTINE CD_HermiteCable_Refine_Mesh
 
-  SUBROUTINE smoothed_element_means(l0, q, EA, sm, ErrStat, ErrMsg)
+  SUBROUTINE smoothed_element_means(l0, q, EA, sm, ErrStat, ErrMsg, axial_offset)
     !! Three-element mean of the element-mean axial force: sm(e) is the length-weighted
     !! mean, over elements e-1, e, e+1 (clipped at the line ends), of the three-point Gauss
     !! mean of the signed axial resultant EA (|r'| - 1) -- the force that enters equilibrium,
     !! free of the pointwise oscillation of a stiff-EA cubic-Hermite element (per element,
-    !! the smoothed_axial_min of CD_HermiteCable_Branch_Audit).
+    !! the smoothed_axial_min of CD_HermiteCable_Branch_Audit) -- plus axial_offset(e) where
+    !! given (the coupling force of CD_HermiteCable_Resolution_Metrics).
     REAL(wp), INTENT(IN) :: l0(:), q(:), EA(:)
     REAL(wp), INTENT(OUT) :: sm(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: axial_offset(:)
     REAL(wp), PARAMETER :: GX(3) = [0.5_wp - 0.5_wp*SQRT(0.6_wp), 0.5_wp, 0.5_wp + 0.5_wp*SQRT(0.6_wp)]
     REAL(wp), PARAMETER :: GW(3) = [5.0_wp/18.0_wp, 8.0_wp/18.0_wp, 5.0_wp/18.0_wp]
     REAL(wp) :: emean(SIZE(l0)), ng
@@ -5969,6 +5997,7 @@ CONTAINS
         END IF
         emean(e) = emean(e) + GW(k)*ng
       END DO
+      IF (PRESENT(axial_offset)) emean(e) = emean(e) + axial_offset(e)
     END DO
     ErrStat = CD_HCSTAT_OK
     DO e = 1, ne
