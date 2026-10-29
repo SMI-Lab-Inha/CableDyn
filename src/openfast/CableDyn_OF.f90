@@ -59,8 +59,8 @@ MODULE CableDyn
    !! bodies, rods, Point3 buoys, torsion, CONTROL and rigid cable ends fail closed), and
    !! FAST.Farm farm-level moorings (FarmSize > 0: Turbine<J> decks,
    !! per-turbine coupled meshes, shared lines; still-water hydro; farm restart and
-   !! farm linearization fail closed with named messages). Checkpoint restart and
-   !! linearization re-parse a temporary copy of the deck, written next to the
+   !! farm linearization fail closed with named messages). Checkpoint restart re-parses a
+   !! temporary copy of the deck, written next to the
    !! MooringFile (so its side files resolve as in the original run) and removed after
    !! use.
    !!
@@ -573,16 +573,9 @@ CONTAINS
                           'not supported (linearize single-turbine cases).', ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
-      ! Linearize is accepted for the established force-only boundary: the module presents
-      ! the MAP-shaped reduction -- ZERO
-      ! continuous-state variables (CD_InitVars) and a QUASI-STATIC dYdu whose
-      ! displacement columns come from scratch-aggregate static re-solves at the
-      ! perturbed boundary (each init IS a static solve), so the linearized mooring
-      ! is the re-equilibrated stiffness, not the frozen-interior response
-      ! (CD_JacobianPInput). Velocity/acceleration/orientation columns are zero:
-      ! frequency-dependent mooring damping is not representable without states. A
-      ! platform-relative cable end connection is rejected after deck construction below,
-      ! because it introduces orientation-dependent force and moment columns.
+      ! Linearize registers the line states (CD_InitVars, lin_state_map) and differentiates the
+      ! line dynamics (lin_eval); the objects whose states are not linearization states are
+      ! rejected after deck construction below.
       IF (.NOT. InitInp%UsePrimaryInputFile) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: passed-in primary input data is not '// &
                           'supported; provide the MoorDyn-format deck as a file.', ErrStat, ErrMsg, RoutineName )
@@ -3090,21 +3083,23 @@ CONTAINS
       ! Get OP values here (the FD reference point)
       CALL CD_CalcOutput( t, u, p, x, xd, z, OtherState, y, m, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
 
-      ! Linearization with the line dynamics (the glue asks for dXdu with dYdu; the runtime
-      ! input/output solve asks for dYdu alone): the partial derivatives at the fixed state x,
-      ! by central differences of lin_eval, as MoorDyn-F's of its CalcOutput and
-      ! CalcContStateDeriv.
-      IF (Inst(m%CDInst)%lin_states .AND. PRESENT(dXdu)) THEN
+      ! Linearization with the line dynamics: the partial derivatives at the fixed state x, by
+      ! central differences of lin_eval, as MoorDyn-F's of its CalcOutput and
+      ! CalcContStateDeriv (dXdu only when the glue asks for it: a deck without line states
+      ! has none).
+      IF (Inst(m%CDInst)%lin_states) THEN
          IF (PRESENT(dYdu)) THEN
             IF (.NOT. ALLOCATED(dYdu)) THEN
                CALL AllocAry( dYdu, m%Jac%Ny, m%Jac%Nu, 'dYdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
             END IF
             dYdu = 0.0_R8Ki
          END IF
-         IF (.NOT. ALLOCATED(dXdu)) THEN
-            CALL AllocAry( dXdu, m%Jac%Nx, m%Jac%Nu, 'dXdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+         IF (PRESENT(dXdu)) THEN
+            IF (.NOT. ALLOCATED(dXdu)) THEN
+               CALL AllocAry( dXdu, m%Jac%Nx, m%Jac%Nu, 'dXdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+            END IF
+            dXdu = 0.0_R8Ki
          END IF
-         dXdu = 0.0_R8Ki
          CALL CD_CopyInput( u, m%u_perturb, MESH_UPDATECOPY, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
          CALL CD_VarsPackInput( Vars, u, m%Jac%u )
          DO i = 1, SIZE(Vars%u)
@@ -3124,7 +3119,7 @@ CONTAINS
                CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_neg )
                IF (PRESENT(dYdu)) CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
                                                               dYdu(:, iCol) )
-               dXdu(:, iCol) = (m%Jac%x_pos - m%Jac%x_neg)/(2.0_R8Ki*Vars%u(i)%Perturb)
+               IF (PRESENT(dXdu)) dXdu(:, iCol) = (m%Jac%x_pos - m%Jac%x_neg)/(2.0_R8Ki*Vars%u(i)%Perturb)
             END DO
          END DO
          ! the outputs at the operating point again (the glue reads y after this call)
@@ -3138,73 +3133,52 @@ CONTAINS
          RETURN
       END IF
 
-      ! dY/du has TWO distinct contracts. During a normal nonlinear OpenFAST run the
-      ! registered CableDyn states exist (Nx > 0), and the glue input/output solve needs
-      ! the PARTIAL derivative g_u at fixed internal state. Re-equilibrating the line for
-      ! those probes returns a total quasi-static derivative instead; inserting that into
-      ! the runtime algebraic loop can make its Jacobian rank deficient. For formal
-      ! linearization CableDyn deliberately registers no states (Nx = 0), so the useful
-      ! reduction is the re-equilibrated, zero-frequency stiffness. Keep those paths
-      ! explicit rather than using the linearization reduction in the runtime solve.
+      ! The runtime input/output solve of a nonlinear run: the PARTIAL derivative g_u at the
+      ! fixed internal state, as stock MoorDyn's runtime Jacobian. Perturb the current input,
+      ! evaluate CalcOutput with the same x/xd/z/other, and central-difference the packed
+      ! outputs; CD_CalcOutput's probe overlay restores the authoritative CableDyn state after
+      ! every evaluation. (Re-equilibrating the line for these probes would give a total
+      ! quasi-static derivative instead, which can make the runtime Jacobian rank deficient.)
       IF (PRESENT(dYdu)) THEN
          IF (.NOT. ALLOCATED(dYdu)) THEN
             CALL AllocAry( dYdu, m%Jac%Ny, m%Jac%Nu, 'dYdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
          END IF
          dYdu = 0.0_R8Ki
-         IF (m%Jac%Nx > 0) THEN
-            ! Match stock MoorDyn's runtime Jacobian contract: perturb the current input,
-            ! evaluate CalcOutput with the same x/xd/z/other, and central-difference the
-            ! packed outputs. CD_CalcOutput's probe overlay restores the authoritative
-            ! CableDyn state after every evaluation.
-            CALL CD_CopyInput( u, m%u_perturb, MESH_UPDATECOPY, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
-            CALL CD_VarsPackInput( Vars, u, m%Jac%u )
-            DO i = 1, SIZE(Vars%u)
-               DO j = 1, Vars%u(i)%Num
-                  iCol = Vars%u(i)%iLoc(1) + j - 1
-                  CALL MV_Perturb( Vars%u(i), j, 1, m%Jac%u, m%Jac%u_perturb )
-                  CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
-                  CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
-                  IF (Failed()) RETURN
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
+         CALL CD_CopyInput( u, m%u_perturb, MESH_UPDATECOPY, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+         CALL CD_VarsPackInput( Vars, u, m%Jac%u )
+         DO i = 1, SIZE(Vars%u)
+            DO j = 1, Vars%u(i)%Num
+               iCol = Vars%u(i)%iLoc(1) + j - 1
+               CALL MV_Perturb( Vars%u(i), j, 1, m%Jac%u, m%Jac%u_perturb )
+               CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
+               CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
+               IF (Failed()) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
 
-                  CALL MV_Perturb( Vars%u(i), j, -1, m%Jac%u, m%Jac%u_perturb )
-                  CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
-                  CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
-                  IF (Failed()) RETURN
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
+               CALL MV_Perturb( Vars%u(i), j, -1, m%Jac%u, m%Jac%u_perturb )
+               CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
+               CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
+               IF (Failed()) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
 
-                  CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
-                                              dYdu(:, iCol) )
-               END DO
+               CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
+                                           dYdu(:, iCol) )
             END DO
-            ! The final negative probe leaves only output/cache workspaces at the
-            ! perturbed input (the authoritative structural state was already restored).
-            ! Re-evaluate the operating point so the callback is observationally neutral
-            ! to the next glue evaluation as well as state neutral.
-            CALL CD_CalcOutput( t, u, p, x, xd, z, OtherState, y, m, ErrStat2, ErrMsg2 )
-            IF (Failed()) RETURN
-         ELSE
-            ! Zero-state formal linearization: each displacement probe re-solves static
-            ! equilibrium on a scratch aggregate, giving the reduced mooring stiffness.
-            CALL quasistatic_dydu( Vars, u, p, m, dYdu, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
-         END IF
+         END DO
+         ! The final negative probe leaves only output/cache workspaces at the perturbed
+         ! input (the authoritative structural state was already restored). Re-evaluate the
+         ! operating point so the callback is observationally neutral to the next glue
+         ! evaluation as well as state neutral.
+         CALL CD_CalcOutput( t, u, p, x, xd, z, OtherState, y, m, ErrStat2, ErrMsg2 )
+         IF (Failed()) RETURN
       END IF
 
-      ! dX/du: the implicit march has no x' = f(x, u) surface. Under linearization the
-      ! module registers ZERO state variables (see CD_InitVars), so the honest dXdu is
-      ! the empty (0 x Nu) block; a caller holding a state-registered instance (Nx > 0)
-      ! is asking for a surface that does not exist -- fail loudly, never zero-fill.
+      ! dX/du of the implicit march exists only for a linearization run (the line-state
+      ! branch above): fail loudly, never zero-fill.
       IF (PRESENT(dXdu)) THEN
-         IF (m%Jac%Nx > 0) THEN
-            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: dXdu is undefined for the implicit '// &
-                             'march with registered state variables; linearization must be requested at '// &
-                             'Init so the module presents its zero-state (dYdu-only) reduction.', &
-                             ErrStat, ErrMsg, RoutineName )
-            RETURN
-         END IF
-         IF (.NOT. ALLOCATED(dXdu)) THEN
-            CALL AllocAry( dXdu, m%Jac%Nx, m%Jac%Nu, 'dXdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
-         END IF
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: dXdu exists only for a linearization '// &
+                          'run (Linearize = True).', ErrStat, ErrMsg, RoutineName )
+         RETURN
       END IF
 
       IF (PRESENT(dXddu)) THEN
@@ -3221,155 +3195,6 @@ CONTAINS
       END FUNCTION Failed
    END SUBROUTINE CD_JacobianPInput
 
-!----------------------------------------------------------------------------------------------------------------------------------
-   SUBROUTINE quasistatic_dydu( Vars, u, p, m, dYdu, ErrStat, ErrMsg )
-      !! The quasi-static dYdu displacement columns: for each coupled-mesh
-      !! FieldTransDisp perturbation, re-solve the mooring static equilibrium at the
-      !! perturbed boundary on a SCRATCH aggregate built from the deck copy (each
-      !! CD_AGG_Init_From_Deck IS a static solve; coupled_positions places the moving
-      !! points explicitly), read the loads and deck channels, and central-difference.
-      !! The live instance is never touched -- the probe cannot perturb committed
-      !! state by construction. All other input fields keep zero columns.
-      TYPE(ModVarsType),        INTENT(IN   ) :: Vars
-      TYPE(CD_InputType),       INTENT(IN   ) :: u
-      TYPE(CD_ParameterType),   INTENT(IN   ) :: p
-      TYPE(CD_MiscVarType),     INTENT(INOUT) :: m
-      REAL(R8Ki),               INTENT(INOUT) :: dYdu(:,:)
-      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
-      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
-
-      character(*), parameter   :: RoutineName = 'quasistatic_dydu'
-      INTEGER(IntKi)            :: ErrStat2, es, i, j, iCol, node, comp, ncp, k
-      CHARACTER(ErrMsgLen)      :: ErrMsg2
-      CHARACTER(2100)           :: lin_deck
-      REAL(wp), ALLOCATABLE     :: op_pos(:,:), prb_pos(:,:)
-      LOGICAL                   :: use_extf
-      REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static probes
-
-      ErrStat = ErrID_None
-      ErrMsg  = ''
-      IF (p%DeckCopy%NumLines < 1) THEN
-         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the linearization probe needs the '// &
-                          'deck copy in the parameters.', ErrStat, ErrMsg, RoutineName )
-         RETURN
-      END IF
-      ncp = u%CoupledKinematics(1)%Nnodes
-      ALLOCATE (op_pos(3, ncp), prb_pos(3, ncp), STAT=ErrStat2)
-      IF (ErrStat2 /= 0) THEN
-         CALL SetErrStat( ErrID_Fatal, 'Could not allocate the linearization probe positions.', &
-                          ErrStat, ErrMsg, RoutineName )
-         RETURN
-      END IF
-      ! the operating-point boundary: the committed mesh positions at the snapshot
-      DO i = 1, ncp
-         op_pos(:, i) = REAL(u%CoupledKinematics(1)%Position(:, i), wp) + &
-                        REAL(u%CoupledKinematics(1)%TranslationDisp(:, i), wp)
-      END DO
-
-      ! the deck copy back to disk once (beside the MooringFile, so its side files
-      ! resolve); every probe init reuses it and it is removed afterwards
-      CALL write_deck_copy( p, '.lin.dat', lin_deck, ErrStat2, ErrMsg2 )
-      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
-      IF (ErrStat >= AbortErrLev) RETURN
-
-      use_extf = .FALSE.
-      IF (ASSOCIATED(p%WaveField)) use_extf = wavefield_is_ambient( p%WaveField )
-      ! each probe is a static solve in the host's steady current, as the operating point is
-      IF (use_extf) THEN
-         CALL seastate_static_current( p%WaveField, static_cur, ErrStat2, ErrMsg2 )
-         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
-         IF (ErrStat >= AbortErrLev) RETURN
-      END IF
-
-      DO i = 1, SIZE(Vars%u)
-         IF (Vars%u(i)%Field /= FieldTransDisp) CYCLE   ! vel/acc/orientation: zero columns
-         DO j = 1, Vars%u(i)%Num
-            iCol = Vars%u(i)%iLoc(1) + j - 1
-            node = (j - 1)/3 + 1
-            comp = MOD(j - 1, 3) + 1
-            IF (node > ncp) THEN
-               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: linearization probe node index '// &
-                                'exceeds the coupled mesh.', ErrStat, ErrMsg, RoutineName )
-               CALL delete_file( lin_deck )
-               RETURN
-            END IF
-            DO k = 1, 2   ! +perturb then -perturb
-               prb_pos = op_pos
-               IF (k == 1) THEN
-                  prb_pos(comp, node) = prb_pos(comp, node) + REAL(Vars%u(i)%Perturb, wp)
-               ELSE
-                  prb_pos(comp, node) = prb_pos(comp, node) - REAL(Vars%u(i)%Perturb, wp)
-               END IF
-               CALL probe_loads( prb_pos, ErrStat2, ErrMsg2 )
-               CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
-               IF (ErrStat >= AbortErrLev) THEN
-                  CALL delete_file( lin_deck )
-                  RETURN
-               END IF
-               IF (k == 1) THEN
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
-               ELSE
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
-               END IF
-            END DO
-            CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, dYdu(:, iCol) )
-         END DO
-      END DO
-      CALL delete_file( lin_deck )
-
-   CONTAINS
-
-      SUBROUTINE probe_loads( pos, PErrStat, PErrMsg )
-         !! One static probe: scratch-aggregate init at the given boundary (the init
-         !! IS the static solve), loads + deck channels into m%y_lin, then release.
-         REAL(wp),       INTENT(IN   ) :: pos(:,:)
-         INTEGER(IntKi), INTENT(  OUT) :: PErrStat
-         CHARACTER(*),   INTENT(  OUT) :: PErrMsg
-
-         TYPE(CD_AGG_ModuleType) :: agg_p
-         REAL(wp)                :: q_p(3, ncp), v_p(3, ncp), a_p(3, ncp), f_p(3, ncp)
-         REAL(wp)                :: cval
-         INTEGER(IntKi)          :: es_p, ich
-         CHARACTER(ErrMsgLen)          :: em_p
-
-         PErrStat = ErrID_None
-         PErrMsg  = ''
-         CALL CD_AGG_Init_From_Deck( agg_p, TRIM(lin_deck), REAL(p%dtM0, wp), es_p, em_p, &
-                                     env_gravity=REAL(p%g, wp), env_rho_water=REAL(p%rhoW, wp), &
-                                     env_wtrdpth=REAL(p%WtrDpth, wp), external_fluid=use_extf, &
-                                     coupled_positions=pos, run_tmax=REAL(p%Tmax, wp), &
-                                     static_current=static_cur )
-         IF (es_p /= CD_AGG_OK) THEN
-            PErrStat = ErrID_Fatal
-            PErrMsg  = 'linearization static probe init failed: '//TRIM(em_p)
-            RETURN
-         END IF
-         CALL CD_AGG_CalcOutput( agg_p, es_p, em_p )
-         IF (es_p == CD_AGG_OK) CALL CD_AGG_GetMovingPointMesh( agg_p, q_p, v_p, a_p, f_p, es_p, em_p )
-         IF (es_p /= CD_AGG_OK) THEN
-            CALL CD_AGG_End( agg_p, es_p, em_p )
-            PErrStat = ErrID_Fatal
-            PErrMsg  = 'linearization static probe output failed: '//TRIM(em_p)
-            RETURN
-         END IF
-         DO ich = 1, ncp
-            m%y_lin%CoupledLoads(1)%Force(:, ich) = REAL(f_p(:, ich), ReKi)
-            m%y_lin%CoupledLoads(1)%Moment(:, ich) = 0.0_ReKi
-         END DO
-         DO ich = 1, p%NumOuts
-            CALL CD_AGG_EvalChannel( agg_p, ich, cval, es_p, em_p )
-            IF (es_p /= CD_AGG_OK) THEN
-               CALL CD_AGG_End( agg_p, es_p, em_p )
-               PErrStat = ErrID_Fatal
-               PErrMsg  = 'linearization static probe channel failed: '//TRIM(em_p)
-               RETURN
-            END IF
-            m%y_lin%WriteOutput(ich) = REAL(cval, ReKi)
-         END DO
-         CALL CD_AGG_End( agg_p, es_p, em_p )
-      END SUBROUTINE probe_loads
-
-   END SUBROUTINE quasistatic_dydu
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_JacobianPContState(Vars, t, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg, dYdx, dXdx, dXddx, dZdx)
@@ -3452,15 +3277,11 @@ CONTAINS
          END IF
          RETURN
       END IF
-      ! Under linearization the module registers ZERO state variables (the MAP-shaped
-      ! dYdu-only reduction; see CD_InitVars), so every state Jacobian is an empty
-      ! block. A state-registered instance (Nx > 0) has no x' = f(x, u) surface to
-      ! differentiate -- fail loudly rather than fabricate one.
+      ! Outside a linearization run the implicit march has no x' = f(x, u) surface to
+      ! differentiate: fail loudly rather than fabricate one.
       IF (m%Jac%Nx > 0) THEN
-         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: state Jacobians are undefined for the '// &
-                          'implicit march with registered state variables; linearization must be '// &
-                          'requested at Init so the module presents its zero-state (dYdu-only) '// &
-                          'reduction.', ErrStat, ErrMsg, RoutineName )
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: state Jacobians exist only for a '// &
+                          'linearization run (Linearize = True).', ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
       IF (PRESENT(dYdx)) THEN
