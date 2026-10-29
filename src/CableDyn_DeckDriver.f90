@@ -9432,13 +9432,24 @@ CONTAINS
                       TRIM(int_to_str(ln%id))//' is slack at init; shorten the line or raise the pretension')
             RETURN
           END IF
-          CALL rest_strain(isec, t_static(e), eps_e, es, em)
+          ! an iterate's tension above the top of the table (the placeholder alpha can overshoot
+          ! the curve) takes the curve's secant at the table's top row, where the curve's secant
+          ! is continuous, so the update goes on; the converged tensions are checked against the
+          ! table below
+          eps_e = types(sec_type(isec))%syrope_owc_strain(SIZE(types(sec_type(isec))%syrope_owc_strain))
+          CALL rest_tension(isec, eps_e, t_ref, es, em)
+          IF (es == CD_SYROPE_OK .AND. .NOT. (t_static(e) > t_ref)) &
+            CALL rest_strain(isec, t_static(e), eps_e, es, em)
           IF (es /= CD_SYROPE_OK) THEN
             CALL release_syrope(.TRUE.)
             CALL fail(ErrStat, ErrMsg, 'Syrope section '//TRIM(int_to_str(isec))//' of LINE '// &
                       TRIM(int_to_str(ln%id))//': '//TRIM(em)); RETURN
           END IF
-          cand_el(e) = t_static(e)/eps_e
+          IF (t_static(e) > t_ref) THEN
+            cand_el(e) = t_ref/eps_e
+          ELSE
+            cand_el(e) = t_static(e)/eps_e
+          END IF
           change = MAX(change, ABS(cand_el(e) - sec_el(e))/sec_el(e))
         END DO
         IF (change <= 1.0e-10_wp) THEN
@@ -9474,6 +9485,14 @@ CONTAINS
       END IF
       DO e = 1, ne
         IF (.NOT. sis(e)) CYCLE
+        ! a converged tension above the table's top (the secant held at the top row's) is refused
+        ! by name
+        CALL rest_strain(el_sec(e), t_static(e), eps_e, es, em)
+        IF (es /= CD_SYROPE_OK) THEN
+          CALL release_syrope(.TRUE.)
+          CALL fail(ErrStat, ErrMsg, 'Syrope section '//TRIM(int_to_str(el_sec(e)))//' of LINE '// &
+                    TRIM(int_to_str(ln%id))//': '//TRIM(em)); RETURN
+        END IF
         IF (.NOT. strain_in_table(el_sec(e), t_static(e)/sec_el(e))) THEN
           CALL release_syrope(.TRUE.)
           RETURN

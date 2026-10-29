@@ -19,6 +19,9 @@ PROGRAM test_syrope_composite
   !!   5. A SYROPE IC history (Tmax0 above the static tension) puts the section on the Tmax0
   !!      working curve instead.
   !!   6. A pretension above the top of the OWC table fails closed by name.
+  !!   7. A taut line of two Syrope sections whose first solve, at the placeholder alpha, overshoots
+  !!      the top of the table: the update continues from the table's top secant and every
+  !!      element lands on its OWC.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_Models, CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_Model, ONLY: CD_ModelType, CD_End_Model, CD_Get_Model_Tension
@@ -121,6 +124,9 @@ PROGRAM test_syrope_composite
   CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'above the top of its OWC table') > 0, &
                'a pretension above the OWC table fails closed by name: '//TRIM(em))
 
+  ! 7. an overshooting first solve on a taut two-section rope
+  CALL taut_overshoot()
+
   CALL finish()
 
 CONTAINS
@@ -153,6 +159,60 @@ CONTAINS
     PRINT '(A,I0,A,ES10.3)', '  still run: ', n, ' rows, max |FairTen - FairTen(0)| / FairTen(0) ', dev/ft0
     CALL require(n > 100 .AND. dev <= 1.0e-7_wp*ft0, 'the dynamics start in the static equilibrium')
   END SUBROUTINE still_run
+
+  SUBROUTINE taut_overshoot()
+    !! 20 m of virgin rope in two 10 m Syrope sections between fixed points 20.7 m apart: alpha
+    !! (1.53e8 N) at the 3.5 % chord strain gives 5.4 MN, above the table's 4.4 MN top, while the
+    !! OWC there is about 2 MN.
+    TYPE(CD_ModelType), ALLOCATABLE :: mt(:)
+    REAL(wp) :: ten(10), eps_k, wst
+    INTEGER :: u, k
+    OPEN (NEWUNIT=u, FILE='csyr_taut.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'taut two-section Syrope test deck'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'poly 0.1438 22.42 "SYROPE:csyr_settings.dat|1.53e8|23.12" 5.0e10|1.0e5 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Fixed 20.7 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Vessel 0.0 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 2 1 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 poly 10.0 5'
+    WRITE (u, '(A)') '1 poly 10.0 5'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '200.0 WtrDpth'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+    CALL CD_Init_Deck_Models('csyr_taut.dat', mt, es, em)
+    CALL require(es == CD_DECKDRV_OK, 'a taut rope whose first solve overshoots the OWC table builds: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    ASSOCIATE (md => mt(1))
+      CALL CD_Get_Model_Tension(md, ten, es, em)
+      wst = 0.0_wp
+      DO k = 1, md%n_elem
+        eps_k = NORM2(md%q(3*md%elem_conn(2, k) - 2:3*md%elem_conn(2, k)) - &
+                      md%q(3*md%elem_conn(1, k) - 2:3*md%elem_conn(1, k)))/md%l0(k) - 1.0_wp
+        wst = MAX(wst, ABS(owc(eps_k) - ten(k))/ten(k))
+      END DO
+      PRINT '(A,ES12.5,A,ES12.5,A,ES10.3)', '  taut rope: tensions ', MINVAL(ten), ' to ', MAXVAL(ten), &
+        ' N, elements off their OWC by at most ', wst
+      CALL require(wst <= 1.0e-8_wp .AND. MAXVAL(ten) < OWC_TEN(NOWC), &
+                   'every element of the taut rope sits on its OWC, inside the table')
+    END ASSOCIATE
+    CALL CD_End_Model(mt(1), es, em)
+  END SUBROUTINE taut_overshoot
 
   SUBROUTINE tmax0_curve()
     !! SYROPE IC Tmax0 = 2.5 MN: the polyester's mean tension is the Tmax0 working curve's at its
