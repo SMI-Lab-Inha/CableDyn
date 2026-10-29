@@ -85,6 +85,7 @@ MODULE CableDyn_System
   PUBLIC :: CD_Get_System_Point_State
   PUBLIC :: CD_Get_System_Line_State
   PUBLIC :: CD_Get_System_Line_Tension
+  PUBLIC :: CD_Get_System_Line_Stretch
   PUBLIC :: CD_Get_System_CoupledMotion
   PUBLIC :: CD_Update_System_CoupledMotion
   PUBLIC :: CD_Update_System_Point_States
@@ -1148,6 +1149,33 @@ CONTAINS
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
   END SUBROUTINE CD_Get_System_Line_Tension
+
+  SUBROUTINE CD_Get_System_Line_Stretch(system, line_index, stretch, ErrStat, ErrMsg)
+    !! Copy the element stretches of one contained line: each element's current chord length
+    !! minus its unstretched length (negative on a slack element).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    REAL(wp), INTENT(OUT) :: stretch(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: e, na, nb
+
+    stretch = CD_ZERO
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    ASSOCIATE (ln => system%lines(line_index))
+      IF (SIZE(stretch) /= ln%n_elem) THEN
+        CALL fail(ErrStat, ErrMsg, 'stretch output must have shape (n_elem)')
+        RETURN
+      END IF
+      DO e = 1, ln%n_elem
+        na = ln%elem_conn(1, e)
+        nb = ln%elem_conn(2, e)
+        stretch(e) = NORM2(ln%q(3*nb - 2:3*nb) - ln%q(3*na - 2:3*na)) - ln%l0(e)
+      END DO
+    END ASSOCIATE
+  END SUBROUTINE CD_Get_System_Line_Stretch
 
   SUBROUTINE CD_Get_System_CoupledMotion(system, q_coupled, v_coupled, a_coupled, ErrStat, ErrMsg)
     !! Copy aggregate compact coupled motion, concatenated line by line.

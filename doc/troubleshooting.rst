@@ -403,8 +403,8 @@ Torsion
        FAST.Farm run, add a body (such a deck runs on the multibody route, which supports
        torsion), or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
    * - ``formal OpenFAST linearization of a line restrained in torsion is not supported``
-     - linearise the model with ``TorsStiffness Free``; the torque's rotational stiffness is not
-       part of the quasi-static reduction.
+     - linearise the model with ``TorsStiffness Free``; the twist and the torque carry no
+       linearisation state.
    * - ``torsion: the twist would move more than pi/2 from its committed value``
      - the host turned a fairlead by more than 90° about the line's end direction without a
        step (an output probe or a non-stepping input update). Keep the platform turn per
@@ -846,10 +846,12 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
    * - a finite-EI cable in the same deck as Rigid6 bodies, rods, or ``Connect``/``Free`` points
      - model the cable and the body/point system in separate decks or use the supported
        combinations in :doc:`capabilities`
-   * - OpenFAST linearisation with a platform-relative cable ``END CONNECTIONS`` row
-       (``formal OpenFAST linearization with a platform-relative cable end connection is not
-       supported``) or with a ``CONTROL`` section
-     - linearise a pinned-hang-off, uncontrolled variant of the deck; time-domain runs support both
+   * - OpenFAST linearisation of a cable with a ``Rigid`` ``END CONNECTIONS`` row (``formal
+       OpenFAST linearization of a cable with a rigid end connection is not supported``), of a deck
+       with ``Free`` or ``Connect`` points, or with a ``CONTROL`` section
+     - linearise a variant with a numeric rotational stiffness at the hang-off, the lines attached to
+       ``Fixed`` or ``Coupled`` points, and no ``CONTROL`` section; time-domain runs support all of
+       them
    * - a ``Rigid`` end-connection direction reversed by exactly 180 degrees in one host update
      - drive the platform through intermediate orientations
    * - VIV on a finite-EI line with two moving ends (``needs its End B fixed``)

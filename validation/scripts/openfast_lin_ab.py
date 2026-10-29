@@ -20,12 +20,15 @@ The script derives the linearization decks from a time-domain twin pair:
     so the dynamic-relaxation initial state is settled, and no
     `SeaState WaterKin` row (no effect in still water).
 
+Both modules linearize with the line dynamics: the continuous states are the
+line nodes' positions and velocities (882 on this deck, in the same layout), and
+the zero-frequency stiffness is the reduction K = D - C A^-1 B of each.
+
 WHAT IS GATED
   1. CableDyn invariants of a tangent mooring stiffness at equilibrium, on its
-     quasi-static dYdu (force rows vs translation-displacement columns, matched
-     by ROW/COLUMN LABELS): symmetry, negative (restoring) displacement
-     diagonals, and no net sway force under a collective surge of this
-     y-symmetric spread.
+     K (force rows vs translation-displacement columns, matched by ROW/COLUMN
+     LABELS): symmetry, negative (restoring) displacement diagonals, and no net
+     sway force under a collective surge of this y-symmetric spread.
   2. The reference itself: MoorDyn's zero-frequency reduction
      K_md = D - C A^-1 B must be symmetric (<= 1e-3) and its .lin matrices
      must carry >= 10 significant digits; otherwise the comparison is refused
@@ -39,9 +42,28 @@ WHAT IS GATED
          operating-point fairlead loads): diagonals within --gate-pct, every
          entry within --gate-pct of sqrt(K_ii K_jj).
      Measured on this model (OutFmt ES24.15E3, TmaxIC 400 s, t = 0): the
-     dominant fairlead entries agree to 0.07-0.10 %, the small transverse
-     (H/X) entry to 0.29 %, the 6x6 diagonals to <= 0.10 % and every 6x6
-     entry to 1.0e-3 of sqrt(K_ii K_jj) or better.
+     fairlead entries agree to 0.10 % (the small transverse entry to 0.29 %),
+     the 6x6 diagonals to <= 0.10 % and every 6x6 entry to 1.1e-3 of
+     sqrt(K_ii K_jj) or better.
+  4. The dynamics: both state matrices stable (every eigenvalue in the left
+     half-plane), and the lowest --n-modes line-mode frequencies of CableDyn's
+     A within --freq-pct (default 1 %) of MoorDyn's. Measured: 0.04-0.07 % on
+     the first three modes, 0.3 % on the ninth (CableDyn's consistent mass
+     against MoorDyn's lumped mass). The damping ratios are printed, not gated: the
+     quadratic drag has no slope at rest, so both codes difference it over the
+     same +-0.1 m/s velocity step, and CableDyn's drag, integrated over the
+     element rather than lumped at the node, gives half the slope for a one-node
+     perturbation.
+  5. With --cable-deck and --driver (optional): every coupled point of a mixed
+     deck (EI = 0 lines and finite-EI cables) against the deck's own static
+     solution. The deck is linearized in the same OpenFAST case (seabed
+     friction off: a stuck laid run is a different static problem), and the
+     standalone driver solves it at TMax = 0 with one coupled point moved
+     +-h (--cable-h, default 0.05 m) along each axis; -dF/dx of those solves is
+     the reference. Per-point 3x3 entries >= 10 % of the block's largest within
+     --cable-pct (default 1 %), every entry >= 1 % of it within twice that.
+     Measured on examples/iea15mw_umaine_mixed_cabledyn.dat: the lazy-wave
+     cable's 36.0 / 2.62 / 38.5 N/m within 3.3e-4, the chains within 7e-5.
 
 The 6x6 is the module-level stiffness. A full-system ElastoDyn linearization
 additionally contains a term of ElastoDyn/glue origin proportional to the
@@ -66,6 +88,8 @@ Usage:
         [--ref-cd IEA-15-UMaine_CompMooring5_CableDyn.fst]
         [--ref-md IEA-15-UMaine_CompMooring3_MoorDyn.fst]
         [--t-lin 0.0] [--gate-pct 0.5] [--outfmt ES24.15E3] [--md-tmaxic 400]
+        [--n-modes 9] [--freq-pct 1.0]
+        [--cable-deck <mixed deck> --driver <cabledyn driver> [--cable-h 0.05] [--cable-pct 1.0]]
         [--skip-run]
 """
 
@@ -306,25 +330,145 @@ def op_values(labels: list[str], idx: list[int]) -> np.ndarray:
 def static_impedance(mod: dict) -> np.ndarray:
     """K = D - C A^+ B (reduces to D when the module carries no states).
 
-    A^+ is the pseudo-inverse when A is numerically singular: a lumped-mass
-    mooring on a FRICTIONLESS seabed can have neutral horizontal modes on its
-    grounded nodes (zero restoring force). The minimum-norm solution projects the
-    neutral modes out -- they stay put under a static boundary displacement, which
-    is exactly the quasi-static physics. On the settled UMaine deck with full
-    precision A is regular (the seabed penalty and line tension restrain every
-    node) and the plain solve is used."""
+    A^+ is the pseudo-inverse only when A is singular to working precision (cond >
+    1e14): a mooring on a FRICTIONLESS seabed can have neutral horizontal modes on
+    its grounded nodes (zero restoring force). The minimum-norm solution projects
+    the neutral modes out -- they stay put under a static boundary displacement,
+    which is exactly the quasi-static physics. A merely ill-conditioned A is solved
+    plainly: the soft lateral modes of a long laid cable are physical, and
+    truncating them corrupts every subsystem's reduction. On the settled UMaine
+    deck A is regular (the seabed penalty and line tension restrain every node)."""
     if mod["n_x"] == 0:
         return mod["D"]
     A = mod["A"]
     sv = np.linalg.svd(A, compute_uv=False)
     cond = sv[0] / max(sv[-1], 1e-300)
-    print(f"MD state matrix: {A.shape[0]} states, cond ~ {cond:.2e}")
-    if cond > 1e10:
+    print(f"state matrix: {A.shape[0]} states, cond ~ {cond:.2e}")
+    if cond > 1e14:
         print("note: neutral modes; using the pseudo-inverse zero-frequency reduction")
-        X = np.linalg.lstsq(A, mod["B"], rcond=1e-8)[0]
+        X = np.linalg.lstsq(A, mod["B"], rcond=1e-12)[0]
     else:
         X = np.linalg.solve(A, mod["B"])
     return mod["D"] - mod["C"] @ X
+
+
+def line_modes(A: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """Natural frequencies (Hz) and damping ratios of the oscillatory modes of a
+    state matrix, ascending in frequency, and its largest eigenvalue real part."""
+    ev = np.linalg.eigvals(A)
+    osc = ev[ev.imag > 1e-9 * max(np.abs(ev).max(), 1.0)]
+    wn = np.abs(osc)
+    order = np.argsort(wn)
+    return wn[order] / (2.0 * np.pi), -osc.real[order] / wn[order], float(ev.real.max())
+
+
+def deck_points(deck: Path) -> list[tuple[int, str, list[float], int]]:
+    """(id, type, xyz, line index) of every row of a deck's POINTS section."""
+    out = []
+    in_points = False
+    for k, ln in enumerate(deck.read_text().splitlines()):
+        if ln.lstrip().startswith("-"):
+            in_points = "POINTS" in ln.upper()
+            continue
+        tok = ln.split()
+        if in_points and len(tok) >= 5 and tok[0].isdigit():
+            out.append((int(tok[0]), tok[1].lower(), [float(v) for v in tok[2:5]], k))
+    return out
+
+
+def driver_point_loads(driver: Path, deck: Path, work: Path, pid: int, xyz: list[float],
+                       coupled: list[int]) -> np.ndarray:
+    """The static loads Point<P>F{x,y,z} on every coupled point with point pid moved
+    to xyz: the deck solved by the standalone driver at TMax = 0."""
+    lines = deck.read_text().splitlines()
+    row = {p[0]: p[3] for p in deck_points(deck)}[pid]
+    tok = lines[row].split()
+    lines[row] = "  ".join(tok[:2] + [f"{v:.10f}" for v in xyz] + tok[5:])
+    out: list[str] = []
+    in_outputs = False
+    for ln in lines:
+        up = ln.strip().upper()
+        if ln.lstrip().startswith("-") and "OUTPUTS" in up:
+            in_outputs = True
+            out.append(ln)
+            out.extend(f'"Point{p}F{c}"' for p in coupled for c in "xyz")
+            continue
+        if in_outputs:
+            if up.startswith("END"):
+                in_outputs = False
+                out.append(ln)
+            continue
+        if re.match(r"^\s*\S+\s+TMax\b", ln):
+            ln = re.sub(r"^\s*\S+", "0.0", ln, count=1)
+        out.append(ln)
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "trial.dat").write_text("\n".join(out) + "\n")
+    proc = subprocess.run([str(driver), "trial.dat", "trial"], cwd=work, capture_output=True,
+                          text=True, timeout=3600)
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-15:])
+        die(f"driver failed on {deck.name} with point {pid} at {xyz}:\n{tail}")
+    rows = [r for r in (work / "trial.out").read_text().splitlines() if r.strip() and not r.startswith("#")]
+    head = rows[0].split()
+    vals = [float(v) for v in rows[1].split()]
+    return np.array([[vals[head.index(f"Point{p}F{c}")] for c in "xyz"] for p in coupled])
+
+
+def cable_gate(args: argparse.Namespace, case: Path, cd_fst: Path) -> list[str]:
+    """Gate 5: a mixed deck's coupled-point stiffness against its static solution."""
+    src = args.cable_deck.resolve()
+    if not src.is_file():
+        die(f"cable deck not found: {src}")
+    if not args.driver.is_file():
+        die(f"driver not found: {args.driver}")
+    deck = case / "CableDyn_cable_lin.dat"
+    text, n_mu = re.subn(r"^(\s*)\S+(\s+frictionMu\b)", r"\1none\2", src.read_text(), flags=re.M)
+    deck.write_text(text)
+    fst = case / "Main_lin_cable.fst"
+    fst_text = cd_fst.read_text()
+    name = file_entry(fst_text, "MooringFile", cd_fst.name)
+    fst.write_text(fst_text.replace(f'"{name}"', f'"{deck.name}"'))
+    if not args.skip_run:
+        print(f"running {fst.name} ...")
+        run_case(args.exe, fst)
+    mod = parse_module_lin(case / "Main_lin_cable.1.CD.lin")
+    kb, _ = block(mod, -static_impedance(mod), ["force"], ["translation displacement"],
+                  "cable-deck stiffness")
+    pts = [p for p in deck_points(deck) if p[1] in ("coupled", "vessel", "cpld", "ves")]
+    ids = [p[0] for p in pts]
+    if kb.shape != (3 * len(ids), 3 * len(ids)):
+        die(f"cable-deck stiffness block {kb.shape} does not match {len(ids)} coupled points")
+    h = args.cable_h
+    tol = args.cable_pct / 100.0
+    worst_dom = worst_all = 0.0
+    print(f"cable deck {src.name} (frictionMu rows set to none: {n_mu}), coupled points {ids}, "
+          f"static reference from +-{h} m driver solves; K lin / K static / rel. diff (N/m):")
+    for ip, (pid, _, xyz, _) in enumerate(pts):
+        kref = np.zeros((3, 3))
+        for k in range(3):
+            xp, xm = list(xyz), list(xyz)
+            xp[k] += h
+            xm[k] -= h
+            fp = driver_point_loads(args.driver, deck, case / "cable_lin_work", pid, xp, ids)
+            fm = driver_point_loads(args.driver, deck, case / "cable_lin_work", pid, xm, ids)
+            kref[:, k] = -(fp[ip] - fm[ip]) / (2.0 * h)
+        b = kb[3 * ip:3 * ip + 3, 3 * ip:3 * ip + 3]
+        big = np.abs(kref).max()
+        for i in range(3):
+            cells = []
+            for j in range(3):
+                rel = (b[i, j] - kref[i, j]) / kref[i, j] if abs(kref[i, j]) > 1e-2 * big else 0.0
+                if abs(kref[i, j]) >= 0.1 * big:
+                    worst_dom = max(worst_dom, abs(rel))
+                if abs(kref[i, j]) >= 1e-2 * big:
+                    worst_all = max(worst_all, abs(rel))
+                cells.append(f"{b[i, j]:11.5g} / {kref[i, j]:11.5g} / {rel:+.2e}")
+            print(f"  point {pid} {'xyz'[i]}: " + " | ".join(cells))
+    print(f"cable deck: dominant entries max rel. diff {worst_dom:.2e} (gate {tol:.1e}); "
+          f"all entries >= 1% of block max {worst_all:.2e} (gate {2 * tol:.1e})")
+    if worst_dom > tol or worst_all > 2 * tol:
+        return ["the cable deck's linearized point stiffness differs from its static solution"]
+    return []
 
 
 def block(mod: dict, K: np.ndarray, row_must: list[str], col_must: list[str], what: str) -> tuple:
@@ -372,8 +516,20 @@ def main() -> None:
                     help="OutFmt written into both decks; the .lin matrices use it")
     ap.add_argument("--md-tmaxic", type=float, default=400.0,
                     help="MoorDyn dynamic-relaxation time TmaxIC (s)")
+    ap.add_argument("--n-modes", type=int, default=9,
+                    help="lowest line modes whose frequencies are gated")
+    ap.add_argument("--freq-pct", type=float, default=1.0,
+                    help="CableDyn vs MoorDyn line-mode frequency tolerance in %%")
+    ap.add_argument("--cable-deck", type=Path,
+                    help="a mixed EI = 0 + finite-EI deck for gate 5 (needs --driver)")
+    ap.add_argument("--driver", type=Path, help="the standalone CableDyn driver (gate 5)")
+    ap.add_argument("--cable-h", type=float, default=0.05,
+                    help="coupled-point displacement of the gate-5 static solves (m)")
+    ap.add_argument("--cable-pct", type=float, default=1.0, help="gate-5 tolerance in %%")
     ap.add_argument("--skip-run", action="store_true")
     args = ap.parse_args()
+    if (args.cable_deck is None) != (args.driver is None):
+        die("--cable-deck and --driver go together")
 
     case = args.case_dir
     cd_fst = case / "Main_lin_cd5.fst"
@@ -390,9 +546,9 @@ def main() -> None:
     md = parse_module_lin(case / "Main_lin_md3.1.MD.lin")
     print(f"CD: n_x={cd['n_x']} n_u={len(cd['u_labels'])} n_y={len(cd['y_labels'])}")
     print(f"MD: n_x={md['n_x']} n_u={len(md['u_labels'])} n_y={len(md['y_labels'])}")
-    if cd["n_x"] != 0:
-        die("CableDyn module reported continuous states under linearization "
-            "(the dYdu-only reduction must register Nx = 0)")
+    if cd["n_x"] == 0:
+        die("CableDyn module reported no continuous states under linearization "
+            "(the line positions and velocities must be states)")
 
     r_cd = coupled_points(cd_fst)
     r_md = coupled_points(md_fst)
@@ -483,6 +639,27 @@ def main() -> None:
           f"max |dK_ij|/sqrt(K_ii K_jj) {norm.max():.2e} at ({dofs[i]},{dofs[j]}) (gate {tol:.1e})")
     if np.abs(rel_d).max() > tol or norm.max() > tol:
         failures.append("platform 6x6 stiffness differs from MoorDyn beyond the gate")
+
+    # 4. The dynamics: stability and the lowest line-mode frequencies.
+    f_cd, z_cd, re_cd = line_modes(cd["A"])
+    f_md, z_md, re_md = line_modes(md["A"])
+    nm = args.n_modes
+    if len(f_cd) < nm or len(f_md) < nm:
+        die(f"fewer than {nm} oscillatory modes (CD {len(f_cd)}, MD {len(f_md)})")
+    rel_f = f_cd[:nm] / f_md[:nm] - 1.0
+    print(f"state matrices: max Re(lambda) CD {re_cd:.3e}, MD {re_md:.3e} (gate < 0)")
+    print(f"lowest {nm} line modes, f [Hz] CD / MD / rel. diff, damping ratio CD / MD (not gated):")
+    for i in range(nm):
+        print(f"  {i + 1:2d}  {f_cd[i]:.6f} / {f_md[i]:.6f} / {rel_f[i]:+.2e}   {z_cd[i]:.4f} / {z_md[i]:.4f}")
+    print(f"line modes: max |rel. diff| {np.abs(rel_f).max():.2e} (gate {args.freq_pct / 100.0:.1e})")
+    if not (re_cd < 0.0 and re_md < 0.0):
+        failures.append("a state matrix has an eigenvalue in the right half-plane")
+    if np.abs(rel_f).max() > args.freq_pct / 100.0:
+        failures.append("the line-mode frequencies differ from MoorDyn beyond the gate")
+
+    # 5. Optional: a mixed deck's coupled points against its own static solution.
+    if args.cable_deck is not None:
+        failures += cable_gate(args, case, cd_fst)
 
     if failures:
         die("; ".join(failures))

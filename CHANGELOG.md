@@ -10,6 +10,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
+  interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
+  degrees of freedom of every finite-EI cable (node positions and tangents), then their
+  velocities, with `A`, `B`, `C` and `D` by central differences of the accelerations solved at the
+  perturbed state. On the UMaine chains the stiffness `D - C A^-1 B` matches MoorDyn-F's to 0.1 %
+  and the lowest nine line-mode frequencies to 0.3 %; with a lazy-wave power cable every coupled
+  point matches the deck's own static solutions to 3e-4, also with a hang-off spring. A cable
+  end connection with a numeric stiffness now linearises. Free/Connect points, a `Rigid` cable
+  end connection, bodies, rods, buoys, torsion and `CONTROL` fail closed with named messages.
+  This replaces the quasi-static linearisation without states.
 - Section-frame curvature channels `CurvX<L>N<J>` and `CurvY<L>N<J>` on finite-EI lines: the
   curvature vector on the cable's cross-section axes, for the fatigue of an armour wire or
   conductor at a fixed point of the section. The axes start at End A from the end connection

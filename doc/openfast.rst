@@ -326,8 +326,9 @@ hang-off the declared direction is given in platform axes and follows the OpenFA
 orientation; its angular velocity and acceleration enter the implicit residual and tangent, and
 the connection moment is returned to OpenFAST. Fixed-end directions are global. A rigid
 direction reversal of exactly 180° in one host update is rejected, because the shortest rotation
-is not unique. Formal linearisation (``Linearize = True``) with a platform-relative end
-connection fails during initialisation. Row grammar: :doc:`driver_format`.
+is not unique. Formal linearisation (``Linearize = True``) supports pinned and numeric-stiffness
+connections; a ``Rigid`` row fails during initialisation, because only the axial stretch of its
+end tangent is a degree of freedom (see `Linearisation`_). Row grammar: :doc:`driver_format`.
 
 Line torsion
 ------------
@@ -413,15 +414,42 @@ without an auxiliary process:
 Each is a separate qualification: a successful ordinary run does not qualify restart,
 linearisation, control, failure, or farm behaviour for a new model.
 
-Two different Jacobians
-~~~~~~~~~~~~~~~~~~~~~~~
+Jacobians
+~~~~~~~~~
 
 During time marching, the OpenFAST input–output solver asks for the instantaneous output
 derivative with the cable state frozen; CableDyn evaluates it by symmetric perturbation of the
-coupled input while preserving the committed state. In a ``Linearize = True`` run CableDyn
-registers no dynamic states and reports the re-equilibrated quasi-static stiffness instead.
-These are different derivatives and must not be interchanged. ``NumCrctn`` controls glue
-correction passes; it does not change which derivative is used.
+coupled input while preserving the committed state. A ``Linearize = True`` run differentiates the
+line dynamics themselves (`Linearisation`_). ``NumCrctn`` controls glue correction passes; it does
+not change which derivative is used.
+
+Linearisation
+~~~~~~~~~~~~~
+
+With ``Linearize = True`` CableDyn linearises the line dynamics, as MoorDyn-F does. The continuous
+states are the positions of every ``EI = 0`` line's interior nodes and of every finite-EI cable's
+free degrees of freedom (node positions and tangents ``m = dr/ds``), followed by their velocities.
+``EI = 0`` states carry MoorDyn's names and order (``Line 1 node 1 Px, m`` … ``Vz, m/s``); a cable's
+are named ``Cable 1 node 2 Px, m``, ``Cable 1 node 2 Tx, -`` (tangent) and ``Cable 1 node 2 dTx,
+1/s`` (its rate), with node 1 at End A. The matrices ``A``, ``B``, ``C`` and ``D`` are central
+differences: at each perturbed state or input, the accelerations are solved without a time step.
+Positions, tangents and coupled-point displacements are stepped by 1 µm, which stays inside the
+seabed penetration of a light cable and the stretch of every taut element. Velocities are stepped
+by 0.1 m/s, MoorDyn-F's step.
+
+The zero-frequency reduction ``D − C A⁻¹ B`` is the static mooring stiffness. It agrees with
+MoorDyn-F and with CableDyn's own static solutions (:doc:`validation`). Quadratic drag has no
+slope at rest, so the 0.1 m/s step gives its equivalent linear damping at that velocity amplitude.
+CableDyn integrates the drag over the element, and a one-node step then gives about half of
+MoorDyn-F's lumped value. The internal states of viscoelastic, Syrope and VIV models and the
+seabed-friction anchors are held at their operating-point values: the linearisation sees the rope's
+instantaneous stiffness and a stuck laid run. Linearise from a settled operating point, such as the
+still-water start at ``t = 0``.
+
+Initialisation fails with a named message for Free and Connect points, Point3 buoys, Rigid6 bodies
+and rods, a line restrained in torsion, a ``CONTROL`` section, a cable with a ``Rigid`` end
+connection, and FAST.Farm. These carry states that are not linearisation states. Time-domain runs
+support all of them.
 
 Performance
 -----------
