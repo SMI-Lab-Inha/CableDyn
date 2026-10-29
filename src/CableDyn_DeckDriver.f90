@@ -35485,7 +35485,6 @@ CONTAINS
     CASE (9, 10, 11)   ! condensed torsion: torque [N m], twist from End A to node J, total twist [deg]
       BLOCK
         REAL(wp) :: th, mt
-        INTEGER :: e
         CALL CD_HermiteCable_Dyn_Torsion_State(cable%line, th, mt, es, em)
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN

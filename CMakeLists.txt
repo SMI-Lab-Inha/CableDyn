@@ -2740,7 +2740,8 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_hermite_drag_dynamics
       test_hermite_axial_damping
       test_hermite_cable_control
-      test_endconn_spring)
+      test_endconn_spring
+      test_torsion_coupling)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
   endforeach()
   target_compile_options(test_openfast_aggregate PRIVATE
