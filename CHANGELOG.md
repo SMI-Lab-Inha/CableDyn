@@ -80,6 +80,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   0.1 s drops from 18,000 components to 1,800. On the 300 s lazy-wave case both records then run
   in 72 s, and every output channel's standard deviation moves by at most 0.002 %. A record with
   no component at or below the cut-off is refused by name.
+- Coupled OpenFAST runs start from the equilibrium in SeaState's steady current (`CurrMod 1`),
+  as standalone decks start in their `current` option, instead of from the still-water shape.
+  The current is evaluated at SeaState's vertical grid levels for the static solves only; the
+  dynamics take the SeaState field alone. On the IEA-15 MW mixed example in a 0.5 m/s cross
+  current, the lazy-wave cable starts 29 m across at its deepest monitored node and moves less
+  than 0.6 m over the first 30 s, where the still-water start has reached a third of that offset.
+  `CurrMod 2` and InflowWind currents keep the still-water start, with a note.
 - Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
   range graphs and element file) report the cable's own moment, the line type's EI times the
   curvature; lines without stiffeners are unchanged.

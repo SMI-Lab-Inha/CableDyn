@@ -159,6 +159,7 @@ PROGRAM test_openfast_aggregate
   CALL case_external_fluid()
   CALL case_still_water_deck_ambient()
   CALL case_external_fluid_report()
+  CALL case_static_current()
   CALL case_coupled_positions_override()
   CALL case_farm_partition()
   CALL case_farm_free_clump()
@@ -4518,6 +4519,110 @@ CONTAINS
                  'extfc: plain build rejects host fields naming external_fluid')
     CALL CD_AGG_End(agg_p, es, em)
   END SUBROUTINE case_external_fluid_cable
+
+  SUBROUTINE case_static_current()
+    !! The coupled start in the host's steady current (static_current, what the OpenFAST shell
+    !! passes from a SeaState CurrMod 1 current: 0.4 m/s along x and 0.3 m/s across):
+    !!  - a pure EI = 0 deck starts as the same deck with that current as its deck OPTION;
+    !!  - on the mixed deck (EI = 0 line and finite-EI cable), held under the host field of the
+    !!    same current, the start stays at its loads -- the equilibrium in that current, with no
+    !!    second copy of it in the dynamics -- where the still-water start moves away;
+    !!  - static_current needs the host field, and z levels that ascend.
+    TYPE(CD_AGG_ModuleType) :: agg_w, agg_c, agg_u
+    REAL(wp), PARAMETER :: DT = 0.05_wp
+    REAL(wp), PARAMETER :: UC(3) = [0.4_wp, 0.3_wp, 0.0_wp]
+    REAL(wp) :: prof(4, 2), r0(3, 3), vel(3, 3), acc(3, 3), lu(3, 3), lc3(3, 3), v3(3, 3), a3(3, 3)
+    REAL(wp) :: drift(2)
+    INTEGER :: es
+    CHARACTER(1024) :: em
+
+    prof(:, 1) = [-300.0_wp, UC]
+    prof(:, 2) = [0.0_wp, UC]
+
+    ! (1) pure EI = 0: the static current is the deck current OPTION's
+    CALL write_volturnus_deck('agg_sc_still.dat', extra_option='0.05 dtM', extra_option2='60.0 TMax')
+    CALL write_volturnus_deck('agg_sc_deck.dat', extra_option='uniform 0.4 0.3 0.0 current', &
+                              extra_option2='0.05 dtM', extra_option3='60.0 TMax')
+    CALL CD_AGG_Init_From_Deck(agg_u, 'agg_sc_deck.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'static-current:deck-current-init: '//TRIM(em))
+    CALL CD_AGG_Init_From_Deck(agg_c, 'agg_sc_still.dat', DT, es, em, external_fluid=.TRUE., static_current=prof)
+    CALL require(es == CD_AGG_OK, 'static-current:ei0-init: '//TRIM(em))
+    IF (es == CD_AGG_OK) THEN
+      CALL CD_AGG_CalcOutput(agg_u, es, em)
+      CALL CD_AGG_GetMovingPointMesh(agg_u, r0, vel, acc, lu, es, em)
+      CALL CD_AGG_CalcOutput(agg_c, es, em)
+      CALL CD_AGG_GetMovingPointMesh(agg_c, r0, v3, a3, lc3, es, em)
+      CALL require(nan_max_abs(lc3 - lu) <= 1.0e-9_wp*nan_max_abs(lu), &
+                   'static-current:ei0-start-equals-deck-current-start')
+    END IF
+    CALL CD_AGG_End(agg_u, es, em)
+    CALL CD_AGG_End(agg_c, es, em)
+
+    ! (2) mixed deck: held in the host's current, the start in that current stays put
+    CALL write_mixed_deck('agg_sc_mixed.dat')
+    CALL CD_AGG_Init_From_Deck(agg_w, 'agg_sc_mixed.dat', DT, es, em, external_fluid=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'static-current:still-water-start: '//TRIM(em))
+    CALL CD_AGG_Init_From_Deck(agg_c, 'agg_sc_mixed.dat', DT, es, em, external_fluid=.TRUE., static_current=prof)
+    CALL require(es == CD_AGG_OK, 'static-current:current-start: '//TRIM(em))
+    IF (es == CD_AGG_OK) THEN
+      CALL held_drift(agg_w, UC, drift(1))
+      CALL held_drift(agg_c, UC, drift(2))
+      WRITE (*, '(A,ES10.3,A,ES10.3)') 'static current: load drift over 1 s held in the current, still-water '// &
+        'start ', drift(1), ', start in the current ', drift(2)
+      CALL require(drift(2) <= 1.0e-4_wp, 'static-current:start-in-current-stays-put')
+      CALL require(drift(1) > 1.0e2_wp*drift(2), 'static-current:still-water-start-moves')
+    END IF
+    CALL CD_AGG_End(agg_w, es, em)
+    CALL CD_AGG_End(agg_c, es, em)
+
+    ! (3) contract
+    CALL CD_AGG_Init_From_Deck(agg_c, 'agg_sc_mixed.dat', DT, es, em, static_current=prof)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'external_fluid') > 0, &
+                 'static-current:needs-host-field: '//TRIM(em))
+    CALL CD_AGG_End(agg_c, es, em)
+    prof(1, 2) = -400.0_wp
+    CALL CD_AGG_Init_From_Deck(agg_c, 'agg_sc_mixed.dat', DT, es, em, external_fluid=.TRUE., static_current=prof)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'ascend') > 0, 'static-current:levels-ascend: '//TRIM(em))
+    CALL CD_AGG_End(agg_c, es, em)
+  END SUBROUTINE case_static_current
+
+  SUBROUTINE held_drift(agg, uc, rel)
+    !! Largest relative change of the two moving-point loads of the mixed deck over 1 s with the
+    !! boundary held at its start and the host field the uniform current uc.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
+    REAL(wp), INTENT(IN) :: uc(3)
+    REAL(wp), INTENT(OUT) :: rel
+    REAL(wp), PARAMETER :: DT = 0.05_wp
+    REAL(wp), ALLOCATABLE :: fu(:, :), fud(:, :), wl(:), r(:, :), v(:, :), a(:, :), l0(:, :), l1(:, :)
+    INTEGER :: nf, nm, s, ni, k, es
+    LOGICAL :: cv, st
+    CHARACTER(1024) :: em
+    rel = HUGE(1.0_wp)
+    nf = CD_AGG_NFluidNodes(agg, es, em)
+    IF (es /= CD_AGG_OK) RETURN
+    ALLOCATE (fu(3, nf), fud(3, nf), wl(nf))
+    DO k = 1, nf
+      fu(:, k) = uc
+    END DO
+    fud = 0.0_wp
+    wl = 0.0_wp
+    CALL CD_AGG_SetFluidFields(agg, fu, fud, wl, es, em)
+    CALL require(es == CD_AGG_OK, 'static-current:set-fields: '//TRIM(em))
+    nm = 2
+    ALLOCATE (r(3, nm), v(3, nm), a(3, nm), l0(3, nm), l1(3, nm))
+    CALL CD_AGG_CalcOutput(agg, es, em)
+    CALL CD_AGG_GetMovingPointMesh(agg, r, v, a, l0, es, em)
+    v = 0.0_wp
+    a = 0.0_wp
+    DO s = 1, 20
+      CALL CD_AGG_Step_Moving(agg, DT, r, v, a, cv, st, ni, es, em)
+      CALL require(es == CD_AGG_OK .AND. cv, 'static-current:held-step: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+    END DO
+    CALL CD_AGG_CalcOutput(agg, es, em)
+    CALL CD_AGG_GetMovingPointMesh(agg, r, v, a, l1, es, em)
+    rel = nan_max_abs(l1 - l0)/nan_max_abs(l0)
+  END SUBROUTINE held_drift
 
   SUBROUTINE case_restart_line_control()
     !! CHECKPOINT-RESTART of a controlled EI = 0 deck, bit for bit (the shell rebuild's

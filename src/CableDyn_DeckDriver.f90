@@ -6814,7 +6814,7 @@ CONTAINS
   SUBROUTINE CD_Init_Deck_Aggregate(deck_path, dt, agg, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                    range_files, host_orientation)
+                                    range_files, host_orientation, static_current)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -6886,6 +6886,14 @@ CONTAINS
     ! restrained in torsion. Without it (the C API, the standalone mixed route) a deck with
     ! torsion columns fails closed rather than holding that frame fixed.
     LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
+    ! static_current (4, n): the host's steady current as a depth profile, rows z (ascending),
+    ! ux, uy, uz -- the OpenFAST shell's SeaState CurrMod 1 current at SeaState's grid levels.
+    ! With external_fluid and the host current on, the static solves (bodies and rods, points,
+    ! EI = 0 lines, finite-EI cables) take it as a deck current profile, so the coupled start
+    ! is the equilibrium in that current, as a standalone deck's is in its current OPTION. The
+    ! dynamics take the host field alone: the profile goes into a copy of the options that
+    ! only the static builders see.
+    REAL(wp), INTENT(IN), OPTIONAL :: static_current(:, :)
 
     INTEGER :: nturb
     LOGICAL :: host_turns
@@ -6897,6 +6905,8 @@ CONTAINS
     TYPE(DeckLine), ALLOCATABLE :: lines(:), ei0_lines(:)
     TYPE(DeckSection), ALLOCATABLE :: sections(:)
     TYPE(DeckOptions) :: opts
+    ! opts plus the host's steady current (static_current): the options of the static builders
+    TYPE(DeckOptions) :: opts_static
     CHARACTER(NAMELEN), ALLOCATABLE :: channels(:)
     TYPE(CD_BathymetryType) :: bathymetry
     TYPE(DeckFailure), ALLOCATABLE :: fails(:)
@@ -7361,6 +7371,32 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END IF
 
+    ! The static builders' options: the deck's, plus the host's steady current when the host
+    ! current drives this deck (a WaterKin CurrentMod 1 file keeps its own profile instead).
+    opts_static = opts
+    IF (PRESENT(static_current)) THEN
+      IF (.NOT. opts%external_fluid) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: static_current needs the host fluid field '// &
+                  '(external_fluid)'); RETURN
+      END IF
+      IF (SIZE(static_current, 1) /= 4 .OR. SIZE(static_current, 2) < 2) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: static_current must be shaped (4, n >= 2): '// &
+                  'z, ux, uy, uz'); RETURN
+      END IF
+      IF (.NOT. ALL(IEEE_IS_FINITE(static_current))) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: static_current must be finite'); RETURN
+      END IF
+      IF (ANY(static_current(1, 2:) <= static_current(1, :SIZE(static_current, 2) - 1))) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: static_current levels must ascend in z'); RETURN
+      END IF
+      IF (agg%host_current_enabled .AND. .NOT. (opts%has_current .OR. opts%has_current_profile)) THEN
+        opts_static%has_current = .TRUE.
+        opts_static%has_current_profile = .TRUE.
+        opts_static%current_profile_z = static_current(1, :)
+        opts_static%current_profile_velocity = static_current(2:4, :)
+      END IF
+    END IF
+
     ! Free Rigid6 bodies and free rods start at their static equilibrium with the host's coupled
     ! points held at their initial (PtfmInit) pose, as on the standalone route (bodyIC static;
     ! bodyIC deck keeps the deck pose). The solve moves the bodies' start pose and the rod and
@@ -7370,11 +7406,12 @@ CONTAINS
         CALL load_bathymetry_file(path_join(deck_dir(deck_path), opts%bathymetry_file), bathymetry, ErrStat, ErrMsg, &
                                   points=points)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        CALL solve_body_equilibrium(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, ErrMsg, &
-                                    bathymetry=bathymetry)
+        CALL solve_body_equilibrium(types, bodies, rod_types, rods, points, lines, sections, opts_static, ErrStat, &
+                                    ErrMsg, bathymetry=bathymetry)
         CALL CD_End_Bathymetry(bathymetry)
       ELSE
-        CALL solve_body_equilibrium(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, ErrMsg)
+        CALL solve_body_equilibrium(types, bodies, rod_types, rods, points, lines, sections, opts_static, ErrStat, &
+                                    ErrMsg)
       END IF
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         ErrMsg = 'CD_Init_Deck_Aggregate: '//TRIM(ErrMsg)
@@ -7401,12 +7438,12 @@ CONTAINS
         CALL load_bathymetry_file(path_join(deck_dir(deck_path), opts%bathymetry_file), bathymetry, ErrStat, ErrMsg, &
                                   points=points)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        CALL init_deck_system_from_parsed(types, points, ei0_lines, sections, opts, agg%sys, ErrStat, ErrMsg, &
-                                          bathymetry=bathymetry, failures=fails)
+        CALL init_deck_system_from_parsed(types, points, ei0_lines, sections, opts_static, agg%sys, ErrStat, &
+                                          ErrMsg, bathymetry=bathymetry, failures=fails)
         CALL CD_End_Bathymetry(bathymetry)
       ELSE
-        CALL init_deck_system_from_parsed(types, points, ei0_lines, sections, opts, agg%sys, ErrStat, ErrMsg, &
-                                          failures=fails)
+        CALL init_deck_system_from_parsed(types, points, ei0_lines, sections, opts_static, agg%sys, ErrStat, &
+                                          ErrMsg, failures=fails)
       END IF
       IF (ErrStat /= CD_DECKDRV_OK) THEN
         CALL CD_End_Deck_Aggregate(agg); RETURN
@@ -7475,14 +7512,14 @@ CONTAINS
             fairlead_dcm = ptfm_zyx_dcm(ptfm_init(4:6))
           END IF
           IF (opts%has_bathymetry_file) THEN
-            CALL build_one_hermite_cable(lines(i), sections, types, points, opts, dt, agg%cables(c), cn, es, em, &
-                                         bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, &
+            CALL build_one_hermite_cable(lines(i), sections, types, points, opts_static, dt, agg%cables(c), cn, es, &
+                                         em, bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, &
                                          init_note=agg%cable_note(c), install_viv=.TRUE., &
                                          fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
                                                             deck_has_dynamic_points(points)))
           ELSE
-            CALL build_one_hermite_cable(lines(i), sections, types, points, opts, dt, agg%cables(c), cn, es, em, &
-                                         fairlead_orientation=fairlead_dcm, init_note=agg%cable_note(c), &
+            CALL build_one_hermite_cable(lines(i), sections, types, points, opts_static, dt, agg%cables(c), cn, es, &
+                                         em, fairlead_orientation=fairlead_dcm, init_note=agg%cable_note(c), &
                                          install_viv=.TRUE., &
                                          fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
                                                             deck_has_dynamic_points(points)))
