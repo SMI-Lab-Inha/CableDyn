@@ -13,11 +13,13 @@ PROGRAM test_nodal_twist_dynamic
   !!      roll at one end below its first torsional mode, carries at the other end the torque of
   !!      the continuum, GJ A k / sin(kL) with k = Omega sqrt(Irn/GJ);
   !!   D  torsional damping: the first torsional mode rings down at zeta_1 = omega_1 Bt/(2 GJ);
+  !!      a parent rolling its end frame at a steady rate Omega (negligible Irn) loads the held
+  !!      end with (GJ theta + Bt Omega)/L, the damping of the frame's own turn included;
   !!   E  energy: free vibration of a bowed, twisted line with a real Irn (rho_inf = 1): kinetic
   !!      (with the polar part) + elastic (with the twist) stays within the band of the line
   !!      without torsion;
-  !!   R  restart: a rolling run restored from a snapshot, and one rebuilt from the checkpoint
-  !!      mirror, continue bit-identically.
+  !!   R  restart: a rolling, torsionally damped run restored from a snapshot, and one rebuilt
+  !!      from the checkpoint mirror, continue bit-identically.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -43,6 +45,7 @@ PROGRAM test_nodal_twist_dynamic
   CALL check_quasi_static('elastic', .FALSE., 0.05_wp)
   CALL check_waves()
   CALL check_damping()
+  CALL check_frame_damping()
   CALL check_energy()
   CALL check_restart()
 
@@ -95,12 +98,13 @@ CONTAINS
     END DO
   END SUBROUTINE line_seed
 
-  SUBROUTINE torsion_of(q, phi, tors, irn, compliance)
+  SUBROUTINE torsion_of(q, phi, tors, irn, compliance, bt)
     !! Torsion of the line: both ends along +x with reference normal +z, GJ on every element,
     !! imposed twist phi, Theta of the seed q (branch nearest 0); irn > 0 adds the polar inertia
-    !! (nodal twist), compliance the torsional end compliances.
+    !! (nodal twist), compliance the torsional end compliances, bt the torsional damping.
     REAL(wp), INTENT(IN) :: q(NDOF), phi, irn, compliance
     TYPE(CD_HermiteTorsionType), INTENT(OUT) :: tors
+    REAL(wp), INTENT(IN), OPTIONAL :: bt
     REAL(wp) :: g(NDOF), raw, l0(NE)
     INTEGER :: es
     CHARACTER(200) :: em
@@ -116,19 +120,24 @@ CONTAINS
       ALLOCATE (tors%irn(NE))
       tors%irn = irn
     END IF
+    IF (PRESENT(bt)) THEN
+      ALLOCATE (tors%bt(NE))
+      tors%bt = bt
+    END IF
     CALL CD_HermiteTorsion_Line(q, l0, tors%ends, raw, g, es, em)
     CALL require(es == CD_HTORS_OK, 'seed twist evaluates: '//TRIM(em))
     tors%theta = CD_HermiteTorsion_Unwrap(raw, 0.0_wp)
     tors%has_theta = .TRUE.
   END SUBROUTINE torsion_of
 
-  SUBROUTINE build_cable(cab, q, phi, dt, tol, rho_inf, pinned, irn, compliance)
+  SUBROUTINE build_cable(cab, q, phi, dt, tol, rho_inf, pinned, irn, compliance, bt)
     !! HFMF cable on seed q: node NN coupled (driven), node 1 held; Rigid bending connections
     !! along +x at both ends (none with pinned), the coupled one in parent axes (identity
-    !! attitude); torsion with the coupled end's frame attached to the parent.
+    !! attitude); torsion with the coupled end's frame attached to the parent (damping bt).
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cab
     REAL(wp), INTENT(IN) :: q(NDOF), phi, dt, tol, rho_inf, irn, compliance
     LOGICAL, INTENT(IN) :: pinned
+    REAL(wp), INTENT(IN), OPTIONAL :: bt
     TYPE(CD_HermiteTorsionType) :: tors
     REAL(wp) :: l0(NE), eye(3, 3), frame(3, 2)
     INTEGER :: es
@@ -146,7 +155,7 @@ CONTAINS
                                      connection_mode=[CD_ENDCONN_RIGID, CD_ENDCONN_RIGID])
       CALL require(es == CD_HFMF_OK, 'cable end connections: '//TRIM(em))
     END IF
-    CALL torsion_of(q, phi, tors, irn, compliance)
+    CALL torsion_of(q, phi, tors, irn, compliance, bt)
     frame(:, 1) = [1.0_wp, 0.0_wp, 0.0_wp]
     frame(:, 2) = [0.0_wp, 0.0_wp, 1.0_wp]
     CALL CD_HFMF_Set_Torsion(cab, tors, es, em, coupled_frame_parent=frame, parent_orientation=eye)
@@ -364,6 +373,50 @@ CONTAINS
   END SUBROUTINE check_damping
 
   ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_frame_damping()
+    !! D: the straight clamped line with Irn = 1e-9 kg m and Bt = 40 N m2 s; the parent rolls the
+    !! coupled end's frame (the imposed twist stays 0) at a rate eased in to OMR over 1 s, then
+    !! steady. Every element carries the torque, so the held end reads (GJ theta + Bt theta_dot)/L
+    !! with theta the parent's roll: the damping of the twist the frame's turn puts into the end
+    !! element (a sixth of the torque here) included.
+    REAL(wp), PARAMETER :: BT = 40.0_wp, OMR = 0.5_wp, TR = 1.0_wp, DT = 0.01_wp
+    INTEGER, PARAMETER :: NSTEP = 300
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab
+    REAL(wp) :: q(NDOF), x(3), t, ang, rate, ntq(NN), expect, err, mref
+    INTEGER :: k, es
+    CHARACTER(300) :: em
+    ALLOCATE (cab)
+    CALL line_seed(0.0_wp, 0.0_wp, q)
+    CALL build_cable(cab, q, 0.0_wp, DT, 1.0e-11_wp, 0.8_wp, .FALSE., 1.0e-9_wp, 0.0_wp, bt=BT)
+    x = q(NDOF - 5:NDOF - 3)
+    err = 0.0_wp
+    mref = (GJ*OMR*REAL(NSTEP, wp)*DT + BT*OMR)/LL
+    DO k = 1, NSTEP
+      t = DT*REAL(k, wp)
+      IF (t < TR) THEN
+        ang = OMR*(t**3/TR**2 - 0.5_wp*t**4/TR**3)
+        rate = OMR*(3.0_wp*t**2/TR**2 - 2.0_wp*t**3/TR**3)
+      ELSE
+        ang = OMR*(t - 0.5_wp*TR)
+        rate = OMR
+      END IF
+      CALL CD_HFMF_UpdateStates(cab, x, [0.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 0.0_wp, 0.0_wp], es, em, &
+                                u_orientation=roll_x(ang))
+      CALL require(es == CD_HFMF_OK, 'D frame: step: '//TRIM(em))
+      IF (es /= CD_HFMF_OK) EXIT
+      IF (t > TR + 0.5_wp) THEN
+        CALL CD_HermiteCable_Dyn_Node_Torque(cab%line, ntq, es, em)
+        expect = (GJ*ang + BT*rate)/LL
+        err = MAX(err, MAXVAL(ABS(ABS(ntq) - expect))/mref)
+      END IF
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES12.5,A,ES12.5)') 'D frame-driven damping: node torques against (GJ theta + Bt Omega)/L ', &
+      err, '; held end ', ntq(1), ', elastic part ', GJ*ang/LL
+    CALL require(err <= 1.0e-4_wp, 'D: a turning end frame loads the line with its torsional damping')
+    CALL CD_HFMF_End(cab)
+  END SUBROUTINE check_frame_damping
+
+  ! ------------------------------------------------------------------------------------------
   SUBROUTINE energy_run(phi, irn, band, e_vib)
     !! Free vibration of the bowed line clamped at both ends (no gravity, no fluid), rho_inf = 1,
     !! ten periods of the first bending mode; band = (max - min) of kinetic + elastic over the
@@ -434,7 +487,7 @@ CONTAINS
     CHARACTER(300) :: em
     ALLOCATE (cab, cab2)
     CALL line_seed(0.3_wp, 0.1_wp, q)
-    CALL build_cable(cab, q, 1.0_wp, 0.01_wp, 1.0e-10_wp, 0.8_wp, .FALSE., 0.05_wp, 0.0_wp)
+    CALL build_cable(cab, q, 1.0_wp, 0.01_wp, 1.0e-10_wp, 0.8_wp, .FALSE., 0.05_wp, 0.0_wp, bt=0.5_wp)
     CALL march(cab, 0, 150, ok)
     CALL require(ok, 'R: first leg')
     CALL CD_HFMF_Snapshot(cab, es, em)
@@ -454,7 +507,7 @@ CONTAINS
     CALL require(ok .AND. ALL(bits(qb) == bits(qref)) .AND. ALL(bits(pb) == bits(pref)), &
                  'R: the restored run continues bit-identically')
     CALL line_seed(0.3_wp, 0.1_wp, q)
-    CALL build_cable(cab2, q, 1.0_wp, 0.01_wp, 1.0e-10_wp, 0.8_wp, .FALSE., 0.05_wp, 0.0_wp)
+    CALL build_cable(cab2, q, 1.0_wp, 0.01_wp, 1.0e-10_wp, 0.8_wp, .FALSE., 0.05_wp, 0.0_wp, bt=0.5_wp)
     CALL CD_HFMF_UnpackMirror(cab2, mirror, 1.5_wp, es, em)
     CALL require(es == CD_HFMF_OK, 'R: mirror reload: '//TRIM(em))
     CALL march(cab2, 150, 250, ok)

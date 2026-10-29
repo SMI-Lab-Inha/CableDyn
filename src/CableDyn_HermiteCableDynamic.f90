@@ -51,6 +51,7 @@ MODULE CableDyn_HermiteCableDynamic
   !!                                + (1-alpha_f) gamma/(beta dt) Kv(q_alpha, v_alpha),
   !! where Kv = dR/dv is the drag velocity Jacobian and gamma/(beta dt) = d v_{n+1}/d q_{n+1}.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite, CD_Is_Finite
+  USE CableDyn_SO3, ONLY: CD_Log_SO3
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE CableDyn_EndConnection, ONLY: CD_EndConn_Spring, CD_EndConn_Energy, &
                                     CD_EndConn_Reaction_Moment, CD_EndConn_Basis, &
@@ -489,6 +490,10 @@ MODULE CableDyn_HermiteCableDynamic
     ! the step's residual norm.
     REAL(wp) :: tw_tsum = CD_ZERO, tw_spsi(2) = CD_ZERO, tw_tscale = CD_ONE
     REAL(wp), ALLOCATABLE :: tw_su(:, :), tw_stn(:, :), tw_sbeta(:)
+    ! tw_som(:, k): the angular velocity of end frame k over the running step, log(R_{n+1}
+    ! R_n^T)/dt (R = [d n d x n]); tw_om: that of the committed step. A turning frame twists
+    ! the element at a rigid end through rho, and the torsional damping takes that rate.
+    REAL(wp) :: tw_som(3, 2) = CD_ZERO, tw_om(3, 2) = CD_ZERO
     ! Packed twist state (tw_pack) of the recovering step's interval start and of the snapshot,
     ! and the snapshot's tw_fcR.
     REAL(wp), ALLOCATABLE :: ws_recovery_tw(:), snap_tw(:), snap_tw_fcR(:)
@@ -3872,6 +3877,7 @@ CONTAINS
     ! Condensed torsion: F_n above used the committed end frames and Phi; every evaluation of the
     ! step from here on uses the step's target (set by CD_HermiteCable_Dyn_Step).
     model%tors_use_step = model%torsion%active
+    IF (model%tw_active) CALL tw_frame_rates(model, dt)
     ! Newton predictor. The standard Newmark guess q_n + dt v_n + dt^2 (1/2 - beta) a_n (the
     ! acceleration map's base a_{n+1} = 0) is a far better start than q_n when the state is
     ! moving. When the committed acceleration is the physical one, the constant-acceleration
@@ -4542,6 +4548,7 @@ CONTAINS
         model%tw_w(iv) = model%tw_wn(iv) + dt*((CD_ONE - gm)*model%tw_an(iv) + gm*model%tw_ak(iv))
       END DO
       CALL tw_commit_reference(model)
+      model%tw_om = model%tw_som
       DO iv = 1, model%ne
         model%tw_mt(iv) = model%tw_me(iv)
       END DO
@@ -6754,8 +6761,8 @@ CONTAINS
   PURE INTEGER FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size(model) RESULT(n)
     !! Reals of the nodal-twist checkpoint mirror (CD_HermiteCable_Dyn_Twist_Pack): the
     !! committed angles, rates and accelerations, directors, reference tangents, reference
-    !! twists, element torques, end-frame references and the force cache's angle part; 0 without
-    !! the nodal twist.
+    !! twists, element torques, end-frame references and rates, and the force cache's angle
+    !! part; 0 without the nodal twist.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     n = 0
     IF (model%tw_active) n = tw_pack_size(model) + model%nn
@@ -7970,6 +7977,8 @@ CONTAINS
     model%tw_lk = CD_ZERO
     model%tw_tsum = CD_ZERO
     model%tw_spsi = CD_ZERO
+    model%tw_som = CD_ZERO
+    model%tw_om = CD_ZERO
     model%tw_tscale = CD_ONE
     model%snap_valid = .FALSE.
     model%require_tensile = .FALSE.
@@ -8613,10 +8622,10 @@ CONTAINS
 
   PURE INTEGER FUNCTION tw_pack_size(model) RESULT(n)
     !! Reals of the packed twist state of tw_pack: the angles, rates and accelerations, the
-    !! directors and unit tangents, the reference twists, the element torques and the two
-    !! end-frame references.
+    !! directors and unit tangents, the reference twists, the element torques, the two
+    !! end-frame references and the end frames' angular velocities of the committed step.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
-    n = 9*model%nn + 2*model%ne + 2
+    n = 9*model%nn + 2*model%ne + 8
   END FUNCTION tw_pack_size
 
   PURE SUBROUTINE tw_pack(model, buf)
@@ -8633,6 +8642,7 @@ CONTAINS
     buf(9*nn + 1:9*nn + ne) = model%tw_beta
     buf(9*nn + ne + 1:9*nn + 2*ne) = model%tw_mt
     buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2) = model%tw_psi
+    buf(9*nn + 2*ne + 3:9*nn + 2*ne + 8) = RESHAPE(model%tw_om, [6])
   END SUBROUTINE tw_pack
 
   PURE SUBROUTINE tw_unpack(model, buf)
@@ -8649,6 +8659,7 @@ CONTAINS
     model%tw_beta = buf(9*nn + 1:9*nn + ne)
     model%tw_mt = buf(9*nn + ne + 1:9*nn + 2*ne)
     model%tw_psi = buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2)
+    model%tw_om = RESHAPE(buf(9*nn + 2*ne + 3:9*nn + 2*ne + 8), [3, 2])
   END SUBROUTINE tw_unpack
 
   ELEMENTAL REAL(wp) FUNCTION tw_wrap(x) RESULT(y)
@@ -8925,6 +8936,8 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), POINTER :: phi(:), w(:)
     REAL(wp) :: ends(3, 4), phi_end, rho, beta, g(12), h(12, 12), ve(12), hv(12), ke(12, 12), kel, kd
+    REAL(wp) :: om(3, 2), ew(3, 2)
+    LOGICAL :: turning
     REAL(wp) :: tau, rate, mt, psi, gl(3), hl(3, 3), k, tw
     INTEGER :: e, iend, node, b, i, j, es
     CHARACTER(1024) :: em
@@ -8941,8 +8954,20 @@ CONTAINS
     END IF
     IF (want_residual) model%tw_R = CD_ZERO
     model%tw_tsum = CD_ZERO
+    om = MERGE(model%tw_som, model%tw_om, model%tors_use_step)
+    turning = ANY(om /= CD_ZERO) .AND. ALLOCATED(model%torsion%bt)
     DO e = 1, model%ne
-      CALL twist_reference(model, e, q_cfg, ends, want_tangent, rho, beta, g, h, es, em)
+      kd = CD_ZERO
+      IF (ALLOCATED(model%torsion%bt)) kd = model%torsion%bt(e)/model%l0(e)
+      ! an element at a rigid end twists through rho as its end frame turns: its damping rate
+      ! takes d rho/dw . omega of the frames (the tangent keeps the rate's q-dependence through
+      ! g only, as the frame's share of it is of order omega dt)
+      IF (turning .AND. kd > CD_ZERO .AND. (e == 1 .OR. e == model%ne)) THEN
+        CALL twist_reference(model, e, q_cfg, ends, want_tangent, rho, beta, g, h, es, em, end_w=ew)
+      ELSE
+        CALL twist_reference(model, e, q_cfg, ends, want_tangent, rho, beta, g, h, es, em)
+        ew = CD_ZERO
+      END IF
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es
         ErrMsg = TRIM(em)
@@ -8950,10 +8975,9 @@ CONTAINS
       END IF
       ve = v_cfg(6*e - 5:6*e + 6)
       kel = model%torsion%gj(e)/model%l0(e)
-      kd = CD_ZERO
-      IF (ALLOCATED(model%torsion%bt)) kd = model%torsion%bt(e)/model%l0(e)
       tau = phi(e + 1) - phi(e) + rho
       rate = w(e + 1) - w(e) + DOT_PRODUCT(g, ve)
+      IF (turning .AND. kd > CD_ZERO) rate = rate + DOT_PRODUCT(ew(:, 1), om(:, 1)) + DOT_PRODUCT(ew(:, 2), om(:, 2))
       mt = kel*tau + kd*rate
       model%tw_me(e) = mt
       model%tw_tsum = model%tw_tsum + tau
@@ -9220,6 +9244,8 @@ CONTAINS
     ! a rigid end's element takes its end-frame constant in tw_beta: its formula at the
     ! committed state is tw_beta itself, so take the director angle of the gauge directly
     model%tw_psi = CD_ZERO
+    model%tw_som = CD_ZERO
+    model%tw_om = CD_ZERO
     IF (.NOT. model%tw_rigid(1)) model%tw_psi(1) = CD_HermiteTwist_Angle(model%tw_u(:, 1), &
                                                                          CD_HermiteTwist_Carry(ends(:, 1), &
                                                                                                model%tw_tn(:, 1), &
@@ -9364,6 +9390,25 @@ CONTAINS
       model%tw_su(:, i) = u/NORM2(u)
     END DO
   END SUBROUTINE tw_advance_reference
+
+  SUBROUTINE tw_frame_rates(model, dt)
+    !! tw_som: the angular velocity of each end frame from the committed frames to the step's,
+    !! log(R_{n+1} R_n^T)/dt with R = [d n d x n] (spatial, as end_w of twist_reference).
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: dt
+    REAL(wp) :: r0(3, 3), r1(3, 3)
+    INTEGER :: k
+    model%tw_som = CD_ZERO
+    IF (.NOT. dt > CD_ZERO) RETURN
+    DO k = 1, 2
+      IF (ALL(model%tors_step_ends(:, 2*k - 1:2*k) == model%torsion%ends(:, 2*k - 1:2*k))) CYCLE
+      r0(:, 1:2) = model%torsion%ends(:, 2*k - 1:2*k)
+      r0(:, 3) = tw_cross(r0(:, 1), r0(:, 2))
+      r1(:, 1:2) = model%tors_step_ends(:, 2*k - 1:2*k)
+      r1(:, 3) = tw_cross(r1(:, 1), r1(:, 2))
+      model%tw_som(:, k) = CD_Log_SO3(MATMUL(r1, TRANSPOSE(r0)))/dt
+    END DO
+  END SUBROUTINE tw_frame_rates
 
   SUBROUTINE tw_commit_reference(model)
     !! Make the reference state of tw_advance_reference the committed one.
