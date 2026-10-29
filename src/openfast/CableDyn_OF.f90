@@ -52,12 +52,16 @@ MODULE CableDyn
    !! wave/current kinematics sampled at the line nodes (single-turbine only; see the
    !! farm scope at the use_extf guard), checkpoint restart (rebuild from the packed
    !! deck + state mirror, accepted on committed mooring-interval boundaries),
-   !! linearization (quasi-static dYdu only -- no dynamic state linearization; the
-   !! module registers zero continuous states and CD_CalcContStateDeriv stays fatal
-   !! by design), and FAST.Farm farm-level moorings (FarmSize > 0: Turbine<J> decks,
+   !! linearization with the line dynamics (as MoorDyn-F: the continuous states are the
+   !! EI=0 lines' interior-node positions and the finite-EI cables' free DOFs, positions
+   !! and tangents, then their velocities, and the rope models' constitutive states; A, B, C
+   !! and D by central differences of lin_eval, the accelerations and state rates evaluated
+   !! at the perturbed state; Free/Connect points, VIV lines, bodies, rods, Point3 buoys,
+   !! torsion, CONTROL and rigid cable ends fail closed), and
+   !! FAST.Farm farm-level moorings (FarmSize > 0: Turbine<J> decks,
    !! per-turbine coupled meshes, shared lines; still-water hydro; farm restart and
-   !! farm linearization fail closed with named messages). Checkpoint restart and
-   !! linearization re-parse a temporary copy of the deck, written next to the
+   !! farm linearization fail closed with named messages). Checkpoint restart re-parses a
+   !! temporary copy of the deck, written next to the
    !! MooringFile (so its side files resolve as in the original run) and removed after
    !! use.
    !!
@@ -94,7 +98,7 @@ MODULE CableDyn
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
                                            CD_HFMF_FrictionMirrorSize, CD_HFMF_BoundaryMirrorSize, &
                                            CD_HFMF_ForceMirrorSize, CD_HFMF_TorsionMirrorSize, CD_HFMF_VIVMirrorSize, &
-                                           CD_HFMF_OK
+                                           CD_HFMF_Refresh_Acceleration, CD_HFMF_OK
    USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, &
                                             CD_HermiteCable_Dyn_Disable_Profile, &
                                             CD_HermiteCable_Dyn_Get_Profile, &
@@ -104,6 +108,8 @@ MODULE CableDyn
    USE CableDyn_LoadPredictor, ONLY: CD_Predictor_Ready, CD_Predictor_Fraction, CD_Predict_Loads
    USE CableDyn_Profile, ONLY: CD_Profile_Arm, CD_Profile_Disarm, CD_Profile_Kernels, CD_PROF_K_RESIDUAL, &
                                CD_PROF_K_TANGENT, CD_PROF_K_FACTOR, CD_PROF_K_SOLVE, CD_PROF_NKERNEL
+   USE CableDyn_System, ONLY: CD_Get_System_Line_Stretch, CD_Get_System_Line_Internal_Rates
+   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
    USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_System_Line_NElem, &
                               CD_Get_System_DynamicPoint_States, CD_Set_System_DynamicPoint_States, &
                               CD_System_NSystemCoupledDOF, CD_Get_System_CoupledMotion, &
@@ -125,6 +131,9 @@ MODULE CableDyn
    IMPLICIT NONE
 
    PRIVATE
+
+   ! the kinds of first-order linearization state (lin_state_map)
+   INTEGER(IntKi), PARAMETER :: LIN1_VE = 1, LIN1_SYROPE = 2
 
    TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.3.0', '2026-10-23' )
    INTERFACE
@@ -192,6 +201,16 @@ MODULE CableDyn
       ! restored after (the boundary-only restore recomputes interior accelerations,
       ! which are gen-alpha COMMITTED values, not (q, v)-derivable)
       REAL(R8Ki), ALLOCATABLE :: ws_msave(:)
+      ! Linearization with the line dynamics (lin_state_map): for every state, its position,
+      ! velocity and acceleration slots in the x%states mirror, and the mirror save/work
+      ! buffers of lin_eval
+      LOGICAL                 :: lin_states = .FALSE.
+      INTEGER(IntKi), ALLOCATABLE :: lin_pos(:), lin_vel(:), lin_acc(:)
+      ! the first-order linearization states, the per-element constitutive states of the
+      ! EI = 0 lines: mirror slot, line, element and kind (LIN1_VE: the viscoelastic slow-branch
+      ! stretch dl_1; LIN1_SYROPE: the Syrope slow strain)
+      INTEGER(IntKi), ALLOCATABLE :: lin1_slot(:), lin1_line(:), lin1_elem(:), lin1_kind(:)
+      REAL(R8Ki), ALLOCATABLE :: ws_lsave(:), ws_lwork(:)
       ! FAST.Farm: turbine count (0 = plain single-turbine mode), the driving turbine
       ! per flat aggregate moving slot, that slot's node index within its turbine's
       ! mesh, the farm-layout reference offsets, and the per-turbine PtfmInit.
@@ -562,16 +581,9 @@ CONTAINS
                           'not supported (linearize single-turbine cases).', ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
-      ! Linearize is accepted for the established force-only boundary: the module presents
-      ! the MAP-shaped reduction -- ZERO
-      ! continuous-state variables (CD_InitVars) and a QUASI-STATIC dYdu whose
-      ! displacement columns come from scratch-aggregate static re-solves at the
-      ! perturbed boundary (each init IS a static solve), so the linearized mooring
-      ! is the re-equilibrated stiffness, not the frozen-interior response
-      ! (CD_JacobianPInput). Velocity/acceleration/orientation columns are zero:
-      ! frequency-dependent mooring damping is not representable without states. A
-      ! platform-relative cable end connection is rejected after deck construction below,
-      ! because it introduces orientation-dependent force and moment columns.
+      ! Linearize registers the line states (CD_InitVars, lin_state_map) and differentiates the
+      ! line dynamics (lin_eval); the objects whose states are not linearization states are
+      ! rejected after deck construction below.
       IF (.NOT. InitInp%UsePrimaryInputFile) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: passed-in primary input data is not '// &
                           'supported; provide the MoorDyn-format deck as a file.', ErrStat, ErrMsg, RoutineName )
@@ -779,46 +791,77 @@ CONTAINS
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
-      ! Rigid6 bodies and rods carry their own degrees of freedom, but the quasi-static
-      ! linearization re-solves only the line and point equilibrium at each perturbed
-      ! boundary and holds them at their deck pose, so its dYdu would silently omit
-      ! their compliance. Fail closed until body-state linearization exists.
+      ! Rigid6 bodies and rods carry their own degrees of freedom, which are not linearization
+      ! states (the states are the line and cable DOFs): the linearization would hold them
+      ! where they are and omit their compliance. Fail closed until body-state linearization
+      ! exists.
       IF (InitInp%Linearize .AND. (CD_AGG_HasRigid6( Inst(id)%agg ) .OR. CD_AGG_HasRod( Inst(id)%agg ))) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
-                          'with Rigid6 bodies or RODs is not supported; the quasi-static reduction '// &
-                          'holds them at their deck pose instead of re-solving their equilibrium '// &
-                          '(linearize a deck without BODIES/RODS).', ErrStat, ErrMsg, RoutineName )
+                          'with Rigid6 bodies or RODs is not supported; their states are not '// &
+                          'linearization states (linearize a deck without BODIES/RODS).', &
+                          ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
-      ! A Point3 buoy steps as a Free point, but the static solve holds it at its deck position:
-      ! each perturbed re-solve would leave it there and omit its compliance as well.
+      ! A Point3 buoy steps as a Free point with its own state, which is not a linearization
+      ! state either.
       IF (InitInp%Linearize .AND. CD_AGG_HasPoint3( Inst(id)%agg )) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
-                          'with Point3 buoys is not supported; the quasi-static reduction holds a '// &
-                          'Point3 buoy at its deck position instead of re-solving its equilibrium '// &
-                          '(model the buoy as a Free point to linearize).', ErrStat, ErrMsg, RoutineName )
+                          'with Point3 buoys is not supported; their states are not linearization '// &
+                          'states.', ErrStat, ErrMsg, RoutineName )
+         RETURN
+      END IF
+      ! A Free/Connect point steps with its own state through the implicit point-line coupling;
+      ! the linearization states are the line and cable DOFs only, so the point would be held
+      ! where it is and its compliance omitted.
+      ! A line with VIV oscillates about a lock-in limit cycle, not about an equilibrium, and its
+      ! shedding phase and running mean squares are not linearization states either.
+      IF (InitInp%Linearize) THEN
+         DO il = 1, Inst(id)%nlines
+            IF (CD_System_Line_VIV_MirrorSize( Inst(id)%agg%sys%fast%system, il ) > 0) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                                'of a line with VIV (LINE TYPES Cl > 0) is not supported; set Cl = 0 to '// &
+                                'linearize.', ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
+         END DO
+         DO ic = 1, Inst(id)%agg%ncable
+            IF (Inst(id)%agg%cables(ic)%line%has_viv) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                                'of a cable with VIV (LINE TYPES Cl > 0) is not supported; set Cl = 0 to '// &
+                                'linearize.', ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
+         END DO
+      END IF
+      IF (InitInp%Linearize .AND. CD_AGG_NDynamicPoints( Inst(id)%agg ) > 0) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                          'with Free or Connect points is not supported; their states are not '// &
+                          'linearization states (attach the lines to Fixed or Coupled points to '// &
+                          'linearize).', ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
       IF (InitInp%Linearize .AND. Inst(id)%agg%ncable > 0) THEN
          DO ic = 1, Inst(id)%agg%ncable
+            ! a rigid end connection holds the end tangent on the parent's direction, so only
+            ! its axial part is a degree of freedom, which the global-component states cannot
+            ! carry
+            IF (ANY(Inst(id)%agg%cables(ic)%line%endconn_mode == CD_ENDCONN_RIGID)) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                                'of a cable with a rigid end connection is not supported (use a '// &
+                                'finite rotational stiffness in END CONNECTIONS to linearize).', &
+                                ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
             ! a line restrained in torsion returns a torque moment that turns with the platform
             ! even at a bending-pinned end: its rotational stiffness a a^T / C has no column in
             ! the translation-only reduction either
             IF (Inst(id)%agg%cables(ic)%line%torsion%active) THEN
                CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
-                                'of a line restrained in torsion is not supported; the torque''s '// &
-                                'orientation and moment Jacobian columns are not part of the current '// &
-                                'quasi-static reduction (set TorsStiffness Free to linearize).', &
+                                'of a line restrained in torsion is not supported: its condensed torque '// &
+                                'carries no state of its own (set TorsStiffness Free to linearize).', &
                                 ErrStat, ErrMsg, RoutineName )
                RETURN
             END IF
-            IF (.NOT. Inst(id)%agg%cables(ic)%has_parent_endconn) CYCLE
-            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
-                             'with a platform-relative cable end connection is not supported; '// &
-                             'the required orientation and connection-moment Jacobian columns '// &
-                             'are not part of the current quasi-static reduction.', &
-                             ErrStat, ErrMsg, RoutineName )
-            RETURN
          END DO
       END IF
       CALL CD_AGG_GetInitMetadata( Inst(id)%agg, nreportlines, npoints, nsections, nei0, nfinite, es, em )
@@ -1215,6 +1258,11 @@ CONTAINS
       CALL CD_InitVars( InitOut%Vars, u, p, x, y, m, Inst(id), InitInp%Linearize, ErrStat2, ErrMsg2 )
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) RETURN
+      IF (InitInp%Linearize) THEN
+         CALL lin_state_map( Inst(id), m, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) RETURN
+      END IF
 
       ! The time history contains the selected deck channels and is therefore opened only
       ! when nch > 0. The static profile, unconditional and covering every line node
@@ -2645,15 +2693,314 @@ CONTAINS
       CHARACTER(*),                       INTENT( OUT)   :: ErrMsg
 
       character(*), parameter :: RoutineName = 'CD_CalcContStateDeriv'
+      INTEGER(IntKi)          :: ErrStat2
+      CHARACTER(ErrMsgLen)    :: ErrMsg2
 
       ErrStat = ErrID_None
       ErrMsg  = ''
-      ! Only the linearization/GetOP paths reach this routine (the module marches
-      ! implicitly through UpdateStates). CableDyn exposes no continuous states.
-      CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: continuous-state derivatives are part of '// &
-                       'the linearization surface; CableDyn exposes no continuous states to OpenFAST.', &
-                       ErrStat, ErrMsg, RoutineName )
+      ! Only the linearization/GetOP paths reach this routine (the module marches implicitly
+      ! through UpdateStates): dx/dt of the linearization states (lin_eval).
+      IF (.NOT. Inst(m%CDInst)%lin_states) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: continuous-state derivatives exist only '// &
+                          'for a linearization run (Linearize = True).', ErrStat, ErrMsg, RoutineName )
+         RETURN
+      END IF
+      CALL lin_eval( m%CDInst, p, m, u, x, ErrStat2, ErrMsg2, dxdt=dxdt )
+      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
    END SUBROUTINE CD_CalcContStateDeriv
+
+!----------------------------------------------------------------------------------------------------------------------------------
+   SUBROUTINE lin_state_map( inst_e, m, ErrStat, ErrMsg )
+      !! The x%states mirror slots of the linearization states (CD_InitVars under Linearize): for
+      !! every interior DOF of an EI = 0 line and every free DOF of a finite-EI cable, the slot of
+      !! its position, of its velocity and of its acceleration (lin_pos, lin_vel, lin_acc), and the
+      !! mirror buffers of lin_eval.
+      TYPE(CD_OF_Instance), INTENT(INOUT) :: inst_e
+      TYPE(CD_MiscVarType), INTENT(IN)    :: m
+      INTEGER(IntKi),       INTENT(OUT)   :: ErrStat
+      CHARACTER(*),         INTENT(OUT)   :: ErrMsg
+      INTEGER(IntKi) :: il, ic, ndofl, nin, nf, csz, koff, n, k, j, es, n1, k1, kind
+      CHARACTER(ErrMsgLen) :: em
+      LOGICAL, ALLOCATABLE :: mask(:)
+
+      ErrStat = ErrID_None
+      ErrMsg  = ''
+      n = 0
+      DO il = 1, inst_e%nlines
+         ndofl = CD_System_Line_NDOF( inst_e%agg%sys%fast%system, il, es, em )
+         IF (es /= CD_SYSTEM_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, TRIM(em), ErrStat, ErrMsg, 'lin_state_map' ); RETURN
+         END IF
+         n = n + ndofl - 6
+      END DO
+      DO ic = 1, inst_e%agg%ncable
+         IF (CD_HFMF_MirrorSize( inst_e%agg%cables(ic) ) <= 0) CYCLE
+         n = n + COUNT(inst_e%agg%cables(ic)%line%freemask)
+      END DO
+      ! the constitutive states: every viscoelastic and Syrope element, the per-element tail
+      ! after the line's interior block (as pack_state_mirror)
+      n1 = 0
+      DO il = 1, inst_e%nlines
+         n1 = n1 + COUNT(lin1_element(il, LIN1_VE)) + COUNT(lin1_element(il, LIN1_SYROPE))
+      END DO
+      IF (ALLOCATED(inst_e%lin1_slot)) DEALLOCATE (inst_e%lin1_slot, inst_e%lin1_line, inst_e%lin1_elem, &
+                                                   inst_e%lin1_kind)
+      ALLOCATE (inst_e%lin1_slot(n1), inst_e%lin1_line(n1), inst_e%lin1_elem(n1), inst_e%lin1_kind(n1), STAT=es)
+      IF (es /= 0) THEN
+         CALL SetErrStat( ErrID_Fatal, 'Could not allocate the linearization state map.', ErrStat, ErrMsg, &
+                          'lin_state_map' ); RETURN
+      END IF
+      k1 = 0
+      DO il = 1, inst_e%nlines
+         nin = CD_System_Line_NDOF( inst_e%agg%sys%fast%system, il, es, em ) - 6
+         DO kind = LIN1_VE, LIN1_SYROPE
+            mask = lin1_element(il, kind)
+            DO j = 1, SIZE(mask)
+               IF (.NOT. mask(j)) CYCLE
+               k1 = k1 + 1
+               inst_e%lin1_slot(k1) = m%LineStateIs1(il) + 3*nin + j - 1
+               inst_e%lin1_line(k1) = il
+               inst_e%lin1_elem(k1) = j
+               inst_e%lin1_kind(k1) = kind
+            END DO
+         END DO
+      END DO
+      IF (ALLOCATED(inst_e%lin_pos)) DEALLOCATE (inst_e%lin_pos, inst_e%lin_vel, inst_e%lin_acc)
+      IF (ALLOCATED(inst_e%ws_lsave)) DEALLOCATE (inst_e%ws_lsave, inst_e%ws_lwork)
+      ALLOCATE (inst_e%lin_pos(n), inst_e%lin_vel(n), inst_e%lin_acc(n), inst_e%ws_lsave(m%Nx), &
+                inst_e%ws_lwork(m%Nx), STAT=es)
+      IF (es /= 0) THEN
+         CALL SetErrStat( ErrID_Fatal, 'Could not allocate the linearization state map.', ErrStat, ErrMsg, &
+                          'lin_state_map' ); RETURN
+      END IF
+      ! a mooring line's interior block is [v; r; a], 3 (N - 1) each, at LineStateIs1
+      k = 0
+      DO il = 1, inst_e%nlines
+         ndofl = CD_System_Line_NDOF( inst_e%agg%sys%fast%system, il, es, em )
+         nin = ndofl - 6
+         DO j = 0, nin - 1
+            k = k + 1
+            inst_e%lin_vel(k) = m%LineStateIs1(il) + j
+            inst_e%lin_pos(k) = m%LineStateIs1(il) + nin + j
+            inst_e%lin_acc(k) = m%LineStateIs1(il) + 2*nin + j
+         END DO
+      END DO
+      ! a cable's mirror starts [v_free; q_free; a_free], after the mooring block
+      koff = 0
+      IF (inst_e%nlines > 0) koff = m%LineStateIsN(inst_e%nlines)
+      DO ic = 1, inst_e%agg%ncable
+         csz = CD_HFMF_MirrorSize( inst_e%agg%cables(ic) )
+         IF (csz <= 0) CYCLE
+         nf = COUNT(inst_e%agg%cables(ic)%line%freemask)
+         DO j = 1, nf
+            k = k + 1
+            inst_e%lin_vel(k) = koff + j
+            inst_e%lin_pos(k) = koff + nf + j
+            inst_e%lin_acc(k) = koff + 2*nf + j
+         END DO
+         koff = koff + csz
+      END DO
+      inst_e%lin_states = .TRUE.
+
+   CONTAINS
+
+      FUNCTION lin1_element(il_, kind_) RESULT(msk)
+         !! The elements of line il_ carrying a constitutive state of kind kind_.
+         INTEGER(IntKi), INTENT(IN) :: il_, kind_
+         LOGICAL, ALLOCATABLE :: msk(:)
+         msk = lin1_mask( inst_e, il_, kind_ )
+      END FUNCTION lin1_element
+   END SUBROUTINE lin_state_map
+
+   FUNCTION lin1_mask( inst_, il, kind ) RESULT(msk)
+      !! The elements of EI = 0 line il that carry a first-order linearization state of the kind:
+      !! viscoelastic (ElasticMod 2/3) elements for LIN1_VE, Syrope elements for LIN1_SYROPE.
+      TYPE(CD_OF_Instance), INTENT(IN) :: inst_
+      INTEGER(IntKi),       INTENT(IN) :: il, kind
+      LOGICAL, ALLOCATABLE :: msk(:)
+      ASSOCIATE (ln => inst_%agg%sys%fast%system%lines(il))
+         ALLOCATE (msk(ln%n_elem))
+         msk = .FALSE.
+         IF (kind == LIN1_VE .AND. ln%has_viscoelastic) msk = ln%ve_mode /= 0
+         IF (kind == LIN1_SYROPE .AND. ln%has_syrope) msk = ln%syrope_is
+      END ASSOCIATE
+   END FUNCTION lin1_mask
+
+   SUBROUTINE lin_disp_step( inst_, dx, ErrStat, ErrMsg )
+      !! The coupled-point displacement step of the linearization, as MoorDyn-F's: half the
+      !! smallest positive element stretch of the EI = 0 lines, at most dx on entry. A larger
+      !! step would slacken a tension-only element on one side of the central difference (a
+      !! taut chain stretches about a centimetre per element) and halve its stiffness.
+      TYPE(CD_OF_Instance),  INTENT(IN)    :: inst_
+      REAL(R8Ki),            INTENT(INOUT) :: dx
+      INTEGER(IntKi),        INTENT(OUT)   :: ErrStat
+      CHARACTER(*),          INTENT(OUT)   :: ErrMsg
+
+      INTEGER(IntKi)        :: il, ne, es
+      CHARACTER(ErrMsgLen)  :: em
+      REAL(wp), ALLOCATABLE :: stretch(:)
+
+      ErrStat = ErrID_None
+      ErrMsg  = ''
+      DO il = 1, inst_%nlines
+         ne = CD_System_Line_NElem( inst_%agg%sys%fast%system, il, es, em )
+         IF (es == CD_SYSTEM_OK) THEN
+            ALLOCATE (stretch(ne))
+            CALL CD_Get_System_Line_Stretch( inst_%agg%sys%fast%system, il, stretch, es, em )
+         END IF
+         IF (es /= CD_SYSTEM_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: line '//TRIM(Num2LStr(il))//': '// &
+                             TRIM(em), ErrStat, ErrMsg, 'CableDyn:lin_disp_step' ); RETURN
+         END IF
+         IF (ANY(stretch > 0.0_wp)) dx = MIN(dx, 0.5_R8Ki*REAL(MINVAL(stretch, MASK=stretch > 0.0_wp), R8Ki))
+         DEALLOCATE (stretch)
+      END DO
+   END SUBROUTINE lin_disp_step
+
+!----------------------------------------------------------------------------------------------------------------------------------
+   SUBROUTINE lin_eval( id, p, m, u, x_in, ErrStat, ErrMsg, dxdt, y_out )
+      !! The linearization surface at the state x_in and input u: the line interiors and cable
+      !! free DOFs take x_in's positions and velocities, the coupled points u's kinematics, and the
+      !! accelerations are solved from them without a time step. dxdt gets dx/dt of the
+      !! linearization states (each position slot its velocity, each velocity slot its
+      !! acceleration; the other slots 0); y_out the loads on the coupled points and the deck
+      !! channels at that state. The committed state is restored on exit.
+      INTEGER(IntKi),                 INTENT(IN   ) :: id
+      TYPE(CD_ParameterType),         INTENT(IN   ) :: p
+      TYPE(CD_MiscVarType),           INTENT(INOUT) :: m
+      TYPE(CD_InputType),             INTENT(IN   ) :: u
+      TYPE(CD_ContinuousStateType),   INTENT(IN   ) :: x_in
+      INTEGER(IntKi),                 INTENT(  OUT) :: ErrStat
+      CHARACTER(*),                   INTENT(  OUT) :: ErrMsg
+      TYPE(CD_ContinuousStateType),   INTENT(INOUT), OPTIONAL :: dxdt
+      TYPE(CD_OutputType),            INTENT(INOUT), OPTIONAL :: y_out
+
+      character(*), parameter :: RoutineName = 'CableDyn:lin_eval'
+      INTEGER(IntKi)          :: ErrStat2, es, i, ic, il, ne, k
+      REAL(wp), ALLOCATABLE   :: ve_rate(:), syr_rate(:)
+      CHARACTER(ErrMsgLen)    :: ErrMsg2, em
+      REAL(wp)                :: cval, t_clock
+
+      ErrStat = ErrID_None
+      ErrMsg  = ''
+      t_clock = REAL(MAX(Inst(id)%t_commit, 0.0_DbKi), wp)
+      ! the committed state: the coupled kinematics and the whole mirror
+      CALL CD_AGG_GetMovingPointMesh( Inst(id)%agg, Inst(id)%sv_pos, Inst(id)%sv_vel, Inst(id)%sv_acc, &
+                                      Inst(id)%ws_fld, es, em, orientation=Inst(id)%sv_orient, &
+                                      angular_velocity=Inst(id)%sv_omega, angular_acceleration=Inst(id)%sv_alpha, &
+                                      cable_loads=.FALSE. )
+      IF (es /= CD_AGG_OK) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
+      END IF
+      CALL pack_state_mirror_ary( Inst(id), m, Inst(id)%ws_lsave, ErrStat2, ErrMsg2 )
+      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      IF (ErrStat >= AbortErrLev) RETURN
+      ! the state: x_in's positions and velocities in the committed mirror
+      Inst(id)%ws_lwork = Inst(id)%ws_lsave
+      Inst(id)%ws_lwork(Inst(id)%lin_pos) = x_in%states(Inst(id)%lin_pos)
+      Inst(id)%ws_lwork(Inst(id)%lin_vel) = x_in%states(Inst(id)%lin_vel)
+      Inst(id)%ws_lwork(Inst(id)%lin1_slot) = x_in%states(Inst(id)%lin1_slot)
+      CALL reload_interiors_ary( Inst(id), m, Inst(id)%ws_lwork, t_clock, ErrStat2, ErrMsg2 )
+      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      IF (ErrStat >= AbortErrLev) THEN
+         CALL restore; RETURN
+      END IF
+      ! the input: the coupled points move to u, and the accelerations follow (the EI = 0 lines
+      ! in the non-probe update, the cables by their refresh)
+      CALL mesh_to_arrays( u%CoupledKinematics(1), Inst(id)%ncp, Inst(id)%ws_pos, Inst(id)%ws_vel, &
+                           Inst(id)%ws_acc, Inst(id)%ws_orient, Inst(id)%ws_omega, Inst(id)%ws_alpha, &
+                           ErrStat2, ErrMsg2 )
+      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      IF (ErrStat >= AbortErrLev) THEN
+         CALL restore; RETURN
+      END IF
+      CALL CD_AGG_UpdateStates_Moving( Inst(id)%agg, Inst(id)%ws_pos, Inst(id)%ws_vel, Inst(id)%ws_acc, es, em, &
+                                       output_probe=.FALSE., orientation=Inst(id)%ws_orient, &
+                                       angular_velocity=Inst(id)%ws_omega, angular_acceleration=Inst(id)%ws_alpha )
+      IF (es /= CD_AGG_OK) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+         CALL restore; RETURN
+      END IF
+      DO ic = 1, Inst(id)%agg%ncable
+         CALL CD_HFMF_Refresh_Acceleration( Inst(id)%agg%cables(ic), es, em )
+         IF (es /= CD_HFMF_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
+                             ' acceleration: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+            CALL restore; RETURN
+         END IF
+      END DO
+      IF (PRESENT(dxdt)) THEN
+         CALL pack_state_mirror_ary( Inst(id), m, Inst(id)%ws_lwork, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) THEN
+            CALL restore; RETURN
+         END IF
+         dxdt%states = 0.0_R8Ki
+         dxdt%states(Inst(id)%lin_pos) = Inst(id)%ws_lwork(Inst(id)%lin_vel)
+         dxdt%states(Inst(id)%lin_vel) = Inst(id)%ws_lwork(Inst(id)%lin_acc)
+         ! the constitutive states' rates at this state (the instantaneous element laws)
+         DO il = 1, Inst(id)%nlines
+            IF (.NOT. ANY(Inst(id)%lin1_line == il)) CYCLE
+            ne = CD_System_Line_NElem( Inst(id)%agg%sys%fast%system, il, es, em )
+            ALLOCATE (ve_rate(ne), syr_rate(ne))
+            CALL CD_Get_System_Line_Internal_Rates( Inst(id)%agg%sys%fast%system, il, ve_rate, syr_rate, es, em )
+            IF (es /= CD_SYSTEM_OK) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+               CALL restore; RETURN
+            END IF
+            DO k = 1, SIZE(Inst(id)%lin1_slot)
+               IF (Inst(id)%lin1_line(k) /= il) CYCLE
+               IF (Inst(id)%lin1_kind(k) == LIN1_VE) THEN
+                  dxdt%states(Inst(id)%lin1_slot(k)) = REAL(ve_rate(Inst(id)%lin1_elem(k)), R8Ki)
+               ELSE
+                  dxdt%states(Inst(id)%lin1_slot(k)) = REAL(syr_rate(Inst(id)%lin1_elem(k)), R8Ki)
+               END IF
+            END DO
+            DEALLOCATE (ve_rate, syr_rate)
+         END DO
+      END IF
+      IF (PRESENT(y_out)) THEN
+         CALL CD_AGG_CalcOutput( Inst(id)%agg, es, em )
+         IF (es == CD_AGG_OK) CALL CD_AGG_GetMovingPointMesh( Inst(id)%agg, Inst(id)%ws_pos, Inst(id)%ws_vel, &
+                                                              Inst(id)%ws_acc, Inst(id)%ws_fld, es, em, &
+                                                              orientation=Inst(id)%ws_orient, &
+                                                              moment=Inst(id)%ws_moment, &
+                                                              angular_velocity=Inst(id)%ws_omega, &
+                                                              angular_acceleration=Inst(id)%ws_alpha )
+         IF (es /= CD_AGG_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+            CALL restore; RETURN
+         END IF
+         DO i = 1, Inst(id)%ncp
+            y_out%CoupledLoads(1)%Force(:, i) = REAL(Inst(id)%ws_fld(:, i), ReKi)
+            y_out%CoupledLoads(1)%Moment(:, i) = REAL(Inst(id)%ws_moment(:, i), ReKi)
+         END DO
+         DO i = 1, p%NumOuts
+            CALL CD_AGG_EvalChannel( Inst(id)%agg, i, cval, es, em )
+            IF (es /= CD_AGG_OK) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: output channel evaluation failed: '// &
+                                TRIM(em), ErrStat, ErrMsg, RoutineName )
+               CALL restore; RETURN
+            END IF
+            y_out%WriteOutput(i) = REAL(cval, ReKi)
+         END DO
+      END IF
+      CALL restore
+
+   CONTAINS
+
+      SUBROUTINE restore()
+         !! The committed coupled kinematics and mirror back; the held loads are re-evaluated.
+         CALL CD_AGG_UpdateStates_Moving( Inst(id)%agg, Inst(id)%sv_pos, Inst(id)%sv_vel, Inst(id)%sv_acc, es, em, &
+                                          output_probe=.TRUE., orientation=Inst(id)%sv_orient, &
+                                          angular_velocity=Inst(id)%sv_omega, angular_acceleration=Inst(id)%sv_alpha )
+         IF (es /= CD_AGG_OK) CALL SetErrStat( ErrID_Fatal, 'CableDyn linearization restore failed: '//TRIM(em), &
+                                               ErrStat, ErrMsg, RoutineName )
+         CALL reload_interiors_ary( Inst(id), m, Inst(id)%ws_lsave, t_clock, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         Inst(id)%loads_cached = .FALSE.
+      END SUBROUTINE restore
+   END SUBROUTINE lin_eval
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_End(u, p, x, xd, z, other, y, m, ErrStat , ErrMsg)
@@ -2838,73 +3185,102 @@ CONTAINS
       ! Get OP values here (the FD reference point)
       CALL CD_CalcOutput( t, u, p, x, xd, z, OtherState, y, m, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
 
-      ! dY/du has TWO distinct contracts. During a normal nonlinear OpenFAST run the
-      ! registered CableDyn states exist (Nx > 0), and the glue input/output solve needs
-      ! the PARTIAL derivative g_u at fixed internal state. Re-equilibrating the line for
-      ! those probes returns a total quasi-static derivative instead; inserting that into
-      ! the runtime algebraic loop can make its Jacobian rank deficient. For formal
-      ! linearization CableDyn deliberately registers no states (Nx = 0), so the useful
-      ! reduction is the re-equilibrated, zero-frequency stiffness. Keep those paths
-      ! explicit rather than using the linearization reduction in the runtime solve.
+      ! Linearization with the line dynamics: the partial derivatives at the fixed state x, by
+      ! central differences of lin_eval, as MoorDyn-F's of its CalcOutput and
+      ! CalcContStateDeriv (dXdu only when the glue asks for it: a deck without line states
+      ! has none).
+      IF (Inst(m%CDInst)%lin_states) THEN
+         IF (PRESENT(dYdu)) THEN
+            IF (.NOT. ALLOCATED(dYdu)) THEN
+               CALL AllocAry( dYdu, m%Jac%Ny, m%Jac%Nu, 'dYdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+            END IF
+            dYdu = 0.0_R8Ki
+         END IF
+         IF (PRESENT(dXdu)) THEN
+            IF (.NOT. ALLOCATED(dXdu)) THEN
+               CALL AllocAry( dXdu, m%Jac%Nx, m%Jac%Nu, 'dXdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+            END IF
+            dXdu = 0.0_R8Ki
+         END IF
+         CALL CD_CopyInput( u, m%u_perturb, MESH_UPDATECOPY, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+         CALL CD_VarsPackInput( Vars, u, m%Jac%u )
+         DO i = 1, SIZE(Vars%u)
+            DO j = 1, Vars%u(i)%Num
+               iCol = Vars%u(i)%iLoc(1) + j - 1
+               CALL MV_Perturb( Vars%u(i), j, 1, m%Jac%u, m%Jac%u_perturb )
+               CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
+               CALL lin_eval( m%CDInst, p, m, m%u_perturb, x, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
+               IF (Failed()) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
+               CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_pos )
+               CALL MV_Perturb( Vars%u(i), j, -1, m%Jac%u, m%Jac%u_perturb )
+               CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
+               CALL lin_eval( m%CDInst, p, m, m%u_perturb, x, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
+               IF (Failed()) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
+               CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_neg )
+               IF (PRESENT(dYdu)) CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
+                                                              dYdu(:, iCol) )
+               IF (PRESENT(dXdu)) dXdu(:, iCol) = (m%Jac%x_pos - m%Jac%x_neg)/(2.0_R8Ki*Vars%u(i)%Perturb)
+            END DO
+         END DO
+         ! the outputs at the operating point again (the glue reads y after this call)
+         CALL CD_CalcOutput( t, u, p, x, xd, z, OtherState, y, m, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+         IF (PRESENT(dXddu)) THEN
+            IF (ALLOCATED(dXddu)) DEALLOCATE (dXddu)
+         END IF
+         IF (PRESENT(dZdu)) THEN
+            IF (ALLOCATED(dZdu)) DEALLOCATE (dZdu)
+         END IF
+         RETURN
+      END IF
+
+      ! The runtime input/output solve of a nonlinear run: the PARTIAL derivative g_u at the
+      ! fixed internal state, as stock MoorDyn's runtime Jacobian. Perturb the current input,
+      ! evaluate CalcOutput with the same x/xd/z/other, and central-difference the packed
+      ! outputs; CD_CalcOutput's probe overlay restores the authoritative CableDyn state after
+      ! every evaluation. (Re-equilibrating the line for these probes would give a total
+      ! quasi-static derivative instead, which can make the runtime Jacobian rank deficient.)
       IF (PRESENT(dYdu)) THEN
          IF (.NOT. ALLOCATED(dYdu)) THEN
             CALL AllocAry( dYdu, m%Jac%Ny, m%Jac%Nu, 'dYdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
          END IF
          dYdu = 0.0_R8Ki
-         IF (m%Jac%Nx > 0) THEN
-            ! Match stock MoorDyn's runtime Jacobian contract: perturb the current input,
-            ! evaluate CalcOutput with the same x/xd/z/other, and central-difference the
-            ! packed outputs. CD_CalcOutput's probe overlay restores the authoritative
-            ! CableDyn state after every evaluation.
-            CALL CD_CopyInput( u, m%u_perturb, MESH_UPDATECOPY, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
-            CALL CD_VarsPackInput( Vars, u, m%Jac%u )
-            DO i = 1, SIZE(Vars%u)
-               DO j = 1, Vars%u(i)%Num
-                  iCol = Vars%u(i)%iLoc(1) + j - 1
-                  CALL MV_Perturb( Vars%u(i), j, 1, m%Jac%u, m%Jac%u_perturb )
-                  CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
-                  CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
-                  IF (Failed()) RETURN
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
+         CALL CD_CopyInput( u, m%u_perturb, MESH_UPDATECOPY, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
+         CALL CD_VarsPackInput( Vars, u, m%Jac%u )
+         DO i = 1, SIZE(Vars%u)
+            DO j = 1, Vars%u(i)%Num
+               iCol = Vars%u(i)%iLoc(1) + j - 1
+               CALL MV_Perturb( Vars%u(i), j, 1, m%Jac%u, m%Jac%u_perturb )
+               CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
+               CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
+               IF (Failed()) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
 
-                  CALL MV_Perturb( Vars%u(i), j, -1, m%Jac%u, m%Jac%u_perturb )
-                  CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
-                  CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
-                  IF (Failed()) RETURN
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
+               CALL MV_Perturb( Vars%u(i), j, -1, m%Jac%u, m%Jac%u_perturb )
+               CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
+               CALL CD_CalcOutput( t, m%u_perturb, p, x, xd, z, OtherState, m%y_lin, m, ErrStat2, ErrMsg2 )
+               IF (Failed()) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
 
-                  CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
-                                              dYdu(:, iCol) )
-               END DO
+               CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
+                                           dYdu(:, iCol) )
             END DO
-            ! The final negative probe leaves only output/cache workspaces at the
-            ! perturbed input (the authoritative structural state was already restored).
-            ! Re-evaluate the operating point so the callback is observationally neutral
-            ! to the next glue evaluation as well as state neutral.
-            CALL CD_CalcOutput( t, u, p, x, xd, z, OtherState, y, m, ErrStat2, ErrMsg2 )
-            IF (Failed()) RETURN
-         ELSE
-            ! Zero-state formal linearization: each displacement probe re-solves static
-            ! equilibrium on a scratch aggregate, giving the reduced mooring stiffness.
-            CALL quasistatic_dydu( Vars, u, p, m, dYdu, ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
-         END IF
+         END DO
+         ! The final negative probe leaves only output/cache workspaces at the perturbed
+         ! input (the authoritative structural state was already restored). Re-evaluate the
+         ! operating point so the callback is observationally neutral to the next glue
+         ! evaluation as well as state neutral.
+         CALL CD_CalcOutput( t, u, p, x, xd, z, OtherState, y, m, ErrStat2, ErrMsg2 )
+         IF (Failed()) RETURN
       END IF
 
-      ! dX/du: the implicit march has no x' = f(x, u) surface. Under linearization the
-      ! module registers ZERO state variables (see CD_InitVars), so the honest dXdu is
-      ! the empty (0 x Nu) block; a caller holding a state-registered instance (Nx > 0)
-      ! is asking for a surface that does not exist -- fail loudly, never zero-fill.
+      ! dX/du of the implicit march exists only for a linearization run (the line-state
+      ! branch above): fail loudly, never zero-fill.
       IF (PRESENT(dXdu)) THEN
-         IF (m%Jac%Nx > 0) THEN
-            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: dXdu is undefined for the implicit '// &
-                             'march with registered state variables; linearization must be requested at '// &
-                             'Init so the module presents its zero-state (dYdu-only) reduction.', &
-                             ErrStat, ErrMsg, RoutineName )
-            RETURN
-         END IF
-         IF (.NOT. ALLOCATED(dXdu)) THEN
-            CALL AllocAry( dXdu, m%Jac%Nx, m%Jac%Nu, 'dXdu', ErrStat2, ErrMsg2 ); IF (Failed()) RETURN
-         END IF
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: dXdu exists only for a linearization '// &
+                          'run (Linearize = True).', ErrStat, ErrMsg, RoutineName )
+         RETURN
       END IF
 
       IF (PRESENT(dXddu)) THEN
@@ -2921,155 +3297,6 @@ CONTAINS
       END FUNCTION Failed
    END SUBROUTINE CD_JacobianPInput
 
-!----------------------------------------------------------------------------------------------------------------------------------
-   SUBROUTINE quasistatic_dydu( Vars, u, p, m, dYdu, ErrStat, ErrMsg )
-      !! The quasi-static dYdu displacement columns: for each coupled-mesh
-      !! FieldTransDisp perturbation, re-solve the mooring static equilibrium at the
-      !! perturbed boundary on a SCRATCH aggregate built from the deck copy (each
-      !! CD_AGG_Init_From_Deck IS a static solve; coupled_positions places the moving
-      !! points explicitly), read the loads and deck channels, and central-difference.
-      !! The live instance is never touched -- the probe cannot perturb committed
-      !! state by construction. All other input fields keep zero columns.
-      TYPE(ModVarsType),        INTENT(IN   ) :: Vars
-      TYPE(CD_InputType),       INTENT(IN   ) :: u
-      TYPE(CD_ParameterType),   INTENT(IN   ) :: p
-      TYPE(CD_MiscVarType),     INTENT(INOUT) :: m
-      REAL(R8Ki),               INTENT(INOUT) :: dYdu(:,:)
-      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
-      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
-
-      character(*), parameter   :: RoutineName = 'quasistatic_dydu'
-      INTEGER(IntKi)            :: ErrStat2, es, i, j, iCol, node, comp, ncp, k
-      CHARACTER(ErrMsgLen)      :: ErrMsg2
-      CHARACTER(2100)           :: lin_deck
-      REAL(wp), ALLOCATABLE     :: op_pos(:,:), prb_pos(:,:)
-      LOGICAL                   :: use_extf
-      REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static probes
-
-      ErrStat = ErrID_None
-      ErrMsg  = ''
-      IF (p%DeckCopy%NumLines < 1) THEN
-         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the linearization probe needs the '// &
-                          'deck copy in the parameters.', ErrStat, ErrMsg, RoutineName )
-         RETURN
-      END IF
-      ncp = u%CoupledKinematics(1)%Nnodes
-      ALLOCATE (op_pos(3, ncp), prb_pos(3, ncp), STAT=ErrStat2)
-      IF (ErrStat2 /= 0) THEN
-         CALL SetErrStat( ErrID_Fatal, 'Could not allocate the linearization probe positions.', &
-                          ErrStat, ErrMsg, RoutineName )
-         RETURN
-      END IF
-      ! the operating-point boundary: the committed mesh positions at the snapshot
-      DO i = 1, ncp
-         op_pos(:, i) = REAL(u%CoupledKinematics(1)%Position(:, i), wp) + &
-                        REAL(u%CoupledKinematics(1)%TranslationDisp(:, i), wp)
-      END DO
-
-      ! the deck copy back to disk once (beside the MooringFile, so its side files
-      ! resolve); every probe init reuses it and it is removed afterwards
-      CALL write_deck_copy( p, '.lin.dat', lin_deck, ErrStat2, ErrMsg2 )
-      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
-      IF (ErrStat >= AbortErrLev) RETURN
-
-      use_extf = .FALSE.
-      IF (ASSOCIATED(p%WaveField)) use_extf = wavefield_is_ambient( p%WaveField )
-      ! each probe is a static solve in the host's steady current, as the operating point is
-      IF (use_extf) THEN
-         CALL seastate_static_current( p%WaveField, static_cur, ErrStat2, ErrMsg2 )
-         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
-         IF (ErrStat >= AbortErrLev) RETURN
-      END IF
-
-      DO i = 1, SIZE(Vars%u)
-         IF (Vars%u(i)%Field /= FieldTransDisp) CYCLE   ! vel/acc/orientation: zero columns
-         DO j = 1, Vars%u(i)%Num
-            iCol = Vars%u(i)%iLoc(1) + j - 1
-            node = (j - 1)/3 + 1
-            comp = MOD(j - 1, 3) + 1
-            IF (node > ncp) THEN
-               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: linearization probe node index '// &
-                                'exceeds the coupled mesh.', ErrStat, ErrMsg, RoutineName )
-               CALL delete_file( lin_deck )
-               RETURN
-            END IF
-            DO k = 1, 2   ! +perturb then -perturb
-               prb_pos = op_pos
-               IF (k == 1) THEN
-                  prb_pos(comp, node) = prb_pos(comp, node) + REAL(Vars%u(i)%Perturb, wp)
-               ELSE
-                  prb_pos(comp, node) = prb_pos(comp, node) - REAL(Vars%u(i)%Perturb, wp)
-               END IF
-               CALL probe_loads( prb_pos, ErrStat2, ErrMsg2 )
-               CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
-               IF (ErrStat >= AbortErrLev) THEN
-                  CALL delete_file( lin_deck )
-                  RETURN
-               END IF
-               IF (k == 1) THEN
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
-               ELSE
-                  CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
-               END IF
-            END DO
-            CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, dYdu(:, iCol) )
-         END DO
-      END DO
-      CALL delete_file( lin_deck )
-
-   CONTAINS
-
-      SUBROUTINE probe_loads( pos, PErrStat, PErrMsg )
-         !! One static probe: scratch-aggregate init at the given boundary (the init
-         !! IS the static solve), loads + deck channels into m%y_lin, then release.
-         REAL(wp),       INTENT(IN   ) :: pos(:,:)
-         INTEGER(IntKi), INTENT(  OUT) :: PErrStat
-         CHARACTER(*),   INTENT(  OUT) :: PErrMsg
-
-         TYPE(CD_AGG_ModuleType) :: agg_p
-         REAL(wp)                :: q_p(3, ncp), v_p(3, ncp), a_p(3, ncp), f_p(3, ncp)
-         REAL(wp)                :: cval
-         INTEGER(IntKi)          :: es_p, ich
-         CHARACTER(ErrMsgLen)          :: em_p
-
-         PErrStat = ErrID_None
-         PErrMsg  = ''
-         CALL CD_AGG_Init_From_Deck( agg_p, TRIM(lin_deck), REAL(p%dtM0, wp), es_p, em_p, &
-                                     env_gravity=REAL(p%g, wp), env_rho_water=REAL(p%rhoW, wp), &
-                                     env_wtrdpth=REAL(p%WtrDpth, wp), external_fluid=use_extf, &
-                                     coupled_positions=pos, run_tmax=REAL(p%Tmax, wp), &
-                                     static_current=static_cur )
-         IF (es_p /= CD_AGG_OK) THEN
-            PErrStat = ErrID_Fatal
-            PErrMsg  = 'linearization static probe init failed: '//TRIM(em_p)
-            RETURN
-         END IF
-         CALL CD_AGG_CalcOutput( agg_p, es_p, em_p )
-         IF (es_p == CD_AGG_OK) CALL CD_AGG_GetMovingPointMesh( agg_p, q_p, v_p, a_p, f_p, es_p, em_p )
-         IF (es_p /= CD_AGG_OK) THEN
-            CALL CD_AGG_End( agg_p, es_p, em_p )
-            PErrStat = ErrID_Fatal
-            PErrMsg  = 'linearization static probe output failed: '//TRIM(em_p)
-            RETURN
-         END IF
-         DO ich = 1, ncp
-            m%y_lin%CoupledLoads(1)%Force(:, ich) = REAL(f_p(:, ich), ReKi)
-            m%y_lin%CoupledLoads(1)%Moment(:, ich) = 0.0_ReKi
-         END DO
-         DO ich = 1, p%NumOuts
-            CALL CD_AGG_EvalChannel( agg_p, ich, cval, es_p, em_p )
-            IF (es_p /= CD_AGG_OK) THEN
-               CALL CD_AGG_End( agg_p, es_p, em_p )
-               PErrStat = ErrID_Fatal
-               PErrMsg  = 'linearization static probe channel failed: '//TRIM(em_p)
-               RETURN
-            END IF
-            m%y_lin%WriteOutput(ich) = REAL(cval, ReKi)
-         END DO
-         CALL CD_AGG_End( agg_p, es_p, em_p )
-      END SUBROUTINE probe_loads
-
-   END SUBROUTINE quasistatic_dydu
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_JacobianPContState(Vars, t, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg, dYdx, dXdx, dXddx, dZdx)
@@ -3092,22 +3319,71 @@ CONTAINS
 
       character(*), parameter :: RoutineName = 'CD_JacobianPContState'
 
-      INTEGER(IntKi)          :: ErrStat2
+      INTEGER(IntKi)          :: ErrStat2, i, j, iCol
       CHARACTER(ErrMsgLen)    :: ErrMsg2
 
       ErrStat = ErrID_None
       ErrMsg  = ''
       ErrStat2 = ErrID_None
       ErrMsg2  = ''
-      ! Under linearization the module registers ZERO state variables (the MAP-shaped
-      ! dYdu-only reduction; see CD_InitVars), so every state Jacobian is an empty
-      ! block. A state-registered instance (Nx > 0) has no x' = f(x, u) surface to
-      ! differentiate -- fail loudly rather than fabricate one.
+      ! Linearization with the line dynamics: dYdx and dXdx by central differences of lin_eval
+      ! over the registered states, as MoorDyn-F's
+      IF (Inst(m%CDInst)%lin_states) THEN
+         IF (PRESENT(dYdx)) THEN
+            IF (.NOT. ALLOCATED(dYdx)) THEN
+               CALL AllocAry( dYdx, m%Jac%Ny, m%Jac%Nx, 'dYdx', ErrStat2, ErrMsg2 )
+               CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+               IF (ErrStat >= AbortErrLev) RETURN
+            END IF
+            dYdx = 0.0_R8Ki
+         END IF
+         IF (PRESENT(dXdx)) THEN
+            IF (.NOT. ALLOCATED(dXdx)) THEN
+               CALL AllocAry( dXdx, m%Jac%Nx, m%Jac%Nx, 'dXdx', ErrStat2, ErrMsg2 )
+               CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+               IF (ErrStat >= AbortErrLev) RETURN
+            END IF
+            dXdx = 0.0_R8Ki
+         END IF
+         CALL CD_CopyContState( x, m%x_perturb, MESH_UPDATECOPY, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) RETURN
+         CALL CD_VarsPackContState( Vars, x, m%Jac%x )
+         DO i = 1, SIZE(Vars%x)
+            DO j = 1, Vars%x(i)%Num
+               iCol = Vars%x(i)%iLoc(1) + j - 1
+               CALL MV_Perturb( Vars%x(i), j, 1, m%Jac%x, m%Jac%x_perturb )
+               CALL CD_VarsUnpackContState( Vars, m%Jac%x_perturb, m%x_perturb )
+               CALL lin_eval( m%CDInst, p, m, u, m%x_perturb, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
+               CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+               IF (ErrStat >= AbortErrLev) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
+               CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_pos )
+               CALL MV_Perturb( Vars%x(i), j, -1, m%Jac%x, m%Jac%x_perturb )
+               CALL CD_VarsUnpackContState( Vars, m%Jac%x_perturb, m%x_perturb )
+               CALL lin_eval( m%CDInst, p, m, u, m%x_perturb, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
+               CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+               IF (ErrStat >= AbortErrLev) RETURN
+               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
+               CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_neg )
+               IF (PRESENT(dYdx)) CALL MV_ComputeCentralDiff( Vars%y, Vars%x(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
+                                                              dYdx(:, iCol) )
+               IF (PRESENT(dXdx)) dXdx(:, iCol) = (m%Jac%x_pos - m%Jac%x_neg)/(2.0_R8Ki*Vars%x(i)%Perturb)
+            END DO
+         END DO
+         IF (PRESENT(dXddx)) THEN
+            IF (ALLOCATED(dXddx)) DEALLOCATE (dXddx)
+         END IF
+         IF (PRESENT(dZdx)) THEN
+            IF (ALLOCATED(dZdx)) DEALLOCATE (dZdx)
+         END IF
+         RETURN
+      END IF
+      ! Outside a linearization run the implicit march has no x' = f(x, u) surface to
+      ! differentiate: fail loudly rather than fabricate one.
       IF (m%Jac%Nx > 0) THEN
-         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: state Jacobians are undefined for the '// &
-                          'implicit march with registered state variables; linearization must be '// &
-                          'requested at Init so the module presents its zero-state (dYdu-only) '// &
-                          'reduction.', ErrStat, ErrMsg, RoutineName )
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: state Jacobians exist only for a '// &
+                          'linearization run (Linearize = True).', ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
       IF (PRESENT(dYdx)) THEN
@@ -3210,25 +3486,167 @@ CONTAINS
       CHARACTER(LinChanLen), ALLOCATABLE :: CblLinVel(:), CblLinPos(:), CblLinAcc(:)
       character(20), parameter  :: TransDispSuffix(*) = [' Px, m', ' Py, m', ' Pz, m']
       character(20), parameter  :: TransVelSuffix(*)  = [' Vx, m/s', ' Vy, m/s', ' Vz, m/s']
+      ! a finite-EI cable node's tangent m = dr/ds and its rate (linearization states)
+      character(20), parameter  :: TangentSuffix(*)     = [' Tx, -', ' Ty, -', ' Tz, -']
+      character(20), parameter  :: TangentRateSuffix(*) = [' dTx, 1/s', ' dTy, 1/s', ' dTz, 1/s']
+      ! central-difference steps of the linearization states. Positions, tangents and the
+      ! coupled-point displacements take 1 um (a tangent step moves an element by about its
+      ! length times the step): far inside the seabed penetration of a light cable (a few
+      ! tenths of a millimetre) and any element's slack, either of which a millimetre step
+      ! would cross on one side of the difference, and still some ten digits above round-off.
+      ! The velocity step is MoorDyn-F's 0.1 m/s: quadratic drag has no slope at rest, so the
+      ! difference over +-0.1 m/s is the drag's equivalent linear damping at that velocity
+      ! amplitude (a smaller step leaves the line modes all but undamped); a cable's tangent
+      ! rate takes the same amplitude over its mean element length.
+      REAL(R8Ki), PARAMETER     :: LIN_DX = 1.0E-6_R8Ki, LIN_DV = 0.1_R8Ki
+      REAL(R8Ki), PARAMETER     :: LIN_DT = 1.0E-6_R8Ki
+      ! the constitutive states: a viscoelastic slow-branch stretch (m) takes the position step,
+      ! a Syrope slow strain the strain of a micrometre over a metre
+      REAL(R8Ki), PARAMETER     :: LIN_DSLOW = 1.0E-6_R8Ki
+      LOGICAL, ALLOCATABLE      :: lin1m(:)
+      INTEGER(IntKi)            :: kind1
+      INTEGER(IntKi)            :: ipass, nnc, inode, ikind, i0, nrun, icomp, k
+      ! the position step of the line states and the coupled-point displacement step of the
+      ! inputs under linearization (lin_disp_step), and a cable's tangent-rate step
+      REAL(R8Ki)                :: dx_pos, dx_u, dtr
 
       ErrStat = ErrID_None
       ErrMsg  = ''
+      dx_u = 0.05_R8Ki
+      IF (Linearize) THEN
+         dx_u = LIN_DX
+         CALL lin_disp_step( inst_, dx_u, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) RETURN
+      END IF
+      dx_pos = dx_u
 
       IF (Linearize) THEN
-         ! Linearization presents the module in the MAP shape: ZERO continuous-state
-         ! variables. The module marches implicitly (generalised-alpha behind
-         ! UpdateStates), so there is no x' = f(x, u) surface to expose, and the glue
-         ! force-flags every registered x variable into the linearization set. With
-         ! Nx = 0 the linearized mooring is the direct-feedthrough impedance dYdu --
-         ! stiffness from the displacement columns, damping from the velocity columns,
-         ! inertia from the acceleration columns: the quasi-static reduction MAP
-         ! exposes, and what a FOWT linearization consumes from a mooring. The
-         ! checkpoint and state-copy machinery is UNAFFECTED: pack_state_mirror and
-         ! the registry state copies use x%states directly, never Vars%x.
+         ! Linearization with the line dynamics, as MoorDyn-F: the continuous states are the
+         ! positions of every EI = 0 line's interior nodes and of every finite-EI cable's free
+         ! DOFs (node positions r and tangents m = dr/ds), then their velocities, held in the
+         ! x%states mirror slots (lin_state_map), and the per-element constitutive states of the
+         ! viscoelastic and Syrope ropes as first-order states. The acceleration and the other
+         ! mirror blocks are not registered: the glue would take every registered x as a state.
          ALLOCATE (Vars%x(0), STAT=ErrStat2)
          IF (ErrStat2 /= 0) THEN
             CALL SetErrStat( ErrID_Fatal, 'Could not allocate Vars%x.', ErrStat, ErrMsg, RoutineName ); RETURN
          END IF
+         DO ipass = 1, 2   ! the positions, then the velocities
+            DO il = 1, inst_%nlines
+               ndofl = CD_System_Line_NDOF( inst_%agg%sys%fast%system, il, es, em )
+               IF (es /= CD_SYSTEM_OK) THEN
+                  CALL SetErrStat( ErrID_Fatal, TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
+               END IF
+               N = ndofl/3 - 1
+               DO i = 0, N - 2
+                  LinStr = 'Line '//TRIM(Num2LStr(il))//' node '//TRIM(Num2LStr(i + 1))
+                  IF (ipass == 1) THEN
+                     CALL MV_AddVar( Vars%x, LinStr, FieldTransDisp, DatLoc(CD_x_states), &
+                                     iAry=m%LineStateIs1(il) + 3*(N - 1) + 3*i, Num=3, Flags=VF_DerivOrder2, &
+                                     Perturb=dx_pos, LinNames=[(TRIM(LinStr)//TransDispSuffix(j), j=1, 3)] )
+                  ELSE
+                     CALL MV_AddVar( Vars%x, LinStr, FieldTransVel, DatLoc(CD_x_states), &
+                                     iAry=m%LineStateIs1(il) + 3*i, Num=3, Flags=VF_DerivOrder2, &
+                                     Perturb=LIN_DV, LinNames=[(TRIM(LinStr)//TransVelSuffix(j), j=1, 3)] )
+                  END IF
+               END DO
+            END DO
+            koff = 0
+            IF (inst_%nlines > 0) koff = m%LineStateIsN(inst_%nlines)
+            DO ic = 1, inst_%agg%ncable
+               csz = CD_HFMF_MirrorSize( inst_%agg%cables(ic) )
+               IF (csz <= 0) CYCLE
+               nf = COUNT(inst_%agg%cables(ic)%line%freemask)
+               ndofl = inst_%agg%cables(ic)%line%ndof
+               nnc = inst_%agg%cables(ic)%line%nn
+               dtr = LIN_DV*REAL(inst_%agg%cables(ic)%line%ne, R8Ki)/REAL(SUM(inst_%agg%cables(ic)%line%l0), R8Ki)
+               k = 0
+               i = 1
+               DO WHILE (i <= ndofl)
+                  IF (.NOT. inst_%agg%cables(ic)%line%freemask(i)) THEN
+                     i = i + 1
+                     CYCLE
+                  END IF
+                  ! a run of free DOFs of one node and one kind: the position r (DOFs 1-3 of the
+                  ! node) or the tangent m (4-6); the node is named End A first, as the channels
+                  inode = (i - 1)/6 + 1
+                  ikind = MERGE(1, 2, MOD(i - 1, 6) < 3)
+                  i0 = i
+                  DO WHILE (i <= ndofl)
+                     IF (.NOT. inst_%agg%cables(ic)%line%freemask(i)) EXIT
+                     IF ((i - 1)/6 + 1 /= inode .OR. MERGE(1, 2, MOD(i - 1, 6) < 3) /= ikind) EXIT
+                     i = i + 1
+                  END DO
+                  nrun = i - i0
+                  LinStr = 'Cable '//TRIM(Num2LStr(ic))//' node '//TRIM(Num2LStr(nnc + 1 - inode))
+                  ALLOCATE (CblLinPos(nrun), STAT=ErrStat2)
+                  IF (ErrStat2 /= 0) THEN
+                     CALL SetErrStat( ErrID_Fatal, 'Could not allocate cable lin-name work array.', &
+                                      ErrStat, ErrMsg, RoutineName ); RETURN
+                  END IF
+                  DO j = 1, nrun
+                     icomp = MOD(i0 + j - 2, 3) + 1
+                     IF (ikind == 1 .AND. ipass == 1) THEN
+                        CblLinPos(j) = TRIM(LinStr)//TransDispSuffix(icomp)
+                     ELSE IF (ikind == 1) THEN
+                        CblLinPos(j) = TRIM(LinStr)//TransVelSuffix(icomp)
+                     ELSE IF (ipass == 1) THEN
+                        CblLinPos(j) = TRIM(LinStr)//TangentSuffix(icomp)
+                     ELSE
+                        CblLinPos(j) = TRIM(LinStr)//TangentRateSuffix(icomp)
+                     END IF
+                  END DO
+                  IF (ipass == 1) THEN
+                     IF (ikind == 1 .AND. nrun == 3) THEN
+                        CALL MV_AddVar( Vars%x, LinStr, FieldTransDisp, DatLoc(CD_x_states), &
+                                        iAry=koff + nf + k + 1, Num=nrun, Flags=VF_DerivOrder2, &
+                                        Perturb=dx_pos, LinNames=CblLinPos )
+                     ELSE
+                        CALL MV_AddVar( Vars%x, LinStr, FieldScalar, DatLoc(CD_x_states), &
+                                        iAry=koff + nf + k + 1, Num=nrun, Flags=VF_DerivOrder2, DerivOrder=0, &
+                                        Perturb=MERGE(dx_pos, LIN_DT, ikind == 1), LinNames=CblLinPos )
+                     END IF
+                  ELSE
+                     IF (ikind == 1 .AND. nrun == 3) THEN
+                        CALL MV_AddVar( Vars%x, LinStr, FieldTransVel, DatLoc(CD_x_states), &
+                                        iAry=koff + k + 1, Num=nrun, Flags=VF_DerivOrder2, &
+                                        Perturb=LIN_DV, LinNames=CblLinPos )
+                     ELSE
+                        CALL MV_AddVar( Vars%x, LinStr, FieldScalar, DatLoc(CD_x_states), &
+                                        iAry=koff + k + 1, Num=nrun, Flags=VF_DerivOrder2, DerivOrder=1, &
+                                        Perturb=MERGE(LIN_DV, dtr, ikind == 1), LinNames=CblLinPos )
+                     END IF
+                  END IF
+                  DEALLOCATE (CblLinPos)
+                  k = k + nrun
+               END DO
+               koff = koff + csz
+            END DO
+         END DO
+         ! the per-element constitutive states of the EI = 0 lines, first-order states: the
+         ! viscoelastic slow-branch stretch dl_1 and the Syrope slow strain (the Syrope running
+         ! maximum is a load history, held as the operating point's)
+         DO il = 1, inst_%nlines
+            ndofl = CD_System_Line_NDOF( inst_%agg%sys%fast%system, il, es, em )
+            nin = ndofl - 6
+            DO kind1 = LIN1_VE, LIN1_SYROPE
+               lin1m = lin1_mask( inst_, il, kind1 )
+               DO j = 1, SIZE(lin1m)
+                  IF (.NOT. lin1m(j)) CYCLE
+                  LinStr = 'Line '//TRIM(Num2LStr(il))//' segment '//TRIM(Num2LStr(j))
+                  IF (kind1 == LIN1_VE) THEN
+                     CALL MV_AddVar( Vars%x, LinStr, FieldScalar, DatLoc(CD_x_states), &
+                                     iAry=m%LineStateIs1(il) + 3*nin + j - 1, Num=1, Flags=VF_DerivOrder1, &
+                                     Perturb=LIN_DX, LinNames=[TRIM(LinStr)//' dl1, m'] )
+                  ELSE
+                     CALL MV_AddVar( Vars%x, LinStr, FieldScalar, DatLoc(CD_x_states), &
+                                     iAry=m%LineStateIs1(il) + 3*nin + j - 1, Num=1, Flags=VF_DerivOrder1, &
+                                     Perturb=LIN_DSLOW, LinNames=[TRIM(LinStr)//' slow strain, -'] )
+                  END IF
+               END DO
+            END DO
+         END DO
       ELSE
 
       ! position states (interior line nodes; the mirror layout stores [rd, r] per
@@ -3609,7 +4027,7 @@ CONTAINS
          CALL MV_AddMeshVar( Vars%u, "CoupledKinematics", MotionFields, &
                              DatLoc(CD_u_CoupledKinematics, ivT), &
                              Mesh=u%CoupledKinematics(ivT), &
-                             Perturbs=[0.05_R8Ki, &   ! FieldTransDisp
+                             Perturbs=[dx_u, &        ! FieldTransDisp
                                        0.1_R8Ki, &    ! FieldOrientation
                                        0.1_R8Ki, &    ! FieldTransVel
                                        0.1_R8Ki, &    ! FieldAngularVel

@@ -98,6 +98,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Latch_Model_VIV_Window
   PUBLIC :: CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Model_Has_VIV, CD_Get_Model_VIV_Lift
   PUBLIC :: CD_Get_Model_Tension
+  PUBLIC :: CD_Get_Model_Internal_Rates
   PUBLIC :: CD_Get_Model_EndForces
   PUBLIC :: CD_Get_Model_EndNodeMassDiag
   PUBLIC :: CD_Get_Model_EndNodeAddedMass
@@ -5576,6 +5577,82 @@ CONTAINS
     ! the viscoelastic and Syrope elements report their own law's tension
     CALL model_law_tensions(model, tension, ErrStat, ErrMsg)
   END SUBROUTINE CD_Get_Model_Tension
+
+  SUBROUTINE CD_Get_Model_Internal_Rates(model, ve_rate, syrope_rate, ErrStat, ErrMsg)
+    !! The rates of the per-element constitutive states at the model's current q, v and states,
+    !! as the instantaneous (dt = 0) element loads evaluate them: the viscoelastic slow-branch
+    !! stretch d(dl_1)/dt (its taut ODE, or the zero-load relaxation of a slack element) and the
+    !! Syrope slow strain d(eps_slow)/dt; zero on the other elements.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: ve_rate(:), syrope_rate(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: e, idx(6), es
+    REAL(wp) :: q2(6), v2(6), chord(3), tang(3), length, lstrd, dl, bsum, ld1, ea_d_eff, ea_1_eff
+    REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC), f6(6), jq6(6, 6), t_mean, dslow
+    REAL(wp) :: slow_at
+    CHARACTER(200) :: em
+
+    ve_rate = CD_ZERO
+    syrope_rate = CD_ZERO
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_MODEL_NOT_INITIALIZED
+      ErrMsg = 'CableDyn_Model: model is not initialized'
+      RETURN
+    END IF
+    IF (SIZE(ve_rate) /= model%n_elem .OR. SIZE(syrope_rate) /= model%n_elem) THEN
+      CALL fail(ErrStat, ErrMsg, 'internal-rate outputs must have shape (n_elem)')
+      RETURN
+    END IF
+    IF (model%has_viscoelastic) THEN
+      DO e = 1, model%n_elem
+        IF (model%ve_mode(e) == 0) CYCLE
+        CALL model_viscoelastic_coeffs(model, e, ea_d_eff, ea_1_eff, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_MODEL_OK) RETURN
+        CALL extract_element_state(model, e, model%q, model%v, idx, q2, v2)
+        chord = q2(4:6) - q2(1:3)
+        length = NORM2(chord)
+        IF (length <= CD_VISCO_TINY_LEN) THEN
+          CALL fail(ErrStat, ErrMsg, 'viscoelastic element collapsed to zero length')
+          RETURN
+        END IF
+        tang = chord/length
+        lstrd = DOT_PRODUCT(tang, v2(4:6) - v2(1:3))
+        dl = length - model%l0(e)
+        bsum = model%ve_ba_d(e) + model%ve_ba(e)
+        ! the taut series-Kelvin ODE; a slack chain (tension max(MagT + MagTd, 0) = 0)
+        ! relaxes under zero load, BA*ld_1 + EA_1*dl_1 = 0, as the element load's switch
+        ld1 = (ea_d_eff*dl - (ea_d_eff + ea_1_eff)*model%ve_dl_1(e) + model%ve_ba_d(e)*lstrd)/bsum
+        IF (ea_1_eff*model%ve_dl_1(e)/model%l0(e) + model%ve_ba(e)*ld1/model%l0(e) < CD_ZERO) THEN
+          ld1 = CD_ZERO
+          IF (model%ve_ba(e) > CD_ZERO) ld1 = -ea_1_eff*model%ve_dl_1(e)/model%ve_ba(e)
+        END IF
+        ve_rate(e) = ld1
+      END DO
+    END IF
+    IF (model%has_syrope) THEN
+      DO e = 1, model%n_elem
+        IF (.NOT. model%syrope_is(e)) CYCLE
+        CALL extract_element_state(model, e, model%q, model%v, idx, q2, v2)
+        CALL CD_Syrope_Working_Curve(model%syrope_type(e), model%syrope_tmax(e), ws, wt, wsl, es, em)
+        IF (es /= CD_SYROPE_OK) THEN
+          CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
+        END IF
+        slow_at = CD_Syrope_Branch_Divider(model%syrope_type(e), model%syrope_tmax(e))
+        CALL CD_Syrope_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), model%syrope_type(e), &
+                                    ws, wt, wsl, model%syrope_slow(e) < slow_at, model%syrope_slow(e), &
+                                    model%tension_only, f6, jq6, t_mean, dslow, es, em, dt=CD_ZERO, &
+                                    divider=slow_at)
+        IF (es /= CD_SYROPE_OK) THEN
+          CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
+        END IF
+        syrope_rate(e) = dslow
+      END DO
+    END IF
+  END SUBROUTINE CD_Get_Model_Internal_Rates
 
   SUBROUTINE model_law_tensions(model, tension, ErrStat, ErrMsg)
     !! Overwrite the entries of the viscoelastic and Syrope elements of tension (n_elem) with
