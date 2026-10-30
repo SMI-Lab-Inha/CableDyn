@@ -20,7 +20,11 @@ Gates, each run through the cabledyn driver with the line node tension channels 
   time) is an equilibrium of the march on the EI = 0, the finite-EI and the point-connected EI = 0
   routes: over the first 2 s the tensions move by less than 1e-4 of the change the current makes
   to the still-water start (a finite-EI static that samples the grid in its translated solve frame
-  instead of at the global node positions moves them by 0.8 of it).
+  instead of at the global node positions moves them by 0.8 of it);
+* a current that is zero along the straight chord but not where the line sags (offchord: Currents 1
+  and 2 on the EI = 0 route, Currents 2 on the finite-EI route) is in the static start: the march
+  then moves the tensions by less than 1e-4 of the change the current makes, and the EI = 0 start
+  is within 0.5 % of the finite-EI one (an EI = 0 start in still water drifted 192 N in 4 s).
 
 usage: test_mdc_currents_runs.py --exe <cabledyn> --data <tests/data/currents_mdc> --output <dir>
 """
@@ -177,6 +181,33 @@ def static_start(exe: str, data: Path, out: Path) -> None:
               f"water; the march then moves them by {drift:.2e} N ({drift / step:.1e}, 1e-4) over 2 s")
 
 
+def current_below_the_chord(exe: str, data: Path, out: Path) -> None:
+    """The static start in a current that is zero along the straight chord but not where the line
+    sags (offchord: 0.8 m/s below z = -32 m, the ends at z = -20 m) carries the current: the march
+    then holds the start, and the EI = 0 start agrees with the finite-EI one."""
+    src = data / "offchord"
+    tables = [src / "current_profile.txt", src / "current_profile_dynamic.txt"]
+    runs = {}
+    for name, finite in (("c1", False), ("c2", False), ("c2", True)):
+        tag = f"{name}_{'fei' if finite else 'ei0'}"
+        text = deck_text(src / f"{name}.dat", finite)
+        runs[tag] = run(exe, out / f"offchord_{tag}", "run", text, tables)
+    still = run(exe, out / "offchord_still", "run", deck_text(data / "tension_c0" / "tension.dat", tmax=4.0), [])
+    if still is None or any(r is None for r in runs.values()):
+        return
+    for tag, r in runs.items():
+        step = np.abs(r[0, 1:] - still[0, 1:]).max()
+        drift = np.abs(r[:, 1:] - r[0, 1:]).max()
+        check(step > 0.05 * np.abs(still[0, 1:]).max() and drift <= 1.0e-4 * step,
+              f"current below the chord, {tag}: the static start carries it ({step:.0f} N from still water); "
+              f"the march then moves the tensions by {drift:.2e} N over 4 s (1e-4 of that)")
+    ei0, fei = runs["c2_ei0"][0, 1:], runs["c2_fei"][0, 1:]
+    gap = np.abs(ei0 - fei).max() / np.abs(fei).max()
+    check(gap <= 5.0e-3 and np.array_equal(runs["c1_ei0"][0, 1:], ei0),
+          f"current below the chord: the EI = 0 start within {gap:.1e} of the finite-EI one (0.5 %), and "
+          "Currents 1 and 2 give the same start")
+
+
 def two_line_deck(currents: int) -> str:
     """The tension rope as two EI = 0 lines meeting at a free point (the point-connected route)."""
     return f"""--------------------- MoorDyn Input File ------------------------------------
@@ -220,6 +251,7 @@ def main() -> int:
     against_moordyn_c(args.exe, data, out)
     same_field(args.exe, data, out)
     static_start(args.exe, data, out)
+    current_below_the_chord(args.exe, data, out)
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
 

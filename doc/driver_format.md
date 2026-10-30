@@ -1256,7 +1256,13 @@ every node's position and time as MoorDyn-C interpolates them. Standalone decks 
   node elevation is not stretched;
 - the current has no fluid acceleration (MoorDyn-C sets it to zero), so its time variation adds
   no Froude-Krylov or added-mass load;
-- the static start takes the current at `t = 0`, as MoorDyn-C's initial condition does;
+- the static start takes the current at `t = 0`, as MoorDyn-C's default stationary initial
+  condition does (its legacy dynamic relaxation, `ICgenDynamic 1`, samples the current over the
+  relaxation time instead);
+- a grid holds at most 2e6 resampled points in space and time (every static solve holds a copy,
+  48 MB at the limit);
+- the C API and the OpenFAST point-system shells have no simulation clock: they apply a current
+  constant in time as a steady field, as `Currents 1`, and refuse one that varies in time;
 - `current_profile_4d.txt` is read as MoorDyn-C documents it, which MoorDyn-C v2.7.1 does not
   quite do: it reads its rows from line 7, so a row on line 6 leaves that grid point at zero, and
   it matches a row to the grid by the text of its coordinates, so a row writing `-0` for `0` or

@@ -150,7 +150,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   times the current is identical to MoorDyn-C v2.7.1's; a constant table equals `Currents 1` and a
   grid uniform in x and y equals `Currents 2`; on a 70 m rope the tension change of a time-varying
   and of a sheared current matches MoorDyn-C's within 0.9 %, and the static start in a sheared grid
-  holds the tensions to 1.4e-7 of the change the current makes.
+  holds the tensions to 1.4e-7 of the change the current makes. The C API, without a clock,
+  refuses a table that varies in time.
 
 ### Changed
 
@@ -220,6 +221,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and where a light rope's steep residual (BA_s|BA_d = 1e4|1e3) changes sign between two
   adjacent reals it returns that root to machine precision. Over 440,000 fuzzed states every
   solve that converged before is bit-identical, and the 26 that failed now converge.
+- The static start of an `EI = 0` line now carries a deck current that is zero along the
+  straight chord between its ends but not where the line sags (a depth profile or a current
+  grid): it was solved in still water and the march drifted toward the current's equilibrium.
+  On a 70 m rope with its ends at z = -20 m in 0.8 m/s below z = -32 m the start now holds to
+  machine precision (it drifted 192 N in 4 s) and agrees with the finite-EI route within 0.14 %.
+  The static tangent takes the current's gradient along the line, so the Newton iteration also
+  converges in a current sheared across the line. A later `current` row now discards the levels
+  of an earlier profile row.
 - A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
   start, reduces the record over its own length instead of failing for want of a positive
   `TMax`.

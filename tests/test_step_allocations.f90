@@ -25,8 +25,13 @@ PROGRAM test_step_allocations
   !! the same cable carries the nodal twist (polar inertia and torsional damping), with its
   !! 7-DOF-per-node band and the node-torque and element-twist queries.
   !!
+  !! With "current_grid" the gate runs the evaluation of a MoorDyn-C current grid (Currents 2 and
+  !! 5) that every standalone step makes at every node: CD_Current_Grid_Velocity, and the gradient
+  !! of the EI = 0 static tangent (CD_Current_Grid_Gradient), at points inside and outside a
+  !! sheared grid and at times before, inside and past its last sample.
+  !!
   !! Usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]
-  !!        test_step_allocations torsion | nodal
+  !!        test_step_allocations torsion | nodal | current_grid
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT, C_LONG_LONG
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
@@ -37,6 +42,8 @@ PROGRAM test_step_allocations
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_End_Force, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Dyn_Torsion_State, CD_HermiteCable_Dyn_Node_Torque, &
                                           CD_HermiteCable_Dyn_Element_Twist
+  USE CableDyn_Hydro, ONLY: CD_CurrentGridType, CD_Current_Grid_Resample, CD_Current_Grid_Velocity, &
+                            CD_Current_Grid_Gradient
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_NFluidNodes, CD_AGG_NumChannels, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_Snapshot, CD_AGG_SetFluidFields, CD_AGG_Step_Moving, &
@@ -67,7 +74,12 @@ PROGRAM test_step_allocations
 
   IF (COMMAND_ARGUMENT_COUNT() == 1) THEN
     CALL GET_COMMAND_ARGUMENT(1, arg)
-    IF (TRIM(arg) /= 'torsion' .AND. TRIM(arg) /= 'nodal') ERROR STOP 'a single argument must be "torsion" or "nodal"'
+    IF (TRIM(arg) == 'current_grid') THEN
+      CALL current_grid_gate()
+      STOP
+    END IF
+    IF (TRIM(arg) /= 'torsion' .AND. TRIM(arg) /= 'nodal') &
+      ERROR STOP 'a single argument must be "torsion", "nodal" or "current_grid"'
     CALL torsion_gate(TRIM(arg) == 'nodal')
     STOP
   END IF
@@ -277,6 +289,51 @@ CONTAINS
     END IF
     PRINT '(A)', 'PASS: no heap allocation in the per-step advance or outputs of a cable with torsion after warm-up'
   END SUBROUTINE torsion_gate
+
+  SUBROUTINE current_grid_gate()
+    TYPE(CD_CurrentGridType) :: grid
+    REAL(wp) :: xc(4), yc(2), zc(4), tc(4), v_in(3, 4, 2, 4, 4), u(3), g(3, 3), p(3), t, total
+    INTEGER(C_LONG_LONG) :: n0, n1
+    INTEGER :: ix, iy, iz, it, k
+    xc = [-60.0_wp, -20.0_wp, 10.0_wp, 50.0_wp]
+    yc = [-30.0_wp, 30.0_wp]
+    zc = [-50.0_wp, -25.0_wp, -10.0_wp, 0.0_wp]
+    tc = [0.0_wp, 5.0_wp, 12.0_wp, 20.0_wp]
+    DO it = 1, 4
+      DO iz = 1, 4
+        DO iy = 1, 2
+          DO ix = 1, 4
+            v_in(:, ix, iy, iz, it) = [0.4_wp + 0.006_wp*xc(ix) + 0.01_wp*tc(it), 0.003_wp*yc(iy), 0.001_wp*zc(iz)]
+          END DO
+        END DO
+      END DO
+    END DO
+    CALL CD_Current_Grid_Resample(xc, yc, zc, tc, v_in, grid, es, em)
+    CALL check('current grid resample')
+    total = 0.0_wp
+    ! warm-up (any lazy runtime set-up outside the counted window)
+    CALL CD_Current_Grid_Velocity(grid, [1.0_wp, 2.0_wp, -3.0_wp], 1.0_wp, u, es, em)
+    CALL check('current grid warm-up')
+    CALL cd_test_allocation_counting(1_C_INT)
+    n0 = cd_test_allocation_count()
+    DO k = 1, 20000
+      t = -1.0_wp + 0.0037_wp*REAL(k, wp)
+      p = [-80.0_wp + 0.0071_wp*REAL(k, wp), -45.0_wp + 0.0047_wp*REAL(k, wp), -60.0_wp + 0.0033_wp*REAL(k, wp)]
+      CALL CD_Current_Grid_Velocity(grid, p, t, u, es, em)
+      CALL check('current grid velocity')
+      CALL CD_Current_Grid_Gradient(grid, p, t, g, es, em)
+      CALL check('current grid gradient')
+      total = total + SUM(u) + SUM(g)
+    END DO
+    n1 = cd_test_allocation_count()
+    CALL cd_test_allocation_counting(0_C_INT)
+    PRINT '(A,I0,A,ES12.4,A)', 'current grid: 20000 evaluations, ', n1 - n0, ' heap allocations (checksum ', total, ')'
+    IF (n1 /= n0) THEN
+      PRINT '(A)', 'FAIL: the current grid evaluation allocated'
+      ERROR STOP 1
+    END IF
+    PRINT '(A)', 'PASS: no heap allocation in the current grid evaluation'
+  END SUBROUTINE current_grid_gate
 
   SUBROUTINE check(stage)
     CHARACTER(*), INTENT(IN) :: stage

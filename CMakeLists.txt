@@ -1430,6 +1430,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
   # And with the nodal twist (polar inertia, torsional damping, the 7-DOF-per-node band).
   add_test(NAME step_allocations_nodal_twist COMMAND test_step_allocations nodal)
   set_tests_properties(step_allocations_nodal_twist PROPERTIES LABELS "fortran;dynamic;memory")
+  # And the MoorDyn-C current grid (Currents 2 and 5) every standalone step samples at the nodes.
+  add_test(NAME step_allocations_current_grid COMMAND test_step_allocations current_grid)
+  set_tests_properties(step_allocations_current_grid PROPERTIES LABELS "fortran;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)

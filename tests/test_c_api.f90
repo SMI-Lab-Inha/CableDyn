@@ -26,6 +26,7 @@ PROGRAM test_c_api
   CALL case_lifecycle()
   CALL case_deck_init()
   CALL case_deck_dynamic_point_fluid()
+  CALL case_deck_current_in_time()
   CALL case_deck_bodies_rods()
   CALL case_init_update_output_step()
   CALL case_multiline_shared_map()
@@ -202,6 +203,87 @@ CONTAINS
     CALL CableDyn_Close(hydro_handle, es)
     CALL require(es == 0_C_INT .AND. .NOT. C_ASSOCIATED(hydro_handle), 'c-api-deck-fluid:close-hydro')
   END SUBROUTINE case_deck_dynamic_point_fluid
+
+  SUBROUTINE case_deck_current_in_time()
+    !! The C ABI has no simulation clock: a deck current that varies in time (MoorDyn-C
+    !! Currents 2) is refused, as deck waves are, rather than held at its t = 0 value; the same
+    !! table constant in time is the steady field the ABI applies, as Currents 1.
+    CHARACTER(*), PARAMETER :: DECK_PATH = 'capi_currents2_deck.dat'
+    CHARACTER(KIND=C_CHAR), TARGET :: c_path(LEN(DECK_PATH))
+    CHARACTER(KIND=C_CHAR), TARGET :: msg(300)
+    TYPE(C_PTR) :: handle
+    INTEGER(C_INT) :: es
+    INTEGER :: i
+
+    DO i = 1, LEN(DECK_PATH)
+      c_path(i) = DECK_PATH(i:i)
+    END DO
+    CALL write_capi_currents_deck(DECK_PATH, '0.2 0.2 0.0 0.0')
+    CALL CableDyn_Create(handle, es)
+    CALL require(es == 0_C_INT .AND. C_ASSOCIATED(handle), 'c-api-currents2:create')
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN(DECK_PATH), C_INT), es)
+    CALL require(es == 3_C_INT, 'c-api-currents2:varying-in-time-rejected')
+    CALL CableDyn_GetLastError(handle, C_LOC(msg), INT(SIZE(msg), C_INT))
+    CALL require(INDEX(c_text(msg), 'no simulation clock') > 0 .AND. INDEX(c_text(msg), 'Currents 2') > 0, &
+                 'c-api-currents2:varying-in-time-message')
+    CALL write_capi_currents_deck(DECK_PATH, '0.1 0.1 0.0 0.0')
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN(DECK_PATH), C_INT), es)
+    CALL require(es == 0_C_INT, 'c-api-currents2:constant-in-time-applied')
+    CALL CableDyn_Close(handle, es)
+    CALL require(es == 0_C_INT .AND. .NOT. C_ASSOCIATED(handle), 'c-api-currents2:close')
+  END SUBROUTINE case_deck_current_in_time
+
+  SUBROUTINE write_capi_currents_deck(path, row_later)
+    !! The smoke deck with Currents 2 and its current_profile_dynamic.txt: x velocities
+    !! 0.1 m/s at the two depths at t = 0 and the given row at t = 5 s.
+    CHARACTER(*), INTENT(IN) :: path, row_later
+    INTEGER :: u, ios
+
+    OPEN (NEWUNIT=u, FILE='current_profile_dynamic.txt', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL require(ios == 0, 'c-api-currents2:create-table')
+    IF (ios /= 0) RETURN
+    WRITE (u, '(A)') 'MoorDyn dynamic currents'
+    WRITE (u, '(A)') 'header'
+    WRITE (u, '(A)') ''
+    WRITE (u, '(A)') ''
+    WRITE (u, '(A)') '-5.0 0.0'
+    WRITE (u, '(A)') 't ux uy'
+    WRITE (u, '(A)') '0.0 0.1 0.1 0.0 0.0'
+    WRITE (u, '(A)') '5.0 '//row_later
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL require(ios == 0, 'c-api-currents2:create-file')
+    IF (ios /= 0) RETURN
+    WRITE (u, '(A)') 'C API deck with a MoorDyn-C current table'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'line 0.10 80.0 1.0e5 0.0 0.0 1.0 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Fixed 0.0 0.0 -1.0'
+    WRITE (u, '(A)') '2 Coupled 0.8 0.0 -1.0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 2 1 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 line 1.0 4'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '5.0 WtrDpth'
+    WRITE (u, '(A)') '0.01 dtM'
+    WRITE (u, '(A)') '1.0 TMax'
+    WRITE (u, '(A)') '2 Currents'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1 AnchTen1'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_capi_currents_deck
 
   SUBROUTINE case_init_update_output_step()
     TYPE(C_PTR) :: handle

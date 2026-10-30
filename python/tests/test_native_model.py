@@ -86,6 +86,26 @@ def test_failed_initialization_in_the_constructor_releases_the_handle(monkeypatc
     assert caught.value.status != 0 and caught.value.detail
 
 
+def test_a_deck_current_that_varies_in_time_is_refused_without_a_clock(tmp_path):
+    # The C ABI has no simulation clock: a MoorDyn-C Currents 2 table that varies in time is
+    # refused like deck waves; the same deck with a table constant in time applies it steadily.
+    case = REPO / "tests" / "data" / "currents_mdc" / "tension_c2"
+    deck = tmp_path / "tension.dat"
+    deck.write_bytes((case / "tension.dat").read_bytes())
+    table = tmp_path / "current_profile_dynamic.txt"
+    table.write_bytes((case / "current_profile_dynamic.txt").read_bytes())
+    with cabledyn.CableDyn() as m:
+        with pytest.raises(CableDynError):
+            m.init_deck(deck)
+        assert "no simulation clock" in m.last_error()
+        assert "Currents 2" in m.last_error()
+    table.write_text(
+        "h\nh\n\n\n-50.0 0.0\nt ux\n0.0 0.4 0.6\n10.0 0.4 0.6\n", encoding="utf-8", newline="\n"
+    )
+    with cabledyn.CableDyn(deck) as m:
+        assert m.n_lines == 1
+
+
 def test_last_error_reports_the_library_diagnostic():
     with cabledyn.CableDyn() as m:
         with pytest.raises(CableDynError) as caught:

@@ -1312,6 +1312,17 @@ CONTAINS
                 'fluid kinematics with CableDyn_UpdatePointFluidFields')
       RETURN
     END IF
+    ! Without a clock a current is held at its t = 0 value, the steady field the embedded system
+    ! applies (as Currents 1): a Currents 2/5 table that varies in time is refused like waves,
+    ! one constant in time (a steady depth profile or grid) is applied.
+    IF (opts%has_current_grid) THEN
+      IF (current_grid_varies_in_time(opts%current_grid)) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_System does not apply a deck current that varies in time '// &
+                  '(Currents '//TRIM(int_to_str(opts%mdc_currents))//'): the embedded system has no simulation '// &
+                  'clock; supply time-varying fluid kinematics with CableDyn_UpdatePointFluidFields')
+        RETURN
+      END IF
+    END IF
     dtM = MERGE(opts%dtM, CD_ZERO, opts%has_dtm)
     gravity = opts%g
     rho_water = opts%rhoW
@@ -1996,18 +2007,18 @@ CONTAINS
     ! static equilibrium is then solved in 3D as well.
     IF (opts%has_current) THEN
       IF (opts%has_current_grid) THEN
-        ! a current grid (Currents 2 and 5): every sample of it, in space and time
+        ! a current grid (Currents 2 and 5): the static start takes its t = 0 sample, every point
+        ! of it; the march is free out of the plane whatever the later samples hold (its held
+        ! DOFs are the end translations only)
         BLOCK
-          INTEGER :: ix, iy, iz, it
-          DO it = 1, opts%current_grid%nt
-            DO iz = 1, SIZE(opts%current_grid%z)
-              DO iy = 1, SIZE(opts%current_grid%y)
-                DO ix = 1, SIZE(opts%current_grid%x)
-                  IF (ABS(-frame_cs(2)*opts%current_grid%velocity(1, ix, iy, iz, it) + &
-                          frame_cs(1)*opts%current_grid%velocity(2, ix, iy, iz, it)) > &
-                      64.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, NORM2(opts%current_grid%velocity(:, ix, iy, iz, it)))) &
-                    require_3d_static = .TRUE.
-                END DO
+          INTEGER :: ix, iy, iz
+          DO iz = 1, SIZE(opts%current_grid%z)
+            DO iy = 1, SIZE(opts%current_grid%y)
+              DO ix = 1, SIZE(opts%current_grid%x)
+                IF (ABS(-frame_cs(2)*opts%current_grid%velocity(1, ix, iy, iz, 1) + &
+                        frame_cs(1)*opts%current_grid%velocity(2, ix, iy, iz, 1)) > &
+                    64.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, NORM2(opts%current_grid%velocity(:, ix, iy, iz, 1)))) &
+                  require_3d_static = .TRUE.
               END DO
             END DO
           END DO
@@ -7320,7 +7331,7 @@ CONTAINS
       RETURN
     END IF
     IF (opts%mdc_wave_kin > 0 .OR. opts%mdc_currents > 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'the MoorDyn-C WaveKin 3/7 and Currents 1 files are not supported on the '// &
+      CALL fail(ErrStat, ErrMsg, 'the MoorDyn-C WaveKin 3/7 and Currents 1/2/5 files are not supported on the '// &
                 'aggregate route (coupled runs take water kinematics from the host; standalone mixed '// &
                 'EI=0/finite-EI decks reject deck water kinematics)')
       RETURN
@@ -13292,6 +13303,9 @@ CONTAINS
     !!    7). A row's coordinates are matched by value.
     !!    Both are resampled in time as MoorDyn-C does and evaluated at every node position and
     !!    time (CD_Current_Grid_Resample, CD_Current_Grid_Velocity), with no fluid acceleration.
+    !!    The static start takes the t = 0 current, as MoorDyn-C's default stationary initial
+    !!    condition does (its legacy dynamic relaxation, ICgenDynamic 1, samples the current over
+    !!    the relaxation time instead).
     CHARACTER(*), INTENT(IN) :: dir
     TYPE(DeckOptions), INTENT(INOUT) :: opts
     INTEGER, INTENT(OUT) :: ErrStat
@@ -13681,7 +13695,7 @@ CONTAINS
 
     SUBROUTINE read_4d_grid()
       !! Currents 5: current_profile_4d.txt into opts%current_grid.
-      INTEGER(int64), PARAMETER :: MAX_POINTS = 10000000_int64
+      INTEGER(int64), PARAMETER :: MAX_POINTS = 2000000_int64
       CHARACTER(:), ALLOCATABLE :: buf
       INTEGER, ALLOCATABLE :: lo(:), hi(:)
       REAL(wp), ALLOCATABLE :: xc(:), yc(:), zc(:), tc(:), v5(:, :, :, :, :)
@@ -13722,7 +13736,7 @@ CONTAINS
           npts = PRODUCT(INT(dims, int64))
           IF (npts > MAX_POINTS) THEN
             CLOSE (unit)
-            CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' declares more than 1e7 grid points')
+            CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' declares more than 2e6 grid points')
             RETURN
           END IF
           DEALLOCATE (xc, yc, zc, tc, v5, seen)
@@ -15947,6 +15961,9 @@ CONTAINS
         opts%current_velocity = [x1, x2, x3]
         opts%has_current = .TRUE.
         opts%has_current_profile = .FALSE.
+        ! last row wins: an earlier profile row leaves no levels behind
+        IF (ALLOCATED(opts%current_profile_z)) DEALLOCATE (opts%current_profile_z)
+        IF (ALLOCATED(opts%current_profile_velocity)) DEALLOCATE (opts%current_profile_velocity)
         RETURN
       ELSE IF (to_lower(TRIM(kw)) == 'waves' .OR. to_lower(TRIM(kw)) == 'wave') THEN
         IF (to_lower(TRIM(mode)) /= 'airy' .AND. to_lower(TRIM(mode)) /= 'stream' .AND. &
@@ -16312,6 +16329,8 @@ CONTAINS
         opts%has_current = .FALSE.
         opts%current_velocity = CD_ZERO
         opts%has_current_profile = .FALSE.
+        IF (ALLOCATED(opts%current_profile_z)) DEALLOCATE (opts%current_profile_z)
+        IF (ALLOCATED(opts%current_profile_velocity)) DEALLOCATE (opts%current_profile_velocity)
       ELSE
         CALL fail(ErrStat, ErrMsg, 'OPTION current supports "none current" or "uniform vx vy vz current"')
       END IF
@@ -17151,6 +17170,10 @@ CONTAINS
     IF (opts%has_current) THEN
       ! A caller-driven (coupled) deck takes its clock from the host, as for frictionMu.
       IF (.NOT. caller_driven .AND. .NOT. opts%has_dtm) THEN
+        IF (opts%mdc_currents > 0) THEN
+          CALL fail(ErrStat, ErrMsg, 'standalone Currents '//TRIM(int_to_str(opts%mdc_currents))// &
+                    ' requires dtM and TMax'); RETURN
+        END IF
         CALL fail(ErrStat, ErrMsg, 'standalone OPTION current requires dtM and TMax'); RETURN
       END IF
       IF (.NOT. ALL(IEEE_IS_FINITE(opts%current_velocity))) THEN
@@ -30615,6 +30638,19 @@ CONTAINS
                                        velocity, ErrStat, ErrMsg)
     END IF
   END FUNCTION deck_current_velocity
+
+  PURE LOGICAL FUNCTION current_grid_varies_in_time(grid) RESULT(varies)
+    !! Whether a current grid holds a sample that differs from its t = 0 sample.
+    TYPE(CD_CurrentGridType), INTENT(IN) :: grid
+    INTEGER :: n
+    varies = .FALSE.
+    DO n = 2, grid%nt
+      IF (ANY(ABS(grid%velocity(:, :, :, :, n) - grid%velocity(:, :, :, :, 1)) > CD_ZERO)) THEN
+        varies = .TRUE.
+        RETURN
+      END IF
+    END DO
+  END FUNCTION current_grid_varies_in_time
 
   PURE FUNCTION line_node_pos(anchor, fairlead, l0, node_id) RESULT(x)
     !! Straight-line position estimate for initial environment fields before

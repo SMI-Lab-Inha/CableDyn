@@ -2507,7 +2507,7 @@ class DeckFile:
                     f"{self._label}: OPTION TMax must be an integer multiple of dtM"
                 )
         # MoorDyn-C WaveKin 3/7 and Currents 1/2/5 (native read_moordyn_c_kinematics): component
-        # waves and a steady current profile read from fixed-name files in the deck folder.
+        # waves and a current profile or grid read from fixed-name files in the deck folder.
         # The coupled aggregate takes its water kinematics from the host and rejects both.
         waterkin_row = option_by_key.get("waterkin")
         currents_row = option_by_key.get("currents")
@@ -2515,8 +2515,8 @@ class DeckFile:
         mdc_currents = _moordyn_c_currents(None if currents_row is None else currents_row.values[0])
         if self.caller_driven and (mdc_wave_kin or mdc_currents):
             raise DeckFormatError(
-                f"{self._label}: the MoorDyn-C WaveKin 3/7 and Currents 1 files are not supported "
-                "on the coupled route (coupled runs take water kinematics from the host)"
+                f"{self._label}: the MoorDyn-C WaveKin 3/7 and Currents 1/2/5 files are not "
+                "supported on the coupled route (coupled runs take water kinematics from the host)"
             )
         # Native apply_option: motionFile, vesselMotion and vesselRAO are alternative
         # sources of one prescribed motion; activating a second one is an error, and a

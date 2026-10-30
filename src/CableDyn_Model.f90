@@ -1544,6 +1544,7 @@ CONTAINS
     ! A current grid in space and time (MoorDyn-C Currents 2 and 5): the static initial condition
     ! then samples it at each node's own position at t = 0, in place of the depth profile.
     TYPE(CD_CurrentGridType), INTENT(IN), OPTIONAL :: current_grid
+    LOGICAL :: field_on
     ! Static seabed friction (with seabed_mu > 0 on a seabed): the policy
     ! (CD_STATIC_FRICTION_AS_LAID or CD_STATIC_FRICTION_NONE, the default), the lay azimuth
     ! [rad, from global +x toward +y; default: the horizontal direction of the chord from
@@ -1722,10 +1723,20 @@ CONTAINS
     ! strut. A steady current enters as Morison drag on the line at rest, with the node
     ! velocities and element hydrodynamics the dynamic model is built with, so the first
     ! dynamic step starts from equilibrium.
+    ! The static start carries the current wherever the field is non-zero: in the node
+    ! velocities, in the depth profile or in the current grid at t = 0 (the node velocities are
+    ! sampled on the straight chord, where a current below the chord would be missed).
     use_current = .FALSE.
     IF (PRESENT(fluid_velocity) .AND. PRESENT(drag_rho)) THEN
       IF (SIZE(fluid_velocity, 1) == 3 .AND. SIZE(fluid_velocity, 2) == n_elem + 1) THEN
-        IF (ANY(ABS(fluid_velocity) > CD_ZERO)) THEN
+        field_on = ANY(ABS(fluid_velocity) > CD_ZERO)
+        IF (PRESENT(current_profile_z) .AND. PRESENT(current_profile_velocity)) &
+          field_on = field_on .OR. ANY(ABS(current_profile_velocity) > CD_ZERO)
+        IF (PRESENT(current_grid)) THEN
+          IF (ALLOCATED(current_grid%velocity)) &
+            field_on = field_on .OR. ANY(ABS(current_grid%velocity(:, :, :, :, 1)) > CD_ZERO)
+        END IF
+        IF (field_on) THEN
           IF (PRESENT(drag_diameter_elem) .AND. PRESENT(drag_cdn_elem) .AND. PRESENT(drag_cdt_elem)) THEN
             use_current = .TRUE.
             cur%elem_diameter = drag_diameter_elem
