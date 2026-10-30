@@ -344,10 +344,11 @@ substeps; an output probe moves the frame without a step, is limited to 90° fro
 committed twist, and stops by name beyond it (a restart first restores the checkpoint's twist,
 so it is not limited this way). Formal
 linearisation takes the line's twist angles as states and the platform rotation as an input
-(see `Linearisation`_). The C API's ``CableDyn_InitDeck``/``InitDeckAt`` and the standalone
-deck that mixes ``EI = 0`` and finite-EI lines without a body move the line ends by translation
-only and refuse torsion columns; a C API host that initialises with
-``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`).
+(see `Linearisation`_). The C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by
+translation only and refuse torsion columns; a C API host that initialises with
+``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`). The standalone driver runs a
+deck that mixes ``EI = 0`` and finite-EI lines on the same aggregate, holding the line end
+frames or turning them with its ``vesselMotion`` and its ``motionFile`` roll column.
 
 Lifecycle features
 ------------------

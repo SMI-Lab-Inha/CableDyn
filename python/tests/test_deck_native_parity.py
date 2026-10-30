@@ -846,7 +846,11 @@ def test_standalone_mixed_deck_runs_on_the_still_water_aggregate():
     _rejects(_options(_MIXED, "uniform 0.5 0 0 current"), "runs in still water")
     _rejects(_options(_MIXED, "airy 2 8 0 waves"), "runs in still water")
     _rejects(_edit(_MIXED, ("2 2 3 -", "2 2 3 pt")), "writes no per-line files")
-    _rejects(_options(_MIXED, "m.txt motionFile"), "mixed EI=0/finite-EI deck does not support")
+    # the driver marches the deck's motionFile or vesselMotion; vesselRAO needs deck waves
+    DeckFile.from_text(_options(_MIXED, "m.txt motionFile"))
+    DeckFile.from_text(_options(_MIXED, "v.txt vesselMotion", "0|0|0 vesselRef"))
+    _rejects(_options(_MIXED, "r.txt vesselRAO"), "vesselRAO needs deck waves")
+    _rejects(_options(_MIXED, "r.txt vesselRAO", "airy 2 8 0 waves"), "runs in still water")
 
 
 def test_coupled_route_takes_no_motion_file_and_needs_a_line():
@@ -1100,8 +1104,10 @@ def test_torsion_scope_rules_follow_the_native_checks():
     DeckFile.from_text(_edit(both_free, _NO_TORSION_OUTPUTS))
 
 
-def test_torsion_on_a_standalone_mixed_deck_is_refused():
-    # a mixed EI = 0 + finite-EI deck without bodies runs on the aggregate, which has no torsion
+def test_torsion_on_a_standalone_mixed_deck_is_accepted():
+    # a mixed EI = 0 + finite-EI deck without bodies runs on the aggregate, whose driver holds the
+    # line end frames or turns them with the deck's vesselMotion and rolls them with the
+    # motionFile roll column (test_mixed_route_torsion)
     gj_cable = _edit(
         _MIXED,
         (
@@ -1128,8 +1134,16 @@ def test_torsion_on_a_standalone_mixed_deck_is_refused():
             "LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist",
             *rows,
         )
-        _rejects(text, "mixes EI = 0 and finite-EI lines without a BODY")
-        _rejects(_options(text, "10.0 TMax"), "mixes EI = 0 and finite-EI lines without a BODY")
+        DeckFile.from_text(text)
+        DeckFile.from_text(_edit(text, ("10.0 TMax\n", "0.0 TMax\n")))
+        DeckFile.from_text(_options(text, "m.txt motionFile"))
+        DeckFile.from_text(_options(text, "v.txt vesselMotion", "0|0|0 vesselRef"))
+        if "Free" not in rows[1]:
+            # restrained at both ends, the dynamic run needs the force blend, as on every route
+            _rejects(
+                _options(text, "False alpha_force_blend"),
+                "needs the force-blended generalised-alpha",
+            )
 
 
 @pytest.mark.parametrize(

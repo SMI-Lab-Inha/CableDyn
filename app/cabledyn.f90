@@ -31,7 +31,9 @@ PROGRAM cabledyn
                                          CD_AGG_NumChannels, CD_AGG_ChannelHeader, &
                                          CD_AGG_EvalChannel, CD_AGG_WriteStaticProfile, &
                                          CD_AGG_GetInitMetadata, CD_AGG_GetInitLine, &
-                                         CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_OK, CD_AGG_BADINPUT
+                                         CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_OK, CD_AGG_BADINPUT, &
+                                         CD_AGG_UpdateStates_Moving, CD_AGG_MotionKinematics, &
+                                         CD_AGG_Refresh_Accelerations
   USE CableDyn_Banner, ONLY: CD_Print_Banner
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Install, CD_Fatal_Report_Time
@@ -452,9 +454,13 @@ CONTAINS
   SUBROUTINE run_mixed_held_deck(deck, root, dt, has_dt, run_time, has_run_time, has_motion, line_outputs, &
                                  run_converged, run_stat, run_msg)
     !! Standalone owner for a mixed {EI=0 + finite-EI} deck. It deliberately reuses
-    !! the production OpenFAST aggregate and holds the initialized coupled endpoints.
-    !! Prescribed reference-body motion and deck-owned ambient fields require separate
-    !! transformations/updaters and therefore remain explicit fail-closed boundaries.
+    !! the production OpenFAST aggregate and holds the initialized coupled endpoints, or,
+    !! with a motionFile or vesselMotion OPTION, marches them through the deck's prescribed
+    !! motion as the standalone cubic-Hermite route does: the point rows' translations, the
+    !! vessel's rotation (the orientation and angular rates the fairlead end connection and
+    !! torsion frames turn with) and the motionFile roll column (the imposed twist of a line
+    !! restrained in torsion). Deck-owned ambient fields require separate updaters and
+    !! therefore remain an explicit fail-closed boundary.
     CHARACTER(*), INTENT(IN) :: deck, root
     REAL(wp), INTENT(IN) :: dt, run_time
     LOGICAL, INTENT(IN) :: has_dt, has_run_time, has_motion, line_outputs
@@ -464,10 +470,12 @@ CONTAINS
 
     TYPE(CD_AGG_ModuleType), ALLOCATABLE :: aggregate   ! about 37 KB: on the heap, not the stack
     REAL(wp), ALLOCATABLE :: position(:, :), velocity(:, :), acceleration(:, :), load(:, :)
+    ! the prescribed motion's frame rotation and roll over the moving surface
+    REAL(wp), ALLOCATABLE :: orientation(:, :, :), angular_velocity(:, :), angular_acceleration(:, :), roll(:)
     REAL(wp) :: time, first_miss_time, last_miss_time, step_dt
     INTEGER :: es, n_moving, nstep, step, n_iter, miss_count, consecutive_miss, max_consecutive_miss
     INTEGER :: unit, ios
-    LOGICAL :: step_converged, stalled, file_open
+    LOGICAL :: step_converged, stalled, file_open, turns, rolls
     CHARACTER(4096) :: em
     CHARACTER(4096) :: static_path, dynamic_path
     TYPE(StandaloneProgress) :: progress
@@ -477,11 +485,8 @@ CONTAINS
     run_msg = ''
     file_open = .FALSE.
     unit = 0
-    IF (has_motion) THEN
-      run_msg = 'CableDyn_driver: mixed-deck motionFile is not supported; platform-reference motion '// &
-                'must be rigidly transformed to every coupled hang-off before marching'
-      RETURN
-    END IF
+    turns = .FALSE.
+    rolls = .FALSE.
     IF (line_outputs) THEN
       run_msg = 'CableDyn_driver: mixed-deck LINE Outputs p/t/V are not supported; '// &
                 'use main OUTPUTS channels or remove the per-line flags'
@@ -523,9 +528,12 @@ CONTAINS
         EXIT mixed_run
       END IF
       ! The aggregate is caller-driven and cannot refresh standalone wave/current
-      ! OPTIONS. Reject such decks by name instead of silently holding zero fluid.
+      ! OPTIONS. Reject such decks by name instead of silently holding zero fluid. The driver
+      ! holds the line end frames or turns them with the deck's vesselMotion table
+      ! (host_orientation), and marches the deck's prescribed motion (prescribed_motion).
       CALL CD_AGG_Init_From_Deck(aggregate, deck, step_dt, es, em, forbid_deck_ambient=.TRUE., &
-                                 run_tmax=MAX(CD_ZERO, run_time), range_files=.TRUE.)
+                                 run_tmax=MAX(CD_ZERO, run_time), range_files=.TRUE., host_orientation=.TRUE., &
+                                 prescribed_motion=has_motion)
       IF (es /= CD_AGG_OK) THEN
         CALL set_aggregate_error(es, em, run_stat, run_msg)
         EXIT mixed_run
@@ -539,7 +547,8 @@ CONTAINS
         EXIT mixed_run
       END IF
       ALLOCATE (position(3, n_moving), velocity(3, n_moving), acceleration(3, n_moving), &
-                load(3, n_moving), STAT=ios)
+                load(3, n_moving), orientation(3, 3, n_moving), angular_velocity(3, n_moving), &
+                angular_acceleration(3, n_moving), roll(n_moving), STAT=ios)
       IF (ios /= 0) THEN
         run_stat = CD_DECKDRV_SOLVEFAIL
         run_msg = 'CableDyn_driver: cannot allocate the mixed aggregate boundary workspace'
@@ -550,11 +559,34 @@ CONTAINS
         CALL set_aggregate_error(es, em, run_stat, run_msg)
         EXIT mixed_run
       END IF
-      ! A standalone deck with no motionFile means held coupling boundaries. Initial
-      ! solver accelerations are not prescribed boundary accelerations and must not be
-      ! fed back into the first step.
-      velocity = CD_ZERO
-      acceleration = CD_ZERO
+      IF (has_motion .AND. nstep > 0) THEN
+        ! Install row 1 of the prescribed motion without advancing (it may differ from the deck
+        ! pose), then recompute the cables' free-node accelerations from their complete
+        ! residual at that state, as the standalone cubic-Hermite route does before its march
+        ! (a run without one, TMax = 0, writes the static state as that route does).
+        CALL CD_AGG_MotionKinematics(aggregate, 1, position, velocity, acceleration, orientation, &
+                                     angular_velocity, angular_acceleration, roll, turns, rolls, es, em)
+        IF (es == CD_AGG_OK) THEN
+          IF (turns) THEN
+            CALL CD_AGG_UpdateStates_Moving(aggregate, position, velocity, acceleration, es, em, &
+                                            orientation=orientation, angular_velocity=angular_velocity, &
+                                            angular_acceleration=angular_acceleration)
+          ELSE
+            CALL CD_AGG_UpdateStates_Moving(aggregate, position, velocity, acceleration, es, em)
+          END IF
+        END IF
+        IF (es == CD_AGG_OK) CALL CD_AGG_Refresh_Accelerations(aggregate, es, em)
+        IF (es /= CD_AGG_OK) THEN
+          CALL set_aggregate_error(es, em, run_stat, run_msg)
+          EXIT mixed_run
+        END IF
+      ELSE
+        ! A standalone deck with no prescribed motion means held coupling boundaries. Initial
+        ! solver accelerations are not prescribed boundary accelerations and must not be
+        ! fed back into the first step.
+        velocity = CD_ZERO
+        acceleration = CD_ZERO
+      END IF
 
       static_path = TRIM(root)//'.static.out'
       CALL CD_AGG_WriteStaticProfile(aggregate, TRIM(static_path), es, em)
@@ -604,8 +636,26 @@ CONTAINS
       IF (nstep > 0) CALL start_standalone_progress(progress, nstep, step_dt)
       DO step = 1, nstep
         time = REAL(step, wp)*step_dt
-        CALL CD_AGG_Step_Moving(aggregate, step_dt, position, velocity, acceleration, step_converged, stalled, &
-                                n_iter, es, em, t_committed=time)
+        IF (has_motion) THEN
+          ! the prescribed boundary at t + dt: grid row step + 1
+          CALL CD_AGG_MotionKinematics(aggregate, step + 1, position, velocity, acceleration, orientation, &
+                                       angular_velocity, angular_acceleration, roll, turns, rolls, es, em)
+          IF (es /= CD_AGG_OK) THEN
+            CALL set_aggregate_error(es, em, run_stat, run_msg)
+            EXIT mixed_run
+          END IF
+        END IF
+        IF (turns) THEN
+          CALL CD_AGG_Step_Moving(aggregate, step_dt, position, velocity, acceleration, step_converged, stalled, &
+                                  n_iter, es, em, t_committed=time, orientation=orientation, &
+                                  angular_velocity=angular_velocity, angular_acceleration=angular_acceleration)
+        ELSE IF (rolls) THEN
+          CALL CD_AGG_Step_Moving(aggregate, step_dt, position, velocity, acceleration, step_converged, stalled, &
+                                  n_iter, es, em, t_committed=time, roll=roll)
+        ELSE
+          CALL CD_AGG_Step_Moving(aggregate, step_dt, position, velocity, acceleration, step_converged, stalled, &
+                                  n_iter, es, em, t_committed=time)
+        END IF
         CALL CD_Profile_Enter(CD_PROF_CHECK)
         IF (es /= CD_AGG_OK) THEN
           CALL set_aggregate_error(es, em, run_stat, run_msg)

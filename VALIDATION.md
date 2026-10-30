@@ -106,6 +106,7 @@ article's methods, are compared in
 | **T-13** | Nodal twist (torsional inertia and damping) | condensed torsion in the limit of no inertia; continuum torsional wave; `ζ = ω Bt/(2 GJ)`; energy; restart | ≤6e-7 against the condensed torsion; wave torque 0.07 %; decrement 6 %; energy band 4.9e-4; restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-12** | Torque–tension coupling | `T = EA ε + K τ`, `M = GJ τ + K ε` closed forms; kernel FD; march | ≤1e-7 against every closed form; kernel gradient 1.7e-10, Hessian 9.8e-11 | see [Torsion](#torsion) | Pass |
 | **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
+| **T-16** | Torsion and prescribed motion on the standalone mixed deck | the single-line cubic-Hermite route; `GJ Φ/L` | torque, twist, node positions to the printed digits; end loads ≤8.2e-6 of range (all channels to the printed digits with the same Newton controls); torque ≤4.7e-6 N·m | printed digits; 5e-5; 1e-6 GJ | Pass |
 
 **Pass** meets the stated acceptance value. **Pass measured** records a measured
 comparison without an acceptance value. **Informative** is reported but not used for
@@ -1101,14 +1102,32 @@ in parentheses).
   straight line's torsional modes and its bending and axial modes against `TorsStiffness Free`
   hold to the table's nine digits, turned 30° about +z it keeps its frequencies and writes its
   positions in the deck's axes, and the lazy wave twisted two turns writes its modes.
+- **T-16 standalone mixed deck** (`mixed_route_torsion`, `step_allocations_motion_*`). A deck
+  that mixes `EI = 0` and finite-EI lines between `Fixed`/`Coupled`/`Vessel` points runs on the
+  coupled aggregate, which the driver marches through the deck's `motionFile` or
+  `vesselMotion`. A sagging 100 m finite-EI line clamped and restrained in torsion at both ends
+  (Pretwist 20° at End B), driven from rest by a vessel rolling 20°, pitching 4° and heaving
+  1 m, or by a 1 m surge with a 20° roll column, gives the same channels alone (the single-line
+  cubic-Hermite route) and beside a moving chain (the mixed route): torque, twist and the
+  mid-line node to the printed digits (at most 0.57 of a unit in the eighth digit), the fairlead
+  and anchor tensions, fairlead inclination and End A bend moment within 8.2e-6 of their range,
+  the out-of-plane node offset within 2.2e-8 m. The difference is the Newton tolerance: the
+  coupled cables step with the coupled controls (relative tolerance 5e-3, a fresh factor every
+  step), the single line with the deck's (1e-8, a carried factor); given the single-line
+  controls, the mixed route reproduces every channel of the single-line route to 0.36 of a
+  printed unit. The vessel turns the clamp and the torsion frame on both routes: a `motionFile`
+  of the same point translations, which holds them, changes the End A bend moment by 11 % of
+  its range and the twist by 19°. A straight neutral line beside a chain, its End A held or
+  rolled by up to 30° by a vessel or by the roll column, gives `Twist1 = Pretwist − roll` to
+  5e-7° and `Torq = GJ Φ/L` at both ends to 4.7e-6 N·m. A non-zero roll column at the chain's
+  point stops by name, and the march makes no heap allocation after warm-up.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
   give the same run. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
-  `ATTACHMENTS`, the configuration blend (also on the coupled entries), misuse of
-  the roll column, channels on an unrestrained line, a coupled caller that passes no orientation
-  (the C API) and a standalone mixed `EI = 0` + finite-EI deck without a body stop with named
-  errors.
+  the configuration blend (also on the coupled entries), misuse of the roll column, channels on
+  an unrestrained line and a coupled caller that passes no orientation (the C API's
+  `CableDyn_InitDeck`/`InitDeckAt`) stop with named errors.
 
 Limits. The torsion model takes no seabed friction against twist and does not resolve
 self-contact; its statics are condensed (uniform torque). The nodal twist's inertia and damping

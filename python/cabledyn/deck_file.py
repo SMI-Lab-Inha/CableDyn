@@ -3448,7 +3448,6 @@ class DeckFile:
             body_types,
             option_by_key,
             has_tmax,
-            mixed_route,
         )
 
         rod_types = self._rows("ROD TYPES")
@@ -3622,17 +3621,14 @@ class DeckFile:
         # deck driver, whose dispatch gates follow.
         deck_driver_route = not self.caller_driven and not mixed_route
         if self.caller_driven or mixed_route:
-            # native CD_Init_Deck_Aggregate: the host (or, for a standalone mixed deck, the
-            # driver holding the initialized ends) drives the coupled boundary
+            # native CD_Init_Deck_Aggregate: the host drives the coupled boundary; a standalone
+            # mixed deck is driven by the driver, which holds the initialized ends or marches
+            # the deck's motionFile/vesselMotion (prescribed_motion; vesselRAO needs deck
+            # waves, which the still-water mixed route refuses below)
             if has_motion_file and self.caller_driven:
                 raise DeckFormatError(
                     f"{self._label}: the coupled boundary is driven by the host, not a deck "
                     "motionFile; remove the motionFile OPTION"
-                )
-            if has_motion_file:
-                raise DeckFormatError(
-                    f"{self._label}: a mixed EI=0/finite-EI deck does not support motionFile "
-                    "(the driver holds its coupled ends)"
                 )
             if not line_ids:
                 raise DeckFormatError(f"{self._label}: the coupled route needs at least one line")
@@ -4285,7 +4281,6 @@ class DeckFile:
         body_types: dict[str, str],
         option_by_key: dict[str, OptionRecord],
         has_tmax: bool,
-        aggregate_route: bool,
     ) -> set[str]:
         """Native ``check_torsion_line`` and the driver's torsion scope; the torsional lines.
 
@@ -4295,18 +4290,16 @@ class DeckFile:
         be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
         rod end nor on a body other than Rigid6. A deck with torsion runs dynamics only with
         the force-blended generalised-alpha (a coupled run is always dynamic); its modal
-        analysis (nModes) carries the twist. A standalone mixed EI = 0 + finite-EI deck
-        without bodies (``aggregate_route``, run on the aggregate, which moves the line ends by
-        translation only) refuses any torsion column, one restrained end included; the coupled
-        OpenFAST and FAST.Farm routes turn the fairlead frame with the platform and accept it.
+        analysis (nModes) carries the twist. The coupled OpenFAST and FAST.Farm routes turn the
+        fairlead frame with the platform, and the standalone mixed EI = 0 + finite-EI deck
+        without bodies (run on the aggregate) holds it or turns it with its vesselMotion and
+        rolls it with the motionFile roll column, as the standalone cubic-Hermite route does.
         """
         # _check_attachments has already accepted every LineID as an integer
         torsion_lines: set[str] = set()
-        has_torsion_column = False
         for line_id, ends in torsion_ends.items():
             if not any(ends.values()):
                 continue
-            has_torsion_column = True
             if not any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id]):
                 raise DeckFormatError(
                     f"{self._label}: torsional END CONNECTIONS (TorsStiffness Rigid or a "
@@ -4346,18 +4339,6 @@ class DeckFile:
                     "a Rigid6 body"
                 )
             torsion_lines.add(line_id)
-        # native CD_Init_Deck_Aggregate (deck_has_torsion_columns): a standalone mixed EI = 0 +
-        # finite-EI deck without bodies moves its line ends by translation only and refuses any
-        # restrained end; the OpenFAST and FAST.Farm hosts turn the fairlead frame
-        if has_torsion_column and aggregate_route and not self.caller_driven:
-            raise DeckFormatError(
-                f"{self._label}: a line restrained in torsion needs a host that turns its fairlead "
-                "frame: coupled OpenFAST and FAST.Farm runs do, and a C API host initialised with "
-                "CableDyn_InitDeckRotating, while CableDyn_InitDeck/InitDeckAt and a standalone "
-                "deck that mixes EI = 0 and finite-EI lines without a BODY move the line ends by "
-                "translation only (with a BODY such a deck runs on the multibody route, which "
-                "supports torsion); set TorsStiffness Free in every END CONNECTIONS row"
-            )
         if not torsion_lines:
             return torsion_lines
         tmax_row = option_by_key.get("tmax")

@@ -215,6 +215,11 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_Rigid6_ScatterHostPoints, CD_Rigid6_HostWrench, CD_Rigid6_Stage, CD_Rigid6_Unstage
   PUBLIC :: CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations
   PUBLIC :: CD_RodRuntimeType
+  ! Prescribed motion of a standalone mixed deck: the aggregate owns the schedule the standalone
+  ! driver marches it with (opaque; MotionTable/DeckPoint stay private).
+  PUBLIC :: CD_MotionRuntimeType
+  PUBLIC :: CD_Motion_Active, CD_Motion_NColumns, CD_Motion_Has_Rotation, CD_Motion_Has_Roll
+  PUBLIC :: CD_Motion_Kinematics, CD_Motion_Deck_Positions, CD_Motion_End
   PUBLIC :: CD_Init_Deck_Aggregate_Rod, CD_Step_Aggregate_Rod
   PUBLIC :: CD_Rod_NRods, CD_Rod_Snapshot, CD_Rod_Restore, CD_Rod_End
   PUBLIC :: CD_Rod_MirrorSize, CD_Rod_Get_States, CD_Rod_Set_States, CD_Rod_Apply_States
@@ -285,11 +290,10 @@ MODULE CableDyn_DeckDriver
   CHARACTER(*), PARAMETER :: INSPECTION_NOTE = ' Output contains only committed states and is for inspection only.'
   ! a line restrained in torsion on an entry whose caller does not turn the fairlead frame
   CHARACTER(*), PARAMETER :: TORSION_NEEDS_ORIENTATION = 'a line restrained in torsion needs a host that '// &
-                             'turns its fairlead frame: coupled OpenFAST and FAST.Farm runs do, and a C API host '// &
-                             'initialised with CableDyn_InitDeckRotating, while CableDyn_InitDeck/InitDeckAt '// &
-                             'and a standalone deck that mixes EI = 0 and finite-EI lines without a BODY move '// &
-                             'the line ends by translation only (with a BODY such a deck runs on the multibody '// &
-                             'route, which supports torsion); set TorsStiffness Free in every END CONNECTIONS row'
+                             'turns its fairlead frame: coupled OpenFAST and FAST.Farm runs do, as does the '// &
+                             'standalone driver and a C API host initialised with CableDyn_InitDeckRotating, '// &
+                             'while CableDyn_InitDeck/InitDeckAt move the line ends by translation only; set '// &
+                             'TorsStiffness Free in every END CONNECTIONS row'
   CHARACTER(*), PARAMETER :: TORSION_NEEDS_FORCE_BLEND = 'torsion in a dynamic run needs the force-blended '// &
                              'generalised-alpha (OPTION alpha_force_blend True)'
   CHARACTER(*), PARAMETER :: CONTROL_NEEDS_FORCE_BLEND = 'active line control of a finite-EI line needs the '// &
@@ -1042,6 +1046,25 @@ MODULE CableDyn_DeckDriver
     TYPE(RodState), ALLOCATABLE :: stage_rods(:)
   END TYPE
 
+  !> Opaque prescribed-motion schedule of a standalone mixed deck, which the standalone driver
+  !> marches on the coupled aggregate: the deck's motionFile or vesselMotion table (read by
+  !> CD_Init_Deck_Aggregate with prescribed_motion) and, per aggregate moving column, the
+  !> Coupled/Vessel point that drives it. CD_Motion_Kinematics returns one grid row of the
+  !> moving surface: the point translations, the vessel rotation of a vesselMotion table (the
+  !> orientation the end connection and torsion frames turn with) and the motionFile roll column.
+  TYPE :: CD_MotionRuntimeType
+    PRIVATE
+    LOGICAL :: active = .FALSE.
+    TYPE(MotionTable) :: motion
+    ! per aggregate moving column: the motion-table point that drives it, and its deck position
+    INTEGER, ALLOCATABLE :: col_point(:)
+    REAL(wp), ALLOCATABLE :: col_pos(:, :)
+    ! per aggregate moving column: the column takes the roll column of its point (the moving
+    ! End A of a finite-EI line restrained in torsion at both ends, as on the standalone
+    ! cubic-Hermite route)
+    LOGICAL, ALLOCATABLE :: col_roll(:)
+  END TYPE
+
   TYPE :: FiniteDeckModel
     TYPE(CD_FiniteEIModelType) :: model
     INTEGER :: n_elem = 0
@@ -1180,6 +1203,9 @@ MODULE CableDyn_DeckDriver
     ! Range graphs (LINES flag r, standalone only) and the touchdown references of the
     ! TDP<L> channels, keyed by deck line id and fixed at the converged initial state.
     TYPE(CD_RangeSet) :: ranges
+    ! The deck's own prescribed motion (prescribed_motion: the standalone driver), in the
+    ! aggregate moving-set order; inactive otherwise.
+    TYPE(CD_MotionRuntimeType) :: motion
   END TYPE
 
 CONTAINS
@@ -7124,7 +7150,7 @@ CONTAINS
   SUBROUTINE CD_Init_Deck_Aggregate(deck_path, dt, agg, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                    range_files, host_orientation, static_current)
+                                    range_files, host_orientation, static_current, prescribed_motion)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -7138,8 +7164,8 @@ CONTAINS
     !! Scope: EI=0 lines with Fixed/Coupled/Vessel/Connect/Free points, Point3 buoys, Rigid6
     !! bodies and RODs (free, fixed, pinned, host-coupled or host-pinned), CONTROL, FAILURE and
     !! FAST.Farm turbines, plus finite-EI cables. Fails closed with a clear message on: a
-    !! motionFile (the host drives the coupled boundary); deck waves (the host supplies wave
-    !! kinematics); a deck current on
+    !! motionFile (the host drives the coupled boundary; prescribed_motion excepted); deck
+    !! waves (the host supplies wave kinematics); a deck current on
     !! a deck with a finite-EI cable, a Rigid6 body or a rod, under a host fluid field, or in
     !! FAST.Farm mode; a deck with a finite-EI cable that also carries Free/Connect dynamic
     !! points. A deck current on any other deck is a steady field applied through the lines.
@@ -7192,9 +7218,10 @@ CONTAINS
     ! mixed route); a coupled host does not, so the flag fails closed there.
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
     ! host_orientation: the caller passes each moving point's orientation with every update
-    ! (the OpenFAST and FAST.Farm shells), which turns the fairlead frame of a finite-EI line
-    ! restrained in torsion. Without it (the C API, the standalone mixed route) a deck with
-    ! torsion columns fails closed rather than holding that frame fixed.
+    ! (the OpenFAST and FAST.Farm shells, and the standalone mixed route, which holds the frame
+    ! or turns it with its vesselMotion table), which turns the fairlead frame of a finite-EI
+    ! line restrained in torsion. Without it (the C API) a deck with torsion columns fails
+    ! closed rather than holding that frame fixed.
     LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
     ! static_current (4, n): the host's steady current as a depth profile, rows z (ascending),
     ! ux, uy, uz -- the OpenFAST shell's SeaState CurrMod 1 current at SeaState's grid levels.
@@ -7204,9 +7231,13 @@ CONTAINS
     ! dynamics take the host field alone: the profile goes into a copy of the options that
     ! only the static builders see.
     REAL(wp), INTENT(IN), OPTIONAL :: static_current(:, :)
+    ! prescribed_motion: the caller marches the deck's own motionFile or vesselMotion table
+    ! (the standalone driver on a mixed deck of lines between Fixed/Coupled/Vessel points):
+    ! the table is read into agg%motion in the moving-set order instead of being refused.
+    LOGICAL, INTENT(IN), OPTIONAL :: prescribed_motion
 
     INTEGER :: nturb
-    LOGICAL :: host_turns
+    LOGICAL :: host_turns, own_motion, dynamic_points
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
     TYPE(DeckRodType), ALLOCATABLE :: rod_types(:)
@@ -7498,9 +7529,21 @@ CONTAINS
     n_host_rod = COUNT(rods%rod_type == 'coupled' .OR. rods%rod_type == 'vessel' .OR. &
                        rods%rod_type == 'coupledpinned')
     n_host_body = COUNT(bodies%host_coupled .OR. bodies%host_pinned)
-    IF (opts%has_motion_file) THEN
+    own_motion = .FALSE.
+    IF (PRESENT(prescribed_motion)) own_motion = prescribed_motion .AND. opts%has_motion_file
+    IF (opts%has_motion_file .AND. .NOT. own_motion) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the coupled boundary is driven by the host, '// &
                 'not a deck motionFile; remove the motionFile OPTION'); RETURN
+    END IF
+    IF (own_motion) THEN
+      ! the deck's table moves the Coupled/Vessel line points; the caller marches it from the
+      ! deck pose (no host placement) over lines between Fixed/Coupled/Vessel points only
+      dynamic_points = deck_has_dynamic_points(points)
+      IF (dynamic_points .OR. SIZE(bodies) > 0 .OR. n_rod > 0 .OR. nturb > 0 .OR. &
+          PRESENT(ptfm_init) .OR. PRESENT(coupled_positions) .OR. PRESENT(farm_ptfm_init)) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a deck-prescribed motion drives lines between '// &
+                  'Fixed/Coupled/Vessel points only, from the deck pose'); RETURN
+      END IF
     END IF
     IF (SIZE(lines) == 0) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: deck defines no lines'); RETURN
@@ -7922,6 +7965,13 @@ CONTAINS
     CALL fill_turbine_of_moving(points, lines, is_fin, agg, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CALL CD_End_Deck_Aggregate(agg); RETURN
+    END IF
+    ! The deck's own prescribed motion over the same moving-set order.
+    IF (own_motion) THEN
+      CALL build_aggregate_motion(points, lines, is_fin, opts, agg%motion, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_DECKDRV_OK) THEN
+        CALL CD_End_Deck_Aggregate(agg); RETURN
+      END IF
     END IF
 
     ! Range graphs and touchdown channels: fix the TDP references at the converged state.
@@ -8483,9 +8533,203 @@ CONTAINS
     agg%has_rod = .FALSE.
     agg%has_point3 = .FALSE.
     CALL CD_Range_End(agg%ranges)
+    CALL CD_Motion_End(agg%motion)
     agg%gravity = CD_ZERO
     agg%rho_water = CD_ZERO
   END SUBROUTINE CD_End_Deck_Aggregate
+
+  SUBROUTINE build_aggregate_motion(points, lines, is_fin, opts, rt, ErrStat, ErrMsg)
+    !! The deck's motionFile or vesselMotion table, keyed to the aggregate moving-set order (the
+    !! enumeration of apply_coupled_positions: the system's BOUND Coupled/Vessel points in deck
+    !! POINT order, then one coupled fairlead per finite-EI cable in deck LINE order). The roll
+    !! column of a motionFile drives the moving End A of a line restrained in torsion at both
+    !! ends, as on the standalone cubic-Hermite route (check_motion_roll_lines).
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    LOGICAL, INTENT(IN) :: is_fin(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(CD_MotionRuntimeType), INTENT(INOUT) :: rt
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: i, l, n, pass, ip
+    LOGICAL :: bound_ei0
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    CALL CD_Motion_End(rt)
+    CALL read_motion_file(opts%motion_file, points, opts, rt%motion, ErrStat, ErrMsg, &
+                          with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]))
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    CALL check_motion_roll_lines(rt%motion, lines, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    ! pass 1 counts the moving columns, pass 2 fills them
+    DO pass = 1, 2
+      n = 0
+      DO i = 1, SIZE(points)
+        SELECT CASE (TRIM(points(i)%ptype))
+        CASE ('coupled', 'vessel')
+          bound_ei0 = .FALSE.
+          DO l = 1, SIZE(lines)
+            IF (is_fin(l)) CYCLE
+            IF (lines(l)%nodeA == points(i)%id .OR. lines(l)%nodeB == points(i)%id) THEN
+              bound_ei0 = .TRUE.; EXIT
+            END IF
+          END DO
+          IF (bound_ei0) THEN
+            n = n + 1
+            IF (pass == 2) CALL set_column(n, i, .FALSE.)
+          END IF
+        END SELECT
+      END DO
+      DO l = 1, SIZE(lines)
+        IF (.NOT. is_fin(l)) CYCLE
+        DO i = 1, SIZE(points)
+          IF (points(i)%id /= lines(l)%nodeA .AND. points(i)%id /= lines(l)%nodeB) CYCLE
+          SELECT CASE (TRIM(points(i)%ptype))
+          CASE ('coupled', 'vessel')
+            n = n + 1
+            IF (pass == 2) CALL set_column(n, i, rt%motion%has_roll .AND. line_torsion_active(lines(l)) .AND. &
+                                           points(i)%id == lines(l)%nodeA)
+          END SELECT
+        END DO
+      END DO
+      IF (pass == 1) ALLOCATE (rt%col_point(n), rt%col_pos(3, n), rt%col_roll(n))
+    END DO
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    rt%active = .TRUE.
+
+  CONTAINS
+
+    SUBROUTINE set_column(col, ipt, takes_roll)
+      INTEGER, INTENT(IN) :: col, ipt
+      LOGICAL, INTENT(IN) :: takes_roll
+      ip = find_motion_point(rt%motion, points(ipt)%id)
+      IF (ip < 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'the prescribed motion has no rows for point '//TRIM(int_to_str(points(ipt)%id)))
+        ip = 1
+      END IF
+      rt%col_point(col) = ip
+      rt%col_pos(:, col) = points(ipt)%pos
+      rt%col_roll(col) = takes_roll
+    END SUBROUTINE set_column
+  END SUBROUTINE build_aggregate_motion
+
+  LOGICAL FUNCTION CD_Motion_Active(rt) RESULT(active)
+    !! The schedule holds the deck's prescribed motion.
+    TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
+    active = rt%active
+  END FUNCTION CD_Motion_Active
+
+  INTEGER FUNCTION CD_Motion_NColumns(rt) RESULT(n)
+    !! Moving columns the schedule drives (0 when inactive).
+    TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
+    n = 0
+    IF (rt%active) n = SIZE(rt%col_point)
+  END FUNCTION CD_Motion_NColumns
+
+  LOGICAL FUNCTION CD_Motion_Has_Rotation(rt) RESULT(has)
+    !! A vesselMotion table: the moving points turn with the vessel.
+    TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
+    has = .FALSE.
+    IF (rt%active) has = rt%motion%has_rot
+  END FUNCTION CD_Motion_Has_Rotation
+
+  LOGICAL FUNCTION CD_Motion_Has_Roll(rt) RESULT(has)
+    !! A motionFile roll column drives some column (a line restrained in torsion).
+    TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
+    has = .FALSE.
+    IF (rt%active) has = ANY(rt%col_roll)
+  END FUNCTION CD_Motion_Has_Roll
+
+  SUBROUTINE CD_Motion_Deck_Positions(rt, position, ErrStat, ErrMsg)
+    !! Deck position of the point that drives each moving column (3, n): the caller checks the
+    !! column map against its own moving surface at the static state.
+    TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
+    REAL(wp), INTENT(OUT) :: position(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    position = CD_ZERO
+    ErrStat = CD_DECKDRV_BADINPUT
+    IF (.NOT. rt%active) THEN
+      ErrMsg = 'CD_Motion_Deck_Positions: no prescribed motion'; RETURN
+    END IF
+    IF (SIZE(position, 1) /= 3 .OR. SIZE(position, 2) /= SIZE(rt%col_point)) THEN
+      ErrMsg = 'CD_Motion_Deck_Positions: position must be shaped (3, n_columns)'; RETURN
+    END IF
+    position = rt%col_pos
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_Motion_Deck_Positions
+
+  SUBROUTINE CD_Motion_Kinematics(rt, time_index, position, velocity, acceleration, orientation, angular_velocity, &
+                                  angular_acceleration, roll, ErrStat, ErrMsg)
+    !! Grid row time_index (1 = t 0) of the moving surface, columns in the aggregate moving-set
+    !! order: position, velocity and acceleration of each driving point (3, n); the
+    !! global-to-parent DCM (3, 3, n) and the global-axis angular velocity and acceleration
+    !! (3, n) -- the vessel's under a vesselMotion table, the identity and zero otherwise, so a
+    !! motionFile turns no frame -- and the motionFile roll [rad] of each column that takes one
+    !! (zero elsewhere). Allocation free.
+    TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
+    INTEGER, INTENT(IN) :: time_index
+    REAL(wp), INTENT(OUT) :: position(:, :), velocity(:, :), acceleration(:, :)
+    REAL(wp), INTENT(OUT) :: orientation(:, :, :), angular_velocity(:, :), angular_acceleration(:, :), roll(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: col, ip, n
+
+    ErrStat = CD_DECKDRV_BADINPUT
+    ErrMsg = ''
+    IF (.NOT. rt%active) THEN
+      ErrMsg = 'CD_Motion_Kinematics: no prescribed motion'; RETURN
+    END IF
+    n = SIZE(rt%col_point)
+    IF (SIZE(position, 1) /= 3 .OR. SIZE(position, 2) /= n .OR. SIZE(velocity, 1) /= 3 .OR. &
+        SIZE(velocity, 2) /= n .OR. SIZE(acceleration, 1) /= 3 .OR. SIZE(acceleration, 2) /= n .OR. &
+        SIZE(orientation, 1) /= 3 .OR. SIZE(orientation, 2) /= 3 .OR. SIZE(orientation, 3) /= n .OR. &
+        SIZE(angular_velocity, 1) /= 3 .OR. SIZE(angular_velocity, 2) /= n .OR. &
+        SIZE(angular_acceleration, 1) /= 3 .OR. SIZE(angular_acceleration, 2) /= n .OR. SIZE(roll) /= n) THEN
+      ErrMsg = 'CD_Motion_Kinematics: arrays must be shaped (3, n), (3, 3, n) and (n) over the moving columns'
+      RETURN
+    END IF
+    IF (time_index < 1 .OR. time_index > rt%motion%n_time) THEN
+      ErrMsg = 'CD_Motion_Kinematics: time index '//TRIM(int_to_str(time_index))//' outside the motion grid of '// &
+               TRIM(int_to_str(rt%motion%n_time))//' rows'
+      RETURN
+    END IF
+    DO col = 1, n
+      ip = rt%col_point(col)
+      position(:, col) = rt%motion%q(:, ip, time_index)
+      velocity(:, col) = rt%motion%v(:, ip, time_index)
+      acceleration(:, col) = rt%motion%a(:, ip, time_index)
+      IF (rt%motion%has_rot) THEN
+        ! the vessel-to-global rotation R: the parent DCM is its transpose (global to vessel)
+        orientation(:, :, col) = TRANSPOSE(rt%motion%rot(:, :, time_index))
+        angular_velocity(:, col) = rt%motion%omega(:, time_index)
+        angular_acceleration(:, col) = rt%motion%alpha(:, time_index)
+      ELSE
+        orientation(:, :, col) = CD_ZERO
+        orientation(1, 1, col) = CD_ONE
+        orientation(2, 2, col) = CD_ONE
+        orientation(3, 3, col) = CD_ONE
+        angular_velocity(:, col) = CD_ZERO
+        angular_acceleration(:, col) = CD_ZERO
+      END IF
+      roll(col) = CD_ZERO
+      IF (rt%col_roll(col)) roll(col) = rt%motion%roll(ip, time_index)
+    END DO
+    ErrStat = CD_DECKDRV_OK
+  END SUBROUTINE CD_Motion_Kinematics
+
+  SUBROUTINE CD_Motion_End(rt)
+    !! Release the schedule. Idempotent.
+    TYPE(CD_MotionRuntimeType), INTENT(INOUT) :: rt
+    TYPE(MotionTable) :: empty
+    rt%motion = empty
+    IF (ALLOCATED(rt%col_point)) DEALLOCATE (rt%col_point)
+    IF (ALLOCATED(rt%col_pos)) DEALLOCATE (rt%col_pos)
+    IF (ALLOCATED(rt%col_roll)) DEALLOCATE (rt%col_roll)
+    rt%active = .FALSE.
+  END SUBROUTINE CD_Motion_End
 
   SUBROUTINE CD_Run_Deck_Driver(deck_path, out_root, converged, ErrStat, ErrMsg)
     !! Parse a MoorDyn-style deck, run static IC and optional held-end dynamic march,
@@ -29926,36 +30170,44 @@ CONTAINS
   CONTAINS
 
     SUBROUTINE check_motion_roll(est, emt)
-      !! The motionFile roll column drives a torsional line through its moving end only (internal
-      !! End A after the anchor-first swap: the user's End A, or End B of an anchor-first deck),
-      !! right-handed about the tangent pointing into the line, so Phi = Pretwist(B) -
-      !! Pretwist(A) - roll in either order; it starts from the static state (roll 0 at t = 0).
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
-      INTEGER :: ip, li
-      LOGICAL :: used
-      est = CD_DECKDRV_OK
-      emt = ''
-      IF (.NOT. motion%has_roll) RETURN
-      DO ip = 1, motion%n_point
-        IF (.NOT. ANY(ABS(motion%roll(ip, :)) > CD_ZERO)) CYCLE
-        used = .FALSE.
-        DO li = 1, SIZE(lines)
-          IF (lines(li)%nodeA == motion%point_ids(ip) .AND. line_torsion_active(lines(li))) used = .TRUE.
-        END DO
-        IF (.NOT. used) THEN
-          CALL fail(est, emt, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' has a non-zero roll '// &
-                    'column, but no line restrained in torsion at both ends (END CONNECTIONS TorsStiffness) '// &
-                    'has its moving (non-Fixed) end there'); RETURN
-        END IF
-        IF (ABS(motion%roll(ip, 1)) > CD_ZERO) THEN
-          CALL fail(est, emt, 'motionFile: the roll column of point '//TRIM(int_to_str(motion%point_ids(ip)))// &
-                    ' must be 0 at t = 0 (the static solve uses the END CONNECTIONS Pretwist, which takes a '// &
-                    'constant twist)'); RETURN
-        END IF
-      END DO
+      CALL check_motion_roll_lines(motion, lines, est, emt)
     END SUBROUTINE check_motion_roll
   END SUBROUTINE write_hermite_dynamic_out
+
+  SUBROUTINE check_motion_roll_lines(motion, lines, est, emt)
+    !! The motionFile roll column drives a torsional line through its moving end only (internal
+    !! End A after the anchor-first swap: the user's End A, or End B of an anchor-first deck),
+    !! right-handed about the tangent pointing into the line, so Phi = Pretwist(B) -
+    !! Pretwist(A) - roll in either order; it starts from the static state (roll 0 at t = 0).
+    TYPE(MotionTable), INTENT(IN) :: motion
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    INTEGER, INTENT(OUT) :: est
+    CHARACTER(*), INTENT(OUT) :: emt
+    INTEGER :: ip, li
+    LOGICAL :: used
+    est = CD_DECKDRV_OK
+    emt = ''
+    IF (.NOT. motion%has_roll) RETURN
+    DO ip = 1, motion%n_point
+      IF (.NOT. ANY(ABS(motion%roll(ip, :)) > CD_ZERO)) CYCLE
+      used = .FALSE.
+      DO li = 1, SIZE(lines)
+        IF (lines(li)%nodeA == motion%point_ids(ip) .AND. line_torsion_active(lines(li))) used = .TRUE.
+      END DO
+      IF (.NOT. used) THEN
+        CALL fail(est, emt, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' has a non-zero roll '// &
+                  'column, but no line restrained in torsion at both ends (END CONNECTIONS TorsStiffness) '// &
+                  'has its moving (non-Fixed) end there'); RETURN
+      END IF
+      IF (ABS(motion%roll(ip, 1)) > CD_ZERO) THEN
+        CALL fail(est, emt, 'motionFile: the roll column of point '//TRIM(int_to_str(motion%point_ids(ip)))// &
+                  ' must be 0 at t = 0 (the static solve uses the END CONNECTIONS Pretwist, which takes a '// &
+                  'constant twist)'); RETURN
+      END IF
+    END DO
+  END SUBROUTINE check_motion_roll_lines
 
   SUBROUTINE write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
     !! Persist the converged finite-EI initialization as the same engineering range

@@ -968,9 +968,9 @@ CONTAINS
                     [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
                     [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
                     [CHARACTER(24) :: '0.1 dtM'], [CHARACTER(16) :: 'FairTen1'])
-    ! a caller that does not pass the fairlead orientation (the C API, the standalone mixed
-    ! route) is refused by name; one that does (the OpenFAST and FAST.Farm shells) builds the
-    ! line with its torsion
+    ! a caller that does not pass the fairlead orientation (the C API) is refused by name; one
+    ! that does (the OpenFAST and FAST.Farm shells, the standalone mixed route) builds the line
+    ! with its torsion
     CALL CD_Init_Deck_Aggregate('tdeck_e12.dat', 0.1_wp, agg, es, em)
     CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'needs a host that turns its fairlead frame') > 0, &
                  'an aggregate caller without orientations refuses torsion by name (got: '//TRIM(em)//')')

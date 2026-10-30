@@ -67,10 +67,11 @@ Line and constitutive capability
    * - Mixed ``EI = 0`` + finite-EI deck
      - Supported with route limits
      - a mixed deck of lines between held or coupled points only (no bodies, rods, or
-       ``Free``/``Connect`` points) runs in OpenFAST and standalone as a static or held-end
-       dynamic run, and rejects a standalone ``motionFile`` or deck waves; a mixed deck with
-       bodies, rods, or ``Free``/``Connect`` points runs standalone on the multibody march, with
-       moving objects and deck waves/current, but not with a ``motionFile``
+       ``Free``/``Connect`` points) runs in OpenFAST and standalone as a static run or a dynamic
+       run with held ends or a ``motionFile``/``vesselMotion`` prescription, and rejects deck
+       waves standalone (so ``vesselRAO`` too); a mixed deck with bodies, rods, or
+       ``Free``/``Connect`` points runs standalone on the multibody march, with moving objects
+       and deck waves/current, but not with a ``motionFile``
    * - Viscoelastic rope (MoorDyn ``ElasticMod`` 2/3)
      - Supported
      - per-element series-Kelvin state (standard linear solid only when ``BA_D = 0``),
@@ -92,16 +93,17 @@ Line and constitutive capability
        descent, and a twist angle at every node in dynamics, with the polar inertia ``Irn`` and
        torsional damping (``GJ|K|Bt``),
        with turning Rigid6 bodies, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll
-       column standalone, and with the platform orientation in coupled OpenFAST and FAST.Farm
+       column standalone (``vesselMotion`` and the roll column also on a mixed ``EI = 0`` +
+       finite-EI deck), and with the platform orientation in coupled OpenFAST and FAST.Farm
        runs (torque returned to the platform, ``PtfmInit``, checkpoints, linearisation with the
        twist angles as states; see :doc:`openfast`) and through the C API with the host's
        rotations (``CableDyn_InitDeckRotating``, :doc:`capi`), active line control
        (``CONTROL``) of the fairlead segment on the coupled route; ``Torq``/``Twist`` channels and
-       standalone range graphs. Stopped by name: the standalone mixed ``EI = 0`` + finite-EI
-       aggregate and ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
-       translation only), rod ends, bodies other than Rigid6 and ``False alpha_force_blend``.
-       Modal analysis carries the twist angle of every node. Not modelled: seabed friction
-       against twist, anisotropic sections, self-contact of a loop (see :ref:`theory-torsion`)
+       standalone range graphs. Stopped by name: ``CableDyn_InitDeck``/``InitDeckAt`` (which
+       move the line ends by translation only), rod ends, bodies other than Rigid6 and
+       ``False alpha_force_blend``. Modal analysis carries the twist angle of every node. Not
+       modelled: seabed friction against twist, anisotropic sections, self-contact of a loop
+       (see :ref:`theory-torsion`)
    * - Hockling loops, nonlinear cross-section laws
      - Not provided
      - the buckling onset and the post-buckled shape are computed, but a loop that closes on

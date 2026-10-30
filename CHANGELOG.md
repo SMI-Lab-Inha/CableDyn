@@ -64,6 +64,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   fairlead to 4.9e-4. In a `Linearize = True` run every input Jacobian, those of the time march
   included, steps the coupled-point rotation by 1e-4 rad instead of 0.1 rad, which changes the
   rotation columns of a deck with a hang-off spring by up to 0.17 %.
+- Prescribed motion and torsion on the standalone mixed deck (`EI = 0` and finite-EI lines between
+  `Fixed`/`Coupled`/`Vessel` points, run on the coupled aggregate): the driver marches a
+  `motionFile` or `vesselMotion` as on the cubic-Hermite route, row 1 installed before `t = 0`. A
+  vessel turns the end connection and torsion frames of the cables on its points, and the roll
+  column imposes the twist of a line restrained in torsion, which these decks no longer refuse.
+  Under vessel roll, pitch and heave, or a surge with the roll column, a clamped line gives the
+  single-line route's torque, twist and node positions to the printed eight digits and its end
+  tensions and bend moment within 8.2e-6 of their range (the coupled cables' Newton tolerance; with
+  the single-line route's, every channel to the printed digits). A straight line rolled slowly
+  gives `Torq = GJ Phi / L` to 5e-6 N m. `vesselRAO` stays refused with the deck waves.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their

@@ -1443,6 +1443,11 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
   # And the MoorDyn-C current grid (Currents 2 and 5) every standalone step samples at the nodes.
   add_test(NAME step_allocations_current_grid COMMAND test_step_allocations current_grid)
   set_tests_properties(step_allocations_current_grid PROPERTIES LABELS "fortran;dynamic;memory")
+  # The standalone driver's march of a mixed deck with its prescribed motion (roll column, vessel).
+  add_test(NAME step_allocations_motion_roll COMMAND test_step_allocations motion_roll)
+  set_tests_properties(step_allocations_motion_roll PROPERTIES LABELS "fortran;dynamic;memory")
+  add_test(NAME step_allocations_motion_vessel COMMAND test_step_allocations motion_vessel)
+  set_tests_properties(step_allocations_motion_vessel PROPERTIES LABELS "fortran;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)
@@ -2198,6 +2203,14 @@ add_executable(test_torsion_coupling tests/test_torsion_coupling.f90)
 target_link_libraries(test_torsion_coupling PRIVATE cabledyn_core)
 add_test(NAME torsion_coupling COMMAND test_torsion_coupling)
 set_tests_properties(torsion_coupling PROPERTIES LABELS "fortran;unit;driver;integration;static")
+
+# Torsion and prescribed motion on the standalone mixed EI = 0 + finite-EI route (the driver
+# executable marches the aggregate): route equivalence with the cubic-Hermite route under vessel
+# and roll-column motion, quasi-static torque, roll-column refusal.
+add_executable(test_mixed_route_torsion tests/test_mixed_route_torsion.f90)
+target_link_libraries(test_mixed_route_torsion PRIVATE cabledyn_core)
+add_test(NAME mixed_route_torsion COMMAND test_mixed_route_torsion $<TARGET_FILE:cabledyn>)
+set_tests_properties(mixed_route_torsion PROPERTIES LABELS "fortran;driver;integration;dynamic")
 
 add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
 target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)

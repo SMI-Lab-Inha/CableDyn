@@ -99,18 +99,20 @@ The standalone driver accepts a deck containing separate ``EI = 0`` mooring line
 power cables between ``Fixed`` and ``Coupled``/``Vessel`` points. It uses the same aggregate that
 backs ``CompMooring = 5`` in OpenFAST (maintained by NLR, the National Laboratory of the Rockies,
 formerly NREL) and advances the objects atomically. Every ``Coupled``/``Vessel`` endpoint is held
-at its initialised position. A mixed deck that also has bodies, rods or ``Connect``/``Free``
-points runs on the multibody march instead (:doc:`driver_format`), which accepts deck waves and
-current. ``examples/iea15mw_umaine_mixed_cabledyn.dat`` is the maintained four-line
+at its initialised position, or follows the deck's ``motionFile`` or ``vesselMotion`` (a vessel
+turns the end connection and torsion frames of the power cables on its points, and the
+``motionFile`` roll column twists a cable restrained in torsion, as on the single-cable route).
+A mixed deck that also has bodies, rods or ``Connect``/``Free`` points runs on the multibody
+march instead (:doc:`driver_format`), which accepts deck waves and current. ``examples/iea15mw_umaine_mixed_cabledyn.dat`` is the maintained four-line
 example; its ``TMax = 0`` setting writes the common static configuration. Give a positive ``TMax``
 to march held-end dynamics. A static-only mixed deck with no dynamic-only option may instead omit
 both ``dtM`` and ``TMax``; the time-step option becomes mandatory when a positive-duration march
 is requested.
 
-A mixed deck rejects ``motionFile`` and deck-owned wave/current OPTIONS by name. Platform
-six-DOF motion is defined at the OpenFAST platform reference point, whereas a cable requires each
-hang-off's translated and rotated position, velocity, and acceleration, and CableDyn does not
-equate those two boundaries. Mixed-deck LINE ``Outputs`` flags ``p`` and ``t`` are rejected as
+A mixed deck rejects deck-owned wave/current OPTIONS by name, and with them ``vesselRAO``,
+which needs deck waves. A ``vesselMotion`` record moves every ``Coupled``/``Vessel`` point
+rigidly with the vessel (translation and rotation of each hang-off); a ``motionFile`` gives the
+rows of each point. Mixed-deck LINE ``Outputs`` flags ``p`` and ``t`` are rejected as
 well; request the needed mixed-deck quantities through the main ``OUTPUTS`` section instead
 (the ``r`` range graph is available).
 

@@ -338,9 +338,13 @@ rejected. `EI > 0` is routed as follows.
 
 **Standalone mixed deck** (separate `EI = 0` and `EI > 0` lines between `Fixed`/`Coupled`/`Vessel`
 points only): the deck is partitioned through the same atomic aggregate used by OpenFAST.
-`Coupled`/`Vessel` endpoints are held at their deck positions. The run writes the common `.out`
-and the all-line `.static.out` tables, plus the range graph of every line with the `r` flag.
-Mixed decks reject, by name, `motionFile`, deck wave/current OPTIONS, WaterKin `WaveKinMod 1`,
+`Coupled`/`Vessel` endpoints are held at their deck positions, or follow a `motionFile` or
+`vesselMotion` as on the cubic-Hermite route: row 1 is installed and the cables' free-node
+accelerations recomputed before `t = 0`, a vessel turns the end connection and torsion frames of
+the cables on its points, and the roll column imposes the twist of a line restrained in torsion.
+The run writes the common `.out` and the all-line `.static.out` tables, plus the range graph of
+every line with the `r` flag.
+Mixed decks reject, by name, deck wave/current OPTIONS (so `vesselRAO`), WaterKin `WaveKinMod 1`,
 MoorDyn-C `WaveKin 3`/`7` and `Currents 1`/`2`/`5`, and per-line `p`/`t` flags.
 
 (multibody-march)=
@@ -878,14 +882,13 @@ Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B
 (see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
 torsion on an `EI = 0` line, on a rod end or on a `Point3` body,
 a dynamic or coupled run with `False alpha_force_blend`, any
-restrained end (one end included) in a standalone deck mixing `EI = 0` and finite-EI lines
-without a body or through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line
-ends by translation only (`a line restrained in torsion needs a host that turns its fairlead
-frame ...`; with a body such a deck runs on the multibody route, which supports torsion, and a C
-API host passes its rotations after `CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel
-on a line that is not restrained at both ends. OpenFAST linearisation includes the twist angles
-as states; like any cable, the line must not have a `Rigid` bending connection there. Seabed
-friction does not resist twist (the laid part of a line twists freely), and there
+restrained end (one end included) through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which
+move the line ends by translation only (`a line restrained in torsion needs a host that turns
+its fairlead frame ...`; a C API host passes its rotations after `CableDyn_InitDeckRotating`),
+and a `Torq`/`Twist` channel on a line that is not restrained at both ends. OpenFAST
+linearisation includes the twist angles as states; like any cable, the line must not have a
+`Rigid` bending connection there. Seabed friction does not resist twist (the laid part of a
+line twists freely), and there
 is no torque–tension coupling.
 
 ### EQUIVALENT BUOYANCY (optional)
@@ -1347,8 +1350,10 @@ cases. With an active path:
   `Free` rods in the same deck are integrated dynamically.
 - Rigid6 decks prescribe the full 6-DOF body motion from `Body<N>` rows (see
   [BODIES](#deck-bodies)).
-- `Connect`/`Free` point-system decks, FAILURE decks, and mixed `EI = 0` + finite-EI decks reject
-  `motionFile`.
+- A mixed `EI = 0` + finite-EI deck of lines between `Fixed`/`Coupled`/`Vessel` points moves the
+  points of both line kinds from their rows, and a finite-EI line on them as on the finite-EI
+  route (row 1 installed before `t = 0`, the roll column below).
+- `Connect`/`Free` point-system decks and FAILURE decks reject `motionFile`.
 
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
 plain numbers; tokens after the eleventh are ignored, except that a deck with a line restrained

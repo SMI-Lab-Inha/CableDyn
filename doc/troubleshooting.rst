@@ -215,9 +215,8 @@ Clock, motion, and environment
        header lines with ``#``.
    * - motionFile ``... which is not Coupled/Vessel`` / ``duplicate row for point``
      - the ``point_id`` is not a prescribed point, or a (point, time) pair appears twice.
-   * - ``Connect/Free dynamic-point deck does not support motionFile coupling`` /
-       ``mixed-deck motionFile is not supported``
-     - these routes hold their coupled endpoints. Remove ``motionFile`` or separate the model.
+   * - ``Connect/Free dynamic-point deck does not support motionFile coupling``
+     - this route holds its coupled endpoints. Remove ``motionFile`` or separate the model.
    * - ``bathymetry file must define one complete rectangular grid`` / ``grid is incomplete`` /
        ``duplicate x/y entries`` / ``needs at least a 2x2 grid`` / ``depths must be positive``
      - the ``x y depth`` rows must cover every combination of the distinct ``x`` and ``y``
@@ -397,12 +396,10 @@ Torsion
      - outside the torsion scope (:doc:`capabilities`). Move End A to a ``Fixed``,
        ``Coupled``/``Vessel`` point or a Rigid6 body.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
-     - the standalone deck that mixes ``EI = 0`` and finite-EI lines without a body, and the C
-       API's ``CableDyn_InitDeck``/``InitDeckAt``, move the line ends by translation only. Run the
-       line in a coupled OpenFAST or FAST.Farm run, initialise a C API handle with
-       ``CableDyn_InitDeckRotating`` and pass the host's rotations, add a body (such a deck runs
-       on the multibody route, which supports torsion), or set ``TorsStiffness Free`` in every
-       ``END CONNECTIONS`` row.
+     - the C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by translation only.
+       Run the line in a coupled OpenFAST or FAST.Farm run or in the standalone driver,
+       initialise a C API handle with ``CableDyn_InitDeckRotating`` and pass the host's
+       rotations, or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
    * - ``torsion: the twist would move more than pi/2 from its committed value``
      - the host turned a fairlead by more than 90° about the line's end direction without a
        step (an output probe or a non-stepping input update). Keep the platform turn per
