@@ -3115,7 +3115,7 @@ class DeckFile:
             # A finite-EI line to a rod end swaps too (it runs only from the rod, End A, to a
             # Fixed End B); an EI = 0 line to a rod end keeps its written order.
             line_key = str(_native_int(row.tokens[0]))
-            finite_ei = line_key in finite_ei_lines or (
+            line_is_finite_ei = line_key in finite_ei_lines or (
                 len(row.tokens) == 7
                 and line_type_meta.get(row.tokens[1].lower(), (0.0, 0.0, 0.0, 0.0))[3] > 0.0
             )
@@ -3124,7 +3124,7 @@ class DeckFile:
                 or type_b.startswith("body")
                 or _is_turbine_point_type(type_b)
                 or (type_b in {"connect", "free"} and point_z[node_a] <= point_z[node_b])
-                or (finite_ei and _rod_point(type_b) is not None)
+                or (line_is_finite_ei and _rod_point(type_b) is not None)
             )
             if type_a == "fixed" and upper_b:
                 node_a, node_b = node_b, node_a
