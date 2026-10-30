@@ -7907,7 +7907,8 @@ CONTAINS
     !! UnstrLen and N, summed over the line's sections), from which the apply takes
     !! MoorDyn-F's command bounds. Every capability check runs here (a finite-EI line also
     !! needs the force-blended generalised-alpha), so the apply loop cannot fail for input
-    !! reasons after its prevalidation.
+    !! reasons after its prevalidation. An EI = 0 segment may be linear-elastic or Syrope (its
+    !! slow stretch carries over the length change); a viscoelastic one fails closed.
     TYPE(DeckControl), INTENT(IN) :: ctrls(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
@@ -8003,13 +8004,8 @@ CONTAINS
                         'segment; active line control is not supported on the viscoelastic model'); RETURN
             END IF
           END IF
-          IF (agg%sys%lines(obj)%has_syrope) THEN
-            IF (agg%sys%lines(obj)%syrope_is(e)) THEN
-              ! the same rule for the Syrope working-curve states
-              CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' targets a Syrope segment; active '// &
-                        'line control is not supported on the Syrope model'); RETURN
-            END IF
-          END IF
+          ! A Syrope controlled segment carries its slow stretch over each length change, as
+          ! MoorDyn-F/C do (CD_Update_Model_SegmentLength), so it needs no check here.
         ELSE
           ! the coupled cable builder makes End A the host-driven fairlead and End B the
           ! Fixed anchor; any other arrangement would control a segment that is not the

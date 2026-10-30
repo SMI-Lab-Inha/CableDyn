@@ -3562,6 +3562,20 @@ def test_control_rows_may_name_finite_ei_cables_on_the_coupled_route():
     assert [row.tokens for row in deck._rows("CONTROL")] == [("1", "4"), ("2", "1,3")]
 
 
+def test_control_rows_may_name_syrope_lines_on_the_coupled_route():
+    # native CD_Init_Deck_Aggregate controls a Syrope segment too (its slow stretch carries over
+    # the length change, as in MoorDyn-F/C), so the mirror accepts the row
+    source = (ROOT / "examples/syrope_polyester_mooring.dat").read_text(encoding="utf-8")
+    marker = "--------------------- OPTIONS"
+    assert source.count(marker) == 1
+    block = (
+        "--------------------- CONTROL ----------------------------------------\n"
+        "ChannelID Lines\n(-) (-)\n1 1\n"
+    )
+    deck = DeckFile.from_text(source.replace(marker, block + marker, 1), caller_driven=True)
+    assert [row.tokens for row in deck._rows("CONTROL")] == [("1", "1")]
+
+
 # ---------------------------------------------------------------------------
 # Editing API error contract
 # ---------------------------------------------------------------------------

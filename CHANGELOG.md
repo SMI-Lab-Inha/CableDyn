@@ -35,6 +35,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
   (`inertialF 1`) a pendulum swinging through 120 deg agrees to 0.09 deg (0.15 deg when its node
   surges). Outside
   a coupled host, without inertias, and in linearisation the body fails closed by name.
+- Active line control (`CONTROL`, OpenFAST `CableDeltaL`/`CableDeltaLdot`) of a Syrope
+  polyester segment, which stopped at initialisation before. As in MoorDyn-F and MoorDyn-C the
+  segment's slow stretch carries over the length change (its slow strain is read at the new
+  length) and the running maximum is kept. On a taut 100 m line whose fairlead segment is paid
+  out by 0.5 m, hauled in to -1 m and paid back, the tension follows the rest curve of its load
+  history (working curve, OWC, then the working curve of the new maximum) to 2.5e-4 along the
+  ramps and 6e-7 at rest; after a length step it is MoorDyn's at the carried stretch to 1e-15
+  (carrying the strain instead would be off by 0.4 to 2.4 %); a restart in the ramp continues
+  bit for bit; a polyester-chain line with a Syrope fairlead segment and a
+  chain-polyester-chain line run. The Syrope state solve also finishes by bisection when its
+  root sits next to the top of the working curve, where the Newton step alone stopped a run
+  held at its running maximum under `False alpha_force_blend`.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their

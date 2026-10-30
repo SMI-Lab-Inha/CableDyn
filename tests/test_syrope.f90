@@ -7,7 +7,9 @@ PROGRAM test_syrope
   !! constants -- working-curve generation for all three shapes, the static strain split, the
   !! rate/tension evaluation on
   !! both branches, the running-max regeneration event, and the fail-closed
-  !! battery.
+  !! battery. The backward-Euler state solve also converges when its root sits at the top
+  !! sample of the working curve (a rope at rest on its OWC at its running maximum), where the
+  !! safeguarded Newton step alone crept along one side of the bracket and the solve failed.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Syrope, ONLY: CD_SyropeType, CD_Syrope_Init, CD_Syrope_End, &
                              CD_Syrope_Working_Curve, CD_Syrope_Find_Strains, &
@@ -68,6 +70,7 @@ PROGRAM test_syrope
   CALL case_owc_branch_and_running_max()
   CALL case_interp_clamps()
   CALL case_projected_state_advance()
+  CALL case_state_advance_at_wc_top()
   CALL case_element_load()
   CALL case_model_legacy_ba_mask()
   CALL case_model_held()
@@ -352,6 +355,45 @@ CONTAINS
     CALL require(es /= CD_SYROPE_OK .AND. INDEX(em, 'slow_old >= 0') > 0, 'projected:negative-old-fails')
     CALL CD_Syrope_End(td)
   END SUBROUTINE case_projected_state_advance
+
+  SUBROUTINE case_state_advance_at_wc_top()
+    !! A rope held at rest on its OWC at its running maximum: the backward-Euler root lies just
+    !! above the top sample of the working curve's slow strains, where T_mean(eps_slow) stops
+    !! rising (it clamps at T_max up to the branch divider), closer to it than the Newton
+    !! step's difference interval. The state of a run (LINEAR, k1 = 0.5, BA_s|BA_d = 1e6|1e5,
+    !! a line hauled in and held) on which the safeguarded Newton step crept 80 iterations
+    !! along that kink and the solve failed; the bisection that finishes the solve meets the
+    !! residual test, between the kink and the divider, at the curve's top tension.
+    TYPE(CD_SyropeType) :: td
+    REAL(wp), PARAMETER :: TMAX = 1.7790941510791376e6_wp, SLOW0 = 2.0004433178640910e-2_wp, &
+                           EPS = 3.0303024894996432e-2_wp, DEPS = -1.4208693414705444e-13_wp, DT = 5.0e-2_wp
+    REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
+    REAL(wp) :: slow_next, t_mean, divider, rate, tension, mean, residual
+    INTEGER :: es
+    CHARACTER(200) :: em
+    CALL CD_Syrope_Init(td, OWC_EPS, OWC_TEN, CD_SYROPE_WC_LINEAR, 0.5_wp, 0.0_wp, &
+                        ALPHA, BETA, 1.0e6_wp, 1.0e5_wp, es, em)
+    CALL require(es == CD_SYROPE_OK, 'wc-top:init')
+    CALL CD_Syrope_Working_Curve(td, TMAX, ws, wt, wsl, es, em)
+    CALL require(es == CD_SYROPE_OK, 'wc-top:wc')
+    divider = CD_Syrope_Branch_Divider(td, TMAX)
+    CALL CD_Syrope_State_Advance(td, SLOW0 < divider, ws, wt, wsl, SLOW0, EPS, DEPS, DT, slow_next, t_mean, &
+                                 es, em, divider=divider)
+    CALL require(es == CD_SYROPE_OK, 'wc-top:the solve converges: '//TRIM(em))
+    CALL CD_Syrope_Rate_And_Tension(td, slow_next < divider, ws, wt, wsl, slow_next, EPS, DEPS, rate, tension, &
+                                    mean, es, em)
+    residual = slow_next - SLOW0 - DT*rate
+    WRITE (*, '(A,ES16.9,A,ES10.3,A,ES12.5,A)') '  wc-top: slow strain ', slow_next, ', residual ', residual, &
+      ', mean tension ', mean, ' N'
+    CALL require(ABS(residual) <= 5.0e-13_wp .AND. slow_next > wsl(CD_SYROPE_NWC) .AND. slow_next < divider .AND. &
+                 bits_same(mean, wt(CD_SYROPE_NWC)) .AND. bits_same(mean, t_mean), 'wc-top:root at the curve top')
+    CALL CD_Syrope_End(td)
+  END SUBROUTINE case_state_advance_at_wc_top
+
+  LOGICAL FUNCTION bits_same(a, b) RESULT(same)
+    REAL(wp), INTENT(IN) :: a, b
+    same = TRANSFER(a, 0_8) == TRANSFER(b, 0_8)
+  END FUNCTION bits_same
 
   SUBROUTINE case_element_load()
     !! The element load wraps the kernel: a colinear element stretched to a

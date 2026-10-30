@@ -328,7 +328,9 @@ MODULE CableDyn_Model
     ! load-history-dependent alternative to the series-Kelvin law. syrope_is(:) marks the Syrope
     ! elements; syrope_type(:) holds each element's constitutive data (OWC
     ! table + working-curve shape + spring/dashpot constants -- immutable after
-    ! init). syrope_slow is the committed slow-spring static strain (the STATE)
+    ! init). syrope_slow is the committed slow-spring static strain (the STATE), a strain of
+    ! the unstretched length the committed state was reached with (l0_c; after a length change
+    ! by active line control the element reads it at its present length, model_syrope_slow),
     ! and syrope_tmax the running maximum mean tension (a second, monotone STATE
     ! whose growth regenerates the working curve on demand). Syrope elements
     ! share the ea_dyn/ba_dyn masking with the viscoelastic path (their elastic
@@ -3773,7 +3775,9 @@ CONTAINS
   SUBROUTINE CD_Get_Model_Syrope_State(model, slow, tmax, ErrStat, ErrMsg)
     !! Copy the per-element Syrope committed states -- the slow-spring static strain
     !! slow and the running-maximum tension tmax (each size n_elem) -- for the coupled
-    !! checkpoint mirror. A non-Syrope model returns zeros (total accessor).
+    !! checkpoint mirror. A non-Syrope model returns zeros (total accessor). The slow strain
+    !! is that of the lengths the committed state was reached with (l0_c), the lengths a
+    !! checkpoint restart re-applies as committed (CD_Update_Model_SegmentLength, restored).
     TYPE(CD_ModelType), INTENT(IN) :: model
     REAL(wp), INTENT(OUT) :: slow(:), tmax(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4936,7 +4940,8 @@ CONTAINS
     !! term. restored = .TRUE. (a checkpoint restart re-applying the command of
     !! the committed state) makes the new length and rate the committed ones as well. A rate
     !! of -0 is stored as +0, so a zero command of either sign leaves an uncontrolled model
-    !! bit-identical (the committed-length test compares bits).
+    !! bit-identical (the committed-length test compares bits). On a Syrope element the slow
+    !! stretch eps_slow*l0 is carried over the change (model_syrope_slow).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: elem
     REAL(wp), INTENT(IN) :: l0_new, l0_dot
@@ -4977,16 +4982,10 @@ CONTAINS
         RETURN
       END IF
     END IF
-    IF (model%has_syrope) THEN
-      IF (model%syrope_is(elem)) THEN
-        ! the Syrope strain states partition against the INIT-time natural
-        ! length; no rescaling law for a controlled Syrope segment, so this
-        ! composition fails closed by name (same rule as the viscoelastic path)
-        CALL fail(ErrStat, ErrMsg, 'segment-length update on a Syrope element is not supported: '// &
-                  'the working-curve strain states have no length-rescaling law')
-        RETURN
-      END IF
-    END IF
+    ! A Syrope element keeps its states as they are: the slow strain stays the committed state's,
+    ! a strain of l0_c, and the element reads it at its present length (model_syrope_slow), so
+    ! its slow STRETCH carries over the length change as MoorDyn-F/C carry it; the running
+    ! maximum, a tension, does not depend on the length.
     ! The update is atomic: every length-dependent quantity is built from a trial
     ! length vector first, and the committed fields are mutated only once all builds
     ! succeeded.
@@ -5643,9 +5642,9 @@ CONTAINS
         END IF
         slow_at = CD_Syrope_Branch_Divider(model%syrope_type(e), model%syrope_tmax(e))
         CALL CD_Syrope_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), model%syrope_type(e), &
-                                    ws, wt, wsl, model%syrope_slow(e) < slow_at, model%syrope_slow(e), &
-                                    model%tension_only, f6, jq6, t_mean, dslow, es, em, dt=CD_ZERO, &
-                                    divider=slow_at)
+                                    ws, wt, wsl, model_syrope_slow(model, e) < slow_at, &
+                                    model_syrope_slow(model, e), model%tension_only, f6, jq6, t_mean, dslow, &
+                                    es, em, dt=CD_ZERO, divider=slow_at)
         IF (es /= CD_SYROPE_OK) THEN
           CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
         END IF
@@ -7449,14 +7448,15 @@ CONTAINS
     !! selects the branch by the evaluated slow strain vs the branch divider at
     !! that maximum, and calls the element load. Inside a step (ve_dt > 0) the
     !! slow strain is eliminated by the same backward-Euler solve the commit makes;
-    !! outside (ve_dt = 0) the committed state is used as is.
+    !! outside (ve_dt = 0) the committed state is used as is. The slow strain is the committed
+    !! one at the element's present length (model_syrope_slow).
     TYPE(CD_ModelType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: q2(6), v2(6)
     REAL(wp), INTENT(OUT) :: force(6), jac_q(6, 6), jac_v(6, 6), t_mean, dslow
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC), slow_at
+    REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC), slow_at, slow
     LOGICAL :: on_wc
     INTEGER :: es
     CHARACTER(200) :: em
@@ -7471,9 +7471,10 @@ CONTAINS
     END IF
     ! the branch follows the evaluated slow strain against the continuous divider
     slow_at = CD_Syrope_Branch_Divider(model%syrope_type(e), model%syrope_tmax(e))
-    on_wc = model%syrope_slow(e) < slow_at
+    slow = model_syrope_slow(model, e)
+    on_wc = slow < slow_at
     CALL CD_Syrope_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), model%syrope_type(e), &
-                                ws, wt, wsl, on_wc, model%syrope_slow(e), model%tension_only, &
+                                ws, wt, wsl, on_wc, slow, model%tension_only, &
                                 force, jac_q, t_mean, dslow, es, em, jac_v=jac_v, dt=model%ve_dt, &
                                 divider=slow_at)
     IF (es /= CD_SYROPE_OK) THEN
@@ -7488,7 +7489,9 @@ CONTAINS
     !! caller invokes this for every element before the atomic commit pass. The
     !! candidate comes from the element load's own implicit elimination, so the
     !! committed slow strain is bit-identical to the one the converged in-step
-    !! force was evaluated at. A candidate beyond the OWC table fails the step.
+    !! force was evaluated at. A candidate beyond the OWC table fails the step. The advance
+    !! starts from the committed slow strain at the element's present length
+    !! (model_syrope_slow), so after a length change it integrates MoorDyn's slow stretch.
     TYPE(CD_ModelType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: q2(6), v2(6), dt
@@ -7496,12 +7499,13 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
-    REAL(wp) :: chord(3), length, eps, slow_at, f6(6), jq6(6, 6), dslow
+    REAL(wp) :: chord(3), length, eps, slow_at, f6(6), jq6(6, 6), dslow, slow
     LOGICAL :: on_wc
     INTEGER :: es
     CHARACTER(200) :: em
 
-    slow_next = model%syrope_slow(e)
+    slow = model_syrope_slow(model, e)
+    slow_next = slow
     t_mean = CD_ZERO
     chord = q2(4:6) - q2(1:3)
     length = NORM2(chord)
@@ -7519,9 +7523,9 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
     END IF
     slow_at = CD_Syrope_Branch_Divider(model%syrope_type(e), model%syrope_tmax(e))
-    on_wc = model%syrope_slow(e) < slow_at
+    on_wc = slow < slow_at
     CALL CD_Syrope_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), model%syrope_type(e), &
-                                ws, wt, wsl, on_wc, model%syrope_slow(e), model%tension_only, &
+                                ws, wt, wsl, on_wc, slow, model%tension_only, &
                                 f6, jq6, t_mean, dslow, es, em, dt=dt, slow_next=slow_next, divider=slow_at)
     IF (es /= CD_SYROPE_OK) THEN
       CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
@@ -7546,6 +7550,25 @@ CONTAINS
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
   END SUBROUTINE model_syrope_state_next
+
+  PURE REAL(wp) FUNCTION model_syrope_slow(model, e) RESULT(slow)
+    !! The slow strain of Syrope element e at its present unstretched length l0(e). The state
+    !! syrope_slow is a strain of the length the committed state was reached with, l0_c(e).
+    !! MoorDyn-F and MoorDyn-C keep the slow STRETCH of a segment, dl_1 = eps_slow*l, as its
+    !! state, and an unstretched-length change leaves it as it is (MoorDyn-F sets l(N) and ld(N)
+    !! of a controlled line; MoorDyn-C's setUnstretchedLength sets every l[i]); their mean
+    !! tension reads the slow strain dl_1/l at the new length. So after a length change
+    !!   eps_slow(l0) = eps_slow*l0_c/l0,
+    !! the stretch carried over, and a step from it, eps_slow^{n+1} = eps_slow^n l0_c/l0 + dt
+    !! d(eps_slow)/dt, is the backward-Euler step of MoorDyn's d(dl_1)/dt = l0 d(eps_slow)/dt
+    !! (with the chord rate, no paid-out term, as MoorDyn's Syrope rate takes it). The running
+    !! maximum, a tension, does not depend on the length. An element whose length is the
+    !! committed one (bit for bit, every element of an uncontrolled line) reads the state as is.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    slow = model%syrope_slow(e)
+    IF (.NOT. bits_equal(model%l0(e), model%l0_c(e))) slow = slow*(model%l0_c(e)/model%l0(e))
+  END FUNCTION model_syrope_slow
 
   SUBROUTINE model_contributor_load(model, q, v, force, jac_q, jac_v, ErrStat, ErrMsg)
     !! Assemble all configured non-structural model load contributors and tangents.

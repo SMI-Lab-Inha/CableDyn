@@ -597,6 +597,31 @@ CONTAINS
       END IF
       x = trial
     END DO
+    ! The safeguarded Newton step can creep along one side of the bracket when the root lies
+    ! closer to a kink of the rate than its difference interval h, where the slope of
+    ! T_mean(eps_slow) changes (the top sample of the working curve, beyond which its
+    ! interpolation clamps at T_max, as when a rope rests on its OWC at its running maximum):
+    ! the difference quotient straddles the kink, and every step lands inside the bracket and
+    ! moves only that end. Finish then by bisection, which halves the bracket every iteration
+    ! (R is continuous on it, so the bracket closes on its root) until the residual test is met.
+    ! A solve that converged above never gets here, so its result is unchanged.
+    DO iter = 1, 200
+      x = 0.5_wp*(lo + hi)
+      IF (.NOT. (x > lo .AND. x < hi)) EXIT
+      CALL eval_rate(x, rate, tension, t_mean)
+      IF (ErrStat /= CD_SYROPE_OK) RETURN
+      residual = x - slow_old - dt*rate
+      tol = RTOL*MAX(CD_ONE, ABS(x), ABS(slow_old), ABS(dt*rate))
+      IF (ABS(residual) <= tol) THEN
+        slow_next = x
+        RETURN
+      END IF
+      IF (residual < CD_ZERO) THEN
+        lo = x
+      ELSE
+        hi = x
+      END IF
+    END DO
     CALL fail(ErrStat, ErrMsg, 'Syrope backward-Euler state solve did not converge')
 
   CONTAINS

@@ -757,7 +757,8 @@ The slow strain is eliminated implicitly in every in-step evaluation: a projecte
 backward-Euler solve,
 :math:`\varepsilon_\text{slow}^{n+1} = \varepsilon_\text{slow}^{n} + \Delta t\,\dot\varepsilon_\text{slow}(\varepsilon_\text{slow}^{n+1}, \varepsilon, \dot\varepsilon)`
 constrained to :math:`\varepsilon_\text{slow} \ge 0`, gives the slow strain that the force
-uses. The tangent carries :math:`\partial\varepsilon_\text{slow}^{n+1}/\partial(\varepsilon, \dot\varepsilon)`
+uses (safeguarded Newton steps, finished by bisection where they stall next to a kink of the
+interpolated curves, as at the top of the working curve). The tangent carries :math:`\partial\varepsilon_\text{slow}^{n+1}/\partial(\varepsilon, \dot\varepsilon)`
 from the implicit-function theorem. The step commits that same slow strain, so the force applied
 to the nodes equals the reported tension. The working curve is the one regenerated at the
 committed :math:`T_\text{max}`. The branch follows the evaluated slow strain: the working curve
@@ -2792,6 +2793,30 @@ of the step to 3e-8 N, where applying the whole change in the first sub-step dep
 22 N (2.2 times the tension change per step). A step recovered after a stall and the halves of a
 line-system step halved after a failure, which take their sub-steps as given, apply the whole
 change in their first part.
+
+A Syrope segment keeps its states over a length change as MoorDyn-F and MoorDyn-C keep them.
+Their state is the segment's slow stretch :math:`\Delta l_1 = \varepsilon_\text{slow} L_0`, which a
+change of :math:`L_0` leaves as it is, and the mean tension reads the slow strain
+:math:`\Delta l_1/L_0` at the new length. CableDyn stores the slow strain of the committed state,
+a strain of :math:`L_{0,c}`, and reads it at the present length,
+
+.. math::
+
+   \varepsilon_\text{slow}(L_0) = \varepsilon_\text{slow}\,\frac{L_{0,c}}{L_0},
+
+so the step's backward-Euler update
+:math:`\varepsilon_\text{slow}^{n+1} = \varepsilon_\text{slow}^{n} L_{0,c}/L_0 + \Delta t\,\dot\varepsilon_\text{slow}`
+is that of MoorDyn's :math:`\mathrm{d}\Delta l_1/\mathrm{d}t = L_0\,\dot\varepsilon_\text{slow}`; the
+committed force of the force blend reads the state at :math:`L_{0,c}` as it is. The running
+maximum, a tension, is kept, and the slow-strain rate takes the chord rate
+:math:`\dot\varepsilon = \mathbf{t}\cdot\Delta\mathbf{v}/L_0` without the paid-out term, as
+MoorDyn's Syrope rate does. A slow pay-out therefore unloads the segment along the working curve
+of its load history, and a haul-in beyond :math:`T_\text{max}` follows the OWC and raises it. On a
+taut 100 m polyester line whose fairlead segment is paid out by 0.5 m, hauled in to −1 m and paid
+back over 80 s, every element's tension follows the rest curve of its history at the line strain
+to 2.5e-4 of the initial tension along the ramps and to 6e-7 at rest; after a length step it is
+MoorDyn's at the carried stretch to round-off, where carrying the strain instead would be off by
+0.4 to 2.4 %. A viscoelastic segment cannot be controlled.
 
 On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
 up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by

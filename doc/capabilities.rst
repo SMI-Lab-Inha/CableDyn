@@ -79,8 +79,9 @@ Line and constitutive capability
      - Supported with limits
      - dynamic line with OWC and two history states, single-section and taut or between
        linear-elastic ``EI = 0`` sections (chain–polyester–chain), with the seabed, Morison loads,
-       current, waves, host fluid fields and VIV of any ``EI = 0`` line; finite-EI combinations
-       fail closed by name
+       current, waves, host fluid fields and VIV of any ``EI = 0`` line, and active line control
+       of a Syrope segment in coupled OpenFAST runs (its slow stretch carried over the length
+       change, as in MoorDyn); finite-EI combinations fail closed by name
    * - Torsion of finite-EI lines
      - Supported with limits
      - isotropic torsion of a finite-EI line restrained in torsion at both ends
@@ -210,7 +211,7 @@ OpenFAST coverage
 The ``CompMooring = 5`` shell covers normal coupled time-domain stepping with its own ``dtM``,
 nonzero ``PtfmInit``, correction iterations, SeaState fields, checkpoint/restart, scoped
 quasi-static ``dYdu`` linearisation, line failures, active-tension control of ``EI = 0`` lines
-and finite-EI cables, and FAST.Farm shared moorings. Restart and linearisation do not arise under
+(linear-elastic or Syrope segments) and finite-EI cables, and FAST.Farm shared moorings. Restart and linearisation do not arise under
 FAST.Farm, which does not call those module operations, and active-tension control is rejected
 there. See :doc:`openfast` for setup and :doc:`coupling_boundary` for the interface contract.
 

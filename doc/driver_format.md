@@ -302,7 +302,8 @@ and `BA = BA_s|BA_d`:
   initialisation, or a composite line whose other sections are linear-elastic `EI = 0` sections (a
   chain–polyester–chain mooring), with every Syrope element in tension at initialisation. It runs
   on a dynamic deck (`dtM`/`TMax`) and takes the seabed, `bathymetryFile`, Morison loads, current,
-  waves, host fluid fields and VIV of any `EI = 0` line.
+  waves, host fluid fields and VIV of any `EI = 0` line, and active line control of a Syrope
+  segment on the OpenFAST route ([CONTROL](#control-optional-openfast-line-control)).
 - The static start solves each Syrope element on the rest curve of its load history (the OWC, or
   the `Tmax0` working curve under `SYROPE IC`). A single-section line takes one secant EA from the
   curve at its mean strain; on a composite line, where the tension varies along a sagging Syrope
@@ -1111,6 +1112,14 @@ bounds that would make it zero or negative (possible when it is shorter than hal
   advance (with the force blend, the default, the step-start force; under
   `False alpha_force_blend`, lengths blended with the configuration), so a length ramp is
   followed without lag at any `rhoInf`.
+- A Syrope polyester segment (a Syrope line, or a composite line whose fairlead-side section is
+  Syrope) carries its slow stretch over the length change, as MoorDyn-F and MoorDyn-C carry it:
+  they keep the stretch `dl_1` of the segment as its state and read its slow strain as `dl_1`
+  over the new length. The running maximum tension is kept, and the slow-strain rate takes the
+  chord rate without the paid-out term, as MoorDyn's Syrope rate does. A slow pay-out therefore
+  unloads the segment along the working curve of its load history, and a haul-in beyond the
+  running maximum follows the OWC and raises it. A viscoelastic segment cannot be controlled:
+  initialisation stops with a message.
 - On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
   is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
   its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that

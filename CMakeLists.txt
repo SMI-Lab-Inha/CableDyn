@@ -2124,6 +2124,13 @@ target_link_libraries(test_syrope_composite PRIVATE cabledyn_core)
 add_test(NAME syrope_composite COMMAND test_syrope_composite)
 set_tests_properties(syrope_composite PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+# Active line control of Syrope segments on the coupled route (the slow stretch carried over a
+# length change, as MoorDyn-F/C carry it): quasi-static cycle, length step, restart, composites
+add_executable(test_syrope_control tests/test_syrope_control.f90)
+target_link_libraries(test_syrope_control PRIVATE cabledyn_core)
+add_test(NAME syrope_control COMMAND test_syrope_control)
+set_tests_properties(syrope_control PROPERTIES LABELS "fortran;integration;dynamic;openfast")
+
 add_executable(test_torsion_coupling tests/test_torsion_coupling.f90)
 target_link_libraries(test_torsion_coupling PRIVATE cabledyn_core)
 add_test(NAME torsion_coupling COMMAND test_torsion_coupling)
@@ -2793,6 +2800,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                          -Wno-maybe-uninitialized)
   target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_syrope_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)
