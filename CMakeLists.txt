@@ -2187,6 +2187,11 @@ target_link_libraries(test_two_moving_ends PRIVATE cabledyn_core)
 add_test(NAME two_moving_ends COMMAND test_two_moving_ends)
 set_tests_properties(two_moving_ends PROPERTIES LABELS "fortran;driver;integration;dynamic;openfast")
 
+add_executable(test_cable_between_bodies tests/test_cable_between_bodies.f90)
+target_link_libraries(test_cable_between_bodies PRIVATE cabledyn_core)
+add_test(NAME cable_between_bodies COMMAND test_cable_between_bodies)
+set_tests_properties(cable_between_bodies PROPERTIES LABELS "fortran;driver;integration;dynamic;static")
+
 add_executable(test_section_curvature tests/test_section_curvature.f90)
 target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
 add_test(NAME section_curvature COMMAND test_section_curvature)
@@ -2707,7 +2712,7 @@ cabledyn_msg_test(shared_line_finite_ei msg_shared_line_finite_ei.dat 1
   "finite-EI section .EI>0. requires a dynamic deck with dtM and TMax"
   "Workaround;must be a Fixed")
 cabledyn_msg_test(pliant_connect_end_b msg_pliant_connect_end_b.dat 1
-  "finite-EI LINE 1 in a mixed-topology deck needs a Fixed End B;End B is POINT 2 .connect.;Anchor the cable on a Fixed point"
+  "finite-EI LINE 1 in a mixed-topology deck: End B is POINT 2 .connect.;is not supported on the multibody march;End the cable on a Fixed point"
   "")
 cabledyn_msg_test(mixed_current msg_mixed_current.dat 1
   "the deck current OPTION is not supported for a standalone mixed EI=0/finite-EI deck;runs the mooring in STILL WATER;couple the deck to OpenFAST .CompMooring = 5. with SeaState"

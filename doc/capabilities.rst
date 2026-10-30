@@ -65,7 +65,9 @@ Line and constitutive capability
        seabed-contact cables in standalone and OpenFAST-coupled use; a line between two moving
        points (End B on a ``Coupled``/``Vessel`` point: a cable shared by two floaters, a
        FAST.Farm shared line) has both ends driven, standalone, in OpenFAST, FAST.Farm and the C
-       API, with end connections and torsion at both ends (not yet on the multibody march)
+       API, with end connections and torsion at both ends; on the standalone multibody march
+       a line between two objects (both ends on Rigid6 bodies or rod ends) is driven by both
+       objects, coupled in its monolithic step and balanced in its static solve
    * - Mixed ``EI = 0`` + finite-EI deck
      - Supported with route limits
      - a mixed deck of lines between held or coupled points only (no bodies, rods, or

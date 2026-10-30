@@ -391,19 +391,31 @@ With `bodyScheme staggered` each step is a predictor-corrector:
 
 The staggered steps are sub-cycled so the explicit object positions resolve the stiffest
 object-mooring mode of the EI = 0 lines. A finite-EI cable end on a body point or a rod end is
-pinned unless its
-End A has an [END CONNECTIONS](#end-connections-optional-finite-ei-lines) row: a pinned end passes
-its end force to the object at the attachment and no moment. A `Rigid` or spring End A is fixed
-in the object: its direction turns with the object, the connection moment is returned to it, and
-the monolithic step re-steps the cable at every outer iteration with its end stiffness in the
-Newton matrix. The static solve (`bodyIC static`) balances the cable's bending end force and
-connection moment. On this route:
+pinned unless it has an [END CONNECTIONS](#end-connections-optional-finite-ei-lines) row: a pinned
+end passes its end force to the object at the attachment and no moment. A `Rigid` or spring end
+is fixed in the object: its direction turns with the object, the connection moment is returned to
+it, and the monolithic step re-steps the cable at every outer iteration with its end stiffness in
+the Newton matrix. A cable between two objects (End B on a body point or a rod end as well) is
+driven at both ends and re-stepped at every outer iteration whatever its connections; its
+end-to-end stiffness couples the two objects' coordinates in the one Newton matrix of the step,
+and its end loads (and, at a connected or torsional end, the connection moment and torque) return
+to each object. The static solve (`bodyIC static`) balances the cable's bending end force and
+connection moment at every connected end, and at both ends of a cable between two objects
+(passes accelerated by Anderson mixing when the deck has such a cable). On this route:
 
-- a finite-EI cable needs a `Fixed` End B, and its End A may be a `Fixed` point, a Rigid6
-  `Body<N>` point or a rod end, not a `Free`/`Connect` point or a `Point3` buoy;
-- a clamped or elastic End A on a body or rod, or one restrained in torsion (bending-pinned
-  included), needs `bodyScheme monolithic` (the default); `staggered`, which drives a cable end by
-  translation, rejects it by name;
+- a finite-EI cable's ends may be `Fixed` points, Rigid6 `Body<N>` points or rod ends, not
+  `Free`/`Connect` points or `Point3` buoys; a `Coupled`/`Vessel` end, which this march has no
+  motion to drive, is rejected by name;
+- a clamped or elastic end, or a torsional one (bending-pinned included), on a body or rod needs
+  `bodyScheme monolithic` (the default); `staggered` rejects it by name, at either end. The
+  staggered scheme passes cable end forces explicitly and sizes its sub-steps from each end's
+  spring to its own object, so a stiff cable with both ends on one body (or between two light
+  objects) is resolved there only as far as `dtM` allows; the monolithic scheme couples it in its
+  Newton matrix;
+- a cable re-stepped at every outer iteration of the monolithic step is one connected at an end
+  on a moving object or one between two moving objects (Rigid6 bodies, free or pinned rods);
+  a pinned cable with one moving end is coupled at the predictor, whichever end that is, and an
+  end on a fixed rod's end is the `Fixed` end there;
 - every `Free`/`Connect` point carries at least one EI = 0 line;
 - `motionFile` and `Coupled`/`Vessel` rods are rejected by name.
 
@@ -796,8 +808,10 @@ rope: its static solve uses the OWC, and each element's running maximum is its s
 pinned. At most one row may name a given line end. A non-pinned connection requires a finite-EI
 line whose End B is a `Fixed` point or a `Coupled`/`Vessel` point, whose connection is held by
 that point's parent and turns with it as End A's does (the `vesselMotion`/`vesselRAO` vessel
-standalone, the host orientation of End B's point when coupled); any other End B fails deck
-validation. End A may be a `Fixed` or `Coupled` point, a Rigid6 `Body<N>` point or a rod end.
+standalone, the host orientation of End B's point when coupled), or a Rigid6 `Body<N>` point or a
+rod end on the [multibody march](#multibody-march) (a line between two objects, whose connection
+turns with End B's object); any other End B fails deck validation. End A may be a `Fixed` or
+`Coupled` point, a Rigid6 `Body<N>` point or a rod end.
 
 ```text
 --------------------- END CONNECTIONS -------------------------------
@@ -925,20 +939,20 @@ Behaviour:
   polar inertia `Irn` of the `LINE TYPES` row (see [theory](theory.rst)).
 
 Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B or, restrained
-at both ends, a `Coupled`/`Vessel` End B (both end frames then turn with their parents, and
-standalone the `motionFile` roll column rolls either end: `Φ = Pretwist(B) − Pretwist(A) −
-roll(A) − roll(B)`, each roll about the tangent pointing into the line from that end), an explicit
-`GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point, a Rigid6 `Body<N>`
-point (the ends of a `Body<N>` rod included) or an end of a `Fixed` rod (with a `Fixed` End B); in
-a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
+at both ends, a `Coupled`/`Vessel` or Rigid6 `Body<N>` End B (both end frames then turn with
+their parents, and standalone the `motionFile` roll column rolls either end: `Φ = Pretwist(B) −
+Pretwist(A) − roll(A) − roll(B)`, each roll about the tangent pointing into the line from that
+end), an explicit `GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point, a
+Rigid6 `Body<N>` point (the ends of a `Body<N>` rod included) or an end of a `Fixed` rod (with a
+`Fixed` End B); in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
 (see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
 torsion on an `EI = 0` line, on an end of a `Free`, `Pinned`, `Body<N>Pinned` or `CoupledPinned`
 rod (an axisymmetric rod has no roll angle about its own axis: no load acts about the axis and
 its static solve has none, so it cannot hold the torque) or of a `Coupled`/`Vessel` rod (no route
-carries a finite-EI line on a host-driven rod), a line whose End B is a rod end (a line between
-two rods: put a `Fixed` point at the rod end), on a `Point3` body, a dynamic or coupled run with
-`False alpha_force_blend`, any restrained end (one end included) through the C API's
-`CableDyn_InitDeck`/`InitDeckAt`, which move the line ends by translation only (`a line
+carries a finite-EI line on a host-driven rod), at End B on a rod end (a line between two rods:
+restrain it through End A, or put a `Fixed` point at the rod end), on a `Point3` body, a dynamic
+or coupled run with `False alpha_force_blend`, any restrained end (one end included) through the
+C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line ends by translation only (`a line
 restrained in torsion needs a host that turns its fairlead frame ...`; a C API host passes its
 rotations after `CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel on a line whose
 torsion is not solved. OpenFAST linearisation includes the twist angles as states; like any

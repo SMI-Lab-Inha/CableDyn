@@ -105,6 +105,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_VIV_Node_Lift, &
                                           CD_HermiteCable_Dyn_Set_Control_Seabed, &
                                           CD_HermiteCable_Dyn_Max_Step_Rotation, CD_HermiteCable_Dyn_Energy, &
+                                          CD_HermiteCable_Dyn_Momentum, &
                                           CD_HermiteCable_Attachment_Drag, CD_HermiteCable_Dyn_Torsion_State, &
                                           CD_HermiteCable_Dyn_Element_Twist, CD_HermiteCable_Dyn_Coupling_Tension, &
                                           CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
@@ -257,7 +258,11 @@ MODULE CableDyn_DeckDriver
   ! the next multibody run start body 1 with the given velocity and angular velocity and record
   ! its full-precision state after every step; CD_Multibody_Probe_Get returns the record.
   PUBLIC :: CD_Multibody_Probe_Arm, CD_Multibody_Probe_Get
-  INTEGER, PARAMETER, PUBLIC :: CD_MB_PROBE_NCOL = 29
+  ! Verification hook: the largest number of static passes of solve_body_equilibrium (its
+  ! default when n <= 0), to reach its non-convergence report in a test.
+  PUBLIC :: CD_Body_Static_Pass_Limit
+  INTEGER, SAVE :: body_static_pass_limit = 0
+  INTEGER, PARAMETER, PUBLIC :: CD_MB_PROBE_NCOL = 56
   LOGICAL, SAVE :: probe_armed = .FALSE.
   REAL(wp), SAVE :: probe_v0(3) = 0.0_wp, probe_w0(3) = 0.0_wp
   REAL(wp), ALLOCATABLE, SAVE :: probe_rec(:, :)
@@ -494,13 +499,6 @@ MODULE CableDyn_DeckDriver
   ! Smallest |Nx x Ez| / |Nx| accepted for a reference normal (about 0.06 degrees off Ez).
   REAL(wp), PARAMETER :: TORS_NX_PARALLEL_TOL = 1.0e-3_wp
   REAL(wp), PARAMETER :: DEG2RAD_TORS = 3.14159265358979323846264338327950288_wp/180.0_wp
-  ! A finite-EI line with a bending or torsional END CONNECTION whose End B is a rod end (also a
-  ! line between two rods, a J-tube to a J-tube): the cable holds End B at a Fixed, Coupled or
-  ! Vessel point only.
-  CHARACTER(*), PARAMETER :: ROD_END_B_NOTE = ' ends (End B) on a rod end: a line between two rods is not '// &
-                             'supported in this build (the cable holds its End B at a Fixed, Coupled or Vessel '// &
-                             'point only); for a Fixed rod, end the line on a Fixed point at the rod end''s '// &
-                             'position (its force then stays out of that rod''s Rod<N> loads)'
 
   TYPE :: DeckLine
     INTEGER :: id = 0, nodeA = 0, nodeB = 0
@@ -985,6 +983,17 @@ MODULE CableDyn_DeckDriver
     ! the committed cable states; no state of their own.
     LOGICAL, ALLOCATABLE :: cab_clamp(:)
     REAL(wp), ALLOCATABLE :: cab_moment(:, :), cab_fend(:, :), cab_mend(:, :), cab_f0(:, :), cab_m0(:, :)
+    ! A cable between two objects (End B on a body point or a rod end, its End A on an object or a
+    ! Fixed point): cab_kind_b/cab_obj_b/cab_off_b describe End B as cab_kind/cab_obj/cab_off do
+    ! End A (cab_kind_b 0: a Fixed End B, held), cab_clamp_b its connection or torsion frame on its
+    ! object, and the *_b loads those of End B on its object. cab_imp: the cable is re-stepped at
+    ! every outer iteration of the monolithic step with its end stiffness in the Newton matrix
+    ! (cab_clamp, or an End B on an object: the cable then couples the groups of its two objects).
+    INTEGER, ALLOCATABLE :: cab_kind_b(:), cab_obj_b(:)
+    REAL(wp), ALLOCATABLE :: cab_off_b(:, :)
+    LOGICAL, ALLOCATABLE :: cab_clamp_b(:), cab_imp(:)
+    REAL(wp), ALLOCATABLE :: cab_force_b(:, :), cab_moment_b(:, :), cab_fend_b(:, :), cab_mend_b(:, :)
+    REAL(wp), ALLOCATABLE :: cab_f0_b(:, :), cab_m0_b(:, :)
     LOGICAL, ALLOCATABLE :: line_is_cable(:)
     INTEGER, ALLOCATABLE :: line_obj_index(:)
     TYPE(RigidBodyState), ALLOCATABLE :: rigid(:), old_rigid(:)
@@ -1002,7 +1011,9 @@ MODULE CableDyn_DeckDriver
     INTEGER :: tan_age = HUGE(1), last_outer = 0, n_refresh = 0
     ! clamped-cable Jacobian reuse: each clamped cable's finite-difference contribution to the
     ! junction Jacobian over its object's group (cab_jac(1:n, 1:n, c), rows and columns from the
-    ! group's first coordinate), the steps since it was built and the step size it was built for
+    ! group's first coordinate; for a cable between the objects of two groups, the first group's
+    ! coordinates then the second's), the steps since it was built and the step size it was built
+    ! for
     REAL(wp), ALLOCATABLE :: cab_jac(:, :, :)
     INTEGER :: cab_age = HUGE(1)
     REAL(wp) :: cab_dt = CD_ZERO
@@ -1779,8 +1790,14 @@ CONTAINS
     IF (PRESENT(allow_moving_end_b)) moving_b = allow_moving_end_b .AND. &
                                            (TRIM(points(pa)%ptype) == 'coupled' .OR. TRIM(points(pa)%ptype) == 'vessel')
     IF (TRIM(points(pa)%ptype) /= 'fixed' .AND. .NOT. moving_b) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI coupled cable requires End B (the anchor) to be a '// &
-                'Fixed point; got "'//TRIM(points(pa)%ptype)//'"'); RETURN
+      IF (PRESENT(allow_moving_end_b)) THEN
+        IF (allow_moving_end_b) THEN
+          CALL fail(ErrStat, ErrMsg, 'finite-EI coupled cable requires End B to be a Fixed point or a '// &
+                    'Coupled/Vessel point (a second driven end); got "'//TRIM(points(pa)%ptype)//'"'); RETURN
+        END IF
+      END IF
+      CALL fail(ErrStat, ErrMsg, 'finite-EI coupled cable requires End B to be a Fixed point; got "'// &
+                TRIM(points(pa)%ptype)//'"'); RETURN
     END IF
     anchor = points(pa)%pos
     fairlead = points(pb)%pos
@@ -17991,23 +18008,18 @@ CONTAINS
       END IF
       ! The production Hermite boundary connects End A to its moving parent and End B to a
       ! Fixed point or to its own moving parent (a Coupled/Vessel End B, a line between two
-      ! moving points). Any other End B fails closed here, at the common parser boundary, so
-      ! no entry point can silently reinterpret a declared connection as pinned.
+      ! moving points; a body point or a rod end, a line between two objects on the multibody
+      ! march). Any other End B fails closed here, at the common parser boundary, so no entry
+      ! point can silently reinterpret a declared connection as pinned.
       j = find_point(points, lines(i)%nodeB)
-      IF (j > 0) THEN
-        IF (is_rod_point_type(points(j)%ptype)) THEN
-          CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel '// &
-                    'point; line '//TRIM(int_to_str(lines(i)%id))//ROD_END_B_NOTE)
-          RETURN
-        END IF
-      END IF
       IF (j < 1) THEN
-        CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel point')
+        CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel point, '// &
+                  'a Rigid6 body point or a rod end')
         RETURN
-      ELSE IF (TRIM(points(j)%ptype) /= 'fixed' .AND. TRIM(points(j)%ptype) /= 'coupled' .AND. &
-               TRIM(points(j)%ptype) /= 'vessel') THEN
-        CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; '// &
-                  'line '//TRIM(int_to_str(lines(i)%id))//' ends on a "'//TRIM(points(j)%ptype)//'" point')
+      ELSE IF (.NOT. end_b_holds_frame(points(j)%ptype)) THEN
+        CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel point, '// &
+                  'a Rigid6 body point or a rod end; line '//TRIM(int_to_str(lines(i)%id))//' ends on a "'// &
+                  TRIM(points(j)%ptype)//'" point')
         RETURN
       END IF
     END DO
@@ -18040,9 +18052,9 @@ CONTAINS
 
     SUBROUTINE check_torsion_line(ln, es_t, em_t)
       !! A line with a torsional END CONNECTIONS restraint: a finite-EI (cubic-Hermite) line. With
-      !! both ends restrained (torsion active) End B must be Fixed, every section's LINE TYPES row
-      !! must give an explicit GJ, a body End A must be a Rigid6 body, and a rod End A must be on a
-      !! Fixed rod, with a Fixed End B.
+      !! both ends restrained (torsion active) End B must be Fixed, Coupled/Vessel or a Rigid6 body
+      !! point (not a rod end), every section's LINE TYPES row must give an explicit GJ, a body end
+      !! must be on a Rigid6 body, and a rod End A must be on a Fixed rod, with a Fixed End B.
       !!
       !! The End A torsion frame (director, reference normal) is held by End A's parent and turns
       !! with its whole orientation, its roll about the line included. A Fixed rod holds it still,
@@ -18052,11 +18064,13 @@ CONTAINS
       !! static solve has no roll angle and its roll in the dynamics is never loaded, so the line's
       !! torque would have nothing to react it. A Coupled/Vessel rod carries no finite-EI line on
       !! any route of this build (the multibody march takes no motionFile, the coupled aggregate no
-      !! rod beside a finite-EI cable), so its host-driven frame is not wired to the torsion.
+      !! rod beside a finite-EI cable), so its host-driven frame is not wired to the torsion. A
+      !! moving End B (a Coupled/Vessel point, or a body point: a line between two objects) turns
+      !! its own frame with its parent.
       TYPE(DeckLine), INTENT(IN) :: ln
       INTEGER, INTENT(OUT) :: es_t
       CHARACTER(*), INTENT(OUT) :: em_t
-      INTEGER :: js, jp, jb, rid, rend
+      INTEGER :: js, jp, jb, je, rid, rend
       CHARACTER(32) :: lid
       es_t = 0
       em_t = ''
@@ -18098,18 +18112,13 @@ CONTAINS
         RETURN
       END IF
       ! End B is held at a Fixed point or driven with its own frame at a Coupled/Vessel point (a
-      ! line between two moving points: both end frames turn with their parents)
+      ! line between two moving points: both end frames turn with their parents) or on a body
+      ! point (a line between two objects)
       jp = find_point(points, ln%nodeB)
       IF (jp < 1) RETURN
-      IF (is_rod_point_type(points(jp)%ptype)) THEN
-        CALL fail(es_t, em_t, 'torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; line '// &
-                  TRIM(lid)//ROD_END_B_NOTE)
-        RETURN
-      END IF
-      IF (TRIM(points(jp)%ptype) /= 'fixed' .AND. TRIM(points(jp)%ptype) /= 'coupled' .AND. &
-          TRIM(points(jp)%ptype) /= 'vessel') THEN
-        CALL fail(es_t, em_t, 'torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; line '// &
-                  TRIM(lid)//' ends on a "'//TRIM(points(jp)%ptype)//'" point')
+      IF (.NOT. end_b_holds_frame(points(jp)%ptype)) THEN
+        CALL fail(es_t, em_t, 'torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point or a '// &
+                  'Rigid6 body point; line '//TRIM(lid)//' ends on a "'//TRIM(points(jp)%ptype)//'" point')
         RETURN
       END IF
       DO js = 1, SIZE(sections)
@@ -18122,6 +18131,14 @@ CONTAINS
           RETURN
         END IF
       END DO
+      ! End B on a rod end: no route of this build solves a torsion frame at a rod's end at End B
+      IF (is_rod_point_type(points(jp)%ptype)) THEN
+        CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on a rod end is not supported '// &
+                  'at End B: restrain the line at the rod end through its End A (a Fixed rod, or a rod fixed to '// &
+                  'a Rigid6 body, RODS type Body<N>), or end it on a Fixed point at a Fixed rod end''s position '// &
+                  '(its force then stays out of that rod''s Rod<N> loads)')
+        RETURN
+      END IF
       jp = find_point(points, ln%nodeA)
       IF (jp < 1) RETURN
       IF (is_rod_point_type(points(jp)%ptype)) THEN
@@ -18155,16 +18172,21 @@ CONTAINS
           END IF
         END IF
       END IF
-      IF (starts_with(TRIM(points(jp)%ptype), 'body')) THEN
-        jb = find_body(bodies, points(jp)%body_id)
-        IF (jb > 0) THEN
-          IF (TRIM(bodies(jb)%btype) /= 'rigid6') THEN
-            CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on a body needs a Rigid6 '// &
-                      'body')
-            RETURN
+      ! either end on a non-Rigid6 body (End B on a body point: a line between two objects)
+      DO je = 1, 2
+        jp = find_point(points, MERGE(ln%nodeA, ln%nodeB, je == 1))
+        IF (jp < 1) RETURN
+        IF (starts_with(TRIM(points(jp)%ptype), 'body')) THEN
+          jb = find_body(bodies, points(jp)%body_id)
+          IF (jb > 0) THEN
+            IF (TRIM(bodies(jb)%btype) /= 'rigid6') THEN
+              CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on a body needs a Rigid6 '// &
+                        'body')
+              RETURN
+            END IF
           END IF
         END IF
-      END IF
+      END DO
     END SUBROUTINE check_torsion_line
   END SUBROUTINE finalize_checks
 
@@ -20419,6 +20441,17 @@ CONTAINS
         f = f + [cable_global_component(mb%cables(c), fl, 1), cable_global_component(mb%cables(c), fl, 2), &
                  cable_global_component(mb%cables(c), fl, 3)]
       END DO
+      ! End B of a cable between two objects (internal node 1)
+      IF (.NOT. ALLOCATED(mb%cab_kind_b)) RETURN
+      DO c = 1, SIZE(mb%cables)
+        IF (mb%cab_kind_b(c) == 0 .OR. mb%cable_points(2, c) /= points(pidx)%id) CYCLE
+        CALL CD_HermiteCable_Dyn_End_Force(mb%cables(c)%line, 1, fl, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'cable end-force recovery failed: '//TRIM(em)); RETURN
+        END IF
+        f = f + [cable_global_component(mb%cables(c), fl, 1), cable_global_component(mb%cables(c), fl, 2), &
+                 cable_global_component(mb%cables(c), fl, 3)]
+      END DO
     END IF
   END SUBROUTINE point_line_force
 
@@ -20474,6 +20507,7 @@ CONTAINS
         IF (ALLOCATED(mb%cab_mend)) THEN
           DO ip = 1, SIZE(mb%cables)
             IF (mb%cab_kind(ip) == 1 .AND. mb%cab_obj(ip) == ib) m = m + mb%cab_mend(:, ip)
+            IF (mb%cab_kind_b(ip) == 1 .AND. mb%cab_obj_b(ip) == ib) m = m + mb%cab_mend_b(:, ip)
           END DO
         END IF
         DO ir = 1, SIZE(mb%rods)
@@ -20563,13 +20597,26 @@ CONTAINS
       IF (ALLOCATED(mb%cab_mend)) THEN
         DO ip = 1, SIZE(mb%cables)
           IF (body_of == 0) THEN
-            IF (mb%cab_kind(ip) /= 2) CYCLE
-            IF (mb%rods(mb%cab_obj(ip))%rod_id == rs%rod_id) m = m + mb%cab_mend(:, ip)
-          ELSE
-            IF (mb%cab_kind(ip) /= 1 .OR. mb%cab_obj(ip) /= body_of .OR. .NOT. ALLOCATED(mb%cable_points)) CYCLE
-            e = find_point(points, mb%cable_points(1, ip))
-            IF (e < 1) CYCLE
-            IF (points(e)%rod_ref == rs%rod_id .AND. points(e)%rod_end > 0) m = m + mb%cab_mend(:, ip)
+            IF (mb%cab_kind(ip) == 2) THEN
+              IF (mb%rods(mb%cab_obj(ip))%rod_id == rs%rod_id) m = m + mb%cab_mend(:, ip)
+            END IF
+            IF (mb%cab_kind_b(ip) == 2) THEN
+              IF (mb%rods(mb%cab_obj_b(ip))%rod_id == rs%rod_id) m = m + mb%cab_mend_b(:, ip)
+            END IF
+          ELSE IF (ALLOCATED(mb%cable_points)) THEN
+            IF (mb%cab_kind(ip) == 1 .AND. mb%cab_obj(ip) == body_of) THEN
+              e = find_point(points, mb%cable_points(1, ip))
+              IF (e > 0) THEN
+                IF (points(e)%rod_ref == rs%rod_id .AND. points(e)%rod_end > 0) m = m + mb%cab_mend(:, ip)
+              END IF
+            END IF
+            ! End B on a body point made from this rod's end (a line between two objects)
+            IF (mb%cab_kind_b(ip) == 1 .AND. mb%cab_obj_b(ip) == body_of) THEN
+              e = find_point(points, mb%cable_points(2, ip))
+              IF (e > 0) THEN
+                IF (points(e)%rod_ref == rs%rod_id .AND. points(e)%rod_end > 0) m = m + mb%cab_mend_b(:, ip)
+              END IF
+            END IF
           END IF
         END DO
       END IF
@@ -21150,15 +21197,24 @@ CONTAINS
       pa = find_point(points, lines(i)%nodeA)
       pb = find_point(points, lines(i)%nodeB)
       IF (is_fin(i)) THEN
-        IF (TRIM(points(pb)%ptype) /= 'fixed') THEN
+        ! End B: a Fixed point (held), or a Rigid6 body point or a rod end (a cable between two
+        ! objects, driven at both ends); a Connect/Free point or a Point3 buoy is refused, and a
+        ! Coupled/Vessel End B, which this march has no motion to drive
+        IF (TRIM(points(pb)%ptype) == 'free' .OR. TRIM(points(pb)%ptype) == 'connect' .OR. &
+            point_on_point3_body(points(pb), bodies)) THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//' in a mixed-topology '// &
-                    'deck needs a Fixed End B (the cable is driven at End A), but End B is POINT '// &
-                    TRIM(int_to_str(points(pb)%id))//' ('//TRIM(points(pb)%ptype)//'). A finite-EI cable that '// &
-                    'ends on a Connect/Free/Coupled point (a junction with other lines, a buoy or a pliant-wave '// &
-                    'hang-off) '// &
-                    'is not supported in a deck with Connect/Free points, bodies or rods (the multibody '// &
-                    'march). Anchor the cable on a Fixed point, or run the cable and the lines it joins as '// &
+                    'deck: End B is POINT '//TRIM(int_to_str(points(pb)%id))//' ('//TRIM(points(pb)%ptype)// &
+                    '); a cable end on a Free/Connect point or a Point3 buoy (a junction with other lines, a '// &
+                    'buoy or a pliant-wave hang-off) is not supported on the multibody march. End the cable on '// &
+                    'a Fixed point, a Rigid6 body point or a rod end, or run the cable and the lines it joins as '// &
                     'separate decks'); RETURN
+        END IF
+        IF (TRIM(points(pb)%ptype) == 'coupled' .OR. TRIM(points(pb)%ptype) == 'vessel') THEN
+          CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a Coupled/Vessel End B '// &
+                    '(POINT '//TRIM(int_to_str(points(pb)%id))//') would need motionFile coupling to drive it, '// &
+                    'which a mixed-topology deck with Connect/Free points or bodies (marched as one multibody '// &
+                    'system) does not support. End the cable on a Fixed point, a Rigid6 body point or a rod end'); &
+            RETURN
         END IF
         IF (TRIM(points(pa)%ptype) == 'free' .OR. TRIM(points(pa)%ptype) == 'connect' .OR. &
             point_on_point3_body(points(pa), bodies)) THEN
@@ -21187,9 +21243,9 @@ CONTAINS
                         'elastic END CONNECTION on a body or rod needs bodyScheme monolithic (the staggered '// &
                         'scheme couples cable ends as point forces)')
             ELSE
-              CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a torsional END '// &
-                       'CONNECTION on a body or rod needs bodyScheme monolithic (the staggered scheme drives cable '// &
-                        'ends by translation and couples them as point forces)')
+              CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a clamped or '// &
+                        'elastic END CONNECTION or a torsional one on a body or rod needs bodyScheme monolithic '// &
+                        '(the staggered scheme couples cable ends as point forces)')
             END IF
             RETURN
           END IF
@@ -21199,6 +21255,24 @@ CONTAINS
                                     check_axis=.NOT. opts%body_ic_static)
           END BLOCK
           IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        END IF
+        IF (TRIM(points(pb)%ptype) /= 'fixed' .AND. (lines(i)%endconn_mode(2) /= CD_ENDCONN_PINNED .OR. &
+                                                     line_torsion_at_b(lines(i)))) THEN
+          ! the same for a clamped or elastic End B, or a torsion frame, on a body or rod
+          IF (opts%body_scheme_staggered) THEN
+            CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a clamped or '// &
+                      'elastic END CONNECTION or a torsional one on a body or rod needs bodyScheme monolithic '// &
+                      '(the staggered scheme couples cable ends as point forces)')
+            RETURN
+          END IF
+          IF (lines(i)%endconn_mode(2) /= CD_ENDCONN_PINNED) THEN
+            BLOCK
+              REAL(wp) :: rclamp(3, 3), dclamp(3)
+              CALL clamp_object_frame(lines(i), points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, &
+                                      check_axis=.NOT. opts%body_ic_static, end_b=.TRUE.)
+            END BLOCK
+            IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          END IF
         END IF
       END IF
     END DO
@@ -21253,6 +21327,21 @@ CONTAINS
               mb%cab_clamp(SIZE(cab_lines)), mb%cab_moment(3, SIZE(cab_lines)), mb%cab_fend(3, SIZE(cab_lines)), &
               mb%cab_mend(3, SIZE(cab_lines)), mb%cab_f0(3, SIZE(cab_lines)), mb%cab_m0(3, SIZE(cab_lines)), &
               mb%cab_kax(SIZE(cab_lines)), mb%cab_len(SIZE(cab_lines)))
+    ALLOCATE (mb%cab_kind_b(SIZE(cab_lines)), mb%cab_obj_b(SIZE(cab_lines)), mb%cab_off_b(3, SIZE(cab_lines)), &
+              mb%cab_clamp_b(SIZE(cab_lines)), mb%cab_imp(SIZE(cab_lines)), mb%cab_force_b(3, SIZE(cab_lines)), &
+              mb%cab_moment_b(3, SIZE(cab_lines)), mb%cab_fend_b(3, SIZE(cab_lines)), &
+              mb%cab_mend_b(3, SIZE(cab_lines)), mb%cab_f0_b(3, SIZE(cab_lines)), mb%cab_m0_b(3, SIZE(cab_lines)))
+    mb%cab_kind_b = 0
+    mb%cab_obj_b = 0
+    mb%cab_off_b = CD_ZERO
+    mb%cab_clamp_b = .FALSE.
+    mb%cab_imp = .FALSE.
+    mb%cab_force_b = CD_ZERO
+    mb%cab_moment_b = CD_ZERO
+    mb%cab_fend_b = CD_ZERO
+    mb%cab_mend_b = CD_ZERO
+    mb%cab_f0_b = CD_ZERO
+    mb%cab_m0_b = CD_ZERO
     mb%cab_age = HUGE(1)
     mb%cab_kind = 0
     mb%cab_obj = 0
@@ -21289,6 +21378,51 @@ CONTAINS
       IF (TRIM(pc(pa)%ptype) /= 'fixed') pc(pa)%ptype = 'coupled'
       mb%cab_clamp(c) = (cab_lines(c)%endconn_mode(1) /= CD_ENDCONN_PINNED .OR. line_torsion_at_a(cab_lines(c))) &
                         .AND. TRIM(points(pa)%ptype) /= 'fixed'
+      pb = find_point(points, cab_lines(c)%nodeB)
+      IF (TRIM(points(pb)%ptype) /= 'fixed') THEN
+        ! a cable between two objects: End B is a second driven end on its body or rod, its
+        ! connection direction and torsion normal in that object's frame
+        pc(pb)%ptype = 'coupled'
+        mb%cab_clamp_b(c) = cab_lines(c)%endconn_mode(2) /= CD_ENDCONN_PINNED .OR. line_torsion_at_b(cab_lines(c))
+        ! re-stepped inside the outer Newton when End A is connected, otherwise set with the
+        ! attachments below: when End B is connected on an object that moves, or both ends' objects
+        ! move; a cable with one moving end on an object is coupled at the predictor (pinned) or
+        ! implicitly (connected) whichever end that is
+        mb%cab_imp(c) = mb%cab_clamp(c)
+        BLOCK
+          TYPE(DeckLine) :: lnc
+          REAL(wp) :: rclamp(3, 3), dclamp(3), rclamp_b(3, 3), dclamp_b(3)
+          lnc = cab_lines(c)
+          rclamp = CD_ZERO
+          rclamp(1, 1) = CD_ONE
+          rclamp(2, 2) = CD_ONE
+          rclamp(3, 3) = CD_ONE
+          rclamp_b = rclamp
+          IF (mb%cab_clamp(c)) THEN
+            CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, &
+                                    check_axis=.NOT. opts%body_ic_static)
+            IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
+            lnc%endconn_ez_ref(:, 1) = dclamp
+          END IF
+          IF (mb%cab_clamp_b(c)) THEN
+            CALL clamp_object_frame(lnc, points, bodies, rods, rclamp_b, dclamp_b, ErrStat, ErrMsg, &
+                                    check_axis=.NOT. opts%body_ic_static, end_b=.TRUE.)
+            IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
+            lnc%endconn_ez_ref(:, 2) = dclamp_b
+          END IF
+          CALL build_one_hermite_cable(lnc, sections, types, pc, opts, opts%dtM, mb%cables(c), node, &
+                                       ErrStat, ErrMsg, standalone_controls=.TRUE., bathymetry=bathymetry, &
+                                       fairlead_orientation=TRANSPOSE(rclamp), install_viv=.TRUE., &
+                                       fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                          deck_has_non_rigid6_dynamic_points(points, bodies)), &
+                                       allow_moving_end_b=.TRUE., end_b_orientation=TRANSPOSE(rclamp_b))
+        END BLOCK
+        IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
+        ! re-stepped inside the outer Newton of the monolithic step
+        IF (mb%cab_imp(c)) mb%cables(c)%tol = MIN(mb%cables(c)%tol, CLAMPED_CABLE_TOL)
+        CYCLE
+      END IF
+      mb%cab_imp(c) = mb%cab_clamp(c)
       IF (mb%cab_clamp(c)) THEN
         ! End A clamped or elastic on its object: the connection direction is stored in the object
         ! frame and turns with the object's orientation (the OpenFAST parent-frame contract)
@@ -21390,12 +21524,43 @@ CONTAINS
                     'unresolved rod end'); GOTO 900
         END IF
       END IF
+      ! End B on a body point or a rod end (a cable between two objects)
+      pb = find_point(points, cab_lines(c)%nodeB)
+      IF (starts_with(TRIM(points(pb)%ptype), 'body')) THEN
+        DO ib = 1, SIZE(mb%rigid)
+          IF (mb%rigid(ib)%body_id == points(pb)%body_id) THEN
+            mb%cab_kind_b(c) = 1
+            mb%cab_obj_b(c) = ib
+            mb%cab_off_b(:, c) = points(pb)%body_offset
+          END IF
+        END DO
+      ELSE IF (is_rod_point_type(points(pb)%ptype)) THEN
+        CALL parse_rod_point_type(points(pb)%ptype, bid, k)
+        DO ir = 1, SIZE(mb%rods)
+          IF (mb%rods(ir)%rod_id /= bid) CYCLE
+          mb%cab_kind_b(c) = 2
+          mb%cab_obj_b(c) = ir
+          mb%cab_off_b(:, c) = [MERGE(-CD_ONE, CD_ONE, k == 1), CD_ZERO, CD_ZERO]
+        END DO
+        IF (mb%cab_kind_b(c) == 0) THEN
+          CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(cab_lines(c)%id))//' attaches to an '// &
+                    'unresolved rod end'); GOTO 900
+        END IF
+      END IF
+      ! a cable connected at End B on a moving object, or between two moving objects, couples
+      ! them implicitly
+      IF (mb%cab_kind_b(c) > 0 .AND. .NOT. mb%cab_imp(c)) THEN
+        mb%cab_imp(c) = attachment_moves(mb%cab_kind_b(c), mb%cab_obj_b(c)) .AND. &
+                        (mb%cab_clamp_b(c) .OR. attachment_moves(mb%cab_kind(c), mb%cab_obj(c)))
+        IF (mb%cab_imp(c)) mb%cables(c)%tol = MIN(mb%cables(c)%tol, CLAMPED_CABLE_TOL)
+      END IF
     END DO
     ALLOCATE (mb%cable_points(2, SIZE(cab_lines)))
     DO c = 1, SIZE(cab_lines)
       mb%cable_points(:, c) = [cab_lines(c)%nodeA, cab_lines(c)%nodeB]
       ! the committed end loads of the initial state (outputs at t = 0, the first step's entry)
-      CALL mb_cable_committed_loads(mb, c, mb%cab_fend(:, c), mb%cab_mend(:, c), ErrStat, ErrMsg)
+      CALL mb_cable_committed_loads(mb, c, mb%cab_fend(:, c), mb%cab_mend(:, c), ErrStat, ErrMsg, &
+                                    fb=mb%cab_fend_b(:, c), mbm=mb%cab_mend_b(:, c))
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
     END DO
     CALL range_setup_aggregate(mb_ranges, lines, channels, opts, mb%has_sys, mb%system, mb%cables, &
@@ -21503,6 +21668,19 @@ CONTAINS
 
   CONTAINS
 
+    LOGICAL FUNCTION attachment_moves(kind, obj) RESULT(moves)
+      !! A cable end attachment that the march moves: a Rigid6 body, or a free or pinned rod (a
+      !! fixed rod, a rod fixed in place, and a held point do not).
+      INTEGER, INTENT(IN) :: kind, obj
+      moves = .FALSE.
+      SELECT CASE (kind)
+      CASE (1)
+        moves = .TRUE.
+      CASE (2)
+        moves = mb%rods(obj)%is_free .OR. mb%rods(obj)%is_pinned
+      END SELECT
+    END FUNCTION attachment_moves
+
     SUBROUTINE probe_record(col, time)
       !! Column col of the probe record: t, r(3), v(3), rot_mat(9, column-major), omega(3), a(3) of
       !! body 1; finite-EI cable 1 energy (kinetic plus elastic), End A connection moment(3) and end
@@ -21528,6 +21706,25 @@ CONTAINS
         END BLOCK
         probe_rec(24:26, col) = mb%cab_mend(:, 1)
         probe_rec(27:29, col) = mb%cab_fend(:, 1)
+        ! End B's connection moment and end force on its object, the cable's linear momentum
+        probe_rec(51:53, col) = mb%cab_mend_b(:, 1)
+        probe_rec(54:56, col) = mb%cab_fend_b(:, 1)
+        BLOCK
+          REAL(wp) :: pm(3)
+          INTEGER :: es_p
+          CHARACTER(1024) :: em_p
+          CALL CD_HermiteCable_Dyn_Momentum(mb%cables(1)%line, pm, es_p, em_p)
+          probe_rec(48:50, col) = [cable_global_component(mb%cables(1), pm, 1), &
+                                   cable_global_component(mb%cables(1), pm, 2), &
+                                   cable_global_component(mb%cables(1), pm, 3)]
+        END BLOCK
+      END IF
+      ! body 2: r(3), v(3), rot_mat(9), omega(3)
+      IF (SIZE(mb%rigid) > 1) THEN
+        probe_rec(30:32, col) = mb%rigid(2)%r
+        probe_rec(33:35, col) = mb%rigid(2)%v
+        probe_rec(36:44, col) = RESHAPE(mb%rigid(2)%rot_mat, [9])
+        probe_rec(45:47, col) = mb%rigid(2)%omega
       END IF
     END SUBROUTINE probe_record
 
@@ -21588,6 +21785,13 @@ CONTAINS
     END SUBROUTINE mb_outputs
   END SUBROUTINE write_multibody_dynamic_out
 
+  SUBROUTINE CD_Body_Static_Pass_Limit(n)
+    !! Verification hook: limit the static passes of solve_body_equilibrium to n (n <= 0: the
+    !! default MAX_PASS).
+    INTEGER, INTENT(IN) :: n
+    body_static_pass_limit = n
+  END SUBROUTINE CD_Body_Static_Pass_Limit
+
   SUBROUTINE CD_Multibody_Probe_Arm(v0, omega0)
     !! Arm the multibody-march probe (verification tests): the next multibody run starts body 1
     !! with velocity v0 and angular velocity omega0 (global frame, m/s and rad/s) and records its
@@ -21602,8 +21806,10 @@ CONTAINS
   SUBROUTINE CD_Multibody_Probe_Get(rec)
     !! The record of the last probed multibody run: rec(CD_MB_PROBE_NCOL, 0:nstep), columns t,
     !! r(3), v(3), rot_mat(9, column-major), omega(3), a(3) of body 1 (1-22), then finite-EI cable
-    !! 1's energy (23), committed End A connection moment (24-26) and end force (27-29)
-    !! (probe_record); unallocated when none.
+    !! 1's energy (23), committed End A connection moment (24-26) and end force (27-29), body 2's
+    !! r(3), v(3), rot_mat(9), omega(3) (30-47, zero without a second body), cable 1's linear
+    !! momentum (48-50) and its committed End B connection moment (51-53) and end force (54-56)
+    !! on End B's object (zero with a Fixed End B) (probe_record); unallocated when none.
     REAL(wp), ALLOCATABLE, INTENT(OUT) :: rec(:, :)
     IF (ALLOCATED(probe_rec)) rec = probe_rec
   END SUBROUTINE CD_Multibody_Probe_Get
@@ -21634,19 +21840,23 @@ CONTAINS
     rod%a = a_pin + cross3(rod%alpha, arm) + cross3(rod%omega, cross3(rod%omega, arm))
   END SUBROUTINE mb_snap_pinned
 
-  SUBROUTINE mb_attachment_motion(mb, c, x, v, a, es, em, dcm, w, al)
+  SUBROUTINE mb_attachment_motion(mb, c, x, v, a, es, em, dcm, w, al, end_b)
     !! Position, velocity and acceleration of cable c's End A attachment (body point, rod end or
-    !! held point); optionally the attached object's orientation as a global-to-object DCM (the
-    !! OpenFAST mesh convention of CD_HFMF_UpdateStates) and its angular velocity and
-    !! acceleration in global axes (identity and zero at a held point). es/em carry the held
-    !! point's kinematics query status (CD_HFMF_OK otherwise).
+    !! held point), or with end_b its End B attachment; optionally the attached object's
+    !! orientation as a global-to-object DCM (the OpenFAST mesh convention of
+    !! CD_HFMF_UpdateStates) and its angular velocity and acceleration in global axes (identity
+    !! and zero at a held point). es/em carry the held point's kinematics query status (CD_HFMF_OK
+    !! otherwise).
     TYPE(MultibodyMarch), INTENT(IN) :: mb
     INTEGER, INTENT(IN) :: c
     REAL(wp), INTENT(OUT) :: x(3), v(3), a(3)
     INTEGER, INTENT(OUT) :: es
     CHARACTER(*), INTENT(OUT) :: em
     REAL(wp), INTENT(OUT), OPTIONAL :: dcm(3, 3), w(3), al(3)
-    REAL(wp) :: arm(3), rot(3, 3), wo(3), alo(3)
+    LOGICAL, INTENT(IN), OPTIONAL :: end_b
+    REAL(wp) :: arm(3), rot(3, 3), wo(3), alo(3), off(3)
+    INTEGER :: kind, obj
+    LOGICAL :: at_b
     es = CD_HFMF_OK
     em = ''
     rot = CD_ZERO
@@ -21655,10 +21865,21 @@ CONTAINS
     rot(3, 3) = CD_ONE
     wo = CD_ZERO
     alo = CD_ZERO
-    SELECT CASE (mb%cab_kind(c))
+    at_b = .FALSE.
+    IF (PRESENT(end_b)) at_b = end_b
+    IF (at_b) THEN
+      kind = mb%cab_kind_b(c)
+      obj = mb%cab_obj_b(c)
+      off = mb%cab_off_b(:, c)
+    ELSE
+      kind = mb%cab_kind(c)
+      obj = mb%cab_obj(c)
+      off = mb%cab_off(:, c)
+    END IF
+    SELECT CASE (kind)
     CASE (1)
-      ASSOCIATE (b => mb%rigid(mb%cab_obj(c)))
-        arm = MATMUL(b%rot_mat, mb%cab_off(:, c))
+      ASSOCIATE (b => mb%rigid(obj))
+        arm = MATMUL(b%rot_mat, off)
         x = b%r + arm
         v = b%v + cross3(b%omega, arm)
         a = b%a + cross3(b%alpha, arm) + cross3(b%omega, cross3(b%omega, arm))
@@ -21667,8 +21888,8 @@ CONTAINS
         alo = b%alpha
       END ASSOCIATE
     CASE (2)
-      ASSOCIATE (r => mb%rods(mb%cab_obj(c)))
-        arm = mb%cab_off(1, c)*r%half_length*r%rot_mat(:, 1)
+      ASSOCIATE (r => mb%rods(obj))
+        arm = off(1)*r%half_length*r%rot_mat(:, 1)
         x = r%r + arm
         v = r%v + cross3(r%omega, arm)
         a = r%a + cross3(r%alpha, arm) + cross3(r%omega, cross3(r%omega, arm))
@@ -21677,7 +21898,11 @@ CONTAINS
         alo = r%alpha
       END ASSOCIATE
     CASE DEFAULT
-      CALL CD_HFMF_GetCoupledKinematics(mb%cables(c), x, v, a, es, em)
+      IF (at_b) THEN
+        CALL CD_HFMF_GetEndBKinematics(mb%cables(c), x, v, a, es, em)
+      ELSE
+        CALL CD_HFMF_GetCoupledKinematics(mb%cables(c), x, v, a, es, em)
+      END IF
       v = CD_ZERO
       a = CD_ZERO
     END SELECT
@@ -21689,18 +21914,44 @@ CONTAINS
   SUBROUTINE mb_cable_drive(mb, c, dt, ErrStat, ErrMsg)
     !! Step cable c over dt with its End A attachment's current (end-of-step) motion, the object
     !! orientation driving a clamped or elastic connection, and read its committed end force and
-    !! connection moment into cab_fend/cab_mend.
+    !! connection moment into cab_fend/cab_mend. A cable between two objects is driven at End B
+    !! by its End B attachment as well (cab_fend_b/cab_mend_b).
     TYPE(MultibodyMarch), INTENT(INOUT) :: mb
     INTEGER, INTENT(IN) :: c
     REAL(wp), INTENT(IN) :: dt
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: xa(3), va(3), aa(3), dcm(3, 3), wa(3), ala(3)
+    REAL(wp) :: xb(3), vb(3), ab(3), dcmb(3, 3), wb(3), alb(3)
     INTEGER :: es
     CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     mb%cables(c)%dt = dt
+    IF (mb%cab_kind_b(c) > 0) THEN
+      CALL mb_attachment_motion(mb, c, xa, va, aa, es, em, dcm, wa, ala)
+      IF (es == CD_HFMF_OK) CALL mb_attachment_motion(mb, c, xb, vb, ab, es, em, dcmb, wb, alb, end_b=.TRUE.)
+      IF (es == CD_HFMF_OK) THEN
+        IF (mb%cab_clamp(c) .AND. mb%cab_clamp_b(c)) THEN
+          CALL CD_HFMF_UpdateStates(mb%cables(c), xa, va, aa, es, em, u_orientation=dcm, u_angular_velocity=wa, &
+                                    u_angular_acceleration=ala, ub_pos=xb, ub_vel=vb, ub_acc=ab, &
+                                    ub_orientation=dcmb, ub_angular_velocity=wb, ub_angular_acceleration=alb)
+        ELSE IF (mb%cab_clamp(c)) THEN
+          CALL CD_HFMF_UpdateStates(mb%cables(c), xa, va, aa, es, em, u_orientation=dcm, u_angular_velocity=wa, &
+                                    u_angular_acceleration=ala, ub_pos=xb, ub_vel=vb, ub_acc=ab)
+        ELSE IF (mb%cab_clamp_b(c)) THEN
+          CALL CD_HFMF_UpdateStates(mb%cables(c), xa, va, aa, es, em, ub_pos=xb, ub_vel=vb, ub_acc=ab, &
+                                    ub_orientation=dcmb, ub_angular_velocity=wb, ub_angular_acceleration=alb)
+        ELSE
+          CALL CD_HFMF_UpdateStates(mb%cables(c), xa, va, aa, es, em, ub_pos=xb, ub_vel=vb, ub_acc=ab)
+        END IF
+      END IF
+      IF (es == CD_HFMF_OK) CALL CD_HFMF_CalcOutput(mb%cables(c), mb%cab_fend(:, c), es, em, &
+                                                    y_moment=mb%cab_mend(:, c), y_end_b=mb%cab_fend_b(:, c), &
+                                                    y_moment_b=mb%cab_mend_b(:, c))
+      IF (es /= CD_HFMF_OK) CALL fail_solve(ErrStat, ErrMsg, 'multibody finite-EI cable step failed: '//TRIM(em))
+      RETURN
+    END IF
     IF (mb%cab_clamp(c)) THEN
       CALL mb_attachment_motion(mb, c, xa, va, aa, es, em, dcm, wa, ala)
       IF (es == CD_HFMF_OK) CALL CD_HFMF_UpdateStates(mb%cables(c), xa, va, aa, es, em, u_orientation=dcm, &
@@ -21714,28 +21965,49 @@ CONTAINS
     IF (es /= CD_HFMF_OK) CALL fail_solve(ErrStat, ErrMsg, 'multibody finite-EI cable step failed: '//TRIM(em))
   END SUBROUTINE mb_cable_drive
 
-  SUBROUTINE mb_cable_committed_loads(mb, c, f, m, ErrStat, ErrMsg)
-    !! Committed end force and connection moment of cable c on its End A attachment.
+  SUBROUTINE mb_cable_committed_loads(mb, c, f, m, ErrStat, ErrMsg, fb, mbm)
+    !! Committed end force and connection moment of cable c on its End A attachment; fb/mbm those
+    !! on its End B attachment (a cable between two objects; zero otherwise).
     TYPE(MultibodyMarch), INTENT(INOUT) :: mb
     INTEGER, INTENT(IN) :: c
     REAL(wp), INTENT(OUT) :: f(3), m(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: fb(3), mbm(3)
     INTEGER :: es
     CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
-    CALL CD_HFMF_CalcOutput(mb%cables(c), f, es, em, y_moment=m)
+    IF (PRESENT(fb)) fb = CD_ZERO
+    IF (PRESENT(mbm)) mbm = CD_ZERO
+    IF (PRESENT(fb) .AND. PRESENT(mbm) .AND. mb%cab_kind_b(c) > 0) THEN
+      CALL CD_HFMF_CalcOutput(mb%cables(c), f, es, em, y_moment=m, y_end_b=fb, y_moment_b=mbm)
+    ELSE
+      CALL CD_HFMF_CalcOutput(mb%cables(c), f, es, em, y_moment=m)
+    END IF
     IF (es /= CD_HFMF_OK) CALL fail_solve(ErrStat, ErrMsg, 'multibody cable end-load query failed: '//TRIM(em))
   END SUBROUTINE mb_cable_committed_loads
 
-  SUBROUTINE mb_cable_arm(mb, c, arm)
+  SUBROUTINE mb_cable_arm(mb, c, arm, end_b)
     !! Arm from the attached object's reference point (body reference, rod centre) to cable c's
-    !! End A.
+    !! End A, or with end_b to its End B.
     TYPE(MultibodyMarch), INTENT(IN) :: mb
     INTEGER, INTENT(IN) :: c
     REAL(wp), INTENT(OUT) :: arm(3)
+    LOGICAL, INTENT(IN), OPTIONAL :: end_b
+    LOGICAL :: at_b
+    at_b = .FALSE.
+    IF (PRESENT(end_b)) at_b = end_b
     arm = CD_ZERO
+    IF (at_b) THEN
+      SELECT CASE (mb%cab_kind_b(c))
+      CASE (1)
+        arm = MATMUL(mb%rigid(mb%cab_obj_b(c))%rot_mat, mb%cab_off_b(:, c))
+      CASE (2)
+        arm = mb%cab_off_b(1, c)*mb%rods(mb%cab_obj_b(c))%half_length*mb%rods(mb%cab_obj_b(c))%rot_mat(:, 1)
+      END SELECT
+      RETURN
+    END IF
     SELECT CASE (mb%cab_kind(c))
     CASE (1)
       arm = MATMUL(mb%rigid(mb%cab_obj(c))%rot_mat, mb%cab_off(:, c))
@@ -21762,12 +22034,23 @@ CONTAINS
       eye(k, k) = CD_ONE
     END DO
     DO c = 1, SIZE(mb%cables)
-      IF (mb%cab_kind(c) /= kind .OR. mb%cab_obj(c) /= obj) CYCLE
-      CALL mb_cable_arm(mb, c, arm)
+      IF (mb%cab_kind(c) == kind .AND. mb%cab_obj(c) == obj) THEN
+        CALL mb_cable_arm(mb, c, arm)
+        CALL add_end(mb%cab_force(:, c))
+      END IF
+      ! End B of a cable between two objects
+      IF (mb%cab_kind_b(c) == kind .AND. mb%cab_obj_b(c) == obj) THEN
+        CALL mb_cable_arm(mb, c, arm, end_b=.TRUE.)
+        CALL add_end(mb%cab_force_b(:, c))
+      END IF
+    END DO
+  CONTAINS
+    SUBROUTINE add_end(fend)
+      REAL(wp), INTENT(IN) :: fend(3)
       arm = arm + shift
-      ten = NORM2(mb%cab_force(:, c))
+      ten = NORM2(fend)
       IF (ten > CD_ZERO .AND. mb%cab_len(c) > CD_ZERO) THEN
-        t = mb%cab_force(:, c)/ten
+        t = fend/ten
         katt = mb%cab_kax(c)*SPREAD(t, 2, 3)*SPREAD(t, 1, 3) + &
                ten/mb%cab_len(c)*(eye - SPREAD(t, 2, 3)*SPREAD(t, 1, 3))
       ELSE
@@ -21779,7 +22062,7 @@ CONTAINS
         k6(k) = k6(k) + katt(k, k)
         k6(3 + k) = k6(3 + k) + krot(k, k)
       END DO
-    END DO
+    END SUBROUTINE add_end
   END SUBROUTINE mb_cable_k6
 
   SUBROUTINE mb_rod_bases(mb, points, rod, bases, arms)
@@ -22073,6 +22356,19 @@ CONTAINS
         fxr(:, mb%cab_obj(c)) = fxr(:, mb%cab_obj(c)) + mb%cab_force(:, c)
         mxr(:, mb%cab_obj(c)) = mxr(:, mb%cab_obj(c)) + cross3(arm, mb%cab_force(:, c)) + mb%cab_moment(:, c)
       END SELECT
+      ! End B of a cable between two objects
+      IF (mb%cab_kind_b(c) == 0) CYCLE
+      CALL mb_cable_arm(mb, c, arm, end_b=.TRUE.)
+      SELECT CASE (mb%cab_kind_b(c))
+      CASE (1)
+        fxb(:, mb%cab_obj_b(c)) = fxb(:, mb%cab_obj_b(c)) + mb%cab_force_b(:, c)
+        mxb(:, mb%cab_obj_b(c)) = mxb(:, mb%cab_obj_b(c)) + cross3(arm, mb%cab_force_b(:, c)) + &
+                                  mb%cab_moment_b(:, c)
+      CASE (2)
+        fxr(:, mb%cab_obj_b(c)) = fxr(:, mb%cab_obj_b(c)) + mb%cab_force_b(:, c)
+        mxr(:, mb%cab_obj_b(c)) = mxr(:, mb%cab_obj_b(c)) + cross3(arm, mb%cab_force_b(:, c)) + &
+                                  mb%cab_moment_b(:, c)
+      END SELECT
     END DO
     ! bodies with their pinned rods
     DO ib = 1, SIZE(mb%rigid)
@@ -22205,7 +22501,12 @@ CONTAINS
       END IF
     END IF
     DO c = 1, SIZE(mb%cables)
-      CALL CD_HFMF_CalcOutput(mb%cables(c), mb%cab_force(:, c), es, em, y_moment=mb%cab_moment(:, c))
+      IF (mb%cab_kind_b(c) > 0) THEN
+        CALL CD_HFMF_CalcOutput(mb%cables(c), mb%cab_force(:, c), es, em, y_moment=mb%cab_moment(:, c), &
+                                y_end_b=mb%cab_force_b(:, c), y_moment_b=mb%cab_moment_b(:, c))
+      ELSE
+        CALL CD_HFMF_CalcOutput(mb%cables(c), mb%cab_force(:, c), es, em, y_moment=mb%cab_moment(:, c))
+      END IF
       IF (es /= CD_HFMF_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'multibody cable end-force query failed: '//TRIM(em)); RETURN
       END IF
@@ -22430,6 +22731,13 @@ CONTAINS
       END IF
     END IF
     DO c = 1, SIZE(mb%cables)
+      IF (mb%cab_kind_b(c) > 0) THEN
+        ! a cable between two objects (pinned at both ends on this scheme): both ends driven by
+        ! their predicted attachments
+        CALL mb_cable_drive(mb, c, dt, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        CYCLE
+      END IF
       CALL mb_attachment_motion(mb, c, x, v, a, es, em)
       mb%cables(c)%dt = dt
       IF (es == CD_HFMF_OK) CALL CD_HFMF_UpdateStates(mb%cables(c), x, v, a, es, em)
@@ -22612,11 +22920,12 @@ CONTAINS
       END IF
     END DO
     ! the clamped cables' kept Jacobian columns span a whole group: a body's six coordinates
-    ! and three for each rod pinned to it
+    ! and three for each rod pinned to it; a cable between two objects spans both groups
     IF (ALLOCATED(mb%cables)) THEN
       IF (ALLOCATED(mb%cab_jac)) DEALLOCATE (mb%cab_jac)
       k = 1
       IF (mb%ng > 0) k = MAX(k, MAXVAL(mb%g_hi(1:mb%ng) - mb%g_lo(1:mb%ng) + 1))
+      IF (ANY(mb%cab_kind_b > 0)) k = 2*k
       ALLOCATE (mb%cab_jac(k, k, SIZE(mb%cables)))
       mb%cab_jac = CD_ZERO
       mb%cab_age = HUGE(1)
@@ -22943,15 +23252,26 @@ CONTAINS
       m = CD_ZERO
       IF (.NOT. ALLOCATED(mb%cables)) RETURN
       DO cc = 1, SIZE(mb%cables)
-        IF (mb%cab_kind(cc) /= kind .OR. mb%cab_obj(cc) /= obj) CYCLE
-        IF (kind == 1) THEN
-          arm = MATMUL(mb%rig_af(obj)%rot_mat, mb%cab_off(:, cc))
-        ELSE
-          arm = mb%cab_off(1, cc)*mb%rod_af(obj)%half_length*mb%rod_af(obj)%rot_mat(:, 1)
+        IF (mb%cab_kind(cc) == kind .AND. mb%cab_obj(cc) == obj) THEN
+          IF (kind == 1) THEN
+            arm = MATMUL(mb%rig_af(obj)%rot_mat, mb%cab_off(:, cc))
+          ELSE
+            arm = mb%cab_off(1, cc)*mb%rod_af(obj)%half_length*mb%rod_af(obj)%rot_mat(:, 1)
+          END IF
+          f = f + mb%cab_force(:, cc)
+          ! a clamped or elastic End A also returns its connection moment to the object
+          m = m + cross3(arm, mb%cab_force(:, cc)) + mb%cab_moment(:, cc)
         END IF
-        f = f + mb%cab_force(:, cc)
-        ! a clamped or elastic End A also returns its connection moment to the object
-        m = m + cross3(arm, mb%cab_force(:, cc)) + mb%cab_moment(:, cc)
+        ! End B of a cable between two objects, with its connection moment
+        IF (mb%cab_kind_b(cc) == kind .AND. mb%cab_obj_b(cc) == obj) THEN
+          IF (kind == 1) THEN
+            arm = MATMUL(mb%rig_af(obj)%rot_mat, mb%cab_off_b(:, cc))
+          ELSE
+            arm = mb%cab_off_b(1, cc)*mb%rod_af(obj)%half_length*mb%rod_af(obj)%rot_mat(:, 1)
+          END IF
+          f = f + mb%cab_force_b(:, cc)
+          m = m + cross3(arm, mb%cab_force_b(:, cc)) + mb%cab_moment_b(:, cc)
+        END IF
       END DO
     END SUBROUTINE cable_load
   END SUBROUTINE mb_imp_group_residual
@@ -23028,6 +23348,7 @@ CONTAINS
       IF (.NOT. ALLOCATED(mb%cables)) RETURN
       DO cc = 1, SIZE(mb%cables)
         IF (mb%cab_kind(cc) == kind .AND. mb%cab_obj(cc) == obj) fc = MAX(fc, NORM2(mb%cab_force(:, cc)))
+        IF (mb%cab_kind_b(cc) == kind .AND. mb%cab_obj_b(cc) == obj) fc = MAX(fc, NORM2(mb%cab_force_b(:, cc)))
       END DO
     END FUNCTION cable_force
 
@@ -23039,7 +23360,8 @@ CONTAINS
       ks = CD_ZERO
       IF (.NOT. ALLOCATED(mb%cables)) RETURN
       DO cc = 1, SIZE(mb%cables)
-        IF (mb%cab_kind(cc) /= 1 .OR. mb%cab_obj(cc) /= obj) CYCLE
+        IF (.NOT. ((mb%cab_kind(cc) == 1 .AND. mb%cab_obj(cc) == obj) .OR. &
+                   (mb%cab_kind_b(cc) == 1 .AND. mb%cab_obj_b(cc) == obj))) CYCLE
         IF (.NOT. mb%cables(cc)%line%torsion%active) CYCLE
         cmp = CD_HermiteTorsion_Compliance(mb%cables(cc)%line%torsion, mb%cables(cc)%line%l0)
         IF (cmp > CD_ZERO) ks = ks + CD_ONE/cmp
@@ -23075,7 +23397,7 @@ CONTAINS
     ! times the object length scale); the line reactions carry the inner tolerance
     REAL(wp), PARAMETER :: JUNCTION_TOL = 1.0e-6_wp, PREDICTOR_TOL = 1.0e-9_wp
     CHARACTER(24) :: tstr
-    INTEGER :: dep, it, g, c, ib, ir, p, o, es, lit, nj, gworst, it2, gsz
+    INTEGER :: dep, it, g, c, ib, ir, p, o, es, lit, nj, gworst, it2, gsz, gb, gszb
     LOGICAL :: lconv, lstall, first, ok, conv2, stall2, refresh, lines_stepped, tors_turn, lim, cab_refresh
     INTEGER, PARAMETER :: TAN_MAX_AGE = 20
     REAL(wp) :: rho, am, af, beta_na, gam_na, t_af, h, fac, dth, worst, tol_it, am_p, gam_p, beta_p
@@ -23127,9 +23449,11 @@ CONTAINS
       IF (es /= CD_HFMF_OK) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'multibody cable snapshot failed: '//TRIM(em)); RETURN
       END IF
-      ! the step-entry end loads of a clamped cable (its alpha-level blend)
-      IF (mb%cab_clamp(c)) THEN
-        CALL mb_cable_committed_loads(mb, c, mb%cab_f0(:, c), mb%cab_m0(:, c), ErrStat, ErrMsg)
+      ! the step-entry end loads of a clamped cable or one between two objects (its alpha-level
+      ! blend)
+      IF (mb%cab_imp(c)) THEN
+        CALL mb_cable_committed_loads(mb, c, mb%cab_f0(:, c), mb%cab_m0(:, c), ErrStat, ErrMsg, &
+                                      fb=mb%cab_f0_b(:, c), mbm=mb%cab_m0_b(:, c))
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
       END IF
     END DO
@@ -23196,13 +23520,14 @@ CONTAINS
         IF (.NOT. lconv) EXIT
         mb%loads = mb%floads
       END IF
-      ! finite-EI cables with a pinned End A: stepped once, with the attachment motion of the
-      ! Newmark predictor; their end force is held through the outer iterations (explicit
-      ! coupling at the predictor). A cable clamped (or elastically connected) to its object is
-      ! re-stepped from the step entry at every outer iteration with the iterate's motion and
-      ! orientation, and loads the junction at the alpha level (implicit coupling)
+      ! finite-EI cables with a pinned End A and a Fixed End B: stepped once, with the attachment
+      ! motion of the Newmark predictor; their end force is held through the outer iterations
+      ! (explicit coupling at the predictor). A cable clamped (or elastically connected) to its
+      ! object, or one between two objects, is re-stepped from the step entry at every outer
+      ! iteration with the iterate's motion and orientation of its objects, and loads the
+      ! junction at both ends at the alpha level (implicit coupling)
       DO c = 1, SIZE(mb%cables)
-        IF (.NOT. (first .OR. mb%cab_clamp(c))) CYCLE
+        IF (.NOT. (first .OR. mb%cab_imp(c))) CYCLE
         IF (.NOT. first) THEN
           CALL CD_HFMF_Restore(mb%cables(c), es, em)
           IF (es /= CD_HFMF_OK) THEN
@@ -23211,11 +23536,16 @@ CONTAINS
         END IF
         CALL mb_cable_drive(mb, c, dt, ErrStat, ErrMsg)
         IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        IF (mb%cab_clamp(c)) THEN
+        IF (mb%cab_imp(c)) THEN
           mb%cab_force(:, c) = (CD_ONE - af)*mb%cab_fend(:, c) + af*mb%cab_f0(:, c)
           mb%cab_moment(:, c) = (CD_ONE - af)*mb%cab_mend(:, c) + af*mb%cab_m0(:, c)
+          IF (mb%cab_kind_b(c) > 0) THEN
+            mb%cab_force_b(:, c) = (CD_ONE - af)*mb%cab_fend_b(:, c) + af*mb%cab_f0_b(:, c)
+            mb%cab_moment_b(:, c) = (CD_ONE - af)*mb%cab_mend_b(:, c) + af*mb%cab_m0_b(:, c)
+          END IF
         ELSE
           mb%cab_force(:, c) = mb%cab_fend(:, c)
+          IF (mb%cab_kind_b(c) > 0) mb%cab_force_b(:, c) = mb%cab_fend_b(:, c)
         END IF
       END DO
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
@@ -23293,16 +23623,37 @@ CONTAINS
         cab_refresh = cab_refresh .OR. it >= 3
       END IF
       DO c = 1, SIZE(mb%cables)
-        IF (.NOT. mb%cab_clamp(c)) CYCLE
+        IF (.NOT. mb%cab_imp(c)) CYCLE
         g = mb_cable_group(mb, c)
+        ! a cable between two objects: the junction coordinates of both groups (the same group
+        ! counted once), its end-to-end stiffness coupling them in the Newton matrix
+        gb = 0
+        IF (mb%cab_kind_b(c) > 0) gb = mb_cable_group(mb, c, end_b=.TRUE.)
+        IF (gb == g) gb = 0
+        IF (g == 0) THEN
+          g = gb
+          gb = 0
+        END IF
         IF (g == 0) CYCLE
         IF (cab_refresh) THEN
-          CALL cable_columns(c, g)
+          CALL cable_columns(c, g, gb)
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
-        ELSE
+        ELSE IF (gb == 0) THEN
           gsz = mb%g_hi(g) - mb%g_lo(g) + 1
           jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(g):mb%g_hi(g)) = &
             jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(g):mb%g_hi(g)) + mb%cab_jac(1:gsz, 1:gsz, c)
+        ELSE
+          gsz = mb%g_hi(g) - mb%g_lo(g) + 1
+          gszb = mb%g_hi(gb) - mb%g_lo(gb) + 1
+          jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(g):mb%g_hi(g)) = &
+            jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(g):mb%g_hi(g)) + mb%cab_jac(1:gsz, 1:gsz, c)
+          jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(gb):mb%g_hi(gb)) = &
+            jac(mb%g_lo(g):mb%g_hi(g), mb%g_lo(gb):mb%g_hi(gb)) + mb%cab_jac(1:gsz, gsz + 1:gsz + gszb, c)
+          jac(mb%g_lo(gb):mb%g_hi(gb), mb%g_lo(g):mb%g_hi(g)) = &
+            jac(mb%g_lo(gb):mb%g_hi(gb), mb%g_lo(g):mb%g_hi(g)) + mb%cab_jac(gsz + 1:gsz + gszb, 1:gsz, c)
+          jac(mb%g_lo(gb):mb%g_hi(gb), mb%g_lo(gb):mb%g_hi(gb)) = &
+            jac(mb%g_lo(gb):mb%g_hi(gb), mb%g_lo(gb):mb%g_hi(gb)) + &
+            mb%cab_jac(gsz + 1:gsz + gszb, gsz + 1:gsz + gszb, c)
         END IF
       END DO
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
@@ -23386,19 +23737,26 @@ CONTAINS
     converged = conv2
     stalled = stall2
   CONTAINS
-    SUBROUTINE cable_columns(cc, gg)
+    SUBROUTINE cable_columns(cc, gg, gg2)
       !! Add clamped cable cc's end-load derivative to the Jacobian columns of its group gg:
       !! the cable re-stepped from the step entry with each column perturbed, the group residual
       !! re-evaluated at the unperturbed objects with the perturbed cable loads. The columns are
-      !! also kept in mb%cab_jac for reuse.
-      INTEGER, INTENT(IN) :: cc, gg
+      !! also kept in mb%cab_jac for reuse. gg2 > 0: the cable joins the objects of groups gg and
+      !! gg2, and the derivative spans the rows and columns of both (cable_columns_two).
+      INTEGER, INTENT(IN) :: cc, gg, gg2
       REAL(wp), PARAMETER :: CABLE_FD = 1.0e-5_wp
       INTEGER :: col, lo, hi
-      REAL(wp) :: fsave(3), msave(3), hc
+      REAL(wp) :: fsave(3), msave(3), fbsave(3), mbsave(3), hc
+      IF (gg2 > 0) THEN
+        CALL cable_columns_two(cc, gg, gg2)
+        RETURN
+      END IF
       lo = mb%g_lo(gg)
       hi = mb%g_hi(gg)
       fsave = mb%cab_force(:, cc)
       msave = mb%cab_moment(:, cc)
+      fbsave = mb%cab_force_b(:, cc)
+      mbsave = mb%cab_moment_b(:, cc)
       hc = CABLE_FD/(beta_na*dt*dt)
       DO col = lo, hi
         xp = x
@@ -23416,14 +23774,81 @@ CONTAINS
         CALL mb_imp_alpha(mb, af, am, am_p)
         mb%cab_force(:, cc) = (CD_ONE - af)*mb%cab_fend(:, cc) + af*mb%cab_f0(:, cc)
         mb%cab_moment(:, cc) = (CD_ONE - af)*mb%cab_mend(:, cc) + af*mb%cab_m0(:, cc)
+        ! a cable whose two objects share the group loads it at both ends
+        IF (mb%cab_kind_b(cc) > 0) THEN
+          mb%cab_force_b(:, cc) = (CD_ONE - af)*mb%cab_fend_b(:, cc) + af*mb%cab_f0_b(:, cc)
+          mb%cab_moment_b(:, cc) = (CD_ONE - af)*mb%cab_mend_b(:, cc) + af*mb%cab_m0_b(:, cc)
+        END IF
         CALL mb_imp_group_residual(mb, points, opts, gg, t_af, rp, ErrStat, ErrMsg, bathymetry)
         mb%cab_force(:, cc) = fsave
         mb%cab_moment(:, cc) = msave
+        IF (mb%cab_kind_b(cc) > 0) THEN
+          mb%cab_force_b(:, cc) = fbsave
+          mb%cab_moment_b(:, cc) = mbsave
+        END IF
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
         mb%cab_jac(1:hi - lo + 1, col - lo + 1, cc) = (rp(lo:hi) - r(lo:hi))/hc
         jac(lo:hi, col) = jac(lo:hi, col) + mb%cab_jac(1:hi - lo + 1, col - lo + 1, cc)
       END DO
     END SUBROUTINE cable_columns
+
+    SUBROUTINE cable_columns_two(cc, g1, g2)
+      !! cable_columns for a cable joining the objects of two groups g1 (End A's) and g2: each
+      !! column of either group perturbs the end-of-step pose of its object, the cable is
+      !! re-stepped with both ends' motion, and the residuals of both groups are re-evaluated with
+      !! the perturbed loads at both ends. Rows and columns are stored g1 first, then g2.
+      INTEGER, INTENT(IN) :: cc, g1, g2
+      REAL(wp), PARAMETER :: CABLE_FD = 1.0e-5_wp
+      INTEGER :: col, n1, jg, gcol, k
+      INTEGER :: lo(2), hi(2), roff(2)
+      REAL(wp) :: fsave(3), msave(3), fbsave(3), mbsave(3), hc
+      lo = [mb%g_lo(g1), mb%g_lo(g2)]
+      hi = [mb%g_hi(g1), mb%g_hi(g2)]
+      n1 = hi(1) - lo(1) + 1
+      roff = [0, n1]
+      fsave = mb%cab_force(:, cc)
+      msave = mb%cab_moment(:, cc)
+      fbsave = mb%cab_force_b(:, cc)
+      mbsave = mb%cab_moment_b(:, cc)
+      hc = CABLE_FD/(beta_na*dt*dt)
+      DO jg = 1, 2
+        DO col = lo(jg), hi(jg)
+          gcol = roff(jg) + col - lo(jg) + 1
+          xp = x
+          xp(col) = x(col) + hc
+          CALL mb_imp_states(mb, xp, dt, gam_na, beta_na, gam_p, beta_p, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          CALL CD_HFMF_Restore(mb%cables(cc), es, em)
+          IF (es /= CD_HFMF_OK) THEN
+            CALL fail_solve(ErrStat, ErrMsg, 'multibody cable restore failed: '//TRIM(em)); RETURN
+          END IF
+          CALL mb_cable_drive(mb, cc, dt, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          CALL mb_imp_states(mb, x, dt, gam_na, beta_na, gam_p, beta_p, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          CALL mb_imp_alpha(mb, af, am, am_p)
+          mb%cab_force(:, cc) = (CD_ONE - af)*mb%cab_fend(:, cc) + af*mb%cab_f0(:, cc)
+          mb%cab_moment(:, cc) = (CD_ONE - af)*mb%cab_mend(:, cc) + af*mb%cab_m0(:, cc)
+          mb%cab_force_b(:, cc) = (CD_ONE - af)*mb%cab_fend_b(:, cc) + af*mb%cab_f0_b(:, cc)
+          mb%cab_moment_b(:, cc) = (CD_ONE - af)*mb%cab_mend_b(:, cc) + af*mb%cab_m0_b(:, cc)
+          DO k = 1, 2
+            CALL mb_imp_group_residual(mb, points, opts, MERGE(g1, g2, k == 1), t_af, rp, ErrStat, ErrMsg, &
+                                       bathymetry)
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+          END DO
+          mb%cab_force(:, cc) = fsave
+          mb%cab_moment(:, cc) = msave
+          mb%cab_force_b(:, cc) = fbsave
+          mb%cab_moment_b(:, cc) = mbsave
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          DO k = 1, 2
+            mb%cab_jac(roff(k) + 1:roff(k) + hi(k) - lo(k) + 1, gcol, cc) = (rp(lo(k):hi(k)) - r(lo(k):hi(k)))/hc
+            jac(lo(k):hi(k), col) = jac(lo(k):hi(k), col) + mb%cab_jac(roff(k) + 1:roff(k) + hi(k) - lo(k) + 1, &
+                                                                       gcol, cc)
+          END DO
+        END DO
+      END DO
+    END SUBROUTINE cable_columns_two
   END SUBROUTINE mb_step_implicit
 
   SUBROUTINE mb_torsion_turn_limit(mb, x, dt, beta_na, limited)
@@ -23443,33 +23868,50 @@ CONTAINS
     limited = .FALSE.
     IF (.NOT. ALLOCATED(mb%cables)) RETURN
     DO c = 1, SIZE(mb%cables)
-      ! (a free End A: the body's turn does not twist the line)
-      IF (mb%cab_kind(c) /= 1 .OR. .NOT. mb%cables(c)%line%torsion%active) CYCLE
-      IF (mb%cables(c)%line%torsion%end_free(2)) CYCLE
-      ib = mb%cab_obj(c)
+      IF (.NOT. mb%cables(c)%line%torsion%active) CYCLE
+      ! (a free end, end_free, solve-frame end 2 at End A and 1 at End B: its object's turn does
+      ! not twist the line)
+      IF (mb%cab_kind(c) == 1 .AND. .NOT. mb%cables(c)%line%torsion%end_free(2)) CALL limit_body(mb%cab_obj(c))
+      ! End B's body (a cable between two objects)
+      IF (mb%cab_kind_b(c) == 1 .AND. .NOT. mb%cables(c)%line%torsion%end_free(1)) &
+        CALL limit_body(mb%cab_obj_b(c))
+    END DO
+  CONTAINS
+    SUBROUTINE limit_body(ibody)
+      INTEGER, INTENT(IN) :: ibody
+      ib = ibody
       o = mb%jb_off(ib)
-      IF (o < 0) CYCLE
+      IF (o < 0) RETURN
       base = dt*mb%old_rigid(ib)%omega + dt*dt*(0.5_wp - beta_na)*mb%old_rigid(ib)%alpha
       dpsi = base + dt*dt*beta_na*x(o + 4:o + 6)
-      IF (NORM2(dpsi) <= TURN_FRAC*CD_HTORS_MAX_STEP) CYCLE
+      IF (NORM2(dpsi) <= TURN_FRAC*CD_HTORS_MAX_STEP) RETURN
       ! non-finite trials are left to the residual's finite check
-      IF (.NOT. ALL(IEEE_IS_FINITE(dpsi))) CYCLE
+      IF (.NOT. ALL(IEEE_IS_FINITE(dpsi))) RETURN
       s = TURN_FRAC*CD_HTORS_MAX_STEP/NORM2(dpsi)
       x(o + 4:o + 6) = (s*dpsi - base)/(dt*dt*beta_na)
       limited = .TRUE.
-    END DO
+    END SUBROUTINE limit_body
   END SUBROUTINE mb_torsion_turn_limit
 
-  INTEGER FUNCTION mb_cable_group(mb, c) RESULT(g)
-    !! The junction group that carries cable c's End A object (0: a held attachment or an object
-    !! without junction coordinates). A rod pinned to a body belongs to the body's group.
+  INTEGER FUNCTION mb_cable_group(mb, c, end_b) RESULT(g)
+    !! The junction group that carries cable c's End A object, or with end_b its End B object (0:
+    !! a held attachment or an object without junction coordinates). A rod pinned to a body
+    !! belongs to the body's group.
     TYPE(MultibodyMarch), INTENT(IN) :: mb
     INTEGER, INTENT(IN) :: c
-    INTEGER :: gg, kind, obj
+    LOGICAL, INTENT(IN), OPTIONAL :: end_b
+    INTEGER :: gg, kind, obj, akind
     g = 0
     kind = 0
     obj = mb%cab_obj(c)
-    SELECT CASE (mb%cab_kind(c))
+    akind = mb%cab_kind(c)
+    IF (PRESENT(end_b)) THEN
+      IF (end_b) THEN
+        obj = mb%cab_obj_b(c)
+        akind = mb%cab_kind_b(c)
+      END IF
+    END IF
+    SELECT CASE (akind)
     CASE (1)
       kind = 1
     CASE (2)
@@ -25471,7 +25913,7 @@ CONTAINS
 
   SUBROUTINE solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                          ErrMsg, bathymetry, points_only, jac_check_err, ext_pt, ext_fm, &
-                                         end_force_a, quiet, skipped, ext_km, ext_rot)
+                                         end_force_a, quiet, skipped, ext_km, ext_rot, end_force_b)
     !! Static equilibrium of the free objects of a deck: free Rigid6 bodies (six DOFs: position
     !! and a rotation-vector increment on SO(3); a CoupledPinned body holds its position at its
     !! host node and balances its moment about it), free rods (position and the two rotations
@@ -25547,6 +25989,8 @@ CONTAINS
     ! The end force every moving line exerts on its End A point at the solution (zero for a line
     ! that does not move), and quiet: no notes or completion line.
     REAL(wp), INTENT(OUT), OPTIONAL :: end_force_a(:, :)
+    ! ... and on its End B point (a line between two objects)
+    REAL(wp), INTENT(OUT), OPTIONAL :: end_force_b(:, :)
     LOGICAL, INTENT(IN), OPTIONAL :: quiet
     ! skipped: the objects were held at their deck poses (a moving line has no moving-end
     ! static solve), so nothing was balanced
@@ -25587,6 +26031,7 @@ CONTAINS
     IF (PRESENT(points_only)) only_points = points_only
     IF (PRESENT(jac_check_err)) jac_check_err = -CD_ONE
     IF (PRESENT(end_force_a)) end_force_a = CD_ZERO
+    IF (PRESENT(end_force_b)) end_force_b = CD_ZERO
     silent = .FALSE.
     IF (PRESENT(quiet)) silent = quiet
     IF (PRESENT(skipped)) skipped = .FALSE.
@@ -25959,6 +26404,11 @@ CONTAINS
       DO j = 1, SIZE(lines)
         IF (lmove(j)) end_force_a(:, j) = lc(j)%ef(:, 2)
       END DO
+      IF (PRESENT(end_force_b)) THEN
+        DO j = 1, SIZE(lines)
+          IF (lmove(j)) end_force_b(:, j) = lc(j)%ef(:, 1)
+        END DO
+      END IF
     END IF
     CALL apply_state(x, bodies, rods, points)
     IF (only_points .OR. silent) RETURN
@@ -27041,7 +27491,15 @@ CONTAINS
     !! core the torque's moment stiffness (1/C) a a^T about the previous pass's pose (a = dTheta/dw
     !! of the cable at that pose, its shape held; C the line torsional compliance), so the passes
     !! converge whatever the ratio of the object's own restoring stiffness to GJ/L (the passes
-    !! alone would need it far above GJ/L), to 1e-10 of the force scale.
+    !! alone would need it far above GJ/L), to 1e-10 of the force scale. A finite-EI line between
+    !! two objects (End B on a body point or a rod end) takes the same corrections at both ends,
+    !! whatever its connections (the passes balance both objects on the cubic-Hermite cable); the
+    !! torque's stiffness at each end is about that end's object with the other's held, the
+    !! coupling between them carried by the passes. A deck with such a line accelerates the passes
+    !! (Anderson mixing of the last ANDERSON_DEPTH passes on the extra loads, ext_fm, a secant
+    !! method that a pass map oscillating about its fixed point does not defeat: a stiff cable
+    !! between two moored bodies turns them through an out-of-plane mode that the plain passes
+    !! overshoot); a deck without one keeps the plain passes.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckBody), INTENT(INOUT) :: bodies(:)
     TYPE(DeckRodType), INTENT(IN) :: rod_types(:)
@@ -27055,15 +27513,19 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     LOGICAL, INTENT(IN), OPTIONAL :: points_only
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_check_err
-    INTEGER, PARAMETER :: MAX_PASS = 60
+    INTEGER, PARAMETER :: MAX_PASS = 60, ANDERSON_DEPTH = 6
     REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp
     TYPE(DeckBody), ALLOCATABLE :: bodies0(:)
     TYPE(DeckRod), ALLOCATABLE :: rods0(:)
     TYPE(DeckPoint), ALLOCATABLE :: points0(:)
-    INTEGER, ALLOCATABLE :: cl(:), ext_pt(:)
+    INTEGER, ALLOCATABLE :: cl(:), ext_pt(:), clb(:), eb(:), eline(:)
+    ! Anderson mixing of the passes (lines between two objects): the last passes' inputs and
+    ! residuals (new_fm - ext_fm), packed
+    REAL(wp), ALLOCATABLE :: and_x(:, :), and_f(:, :)
+    INTEGER :: n_and, max_pass_eff
     REAL(wp), ALLOCATABLE :: ext_fm(:, :), new_fm(:, :), fs(:, :), ext_km(:, :, :), ext_rot(:, :, :)
-    REAL(wp), ALLOCATABLE :: new_km(:, :, :), new_rot(:, :, :)
-    INTEGER :: j, pa, e, pass, ncl, eworst
+    REAL(wp), ALLOCATABLE :: new_km(:, :, :), new_rot(:, :, :), fsb(:, :)
+    INTEGER :: j, pa, e, pass, ncl, eworst, pb, ne, nb
     LOGICAL :: only_points, held
     REAL(wp) :: scale, change, pass_tol_eff
     CHARACTER(24) :: b1
@@ -27072,12 +27534,21 @@ CONTAINS
     ErrMsg = ''
     only_points = .FALSE.
     IF (PRESENT(points_only)) only_points = points_only
-    ! the lines with a connected End A on a Rigid6 body point or a rod end
-    ALLOCATE (cl(0))
+    ! the lines with a connected End A on a Rigid6 body point or a rod end, and the lines between
+    ! two objects (End B on a body point or a rod end; clb lists those, with their End B entries)
+    ALLOCATE (cl(0), clb(0))
     IF (.NOT. only_points .AND. .NOT. PRESENT(jac_check_err) .AND. opts%body_ic_static) THEN
       DO j = 1, SIZE(lines)
-        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j))) CYCLE
         IF (.NOT. line_is_finite_ei(lines(j), types, sections)) CYCLE
+        pb = find_point(points, lines(j)%nodeB)
+        IF (pb > 0) THEN
+          IF (starts_with(TRIM(points(pb)%ptype), 'body') .OR. is_rod_point_type(points(pb)%ptype)) THEN
+            cl = [cl, j]
+            clb = [clb, j]
+            CYCLE
+          END IF
+        END IF
+        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j))) CYCLE
         pa = find_point(points, lines(j)%nodeA)
         IF (pa < 1) CYCLE
         IF (starts_with(TRIM(points(pa)%ptype), 'body')) THEN
@@ -27088,6 +27559,7 @@ CONTAINS
       END DO
     END IF
     ncl = SIZE(cl)
+    nb = SIZE(clb)
     IF (ncl == 0) THEN
       CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                        ErrMsg, bathymetry, points_only, jac_check_err)
@@ -27097,29 +27569,48 @@ CONTAINS
     DO e = 1, ncl
       BLOCK
         REAL(wp) :: rclamp(3, 3), dclamp(3)
-        CALL clamp_object_frame(lines(cl(e)), points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg)
+        IF (connected_end(cl(e), .FALSE.)) &
+          CALL clamp_object_frame(lines(cl(e)), points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg)
+        IF (ErrStat == CD_DECKDRV_OK .AND. connected_end(cl(e), .TRUE.)) &
+          CALL clamp_object_frame(lines(cl(e)), points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, end_b=.TRUE.)
       END BLOCK
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
     bodies0 = bodies
     rods0 = rods
     points0 = points
-    ALLOCATE (ext_pt(ncl), ext_fm(6, ncl), new_fm(6, ncl), fs(3, SIZE(lines)))
-    ALLOCATE (ext_km(3, 3, ncl), ext_rot(3, 3, ncl), new_km(3, 3, ncl), new_rot(3, 3, ncl))
+    ! the extra loads: End A of every listed line (1:ncl), then End B of the lines between two
+    ! objects (ncl + 1:ncl + nb, eb(e) the End B entry of line cl(e), 0 for none)
+    ne = ncl + nb
+    ALLOCATE (ext_pt(ne), ext_fm(6, ne), new_fm(6, ne), fs(3, SIZE(lines)), fsb(3, SIZE(lines)), eb(ncl), &
+              eline(ne))
+    ALLOCATE (ext_km(3, 3, ne), ext_rot(3, 3, ne), new_km(3, 3, ne), new_rot(3, 3, ne))
     pass_tol_eff = PASS_TOL
+    eb = 0
     DO e = 1, ncl
       ext_pt(e) = find_point(points, lines(cl(e))%nodeA)
+      eline(e) = cl(e)
       IF (line_torsion_at_a(lines(cl(e)))) pass_tol_eff = PASS_TOL_TORSION
     END DO
+    DO j = 1, nb
+      e = FINDLOC(cl, clb(j), DIM=1)
+      eb(e) = ncl + j
+      ext_pt(ncl + j) = find_point(points, lines(clb(j))%nodeB)
+      eline(ncl + j) = clb(j)
+    END DO
+    n_and = 0
+    max_pass_eff = MAX_PASS
+    IF (body_static_pass_limit > 0) max_pass_eff = body_static_pass_limit
+    IF (nb > 0) ALLOCATE (and_x(6*ne, ANDERSON_DEPTH + 1), and_f(6*ne, ANDERSON_DEPTH + 1))
     ext_fm = CD_ZERO
     ext_km = CD_ZERO
     ext_rot = CD_ZERO
-    DO e = 1, ncl
+    DO e = 1, ne
       ext_rot(1, 1, e) = CD_ONE
       ext_rot(2, 2, e) = CD_ONE
       ext_rot(3, 3, e) = CD_ONE
     END DO
-    DO pass = 1, MAX_PASS
+    DO pass = 1, max_pass_eff
       bodies = bodies0
       rods = rods0
       points = points0
@@ -27128,78 +27619,241 @@ CONTAINS
       IF (pass_tol_eff < PASS_TOL) THEN
         CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                          ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                         quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot)
+                                         quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot, &
+                                         end_force_b=fsb)
       ELSE
         CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                          ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                         quiet=pass > 1, skipped=held)
+                                         quiet=pass > 1, skipped=held, end_force_b=fsb)
       END IF
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! the objects stay at their deck poses (the core has already said why): nothing to balance
       IF (held) RETURN
       scale = CD_ONE
       DO e = 1, ncl
-        CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
+        IF (eb(e) > 0) THEN
+          CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e), new_fm(:, eb(e)), &
+                                 new_km(:, :, eb(e)), new_rot(:, :, eb(e)))
+        ELSE
+          CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
+        END IF
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
         new_fm(1:3, e) = new_fm(1:3, e) - fs(:, cl(e))
         scale = MAX(scale, NORM2(fs(:, cl(e))), NORM2(new_fm(1:3, e) + fs(:, cl(e))))
+        IF (eb(e) > 0) THEN
+          new_fm(1:3, eb(e)) = new_fm(1:3, eb(e)) - fsb(:, cl(e))
+          scale = MAX(scale, NORM2(fsb(:, cl(e))), NORM2(new_fm(1:3, eb(e)) + fsb(:, cl(e))))
+        END IF
       END DO
       change = MAXVAL(ABS(new_fm - ext_fm))
       eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
-      ext_fm = new_fm
       ext_km = new_km
       ext_rot = new_rot
-      IF (change <= pass_tol_eff*scale) EXIT
+      IF (change <= pass_tol_eff*scale) THEN
+        ext_fm = new_fm
+        EXIT
+      END IF
+      IF (nb > 0) THEN
+        CALL anderson_next(ext_fm, new_fm)
+      ELSE
+        ext_fm = new_fm
+      END IF
     END DO
     IF (change > pass_tol_eff*scale) THEN
       WRITE (b1, '(ES10.3)') change/scale
-      CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the clamped or elastic END CONNECTION '// &
-                      'of finite-EI LINE '//TRIM(int_to_str(lines(cl(eworst))%id))//' did not converge after '// &
-                      TRIM(int_to_str(MAX_PASS))//' passes (relative end-load change '//TRIM(ADJUSTL(b1))// &
-                      '); OPTION bodyIC deck starts from the deck pose instead')
+      IF (nb == 0) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the clamped or elastic END '// &
+                        'CONNECTION of finite-EI LINE '//TRIM(int_to_str(lines(eline(eworst))%id))// &
+                        ' did not converge after '//TRIM(int_to_str(max_pass_eff))//' passes (relative end-load '// &
+                        'change '//TRIM(ADJUSTL(b1))//'); OPTION bodyIC deck starts from the deck pose instead')
+      ELSE
+        ! the worst entry may be the End B of a line between two objects, connected or pinned
+        CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the bending end loads of finite-EI '// &
+                        'LINE '//TRIM(int_to_str(lines(eline(eworst))%id))//' (its End '// &
+                        MERGE('B', 'A', eworst > ncl)//', on a body or rod) did not converge after '// &
+                        TRIM(int_to_str(max_pass_eff))//' passes (relative end-load change '//TRIM(ADJUSTL(b1))// &
+                        '); OPTION bodyIC deck starts from the deck pose instead')
+      END IF
       RETURN
     END IF
-    WRITE (output_unit, '(A)') '   Initial conditions: the end moments and bending end forces of '// &
-      TRIM(int_to_str(ncl))//' clamped or elastic finite-EI line end(s) balanced in '// &
-      TRIM(int_to_str(pass))//' static pass(es).'
+    IF (nb == 0) THEN
+      WRITE (output_unit, '(A)') '   Initial conditions: the end moments and bending end forces of '// &
+        TRIM(int_to_str(ncl))//' clamped or elastic finite-EI line end(s) balanced in '// &
+        TRIM(int_to_str(pass))//' static pass(es).'
+    ELSE
+      WRITE (output_unit, '(A)') '   Initial conditions: the end moments and bending end forces of '// &
+        TRIM(int_to_str(ne))//' finite-EI line end(s) on bodies and rods ('//TRIM(int_to_str(nb))// &
+        ' line(s) between two objects) balanced in '//TRIM(int_to_str(pass))//' static pass(es).'
+    END IF
 
   CONTAINS
 
-    SUBROUTINE hermite_end_loads(jl, fm, km, rot)
+    SUBROUTINE anderson_next(x, g)
+      !! The next pass input from the pass map g(x) (the extra loads one pass returns for the
+      !! loads x it was given): Anderson mixing, x+ = g - dG gamma with gamma the least-squares
+      !! fit of the residual f = g - x by the differences of the last residuals, dF gamma ~ f
+      !! (at most ANDERSON_DEPTH of them, the oldest dropped first). The fit is solved by
+      !! modified Gram-Schmidt on dF; a column that adds no new direction is dropped. A residual
+      !! that grows tenfold over the last one restarts the mixing from the plain pass.
+      REAL(wp), INTENT(INOUT) :: x(:, :)
+      REAL(wp), INTENT(IN) :: g(:, :)
+      REAL(wp) :: xv(SIZE(x)), gv(SIZE(x)), fv(SIZE(x)), q(SIZE(x), ANDERSON_DEPTH), rr(ANDERSON_DEPTH, ANDERSON_DEPTH)
+      REAL(wp) :: dfi(SIZE(x)), dgk(SIZE(x), ANDERSON_DEPTH), c(ANDERSON_DEPTH), gam(ANDERSON_DEPTH), nrm
+      INTEGER :: m, i, k, kept
+      xv = RESHAPE(x, [SIZE(x)])
+      gv = RESHAPE(g, [SIZE(g)])
+      fv = gv - xv
+      IF (n_and > 0) THEN
+        IF (NORM2(fv) > 10.0_wp*NORM2(and_f(:, n_and))) n_and = 0
+      END IF
+      ! history: inputs and residuals of the passes so far (newest last)
+      IF (n_and == ANDERSON_DEPTH + 1) THEN
+        and_x(:, 1:ANDERSON_DEPTH) = and_x(:, 2:ANDERSON_DEPTH + 1)
+        and_f(:, 1:ANDERSON_DEPTH) = and_f(:, 2:ANDERSON_DEPTH + 1)
+        n_and = ANDERSON_DEPTH
+      END IF
+      n_and = n_and + 1
+      and_x(:, n_and) = xv
+      and_f(:, n_and) = fv
+      m = n_and - 1
+      IF (m == 0) THEN
+        x = g
+        RETURN
+      END IF
+      ! dF columns orthonormalised (modified Gram-Schmidt), dG the matching map differences
+      kept = 0
+      rr = CD_ZERO
+      DO i = 1, m
+        dfi = and_f(:, i + 1) - and_f(:, i)
+        nrm = NORM2(dfi)
+        IF (.NOT. nrm > CD_ZERO) CYCLE
+        DO k = 1, kept
+          rr(k, kept + 1) = DOT_PRODUCT(q(:, k), dfi)
+          dfi = dfi - rr(k, kept + 1)*q(:, k)
+        END DO
+        IF (NORM2(dfi) <= 1.0e-10_wp*nrm) CYCLE
+        kept = kept + 1
+        rr(kept, kept) = NORM2(dfi)
+        q(:, kept) = dfi/rr(kept, kept)
+        ! the column's map difference: dG = dF + dX
+        dgk(:, kept) = (and_f(:, i + 1) + and_x(:, i + 1)) - (and_f(:, i) + and_x(:, i))
+      END DO
+      IF (kept == 0) THEN
+        x = g
+        RETURN
+      END IF
+      ! R gamma = Q^T f, back substitution over the kept (upper triangular in kept order) columns
+      DO k = 1, kept
+        c(k) = DOT_PRODUCT(q(:, k), fv)
+      END DO
+      DO k = kept, 1, -1
+        gam(k) = (c(k) - DOT_PRODUCT(rr(k, k + 1:kept), gam(k + 1:kept)))/rr(k, k)
+      END DO
+      DO k = 1, kept
+        gv = gv - gam(k)*dgk(:, k)
+      END DO
+      IF (.NOT. ALL(IEEE_IS_FINITE(gv))) THEN
+        n_and = 0
+        x = g
+        RETURN
+      END IF
+      x = RESHAPE(gv, SHAPE(x))
+    END SUBROUTINE anderson_next
+
+    LOGICAL FUNCTION connected_end(jl, at_b) RESULT(yes)
+      !! Line jl's End A (End B with at_b) carries a connection or a torsion frame on a body point
+      !! or a rod end, whose object frame clamp_object_frame gives.
+      INTEGER, INTENT(IN) :: jl
+      LOGICAL, INTENT(IN) :: at_b
+      INTEGER :: ip
+      yes = .FALSE.
+      ip = find_point(points, MERGE(lines(jl)%nodeB, lines(jl)%nodeA, at_b))
+      IF (ip < 1) RETURN
+      IF (.NOT. (starts_with(TRIM(points(ip)%ptype), 'body') .OR. is_rod_point_type(points(ip)%ptype))) RETURN
+      yes = lines(jl)%endconn_mode(MERGE(2, 1, at_b)) /= CD_ENDCONN_PINNED .OR. &
+            MERGE(line_torsion_at_b(lines(jl)), line_torsion_at_a(lines(jl)), at_b)
+    END FUNCTION connected_end
+
+    SUBROUTINE hermite_end_loads(jl, fm, km, rot, fmb, kmb, rotb)
       !! The cubic-Hermite static end force and connection moment of line jl on its End A object,
       !! at the current (solved) object poses and point positions; for a line with condensed
       !! torsion, km = (1/C) a a^T, the torque's moment stiffness against a rotation of the object
       !! with the cable shape held (a = dTheta/dw: the End A frame turns, and a clamped end's
       !! tangent with it), in global axes, and rot the object's orientation (km = 0 otherwise).
+      !! fmb, kmb, rotb: the same on the End B object of a line between two objects.
       INTEGER, INTENT(IN) :: jl
       REAL(wp), INTENT(OUT) :: fm(6), km(3, 3), rot(3, 3)
+      REAL(wp), INTENT(OUT), OPTIONAL :: fmb(6), kmb(3, 3), rotb(3, 3)
       TYPE(CD_HFMF_ModuleType) :: cab
       TYPE(DeckLine) :: lnc
       TYPE(DeckPoint), ALLOCATABLE :: pc(:)
-      REAL(wp) :: rclamp(3, 3), dclamp(3), nclamp(3), dtb
+      REAL(wp) :: rclamp(3, 3), dclamp(3), nclamp(3), dtb, rclamp_b(3, 3)
       INTEGER :: node, es
+      LOGICAL :: two
       CHARACTER(1024) :: note
       CHARACTER(1024) :: em
       fm = CD_ZERO
       km = CD_ZERO
+      two = PRESENT(fmb)
       lnc = lines(jl)
-      CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, check_axis=.FALSE., &
-                              nx0=nclamp)
-      rot = rclamp
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      lnc%endconn_ez_ref(:, 1) = dclamp
-      lnc%tors_nx(:, 1) = nclamp
+      IF (two) THEN
+        fmb = CD_ZERO
+        kmb = CD_ZERO
+        ! a line between two objects: each connected end in its object's frame, both ends driven
+        rclamp = CD_ZERO
+        rclamp(1, 1) = CD_ONE
+        rclamp(2, 2) = CD_ONE
+        rclamp(3, 3) = CD_ONE
+        rclamp_b = rclamp
+        IF (connected_end(jl, .FALSE.)) THEN
+          CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, check_axis=.FALSE., &
+                                  nx0=nclamp)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          lnc%endconn_ez_ref(:, 1) = dclamp
+          lnc%tors_nx(:, 1) = nclamp
+        END IF
+        IF (connected_end(jl, .TRUE.)) THEN
+          CALL clamp_object_frame(lnc, points, bodies, rods, rclamp_b, dclamp, ErrStat, ErrMsg, check_axis=.FALSE., &
+                                  end_b=.TRUE.)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          lnc%endconn_ez_ref(:, 2) = dclamp
+        END IF
+        rot = rclamp
+        rotb = rclamp_b
+      ELSE
+        CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, check_axis=.FALSE., &
+                                nx0=nclamp)
+        rot = rclamp
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        lnc%endconn_ez_ref(:, 1) = dclamp
+        lnc%tors_nx(:, 1) = nclamp
+      END IF
       pc = points
-      pc(find_point(points, lnc%nodeA))%ptype = 'coupled'
+      IF (TRIM(pc(find_point(points, lnc%nodeA))%ptype) /= 'fixed' .OR. .NOT. two) &
+        pc(find_point(points, lnc%nodeA))%ptype = 'coupled'
       dtb = CD_ONE
       IF (opts%dtM > CD_ZERO) dtb = opts%dtM
-      CALL build_one_hermite_cable(lnc, sections, types, pc, opts, dtb, cab, node, ErrStat, ErrMsg, &
-                                   standalone_controls=.TRUE., bathymetry=bathymetry, &
-                                   fairlead_orientation=TRANSPOSE(rclamp), init_note=note, &
-                                   fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
-                                                      deck_has_non_rigid6_dynamic_points(points, bodies)))
+      IF (two) THEN
+        pc(find_point(points, lnc%nodeB))%ptype = 'coupled'
+        CALL build_one_hermite_cable(lnc, sections, types, pc, opts, dtb, cab, node, ErrStat, ErrMsg, &
+                                     standalone_controls=.TRUE., bathymetry=bathymetry, &
+                                     fairlead_orientation=TRANSPOSE(rclamp), init_note=note, &
+                                     fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                        deck_has_non_rigid6_dynamic_points(points, bodies)), &
+                                     allow_moving_end_b=.TRUE., end_b_orientation=TRANSPOSE(rclamp_b))
+      ELSE
+        CALL build_one_hermite_cable(lnc, sections, types, pc, opts, dtb, cab, node, ErrStat, ErrMsg, &
+                                     standalone_controls=.TRUE., bathymetry=bathymetry, &
+                                     fairlead_orientation=TRANSPOSE(rclamp), init_note=note, &
+                                     fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                        deck_has_non_rigid6_dynamic_points(points, bodies)))
+      END IF
       IF (ErrStat == CD_DECKDRV_OK) THEN
-        CALL CD_HFMF_CalcOutput(cab, fm(1:3), es, em, y_moment=fm(4:6))
+        IF (two) THEN
+          CALL CD_HFMF_CalcOutput(cab, fm(1:3), es, em, y_moment=fm(4:6), y_end_b=fmb(1:3), y_moment_b=fmb(4:6))
+        ELSE
+          CALL CD_HFMF_CalcOutput(cab, fm(1:3), es, em, y_moment=fm(4:6))
+        END IF
         IF (es /= CD_HFMF_OK) CALL fail_solve(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lnc%id))// &
                                               ' static end loads failed: '//TRIM(em))
       END IF
@@ -27220,6 +27874,13 @@ CONTAINS
             ag = [cab%frame_c*a(1) - cab%frame_s*a(2), cab%frame_s*a(1) + cab%frame_c*a(2), a(3)]
             cc = CD_HermiteTorsion_Compliance(cab%line%torsion, cab%line%l0)
             km = SPREAD(ag, 2, 3)*SPREAD(ag, 1, 3)/cc
+            IF (two) THEN
+              ! End B is the cable's first node (internal end 1)
+              a = eg(1:3)
+              IF (cab%line%endconn_mode(1) == CD_ENDCONN_RIGID) a = a + cross3(cab%line%q(4:6), gq(4:6))
+              ag = [cab%frame_c*a(1) - cab%frame_s*a(2), cab%frame_s*a(1) + cab%frame_c*a(2), a(3)]
+              kmb = SPREAD(ag, 2, 3)*SPREAD(ag, 1, 3)/cc
+            END IF
           END IF
         END BLOCK
       END IF
@@ -29789,7 +30450,10 @@ CONTAINS
     END IF
     IF (opts%has_motion_file) THEN
       CALL read_motion_file(opts%motion_file, points, opts, motion, ErrStat, ErrMsg, &
-                            with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]))
+                            with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]), &
+                            with_turbine_frames=ANY([(line_torsion_active(lines(i)) .OR. &
+                                                      ANY(lines(i)%endconn_mode /= CD_ENDCONN_PINNED), &
+                                                      i=1, SIZE(lines))]))
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       CALL check_motion_roll(ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
@@ -29875,7 +30539,6 @@ CONTAINS
           ubv = CD_ZERO; uba = CD_ZERO
         END IF
         IF (motion%has_rot) THEN
-          ! vessel motion: the fairlead end connection turns with the vessel (the DCM is
           ! vessel motion: the fairlead end connection turns with the vessel (the DCM is
           ! global-to-vessel, the transpose of the vessel rotation); a moving End B rides on the
           ! same vessel
@@ -32996,7 +33659,7 @@ CONTAINS
   END SUBROUTINE prescribed_point_state
 
   SUBROUTINE read_motion_file(path, points, opts, motion, ErrStat, ErrMsg, include_rod_points, include_body_points, &
-                              with_roll)
+                              with_roll, with_turbine_frames)
     !! Prescribed point motion: rows "time point_id x y z vx vy vz ax ay az". with_roll (a deck
     !! with a torsional line) also reads an optional 12th column, the roll [deg] of the line end
     !! frames at that point about their directors (motion%roll, radians); a point gives it on
@@ -33010,6 +33673,11 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: include_rod_points
     LOGICAL, INTENT(IN), OPTIONAL :: include_body_points
     LOGICAL, INTENT(IN), OPTIONAL :: with_roll
+    ! with_turbine_frames: keep each TURBINES row's rotation, angular velocity and acceleration
+    ! (motion%turb_rot/turb_omega/turb_alpha) for a deck whose line ends carry connection or
+    ! torsion frames
+    LOGICAL, INTENT(IN), OPTIONAL :: with_turbine_frames
+    LOGICAL :: keep_turb
 
     INTEGER :: unit, ios, ip, it, pid, nstep, lineno, row_status, ipt
     LOGICAL :: read_roll, roll_ok
@@ -33154,6 +33822,10 @@ CONTAINS
             CALL fail(ErrStat, ErrMsg, 'cannot allocate the TURBINES motion bookkeeping'); RETURN
           END IF
           turb_seen = .FALSE.
+        END IF
+        keep_turb = .FALSE.
+        IF (PRESENT(with_turbine_frames)) keep_turb = with_turbine_frames
+        IF (keep_turb .AND. .NOT. ALLOCATED(motion%turb_rot)) THEN
           ALLOCATE (motion%turb_rot(3, 3, SIZE(opts%turb_ref, 2), motion%n_time), &
                     motion%turb_omega(3, SIZE(opts%turb_ref, 2), motion%n_time), &
                     motion%turb_alpha(3, SIZE(opts%turb_ref, 2), motion%n_time), STAT=ios)
@@ -33174,9 +33846,11 @@ CONTAINS
         END IF
         turb_seen(jturb, it) = .TRUE.
         rq = quat_rotation(trow(6:9))
-        motion%turb_rot(:, :, jturb, it) = rq
-        motion%turb_omega(:, jturb, it) = trow(13:15)
-        motion%turb_alpha(:, jturb, it) = trow(19:21)
+        IF (motion%has_turb_rot) THEN
+          motion%turb_rot(:, :, jturb, it) = rq
+          motion%turb_omega(:, jturb, it) = trow(13:15)
+          motion%turb_alpha(:, jturb, it) = trow(19:21)
+        END IF
         DO ip = 1, motion%n_point
           ipt = find_point(points, motion%point_ids(ip))
           IF (ipt < 1) CYCLE
@@ -36790,6 +37464,15 @@ CONTAINS
     END DO
   END FUNCTION deck_has_non_rod_dynamic_points
 
+  LOGICAL FUNCTION end_b_holds_frame(ptype) RESULT(ok)
+    !! End B can hold an END CONNECTION or a torsion frame: a Fixed point, a Coupled/Vessel point
+    !! (a second driven end), a body point or a rod end (a line between two objects, on the
+    !! multibody march, which checks the object).
+    CHARACTER(*), INTENT(IN) :: ptype
+    ok = TRIM(ptype) == 'fixed' .OR. TRIM(ptype) == 'coupled' .OR. TRIM(ptype) == 'vessel' .OR. &
+         starts_with(TRIM(ptype), 'body') .OR. is_rod_point_type(ptype)
+  END FUNCTION end_b_holds_frame
+
   LOGICAL FUNCTION endpoint_type_supported_dynamic(ptype) RESULT(ok)
     CHARACTER(*), INTENT(IN) :: ptype
     ok = ptype == 'fixed' .OR. ptype == 'coupled' .OR. ptype == 'vessel' .OR. &
@@ -37131,8 +37814,8 @@ CONTAINS
 
   PURE LOGICAL FUNCTION line_torsion_at_b(ln) RESULT(at_b)
     !! The line is solved in torsion and its End B is restrained in torsion: a moving End B's
-    !! object (a line between two moving points) takes the torque, and its turn or roll twists
-    !! the line.
+    !! object (a line between two moving points or two objects) takes the torque, and its turn or
+    !! roll twists the line.
     TYPE(DeckLine), INTENT(IN) :: ln
     at_b = line_torsion_active(ln) .AND. ln%tors_mode(2) /= TORS_FREE
   END FUNCTION line_torsion_at_b
@@ -37588,7 +38271,7 @@ CONTAINS
     rot(:, 3) = zaxis
   END FUNCTION rod_orientation_from_axis
 
-  SUBROUTINE clamp_object_frame(ln, points, bodies, rods, rot, d0, ErrStat, ErrMsg, check_axis, nx0)
+  SUBROUTINE clamp_object_frame(ln, points, bodies, rods, rot, d0, ErrStat, ErrMsg, check_axis, nx0, end_b)
     !! The object frame of a finite-EI line's End A END CONNECTION on a Rigid6 body point or a rod
     !! end, at the object's current pose (its static-equilibrium pose once solved): rot, the
     !! object-to-global rotation, and d0, the connection direction (End A to End B) in the object
@@ -37597,7 +38280,8 @@ CONTAINS
     !! free or pinned rod has no spin angle in its static solve, and a direction along the axis
     !! makes the connection moment normal to the axis. check_axis = .FALSE. (after the static
     !! solve has turned the rod; the deck direction was checked before it) keeps only the sense.
-    !! nx0: End A's torsion reference normal in the object frame. On a body point the deck gives
+    !! With end_b the same for End B's connection (a line between two objects).
+    !! nx0: that end's torsion reference normal in the object frame. On a body point the deck gives
     !! it in the body frame; on an end of a Fixed rod in the frame of the rod's deck coordinates,
     !! so it is carried into the rod frame rot: nx0 = rot^T Nx. On any other rod (torsion refused
     !! there, check_torsion_line) nx0 is the deck's Nx unchanged, not a normal in that rod's frame.
@@ -37608,11 +38292,11 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: rot(3, 3), d0(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    LOGICAL, INTENT(IN), OPTIONAL :: check_axis
+    LOGICAL, INTENT(IN), OPTIONAL :: check_axis, end_b
     REAL(wp), INTENT(OUT), OPTIONAL :: nx0(3)
     INTEGER :: pa, ib, ir, rid, iend
     REAL(wp) :: axis(3), ez(3), an
-    LOGICAL :: check
+    LOGICAL :: check, at_b
     CHARACTER(64) :: who
 
     ErrStat = CD_DECKDRV_OK
@@ -37621,13 +38305,15 @@ CONTAINS
     rot(1, 1) = CD_ONE
     rot(2, 2) = CD_ONE
     rot(3, 3) = CD_ONE
-    ez = ln%endconn_ez_ref(:, 1)
+    at_b = .FALSE.
+    IF (PRESENT(end_b)) at_b = end_b
+    ez = ln%endconn_ez_ref(:, MERGE(2, 1, at_b))
     d0 = ez
-    IF (PRESENT(nx0)) nx0 = ln%tors_nx(:, 1)
+    IF (PRESENT(nx0)) nx0 = ln%tors_nx(:, MERGE(2, 1, at_b))
     check = .TRUE.
     IF (PRESENT(check_axis)) check = check_axis
-    who = 'finite-EI LINE '//TRIM(int_to_str(ln%id))//' End A'
-    pa = find_point(points, ln%nodeA)
+    who = 'finite-EI LINE '//TRIM(int_to_str(ln%id))//MERGE(' End B', ' End A', at_b)
+    pa = find_point(points, MERGE(ln%nodeB, ln%nodeA, at_b))
     IF (pa < 1) THEN
       CALL fail(ErrStat, ErrMsg, TRIM(who)//' references an unknown point'); RETURN
     END IF
@@ -37668,7 +38354,8 @@ CONTAINS
       ! a Fixed rod keeps the frame init_rod_states gives it (rod_orientation_from_axis of its deck
       ! axis), in which the march holds the End A frame (mb_attachment_motion); a free or pinned
       ! rod's march frame differs from rot by a roll, and torsion is refused there
-      IF (PRESENT(nx0) .AND. TRIM(rods(ir)%rod_type) == 'fixed') nx0 = MATMUL(TRANSPOSE(rot), ln%tors_nx(:, 1))
+      IF (PRESENT(nx0) .AND. TRIM(rods(ir)%rod_type) == 'fixed') &
+        nx0 = MATMUL(TRANSPOSE(rot), ln%tors_nx(:, MERGE(2, 1, at_b)))
     ELSE
       CALL fail(ErrStat, ErrMsg, TRIM(who)//': a clamped or elastic END CONNECTION needs a Fixed point, a '// &
                 'Rigid6 body point or a rod end'); RETURN

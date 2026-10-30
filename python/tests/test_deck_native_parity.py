@@ -1115,6 +1115,73 @@ def _one_end_rod(rod_kind: str) -> str:
     )
 
 
+def _torsion_between_bodies(body2_row: str, end_b: str = "2 Body2 0.0 0.0 0.0") -> str:
+    """The torsional line of _TORSION_DYN between two bodies: End A on body 1, End B on body 2."""
+    return _edit(
+        _torsion_body(
+            "1 Rigid6 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3\n" + body2_row
+        ),
+        ("2 Fixed 100.0 0.0 -50.0 0 0 0 0", end_b + " 0 0 0 0"),
+    )
+
+
+def test_torsion_between_two_bodies_follows_the_native_checks():
+    # a line restrained in torsion between two Rigid6 bodies: both end frames on their bodies
+    DeckFile.from_text(
+        _torsion_between_bodies("2 Rigid6 100 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3")
+    )
+    # End B on a Point3 buoy or a rod end stops by name, as End A does
+    _rejects(
+        _torsion_between_bodies("2 Point3 100 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0"),
+        "a torsional END CONNECTION on a body needs a Rigid6 body",
+    )
+    rod_end = _edit(
+        _torsion_body("1 Rigid6 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3"),
+        (
+            f"{_BAR} POINTS {_BAR}",
+            f"{_BAR} ROD TYPES {_BAR}\nName Diam Mass Cd Ca CdEnd CaEnd\n"
+            "spar 1.0 300.0 0.8 1.0 0.0 0.0\n"
+            f"{_BAR} RODS {_BAR}\nID RodType Type XA YA ZA XB YB ZB NumSegs Outputs\n"
+            f"1 spar Free 100 0 -50 110 0 -50 2 -\n{_BAR} POINTS {_BAR}",
+        ),
+        ("2 Fixed 100.0 0.0 -50.0 0 0 0 0", "2 Rod1A 100.0 0.0 -50.0 0 0 0 0"),
+    )
+    _rejects(rod_end, "a torsional END CONNECTION on a rod end is not supported")
+
+
+_RIGID6_B = "2 Rigid6 100 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3"
+
+
+def test_multibody_cable_ends_follow_the_native_march_checks():
+    # End B on a Free/Connect point, a Point3 buoy or a Coupled point stops by name on the march
+    for end_b, message in [
+        ("2 Free 100.0 0.0 -50.0", "a cable end on a Free/Connect point or a Point3 buoy"),
+        ("2 Coupled 100.0 0.0 -50.0", "a Coupled/Vessel End B"),
+    ]:
+        pinned = _edit(
+            _torsion_between_bodies(_RIGID6_B, end_b),
+            (_TORSION_ROW_A, "1 A Pinned 1 0 0\n"),
+            ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Pinned 1 0 0"),
+            _NO_TORSION_OUTPUTS,
+        )
+        _rejects(pinned, message)
+    _rejects(
+        _torsion_between_bodies("2 Point3 100 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0"),
+        "a torsional END CONNECTION on a body needs a Rigid6 body",
+    )
+    # a connected or torsional end on a body needs the monolithic scheme, at either end: a
+    # torsion frame at a bending-pinned End A included
+    staggered = ("0.1 dtM\n", "0.1 dtM\nstaggered bodyScheme\n")
+    DeckFile.from_text(_torsion_between_bodies(_RIGID6_B))
+    _rejects(_edit(_torsion_between_bodies(_RIGID6_B), staggered), "needs bodyScheme monolithic")
+    torsion_pinned_a = _edit(
+        _torsion_body("1 Rigid6 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3"),
+        (_TORSION_ROW_A, "1 A Pinned 1 0 0 Rigid 0 0 1 0\n"),
+    )
+    DeckFile.from_text(torsion_pinned_a)
+    _rejects(_edit(torsion_pinned_a, staggered), "needs bodyScheme monolithic")
+
+
 def test_torsion_scope_rules_follow_the_native_checks():
     # End A on a Rigid6 body is supported, on a Point3 body or a rod end it stops by name
     DeckFile.from_text(
@@ -1179,9 +1246,9 @@ def test_torsion_scope_rules_follow_the_native_checks():
             ),
             ("1 R1A 2 -", "1 R1A R2A -"),
         ),
-        # the bending row is checked first here, the torsion first natively: one remedy
-        r"END CONNECTIONS require a finite-EI line with Fixed End B; line 1 ends \(End B\) on a "
-        "rod end: a line between two rods is not supported in this build",
+        # a line between two rods takes its bending connections (a line between two objects);
+        # its torsion at the End B rod end stops
+        "line 1: a torsional END CONNECTION on a rod end is not supported at End B",
     )
     _rejects(
         _options(_edit(rod_end, ("1 spar Fixed", "1 spar Coupled")), "rod.motion motionFile"),
@@ -1205,21 +1272,23 @@ def test_torsion_scope_rules_follow_the_native_checks():
         ),
     )
     DeckFile.from_text(attachments)  # a torsional line with ATTACHMENTS is accepted
-    # restrained at both ends, End B must hold its frame: Fixed, or Coupled/Vessel (driven)
+    # restrained at both ends, End B must hold its frame: Fixed, Coupled/Vessel (driven) or a
+    # Rigid6 body point (a line between two objects)
     _rejects(
         _torsion_two_moving("1 A Pinned 1 0 0 Rigid 0 0 1 0\n"),
-        "torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; line 1 ends "
-        'on a "free" point',
+        "torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point or a Rigid6 body "
+        'point; line 1 ends on a "free" point',
     )
-    # one restrained end only, or none, is ignored: the same verdict as the six-column rows
+    # one restrained end only, or none, is ignored: the same verdict as the six-column rows (here
+    # the multibody march's, which ends no finite-EI cable on a Free point)
     one_end = _edit(_torsion_two_moving("1 A Pinned 1 0 0 Free 0 0 1 0\n"), _NO_TORSION_OUTPUTS)
     six = _edit(
         _torsion_two_moving("1 A Pinned 1 0 0\n"),
         ("1 B Pinned 1 0 0 Rigid 0 0 1 720", "1 B Pinned 1 0 0"),
         _NO_TORSION_OUTPUTS,
     )
-    DeckFile.from_text(six)
-    DeckFile.from_text(one_end)
+    for deck in (six, one_end):
+        _rejects(deck, "a cable end on a Free/Connect point or a Point3 buoy")
     both_free = _edit(
         _TORSION,
         (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),

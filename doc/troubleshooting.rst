@@ -272,14 +272,24 @@ Model data
        refused (``finite-EI LINE <L> End B ... must be a Fixed (anchor), Coupled or Vessel
        point``), and it cannot be split at a ``Connect`` point (beside ``Connect`` points a
        finite-EI cable needs a Fixed End B): anchor it, or end it on a ``Coupled``/``Vessel`` point.
-   * - ``finite-EI LINE <L> in a mixed-topology deck needs a Fixed End B ... End B is POINT <n>
-       (<type>)``
-     - a deck with ``Connect``/``Free`` points, bodies or rods that also has finite-EI cables drives
-       each cable at End A, so End B must be a ``Fixed`` point. A cable that ends on a ``Connect``/``Free``/``Coupled``
-       point (a junction with other lines, a buoy, a pliant-wave hang-off) is not supported in a
-       deck with ``Connect``/``Free`` points, bodies or rods, which is marched as one multibody
-       system. Anchor the cable on a Fixed point, or run the cable and the lines it joins as
-       separate decks.
+   * - ``finite-EI LINE <L> in a mixed-topology deck: End B is POINT <n> (<type>); a cable end on a
+       Free/Connect point or a Point3 buoy ... is not supported``
+     - a deck with ``Connect``/``Free`` points, bodies or rods that also has finite-EI cables
+       drives each cable by the objects at its ends: End B must be a ``Fixed`` point, a Rigid6
+       ``Body<N>`` point or a rod end. A cable that ends on a ``Connect``/``Free`` point or a
+       ``Point3`` buoy (a junction with other lines, a buoy, a pliant-wave hang-off) is not
+       supported in a deck marched as one multibody system. End the cable on a Fixed point, a
+       body or a rod end, or run the cable and the lines it joins as separate decks.
+   * - ``static body/rod equilibrium with the bending end loads of finite-EI LINE <L> (its End A|B,
+       on a body or rod) did not converge after 60 passes``
+     - the static passes that balance a finite-EI line between two objects on its cubic-Hermite
+       end loads (Anderson-accelerated) did not settle; the line's bending couples the objects
+       more strongly than their own restoring holds them. Check the connection directions and
+       the mooring, or start from the deck pose (``deck bodyIC``).
+   * - ``finite-EI LINE <L>: a Coupled/Vessel End B (POINT <n>) would need motionFile coupling to
+       drive it``
+     - the multibody march takes no ``motionFile``, so it has nothing to drive a ``Coupled``/
+       ``Vessel`` end with. End the cable on a Fixed point, a Rigid6 body point or a rod end.
    * - ``finite-EI LINE <L>: a Coupled/Vessel End A (POINT <n>) would need motionFile coupling
        to drive it``
      - a mixed-topology deck that has ``Connect``/``Free`` points or bodies is marched as one
@@ -392,9 +402,9 @@ Torsion
      - torsion has no ``EI/1.3`` default: use the 14-column ``LINE TYPES`` row with ``GJ`` (and
        positive ``GAs``, ``Irt``, ``Irn``) for every section of the line.
    * - ``torsional END CONNECTIONS ... require a finite-EI line`` / ``need End B on a Fixed,
-       Coupled or Vessel point``
-     - torsion is solved on cubic-Hermite lines whose End B is an anchor or a ``Coupled``/
-       ``Vessel`` point (both end frames then turn with their parents).
+       Coupled or Vessel point or a Rigid6 body point``
+     - torsion is solved on cubic-Hermite lines whose End B is an anchor, a ``Coupled``/
+       ``Vessel`` point or a Rigid6 body point (both end frames then turn with their parents).
    * - ``a torsional END CONNECTION on the end of ROD <N> (...) is not supported: a free or
        pinned rod is axisymmetric`` / ``on the end of Coupled/Vessel ROD <N> is not supported`` /
        ``on a body needs a Rigid6 body``
@@ -403,12 +413,11 @@ Torsion
        to a Rigid6 body (``RODS`` type ``Body<N>``), a Rigid6 body or a ``Fixed`` point (a
        ``Coupled``/``Vessel`` End A only in a deck without bodies and rods: a deck with them runs
        on the multibody march, which takes no ``Coupled`` End A for a finite-EI line).
-   * - ``... need End B on a Fixed, Coupled or Vessel point; line <L> ends (End B) on a rod end``
-       / ``a torsional END CONNECTION on a rod end needs a Fixed End B``
-     - the cable holds its End B at a ``Fixed``, ``Coupled`` or ``Vessel`` point only, so a line
-       between two rods (a J-tube to a J-tube) is not supported, and a line restrained in torsion
-       at a rod end needs a ``Fixed`` End B. For a ``Fixed`` rod, end the line on a ``Fixed``
-       point at the rod end's position; that rod's ``Rod<N>`` loads then leave its force out.
+   * - ``a torsional END CONNECTION on a rod end is not supported at End B`` / ``on a rod end
+       needs a Fixed End B``
+     - a rod end holds a torsion frame at End A only, with a ``Fixed`` End B. Restrain the line
+       through its End A at the rod end, or end it on a ``Fixed`` point at a ``Fixed`` rod end's
+       position; that rod's ``Rod<N>`` loads then leave its force out.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
      - the C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by translation only.
        Run the line in a coupled OpenFAST or FAST.Farm run or in the standalone driver,

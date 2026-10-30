@@ -426,17 +426,16 @@ CONTAINS
     ! the staggered body scheme drives a cable end by translation only: a torsional End A on a
     ! rod fixed to a body (here bending-pinned, which that scheme otherwise takes) is refused
     CALL refused('Body<N> (staggered)', '1 arm Body1 0 0 -10 0 0 -20 4 -', [brow], &
-                 'a torsional END CONNECTION on a body or rod needs bodyScheme monolithic', 'staggered bodyScheme', &
+                 'or a torsional one on a body or rod needs bodyScheme monolithic', 'staggered bodyScheme', &
                  'Pinned')
     ! written anchor first onto a Pinned rod, the line is turned around and meets the rod's own
     ! refusal (not "two moving ends")
     CALL refused_rows('anchor-first Pinned', ['1 arm Pinned 0 0 -30 0 0 -40 4 -'], '1 2 R1B -', 1.0_wp, &
                       'on the end of ROD 1 (pinned) is not supported: a free or pinned rod is axisymmetric')
-    ! a line between two Fixed rods (a J-tube to a J-tube): End B is a rod end
+    ! a line between two Fixed rods (a J-tube to a J-tube): no torsion frame at End B's rod end
     CALL refused_rows('two Fixed', [CHARACTER(48) :: '1 arm Fixed 0 0 -30 0 0 -40 4 -', &
                                     '2 arm Fixed 0 0 -140.01 0 0 -150.01 4 -'], '1 R1B R2A -', -1.0_wp, &
-                      'torsional END CONNECTIONS require a finite-EI line with Fixed End B; line 1 ends (End B) '// &
-                      'on a rod end: a line between two rods is not supported in this build')
+                      'line 1: a torsional END CONNECTION on a rod end is not supported at End B')
   END SUBROUTINE check_refusals
 
   SUBROUTINE refused_rows(label, rod_rows, line_row, ez_z, needle)
