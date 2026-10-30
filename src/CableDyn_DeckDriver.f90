@@ -3515,7 +3515,7 @@ CONTAINS
       !! The torsion stage of a line with ATTACHMENTS, on its discrete equilibrium (after the
       !! attachment polish): the attachments' net weights -(m - rho V) g e_z at their nodes and,
       !! in a deck current, their drag at the twisted state as nodal loads. The drag depends on
-      !! the node's depth and line tangent, so the stage is repeated, each time a fresh torsion
+      !! the node's position and line tangent, so the stage is repeated, each time a fresh torsion
       !! solve from the last state, with the drag of the last solution until the solution stops
       !! moving (fixed point, as in attachment_static_polish).
       INTEGER, INTENT(OUT) :: est
@@ -5129,9 +5129,9 @@ CONTAINS
     !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
     !! forces -(m - rho V) g e_z and, in a deck current, the attachment current drag grow from
     !! zero to full, with the contact, dry-buoyancy, end-connection and line current terms of
-    !! the builder's static problem. The drag depends on the node's depth (profile current)
-    !! and line tangent, so the full-load solve is repeated with the drag of the last solution
-    !! until the solution stops moving (fixed point).
+    !! the builder's static problem. The drag depends on the node's position (profile current,
+    !! current grid) and line tangent, so the full-load solve is repeated with the drag of the
+    !! last solution until the solution stops moving (fixed point).
     !!
     !! The load fraction advances in steps of 1/NSTEP. A step whose damped Newton solve does
     !! not converge is repeated from the last converged state with pseudo-transient

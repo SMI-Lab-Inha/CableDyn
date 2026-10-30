@@ -33,8 +33,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   pendulum keeps the elliptic-integral period to 1.6e-4 at `dt = T/100`, a body with a
   `CoupledPinned` rod's mass and inertia follows the rod to 2e-12, and against MoorDyn-F
   (`inertialF 1`) a pendulum swinging through 120 deg agrees to 0.09 deg (0.15 deg when its node
-  surges). Outside
-  a coupled host, without inertias, and in linearisation the body fails closed by name.
+  surges). Outside a coupled host, without inertias, and in linearisation the body fails closed
+  by name.
 - Active line control (`CONTROL`, OpenFAST `CableDeltaL`/`CableDeltaLdot`) of a Syrope
   polyester segment, which stopped at initialisation before. As in MoorDyn-F and MoorDyn-C the
   segment's slow stretch carries over the length change (its slow strain is read at the new

@@ -951,13 +951,14 @@ Behaviour:
 - Loads: the net weight `(Mass − rhoW Volume) g` downward; with the dry mass, the added mass
   `Ca rhoW Volume` (a constant nodal mass); the fluid-inertia force
   `rhoW Volume (1 + Ca) du/dt` and the drag against the current and wave velocity at the node.
-  A deck `current` (uniform or profile) loads the attachments in the static initial condition
+  A deck current (a `current` row, uniform or profile, or a MoorDyn-C `Currents` field at
+  `t = 0`, sampled at the attachment node) loads the attachments in the static initial condition
   with the same drag law at rest, so a run in a current starts in equilibrium.
   An attachment above the free surface carries its weight only. Attachments have no seabed
   contact of their own; the node's contact acts on the line.
 - The static equilibrium is solved first with each attachment's net weight spread over the two
   elements at its node, then carried to the discrete loads by continuation. The current drag
-  depends on the node's depth and line direction, so the final solve is repeated until the
+  depends on the node's position and line direction, so the final solve is repeated until the
   node positions change by less than 1e-9 m. On a line restrained in torsion the torsion stage
   (the imposed twist) follows on the discrete equilibrium, with the attachments' net weights
   and drag as nodal loads (the drag again to a fixed point), so a run starts in the twisted

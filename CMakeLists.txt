@@ -2141,6 +2141,18 @@ add_test(NAME torsion_attachments
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(torsion_attachments PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+# Where the MoorDyn-parity features meet: a CoupledPinned body in a Currents 2/5 deck (refused on
+# the coupled aggregate for the current files, standalone for the body), CONTROL on viscoelastic
+# and Syrope segments in the host's cross-flow against the static start of the changed deck, and
+# ATTACHMENTS on a turned torsion line in a sheared Currents 5 grid (a still run keeps the start)
+add_executable(test_parity_integration tests/test_parity_integration.f90)
+target_link_libraries(test_parity_integration PRIVATE cabledyn_core)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/parity_integration)
+add_test(NAME parity_integration
+         COMMAND test_parity_integration ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_torsion_attachments.dat
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/parity_integration)
+set_tests_properties(parity_integration PROPERTIES LABELS "fortran;driver;integration;dynamic;openfast")
+
 add_executable(test_section_curvature tests/test_section_curvature.f90)
 target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
 add_test(NAME section_curvature COMMAND test_section_curvature)
