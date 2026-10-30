@@ -360,6 +360,7 @@ Model data
        finite-EI line with Fixed End B``
      - bending end connections apply only to ``EI > 0`` lines whose End B is an anchor.
    * - ``a clamped or elastic END CONNECTION on a body or rod needs bodyScheme monolithic`` /
+       ``a torsional END CONNECTION on a body or rod needs bodyScheme monolithic`` /
        ``the END CONNECTION direction on a rod end must be parallel to the rod axis``
      - remove ``staggered bodyScheme``; on a rod end give the direction along the rod axis
        (either sense).
@@ -391,10 +392,13 @@ Torsion
    * - ``torsional END CONNECTIONS ... require a finite-EI line`` / ``require a finite-EI line
        with Fixed End B``
      - torsion is solved on cubic-Hermite lines whose End B is an anchor.
-   * - ``a torsional END CONNECTION on a rod end is not supported`` / ``on a body needs a Rigid6
-       body``
-     - outside the torsion scope (:doc:`capabilities`). Move End A to a ``Fixed``,
-       ``Coupled``/``Vessel`` point or a Rigid6 body.
+   * - ``a torsional END CONNECTION on the end of ROD <N> (...) is not supported: a free or
+       pinned rod is axisymmetric`` / ``on the end of Coupled/Vessel ROD <N> is not supported`` /
+       ``on a body needs a Rigid6 body``
+     - outside the torsion scope (:doc:`capabilities`). A free or pinned rod has no roll angle
+       about its own axis, so it cannot hold the torque. Move End A to a ``Fixed`` rod, a rod fixed
+       to a Rigid6 body (``RODS`` type ``Body<N>``), a ``Fixed`` or ``Coupled``/``Vessel`` point
+       or a Rigid6 body.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
      - the C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by translation only.
        Run the line in a coupled OpenFAST or FAST.Farm run or in the standalone driver,

@@ -1098,7 +1098,37 @@ def test_torsion_scope_rules_follow_the_native_checks():
         ("1 1 2 -", "1 R1A 2 -"),
         ("1 Coupled 0.0 0.0 -50.0 0 0 0 0\n", ""),
     )
-    _rejects(rod_end, "a torsional END CONNECTION on a rod end is not supported")
+    # a Fixed rod holds the End A torsion frame still; a free or pinned rod has no roll angle,
+    # and a Coupled rod carries no finite-EI line on any route
+    DeckFile.from_text(rod_end)
+    axisymmetric = "is not supported: a free or pinned rod is axisymmetric, with no roll about"
+    _rejects(
+        _edit(rod_end, ("1 spar Fixed", "1 spar Pinned")),
+        rf"line 1: a torsional END CONNECTION on the end of ROD 1 \(pinned\) {axisymmetric}",
+    )
+    _rejects(
+        _edit(rod_end, ("1 spar Fixed", "1 spar Free")),
+        rf"on the end of ROD 1 \(free\) {axisymmetric}",
+    )
+    _rejects(
+        _edit(
+            rod_end,
+            (
+                f"{_BAR} ROD TYPES {_BAR}",
+                f"{_BAR} BODIES {_BAR}\n"
+                "ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz\n"
+                "1 Rigid6 0 0 -30 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3\n"
+                f"{_BAR} ROD TYPES {_BAR}",
+            ),
+            ("1 spar Fixed 0 0 -50 0 0 -40", "1 spar Body1Pin 0 0 -20 0 0 -10"),
+        ),
+        rf"on the end of ROD 1 \(body1pinned\) {axisymmetric}",
+    )
+    _rejects(
+        _options(_edit(rod_end, ("1 spar Fixed", "1 spar Coupled")), "rod.motion motionFile"),
+        "a torsional END CONNECTION on the end of Coupled/Vessel ROD 1 is not supported: no route "
+        "of this build carries a finite-EI line on a host-driven rod",
+    )
     attachments = _edit(
         _TORSION,
         (

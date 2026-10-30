@@ -395,8 +395,9 @@ connection moment. On this route:
 
 - a finite-EI cable needs a `Fixed` End B, and its End A may be a `Fixed` point, a Rigid6
   `Body<N>` point or a rod end, not a `Free`/`Connect` point or a `Point3` buoy;
-- a clamped or elastic End A on a body or rod needs `bodyScheme monolithic` (the default);
-  `staggered` rejects it by name;
+- a clamped or elastic End A on a body or rod, or one restrained in torsion (bending-pinned
+  included), needs `bodyScheme monolithic` (the default); `staggered`, which drives a cable end by
+  translation, rejects it by name;
 - every `Free`/`Connect` point carries at least one EI = 0 line;
 - `motionFile` and `Coupled`/`Vessel` rods are rejected by name.
 
@@ -812,8 +813,8 @@ Behaviour:
 - On a `Body<N>` point the direction is given in the body frame, like the point offset, and
   turns with the body. On a rod end it must be parallel to the rod axis (either sense, in the
   frame of the rod's deck coordinates); another direction is rejected by name. The connection
-  moment is part of `Body<N>M*`/`Rod<N>M*`, and the body or rod carries it in the dynamics and in
-  the static solve.
+  moment is part of `Body<N>M*`/`Rod<N>M*` (of both on an end of a rod fixed to a body), and the
+  body or rod carries it in the dynamics and in the static solve.
 - A finite stiffness is an isotropic rotational spring on the tangent direction; the tangent
   magnitude stays free.
 - `Rigid` is an exact two-coordinate direction constraint, not a large penalty; the tangent
@@ -881,9 +882,15 @@ Behaviour:
   set the End B pretwist to minus the static `Twist<L>` of a run with zero pretwist (in degrees);
   the line then keeps its untwisted shape.
 - The torsion end frame turns with what carries the end: a Rigid6 body, the vessel of
-  `vesselMotion`/`vesselRAO`, or nothing at a `Fixed` or held point. The `motionFile` roll
-  column rolls the frame of the line's moving end
+  `vesselMotion`/`vesselRAO`, or nothing at a `Fixed` or held point or on a `Fixed` rod. The
+  `motionFile` roll column rolls the frame of the line's moving end
   ([Prescribed motion](#prescribed-motion-motionfile)).
+- On a rod end (an I-tube or J-tube modelled as a rod), `Ez` lies along the rod axis and `Nx`
+  is given in the frame of the rod's deck coordinates, as `Ez` is. A `Fixed` rod holds the frame
+  still, and its `Rod<N>M*` carries the torque about the line axis. The ends of a rod fixed to a
+  Rigid6 body (`RODS` type `Body<N>`) are points of the body: `Ez` and `Nx` are given in the body
+  frame, the frame rolls with the body, and the torque reaches the body (`Body<N>M*`) and appears
+  in the rod's `Rod<N>M*`.
 - A Rigid6 body holding such a line turns by less than 90° per step: a step whose turn would be
   larger is halved (the twist is read from the body's orientation, which repeats every turn), and
   a run that still needs more after six halvings stops by name; reduce `dtM`.
@@ -901,17 +908,21 @@ Behaviour:
   polar inertia `Irn` of the `LINE TYPES` row (see [theory](theory.rst)).
 
 Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B, an explicit
-`GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point or a Rigid6
-`Body<N>` point; in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
-(see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
-torsion on an `EI = 0` line, on a rod end or on a `Point3` body,
-a dynamic or coupled run with `False alpha_force_blend`, any
-restrained end (one end included) through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which
-move the line ends by translation only (`a line restrained in torsion needs a host that turns
-its fairlead frame ...`; a C API host passes its rotations after `CableDyn_InitDeckRotating`),
-and a `Torq`/`Twist` channel on a line whose torsion is not solved. OpenFAST linearisation
-includes the twist angles as states; like any cable, the line must not have a `Rigid` bending
-connection there. Seabed friction does not resist twist (the laid part of a line twists freely).
+`GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point, a Rigid6 `Body<N>`
+point (the ends of a `Body<N>` rod included) or an end of a `Fixed` rod; in a coupled OpenFAST
+or FAST.Farm run the End A frame turns with the platform (see the manual's OpenFAST page, Line
+torsion). Each of the following stops with a named error: torsion on an `EI = 0` line, on an end
+of a `Free`, `Pinned`, `Body<N>Pinned` or `CoupledPinned` rod (an axisymmetric rod has no roll
+angle about its own axis: no load acts about the axis and its static solve has none, so it
+cannot hold the torque) or of a `Coupled`/`Vessel` rod (no route carries a finite-EI line on a
+host-driven rod), on a `Point3` body, a dynamic or coupled run with `False alpha_force_blend`,
+any restrained end (one end included) through the C API's `CableDyn_InitDeck`/`InitDeckAt`,
+which move the line ends by translation only (`a line restrained in torsion needs a host that
+turns its fairlead frame ...`; a C API host passes its rotations after
+`CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel on a line whose torsion is not
+solved. OpenFAST linearisation includes the twist angles as states; like any cable, the line
+must not have a `Rigid` bending connection there. Seabed friction does not resist twist (the
+laid part of a line twists freely).
 
 ### EQUIVALENT BUOYANCY (optional)
 

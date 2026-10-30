@@ -18338,12 +18338,22 @@ CONTAINS
     SUBROUTINE check_torsion_line(ln, es_t, em_t)
       !! A line with a torsional END CONNECTIONS restraint: a finite-EI (cubic-Hermite) line. With
       !! both ends restrained (torsion active) End B must be Fixed, every section's LINE TYPES row
-      !! must give an explicit GJ, End A may not be a rod end, and a body End A must be a Rigid6
-      !! body.
+      !! must give an explicit GJ, a body End A must be a Rigid6 body, and a rod End A must be on a
+      !! Fixed rod.
+      !!
+      !! The End A torsion frame (director, reference normal) is held by End A's parent and turns
+      !! with its whole orientation, its roll about the line included. A Fixed rod holds it still,
+      !! as a Fixed point does; the ends of a rod fixed to a Rigid6 body (RODS type Body<N>) are
+      !! points of the body (resolve_rod_end_tokens) and turn with it. A Free or Pinned rod (also
+      !! Body<N>Pinned, CoupledPinned) is an axisymmetric body: no load acts about its axis, its
+      !! static solve has no roll angle and its roll in the dynamics is never loaded, so the line's
+      !! torque would have nothing to react it. A Coupled/Vessel rod carries no finite-EI line on
+      !! any route of this build (the multibody march takes no motionFile, the coupled aggregate no
+      !! rod beside a finite-EI cable), so its host-driven frame is not wired to the torsion.
       TYPE(DeckLine), INTENT(IN) :: ln
       INTEGER, INTENT(OUT) :: es_t
       CHARACTER(*), INTENT(OUT) :: em_t
-      INTEGER :: js, jp, jb
+      INTEGER :: js, jp, jb, rid, rend
       CHARACTER(32) :: lid
       es_t = 0
       em_t = ''
@@ -18404,9 +18414,26 @@ CONTAINS
       jp = find_point(points, ln%nodeA)
       IF (jp < 1) RETURN
       IF (is_rod_point_type(points(jp)%ptype)) THEN
-        CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on a rod end is not supported '// &
-                  '(a rod has no spin angle in this build)')
-        RETURN
+        CALL parse_rod_point_type(points(jp)%ptype, rid, rend)
+        jb = find_rod(rods, rid)
+        IF (jb > 0) THEN
+          SELECT CASE (TRIM(rods(jb)%rod_type))
+          CASE ('fixed')
+          CASE ('coupled', 'vessel')
+            CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on the end of Coupled/Vessel '// &
+                      'ROD '//TRIM(int_to_str(rid))//' is not supported: no route of this build carries a '// &
+                      'finite-EI line on a host-driven rod')
+            RETURN
+          CASE DEFAULT
+            CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on the end of ROD '// &
+                      TRIM(int_to_str(rid))//' ('//TRIM(rods(jb)%rod_type)//') is not supported: a free or '// &
+                      'pinned rod is axisymmetric, with no roll about its own axis (no load acts about the axis '// &
+                      'and its static solve has no roll angle), so it cannot hold the line''s torque; restrain '// &
+                      'End A on a Fixed rod, on a rod fixed to a Rigid6 body (RODS type Body<N>), on a Rigid6 '// &
+                      'body point or on a Fixed or Coupled point')
+            RETURN
+          END SELECT
+        END IF
       END IF
       IF (starts_with(TRIM(points(jp)%ptype), 'body')) THEN
         jb = find_body(bodies, points(jp)%body_id)
@@ -20590,7 +20617,8 @@ CONTAINS
     !! MoorDyn's roll and pitch of the axis from the vertical [deg]. Loads are evaluated at the
     !! committed state: Body F/M is the net external load about the reference point, Rod F/M
     !! about End A (weight, buoyancy, hydrodynamic and seabed loads, external loads, the line
-    !! end forces and, for a body, its fixed rods and the pin forces of its pinned rods); Rod
+    !! end forces, the connection moments of clamped cables and, for a body, its fixed rods and
+    !! the pin forces of its pinned rods); Rod
     !! TenA/TenB is the magnitude of the summed line force at End A/B, Sub the submerged
     !! fraction of its length.
     CHARACTER(*), INTENT(IN) :: ch
@@ -20860,7 +20888,8 @@ CONTAINS
   SUBROUTINE rod_net_wrench(rs, body_of, points, opts, time, f6, ten, sub, ErrStat, ErrMsg, system, mb, bathymetry, &
                             added6)
     !! Net external force and moment on a rod about its End A (global axes) at its committed
-    !! state (weight, buoyancy, Morison and seabed loads, the line forces at its ends), the
+    !! state (weight, buoyancy, Morison and seabed loads, the line forces at its ends and the
+    !! connection moments, bending and torque, of the cables clamped there), the
     !! summed line force magnitudes at End A and End B, and its submerged length fraction.
     !! body_of > 0: the rod is fixed to that body, and its end lines are the body attachment
     !! points made from its ends (DeckPoint rod_ref/rod_end). added6: its 6x6 added mass
@@ -20918,12 +20947,21 @@ CONTAINS
     ten(2) = NORM2(fe(:, 2))
     f = f + fe(:, 1) + fe(:, 2)
     m = m + cross3(pb - pa, fe(:, 2))
-    ! the connection moments of the cables clamped (or elastically connected) to the rod's ends
-    IF (PRESENT(mb) .AND. body_of == 0) THEN
+    ! the connection moments of the cables clamped (or elastically connected) to the rod's ends:
+    ! on a rod of the march its rod-end attachments, on a rod fixed to a body the body points made
+    ! from its ends (whose cables the body carries)
+    IF (PRESENT(mb)) THEN
       IF (ALLOCATED(mb%cab_mend)) THEN
         DO ip = 1, SIZE(mb%cables)
-          IF (mb%cab_kind(ip) /= 2) CYCLE
-          IF (mb%rods(mb%cab_obj(ip))%rod_id == rs%rod_id) m = m + mb%cab_mend(:, ip)
+          IF (body_of == 0) THEN
+            IF (mb%cab_kind(ip) /= 2) CYCLE
+            IF (mb%rods(mb%cab_obj(ip))%rod_id == rs%rod_id) m = m + mb%cab_mend(:, ip)
+          ELSE
+            IF (mb%cab_kind(ip) /= 1 .OR. mb%cab_obj(ip) /= body_of .OR. .NOT. ALLOCATED(mb%cable_points)) CYCLE
+            e = find_point(points, mb%cable_points(1, ip))
+            IF (e < 1) CYCLE
+            IF (points(e)%rod_ref == rs%rod_id .AND. points(e)%rod_end > 0) m = m + mb%cab_mend(:, ip)
+          END IF
         END DO
       END IF
     END IF
@@ -21529,12 +21567,21 @@ CONTAINS
                     'standalone driver runs with its Coupled points held still (that route takes no motionFile '// &
                     'either)'); RETURN
         END IF
-        IF (lines(i)%endconn_mode(1) /= CD_ENDCONN_PINNED .AND. TRIM(points(pa)%ptype) /= 'fixed') THEN
-          ! a clamped or elastic End A on a body or rod: implicit (monolithic step) only
+        IF ((lines(i)%endconn_mode(1) /= CD_ENDCONN_PINNED .OR. line_torsion_active(lines(i))) .AND. &
+            TRIM(points(pa)%ptype) /= 'fixed') THEN
+          ! a clamped, elastic or torsionally restrained End A on a body or rod: implicit (monolithic
+          ! step) only; the staggered step drives the cable end by translation, so its End A frame
+          ! would not turn with the object nor return the torque
           IF (opts%body_scheme_staggered) THEN
-            CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a clamped or '// &
-                      'elastic END CONNECTION on a body or rod needs bodyScheme monolithic (the staggered '// &
-                      'scheme couples cable ends as point forces)')
+            IF (lines(i)%endconn_mode(1) /= CD_ENDCONN_PINNED) THEN
+              CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a clamped or '// &
+                        'elastic END CONNECTION on a body or rod needs bodyScheme monolithic (the staggered '// &
+                        'scheme couples cable ends as point forces)')
+            ELSE
+              CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a torsional END '// &
+                       'CONNECTION on a body or rod needs bodyScheme monolithic (the staggered scheme drives cable '// &
+                        'ends by translation and couples them as point forces)')
+            END IF
             RETURN
           END IF
           BLOCK
@@ -21638,12 +21685,13 @@ CONTAINS
         ! frame and turns with the object's orientation (the OpenFAST parent-frame contract)
         BLOCK
           TYPE(DeckLine) :: lnc
-          REAL(wp) :: rclamp(3, 3), dclamp(3)
+          REAL(wp) :: rclamp(3, 3), dclamp(3), nclamp(3)
           lnc = cab_lines(c)
           CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, &
-                                  check_axis=.NOT. opts%body_ic_static)
+                                  check_axis=.NOT. opts%body_ic_static, nx0=nclamp)
           IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
           lnc%endconn_ez_ref(:, 1) = dclamp
+          lnc%tors_nx(:, 1) = nclamp
           CALL build_one_hermite_cable(lnc, sections, types, pc, opts, opts%dtM, mb%cables(c), node, &
                                        ErrStat, ErrMsg, standalone_controls=.TRUE., bathymetry=bathymetry, &
                                        fairlead_orientation=TRANSPOSE(rclamp), install_viv=.TRUE., &
@@ -27519,17 +27567,19 @@ CONTAINS
       TYPE(CD_HFMF_ModuleType) :: cab
       TYPE(DeckLine) :: lnc
       TYPE(DeckPoint), ALLOCATABLE :: pc(:)
-      REAL(wp) :: rclamp(3, 3), dclamp(3), dtb
+      REAL(wp) :: rclamp(3, 3), dclamp(3), nclamp(3), dtb
       INTEGER :: node, es
       CHARACTER(1024) :: note
       CHARACTER(1024) :: em
       fm = CD_ZERO
       km = CD_ZERO
       lnc = lines(jl)
-      CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, check_axis=.FALSE.)
+      CALL clamp_object_frame(lnc, points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, check_axis=.FALSE., &
+                              nx0=nclamp)
       rot = rclamp
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       lnc%endconn_ez_ref(:, 1) = dclamp
+      lnc%tors_nx(:, 1) = nclamp
       pc = points
       pc(find_point(points, lnc%nodeA))%ptype = 'coupled'
       dtb = CD_ONE
@@ -38514,15 +38564,18 @@ CONTAINS
     rot(:, 3) = zaxis
   END FUNCTION rod_orientation_from_axis
 
-  SUBROUTINE clamp_object_frame(ln, points, bodies, rods, rot, d0, ErrStat, ErrMsg, check_axis)
+  SUBROUTINE clamp_object_frame(ln, points, bodies, rods, rot, d0, ErrStat, ErrMsg, check_axis, nx0)
     !! The object frame of a finite-EI line's End A END CONNECTION on a Rigid6 body point or a rod
     !! end, at the object's current pose (its static-equilibrium pose once solved): rot, the
     !! object-to-global rotation, and d0, the connection direction (End A to End B) in the object
     !! frame. On a body point the deck direction is given in the body frame. On a rod end it must
     !! be parallel to the rod axis (either sense, in the frame of the rod's deck coordinates): a
-    !! rod has no spin angle in its static solve, and a direction along the axis makes the
-    !! connection moment normal to the axis. check_axis = .FALSE. (after the static solve has
-    !! turned the rod; the deck direction was checked before it) keeps only the sense.
+    !! free or pinned rod has no spin angle in its static solve, and a direction along the axis
+    !! makes the connection moment normal to the axis. check_axis = .FALSE. (after the static
+    !! solve has turned the rod; the deck direction was checked before it) keeps only the sense.
+    !! nx0: End A's torsion reference normal in the object frame. On a body point the deck gives
+    !! it in the body frame; on a rod end (a Fixed rod, check_torsion_line) in the frame of the
+    !! rod's deck coordinates, so it is carried into the rod frame rot: nx0 = rot^T Nx.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckBody), INTENT(IN) :: bodies(:)
@@ -38531,6 +38584,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: check_axis
+    REAL(wp), INTENT(OUT), OPTIONAL :: nx0(3)
     INTEGER :: pa, ib, ir, rid, iend
     REAL(wp) :: axis(3), ez(3), an
     LOGICAL :: check
@@ -38544,6 +38598,7 @@ CONTAINS
     rot(3, 3) = CD_ONE
     ez = ln%endconn_ez_ref(:, 1)
     d0 = ez
+    IF (PRESENT(nx0)) nx0 = ln%tors_nx(:, 1)
     check = .TRUE.
     IF (PRESENT(check_axis)) check = check_axis
     who = 'finite-EI LINE '//TRIM(int_to_str(ln%id))//' End A'
@@ -38585,6 +38640,9 @@ CONTAINS
         IF (ib > 0) axis = MATMUL(deck_body_pose_rotation(bodies(ib)), axis)
       END IF
       rot = rod_orientation_from_axis(axis)
+      ! the frame init_rod_states gives the rod (rod_orientation_from_axis of its deck axis), in
+      ! which the march turns the End A frame (mb_attachment_motion)
+      IF (PRESENT(nx0)) nx0 = MATMUL(TRANSPOSE(rot), ln%tors_nx(:, 1))
     ELSE
       CALL fail(ErrStat, ErrMsg, TRIM(who)//': a clamped or elastic END CONNECTION needs a Fixed point, a '// &
                 'Rigid6 body point or a rod end'); RETURN

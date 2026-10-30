@@ -2709,7 +2709,11 @@ end force and moment load the object at the force level
 :math:`(1-\alpha_f)\,\mathbf{f}_{n+1} + \alpha_f\,\mathbf{f}_n`. Its condensed dynamic end
 stiffness with respect to the object's translation and rotation enters the Newton matrix by
 differences of the cable step. On a rod end the direction must lie along the rod axis, so the
-moment has no component about the axis, which carries no degree of freedom. The static solve
+bending moment has no component about the axis, which carries no degree of freedom on a free
+or pinned rod (an axisymmetric rod has no roll angle; a line restrained in torsion is refused
+there). A ``Fixed`` rod holds its end frame, and the torque of a line restrained in torsion
+returns to it about the line axis; the ends of a rod fixed to a body are points of the body,
+whose frame rolls with it. The static solve
 carries the cable first without bending; passes then add the difference between the cubic-Hermite
 cable's end force and that surrogate, and the Hermite connection moment, at the previous
 pass's pose, until these loads change by less than :math:`10^{-7}` of the force scale. At the

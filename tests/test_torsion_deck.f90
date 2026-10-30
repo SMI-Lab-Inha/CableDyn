@@ -1023,8 +1023,9 @@ CONTAINS
   END SUBROUTINE write_lines
 
   SUBROUTINE check_scope_refusals()
-    !! 6 (continued). Torsion outside its scope stops by name: End A on a rod end and End A on a
-    !! Point3 body; a torsional line carrying ATTACHMENTS solves (test_torsion_attachments).
+    !! 6 (continued). Torsion outside its scope stops by name: End A on a pinned rod (a Fixed rod
+    !! end is supported, test_rod_end_torsion) and End A on a Point3 body; a torsional line
+    !! carrying ATTACHMENTS solves (test_torsion_attachments).
     CHARACTER(120) :: tail(9), ty(4)
     ty(1) = '--- LINE TYPES ---'
     ty(2) = 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
@@ -1044,14 +1045,15 @@ CONTAINS
                                       'Name Diam Mass Cd Ca CdEnd CaEnd', '(-) (m) (kg/m) (-) (-) (-) (-)', &
                                       'arm 0.6 400.0 1.0 1.0 0.0 0.0', '--- RODS ---', &
                                       'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs', &
-                                     '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)', '1 arm Fixed 0 0 -40 0 0 -50 4 -', &
+                                    '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)', '1 arm Pinned 0 0 -40 0 0 -50 4 -', &
                           '--- POINTS ---', 'ID Type X Y Z Mass Vol CdA Ca', '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)', &
                       '2 Fixed 100.0 0.0 -50.0 0 0 0 0', '--- LINES ---', 'ID NodeA NodeB Outputs', '(-) (-) (-) (-)', &
                                       '1 R1B 2 -', tail(1:4), '--- END CONNECTIONS ---', &
                                       'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist', &
                         '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)', '1 A Rigid 0 0 -1 Rigid 1 0 0 0', &
                                       '1 B Rigid 1 0 0 Rigid 0 0 1 0', tail(5:9)])
-    CALL expect_error('a torsional end on a rod is named', 'tdeck_s1.dat', 'tdeck_s1', 'on a rod end is not supported')
+    CALL expect_error('a torsional end on a pinned rod is named', 'tdeck_s1.dat', 'tdeck_s1', &
+                      'on the end of ROD 1 (pinned) is not supported')
     ! End A on a Point3 body
     CALL write_lines('tdeck_s2.dat', [CHARACTER(120) :: 'torsion scope', ty, '--- BODIES ---', &
                                       'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca', &

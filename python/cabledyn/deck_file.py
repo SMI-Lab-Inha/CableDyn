@@ -4300,8 +4300,10 @@ class DeckFile:
 
         A line with a torsional END CONNECTIONS restraint (TorsStiffness Rigid or a
         stiffness) must be finite-EI. Restrained at both ends, torsion is solved: End B must
-        be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
-        rod end nor on a body other than Rigid6. Restrained at one end only (its other end
+        be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither on
+        a rod other than a Fixed one (a free or pinned rod has no roll angle, a Coupled/Vessel rod
+        carries no finite-EI line; the ends of a rod fixed to a body are body points) nor on a
+        body other than Rigid6. Restrained at one end only (its other end
         free to twist), it is solved in torsion under the same rules, and with no CONTROL, no
         modal analysis and a force-blended march; otherwise it keeps the meaning of the
         6-column rows (no error). A deck with torsion runs dynamics only with the
@@ -4314,6 +4316,7 @@ class DeckFile:
         """
         # _check_attachments has already accepted every LineID as an integer
         attachment_lines = {str(_native_int(row.tokens[0])) for row in self._rows("ATTACHMENTS")}
+        rod_kinds = self._rod_rows_by_id()
         # CONTROL rows are checked later; a malformed one fails there
         controlled_lines: set[str] = set()
         for row in self._rows("CONTROL"):
@@ -4412,10 +4415,24 @@ class DeckFile:
                         f'its LINE TYPES row "{name}" must give an explicit GJ > 0 (the 14-column '
                         "row; torsion has no EI/1.3 default)"
                     )
-            if _rod_point(point_types[end_a]) is not None:
+            rod_end = _rod_point(point_types[end_a])
+            rod_kind = None if rod_end is None else rod_kinds.get(rod_end[0], (None, 0))[0]
+            if rod_end is not None and rod_kind is not None and rod_kind != "fixed":
+                if re.fullmatch(r"body[0-9]+pin", rod_kind):
+                    rod_kind += "ned"
+                if rod_kind in {"coupled", "vessel"}:
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id}: a torsional END CONNECTION on the end of "
+                        f"Coupled/Vessel ROD {rod_end[0]} is not supported: no route of this build "
+                        "carries a finite-EI line on a host-driven rod"
+                    )
                 raise DeckFormatError(
-                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a rod end is "
-                    "not supported (a rod has no spin angle in this build)"
+                    f"{self._label}: line {line_id}: a torsional END CONNECTION on the end of ROD "
+                    f"{rod_end[0]} ({rod_kind}) is not supported: a free or pinned rod is "
+                    "axisymmetric, with no roll about its own axis (no load acts about the axis "
+                    "and its static solve has no roll angle), so it cannot hold the line's torque; "
+                    "restrain End A on a Fixed rod, on a rod fixed to a Rigid6 body (RODS type "
+                    "Body<N>), on a Rigid6 body point or on a Fixed or Coupled point"
                 )
             body_id = _body_point_id(point_types[end_a])
             if body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":

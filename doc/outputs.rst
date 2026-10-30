@@ -901,8 +901,9 @@ output time.
      - deg/s, deg/s²
    * - ``Rod<N>Fx`` / ``Fy`` / ``Fz``, ``Mx`` / ``My`` / ``Mz``
      - net external force on the rod and its moment about End A: weight, buoyancy, Morison and
-       seabed loads and the line and cable end forces (not the pin reaction of a pinned rod,
-       whose ``M`` therefore vanishes at a static equilibrium)
+       seabed loads, the line and cable end forces and the connection moment (bending and
+       torque) of a cable clamped at its ends, on a rod fixed to a body too (not the pin
+       reaction of a pinned rod, whose ``M`` therefore vanishes at a static equilibrium)
      - N, N·m
    * - ``Rod<N>TenA`` / ``TenB``
      - magnitude of the summed line and cable end force at End A / End B

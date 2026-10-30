@@ -2165,6 +2165,10 @@ add_test(NAME torsion_attachments
          COMMAND test_torsion_attachments ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_torsion_attachments.dat
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(torsion_attachments PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
+add_executable(test_rod_end_torsion tests/test_rod_end_torsion.f90)
+target_link_libraries(test_rod_end_torsion PRIVATE cabledyn_core)
+add_test(NAME rod_end_torsion COMMAND test_rod_end_torsion)
+set_tests_properties(rod_end_torsion PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
 # Where the MoorDyn-parity features meet: a CoupledPinned body in a Currents 2/5 deck (refused on
 # the coupled aggregate for the current files, standalone for the body), CONTROL on viscoelastic

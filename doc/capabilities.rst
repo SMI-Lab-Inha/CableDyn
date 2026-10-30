@@ -94,18 +94,19 @@ Line and constitutive capability
        (``GJ|K``): condensed (uniform torque) in statics with a stability check and buckling
        descent, and a twist angle at every node in dynamics, with the polar inertia ``Irn`` and
        torsional damping (``GJ|K|Bt``),
-       with turning Rigid6 bodies, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll
-       column standalone (``vesselMotion`` and the roll column also on a mixed ``EI = 0`` +
-       finite-EI deck), and with the platform orientation in coupled OpenFAST and FAST.Farm
-       runs (torque returned to the platform, ``PtfmInit``, checkpoints, linearisation with the
-       twist angles as states; see :doc:`openfast`) and through the C API with the host's
-       rotations (``CableDyn_InitDeckRotating``, :doc:`capi`), active line control
-       (``CONTROL``) of the fairlead segment on the coupled route; ``Torq``/``Twist`` channels and
-       standalone range graphs. Stopped by name: ``CableDyn_InitDeck``/``InitDeckAt`` (which
-       move the line ends by translation only), rod ends, bodies other than Rigid6 and
-       ``False alpha_force_blend``. Modal analysis carries the twist angle of every node. Not
-       modelled: seabed friction against twist, anisotropic sections, self-contact of a loop
-       (see :ref:`theory-torsion`)
+       with turning Rigid6 bodies (the ends of rods fixed to them included), ends of ``Fixed``
+       rods, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll column standalone
+       (``vesselMotion`` and the roll column also on a mixed ``EI = 0`` + finite-EI deck), and
+       with the platform orientation in coupled OpenFAST and FAST.Farm runs (torque returned to
+       the platform, ``PtfmInit``, checkpoints, linearisation with the twist angles as states;
+       see :doc:`openfast`) and through the C API with the host's rotations
+       (``CableDyn_InitDeckRotating``, :doc:`capi`), active line control (``CONTROL``) of the
+       fairlead segment on the coupled route; ``Torq``/``Twist`` channels and standalone range
+       graphs. Stopped by name: ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
+       translation only), ends of free and pinned rods (axisymmetric, no roll angle) and of
+       ``Coupled``/``Vessel`` rods, bodies other than Rigid6 and ``False alpha_force_blend``.
+       Modal analysis carries the twist angle of every node. Not modelled: seabed friction
+       against twist, anisotropic sections, self-contact of a loop (see :ref:`theory-torsion`)
    * - Hockling loops, nonlinear cross-section laws
      - Not provided
      - the buckling onset and the post-buckled shape are computed, but a loop that closes on
