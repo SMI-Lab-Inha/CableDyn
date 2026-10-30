@@ -102,7 +102,7 @@ article's methods, are compared in
 | **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
 | **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
 | **T-10** | Torsion dynamics, restart and body torque | quasi-static torque, energy, uninterrupted run, pendulum | torque 2.2e-16; energy band 4.9e-4; restart bit-identical; pendulum 6.4e-5 | see [Torsion](#torsion) | Pass |
-| **T-14** | Active line control of a line restrained in torsion | `GJ Φ/L(t) + K (H − L)/L`; Kelvin–Voigt torque of a pay-out; finite differences; energy of a length change; `ρ∞ = 0`; uninterrupted run | torque ≤1.5e-12, tension 3.6e-6; damping 5.8e-6 N·m of 0.64 N·m; FD 1.1e-10; energy 7.8e-5; no lag (1.4e-3 of the per-step change); restart bit-identical | see [Torsion](#torsion) | Pass |
+| **T-14** | Active line control of a line restrained in torsion | `GJ Φ/L(t) + K (H − L)/L`; Kelvin–Voigt torque of a pay-out; finite differences; energy of a length change; `ρ∞ = 0`; uninterrupted run | torque ≤1.5e-12, tension 3.6e-6; damping 5.8e-6 N·m of 0.64 N·m; FD 1.3e-10, tangent 1.1e-9; energy 7.8e-5; no lag (1.4e-3 of the per-step change); restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-13** | Nodal twist (torsional inertia and damping) | condensed torsion in the limit of no inertia; continuum torsional wave; `ζ = ω Bt/(2 GJ)`; energy; restart | ≤6e-7 against the condensed torsion; wave torque 0.07 %; decrement 6 %; energy band 4.9e-4; restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-12** | Torque–tension coupling | `T = EA ε + K τ`, `M = GJ τ + K ε` closed forms; kernel FD; march | ≤1e-7 against every closed form; kernel gradient 1.7e-10, Hessian 9.8e-11 | see [Torsion](#torsion) | Pass |
 | **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
@@ -1059,7 +1059,10 @@ in parentheses).
     length χ and the torque is `GJ χ + Bt χ̇` to 5.8e-6 N·m of its 0.642 N·m damping share
     (0.646 N·m off without the length rate);
   - on a bowed line the length-rate share of the damping torque equals `Bt l̇0 ∂(τ/l0)/∂l0` by
-    central differences of the element twist to 1.1e-10 (1.7 % from the straight-line value);
+    central differences of the element twist to 1.3e-10 on interior elements, at both rigid
+    torsional ends (End A the fairlead) and with `K/GJ = 0.5` (the straight-line value is up to
+    a factor 5 off), and the torque tangent a step assembles matches central differences of the
+    torque to 1.1e-9, where its length-rate share is 1.6e-3 to 7.6e-3 of it;
   - the polar inertia and a `-ζ` damping a command rebuilds equal those of a model built with
     the new lengths bit for bit, and a committed-state evaluation, a saved control state and a
     snapshot take the committed lengths and terms;
@@ -1067,10 +1070,13 @@ in parentheses).
     twist and polar kinetic energy change by the work of the length change to 7.8e-5 of it;
   - paid out slowly, the run at `ρ∞ = 0.4` follows the one at `ρ∞ = 0` to 1.4e-3 of the
     per-step torque change, also with the committed force evaluated afresh each step (taken at
-    the new lengths it lags by `α_f` of the change, 0.29);
+    the new lengths it would lag by the expected `α_f = 2/7` of the change; an ablation of the
+    committed lengths measured 0.289);
   - restarts mid-ramp from a snapshot, from the checkpoint mirror with the command re-applied,
     and of a `CONTROL` deck on the coupled aggregate (whose `Torq1N1` follows `GJ Twist1/L(t)`
-    to 6e-11) continue bit-identically.
+    to 6e-11) continue bit-identically; after a non-stepping frame write the snapshot and the
+    checkpoint mirror bring back the committed torque bit for bit (re-derived as `(Φ − Θ)/C` it
+    would differ by 1.8e-15 N·m).
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`

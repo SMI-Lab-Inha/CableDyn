@@ -102,7 +102,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `GJ Φ/L(t) + K (H − L)/L` to 1.5e-12 and its tension to 4e-6; a constant pay-out carries the
   Kelvin–Voigt torque to 6e-6 N m of its 0.64 N m damping share; a pay-out under a ringing twist
   balances the energy to 8e-5 of the work done; restarts mid-ramp (snapshot, checkpoint mirror,
-  a coupled deck) are bit-identical.
+  a coupled deck) are bit-identical. The checkpoint mirror of a line with the nodal twist gains
+  one value, its committed torque.
 - Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
   `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.

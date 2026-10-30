@@ -580,17 +580,19 @@ the axial damping takes the rate of the strain:
          \Big(\dot{\hat\tau}_e - \hat\tau_e\,\frac{\dot L_{0,e}}{L_{0,e}}\Big) .
 
 At fixed :math:`\mathbf{q}` the twist changes with :math:`L_0` through the coupling term and the
-element's shape. The reference twist depends on the tangent handles only through
-:math:`L_0\mathbf{m}` (the Hermite :math:`\mathbf{r}'` and :math:`\mathbf{r}''`) and
-:math:`\mathbf{m}/|\mathbf{m}|`, and so does :math:`l_e`, so
-:math:`L_0\,\partial(m_e + c_e l_e)/\partial L_0 = \mathbf{m}_1\cdot\partial/\partial\mathbf{m}_1 +
-\mathbf{m}_2\cdot\partial/\partial\mathbf{m}_2` of the same with :math:`c_e = K_e/GJ_e`, and
+element's shape. Write :math:`\mathbf{a}_1, \mathbf{a}_2` for the tangent DOFs of the element's two
+nodes (the nodal :math:`\mathbf{m} = d\mathbf{r}/ds`). The reference twist :math:`m_e` depends on
+them only through :math:`L_0\mathbf{a}_i` (the Hermite :math:`\mathbf{r}'` and
+:math:`\mathbf{r}''`) and :math:`\mathbf{a}_i/|\mathbf{a}_i|`, and the stretched length
+:math:`l_e` only through :math:`L_0\mathbf{a}_i`, so with :math:`c_e = K_e/GJ_e`
+:math:`L_0\,\partial(m_e + c_e l_e)/\partial L_0 = \sum_i \mathbf{a}_i\cdot\partial(m_e + c_e
+l_e)/\partial\mathbf{a}_i`, and
 
 .. math::
 
    \dot{\hat\tau}_e = \dot\varphi_{k+1} - \dot\varphi_k + \nabla\hat\tau_e\cdot\dot{\mathbf{q}}
-     + \frac{\dot L_{0,e}}{L_{0,e}}\Big(\mathbf{m}_1\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{m}_1}
-     + \mathbf{m}_2\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{m}_2} - c_e L_{0,e}\Big) ,
+     + \frac{\dot L_{0,e}}{L_{0,e}}\Big(\mathbf{a}_1\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{a}_1}
+     + \mathbf{a}_2\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{a}_2} - c_e L_{0,e}\Big) ,
 
 with the matching tangent terms. A segment paid out at a constant twist per length carries no
 damping torque. The test suite checks the quasi-static torque :math:`GJ\Phi/L(t) + K(H - L)/L` of a

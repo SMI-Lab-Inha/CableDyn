@@ -1698,10 +1698,9 @@ CONTAINS
     !! recompute inputs is refused, as is a model on the configuration-blended generalised-alpha
     !! (force blend off, CD_HermiteCable_Dyn_Set_ForceBlend), whose blended state has no
     !! committed-length treatment, so a ramp would lag by alpha_f times the length change.
-    !! restored = .TRUE. (a checkpoint
-    !! restart re-applying the command the committed state was reached with) makes the
-    !! lengths and rates the committed ones at once; a committed force reloaded with the
-    !! state belongs to them and stays valid.
+    !! restored = .TRUE. (a checkpoint restart re-applying the command the committed state was
+    !! reached with) makes the lengths and rates the committed ones at once; a committed force
+    !! reloaded with the state belongs to them and stays valid.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: elems(:)
     REAL(wp), INTENT(IN) :: l0_new(:), l0_dot(:)
@@ -6814,11 +6813,13 @@ CONTAINS
   PURE INTEGER FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size(model) RESULT(n)
     !! Reals of the nodal-twist checkpoint mirror (CD_HermiteCable_Dyn_Twist_Pack): the
     !! committed angles, rates and accelerations, directors, reference tangents, reference
-    !! twists, element torques, end-frame references and rates, and the force cache's angle
-    !! part; 0 without the nodal twist.
+    !! twists, element torques, end-frame references and rates, the force cache's angle part,
+    !! and the committed mean torque as it was formed (the summed twist over the compliance of
+    !! the lengths it was reached with, which a reload does not re-derive, as Restore does not);
+    !! 0 without the nodal twist.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     n = 0
-    IF (model%tw_active) n = tw_pack_size(model) + model%nn
+    IF (model%tw_active) n = tw_pack_size(model) + model%nn + 1
   END FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size
 
   SUBROUTINE CD_HermiteCable_Dyn_Twist_Pack(model, buf)
@@ -6830,13 +6831,14 @@ CONTAINS
     n = tw_pack_size(model)
     CALL tw_pack(model, buf(1:n))
     buf(n + 1:n + model%nn) = model%tw_fcR
+    buf(n + model%nn + 1) = model%torsion%torque
   END SUBROUTINE CD_HermiteCable_Dyn_Twist_Pack
 
   SUBROUTINE CD_HermiteCable_Dyn_Twist_Unpack(model, buf, ErrStat, ErrMsg, check_only)
     !! Reload the nodal twist from a mirror of CD_HermiteCable_Dyn_Twist_Pack written by a
     !! model built from the same input (the caller restores q, v, a and the force cache with
-    !! it). Fails closed on a size mismatch, a non-finite value or a non-unit director; with
-    !! check_only it only checks.
+    !! it), the committed torque included. Fails closed on a size mismatch, a non-finite value
+    !! or a non-unit director; with check_only it only checks.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: buf(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -6848,7 +6850,7 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: the model has no nodal twist'; RETURN
     END IF
     n = tw_pack_size(model)
-    IF (SIZE(buf) /= n + model%nn) THEN
+    IF (SIZE(buf) /= n + model%nn + 1) THEN
       ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: the mirror does not match this line'; RETURN
     END IF
     IF (.NOT. CD_All_Finite(buf)) THEN
@@ -6867,6 +6869,7 @@ CONTAINS
     END IF
     CALL tw_unpack(model, buf(1:n))
     model%tw_fcR = buf(n + 1:n + model%nn)
+    model%torsion%torque = buf(n + model%nn + 1)
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
   END SUBROUTINE CD_HermiteCable_Dyn_Twist_Unpack

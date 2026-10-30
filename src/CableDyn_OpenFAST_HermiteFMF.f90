@@ -1751,8 +1751,10 @@ CONTAINS
 
   INTEGER FUNCTION CD_HFMF_TorsionMirrorSize(self) RESULT(n)
     !! Mirror slots of the torsion, last: the accepted (unwrapped) Theta, Phi and the four
-    !! end-frame vectors (14 values), then the nodal twist's state
-    !! (CD_HermiteCable_Dyn_Twist_Mirror_Size); zero without torsion.
+    !! end-frame vectors (14 values), then the nodal twist's state with its committed torque
+    !! (CD_HermiteCable_Dyn_Twist_Mirror_Size); zero without torsion. The condensed torque is
+    !! re-derived on a reload, (Phi - Theta)/C at the re-applied (committed) lengths, which is
+    !! how every step and frame write forms it.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
@@ -2007,7 +2009,8 @@ CONTAINS
       self%line%torsion%torque = (self%line%torsion%phi - self%line%torsion%theta)/ &
                                  CD_HermiteTorsion_Compliance(self%line%torsion, self%line%l0)
       self%line%tors_drive_set = .FALSE.
-      ! the nodal twist, checked above (its force-cache part rides with the cable's)
+      ! the nodal twist, checked above (its force-cache part rides with the cable's); it brings
+      ! back the committed torque as it was formed (a summed twist over the compliance)
       IF (self%line%tw_active) CALL CD_HermiteCable_Dyn_Twist_Unpack(self%line, buf(k + 15:SIZE(buf)), es, em)
       ! (a parent-attached torsion frame turns with the parent orientation, which the boundary
       ! block restored as committed, so a later step without u_orientation holds it)

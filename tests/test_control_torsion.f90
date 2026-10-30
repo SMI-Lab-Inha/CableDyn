@@ -16,7 +16,9 @@ PROGRAM test_control_torsion
   !!      GJ chi + Bt chi_dot with chi = (Phi + (K/GJ) H)/L - K/GJ; without the rate it is not;
   !!   F  the length-rate share of the torsional damping on a bowed line equals Bt l0_dot
   !!      d(tau/l0)/dl0 by central differences of the element twist at fixed q (the Euler identity
-  !!      l0 drho/dl0 = m . drho/dm of the element shape);
+  !!      l0 drho/dl0 = m . drho/dm of the element shape), on interior elements, at both rigid
+  !!      torsional ends (End A the fairlead) and with coupling, and the torque tangent the step
+  !!      assembles matches central differences of the torque;
   !!   Z  the torsion terms a length change rebuilds equal those of a model built with the new
   !!      lengths bit for bit (the lumped polar inertia Irn l0/2, a -zeta torsional damping
   !!      re-resolved as zeta l0 sqrt(GJ Irn), a direct Bt kept); a committed-state evaluation
@@ -33,7 +35,9 @@ PROGRAM test_control_torsion
   !!      lags by alpha_f of it), and no step jumps;
   !!   R  restart mid-ramp: a rolling, twisting, torsionally damped coupled cable under a pay-out
   !!      ramp continues bit-identically from a snapshot and from a module rebuilt from the
-  !!      checkpoint mirror with the command re-applied;
+  !!      checkpoint mirror with the command re-applied; after a non-stepping frame write (whose
+  !!      torque is the summed twist over the compliance) both bring back that committed torque
+  !!      bit for bit, which re-deriving it as (Phi - Theta)/C would not;
   !!   S  deck: a straight torsion line with a pretwist and a CONTROL row on the coupled aggregate
   !!      (the CompMooring = 5 route; the standalone driver takes no CONTROL) initialises, its
   !!      Torq1N1 follows GJ Twist1/L(t) through a haul-in ramp, and the shell's checkpoint recipe
@@ -41,7 +45,8 @@ PROGRAM test_control_torsion
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
-                                     CD_HermiteTorsion_Zeta_Damping, CD_HTORS_OK
+                                     CD_HermiteTorsion_Zeta_Damping, CD_HermiteTorsion_Element_Stretch, &
+                                     CD_HermiteTorsion_Compliance, CD_HTORS_OK
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Reaction, &
                                           CD_HermiteCable_Dyn_Set_SegmentLength, &
@@ -55,6 +60,7 @@ PROGRAM test_control_torsion
                                           CD_HermiteCable_Dyn_Set_ForceBlend, CD_HermiteCable_Dyn_End, CD_HCDYN_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Init, CD_HFMF_Set_EndConnection, &
                                           CD_HFMF_Set_Torsion, CD_HFMF_UpdateStates, CD_HFMF_Set_SegmentLength, &
+                                          CD_HFMF_SetCoupledKinematics, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, CD_HFMF_MirrorSize, &
                                           CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
@@ -75,7 +81,11 @@ PROGRAM test_control_torsion
   CALL check_quasi_static('condensed, coupled', KTT, 0.0_wp)
   CALL check_quasi_static('nodal twist, coupled', KTT, 1.0e-9_wp)
   CALL check_damping_rate()
-  CALL check_rate_identity()
+  CALL check_rate_identity('interior', [5, 6], 0.0_wp)
+  CALL check_rate_identity('End B rigid', [1, 2], 0.0_wp)
+  CALL check_rate_identity('fairlead, End A rigid', [NE - 1, NE], 0.0_wp)
+  CALL check_rate_identity('interior, coupled', [5, 6], 0.5_wp)
+  CALL check_rate_identity('fairlead, coupled', [NE - 1, NE], 0.5_wp)
   CALL check_rebuild()
   CALL check_energy()
   CALL check_lag()
@@ -289,19 +299,27 @@ CONTAINS
   END SUBROUTINE check_damping_rate
 
   ! ------------------------------------------------------------------------------------------
-  SUBROUTINE check_rate_identity()
-    !! F: a bowed line at rest (transverse DOFs free, nodal twist, Bt = 30 N m2 s, no coupling),
-    !! elements 5 and 6 at the rate l0_dot = 0.02 m/s: the change of their committed torque is
-    !! Bt l0_dot d(tau/l0)/dl0 at fixed q, against central differences of the element twist over
-    !! l0 (+- 1e-5 m), and against the straight-line value -Bt l0_dot tau/l0^2 that leaves out
-    !! the shape's dependence on l0.
-    REAL(wp), PARAMETER :: BT = 30.0_wp, RATE = 0.02_wp, DELTA = 1.0e-5_wp
-    INTEGER, PARAMETER :: EL(2) = [5, 6]
-    TYPE(CD_HermiteCableDynType) :: m
+  SUBROUTINE check_rate_identity(label, el, kc)
+    !! F: a bowed line at rest whose tangent DOFs are neither unit nor along the chord (transverse
+    !! DOFs free, node 1 and the last node held, nodal twist Irn 0.05 kg m, Bt = 30 N m2 s, rigid
+    !! torsional ends, coupling K/GJ = kc), the elements el at the rate l0_dot = 0.02 m/s:
+    !!  - the change of their committed torque is Bt l0_dot d(tau/l0)/dl0 at fixed q, against
+    !!    central differences of the element twist (with the coupling term (K/GJ)(l - l0)) over
+    !!    l0 (+- 1e-5 m), and against the straight-line value -Bt l0_dot tau/l0^2;
+    !!  - the element torque's tangent in its 12 DOFs and in its End-2 angle as a step assembles
+    !!    it (the last assembly of a two-iteration step, at the accepted trial iterate, whose q, v,
+    !!    angles and rates the test reads back and checks against the torque the assembly kept),
+    !!    against central differences of the torque at that state (+- 1e-6), and the same
+    !!    differences without the rate, which the check must resolve.
+    CHARACTER(*), INTENT(IN) :: label
+    INTEGER, INTENT(IN) :: el(2)
+    REAL(wp), INTENT(IN) :: kc
+    REAL(wp), PARAMETER :: BT = 30.0_wp, RATE = 0.02_wp, DELTA = 1.0e-5_wp, HQ = 1.0e-6_wp
+    TYPE(CD_HermiteCableDynType) :: m, base, pert, at, at0
     TYPE(CD_HermiteTorsionType) :: tors
     REAL(wp) :: l0(NE), q(NDOF), s, g(NDOF), raw, tw0(NE), twp(NE), twm(NE), mt0(NE), mt1(NE)
-    REAL(wp) :: fd(2), share(2), shape(2), err
-    INTEGER :: i, k, es
+    REAL(wp) :: fd(2), share(2), shape(2), err, dq(13), dfd(13), dfd0(13), terr, tres, mp, mm, mt_at, state_err
+    INTEGER :: i, k, j, es
     CHARACTER(300) :: em
     l0 = 1.0_wp
     q = 0.0_wp
@@ -310,13 +328,13 @@ CONTAINS
       q(6*i - 5) = s
       q(6*i - 4) = 0.8_wp*SIN(PI*s/LS)**2
       q(6*i - 3) = 0.4_wp*SIN(2.0_wp*PI*s/LS)**2
-      q(6*i - 2) = 1.0_wp
-      q(6*i - 1) = 0.8_wp*(PI/LS)*SIN(2.0_wp*PI*s/LS)
-      q(6*i) = 0.4_wp*(2.0_wp*PI/LS)*SIN(4.0_wp*PI*s/LS)
+      q(6*i - 2) = 1.0_wp + 0.05_wp*s
+      q(6*i - 1) = 0.8_wp*(PI/LS)*SIN(2.0_wp*PI*s/LS) + 0.1_wp
+      q(6*i) = 0.4_wp*(2.0_wp*PI/LS)*SIN(4.0_wp*PI*s/LS) - 0.07_wp
     END DO
     CALL CD_HermiteCable_Dyn_Init(m, l0, [(EA, k=1, NE)], [(EI, k=1, NE)], [(1.0_wp, k=1, NE)], [(0.0_wp, k=1, NE)], &
                                   q, [1, 2, 3, NDOF - 5, NDOF - 4, NDOF - 3], -1.0e3_wp, 0.0_wp, 0.0_wp, es, em)
-    CALL require(es == CD_HCDYN_OK, 'F: init: '//TRIM(em))
+    CALL require(es == CD_HCDYN_OK, 'F '//label//': init: '//TRIM(em))
     IF (es /= CD_HCDYN_OK) RETURN
     tors%active = .TRUE.
     tors%phi = 1.0_wp
@@ -324,44 +342,129 @@ CONTAINS
                          0.0_wp, 0.0_wp, 1.0_wp], [3, 4])
     tors%end_compliance = 0.0_wp
     tors%gj = [(GJ, k=1, NE)]
+    IF (kc > 0.0_wp) tors%couple = [(kc, k=1, NE)]
     tors%irn = [(0.05_wp, k=1, NE)]
     tors%bt = [(BT, k=1, NE)]
-    CALL CD_HermiteTorsion_Line(q, l0, tors%ends, raw, g, es, em)
+    CALL CD_HermiteTorsion_Line(q, l0, tors%ends, raw, g, es, em, couple=tors%couple)
     tors%theta = CD_HermiteTorsion_Unwrap(raw, 0.0_wp)
     tors%has_theta = .TRUE.
     CALL CD_HermiteCable_Dyn_Set_Torsion(m, tors, es, em)
-    CALL require(es == CD_HCDYN_OK .AND. m%tw_active, 'F: nodal twist on the bowed line: '//TRIM(em))
+    CALL require(es == CD_HCDYN_OK .AND. m%tw_active, 'F '//label//': nodal twist on the bowed line: '//TRIM(em))
     IF (es /= CD_HCDYN_OK) RETURN
-    CALL CD_HermiteCable_Dyn_Element_Twist(m, tw0, es, em)
+    CALL coupled_twist(m, kc, tw0)
     CALL CD_HermiteCable_Dyn_Element_Torque(m, mt0, es, em)
     ! the element twist at l0 +- DELTA (the committed angles and q kept)
-    CALL CD_HermiteCable_Dyn_Set_SegmentLength(m, EL, l0(EL) + DELTA, [0.0_wp, 0.0_wp], es, em)
-    CALL CD_HermiteCable_Dyn_Element_Twist(m, twp, es, em)
-    CALL CD_HermiteCable_Dyn_Set_SegmentLength(m, EL, l0(EL) - DELTA, [0.0_wp, 0.0_wp], es, em)
-    CALL CD_HermiteCable_Dyn_Element_Twist(m, twm, es, em)
+    CALL CD_HermiteCable_Dyn_Set_SegmentLength(m, el, l0(el) + DELTA, [0.0_wp, 0.0_wp], es, em)
+    CALL coupled_twist(m, kc, twp)
+    CALL CD_HermiteCable_Dyn_Set_SegmentLength(m, el, l0(el) - DELTA, [0.0_wp, 0.0_wp], es, em)
+    CALL coupled_twist(m, kc, twm)
     ! the rate at the base lengths, committed, and the torque of that committed state
-    CALL CD_HermiteCable_Dyn_Set_SegmentLength(m, EL, l0(EL), [RATE, RATE], es, em, restored=.TRUE.)
-    CALL require(es == CD_HCDYN_OK, 'F: the committed rate: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Set_SegmentLength(m, el, l0(el), [RATE, RATE], es, em, restored=.TRUE.)
+    CALL require(es == CD_HCDYN_OK, 'F '//label//': the committed rate: '//TRIM(em))
     CALL CD_HermiteCable_Dyn_Recompute_Acceleration(m, es, em)
-    CALL require(es == CD_HCDYN_OK, 'F: the committed state with the rate: '//TRIM(em))
+    CALL require(es == CD_HCDYN_OK, 'F '//label//': the committed state with the rate: '//TRIM(em))
     CALL CD_HermiteCable_Dyn_Element_Torque(m, mt1, es, em)
     err = 0.0_wp
     DO k = 1, 2
-      i = EL(k)
+      i = el(k)
       fd(k) = BT*RATE*(twp(i)/(l0(i) + DELTA) - twm(i)/(l0(i) - DELTA))/(2.0_wp*DELTA)
       shape(k) = -BT*RATE*tw0(i)/l0(i)**2
       share(k) = mt1(i) - mt0(i)
       err = MAX(err, ABS(share(k) - fd(k))/ABS(fd(k)))
     END DO
-    WRITE (*, '(A,2ES13.5,A,2ES13.5,A,2ES13.5,A,ES9.2)') 'F length-rate damping torque ', share, &
-      '; by differences ', fd, '; straight-line value ', shape, '; rel. error ', err
-    CALL require(err <= 1.0e-6_wp, 'F: the length-rate damping is Bt l0_dot d(tau/l0)/dl0 at fixed q')
+    ! the tangent of the last assembly of a step (full Newton: the accepted trial of its first
+    ! iteration) at the state of that assembly, read back from the step's staged iterate
+    base = m
+    CALL CD_HermiteCable_Dyn_Step(m, 1.0e-4_wp, 2, 1.0e-14_wp, es, em)
+    at = base
+    at%q = m%ws_qa
+    at%v = m%ws_va
+    at%tw_phi = m%tw_pe
+    at%tw_w = m%tw_we
+    at0 = at
+    at0%l0_dot = 0.0_wp
+    at0%l0_dot_c = 0.0_wp
+    terr = 0.0_wp
+    tres = 0.0_wp
+    state_err = 0.0_wp
+    DO k = 1, 2
+      i = el(k)
+      dq(1:12) = m%tw_ek(i)*m%tw_eg(:, i) + m%tw_ed(i)*m%tw_ehv(:, i)
+      dq(13) = m%tw_ek(i)
+      pert = at
+      CALL perturbed_torque(pert, i, 1, 0.0_wp, mt_at)
+      state_err = MAX(state_err, ABS(mt_at - m%tw_me(i))/ABS(m%tw_me(i)))
+      DO j = 1, 13
+        pert = at
+        CALL perturbed_torque(pert, i, j, HQ, mp)
+        pert = at
+        CALL perturbed_torque(pert, i, j, -HQ, mm)
+        dfd(j) = (mp - mm)/(2.0_wp*HQ)
+        pert = at0
+        CALL perturbed_torque(pert, i, j, HQ, mp)
+        pert = at0
+        CALL perturbed_torque(pert, i, j, -HQ, mm)
+        dfd0(j) = (mp - mm)/(2.0_wp*HQ)
+      END DO
+      terr = MAX(terr, MAXVAL(ABS(dq - dfd))/MAXVAL(ABS(dfd)))
+      tres = MAX(tres, MAXVAL(ABS(dfd - dfd0))/MAXVAL(ABS(dfd)))
+    END DO
+    WRITE (*, '(A,A,A,2ES13.5,A,2ES13.5,A,2ES13.5,A,ES9.2,A,ES9.2,A,ES9.2,A,ES9.2)') 'F length-rate damping (', &
+      label, '): torque ', share, '; by differences ', fd, '; straight-line value ', shape, '; rel. error ', err, &
+      '; tangent against differences ', terr, ', its length-rate share ', tres, ' (state read back to ', &
+      state_err, ')'
+    CALL require(err <= 1.0e-6_wp, 'F '//label//': the length-rate damping is Bt l0_dot d(tau/l0)/dl0 at fixed q')
     CALL require(MAXVAL(ABS(shape - fd)) > 1.0e3_wp*err*MAXVAL(ABS(fd)), &
-                 'F: the element shape''s dependence on l0 is resolved by the check')
-    CALL require(same_bits(mt1(1:4), mt0(1:4)) .AND. same_bits(mt1(7:NE), mt0(7:NE)), &
-                 'F: elements without a rate keep their torque')
+                 'F '//label//': the element shape''s dependence on l0 is resolved by the check')
+    CALL require(state_err <= 1.0e-12_wp, 'F '//label//': the state of the step''s last assembly is read back')
+    CALL require(terr <= 1.0e-6_wp, 'F '//label//': the assembled torque tangent matches central differences')
+    CALL require(tres > 1.0e2_wp*terr, 'F '//label//': the tangent check resolves the length-rate share')
+    DO k = 1, NE
+      IF (ANY(el == k)) CYCLE
+      CALL require(same_bits(mt1(k:k), mt0(k:k)), 'F '//label//': elements without a rate keep their torque')
+    END DO
     CALL CD_HermiteCable_Dyn_End(m)
+    CALL CD_HermiteCable_Dyn_End(base)
+    CALL CD_HermiteCable_Dyn_End(pert)
+    CALL CD_HermiteCable_Dyn_End(at)
+    CALL CD_HermiteCable_Dyn_End(at0)
   END SUBROUTINE check_rate_identity
+
+  SUBROUTINE coupled_twist(m, kc, tw)
+    !! The element twists tau_e of the nodal twist: the material twist (the query) plus the
+    !! coupling term (K/GJ)(l_e - l0_e) of the stretched element length.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: m
+    REAL(wp), INTENT(IN) :: kc
+    REAL(wp), INTENT(OUT) :: tw(NE)
+    INTEGER :: e, es
+    CHARACTER(300) :: em
+    CALL CD_HermiteCable_Dyn_Element_Twist(m, tw, es, em)
+    IF (.NOT. kc > 0.0_wp) RETURN
+    DO e = 1, NE
+      tw(e) = tw(e) + kc*(CD_HermiteTorsion_Element_Stretch(m%q(6*e - 5:6*e + 6), m%l0(e), 4) - m%l0(e))
+    END DO
+  END SUBROUTINE coupled_twist
+
+  SUBROUTINE perturbed_torque(m, e, j, h, mt)
+    !! The committed torque of element e with its DOF j (1-12: [r1, m1, r2, m2]; 13: the End-2
+    !! angle) moved by h, from a re-derived committed state.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: m
+    INTEGER, INTENT(IN) :: e, j
+    REAL(wp), INTENT(IN) :: h
+    REAL(wp), INTENT(OUT) :: mt
+    REAL(wp) :: tq(NE)
+    INTEGER :: es
+    CHARACTER(300) :: em
+    IF (j <= 12) THEN
+      m%q(6*e - 6 + j) = m%q(6*e - 6 + j) + h
+    ELSE
+      m%tw_phi(e + 1) = m%tw_phi(e + 1) + h
+    END IF
+    CALL CD_HermiteCable_Dyn_Recompute_Acceleration(m, es, em)
+    CALL CD_HermiteCable_Dyn_Element_Torque(m, tq, es, em)
+    mt = tq(e)
+    IF (es /= CD_HCDYN_OK) mt = HUGE(1.0_wp)
+  END SUBROUTINE perturbed_torque
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE check_rebuild()
@@ -744,6 +847,48 @@ CONTAINS
                  same_bits(cab2%line%tw_mt, mref), 'R: the run rebuilt from the mirror continues bit-identically')
     WRITE (*, '(A,F9.5,A,F9.5,A)') 'R restart mid-ramp: span ', SUM(cab%line%l0(19:20)), ' m, end twist angle ', &
       pref(SIZE(pref)), ' rad; snapshot and mirror runs identical'
+    ! a non-stepping write of the coupled end at step 250 turned 0.05 rad further: the committed
+    ! torque is then the summed twist over the compliance, which the snapshot and the mirror
+    ! must bring back as it is
+    BLOCK
+      TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab3
+      REAL(wp) :: t, x(3), v(3), a(3), dcm(3, 3), tq_keep, tq_formula
+      LOGICAL :: ok2
+      ALLOCATE (cab3)
+      t = 2.5_wp
+      x = [LS, 0.05_wp*SIN(2.0_wp*t), 0.0_wp]
+      v = [0.0_wp, 0.1_wp*COS(2.0_wp*t), 0.0_wp]
+      a = [0.0_wp, -0.2_wp*SIN(2.0_wp*t), 0.0_wp]
+      dcm = 0.0_wp
+      dcm(1, 1) = 1.0_wp
+      dcm(2, 2) = COS(2.0_wp*t + 0.05_wp)
+      dcm(3, 3) = COS(2.0_wp*t + 0.05_wp)
+      dcm(2, 3) = SIN(2.0_wp*t + 0.05_wp)
+      dcm(3, 2) = -SIN(2.0_wp*t + 0.05_wp)
+      CALL CD_HFMF_SetCoupledKinematics(cab, x, v, a, es, em, u_orientation=dcm, &
+                                        u_angular_velocity=[2.0_wp, 0.0_wp, 0.0_wp], &
+                                        u_angular_acceleration=[0.0_wp, 0.0_wp, 0.0_wp])
+      CALL require(es == CD_HFMF_OK, 'R: the non-stepping frame write: '//TRIM(em))
+      tq_keep = cab%line%torsion%torque
+      tq_formula = (cab%line%torsion%phi - cab%line%torsion%theta)/ &
+                   CD_HermiteTorsion_Compliance(cab%line%torsion, cab%line%l0)
+      CALL CD_HFMF_PackMirror(cab, mirror, es, em)
+      CALL CD_HFMF_Snapshot(cab, es, em)
+      CALL coupled_march(cab, 250, 251, ok2)
+      CALL CD_HFMF_Restore(cab, es, em)
+      CALL require(es == CD_HFMF_OK .AND. ok2 .AND. same_bits([cab%line%torsion%torque], [tq_keep]), &
+                   'R: the snapshot brings back the committed torque of a frame write as it was formed')
+      CALL build_coupled(cab3, es, em)
+      CALL coupled_command(cab3, 250, es, em, restored=.TRUE.)
+      CALL CD_HFMF_UnpackMirror(cab3, mirror, t, es, em)
+      CALL require(es == CD_HFMF_OK .AND. same_bits([cab3%line%torsion%torque], [tq_keep]), &
+                   'R: the mirror brings back the committed torque of a frame write as it was formed')
+      WRITE (*, '(A,ES24.16,A,ES10.3)') 'R committed torque after a frame write ', tq_keep, &
+        ' N m; re-derived as (Phi - Theta)/C it would differ by ', tq_formula - tq_keep
+      CALL require(.NOT. same_bits([tq_formula], [tq_keep]), &
+                   'R: the frame write''s torque differs from (Phi - Theta)/C, so the check resolves it')
+      CALL CD_HFMF_End(cab3)
+    END BLOCK
     CALL CD_HFMF_End(cab)
     CALL CD_HFMF_End(cab2)
   END SUBROUTINE check_restart
