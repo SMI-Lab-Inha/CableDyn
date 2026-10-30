@@ -140,6 +140,24 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                       $<$<COMPILE_LANGUAGE:C>:-Wall>
                       $<$<COMPILE_LANGUAGE:C>:-Wextra>)
 endif()
+# Local variables are automatic in every procedure, whatever the OpenMP setting: separate
+# models (C API handles, Python objects, FAST.Farm turbines) may step concurrently on
+# several threads, and a local in static storage is shared by every thread that runs its
+# procedure. Without OpenMP, IFX keeps fixed-size local arrays and CHARACTER locals in
+# static storage (its default, /Qauto-scalar, makes only the numeric and LOGICAL scalars
+# automatic), and gfortran moves a local array larger than -fmax-stack-var-size (64 KiB)
+# there; /Qauto (-auto) and -frecursive put them on the stack (-fopenmp already implies
+# -frecursive, so the default GNU build is unchanged). A value that must persist between
+# calls is SAVEd explicitly.
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+  add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-frecursive>)
+elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
+  if(WIN32)
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:/Qauto>)
+  else()
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-auto>)
+  endif()
+endif()
 # GNU builds on Windows (MinGW-w64): every executable gets a 64 MiB stack reserve instead of
 # the 2 MiB MinGW default. With OpenMP, gfortran places fixed-size local arrays on the stack
 # (-fopenmp implies -frecursive), and the stack depth of the OpenBLAS kernels varies with the

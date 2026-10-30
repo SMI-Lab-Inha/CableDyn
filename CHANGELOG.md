@@ -460,6 +460,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
   equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
   static passes too (4 here); the rod holds its pose to the output's 8 digits.
+- Separate handles used on several threads at once failed in the Windows wheel and the release
+  binaries (Intel ifx without OpenMP): ifx kept the fixed-size local arrays and `CHARACTER` locals
+  of every procedure in static storage, which all threads share, so an initialisation that ran
+  while other handles stepped stopped with "tangent assembly failed" or "band scatter" errors
+  (gfortran builds were not affected: `-fopenmp` makes every local automatic). Every build now
+  makes local variables automatic, `/Qauto` (`-auto`) with ifx and `-frecursive` with gfortran,
+  which `-fopenmp` already implied, so the default gfortran build is unchanged. The release
+  benchmark decks run as fast or faster (0.3 to 21 %); ifx results change at round-off (with
+  `/fp:precise` every example is bit-identical).
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations
