@@ -4800,3 +4800,27 @@ def test_viv_rms_window_option_is_non_negative():
     DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n0.25 VIVrmsWindow\n")))
     with pytest.raises(DeckFormatError, match="VIVrmsWindow"):
         DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n-1.0 VIVrmsWindow\n")))
+
+
+def test_as_laid_statics_refused_on_a_finite_ei_line_between_two_moving_points():
+    # native build_one_hermite_cable: no anchored end to lay the line from
+    deck = (
+        "title\n"
+        "--------------------- LINE TYPES ---------------------------------------\n"
+        "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2 0.2 1.0 0.0\n"
+        "--------------------- POINTS -------------------------------------------\n"
+        "1 Coupled 0 0 -10 0 0 0 0\n"
+        "2 Vessel 300 0 -10 0 0 0 0\n"
+        "--------------------- LINES --------------------------------------------\n"
+        "1 1 2 -\n"
+        "--------------------- SECTIONS -----------------------------------------\n"
+        "1 chain 620 30\n"
+        "--------------------- OPTIONS ------------------------------------------\n"
+        "100 WtrDpth\n0.1 dtM\n10.0 TMax\n0.5 frictionMu\nasLaid staticsFriction\n"
+        "--------------------- OUTPUTS ------------------------------------------\n"
+        "FairTen1\n"
+        "--------------------- need this line -----------------------------------\n"
+    )
+    with pytest.raises(DeckFormatError, match="has a moving End B"):
+        DeckFile.from_text(deck)
+    DeckFile.from_text(deck.replace("asLaid staticsFriction", "none staticsFriction"))

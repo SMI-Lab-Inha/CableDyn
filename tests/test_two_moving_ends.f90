@@ -43,7 +43,10 @@ PROGRAM test_two_moving_ends
   !!      from turbine 2's (the turbine map), and, driven by prescribed turbine motions, reports the
   !!      end tensions of the standalone TURBINES deck run with the same motions (solver tolerances);
   !!   FT the torsional line between two host-driven columns, each turned by its own host orientation:
-  !!      equal rolls keep the torque, opposite rolls change it by GJ (2 phi) / L.
+  !!      equal rolls keep the torque, opposite rolls change it by GJ (2 phi) / L;
+  !!   FP a standalone TURBINES deck whose turbines start yawed (PtfmInit) reads each end's Ez and Nx
+  !!      in its turbine's axes, as FAST.Farm does: the clamped, twisted line between the two turbines
+  !!      reports the FAST.Farm aggregate's tensions, torque and end curvature (solver tolerances).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Init_Deck_HermiteCable, CD_DECKDRV_OK
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_Step_Moving, &
@@ -74,6 +77,7 @@ PROGRAM test_two_moving_ends
   CALL check_torsion_restart()
   CALL check_farm_shared_line()
   CALL check_aggregate_torsion()
+  CALL check_farm_ptfm_parity()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -1270,5 +1274,118 @@ CONTAINS
     CALL require(err(1) <= 1.0e-6_wp*GJ, 'FT: opposite host rolls change the torque by GJ (2 phi) / L')
     CALL require(err(2) <= 1.0e-6_wp*GJ, 'FT: equal host rolls keep the torque')
   END SUBROUTINE check_aggregate_torsion
+
+  SUBROUTINE write_farm_tdeck(path, ptfm, motion, tmax)
+    !! The clamped straight torsion line of write_tdeck between two turbines 100 m apart, End A on
+    !! Turbine1 and End B on Turbine2 at (0, 0, -50) in turbine axes; ptfm: write the TURBINES PtfmInit
+    !! columns (turbine 1 yawed +15 deg, turbine 2 -8 deg).
+    CHARACTER(*), INTENT(IN) :: path, motion
+    LOGICAL, INTENT(IN) :: ptfm
+    REAL(wp), INTENT(IN) :: tmax
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'two moving ends farm torsion gate'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    WRITE (u, '(A,ES24.16,A)') 'cab 0.2 ', 1025.0_wp*0.25_wp*PI*0.04_wp, &
+      ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-12 0.0 0.0 0.0 0.0'
+    WRITE (u, '(A)') '--- TURBINES ---'
+    IF (ptfm) THEN
+      WRITE (u, '(A)') 'J X0 Y0 Z0 PtfmSurge PtfmSway PtfmHeave PtfmRoll PtfmPitch PtfmYaw'
+      WRITE (u, '(A)') '1 0 0 0 0 0 0 0 0 15'
+      WRITE (u, '(A)') '2 100 0 0 0 0 0 0 0 -8'
+    ELSE
+      WRITE (u, '(A)') 'J X0 Y0 Z0'
+      WRITE (u, '(A)') '1 0 0 0'
+      WRITE (u, '(A)') '2 100 0 0'
+    END IF
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Turbine1 0 0 -50 0 0 0 0'
+    WRITE (u, '(A)') '2 Turbine2 0 0 -50 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 cab 100.0 40'
+    WRITE (u, '(A)') '--- END CONNECTIONS ---'
+    WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+    WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
+    WRITE (u, '(A)') '1 A Rigid 1 0 0 Rigid 0 0 1 0'
+    WRITE (u, '(A)') '1 B Rigid 1 0 0 Rigid 0 0 1 90'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '0.05 dtM'
+    WRITE (u, '(F7.3,A)') tmax, ' TMax'
+    IF (LEN_TRIM(motion) > 0) WRITE (u, '(A)') TRIM(motion)//' motionFile'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1 AnchTen1 Torq1N1 Torq1N41 Curv1N2 Curv1N40'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+  END SUBROUTINE write_farm_tdeck
+
+  SUBROUTINE check_farm_ptfm_parity()
+    !! FP. Turbines yawed by PtfmInit (+15 and -8 deg about their reference points, which carry the
+    !!     fairleads on their z axes, so the ends do not move but their frames turn): the clamped line,
+    !!     twisted 90 deg, is bent at both ends by the turned Ez and twisted by the turned Nx. The
+    !!     standalone run (held, 10 steps) and the FAST.Farm aggregate (farm_ptfm_init, the host
+    !!     passing each turbine's orientation) agree in every channel at every step.
+    INTEGER, PARAMETER :: NSTEP = 10, NCOL = 7
+    REAL(wp) :: rows(NCOL, NSTEP + 1), pos(3, 2), zero3(3, 2), ori(3, 3, 2), v, err, scale, yaw(2)
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: agg
+    INTEGER :: n, k, ic, es, nit
+    LOGICAL :: ok, conv, stalled
+    CHARACTER(1024) :: em
+    CALL write_farm_tdeck('tme_fp_sa.dat', .TRUE., '', NSTEP*0.05_wp)
+    CALL run_deck('tme_fp_sa.dat', 'tme_fp_sa', ok, em)
+    CALL require(ok, 'FP: the standalone TURBINES torsion deck runs: '//TRIM(em))
+    CALL read_rows('tme_fp_sa.out', rows, n, ok)
+    CALL require(ok .AND. n == NSTEP + 1, 'FP: standalone output readable')
+    IF (.NOT. ok) RETURN
+    yaw = [15.0_wp, -8.0_wp]*PI/180.0_wp
+    ALLOCATE (agg)
+    CALL write_farm_tdeck('tme_fp_agg.dat', .FALSE., '', NSTEP*0.05_wp)
+    CALL CD_AGG_Init_From_Deck(agg, 'tme_fp_agg.dat', 0.05_wp, es, em, n_turbines=2, &
+                               turbine_ref_pos=RESHAPE([0.0_wp, 0.0_wp, 0.0_wp, 100.0_wp, 0.0_wp, 0.0_wp], [3, 2]), &
+                               farm_ptfm_init=RESHAPE([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, yaw(1), &
+                                                       0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, yaw(2)], [6, 2]), &
+                               forbid_deck_ambient=.TRUE., host_orientation=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'FP: the FAST.Farm aggregate builds: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    agg%cables(1)%tol = 1.0e-8_wp
+    agg%cables(1)%max_iter = 30
+    pos(:, 1) = [0.0_wp, 0.0_wp, -50.0_wp]
+    pos(:, 2) = [100.0_wp, 0.0_wp, -50.0_wp]
+    zero3 = 0.0_wp
+    DO k = 1, 2
+      ori(:, :, k) = RESHAPE([COS(yaw(k)), -SIN(yaw(k)), 0.0_wp, SIN(yaw(k)), COS(yaw(k)), 0.0_wp, &
+                              0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+    END DO
+    err = 0.0_wp
+    scale = 0.0_wp
+    DO k = 0, NSTEP
+      IF (k > 0) THEN
+        CALL CD_AGG_Step_Moving(agg, 0.05_wp, pos, zero3, zero3, conv, stalled, nit, es, em, t_committed=0.05_wp*k, &
+                                orientation=ori, angular_velocity=zero3, angular_acceleration=zero3)
+        CALL require(es == CD_AGG_OK, 'FP: aggregate step: '//TRIM(em))
+        IF (es /= CD_AGG_OK) EXIT
+      END IF
+      DO ic = 1, NCOL - 1
+        CALL CD_AGG_EvalChannel(agg, ic, v, es, em)
+        err = nan_max_abs([err, ABS(v - rows(ic + 1, k + 1))/MAX(1.0_wp, ABS(rows(ic + 1, k + 1)))])
+        scale = MAX(scale, ABS(rows(ic + 1, k + 1)))
+      END DO
+    END DO
+    WRITE (*, '(A,ES10.3,A,4ES12.4)') 'FAST.Farm vs standalone, yawed turbines, torsion: largest relative channel '// &
+      'difference ', err, '; standalone t = 0: FairTen, AnchTen, Torq ', rows(2:4, 1), rows(6, 1)
+    CALL require(err <= 1.0e-5_wp, 'FP: the standalone TURBINES deck reads its end frames in the turbines'' axes')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE check_farm_ptfm_parity
 
 END PROGRAM test_two_moving_ends

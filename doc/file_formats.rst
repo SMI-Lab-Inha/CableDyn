@@ -176,15 +176,16 @@ Tokens after the eleventh are ignored, except on a deck with a torsional line (b
 
 **Roll column (torsion).** On a deck where some finite-EI line is solved in torsion, restrained
 at both ends or at one (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`), a numeric
-twelfth token is read as the roll of the frame of a line's moving end (End A, or End B in a deck
-that lists the anchor as End A), in degrees, right-handed about the line tangent pointing into the line from that
-end. It imposes a twist history without turning the point: the line's imposed twist is
+twelfth token is read as the roll of the frame of a line's moving end restrained in torsion (End A,
+or End B in a deck that lists the anchor as End A; both ends of a line between two moving points),
+in degrees, right-handed about the line tangent pointing into the line from that end. It imposes a
+twist history without turning the point: the line's imposed twist is
 
 .. math::
 
-   \Phi(t) = \text{Pretwist}_B - \text{Pretwist}_A - \text{roll}(t),
+   \Phi(t) = \text{Pretwist}_B - \text{Pretwist}_A - \text{roll}_A(t) - \text{roll}_B(t),
 
-whichever end moves, so a positive roll lowers :math:`\Phi`. At End A it has the sense of
+the roll of a ``Fixed`` end being 0, so a positive roll lowers :math:`\Phi`. At End A it has the sense of
 ``Pretwist`` (A) and of rolling the End A frame through a body or vessel; at End B, where the
 inward tangent is ``−Ez``, it has the opposite sense to ``Pretwist`` (B). Rules:
 

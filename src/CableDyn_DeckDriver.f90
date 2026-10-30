@@ -8749,6 +8749,8 @@ CONTAINS
     CHARACTER(1024) :: fail_msg
     TYPE(CD_ModelType), ALLOCATABLE :: models(:)
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: hermite_models(:)
+    ! the global-to-parent DCM of each line end at the static start (turbine_end_dcm)
+    REAL(wp) :: dcm_end(3, 3, 2)
     TYPE(CD_SystemType) :: point_system
     TYPE(CD_BathymetryType) :: bathymetry
     TYPE(DeckFailure), ALLOCATABLE :: fails(:)
@@ -8933,14 +8935,20 @@ CONTAINS
         END DO
         ALLOCATE (hermite_models(SIZE(lines)))
         DO li = 1, SIZE(lines)
+          ! a TURBINES deck: an end on a Turbine<J> point takes its Ez and Nx in that turbine's axes,
+          ! turned by the turbine's PtfmInit at the static start (as the FAST.Farm aggregate does)
+          dcm_end(:, :, 1) = turbine_end_dcm(points, opts, lines(li)%nodeA)
+          dcm_end(:, :, 2) = turbine_end_dcm(points, opts, lines(li)%nodeB)
           IF (opts%has_bathymetry_file) THEN
             CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
                                          hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
-                                         bathymetry=bathymetry, install_viv=.TRUE., allow_moving_end_b=.TRUE.)
+                                         bathymetry=bathymetry, install_viv=.TRUE., allow_moving_end_b=.TRUE., &
+                                         fairlead_orientation=dcm_end(:, :, 1), end_b_orientation=dcm_end(:, :, 2))
           ELSE
             CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
                                          hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
-                                         install_viv=.TRUE., allow_moving_end_b=.TRUE.)
+                                         install_viv=.TRUE., allow_moving_end_b=.TRUE., &
+                                         fairlead_orientation=dcm_end(:, :, 1), end_b_orientation=dcm_end(:, :, 2))
           END IF
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
         END DO
@@ -29999,6 +30007,30 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE check_motion_roll_lines
+
+  PURE FUNCTION turbine_end_dcm(points, opts, point_id) RESULT(dcm)
+    !! The global-to-parent DCM, at the static start, of a line end on point point_id: on a
+    !! TURBINES deck a Turbine<J> point's parent is turbine J, turned by its PtfmInit rotation
+    !! (ptfm_zyx_dcm, the FAST.Farm farm_ptfm_init convention); identity otherwise.
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    INTEGER, INTENT(IN) :: point_id
+    REAL(wp) :: dcm(3, 3)
+    INTEGER :: j, k
+    dcm = CD_ZERO
+    dcm(1, 1) = CD_ONE
+    dcm(2, 2) = CD_ONE
+    dcm(3, 3) = CD_ONE
+    IF (opts%n_turb < 1) RETURN
+    j = 0
+    DO k = 1, SIZE(points)
+      IF (points(k)%id == point_id) j = k
+    END DO
+    IF (j < 1) RETURN
+    k = points(j)%turbine_id
+    IF (k < 1 .OR. k > SIZE(opts%turb_ptfm, 2)) RETURN
+    dcm = ptfm_zyx_dcm(opts%turb_ptfm(4:6, k))
+  END FUNCTION turbine_end_dcm
 
   SUBROUTINE hermite_step_ends(cable, up, uv, ua, ubp, ubv, uba, es, em, u_orientation, u_angular_velocity, &
                                u_angular_acceleration, u_twist, ub_orientation, ub_angular_velocity, &

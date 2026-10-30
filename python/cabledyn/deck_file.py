@@ -3231,6 +3231,25 @@ class DeckFile:
                     "Coupled or Vessel"
                 )
             raise DeckFormatError(f"{self._at(row)}: static LINE End B must be Fixed")
+        # native build_one_hermite_cable: the as-laid reference lays a line on the seabed from its
+        # anchored end, which a finite-EI line between two moving points does not have
+        statics_row = option_by_key.get("statics_friction")
+        if (
+            statics_row is not None
+            and statics_row.values[0].lower() != "none"
+            and friction_active
+            and (has_depth or has_bathymetry)
+        ):
+            for line_id, (_, end_b) in normalized_line_endpoints.items():
+                end_b_type = point_types.get(end_b, end_b)
+                if end_b_type == "fixed" or not _end_b_holds_connection(end_b_type):
+                    continue
+                if any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id]):
+                    raise DeckFormatError(
+                        f"{self._label}: OPTION staticsFriction asLaid lays a line on the seabed "
+                        f"from its anchored end; finite-EI LINE {line_id} has a moving End B (both "
+                        "ends on moving points): use staticsFriction none"
+                    )
         # native CD_Deck_Query_dtM has_objects, on the parsed (zero-length rods collapsed) deck
         has_objects = (
             bool(self._rows("BODIES"))

@@ -261,6 +261,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the fairlead already moved to row 1. A deck whose row 1 is off the deck fairlead changes
   `.static.out` only (a 2 cm offset changed the fairlead x by 0.02 m and its tension from 3.5 MN
   back to the static 29 kN); the example decks are unchanged.
+- Standalone `TURBINES` decks read the `END CONNECTIONS` direction `Ez` and torsion normal `Nx`
+  of an end on a `Turbine<J>` point in that turbine's axes, turned by its `PtfmInit` rotation at
+  the static start, as the FAST.Farm aggregate does (they were global). A deck whose turbines
+  start rotated and whose finite-EI lines carry end connections or torsion changes; on a clamped
+  line twisted 90 deg between turbines yawed +15 and -8 deg the standalone run now matches the
+  FAST.Farm aggregate to 8e-9 in every channel. Decks without a `PtfmInit` rotation, or without
+  end connections and torsion, are unchanged.
 - `TMax = 0` checks the static start of any dynamic deck as it stands: a `motionFile` or
   `vesselMotion` record may run past `TMax` (its later rows are checked on the `dtM` grid and
   not used, so a long record also serves a shorter run), and `RangeStart` is accepted at

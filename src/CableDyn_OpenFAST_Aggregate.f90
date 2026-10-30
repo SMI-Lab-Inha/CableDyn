@@ -2883,7 +2883,7 @@ CONTAINS
     at_start = .FALSE.
     IF (PRESENT(step_start)) at_start = step_start
     IF (self%nhost_body > 0) THEN
-      c0 = self%ncp_sys + self%ncable + self%nhost_rod + 1
+      c0 = self%ncp_sys + self%ncable + self%ncable_b + self%nhost_rod + 1
       c1 = ncp_all(self)
       IF (PRESENT(orientation)) THEN
         CALL CD_Rigid6_SetHostKinematics(self%rigid6, position(:, c0:c1), velocity(:, c0:c1), &
@@ -2902,8 +2902,8 @@ CONTAINS
       END IF
     END IF
     IF (self%nhost_rod == 0) RETURN
-    c0 = self%ncp_sys + self%ncable + 1
-    c1 = self%ncp_sys + self%ncable + self%nhost_rod
+    c0 = self%ncp_sys + self%ncable + self%ncable_b + 1
+    c1 = self%ncp_sys + self%ncable + self%ncable_b + self%nhost_rod
     IF (PRESENT(orientation)) THEN
       IF (PRESENT(angular_velocity)) THEN
         CALL CD_Rod_SetHostKinematics(self%rod, position(:, c0:c1), velocity(:, c0:c1), acceleration(:, c0:c1), &

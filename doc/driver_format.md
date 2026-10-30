@@ -726,8 +726,9 @@ rod end, and `Free`/`Connect`-to-`Coupled` lines are left as written.
 
 - In a deck without dynamic points (`Connect`, `Free`, `Body<N>`, or `Rod<N>A/B`), End A must be a
   `Coupled`, `Vessel`, or `Body<N>` point and End B a `Fixed` point. A fairlead below its anchor
-  fails with `LINE End A fairlead (NodeA) must not be below End B anchor (NodeB)`. The exception
-  is a FAST.Farm shared line with both ends on `Turbine<J>` points.
+  fails with `LINE End A fairlead (NodeA) must not be below End B anchor (NodeB)`. The exceptions
+  are a FAST.Farm shared line with both ends on `Turbine<J>` points and a finite-EI line whose End
+  B is also a `Coupled`/`Vessel` point (a line between two moving points, driven at both ends).
 - In a deck with dynamic points, line ends may be `Fixed`, `Coupled`, `Vessel`, `Connect`, `Free`,
   `Body<N>`, or `Rod<N>A/B`.
 
@@ -1405,11 +1406,14 @@ cases. With an active path:
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
 plain numbers; tokens after the eleventh are ignored, except that a deck with a line solved in
 torsion reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the line's moving
-end, restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A),
-right-handed about the line tangent pointing into the line from that end. Either way it imposes
-`Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`: the roll has the sense of `Pretwist(A)` at End A
-(where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)` at End B (where it is
-`−Ez`). The roll is 0 at
+end restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A; both
+ends of a line between two moving points), right-handed about the line tangent pointing into the
+line from that end. It imposes `Phi(t) = Pretwist(B) − Pretwist(A) − roll(A)(t) − roll(B)(t)`,
+the roll of a `Fixed` end, or of an end free in torsion, being 0: the roll has the sense of
+`Pretwist(A)` at End A (where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)`
+at End B (where it is `−Ez`), so equal rolls of the two ends of a line between two moving points
+twist it by twice the roll, and a rigid roll of the line about its axis (opposite rolls) does not
+twist it. The roll is 0 at
 `t = 0` and is given on every row of the point or on none. Header lines must be comments. `time` must
 lie on the `0, dtM, 2·dtM, …` grid (rows after `TMax` are read and not used) and `point_id` must be
 a prescribed point. Each
