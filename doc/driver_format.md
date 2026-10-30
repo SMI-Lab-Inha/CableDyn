@@ -274,8 +274,9 @@ cable or wire rope (`T = EA ε + K τ`, `M = GJ τ + K ε`; see
 `GJ|K|Bt` adds the torsional damping `Bt` [N·m²·s] of the nodal twist (the torque
 `Bt dτ/dt`, stiffness-proportional: a torsional mode of frequency `ω` has the damping ratio
 `ω Bt/(2 GJ)`); a negative `Bt` is `-ζ`, the fraction of an element's critical torsional damping
-`l0 √(GJ Irn)` on the final mesh, as `BA` is for the axial damping. It needs a finite-EI type;
-`GJ|0|Bt` is damping without coupling.
+`l0 √(GJ Irn)` on the final mesh, as `BA` is for the axial damping (an element whose length
+active line control changes keeps its `ζ`). It needs a finite-EI type; `GJ|0|Bt` is damping
+without coupling.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -1143,8 +1144,14 @@ bounds that would make it zero or negative (possible when it is shorter than hal
   the bounds above, a cable of one section scales each element within [0.5, 2] of its initial
   length; on a cable of several sections the scaling can leave that range, beyond the
   resolution its static mesh was built for, so keep large commands on a fairlead section whose
-  segments are at least `UnstrLen`/N long. A cable restrained in torsion cannot be controlled
-  (the coupled route rejects torsion stiffness in END CONNECTIONS).
+  segments are at least `UnstrLen`/N long.
+- On a cable restrained in torsion at both ends the torsion follows the lengths too: the line's
+  torsional compliance, the elements' torsional stiffness `GJ`/l and damping `Bt`/l, the
+  torque–tension coupling and the polar inertia `Irn` l/2 at the nodes take the new lengths, a
+  torsional damping written as `-ζ` keeps its `ζ` (`Bt` = ζ l √(GJ `Irn`) at the new length; a
+  positive `Bt` stays), and the damping acts on the rate of the twist per unit length, so a
+  segment paid out at constant twist per length carries no damping torque. A haul-in raises the
+  torque of a fixed end-to-end twist as `GJ` Twist/L does.
 
 The host input arrays are sized to the highest channel id.
 

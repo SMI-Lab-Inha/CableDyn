@@ -382,7 +382,8 @@ without an auxiliary process:
   (:doc:`driver_format`, CONTROL). A viscoelastic or Syrope polyester segment carries its
   slow stretch over the length change, as MoorDyn-F and MoorDyn-C do.
   On a finite-EI cable the command scales every cable element
-  of that segment, and needs the force-blended generalised-α (the default). On both kinds a
+  of that segment, and needs the force-blended generalised-α (the default); on a cable
+  restrained in torsion the torsion follows the new lengths (:ref:`theory-torsion`). On both kinds a
   command outside MoorDyn-F's bounds, from minus half to plus one ``UnstrLen``/N of the line
   (the controlled segment's initial length on a line of one section), stops the run with a
   message that names the line, as it stops MoorDyn-F; so does a command that would make the

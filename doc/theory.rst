@@ -559,6 +559,45 @@ between steps (the direct feedthrough) twists the end element against the frozen
 the end's translation stretches it. The node torque (``Torq<L>N<J>``) is the mean of its two
 elements', and the material twists of the elements sum to the twist channels.
 
+**Active line control.** A length command on a controlled element (see Active line control
+below) changes every torsion term that reads :math:`L_0`: the condensed compliance
+:math:`C = \sum_e L_{0,e}/GJ_e + 1/k_1 + 1/k_2`, the element stiffness :math:`GJ/L_0` and damping
+:math:`B_t/L_0` of the nodal twist, the coupling term :math:`(K/GJ)(l - L_0)` and, through the
+Hermite interpolant, the element holonomy. Each is evaluated with the lengths of its time level,
+as the rest of the residual: the committed force with the lengths the committed state was reached
+with, the step's force with the new ones. The lumped polar inertia :math:`I_{rn} L_0/2` is rebuilt
+with the consistent mass (its rate term is not modelled either), and a torsional damping written
+as :math:`-\zeta` is resolved again at the new length, :math:`B_t = \zeta L_0 \sqrt{GJ I_{rn}}`, so
+the element keeps its fraction of critical damping; a positive :math:`B_t` is a section property
+and stays (the axial ``BA`` keeps its initial resolution, as in MoorDyn). The torsional damping
+takes the rate of the twist per unit length :math:`\hat\tau/L_0` that the elastic torque reads, as
+the axial damping takes the rate of the strain:
+
+.. math::
+
+   M_e = \frac{GJ_e}{L_{0,e}}\,\hat\tau_e + B_{t,e}\,\frac{d}{dt}\frac{\hat\tau_e}{L_{0,e}}
+       = \frac{GJ_e}{L_{0,e}}\,\hat\tau_e + \frac{B_{t,e}}{L_{0,e}}
+         \Big(\dot{\hat\tau}_e - \hat\tau_e\,\frac{\dot L_{0,e}}{L_{0,e}}\Big) .
+
+At fixed :math:`\mathbf{q}` the twist changes with :math:`L_0` through the coupling term and the
+element's shape. The reference twist depends on the tangent handles only through
+:math:`L_0\mathbf{m}` (the Hermite :math:`\mathbf{r}'` and :math:`\mathbf{r}''`) and
+:math:`\mathbf{m}/|\mathbf{m}|`, and so does :math:`l_e`, so
+:math:`L_0\,\partial(m_e + c_e l_e)/\partial L_0 = \mathbf{m}_1\cdot\partial/\partial\mathbf{m}_1 +
+\mathbf{m}_2\cdot\partial/\partial\mathbf{m}_2` of the same with :math:`c_e = K_e/GJ_e`, and
+
+.. math::
+
+   \dot{\hat\tau}_e = \dot\varphi_{k+1} - \dot\varphi_k + \nabla\hat\tau_e\cdot\dot{\mathbf{q}}
+     + \frac{\dot L_{0,e}}{L_{0,e}}\Big(\mathbf{m}_1\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{m}_1}
+     + \mathbf{m}_2\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{m}_2} - c_e L_{0,e}\Big) ,
+
+with the matching tangent terms. A segment paid out at a constant twist per length carries no
+damping torque. The test suite checks the quasi-static torque :math:`GJ\Phi/L(t) + K(H - L)/L` of a
+taut line paid out and hauled in (condensed and nodal twist), the Kelvin–Voigt torque of a constant
+pay-out, the length-rate term against finite differences on a bowed line, the energy a length
+change puts into a ringing twist, and that the step does not lag at :math:`\alpha_f > 0`.
+
 **Limits.** Seabed friction does not resist twist, so the laid part of a line twists freely
 (the friction torque of a cable on the seabed can be comparable with the twist torque near
 touchdown). There is no anisotropic or pre-twisted section, and no self-contact: a loop that
@@ -2869,7 +2908,8 @@ the end-position part,
 
 and a segment paid out at constant strain carries no damping force. The position Jacobian of the
 damping force gains :math:`-BA\, H'_a H'_b\, (\dot L_0/L_0^2)\, \mathbf{t}\mathbf{t}^\mathsf{T}` on
-the end-position columns.
+the end-position columns. On a cable restrained in torsion the torsion follows the lengths in the
+same way (:ref:`theory-torsion`, Active line control).
 
 Tension and coupled loads
 -------------------------

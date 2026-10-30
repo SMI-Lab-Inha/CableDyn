@@ -113,7 +113,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Element_Twist, CD_HermiteCable_Dyn_Coupling_Tension, &
                                           CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
-                                     CD_HTORS_MAX_TWIST
+                                     CD_HTORS_MAX_TWIST, CD_HermiteTorsion_Zeta_Damping
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -372,7 +372,8 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: ktt = CD_ZERO
     ! torsional damping Bt [N m^2 s] of the GJ column's third part (GJ|K|Bt), the torque Bt dtau/dt
     ! of the nodal twist; negative: -zeta, the fraction of an element's critical torsional
-    ! damping l0 sqrt(GJ Irn), resolved on the final mesh
+    ! damping l0 sqrt(GJ Irn), resolved on the final mesh (and again at the lengths active line
+    ! control sets)
     REAL(wp) :: bt = CD_ZERO
     REAL(wp) :: i_rt = CD_ZERO, i_rn = CD_ZERO
     REAL(wp) :: cdn = CD_ZERO, cdt = CD_ZERO, can = CD_ZERO, cat = CD_ZERO
@@ -3421,12 +3422,20 @@ CONTAINS
       tors%irn = i_rn_in
       IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%irn, ld, lf)
       ! torsional damping (GJ|K|Bt): a negative value is -zeta of an element's critical torsional
-      ! damping l0 sqrt(GJ Irn), on the final mesh
+      ! damping l0 sqrt(GJ Irn), on the final mesh; the elements keep their zeta (bt_zeta), so a
+      ! length change by active line control re-resolves it
       IF (ANY(ABS(bt_in) > CD_ZERO)) THEN
         tors%bt = bt_in
         IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%bt, ld, lf)
+        IF (ANY(tors%bt < CD_ZERO)) THEN
+          ALLOCATE (tors%bt_zeta(SIZE(tors%bt)))
+          tors%bt_zeta = CD_ZERO
+        END IF
         DO k = 1, SIZE(tors%bt)
-          IF (tors%bt(k) < CD_ZERO) tors%bt(k) = -tors%bt(k)*lf(k)*SQRT(tors%gj(k)*tors%irn(k))
+          IF (tors%bt(k) < CD_ZERO) THEN
+            tors%bt_zeta(k) = -tors%bt(k)
+            tors%bt(k) = CD_HermiteTorsion_Zeta_Damping(tors%bt_zeta(k), lf(k), tors%gj(k), tors%irn(k))
+          END IF
         END DO
       END IF
       DO k = 1, 2
@@ -8080,10 +8089,6 @@ CONTAINS
             CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' has no finite-EI cable'); RETURN
           END IF
           ASSOCIATE (cab => agg%cables(obj)%line)
-            IF (cab%torsion%active) THEN
-              CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//': active line control of a finite-EI '// &
-                        'line restrained in torsion is not supported'); RETURN
-            END IF
             IF (cab%has_contact .AND. .NOT. cab%has_seabed_recompute) THEN
               CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' was built without the seabed '// &
                         'recompute inputs'); RETURN

@@ -95,6 +95,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and the OpenFAST checkpoint mirror. Decks with torsion whose `Irn` was a placeholder (the
   column was unused before) need the section's real value. The Python deck reader and builder
   take `GJ|K|Bt` (builder `gj=(GJ, K, Bt)`).
+- Active line control (`CONTROL`) of a finite-EI cable restrained in torsion, which was refused:
+  the torsional compliance, the nodal twist's `GJ`/l and `Bt`/l, the torque–tension coupling and
+  the polar inertia take the new lengths, a `-ζ` torsional damping keeps its `ζ`, and the damping
+  acts on the rate of the twist per length. A taut line paid out and hauled in carries
+  `GJ Φ/L(t) + K (H − L)/L` to 1.5e-12 and its tension to 4e-6; a constant pay-out carries the
+  Kelvin–Voigt torque to 6e-6 N m of its 0.64 N m damping share; a pay-out under a ringing twist
+  balances the energy to 8e-5 of the work done; restarts mid-ramp (snapshot, checkpoint mirror,
+  a coupled deck) are bit-identical.
 - Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
   `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.

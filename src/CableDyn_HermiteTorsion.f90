@@ -49,6 +49,7 @@ MODULE CableDyn_HermiteTorsion
   PUBLIC :: CD_HermiteTorsionType
   PUBLIC :: CD_HermiteTorsion_Compliance
   PUBLIC :: CD_HermiteTorsion_Validate
+  PUBLIC :: CD_HermiteTorsion_Zeta_Damping
   PUBLIC :: CD_HermiteTorsion_Bordered_Solve
   PUBLIC :: CD_HermiteTorsion_Inertia
   PUBLIC :: CD_HermiteTorsion_Lowest_Mode
@@ -120,6 +121,11 @@ MODULE CableDyn_HermiteTorsion
     !! (torque Bt d tau/dt). With irn unallocated the dynamics keeps the condensed, quasi-static
     !! torsion; the statics never read them.
     REAL(wp), ALLOCATABLE :: irn(:), bt(:)
+    !! The fraction zeta of an element's critical torsional damping l0 sqrt(GJ Irn) that a
+    !! negative deck Bt (-zeta) asked for, 0 on an element with a direct Bt; unallocated: every
+    !! Bt is direct. bt holds the resolved value zeta l0 sqrt(GJ Irn) (CD_HermiteTorsion_Zeta_Damping),
+    !! which active line control re-resolves when it changes l0, so the element keeps its zeta.
+    REAL(wp), ALLOCATABLE :: bt_zeta(:)
     INTEGER :: quadrature_order = 4
     !! State: the accepted Theta (unwrapped) once has_theta; before that theta_hint selects the
     !! 2 pi branch of the first evaluation (0 for an untwisted start).
@@ -172,6 +178,14 @@ CONTAINS
     IF (SIZE(tors%gj) /= SIZE(l0)) RETURN
     c = tors%end_compliance(1) + tors%end_compliance(2) + SUM(l0/tors%gj)
   END FUNCTION CD_HermiteTorsion_Compliance
+
+  ELEMENTAL REAL(wp) FUNCTION CD_HermiteTorsion_Zeta_Damping(zeta, l0, gj, irn) RESULT(bt)
+    !! The torsional damping Bt [N m^2 s] of an element of length l0 that a deck Bt of -zeta asks
+    !! for: zeta times the element's critical torsional damping l0 sqrt(GJ Irn) (the convention
+    !! of the axial BA, with GJ for EA and the polar inertia Irn for the mass per length).
+    REAL(wp), INTENT(IN) :: zeta, l0, gj, irn
+    bt = zeta*l0*SQRT(gj*irn)
+  END FUNCTION CD_HermiteTorsion_Zeta_Damping
 
   PURE SUBROUTINE CD_HermiteTorsion_Validate(tors, l0, ErrStat, ErrMsg)
     !! Fail-closed check of an active torsion description against a mesh of SIZE(l0) elements.
@@ -242,6 +256,25 @@ CONTAINS
       END IF
       IF (ANY(tors%bt < CD_ZERO)) THEN
         ErrMsg = 'torsion: the torsional damping must be non-negative'
+        RETURN
+      END IF
+    END IF
+    IF (ALLOCATED(tors%bt_zeta)) THEN
+      IF (.NOT. ALLOCATED(tors%bt)) THEN
+        ErrMsg = 'torsion: a torsional damping ratio needs the torsional damping it resolves'
+        RETURN
+      END IF
+      IF (SIZE(tors%bt_zeta) /= SIZE(l0)) THEN
+        ErrMsg = 'torsion: the torsional damping ratio must have one entry per element'
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(tors%bt_zeta)) THEN
+        ErrStat = CD_HTORS_NONFINITE
+        ErrMsg = 'torsion: non-finite torsional damping ratio'
+        RETURN
+      END IF
+      IF (ANY(tors%bt_zeta < CD_ZERO)) THEN
+        ErrMsg = 'torsion: the torsional damping ratio must be non-negative'
         RETURN
       END IF
     END IF

@@ -102,6 +102,7 @@ article's methods, are compared in
 | **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
 | **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
 | **T-10** | Torsion dynamics, restart and body torque | quasi-static torque, energy, uninterrupted run, pendulum | torque 2.2e-16; energy band 4.9e-4; restart bit-identical; pendulum 6.4e-5 | see [Torsion](#torsion) | Pass |
+| **T-14** | Active line control of a line restrained in torsion | `GJ Φ/L(t) + K (H − L)/L`; Kelvin–Voigt torque of a pay-out; finite differences; energy of a length change; `ρ∞ = 0`; uninterrupted run | torque ≤1.5e-12, tension 3.6e-6; damping 5.8e-6 N·m of 0.64 N·m; FD 1.1e-10; energy 7.8e-5; no lag (1.4e-3 of the per-step change); restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-13** | Nodal twist (torsional inertia and damping) | condensed torsion in the limit of no inertia; continuum torsional wave; `ζ = ω Bt/(2 GJ)`; energy; restart | ≤6e-7 against the condensed torsion; wave torque 0.07 %; decrement 6 %; energy band 4.9e-4; restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-12** | Torque–tension coupling | `T = EA ε + K τ`, `M = GJ τ + K ε` closed forms; kernel FD; march | ≤1e-7 against every closed form; kernel gradient 1.7e-10, Hessian 9.8e-11 | see [Torsion](#torsion) | Pass |
 | **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
@@ -1047,6 +1048,29 @@ in parentheses).
   roll (`GJ (−roll)/l_e`) against the frozen interior. The example
   `torsion_lazy_wave_hangoff_twist.dat` (Irn of the section) moves by at most 7e-5 of the
   torque against the condensed torsion.
+- **T-14 active line control** (`control_torsion`). The fairlead span (2 of 10 elements) of a
+  taut straight line between rigid torsional ends 10.1 m apart (EA 1e5 N, GJ 80 N·m²,
+  `Φ = 90°`) is commanded:
+  - paid out and hauled in by ±0.065 m over 10 s, the line carries `GJ Φ/L(t) + K (H − L)/L`
+    (condensed 2.8e-16, with `K = 500 N·m` 9.6e-15, nodal twist with `Irn = 1e-9 kg·m`
+    1.5e-12; a frozen compliance would miss by 6.5e-3 and 0.23) and the tension
+    `EA (H − L)/L + K Φ/L` with the axial damping's share to 3.6e-6;
+  - paid out at 0.01 m/s under `Bt = 100 N·m²·s` with `K`, every element keeps one twist per
+    length χ and the torque is `GJ χ + Bt χ̇` to 5.8e-6 N·m of its 0.642 N·m damping share
+    (0.646 N·m off without the length rate);
+  - on a bowed line the length-rate share of the damping torque equals `Bt l̇0 ∂(τ/l0)/∂l0` by
+    central differences of the element twist to 1.1e-10 (1.7 % from the straight-line value);
+  - the polar inertia and a `-ζ` damping a command rebuilds equal those of a model built with
+    the new lengths bit for bit, and a committed-state evaluation, a saved control state and a
+    snapshot take the committed lengths and terms;
+  - paid out by 0.5 m under a ringing twist (`Irn = 0.5 kg·m`, `ρ∞ = 1`, centreline held), the
+    twist and polar kinetic energy change by the work of the length change to 7.8e-5 of it;
+  - paid out slowly, the run at `ρ∞ = 0.4` follows the one at `ρ∞ = 0` to 1.4e-3 of the
+    per-step torque change, also with the committed force evaluated afresh each step (taken at
+    the new lengths it lags by `α_f` of the change, 0.29);
+  - restarts mid-ramp from a snapshot, from the checkpoint mirror with the command re-applied,
+    and of a `CONTROL` deck on the coupled aggregate (whose `Torq1N1` follows `GJ Twist1/L(t)`
+    to 6e-11) continue bit-identically.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`

@@ -715,6 +715,15 @@ target_link_libraries(test_hermite_cable_control PRIVATE cabledyn_core)
 add_test(NAME hermite_cable_control COMMAND test_hermite_cable_control)
 set_tests_properties(hermite_cable_control PROPERTIES LABELS "fortran;unit;dynamic;hermite")
 
+# Active line control of a line restrained in torsion: the quasi-static torque GJ Phi/L(t) (with
+# torque-tension coupling), the torsional damping of the twist per length, the length terms a
+# fresh build carries, the energy of a length change with a real Irn, no lag at alpha_f > 0,
+# restart mid-ramp (snapshot, mirror) and a CONTROL deck on the coupled aggregate.
+add_executable(test_control_torsion tests/test_control_torsion.f90)
+target_link_libraries(test_control_torsion PRIVATE cabledyn_core)
+add_test(NAME control_torsion COMMAND test_control_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(control_torsion PROPERTIES LABELS "fortran;unit;dynamic;hermite;openfast")
+
 add_executable(test_hermite_added_mass tests/test_hermite_added_mass.f90)
 target_link_libraries(test_hermite_added_mass PRIVATE cabledyn_core)
 add_test(NAME hermite_added_mass COMMAND test_hermite_added_mass)
@@ -2845,6 +2854,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_hermite_drag_dynamics
       test_hermite_axial_damping
       test_hermite_cable_control
+      test_control_torsion
       test_endconn_spring
       test_torsion_coupling)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
@@ -2857,6 +2867,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
   target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_syrope_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_viscoelastic_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_control_torsion PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)
@@ -2908,6 +2919,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_hermite_drag_dynamics
       test_hermite_axial_damping
       test_hermite_cable_control
+      test_control_torsion
       test_hermite_added_mass
       test_hermite_wave_forcing
       test_lazywave_dynamics

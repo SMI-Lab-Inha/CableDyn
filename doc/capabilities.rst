@@ -95,7 +95,8 @@ Line and constitutive capability
        column standalone, and with the platform orientation in coupled OpenFAST and FAST.Farm
        runs (torque returned to the platform, ``PtfmInit``, checkpoints, linearisation with the
        twist angles as states; see :doc:`openfast`) and through the C API with the host's
-       rotations (``CableDyn_InitDeckRotating``, :doc:`capi`); ``Torq``/``Twist`` channels and
+       rotations (``CableDyn_InitDeckRotating``, :doc:`capi`), active line control
+       (``CONTROL``) of the fairlead segment on the coupled route; ``Torq``/``Twist`` channels and
        standalone range graphs. Stopped by name: the standalone mixed ``EI = 0`` + finite-EI
        aggregate and ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
        translation only), rod ends, bodies other than Rigid6, modal analysis, and
