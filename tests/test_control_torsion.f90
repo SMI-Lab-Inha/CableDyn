@@ -43,6 +43,15 @@ PROGRAM test_control_torsion
   !!      (the CompMooring = 5 route; the standalone driver takes no CONTROL) initialises, its
   !!      Torq1N1 follows GJ Twist1/L(t) through a haul-in ramp, and the shell's checkpoint recipe
   !!      continues bit-identically.
+  !!   O  deck, a line restrained in torsion at one end only: a straight neutral cable (EA 1e7 N,
+  !!      GJ|K 5e4 N m2|4e5 N m, Irn 1e-9 kg m) of L0 = 99 m held H = 100 m apart, free in torsion
+  !!      at End A (the controlled fairlead) and, in turn, at End B, paid out by 0.2 m on a half
+  !!      cosine over 2 s and held. With no torque the section is free to twist, so each element
+  !!      twists by -(K/GJ)(l_e - l0_e) and the free end turns with the commanded length:
+  !!      Twist1 = -(K/GJ)(H - L0 - dL(t)) at every step, with no torque at either end; over the
+  !!      hold the tension, about which the undamped axial waves of the ramp ring, has the mean
+  !!      (EA - K^2/GJ)(H - L0 - dL)/(L0 + dL) of a section free to twist (within 5e-4: the 2 s mean
+  !!      of the 2.4e-3 ringing).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -92,6 +101,8 @@ PROGRAM test_control_torsion
   CALL check_lag()
   CALL check_restart()
   CALL check_deck()
+  CALL check_deck_one_end(1)
+  CALL check_deck_one_end(2)
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -1044,5 +1055,123 @@ CONTAINS
     CALL CD_AGG_End(a, es, em)
     CALL CD_AGG_End(b, es, em)
   END SUBROUTINE check_deck
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_deck_one_end(kfree)
+    !! O: the controlled line free in torsion at deck End kfree (1 = A, the fairlead, 2 = B).
+    REAL(wp), PARAMETER :: DT = 0.05_wp, GJD = 5.0e4_wp, KD = 4.0e5_wp, EAD = 1.0e7_wp, H0 = 100.0_wp, &
+                           L0D = 99.0_wp, DLMAX = 0.2_wp, TR = 2.0_wp, DEG = PI/180.0_wp
+    INTEGER, PARAMETER :: NSTEP = 80
+    INTEGER, INTENT(IN) :: kfree
+    TYPE(CD_AGG_ModuleType) :: a
+    REAL(wp) :: pos(3, 1), vel(3, 1), acc(3, 1), load(3, 1), orient(3, 3, 1), omega(3, 1), alpha(3, 1)
+    REAL(wp) :: dl, dldot, tw, tqa, tqb, ten, tw_ref, ten_ref, e_tw, e_tq, e_ten, t, ten_sum
+    INTEGER :: es, ni, k, u, n_hold
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+    CHARACTER(160) :: ltype
+    CHARACTER(2) :: tag
+    tag = MERGE('A ', 'B ', kfree == 1)
+    WRITE (ltype, '(A,ES24.16,A)') 'cab 0.2 ', 1025.0_wp*0.25_wp*PI*0.04_wp, &
+      ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4|4.0e5 1.0 1.0e-9 0.0 0.0 0.0 0.0'
+    OPEN (NEWUNIT=u, FILE='ctl_torsion_one_end.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'controlled line restrained in torsion at one end'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    WRITE (u, '(A)') TRIM(ltype)
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Coupled 0.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Fixed 100.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 cab 99.0 40'
+    WRITE (u, '(A)') '--- END CONNECTIONS ---'
+    WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+    WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
+    IF (kfree == 1) THEN
+      WRITE (u, '(A)') '1 A Rigid 1 0 0 Free 0 0 1'
+      WRITE (u, '(A)') '1 B Rigid 1 0 0 Rigid 0 0 1 30'
+    ELSE
+      WRITE (u, '(A)') '1 A Rigid 1 0 0 Rigid 0 0 1 -30'
+      WRITE (u, '(A)') '1 B Rigid 1 0 0 Free 0 0 1'
+    END IF
+    WRITE (u, '(A)') '--- CONTROL ---'
+    WRITE (u, '(A)') 'ChannelID Line(s)'
+    WRITE (u, '(A)') '(-) (-)'
+    WRITE (u, '(A)') '1 1'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '0.05 dtM'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Twist1'
+    WRITE (u, '(A)') 'Torq1N1'
+    WRITE (u, '(A)') 'Torq1N41'
+    WRITE (u, '(A)') 'FairTen1'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    CALL CD_AGG_Init_From_Deck(a, 'ctl_torsion_one_end.dat', DT, es, em, host_orientation=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'O (End '//TRIM(tag)//' free): a CONTROL deck on a line restrained at one end '// &
+                 'initialises with its twist channels: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL require(a%ctrl_is_cable(1) .AND. a%cables(1)%line%tw_active .AND. &
+                 a%cables(1)%line%torsion%end_free(3 - kfree), &
+                 'O: the row controls the nodal-twist cable, free at the deck end')
+    CALL CD_AGG_GetMovingPointMesh(a, pos, vel, acc, load, es, em, orientation=orient)
+    omega = 0.0_wp
+    alpha = 0.0_wp
+    e_tw = 0.0_wp
+    e_tq = 0.0_wp
+    e_ten = 0.0_wp
+    ten_sum = 0.0_wp
+    n_hold = 0
+    DO k = 1, NSTEP
+      t = DT*REAL(k, wp)
+      IF (t < TR) THEN
+        dl = DLMAX*0.5_wp*(1.0_wp - COS(PI*t/TR))
+        dldot = DLMAX*0.5_wp*PI/TR*SIN(PI*t/TR)
+      ELSE
+        dl = DLMAX
+        dldot = 0.0_wp
+      END IF
+      CALL CD_AGG_Apply_LineControl(a, [dl], [dldot], es, em)
+      CALL require(es == CD_AGG_OK, 'O: command: '//TRIM(em))
+      CALL CD_AGG_Step_Moving(a, DT, pos, vel, acc, cv, st, ni, es, em, orientation=orient, &
+                              angular_velocity=omega, angular_acceleration=alpha)
+      CALL require(es == CD_AGG_OK .AND. cv, 'O: step: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      CALL CD_AGG_CalcOutput(a, es, em)
+      CALL CD_AGG_EvalChannel(a, 1, tw, es, em)
+      CALL CD_AGG_EvalChannel(a, 2, tqa, es, em)
+      CALL CD_AGG_EvalChannel(a, 3, tqb, es, em)
+      CALL CD_AGG_EvalChannel(a, 4, ten, es, em)
+      tw_ref = -(KD/GJD)*(H0 - L0D - dl)/DEG
+      e_tw = MAX(e_tw, ABS(tw - tw_ref)/ABS(tw_ref))
+      ! against the torque K eps the coupling would give a section held from twisting
+      e_tq = MAX(e_tq, ABS(tqa), ABS(tqb))
+      IF (t > TR) THEN
+        ten_sum = ten_sum + ten
+        n_hold = n_hold + 1
+      END IF
+    END DO
+    ten_ref = (EAD - KD**2/GJD)*(H0 - L0D - DLMAX)/(L0D + DLMAX)
+    e_ten = ABS(ten_sum/REAL(n_hold, wp) - ten_ref)/ten_ref
+    e_tq = e_tq/(KD*(H0 - L0D - DLMAX)/(L0D + DLMAX))
+    WRITE (*, '(A,A,A,F12.5,A,F12.5,A,3ES10.3)') 'O deck, End ', TRIM(tag), ' free, paid out 0.2 m: Twist1 ', tw, &
+      ' deg (-(K/GJ)(H - L) ', tw_ref, '); max rel. errors twist, |torque| / K eps, mean held tension ', e_tw, &
+      e_tq, e_ten
+    CALL require(e_tw <= 1.0e-6_wp, 'O: the free end turns with the commanded length, -(K/GJ)(H - L(t))')
+    CALL require(e_tq <= 1.0e-6_wp, 'O: no torque at either end')
+    CALL require(e_ten <= 5.0e-4_wp, 'O: the mean held tension is (EA - K^2/GJ) eps')
+    CALL CD_AGG_End(a, es, em)
+  END SUBROUTINE check_deck_one_end
 
 END PROGRAM test_control_torsion

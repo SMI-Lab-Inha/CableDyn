@@ -4329,34 +4329,20 @@ class DeckFile:
 
         A line with a torsional END CONNECTIONS restraint (TorsStiffness Rigid or a
         stiffness) must be finite-EI. Restrained at both ends, torsion is solved: End B must
-        be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither on
-        a rod other than a Fixed one (a free or pinned rod has no roll angle, a Coupled/Vessel rod
-        carries no finite-EI line; the ends of a rod fixed to a body are body points) nor on a
-        body other than Rigid6. Restrained at one end only (its other end
-        free to twist), it is solved in torsion under the same rules, and with no CONTROL, no
-        modal analysis and a force-blended march; otherwise it keeps the meaning of the
-        6-column rows (no error). A deck with torsion runs dynamics only with the
-        force-blended generalised-alpha (a coupled run is always dynamic); the modal analysis
-        (nModes) of a line restrained at both ends carries the twist. The coupled OpenFAST and
-        FAST.Farm routes turn the fairlead frame with the platform, and the standalone mixed
-        EI = 0 + finite-EI deck without bodies (run on the aggregate) holds it or turns it with
-        its vesselMotion and rolls it with the motionFile roll column, as the standalone
-        cubic-Hermite route does.
+        be Fixed, every section type needs an explicit GJ > 0, End A neither on a rod other than
+        a Fixed one (a free or pinned rod has no roll angle, a Coupled/Vessel rod carries no
+        finite-EI line; the ends of a rod fixed to a body are body points) nor on a body other
+        than Rigid6. Restrained at one end only (its other end free to twist), it is solved in
+        torsion under the same rules and with a force-blended march; otherwise it keeps the
+        meaning of the 6-column rows (no error). ATTACHMENTS, CONTROL and the modal analysis
+        (nModes, whose modes carry the twist) take a line solved in torsion. A deck with torsion
+        runs dynamics only with the force-blended generalised-alpha (a coupled run is always
+        dynamic). The coupled OpenFAST and FAST.Farm routes turn the fairlead frame with the
+        platform, and the standalone mixed EI = 0 + finite-EI deck without bodies (run on the
+        aggregate) holds it or turns it with its vesselMotion and rolls it with the motionFile
+        roll column, as the standalone cubic-Hermite route does.
         """
-        # _check_attachments has already accepted every LineID as an integer
-        attachment_lines = {str(_native_int(row.tokens[0])) for row in self._rows("ATTACHMENTS")}
         rod_kinds = self._rod_rows_by_id()
-        # CONTROL rows are checked later; a malformed one fails there
-        controlled_lines: set[str] = set()
-        for row in self._rows("CONTROL"):
-            if len(row.tokens) != 2:
-                continue
-            try:
-                controlled_lines.update(
-                    str(_native_int(value)) for value in row.tokens[1].split(",")
-                )
-            except ValueError:
-                continue
         tmax_row = option_by_key.get("tmax")
         # a coupled run is always dynamic (the host owns TMax)
         dynamic = self.caller_driven or (
@@ -4371,8 +4357,6 @@ class DeckFile:
             "on",
             "1",
         }
-        modes_row = option_by_key.get("n_modes")
-        modal = modes_row is not None and round(_native_float(modes_row.values[0])) > 0
         torsion_lines: set[str] = set()
         torsion_notes: dict[str, str] = {}
         for line_id, ends in torsion_ends.items():
@@ -4394,12 +4378,6 @@ class DeckFile:
                     )
                 elif point_types[end_b] != "fixed":
                     note = "it has two moving ends (torsion needs a Fixed End B)"
-                elif line_id in attachment_lines:
-                    note = "torsion is not combined with ATTACHMENTS"
-                elif line_id in controlled_lines:
-                    note = "active line control (CONTROL) is not combined with torsion"
-                elif modal:
-                    note = "the modal analysis (nModes) has no torsion"
                 elif dynamic and not force_blend:
                     note = (
                         "torsion in a dynamic run needs the force-blended generalised-alpha "
@@ -4407,8 +4385,19 @@ class DeckFile:
                     )
                 elif ends.get("a", False):
                     body_id = _body_point_id(point_types[end_a])
-                    if _rod_point(point_types[end_a]) is not None:
-                        note = "its restrained End A is on a rod end (a rod has no spin angle)"
+                    rod_end = _rod_point(point_types[end_a])
+                    rod_kind = None if rod_end is None else rod_kinds.get(rod_end[0], (None, 0))[0]
+                    if rod_end is not None and rod_kind is not None and rod_kind != "fixed":
+                        if rod_kind in {"coupled", "vessel"}:
+                            note = (
+                                "its restrained End A is on a Coupled/Vessel rod end (no route "
+                                "carries a finite-EI line on a host-driven rod)"
+                            )
+                        else:
+                            note = (
+                                "its restrained End A is on the end of a free or pinned rod "
+                                "(axisymmetric, with no roll angle to hold the torque)"
+                            )
                     elif body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
                         note = "its restrained End A is on a body that is not Rigid6"
                 if note:

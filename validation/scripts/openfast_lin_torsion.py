@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenFAST linearisation of finite-EI lines restrained in torsion (CompMooring = 5).
 
-Two decks, each linearised once at t = 0 in the case of openfast_lin_ab.py (the IEA-15MW
+Three decks, each linearised once at t = 0 in the case of openfast_lin_ab.py (the IEA-15MW
 UMaine model, platform DOFs only, still water, OutFmt ES24.15E3, module-level output), with
 the deck below as the only mooring:
 
@@ -36,10 +36,19 @@ the deck below as the only mooring:
      >= 1 % of it within twice that. The operating-point moment about d must equal the
      static Torq1N1.
 
+  3. The straight line of 1 restrained in torsion at End A only, End B free to twist: the free
+     end's angle is a state; the torsional modes of A are the clamped-free ones, against the
+     continuum's quarter-wave (2n - 1) pi/(2L) sqrt(GJ/Irn) within x^2/6, x = (2n - 1) pi/(4N),
+     and the lumped chain's 2 sqrt(GJ/Irn)/h sin(x); the roll stiffness about the line axis
+     vanishes (the platform turns the line as a whole), against the feedthrough GJ/l_e.
+
 Measured (the 0.4.0 module): the three torsional modes are the lumped chain's to 5e-14 and the
 continuum's within -1.6e-4, -6.6e-4, -1.5e-3; the straight line's roll stiffness is GJ/L to
 1.5e-14 (feedthrough D alone 25 000 = GJ/l_e); the twisted lazy wave matches its static
-solutions to 4.9e-4 (the moment about d per unit rotation 82.4268 / 82.4263 N m/rad, 5.9e-6).
+solutions to 4.9e-4 (the moment about d per unit rotation 82.4268 / 82.4263 N m/rad, 5.9e-6);
+the line free at End B has 100 twist states, its modes are the clamped-free chain's to 2.5e-13
+and lie 4.1e-5, 3.7e-4, 1.0e-3 below the quarter-wave, and its roll stiffness is 0 against the
+feedthrough 25 000.
 An executable without twist states refuses both decks at initialisation ("formal OpenFAST
 linearization of a line restrained in torsion is not supported"); with the twist angles held
 the straight line's roll stiffness would be the end element's GJ/l_e, 50 times GJ/L.
@@ -70,7 +79,7 @@ N_STRAIGHT = 50
 IRN_STRAIGHT = 2.0
 
 
-def straight_deck() -> str:
+def straight_deck(tors_b: str = "Rigid") -> str:
     mass = RHOW * 0.25 * np.pi * 0.2**2
     return "\n".join([
         "--------------------- CableDyn Input File ------------------------------------",
@@ -96,7 +105,7 @@ def straight_deck() -> str:
         "LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist",
         "(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)",
         "1 A Pinned 0 0 -1 Rigid 1 0 0 0",
-        "1 B Pinned 0 0 -1 Rigid 1 0 0 0",
+        f"1 B Pinned 0 0 -1 {tors_b} 1 0 0 0",
         "--------------------- OPTIONS -----------------------------------------------",
         "0.025 dtM - CableDyn time step (s)",
         "--------------------- OUTPUTS -----------------------------------------------",
@@ -286,6 +295,43 @@ def gate_straight(args: argparse.Namespace, case: Path) -> list[str]:
     return fails
 
 
+def gate_straight_free(args: argparse.Namespace, case: Path) -> list[str]:
+    mod = lin_case(args, case, "tors_straight_free", straight_deck("Free"))
+    fails = []
+    labels = [ab_label(s) for s in state_labels(case / "Main_lin_tors_straight_free.1.CD.lin", mod["n_x"])]
+    tw = np.array(["twist" in s for s in labels])
+    print(f"straight line free at End B: {mod['n_x']} states, {int(tw.sum())} twist")
+    if int(tw.sum()) != 2 * N_STRAIGHT:
+        fails.append("the free end's angle is not a state")
+    ev, vec = np.linalg.eig(mod["A"])
+    share = np.sum(np.abs(vec[tw, :])**2, axis=0) / np.sum(np.abs(vec)**2, axis=0)
+    pick = (ev.imag > 1e-9) & (share > 0.999)
+    w = np.sort(np.abs(ev[pick]))
+    h = L_STRAIGHT / N_STRAIGHT
+    c = np.sqrt(GJ / IRN_STRAIGHT)
+    worst_c = worst_d = 0.0
+    if len(w) < 3:
+        ab.die(f"found {len(w)} torsional modes of the line free at End B, expected at least 3")
+    for n in (1, 2, 3):
+        x = (2 * n - 1) * np.pi / (4 * N_STRAIGHT)
+        wc = (2 * n - 1) * np.pi / (2 * L_STRAIGHT) * c
+        wd = 2.0 / h * c * np.sin(x)
+        ec, ed = w[n - 1] / wc - 1.0, w[n - 1] / wd - 1.0
+        bound = 1.2 * x**2 / 6.0 + 1e-6
+        print(f"  torsional mode {n}: {w[n - 1] / (2 * np.pi):.8f} Hz; quarter-wave {wc / (2 * np.pi):.8f} "
+              f"({ec:+.3e}, bound {bound:.2e}); clamped-free chain {wd / (2 * np.pi):.8f} ({ed:+.3e})")
+        worst_c = max(worst_c, abs(ec) / bound)
+        worst_d = max(worst_d, abs(ed))
+    if worst_c > 1.0 or worst_d > 1e-6:
+        fails.append("the torsional modes of A differ from the clamped-free ones")
+    K, Dft = reduced_6x6(mod)
+    print(f"  roll stiffness about the line axis -(D - C A^-1 B) = {K[5, 5]:.3e} N m/rad (GJ/L = "
+          f"{GJ / L_STRAIGHT:.3e}); feedthrough -D = {Dft[5, 5]:.6e} (GJ/l_e = {GJ / h:.6e})")
+    if abs(K[5, 5]) > 1e-6 * GJ / L_STRAIGHT:
+        fails.append("the line free at End B has a roll stiffness")
+    return fails
+
+
 def state_labels(path: Path, n_x: int) -> list[str]:
     text = path.read_text().splitlines()
     out: list[str] = []
@@ -404,7 +450,7 @@ def main() -> None:
     if not args.driver.is_file():
         ab.die(f"driver not found: {args.driver}")
     case = args.case_dir
-    fails = gate_straight(args, case) + gate_lazy_wave(args, case)
+    fails = gate_straight(args, case) + gate_straight_free(args, case) + gate_lazy_wave(args, case)
     if fails:
         ab.die("; ".join(fails))
     print("PASS")

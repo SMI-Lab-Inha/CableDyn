@@ -635,9 +635,9 @@ Warnings and notes that do not stop a run
      - a line restrained at one end, its other end free to twist, is solved in torsion (its free
        end turns with the twist of the line) where a line restrained at both ends would be; the
        reason names the rule it misses: no ``GJ`` in its ``LINE TYPES`` rows (give the 14-column
-       row), two moving ends, ``ATTACHMENTS``, ``CONTROL``, ``nModes``, ``False
-       alpha_force_blend`` in a dynamic run, or a restrained End A on a rod end or a body other
-       than Rigid6. The line is then solved as without the torsion columns.
+       row), two moving ends, ``False alpha_force_blend`` in a dynamic run, or a restrained End A
+       on the end of a free, pinned or ``Coupled``/``Vessel`` rod or on a body other than Rigid6.
+       The line is then solved as without the torsion columns.
    * - ``Note: line <L>: torsion restrained at End <B|A> only: no static torque; Twist<L> = <x>
        deg (End B relative to End A, right-handed about the End A -> End B tangent)``
      - a line restrained in torsion at one end: it carries no static torque, and under

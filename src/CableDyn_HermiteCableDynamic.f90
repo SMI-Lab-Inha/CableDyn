@@ -6822,7 +6822,8 @@ CONTAINS
     !! without damping), so d2E/dq2 = emt eh + ek eg eg^T, d2E/dphi_{e+1} dq = ek eg = -d2E/dphi_e dq
     !! and d2E/dphi2 = ek [[1, -1], [-1, 1]]. Per end k (columns): lg = d psi/dm and lh = d2 psi/dm2
     !! in the end node's tangent handle m, lk the spring stiffness (0 at a rigid end, whose
-    !! angle is held) and lmt = lk tw, so d2E/dm2 = lk lg lg^T -+ lmt lh (- at end 1, + at end 2),
+    !! angle is held, and at a free end, which has no spring) and lmt = lk tw, so
+    !! d2E/dm2 = lk lg lg^T -+ lmt lh (- at end 1, + at end 2),
     !! d2E/dphi dm = -lk lg and d2E/dphi2 = lk. Fails closed without the nodal twist.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     REAL(wp), INTENT(OUT) :: eg(:, :), eh(:, :, :), ek(:), emt(:), lg(3, 2), lh(3, 3, 2), lk(2), lmt(2)
@@ -6858,7 +6859,8 @@ CONTAINS
       emt(e) = ek(e)*(model%tw_phi(e + 1) - model%tw_phi(e) + rho)
     END DO
     DO iend = 1, 2
-      IF (model%tw_rigid(iend)) CYCLE
+      ! (a free end, end_free, has no spring: its angle is free and its energy term absent)
+      IF (.NOT. tw_spring(model, iend)) CYCLE
       CALL twist_link(model, iend, model%q, model%torsion%ends, .TRUE., psi, lg(:, iend), lh(:, :, iend), &
                       ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCDYN_OK) THEN

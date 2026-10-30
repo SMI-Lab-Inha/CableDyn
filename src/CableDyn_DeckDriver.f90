@@ -3515,7 +3515,7 @@ CONTAINS
       IF (ln%tors_mode(1) == TORS_FINITE) tors%end_compliance(2) = CD_ONE/ln%tors_k(1)
       tors%phi = ln%tors_pretwist(2) - ln%tors_pretwist(1)
       IF (kf > 0) THEN
-        CALL one_end_state(kf, est, emt)
+        CALL one_end_state(kf, lf, est, emt)
         RETURN
       END IF
       ! Rotating a buckled shape about a common clamp axis is an exact symmetry only without
@@ -3655,12 +3655,14 @@ CONTAINS
       END IF
     END SUBROUTINE twisted_attachment_checks
 
-    SUBROUTINE one_end_state(kf, est, emt)
+    SUBROUTINE one_end_state(kf, lf, est, emt)
       !! torsion_stage of a line restrained at one end only (internal end 3 - kf restrained, the
       !! other set up here): the free end's gauge frame, Theta at the untwisted static state
       !! (has_theta, no torque), and the note of the free end's static turn, the summed element
-      !! twists -sum (K/GJ)(l_e - l0_e) of torque-tension coupling (Twist<L>).
+      !! twists -sum (K/GJ)(l_e - l0_e) of torque-tension coupling (Twist<L>). lf: the stage's
+      !! final mesh (l0_am, or l0 after the attachment polish of a line with ATTACHMENTS).
       INTEGER, INTENT(IN) :: kf
+      REAL(wp), INTENT(IN) :: lf(:)
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
       REAL(wp), ALLOCATABLE :: gth(:)
@@ -3672,7 +3674,7 @@ CONTAINS
       IF (NORM2(endconn_d0_local(:, kf)) > CD_ZERO .AND. endconn_mode(kf) /= CD_ENDCONN_PINNED) THEN
         dvec = endconn_d0_local(:, kf)/NORM2(endconn_d0_local(:, kf))
       ELSE
-        node = MERGE(1, SIZE(l0_am) + 1, kf == 1)
+        node = MERGE(1, SIZE(lf) + 1, kf == 1)
         dvec = q_static(6*node - 2:6*node)/NORM2(q_static(6*node - 2:6*node))
       END IF
       nvec = tors%ends(:, 2*(3 - kf))
@@ -3687,7 +3689,7 @@ CONTAINS
       tors%ends(:, 2*kf) = nvec/NORM2(nvec)
       tors%end_free(kf) = .TRUE.
       ALLOCATE (gth(SIZE(q_static)))
-      CALL CD_HermiteTorsion_Line(q_static, l0_am, tors%ends, raw, gth, ks, emt, couple=tors%couple, &
+      CALL CD_HermiteTorsion_Line(q_static, lf, tors%ends, raw, gth, ks, emt, couple=tors%couple, &
                                   quadrature_order=tors%quadrature_order)
       IF (ks /= CD_HTORS_OK) THEN
         est = CD_DECKDRV_SOLVEFAIL
@@ -3699,9 +3701,9 @@ CONTAINS
       tors%torque = CD_ZERO
       twist = CD_ZERO
       IF (ALLOCATED(tors%couple)) THEN
-        DO e = 1, SIZE(l0_am)
-          twist = twist - tors%couple(e)*(CD_HermiteTorsion_Element_Stretch(q_static(6*e - 5:6*e + 6), l0_am(e), &
-                                                                            tors%quadrature_order) - l0_am(e))
+        DO e = 1, SIZE(lf)
+          twist = twist - tors%couple(e)*(CD_HermiteTorsion_Element_Stretch(q_static(6*e - 5:6*e + 6), lf(e), &
+                                                                            tors%quadrature_order) - lf(e))
         END DO
       END IF
       ! Twist<L> is the turn of End B relative to End A, right-handed about the End A -> End B
@@ -8883,9 +8885,10 @@ CONTAINS
         ANY([(line_outputs_requested(lines(j)%outputs), j=1, SIZE(lines))])) &
       WRITE (output_unit, '(A)') '  Note: '//CD_LINE_NODE_NUMBERING_NOTE//'.'
     ! Torsion (a line torsionally restrained at both ends, or at one with the other free to
-    ! twist) runs on the standalone cubic-Hermite route and the multibody march, in statics and
-    ! dynamics. A line restrained at one end only whose torsion is not solved
-    ! (resolve_one_end_torsion) is noted with the reason.
+    ! twist) runs on the standalone cubic-Hermite route, the multibody march and the mixed
+    ! EI = 0 + finite-EI aggregate, in statics and in dynamics with the nodal twist's polar
+    ! inertia and the torque-tension coupling. A line restrained at one end only whose torsion
+    ! is not solved (resolve_one_end_torsion) is noted with the reason.
     DO li = 1, SIZE(lines)
       IF (COUNT(lines(li)%tors_mode /= TORS_FREE) == 1 .AND. lines(li)%tors_free_end == 0 .AND. &
           LEN_TRIM(lines(li)%tors_note) > 0) WRITE (output_unit, '(A)') '  Note: line '// &
@@ -12806,11 +12809,7 @@ CONTAINS
       END IF
     END DO
     CALL normalize_stock_endpoint_order(points, lines, sections, types)
-    IF (PRESENT(controls)) THEN
-      CALL resolve_one_end_torsion(types, bodies, points, lines, sections, opts, ext_march, controls)
-    ELSE
-      CALL resolve_one_end_torsion(types, bodies, points, lines, sections, opts, ext_march)
-    END IF
+    CALL resolve_one_end_torsion(types, bodies, rods, points, lines, sections, opts, ext_march)
     CALL finalize_and_validate(types, bodies, rod_types, rods, points, lines, sections, opts, channels, ext_march, &
                                static_finite_ok, ErrStat, ErrMsg, channel_lines)
     IF (ErrStat == 0) CALL set_azimuth_ranges(points, lines)
@@ -21607,7 +21606,7 @@ CONTAINS
                     'standalone driver runs with its Coupled points held still (that route takes no motionFile '// &
                     'either)'); RETURN
         END IF
-        IF ((lines(i)%endconn_mode(1) /= CD_ENDCONN_PINNED .OR. line_torsion_active(lines(i))) .AND. &
+        IF ((lines(i)%endconn_mode(1) /= CD_ENDCONN_PINNED .OR. line_torsion_at_a(lines(i))) .AND. &
             TRIM(points(pa)%ptype) /= 'fixed') THEN
           ! a clamped, elastic or torsionally restrained End A on a body or rod: implicit (monolithic
           ! step) only; the staggered step drives the cable end by translation, so its End A frame
@@ -38156,13 +38155,14 @@ CONTAINS
     at_a = line_torsion_active(ln) .AND. ln%tors_mode(1) /= TORS_FREE
   END FUNCTION line_torsion_at_a
 
-  SUBROUTINE resolve_one_end_torsion(types, bodies, points, lines, sections, opts, caller_driven, controls)
+  SUBROUTINE resolve_one_end_torsion(types, bodies, rods, points, lines, sections, opts, caller_driven)
     !! A finite-EI line restrained in torsion at one end only (the other end TorsStiffness Free,
     !! or no END CONNECTIONS row there) is solved in torsion where a line restrained at both ends
     !! is: every section gives GJ (the 14-column LINE TYPES row, whose Irn > 0 gives the nodal
-    !! twist its inertia), End B is Fixed, no ATTACHMENTS or CONTROL, the modal analysis is off,
-    !! a march (TMax > 0, or a caller-driven deck) is force-blended, and a restrained End A is on
-    !! no rod end and on no body but a Rigid6 one. Its free end carries no torque and turns with
+    !! twist its inertia), End B is Fixed, a march (TMax > 0, or a caller-driven deck) is
+    !! force-blended, and a restrained End A is on no body but a Rigid6 one and on no rod end but
+    !! a Fixed rod's (check_torsion_line). ATTACHMENTS, CONTROL and the modal analysis take it as
+    !! they take a line restrained at both ends. Its free end carries no torque and turns with
     !! the twist of the line: the stretch's under torque-tension coupling, and the torsional
     !! waves of the dynamics. tors_free_end is then the free deck end and its Pretwist 0 (it
     !! rolls nothing: Phi is the restrained end's Pretwist alone). Otherwise the line keeps the
@@ -38170,14 +38170,14 @@ CONTAINS
     !! sections are matched to their LINE TYPES by name (validation resolves them later).
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckBody), INTENT(IN) :: bodies(:)
+    TYPE(DeckRod), INTENT(IN) :: rods(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckLine), INTENT(INOUT) :: lines(:)
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
     LOGICAL, INTENT(IN) :: caller_driven
-    TYPE(DeckControl), INTENT(IN), OPTIONAL :: controls(:)
-    INTEGER :: i, j, k, ifree, ja, jb
-    LOGICAL :: finite, has_gj, ctrl
+    INTEGER :: i, j, k, ifree, ja, jb, rid, rend
+    LOGICAL :: finite, has_gj
     CHARACTER(200) :: why
     DO i = 1, SIZE(lines)
       lines(i)%tors_free_end = 0
@@ -38198,13 +38198,6 @@ CONTAINS
       END DO
       ! (an EI = 0 line with a torsional restraint is refused by name in finalize_checks)
       IF (.NOT. finite) CYCLE
-      ctrl = .FALSE.
-      IF (PRESENT(controls)) THEN
-        DO j = 1, SIZE(controls)
-          IF (.NOT. ALLOCATED(controls(j)%line_ids)) CYCLE
-          IF (ANY(controls(j)%line_ids == lines(i)%id)) ctrl = .TRUE.
-        END DO
-      END IF
       why = ''
       j = find_point(points, lines(i)%nodeB)
       IF (.NOT. has_gj) THEN
@@ -38213,12 +38206,6 @@ CONTAINS
         why = 'its End B point is undefined'
       ELSE IF (TRIM(points(j)%ptype) /= 'fixed') THEN
         why = 'it has two moving ends (torsion needs a Fixed End B)'
-      ELSE IF (ALLOCATED(lines(i)%att)) THEN
-        why = 'torsion is not combined with ATTACHMENTS'
-      ELSE IF (ctrl) THEN
-        why = 'active line control (CONTROL) is not combined with torsion'
-      ELSE IF (opts%n_modes > 0) THEN
-        why = 'the modal analysis (nModes) has no torsion'
       ELSE IF (.NOT. opts%alpha_force_blend .AND. (caller_driven .OR. (opts%has_tmax .AND. opts%tmax > CD_ZERO))) THEN
         why = 'torsion in a dynamic run needs the force-blended generalised-alpha (alpha_force_blend True)'
       ELSE IF (ifree == 2) THEN
@@ -38226,7 +38213,22 @@ CONTAINS
         ja = find_point(points, lines(i)%nodeA)
         IF (ja > 0) THEN
           IF (is_rod_point_type(points(ja)%ptype)) THEN
-            why = 'its restrained End A is on a rod end (a rod has no spin angle)'
+            ! a Fixed rod holds the End A torsion frame; a free or pinned rod is axisymmetric (no
+            ! roll angle to react the torque), and no route carries a finite-EI line on a
+            ! Coupled/Vessel rod
+            CALL parse_rod_point_type(points(ja)%ptype, rid, rend)
+            jb = find_rod(rods, rid)
+            IF (jb > 0) THEN
+              SELECT CASE (TRIM(rods(jb)%rod_type))
+              CASE ('fixed')
+              CASE ('coupled', 'vessel')
+                why = 'its restrained End A is on a Coupled/Vessel rod end (no route carries a finite-EI line '// &
+                      'on a host-driven rod)'
+              CASE DEFAULT
+                why = 'its restrained End A is on the end of a free or pinned rod (axisymmetric, with no roll '// &
+                      'angle to hold the torque)'
+              END SELECT
+            END IF
           ELSE IF (starts_with(TRIM(points(ja)%ptype), 'body')) THEN
             jb = find_body(bodies, int_suffix(TRIM(points(ja)%ptype), 5))
             IF (jb > 0) THEN

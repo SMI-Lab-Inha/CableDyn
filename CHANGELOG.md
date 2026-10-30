@@ -146,9 +146,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   0.0125 s); clamped there, by about 1e-7. OpenFAST checkpoints of such decks written before
   this change do not reload: the cable's state mirror now carries the nodal twist, and the
   rebuild stops at a mirror-extent check (`... mirror extends past the state vector`). A line
-  restrained at one end that misses a rule (no `GJ`, two moving ends, `ATTACHMENTS`,
-  `CONTROL`, `nModes`, the configuration blend) is solved without torsion as before, with a
-  note naming the rule; a solved one's restrained `Pretwist` is held within 1000 turns.
+  restrained at one end that misses a rule (no `GJ`, two moving ends, the configuration blend,
+  a restrained End A on a free, pinned or Coupled rod end or a non-Rigid6 body) is solved
+  without torsion as before, with a note naming the rule; a solved one's restrained `Pretwist`
+  is held within 1000 turns.
 - Torsion at a rod end: a line restrained in torsion may hang from an end of a `Fixed` rod (an
   I-tube or J-tube), whose frame holds the End A torsion frame, with `Nx` in the rod's deck
   axes. Two turns on an inclined J-tube give `GJ Phi / L` to 1.2e-9, the same torque as from a
@@ -159,6 +160,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and Coupled rods refuse the torsion by name, and so does `staggered bodyScheme` on a body or
   rod (it drove the cable end by translation, so the torsion frame did not turn); a line between
   two rods is refused as ending on a rod end, not as having two moving ends.
+- The torsion routes combined: a line restrained in torsion at one end only takes `ATTACHMENTS`,
+  `CONTROL`, `nModes` and a `Fixed` rod end, which left it unsolved in torsion. With modules of
+  net weights 14.6, −9.1 and 5.8 kN on a vertical cable its free end turns by `−(K/GJ)(H − L)`
+  to 8.5e-9 and its mid-line node with the module tensions to 3.9e-4 (a first-order mesh
+  error); a paid-out fairlead turns it by `−(K/GJ)(H − L(t))` to 4e-11 with no torque; its modes
+  and the eigenvalues of the OpenFAST `A` are the clamped–free chain's to 8e-10 and 2e-14 and
+  the quarter-wave `(2n − 1)π/(2L) √(GJ/Irn)` within the lumped-inertia error, with no roll
+  stiffness. The modal twist Hessian no longer takes a free end for an elastic one of infinite
+  stiffness. `ATTACHMENTS` on a line restrained at both ends run on the mixed `EI = 0` +
+  finite-EI route and on a `Fixed` rod end as on the single-line route (to the printed digits).
 - Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
   `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.

@@ -106,6 +106,7 @@ article's methods, are compared in
 | **T-13** | Nodal twist (torsional inertia and damping) | condensed torsion in the limit of no inertia; continuum torsional wave; `ζ = ω Bt/(2 GJ)`; energy; restart | ≤6e-7 against the condensed torsion; wave torque 0.07 %; decrement 6 %; energy band 4.9e-4; restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-12** | Torque–tension coupling | `T = EA ε + K τ`, `M = GJ τ + K ε` closed forms; kernel FD; march | ≤1e-7 against every closed form; kernel gradient 1.7e-10, Hessian 9.8e-11 | see [Torsion](#torsion) | Pass |
 | **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
+| **T-17** | One restrained end with ATTACHMENTS, CONTROL, modes, linearisation and rod ends; ATTACHMENTS on the mixed and rod routes | `-(K/GJ)(H - L)`; module tensions; clamped–free chain and quarter-wave; continuum roll response; zero roll stiffness; a second route | twist ≤8.5e-9, mid-line 3.9e-4 (first-order mesh error); modes chain ≤8e-10, quarter-wave within `1 − sin x/x`; roll stiffness 0; routes to the printed digits | 1e-6; 1e-3; 2e-8 | Pass |
 | **T-16** | Torsion and prescribed motion on the standalone mixed deck | the single-line cubic-Hermite route; `GJ Φ/L` | torque, twist, node positions to the printed digits; end loads ≤8.2e-6 of range (all channels to the printed digits with the same Newton controls); torque ≤4.7e-6 N·m | printed digits; 5e-5; 1e-6 GJ | Pass |
 
 **Pass** meets the stated acceptance value. **Pass measured** records a measured
@@ -1126,10 +1127,45 @@ in parentheses).
   fairlead both routes write the same `t = 0` row at the installed row and a `.static.out` of
   the static solve; a static mixed run with torsion takes `False alpha_force_blend`, and a
   dynamic one stops by name.
+- **T-17 the routes combined** (`torsion_one_end`, `control_torsion`, `modal_torsion_deck`,
+  `lin_torsion`, `rod_end_torsion`, `mixed_route_torsion`). A line restrained in torsion at one
+  end only, its other end free to twist (GJ|K 5e4 N·m²|4e5 N·m unless named otherwise):
+  - `ATTACHMENTS`: hung vertically, 99 m between points 100 m apart, with two clumps and a buoy
+    of net weights 14.6, −9.1 and 5.8 kN, free at End A and at End B in turn: `Twist1` is
+    `−(K/GJ)(H − L0)` to 8.5e-9 whatever the weights, the end tensions carry them to 2.9e-9, no
+    torque, and the mid-line twist follows the module tensions to 3.9e-4 (the shared nodal
+    tangent spreads each tension step over two elements: 1.9e-4 at 80 elements, 9.6e-5 at
+    160); with neutral modules a roll of the restrained end at `kL = π/8` gives the continuum's
+    free-end twist and end torques to 9e-4;
+  - `CONTROL` on the coupled aggregate: the free end, the controlled fairlead or the anchor,
+    turns with the commanded length, `Twist1 = −(K/GJ)(H − L(t))`, to 3.7e-11 through a 0.2 m
+    pay-out, with no torque (8.2e-11 of `K ε`) and the mean held tension `(EA − K²/GJ) ε` to 1.2e-4;
+  - `nModes` (straight clamped line of T-15): the torsional modes are the clamped–free chain's
+    `2 √(GJ/Irn)/l0 sin((2n − 1)π/(4N))` to 8e-10 and the quarter-wave `(2n − 1)π/(2L) √(GJ/Irn)`
+    within the chain's `1 − sin x/x` (6.4e-5 on the first), the first mode shape
+    `sin(π s/(2L))` to 5e-10, the other modes those of `TorsStiffness Free`;
+  - OpenFAST linearisation (the shell's recipe): the free end's angle is a state, the twist
+    modes of `A` are the clamped–free chain's to 2e-14 and the quarter-wave's within the
+    lumped-inertia error (4.1e-5 on the first), and the reduced roll stiffness is 0 (End B free:
+    `C A⁻¹ B` cancels the feedthrough `GJ/l_e`; End A free: no column);
+  - on a `Fixed` rod end (the J-tube of the rod-end gate), free at End B or at the rod end:
+    `Twist1 = −(K/GJ) dl` to 8.5e-9 and the held Coupled point's to the printed digits.
+
+  Before these routes were combined, `ATTACHMENTS`, `CONTROL`, `nModes` and a restrained End A
+  on a rod end left such a line unsolved in torsion (a note; its twist channels stopped by
+  name), while the linearisation already took it; lifting the rules alone would not do: the
+  torsion stage after the attachment polish read the pre-polish mesh (a crash), and the modal
+  twist Hessian took the free end for an elastic one of infinite stiffness (a non-finite
+  matrix). `ATTACHMENTS` on a line restrained at both ends
+  run on the mixed route (three buoyancy modules on the gate-2 line of T-16: the single-line
+  route's torque and twist to 1.15 printed units, end loads to 2.1e-5 of their range) and on a
+  `Fixed` rod end (two clumps and a buoy: the held Coupled point's torque and twist to the
+  printed digits).
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
-  with `Free` columns (whatever their normal), or with one restrained end, every output is
-  byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
-  give the same run. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
+  with `Free` columns (whatever their normal), or with one restrained end on a line whose
+  `LINE TYPES` rows give no `GJ`, every output is byte-identical to the 6-column deck, and
+  `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"` give the same run. Malformed rows, a missing
+  `GJ`, an `EI = 0` line, the end of a free, pinned or `Coupled` rod, a `Point3` body,
   the configuration blend (also on the coupled entries), misuse of the roll column, channels on
   an unrestrained line and a coupled caller that passes no orientation (the C API's
   `CableDyn_InitDeck`/`InitDeckAt`) stop with named errors.

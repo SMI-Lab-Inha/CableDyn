@@ -864,14 +864,17 @@ Behaviour:
   `Pretwist` are not used. The section axes of `CurvX`/`CurvY` start, with End A restrained,
   from End A's `Nx` (not rolled by its `Pretwist`, as on a line restrained at both ends) and,
   with End B restrained, from End B's `Nx` rolled by End B's `Pretwist`; either way they are
-  carried along the line and turned by its twist. A line restrained at one end that misses a
-  rule (its `LINE TYPES` rows give no `GJ`, two moving ends, `ATTACHMENTS`, `CONTROL`,
-  `nModes`, a dynamic or coupled run with `False alpha_force_blend`, a restrained End A on a
-  rod end or a non-Rigid6 body) is solved as without the columns, and the standalone driver
-  prints a note with the reason. A solved one's imposed twist, its restrained end's `Pretwist`,
-  must lie within 1000 turns, as `Pretwist(B) − Pretwist(A)` must on a line restrained at both
-  ends. A line restrained at End A on a Rigid6 body joins the static balance of the body's
-  clamped and elastic ends, also at a bending-`Pinned` End A (the body takes its torque).
+  carried along the line and turned by its twist. `ATTACHMENTS`, `CONTROL`, `nModes` (the
+  free end's angle is a mode coordinate, with the clamped–free modes) and OpenFAST
+  linearisation (the free end's angle is a state) take such a line as they take one
+  restrained at both ends. A line restrained at one end that misses a rule (its `LINE TYPES`
+  rows give no `GJ`, two moving ends, a dynamic or coupled run with `False alpha_force_blend`,
+  a restrained End A on a rod end other than a `Fixed` rod's or on a non-Rigid6 body) is
+  solved as without the columns, and the standalone driver prints a note with the reason. A
+  solved one's imposed twist, its restrained end's `Pretwist`, must lie within 1000 turns, as
+  `Pretwist(B) − Pretwist(A)` must on a line restrained at both ends. A line restrained at End A
+  on a Rigid6 body joins the static balance of the body's clamped and elastic ends, also at a
+  bending-`Pinned` End A (the body takes its torque).
   `Free` columns, or no columns, reproduce the 6-column results exactly.
 - The imposed twist is `Phi = Pretwist(B) − Pretwist(A)`, measured against the line's own
   geometric twist `Theta`, the parallel-transport rotation of the End A normal carried along the
@@ -1393,8 +1396,8 @@ cases. With an active path:
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
 plain numbers; tokens after the eleventh are ignored, except that a deck with a line solved in
 torsion reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the line's moving
-end, restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A), right-handed
-about the line tangent pointing into the line from that end. Either way it imposes
+end, restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A),
+right-handed about the line tangent pointing into the line from that end. Either way it imposes
 `Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`: the roll has the sense of `Pretwist(A)` at End A
 (where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)` at End B (where it is
 `−Ez`). The roll is 0 at

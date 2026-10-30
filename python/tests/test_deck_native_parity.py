@@ -1024,10 +1024,28 @@ def test_torsion_line_rules_follow_the_native_checks():
         _options(one_end_dyn, "False alpha_force_blend"),
         "torsion is not solved: torsion in a dynamic run needs the force-blended",
     )
+    # the modal analysis, ATTACHMENTS and CONTROL take a line solved at one end, its channels too
+    DeckFile.from_text(_options(one_end, "3 nModes"))
     DeckFile.from_text(
-        _options(_edit(one_end, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")), "3 nModes")
+        _edit(
+            one_end,
+            (
+                f"{_BAR} OPTIONS {_BAR}",
+                f"{_BAR} ATTACHMENTS {_BAR}\nLineID ArcLength Mass Volume CdA Ca\n"
+                f"1 50.0 10.0 0.0 0.0 0.0\n{_BAR} OPTIONS {_BAR}",
+            ),
+        )
     )
-    _rejects(_options(one_end, "3 nModes"), "torsion is not solved: the modal analysis")
+    DeckFile.from_text(
+        _edit(
+            one_end,
+            (
+                f"{_BAR} OPTIONS {_BAR}",
+                f"{_BAR} CONTROL {_BAR}\nChannelID Line(s)\n(-) (-)\n1 1\n{_BAR} OPTIONS {_BAR}",
+            ),
+        ),
+        caller_driven=True,
+    )
     # the dynamic run needs the force blend; modal analysis carries the twist
     dynamic = _edit(_TORSION, ("0.0 TMax\n", "10.0 TMax\n"))
     DeckFile.from_text(dynamic)
@@ -1074,6 +1092,24 @@ def _torsion_two_moving(row_a: str) -> str:
         ("2 Fixed 100.0 0.0 -50.0 0 0 0 0", "2 Free 100.0 0.0 -50.0 100 0 0 0"),
         (_TORSION_ROW_A, row_a),
         ("1 B Rigid 1 0 0 Rigid", "1 B Pinned 1 0 0 Rigid"),
+    )
+
+
+def _one_end_rod(rod_kind: str) -> str:
+    """The pure-torsion line hung from End B of a rod of the given kind along its axis (+x),
+    restrained in torsion there only (End B of the line free to twist)."""
+    return _edit(
+        _TORSION_DYN,
+        (
+            f"{_BAR} POINTS {_BAR}",
+            f"{_BAR} ROD TYPES {_BAR}\nName Diam Mass Cd Ca CdEnd CaEnd\n"
+            "spar 1.0 300.0 0.8 1.0 0.0 0.0\n"
+            f"{_BAR} RODS {_BAR}\nID RodType Type XA YA ZA XB YB ZB NumSegs Outputs\n"
+            f"1 spar {rod_kind} -10 0 -50 0 0 -50 2 -\n{_BAR} POINTS {_BAR}",
+        ),
+        ("1 1 2 -", "1 R1B 2 -"),
+        ("1 Coupled 0.0 0.0 -50.0 0 0 0 0\n", ""),
+        ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Free 0 0 1 0"),
     )
 
 
@@ -1150,6 +1186,14 @@ def test_torsion_scope_rules_follow_the_native_checks():
         "a torsional END CONNECTION on the end of Coupled/Vessel ROD 1 is not supported: no route "
         "of this build carries a finite-EI line on a host-driven rod",
     )
+    # restrained at the rod end only (End B free to twist): solved on a Fixed rod, noted on a
+    # pinned one, whose twist channels are then refused with the reason
+    DeckFile.from_text(_one_end_rod("Fixed"))
+    _rejects(
+        _one_end_rod("Pinned"),
+        "its torsion is not solved: its restrained End A is on the end of a free or pinned rod",
+    )
+    DeckFile.from_text(_edit(_one_end_rod("Pinned"), _NO_TORSION_OUTPUTS))
     attachments = _edit(
         _TORSION,
         (
@@ -1498,8 +1542,28 @@ def test_one_end_pretwist_stays_within_1000_turns():
             (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
             ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Rigid 0 0 1 1e8"),
         ),
+        _options(_edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n")), "3 nModes"),
+        _edit(
+            _TORSION,
+            (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
+            (
+                f"{_BAR} OPTIONS {_BAR}",
+                f"{_BAR} ATTACHMENTS {_BAR}\nLineID ArcLength Mass Volume CdA Ca\n"
+                f"1 50.0 10.0 0.0 0.0 0.0\n{_BAR} OPTIONS {_BAR}",
+            ),
+        ),
+        _one_end_rod("Fixed"),
+        _one_end_rod("Pinned"),
     ],
-    ids=["stock-point3-body", "stock-rigid6-body", "one-end-huge-pretwist"],
+    ids=[
+        "stock-point3-body",
+        "stock-rigid6-body",
+        "one-end-huge-pretwist",
+        "one-end-nmodes",
+        "one-end-attachments",
+        "one-end-fixed-rod",
+        "one-end-pinned-rod",
+    ],
 )
 def test_one_end_torsion_gets_the_native_verdict(text, tmp_path):
     try:

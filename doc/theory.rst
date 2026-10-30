@@ -561,8 +561,11 @@ the clamped–free ones, :math:`\omega_n = (2n - 1)\,\pi/(2L)\,\sqrt{GJ/I_{rn}}`
 line held rigidly at the other end; a roll :math:`A\sin\Omega t` of the restrained end turns
 the free end by :math:`A/\cos kL` (:math:`k = \Omega\sqrt{I_{rn}/GJ}`) and loads the
 restrained end with :math:`GJ A k \tan kL`. Exactly one end is restrained, so no rigid spin of
-the angles is left free. The test suite checks these frequencies, the driven response at
-:math:`kL = \pi/4` and :math:`3\pi/4` and the free end's coupling turn against the continuum.
+the angles is left free. The modal analysis and the OpenFAST linearisation take the free end's
+angle as a coordinate (no spring term in the twist Hessian) and give these clamped–free modes,
+and a free end has no roll stiffness. The test suite checks these frequencies, the driven
+response at :math:`kL = \pi/4` and :math:`3\pi/4` and the free end's coupling turn against
+the continuum.
 
 In the limit of a negligible inertia the element torques are uniform and equal the condensed
 torque; the test suite holds the two models to 1e-6 on a rolling, swaying, bowed line with

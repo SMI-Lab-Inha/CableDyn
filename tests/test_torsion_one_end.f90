@@ -40,6 +40,21 @@ PROGRAM test_torsion_one_end
   !!   N  a line restrained at one end whose LINE TYPES row gives no GJ (10 columns) keeps the
   !!      meaning of the 6-column rows: its twist channels are refused with the reason; a solved
   !!      line's restrained Pretwist beyond 1000 turns is refused by name.
+  !!   T  ATTACHMENTS on a line free at one end (the torsion stage after the attachment polish,
+  !!      on the polished mesh):
+  !!      T1 statics: the C1 cable hung vertically (99 m between points 100 m apart) carrying three
+  !!         clumps and buoys of net weights w_k at nodes n_k, free at End A and at End B in turn.
+  !!         The line stays straight and its section is free to twist, so each element carries
+  !!         the tension T_e = T_A - sum_(n_k <= e) w_k and the strain T_e/(EA - K^2/GJ), with
+  !!         sum_e l0 eps_e = H - L0: T_A = [(EA - K^2/GJ)(H - L0)/l0 + sum_k w_k (NE + 1 - n_k)]/NE.
+  !!         The free end turns by Twist1 = -(K/GJ)(H - L0) whatever the weights, with no torque
+  !!         and the tensions T_A, T_A - sum w_k; the mid-line node by -(K/GJ) sum_(e<=20) l0 eps_e
+  !!         (0.8 % beyond the uniform strain's half) within 1e-3: the shared nodal tangent of
+  !!         the cubic-Hermite elements spreads each tension step over its two elements, a
+  !!         first-order mesh error (3.9e-4, 1.9e-4, 9.6e-5 at 40, 80, 160 elements);
+  !!      T2 dynamics: the D roll of the restrained End A, the line taut (99.9 m over the span),
+  !!         with three neutral modules (their mass is translational only, so the torsional
+  !!         response is D's continuum over the 99.9 m).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -74,6 +89,8 @@ PROGRAM test_torsion_one_end
   CALL check_deck_inertia()
   CALL check_aggregate()
   CALL check_not_solved()
+  CALL check_attachments_statics()
+  CALL check_attachments_inertia()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -405,13 +422,15 @@ CONTAINS
       TRIM(gj_col)//' 1.0 ', irn, ' 0.0 0.0 0.0 0.0'
   END FUNCTION type_row
 
-  SUBROUTINE write_deck(path, trow, conns, length, options, outs, ten_cols)
-    !! The straight cable along +x from a Coupled End A (0, 0, -50) to a Fixed End B (100, 0, -50),
-    !! 40 elements over length, LINE TYPES row trow (14 columns, or 10 with ten_cols), END
-    !! CONNECTIONS rows conns (none when empty), then options and outs.
+  SUBROUTINE write_deck(path, trow, conns, length, options, outs, ten_cols, atts, end_b)
+    !! The straight cable along +x from a Coupled End A (0, 0, -50) to a Fixed End B (100, 0, -50)
+    !! (or end_b), 40 elements over length, LINE TYPES row trow (14 columns, or 10 with ten_cols),
+    !! END CONNECTIONS rows conns (none when empty), ATTACHMENTS rows atts, then options and outs.
     CHARACTER(*), INTENT(IN) :: path, trow, conns(:), options(:), outs(:)
     REAL(wp), INTENT(IN) :: length
     LOGICAL, INTENT(IN), OPTIONAL :: ten_cols
+    CHARACTER(*), INTENT(IN), OPTIONAL :: atts(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: end_b(3)
     INTEGER :: u, i
     LOGICAL :: ten
     ten = .FALSE.
@@ -431,7 +450,11 @@ CONTAINS
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
     WRITE (u, '(A)') '1 Coupled 0.0 0.0 -50.0 0 0 0 0'
-    WRITE (u, '(A)') '2 Fixed 100.0 0.0 -50.0 0 0 0 0'
+    IF (PRESENT(end_b)) THEN
+      WRITE (u, '(A,3ES24.16,A)') '2 Fixed ', end_b, ' 0 0 0 0'
+    ELSE
+      WRITE (u, '(A)') '2 Fixed 100.0 0.0 -50.0 0 0 0 0'
+    END IF
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
@@ -440,6 +463,14 @@ CONTAINS
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
     WRITE (u, '(A,F10.4,A)') '1 cab ', length, ' 40'
+    IF (PRESENT(atts)) THEN
+      WRITE (u, '(A)') '--- ATTACHMENTS ---'
+      WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca'
+      WRITE (u, '(A)') '(-) (m) (kg) (m3) (m2) (-)'
+      DO i = 1, SIZE(atts)
+        WRITE (u, '(A)') TRIM(atts(i))
+      END DO
+    END IF
     IF (SIZE(conns) > 0) THEN
       WRITE (u, '(A)') '--- END CONNECTIONS ---'
       WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
@@ -845,6 +876,122 @@ CONTAINS
                                       'turns') > 0, 'N: a restrained Pretwist beyond 1000 turns is named (got: '// &
                  TRIM(em)//')')
   END SUBROUTINE check_not_solved
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_attachments_statics()
+    !! T1: the static coupling twist of a vertical line free at one end carrying attachments.
+    INTEGER, PARAMETER :: NE_D = 40, NATT = 3, NODE(NATT) = [11, 21, 31]
+    REAL(wp), PARAMETER :: MASS(NATT) = [2000.0_wp, 100.0_wp, 800.0_wp], VOL(NATT) = [0.5_wp, 1.0_wp, 0.2_wp]
+    CHARACTER(16), PARAMETER :: OUTS(7) = [CHARACTER(16) :: 'FairTen1', 'AnchTen1', 'Torq1N1', 'Torq1N41', &
+                                                                                     'Twist1N21', 'Twist1', 'Twist1N41']
+    CHARACTER(48) :: conns(2, 2), atts(NATT)
+    CHARACTER(24), PARAMETER :: LABEL(2) = [CHARACTER(24) :: 'End A free', 'End B free']
+    REAL(wp), ALLOCATABLE :: rows(:, :)
+    REAL(wp) :: w(NATT), l0, ea_eff, t_a, t_e, tw_ref, tw_mid, tw_mid0, e_tw, e_mid, e_t, e_m
+    INTEGER :: iv, k, e, nrow
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    l0 = L0_D/REAL(NE_D, wp)
+    w = (MASS - RHOW*VOL)*9.80665_wp
+    DO k = 1, NATT
+      WRITE (atts(k), '(A,F12.6,F10.2,F8.3,A)') '1 ', REAL(NODE(k) - 1, wp)*l0, MASS(k), VOL(k), ' 0.0 0.0'
+    END DO
+    ! the element tensions from End A down, their strains and the twists
+    ea_eff = EA_D - K_D**2/GJ_D
+    t_a = ea_eff*(SPAN - L0_D)/l0
+    DO k = 1, NATT
+      t_a = t_a + w(k)*REAL(NE_D + 1 - NODE(k), wp)
+    END DO
+    t_a = t_a/REAL(NE_D, wp)
+    tw_ref = -(K_D/GJ_D)*(SPAN - L0_D)/DEG
+    tw_mid = 0.0_wp
+    DO e = 1, 20
+      t_e = t_a - SUM(w, MASK=NODE <= e)
+      tw_mid = tw_mid - (K_D/GJ_D)*l0*t_e/ea_eff
+    END DO
+    tw_mid = tw_mid/DEG
+    tw_mid0 = 0.5_wp*tw_ref
+    conns(:, 1) = [CHARACTER(48) :: '1 A Rigid 0 0 -1 Free 1 0 0', '1 B Rigid 0 0 -1 Rigid 1 0 0 30']
+    conns(:, 2) = [CHARACTER(48) :: '1 A Rigid 0 0 -1 Rigid 1 0 0 -30', '1 B Rigid 0 0 -1 Free 1 0 0']
+    DO iv = 1, 2
+      CALL write_deck('t1e_att.dat', type_row('5.0e4|4.0e5', 1.0e-9_wp), conns(:, iv), L0_D, &
+                      [CHARACTER(16) :: '200.0 WtrDpth', '0.1 dtM', '0.0 TMax'], OUTS, atts=atts, &
+                      end_b=[0.0_wp, 0.0_wp, -50.0_wp - SPAN])
+      CALL run_deck('t1e_att.dat', 't1e_att', ok, em)
+      CALL require(ok, 'T1 ('//TRIM(LABEL(iv))//'): the deck with attachments runs with its twist channels: '//TRIM(em))
+      IF (.NOT. ok) CYCLE
+      CALL read_out('t1e_att.out', 8, rows, nrow)
+      CALL require(nrow == 1, 'T1: one static row')
+      IF (nrow < 1) CYCLE
+      e_tw = MAX(ABS(rows(7, 1) - tw_ref), ABS(rows(8, 1) - tw_ref))/ABS(tw_ref)
+      e_mid = ABS(rows(6, 1) - tw_mid)/ABS(tw_mid)
+      e_t = MAX(ABS(rows(2, 1) - t_a), ABS(rows(3, 1) - (t_a - SUM(w))))/t_a
+      e_m = nan_max_abs(rows(4:5, 1))
+      WRITE (*, '(A,A,A,F12.5,A,F12.5,A,F12.5,A,F12.5,A,F12.5,A,4ES10.2)') 'T1 ', TRIM(LABEL(iv)), ': Twist1 ', &
+        rows(7, 1), ' deg (expected ', tw_ref, '), Twist1N21 ', rows(6, 1), ' (expected ', tw_mid, &
+        '; uniform strain ', tw_mid0, '); errors twist, mid twist, tensions, |torque| ', e_tw, e_mid, e_t, e_m
+      CALL require(e_tw <= 1.0e-6_wp, 'T1 ('//TRIM(LABEL(iv))//'): the free end turns by -(K/GJ) dl with the modules')
+      CALL require(e_mid <= 1.0e-3_wp, 'T1 ('//TRIM(LABEL(iv))//'): the mid-line twist follows the module tensions')
+      CALL require(e_t <= 1.0e-6_wp, 'T1 ('//TRIM(LABEL(iv))//'): the end tensions carry the module weights')
+      CALL require(e_m <= 1.0e-6_wp, 'T1 ('//TRIM(LABEL(iv))//'): no static torque')
+    END DO
+  END SUBROUTINE check_attachments_statics
+
+  SUBROUTINE check_attachments_inertia()
+    !! T2: the D roll of the restrained End A with three neutral modules (mass rhoW V, no drag), the
+    !! line taut (an attachment polish of the slack-free D line does not converge, with or without
+    !! torsion).
+    REAL(wp), PARAMETER :: IRN_D = 1.0_wp, AMP = 0.1_wp, LEN_T = 99.9_wp
+    INTEGER, PARAMETER :: NPP = 120, NPER_RAMP = 8, NPER_MEAS = 4
+    REAL(wp), ALLOCATABLE :: rows(:, :)
+    REAL(wp) :: c, om, dt, t, kw, tw_ref, ma_ref, mb_ref, proj(3), e(3)
+    INTEGER :: u, k, nrow, k0, nstep
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    CHARACTER(64) :: opt(3)
+    c = SQRT(GJ_D/IRN_D)
+    om = 0.25_wp*0.5_wp*PI*c/SPAN
+    dt = 2.0_wp*PI/om/REAL(NPP, wp)
+    nstep = (NPER_RAMP + 1 + NPER_MEAS)*NPP
+    OPEN (NEWUNIT=u, FILE='t1e_att_roll.txt', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') '# time id x y z vx vy vz ax ay az roll'
+    DO k = 0, nstep
+      t = dt*REAL(k, wp)
+      WRITE (u, '(ES24.16,A,ES24.16)') t, ' 1 0.0 0.0 -50.0 0 0 0 0 0 0 ', &
+        AMP*ramp(t, REAL(NPER_RAMP, wp)*2.0_wp*PI/om)*SIN(om*t)/DEG
+    END DO
+    CLOSE (u)
+    WRITE (opt(1), '(ES24.16,A)') dt, ' dtM'
+    WRITE (opt(2), '(ES24.16,A)') dt*REAL(nstep, wp), ' TMax'
+    opt(3) = 't1e_att_roll.txt motionFile'
+    CALL write_deck('t1e_att_roll.dat', type_row('5.0e4', IRN_D), &
+                    [CHARACTER(48) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Free 0 0 1'], LEN_T, opt, &
+                    [CHARACTER(16) :: 'Twist1', 'Torq1N1', 'Torq1N41'], &
+                    atts=[CHARACTER(48) :: '1 25.0 512.5 0.5 0.0 0.0', '1 50.0 1025.0 1.0 0.0 0.0', &
+                          '1 75.0 205.0 0.2 0.0 0.0'])
+    CALL run_deck('t1e_att_roll.dat', 't1e_att_roll', ok, em)
+    CALL require(ok, 'T2: the rolling march with neutral modules runs: '//TRIM(em))
+    IF (.NOT. ok) RETURN
+    CALL read_out('t1e_att_roll.out', 4, rows, nrow)
+    CALL require(nrow == nstep + 1, 'T2: one row per step')
+    IF (nrow /= nstep + 1) RETURN
+    k0 = (NPER_RAMP + 1)*NPP + 1
+    proj = 0.0_wp
+    DO k = k0 + 1, nrow
+      proj = proj + rows(2:4, k)*SIN(om*rows(1, k))
+    END DO
+    proj = 2.0_wp*proj/REAL(NPER_MEAS*NPP, wp)
+    kw = om/c
+    CALL inertia_expect(AMP, kw, LEN_T, 40, tw_ref, ma_ref, mb_ref)
+    e(1) = proj(1)*DEG/tw_ref - 1.0_wp
+    e(2) = proj(2)/ma_ref - 1.0_wp
+    e(3) = proj(3)/mb_ref - 1.0_wp
+    WRITE (*, '(A,3ES13.5,A,3ES13.5,A,3ES10.2)') 'T2 roll with neutral modules (kL = pi/8): Twist1, Torq1N1, '// &
+      'Torq1N41 at Omega ', proj(1)*DEG, proj(2:3), ' continuum ', tw_ref, ma_ref, mb_ref, ' errors ', e
+    CALL require(ABS(e(1)) <= 1.0e-2_wp, 'T2: the free End B follows the roll with the continuum''s twist')
+    CALL require(ABS(e(2)) <= 1.0e-2_wp, 'T2: the restrained End A carries the continuum''s inertial torque')
+    CALL require(ABS(e(3)) <= 3.0e-2_wp, 'T2: the free End B''s element carries the continuum''s small torque')
+  END SUBROUTINE check_attachments_inertia
 
   ELEMENTAL INTEGER(8) FUNCTION bits(x)
     REAL(wp), INTENT(IN) :: x

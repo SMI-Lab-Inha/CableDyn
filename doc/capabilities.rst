@@ -89,7 +89,8 @@ Line and constitutive capability
      - Supported with limits
      - isotropic torsion of a finite-EI line restrained in torsion at both ends, or at one end
        with the other free to twist (the free end carries no torque and turns with the twist of
-       the line: the stretch's under ``GJ|K``, and torsional waves in dynamics)
+       the line: the stretch's under ``GJ|K``, and torsional waves in dynamics; on every route
+       and with every feature below that takes a line restrained at both ends)
        (``END CONNECTIONS`` torsion columns, explicit ``GJ``), with torque–tension coupling
        (``GJ|K``): condensed (uniform torque) in statics with a stability check and buckling
        descent, and a twist angle at every node in dynamics, with the polar inertia ``Irn`` and

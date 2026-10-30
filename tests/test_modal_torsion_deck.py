@@ -14,7 +14,15 @@
    deck's axes.
 2. tests/data/torsion_lazy_wave_modes.dat, the lazy wave twisted two turns, runs its modes:
    12 ascending, finite frequencies with PolarShare in [0, 1] and a dTwist column.
-Both fail closed on a driver that refuses nModes with torsion.
+3. The straight line of 1 restrained in torsion at one end only, the other free to twist (End B
+   free, then End A): its torsional modes are the clamped-free chain's
+   2 sqrt(GJ/Irn)/l0 sin((2n - 1) pi/(4 NE)) (the free end's half polar mass is the mid-node of
+   a clamped-clamped chain twice as long) and the continuum's quarter-wave (2n - 1) pi/(2 L0)
+   sqrt(GJ/Irn) within the chain's own 1 - sin(x)/x, x = (2n - 1) pi/(4 NE); the first one's
+   dTwist is sin(pi s/(2 L0)) from the restrained end, largest at the free end; the bending and
+   axial modes are those of the TorsStiffness Free deck.
+1 and 2 fail closed on a driver that refuses nModes with torsion, 3 on one that does not solve
+the torsion of a line restrained at one end with nModes (no twist columns).
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ N_MODES = 24
 REL_EXACT = 2.0e-8
 
 
-def straight_deck(torsion: str, heading_deg: float = 0.0) -> str:
+def straight_deck(torsion: str, heading_deg: float = 0.0, torsion_b: str | None = None) -> str:
     mass = RHO_W * math.pi * DIAM**2 / 4.0  # neutrally buoyant: the line stays straight
     span = L0 * (1.0 + TENSION / EA)
     c, s = math.cos(math.radians(heading_deg)), math.sin(math.radians(heading_deg))
@@ -54,7 +62,7 @@ LineID LineType Length NumSegs
 {bar} END CONNECTIONS {bar}
 LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist
 1 A Rigid {c!r} {s!r} 0 {torsion} 0 0 1 0
-1 B Rigid {c!r} {s!r} 0 {torsion} 0 0 1 0
+1 B Rigid {c!r} {s!r} 0 {torsion if torsion_b is None else torsion_b} 0 0 1 0
 {bar} OPTIONS {bar}
 9.80665 g
 {RHO_W!r} rhoW
@@ -172,6 +180,63 @@ def check_straight(exe: str, out: Path) -> list[str]:
     return failures
 
 
+def check_one_end(exe: str, out: Path) -> list[str]:
+    failures: list[str] = []
+    _, freq0, _, _ = read_modes(run_deck(exe, out, "straight_free", straight_deck("Free")))
+    omega0 = [row[4] for row in freq0]
+    l0 = L0 / NE
+    for label, row_a, row_b in (("End B free", "Rigid", "Free"), ("End A free", "Free", "Rigid")):
+        name = "one_end_" + label.split()[1].lower()
+        fh, freq, sh, shapes = read_modes(run_deck(exe, out, name, straight_deck(row_a, torsion_b=row_b)))
+        if fh[-1] != "PolarShare" or sh[-1] != "dTwist":
+            failures.append(f"{label}: no PolarShare/dTwist columns ({fh}, {sh})")
+            continue
+        n = 0
+        other = []
+        for j, row in enumerate(freq, start=1):
+            om, share = row[4], row[5]
+            if share <= 0.5:
+                other.append(om)
+                continue
+            n += 1
+            x = (2 * n - 1) * math.pi / (4.0 * NE)
+            chain = 2.0 * math.sqrt(GJ / IRN) / l0 * math.sin(x)
+            cont = (2 * n - 1) * math.pi / (2.0 * L0) * math.sqrt(GJ / IRN)
+            err_d, err_c = abs(om / chain - 1.0), abs(om / cont - 1.0)
+            bound = 1.0 - math.sin(x) / x
+            print(
+                f"  {label}: torsional mode {n} (mode {j}): omega {om:.6f} rad/s, quarter-wave "
+                f"{cont:.6f}, error {err_c:.2e} (bound {1.01 * bound:.2e}), clamped-free chain error "
+                f"{err_d:.2e}, polar share 1 - {1 - share:.1e}"
+            )
+            if err_d > REL_EXACT or err_c > 1.01 * bound + REL_EXACT or 1.0 - share > REL_EXACT:
+                failures.append(f"{label}: torsional mode {n}: omega {om}, chain {chain}, continuum {cont}")
+            if n == 1:
+                rows = [r for r in shapes if int(r[1]) == j]
+                twist = [r[9] for r in rows]
+                # the node index from End A; the restrained end is End A when End B is free
+                ks = range(NE + 1) if row_a == "Rigid" else range(NE, -1, -1)
+                ref = [math.sin(0.5 * math.pi * k / NE) for k in ks]
+                sign = 1.0 if twist[NE // 2] * ref[NE // 2] > 0.0 else -1.0
+                err_s = max(abs(sign * t - r) for t, r in zip(twist, ref))
+                print(f"  {label}: torsional mode 1 shape against sin(pi s/(2 L0)) {err_s:.2e}")
+                if err_s > 1.0e-6:
+                    failures.append(f"{label}: torsional mode 1 shape {err_s}")
+        err_o = max(abs(om / om0 - 1.0) for om, om0 in zip(other, omega0))
+        print(f"  {label}: {n} torsional modes; {len(other)} others against TorsStiffness Free {err_o:.2e}")
+        if n < 3:
+            failures.append(f"{label}: expected at least 3 torsional modes among the {N_MODES} lowest, found {n}")
+        if err_o > REL_EXACT:
+            failures.append(f"{label}: bending/axial modes differ from the Free deck by {err_o}")
+    return failures
+
+
+def run_deck(exe: str, out: Path, name: str, text: str) -> Path:
+    deck = out / f"{name}.dat"
+    deck.write_text(text, encoding="utf-8")
+    return run(exe, deck, out / name)
+
+
 def check_lazy_wave(exe: str, source: Path, out: Path) -> list[str]:
     failures: list[str] = []
     path = run(exe, source / "tests" / "data" / "torsion_lazy_wave_modes.dat", out / "torsion_lazy_wave_modes")
@@ -204,6 +269,7 @@ def main() -> int:
     try:
         failures += check_straight(args.exe, args.output)
         failures += check_lazy_wave(args.exe, args.source, args.output)
+        failures += check_one_end(args.exe, args.output)
     except AssertionError as exc:
         failures.append(str(exc))
     for failure in failures:

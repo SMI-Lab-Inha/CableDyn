@@ -29,6 +29,13 @@
 !>     on a body-fixed rod even when its bending is pinned (it ran with the frame frozen); a line
 !>     written anchor first onto a Pinned rod meets the Pinned rod's refusal (it read "two moving
 !>     ends"), and a line between two Fixed rods is refused as one with End B on a rod end.
+!>  4. with the other routes: the gate 1 line on the Fixed J-tube, with torque-tension coupling
+!>     (GJ|K 5e4 N m2|4e5 N m) and restrained in torsion at the rod end only (End B free to twist),
+!>     carries no torque and its free end turns with the 1e-4 stretch, Twist1 = -(K/GJ) dl, the
+!>     same as from the held Coupled point; free at the rod end and restrained at the anchor
+!>     instead, the same twist. The gate 1 line twisted two turns and carrying two clumps and a
+!>     buoy (ATTACHMENTS, which bend it off the rod axis) gives the torque and twist of the same
+!>     line from the held Coupled point to the printed digits.
 !> The multibody march has no restart (checkpoint) path, so there is no restart gate.
 PROGRAM test_rod_end_torsion
   USE CableDyn_Precision, ONLY: wp
@@ -50,6 +57,8 @@ PROGRAM test_rod_end_torsion
   CALL check_fixed_rod()
   CALL check_body_rod_roll()
   CALL check_refusals()
+  CALL check_one_end_rod()
+  CALL check_attachments_rod()
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' rod-end torsion gate(s) failed'
     ERROR STOP 1
@@ -69,12 +78,13 @@ CONTAINS
     END IF
   END SUBROUTINE require
 
-  SUBROUTINE write_deck(path, bodies, rods, points, line, length_segs, endconns, options, outs)
+  SUBROUTINE write_deck(path, bodies, rods, points, line, length_segs, endconns, options, outs, atts)
     !! A one-line deck: the neutral line type, optional BODIES and RODS rows (the arm rod type),
-    !! POINTS, one LINES row, its SECTIONS row, END CONNECTIONS, OPTIONS (g, rhoW, WtrDpth 200
-    !! and the given rows) and OUTPUTS.
+    !! POINTS, one LINES row, its SECTIONS row, optional ATTACHMENTS rows atts, END CONNECTIONS,
+    !! OPTIONS (g, rhoW, WtrDpth 200 and the given rows) and OUTPUTS.
     CHARACTER(*), INTENT(IN) :: path, bodies(:), rods(:), points(:), line, length_segs, endconns(:), options(:), &
                                 outs(:)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: atts(:)
     INTEGER :: u, i
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'rod-end torsion gate'
@@ -116,6 +126,14 @@ CONTAINS
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
     WRITE (u, '(A)') '1 cab '//TRIM(length_segs)
+    IF (PRESENT(atts)) THEN
+      WRITE (u, '(A)') '--- ATTACHMENTS ---'
+      WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca'
+      WRITE (u, '(A)') '(-) (m) (kg) (m3) (m2) (-)'
+      DO i = 1, SIZE(atts)
+        WRITE (u, '(A)') TRIM(atts(i))
+      END DO
+    END IF
     WRITE (u, '(A)') '--- END CONNECTIONS ---'
     WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
     WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
@@ -466,5 +484,103 @@ CONTAINS
     CALL require(.NOT. ok .AND. INDEX(em, needle) > 0, '3: a torsional End A on a '//label//' rod is refused '// &
                  'by name (got: '//TRIM(em)//')')
   END SUBROUTINE refused
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_one_end_rod()
+    !! Gate 4, one restrained end: the gate 1 J-tube line with GJ|K, free in torsion at one end.
+    CHARACTER(16), PARAMETER :: OUTS(3) = [CHARACTER(16) :: 'Torq1N1', 'Torq1N41', 'Twist1']
+    REAL(wp), PARAMETER :: AX(3) = [0.48_wp, 0.36_wp, -0.8_wp], NX(3) = [0.6_wp, -0.8_wp, 0.0_wp]
+    REAL(wp), PARAMETER :: LN = 100.0_wp, KC = 4.0e5_wp
+    CHARACTER(160) :: bare_type
+    REAL(wp) :: pa(3), pb(3), anchor(3), tw_ref, v(4), vp(4), e_tw(2), e_m(2), e_route(2)
+    CHARACTER(256) :: rrow, prow, arow, ca(2), cb(2)
+    CHARACTER(24), PARAMETER :: LABEL(2) = [CHARACTER(24) :: 'End B free', 'End A (rod end) free']
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    INTEGER :: iv
+    bare_type = neutral_type
+    WRITE (neutral_type, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, &
+      ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4|4.0e5 1.0 1.0e-12 0.0 0.0 0.0 0.0'
+    pa = [0.0_wp, 0.0_wp, -30.0_wp]
+    pb = pa + 10.0_wp*AX
+    anchor = pb + (LN*1.0001_wp)*AX
+    rrow = '1 arm Fixed '//TRIM(vec(pa))//' '//TRIM(vec(pb))//' 4 -'
+    WRITE (arow, '(A,A,A)') '2 Fixed ', TRIM(vec(anchor)), ' 0 0 0 0'
+    WRITE (prow, '(A,A,A)') '1 Coupled ', TRIM(vec(pb)), ' 0 0 0 0'
+    ! the free end turns by the stretch's -(K/GJ) dl relative to the restrained one
+    tw_ref = -(KC/GJ)*(LN*1.0e-4_wp)*180.0_wp/PI
+    ca(1) = '1 A Rigid '//TRIM(vec(AX))//' Rigid '//TRIM(vec(NX))//' 30'
+    cb(1) = '1 B Rigid '//TRIM(vec(AX))//' Free '//TRIM(vec(NX))//' 0'
+    ca(2) = '1 A Rigid '//TRIM(vec(AX))//' Free '//TRIM(vec(NX))//' 0'
+    cb(2) = '1 B Rigid '//TRIM(vec(AX))//' Rigid '//TRIM(vec(NX))//' 30'
+    DO iv = 1, 2
+      CALL write_deck('trod_oe.dat', [CHARACTER(8) ::], [rrow], [arow], '1 R1B 2 -', '100.0 40', [ca(iv), cb(iv)], &
+                      [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], OUTS)
+      CALL run_deck('trod_oe.dat', 'trod_oe', ok, em)
+      CALL require(ok, '4: a line restrained at one end ('//TRIM(LABEL(iv))//') on a Fixed rod runs with its twist '// &
+                   'channels: '//TRIM(em))
+      e_tw(iv) = 1.0_wp
+      e_m(iv) = 1.0_wp
+      e_route(iv) = 1.0_wp
+      IF (.NOT. ok) CYCLE
+      CALL read_row('trod_oe.out', 0, v, ok)
+      CALL require(ok, '4: one-end rod output readable')
+      e_tw(iv) = ABS(v(4) - tw_ref)/ABS(tw_ref)
+      ! against the torque K eps the coupling would give a section held from twisting
+      e_m(iv) = nan_max_abs(v(2:3))/(KC*1.0e-4_wp)
+      CALL write_deck('trod_oep.dat', [CHARACTER(8) ::], [CHARACTER(8) ::], [prow, arow], '1 1 2 -', '100.0 40', &
+                      [ca(iv), cb(iv)], [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], OUTS)
+      CALL run_deck('trod_oep.dat', 'trod_oep', ok, em)
+      CALL require(ok, '4: the same line from a held Coupled point runs: '//TRIM(em))
+      IF (ok) CALL read_row('trod_oep.out', 0, vp, ok)
+      IF (ok) e_route(iv) = ABS(v(4) - vp(4))/ABS(tw_ref)
+      WRITE (*, '(A,A,A,F12.7,A,F12.7,A,3ES10.3)') 'one end on a Fixed rod, ', TRIM(LABEL(iv)), ': Twist1 ', v(4), &
+        ' deg (-(K/GJ) dl ', tw_ref, '); errors twist, |torque| / K eps, vs a held Coupled point ', e_tw(iv), &
+        e_m(iv), e_route(iv)
+    END DO
+    neutral_type = bare_type
+    CALL require(MAXVAL(e_tw) <= 1.0e-6_wp, '4: the free end turns by -(K/GJ) dl on a Fixed rod end')
+    CALL require(MAXVAL(e_m) <= 1.0e-6_wp, '4: a line free at one end carries no torque on a Fixed rod end')
+    CALL require(MAXVAL(e_route) <= 1.0e-6_wp, '4: the same twist as from a held Coupled point')
+  END SUBROUTINE check_one_end_rod
+
+  SUBROUTINE check_attachments_rod()
+    !! Gate 4, ATTACHMENTS: the gate 1 line twisted two turns with two clumps and a buoy.
+    CHARACTER(16), PARAMETER :: OUTS(3) = [CHARACTER(16) :: 'Torq1N1', 'Torq1N41', 'Twist1']
+    REAL(wp), PARAMETER :: AX(3) = [0.48_wp, 0.36_wp, -0.8_wp], NX(3) = [0.6_wp, -0.8_wp, 0.0_wp]
+    REAL(wp), PARAMETER :: LN = 100.0_wp
+    CHARACTER(48), PARAMETER :: ATTS(3) = [CHARACTER(48) :: '1 25.0 500.0 0.1 0.0 0.0', '1 50.0 50.0 0.4 0.0 0.0', &
+                                                                                            '1 75.0 300.0 0.05 0.0 0.0']
+    REAL(wp) :: pa(3), pb(3), anchor(3), m_ref, v(4), vp(4), e_route
+    CHARACTER(256) :: rrow, prow, arow, ca, cb
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    pa = [0.0_wp, 0.0_wp, -30.0_wp]
+    pb = pa + 10.0_wp*AX
+    anchor = pb + (LN*1.0001_wp)*AX
+    rrow = '1 arm Fixed '//TRIM(vec(pa))//' '//TRIM(vec(pb))//' 4 -'
+    WRITE (arow, '(A,A,A)') '2 Fixed ', TRIM(vec(anchor)), ' 0 0 0 0'
+    WRITE (prow, '(A,A,A)') '1 Coupled ', TRIM(vec(pb)), ' 0 0 0 0'
+    m_ref = GJ*4.0_wp*PI/LN
+    ca = '1 A Rigid '//TRIM(vec(AX))//' Rigid '//TRIM(vec(NX))//' 30'
+    cb = '1 B Rigid '//TRIM(vec(AX))//' Rigid '//TRIM(vec(NX))//' 750'
+    CALL write_deck('trod_att.dat', [CHARACTER(8) ::], [rrow], [arow], '1 R1B 2 -', '100.0 40', [ca, cb], &
+                    [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], OUTS, atts=ATTS)
+    CALL run_deck('trod_att.dat', 'trod_att', ok, em)
+    CALL require(ok, '4: a rod-end line with ATTACHMENTS runs: '//TRIM(em))
+    IF (.NOT. ok) RETURN
+    CALL read_row('trod_att.out', 0, v, ok)
+    CALL write_deck('trod_attp.dat', [CHARACTER(8) ::], [CHARACTER(8) ::], [prow, arow], '1 1 2 -', '100.0 40', &
+                    [ca, cb], [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], OUTS, atts=ATTS)
+    CALL run_deck('trod_attp.dat', 'trod_attp', ok, em)
+    CALL require(ok, '4: the same line with ATTACHMENTS from a held Coupled point runs: '//TRIM(em))
+    IF (.NOT. ok) RETURN
+    CALL read_row('trod_attp.out', 0, vp, ok)
+    e_route = nan_max_abs(v(2:4) - vp(2:4))/m_ref
+    WRITE (*, '(A,3ES15.7,A,3ES15.7,A,ES10.3)') 'ATTACHMENTS on a Fixed rod line: Torq N1/N41, Twist1 ', v(2:4), &
+      '; from a held Coupled point ', vp(2:4), '; difference / (GJ Phi/L) ', e_route
+    CALL require(e_route <= 1.0e-7_wp, '4: the rod-end line with ATTACHMENTS has the held point''s torque and twist')
+    CALL require(ABS(v(2)/m_ref - 1.0_wp) > 1.0e-6_wp, '4: the attachments bend the line (its torque is not GJ Phi/L)')
+  END SUBROUTINE check_attachments_rod
 
 END PROGRAM test_rod_end_torsion

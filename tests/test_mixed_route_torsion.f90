@@ -30,6 +30,9 @@
 !>     both write the .static.out of the static solve (fairlead x = 0) before it.
 !>  6. Without the force blend a line restrained in torsion runs a static mixed deck (TMax = 0,
 !>     no step) and its torque, as the single-line route, and a dynamic one stops by name.
+!>  7. ATTACHMENTS: the gate 2 line carrying three buoyancy modules (ATTACHMENTS, with drag and
+!>     added mass), its torsion stage after the attachment polish on both routes, gives the gate 2
+!>     agreement between the single-line route and the mixed route beside the chain.
 PROGRAM test_mixed_route_torsion
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -76,6 +79,7 @@ PROGRAM test_mixed_route_torsion
   CALL check_refusal()
   CALL check_static_row1()
   CALL check_static_blend()
+  CALL check_attachment_routes()
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' mixed-route torsion gate(s) failed'
     ERROR STOP 1
@@ -93,8 +97,10 @@ CONTAINS
     END IF
   END SUBROUTINE require
 
-  SUBROUTINE write_deck(path, types, points, lines, sections, endconns, options, outs)
+  SUBROUTINE write_deck(path, types, points, lines, sections, endconns, options, outs, atts)
     CHARACTER(*), INTENT(IN) :: path, types(:), points(:), lines(:), sections(:), endconns(:), options(:), outs(:)
+    ! ATTACHMENTS rows (none when absent)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: atts(:)
     INTEGER :: u, i
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'mixed-route torsion gate'
@@ -122,6 +128,14 @@ CONTAINS
     DO i = 1, SIZE(sections)
       WRITE (u, '(A)') TRIM(sections(i))
     END DO
+    IF (PRESENT(atts)) THEN
+      WRITE (u, '(A)') '--- ATTACHMENTS ---'
+      WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca'
+      WRITE (u, '(A)') '(-) (m) (kg) (m3) (m2) (-)'
+      DO i = 1, SIZE(atts)
+        WRITE (u, '(A)') TRIM(atts(i))
+      END DO
+    END IF
     WRITE (u, '(A)') '--- END CONNECTIONS ---'
     WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
     WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
@@ -142,15 +156,16 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_deck
 
-  SUBROUTINE sag_deck(path, point_type, chain, options, tmax_row)
+  SUBROUTINE sag_deck(path, point_type, chain, options, tmax_row, atts)
     !! Gates 1 and 2: a 100 m finite-EI line from End A (0, 0, -50) on a point_type point to a
     !! Fixed End B (95, 0, -60), 40 elements, both ends Rigid in bending and in torsion
     !! (Pretwist 20 deg at End B); with chain, an EI = 0 chain from (0, 20, -50) on a second
-    !! point_type point to a Fixed (0, 110, -100).
+    !! point_type point to a Fixed (0, 110, -100); atts: ATTACHMENTS rows of line 1.
     CHARACTER(*), INTENT(IN) :: path, point_type, options(:)
     LOGICAL, INTENT(IN) :: chain
     ! the TMax row (default 10 s)
     CHARACTER(*), INTENT(IN), OPTIONAL :: tmax_row
+    CHARACTER(*), INTENT(IN), OPTIONAL :: atts(:)
     CHARACTER(48) :: points(4), tm
     CHARACTER(96) :: ec(2)
     ec(1) = '1 A Rigid 1 0 -0.1 Rigid 0 0 1 0'
@@ -161,7 +176,17 @@ CONTAINS
     points(2) = '2 Fixed 95.0 0.0 -60.0 0 0 0 0'
     points(3) = '3 '//point_type//' 0.0 20.0 -50.0 0 0 0 0'
     points(4) = '4 Fixed 0.0 110.0 -100.0 0 0 0 0'
-    IF (chain) THEN
+    IF (PRESENT(atts)) THEN
+      IF (chain) THEN
+        CALL write_deck(path, [CHARACTER(96) :: CAB_T, CHAIN_T], points, [CHARACTER(16) :: '1 1 2 -', '2 3 4 -'], &
+                        [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], EC, &
+                        [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', tm, options], [OUTS, CHAIN_OUTS], atts)
+      ELSE
+        CALL write_deck(path, [CHARACTER(96) :: CAB_T], points(1:2), [CHARACTER(16) :: '1 1 2 -'], &
+                        [CHARACTER(24) :: '1 cab 100.0 40'], EC, &
+                        [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', tm, options], OUTS, atts)
+      END IF
+    ELSE IF (chain) THEN
       CALL write_deck(path, [CHARACTER(96) :: CAB_T, CHAIN_T], points, [CHARACTER(16) :: '1 1 2 -', '2 3 4 -'], &
                       [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], EC, &
                       [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', tm, options], [OUTS, CHAIN_OUTS])
@@ -532,6 +557,23 @@ CONTAINS
     CALL compare_routes('2 roll column', 'tmrt_roll_a', 'tmrt_roll_b')
     CALL march_library('tmrt_roll_b.dat', 'tmrt_roll_a', '2 roll column')
   END SUBROUTINE check_roll_routes
+
+  SUBROUTINE check_attachment_routes()
+    !! Gate 7: the gate 2 decks with three buoyancy modules on line 1.
+    LOGICAL :: ok
+    CHARACTER(48), PARAMETER :: ATTS(3) = [CHARACTER(48) :: '1 40.0 100.0 0.5 0.5 1.0', '1 50.0 100.0 0.5 0.5 1.0', &
+                                                                                             '1 60.0 100.0 0.5 0.5 1.0']
+    CALL write_roll_rows('tmrt_att_1.txt', .FALSE.)
+    CALL write_roll_rows('tmrt_att_2.txt', .TRUE.)
+    CALL sag_deck('tmrt_att_a.dat', 'Coupled', .FALSE., [CHARACTER(48) :: 'tmrt_att_1.txt motionFile'], atts=ATTS)
+    CALL sag_deck('tmrt_att_b.dat', 'Coupled', .TRUE., [CHARACTER(48) :: 'tmrt_att_2.txt motionFile'], atts=ATTS)
+    CALL run_driver('tmrt_att_a.dat', 'tmrt_att_a', ok)
+    CALL require(ok, '7: the roll-column deck with ATTACHMENTS runs on the standalone cubic-Hermite route')
+    CALL run_driver('tmrt_att_b.dat', 'tmrt_att_b', ok)
+    CALL require(ok, '7: the mixed roll-column deck with ATTACHMENTS runs')
+    CALL require(log_has('tmrt_att_b', 'mixed standalone aggregate'), '7: the mixed deck runs on the aggregate')
+    CALL compare_routes('7 attachments', 'tmrt_att_a', 'tmrt_att_b')
+  END SUBROUTINE check_attachment_routes
 
   SUBROUTINE check_quasi_static(mode)
     !! Gate 3: the straight 100 m neutral line of test_torsion_deck from (0, 0, -50) to a Fixed
