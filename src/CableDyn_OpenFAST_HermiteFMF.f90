@@ -1050,12 +1050,18 @@ CONTAINS
   PURE LOGICAL FUNCTION end_b_held(self, ub_pos, ub_vel, ub_acc) RESULT(held)
     !! End B stays exactly at rest over the step: committed at rest, and the target is its committed
     !! position with zero velocity and acceleration (bit for bit), the boundary a Fixed End B holds.
+    !! The position is the committed one in either frame: the solve frame (a target rotated in, as a
+    !! motion row is) or the caller's global frame (a target read back by CD_HFMF_GetEndBKinematics,
+    !! which a rotation round trip at a non-zero chord heading need not return bit for bit).
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     REAL(wp), INTENT(IN) :: ub_pos(3), ub_vel(3), ub_acc(3)
     held = end_b_at_rest(self)
     IF (.NOT. held) RETURN
-    held = .NOT. (ANY(ABS(frame_to_local(self, ub_pos) - self%line%q(self%pdof_b)) > CD_ZERO) .OR. &
-                  ANY(ABS(ub_vel) > CD_ZERO) .OR. ANY(ABS(ub_acc) > CD_ZERO))
+    held = .NOT. (ANY(ABS(ub_vel) > CD_ZERO) .OR. ANY(ABS(ub_acc) > CD_ZERO))
+    IF (.NOT. held) RETURN
+    held = .NOT. ANY(ABS(frame_to_local(self, ub_pos) - self%line%q(self%pdof_b)) > CD_ZERO)
+    IF (held) RETURN
+    held = .NOT. ANY(ABS(ub_pos - frame_to_global(self, self%line%q(self%pdof_b))) > CD_ZERO)
   END FUNCTION end_b_held
 
   SUBROUTINE CD_HFMF_Snapshot(self, ErrStat, ErrMsg)

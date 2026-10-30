@@ -10,6 +10,8 @@ PROGRAM test_two_moving_ends
   !!      hold it at its deck position writes the .out, line, element and static files of the same
   !!      line with a Fixed End B byte for byte; so does the pair without a motionFile (both held),
   !!      and the modal analysis (OPTION nModes: the modes hold both ends) writes the same modes file;
+  !!      also with the chord at a 37 deg heading (the cable solves in a frame turned about +z, so a
+  !!      held End B read back in global axes is the rotated committed position);
   !!   S  symmetry: a symmetric suspended cable whose two ends move mirror-symmetrically (apart and up)
   !!      stays mirror symmetric -- node positions and the two end loads -- to round-off at every step;
   !!   G  rigid translation (Galilean invariance, no fluid drag): both ends translating at one constant
@@ -131,6 +133,58 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_deck
 
+  SUBROUTINE write_heading_deck(path, type_b, with_motion)
+    !! A 360 m slack cable from (0, 0, -14) to (239.589104, 180.544538, -20) (a 300 m span at a
+    !! 36.99 deg heading) on an 80 m seabed, 20 s; with_motion: End A surges 3 m by motionFile rows
+    !! that hold a Coupled End B at its deck position.
+    CHARACTER(*), INTENT(IN) :: path, type_b
+    LOGICAL, INTENT(IN) :: with_motion
+    INTEGER :: u, k
+    REAL(wp) :: t, x, v, a
+    IF (with_motion) THEN
+      OPEN (NEWUNIT=u, FILE='tme_zero_h_'//type_b//'.txt', STATUS='REPLACE', ACTION='WRITE')
+      DO k = 0, 400
+        t = REAL(k, wp)*DT
+        CALL ramp(t, 3.0_wp, x, v, a)
+        WRITE (u, '(F10.5,A,9(1X,ES24.16))') t, ' 1', x, 0.0_wp, -14.0_wp, v, 0.0_wp, 0.0_wp, a, 0.0_wp, 0.0_wp
+        IF (type_b == 'Coupled') WRITE (u, '(F10.5,A)') t, ' 2 239.589104 180.544538 -20.0 0 0 0 0 0 0'
+      END DO
+      CLOSE (u)
+    END IF
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'two moving ends heading gate'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'bare 0.160 36.70 4.69e8 0.0 1.99e4 1.2 0.1 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 0.0 0.0 -14.0'
+    WRITE (u, '(A)') '2 '//type_b//' 239.589104 180.544538 -20.0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 bare 360.0 72'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '80.0 WtrDpth'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') '1.0e4 cBot'
+    WRITE (u, '(A)') '0.05 dtM'
+    WRITE (u, '(A)') '20.0 TMax'
+    IF (with_motion) WRITE (u, '(A)') 'tme_zero_h_'//type_b//'.txt motionFile'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1 AnchTen1 AnchFz1 Point1Fx Point2Fx'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+  END SUBROUTINE write_heading_deck
+
   SUBROUTINE ramp(t, amp, x, v, a)
     !! amp (1 - cos(w t)) / 2 with w = 2 pi / 8 s: from rest (x = v = 0 at t = 0).
     REAL(wp), INTENT(IN) :: t, amp
@@ -141,15 +195,18 @@ CONTAINS
     a = 0.5_wp*amp*W*W*COS(W*t)
   END SUBROUTINE ramp
 
-  SUBROUTINE write_motion(path, nstep, sa, sb, with_b)
-    !! motionFile rows: point 1 at (0, 0, ZE) + surge sa ramp, point 2 at (SPAN, 0, ZE) + surge sb ramp
-    !! (written when with_b).
+  SUBROUTINE write_motion(path, nstep, sa, sb, with_b, pb)
+    !! motionFile rows: point 1 at (0, 0, ZE) + surge sa ramp, point 2 at (SPAN, 0, ZE) (or pb) + surge
+    !! sb ramp (written when with_b).
     CHARACTER(*), INTENT(IN) :: path
     INTEGER, INTENT(IN) :: nstep
     REAL(wp), INTENT(IN) :: sa, sb
     LOGICAL, INTENT(IN) :: with_b
+    REAL(wp), INTENT(IN), OPTIONAL :: pb(3)
     INTEGER :: u, k
-    REAL(wp) :: t, x, v, a
+    REAL(wp) :: t, x, v, a, b(3)
+    b = [SPAN, 0.0_wp, ZE]
+    IF (PRESENT(pb)) b = pb
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     DO k = 0, nstep
       t = REAL(k, wp)*DT
@@ -157,7 +214,7 @@ CONTAINS
       WRITE (u, '(F10.5,A,9(1X,ES24.16))') t, ' 1', x, 0.0_wp, ZE, v, 0.0_wp, 0.0_wp, a, 0.0_wp, 0.0_wp
       IF (with_b) THEN
         CALL ramp(t, sb, x, v, a)
-        WRITE (u, '(F10.5,A,9(1X,ES24.16))') t, ' 2', SPAN + x, 0.0_wp, ZE, v, 0.0_wp, 0.0_wp, a, 0.0_wp, 0.0_wp
+        WRITE (u, '(F10.5,A,9(1X,ES24.16))') t, ' 2', b(1) + x, b(2), b(3), v, 0.0_wp, 0.0_wp, a, 0.0_wp, 0.0_wp
       END IF
     END DO
     CLOSE (u)
@@ -278,6 +335,23 @@ CONTAINS
     same = same_file('tme_zero_fixedm.modes.out', 'tme_zero_movingm.modes.out')
     WRITE (*, '(A,L1)') 'zero motion, nModes: modes files byte-identical: ', same
     CALL require(same, 'Z: the modes of a line with a Coupled End B are those with a Fixed End B')
+    ! a 37 deg chord heading: a 360 m slack cable over a 300 m span touching down on an 80 m seabed,
+    ! 20 s held (End B read back in global axes and stepped at rest), and with End A surging
+    BLOCK
+      INTEGER :: ih
+      DO ih = 1, 2
+        CALL write_heading_deck('tme_zero_fixedh.dat', 'Fixed', ih == 2)
+        CALL write_heading_deck('tme_zero_movingh.dat', 'Coupled', ih == 2)
+        CALL run_deck('tme_zero_fixedh.dat', 'tme_zero_fixedh', ok, em)
+        CALL require(ok, 'Z: the 37 deg Fixed End B deck runs: '//TRIM(em))
+        CALL run_deck('tme_zero_movingh.dat', 'tme_zero_movingh', ok, em)
+        CALL require(ok, 'Z: the 37 deg held Coupled End B deck runs: '//TRIM(em))
+        same = same_file('tme_zero_fixedh.out', 'tme_zero_movingh.out')
+        WRITE (*, '(A,A,A,L1)') 'zero motion at a 37 deg heading (', MERGE('no motionFile', 'motionFile   ', ih == 1), &
+          '): byte-identical: ', same
+        CALL require(same, 'Z: at a 37 deg heading a held Coupled End B is the Fixed End B, byte for byte')
+      END DO
+    END BLOCK
   END SUBROUTINE check_zero_motion
 
   ! ------------------------------------------------------------------------------------------
