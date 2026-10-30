@@ -5828,7 +5828,7 @@ CONTAINS
           strain = strain + 0.5_wp*model%torsion%gj(e)/model%l0(e)*tau*tau
         END DO
         DO iend = 1, 2
-          IF (model%tw_rigid(iend)) CYCLE
+          IF (.NOT. tw_spring(model, iend)) CYCLE
           CALL twist_link(model, iend, model%q, model%torsion%ends, .FALSE., psi, gl, hl, ErrStat, em2)
           IF (ErrStat /= CD_HCDYN_OK) THEN
             ErrMsg = 'CD_HermiteCable_Dyn_Energy: '//TRIM(em2)
@@ -6005,11 +6005,13 @@ CONTAINS
     t = -unit_tangent(model, model%nn)
     d1 = r - DOT_PRODUCT(r, t)*t
     rn = NORM2(d1)
-    IF (.NOT. rn > 1.0e-6_wp*MAX(NORM2(r), TINY(CD_ONE))) THEN
+    ! (a free End A's torsion frame is a gauge: its section is the material director below)
+    IF (.NOT. rn > 1.0e-6_wp*MAX(NORM2(r), TINY(CD_ONE)) .AND. .NOT. (model%tw_active .AND. &
+                                                                      model%torsion%end_free(2))) THEN
       ErrStat = CD_HCDYN_BADINPUT
       ErrMsg = 'CD_HermiteCable_Dyn_Section_Curvature: the section reference lies along the End A tangent'; RETURN
     END IF
-    d1 = d1/rn
+    IF (rn > CD_ZERO) d1 = d1/rn
     IF (model%tw_active) THEN
       ! Nodal twist: the material director Rot(t_k, phi - Phi) u of every node (t_k the solve
       ! tangent, End 1 -> End 2), on the frame convention above: End A (node nn) takes the
@@ -6763,7 +6765,7 @@ CONTAINS
       RETURN
     END IF
     DO iend = 1, 2
-      IF (model%tw_rigid(iend)) CYCLE
+      IF (.NOT. tw_spring(model, iend)) CYCLE
       CALL twist_link(model, iend, model%q, model%torsion%ends, .FALSE., psi, gl, hl, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCDYN_OK) THEN
         ErrMsg = 'CD_HermiteCable_Dyn_End_Twist: '//TRIM(ErrMsg)
@@ -6802,7 +6804,7 @@ CONTAINS
       END IF
     END DO
     DO iend = 1, 2
-      IF (model%tw_rigid(iend)) CYCLE
+      IF (.NOT. tw_spring(model, iend)) CYCLE
       CALL twist_link(model, iend, q_check, ends, .FALSE., psi, gl, hl, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCDYN_OK) THEN
         ErrMsg = 'CD_HermiteCable_Dyn_Twist_Check: '//TRIM(ErrMsg); RETURN
@@ -7417,7 +7419,7 @@ CONTAINS
       ! director in a transport triangle adds d x dOmega/dd. The slaved tangent of a rigid
       ! bending end adds its share through the constraint reaction below. The held end section
       ! turns with the frame and its held angle, chi_dot = -+drho/dw . omega + phi_dot (End 1,
-      ! End 2): its polar inertia I adds -I chi_ddot dchi/dw.
+      ! End 2): its polar inertia I adds -I chi_ddot dchi/dw. A free end transmits no torque.
       BLOCK
         REAL(wp) :: rho, beta, g(12), h(12, 12), ew(3, 2), psi, gl(3), hl(3, 3), lw(3), tw, sg, chi_dd
         IF (model%tw_rigid(iend)) THEN
@@ -7432,7 +7434,7 @@ CONTAINS
           sg = MERGE(-CD_ONE, CD_ONE, iend == 1)
           chi_dd = sg*DOT_PRODUCT(ew(:, iend), model%tw_oal(:, iend)) + model%tw_al(node)
           moment = moment - model%tw_mass(node)*chi_dd*sg*ew(:, iend)
-        ELSE
+        ELSE IF (tw_spring(model, iend)) THEN
           CALL twist_link(model, iend, model%q, model%torsion%ends, .FALSE., psi, gl, hl, es, em, end_w=lw)
           IF (es /= CD_HCDYN_OK) THEN
             ErrStat = es
@@ -7745,7 +7747,9 @@ CONTAINS
       RETURN
     END IF
     theta = CD_HermiteTorsion_Unwrap(raw, model%torsion%theta)
-    IF (ABS(theta - model%torsion%theta) > CD_HTORS_MAX_STEP) THEN
+    ! (a line free at one end carries no condensed torque on any branch: the nodal twist, not
+    ! Theta, holds its state, and its accepted Theta is only the view Phi less the summed twist)
+    IF (ABS(theta - model%torsion%theta) > CD_HTORS_MAX_STEP .AND. .NOT. ANY(model%torsion%end_free)) THEN
       ErrStat = CD_HCDYN_NOCONVERGE
       ErrMsg = 'torsion: the twist moved more than pi/2 from its accepted value'
       theta = CD_ZERO
@@ -9182,7 +9186,7 @@ CONTAINS
       model%tw_lk = CD_ZERO
     END IF
     DO iend = 1, 2
-      IF (model%tw_rigid(iend)) CYCLE
+      IF (.NOT. tw_spring(model, iend)) CYCLE
       CALL twist_link(model, iend, q_cfg, ends, want_tangent, psi, gl, hl, es, em)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es
@@ -9348,7 +9352,10 @@ CONTAINS
     !! holonomy), angles accumulated from the element twists mt l0/GJ - rho_e and the end
     !! compliances, rates zero. A rigid end 2 holds phi = Phi: the last element's reference
     !! twist takes the multiple of 2 pi the accumulated angle needs, as an elastic end 2's psi
-    !! does; a remainder above STATE_TOL (a static state off equilibrium) fails closed.
+    !! does; a remainder above STATE_TOL (a static state off equilibrium) fails closed. A free
+    !! end (mt = 0) has no reference of its own: a free end 1 starts the directors from its
+    !! gauge frame and the angles shift as one to meet the restrained end 2 (its held Phi or a
+    !! slack spring); a free end 2 ends the accumulation.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: mt
     INTEGER, INTENT(OUT) :: ErrStat
@@ -9415,15 +9422,15 @@ CONTAINS
     model%tw_som = CD_ZERO
     model%tw_om = CD_ZERO
     model%tw_oal = CD_ZERO
-    IF (.NOT. model%tw_rigid(1)) model%tw_psi(1) = CD_HermiteTwist_Angle(model%tw_u(:, 1), &
-                                                                         CD_HermiteTwist_Carry(ends(:, 1), &
-                                                                                               model%tw_tn(:, 1), &
-                                                                                               ends(:, 2)), &
-                                                                         model%tw_tn(:, 1))
+    IF (tw_spring(model, 1)) model%tw_psi(1) = CD_HermiteTwist_Angle(model%tw_u(:, 1), &
+                                                                     CD_HermiteTwist_Carry(ends(:, 1), &
+                                                                                           model%tw_tn(:, 1), &
+                                                                                           ends(:, 2)), &
+                                                                     model%tw_tn(:, 1))
     ! angles from the uniform torque
     tol = STATE_TOL*MAX(CD_ONE, ABS(phi_end))
     model%tw_phi = CD_ZERO
-    IF (.NOT. model%tw_rigid(1)) model%tw_phi(1) = mt*model%torsion%end_compliance(1) + model%tw_psi(1)
+    IF (tw_spring(model, 1)) model%tw_phi(1) = mt*model%torsion%end_compliance(1) + model%tw_psi(1)
     model%tors_use_step = .FALSE.
     DO e = 1, ne
       CALL twist_reference(model, e, model%q, ends, .FALSE., rho, beta, g, h, es, em2)
@@ -9433,7 +9440,12 @@ CONTAINS
         RETURN
       END IF
       model%tw_phi(e + 1) = model%tw_phi(e) + mt*model%l0(e)/model%torsion%gj(e) - rho
-      IF (e == ne .AND. model%tw_rigid(2)) THEN
+      IF (e == ne .AND. model%tw_rigid(2) .AND. model%torsion%end_free(1)) THEN
+        ! a free end 1: the angles shift as one to the held Phi of end 2
+        diff = model%tw_phi(nn) - phi_end
+        model%tw_phi = model%tw_phi - diff
+        model%tw_phi(nn) = phi_end
+      ELSE IF (e == ne .AND. model%tw_rigid(2)) THEN
         diff = model%tw_phi(nn) - phi_end
         kk = ANINT(diff/(2.0_wp*CD_HTORS_PI))
         IF (ABS(diff - 2.0_wp*CD_HTORS_PI*kk) > tol) THEN
@@ -9446,11 +9458,13 @@ CONTAINS
         model%tw_phi(nn) = phi_end
       END IF
     END DO
-    IF (.NOT. model%tw_rigid(2)) THEN
+    IF (tw_spring(model, 2)) THEN
       ! the End-2 spring: its psi at the committed state is the director angle itself, on the
-      ! branch that puts the static end twist mt/k_2 on it
+      ! branch that puts the static end twist mt/k_2 on it (a free end 1: the angles shift as
+      ! one to leave the spring slack, mt = 0)
       psi = CD_HermiteTwist_Angle(model%tw_u(:, nn), CD_HermiteTwist_Carry(ends(:, 3), model%tw_tn(:, nn), &
                                                                            ends(:, 4)), model%tw_tn(:, nn))
+      IF (model%torsion%end_free(1)) model%tw_phi = model%tw_phi + (psi + phi_end - model%tw_phi(nn))
       diff = mt*model%torsion%end_compliance(2) - (psi + phi_end - model%tw_phi(nn))
       kk = ANINT(diff/(2.0_wp*CD_HTORS_PI))
       IF (ABS(diff - 2.0_wp*CD_HTORS_PI*kk) > tol) THEN
@@ -9476,11 +9490,12 @@ CONTAINS
 
   SUBROUTINE tw_set_derived(model, tors)
     !! The rigid ends, held angles and lumped polar inertia (half of each adjacent element's
-    !! Irn l0) the torsion description tors gives.
+    !! Irn l0) the torsion description tors gives. A free end (tors%end_free) is neither rigid
+    !! nor elastic: its angle is free and nothing twists it against its end frame.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     TYPE(CD_HermiteTorsionType), INTENT(IN) :: tors
     INTEGER :: e
-    model%tw_rigid = .NOT. (tors%end_compliance > CD_ZERO)
+    model%tw_rigid = .NOT. (tors%end_compliance > CD_ZERO) .AND. .NOT. tors%end_free
     model%tw_free = .TRUE.
     IF (model%tw_rigid(1)) model%tw_free(1) = .FALSE.
     IF (model%tw_rigid(2)) model%tw_free(model%nn) = .FALSE.
@@ -9490,6 +9505,14 @@ CONTAINS
       model%tw_mass(e + 1) = model%tw_mass(e + 1) + 0.5_wp*tors%irn(e)*model%l0(e)
     END DO
   END SUBROUTINE tw_set_derived
+
+  PURE LOGICAL FUNCTION tw_spring(model, iend) RESULT(spring)
+    !! End iend of the nodal twist is elastic: a torsional spring between its end node and its
+    !! end frame (neither rigid, holding the angle, nor free, without restraint).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: iend
+    spring = .NOT. (model%tw_rigid(iend) .OR. model%torsion%end_free(iend))
+  END FUNCTION tw_spring
 
   SUBROUTINE tw_settle_committed(model)
     !! After an evaluation of the committed state (solve_consistent_acceleration): the angles'
@@ -9540,7 +9563,7 @@ CONTAINS
     END DO
     model%tw_spsi = model%tw_psi
     DO iend = 1, 2
-      IF (model%tw_rigid(iend)) CYCLE
+      IF (.NOT. tw_spring(model, iend)) CYCLE
       CALL twist_link(model, iend, q_new, ends_new, .FALSE., psi, gl, hl, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCDYN_OK) RETURN
       model%tw_spsi(iend) = psi

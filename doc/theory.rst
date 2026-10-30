@@ -345,7 +345,9 @@ The section axis :math:`\mathbf{d}_1` (x) starts at End A normal to the End A â†
 :math:`\mathbf{t}`:
 
 - on a line restrained in torsion, along End A's torsion normal ``Nx``, which turns with the
-  hang-off;
+  hang-off; on a line restrained at End B only (End A free to twist), along End A's own
+  section: End B's ``Nx``, rolled by End B's ``Pretwist``, carried to End A and turned by the
+  twist of the line (:ref:`a free end <theory-free-end>`);
 - otherwise along the static start's upper normal, the projection of global +z normal to the
   End A tangent (global +x where the tangent is vertical). It is fixed in the hang-off's axes
   when End A is clamped or held by a finite rotational stiffness, so it turns with the vessel,
@@ -496,7 +498,9 @@ length, integrated on the bending rule with its gradient and Hessian. Everything
 including the rank-one tangent, the step limit and the stability test, holds with
 :math:`\Theta_{\text{eff}}`. The coupling part has no :math:`2\pi` ambiguity, so the first
 evaluation unwraps the holonomy alone. A line free to twist at one end carries no torque and
-the axial stiffness :math:`EA - K^2/GJ`. Restrained at both ends, a straight stretched line
+the axial stiffness :math:`EA - K^2/GJ`, and its free end turns by the element twists,
+:math:`-\sum_e (K_e/GJ_e)(l_e - L_{0,e})` (see the free end below). Restrained at both ends, a
+straight stretched line
 cannot twist, so it carries :math:`T = EA\,\varepsilon` and :math:`M = K\varepsilon`. The node
 tension adds the element's :math:`(K/GJ)\,M`, and the twist channels sum the element twists
 :math:`M L_0/GJ - (K/GJ)(l - L_0)`.
@@ -540,6 +544,25 @@ that normal as its node's director and holds the node's angle (0 at the first no
 order, End B, and :math:`\Phi` at End A), so a turn of the frame enters the end element's
 reference twist through the same solid angles. A turn of an end frame by more than
 :math:`\pi/2` about the line within one step is refused, and the step is cut.
+
+.. _theory-free-end:
+
+**A free end.** A line restrained in torsion at one end only has its other end free to twist:
+an infinite end compliance, so the condensed compliance :math:`C` is infinite and the condensed
+torque :math:`(\Phi - \Theta_{\text{eff}})/C` zero. The statics are then those of the line
+without torsion (with the axial stiffness :math:`EA - K^2/GJ`), and every element twists by
+:math:`\hat\tau_e = 0`, i.e. by :math:`-(K_e/GJ_e)(l_e - L_{0,e})` of material twist; their sum
+is the free end's turn against the restrained end's frame carried along the line
+(``Twist<L>``). In the dynamics the free end's node has no spring and no held angle: its angle
+is free, its lumped inertia :math:`I_{rn} L_0/2` and its element's torque balance it, and its
+end frame is a gauge that nothing reads (the free end's ``Nx`` and ``Pretwist`` are not used).
+The torque vanishes at the free end, so torsional waves reflect there, and the line's modes are
+the clampedâ€“free ones, :math:`\omega_n = (2n - 1)\,\pi/(2L)\,\sqrt{GJ/I_{rn}}` for a uniform
+line held rigidly at the other end; a roll :math:`A\sin\Omega t` of the restrained end turns
+the free end by :math:`A/\cos kL` (:math:`k = \Omega\sqrt{I_{rn}/GJ}`) and loads the
+restrained end with :math:`GJ A k \tan kL`. Exactly one end is restrained, so no rigid spin of
+the angles is left free. The test suite checks these frequencies, the driven response at
+:math:`kL = \pi/4` and :math:`3\pi/4` and the free end's coupling turn against the continuum.
 
 In the limit of a negligible inertia the element torques are uniform and equal the condensed
 torque; the test suite holds the two models to 1e-6 on a rolling, swaying, bowed line with

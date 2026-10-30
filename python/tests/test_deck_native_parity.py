@@ -974,6 +974,9 @@ def test_end_connection_errors_name_the_line_end_and_value(row, message):
     _rejects(_edit(_TORSION, (_TORSION_ROW_A, row)), message)
 
 
+_NO_TORSION_OUTPUTS_ONE_END = ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")
+
+
 def test_torsion_line_rules_follow_the_native_checks():
     # torsion has no EI/1.3 default: the 10-column LINE TYPES row has no GJ
     no_gj = _edit(
@@ -996,10 +999,35 @@ def test_torsion_line_rules_follow_the_native_checks():
         ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n"),
     )
     _rejects(ei0, "require a finite-EI line; line 1 has EI = 0")
-    # one restrained end is accepted (it carries no torque), but takes no torsion channel
+    # one restrained end, the other free to twist, is solved in torsion with its channels ...
     one_end = _edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"))
-    _rejects(one_end, "is not torsionally restrained at both ends")
-    DeckFile.from_text(_edit(one_end, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")))
+    DeckFile.from_text(one_end)
+    # ... where both-end torsion would be; otherwise it is not, and its channels are refused
+    one_end_no_gj = _edit(
+        one_end,
+        (
+            "Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat\n",
+            "Name Diam Mass EA BA EI Cdn Cdt Can Cat\n",
+        ),
+        (
+            "cab 0.2 32.2 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0",
+            "cab 0.2 32.2 1.0e7 0.0 1.0e6 0 0 0 0",
+        ),
+    )
+    _rejects(
+        one_end_no_gj, "restrained at one end only and its torsion is not solved: its LINE TYPES"
+    )
+    DeckFile.from_text(_edit(one_end_no_gj, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")))
+    one_end_dyn = _edit(one_end, ("0.0 TMax\n", "10.0 TMax\n"))
+    DeckFile.from_text(one_end_dyn)
+    _rejects(
+        _options(one_end_dyn, "False alpha_force_blend"),
+        "torsion is not solved: torsion in a dynamic run needs the force-blended",
+    )
+    DeckFile.from_text(
+        _options(_edit(one_end, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")), "3 nModes")
+    )
+    _rejects(_options(one_end, "3 nModes"), "torsion is not solved: the modal analysis")
     # the dynamic run needs the force blend; modal analysis carries the twist
     dynamic = _edit(_TORSION, ("0.0 TMax\n", "10.0 TMax\n"))
     DeckFile.from_text(dynamic)
@@ -1100,7 +1128,7 @@ def test_torsion_scope_rules_follow_the_native_checks():
         (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
         ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Free 0 0 1 720"),
     )
-    _rejects(both_free, "is not torsionally restrained at both ends")
+    _rejects(both_free, "is not torsionally restrained \\(END CONNECTIONS")
     DeckFile.from_text(_edit(both_free, _NO_TORSION_OUTPUTS))
 
 
@@ -1269,7 +1297,7 @@ _PARITY_DRIVER = (
 def test_torsion_rows_get_the_native_verdict(row_a, tmp_path):
     text = _edit(_TORSION, (_TORSION_ROW_A, f"{row_a}\n"))
     if row_a.split()[6].lower() in {"free", "zero"}:
-        # one restrained end carries no torque: judge the row, not the torsion channels
+        # a Free End A: judge the row (its normal and pretwist), not the torsion channels
         text = _edit(text, _NO_TORSION_OUTPUTS)
     try:
         DeckFile.from_text(text)

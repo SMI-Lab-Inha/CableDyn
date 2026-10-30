@@ -465,7 +465,8 @@ Finite-EI cable controls
        ``dtM`` 0.1 / 0.05 / 0.025 / 0.0125 s with ``False`` and 9424 / 9322 / 9314 / 9311 N
        with ``True``. A run prints a note when a nodal tangent turns by more than 0.25 deg
        (``True``) or 0.1 deg (``False``) in one step. A dynamic run with a torsional line
-       (``END CONNECTIONS`` ``TorsStiffness`` at both ends) needs ``True``. The lines the raw C
+       (``END CONNECTIONS`` ``TorsStiffness``) needs ``True``; a line restrained at one end only is
+       otherwise solved without torsion (noted). The lines the raw C
        API builds without a deck (``CableDyn_InitLine``, ``CableDyn_InitLines``) always use
        ``True``: their only integrator setting is ``rho_inf`` (:doc:`capi`). ``False`` also
        turns ``ei0_substeps`` off unless the deck sets it
@@ -693,8 +694,9 @@ Ambient fluid and prescribed motion
      - path, or ``0``/``none``
      - absent
      - an active path requires ``dtM`` and ``TMax``; ``0`` or case-insensitive ``none`` disables
-       it. On a deck with a line restrained in torsion at both ends, an optional twelfth column
-       rolls the frame of that line's moving end (degrees, 0 at ``t = 0``). See the file
+       it. On a deck with a line solved in torsion, an optional twelfth column rolls the frame of
+       that line's moving end when that end is restrained in torsion (degrees, 0 at
+       ``t = 0``). See the file
        grammar in :doc:`file_formats`
      - standalone ``Coupled``/``Vessel`` points, prescribed rods, and Rigid6 bodies; rejected
        on ``Connect``/``Free`` point-system, FAILURE, and mixed decks; forbidden in OpenFAST,

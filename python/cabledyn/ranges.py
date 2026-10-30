@@ -455,8 +455,9 @@ def read_range_graphs(source: str | os.PathLike[str] | OutputTable) -> dict[str,
     LINES ``Outputs`` flag ``r``: the minimum, maximum, and mean over the
     output times of the range window of the node tension, curvature, bend
     moment, and declination, the seabed clearance when the deck has a
-    seabed, and the torque and twist from End A when the line is restrained
-    in torsion at both ends, at every node against its arc length.
+    seabed, and the torque and twist from End A when the line is solved in
+    torsion (restrained at both ends, or at one end with the other free), at
+    every node against its arc length.
 
     Parameters
     ----------

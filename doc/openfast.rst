@@ -333,9 +333,12 @@ Line torsion
 ------------
 
 A finite-EI line restrained in torsion at both ends (``END CONNECTIONS`` torsion columns, see
-:ref:`theory-torsion`) runs coupled as it does standalone. Its End A frame is given in platform
-axes and turns with the OpenFAST point-mesh orientation, whatever the bending connection, so a
-platform roll, pitch or yaw about the line's end direction twists the line. The torque moment is
+:ref:`theory-torsion`), or at one end with the other free to twist, runs coupled as it does
+standalone. A restrained End A frame is given in platform axes and turns with the OpenFAST
+point-mesh orientation, whatever the bending connection, so a platform roll, pitch or yaw about
+the line's end direction twists the line (on a line free at End B it spins the line, whose
+torsional inertia loads the platform); a free End A transmits no torque, and the platform's
+turn does not reach the line. The torque moment is
 returned to OpenFAST with the connection moment, the ``Torq<L>N<J>`` and ``Twist<L>``
 channels are available, ``PtfmInit`` twists the line in the static initialisation, and the
 unwrapped twist is part of the checkpoint state. End B must be a ``Fixed`` point. Within one

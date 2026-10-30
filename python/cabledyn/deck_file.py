@@ -3437,7 +3437,7 @@ class DeckFile:
             )
             for row in bodies
         }
-        torsion_lines = self._check_torsion_lines(
+        torsion_lines, torsion_notes = self._check_torsion_lines(
             torsion_ends,
             torsion_pretwist,
             section_types_by_line,
@@ -4197,11 +4197,16 @@ class DeckFile:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r} node exceeds the line node count"
                     )
+                if line_id in torsion_notes:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: line {line_id} is torsionally "
+                        "restrained at one end only and its torsion is not solved: "
+                        f"{torsion_notes[line_id]}"
+                    )
                 if line_id not in torsion_lines:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r}: line {line_id} is not torsionally "
-                        "restrained at both ends (END CONNECTIONS TorsStiffness), so it carries "
-                        "no torque"
+                        "restrained (END CONNECTIONS TorsStiffness), so it carries no torque"
                     )
                 continue
             if lowered.startswith(("ten", "curv", "bendmom", "stfmom", "l")):
@@ -4281,22 +4286,57 @@ class DeckFile:
         body_types: dict[str, str],
         option_by_key: dict[str, OptionRecord],
         has_tmax: bool,
-    ) -> set[str]:
-        """Native ``check_torsion_line`` and the driver's torsion scope; the torsional lines.
+    ) -> tuple[set[str], dict[str, str]]:
+        """Native ``check_torsion_line`` and the driver's torsion scope.
+
+        Returns the lines solved in torsion and, for a line restrained at one end only whose
+        torsion is not solved, why (native ``resolve_one_end_torsion``).
 
         A line with a torsional END CONNECTIONS restraint (TorsStiffness Rigid or a
-        stiffness) must be finite-EI. With one restrained end it carries no torque and is
-        solved as without the columns. Restrained at both ends, torsion is solved: End B must
+        stiffness) must be finite-EI. Restrained at both ends, torsion is solved: End B must
         be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
-        rod end nor on a body other than Rigid6. A deck with torsion runs dynamics only with
-        the force-blended generalised-alpha (a coupled run is always dynamic); its modal
-        analysis (nModes) carries the twist. The coupled OpenFAST and FAST.Farm routes turn the
-        fairlead frame with the platform, and the standalone mixed EI = 0 + finite-EI deck
-        without bodies (run on the aggregate) holds it or turns it with its vesselMotion and
-        rolls it with the motionFile roll column, as the standalone cubic-Hermite route does.
+        rod end nor on a body other than Rigid6. Restrained at one end only (its other end
+        free to twist), it is solved in torsion under the same rules, and with no CONTROL, no
+        modal analysis and a force-blended march; otherwise it keeps the meaning of the
+        6-column rows (no error). A deck with torsion runs dynamics only with the
+        force-blended generalised-alpha (a coupled run is always dynamic); the modal analysis
+        (nModes) of a line restrained at both ends carries the twist. The coupled OpenFAST and
+        FAST.Farm routes turn the fairlead frame with the platform, and the standalone mixed
+        EI = 0 + finite-EI deck without bodies (run on the aggregate) holds it or turns it with
+        its vesselMotion and rolls it with the motionFile roll column, as the standalone
+        cubic-Hermite route does.
         """
         # _check_attachments has already accepted every LineID as an integer
+        attachment_lines = {str(_native_int(row.tokens[0])) for row in self._rows("ATTACHMENTS")}
+        # CONTROL rows are checked later; a malformed one fails there
+        controlled_lines: set[str] = set()
+        for row in self._rows("CONTROL"):
+            if len(row.tokens) != 2:
+                continue
+            try:
+                controlled_lines.update(
+                    str(_native_int(value)) for value in row.tokens[1].split(",")
+                )
+            except ValueError:
+                continue
+        tmax_row = option_by_key.get("tmax")
+        # a coupled run is always dynamic (the host owns TMax)
+        dynamic = self.caller_driven or (
+            has_tmax and tmax_row is not None and _native_float(tmax_row.values[0]) > 0.0
+        )
+        blend_row = option_by_key.get("alpha_force_blend")
+        force_blend = blend_row is None or blend_row.values[0].lower() in {
+            "true",
+            "t",
+            "yes",
+            "y",
+            "on",
+            "1",
+        }
+        modes_row = option_by_key.get("n_modes")
+        modal = modes_row is not None and round(_native_float(modes_row.values[0])) > 0
         torsion_lines: set[str] = set()
+        torsion_notes: dict[str, str] = {}
         for line_id, ends in torsion_ends.items():
             if not any(ends.values()):
                 continue
@@ -4305,8 +4345,38 @@ class DeckFile:
                     f"{self._label}: torsional END CONNECTIONS (TorsStiffness Rigid or a "
                     f"stiffness) require a finite-EI line; line {line_id} has EI = 0"
                 )
-            # one restrained end only carries no torque: noted and ignored
             if not (ends.get("a", False) and ends.get("b", False)):
+                # one restrained end: solved where the rules hold, noted otherwise
+                end_a, end_b = normalized_line_endpoints[line_id]
+                note = ""
+                if not all(line_type_gj[name] > 0.0 for name in section_types_by_line[line_id]):
+                    note = (
+                        "its LINE TYPES rows give no GJ (the 14-column row; torsion has no "
+                        "EI/1.3 default)"
+                    )
+                elif point_types[end_b] != "fixed":
+                    note = "it has two moving ends (torsion needs a Fixed End B)"
+                elif line_id in attachment_lines:
+                    note = "torsion is not combined with ATTACHMENTS"
+                elif line_id in controlled_lines:
+                    note = "active line control (CONTROL) is not combined with torsion"
+                elif modal:
+                    note = "the modal analysis (nModes) has no torsion"
+                elif dynamic and not force_blend:
+                    note = (
+                        "torsion in a dynamic run needs the force-blended generalised-alpha "
+                        "(alpha_force_blend True)"
+                    )
+                elif ends.get("a", False):
+                    body_id = _body_point_id(point_types[end_a])
+                    if _rod_point(point_types[end_a]) is not None:
+                        note = "its restrained End A is on a rod end (a rod has no spin angle)"
+                    elif body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
+                        note = "its restrained End A is on a body that is not Rigid6"
+                if note:
+                    torsion_notes[line_id] = note
+                else:
+                    torsion_lines.add(line_id)
                 continue
             twist = torsion_pretwist[line_id]["b"] - torsion_pretwist[line_id]["a"]
             if abs(twist) > _MAX_STATIC_TWIST_DEG:
@@ -4340,27 +4410,13 @@ class DeckFile:
                 )
             torsion_lines.add(line_id)
         if not torsion_lines:
-            return torsion_lines
-        tmax_row = option_by_key.get("tmax")
-        # a coupled run is always dynamic (the host owns TMax)
-        dynamic = self.caller_driven or (
-            has_tmax and tmax_row is not None and _native_float(tmax_row.values[0]) > 0.0
-        )
-        blend_row = option_by_key.get("alpha_force_blend")
-        force_blend = blend_row is None or blend_row.values[0].lower() in {
-            "true",
-            "t",
-            "yes",
-            "y",
-            "on",
-            "1",
-        }
+            return torsion_lines, torsion_notes
         if dynamic and not force_blend:
             raise DeckFormatError(
                 f"{self._label}: torsion in a dynamic run needs the force-blended "
                 "generalised-alpha (OPTION alpha_force_blend True)"
             )
-        return torsion_lines
+        return torsion_lines, torsion_notes
 
     def _line_type_fields(self, record: DeckRecord) -> tuple[str, ...]:
         fields = _FIELDS["line_type"]

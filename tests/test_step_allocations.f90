@@ -23,7 +23,8 @@ PROGRAM test_step_allocations
   !! committed-state outputs (CD_HFMF_SetCoupledKinematics, CD_HFMF_CalcOutput with the connection
   !! moment, both end forces, the energy and the torque query) are gated as well. With "nodal"
   !! the same cable carries the nodal twist (polar inertia and torsional damping), with its
-  !! 7-DOF-per-node band and the node-torque and element-twist queries.
+  !! 7-DOF-per-node band and the node-torque and element-twist queries; with "free" the nodal
+  !! twist of the same cable free in torsion at its held end (restrained at the coupled end only).
   !!
   !! With "current_grid" the gate runs the evaluation of a MoorDyn-C current grid (Currents 2 and
   !! 5) that every standalone step makes at every node: CD_Current_Grid_Velocity, and the gradient
@@ -36,7 +37,7 @@ PROGRAM test_step_allocations
   !! line restrained in torsion whose End A rolls about its axis, beside an EI = 0 chain.
   !!
   !! Usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]
-  !!        test_step_allocations torsion | nodal | current_grid | motion_roll | motion_vessel
+  !!        test_step_allocations torsion | nodal | free | current_grid | motion_roll | motion_vessel
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT, C_LONG_LONG
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
@@ -81,14 +82,15 @@ PROGRAM test_step_allocations
   IF (COMMAND_ARGUMENT_COUNT() == 1) THEN
     CALL GET_COMMAND_ARGUMENT(1, arg)
     SELECT CASE (TRIM(arg))
-    CASE ('torsion', 'nodal')
-      CALL torsion_gate(TRIM(arg) == 'nodal')
+    CASE ('torsion', 'nodal', 'free')
+      CALL torsion_gate(TRIM(arg) /= 'torsion', TRIM(arg) == 'free')
     CASE ('current_grid')
       CALL current_grid_gate()
     CASE ('motion_roll', 'motion_vessel')
       CALL motion_gate(TRIM(arg) == 'motion_vessel')
     CASE DEFAULT
-      ERROR STOP 'a single argument must be "torsion", "nodal", "current_grid", "motion_roll" or "motion_vessel"'
+      ERROR STOP 'a single argument must be "torsion", "nodal", "free", "current_grid", "motion_roll" or '// &
+        '"motion_vessel"'
     END SELECT
     STOP
   END IF
@@ -193,10 +195,10 @@ CONTAINS
     END DO
   END SUBROUTINE march
 
-  SUBROUTINE torsion_gate(nodal)
+  SUBROUTINE torsion_gate(nodal, free_end)
     !! Zero heap allocation in CD_HFMF_UpdateStates of a cable with condensed torsion, or with the
-    !! nodal twist.
-    LOGICAL, INTENT(IN) :: nodal
+    !! nodal twist (free_end: free in torsion at the held end 1).
+    LOGICAL, INTENT(IN) :: nodal, free_end
     INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NDOF = 6*NN, N_WARM = 40, N_COUNT = 200
     REAL(wp), PARAMETER :: LL = 10.0_wp, DTT = 0.01_wp
     TYPE(CD_HFMF_ModuleType) :: cab
@@ -237,6 +239,7 @@ CONTAINS
       tors%irn = 0.05_wp
       tors%bt = 0.5_wp
     END IF
+    IF (free_end) tors%end_free(1) = .TRUE.
     tors%has_theta = .TRUE.
     frame(:, 1) = [1.0_wp, 0.0_wp, 0.0_wp]
     frame(:, 2) = [0.0_wp, 0.0_wp, 1.0_wp]

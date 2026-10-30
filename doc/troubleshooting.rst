@@ -410,11 +410,15 @@ Torsion
    * - ``torsion in a dynamic run needs the force-blended generalised-alpha (OPTION
        alpha_force_blend True)``
      - remove ``False alpha_force_blend`` from a deck with torsion.
-   * - ``OUTPUT "Torq...": line <L> is not torsionally restrained at both ends ..., so it carries
-       no torque``
-     - a ``Torq``/``Twist`` channel needs a line with a torsional restraint at both ends.
-   * - ``motionFile: point <id> has a non-zero roll column, but no line restrained in torsion at
-       both ends ... has its moving (non-Fixed) end there`` / ``the roll column of point <id> must
+   * - ``OUTPUT "Torq...": line <L> is not torsionally restrained (END CONNECTIONS
+       TorsStiffness), so it carries no torque`` / ``... line <L> is torsionally restrained at
+       one end only and its torsion is not solved: <reason>``
+     - a ``Torq``/``Twist`` channel needs a line solved in torsion: restrained at both ends, or
+       at one end with the other free to twist; the second message gives the rule a line
+       restrained at one end missed (see the note below).
+   * - ``motionFile: point <id> has a non-zero roll column, but no line restrained in torsion
+       (END CONNECTIONS TorsStiffness) at its moving (non-Fixed) end has that end there`` /
+       ``the roll column of point <id> must
        be 0 at t = 0`` / ``gives the roll column (12th) on some rows only`` / ``the roll column
        (12th, degrees) must be a finite number``
      - the roll column drives the frame of a torsional line's moving end, starts from 0 (put a
@@ -617,9 +621,18 @@ Warnings and notes that do not stop a run
 
    * - Message
      - Cause and fix
-   * - ``Note: line <L> is torsionally restrained at one end only; ... no torsion is solved``
-     - with the other end free to twist the line carries no torque, so the torsion columns of the
-       restrained end have no effect. Restrain both ends to solve torsion.
+   * - ``Note: line <L> is torsionally restrained at one end only and its torsion is not solved:
+       <reason>``
+     - a line restrained at one end, its other end free to twist, is solved in torsion (its free
+       end turns with the twist of the line) where a line restrained at both ends would be; the
+       reason names the rule it misses: no ``GJ`` in its ``LINE TYPES`` rows (give the 14-column
+       row), two moving ends, ``ATTACHMENTS``, ``CONTROL``, ``nModes``, ``False
+       alpha_force_blend`` in a dynamic run, or a restrained End A on a rod end or a body other
+       than Rigid6. The line is then solved as without the torsion columns.
+   * - ``Note: line <L>: torsion restrained at End <B|A> only: no static torque; the free End
+       <A|B> turns with the twist of the line, <x> deg (Twist<L>)``
+     - a line restrained in torsion at one end: it carries no static torque, and its stretch
+       turns the free end under torque–tension coupling (``GJ|K``), :math:`-\sum (K/GJ)(l - L)`.
    * - ``Note: line <L>: torsion solved, imposed twist ... deg, torque ... N m (<n> twist
        stage(s), <m> buckling descent(s))``
      - the static twist stage of a torsional line. A non-zero descent count means the straight or

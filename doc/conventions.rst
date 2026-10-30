@@ -172,7 +172,10 @@ Angles at line ends
 Torsion signs
 -------------
 
-These apply to a finite-EI line restrained in torsion at both ends (:doc:`driver_format`).
+These apply to a finite-EI line solved in torsion: restrained at both ends, or at one end with
+the other free to twist (:doc:`driver_format`). On a line free at one end the free end's
+``Pretwist`` is not used (0), :math:`\Phi` is the restrained end's alone, and ``Twist<L>`` is
+the free end's turn relative to the restrained end.
 
 - The end frame of each end is its direction ``Ez`` (End A → End B) and its reference normal
   ``Nx``, in the frame of ``Ez``. ``Pretwist`` rolls the end frame about ``Ez`` by a right-handed

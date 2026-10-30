@@ -193,12 +193,11 @@ inward tangent is ``−Ez``, it has the opposite sense to ``Pretwist`` (B). Rule
 * the roll must be 0 at ``t = 0``, because the static initial condition uses the deck
   ``Pretwist``; give a constant twist there (``the roll column of point <id> must be 0 at
   t = 0``);
-* a non-zero roll is accepted only at the moving end of a line restrained in torsion at both
-  ends (``has a non-zero roll column, but no line restrained in torsion at both ends ... has its
-  moving (non-Fixed) end there``);
-* the roll is real valued and not wrapped, so several turns are written as they accumulate.
-  Torsion carries no inertia (see :doc:`theory`), so the torque follows the roll at once and no
-  roll rate or acceleration column is needed.
+* a non-zero roll is accepted only at the moving end of a line solved in torsion, restrained
+  there (``has a non-zero roll column, but no line restrained in torsion ... at its moving
+  (non-Fixed) end has that end there``): a free end has no torsion frame to roll;
+* the roll is real valued and not wrapped, so several turns are written as they accumulate; the
+  time integration takes its rate and acceleration from the roll history (no column).
 
 :file:`examples/data/torsion/hangoff_roll_2turns_60s_dt01.txt`, used by
 :file:`examples/torsion_lazy_wave_hangoff_twist.dat`, holds the hang-off in place and rolls it

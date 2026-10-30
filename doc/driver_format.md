@@ -849,10 +849,20 @@ used.
 
 Behaviour:
 
-- Torsion is solved only on a line restrained at **both** ends. With one end restrained the
-  other end is free to twist, the line carries no torque, and the driver prints a note and
-  solves the line as without the columns (the rules below then do not apply). `Free` columns,
-  or no columns, reproduce the 6-column results exactly.
+- Torsion is solved on a line restrained at both ends, and on a line restrained at **one** end
+  whose other end is free to twist (`TorsStiffness` `Free` there, or no row), under the rules
+  below. A free end carries no torque. In statics the line then has none, and its static state
+  is that of the line without the columns; under torque–tension coupling (`GJ|K`) the stretch
+  twists it, so the free end turns by `Twist<L> = −Σ (K/GJ)(l − L)` over the elements (`l`
+  stretched, `L` unstretched). In the dynamics the polar inertia `Irn` carries torsional waves
+  that reflect at the free end, and the restrained end (and the body or vessel holding it)
+  takes their torque. The free end's `Nx` and `Pretwist` are not used: its section is the
+  restrained end's, rolled by that end's `Pretwist`, carried along the line and turned by the
+  twist of the line. A line restrained at one end that misses a rule (its `LINE TYPES` rows
+  give no `GJ`, two moving ends, `ATTACHMENTS`, `CONTROL`, `nModes`, a dynamic or coupled run
+  with `False alpha_force_blend`, a restrained End A on a rod end or a non-Rigid6 body) is
+  solved as without the columns, and the standalone driver prints a note with the reason.
+  `Free` columns, or no columns, reproduce the 6-column results exactly.
 - The imposed twist is `Phi = Pretwist(B) − Pretwist(A)`, measured against the line's own
   geometric twist `Theta`, the parallel-transport rotation of the End A normal carried along the
   centreline to End B (zero for a line that stays in a plane, with both normals perpendicular to
@@ -879,8 +889,8 @@ Behaviour:
   dynamics; it is part of `Body<N>M*`.
 - Statics solve the imposed twist as the last load stage, in steps of at most 45°, test every
   stage for stability and, above a buckling onset, leave the unstable straight state for the
-  buckled one. Dynamics carry the torque in every step; torsion has no inertia (quasi-static
-  torsion), so the torque follows the imposed twist without a torsional wave.
+  buckled one. Dynamics carry the torsion in every step with a twist angle at every node and the
+  polar inertia `Irn` of the `LINE TYPES` row (see [theory](theory.rst)).
 
 Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B, an explicit
 `GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point or a Rigid6
@@ -891,11 +901,9 @@ a dynamic or coupled run with `False alpha_force_blend`, any
 restrained end (one end included) through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which
 move the line ends by translation only (`a line restrained in torsion needs a host that turns
 its fairlead frame ...`; a C API host passes its rotations after `CableDyn_InitDeckRotating`),
-and a `Torq`/`Twist` channel on a line that is not restrained at both ends. OpenFAST
-linearisation includes the twist angles as states; like any cable, the line must not have a
-`Rigid` bending connection there. Seabed friction does not resist twist (the laid part of a
-line twists freely), and there
-is no torque–tension coupling.
+and a `Torq`/`Twist` channel on a line whose torsion is not solved. OpenFAST linearisation
+includes the twist angles as states; like any cable, the line must not have a `Rigid` bending
+connection there. Seabed friction does not resist twist (the laid part of a line twists freely).
 
 ### EQUIVALENT BUOYANCY (optional)
 
@@ -1362,9 +1370,9 @@ cases. With an active path:
 - `Connect`/`Free` point-system decks and FAILURE decks reject `motionFile`.
 
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
-plain numbers; tokens after the eleventh are ignored, except that a deck with a line restrained
-in torsion at both ends reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the
-line's moving end (End A, or End B in a deck that lists the `Fixed` anchor as End A), right-handed
+plain numbers; tokens after the eleventh are ignored, except that a deck with a line solved in
+torsion reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the line's moving
+end, restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A), right-handed
 about the line tangent pointing into the line from that end. Either way it imposes
 `Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`: the roll has the sense of `Pretwist(A)` at End A
 (where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)` at End B (where it is
@@ -1487,9 +1495,9 @@ bending moment. None of these channels is mandatory.
 | `TDP<L>Lay` | line L layback: horizontal distance from the TDP to the suspended end | m |
 | `TDP<L>Exc` | line L TDP excursion: horizontal TDP displacement from its initial position, along the initial direction toward the suspended end | m |
 | `TDP<L>Grd` | line L grounded length: deformed chord length along the nodes from the grounded end to the TDP; continuous with the TDP, 0 only when nothing touches (the grounded end has lifted off) | m |
-| `Torq<L>N<J>` | line L torque at node J (uniform along the line); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line restrained in torsion at both ends | N·m |
-| `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` over the elements in between; 0 at End A, without the end-spring windup. Only on a line restrained in torsion at both ends | deg |
-| `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included. Only on a line restrained in torsion at both ends | deg |
+| `Torq<L>N<J>` | line L torque at node J (uniform along the line in statics); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line solved in torsion (restrained at both ends, or at one end with the other free) | N·m |
+| `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` (less `(K/GJ)(l − L)` under coupling) over the elements in between; 0 at End A, without the end-spring windup. Only on a line solved in torsion | deg |
+| `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included; on a line free at one end the twist of its elements, the free end's turn. Only on a line solved in torsion | deg |
 
 - `<L>`/`<P>` are deck LINE/POINT **ids**, not array positions. A channel that matches no
   supported form, names an unknown id, or carries trailing text (for example `Point2px_raw`) is a
