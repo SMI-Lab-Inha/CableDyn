@@ -75,7 +75,7 @@ MODULE CableDyn_Hydro
   ! CD_Current_Grid_Velocity, which mirror constructDynamicCurrentGrid / construct4DCurrentGrid
   ! (source/Waves/WaveGrid.cpp) and CurrentGrid::getCurrentKin (source/Waves.cpp). The fluid
   ! acceleration of such a current is zero, as MoorDyn-C sets it.
-  TYPE, PUBLIC :: CD_CurrentGridType
+  TYPE :: CD_CurrentGridType
     REAL(wp), ALLOCATABLE :: x(:), y(:), z(:)
     REAL(wp) :: dt = 1.0_wp
     INTEGER :: nt = 1
