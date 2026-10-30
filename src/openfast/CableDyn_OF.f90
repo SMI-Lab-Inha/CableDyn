@@ -860,6 +860,14 @@ CONTAINS
             ! (a line restrained in torsion linearises: its free twist angles and their rates
             ! are states, lin_state_map, and the coupled-point orientation of the input turns its
             ! End A frame; a condensed torsion's torque follows q and the frames, see lin_eval)
+            ! a finite-EI line between two moving points has a second host-driven end, whose input
+            ! column the linearization does not perturb yet
+            IF (Inst(id)%agg%cables(ic)%moving_b) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
+                                'of a finite-EI line with two moving ends is not supported (anchor its '// &
+                                'End B on a Fixed point to linearize).', ErrStat, ErrMsg, RoutineName )
+               RETURN
+            END IF
          END DO
       END IF
       CALL CD_AGG_GetInitMetadata( Inst(id)%agg, nreportlines, npoints, nsections, nei0, nfinite, es, em )

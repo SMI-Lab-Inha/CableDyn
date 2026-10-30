@@ -414,8 +414,9 @@ initialised.
    One ``x, y, z`` block for every host-driven point and nothing else: first the
    ``Coupled``/``Vessel`` points attached to an ``EI = 0`` line, in ``POINTS`` table order,
    then the fairlead (End A, which must be ``Coupled``/``Vessel``) of each finite-EI line, in
-   ``LINES`` table order. ``Fixed`` anchors, ``Free``/``Connect`` points, bodies and rods have
-   no block.
+   ``LINES`` table order, then the End B of each finite-EI line whose End B is also
+   ``Coupled``/``Vessel`` (a line between two moving points, driven at both ends), in ``LINES``
+   table order. ``Fixed`` anchors, ``Free``/``Connect`` points, bodies and rods have no block.
 
 ``CableDyn_InitLine``
    ``n_fixed`` entries. Entry ``k`` is the DOF ``fixed_dofs[k]``, in the order the caller

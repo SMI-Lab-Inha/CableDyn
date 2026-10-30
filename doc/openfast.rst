@@ -329,6 +329,19 @@ is not unique. Formal linearisation (``Linearize = True``) supports pinned and n
 connections; a ``Rigid`` row fails during initialisation, because only the axial stretch of its
 end tangent is a degree of freedom (see `Linearisation`_). Row grammar: :doc:`driver_format`.
 
+Lines between two moving points
+-------------------------------
+
+A finite-EI line may run between two host-driven points: both ends on ``Coupled``/``Vessel``
+points, or in FAST.Farm between two ``Turbine<J>`` fairleads (a shared power cable between two
+floating turbines). Each end is a mesh point of its own: End A takes the line's fairlead point,
+End B a second point placed after the fairleads of all finite-EI lines (in FAST.Farm on End B's
+turbine), and the load and moment of each end return to its own host. End B's connection
+direction and torsion frame are given in its parent's axes and turn with its point-mesh
+orientation as End A's do. The static initialisation is that of the same line with End B held
+at its position; ``PtfmInit`` (or the farm's initial turbine displacements) places both ends.
+Formal linearisation of such a line fails during initialisation.
+
 Line torsion
 ------------
 
@@ -341,7 +354,9 @@ torsional inertia loads the platform); a free End A transmits no torque, and the
 turn does not reach the line. The torque moment is
 returned to OpenFAST with the connection moment, the ``Torq<L>N<J>`` and ``Twist<L>``
 channels are available, ``PtfmInit`` twists the line in the static initialisation, and the
-unwrapped twist is part of the checkpoint state. End B must be a ``Fixed`` point. Within one
+unwrapped twist is part of the checkpoint state. End B is a ``Fixed`` point or a second
+host-driven end whose frame turns with its own orientation (`Lines between two moving points`_).
+Within one
 step the line may turn by more than 90° about its end direction, because the step is cut into
 substeps; an output probe moves the frame without a step, is limited to 90° from the
 committed twist, and stops by name beyond it (a restart first restores the checkpoint's twist,

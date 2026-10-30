@@ -11,9 +11,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 ### Added
 
 - Finite-EI lines with two moving ends on the cubic-Hermite route: a line whose End B is a
-  `Coupled`/`Vessel` point (a cable shared by two floaters, a `TURBINES` shared line) is driven at
-  both ends, with `END CONNECTIONS` and torsion at both (both end frames turn with their parents)
-  and every Hermite feature. A `Coupled` End B held at rest writes the `Fixed` End B's files byte
+  `Coupled`/`Vessel` point (a cable shared by two floaters, a FAST.Farm shared line) is driven at
+  both ends standalone, in OpenFAST, FAST.Farm and the C API (End B on a moving column of its
+  own), with `END CONNECTIONS` and torsion at both (both end frames turn with their parents) and
+  every Hermite feature; a FAST.Farm aggregate driven by prescribed turbine motions reports the
+  standalone deck's end tensions to 7e-3 N of 1.9e4 N. A `Coupled` End B held at rest writes the `Fixed` End B's files byte
   for byte; a symmetric cable whose ends move apart stays mirror-symmetric to 4e-11 m; a rigidly
   translating line keeps its end loads to 4e-5 N of 1.6e4 N; driving End B matches the reversed
   line driven at End A to 1e-3 N, with a turning clamped End B to 2e-5 N and 4e-7 N m; equal rolls

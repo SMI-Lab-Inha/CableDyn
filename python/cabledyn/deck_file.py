@@ -3246,15 +3246,14 @@ class DeckFile:
         ]
         # Native build_one_hermite_cable, which builds every finite-EI line of the coupled
         # aggregate (OpenFAST, FAST.Farm, the C API and the standalone mixed deck): the cable
-        # is held at a Fixed End B (the anchor) and driven at End A. A finite-EI line shared by
-        # two turbines is refused here, before its end-force channels (AnchFz, AnchFH) could be
-        # accepted for an end the aggregate cannot hold. (A standalone line's moving End B is
-        # refused by the static LINE checks above.)
+        # is driven at End A and either held at a Fixed End B (the anchor) or driven at a
+        # Coupled/Vessel End B (its own moving column: a line between two moving points, such
+        # as a line shared by two turbines). Any other End B is refused here.
         if self.caller_driven or mixed_route:
             for line_id in finite_line_ids:
                 end_b = normalized_line_endpoints[line_id][1]
                 end_b_type = point_types.get(end_b, end_b)
-                if end_b_type != "fixed":
+                if not _end_b_holds_connection(end_b_type):
                     raise DeckFormatError(
                         f"{self._label}: line {line_id}: finite-EI coupled cable requires End B "
                         f'(the anchor) to be a Fixed point; got "{end_b_type}"'

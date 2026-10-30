@@ -35,9 +35,18 @@ PROGRAM test_two_moving_ends
   !!      translates and turns, equals the same line written in reverse and driven at its End A by the
   !!      same parent motion (the established End A boundary): end forces and connection moments;
   !!   CT restart with torsion, the nodal twist and both end frames turning: snapshot and mirror
-  !!      rebuild continue bit-identically.
+  !!      rebuild continue bit-identically;
+  !! the coupled aggregate (OpenFAST, FAST.Farm, the C API), one moving column per end:
+  !!   F  FAST.Farm: a line shared by two turbines takes its End A from turbine 1's column and its End B
+  !!      from turbine 2's (the turbine map), and, driven by prescribed turbine motions, reports the
+  !!      end tensions of the standalone TURBINES deck run with the same motions (solver tolerances);
+  !!   FT the torsional line between two host-driven columns, each turned by its own host orientation:
+  !!      equal rolls keep the torque, opposite rolls change it by GJ (2 phi) / L.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Init_Deck_HermiteCable, CD_DECKDRV_OK
+  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_Step_Moving, &
+                                         CD_AGG_NMovingPoints, CD_AGG_TurbineOfMoving, CD_AGG_NumChannels, &
+                                         CD_AGG_EvalChannel, CD_AGG_GetMovingPointMesh, CD_AGG_End, CD_AGG_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, &
                                           CD_HFMF_GetNodePositions, CD_HFMF_GetCoupledKinematics, &
                                           CD_HFMF_GetEndBKinematics, CD_HFMF_Snapshot, CD_HFMF_Restore, &
@@ -61,6 +70,8 @@ PROGRAM test_two_moving_ends
   CALL check_bending_reversal('finite')
   CALL check_bending_reversal('clamped')
   CALL check_torsion_restart()
+  CALL check_farm_shared_line()
+  CALL check_aggregate_torsion()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -220,7 +231,7 @@ CONTAINS
     !!    Fixed End B: every output file byte for byte, while End A surges 2 m.
     INTEGER, PARAMETER :: NSTEP = 120
     CHARACTER(16), PARAMETER :: SFX(5) = [CHARACTER(16) :: '.out', '.Line1.p.out', '.Line1.t.out', &
-                                           '.static.out', '.elements.out']
+                                                                                         '.static.out', '.elements.out']
     LOGICAL :: ok, same
     CHARACTER(1024) :: em
     INTEGER :: k
@@ -646,7 +657,7 @@ CONTAINS
     opt(3) = 'tme_ts_vessel.txt vesselMotion'
     opt(4) = '0|0|-50 vesselRef'
     CALL write_tdeck('tme_ts.dat', [0.0_wp, 0.0_wp, -50.0_wp], 'Vessel', [100.0_wp, 0.0_wp, -50.0_wp], 'Vessel', &
-                     'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 90', opt, 'Torq1N1 Torq1N41 Twist1 FairTen1 AnchTen1', &
+          'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 90', opt, 'Torq1N1 Torq1N41 Twist1 FairTen1 AnchTen1', &
                      1.0e-12_wp)
     CALL run_deck('tme_ts.dat', 'tme_ts', ok, em)
     CALL require(ok, 'TS: the twisted line between two points of a rolling vessel runs: '//TRIM(em))
@@ -859,7 +870,7 @@ CONTAINS
     END DO
     WRITE (*, '(A,A,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A)') 'bending reversal (', kind, '): end force difference ', &
       ef, ' N (of ', fs, ' N), connection moment difference ', em_, ' N m (of ', ms, ' N m)'
-    CALL require(ef <= 1.0e-6_wp*fs, 'B ('//kind//'): End B forces of the line driven at End B equal the reversed line''s')
+ CALL require(ef <= 1.0e-6_wp*fs, 'B ('//kind//'): End B forces of the line driven at End B equal the reversed line''s')
     CALL require(em_ <= 1.0e-6_wp*MAX(ms, 1.0_wp), 'B ('//kind//'): and the connection moments')
     CALL require(ms > 1.0e2_wp, 'B ('//kind//'): the turning parent loads its connection (a moment above 100 N m)')
     CALL CD_HFMF_End(c1)
@@ -991,5 +1002,199 @@ CONTAINS
     CALL CD_HFMF_End(cab)
     CALL CD_HFMF_End(fresh)
   END SUBROUTINE check_torsion_restart
+
+  ! ------------------------------------------------------------------------------------------
+  ! the coupled aggregate
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE write_farm_deck(path, motion, tmax)
+    !! The suspended line of write_deck shared by two turbines: TURBINES 1 at the origin and 2 at
+    !! x = 80, the line between their fairleads (0, 0, -20) in turbine axes; motion a motionFile or
+    !! blank.
+    CHARACTER(*), INTENT(IN) :: path, motion
+    REAL(wp), INTENT(IN) :: tmax
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'two moving ends farm gate'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'pcable 0.20 60 8.0e8 0.0 2.0e4 1.0 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- TURBINES ---'
+    WRITE (u, '(A)') 'J X0 Y0 Z0'
+    WRITE (u, '(A)') '(-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 0 0 0'
+    WRITE (u, '(A)') '2 80 0 0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Turbine1 0 0 -20 0 0 0 0'
+    WRITE (u, '(A)') '2 Turbine2 0 0 -20 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 pcable 100.0 40'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(F6.3,A)') DT, ' dtM'
+    WRITE (u, '(F7.3,A)') tmax, ' TMax'
+    IF (LEN_TRIM(motion) > 0) WRITE (u, '(A)') TRIM(motion)//' motionFile'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1 AnchTen1'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+  END SUBROUTINE write_farm_deck
+
+  SUBROUTINE ramp0(t, amp, x, v, a)
+    !! amp (1 - cos(w t))^2 / 4 with w = 2 pi / 8 s: from rest with zero acceleration at t = 0, so a
+    !! host that starts from the static state (no first-row acceleration) sees the same motion.
+    REAL(wp), INTENT(IN) :: t, amp
+    REAL(wp), INTENT(OUT) :: x, v, a
+    REAL(wp), PARAMETER :: W = 2.0_wp*PI/8.0_wp
+    x = 0.25_wp*amp*(1.0_wp - COS(W*t))**2
+    v = 0.5_wp*amp*W*(1.0_wp - COS(W*t))*SIN(W*t)
+    a = 0.5_wp*amp*W*W*(SIN(W*t)**2 + (1.0_wp - COS(W*t))*COS(W*t))
+  END SUBROUTINE ramp0
+
+  SUBROUTINE turbine_motion(j, t, x, v, a)
+    !! Prescribed rigid motion of turbine j (no rotation): turbine 1 surges 2 m, turbine 2 sways
+    !! 1.5 m and heaves 1 m, each from rest (ramp0); x is the turbine reference point.
+    INTEGER, INTENT(IN) :: j
+    REAL(wp), INTENT(IN) :: t
+    REAL(wp), INTENT(OUT) :: x(3), v(3), a(3)
+    REAL(wp) :: s, sv, sa, h, hv, ha
+    x = 0.0_wp; v = 0.0_wp; a = 0.0_wp
+    IF (j == 1) THEN
+      CALL ramp0(t, 2.0_wp, s, sv, sa)
+      x(1) = s; v(1) = sv; a(1) = sa
+    ELSE
+      CALL ramp0(t, 1.5_wp, s, sv, sa)
+      CALL ramp0(t, 1.0_wp, h, hv, ha)
+      x = [SPAN, s, h]; v = [0.0_wp, sv, hv]; a = [0.0_wp, sa, ha]
+    END IF
+  END SUBROUTINE turbine_motion
+
+  SUBROUTINE check_farm_shared_line()
+    !! F. The standalone TURBINES deck (motionFile turbine rows) and the FAST.Farm aggregate (n_turbines
+    !!    = 2, the same reference positions) of one shared line, driven by the same turbine motions.
+    !!    The aggregate maps its two moving columns to turbines 1 and 2; FairTen and AnchTen agree to
+    !!    the solver tolerances (the standalone route solves its statics to 1e-8 and the aggregate's
+    !!    to 1e-6; both step to 1e-8 here) at every step.
+    INTEGER, PARAMETER :: NSTEP = 160, NCOL = 3
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: agg
+    REAL(wp) :: rows(NCOL, NSTEP + 1), pos(3, 2), vel(3, 2), acc(3, 2), x(3), v(3), a(3), t, fa, fb, err, scale
+    INTEGER :: u, k, j, n, es, nit, turb(2)
+    LOGICAL :: ok, conv, stalled
+    CHARACTER(1024) :: em
+    OPEN (NEWUNIT=u, FILE='tme_farm.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, NSTEP
+      t = REAL(k, wp)*DT
+      DO j = 1, 2
+        CALL turbine_motion(j, t, x, v, a)
+        WRITE (u, '(F10.5,1X,I0,3(1X,ES24.16),A,3(1X,ES24.16),A,3(1X,ES24.16),A)') t, j, x, ' 1 0 0 0', v, &
+          ' 0 0 0', a, ' 0 0 0'
+      END DO
+    END DO
+    CLOSE (u)
+    CALL write_farm_deck('tme_farm_sa.dat', 'tme_farm.txt', NSTEP*DT)
+    CALL run_deck('tme_farm_sa.dat', 'tme_farm_sa', ok, em)
+    CALL require(ok, 'F: the standalone TURBINES deck runs: '//TRIM(em))
+    CALL read_rows('tme_farm_sa.out', rows, n, ok)
+    CALL require(ok .AND. n == NSTEP + 1, 'F: standalone output readable')
+    IF (.NOT. ok) RETURN
+    ALLOCATE (agg)
+    CALL write_farm_deck('tme_farm_agg.dat', '', NSTEP*DT)
+    CALL CD_AGG_Init_From_Deck(agg, 'tme_farm_agg.dat', DT, es, em, n_turbines=2, &
+                               turbine_ref_pos=RESHAPE([0.0_wp, 0.0_wp, 0.0_wp, SPAN, 0.0_wp, 0.0_wp], [3, 2]), &
+                               forbid_deck_ambient=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'F: the FAST.Farm aggregate builds the shared line: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL require(CD_AGG_NMovingPoints(agg, es, em) == 2, 'F: two moving columns, one per end')
+    CALL CD_AGG_TurbineOfMoving(agg, turb, es, em)
+    CALL require(es == CD_AGG_OK .AND. turb(1) == 1 .AND. turb(2) == 2, &
+                 'F: End A is driven by turbine 1 and End B by turbine 2')
+    agg%cables(1)%tol = 1.0e-8_wp
+    agg%cables(1)%max_iter = 30
+    err = 0.0_wp
+    scale = MAXVAL(ABS(rows(2:3, 1:n)))
+    DO k = 0, NSTEP
+      IF (k > 0) THEN
+        t = REAL(k, wp)*DT
+        DO j = 1, 2
+          CALL turbine_motion(j, t, x, v, a)
+          pos(:, j) = x + [0.0_wp, 0.0_wp, ZE]
+          vel(:, j) = v
+          acc(:, j) = a
+        END DO
+        CALL CD_AGG_Step_Moving(agg, DT, pos, vel, acc, conv, stalled, nit, es, em, t_committed=t)
+        CALL require(es == CD_AGG_OK, 'F: aggregate step: '//TRIM(em))
+        IF (es /= CD_AGG_OK) EXIT
+      END IF
+      CALL CD_AGG_EvalChannel(agg, 1, fa, es, em)
+      CALL CD_AGG_EvalChannel(agg, 2, fb, es, em)
+      IF (k == 0) WRITE (*, '(A,2ES16.8,A,2ES16.8)') '  static FairTen, AnchTen: aggregate ', fa, fb, &
+        ' standalone ', rows(2:3, 1)
+      err = nan_max_abs([err, ABS(fa - rows(2, k + 1)), ABS(fb - rows(3, k + 1))])
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3,A)') 'FAST.Farm shared line: aggregate vs standalone end tensions ', err, &
+      ' N (of ', scale, ' N)'
+    CALL require(err <= 1.0e-6_wp*scale, 'F: the aggregate reports the standalone route''s end tensions')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE check_farm_shared_line
+
+  SUBROUTINE check_aggregate_torsion()
+    !! FT. The clamped line twisted 90 deg between two Coupled points of the aggregate (host
+    !!     orientations): the host rolls column 1 by +phi and column 2 by -phi about the line (End B
+    !!     frame against End A's: the twist falls by 2 phi), or both by +phi (a rigid roll).
+    INTEGER, PARAMETER :: NSTEP = 10
+    REAL(wp), PARAMETER :: GJ = 5.0e4_wp, L = 100.0_wp, PHI_MAX = 30.0_wp
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: agg
+    REAL(wp) :: pos(3, 2), zero3(3, 2), ori(3, 3, 2), phi, m0, mt, err(2)
+    INTEGER :: k, es, nit, isame
+    LOGICAL :: conv, stalled
+    CHARACTER(1024) :: em
+    CHARACTER(40) :: opt(2)
+    opt(1) = '0.05 dtM'
+    opt(2) = '0.5 TMax'
+    CALL write_tdeck('tme_aggt.dat', [0.0_wp, 0.0_wp, -50.0_wp], 'Coupled', [100.0_wp, 0.0_wp, -50.0_wp], 'Coupled', &
+                     'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 90', opt, 'Torq1N1', 1.0e-12_wp)
+    pos(:, 1) = [0.0_wp, 0.0_wp, -50.0_wp]
+    pos(:, 2) = [100.0_wp, 0.0_wp, -50.0_wp]
+    zero3 = 0.0_wp
+    err = 0.0_wp
+    DO isame = 1, 2
+      ALLOCATE (agg)
+      CALL CD_AGG_Init_From_Deck(agg, 'tme_aggt.dat', 0.05_wp, es, em, host_orientation=.TRUE.)
+      CALL require(es == CD_AGG_OK, 'FT: the aggregate builds the twisted line: '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      m0 = agg%cables(1)%line%torsion%torque
+      DO k = 1, NSTEP
+        phi = PHI_MAX*REAL(k, wp)/REAL(NSTEP, wp)*PI/180.0_wp
+        ori(:, :, 1) = roll_x(phi)
+        ori(:, :, 2) = roll_x(MERGE(phi, -phi, isame == 2))
+        CALL CD_AGG_Step_Moving(agg, 0.05_wp, pos, zero3, zero3, conv, stalled, nit, es, em, &
+                                t_committed=0.05_wp*k, orientation=ori, angular_velocity=zero3, &
+                                angular_acceleration=zero3)
+        CALL require(es == CD_AGG_OK, 'FT: aggregate step: '//TRIM(em))
+        IF (es /= CD_AGG_OK) EXIT
+        mt = agg%cables(1)%line%torsion%torque
+        IF (isame == 1) THEN
+          err(1) = nan_max_abs([err(1), ABS((mt - m0) + GJ*2.0_wp*phi/L)])
+        ELSE
+          err(2) = nan_max_abs([err(2), ABS(mt - m0)])
+        END IF
+      END DO
+      CALL CD_AGG_End(agg, es, em)
+      DEALLOCATE (agg)
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES10.3,A,ES12.5,A)') 'aggregate host rolls: opposite error ', err(1), ' N m, same error ', &
+      err(2), ' N m (torque ', m0, ' N m)'
+    CALL require(err(1) <= 1.0e-6_wp*GJ, 'FT: opposite host rolls change the torque by GJ (2 phi) / L')
+    CALL require(err(2) <= 1.0e-6_wp*GJ, 'FT: equal host rolls keep the torque')
+  END SUBROUTINE check_aggregate_torsion
 
 END PROGRAM test_two_moving_ends

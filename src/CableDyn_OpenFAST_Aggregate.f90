@@ -54,6 +54,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, &
                                           CD_HFMF_PreflightCoupledKinematics, &
                                           CD_HFMF_SetCoupledKinematics, CD_HFMF_GetCoupledKinematics, &
+                                          CD_HFMF_GetEndBKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK, CD_HFMF_BADINPUT, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, &
                                           CD_HFMF_Set_Held_Fluid, CD_HFMF_NNodes, CD_HFMF_GetNodePositions, &
@@ -140,6 +141,8 @@ MODULE CableDyn_OpenFAST_Aggregate
   ! maps a sub-module status onto the same integer meaning.
   INTEGER, PARAMETER, PUBLIC :: CD_AGG_OK = 0, CD_AGG_BADINPUT = 1, CD_AGG_SOLVEFAIL = 2, &
                                 CD_AGG_NOT_INITIALIZED = 3, CD_AGG_ALLOCFAIL = 4
+  ! cable_two_ends modes
+  INTEGER, PARAMETER :: CABLE_PREFLIGHT = 1, CABLE_SET = 2, CABLE_STEP = 3
 
   TYPE :: CD_AGG_ModuleType
     !! Owner of the composed {EI=0 system + N Hermite cables} behind the FMF facade.
@@ -157,6 +160,12 @@ MODULE CableDyn_OpenFAST_Aggregate
     REAL(wp) :: max_strain = 0.5_wp
     INTEGER :: ncp_sys = 0                               ! moving points owned by sys
     INTEGER :: ncable = 0                                ! number of cables (= trailing moving points)
+    ! Cables with a moving End B (a finite-EI line between two moving points): their count and,
+    ! per cable, the moving column of End B (0 for a held End B). The End B columns follow the End
+    ! A columns of all cables, in cable order (host rods and bodies, after them, never share a deck
+    ! with a finite-EI cable).
+    INTEGER :: ncable_b = 0
+    INTEGER, ALLOCATABLE :: cable_col_b(:)
     INTEGER :: n_lines = 0, n_points = 0, n_sections = 0
     INTEGER :: n_ei0_lines = 0, n_finite_ei_lines = 0
     TYPE(CD_LineInitSummary), ALLOCATABLE :: init_lines(:)
@@ -463,6 +472,22 @@ CONTAINS
     ELSE
       candidate%ncable = 0
     END IF
+    ALLOCATE (candidate%cable_col_b(candidate%ncable))
+    candidate%cable_col_b = 0
+    candidate%ncable_b = 0
+    DO ich = 1, candidate%ncable
+      IF (.NOT. candidate%cables(ich)%moving_b) CYCLE
+      candidate%ncable_b = candidate%ncable_b + 1
+      candidate%cable_col_b(ich) = candidate%ncp_sys + candidate%ncable + candidate%ncable_b
+    END DO
+    IF (candidate%ncable_b > 0 .AND. (candidate%nhost_rod > 0 .OR. candidate%nhost_body > 0)) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: a finite-EI cable with a moving End B does not share a deck with '// &
+               'host-driven rods or bodies'
+      CALL CD_End_Deck_Aggregate(parts)
+      CALL CD_AGG_End(candidate, es, em)
+      RETURN
+    END IF
     ! Take the deck OUTPUTS channels + the deck-line-id -> object map (MOVE, then derive the unit
     ! label per channel). CD_Init_Deck_Aggregate populates these ONLY when the deck declares an
     ! OUTPUTS section; a channel-free deck leaves them unallocated, so this module reports
@@ -503,11 +528,12 @@ CONTAINS
       END DO
     END IF
     ! Host rod and body nodes append after the cables; outside farm mode they drive no turbine.
-    IF (ncp_total > candidate%ncp_sys + candidate%ncable .AND. ALLOCATED(candidate%turbine_of_moving)) THEN
+    IF (ncp_total > candidate%ncp_sys + candidate%ncable + candidate%ncable_b .AND. &
+        ALLOCATED(candidate%turbine_of_moving)) THEN
       candidate%turbine_of_moving = [candidate%turbine_of_moving, &
-                                     (0, ich=1, ncp_total - candidate%ncp_sys - candidate%ncable)]
+                                     (0, ich=1, ncp_total - candidate%ncp_sys - candidate%ncable - candidate%ncable_b)]
     END IF
-    IF (ncp_total > candidate%ncp_sys + candidate%ncable) THEN
+    IF (ncp_total > candidate%ncp_sys + candidate%ncable + candidate%ncable_b) THEN
       ich = fmf_nblocks(candidate%sys)
       ALLOCATE (candidate%hb_pos(3, ich), candidate%hb_vel(3, ich), candidate%hb_acc(3, ich), &
                 candidate%hb_load(3, ich), STAT=istat)
@@ -645,8 +671,8 @@ CONTAINS
     ! reactions write only the cable's scratch, so the other outputs are unchanged.
     LOGICAL, INTENT(IN), OPTIONAL :: cable_loads
 
-    INTEGER :: c, col, es
-    REAL(wp) :: y_fair(3)
+    INTEGER :: c, col, colb, es
+    REAL(wp) :: y_fair(3), y_b(3), m_a(3), m_b(3)
     LOGICAL :: want_cable_loads
     CHARACTER(1024) :: em
 
@@ -730,6 +756,39 @@ CONTAINS
         CALL map_hfmf_status(es, em, ErrStat, ErrMsg)
         RETURN
       END IF
+      IF (self%cable_col_b(c) > 0) THEN
+        ! a moving End B: its column carries node 1's kinematics and the load on End B's host,
+        ! both ends' loads from one evaluation of the committed state
+        colb = self%cable_col_b(c)
+        CALL CD_HFMF_GetEndBKinematics(self%cables(c), position(:, colb), velocity(:, colb), &
+                                       acceleration(:, colb), es, em, self%mv_orient(:, :, colb), &
+                                       self%mv_omega(:, colb), self%mv_alpha(:, colb))
+        IF (es /= CD_HFMF_OK) THEN
+          CALL map_hfmf_status(es, em, ErrStat, ErrMsg)
+          RETURN
+        END IF
+        IF (.NOT. want_cable_loads) CYCLE
+        CALL CD_HFMF_CalcOutput(self%cables(c), y_fair, es, em, y_moment=m_a, y_end_b=y_b, y_moment_b=m_b)
+        IF (es /= CD_HFMF_OK) THEN
+          CALL map_hfmf_status(es, em, ErrStat, ErrMsg)
+          RETURN
+        END IF
+        load(:, col) = y_fair
+        load(:, colb) = y_b
+        IF (PRESENT(moment)) THEN
+          moment(:, col) = m_a
+          moment(:, colb) = m_b
+        END IF
+        IF (.NOT. self%cable_load_feedback) THEN
+          load(:, col) = CD_ZERO
+          load(:, colb) = CD_ZERO
+          IF (PRESENT(moment)) THEN
+            moment(:, col) = CD_ZERO
+            moment(:, colb) = CD_ZERO
+          END IF
+        END IF
+        CYCLE
+      END IF
       IF (.NOT. want_cable_loads) CYCLE
       IF (PRESENT(moment)) THEN
         CALL CD_HFMF_CalcOutput(self%cables(c), y_fair, es, em, moment(:, col))
@@ -756,7 +815,7 @@ CONTAINS
         RETURN
       END IF
       DO c = 1, self%nhost_rod
-        col = self%ncp_sys + self%ncable + c
+        col = self%ncp_sys + self%ncable + self%ncable_b + c
         CALL CD_Rod_GetHostKinematics(self%rod, c, position(:, col), velocity(:, col), acceleration(:, col), &
                                       self%mv_orient(:, :, col), self%mv_omega(:, col), self%mv_alpha(:, col))
         CALL CD_Rod_HostWrench(self%sys%fast%system, self%rod, self%hb_load, c, load(:, col), y_fair, es, em)
@@ -776,7 +835,7 @@ CONTAINS
         RETURN
       END IF
       DO c = 1, self%nhost_body
-        col = self%ncp_sys + self%ncable + self%nhost_rod + c
+        col = self%ncp_sys + self%ncable + self%ncable_b + self%nhost_rod + c
         CALL CD_Rigid6_GetHostKinematics(self%rigid6, c, position(:, col), velocity(:, col), acceleration(:, col), &
                                          self%mv_orient(:, :, col), self%mv_omega(:, col), self%mv_alpha(:, col))
         CALL CD_Rigid6_HostWrench(self%sys%fast%system, self%rigid6, self%hb_load, c, load(:, col), y_fair, es, em)
@@ -870,7 +929,11 @@ CONTAINS
     ! validating that each supplied orientation is a proper DCM.
     DO c = 1, self%ncable
       col = self%ncp_sys + c
-      IF (PRESENT(orientation)) THEN
+      IF (self%cable_col_b(c) > 0) THEN
+        CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_PREFLIGHT, position, velocity, &
+                            acceleration, es, em, orientation, &
+                            angular_velocity, angular_acceleration)
+      ELSE IF (PRESENT(orientation)) THEN
         IF (PRESENT(angular_velocity)) THEN
           CALL CD_HFMF_PreflightCoupledKinematics(self%cables(c), position(:, col), velocity(:, col), &
                                                   acceleration(:, col), es, em, orientation(:, :, col), &
@@ -934,7 +997,11 @@ CONTAINS
     END IF
     DO c = 1, self%ncable
       col = self%ncp_sys + c
-      IF (PRESENT(orientation)) THEN
+      IF (self%cable_col_b(c) > 0) THEN
+        CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_SET, position, velocity, &
+                            acceleration, es, em, orientation, &
+                            self%mv_omega, self%mv_alpha)
+      ELSE IF (PRESENT(orientation)) THEN
         CALL CD_HFMF_SetCoupledKinematics(self%cables(c), position(:, col), velocity(:, col), &
                                           acceleration(:, col), es, em, orientation(:, :, col), &
                                           self%mv_omega(:, col), self%mv_alpha(:, col))
@@ -1240,8 +1307,14 @@ CONTAINS
       !$OMP DO SCHEDULE(STATIC)
       DO c = 1, self%ncable
         col = self%ncp_sys + c
-        CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em, &
-                        orientation(:, :, col))
+        IF (self%cable_col_b(c) > 0) THEN
+          CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
+                              acceleration, es, em, orientation, &
+                              self%mv_omega, self%mv_alpha)
+        ELSE
+          CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em, &
+                          orientation(:, :, col))
+        END IF
         self%cable_stat(c) = es
         self%cable_msg(c) = em
       END DO
@@ -1255,7 +1328,13 @@ CONTAINS
       !$OMP DO SCHEDULE(STATIC)
       DO c = 1, self%ncable
         col = self%ncp_sys + c
-        CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em)
+        IF (self%cable_col_b(c) > 0) THEN
+          CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
+                              acceleration, es, em, &
+                              angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha)
+        ELSE
+          CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em)
+        END IF
         self%cable_stat(c) = es
         self%cable_msg(c) = em
       END DO
@@ -2242,6 +2321,8 @@ CONTAINS
     IF (ALLOCATED(self%host_current_profile_velocity)) DEALLOCATE (self%host_current_profile_velocity)
     self%ncp_sys = 0
     self%ncable = 0
+    self%ncable_b = 0
+    IF (ALLOCATED(self%cable_col_b)) DEALLOCATE (self%cable_col_b)
     self%n_lines = 0
     self%n_points = 0
     self%n_sections = 0
@@ -2651,10 +2732,59 @@ CONTAINS
   END SUBROUTINE host_fairlead_motion
 
   PURE INTEGER FUNCTION ncp_all(self) RESULT(n)
-    !! Total moving columns: system moving points, cable fairleads, host rod nodes.
+    !! Total moving columns: system moving points, cable fairleads, the moving End B of a cable
+    !! between two moving points, host rod nodes, host body nodes.
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
-    n = self%ncp_sys + self%ncable + self%nhost_rod + self%nhost_body
+    n = self%ncp_sys + self%ncable + self%ncable_b + self%nhost_rod + self%nhost_body
   END FUNCTION ncp_all
+
+  SUBROUTINE cable_two_ends(cable, ca, cb, mode, position, velocity, acceleration, es, em, orientation, &
+                            angular_velocity, angular_acceleration)
+    !! The HFMF boundary call of a cable with a moving End B (CD_HFMF_Set_Moving_End_B): End A takes
+    !! the moving column ca, End B column cb, each with its orientation and rates (the
+    !! committed parent orientation and zero rates where the host passes none). mode CABLE_PREFLIGHT
+    !! validates, CABLE_SET transfers without a step (direct feedthrough), CABLE_STEP advances.
+    !! Touches only that cable (safe inside the cables' parallel loop).
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
+    INTEGER, INTENT(IN) :: ca, cb, mode
+    REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
+    INTEGER, INTENT(OUT) :: es
+    CHARACTER(*), INTENT(OUT) :: em
+    REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
+    REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    REAL(wp) :: dcm_a(3, 3), dcm_b(3, 3), w_a(3), al_a(3), w_b(3), al_b(3)
+    dcm_a = cable%parent_dcm
+    dcm_b = cable%parent_dcm_b
+    IF (PRESENT(orientation)) THEN
+      dcm_a = orientation(:, :, ca)
+      dcm_b = orientation(:, :, cb)
+    END IF
+    w_a = CD_ZERO
+    al_a = CD_ZERO
+    w_b = CD_ZERO
+    al_b = CD_ZERO
+    IF (PRESENT(angular_velocity) .AND. PRESENT(angular_acceleration)) THEN
+      w_a = angular_velocity(:, ca)
+      al_a = angular_acceleration(:, ca)
+      w_b = angular_velocity(:, cb)
+      al_b = angular_acceleration(:, cb)
+    END IF
+    SELECT CASE (mode)
+    CASE (CABLE_PREFLIGHT)
+      CALL CD_HFMF_PreflightCoupledKinematics(cable, position(:, ca), velocity(:, ca), acceleration(:, ca), &
+                                              es, em, dcm_a, w_a, al_a, position(:, cb), velocity(:, cb), &
+                                              acceleration(:, cb), dcm_b, w_b, al_b)
+    CASE (CABLE_SET)
+      CALL CD_HFMF_SetCoupledKinematics(cable, position(:, ca), velocity(:, ca), acceleration(:, ca), &
+                                        es, em, dcm_a, w_a, al_a, position(:, cb), velocity(:, cb), &
+                                        acceleration(:, cb), dcm_b, w_b, al_b)
+    CASE DEFAULT
+      CALL CD_HFMF_UpdateStates(cable, position(:, ca), velocity(:, ca), acceleration(:, ca), es, em, &
+                                dcm_a, w_a, al_a, ub_pos=position(:, cb), ub_vel=velocity(:, cb), &
+                                ub_acc=acceleration(:, cb), ub_orientation=dcm_b, ub_angular_velocity=w_b, &
+                                ub_angular_acceleration=al_b)
+    END SELECT
+  END SUBROUTINE cable_two_ends
 
   INTEGER FUNCTION fmf_nblocks(sys) RESULT(n)
     !! Coupled 3-DOF blocks of the EI=0 system (the full point-mesh width).

@@ -7375,7 +7375,8 @@ CONTAINS
     ! coupled_positions (3, n_moving): explicit placement of every host-prescribed
     ! (moving) point BEFORE the static solves, in the aggregate moving-set order --
     ! the system's BOUND Coupled/Vessel points in deck POINT order, then one coupled
-    ! fairlead per finite-EI cable in deck LINE order. The generalization of ptfm_init
+    ! fairlead (End A) per finite-EI cable in deck LINE order, then the moving End B of
+    ! each finite-EI cable between two moving points, in deck LINE order. The generalization of ptfm_init
     ! (which is a rigid transform of the same points; the two are mutually exclusive).
     ! Consumed by the linearization probe: each perturbed init IS a static solve at
     ! the probed boundary.
@@ -7440,7 +7441,7 @@ CONTAINS
     LOGICAL, ALLOCATABLE :: is_fin(:)
     INTEGER :: i, c, n_fin, n_ei0, cn, es, j
     INTEGER :: n_rigid6, n_point3, n_rod, n_host_rod, n_host_body
-    REAL(wp) :: fairlead_dcm(3, 3), host_dcm(3, 3)
+    REAL(wp) :: fairlead_dcm(3, 3), host_dcm(3, 3), end_b_dcm(3, 3)
     ! Preserve the complete multi-hierarchy finite-EI initialization diagnostic.
     ! This path feeds both the aggregate and OpenFAST facade; clipping it hides the
     ! mesh level/resolution evidence users need to correct a rejected deck.
@@ -8054,18 +8055,33 @@ CONTAINS
           ELSE IF (PRESENT(ptfm_init)) THEN
             fairlead_dcm = ptfm_zyx_dcm(ptfm_init(4:6))
           END IF
+          ! a moving End B (a line between two moving points) is host-driven like End A: its
+          ! parent's orientation at the static state is that of its own turbine, or the platform's
+          end_b_dcm = CD_ZERO
+          end_b_dcm(1, 1) = CD_ONE
+          end_b_dcm(2, 2) = CD_ONE
+          end_b_dcm(3, 3) = CD_ONE
+          IF (nturb > 0 .AND. PRESENT(farm_ptfm_init)) THEN
+            j = find_point(points, lines(i)%nodeB)
+            IF (j > 0 .AND. points(j)%turbine_id > 0) &
+              end_b_dcm = ptfm_zyx_dcm(farm_ptfm_init(4:6, points(j)%turbine_id))
+          ELSE IF (PRESENT(ptfm_init)) THEN
+            end_b_dcm = ptfm_zyx_dcm(ptfm_init(4:6))
+          END IF
           IF (opts%has_bathymetry_file) THEN
             CALL build_one_hermite_cable(lines(i), sections, types, points, opts_static, dt, agg%cables(c), cn, es, &
                                          em, bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, &
                                          init_note=agg%cable_note(c), install_viv=.TRUE., &
                                          fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
-                                                            deck_has_dynamic_points(points)))
+                                                            deck_has_dynamic_points(points)), &
+                                         allow_moving_end_b=.TRUE., end_b_orientation=end_b_dcm)
           ELSE
             CALL build_one_hermite_cable(lines(i), sections, types, points, opts_static, dt, agg%cables(c), cn, es, &
                                          em, fairlead_orientation=fairlead_dcm, init_note=agg%cable_note(c), &
                                          install_viv=.TRUE., &
                                          fold_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
-                                                            deck_has_dynamic_points(points)))
+                                                            deck_has_dynamic_points(points)), &
+                                         allow_moving_end_b=.TRUE., end_b_orientation=end_b_dcm)
           END IF
           IF (es /= CD_DECKDRV_OK) THEN
             ErrStat = es
@@ -8467,6 +8483,7 @@ CONTAINS
     END DO
     DO l = 1, SIZE(lines)
       IF (is_fin(l)) n = n + 1
+      IF (is_fin(l) .AND. moving_end_b_point(points, lines(l))) n = n + 1
     END DO
     ALLOCATE (agg%turbine_of_moving(n), STAT=istat)
     IF (istat /= 0) THEN
@@ -8490,18 +8507,37 @@ CONTAINS
         END IF
       END SELECT
     END DO
+    ! one coupled fairlead (End A) per finite-EI cable, then the moving End B of each cable between
+    ! two moving points (the turbine that drives each)
     DO l = 1, SIZE(lines)
       IF (.NOT. is_fin(l)) CYCLE
       n = n + 1
-      DO i = 1, SIZE(points)
-        IF (points(i)%id /= lines(l)%nodeA .AND. points(i)%id /= lines(l)%nodeB) CYCLE
-        SELECT CASE (TRIM(points(i)%ptype))
-        CASE ('coupled', 'vessel')
-          agg%turbine_of_moving(n) = points(i)%turbine_id
-        END SELECT
-      END DO
+      i = find_point(points, lines(l)%nodeA)
+      IF (i < 1) CYCLE
+      SELECT CASE (TRIM(points(i)%ptype))
+      CASE ('coupled', 'vessel')
+        agg%turbine_of_moving(n) = points(i)%turbine_id
+      END SELECT
+    END DO
+    DO l = 1, SIZE(lines)
+      IF (.NOT. is_fin(l)) CYCLE
+      IF (.NOT. moving_end_b_point(points, lines(l))) CYCLE
+      n = n + 1
+      agg%turbine_of_moving(n) = points(find_point(points, lines(l)%nodeB))%turbine_id
     END DO
   END SUBROUTINE fill_turbine_of_moving
+
+  LOGICAL FUNCTION moving_end_b_point(points, ln) RESULT(moving)
+    !! Line ln ends at End B on a Coupled/Vessel point: a finite-EI cable then has two moving ends
+    !! (build_one_hermite_cable allow_moving_end_b).
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckLine), INTENT(IN) :: ln
+    INTEGER :: j
+    moving = .FALSE.
+    j = find_point(points, ln%nodeB)
+    IF (j < 1) RETURN
+    moving = TRIM(points(j)%ptype) == 'coupled' .OR. TRIM(points(j)%ptype) == 'vessel'
+  END FUNCTION moving_end_b_point
 
   SUBROUTINE CD_Deck_Query_dtM(deck_path, dtM, has_dtm, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                tmax, has_tmax, n_ei0, n_finite_ei, has_motion_file, standalone_scan, has_line_outputs, &
@@ -38124,7 +38160,8 @@ CONTAINS
     !! static solves, in the aggregate moving-set order: the system's BOUND
     !! Coupled/Vessel points in deck POINT order (a Coupled point bound only to a
     !! finite-EI cable is NOT in the system's coupled map -- bound-only counting),
-    !! followed by one coupled fairlead per finite-EI cable in deck LINE order.
+    !! followed by one coupled fairlead (End A) per finite-EI cable in deck LINE order, then
+    !! the moving End B of each finite-EI cable between two moving points, in deck LINE order.
     !! Fails closed on a shape/count mismatch, non-finite input, or combination with
     !! a nonzero ptfm_init (the two mutate the same points).
     TYPE(DeckPoint), INTENT(INOUT) :: points(:)
@@ -38175,18 +38212,27 @@ CONTAINS
     END DO
     DO l = 1, SIZE(lines)
       IF (.NOT. is_fin(l)) CYCLE
-      DO i = 1, SIZE(points)
-        IF (points(i)%id /= lines(l)%nodeA .AND. points(i)%id /= lines(l)%nodeB) CYCLE
-        SELECT CASE (TRIM(points(i)%ptype))
-        CASE ('coupled', 'vessel')
-          icol = icol + 1
-          IF (icol > SIZE(coupled_positions, 2)) THEN
-            CALL fail(ErrStat, ErrMsg, 'coupled_positions has fewer columns than the deck has '// &
-                      'host-prescribed points'); RETURN
-          END IF
-          points(i)%pos = coupled_positions(:, icol)
-        END SELECT
-      END DO
+      i = find_point(points, lines(l)%nodeA)
+      IF (i < 1) CYCLE
+      SELECT CASE (TRIM(points(i)%ptype))
+      CASE ('coupled', 'vessel')
+        icol = icol + 1
+        IF (icol > SIZE(coupled_positions, 2)) THEN
+          CALL fail(ErrStat, ErrMsg, 'coupled_positions has fewer columns than the deck has '// &
+                    'host-prescribed points'); RETURN
+        END IF
+        points(i)%pos = coupled_positions(:, icol)
+      END SELECT
+    END DO
+    DO l = 1, SIZE(lines)
+      IF (.NOT. is_fin(l)) CYCLE
+      IF (.NOT. moving_end_b_point(points, lines(l))) CYCLE
+      icol = icol + 1
+      IF (icol > SIZE(coupled_positions, 2)) THEN
+        CALL fail(ErrStat, ErrMsg, 'coupled_positions has fewer columns than the deck has '// &
+                  'host-prescribed points'); RETURN
+      END IF
+      points(find_point(points, lines(l)%nodeB))%pos = coupled_positions(:, icol)
     END DO
     IF (icol /= SIZE(coupled_positions, 2)) THEN
       CALL fail(ErrStat, ErrMsg, 'coupled_positions column count does not match the deck''s '// &

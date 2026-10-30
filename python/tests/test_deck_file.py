@@ -2123,10 +2123,9 @@ def test_invalid_output_channels_fail_before_case_generation(tmp_path, channel, 
 
 
 @pytest.mark.parametrize("channel", ["FairTen1", "AnchFz1", "AnchFH1"])
-def test_finite_ei_cable_shared_by_two_turbines_is_refused(tmp_path, channel):
-    # native build_one_hermite_cable: the coupled aggregate holds a finite-EI cable at a Fixed
-    # anchor, so a cable between two turbines (End B moving) is refused, end-force channels
-    # included
+def test_finite_ei_cable_shared_by_two_turbines_runs_coupled(tmp_path, channel):
+    # native build_one_hermite_cable: the coupled aggregate drives a finite-EI cable between two
+    # turbines at both ends (End B on its own moving column), end-force channels included
     path = _chain_variant(
         tmp_path,
         ("1.607e9    -1.0       0.0 ", "1.607e9    -1.0       2.0e5 "),
@@ -2134,8 +2133,7 @@ def test_finite_ei_cable_shared_by_two_turbines_is_refused(tmp_path, channel):
         ("2     Coupled   0.0", "2     Turbine1  0.0"),
         ('"FairTen1"', f'"{channel}"'),
     )
-    with pytest.raises(DeckFormatError, match=r"requires End B \(the anchor\) to be a Fixed point"):
-        DeckFile.read(path, caller_driven=True)
+    assert channel in DeckFile.read(path, caller_driven=True).outputs
 
 
 def test_ei0_line_shared_by_two_turbines_keeps_its_end_force_channels(tmp_path):

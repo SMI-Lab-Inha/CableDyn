@@ -62,9 +62,10 @@ Line and constitutive capability
    * - Finite-EI bending cable
      - Supported
      - production cubic-Hermite static/dynamic path for suspended and flat/structured
-       seabed-contact cables in standalone and OpenFAST-coupled use; standalone, a line between
-       two moving points (End B on a ``Coupled``/``Vessel`` point, a cable shared by two
-       floaters) has both ends driven, with end connections and torsion at both ends
+       seabed-contact cables in standalone and OpenFAST-coupled use; a line between two moving
+       points (End B on a ``Coupled``/``Vessel`` point: a cable shared by two floaters, a
+       FAST.Farm shared line) has both ends driven, standalone, in OpenFAST, FAST.Farm and the C
+       API, with end connections and torsion at both ends (not yet on the multibody march)
    * - Mixed ``EI = 0`` + finite-EI deck
      - Supported with route limits
      - a mixed deck of lines between held or coupled points only (no bodies, rods, or
