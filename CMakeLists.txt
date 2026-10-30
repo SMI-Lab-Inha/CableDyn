@@ -1376,6 +1376,21 @@ add_test(NAME c_api_threads_stress
                  $<IF:$<BOOL:${CABLEDYN_HAVE_OPENBLAS_SET_NUM_THREADS}>,1,0>)
 set_tests_properties(c_api_threads_stress PROPERTIES LABELS "c;unit;capi;threading" TIMEOUT 600
                      ENVIRONMENT "CABLEDYN_THREAD_TEST_LOOPS=5;CABLEDYN_THREAD_TEST_TIMEOUT=540")
+# Concurrent steps on every per-handle route at once, 4 threads per deck, each trajectory against
+# its deck's serial reference: EI = 0 chain and finite-EI cable on the coupled aggregate,
+# viscoelastic and Syrope segments, a mixed EI = 0/finite-EI deck, Free points, a finite-EI
+# power cable and a Free rod. Static locals or closure trampolines shared by the threads fail it.
+add_test(NAME c_api_threads_mixed
+         COMMAND test_c_api_threads --mixed 40
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/host_coupling_chain_cable.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/ve_polyester_catenary_mooring.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/syrope_polyester_mooring.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/foam_esflowc_box_points.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/lozon_gomaine200_power_cable.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/c_api_free_rod.dat)
+set_tests_properties(c_api_threads_mixed PROPERTIES LABELS "c;unit;capi;threading" TIMEOUT 600
+                     ENVIRONMENT "CABLEDYN_THREAD_TEST_TIMEOUT=540")
 if(WIN32)
   # Host threads that ran OpenMP teams, then an immediate process exit: MinGW-w64
   # libgomp could hang in its exit handler when a pool thread was still ending.
@@ -1573,6 +1588,14 @@ if(Python3_Interpreter_FOUND)
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_omp_fatal_init.py)
   set_tests_properties(omp_fatal_init PROPERTIES
     LABELS "python;unit;stack"
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
+  # Storage that concurrent models could share: closures, implicit SAVE, unreviewed static
+  # variables, and the automatic-locals flags (tests/test_thread_safe_sources.py).
+  add_test(NAME thread_safe_sources
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_thread_safe_sources.py)
+  set_tests_properties(thread_safe_sources PROPERTIES
+    LABELS "python;unit;threading"
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
   add_test(NAME documentation_sources
