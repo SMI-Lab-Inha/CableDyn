@@ -15,7 +15,8 @@ ifx build would show at run time (test_c_api_threads):
   thread), and no DATA or COMMON;
 * every variable in static storage (SAVE, module variables) is one of the reviewed
   process-wide entries below, with the reason it is not per-model state;
-* the build makes every other local automatic (CMakeLists.txt: /Qauto, -auto, -frecursive).
+* the build makes every other local automatic (CMakeLists.txt: /Qauto, -auto, -frecursive;
+  the OpenFAST Visual Studio project: LocalVariableStorage in every configuration).
 """
 
 from __future__ import annotations
@@ -265,6 +266,14 @@ class ThreadSafeSources(unittest.TestCase):
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         for flag in ("-frecursive>", "/Qauto>", "-auto>"):
             self.assertTrue(flag in cmake, f"CMakeLists.txt does not pass {flag[:-1]}")
+        # the OpenFAST Visual Studio project compiles the adapter: every configuration too
+        vfproj = (ROOT / "integration/openfast/vs-build/CableDyn.vfproj.in").read_text(
+            encoding="utf-8"
+        )
+        tools = re.findall(r"<Tool Name=\"VFFortranCompilerTool\"[^>]*>", vfproj)
+        self.assertGreater(len(tools), 0)
+        for tool in tools:
+            self.assertIn('LocalVariableStorage="localStorageAutomatic"', tool)
 
     def test_audit_sees_a_closure_and_an_initialised_local(self):
         # the checks themselves: a closure and an implicit SAVE in a scratch source

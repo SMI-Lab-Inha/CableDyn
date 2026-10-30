@@ -48,6 +48,10 @@ For the static Windows release, pass a clean, unpatched checkout to
 [Installation](../../doc/installation.rst)). Its Visual Studio project compiles the CableDyn
 adapter with `/heap-arrays:1024`, as the static CMake build compiles the CableDyn core, so arrays
 whose size is known only at run time are placed on the heap rather than on the `openfast.exe` stack.
+Every configuration also makes local variables automatic (`/Qauto`, as the CMake build of the
+core does with every compiler): without OpenMP, ifx keeps fixed-size local arrays and `CHARACTER`
+locals in static storage, which every thread shares, and the turbines of a FAST.Farm run, like
+separate C API handles, may step on several threads at once.
 
 ## License of modified files
 

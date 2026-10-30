@@ -480,7 +480,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   while other handles stepped stopped with "tangent assembly failed" or "band scatter" errors
   (gfortran builds were not affected: `-fopenmp` makes every local automatic). Every build now
   makes local variables automatic, `/Qauto` (`-auto`) with ifx and `-frecursive` with gfortran,
-  which `-fopenmp` already implied, so the default gfortran build is unchanged. The release
+  which `-fopenmp` already implied, so the default gfortran build is unchanged, and so does every
+  configuration of the OpenFAST Visual Studio project (`LocalVariableStorage`). The release
   benchmark decks run as fast or faster (0.3 to 21 %); ifx results change at round-off (with
   `/fp:precise` every example is bit-identical).
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
