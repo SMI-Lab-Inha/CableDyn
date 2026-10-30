@@ -1201,6 +1201,10 @@ target_link_libraries(test_flagship_compression_note PRIVATE cabledyn_core)
 add_test(NAME flagship_compression_note
          COMMAND test_flagship_compression_note ${CMAKE_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat)
 set_tests_properties(flagship_compression_note PROPERTIES LABELS "fortran;integration;static;contact")
+add_executable(test_static_dry_weight tests/test_static_dry_weight.f90)
+target_link_libraries(test_static_dry_weight PRIVATE cabledyn_core)
+add_test(NAME static_dry_weight COMMAND test_static_dry_weight WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(static_dry_weight PROPERTIES LABELS "fortran;integration;static;openfast")
 
 add_executable(test_viv_kernels tests/test_viv_kernels.f90)
 target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)

@@ -11259,8 +11259,10 @@ CONTAINS
 
   SUBROUTINE print_static_input_warnings(types, points, lines, sections, opts)
     !! Standard-output WARNINGS (never failures) for admissible but non-physical or
-    !! questionable inputs: a line end above the still-water level (the line is modelled
-    !! fully submerged), a line type that sinks into the penalty seabed by more than its
+    !! questionable inputs: an EI = 0 line end above the still-water level on a deck without a
+    !! seabed (the line is then modelled fully submerged; with WtrDpth or a bathymetry, and on
+    !! a finite-EI line, the part above the surface carries its dry weight), a line type that
+    !! sinks into the penalty seabed by more than its
     !! diameter (kBot too soft for its submerged weight), a slack anchored line that hangs
     !! below its anchor on a deck with no seabed (reported after the static solve by
     !! warn_line_below_anchor), and a line with fewer than three segments (a straight
@@ -11272,14 +11274,23 @@ CONTAINS
     TYPE(DeckOptions), INTENT(IN) :: opts
     INTEGER :: i, j, k, nseg
     REAL(wp) :: w, pen
+    LOGICAL :: dry_weight
     CHARACTER(32) :: b1, b2
 
     DO i = 1, SIZE(lines)
+      ! the line's model carries the dry weight above the surface: a finite-EI line always, an
+      ! EI = 0 line with a seabed (its buoyancy recovery)
+      dry_weight = opts%has_wtrdpth .OR. opts%has_bathymetry_file
+      DO j = 1, SIZE(sections)
+        IF (sections(j)%line_id /= lines(i)%id) CYCLE
+        IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
+        IF (types(sections(j)%ltype)%ei > CD_ZERO) dry_weight = .TRUE.
+      END DO
       DO k = 1, 2
         IF (k == 1) j = find_point(points, lines(i)%nodeA)
         IF (k == 2) j = find_point(points, lines(i)%nodeB)
         IF (j < 1) CYCLE
-        IF (points(j)%pos(3) > CD_ZERO) THEN
+        IF (points(j)%pos(3) > CD_ZERO .AND. .NOT. dry_weight) THEN
           WRITE (b1, '(ES10.3)') points(j)%pos(3)
           WRITE (output_unit, '(A)') ' WARNING: LINE '//TRIM(int_to_str(lines(i)%id))//' end POINT '// &
             TRIM(int_to_str(points(j)%id))//' is above the still-water level (z = '//TRIM(ADJUSTL(b1))// &
@@ -11885,6 +11896,9 @@ CONTAINS
     INTEGER, ALLOCATABLE :: conn(:, :)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), w(:), load(:, :), f_ext(:)
     REAL(wp), ALLOCATABLE :: kn(:)
+    ! the dry part's weight (with a seabed, as the dynamic model's buoyancy recovery): the
+    ! waterline per node and the recovery load of the solution
+    REAL(wp), ALLOCATABLE :: dry_wl(:), f_dry(:)
     REAL(wp) :: anchor(3), fairlead(3), force_a(3), force_b(3)
     INTEGER :: ne, n_dof, i, j, ns, es
     CHARACTER(1024) :: em
@@ -11998,28 +12012,43 @@ CONTAINS
       cur%elem_cdn = cur%elem_cdn(ne:1:-1)
       cur%elem_cdt = cur%elem_cdt(ne:1:-1)
     END IF
+    ALLOCATE (f_dry(n_dof))
+    f_dry = CD_ZERO
     IF (PRESENT(bathymetry) .OR. opts%has_wtrdpth) THEN
       CALL CD_Nodal_Seabed_Stiffness(opts%kbot, diam, l0, kn, es, em)
       IF (es /= CD_LINE_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'seabed stiffness: '//TRIM(em)); RETURN
       END IF
+      ! the line's model has a seabed and so the buoyancy recovery of its dry part
+      ! (init_deck_models_from_parsed): the part above the still-water level takes its dry
+      ! weight here too, so that the static-only start is the dynamic route's
+      ALLOCATE (dry_wl(ne + 1))
+      dry_wl = CD_ZERO
     END IF
 
     IF (PRESENT(bathymetry)) THEN
       IF (opts%has_current) THEN
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry, current=cur)
+                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry, current=cur, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       ELSE
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry)
+                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       END IF
     ELSE IF (opts%has_wtrdpth) THEN
       IF (opts%has_current) THEN
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, current=cur)
+                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, current=cur, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       ELSE
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn)
+                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       END IF
     ELSE IF (opts%has_current) THEN
       CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
@@ -12045,6 +12074,8 @@ CONTAINS
       CALL fail_solve(ErrStat, ErrMsg, 'tension recovery: '//TRIM(em)); RETURN
     END IF
     IF (PRESENT(end_ten) .OR. PRESENT(end_force)) THEN
+      ! the equilibrium's external load: the submerged weight and the dry part's recovery
+      f_ext = f_ext + f_dry
       IF (PRESENT(bathymetry) .AND. opts%has_current) THEN
         CALL CD_Static_Line_End_Forces(q, conn, l0, ea, f_ext, .TRUE., force_a, force_b, es, em, &
                                        seabed_kn=kn, bathymetry=bathymetry, current=cur)

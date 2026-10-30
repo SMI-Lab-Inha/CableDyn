@@ -1520,6 +1520,20 @@ beyond a :math:`10^{-6}` relative round-off band; a slack element reports zero t
    A line with no admissible equilibrium fails closed, naming the line, the seeds and stages
    tried, and the reason.
 
+With a seabed (``WtrDpth`` or a bathymetry) the march gives the part of a line above the
+still-water level its dry weight, through the recovery load of *Buoyancy and wetting* above, and
+the static start does the same. The recovery depends on the wetted lengths, so the line is
+solved again with the recovery of the last solution as a constant load until its nodes move by
+less than :math:`10^{-9}` m. This fixed point contracts at the ratio of the recovery's stiffness
+:math:`\rho g A/\sin\theta` (:math:`\theta` the inclination at the surface) to the line's own,
+a few :math:`10^{-3}` for a hanging chain. A chain hung from 5 m above the surface then starts in
+the equilibrium its march holds, and the coupled and standalone starts agree; with its buoyancy
+kept above the surface it moved by :math:`10^{-3}` of its fairlead load in the first step. A line
+wholly below the surface has no recovery and is solved once. Without a seabed the march, and so
+the static start, keeps the buoyancy everywhere (the driver warns about a line end above the
+surface then). The force balance of ``Connect`` and ``Free`` points below takes its lines with
+their buoyancy everywhere.
+
 A steady current (uniform, or a depth profile sampled at each node's own elevation as in the
 march) enters the static equilibrium as Morison drag on the line at rest, so the out-of-plane
 offset is part of the initial condition. ``Connect`` and ``Free`` points are then placed at

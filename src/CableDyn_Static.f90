@@ -34,7 +34,7 @@ MODULE CableDyn_Static
                                  CD_Bathymetry_Floor_Gradient, CD_BATHY_OK
   USE CableDyn_Hydro, ONLY: CD_Cable_Morison_Drag_Force, CD_Morison_Drag_Element_Load, CD_Current_Profile_Velocity, &
                             CD_CurrentGridType, CD_Current_Grid_Velocity, CD_Current_Grid_Gradient, &
-                            CD_Current_Profile_Gradient, CD_HYDRO_OK
+                            CD_Current_Profile_Gradient, CD_Buoyancy_Recovery_Element_Force, CD_HYDRO_OK
   USE CableDyn_Linalg, ONLY: CD_Solve_Banded
   USE CableDyn_Mesh, ONLY: CD_Partition_Free_Dofs
   USE CableDyn_Catenary, ONLY: CD_Catenary_Seed, CD_CAT_OK
@@ -1623,9 +1623,143 @@ CONTAINS
 
   SUBROUTINE CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, cfg, tension_only, &
                                         q, converged, report, ErrStat, ErrMsg, seabed_z_floor, seabed_kn, &
-                                        bathymetry, current, load_factors)
+                                        bathymetry, current, load_factors, dry_waterline_z, dry_rho, dry_gravity, &
+                                        dry_diameter, dry_load)
     !! Robust static equilibrium of one EI=0 line held at both ends: the single initializer
-    !! shared by the static-only deck route and the dynamic-model initial condition.
+    !! shared by the static-only deck route and the dynamic-model initial condition (see
+    !! line_equilibrium for the seeds and solver stages).
+    !!
+    !! f_ext is the submerged weight, full buoyancy everywhere. With the dry-part arguments
+    !! (dry_waterline_z per node, dry_rho, dry_gravity, dry_diameter per element) the part of
+    !! the line above its waterline carries its dry weight, as in the dynamic model's buoyancy
+    !! recovery (CD_Buoyancy_Recovery_Element_Force): each element straddling or above the
+    !! waterline gives back the buoyancy -(1 - f) rho g (pi/4) d^2 l0 / 2 at each of its nodes,
+    !! f its submerged fraction. A line held above the surface (a fairlead on deck) then starts
+    !! in the equilibrium the march holds; without them its dry part kept its buoyancy, and a
+    !! chain hung 5 m above the surface jumped by 1e-3 of its fairlead load in the first step.
+    !! The recovery load depends on the wetted lengths, so the solve is repeated with the
+    !! recovery of the last solution as a constant load until the nodes move by less than
+    !! DRY_TOL or the recovery changes by less than DRY_REL of the largest nodal load, below
+    !! what the solver's own residual tolerance resolves (a fixed point: it contracts at the
+    !! ratio of the recovery's stiffness rho g A / sin(inclination) to the line's own, a few
+    !! 1e-3 for a hanging chain). A fully submerged
+    !! line has no recovery and is solved once, unchanged. A fixed point that does not settle in
+    !! DRY_MAX solves (a line floating at the surface, whose dry weight is its whole restoring)
+    !! returns converged = .FALSE. with the reason. dry_load (optional) returns the recovery
+    !! load at the solution, zero without the dry-part arguments: f_ext + dry_load is the
+    !! external load of the equilibrium (its end forces, CD_Static_Line_End_Forces).
+    REAL(wp), INTENT(IN) :: anchor(3), fairlead(3)
+    INTEGER, INTENT(IN) :: elem_conn(:, :)
+    REAL(wp), INTENT(IN) :: l0(:), ea(:), weight(:), f_ext(:)
+    TYPE(CableSolverConfig), INTENT(IN) :: cfg
+    LOGICAL, INTENT(IN) :: tension_only
+    REAL(wp), INTENT(OUT) :: q(:)
+    LOGICAL, INTENT(OUT) :: converged
+    TYPE(CD_StaticLineReport), INTENT(OUT) :: report
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: seabed_z_floor
+    REAL(wp), INTENT(IN), OPTIONAL :: seabed_kn(:)
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    TYPE(CableCurrentLoad), INTENT(IN), OPTIONAL :: current
+    REAL(wp), INTENT(IN), OPTIONAL :: load_factors(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: dry_waterline_z(:), dry_rho, dry_gravity, dry_diameter(:)
+    REAL(wp), INTENT(OUT), OPTIONAL :: dry_load(:)
+    ! fixed-point tolerances on the node positions [m] and on the recovery load (relative to
+    ! the largest nodal load), and the solve budget
+    REAL(wp), PARAMETER :: DRY_TOL = 1.0e-9_wp, DRY_REL = 1.0e-10_wp
+    INTEGER, PARAMETER :: DRY_MAX = 50
+    REAL(wp), ALLOCATABLE :: f_dry(:), q_prev(:), f_prev(:)
+    REAL(wp) :: change, f_scale
+    INTEGER :: k, n_it
+    CHARACTER(64) :: num
+
+    IF (PRESENT(dry_load)) dry_load = CD_ZERO
+    CALL line_equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, cfg, tension_only, q, converged, &
+                          report, ErrStat, ErrMsg, seabed_z_floor, seabed_kn, bathymetry, current, load_factors)
+    IF (.NOT. (PRESENT(dry_waterline_z) .AND. PRESENT(dry_rho) .AND. PRESENT(dry_gravity) .AND. &
+               PRESENT(dry_diameter))) RETURN
+    IF (ErrStat /= CD_STATIC_OK .OR. .NOT. converged) RETURN
+    IF (SIZE(dry_waterline_z) /= SIZE(q)/3 .OR. SIZE(dry_diameter) /= SIZE(l0) .OR. &
+        (PRESENT(dry_load) .AND. SIZE(f_ext) /= SIZE(q))) THEN
+      CALL fail(ErrStat, ErrMsg, 'line equilibrium: dry_waterline_z (n_nodes) / dry_diameter (n_elem) shapes')
+      converged = .FALSE.
+      RETURN
+    END IF
+    IF (PRESENT(dry_load)) THEN
+      IF (SIZE(dry_load) /= SIZE(q)) THEN
+        CALL fail(ErrStat, ErrMsg, 'line equilibrium: dry_load must have shape (3 n_nodes)')
+        converged = .FALSE.
+        RETURN
+      END IF
+    END IF
+    ALLOCATE (f_dry(SIZE(q)), q_prev(SIZE(q)), f_prev(SIZE(q)))
+    CALL dry_recovery(q, f_dry)
+    IF (ErrStat /= CD_STATIC_OK) RETURN
+    ! fully submerged: no recovery, the solution stands as solved
+    IF (ALL(f_dry == CD_ZERO)) RETURN
+    f_scale = MAXVAL(ABS(f_ext))
+    n_it = report%n_iter
+    DO k = 1, DRY_MAX
+      q_prev = q
+      f_prev = f_dry
+      CALL line_equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext + f_dry, cfg, tension_only, q, &
+                            converged, report, ErrStat, ErrMsg, seabed_z_floor, seabed_kn, bathymetry, current, &
+                            load_factors)
+      n_it = n_it + report%n_iter
+      report%n_iter = n_it
+      IF (ErrStat /= CD_STATIC_OK) RETURN
+      IF (.NOT. converged) THEN
+        report%message = 'with the dry weight above the waterline: '//TRIM(report%message)
+        RETURN
+      END IF
+      change = MAXVAL(ABS(q - q_prev))
+      CALL dry_recovery(q, f_dry)
+      IF (ErrStat /= CD_STATIC_OK) RETURN
+      IF (change <= DRY_TOL .OR. MAXVAL(ABS(f_dry - f_prev)) <= DRY_REL*f_scale) THEN
+        ! the recovery the returned state was solved with (its end forces balance it exactly)
+        IF (PRESENT(dry_load)) dry_load = f_prev
+        RETURN
+      END IF
+    END DO
+    converged = .FALSE.
+    WRITE (num, '(ES9.2)') change
+    report%message = 'the dry weight above the waterline did not settle to a fixed point (the nodes still move '// &
+                     TRIM(ADJUSTL(num))//' m per solve): a line floating at the surface is outside the EI = 0 '// &
+                     'static start'
+
+  CONTAINS
+
+    SUBROUTINE dry_recovery(qs, f)
+      !! The buoyancy recovery of the dry part of every element in state qs.
+      REAL(wp), INTENT(IN) :: qs(:)
+      REAL(wp), INTENT(OUT) :: f(:)
+      REAL(wp) :: fe(6)
+      INTEGER :: e, a, b, es
+      CHARACTER(1024) :: em
+      f = CD_ZERO
+      DO e = 1, SIZE(l0)
+        a = elem_conn(1, e)
+        b = elem_conn(2, e)
+        CALL CD_Buoyancy_Recovery_Element_Force(qs(3*a - 2:3*a), qs(3*b - 2:3*b), l0(e), dry_waterline_z(a), &
+                                                dry_waterline_z(b), dry_rho, dry_diameter(e), dry_gravity, fe, &
+                                                es, em)
+        IF (es /= CD_HYDRO_OK) THEN
+          CALL fail(ErrStat, ErrMsg, 'line equilibrium: dry-part buoyancy: '//TRIM(em))
+          converged = .FALSE.
+          RETURN
+        END IF
+        f(3*a - 2:3*a) = f(3*a - 2:3*a) + fe(1:3)
+        f(3*b - 2:3*b) = f(3*b - 2:3*b) + fe(4:6)
+      END DO
+    END SUBROUTINE dry_recovery
+  END SUBROUTINE CD_Static_Line_Equilibrium
+
+  SUBROUTINE line_equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, cfg, tension_only, &
+                              q, converged, report, ErrStat, ErrMsg, seabed_z_floor, seabed_kn, &
+                              bathymetry, current, load_factors)
+    !! Robust static equilibrium of one EI=0 line held at both ends under the constant load
+    !! f_ext (CD_Static_Line_Equilibrium adds the dry part above the waterline).
     !!
     !! Node 1 is the anchor and node n the fairlead (both held); weight is the signed
     !! submerged weight per unit length of each element (downward positive) used by the seeds,
@@ -2355,7 +2489,7 @@ CONTAINS
       IF (es_g == CD_BATHY_OK) g = gx*hd(1) + gy*hd(2)
     END SUBROUTINE seabed_slope_along
 
-  END SUBROUTINE CD_Static_Line_Equilibrium
+  END SUBROUTINE line_equilibrium
 
   SUBROUTINE polyline_seed(anchor, fairlead, l0, has_seabed, z_floor, q)
     !! Positions-only seed that never compresses a line longer than its chord: the nodes are

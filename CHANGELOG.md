@@ -361,6 +361,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   a pinned arm rod numbered 1, its tether on an explicit `Rod1B` POINT listed first, now writes
   the outputs of the same deck with the arm as rod 3 bit for bit; before, the arm turned 172 deg
   in pitch, the body 1.06 deg, and a leg tension moved 3.0 kN in 1 s.
+- The static start of an `EI = 0` line held above the still-water level kept the buoyancy of its
+  dry part, while the march (with `WtrDpth` or a bathymetry) gives that part its dry weight. The
+  start was not the march's equilibrium: a chain hung from 5 m above the surface onto the
+  seabed moved by 1e-3 of its fairlead load in the first step, and the coupled start differed
+  from the standalone one by 2.4e-4. The static solve now carries the dry weight (a fixed point
+  on the wetted lengths): the start holds to 1e-10, the two routes agree to 1.4e-8, and a
+  vertical chain's end loads sum to its weight to 1.5e-8 (before 1.4 % low). Lines below the
+  surface are unchanged.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations

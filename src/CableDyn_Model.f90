@@ -1563,6 +1563,9 @@ CONTAINS
     INTEGER, ALLOCATABLE :: elem_conn(:, :), fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mass_per_length(:), diameter(:)
     REAL(wp), ALLOCATABLE :: weight(:), elem_load(:, :), f_ext(:), q_static(:), v0(:)
+    ! the waterline and diameters of the dry part's weight in the static start (unallocated:
+    ! the static start keeps the buoyancy everywhere, as a model without buoyancy recovery)
+    REAL(wp), ALLOCATABLE :: dry_wl(:), dry_d(:)
     INTEGER :: n_elem, n_dof, e, es, istat, fr_policy
     LOGICAL :: dyn_to, friction_static
     REAL(wp) :: laid_az, laid_t
@@ -1713,6 +1716,23 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'line model lay_azimuth must be finite')
       RETURN
     END IF
+    ! The dynamic model's buoyancy recovery gives the part of the line above the waterline its
+    ! dry weight; the static start does the same (CD_Static_Line_Equilibrium), so that a line
+    ! held above the surface starts in the equilibrium its march holds.
+    IF (PRESENT(buoyancy_waterline_z) .AND. PRESENT(buoyancy_rho) .AND. PRESENT(buoyancy_gravity)) THEN
+      IF (SIZE(buoyancy_waterline_z) == n_dof/3) THEN
+        IF (PRESENT(buoyancy_diameter_elem)) THEN
+          IF (SIZE(buoyancy_diameter_elem) == n_elem .AND. .NOT. PRESENT(buoyancy_diameter)) THEN
+            dry_wl = buoyancy_waterline_z
+            dry_d = buoyancy_diameter_elem
+          END IF
+        ELSE IF (PRESENT(buoyancy_diameter)) THEN
+          dry_wl = buoyancy_waterline_z
+          ALLOCATE (dry_d(n_elem))
+          dry_d = buoyancy_diameter
+        END IF
+      END IF
+    END IF
     friction_static = .FALSE.
     IF (use_seabed .AND. use_seabed_friction) friction_static = seabed_mu > CD_ZERO .AND. &
                                                                 fr_policy == CD_STATIC_FRICTION_AS_LAID
@@ -1770,7 +1790,9 @@ CONTAINS
         IF (seabed_mu > CD_ZERO) THEN
           CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, dyn_to, &
                                           q_static, converged, report, es, em, seabed_z_floor=seabed_z_floor, &
-                                          seabed_kn=seabed_kn, bathymetry=bathymetry, load_factors=load_factors)
+                                          seabed_kn=seabed_kn, bathymetry=bathymetry, load_factors=load_factors, &
+                                          dry_waterline_z=dry_wl, dry_rho=buoyancy_rho, dry_gravity=buoyancy_gravity, &
+                                          dry_diameter=dry_d)
           IF (es /= CD_STATIC_OK .OR. .NOT. converged) THEN
             ErrStat = CD_MODEL_SOLVEFAIL
             ErrMsg = 'CableDyn_Model: still-water reference of the seabed friction failed: '//TRIM(em)// &
@@ -1827,11 +1849,15 @@ CONTAINS
       CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, dyn_to, &
                                       q_static, converged, report, es, em, seabed_z_floor=seabed_z_floor, &
                                       seabed_kn=seabed_kn, bathymetry=bathymetry, current=cur, &
-                                      load_factors=load_factors)
+                                      load_factors=load_factors, &
+                                      dry_waterline_z=dry_wl, dry_rho=buoyancy_rho, dry_gravity=buoyancy_gravity, &
+                                      dry_diameter=dry_d)
     ELSE
       CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, dyn_to, &
                                       q_static, converged, report, es, em, seabed_z_floor=seabed_z_floor, &
-                                      seabed_kn=seabed_kn, bathymetry=bathymetry, load_factors=load_factors)
+                                      seabed_kn=seabed_kn, bathymetry=bathymetry, load_factors=load_factors, &
+                                      dry_waterline_z=dry_wl, dry_rho=buoyancy_rho, dry_gravity=buoyancy_gravity, &
+                                      dry_diameter=dry_d)
     END IF
     IF (es /= CD_STATIC_OK) THEN
       ErrStat = CD_MODEL_SOLVEFAIL
@@ -1859,12 +1885,16 @@ CONTAINS
             CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, &
                                             dyn_to, q_sw, conv_sw, report_sw, es, em, &
                                             seabed_z_floor=seabed_z_floor, seabed_kn=seabed_kn, &
-                                            bathymetry=bathymetry, current=cur_sw, load_factors=load_factors)
+                                            bathymetry=bathymetry, current=cur_sw, load_factors=load_factors, &
+                                            dry_waterline_z=dry_wl, dry_rho=buoyancy_rho, &
+                                            dry_gravity=buoyancy_gravity, dry_diameter=dry_d)
           ELSE
             CALL CD_Static_Line_Equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, static_cfg, &
                                             dyn_to, q_sw, conv_sw, report_sw, es, em, &
                                             seabed_z_floor=seabed_z_floor, seabed_kn=seabed_kn, &
-                                            bathymetry=bathymetry, load_factors=load_factors)
+                                            bathymetry=bathymetry, load_factors=load_factors, &
+                                            dry_waterline_z=dry_wl, dry_rho=buoyancy_rho, &
+                                            dry_gravity=buoyancy_gravity, dry_diameter=dry_d)
           END IF
           IF (es == CD_STATIC_OK .AND. conv_sw) THEN
             IF (ALLOCATED(cur%friction_ref)) THEN
