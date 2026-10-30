@@ -340,7 +340,7 @@ points only): the deck is partitioned through the same atomic aggregate used by 
 `Coupled`/`Vessel` endpoints are held at their deck positions. The run writes the common `.out`
 and the all-line `.static.out` tables, plus the range graph of every line with the `r` flag.
 Mixed decks reject, by name, `motionFile`, deck wave/current OPTIONS, WaterKin `WaveKinMod 1`,
-MoorDyn-C `WaveKin 3`/`7` and `Currents 1`, and per-line `p`/`t` flags.
+MoorDyn-C `WaveKin 3`/`7` and `Currents 1`/`2`/`5`, and per-line `p`/`t` flags.
 
 (multibody-march)=
 **Multibody march** (bodies, rods, `Connect`/`Free` points, EI = 0 lines and finite-EI cables in
@@ -1230,27 +1230,56 @@ always returns the inertia of coupled bodies and rods; `0` and `2` are rejected 
 ### MoorDyn-C `WaveKin` and `Currents` modes
 
 A MoorDyn-C deck selects its water kinematics with the numeric `WaveKin` and `Currents` options
-and fixed-name files in the deck folder. CableDyn reduces each file to wave components or a depth
-profile and evaluates them exactly at every node, with Wheeler stretching; MoorDyn-C tabulates
-them on `water_grid.txt` and interpolates, so that file is not read. Standalone decks only.
+and fixed-name files in the deck folder. CableDyn reduces each wave file to wave components and
+evaluates them exactly at every node, with Wheeler stretching; MoorDyn-C tabulates them on
+`water_grid.txt` and interpolates, so that file is not read. The current files are evaluated at
+every node's position and time as MoorDyn-C interpolates them. Standalone decks only.
 
 | Option | File | Meaning |
 |---|---|---|
 | `WaveKin 3` | `wave_elevation.txt` | `time elevation` rows from `t = 0` (no header rows), resampled linearly at `dtWave` to `floor(t_last/dtWave) + 1` samples (the last dropped when the count is odd) and reduced to its Fourier components; components above `WvHiCOff` (default 0.5 Hz, MoorDyn-C's fixed cut) are dropped and the mean is a mean-level offset, as MoorDyn-C does. Waves travel along +x |
 | `WaveKin 7` | `wave_frequencies.txt` | `omega Re Im [beta]` rows [rad/s, m, m, rad], the first at `omega = 0`: each row is the component `\|c\| sin(omega t - k d + arg c)`, `d = x cos(beta) + y sin(beta)`; the `omega = 0` row is a mean-level offset. All rows must share one `beta` |
 | `Currents 1` | `current_profile.txt` | `z ux uy uz` rows after its header rows, strictly increasing `z`; linear in `z` and held beyond the end rows |
+| `Currents 2` | `current_profile_dynamic.txt` | a depth profile in time: lines 1-4 and 6 are free text, line 5 lists the depths `z1 ... zn` (strictly increasing, read in single precision as MoorDyn-C does), and each later row is `t ux1 ... uxn [uy1 ... uyn [uz1 ... uzn]]` (missing components zero), at least two rows with strictly increasing `t` |
+| `Currents 5` | `current_profile_4d.txt` | a grid in x, y, z and time: line 1 is `nx ny nz nt`, lines 2-5 the x, y, z and t coordinates (each strictly increasing, at least two times), then one `x y z t ux uy uz` row per grid point, in any order, matched to the grid by value; a text line 6 is a header |
+
+`Currents 2` and `5` follow MoorDyn-C v2.7.1 (`constructDynamicCurrentGrid`,
+`construct4DCurrentGrid` and `CurrentGrid::getCurrentKin`):
+
+- the table is resampled in time at its smallest time interval `dt`, from `t = 0` to
+  `floor(t_last/dt) dt` (a last time that is not a multiple of `dt` is not reached), linearly
+  between rows and held at the first and last rows;
+- between samples the current is linear in time; past the last sample the grid repeats with
+  period `nt dt` (`nt` samples), holding its `t = 0` value over the last interval of each period,
+  as MoorDyn-C's index wrap does. A run longer than the last sample prints a note;
+- in x, y and z the current is linear between grid coordinates and held beyond the end ones; the
+  node elevation is not stretched;
+- the current has no fluid acceleration (MoorDyn-C sets it to zero), so its time variation adds
+  no Froude-Krylov or added-mass load;
+- the static start takes the current at `t = 0`, as MoorDyn-C's initial condition does;
+- `current_profile_4d.txt` is read as MoorDyn-C documents it, which MoorDyn-C v2.7.1 does not
+  quite do: it reads its rows from line 7, so a row on line 6 leaves that grid point at zero, and
+  it matches a row to the grid by the text of its coordinates, so a row writing `-0` for `0` or
+  `1.0` for `1` lands on the first grid point. CableDyn reads line 6 as a row unless it is text
+  and matches by value, and it rejects a missing, repeated or off-grid point. A file with a text
+  line 6 and its coordinates written as on lines 2-5 reads the same in both codes.
+
+With `WaveKin 3`, MoorDyn-C (its default `UnifyCurrentGrid 1`) adds a current to the wave grid,
+where it is sampled on `water_grid.txt`; CableDyn adds the current at the nodes, as MoorDyn-C's
+`UnifyCurrentGrid 0`.
 
 Rejected by name: `WaveKin 1` (kinematics set node by node through the MoorDyn-C API; a deck has
 no source for them), `WaveKin 2` (the FFT grid: `wave_frequencies.txt` resampled to an even
 spectrum; `WaveKin 7` evaluates the same file's components exactly), `WaveKin 4`-`6` and
-`Currents 3`-`4` (no kinematics source in MoorDyn-C v2.7.1), `Currents 2` (the
-time-varying profile `current_profile_dynamic.txt`), `Currents 5` (the 4-D current grid), and a
-`wave_frequencies.txt` whose rows have different directions. A deck that also declares a `waves`
-option, a WaterKin file, or a second current source is rejected as double counting. On shared
-inputs the `wavekin_modes` test holds `WaveKin 7` and `Currents 1` identical to MoorDyn-C v2.7.1
-(`5e-12` relative) and `WaveKin 3` within `3e-7` m in elevation and `1e-4` in velocity and
-acceleration at MoorDyn-C's grid points, the remainder being MoorDyn-C's grid interpolation and
-its approximate wave number.
+`Currents 3`-`4` (no kinematics source in MoorDyn-C v2.7.1), and a `wave_frequencies.txt` whose
+rows have different directions. A deck that also declares a `waves` option, a WaterKin file, or a
+second current source is rejected as double counting. On shared inputs the `wavekin_modes` test
+holds `WaveKin 7` and `Currents 1` identical to MoorDyn-C v2.7.1 (`5e-12` relative) and `WaveKin 3`
+within `3e-7` m in elevation and `1e-4` in velocity and acceleration at MoorDyn-C's grid points,
+the remainder being MoorDyn-C's grid interpolation and its approximate wave number. The
+`mdc_currents` test holds `Currents 2` and `5` identical to MoorDyn-C v2.7.1 at 739 points and
+times (including past the last sample), and `mdc_currents_runs` matches the tension change of a
+time-varying and of a sheared current to MoorDyn-C's within 0.9 % on a 70 m rope.
 
 (waterkin-file-modes)=
 ### MoorDyn-F `WaterKin` file modes

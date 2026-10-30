@@ -631,7 +631,8 @@ the default permissions of a newly created file.
 
 The MoorDyn-C kinematics files are read by fixed name from the folder of the deck being run:
 ``3 WaveKin`` reads ``wave_elevation.txt``, ``7 WaveKin`` reads ``wave_frequencies.txt`` and
-``1 Currents`` reads ``current_profile.txt``. ``generate_deck_cases`` copies these files next to
+``1 Currents`` reads ``current_profile.txt``, ``2 Currents`` ``current_profile_dynamic.txt`` and
+``5 Currents`` ``current_profile_4d.txt``. ``generate_deck_cases`` copies these files next to
 the generated decks, and ``cases.json`` records their SHA-256 under ``companion_files``;
 ``DeckModel.save(rebase=True)`` copies them too.
 

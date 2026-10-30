@@ -28,7 +28,15 @@ __all__ = ["StudyCaseResult", "StudyResult", "run_study"]
 _CASE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 # Suffixes the native driver appends to an output root (``<root>.<suffix>.out``).
 # Fixed-name MoorDyn-C kinematics files that generate_deck_cases copies next to the cases.
-_COMPANION_FILES = frozenset({"wave_elevation.txt", "wave_frequencies.txt", "current_profile.txt"})
+_COMPANION_FILES = frozenset(
+    {
+        "wave_elevation.txt",
+        "wave_frequencies.txt",
+        "current_profile.txt",
+        "current_profile_dynamic.txt",
+        "current_profile_4d.txt",
+    }
+)
 _OUTPUT_SUFFIX = re.compile(r"\.(?:static|elements|Line\d+\.[pt]|Rod-?\d+\.p)$", re.IGNORECASE)
 
 

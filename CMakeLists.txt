@@ -1715,6 +1715,17 @@ if(Python3_Interpreter_FOUND)
       LABELS "python;integration;dynamic;viv;validation"
       TIMEOUT ${_viv_lockin_timeout}
       ENVIRONMENT "${_cabledyn_python_test_environment}")
+    # MoorDyn-C Currents 2 and 5 runs: tensions against MoorDyn-C v2.7.1, two sources of one
+    # field, and the static start in a sheared grid on the EI = 0 and finite-EI routes
+    add_test(NAME mdc_currents_runs
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mdc_currents_runs.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --data ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/currents_mdc
+                     --output ${CMAKE_BINARY_DIR}/mdc_currents_runs)
+    set_tests_properties(mdc_currents_runs PROPERTIES
+      LABELS "python;integration;dynamic;validation"
+      TIMEOUT ${_viv_lockin_timeout}
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
     message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
@@ -2096,6 +2107,19 @@ add_executable(test_wavekin_modes tests/test_wavekin_modes.f90)
 target_link_libraries(test_wavekin_modes PRIVATE cabledyn_core)
 add_test(NAME wavekin_modes COMMAND test_wavekin_modes WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(wavekin_modes PROPERTIES LABELS "fortran;driver;validation;dynamic")
+
+# MoorDyn-C Currents 2 and 5 vs MoorDyn-C v2.7.1 and an independent evaluation on shared inputs
+# (the reference rows come from validation/scripts/currents_mdc_reference.py)
+file(GLOB_RECURSE CD_CURRENTS_MDC_FILES RELATIVE ${CMAKE_SOURCE_DIR}/tests/data/currents_mdc
+     ${CMAKE_SOURCE_DIR}/tests/data/currents_mdc/*)
+foreach(f IN LISTS CD_CURRENTS_MDC_FILES)
+  configure_file(tests/data/currents_mdc/${f} ${CMAKE_BINARY_DIR}/currents_mdc/${f} COPYONLY)
+endforeach()
+add_executable(test_mdc_currents tests/test_mdc_currents.f90)
+target_link_libraries(test_mdc_currents PRIVATE cabledyn_core)
+add_test(NAME mdc_currents COMMAND test_mdc_currents WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/mdc_currents_work)
+set_tests_properties(mdc_currents PROPERTIES LABELS "fortran;driver;validation;dynamic")
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/mdc_currents_work)
 
 add_executable(test_clamped_cable_ends tests/test_clamped_cable_ends.f90)
 target_link_libraries(test_clamped_cable_ends PRIVATE cabledyn_core)

@@ -378,9 +378,13 @@ _MAX_STATIC_TWIST_DEG = 360000.0
 _TORSION_NORMAL_PARALLEL_TOL = 1.0e-3
 _WATERKIN_FILENAME_LETTERS = frozenset("abcdfghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
 # MoorDyn-C kinematics files the native reader opens by fixed name in the deck folder
-# (read_moordyn_c_kinematics): WaveKin 3, WaveKin 7 and Currents 1.
+# (read_moordyn_c_kinematics): WaveKin 3, WaveKin 7 and Currents 1, 2 and 5.
 _MOORDYN_C_WAVE_FILES = {3: "wave_elevation.txt", 7: "wave_frequencies.txt"}
-_MOORDYN_C_CURRENT_FILE = "current_profile.txt"
+_MOORDYN_C_CURRENT_FILES = {
+    1: "current_profile.txt",
+    2: "current_profile_dynamic.txt",
+    5: "current_profile_4d.txt",
+}
 
 
 def _moordyn_c_wave_kin(value: str | None) -> int:
@@ -397,10 +401,11 @@ def _moordyn_c_wave_kin(value: str | None) -> int:
 
 
 def _moordyn_c_currents(value: str | None) -> int:
-    """Return the MoorDyn-C ``Currents`` mode (0 or 1) of a validated row value."""
+    """Return the MoorDyn-C ``Currents`` mode (0, 1, 2 or 5) of a validated row value."""
     if value is None:
         return 0
-    return 1 if round(_native_float(value)) == 1 else 0
+    mode = round(_native_float(value))
+    return mode if mode in _MOORDYN_C_CURRENT_FILES else 0
 
 
 def _comment_position(text: str) -> int | None:
@@ -1390,9 +1395,13 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
             numeric = _native_float(value)
         except ValueError:
             return "must be numeric"
+        # native apply_option: 0 none and the MoorDyn-C current files 1, 2 and 5; 3 and 4
+        # (MoorDyn-C's node approaches) have no current source in MoorDyn-C v2.7.1
         if not math.isfinite(numeric) or abs(numeric - round(numeric)) > 1.0e-9:
-            return "supports only mode 0 or 1"
-        return None if round(numeric) in {0, 1} else "supports only mode 0 or 1"
+            return "supports only mode 0, 1, 2 or 5"
+        if round(numeric) in {3, 4}:
+            return f"{round(numeric)} has no current source in MoorDyn-C v2.7.1; use 1, 2 or 5"
+        return None if round(numeric) in {0, 1, 2, 5} else "supports only mode 0, 1, 2 or 5"
     if key == "waterkin":
         lowered = value.lower()
         if lowered in {"none", "seastate"} or any(
@@ -2398,7 +2407,7 @@ class DeckFile:
         that depend on their contents stay with the solver: for example the
         anchor height on a bathymetry surface, whether a WaterKin file carries
         waves (``WaveKinMod``) for ``vesselRAO``, and whether its current
-        doubles a ``current`` row or ``Currents 1``.
+        doubles a ``current`` row or ``Currents 1``, ``2`` or ``5``.
 
         Raises
         ------
@@ -2497,7 +2506,7 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{self._label}: OPTION TMax must be an integer multiple of dtM"
                 )
-        # MoorDyn-C WaveKin 3/7 and Currents 1 (native read_moordyn_c_kinematics): component
+        # MoorDyn-C WaveKin 3/7 and Currents 1/2/5 (native read_moordyn_c_kinematics): component
         # waves and a steady current profile read from fixed-name files in the deck folder.
         # The coupled aggregate takes its water kinematics from the host and rejects both.
         waterkin_row = option_by_key.get("waterkin")
@@ -2625,7 +2634,7 @@ class DeckFile:
         ):
             raise DeckFormatError(f"{self._label}: a wave train needs |direction| <= 1e6 deg")
         # native read_moordyn_c_kinematics: WaveKin 3/7 components add to no other deck sea,
-        # and Currents 1 to no other current; each then needs the dynamic sea/current setup.
+        # and Currents 1/2/5 to no other current; each then needs the dynamic sea/current setup.
         if mdc_wave_kin:
             if has_waves or trains:
                 raise DeckFormatError(
@@ -2639,11 +2648,13 @@ class DeckFile:
         if mdc_currents:
             if current is not None and current.values[0].lower() != "none":
                 raise DeckFormatError(
-                    f"{self._label}: the deck declares both a current OPTION and Currents 1 "
-                    "(double-counting); keep one"
+                    f"{self._label}: the deck declares both a current OPTION and Currents "
+                    f"{mdc_currents} (double-counting); keep one"
                 )
             if not has_dtm:
-                raise DeckFormatError(f"{self._label}: standalone Currents 1 requires dtM and TMax")
+                raise DeckFormatError(
+                    f"{self._label}: standalone Currents {mdc_currents} requires dtM and TMax"
+                )
         friction = option_by_key.get("friction")
         friction_active = False
         iso = 0.0
@@ -4883,9 +4894,10 @@ class DeckFile:
         """Return the fixed-name kinematics files this deck reads from its own folder.
 
         MoorDyn-C ``WaveKin 3`` reads ``wave_elevation.txt``, ``WaveKin 7`` reads
-        ``wave_frequencies.txt`` and ``Currents 1`` reads ``current_profile.txt``;
-        the native reader opens them by name next to the deck, so a deck written
-        to another folder needs them copied there.
+        ``wave_frequencies.txt``, ``Currents 1`` reads ``current_profile.txt``,
+        ``Currents 2`` ``current_profile_dynamic.txt`` and ``Currents 5``
+        ``current_profile_4d.txt``; the native reader opens them by name next to the
+        deck, so a deck written to another folder needs them copied there.
         """
         effective = {_option_key(record.keyword): record for record in self.options}
         names: list[str] = []
@@ -4894,8 +4906,9 @@ class DeckFile:
         if mode:
             names.append(_MOORDYN_C_WAVE_FILES[mode])
         currents = effective.get("currents")
-        if _moordyn_c_currents(None if currents is None else currents.values[0]):
-            names.append(_MOORDYN_C_CURRENT_FILE)
+        mode = _moordyn_c_currents(None if currents is None else currents.values[0])
+        if mode:
+            names.append(_MOORDYN_C_CURRENT_FILES[mode])
         return tuple(names)
 
     def _rebase_relative_inputs(self, target_directory: str | os.PathLike[str]) -> None:
@@ -5014,7 +5027,8 @@ def generate_deck_cases(
     rewritten so they still resolve from the new location. The MoorDyn-C
     kinematics files that the solver reads by fixed name from the deck folder
     (``wave_elevation.txt`` for ``WaveKin 3``, ``wave_frequencies.txt`` for
-    ``WaveKin 7``, ``current_profile.txt`` for ``Currents 1``) are copied into
+    ``WaveKin 7``, ``current_profile.txt``, ``current_profile_dynamic.txt`` and
+    ``current_profile_4d.txt`` for ``Currents 1``, ``2`` and ``5``) are copied into
     ``output_directory``. A ``cases.json`` manifest records the source deck,
     its SHA-256 digest, and every case's changes and digest (with the digests
     of the copied kinematics files it reads); :func:`cabledyn.run_study`

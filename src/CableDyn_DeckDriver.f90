@@ -134,7 +134,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Component_Wave_Kinematics, &
-                            CD_Current_Profile_Velocity, &
+                            CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Resample, &
+                            CD_Current_Grid_Velocity, &
                             CD_JONSWAP_COMPONENTS, CD_JONSWAP_Random_Components, &
                             CD_Solve_Dispersion_Wavenumber, &
                             CD_Morison_Drag_Element_Load, &
@@ -667,6 +668,11 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: vessel_ref(3) = CD_ZERO
     LOGICAL  :: has_current = .FALSE.
     LOGICAL  :: has_current_profile = .FALSE.
+    ! MoorDyn-C Currents 2 and 5 (read_moordyn_c_kinematics): a current grid in space and time
+    ! (CD_CurrentGridType), sampled at every node's position and time (deck_current_velocity);
+    ! has_current is then set and has_current_profile is not.
+    LOGICAL  :: has_current_grid = .FALSE.
+    TYPE(CD_CurrentGridType), ALLOCATABLE :: current_grid
     ! MoorDyn WaterKin OPTION: a filename declaring file-driven water kinematics
     ! for STANDALONE runs (coupled runs consume SeaState).
     CHARACTER(CD_DECK_PATHLEN) :: waterkin_file = ''
@@ -680,7 +686,8 @@ MODULE CableDyn_DeckDriver
     INTEGER  :: waterkin_wave_mode = -1
     INTEGER  :: waterkin_current_mode = -1
     ! MoorDyn-C numeric WaveKin / Currents OPTIONS (0: none): WaveKin 3 reads wave_elevation.txt,
-    ! WaveKin 7 wave_frequencies.txt, Currents 1 current_profile.txt, all in the deck folder
+    ! WaveKin 7 wave_frequencies.txt, Currents 1 current_profile.txt, Currents 2
+    ! current_profile_dynamic.txt and Currents 5 current_profile_4d.txt, all in the deck folder
     ! (read_moordyn_c_kinematics); dtWave is the WaveKin 3 resampling step.
     INTEGER  :: mdc_wave_kin = 0
     INTEGER  :: mdc_currents = 0
@@ -1988,7 +1995,24 @@ CONTAINS
     ! of that plane, which the dynamics (endpoints held, every other DOF free) follow: the
     ! static equilibrium is then solved in 3D as well.
     IF (opts%has_current) THEN
-      IF (opts%has_current_profile) THEN
+      IF (opts%has_current_grid) THEN
+        ! a current grid (Currents 2 and 5): every sample of it, in space and time
+        BLOCK
+          INTEGER :: ix, iy, iz, it
+          DO it = 1, opts%current_grid%nt
+            DO iz = 1, SIZE(opts%current_grid%z)
+              DO iy = 1, SIZE(opts%current_grid%y)
+                DO ix = 1, SIZE(opts%current_grid%x)
+                  IF (ABS(-frame_cs(2)*opts%current_grid%velocity(1, ix, iy, iz, it) + &
+                          frame_cs(1)*opts%current_grid%velocity(2, ix, iy, iz, it)) > &
+                      64.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, NORM2(opts%current_grid%velocity(:, ix, iy, iz, it)))) &
+                    require_3d_static = .TRUE.
+                END DO
+              END DO
+            END DO
+          END DO
+        END BLOCK
+      ELSE IF (opts%has_current_profile) THEN
         DO i = 1, SIZE(opts%current_profile_z)
           IF (ABS(-frame_cs(2)*opts%current_profile_velocity(1, i) + frame_cs(1)*opts%current_profile_velocity(2, i)) &
               > 64.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, NORM2(opts%current_profile_velocity(:, i)))) &
@@ -2283,6 +2307,7 @@ CONTAINS
         cur_obj%drag = .FALSE.
         IF (ALLOCATED(cur_obj%profile_z)) DEALLOCATE (cur_obj%profile_z)
         IF (ALLOCATED(cur_obj%profile_velocity)) DEALLOCATE (cur_obj%profile_velocity)
+        IF (ALLOCATED(cur_obj%grid)) DEALLOCATE (cur_obj%grid)
       END IF
       IF (as_laid) THEN
         CALL as_laid_reference(es, em)
@@ -3824,6 +3849,7 @@ CONTAINS
       opts_sw = opts
       opts_sw%has_current = .FALSE.
       opts_sw%has_current_profile = .FALSE.
+      opts_sw%has_current_grid = .FALSE.
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esw, emw, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
@@ -4074,6 +4100,22 @@ CONTAINS
           uh = NORM2(cur_obj%profile_velocity(1:2, k))
           cur_obj%profile_velocity(1:2, k) = cur_obj%profile_velocity(1:2, k) + SYM_BREAK*uh*nrm
         END DO
+      END IF
+      IF (ALLOCATED(cur_obj%grid)) THEN
+        BLOCK
+          INTEGER :: ix, iy, iz, it
+          DO it = 1, cur_obj%grid%nt
+            DO iz = 1, SIZE(cur_obj%grid%z)
+              DO iy = 1, SIZE(cur_obj%grid%y)
+                DO ix = 1, SIZE(cur_obj%grid%x)
+                  uh = NORM2(cur_obj%grid%velocity(1:2, ix, iy, iz, it))
+                  cur_obj%grid%velocity(1:2, ix, iy, iz, it) = cur_obj%grid%velocity(1:2, ix, iy, iz, it) + &
+                                                               SYM_BREAK*uh*nrm
+                END DO
+              END DO
+            END DO
+          END DO
+        END BLOCK
       END IF
       retry = .TRUE.
     END FUNCTION symmetric_current_retry
@@ -4616,6 +4658,7 @@ CONTAINS
       opts_sw = opts
       opts_sw%has_current = .FALSE.
       opts_sw%has_current_profile = .FALSE.
+      opts_sw%has_current_grid = .FALSE.
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esr, emr, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
@@ -5296,7 +5339,10 @@ CONTAINS
       IF (.NOT. (att(4, k) > CD_ZERO .OR. att(6, k) > CD_ZERO)) CYCLE
       base = 6*(node(k) - 1)
       IF (q(base + 3) > CD_ZERO) CYCLE
-      ug = deck_current_velocity(opts, q(base + 3), es, em)
+      ! the node's global position (the solve frame is the global one turned by frame_cs)
+      ug = deck_current_velocity(opts, [frame_cs(1)*q(base + 1) - frame_cs(2)*q(base + 2), &
+                                        frame_cs(2)*q(base + 1) + frame_cs(1)*q(base + 2), q(base + 3)], &
+                                 CD_ZERO, es, em)
       IF (es /= CD_HYDRO_OK) THEN
         CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
       END IF
@@ -5445,6 +5491,7 @@ CONTAINS
     LOGICAL :: tensile, refine_all, planar_bed, walk_needed, laid
     REAL(wp) :: h_target
     REAL(wp) :: origin(2), a_l(3), f_l(3), seabed_z, seabed_slope, horizontal_tension, grounded_length
+    TYPE(CD_HermiteStaticCurrentType), ALLOCATABLE :: cur_s
     REAL(wp) :: lambda0, ratio, span(2), span_len, t, xg, yg, zf, sx, sz, sxx, sxz, xl, yl
     REAL(wp) :: res_cont, cont_tol, phi, penetration, zfit(NFIT), fit_misfit, fine_limit, seed_bed, anchor_bed
     REAL(wp), ALLOCATABLE :: pos(:), q_seed(:), q_cont(:), curv_cont(:), knnode(:), tdir(:, :), stretch(:)
@@ -5480,6 +5527,12 @@ CONTAINS
     IF (.NOT. PRESENT(bathymetry)) origin = anchor(1:2)
     a_l = [anchor(1) - origin(1), anchor(2) - origin(2), anchor(3)]
     f_l = [fairlead(1) - origin(1), fairlead(2) - origin(2), fairlead(3)]
+    ! the solves below run in the frame translated to origin: the current they take knows it, so
+    ! a current grid is sampled at the nodes' global positions (CD_HermiteStaticCurrentType)
+    IF (PRESENT(cur_obj)) THEN
+      ALLOCATE (cur_s, SOURCE=cur_obj)
+      cur_s%origin = origin
+    END IF
 
     ! Seabed plane under the line. A structured bathymetry is represented by its
     ! least-squares plane along the horizontal chord; the contact solve itself always
@@ -5761,7 +5814,7 @@ CONTAINS
                                                      endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                      endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
                                                      dry_buoyancy=dry_b, &
-                                                     water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                     water_weight=opts%rhoW*opts%g, current=cur_s)
     ELSE
       CALL CD_HermiteCable_Static_Solve_Continuation(l0, ea, ei, w, q_seed, fixed_dofs, contact_z, CD_ZERO, &
                                                      STAGE_MAX_ITER, cont_tol, lambda0, budget_cont, &
@@ -5771,7 +5824,7 @@ CONTAINS
                                                      endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                      endconn_mode=endconn_mode, waterline_z=CD_ZERO, &
                                                      dry_buoyancy=dry_b, &
-                                                     water_weight=opts%rhoW*opts%g, current=cur_obj)
+                                                     water_weight=opts%rhoW*opts%g, current=cur_s)
     END IF
     iters = cont_iters
     IF (es /= CD_HCSTAT_OK) THEN
@@ -6102,7 +6155,7 @@ CONTAINS
                                               bending_quadrature_order=opts%bending_quadrature_order, &
                                               endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                               endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                              water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                              water_weight=opts%rhoW*opts%g, current=cur_s, &
                                               energy_minimization=energy)
             total_it = total_it + it_w
             IF (es_w /= CD_HCSTAT_OK) THEN
@@ -6156,7 +6209,7 @@ CONTAINS
                                           bending_quadrature_order=opts%bending_quadrature_order, &
                                           endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                           endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                          water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                          water_weight=opts%rhoW*opts%g, current=cur_s, &
                                           energy_minimization=energy)
         total_it = total_it + it_w
         IF (es_w == CD_HCSTAT_OK .AND. .NOT. folded) THEN
@@ -6460,7 +6513,7 @@ CONTAINS
                                                    refine_non_axial=refine_all, &
                                                    endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                    endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                   water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                   water_weight=opts%rhoW*opts%g, current=cur_s, &
                                                    local_refinement=.TRUE.)
       ELSE IF (contact_enabled) THEN
         CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_cont, fixed_dofs, contact_z, CD_ZERO, &
@@ -6479,7 +6532,7 @@ CONTAINS
                                                    refine_non_axial=refine_all, &
                                                    endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                    endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                   water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                   water_weight=opts%rhoW*opts%g, current=cur_s, &
                                                    local_refinement=.TRUE.)
       ELSE
         CALL CD_HermiteCable_Static_Solve_AutoMesh(l0, ea, ei, w, q_cont, fixed_dofs, contact_z, CD_ZERO, &
@@ -6496,7 +6549,7 @@ CONTAINS
                                                    refine_non_axial=refine_all, &
                                                    endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                                    endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry_b, &
-                                                   water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                                   water_weight=opts%rhoW*opts%g, current=cur_s, &
                                                    local_refinement=.TRUE.)
       END IF
       iters = iters + polish_iters
@@ -6526,7 +6579,10 @@ CONTAINS
     cur%rho = opts%rhoW
     cur%waterline_z = CD_ZERO
     cur%frame_cs = frame_cs
-    IF (opts%has_current_profile) THEN
+    IF (opts%has_current_grid) THEN
+      ! sampled at the node positions at t = 0 (the static start)
+      ALLOCATE (cur%grid, SOURCE=opts%current_grid)
+    ELSE IF (opts%has_current_profile) THEN
       cur%profile_z = opts%current_profile_z
       cur%profile_velocity = opts%current_profile_velocity
     ELSE
@@ -9146,7 +9202,7 @@ CONTAINS
       ALLOCATE (fluid_velocity(3, SIZE(l0) + 1), drag_waterline(SIZE(l0) + 1))
       DO i = 1, SIZE(l0) + 1
         IF (opts%has_current) THEN
-          fluid_velocity(:, i) = deck_current_velocity(opts, line_node_z(anchor, fairlead, l0, i), es, em)
+          fluid_velocity(:, i) = deck_current_velocity(opts, line_node_pos(anchor, fairlead, l0, i), CD_ZERO, es, em)
           IF (es /= CD_HYDRO_OK) THEN
             CALL fail(ErrStat, ErrMsg, 'current profile for model init: '//TRIM(em)); RETURN
           END IF
@@ -9187,7 +9243,7 @@ CONTAINS
                               as_laid_tension=laid_t, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
-                              current_profile_velocity=opts%current_profile_velocity, &
+                              current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
                               drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt, &
                               fluid_acceleration=fluid_acceleration, fk_waterline_z=waterline, fk_rho=opts%rhoW, &
@@ -9217,7 +9273,7 @@ CONTAINS
                               as_laid_tension=laid_t, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
-                              current_profile_velocity=opts%current_profile_velocity, &
+                              current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
                               drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt, &
                               added_mass_waterline_z=waterline, added_mass_rho=opts%rhoW, &
@@ -9245,7 +9301,7 @@ CONTAINS
                               as_laid_tension=laid_t, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
-                              current_profile_velocity=opts%current_profile_velocity, &
+                              current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
                               drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt, &
                               added_mass_waterline_z=waterline, added_mass_rho=opts%rhoW, &
@@ -9274,7 +9330,7 @@ CONTAINS
                               as_laid_tension=laid_t, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
-                              current_profile_velocity=opts%current_profile_velocity, &
+                              current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
                               drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt, &
                               fluid_acceleration=fluid_acceleration, fk_waterline_z=waterline, fk_rho=opts%rhoW, &
@@ -9305,7 +9361,7 @@ CONTAINS
                               as_laid_tension=laid_t, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
-                              current_profile_velocity=opts%current_profile_velocity, &
+                              current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
                               drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt, &
                               added_mass_waterline_z=waterline, added_mass_rho=opts%rhoW, &
@@ -9334,7 +9390,7 @@ CONTAINS
                               as_laid_tension=laid_t, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
-                              current_profile_velocity=opts%current_profile_velocity, &
+                              current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
                               drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt, &
                               added_mass_waterline_z=waterline, added_mass_rho=opts%rhoW, &
@@ -9348,7 +9404,7 @@ CONTAINS
                               syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., ba=ba, &
                               ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet, &
                               current_profile_z=opts%current_profile_z, &
-                              current_profile_velocity=opts%current_profile_velocity, &
+                              current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
                               drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt)
     ELSE
@@ -11072,7 +11128,7 @@ CONTAINS
       END IF
     END IF
     IF (opts%has_current) THEN
-      current_velocity = deck_current_velocity(opts, x(3), es, em)
+      current_velocity = deck_current_velocity(opts, x, time, es, em)
       IF (es /= CD_HYDRO_OK) THEN
         ErrStat = es
         ErrMsg = em
@@ -11664,8 +11720,13 @@ CONTAINS
     CHARACTER(512) :: em
     on = .FALSE.
     IF (.NOT. opts%has_current) RETURN
+    IF (opts%has_current_grid) THEN
+      ! a current grid (Currents 2 and 5) counts wherever it is non-zero
+      on = ANY(ABS(opts%current_grid%velocity) > CD_ZERO)
+      RETURN
+    END IF
     DO k = 1, SIZE(z)
-      u = deck_current_velocity(opts, z(k), es, em)
+      u = deck_current_velocity(opts, [CD_ZERO, CD_ZERO, z(k)], CD_ZERO, es, em)
       IF (es /= CD_HYDRO_OK) CYCLE
       IF (NORM2(u) > CD_ZERO) THEN
         on = .TRUE.
@@ -11868,7 +11929,8 @@ CONTAINS
       cur%waterline_z = CD_ZERO
       ALLOCATE (cur%node_velocity(3, ne + 1), cur%elem_diameter(ne), cur%elem_cdn(ne), cur%elem_cdt(ne))
       DO i = 1, ne + 1
-        cur%node_velocity(:, i) = deck_current_velocity(opts, line_node_z(anchor, fairlead, l0, i), es, em)
+        cur%node_velocity(:, i) = deck_current_velocity(opts, line_node_pos(anchor, fairlead, l0, i), CD_ZERO, &
+                                                        es, em)
         IF (es /= CD_HYDRO_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'current profile: '//TRIM(em)); RETURN
         END IF
@@ -11886,6 +11948,8 @@ CONTAINS
         cur%profile_z = opts%current_profile_z
         cur%profile_velocity = opts%current_profile_velocity
       END IF
+      ! a current grid (Currents 2 and 5) at the node positions, at t = 0
+      IF (opts%has_current_grid) ALLOCATE (cur%grid, SOURCE=opts%current_grid)
       ! file order is End A (fairlead) -> End B; the mesh runs anchor -> fairlead
       cur%elem_diameter = cur%elem_diameter(ne:1:-1)
       cur%elem_cdn = cur%elem_cdn(ne:1:-1)
@@ -12342,7 +12406,7 @@ CONTAINS
                 'driver has no host SeaState field')
       RETURN
     END IF
-    ! MoorDyn-C WaveKin 3/7 and Currents 1: their fixed-name files in the deck folder
+    ! MoorDyn-C WaveKin 3/7 and Currents 1/2/5: their fixed-name files in the deck folder
     IF (opts%mdc_wave_kin > 0 .OR. opts%mdc_currents > 0) THEN
       CALL read_moordyn_c_kinematics(deck_dir(path), opts, ErrStat, ErrMsg)
       IF (ErrStat /= 0) RETURN
@@ -13218,6 +13282,16 @@ CONTAINS
     !!    must share one direction beta.
     !!  - Currents 1, current_profile.txt (`z ux uy uz` rows after its header rows): the steady
     !!    profile, linear in z and held beyond its ends, as MoorDyn-C's current grid.
+    !!  - Currents 2, current_profile_dynamic.txt (constructDynamicCurrentGrid of MoorDyn-C's
+    !!    source/Waves/WaveGrid.cpp): lines 1-4 and 6 are free text, line 5 lists the depths
+    !!    z(1:nz) (read in single precision, as MoorDyn-C's stof), and every later row is
+    !!    `t ux(1:nz) [uy(1:nz) [uz(1:nz)]]` (missing components zero). A depth profile in time.
+    !!  - Currents 5, current_profile_4d.txt (construct4DCurrentGrid): line 1 is `nx ny nz nt`,
+    !!    lines 2-5 the x, y, z and t coordinates, and the rows `x y z t ux uy uz` give every grid
+    !!    point once, from line 6 (a text line 6 is a header, as MoorDyn-C reads its rows from line
+    !!    7). A row's coordinates are matched by value.
+    !!    Both are resampled in time as MoorDyn-C does and evaluated at every node position and
+    !!    time (CD_Current_Grid_Resample, CD_Current_Grid_Velocity), with no fluid acceleration.
     CHARACTER(*), INTENT(IN) :: dir
     TYPE(DeckOptions), INTENT(INOUT) :: opts
     INTEGER, INTENT(OUT) :: ErrStat
@@ -13226,7 +13300,10 @@ CONTAINS
     REAL(wp) :: dt, tl, frac, ca, sa, angle, scale, beta, mean_level, arg
     INTEGER :: n, nt, j, k, nc, bracket
     INTEGER(KIND=8) :: kj
-    CHARACTER(24) :: fname
+    CHARACTER(32) :: fname
+    ! the longest row of a MoorDyn-C current table (a time and 3 nz velocities per row)
+    INTEGER, PARAMETER :: LONG_ROW = 65536
+    INTEGER, PARAMETER :: SP = SELECTED_REAL_KIND(6, 37)
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -13377,8 +13454,400 @@ CONTAINS
       opts%has_current = .TRUE.
       opts%has_current_profile = .TRUE.
     END IF
+    IF (opts%mdc_currents == 2 .OR. opts%mdc_currents == 5) THEN
+      IF (opts%has_current) THEN
+        CALL fail(ErrStat, ErrMsg, 'the deck declares BOTH a current OPTION (or a WaterKin current) and '// &
+                  'Currents '//TRIM(int_to_str(opts%mdc_currents))//' (double-counting); keep one'); RETURN
+      END IF
+      IF (ALLOCATED(opts%current_grid)) DEALLOCATE (opts%current_grid)
+      ALLOCATE (opts%current_grid)
+      IF (opts%mdc_currents == 2) THEN
+        fname = 'current_profile_dynamic.txt'
+        CALL read_dynamic_profile()
+      ELSE
+        fname = 'current_profile_4d.txt'
+        CALL read_4d_grid()
+      END IF
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      opts%has_current = .TRUE.
+      opts%has_current_grid = .TRUE.
+      opts%has_current_profile = .FALSE.
+      ! past its last sample MoorDyn-C's grid repeats (CD_Current_Grid_Velocity)
+      IF (opts%has_tmax .AND. opts%current_grid%nt > 1) THEN
+        tl = REAL(opts%current_grid%nt - 1, wp)*opts%current_grid%dt
+        IF (opts%tmax > tl) WRITE (error_unit, '(A)') '   Note: Currents '//TRIM(int_to_str(opts%mdc_currents))// &
+          ': TMax outlasts the last sample of '//TRIM(fname)//' (t = '//TRIM(real_to_str(tl))//' s); as in '// &
+          'MoorDyn-C the current then repeats with period '// &
+          TRIM(real_to_str(REAL(opts%current_grid%nt, wp)*opts%current_grid%dt))// &
+          ' s, holding its t = 0 value over the last interval of each period.'
+      END IF
+    END IF
 
   CONTAINS
+
+    SUBROUTINE open_table(name, unit, ok)
+      !! Open the kinematics file name in the deck folder.
+      CHARACTER(*), INTENT(IN) :: name
+      INTEGER, INTENT(OUT) :: unit
+      LOGICAL, INTENT(OUT) :: ok
+      INTEGER :: ios
+      CHARACTER(1024) :: why
+      CHARACTER(CD_DECK_PATHLEN) :: fpath
+      fpath = path_join(dir, TRIM(name))
+      CALL CD_Open_Input(unit, TRIM(fpath), ios, why)
+      ok = ios == 0
+      IF (.NOT. ok) CALL fail(ErrStat, ErrMsg, 'cannot open the MoorDyn-C kinematics file '//TRIM(fpath)// &
+                              input_open_reason(TRIM(fpath), why))
+    END SUBROUTINE open_table
+
+    SUBROUTINE next_row(unit, buf, lineno, ios)
+      !! The next whole record of a current table (lineno counts every line, blank ones too, as
+      !! MoorDyn-C's fileToLines does); a record longer than buf fails (ios = 1, ErrStat set).
+      INTEGER, INTENT(IN) :: unit
+      CHARACTER(*), INTENT(OUT) :: buf
+      INTEGER, INTENT(INOUT) :: lineno
+      INTEGER, INTENT(OUT) :: ios
+      LOGICAL :: overflow
+      CALL read_whole_record(unit, buf, ios, overflow)
+      IF (ios /= 0) RETURN
+      lineno = lineno + 1
+      IF (lineno == 1) CALL CD_Strip_BOM(buf)
+      IF (overflow) THEN
+        ios = 1
+        CALL fail(ErrStat, ErrMsg, TRIM(fname)//' rows must be at most '//TRIM(int_to_str(LEN(buf)))// &
+                  ' characters long')
+        CALL add_file_line(TRIM(fname), lineno, ErrMsg)
+      END IF
+    END SUBROUTINE next_row
+
+    SUBROUTINE row_tokens(line, lo, hi, ntok)
+      !! The whitespace tokens of a row as MoorDyn-C splits it (moordyn::str::split): up to the
+      !! first token holding '#', which starts a comment.
+      CHARACTER(*), INTENT(IN) :: line
+      INTEGER, ALLOCATABLE, INTENT(INOUT) :: lo(:), hi(:)
+      INTEGER, INTENT(OUT) :: ntok
+      INTEGER, ALLOCATABLE :: grown(:)
+      INTEGER :: pos, a, b
+      ntok = 0
+      pos = 1
+      DO
+        CALL token_bounds(line, pos, a, b)
+        IF (a == 0) EXIT
+        IF (INDEX(line(a:b), '#') > 0) EXIT
+        ntok = ntok + 1
+        IF (ntok > SIZE(lo)) THEN
+          ALLOCATE (grown(2*SIZE(lo)))
+          grown(1:SIZE(lo)) = lo
+          CALL MOVE_ALLOC(grown, lo)
+          ALLOCATE (grown(2*SIZE(hi)))
+          grown(1:SIZE(hi)) = hi
+          CALL MOVE_ALLOC(grown, hi)
+        END IF
+        lo(ntok) = a
+        hi(ntok) = b
+      END DO
+    END SUBROUTINE row_tokens
+
+    LOGICAL FUNCTION table_number(tok, x, lineno) RESULT(ok)
+      !! tok read as a plain finite number; otherwise fail naming the file line.
+      CHARACTER(*), INTENT(IN) :: tok
+      REAL(wp), INTENT(OUT) :: x
+      INTEGER, INTENT(IN) :: lineno
+      CALL parse_real_token(tok, x, ok)
+      IF (.NOT. ok) THEN
+        CALL fail(ErrStat, ErrMsg, TRIM(fname)//' value "'//tok//'" is not a plain finite number')
+        CALL add_file_line(TRIM(fname), lineno, ErrMsg)
+      END IF
+    END FUNCTION table_number
+
+    LOGICAL FUNCTION strictly_increasing(c) RESULT(ok)
+      REAL(wp), INTENT(IN) :: c(:)
+      INTEGER :: k
+      ok = .TRUE.
+      DO k = 2, SIZE(c)
+        IF (.NOT. c(k) > c(k - 1)) ok = .FALSE.
+      END DO
+    END FUNCTION strictly_increasing
+
+    SUBROUTINE read_dynamic_profile()
+      !! Currents 2: current_profile_dynamic.txt into opts%current_grid (nx = ny = 1).
+      CHARACTER(:), ALLOCATABLE :: buf
+      INTEGER, ALLOCATABLE :: lo(:), hi(:)
+      REAL(wp), ALLOCATABLE :: zc(:), tc(:), uu(:, :, :), grow_u(:, :, :), grow_t(:), v5(:, :, :, :, :)
+      REAL(wp) :: x
+      REAL(SP) :: z4
+      INTEGER :: unit, ios, lineno, nz, ntok, m, k, ncomp, rios
+      LOGICAL :: ok
+      CHARACTER(512) :: em_g
+      INTEGER :: es_g
+      ALLOCATE (CHARACTER(LONG_ROW) :: buf)
+      ALLOCATE (lo(64), hi(64))
+      CALL open_table(fname, unit, ok)
+      IF (.NOT. ok) RETURN
+      nz = 0
+      m = 0
+      lineno = 0
+      ALLOCATE (tc(16), zc(0), uu(3, 0, 16))
+      DO
+        CALL next_row(unit, buf, lineno, ios)
+        IF (ios /= 0) EXIT
+        ! lines 1-4 and 6 are free text (MoorDyn-C skips them by position)
+        IF (lineno <= 4 .OR. lineno == 6) CYCLE
+        CALL row_tokens(buf, lo, hi, ntok)
+        IF (lineno == 5) THEN
+          IF (ntok < 1) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'Currents 2: line 5 of '//TRIM(fname)//' must list the depths')
+            RETURN
+          END IF
+          nz = ntok
+          DEALLOCATE (zc, uu)
+          ALLOCATE (zc(nz), uu(3, nz, 16))
+          DO k = 1, nz
+            IF (.NOT. table_number(buf(lo(k):hi(k)), x, lineno)) THEN
+              CLOSE (unit); RETURN
+            END IF
+            ! MoorDyn-C reads the depths in single precision (stof)
+            READ (buf(lo(k):hi(k)), *, IOSTAT=rios) z4
+            IF (rios /= 0 .OR. .NOT. IEEE_IS_FINITE(z4)) THEN
+              CLOSE (unit)
+              CALL fail(ErrStat, ErrMsg, TRIM(fname)//' depth "'//buf(lo(k):hi(k))//'" is not a single-precision '// &
+                        'number')
+              CALL add_file_line(TRIM(fname), lineno, ErrMsg)
+              RETURN
+            END IF
+            zc(k) = REAL(z4, wp)
+          END DO
+          CYCLE
+        END IF
+        IF (ntok == 0) CYCLE
+        IF (ntok == 1 + nz) THEN
+          ncomp = 1
+        ELSE IF (ntok == 1 + 2*nz) THEN
+          ncomp = 2
+        ELSE IF (ntok == 1 + 3*nz) THEN
+          ncomp = 3
+        ELSE
+          CLOSE (unit)
+          CALL fail(ErrStat, ErrMsg, 'Currents 2: a '//TRIM(fname)//' row is the time and the x, the x and y, or '// &
+                    'the x, y and z velocities at the '//TRIM(int_to_str(nz))//' depths ('// &
+                    TRIM(int_to_str(1 + nz))//', '//TRIM(int_to_str(1 + 2*nz))//' or '// &
+                    TRIM(int_to_str(1 + 3*nz))//' numbers); found '//TRIM(int_to_str(ntok)))
+          CALL add_file_line(TRIM(fname), lineno, ErrMsg)
+          RETURN
+        END IF
+        m = m + 1
+        IF (m > SIZE(tc)) THEN
+          ALLOCATE (grow_t(2*SIZE(tc)), grow_u(3, nz, 2*SIZE(tc)))
+          grow_t(1:m - 1) = tc(1:m - 1)
+          grow_u(:, :, 1:m - 1) = uu(:, :, 1:m - 1)
+          CALL MOVE_ALLOC(grow_t, tc)
+          CALL MOVE_ALLOC(grow_u, uu)
+        END IF
+        IF (.NOT. table_number(buf(lo(1):hi(1)), tc(m), lineno)) THEN
+          CLOSE (unit); RETURN
+        END IF
+        uu(:, :, m) = CD_ZERO
+        DO k = 1, ncomp*nz
+          IF (.NOT. table_number(buf(lo(k + 1):hi(k + 1)), x, lineno)) THEN
+            CLOSE (unit); RETURN
+          END IF
+          ! the x velocities depth by depth, then the y ones, then the z ones
+          uu((k - 1)/nz + 1, MOD(k - 1, nz) + 1, m) = x
+        END DO
+      END DO
+      CLOSE (unit)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (nz == 0 .OR. lineno < 7) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 2: '//TRIM(fname)//' needs at least 7 lines (4 header lines, the '// &
+                  'depths, a header line and the time rows)'); RETURN
+      END IF
+      IF (m < 2) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 2: '//TRIM(fname)//' needs at least two time rows'); RETURN
+      END IF
+      IF (.NOT. strictly_increasing(zc)) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 2: '//TRIM(fname)//' depths must be strictly increasing'); RETURN
+      END IF
+      IF (.NOT. strictly_increasing(tc(1:m))) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 2: '//TRIM(fname)//' times must be strictly increasing'); RETURN
+      END IF
+      ALLOCATE (v5(3, 1, 1, nz, m))
+      v5(:, 1, 1, :, :) = uu(:, :, 1:m)
+      CALL CD_Current_Grid_Resample([CD_ZERO], [CD_ZERO], zc, tc(1:m), v5, opts%current_grid, es_g, em_g)
+      IF (es_g /= CD_HYDRO_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 2: '//TRIM(fname)//': '//TRIM(em_g)); RETURN
+      END IF
+    END SUBROUTINE read_dynamic_profile
+
+    SUBROUTINE read_4d_grid()
+      !! Currents 5: current_profile_4d.txt into opts%current_grid.
+      INTEGER(int64), PARAMETER :: MAX_POINTS = 10000000_int64
+      CHARACTER(:), ALLOCATABLE :: buf
+      INTEGER, ALLOCATABLE :: lo(:), hi(:)
+      REAL(wp), ALLOCATABLE :: xc(:), yc(:), zc(:), tc(:), v5(:, :, :, :, :)
+      LOGICAL, ALLOCATABLE :: seen(:, :, :, :)
+      REAL(wp) :: row(7)
+      INTEGER :: unit, ios, lineno, ntok, k, dims(4), ix, iy, iz, it
+      INTEGER(int64) :: nrow, npts
+      LOGICAL :: ok
+      CHARACTER(512) :: em_g
+      INTEGER :: es_g
+      ALLOCATE (CHARACTER(LONG_ROW) :: buf)
+      ALLOCATE (lo(64), hi(64))
+      CALL open_table(fname, unit, ok)
+      IF (.NOT. ok) RETURN
+      lineno = 0
+      nrow = 0
+      npts = 0
+      dims = 0
+      ALLOCATE (xc(0), yc(0), zc(0), tc(0), v5(3, 0, 0, 0, 0), seen(0, 0, 0, 0))
+      DO
+        CALL next_row(unit, buf, lineno, ios)
+        IF (ios /= 0) EXIT
+        CALL row_tokens(buf, lo, hi, ntok)
+        SELECT CASE (lineno)
+        CASE (1)
+          ! nx ny nz nt
+          ok = ntok == 4
+          DO k = 1, MIN(ntok, 4)
+            IF (ok) CALL parse_int_token(buf(lo(k):hi(k)), dims(k), ok)
+          END DO
+          IF (ok) ok = ALL(dims >= 1)
+          IF (.NOT. ok) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'Currents 5: line 1 of '//TRIM(fname)//' must be the four positive '// &
+                      'grid sizes `nx ny nz nt`')
+            RETURN
+          END IF
+          npts = PRODUCT(INT(dims, int64))
+          IF (npts > MAX_POINTS) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' declares more than 1e7 grid points')
+            RETURN
+          END IF
+          DEALLOCATE (xc, yc, zc, tc, v5, seen)
+          ALLOCATE (xc(dims(1)), yc(dims(2)), zc(dims(3)), tc(dims(4)))
+          ALLOCATE (v5(3, dims(1), dims(2), dims(3), dims(4)), seen(dims(1), dims(2), dims(3), dims(4)))
+          v5 = CD_ZERO
+          seen = .FALSE.
+        CASE (2:5)
+          IF (ntok /= dims(lineno - 1)) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'Currents 5: line '//TRIM(int_to_str(lineno))//' of '//TRIM(fname)// &
+                      ' must list the '//TRIM(int_to_str(dims(lineno - 1)))//' '// &
+                      axis_name(lineno - 1)//' coordinates declared on line 1; found '//TRIM(int_to_str(ntok)))
+            RETURN
+          END IF
+          DO k = 1, ntok
+            SELECT CASE (lineno)
+            CASE (2)
+              ok = table_number(buf(lo(k):hi(k)), xc(k), lineno)
+            CASE (3)
+              ok = table_number(buf(lo(k):hi(k)), yc(k), lineno)
+            CASE (4)
+              ok = table_number(buf(lo(k):hi(k)), zc(k), lineno)
+            CASE DEFAULT
+              ok = table_number(buf(lo(k):hi(k)), tc(k), lineno)
+            END SELECT
+            IF (.NOT. ok) THEN
+              CLOSE (unit); RETURN
+            END IF
+          END DO
+        CASE DEFAULT
+          IF (ntok == 0) CYCLE
+          ! a text line 6 is a header (MoorDyn-C reads its rows from line 7)
+          IF (lineno == 6) THEN
+            IF (.NOT. numeric_token_shape(buf(lo(1):hi(1)))) CYCLE
+          END IF
+          IF (ntok /= 7) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'Currents 5: a '//TRIM(fname)//' row is `x y z t ux uy uz` (7 numbers); '// &
+                      'found '//TRIM(int_to_str(ntok)))
+            CALL add_file_line(TRIM(fname), lineno, ErrMsg)
+            RETURN
+          END IF
+          DO k = 1, 7
+            IF (.NOT. table_number(buf(lo(k):hi(k)), row(k), lineno)) THEN
+              CLOSE (unit); RETURN
+            END IF
+          END DO
+          ix = FINDLOC(xc, row(1), DIM=1)
+          iy = FINDLOC(yc, row(2), DIM=1)
+          iz = FINDLOC(zc, row(3), DIM=1)
+          it = FINDLOC(tc, row(4), DIM=1)
+          IF (ix == 0 .OR. iy == 0 .OR. iz == 0 .OR. it == 0) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'Currents 5: a '//TRIM(fname)//' row names a point off the grid of lines '// &
+                      '2-5 (its x, y, z and t must each equal one of the listed coordinates)')
+            CALL add_file_line(TRIM(fname), lineno, ErrMsg)
+            RETURN
+          END IF
+          IF (seen(ix, iy, iz, it)) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'Currents 5: a '//TRIM(fname)//' row repeats a grid point')
+            CALL add_file_line(TRIM(fname), lineno, ErrMsg)
+            RETURN
+          END IF
+          seen(ix, iy, iz, it) = .TRUE.
+          v5(:, ix, iy, iz, it) = row(5:7)
+          nrow = nrow + 1
+        END SELECT
+      END DO
+      CLOSE (unit)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (lineno < 5) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' needs the grid sizes, the x, y, z and t '// &
+                  'coordinates (lines 1-5) and a row per grid point'); RETURN
+      END IF
+      IF (.NOT. (strictly_increasing(xc) .AND. strictly_increasing(yc) .AND. strictly_increasing(zc))) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' x, y and z coordinates must be strictly '// &
+                  'increasing'); RETURN
+      END IF
+      IF (.NOT. strictly_increasing(tc)) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' times must be strictly increasing'); RETURN
+      END IF
+      IF (SIZE(tc) < 2) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' needs at least two times (MoorDyn-C reads '// &
+                  'before its table with one)'); RETURN
+      END IF
+      IF (nrow < npts) THEN
+        ! the first missing point
+        DO it = 1, SIZE(tc)
+          DO iz = 1, SIZE(zc)
+            DO iy = 1, SIZE(yc)
+              DO ix = 1, SIZE(xc)
+                IF (seen(ix, iy, iz, it)) CYCLE
+                CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//' has no row for the grid point (x, y, z, '// &
+                          't) = ('//TRIM(real_to_str(xc(ix)))//', '//TRIM(real_to_str(yc(iy)))//', '// &
+                          TRIM(real_to_str(zc(iz)))//', '//TRIM(real_to_str(tc(it)))//')')
+                RETURN
+              END DO
+            END DO
+          END DO
+        END DO
+      END IF
+      CALL CD_Current_Grid_Resample(xc, yc, zc, tc, v5, opts%current_grid, es_g, em_g)
+      IF (es_g /= CD_HYDRO_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'Currents 5: '//TRIM(fname)//': '//TRIM(em_g)); RETURN
+      END IF
+    END SUBROUTINE read_4d_grid
+
+    FUNCTION axis_name(k) RESULT(name)
+      INTEGER, INTENT(IN) :: k
+      CHARACTER(1) :: name
+      CHARACTER(4), PARAMETER :: AXES = 'xyzt'
+      name = AXES(k:k)
+    END FUNCTION axis_name
+
+    FUNCTION real_to_str(x) RESULT(t)
+      !! x in G0.6 (asterisks never abort: the WRITE carries IOSTAT).
+      REAL(wp), INTENT(IN) :: x
+      CHARACTER(32) :: t
+      INTEGER :: ios
+      t = ''
+      WRITE (t, '(G0.6)', IOSTAT=ios) x
+      t = ADJUSTL(t)
+    END FUNCTION real_to_str
 
     SUBROUTINE install_components()
       !! The component waves (omega, amplitude, phase in CableDyn's cos(k d - omega t + phase)
@@ -16003,29 +16472,25 @@ CONTAINS
       END IF
     CASE ('currents')
       ! Stock MoorDyn-C switch selecting where current kinematics come from: 0 none, 1 the steady
-      ! depth table current_profile.txt in the deck folder (read_moordyn_c_kinematics); the
-      ! time-varying and gridded tables fail closed by name (CableDyn decks may also declare
-      ! current via the "current" option)
+      ! depth table current_profile.txt, 2 the time-varying depth table
+      ! current_profile_dynamic.txt, 5 the grid in x, y, z and time current_profile_4d.txt, each
+      ! in the deck folder (read_moordyn_c_kinematics). 3 and 4 (MoorDyn-C's node approaches)
+      ! have no current source in MoorDyn-C v2.7.1 and fail closed by name (CableDyn decks may
+      ! also declare current via the "current" option)
       CALL rd(val, x1, ErrStat, ErrMsg)
       IF (ErrStat /= 0) RETURN
       opts%mdc_currents = 0
       IF (ABS(x1 - ANINT(x1)) > 1.0e-9_wp .OR. x1 < -0.5_wp .OR. x1 > 5.5_wp) THEN
-        CALL fail(ErrStat, ErrMsg, 'Currents '//TRIM(val)//' not supported (0 none, or 1 for the MoorDyn-C '// &
-                  'steady profile current_profile.txt)')
+        CALL fail(ErrStat, ErrMsg, 'Currents '//TRIM(val)//' not supported (0 none, or the MoorDyn-C current '// &
+                  'files: 1 current_profile.txt, 2 current_profile_dynamic.txt, 5 current_profile_4d.txt)')
         RETURN
       END IF
       SELECT CASE (NINT(x1))
-      CASE (1)
-        opts%mdc_currents = 1
-      CASE (2)
-        CALL fail(ErrStat, ErrMsg, 'Currents 2 (the MoorDyn-C time-varying profile current_profile_dynamic.txt) '// &
-                  'is not supported; use Currents 1 or the "current" option')
+      CASE (1, 2, 5)
+        opts%mdc_currents = NINT(x1)
       CASE (3, 4)
         CALL fail(ErrStat, ErrMsg, 'Currents '//TRIM(int_to_str(NINT(x1)))//' is not supported '// &
-                  '(no current source in MoorDyn-C v2.7.1); use Currents 1')
-      CASE (5)
-        CALL fail(ErrStat, ErrMsg, 'Currents 5 (the MoorDyn-C 4-D current grid current_profile_4d.txt) is not '// &
-                  'supported; use Currents 1 or the "current" option')
+                  '(no current source in MoorDyn-C v2.7.1); use Currents 1, 2 or 5')
       END SELECT
     CASE DEFAULT
       ! per-line static friction rows: layAzimuth<ID>, asLaidTension<ID> (line ID suffix)
@@ -16716,6 +17181,18 @@ CONTAINS
             END IF
           END DO
         END BLOCK
+      END IF
+      IF (opts%has_current_grid) THEN
+        IF (.NOT. ALLOCATED(opts%current_grid)) THEN
+          CALL fail(ErrStat, ErrMsg, 'current grid declared without grid data'); RETURN
+        END IF
+        ! read_moordyn_c_kinematics has checked that the grid is finite and increasing
+        IF (ANY(ABS(opts%current_grid%x) > MAX_COORDINATE) .OR. ANY(ABS(opts%current_grid%y) > MAX_COORDINATE) &
+            .OR. ANY(ABS(opts%current_grid%z) > MAX_COORDINATE) .OR. &
+            ANY(ABS(opts%current_grid%velocity) > MAX_FLUID_SPEED)) THEN
+          CALL fail(ErrStat, ErrMsg, 'current grid coordinates must be at most 1e6 m and velocities at most '// &
+                    '1e3 m/s in magnitude'); RETURN
+        END IF
       END IF
     END IF
     IF (opts%has_wave) THEN
@@ -24752,7 +25229,7 @@ CONTAINS
         END IF
       END IF
       IF (opts%has_current) THEN
-        uq = uq + deck_current_velocity(opts, xq(3), es, em)
+        uq = uq + deck_current_velocity(opts, xq, time, es, em)
         IF (es /= CD_HYDRO_OK) THEN
           ErrStat = CD_DECKDRV_BADINPUT
           ErrMsg = 'CableDyn_DeckDriver: rod current profile failed: '//TRIM(em)
@@ -25695,7 +26172,7 @@ CONTAINS
           fk(3, kk) = (opts%rhoW*pts(idx(kk))%vol - pts(idx(kk))%mass)*opts%g
           sc_out = MAX(sc_out, ABS(fk(3, kk)))
           IF (opts%has_current .AND. pts(idx(kk))%cda > CD_ZERO) THEN
-            u = deck_current_velocity(opts, pts(idx(kk))%pos(3), es_l, em_l)
+            u = deck_current_velocity(opts, pts(idx(kk))%pos, CD_ZERO, es_l, em_l)
             IF (es_l /= CD_HYDRO_OK) THEN
               CALL fail(ErrStat, ErrMsg, 'static equilibrium: current profile at point '// &
                         TRIM(int_to_str(pts(idx(kk))%id))//': '//TRIM(em_l)); RETURN
@@ -26254,8 +26731,8 @@ CONTAINS
         curp%waterline_z = CD_ZERO
         ALLOCATE (curp%node_velocity(3, nn))
         DO ii = 1, nn
-          curp%node_velocity(:, ii) = deck_current_velocity(opts, line_node_z(anchor, fairlead, lc(jl)%l0, ii), &
-                                                            es_l, em_l)
+          curp%node_velocity(:, ii) = deck_current_velocity(opts, line_node_pos(anchor, fairlead, lc(jl)%l0, ii), &
+                                                            CD_ZERO, es_l, em_l)
           IF (es_l /= CD_HYDRO_OK) THEN
             CALL fail(es_out, em_out, 'current profile: '//TRIM(em_l)); RETURN
           END IF
@@ -26267,6 +26744,7 @@ CONTAINS
           curp%profile_z = opts%current_profile_z
           curp%profile_velocity = opts%current_profile_velocity
         END IF
+        IF (opts%has_current_grid) ALLOCATE (curp%grid, SOURCE=opts%current_grid)
       END IF
       ALLOCATE (q(3*nn))
       conv = .FALSE.
@@ -27719,7 +28197,7 @@ CONTAINS
       CALL deck_wave_kinematics(opts, pos(1, i), pos(2, i), pos(3, i), times(i), eta(i), vel(:, i), acc(:, i), &
                                 ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      vel(:, i) = vel(:, i) + deck_current_velocity(opts, pos(3, i), ErrStat, ErrMsg)
+      vel(:, i) = vel(:, i) + deck_current_velocity(opts, pos(:, i), times(i), ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
   END SUBROUTINE CD_Deck_Fluid_Probe
@@ -29192,7 +29670,7 @@ CONTAINS
         END IF
       END IF
       IF (opts%has_current) THEN
-        fluid_velocity = fluid_velocity + deck_current_velocity(opts, body%r(3), es, em)
+        fluid_velocity = fluid_velocity + deck_current_velocity(opts, body%r, time, es, em)
         IF (es /= CD_HYDRO_OK) THEN
           ErrStat = CD_DECKDRV_BADINPUT
           ErrMsg = 'CableDyn_DeckDriver: Rigid6 current profile failed: '//TRIM(em)
@@ -29687,7 +30165,7 @@ CONTAINS
         fv = CD_ZERO; fa = CD_ZERO; wl = CD_ZERO
         DO j = 1, nn
           IF (opts%has_current) THEN
-            fv(:, j) = deck_current_velocity(opts, xyz(3, j), es, em_k)
+            fv(:, j) = deck_current_velocity(opts, xyz(:, j), time, es, em_k)
             IF (es /= CD_HYDRO_OK) THEN
               CALL hermite_fluid_fail('current profile', em_k); RETURN
             END IF
@@ -30115,11 +30593,11 @@ CONTAINS
     IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(output_work%rset, out_root, ErrStat, ErrMsg)
   END SUBROUTINE write_finite_dynamic_out
 
-  FUNCTION deck_current_velocity(opts, z, ErrStat, ErrMsg) RESULT(velocity)
-    !! Return the deck current velocity at elevation z, with two-point profile
-    !! interpolation when a profile current is active.
+  FUNCTION deck_current_velocity(opts, pos, time, ErrStat, ErrMsg) RESULT(velocity)
+    !! Return the deck current velocity at position pos and time: uniform, a depth profile at
+    !! pos(3), or the MoorDyn-C current grid (Currents 2 and 5) at pos and time.
     TYPE(DeckOptions), INTENT(IN) :: opts
-    REAL(wp), INTENT(IN) :: z
+    REAL(wp), INTENT(IN) :: pos(3), time
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp) :: velocity(3)
@@ -30128,24 +30606,27 @@ CONTAINS
     ErrMsg = ''
     IF (.NOT. opts%has_current) THEN
       velocity = CD_ZERO
+    ELSE IF (opts%has_current_grid) THEN
+      CALL CD_Current_Grid_Velocity(opts%current_grid, pos, time, velocity, ErrStat, ErrMsg)
     ELSE IF (.NOT. opts%has_current_profile) THEN
       velocity = opts%current_velocity
     ELSE
-      CALL CD_Current_Profile_Velocity(z, opts%current_profile_z, opts%current_profile_velocity, &
+      CALL CD_Current_Profile_Velocity(pos(3), opts%current_profile_z, opts%current_profile_velocity, &
                                        velocity, ErrStat, ErrMsg)
     END IF
   END FUNCTION deck_current_velocity
 
-  PURE REAL(wp) FUNCTION line_node_z(anchor, fairlead, l0, node_id) RESULT(z)
-    !! Straight-line elevation estimate for initial environment fields before
+  PURE FUNCTION line_node_pos(anchor, fairlead, l0, node_id) RESULT(x)
+    !! Straight-line position estimate for initial environment fields before
     !! the persistent line model exposes its static equilibrium state.
     REAL(wp), INTENT(IN) :: anchor(3), fairlead(3), l0(:)
     INTEGER, INTENT(IN) :: node_id
+    REAL(wp) :: x(3)
     REAL(wp) :: total, s
 
     total = SUM(l0)
     IF (total <= CD_ZERO) THEN
-      z = anchor(3)
+      x = anchor
       RETURN
     END IF
     IF (node_id <= 1) THEN
@@ -30155,8 +30636,8 @@ CONTAINS
     ELSE
       s = SUM(l0(1:node_id - 1))
     END IF
-    z = anchor(3) + (fairlead(3) - anchor(3))*s/total
-  END FUNCTION line_node_z
+    x = anchor + (fairlead - anchor)*s/total
+  END FUNCTION line_node_pos
 
   SUBROUTINE deck_wave_kinematics(opts, x, y, z, time, eta, velocity, acceleration, ErrStat, ErrMsg, pdyn)
     !! Dispatch the active deck wave model to the hydro kinematics primitive. During the
@@ -30678,7 +31159,7 @@ CONTAINS
     DO i = 1, SIZE(points)
       IF (opts%has_current) THEN
         work%fluid_velocity(:, i) = work%fluid_velocity(:, i) + &
-                                    deck_current_velocity(opts, system%points(i)%q(3), es, em)
+                                    deck_current_velocity(opts, system%points(i)%q(1:3), time, es, em)
         IF (es /= CD_HYDRO_OK) THEN
           ErrStat = CD_DECKDRV_BADINPUT
           ErrMsg = 'CableDyn_DeckDriver: point current profile failed: '//TRIM(em)
@@ -30785,7 +31266,8 @@ CONTAINS
         END IF
         work%fluid_velocity(:, j) = wave_velocity
         IF (opts%has_current) THEN
-          work%fluid_velocity(:, j) = work%fluid_velocity(:, j) + deck_current_velocity(opts, work%q(3*j), es, em)
+          work%fluid_velocity(:, j) = work%fluid_velocity(:, j) + &
+                                      deck_current_velocity(opts, work%q(3*j - 2:3*j), time, es, em)
           IF (es /= CD_HYDRO_OK) THEN
             ErrStat = CD_DECKDRV_BADINPUT
             ErrMsg = 'CableDyn_DeckDriver: system-line current profile failed: '//TRIM(em)
@@ -30881,7 +31363,8 @@ CONTAINS
         work%waterline(j) = eta
         work%fluid_velocity(:, j) = wave_velocity
         IF (opts%has_current) THEN
-          work%fluid_velocity(:, j) = work%fluid_velocity(:, j) + deck_current_velocity(opts, work%q(3*j), es, em)
+          work%fluid_velocity(:, j) = work%fluid_velocity(:, j) + &
+                                      deck_current_velocity(opts, work%q(3*j - 2:3*j), time, es, em)
           IF (es /= CD_HYDRO_OK) THEN
             ErrStat = CD_DECKDRV_BADINPUT
             ErrMsg = 'CableDyn_DeckDriver: model current profile failed: '//TRIM(em)

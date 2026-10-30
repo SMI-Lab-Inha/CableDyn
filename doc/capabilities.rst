@@ -161,6 +161,11 @@ Loads and environment
    * - Uniform/profile current
      - Supported
      - standalone deck source; coupled runs use explicitly selected host/file sources
+   * - MoorDyn-C currents in time and space (``Currents 2``, ``Currents 5``)
+     - Standalone only
+     - ``current_profile_dynamic.txt`` and ``current_profile_4d.txt``, interpolated as MoorDyn-C
+       v2.7.1 does at every node's position and time, the static start included; see
+       :ref:`moordyn-c-wavekin`
    * - Airy and JONSWAP waves
      - Supported
      - standalone deck source or OpenFAST SeaState, never an accidental double source

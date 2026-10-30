@@ -142,6 +142,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Output channels `StfMom<L>N<J>`, the share of the section moment a bend stiffener carries,
   and `FairDefl<L>`/`AnchDefl<L>`, the deflection of the end force from the direction a held
   END CONNECTIONS row declares (with the end tension, a stiffener's load case).
+- MoorDyn-C time-varying and gridded currents on the standalone routes: `Currents 2` (the depth
+  profile in time `current_profile_dynamic.txt`) and `Currents 5` (the grid in x, y, z and time
+  `current_profile_4d.txt`), read and interpolated as MoorDyn-C v2.7.1 does (resampled at the
+  smallest time interval, repeating past the last sample, held beyond the grid, no fluid
+  acceleration) at every node's position and time, the static start included. At 739 points and
+  times the current is identical to MoorDyn-C v2.7.1's; a constant table equals `Currents 1` and a
+  grid uniform in x and y equals `Currents 2`; on a 70 m rope the tension change of a time-varying
+  and of a sheared current matches MoorDyn-C's within 0.9 %, and the static start in a sheared grid
+  holds the tensions to 1.4e-7 of the change the current makes.
 
 ### Changed
 

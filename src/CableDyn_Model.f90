@@ -47,7 +47,7 @@ MODULE CableDyn_Model
   USE CableDyn_Syrope, ONLY: CD_SyropeType, CD_Syrope_Init, CD_Syrope_End, CD_Syrope_Is_Ready, &
                              CD_Syrope_Working_Curve, CD_Syrope_Rate_And_Tension, CD_Syrope_Branch_Divider, &
                              CD_Syrope_Element_Load, CD_Syrope_Check_Range, CD_SYROPE_OK, CD_SYROPE_NWC
-  USE CableDyn_Hydro, ONLY: CD_Cable_Morison_Drag_Load, CD_Cable_Morison_Drag_Force, &
+  USE CableDyn_Hydro, ONLY: CD_CurrentGridType, CD_Cable_Morison_Drag_Load, CD_Cable_Morison_Drag_Force, &
                             CD_Morison_Drag_Element_Load, CD_Morison_Drag_Element_Force, &
                             CD_Cable_Froude_Krylov_Load, CD_Cable_Froude_Krylov_Force, &
                             CD_Froude_Krylov_Element_Load, CD_Froude_Krylov_Element_Force, &
@@ -1468,7 +1468,7 @@ CONTAINS
                                 ve_ea_d, ve_ba, ve_ba_d, ve_alpha_mbl, ve_vbeta, &
                                 syrope_is, syrope_type, syrope_slow0, syrope_tmax0, &
                                 current_profile_z, current_profile_velocity, &
-                                static_friction, lay_azimuth, as_laid_tension)
+                                static_friction, lay_azimuth, as_laid_tension, current_grid)
     !! Initialise a persistent EI=0 dynamic model from an OrcaFlex-style line object:
     !! line types + sections + end points. This routine builds the mesh, assembles
     !! submerged-weight loads, obtains a static initial condition by load continuation,
@@ -1541,6 +1541,9 @@ CONTAINS
     ! then samples the current at each node's own elevation, as the dynamic march does, so the
     ! march starts from rest. Without it the static drag uses fluid_velocity as given.
     REAL(wp), INTENT(IN), OPTIONAL :: current_profile_z(:), current_profile_velocity(:, :)
+    ! A current grid in space and time (MoorDyn-C Currents 2 and 5): the static initial condition
+    ! then samples it at each node's own position at t = 0, in place of the depth profile.
+    TYPE(CD_CurrentGridType), INTENT(IN), OPTIONAL :: current_grid
     ! Static seabed friction (with seabed_mu > 0 on a seabed): the policy
     ! (CD_STATIC_FRICTION_AS_LAID or CD_STATIC_FRICTION_NONE, the default), the lay azimuth
     ! [rad, from global +x toward +y; default: the horizontal direction of the chord from
@@ -1743,6 +1746,9 @@ CONTAINS
       IF (PRESENT(current_profile_z) .AND. PRESENT(current_profile_velocity)) THEN
         cur%profile_z = current_profile_z
         cur%profile_velocity = current_profile_velocity
+      END IF
+      IF (PRESENT(current_grid)) THEN
+        ALLOCATE (cur%grid, SOURCE=current_grid)
       END IF
       IF (PRESENT(drag_waterline_z)) cur%node_waterline = drag_waterline_z
       ! Without the as-laid policy a frictional seabed holds the line against the current

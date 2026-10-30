@@ -757,10 +757,13 @@ Ambient fluid and prescribed motion
      - standalone
      - ``6.2832 WvHiCOff``
    * - ``Currents``
-     - ``0`` or ``1``
+     - ``0``, ``1``, ``2`` or ``5``
      - ``0``
-     - ``1`` reads the MoorDyn-C steady profile ``current_profile.txt`` in the deck folder; the
-       other MoorDyn-C modes fail closed by name. ``current`` and a WaterKin table are the other
+     - the MoorDyn-C current file in the deck folder: ``1`` the steady profile
+       ``current_profile.txt``, ``2`` the depth profile in time ``current_profile_dynamic.txt``,
+       ``5`` the grid in x, y, z and time ``current_profile_4d.txt``, each interpolated as
+       MoorDyn-C v2.7.1 does (:ref:`moordyn-c-wavekin`); ``3`` and ``4`` (no current source in
+       MoorDyn-C v2.7.1) fail closed by name. ``current`` and a WaterKin table are the other
        sources; two sources in one deck are rejected
      - standalone
      - ``1 Currents``
