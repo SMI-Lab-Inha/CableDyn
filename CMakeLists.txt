@@ -1419,6 +1419,12 @@ if(NOT WIN32)
 endif()
 # Growth bounds [MiB]: observed 0.0 MiB over 20000 C-API steps and 0.11 MiB over 1000
 # aggregate steps; 2 MiB leaves room for allocator page granularity.
+if(CABLEDYN_STATIC_WINDOWS_RELEASE)
+  # The static IFX core archive holds /Qipo objects, which only an IFX link reads (link.exe,
+  # the C linker, reports every CableDyn_* symbol unresolved): the C tests that link the core
+  # directly link through IFX there.
+  set_target_properties(test_c_api_raw_small_dt test_memory_growth PROPERTIES LINKER_LANGUAGE Fortran)
+endif()
 add_test(NAME memory_growth
          COMMAND test_memory_growth 2 ${CMAKE_CURRENT_SOURCE_DIR}/examples/spread_3line_chain.dat 20000)
 set_tests_properties(memory_growth PROPERTIES LABELS "c;capi;dynamic;memory" SKIP_RETURN_CODE 77)
