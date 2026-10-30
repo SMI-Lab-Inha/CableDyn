@@ -1736,7 +1736,13 @@ the current itself; the element fluid velocity is the mean of the current at its
 as in the dynamics). The drag follows the line and is not a potential force: it is carried
 along the stiffness continuation frozen at the last accepted configuration, then converged
 at full stiffness by a fixed-point iteration on the frozen drag and a final Newton solve with
-the configuration-dependent drag and its Jacobian. If the frozen-drag continuation fails, the
+the configuration-dependent drag and its Jacobian. A depth profile is sampled at the node
+elevations and a current grid at the node positions, so the drag moves with the nodes through the
+current too; the Jacobian carries it as the drag's derivative with respect to the fluid velocity,
+:math:`-(\partial\mathbf{f}/\partial\dot{\mathbf{r}}_a + \partial\mathbf{f}/\partial
+\dot{\mathbf{r}}_b)`, times the element velocity's gradient
+:math:`\tfrac12\,\mathbf{R}^{\mathsf T}(\partial\mathbf{U}/\partial\mathbf{x})\,\mathbf{R}` at each
+node (:math:`\mathbf{R}` the turn of the solve frame). If the frozen-drag continuation fails, the
 still-water equilibrium is found first and the drag is brought in by load steps. A load step
 that stalls hands over to a pseudo-arclength continuation in the drag fraction
 :math:`\lambda`: each corrector solves the bordered system

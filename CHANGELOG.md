@@ -361,6 +361,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   a pinned arm rod numbered 1, its tether on an explicit `Rod1B` POINT listed first, now writes
   the outputs of the same deck with the arm as rod 3 bit for bit; before, the arm turned 172 deg
   in pitch, the body 1.06 deg, and a leg tension moved 3.0 kN in 1 s.
+- The Newton tangent of the finite-EI static solve in a depth-profile current or a current grid
+  carries the current's gradient: the drag samples the current at the node positions, so it moves
+  with them. The drag part of the tangent now matches central differences of the residual to
+  8e-10 (before off by 5e-2 to 0.2 in sheared profiles). Newton takes up to a third fewer
+  iterations on a light cable in a strong shear (16 instead of 23); the equilibria are unchanged
+  within the solver tolerance.
 - The static start of an `EI = 0` line held above the still-water level kept the buoyancy of its
   dry part, while the march (with `WtrDpth` or a bathymetry) gives that part its dry weight. The
   start was not the march's equilibrium: a chain hung from 5 m above the surface onto the

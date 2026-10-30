@@ -49,7 +49,8 @@ MODULE CableDyn_HermiteCableStatic
                                  CD_Bathymetry_Rotate_Curvature
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
   USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK
-  USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Velocity, CD_HYDRO_OK
+  USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Velocity, &
+                            CD_Current_Profile_Gradient, CD_Current_Grid_Gradient, CD_HYDRO_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
                                      CD_HermiteTorsion_Coupling_Twist, &
                                      CD_HermiteTorsion_Accept, CD_HermiteTorsion_Compliance, &
@@ -2954,14 +2955,16 @@ CONTAINS
     !! Steady-current drag on one element at rest: the load fd(12) (f_ext) and, when
     !! want_jac, its position Jacobian, both scaled by current%load_factor. The element
     !! fluid velocity is the mean of the current at its two nodes, rotated into the solve
-    !! frame.
+    !! frame. A depth profile is sampled at the nodes' elevations and a current grid at their
+    !! positions, so the current moves with them: the Jacobian carries that dependence too
+    !! (below).
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN) :: current
     REAL(wp), INTENT(IN) :: qe(12), l0e, d, cn, ct
     LOGICAL, INTENT(IN) :: want_jac
     REAL(wp), INTENT(OUT) :: fd(12), djq(12, 12)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: ve(12), djv(12, 12), ua(3), ub(3), ug(3), ul(3)
+    REAL(wp) :: ve(12), djv(12, 12), ua(3), ub(3), ug(3), ul(3), ga(3, 3), gb(3, 3), dfdu(12, 3), rot(3, 3)
     INTEGER :: es
     CHARACTER(200) :: em
     ErrStat = CD_HCSTAT_OK
@@ -3001,6 +3004,32 @@ CONTAINS
     END IF
     IF (es /= CD_HCDYN_OK) THEN
       ErrStat = CD_HCSTAT_NOCONVERGE; ErrMsg = TRIM(em); RETURN
+    END IF
+    IF (want_jac .AND. (ALLOCATED(current%grid) .OR. ALLOCATED(current%profile_z))) THEN
+      ! The current at the nodes moves with them. The element fluid velocity is
+      ! u = R^T (U(x_a) + U(x_b))/2, with R the turn of frame_cs (global = R solve frame, z
+      ! alone) and x = R (x_l + origin) the global node position (a profile reads only z), so
+      ! du/dx_l,a = R^T G_a R / 2 with G = dU/dx the field's gradient at the node. The drag sees
+      ! u - v(s), and a uniform velocity c of the element is the nodal velocity [c, 0, c, 0]
+      ! (its tangent rates zero: the Hermite shape functions of the two positions sum to one),
+      ! so d fd/du = -(djv(:, 1:3) + djv(:, 7:9)) and d fd/dx_l,a = d fd/du du/dx_l,a. Without
+      ! it a sheared current entered the Newton tangent as if it were uniform.
+      IF (ALLOCATED(current%grid)) THEN
+        CALL CD_Current_Grid_Gradient(current%grid, global_position(qe(1:3)), 0.0_wp, ga, es, em)
+        IF (es == CD_HYDRO_OK) CALL CD_Current_Grid_Gradient(current%grid, global_position(qe(7:9)), 0.0_wp, gb, &
+                                                             es, em)
+        IF (es /= CD_HYDRO_OK) THEN
+          ErrStat = CD_HCSTAT_NOCONVERGE; ErrMsg = TRIM(em); RETURN
+        END IF
+      ELSE
+        CALL CD_Current_Profile_Gradient(qe(3), current%profile_z, current%profile_velocity, ga)
+        CALL CD_Current_Profile_Gradient(qe(9), current%profile_z, current%profile_velocity, gb)
+      END IF
+      rot = RESHAPE([current%frame_cs(1), current%frame_cs(2), CD_ZERO, -current%frame_cs(2), current%frame_cs(1), &
+                     CD_ZERO, CD_ZERO, CD_ZERO, CD_ONE], [3, 3])
+      dfdu = -(djv(:, 1:3) + djv(:, 7:9))
+      djq(:, 1:3) = djq(:, 1:3) + 0.5_wp*MATMUL(dfdu, MATMUL(TRANSPOSE(rot), MATMUL(ga, rot)))
+      djq(:, 7:9) = djq(:, 7:9) + 0.5_wp*MATMUL(dfdu, MATMUL(TRANSPOSE(rot), MATMUL(gb, rot)))
     END IF
     fd = current%load_factor*fd
     IF (want_jac) djq = current%load_factor*djq

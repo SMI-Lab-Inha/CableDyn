@@ -663,6 +663,13 @@ target_link_libraries(test_hermite_cable_static PRIVATE cabledyn_core)
 add_test(NAME hermite_cable_static COMMAND test_hermite_cable_static)
 set_tests_properties(hermite_cable_static PROPERTIES LABELS "fortran;unit;static")
 
+# Finite-EI static tangent of a depth-profile current: the profile's vertical gradient in the drag
+# tangent, against central differences of the residual
+add_executable(test_hermite_static_current_gradient tests/test_hermite_static_current_gradient.f90)
+target_link_libraries(test_hermite_static_current_gradient PRIVATE cabledyn_core)
+add_test(NAME hermite_static_current_gradient COMMAND test_hermite_static_current_gradient)
+set_tests_properties(hermite_static_current_gradient PROPERTIES LABELS "fortran;unit;static;hermite")
+
 # Finite-EI mesh-resolution diagnosis: h*kappa peak / curvature-jump / contact-island metrics
 # and the power-of-two refinement recommendation -- the preflight trigger for the adaptive mesh
 # policy. Synthetic controlled profiles + fail-closed validation.
