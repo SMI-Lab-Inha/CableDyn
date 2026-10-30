@@ -39840,7 +39840,9 @@ CONTAINS
 
   INTEGER FUNCTION real_token_defect(tok) RESULT(k)
     !! real_value_defect of a token that reads whole as a real number; REAL_OK for a token
-    !! that is not a number at all (a name), which its own reader then judges.
+    !! that is not a number at all (a name), which its own reader then judges. A token spelled
+    !! as a number that the READ refuses is a magnitude beyond the range of the kind: gfortran
+    !! reads one beyond HUGE as Inf, the Intel run-time stops the READ with a conversion error.
     CHARACTER(*), INTENT(IN) :: tok
     REAL(wp) :: x
     INTEGER :: ios
@@ -39848,7 +39850,10 @@ CONTAINS
     IF (LEN_TRIM(tok) == 0) RETURN
     IF (.NOT. numeric_token_shape(tok)) RETURN
     READ (tok, *, IOSTAT=ios) x
-    IF (ios /= 0) RETURN
+    IF (ios /= 0) THEN
+      k = REAL_NONFINITE
+      RETURN
+    END IF
     k = real_value_defect(x)
   END FUNCTION real_token_defect
 
