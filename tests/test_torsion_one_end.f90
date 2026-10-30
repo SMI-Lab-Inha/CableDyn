@@ -38,7 +38,8 @@ PROGRAM test_torsion_one_end
   !!      roll does not reach a free end), with no axial moment on the platform; the D line
   !!      restrained at End A rolled by the platform gives D's continuum response;
   !!   N  a line restrained at one end whose LINE TYPES row gives no GJ (10 columns) keeps the
-  !!      meaning of the 6-column rows: its twist channels are refused with the reason.
+  !!      meaning of the 6-column rows: its twist channels are refused with the reason; a solved
+  !!      line's restrained Pretwist beyond 1000 turns is refused by name.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -835,6 +836,14 @@ CONTAINS
                     [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], [CHARACTER(16) :: 'FairTen1'], ten_cols=.TRUE.)
     CALL run_deck('t1e_n.dat', 't1e_n', ok, em)
     CALL require(ok, 'N: without the twist channel the deck runs: '//TRIM(em))
+    ! a solved line's imposed twist, its restrained end's Pretwist, is held within 1000 turns
+    CALL write_deck('t1e_n2.dat', type_row('5.0e4', 1.0_wp), &
+                    [CHARACTER(48) :: '1 A Rigid 1 0 0 Free 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 4.0e5'], L0_D, &
+                    [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], [CHARACTER(16) :: 'Twist1'])
+    CALL run_deck('t1e_n2.dat', 't1e_n2', ok, em)
+    CALL require(.NOT. ok .AND. INDEX(em, 'the Pretwist of its restrained End B = 4.00000E+05 deg exceeds 1000 '// &
+                                      'turns') > 0, 'N: a restrained Pretwist beyond 1000 turns is named (got: '// &
+                 TRIM(em)//')')
   END SUBROUTINE check_not_solved
 
   ELEMENTAL INTEGER(8) FUNCTION bits(x)

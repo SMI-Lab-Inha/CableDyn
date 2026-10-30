@@ -552,8 +552,8 @@ an infinite end compliance, so the condensed compliance :math:`C` is infinite an
 torque :math:`(\Phi - \Theta_{\text{eff}})/C` zero. The statics are then those of the line
 without torsion (with the axial stiffness :math:`EA - K^2/GJ`), and every element twists by
 :math:`\hat\tau_e = 0`, i.e. by :math:`-(K_e/GJ_e)(l_e - L_{0,e})` of material twist; their sum
-is the free end's turn against the restrained end's frame carried along the line
-(``Twist<L>``). In the dynamics the free end's node has no spring and no held angle: its angle
+is ``Twist<L>``, the turn of End B relative to End A against the restrained end's frame
+carried along the line (a free End A turns by its negative). In the dynamics the free end's node has no spring and no held angle: its angle
 is free, its lumped inertia :math:`I_{rn} L_0/2` and its element's torque balance it, and its
 end frame is a gauge that nothing reads (the free end's ``Nx`` and ``Pretwist`` are not used).
 The torque vanishes at the free end, so torsional waves reflect there, and the line's modes are

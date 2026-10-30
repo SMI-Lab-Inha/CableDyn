@@ -629,10 +629,12 @@ Warnings and notes that do not stop a run
        row), two moving ends, ``ATTACHMENTS``, ``CONTROL``, ``nModes``, ``False
        alpha_force_blend`` in a dynamic run, or a restrained End A on a rod end or a body other
        than Rigid6. The line is then solved as without the torsion columns.
-   * - ``Note: line <L>: torsion restrained at End <B|A> only: no static torque; the free End
-       <A|B> turns with the twist of the line, <x> deg (Twist<L>)``
-     - a line restrained in torsion at one end: it carries no static torque, and its stretch
-       turns the free end under torque–tension coupling (``GJ|K``), :math:`-\sum (K/GJ)(l - L)`.
+   * - ``Note: line <L>: torsion restrained at End <B|A> only: no static torque; Twist<L> = <x>
+       deg (End B relative to End A, right-handed about the End A -> End B tangent)``
+     - a line restrained in torsion at one end: it carries no static torque, and under
+       torque–tension coupling (``GJ|K``) its stretch twists it by
+       :math:`-\sum (K/GJ)(l - L)`, so a free End B turns by :math:`+x` and a free End A by
+       :math:`-x` about the End A → End B tangent.
    * - ``Note: line <L>: torsion solved, imposed twist ... deg, torque ... N m (<n> twist
        stage(s), <m> buckling descent(s))``
      - the static twist stage of a torsional line. A non-zero descent count means the straight or

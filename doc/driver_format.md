@@ -853,15 +853,23 @@ Behaviour:
   whose other end is free to twist (`TorsStiffness` `Free` there, or no row), under the rules
   below. A free end carries no torque. In statics the line then has none, and its static state
   is that of the line without the columns; under torque–tension coupling (`GJ|K`) the stretch
-  twists it, so the free end turns by `Twist<L> = −Σ (K/GJ)(l − L)` over the elements (`l`
-  stretched, `L` unstretched). In the dynamics the polar inertia `Irn` carries torsional waves
-  that reflect at the free end, and the restrained end (and the body or vessel holding it)
-  takes their torque. The free end's `Nx` and `Pretwist` are not used: its section is the
-  restrained end's, rolled by that end's `Pretwist`, carried along the line and turned by the
-  twist of the line. A line restrained at one end that misses a rule (its `LINE TYPES` rows
-  give no `GJ`, two moving ends, `ATTACHMENTS`, `CONTROL`, `nModes`, a dynamic or coupled run
-  with `False alpha_force_blend`, a restrained End A on a rod end or a non-Rigid6 body) is
-  solved as without the columns, and the standalone driver prints a note with the reason.
+  twists it by `Twist<L> = −Σ (K/GJ)(l − L)` over the elements (`l` stretched, `L`
+  unstretched). `Twist<L>` keeps its sign, the turn of End B relative to End A, right-handed
+  about the End A → End B tangent: a free End B turns by `+Twist<L>` against End A's frame
+  carried along the line, a free End A by `−Twist<L>` against End B's. In the dynamics the
+  polar inertia `Irn` carries torsional waves that reflect at the free end, and the restrained
+  end (and the body or vessel holding it) takes their torque. The free end's `Nx` and
+  `Pretwist` are not used. The section axes of `CurvX`/`CurvY` start, with End A restrained,
+  from End A's `Nx` (not rolled by its `Pretwist`, as on a line restrained at both ends) and,
+  with End B restrained, from End B's `Nx` rolled by End B's `Pretwist`; either way they are
+  carried along the line and turned by its twist. A line restrained at one end that misses a
+  rule (its `LINE TYPES` rows give no `GJ`, two moving ends, `ATTACHMENTS`, `CONTROL`,
+  `nModes`, a dynamic or coupled run with `False alpha_force_blend`, a restrained End A on a
+  rod end or a non-Rigid6 body) is solved as without the columns, and the standalone driver
+  prints a note with the reason. A solved one's imposed twist, its restrained end's `Pretwist`,
+  must lie within 1000 turns, as `Pretwist(B) − Pretwist(A)` must on a line restrained at both
+  ends. A line restrained at End A on a Rigid6 body joins the static balance of the body's
+  clamped and elastic ends, also at a bending-`Pinned` End A (the body takes its torque).
   `Free` columns, or no columns, reproduce the 6-column results exactly.
 - The imposed twist is `Phi = Pretwist(B) − Pretwist(A)`, measured against the line's own
   geometric twist `Theta`, the parallel-transport rotation of the End A normal carried along the

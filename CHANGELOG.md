@@ -130,18 +130,25 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Torsion of a finite-EI line restrained at one end only, the other free to twist (`TorsStiffness`
   `Free` there, or no row): solved where a line restrained at both ends is and its LINE TYPES
   rows give `GJ`, instead of being ignored. The free end carries no torque and turns with the
-  twist of the line: statically by `−Σ (K/GJ)(l − L)` under `GJ|K` (`Twist<L>`, to 1e-8 on a
-  stretched straight cable, the moving end free or the anchored one), and in the dynamics with
-  torsional waves that reflect at it. A straight line held rigidly at the other end rings at the
+  twist of the line: statically `Twist<L> = −Σ (K/GJ)(l − L)` under `GJ|K` (End B relative to
+  End A; to 1e-8 on a stretched straight cable, the moving end free or the anchored one), and in
+  the dynamics with torsional waves that reflect at it. A straight line held rigidly at the other end rings at the
   clamped–free frequencies `(2n − 1) π/(2L) √(GJ/Irn)` (3e-4 and 3e-3 for n = 1, 2), and a roll
   of the restrained end gives the continuum's free-end turn `A/cos kL` and reaction
   `GJ A k tan kL` to 0.5 % below and above the first mode, in the standalone driver and on the
-  coupled aggregate. The `Torq`/`Twist` channels and range columns work on such a line. Its
-  static state is unchanged bit for bit (its `CurvX`/`CurvY` axes now follow its twist); its
-  dynamics now carry the twist (on a swaying lazy-wave cable with `GJ|K` the tensions move by
-  up to 1.5e-4, 7e-8 in a planar heave). A line restrained at
-  one end that misses a rule (no `GJ`, two moving ends, `ATTACHMENTS`, `CONTROL`, `nModes`, the
-  configuration blend) is solved without torsion as before, with a note naming the rule.
+  coupled aggregate. The `Torq`/`Twist` channels and range columns work on such a line, and
+  its `CurvX`/`CurvY` axes follow its twist. Results change on such decks: the dynamics carry
+  the twist (on a swaying lazy-wave cable with `GJ|K` the tensions move by up to 1.5e-4, 7e-8
+  in a planar heave), and a line restrained at End A on a Rigid6 body joins the static body
+  balance of the clamped ends: bending-Pinned there, its body's static moment now balances
+  (Body1My −103.9 N m to 1e-6 on a buoy, FairTen1 126885 to 126857 N, 2.2e-4, Body1Ry
+  0.3004 to 0.2984 deg; the march then differs by up to 2.6 % at dtM 0.05 s, 0.5 % at
+  0.0125 s); clamped there, by about 1e-7. OpenFAST checkpoints of such decks written before
+  this change do not reload: the cable's state mirror now carries the nodal twist, and the
+  rebuild stops at a mirror-extent check (`... mirror extends past the state vector`). A line
+  restrained at one end that misses a rule (no `GJ`, two moving ends, `ATTACHMENTS`,
+  `CONTROL`, `nModes`, the configuration blend) is solved without torsion as before, with a
+  note naming the rule; a solved one's restrained `Pretwist` is held within 1000 turns.
 - Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
   `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.

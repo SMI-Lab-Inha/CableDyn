@@ -174,8 +174,10 @@ Torsion signs
 
 These apply to a finite-EI line solved in torsion: restrained at both ends, or at one end with
 the other free to twist (:doc:`driver_format`). On a line free at one end the free end's
-``Pretwist`` is not used (0), :math:`\Phi` is the restrained end's alone, and ``Twist<L>`` is
-the free end's turn relative to the restrained end.
+``Pretwist`` is not used (0), :math:`\Phi` is the restrained end's alone, and ``Twist<L>``
+keeps its sign, the turn of End B relative to End A about the End A → End B tangent: a free
+End B turns by ``+Twist<L>`` against End A's frame carried along the line, a free End A by
+``−Twist<L>`` against End B's.
 
 - The end frame of each end is its direction ``Ez`` (End A → End B) and its reference normal
   ``Nx``, in the frame of ``Ez``. ``Pretwist`` rolls the end frame about ``Ez`` by a right-handed

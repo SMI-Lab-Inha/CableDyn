@@ -1364,6 +1364,102 @@ def test_torsion_channels_get_the_native_verdict(channel, tmp_path):
     assert python_accepts == (_native_exit(text, tmp_path) != 1)
 
 
+def _stock_body(body_row: str, row_a: str, row_b: str) -> str:
+    """A line written anchor first (NodeA the Fixed anchor, NodeB on body 1), which the reader
+    turns around: its deck End B becomes End A."""
+    return f"""{_BAR} CableDyn Input File {_BAR}
+in-memory fixture: an anchor-first line restrained in torsion at one end
+{_BAR} LINE TYPES {_BAR}
+Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat
+cab 0.2 32.2 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0
+{_BAR} BODIES {_BAR}
+ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz
+{body_row}
+{_BAR} POINTS {_BAR}
+ID Type X Y Z Mass Vol CdA Ca
+1 Body1 0.0 0.0 0.0 0 0 0 0
+2 Fixed 100.0 0.0 -50.0 0 0 0 0
+{_BAR} LINES {_BAR}
+ID NodeA NodeB Outputs
+1 2 1 -
+{_BAR} SECTIONS {_BAR}
+LineID LineType Length NumSegs
+1 cab 100.0 40
+{_BAR} END CONNECTIONS {_BAR}
+LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist
+{row_a}
+{row_b}
+{_BAR} OPTIONS {_BAR}
+9.80665 g
+1025.0 rhoW
+50.0 WtrDpth
+0.1 dtM
+1.0 TMax
+{_BAR} OUTPUTS {_BAR}
+FairTen1
+Twist1
+{_BAR} need this line {_BAR}
+"""
+
+
+# restrained at the deck's End B, the body, which the anchor-first swap makes End A
+_STOCK_POINT3_AT_BODY = _stock_body(
+    "1 Point3 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0",
+    "1 A Rigid -1 0 0 Free 0 0 1 0",
+    "1 B Rigid -1 0 0 Rigid 0 0 1 0",
+)
+_STOCK_RIGID6_AT_BODY = _stock_body(
+    "1 Rigid6 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3",
+    "1 A Rigid -1 0 0 Free 0 0 1 0",
+    "1 B Rigid -1 0 0 Rigid 0 0 1 0",
+)
+
+
+def test_one_end_torsion_follows_the_anchor_first_swap():
+    # a Point3 body does not carry torsion: the line restrained there is not solved, and its
+    # twist channel is refused; on a Rigid6 body it is solved
+    _rejects(_STOCK_POINT3_AT_BODY, "its restrained End A is on a body that is not Rigid6")
+    DeckFile.from_text(_STOCK_RIGID6_AT_BODY)
+
+
+def test_one_end_pretwist_stays_within_1000_turns():
+    one_end = _edit(
+        _TORSION,
+        (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
+        ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Rigid 0 0 1 1e8"),
+    )
+    _rejects(one_end, "the Pretwist of its restrained End B = 1.00000e\\+08 deg exceeds 1000 turns")
+    # the free end's pretwist rolls nothing and is not checked
+    DeckFile.from_text(_edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 1e8\n")))
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the native torsion parity",
+)
+@pytest.mark.parametrize(
+    "text",
+    [
+        _STOCK_POINT3_AT_BODY,
+        _STOCK_RIGID6_AT_BODY,
+        _edit(
+            _TORSION,
+            (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
+            ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Rigid 0 0 1 1e8"),
+        ),
+    ],
+    ids=["stock-point3-body", "stock-rigid6-body", "one-end-huge-pretwist"],
+)
+def test_one_end_torsion_gets_the_native_verdict(text, tmp_path):
+    try:
+        DeckFile.from_text(text)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    # exit code 1 is an input refusal; 0 a run and 2 a solve failure after validation
+    assert python_accepts == (_native_exit(text, tmp_path) != 1)
+
+
 @pytest.mark.parametrize(
     ("channel", "message"),
     [

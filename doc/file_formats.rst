@@ -174,10 +174,10 @@ Each data row has eleven whitespace-separated numbers:
 Every row must start with a number, so any header or column-label line must be a comment.
 Tokens after the eleventh are ignored, except on a deck with a torsional line (below).
 
-**Roll column (torsion).** On a deck where some finite-EI line is restrained in torsion at both
-ends (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`), a numeric twelfth token is
-read as the roll of the frame of that line's moving end (End A, or End B in a deck that lists the
-anchor as End A), in degrees, right-handed about the line tangent pointing into the line from that
+**Roll column (torsion).** On a deck where some finite-EI line is solved in torsion, restrained
+at both ends or at one (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`), a numeric
+twelfth token is read as the roll of the frame of a line's moving end (End A, or End B in a deck
+that lists the anchor as End A), in degrees, right-handed about the line tangent pointing into the line from that
 end. It imposes a twist history without turning the point: the line's imposed twist is
 
 .. math::

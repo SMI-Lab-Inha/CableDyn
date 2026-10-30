@@ -3698,10 +3698,11 @@ CONTAINS
                                                                             tors%quadrature_order) - l0_am(e))
         END DO
       END IF
-      WRITE (tnote, '(A,I0,A,A,A,A,A,ES12.5,A)') 'line ', ln%id, ': torsion restrained at End ', &
-        MERGE('B', 'A', ln%tors_free_end == 1), ' only: no static torque; the free End ', &
-        MERGE('A', 'B', ln%tors_free_end == 1), ' turns with the twist of the line, ', twist*45.0_wp/QUARTER_PI, &
-        ' deg (Twist<L>)'
+      ! Twist<L> is the turn of End B relative to End A, right-handed about the End A -> End B
+      ! tangent: a free End B turns by +Twist<L>, a free End A by -Twist<L>
+      WRITE (tnote, '(A,I0,A,A,A,ES12.5,A)') 'line ', ln%id, ': torsion restrained at End ', &
+        MERGE('B', 'A', ln%tors_free_end == 1), ' only: no static torque; Twist<L> = ', twist*45.0_wp/QUARTER_PI, &
+        ' deg (End B relative to End A, right-handed about the End A -> End B tangent)'
       CALL report_note(tnote)
     END SUBROUTINE one_end_state
 
@@ -18353,7 +18354,24 @@ CONTAINS
         RETURN
       END IF
       ! one restrained end only: solved in torsion where resolve_one_end_torsion found the rules
-      ! below met, otherwise noted (no torsion); the rules apply to a line restrained at both ends
+      ! below met, otherwise noted (no torsion); the rules apply to a line restrained at both ends.
+      ! A solved one's imposed twist is its restrained end's Pretwist (the free end's is 0), within
+      ! the same 1000 turns.
+      IF (ln%tors_free_end > 0) THEN
+        js = 3 - ln%tors_free_end
+        IF (ABS(ln%tors_pretwist(js)) > CD_HTORS_MAX_TWIST) THEN
+          BLOCK
+            CHARACTER(32) :: tw
+            INTEGER :: tw_ios
+            tw = ''
+            WRITE (tw, '(ES12.5)', IOSTAT=tw_ios) ln%tors_pretwist(js)/DEG2RAD_TORS
+            CALL fail(es_t, em_t, 'line '//TRIM(lid)//': the Pretwist of its restrained End '// &
+                      MERGE('A', 'B', js == 1)//' = '//TRIM(ADJUSTL(tw))//' deg exceeds 1000 turns '// &
+                      '(360000 deg), the largest twist')
+          END BLOCK
+        END IF
+        RETURN
+      END IF
       IF (.NOT. ALL(ln%tors_mode /= TORS_FREE)) RETURN
       IF (ABS(ln%tors_pretwist(2) - ln%tors_pretwist(1)) > CD_HTORS_MAX_TWIST) THEN
         BLOCK

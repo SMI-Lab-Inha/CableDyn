@@ -3245,7 +3245,9 @@ class DeckFile:
         assigned_end_connections: set[tuple[str, str]] = set()
         # (line, end) held by a Rigid or rotational-spring row, in native End A/B order
         held_ends: set[tuple[str, str]] = set()
-        # line id -> {end: torsionally restrained} from the optional torsion columns
+        # line id -> {end: torsionally restrained} from the optional torsion columns, and the
+        # pretwists, in native End A/B order (after the anchor-first swap, which reverses Ez and
+        # so negates a pretwist)
         torsion_ends: dict[str, dict[str, bool]] = {}
         torsion_pretwist: dict[str, dict[str, float]] = {}
         for row in self.end_connections:
@@ -3334,11 +3336,15 @@ class DeckFile:
                 pretwist = 0.0
                 if len(row.tokens) == 11:
                     pretwist = numeric(row.tokens[10], row, "END CONNECTIONS pretwist")
-                torsion_pretwist.setdefault(line_id, {})[end] = pretwist
+                native_end = end
+                if line_id in swapped_lines:
+                    native_end = {"a": "b", "b": "a"}[end]
+                    pretwist = -pretwist
+                torsion_pretwist.setdefault(line_id, {})[native_end] = pretwist
                 if restrained:
                     # a Free end has no torsion frame: its normal is not checked (native)
                     self._check_torsion_normal(where, row, normal, direction, norm)
-                torsion_ends.setdefault(line_id, {})[end] = restrained
+                torsion_ends.setdefault(line_id, {})[native_end] = restrained
             if non_pinned:
                 swapped = line_id in swapped_lines
                 held_ends.add((line_id, {"a": "b", "b": "a"}[end] if swapped else end))
@@ -4375,8 +4381,17 @@ class DeckFile:
                         note = "its restrained End A is on a body that is not Rigid6"
                 if note:
                     torsion_notes[line_id] = note
-                else:
-                    torsion_lines.add(line_id)
+                    continue
+                # native check_torsion_line: the restrained end's pretwist is the imposed twist
+                restrained_end = "a" if ends.get("a", False) else "b"
+                twist = torsion_pretwist[line_id].get(restrained_end, 0.0)
+                if abs(twist) > _MAX_STATIC_TWIST_DEG:
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id}: the Pretwist of its restrained End "
+                        f"{restrained_end.upper()} = {twist:.5e} deg exceeds 1000 turns "
+                        "(360000 deg), the largest twist"
+                    )
+                torsion_lines.add(line_id)
                 continue
             twist = torsion_pretwist[line_id]["b"] - torsion_pretwist[line_id]["a"]
             if abs(twist) > _MAX_STATIC_TWIST_DEG:

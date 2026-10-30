@@ -770,9 +770,10 @@ Line-node channels
        torsional end springs: the imposed twist :math:`\Phi` less the geometric twist
        :math:`\Theta` the line takes up by writhing out of its plane (in the dynamics the
        element twists plus the end springs' windup). On a line free in torsion at one end, the
-       twist of its elements (no windup at the free end): the turn of End B relative to End A,
-       so the free end's turn against the restrained end's frame carried along the line;
-       statically :math:`-\sum (K/GJ)(l_e - L_e)` under torque–tension coupling
+       twist of its elements (no windup at the free end), still the turn of End B relative to
+       End A: a free End B turns by ``+Twist<L>`` and a free End A by ``−Twist<L>`` against
+       the restrained end's frame carried along the line; statically
+       :math:`-\sum (K/GJ)(l_e - L_e)` under torque–tension coupling
      - deg
 
 Touchdown channels
