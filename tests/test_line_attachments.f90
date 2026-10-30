@@ -20,6 +20,15 @@ PROGRAM test_line_attachments
   !!   7. Acceptance of a fallback attachment state (CD_Attachment_Discrete_Verdict): a slope
   !!      jump beside an attachment node passes the kink limit; the same bend away from it, a
   !!      compressed state under tensile_safety and an unstable state fail closed by name.
+  !!   8. A neutral line whose length equals its span (straight at zero strain, no weight, no
+  !!      tension) with neutral modules (m = rho V) or with a drag area alone, pinned or clamped:
+  !!      the static start converges and stays straight and unloaded (fairlead tension below
+  !!      1e-3 N). Its residual sits at the round-off floor of the axial forces, about
+  !!      eps max(EA/l0) |x| = 9e-8 N here, above tol x 1 N, where the polish stalled at every
+  !!      load step; the convergence scale now keeps tol x scale at 16 times that floor. Heavy
+  !!      modules on the same line (which carry it into tension) still solve. Restrained in
+  !!      torsion (GJ 5e4 N m^2, a quarter turn at End B), the neutral-module line carries the
+  !!      torque GJ Phi / L to 1e-6.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Attachment_Discrete_Verdict
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED
@@ -47,6 +56,7 @@ PROGRAM test_line_attachments
   CALL case_grammar()
   CALL case_coupled()
   CALL case_fallback_verdict()
+  CALL case_zero_strain()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -57,6 +67,135 @@ PROGRAM test_line_attachments
 CONTAINS
 
   INCLUDE 'nan_max_abs.inc'
+
+  SUBROUTINE case_zero_strain()
+    !! 8: a 100 m neutral line (Diam 0.2 m, mass rho pi d^2/4, EA 1e7, EI 1e6) between a Coupled
+    !! point and a Fixed one 100 m apart, 40 elements, TMax 0, with three modules at 25 m pitch.
+    CHARACTER(160) :: trow
+    ! the module rows: neutral (m = rho V), a drag area alone, heavy
+    CHARACTER(*), PARAMETER :: ROW1 = '1 25.0:25.0:75.0 102.5 0.1 0.0 0.0 0.0'
+    CHARACTER(*), PARAMETER :: ROW2 = '1 25.0:25.0:75.0 0.0 0.0 0.1 0.0 0.0'
+    CHARACTER(*), PARAMETER :: ROW3 = '1 25.0:25.0:75.0 200.0 0.1 0.0 0.0 0.0'
+    CHARACTER(64) :: rows(3)
+    CHARACTER(16) :: label(3)
+    REAL(wp), ALLOCATABLE :: d(:, :)
+    INTEGER :: k, iend, u, nrow
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CHARACTER(32) :: root
+    rows = [CHARACTER(64) :: ROW1, ROW2, ROW3]
+    label = [CHARACTER(16) :: 'neutral modules', 'drag area alone', 'heavy modules']
+    WRITE (trow, '(A,ES24.16,A)') 'cab 0.2 ', 1025.0_wp*0.25_wp*PI*0.04_wp, ' 1.0e7 0.0 1.0e6 0.0 0.0 0.0 0.0'
+    DO iend = 1, 2
+      DO k = 1, 3
+        WRITE (root, '(A,I0,A,I0)') 'att_span_', k, '_', iend
+        OPEN (NEWUNIT=u, FILE=TRIM(root)//'.dat', STATUS='replace', ACTION='write')
+        WRITE (u, '(A)') '--------------------- CableDyn Input File ------------------------------------'
+        WRITE (u, '(A)') 'neutral line of the length of its span with attachments'
+        WRITE (u, '(A)') '--------------------- LINE TYPES ---------------------------------------------'
+        WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+        WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+        WRITE (u, '(A)') TRIM(trow)
+        WRITE (u, '(A)') '--------------------- POINTS -------------------------------------------------'
+        WRITE (u, '(A)') 'ID Type X Y Z'
+        WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+        WRITE (u, '(A)') '1 Coupled 0.0 0.0 -50.0'
+        WRITE (u, '(A)') '2 Fixed 100.0 0.0 -50.0'
+        WRITE (u, '(A)') '--------------------- LINES --------------------------------------------------'
+        WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+        WRITE (u, '(A)') '(-) (-) (-) (-)'
+        WRITE (u, '(A)') '1 1 2 -'
+        WRITE (u, '(A)') '--------------------- SECTIONS -----------------------------------------------'
+        WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+        WRITE (u, '(A)') '(-) (-) (m) (-)'
+        WRITE (u, '(A)') '1 cab 100.0 40'
+        WRITE (u, '(A)') '--------------------- ATTACHMENTS -------------------------------------------'
+        WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+        WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+        WRITE (u, '(A)') TRIM(rows(k))
+        IF (iend == 2) THEN
+          WRITE (u, '(A)') '--------------------- END CONNECTIONS ----------------------------------------'
+          WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ'
+          WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-)'
+          WRITE (u, '(A)') '1 A Rigid 1 0 0'
+          WRITE (u, '(A)') '1 B Rigid 1 0 0'
+        END IF
+        WRITE (u, '(A)') '--------------------- OPTIONS ------------------------------------------------'
+        WRITE (u, '(A)') '9.80665 g'
+        WRITE (u, '(A)') '1025.0 rhoW'
+        WRITE (u, '(A)') '0.1 dtM'
+        WRITE (u, '(A)') '0.0 TMax'
+        WRITE (u, '(A)') '--------------------- OUTPUTS ------------------------------------------------'
+        WRITE (u, '(A)') 'FairTen1'
+        WRITE (u, '(A)') '--------------------- END ----------------------------------------------------'
+        CLOSE (u)
+        CALL run(TRIM(root)//'.dat', TRIM(root), ok, msg)
+        CALL require(ok, '8 '//TRIM(label(k))//MERGE(' (clamped)', ' (pinned) ', iend == 2)// &
+                     ': the static start of a line as long as its span converges: '//TRIM(msg))
+        IF (.NOT. ok) CYCLE
+        CALL read_out(TRIM(root)//'.out', d, nrow, 2)
+        CALL require(nrow >= 1, '8 '//TRIM(label(k))//': static row written')
+        IF (nrow < 1) CYCLE
+        WRITE (*, '(A,A,A,ES12.4,A)') '  8 ', TRIM(label(k)), MERGE(' (clamped)', ' (pinned) ', iend == 2), &
+          d(2, 1), ' N fairlead tension'
+        IF (k < 3) CALL require(ABS(d(2, 1)) < 1.0e-3_wp, '8 '//TRIM(label(k))//': the line stays unloaded')
+        IF (k == 3) CALL require(d(2, 1) > 1.0e3_wp, '8 heavy modules: the line is carried into tension')
+      END DO
+    END DO
+    ! restrained in torsion, pinned in bending, a quarter turn at End B
+    WRITE (trow, '(A,ES24.16,A)') 'cab 0.2 ', 1025.0_wp*0.25_wp*PI*0.04_wp, &
+      ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-12 0.0 0.0 0.0 0.0'
+    root = 'att_span_torsion'
+    OPEN (NEWUNIT=u, FILE=TRIM(root)//'.dat', STATUS='replace', ACTION='write')
+    WRITE (u, '(A)') '--------------------- CableDyn Input File ------------------------------------'
+    WRITE (u, '(A)') 'neutral line of the length of its span with neutral attachments, restrained in torsion'
+    WRITE (u, '(A)') '--------------------- LINE TYPES ---------------------------------------------'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    WRITE (u, '(A)') TRIM(trow)
+    WRITE (u, '(A)') '--------------------- POINTS -------------------------------------------------'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 0.0 0.0 -50.0'
+    WRITE (u, '(A)') '2 Fixed 100.0 0.0 -50.0'
+    WRITE (u, '(A)') '--------------------- LINES --------------------------------------------------'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--------------------- SECTIONS -----------------------------------------------'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 cab 100.0 40'
+    WRITE (u, '(A)') '--------------------- ATTACHMENTS -------------------------------------------'
+    WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+    WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+    WRITE (u, '(A)') TRIM(rows(1))
+    WRITE (u, '(A)') '--------------------- END CONNECTIONS ----------------------------------------'
+    WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+    WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
+    WRITE (u, '(A)') '1 A Pinned 1 0 0 Rigid 0 0 1 0'
+    WRITE (u, '(A)') '1 B Pinned 1 0 0 Rigid 0 0 1 90'
+    WRITE (u, '(A)') '--------------------- OPTIONS ------------------------------------------------'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '0.1 dtM'
+    WRITE (u, '(A)') '0.0 TMax'
+    WRITE (u, '(A)') '--------------------- OUTPUTS ------------------------------------------------'
+    WRITE (u, '(A)') 'FairTen1'
+    WRITE (u, '(A)') 'Torq1N1'
+    WRITE (u, '(A)') '--------------------- END ----------------------------------------------------'
+    CLOSE (u)
+    CALL run(TRIM(root)//'.dat', TRIM(root), ok, msg)
+    CALL require(ok, '8 torsion: the static start of a line as long as its span converges: '//TRIM(msg))
+    IF (.NOT. ok) RETURN
+    CALL read_out(TRIM(root)//'.out', d, nrow, 3)
+    CALL require(nrow >= 1, '8 torsion: static row written')
+    IF (nrow < 1) RETURN
+    WRITE (*, '(A,ES16.8,A,ES16.8,A)') '  8 torsion: torque ', d(3, 1), ' N m, GJ Phi / L ', &
+      5.0e4_wp*0.5_wp*PI/100.0_wp, ' N m'
+    CALL require(ABS(d(3, 1) - 5.0e4_wp*0.5_wp*PI/100.0_wp) <= 1.0e-6_wp*5.0e4_wp*0.5_wp*PI/100.0_wp, &
+                 '8 torsion: the straight line carries GJ Phi / L')
+  END SUBROUTINE case_zero_strain
 
   SUBROUTINE case_fallback_verdict()
     !! A straight 10 m line on 1 m elements whose tangent at node 6 is turned by 0.6 rad: the

@@ -361,6 +361,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   a pinned arm rod numbered 1, its tether on an explicit `Rod1B` POINT listed first, now writes
   the outputs of the same deck with the arm as rod 3 bit for bit; before, the arm turned 172 deg
   in pitch, the body 1.06 deg, and a leg tension moved 3.0 kN in 1 s.
+- The static start of a neutral finite-EI line whose length equals its span (straight at zero
+  strain, so with neither weight nor tension) failed with neutral `ATTACHMENTS` or with
+  attachments that only carry a drag area: the attachment polish stalled at the round-off of the
+  axial forces, 7.6e-8 N, against a tolerance of 1e-8 times the solver's 1 N force floor, at
+  every load step. For a line whose chord is at least its length the force scale of the
+  convergence test now includes that round-off floor over the tolerance
+  (`16 eps max(EA/L0) |x| / tol`, as on the `EI = 0` path), so these lines start straight and
+  unloaded; slack lines and lines that carry weight or tension are unchanged.
 - The Newton tangent of the finite-EI static solve in a depth-profile current or a current grid
   carries the current's gradient: the drag samples the current at the node positions, so it moves
   with them. The drag part of the tangent now matches central differences of the residual to

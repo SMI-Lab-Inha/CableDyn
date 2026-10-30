@@ -1825,7 +1825,15 @@ The fallback and the dynamic Hermite path use
   fallback hierarchies are tried before a direct cold solve; every attempt uses the same
   physical inputs and tolerance;
 - a **dimensionless per-DOF residual norm**, with tangent-DOF residuals divided by the nodal
-  tributary length.
+  tributary length. The force scale is the largest of 1 N, the line's weight, the applied nodal
+  loads, and, for a line held at both ends whose chord is at least its length, the tension the
+  chord implies and the round-off floor of the axial forces over the tolerance,
+  :math:`16\,\epsilon\,\max(EA/L_0)\max(\lvert x\rvert, L_0)/\text{tol}` with
+  :math:`\lvert x\rvert` the largest coordinate (the floor of the ``EI = 0`` path). A neutral line
+  of the length of its span, straight at zero strain, carries neither weight nor tension, and
+  without the floor its residual could not meet the tolerance: its attachment polish stalled at
+  7.6e-8 N against :math:`10^{-8}` N. A slack weightless line keeps its scale, so its round-off
+  stall on the straight compressed strut fails over to the weight continuation above.
 
 The static tolerance is :math:`\min(10^{-6},\ \text{tol}_\text{dyn})`, where
 :math:`\text{tol}_\text{dyn}` is the dynamic Newton tolerance, so the dynamics start from an

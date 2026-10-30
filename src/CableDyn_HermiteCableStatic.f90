@@ -918,6 +918,27 @@ CONTAINS
     IF (.NOT. (ANY(freemask(1:3)) .OR. ANY(freemask(6*(nn - 1) + 1:6*(nn - 1) + 3))) .AND. ALL(EA > CD_ZERO)) THEN
       chord = NORM2(q(6*(nn - 1) + 1:6*(nn - 1) + 3) - q(1:3))
       IF (chord > SUM(l0)) fscale = MAX(fscale, (chord/SUM(l0) - CD_ONE)*SUM(l0)/SUM(l0/EA))
+      ! The round-off floor of the residual itself, for a line whose chord is at least its
+      ! length. The axial force is formed from coordinate differences, so a nodal force carries
+      ! a round-off of about eps max(EA/l0) |x| (|x| the largest coordinate; the EI = 0 path's
+      ! floor is 16 eps max(EA/L0) max(|q|, L0)), and the residual can fall no lower. The scale
+      ! keeps tol x fscale at 16 times that floor. A neutral line whose length equals its span,
+      ! straight at zero strain, carries neither weight nor tension and otherwise met the 1 N
+      ! floor of the scale: under neutral attachments its polish stalled at ||R|| = 7.6e-8 N
+      ! against tol x 1 N = 1e-8 N (EA 1e7, 2.5 m elements, |x| = 100 m) and failed at every load
+      ! step. A slack line keeps its scale: a weightless one can stall at that floor on its straight
+      ! compressed strut, a saddle, and is solved by the weight continuation that accepts the
+      ! floor on its bowed equilibrium (light_line_route of the deck driver).
+      IF (chord >= (CD_ONE - 1.0e-9_wp)*SUM(l0) .AND. tol > CD_ZERO) THEN
+        BLOCK
+          REAL(wp) :: xmax
+          xmax = MAXVAL(l0)
+          DO i = 1, nn
+            xmax = MAX(xmax, MAXVAL(ABS(q(6*(i - 1) + 1:6*(i - 1) + 3))))
+          END DO
+          fscale = MAX(fscale, 16.0_wp*EPSILON(CD_ONE)*MAXVAL(EA/l0)*xmax/tol)
+        END BLOCK
+      END IF
     END IF
 
     ! Buoyancy load continuation. A net-buoyant section (w < 0, e.g. a lazy-wave buoyancy
