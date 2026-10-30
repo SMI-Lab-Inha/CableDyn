@@ -30972,7 +30972,7 @@ CONTAINS
         WRITE (unit, '(A)') 'LineID'//tb//'Mode'//tb//'Node'//tb//'X'//tb//'Y'//tb//'Z'//tb//'dX'//tb//'dY'//tb// &
           'dZ'//tb//'dTwist'
         WRITE (unit, '(A)') '(-)'//tb//'(-)'//tb//'(-)'//tb//'(m)'//tb//'(m)'//tb//'(m)'//tb//'(-)'//tb//'(-)'// &
-          tb//'(-)'//tb//'(rad)'
+          tb//'(-)'//tb//'(-)'
       ELSE
         WRITE (unit, '(A)') '# Mode shapes (nodal translations, unit largest nodal displacement)'
         WRITE (unit, '(A)') 'LineID'//tb//'Mode'//tb//'Node'//tb//'X'//tb//'Y'//tb//'Z'//tb//'dX'//tb//'dY'//tb//'dZ'

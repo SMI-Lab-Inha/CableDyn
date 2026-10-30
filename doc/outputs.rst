@@ -463,10 +463,13 @@ column, for every line of the file (``0`` on a line without torsion):
 * ``PolarShare`` (frequency table): the polar share of the mode's kinetic energy,
   :math:`\sum_k I_k \varphi_k^2` of the mass-normalised mode with :math:`I_k` the lumped polar
   inertia, 1 for a pure torsional mode and 0 for one without twist;
-* ``dTwist`` [rad] (shape table): the rotation of the node's section about the line tangent,
-  positive right-handed about the direction from End A to End B, on the scale of the
-  translations; a torsional mode (``PolarShare`` above 0.5) is scaled to a unit largest
-  ``dTwist`` instead.
+* ``dTwist`` (shape table): the rotation of the node's section about the line tangent,
+  positive right-handed about the direction from End A to End B, End A being the reader's
+  (the fairlead on a deck written anchor-first, as in the other line files). Like ``dX dY dZ``
+  it is a normalised shape value, marked ``(-)``: the mode is scaled so that its largest nodal
+  displacement is 1, and ``dTwist`` is then in rad per metre of that displacement; a torsional
+  mode (``PolarShare`` above 0.5) is scaled to a unit largest ``dTwist`` instead, and its
+  translations are then in metres per radian of that twist.
 
 Per-rod files (``RODS`` ``Outputs`` flag)
 -----------------------------------------

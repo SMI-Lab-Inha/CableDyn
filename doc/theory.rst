@@ -1837,15 +1837,21 @@ dynamics, so its modes do too: the twist angle :math:`\varphi_k` of every node j
 degrees of freedom, :math:`[\mathbf r, \mathbf m, \varphi]` per node (half-bandwidth 13), with
 the lumped polar inertia :math:`I_k` as its mass and the second variation of the twist energy
 :math:`E_t = \sum_e \tfrac12 (GJ_e/L_{0,e})\,\hat\tau_e^2` (and of the elastic end springs) as
-its stiffness, at the static torque :math:`M_e`:
+its stiffness, at the static element torques :math:`M_e = (GJ_e/L_{0,e})\,\hat\tau_e`. With
+element :math:`e` between nodes :math:`k` and :math:`k+1` and its full twist
+:math:`\hat\tau_e = \varphi_{k+1} - \varphi_k + \rho_e(\mathbf q)`,
+:math:`\rho_e = m_e + (K_e/GJ_e)(l_e - L_{0,e})`,
 
 .. math::
 
-   \frac{\partial^2 E_t}{\partial\mathbf q^2} = M_e\,\frac{\partial^2 m_e}{\partial\mathbf q^2}
-     + \frac{GJ_e}{L_{0,e}}\,\mathbf g_e\mathbf g_e^{\mathsf T}, \qquad
-   \frac{\partial^2 E_t}{\partial\varphi_{k+1}\,\partial\mathbf q}
-     = -\frac{\partial^2 E_t}{\partial\varphi_k\,\partial\mathbf q} = \frac{GJ_e}{L_{0,e}}\,\mathbf g_e,
-   \qquad \mathbf g_e = \frac{\partial\hat\tau_e}{\partial\mathbf q} .
+   \frac{\partial^2 E_t}{\partial\mathbf q^2} = \sum_e \Big( M_e\,\frac{\partial^2 \rho_e}{\partial\mathbf q^2}
+     + \frac{GJ_e}{L_{0,e}}\,\mathbf g_e\mathbf g_e^{\mathsf T} \Big), \qquad
+   \frac{\partial^2 E_t}{\partial\varphi_{k+1}\,\partial\mathbf q}\Big|_e
+     = -\frac{\partial^2 E_t}{\partial\varphi_k\,\partial\mathbf q}\Big|_e = \frac{GJ_e}{L_{0,e}}\,\mathbf g_e,
+   \qquad \mathbf g_e = \frac{\partial\rho_e}{\partial\mathbf q} ,
+
+the second term summed over the two elements that share a node; under torque–tension coupling
+:math:`\partial^2\rho_e/\partial\mathbf q^2` holds :math:`(K_e/GJ_e)\,\partial^2 l_e/\partial\mathbf q^2`.
 
 The torque term lowers the bending frequencies of a twisted line, as on Greenhill's twisted
 shaft; :math:`\mathbf g_e` couples the twist to the bending of a curved line and, under
