@@ -49,7 +49,9 @@ foreach(row
     "\n      outputs +[0-9]+\\.[0-9]+ s"
     "\n      progress and bookkeeping +[0-9]+\\.[0-9]+ s"
     "\n    finalisation +[0-9]+\\.[0-9]+ s"
-    "\n    total +[0-9]+\\.[0-9]+ s +100\\.0 %"
+    # the total is 100 % of itself, or 0.000 s and 0.0 % when the whole run took less than half a
+    # millisecond (a fast build on the short deck): the driver gives no share of a zero total
+    "\n    total +([0-9]+\\.[0-9]+ s +100\\.0|0\\.000 s +0\\.0) %"
     "\n    March: [1-9][0-9]* committed step\\(s\\), [0-9]+\\.[0-9]+ ms per step\\.")
   if(NOT profiled MATCHES "${row}")
     message(FATAL_ERROR "the profiled stdout lacks \"${row}\":\n${profiled}")

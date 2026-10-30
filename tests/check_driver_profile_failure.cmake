@@ -20,7 +20,9 @@ foreach(row
     "Run-time profile \\(CABLEDYN_PROFILE\\), wall-clock time:"
     "\n    dynamic march +[0-9]+\\.[0-9]+ s"
     "\n    finalisation +0\\.000 s +0\\.0 %"
-    "\n    total +[0-9]+\\.[0-9]+ s +100\\.0 %")
+    # the total is 100 % of itself, or 0.000 s and 0.0 % when the whole run took less than half a
+    # millisecond (a fast build on the short deck): the driver gives no share of a zero total
+    "\n    total +([0-9]+\\.[0-9]+ s +100\\.0|0\\.000 s +0\\.0) %")
   if(NOT out MATCHES "${row}")
     message(FATAL_ERROR "the stdout of the failed run lacks \"${row}\":\n${out}")
   endif()
