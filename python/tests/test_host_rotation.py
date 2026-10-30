@@ -21,6 +21,7 @@ try:
 except (ImportError, OSError) as exc:  # a missing library raises OSError
     pytest.skip(f"CableDyn shared library not available: {exc}", allow_module_level=True)
 
+import cabledyn
 from cabledyn import _lib
 from cabledyn.errors import CableDynError
 from cabledyn.model import CableDyn
@@ -63,7 +64,7 @@ def _roll(phi: float) -> np.ndarray:
 
 def test_abi_minor_reports_the_host_rotation_extension():
     assert _lib.HOST_ROTATION_ABI_MINOR == 3
-    assert _lib.abi_minor() == _lib.HOST_ROTATION_ABI_MINOR
+    assert _lib.abi_minor() == cabledyn.abi_minor() == _lib.HOST_ROTATION_ABI_MINOR
 
 
 def test_torsion_deck_needs_the_rotating_initialization(tmp_path):
@@ -123,5 +124,6 @@ def test_point_route_takes_rotations_and_returns_no_moment():
     with CableDyn() as model:
         model.init_deck_rotating(BOX)
         nb = model.n_coupled_dof // 3
-        model.update_rotations(np.repeat(_roll(0.3), nb, axis=0), np.zeros((nb, 3)), np.zeros((nb, 3)))
+        dcm = np.repeat(_roll(0.3), nb, axis=0)
+        model.update_rotations(dcm, np.zeros((nb, 3)), np.zeros((nb, 3)))
         assert np.array_equal(model.coupled_moments(), np.zeros(3 * nb))
