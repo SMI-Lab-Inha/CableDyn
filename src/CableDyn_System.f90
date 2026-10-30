@@ -123,14 +123,6 @@ MODULE CableDyn_System
   INTEGER, PARAMETER, PUBLIC :: CD_LINE_END_A = 1
   INTEGER, PARAMETER, PUBLIC :: CD_LINE_END_B = 2
 
-  ! Adaptive-substep fallback tripwire: how many times CD_Step_System entered the
-  ! subdivision retry since the last reset. A plain integer increment on the RARE
-  ! stall path only (the converged path never touches it), so it is always on --
-  ! diagnostics can read it to assert a healthy run never needed the fallback, and a
-  ! coupled log can report it at shutdown.
-  ! Module-level (not per-system): a diagnostics tally, not model state.
-  INTEGER, SAVE :: n_fallback_entries = 0
-
   TYPE :: CD_SystemPointType
     !! Named system point. Fixed/coupled points are externally prescribed.
     !! Free/connect points are integrated by the system dynamic-point step.
@@ -245,6 +237,13 @@ MODULE CableDyn_System
     ! mean squares per node, 3 per node: sized like snap_q, line by line).
     REAL(wp), ALLOCATABLE :: snap_viv(:)
     LOGICAL :: snap_valid = .FALSE.
+    ! Adaptive-substep fallback tripwire: how many times CD_Step_System entered the
+    ! subdivision retry of this system since its initialisation or the last
+    ! CD_System_Fallback_Reset. An increment on the RARE stall path only (the converged path
+    ! never touches it), so it is always on: diagnostics can assert that a healthy run never
+    ! needed the fallback. Per system, so concurrent systems never mix their counts; not part
+    ! of the snapshot (a restored step keeps its count) and of no result.
+    INTEGER :: n_fallback_entries = 0
   END TYPE CD_SystemType
 
 CONTAINS
@@ -1534,8 +1533,8 @@ CONTAINS
     ! and on ANY failure to complete the full interval converged it restores that snapshot
     ! -- so a mid-interval state can never leak.
     IF (.NOT. converged .AND. depth < MAX_SUBDIV) THEN
-      !$OMP ATOMIC UPDATE
-      n_fallback_entries = n_fallback_entries + 1
+      ! the system's own count, outside the lines' parallel region: one thread steps a system
+      system%n_fallback_entries = system%n_fallback_entries + 1
       ! Capture the coupled motion at the START of the interval only on the rare subdivision
       ! path. The common converged path must not heap-allocate just to prepare an unused retry.
       ALLOCATE (q0(SIZE(q_coupled)), v0(SIZE(q_coupled)), a0(SIZE(q_coupled)))
@@ -3639,16 +3638,18 @@ CONTAINS
     END DO
   END SUBROUTINE CD_Get_System_Substep_Counts
 
-  PURE FUNCTION CD_System_Fallback_Count() RESULT(n)
-    !! Subdivision-retry entries since the last CD_System_Fallback_Reset (see the
-    !! module-level tripwire note).
+  PURE FUNCTION CD_System_Fallback_Count(system) RESULT(n)
+    !! Subdivision-retry entries of system since its initialisation or the last
+    !! CD_System_Fallback_Reset (see CD_SystemType%n_fallback_entries).
+    TYPE(CD_SystemType), INTENT(IN) :: system
     INTEGER :: n
-    n = n_fallback_entries
+    n = system%n_fallback_entries
   END FUNCTION CD_System_Fallback_Count
 
-  SUBROUTINE CD_System_Fallback_Reset()
-    !! Zero the subdivision-retry tripwire (start of a measured window).
-    n_fallback_entries = 0
+  SUBROUTINE CD_System_Fallback_Reset(system)
+    !! Zero the subdivision-retry tripwire of system (start of a measured window).
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    system%n_fallback_entries = 0
   END SUBROUTINE CD_System_Fallback_Reset
 
 END MODULE CableDyn_System

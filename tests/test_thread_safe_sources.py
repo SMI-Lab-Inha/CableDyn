@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,10 +45,6 @@ REVIEWED_STATIC = {
     ("CableDyn_DeckDriver.f90", "warned"): "warn-once flag of a message, under an OpenMP critical",
     ("CableDyn_Profile.f90", "*"): "opt-in run profile (CABLEDYN_PROFILE), written only when armed",
     ("CableDyn_HermiteCableDynamic.f90", "prof_*"): "opt-in step profile, written only when armed",
-    ("CableDyn_HermiteCableDynamic.f90", "n_substep_recoveries"): "process-wide diagnostics tally",
-    ("CableDyn_System.f90", "n_fallback_entries"): "process-wide diagnostics tally",
-    ("CableDyn_CosseratAssemble.f90", "CD_COSASM_*"): "process-wide diagnostics tallies",
-    ("CableDyn_CosseratDynamic.f90", "CD_COSDYN_*"): "process-wide diagnostics tallies",
     ("cabledyn.f90", "printed"): "the driver program prints its profile once",
 }
 
@@ -64,13 +61,14 @@ UNIT = re.compile(
 )
 
 
-def statements(path: Path):
+def statements(path: Path) -> Iterator[tuple[int, str]]:
     """(line number, statement) with comments, continuations and semicolons resolved."""
-    buf, start = "", None
+    buf, start = "", 0
     for no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if raw.lstrip().startswith("#"):
             continue
-        out, quote = [], None
+        out: list[str] = []
+        quote: str | None = None
         for ch in raw:
             if quote:
                 out.append(ch)
@@ -88,19 +86,22 @@ def statements(path: Path):
             continue
         if buf and text.startswith("&"):
             text = text[1:]
-        if start is None:
+        if not buf:
             start = no
         if text.endswith("&"):
             buf += text[:-1] + " "
             continue
-        line, buf, line_no, start = buf + text, "", start, None
+        line, buf, line_no = buf + text, "", start
         for stmt in split_top(line, ";"):
             if stmt.strip():
                 yield line_no, stmt.strip()
 
 
 def split_top(text: str, sep: str) -> list[str]:
-    parts, depth, cur, quote = [], 0, [], None
+    parts: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    quote: str | None = None
     for ch in text:
         if quote:
             cur.append(ch)
@@ -127,7 +128,7 @@ def without_strings(text: str) -> str:
 
 
 class Scope:
-    def __init__(self, kind: str, name: str):
+    def __init__(self, kind: str, name: str) -> None:
         self.kind, self.name = kind, name
         self.contains = False
         self.internal: list[str] = []
@@ -135,7 +136,7 @@ class Scope:
         self.body: list[tuple[int, str, Scope]] = []
 
 
-def scan(path: Path):
+def scan(path: Path) -> Iterator[tuple[str, int, str, str]]:
     """Yield (kind, line, scope name, detail) findings of one file."""
     stack: list[Scope] = []
     in_type = in_interface = 0
@@ -181,9 +182,10 @@ def scan(path: Path):
                 stack[-1].contains = True
             continue
         unit = next((s for s in reversed(stack) if s.kind in ("unit", "program")), None)
-        for scope in stack:
-            if scope.kind in ("unit", "program"):
-                scope.body.append((no, stmt, unit))
+        if unit is not None:
+            for scope in stack:
+                if scope.kind in ("unit", "program"):
+                    scope.body.append((no, stmt, unit))
         where = unit.name if unit else (stack[-1].name if stack else "?")
         if re.match(r"^(data\s+\w|common\b)", low):
             yield "DATA/COMMON", no, where, stmt
@@ -195,7 +197,7 @@ def scan(path: Path):
             continue
         attrs, names = stmt.split("::", 1)
         attrs_low = attrs.lower()
-        variables = [re.match(r"\s*(\w+)", n).group(1) for n in split_top(names, ",")]
+        variables = [m.group(1) for n in split_top(names, ",") if (m := re.match(r"\s*(\w+)", n))]
         if unit is not None:
             unit.declared.update(v.lower() for v in variables)
         if "parameter" in attrs_low:
@@ -214,11 +216,11 @@ def scan(path: Path):
                 yield "INITIALISED LOCAL", no, where, stmt
                 break
     for host in hosts:
-        names = set(host.internal)
+        internal_names = set(host.internal)
         for no, stmt, inside in host.body:
             code = without_strings(stmt).lower()
             # in its own body the name is the result; a local declaration hides it
-            for name in names - {inside.name.lower()} - inside.declared:
+            for name in internal_names - {inside.name.lower()} - inside.declared:
                 for m in re.finditer(r"(?<![\w%])" + name + r"(?!\w)", code):
                     before = code[: m.start()].rstrip()
                     after = code[m.end() :].lstrip()
@@ -240,15 +242,15 @@ def reviewed(file: str, name: str) -> bool:
 
 
 class ThreadSafeSources(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.findings = [(p.name, *f) for p in SOURCES for f in scan(p)]
         self.assertGreater(len(SOURCES), 40)
 
-    def test_no_closures(self):
+    def test_no_closures(self) -> None:
         bad = [f for f in self.findings if f[1] == "CLOSURE"]
         self.assertEqual(bad, [], "internal procedures passed as procedure values")
 
-    def test_no_implicit_static_storage(self):
+    def test_no_implicit_static_storage(self) -> None:
         bad = [
             f
             for f in self.findings
@@ -256,13 +258,13 @@ class ThreadSafeSources(unittest.TestCase):
         ]
         self.assertEqual(bad, [], "locals in static storage")
 
-    def test_static_storage_is_reviewed(self):
+    def test_static_storage_is_reviewed(self) -> None:
         bad = [f for f in self.findings if f[1] == "STATIC" and not reviewed(f[0], f[4])]
         self.assertEqual(bad, [], "static storage not in REVIEWED_STATIC")
         n = sum(1 for f in self.findings if f[1] == "STATIC")
         print(f"{n} reviewed variables in static storage in {len(SOURCES)} files")
 
-    def test_build_makes_locals_automatic(self):
+    def test_build_makes_locals_automatic(self) -> None:
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         for flag in ("-frecursive>", "/Qauto>", "-auto>"):
             self.assertTrue(flag in cmake, f"CMakeLists.txt does not pass {flag[:-1]}")
@@ -275,7 +277,7 @@ class ThreadSafeSources(unittest.TestCase):
         for tool in tools:
             self.assertIn('LocalVariableStorage="localStorageAutomatic"', tool)
 
-    def test_audit_sees_a_closure_and_an_initialised_local(self):
+    def test_audit_sees_a_closure_and_an_initialised_local(self) -> None:
         # the checks themselves: a closure and an implicit SAVE in a scratch source
         probe = Path(__file__).with_name("thread_safe_probe.f90.tmp")
         probe.write_text(

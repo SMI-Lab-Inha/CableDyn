@@ -460,6 +460,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
   equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
   static passes too (4 here); the rod holds its pose to the output's 8 digits.
+- Diagnostic counts that concurrent models shared: the adaptive-substep fallbacks of an `EI = 0`
+  system and the assembly and modified-Newton counts of the finite-EI Cosserat solver were
+  process-wide (and lost increments without OpenMP); they are now kept per system and per solver
+  workspace. The count of finite-EI intervals recovered by substeps is reported only by the opt-in
+  run profile (`CABLEDYN_PROFILE`), whose figures stay process-wide by design; each model keeps its
+  own. No result changes.
 - A failing `OPEN` of a file name of about 600 characters or more (the extended-length spelling of
   a path beyond the Windows limit) ended an ifx-built program or the wheel's DLL with
   `STATUS_STACK_BUFFER_OVERRUN` inside the Intel Fortran run-time, for example an output root in

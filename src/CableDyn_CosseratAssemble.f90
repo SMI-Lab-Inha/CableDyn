@@ -30,25 +30,7 @@ MODULE CableDyn_CosseratAssemble
   PUBLIC :: CD_Assemble_Cosserat_Internal_Force_Workspace
   PUBLIC :: CD_Cosserat_Free_Bandwidth, CD_Cosserat_Free_Bandwidth_Workspace
   PUBLIC :: CD_CosseratAssemblyWorkspace, CD_Clear_CosseratAssembly_Workspace
-  PUBLIC :: CD_COSASM_N_TANGENT, CD_COSASM_N_FORCE, CD_COSASM_T_TANGENT, CD_COSASM_T_FORCE
   PUBLIC :: CD_Reset_Cosserat_Asm_Counts
-
-  !! Diagnostic assembly counters for performance measurement: how many
-  !! global tangent vs internal-force assemblies have run since the last reset.
-  !! Incremented once per assembly call (in the serial part, not the OpenMP element
-  !! loop), they let a benchmark / solver attribute wall time to Newton tangent
-  !! builds vs residual (line-search) evaluations. Not part of any numerical result;
-  !! ignore in production.
-  !!
-  !! CONTRACT: these are PROCESS-GLOBAL, single-run, single-threaded instrumentation
-  !! -- not per-model and not synchronized. They are only meaningful for one model
-  !! stepped on one thread (a benchmark resets then reads them);
-  !! concurrent multi-model or multi-threaded stepping would interleave the counts.
-  !! They are diagnostics only, so a corrupted count never affects a physics result.
-  INTEGER, SAVE :: CD_COSASM_N_TANGENT = 0
-  INTEGER, SAVE :: CD_COSASM_N_FORCE = 0
-  REAL(wp), SAVE :: CD_COSASM_T_TANGENT = 0.0_wp
-  REAL(wp), SAVE :: CD_COSASM_T_FORCE = 0.0_wp
 
   TYPE :: CD_CosseratAssemblyWorkspace
     !! Reusable scratch for finite-EI global assembly kernels.
@@ -57,6 +39,13 @@ MODULE CableDyn_CosseratAssemble
     REAL(wp), ALLOCATABLE :: Ke(:, :, :)
     INTEGER, ALLOCATABLE :: elem_es(:)
     CHARACTER(120), ALLOCATABLE :: elem_em(:)
+    ! Diagnostics of the assemblies run on this workspace since CD_Reset_Cosserat_Asm_Counts:
+    ! the global tangent and internal-force assemblies and their wall time, so a benchmark can
+    ! attribute time to Newton tangents and residual-only evaluations. They belong to the
+    ! workspace (one per model), so concurrent models never mix their counts, and no result
+    ! depends on them.
+    INTEGER :: n_tangent = 0, n_force = 0
+    REAL(wp) :: t_tangent = 0.0_wp, t_force = 0.0_wp
   END TYPE CD_CosseratAssemblyWorkspace
 
 CONTAINS
@@ -71,12 +60,13 @@ CONTAINS
     IF (ALLOCATED(work%elem_em)) DEALLOCATE (work%elem_em)
   END SUBROUTINE CD_Clear_CosseratAssembly_Workspace
 
-  SUBROUTINE CD_Reset_Cosserat_Asm_Counts()
-    !! Zero the diagnostic assembly counters (call before a timed solve).
-    CD_COSASM_N_TANGENT = 0
-    CD_COSASM_N_FORCE = 0
-    CD_COSASM_T_TANGENT = 0.0_wp
-    CD_COSASM_T_FORCE = 0.0_wp
+  SUBROUTINE CD_Reset_Cosserat_Asm_Counts(work)
+    !! Zero the diagnostic assembly counters of a workspace (call before a timed solve).
+    TYPE(CD_CosseratAssemblyWorkspace), INTENT(INOUT) :: work
+    work%n_tangent = 0
+    work%n_force = 0
+    work%t_tangent = 0.0_wp
+    work%t_force = 0.0_wp
   END SUBROUTINE CD_Reset_Cosserat_Asm_Counts
 
   SUBROUTINE CD_Assemble_Cosserat_Tangent_Force(nodes_ref, elem_conn, ea, gas, ei, gj, q, &
@@ -90,15 +80,12 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: n_nodes, n_elem, e, a, b, ndof, gmap(12), i, j, es
-    INTEGER(INT64) :: c0, rate
     REAL(wp) :: Lam0(3, 3), L0, qe(12), Kte(12, 12), finte(12)
     REAL(wp), ALLOCATABLE :: fe(:, :), Ke(:, :, :)
     INTEGER, ALLOCATABLE :: elem_es(:)
     CHARACTER(120), ALLOCATABLE :: elem_em(:)
     CHARACTER(120) :: em
 
-    CD_COSASM_N_TANGENT = CD_COSASM_N_TANGENT + 1
-    CALL SYSTEM_CLOCK(c0, rate)
     Kt = 0.0_wp
     fint = 0.0_wp
     CALL check_inputs(nodes_ref, elem_conn, ea, gas, ei, gj, q, n_nodes, n_elem, ndof, ErrStat, ErrMsg)
@@ -158,7 +145,6 @@ CONTAINS
         END DO
       END DO
     END DO
-    CALL add_elapsed(CD_COSASM_T_TANGENT, c0, rate)
   END SUBROUTINE CD_Assemble_Cosserat_Tangent_Force
 
   SUBROUTINE CD_Cosserat_Free_Bandwidth(elem_conn, n_nodes, free, kl, ku, ErrStat, ErrMsg)
@@ -273,7 +259,7 @@ CONTAINS
     REAL(wp) :: Lam0(3, 3), L0, qe(12), Kte(12, 12), finte(12)
     CHARACTER(120) :: em
 
-    CD_COSASM_N_TANGENT = CD_COSASM_N_TANGENT + 1
+    work%n_tangent = work%n_tangent + 1
     CALL SYSTEM_CLOCK(c0, rate)
     Kb = 0.0_wp
     fint = 0.0_wp
@@ -382,7 +368,7 @@ CONTAINS
         END DO
       END DO
     END DO
-    CALL add_elapsed(CD_COSASM_T_TANGENT, c0, rate)
+    CALL add_elapsed(work%t_tangent, c0, rate)
   END SUBROUTINE CD_Assemble_Cosserat_Tangent_Force_Banded_Free_Workspace
 
   SUBROUTINE CD_Assemble_Cosserat_Internal_Force(nodes_ref, elem_conn, ea, gas, ei, gj, q, &
@@ -417,7 +403,7 @@ CONTAINS
     REAL(wp) :: Lam0(3, 3), L0, qe(12), finte(12)
     CHARACTER(120) :: em
 
-    CD_COSASM_N_FORCE = CD_COSASM_N_FORCE + 1
+    work%n_force = work%n_force + 1
     CALL SYSTEM_CLOCK(c0, rate)
     fint = 0.0_wp
     CALL check_inputs(nodes_ref, elem_conn, ea, gas, ei, gj, q, n_nodes, n_elem, ndof, ErrStat, ErrMsg)
@@ -472,7 +458,7 @@ CONTAINS
         fint(gmap(i)) = fint(gmap(i)) + work%fe(i, e)
       END DO
     END DO
-    CALL add_elapsed(CD_COSASM_T_FORCE, c0, rate)
+    CALL add_elapsed(work%t_force, c0, rate)
   END SUBROUTINE CD_Assemble_Cosserat_Internal_Force_Workspace
 
   SUBROUTINE ensure_assembly_workspace(work, ndof, n_elem, need_tangent, ErrStat, ErrMsg)

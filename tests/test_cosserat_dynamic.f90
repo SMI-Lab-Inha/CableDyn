@@ -16,8 +16,7 @@ PROGRAM test_cosserat_dynamic
                                       CD_Cosserat_Mechanical_Energy, CD_Assemble_Cosserat_Mass, &
                                       CD_Assemble_Cosserat_Mass_Banded_Free, CD_Cosserat_Mass_MatVec, &
                                       CD_CosseratGenAlphaWorkspace, CD_Clear_CosseratGenAlpha_Workspace, &
-                                      CD_Reset_Cosserat_Dyn_Counts, CD_COSDYN_N_STALE_ACCEPT, &
-                                      CD_COSDYN_N_STALE_REJECT, CD_COSDYN_N_DEFERRED_REFRESH
+                                      CD_Reset_Cosserat_Dyn_Counts
   USE CableDyn_CosseratAssemble, ONLY: CD_Assemble_Cosserat_Internal_Force, CD_Cosserat_Free_Bandwidth
   USE CableDyn_Cosserat, ONLY: CD_Reference_Frame, CD_Cosserat_Element_Energy
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_DYN_OK
@@ -363,6 +362,7 @@ CONTAINS
     INTEGER :: es_l, nit_full, nit_mod
     LOGICAL :: cvg_full, stl_full, cvg_mod, stl_mod
     CHARACTER(120) :: em_l
+    TYPE(CD_CosseratGenAlphaWorkspace) :: mod_work
 
     amp = 2.0e-3_wp
     q0 = q
@@ -391,14 +391,16 @@ CONTAINS
                                     q_full, v_full, a_full, cvg_full, stl_full, nit_full, es_l, em_l)
     CALL require(es_l == CD_DYN_OK .AND. cvg_full .AND. .NOT. stl_full, 'cosserat-mod-newton:full-converged')
 
-    CALL CD_Reset_Cosserat_Dyn_Counts()
+    CALL CD_Reset_Cosserat_Dyn_Counts(mod_work)
     CALL CD_Cosserat_Gen_Alpha_Step(nodes_ref, conn, ea_a, gas_a, ei_a, gj_a, ra, it, in_, .TRUE., &
                                     q0, v0, a_init, f_load, [INTEGER ::], 0.02_wp, cfg_mod, &
-                                    q_mod, v_mod, a_mod, cvg_mod, stl_mod, nit_mod, es_l, em_l)
+                                    q_mod, v_mod, a_mod, cvg_mod, stl_mod, nit_mod, es_l, em_l, &
+                                    workspace=mod_work)
     CALL require(es_l == CD_DYN_OK .AND. cvg_mod .AND. .NOT. stl_mod, 'cosserat-mod-newton:modified-converged')
-    CALL require(CD_COSDYN_N_STALE_ACCEPT + CD_COSDYN_N_STALE_REJECT > 0, &
+    CALL require(mod_work%n_stale_accept + mod_work%n_stale_reject > 0, &
                  'cosserat-mod-newton:stale-tangent-attempted')
-    CALL require(CD_COSDYN_N_DEFERRED_REFRESH == 0, 'cosserat-mod-newton:no-pre-solve-refresh')
+    CALL require(mod_work%n_deferred_refresh == 0, 'cosserat-mod-newton:no-pre-solve-refresh')
+    CALL CD_Clear_CosseratGenAlpha_Workspace(mod_work)
     dqmax = nan_max_abs(q_mod - q_full)
     dvmax = nan_max_abs(v_mod - v_full)
     damax = nan_max_abs(a_mod - a_full)

@@ -93,6 +93,7 @@ MODULE CableDyn_OpenFAST_Aggregate
                                  CD_Deck_Current_End
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
   USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
+                             CD_System_Fallback_Count, CD_System_Fallback_Reset, &
                              CD_Get_System_Line_State, &
                              CD_Update_System_Line_SegmentLength, CD_Save_System_Line_Control, &
                              CD_Restore_System_Line_Control, &
@@ -109,6 +110,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   PUBLIC :: CD_AGG_HasRigid6
   PUBLIC :: CD_AGG_HasRod
   PUBLIC :: CD_AGG_HasPoint3
+  PUBLIC :: CD_AGG_Fallback_Count, CD_AGG_Fallback_Reset
   PUBLIC :: CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, CD_AGG_Set_Rigid6_States
   PUBLIC :: CD_AGG_Rod_MirrorSize, CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States
   PUBLIC :: CD_AGG_Refresh_PointMesh
@@ -624,6 +626,20 @@ CONTAINS
     self = candidate
     CALL CD_AGG_End(candidate, es, em)
   END SUBROUTINE CD_AGG_Init_From_Deck
+
+  PURE INTEGER FUNCTION CD_AGG_Fallback_Count(self) RESULT(n)
+    !! Subdivision-retry entries of the EI = 0 system step since its initialisation or the
+    !! last CD_AGG_Fallback_Reset (CD_System_Fallback_Count); 0 without an EI = 0 system.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    n = 0
+    IF (self%has_sys) n = CD_System_Fallback_Count(self%sys%fast%system)
+  END FUNCTION CD_AGG_Fallback_Count
+
+  SUBROUTINE CD_AGG_Fallback_Reset(self)
+    !! Zero the subdivision-retry tripwire of the EI = 0 system (start of a measured window).
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    IF (self%has_sys) CALL CD_System_Fallback_Reset(self%sys%fast%system)
+  END SUBROUTINE CD_AGG_Fallback_Reset
 
   INTEGER FUNCTION CD_AGG_NMovingPoints(self, ErrStat, ErrMsg) RESULT(n)
     !! Total host-prescribed (moving) points: the EI=0 system's moving points followed by

@@ -562,7 +562,7 @@ CONTAINS
     TYPE(CD_HermiteCableDynType) :: m
     REAL(wp), ALLOCATABLE :: l0(:), EAv(:), EIv(:), rhoAv(:), wv(:), seed(:), q_before(:)
     INTEGER, ALLOCATABLE :: fx(:)
-    INTEGER :: es, event_count, worst_element
+    INTEGER :: es, event_count, worst_element, n_before
     REAL(wp) :: worst_force, worst_threshold, worst_xi, worst_time
     CHARACTER(300) :: em
 
@@ -580,12 +580,12 @@ CONTAINS
     CALL require(INDEX(em, 'axial compression') > 0, 'tensile-safety diagnostic identifies axial compression')
     CALL require(nan_max_abs(m%q - q_before) <= TINY(1.0_wp), &
                  'rejected tensile-safety step does not commit its candidate state')
-    CALL CD_HermiteCable_Dyn_Recovery_Reset()
+    n_before = recovered_intervals(m)
     CALL CD_HermiteCable_Dyn_Step_Recovering(m, 0.01_wp, 20, 1.0e-9_wp, es, em)
     CALL require(es == CD_HCDYN_NOCONVERGE, 'recovering step preserves tensile-safety rejection')
     CALL require(INDEX(em, 'tensile qualification failed') > 0 .AND. INDEX(em, 'diverged') == 0, &
                  'recovering step reports spatial qualification rather than temporal divergence')
-    CALL require(CD_HermiteCable_Dyn_Recovery_Count() == 0, &
+    CALL require(recovered_intervals(m) == n_before, &
                  'tensile-safety rejection does not attempt temporal subdivision')
     CALL require(nan_max_abs(m%q - q_before) <= TINY(1.0_wp), &
                  'recovering tensile-safety rejection preserves the committed state')
@@ -838,7 +838,6 @@ CONTAINS
     CALL require(es == CD_HCDYN_OK, 'recovering identity init m1: '//TRIM(em))
     CALL CD_HermiteCable_Dyn_Init(m2, l0, EAv, EIv, rhoAv, wv, seed, fx, 0.0_wp, 0.0_wp, 0.9_wp, es, em)
     CALL require(es == CD_HCDYN_OK, 'recovering identity init m2: '//TRIM(em))
-    CALL CD_HermiteCable_Dyn_Recovery_Reset()
     pd(1) = 3
     DO s = 1, 5
       pq(1) = 0.002_wp*REAL(s, wp); pv(1) = 0.002_wp/DTC; pa(1) = 0.0_wp
@@ -852,7 +851,7 @@ CONTAINS
     CALL require(nan_max_abs(m1%q - m2%q) <= 0.0_wp, 'recovering wrapper q bit-identical on a converging step')
     CALL require(nan_max_abs(m1%v - m2%v) <= 0.0_wp, 'recovering wrapper v bit-identical on a converging step')
     CALL require(nan_max_abs(m1%a - m2%a) <= 0.0_wp, 'recovering wrapper a bit-identical on a converging step')
-    CALL require(CD_HermiteCable_Dyn_Recovery_Count() == 0, 'no recovery on converging steps (count stays 0)')
+    CALL require(recovered_intervals(m2) == 0, 'no recovery on converging steps (count stays 0)')
     CALL CD_HermiteCable_Dyn_End(m1)
     CALL CD_HermiteCable_Dyn_End(m2)
 
@@ -871,16 +870,20 @@ CONTAINS
                                   pres_dofs=pd, pres_q=pq, pres_v=pv, pres_a=pa)
     CALL require(es == CD_HCDYN_NOCONVERGE, 'recovery probe: plain full step diverges on the hard interval')
     ! Wrapper on the same interval + same budget: substeps and completes, landing at t+dt on target.
+    ! the armed step profile counts the recovered interval too (process-wide, with its reset)
+    CALL CD_HermiteCable_Dyn_Reset_Profile()
     CALL CD_HermiteCable_Dyn_Recovery_Reset()
-    n0 = CD_HermiteCable_Dyn_Recovery_Count()
+    n0 = recovered_intervals(mr)
     CALL CD_HermiteCable_Dyn_Step_Recovering(mr, DTV, MAXIT_HARD, 1.0e-6_wp, es, em, &
                                              pres_dofs=pd, pres_q=pq, pres_v=pv, pres_a=pa)
     CALL require(es == CD_HCDYN_OK, 'recovery: wrapper completes the violent interval via substepping: '//TRIM(em))
-    CALL require(CD_HermiteCable_Dyn_Recovery_Count() == n0 + 1, 'recovery: the substep tripwire incremented')
+    CALL require(recovered_intervals(mr) == n0 + 1, 'recovery: the substep tripwire incremented')
+    CALL require(CD_HermiteCable_Dyn_Recovery_Count() == 1, 'recovery: the armed profile counts the interval')
     CALL require(ABS(mr%q(3) - ZJUMP) < 1.0e-10_wp, 'recovery: prescribed boundary landed exactly on target')
     CALL require(ABS(mr%t - DTV) < 1.0e-9_wp, 'recovery: cable landed at t+dt (fixed-dt aggregate contract)')
     CALL CD_HermiteCable_Dyn_Recovery_Reset()
     CALL require(CD_HermiteCable_Dyn_Recovery_Count() == 0, 'recovery tripwire zero after reset')
+    CALL CD_HermiteCable_Dyn_Disable_Profile()
 
     ! --- (3) a converged full step can still be temporally under-resolved ---
     CALL CD_HermiteCable_Dyn_Init(mq, l0, EAv, EIv, rhoAv, wv, seed, fx, 0.0_wp, 0.0_wp, 0.9_wp, es, em)
@@ -890,11 +893,10 @@ CONTAINS
     CALL CD_HermiteCable_Dyn_Step(mq, DTV, 40, 1.0e-6_wp, es, em, &
                                   pres_dofs=pd, pres_q=pq, pres_v=pv, pres_a=pa)
     CALL require(es == CD_HCDYN_OK, 'quality-gate probe: full step is Newton-converged')
-    CALL CD_HermiteCable_Dyn_Recovery_Reset()
     CALL CD_HermiteCable_Dyn_Step_Recovering(mrq, DTV, 40, 1.0e-6_wp, es, em, &
                                              pres_dofs=pd, pres_q=pq, pres_v=pv, pres_a=pa)
     CALL require(es == CD_HCDYN_OK, 'quality-gate recovery: under-resolved step subdivides: '//TRIM(em))
-    CALL require(CD_HermiteCable_Dyn_Recovery_Count() == 1, &
+    CALL require(recovered_intervals(mrq) == 1, &
                  'quality-gate recovery: converged but under-resolved interval counted')
     CALL require(ABS(mrq%q(3) - ZJUMP) < 1.0e-10_wp, 'quality-gate recovery lands on prescribed target')
     CALL CD_HermiteCable_Dyn_End(mq)
@@ -912,12 +914,11 @@ CONTAINS
     ! temporal gate's limit, while each quarter step is resolved (the gate measures
     ! deformation, so a smaller, nearly rigid rotation of the beam is accepted whole).
     pq = [-2.0_wp]; pv = [0.3_wp]; pa = [0.1_wp]
-    CALL CD_HermiteCable_Dyn_Recovery_Reset()
     CALL CD_HermiteCable_Dyn_Step_Recovering(mk, DTV, 40, 1.0e-6_wp, es, em, &
                                              pres_dofs=pd, pres_q=pq, pres_v=pv, pres_a=pa, &
                                              max_substeps=4)
     CALL require(es == CD_HCDYN_OK, 'quintic recovery completes on four substeps: '//TRIM(em))
-    CALL require(CD_HermiteCable_Dyn_Recovery_Count() == 1, 'quintic comparison exercised recovery')
+    CALL require(recovered_intervals(mk) == 1, 'quintic comparison exercised recovery')
     CALL CD_HermiteCable_Dyn_Get_Recovery_Diagnostics(mk, recovery_events, recovery_max_used, es, em)
     CALL require(es == CD_HCDYN_OK .AND. recovery_events == 1 .AND. recovery_max_used == 4, &
                  'recovery diagnostics report the committed interval and winning rung')
@@ -1025,6 +1026,14 @@ CONTAINS
         (-24.0_wp*u + 84.0_wp*u2 - 60.0_wp*u3)*v1/duration + &
         (3.0_wp*u - 12.0_wp*u2 + 10.0_wp*u3)*a1
   END SUBROUTINE test_quintic_state
+
+  INTEGER FUNCTION recovered_intervals(model) RESULT(n)
+    !! The intervals the model completed by internal substeps (its recovery diagnostics).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER :: max_used, es
+    CHARACTER(256) :: em
+    CALL CD_HermiteCable_Dyn_Get_Recovery_Diagnostics(model, n, max_used, es, em)
+  END FUNCTION recovered_intervals
 
   SUBROUTINE require(cond, label)
     LOGICAL, INTENT(IN) :: cond

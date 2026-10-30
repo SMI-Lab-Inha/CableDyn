@@ -7,11 +7,11 @@ PROGRAM test_openfast_touchdown
   !! a multi-node grounded run (not merely a seabed endpoint), and drives all platform attachments
   !! through a finite surge/heave trajectory in a uniform current.
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, &
+  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_Fallback_Count, CD_AGG_Fallback_Reset, &
+                                         CD_AGG_ModuleType, CD_AGG_Init_From_Deck, &
                                          CD_AGG_NMovingPoints, CD_AGG_NFluidNodes, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_SetFluidFields, &
                                          CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_End, CD_AGG_OK
-  USE CableDyn_System, ONLY: CD_System_Fallback_Count, CD_System_Fallback_Reset
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
 
@@ -67,7 +67,7 @@ PROGRAM test_openfast_touchdown
   nstep = NINT(DURATION/DT)
   iter_max = 0
   stalled_count = 0
-  CALL CD_System_Fallback_Reset()
+  CALL CD_AGG_Fallback_Reset(agg)
   DO s = 1, nstep
     t = REAL(s, wp)*DT
     phase = omega*t
@@ -109,7 +109,7 @@ PROGRAM test_openfast_touchdown
       EXIT
     END IF
   END DO
-  CALL require(CD_System_Fallback_Count() == 0, 'no EI=0 adaptive-substep fallback at 40 Hz')
+  CALL require(CD_AGG_Fallback_Count(agg) == 0, 'no EI=0 adaptive-substep fallback at 40 Hz')
   CALL require(stalled_count == 0, 'no aggregate nonlinear-stall recovery at 40 Hz')
   CALL require(iter_max <= 40, 'bounded nonlinear iterations over the touchdown trajectory')
   WRITE (*, '(A,I0,A,I0)') 'touchdown gate: grounded nodes=', grounded_nodes, ', max Newton iterations=', iter_max
