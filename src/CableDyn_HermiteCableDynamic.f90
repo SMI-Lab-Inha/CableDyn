@@ -5769,12 +5769,22 @@ CONTAINS
       strain = strain + connection_energy
     END IF
     IF (model%tw_active) THEN
-      ! nodal twist: the element and end-spring energies and the polar kinetic energy
+      ! nodal twist: the element and end-spring energies and the polar kinetic energy, a held
+      ! end section's spin chi_dot = -+drho/dw . omega + phi_dot (End 1, End 2) as in its
+      ! reaction (CD_HermiteCable_Dyn_EndConnection_Moment)
       BLOCK
-        REAL(wp) :: rho, beta, g(12), h(12, 12), tau, psi, gl(3), hl(3, 3), tw
+        REAL(wp) :: rho, beta, g(12), h(12, 12), tau, psi, gl(3), hl(3, 3), tw, ew(3, 2), ewe(3, 2), spin(2)
         INTEGER :: iend
+        ew = CD_ZERO
         DO e = 1, model%ne
-          CALL twist_reference(model, e, model%q, model%torsion%ends, .FALSE., rho, beta, g, h, ErrStat, em2)
+          IF (e == 1 .OR. e == model%ne) THEN
+            CALL twist_reference(model, e, model%q, model%torsion%ends, .FALSE., rho, beta, g, h, ErrStat, em2, &
+                                 end_w=ewe)
+            IF (e == 1) ew(:, 1) = ewe(:, 1)
+            IF (e == model%ne) ew(:, 2) = ewe(:, 2)
+          ELSE
+            CALL twist_reference(model, e, model%q, model%torsion%ends, .FALSE., rho, beta, g, h, ErrStat, em2)
+          END IF
           IF (ErrStat /= CD_HCDYN_OK) THEN
             ErrMsg = 'CD_HermiteCable_Dyn_Energy: '//TRIM(em2)
             RETURN
@@ -5796,7 +5806,11 @@ CONTAINS
           END IF
           strain = strain + 0.5_wp*tw*tw/model%torsion%end_compliance(iend)
         END DO
-        kinetic = kinetic + 0.5_wp*SUM(model%tw_mass*model%tw_w*model%tw_w)
+        spin = [model%tw_w(1), model%tw_w(model%nn)]
+        IF (model%tw_rigid(1)) spin(1) = spin(1) - DOT_PRODUCT(ew(:, 1), model%tw_om(:, 1))
+        IF (model%tw_rigid(2)) spin(2) = spin(2) + DOT_PRODUCT(ew(:, 2), model%tw_om(:, 2))
+        kinetic = kinetic + 0.5_wp*SUM(model%tw_mass(2:model%nn - 1)*model%tw_w(2:model%nn - 1)**2) &
+                  + 0.5_wp*(model%tw_mass(1)*spin(1)**2 + model%tw_mass(model%nn)*spin(2)**2)
       END BLOCK
     ELSE IF (model%torsion%active) THEN
       BLOCK

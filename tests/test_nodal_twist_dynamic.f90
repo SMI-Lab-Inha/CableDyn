@@ -19,7 +19,8 @@ PROGRAM test_nodal_twist_dynamic
   !!      end with (GJ theta + Bt Omega)/L, the damping of the frame's own turn included;
   !!   E  energy: free vibration of a bowed, twisted line with a real Irn (rho_inf = 1): kinetic
   !!      (with the polar part) + elastic (with the twist) stays within the band of the line
-  !!      without torsion;
+  !!      without torsion; a parent rolling the clamped line's end frame at a steady rate puts
+  !!      the continuum's polar kinetic energy into it, the held end section's spin included;
   !!   R  restart: a rolling, torsionally damped run restored from a snapshot, and one rebuilt
   !!      from the checkpoint mirror, continue bit-identically.
   USE CableDyn_Precision, ONLY: wp
@@ -51,6 +52,7 @@ PROGRAM test_nodal_twist_dynamic
   CALL check_damping()
   CALL check_frame_damping()
   CALL check_energy()
+  CALL check_frame_energy()
   CALL check_restart()
 
   IF (nfail > 0) THEN
@@ -530,6 +532,53 @@ CONTAINS
       ', untwisted ', band0, ' of the vibration energy'
     CALL require(band1 <= 5.0e-3_wp, 'E: kinetic + elastic energy with the nodal twist conserved within 0.5 %')
   END SUBROUTINE check_energy
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_frame_energy()
+    !! E: the straight clamped line with Irn = 0.5 kg m and Bt = 10 N m2 s (zeta_1 = 0.25); the
+    !! parent rolls the coupled end's frame (the imposed twist stays 0) at a rate eased in to OMR
+    !! over 5 s, then steady. The sections spin as the continuum's, OMR s/L, so the kinetic
+    !! energy is 1/2 sum I_j (OMR s_j/L)^2 over the lumped polar inertias, the held end's
+    !! (I l0/2, its section spinning at OMR with a held angle) 7 % of it here.
+    REAL(wp), PARAMETER :: IRN = 0.5_wp, BT = 10.0_wp, OMR = 0.5_wp, TR = 5.0_wp, DT = 0.01_wp
+    INTEGER, PARAMETER :: NSTEP = 1000
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab
+    REAL(wp) :: q(NDOF), x(3), t, ang, ke, se, expect, err, l0, mj
+    INTEGER :: k, j, es
+    CHARACTER(300) :: em
+    ALLOCATE (cab)
+    CALL line_seed(0.0_wp, 0.0_wp, q)
+    CALL build_cable(cab, q, 0.0_wp, DT, 1.0e-11_wp, 0.8_wp, .FALSE., IRN, 0.0_wp, bt=BT)
+    x = q(NDOF - 5:NDOF - 3)
+    l0 = LL/REAL(NE, wp)
+    expect = 0.0_wp
+    DO j = 1, NN
+      mj = MERGE(0.5_wp, 1.0_wp, j == 1 .OR. j == NN)*IRN*l0
+      expect = expect + 0.5_wp*mj*(OMR*REAL(j - 1, wp)/REAL(NE, wp))**2
+    END DO
+    err = 0.0_wp
+    DO k = 1, NSTEP
+      t = DT*REAL(k, wp)
+      IF (t < TR) THEN
+        ang = OMR*(t**3/TR**2 - 0.5_wp*t**4/TR**3)
+      ELSE
+        ang = OMR*(t - 0.5_wp*TR)
+      END IF
+      CALL CD_HFMF_UpdateStates(cab, x, [0.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 0.0_wp, 0.0_wp], es, em, &
+                                u_orientation=roll_x(ang))
+      CALL require(es == CD_HFMF_OK, 'E frame: step: '//TRIM(em))
+      IF (es /= CD_HFMF_OK) EXIT
+      IF (t > 0.8_wp*REAL(NSTEP, wp)*DT) THEN
+        CALL CD_HermiteCable_Dyn_Energy(cab%line, ke, se, es, em)
+        CALL require(es == CD_HCDYN_OK, 'E frame: energy: '//TRIM(em))
+        err = MAX(err, ABS(ke - expect)/expect)
+      END IF
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES12.5)') 'E frame-driven spin: kinetic energy against the continuum''s ', err, &
+      ' of ', expect
+    CALL require(err <= 1.0e-2_wp, 'E: a held end section spinning with its frame carries its kinetic energy')
+    CALL CD_HFMF_End(cab)
+  END SUBROUTINE check_frame_energy
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE check_restart()
