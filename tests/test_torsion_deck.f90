@@ -45,9 +45,12 @@ PROGRAM test_torsion_deck
   CHARACTER(16) :: arg
   CHARACTER(8) :: no_rows(0)
 
-  ! neutral 0.2 m section: mass = rhoW pi d^2 / 4; EA 1e7, EI 1e6, GAs 1e8, GJ 5e4
+  ! neutral 0.2 m section: mass = rhoW pi d^2 / 4; EA 1e7, EI 1e6, GAs 1e8, GJ 5e4, Irn 1e-12 (the
+  ! massless-line torsion these gates check, down to the coarse-step pendulum's trapezoidal closed
+  ! form: the nodal twist's limit of a negligible polar inertia, whose inertia
+  ! test_nodal_twist_dynamic gates)
   WRITE (neutral_type, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, &
-    ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
+    ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-12 0.0 0.0 0.0 0.0'
 
   ! optional argument: run only gate 1..9 (diagnostics)
   only = 0
@@ -911,7 +914,7 @@ CONTAINS
     CALL expect_error('an imposed twist above 1000 turns is named', 'tdeck_e16.dat', 'tdeck_e16', &
                       'line 1: the imposed twist Pretwist(B) - Pretwist(A) = 4.00000E+05 deg exceeds 1000 turns')
     ! a twist far beyond the buckling onset: the failed stage is named once, with its line
-    t10(1) = 'cab 0.2 32.2013246 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0'
+    t10(1) = 'cab 0.2 32.2013246 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-9 0.0 0.0 0.0 0.0'
     CALL straight_deck('tdeck_e15.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Rigid 0 0 1 36000', OUTS, t10)
     CALL expect_error('a failed torsion stage is named without a doubled prefix', 'tdeck_e15.dat', 'tdeck_e15', &
                       'CableDyn_DeckDriver: line 1: finite-EI torsion static solve failed')

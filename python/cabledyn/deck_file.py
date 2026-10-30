@@ -2655,7 +2655,7 @@ class DeckFile:
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
                 if len(row.tokens) == 14 and index == 7:
-                    continue  # the GJ column, GJ or GJ|K, is read below
+                    continue  # the GJ column, GJ, GJ|K or GJ|K|Bt, is read below
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
             ea_parts = row.tokens[3].split("|")
             ba_parts = row.tokens[4].split("|")
@@ -2744,14 +2744,17 @@ class DeckFile:
                 raise DeckFormatError(f"{self._at(row)}: {model} is not supported with EI > 0")
             gj_value = 0.0
             if len(row.tokens) == 14:
-                # the GJ column is GJ or GJ|K (K the torque-tension coupling, N m)
+                # the GJ column is GJ, GJ|K or GJ|K|Bt (K the torque-tension coupling, N m;
+                # Bt the torsional damping, N m^2 s, negative: -zeta)
                 gj_parts = row.tokens[7].split("|")
-                if len(gj_parts) > 2:
+                if len(gj_parts) > 3:
                     raise DeckFormatError(
-                        f'{self._at(row)}: LINE TYPES GJ column "{row.tokens[7]}" takes GJ or GJ|K'
+                        f'{self._at(row)}: LINE TYPES GJ column "{row.tokens[7]}" takes GJ, GJ|K '
+                        "or GJ|K|Bt"
                     )
                 gj_value = numeric(gj_parts[0], row, "GJ")
-                ktt = numeric(gj_parts[1], row, "GJ|K coupling") if len(gj_parts) == 2 else 0.0
+                ktt = numeric(gj_parts[1], row, "GJ|K coupling") if len(gj_parts) >= 2 else 0.0
+                btor = numeric(gj_parts[2], row, "GJ|K|Bt damping") if len(gj_parts) == 3 else 0.0
                 finite_ei = [
                     numeric(row.tokens[6], row, "LINE TYPES column 7"),
                     gj_value,
@@ -2781,6 +2784,11 @@ class DeckFile:
                             f"{self._at(row)}: LINE TYPES {name}: torque-tension coupling needs "
                             "GJ > 0 and K^2 < EA GJ"
                         )
+                if btor != 0.0 and not (ei > 0.0 and gj_value > 0.0 and finite_ei[3] > 0.0):
+                    raise DeckFormatError(
+                        f"{self._at(row)}: LINE TYPES {row.tokens[0]}: torsional damping (GJ|K|Bt) "
+                        "needs a finite-EI cable with GJ > 0 and Irn > 0"
+                    )
             line_type_meta[row.tokens[0].lower()] = (
                 numeric(row.tokens[1], row, "Diam"),
                 numeric(row.tokens[2], row, "Mass"),

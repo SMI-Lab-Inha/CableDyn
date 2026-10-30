@@ -102,6 +102,7 @@ article's methods, are compared in
 | **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
 | **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
 | **T-10** | Torsion dynamics, restart and body torque | quasi-static torque, energy, uninterrupted run, pendulum | torque 2.2e-16; energy band 4.9e-4; restart bit-identical; pendulum 6.4e-5 | see [Torsion](#torsion) | Pass |
+| **T-13** | Nodal twist (torsional inertia and damping) | condensed torsion in the limit of no inertia; continuum torsional wave; `ζ = ω Bt/(2 GJ)`; energy; restart | ≤6e-7 against the condensed torsion; wave torque 0.07 %; decrement 6 %; energy band 4.9e-4; restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-12** | Torque–tension coupling | `T = EA ε + K τ`, `M = GJ τ + K ε` closed forms; kernel FD; march | ≤1e-7 against every closed form; kernel gradient 1.7e-10, Hessian 9.8e-11 | see [Torsion](#torsion) | Pass |
 | **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
 
@@ -999,6 +1000,30 @@ in parentheses).
 
   A 20 s march that moves End A 0.1 m away and rolls it −90° ends on the static values of that
   state to 1e-7. `GJ|0` equals the uncoupled cable bit for bit, and `K² ≥ EA GJ` stops by name.
+- **T-13 nodal twist** (`nodal_twist_dynamic`, `hermite_twist_kernel`). The reference twist of the
+  time-parallel-transported directors equals the direct composition of the smallest rotations
+  to 1e-13 (interior element, rigid End A, rigid End B, one element rigid at both ends, an
+  elastic end's spring), equals the fine transport along the element with the holonomy to
+  1e-6, and has the gradient and Hessian of its finite differences. On the 10 m line
+  (EA 1e5 N, EI 100 N·m², GJ 80 N·m², 20 elements):
+  - with `Irn = 1e-9 kg·m` it reproduces the condensed torsion through 300 steps of sway, a
+    roll of more than a turn and an imposed twist, for clamped, bending-pinned and elastic
+    ends: centreline to 1.3e-10 m, mean torque 1.7e-12, node torques 5.9e-7, end force 9.9e-8
+    and end moment 5.5e-7 relative;
+  - with `Irn = 0.5 kg·m`, rolled at half its first torsional frequency, the held end carries
+    the continuum torque `GJ A k/sin(kL)` to 0.07 %;
+  - with `Bt` for `ζ_1 = 0.05`, the first torsional mode rings down with the logarithmic
+    decrement 0.334 against 0.315 (6 %, the faster higher modes not yet gone);
+  - in free vibration at `ρ∞ = 1` the energy stays in a band of 4.9e-4 of the vibration energy
+    (3.8e-4 without torsion), and a run restored from a snapshot or rebuilt from the checkpoint
+    mirror continues bit-identically.
+
+  The torsion gates of `torsion_deck`, `coupled_torsion` and `torsion_coupling` run in the
+  limit of a negligible polar inertia (`Irn = 1e-12` and `1e-9 kg·m`), whose closed forms they
+  check; at a direct non-stepping write of the coupled end, the end element alone takes the
+  roll (`GJ (−roll)/l_e`) against the frozen interior. The example
+  `torsion_lazy_wave_hangoff_twist.dat` (Irn of the section) moves by at most 7e-5 of the
+  torque against the condensed torsion.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
@@ -1008,8 +1033,9 @@ in parentheses).
   (the C API) and a standalone mixed `EI = 0` + finite-EI deck without a body stop with named
   errors.
 
-Limits. The torsion model is quasi-static (no torsional inertia), takes no seabed friction
-against twist, and does not resolve self-contact. The torque–tension coupling is checked against
+Limits. The torsion model takes no seabed friction against twist and does not resolve
+self-contact; its statics are condensed (uniform torque). The nodal twist's inertia and damping
+are checked against the continuum and modal closed forms only. The torque–tension coupling is checked against
 closed forms only; there is no cross-code or experimental record of it. Dynamic loop
 formation (hockling) and a twisted slack catenary against OrcaFlex are not part of this record,
 and there is no experimental torsion case.

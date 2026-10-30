@@ -83,9 +83,11 @@ Line and constitutive capability
        fail closed by name
    * - Torsion of finite-EI lines
      - Supported with limits
-     - condensed isotropic torsion (uniform torque, quasi-static: no torsional inertia) of a
-       finite-EI line restrained in torsion at both ends (``END CONNECTIONS`` torsion columns,
-       explicit ``GJ``), with torque–tension coupling (``GJ|K``), in statics with a stability check and buckling descent, and in dynamics
+     - isotropic torsion of a finite-EI line restrained in torsion at both ends
+       (``END CONNECTIONS`` torsion columns, explicit ``GJ``), with torque–tension coupling
+       (``GJ|K``): condensed (uniform torque) in statics with a stability check and buckling
+       descent, and a twist angle at every node in dynamics, with the polar inertia ``Irn`` and
+       torsional damping (``GJ|K|Bt``),
        with turning Rigid6 bodies, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll
        column standalone, and with the platform orientation in coupled OpenFAST and FAST.Farm
        runs (torque returned to the platform, ``PtfmInit``, checkpoints; see
@@ -93,8 +95,8 @@ Line and constitutive capability
        name: the standalone mixed ``EI = 0`` + finite-EI aggregate and the C API (which move the
        line ends by translation only), OpenFAST linearisation of a line restrained in torsion,
        rod ends, bodies other than Rigid6, lines with ``ATTACHMENTS``, modal analysis, and
-       ``False alpha_force_blend``. Not modelled: seabed friction against twist, torque–tension
-       coupling, anisotropic sections, self-contact of a loop (see :ref:`theory-torsion`)
+       ``False alpha_force_blend``. Not modelled: seabed friction against twist, anisotropic
+       sections, self-contact of a loop (see :ref:`theory-torsion`)
    * - Hockling loops, nonlinear cross-section laws
      - Not provided
      - the buckling onset and the post-buckled shape are computed, but a loop that closes on

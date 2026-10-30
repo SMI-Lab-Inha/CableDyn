@@ -962,12 +962,35 @@ def test_torque_tension_coupling_round_trips_in_the_gj_column(tmp_path: Path) ->
     assert next(t for t in loaded.line_types if t.name == "cable").gj == (1.0e4, 2.0e5)
 
 
+def test_torsional_damping_round_trips_in_the_gj_column(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    cable = model.add_line_type(
+        "cable",
+        diam=0.2,
+        mass=40.0,
+        ea=5.0e8,
+        ei=1.0e4,
+        gas=1.0e8,
+        gj=(1.0e4, 0.0, -0.02),
+        irt=0.1,
+        irn=0.05,
+    )
+    assert cable.gj == (1.0e4, 0.0, -0.02)
+    target = model.save(tmp_path / "damped.dat")
+    deck = DeckFile.read(target)
+    row = next(r for r in deck.line_types if r.tokens[0] == "cable")
+    assert [float(v) for v in row.tokens[7].split("|")] == [1.0e4, 0.0, -0.02]
+    loaded = DeckModel.load(target)
+    assert next(t for t in loaded.line_types if t.name == "cable").gj == (1.0e4, 0.0, -0.02)
+
+
 @pytest.mark.parametrize(
     ("gj", "ei", "message"),
     [
         ("1.0e4|1.0e7", "1.0e4", r"K\^2 < EA GJ"),
         ("1.0e4|1.0e3", "0.0", "needs a finite-EI cable"),
-        ("1.0e4|1.0e3|5.0", "1.0e4", r"takes GJ or GJ\|K"),
+        ("1.0e4|1.0e3|5.0|1.0", "1.0e4", r"takes GJ, GJ\|K or GJ\|K\|Bt"),
+        ("1.0e4|0|5.0", "0.0", "torsional damping"),
     ],
 )
 def test_torque_tension_coupling_refusals(tmp_path: Path, gj: str, ei: str, message: str) -> None:
