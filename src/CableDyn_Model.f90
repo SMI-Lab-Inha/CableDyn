@@ -303,6 +303,8 @@ MODULE CableDyn_Model
     ! (the static-branch dashpot Bs lives inside the series law). ve_dt carries the
     ! active step size into the contributors; 0 = the instantaneous
     ! (committed-state) limit used by IC, coupled-load, and tension queries.
+    ! ve_dl_1 is a stretch [m], so an unstretched-length change (active line control) leaves
+    ! it as it is, as MoorDyn's dl_1 (CD_Update_Model_SegmentLength).
     ! ve_dl_1_rollback is the system-level rollback twin of q_rollback: a line
     ! whose step committed (advancing dl_1) can be rolled back when a sibling
     ! line or the coupled point solve fails.
@@ -4941,7 +4943,8 @@ CONTAINS
     !! the committed state) makes the new length and rate the committed ones as well. A rate
     !! of -0 is stored as +0, so a zero command of either sign leaves an uncontrolled model
     !! bit-identical (the committed-length test compares bits). On a Syrope element the slow
-    !! stretch eps_slow*l0 is carried over the change (model_syrope_slow).
+    !! stretch eps_slow*l0 is carried over the change (model_syrope_slow); on a viscoelastic
+    !! element the slow-branch stretch dl_1 is, as it is (both as in MoorDyn-F/C).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: elem
     REAL(wp), INTENT(IN) :: l0_new, l0_dot
@@ -4972,16 +4975,14 @@ CONTAINS
                 'recompute scalars (kBot + contact diameter) supplied at init')
       RETURN
     END IF
-    IF (model%has_viscoelastic) THEN
-      IF (model%ve_mode(elem) /= 0) THEN
-        ! the dl_1 state partitions the stretch against the INIT-time natural
-        ! length; MoorDyn defines no rescaling law for a controlled
-        ! viscoelastic segment, so this composition fails closed by name
-        CALL fail(ErrStat, ErrMsg, 'segment-length update on a viscoelastic (ElasticMod > 1) element '// &
-                  'is not supported: the dl_1 state has no length-rescaling law')
-        RETURN
-      END IF
-    END IF
+    ! A viscoelastic element keeps its slow-branch stretch dl_1 as it is, and every law
+    ! evaluation reads it with the present l0: MagT = EA_1 dl_1/l0, MagTd = BA ld_1/l0, the ODE
+    ! ld_1 = (EA_D dl - (EA_D + EA_1) dl_1 + BA_D lstrd)/(BA_D + BA) with dl = lstr - l0, and the
+    ! ElasticMod 3 EA_D(dl_1, l0). That is MoorDyn's rule: MoorDyn-F (MD_CalcContStateDeriv sets
+    ! l(N), ld(N) of a controlled line; Line_GetStateDeriv reads Line%dl_1 against Line%l) and
+    ! MoorDyn-C (Line::setUnstretchedLength sets every l[i]; Line::getStateDeriv reads dl_1[i]
+    ! against l[i]) never touch dl_1 on a length change. The force blend's committed force reads
+    ! the same dl_1 at l0_c.
     ! A Syrope element keeps its states as they are: the slow strain stays the committed state's,
     ! a strain of l0_c, and the element reads it at its present length (model_syrope_slow), so
     ! its slow STRETCH carries over the length change as MoorDyn-F/C carry it; the running

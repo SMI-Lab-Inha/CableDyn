@@ -30,6 +30,11 @@ PROGRAM test_syrope_control
   !!   4. Composite lines: a polyester-chain line (the controlled segment is Syrope) takes the
   !!      oracle of 2 at its fairlead element and runs a ramp; a chain-polyester-chain line (the
   !!      controlled segment is chain) leaves its Syrope states untouched and runs the ramp.
+  !!   5. Without CONTROL, under False alpha_force_blend: the fairlead pulled out 1 m over 40 s and
+  !!      held, so the rope rests on its OWC at its new running maximum. The backward-Euler root
+  !!      then lies next to the top sample of the working curve, where the safeguarded Newton step
+  !!      alone crept and stopped the run (CableDyn_Syrope, CD_Syrope_State_Advance); every step
+  !!      converges and the held tension is the OWC tension at the line strain.
   !! Gates 1-3 and the polyester-chain line of 4 stopped at initialisation before (CONTROL on a
   !! Syrope segment was refused).
   USE CableDyn_Precision, ONLY: wp
@@ -71,6 +76,7 @@ PROGRAM test_syrope_control
   CALL write_deck('sctl_poly_chain.dat', 'poly_chain')
   CALL write_deck('sctl_chain_poly_chain.dat', 'chain_poly_chain')
   CALL write_deck('sctl_single_noblend.dat', 'single', no_force_blend=.TRUE.)
+  CALL write_deck('sctl_hold_noblend.dat', 'single', no_force_blend=.TRUE., no_control=.TRUE.)
 
   CALL case_quasi_static('sctl_single.dat', 'quasi-static')
   CALL case_quasi_static('sctl_single_noblend.dat', 'quasi-static, False alpha_force_blend')
@@ -78,6 +84,7 @@ PROGRAM test_syrope_control
   CALL case_length_step('sctl_single.dat', -0.04_wp, 'haul-in step')
   CALL case_restart()
   CALL case_composite()
+  CALL case_hold_at_maximum()
 
   IF (nfail > 0) THEN
     PRINT '(I0,A)', nfail, ' assertion(s) failed'
@@ -584,6 +591,64 @@ CONTAINS
   END SUBROUTINE ramp_runs
 
   ! ---------------------------------------------------------------------------------------------
+  ! 5. a rope held at its running maximum, no CONTROL
+  ! ---------------------------------------------------------------------------------------------
+
+  SUBROUTINE case_hold_at_maximum()
+    TYPE(CD_AGG_ModuleType) :: agg
+    REAL(wp) :: r0(3, 1), pos(3, 1), vel(3, 1), acc(3, 1), ld(3, 1), x, xdot, t, chord, l_tot, t_o
+    REAL(wp), ALLOCATABLE :: ten(:)
+    INTEGER :: es, ni, s, il, ne
+    LOGICAL :: cv, st, ok
+    CHARACTER(512) :: em
+
+    CALL CD_AGG_Init_From_Deck(agg, 'sctl_hold_noblend.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'held at the maximum: the deck initialises: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetMovingPointMesh(agg, r0, vel, acc, ld, es, em)
+    il = 1
+    ne = CD_System_Line_NElem(agg%sys%fast%system, il, es, em)
+    ALLOCATE (ten(ne))
+    ASSOCIATE (md => agg%sys%fast%system%lines(il))
+      l_tot = SUM(md%l0)
+    END ASSOCIATE
+    ok = .TRUE.
+    DO s = 1, 960
+      t = REAL(s, wp)*DT
+      IF (t < 40.0_wp) THEN
+        CALL half_cosine(t, 0.0_wp, 40.0_wp, 0.0_wp, -1.0_wp, x, xdot)
+      ELSE
+        x = -1.0_wp
+        xdot = 0.0_wp
+      END IF
+      pos = r0
+      pos(1, 1) = r0(1, 1) + x
+      vel = 0.0_wp
+      vel(1, 1) = xdot
+      acc = 0.0_wp
+      CALL CD_AGG_Step_Moving(agg, DT, pos, vel, acc, cv, st, ni, es, em)
+      IF (es /= CD_AGG_OK .OR. .NOT. cv) THEN
+        ok = .FALSE.
+        CALL require(.FALSE., 'held at the maximum: step at t = '//TRIM(fmt_real(t))//': '//TRIM(em))
+        EXIT
+      END IF
+    END DO
+    IF (ok) THEN
+      CALL CD_Get_System_Line_Tension(agg%sys%fast%system, il, ten, es, em)
+      ASSOCIATE (md => agg%sys%fast%system%lines(il))
+        chord = NORM2(md%q(3*md%elem_conn(2, ne) - 2:3*md%elem_conn(2, ne)) - &
+                      md%q(3*md%elem_conn(1, 1) - 2:3*md%elem_conn(1, 1)))
+      END ASSOCIATE
+      t_o = owc_t(chord/l_tot - 1.0_wp)
+      PRINT '(A,ES12.5,A,ES12.5,A,ES10.3)', '  held at the maximum for 8 s: tension ', MAXVAL(ten), ' N, OWC ', t_o, &
+        ' N, rel. difference ', MAXVAL(ABS(ten - t_o))/t_o
+      CALL require(MAXVAL(ABS(ten - t_o)) <= 1.0e-6_wp*t_o, &
+                   'held at the maximum: every step converges and the rope rests on its OWC')
+    END IF
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE case_hold_at_maximum
+
+  ! ---------------------------------------------------------------------------------------------
   ! the OWC table, files and helpers
   ! ---------------------------------------------------------------------------------------------
 
@@ -638,16 +703,17 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_settings
 
-  SUBROUTINE write_deck(path, kind, no_force_blend)
+  SUBROUTINE write_deck(path, kind, no_force_blend, no_control)
     !! A Coupled fairlead at x = 0 and a Fixed anchor at mid-depth, the line written fairlead first
     !! (its only host-driven end at NodeA, the controlled end), with a CONTROL row on channel 1:
     !!   single: 100 m of polyester in 10 segments, the anchor 102 m away;
     !!   poly_chain: 80 m of polyester (8 segments) then 20 m of chain (2), 101.6 m;
     !!   chain_poly_chain: 10 m of chain, 80 m of polyester, 10 m of chain (1, 8, 1), 101.6 m.
     !! The polyester is nearly neutrally buoyant (0.05 kg/m above the displaced water's).
-    !! no_force_blend writes False alpha_force_blend.
+    !! no_force_blend writes False alpha_force_blend, no_control leaves the CONTROL section out.
     CHARACTER(*), INTENT(IN) :: path, kind
-    LOGICAL, INTENT(IN), OPTIONAL :: no_force_blend
+    LOGICAL, INTENT(IN), OPTIONAL :: no_force_blend, no_control
+    LOGICAL :: ctrl
     INTEGER :: u
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'Syrope line-control test deck ('//kind//')'
@@ -683,10 +749,14 @@ CONTAINS
       WRITE (u, '(A)') '1 poly 80.0 8'
       WRITE (u, '(A)') '1 chain 10.0 1'
     END SELECT
-    WRITE (u, '(A)') '--- CONTROL ---'
-    WRITE (u, '(A)') 'ChannelID Lines'
-    WRITE (u, '(A)') '(-) (-)'
-    WRITE (u, '(A)') '1 1'
+    ctrl = .TRUE.
+    IF (PRESENT(no_control)) ctrl = .NOT. no_control
+    IF (ctrl) THEN
+      WRITE (u, '(A)') '--- CONTROL ---'
+      WRITE (u, '(A)') 'ChannelID Lines'
+      WRITE (u, '(A)') '(-) (-)'
+      WRITE (u, '(A)') '1 1'
+    END IF
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'

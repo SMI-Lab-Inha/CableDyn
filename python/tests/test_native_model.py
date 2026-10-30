@@ -66,7 +66,10 @@ def test_failed_initialization_in_the_constructor_releases_the_handle(monkeypatc
     original = model_module.CableDyn.close
 
     def tracking_close(self: model_module.CableDyn) -> None:
-        closed.append(bool(self._handle))
+        # only an instance's first close (generation 0): an instance an earlier test closed and
+        # left behind can be finalized while this one is constructed, closing it again
+        if self._generation == 0:
+            closed.append(bool(self._handle))
         original(self)
 
     monkeypatch.setattr(model_module.CableDyn, "close", tracking_close)

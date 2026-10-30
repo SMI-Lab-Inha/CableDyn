@@ -7907,8 +7907,8 @@ CONTAINS
     !! UnstrLen and N, summed over the line's sections), from which the apply takes
     !! MoorDyn-F's command bounds. Every capability check runs here (a finite-EI line also
     !! needs the force-blended generalised-alpha), so the apply loop cannot fail for input
-    !! reasons after its prevalidation. An EI = 0 segment may be linear-elastic or Syrope (its
-    !! slow stretch carries over the length change); a viscoelastic one fails closed.
+    !! reasons after its prevalidation. An EI = 0 segment may be linear-elastic, viscoelastic
+    !! or Syrope (the slow stretch of the last two carries over the length change).
     TYPE(DeckControl), INTENT(IN) :: ctrls(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
@@ -7995,17 +7995,9 @@ CONTAINS
           IF (agg%sys%lines(obj)%has_seabed .AND. .NOT. agg%sys%lines(obj)%has_seabed_recompute) THEN
             CALL fail(ErrStat, ErrMsg, 'CONTROL line was built without the seabed recompute inputs'); RETURN
           END IF
-          IF (agg%sys%lines(obj)%has_viscoelastic) THEN
-            IF (agg%sys%lines(obj)%ve_mode(e) /= 0) THEN
-              ! the runtime length update fails closed on a viscoelastic element (the
-              ! dl_1 state has no rescaling law), so a deck composing CONTROL with a
-              ! viscoelastic controlled segment must not start at all
-              CALL fail(ErrStat, ErrMsg, 'CONTROL targets a viscoelastic (ElasticMod 2) '// &
-                        'segment; active line control is not supported on the viscoelastic model'); RETURN
-            END IF
-          END IF
-          ! A Syrope controlled segment carries its slow stretch over each length change, as
-          ! MoorDyn-F/C do (CD_Update_Model_SegmentLength), so it needs no check here.
+          ! A viscoelastic or Syrope controlled segment carries its slow stretch over each
+          ! length change, as MoorDyn-F/C do (CD_Update_Model_SegmentLength), so it needs no
+          ! check here.
         ELSE
           ! the coupled cable builder makes End A the host-driven fairlead and End B the
           ! Fixed anchor; any other arrangement would control a segment that is not the

@@ -1118,8 +1118,13 @@ bounds that would make it zero or negative (possible when it is shorter than hal
   over the new length. The running maximum tension is kept, and the slow-strain rate takes the
   chord rate without the paid-out term, as MoorDyn's Syrope rate does. A slow pay-out therefore
   unloads the segment along the working curve of its load history, and a haul-in beyond the
-  running maximum follows the OWC and raises it. A viscoelastic segment cannot be controlled:
-  initialisation stops with a message.
+  running maximum follows the OWC and raises it.
+- A viscoelastic segment (`Es|Ed` or `Es|alphaMBL|vbeta`) keeps its slow-branch stretch `dl_1`
+  as it is over the length change and reads it at the new length, as MoorDyn-F and MoorDyn-C do:
+  the tension `EA_1 dl_1/L0 + BA ld_1/L0`, the rate `ld_1` with `dl` = stretched length − `L0`,
+  and the load-dependent `EA_D` all take the new `L0`, and the rate takes the chord rate without
+  the paid-out term. A slow pay-out or haul-in therefore follows the static law `Es` times the
+  strain; a fast change first meets the dynamic stiffness and relaxes to it.
 - On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
   is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
   its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that

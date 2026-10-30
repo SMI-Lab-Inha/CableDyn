@@ -725,7 +725,8 @@ CONTAINS
   END SUBROUTINE case_model_copy_midstate
 
   SUBROUTINE case_model_fail_closed()
-    !! The init validation battery and the control-composition choke point.
+    !! The init validation battery and the control composition: a segment-length change on a
+    !! viscoelastic element leaves its dl_1 stretch as it is (MoorDyn-F/C), and the line steps.
     TYPE(CD_ModelType) :: model
     TYPE(GenAlphaConfig) :: cfg
     INTEGER :: conn(2, 2), fixed(6), es, n_iter
@@ -775,15 +776,20 @@ CONTAINS
                        ve_ea_d=ve_ead, ve_ba=ve_ba, ve_ba_d=ve_bad)
     CALL require(es /= CD_MODEL_OK .AND. INDEX(em, 'plain element') > 0, 'fail:plain-with-dashpots')
     ! MIXED line: element 1 viscoelastic, element 2 plain -- the segment-length
-    ! control fails closed by name on the viscoelastic element and stays
-    ! available on the plain one
+    ! control applies to both; the viscoelastic element keeps its dl_1 stretch bit for bit
     ve_ba = [7.0_wp, 0.0_wp]
     ve_bad = [3.0_wp, 0.0_wp]
     CALL CD_Init_Model(model, q0, v0, conn, l0, ea, rho_a, .FALSE., f_ext, fixed, cfg, es, em, &
                        ve_ea_d=ve_ead, ve_ba=ve_ba, ve_ba_d=ve_bad)
     CALL require(es == CD_MODEL_OK, 'fail:mixed-init-ok')
-    CALL CD_Update_Model_SegmentLength(model, 1, 1.01_wp, 0.0_wp, es, em)
-    CALL require(es /= CD_MODEL_OK .AND. INDEX(em, 'viscoelastic') > 0, 'fail:control-on-viscoelastic')
+    BLOCK
+      REAL(wp) :: dl1_before(2), dl1_after(2)
+      CALL CD_Get_Model_VE_Dl1(model, dl1_before, es, em)
+      CALL CD_Update_Model_SegmentLength(model, 1, 1.01_wp, 0.0_wp, es, em)
+      CALL CD_Get_Model_VE_Dl1(model, dl1_after, es, em)
+      CALL require(es == CD_MODEL_OK .AND. ALL(TRANSFER(dl1_after, 0_8, 2) == TRANSFER(dl1_before, 0_8, 2)), &
+                   'fail:control-on-viscoelastic-keeps-dl1')
+    END BLOCK
     CALL CD_Update_Model_SegmentLength(model, 2, 1.01_wp, 0.0_wp, es, em)
     CALL require(es == CD_MODEL_OK, 'fail:control-on-plain-ok')
     ! the mixed model still steps (the plain element keeps its EA elastic force)

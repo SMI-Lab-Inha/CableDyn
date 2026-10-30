@@ -44,9 +44,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   ramps and 6e-7 at rest; after a length step it is MoorDyn's at the carried stretch to 1e-15
   (carrying the strain instead would be off by 0.4 to 2.4 %); a restart in the ramp continues
   bit for bit; a polyester-chain line with a Syrope fairlead segment and a
-  chain-polyester-chain line run. The Syrope state solve also finishes by bisection when its
-  root sits next to the top of the working curve, where the Newton step alone stopped a run
-  held at its running maximum under `False alpha_force_blend`.
+  chain-polyester-chain line run.
+- Active line control of a viscoelastic segment (`Es|Ed` and `Es|alphaMBL|vbeta`), which
+  stopped at initialisation before. As in MoorDyn-F and MoorDyn-C the slow-branch stretch
+  `dl_1` is left as it is and read at the new length. On the same taut line and cycle the
+  tension follows the static law `Es` times the strain to 1.7e-4 along the ramps (4.6e-4
+  load-dependent) and 4e-9 at rest; after a length step it is MoorDyn's at the carried stretch
+  to 4e-16 (carrying the strain instead would be off by 0.4 to 4.6 %); a restart in the ramp
+  continues bit for bit.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their
@@ -199,6 +204,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   host acceleration at `t = 0` enters neither version.
 - MoorDyn-F's `inertialF` option was an unknown keyword; `inertialF 1` (CableDyn's behaviour)
   is now accepted, and `0` and `2` are rejected by name.
+- A Syrope line held at its running maximum (the fairlead pulled out and held) under
+  `False alpha_force_blend` stopped with "Syrope backward-Euler state solve did not converge":
+  next to the top sample of the working curve the Newton step's difference quotient straddled
+  the kink and crept along one side of the bracket. The solve now finishes by bisection there;
+  solves that converged before are unchanged.
 - A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
   start, reduces the record over its own length instead of failing for want of a positive
   `TMax`.

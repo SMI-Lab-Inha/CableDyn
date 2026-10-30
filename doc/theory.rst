@@ -2816,7 +2816,22 @@ taut 100 m polyester line whose fairlead segment is paid out by 0.5 m, hauled in
 back over 80 s, every element's tension follows the rest curve of its history at the line strain
 to 2.5e-4 of the initial tension along the ramps and to 6e-7 at rest; after a length step it is
 MoorDyn's at the carried stretch to round-off, where carrying the strain instead would be off by
-0.4 to 2.4 %. A viscoelastic segment cannot be controlled.
+0.4 to 2.4 %.
+
+A viscoelastic segment keeps its slow-branch stretch :math:`\Delta l_1` over a length change, as
+MoorDyn-F (``MD_CalcContStateDeriv`` sets the controlled segment's ``l`` and ``ld``,
+``Line_GetStateDeriv`` reads ``dl_1`` against ``l``) and MoorDyn-C
+(``Line::setUnstretchedLength``, ``Line::getStateDeriv``) keep it: :math:`\Delta l_1` is a
+stretch, so no rescaling arises, and the law reads it at the present length,
+:math:`T = EA_1\,\Delta l_1/L_0 + BA\,\dot{\Delta l}_1/L_0` with
+:math:`\dot{\Delta l}_1 = (EA_D (l - L_0) - (EA_D + EA_1)\Delta l_1 + BA_D\,\dot l)/(BA_D + BA)`
+and, for the load-dependent stiffness, :math:`EA_D(\Delta l_1, L_0)`; the committed force of the
+force blend reads the same :math:`\Delta l_1` at :math:`L_{0,c}`. The rate :math:`\dot l` is the
+chord rate, without the paid-out term, as in MoorDyn. On the taut 100 m line above with
+:math:`E_s = 10^8` N, the same pay-out and haul-in cycle follows the static law
+:math:`E_s(D/L - 1)` to 1.7e-4 of the initial tension along the ramps (4.6e-4 with the
+load-dependent stiffness) and to 4e-9 at rest; after a length step the tension is MoorDyn's at
+the carried stretch to round-off, where carrying the strain instead would be off by 0.4 to 4.6 %.
 
 On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
 up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by

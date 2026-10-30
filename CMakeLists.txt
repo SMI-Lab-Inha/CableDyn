@@ -2131,6 +2131,13 @@ target_link_libraries(test_syrope_control PRIVATE cabledyn_core)
 add_test(NAME syrope_control COMMAND test_syrope_control)
 set_tests_properties(syrope_control PROPERTIES LABELS "fortran;integration;dynamic;openfast")
 
+# Active line control of viscoelastic (ElasticMod 2/3) segments on the coupled route (the dl_1
+# stretch carried over a length change, as MoorDyn-F/C carry it): quasi-static cycle, step, restart
+add_executable(test_viscoelastic_control tests/test_viscoelastic_control.f90)
+target_link_libraries(test_viscoelastic_control PRIVATE cabledyn_core)
+add_test(NAME viscoelastic_control COMMAND test_viscoelastic_control)
+set_tests_properties(viscoelastic_control PROPERTIES LABELS "fortran;integration;dynamic;openfast")
+
 add_executable(test_torsion_coupling tests/test_torsion_coupling.f90)
 target_link_libraries(test_torsion_coupling PRIVATE cabledyn_core)
 add_test(NAME torsion_coupling COMMAND test_torsion_coupling)
@@ -2801,6 +2808,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
   target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_syrope_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_viscoelastic_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)

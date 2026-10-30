@@ -74,7 +74,9 @@ Line and constitutive capability
    * - Viscoelastic rope (MoorDyn ``ElasticMod`` 2/3)
      - Supported
      - per-element series-Kelvin state (standard linear solid only when ``BA_D = 0``),
-       including load-dependent dynamic stiffness; ``EI = 0`` lines
+       including load-dependent dynamic stiffness; ``EI = 0`` lines, with active line control
+       in coupled OpenFAST runs (the slow-branch stretch carried over the length change, as in
+       MoorDyn)
    * - Syrope polyester
      - Supported with limits
      - dynamic line with OWC and two history states, single-section and taut or between
@@ -211,7 +213,8 @@ OpenFAST coverage
 The ``CompMooring = 5`` shell covers normal coupled time-domain stepping with its own ``dtM``,
 nonzero ``PtfmInit``, correction iterations, SeaState fields, checkpoint/restart, scoped
 quasi-static ``dYdu`` linearisation, line failures, active-tension control of ``EI = 0`` lines
-(linear-elastic or Syrope segments) and finite-EI cables, and FAST.Farm shared moorings. Restart and linearisation do not arise under
+(linear-elastic, viscoelastic or Syrope segments) and finite-EI cables, and FAST.Farm shared
+moorings. Restart and linearisation do not arise under
 FAST.Farm, which does not call those module operations, and active-tension control is rejected
 there. See :doc:`openfast` for setup and :doc:`coupling_boundary` for the interface contract.
 

@@ -385,8 +385,8 @@ without an auxiliary process:
 * **Active tensioning** maps ServoDyn ``CableDeltaL``/``CableDeltaLdot`` control onto the
   fairlead-side segment of ``EI = 0`` lines and finite-EI cables, the segment at the line's end
   on a host-driven point, or at the ``NodeB`` written in the deck when both or neither ends are
-  (:doc:`driver_format`, CONTROL). A Syrope polyester segment carries its slow stretch over
-  the length change, as MoorDyn-F and MoorDyn-C do; a viscoelastic segment cannot be controlled.
+  (:doc:`driver_format`, CONTROL). A viscoelastic or Syrope polyester segment carries its
+  slow stretch over the length change, as MoorDyn-F and MoorDyn-C do.
   On a finite-EI cable the command scales every cable element
   of that segment, and needs the force-blended generalised-α (the default). On both kinds a
   command outside MoorDyn-F's bounds, from minus half to plus one ``UnstrLen``/N of the line
