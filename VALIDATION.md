@@ -392,6 +392,23 @@ scripts, results, and source provenance are in
     lazy-wave power cable (positions and tangents of its free nodes, and their rates). Every coupled
     point's linearised stiffness equals central differences of the deck's own static solutions to
     ≤3.3e-4, the cable's 36.0 / 2.62 / 38.5 N/m included, and also with a 5e4 N·m/rad hang-off spring.
+    With that spring, the t = 0 linearisation's force per unit rotation reads 1.2 % below the static
+    solutions out of plane (Fy per x-rotation 2.583 against 2.614 N/rad). In plane it is 0.08 % and
+    0.32 % off (Fx and Fz per y-rotation). The cause is the operating point, not the `.lin`
+    matrices. A probe that differentiates the core's acceleration recompute as `lin_eval` does
+    reproduces `A`, `B`, `C` and `D` to 1e-8. The platform starts out of balance, so at t = 0 the
+    fairlead accelerates at (−0.019, 0, −0.016) m/s². The cable's coupled load is its support
+    reaction, which includes the inertia `−M(q) a` of the line, and turning the end tangent changes
+    that reaction while the fairlead accelerates. With this acceleration prescribed, the probe
+    reproduces the rotation columns to 2e-5 (2.5826 N/rad). With the platform DOFs disabled in
+    ElastoDyn, the coupled point does not accelerate. The OpenFAST reduction is then symmetric,
+    and it matches the static solutions, Richardson-extrapolated over 0.125° and 0.25° rotations,
+    in plane to 1.1e-5 (Fx per y-rotation 33.8954 / 33.8952 N/rad) and out of plane to 2.7e-4
+    (2.6149 / 2.6142 N/rad). The out-of-plane residue is the O(h²) truncation of the 1 µm state
+    step on the soft sideways mode of the frictionless laid tail. In the probe it falls to 2.6e-5
+    at a 0.3 µm step and grows to 2.9e-2 at 10 µm, and the sway translation column shows the same
+    residue. The moments per unit translation carry no inertia, so they match the static solutions
+    at either operating point.
     Two step sizes had to be small. A millimetre position step lifted the cable's grounded nodes out
     of their 0.3 mm seabed penetration on one side of the difference, and a 5 cm coupled-point step
     slackened the chain's last element. Each halved a stiffness (the cable's sway stiffness read 242

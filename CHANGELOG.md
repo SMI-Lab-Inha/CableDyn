@@ -123,8 +123,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   velocities, with `A`, `B`, `C` and `D` by central differences of the accelerations solved at the
   perturbed state. On the UMaine chains the stiffness `D - C A^-1 B` matches MoorDyn-F's to 0.1 %
   and the lowest nine line-mode frequencies to 0.3 %; with a lazy-wave power cable every coupled
-  point matches the deck's own static solutions to 3e-4, also with a hang-off spring. A cable
-  end connection with a numeric stiffness now linearises. The viscoelastic slow-branch stretch
+  point matches the deck's own static solutions to 3e-4, also with a hang-off spring. The
+  reduction is the static stiffness at an operating point whose coupled points do not
+  accelerate: the coupled load includes the line's inertia, so at the accelerating `t = 0`
+  platform the lazy wave's force per unit rotation reads 1.2 % off, and 2.7e-4 with the platform
+  DOFs disabled (`doc/openfast.rst`). A cable end connection with a numeric stiffness now
+  linearises. The viscoelastic slow-branch stretch
   and the Syrope slow strain are first-order states, so the reduction gives these ropes' relaxed
   static stiffness (each matches its deck's static solutions to 7e-5; held, they would read the
   chain 0.6 % and the polyester 2.9 times too stiff). Free/Connect points, a `Rigid` cable end
