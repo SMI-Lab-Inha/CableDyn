@@ -48,6 +48,7 @@ MODULE CableDyn_Static
   PUBLIC :: CD_Static_Cable_Solve_Continuation
   PUBLIC :: CD_Static_Line_Equilibrium
   PUBLIC :: CD_Static_Line_End_Forces
+  PUBLIC :: CD_Static_Line_Dry_Load
   PUBLIC :: CD_Static_Anchor_Seabed_Tolerance
   PUBLIC :: CD_Static_Friction_Anchors
   PUBLIC :: CD_Static_As_Laid_Reference
@@ -1734,26 +1735,52 @@ CONTAINS
       !! The buoyancy recovery of the dry part of every element in state qs.
       REAL(wp), INTENT(IN) :: qs(:)
       REAL(wp), INTENT(OUT) :: f(:)
-      REAL(wp) :: fe(6)
-      INTEGER :: e, a, b, es
+      INTEGER :: es
       CHARACTER(1024) :: em
-      f = CD_ZERO
-      DO e = 1, SIZE(l0)
-        a = elem_conn(1, e)
-        b = elem_conn(2, e)
-        CALL CD_Buoyancy_Recovery_Element_Force(qs(3*a - 2:3*a), qs(3*b - 2:3*b), l0(e), dry_waterline_z(a), &
-                                                dry_waterline_z(b), dry_rho, dry_diameter(e), dry_gravity, fe, &
-                                                es, em)
-        IF (es /= CD_HYDRO_OK) THEN
-          CALL fail(ErrStat, ErrMsg, 'line equilibrium: dry-part buoyancy: '//TRIM(em))
-          converged = .FALSE.
-          RETURN
-        END IF
-        f(3*a - 2:3*a) = f(3*a - 2:3*a) + fe(1:3)
-        f(3*b - 2:3*b) = f(3*b - 2:3*b) + fe(4:6)
-      END DO
+      CALL CD_Static_Line_Dry_Load(qs, elem_conn, l0, dry_waterline_z, dry_rho, dry_gravity, dry_diameter, f, es, em)
+      IF (es /= CD_STATIC_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'line equilibrium: '//TRIM(em))
+        converged = .FALSE.
+      END IF
     END SUBROUTINE dry_recovery
   END SUBROUTINE CD_Static_Line_Equilibrium
+
+  SUBROUTINE CD_Static_Line_Dry_Load(q, elem_conn, l0, waterline_z, rho, gravity, diameter, f, ErrStat, ErrMsg)
+    !! The dry part's weight of an EI = 0 line in state q (3 n_nodes), as the dynamic model's
+    !! buoyancy recovery gives it (CD_Buoyancy_Recovery_Element_Force): each element straddling
+    !! or above the waterline (waterline_z per node) gives back the buoyancy
+    !! -(1 - f) rho g (pi/4) d^2 l0 / 2 at each of its nodes, f its submerged fraction
+    !! (diameter per element). f is exactly zero for a line wholly below its waterline.
+    REAL(wp), INTENT(IN) :: q(:)
+    INTEGER, INTENT(IN) :: elem_conn(:, :)
+    REAL(wp), INTENT(IN) :: l0(:), waterline_z(:), rho, gravity, diameter(:)
+    REAL(wp), INTENT(OUT) :: f(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: fe(6)
+    INTEGER :: e, a, b, es
+    CHARACTER(1024) :: em
+    ErrStat = CD_STATIC_OK
+    ErrMsg = ''
+    f = CD_ZERO
+    IF (SIZE(waterline_z) /= SIZE(q)/3 .OR. SIZE(diameter) /= SIZE(l0) .OR. SIZE(f) /= SIZE(q) .OR. &
+        SIZE(elem_conn, 2) /= SIZE(l0)) THEN
+      CALL fail(ErrStat, ErrMsg, 'dry-part buoyancy: waterline_z (n_nodes) / diameter (n_elem) / f shapes')
+      RETURN
+    END IF
+    DO e = 1, SIZE(l0)
+      a = elem_conn(1, e)
+      b = elem_conn(2, e)
+      CALL CD_Buoyancy_Recovery_Element_Force(q(3*a - 2:3*a), q(3*b - 2:3*b), l0(e), waterline_z(a), &
+                                              waterline_z(b), rho, diameter(e), gravity, fe, es, em)
+      IF (es /= CD_HYDRO_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'dry-part buoyancy: '//TRIM(em))
+        RETURN
+      END IF
+      f(3*a - 2:3*a) = f(3*a - 2:3*a) + fe(1:3)
+      f(3*b - 2:3*b) = f(3*b - 2:3*b) + fe(4:6)
+    END DO
+  END SUBROUTINE CD_Static_Line_Dry_Load
 
   SUBROUTINE line_equilibrium(anchor, fairlead, elem_conn, l0, ea, weight, f_ext, cfg, tension_only, &
                               q, converged, report, ErrStat, ErrMsg, seabed_z_floor, seabed_kn, &

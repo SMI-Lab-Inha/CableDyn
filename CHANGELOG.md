@@ -381,8 +381,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   seabed moved by 1e-3 of its fairlead load in the first step, and the coupled start differed
   from the standalone one by 2.4e-4. The static solve now carries the dry weight (a fixed point
   on the wetted lengths): the start holds to 1e-10, the two routes agree to 1.4e-8, and a
-  vertical chain's end loads sum to its weight to 1.5e-8 (before 1.4 % low). Lines below the
-  surface are unchanged.
+  vertical chain's end loads sum to its weight to 1.5e-8 (before 1.4 % low). The force balance
+  of `Connect` and `Free` points and free bodies and rods takes the same dry weight: a 50 t
+  `Connect` point hung by two chains from 10 m above the surface holds its position to the
+  output's 8 digits over 2 s (before it sank 1.1e-2 m). Lines below the surface are unchanged.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations

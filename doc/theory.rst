@@ -1559,8 +1559,9 @@ the equilibrium its march holds, and the coupled and standalone starts agree; wi
 kept above the surface it moved by :math:`10^{-3}` of its fairlead load in the first step. A line
 wholly below the surface has no recovery and is solved once. Without a seabed the march, and so
 the static start, keeps the buoyancy everywhere (the driver warns about a line end above the
-surface then). The force balance of ``Connect`` and ``Free`` points below takes its lines with
-their buoyancy everywhere.
+surface then). The force balance of ``Connect`` and ``Free`` points and of free bodies and rods
+below takes its lines with the same dry weight, so these objects start balanced against the march
+too.
 
 A steady current (uniform, or a depth profile sampled at each node's own elevation as in the
 march) enters the static equilibrium as Morison drag on the line at rest, so the out-of-plane

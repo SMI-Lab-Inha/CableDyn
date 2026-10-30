@@ -22,6 +22,12 @@ PROGRAM test_static_dry_weight
   !!      equilibrium).
   !!   4. A finite-EI cable hung 5 m above the surface (its statics already carry the dry
   !!      weight): coupled and standalone starts agree to 2e-7 (measured 7e-8; a guard).
+  !!   5. A 50 t Connect point hung by two chains from Fixed points 10 m above the surface on a
+  !!      300 m seabed: the point's force balance (the static object solve, its warm line solves
+  !!      included) carries the dry weight too, so the point holds its static position over 2 s
+  !!      of the march to 1e-4 m, the output's 8 digits (measured 0), and the fairlead tension to
+  !!      1e-6 (measured 0). With the dry weight only in the line starts the point sank 1.1e-2 m
+  !!      and the tension moved by 9.6e-4.
   !! A deck whose lines are all submerged is solved once, bit-identically (the example A/B).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
@@ -74,6 +80,13 @@ PROGRAM test_static_dry_weight
   err = MAXVAL(ABS(f_agg - f_drv))/NORM2(f_drv)
   WRITE (*, '(A,ES10.2)') '  finite-EI cable above the surface: coupled vs standalone rel. ', err
   CALL check(err <= 2.0e-7_wp, 'finite-EI cable above the surface: coupled and standalone static starts agree')
+
+  ! 5. a Connect point between two chains held above the surface
+  CALL connect_point_drift(err, dmax)
+  WRITE (*, '(A,ES10.2,A,ES10.2)') '  Connect point held 2 s: largest vertical drift ', dmax, &
+    ' m, largest rel. fairlead tension change ', err
+  CALL check(dmax <= 1.0e-4_wp, 'Connect point above the surface: its static position is the equilibrium of the march')
+  CALL check(err <= 1.0e-6_wp, 'Connect point above the surface: the fairlead tension holds its static value')
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAILED: ', nfail, ' check(s)'
@@ -164,6 +177,82 @@ CONTAINS
     END DO
     CLOSE (u)
   END SUBROUTINE driver_forces
+
+  SUBROUTINE connect_point_drift(ten_rel, dz_max)
+    !! Gate 5: two 240 m chains from Fixed points at (-+200, 0, 10) m to a Connect point (50 t,
+    !! 2 m^3) at (0, 0, -100) m, WtrDpth 300 m, held 2 s (dtM 0.01 s). ten_rel: the largest change
+    !! of FairTen1 over its t = 0 value, relative; dz_max: the largest change of the point's z [m].
+    REAL(wp), INTENT(OUT) :: ten_rel, dz_max
+    INTEGER :: u, ios, es
+    LOGICAL :: conv
+    REAL(wp) :: row(4), t0, z0
+    CHARACTER(1024) :: em
+    CHARACTER(4096) :: line
+    LOGICAL :: first
+    ten_rel = HUGE(1.0_wp)
+    dz_max = HUGE(1.0_wp)
+    OPEN (NEWUNIT=u, FILE='dry_connect.dat', STATUS='replace', ACTION='write')
+    WRITE (u, '(A)') '--------------------- CableDyn Input File ------------------------------------'
+    WRITE (u, '(A)') 'test_static_dry_weight: a Connect point between two chains held above the surface'
+    WRITE (u, '(A)') '--------------------- LINE TYPES ---------------------------------------------'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'chain 0.2791 480.93 2.058e9 -1.0 0.0 1.37 0.64 1.0 0.0'
+    WRITE (u, '(A)') '--------------------- POINTS ------------------------------------------------'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m^3) (m^2) (-)'
+    WRITE (u, '(A)') '1 Fixed -200.0 0.0 10.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Connect 0.0 0.0 -100.0 50000.0 2.0 0 0'
+    WRITE (u, '(A)') '3 Fixed 200.0 0.0 10.0 0 0 0 0'
+    WRITE (u, '(A)') '--------------------- LINES -------------------------------------------------'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '2 3 2 -'
+    WRITE (u, '(A)') '--------------------- SECTIONS ----------------------------------------------'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 chain 240.0 30'
+    WRITE (u, '(A)') '2 chain 240.0 30'
+    WRITE (u, '(A)') '--------------------- OPTIONS -----------------------------------------------'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') '1.0e4 cBot'
+    WRITE (u, '(A)') '0.01 dtM'
+    WRITE (u, '(A)') '2.0 TMax'
+    WRITE (u, '(A)') '300.0 WtrDpth'
+    WRITE (u, '(A)') '--------------------- OUTPUTS -----------------------------------------------'
+    WRITE (u, '(A)') '"FairTen1"'
+    WRITE (u, '(A)') '"Point2px"'
+    WRITE (u, '(A)') '"Point2pz"'
+    WRITE (u, '(A)') 'END'
+    WRITE (u, '(A)') '--------------------- need this line ----------------------------------------'
+    CLOSE (u)
+    CALL CD_Run_Deck_Driver('dry_connect.dat', 'dry_connect', conv, es, em)
+    CALL check(es == CD_DECKDRV_OK .AND. conv, 'dry_connect: run: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    OPEN (NEWUNIT=u, FILE='dry_connect.out', STATUS='old', ACTION='read')
+    first = .TRUE.
+    t0 = 0.0_wp
+    z0 = 0.0_wp
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      IF (line(1:1) == '#' .OR. INDEX(line, 'Time') > 0 .OR. LEN_TRIM(line) == 0) CYCLE
+      READ (line, *) row
+      IF (first) THEN
+        t0 = row(2)
+        z0 = row(4)
+        ten_rel = 0.0_wp
+        dz_max = 0.0_wp
+        first = .FALSE.
+      END IF
+      ten_rel = MAX(ten_rel, ABS(row(2) - t0)/t0)
+      dz_max = MAX(dz_max, ABS(row(4) - z0))
+    END DO
+    CLOSE (u)
+  END SUBROUTINE connect_point_drift
 
   SUBROUTINE coupled_force(path, nstep, f0, dmax_rel)
     !! The coupled aggregate's static start (OpenFAST host environment): the fairlead load, and

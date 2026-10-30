@@ -37,7 +37,7 @@ MODULE CableDyn_DeckDriver
                                CD_Assemble_Cable_Tangent_Force_Banded_Free
   USE CableDyn_Static, ONLY: CableSolverConfig, CableCurrentLoad, CD_StaticLineReport, CD_Static_Line_Equilibrium, &
                              CD_Static_Line_End_Forces, CD_Static_Anchor_Seabed_Tolerance, CD_Static_Cable_Solve, &
-                             CD_STATIC_OK, CD_STATIC_BADINPUT, &
+                             CD_Static_Line_Dry_Load, CD_STATIC_OK, CD_STATIC_BADINPUT, &
                              CD_STATIC_FRICTION_AS_LAID, CD_STATIC_FRICTION_NONE
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, &
                                  CD_Bathymetry_Is_Initialized, CD_Bathymetry_Floor, &
@@ -25981,7 +25981,8 @@ CONTAINS
     !! = -K_c, mapped to the object unknowns through the attachment arms, plus the moment of
     !! the end force under a rotation of the arm. The objects' own loads (no lines, cheap) are
     !! differentiated by central differences. The line's steady-current drag stiffness is not in
-    !! K_c; the residual is exact, so it only slows convergence in a current. A line exactly at
+    !! K_c, nor the stiffness of its dry part's weight above the still-water level (with a seabed,
+    !! cached_line_solve); the residual is exact, so they only slow convergence. A line exactly at
     !! its slack/taut kink has no one-sided stiffness: when the analytic Newton system is
     !! singular or its step fails, the iteration falls back to a central-difference Jacobian of
     !! the full residual (warm-started line solves per column). Newton steps in a trust region
@@ -26042,6 +26043,10 @@ CONTAINS
       INTEGER, ALLOCATABLE :: conn(:, :)
       REAL(wp), ALLOCATABLE :: l0(:), ea(:), w(:), f_ext(:), kn(:), q(:), s(:)
       REAL(wp), ALLOCATABLE :: dia(:), cdn(:), cdt(:)
+      ! with a seabed, the dry part's weight above the still-water level (as the dynamic model's
+      ! buoyancy recovery): the element diameters and the waterline per node (unallocated: the
+      ! line keeps its buoyancy everywhere)
+      REAL(wp), ALLOCATABLE :: dry_d(:), dry_wl(:)
       REAL(wp) :: anchor(3) = CD_ZERO, fairlead(3) = CD_ZERO
       REAL(wp) :: ef(3, 2) = CD_ZERO, kc(6, 6) = CD_ZERO
     END TYPE
@@ -27218,6 +27223,13 @@ CONTAINS
         IF (es_l /= CD_LINE_OK) THEN
           CALL fail(es_out, em_out, 'seabed stiffness: '//TRIM(em_l)); RETURN
         END IF
+        ! the line's model has a seabed and so the buoyancy recovery of its dry part
+        ! (init_deck_models_from_parsed): the part above the still-water level takes its dry
+        ! weight here too, as in solve_one_line, so that the objects start balanced against the
+        ! loads the march applies
+        lc(jl)%dry_d = diam
+        ALLOCATE (lc(jl)%dry_wl(ne + 1))
+        lc(jl)%dry_wl = CD_ZERO
       END IF
       lc(jl)%ready = .TRUE.
     END SUBROUTINE prepare_line
@@ -27235,14 +27247,14 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: em_out
       LOGICAL, INTENT(IN), OPTIONAL :: want_k
       LOGICAL, INTENT(OUT), OPTIONAL :: k_ok
-      TYPE(CableSolverConfig) :: cfg, cfg_w
+      TYPE(CableSolverConfig) :: cfg
       TYPE(CD_StaticLineReport) :: report
       TYPE(CableCurrentLoad), ALLOCATABLE :: curp
-      REAL(wp), ALLOCATABLE :: zf, q0(:), q(:), tq(:)
+      REAL(wp), ALLOCATABLE :: zf, q0(:), q(:), f_dry(:), f_prev(:), q_prev(:)
       REAL(wp) :: c_old(3), c_new(3), rot_w(3, 3), sc_w
       REAL(wp) :: anchor(3), fairlead(3), fa(3), fb(3)
-      INTEGER :: nn, ii, es_l, nit
-      LOGICAL :: conv, stalled, at_floor
+      INTEGER :: nn, ii, es_l, kd
+      LOGICAL :: conv
       CHARACTER(1024) :: em_l
 
       es_out = CD_DECKDRV_OK
@@ -27297,37 +27309,53 @@ CONTAINS
         END DO
         q0(1:3) = anchor
         q0(3*nn - 2:3*nn) = fairlead
-        ! (a) plain Newton with the compression-capable law, accepted when no element is
-        ! compressed beyond the 1e-6 round-off band (every element taut: it is then the
-        ! tension-only equilibrium), as the cold initializer's first stage accepts it
-        CALL CD_Static_Cable_Solve(q0, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., lc(jl)%f_ext, &
-                                   [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg, q, conv, stalled, at_floor, nit, &
-                                   es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
-                                   bathymetry=bathymetry)
-        IF (es_l /= CD_STATIC_OK) conv = .FALSE.
-        IF (conv) conv = ALL(IEEE_IS_FINITE(q))
-        IF (conv) THEN
-          ALLOCATE (tq(nn - 1))
-          CALL CD_Compute_Cable_Tension(RESHAPE(q, [3, nn]), lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., tq, &
-                                        es_l, em_l)
-          conv = es_l == 0
-          IF (conv) conv = MINVAL(tq) >= -1.0e-6_wp*MAX(MAXVAL(ABS(tq)), TINY(CD_ONE))
-        END IF
-        IF (.NOT. conv) THEN
-          ! (b) the exact tension-only law (a slack run), Levenberg-Marquardt, short budget
-          cfg_w%max_iter = 10
-          CALL CD_Static_Cable_Solve(q0, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .TRUE., lc(jl)%f_ext, &
-                                     [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg_w, q, conv, stalled, at_floor, nit, &
-                                     es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
-                                     bathymetry=bathymetry, regularized=.TRUE.)
+        ALLOCATE (f_dry(3*nn))
+        f_dry = CD_ZERO
+        CALL warm_line_solve(jl, q0, lc(jl)%f_ext, zf, curp, q, conv)
+        ! With the dry part's weight (a line above the still-water level), the warm solve is
+        ! repeated with the recovery of the last solution as a constant load until the nodes move
+        ! by less than 1e-9 m or the recovery changes by less than 1e-10 of the largest nodal
+        ! load, as CD_Static_Line_Equilibrium iterates it; f_dry is then the recovery the
+        ! returned shape was solved with. A line wholly below the surface is solved once.
+        IF (conv .AND. ALLOCATED(lc(jl)%dry_d)) THEN
+          CALL CD_Static_Line_Dry_Load(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%dry_wl, opts%rhoW, opts%g, lc(jl)%dry_d, &
+                                       f_dry, es_l, em_l)
           IF (es_l /= CD_STATIC_OK) conv = .FALSE.
-          IF (conv) conv = ALL(IEEE_IS_FINITE(q))
+          IF (conv .AND. ANY(f_dry /= CD_ZERO)) THEN
+            conv = .FALSE.
+            DO kd = 1, 50
+              q_prev = q
+              f_prev = f_dry
+              CALL warm_line_solve(jl, q_prev, lc(jl)%f_ext + f_prev, zf, curp, q, conv)
+              IF (.NOT. conv) EXIT
+              CALL CD_Static_Line_Dry_Load(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%dry_wl, opts%rhoW, opts%g, &
+                                           lc(jl)%dry_d, f_dry, es_l, em_l)
+              IF (es_l /= CD_STATIC_OK) THEN
+                conv = .FALSE.
+                EXIT
+              END IF
+              conv = MAXVAL(ABS(q - q_prev)) <= 1.0e-9_wp .OR. &
+                     MAXVAL(ABS(f_dry - f_prev)) <= 1.0e-10_wp*MAXVAL(ABS(lc(jl)%f_ext))
+              IF (conv) EXIT
+            END DO
+            f_dry = f_prev
+          END IF
         END IF
       END IF
       IF (.NOT. conv) THEN
-        CALL CD_Static_Line_Equilibrium(anchor, fairlead, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%w, &
-                                        lc(jl)%f_ext, cfg, .TRUE., q, conv, report, es_l, em_l, seabed_z_floor=zf, &
-                                        seabed_kn=lc(jl)%kn, bathymetry=bathymetry, current=curp)
+        IF (.NOT. ALLOCATED(f_dry)) ALLOCATE (f_dry(3*nn))
+        f_dry = CD_ZERO
+        IF (ALLOCATED(lc(jl)%dry_d)) THEN
+          CALL CD_Static_Line_Equilibrium(anchor, fairlead, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%w, &
+                                          lc(jl)%f_ext, cfg, .TRUE., q, conv, report, es_l, em_l, seabed_z_floor=zf, &
+                                          seabed_kn=lc(jl)%kn, bathymetry=bathymetry, current=curp, &
+                                          dry_waterline_z=lc(jl)%dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                          dry_diameter=lc(jl)%dry_d, dry_load=f_dry)
+        ELSE
+          CALL CD_Static_Line_Equilibrium(anchor, fairlead, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%w, &
+                                          lc(jl)%f_ext, cfg, .TRUE., q, conv, report, es_l, em_l, seabed_z_floor=zf, &
+                                          seabed_kn=lc(jl)%kn, bathymetry=bathymetry, current=curp)
+        END IF
         IF (es_l /= CD_STATIC_OK) THEN
           CALL fail(es_out, em_out, 'static equilibrium: line '//TRIM(int_to_str(lines(jl)%id))// &
                     ' static solve rejected the input: '//TRIM(em_l)); RETURN
@@ -27339,8 +27367,9 @@ CONTAINS
           RETURN
         END IF
       END IF
-      CALL CD_Static_Line_End_Forces(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%f_ext, .TRUE., fa, fb, es_l, &
-                                     em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, bathymetry=bathymetry, &
+      ! the equilibrium's external load: the submerged weight and the dry part's recovery
+      CALL CD_Static_Line_End_Forces(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%f_ext + f_dry, .TRUE., fa, fb, &
+                                     es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, bathymetry=bathymetry, &
                                      current=curp)
       IF (es_l /= 0 .OR. .NOT. (ALL(IEEE_IS_FINITE(fa)) .AND. ALL(IEEE_IS_FINITE(fb)))) THEN
         CALL fail_solve(es_out, em_out, 'static equilibrium: line '//TRIM(int_to_str(lines(jl)%id))// &
@@ -27359,6 +27388,49 @@ CONTAINS
         END IF
       END IF
     END SUBROUTINE cached_line_solve
+
+    SUBROUTINE warm_line_solve(jl, qs, fl, zf, curp, q, conv)
+      !! One warm solve of line jl from the seed qs (both ends held) under the constant load fl
+      !! (cached_line_solve): q the shape, conv whether it was accepted.
+      INTEGER, INTENT(IN) :: jl
+      REAL(wp), INTENT(IN) :: qs(:), fl(:)
+      REAL(wp), ALLOCATABLE, INTENT(IN) :: zf
+      TYPE(CableCurrentLoad), ALLOCATABLE, INTENT(IN) :: curp
+      REAL(wp), INTENT(OUT) :: q(:)
+      LOGICAL, INTENT(OUT) :: conv
+      TYPE(CableSolverConfig) :: cfg, cfg_w
+      REAL(wp), ALLOCATABLE :: tq(:)
+      INTEGER :: nn, es_l, nit
+      LOGICAL :: stalled, at_floor
+      CHARACTER(1024) :: em_l
+      nn = lc(jl)%nn
+      ! (a) plain Newton with the compression-capable law, accepted when no element is
+      ! compressed beyond the 1e-6 round-off band (every element taut: it is then the
+      ! tension-only equilibrium), as the cold initializer's first stage accepts it
+      CALL CD_Static_Cable_Solve(qs, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., fl, &
+                                 [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg, q, conv, stalled, at_floor, nit, &
+                                 es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
+                                 bathymetry=bathymetry)
+      IF (es_l /= CD_STATIC_OK) conv = .FALSE.
+      IF (conv) conv = ALL(IEEE_IS_FINITE(q))
+      IF (conv) THEN
+        ALLOCATE (tq(nn - 1))
+        CALL CD_Compute_Cable_Tension(RESHAPE(q, [3, nn]), lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., tq, &
+                                      es_l, em_l)
+        conv = es_l == 0
+        IF (conv) conv = MINVAL(tq) >= -1.0e-6_wp*MAX(MAXVAL(ABS(tq)), TINY(CD_ONE))
+      END IF
+      IF (.NOT. conv) THEN
+        ! (b) the exact tension-only law (a slack run), Levenberg-Marquardt, short budget
+        cfg_w%max_iter = 10
+        CALL CD_Static_Cable_Solve(qs, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .TRUE., fl, &
+                                   [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg_w, q, conv, stalled, at_floor, nit, &
+                                   es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
+                                   bathymetry=bathymetry, regularized=.TRUE.)
+        IF (es_l /= CD_STATIC_OK) conv = .FALSE.
+        IF (conv) conv = ALL(IEEE_IS_FINITE(q))
+      END IF
+    END SUBROUTINE warm_line_solve
 
     SUBROUTINE condensed_end_stiffness(jl, zf, ok)
       !! lc(jl)%kc: the static tangent of line jl at its stored shape condensed onto its end
