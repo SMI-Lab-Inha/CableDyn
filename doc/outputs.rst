@@ -456,6 +456,18 @@ row:
   scaled so that the largest nodal displacement of the mode is 1. Nodes are numbered End A first,
   as in the other line files; the held end nodes have zero displacement.
 
+When a line is restrained in torsion (both ends, see :doc:`driver_format`), its modes carry the
+twist angle of every node (:ref:`nodal twist <theory-nodal-twist>`) and both tables gain a
+column, for every line of the file (``0`` on a line without torsion):
+
+* ``PolarShare`` (frequency table): the polar share of the mode's kinetic energy,
+  :math:`\sum_k I_k \varphi_k^2` of the mass-normalised mode with :math:`I_k` the lumped polar
+  inertia, 1 for a pure torsional mode and 0 for one without twist;
+* ``dTwist`` [rad] (shape table): the rotation of the node's section about the line tangent,
+  positive right-handed about the direction from End A to End B, on the scale of the
+  translations; a torsional mode (``PolarShare`` above 0.5) is scaled to a unit largest
+  ``dTwist`` instead.
+
 Per-rod files (``RODS`` ``Outputs`` flag)
 -----------------------------------------
 

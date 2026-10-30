@@ -411,9 +411,8 @@ Torsion
        after 6 step halvings``
      - the body turns faster than one step can follow the twist; reduce ``dtM``.
    * - ``torsion in a dynamic run needs the force-blended generalised-alpha (OPTION
-       alpha_force_blend True)`` / ``modal analysis (OPTION nModes) of a line with torsion is not
-       yet supported``
-     - remove ``False alpha_force_blend`` or ``nModes`` from a deck with torsion.
+       alpha_force_blend True)``
+     - remove ``False alpha_force_blend`` from a deck with torsion.
    * - ``OUTPUT "Torq...": line <L> is not torsionally restrained at both ends ..., so it carries
        no torque``
      - a ``Torq``/``Twist`` channel needs a line with a torsional restraint at both ends.

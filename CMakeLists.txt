@@ -2014,6 +2014,13 @@ add_executable(test_modal tests/test_modal.f90 tests/blas_config_probe.c)
 target_link_libraries(test_modal PRIVATE cabledyn_core)
 add_test(NAME modal COMMAND test_modal)
 set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validation")
+# Modal analysis of a line restrained in torsion: the twist angle of every node joins the modes
+# (torsional, elastic-end and torque-tension coupled modes, the lateral modes under a torque, the
+# Schur complement of the angles against the condensed static tangent).
+add_executable(test_modal_torsion tests/test_modal_torsion.f90)
+target_link_libraries(test_modal_torsion PRIVATE cabledyn_core)
+add_test(NAME modal_torsion COMMAND test_modal_torsion)
+set_tests_properties(modal_torsion PROPERTIES LABELS "fortran;unit;static;validation")
 # The modal eigensolves through CableDyn's LAPACK layer with every argument array against a
 # no-access page: no read or write outside the arrays the modal code passes.
 if(NOT CABLEDYN_STATIC_WINDOWS_RELEASE)
@@ -2402,6 +2409,13 @@ add_test(NAME driver_cli_mixed_nmodes
     "-DMUST_MATCH=nModes is not supported for mixed EI=0/finite-EI decks"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_cli_mixed_nmodes PROPERTIES LABELS "fortran;driver;cli")
+# A lazy wave restrained in torsion and twisted two turns writes its modes with the twist.
+add_test(NAME driver_cli_torsion_nmodes
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_lazy_wave_modes.dat|${CMAKE_CURRENT_BINARY_DIR}/driver_cli_torsion_nmodes"
+    "-DMUST_MATCH=torsion solved, imposed twist  7.20000E\\+02 deg;converged run written"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_cli_torsion_nmodes PROPERTIES LABELS "fortran;driver;cli")
 # Non-ASCII, reserved-device, input-clobbering, and concurrently used output paths.
 add_test(
   NAME driver_cli_paths
@@ -2741,6 +2755,16 @@ if(Python3_Interpreter_FOUND)
       --output ${CMAKE_CURRENT_BINARY_DIR}/lozon_example_equilibrium)
   set_tests_properties(lozon_example_equilibrium PROPERTIES
     LABELS "python;driver;integration;example;lozon;validation")
+  # Modal analysis of decks restrained in torsion: the torsional modes of a straight clamped
+  # line against the chain and the continuum, its other modes against TorsStiffness Free, and
+  # the twisted lazy wave's modes.
+  add_test(
+    NAME modal_torsion_deck
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_modal_torsion_deck.py
+      --exe $<TARGET_FILE:cabledyn>
+      --source ${CMAKE_CURRENT_SOURCE_DIR}
+      --output ${CMAKE_CURRENT_BINARY_DIR}/modal_torsion_deck)
+  set_tests_properties(modal_torsion_deck PROPERTIES LABELS "python;driver;integration;validation")
   # Static-initialization robustness matrix: a deterministic sample of EI=0 mooring regimes
   # (catenary, semi-taut, taut, suspended, composite, slack/vertical, anchors off the seabed,
   # sloped seabed, fine mesh, soft seabed, current, one/two segments, Free/Connect points)

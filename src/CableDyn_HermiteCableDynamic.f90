@@ -100,7 +100,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Coupling_Tension
   PUBLIC :: CD_HermiteCable_Dyn_Element_Torque, CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
   PUBLIC :: CD_HermiteCable_Dyn_Twist_Mirror_Size, CD_HermiteCable_Dyn_Twist_Pack, CD_HermiteCable_Dyn_Twist_Unpack
-  PUBLIC :: CD_HermiteCable_Dyn_Twist_Check
+  PUBLIC :: CD_HermiteCable_Dyn_Twist_Check, CD_HermiteCable_Dyn_Twist_Hessian
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Drive
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Frames
   PUBLIC :: CD_HermiteCable_Dyn_EndConnection_Moment
@@ -6809,6 +6809,68 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE CD_HermiteCable_Dyn_Twist_Check
+
+  SUBROUTINE CD_HermiteCable_Dyn_Twist_Hessian(model, eg, eh, ek, emt, lg, lh, lk, lmt, ErrStat, ErrMsg)
+    !! The second variation of the nodal-twist elastic energy at the committed state, for an
+    !! undamped modal analysis about it (CableDyn_Modal): the energy is
+    !!   sum_e 1/2 (GJ/l0)_e tau_e**2 + sum_(elastic ends) 1/2 k tw**2,
+    !!   tau_e = phi_{e+1} - phi_e + rho_e(q),  tw = phi_1 - psi_1(q) (end 1), psi_2(q) + Phi - phi_N (end 2),
+    !! with the committed reference and end frames held. Per element: eg = d rho_e/dq and
+    !! eh = d2 rho_e/dq2 over its 12 DOFs, ek = GJ/l0 and emt = ek tau_e (the element torque
+    !! without damping), so d2E/dq2 = emt eh + ek eg eg^T, d2E/dphi_{e+1} dq = ek eg = -d2E/dphi_e dq
+    !! and d2E/dphi2 = ek [[1, -1], [-1, 1]]. Per end k (columns): lg = d psi/dm and lh = d2 psi/dm2
+    !! in the end node's tangent handle m, lk the spring stiffness (0 at a rigid end, whose
+    !! angle is held) and lmt = lk tw, so d2E/dm2 = lk lg lg^T -+ lmt lh (- at end 1, + at end 2),
+    !! d2E/dphi dm = -lk lg and d2E/dphi2 = lk. Fails closed without the nodal twist.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: eg(:, :), eh(:, :, :), ek(:), emt(:), lg(3, 2), lh(3, 3, 2), lk(2), lmt(2)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: rho, beta, psi, tw
+    INTEGER :: e, iend
+    eg = CD_ZERO
+    eh = CD_ZERO
+    ek = CD_ZERO
+    emt = CD_ZERO
+    lg = CD_ZERO
+    lh = CD_ZERO
+    lk = CD_ZERO
+    lmt = CD_ZERO
+    ErrStat = CD_HCDYN_BADINPUT
+    IF (.NOT. model%tw_active) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: the model has no nodal twist'; RETURN
+    END IF
+    IF (SIZE(eg, 1) /= 12 .OR. SIZE(eg, 2) /= model%ne .OR. SIZE(eh, 1) /= 12 .OR. SIZE(eh, 2) /= 12 .OR. &
+        SIZE(eh, 3) /= model%ne .OR. SIZE(ek) /= model%ne .OR. SIZE(emt) /= model%ne) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: the element arrays must have ne columns'; RETURN
+    END IF
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    DO e = 1, model%ne
+      CALL twist_reference(model, e, model%q, model%torsion%ends, .TRUE., rho, beta, eg(:, e), eh(:, :, e), &
+                           ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: '//TRIM(ErrMsg); RETURN
+      END IF
+      ek(e) = model%torsion%gj(e)/model%l0(e)
+      emt(e) = ek(e)*(model%tw_phi(e + 1) - model%tw_phi(e) + rho)
+    END DO
+    DO iend = 1, 2
+      IF (model%tw_rigid(iend)) CYCLE
+      CALL twist_link(model, iend, model%q, model%torsion%ends, .TRUE., psi, lg(:, iend), lh(:, :, iend), &
+                      ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: '//TRIM(ErrMsg); RETURN
+      END IF
+      lk(iend) = CD_ONE/model%torsion%end_compliance(iend)
+      IF (iend == 1) THEN
+        tw = model%tw_phi(1) - psi
+      ELSE
+        tw = psi + model%torsion%phi - model%tw_phi(model%nn)
+      END IF
+      lmt(iend) = lk(iend)*tw
+    END DO
+  END SUBROUTINE CD_HermiteCable_Dyn_Twist_Hessian
 
   PURE INTEGER FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size(model) RESULT(n)
     !! Reals of the nodal-twist checkpoint mirror (CD_HermiteCable_Dyn_Twist_Pack): the

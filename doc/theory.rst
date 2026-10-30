@@ -1829,6 +1829,36 @@ tension :math:`H`, and the symmetric in-plane modes satisfy
 with :math:`\lambda^2 = (wL/H)^2\,L/(H L_e/EA)` (:ref:`Irvine & Caughey, 1974 <ref-irvine1974>`);
 the modal analysis reproduces both.
 
+A finite-EI line's modes carry what its dynamics carries: an end connection's spring adds its
+Hessian on the end tangent, a rigid end keeps only the magnitude of its tangent (the two
+transverse components of its basis are held), and discrete attachments add their dry and added
+masses. A line restrained in torsion carries the :ref:`nodal twist <theory-nodal-twist>` in its
+dynamics, so its modes do too: the twist angle :math:`\varphi_k` of every node joins the
+degrees of freedom, :math:`[\mathbf r, \mathbf m, \varphi]` per node (half-bandwidth 13), with
+the lumped polar inertia :math:`I_k` as its mass and the second variation of the twist energy
+:math:`E_t = \sum_e \tfrac12 (GJ_e/L_{0,e})\,\hat\tau_e^2` (and of the elastic end springs) as
+its stiffness, at the static torque :math:`M_e`:
+
+.. math::
+
+   \frac{\partial^2 E_t}{\partial\mathbf q^2} = M_e\,\frac{\partial^2 m_e}{\partial\mathbf q^2}
+     + \frac{GJ_e}{L_{0,e}}\,\mathbf g_e\mathbf g_e^{\mathsf T}, \qquad
+   \frac{\partial^2 E_t}{\partial\varphi_{k+1}\,\partial\mathbf q}
+     = -\frac{\partial^2 E_t}{\partial\varphi_k\,\partial\mathbf q} = \frac{GJ_e}{L_{0,e}}\,\mathbf g_e,
+   \qquad \mathbf g_e = \frac{\partial\hat\tau_e}{\partial\mathbf q} .
+
+The torque term lowers the bending frequencies of a twisted line, as on Greenhill's twisted
+shaft; :math:`\mathbf g_e` couples the twist to the bending of a curved line and, under
+torque–tension coupling, to the stretch. Eliminating the angles (no polar inertia) leaves the
+condensed tangent of the statics, :math:`-M_t\,\partial^2\Theta/\partial\mathbf q^2 +
+\nabla\Theta\,\nabla\Theta^{\mathsf T}/C`: the Schur complement of the angle block is the
+rank-one term the statics carry in a bordered solve, which a band cannot hold. Damping (also
+:math:`B_t`) is left out. The test suite checks the torsional modes of a clamped straight line
+against :math:`\omega_n = (n\pi/L)\sqrt{GJ/I_{rn}}` and its lumped chain, elastic torsional
+ends, the coupled axial–torsional modes of :math:`K`, the lateral modes of a taut line under a
+torque against the clamped Greenhill-cable determinant, and the Schur complement against the
+condensed static tangent (see :doc:`validation`).
+
 Time integration
 ----------------
 

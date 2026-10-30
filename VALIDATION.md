@@ -1077,11 +1077,35 @@ in parentheses).
     to 6e-11) continue bit-identically; after a non-stepping frame write the snapshot and the
     checkpoint mirror bring back the committed torque bit for bit (re-derived as `(Φ − Θ)/C` it
     would differ by 1.8e-15 N·m).
+- **T-15 modal analysis with torsion** (`modal_torsion`, `modal_torsion_deck`,
+  `driver_cli_torsion_nmodes`). The modes carry the twist angle of every node. On the 10 m line
+  (EI 100 N·m², GJ 80 N·m², EA 1e4 N, T 10 N, 40 elements), clamped:
+  - rigid torsional ends, `Irn = 0.04 kg·m`: the torsional modes are the lumped chain's to 1e-16
+    and `nπ/L √(GJ/Irn)` within the chain's own `1 − sin(x)/x` (2.6e-4, 1.0e-3); the bending and
+    axial modes equal those of the line without torsion bit for bit, with no twist;
+  - elastic torsional ends `k = 2 GJ/L`: the continuum's `tan(βL) = 2kGJβ/((GJβ)² − k²)` to
+    1.5e-4, the lumped chain to 4e-14;
+  - torque–tension coupling `K = 300 N·m`: the coupled axial–torsional modes
+    `ω² = (nπ/L)² eig([[EA, K], [K, GJ]], diag(m, Irn))` within the chain's error (≤ 8.6e-4);
+  - under a torque `M = 4 EI/L` with a negligible `Irn = 1e-6 kg·m` (100 elements), the four
+    lowest lateral pairs match the clamped Greenhill-cable determinant
+    (`EI u'''' − i M u''' − T u'' = m ω² u`) to 3.2e-7, 5.5 % to 1.2 % below the untwisted ones.
+
+  On a bowed, twisted 12-element line (pinned and clamped bending ends, rigid and elastic
+  torsional ends, coupling) the Schur complement of the angles equals the condensed static
+  tangent to 1.4e-16 and the central differences of the condensed static residual to 7.6e-10.
+  The modal route without the twist finds no torsional mode, misses the torque (4e-4 to 4e-3
+  of the tangent) and, ignoring the end connections, puts the clamped line's first lateral
+  frequency 41 % low; finite bending springs at both ends now put it between the pinned and
+  the clamped line's, within 3.6e-5 of the clamp at `k = 1e5 EI/L`. In the deck the same
+  straight line's torsional modes and its bending and axial modes against `TorsStiffness Free`
+  hold to the table's nine digits, turned 30° about +z it keeps its frequencies and writes its
+  positions in the deck's axes, and the lazy wave twisted two turns writes its modes.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
   give the same run. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
-  `ATTACHMENTS`, modal analysis, the configuration blend (also on the coupled entries), misuse of
+  `ATTACHMENTS`, the configuration blend (also on the coupled entries), misuse of
   the roll column, channels on an unrestrained line, a coupled caller that passes no orientation
   (the C API) and a standalone mixed `EI = 0` + finite-EI deck without a body stop with named
   errors.

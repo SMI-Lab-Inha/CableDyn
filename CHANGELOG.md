@@ -104,6 +104,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   balances the energy to 8e-5 of the work done; restarts mid-ramp (snapshot, checkpoint mirror,
   a coupled deck) are bit-identical. The checkpoint mirror of a line with the nodal twist gains
   one value, its committed torque.
+- Modal analysis (`nModes`) of finite-EI lines restrained in torsion: the modes carry the twist
+  angle of every node, as the dynamics do, with the lumped polar inertia and the second variation
+  of the twist energy at the static torque. A clamped straight line's torsional modes match
+  `nπ/L √(GJ/Irn)` within the lumped chain's own error (2.6e-4 on the first), elastic ends and
+  the torque–tension coupling their continuum solutions to 1e-3, and under a torque its lateral
+  modes match the clamped Greenhill cable to 3e-7; eliminating the angles reproduces the
+  condensed static tangent to 1e-16. `<root>.modes.out` adds `PolarShare` and `dTwist` when a
+  line carries twist.
 - Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
   `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.
@@ -251,6 +259,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The static tangent takes the current's gradient along the line, so the Newton iteration also
   converges in a current sheared across the line. A later `current` row now discards the levels
   of an earlier profile row.
+- The modal analysis of finite-EI lines ignored the end connections and the discrete
+  attachments: a clamped end was solved pinned (the first twelve frequencies of the lazy wave
+  of `torsion_lazy_wave_hangoff_twist.dat`, untwisted, rise by 0.1 % to 3.8 % with its clamps)
+  and buoyancy modules had no mass (with `nModes`, the first six frequencies of
+  `lazy_wave_buoyancy_modules.dat` drop by 13 % to 29 %). The positions and translations of a
+  line with a heading are written in the deck's axes, not the line's.
 - A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
   start, reduces the record over its own length instead of failing for want of a positive
   `TMax`.

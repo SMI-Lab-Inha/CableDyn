@@ -4294,11 +4294,11 @@ class DeckFile:
         solved as without the columns. Restrained at both ends, torsion is solved: End B must
         be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
         rod end nor on a body other than Rigid6. A deck with torsion runs dynamics only with
-        the force-blended generalised-alpha (a coupled run is always dynamic) and takes no
-        modal analysis. A standalone mixed EI = 0 + finite-EI deck without bodies
-        (``aggregate_route``, run on the aggregate, which moves the line ends by translation
-        only) refuses any torsion column, one restrained end included; the coupled OpenFAST
-        and FAST.Farm routes turn the fairlead frame with the platform and accept it.
+        the force-blended generalised-alpha (a coupled run is always dynamic); its modal
+        analysis (nModes) carries the twist. A standalone mixed EI = 0 + finite-EI deck
+        without bodies (``aggregate_route``, run on the aggregate, which moves the line ends by
+        translation only) refuses any torsion column, one restrained end included; the coupled
+        OpenFAST and FAST.Farm routes turn the fairlead frame with the platform and accept it.
         """
         # _check_attachments has already accepted every LineID as an integer
         torsion_lines: set[str] = set()
@@ -4378,12 +4378,6 @@ class DeckFile:
             raise DeckFormatError(
                 f"{self._label}: torsion in a dynamic run needs the force-blended "
                 "generalised-alpha (OPTION alpha_force_blend True)"
-            )
-        modes_row = option_by_key.get("n_modes")
-        if modes_row is not None and round(_native_float(modes_row.values[0])) > 0:
-            raise DeckFormatError(
-                f"{self._label}: modal analysis (OPTION nModes) of a line with torsion is not "
-                "yet supported"
             )
         return torsion_lines
 

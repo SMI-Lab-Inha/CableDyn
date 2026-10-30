@@ -877,7 +877,7 @@ Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B
 `Body<N>` point; in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
 (see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
 torsion on an `EI = 0` line, on a rod end or on a `Point3` body,
-modal analysis (`nModes`), a dynamic or coupled run with `False alpha_force_blend`, any
+a dynamic or coupled run with `False alpha_force_blend`, any
 restrained end (one end included) in a standalone deck mixing `EI = 0` and finite-EI lines
 without a body or through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line
 ends by translation only (`a line restrained in torsion needs a host that turns its fairlead
@@ -1205,7 +1205,7 @@ syntax form. The most frequently edited keywords are:
 | `WaveDirections` | direction bins of a spread train | 9 |
 | `WaveComponents` | frequency components per train and direction (at least 2) | 200 |
 | `StreamOrder` | Fourier terms of a `stream` wave: 0 (default, 20) or 2 to 60 | 0 |
-| `nModes` | modal analysis: the N lowest natural frequencies and mode shapes of every line about its static equilibrium, written to `<root>.modes.out` (EI = 0 decks, or finite-EI decks on the Hermite route; flat seabed; 0 = off) | 0 |
+| `nModes` | modal analysis: the N lowest natural frequencies and mode shapes of every line about its static equilibrium, written to `<root>.modes.out` (EI = 0 decks, or finite-EI decks on the Hermite route, where a line restrained in torsion adds the twist angle of every node; flat seabed; 0 = off) | 0 |
 | `WaveSeed` | integer from 1 to 2147483646; seed of the random spectral sea (the same seed gives the same sea on every platform; train *i* uses seed + 7919 (*i* − 1)) | 1 |
 | `rampTime` | half-cosine start-up ramp of the wave amplitudes [s]; the current is not ramped. `0` disables it | 0 |
 | `motionFile` | path to a prescribed-motion time series for `Coupled`/`Vessel` points, rod end rows, and prescribed Rigid6 `Body<N>` points; `0` or `none` disables it | — |

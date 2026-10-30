@@ -614,9 +614,9 @@ Ambient fluid and prescribed motion
        dynamic deck), or all finite-EI lines on the cubic-Hermite route (dynamic deck, every
        End B Fixed). Other decks are rejected; a deck that mixes ``EI = 0`` and finite-EI
        lines stops with ``OPTION nModes is not supported for mixed EI=0/finite-EI decks;
-       remove it or set it to 0``; a deck with a torsional line stops with ``modal analysis
-       (OPTION nModes) of a line with torsion is not yet supported``. The banded solver has no
-       line-length limit: a
+       remove it or set it to 0``. A line restrained in torsion adds the twist angle of every
+       node to its modes (``PolarShare`` and ``dTwist`` in :doc:`outputs`). The banded solver has
+       no line-length limit: a
        1024-element finite-EI cable takes a few seconds. See :doc:`theory`
      - standalone
      - ``10 nModes``

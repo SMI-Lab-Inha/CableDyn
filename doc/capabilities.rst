@@ -99,9 +99,9 @@ Line and constitutive capability
        (``CONTROL``) of the fairlead segment on the coupled route; ``Torq``/``Twist`` channels and
        standalone range graphs. Stopped by name: the standalone mixed ``EI = 0`` + finite-EI
        aggregate and ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
-       translation only), rod ends, bodies other than Rigid6, modal analysis, and
-       ``False alpha_force_blend``. Not modelled: seabed friction against twist, anisotropic
-       sections, self-contact of a loop (see :ref:`theory-torsion`)
+       translation only), rod ends, bodies other than Rigid6 and ``False alpha_force_blend``.
+       Modal analysis carries the twist angle of every node. Not modelled: seabed friction
+       against twist, anisotropic sections, self-contact of a loop (see :ref:`theory-torsion`)
    * - Hockling loops, nonlinear cross-section laws
      - Not provided
      - the buckling onset and the post-buckled shape are computed, but a loop that closes on
@@ -121,8 +121,9 @@ Line and constitutive capability
    * - Modal analysis (``nModes``)
      - Standalone only
      - natural frequencies and mode shapes of each line about its static equilibrium (all
-       ``EI = 0`` lines, or all finite-EI lines on the Hermite route; flat seabed); a deck with
-       torsion is rejected
+       ``EI = 0`` lines, or all finite-EI lines on the Hermite route with their end connections
+       and attachments; flat seabed); a line restrained in torsion adds the twist angle of every
+       node, so its torsional modes and the torque's effect on the others appear
    * - Cross-flow VIV (LINE TYPES ``Cl``, ``dF``, ``cF``)
      - Standalone and coupled
      - MoorDyn v2's synchronisation model on ``EI = 0`` lines and, as a distributed lift, on
