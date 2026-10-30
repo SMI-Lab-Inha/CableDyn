@@ -180,8 +180,7 @@ _has_object_queries = _bind_object_queries()
 # restore of outer correctors, and the coupled layout query. A library built
 # before the extension lacks these symbols and reports ``abi_minor() < 2``.
 
-#: Minor extension level of ABI 1 this binding uses for the host-coupling calls
-#: (the newest extension the binding knows).
+#: Minor extension level of ABI 1 this binding uses for the host-coupling calls.
 HOST_COUPLING_ABI_MINOR = 2
 
 
@@ -208,6 +207,33 @@ def _bind_host_coupling() -> bool:
 
 
 _has_host_coupling = _bind_host_coupling()
+
+
+# --- ABI 1, minor extension 3: host rotations --------------------------------
+# Initialization for a host that turns its coupled points, their rotations, and
+# the coupled moments. A library built before the extension lacks these symbols
+# and reports ``abi_minor() < 3``.
+
+#: Minor extension level of ABI 1 this binding uses for the host-rotation calls
+#: (the newest extension the binding knows).
+HOST_ROTATION_ABI_MINOR = 3
+
+
+def _bind_host_rotation() -> bool:
+    try:
+        init_rot = _lib.CableDyn_InitDeckRotating
+    except AttributeError:
+        return False
+    init_rot.argtypes = [c_void_p, c_char_p, c_int, _DBL, c_int, POINTER(c_int)]
+    init_rot.restype = None
+    _lib.CableDyn_UpdateRotations.argtypes = [c_void_p, _DBL, _DBL, _DBL, c_int, POINTER(c_int)]
+    _lib.CableDyn_UpdateRotations.restype = None
+    _lib.CableDyn_GetCoupledMoments.argtypes = [c_void_p, _DBL, c_int, POINTER(c_int)]
+    _lib.CableDyn_GetCoupledMoments.restype = None
+    return True
+
+
+_has_host_rotation = _bind_host_rotation()
 
 
 def abi_minor() -> int:

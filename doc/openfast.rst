@@ -345,9 +345,10 @@ substeps; an output probe moves the frame without a step, is limited to 90° fro
 committed twist, and stops by name beyond it (a restart first restores the checkpoint's twist,
 so it is not limited this way). Formal
 linearisation of a line restrained in torsion fails during initialisation: the torque's
-rotational stiffness has no column in the translation-only quasi-static reduction. The C API
-and the standalone deck that mixes ``EI = 0`` and finite-EI lines without a body move the line
-ends by translation only and refuse torsion columns.
+rotational stiffness has no column in the translation-only quasi-static reduction. The C API's
+``CableDyn_InitDeck``/``InitDeckAt`` and the standalone deck that mixes ``EI = 0`` and finite-EI
+lines without a body move the line ends by translation only and refuse torsion columns; a C API
+host that initialises with ``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`).
 
 Lifecycle features
 ------------------

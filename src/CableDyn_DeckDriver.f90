@@ -283,7 +283,8 @@ MODULE CableDyn_DeckDriver
   CHARACTER(*), PARAMETER :: INSPECTION_NOTE = ' Output contains only committed states and is for inspection only.'
   ! a line restrained in torsion on an entry whose caller does not turn the fairlead frame
   CHARACTER(*), PARAMETER :: TORSION_NEEDS_ORIENTATION = 'a line restrained in torsion needs a host that '// &
-                             'turns its fairlead frame: coupled OpenFAST and FAST.Farm runs do, while the C API '// &
+                             'turns its fairlead frame: coupled OpenFAST and FAST.Farm runs do, and a C API host '// &
+                             'initialised with CableDyn_InitDeckRotating, while CableDyn_InitDeck/InitDeckAt '// &
                              'and a standalone deck that mixes EI = 0 and finite-EI lines without a BODY move '// &
                              'the line ends by translation only (with a BODY such a deck runs on the multibody '// &
                              'route, which supports torsion); set TorsStiffness Free in every END CONNECTIONS row'

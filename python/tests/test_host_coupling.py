@@ -49,7 +49,7 @@ def _motion(model: CableDyn, q0: np.ndarray, amp: float, t: float):
 
 def test_abi_minor_reports_the_host_coupling_extension():
     assert _lib.HOST_COUPLING_ABI_MINOR == 2
-    assert _lib.abi_minor() == cabledyn.abi_minor() == _lib.HOST_COUPLING_ABI_MINOR
+    assert _lib.abi_minor() == cabledyn.abi_minor() >= _lib.HOST_COUPLING_ABI_MINOR
 
 
 def test_point_route_layout():

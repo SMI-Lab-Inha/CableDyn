@@ -90,6 +90,26 @@ def _dbl_ptr(arr: FloatArray) -> Any:
     return arr.ctypes.data_as(POINTER(c_double))
 
 
+def _host_positions(q0: ArrayInput) -> FloatArray:
+    """``q0`` of :meth:`CableDyn.init_deck_at`: flat ``(3 n,)`` or column-per-point ``(3, n)``."""
+    q = _as_real_array(q0, "q0")
+    if q.ndim == 2 and q.shape == (3, 3):
+        # three points: column-per-point and row-per-point look alike
+        raise ValueError(
+            "q0 of shape (3, 3) is ambiguous (column-per-point or row-per-point); "
+            "pass it flat, x1 y1 z1 x2 y2 z2 ..."
+        )
+    if q.ndim == 2 and q.shape[0] == 3:
+        q = np.ascontiguousarray(q.reshape(-1, order="F"))
+    if q.ndim != 1 or q.size % 3 != 0:
+        raise ValueError(
+            f"q0 must be flat (3 * n,) or column-per-point (3, n); got shape {np.shape(q0)}"
+        )
+    if not np.all(np.isfinite(q)):
+        raise ValueError("q0 must be finite (no NaN or Inf)")
+    return q
+
+
 def _encode_path(deck: str | os.PathLike[str]) -> bytes:
     """Encode a deck path for the Fortran runtime's narrow-character ``OPEN``."""
     text = os.fspath(deck)
@@ -239,21 +259,7 @@ class CableDyn:
         _encode_path(deck)  # rejects a NUL before any file-system call
         resolved = Path(deck).expanduser().resolve()
         path = _encode_path(resolved)
-        q = _as_real_array(q0, "q0")
-        if q.ndim == 2 and q.shape == (3, 3):
-            # three points: column-per-point and row-per-point look alike
-            raise ValueError(
-                "q0 of shape (3, 3) is ambiguous (column-per-point or row-per-point); "
-                "pass it flat, x1 y1 z1 x2 y2 z2 ..."
-            )
-        if q.ndim == 2 and q.shape[0] == 3:
-            q = np.ascontiguousarray(q.reshape(-1, order="F"))
-        if q.ndim != 1 or q.size % 3 != 0:
-            raise ValueError(
-                f"q0 must be flat (3 * n,) or column-per-point (3, n); got shape {np.shape(q0)}"
-            )
-        if not np.all(np.isfinite(q)):
-            raise ValueError("q0 must be finite (no NaN or Inf)")
+        q = _host_positions(q0)
         with self._lock:
             self._require_host_coupling()
             status = c_int()
@@ -263,6 +269,39 @@ class CableDyn:
             self._check("CableDyn_InitDeckAt", status.value)
             self._initialized_from(resolved)
 
+    def init_deck_rotating(
+        self, deck: str | os.PathLike[str], q0: ArrayInput | None = None
+    ) -> None:
+        """Initialize from a deck for a host that turns the bodies its coupled points are on.
+
+        :meth:`init_deck_at` (or :meth:`init_deck` with ``q0=None``) whose model
+        takes each coupled block's rotation from :meth:`update_rotations` and
+        passes it with every :meth:`update_states` and :meth:`step`, so a line
+        restrained in torsion (``END CONNECTIONS`` ``TorsStiffness``) and a
+        ``Rigid`` bending end connection turn with the host at their host-driven
+        end; the other initializations refuse a deck with a line restrained in
+        torsion. The rotations start at identity (the deck's axes at the static
+        start) and rest. :meth:`coupled_moments` returns the moments the lines
+        apply to the host.
+        """
+        _encode_path(deck)  # rejects a NUL before any file-system call
+        resolved = Path(deck).expanduser().resolve()
+        path = _encode_path(resolved)
+        q = np.zeros(0) if q0 is None else _host_positions(q0)
+        with self._lock:
+            self._require_host_rotation()
+            status = c_int()
+            _lib.CableDyn_InitDeckRotating(
+                self._handle,
+                path,
+                len(path),
+                _dbl_ptr(q) if q.size else None,
+                int(q.size),
+                byref(status),
+            )
+            self._check("CableDyn_InitDeckRotating", status.value)
+            self._initialized_from(resolved)
+
     def _initialized_from(self, deck: Path) -> None:
         """Book-keeping after a successful deck initialization (the caller holds the lock)."""
         self._generation += 1
@@ -270,6 +309,15 @@ class CableDyn:
         self._time = 0.0
         self._saved_time = None
         self._deck = deck
+
+    @staticmethod
+    def _require_host_rotation() -> None:
+        if _lib_module.abi_minor() < _lib_module.HOST_ROTATION_ABI_MINOR:
+            # not a C status: the loaded library lacks the entry points
+            raise RuntimeError(
+                "the loaded CableDyn library predates the host-rotation calls "
+                "(ABI 1 minor extension 3); rebuild it from this checkout"
+            )
 
     @staticmethod
     def _require_host_coupling() -> None:
@@ -539,6 +587,65 @@ class CableDyn:
             self._check("CableDyn_RestoreState", status.value)
             if self._saved_time is not None:
                 self._time = self._saved_time
+
+    # -- host rotations -------------------------------------------------------
+
+    def update_rotations(self, dcm: ArrayInput, omega: ArrayInput, alpha: ArrayInput) -> None:
+        """Set the host's rotation of every coupled block for the next updates and steps.
+
+        ``dcm`` is ``(n_block, 3, 3)``: ``dcm[k]`` is block ``k``'s global-to-body
+        direction cosine matrix (its rows are the body axes in global axes, the
+        OpenFAST mesh orientation; identity is the body at its static-start
+        attitude). ``omega`` and ``alpha`` are ``(n_block, 3)``: the body's
+        angular velocity [rad/s] and acceleration [rad/s^2] in global axes. Only a
+        finite-EI line's host-driven end uses its block. The rotations are kept
+        until the next call and saved with :meth:`save_state`. Requires
+        :meth:`init_deck_rotating`; a rejected input (a matrix that is not proper
+        orthogonal to 1e-8, a non-finite value) leaves the rotations unchanged.
+        """
+        with self._lock:
+            self._require_host_rotation()
+            nb = self.n_coupled_dof // 3
+            r = _as_real_array(dcm, "dcm")
+            w = _as_real_array(omega, "omega")
+            al = _as_real_array(alpha, "alpha")
+            if r.shape != (nb, 3, 3):
+                raise ValueError(f"dcm must be shaped ({nb}, 3, 3); got {r.shape}")
+            for name, x in (("omega", w), ("alpha", al)):
+                if x.shape != (nb, 3):
+                    raise ValueError(f"{name} must be shaped ({nb}, 3); got {x.shape}")
+            r = np.ascontiguousarray(r.reshape(-1))
+            w = np.ascontiguousarray(w.reshape(-1))
+            al = np.ascontiguousarray(al.reshape(-1))
+            status = c_int()
+            _lib.CableDyn_UpdateRotations(
+                self._handle,
+                _dbl_ptr(r) if nb else None,
+                _dbl_ptr(w) if nb else None,
+                _dbl_ptr(al) if nb else None,
+                nb,
+                byref(status),
+            )
+            self._check("CableDyn_UpdateRotations", status.value)
+
+    def coupled_moments(self) -> FloatArray:
+        """The moments the lines apply to the host at the coupled points, ``(n_dof,)`` N m.
+
+        Block ``k`` (entries ``3k .. 3k+2``, global axes) is a finite-EI line's
+        torsional and bending reaction about the coupled point at its host-driven
+        end, at the state :meth:`calc_output` reports; zero for the other blocks
+        and for ``EI = 0`` lines.
+        """
+        with self._lock:
+            self._require_host_rotation()
+            n = self.n_coupled_dof
+            moments = np.zeros(n)
+            status = c_int()
+            _lib.CableDyn_GetCoupledMoments(
+                self._handle, _dbl_ptr(moments) if n else None, n, byref(status)
+            )
+            self._check("CableDyn_GetCoupledMoments", status.value)
+            return moments
 
     def coupled_layout(self) -> tuple[tuple[int, PointKind], ...]:
         """The owner of each 3-DOF block of the coupled vector, as ``(point_id, kind)``.

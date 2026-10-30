@@ -29,13 +29,14 @@ A model lives behind an opaque handle. The lifecycle is:
 .. code-block:: text
 
    CableDyn_Create
-     -> CableDyn_InitDeck | CableDyn_InitDeckAt                       (initialize; may repeat)
-        | CableDyn_InitLine | CableDyn_InitLines
+     -> CableDyn_InitDeck | CableDyn_InitDeckAt | CableDyn_InitDeckRotating
+        | CableDyn_InitLine | CableDyn_InitLines                      (initialize; may repeat)
      -> CableDyn_GetCoupledMotion                                     (read the initial state)
      -> loop:  [CableDyn_SaveState | CableDyn_RestoreState]           (host outer correctors)
                [CableDyn_UpdatePointFluidFields]
+               [CableDyn_UpdateRotations]                             (a host that turns)
                CableDyn_Step(dt, motion at t+dt)
-               CableDyn_CalcOutput                                    (loads at t+dt)
+               CableDyn_CalcOutput [, CableDyn_GetCoupledMoments]     (loads at t+dt)
      -> CableDyn_Close
 
 A host solver that drives the ``Coupled`` points of a deck, a CFD code in particular, should
@@ -83,6 +84,11 @@ MoorDyn's C API.
      - host coupling (ABI 1.2): initialization with the statics at the host's positions, a
        one-slot state save and restore for outer correctors, and the owner of each block of
        the coupled vector (`Host coupling calls`_)
+   * - ``CableDyn_InitDeckRotating``, ``CableDyn_UpdateRotations``,
+       ``CableDyn_GetCoupledMoments``
+     - host rotations (ABI 1.3): a host that turns the bodies its coupled points are fixed to,
+       for lines restrained in torsion and Rigid end connections, and the moments the lines
+       apply (`Host rotation calls`_)
 
 Building and linking
 --------------------
@@ -237,9 +243,9 @@ ABI and versioning
      - 1
      - the C ABI revision the header describes
    * - ``CABLEDYN_CAPI_ABI_MINOR`` / ``CableDyn_GetAbiMinor()``
-     - 2
+     - 3
      - additive extensions of ABI 1: 1 adds the `Object queries`_, 2 the
-       `Host coupling calls`_
+       `Host coupling calls`_, 3 the `Host rotation calls`_
    * - ``CableDyn_GetVersion(&major, &minor, &patch, &abi)``
      - runtime
      - the same four numbers, reported by the loaded library
@@ -270,8 +276,9 @@ The Python package does this check at import and rejects a library that speaks a
 
 A minor extension only adds functions: every ABI 1 prototype and its semantics are unchanged,
 so a caller built against an older header keeps working. A caller that uses the additions checks
-``CableDyn_GetAbiMinor() >= 1`` before calling the object queries, and
-``CableDyn_GetAbiMinor() >= 2`` before calling the host-coupling functions.
+``CableDyn_GetAbiMinor() >= 1`` before calling the object queries,
+``CableDyn_GetAbiMinor() >= 2`` before calling the host-coupling functions, and
+``CableDyn_GetAbiMinor() >= 3`` before calling the host-rotation functions.
 
 Calling conventions
 -------------------
@@ -650,6 +657,33 @@ SI units in the global right-handed frame with z up and still water at :math:`z 
 (:doc:`conventions`), as in MoorDyn. A host in another frame or unit system converts the
 motion it passes and the loads it receives.
 
+Step 8: a host that turns: torsion and rigid end connections
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The coupled vector carries translations only, which is all an ``EI = 0`` line or a pinned
+finite-EI end takes. A finite-EI line restrained in torsion (``END CONNECTIONS``
+``TorsStiffness``) twists with the body's roll about the line, and a ``Rigid`` bending end
+connection holds the line's end tangent on a direction fixed to the body: both need the body's
+rotation. ``CableDyn_InitDeck`` and ``CableDyn_InitDeckAt`` move the ends by translation only and
+refuse a deck with a line restrained in torsion; a ``Rigid`` end connection there keeps its deck
+direction.
+
+*CableDyn.* Initialise with ``CableDyn_InitDeckRotating`` (``CableDyn_InitDeckAt`` that takes
+rotations; ``n_q0 = 0`` for the deck positions) and, before every ``CableDyn_UpdateStates`` and
+``CableDyn_Step``, pass the body's rotation at the same instant with
+``CableDyn_UpdateRotations``: for each block of the coupled vector, the global-to-body
+direction cosine matrix (row-major: its rows are the body axes in global axes, the OpenFAST
+mesh orientation) and the body's angular velocity and acceleration in global axes. The body's
+axes are the deck's at the static start, so the rotation starts at identity; a host whose body
+starts rotated passes its rotation relative to that start. ``CableDyn_GetCoupledMoments`` then
+returns the moment each line applies to the body about its fairlead, in global axes, beside the
+force of ``CableDyn_CalcOutput``; add :math:`\sum_k m_k` to the moment of Step 5. *MoorDyn* has
+no line torsion; its coupled bodies and rods take 6 values per object.
+
+The rotations are inputs, like the motion: an end frame turned by more than a quarter turn
+about its line since the last committed step is refused, and ``CableDyn_SaveState``/``CableDyn_RestoreState`` carry the
+last rotations with the model.
+
 Call sequence
 ~~~~~~~~~~~~~
 
@@ -684,9 +718,12 @@ the deck's ``POINTS`` order of the ``Coupled`` points) the host computes from th
        }
        ++j;
    }
+   /* a host that turns (CableDyn_InitDeckRotating): the body's rotation at t first */
+   /* CableDyn_UpdateRotations(h, dcm, omega, alpha, n / 3, &err); */
    CableDyn_Step(h, dt, q, v, a, n, &converged, &stalled, &n_iter, &err);
    CableDyn_CalcOutput(h, f, n, &err);
    /* F = sum of f over the host blocks; M = sum of (x - r) x f over the same blocks */
+   /* (+ the moments of CableDyn_GetCoupledMoments over the same blocks, Step 8) */
 
    /* End of the run. */
    CableDyn_Close(&h, &err);
@@ -1952,6 +1989,87 @@ line-bound points of every type in ``POINTS`` order; on the aggregate route they
 ``Coupled``/``Vessel`` points only (`Coupled DOF layout`_). A handle initialised from raw arrays
 has no deck points, and the call returns ``CD_C_BAD_INPUT``: its coupled vector is the caller's
 own ``fixed_dofs`` list. A wrong ``n_block`` returns ``CD_C_BAD_INPUT``.
+
+Host rotation calls
+~~~~~~~~~~~~~~~~~~~
+
+ABI 1 minor extension 3: check ``CableDyn_GetAbiMinor() >= 3`` before calling these.
+`Step 8: a host that turns: torsion and rigid end connections`_ shows how they fit together.
+
+.. code-block:: c
+
+   void CableDyn_InitDeckRotating(void *handle, const char *deck_path,
+                                  int deck_path_len, const double *q0, int n_q0,
+                                  int *err_stat);
+   void CableDyn_UpdateRotations(void *handle, const double *dcm,
+                                 const double *omega, const double *alpha,
+                                 int n_block, int *err_stat);
+   void CableDyn_GetCoupledMoments(void *handle, double *coupled_moments,
+                                   int n_coupled_dof, int *err_stat);
+
+**CableDyn_InitDeckRotating.** ``CableDyn_InitDeckAt`` for a host that turns its coupled points:
+the arguments, routes, rejections, serialisation and transactions are those of
+``CableDyn_InitDeckAt``, and ``n_q0 = 0`` (``q0`` may be ``NULL``) solves the statics at the deck
+positions, as ``CableDyn_InitDeck``. The handle takes each coupled block's rotation from
+``CableDyn_UpdateRotations`` and passes it with every ``CableDyn_UpdateStates`` and
+``CableDyn_Step``, so a line restrained in torsion and a ``Rigid`` bending end connection turn
+with the host at their host-driven end, as on the coupled OpenFAST route. It accepts a deck
+with a line restrained in torsion, which the other ``Init*`` calls refuse. The rotations start
+at identity and rest. Another ``Init*`` call makes the handle one that takes no rotations.
+
+**CableDyn_UpdateRotations.** The rotation of each 3-DOF block of the coupled vector for the
+following ``CableDyn_UpdateStates`` and ``CableDyn_Step`` calls; it is kept until the next call.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 8 12 12 12 38
+
+   * - Argument
+     - Dir
+     - C type
+     - Length
+     - NULL
+     - Meaning
+   * - ``dcm``
+     - in
+     - ``const double *``
+     - ``9 * n_block``
+     - only if ``n_block == 0``
+     - ``dcm[9k + 3i + j]`` is :math:`R_{ij}` of block ``k``'s global-to-body direction cosine
+       matrix, row-major: row ``i`` is body axis ``i`` in global axes (the OpenFAST mesh
+       orientation). Identity is the body at its static-start attitude.
+   * - ``omega``, ``alpha``
+     - in
+     - ``const double *``
+     - ``3 * n_block`` each
+     - only if ``n_block == 0``
+     - the body's angular velocity [rad/s] and acceleration [rad/s²] in global axes
+   * - ``n_block``
+     - in
+     - ``int``
+     - --
+     - --
+     - must equal ``CableDyn_NCoupledDOF / 3``
+
+Only a finite-EI line's host-driven end uses its block; the other blocks (``EI = 0`` lines,
+the point route, bodies and rods) are checked and not used. The call is all or nothing: a
+handle not initialised by ``CableDyn_InitDeckRotating``, a wrong ``n_block``, a ``NULL``
+pointer, a non-finite entry, and a matrix that is not proper orthogonal to :math:`10^{-8}`
+(:math:`\max |R R^T - I|` and :math:`|\det R - 1|`) return ``CD_C_BAD_INPUT`` and leave the
+rotations unchanged. The rotations are checked against the lines at the next update or step:
+an end frame turned by more than a quarter turn about its line since the last committed state is
+refused there.
+``CableDyn_SaveState`` saves the rotations with the model and ``CableDyn_RestoreState`` restores
+them.
+
+**CableDyn_GetCoupledMoments.** The moment [N m] each block of the coupled vector applies to the
+host, about the coupled point in global axes, at the state ``CableDyn_CalcOutput`` reports
+(after an update without a step, against the frozen interior as there). It is a finite-EI
+line's torsional and bending reaction at its host-driven end, and zero for the other blocks and
+on the point route. ``coupled_moments`` holds ``n_coupled_dof`` values (``NULL`` only if
+``n_coupled_dof == 0``), which must equal ``CableDyn_NCoupledDOF``; it is set to zero before the
+evaluation and stays zero if the call fails. It is available on any initialised handle, so a
+host without rotations can read the moment of a ``Rigid`` end connection at its deck direction.
 
 Examples
 --------

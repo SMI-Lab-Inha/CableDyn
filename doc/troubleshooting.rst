@@ -399,9 +399,11 @@ Torsion
        buoyancy section.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
      - the standalone deck that mixes ``EI = 0`` and finite-EI lines without a body, and the C
-       API, move the line ends by translation only. Run the line in a coupled OpenFAST or
-       FAST.Farm run, add a body (such a deck runs on the multibody route, which supports
-       torsion), or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
+       API's ``CableDyn_InitDeck``/``InitDeckAt``, move the line ends by translation only. Run the
+       line in a coupled OpenFAST or FAST.Farm run, initialise a C API handle with
+       ``CableDyn_InitDeckRotating`` and pass the host's rotations, add a body (such a deck runs
+       on the multibody route, which supports torsion), or set ``TorsStiffness Free`` in every
+       ``END CONNECTIONS`` row.
    * - ``formal OpenFAST linearization of a line restrained in torsion is not supported``
      - linearise the model with ``TorsStiffness Free``; the twist and the torque carry no
        linearisation state.

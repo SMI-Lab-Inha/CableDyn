@@ -206,8 +206,8 @@ static int edit_deck(const char *in_path, const char *out_path, const char *old_
 
 static int check_version(void)
 {
-    CHECK(CABLEDYN_CAPI_ABI_MINOR == 2 && CableDyn_GetAbiMinor() == CABLEDYN_CAPI_ABI_MINOR,
-          "ABI minor level 2");
+    CHECK(CABLEDYN_CAPI_ABI_MINOR >= 2 && CableDyn_GetAbiMinor() == CABLEDYN_CAPI_ABI_MINOR,
+          "ABI minor level 2 or later");
     return 0;
 }
 

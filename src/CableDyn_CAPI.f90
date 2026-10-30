@@ -31,7 +31,7 @@ MODULE CableDyn_CAPI
                                CD_FAST_NCoupledDOF, CD_FAST_NPoints, CD_FAST_NLines, CD_FAST_OK, CD_FAST_BADINPUT, &
                                CD_FAST_NOT_INITIALIZED, CD_FAST_ALLOCFAIL, CD_FAST_UpdatePointFluidFields
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType
-  USE CableDyn_Precision, ONLY: wp, CD_ZERO
+  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
   USE CableDyn_System, ONLY: CD_SystemType, CD_System_Line_NDOF, CD_Get_System_PointBlocks, CD_SYSTEM_OK, &
                              CD_POINT_COUPLED
   IMPLICIT NONE
@@ -67,6 +67,9 @@ MODULE CableDyn_CAPI
   PUBLIC :: CableDyn_SaveState
   PUBLIC :: CableDyn_RestoreState
   PUBLIC :: CableDyn_GetCoupledLayout
+  PUBLIC :: CableDyn_InitDeckRotating
+  PUBLIC :: CableDyn_UpdateRotations
+  PUBLIC :: CableDyn_GetCoupledMoments
 
   INTEGER(C_INT), PARAMETER :: CD_C_OK = 0_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_BAD_HANDLE = 1_C_INT
@@ -80,8 +83,10 @@ MODULE CableDyn_CAPI
   INTEGER(C_INT), PARAMETER :: CD_C_ABI_VERSION = 1_C_INT
   CHARACTER(*), PARAMETER :: CD_C_VERSION_STRING = 'CableDyn 0.3.0 C-ABI 1'
   !> Minor extension level of ABI 1: 1 adds the in-process object queries, 2 the host-coupling
-  !> calls (initialization at host positions, state save/restore, the coupled layout query).
-  INTEGER(C_INT), PARAMETER :: CD_C_ABI_MINOR = 2_C_INT
+  !> calls (initialization at host positions, state save/restore, the coupled layout query), 3
+  !> the host rotations (initialization for a host that turns its coupled points, their
+  !> rotations, the coupled moments).
+  INTEGER(C_INT), PARAMETER :: CD_C_ABI_MINOR = 3_C_INT
   !> Object kinds of CableDyn_NObjects / CableDyn_GetObjectInfo.
   INTEGER(C_INT), PARAMETER :: CD_C_OBJ_LINE = 1_C_INT, CD_C_OBJ_POINT = 2_C_INT, CD_C_OBJ_BODY = 3_C_INT, &
                                CD_C_OBJ_ROD = 4_C_INT
@@ -156,6 +161,13 @@ MODULE CableDyn_CAPI
     TYPE(CD_AGG_ModuleType) :: agg
     REAL(wp) :: agg_dt = CD_ZERO, agg_t = CD_ZERO
     REAL(wp), ALLOCATABLE :: agg_pos(:, :), agg_vel(:, :), agg_acc(:, :), agg_load(:, :)
+    ! A handle initialised by CableDyn_InitDeckRotating (host_rot): the host's rotation of each
+    ! coupled block, set by CableDyn_UpdateRotations and passed with every update and step on the
+    ! aggregate route (agg_dcm: OpenFAST's global-to-body DCM; agg_om, agg_al: the angular
+    ! velocity and acceleration in global axes; identity and rest at the static start).
+    ! agg_moment: the coupled moments' workspace of CableDyn_GetCoupledMoments.
+    LOGICAL :: host_rot = .FALSE.
+    REAL(wp), ALLOCATABLE :: agg_dcm(:, :, :), agg_om(:, :), agg_al(:, :), agg_moment(:, :)
     ! Point-route line inventory for the object queries: the deck-line-id -> system-line map
     ! (pt_obj, 0 = no such line; pt_is_cable all .FALSE.) the shared channel evaluator resolves
     ! through, and an empty cable store to pass it. Raw-line handles number their lines 1..n.
@@ -171,6 +183,7 @@ MODULE CableDyn_CAPI
     TYPE(CD_FAST_ModuleType) :: saved_fast
     TYPE(CD_AGG_ModuleType), ALLOCATABLE :: saved_agg
     REAL(wp) :: saved_agg_t = CD_ZERO
+    REAL(wp), ALLOCATABLE :: saved_dcm(:, :, :), saved_om(:, :), saved_al(:, :)
     CHARACTER(CD_C_MSG_LEN) :: last_error = ''
   END TYPE CD_C_Handle
 
@@ -257,49 +270,86 @@ CONTAINS
     TYPE(C_PTR), VALUE :: handle, deck_path_ptr, q0_ptr
     INTEGER(C_INT), VALUE :: deck_path_len, n_q0
     INTEGER(C_INT), INTENT(OUT) :: err_stat
+
+    CALL init_deck_at(handle, deck_path_ptr, deck_path_len, q0_ptr, n_q0, 'CableDyn_InitDeckAt', .FALSE., err_stat)
+  END SUBROUTINE CableDyn_InitDeckAt
+
+  SUBROUTINE CableDyn_InitDeckRotating(handle, deck_path_ptr, deck_path_len, q0_ptr, n_q0, err_stat) &
+    BIND(C, NAME='CableDyn_InitDeckRotating')
+    !! CableDyn_InitDeckAt for a host that turns its coupled points: the handle takes each
+    !! coupled block's rotation from CableDyn_UpdateRotations and passes it with every update and
+    !! step, so a line restrained in torsion (END CONNECTIONS TorsStiffness) and a Rigid bending
+    !! END CONNECTION turn with the host at their coupled end, as on the coupled OpenFAST route.
+    !! The rotations start at identity (the deck's axes at the static start) and rest. n_q0 = 0
+    !! solves the statics at the deck positions, as CableDyn_InitDeck. Serialised process-wide
+    !! and transactional like CableDyn_InitDeck.
+    TYPE(C_PTR), VALUE :: handle, deck_path_ptr, q0_ptr
+    INTEGER(C_INT), VALUE :: deck_path_len, n_q0
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+
+    CALL init_deck_at(handle, deck_path_ptr, deck_path_len, q0_ptr, n_q0, 'CableDyn_InitDeckRotating', .TRUE., &
+                      err_stat)
+  END SUBROUTINE CableDyn_InitDeckRotating
+
+  SUBROUTINE init_deck_at(handle, deck_path_ptr, deck_path_len, q0_ptr, n_q0, caller, rotating, err_stat)
+    !! CableDyn_InitDeckAt / CableDyn_InitDeckRotating body: the host positions q0 (n_q0 = 0:
+    !! none, the deck positions) and, with rotating, a handle that takes the host's rotations.
+    TYPE(C_PTR), VALUE :: handle, deck_path_ptr, q0_ptr
+    INTEGER(C_INT), VALUE :: deck_path_len, n_q0
+    CHARACTER(*), INTENT(IN) :: caller
+    LOGICAL, INTENT(IN) :: rotating
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
     TYPE(CD_C_Handle), POINTER :: h
     REAL(C_DOUBLE), POINTER :: q0_c(:)
     REAL(wp), ALLOCATABLE :: positions(:, :)
     INTEGER :: stat
 
-    IF (.NOT. blas_runtime_ready(handle, 'CableDyn_InitDeckAt', err_stat)) RETURN
+    IF (.NOT. blas_runtime_ready(handle, caller, err_stat)) RETURN
     err_stat = validate_handle(handle, h)
     IF (err_stat /= CD_C_OK) RETURN
     IF (n_q0 < 0_C_INT .OR. MOD(n_q0, 3_C_INT) /= 0_C_INT) THEN
-      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeckAt: n_q0 must be a non-negative multiple of 3', &
-                      err_stat)
+      CALL set_status(h, CD_C_BAD_INPUT, caller//': n_q0 must be a non-negative multiple of 3', err_stat)
       RETURN
     END IF
     IF (n_q0 > 0_C_INT .AND. .NOT. C_ASSOCIATED(q0_ptr)) THEN
-      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeckAt: q0 pointer is null', err_stat)
+      CALL set_status(h, CD_C_BAD_INPUT, caller//': q0 pointer is null', err_stat)
+      RETURN
+    END IF
+    IF (rotating .AND. n_q0 == 0_C_INT) THEN
+      ! no host positions: the statics at the deck positions, as CableDyn_InitDeck
+      CALL cabledyn_input_lock()
+      CALL init_deck_serialised(handle, deck_path_ptr, deck_path_len, caller, err_stat, rotating=rotating)
+      CALL cabledyn_input_unlock()
       RETURN
     END IF
     ALLOCATE (positions(3, INT(n_q0)/3), STAT=stat)
     IF (stat /= 0) THEN
-      CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_InitDeckAt: q0 allocation failed', err_stat)
+      CALL set_status(h, CD_C_ALLOC_FAIL, caller//': q0 allocation failed', err_stat)
       RETURN
     END IF
     IF (n_q0 > 0_C_INT) THEN
       CALL C_F_POINTER(q0_ptr, q0_c, [INT(n_q0)])
       IF (.NOT. ALL(IEEE_IS_FINITE(q0_c))) THEN
-        CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitDeckAt: q0 must be finite', err_stat)
+        CALL set_status(h, CD_C_BAD_INPUT, caller//': q0 must be finite', err_stat)
         RETURN
       END IF
       positions = RESHAPE(REAL(q0_c, wp), SHAPE(positions))
     END IF
     CALL cabledyn_input_lock()
-    CALL init_deck_serialised(handle, deck_path_ptr, deck_path_len, 'CableDyn_InitDeckAt', err_stat, positions)
+    CALL init_deck_serialised(handle, deck_path_ptr, deck_path_len, caller, err_stat, positions, rotating)
     CALL cabledyn_input_unlock()
-  END SUBROUTINE CableDyn_InitDeckAt
+  END SUBROUTINE init_deck_at
 
-  SUBROUTINE init_deck_serialised(handle, deck_path_ptr, deck_path_len, caller, err_stat, positions)
-    !! CableDyn_InitDeck / CableDyn_InitDeckAt body; the caller holds the process-wide input
-    !! lock. positions (3, n): the host positions of CableDyn_InitDeckAt.
+  SUBROUTINE init_deck_serialised(handle, deck_path_ptr, deck_path_len, caller, err_stat, positions, rotating)
+    !! CableDyn_InitDeck / CableDyn_InitDeckAt / CableDyn_InitDeckRotating body; the caller holds
+    !! the process-wide input lock. positions (3, n): the host positions of CableDyn_InitDeckAt;
+    !! rotating: the handle takes the host's rotations (CableDyn_InitDeckRotating).
     TYPE(C_PTR), VALUE :: handle, deck_path_ptr
     INTEGER(C_INT), VALUE :: deck_path_len
     CHARACTER(*), INTENT(IN) :: caller
     INTEGER(C_INT), INTENT(OUT) :: err_stat
     REAL(wp), INTENT(IN), OPTIONAL :: positions(:, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: rotating
 
     TYPE(CD_C_Handle), POINTER :: h
     TYPE(CD_FAST_ModuleType) :: new_fast
@@ -308,9 +358,11 @@ CONTAINS
     INTEGER :: i, es, end_es, stat, n_objects, n_finite
     INTEGER, ALLOCATABLE :: line_ids(:)
     REAL(wp) :: dtm, gravity, rho_water
-    LOGICAL :: has_dtm
+    LOGICAL :: has_dtm, rot
     CHARACTER(CD_C_MSG_LEN) :: em, end_em
 
+    rot = .FALSE.
+    IF (PRESENT(rotating)) rot = rotating
     err_stat = validate_handle(handle, h)
     IF (err_stat /= CD_C_OK) RETURN
     IF (deck_path_len < 1_C_INT .OR. .NOT. C_ASSOCIATED(deck_path_ptr)) THEN
@@ -340,7 +392,7 @@ CONTAINS
     CALL CD_Deck_Query_dtM(TRIM(deck_path), dtm, has_dtm, es, em, standalone_scan=.TRUE., n_bodies_rods=n_objects, &
                            n_finite_ei=n_finite)
     IF (es == CD_DECKDRV_OK .AND. (n_objects > 0 .OR. n_finite > 0)) THEN
-      CALL init_deck_aggregate(h, TRIM(deck_path), has_dtm, dtm, caller, err_stat, positions)
+      CALL init_deck_aggregate(h, TRIM(deck_path), has_dtm, dtm, caller, rot, err_stat, positions)
       RETURN
     END IF
     ! An absent positions argument stays absent through the optional coupled_positions.
@@ -366,6 +418,9 @@ CONTAINS
     CALL drop_aggregate(h)
     CALL drop_saved_state(h)
     CALL set_point_line_map(h, line_ids)
+    ! the point route's EI = 0 lines take no rotation (CableDyn_UpdateRotations checks and
+    ! ignores it)
+    h%host_rot = rot
     CALL store_status(h, CD_C_OK, '')
     err_stat = CD_C_OK
   END SUBROUTINE init_deck_serialised
@@ -424,23 +479,27 @@ CONTAINS
     same = ALL(ABS(x - y) <= 1.0e-9_wp*MAX(1.0_wp, ABS(y)))
   END FUNCTION same_position
 
-  SUBROUTINE init_deck_aggregate(h, deck_path, has_dtm, dtm, caller, err_stat, positions)
+  SUBROUTINE init_deck_aggregate(h, deck_path, has_dtm, dtm, caller, rotating, err_stat, positions)
     !! Build a BODIES/RODS deck on the coupled aggregate (transactional: the handle keeps its
     !! previous model on failure). Coupled/Vessel rods and bodies are 6-DOF host nodes, which the
     !! translational C ABI cannot drive; the standalone deck rules already reject them without a
     !! motionFile, and the aggregate rejects a motionFile. positions (3, n_moving): the host
-    !! positions of CableDyn_InitDeckAt, in the aggregate's coupled order.
+    !! positions of CableDyn_InitDeckAt, in the aggregate's coupled order. rotating: the host
+    !! passes the coupled points' rotations (CableDyn_InitDeckRotating), which a line restrained
+    !! in torsion needs; without it such a deck is refused.
     TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
     CHARACTER(*), INTENT(IN) :: deck_path
     LOGICAL, INTENT(IN) :: has_dtm
     REAL(wp), INTENT(IN) :: dtm
     CHARACTER(*), INTENT(IN) :: caller
+    LOGICAL, INTENT(IN) :: rotating
     INTEGER(C_INT), INTENT(OUT) :: err_stat
     REAL(wp), INTENT(IN), OPTIONAL :: positions(:, :)
     ! On the heap: InitDeck runs on the host's thread, whose stack size the host chooses.
     TYPE(CD_AGG_ModuleType), ALLOCATABLE :: new_agg
     INTEGER :: es, nm, stat, k
     REAL(wp), ALLOCATABLE :: pos(:, :), vel(:, :), acc(:, :), load(:, :)
+    REAL(wp), ALLOCATABLE :: dcm(:, :, :), om(:, :), al(:, :), moment(:, :)
     CHARACTER(CD_C_MSG_LEN) :: em
 
     IF (.NOT. (has_dtm .AND. dtm > CD_ZERO)) THEN
@@ -454,7 +513,8 @@ CONTAINS
       RETURN
     END IF
     ! An absent positions argument stays absent through the optional coupled_positions.
-    CALL CD_AGG_Init_From_Deck(new_agg, deck_path, dtm, es, em, coupled_positions=positions)
+    CALL CD_AGG_Init_From_Deck(new_agg, deck_path, dtm, es, em, coupled_positions=positions, &
+                               host_orientation=rotating)
     IF (es /= CD_AGG_OK) THEN
       CALL map_agg_status(es, err_stat)
       CALL store_status(h, err_stat, caller//': '//TRIM(em))
@@ -464,7 +524,8 @@ CONTAINS
     nm = CD_AGG_NMovingPoints(new_agg, es, em)
     ! Allocate the new route's workspace before releasing the old route, so an
     ! allocation failure leaves the handle's previous model in place.
-    ALLOCATE (pos(3, nm), vel(3, nm), acc(3, nm), load(3, nm), STAT=stat)
+    ALLOCATE (pos(3, nm), vel(3, nm), acc(3, nm), load(3, nm), dcm(3, 3, nm), om(3, nm), al(3, nm), &
+              moment(3, nm), STAT=stat)
     IF (stat /= 0) THEN
       CALL CD_AGG_End(new_agg, es, em)
       CALL set_status(h, CD_C_ALLOC_FAIL, caller//': aggregate workspace allocation failed', err_stat)
@@ -503,6 +564,20 @@ CONTAINS
     CALL MOVE_ALLOC(vel, h%agg_vel)
     CALL MOVE_ALLOC(acc, h%agg_acc)
     CALL MOVE_ALLOC(load, h%agg_load)
+    dcm = CD_ZERO
+    DO k = 1, nm
+      dcm(1, 1, k) = CD_ONE
+      dcm(2, 2, k) = CD_ONE
+      dcm(3, 3, k) = CD_ONE
+    END DO
+    om = CD_ZERO
+    al = CD_ZERO
+    moment = CD_ZERO
+    CALL MOVE_ALLOC(dcm, h%agg_dcm)
+    CALL MOVE_ALLOC(om, h%agg_om)
+    CALL MOVE_ALLOC(al, h%agg_al)
+    CALL MOVE_ALLOC(moment, h%agg_moment)
+    h%host_rot = rotating
     CALL move_aggregate(new_agg, h%agg)
     CALL clear_point_line_map(h)
     h%use_agg = .TRUE.
@@ -554,6 +629,7 @@ CONTAINS
     END IF
     CALL CD_FAST_End(h%saved_fast, es, em)
     h%saved_agg_t = CD_ZERO
+    IF (ALLOCATED(h%saved_dcm)) DEALLOCATE (h%saved_dcm, h%saved_om, h%saved_al)
     h%has_saved = .FALSE.
   END SUBROUTINE drop_saved_state
 
@@ -567,6 +643,8 @@ CONTAINS
     h%agg_dt = CD_ZERO
     h%agg_t = CD_ZERO
     IF (ALLOCATED(h%agg_pos)) DEALLOCATE (h%agg_pos, h%agg_vel, h%agg_acc, h%agg_load)
+    IF (ALLOCATED(h%agg_dcm)) DEALLOCATE (h%agg_dcm, h%agg_om, h%agg_al, h%agg_moment)
+    h%host_rot = .FALSE.
   END SUBROUTINE drop_aggregate
 
   SUBROUTINE map_agg_status(agg_stat, err_stat)
@@ -933,7 +1011,12 @@ CONTAINS
         h%agg_vel = RESHAPE(REAL(v_c, wp), SHAPE(h%agg_vel))
         h%agg_acc = RESHAPE(REAL(a_c, wp), SHAPE(h%agg_acc))
       END IF
-      CALL CD_AGG_UpdateStates_Moving(h%agg, h%agg_pos, h%agg_vel, h%agg_acc, es, em)
+      IF (h%host_rot) THEN
+        CALL CD_AGG_UpdateStates_Moving(h%agg, h%agg_pos, h%agg_vel, h%agg_acc, es, em, orientation=h%agg_dcm, &
+                                        angular_velocity=h%agg_om, angular_acceleration=h%agg_al)
+      ELSE
+        CALL CD_AGG_UpdateStates_Moving(h%agg, h%agg_pos, h%agg_vel, h%agg_acc, es, em)
+      END IF
       CALL map_agg_status(es, err_stat)
       CALL store_status(h, err_stat, em)
       RETURN
@@ -1043,8 +1126,14 @@ CONTAINS
         h%agg_vel = RESHAPE(REAL(v_c, wp), SHAPE(h%agg_vel))
         h%agg_acc = RESHAPE(REAL(a_c, wp), SHAPE(h%agg_acc))
       END IF
-      CALL CD_AGG_Step_Moving(h%agg, REAL(dt, wp), h%agg_pos, h%agg_vel, h%agg_acc, conv_f, stall_f, nit, es, em, &
-                              t_committed=h%agg_t + REAL(dt, wp))
+      IF (h%host_rot) THEN
+        CALL CD_AGG_Step_Moving(h%agg, REAL(dt, wp), h%agg_pos, h%agg_vel, h%agg_acc, conv_f, stall_f, nit, es, &
+                                em, t_committed=h%agg_t + REAL(dt, wp), orientation=h%agg_dcm, &
+                                angular_velocity=h%agg_om, angular_acceleration=h%agg_al)
+      ELSE
+        CALL CD_AGG_Step_Moving(h%agg, REAL(dt, wp), h%agg_pos, h%agg_vel, h%agg_acc, conv_f, stall_f, nit, es, &
+                                em, t_committed=h%agg_t + REAL(dt, wp))
+      END IF
       IF (es == CD_AGG_OK) h%agg_t = h%agg_t + REAL(dt, wp)
       converged = LOGICAL(conv_f, C_BOOL)
       stalled = LOGICAL(stall_f, C_BOOL)
@@ -1769,8 +1858,9 @@ CONTAINS
     !! Save the whole model into the handle's single save slot, replacing any earlier save:
     !! every line, point, body and rod state with its solver history (viscoelastic, Syrope and
     !! friction states, the last converged step), the point fluid fields, and on the aggregate
-    !! route the committed time. The slot holds a deep copy of the model object, independent of
-    !! the step's own rollback buffers, so any number of steps may follow before the restore.
+    !! route the committed time and the host's rotations (CableDyn_UpdateRotations). The slot
+    !! holds a deep copy of the model object, independent of the step's own rollback buffers,
+    !! so any number of steps may follow before the restore.
     !! A successful Init* call discards the slot; a failed InitDeck/InitDeckAt keeps it with the
     !! model, and a failed InitLine/InitLines discards it unless the handle's live model is an
     !! aggregate (drop_point_save_on_failure). Only the allocation of the aggregate slot itself
@@ -1795,6 +1885,12 @@ CONTAINS
       END IF
       CALL copy_aggregate(h%agg, h%saved_agg)
       h%saved_agg_t = h%agg_t
+      ! the host's rotations are the inputs of the saved instant (CableDyn_UpdateRotations)
+      IF (h%host_rot) THEN
+        h%saved_dcm = h%agg_dcm
+        h%saved_om = h%agg_om
+        h%saved_al = h%agg_al
+      END IF
     ELSE
       CALL copy_point_system(h%fast, h%saved_fast)
     END IF
@@ -1820,6 +1916,11 @@ CONTAINS
     IF (h%use_agg) THEN
       CALL copy_aggregate(h%saved_agg, h%agg)
       h%agg_t = h%saved_agg_t
+      IF (h%host_rot) THEN
+        h%agg_dcm = h%saved_dcm
+        h%agg_om = h%saved_om
+        h%agg_al = h%saved_al
+      END IF
     ELSE
       CALL copy_point_system(h%saved_fast, h%fast)
     END IF
@@ -1860,6 +1961,140 @@ CONTAINS
     END IF
     CALL store_status(h, CD_C_OK, '')
   END SUBROUTINE CableDyn_GetCoupledLayout
+
+  ! ---------------------------------------------------------------------------------------
+  ! Host rotations (C ABI 1, minor extension 3): CableDyn_InitDeckRotating (above, with
+  ! InitDeckAt), the rotation of each coupled block, and the coupled moments.
+  ! ---------------------------------------------------------------------------------------
+
+  SUBROUTINE CableDyn_UpdateRotations(handle, dcm_ptr, omega_ptr, alpha_ptr, n_block, err_stat) &
+    BIND(C, NAME='CableDyn_UpdateRotations')
+    !! The host's rotation of each 3-DOF block k of the coupled vector, for the following
+    !! CableDyn_UpdateStates and CableDyn_Step calls (kept until the next call): dcm[9k + 3i + j]
+    !! = R_ij of the global-to-body DCM (row-major; rows are the body axes in global axes, the
+    !! OpenFAST mesh orientation), omega[3k + i] and alpha[3k + i] the body's angular velocity
+    !! and acceleration in global axes. The body is the host part the coupled point is fixed to,
+    !! with its axes on the deck's axes at the static start (identity). A finite-EI line's
+    !! host-driven end turns with it; the other blocks take no rotation (their entries are
+    !! checked and not used). n_block must equal CableDyn_NCoupledDOF / 3. Only a handle
+    !! initialised by CableDyn_InitDeckRotating takes rotations. The call is all or nothing: a
+    !! rejected input (a DCM that is not finite and proper orthogonal to 1e-8, non-finite rates)
+    !! leaves the rotations unchanged.
+    TYPE(C_PTR), VALUE :: handle, dcm_ptr, omega_ptr, alpha_ptr
+    INTEGER(C_INT), VALUE :: n_block
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    REAL(C_DOUBLE), POINTER :: dcm_c(:), om_c(:), al_c(:)
+    REAL(wp) :: r(3, 3), gram(3, 3), det
+    INTEGER :: n, k, i, j
+
+    IF (.NOT. query_ready(handle, h, 'CableDyn_UpdateRotations', err_stat)) RETURN
+    IF (.NOT. h%host_rot) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateRotations: the handle takes no rotations (initialise it '// &
+                      'with CableDyn_InitDeckRotating)', err_stat)
+      RETURN
+    END IF
+    IF (n_block < 0_C_INT .OR. n_block > HUGE(n_block)/9_C_INT) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateRotations: n_block does not match '// &
+                      'CableDyn_NCoupledDOF / 3', err_stat)
+      RETURN
+    END IF
+    IF (.NOT. valid_coupled_dof_count(h, 3_C_INT*n_block, err_stat)) THEN
+      IF (err_stat == CD_C_BAD_INPUT) CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateRotations: n_block '// &
+                                                      'does not match CableDyn_NCoupledDOF / 3', err_stat)
+      RETURN
+    END IF
+    n = INT(n_block)
+    IF (n == 0) THEN
+      CALL store_status(h, CD_C_OK, '')
+      err_stat = CD_C_OK
+      RETURN
+    END IF
+    IF (.NOT. (C_ASSOCIATED(dcm_ptr) .AND. C_ASSOCIATED(omega_ptr) .AND. C_ASSOCIATED(alpha_ptr))) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateRotations: input pointer is null', err_stat)
+      RETURN
+    END IF
+    CALL C_F_POINTER(dcm_ptr, dcm_c, [9*n])
+    CALL C_F_POINTER(omega_ptr, om_c, [3*n])
+    CALL C_F_POINTER(alpha_ptr, al_c, [3*n])
+    IF (.NOT. (ALL(IEEE_IS_FINITE(dcm_c)) .AND. ALL(IEEE_IS_FINITE(om_c)) .AND. ALL(IEEE_IS_FINITE(al_c)))) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateRotations: rotations must be finite', err_stat)
+      RETURN
+    END IF
+    ! every block is checked before any is stored (the aggregate's own test of its orientations)
+    DO k = 1, n
+      DO i = 1, 3
+        DO j = 1, 3
+          r(i, j) = REAL(dcm_c(9*(k - 1) + 3*(i - 1) + j), wp)
+        END DO
+      END DO
+      gram = MATMUL(r, TRANSPOSE(r))
+      DO i = 1, 3
+        gram(i, i) = gram(i, i) - CD_ONE
+      END DO
+      det = r(1, 1)*(r(2, 2)*r(3, 3) - r(2, 3)*r(3, 2)) - r(1, 2)*(r(2, 1)*r(3, 3) - r(2, 3)*r(3, 1)) + &
+            r(1, 3)*(r(2, 1)*r(3, 2) - r(2, 2)*r(3, 1))
+      IF (MAXVAL(ABS(gram)) > 1.0e-8_wp .OR. ABS(det - CD_ONE) > 1.0e-8_wp) THEN
+        CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateRotations: the DCM of block '//TRIM(int_text(k - 1))// &
+                        ' is not proper orthogonal', err_stat)
+        RETURN
+      END IF
+    END DO
+    IF (h%use_agg) THEN
+      DO k = 1, n
+        DO i = 1, 3
+          DO j = 1, 3
+            h%agg_dcm(i, j, k) = REAL(dcm_c(9*(k - 1) + 3*(i - 1) + j), wp)
+          END DO
+        END DO
+        h%agg_om(:, k) = REAL(om_c(3*k - 2:3*k), wp)
+        h%agg_al(:, k) = REAL(al_c(3*k - 2:3*k), wp)
+      END DO
+    END IF
+    CALL store_status(h, CD_C_OK, '')
+    err_stat = CD_C_OK
+  END SUBROUTINE CableDyn_UpdateRotations
+
+  SUBROUTINE CableDyn_GetCoupledMoments(handle, moments_ptr, n_coupled_dof, err_stat) &
+    BIND(C, NAME='CableDyn_GetCoupledMoments')
+    !! The moment each 3-DOF block of the coupled vector applies to the host, about the coupled
+    !! point in global axes, at the state CableDyn_CalcOutput reports: a finite-EI line's
+    !! torsional and bending reaction at its host-driven end (a line restrained in torsion, a
+    !! Rigid or spring bending END CONNECTION), zero for the other blocks and on the point
+    !! route. n_coupled_dof must equal CableDyn_NCoupledDOF.
+    TYPE(C_PTR), VALUE :: handle, moments_ptr
+    INTEGER(C_INT), VALUE :: n_coupled_dof
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    REAL(C_DOUBLE), POINTER :: moments_c(:)
+    INTEGER :: es
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    IF (.NOT. query_ready(handle, h, 'CableDyn_GetCoupledMoments', err_stat)) RETURN
+    IF (.NOT. valid_coupled_dof_count(h, n_coupled_dof, err_stat)) RETURN
+    IF (n_coupled_dof == 0_C_INT) THEN
+      CALL store_status(h, CD_C_OK, '')
+      err_stat = CD_C_OK
+      RETURN
+    END IF
+    IF (.NOT. C_ASSOCIATED(moments_ptr)) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_GetCoupledMoments: moments pointer is null', err_stat)
+      RETURN
+    END IF
+    CALL C_F_POINTER(moments_ptr, moments_c, [INT(n_coupled_dof)])
+    moments_c = 0.0_C_DOUBLE
+    IF (.NOT. h%use_agg) THEN
+      CALL store_status(h, CD_C_OK, '')
+      err_stat = CD_C_OK
+      RETURN
+    END IF
+    CALL CD_AGG_CalcOutput(h%agg, es, em)
+    IF (es == CD_AGG_OK) CALL CD_AGG_GetMovingPointMesh(h%agg, h%agg_pos, h%agg_vel, h%agg_acc, h%agg_load, es, em, &
+                                                        moment=h%agg_moment)
+    IF (es == CD_AGG_OK) moments_c = REAL(RESHAPE(h%agg_moment, [INT(n_coupled_dof)]), C_DOUBLE)
+    CALL map_agg_status(es, err_stat)
+    CALL store_status(h, err_stat, em)
+  END SUBROUTINE CableDyn_GetCoupledMoments
 
   SUBROUTINE coupled_layout(h, ids, types, err_stat)
     !! Deck point id and point type (the CD_POINT_* codes) of each coupled block. Point route:

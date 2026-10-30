@@ -9,6 +9,7 @@ EXPORTS
     CableDyn_GetAbiMinor
     CableDyn_GetBodyState
     CableDyn_GetCoupledLayout
+    CableDyn_GetCoupledMoments
     CableDyn_GetCoupledMotion
     CableDyn_GetLastError
     CableDyn_GetLineValues
@@ -19,6 +20,7 @@ EXPORTS
     CableDyn_GetVersionString
     CableDyn_InitDeck
     CableDyn_InitDeckAt
+    CableDyn_InitDeckRotating
     CableDyn_InitLine
     CableDyn_InitLines
     CableDyn_IsInitialized
@@ -30,4 +32,5 @@ EXPORTS
     CableDyn_SaveState
     CableDyn_Step
     CableDyn_UpdatePointFluidFields
+    CableDyn_UpdateRotations
     CableDyn_UpdateStates
