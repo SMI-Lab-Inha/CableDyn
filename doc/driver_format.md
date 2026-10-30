@@ -710,10 +710,11 @@ never both: a `SECTIONS` row for a 7-column line is an error naming the line.
 
 **Automatic anchor-first swap.** Stock MoorDyn decks list lines anchor first. When a line's
 `NodeA` is a `Fixed` point and its `NodeB` is a `Coupled`, `Vessel`, `Body<N>`, `Free`, or
-`Connect` point (`Turbine<J>` points count as coupled), the parser swaps the two ends, reverses
-that line's `SECTIONS` rows, and swaps its `END CONNECTIONS` ends, negating their reference
-directions. Lines already listed fairlead first, and `Free`/`Connect`-to-`Coupled` lines, are left
-as written.
+`Connect` point (`Turbine<J>` points count as coupled), or a finite-EI line's `NodeB` is a rod
+end (`R<N>A`/`R<N>B`), the parser swaps the two ends, reverses that line's `SECTIONS` rows, and
+swaps its `END CONNECTIONS` ends, negating their reference directions and pretwists (the
+torsion normals swap with their ends). Lines already listed fairlead first, `EI = 0` lines to a
+rod end, and `Free`/`Connect`-to-`Coupled` lines are left as written.
 
 **Endpoint rules.**
 
@@ -915,7 +916,8 @@ torsion). Each of the following stops with a named error: torsion on an `EI = 0`
 of a `Free`, `Pinned`, `Body<N>Pinned` or `CoupledPinned` rod (an axisymmetric rod has no roll
 angle about its own axis: no load acts about the axis and its static solve has none, so it
 cannot hold the torque) or of a `Coupled`/`Vessel` rod (no route carries a finite-EI line on a
-host-driven rod), on a `Point3` body, a dynamic or coupled run with `False alpha_force_blend`,
+host-driven rod), a line whose End B is a rod end (a line between two rods: put a `Fixed` point
+at the rod end), on a `Point3` body, a dynamic or coupled run with `False alpha_force_blend`,
 any restrained end (one end included) through the C API's `CableDyn_InitDeck`/`InitDeckAt`,
 which move the line ends by translation only (`a line restrained in torsion needs a host that
 turns its fairlead frame ...`; a C API host passes its rotations after

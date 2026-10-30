@@ -372,6 +372,12 @@ _ROD_ATTACHMENT_ALIASES = {
 _RIGID_END_CONNECTIONS = frozenset({"rigid", "infinity", "inf"})
 # TorsStiffness keywords of an end free to twist (a numeric 0 is free too)
 _FREE_TORSION_KEYWORDS = frozenset({"free", "zero"})
+# native ROD_END_B_NOTE: a finite-EI line with an END CONNECTION whose End B is a rod end
+_ROD_END_B_NOTE = (
+    " ends (End B) on a rod end: a line between two rods is not supported in this build (the "
+    "cable holds its End B at a Fixed point only); for a Fixed rod, end the line on a Fixed "
+    "point at the rod end's position (its force then stays out of that rod's Rod<N> loads)"
+)
 # native CD_HTORS_MAX_TWIST: the largest imposed static twist, 1000 turns
 _MAX_STATIC_TWIST_DEG = 360000.0
 # Native TORS_NX_PARALLEL_TOL: smallest |Nx x Ez| of unit vectors (about 0.06 degrees off Ez).
@@ -3019,6 +3025,16 @@ class DeckFile:
         normalized_line_endpoints: dict[str, tuple[str, str]] = {}
         # lines whose stock anchor-first row the native reader turns around (its ends swap)
         swapped_lines: set[str] = set()
+        # native finite_ei_by_name (normalize_stock_endpoint_order): the lines whose SECTIONS
+        # rows name a line type with EI > 0
+        finite_ei_lines: set[str] = set()
+        for section in self._rows("SECTIONS"):
+            if len(section.tokens) < 2:
+                continue
+            meta = line_type_meta.get(section.tokens[1].lower())
+            if meta is not None and meta[3] > 0.0:
+                with contextlib.suppress(ValueError):
+                    finite_ei_lines.add(str(_native_int(section.tokens[0])))
         range_lines = 0
         lift_lines = 0  # lines with the VIV lift file (flag V)
         series_lines = 0  # lines with per-line time-series files (flags p, t, V)
@@ -3096,11 +3112,19 @@ class DeckFile:
             # when NodeB is a fairlead (Coupled/Vessel/Body/Turbine), or a Free/Connect
             # point at or above the Fixed NodeA. A Fixed NodeA above a Free/Connect
             # NodeB is an elevated hang-off already in CableDyn (upper-end-first) order.
+            # A finite-EI line to a rod end swaps too (it runs only from the rod, End A, to a
+            # Fixed End B); an EI = 0 line to a rod end keeps its written order.
+            line_key = str(_native_int(row.tokens[0]))
+            finite_ei = line_key in finite_ei_lines or (
+                len(row.tokens) == 7
+                and line_type_meta.get(row.tokens[1].lower(), (0.0, 0.0, 0.0, 0.0))[3] > 0.0
+            )
             upper_b = (
                 type_b in {"coupled", "vessel"}
                 or type_b.startswith("body")
                 or _is_turbine_point_type(type_b)
                 or (type_b in {"connect", "free"} and point_z[node_a] <= point_z[node_b])
+                or (finite_ei and _rod_point(type_b) is not None)
             )
             if type_a == "fixed" and upper_b:
                 node_a, node_b = node_b, node_a
@@ -3355,6 +3379,11 @@ class DeckFile:
                 if not has_finite_ei:
                     raise DeckFormatError(f"{where} END CONNECTIONS requires a finite-EI line")
                 end_b = normalized_line_endpoints[line_id][1]
+                if _rod_point(point_types[end_b]) is not None:
+                    raise DeckFormatError(
+                        f"{where} non-pinned END CONNECTIONS require a finite-EI line with Fixed "
+                        f"End B; line {line_id}{_ROD_END_B_NOTE}"
+                    )
                 if point_types[end_b] != "fixed":
                     raise DeckFormatError(
                         f"{where} non-pinned END CONNECTIONS require "
@@ -4403,6 +4432,11 @@ class DeckFile:
                     f"{twist:.5e} deg exceeds 1000 turns (360000 deg), the largest static twist"
                 )
             end_a, end_b = normalized_line_endpoints[line_id]
+            if _rod_point(point_types[end_b]) is not None:
+                raise DeckFormatError(
+                    f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
+                    f"End B; line {line_id}{_ROD_END_B_NOTE}"
+                )
             if point_types[end_b] != "fixed":
                 raise DeckFormatError(
                     f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
@@ -4432,7 +4466,7 @@ class DeckFile:
                     "axisymmetric, with no roll about its own axis (no load acts about the axis "
                     "and its static solve has no roll angle), so it cannot hold the line's torque; "
                     "restrain End A on a Fixed rod, on a rod fixed to a Rigid6 body (RODS type "
-                    "Body<N>), on a Rigid6 body point or on a Fixed or Coupled point"
+                    "Body<N>), on a Rigid6 body point or on a Fixed point"
                 )
             body_id = _body_point_id(point_types[end_a])
             if body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":

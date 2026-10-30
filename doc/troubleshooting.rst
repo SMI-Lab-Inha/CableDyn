@@ -397,8 +397,13 @@ Torsion
        ``on a body needs a Rigid6 body``
      - outside the torsion scope (:doc:`capabilities`). A free or pinned rod has no roll angle
        about its own axis, so it cannot hold the torque. Move End A to a ``Fixed`` rod, a rod fixed
-       to a Rigid6 body (``RODS`` type ``Body<N>``), a ``Fixed`` or ``Coupled``/``Vessel`` point
-       or a Rigid6 body.
+       to a Rigid6 body (``RODS`` type ``Body<N>``), a Rigid6 body or a ``Fixed`` point (a
+       ``Coupled``/``Vessel`` End A only in a deck without bodies and rods: a deck with them runs
+       on the multibody march, which takes no ``Coupled`` End A for a finite-EI line).
+   * - ``... require a finite-EI line with Fixed End B; line <L> ends (End B) on a rod end``
+     - the cable holds its End B at a ``Fixed`` point only, so a line between two rods (a J-tube
+       to a J-tube) is not supported. For a ``Fixed`` rod, end the line on a ``Fixed`` point at
+       the rod end's position; that rod's ``Rod<N>`` loads then leave its force out.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
      - the C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by translation only.
        Run the line in a coupled OpenFAST or FAST.Farm run or in the standalone driver,

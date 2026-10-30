@@ -8,12 +8,13 @@
 !>  1. a straight neutral line, stretched by 1e-4 and restrained in torsion, hung along the axis
 !>     of an inclined Fixed rod (the J-tube; its frame is not the global one), with the reference
 !>     normals given in global axes: two turns of pretwist give Torq = GJ Phi / L at every node,
-!>     the same torque as the line hung from a Fixed point (a second route, the standalone
-!>     finite-EI march) to the printed digits, and equal normals with equal pretwists give no
-!>     torque (the End A normal is carried into the rod frame; taken in the rod frame instead it
+!>     the same torque as the line hung from a Coupled point held still (a second route, the
+!>     standalone finite-EI march) to the printed digits, and equal normals with equal pretwists
+!>     give no torque (the End A normal is carried into the rod frame; taken in the rod frame instead it
 !>     would twist the line by the roll of that frame); Rod<N>M about the rod's End A is the
 !>     torque along the line axis, M_t a (the moment returned to the rod); a 1 s march keeps the
-!>     torque; a bending-pinned, torsionally rigid End A carries the same torque;
+!>     torque; a bending-pinned, torsionally rigid End A carries the same torque; the deck written
+!>     anchor first (MoorDyn's order, NodeA the anchor) is turned around and runs bit for bit;
 !>  2. a rod fixed to a rolling Rigid6 body (RODS type Body<N>, the body attitude rolled,
 !>     pitched and yawed), the line hung along the rod axis and pretwisted by 30 deg, the body
 !>     released from rest: the body and its rod roll about the line axis as a torsional pendulum
@@ -25,7 +26,9 @@
 !>  3. named refusals: a Pinned, a Free and a Body<N>Pinned rod are axisymmetric with no roll
 !>     angle and cannot hold the torque; a Coupled rod carries no finite-EI line on any route; the
 !>     staggered body scheme, which drives a cable end by translation, refuses a torsional End A
-!>     on a body-fixed rod even when its bending is pinned (it ran with the frame frozen).
+!>     on a body-fixed rod even when its bending is pinned (it ran with the frame frozen); a line
+!>     written anchor first onto a Pinned rod meets the Pinned rod's refusal (it read "two moving
+!>     ends"), and a line between two Fixed rods is refused as one with End B on a rod end.
 !> The multibody march has no restart (checkpoint) path, so there is no restart gate.
 PROGRAM test_rod_end_torsion
   USE CableDyn_Precision, ONLY: wp
@@ -169,6 +172,34 @@ CONTAINS
     ok = ALL(IEEE_IS_FINITE(vals))
   END SUBROUTINE read_row
 
+  LOGICAL FUNCTION same_file(a, b) RESULT(same)
+    !! Byte-identical text files.
+    CHARACTER(*), INTENT(IN) :: a, b
+    INTEGER :: ua, ub, ia, ib
+    CHARACTER(4096) :: la, lb
+    same = .FALSE.
+    OPEN (NEWUNIT=ua, FILE=a, STATUS='OLD', ACTION='READ', IOSTAT=ia)
+    IF (ia /= 0) RETURN
+    OPEN (NEWUNIT=ub, FILE=b, STATUS='OLD', ACTION='READ', IOSTAT=ib)
+    IF (ib /= 0) THEN
+      CLOSE (ua)
+      RETURN
+    END IF
+    DO
+      READ (ua, '(A)', IOSTAT=ia) la
+      READ (ub, '(A)', IOSTAT=ib) lb
+      IF (ia /= 0 .OR. ib /= 0) EXIT
+      IF (la /= lb) THEN
+        CLOSE (ua)
+        CLOSE (ub)
+        RETURN
+      END IF
+    END DO
+    same = ia /= 0 .AND. ib /= 0
+    CLOSE (ua)
+    CLOSE (ub)
+  END FUNCTION same_file
+
   FUNCTION vec(v) RESULT(s)
     !! Three numbers at full precision for a deck row.
     REAL(wp), INTENT(IN) :: v(3)
@@ -182,7 +213,7 @@ CONTAINS
     !! hangs from its End B along a to an anchor 100.01 m away, both ends Rigid in bending and
     !! torsion with Ez = a and Nx = (0.6, -0.8, 0) (normal to a, global axes).
     CHARACTER(16), PARAMETER :: OUTS(6) = [CHARACTER(16) :: 'Torq1N1', 'Torq1N41', 'Twist1', 'Rod1Mx', 'Rod1My', &
-                                                                  'Rod1Mz']
+                                                                                                   'Rod1Mz']
     REAL(wp), PARAMETER :: AX(3) = [0.48_wp, 0.36_wp, -0.8_wp], NX(3) = [0.6_wp, -0.8_wp, 0.0_wp]
     REAL(wp), PARAMETER :: LN = 100.0_wp
     REAL(wp) :: pa(3), pb(3), anchor(3), m_ref, v(7), vp(7), e_ref, e_route, e_zero, e_mom, e_dyn, e_pin
@@ -210,14 +241,16 @@ CONTAINS
     ! Rod1M about the rod's End A: the line pulls along the rod axis through End B, the neutral
     ! rod's weight and buoyancy cancel, so the moment is the connection moment M_t a
     e_mom = NORM2(v(5:7) - m_ref*AX)/m_ref
-    ! (b) the same line hung from a Fixed point at the rod's End B: the standalone finite-EI march
+    ! (b) the same line hung from a Coupled point at the rod's End B, which the standalone finite-EI
+    ! march (a second route; it takes no Fixed End A) holds still
     WRITE (prow, '(A,A,A)') '1 Coupled ', TRIM(vec(pb)), ' 0 0 0 0'
     CALL write_deck('trod_point.dat', [CHARACTER(8) ::], [CHARACTER(8) ::], [prow, arow], '1 1 2 -', '100.0 40', &
                     [ca, cb], [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], OUTS(1:3))
     CALL run_deck('trod_point.dat', 'trod_point', ok, em)
-    CALL require(ok, '1: the same line from a point runs: '//TRIM(em))
-    CALL read_row('trod_point.out', 0, vp(1:4), ok)
-    e_route = nan_max_abs(v(2:4) - vp(2:4))/m_ref
+    CALL require(ok, '1: the same line from a held Coupled point runs: '//TRIM(em))
+    e_route = 1.0_wp
+    IF (ok) CALL read_row('trod_point.out', 0, vp(1:4), ok)
+    IF (ok) e_route = nan_max_abs(v(2:4) - vp(2:4))/m_ref
     ! (c) equal normals and pretwists: no twist, whatever the roll of the rod frame
     ca = '1 A Rigid '//TRIM(vec(AX))//' Rigid '//TRIM(vec(NX))//' 45'
     cb = '1 B Rigid '//TRIM(vec(AX))//' Rigid '//TRIM(vec(NX))//' 45'
@@ -250,11 +283,23 @@ CONTAINS
     CALL require(ok, '1: the bending-pinned rod-end line runs: '//TRIM(em))
     CALL read_row('trod_pin.out', 0, vp, ok)
     e_pin = nan_max_abs(vp(2:3) - m_ref)/m_ref
-    WRITE (*, '(A,2ES15.7,A,ES15.7,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3)') &
-      'Fixed rod: Torq N1/N41 ', v(2:3), ' ref GJ Phi/L ', m_ref, ' (rel ', e_ref, '); vs a Fixed point ', &
-      e_route, '; untwisted ', e_zero, '; Rod1M - M a ', e_mom, '; 1 s march ', e_dyn, '; pinned bending ', e_pin
+    ! (f) the deck of (a) written anchor first (MoorDyn's order: NodeA the anchor, NodeB the rod
+    ! end, each row's Ez from the anchor and its pretwist about it): the reader turns the line
+    ! around, and the run is (a)'s bit for bit
+    ca = '1 A Rigid '//TRIM(vec(-AX))//' Rigid '//TRIM(vec(NX))//' -750'
+    cb = '1 B Rigid '//TRIM(vec(-AX))//' Rigid '//TRIM(vec(NX))//' -30'
+    CALL write_deck('trod_af.dat', [CHARACTER(8) ::], [rrow], [arow], '1 2 R1B -', '100.0 40', [ca, cb], &
+                    [CHARACTER(16) :: '0.1 dtM', '0.0 TMax'], OUTS)
+    CALL run_deck('trod_af.dat', 'trod_af', ok, em)
+    CALL require(ok, '1: the anchor-first line onto the Fixed rod runs: '//TRIM(em))
+    CALL require(same_file('trod_fixed.out', 'trod_af.out'), '1: the anchor-first deck runs bit for bit as '// &
+                 'the rod-first one')
+    WRITE (*, '(A,2ES15.7,A,ES15.7,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A,L1)') &
+      'Fixed rod: Torq N1/N41 ', v(2:3), ' ref GJ Phi/L ', m_ref, ' (rel ', e_ref, '); vs a held Coupled point ', &
+      e_route, '; untwisted ', e_zero, '; Rod1M - M a ', e_mom, '; 1 s march ', e_dyn, '; pinned bending ', e_pin, &
+      '; anchor-first identical ', same_file('trod_fixed.out', 'trod_af.out')
     CALL require(e_ref <= 1.0e-7_wp, '1: Torq = GJ Phi / L on a Fixed rod end')
-    CALL require(e_route <= 1.0e-7_wp, '1: the same torque and twist as from a Fixed point')
+    CALL require(e_route <= 1.0e-7_wp, '1: the same torque and twist as from a held Coupled point')
     CALL require(e_zero <= 1.0e-7_wp, '1: equal normals and pretwists give no torque (normal in the rod frame)')
     CALL require(e_mom <= 1.0e-7_wp, '1: Rod<N>M is the torque along the line axis')
     CALL require(e_dyn <= 1.0e-7_wp, '1: the march holds the torque and the rod moment')
@@ -365,7 +410,35 @@ CONTAINS
     CALL refused('Body<N> (staggered)', '1 arm Body1 0 0 -10 0 0 -20 4 -', [brow], &
                  'a torsional END CONNECTION on a body or rod needs bodyScheme monolithic', 'staggered bodyScheme', &
                  'Pinned')
+    ! written anchor first onto a Pinned rod, the line is turned around and meets the rod's own
+    ! refusal (not "two moving ends")
+    CALL refused_rows('anchor-first Pinned', ['1 arm Pinned 0 0 -30 0 0 -40 4 -'], '1 2 R1B -', 1.0_wp, &
+                      'on the end of ROD 1 (pinned) is not supported: a free or pinned rod is axisymmetric')
+    ! a line between two Fixed rods (a J-tube to a J-tube): End B is a rod end
+    CALL refused_rows('two Fixed', [CHARACTER(48) :: '1 arm Fixed 0 0 -30 0 0 -40 4 -', &
+                                    '2 arm Fixed 0 0 -140.01 0 0 -150.01 4 -'], '1 R1B R2A -', -1.0_wp, &
+                      'torsional END CONNECTIONS require a finite-EI line with Fixed End B; line 1 ends (End B) '// &
+                      'on a rod end: a line between two rods is not supported in this build')
   END SUBROUTINE check_refusals
+
+  SUBROUTINE refused_rows(label, rod_rows, line_row, ez_z, needle)
+    !! A vertical line between z = -40 and -140.01 twisted by 90 deg (Ez = (0, 0, ez_z) at both
+    !! ends) on the given rods and LINES row (the Fixed point 2 at the bottom): the deck stops
+    !! with the message needle.
+    CHARACTER(*), INTENT(IN) :: label, rod_rows(:), line_row, needle
+    REAL(wp), INTENT(IN) :: ez_z
+    CHARACTER(256) :: ca, cb
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    ca = '1 A Rigid '//TRIM(vec([0.0_wp, 0.0_wp, ez_z]))//' Rigid 1 0 0 0'
+    cb = '1 B Rigid '//TRIM(vec([0.0_wp, 0.0_wp, ez_z]))//' Rigid 1 0 0 90'
+    CALL write_deck('trod_ref.dat', [CHARACTER(8) ::], rod_rows, ['2 Fixed 0.0 0.0 -140.01 0 0 0 0'], line_row, &
+                    '100.0 40', [ca, cb], [CHARACTER(32) :: '0.1 dtM', '1.0 TMax'], [CHARACTER(8) :: 'Torq1N1'])
+    CALL run_deck('trod_ref.dat', 'trod_ref', ok, em)
+    WRITE (*, '(A,A,A,A)') 'refusal on a ', label, ' rod line: ', TRIM(em)
+    CALL require(.NOT. ok .AND. INDEX(em, needle) > 0, '3: a torsional line on a '//label//' rod is refused '// &
+                 'by name (got: '//TRIM(em)//')')
+  END SUBROUTINE refused_rows
 
   SUBROUTINE refused(label, rod_row, bodies, needle, extra, bend_a)
     !! A vertical rod (End B at z = -40, or the body rods' at -40 in global axes) holding a

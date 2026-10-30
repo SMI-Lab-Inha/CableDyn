@@ -1124,6 +1124,27 @@ def test_torsion_scope_rules_follow_the_native_checks():
         ),
         rf"on the end of ROD 1 \(body1pinned\) {axisymmetric}",
     )
+    # written anchor first (MoorDyn's order) the finite-EI line is turned around, onto the Fixed
+    # rod as onto a pinned one; a line between two rods ends on a rod end
+    anchor_first = _edit(rod_end, ("1 R1A 2 -", "1 2 R1A -"))
+    DeckFile.from_text(anchor_first)
+    _rejects(
+        _edit(anchor_first, ("1 spar Fixed", "1 spar Pinned")),
+        rf"on the end of ROD 1 \(pinned\) {axisymmetric}",
+    )
+    _rejects(
+        _edit(
+            rod_end,
+            (
+                "1 spar Fixed 0 0 -50 0 0 -40 2 -\n",
+                "1 spar Fixed 0 0 -50 0 0 -40 2 -\n2 spar Fixed 100 0 -50 100 0 -60 2 -\n",
+            ),
+            ("1 R1A 2 -", "1 R1A R2A -"),
+        ),
+        # the bending row is checked first here, the torsion first natively: one remedy
+        r"END CONNECTIONS require a finite-EI line with Fixed End B; line 1 ends \(End B\) on a "
+        "rod end: a line between two rods is not supported in this build",
+    )
     _rejects(
         _options(_edit(rod_end, ("1 spar Fixed", "1 spar Coupled")), "rod.motion motionFile"),
         "a torsional END CONNECTION on the end of Coupled/Vessel ROD 1 is not supported: no route "

@@ -497,6 +497,12 @@ MODULE CableDyn_DeckDriver
   ! Smallest |Nx x Ez| / |Nx| accepted for a reference normal (about 0.06 degrees off Ez).
   REAL(wp), PARAMETER :: TORS_NX_PARALLEL_TOL = 1.0e-3_wp
   REAL(wp), PARAMETER :: DEG2RAD_TORS = 3.14159265358979323846264338327950288_wp/180.0_wp
+  ! A finite-EI line with a bending or torsional END CONNECTION whose End B is a rod end (also a
+  ! line between two rods, a J-tube to a J-tube): the cable holds End B at a Fixed point only.
+  CHARACTER(*), PARAMETER :: ROD_END_B_NOTE = ' ends (End B) on a rod end: a line between two rods is not '// &
+                             'supported in this build (the cable holds its End B at a Fixed point only); for a '// &
+                             'Fixed rod, end the line on a Fixed point at the rod end''s position (its force then '// &
+                             'stays out of that rod''s Rod<N> loads)'
 
   TYPE :: DeckLine
     INTEGER :: id = 0, nodeA = 0, nodeB = 0
@@ -12799,7 +12805,7 @@ CONTAINS
         RETURN
       END IF
     END DO
-    CALL normalize_stock_endpoint_order(points, lines, sections)
+    CALL normalize_stock_endpoint_order(points, lines, sections, types)
     IF (PRESENT(controls)) THEN
       CALL resolve_one_end_torsion(types, bodies, points, lines, sections, opts, ext_march, controls)
     ELSE
@@ -17159,7 +17165,7 @@ CONTAINS
     END DO
   END SUBROUTINE set_azimuth_ranges
 
-  SUBROUTINE normalize_stock_endpoint_order(points, lines, sections)
+  SUBROUTINE normalize_stock_endpoint_order(points, lines, sections, types)
     !! Stock MoorDyn decks write lines anchor (End A) -> fairlead (End B); the CableDyn
     !! deck convention is the reverse (End A = fairlead side, End B = anchor). When a
     !! line arrives in stock order -- NodeA a Fixed anchor, NodeB a Coupled/Vessel/
@@ -17170,12 +17176,17 @@ CONTAINS
     !! point ids are untouched. The normalization runs on dynamic-point decks too: their
     !! anchored Fixed<->Coupled legs carry the same stock-order convention (a clump-split
     !! farm deck's anchor legs would otherwise reach the builders reversed).
+    !! A finite-EI line (types given) from a Fixed NodeA to a rod end NodeB swaps too: such a
+    !! line runs only from the rod (End A, on the multibody march) to a Fixed End B, so the
+    !! stock row would otherwise stop. An EI = 0 line to a rod end keeps its written order.
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckLine), INTENT(INOUT) :: lines(:)
     TYPE(DeckSection), INTENT(INOUT) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN), OPTIONAL :: types(:)
     INTEGER :: i, ia, ib, tmp, mode_tmp
     REAL(wp) :: k_tmp, ez_tmp(3)
     CHARACTER(NAMELEN) :: ta, tb
+    LOGICAL :: rod_b
     DO i = 1, SIZE(lines)
       ia = find_point(points, lines(i)%nodeA)
       ib = find_point(points, lines(i)%nodeB)
@@ -17192,8 +17203,12 @@ CONTAINS
       ! that line is already in CableDyn order (End A = upper end) and is left as written,
       ! so the internal anchor->fairlead model keeps its fairlead above its anchor. (Both
       ! positions are global there; Coupled/Vessel/Body points may be body-relative.)
+      rod_b = .FALSE.
+      IF (PRESENT(types) .AND. TRIM(ta) == 'fixed') THEN
+        IF (is_rod_point_type(tb)) rod_b = finite_ei_by_name(lines(i)%id)
+      END IF
       IF (TRIM(ta) == 'fixed' .AND. (TRIM(tb) == 'coupled' .OR. TRIM(tb) == 'vessel' .OR. &
-                                     starts_with(TRIM(tb), 'body') .OR. &
+                                     starts_with(TRIM(tb), 'body') .OR. rod_b .OR. &
                                      ((TRIM(tb) == 'free' .OR. TRIM(tb) == 'connect') .AND. &
                                       points(ia)%pos(3) <= points(ib)%pos(3)))) THEN
         tmp = lines(i)%nodeA
@@ -17231,6 +17246,19 @@ CONTAINS
         CALL reverse_line_sections(sections, lines(i)%id)
       END IF
     END DO
+  CONTAINS
+    LOGICAL FUNCTION finite_ei_by_name(line_id) RESULT(fin)
+      !! line_is_finite_ei before the SECTIONS line types are resolved (by name).
+      INTEGER, INTENT(IN) :: line_id
+      INTEGER :: j, it
+      fin = .FALSE.
+      DO j = 1, SIZE(sections)
+        IF (sections(j)%line_id /= line_id) CYCLE
+        it = find_type(types, sections(j)%ltype_name)
+        IF (it < 1) CYCLE
+        IF (types(it)%ei > CD_ZERO) fin = .TRUE.
+      END DO
+    END FUNCTION finite_ei_by_name
   END SUBROUTINE normalize_stock_endpoint_order
 
   SUBROUTINE reverse_line_sections(sections, line_id)
@@ -18302,6 +18330,13 @@ CONTAINS
       ! as pinned, while retaining finite/rigid connections at either end of every
       ! supported Fixed-End-B cable.
       j = find_point(points, lines(i)%nodeB)
+      IF (j > 0) THEN
+        IF (is_rod_point_type(points(j)%ptype)) THEN
+          CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS require a finite-EI line with Fixed End B; '// &
+                    'line '//TRIM(int_to_str(lines(i)%id))//ROD_END_B_NOTE)
+          RETURN
+        END IF
+      END IF
       IF (j < 1 .OR. TRIM(points(j)%ptype) /= 'fixed') THEN
         CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS require a finite-EI line with Fixed End B; '// &
                   'the two-moving-end compatibility solver does not apply bending connections')
@@ -18396,6 +18431,11 @@ CONTAINS
       END IF
       jp = find_point(points, ln%nodeB)
       IF (jp < 1) RETURN
+      IF (is_rod_point_type(points(jp)%ptype)) THEN
+        CALL fail(es_t, em_t, 'torsional END CONNECTIONS require a finite-EI line with Fixed End B; line '// &
+                  TRIM(lid)//ROD_END_B_NOTE)
+        RETURN
+      END IF
       IF (TRIM(points(jp)%ptype) /= 'fixed') THEN
         CALL fail(es_t, em_t, 'torsional END CONNECTIONS require a finite-EI line with Fixed End B; line '// &
                   TRIM(lid)//' has two moving ends')
@@ -18430,7 +18470,7 @@ CONTAINS
                       'pinned rod is axisymmetric, with no roll about its own axis (no load acts about the axis '// &
                       'and its static solve has no roll angle), so it cannot hold the line''s torque; restrain '// &
                       'End A on a Fixed rod, on a rod fixed to a Rigid6 body (RODS type Body<N>), on a Rigid6 '// &
-                      'body point or on a Fixed or Coupled point')
+                      'body point or on a Fixed point')
             RETURN
           END SELECT
         END IF
@@ -38574,8 +38614,9 @@ CONTAINS
     !! makes the connection moment normal to the axis. check_axis = .FALSE. (after the static
     !! solve has turned the rod; the deck direction was checked before it) keeps only the sense.
     !! nx0: End A's torsion reference normal in the object frame. On a body point the deck gives
-    !! it in the body frame; on a rod end (a Fixed rod, check_torsion_line) in the frame of the
-    !! rod's deck coordinates, so it is carried into the rod frame rot: nx0 = rot^T Nx.
+    !! it in the body frame; on an end of a Fixed rod in the frame of the rod's deck coordinates,
+    !! so it is carried into the rod frame rot: nx0 = rot^T Nx. On any other rod (torsion refused
+    !! there, check_torsion_line) nx0 is the deck's Nx unchanged, not a normal in that rod's frame.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckBody), INTENT(IN) :: bodies(:)
@@ -38640,9 +38681,10 @@ CONTAINS
         IF (ib > 0) axis = MATMUL(deck_body_pose_rotation(bodies(ib)), axis)
       END IF
       rot = rod_orientation_from_axis(axis)
-      ! the frame init_rod_states gives the rod (rod_orientation_from_axis of its deck axis), in
-      ! which the march turns the End A frame (mb_attachment_motion)
-      IF (PRESENT(nx0)) nx0 = MATMUL(TRANSPOSE(rot), ln%tors_nx(:, 1))
+      ! a Fixed rod keeps the frame init_rod_states gives it (rod_orientation_from_axis of its deck
+      ! axis), in which the march holds the End A frame (mb_attachment_motion); a free or pinned
+      ! rod's march frame differs from rot by a roll, and torsion is refused there
+      IF (PRESENT(nx0) .AND. TRIM(rods(ir)%rod_type) == 'fixed') nx0 = MATMUL(TRANSPOSE(rot), ln%tors_nx(:, 1))
     ELSE
       CALL fail(ErrStat, ErrMsg, TRIM(who)//': a clamped or elastic END CONNECTION needs a Fixed point, a '// &
                 'Rigid6 body point or a rod end'); RETURN
