@@ -42,6 +42,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   !! dt that differs from it (a mismatched size would silently desync the cables, whose
   !! generalised-alpha step carries the Init dt, from the mooring columns).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite
+  USE CableDyn_PathIO, ONLY: CD_Open_Write
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
@@ -2675,7 +2676,7 @@ CONTAINS
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: line map unavailable for the static profile'
       RETURN
     END IF
-    OPEN (NEWUNIT=unit, FILE=TRIM(path), STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, TRIM(path), ios)
     IF (ios /= 0) THEN
       ErrStat = CD_AGG_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: cannot open static profile: '//TRIM(path)

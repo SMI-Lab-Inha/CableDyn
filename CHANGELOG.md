@@ -460,6 +460,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
   equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
   static passes too (4 here); the rod holds its pose to the output's 8 digits.
+- A failing `OPEN` of a file name of about 600 characters or more (the extended-length spelling of
+  a path beyond the Windows limit) ended an ifx-built program or the wheel's DLL with
+  `STATUS_STACK_BUFFER_OVERRUN` inside the Intel Fortran run-time, for example an output root in
+  a folder that does not exist. Every `OPEN` of a user-supplied name now first asks the system
+  whether the file opens (`CD_Path_Openable`) and reports the failure without attempting the
+  `OPEN`; the messages are unchanged.
 - Concurrent steps of separate handles crashed the ifx builds with access violations: an `EI = 0`
   line model passed its load and added-mass callbacks to the integrator as internal procedures,
   and ifx calls such a closure through a trampoline kept in memory every thread shares, so two

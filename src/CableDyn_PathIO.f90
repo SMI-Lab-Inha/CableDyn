@@ -13,7 +13,8 @@ MODULE CableDyn_PathIO
   IMPLICIT NONE
   PRIVATE
 
-  PUBLIC :: CD_Get_Argument, CD_Native_Path, CD_Open_Input, CD_Path_Is_Device, CD_Lock_Path
+  PUBLIC :: CD_Get_Argument, CD_Native_Path, CD_Open_Input, CD_Open_Read, CD_Open_Write, CD_Path_Openable
+  PUBLIC :: CD_Path_Is_Device, CD_Lock_Path
   PUBLIC :: CD_Strip_BOM
 
   !> CD_Native_Path status: converted, a reserved device name, a name the ANSI code
@@ -61,6 +62,12 @@ MODULE CableDyn_PathIO
       INTEGER(C_INT), VALUE :: in_len
       INTEGER(C_INT) :: n
     END FUNCTION c_path_lock
+    FUNCTION c_path_probe(in, in_len, for_output) RESULT(n) BIND(C, name='cabledyn_path_probe')
+      IMPORT :: C_INT, C_CHAR
+      CHARACTER(KIND=C_CHAR), INTENT(IN) :: in(*)
+      INTEGER(C_INT), VALUE :: in_len, for_output
+      INTEGER(C_INT) :: n
+    END FUNCTION c_path_probe
   END INTERFACE
 
 CONTAINS
@@ -160,8 +167,7 @@ CONTAINS
     CHARACTER(*), INTENT(IN) :: path
     CHARACTER(*), INTENT(OUT) :: reason
     CHARACTER(:), ALLOCATABLE :: native
-    INTEGER :: stat, iq
-    LOGICAL :: exists
+    INTEGER :: stat
 
     unit = -1
     CALL CD_Native_Path(path, native, stat, reason)
@@ -169,18 +175,58 @@ CONTAINS
       ios = 1
       RETURN
     END IF
-    ! A missing file is found by INQUIRE, not by a failing OPEN: the Intel Fortran run-time
-    ! (ifx 2025.3) ends the process with a stack buffer overrun when an OPEN of an
-    ! extended-length (\\?\) name of about 600 characters or more fails, as it formats the
-    ! error; INQUIRE of the same name returns.
-    exists = .TRUE.
-    INQUIRE (FILE=native, EXIST=exists, IOSTAT=iq)
-    IF (iq == 0 .AND. .NOT. exists) THEN
-      ios = 1
-      RETURN
-    END IF
-    OPEN (NEWUNIT=unit, FILE=native, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL CD_Open_Read(unit, native, ios)
   END SUBROUTINE CD_Open_Input
+
+  SUBROUTINE CD_Open_Read(unit, name, ios)
+    !! OPEN the existing file name (a runtime spelling, such as one CD_Native_Path gave) for
+    !! sequential formatted reading. ios /= 0 on failure: the OPEN's IOSTAT, or 1 when
+    !! CD_Path_Openable refused the name and no OPEN was attempted.
+    INTEGER, INTENT(OUT) :: unit, ios
+    CHARACTER(*), INTENT(IN) :: name
+
+    unit = -1
+    ios = 1
+    IF (.NOT. CD_Path_Openable(name, .FALSE.)) RETURN
+    OPEN (NEWUNIT=unit, FILE=name, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+  END SUBROUTINE CD_Open_Read
+
+  SUBROUTINE CD_Open_Write(unit, name, ios, status)
+    !! OPEN name (a runtime spelling: one CD_Native_Path gave, or an output root's spelling
+    !! with a suffix) for sequential formatted writing, STATUS 'REPLACE' or, given, status.
+    !! ios /= 0 on failure: the OPEN's IOSTAT, or 1 when CD_Path_Openable refused the name
+    !! and no OPEN was attempted.
+    INTEGER, INTENT(OUT) :: unit, ios
+    CHARACTER(*), INTENT(IN) :: name
+    CHARACTER(*), INTENT(IN), OPTIONAL :: status
+
+    unit = -1
+    ios = 1
+    IF (.NOT. CD_Path_Openable(name, .TRUE.)) RETURN
+    IF (PRESENT(status)) THEN
+      OPEN (NEWUNIT=unit, FILE=name, STATUS=status, ACTION='WRITE', IOSTAT=ios)
+    ELSE
+      OPEN (NEWUNIT=unit, FILE=name, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    END IF
+  END SUBROUTINE CD_Open_Write
+
+  LOGICAL FUNCTION CD_Path_Openable(name, for_output) RESULT(openable)
+    !! Whether the system opens name (a runtime spelling, trailing blanks ignored) for
+    !! reading an existing file or, with for_output, for writing (a missing file is then
+    !! created empty, an existing one left as it is). Every OPEN of a user-supplied name asks
+    !! here first and is not attempted when the answer is no: the Intel Fortran run-time
+    !! (ifx 2025.3, Windows) ends the process with a stack buffer overrun (0xC0000409) while
+    !! it formats the error of a failing OPEN of a name of about 600 characters or more (the
+    !! extended-length \\?\ spelling CD_Native_Path gives a long path), where an INQUIRE or
+    !! this probe returns.
+    CHARACTER(*), INTENT(IN) :: name
+    LOGICAL, INTENT(IN) :: for_output
+    INTEGER(C_INT) :: mode
+
+    mode = 0_C_INT
+    IF (for_output) mode = 1_C_INT
+    openable = c_path_probe(name, INT(LEN_TRIM(name), C_INT), mode) == 0_C_INT
+  END FUNCTION CD_Path_Openable
 
   PURE LOGICAL FUNCTION CD_Path_Is_Device(path) RESULT(is_device)
     !! True on Windows when any component of path is a reserved device name.

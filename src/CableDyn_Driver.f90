@@ -34,6 +34,7 @@ MODULE CableDyn_Driver
   !! CableDyn_Static path; tensions are recovered with
   !! CD_Compute_Cable_Tension on the converged state.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite, CD_Is_Finite
+  USE CableDyn_PathIO, ONLY: CD_Open_Read, CD_Open_Write
   USE CableDyn_Loads, ONLY: CD_Submerged_Weight, CD_Assemble_Distributed_Load
   USE CableDyn_Assemble, ONLY: CD_Compute_Cable_Tension
   USE CableDyn_Static, ONLY: CableSolverConfig, CD_Static_Cable_Solve, &
@@ -333,7 +334,7 @@ CONTAINS
     ! error return and silences -Wmaybe-uninitialized.
     ALLOCATE (nodes(3, 0), conn(2, 0), l0(0), ea(0), mass_pl(0), diam(0), fixed_dofs(0))
 
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL CD_Open_Read(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open input file: '//TRIM(path))
       RETURN
@@ -515,7 +516,7 @@ CONTAINS
     ALLOCATE (line_types(0), sections(0))
     ALLOCATE (factors(4)); factors = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
 
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL CD_Open_Read(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open input file: '//TRIM(path)); RETURN
     END IF
@@ -688,7 +689,7 @@ CONTAINS
     is_line = .FALSE.
     ErrStat = 0
     ErrMsg = ''
-    OPEN (NEWUNIT=unit, FILE=input_path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL CD_Open_Read(unit, input_path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open input file: '//TRIM(input_path)); RETURN
     END IF
@@ -747,7 +748,7 @@ CONTAINS
     ErrMsg = ''
     n_nodes = SIZE(q)/3
     n_elem = SIZE(conn, 2)
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
     END IF

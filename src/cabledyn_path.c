@@ -24,7 +24,11 @@
  *       the console or discards output;
  *   cabledyn_path_lock
  *       an exclusive lock file for an output root, released by the operating
- *       system when the process ends, however it ends.
+ *       system when the process ends, however it ends;
+ *   cabledyn_path_probe
+ *       whether the system opens a runtime spelling for reading or for writing, asked
+ *       before the Fortran OPEN so that an OPEN that would fail is never attempted
+ *       (see CD_Path_Openable in src/CableDyn_PathIO.f90).
  *
  * On other systems names are UTF-8 byte strings that the runtime opens unchanged,
  * so the conversion is the identity and the lock uses an advisory flock().
@@ -52,6 +56,18 @@ int cabledyn_path_arg(int index, char *buf, int buflen);
 int cabledyn_path_native(const char *in, int in_len, int for_output, int reserve, char *out, int outlen);
 int cabledyn_path_is_device(const char *in, int in_len);
 int cabledyn_path_lock(const char *in, int in_len);
+int cabledyn_path_probe(const char *in, int in_len, int for_output);
+
+/* The name s[0..n) as a NUL-terminated copy (malloc), or NULL. */
+static char *terminated(const char *s, int n) {
+  char *t;
+  if (s == NULL || n <= 0) return NULL;
+  t = (char *)malloc((size_t)n + 1);
+  if (t == NULL) return NULL;
+  memcpy(t, s, (size_t)n);
+  t[n] = '\0';
+  return t;
+}
 
 /* Copies n bytes and a terminating NUL when they fit; returns n or CD_PATH_ERR_BUFFER. */
 static int copy_out(const char *src, int n, char *out, int outlen) {
@@ -402,6 +418,24 @@ int cabledyn_path_lock(const char *in, int in_len) {
   return CD_LOCK_FAILED;
 }
 
+/* 0 when the system opens the runtime spelling in[0..in_len) (the narrow name the Fortran
+ * OPEN is given) for reading an existing file, or for writing (for_output; a missing file
+ * is created, an existing one left as it is), else 1. The ANSI entry point reads the name
+ * as the runtime's own calls do. A directory is refused: without backup semantics it does
+ * not open. The handle is closed at once. */
+int cabledyn_path_probe(const char *in, int in_len, int for_output) {
+  char *name = terminated(in, in_len);
+  HANDLE h;
+  if (name == NULL) return 1;
+  h = CreateFileA(name, for_output ? GENERIC_WRITE : GENERIC_READ,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                  for_output ? OPEN_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  free(name);
+  if (h == INVALID_HANDLE_VALUE) return 1;
+  CloseHandle(h);
+  return 0;
+}
+
 #else /* !_WIN32 */
 
 #include <fcntl.h>
@@ -423,6 +457,22 @@ int cabledyn_path_native(const char *in, int in_len, int for_output, int reserve
   (void)reserve;
   if (in_len < 0) return CD_PATH_ERR_GENERAL;
   return copy_out(in, in_len, out, outlen);
+}
+
+/* 0 when the system opens in[0..in_len) for reading an existing regular file (not a
+ * directory), or for writing (for_output; a missing file is created, an existing one left
+ * as it is), else 1. */
+int cabledyn_path_probe(const char *in, int in_len, int for_output) {
+  char *name = terminated(in, in_len);
+  struct stat st;
+  int fd, ok;
+  if (name == NULL) return 1;
+  fd = open(name, for_output ? (O_WRONLY | O_CREAT) : O_RDONLY, 0666);
+  free(name);
+  if (fd < 0) return 1;
+  ok = fstat(fd, &st) == 0 && !S_ISDIR(st.st_mode);
+  close(fd);
+  return ok ? 0 : 1;
 }
 
 static char *lock_name = NULL;

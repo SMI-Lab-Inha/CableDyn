@@ -5,6 +5,8 @@
 #     by a best-fit look-alike (café -> cafe);
 #   * no output file may be the deck or a file the deck reads, however it is spelled;
 #   * reserved Windows device names are refused instead of blocking on the console;
+#   * an output root beyond the path limit in a folder that does not exist is refused with
+#     the reason (exit 1), not a run-time crash;
 #   * a second run on an output root that a live run holds is refused, and the lock
 #     disappears with the run.
 if(DEFINED DELAYED_RUN)
@@ -135,6 +137,20 @@ string(REPLACE "100.0        WtrDpth" "auxclash.static.out bathymetryFile" clash
 file(WRITE "${WORK}/auxclash_deck.dat" "${clash_text}")
 run_driver("auxclash_deck.dat" "auxclash")
 expect_refusal("output over the bathymetry file" "would overwrite the input file")
+
+# --- an output root beyond the path limit in a folder that does not exist ----------------
+# Its runtime spelling (extended-length on Windows) is about 700 characters: a failing OPEN
+# of such a name ended an ifx-built driver inside the Intel run-time (0xC0000409); it must
+# be refused with the reason instead.
+string(REPEAT "a" 200 seg_a)
+string(REPEAT "b" 200 seg_b)
+string(REPEAT "c" 200 seg_c)
+file(WRITE "${WORK}/long_root_deck.dat" "${static_text}")
+run_driver("long_root_deck.dat" "${WORK}/no_such_folder/${seg_a}/${seg_b}/${seg_c}/run")
+if(NOT run_rc EQUAL 1 OR NOT run_err MATCHES "cannot write output files")
+  message(FATAL_ERROR "long output root in a missing folder: expected exit 1 and 'cannot write output files', "
+                      "got rc=${run_rc}\n${run_err}")
+endif()
 
 # --- reserved Windows device names -----------------------------------------------------
 if(WIN32)

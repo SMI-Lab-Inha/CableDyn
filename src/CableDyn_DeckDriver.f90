@@ -157,7 +157,7 @@ MODULE CableDyn_DeckDriver
   USE CableDyn_RigidKinematics, ONLY: CD_Rigid_Advance_Newmark, CD_RIGID_OK, CD_RIGID_NEWMARK_GAMMA, &
                                       CD_RIGID_NEWMARK_BETA
   USE CableDyn_SO3, ONLY: CD_Log_SO3, CD_Exp_SO3
-  USE CableDyn_PathIO, ONLY: CD_Open_Input, CD_Native_Path, CD_Strip_BOM
+  USE CableDyn_PathIO, ONLY: CD_Open_Input, CD_Open_Write, CD_Native_Path, CD_Strip_BOM
   USE CableDyn_Profile, ONLY: CD_Profile_Enter, CD_Profile_Step, CD_PROF_INPUT, CD_PROF_INIT, CD_PROF_FLUID, &
                               CD_PROF_SOLVE, CD_PROF_CHECK, CD_PROF_OUTPUT, CD_PROF_PROGRESS, CD_PROF_FINAL
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
@@ -18550,7 +18550,7 @@ CONTAINS
       END DO
     END IF
     path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
     END IF
@@ -18609,7 +18609,7 @@ CONTAINS
     ErrMsg = ''
     tab = char_tab()
     path = TRIM(out_root)//'.static.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open static-configuration output file: '//TRIM(path)); RETURN
     END IF
@@ -18697,7 +18697,7 @@ CONTAINS
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     path = TRIM(out_root)//'.Line'//TRIM(int_to_str(line_id))//'.p.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open line position output file: '//TRIM(path)); RETURN
     END IF
@@ -18724,7 +18724,7 @@ CONTAINS
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     path = TRIM(out_root)//'.Line'//TRIM(int_to_str(line_id))//'.t.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open line tension output file: '//TRIM(path)); RETURN
     END IF
@@ -18774,7 +18774,7 @@ CONTAINS
       ne = nnode - 1
       IF (line_output_has_flag(lines(i)%outputs, 'p')) THEN
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.p.out'
-        OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+        CALL CD_Open_Write(pos_units(i), path, ios)
         IF (ios /= 0) THEN
           CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open dynamic line position output file: '//TRIM(path)); RETURN
@@ -18790,7 +18790,7 @@ CONTAINS
       END IF
       IF (line_output_has_flag(lines(i)%outputs, 't')) THEN
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.t.out'
-        OPEN (NEWUNIT=ten_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+        CALL CD_Open_Write(ten_units(i), path, ios)
         IF (ios /= 0) THEN
           CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open dynamic line tension output file: '//TRIM(path)); RETURN
@@ -18851,7 +18851,7 @@ CONTAINS
       ne = nnode - 1
       IF (line_output_has_flag(lines(i)%outputs, 'p')) THEN
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.p.out'
-        OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+        CALL CD_Open_Write(pos_units(i), path, ios)
         IF (ios /= 0) THEN
           CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open system dynamic line position output file: '//TRIM(path)); RETURN
@@ -18867,7 +18867,7 @@ CONTAINS
       END IF
       IF (line_output_has_flag(lines(i)%outputs, 't')) THEN
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.t.out'
-        OPEN (NEWUNIT=ten_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+        CALL CD_Open_Write(ten_units(i), path, ios)
         IF (ios /= 0) THEN
           CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open system dynamic line tension output file: '//TRIM(path)); RETURN
@@ -19137,7 +19137,7 @@ CONTAINS
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     path = TRIM(out_root)//'.Line'//TRIM(int_to_str(line_id))//'.V.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       unit = 0
       CALL fail(ErrStat, ErrMsg, 'cannot open dynamic line VIV lift output file: '//TRIM(path)); RETURN
@@ -19178,7 +19178,7 @@ CONTAINS
       IF (.NOT. rod_outputs_requested(rods(i)%outputs)) CYCLE
       IF (rod_output_has_flag(rods(i)%outputs, 'p')) THEN
         path = TRIM(out_root)//'.Rod'//TRIM(int_to_str(rods(i)%id))//'.p.out'
-        OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+        CALL CD_Open_Write(pos_units(i), path, ios)
         IF (ios /= 0) THEN
           CALL close_dynamic_rod_outputs(pos_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open dynamic rod position output file: '//TRIM(path)); RETURN
@@ -19307,7 +19307,7 @@ CONTAINS
                                    lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
@@ -19463,7 +19463,7 @@ CONTAINS
                                           lift_units=lift_units)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
@@ -19852,7 +19852,7 @@ CONTAINS
                              bathymetry=bathymetry)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
     END IF
@@ -20028,7 +20028,7 @@ CONTAINS
                              bathymetry=bathymetry)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path))
       RETURN
@@ -21173,7 +21173,7 @@ CONTAINS
                                 rst(k)%a, rst(k)%alpha, ErrStat, ErrMsg, rod=rst(k), bathymetry=bathymetry)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
-    OPEN (NEWUNIT=unit, FILE=TRIM(out_root)//'.out', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, TRIM(out_root)//'.out', ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(out_root)//'.out'); RETURN
     END IF
@@ -21891,7 +21891,7 @@ CONTAINS
     ! ---- output ----
     nstep = NINT(opts%tmax/opts%dtM)
     path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); GOTO 900
     END IF
@@ -30977,7 +30977,7 @@ CONTAINS
     CALL range_setup_planned(ranges, lines, channels, opts, ErrStat, ErrMsg, cables=cables, bathymetry=bathymetry)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
     END IF
@@ -31312,7 +31312,7 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'Hermite static-profile cable count does not match line count'); RETURN
     END IF
     path = TRIM(out_root)//'.static.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open Hermite static profile: '//TRIM(path)); RETURN
     END IF
@@ -31406,7 +31406,7 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'Hermite static-element cable count does not match line count'); RETURN
     END IF
     path = TRIM(out_root)//'.elements.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, path, ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open Hermite static-element profile: '//TRIM(path)); RETURN
     END IF
@@ -31715,7 +31715,7 @@ CONTAINS
       IF (.NOT. line_outputs_requested(lines(i)%outputs)) CYCLE
       IF (line_output_has_flag(lines(i)%outputs, 'p')) THEN
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.p.out'
-        OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+        CALL CD_Open_Write(pos_units(i), path, ios)
         IF (ios /= 0) THEN
           CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open Hermite line position output: '//TRIM(path)); RETURN
@@ -31740,7 +31740,7 @@ CONTAINS
       END IF
       IF (line_output_has_flag(lines(i)%outputs, 't')) THEN
         path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.t.out'
-        OPEN (NEWUNIT=ten_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+        CALL CD_Open_Write(ten_units(i), path, ios)
         IF (ios /= 0) THEN
           CALL close_dynamic_line_outputs(pos_units, ten_units, lift_units)
           CALL fail(ErrStat, ErrMsg, 'cannot open Hermite line tension output: '//TRIM(path)); RETURN
@@ -32174,7 +32174,7 @@ CONTAINS
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     tb = char_tab()
-    OPEN (NEWUNIT=unit, FILE=TRIM(out_root)//'.modes.out', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, TRIM(out_root)//'.modes.out', ios)
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'cannot open modal output file: '//TRIM(out_root)//'.modes.out'); RETURN
     END IF

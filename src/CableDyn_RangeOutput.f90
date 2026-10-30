@@ -27,6 +27,7 @@ MODULE CableDyn_RangeOutput
   !! length the deformed chord length from the grounded end to the TDP (0 while no node
   !! beyond the grounded end node is grounded).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
+  USE CableDyn_PathIO, ONLY: CD_Open_Write
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Floor, CD_Bathymetry_Is_Initialized, &
                                  CD_BATHY_OK
   USE CableDyn_SeabedContact, ONLY: CD_SEABED_CONTACT_BLEND
@@ -522,7 +523,7 @@ CONTAINS
       END IF
       WRITE (id_text, '(I0)') set%lines(il)%line_id
       path = TRIM(out_root)//'.Line'//TRIM(id_text)//'.range.out'
-      OPEN (NEWUNIT=unit, FILE=TRIM(path), STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+      CALL CD_Open_Write(unit, TRIM(path), ios)
       IF (ios /= 0) THEN
         ErrStat = CD_RANGE_BADINPUT
         ErrMsg = 'CableDyn_RangeOutput: cannot open range-graph output file: '//TRIM(path)
