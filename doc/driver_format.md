@@ -571,8 +571,12 @@ degrees). Turbines not in the section are an error naming the point. With a `mot
 rows are per-turbine rigid-body records
 `time J x y z q0 q1 q2 q3 vx vy vz wx wy wz ax ay az alx aly alz` (reference position,
 unit quaternion, velocity, angular velocity, and their rates); each Turbine<J> fairlead
-follows `x + R(q) p`, with the rigid-body velocity and acceleration. In FAST.Farm the host
-supplies the turbine positions and the section is not used.
+follows `x + R(q) p`, with the rigid-body velocity and acceleration. A finite-EI line end on a
+`Turbine<J>` point takes its `END CONNECTIONS` direction `Ez` and torsion normal `Nx` in that
+turbine's axes: turned by the `PtfmInit` rotation at the static start and by `R(q)`, with the
+row's angular velocity and acceleration, in the run (End A and End B alike), as the FAST.Farm
+host's orientations turn them. In FAST.Farm the host supplies the turbine positions and the
+section is not used.
 
 ### ROD TYPES + RODS (rigid cylindrical rods)
 

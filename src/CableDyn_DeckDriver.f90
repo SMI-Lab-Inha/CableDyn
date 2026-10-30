@@ -830,6 +830,11 @@ MODULE CableDyn_DeckDriver
     ! angular velocity and acceleration (3,t); an end connection on a vessel point turns with R.
     LOGICAL :: has_rot = .FALSE.
     REAL(wp), ALLOCATABLE :: rot(:, :, :), omega(:, :), alpha(:, :)
+    ! TURBINES rows (a standalone farm deck): each turbine's rotation turb_rot(3,3,J,t) (turbine to
+    ! global, from the row's quaternion) and its global-axis angular velocity and acceleration; a
+    ! finite-EI line end on a Turbine<J> point turns its connection and torsion frames with it.
+    LOGICAL :: has_turb_rot = .FALSE.
+    REAL(wp), ALLOCATABLE :: turb_rot(:, :, :, :), turb_omega(:, :, :), turb_alpha(:, :, :)
     ! Roll column of motionFile point rows (read only on a deck with a torsional line): roll(p, t)
     ! [rad] of the line end frames at point p about their directors, added to the END
     ! CONNECTIONS Pretwist of those ends; has_roll when some row gives one.
@@ -29768,6 +29773,8 @@ CONTAINS
     REAL(wp) :: t, up(3), uv(3), ua(3), tensile_force, tensile_threshold, tensile_xi, tensile_time, turn
     ! a moving End B's kinematics (CD_HFMF_Set_Moving_End_B), unused on a line with a Fixed End B
     REAL(wp) :: ubp(3), ubv(3), uba(3)
+    ! the parent rotation of each end on a TURBINES deck (turbine_end_rotation)
+    REAL(wp) :: dcm_a(3, 3), w_a(3), al_a(3), dcm_b(3, 3), w_b(3), al_b(3)
     ! Per-step tangent turn [deg] above which the time-step note is printed (see below).
     REAL(wp), PARAMETER :: TURN_NOTE_FORCE_BLEND = 0.25_wp, TURN_NOTE_CONFIG_BLEND = 0.1_wp
     REAL(wp), PARAMETER :: RAD2DEG = 57.29577951308232_wp
@@ -29879,6 +29886,13 @@ CONTAINS
                                  ub_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
                                  ub_angular_velocity=motion%omega(:, step + 1), &
                                  ub_angular_acceleration=motion%alpha(:, step + 1))
+        ELSE IF (motion%has_turb_rot) THEN
+          ! TURBINES rows: each end's connection and torsion frames turn with its own turbine
+          CALL turbine_end_rotation(points, motion, lines(i)%nodeA, step + 1, dcm_a, w_a, al_a)
+          CALL turbine_end_rotation(points, motion, lines(i)%nodeB, step + 1, dcm_b, w_b, al_b)
+          CALL hermite_step_ends(cables(i), up, uv, ua, ubp, ubv, uba, es, em, &
+                                 u_orientation=dcm_a, u_angular_velocity=w_a, u_angular_acceleration=al_a, &
+                                 ub_orientation=dcm_b, ub_angular_velocity=w_b, ub_angular_acceleration=al_b)
         ELSE IF (motion%has_roll .AND. ((line_torsion_at_a(lines(i)) .AND. &
                                          find_motion_point(motion, lines(i)%nodeA) > 0) .OR. &
                                         (line_torsion_at_b(lines(i)) .AND. cables(i)%moving_b))) THEN
@@ -30007,6 +30021,34 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE check_motion_roll_lines
+
+  PURE SUBROUTINE turbine_end_rotation(points, motion, point_id, time_index, dcm, omega, alpha)
+    !! The parent orientation of a line end at a TURBINES motion row: for a Turbine<J> point the
+    !! global-to-turbine DCM (the transpose of the row's rotation, the OpenFAST mesh convention) and
+    !! the turbine's angular velocity and acceleration; identity and zero for any other point (its
+    !! frames are held).
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(MotionTable), INTENT(IN) :: motion
+    INTEGER, INTENT(IN) :: point_id, time_index
+    REAL(wp), INTENT(OUT) :: dcm(3, 3), omega(3), alpha(3)
+    INTEGER :: j, k
+    dcm = CD_ZERO
+    dcm(1, 1) = CD_ONE
+    dcm(2, 2) = CD_ONE
+    dcm(3, 3) = CD_ONE
+    omega = CD_ZERO
+    alpha = CD_ZERO
+    j = 0
+    DO k = 1, SIZE(points)
+      IF (points(k)%id == point_id) j = k
+    END DO
+    IF (j < 1) RETURN
+    k = points(j)%turbine_id
+    IF (k < 1 .OR. k > SIZE(motion%turb_rot, 3)) RETURN
+    dcm = TRANSPOSE(motion%turb_rot(:, :, k, time_index))
+    omega = motion%turb_omega(:, k, time_index)
+    alpha = motion%turb_alpha(:, k, time_index)
+  END SUBROUTINE turbine_end_rotation
 
   PURE FUNCTION turbine_end_dcm(points, opts, point_id) RESULT(dcm)
     !! The global-to-parent DCM, at the static start, of a line end on point point_id: on a
@@ -30277,6 +30319,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, pidx, es
     REAL(wp) :: q(3), v(3), a(3), qb(3), vb(3), ab(3)
+    REAL(wp) :: dcm_a(3, 3), w_a(3), al_a(3), dcm_b(3, 3), w_b(3), al_b(3)
     CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
@@ -30305,6 +30348,13 @@ CONTAINS
                               ub_orientation=TRANSPOSE(motion%rot(:, :, time_index)), &
                               ub_angular_velocity=motion%omega(:, time_index), &
                               ub_angular_acceleration=motion%alpha(:, time_index))
+      ELSE IF (motion%has_turb_rot) THEN
+        ! TURBINES rows: each end's frames turn with its own turbine
+        CALL turbine_end_rotation(points, motion, lines(i)%nodeA, time_index, dcm_a, w_a, al_a)
+        CALL turbine_end_rotation(points, motion, lines(i)%nodeB, time_index, dcm_b, w_b, al_b)
+        CALL hermite_set_ends(cables(i), q, v, a, qb, vb, ab, es, em, u_orientation=dcm_a, &
+                              u_angular_velocity=w_a, u_angular_acceleration=al_a, ub_orientation=dcm_b, &
+                              ub_angular_velocity=w_b, ub_angular_acceleration=al_b)
       ELSE
         CALL hermite_set_ends(cables(i), q, v, a, qb, vb, ab, es, em)
       END IF
@@ -33104,6 +33154,17 @@ CONTAINS
             CALL fail(ErrStat, ErrMsg, 'cannot allocate the TURBINES motion bookkeeping'); RETURN
           END IF
           turb_seen = .FALSE.
+          ALLOCATE (motion%turb_rot(3, 3, SIZE(opts%turb_ref, 2), motion%n_time), &
+                    motion%turb_omega(3, SIZE(opts%turb_ref, 2), motion%n_time), &
+                    motion%turb_alpha(3, SIZE(opts%turb_ref, 2), motion%n_time), STAT=ios)
+          IF (ios /= 0) THEN
+            CLOSE (unit)
+            CALL fail(ErrStat, ErrMsg, 'cannot allocate the TURBINES rotation table'); RETURN
+          END IF
+          motion%turb_rot = CD_ZERO
+          motion%turb_omega = CD_ZERO
+          motion%turb_alpha = CD_ZERO
+          motion%has_turb_rot = .TRUE.
         END IF
         IF (turb_seen(jturb, it)) THEN
           CLOSE (unit)
@@ -33113,6 +33174,9 @@ CONTAINS
         END IF
         turb_seen(jturb, it) = .TRUE.
         rq = quat_rotation(trow(6:9))
+        motion%turb_rot(:, :, jturb, it) = rq
+        motion%turb_omega(:, jturb, it) = trow(13:15)
+        motion%turb_alpha(:, jturb, it) = trow(19:21)
         DO ip = 1, motion%n_point
           ipt = find_point(points, motion%point_ids(ip))
           IF (ipt < 1) CYCLE

@@ -46,7 +46,9 @@ PROGRAM test_two_moving_ends
   !!      equal rolls keep the torque, opposite rolls change it by GJ (2 phi) / L;
   !!   FP a standalone TURBINES deck whose turbines start yawed (PtfmInit) reads each end's Ez and Nx
   !!      in its turbine's axes, as FAST.Farm does: the clamped, twisted line between the two turbines
-  !!      reports the FAST.Farm aggregate's tensions, torque and end curvature (solver tolerances).
+  !!      reports the FAST.Farm aggregate's tensions, torque and end curvature (solver tolerances);
+  !!   FR the same line with the turbines rolling (motionFile TURBINES rows with their quaternions):
+  !!      both end frames turn with their turbines, standalone as in the FAST.Farm aggregate.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Init_Deck_HermiteCable, CD_DECKDRV_OK
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_Step_Moving, &
@@ -78,6 +80,7 @@ PROGRAM test_two_moving_ends
   CALL check_farm_shared_line()
   CALL check_aggregate_torsion()
   CALL check_farm_ptfm_parity()
+  CALL check_farm_rotation_parity()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -1387,5 +1390,124 @@ CONTAINS
     CALL require(err <= 1.0e-5_wp, 'FP: the standalone TURBINES deck reads its end frames in the turbines'' axes')
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE check_farm_ptfm_parity
+
+  SUBROUTINE turbine_pose(j, t, x, v, a, r, w, al)
+    !! Turbine j of FR: reference (0, 0, 0) or (100, 0, 0), rotation R = Rz(yaw_j) Rx(+-phi(t)) with
+    !! yaw +15 / -8 deg (the PtfmInit) and phi a 10 deg roll over 1 s from rest with zero initial
+    !! acceleration (as a host starting from the static state sees it); x, v, a the motion
+    !! of the fairlead (0, 0, -50) in turbine axes, r the rotation, w and al its global angular
+    !! velocity and acceleration (w = phi' Rz e_x).
+    INTEGER, INTENT(IN) :: j
+    REAL(wp), INTENT(IN) :: t
+    REAL(wp), INTENT(OUT) :: x(3), v(3), a(3), r(3, 3), w(3), al(3)
+    REAL(wp) :: yaw, sg, phi, pd, pdd, rz(3, 3), rx(3, 3), p(3), ax(3)
+    REAL(wp), PARAMETER :: WR = PI
+    yaw = MERGE(15.0_wp, -8.0_wp, j == 1)*PI/180.0_wp
+    sg = MERGE(1.0_wp, -1.0_wp, j == 1)
+    ! 10 deg (1 - cos)^2 / 4 with w = pi: phi(1 s) = 10 deg, phi'(0) = phi''(0) = 0
+    phi = sg*0.25_wp*(10.0_wp*PI/180.0_wp)*(1.0_wp - COS(WR*t))**2
+    pd = sg*0.5_wp*(10.0_wp*PI/180.0_wp)*WR*(1.0_wp - COS(WR*t))*SIN(WR*t)
+    pdd = sg*0.5_wp*(10.0_wp*PI/180.0_wp)*WR*WR*(SIN(WR*t)**2 + (1.0_wp - COS(WR*t))*COS(WR*t))
+    rz = RESHAPE([COS(yaw), SIN(yaw), 0.0_wp, -SIN(yaw), COS(yaw), 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+    rx = RESHAPE([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, COS(phi), SIN(phi), 0.0_wp, -SIN(phi), COS(phi)], [3, 3])
+    r = MATMUL(rz, rx)
+    ax = [COS(yaw), SIN(yaw), 0.0_wp]
+    w = pd*ax
+    al = pdd*ax
+    p = MATMUL(r, [0.0_wp, 0.0_wp, -50.0_wp])
+    x = MERGE(0.0_wp, 100.0_wp, j == 1)*[1.0_wp, 0.0_wp, 0.0_wp] + p
+    v = [w(2)*p(3) - w(3)*p(2), w(3)*p(1) - w(1)*p(3), w(1)*p(2) - w(2)*p(1)]
+    a = [al(2)*p(3) - al(3)*p(2), al(3)*p(1) - al(1)*p(3), al(1)*p(2) - al(2)*p(1)] + &
+        [w(2)*v(3) - w(3)*v(2), w(3)*v(1) - w(1)*v(3), w(1)*v(2) - w(2)*v(1)]
+  END SUBROUTINE turbine_pose
+
+  SUBROUTINE check_farm_rotation_parity()
+    !! FR. The turbines of FP roll their fairleads by +-10 deg about their (yawed) x axes: the TURBINES
+    !!     rows give each turbine's quaternion, which turns its end's connection and torsion frames;
+    !!     the FAST.Farm aggregate takes the same rotations as host orientations. Every channel
+    !!     agrees at every step, and the twist changes (the two frames turn oppositely).
+    INTEGER, PARAMETER :: NSTEP = 20, NCOL = 7
+    REAL(wp) :: rows(NCOL, NSTEP + 1), pos(3, 2), vel(3, 2), acc(3, 2), ori(3, 3, 2), om(3, 2), al(3, 2)
+    REAL(wp) :: x(3), v(3), a(3), r(3, 3), w(3), aa(3), tt, val, err, yaw(2), q(4), trq0
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: agg
+    INTEGER :: n, k, j, ic, es, nit, u
+    LOGICAL :: ok, conv, stalled
+    CHARACTER(1024) :: em
+    OPEN (NEWUNIT=u, FILE='tme_fr.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, NSTEP
+      tt = REAL(k, wp)*0.05_wp
+      DO j = 1, 2
+        CALL turbine_pose(j, tt, x, v, a, r, w, aa)
+        ! the row's quaternion of R = Rz(yaw) Rx(phi)
+        q = rot_quaternion(r)
+        WRITE (u, '(F10.5,1X,I0,3(1X,ES24.16),4(1X,ES24.16),12(1X,ES24.16))') tt, j, &
+          MERGE(0.0_wp, 100.0_wp, j == 1), 0.0_wp, 0.0_wp, q, 0.0_wp, 0.0_wp, 0.0_wp, w, 0.0_wp, 0.0_wp, 0.0_wp, aa
+      END DO
+    END DO
+    CLOSE (u)
+    CALL write_farm_tdeck('tme_fr_sa.dat', .TRUE., 'tme_fr.txt', NSTEP*0.05_wp)
+    CALL run_deck('tme_fr_sa.dat', 'tme_fr_sa', ok, em)
+    CALL require(ok, 'FR: the rolling TURBINES deck runs: '//TRIM(em))
+    CALL read_rows('tme_fr_sa.out', rows, n, ok)
+    CALL require(ok .AND. n == NSTEP + 1, 'FR: standalone output readable')
+    IF (.NOT. ok) RETURN
+    yaw = [15.0_wp, -8.0_wp]*PI/180.0_wp
+    ALLOCATE (agg)
+    CALL write_farm_tdeck('tme_fr_agg.dat', .FALSE., '', NSTEP*0.05_wp)
+    CALL CD_AGG_Init_From_Deck(agg, 'tme_fr_agg.dat', 0.05_wp, es, em, n_turbines=2, &
+                               turbine_ref_pos=RESHAPE([0.0_wp, 0.0_wp, 0.0_wp, 100.0_wp, 0.0_wp, 0.0_wp], [3, 2]), &
+                               farm_ptfm_init=RESHAPE([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, yaw(1), &
+                                                       0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, yaw(2)], [6, 2]), &
+                               forbid_deck_ambient=.TRUE., host_orientation=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'FR: the FAST.Farm aggregate builds: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    agg%cables(1)%tol = 1.0e-8_wp
+    agg%cables(1)%max_iter = 30
+    err = 0.0_wp
+    trq0 = rows(4, 1)
+    DO k = 0, NSTEP
+      IF (k > 0) THEN
+        tt = REAL(k, wp)*0.05_wp
+        DO j = 1, 2
+          CALL turbine_pose(j, tt, pos(:, j), vel(:, j), acc(:, j), r, om(:, j), al(:, j))
+          ori(:, :, j) = TRANSPOSE(r)
+        END DO
+        CALL CD_AGG_Step_Moving(agg, 0.05_wp, pos, vel, acc, conv, stalled, nit, es, em, t_committed=tt, &
+                                orientation=ori, angular_velocity=om, angular_acceleration=al)
+        CALL require(es == CD_AGG_OK, 'FR: aggregate step: '//TRIM(em))
+        IF (es /= CD_AGG_OK) EXIT
+      END IF
+      DO ic = 1, NCOL - 1
+        CALL CD_AGG_EvalChannel(agg, ic, val, es, em)
+        err = nan_max_abs([err, ABS(val - rows(ic + 1, k + 1))/MAX(1.0_wp, ABS(rows(ic + 1, k + 1)))])
+      END DO
+    END DO
+    WRITE (*, '(A,ES10.3,A,ES12.5,A,ES12.5,A)') 'FAST.Farm vs standalone, rolling turbines: largest relative '// &
+      'channel difference ', err, '; Torq1N1 ', trq0, ' -> ', rows(4, n), ' N m'
+    CALL require(err <= 1.0e-5_wp, 'FR: TURBINES rows turn both end frames as the FAST.Farm host does')
+    CALL require(ABS(rows(4, n) - trq0) > 1.0e-2_wp*ABS(trq0), 'FR: the turbines'' rolls twist the line')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE check_farm_rotation_parity
+
+  FUNCTION rot_quaternion(r) RESULT(q)
+    !! Unit quaternion (q0, q1, q2, q3) of a proper rotation matrix (Shepperd's method, q0 >= 0).
+    REAL(wp), INTENT(IN) :: r(3, 3)
+    REAL(wp) :: q(4), tr, s
+    tr = r(1, 1) + r(2, 2) + r(3, 3)
+    IF (tr > 0.0_wp) THEN
+      s = 0.5_wp/SQRT(tr + 1.0_wp)
+      q = [0.25_wp/s, (r(3, 2) - r(2, 3))*s, (r(1, 3) - r(3, 1))*s, (r(2, 1) - r(1, 2))*s]
+    ELSE IF (r(1, 1) > r(2, 2) .AND. r(1, 1) > r(3, 3)) THEN
+      s = 2.0_wp*SQRT(1.0_wp + r(1, 1) - r(2, 2) - r(3, 3))
+      q = [(r(3, 2) - r(2, 3))/s, 0.25_wp*s, (r(1, 2) + r(2, 1))/s, (r(1, 3) + r(3, 1))/s]
+    ELSE IF (r(2, 2) > r(3, 3)) THEN
+      s = 2.0_wp*SQRT(1.0_wp + r(2, 2) - r(1, 1) - r(3, 3))
+      q = [(r(1, 3) - r(3, 1))/s, (r(1, 2) + r(2, 1))/s, 0.25_wp*s, (r(2, 3) + r(3, 2))/s]
+    ELSE
+      s = 2.0_wp*SQRT(1.0_wp + r(3, 3) - r(1, 1) - r(2, 2))
+      q = [(r(2, 1) - r(1, 2))/s, (r(1, 3) + r(3, 1))/s, (r(2, 3) + r(3, 2))/s, 0.25_wp*s]
+    END IF
+    IF (q(1) < 0.0_wp) q = -q
+  END FUNCTION rot_quaternion
 
 END PROGRAM test_two_moving_ends

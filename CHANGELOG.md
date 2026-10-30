@@ -268,6 +268,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   line twisted 90 deg between turbines yawed +15 and -8 deg the standalone run now matches the
   FAST.Farm aggregate to 8e-9 in every channel. Decks without a `PtfmInit` rotation, or without
   end connections and torsion, are unchanged.
+- Standalone `TURBINES` motion rows turn the `END CONNECTIONS` and torsion frames of a finite-EI
+  line end on a `Turbine<J>` point with the row's rotation, angular velocity and acceleration (End A
+  and End B), as `vesselMotion` and the OpenFAST and FAST.Farm hosts do; they were held at their
+  start orientation while the end moved. A `TURBINES` deck whose rows rotate the turbines and whose
+  finite-EI lines carry end connections or torsion changes: a clamped line twisted 90 deg between
+  turbines that roll 10 deg in opposite senses over 1 s ends at 613.6 N m of torque (788.1 N m
+  before; the tensions change by under 5e-7) and matches the FAST.Farm aggregate to 3.4e-8 in every channel.
+  No example deck uses `TURBINES` rows; the examples are unchanged.
 - `TMax = 0` checks the static start of any dynamic deck as it stands: a `motionFile` or
   `vesselMotion` record may run past `TMax` (its later rows are checked on the `dtM` grid and
   not used, so a long record also serves a shorter run), and `RangeStart` is accepted at
