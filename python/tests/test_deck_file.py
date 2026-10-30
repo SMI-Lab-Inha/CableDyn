@@ -1546,18 +1546,26 @@ def test_coupled_pinned_bodies_need_a_coupled_host_and_inertia(tmp_path, kind):
     # native finalize_checks: the host moves the reference point of a CoupledPinned body and
     # its rotation is integrated, so the standalone driver refuses it and the coupled route
     # takes it with positive inertias (18- and 14-column rows)
-    source = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
+    static = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
     marker = "--------------------- POINTS -------------------------------------------"
+    clock = "--------------------- OUTPUTS ------------------------------------------"
+    dynamic = static.replace(clock, "0.01 dtM\n1.0 TMax\n" + clock)
     bodies = "--------------------- BODIES -------------------------------------------\n"
     path = tmp_path / "pinned.dat"
     for row in (
         f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0 1 1 1\n",
         f"1 {kind} 0 0 -20 0 0 0 10 0|0|-1 1|2|3 0 0 0\n",
     ):
-        path.write_text(source.replace(marker, bodies + row + marker), encoding="utf-8")
+        path.write_text(dynamic.replace(marker, bodies + row + marker), encoding="utf-8")
         with pytest.raises(DeckFormatError, match="requires a coupled host"):
             DeckFile.read(path)
         DeckFile.read(path, caller_driven=True)
+        # without a clock the native Rigid6 dynamic-deck rule comes first
+        path.write_text(static.replace(marker, bodies + row + marker), encoding="utf-8")
+        with pytest.raises(DeckFormatError, match="Rigid6 BODY requires a dynamic deck"):
+            DeckFile.read(path)
+        DeckFile.read(path, caller_driven=True)
+    source = dynamic
     for row in (
         f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0\n",
         f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0 1 0 1\n",
@@ -1567,6 +1575,23 @@ def test_coupled_pinned_bodies_need_a_coupled_host_and_inertia(tmp_path, kind):
         path.write_text(source.replace(marker, bodies + row + marker), encoding="utf-8")
         with pytest.raises(DeckFormatError, match=r"requires Ixx/Iyy/Izz > 0"):
             DeckFile.read(path, caller_driven=True)
+
+
+@pytest.mark.parametrize(
+    "value, accepted", [("1", True), ("1.0", True), ("0", False), ("2", False)]
+)
+def test_moordyn_inertial_f_option(tmp_path, value, accepted):
+    # native apply_option: CableDyn always returns the coupled objects' inertia (inertialF 1)
+    source = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
+    clock = "--------------------- OUTPUTS ------------------------------------------"
+    path = tmp_path / "inertial.dat"
+    text = source.replace(clock, f"{value} inertialF\n30.0 inertialF_rampT\n" + clock)
+    path.write_text(text, encoding="utf-8")
+    if accepted:
+        DeckFile.read(path)
+    else:
+        with pytest.raises(DeckFormatError, match=r"inertialF 0 \(MoorDyn-F's default"):
+            DeckFile.read(path)
 
 
 @pytest.mark.parametrize(

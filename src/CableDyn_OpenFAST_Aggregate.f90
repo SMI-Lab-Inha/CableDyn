@@ -81,6 +81,7 @@ MODULE CableDyn_OpenFAST_Aggregate
                                  CD_Rod_GetFluidPositions, CD_Rod_SetHeldFluid, &
                                  CD_Rod_NHost, CD_Rod_SetHostKinematics, CD_Rod_GetHostKinematics, &
                                  CD_Rod_ScatterHostPoints, CD_Rod_HostWrench, CD_Rod_Stage, CD_Rod_Unstage, &
+                                 CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations, &
                                  CD_Deck_Range_Sample_Aggregate, CD_Deck_Range_Write
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
   USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
@@ -244,6 +245,10 @@ MODULE CableDyn_OpenFAST_Aggregate
     LOGICAL, ALLOCATABLE :: hf_mask(:)
     REAL(wp), ALLOCATABLE :: hf_q(:), hf_v(:), hf_a(:)
     REAL(wp), ALLOCATABLE :: hb_pos(:, :), hb_vel(:, :), hb_acc(:, :), hb_load(:, :)
+    ! The bodies and rods carry the accelerations of a committed step or of a restored state mirror;
+    ! until then a transfer of the step-start host kinematics re-solves their start accelerations
+    ! (start_object_accelerations), so the mirror carries them from t = 0.
+    LOGICAL :: objects_committed = .FALSE.
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_AGG_ModuleType
 
@@ -517,6 +522,13 @@ CONTAINS
     ! the surface is queryable regardless; driving FIELDS into a build without the
     ! wave-capable hydro configuration fails closed at the model layer.
     CALL size_fluid_surface(candidate, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_AGG_OK) THEN
+      CALL CD_AGG_End(candidate, es, em)
+      RETURN
+    END IF
+    ! the bodies and rods start from their accelerations at the initial state, the host at rest in its
+    ! Init pose (the first step's start; the state mirror then carries them from t = 0)
+    CALL start_object_accelerations(candidate, ErrStat, ErrMsg)
     IF (ErrStat /= CD_AGG_OK) THEN
       CALL CD_AGG_End(candidate, es, em)
       RETURN
@@ -879,6 +891,12 @@ CONTAINS
       CALL overlay_host_objects(self, is_output_probe, ErrStat, ErrMsg)
       IF (ErrStat /= CD_AGG_OK) RETURN
     END IF
+    ! before the first step, a committed (non-probe) transfer of the step-start kinematics moves
+    ! the start of the first step: the start accelerations follow it
+    IF (.NOT. (is_output_probe .OR. self%objects_committed)) THEN
+      CALL start_object_accelerations(self, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) RETURN
+    END IF
     DO c = 1, self%ncable
       col = self%ncp_sys + c
       IF (PRESENT(orientation)) THEN
@@ -1235,6 +1253,7 @@ CONTAINS
         RETURN
       END IF
     END IF
+    IF (self%has_rigid6 .OR. self%has_rod) self%objects_committed = .TRUE.
     ErrStat = CD_AGG_OK
     ErrMsg = ''
 
@@ -2423,6 +2442,47 @@ CONTAINS
     IF (es /= CD_FMF_OK) CALL map_fmf_status(es, em, ErrStat, ErrMsg)
   END SUBROUTINE overlay_host_objects
 
+  SUBROUTINE start_object_accelerations(self, ErrStat, ErrMsg)
+    !! Solve the start accelerations of the integrated bodies and rods at the current state
+    !! (CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations): at Init and at a committed
+    !! transfer of the step-start kinematics before the first step. The OpenFAST shell restores
+    !! the state mirror after every CalcOutput, which marks the object accelerations committed;
+    !! solved here, the mirror carries the start accelerations, and the first step starts from them
+    !! instead of from zero.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    LOGICAL :: pin_b, pin_r
+    CHARACTER(1024) :: em
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+    pin_b = .FALSE.
+    pin_r = .FALSE.
+    IF (.NOT. self%has_sys) RETURN
+    IF (self%has_rigid6) THEN
+      CALL CD_Rigid6_StartAccelerations(self%sys%fast%system, self%rigid6, es, em, pinned=pin_b)
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL map_deck_status(es, em, ErrStat, ErrMsg)
+        RETURN
+      END IF
+    END IF
+    IF (self%has_rod) THEN
+      CALL CD_Rod_StartAccelerations(self%sys%fast%system, self%rod, es, em, pinned=pin_r)
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL map_deck_status(es, em, ErrStat, ErrMsg)
+        RETURN
+      END IF
+    END IF
+    ! the line ends on a CoupledPinned rod or body move with its solved acceleration (a mirror
+    ! restore puts them there too, CD_AGG_Set_Rigid6_States, CD_AGG_Set_Rod_States), and the line
+    ! interior accelerations follow them (a committed transfer); Coupled/Vessel objects keep the
+    ! host's (Init) motion
+    IF (.NOT. (pin_b .OR. pin_r)) RETURN
+    CALL overlay_host_objects(self, .FALSE., ErrStat, ErrMsg)
+    IF (ErrStat == CD_AGG_OK) CALL CD_FMF_Refresh_PointMesh(self%sys, ErrStat, ErrMsg)
+  END SUBROUTINE start_object_accelerations
+
   SUBROUTINE set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, orientation, &
                               angular_velocity, angular_acceleration, step_start)
     !! Impose the host-rod and host-body columns (the trailing nhost_rod + nhost_body moving
@@ -2655,7 +2715,9 @@ CONTAINS
     ErrMsg = ''
     IF (.NOT. self%has_rigid6) RETURN
     CALL CD_Rigid6_Set_States(self%rigid6, states, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_AGG_OK .OR. self%nhost_body == 0) RETURN
+    IF (ErrStat /= CD_AGG_OK) RETURN
+    self%objects_committed = .TRUE.
+    IF (self%nhost_body == 0) RETURN
     ! Host-driven bodies: their Body<N> line ends follow the restored body state exactly.
     CALL overlay_host_objects(self, .TRUE., ErrStat, ErrMsg)
     IF (ErrStat == CD_AGG_OK) CALL CD_FMF_Refresh_PointMesh(self%sys, ErrStat, ErrMsg)
@@ -2689,6 +2751,7 @@ CONTAINS
     IF (.NOT. self%has_rod) RETURN
     CALL CD_Rod_Set_States(self%rod, states, ErrStat, ErrMsg)
     IF (ErrStat /= CD_AGG_OK) RETURN
+    self%objects_committed = .TRUE.
     CALL CD_Rod_Apply_States(self%sys%fast%system, self%rod, ErrStat, ErrMsg)
     IF (ErrStat /= CD_AGG_OK) RETURN
     ! Host-driven rods: their Rod<N>A/B line ends follow the restored rod state exactly (an

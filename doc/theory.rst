@@ -2562,8 +2562,19 @@ arms, and :math:`\mathbf{M}_{rt} = m[\mathbf{c}]_\times` (MoorDyn-F's
 The node receives
 :math:`\mathbf{F} - (m + m_a)\mathbf{a}_p - m(\boldsymbol{\alpha}\times\mathbf{c} + \boldsymbol{\omega}\times(\boldsymbol{\omega}\times\mathbf{c}))`
 and no moment, :math:`m_a` the body's translational added mass, with the angular acceleration
-solved again for the current node acceleration as for the rod (MoorDyn-F with ``inertialF 1``;
-its default ``inertialF 0`` leaves the inertia out of the coupled force). The sub-step estimate
+solved again for the current node acceleration as for the rod. This is MoorDyn-F's coupled pinned
+body with ``inertialF 1`` (its default ``inertialF 0`` leaves the inertia out of the coupled
+force; CableDyn always includes it) but for three modelling differences, where CableDyn keeps the
+consistent form: MoorDyn-F's centripetal force :math:`-\mathbf{M}_{(1:3,1:3)}\,\boldsymbol{\omega}\times(\boldsymbol{\omega}\times\mathbf{c})`
+takes its translational mass block, with the added mass :math:`\rho V C_a` and the attached
+points' masses, at the centre of gravity, where CableDyn takes the structural mass there and the
+added mass and line ends at their own points; MoorDyn-F applies the full buoyancy
+:math:`\rho g V` at any elevation, CableDyn the wetted one (``bodyWetting moordyn`` restores
+MoorDyn's); and the attached ``EI = 0`` lines carry their consistent end-node inertia
+(:math:`m l/3` of the end element, less with the interior following in a step) against
+MoorDyn-F's lumped :math:`m l/2`. The aggregate solves the start accelerations of its bodies and
+rods at initialisation and at a committed transfer of the step-start kinematics, so the state
+mirror the OpenFAST shell restores after its first output call already carries them. The sub-step estimate
 takes the diagonal of :math:`\mathbf{I}_p` against the line springs through their arms from the
 node, the waterplane restoring, and the swing stiffness of the weight and buoyancy turning with
 the body, :math:`|\mathbf{K}_{kk}|` of :math:`\mathbf{K} = -\sum_i[\mathbf{f}_i]_\times[\mathbf{p}_i]_\times`

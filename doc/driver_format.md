@@ -444,8 +444,11 @@ row. On this route:
   node orientation and angular rates are ignored, and the node returns the body's net load less
   its inertia, with no moment (MoorDyn-F's coupled pinned body); the angular acceleration in that
   inertia is solved for the node's current acceleration. With `bodyIC static` the body starts
-  balanced about its node. Outside a coupled host such a body is rejected by name ("requires a
-  coupled host");
+  balanced about its node. `PtfmInit` turns the body with the platform, as it turns the body's
+  attachment points (M^T R0 for the deck orientation R0 and the platform's global-to-local DCM
+  M); MoorDyn-F's driver instead starts a coupled pinned body at its deck orientation, so with
+  `bodyIC deck` and a rotation in `PtfmInit` the two start from different poses. Outside a
+  coupled host such a body is rejected by name ("requires a coupled host");
 - cables may be suspended or use the same flat/structured seabed contact, normal damping, and
   stick-slip friction as the standalone Hermite route.
 
@@ -461,7 +464,7 @@ columns, or 18 with the trailing inertias, or the 14 columns of a MoorDyn v2 row
 | `Type` | `Point3` (3-DOF translational buoy or clump), `Rigid6` (6-DOF rigid body), `Coupled`/`Vessel` (a `Rigid6` body whose pose follows the host: the OpenFAST platform, or `motionFile` rows for its `Body<ID>` points in the standalone driver), or `CoupledPinned`/`VesselPinned` (MoorDyn aliases `CpldPin`, `VesPin`: a `Rigid6` body whose reference point follows the OpenFAST platform position while it turns about that point; OpenFAST only) |
 | `X,Y,Z` | reference position [m] |
 | `Roll,Pitch,Yaw` | reference orientation [deg] (`Rigid6`; ignored for `Point3`) |
-| `Mass` | body mass [kg]; > 0 |
+| `Mass` | body mass [kg]; > 0 (≥ 0 for `Coupled`/`Vessel` and `CoupledPinned`/`VesselPinned`) |
 | `Vol` | displaced volume [m³] (buoyancy ρ_w·g·Vol); ≥ 0 |
 | `C33` | heave hydrostatic restoring ρ_w·g·A_wp [N/m] |
 | `C44/55` | roll/pitch restoring [N·m/rad] (`Rigid6`) |
@@ -1203,7 +1206,9 @@ in, so keys such as `staticRelTol` or `staticMaxIter` are rejected like any othe
 set the dynamic Newton controls with `dynamic_solver`. The stock MoorDyn keywords `dtIC`,
 `TmaxIC`, `CdScaleIC`, `threshIC`, `TScheme`, `WriteLog`, and `dtOut` are accepted and ignored,
 because CableDyn uses a Newton static initial condition, an implicit integrator, and
-caller-controlled output cadence.
+caller-controlled output cadence. MoorDyn-F's `inertialF` is accepted as `1` only (CableDyn
+always returns the inertia of coupled bodies and rods; `0` and `2` are rejected by name), and
+`inertialF_rampT` is accepted and ignored.
 
 (moordyn-c-wavekin)=
 ### MoorDyn-C `WaveKin` and `Currents` modes

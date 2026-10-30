@@ -294,6 +294,8 @@ _SCALAR_OPTION_KEYWORDS = frozenset(_OPTION_ALIASES) | {
     "writelog",
     "dtout",
     "currents",
+    "inertialf",
+    "inertialf_rampt",
 }
 # Native CD_DECK_NAMELEN: the longest OUTPUTS channel name the reader stores.
 _NATIVE_NAME_LENGTH = 64
@@ -337,12 +339,19 @@ _END_CONNECTION_ENDS = {
 _PINNED_END_CONNECTIONS = frozenset({"pinned", "free", "zero"})
 # Host-driven (platform-borne) BODIES types, MoorDyn aliases included (native append_body)
 _HOST_BODY_TYPES = frozenset({"coupled", "vessel", "cpld", "ves"})
+# native apply_option: MoorDyn-F's inertialF other than 1
+_INERTIAL_F_MESSAGE = (
+    "CableDyn returns the inertia of coupled bodies and rods with their coupled loads, as "
+    "MoorDyn-F's inertialF 1; inertialF 0 (MoorDyn-F's default: no inertia) and 2 (the inertia "
+    "ramped in) are not supported: use 1 or remove the row"
+)
 # Bodies pinned to a host node (MoorDyn CoupledPinned/VesselPinned): coupled hosts only
 _PINNED_BODY_TYPES = frozenset({"coupledpinned", "cpldpin", "vesselpinned", "vespin"})
 _PINNED_BODY_HOST_MESSAGE = (
     "CoupledPinned/VesselPinned BODY requires a coupled host (OpenFAST CompMooring = 5); in a "
     "standalone deck use a Free body, or a Coupled body with a motionFile"
 )
+_RIGID6_DYNAMIC_MESSAGE = "Rigid6 BODY requires a dynamic deck with dtM and TMax"
 _PINNED_BODY_VALUE_MESSAGE = (
     "CoupledPinned/VesselPinned BODY requires Ixx/Iyy/Izz > 0 and non-negative Mass/Vol/CdA/Ca"
 )
@@ -1156,7 +1165,16 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         lower, upper = 0.0, None
     elif key == "rhoinf":
         lower, upper = 0.0, 1.0
-    elif raw in {"dtic", "tmaxic", "cdscaleic", "threshic", "writelog", "dtout"}:
+    elif raw in {
+        "dtic",
+        "tmaxic",
+        "cdscaleic",
+        "threshic",
+        "writelog",
+        "dtout",
+        "inertialf",
+        "inertialf_rampt",
+    }:
         lower, upper = None, None
     else:
         lower = upper = None
@@ -1189,6 +1207,8 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "dtout",
         "dtwave",
         "wvhicoff",
+        "inertialf",
+        "inertialf_rampt",
     }:
         try:
             numeric = _native_float(value)
@@ -1576,7 +1596,9 @@ class DeckFile:
     rule depends on the host and is checked when OpenFAST initialises the module: the
     current is kept as a steady field when SeaState carries no waves or current and is
     rejected otherwise. The native C API (:class:`cabledyn.CableDyn`) reads decks with the
-    standalone rules.
+    standalone rules, so it rejects the ``CoupledPinned``/``VesselPinned`` bodies and rods
+    that ``caller_driven=True`` accepts; FAST.Farm, in turn, refuses bodies and rods when it
+    initialises the module.
     """
 
     def __init__(
@@ -1864,6 +1886,7 @@ class DeckFile:
         row: DeckRecord,
         numeric: Callable[[str, DeckRecord, str], float],
         has_motion_file: bool = False,
+        has_dtm: bool = True,
     ) -> None:
         """Validate a 14-column MoorDyn BODIES row as the native reader does."""
         attachment = row.tokens[1].lower()
@@ -1909,8 +1932,10 @@ class DeckFile:
         ):
             raise DeckFormatError(f"{self._at(row)}: {_BODY_RANGE_MESSAGE}")
         if pinned:
-            # native finalize_checks: only a coupled host moves the reference point; the
-            # rotation is integrated
+            # native finalize_checks: the Rigid6 dynamic-deck rule first, then only a coupled
+            # host moves the reference point; the rotation is integrated
+            if not (has_dtm or self.caller_driven):
+                raise DeckFormatError(f"{self._at(row)}: {_RIGID6_DYNAMIC_MESSAGE}")
             if not self.caller_driven:
                 raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_HOST_MESSAGE}")
             if min(mass, volume, cda[0], ca[0]) < 0.0 or any(v <= 0.0 for v in lists["I"]):
@@ -2312,6 +2337,9 @@ class DeckFile:
             raise DeckFormatError(f"{where}: unknown OPTION keyword {keyword!r}")
         if error := _scalar_option_value_error(keyword, tokens[0]):
             raise DeckFormatError(f"{where}: OPTION {keyword} {error}")
+        if keyword.lower() == "inertialf" and _native_float(tokens[0]) != 1.0:
+            # native apply_option: CableDyn always returns the coupled objects' inertia
+            raise DeckFormatError(f"{where}: OPTION inertialF {tokens[0]}: {_INERTIAL_F_MESSAGE}")
         _raise_option_defect(where, tokens)
         value = _strip_quotes(tokens[0]) if keyword.lower() in _PATH_OPTIONS else tokens[0]
         return OptionRecord(index, keyword, (value,), description, False, tuple(tokens[2:]))
@@ -3321,7 +3349,7 @@ class DeckFile:
         bodies = self._rows("BODIES")
         for row in bodies:
             if len(row.tokens) == 14:
-                self._check_moordyn_body_row(row, numeric, has_motion_file)
+                self._check_moordyn_body_row(row, numeric, has_motion_file, has_dtm)
                 continue
             if len(row.tokens) not in {15, 18}:
                 raise DeckFormatError(f"{self._at(row)}: BODIES row needs 14, 15 or 18 fields")
@@ -3337,6 +3365,8 @@ class DeckFile:
                     values[:6], values[6:12] + values[13:], values[12]
                 ):
                     raise DeckFormatError(f"{self._at(row)}: {_BODY_RANGE_MESSAGE}")
+                if not (has_dtm or self.caller_driven):
+                    raise DeckFormatError(f"{self._at(row)}: {_RIGID6_DYNAMIC_MESSAGE}")
                 if not self.caller_driven:
                     raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_HOST_MESSAGE}")
                 inertia = values[13:16] if len(values) >= 16 else [0.0, 0.0, 0.0]

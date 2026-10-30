@@ -788,6 +788,13 @@ These names exist so a migrated MoorDyn deck fails less often at the syntax boun
    * - ``WriteLog``
      - plain number
      - Parsed strictly and ignored; reporting uses the normal CableDyn/OpenFAST diagnostics.
+   * - ``inertialF``, ``inertialF_rampT``
+     - plain number
+     - ``inertialF 1`` is accepted without effect: CableDyn always returns the inertia of coupled
+       bodies and rods (``Coupled``/``Vessel`` and ``CoupledPinned``/``VesselPinned``) with
+       their coupled loads, as MoorDyn-F's ``inertialF 1``. ``0`` (MoorDyn-F's default, no
+       inertia) and ``2`` (the inertia ramped in) are rejected by name. ``inertialF_rampT``, the
+       ramp time of ``inertialF 2``, is parsed strictly and ignored.
    * - ``dtOut``
      - plain number
      - Parsed strictly and ignored. Standalone output follows ``dtM``; coupled ``.CD.out``

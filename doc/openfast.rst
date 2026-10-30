@@ -417,8 +417,13 @@ without an auxiliary process:
   centre of gravity, the node acceleration and the moments of its lines; MoorDyn-F's coupled pinned
   body), and the node returns the body's net load less its inertia, with zero moment, the angular
   acceleration again solved for the node's current acceleration. ``PtfmInit`` moves and turns such
-  a body with the platform before the static solve balances it about its node. Its inertias
-  ``Ixx``/``Iyy``/``Izz`` must be positive. Linearisation fails closed on decks with bodies.
+  a body with the platform before the static solve balances it about its node (MoorDyn-F's
+  driver keeps the deck orientation of a coupled pinned body: with ``bodyIC deck`` and a
+  ``PtfmInit`` rotation the start poses differ). Its inertias ``Ixx``/``Iyy``/``Izz`` must be
+  positive. Linearisation fails closed on decks with bodies. The force follows MoorDyn-F's
+  coupled pinned body with ``inertialF 1`` (CableDyn always includes the inertia), with the
+  differences given in :doc:`theory` (the centripetal force of the structural mass only, the
+  wetted buoyancy, the lines' consistent end-node inertia).
 
 Each is a separate qualification: a successful ordinary run does not qualify restart,
 linearisation, control, failure, or farm behaviour for a new model.

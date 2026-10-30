@@ -31,8 +31,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   less its inertia, with no moment. `PtfmInit` moves and turns the body, `bodyIC static` balances
   it about its node, and the checkpoint state and correction rewind carry it. A dry compound
   pendulum keeps the elliptic-integral period to 1.6e-4 at `dt = T/100`, a body with a
-  `CoupledPinned` rod's mass and inertia follows the rod to 2e-12, and against MoorDyn-F a
-  pendulum swinging through 120 deg agrees to 0.09 deg (0.15 deg when its node surges). Outside
+  `CoupledPinned` rod's mass and inertia follows the rod to 2e-12, and against MoorDyn-F
+  (`inertialF 1`) a pendulum swinging through 120 deg agrees to 0.09 deg (0.15 deg when its node
+  surges). Outside
   a coupled host, without inertias, and in linearisation the body fails closed by name.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
@@ -174,6 +175,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
+  step from zero acceleration: the module restores its state mirror after the output call at
+  `t = 0`, which marked the objects' accelerations as committed before the start accelerations
+  were solved. They are now solved when the module initialises (and at a committed step-start
+  transfer before the first step), and the line ends on a CoupledPinned object move with them.
+  An object in its static equilibrium changes at round-off (1e-12 m and 1e-6 deg over 10 s); one
+  started out of balance (`bodyIC deck`) changes by the first step's velocity error, 0.02 m/s and
+  0.05 deg for a hanging Pinned rod and up to 0.6 m/s for bodies and rods released far out of
+  balance. The committed host kinematics at the first step are those of the initial state, so a
+  host acceleration at `t = 0` enters neither version.
+- MoorDyn-F's `inertialF` option was an unknown keyword; `inertialF 1` (CableDyn's behaviour)
+  is now accepted, and `0` and `2` are rejected by name.
 - A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
   start, reduces the record over its own length instead of failing for want of a positive
   `TMax`.

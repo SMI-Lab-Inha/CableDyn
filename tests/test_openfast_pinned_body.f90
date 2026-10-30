@@ -29,8 +29,13 @@ PROGRAM test_openfast_pinned_body
   !!      rates are ignored;
   !!   9) beside a Coupled body (a 6-DOF host node, deck BODY order) the pinned body keeps its own
   !!      motion: the same as alone to 1e-12;
-  !!  10) a CoupledPinned body outside a coupled host, without inertia, or under the linearisation
-  !!      probe (coupled_positions) is refused by name.
+  !!  10) the OpenFAST shell's order (a state-mirror restore after the output call at t = 0, before
+  !!      the first step) starts every integrated object from its solved start acceleration: the
+  !!      pinned body (line at the node, and at an arm), a Free Rigid6 body, and Free, Pinned and
+  !!      CoupledPinned rods march bit for bit as without the restore;
+  !!  11) a CoupledPinned body outside a coupled host, without inertia, or under the linearisation
+  !!      probe (coupled_positions) is refused by name, and so is MoorDyn-F's inertialF 0 (CableDyn
+  !!      always returns the inertia; inertialF 1 is accepted).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -38,7 +43,8 @@ PROGRAM test_openfast_pinned_body
                                          CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_Snapshot, CD_AGG_Restore, &
                                          CD_AGG_End, CD_AGG_OK, CD_AGG_HasRigid6, CD_AGG_HasRod, &
                                          CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
-                                         CD_AGG_Set_Rigid6_States, CD_AGG_Rod_MirrorSize, CD_AGG_Get_Rod_States
+                                         CD_AGG_Set_Rigid6_States, CD_AGG_Rod_MirrorSize, CD_AGG_Get_Rod_States, &
+                                         CD_AGG_Set_Rod_States
   USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_Get_System_Line_State, &
                              CD_Update_System_Line_Interior_State, CD_SYSTEM_OK, CD_System_NSystemCoupledDOF, &
                              CD_Get_System_CoupledMotion, CD_Update_System_CoupledMotion, CD_Calc_System_CoupledLoads
@@ -61,6 +67,7 @@ PROGRAM test_openfast_pinned_body
   CALL case_ptfm_static()
   CALL case_substep()
   CALL case_mixed_hosts()
+  CALL case_shell_start()
   CALL case_refusals()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -176,16 +183,22 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_pendulum_deck
 
-  SUBROUTINE write_arm_deck(path, as_rod, body_ic)
+  SUBROUTINE write_arm_deck(path, as_rod, body_ic, rod_type)
     !! The arm of the second route, pinned at (0, 0, ZA) and hanging at THA from the downward
     !! vertical towards +x, above the water: as_rod a CoupledPinned ROD (LA long, DA diameter, MA kg,
     !! no drag or added mass), else a CoupledPinned BODY with the rod's mass, its CG at the rod
     !! centre and the rod's inertia about it (body x axis along the rod). A slack line runs from
     !! End B (the body point at LA along x) to an anchor at (30, 0, -20) and pulls the arm round.
+    !! rod_type replaces CoupledPinned for the rod; a Free rod takes a second line from End A to an
+    !! anchor at (-30, 0, -20).
     CHARACTER(*), INTENT(IN) :: path, body_ic
     LOGICAL, INTENT(IN) :: as_rod
+    CHARACTER(*), INTENT(IN), OPTIONAL :: rod_type
     REAL(wp) :: th, xb, zb, r, i1, i2
     INTEGER :: u
+    CHARACTER(16) :: rt
+    rt = 'CoupledPinned'
+    IF (PRESENT(rod_type)) rt = rod_type
     th = THA*PI/180.0_wp
     xb = LA*SIN(th)
     zb = ZA - LA*COS(th)
@@ -202,7 +215,7 @@ CONTAINS
       WRITE (u, '(A)') '--- RODS ---'
       WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
       WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
-      WRITE (u, '(A,ES24.16,A,ES24.16,A,ES24.16,A)') '1 arm CoupledPinned 0 0 ', ZA, ' ', xb, ' 0 ', zb, ' 4 -'
+      WRITE (u, '(A,ES24.16,A,ES24.16,A,ES24.16,A)') '1 arm '//TRIM(rt)//' 0 0 ', ZA, ' ', xb, ' 0 ', zb, ' 4 -'
     ELSE
       ! R = Ry(p) carries the body x axis to (cos p, 0, -sin p) = (sin th, 0, -cos th): p = 90 - th
       CALL write_md_body(u, 'CoupledPinned', [0.0_wp, 0.0_wp, ZA], [0.0_wp, 90.0_wp - THA, 0.0_wp], MA, &
@@ -213,11 +226,13 @@ CONTAINS
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
     WRITE (u, '(A)') '1 Fixed 30.0 0.0 -20.0 0 0 0 0'
     IF (.NOT. as_rod) WRITE (u, '(A,ES24.16,A)') '2 Body1 ', LA, ' 0.0 0.0 0 0 0 0'
+    IF (TRIM(rt) == 'Free') WRITE (u, '(A)') '3 Fixed -30.0 0.0 -20.0 0 0 0 0'
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
     IF (as_rod) THEN
       WRITE (u, '(A)') '1 R1B 1 -'
+      IF (TRIM(rt) == 'Free') WRITE (u, '(A)') '2 R1A 3 -'
     ELSE
       WRITE (u, '(A)') '1 2 1 -'
     END IF
@@ -225,23 +240,33 @@ CONTAINS
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
     WRITE (u, '(A)') '1 line 40.0 20'
+    IF (TRIM(rt) == 'Free') WRITE (u, '(A)') '2 line 38.0 20'
     CALL write_options(u, 20.0_wp, body_ic)
     CLOSE (u)
   END SUBROUTINE write_arm_deck
 
-  SUBROUTINE write_symmetric_deck(path)
+  SUBROUTINE write_symmetric_deck(path, free_body)
     !! A submerged VesselPinned body (18-column row: 200 kg, 0.1 m^3, Ca 0.5, inertia 50 kg m^2,
     !! CG at the reference point) at (0, 0, -5) on four identical lines from (+-3, 0, 0) and
-    !! (0, +-3, 0) in the body frame to anchors 40 m out on the 50 m seabed.
+    !! (0, +-3, 0) in the body frame to anchors 40 m out on the 50 m seabed. free_body: a Free
+    !! Rigid6 body instead, started 1 m above the pose, pitched 10 deg (out of balance).
     CHARACTER(*), INTENT(IN) :: path
+    LOGICAL, INTENT(IN), OPTIONAL :: free_body
     INTEGER :: u
+    LOGICAL :: fb
+    fb = .FALSE.
+    IF (PRESENT(free_body)) fb = free_body
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     CALL write_header(u, 'symmetric VesselPinned body on the coupled aggregate')
     WRITE (u, '(A)') '--- BODIES ---'
     WRITE (u, '(A)') 'ID Type X Y Z Rot1 Rot2 Rot3 Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm/rad) (Nm/rad) (m2) (-) '// &
       '(kgm2) (kgm2) (kgm2)'
-    WRITE (u, '(A)') '1 VesselPinned 0.0 0.0 -5.0 0.0 0.0 0.0 200.0 0.1 0.0 0.0 0.0 0.0 0.5 50.0 50.0 50.0'
+    IF (fb) THEN
+      WRITE (u, '(A)') '1 Rigid6 0.0 0.0 -4.0 0.0 10.0 0.0 200.0 0.1 0.0 0.0 0.0 0.0 0.5 50.0 50.0 50.0'
+    ELSE
+      WRITE (u, '(A)') '1 VesselPinned 0.0 0.0 -5.0 0.0 0.0 0.0 200.0 0.1 0.0 0.0 0.0 0.0 0.5 50.0 50.0 50.0'
+    END IF
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
@@ -1237,7 +1262,93 @@ CONTAINS
   END SUBROUTINE case_mixed_hosts
 
   ! --------------------------------------------------------------------------------------------- !
-  ! 10: refusals                                                                                   !
+  ! 10: the shell's state-mirror restore before the first step                                    !
+  ! --------------------------------------------------------------------------------------------- !
+
+  SUBROUTINE case_shell_start()
+    !! The OpenFAST shell evaluates its outputs at t = 0 before the first step and restores the
+    !! state mirror afterwards, which marks every object's acceleration committed. The mirror must
+    !! then already carry the start accelerations (solved at Init): with every node held, each deck
+    !! (out of balance at its deck pose) marches bit for bit with and without that restore.
+    CHARACTER(32) :: deck(6)
+    INTEGER :: k
+    CALL write_pendulum_deck('pinbody_shell1.dat', 30.0_wp)
+    CALL write_symmetric_deck('pinbody_shell2.dat', free_body=.TRUE.)
+    CALL write_arm_deck('pinbody_shell3.dat', .TRUE., 'deck', rod_type='Free')
+    CALL write_arm_deck('pinbody_shell4.dat', .TRUE., 'deck', rod_type='Pinned')
+    CALL write_arm_deck('pinbody_shell5.dat', .TRUE., 'deck')
+    CALL write_arm_deck('pinbody_shell6.dat', .FALSE., 'deck')
+    deck = ['pinbody_shell1.dat', 'pinbody_shell2.dat', 'pinbody_shell3.dat', 'pinbody_shell4.dat', &
+            'pinbody_shell5.dat', 'pinbody_shell6.dat']
+    DO k = 1, 6
+      CALL shell_start_one(TRIM(deck(k)), k >= 3 .AND. k <= 5, k == 2)
+    END DO
+  END SUBROUTINE case_shell_start
+
+  SUBROUTINE shell_start_one(path, rod, extf)
+      !! One deck of case_shell_start: rod selects the rod mirror, extf the host fluid field.
+    CHARACTER(*), INTENT(IN) :: path
+    LOGICAL, INTENT(IN) :: rod, extf
+    REAL(wp), PARAMETER :: DT = 0.01_wp
+    TYPE(CD_AGG_ModuleType) :: direct, shell
+    REAL(wp), ALLOCATABLE :: p(:, :), v(:, :), a(:, :), f(:, :), ms(:), s1(:), s2(:)
+    REAL(wp) :: err, amp, w0
+    INTEGER :: es, n, step, it, nm
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+    CALL CD_AGG_Init_From_Deck(direct, path, DT, es, em, external_fluid=extf)
+    CALL CD_AGG_Init_From_Deck(shell, path, DT, es, em, external_fluid=extf)
+    CALL require(es == CD_AGG_OK, 'shell-start:init '//path//': '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    n = CD_AGG_NMovingPoints(shell, es, em)
+    IF (rod) THEN
+      nm = CD_AGG_Rod_MirrorSize(shell)
+    ELSE
+      nm = CD_AGG_Rigid6_MirrorSize(shell)
+    END IF
+    ALLOCATE (p(3, n), v(3, n), a(3, n), f(3, n), ms(nm), s1(nm), s2(nm))
+    ! the shell's output call at t = 0: evaluate, then restore the state mirror
+    CALL CD_AGG_CalcOutput(shell, es, em)
+    CALL CD_AGG_GetMovingPointMesh(shell, p, v, a, f, es, em)
+    IF (rod) THEN
+      CALL CD_AGG_Get_Rod_States(shell, ms, es, em)
+      CALL CD_AGG_Set_Rod_States(shell, ms, es, em)
+    ELSE
+      CALL CD_AGG_Get_Rigid6_States(shell, ms, es, em)
+      CALL CD_AGG_Set_Rigid6_States(shell, ms, es, em)
+    END IF
+    CALL require(es == CD_AGG_OK, 'shell-start:mirror '//path//': '//TRIM(em))
+    v = 0.0_wp
+    a = 0.0_wp
+    err = 0.0_wp
+    amp = 0.0_wp
+    w0 = 0.0_wp
+    DO step = 1, 100
+      CALL CD_AGG_Step_Moving(direct, DT, p, v, a, cv, st, it, es, em, t_committed=REAL(step, wp)*DT)
+      CALL CD_AGG_Step_Moving(shell, DT, p, v, a, cv, st, it, es, em, t_committed=REAL(step, wp)*DT)
+      CALL require(es == CD_AGG_OK, 'shell-start:step '//path//': '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+      IF (rod) THEN
+        CALL CD_AGG_Get_Rod_States(direct, s1, es, em)
+        CALL CD_AGG_Get_Rod_States(shell, s2, es, em)
+      ELSE
+        CALL CD_AGG_Get_Rigid6_States(direct, s1, es, em)
+        CALL CD_AGG_Get_Rigid6_States(shell, s2, es, em)
+      END IF
+      IF (step == 1) w0 = MAXVAL(ABS([s1(4:6), s1(10:12)]))
+      err = MAX(err, nan_max_abs(s1 - s2))
+      amp = MAX(amp, nan_max_abs(s1))
+    END DO
+    WRITE (*, '(A,A,A,ES10.3,A,ES10.3)') 'shell order (mirror restore at t = 0), ', path, &
+      ': |state difference| ', err, '; first-step velocity ', w0
+    CALL require(w0 > 0.0_wp, 'shell-start:the deck starts out of balance '//path)
+    CALL require(err <= 0.0_wp, 'shell-start:the restore keeps the start acceleration '//path)
+    CALL CD_AGG_End(direct, es, em)
+    CALL CD_AGG_End(shell, es, em)
+  END SUBROUTINE shell_start_one
+
+  ! --------------------------------------------------------------------------------------------- !
+  ! 11: refusals                                                                                   !
   ! --------------------------------------------------------------------------------------------- !
 
   SUBROUTINE case_refusals()
@@ -1266,7 +1377,42 @@ CONTAINS
     CALL CD_AGG_Init_From_Deck(agg, 'pinbody_noinertia.dat', 0.01_wp, es, em, external_fluid=.TRUE.)
     CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'requires Ixx/Iyy/Izz > 0') > 0, 'refusal:inertia: '//TRIM(em))
     CALL CD_AGG_End(agg, es, em)
+    ! MoorDyn-F's inertialF: CableDyn always returns the inertia (inertialF 1, accepted); 0 and 2
+    ! are refused by name
+    CALL write_pendulum_deck('pinbody_inertialf.dat', 0.0_wp)
+    CALL add_option_row('pinbody_inertialf.dat', '1 inertialF')
+    CALL CD_AGG_Init_From_Deck(agg, 'pinbody_inertialf.dat', 0.01_wp, es, em)
+    CALL require(es == CD_AGG_OK, 'refusal:inertialF 1 is accepted: '//TRIM(em))
+    CALL CD_AGG_End(agg, es, em)
+    CALL write_pendulum_deck('pinbody_inertialf.dat', 0.0_wp)
+    CALL add_option_row('pinbody_inertialf.dat', '0 inertialF')
+    CALL CD_AGG_Init_From_Deck(agg, 'pinbody_inertialf.dat', 0.01_wp, es, em)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'inertialF 0 (MoorDyn-F''s default') > 0, &
+                 'refusal:inertialF 0: '//TRIM(em))
+    CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_refusals
+
+  SUBROUTINE add_option_row(path, row)
+    !! Insert an OPTIONS row before the end marker of a deck.
+    CHARACTER(*), INTENT(IN) :: path, row
+    CHARACTER(512) :: rows(200), line
+    INTEGER :: u, ios, n, i
+    n = 0
+    OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ')
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      n = n + 1
+      rows(n) = line
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    DO i = 1, n
+      IF (TRIM(rows(i)) == '--- end ---') WRITE (u, '(A)') row
+      WRITE (u, '(A)') TRIM(rows(i))
+    END DO
+    CLOSE (u)
+  END SUBROUTINE add_option_row
 
   SUBROUTINE write_zero_inertia(path)
     !! The symmetric deck with a 15-column BODIES row (no inertias) for its VesselPinned body.

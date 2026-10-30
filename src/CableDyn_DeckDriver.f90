@@ -212,6 +212,7 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_Rigid6_GetRefPositions, CD_Rigid6_SetHeldFluid
   PUBLIC :: CD_Rigid6_NHost, CD_Rigid6_AllHost, CD_Rigid6_SetHostKinematics, CD_Rigid6_GetHostKinematics
   PUBLIC :: CD_Rigid6_ScatterHostPoints, CD_Rigid6_HostWrench, CD_Rigid6_Stage, CD_Rigid6_Unstage
+  PUBLIC :: CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations
   PUBLIC :: CD_RodRuntimeType
   PUBLIC :: CD_Init_Deck_Aggregate_Rod, CD_Step_Aggregate_Rod
   PUBLIC :: CD_Rod_NRods, CD_Rod_Snapshot, CD_Rod_Restore, CD_Rod_End
@@ -15920,6 +15921,23 @@ CONTAINS
     CASE ('writelog')
       ! Stock MoorDyn log-verbosity switch; CableDyn reports through ErrStat/ErrMsg.
       CALL rd(val, x1, ErrStat, ErrMsg)
+    CASE ('inertialf')
+      ! MoorDyn-F's switch for the inertia of the coupled objects in their coupled loads: 0 none
+      ! (its default), 1 included, 2 ramped in over inertialF_rampT. CableDyn always includes it
+      ! (the coupled body, rod and pinned object loads net of their inertia): 1 is accepted
+      ! without effect, 0 and 2 are refused by name.
+      CALL rd(val, x1, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) RETURN
+      IF (ABS(x1 - CD_ONE) > CD_ZERO) THEN
+        CALL fail(ErrStat, ErrMsg, 'OPTION inertialF '//TRIM(val)//': CableDyn returns the inertia of '// &
+                  'coupled bodies and rods with their coupled loads, as MoorDyn-F''s inertialF 1; '// &
+                  'inertialF 0 (MoorDyn-F''s default: no inertia) and 2 (the inertia ramped in) are not '// &
+                  'supported: use 1 or remove the row')
+        RETURN
+      END IF
+    CASE ('inertialf_rampt')
+      ! the ramp time of MoorDyn-F's inertialF 2 (refused above): accepted without effect
+      CALL rd(val, x1, ErrStat, ErrMsg)
     CASE ('dtout')
       ! Stock MoorDyn output-file cadence; CableDyn's output cadence is governed by
       ! the caller (driver print interval / OpenFAST glue), not the deck.
@@ -16125,7 +16143,8 @@ CONTAINS
       rule = 'finite'
     CASE ('rhoinf', 'rho_inf')
       rule = 'unit'
-    CASE ('kbot', 'kb', 'cbot', 'cb', 'dtic', 'tmaxic', 'cdscaleic', 'threshic', 'writelog', 'dtout')
+    CASE ('kbot', 'kb', 'cbot', 'cb', 'dtic', 'tmaxic', 'cdscaleic', 'threshic', 'writelog', 'dtout', 'inertialf', &
+          'inertialf_rampt')
       rule = 'finite'
     CASE DEFAULT
       RETURN
@@ -27007,6 +27026,84 @@ CONTAINS
     TYPE(CD_Rigid6RuntimeType), INTENT(INOUT) :: rt
     IF (ALLOCATED(rt%stage_rigid)) rt%rigid = rt%stage_rigid
   END SUBROUTINE CD_Rigid6_Unstage
+
+  SUBROUTINE CD_Rigid6_StartAccelerations(system, rt, ErrStat, ErrMsg, pinned)
+    !! Solve the accelerations of every integrated (Free and CoupledPinned) body at the current
+    !! state, as the start of the first step does (rigid_start_accelerations from the current line
+    !! loads; a CoupledPinned body with its node at its step-start pose, pin0), and mark them
+    !! committed. The aggregate calls it at Init and at a transfer of the step-start host
+    !! kinematics before the first step, so the state mirror carries the start accelerations from
+    !! t = 0: a mirror restore (the OpenFAST shell restores it after every CalcOutput) marks the
+    !! accelerations committed, and the first step would otherwise start from zero. Only the
+    !! accelerations change; the state is solved on a copy. pinned: a CoupledPinned body was
+    !! solved (its line ends then move with it).
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    TYPE(CD_Rigid6RuntimeType), INTENT(INOUT) :: rt
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(OUT), OPTIONAL :: pinned
+    TYPE(RigidBodyState), ALLOCATABLE :: trial(:)
+    REAL(wp), ALLOCATABLE :: hk(:, :)
+    INTEGER :: ib
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (PRESENT(pinned)) pinned = .FALSE.
+    IF (.NOT. ALLOCATED(rt%rigid)) RETURN
+    IF (PRESENT(pinned)) pinned = ANY(rt%rigid%is_host_pinned)
+    IF (ALL(rt%rigid%is_prescribed)) RETURN
+    trial = rt%rigid
+    DO ib = 1, SIZE(trial)
+      IF (.NOT. trial(ib)%is_prescribed) trial(ib)%accel_valid = .FALSE.
+    END DO
+    CALL save_host_end_rigid(trial, hk)
+    CALL interp_host_body_pins(trial, hk, CD_ZERO)
+    CALL rigid_start_accelerations(system, rt%points, rt%opts, trial, CD_ZERO, rt%work, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    DO ib = 1, SIZE(trial)
+      IF (rt%rigid(ib)%is_prescribed) CYCLE
+      rt%rigid(ib)%a = trial(ib)%a
+      rt%rigid(ib)%alpha = trial(ib)%alpha
+      rt%rigid(ib)%accel_valid = .TRUE.
+    END DO
+  END SUBROUTINE CD_Rigid6_StartAccelerations
+
+  SUBROUTINE CD_Rod_StartAccelerations(system, rt, ErrStat, ErrMsg, pinned)
+    !! Rod twin of CD_Rigid6_StartAccelerations for the Free, Pinned and CoupledPinned rods
+    !! (rod_start_accelerations; a CoupledPinned rod with its pin at its step-start pose, pin0, as
+    !! the first step of step_rod_system takes it). A pinned rod keeps its centre acceleration of
+    !! that pose with the solved angular one, consistent with its committed End A motion. pinned:
+    !! a CoupledPinned rod was solved.
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    TYPE(CD_RodRuntimeType), INTENT(INOUT) :: rt
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(OUT), OPTIONAL :: pinned
+    TYPE(RodState), ALLOCATABLE :: trial(:)
+    REAL(wp), ALLOCATABLE :: hk(:, :)
+    INTEGER :: ir
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (PRESENT(pinned)) pinned = .FALSE.
+    IF (.NOT. ALLOCATED(rt%rods)) RETURN
+    IF (PRESENT(pinned)) pinned = ANY(rt%rods%is_host_pinned)
+    IF (.NOT. ANY(rt%rods%is_free .OR. rt%rods%is_pinned)) RETURN
+    trial = rt%rods
+    DO ir = 1, SIZE(trial)
+      IF (trial(ir)%is_free .OR. trial(ir)%is_pinned) trial(ir)%accel_valid = .FALSE.
+    END DO
+    CALL save_host_end_rod(trial, hk)
+    CALL interp_host_pins(trial, hk, CD_ZERO)
+    CALL rod_start_accelerations(system, rt%points, rt%opts, trial, CD_ZERO, rt%work, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    DO ir = 1, SIZE(trial)
+      IF (.NOT. (trial(ir)%is_free .OR. trial(ir)%is_pinned)) CYCLE
+      rt%rods(ir)%a = trial(ir)%a
+      rt%rods(ir)%alpha = trial(ir)%alpha
+      rt%rods(ir)%accel_valid = .TRUE.
+    END DO
+  END SUBROUTINE CD_Rod_StartAccelerations
 
   SUBROUTINE CD_Step_Aggregate_Rigid6(system, rt, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, host_mask, &
                                       host_q, host_v, host_a, interp_hosts)
