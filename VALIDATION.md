@@ -407,6 +407,27 @@ scripts, results, and source provenance are in
     and pitch are 7.29e6 N·m/rad below the module-level 6×6 for both mooring modules. A run with no
     mooring and only a constant −6.084e6 N vertical load at the platform reference point (HydroDyn
     `AddF0`) reproduces this term, so it comes from ElastoDyn/glue code and not from the mooring module.
+  - *Linearisation of a line restrained in torsion*
+    ([`validation/scripts/openfast_lin_torsion.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_torsion.py),
+    same case): the twist angles of the free nodes and their rates are states, and the platform
+    rotation turns the End A frame. A straight, taut 100 m line (`GJ` 5e4 N·m², `Irn` 2 kg·m, 50
+    elements, rigid in torsion at both ends) has torsional modes in the eigenvalues of `A` equal
+    to the lumped chain's `2 √(GJ/Irn)/h sin(nπ/2N)` to 5e-14. They lie −1.6e-4, −6.6e-4 and
+    −1.5e-3 below the continuum's `nπ/L √(GJ/Irn)`, the discretisation error. The fairlead moment
+    about the line per unit platform rotation about it, `D − C A⁻¹ B`, is `GJ/L` to 1.5e-14. The
+    feedthrough `D` alone is the end element's `GJ/lₑ`, fifty times more, which is what the
+    reduction would give without twist states. The lazy-wave cable of the mixed deck, twisted
+    90° and alone (pinned in bending, rigid in torsion, 3470 states), matches the deck's own
+    static solutions to ≤4.9e-4. These are the moment about the End A director per unit
+    rotation about it (82.4268 / 82.4263 N·m/rad, from `Pretwist(A) ± 0.5°`), the forces and
+    that moment per unit fairlead translation, and the forces per unit rotation against the
+    reciprocal moment row. `tests/test_lin_torsion.f90` repeats the straight-line gates with the
+    shell's evaluation sequence on the aggregate. It adds the condensed torsion, an elastic
+    torsional end (`1/(L/GJ + 1/kₜ)`), and the platform's angular rates: `Bt/L` per unit angular
+    velocity and the held end section's `Irn lₑ/2` per unit angular acceleration. Under
+    linearisation the platform rotation is stepped by 1e-4 rad instead of 0.1 rad. On a straight
+    line with a 2e5 N·m/rad hang-off spring, this brings the force per unit rotation to 4e-8 of
+    the static solutions (6.8e-6 with 0.1 rad).
 
   The mooring-only A/B compares an all-chain system that both codes model in the same
   way; the finite-EI cable under coupled motion is compared with OrcaFlex in L4-1c.
@@ -801,7 +822,7 @@ stop with a named error.
 | Correction iterations (`NumCrctn > 0`) | Pass verified | bit-identical to own `NumCrctn = 0` run |
 | SeaState wave/current kinematics | Pass verified | wave A/B ≤0.16% of range |
 | Checkpoint-restart (incl. Free/Connect points) | Pass verified | restarted window = continuous run to 0.0; also with supercycling (`dtM` > `DT`, the held SeaState fields and the predictor loads checkpointed): IEA-15 VolturnUS-S, turbulent wind and JONSWAP sea, `openfast -restart` at 50 s reproduces every later OpenFAST and `.CD.out` row of the chain mooring at `dtM` = 4 `DT` (extrapolated and held loads) and `DT`, and of the chain + 248-element power-cable mooring at `dtM` = 2 `DT`. A finite-EI cable also checkpoints its committed boundary (held DOFs, end-connection directions, vessel frame): before, the rebuild took its fairlead from the restored input mesh, which differs in the last bits, and on the IEA-15 mixed deck restarted at 6 s the lazy-wave cable's `.CD.out` channels drifted by up to 9.4e-7 (relative) within 4 s; now all rows to 10 s match bit for bit at `dtM` = `DT` and 2 `DT`, `NumCrctn` 0 and 1, and with a rigid fairlead END CONNECTIONS row |
-| Linearisation | Pass verified (line dynamics) | line states as MoorDyn-F's (882 on the UMaine chains); zero-frequency reduction `D − C A⁻¹ B` compared entry by entry with stock MoorDyn's (full-precision `.lin` output): fairlead stiffness ≤0.10%, transverse `H/X` term 0.29%, platform 6×6 diagonals ≤0.10%; lowest nine line-mode frequencies 0.04–0.30%, both state matrices stable; a mixed deck with a lazy-wave power cable (2976 cable states) matches its own static solutions at every coupled point to ≤3.3e-4, also with a hang-off spring ([`openfast_lin_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_ab.py)) |
+| Linearisation | Pass verified (line dynamics) | line states as MoorDyn-F's (882 on the UMaine chains); zero-frequency reduction `D − C A⁻¹ B` compared entry by entry with stock MoorDyn's (full-precision `.lin` output): fairlead stiffness ≤0.10%, transverse `H/X` term 0.29%, platform 6×6 diagonals ≤0.10%; lowest nine line-mode frequencies 0.04–0.30%, both state matrices stable; a mixed deck with a lazy-wave power cable (2976 cable states) matches its own static solutions at every coupled point to ≤3.3e-4, also with a hang-off spring ([`openfast_lin_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_ab.py)); a line restrained in torsion adds its twist angles as states: the straight line's torsional modes equal the lumped chain's to 5e-14 and its roll stiffness `GJ/L` to 1.5e-14, and a twisted lazy wave matches its static solutions to ≤4.9e-4 ([`openfast_lin_torsion.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_torsion.py)) |
 | FAST.Farm shared moorings + clumps + channel record | Pass verified | 600 s A/B of the r-test `MD_Shared` farm against stock MoorDyn (same deck, analysis from 100 s; [`fastfarm_shared_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/fastfarm_shared_ab.py)): tension means ≤0.02%, minima and maxima ≤0.25%, platform motions within millimetres and 0.001°; shared-line tension std 2.2–2.7% lower, 1.0% at half the mooring step (CableDyn's implicit step at the 0.05 s coupling step against MoorDyn's 1e-4 s explicit step). On the shared lines, which have no Fixed end, `FairTen`/`AnchTen` name the opposite ends from MoorDyn's (see the migration guide). MoorDyn's initial settling does not converge for the anchor legs 6 and 7 (2.4 m excess length at t = 0), a start-up transient over by 100 s that most likely set the 3% end of the earlier 60 s record |
 | Slack-line tension convention | Pass verified | tension-only dynamics; BA on slack lines matches `MoorDyn_Line.f90` |
 | Farm + restart / Farm + linearisation | Not applicable | FAST.Farm has no restart and does not call module linearisation; the same applies to stock MoorDyn |

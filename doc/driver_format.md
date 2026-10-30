@@ -811,8 +811,8 @@ Behaviour:
 - Connection moments are included in the OpenFAST coupled-load mesh.
 
 Rows on an `EI = 0` line, duplicate rows, unknown line ids, null directions, negative stiffnesses,
-and non-finite values fail deck validation. OpenFAST linearisation with a platform-relative end
-connection is rejected at initialisation.
+and non-finite values fail deck validation. OpenFAST linearisation with a `Rigid` end connection
+is rejected at initialisation.
 
 #### Torsion columns
 
@@ -881,9 +881,10 @@ restrained end (one end included) in a standalone deck mixing `EI = 0` and finit
 without a body or through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line
 ends by translation only (`a line restrained in torsion needs a host that turns its fairlead
 frame ...`; with a body such a deck runs on the multibody route, which supports torsion, and a C
-API host passes its rotations after `CableDyn_InitDeckRotating`), OpenFAST linearisation of a line
-restrained in torsion, and a `Torq`/`Twist` channel on a line that is not restrained at both
-ends. Seabed friction does not resist twist (the laid part of a line twists freely), and there
+API host passes its rotations after `CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel
+on a line that is not restrained at both ends. OpenFAST linearisation takes the twist angles as
+states (as for any line, not with a `Rigid` bending connection). Seabed friction does not resist
+twist (the laid part of a line twists freely), and there
 is no torque–tension coupling.
 
 ### EQUIVALENT BUOYANCY (optional)

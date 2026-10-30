@@ -93,13 +93,12 @@ Line and constitutive capability
        torsional damping (``GJ|K|Bt``),
        with turning Rigid6 bodies, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll
        column standalone, and with the platform orientation in coupled OpenFAST and FAST.Farm
-       runs (torque returned to the platform, ``PtfmInit``, checkpoints; see
-       :doc:`openfast`) and through the C API with the host's rotations
-       (``CableDyn_InitDeckRotating``, :doc:`capi`); ``Torq``/``Twist`` channels and standalone
-       range graphs. Stopped by name: the standalone mixed ``EI = 0`` + finite-EI aggregate and
-       ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by translation only),
-       OpenFAST linearisation of a line restrained in torsion,
-       rod ends, bodies other than Rigid6, modal analysis, and
+       runs (torque returned to the platform, ``PtfmInit``, checkpoints, linearisation with the
+       twist angles as states; see :doc:`openfast`) and through the C API with the host's
+       rotations (``CableDyn_InitDeckRotating``, :doc:`capi`); ``Torq``/``Twist`` channels and
+       standalone range graphs. Stopped by name: the standalone mixed ``EI = 0`` + finite-EI
+       aggregate and ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
+       translation only), rod ends, bodies other than Rigid6, modal analysis, and
        ``False alpha_force_blend``. Not modelled: seabed friction against twist, anisotropic
        sections, self-contact of a loop (see :ref:`theory-torsion`)
    * - Hockling loops, nonlinear cross-section laws
@@ -217,7 +216,7 @@ OpenFAST coverage
 
 The ``CompMooring = 5`` shell covers normal coupled time-domain stepping with its own ``dtM``,
 nonzero ``PtfmInit``, correction iterations, SeaState fields, checkpoint/restart, scoped
-quasi-static ``dYdu`` linearisation, line failures, active-tension control of ``EI = 0`` lines
+linearisation with the line dynamics, line failures, active-tension control of ``EI = 0`` lines
 (linear-elastic, viscoelastic or Syrope segments) and finite-EI cables, and FAST.Farm shared
 moorings. Restart and linearisation do not arise under
 FAST.Farm, which does not call those module operations, and active-tension control is rejected

@@ -985,10 +985,10 @@ output root:
        selected
    * - ``<FarmRoot>.FarmCD.static.out`` / ``<FarmRoot>.FarmCD.out``
      - the same two files for a FAST.Farm run, named from the FAST.Farm output root
-   * - ``<RootName>.CD.rst.dat`` / ``<RootName>.CD.lin.dat``
-     - temporary copies of the CableDyn deck, written in the ``MooringFile`` folder when a run
-       restarts from a checkpoint or linearises; the module rebuilds its model from them and
-       removes them after use (see :doc:`openfast`)
+   * - ``<RootName>.CD.rst.dat``
+     - temporary copy of the CableDyn deck, written in the ``MooringFile`` folder when a run
+       restarts from a checkpoint; the module rebuilds its model from it and removes it after use
+       (see :doc:`openfast`)
 
 ``<RootName>.CD.out`` layout — note that it differs from the standalone ``.out``:
 

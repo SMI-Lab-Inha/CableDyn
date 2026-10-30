@@ -403,9 +403,6 @@ Torsion
        ``CableDyn_InitDeckRotating`` and pass the host's rotations, add a body (such a deck runs
        on the multibody route, which supports torsion), or set ``TorsStiffness Free`` in every
        ``END CONNECTIONS`` row.
-   * - ``formal OpenFAST linearization of a line restrained in torsion is not supported``
-     - linearise the model with ``TorsStiffness Free``; the twist and the torque carry no
-       linearisation state.
    * - ``torsion: the twist would move more than pi/2 from its committed value``
      - the host turned a fairlead by more than 90° about the line's end direction without a
        step (an output probe or a non-stepping input update). Keep the platform turn per

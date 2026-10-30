@@ -267,10 +267,9 @@ channels ``AnchFz<L>``, ``AnchFH<L>`` and ``TDP<L>Grd``) and units are in :doc:`
      - CableDyn-owned, always written: the static-equilibrium profile of every line, one row per
        node (arc length, coordinates, effective tension, curvature, bend moment, declination,
        inclination, azimuth) — the coupled range graph, at the state of the printed line summary
-   * - ``<RootName>.CD.rst.dat``, ``<RootName>.CD.lin.dat``
-     - temporary CableDyn-owned copies of the deck, written in the ``MooringFile`` folder only
-       when a run restarts from a checkpoint or linearises (see *Lifecycle features*), and
-       removed after use
+   * - ``<RootName>.CD.rst.dat``
+     - temporary CableDyn-owned copy of the deck, written in the ``MooringFile`` folder only
+       when a run restarts from a checkpoint (see *Lifecycle features*), and removed after use
 
 With ``WrVTK > 0`` OpenFAST writes its VTK visualisation files as usual, but CableDyn provides no
 mooring or cable meshes to them, and says so at initialisation: the lines do not appear in the
@@ -344,11 +343,11 @@ step the line may turn by more than 90° about its end direction, because the st
 substeps; an output probe moves the frame without a step, is limited to 90° from the
 committed twist, and stops by name beyond it (a restart first restores the checkpoint's twist,
 so it is not limited this way). Formal
-linearisation of a line restrained in torsion fails during initialisation: the torque's
-rotational stiffness has no column in the translation-only quasi-static reduction. The C API's
-``CableDyn_InitDeck``/``InitDeckAt`` and the standalone deck that mixes ``EI = 0`` and finite-EI
-lines without a body move the line ends by translation only and refuse torsion columns; a C API
-host that initialises with ``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`).
+linearisation takes the line's twist angles as states and the platform rotation as an input
+(see `Linearisation`_). The C API's ``CableDyn_InitDeck``/``InitDeckAt`` and the standalone
+deck that mixes ``EI = 0`` and finite-EI lines without a body move the line ends by translation
+only and refuse torsion columns; a C API host that initialises with
+``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`).
 
 Lifecycle features
 ------------------
@@ -365,18 +364,13 @@ without an auxiliary process:
   temporary deck copy, ``<RootName>.CD.rst.dat``, beside the ``MooringFile``, rebuilds the model
   from it and removes it; files the deck names (``bathymetryFile``, a WaterKin file, Syrope
   tables) resolve against the ``MooringFile`` folder as in the original run. Keep restart files with the exact executable and complete input set.
-* **Linearisation** publishes the quasi-static mooring load derivative at a committed boundary.
-  It rebuilds the model from a temporary deck copy, ``<RootName>.CD.lin.dat``, written beside the
-  ``MooringFile`` and removed after use, so side files resolve as on restart. Set ``dtM = DT`` and linearise at the initial
-  operating point (``CalcSteady = False``,
+* **Linearisation** differentiates the line dynamics at the committed state (`Linearisation`_).
+  Set ``dtM = DT`` and linearise at the initial operating point (``CalcSteady = False``,
   ``LinTimes = 0``, platform at its still-water equilibrium, rotor speed and pitch at their
   steady values). Contact switching makes derivatives near touchdown non-smooth. OpenFAST writes
   the ``.lin`` matrices in the ``.fst`` ``OutFmt``; to compare them with MoorDyn's
   ``D - C A^-1 B``, use a full-precision format such as ``"ES24.15E3"``, because the usual
-  4-digit format cannot resolve that reduction. A deck with
-  Rigid6 bodies, rods or ``Point3`` buoys is rejected at initialisation: the quasi-static
-  reduction would hold them at their deck pose instead of re-solving their equilibrium (a
-  ``Free`` point with the buoy's ``Mass``, ``Vol``, ``CdA`` and ``Ca`` is re-solved).
+  4-digit format cannot resolve that reduction.
 * **FAST.Farm** selects CableDyn with ``Mod_SharedMooring = 5`` for shared lines and
   connections. Gravity, water density, depth, and ``TMax`` are host-owned and must agree across
   turbines, otherwise initialisation fails.
@@ -453,6 +447,17 @@ Positions, tangents and coupled-point displacements are stepped by 1 µm, which 
 seabed penetration of a light cable and the stretch of every taut element. Velocities are stepped
 by 0.1 m/s, MoorDyn-F's step.
 
+A line restrained in torsion adds the twist angle of every node that its end frames do not hold
+(all nodes but a torsionally ``Rigid`` end), after the cables' positions and tangents, and their
+rates after the cables' velocities: ``Cable 1 node 2 twist, rad`` and ``Cable 1 node 2 twist
+rate, rad/s``. The angles' accelerations come from the same evaluation as the cable's, with their
+polar inertia ``Irn``. The coupled point's orientation turns the line's End A frame, so a platform
+rotation twists the line; the point's angular velocity and acceleration turn the frame too, for the
+torsional damping ``Bt`` and the held end section's polar inertia. The fairlead moment carries the
+torque. Angles are stepped by 1 µrad and their rates by 0.01 rad/s, both of which enter linearly; the
+coupled-point rotation is stepped by 1e-4 rad (a rotation moves no node, so no contact or slack
+limits it, and the turn of an end frame or connection direction is nonlinear).
+
 The zero-frequency reduction ``D − C A⁻¹ B`` is the static mooring stiffness. It agrees with
 MoorDyn-F and with CableDyn's own static solutions (:doc:`validation`). Quadratic drag has no
 slope at rest, so the 0.1 m/s step gives its equivalent linear damping at that velocity amplitude.
@@ -469,9 +474,9 @@ stick anchors (a stuck laid run). Linearise from a settled operating point, such
 start at ``t = 0``.
 
 Initialisation fails with a named message for Free and Connect points, Point3 buoys, Rigid6 bodies
-and rods, a line restrained in torsion, a line with VIV (``Cl > 0``: it oscillates about a lock-in
-cycle, not an equilibrium), a ``CONTROL`` section, a cable with a ``Rigid`` end connection, and
-FAST.Farm. Their states are not linearisation states. Time-domain runs support all of them.
+and rods, a line with VIV (``Cl > 0``: it oscillates about a lock-in cycle, not an equilibrium), a
+``CONTROL`` section, a cable with a ``Rigid`` end connection, and FAST.Farm. Their states are not
+linearisation states. Time-domain runs support all of them.
 
 Performance
 -----------

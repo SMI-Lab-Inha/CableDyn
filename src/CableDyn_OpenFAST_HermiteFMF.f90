@@ -74,6 +74,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_Set_EndConnection
   PUBLIC :: CD_HFMF_Set_Torsion
   PUBLIC :: CD_HFMF_Refresh_Acceleration
+  PUBLIC :: CD_HFMF_Twist_Lin_Count, CD_HFMF_Twist_Lin_Slots, CD_HFMF_Set_Twist_Frame_Rates
   PUBLIC :: CD_HFMF_NNodes
   PUBLIC :: CD_HFMF_GetNodePositions
   PUBLIC :: CD_HFMF_UpdateStates
@@ -1273,6 +1274,77 @@ CONTAINS
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Refresh_Acceleration: '//TRIM(em); RETURN
     END IF
   END SUBROUTINE CD_HFMF_Refresh_Acceleration
+
+  INTEGER FUNCTION CD_HFMF_Twist_Lin_Count(self) RESULT(n)
+    !! Number of the cable's nodal-twist linearisation states of one kind: the free twist angles,
+    !! at every node but a torsionally rigid end (whose angle is held). Zero without torsion and
+    !! for the condensed torsion, whose torque M = (Phi - Theta(q))/C is an algebraic function of
+    !! the configuration and the end frames with no state of its own.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
+    n = 0
+    IF (.NOT. self%initialized) RETURN
+    IF (.NOT. self%line%tw_active) RETURN
+    n = COUNT(self%line%tw_free)
+  END FUNCTION CD_HFMF_Twist_Lin_Count
+
+  SUBROUTINE CD_HFMF_Twist_Lin_Slots(self, phi_slot, rate_slot, acc_slot, node, ErrStat, ErrMsg)
+    !! The slots, 1-based in this cable's CD_HFMF_PackMirror buffer, of the free twist angles phi,
+    !! their rates and their accelerations, with their model nodes (End B = node 1), in node order;
+    !! each array is sized CD_HFMF_Twist_Lin_Count. Angles, rates and accelerations are the first
+    !! three nn-blocks of the nodal-twist tail that closes the torsion block
+    !! (CD_HermiteCable_Dyn_Twist_Pack), so the slots of the free nodes are consecutive.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
+    INTEGER, INTENT(OUT) :: phi_slot(:), rate_slot(:), acc_slot(:), node(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: k0, i, k, n
+    ErrStat = CD_HFMF_OK
+    ErrMsg = ''
+    phi_slot = 0
+    rate_slot = 0
+    acc_slot = 0
+    node = 0
+    n = CD_HFMF_Twist_Lin_Count(self)
+    IF (SIZE(phi_slot) /= n .OR. SIZE(rate_slot) /= n .OR. SIZE(acc_slot) /= n .OR. SIZE(node) /= n) THEN
+      ErrStat = CD_HFMF_BADINPUT
+      ErrMsg = 'CD_HFMF_Twist_Lin_Slots: the slot arrays must be sized CD_HFMF_Twist_Lin_Count'
+      RETURN
+    END IF
+    IF (n == 0) RETURN
+    k0 = CD_HFMF_MirrorSize(self) - CD_HermiteCable_Dyn_Twist_Mirror_Size(self%line)
+    k = 0
+    DO i = 1, self%line%nn
+      IF (.NOT. self%line%tw_free(i)) CYCLE
+      k = k + 1
+      phi_slot(k) = k0 + i
+      rate_slot(k) = k0 + self%line%nn + i
+      acc_slot(k) = k0 + 2*self%line%nn + i
+      node(k) = i
+    END DO
+  END SUBROUTINE CD_HFMF_Twist_Lin_Slots
+
+  SUBROUTINE CD_HFMF_Set_Twist_Frame_Rates(self, ErrStat, ErrMsg)
+    !! Linearisation of the nodal twist: give the parent-attached end frame the angular velocity
+    !! and acceleration of the parent last written (CD_HFMF_SetCoupledKinematics), the rates a
+    !! time step takes from the frame's turn over the step (tw_om, tw_oal of the committed step).
+    !! The frame turns rigidly with the parent, so its rates are the parent's, here in the solve
+    !! frame. With them the torsional damping of the element at a rigid end takes the frame's
+    !! turning rate, (Bt/l0) drho/dw . omega, and the reaction moment the polar inertia of the held
+    !! end section, as in the march; without them a linearisation would hold both at the committed
+    !! rates. A no-op without the nodal twist or a parent-attached frame. The caller restores the
+    !! committed rates with the mirror (CD_HFMF_UnpackMirror).
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ErrStat = CD_HFMF_OK
+    ErrMsg = ''
+    IF (.NOT. self%initialized) THEN
+      ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Twist_Frame_Rates: module not initialised'; RETURN
+    END IF
+    IF (.NOT. (self%tors_parent .AND. self%line%tw_active)) RETURN
+    self%line%tw_om(:, self%tors_index) = frame_to_local(self, self%parent_omega)
+    self%line%tw_oal(:, self%tors_index) = frame_to_local(self, self%parent_alpha)
+  END SUBROUTINE CD_HFMF_Set_Twist_Frame_Rates
 
   INTEGER FUNCTION CD_HFMF_NNodes(self) RESULT(n)
     !! Node count of the owned cable (the held-fluid sampling surface). Zero if
