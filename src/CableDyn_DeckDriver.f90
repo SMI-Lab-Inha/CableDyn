@@ -455,6 +455,9 @@ MODULE CableDyn_DeckDriver
     ! Coupled/Vessel body (MoorDyn "Coupled"): a Rigid6 body whose pose follows the host (the
     ! coupled platform, or motionFile rows standalone) instead of being integrated.
     LOGICAL :: host_coupled = .FALSE.
+    ! CoupledPinned/VesselPinned body (MoorDyn "CoupledPinned"): a Rigid6 body whose reference
+    ! point follows a host node (the coupled aggregate only) while its rotation is integrated.
+    LOGICAL :: host_pinned = .FALSE.
   END TYPE
 
   TYPE :: DeckRodType
@@ -870,6 +873,14 @@ MODULE CableDyn_DeckDriver
     INTEGER :: body_index = 0
     ! Host-driven (Coupled/Vessel) body: its state is imposed, never integrated.
     LOGICAL :: is_prescribed = .FALSE.
+    ! CoupledPinned/VesselPinned body (coupled aggregate): the reference point is pinned to a host
+    ! node. The host prescribes its translation (pin, pin_v, pin_a), which r, v and a always
+    ! equal (body_snap_pinned), and the body's rotation about it stays its own degree of freedom
+    ! (MoorDyn-F's coupled pinned body). pin0, pin0_v and pin0_a are the committed translation at
+    ! the start of the coming step (set_body_pin_start; see RodState%pin0).
+    LOGICAL :: is_host_pinned = .FALSE.
+    REAL(wp) :: pin(3) = CD_ZERO, pin_v(3) = CD_ZERO, pin_a(3) = CD_ZERO
+    REAL(wp) :: pin0(3) = CD_ZERO, pin0_v(3) = CD_ZERO, pin0_a(3) = CD_ZERO
     INTEGER, ALLOCATABLE :: point_indices(:)
     REAL(wp) :: r_ref(3) = CD_ZERO
     REAL(wp) :: rot_ref(3, 3) = CD_ZERO
@@ -7408,7 +7419,7 @@ CONTAINS
     n_rod = SIZE(rods)
     n_host_rod = COUNT(rods%rod_type == 'coupled' .OR. rods%rod_type == 'vessel' .OR. &
                        rods%rod_type == 'coupledpinned')
-    n_host_body = COUNT(bodies%host_coupled)
+    n_host_body = COUNT(bodies%host_coupled .OR. bodies%host_pinned)
     IF (opts%has_motion_file) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the coupled boundary is driven by the host, '// &
                 'not a deck motionFile; remove the motionFile OPTION'); RETURN
@@ -7480,13 +7491,14 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: line FAILURE on a coupled Rigid6 deck is not '// &
                   'supported (the failure trigger is not evaluated against the post-body-march state)'); RETURN
       END IF
-      ! Coupled/Vessel bodies become 6-DOF host nodes. They may share a deck with Free bodies: when
-      ! the free-body march sub-cycles, the host-driven bodies follow the host path interpolated
-      ! from the step start (interp_host_rigid). The linearization probe places translational
-      ! moving points only.
+      ! Coupled/Vessel bodies become 6-DOF host nodes, CoupledPinned ones translational host nodes
+      ! with a rotation of their own. They may share a deck with Free bodies: when the body march
+      ! sub-cycles, the host-driven bodies follow the host path interpolated from the step start
+      ! (interp_host_rigid, interp_host_body_pins). The linearization probe places translational
+      ! moving points only and holds every body, so it carries neither.
       IF (n_host_body > 0 .AND. PRESENT(coupled_positions)) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: coupled_positions (the linearization probe) '// &
-                  'does not support Coupled/Vessel BODIES'); RETURN
+                  'does not support Coupled/Vessel or CoupledPinned BODIES'); RETURN
       END IF
     END IF
 
@@ -13916,8 +13928,9 @@ CONTAINS
     CASE ('coupled', 'vessel', 'cpld', 'ves')
       b%btype = 'rigid6'
       b%host_coupled = .TRUE.
-    CASE ('coupledpinned', 'cpldpin')
-      CALL fail(ErrStat, ErrMsg, 'CoupledPinned BODY is not supported (use Coupled or Free)'); RETURN
+    CASE ('coupledpinned', 'cpldpin', 'vesselpinned', 'vespin')
+      b%btype = 'rigid6'
+      b%host_pinned = .TRUE.
     END SELECT
     CALL grow_bodies(bodies, nb)
     nb = nb + 1
@@ -13928,8 +13941,9 @@ CONTAINS
     !! MoorDyn v2 BODIES row: ID Attachment X0 Y0 Z0 r0 p0 y0 Mass CG* I* Volume CdA* Ca*, with
     !! bar lists CG = z | x|y|z, I = I (all axes) | Ixx|Iyy|Izz about the CG, CdA = CdA | CdA|CdA_rot
     !! (or 3/6 entries) and Ca = Ca | Cax|Cay|Caz. A Free body becomes a Rigid6 body with its CG
-    !! (also the centre of buoyancy, as in MoorDyn). The body model is isotropic: 3-entry CdA/Ca
-    !! lists must be equal, and rotational drag and other attachments fail closed by name.
+    !! (also the centre of buoyancy, as in MoorDyn); Coupled/Vessel and CoupledPinned/VesselPinned
+    !! bodies are host-driven. The body model is isotropic: 3-entry CdA/Ca lists must be equal, and
+    !! rotational drag and other attachments fail closed by name.
     CHARACTER(*), INTENT(IN) :: line
     TYPE(DeckBody), INTENT(OUT) :: b
     INTEGER, INTENT(OUT) :: ErrStat
@@ -13954,9 +13968,12 @@ CONTAINS
     CASE ('coupled', 'vessel', 'cpld', 'ves')
       b%btype = 'rigid6'
       b%host_coupled = .TRUE.
+    CASE ('coupledpinned', 'cpldpin', 'vesselpinned', 'vespin')
+      b%btype = 'rigid6'
+      b%host_pinned = .TRUE.
     CASE DEFAULT
       CALL fail(ErrStat, ErrMsg, 'BODIES attachment "'//TRIM(tok(2))//'" is not supported in the '// &
-                '14-column MoorDyn row (Free, Coupled, or Vessel bodies)'); RETURN
+                '14-column MoorDyn row (Free, Coupled, Vessel, CoupledPinned or VesselPinned bodies)'); RETURN
     END SELECT
     READ (line, *, IOSTAT=ios) tok(1), tok(2), b%pos(1), b%pos(2), b%pos(3), b%rot(1), b%rot(2), b%rot(3), b%mass
     IF (ios == 0) THEN
@@ -16912,6 +16929,22 @@ CONTAINS
         IF (.NOT. opts%has_dtm .AND. .NOT. caller_driven) THEN
           CALL fail(ErrStat, ErrMsg, 'Rigid6 BODY requires a dynamic deck with dtM and TMax'); RETURN
         END IF
+        IF (bodies(i)%host_pinned) THEN
+          ! The host moves the reference point of a CoupledPinned body and takes its force; a
+          ! motionFile cannot stand in for it (its Body<N> rows prescribe the whole pose), so the
+          ! body needs the coupled aggregate. Its rotation is integrated: Ixx/Iyy/Izz > 0.
+          IF (.NOT. opts%host_coupled_objects) THEN
+            CALL fail(ErrStat, ErrMsg, 'CoupledPinned/VesselPinned BODY requires a coupled host (OpenFAST '// &
+                      'CompMooring = 5); in a standalone deck use a Free body, or a Coupled body with a '// &
+                      'motionFile'); RETURN
+          END IF
+          IF (bodies(i)%mass < CD_ZERO .OR. bodies(i)%vol < CD_ZERO .OR. bodies(i)%cda < CD_ZERO .OR. &
+              bodies(i)%ca < CD_ZERO .OR. ANY(bodies(i)%inertia <= CD_ZERO)) THEN
+            CALL fail(ErrStat, ErrMsg, 'CoupledPinned/VesselPinned BODY requires Ixx/Iyy/Izz > 0 and '// &
+                      'non-negative Mass/Vol/CdA/Ca'); RETURN
+          END IF
+          CYCLE
+        END IF
         IF (bodies(i)%host_coupled) THEN
           IF (.NOT. (opts%has_motion_file .OR. opts%host_coupled_objects)) THEN
             CALL fail(ErrStat, ErrMsg, 'Coupled/Vessel BODY requires a motionFile (or a coupled host)'); RETURN
@@ -19484,11 +19517,12 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: acc(3), alpha(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    ! pin_arm: the reference point turns about a pin at -pin_arm from it (a pinned rod): with
+    ! pin_arm: the reference point turns about a pin at -pin_arm from it (a pinned rod; zero for
+    ! a CoupledPinned body, which turns about its reference point): with
     ! x = T y + b, T = [-[r]x; I], b = [a_p + w x (w x r); 0], the rotational acceleration y
     ! solves T^T m6 T y = T^T (rhs - m6 b). a_p is pin_acc, the pin acceleration (zero when
-    ! absent: a fixed pin); a moving pin (a CoupledPinned rod) thus loads the rotation with the
-    ! inertia of its acceleration.
+    ! absent: a fixed pin); a moving pin (a CoupledPinned rod or body) thus loads the rotation with
+    ! the inertia of its acceleration.
     REAL(wp), INTENT(IN), OPTIONAL :: pin_arm(3), pin_acc(3)
     ! m6_out/rhs_out: return the assembled system m6 x = rhs instead of solving it (the pinned-
     ! child group solve of mb_group_solve); acc and alpha are then zero
@@ -19566,7 +19600,7 @@ CONTAINS
       CALL solve_sym3(MATMUL(TRANSPOSE(t63), MATMUL(m6, t63)), MATMUL(TRANSPOSE(t63), rhs - MATMUL(m6, b6)), y, ok)
       IF (.NOT. ok) THEN
         ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: pinned rod rotational inertia is singular'
+        ErrMsg = 'CableDyn_DeckDriver: pinned rod or body rotational inertia is singular'
         RETURN
       END IF
       alpha = y
@@ -23263,17 +23297,116 @@ CONTAINS
 
   SUBROUTINE save_host_end_rigid(rigid, hk)
     !! Record the t + dt kinematics of the host-driven bodies (columns: r, v, a, omega, alpha,
-    !! rot_mat) before sub-stepping moves them along the interpolated host path.
+    !! rot_mat; rows 25 to 33 the pin, pin velocity and pin acceleration of a host-pinned body)
+    !! before sub-stepping moves them along the interpolated host path.
     TYPE(RigidBodyState), INTENT(IN) :: rigid(:)
     REAL(wp), ALLOCATABLE, INTENT(INOUT) :: hk(:, :)
     INTEGER :: ib
     IF (ALLOCATED(hk)) DEALLOCATE (hk)
-    ALLOCATE (hk(24, SIZE(rigid)))
+    ALLOCATE (hk(33, SIZE(rigid)))
     DO ib = 1, SIZE(rigid)
       hk(:, ib) = [rigid(ib)%r, rigid(ib)%v, rigid(ib)%a, rigid(ib)%omega, rigid(ib)%alpha, &
-                   RESHAPE(rigid(ib)%rot_mat, [9])]
+                   RESHAPE(rigid(ib)%rot_mat, [9]), rigid(ib)%pin, rigid(ib)%pin_v, rigid(ib)%pin_a]
     END DO
   END SUBROUTINE save_host_end_rigid
+
+  SUBROUTINE interp_host_body_pins(rigid, hk, s)
+    !! Place the node of every host-pinned body at fraction s of its step and move the body's
+    !! reference point with it (body_snap_pinned); the body keeps its own rotation. Position,
+    !! velocity and acceleration are each linear between the step-start pin (pin0, the committed
+    !! reference-point motion) and the t + dt host values in hk (rows 25 to 33), as for the pins
+    !! of host-pinned rods (interp_host_pins); s = 1 restores the t + dt pin.
+    TYPE(RigidBodyState), INTENT(INOUT) :: rigid(:)
+    REAL(wp), INTENT(IN) :: hk(:, :), s
+    INTEGER :: ib
+    DO ib = 1, SIZE(rigid)
+      IF (.NOT. rigid(ib)%is_host_pinned) CYCLE
+      IF (s >= CD_ONE) THEN
+        rigid(ib)%pin = hk(25:27, ib)
+        rigid(ib)%pin_v = hk(28:30, ib)
+        rigid(ib)%pin_a = hk(31:33, ib)
+      ELSE
+        rigid(ib)%pin = rigid(ib)%pin0 + s*(hk(25:27, ib) - rigid(ib)%pin0)
+        rigid(ib)%pin_v = rigid(ib)%pin0_v + s*(hk(28:30, ib) - rigid(ib)%pin0_v)
+        rigid(ib)%pin_a = rigid(ib)%pin0_a + s*(hk(31:33, ib) - rigid(ib)%pin0_a)
+      END IF
+      CALL body_snap_pinned(rigid(ib))
+    END DO
+  END SUBROUTINE interp_host_body_pins
+
+  SUBROUTINE body_snap_pinned(body)
+    !! A host-pinned body keeps its reference point on the host node: its position, velocity and
+    !! acceleration are the node's (pin, pin_v, pin_a). Every other body is left unchanged.
+    TYPE(RigidBodyState), INTENT(INOUT) :: body
+    IF (.NOT. body%is_host_pinned) RETURN
+    body%r = body%pin
+    body%v = body%pin_v
+    body%a = body%pin_a
+  END SUBROUTINE body_snap_pinned
+
+  SUBROUTINE set_body_pin_start(body)
+    !! Record the committed reference-point motion of a host-pinned body as the pin kinematics its
+    !! next step starts from (RigidBodyState%pin0). The checkpoint mirror carries it (r, v, a),
+    !! so a restored run takes the same values bit for bit.
+    TYPE(RigidBodyState), INTENT(INOUT) :: body
+    body%pin0 = body%r
+    body%pin0_v = body%v
+    body%pin0_a = body%a
+  END SUBROUTINE set_body_pin_start
+
+  SUBROUTINE pinned_body_estimate_terms(body, opts, time, mass6, k6, ErrStat, ErrMsg)
+    !! The sub-step estimate terms of a host-pinned body (step_rigid6_system), whose rotation is
+    !! its only degree of freedom: mass6(1:3) = 0 (the host prescribes the translation) and
+    !! mass6(4:6) the diagonal of its rotational inertia about the pin (its reference point),
+    !! I_p = R J R^T - m [c]x [c]x for the CG at c = R cg; k6(4:6) the diagonal of its swing
+    !! stiffness about the pin. Vertical loads f_i at p_i from the pin that turn with the body
+    !! have the rotational stiffness K = -sum_i [f_i]x [p_i]x: the weight -m g e3 at c and the
+    !! buoyancy rhoW g phi V e3 at the centre of buoyancy (|K_kk| taken, so an upright buoyant
+    !! body counts too). The pin acceleration a_p loads the body with -m a_p at c, a stiffness
+    !! of at most |a_p| m |c|, |a_p| the larger of the step-start and end-of-step host values.
+    !! The buoyancy is taken at the larger of the body at its step-start pin and at the t + dt
+    !! pin the host has placed (a straight pin path crosses the surface monotonically; see
+    !! pinned_swing_omega2). The waterplane restoring C44/C55 is added as for a free body.
+    TYPE(RigidBodyState), INTENT(INOUT) :: body
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(IN) :: time
+    REAL(wp), INTENT(OUT) :: mass6(6), k6(6)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: c(3), cb(3), ip(3, 3), kg(3, 3), kd(3), phi, a_pin, r_end(3)
+    INTEGER :: k, pose
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    c = MATMUL(body%rot_mat, body%cg)
+    cb = MATMUL(body%rot_mat, body%cb)
+    ip = CD_ZERO
+    DO k = 1, 3
+      ip(k, k) = body%inertia(k)
+    END DO
+    ip = MATMUL(body%rot_mat, MATMUL(ip, TRANSPOSE(body%rot_mat))) - body%mass*MATMUL(skew3(c), skew3(c))
+    mass6(1:3) = CD_ZERO
+    DO k = 1, 3
+      mass6(3 + k) = ip(k, k)
+    END DO
+    k6 = [CD_ZERO, CD_ZERO, CD_ZERO, body%c44, body%c55, CD_ZERO]
+    kd = CD_ZERO
+    r_end = body%r
+    DO pose = 1, 2
+      ! pose 1: the body at its step-start pin (the state is put back exactly after it)
+      IF (pose == 1) body%r = body%pin0
+      CALL rigid6_wet_fraction(body, opts, time, phi, ErrStat, ErrMsg)
+      body%r = r_end
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      kg = -MATMUL(skew3([CD_ZERO, CD_ZERO, -body%mass*opts%g]), skew3(c)) - &
+           MATMUL(skew3([CD_ZERO, CD_ZERO, opts%rhoW*phi*body%vol*opts%g]), skew3(cb))
+      DO k = 1, 3
+        kd(k) = MAX(kd(k), ABS(kg(k, k)))
+      END DO
+    END DO
+    a_pin = MAX(NORM2(body%pin_a), NORM2(body%pin0_a))
+    k6(4:6) = k6(4:6) + kd + a_pin*body%mass*NORM2(c)
+  END SUBROUTINE pinned_body_estimate_terms
 
   SUBROUTINE interp_host_rigid(rigid, start, hk, s)
     !! Place every host-driven body at fraction s of its step: position, velocity, acceleration
@@ -24653,7 +24786,9 @@ CONTAINS
       rigid(ir)%body_id = bodies(i)%id
       rigid(ir)%body_index = i
       rigid(ir)%is_prescribed = bodies(i)%host_coupled
-      ! a host-driven body starts at rest in the host's Init pose; its a/alpha are the host's
+      rigid(ir)%is_host_pinned = bodies(i)%host_pinned
+      ! a host-driven body starts at rest in the host's Init pose; its a/alpha are the host's (a
+      ! host-pinned body solves its own at the first step, like a free body)
       rigid(ir)%accel_valid = bodies(i)%host_coupled
       rigid(ir)%r_ref = bodies(i)%pos
       rigid(ir)%r = bodies(i)%pos
@@ -24678,6 +24813,11 @@ CONTAINS
       rigid(ir)%ext_f = bodies(i)%ext_f
       rigid(ir)%ext_blin = bodies(i)%ext_blin
       rigid(ir)%ext_bquad = bodies(i)%ext_bquad
+      ! a host-pinned body starts its first step from its pin at rest in its start pose
+      IF (rigid(ir)%is_host_pinned) THEN
+        rigid(ir)%pin = rigid(ir)%r
+        CALL set_body_pin_start(rigid(ir))
+      END IF
       CALL collect_body_point_indices(points, bodies(i)%id, rigid(ir)%point_indices)
       no_pts = .FALSE.
       IF (PRESENT(allow_no_points)) no_pts = allow_no_points
@@ -24804,7 +24944,8 @@ CONTAINS
                                          ErrMsg, bathymetry, points_only, jac_check_err, ext_pt, ext_fm, &
                                          end_force_a, quiet, skipped, ext_km, ext_rot)
     !! Static equilibrium of the free objects of a deck: free Rigid6 bodies (six DOFs: position
-    !! and a rotation-vector increment on SO(3)), free rods (position and the two rotations
+    !! and a rotation-vector increment on SO(3); a CoupledPinned body holds its position at its
+    !! host node and balances its moment about it), free rods (position and the two rotations
     !! normal to the axis; the rod is symmetric about it) and, jointly with them, the
     !! Free/Connect points. With points_only the bodies and rods are held and only the points
     !! move (the point initial condition, solve_point_equilibrium); otherwise the bodies and rods
@@ -24899,9 +25040,9 @@ CONTAINS
     INTEGER :: ibp
     REAL(wp), ALLOCATABLE :: lsc(:), base_r(:, :), base_rot(:, :, :), e1(:, :), e2(:, :)
     REAL(wp), ALLOCATABLE :: x(:), r(:), r_try(:), x_try(:), jac(:, :), a(:, :), g(:), dx(:), dxn(:)
-    REAL(wp), ALLOCATABLE :: dxc(:), jtry(:, :), rmask(:), base_rot0(:, :, :), e1_0(:, :), e2_0(:, :)
+    REAL(wp), ALLOCATABLE :: dxc(:), jtry(:, :), rmask(:), base_rot0(:, :, :), e1_0(:, :), e2_0(:, :), hold(:)
     INTEGER :: phase, kbad
-    LOGICAL :: unstable, silent
+    LOGICAL :: unstable, silent, pinned_body
     TYPE(LineStaticCache), ALLOCATABLE :: lc(:)
     LOGICAL, ALLOCATABLE :: lmove(:)
     TYPE(DeckOptions) :: opts_calm
@@ -25081,6 +25222,17 @@ CONTAINS
     ALLOCATE (x(n), r(n), r_try(n), x_try(n), jac(n, n), a(n, n), g(n), dx(n), dxn(n), dxc(n), jtry(n, n))
     ALLOCATE (rmask(n))
     rmask = CD_ONE
+    ! a CoupledPinned body turns about its host node, held at its initial pose: its translation
+    ! is held (the force rows carry the host's reaction, not a residual) and its three rotations
+    ! balance the moment about the node (min_norm_step)
+    pinned_body = .FALSE.
+    DO k = 1, nobj
+      IF (okind(k) /= OBJ_BODY) CYCLE
+      IF (.NOT. bodies(idx(k))%host_pinned) CYCLE
+      rmask(off(k) + 1:off(k) + 3) = CD_ZERO
+      pinned_body = .TRUE.
+    END DO
+    hold = rmask
     x = CD_ZERO
     IF (PRESENT(jac_check_err)) THEN
       CALL jacobian_check(jac_check_err)
@@ -25120,7 +25272,11 @@ CONTAINS
           ! rejected one (a warm line solve that cannot follow a long trial step counts as rejected)
           dxn = -r
           rnorm_try = rnorm
-          CALL CD_Solve_Dense_As_Banded(jac, dxn, info, lin_msg)
+          IF (pinned_body) THEN
+            CALL min_norm_step(jac, dxn, info)
+          ELSE
+            CALL CD_Solve_Dense_As_Banded(jac, dxn, info, lin_msg)
+          END IF
           IF (info == CD_LINALG_OK .AND. ALL(IEEE_IS_FINITE(dxn))) THEN
             IF (trust < CD_ZERO) trust = MIN(NORM2(dxn), step_cap)
             DO inner = 1, 8
@@ -25145,7 +25301,11 @@ CONTAINS
                   CALL analytic_jacobian(x_try, jtry, ok)
                   IF (ok) THEN
                     dxc = -r_try
-                    CALL CD_Solve_Dense_As_Banded(jtry, dxc, info, lin_msg)
+                    IF (pinned_body) THEN
+                      CALL min_norm_step(jtry, dxc, info)
+                    ELSE
+                      CALL CD_Solve_Dense_As_Banded(jtry, dxc, info, lin_msg)
+                    END IF
                     ok = info == CD_LINALG_OK
                     IF (ok) ok = ALL(IEEE_IS_FINITE(dxc))
                     IF (ok) ok = NORM2(dxc) <= 0.5_wp*NORM2(dxn)
@@ -25210,7 +25370,7 @@ CONTAINS
         END IF
       END DO
       IF (phase == 2) THEN
-        rmask = CD_ONE
+        rmask = hold
         phase = 3
         CYCLE
       END IF
@@ -25649,6 +25809,29 @@ CONTAINS
       END DO
     END SUBROUTINE mask_jacobian
 
+    SUBROUTINE min_norm_step(jm, step, info_s)
+      !! The Newton step of a solve with a CoupledPinned body, J step = -r (step holds -r on
+      !! entry): the minimum-norm Gauss-Newton step (J^T J + 1e-10 D) step = J^T (-r), D the
+      !! diagonal of J^T J floored at 1e-12 of its largest entry. Such a body may turn neutrally
+      !! (its lines and its CG on one axis through the node: the spin about the axis meets no
+      !! load, so J has that spin as a null vector); J^T r has no component along it, so the step
+      !! does not spin the body, where an LU solve of the near-singular J would (and the rotation
+      !! cap of the step would then leave the useful part of the step negligible). For a regular J
+      !! the step is the Newton step.
+      REAL(wp), INTENT(IN) :: jm(:, :)
+      REAL(wp), INTENT(INOUT) :: step(:)
+      INTEGER, INTENT(OUT) :: info_s
+      REAL(wp) :: nm(SIZE(step), SIZE(step)), dm
+      INTEGER :: ii
+      nm = MATMUL(TRANSPOSE(jm), jm)
+      step = MATMUL(TRANSPOSE(jm), step)
+      dm = MAX(MAXVAL([(nm(ii, ii), ii=1, SIZE(step))]), TINY(CD_ONE))
+      DO ii = 1, SIZE(step)
+        nm(ii, ii) = nm(ii, ii) + 1.0e-10_wp*MAX(nm(ii, ii), 1.0e-12_wp*dm)
+      END DO
+      CALL CD_Solve_Dense_As_Banded(nm, step, info_s, lin_msg)
+    END SUBROUTINE min_norm_step
+
     LOGICAL FUNCTION equilibrium_stable(kb) RESULT(stable)
       !! Whether the converged equilibrium x is statically stable: the symmetric part of the
       !! stiffness -dR/dx (analytic Jacobian, scaled unknowns: a congruence, so definiteness is
@@ -25666,6 +25849,10 @@ CONTAINS
       ErrMsg = ''
       IF (.NOT. gd) RETURN
       s = -0.5_wp*(jtry + TRANSPOSE(jtry))
+      ! a held unknown (the node translation of a CoupledPinned body) is no mode of the solve
+      DO ii = 1, n
+        IF (rmask(ii) <= CD_ZERO) s(ii, ii) = CD_ONE
+      END DO
       shift = CD_ZERO
       DO ii = 1, n
         shift = MAX(shift, ABS(s(ii, ii)))
@@ -26511,10 +26698,12 @@ CONTAINS
   SUBROUTINE CD_Init_Deck_Aggregate_Rigid6(bodies, points, opts, rt, ErrStat, ErrMsg, ptfm_init)
     !! Populate the opaque Rigid6 runtime for the coupled aggregate: build the body states and
     !! retain the deck options + points the per-step marcher needs (the aggregate keeps neither).
-    !! Coupled/Vessel bodies become host nodes (one per body, in deck BODY order) at their
-    !! reference point; ptfm_init (the host's initial platform displacement) moves them rigidly
-    !! with the platform (reference pose included), and the body frame in platform axes, O0 R,
-    !! then follows the host orientation.
+    !! Coupled/Vessel and CoupledPinned/VesselPinned bodies become host nodes (one per body, in
+    !! deck BODY order) at their reference point; ptfm_init (the host's initial platform
+    !! displacement) moves a Coupled body rigidly with the platform (reference pose included), and
+    !! the body frame in platform axes, O0 R, then follows the host orientation. A CoupledPinned
+    !! body takes only the position of its node and turns about it; its PtfmInit pose was set on
+    !! the deck body before the static solve (apply_ptfm_host_bodies).
     TYPE(DeckBody), INTENT(IN) :: bodies(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -26535,14 +26724,14 @@ CONTAINS
     rt%host_o0(3, 3) = CD_ONE
     IF (PRESENT(ptfm_init)) rt%host_o0 = ptfm_zyx_dcm(ptfm_init(4:6))
     mt = TRANSPOSE(rt%host_o0)
-    nh = COUNT(rt%rigid%is_prescribed)
+    nh = COUNT(rt%rigid%is_prescribed .OR. rt%rigid%is_host_pinned)
     ALLOCATE (rt%host_body(nh), rt%host_rrel(3, 3, nh))
     k = 0
     DO ib = 1, SIZE(rt%rigid)
-      IF (.NOT. rt%rigid(ib)%is_prescribed) CYCLE
+      IF (.NOT. (rt%rigid(ib)%is_prescribed .OR. rt%rigid(ib)%is_host_pinned)) CYCLE
       k = k + 1
       rt%host_body(k) = ib
-      IF (PRESENT(ptfm_init)) THEN
+      IF (PRESENT(ptfm_init) .AND. rt%rigid(ib)%is_prescribed) THEN
         rt%rigid(ib)%r_ref = ptfm_init(1:3) + MATMUL(mt, rt%rigid(ib)%r_ref)
         rt%rigid(ib)%r = rt%rigid(ib)%r_ref
         rt%rigid(ib)%rot_ref = MATMUL(mt, rt%rigid(ib)%rot_ref)
@@ -26556,30 +26745,40 @@ CONTAINS
   END SUBROUTINE CD_Init_Deck_Aggregate_Rigid6
 
   PURE INTEGER FUNCTION CD_Rigid6_NHost(rt) RESULT(n)
-    !! Number of host-driven (Coupled/Vessel) bodies, i.e. the body host nodes (0 if unpopulated).
+    !! Number of host-driven (Coupled/Vessel and CoupledPinned/VesselPinned) bodies, i.e. the body
+    !! host nodes (0 if unpopulated).
     TYPE(CD_Rigid6RuntimeType), INTENT(IN) :: rt
     n = 0
     IF (ALLOCATED(rt%host_body)) n = SIZE(rt%host_body)
   END FUNCTION CD_Rigid6_NHost
 
   PURE LOGICAL FUNCTION CD_Rigid6_AllHost(rt) RESULT(all_host)
-    !! Whether every body of the runtime is host-driven (no body is integrated).
+    !! Whether every body of the runtime is host-prescribed (no body is integrated; a
+    !! CoupledPinned body integrates its rotation).
     TYPE(CD_Rigid6RuntimeType), INTENT(IN) :: rt
-    all_host = CD_Rigid6_NBodies(rt) > 0 .AND. CD_Rigid6_NHost(rt) == CD_Rigid6_NBodies(rt)
+    all_host = .FALSE.
+    IF (CD_Rigid6_NBodies(rt) > 0) all_host = ALL(rt%rigid%is_prescribed)
   END FUNCTION CD_Rigid6_AllHost
 
   SUBROUTINE CD_Rigid6_SetHostKinematics(rt, position, velocity, acceleration, ErrStat, ErrMsg, orientation, &
-                                         angular_velocity, angular_acceleration)
+                                         angular_velocity, angular_acceleration, step_start)
     !! Impose the host node kinematics (reference-point position/velocity/acceleration, the host
     !! orientation and angular rates, all global; arrays shaped (3[,3], NHost)) on every
     !! Coupled/Vessel body: R = O^T (O0 R0). Without an orientation the Init orientation is held;
-    !! without angular rates they are zero. Validates every shape before any change.
+    !! without angular rates they are zero. A CoupledPinned body takes the node translation as
+    !! the motion of its reference point and ignores the orientation and angular rates: it keeps
+    !! its own rotation (body_snap_pinned). Validates every shape before any change.
+    !!
+    !! step_start: the kinematics are those of the committed time (a transfer that does not
+    !! advance), not the t + dt input of a coming step; the next step of a CoupledPinned body
+    !! then starts from them (RigidBodyState%pin0). Default .FALSE.
     TYPE(CD_Rigid6RuntimeType), INTENT(INOUT) :: rt
     REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: step_start
     INTEGER :: k, ib, nh
     REAL(wp) :: o(3, 3)
 
@@ -26608,6 +26807,16 @@ CONTAINS
     END IF
     DO k = 1, nh
       ib = rt%host_body(k)
+      IF (rt%rigid(ib)%is_host_pinned) THEN
+        rt%rigid(ib)%pin = position(:, k)
+        rt%rigid(ib)%pin_v = velocity(:, k)
+        rt%rigid(ib)%pin_a = acceleration(:, k)
+        CALL body_snap_pinned(rt%rigid(ib))
+        IF (PRESENT(step_start)) THEN
+          IF (step_start) CALL set_body_pin_start(rt%rigid(ib))
+        END IF
+        CYCLE
+      END IF
       o = rt%host_o0
       IF (PRESENT(orientation)) o = orientation(:, :, k)
       rt%rigid(ib)%rot_mat = MATMUL(TRANSPOSE(o), rt%host_rrel(:, :, k))
@@ -26628,7 +26837,9 @@ CONTAINS
   SUBROUTINE CD_Rigid6_GetHostKinematics(rt, k, position, velocity, acceleration, orientation, angular_velocity, &
                                          angular_acceleration)
     !! The committed kinematics of host node k (the k-th Coupled/Vessel body's reference point)
-    !! and the host orientation O = (O0 R0) R^T it implies.
+    !! and the host orientation O = (O0 R0) R^T it implies. A CoupledPinned body implies no host
+    !! orientation or angular rates: its node reports the Init orientation and zero rates, which
+    !! CD_Rigid6_SetHostKinematics ignores for it.
     TYPE(CD_Rigid6RuntimeType), INTENT(IN) :: rt
     INTEGER, INTENT(IN) :: k
     REAL(wp), INTENT(OUT) :: position(3), velocity(3), acceleration(3), orientation(3, 3)
@@ -26652,6 +26863,10 @@ CONTAINS
     position = rt%rigid(ib)%r
     velocity = rt%rigid(ib)%v
     acceleration = rt%rigid(ib)%a
+    IF (rt%rigid(ib)%is_host_pinned) THEN
+      orientation = rt%host_o0
+      RETURN
+    END IF
     orientation = MATMUL(rt%host_rrel(:, :, k), TRANSPOSE(rt%rigid(ib)%rot_mat))
     angular_velocity = rt%rigid(ib)%omega
     angular_acceleration = rt%rigid(ib)%alpha
@@ -26690,16 +26905,28 @@ CONTAINS
     !! seabed contact and external loads -- the loads rigid6_body_acceleration integrates for a
     !! free body -- minus the rigid-body and added-mass inertia M a (CG offset, velocity and
     !! gyroscopic terms included) at the host-prescribed acceleration.
-    TYPE(CD_SystemType), INTENT(IN) :: system
-    TYPE(CD_Rigid6RuntimeType), INTENT(IN) :: rt
+    !!
+    !! A CoupledPinned body returns a force and no moment (MoorDyn-F's coupled pinned body): the
+    !! load it exerts on its node, its net load less its inertia, F - (m + m_a) a_p
+    !! - m (alpha x c + w x (w x c)) for the CG at c (pin_load of rigid_coupled_acceleration). As
+    !! for a CoupledPinned rod (CD_Rod_HostWrench) the node acceleration a_p is the reference-point
+    !! acceleration of the body state (the host's, an output probe's included), the rotation and
+    !! angular velocity are the committed ones, the angular acceleration is solved again for a_p
+    !! (rigid6_body_acceleration at dt = 0), and the attached lines' end-node inertia moves to the
+    !! re-solved end accelerations with their coupled mass block at a frozen interior. The force
+    !! thereby depends on the checkpointed body state and the line states only.
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    TYPE(CD_Rigid6RuntimeType), INTENT(INOUT) :: rt
     REAL(wp), INTENT(IN) :: loads(:, :)
     INTEGER, INTENT(IN) :: k
     REAL(wp), INTENT(OUT) :: force(3), moment(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: ib, ip, pidx, base, j
+    INTEGER :: ib, ip, pidx, base, j, n, es
     REAL(wp) :: f_env(3), mass_eff, drag3(3, 3), f_h(3), m_h(3), cg6(6, 6), f_bias(3), m_bias(3)
     REAL(wp) :: f_sb(3), m_sb(3), load_dv(6, 6), f_ext(3), arm(3), ig(3, 3), m6(6, 6), acc6(6), w6(6)
+    REAL(wp) :: acc(3), alpha(3)
+    CHARACTER(1024) :: em
 
     force = CD_ZERO
     moment = CD_ZERO
@@ -26709,6 +26936,27 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'CD_Rigid6_HostWrench: host node index out of range'); RETURN
     END IF
     ib = rt%host_body(k)
+    IF (rt%rigid(ib)%is_host_pinned) THEN
+      n = system%n_system_coupled_dof
+      IF (3*SIZE(loads, 2) /= n .OR. SIZE(loads, 1) /= 3) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Rigid6_HostWrench: load array does not cover the coupled points'); RETURN
+      END IF
+      ! the step workspace serves as scratch between steps (a step refills it before use)
+      CALL ensure_rigid_step_workspace(rt%work, n, SIZE(rt%rigid), SIZE(system%points))
+      rt%work%loads(1:n) = RESHAPE(loads, [n])
+      CALL CD_Get_System_CoupledMotion(system, rt%work%q(1:n), rt%work%v(1:n), rt%work%a(1:n), es, em)
+      ! the end-node inertia moves with the line interior held (an output evaluation keeps the
+      ! committed interior state, accelerations included)
+      IF (es == CD_SYSTEM_OK) CALL CD_Calc_System_CoupledAccelDerivative(system, rt%work%dload_da, es, em, &
+                                                                         frozen_interior=.TRUE.)
+      IF (es /= CD_SYSTEM_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'CD_Rigid6_HostWrench: pinned-body line query failed: '//TRIM(em)); RETURN
+      END IF
+      CALL rigid6_body_acceleration(system, rt%points, rt%opts, rt%rigid(ib), CD_ZERO, CD_ZERO, &
+                                    [CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO], rt%work, ib, acc, &
+                                    alpha, ErrStat, ErrMsg, pin_load=force)
+      RETURN
+    END IF
     CALL rigid6_environment_force(rt%rigid(ib), rt%opts, CD_ZERO, f_env, mass_eff, drag3, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     CALL rigid6_hydrostatics(rt%rigid(ib), rt%opts, CD_ZERO, f_h, m_h, ErrStat, ErrMsg)
@@ -27692,6 +27940,15 @@ CONTAINS
       rt%rigid(ib)%rot_mat = RESHAPE(states(k + 16:k + 24), [3, 3])
       rt%rigid(ib)%eta = CD_Log_SO3(MATMUL(rt%rigid(ib)%rot_mat, TRANSPOSE(rt%rigid(ib)%rot_ref)))
       rt%rigid(ib)%accel_valid = .TRUE.
+      ! A CoupledPinned body's node is its reference point, whose motion the mirror carries: the
+      ! pin and the step-start pin are that motion, as the continuing run has them (the pin is
+      ! replaced by the host transfer before the next step or output evaluation).
+      IF (rt%rigid(ib)%is_host_pinned) THEN
+        rt%rigid(ib)%pin = rt%rigid(ib)%r
+        rt%rigid(ib)%pin_v = rt%rigid(ib)%v
+        rt%rigid(ib)%pin_a = rt%rigid(ib)%a
+        CALL set_body_pin_start(rt%rigid(ib))
+      END IF
     END DO
   END SUBROUTINE CD_Rigid6_Set_States
 
@@ -27699,7 +27956,8 @@ CONTAINS
                                 work, bathymetry, host_mask, host_q, host_v, host_a, host_start)
     !! Advance Rigid6 bodies and lines from time - dt to time: step_rigid6_once, sub-cycled so
     !! that the explicit central-difference body position resolves the stiffest body-mooring
-    !! mode (rigid_substep_count). converged is the AND and stalled the OR over the sub-steps.
+    !! mode and the swing of a CoupledPinned body about its node (rigid_substep_count). converged
+    !! is the AND and stalled the OR over the sub-steps.
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -27718,12 +27976,13 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: host_mask(:)
     REAL(wp), INTENT(IN), OPTIONAL :: host_q(:), host_v(:), host_a(:)
     ! host_start: the step-start state of the host-driven (is_prescribed) bodies, which hold their
-    ! t + dt pose on entry; sub-steps then move them along the interpolated host path
+    ! t + dt pose on entry; sub-steps then move them along the interpolated host path (a
+    ! host-pinned body carries its step-start pin itself, RigidBodyState%pin0)
     TYPE(RigidBodyState), INTENT(IN), OPTIONAL :: host_start(:)
     REAL(wp), ALLOCATABLE :: q0h(:), v0h(:), a0h(:)
     INTEGER :: ib, ip, nsub, isub, it
     REAL(wp), ALLOCATABLE :: hk_end(:, :)
-    LOGICAL :: conv_s, stall_s
+    LOGICAL :: conv_s, stall_s, host_pins
     REAL(wp) :: omega2, mass6(6), k6c(6)
 
     converged = .TRUE.
@@ -27739,12 +27998,22 @@ CONTAINS
           att_base(ip) = system_point_base(system, points(rigid(ib)%point_indices(ip))%id)
           att_arm(:, ip) = MATMUL(rigid(ib)%rot_mat, points(rigid(ib)%point_indices(ip))%body_offset)
         END DO
-        ! structural mass and inertia plus the submerged body's translational added mass
-        mass6(1:3) = rigid(ib)%mass
-        IF (rigid(ib)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*rigid(ib)%vol*MAX(CD_ZERO, rigid(ib)%ca)
-        mass6(4:6) = global_inertia_diag(rigid(ib)%rot_mat, rigid(ib)%inertia)
-        ! hydrostatic restoring plus the seabed contact that acts within the step
-        k6c = [CD_ZERO, CD_ZERO, rigid(ib)%c33, rigid(ib)%c44, rigid(ib)%c55, CD_ZERO]
+        IF (rigid(ib)%is_host_pinned) THEN
+          ! a host-pinned body only turns about its reference point: its line ends act through
+          ! their arms on its rotational inertia about the pin (the translational entries stay
+          ! zero, so rigid_omega2_estimate skips them), and its weight, buoyancy and pin
+          ! acceleration make it a compound pendulum (pinned_body_estimate_terms)
+          CALL pinned_body_estimate_terms(rigid(ib), opts, time - dt, mass6, k6c, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        ELSE
+          ! structural mass and inertia plus the submerged body's translational added mass
+          mass6(1:3) = rigid(ib)%mass
+          IF (rigid(ib)%r(3) < CD_ZERO) mass6(1:3) = mass6(1:3) + opts%rhoW*rigid(ib)%vol*MAX(CD_ZERO, rigid(ib)%ca)
+          mass6(4:6) = global_inertia_diag(rigid(ib)%rot_mat, rigid(ib)%inertia)
+          ! hydrostatic restoring
+          k6c = [CD_ZERO, CD_ZERO, rigid(ib)%c33, rigid(ib)%c44, rigid(ib)%c55, CD_ZERO]
+        END IF
+        ! plus the seabed contact that acts within the step
         CALL rigid6_contact_stiffness(rigid(ib), opts, time - dt, dt, k6c, ErrStat, ErrMsg, bathymetry)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
         omega2 = MAX(omega2, rigid_omega2_estimate(system, att_base, att_arm, mass6, k6c))
@@ -27753,10 +28022,23 @@ CONTAINS
     nsub = rigid_substep_count(omega2, dt)
     CALL host_substep_start(system, nsub, q0h, v0h, a0h, ErrStat, ErrMsg, host_mask)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    ! A host-pinned body without a committed acceleration (the first step) takes its starting
+    ! acceleration with its pin at the step start: the host has already placed the pin at
+    ! t + dt, so the bodies go back to their step-start pin (pin0) for it, together with every
+    ! other body without one, and return to t + dt after it (see step_rod_system).
+    host_pins = ANY(rigid%is_host_pinned)
+    IF (ANY(rigid%is_host_pinned .AND. .NOT. rigid%accel_valid)) THEN
+      CALL save_host_end_rigid(rigid, hk_end)
+      CALL interp_host_body_pins(rigid, hk_end, CD_ZERO)
+      CALL rigid_start_accelerations(system, points, opts, rigid, time - dt, work, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      CALL interp_host_body_pins(rigid, hk_end, CD_ONE)
+    END IF
     DO isub = 1, nsub
-      IF (nsub > 1 .AND. PRESENT(host_start)) THEN
+      IF (nsub > 1 .AND. (PRESENT(host_start) .OR. host_pins)) THEN
         IF (isub == 1) CALL save_host_end_rigid(rigid, hk_end)
-        CALL interp_host_rigid(rigid, host_start, hk_end, REAL(isub, wp)/REAL(nsub, wp))
+        IF (PRESENT(host_start)) CALL interp_host_rigid(rigid, host_start, hk_end, REAL(isub, wp)/REAL(nsub, wp))
+        IF (host_pins) CALL interp_host_body_pins(rigid, hk_end, REAL(isub, wp)/REAL(nsub, wp))
       END IF
       IF (.NOT. PRESENT(host_mask)) THEN
         CALL step_rigid6_once(system, points, opts, rigid, time - dt + REAL(isub, wp)*dt/REAL(nsub, wp), &
@@ -27777,6 +28059,10 @@ CONTAINS
       n_iter = n_iter + it
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
+    ! the committed pin of a host-pinned body starts its next step
+    DO ib = 1, SIZE(rigid)
+      IF (rigid(ib)%is_host_pinned) CALL set_body_pin_start(rigid(ib))
+    END DO
   END SUBROUTINE step_rigid6_system
 
   SUBROUTINE step_rigid6_once(system, points, opts, rigid, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
@@ -27795,7 +28081,9 @@ CONTAINS
     !! never displaced from the positions the lines were solved with. Position-dependent body
     !! loads (hydrostatic restoring, seabed springs) act explicitly: stable for
     !! dt*SQRT(k/m) < 2. The Body<N> point records are finally set to the corrected motion (the
-    !! same map a checkpoint restore applies).
+    !! same map a checkpoint restore applies). A host-pinned (CoupledPinned) body advances its
+    !! rotation only: its reference point follows the host node (body_snap_pinned) and the
+    !! corrector solves its angular acceleration about it.
     TYPE(CD_SystemType), INTENT(INOUT) :: system
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -27834,22 +28122,8 @@ CONTAINS
     END DO
     ! 0. a body without a committed acceleration (the first step) gets the instantaneous one
     ! from the current line loads, so the predictor starts from the actual a_0
-    IF (.NOT. ALL(rigid%accel_valid)) THEN
-      CALL rigid_start_loads(system, work%q(1:system%n_system_coupled_dof), work%v(1:system%n_system_coupled_dof), &
-                             work%a(1:system%n_system_coupled_dof), work%loads(1:system%n_system_coupled_dof), &
-                             work%dload_da, ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      DO ib = 1, SIZE(rigid)
-        IF (rigid(ib)%accel_valid) CYCLE
-        CALL rigid6_body_acceleration(system, points, opts, rigid(ib), time - dt, CD_ZERO, &
-                                      [CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO], work, ib, &
-                                      acc, alpha, ErrStat, ErrMsg, bathymetry)
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        rigid(ib)%a = acc
-        rigid(ib)%alpha = alpha
-        rigid(ib)%accel_valid = .TRUE.
-      END DO
-    END IF
+    CALL rigid_start_accelerations(system, points, opts, rigid, time - dt, work, ErrStat, ErrMsg, bathymetry)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
     work%old_rigid = rigid
     work%old_points = system%points
     CALL CD_Get_System_CoupledMotion(system, work%q(1:system%n_system_coupled_dof), &
@@ -27863,7 +28137,8 @@ CONTAINS
     CALL overlay_host_motion(work%q(1:system%n_system_coupled_dof), work%v(1:system%n_system_coupled_dof), &
                              work%a(1:system%n_system_coupled_dof), host_mask, host_q, host_v, host_a)
     ! 1. predictor (previous acceleration held) and the line step to t + dt; a host-driven
-    ! body already carries its t + dt state
+    ! body already carries its t + dt state, and a host-pinned body advances its rotation only
+    ! (its reference point stays on the t + dt pin the host has placed)
     DO ib = 1, SIZE(rigid)
       IF (rigid(ib)%is_prescribed) CYCLE
       CALL CD_Rigid_Advance_Newmark(rigid(ib)%r, rigid(ib)%v, rigid(ib)%rot_mat, rigid(ib)%omega, rigid(ib)%a, &
@@ -27875,6 +28150,7 @@ CONTAINS
         ErrMsg = 'CableDyn_DeckDriver: Rigid6 finite-rotation update failed: '//TRIM(em)
         RETURN
       END IF
+      CALL body_snap_pinned(rigid(ib))
       rigid(ib)%eta = CD_Log_SO3(MATMUL(rigid(ib)%rot_mat, TRANSPOSE(rigid(ib)%rot_ref)))
     END DO
     CALL scatter_rigid6_point_motion(system, points, rigid, work%q(1:system%n_system_coupled_dof), &
@@ -27934,6 +28210,8 @@ CONTAINS
     END IF
     DO ib = 1, SIZE(rigid)
       IF (rigid(ib)%is_prescribed) CYCLE
+      ! (a host-pinned body: old_rigid%a is the t + dt pin acceleration, so the translational
+      ! velocity change dv0 + gamma dt a_p of the reduced solve is zero, as it is)
       dv0(1:3) = -CD_RIGID_NEWMARK_GAMMA*dt*work%old_rigid(ib)%a
       dv0(4:6) = -CD_RIGID_NEWMARK_GAMMA*dt*work%old_rigid(ib)%alpha
       CALL rigid6_body_acceleration(system, points, opts, rigid(ib), time, dt, dv0, work, ib, acc, alpha, &
@@ -27957,6 +28235,7 @@ CONTAINS
       END IF
       rigid(ib)%a = acc
       rigid(ib)%alpha = alpha
+      CALL body_snap_pinned(rigid(ib))
       rigid(ib)%eta = CD_Log_SO3(MATMUL(rigid(ib)%rot_mat, TRANSPOSE(rigid(ib)%rot_ref)))
     END DO
     ! the Body<N> point records follow the corrected bodies
@@ -27996,13 +28275,56 @@ CONTAINS
     END IF
   END SUBROUTINE rigid_start_loads
 
+  SUBROUTINE rigid_start_accelerations(system, points, opts, rigid, time, work, ErrStat, ErrMsg, bathymetry)
+    !! The instantaneous acceleration of every Rigid6 body without a committed one (the first
+    !! step) from the current line loads at time, so the predictor starts from the actual a_0
+    !! (rigid6_body_acceleration at dt = 0; a host-pinned body keeps its pin acceleration and
+    !! solves its angular one).
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(RigidBodyState), INTENT(INOUT) :: rigid(:)
+    REAL(wp), INTENT(IN) :: time
+    TYPE(RigidStepWorkspace), INTENT(INOUT) :: work
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    INTEGER :: ib
+    REAL(wp) :: acc(3), alpha(3)
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (ALL(rigid%accel_valid)) RETURN
+    CALL ensure_rigid_step_workspace(work, system%n_system_coupled_dof, SIZE(rigid), SIZE(system%points))
+    CALL rigid_start_loads(system, work%q(1:system%n_system_coupled_dof), work%v(1:system%n_system_coupled_dof), &
+                           work%a(1:system%n_system_coupled_dof), work%loads(1:system%n_system_coupled_dof), &
+                           work%dload_da, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    DO ib = 1, SIZE(rigid)
+      IF (rigid(ib)%accel_valid) CYCLE
+      CALL rigid6_body_acceleration(system, points, opts, rigid(ib), time, CD_ZERO, &
+                                    [CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO, CD_ZERO], work, ib, &
+                                    acc, alpha, ErrStat, ErrMsg, bathymetry)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      rigid(ib)%a = acc
+      rigid(ib)%alpha = alpha
+      rigid(ib)%accel_valid = .TRUE.
+    END DO
+  END SUBROUTINE rigid_start_accelerations
+
   SUBROUTINE rigid6_body_acceleration(system, points, opts, body, time, dt, dv0, work, ib, acc, alpha, &
-                                      ErrStat, ErrMsg, bathymetry)
+                                      ErrStat, ErrMsg, bathymetry, pin_load)
     !! The acceleration of Rigid6 body ib at its current state and time from every body load
     !! and the line loads in work%loads (evaluated with the attachment accelerations work%a,
     !! end-node inertia derivative work%dload_da): rigid_coupled_acceleration with the step dt
     !! and velocity offset dv0 (dt = 0, dv0 = 0: the instantaneous acceleration). Stores the
-    !! environment force and effective mass in work%f_env(:, ib) / work%mass_eff(ib).
+    !! environment force and effective mass in work%f_env(:, ib) / work%mass_eff(ib). A
+    !! host-pinned body turns about its reference point, which moves with body%a (the host's pin
+    !! acceleration): acc = body%a, and alpha solves the moment equation about the pin,
+    !!   M_rr alpha = M_ext - M_rt a_p - w x (I_p w),
+    !! with M_rr = R J R^T - m [c]x [c]x plus the line end-node inertia through the arms (I_p the
+    !! inertia about the pin) and M_rt = m [c]x for the CG at c = R cg (MoorDyn-F's
+    !! M(4:6,4:6) a(4:6) = F(4:6) - M(4:6,1:3) a(1:3)).
     TYPE(CD_SystemType), INTENT(IN) :: system
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -28014,6 +28336,8 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    ! pin_load (a host-pinned body): the force the body exerts on its node (rigid_coupled_acceleration)
+    REAL(wp), INTENT(OUT), OPTIONAL :: pin_load(3)
 
     ! Rigid6 added mass is the isotropic translational rhoW*phi*Vol*Ca already folded into
     ! mass_eff (MoorDyn Body semantics: no rotational added inertia); body%inertia is about the CG.
@@ -28065,9 +28389,16 @@ CONTAINS
       f_body = f_body + f_attach
       m_global = m_global + cross3(arm, f_attach)
     END DO
-    CALL rigid_coupled_acceleration(work%dload_da, dt, work%a(1:system%n_system_coupled_dof), att_base, att_arm, &
-                                    work%mass_eff(ib), cg6, body%inertia, body%rot_mat, body%omega, &
-                                    f_body, m_global, dv0, load_dv, acc, alpha, ErrStat, ErrMsg)
+    IF (body%is_host_pinned) THEN
+      CALL rigid_coupled_acceleration(work%dload_da, dt, work%a(1:system%n_system_coupled_dof), att_base, att_arm, &
+                                      work%mass_eff(ib), cg6, body%inertia, body%rot_mat, body%omega, &
+                                      f_body, m_global, dv0, load_dv, acc, alpha, ErrStat, ErrMsg, &
+                                      pin_arm=[CD_ZERO, CD_ZERO, CD_ZERO], pin_acc=body%a, pin_load=pin_load)
+    ELSE
+      CALL rigid_coupled_acceleration(work%dload_da, dt, work%a(1:system%n_system_coupled_dof), att_base, att_arm, &
+                                      work%mass_eff(ib), cg6, body%inertia, body%rot_mat, body%omega, &
+                                      f_body, m_global, dv0, load_dv, acc, alpha, ErrStat, ErrMsg)
+    END IF
   END SUBROUTINE rigid6_body_acceleration
 
   SUBROUTINE step_prescribed_rigid6_system(system, points, opts, motion, rigid, time_index, time, dt, converged, &
@@ -36470,20 +36801,52 @@ CONTAINS
   END SUBROUTINE apply_ptfm_init
 
   SUBROUTINE apply_ptfm_host_bodies(bodies, points, ptfm_init)
-    !! Rigid-transform the Body<N> attachment points of every Coupled/Vessel BODY by the initial
-    !! platform displacement (the body pose itself moves in CD_Init_Deck_Aggregate_Rigid6).
-    TYPE(DeckBody), INTENT(IN) :: bodies(:)
+    !! Rigid-transform the Body<N> attachment points of every Coupled/Vessel and CoupledPinned BODY
+    !! by the initial platform displacement (the pose of a Coupled body moves in
+    !! CD_Init_Deck_Aggregate_Rigid6). The pose of a CoupledPinned body moves here, before the
+    !! static solve turns it about its node: its reference point to r + M^T p and its orientation
+    !! to M^T R (MoorDyn-F also turns a coupled pinned body with PtfmInit), written back as the
+    !! deck's x-y'-z'' angles (body_rotation_angles).
+    TYPE(DeckBody), INTENT(INOUT) :: bodies(:)
     TYPE(DeckPoint), INTENT(INOUT) :: points(:)
     REAL(wp), INTENT(IN) :: ptfm_init(6)
     INTEGER :: i, j
+    REAL(wp) :: dcm(3, 3)
+    dcm = ptfm_zyx_dcm(ptfm_init(4:6))
     DO i = 1, SIZE(bodies)
-      IF (.NOT. bodies(i)%host_coupled) CYCLE
+      IF (.NOT. (bodies(i)%host_coupled .OR. bodies(i)%host_pinned)) CYCLE
       DO j = 1, SIZE(points)
         IF (points(j)%body_id == bodies(i)%id .AND. starts_with(TRIM(points(j)%ptype), 'body')) &
           CALL apply_ptfm_point(points(j), ptfm_init)
       END DO
+      IF (.NOT. bodies(i)%host_pinned) CYCLE
+      bodies(i)%pos = ptfm_init(1:3) + MATMUL(TRANSPOSE(dcm), bodies(i)%pos)
+      bodies(i)%rot = body_rotation_angles(MATMUL(TRANSPOSE(dcm), CD_Body_Rotation(bodies(i)%rot(1), &
+                                                                                   bodies(i)%rot(2), &
+                                                                                   bodies(i)%rot(3))))
     END DO
   END SUBROUTINE apply_ptfm_host_bodies
+
+  PURE FUNCTION body_rotation_angles(rot) RESULT(ang)
+    !! The deck angles [deg] of a body rotation, the inverse of CD_Body_Rotation: for
+    !! R = Rx(a) Ry(b) Rz(c), R13 = sin b, (R23, R33) = cos b (-sin a, cos a) and
+    !! (R12, R11) = cos b (-sin c, cos c); at cos b = 0 only a + c (b = 90 deg) or a - c (b = -90
+    !! deg) is defined, taken with c = 0 from R32 = sin a, R22 = cos a.
+    REAL(wp), INTENT(IN) :: rot(3, 3)
+    REAL(wp) :: ang(3)
+    REAL(wp), PARAMETER :: R2D = 180.0_wp/3.14159265358979323846264338327950288_wp
+    REAL(wp) :: sb
+    sb = MAX(-CD_ONE, MIN(CD_ONE, rot(1, 3)))
+    ang(2) = ASIN(sb)
+    IF (SQRT(rot(2, 3)**2 + rot(3, 3)**2) > 1.0e-12_wp) THEN
+      ang(1) = ATAN2(-rot(2, 3), rot(3, 3))
+      ang(3) = ATAN2(-rot(1, 2), rot(1, 1))
+    ELSE
+      ang(1) = ATAN2(rot(3, 2), rot(2, 2))
+      ang(3) = CD_ZERO
+    END IF
+    ang = ang*R2D
+  END FUNCTION body_rotation_angles
 
   SUBROUTINE apply_ptfm_host_rods(rods, points, ptfm_init)
     !! Rigid-transform every Coupled/Vessel and CoupledPinned ROD (its End A/B and its Rod<N>A/B

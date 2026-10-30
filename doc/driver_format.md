@@ -438,6 +438,14 @@ row. On this route:
   and added-mass inertia (MoorDyn-F's coupled body). They may share a deck with `Free` bodies:
   when the free bodies sub-cycle the coupling step, the host-driven bodies follow the host motion
   interpolated from the step start;
+- `CoupledPinned`/`VesselPinned` bodies are pinned to the platform as `CoupledPinned` rods are:
+  a mesh node at the body reference point (moved and turned by `PtfmInit` with the body) that
+  takes the platform position only. The body turns about it with its own three rotations, the
+  node orientation and angular rates are ignored, and the node returns the body's net load less
+  its inertia, with no moment (MoorDyn-F's coupled pinned body); the angular acceleration in that
+  inertia is solved for the node's current acceleration. With `bodyIC static` the body starts
+  balanced about its node. Outside a coupled host such a body is rejected by name ("requires a
+  coupled host");
 - cables may be suspended or use the same flat/structured seabed contact, normal damping, and
   stick-slip friction as the standalone Hermite route.
 
@@ -450,7 +458,7 @@ columns, or 18 with the trailing inertias, or the 14 columns of a MoorDyn v2 row
 | Column | Meaning |
 |--------|---------|
 | `ID` | unique body id ≥ 1 (referenced by `Body<ID>` points) |
-| `Type` | `Point3` (3-DOF translational buoy or clump), `Rigid6` (6-DOF rigid body), or `Coupled`/`Vessel` (a `Rigid6` body whose pose follows the host: the OpenFAST platform, or `motionFile` rows for its `Body<ID>` points in the standalone driver) |
+| `Type` | `Point3` (3-DOF translational buoy or clump), `Rigid6` (6-DOF rigid body), `Coupled`/`Vessel` (a `Rigid6` body whose pose follows the host: the OpenFAST platform, or `motionFile` rows for its `Body<ID>` points in the standalone driver), or `CoupledPinned`/`VesselPinned` (MoorDyn aliases `CpldPin`, `VesPin`: a `Rigid6` body whose reference point follows the OpenFAST platform position while it turns about that point; OpenFAST only) |
 | `X,Y,Z` | reference position [m] |
 | `Roll,Pitch,Yaw` | reference orientation [deg] (`Rigid6`; ignored for `Point3`) |
 | `Mass` | body mass [kg]; > 0 |
@@ -458,14 +466,15 @@ columns, or 18 with the trailing inertias, or the 14 columns of a MoorDyn v2 row
 | `C33` | heave hydrostatic restoring ρ_w·g·A_wp [N/m] |
 | `C44/55` | roll/pitch restoring [N·m/rad] (`Rigid6`) |
 | `CdA`, `Ca` | drag area and added-mass coefficient (dynamic); ≥ 0 |
-| `Ixx,Iyy,Izz` | trailing diagonal rotational inertias [kg·m²]; required and > 0 for `Rigid6` (≥ 0, like `Mass`, for `Coupled`/`Vessel`) |
+| `Ixx,Iyy,Izz` | trailing diagonal rotational inertias [kg·m²]; required and > 0 for `Rigid6` and `CoupledPinned`/`VesselPinned` (≥ 0, like `Mass`, for `Coupled`/`Vessel`) |
 
 Every body value must be finite. Both body types require a dynamic deck (`dtM`/`TMax`) in the
 standalone driver.
 
 The MoorDyn v2 row `ID Attachment X0 Y0 Z0 r0 p0 y0 Mass CG* I* Volume CdA* Ca*` defines a
-`Rigid6` body with a centre of gravity: `Attachment` is `Free`, or `Coupled`/`Vessel` for a
-host-driven body (`CoupledPinned` fails closed); `CG` is `z` or `x|y|z` in
+`Rigid6` body with a centre of gravity: `Attachment` is `Free`, `Coupled`/`Vessel` for a
+host-driven body, or `CoupledPinned`/`VesselPinned` for a body pinned to a host node; `CG` is `z`
+or `x|y|z` in
 the body frame from the reference point (it is also the centre of buoyancy, as in MoorDyn);
 `I` is one value or `Ixx|Iyy|Izz` about the CG; `CdA` is one value, `CdA|CdA_rot`, or 3 or 6
 entries, and `Ca` one value or 3 entries. The body model is isotropic, so direction-dependent

@@ -2303,7 +2303,15 @@ body's position and a rotation-vector increment on SO(3) (for a free rod only th
 normal to its axis), each pinned rod's two rotations about its pin, and each point's position.
 A pinned rod's residual rows are its moment about the pin; its net force acts on its parent body
 at the pin (a rod pinned to a fixed point has none, and a ``CoupledPinned`` rod in OpenFAST is
-balanced about its pin at the platform's initial pose). A free or pinned rod that no line
+balanced about its pin at the platform's initial pose). A ``CoupledPinned`` body in OpenFAST
+keeps its position unknowns held at its node (their force rows carry the host's reaction, not a
+residual) and balances the moment about the node with its three rotations. Its lines and its
+centre of gravity may lie on one axis through the node, about which it then turns neutrally: the
+Jacobian has that spin as a null vector, to which the residual is orthogonal, and the Newton
+step of a deck with such a body is the minimum-norm Gauss-Newton step
+:math:`(\mathbf{J}^T\mathbf{J} + 10^{-10}\mathbf{D})\,\delta\mathbf{x} = -\mathbf{J}^T\mathbf{r}`
+(:math:`\mathbf{D}` the floored diagonal of :math:`\mathbf{J}^T\mathbf{J}`), which does not spin it.
+A free or pinned rod that no line
 attaches to (nor, for a rod pinned to a body, any line of its body) is not an unknown: it keeps
 its deck pose and starts at rest there. A deck with pinned rods takes the
 central-difference Jacobian of the full residual. A finite-EI line enters with its axial
@@ -2541,6 +2549,27 @@ the end accelerations the line loads were evaluated with. MoorDyn-F's coupled pi
 the same pin acceleration term in its rotation equation and returns the same force: its output
 call evaluates the rod's state derivative at the current input first (its lumped line mass has
 no interior coupling).
+
+A ``CoupledPinned`` body is pinned the same way at its reference point, which is its node: its
+translation is the host's, :math:`\mathbf{a} = \mathbf{a}_p`, and its rotation solves the moment
+equation about the node,
+:math:`\mathbf{M}_{rr}\boldsymbol{\alpha} = \mathbf{M} - \mathbf{M}_{rt}\mathbf{a}_p - \boldsymbol{\omega}\times(\mathbf{I}_p\boldsymbol{\omega})`,
+with :math:`\mathbf{I}_p = \mathbf{R}\mathbf{J}\mathbf{R}^T - m[\mathbf{c}]_\times^2` the inertia
+about the node for the centre of gravity at :math:`\mathbf{c}`,
+:math:`\mathbf{M}_{rr} = \mathbf{I}_p` plus the attached lines' end-node inertia through their
+arms, and :math:`\mathbf{M}_{rt} = m[\mathbf{c}]_\times` (MoorDyn-F's
+:math:`\mathbf{M}_{(4:6,4:6)}\mathbf{a}_{(4:6)} = \mathbf{F}_{(4:6)} - \mathbf{M}_{(4:6,1:3)}\mathbf{a}_{(1:3)}`).
+The node receives
+:math:`\mathbf{F} - (m + m_a)\mathbf{a}_p - m(\boldsymbol{\alpha}\times\mathbf{c} + \boldsymbol{\omega}\times(\boldsymbol{\omega}\times\mathbf{c}))`
+and no moment, :math:`m_a` the body's translational added mass, with the angular acceleration
+solved again for the current node acceleration as for the rod (MoorDyn-F with ``inertialF 1``;
+its default ``inertialF 0`` leaves the inertia out of the coupled force). The sub-step estimate
+takes the diagonal of :math:`\mathbf{I}_p` against the line springs through their arms from the
+node, the waterplane restoring, and the swing stiffness of the weight and buoyancy turning with
+the body, :math:`|\mathbf{K}_{kk}|` of :math:`\mathbf{K} = -\sum_i[\mathbf{f}_i]_\times[\mathbf{p}_i]_\times`
+at the step-start and end-of-step node poses, plus :math:`|\mathbf{a}_p|\,m|\mathbf{c}|`; the
+node moves linearly within the sub-steps from the committed reference-point motion, and that
+motion, which the body state mirror carries, starts the next step.
 
 **Mixed topologies.** One step marches every object of a deck together: bodies with their fixed
 and pinned rods, free and pinned rods, the ``EI = 0`` lines with their ``Free``/``Connect``

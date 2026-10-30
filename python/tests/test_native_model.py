@@ -7,6 +7,7 @@ Skipped when the library cannot be loaded (set ``CABLEDYN_LIBRARY``).
 from __future__ import annotations
 
 import ctypes
+import gc
 import importlib.util
 import os
 import sys
@@ -58,6 +59,9 @@ def test_array_shapes_are_validated_before_the_library():
 
 
 def test_failed_initialization_in_the_constructor_releases_the_handle(monkeypatch):
+    # finalise the instances earlier tests left for the collector first, so that only the
+    # failed constructor's close is recorded
+    gc.collect()
     closed: list[bool] = []
     original = model_module.CableDyn.close
 

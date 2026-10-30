@@ -1535,10 +1535,37 @@ def test_coupled_rods_and_bodies_need_a_motion_file_or_a_coupled_host(tmp_path):
     for row, message in (
         ("1 Coupled 0 0 0 0 0 0 -1 0 0 0 0 0 0\n", "requires non-negative"),
         ("1 Coupled 0 0 -20 0 0 0 -1 0 0 0 0 0\n", "requires non-negative"),
-        ("1 CoupledPinned 0 0 0 0 0 0 0 0 0 0 0 0 0\n", "CoupledPinned BODY is not supported"),
     ):
         path.write_text(source.replace(marker, bodies + row + marker), encoding="utf-8")
         with pytest.raises(DeckFormatError, match=message):
+            DeckFile.read(path, caller_driven=True)
+
+
+@pytest.mark.parametrize("kind", ["CoupledPinned", "CpldPin", "VesselPinned", "VesPin"])
+def test_coupled_pinned_bodies_need_a_coupled_host_and_inertia(tmp_path, kind):
+    # native finalize_checks: the host moves the reference point of a CoupledPinned body and
+    # its rotation is integrated, so the standalone driver refuses it and the coupled route
+    # takes it with positive inertias (18- and 14-column rows)
+    source = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
+    marker = "--------------------- POINTS -------------------------------------------"
+    bodies = "--------------------- BODIES -------------------------------------------\n"
+    path = tmp_path / "pinned.dat"
+    for row in (
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0 1 1 1\n",
+        f"1 {kind} 0 0 -20 0 0 0 10 0|0|-1 1|2|3 0 0 0\n",
+    ):
+        path.write_text(source.replace(marker, bodies + row + marker), encoding="utf-8")
+        with pytest.raises(DeckFormatError, match="requires a coupled host"):
+            DeckFile.read(path)
+        DeckFile.read(path, caller_driven=True)
+    for row in (
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0\n",
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0 1 0 1\n",
+        f"1 {kind} 0 0 -20 0 0 0 -1 0 0 0 0 0 0 1 1 1\n",
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0\n",
+    ):
+        path.write_text(source.replace(marker, bodies + row + marker), encoding="utf-8")
+        with pytest.raises(DeckFormatError, match=r"requires Ixx/Iyy/Izz > 0"):
             DeckFile.read(path, caller_driven=True)
 
 
@@ -3354,7 +3381,7 @@ def test_moordyn_body_rows_are_accepted(row):
 @pytest.mark.parametrize(
     ("row", "message"),
     [
-        (_MD_BODY.replace("Free", "Fixed"), "Free, Coupled, or Vessel bodies"),
+        (_MD_BODY.replace("Free", "Fixed"), "Free, Coupled, Vessel, CoupledPinned or VesselPinned"),
         (_MD_BODY.replace("Free", "Coupled"), "Coupled/Vessel BODY requires a motionFile"),
         (_MD_BODY.replace("0|0|-0.5", "0|-0.5"), "BODIES CG has 2 entries"),
         (_MD_BODY.replace("8|0", "8|1"), "isotropic without rotational drag"),

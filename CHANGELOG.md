@@ -25,6 +25,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   one turn of pretwist, in still water and in a cross-flow current, keeps its torque, twist and
   fairlead tension over a still 10 s run to the output precision (a torsion stage before the
   polish would ring by 3e-3 of the torque); neutral modules reproduce the bare line's GJ Phi / L.
+- `CoupledPinned`/`VesselPinned` bodies in OpenFAST, as MoorDyn-F's coupled pinned body: the
+  body reference point is a node of the coupling mesh that takes the platform position only, the
+  body turns about it with its own three rotations, and the node returns the body's net load
+  less its inertia, with no moment. `PtfmInit` moves and turns the body, `bodyIC static` balances
+  it about its node, and the checkpoint state and correction rewind carry it. A dry compound
+  pendulum keeps the elliptic-integral period to 1.6e-4 at `dt = T/100`, a body with a
+  `CoupledPinned` rod's mass and inertia follows the rod to 2e-12, and against MoorDyn-F a
+  pendulum swinging through 120 deg agrees to 0.09 deg (0.15 deg when its node surges). Outside
+  a coupled host, without inertias, and in linearisation the body fails closed by name.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their

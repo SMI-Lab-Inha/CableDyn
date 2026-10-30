@@ -337,6 +337,15 @@ _END_CONNECTION_ENDS = {
 _PINNED_END_CONNECTIONS = frozenset({"pinned", "free", "zero"})
 # Host-driven (platform-borne) BODIES types, MoorDyn aliases included (native append_body)
 _HOST_BODY_TYPES = frozenset({"coupled", "vessel", "cpld", "ves"})
+# Bodies pinned to a host node (MoorDyn CoupledPinned/VesselPinned): coupled hosts only
+_PINNED_BODY_TYPES = frozenset({"coupledpinned", "cpldpin", "vesselpinned", "vespin"})
+_PINNED_BODY_HOST_MESSAGE = (
+    "CoupledPinned/VesselPinned BODY requires a coupled host (OpenFAST CompMooring = 5); in a "
+    "standalone deck use a Free body, or a Coupled body with a motionFile"
+)
+_PINNED_BODY_VALUE_MESSAGE = (
+    "CoupledPinned/VesselPinned BODY requires Ixx/Iyy/Izz > 0 and non-negative Mass/Vol/CdA/Ca"
+)
 
 # MoorDyn RODS attachment aliases (native append_rod)
 _ROD_ATTACHMENT_ALIASES = {
@@ -1858,12 +1867,14 @@ class DeckFile:
     ) -> None:
         """Validate a 14-column MoorDyn BODIES row as the native reader does."""
         attachment = row.tokens[1].lower()
-        if attachment not in {"free", *_HOST_BODY_TYPES}:
+        if attachment not in {"free", *_HOST_BODY_TYPES, *_PINNED_BODY_TYPES}:
             raise DeckFormatError(
                 f"{self._at(row)}: BODIES attachment {row.tokens[1]!r} is not supported in the "
-                "14-column MoorDyn row (Free, Coupled, or Vessel bodies)"
+                "14-column MoorDyn row (Free, Coupled, Vessel, CoupledPinned or VesselPinned "
+                "bodies)"
             )
         host = attachment in _HOST_BODY_TYPES
+        pinned = attachment in _PINNED_BODY_TYPES
         if host and not (has_motion_file or self.caller_driven):
             raise DeckFormatError(
                 f"{self._at(row)}: Coupled/Vessel BODY requires a motionFile (or a coupled host)"
@@ -1897,6 +1908,14 @@ class DeckFile:
             coordinates + lists["CG"], [mass, volume, cda[0], *lists["I"]], ca[0]
         ):
             raise DeckFormatError(f"{self._at(row)}: {_BODY_RANGE_MESSAGE}")
+        if pinned:
+            # native finalize_checks: only a coupled host moves the reference point; the
+            # rotation is integrated
+            if not self.caller_driven:
+                raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_HOST_MESSAGE}")
+            if min(mass, volume, cda[0], ca[0]) < 0.0 or any(v <= 0.0 for v in lists["I"]):
+                raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_VALUE_MESSAGE}")
+            return
         if host:
             # a platform-borne body may be a massless attachment frame
             if min(mass, volume, cda[0], ca[0], *lists["I"]) < 0.0:
@@ -3307,10 +3326,25 @@ class DeckFile:
             if len(row.tokens) not in {15, 18}:
                 raise DeckFormatError(f"{self._at(row)}: BODIES row needs 14, 15 or 18 fields")
             body_type = row.tokens[1].lower()
-            if body_type in {"coupledpinned", "cpldpin"}:
-                raise DeckFormatError(
-                    f"{self._at(row)}: CoupledPinned BODY is not supported (use Coupled or Free)"
-                )
+            if body_type in _PINNED_BODY_TYPES:
+                # native finalize_checks: the host moves the reference point of a CoupledPinned
+                # body, so only a coupled host runs it; its rotation is integrated
+                values = [
+                    numeric(row.tokens[index], row, f"BODIES column {index + 1}")
+                    for index in range(2, len(row.tokens))
+                ]
+                if _body_outside_admissible_range(
+                    values[:6], values[6:12] + values[13:], values[12]
+                ):
+                    raise DeckFormatError(f"{self._at(row)}: {_BODY_RANGE_MESSAGE}")
+                if not self.caller_driven:
+                    raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_HOST_MESSAGE}")
+                inertia = values[13:16] if len(values) >= 16 else [0.0, 0.0, 0.0]
+                if min(values[6], values[7], values[11], values[12]) < 0.0 or any(
+                    value <= 0.0 for value in inertia
+                ):
+                    raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_VALUE_MESSAGE}")
+                continue
             if body_type in _HOST_BODY_TYPES:
                 if not (has_motion_file or self.caller_driven):
                     raise DeckFormatError(
@@ -3356,7 +3390,8 @@ class DeckFile:
         body_types = {
             str(_native_int(row.tokens[0])): (
                 "rigid6"
-                if len(row.tokens) == 14 or row.tokens[1].lower() in _HOST_BODY_TYPES
+                if len(row.tokens) == 14
+                or row.tokens[1].lower() in _HOST_BODY_TYPES | _PINNED_BODY_TYPES
                 else row.tokens[1].lower()
             )
             for row in bodies

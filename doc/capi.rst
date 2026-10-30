@@ -930,7 +930,7 @@ The deck is validated under the standalone-deck rules:
      - Where it is supported
    * - ``Coupled``/``Vessel`` bodies or rods (6-DOF host nodes)
      - the OpenFAST module; the standalone driver with a ``motionFile``
-   * - ``CoupledPinned``/``VesselPinned`` rods (a pin the host moves)
+   * - ``CoupledPinned``/``VesselPinned`` rods or bodies (a pin the host moves)
      - the OpenFAST module
    * - a ``motionFile`` option
      - the standalone driver (prescribe motion through ``CableDyn_Step`` instead)

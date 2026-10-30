@@ -543,11 +543,11 @@ CONTAINS
     !! deck dtM, and 20 driven steps reproduce CD_AGG driven directly bit-for-bit (loads and
     !! coupled motion), also across a SaveState / three trial steps / RestoreState rewind half
     !! way. A mismatched dt, load derivatives and point fluid fields fail closed by name; a
-    !! Coupled rod (a 6-DOF host node) and a CoupledPinned rod (a host-driven pin) are rejected
-    !! by the standalone deck rules.
+    !! Coupled rod (a 6-DOF host node), a CoupledPinned rod (a host-driven pin) and a
+    !! CoupledPinned body (a host-driven reference point) are rejected by the standalone deck rules.
     CHARACTER(*), PARAMETER :: ROD_DECK = 'capi_rod_deck.dat', BODY_DECK = 'capi_body_deck.dat', &
                                HOST_DECK = 'capi_hostrod_deck.dat', PIN_DECK = 'capi_pinrod_deck.dat', &
-                               HOST_PIN_DECK = 'capi_hostpin_deck.dat'
+                               HOST_PIN_DECK = 'capi_hostpin_deck.dat', PIN_BODY_DECK = 'capi_pinbody_deck.dat'
     CHARACTER(KIND=C_CHAR), TARGET :: c_path(64)
     CHARACTER(KIND=C_CHAR), TARGET :: msg(300)
     TYPE(C_PTR) :: handle
@@ -566,6 +566,7 @@ CONTAINS
     CALL write_capi_object_deck(HOST_DECK, 3)
     CALL write_capi_object_deck(PIN_DECK, 4)
     CALL write_capi_object_deck(HOST_PIN_DECK, 5)
+    CALL write_capi_object_deck(PIN_BODY_DECK, 6)
     DO ideck = 1, 3
       SELECT CASE (ideck)
       CASE (1)
@@ -670,12 +671,25 @@ CONTAINS
     CALL require(es == 3_C_INT .AND. INDEX(c_text(msg), 'requires a coupled host') > 0, &
                  'c-api-objects:host-pinned-rod-rejected')
     CALL CableDyn_Close(handle, es)
+    ! and a CoupledPinned body, whose reference point a coupled host moves
+    path = PIN_BODY_DECK
+    c_path = C_NULL_CHAR
+    DO i = 1, LEN_TRIM(path)
+      c_path(i) = path(i:i)
+    END DO
+    CALL CableDyn_Create(handle, es)
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN_TRIM(path), C_INT), es)
+    CALL CableDyn_GetLastError(handle, C_LOC(msg), INT(SIZE(msg), C_INT))
+    CALL require(es == 3_C_INT .AND. INDEX(c_text(msg), 'BODY requires a coupled host') > 0, &
+                 'c-api-objects:host-pinned-body-rejected')
+    CALL CableDyn_Close(handle, es)
   END SUBROUTINE case_deck_bodies_rods
 
   SUBROUTINE write_capi_object_deck(path, kind)
     !! kind 1: a submerged free rod between a Fixed anchor and a Coupled fairlead; kind 2: the same
     !! with a free Rigid6 body; kind 3: a Coupled rod (a 6-DOF host node); kind 4: a Pinned rod
-    !! (End A on a fixed pin); kind 5: a CoupledPinned rod (its pin a host node).
+    !! (End A on a fixed pin); kind 5: a CoupledPinned rod (its pin a host node); kind 6: the
+    !! body of kind 2 as a CoupledPinned body (its reference point a host node).
     CHARACTER(*), INTENT(IN) :: path
     INTEGER, INTENT(IN) :: kind
     INTEGER :: u
@@ -685,12 +699,16 @@ CONTAINS
     WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
     WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
     WRITE (u, '(A)') 'line 0.10 80.0 1.0e5 0.0 0.0 1.0 0.0 1.0 0.0'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '--- BODIES ---'
       WRITE (u, '(A)') 'ID Type X Y Z Rot1 Rot2 Rot3 Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
       WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm/rad) (Nm/rad) (m2) (-) '// &
         '(kgm2) (kgm2) (kgm2)'
-      WRITE (u, '(A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 0.0 0.0 20.0 20.0 20.0'
+      IF (kind == 2) THEN
+        WRITE (u, '(A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 0.0 0.0 20.0 20.0 20.0'
+      ELSE
+        WRITE (u, '(A)') '1 CoupledPinned 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 0.0 0.0 0.0 0.0 20.0 20.0 20.0'
+      END IF
     ELSE
       WRITE (u, '(A)') '--- ROD TYPES ---'
       WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
@@ -714,7 +732,7 @@ CONTAINS
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
     WRITE (u, '(A)') '1 Fixed 2.0 0.0 -5.0 0.0 0.0 0.0 0.0'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '2 Body1 0.0 0.0 0.0 0.0 0.0 0.0 0.0'
       WRITE (u, '(A)') '3 Coupled 0.0 0.0 -1.0 0.0 0.0 0.0 0.0'
     ELSE
@@ -726,7 +744,7 @@ CONTAINS
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
     WRITE (u, '(A)') '1 2 1 -'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '2 3 2 -'
     ELSE
       WRITE (u, '(A)') '2 3 4 -'
@@ -734,7 +752,7 @@ CONTAINS
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '1 line 2.5 3'
       WRITE (u, '(A)') '2 line 2.95 3'
     ELSE

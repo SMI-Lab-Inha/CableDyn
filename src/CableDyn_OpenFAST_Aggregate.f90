@@ -20,7 +20,10 @@ MODULE CableDyn_OpenFAST_Aggregate
   !!                                          (translation in, force out, zero moment; the rod
   !!                                          turns about it on its own),
   !!   last nhost_body columns              -> the k-th Coupled/Vessel BODY's reference point
-  !!                                          (6-DOF host node, force and moment about it),
+  !!                                          (6-DOF host node, force and moment about it) or
+  !!                                          CoupledPinned BODY's reference point (translation
+  !!                                          in, force out, zero moment; the body turns about
+  !!                                          it on its own),
   !! with ncp_total = ncp_sys + ncable + nhost_rod + nhost_body. All facade arrays are shaped
   !! (3, ncp_total).
   !!
@@ -235,7 +238,7 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! the full EI=0 coupled-block scratch (3, n_system_coupled_dof/3) their Rod<N>A/B points are
     ! overlaid on.
     INTEGER :: nhost_rod = 0
-    INTEGER :: nhost_body = 0   ! Coupled/Vessel bodies: the trailing host nodes after the rods
+    INTEGER :: nhost_body = 0   ! Coupled/Vessel and CoupledPinned bodies: the trailing host nodes
     ! Body/rod marches: the host fairleads' t + dt motion as a flat coupled-DOF overlay
     ! (hf_mask marks the moving DOFs), passed into the march as the line step's end motion.
     LOGICAL, ALLOCATABLE :: hf_mask(:)
@@ -717,7 +720,8 @@ CONTAINS
         IF (PRESENT(moment)) moment(:, col) = y_fair
       END DO
     END IF
-    ! Host body nodes: the reference-point kinematics and the wrench about it.
+    ! Host body nodes: the reference-point kinematics and the wrench about it (a CoupledPinned
+    ! body: its force, with zero moment).
     IF (self%nhost_body > 0) THEN
       CALL CD_FMF_GetPointMesh(self%sys, self%hb_pos, self%hb_vel, self%hb_acc, self%hb_load, es, em)
       IF (es /= CD_FMF_OK) THEN
@@ -863,7 +867,7 @@ CONTAINS
     END IF
     IF (self%nhost_rod + self%nhost_body > 0) THEN
       ! a transfer without advancing: the host kinematics of the committed time, from which the
-      ! next step of a CoupledPinned rod starts (an output probe is restored by its caller)
+      ! next step of a CoupledPinned rod or body starts (an output probe is restored by its caller)
       IF (PRESENT(orientation)) THEN
         CALL set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, orientation=orientation, &
                               angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha, step_start=.TRUE.)
@@ -1044,7 +1048,8 @@ CONTAINS
       ! start the generalized-alpha step from the t + dt end state and corrupt the ends' history.
       CALL host_fairlead_motion(self, position, velocity, acceleration)
       ! The step-start bodies are staged before anything moves them: host-driven
-      ! (Coupled/Vessel) bodies take the t+dt host kinematics before the march, and a check
+      ! (Coupled/Vessel) bodies take the t+dt host kinematics before the march (CoupledPinned ones
+      ! their t+dt node translation), and a check
       ! after a successful march (plausibility, FAILURE rows) can still reject the step, so
       ! every failure path below un-stages them together with the system rewind.
       CALL CD_Rigid6_Stage(self%rigid6)
@@ -2420,9 +2425,11 @@ CONTAINS
 
   SUBROUTINE set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, orientation, &
                               angular_velocity, angular_acceleration, step_start)
-    !! Impose the host-rod columns (the trailing nhost_rod moving columns) on the rod runtime.
+    !! Impose the host-rod and host-body columns (the trailing nhost_rod + nhost_body moving
+    !! columns) on the rod and Rigid6 runtimes.
     !! step_start: a transfer that does not advance (CD_AGG_UpdateStates_Moving), whose host
-    !! kinematics the next step of a CoupledPinned rod starts from (CD_Rod_SetHostKinematics).
+    !! kinematics the next step of a CoupledPinned rod or body starts from
+    !! (CD_Rod_SetHostKinematics, CD_Rigid6_SetHostKinematics).
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -2443,12 +2450,13 @@ CONTAINS
       IF (PRESENT(orientation)) THEN
         CALL CD_Rigid6_SetHostKinematics(self%rigid6, position(:, c0:c1), velocity(:, c0:c1), &
                                          acceleration(:, c0:c1), es, em, orientation(:, :, c0:c1), &
-                                         angular_velocity(:, c0:c1), angular_acceleration(:, c0:c1))
+                                         angular_velocity(:, c0:c1), angular_acceleration(:, c0:c1), &
+                                         step_start=at_start)
       ELSE
         CALL CD_Rigid6_SetHostKinematics(self%rigid6, position(:, c0:c1), velocity(:, c0:c1), &
                                          acceleration(:, c0:c1), es, em, &
                                          angular_velocity=angular_velocity(:, c0:c1), &
-                                         angular_acceleration=angular_acceleration(:, c0:c1))
+                                         angular_acceleration=angular_acceleration(:, c0:c1), step_start=at_start)
       END IF
       IF (es /= CD_DECKDRV_OK) THEN
         CALL map_deck_status(es, em, ErrStat, ErrMsg)
