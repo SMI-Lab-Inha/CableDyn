@@ -456,6 +456,21 @@ row:
   scaled so that the largest nodal displacement of the mode is 1. Nodes are numbered End A first,
   as in the other line files; the held end nodes have zero displacement.
 
+When a line is restrained in torsion (both ends, see :doc:`driver_format`), its modes carry the
+twist angle of every node (:ref:`nodal twist <theory-nodal-twist>`) and both tables gain a
+column, for every line of the file (``0`` on a line without torsion):
+
+* ``PolarShare`` (frequency table): the polar share of the mode's kinetic energy,
+  :math:`\sum_k I_k \varphi_k^2` of the mass-normalised mode with :math:`I_k` the lumped polar
+  inertia, 1 for a pure torsional mode and 0 for one without twist;
+* ``dTwist`` (shape table): the rotation of the node's section about the line tangent,
+  positive right-handed about the direction from End A to End B, End A being the reader's
+  (the fairlead on a deck written anchor-first, as in the other line files). Like ``dX dY dZ``
+  it is a normalised shape value, marked ``(-)``: the mode is scaled so that its largest nodal
+  displacement is 1, and ``dTwist`` is then in rad per metre of that displacement; a torsional
+  mode (``PolarShare`` above 0.5) is scaled to a unit largest ``dTwist`` instead, and its
+  translations are then in metres per radian of that twist.
+
 Per-rod files (``RODS`` ``Outputs`` flag)
 -----------------------------------------
 
@@ -985,10 +1000,10 @@ output root:
        selected
    * - ``<FarmRoot>.FarmCD.static.out`` / ``<FarmRoot>.FarmCD.out``
      - the same two files for a FAST.Farm run, named from the FAST.Farm output root
-   * - ``<RootName>.CD.rst.dat`` / ``<RootName>.CD.lin.dat``
-     - temporary copies of the CableDyn deck, written in the ``MooringFile`` folder when a run
-       restarts from a checkpoint or linearises; the module rebuilds its model from them and
-       removes them after use (see :doc:`openfast`)
+   * - ``<RootName>.CD.rst.dat``
+     - temporary copy of the CableDyn deck, written in the ``MooringFile`` folder when a run
+       restarts from a checkpoint; the module rebuilds its model from it and removes it after use
+       (see :doc:`openfast`)
 
 ``<RootName>.CD.out`` layout — note that it differs from the standalone ``.out``:
 

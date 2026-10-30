@@ -55,10 +55,12 @@ MODULE CableDyn
    !! deck + state mirror, accepted on committed mooring-interval boundaries),
    !! linearization with the line dynamics (as MoorDyn-F: the continuous states are the
    !! EI=0 lines' interior-node positions and the finite-EI cables' free DOFs, positions
-   !! and tangents, then their velocities, and the rope models' constitutive states; A, B, C
-   !! and D by central differences of lin_eval, the accelerations and state rates evaluated
-   !! at the perturbed state; Free/Connect points, VIV lines, bodies, rods, Point3 buoys,
-   !! torsion, CONTROL and rigid cable ends fail closed), and
+   !! and tangents, and the free twist angles of a cable restrained in torsion, then their
+   !! velocities, and the rope models' constitutive states; A, B, C and D by central
+   !! differences of lin_eval, the accelerations and state rates evaluated at the perturbed
+   !! state; the coupled-point orientation turns a torsion end frame and the fairlead moment
+   !! carries the torque; Free/Connect points, VIV lines, bodies, rods, Point3 buoys, CONTROL
+   !! and rigid cable ends fail closed), and
    !! FAST.Farm farm-level moorings (FarmSize > 0: Turbine<J> decks,
    !! per-turbine coupled meshes, shared lines; still-water hydro; farm restart and
    !! farm linearization fail closed with named messages). Checkpoint restart re-parses a
@@ -99,7 +101,9 @@ MODULE CableDyn
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
                                            CD_HFMF_FrictionMirrorSize, CD_HFMF_BoundaryMirrorSize, &
                                            CD_HFMF_ForceMirrorSize, CD_HFMF_TorsionMirrorSize, CD_HFMF_VIVMirrorSize, &
-                                           CD_HFMF_Refresh_Acceleration, CD_HFMF_OK
+                                           CD_HFMF_Refresh_Acceleration, CD_HFMF_OK, &
+                                           CD_HFMF_Twist_Lin_Count, CD_HFMF_Twist_Lin_Slots, &
+                                           CD_HFMF_Set_Twist_Frame_Rates
    USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Reset_Profile, &
                                             CD_HermiteCable_Dyn_Disable_Profile, &
                                             CD_HermiteCable_Dyn_Get_Profile, &
@@ -853,16 +857,9 @@ CONTAINS
                                 ErrStat, ErrMsg, RoutineName )
                RETURN
             END IF
-            ! a line restrained in torsion returns a torque moment that turns with the platform
-            ! even at a bending-pinned end: its rotational stiffness a a^T / C has no column in
-            ! the translation-only reduction either
-            IF (Inst(id)%agg%cables(ic)%line%torsion%active) THEN
-               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: formal OpenFAST linearization '// &
-                                'of a line restrained in torsion is not supported: its condensed torque '// &
-                                'carries no state of its own (set TorsStiffness Free to linearize).', &
-                                ErrStat, ErrMsg, RoutineName )
-               RETURN
-            END IF
+            ! (a line restrained in torsion linearises: its free twist angles and their rates
+            ! are states, lin_state_map, and the coupled-point orientation of the input turns its
+            ! End A frame; a condensed torsion's torque follows q and the frames, see lin_eval)
          END DO
       END IF
       CALL CD_AGG_GetInitMetadata( Inst(id)%agg, nreportlines, npoints, nsections, nei0, nfinite, es, em )
@@ -2713,16 +2710,17 @@ CONTAINS
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE lin_state_map( inst_e, m, ErrStat, ErrMsg )
       !! The x%states mirror slots of the linearization states (CD_InitVars under Linearize): for
-      !! every interior DOF of an EI = 0 line and every free DOF of a finite-EI cable, the slot of
-      !! its position, of its velocity and of its acceleration (lin_pos, lin_vel, lin_acc), and the
-      !! mirror buffers of lin_eval.
+      !! every interior DOF of an EI = 0 line, every free DOF of a finite-EI cable and every free
+      !! twist angle of a cable restrained in torsion, the slot of its position, of its velocity
+      !! and of its acceleration (lin_pos, lin_vel, lin_acc), and the mirror buffers of lin_eval.
       TYPE(CD_OF_Instance), INTENT(INOUT) :: inst_e
       TYPE(CD_MiscVarType), INTENT(IN)    :: m
       INTEGER(IntKi),       INTENT(OUT)   :: ErrStat
       CHARACTER(*),         INTENT(OUT)   :: ErrMsg
-      INTEGER(IntKi) :: il, ic, ndofl, nin, nf, csz, koff, n, k, j, es, n1, k1, kind
+      INTEGER(IntKi) :: il, ic, ndofl, nin, nf, csz, koff, n, k, j, es, n1, k1, kind, ntw
       CHARACTER(ErrMsgLen) :: em
       LOGICAL, ALLOCATABLE :: mask(:)
+      INTEGER, ALLOCATABLE :: tw_p(:), tw_r(:), tw_a(:), tw_n(:)
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -2736,7 +2734,7 @@ CONTAINS
       END DO
       DO ic = 1, inst_e%agg%ncable
          IF (CD_HFMF_MirrorSize( inst_e%agg%cables(ic) ) <= 0) CYCLE
-         n = n + COUNT(inst_e%agg%cables(ic)%line%freemask)
+         n = n + COUNT(inst_e%agg%cables(ic)%line%freemask) + CD_HFMF_Twist_Lin_Count( inst_e%agg%cables(ic) )
       END DO
       ! the constitutive states: every viscoelastic and Syrope element, the per-element tail
       ! after the line's interior block (as pack_state_mirror)
@@ -2799,6 +2797,31 @@ CONTAINS
             inst_e%lin_pos(k) = koff + nf + j
             inst_e%lin_acc(k) = koff + 2*nf + j
          END DO
+         koff = koff + csz
+      END DO
+      ! the nodal twist of a cable restrained in torsion: each free node's angle phi, its rate and
+      ! its acceleration, in the cable's torsion tail (CD_HFMF_Twist_Lin_Slots)
+      koff = 0
+      IF (inst_e%nlines > 0) koff = m%LineStateIsN(inst_e%nlines)
+      DO ic = 1, inst_e%agg%ncable
+         csz = CD_HFMF_MirrorSize( inst_e%agg%cables(ic) )
+         IF (csz <= 0) CYCLE
+         ntw = CD_HFMF_Twist_Lin_Count( inst_e%agg%cables(ic) )
+         IF (ntw > 0) THEN
+            ALLOCATE (tw_p(ntw), tw_r(ntw), tw_a(ntw), tw_n(ntw))
+            CALL CD_HFMF_Twist_Lin_Slots( inst_e%agg%cables(ic), tw_p, tw_r, tw_a, tw_n, es, em )
+            IF (es /= CD_HFMF_OK) THEN
+               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))//': '// &
+                                TRIM(em), ErrStat, ErrMsg, 'lin_state_map' ); RETURN
+            END IF
+            DO j = 1, ntw
+               k = k + 1
+               inst_e%lin_pos(k) = koff + tw_p(j)
+               inst_e%lin_vel(k) = koff + tw_r(j)
+               inst_e%lin_acc(k) = koff + tw_a(j)
+            END DO
+            DEALLOCATE (tw_p, tw_r, tw_a, tw_n)
+         END IF
          koff = koff + csz
       END DO
       inst_e%lin_states = .TRUE.
@@ -2907,7 +2930,11 @@ CONTAINS
          CALL restore; RETURN
       END IF
       ! the input: the coupled points move to u, and the accelerations follow (the EI = 0 lines
-      ! in the non-probe update, the cables by their refresh)
+      ! in the non-probe update, the cables by their refresh). The orientation of a cable's
+      ! coupled point turns its parent-attached torsion end frame (CD_HFMF_SetCoupledKinematics):
+      ! the condensed torque (Phi - Theta)/C and a nodal twist's end element are then evaluated
+      ! with the turned frame, and the frame takes the point's angular velocity and acceleration
+      ! (CD_HFMF_Set_Twist_Frame_Rates: the torsional damping and the held section's inertia)
       CALL mesh_to_arrays( u%CoupledKinematics(1), Inst(id)%ncp, Inst(id)%ws_pos, Inst(id)%ws_vel, &
                            Inst(id)%ws_acc, Inst(id)%ws_orient, Inst(id)%ws_omega, Inst(id)%ws_alpha, &
                            ErrStat2, ErrMsg2 )
@@ -2922,7 +2949,17 @@ CONTAINS
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
          CALL restore; RETURN
       END IF
+      ! (The operating-point outputs of the .lin file come from CD_CalcOutput, which keeps the
+      ! committed state's accelerations and the end-frame rates of its last step's turn; at a
+      ! settled operating point, such as the still-water start the documentation prescribes,
+      ! they are those of this surface, and the matrices are differences of this surface alone.)
       DO ic = 1, Inst(id)%agg%ncable
+         CALL CD_HFMF_Set_Twist_Frame_Rates( Inst(id)%agg%cables(ic), es, em )
+         IF (es /= CD_HFMF_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
+                             ' torsion end-frame rates: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+            CALL restore; RETURN
+         END IF
          CALL CD_HFMF_Refresh_Acceleration( Inst(id)%agg%cables(ic), es, em )
          IF (es /= CD_HFMF_OK) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
@@ -3504,17 +3541,36 @@ CONTAINS
       ! the constitutive states: a viscoelastic slow-branch stretch (m) takes the position step,
       ! a Syrope slow strain the strain of a micrometre over a metre
       REAL(R8Ki), PARAMETER     :: LIN_DSLOW = 1.0E-6_R8Ki
+      ! the nodal twist: at a fixed configuration the element twist phi_{e+1} - phi_e + rho_e(q)
+      ! (with GJ|K, + (K/GJ)(l_e - l0), which the angles do not change) and so the torques and
+      ! their forces M_e drho_e/dq on the cable are affine in the angles; the coupling of the
+      ! angles to the configuration (rho_e, the stretch) is not, and the angle takes the
+      ! position step's 1e-6 rad, as the r and m it is differenced with. A rate enters only the
+      ! linear torsional damping, so any rate step is exact up to round-off: 0.01 rad/s
+      REAL(R8Ki), PARAMETER     :: LIN_DPHI = 1.0E-6_R8Ki, LIN_DW = 1.0E-2_R8Ki
+      ! the coupled-point rotation step of a linearization run: a rotation moves no node, so
+      ! neither contact nor slack constrains it, and the turn of a torsion end frame about axes
+      ! across its director (a solid angle) or of an end connection's direction is nonlinear:
+      ! 1e-4 rad keeps the central difference's O(h^2) error near 1e-9 and the difference of the
+      ! moments and accelerations some eight digits above round-off. In a Linearize run every
+      ! input Jacobian goes through lin_eval with this step, the glue's time-domain
+      ! input-output solves before the linearization times included; a run without
+      ! Linearize keeps 0.1 rad
+      REAL(R8Ki), PARAMETER     :: LIN_DROT = 1.0E-4_R8Ki
       LOGICAL, ALLOCATABLE      :: lin1m(:)
-      INTEGER(IntKi)            :: kind1
+      INTEGER(IntKi)            :: kind1, ntw
+      INTEGER, ALLOCATABLE      :: tw_p(:), tw_r(:), tw_a(:), tw_n(:)
       INTEGER(IntKi)            :: ipass, nnc, inode, ikind, i0, nrun, icomp, k
       ! the position step of the line states and the coupled-point displacement step of the
       ! inputs under linearization (lin_disp_step), and a cable's tangent-rate step
-      REAL(R8Ki)                :: dx_pos, dx_u, dtr
+      REAL(R8Ki)                :: dx_pos, dx_u, dtr, dx_rot
 
       ErrStat = ErrID_None
       ErrMsg  = ''
       dx_u = 0.05_R8Ki
+      dx_rot = 0.1_R8Ki
       IF (Linearize) THEN
+         dx_rot = LIN_DROT
          dx_u = LIN_DX
          CALL lin_disp_step( inst_, dx_u, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
@@ -3525,8 +3581,9 @@ CONTAINS
       IF (Linearize) THEN
          ! Linearization with the line dynamics, as MoorDyn-F: the continuous states are the
          ! positions of every EI = 0 line's interior nodes and of every finite-EI cable's free
-         ! DOFs (node positions r and tangents m = dr/ds), then their velocities, held in the
-         ! x%states mirror slots (lin_state_map), and the per-element constitutive states of the
+         ! DOFs (node positions r and tangents m = dr/ds) and the free twist angles phi of a
+         ! cable restrained in torsion, then their velocities, held in the x%states mirror slots
+         ! (lin_state_map), and the per-element constitutive states of the
          ! viscoelastic and Syrope ropes as first-order states. The acceleration and the other
          ! mirror blocks are not registered: the glue would take every registered x as a state.
          ALLOCATE (Vars%x(0), STAT=ErrStat2)
@@ -3622,6 +3679,56 @@ CONTAINS
                   DEALLOCATE (CblLinPos)
                   k = k + nrun
                END DO
+               koff = koff + csz
+            END DO
+            ! the nodal twist of every cable restrained in torsion, after the cables' r and m:
+            ! the angles phi of its free nodes (every node but a torsionally rigid end), then in
+            ! the second pass their rates, one consecutive run per cable (CD_HFMF_Twist_Lin_Slots)
+            koff = 0
+            IF (inst_%nlines > 0) koff = m%LineStateIsN(inst_%nlines)
+            DO ic = 1, inst_%agg%ncable
+               csz = CD_HFMF_MirrorSize( inst_%agg%cables(ic) )
+               IF (csz <= 0) CYCLE
+               ntw = CD_HFMF_Twist_Lin_Count( inst_%agg%cables(ic) )
+               IF (ntw > 0) THEN
+                  nnc = inst_%agg%cables(ic)%line%nn
+                  ALLOCATE (tw_p(ntw), tw_r(ntw), tw_a(ntw), tw_n(ntw), CblLinPos(ntw), STAT=ErrStat2)
+                  IF (ErrStat2 /= 0) THEN
+                     CALL SetErrStat( ErrID_Fatal, 'Could not allocate cable twist lin-name work arrays.', &
+                                      ErrStat, ErrMsg, RoutineName ); RETURN
+                  END IF
+                  CALL CD_HFMF_Twist_Lin_Slots( inst_%agg%cables(ic), tw_p, tw_r, tw_a, tw_n, es, em )
+                  IF (es /= CD_HFMF_OK) THEN
+                     CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
+                                      ': '//TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
+                  END IF
+                  ! one variable per cable and kind needs one consecutive run of mirror slots
+                  IF (tw_p(ntw) - tw_p(1) /= ntw - 1 .OR. tw_r(ntw) - tw_r(1) /= ntw - 1) THEN
+                     CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
+                                      ': the free twist angles are not consecutive in the state mirror.', &
+                                      ErrStat, ErrMsg, RoutineName ); RETURN
+                  END IF
+                  ! the node named End A first, as the channels and the cable's r and m states
+                  DO j = 1, ntw
+                     LinStr = 'Cable '//TRIM(Num2LStr(ic))//' node '//TRIM(Num2LStr(nnc + 1 - tw_n(j)))
+                     IF (ipass == 1) THEN
+                        CblLinPos(j) = TRIM(LinStr)//' twist, rad'
+                     ELSE
+                        CblLinPos(j) = TRIM(LinStr)//' twist rate, rad/s'
+                     END IF
+                  END DO
+                  LinStr = 'Cable '//TRIM(Num2LStr(ic))//' twist'
+                  IF (ipass == 1) THEN
+                     CALL MV_AddVar( Vars%x, LinStr, FieldScalar, DatLoc(CD_x_states), &
+                                     iAry=koff + tw_p(1), Num=ntw, Flags=VF_DerivOrder2, DerivOrder=0, &
+                                     Perturb=LIN_DPHI, LinNames=CblLinPos )
+                  ELSE
+                     CALL MV_AddVar( Vars%x, TRIM(LinStr)//' rate', FieldScalar, DatLoc(CD_x_states), &
+                                     iAry=koff + tw_r(1), Num=ntw, Flags=VF_DerivOrder2, DerivOrder=1, &
+                                     Perturb=LIN_DW, LinNames=CblLinPos )
+                  END IF
+                  DEALLOCATE (tw_p, tw_r, tw_a, tw_n, CblLinPos)
+               END IF
                koff = koff + csz
             END DO
          END DO
@@ -4029,7 +4136,7 @@ CONTAINS
                              DatLoc(CD_u_CoupledKinematics, ivT), &
                              Mesh=u%CoupledKinematics(ivT), &
                              Perturbs=[dx_u, &        ! FieldTransDisp
-                                       0.1_R8Ki, &    ! FieldOrientation
+                                       dx_rot, &      ! FieldOrientation
                                        0.1_R8Ki, &    ! FieldTransVel
                                        0.1_R8Ki, &    ! FieldAngularVel
                                        0.1_R8Ki, &    ! FieldTransAcc

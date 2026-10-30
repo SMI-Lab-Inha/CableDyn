@@ -996,13 +996,13 @@ def test_torsion_line_rules_follow_the_native_checks():
     one_end = _edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"))
     _rejects(one_end, "is not torsionally restrained at both ends")
     DeckFile.from_text(_edit(one_end, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")))
-    # the dynamic run needs the force blend; modal analysis refuses torsion
+    # the dynamic run needs the force blend; modal analysis carries the twist
     dynamic = _edit(_TORSION, ("0.0 TMax\n", "10.0 TMax\n"))
     DeckFile.from_text(dynamic)
     _rejects(
         _options(dynamic, "False alpha_force_blend"), "needs the force-blended generalised-alpha"
     )
-    _rejects(_options(_TORSION, "3 nModes"), "modal analysis .* with torsion is not yet supported")
+    DeckFile.from_text(_options(_TORSION, "3 nModes"))
     # the coupled OpenFAST and FAST.Farm routes turn the fairlead frame with the platform and
     # accept torsion, one restrained end included; a coupled run is always dynamic, so it
     # needs the force blend whatever the deck's TMax

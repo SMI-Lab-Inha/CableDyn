@@ -7,9 +7,9 @@ PROGRAM test_hermite_cable_control
   !!   A  the update is inert when nothing changes (a rate of -0 included), rebuilds every
   !!      length-dependent cache to what a model built with the new lengths carries (bit for
   !!      bit), leaves the committed lengths to a re-derived acceleration, is atomic on
-  !!      failure, refuses a torsion line, a contact line without the seabed recompute inputs
-  !!      and the configuration blend, is taken back exactly by a saved control state, and
-  !!      joins the snapshot/restore contract exactly;
+  !!      failure, refuses a contact line without the seabed recompute inputs and the
+  !!      configuration blend, is taken back exactly by a saved control state, and joins the
+  !!      snapshot/restore contract exactly (a line restrained in torsion: test_control_torsion);
   !!   B  a hanging vertical cable whose top span is paid out settles to the top reaction
   !!      w (L + DeltaL) and the stretched length L' + w L'**2/(2 EA);
   !!   C  a taut vertical cable whose top span is hauled in settles to the top tension
@@ -209,10 +209,6 @@ CONTAINS
     CALL CD_HermiteCable_Dyn_Set_SegmentLength(a, SPAN, [1.0_wp, -1.0_wp], [0.0_wp, 0.0_wp], es, em)
     CALL require(es /= CD_HCDYN_OK .AND. unchanged(a, ref), 'A: a non-positive length fails and writes nothing')
     twin = a
-    twin%torsion%active = .TRUE.
-    CALL CD_HermiteCable_Dyn_Set_SegmentLength(twin, SPAN, [1.0_wp, 1.0_wp], [0.0_wp, 0.0_wp], es, em)
-    CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'torsion') > 0, 'A: a line restrained in torsion fails closed')
-    twin%torsion%active = .FALSE.
     twin%has_seabed_recompute = .FALSE.
     CALL CD_HermiteCable_Dyn_Set_SegmentLength(twin, SPAN, [1.0_wp, 1.0_wp], [0.0_wp, 0.0_wp], es, em)
     CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'seabed recompute') > 0, &

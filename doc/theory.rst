@@ -559,6 +559,47 @@ between steps (the direct feedthrough) twists the end element against the frozen
 the end's translation stretches it. The node torque (``Torq<L>N<J>``) is the mean of its two
 elements', and the material twists of the elements sum to the twist channels.
 
+**Active line control.** A length command on a controlled element (see Active line control
+below) changes every torsion term that reads :math:`L_0`: the condensed compliance
+:math:`C = \sum_e L_{0,e}/GJ_e + 1/k_1 + 1/k_2`, the element stiffness :math:`GJ/L_0` and damping
+:math:`B_t/L_0` of the nodal twist, the coupling term :math:`(K/GJ)(l - L_0)` and, through the
+Hermite interpolant, the element holonomy. Each is evaluated with the lengths of its time level,
+as the rest of the residual: the committed force with the lengths the committed state was reached
+with, the step's force with the new ones. The lumped polar inertia :math:`I_{rn} L_0/2` is rebuilt
+with the consistent mass (its rate term is not modelled either), and a torsional damping written
+as :math:`-\zeta` is resolved again at the new length, :math:`B_t = \zeta L_0 \sqrt{GJ I_{rn}}`, so
+the element keeps its fraction of critical damping; a positive :math:`B_t` is a section property
+and stays (the axial ``BA`` keeps its initial resolution, as in MoorDyn). The torsional damping
+takes the rate of the twist per unit length :math:`\hat\tau/L_0` that the elastic torque reads, as
+the axial damping takes the rate of the strain:
+
+.. math::
+
+   M_e = \frac{GJ_e}{L_{0,e}}\,\hat\tau_e + B_{t,e}\,\frac{d}{dt}\frac{\hat\tau_e}{L_{0,e}}
+       = \frac{GJ_e}{L_{0,e}}\,\hat\tau_e + \frac{B_{t,e}}{L_{0,e}}
+         \Big(\dot{\hat\tau}_e - \hat\tau_e\,\frac{\dot L_{0,e}}{L_{0,e}}\Big) .
+
+At fixed :math:`\mathbf{q}` the twist changes with :math:`L_0` through the coupling term and the
+element's shape. Write :math:`\mathbf{a}_1, \mathbf{a}_2` for the tangent DOFs of the element's two
+nodes (the nodal :math:`\mathbf{m} = d\mathbf{r}/ds`). The reference twist :math:`m_e` depends on
+them only through :math:`L_0\mathbf{a}_i` (the Hermite :math:`\mathbf{r}'` and
+:math:`\mathbf{r}''`) and :math:`\mathbf{a}_i/|\mathbf{a}_i|`, and the stretched length
+:math:`l_e` only through :math:`L_0\mathbf{a}_i`, so with :math:`c_e = K_e/GJ_e`
+:math:`L_0\,\partial(m_e + c_e l_e)/\partial L_0 = \sum_i \mathbf{a}_i\cdot\partial(m_e + c_e
+l_e)/\partial\mathbf{a}_i`, and
+
+.. math::
+
+   \dot{\hat\tau}_e = \dot\varphi_{k+1} - \dot\varphi_k + \nabla\hat\tau_e\cdot\dot{\mathbf{q}}
+     + \frac{\dot L_{0,e}}{L_{0,e}}\Big(\mathbf{a}_1\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{a}_1}
+     + \mathbf{a}_2\cdot\frac{\partial\hat\tau_e}{\partial\mathbf{a}_2} - c_e L_{0,e}\Big) ,
+
+with the matching tangent terms. A segment paid out at a constant twist per length carries no
+damping torque. The test suite checks the quasi-static torque :math:`GJ\Phi/L(t) + K(H - L)/L` of a
+taut line paid out and hauled in (condensed and nodal twist), the Kelvin–Voigt torque of a constant
+pay-out, the length-rate term against finite differences on a bowed line, the energy a length
+change puts into a ringing twist, and that the step does not lag at :math:`\alpha_f > 0`.
+
 **Limits.** Seabed friction does not resist twist, so the laid part of a line twists freely
 (the friction torque of a cable on the seabed can be comparable with the twist torque near
 touchdown). There is no anisotropic or pre-twisted section, and no self-contact: a loop that
@@ -1788,6 +1829,42 @@ tension :math:`H`, and the symmetric in-plane modes satisfy
 with :math:`\lambda^2 = (wL/H)^2\,L/(H L_e/EA)` (:ref:`Irvine & Caughey, 1974 <ref-irvine1974>`);
 the modal analysis reproduces both.
 
+A finite-EI line's modes carry what its dynamics carries: an end connection's spring adds its
+Hessian on the end tangent, a rigid end keeps only the magnitude of its tangent (the two
+transverse components of its basis are held), and discrete attachments add their dry and added
+masses. A line restrained in torsion carries the :ref:`nodal twist <theory-nodal-twist>` in its
+dynamics, so its modes do too: the twist angle :math:`\varphi_k` of every node joins the
+degrees of freedom, :math:`[\mathbf r, \mathbf m, \varphi]` per node (half-bandwidth 13), with
+the lumped polar inertia :math:`I_k` as its mass and the second variation of the twist energy
+:math:`E_t = \sum_e \tfrac12 (GJ_e/L_{0,e})\,\hat\tau_e^2` (and of the elastic end springs) as
+its stiffness, at the static element torques :math:`M_e = (GJ_e/L_{0,e})\,\hat\tau_e`. With
+element :math:`e` between nodes :math:`k` and :math:`k+1` and its full twist
+:math:`\hat\tau_e = \varphi_{k+1} - \varphi_k + \rho_e(\mathbf q)`,
+:math:`\rho_e = m_e + (K_e/GJ_e)(l_e - L_{0,e})`,
+
+.. math::
+
+   \frac{\partial^2 E_t}{\partial\mathbf q^2} = \sum_e \Big( M_e\,\frac{\partial^2 \rho_e}{\partial\mathbf q^2}
+     + \frac{GJ_e}{L_{0,e}}\,\mathbf g_e\mathbf g_e^{\mathsf T} \Big), \qquad
+   \frac{\partial^2 E_t}{\partial\varphi_{k+1}\,\partial\mathbf q}\Big|_e
+     = -\frac{\partial^2 E_t}{\partial\varphi_k\,\partial\mathbf q}\Big|_e = \frac{GJ_e}{L_{0,e}}\,\mathbf g_e,
+   \qquad \mathbf g_e = \frac{\partial\rho_e}{\partial\mathbf q} ,
+
+the second term summed over the two elements that share a node; under torque–tension coupling
+:math:`\partial^2\rho_e/\partial\mathbf q^2` holds :math:`(K_e/GJ_e)\,\partial^2 l_e/\partial\mathbf q^2`.
+
+The torque term lowers the bending frequencies of a twisted line, as on Greenhill's twisted
+shaft; :math:`\mathbf g_e` couples the twist to the bending of a curved line and, under
+torque–tension coupling, to the stretch. Eliminating the angles (no polar inertia) leaves the
+condensed tangent of the statics, :math:`-M_t\,\partial^2\Theta/\partial\mathbf q^2 +
+\nabla\Theta\,\nabla\Theta^{\mathsf T}/C`: the Schur complement of the angle block is the
+rank-one term the statics carry in a bordered solve, which a band cannot hold. Damping (also
+:math:`B_t`) is left out. The test suite checks the torsional modes of a clamped straight line
+against :math:`\omega_n = (n\pi/L)\sqrt{GJ/I_{rn}}` and its lumped chain, elastic torsional
+ends, the coupled axial–torsional modes of :math:`K`, the lateral modes of a taut line under a
+torque against the clamped Greenhill-cable determinant, and the Schur complement against the
+condensed static tangent (see :doc:`validation`).
+
 Time integration
 ----------------
 
@@ -2869,7 +2946,8 @@ the end-position part,
 
 and a segment paid out at constant strain carries no damping force. The position Jacobian of the
 damping force gains :math:`-BA\, H'_a H'_b\, (\dot L_0/L_0^2)\, \mathbf{t}\mathbf{t}^\mathsf{T}` on
-the end-position columns.
+the end-position columns. On a cable restrained in torsion the torsion follows the lengths in the
+same way (:ref:`theory-torsion`, Active line control).
 
 Tension and coupled loads
 -------------------------

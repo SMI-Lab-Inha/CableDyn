@@ -715,6 +715,15 @@ target_link_libraries(test_hermite_cable_control PRIVATE cabledyn_core)
 add_test(NAME hermite_cable_control COMMAND test_hermite_cable_control)
 set_tests_properties(hermite_cable_control PROPERTIES LABELS "fortran;unit;dynamic;hermite")
 
+# Active line control of a line restrained in torsion: the quasi-static torque GJ Phi/L(t) (with
+# torque-tension coupling), the torsional damping of the twist per length, the length terms a
+# fresh build carries, the energy of a length change with a real Irn, no lag at alpha_f > 0,
+# restart mid-ramp (snapshot, mirror) and a CONTROL deck on the coupled aggregate.
+add_executable(test_control_torsion tests/test_control_torsion.f90)
+target_link_libraries(test_control_torsion PRIVATE cabledyn_core)
+add_test(NAME control_torsion COMMAND test_control_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(control_torsion PROPERTIES LABELS "fortran;unit;dynamic;hermite;openfast")
+
 add_executable(test_hermite_added_mass tests/test_hermite_added_mass.f90)
 target_link_libraries(test_hermite_added_mass PRIVATE cabledyn_core)
 add_test(NAME hermite_added_mass COMMAND test_hermite_added_mass)
@@ -2005,6 +2014,13 @@ add_executable(test_modal tests/test_modal.f90 tests/blas_config_probe.c)
 target_link_libraries(test_modal PRIVATE cabledyn_core)
 add_test(NAME modal COMMAND test_modal)
 set_tests_properties(modal PROPERTIES LABELS "fortran;unit;driver;static;validation")
+# Modal analysis of a line restrained in torsion: the twist angle of every node joins the modes
+# (torsional, elastic-end and torque-tension coupled modes, the lateral modes under a torque, the
+# Schur complement of the angles against the condensed static tangent).
+add_executable(test_modal_torsion tests/test_modal_torsion.f90)
+target_link_libraries(test_modal_torsion PRIVATE cabledyn_core)
+add_test(NAME modal_torsion COMMAND test_modal_torsion)
+set_tests_properties(modal_torsion PROPERTIES LABELS "fortran;unit;static;validation")
 # The modal eigensolves through CableDyn's LAPACK layer with every argument array against a
 # no-access page: no read or write outside the arrays the modal code passes.
 if(NOT CABLEDYN_STATIC_WINDOWS_RELEASE)
@@ -2187,6 +2203,14 @@ add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
 target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)
 add_test(NAME coupled_torsion COMMAND test_coupled_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(coupled_torsion PROPERTIES LABELS "fortran;unit;static;dynamic;openfast")
+
+# OpenFAST linearisation of a line restrained in torsion, by the shell's lin_eval recipe on the
+# aggregate: the twist modes of A against n pi/L sqrt(GJ/Irn), the reduced roll stiffness GJ/L
+# (nodal twist and condensed), the damping and inertia columns of the platform's angular rates.
+add_executable(test_lin_torsion tests/test_lin_torsion.f90)
+target_link_libraries(test_lin_torsion PRIVATE cabledyn_core)
+add_test(NAME lin_torsion COMMAND test_lin_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(lin_torsion PROPERTIES LABELS "fortran;unit;dynamic;openfast")
 
 add_executable(test_torsion_orcaflex tests/test_torsion_orcaflex.f90)
 target_link_libraries(test_torsion_orcaflex PRIVATE cabledyn_core)
@@ -2385,6 +2409,13 @@ add_test(NAME driver_cli_mixed_nmodes
     "-DMUST_MATCH=nModes is not supported for mixed EI=0/finite-EI decks"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_cli_mixed_nmodes PROPERTIES LABELS "fortran;driver;cli")
+# A lazy wave restrained in torsion and twisted two turns writes its modes with the twist.
+add_test(NAME driver_cli_torsion_nmodes
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_lazy_wave_modes.dat|${CMAKE_CURRENT_BINARY_DIR}/driver_cli_torsion_nmodes"
+    "-DMUST_MATCH=torsion solved, imposed twist  7.20000E\\+02 deg;converged run written"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_cli_torsion_nmodes PROPERTIES LABELS "fortran;driver;cli")
 # Non-ASCII, reserved-device, input-clobbering, and concurrently used output paths.
 add_test(
   NAME driver_cli_paths
@@ -2724,6 +2755,16 @@ if(Python3_Interpreter_FOUND)
       --output ${CMAKE_CURRENT_BINARY_DIR}/lozon_example_equilibrium)
   set_tests_properties(lozon_example_equilibrium PROPERTIES
     LABELS "python;driver;integration;example;lozon;validation")
+  # Modal analysis of decks restrained in torsion: the torsional modes of a straight clamped
+  # line against the chain and the continuum, its other modes against TorsStiffness Free, and
+  # the twisted lazy wave's modes.
+  add_test(
+    NAME modal_torsion_deck
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_modal_torsion_deck.py
+      --exe $<TARGET_FILE:cabledyn>
+      --source ${CMAKE_CURRENT_SOURCE_DIR}
+      --output ${CMAKE_CURRENT_BINARY_DIR}/modal_torsion_deck)
+  set_tests_properties(modal_torsion_deck PROPERTIES LABELS "python;driver;integration;validation")
   # Static-initialization robustness matrix: a deterministic sample of EI=0 mooring regimes
   # (catenary, semi-taut, taut, suspended, composite, slack/vertical, anchors off the seabed,
   # sloped seabed, fine mesh, soft seabed, current, one/two segments, Free/Connect points)
@@ -2837,6 +2878,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_hermite_drag_dynamics
       test_hermite_axial_damping
       test_hermite_cable_control
+      test_control_torsion
       test_endconn_spring
       test_torsion_coupling)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
@@ -2849,6 +2891,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
   target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_syrope_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_viscoelastic_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_control_torsion PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)
@@ -2900,6 +2943,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_hermite_drag_dynamics
       test_hermite_axial_damping
       test_hermite_cable_control
+      test_control_torsion
       test_hermite_added_mass
       test_hermite_wave_forcing
       test_lazywave_dynamics

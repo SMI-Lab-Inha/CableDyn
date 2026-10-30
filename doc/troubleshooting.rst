@@ -403,9 +403,6 @@ Torsion
        ``CableDyn_InitDeckRotating`` and pass the host's rotations, add a body (such a deck runs
        on the multibody route, which supports torsion), or set ``TorsStiffness Free`` in every
        ``END CONNECTIONS`` row.
-   * - ``formal OpenFAST linearization of a line restrained in torsion is not supported``
-     - linearise the model with ``TorsStiffness Free``; the twist and the torque carry no
-       linearisation state.
    * - ``torsion: the twist would move more than pi/2 from its committed value``
      - the host turned a fairlead by more than 90° about the line's end direction without a
        step (an output probe or a non-stepping input update). Keep the platform turn per
@@ -414,9 +411,8 @@ Torsion
        after 6 step halvings``
      - the body turns faster than one step can follow the twist; reduce ``dtM``.
    * - ``torsion in a dynamic run needs the force-blended generalised-alpha (OPTION
-       alpha_force_blend True)`` / ``modal analysis (OPTION nModes) of a line with torsion is not
-       yet supported``
-     - remove ``False alpha_force_blend`` or ``nModes`` from a deck with torsion.
+       alpha_force_blend True)``
+     - remove ``False alpha_force_blend`` from a deck with torsion.
    * - ``OUTPUT "Torq...": line <L> is not torsionally restrained at both ends ..., so it carries
        no torque``
      - a ``Torq``/``Twist`` channel needs a line with a torsional restraint at both ends.

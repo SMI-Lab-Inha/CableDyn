@@ -83,7 +83,7 @@ MODULE CableDyn_HermiteCableDynamic
                                      CD_HermiteTorsion_Element_Stretch, CD_HermiteTorsion_Element, &
                                      CD_HermiteTorsion_Stretch_Derivatives, CD_HermiteTwist_Reference, &
                                      CD_HermiteTwist_Carry, CD_HermiteTwist_Angle, CD_HermiteTwist_Omega, &
-                                     CD_HermiteTwist_Omega_Gradient, CD_HTORS_PI
+                                     CD_HermiteTwist_Omega_Gradient, CD_HTORS_PI, CD_HermiteTorsion_Zeta_Damping
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_in_parallel
   IMPLICIT NONE
@@ -100,7 +100,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Coupling_Tension
   PUBLIC :: CD_HermiteCable_Dyn_Element_Torque, CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
   PUBLIC :: CD_HermiteCable_Dyn_Twist_Mirror_Size, CD_HermiteCable_Dyn_Twist_Pack, CD_HermiteCable_Dyn_Twist_Unpack
-  PUBLIC :: CD_HermiteCable_Dyn_Twist_Check
+  PUBLIC :: CD_HermiteCable_Dyn_Twist_Check, CD_HermiteCable_Dyn_Twist_Hessian
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Drive
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion_Frames
   PUBLIC :: CD_HermiteCable_Dyn_EndConnection_Moment
@@ -248,7 +248,11 @@ MODULE CableDyn_HermiteCableDynamic
     ! change; from then on l0_dot(ne) holds the unstretched-length rate of every element
     ! (zero outside the controlled span), which the axial damping subtracts from the strain
     ! rate. A model that is never controlled leaves has_ctrl false and l0_dot unallocated, so
-    ! every evaluation is unchanged. BA keeps its initial resolution.
+    ! every evaluation is unchanged. BA keeps its initial resolution. On a line restrained in
+    ! torsion every torsion term reads l0 when it is evaluated (the compliance sum l0/GJ, the
+    ! nodal twist's GJ/l0 and Bt/l0, the coupling term (K/GJ)(l - l0), the element shape), the
+    ! lumped polar inertia and a -zeta torsional damping are rebuilt with the other caches
+    ! (torsion_length_terms), and the torsional damping takes the rate of the twist per length.
     LOGICAL :: has_ctrl = .FALSE.
     REAL(wp), ALLOCATABLE :: l0_dot(:)
     ! The lengths and rates the committed state was reached with (allocated with l0_dot, set
@@ -445,6 +449,9 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp) :: tors_step_ends(3, 4) = CD_ZERO, tors_step_phi = CD_ZERO
     REAL(wp) :: tors_drive_ends(3, 4) = CD_ZERO, tors_drive_phi = CD_ZERO
     REAL(wp) :: snap_torsion_theta = CD_ZERO, snap_torsion_phi = CD_ZERO, snap_torsion_ends(3, 4) = CD_ZERO
+    ! the committed torque of the snapshot, kept as it was formed (under active line control the
+    ! committed state's compliance is that of the committed lengths, not of the present ones)
+    REAL(wp) :: snap_torsion_torque = CD_ZERO
     ! Torsion query cache (allocation-free read-only queries): Theta, dTheta/d[w_1, w_2] and
     ! dTheta/dr at both end nodes, evaluated at tors_c_q with the end frames tors_c_ends and
     ! unwrapped against tors_c_prev. A query uses it only when the model's q, end frames and
@@ -1681,14 +1688,19 @@ CONTAINS
     !! A call that changes no length and no rate (bit for bit, a rate of -0 counting as +0)
     !! returns at once, so a zero command of either sign on an uncontrolled model leaves it
     !! untouched. The update is atomic: every check and rebuild runs before the model is
-    !! written. A line restrained in torsion is refused (its condensed torsional compliance
-    !! has no length-control law here), as is a contact model without the seabed recompute
-    !! inputs and a model on the configuration-blended generalised-alpha (force blend off,
-    !! CD_HermiteCable_Dyn_Set_ForceBlend), whose blended state has no committed-length
-    !! treatment, so a ramp would lag by alpha_f times the length change. restored = .TRUE. (a checkpoint
-    !! restart re-applying the command the committed state was reached with) makes the
-    !! lengths and rates the committed ones at once; a committed force reloaded with the
-    !! state belongs to them and stays valid.
+    !! written. On a line restrained in torsion the torsion follows the lengths in the same way:
+    !! the terms read at evaluation (the condensed compliance sum l0/GJ, the nodal twist's element
+    !! stiffness GJ/l0 and damping Bt/l0, the coupling term (K/GJ)(l - l0)) take l0 there, the
+    !! lumped polar inertia Irn l0/2 and a torsional damping given as -zeta (zeta l0 sqrt(GJ Irn))
+    !! are rebuilt with the caches, and the committed force keeps its torsion part at l0_c with
+    !! the rest. The rate enters the torsional damping as it enters the axial one: the damping
+    !! takes the rate of the twist per length (assemble_twist). A contact model without the seabed
+    !! recompute inputs is refused, as is a model on the configuration-blended generalised-alpha
+    !! (force blend off, CD_HermiteCable_Dyn_Set_ForceBlend), whose blended state has no
+    !! committed-length treatment, so a ramp would lag by alpha_f times the length change.
+    !! restored = .TRUE. (a checkpoint restart re-applying the command the committed state was
+    !! reached with) makes the lengths and rates the committed ones at once; a committed force
+    !! reloaded with the state belongs to them and stays valid.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: elems(:)
     REAL(wp), INTENT(IN) :: l0_new(:), l0_dot(:)
@@ -1721,10 +1733,6 @@ CONTAINS
     END IF
     IF (ANY(l0_new <= CD_ZERO)) THEN
       CALL fail('l0 must be positive'); RETURN
-    END IF
-    IF (model%torsion%active) THEN
-      CALL fail('a line restrained in torsion is not supported (the condensed torsional compliance '// &
-                'has no length-control law)'); RETURN
     END IF
     IF (model%has_contact .AND. .NOT. model%has_seabed_recompute) THEN
       CALL fail('a seabed-contact model needs the seabed recompute inputs '// &
@@ -1923,8 +1931,9 @@ CONTAINS
     !! the constant mass Mgb (element by element, then the attachment masses), the nodal
     !! tributary lengths and, on a contact model, the nodal seabed coefficients
     !! (CD_Nodal_Seabed_Stiffness, as the deck builds them) with the friction spring
-    !! stiffness that follows them. Everything is built first; the model is written only
-    !! when every build succeeded.
+    !! stiffness that follows them, and on a line restrained in torsion the torsion terms built
+    !! from the lengths (torsion_length_terms). Everything is built first; the model is
+    !! written only when every build succeeded.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: l0_new(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1982,15 +1991,38 @@ CONTAINS
       CALL MOVE_ALLOC(cn_new, model%contact_cn)
       IF (model%fr_active) model%fr_k = model%contact_kn
     END IF
-    ! the lumped polar inertia of the nodal twist follows the lengths
-    IF (model%tw_active) CALL tw_set_derived(model, model%torsion)
+    CALL torsion_length_terms(model)
   END SUBROUTINE rebuild_length_caches
+
+  SUBROUTINE torsion_length_terms(model)
+    !! The torsion terms built from the unstretched lengths, from model%l0 in the order
+    !! initialisation used (CD_HermiteCable_Dyn_Set_Torsion, the deck's torsion stage): the lumped
+    !! polar inertia of the nodal twist, half of each adjacent element's Irn l0 (tw_set_derived),
+    !! and the torsional damping of an element given as -zeta, Bt = zeta l0 sqrt(GJ Irn)
+    !! (CD_HermiteTorsion_Zeta_Damping), so the element keeps its fraction of critical damping. A
+    !! direct Bt is a section property and stays. The torsion query cache, keyed on the state and
+    !! not on the lengths, is dropped (Theta depends on l0 through the element shape and the
+    !! coupling term). Without torsion nothing is written.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    INTEGER :: e
+    IF (.NOT. model%torsion%active) RETURN
+    model%tors_c_valid = .FALSE.
+    IF (.NOT. model%tw_active) RETURN
+    CALL tw_set_derived(model, model%torsion)
+    IF (.NOT. (ALLOCATED(model%torsion%bt_zeta) .AND. ALLOCATED(model%torsion%bt))) RETURN
+    DO e = 1, model%ne
+      IF (model%torsion%bt_zeta(e) > CD_ZERO) &
+        model%torsion%bt(e) = CD_HermiteTorsion_Zeta_Damping(model%torsion%bt_zeta(e), model%l0(e), &
+                                                             model%torsion%gj(e), model%torsion%irn(e))
+    END DO
+  END SUBROUTINE torsion_length_terms
 
   SUBROUTINE enter_committed_lengths(model, aside, ErrStat, ErrMsg)
     !! Install the lengths and rates the committed state was reached with (l0_c, l0_dot_c) for
     !! one evaluation of the committed state, setting the present ones aside: after a length
     !! change the length-dependent caches are rebuilt from l0_c, and leave_committed_lengths
-    !! moves the present ones back bit for bit. A model that is not under active line control,
+    !! moves the present ones back bit for bit (the torsion terms, rebuilt from them). A model
+    !! that is not under active line control,
     !! or whose lengths and rates are the committed ones, is left as it is. On failure nothing
     !! is written.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
@@ -2037,6 +2069,8 @@ CONTAINS
         CALL MOVE_ALLOC(aside%cn, model%contact_cn)
         IF (model%fr_active) CALL MOVE_ALLOC(aside%frk, model%fr_k)
       END IF
+      ! the torsion terms of the present lengths, rebuilt from them as they were built
+      CALL torsion_length_terms(model)
     END IF
     IF (aside%rates) model%l0_dot = aside%rate
     aside%lengths = .FALSE.
@@ -5170,7 +5204,7 @@ CONTAINS
     REAL(wp) :: tensile_force_save, tensile_threshold_save, tensile_xi_save, tensile_time_save
     ! The step-rotation diagnostic must not keep the turn of a step that is rewound.
     REAL(wp) :: rotation_save
-    REAL(wp) :: tors_theta0, tors_phi0, tors_phi1, tors_ends0(3, 4), tors_ends1(3, 4), tors_sub(3, 4)
+    REAL(wp) :: tors_theta0, tors_phi0, tors_phi1, tors_ends0(3, 4), tors_ends1(3, 4), tors_sub(3, 4), tors_torque0
     CHARACTER(1024) :: em
     ! Tensile-qualification failure flag reported by each step (classified by flag, not by
     ! message text, so a short caller buffer cannot change the recovery decision).
@@ -5271,6 +5305,7 @@ CONTAINS
     tors_theta0 = model%torsion%theta
     tors_phi0 = model%torsion%phi
     tors_ends0 = model%torsion%ends
+    tors_torque0 = model%torsion%torque
     IF (model%tw_active) CALL tw_pack(model, model%ws_recovery_tw)
     tors_phi1 = tors_phi0
     tors_ends1 = tors_ends0
@@ -5511,13 +5546,13 @@ CONTAINS
   CONTAINS
 
     SUBROUTINE restore_torsion()
-      !! Interval-start torsion state (frames, Phi, Theta) after a rewind; no pending drive.
+      !! Interval-start torsion state (frames, Phi, Theta, torque) after a rewind; no pending drive.
       IF (.NOT. model%torsion%active) RETURN
       model%torsion%theta = tors_theta0
       model%torsion%phi = tors_phi0
       model%torsion%ends = tors_ends0
       IF (model%tw_active) CALL tw_unpack(model, model%ws_recovery_tw)
-      model%torsion%torque = (tors_phi0 - tors_theta0)/CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+      model%torsion%torque = tors_torque0
       model%tors_drive_set = .FALSE.
     END SUBROUTINE restore_torsion
   END SUBROUTINE CD_HermiteCable_Dyn_Step_Recovering
@@ -6775,14 +6810,78 @@ CONTAINS
     END DO
   END SUBROUTINE CD_HermiteCable_Dyn_Twist_Check
 
+  SUBROUTINE CD_HermiteCable_Dyn_Twist_Hessian(model, eg, eh, ek, emt, lg, lh, lk, lmt, ErrStat, ErrMsg)
+    !! The second variation of the nodal-twist elastic energy at the committed state, for an
+    !! undamped modal analysis about it (CableDyn_Modal): the energy is
+    !!   sum_e 1/2 (GJ/l0)_e tau_e**2 + sum_(elastic ends) 1/2 k tw**2,
+    !!   tau_e = phi_{e+1} - phi_e + rho_e(q),  tw = phi_1 - psi_1(q) (end 1), psi_2(q) + Phi - phi_N (end 2),
+    !! with the committed reference and end frames held. Per element: eg = d rho_e/dq and
+    !! eh = d2 rho_e/dq2 over its 12 DOFs, ek = GJ/l0 and emt = ek tau_e (the element torque
+    !! without damping), so d2E/dq2 = emt eh + ek eg eg^T, d2E/dphi_{e+1} dq = ek eg = -d2E/dphi_e dq
+    !! and d2E/dphi2 = ek [[1, -1], [-1, 1]]. Per end k (columns): lg = d psi/dm and lh = d2 psi/dm2
+    !! in the end node's tangent handle m, lk the spring stiffness (0 at a rigid end, whose
+    !! angle is held) and lmt = lk tw, so d2E/dm2 = lk lg lg^T -+ lmt lh (- at end 1, + at end 2),
+    !! d2E/dphi dm = -lk lg and d2E/dphi2 = lk. Fails closed without the nodal twist.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: eg(:, :), eh(:, :, :), ek(:), emt(:), lg(3, 2), lh(3, 3, 2), lk(2), lmt(2)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: rho, beta, psi, tw
+    INTEGER :: e, iend
+    eg = CD_ZERO
+    eh = CD_ZERO
+    ek = CD_ZERO
+    emt = CD_ZERO
+    lg = CD_ZERO
+    lh = CD_ZERO
+    lk = CD_ZERO
+    lmt = CD_ZERO
+    ErrStat = CD_HCDYN_BADINPUT
+    IF (.NOT. model%tw_active) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: the model has no nodal twist'; RETURN
+    END IF
+    IF (SIZE(eg, 1) /= 12 .OR. SIZE(eg, 2) /= model%ne .OR. SIZE(eh, 1) /= 12 .OR. SIZE(eh, 2) /= 12 .OR. &
+        SIZE(eh, 3) /= model%ne .OR. SIZE(ek) /= model%ne .OR. SIZE(emt) /= model%ne) THEN
+      ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: the element arrays must have ne columns'; RETURN
+    END IF
+    ErrStat = CD_HCDYN_OK
+    ErrMsg = ''
+    DO e = 1, model%ne
+      CALL twist_reference(model, e, model%q, model%torsion%ends, .TRUE., rho, beta, eg(:, e), eh(:, :, e), &
+                           ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: '//TRIM(ErrMsg); RETURN
+      END IF
+      ek(e) = model%torsion%gj(e)/model%l0(e)
+      emt(e) = ek(e)*(model%tw_phi(e + 1) - model%tw_phi(e) + rho)
+    END DO
+    DO iend = 1, 2
+      IF (model%tw_rigid(iend)) CYCLE
+      CALL twist_link(model, iend, model%q, model%torsion%ends, .TRUE., psi, lg(:, iend), lh(:, :, iend), &
+                      ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        ErrMsg = 'CD_HermiteCable_Dyn_Twist_Hessian: '//TRIM(ErrMsg); RETURN
+      END IF
+      lk(iend) = CD_ONE/model%torsion%end_compliance(iend)
+      IF (iend == 1) THEN
+        tw = model%tw_phi(1) - psi
+      ELSE
+        tw = psi + model%torsion%phi - model%tw_phi(model%nn)
+      END IF
+      lmt(iend) = lk(iend)*tw
+    END DO
+  END SUBROUTINE CD_HermiteCable_Dyn_Twist_Hessian
+
   PURE INTEGER FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size(model) RESULT(n)
     !! Reals of the nodal-twist checkpoint mirror (CD_HermiteCable_Dyn_Twist_Pack): the
     !! committed angles, rates and accelerations, directors, reference tangents, reference
-    !! twists, element torques, end-frame references and rates, and the force cache's angle
-    !! part; 0 without the nodal twist.
+    !! twists, element torques, end-frame references and rates, the force cache's angle part,
+    !! and the committed mean torque as it was formed (the summed twist over the compliance of
+    !! the lengths it was reached with, which a reload does not re-derive, as Restore does not);
+    !! 0 without the nodal twist.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     n = 0
-    IF (model%tw_active) n = tw_pack_size(model) + model%nn
+    IF (model%tw_active) n = tw_pack_size(model) + model%nn + 1
   END FUNCTION CD_HermiteCable_Dyn_Twist_Mirror_Size
 
   SUBROUTINE CD_HermiteCable_Dyn_Twist_Pack(model, buf)
@@ -6794,13 +6893,14 @@ CONTAINS
     n = tw_pack_size(model)
     CALL tw_pack(model, buf(1:n))
     buf(n + 1:n + model%nn) = model%tw_fcR
+    buf(n + model%nn + 1) = model%torsion%torque
   END SUBROUTINE CD_HermiteCable_Dyn_Twist_Pack
 
   SUBROUTINE CD_HermiteCable_Dyn_Twist_Unpack(model, buf, ErrStat, ErrMsg, check_only)
     !! Reload the nodal twist from a mirror of CD_HermiteCable_Dyn_Twist_Pack written by a
     !! model built from the same input (the caller restores q, v, a and the force cache with
-    !! it). Fails closed on a size mismatch, a non-finite value or a non-unit director; with
-    !! check_only it only checks.
+    !! it), the committed torque included. Fails closed on a size mismatch, a non-finite value
+    !! or a non-unit director; with check_only it only checks.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: buf(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -6812,7 +6912,7 @@ CONTAINS
       ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: the model has no nodal twist'; RETURN
     END IF
     n = tw_pack_size(model)
-    IF (SIZE(buf) /= n + model%nn) THEN
+    IF (SIZE(buf) /= n + model%nn + 1) THEN
       ErrMsg = 'CD_HermiteCable_Dyn_Twist_Unpack: the mirror does not match this line'; RETURN
     END IF
     IF (.NOT. CD_All_Finite(buf)) THEN
@@ -6831,6 +6931,7 @@ CONTAINS
     END IF
     CALL tw_unpack(model, buf(1:n))
     model%tw_fcR = buf(n + 1:n + model%nn)
+    model%torsion%torque = buf(n + model%nn + 1)
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
   END SUBROUTINE CD_HermiteCable_Dyn_Twist_Unpack
@@ -7444,6 +7545,7 @@ CONTAINS
     TYPE(CD_HermiteTorsionType) :: saved
     REAL(wp) :: th, mt
     REAL(wp) :: saved_step_ends(3, 4), saved_step_phi, saved_snap_theta, saved_snap_phi, saved_snap_ends(3, 4)
+    REAL(wp) :: saved_snap_torque
     REAL(wp) :: saved_drive_ends(3, 4), saved_drive_phi
     LOGICAL :: saved_snap_valid, saved_drive_set, saved_tw_active
     REAL(wp), ALLOCATABLE :: saved_tw(:)
@@ -7539,6 +7641,7 @@ CONTAINS
     saved_snap_theta = model%snap_torsion_theta
     saved_snap_phi = model%snap_torsion_phi
     saved_snap_ends = model%snap_torsion_ends
+    saved_snap_torque = model%snap_torsion_torque
     saved_snap_valid = model%snap_valid
     model%tors_use_step = .FALSE.
     model%tors_drive_set = .FALSE.
@@ -7547,6 +7650,7 @@ CONTAINS
     model%snap_torsion_theta = model%torsion%theta
     model%snap_torsion_phi = model%torsion%phi
     model%snap_torsion_ends = model%torsion%ends
+    model%snap_torsion_torque = model%torsion%torque
     ! the snapshot predates the new load set (as for CD_HermiteCable_Dyn_Set_EndConnection)
     model%snap_valid = .FALSE.
     model%fc_valid = .FALSE.
@@ -7565,6 +7669,7 @@ CONTAINS
       model%snap_torsion_theta = saved_snap_theta
       model%snap_torsion_phi = saved_snap_phi
       model%snap_torsion_ends = saved_snap_ends
+      model%snap_torsion_torque = saved_snap_torque
       model%snap_valid = saved_snap_valid
       ErrStat = es
       ErrMsg = 'CD_HermiteCable_Dyn_Set_Torsion: '//TRIM(em)
@@ -7762,6 +7867,7 @@ CONTAINS
     model%snap_torsion_theta = model%torsion%theta
     model%snap_torsion_phi = model%torsion%phi
     model%snap_torsion_ends = model%torsion%ends
+    model%snap_torsion_torque = model%torsion%torque
     IF (model%tw_active) THEN
       IF (.NOT. ALLOCATED(model%snap_tw)) ALLOCATE (model%snap_tw(tw_pack_size(model)), model%snap_tw_fcR(model%nn))
       CALL tw_pack(model, model%snap_tw)
@@ -7844,8 +7950,7 @@ CONTAINS
     model%torsion%theta = model%snap_torsion_theta
     model%torsion%phi = model%snap_torsion_phi
     model%torsion%ends = model%snap_torsion_ends
-    IF (model%torsion%active) model%torsion%torque = (model%torsion%phi - model%torsion%theta)/ &
-                                                     CD_HermiteTorsion_Compliance(model%torsion, model%l0)
+    IF (model%torsion%active) model%torsion%torque = model%snap_torsion_torque
     model%tors_drive_set = .FALSE.
     model%tors_use_step = .FALSE.
     IF (model%tw_active) CALL tw_unpack(model, model%snap_tw)
@@ -7992,6 +8097,7 @@ CONTAINS
     model%snap_torsion_theta = CD_ZERO
     model%snap_torsion_phi = CD_ZERO
     model%snap_torsion_ends = CD_ZERO
+    model%snap_torsion_torque = CD_ZERO
     CALL tw_release(model)
     model%tw_rigid = .FALSE.
     model%tw_psi = CD_ZERO
@@ -8954,6 +9060,17 @@ CONTAINS
     !! g (H q_dot)^T) and Kvb (Bt/l0) g g^T, and the coupling to the angles is kept per element
     !! for the solve (tw_eg, tw_ehv, tw_ek, tw_ed, tw_lg, tw_lk; want_tangent). tw_me holds the
     !! element torques and tw_tsum the summed twist.
+    !!
+    !! An element whose length changes at the rate l0_dot (active line control) damps the rate of
+    !! its twist per length, the quantity tau/l0 its elastic torque GJ tau/l0 reads, as the axial
+    !! damping takes the rate of the strain: M_e = (GJ/l0) tau + (Bt/l0) (d tau/dt - tau l0_dot/l0),
+    !! so a segment paid out at a constant twist per length carries no damping torque. At fixed q,
+    !! tau changes with l0 through the coupling term -(K/GJ) l0 and through the element's shape:
+    !! rho_e depends on the tangent handles m only through l0 m (the Hermite r' and r'') and m/|m|,
+    !! so l0 drho/dl0 = m_1 . drho/dm_1 + m_2 . drho/dm_2 - (K/GJ) l0 (an Euler identity of the
+    !! gradient g), and d tau/dt gains (l0_dot/l0)(m . g_m - (K/GJ) l0). The angle stiffness of the
+    !! element becomes GJ/l0 - (Bt/l0) l0_dot/l0 and its q-gradient gains (Bt/l0)(l0_dot/l0)
+    !! (g_m + H m), H the Hessian of rho_e.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT), TARGET :: model
     REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
     LOGICAL, INTENT(IN) :: want_residual, want_tangent
@@ -8965,6 +9082,10 @@ CONTAINS
     REAL(wp) :: om(3, 2), ew(3, 2)
     LOGICAL :: turning
     REAL(wp) :: tau, rate, mt, psi, gl(3), hl(3, 3), k, tw
+    ! length-rate share of the damping (active line control): l0_dot/l0, the element's tangent
+    ! handles (m in the 12-DOF layout, the r slots zero) and the angle stiffness it leaves
+    REAL(wp) :: rr, mv(12), gmv(12), kel_t, cpl
+    LOGICAL :: ctrl_rate
     INTEGER :: e, iend, node, b, i, j, es
     CHARACTER(1024) :: em
 
@@ -9004,6 +9125,20 @@ CONTAINS
       tau = phi(e + 1) - phi(e) + rho
       rate = w(e + 1) - w(e) + DOT_PRODUCT(g, ve)
       IF (turning .AND. kd > CD_ZERO) rate = rate + DOT_PRODUCT(ew(:, 1), om(:, 1)) + DOT_PRODUCT(ew(:, 2), om(:, 2))
+      kel_t = kel
+      rr = CD_ZERO
+      IF (model%has_ctrl .AND. kd > CD_ZERO) rr = model%l0_dot(e)/model%l0(e)
+      ctrl_rate = ABS(rr) > CD_ZERO
+      mv = CD_ZERO
+      IF (ctrl_rate) THEN
+        ! the rate of the twist per length (see the header): (l0_dot/l0)(m . g_m - (K/GJ) l0 - tau)
+        mv(4:6) = q_cfg(6*e - 2:6*e)
+        mv(10:12) = q_cfg(6*e + 4:6*e + 6)
+        cpl = CD_ZERO
+        IF (ALLOCATED(model%torsion%couple)) cpl = model%torsion%couple(e)
+        rate = rate + rr*(DOT_PRODUCT(g, mv) - cpl*model%l0(e) - tau)
+        kel_t = kel - kd*rr
+      END IF
       mt = kel*tau + kd*rate
       model%tw_me(e) = mt
       model%tw_tsum = model%tw_tsum + tau
@@ -9015,9 +9150,16 @@ CONTAINS
       IF (want_tangent) THEN
         hv = CD_ZERO
         IF (kd > CD_ZERO) hv = MATMUL(h, ve)
+        ! the length-rate share: d(m . g_m)/dq = g_m + H m (H symmetric), and -tau rr in kel_t
+        IF (ctrl_rate) THEN
+          gmv = CD_ZERO
+          gmv(4:6) = g(4:6)
+          gmv(10:12) = g(10:12)
+          hv = MATMUL(h, ve + rr*mv) + rr*gmv
+        END IF
         DO j = 1, 12
           DO i = 1, 12
-            ke(i, j) = mt*h(i, j) + kel*g(i)*g(j) + kd*g(i)*hv(j)
+            ke(i, j) = mt*h(i, j) + kel_t*g(i)*g(j) + kd*g(i)*hv(j)
           END DO
         END DO
         CALL scatter12_band(Kb, ke, e)
@@ -9031,7 +9173,7 @@ CONTAINS
         END IF
         model%tw_eg(:, e) = g
         model%tw_ehv(:, e) = hv
-        model%tw_ek(e) = kel
+        model%tw_ek(e) = kel_t
         model%tw_ed(e) = kd
       END IF
     END DO

@@ -945,7 +945,23 @@ CONTAINS
                     [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
                     [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
                     [CHARACTER(24) :: '0.1 dtM', '0.0 TMax', '3 nModes'], OUTS)
-    CALL expect_error('modal analysis with torsion is refused', 'tdeck_e11.dat', 'tdeck_e11', 'modal analysis')
+    ! modal analysis of a line restrained in torsion carries the twist (test_modal_torsion)
+    BLOCK
+      LOGICAL :: ok_m
+      CHARACTER(512) :: em_m, header
+      INTEGER :: u_m, ios_m
+      CALL run_deck('tdeck_e11.dat', 'tdeck_e11', ok_m, em_m)
+      CALL require(ok_m, 'modal analysis with torsion runs (got: '//TRIM(em_m)//')')
+      header = ''
+      OPEN (NEWUNIT=u_m, FILE='tdeck_e11.modes.out', STATUS='OLD', ACTION='READ', IOSTAT=ios_m)
+      IF (ios_m == 0) THEN
+        READ (u_m, '(A)', IOSTAT=ios_m) header
+        READ (u_m, '(A)', IOSTAT=ios_m) header
+        READ (u_m, '(A)', IOSTAT=ios_m) header
+        CLOSE (u_m)
+      END IF
+      CALL require(INDEX(header, 'PolarShare') > 0, 'the modes of a line with torsion carry the twist columns')
+    END BLOCK
     ! coupled entries
     CALL write_deck('tdeck_e12.dat', [neutral_type], no_rows, &
                     [CHARACTER(48) :: '1 Coupled 0.0 0.0 -50.0 0 0 0 0', '2 Fixed 100.0 0.0 -50.0 0 0 0 0'], &

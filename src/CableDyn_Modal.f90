@@ -29,11 +29,29 @@ MODULE CableDyn_Modal
   !! and the consistent mass (m l0/6) [[2I, I], [I, 2I]].
   !! Finite-EI lines (cubic-Hermite, position and tangent per node): the element Hessian of
   !! CD_HermiteCable_Element and the consistent mass of CD_HermiteCable_Mass.
+  !!
+  !! A line model of the cubic-Hermite dynamics (CD_Modal_Hermite_Line) adds what its dynamics
+  !! carries: the end connections (a finite spring's Hessian on the end tangent; a rigid end
+  !! keeps only the magnitude of its tangent, in the basis [d, b1, b2] of its direction d), the
+  !! discrete attachments' masses and, on a line restrained in torsion, its twist. The dynamics
+  !! of such a line carries a twist angle phi at every node (the nodal twist, with the polar
+  !! inertia Irn), so the modes do too: 7 DOFs per node [r, m, phi], the lumped polar inertia
+  !! (half of each adjacent element's Irn l0) as the mass of phi, and the second variation of the
+  !! twist energy sum_e 1/2 (GJ/l0)(phi_{e+1} - phi_e + rho_e(q))**2 (+ the elastic end springs)
+  !! as stiffness (CD_HermiteCable_Dyn_Twist_Hessian): with M_e the element torque,
+  !!   d2E/dq2 = M_e d2rho/dq2 + (GJ/l0) g g^T,  d2E/dphi dq = +-(GJ/l0) g,  g = drho_e/dq,
+  !! which couples the twist to the bending and, under torque-tension coupling (rho_e then holds
+  !! (K/GJ)(l - l0)), to the stretch. Eliminating the angles (no polar inertia) leaves the
+  !! condensed static tangent of the statics, M_t d2(-Theta)/dq2 + (1/C) g_T g_T^T,
+  !! g_T = dTheta/dq: the Schur complement of the angle block is that rank-one term.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law
   USE CableDyn_Hydro, ONLY: CD_Cable_Added_Mass_Matrix
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Element, CD_HermiteCable_Mass
-  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_AddedMass_Element
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_AddedMass_Element, CD_HermiteCableDynType, &
+                                          CD_HermiteCable_Dyn_Twist_Hessian, CD_HCDYN_OK
+  USE CableDyn_EndConnection, ONLY: CD_EndConn_Spring, CD_EndConn_Basis, CD_ENDCONN_OK, CD_ENDCONN_FINITE, &
+                                    CD_ENDCONN_RIGID
   USE CableDyn_Linalg, ONLY: CD_Factor_Banded, CD_Solve_Factored_Banded, CD_Blas_Runtime_Check, CD_LINALG_OK, &
                              CD_BLAS_UNAVAILABLE_INFO
   IMPLICIT NONE
@@ -48,6 +66,7 @@ MODULE CableDyn_Modal
   REAL(wp), PARAMETER :: TWO_PI = 6.283185307179586476925286766559005768394_wp
 
   PUBLIC :: CD_Modal_Bar_Band, CD_Modal_Hermite_Band, CD_Modal_Solve_Band
+  PUBLIC :: CD_Modal_Hermite_Line, CD_Modal_Hermite_Line_Band
   PUBLIC :: CD_Modal_Bar_Matrices, CD_Modal_Hermite_Matrices, CD_Modal_Solve
   PUBLIC :: CD_Modal_Write_Header, CD_Modal_Write_Line
 
@@ -360,6 +379,288 @@ CONTAINS
       END DO
     END IF
   END SUBROUTINE CD_Modal_Hermite_Band
+
+  SUBROUTINE CD_Modal_Hermite_Line(model, n_modes, omega2, shapes, n_found, dof_per_node, polar, ErrStat, ErrMsg)
+    !! The n_modes lowest modes of a cubic-Hermite line model about its committed state (the
+    !! static equilibrium a deck starts its march from), on the DOFs its dynamics solves
+    !! (CD_Modal_Hermite_Line_Band). dof_per_node is 6 ([r, m] per node) or 7 ([r, m, phi]);
+    !! shapes(:, j) is the full-length mode vector in the model's axes and node order (zero on
+    !! the held DOFs), M-orthonormal; polar(j) its polar share of the modal kinetic energy,
+    !! sum_k I_k phi_k**2 (0 without twist, 1 for a pure torsional mode).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: n_modes
+    REAL(wp), ALLOCATABLE, INTENT(OUT) :: omega2(:), shapes(:, :), polar(:)
+    INTEGER, INTENT(OUT) :: n_found, dof_per_node, ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :)
+    REAL(wp) :: basis(3, 3), f3(3)
+    LOGICAL, ALLOCATABLE :: free(:)
+    INTEGER :: n, kd, iend, j, k, nm
+    CHARACTER(1024) :: em
+
+    n_found = 0
+    CALL CD_Modal_Hermite_Line_Band(model, kd, kb, mb, free, dof_per_node, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODAL_OK) RETURN
+    n = SIZE(free)
+    nm = MIN(n_modes, COUNT(free))
+    ALLOCATE (omega2(MAX(nm, 1)), shapes(n, MAX(nm, 1)), polar(MAX(nm, 1)))
+    omega2 = CD_ZERO
+    shapes = CD_ZERO
+    polar = CD_ZERO
+    IF (nm < 1) THEN
+      CALL fail(ErrStat, ErrMsg, 'the line has no free degree of freedom')
+      RETURN
+    END IF
+    CALL CD_Modal_Solve_Band(kb, mb, kd, free, nm, omega2, shapes, n_found, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODAL_OK) RETURN
+    ! back to the model's axes: m = B [s, 0, 0] at a rigid end
+    IF (model%has_endconn) THEN
+      DO iend = 1, 2
+        IF (model%endconn_mode(iend) /= CD_ENDCONN_RIGID) CYCLE
+        CALL CD_EndConn_Basis(model%endconn_d0(:, iend), basis, ErrStat, em)
+        IF (ErrStat /= CD_ENDCONN_OK) THEN
+          n_found = 0
+          CALL fail(ErrStat, ErrMsg, 'end connection: '//TRIM(em))
+          RETURN
+        END IF
+        j = dof_per_node*(MERGE(1, model%nn, iend == 1) - 1) + 3
+        DO k = 1, n_found
+          f3 = shapes(j + 1:j + 3, k)
+          shapes(j + 1:j + 3, k) = MATMUL(basis, f3)
+        END DO
+      END DO
+    END IF
+    IF (dof_per_node == 7) THEN
+      DO k = 1, n_found
+        polar(k) = SUM(model%tw_mass*shapes(7:n:7, k)**2)
+      END DO
+    END IF
+  END SUBROUTINE CD_Modal_Hermite_Line
+
+  SUBROUTINE CD_Modal_Hermite_Line_Band(model, kd, K, M, free, dof_per_node, ErrStat, ErrMsg)
+    !! Stiffness and mass of a cubic-Hermite line model at its committed state, as their
+    !! symmetric parts in upper band storage of half-bandwidth kd, with the free-DOF mask, on
+    !! the DOFs its dynamics solves: the element stiffness and mass with the Morison added mass
+    !! and the seabed normal contact of CD_Modal_Hermite_Band, the attachments' masses, the end
+    !! connections and, with the nodal twist, the twist angles (see the module note; 7 DOFs per
+    !! node, kd = 13, else 6 and kd = 11). The tangent handle of a rigid end is in the basis
+    !! [d, b1, b2] of its direction (CD_EndConn_Basis), b1 and b2 held. A line with the
+    !! condensed torsion of the quasi-static dynamics (no polar inertia) is refused.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(OUT) :: kd, dof_per_node, ErrStat
+    REAL(wp), ALLOCATABLE, INTENT(OUT) :: K(:, :), M(:, :)
+    LOGICAL, ALLOCATABLE, INTENT(OUT) :: free(:)
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: k6(:, :), m6(:, :), floor_z(:), eg(:, :), eh(:, :, :), ek(:), emt(:)
+    REAL(wp) :: lg(3, 2), lh(3, 3, 2), lk(2), lmt(2), f3(3), k3(3, 3), ke(14, 14), kl(4, 4), basis(3, 3, 2)
+    LOGICAL :: twist, rigid(2)
+    INTEGER :: nn, ne, n6, n, kd6, i, j, i6, j6, e, a, b, ia, ib, iend, node, p
+    INTEGER :: gd(14), gl4(4)
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_MODAL_OK
+    ErrMsg = ''
+    kd = 0
+    dof_per_node = 6
+    nn = model%nn
+    ne = model%ne
+    n6 = model%ndof
+    twist = model%tw_active
+    IF (model%torsion%active .AND. .NOT. twist) THEN
+      CALL fail(ErrStat, ErrMsg, 'a line with condensed torsion (no polar inertia Irn) has no torsional '// &
+                'modes; give its torsion the polar inertia')
+      RETURN
+    END IF
+    ALLOCATE (floor_z(nn))
+    floor_z = model%seabed_z
+    IF (model%has_am .AND. model%has_contact) THEN
+      CALL CD_Modal_Hermite_Band(model%q, model%l0, model%EA, model%EI, model%rho_a, kd6, k6, m6, ErrStat, em, &
+                                 axial_order=model%axial_quadrature_order, &
+                                 bending_order=model%bending_quadrature_order, am_rho=model%am_rho, &
+                                 am_waterline=model%am_wl, am_diam=model%am_diam, am_can=model%am_can, &
+                                 am_cat=model%am_cat, contact_kn=model%contact_kn, floor_z=floor_z)
+    ELSE IF (model%has_am) THEN
+      CALL CD_Modal_Hermite_Band(model%q, model%l0, model%EA, model%EI, model%rho_a, kd6, k6, m6, ErrStat, em, &
+                                 axial_order=model%axial_quadrature_order, &
+                                 bending_order=model%bending_quadrature_order, am_rho=model%am_rho, &
+                                 am_waterline=model%am_wl, am_diam=model%am_diam, am_can=model%am_can, &
+                                 am_cat=model%am_cat)
+    ELSE IF (model%has_contact) THEN
+      CALL CD_Modal_Hermite_Band(model%q, model%l0, model%EA, model%EI, model%rho_a, kd6, k6, m6, ErrStat, em, &
+                                 axial_order=model%axial_quadrature_order, &
+                                 bending_order=model%bending_quadrature_order, contact_kn=model%contact_kn, &
+                                 floor_z=floor_z)
+    ELSE
+      CALL CD_Modal_Hermite_Band(model%q, model%l0, model%EA, model%EI, model%rho_a, kd6, k6, m6, ErrStat, em, &
+                                 axial_order=model%axial_quadrature_order, &
+                                 bending_order=model%bending_quadrature_order)
+    END IF
+    IF (ErrStat /= CD_MODAL_OK) THEN
+      ErrMsg = em
+      RETURN
+    END IF
+    ! discrete attachments: dry mass m and added mass Ca rho V on the node's translations
+    IF (model%has_attach) THEN
+      DO p = 1, SIZE(model%att_node)
+        DO i = 1, 3
+          j = 6*(model%att_node(p) - 1) + i
+          CALL add_entry(m6, kd6, j, j, model%att_mass(p) + model%att_madd(p))
+        END DO
+      END DO
+    END IF
+    ! end connections: a finite spring adds d2U/dm2 on its end tangent; a rigid end is
+    ! rotated into its basis below
+    rigid = .FALSE.
+    IF (model%has_endconn) THEN
+      DO iend = 1, 2
+        node = MERGE(1, nn, iend == 1)
+        j = 6*(node - 1) + 3
+        IF (model%endconn_mode(iend) == CD_ENDCONN_FINITE) THEN
+          CALL CD_EndConn_Spring(model%q(j + 1:j + 3), model%endconn_d0(:, iend), model%endconn_k(iend), f3, k3, &
+                                 ErrStat, em)
+          IF (ErrStat /= CD_ENDCONN_OK) THEN
+            CALL fail(ErrStat, ErrMsg, 'end connection: '//TRIM(em))
+            RETURN
+          END IF
+          CALL add_block(k6, kd6, [j + 1, j + 2, j + 3], k3)
+        ELSE IF (model%endconn_mode(iend) == CD_ENDCONN_RIGID) THEN
+          rigid(iend) = .TRUE.
+          CALL CD_EndConn_Basis(model%endconn_d0(:, iend), basis(:, :, iend), ErrStat, em)
+          IF (ErrStat /= CD_ENDCONN_OK) THEN
+            CALL fail(ErrStat, ErrMsg, 'end connection: '//TRIM(em))
+            RETURN
+          END IF
+        END IF
+      END DO
+    END IF
+
+    IF (.NOT. twist) THEN
+      n = n6
+      kd = kd6
+      CALL MOVE_ALLOC(k6, K)
+      CALL MOVE_ALLOC(m6, M)
+      ALLOCATE (free(n))
+      free = model%freemask
+    ELSE
+      ! [r, m] of node p at 7(p - 1) + 1..6, its angle at 7 p: DOF i6 of the cable is
+      ! i6 + (i6 - 1)/6; one element spans 14 DOFs (half-bandwidth 13)
+      dof_per_node = 7
+      n = 7*nn
+      kd = 13
+      ALLOCATE (K(kd + 1, n), M(kd + 1, n), free(n))
+      K = CD_ZERO
+      M = CD_ZERO
+      DO j6 = 1, n6
+        DO i6 = MAX(1, j6 - kd6), j6
+          K(kd + 1 + (i6 + (i6 - 1)/6) - (j6 + (j6 - 1)/6), j6 + (j6 - 1)/6) = k6(kd6 + 1 + i6 - j6, j6)
+          M(kd + 1 + (i6 + (i6 - 1)/6) - (j6 + (j6 - 1)/6), j6 + (j6 - 1)/6) = m6(kd6 + 1 + i6 - j6, j6)
+        END DO
+        free(j6 + (j6 - 1)/6) = model%freemask(j6)
+      END DO
+      DEALLOCATE (k6, m6)
+      ALLOCATE (eg(12, ne), eh(12, 12, ne), ek(ne), emt(ne))
+      CALL CD_HermiteCable_Dyn_Twist_Hessian(model, eg, eh, ek, emt, lg, lh, lk, lmt, ErrStat, em)
+      IF (ErrStat /= CD_HCDYN_OK) THEN
+        CALL fail(ErrStat, ErrMsg, TRIM(em))
+        RETURN
+      END IF
+      DO e = 1, ne
+        ! element DOFs [r_e, m_e, phi_e, r_e+1, m_e+1, phi_e+1]; the cable's 12 at 1..6, 8..13
+        DO i = 1, 14
+          gd(i) = 7*(e - 1) + i
+        END DO
+        ke = CD_ZERO
+        DO b = 1, 12
+          ib = b + (b - 1)/6
+          DO a = 1, 12
+            ia = a + (a - 1)/6
+            ke(ia, ib) = emt(e)*eh(a, b, e) + ek(e)*eg(a, e)*eg(b, e)
+          END DO
+          ke(ib, 14) = ek(e)*eg(b, e)
+          ke(14, ib) = ke(ib, 14)
+          ke(ib, 7) = -ek(e)*eg(b, e)
+          ke(7, ib) = ke(ib, 7)
+        END DO
+        ke(7, 7) = ek(e)
+        ke(14, 14) = ek(e)
+        ke(7, 14) = -ek(e)
+        ke(14, 7) = -ek(e)
+        CALL add_block(K, kd, gd, ke)
+      END DO
+      DO iend = 1, 2
+        IF (.NOT. lk(iend) > CD_ZERO) CYCLE
+        ! the elastic end's spring on [m, phi] of its node, d2psi/dm2 signed by its torque
+        node = MERGE(1, nn, iend == 1)
+        gl4 = [7*(node - 1) + 4, 7*(node - 1) + 5, 7*(node - 1) + 6, 7*node]
+        DO b = 1, 3
+          DO a = 1, 3
+            kl(a, b) = lk(iend)*lg(a, iend)*lg(b, iend) + MERGE(-lmt(iend), lmt(iend), iend == 1)*lh(a, b, iend)
+          END DO
+          kl(b, 4) = -lk(iend)*lg(b, iend)
+          kl(4, b) = kl(b, 4)
+        END DO
+        kl(4, 4) = lk(iend)
+        CALL add_block(K, kd, gl4, kl)
+      END DO
+      DO p = 1, nn
+        CALL add_entry(M, kd, 7*p, 7*p, model%tw_mass(p))
+        free(7*p) = model%tw_free(p)
+      END DO
+    END IF
+    ! a rigid end: its tangent handle in the basis [d, b1, b2], b1 and b2 held
+    DO iend = 1, 2
+      IF (.NOT. rigid(iend)) CYCLE
+      node = MERGE(1, nn, iend == 1)
+      j = dof_per_node*(node - 1) + 3
+      CALL rotate_band_block(K, kd, j, basis(:, :, iend), ErrStat, em)
+      IF (ErrStat == CD_MODAL_OK) CALL rotate_band_block(M, kd, j, basis(:, :, iend), ErrStat, em)
+      IF (ErrStat /= CD_MODAL_OK) THEN
+        ErrMsg = em
+        RETURN
+      END IF
+      free(j + 2:j + 3) = .FALSE.
+    END DO
+  END SUBROUTINE CD_Modal_Hermite_Line_Band
+
+  SUBROUTINE rotate_band_block(ab, kd, j0, b, ErrStat, ErrMsg)
+    !! A <- T^T A T for a symmetric A in upper band storage, T the identity but for the block b
+    !! on the DOFs j0 + 1..j0 + 3 (the tangent handle of a node in a rigid end's basis). The
+    !! block's couplings reach only the DOFs of its node's two elements, all within kd of every
+    !! DOF of the block, so the band does not widen; an entry that would fails closed.
+    REAL(wp), INTENT(INOUT) :: ab(:, :)
+    INTEGER, INTENT(IN) :: kd, j0
+    REAL(wp), INTENT(IN) :: b(3, 3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: w(:, :)
+    INTEGER :: n, lo, hi, i, j
+    ErrStat = CD_MODAL_OK
+    ErrMsg = ''
+    n = SIZE(ab, 2)
+    lo = MAX(1, j0 + 1 - kd)
+    hi = MIN(n, j0 + 3 + kd)
+    ALLOCATE (w(lo:hi, lo:hi))
+    w = CD_ZERO
+    DO j = lo, hi
+      DO i = MAX(lo, j - kd), j
+        w(i, j) = ab(kd + 1 + i - j, j)
+        w(j, i) = w(i, j)
+      END DO
+    END DO
+    w(j0 + 1:j0 + 3, :) = MATMUL(TRANSPOSE(b), w(j0 + 1:j0 + 3, :))
+    w(:, j0 + 1:j0 + 3) = MATMUL(w(:, j0 + 1:j0 + 3), b)
+    DO j = lo, hi
+      DO i = lo, j
+        IF (.NOT. ((i > j0 .AND. i <= j0 + 3) .OR. (j > j0 .AND. j <= j0 + 3))) CYCLE
+        IF (j - i <= kd) THEN
+          ab(kd + 1 + i - j, j) = w(i, j)
+        ELSE IF (ABS(w(i, j)) > CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'a rigid end basis would widen the band')
+          RETURN
+        END IF
+      END DO
+    END DO
+  END SUBROUTINE rotate_band_block
 
   SUBROUTINE CD_Modal_Bar_Matrices(q, elem_conn, l0, ea, rho_a, tension_only, K, M, ErrStat, ErrMsg, &
                                    am_rho, am_waterline, am_diam, am_can, am_cat, seabed_kn, floor_z)
@@ -742,15 +1043,20 @@ CONTAINS
       '(static tangent, structural + added mass, fixed and prescribed ends held)'
   END SUBROUTINE CD_Modal_Write_Header
 
-  SUBROUTINE CD_Modal_Write_Line(unit, line_id, q, dof_per_node, omega2, shapes, n_found, part)
+  SUBROUTINE CD_Modal_Write_Line(unit, line_id, q, dof_per_node, omega2, shapes, n_found, part, polar)
     !! part = 1: the frequency rows "LineID Mode Frequency Period Omega"; part = 2: the
     !! shape rows "LineID Mode Node X Y Z dX dY dZ", the nodal translations of each mode
     !! scaled to a unit largest nodal displacement (the static position X Y Z beside it).
-    !! A negative omega^2 is written with a negative frequency and period 0.
+    !! A negative omega^2 is written with a negative frequency and period 0. With polar (the
+    !! twist columns of a file holding a line with twist): the frequency rows add the polar
+    !! share of each mode, the shape rows the nodal twist dTwist (the 7th DOF of a node when
+    !! dof_per_node = 7, else 0) on the same scale; a mode whose kinetic energy is mostly polar
+    !! (share above 1/2, a torsional mode) is scaled to a unit largest nodal twist instead.
     INTEGER, INTENT(IN) :: unit, line_id, dof_per_node, n_found, part
     REAL(wp), INTENT(IN) :: q(:), omega2(:), shapes(:, :)
+    REAL(wp), INTENT(IN), OPTIONAL :: polar(:)
     INTEGER :: j, i, nn, i0
-    REAL(wp) :: om, fr, per, scl, dmax
+    REAL(wp) :: om, fr, per, scl, dmax, tw
     CHARACTER(1), PARAMETER :: TB = ACHAR(9)
     nn = SIZE(q)/dof_per_node
     DO j = 1, n_found
@@ -759,19 +1065,35 @@ CONTAINS
         fr = om/TWO_PI
         per = CD_ZERO
         IF (om > CD_ZERO) per = CD_ONE/fr
-        WRITE (unit, '(I0,A,I0,3(A,ES16.8E3))') line_id, TB, j, TB, fr, TB, per, TB, om
+        IF (PRESENT(polar)) THEN
+          WRITE (unit, '(I0,A,I0,4(A,ES16.8E3))') line_id, TB, j, TB, fr, TB, per, TB, om, TB, polar(j)
+        ELSE
+          WRITE (unit, '(I0,A,I0,3(A,ES16.8E3))') line_id, TB, j, TB, fr, TB, per, TB, om
+        END IF
       ELSE
         dmax = CD_ZERO
-        DO i = 1, nn
-          i0 = dof_per_node*(i - 1)
-          dmax = MAX(dmax, SQRT(SUM(shapes(i0 + 1:i0 + 3, j)**2)))
-        END DO
+        IF (PRESENT(polar) .AND. dof_per_node == 7) THEN
+          IF (polar(j) > 0.5_wp) dmax = MAXVAL(ABS(shapes(7:7*nn:7, j)))
+        END IF
+        IF (.NOT. dmax > CD_ZERO) THEN
+          DO i = 1, nn
+            i0 = dof_per_node*(i - 1)
+            dmax = MAX(dmax, SQRT(SUM(shapes(i0 + 1:i0 + 3, j)**2)))
+          END DO
+        END IF
         scl = CD_ONE
         IF (dmax > CD_ZERO) scl = CD_ONE/dmax
         DO i = 1, nn
           i0 = dof_per_node*(i - 1)
-          WRITE (unit, '(I0,A,I0,A,I0,6(A,ES16.8E3))') line_id, TB, j, TB, i, TB, q(i0 + 1), TB, q(i0 + 2), TB, &
-            q(i0 + 3), TB, scl*shapes(i0 + 1, j), TB, scl*shapes(i0 + 2, j), TB, scl*shapes(i0 + 3, j)
+          IF (PRESENT(polar)) THEN
+            tw = CD_ZERO
+            IF (dof_per_node == 7) tw = scl*shapes(i0 + 7, j)
+            WRITE (unit, '(I0,A,I0,A,I0,7(A,ES16.8E3))') line_id, TB, j, TB, i, TB, q(i0 + 1), TB, q(i0 + 2), &
+              TB, q(i0 + 3), TB, scl*shapes(i0 + 1, j), TB, scl*shapes(i0 + 2, j), TB, scl*shapes(i0 + 3, j), TB, tw
+          ELSE
+            WRITE (unit, '(I0,A,I0,A,I0,6(A,ES16.8E3))') line_id, TB, j, TB, i, TB, q(i0 + 1), TB, q(i0 + 2), &
+              TB, q(i0 + 3), TB, scl*shapes(i0 + 1, j), TB, scl*shapes(i0 + 2, j), TB, scl*shapes(i0 + 3, j)
+          END IF
         END DO
       END IF
     END DO

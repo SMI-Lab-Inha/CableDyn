@@ -274,8 +274,9 @@ cable or wire rope (`T = EA ε + K τ`, `M = GJ τ + K ε`; see
 `GJ|K|Bt` adds the torsional damping `Bt` [N·m²·s] of the nodal twist (the torque
 `Bt dτ/dt`, stiffness-proportional: a torsional mode of frequency `ω` has the damping ratio
 `ω Bt/(2 GJ)`); a negative `Bt` is `-ζ`, the fraction of an element's critical torsional damping
-`l0 √(GJ Irn)` on the final mesh, as `BA` is for the axial damping. It needs a finite-EI type;
-`GJ|0|Bt` is damping without coupling.
+`l0 √(GJ Irn)` on the final mesh, as `BA` is for the axial damping (an element whose length
+active line control changes keeps its `ζ`). It needs a finite-EI type; `GJ|0|Bt` is damping
+without coupling.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -811,8 +812,8 @@ Behaviour:
 - Connection moments are included in the OpenFAST coupled-load mesh.
 
 Rows on an `EI = 0` line, duplicate rows, unknown line ids, null directions, negative stiffnesses,
-and non-finite values fail deck validation. OpenFAST linearisation with a platform-relative end
-connection is rejected at initialisation.
+and non-finite values fail deck validation. OpenFAST linearisation with a `Rigid` end connection
+is rejected at initialisation.
 
 #### Torsion columns
 
@@ -876,14 +877,15 @@ Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B
 `Body<N>` point; in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
 (see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
 torsion on an `EI = 0` line, on a rod end or on a `Point3` body,
-modal analysis (`nModes`), a dynamic or coupled run with `False alpha_force_blend`, any
+a dynamic or coupled run with `False alpha_force_blend`, any
 restrained end (one end included) in a standalone deck mixing `EI = 0` and finite-EI lines
 without a body or through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line
 ends by translation only (`a line restrained in torsion needs a host that turns its fairlead
 frame ...`; with a body such a deck runs on the multibody route, which supports torsion, and a C
-API host passes its rotations after `CableDyn_InitDeckRotating`), OpenFAST linearisation of a line
-restrained in torsion, and a `Torq`/`Twist` channel on a line that is not restrained at both
-ends. Seabed friction does not resist twist (the laid part of a line twists freely), and there
+API host passes its rotations after `CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel
+on a line that is not restrained at both ends. OpenFAST linearisation includes the twist angles
+as states; like any cable, the line must not have a `Rigid` bending connection there. Seabed
+friction does not resist twist (the laid part of a line twists freely), and there
 is no torque–tension coupling.
 
 ### EQUIVALENT BUOYANCY (optional)
@@ -1142,8 +1144,14 @@ bounds that would make it zero or negative (possible when it is shorter than hal
   the bounds above, a cable of one section scales each element within [0.5, 2] of its initial
   length; on a cable of several sections the scaling can leave that range, beyond the
   resolution its static mesh was built for, so keep large commands on a fairlead section whose
-  segments are at least `UnstrLen`/N long. A cable restrained in torsion cannot be controlled
-  (the coupled route rejects torsion stiffness in END CONNECTIONS).
+  segments are at least `UnstrLen`/N long.
+- On a cable restrained in torsion at both ends the torsion follows the lengths too: the line's
+  torsional compliance, the elements' torsional stiffness `GJ`/l and damping `Bt`/l, the
+  torque–tension coupling and the polar inertia `Irn` l/2 at the nodes take the new lengths, a
+  torsional damping written as `-ζ` keeps its `ζ` (`Bt` = ζ l √(GJ `Irn`) at the new length; a
+  positive `Bt` stays), and the damping acts on the rate of the twist per unit length, so a
+  segment paid out at constant twist per length carries no damping torque. A haul-in raises the
+  torque of a fixed end-to-end twist as `GJ` Twist/L does.
 
 The host input arrays are sized to the highest channel id.
 
@@ -1197,7 +1205,7 @@ syntax form. The most frequently edited keywords are:
 | `WaveDirections` | direction bins of a spread train | 9 |
 | `WaveComponents` | frequency components per train and direction (at least 2) | 200 |
 | `StreamOrder` | Fourier terms of a `stream` wave: 0 (default, 20) or 2 to 60 | 0 |
-| `nModes` | modal analysis: the N lowest natural frequencies and mode shapes of every line about its static equilibrium, written to `<root>.modes.out` (EI = 0 decks, or finite-EI decks on the Hermite route; flat seabed; 0 = off) | 0 |
+| `nModes` | modal analysis: the N lowest natural frequencies and mode shapes of every line about its static equilibrium, written to `<root>.modes.out` (EI = 0 decks, or finite-EI decks on the Hermite route, where a line restrained in torsion adds the twist angle of every node; flat seabed; 0 = off) | 0 |
 | `WaveSeed` | integer from 1 to 2147483646; seed of the random spectral sea (the same seed gives the same sea on every platform; train *i* uses seed + 7919 (*i* − 1)) | 1 |
 | `rampTime` | half-cosine start-up ramp of the wave amplitudes [s]; the current is not ramped. `0` disables it | 0 |
 | `motionFile` | path to a prescribed-motion time series for `Coupled`/`Vessel` points, rod end rows, and prescribed Rigid6 `Body<N>` points; `0` or `none` disables it | — |

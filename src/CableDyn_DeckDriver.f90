@@ -113,7 +113,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Element_Twist, CD_HermiteCable_Dyn_Coupling_Tension, &
                                           CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
-                                     CD_HTORS_MAX_TWIST
+                                     CD_HTORS_MAX_TWIST, CD_HermiteTorsion_Zeta_Damping
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -143,7 +143,7 @@ MODULE CableDyn_DeckDriver
                             CD_Froude_Krylov_Element_Force, CD_HYDRO_OK
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Normal_Contact, CD_Seabed_Contact_Gate, &
                                     CD_SEABED_CONTACT_BLEND
-  USE CableDyn_Modal, ONLY: CD_Modal_Bar_Band, CD_Modal_Hermite_Band, CD_Modal_Solve_Band, &
+  USE CableDyn_Modal, ONLY: CD_Modal_Bar_Band, CD_Modal_Hermite_Line, CD_Modal_Solve_Band, &
                             CD_Modal_Write_Header, CD_Modal_Write_Line, CD_MODAL_OK
   USE CableDyn_StreamWave, ONLY: CD_StreamWaveType, CD_Stream_Solve, CD_Stream_Kinematics
   USE CableDyn_WaveSpectra, ONLY: CD_SeaType, CD_WaveTrainType, CD_TRAIN_JONSWAP, CD_SEA_OK, &
@@ -303,10 +303,11 @@ MODULE CableDyn_DeckDriver
   INTEGER, PARAMETER :: WAVE_SEA = 4
   ! WAVE_STREAM: regular nonlinear stream-function (Dean) wave of CableDyn_StreamWave
   INTEGER, PARAMETER :: WAVE_STREAM = 5
-  ! One line's modal result (OPTION nModes)
+  ! One line's modal result (OPTION nModes); polar: each mode's polar share of its kinetic
+  ! energy, on a line with twist angles (dof_per_node 7)
   TYPE :: ModalLineResult
     INTEGER :: n_found = 0, dof_per_node = 3
-    REAL(wp), ALLOCATABLE :: omega2(:), shapes(:, :), q(:)
+    REAL(wp), ALLOCATABLE :: omega2(:), shapes(:, :), q(:), polar(:)
   END TYPE ModalLineResult
   REAL(wp), PARAMETER :: TWO_PI = 8.0_wp*QUARTER_PI
   ! Deck and auxiliary-file record buffer length. next_record reports a record whose
@@ -372,7 +373,8 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: ktt = CD_ZERO
     ! torsional damping Bt [N m^2 s] of the GJ column's third part (GJ|K|Bt), the torque Bt dtau/dt
     ! of the nodal twist; negative: -zeta, the fraction of an element's critical torsional
-    ! damping l0 sqrt(GJ Irn), resolved on the final mesh
+    ! damping l0 sqrt(GJ Irn), resolved on the final mesh (and again at the lengths active line
+    ! control sets)
     REAL(wp) :: bt = CD_ZERO
     REAL(wp) :: i_rt = CD_ZERO, i_rn = CD_ZERO
     REAL(wp) :: cdn = CD_ZERO, cdt = CD_ZERO, can = CD_ZERO, cat = CD_ZERO
@@ -3421,12 +3423,20 @@ CONTAINS
       tors%irn = i_rn_in
       IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%irn, ld, lf)
       ! torsional damping (GJ|K|Bt): a negative value is -zeta of an element's critical torsional
-      ! damping l0 sqrt(GJ Irn), on the final mesh
+      ! damping l0 sqrt(GJ Irn), on the final mesh; the elements keep their zeta (bt_zeta), so a
+      ! length change by active line control re-resolves it
       IF (ANY(ABS(bt_in) > CD_ZERO)) THEN
         tors%bt = bt_in
         IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%bt, ld, lf)
+        IF (ANY(tors%bt < CD_ZERO)) THEN
+          ALLOCATE (tors%bt_zeta(SIZE(tors%bt)))
+          tors%bt_zeta = CD_ZERO
+        END IF
         DO k = 1, SIZE(tors%bt)
-          IF (tors%bt(k) < CD_ZERO) tors%bt(k) = -tors%bt(k)*lf(k)*SQRT(tors%gj(k)*tors%irn(k))
+          IF (tors%bt(k) < CD_ZERO) THEN
+            tors%bt_zeta(k) = -tors%bt(k)
+            tors%bt(k) = CD_HermiteTorsion_Zeta_Damping(tors%bt_zeta(k), lf(k), tors%gj(k), tors%irn(k))
+          END IF
         END DO
       END IF
       DO k = 1, 2
@@ -8080,10 +8090,6 @@ CONTAINS
             CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' has no finite-EI cable'); RETURN
           END IF
           ASSOCIATE (cab => agg%cables(obj)%line)
-            IF (cab%torsion%active) THEN
-              CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//': active line control of a finite-EI '// &
-                        'line restrained in torsion is not supported'); RETURN
-            END IF
             IF (cab%has_contact .AND. .NOT. cab%has_seabed_recompute) THEN
               CALL fail(ErrStat, ErrMsg, 'CONTROL line '//TRIM(lid)//' was built without the seabed '// &
                         'recompute inputs'); RETURN
@@ -8557,9 +8563,6 @@ CONTAINS
     IF (ANY([(line_torsion_active(lines(li)), li=1, SIZE(lines))])) THEN
       IF (opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. .NOT. opts%alpha_force_blend) THEN
         CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_FORCE_BLEND); RETURN
-      END IF
-      IF (opts%n_modes > 0) THEN
-        CALL fail(ErrStat, ErrMsg, 'modal analysis (OPTION nModes) of a line with torsion is not yet supported'); RETURN
       END IF
     END IF
     ! A FAILURE deck is inherently dynamic (the trigger fires at a committed march
@@ -30881,7 +30884,10 @@ CONTAINS
 
   SUBROUTINE write_deck_modes_hermite(out_root, lines, opts, cables, ErrStat, ErrMsg)
     !! <out_root>.modes.out for finite-EI lines on the cubic-Hermite route, at the static
-    !! equilibrium the march starts from; the DOFs the march holds are held.
+    !! equilibrium the march starts from, on the DOFs the march solves (CD_Modal_Hermite_Line):
+    !! the DOFs the march holds are held, the end connections clamp or spring the end tangents,
+    !! and a line restrained in torsion carries the twist angle of every node. Positions and
+    !! translations are turned from the line's frame back to the deck's axes (its heading).
     CHARACTER(*), INTENT(IN) :: out_root
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -30889,55 +30895,38 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(ModalLineResult), ALLOCATABLE :: res(:)
-    REAL(wp), ALLOCATABLE :: kmat(:, :), mmat(:, :), floor_z(:)
-    LOGICAL, ALLOCATABLE :: free(:)
-    INTEGER :: li, n, nm, es, kd
+    INTEGER :: li, nn, dpn, es, k, j, c, i0
+    REAL(wp) :: v(3)
     CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     ALLOCATE (res(SIZE(lines)))
     DO li = 1, SIZE(lines)
-      ASSOCIATE (c => cables(li)%line)
-        n = SIZE(c%q)
-        ALLOCATE (free(n), floor_z(c%nn))
-        free = c%freemask
-        floor_z = c%seabed_z
-        IF (c%has_am .AND. c%has_contact) THEN
-          CALL CD_Modal_Hermite_Band(c%q, c%l0, c%EA, c%EI, c%rho_a, kd, kmat, mmat, es, em, &
-                                     axial_order=c%axial_quadrature_order, &
-                                     bending_order=c%bending_quadrature_order, am_rho=c%am_rho, &
-                                     am_waterline=c%am_wl, am_diam=c%am_diam, am_can=c%am_can, am_cat=c%am_cat, &
-                                     contact_kn=c%contact_kn, floor_z=floor_z)
-        ELSE IF (c%has_am) THEN
-          CALL CD_Modal_Hermite_Band(c%q, c%l0, c%EA, c%EI, c%rho_a, kd, kmat, mmat, es, em, &
-                                     axial_order=c%axial_quadrature_order, &
-                                     bending_order=c%bending_quadrature_order, am_rho=c%am_rho, &
-                                     am_waterline=c%am_wl, am_diam=c%am_diam, am_can=c%am_can, am_cat=c%am_cat)
-        ELSE IF (c%has_contact) THEN
-          CALL CD_Modal_Hermite_Band(c%q, c%l0, c%EA, c%EI, c%rho_a, kd, kmat, mmat, es, em, &
-                                     axial_order=c%axial_quadrature_order, &
-                                     bending_order=c%bending_quadrature_order, contact_kn=c%contact_kn, &
-                                     floor_z=floor_z)
-        ELSE
-          CALL CD_Modal_Hermite_Band(c%q, c%l0, c%EA, c%EI, c%rho_a, kd, kmat, mmat, es, em, &
-                                     axial_order=c%axial_quadrature_order, &
-                                     bending_order=c%bending_quadrature_order)
-        END IF
-        nm = MIN(opts%n_modes, COUNT(free))
-        ALLOCATE (res(li)%omega2(MAX(nm, 1)), res(li)%shapes(n, MAX(nm, 1)), res(li)%q(n))
-        res(li)%q = c%q
-        res(li)%dof_per_node = 6
-        IF (es == CD_MODAL_OK .AND. nm > 0) &
-          CALL CD_Modal_Solve_Band(kmat, mmat, kd, free, nm, res(li)%omega2, res(li)%shapes, res(li)%n_found, &
-                                   es, em)
-        IF (ALLOCATED(kmat)) DEALLOCATE (kmat, mmat)
-        DEALLOCATE (free, floor_z)
-      END ASSOCIATE
+      CALL CD_Modal_Hermite_Line(cables(li)%line, opts%n_modes, res(li)%omega2, res(li)%shapes, res(li)%n_found, &
+                                 res(li)%dof_per_node, res(li)%polar, es, em)
       IF (es /= CD_MODAL_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(lines(li)%id))//' modal analysis: '//TRIM(em))
         RETURN
       END IF
+      dpn = res(li)%dof_per_node
+      nn = cables(li)%line%nn
+      ALLOCATE (res(li)%q(dpn*nn))
+      res(li)%q = CD_ZERO
+      DO k = 1, nn
+        res(li)%q(dpn*(k - 1) + 1:dpn*(k - 1) + 6) = cables(li)%line%q(6*k - 5:6*k)
+      END DO
+      IF (cable_frame_is_identity(cables(li))) CYCLE
+      DO k = 1, nn
+        DO i0 = dpn*(k - 1), dpn*(k - 1) + 3, 3
+          v = res(li)%q(i0 + 1:i0 + 3)
+          res(li)%q(i0 + 1:i0 + 3) = [(cable_global_component(cables(li), v, c), c=1, 3)]
+          DO j = 1, res(li)%n_found
+            v = res(li)%shapes(i0 + 1:i0 + 3, j)
+            res(li)%shapes(i0 + 1:i0 + 3, j) = [(cable_global_component(cables(li), v, c), c=1, 3)]
+          END DO
+        END DO
+      END DO
     END DO
     CALL write_modes_file(out_root, lines, res, ErrStat, ErrMsg)
   END SUBROUTINE write_deck_modes_hermite
@@ -30945,15 +30934,19 @@ CONTAINS
   SUBROUTINE write_modes_file(out_root, lines, res, ErrStat, ErrMsg)
     !! <out_root>.modes.out: a frequency table (LineID Mode Frequency Period Omega) and a
     !! mode-shape table (LineID Mode Node X Y Z dX dY dZ). The line models hold their nodes
-    !! End B first; the table numbers them End A first, like every other line output.
+    !! End B first; the table numbers them End A first, like every other line output. A file
+    !! with a line that carries twist angles adds the polar share of each mode (PolarShare) and
+    !! the nodal twist (dTwist, the section's rotation about the line's End A -> End B tangent,
+    !! so the model's angle about its own End B -> End A tangent changes sign).
     CHARACTER(*), INTENT(IN) :: out_root
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(ModalLineResult), INTENT(IN) :: res(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: unit, ios, li, part, nn, k, dpn, src, dst
-    REAL(wp), ALLOCATABLE :: q_a(:), shapes_a(:, :)
+    REAL(wp), ALLOCATABLE :: q_a(:), shapes_a(:, :), polar(:)
     CHARACTER(1) :: tb
+    LOGICAL :: twist
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     tb = char_tab()
@@ -30962,11 +30955,24 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'cannot open modal output file: '//TRIM(out_root)//'.modes.out'); RETURN
     END IF
     CALL CD_Modal_Write_Header(unit)
+    twist = ANY([(res(li)%dof_per_node == 7, li=1, SIZE(res))])
     DO part = 1, 2
       IF (part == 1) THEN
         WRITE (unit, '(A)') '# Natural frequencies'
-        WRITE (unit, '(A)') 'LineID'//tb//'Mode'//tb//'Frequency'//tb//'Period'//tb//'Omega'
-        WRITE (unit, '(A)') '(-)'//tb//'(-)'//tb//'(Hz)'//tb//'(s)'//tb//'(rad/s)'
+        IF (twist) THEN
+          WRITE (unit, '(A)') 'LineID'//tb//'Mode'//tb//'Frequency'//tb//'Period'//tb//'Omega'//tb//'PolarShare'
+          WRITE (unit, '(A)') '(-)'//tb//'(-)'//tb//'(Hz)'//tb//'(s)'//tb//'(rad/s)'//tb//'(-)'
+        ELSE
+          WRITE (unit, '(A)') 'LineID'//tb//'Mode'//tb//'Frequency'//tb//'Period'//tb//'Omega'
+          WRITE (unit, '(A)') '(-)'//tb//'(-)'//tb//'(Hz)'//tb//'(s)'//tb//'(rad/s)'
+        END IF
+      ELSE IF (twist) THEN
+        WRITE (unit, '(A)') '# Mode shapes (nodal translations and twist, unit largest nodal displacement; '// &
+          'a torsional mode, PolarShare > 0.5, unit largest nodal twist)'
+        WRITE (unit, '(A)') 'LineID'//tb//'Mode'//tb//'Node'//tb//'X'//tb//'Y'//tb//'Z'//tb//'dX'//tb//'dY'//tb// &
+          'dZ'//tb//'dTwist'
+        WRITE (unit, '(A)') '(-)'//tb//'(-)'//tb//'(-)'//tb//'(m)'//tb//'(m)'//tb//'(m)'//tb//'(-)'//tb//'(-)'// &
+          tb//'(-)'//tb//'(-)'
       ELSE
         WRITE (unit, '(A)') '# Mode shapes (nodal translations, unit largest nodal displacement)'
         WRITE (unit, '(A)') 'LineID'//tb//'Mode'//tb//'Node'//tb//'X'//tb//'Y'//tb//'Z'//tb//'dX'//tb//'dY'//tb//'dZ'
@@ -30983,8 +30989,18 @@ CONTAINS
           dst = dpn*(k - 1)
           q_a(dst + 1:dst + dpn) = res(li)%q(src + 1:src + dpn)
           shapes_a(dst + 1:dst + dpn, :) = res(li)%shapes(src + 1:src + dpn, :)
+          IF (dpn == 7) shapes_a(dst + 7, :) = CD_ZERO - shapes_a(dst + 7, :)
         END DO
-        CALL CD_Modal_Write_Line(unit, lines(li)%id, q_a, dpn, res(li)%omega2, shapes_a, res(li)%n_found, part)
+        IF (twist) THEN
+          IF (ALLOCATED(polar)) DEALLOCATE (polar)
+          ALLOCATE (polar(MAX(res(li)%n_found, 1)))
+          polar = CD_ZERO
+          IF (ALLOCATED(res(li)%polar)) polar(1:res(li)%n_found) = res(li)%polar(1:res(li)%n_found)
+          CALL CD_Modal_Write_Line(unit, lines(li)%id, q_a, dpn, res(li)%omega2, shapes_a, res(li)%n_found, part, &
+                                   polar=polar)
+        ELSE
+          CALL CD_Modal_Write_Line(unit, lines(li)%id, q_a, dpn, res(li)%omega2, shapes_a, res(li)%n_found, part)
+        END IF
       END DO
     END DO
     CLOSE (unit)

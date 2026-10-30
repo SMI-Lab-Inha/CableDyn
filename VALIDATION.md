@@ -102,6 +102,7 @@ article's methods, are compared in
 | **T-8** | Cross-check with the Cosserat rod path | Cosserat path | shape 4.2e-4 L, torque 5.2e-5 | <1% | Pass |
 | **T-9** | Bordered Newton step on post-buckled states | predicted linear rate without the rank-one term | 3 iterations; rate 0.055 / 0.217 vs 0.055 / 0.218 | ≤4; within 25% | Pass |
 | **T-10** | Torsion dynamics, restart and body torque | quasi-static torque, energy, uninterrupted run, pendulum | torque 2.2e-16; energy band 4.9e-4; restart bit-identical; pendulum 6.4e-5 | see [Torsion](#torsion) | Pass |
+| **T-14** | Active line control of a line restrained in torsion | `GJ Φ/L(t) + K (H − L)/L`; Kelvin–Voigt torque of a pay-out; finite differences; energy of a length change; `ρ∞ = 0`; uninterrupted run | torque ≤1.5e-12, tension 3.6e-6; damping 5.8e-6 N·m of 0.64 N·m; FD 1.3e-10, tangent 1.1e-9; energy 7.8e-5; no lag (1.4e-3 of the per-step change); restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-13** | Nodal twist (torsional inertia and damping) | condensed torsion in the limit of no inertia; continuum torsional wave; `ζ = ω Bt/(2 GJ)`; energy; restart | ≤6e-7 against the condensed torsion; wave torque 0.07 %; decrement 6 %; energy band 4.9e-4; restart bit-identical | see [Torsion](#torsion) | Pass |
 | **T-12** | Torque–tension coupling | `T = EA ε + K τ`, `M = GJ τ + K ε` closed forms; kernel FD; march | ≤1e-7 against every closed form; kernel gradient 1.7e-10, Hessian 9.8e-11 | see [Torsion](#torsion) | Pass |
 | **T-11** | Torsion on the coupled OpenFAST / FAST.Farm route | `GJ (−roll)/L`; single coupled cable; uninterrupted run | twist ≤1.8e-15°, torque ≤1.7e-13 N·m; aggregate = single cable bit for bit; restart bit-identical (aggregate and `openfast -restart`) | see [Torsion](#torsion) | Pass |
@@ -407,6 +408,28 @@ scripts, results, and source provenance are in
     and pitch are 7.29e6 N·m/rad below the module-level 6×6 for both mooring modules. A run with no
     mooring and only a constant −6.084e6 N vertical load at the platform reference point (HydroDyn
     `AddF0`) reproduces this term, so it comes from ElastoDyn/glue code and not from the mooring module.
+  - *Linearisation of a line restrained in torsion*
+    ([`validation/scripts/openfast_lin_torsion.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_torsion.py),
+    same case): the twist angles of the free nodes and their rates are states, and the platform
+    rotation turns the torsion frame of the coupled (host-driven) end. A straight, taut 100 m line (`GJ` 5e4 N·m², `Irn` 2 kg·m, 50
+    elements, rigid in torsion at both ends) has torsional modes in the eigenvalues of `A` equal
+    to the lumped chain's `2 √(GJ/Irn)/h sin(nπ/2N)` to 5e-14. They lie −1.6e-4, −6.6e-4 and
+    −1.5e-3 below the continuum's `nπ/L √(GJ/Irn)`, the discretisation error. The fairlead moment
+    about the line per unit platform rotation about it, `D − C A⁻¹ B`, is `GJ/L` to 1.5e-14. The
+    feedthrough `D` alone is the end element's `GJ/lₑ`, fifty times more, which is what the
+    reduction would give without twist states. The lazy-wave cable of the mixed deck, twisted
+    90° and alone (pinned in bending, rigid in torsion, 3470 states), matches the deck's own
+    static solutions to ≤4.9e-4. These are the moment about the End A director per unit
+    rotation about it (82.4268 / 82.4263 N·m/rad, from `Pretwist(A) ± 0.5°`), the forces and
+    that moment per unit fairlead translation, and the forces per unit rotation against the
+    reciprocal moment row. `tests/test_lin_torsion.f90` repeats the straight-line gates with the
+    shell's evaluation sequence on the aggregate. It adds the condensed torsion, an elastic
+    torsional end (`1/(L/GJ + 1/kₜ)`), and the platform's angular rates: `Bt/L` per unit angular
+    velocity and the held end section's `Irn lₑ/2` per unit angular acceleration. In a
+    `Linearize = True` run every input Jacobian steps the platform rotation by 1e-4 rad instead of
+    0.1 rad. On a straight
+    line with a 2e5 N·m/rad hang-off spring, this brings the force per unit rotation to 4e-8 of
+    the static solutions (6.8e-6 with 0.1 rad).
 
   The mooring-only A/B compares an all-chain system that both codes model in the same
   way; the finite-EI cable under coupled motion is compared with OrcaFlex in L4-1c.
@@ -801,7 +824,7 @@ stop with a named error.
 | Correction iterations (`NumCrctn > 0`) | Pass verified | bit-identical to own `NumCrctn = 0` run |
 | SeaState wave/current kinematics | Pass verified | wave A/B ≤0.16% of range |
 | Checkpoint-restart (incl. Free/Connect points) | Pass verified | restarted window = continuous run to 0.0; also with supercycling (`dtM` > `DT`, the held SeaState fields and the predictor loads checkpointed): IEA-15 VolturnUS-S, turbulent wind and JONSWAP sea, `openfast -restart` at 50 s reproduces every later OpenFAST and `.CD.out` row of the chain mooring at `dtM` = 4 `DT` (extrapolated and held loads) and `DT`, and of the chain + 248-element power-cable mooring at `dtM` = 2 `DT`. A finite-EI cable also checkpoints its committed boundary (held DOFs, end-connection directions, vessel frame): before, the rebuild took its fairlead from the restored input mesh, which differs in the last bits, and on the IEA-15 mixed deck restarted at 6 s the lazy-wave cable's `.CD.out` channels drifted by up to 9.4e-7 (relative) within 4 s; now all rows to 10 s match bit for bit at `dtM` = `DT` and 2 `DT`, `NumCrctn` 0 and 1, and with a rigid fairlead END CONNECTIONS row |
-| Linearisation | Pass verified (line dynamics) | line states as MoorDyn-F's (882 on the UMaine chains); zero-frequency reduction `D − C A⁻¹ B` compared entry by entry with stock MoorDyn's (full-precision `.lin` output): fairlead stiffness ≤0.10%, transverse `H/X` term 0.29%, platform 6×6 diagonals ≤0.10%; lowest nine line-mode frequencies 0.04–0.30%, both state matrices stable; a mixed deck with a lazy-wave power cable (2976 cable states) matches its own static solutions at every coupled point to ≤3.3e-4, also with a hang-off spring ([`openfast_lin_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_ab.py)) |
+| Linearisation | Pass verified (line dynamics) | line states as MoorDyn-F's (882 on the UMaine chains); zero-frequency reduction `D − C A⁻¹ B` compared entry by entry with stock MoorDyn's (full-precision `.lin` output): fairlead stiffness ≤0.10%, transverse `H/X` term 0.29%, platform 6×6 diagonals ≤0.10%; lowest nine line-mode frequencies 0.04–0.30%, both state matrices stable; a mixed deck with a lazy-wave power cable (2976 cable states) matches its own static solutions at every coupled point to ≤3.3e-4, also with a hang-off spring ([`openfast_lin_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_ab.py)); a line restrained in torsion adds its twist angles as states: the straight line's torsional modes equal the lumped chain's to 5e-14 and its roll stiffness `GJ/L` to 1.5e-14, and a twisted lazy wave matches its static solutions to ≤4.9e-4 ([`openfast_lin_torsion.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_torsion.py)) |
 | FAST.Farm shared moorings + clumps + channel record | Pass verified | 600 s A/B of the r-test `MD_Shared` farm against stock MoorDyn (same deck, analysis from 100 s; [`fastfarm_shared_ab.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/fastfarm_shared_ab.py)): tension means ≤0.02%, minima and maxima ≤0.25%, platform motions within millimetres and 0.001°; shared-line tension std 2.2–2.7% lower, 1.0% at half the mooring step (CableDyn's implicit step at the 0.05 s coupling step against MoorDyn's 1e-4 s explicit step). On the shared lines, which have no Fixed end, `FairTen`/`AnchTen` name the opposite ends from MoorDyn's (see the migration guide). MoorDyn's initial settling does not converge for the anchor legs 6 and 7 (2.4 m excess length at t = 0), a start-up transient over by 100 s that most likely set the 3% end of the earlier 60 s record |
 | Slack-line tension convention | Pass verified | tension-only dynamics; BA on slack lines matches `MoorDyn_Line.f90` |
 | Farm + restart / Farm + linearisation | Not applicable | FAST.Farm has no restart and does not call module linearisation; the same applies to stock MoorDyn |
@@ -1025,11 +1048,64 @@ in parentheses).
   roll (`GJ (−roll)/l_e`) against the frozen interior. The example
   `torsion_lazy_wave_hangoff_twist.dat` (Irn of the section) moves by at most 7e-5 of the
   torque against the condensed torsion.
+- **T-14 active line control** (`control_torsion`). The fairlead span (2 of 10 elements) of a
+  taut straight line between rigid torsional ends 10.1 m apart (EA 1e5 N, GJ 80 N·m²,
+  `Φ = 90°`) is commanded:
+  - paid out and hauled in by ±0.065 m over 10 s, the line carries `GJ Φ/L(t) + K (H − L)/L`
+    (condensed 2.8e-16, with `K = 500 N·m` 9.6e-15, nodal twist with `Irn = 1e-9 kg·m`
+    1.5e-12; a frozen compliance would miss by 6.5e-3 and 0.23) and the tension
+    `EA (H − L)/L + K Φ/L` with the axial damping's share to 3.6e-6;
+  - paid out at 0.01 m/s under `Bt = 100 N·m²·s` with `K`, every element keeps one twist per
+    length χ and the torque is `GJ χ + Bt χ̇` to 5.8e-6 N·m of its 0.642 N·m damping share
+    (0.646 N·m off without the length rate);
+  - on a bowed line the length-rate share of the damping torque equals `Bt l̇0 ∂(τ/l0)/∂l0` by
+    central differences of the element twist to 1.3e-10 on interior elements, at both rigid
+    torsional ends (End A the fairlead) and with `K/GJ = 0.5` (the straight-line value is up to
+    a factor 5 off), and the torque tangent a step assembles matches central differences of the
+    torque to 1.1e-9, where its length-rate share is 1.6e-3 to 7.6e-3 of it;
+  - the polar inertia and a `-ζ` damping a command rebuilds equal those of a model built with
+    the new lengths bit for bit, and a committed-state evaluation, a saved control state and a
+    snapshot take the committed lengths and terms;
+  - paid out by 0.5 m under a ringing twist (`Irn = 0.5 kg·m`, `ρ∞ = 1`, centreline held), the
+    twist and polar kinetic energy change by the work of the length change to 7.8e-5 of it;
+  - paid out slowly, the run at `ρ∞ = 0.4` follows the one at `ρ∞ = 0` to 1.4e-3 of the
+    per-step torque change, also with the committed force evaluated afresh each step (taken at
+    the new lengths it would lag by the expected `α_f = 2/7` of the change; an ablation of the
+    committed lengths measured 0.289);
+  - restarts mid-ramp from a snapshot, from the checkpoint mirror with the command re-applied,
+    and of a `CONTROL` deck on the coupled aggregate (whose `Torq1N1` follows `GJ Twist1/L(t)`
+    to 6e-11) continue bit-identically; after a non-stepping frame write the snapshot and the
+    checkpoint mirror bring back the committed torque bit for bit (re-derived as `(Φ − Θ)/C` it
+    would differ by 1.8e-15 N·m).
+- **T-15 modal analysis with torsion** (`modal_torsion`, `modal_torsion_deck`,
+  `driver_cli_torsion_nmodes`). The modes carry the twist angle of every node. On the 10 m line
+  (EI 100 N·m², GJ 80 N·m², EA 1e4 N, T 10 N, 40 elements), clamped:
+  - rigid torsional ends, `Irn = 0.04 kg·m`: the torsional modes are the lumped chain's to 1e-16
+    and `nπ/L √(GJ/Irn)` within the chain's own `1 − sin(x)/x` (2.6e-4, 1.0e-3); the bending and
+    axial modes equal those of the line without torsion bit for bit, with no twist;
+  - elastic torsional ends `k = 2 GJ/L`: the continuum's `tan(βL) = 2kGJβ/((GJβ)² − k²)` to
+    1.5e-4, the lumped chain to 4e-14;
+  - torque–tension coupling `K = 300 N·m`: the coupled axial–torsional modes
+    `ω² = (nπ/L)² eig([[EA, K], [K, GJ]], diag(m, Irn))` within the chain's error (≤ 8.6e-4);
+  - under a torque `M = 4 EI/L` with a negligible `Irn = 1e-6 kg·m` (100 elements), the four
+    lowest lateral pairs match the clamped Greenhill-cable determinant
+    (`EI u'''' − i M u''' − T u'' = m ω² u`) to 3.2e-7, 5.5 % to 1.2 % below the untwisted ones.
+
+  On a bowed, twisted 12-element line (pinned and clamped bending ends, rigid and elastic
+  torsional ends, coupling) the Schur complement of the angles equals the condensed static
+  tangent to 1.4e-16 and the central differences of the condensed static residual to 7.6e-10.
+  The modal route without the twist finds no torsional mode, misses the torque (4e-4 to 4e-3
+  of the tangent) and, ignoring the end connections, puts the clamped line's first lateral
+  frequency 41 % low; finite bending springs at both ends now put it between the pinned and
+  the clamped line's, within 3.6e-5 of the clamp at `k = 1e5 EI/L`. In the deck the same
+  straight line's torsional modes and its bending and axial modes against `TorsStiffness Free`
+  hold to the table's nine digits, turned 30° about +z it keeps its frequencies and writes its
+  positions in the deck's axes, and the lazy wave twisted two turns writes its modes.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`
   give the same run. Malformed rows, a missing `GJ`, an `EI = 0` line, a rod end, a `Point3` body,
-  `ATTACHMENTS`, modal analysis, the configuration blend (also on the coupled entries), misuse of
+  `ATTACHMENTS`, the configuration blend (also on the coupled entries), misuse of
   the roll column, channels on an unrestrained line, a coupled caller that passes no orientation
   (the C API) and a standalone mixed `EI = 0` + finite-EI deck without a body stop with named
   errors.
