@@ -35,6 +35,13 @@ PROGRAM test_syrope_control
   !!      then lies next to the top sample of the working curve, where the safeguarded Newton step
   !!      alone crept and stopped the run (CableDyn_Syrope, CD_Syrope_State_Advance); every step
   !!      converges and the held tension is the OWC tension at the line strain.
+  !!   6. A length change inside sub-steps: the fairlead sways sideways, y = 0.05 t^3, while its
+  !!      segment is paid out at 0.1 m/s for 2 s, with ei0_substep_angle 1e-5 deg and
+  !!      ei0_substep_max 4, so every step (0.05 s) is solved again in 4 sub-steps that spread
+  !!      the length change over them. The oracle is the same run with ei0_substeps off in plain
+  !!      steps of 0.0125 s with the command at the sub-step times (the
+  !!      quintic end motion of a sub-step reproduces the cubic sway, and the interpolated lengths
+  !!      the constant pay-out rate), compared at every 0.05 s.
   !! Gates 1-3 and the polyester-chain line of 4 stopped at initialisation before (CONTROL on a
   !! Syrope segment was refused).
   USE CableDyn_Precision, ONLY: wp
@@ -77,6 +84,10 @@ PROGRAM test_syrope_control
   CALL write_deck('sctl_chain_poly_chain.dat', 'chain_poly_chain')
   CALL write_deck('sctl_single_noblend.dat', 'single', no_force_blend=.TRUE.)
   CALL write_deck('sctl_hold_noblend.dat', 'single', no_force_blend=.TRUE., no_control=.TRUE.)
+  CALL write_deck('sctl_sub.dat', 'single', options=[CHARACTER(24) :: '1.0e-5 ei0_substep_angle', &
+                                                     '4 ei0_substep_max'])
+  CALL write_deck('sctl_sub_ref.dat', 'single', options=[CHARACTER(24) :: '1.0e-5 ei0_substep_angle', &
+                                                         'off ei0_substeps'])
 
   CALL case_quasi_static('sctl_single.dat', 'quasi-static')
   CALL case_quasi_static('sctl_single_noblend.dat', 'quasi-static, False alpha_force_blend')
@@ -85,6 +96,7 @@ PROGRAM test_syrope_control
   CALL case_restart()
   CALL case_composite()
   CALL case_hold_at_maximum()
+  CALL case_substep_length_change()
 
   IF (nfail > 0) THEN
     PRINT '(I0,A)', nfail, ' assertion(s) failed'
@@ -649,6 +661,115 @@ CONTAINS
   END SUBROUTINE case_hold_at_maximum
 
   ! ---------------------------------------------------------------------------------------------
+  ! 6. a length change inside sub-steps
+  ! ---------------------------------------------------------------------------------------------
+
+  SUBROUTINE case_substep_length_change()
+    INTEGER, PARAMETER :: NSTEP = 40, NSUB = 4
+    REAL(wp), PARAMETER :: C_SWAY = 0.05_wp, RATE = 0.1_wp
+    TYPE(CD_AGG_ModuleType) :: agg, ref
+    REAL(wp) :: r0(3, 1), pos(3, 1), vel(3, 1), acc(3, 1), la(3, 1), lr(3, 1), v2(3, 1), a2(3, 1), t, h
+    REAL(wp) :: d_load, d_slow, d_ten, load_scale, rate_k
+    REAL(wp), ALLOCATABLE :: slow_a(:), tmax_a(:), slow_r(:), tmax_r(:), ten_a(:), ten_r(:)
+    INTEGER :: es, ni, s, k, il, ec, ne, max_a, max_r, n_sub, n_ref
+    INTEGER(INT64) :: calls, ev_a, ev_prev, ev_r, capped, fallbacks
+    LOGICAL :: cv, st, ok, sub
+    CHARACTER(512) :: em
+
+    CALL CD_AGG_Init_From_Deck(agg, 'sctl_sub.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'sub-steps: the deck initialises: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    h = DT/REAL(NSUB, wp)
+    CALL CD_AGG_Init_From_Deck(ref, 'sctl_sub_ref.dat', h, es, em)
+    CALL require(es == CD_AGG_OK, 'sub-steps: the reference deck initialises: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetMovingPointMesh(agg, r0, vel, acc, la, es, em)
+    il = agg%ctrl_line(1)
+    ec = agg%ctrl_elem(1)
+    ne = CD_System_Line_NElem(agg%sys%fast%system, il, es, em)
+    ALLOCATE (slow_a(ne), tmax_a(ne), slow_r(ne), tmax_r(ne), ten_a(ne), ten_r(ne))
+    d_load = 0.0_wp
+    d_slow = 0.0_wp
+    d_ten = 0.0_wp
+    load_scale = 0.0_wp
+    n_sub = 0
+    n_ref = 0
+    ev_prev = 0
+    ok = .TRUE.
+    DO s = 1, NSTEP
+      t = REAL(s, wp)*DT
+      CALL sway(t, r0, C_SWAY, pos, vel, acc)
+      CALL CD_AGG_Apply_LineControl(agg, [RATE*t], [RATE], es, em)
+      IF (es == CD_AGG_OK) CALL CD_AGG_Step_Moving(agg, DT, pos, vel, acc, cv, st, ni, es, em)
+      ok = ok .AND. es == CD_AGG_OK .AND. cv
+      CALL CD_AGG_Get_Substep_Counts(agg, calls, ev_a, max_a, capped, fallbacks)
+      sub = ev_a > ev_prev
+      ev_prev = ev_a
+      ! the reference: the step in NSUB plain steps (A must have sub-stepped it)
+      IF (sub) THEN
+        n_sub = n_sub + 1
+        DO k = 1, NSUB
+          t = (REAL(s - 1, wp) + REAL(k, wp)/REAL(NSUB, wp))*DT
+          CALL sway(t, r0, C_SWAY, pos, vel, acc)
+          ! a sub-step's rate is interpolated from the committed one as its length is (no effect
+          ! on a Syrope segment, whose law takes the chord rate)
+          rate_k = RATE
+          IF (s == 1) rate_k = RATE*REAL(k, wp)/REAL(NSUB, wp)
+          CALL CD_AGG_Apply_LineControl(ref, [RATE*t], [rate_k], es, em)
+          IF (es == CD_AGG_OK) CALL CD_AGG_Step_Moving(ref, h, pos, vel, acc, cv, st, ni, es, em)
+          ok = ok .AND. es == CD_AGG_OK .AND. cv
+          n_ref = n_ref + 1
+        END DO
+      ELSE
+        ok = .FALSE.
+        em = 'the step was not sub-stepped'
+      END IF
+      IF (.NOT. ok) THEN
+        CALL require(.FALSE., 'sub-steps: step at t = '//TRIM(fmt_real(t))//': '//TRIM(em))
+        EXIT
+      END IF
+      CALL CD_AGG_CalcOutput(agg, es, em)
+      CALL CD_AGG_CalcOutput(ref, es, em)
+      CALL CD_AGG_GetMovingPointMesh(agg, pos, v2, a2, la, es, em)
+      CALL CD_AGG_GetMovingPointMesh(ref, pos, v2, a2, lr, es, em)
+      CALL CD_Get_System_Line_Syrope_State(agg%sys%fast%system, il, slow_a, tmax_a, es, em)
+      CALL CD_Get_System_Line_Syrope_State(ref%sys%fast%system, il, slow_r, tmax_r, es, em)
+      CALL CD_Get_System_Line_Tension(agg%sys%fast%system, il, ten_a, es, em)
+      CALL CD_Get_System_Line_Tension(ref%sys%fast%system, il, ten_r, es, em)
+      load_scale = MAX(load_scale, NORM2(lr(:, 1)))
+      d_load = MAX(d_load, NORM2(la(:, 1) - lr(:, 1)))
+      d_slow = MAX(d_slow, MAXVAL(ABS(slow_a - slow_r))/MAXVAL(slow_r))
+      d_ten = MAX(d_ten, MAXVAL(ABS(ten_a - ten_r))/MAXVAL(ten_r))
+    END DO
+    IF (ok) THEN
+      CALL CD_AGG_Get_Substep_Counts(ref, calls, ev_r, max_r, capped, fallbacks)
+      PRINT '(A,I0,A,I0,A,I0,A,F7.4,A)', '  sub-steps: ', n_sub, ' of ', NSTEP, ' steps sub-stepped (at most ', &
+        max_a, '), the segment paid out to ', agg%sys%fast%system%lines(il)%l0(ec) - agg%ctrl_base_l0(1), ' m'
+      PRINT '(A,ES10.3,A,ES10.3,A,ES10.3)', '    against the plain reference steps: fairlead load / its peak ', &
+        d_load/load_scale, ', tensions ', d_ten, ', slow strains ', d_slow
+      CALL require(n_sub == NSTEP .AND. n_ref == NSUB*NSTEP .AND. max_a == NSUB .AND. ev_r == 0, &
+                   'sub-steps: every step is solved in 4 sub-steps, the reference in none')
+      CALL require(d_load <= 1.0e-10_wp*load_scale .AND. d_ten <= 1.0e-10_wp .AND. d_slow <= 1.0e-10_wp, &
+                   'sub-steps: the sub-stepped length change is the plain steps'' at the sub-step times')
+    END IF
+    CALL CD_AGG_End(agg, es, em)
+    CALL CD_AGG_End(ref, es, em)
+  END SUBROUTINE case_substep_length_change
+
+  SUBROUTINE sway(t_s, r0, c, p, v, a)
+    !! The fairlead moving sideways as y = c t^3 from its static position r0 (at rest at t = 0;
+    !! a cubic, which the C2 quintic of a sub-stepped step reproduces).
+    REAL(wp), INTENT(IN) :: t_s, r0(3, 1), c
+    REAL(wp), INTENT(OUT) :: p(3, 1), v(3, 1), a(3, 1)
+    p = r0
+    p(2, 1) = r0(2, 1) + c*t_s**3
+    v = 0.0_wp
+    v(2, 1) = 3.0_wp*c*t_s**2
+    a = 0.0_wp
+    a(2, 1) = 6.0_wp*c*t_s
+  END SUBROUTINE sway
+
+  ! ---------------------------------------------------------------------------------------------
   ! the OWC table, files and helpers
   ! ---------------------------------------------------------------------------------------------
 
@@ -703,18 +824,20 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_settings
 
-  SUBROUTINE write_deck(path, kind, no_force_blend, no_control)
+  SUBROUTINE write_deck(path, kind, no_force_blend, no_control, options)
     !! A Coupled fairlead at x = 0 and a Fixed anchor at mid-depth, the line written fairlead first
     !! (its only host-driven end at NodeA, the controlled end), with a CONTROL row on channel 1:
     !!   single: 100 m of polyester in 10 segments, the anchor 102 m away;
     !!   poly_chain: 80 m of polyester (8 segments) then 20 m of chain (2), 101.6 m;
     !!   chain_poly_chain: 10 m of chain, 80 m of polyester, 10 m of chain (1, 8, 1), 101.6 m.
     !! The polyester is nearly neutrally buoyant (0.05 kg/m above the displaced water's).
-    !! no_force_blend writes False alpha_force_blend, no_control leaves the CONTROL section out.
+    !! no_force_blend writes False alpha_force_blend, no_control leaves the CONTROL section out,
+    !! options are further OPTIONS rows.
     CHARACTER(*), INTENT(IN) :: path, kind
     LOGICAL, INTENT(IN), OPTIONAL :: no_force_blend, no_control
+    CHARACTER(*), INTENT(IN), OPTIONAL :: options(:)
     LOGICAL :: ctrl
-    INTEGER :: u
+    INTEGER :: u, k
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'Syrope line-control test deck ('//kind//')'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -763,6 +886,11 @@ CONTAINS
     WRITE (u, '(A)') '200.0 WtrDpth'
     IF (PRESENT(no_force_blend)) THEN
       IF (no_force_blend) WRITE (u, '(A)') 'False alpha_force_blend'
+    END IF
+    IF (PRESENT(options)) THEN
+      DO k = 1, SIZE(options)
+        WRITE (u, '(A)') TRIM(options(k))
+      END DO
     END IF
     WRITE (u, '(A)') '--- OUTPUTS ---'
     WRITE (u, '(A)') 'FairTen1'

@@ -7,7 +7,6 @@ Skipped when the library cannot be loaded (set ``CABLEDYN_LIBRARY``).
 from __future__ import annotations
 
 import ctypes
-import gc
 import importlib.util
 import os
 import sys
@@ -59,23 +58,31 @@ def test_array_shapes_are_validated_before_the_library():
 
 
 def test_failed_initialization_in_the_constructor_releases_the_handle(monkeypatch):
-    # finalise the instances earlier tests left for the collector first, so that only the
-    # failed constructor's close is recorded
-    gc.collect()
-    closed: list[bool] = []
-    original = model_module.CableDyn.close
+    # The constructor's own instance is captured when it calls init_deck, and only its closes
+    # count: instances other tests left behind may be finalized (and closed) at any point, with
+    # or without the cyclic collector running.
+    own: list[model_module.CableDyn] = []
+    closes: list[tuple[model_module.CableDyn, bool]] = []
+    original_init_deck = model_module.CableDyn.init_deck
+    original_close = model_module.CableDyn.close
+
+    def tracking_init_deck(self: model_module.CableDyn, deck: str | os.PathLike[str]) -> None:
+        own.append(self)
+        original_init_deck(self, deck)
 
     def tracking_close(self: model_module.CableDyn) -> None:
-        # only an instance's first close (generation 0): an instance an earlier test closed and
-        # left behind can be finalized while this one is constructed, closing it again
-        if self._generation == 0:
-            closed.append(bool(self._handle))
-        original(self)
+        closes.append((self, bool(self._handle)))
+        original_close(self)
 
+    monkeypatch.setattr(model_module.CableDyn, "init_deck", tracking_init_deck)
     monkeypatch.setattr(model_module.CableDyn, "close", tracking_close)
     with pytest.raises(CableDynError, match="CableDyn_InitDeck failed") as caught:
         cabledyn.CableDyn("no_such_deck_anywhere.dat")
-    assert closed[0] is True
+    assert len(own) == 1
+    own_closes = [held for instance, held in closes if instance is own[0]]
+    # the failed constructor closed its instance while it still held the handle
+    assert own_closes and own_closes[0] is True
+    assert not own[0]._handle
     assert caught.value.status != 0 and caught.value.detail
 
 

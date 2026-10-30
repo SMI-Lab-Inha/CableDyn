@@ -1094,8 +1094,10 @@ the `NodeB` written in the deck. A line written in the stock MoorDyn order, with
 end at `NodeB`, is therefore controlled where MoorDyn-F controls it, at its last segment N at
 `AttachB`; so is a line with both or no host-driven ends. A line written fairlead first, with its
 only host-driven end at `NodeA`, is controlled at that end. The length is held over the advance.
-Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment paid out at
-constant strain carries no damping tension.
+On a linear-elastic segment the axial damping acts on the strain rate, as in MoorDyn-F
+(`BA (lstrd − lstr ld/l)/l`), so a segment paid out at constant strain carries no damping
+tension; the viscoelastic and Syrope laws take the plain chord rate `lstrd`, as MoorDyn-F and
+MoorDyn-C do (see the bullets below).
 
 A command outside MoorDyn-F's bounds stops the run with a message that names the channel, the
 line, the command and the bound, as MoorDyn-F stops there. With `UnstrLen` the line's unstretched

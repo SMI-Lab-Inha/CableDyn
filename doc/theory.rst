@@ -758,7 +758,8 @@ backward-Euler solve,
 :math:`\varepsilon_\text{slow}^{n+1} = \varepsilon_\text{slow}^{n} + \Delta t\,\dot\varepsilon_\text{slow}(\varepsilon_\text{slow}^{n+1}, \varepsilon, \dot\varepsilon)`
 constrained to :math:`\varepsilon_\text{slow} \ge 0`, gives the slow strain that the force
 uses (safeguarded Newton steps, finished by bisection where they stall next to a kink of the
-interpolated curves, as at the top of the working curve). The tangent carries :math:`\partial\varepsilon_\text{slow}^{n+1}/\partial(\varepsilon, \dot\varepsilon)`
+interpolated curves, as at the top of the working curve; a residual so steep that it changes
+sign between two adjacent reals gives the root to machine precision). The tangent carries :math:`\partial\varepsilon_\text{slow}^{n+1}/\partial(\varepsilon, \dot\varepsilon)`
 from the implicit-function theorem. The step commits that same slow strain, so the force applied
 to the nodes equals the reported tension. The working curve is the one regenerated at the
 committed :math:`T_\text{max}`. The branch follows the evaluated slow strain: the working curve

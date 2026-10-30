@@ -575,8 +575,10 @@ CONTAINS
       END IF
       IF (residual < CD_ZERO) THEN
         lo = x
+        rlo = residual
       ELSE
         hi = x
+        rhi = residual
       END IF
 
       ! Safeguarded numerical Newton step. Near a kink or a flat derivative,
@@ -604,10 +606,23 @@ CONTAINS
     ! the difference quotient straddles the kink, and every step lands inside the bracket and
     ! moves only that end. Finish then by bisection, which halves the bracket every iteration
     ! (R is continuous on it, so the bracket closes on its root) until the residual test is met.
-    ! A solve that converged above never gets here, so its result is unchanged.
+    ! A steep R (a light BA_s + BA_d, R' = 1 - dt d(rate)/d(eps_slow) of order 1e6) can change
+    ! sign between two adjacent reals with |R| above the test on both: the root is then located
+    ! to machine precision, and the end with the smaller |R| is taken (R(lo) < 0 <= R(hi)).
+    ! A solve that converged above never gets here, so its result is unchanged. The switch comes
+    ! only after the 80 Newton iterations: many solves that converge creep for a while first,
+    ! and switching on creeping iterations (two to eight in a row) changed 6e3 to 4e4 of 4.4e5
+    ! fuzzed solves that converge without it.
     DO iter = 1, 200
       x = 0.5_wp*(lo + hi)
-      IF (.NOT. (x > lo .AND. x < hi)) EXIT
+      IF (.NOT. (x > lo .AND. x < hi)) THEN
+        x = hi
+        IF (ABS(rlo) < ABS(rhi)) x = lo
+        CALL eval_rate(x, rate, tension, t_mean)
+        IF (ErrStat /= CD_SYROPE_OK) RETURN
+        slow_next = x
+        RETURN
+      END IF
       CALL eval_rate(x, rate, tension, t_mean)
       IF (ErrStat /= CD_SYROPE_OK) RETURN
       residual = x - slow_old - dt*rate
@@ -618,8 +633,10 @@ CONTAINS
       END IF
       IF (residual < CD_ZERO) THEN
         lo = x
+        rlo = residual
       ELSE
         hi = x
+        rhi = residual
       END IF
     END DO
     CALL fail(ErrStat, ErrMsg, 'Syrope backward-Euler state solve did not converge')
