@@ -160,11 +160,22 @@ CONTAINS
     CHARACTER(*), INTENT(IN) :: path
     CHARACTER(*), INTENT(OUT) :: reason
     CHARACTER(:), ALLOCATABLE :: native
-    INTEGER :: stat
+    INTEGER :: stat, iq
+    LOGICAL :: exists
 
     unit = -1
     CALL CD_Native_Path(path, native, stat, reason)
     IF (stat /= CD_PATH_OK) THEN
+      ios = 1
+      RETURN
+    END IF
+    ! A missing file is found by INQUIRE, not by a failing OPEN: the Intel Fortran run-time
+    ! (ifx 2025.3) ends the process with a stack buffer overrun when an OPEN of an
+    ! extended-length (\\?\) name of about 600 characters or more fails, as it formats the
+    ! error; INQUIRE of the same name returns.
+    exists = .TRUE.
+    INQUIRE (FILE=native, EXIST=exists, IOSTAT=iq)
+    IF (iq == 0 .AND. .NOT. exists) THEN
       ios = 1
       RETURN
     END IF
