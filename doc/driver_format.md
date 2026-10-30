@@ -334,14 +334,20 @@ rejected. `EI > 0` is routed as follows.
   [multibody march](#multibody-march).
 - When `motionFile` row 1 differs from the deck fairlead, CableDyn installs that boundary state
   and the initial fluid field, then recomputes the free-node acceleration from the full
-  structural, contact, and hydrodynamic residual before writing `t = 0`.
+  structural, contact, and hydrodynamic residual before writing `t = 0` (also with `TMax = 0`).
+  The `.static.out` profile is written before that, so it holds the static solve.
 
 **Standalone mixed deck** (separate `EI = 0` and `EI > 0` lines between `Fixed`/`Coupled`/`Vessel`
 points only): the deck is partitioned through the same atomic aggregate used by OpenFAST.
 `Coupled`/`Vessel` endpoints are held at their deck positions, or follow a `motionFile` or
 `vesselMotion` as on the cubic-Hermite route: row 1 is installed and the cables' free-node
-accelerations recomputed before `t = 0`, a vessel turns the end connection and torsion frames of
-the cables on its points, and the roll column imposes the twist of a line restrained in torsion.
+accelerations recomputed before `t = 0` (also with `TMax = 0`, whose `.out` row is then that
+state; `.static.out` holds the static solve), a vessel turns the end connection and torsion
+frames of the cables on its points, and the roll column imposes the twist of a line restrained
+in torsion. The row-1 transfer also re-derives the interior accelerations of the `EI = 0` lines
+at that state, which the `EI = 0`-only route does not, so when row 1 is off the deck pose their
+first steps differ from that route's. A static run (`TMax = 0`) of a line restrained in torsion
+takes `False alpha_force_blend`, as on the single-line route.
 The run writes the common `.out` and the all-line `.static.out` tables, plus the range graph of
 every line with the `r` flag.
 Mixed decks reject, by name, deck wave/current OPTIONS (so `vesselRAO`), WaterKin `WaveKinMod 1`,

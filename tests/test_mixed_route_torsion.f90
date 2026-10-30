@@ -24,6 +24,12 @@
 !>     and Torq = GJ Twist / L at both ends at every step (1e-6 GJ).
 !>  4. A non-zero roll column at the chain's point (no line restrained in torsion there) is
 !>     refused by name on the mixed route.
+!>  5. TMax = 0 with a motionFile whose first row is 2 cm off the deck fairlead: both routes write
+!>     the t = 0 row at that installed row (the fairlead element takes the 2 cm against the
+!>     static interior: FairTen 3.5 MN against 29 kN) and agree to the printed precision, and
+!>     both write the .static.out of the static solve (fairlead x = 0) before it.
+!>  6. Without the force blend a line restrained in torsion runs a static mixed deck (TMax = 0,
+!>     no step) and its torque, as the single-line route, and a dynamic one stops by name.
 PROGRAM test_mixed_route_torsion
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -68,6 +74,8 @@ PROGRAM test_mixed_route_torsion
   CALL check_quasi_static(QS_VESSEL)
   CALL check_quasi_static(QS_ROLL)
   CALL check_refusal()
+  CALL check_static_row1()
+  CALL check_static_blend()
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' mixed-route torsion gate(s) failed'
     ERROR STOP 1
@@ -134,17 +142,21 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_deck
 
-  SUBROUTINE sag_deck(path, point_type, chain, options)
+  SUBROUTINE sag_deck(path, point_type, chain, options, tmax_row)
     !! Gates 1 and 2: a 100 m finite-EI line from End A (0, 0, -50) on a point_type point to a
     !! Fixed End B (95, 0, -60), 40 elements, both ends Rigid in bending and in torsion
     !! (Pretwist 20 deg at End B); with chain, an EI = 0 chain from (0, 20, -50) on a second
     !! point_type point to a Fixed (0, 110, -100).
     CHARACTER(*), INTENT(IN) :: path, point_type, options(:)
     LOGICAL, INTENT(IN) :: chain
-    CHARACTER(48) :: points(4)
+    ! the TMax row (default 10 s)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: tmax_row
+    CHARACTER(48) :: points(4), tm
     CHARACTER(96) :: ec(2)
     ec(1) = '1 A Rigid 1 0 -0.1 Rigid 0 0 1 0'
     ec(2) = '1 B Rigid 1 0 0.1 Rigid 0 0 1 20'
+    tm = '10.0 TMax'
+    IF (PRESENT(tmax_row)) tm = tmax_row
     points(1) = '1 '//point_type//' 0.0 0.0 -50.0 0 0 0 0'
     points(2) = '2 Fixed 95.0 0.0 -60.0 0 0 0 0'
     points(3) = '3 '//point_type//' 0.0 20.0 -50.0 0 0 0 0'
@@ -152,11 +164,11 @@ CONTAINS
     IF (chain) THEN
       CALL write_deck(path, [CHARACTER(96) :: CAB_T, CHAIN_T], points, [CHARACTER(16) :: '1 1 2 -', '2 3 4 -'], &
                       [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], EC, &
-                      [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', '10.0 TMax', options], [OUTS, CHAIN_OUTS])
+                      [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', tm, options], [OUTS, CHAIN_OUTS])
     ELSE
       CALL write_deck(path, [CHARACTER(96) :: CAB_T], points(1:2), [CHARACTER(16) :: '1 1 2 -'], &
                       [CHARACTER(24) :: '1 cab 100.0 40'], EC, &
-                      [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', '10.0 TMax', options], OUTS)
+                      [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', tm, options], OUTS)
     END IF
   END SUBROUTINE sag_deck
 
@@ -613,4 +625,111 @@ CONTAINS
     CALL require(.NOT. ok, '4: a roll column at the chain point stops the run')
     CALL require(log_has('tmrt_bad', 'has a non-zero roll column'), '4: the roll column at the chain point is named')
   END SUBROUTINE check_refusal
+
+  REAL(wp) FUNCTION static_fairlead(root, column) RESULT(x)
+    !! Column `column` of line 1's End A (the first node row) in <root>.static.out (4: X, 7:
+    !! tension).
+    CHARACTER(*), INTENT(IN) :: root
+    INTEGER, INTENT(IN) :: column
+    CHARACTER(4096) :: buf
+    REAL(wp) :: row(12)
+    INTEGER :: u, ios, k
+    x = HUGE(1.0_wp)
+    OPEN (NEWUNIT=u, FILE=root//'.static.out', STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    IF (ios /= 0) RETURN
+    DO k = 1, 3
+      READ (u, '(A)', IOSTAT=ios) buf
+    END DO
+    READ (u, *, IOSTAT=ios) row
+    IF (ios == 0) x = row(column)
+    CLOSE (u)
+  END FUNCTION static_fairlead
+
+  SUBROUTINE check_static_row1()
+    !! Gate 5.
+    CHARACTER(32) :: na(MAXCOL), nb(MAXCOL)
+    REAL(wp), ALLOCATABLE :: va(:, :), vb(:, :)
+    INTEGER :: u, ra, rb, k, ca, cb
+    LOGICAL :: ok
+    REAL(wp) :: e, xa, xb, ta, tb
+    DO k = 1, 2
+      OPEN (NEWUNIT=u, FILE=MERGE('tmrt_t0_1.txt', 'tmrt_t0_2.txt', k == 1), STATUS='REPLACE', ACTION='WRITE')
+      WRITE (u, '(A)') '0 1 0.02 0 -50 0 0 0 0 0 0'
+      IF (k == 2) WRITE (u, '(A)') '0 3 0.02 20 -50 0 0 0 0 0 0'
+      CLOSE (u)
+    END DO
+    CALL sag_deck('tmrt_t0_a.dat', 'Coupled', .FALSE., [CHARACTER(48) :: 'tmrt_t0_1.txt motionFile'], '0.0 TMax')
+    CALL sag_deck('tmrt_t0_b.dat', 'Coupled', .TRUE., [CHARACTER(48) :: 'tmrt_t0_2.txt motionFile'], '0.0 TMax')
+    CALL run_driver('tmrt_t0_a.dat', 'tmrt_t0_a', ok)
+    CALL require(ok, '5: the TMax = 0 motion deck runs on the single-line route')
+    CALL run_driver('tmrt_t0_b.dat', 'tmrt_t0_b', ok)
+    CALL require(ok, '5: the TMax = 0 mixed motion deck runs')
+    ALLOCATE (va(MAXROW, MAXCOL), vb(MAXROW, MAXCOL))
+    CALL read_out('tmrt_t0_a.out', na, va, ra)
+    CALL read_out('tmrt_t0_b.out', nb, vb, rb)
+    CALL require(ra == 1 .AND. rb == 1, '5: one t = 0 row on each route')
+    IF (ra /= 1 .OR. rb /= 1) RETURN
+    e = 0.0_wp
+    DO k = 1, SIZE(OUTS)
+      ca = col_of(na, OUTS(k))
+      cb = col_of(nb, OUTS(k))
+      IF (ca == 0 .OR. cb == 0) THEN
+        e = HUGE(1.0_wp)
+      ELSE IF (TRIM(OUTS(k)) == 'L1N21py') THEN
+        e = MAX(e, ABS(vb(1, cb) - va(1, ca))/POS_TOL)
+      ELSE IF (ANY(LOADS == OUTS(k))) THEN
+        e = MAX(e, ABS(vb(1, cb) - va(1, ca))/(LOAD_TOL*ABS(va(1, ca))))
+      ELSE
+        e = MAX(e, print_error(va(:, ca), vb(:, cb), 1)/2.0_wp)
+      END IF
+    END DO
+    xa = static_fairlead('tmrt_t0_a', 4)
+    xb = static_fairlead('tmrt_t0_b', 4)
+    ta = static_fairlead('tmrt_t0_a', 7)
+    tb = static_fairlead('tmrt_t0_b', 7)
+    WRITE (*, '(A,ES10.3,A,2ES12.4,A)') '  5 TMax = 0, row 1 off by 2 cm: t = 0 rows agree to ', e, &
+      ' of their tolerances; static fairlead x ', xa, xb, ' m'
+    CALL require(e <= 1.0_wp, '5: both routes write the t = 0 row at the installed row 1')
+    CALL require(va(1, col_of(na, 'FairTen1')) > 10.0_wp*ta .AND. vb(1, col_of(nb, 'FairTen1')) > 10.0_wp*tb, &
+                 '5: the t = 0 row carries the installed row 1, not the static state')
+    CALL require(ABS(xa) <= 1.0e-9_wp .AND. ABS(xb) <= 1.0e-9_wp, &
+                 '5: both routes write the static configuration before row 1 moves the fairlead')
+  END SUBROUTINE check_static_row1
+
+  SUBROUTINE check_static_blend()
+    !! Gate 6.
+    REAL(wp), PARAMETER :: GJ = 5.0e4_wp, L = 100.0_wp
+    CHARACTER(32) :: names(MAXCOL)
+    REAL(wp), ALLOCATABLE :: vals(:, :)
+    CHARACTER(48) :: points(4)
+    INTEGER :: nrow
+    LOGICAL :: ok
+    REAL(wp) :: terr
+    points(1) = '1 Coupled 0.0 0.0 -50.0 0 0 0 0'
+    points(2) = '2 Fixed 100.0 0.0 -50.0 0 0 0 0'
+    points(3) = '3 Coupled 0.0 10.0 -50.0 0 0 0 0'
+    points(4) = '4 Fixed 0.0 100.0 -100.0 0 0 0 0'
+    CALL write_deck('tmrt_blend_s.dat', [CHARACTER(160) :: neutral_t, CHAIN_T], points, &
+                    [CHARACTER(16) :: '1 1 2 -', '2 3 4 -'], [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
+                    [CHARACTER(48) :: '0.1 dtM', '0.0 TMax', 'False alpha_force_blend'], &
+                    [CHARACTER(16) :: 'Torq1N1', 'Twist1'])
+    CALL run_driver('tmrt_blend_s.dat', 'tmrt_blend_s', ok)
+    CALL require(ok, '6: a static mixed deck with torsion runs without the force blend')
+    ALLOCATE (vals(MAXROW, MAXCOL))
+    CALL read_out('tmrt_blend_s.out', names, vals, nrow)
+    terr = HUGE(1.0_wp)
+    IF (nrow == 1) terr = ABS(vals(1, col_of(names, 'Torq1N1')) - GJ*90.0_wp*D2R/L)
+    WRITE (*, '(A,ES10.3,A)') '  6 static mixed deck without the force blend: torque error ', terr, ' N m'
+    CALL require(terr <= 1.0e-6_wp*GJ, '6: the static torque is GJ Phi / L')
+    CALL write_deck('tmrt_blend_d.dat', [CHARACTER(160) :: neutral_t, CHAIN_T], points, &
+                    [CHARACTER(16) :: '1 1 2 -', '2 3 4 -'], [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
+                    [CHARACTER(48) :: '0.1 dtM', '1.0 TMax', 'False alpha_force_blend'], &
+                    [CHARACTER(16) :: 'Torq1N1', 'Twist1'])
+    CALL run_driver('tmrt_blend_d.dat', 'tmrt_blend_d', ok)
+    CALL require(.NOT. ok, '6: a dynamic mixed deck with torsion and the configuration blend stops')
+    CALL require(log_has('tmrt_blend_d', 'torsion in a dynamic run needs the force-blended'), &
+                 '6: the configuration blend of a dynamic torsion run is named')
+  END SUBROUTINE check_static_blend
 END PROGRAM test_mixed_route_torsion

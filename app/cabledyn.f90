@@ -533,7 +533,7 @@ CONTAINS
       ! (host_orientation), and marches the deck's prescribed motion (prescribed_motion).
       CALL CD_AGG_Init_From_Deck(aggregate, deck, step_dt, es, em, forbid_deck_ambient=.TRUE., &
                                  run_tmax=MAX(CD_ZERO, run_time), range_files=.TRUE., host_orientation=.TRUE., &
-                                 prescribed_motion=has_motion)
+                                 prescribed_motion=has_motion, static_run=nstep == 0)
       IF (es /= CD_AGG_OK) THEN
         CALL set_aggregate_error(es, em, run_stat, run_msg)
         EXIT mixed_run
@@ -559,11 +559,20 @@ CONTAINS
         CALL set_aggregate_error(es, em, run_stat, run_msg)
         EXIT mixed_run
       END IF
-      IF (has_motion .AND. nstep > 0) THEN
+      ! The static configuration, before a prescribed motion moves the ends.
+      static_path = TRIM(root)//'.static.out'
+      CALL CD_AGG_WriteStaticProfile(aggregate, TRIM(static_path), es, em)
+      IF (es /= CD_AGG_OK) THEN
+        CALL set_aggregate_error(es, em, run_stat, run_msg)
+        EXIT mixed_run
+      END IF
+      IF (has_motion) THEN
         ! Install row 1 of the prescribed motion without advancing (it may differ from the deck
         ! pose), then recompute the cables' free-node accelerations from their complete
         ! residual at that state, as the standalone cubic-Hermite route does before its march
-        ! (a run without one, TMax = 0, writes the static state as that route does).
+        ! (also for TMax = 0, whose single row is then the t = 0 state of the motion). On the
+        ! EI = 0 lines the transfer re-derives the interior accelerations at that state
+        ! (CD_FMF_UpdateStates_Moving), which the EI = 0-only route's row-1 transfer does not.
         CALL CD_AGG_MotionKinematics(aggregate, 1, position, velocity, acceleration, orientation, &
                                      angular_velocity, angular_acceleration, roll, turns, rolls, es, em)
         IF (es == CD_AGG_OK) THEN
@@ -586,13 +595,6 @@ CONTAINS
         ! fed back into the first step.
         velocity = CD_ZERO
         acceleration = CD_ZERO
-      END IF
-
-      static_path = TRIM(root)//'.static.out'
-      CALL CD_AGG_WriteStaticProfile(aggregate, TRIM(static_path), es, em)
-      IF (es /= CD_AGG_OK) THEN
-        CALL set_aggregate_error(es, em, run_stat, run_msg)
-        EXIT mixed_run
       END IF
       dynamic_path = TRIM(root)//'.out'
       OPEN (NEWUNIT=unit, FILE=TRIM(dynamic_path), STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)

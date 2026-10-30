@@ -1138,6 +1138,11 @@ def test_torsion_on_a_standalone_mixed_deck_is_accepted():
         DeckFile.from_text(_edit(text, ("10.0 TMax\n", "0.0 TMax\n")))
         DeckFile.from_text(_options(text, "m.txt motionFile"))
         DeckFile.from_text(_options(text, "v.txt vesselMotion", "0|0|0 vesselRef"))
+        # a static run (TMax = 0) marches no step and takes the configuration blend, as native
+        # CD_Init_Deck_Aggregate with static_run (test_mixed_route_torsion gate 6)
+        DeckFile.from_text(
+            _options(_edit(text, ("10.0 TMax\n", "0.0 TMax\n")), "False alpha_force_blend")
+        )
         if "Free" not in rows[1]:
             # restrained at both ends, the dynamic run needs the force blend, as on every route
             _rejects(

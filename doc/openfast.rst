@@ -348,7 +348,8 @@ linearisation takes the line's twist angles as states and the platform rotation 
 translation only and refuse torsion columns; a C API host that initialises with
 ``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`). The standalone driver runs a
 deck that mixes ``EI = 0`` and finite-EI lines on the same aggregate, holding the line end
-frames or turning them with its ``vesselMotion`` and its ``motionFile`` roll column.
+frames or turning them with its ``vesselMotion``, and imposing the twist of its ``motionFile``
+roll column.
 
 Lifecycle features
 ------------------

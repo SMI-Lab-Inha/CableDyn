@@ -1120,7 +1120,12 @@ in parentheses).
   its range and the twist by 19°. A straight neutral line beside a chain, its End A held or
   rolled by up to 30° by a vessel or by the roll column, gives `Twist1 = Pretwist − roll` to
   5e-7° and `Torq = GJ Φ/L` at both ends to 4.7e-6 N·m. A non-zero roll column at the chain's
-  point stops by name, and the march makes no heap allocation after warm-up.
+  point stops by name, and the march makes no heap allocation after warm-up. The agreement
+  figures are for motions from rest; a start with a jump in velocity differs by several percent
+  of the range under the coupled Newton tolerance. With `TMax = 0` and row 1 2 cm off the deck
+  fairlead both routes write the same `t = 0` row at the installed row and a `.static.out` of
+  the static solve; a static mixed run with torsion takes `False alpha_force_blend`, and a
+  dynamic one stops by name.
 - **Backward compatibility and refusals** (`torsion_deck`, full suite). Without torsion columns,
   with `Free` columns (whatever their normal), or with one restrained end, every output is
   byte-identical to the 6-column deck, and `Rigid`, `Infinity`, `Inf` and a quoted `"Rigid"`

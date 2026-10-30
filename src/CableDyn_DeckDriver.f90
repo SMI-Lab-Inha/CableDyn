@@ -7150,7 +7150,8 @@ CONTAINS
   SUBROUTINE CD_Init_Deck_Aggregate(deck_path, dt, agg, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                    range_files, host_orientation, static_current, prescribed_motion)
+                                    range_files, host_orientation, static_current, prescribed_motion, &
+                                    static_run)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -7235,9 +7236,13 @@ CONTAINS
     ! (the standalone driver on a mixed deck of lines between Fixed/Coupled/Vessel points):
     ! the table is read into agg%motion in the moving-set order instead of being refused.
     LOGICAL, INTENT(IN), OPTIONAL :: prescribed_motion
+    ! static_run: the caller marches no step (the standalone driver's TMax = 0 run), so a line
+    ! restrained in torsion needs no force-blended step, as on the single-line standalone route;
+    ! a coupled host always marches.
+    LOGICAL, INTENT(IN), OPTIONAL :: static_run
 
     INTEGER :: nturb
-    LOGICAL :: host_turns, own_motion, dynamic_points
+    LOGICAL :: host_turns, own_motion, dynamic_points, static_only
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
     TYPE(DeckRodType), ALLOCATABLE :: rod_types(:)
@@ -7277,7 +7282,10 @@ CONTAINS
       IF (deck_has_torsion_columns(lines) .AND. .NOT. host_turns) THEN
         CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_ORIENTATION); RETURN
       END IF
-      IF (ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]) .AND. .NOT. opts%alpha_force_blend) THEN
+      static_only = .FALSE.
+      IF (PRESENT(static_run)) static_only = static_run
+      IF (ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]) .AND. .NOT. opts%alpha_force_blend .AND. &
+          .NOT. static_only) THEN
         CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_FORCE_BLEND); RETURN
       END IF
     END IF
@@ -30012,6 +30020,9 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       CALL check_motion_roll(ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      ! The static configuration, before row 1 moves the fairlead.
+      CALL write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! Install row 1 without advancing the cable clock. The first pass makes the
       ! t=0 fluid sample use the prescribed geometry. The held-field setter refreshes
       ! the consistent free acceleration and deliberately zeros fixed DOFs, so repeat
@@ -30054,7 +30065,7 @@ CONTAINS
     CALL write_hermite_model_row(unit, CD_ZERO, channels, lines, points, cables, ErrStat, ErrMsg, &
                                  motion=motion, motion_time_index=MERGE(1, 0, opts%has_motion_file), &
                                  has_motion=opts%has_motion_file, ranges=ranges)
-    IF (ErrStat == CD_DECKDRV_OK) &
+    IF (ErrStat == CD_DECKDRV_OK .AND. .NOT. opts%has_motion_file) &
       CALL write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
     IF (ErrStat == CD_DECKDRV_OK) &
       CALL write_dynamic_hermite_line_outputs(CD_ZERO, lines, cables, pos_units, ten_units, ErrStat, ErrMsg, &

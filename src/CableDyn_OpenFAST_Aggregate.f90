@@ -271,7 +271,7 @@ CONTAINS
   SUBROUTINE CD_AGG_Init_From_Deck(self, deck_path, dt, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                   range_files, host_orientation, static_current, prescribed_motion)
+                                   range_files, host_orientation, static_current, prescribed_motion, static_run)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -316,6 +316,9 @@ CONTAINS
     ! prescribed_motion: the caller marches the deck's own motionFile or vesselMotion table
     ! (CD_AGG_MotionKinematics; the standalone driver, see CD_Init_Deck_Aggregate)
     LOGICAL, INTENT(IN), OPTIONAL :: prescribed_motion
+    ! static_run: the caller marches no step (the standalone TMax = 0 run; see
+    ! CD_Init_Deck_Aggregate)
+    LOGICAL, INTENT(IN), OPTIONAL :: static_run
 
     ! Both bundles (about 70 KB together) are built on the heap: initialisation runs on the
     ! thread of the calling host, whose stack size CableDyn does not choose.
@@ -355,7 +358,8 @@ CONTAINS
                                 turbine_ref_pos=turbine_ref_pos, farm_ptfm_init=farm_ptfm_init, &
                                 forbid_deck_ambient=forbid_deck_ambient, run_tmax=run_tmax, &
                                 range_files=range_files, host_orientation=host_orientation, &
-                                static_current=static_current, prescribed_motion=prescribed_motion)
+                                static_current=static_current, prescribed_motion=prescribed_motion, &
+                                static_run=static_run)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF

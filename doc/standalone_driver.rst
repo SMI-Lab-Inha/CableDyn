@@ -112,9 +112,12 @@ is requested.
 A mixed deck rejects deck-owned wave/current OPTIONS by name, and with them ``vesselRAO``,
 which needs deck waves. A ``vesselMotion`` record moves every ``Coupled``/``Vessel`` point
 rigidly with the vessel (translation and rotation of each hang-off); a ``motionFile`` gives the
-rows of each point. Mixed-deck LINE ``Outputs`` flags ``p`` and ``t`` are rejected as
-well; request the needed mixed-deck quantities through the main ``OUTPUTS`` section instead
-(the ``r`` range graph is available).
+rows of each point. Row 1 is installed before ``t = 0``, also with ``TMax = 0``, after the
+``.static.out`` of the static solve is written. On the ``EI = 0`` lines that transfer re-derives
+the interior accelerations, which the ``EI = 0``-only route does not, so with row 1 off the deck
+pose their first steps differ from that route's. Mixed-deck LINE ``Outputs`` flags ``p`` and
+``t`` are rejected as well; request the needed mixed-deck quantities through the main
+``OUTPUTS`` section instead (the ``r`` range graph is available).
 
 Initialisation report
 ~~~~~~~~~~~~~~~~~~~~~

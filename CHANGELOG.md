@@ -66,14 +66,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   rotation columns of a deck with a hang-off spring by up to 0.17 %.
 - Prescribed motion and torsion on the standalone mixed deck (`EI = 0` and finite-EI lines between
   `Fixed`/`Coupled`/`Vessel` points, run on the coupled aggregate): the driver marches a
-  `motionFile` or `vesselMotion` as on the cubic-Hermite route, row 1 installed before `t = 0`. A
-  vessel turns the end connection and torsion frames of the cables on its points, and the roll
-  column imposes the twist of a line restrained in torsion, which these decks no longer refuse.
+  `motionFile` or `vesselMotion` as on the cubic-Hermite route, row 1 installed before `t = 0`
+  (also with `TMax = 0`). A vessel turns the end connection and torsion frames of the cables on
+  its points, and the roll column imposes the twist of a line restrained in torsion, which these
+  decks no longer refuse.
   Under vessel roll, pitch and heave, or a surge with the roll column, a clamped line gives the
   single-line route's torque, twist and node positions to the printed eight digits and its end
   tensions and bend moment within 8.2e-6 of their range (the coupled cables' Newton tolerance; with
-  the single-line route's, every channel to the printed digits). A straight line rolled slowly
-  gives `Torq = GJ Phi / L` to 5e-6 N m. `vesselRAO` stays refused with the deck waves.
+  the single-line route's, every channel to the printed digits). These figures are for motions
+  that start from rest; a start with a jump in velocity differs by several percent of the range
+  (3 to 11 % in the cases tried) under the coupled Newton tolerance. A straight line rolled
+  slowly gives `Torq = GJ Phi / L` to 5e-6 N m. A static mixed run (`TMax = 0`) with torsion
+  takes `False alpha_force_blend`, as the single-line route and the Python reader do.
+  `vesselRAO` stays refused with the deck waves.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their
@@ -194,6 +199,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- With a `motionFile` or `vesselMotion`, the single-line finite-EI route writes `.static.out`
+  before it installs the first motion row, so the file holds the static solve; before, it showed
+  the fairlead already moved to row 1. A deck whose row 1 is off the deck fairlead changes
+  `.static.out` only (a 2 cm offset changed the fairlead x by 0.02 m and its tension from 3.5 MN
+  back to the static 29 kN); the example decks are unchanged.
 - `TMax = 0` checks the static start of any dynamic deck as it stands: a `motionFile` or
   `vesselMotion` record may run past `TMax` (its later rows are checked on the `dtM` grid and
   not used, so a long record also serves a shorter run), and `RangeStart` is accepted at
