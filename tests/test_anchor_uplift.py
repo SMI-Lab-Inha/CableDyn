@@ -547,7 +547,7 @@ slope_bathy.txt bathymetryFile
                           text=True, env=env)
     check(proc.returncode != 0 and "exactly one end" in proc.stderr,
           "TDP1Grd of a line grounded at both ends is rejected, as the other TDP channels")
-    # a finite-EI line shared by two turbines: both ends move (the two-moving-end route)
+    # a finite-EI line shared by two turbines: both ends move, driven on the cubic-Hermite route
     two_end = """two-moving-end finite-EI line
 --- LINE TYPES ---
 Name Diam Mass EA BA EI Cdn Cdt Can Cat

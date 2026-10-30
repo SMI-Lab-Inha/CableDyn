@@ -146,9 +146,9 @@ Secondary path: Cosserat rod
 
 A finite-bending Cosserat rod with rotation DOFs (``CableDyn_Cosserat*``) is retained as a
 secondary, non-production path. It is not part of the validated product; its integration
-regressions carry the ``cosserat`` CTest label (``ctest -L cosserat``). The standalone driver
-uses it only for the uncommon
-finite-``EI`` topology in which both line ends move.
+regressions carry the ``cosserat`` CTest label (``ctest -L cosserat``). No deck route uses it:
+a finite-``EI`` line whose two ends move runs on the cubic-Hermite route like every other
+finite-``EI`` line.
 
 The element uses the geometrically exact rod strains of :ref:`Simo (1985) <ref-simo1985>`:
 the material strain

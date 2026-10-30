@@ -13,16 +13,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Finite-EI lines with two moving ends on the cubic-Hermite route: a line whose End B is a
   `Coupled`/`Vessel` point (a cable shared by two floaters, a FAST.Farm shared line) is driven at
   both ends standalone, in OpenFAST, FAST.Farm and the C API (End B on a moving column of its
-  own), with `END CONNECTIONS` and torsion at both (both end frames turn with their parents) and
-  every Hermite feature; a FAST.Farm aggregate driven by prescribed turbine motions reports the
-  standalone deck's end tensions to 7e-3 N of 1.9e4 N. A `Coupled` End B held at rest writes the `Fixed` End B's files byte
-  for byte; a symmetric cable whose ends move apart stays mirror-symmetric to 4e-11 m; a rigidly
-  translating line keeps its end loads to 4e-5 N of 1.6e4 N; driving End B matches the reversed
-  line driven at End A to 1e-3 N, with a turning clamped End B to 2e-5 N and 4e-7 N m; equal rolls
-  of both end frames keep the torque to 3e-6 N m and opposite rolls change it by `GJ (2 phi)/L` to
-  5e-6 N m; restarts are bit-identical. The compatibility (Cosserat) route these decks ran on is
-  retired: on four shared-line decks it failed to converge or reached a compressive static state
-  (-6.1e8 N), and the Hermite route runs all four.
+  own), with `END CONNECTIONS` and torsion at both ends (both end frames turn with their
+  parents) and every Hermite feature; the multibody march still needs a `Fixed` End B. A
+  `Coupled` End B held at rest writes the `Fixed` End B's files byte for byte; a symmetric cable
+  whose ends move apart stays mirror-symmetric to 4e-11 m; a rigidly translating line keeps its
+  end loads to 4e-5 N of 1.6e4 N; driving End B matches the reversed line driven at End A to
+  1e-3 N, with a turning clamped End B to 2e-5 N and 4e-7 N m; equal rolls of both end frames
+  keep the torque to 3e-6 N m and opposite rolls change it by `GJ (2 phi)/L` to 5e-6 N m; a
+  FAST.Farm aggregate driven by prescribed turbine motions reports the standalone deck's end
+  tensions to 7e-3 N of 1.9e4 N; restarts are bit-identical. The compatibility (Cosserat) route
+  these decks ran on is retired: on four shared-line decks it failed to converge or reached a
+  compressive static state (-6.1e8 N), and the Hermite route runs all four.
 - C API host rotations (ABI 1.3): `CableDyn_InitDeckRotating` initialises a handle whose host
   passes each coupled point's rotation (`CableDyn_UpdateRotations`: the global-to-body DCM and
   the angular velocity and acceleration) with every update and step, so a line restrained in

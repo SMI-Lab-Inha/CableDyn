@@ -72,10 +72,6 @@ MODULE CableDyn_DeckDriver
                              CD_Detach_System_LineEnds, &
                              CD_SYSTEM_OK, CD_POINT_FIXED, CD_POINT_COUPLED, CD_POINT_FREE, CD_POINT_CONNECT, &
                              CD_LINE_END_A, CD_LINE_END_B
-  USE CableDyn_FiniteEIModel, ONLY: CD_FiniteEIModelType, CD_Init_FiniteEI_Model, CD_Step_FiniteEI_Model, &
-                                    CD_Get_FiniteEI_Model_State, CD_End_FiniteEI_Model, &
-                                    CD_FiniteEI_Model_Is_Initialized, CD_Set_FiniteEI_Model_Load, &
-                                    CD_Set_FiniteEI_Model_PrescribedDofs
   USE CableDyn_HermiteArch, ONLY: CD_FiniteEI_Hermite_Arch_Seed_LengthMatched, CD_HARCH_OK
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Curvature, &
                                    CD_HermiteCable_Peak_Curvature, CD_HermiteCable_Axial_Resultant, &
@@ -1079,30 +1075,6 @@ MODULE CableDyn_DeckDriver
     LOGICAL, ALLOCATABLE :: col_roll(:)
   END TYPE
 
-  TYPE :: FiniteDeckModel
-    TYPE(CD_FiniteEIModelType) :: model
-    INTEGER :: n_elem = 0
-    LOGICAL :: has_seabed = .FALSE.
-    LOGICAL :: has_bathymetry = .FALSE.
-    REAL(wp) :: seabed_z_floor = CD_ZERO
-    TYPE(CD_BathymetryType) :: bathymetry
-    REAL(wp), ALLOCATABLE :: l0(:)
-    REAL(wp), ALLOCATABLE :: ea(:)
-    REAL(wp), ALLOCATABLE :: ei(:)
-    REAL(wp), ALLOCATABLE :: base_f_ext(:)
-    REAL(wp), ALLOCATABLE :: diam(:)
-    REAL(wp), ALLOCATABLE :: cdn(:)
-    REAL(wp), ALLOCATABLE :: cdt(:)
-    REAL(wp), ALLOCATABLE :: can(:)
-    REAL(wp), ALLOCATABLE :: cat(:)
-    REAL(wp), ALLOCATABLE :: seabed_kn(:)
-    REAL(wp), ALLOCATABLE :: seabed_cn(:)
-    REAL(wp), ALLOCATABLE :: q_work(:), v_work(:), a_work(:)
-    REAL(wp), ALLOCATABLE :: f_ext_work(:), contact_work(:), env_work(:)
-    REAL(wp), ALLOCATABLE :: q_fixed_work(:), v_fixed_work(:), a_fixed_work(:)
-    INTEGER, ALLOCATABLE :: free_map_work(:)
-  END TYPE
-
   TYPE :: CD_LineInitSummary
     !! Engineering quantities at the converged static initial condition.  The
     !! fairlead force is the force exerted by the line on public End A and the
@@ -1556,218 +1528,6 @@ CONTAINS
     END IF
   END SUBROUTINE init_deck_system_from_parsed
 
-  SUBROUTINE init_finite_deck_models(types, points, lines, sections, opts, models, ErrStat, ErrMsg, bathymetry)
-    !! Initialize persistent finite-EI dynamic line models from a parsed deck.
-    !! This deck bridge supports held/prescribed translational endpoints, structural
-    !! submerged weight, normal seabed contact, regularized seabed friction, and
-    !! translational current/wave forcing.
-    TYPE(DeckLineType), INTENT(IN) :: types(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(DeckSection), INTENT(IN) :: sections(:)
-    TYPE(DeckOptions), INTENT(IN) :: opts
-    TYPE(FiniteDeckModel), ALLOCATABLE, INTENT(OUT) :: models(:)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
-
-    INTEGER :: i, es
-    CHARACTER(1024) :: em
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    IF (.NOT. all_lines_have_finite_ei(types, lines, sections)) THEN
-      CALL fail(ErrStat, ErrMsg, 'mixed EI=0 and finite-EI dynamic decks are not supported by this entry point')
-      RETURN
-    END IF
-    ! This compatibility route (a finite-EI deck with a line whose End B is not Fixed) solves
-    ! its statics without seabed friction: fail closed on the as-laid policy instead of
-    ! starting from a frictionless equilibrium reported as the as-laid one.
-    IF (opts%has_friction .AND. opts%static_friction == CD_STATIC_FRICTION_AS_LAID) THEN
-      CALL fail(ErrStat, ErrMsg, 'OPTION staticsFriction asLaid is not applied by the finite-EI route of a deck '// &
-                'whose line has a moving End B (End B not Fixed); hold End B at a Fixed point or use '// &
-                'staticsFriction none')
-      RETURN
-    END IF
-
-    ALLOCATE (models(SIZE(lines)))
-    DO i = 1, SIZE(lines)
-      IF (PRESENT(bathymetry)) THEN
-        CALL init_one_finite_model(lines(i), sections, types, points, opts, models(i), es, em, bathymetry=bathymetry)
-      ELSE
-        CALL init_one_finite_model(lines(i), sections, types, points, opts, models(i), es, em)
-      END IF
-      IF (es /= CD_DECKDRV_OK) THEN
-        CALL end_finite_models(models)
-        ErrStat = es
-        ErrMsg = em
-        RETURN
-      END IF
-    END DO
-  END SUBROUTINE init_finite_deck_models
-
-  SUBROUTINE init_one_finite_model(ln, sections, types, points, opts, deck_model, ErrStat, ErrMsg, bathymetry)
-    !! Initialize one finite-EI Cosserat dynamic model from a deck LINE. Torque-tension coupling
-    !! (GJ|K) is a cubic-Hermite cable feature and fails closed here.
-    TYPE(DeckLine), INTENT(IN) :: ln
-    TYPE(DeckSection), INTENT(IN) :: sections(:)
-    TYPE(DeckLineType), INTENT(IN) :: types(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(DeckOptions), INTENT(IN) :: opts
-    TYPE(FiniteDeckModel), INTENT(INOUT) :: deck_model
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
-
-    TYPE(GenAlphaConfig) :: dynamic_cfg
-    INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:)
-    REAL(wp), ALLOCATABLE :: nodes_ref(:, :), q0(:), v0(:), f_ext(:), f3(:), contact_f(:)
-    REAL(wp), ALLOCATABLE :: ea(:), gas(:), ei(:), gj(:), rho_a(:), i_rt(:), i_rn(:), diam(:), mpl(:)
-    REAL(wp), ALLOCATABLE :: gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
-    REAL(wp), ALLOCATABLE :: load_per_length(:, :), w(:)
-    REAL(wp) :: anchor(3), fairlead(3)
-    INTEGER :: pa, pb, es, nnode, ndof
-    CHARACTER(1024) :: em
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    ! This compatibility model prescribes both endpoint translations and predates
-    ! the Hermite end-connection residual.  Never accept a declared bending
-    ! connection here: doing so would silently replace it with a pinned end if a
-    ! future dispatcher change made this route reachable for that deck.
-    IF (ALLOCATED(ln%att)) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI two-moving-end compatibility solver does not support '// &
-                'ATTACHMENTS; use a Fixed End B'); RETURN
-    END IF
-    IF (ALLOCATED(ln%stf)) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI two-moving-end compatibility solver does not support '// &
-                'STIFFENERS; use a Fixed End B'); RETURN
-    END IF
-    IF (opts%friction_mu_axial > CD_ZERO) THEN
-      CALL fail(ErrStat, ErrMsg, 'the finite-EI two-moving-end compatibility solver has isotropic seabed '// &
-                'friction only; remove frictionMuAxial/frictionMuLateral')
-      RETURN
-    END IF
-    IF (ANY(ln%endconn_mode /= CD_ENDCONN_PINNED)) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI two-moving-end compatibility solver does not support '// &
-                'END CONNECTIONS; use a Fixed End B')
-      RETURN
-    END IF
-    BLOCK
-      INTEGER :: js
-      DO js = 1, SIZE(sections)
-        IF (sections(js)%line_id /= ln%id) CYCLE
-        IF (ABS(types(sections(js)%ltype)%ktt) > CD_ZERO) THEN
-          CALL fail(ErrStat, ErrMsg, 'finite-EI two-moving-end compatibility solver does not support '// &
-                    'torque-tension coupling (GJ|K); use a Fixed End B')
-          RETURN
-        END IF
-      END DO
-    END BLOCK
-    pa = find_point(points, ln%nodeB)
-    pb = find_point(points, ln%nodeA)
-    IF (pa < 1 .OR. pb < 1) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI LINE references an unknown endpoint POINT')
-      RETURN
-    END IF
-    anchor = points(pa)%pos
-    fairlead = points(pb)%pos
-
-    CALL build_finite_section_mesh(ln, sections, types, conn, deck_model%l0, ea, mpl, diam, ei, &
-                                   gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    deck_model%n_elem = SIZE(deck_model%l0)
-    ALLOCATE (deck_model%ea(deck_model%n_elem), deck_model%ei(deck_model%n_elem))
-    deck_model%ea = ea
-    ! Per-element bend stiffness (internal anchor->fairlead order, matching ea/l0) for the
-    ! BendMom output channel: BendMom = EI(node) * geometric curvature. EI=0 lines report 0.
-    deck_model%ei = ei
-    ALLOCATE (deck_model%diam(deck_model%n_elem), deck_model%cdn(deck_model%n_elem), &
-              deck_model%cdt(deck_model%n_elem), deck_model%can(deck_model%n_elem), &
-              deck_model%cat(deck_model%n_elem))
-    CALL finite_hydro_arrays(ln, sections, types, deck_model%diam, deck_model%cdn, deck_model%cdt, &
-                             deck_model%can, deck_model%cat)
-
-    nnode = deck_model%n_elem + 1
-    ndof = 6*nnode
-    ALLOCATE (nodes_ref(3, nnode), q0(ndof), v0(ndof), f_ext(ndof), f3(3*nnode), contact_f(ndof), &
-              load_per_length(3, deck_model%n_elem), w(deck_model%n_elem), fixed_dofs(6))
-    CALL CD_Submerged_Weight(mpl, diam, opts%rhoW, opts%g, w, es, em)
-    IF (es /= 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI submerged weight: '//TRIM(em)); RETURN
-    END IF
-    CALL finite_section_closure(ea, ei, mpl, diam, gas_in, gj_in, i_rt_in, i_rn_in, &
-                                gas, gj, rho_a, i_rt, i_rn, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_DECKDRV_OK) RETURN
-
-    IF (ANY(w <= CD_ZERO)) THEN
-      CALL finite_lazy_wave_reference_and_state(anchor, fairlead, deck_model%l0, nodes_ref, q0, ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    ELSE
-      CALL finite_reference_and_state(anchor, fairlead, deck_model%l0, nodes_ref, q0)
-    END IF
-    v0 = CD_ZERO
-    f_ext = CD_ZERO
-    load_per_length = CD_ZERO
-    load_per_length(3, :) = -w
-    CALL CD_Assemble_Distributed_Load(conn, deck_model%l0, load_per_length, f3, es, em)
-    IF (es /= 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI load assembly: '//TRIM(em)); RETURN
-    END IF
-    CALL pack_translational_load(f3, f_ext)
-    ALLOCATE (deck_model%base_f_ext(ndof))
-    deck_model%base_f_ext = f_ext
-    ALLOCATE (deck_model%q_work(ndof), deck_model%v_work(ndof), deck_model%a_work(ndof))
-    ALLOCATE (deck_model%f_ext_work(ndof), deck_model%contact_work(ndof), deck_model%env_work(ndof))
-    ALLOCATE (deck_model%q_fixed_work(ndof), deck_model%v_fixed_work(ndof), deck_model%a_fixed_work(ndof))
-    ALLOCATE (deck_model%free_map_work(ndof))
-    deck_model%q_work = CD_ZERO
-    deck_model%v_work = CD_ZERO
-    deck_model%a_work = CD_ZERO
-    deck_model%f_ext_work = CD_ZERO
-    deck_model%contact_work = CD_ZERO
-    deck_model%env_work = CD_ZERO
-    deck_model%q_fixed_work = CD_ZERO
-    deck_model%v_fixed_work = CD_ZERO
-    deck_model%a_fixed_work = CD_ZERO
-    deck_model%free_map_work = 0
-    IF (opts%has_wtrdpth .OR. PRESENT(bathymetry)) THEN
-      CALL CD_Nodal_Seabed_Stiffness(opts%kbot, diam, deck_model%l0, deck_model%seabed_kn, es, em)
-      IF (es /= CD_LINE_OK) THEN
-        CALL fail(ErrStat, ErrMsg, 'finite-EI seabed stiffness: '//TRIM(em)); RETURN
-      END IF
-      ALLOCATE (deck_model%seabed_cn(SIZE(deck_model%seabed_kn)))
-      deck_model%seabed_cn = deck_model%seabed_kn*(opts%cbot/opts%kbot)
-      deck_model%has_seabed = .TRUE.
-      IF (PRESENT(bathymetry)) THEN
-        deck_model%bathymetry = bathymetry
-        deck_model%has_bathymetry = .TRUE.
-        CALL finite_bathymetry_contact_force(q0, v0, deck_model%bathymetry, deck_model%seabed_kn, &
-                                             deck_model%seabed_cn, opts%friction_mu, contact_f, ErrStat, ErrMsg)
-      ELSE
-        deck_model%seabed_z_floor = -opts%wtrdpth
-        CALL finite_seabed_contact_force(q0, v0, deck_model%seabed_z_floor, deck_model%seabed_kn, &
-                                         deck_model%seabed_cn, opts%friction_mu, contact_f, ErrStat, ErrMsg)
-      END IF
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      f_ext = f_ext + contact_f
-    END IF
-
-    fixed_dofs = [1, 2, 3, ndof - 5, ndof - 4, ndof - 3]
-    dynamic_cfg%rho_inf = opts%rho_inf
-    dynamic_cfg%rel_tol = opts%dynamic_rel_tol
-    dynamic_cfg%abs_tol = opts%dynamic_abs_tol
-    dynamic_cfg%max_iter = opts%dynamic_max_iter
-    dynamic_cfg%armijo_max_backtracks = opts%dynamic_backtracks
-    dynamic_cfg%modified_newton = opts%dynamic_modified_newton
-    CALL CD_Init_FiniteEI_Model(deck_model%model, nodes_ref, conn, ea, gas, ei, gj, rho_a, i_rt, i_rn, .TRUE., &
-                                es, em, q0=q0, v0=v0, f_ext=f_ext, fixed_dofs=fixed_dofs, cfg=dynamic_cfg)
-    IF (es /= CD_MODEL_OK) THEN
-      ErrStat = CD_DECKDRV_SOLVEFAIL
-      ErrMsg = 'CableDyn_DeckDriver: finite-EI model init failed: '//TRIM(em)
-    END IF
-  END SUBROUTINE init_one_finite_model
-
   RECURSIVE SUBROUTINE build_one_hermite_cable(ln, sections, types, points, opts, dt, cable, coupled_node, &
                                                ErrStat, ErrMsg, standalone_controls, bathymetry, &
                                                fairlead_orientation, init_note, coarse_pass, fold_support, &
@@ -1779,8 +1539,8 @@ CONTAINS
     !! Reuses the finite-EI deck extraction (mesh, submerged weight, section closure, and
     !! the cubic-Hermite arch seed) then routes it through the production Hermite static
     !! solve and the coupled FMF shell. Node ordering runs anchor/touchdown (node 1,
-    !! held) -> fairlead (node nn, the platform-driven coupled node), matching
-    !! init_one_finite_model. Both call routes install flat/structured nodal contact when
+    !! held, or a second driven end) -> fairlead (node nn, the platform-driven coupled node).
+    !! Both call routes install flat/structured nodal contact when
     !! the host/deck declares a seabed; a cable that remains clear sees exactly zero reaction.
     !! With allow_moving_end_b, an End B on a Coupled/Vessel point is a second host-driven end
     !! (CD_HFMF_Set_Moving_End_B): a line between two moving points. Its static problem is the one
@@ -10509,41 +10269,6 @@ CONTAINS
     END DO
   END SUBROUTINE end_models
 
-  SUBROUTINE end_finite_models(models)
-    !! Best-effort cleanup for finite-EI dynamic deck model arrays.
-    TYPE(FiniteDeckModel), INTENT(INOUT) :: models(:)
-    INTEGER :: i, es
-    CHARACTER(1024) :: em
-    DO i = 1, SIZE(models)
-      CALL CD_End_FiniteEI_Model(models(i)%model, es, em)
-      IF (ALLOCATED(models(i)%l0)) DEALLOCATE (models(i)%l0)
-      IF (ALLOCATED(models(i)%ea)) DEALLOCATE (models(i)%ea)
-      IF (ALLOCATED(models(i)%base_f_ext)) DEALLOCATE (models(i)%base_f_ext)
-      IF (ALLOCATED(models(i)%diam)) DEALLOCATE (models(i)%diam)
-      IF (ALLOCATED(models(i)%cdn)) DEALLOCATE (models(i)%cdn)
-      IF (ALLOCATED(models(i)%cdt)) DEALLOCATE (models(i)%cdt)
-      IF (ALLOCATED(models(i)%can)) DEALLOCATE (models(i)%can)
-      IF (ALLOCATED(models(i)%cat)) DEALLOCATE (models(i)%cat)
-      IF (ALLOCATED(models(i)%seabed_kn)) DEALLOCATE (models(i)%seabed_kn)
-      IF (ALLOCATED(models(i)%seabed_cn)) DEALLOCATE (models(i)%seabed_cn)
-      IF (ALLOCATED(models(i)%q_work)) DEALLOCATE (models(i)%q_work)
-      IF (ALLOCATED(models(i)%v_work)) DEALLOCATE (models(i)%v_work)
-      IF (ALLOCATED(models(i)%a_work)) DEALLOCATE (models(i)%a_work)
-      IF (ALLOCATED(models(i)%f_ext_work)) DEALLOCATE (models(i)%f_ext_work)
-      IF (ALLOCATED(models(i)%contact_work)) DEALLOCATE (models(i)%contact_work)
-      IF (ALLOCATED(models(i)%env_work)) DEALLOCATE (models(i)%env_work)
-      IF (ALLOCATED(models(i)%q_fixed_work)) DEALLOCATE (models(i)%q_fixed_work)
-      IF (ALLOCATED(models(i)%v_fixed_work)) DEALLOCATE (models(i)%v_fixed_work)
-      IF (ALLOCATED(models(i)%a_fixed_work)) DEALLOCATE (models(i)%a_fixed_work)
-      IF (ALLOCATED(models(i)%free_map_work)) DEALLOCATE (models(i)%free_map_work)
-      CALL CD_End_Bathymetry(models(i)%bathymetry)
-      models(i)%n_elem = 0
-      models(i)%has_seabed = .FALSE.
-      models(i)%has_bathymetry = .FALSE.
-      models(i)%seabed_z_floor = CD_ZERO
-    END DO
-  END SUBROUTINE end_finite_models
-
   SUBROUTINE end_hermite_cables(cables)
     !! Best-effort cleanup for the standalone production finite-EI route.
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE, INTENT(INOUT) :: cables(:)
@@ -11383,175 +11108,6 @@ CONTAINS
     END IF
     ab(brow, jcol) = ab(brow, jcol) + value
   END SUBROUTINE scatter_finite_contact_band
-
-  SUBROUTINE finite_environment_force(model, opts, time, q, v, f_ext, ErrStat, ErrMsg)
-    !! Translational Morison/FK environmental load for finite-EI deck dynamics.
-    !! The force uses the same two-node wet-subsegment kernels as the EI=0 path,
-    !! scattered only into translational DOFs. Rotational hydrodynamic moments
-    !! are not supported on the finite-EI deck path.
-    TYPE(FiniteDeckModel), INTENT(IN) :: model
-    TYPE(DeckOptions), INTENT(IN) :: opts
-    REAL(wp), INTENT(IN) :: time, q(:), v(:)
-    REAL(wp), INTENT(OUT) :: f_ext(:)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: e, a, b, ia, ib, es
-    INTEGER :: idx(6)
-    REAL(wp) :: xa(3), xb(3), va(3), vb(3), eta_a, eta_b
-    REAL(wp) :: fluid_a(3), fluid_b(3), accel_a(3), accel_b(3), f2(6)
-    CHARACTER(200) :: em ! per-element kinematics and Morison messages (at most 160 characters)
-
-    f_ext = CD_ZERO
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    IF (.NOT. (opts%has_current .OR. opts%has_wave)) RETURN
-    IF (SIZE(q) /= SIZE(v) .OR. SIZE(f_ext) /= SIZE(q) .OR. MOD(SIZE(q), 6) /= 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI hydro state/load shapes must be 6*n_nodes')
-      RETURN
-    END IF
-    DO e = 1, model%n_elem
-      a = e
-      b = e + 1
-      ia = 6*a - 5
-      ib = 6*b - 5
-      xa = q(ia:ia + 2)
-      xb = q(ib:ib + 2)
-      va = v(ia:ia + 2)
-      vb = v(ib:ib + 2)
-      idx = [ia, ia + 1, ia + 2, ib, ib + 1, ib + 2]
-      CALL finite_environment_node(opts, time, xa, eta_a, fluid_a, accel_a, es, em)
-      IF (es /= CD_HYDRO_OK) THEN
-        ErrStat = CD_DECKDRV_BADINPUT
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI environment node A failed: '//TRIM(em)
-        RETURN
-      END IF
-      CALL finite_environment_node(opts, time, xb, eta_b, fluid_b, accel_b, es, em)
-      IF (es /= CD_HYDRO_OK) THEN
-        ErrStat = CD_DECKDRV_BADINPUT
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI environment node B failed: '//TRIM(em)
-        RETURN
-      END IF
-      CALL CD_Morison_Drag_Element_Force(xa, xb, va, vb, model%l0(e), fluid_a, fluid_b, eta_a, eta_b, &
-                                         opts%rhoW, model%diam(e), model%cdn(e), model%cdt(e), f2, es, em)
-      IF (es /= CD_HYDRO_OK) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI drag element failed: '//TRIM(em)
-        RETURN
-      END IF
-      f_ext(idx) = f_ext(idx) + f2
-      IF (opts%has_wave) THEN
-        CALL CD_Froude_Krylov_Element_Force(xa, xb, va, vb, model%l0(e), accel_a, accel_b, eta_a, eta_b, &
-                                            opts%rhoW, model%diam(e), model%can(e), model%cat(e), f2, es, em)
-        IF (es /= CD_HYDRO_OK) THEN
-          ErrStat = CD_DECKDRV_SOLVEFAIL
-          ErrMsg = 'CableDyn_DeckDriver: finite-EI FK element failed: '//TRIM(em)
-          RETURN
-        END IF
-        f_ext(idx) = f_ext(idx) + f2
-      END IF
-    END DO
-  END SUBROUTINE finite_environment_force
-
-  SUBROUTINE finite_environment_load_banded(model, opts, time, q, v, free, kl, ku, free_map, &
-                                            force, jac_q_band, jac_v_band, ErrStat, ErrMsg)
-    !! Add finite-EI translational current/wave load plus reduced banded Jacobian.
-    TYPE(FiniteDeckModel), INTENT(IN) :: model
-    TYPE(DeckOptions), INTENT(IN) :: opts
-    REAL(wp), INTENT(IN) :: time, q(:), v(:)
-    INTEGER, INTENT(IN) :: free(:), kl, ku
-    INTEGER, INTENT(INOUT) :: free_map(:)
-    REAL(wp), INTENT(INOUT) :: force(:), jac_q_band(:, :), jac_v_band(:, :)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: e, a, b, ia, ib, irow, jcol, es
-    INTEGER :: idx(6)
-    REAL(wp) :: xa(3), xb(3), va(3), vb(3), eta_a, eta_b
-    REAL(wp) :: fluid_a(3), fluid_b(3), accel_a(3), accel_b(3), f2(6), jq2(6, 6), jv2(6, 6)
-    CHARACTER(200) :: em ! per-element kinematics and Morison messages (at most 160 characters)
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    IF (.NOT. (opts%has_current .OR. opts%has_wave)) RETURN
-    IF (SIZE(q) /= SIZE(v) .OR. SIZE(force) /= SIZE(q) .OR. MOD(SIZE(q), 6) /= 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI hydro tangent state/load shapes must be 6*n_nodes')
-      RETURN
-    END IF
-    IF (SIZE(free_map) < SIZE(q)) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI hydro tangent free map is undersized')
-      RETURN
-    END IF
-    free_map(1:SIZE(q)) = 0
-    DO irow = 1, SIZE(free)
-      IF (free(irow) < 1 .OR. free(irow) > SIZE(q)) THEN
-        CALL fail(ErrStat, ErrMsg, 'finite-EI hydro tangent free DOF out of range')
-        RETURN
-      END IF
-      free_map(free(irow)) = irow
-    END DO
-    DO e = 1, model%n_elem
-      a = e
-      b = e + 1
-      ia = 6*a - 5
-      ib = 6*b - 5
-      idx = [ia, ia + 1, ia + 2, ib, ib + 1, ib + 2]
-      xa = q(ia:ia + 2)
-      xb = q(ib:ib + 2)
-      va = v(ia:ia + 2)
-      vb = v(ib:ib + 2)
-      CALL finite_environment_node(opts, time, xa, eta_a, fluid_a, accel_a, es, em)
-      IF (es /= CD_HYDRO_OK) THEN
-        ErrStat = CD_DECKDRV_BADINPUT
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI tangent node A failed: '//TRIM(em)
-        RETURN
-      END IF
-      CALL finite_environment_node(opts, time, xb, eta_b, fluid_b, accel_b, es, em)
-      IF (es /= CD_HYDRO_OK) THEN
-        ErrStat = CD_DECKDRV_BADINPUT
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI tangent node B failed: '//TRIM(em)
-        RETURN
-      END IF
-      CALL CD_Morison_Drag_Element_Load(xa, xb, va, vb, model%l0(e), fluid_a, fluid_b, eta_a, eta_b, &
-                                        opts%rhoW, model%diam(e), model%cdn(e), model%cdt(e), &
-                                        f2, jq2, jv2, es, em)
-      IF (es /= CD_HYDRO_OK) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI drag tangent failed: '//TRIM(em)
-        RETURN
-      END IF
-      force(idx) = force(idx) + f2
-      DO jcol = 1, 6
-        DO irow = 1, 6
-          CALL scatter_finite_contact_band(jac_q_band, free_map, kl, ku, idx(irow), idx(jcol), &
-                                           jq2(irow, jcol), ErrStat, ErrMsg)
-          IF (ErrStat /= CD_DECKDRV_OK) RETURN
-          CALL scatter_finite_contact_band(jac_v_band, free_map, kl, ku, idx(irow), idx(jcol), &
-                                           jv2(irow, jcol), ErrStat, ErrMsg)
-          IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        END DO
-      END DO
-      IF (opts%has_wave) THEN
-        CALL CD_Froude_Krylov_Element_Load(xa, xb, va, vb, model%l0(e), accel_a, accel_b, eta_a, eta_b, &
-                                           opts%rhoW, model%diam(e), model%can(e), model%cat(e), &
-                                           f2, jq2, jv2, es, em)
-        IF (es /= CD_HYDRO_OK) THEN
-          ErrStat = CD_DECKDRV_SOLVEFAIL
-          ErrMsg = 'CableDyn_DeckDriver: finite-EI FK tangent failed: '//TRIM(em)
-          RETURN
-        END IF
-        force(idx) = force(idx) + f2
-        DO jcol = 1, 6
-          DO irow = 1, 6
-            CALL scatter_finite_contact_band(jac_q_band, free_map, kl, ku, idx(irow), idx(jcol), &
-                                             jq2(irow, jcol), ErrStat, ErrMsg)
-            IF (ErrStat /= CD_DECKDRV_OK) RETURN
-            CALL scatter_finite_contact_band(jac_v_band, free_map, kl, ku, idx(irow), idx(jcol), &
-                                             jv2(irow, jcol), ErrStat, ErrMsg)
-            IF (ErrStat /= CD_DECKDRV_OK) RETURN
-          END DO
-        END DO
-      END IF
-    END DO
-  END SUBROUTINE finite_environment_load_banded
 
   SUBROUTINE finite_environment_node(opts, time, x, eta, fluid_velocity, fluid_acceleration, ErrStat, ErrMsg)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -19192,117 +18748,6 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE write_dynamic_system_line_outputs
-
-  SUBROUTINE open_dynamic_finite_line_outputs(out_root, lines, models, pos_units, ten_units, ErrStat, ErrMsg)
-    !! Open optional finite-EI per-line dynamic time-series files.
-    CHARACTER(*), INTENT(IN) :: out_root
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(FiniteDeckModel), INTENT(IN) :: models(:)
-    INTEGER, ALLOCATABLE, INTENT(OUT) :: pos_units(:), ten_units(:)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-
-    INTEGER :: i, ios, nnode, ne, node, seg
-    CHARACTER(LEN(out_root) + 32) :: path
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    IF (SIZE(models) /= SIZE(lines)) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI line-output model count does not match line count')
-      RETURN
-    END IF
-    ALLOCATE (pos_units(SIZE(lines)), ten_units(SIZE(lines)))
-    pos_units = 0
-    ten_units = 0
-    DO i = 1, SIZE(lines)
-      IF (.NOT. line_outputs_requested(lines(i)%outputs)) CYCLE
-      ne = models(i)%n_elem
-      nnode = ne + 1
-      IF (line_output_has_flag(lines(i)%outputs, 'p')) THEN
-        path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.p.out'
-        OPEN (NEWUNIT=pos_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
-        IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
-          CALL fail(ErrStat, ErrMsg, 'cannot open finite-EI line position output file: '//TRIM(path)); RETURN
-        END IF
-        WRITE (pos_units(i), '(A)') '# CableDyn finite-EI dynamic line node positions; public node order EndA -> EndB'
-        WRITE (pos_units(i), '(A)', ADVANCE='NO') 'Time(s)'
-        DO node = 1, nnode
-          WRITE (pos_units(i), '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'X(m)'
-          WRITE (pos_units(i), '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'Y(m)'
-          WRITE (pos_units(i), '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Node', node, 'Z(m)'
-        END DO
-        WRITE (pos_units(i), '(A)') ''
-      END IF
-      IF (line_output_has_flag(lines(i)%outputs, 't')) THEN
-        path = TRIM(out_root)//'.Line'//TRIM(int_to_str(lines(i)%id))//'.t.out'
-        OPEN (NEWUNIT=ten_units(i), FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
-        IF (ios /= 0) THEN
-          CALL close_dynamic_line_outputs(pos_units, ten_units)
-          CALL fail(ErrStat, ErrMsg, 'cannot open finite-EI line tension output file: '//TRIM(path)); RETURN
-        END IF
-        WRITE (ten_units(i), '(A)') '# CableDyn finite-EI dynamic line segment tensions; public segment order '// &
-          'EndA -> EndB'
-        WRITE (ten_units(i), '(A)', ADVANCE='NO') 'Time(s)'
-        DO seg = 1, ne
-          WRITE (ten_units(i), '(A,A,I0,A)', ADVANCE='NO') char_tab(), 'Segment', seg, 'Tension(N)'
-        END DO
-        WRITE (ten_units(i), '(A)') ''
-      END IF
-    END DO
-  END SUBROUTINE open_dynamic_finite_line_outputs
-
-  SUBROUTINE write_dynamic_finite_line_outputs(time, lines, models, pos_units, ten_units, work, ErrStat, ErrMsg)
-    !! Append one row to requested finite-EI dynamic per-line output files.
-    REAL(wp), INTENT(IN) :: time
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(FiniteDeckModel), INTENT(IN) :: models(:)
-    INTEGER, INTENT(IN) :: pos_units(:), ten_units(:)
-    TYPE(ModelOutputWorkspace), INTENT(INOUT) :: work
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-
-    INTEGER :: i, nnode, ndof, ne, es
-    CHARACTER(1024) :: em
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    DO i = 1, SIZE(lines)
-      IF (pos_units(i) == 0 .AND. ten_units(i) == 0) CYCLE
-      ne = models(i)%n_elem
-      nnode = ne + 1
-      ndof = 6*nnode
-      IF (pos_units(i) /= 0) THEN
-        CALL ensure_model_output_workspace(work, ndof, 0)
-        CALL CD_Get_FiniteEI_Model_State(models(i)%model, work%q(1:ndof), work%v(1:ndof), &
-                                         work%a(1:ndof), es, em)
-        IF (es /= 0) THEN
-          ErrStat = CD_DECKDRV_SOLVEFAIL
-          ErrMsg = 'CableDyn_DeckDriver: finite-EI line-output state recovery failed: '//TRIM(em)
-          RETURN
-        END IF
-        CALL write_line_position_row(pos_units(i), time, work%q(1:ndof), 6, ne, ErrStat)
-        IF (ErrStat /= CD_DECKDRV_OK) THEN
-          ErrMsg = 'CableDyn_DeckDriver: non-finite finite-EI line position output'
-          RETURN
-        END IF
-      END IF
-      IF (ten_units(i) /= 0) THEN
-        CALL ensure_model_output_workspace(work, 0, ne)
-        CALL finite_model_tension(models(i), work%tension(1:ne), work, es, em)
-        IF (es /= CD_DECKDRV_OK) THEN
-          ErrStat = es
-          ErrMsg = em
-          RETURN
-        END IF
-        CALL write_line_tension_row(ten_units(i), time, work%tension(1:ne), ErrStat)
-        IF (ErrStat /= CD_DECKDRV_OK) THEN
-          ErrMsg = 'CableDyn_DeckDriver: non-finite finite-EI line tension output'
-          RETURN
-        END IF
-      END IF
-    END DO
-  END SUBROUTINE write_dynamic_finite_line_outputs
 
   SUBROUTINE close_dynamic_line_outputs(pos_units, ten_units, lift_units)
     INTEGER, ALLOCATABLE, INTENT(INOUT) :: pos_units(:), ten_units(:)
@@ -31146,150 +30591,6 @@ CONTAINS
     END DO
   END SUBROUTINE write_dynamic_hermite_line_outputs
 
-  SUBROUTINE write_finite_dynamic_out(out_root, channels, lines, points, opts, models, converged, ErrStat, ErrMsg, &
-                                      bathymetry)
-    CHARACTER(*), INTENT(IN) :: out_root
-    CHARACTER(NAMELEN), INTENT(IN) :: channels(:)
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(DeckOptions), INTENT(IN) :: opts
-    TYPE(FiniteDeckModel), INTENT(INOUT) :: models(:)
-    LOGICAL, INTENT(OUT) :: converged
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
-
-    INTEGER :: unit, ios, step, nstep, es, n_iter
-    INTEGER, ALLOCATABLE :: pos_units(:), ten_units(:)
-    INTEGER :: miss_count, consecutive_miss, max_consecutive_miss
-    CHARACTER(LEN(out_root) + 8) :: path
-    CHARACTER(1024) :: em
-    LOGICAL :: step_converged, stalled
-    REAL(wp) :: t, first_miss_time, last_miss_time
-    TYPE(MotionTable) :: motion
-    TYPE(ModelOutputWorkspace) :: output_work
-    TYPE(DriverProgress) :: progress
-
-    converged = .TRUE.
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    ! the two-moving-end finite-EI line carries no VIV (Cl > 0 is refused on it), so no lift
-    IF (ANY([(line_output_has_lift(lines(step)%outputs), step=1, SIZE(lines))])) THEN
-      CALL fail(ErrStat, ErrMsg, 'the LINES Outputs flag V (VIV lift) needs a line that carries VIV, which a '// &
-                'finite-EI line with two moving ends does not'); RETURN
-    END IF
-    nstep = NINT(opts%tmax/opts%dtM)
-    CALL range_setup_planned(output_work%rset, lines, channels, opts, ErrStat, ErrMsg, fmodels=models, &
-                             bathymetry=bathymetry)
-    IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    miss_count = 0
-    consecutive_miss = 0
-    max_consecutive_miss = 0
-    first_miss_time = CD_ZERO
-    last_miss_time = CD_ZERO
-    IF (opts%has_motion_file) THEN
-      CALL read_motion_file(opts%motion_file, points, opts, motion, ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      CALL apply_motion_to_finite_models(models, lines, points, motion, 1, es, em)
-      IF (es /= CD_DECKDRV_OK) THEN
-        ErrStat = es
-        ErrMsg = em
-        RETURN
-      END IF
-    END IF
-    ! Seed a_0 with the t=0 seabed-contact + current/wave loads so the first step does not
-    ! march from a gravity-only initial acceleration (mirrors the EI=0 update_wave_models recompute).
-    CALL seed_finite_initial_acceleration(models, opts, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    path = TRIM(out_root)//'.out'
-    OPEN (NEWUNIT=unit, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
-    IF (ios /= 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'cannot open output file: '//TRIM(path)); RETURN
-    END IF
-    WRITE (unit, '(A)') '# CableDyn driver output (finite-EI dynamic; convergence quality in the status message)'
-    CALL write_header(unit, channels)
-    CALL open_dynamic_finite_line_outputs(out_root, lines, models, pos_units, ten_units, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_DECKDRV_OK) THEN
-      CLOSE (unit)
-      RETURN
-    END IF
-    IF (opts%has_motion_file) THEN
-      CALL write_finite_model_row(unit, CD_ZERO, channels, lines, points, models, output_work, ErrStat, ErrMsg, &
-                                  motion, 1)
-    ELSE
-      CALL write_finite_model_row(unit, CD_ZERO, channels, lines, points, models, output_work, ErrStat, ErrMsg)
-    END IF
-    IF (ErrStat /= CD_DECKDRV_OK) THEN
-      CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
-      RETURN
-    END IF
-    CALL write_dynamic_finite_line_outputs(CD_ZERO, lines, models, pos_units, ten_units, output_work, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_DECKDRV_OK) THEN
-      CLOSE (unit)
-      CALL close_dynamic_line_outputs(pos_units, ten_units)
-      RETURN
-    END IF
-    CALL start_driver_progress(progress, nstep, opts%dtM)
-    DO step = 1, nstep
-      CALL CD_Profile_Enter(CD_PROF_SOLVE)
-      t = REAL(step, wp)*opts%dtM
-      IF (opts%has_motion_file) THEN
-        ! Moving-support march: the prescribed endpoint translations follow the motionFile
-        ! trajectory to t_{n+1}, their velocity/acceleration coupling into the dynamic residual
-        ! (the gen-alpha sets the fixed DOFs to the targets -- no separate re-apply needed).
-        CALL step_finite_held_models(models, opts, t, opts%dtM, step_converged, stalled, n_iter, es, em, &
-                                     motion=motion, lines=lines, points=points, time_index=step + 1)
-      ELSE
-        CALL step_finite_held_models(models, opts, t, opts%dtM, step_converged, stalled, n_iter, es, em)
-      END IF
-      CALL CD_Profile_Enter(CD_PROF_CHECK)
-      IF (es /= CD_DECKDRV_OK) THEN
-        CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
-        ErrStat = es
-        ErrMsg = em
-        RETURN
-      END IF
-      CALL update_dynamic_completion_quality(t, step_converged, stalled, miss_count, consecutive_miss, &
-                                             max_consecutive_miss, first_miss_time, last_miss_time)
-      IF (.NOT. step_converged .OR. stalled) THEN
-        CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
-        CALL CD_Classify_Dynamic_Completion('finite-EI dynamic run', nstep, miss_count, &
-                                            max_consecutive_miss, first_miss_time, last_miss_time, &
-                                            converged, ErrStat, ErrMsg)
-        RETURN
-      END IF
-      CALL CD_Profile_Step()
-      CALL CD_Profile_Enter(CD_PROF_OUTPUT)
-      IF (opts%has_motion_file) THEN
-        CALL write_finite_model_row(unit, t, channels, lines, points, models, output_work, ErrStat, ErrMsg, &
-                                    motion, step + 1)
-      ELSE
-        CALL write_finite_model_row(unit, t, channels, lines, points, models, output_work, ErrStat, ErrMsg)
-      END IF
-      IF (ErrStat /= CD_DECKDRV_OK) THEN
-        CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
-        RETURN
-      END IF
-      CALL write_dynamic_finite_line_outputs(t, lines, models, pos_units, ten_units, output_work, ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) THEN
-        CLOSE (unit)
-        CALL close_dynamic_line_outputs(pos_units, ten_units)
-        RETURN
-      END IF
-      CALL CD_Profile_Enter(CD_PROF_PROGRESS)
-      CALL update_driver_progress(progress, step, t)
-    END DO
-    CLOSE (unit)
-    CALL close_dynamic_line_outputs(pos_units, ten_units)
-    CALL CD_Classify_Dynamic_Completion('finite-EI dynamic run', nstep, miss_count, max_consecutive_miss, &
-                                        first_miss_time, last_miss_time, converged, ErrStat, ErrMsg)
-    IF (ErrStat == CD_DECKDRV_OK .AND. converged) CALL range_write(output_work%rset, out_root, ErrStat, ErrMsg)
-  END SUBROUTINE write_finite_dynamic_out
-
   FUNCTION deck_current_velocity(opts, pos, time, ErrStat, ErrMsg) RESULT(velocity)
     !! Return the deck current velocity at position pos and time: uniform, a depth profile at
     !! pos(3), or the MoorDyn-C current grid (Currents 2 and 5) at pos and time.
@@ -32395,24 +31696,6 @@ CONTAINS
                            motion=motion, motion_time_index=motion_time_index)
   END SUBROUTINE write_model_row
 
-  SUBROUTINE write_finite_model_row(unit, time, channels, lines, points, models, work, ErrStat, ErrMsg, &
-                                    motion, motion_time_index)
-    INTEGER, INTENT(IN) :: unit
-    REAL(wp), INTENT(IN) :: time
-    CHARACTER(NAMELEN), INTENT(IN) :: channels(:)
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(FiniteDeckModel), INTENT(IN) :: models(:)
-    TYPE(ModelOutputWorkspace), INTENT(INOUT) :: work
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    TYPE(MotionTable), INTENT(IN), OPTIONAL :: motion
-    INTEGER, INTENT(IN), OPTIONAL :: motion_time_index
-
-    CALL write_planned_row(unit, time, channels, lines, points, work, 'finite-EI ', ErrStat, ErrMsg, &
-                           fmodels=models, motion=motion, motion_time_index=motion_time_index)
-  END SUBROUTINE write_finite_model_row
-
   SUBROUTINE write_system_model_row(unit, time, channels, lines, points, system, work, ErrStat, ErrMsg, rigid, &
                                     rods, opts, bathymetry)
     !! rigid/rods: the body and rod states that Body<N>/Rod<N> channels report.
@@ -32436,14 +31719,14 @@ CONTAINS
   END SUBROUTINE write_system_model_row
 
   SUBROUTINE write_planned_row(unit, time, channels, lines, points, work, label, ErrStat, ErrMsg, models, &
-                               fmodels, system, motion, motion_time_index, rigid, rods, opts, bathymetry)
-    !! Shared dynamic .out row writer for the EI=0 line (`models`), finite-EI (`fmodels`)
-    !! and point-system (`system`) paths; exactly one of the three is present. The
+                               system, motion, motion_time_index, rigid, rods, opts, bathymetry)
+    !! Shared dynamic .out row writer for the EI=0 line (`models`) and point-system (`system`)
+    !! paths; exactly one of the two is present. The
     !! channel list is resolved into descriptors on the first row, each referenced
     !! line's state and tensions are fetched at most once per row, and the row is
     !! emitted by one formatted WRITE. Values and text are identical to evaluating
-    !! every channel through model_channel_value / finite_model_channel_value /
-    !! system_channel_value: any channel the plan cannot resolve, and any per-row
+    !! every channel through model_channel_value / system_channel_value: any channel the plan
+    !! cannot resolve, and any per-row
     !! query failure, is delegated to that routine so its value or error is unchanged.
     !! On an error the row prefix up to the failing channel is left non-advancing.
     INTEGER, INTENT(IN) :: unit
@@ -32456,7 +31739,6 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_ModelType), INTENT(IN), OPTIONAL :: models(:)
-    TYPE(FiniteDeckModel), INTENT(IN), OPTIONAL :: fmodels(:)
     TYPE(CD_SystemType), INTENT(IN), OPTIONAL :: system
     TYPE(MotionTable), INTENT(IN), OPTIONAL :: motion
     INTEGER, INTENT(IN), OPTIONAL :: motion_time_index
@@ -32478,7 +31760,6 @@ CONTAINS
     n = SIZE(channels)
     has_motion = PRESENT(motion) .AND. PRESENT(motion_time_index)
     stride = 3
-    IF (PRESENT(fmodels)) stride = 6
     IF (.NOT. work%plan_ready) THEN
       CALL build_plan()
     ELSE IF (SIZE(work%ch_kind) /= n .OR. SIZE(work%line_ndof) /= SIZE(lines) .OR. &
@@ -32580,8 +31861,6 @@ CONTAINS
         IF (.NOT. CD_Range_Needs_Sample(work%rset, il)) CYCLE
         IF (PRESENT(models)) THEN
           CALL range_sample_model(models(il), work%rset%lines(il), ErrStat, ErrMsg)
-        ELSE IF (PRESENT(fmodels)) THEN
-          CALL range_sample_fmodel(fmodels(il), work%rset%lines(il), ErrStat, ErrMsg)
         ELSE
           CALL range_sample_model(system%lines(il), work%rset%lines(il), ErrStat, ErrMsg)
         END IF
@@ -32617,9 +31896,6 @@ CONTAINS
       IF (PRESENT(models)) THEN
         CALL model_channel_value(channels(ich), lines, points, models, work, v, ErrStat, ErrMsg, motion, &
                                  motion_time_index)
-      ELSE IF (PRESENT(fmodels)) THEN
-        CALL finite_model_channel_value(channels(ich), lines, points, fmodels, work, v, ErrStat, ErrMsg, &
-                                        motion, motion_time_index)
       ELSE
         CALL system_channel_value(channels(ich), lines, points, system, work, v, ErrStat, ErrMsg)
       END IF
@@ -32639,10 +31915,6 @@ CONTAINS
         CALL CD_Get_Model_State(models(il), work%line_q(o + 1:o + m), work%line_v(o + 1:o + m), &
                                 work%line_a(o + 1:o + m), es, msg)
         fetched = es == CD_MODEL_OK
-      ELSE IF (PRESENT(fmodels)) THEN
-        CALL CD_Get_FiniteEI_Model_State(fmodels(il)%model, work%line_q(o + 1:o + m), work%line_v(o + 1:o + m), &
-                                         work%line_a(o + 1:o + m), es, msg)
-        fetched = es == 0
       ELSE
         CALL CD_Get_System_Line_State(system, il, work%line_q(o + 1:o + m), work%line_v(o + 1:o + m), &
                                       work%line_a(o + 1:o + m), es, msg)
@@ -32686,9 +31958,6 @@ CONTAINS
       IF (PRESENT(models)) THEN
         CALL CD_Get_Model_Tension(models(il), work%line_ten(o + 1:o + m), es, msg)
         fetched = es == CD_MODEL_OK
-      ELSE IF (PRESENT(fmodels)) THEN
-        CALL finite_model_tension(fmodels(il), work%line_ten(o + 1:o + m), work, es, msg)
-        fetched = es == CD_DECKDRV_OK
       ELSE
         CALL CD_Get_System_Line_Tension(system, il, work%line_ten(o + 1:o + m), es, msg)
         fetched = es == CD_SYSTEM_OK
@@ -32710,11 +31979,6 @@ CONTAINS
         sized = es == CD_MODEL_OK
         ne_l = ndof_l/3 - 1
         tension_sized = sized
-      ELSE IF (PRESENT(fmodels)) THEN
-        ne_l = fmodels(il)%n_elem
-        ndof_l = 6*(ne_l + 1)
-        sized = .TRUE.
-        tension_sized = .TRUE.
       ELSE
         ndof_l = CD_System_Line_NDOF(system, il, es, msg)
         sized = es == CD_SYSTEM_OK
@@ -32816,19 +32080,6 @@ CONTAINS
               END IF
               EXIT
             END DO
-          ELSE IF (PRESENT(fmodels)) THEN
-            ppos = point_index(points, pidx)
-            IF (ppos == 0) CYCLE
-            IF (has_motion .AND. (TRIM(points(ppos)%ptype) == 'coupled' .OR. &
-                                  TRIM(points(ppos)%ptype) == 'vessel')) THEN
-              midx = find_motion_point(motion, points(ppos)%id)
-              IF (midx == 0) CYCLE
-              work%ch_kind(j) = CH_POINT_MOTION
-              work%ch_aux(j) = midx
-            ELSE
-              work%ch_kind(j) = CH_POINT_FIXED
-              work%ch_aux(j) = ppos
-            END IF
           ELSE
             IF (point_index(points, pidx) == 0) CYCLE
             work%ch_kind(j) = CH_SYS_POINT
@@ -32846,8 +32097,6 @@ CONTAINS
             work%ch_kind(j) = CH_NODE_TEN
             work%ch_node(j) = deck_to_internal_node(node, work%line_ne(il))
           ELSE
-            ! The finite-EI material bend moment keeps its reference-curvature evaluator.
-            IF (PRESENT(fmodels) .AND. kind == 6) CYCLE
             work%ch_kind(j) = CH_NODE_STATE
             work%ch_node(j) = node
             work%ch_aux(j) = kind
@@ -33131,184 +32380,6 @@ CONTAINS
     END IF
   END SUBROUTINE system_channel_value
 
-  SUBROUTINE finite_model_channel_value(ch, lines, points, models, work, val, ErrStat, ErrMsg, motion, &
-                                        motion_time_index)
-    CHARACTER(*), INTENT(IN) :: ch
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(FiniteDeckModel), INTENT(IN) :: models(:)
-    TYPE(ModelOutputWorkspace), INTENT(INOUT) :: work
-    REAL(wp), INTENT(OUT) :: val
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    TYPE(MotionTable), INTENT(IN), OPTIONAL :: motion
-    INTEGER, INTENT(IN), OPTIONAL :: motion_time_index
-
-    INTEGER :: li, pidx, comp, kind, node, nnode, es, inode, ppos, midx
-    CHARACTER(NAMELEN) :: lo
-    CHARACTER(1024) :: em
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    val = CD_ZERO
-    lo = to_lower(ch)
-    IF (is_point_force_channel(lo)) THEN
-      CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": Point<P>F channels are not available on the '// &
-                'two-moving-end finite-EI route (use FairTen/AnchTen)')
-      RETURN
-    END IF
-    ! this route reports the axial chord-stretch tension of the end elements, not an end-force vector
-    IF (is_anchor_force_channel(lo)) THEN
-      CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": AnchFz/AnchFH channels are not available on the '// &
-                'two-moving-end finite-EI route (use AnchTen and AnchIncl)')
-      RETURN
-    END IF
-    IF (starts_with(lo, 'fairten') .OR. starts_with(lo, 'anchten')) THEN
-      li = find_line(lines, int_suffix(ch, 8))
-      CALL ensure_model_output_workspace(work, 0, models(li)%n_elem)
-      CALL finite_model_tension(models(li), work%tension(1:models(li)%n_elem), work, es, em)
-      IF (es /= CD_DECKDRV_OK) THEN
-        ErrStat = es
-        ErrMsg = em
-        RETURN
-      END IF
-      IF (starts_with(lo, 'fairten')) THEN
-        val = work%tension(models(li)%n_elem)
-      ELSE
-        val = work%tension(1)
-      END IF
-    ELSE IF (is_endpoint_angle_channel(lo)) THEN
-      li = find_line(lines, endpoint_angle_line_id(ch))
-      nnode = models(li)%n_elem + 1
-      CALL ensure_model_output_workspace(work, 6*nnode, 0)
-      CALL CD_Get_FiniteEI_Model_State(models(li)%model, work%q(1:6*nnode), work%v(1:6*nnode), &
-                                       work%a(1:6*nnode), es, em)
-      IF (es /= 0) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI state query failed for line-angle channel: '//TRIM(em)
-        RETURN
-      END IF
-      IF (is_fair_endpoint_angle(lo)) THEN
-        val = line_geom_value(7, 1, nnode, work%q(1:6*nnode), 6)          ! End A declination [deg]
-      ELSE
-        val = line_geom_value(7, nnode, nnode, work%q(1:6*nnode), 6)      ! End B declination [deg]
-      END IF
-      val = endpoint_angle_from_declination(lo, val)
-    ELSE IF (is_point_channel(lo)) THEN
-      CALL parse_point_channel(ch, pidx, comp)
-      ppos = point_index(points, pidx)
-      IF (ppos == 0) THEN
-        ErrStat = CD_DECKDRV_BADINPUT
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI Point OUTPUT channel references an unknown point'
-        RETURN
-      END IF
-      IF (PRESENT(motion) .AND. PRESENT(motion_time_index) .AND. &
-          (TRIM(points(ppos)%ptype) == 'coupled' .OR. TRIM(points(ppos)%ptype) == 'vessel')) THEN
-        midx = find_motion_point(motion, points(ppos)%id)
-        IF (midx == 0) THEN
-          ErrStat = CD_DECKDRV_BADINPUT
-          ErrMsg = 'CableDyn_DeckDriver: finite-EI motion output missing point id '//TRIM(int_to_str(points(ppos)%id))
-          RETURN
-        END IF
-        val = motion%q(comp, midx, motion_time_index)
-      ELSE
-        val = points(ppos)%pos(comp)
-      END IF
-    ELSE
-      CALL parse_line_node_channel(ch, li, node, kind, comp)
-      li = find_line(lines, li)
-      nnode = models(li)%n_elem + 1
-      IF (node < 1 .OR. node > nnode) THEN
-        ErrStat = CD_DECKDRV_BADINPUT
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI line-node OUTPUT channel node index is out of range'
-        RETURN
-      END IF
-      inode = deck_to_internal_node(node, models(li)%n_elem)
-      IF (kind == 3) THEN
-        CALL ensure_model_output_workspace(work, 0, models(li)%n_elem)
-        CALL finite_model_tension(models(li), work%tension(1:models(li)%n_elem), work, es, em)
-        IF (es /= CD_DECKDRV_OK) THEN
-          ErrStat = es
-          ErrMsg = em
-          RETURN
-        END IF
-        val = nodal_tension_value(work%tension(1:models(li)%n_elem), inode)
-      ELSE
-        CALL ensure_model_output_workspace(work, 6*nnode, 0)
-        CALL CD_Get_FiniteEI_Model_State(models(li)%model, work%q(1:6*nnode), work%v(1:6*nnode), &
-                                         work%a(1:6*nnode), es, em)
-        IF (es /= 0) THEN
-          ErrStat = CD_DECKDRV_SOLVEFAIL
-          ErrMsg = 'CableDyn_DeckDriver: finite-EI state query failed for line-node channel: '//TRIM(em)
-          RETURN
-        END IF
-        SELECT CASE (kind)
-        CASE (1)   ! position
-          val = work%q(6*(inode - 1) + comp)
-        CASE (2)   ! velocity
-          val = work%v(6*(inode - 1) + comp)
-        CASE (4)   ! acceleration
-          val = work%a(6*(inode - 1) + comp)
-        CASE (6)   ! bend moment [N.m] = EI(node) * |kvec_current - kvec_reference|
-          BLOCK
-            REAL(wp) :: r_cur(3, nnode), kc(3), kr(3)
-            INTEGER :: nn
-            ! OrcaFlex-convention bend moment: EI*|kappa - kappa_ref|, the curvature RELATIVE
-            ! to the stress-free reference shape, so a cable resting at its reference reports
-            ! ~0. On this route the reference (nodes_ref) is a straight rod, so kappa_ref = 0
-            ! and the value is EI times the geometric curvature.
-            DO nn = 1, nnode
-              r_cur(:, nn) = work%q(6*nn - 5:6*nn - 3)
-            END DO
-            kc = node_curvature_vector(r_cur, nnode, inode)
-            kr = node_curvature_vector(models(li)%model%nodes_ref, nnode, inode)
-            val = nodal_ei_value(models(li)%ei, inode)*NORM2(kc - kr)
-          END BLOCK
-        CASE DEFAULT   ! curvature (5) / declination (7) / azimuth (8) -- geometric
-          val = line_geom_value(kind, node, nnode, work%q(1:6*nnode), 6, lines(li)%azi_signed)
-        END SELECT
-      END IF
-    END IF
-  END SUBROUTINE finite_model_channel_value
-
-  SUBROUTINE finite_model_tension(deck_model, tension, work, ErrStat, ErrMsg)
-    !! Recover an axial-tension scalar per element from the translational stretch.
-    !! This is an output diagnostic for deck channels; the dynamic residual still
-    !! uses the full Cosserat internal force/tangent.
-    TYPE(FiniteDeckModel), INTENT(IN) :: deck_model
-    REAL(wp), INTENT(OUT) :: tension(:)
-    TYPE(ModelOutputWorkspace), INTENT(INOUT) :: work
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-
-    INTEGER :: e, es, nnode
-    REAL(wp) :: xa(3), xb(3), length
-    CHARACTER(1024) :: em
-
-    tension = CD_ZERO
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    IF (SIZE(tension) /= deck_model%n_elem) THEN
-      CALL fail(ErrStat, ErrMsg, 'finite-EI tension output has wrong shape')
-      RETURN
-    END IF
-    nnode = deck_model%n_elem + 1
-    CALL ensure_model_output_workspace(work, 6*nnode, 0)
-    CALL CD_Get_FiniteEI_Model_State(deck_model%model, work%q(1:6*nnode), work%v(1:6*nnode), &
-                                     work%a(1:6*nnode), es, em)
-    IF (es /= 0) THEN
-      ErrStat = CD_DECKDRV_SOLVEFAIL
-      ErrMsg = 'CableDyn_DeckDriver: finite-EI tension state query failed: '//TRIM(em)
-      RETURN
-    END IF
-    DO e = 1, deck_model%n_elem
-      xa = work%q(6*e - 5:6*e - 3)
-      xb = work%q(6*(e + 1) - 5:6*(e + 1) - 3)
-      length = SQRT(DOT_PRODUCT(xb - xa, xb - xa))
-      tension(e) = deck_model%ea(e)*(length/deck_model%l0(e) - CD_ONE)
-    END DO
-  END SUBROUTINE finite_model_tension
-
   SUBROUTINE model_channel_value(ch, lines, points, models, work, val, ErrStat, ErrMsg, motion, motion_time_index)
     CHARACTER(*), INTENT(IN) :: ch
     TYPE(DeckLine), INTENT(IN) :: lines(:)
@@ -33532,291 +32603,6 @@ CONTAINS
     ErrMsg = ''
   END FUNCTION model_nelem_from_line
 
-  SUBROUTINE seed_finite_initial_acceleration(models, opts, ErrStat, ErrMsg)
-    !! Recompute each finite-EI line's stored initial acceleration so it is consistent with the
-    !! t=0 configuration-dependent loads the in-loop callback applies during the first step:
-    !! seabed contact AND the current/wave environment force. CD_Init_FiniteEI_Model builds a_0
-    !! from gravity/buoyancy (base_f_ext) alone, so without this seed the first generalized-alpha
-    !! predictor starts from an a_0 inconsistent with the residual -- injecting a spurious startup
-    !! transient for grounded or hydrodynamically loaded finite-EI cables. Mirrors the EI=0 path's
-    !! update_wave_models recompute at t=0. The stored load is restored to base_f_ext afterwards
-    !! so the per-step reset invariant in step_finite_held_models is preserved (the contact/env
-    !! contribution is re-added through the callback each step and must not be double-counted).
-    TYPE(FiniteDeckModel), INTENT(INOUT) :: models(:)
-    TYPE(DeckOptions), INTENT(IN) :: opts
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-
-    INTEGER :: i, es
-    LOGICAL :: use_live_env
-    CHARACTER(1024) :: em
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    use_live_env = opts%has_current .OR. opts%has_wave
-    DO i = 1, SIZE(models)
-      IF (.NOT. (models(i)%has_seabed .OR. use_live_env)) CYCLE
-      CALL CD_Get_FiniteEI_Model_State(models(i)%model, models(i)%q_work, models(i)%v_work, &
-                                       models(i)%a_work, es, em)
-      IF (es /= 0) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI state query before initial-load seed failed: '//TRIM(em)
-        RETURN
-      END IF
-      models(i)%contact_work = CD_ZERO
-      models(i)%env_work = CD_ZERO
-      IF (models(i)%has_seabed) THEN
-        IF (models(i)%has_bathymetry) THEN
-          CALL finite_bathymetry_contact_force(models(i)%q_work, models(i)%v_work, models(i)%bathymetry, &
-                                               models(i)%seabed_kn, models(i)%seabed_cn, opts%friction_mu, &
-                                               models(i)%contact_work, ErrStat, ErrMsg)
-        ELSE
-          CALL finite_seabed_contact_force(models(i)%q_work, models(i)%v_work, models(i)%seabed_z_floor, &
-                                           models(i)%seabed_kn, models(i)%seabed_cn, opts%friction_mu, &
-                                           models(i)%contact_work, ErrStat, ErrMsg)
-        END IF
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      END IF
-      IF (use_live_env) THEN
-        CALL finite_environment_force(models(i), opts, CD_ZERO, models(i)%q_work, models(i)%v_work, &
-                                      models(i)%env_work, ErrStat, ErrMsg)
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      END IF
-      models(i)%f_ext_work = models(i)%base_f_ext + models(i)%contact_work + models(i)%env_work
-      CALL CD_Set_FiniteEI_Model_Load(models(i)%model, models(i)%f_ext_work, es, em, &
-                                      recompute_acceleration=.TRUE.)
-      IF (es /= 0) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI initial-acceleration seed failed: '//TRIM(em)
-        RETURN
-      END IF
-      models(i)%f_ext_work = models(i)%base_f_ext
-      CALL CD_Set_FiniteEI_Model_Load(models(i)%model, models(i)%f_ext_work, es, em, &
-                                      recompute_acceleration=.FALSE.)
-      IF (es /= 0) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI load restore after seed failed: '//TRIM(em)
-        RETURN
-      END IF
-    END DO
-  END SUBROUTINE seed_finite_initial_acceleration
-
-  SUBROUTINE step_finite_held_models(models, opts, time, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
-                                     motion, lines, points, time_index)
-    !! Advance every finite-EI line model one step. With no motion arguments the prescribed
-    !! endpoints are HELD at their stored positions. When motion/lines/points/time_index are
-    !! supplied (together), each line's prescribed endpoint translations follow the motionFile
-    !! trajectory to t_{n+1} as a MOVING support (their velocity/acceleration couple into the
-    !! dynamic residual), rather than being teleported-and-held.
-    TYPE(FiniteDeckModel), INTENT(INOUT) :: models(:)
-    TYPE(DeckOptions), INTENT(IN) :: opts
-    REAL(wp), INTENT(IN) :: time
-    REAL(wp), INTENT(IN) :: dt
-    LOGICAL, INTENT(OUT) :: converged, stalled
-    INTEGER, INTENT(OUT) :: n_iter, ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    TYPE(MotionTable), INTENT(IN), OPTIONAL :: motion
-    TYPE(DeckLine), INTENT(IN), OPTIONAL :: lines(:)
-    TYPE(DeckPoint), INTENT(IN), OPTIONAL :: points(:)
-    INTEGER, INTENT(IN), OPTIONAL :: time_index
-
-    INTEGER :: i, es, line_iter, active_model
-    LOGICAL :: line_converged, line_stalled, use_motion, use_live_env, line_has_live_load
-    CHARACTER(1024) :: em
-
-    converged = .TRUE.
-    stalled = .FALSE.
-    n_iter = 0
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    use_motion = PRESENT(motion) .AND. PRESENT(lines) .AND. PRESENT(points) .AND. PRESENT(time_index)
-    use_live_env = opts%has_current .OR. opts%has_wave
-    active_model = 0
-    DO i = 1, SIZE(models)
-      line_has_live_load = models(i)%has_seabed .OR. use_live_env
-      IF (line_has_live_load) THEN
-        CALL CD_Get_FiniteEI_Model_State(models(i)%model, models(i)%q_work, models(i)%v_work, models(i)%a_work, es, em)
-        IF (es /= 0) THEN
-          ErrStat = CD_DECKDRV_SOLVEFAIL
-          ErrMsg = 'CableDyn_DeckDriver: finite-EI state query before load update failed: '//TRIM(em)
-          RETURN
-        END IF
-        models(i)%f_ext_work = models(i)%base_f_ext
-        CALL CD_Set_FiniteEI_Model_Load(models(i)%model, models(i)%f_ext_work, es, em, &
-                                        recompute_acceleration=.FALSE.)
-        IF (es /= 0) THEN
-          ErrStat = CD_DECKDRV_SOLVEFAIL
-          ErrMsg = 'CableDyn_DeckDriver: finite-EI load update failed: '//TRIM(em)
-          RETURN
-        END IF
-      END IF
-      active_model = i
-      IF (use_motion) THEN
-        CALL finite_motion_targets(models(i), lines(i), points, motion, time_index, models(i)%q_fixed_work, &
-                                   models(i)%v_fixed_work, models(i)%a_fixed_work, ErrStat, ErrMsg)
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        IF (line_has_live_load) THEN
-          ! a live load always carries its banded tangent
-          CALL CD_Step_FiniteEI_Model(models(i)%model, dt, line_converged, line_stalled, line_iter, es, em, &
-                                      q_fixed_target=models(i)%q_fixed_work, v_fixed_target=models(i)%v_fixed_work, &
-                                      a_fixed_target=models(i)%a_fixed_work, &
-                                      load_force_proc=finite_deck_dynamic_force, &
-                                      load_band_proc=finite_deck_dynamic_load_banded)
-        ELSE
-          CALL CD_Step_FiniteEI_Model(models(i)%model, dt, line_converged, line_stalled, line_iter, es, em, &
-                                      q_fixed_target=models(i)%q_fixed_work, v_fixed_target=models(i)%v_fixed_work, &
-                                      a_fixed_target=models(i)%a_fixed_work)
-        END IF
-      ELSE
-        IF (line_has_live_load) THEN
-          CALL CD_Step_FiniteEI_Model(models(i)%model, dt, line_converged, line_stalled, line_iter, es, em, &
-                                      load_force_proc=finite_deck_dynamic_force, &
-                                      load_band_proc=finite_deck_dynamic_load_banded)
-        ELSE
-          CALL CD_Step_FiniteEI_Model(models(i)%model, dt, line_converged, line_stalled, line_iter, es, em)
-        END IF
-      END IF
-      IF (es /= 0) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI dynamic step failed: '//TRIM(em)
-        RETURN
-      END IF
-      converged = converged .AND. line_converged
-      stalled = stalled .OR. line_stalled
-      n_iter = MAX(n_iter, line_iter)
-    END DO
-
-  CONTAINS
-
-    SUBROUTINE finite_deck_dynamic_force(q_in, v_in, force, ErrStatCb, ErrMsgCb)
-      REAL(wp), INTENT(IN) :: q_in(:), v_in(:)
-      REAL(wp), INTENT(OUT) :: force(:)
-      INTEGER, INTENT(OUT) :: ErrStatCb
-      CHARACTER(*), INTENT(OUT) :: ErrMsgCb
-
-      force = CD_ZERO
-      ErrStatCb = CD_DECKDRV_OK
-      ErrMsgCb = ''
-      IF (active_model < 1 .OR. active_model > SIZE(models)) THEN
-        ErrStatCb = CD_DECKDRV_SOLVEFAIL
-        ErrMsgCb = 'finite-EI dynamic force callback has no active model'
-        RETURN
-      END IF
-      IF (SIZE(q_in) /= SIZE(force) .OR. SIZE(v_in) /= SIZE(force) .OR. &
-          SIZE(force) /= SIZE(models(active_model)%base_f_ext)) THEN
-        ErrStatCb = CD_DECKDRV_SOLVEFAIL
-        ErrMsgCb = 'finite-EI dynamic force callback shape mismatch'
-        RETURN
-      END IF
-      models(active_model)%env_work = CD_ZERO
-      models(active_model)%contact_work = CD_ZERO
-      IF (models(active_model)%has_seabed) THEN
-        IF (models(active_model)%has_bathymetry) THEN
-          CALL finite_bathymetry_contact_force(q_in, v_in, models(active_model)%bathymetry, &
-                                               models(active_model)%seabed_kn, models(active_model)%seabed_cn, &
-                                               opts%friction_mu, models(active_model)%contact_work, ErrStatCb, ErrMsgCb)
-        ELSE
-          CALL finite_seabed_contact_force(q_in, v_in, models(active_model)%seabed_z_floor, &
-                                           models(active_model)%seabed_kn, models(active_model)%seabed_cn, &
-                                           opts%friction_mu, models(active_model)%contact_work, ErrStatCb, ErrMsgCb)
-        END IF
-        IF (ErrStatCb /= CD_DECKDRV_OK) RETURN
-      END IF
-      IF (opts%has_current .OR. opts%has_wave) THEN
-        CALL finite_environment_force(models(active_model), opts, time, q_in, v_in, models(active_model)%env_work, &
-                                      ErrStatCb, ErrMsgCb)
-        IF (ErrStatCb /= CD_DECKDRV_OK) RETURN
-      END IF
-      force = models(active_model)%contact_work + models(active_model)%env_work
-    END SUBROUTINE finite_deck_dynamic_force
-
-    SUBROUTINE finite_deck_dynamic_load_banded(q_in, v_in, free, kl, ku, force, jac_q_band, jac_v_band, &
-                                               ErrStatCb, ErrMsgCb)
-      REAL(wp), INTENT(IN) :: q_in(:), v_in(:)
-      INTEGER, INTENT(IN) :: free(:), kl, ku
-      REAL(wp), INTENT(OUT) :: force(:), jac_q_band(:, :), jac_v_band(:, :)
-      INTEGER, INTENT(OUT) :: ErrStatCb
-      CHARACTER(*), INTENT(OUT) :: ErrMsgCb
-
-      force = CD_ZERO
-      jac_q_band = CD_ZERO
-      jac_v_band = CD_ZERO
-      ErrStatCb = CD_DECKDRV_OK
-      ErrMsgCb = ''
-      IF (active_model < 1 .OR. active_model > SIZE(models)) THEN
-        ErrStatCb = CD_DECKDRV_SOLVEFAIL
-        ErrMsgCb = 'finite-EI dynamic banded load callback has no active model'
-        RETURN
-      END IF
-      IF (SIZE(q_in) /= SIZE(force) .OR. SIZE(v_in) /= SIZE(force) .OR. &
-          SIZE(force) /= SIZE(models(active_model)%base_f_ext)) THEN
-        ErrStatCb = CD_DECKDRV_SOLVEFAIL
-        ErrMsgCb = 'finite-EI dynamic banded load callback shape mismatch'
-        RETURN
-      END IF
-      models(active_model)%contact_work = CD_ZERO
-      models(active_model)%env_work = CD_ZERO
-      IF (models(active_model)%has_seabed) THEN
-        IF (models(active_model)%has_bathymetry) THEN
-          CALL finite_bathymetry_contact_load_banded(q_in, v_in, models(active_model)%bathymetry, &
-                                                     models(active_model)%seabed_kn, models(active_model)%seabed_cn, &
-                                                     opts%friction_mu, free, kl, ku, &
-                                                     models(active_model)%free_map_work, &
-                                                     models(active_model)%contact_work, jac_q_band, jac_v_band, &
-                                                     ErrStatCb, ErrMsgCb)
-        ELSE
-          CALL finite_seabed_contact_load_banded(q_in, v_in, models(active_model)%seabed_z_floor, &
-                                                 models(active_model)%seabed_kn, models(active_model)%seabed_cn, &
-                                                 opts%friction_mu, free, kl, ku, &
-                                                 models(active_model)%free_map_work, &
-                                                 models(active_model)%contact_work, jac_q_band, jac_v_band, &
-                                                 ErrStatCb, ErrMsgCb)
-        END IF
-        IF (ErrStatCb /= CD_DECKDRV_OK) RETURN
-        force = force + models(active_model)%contact_work
-      END IF
-      IF (opts%has_current .OR. opts%has_wave) THEN
-        CALL finite_environment_load_banded(models(active_model), opts, time, q_in, v_in, free, kl, ku, &
-                                            models(active_model)%free_map_work, models(active_model)%env_work, &
-                                            jac_q_band, jac_v_band, ErrStatCb, ErrMsgCb)
-        IF (ErrStatCb /= CD_DECKDRV_OK) RETURN
-        force = force + models(active_model)%env_work
-      END IF
-    END SUBROUTINE finite_deck_dynamic_load_banded
-  END SUBROUTINE step_finite_held_models
-
-  SUBROUTINE finite_motion_targets(model, line, points, motion, time_index, q_ft, v_ft, a_ft, ErrStat, ErrMsg)
-    !! Build the t_{n+1} prescribed-support target vectors for a finite-EI line: the full
-    !! current model state with the two endpoint TRANSLATION triplets (DOFs 1..3 and
-    !! ndof-5..ndof-3) overwritten by the motionFile sample. Only those fixed entries are read
-    !! by the moving-support gen-alpha; the rest carry the (finite) current state.
-    TYPE(FiniteDeckModel), INTENT(IN) :: model
-    TYPE(DeckLine), INTENT(IN) :: line
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(MotionTable), INTENT(IN) :: motion
-    INTEGER, INTENT(IN) :: time_index
-    REAL(wp), INTENT(OUT) :: q_ft(:), v_ft(:), a_ft(:)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: ndof, pa, pb, es
-    CHARACTER(1024) :: em
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    ndof = SIZE(q_ft)
-    CALL CD_Get_FiniteEI_Model_State(model%model, q_ft, v_ft, a_ft, es, em)
-    IF (es /= 0) THEN
-      ErrStat = CD_DECKDRV_SOLVEFAIL
-      ErrMsg = 'CableDyn_DeckDriver: finite-EI state query for motion targets failed: '//TRIM(em)
-      RETURN
-    END IF
-    pa = find_point(points, line%nodeB)
-    pb = find_point(points, line%nodeA)
-    CALL prescribed_point_state(points(pa), motion, time_index, q_ft(1:3), v_ft(1:3), a_ft(1:3), ErrStat, ErrMsg)
-    IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    CALL prescribed_point_state(points(pb), motion, time_index, q_ft(ndof - 5:ndof - 3), &
-                                v_ft(ndof - 5:ndof - 3), a_ft(ndof - 5:ndof - 3), ErrStat, ErrMsg)
-  END SUBROUTINE finite_motion_targets
-
   SUBROUTINE step_held_models(models, dt, recovery_max_substeps, converged, stalled, n_iter, &
                               max_substeps_used, ErrStat, ErrMsg, work)
     TYPE(CD_ModelType), INTENT(INOUT) :: models(:)
@@ -34000,48 +32786,6 @@ CONTAINS
       DEALLOCATE (coupled_dofs, qc, vc, ac)
     END DO
   END SUBROUTINE apply_motion_to_models
-
-  SUBROUTINE apply_motion_to_finite_models(models, lines, points, motion, time_index, ErrStat, ErrMsg, &
-                                           recompute_acceleration)
-    TYPE(FiniteDeckModel), INTENT(INOUT) :: models(:)
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(MotionTable), INTENT(IN) :: motion
-    INTEGER, INTENT(IN) :: time_index
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    LOGICAL, INTENT(IN), OPTIONAL :: recompute_acceleration
-
-    INTEGER :: i, ndof, pa, pb, es
-    INTEGER :: dofs(6)
-    REAL(wp) :: q_vals(6), v_vals(6), a_vals(6)
-    LOGICAL :: do_recompute
-    CHARACTER(1024) :: em
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    do_recompute = .TRUE.
-    IF (PRESENT(recompute_acceleration)) do_recompute = recompute_acceleration
-    DO i = 1, SIZE(models)
-      ndof = 6*(models(i)%n_elem + 1)
-      pa = find_point(points, lines(i)%nodeB)
-      pb = find_point(points, lines(i)%nodeA)
-      CALL prescribed_point_state(points(pa), motion, time_index, q_vals(1:3), v_vals(1:3), a_vals(1:3), &
-                                  ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      CALL prescribed_point_state(points(pb), motion, time_index, q_vals(4:6), v_vals(4:6), a_vals(4:6), &
-                                  ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      dofs = [1, 2, 3, ndof - 5, ndof - 4, ndof - 3]
-      CALL CD_Set_FiniteEI_Model_PrescribedDofs(models(i)%model, dofs, q_vals, v_vals, a_vals, es, em, &
-                                                recompute_acceleration=do_recompute)
-      IF (es /= CD_DYN_OK) THEN
-        ErrStat = CD_DECKDRV_SOLVEFAIL
-        ErrMsg = 'CableDyn_DeckDriver: finite-EI prescribed motion update failed: '//TRIM(em)
-        RETURN
-      END IF
-    END DO
-  END SUBROUTINE apply_motion_to_finite_models
 
   SUBROUTINE prescribed_full_state(model, line, points, motion, time_index, q, v, a, ErrStat, ErrMsg)
     TYPE(CD_ModelType), INTENT(IN) :: model
@@ -35747,8 +34491,7 @@ CONTAINS
     !! (anchor->fairlead) with `stride` reals per node (3 for EI=0, 6 for finite-EI).
     !! kind: 5 curvature, 7 declination, 8 azimuth. Bend moment is NOT geometric -- it is
     !! the MATERIAL moment EI*(kappa - kappa_0), computed per path (zero on EI=0 lines;
-    !! finite_model_channel_value and range_sample_fmodel on finite-EI lines), so it is not
-    !! handled here and
+    !! eval_cable_channel and range_sample_cable on finite-EI lines), so it is not handled here and
     !! kind = 6 returns 0. signed: the line's azimuth range (DeckLine%azi_signed).
     INTEGER, INTENT(IN) :: kind, deck_node, nnode, stride
     REAL(wp), INTENT(IN) :: q_flat(:)
@@ -35998,35 +34741,6 @@ CONTAINS
     END IF
   END SUBROUTINE collect_system_init_summaries
 
-  SUBROUTINE collect_finite_init_summaries(lines, points, models, summaries, ErrStat, ErrMsg)
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
-    TYPE(FiniteDeckModel), INTENT(IN) :: models(:)
-    TYPE(CD_LineInitSummary), ALLOCATABLE, INTENT(OUT) :: summaries(:)
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    TYPE(ModelOutputWorkspace) :: work
-    INTEGER :: i
-    REAL(wp) :: tension, declination, azimuth
-    CHARACTER(NAMELEN) :: cten, cdec, cazi
-
-    ErrStat = CD_DECKDRV_OK; ErrMsg = ''
-    ALLOCATE (summaries(SIZE(lines)))
-    DO i = 1, SIZE(lines)
-      CALL init_summary_channels(lines(i)%id, cten, cdec, cazi)
-      CALL finite_model_channel_value(cten, lines, points, models, work, tension, ErrStat, ErrMsg)
-      IF (ErrStat == CD_DECKDRV_OK) CALL finite_model_channel_value(cdec, lines, points, models, work, declination, &
-                                                                    ErrStat, ErrMsg)
-      IF (ErrStat == CD_DECKDRV_OK) CALL finite_model_channel_value(cazi, lines, points, models, work, azimuth, &
-                                                                    ErrStat, ErrMsg)
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      ! The retained Cosserat compatibility route does not expose its complete
-      ! prescribed-DOF reaction. Report the auditable axial component explicitly;
-      ! the production Hermite/OpenFAST paths above report the full reaction.
-      CALL set_init_summary(lines(i)%id, tension, declination, azimuth, summaries(i), force_is_total=.FALSE.)
-    END DO
-  END SUBROUTINE collect_finite_init_summaries
-
   SUBROUTINE collect_hermite_init_summaries(lines, cables, summaries, ErrStat, ErrMsg)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
@@ -36190,10 +34904,10 @@ CONTAINS
     END DO
   END SUBROUTINE range_setup
 
-  SUBROUTINE range_setup_planned(rset, lines, channels, opts, ErrStat, ErrMsg, models, fmodels, system, cables, &
+  SUBROUTINE range_setup_planned(rset, lines, channels, opts, ErrStat, ErrMsg, models, system, cables, &
                                  bathymetry)
     !! Range set of a standalone route, in deck line order, sized from the built line
-    !! objects (exactly one of models, fmodels, system, cables is present).
+    !! objects (exactly one of models, system, cables is present).
     TYPE(CD_RangeSet), INTENT(INOUT) :: rset
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     CHARACTER(*), INTENT(IN) :: channels(:)
@@ -36201,7 +34915,6 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_ModelType), INTENT(IN), OPTIONAL :: models(:)
-    TYPE(FiniteDeckModel), INTENT(IN), OPTIONAL :: fmodels(:)
     TYPE(CD_SystemType), INTENT(IN), OPTIONAL :: system
     TYPE(CD_HFMF_ModuleType), INTENT(IN), OPTIONAL :: cables(:)
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
@@ -36215,8 +34928,6 @@ CONTAINS
       es = 0
       IF (PRESENT(models)) THEN
         nnodes(il) = CD_Model_NDOF(models(il), es, em)/3
-      ELSE IF (PRESENT(fmodels)) THEN
-        nnodes(il) = fmodels(il)%n_elem + 1
       ELSE IF (PRESENT(system)) THEN
         nnodes(il) = CD_System_Line_NDOF(system, il, es, em)/3
       ELSE IF (PRESENT(cables)) THEN
@@ -36319,50 +35030,6 @@ CONTAINS
       rl%val(CD_RQ_TENSION, 1) = end_ten(2)
     END IF
   END SUBROUTINE range_sample_arrays
-
-  SUBROUTINE range_sample_fmodel(fmodel, rl, ErrStat, ErrMsg)
-    !! Sample a finite-EI (two-moving-end route) line with the evaluators of
-    !! finite_model_channel_value: chord-stretch element tension, geometric curvature and
-    !! the reference-relative bend moment EI * |kappa - kappa_ref|.
-    TYPE(FiniteDeckModel), INTENT(IN) :: fmodel
-    TYPE(CD_RangeLine), INTENT(INOUT) :: rl
-    INTEGER, INTENT(OUT) :: ErrStat
-    CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: nn, ne, e, j, inode, es
-    REAL(wp) :: xa(3), xb(3), length, kc(3), kr(3)
-    CHARACTER(1024) :: em
-
-    ErrStat = CD_DECKDRV_OK
-    ErrMsg = ''
-    nn = rl%nn
-    ne = nn - 1
-    IF (fmodel%n_elem /= ne) THEN
-      CALL fail_solve(ErrStat, ErrMsg, 'range-graph sample: finite-EI line size changed'); RETURN
-    END IF
-    CALL CD_Get_FiniteEI_Model_State(fmodel%model, rl%qs(1:6*nn), rl%vs(1:6*nn), rl%as(1:6*nn), es, em)
-    IF (es /= 0) THEN
-      CALL fail_solve(ErrStat, ErrMsg, 'range-graph sample of line '//TRIM(int_to_str(rl%line_id))//' failed: '// &
-                      TRIM(em)); RETURN
-    END IF
-    IF (.NOT. rl%want_range) THEN
-      CALL range_positions(rl, 6)
-      RETURN
-    END IF
-    DO e = 1, ne
-      xa = rl%qs(6*e - 5:6*e - 3)
-      xb = rl%qs(6*(e + 1) - 5:6*(e + 1) - 3)
-      length = SQRT(DOT_PRODUCT(xb - xa, xb - xa))
-      rl%ten_e(e) = fmodel%ea(e)*(length/fmodel%l0(e) - CD_ONE)
-    END DO
-    CALL range_fill_ei0(rl, 6)
-    DO j = 1, nn
-      ! the circumcircle of the reversed node triple is the same circle (bit for bit)
-      inode = deck_to_internal_node(j, ne)
-      kc = node_curvature_vector(rl%r, nn, j)
-      kr = node_curvature_vector(fmodel%model%nodes_ref, nn, inode)
-      rl%val(CD_RQ_BEND, j) = nodal_ei_value(fmodel%ei, inode)*NORM2(kc - kr)
-    END DO
-  END SUBROUTINE range_sample_fmodel
 
   SUBROUTINE range_sample_cable(cable, rl, ErrStat, ErrMsg)
     !! Sample a cubic-Hermite cable with the definitions of eval_cable_channel: the node
@@ -37168,8 +35835,8 @@ CONTAINS
   END SUBROUTINE sys_solvefail
 
   SUBROUTINE eval_cable_channel(cable, ch, val, ErrStat, ErrMsg, mesh_node)
-    !! Evaluate one channel for a finite-EI Hermite power cable (CD_HFMF). Mirrors the driver's
-    !! finite_model_channel_value but reads the cable's committed state directly from the CD_HFMF
+    !! Evaluate one channel for a finite-EI Hermite power cable (CD_HFMF). Reads the cable's
+    !! committed state directly from the CD_HFMF
     !! line (stride-6 DOFs: r at 6*(n-1)+1..3, tangent m at +4..6) and recovers the
     !! complete elastic plus Kelvin-Voigt axial resultant. Node ordering runs anchor (node 1, held)
     !! -> fairlead (node nn, the coupled endpoint), so deck End A = internal node nn. Bend moment is

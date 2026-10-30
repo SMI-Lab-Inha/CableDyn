@@ -260,7 +260,7 @@ torsional stiffness, transverse and polar (axial) rotary inertia per length):
 `Name Diam Mass EA BA EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t`. The four extra values must be finite
 and either all `0` or all `> 0`. All zero, or the 10-column row, selects the circular-section
 closure `GAs = EA/(2(1+0.3))`, `GJ = EI/(1+0.3)`, `Irt = m d²/16`, `Irn = m d²/8`. The closure
-serves the secondary Cosserat path only: a finite-EI line restrained in torsion
+serves the secondary Cosserat library path only: a finite-EI line restrained in torsion
 ([END CONNECTIONS](#end-connections-optional-finite-ei-lines)) takes `GJ` [N·m²/rad] from the
 14-column row of each of its sections and stops by name without it. In the dynamics such a line
 carries a twist angle at every node, whose polar rotary inertia is `Irn` [kg·m²/m]
