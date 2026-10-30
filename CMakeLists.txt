@@ -45,7 +45,15 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   # then holds IPO objects, so it links only through an IPO-capable IFX link (the
   # driver below, or the OpenFAST Release|x64 project, which enables whole-program
   # optimisation).
-  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /heap-arrays:1024 /Qipo")
+  #
+  # /fp:precise: IFX defaults to /fp:fast, which lets it reassociate sums, replace a division by
+  # a multiplication with the reciprocal, and flush subnormals to zero, differently at every
+  # inlined call site. The same expression then rounds differently on two code paths, so the
+  # gates that hold two routes to the same bits (a zero control command and an uncontrolled
+  # cable, a held Coupled End B and a Fixed one, a committed and a re-derived torque) fail, a
+  # subnormal deck value reads as zero, and a secant iteration can stall on equal residuals.
+  # The reference LAPACK is built with /fp:precise as well.
+  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /heap-arrays:1024 /Qipo /fp:precise")
   # CMake does not pass the compile flags to an IFX executable link on Windows. The shared
   # library (the Windows wheel's cabledyn.dll) links the same IPO objects, so it needs the
   # flag as well: without it IFX hands the intermediate objects to link.exe (LNK1107).
