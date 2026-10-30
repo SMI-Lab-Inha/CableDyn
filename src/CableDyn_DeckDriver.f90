@@ -21213,8 +21213,8 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//': a Coupled/Vessel End B '// &
                     '(POINT '//TRIM(int_to_str(points(pb)%id))//') would need motionFile coupling to drive it, '// &
                     'which a mixed-topology deck with Connect/Free points or bodies (marched as one multibody '// &
-                    'system) does not support. End the cable on a Fixed point, a Rigid6 body point or a rod end'); &
-            RETURN
+                    'system) does not support. End the cable on a Fixed point, a Rigid6 body point or a rod end')
+          RETURN
         END IF
         IF (TRIM(points(pa)%ptype) == 'free' .OR. TRIM(points(pa)%ptype) == 'connect' .OR. &
             point_on_point3_body(points(pa), bodies)) THEN
