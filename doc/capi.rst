@@ -1991,7 +1991,9 @@ allocatable data does. There is no serialisation of the state to a caller buffer
 
 The host drives the ``CD_C_POINT_COUPLED`` blocks. On the point route the blocks are the
 line-bound points of every type in ``POINTS`` order; on the aggregate route they are the
-``Coupled``/``Vessel`` points only (`Coupled DOF layout`_). A handle initialised from raw arrays
+``Coupled``/``Vessel`` points only (`Coupled DOF layout`_), and a finite-EI line between two
+``Coupled`` points has one block per end, its End B block after the fairleads of all
+finite-EI lines, so that point id appears once per line end it carries. A handle initialised from raw arrays
 has no deck points, and the call returns ``CD_C_BAD_INPUT``: its coupled vector is the caller's
 own ``fixed_dofs`` list. A wrong ``n_block`` returns ``CD_C_BAD_INPUT``.
 

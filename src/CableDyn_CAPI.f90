@@ -2101,7 +2101,8 @@ CONTAINS
     !! the line-bound points of every type in deck POINT order. Aggregate route: the moving
     !! points, i.e. the EI=0-bound Coupled/Vessel points in deck POINT order, then the fairlead
     !! (End A, which the coupled cable builder requires to be Coupled/Vessel) of each finite-EI
-    !! line in deck LINE order.
+    !! line in deck LINE order, then the moving End B of each finite-EI line between two moving
+    !! points, in deck LINE order (cable_col_b).
     TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
     INTEGER, ALLOCATABLE, INTENT(OUT) :: ids(:), types(:)
     INTEGER(C_INT), INTENT(OUT) :: err_stat
@@ -2134,9 +2135,9 @@ CONTAINS
     nm = CD_AGG_NMovingPoints(h%agg, es, em)
     nsys = 0
     IF (h%agg%has_sys) nsys = h%agg%ncp_sys
-    IF (es /= CD_AGG_OK .OR. nm /= nsys + h%agg%ncable) THEN
+    IF (es /= CD_AGG_OK .OR. nm /= nsys + h%agg%ncable + h%agg%ncable_b) THEN
       CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_GetCoupledLayout: the moving points of the model are not '// &
-                      'its Coupled points and cable fairleads', err_stat)
+                      'its Coupled points and cable ends', err_stat)
       RETURN
     END IF
     ALLOCATE (ids(nm), types(nm))
@@ -2155,6 +2156,11 @@ CONTAINS
     DO i = 1, h%agg%ncable
       ids(nsys + i) = h%agg%cable_points(1, i)
       types(nsys + i) = CD_POINT_COUPLED
+      ! a line between two moving points: its End B has a block of its own
+      IF (h%agg%cable_col_b(i) > 0) THEN
+        ids(h%agg%cable_col_b(i)) = h%agg%cable_points(2, i)
+        types(h%agg%cable_col_b(i)) = CD_POINT_COUPLED
+      END IF
     END DO
   END SUBROUTINE coupled_layout
 
