@@ -7368,7 +7368,8 @@ CONTAINS
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, caller_driven=.TRUE., env_gravity=env_gravity, &
                     env_rho_water=env_rho_water, env_wtrdpth=env_wtrdpth, allow_turbine=.TRUE., &
-                    failures=fails, controls=ctrls, run_tmax=run_tmax, host_coupled_objects=.TRUE.)
+                    failures=fails, controls=ctrls, run_tmax=run_tmax, host_coupled_objects=.TRUE., &
+                    static_run=static_run)
     IF (ErrStat == CD_DECKDRV_OK) THEN
       host_turns = .FALSE.
       IF (PRESENT(host_orientation)) host_turns = host_orientation
@@ -12409,7 +12410,8 @@ CONTAINS
 
   SUBROUTINE parse_deck(path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                         ErrStat, ErrMsg, caller_driven, env_gravity, env_rho_water, env_wtrdpth, &
-                        allow_turbine, failures, controls, run_tmax, allow_static_finite_ei, host_coupled_objects)
+                        allow_turbine, failures, controls, run_tmax, allow_static_finite_ei, host_coupled_objects, &
+                        static_run)
     !! Sectioned MoorDyn-style parser. Sections: LINE TYPES / BODIES / ROD TYPES / RODS /
     !! POINTS / LINES / SECTIONS / OPTIONS / OUTPUTS (TABLE sections skip the column-name
     !! + units rows). Unsupported variants fail closed during validation.
@@ -12445,6 +12447,10 @@ CONTAINS
     ! host_coupled_objects: ONLY the CompMooring=5 aggregate drives Coupled/Vessel rods/bodies from its
     ! host mesh; every other entry point keeps the motionFile requirement.
     LOGICAL, INTENT(IN), OPTIONAL :: host_coupled_objects
+    ! static_run: a caller-driven deck whose caller marches no step (the standalone driver's
+    ! TMax = 0 run on the aggregate): a line restrained in torsion at one end is then resolved
+    ! as in a static run, needing no force-blended step (resolve_one_end_torsion)
+    LOGICAL, INTENT(IN), OPTIONAL :: static_run
     ! FAILURE rows. A deck DECLARING failures parsed by an entry point that does not
     ! consume them fails closed (never silently ignore a declared failure).
     TYPE(DeckFailure), ALLOCATABLE, INTENT(OUT), OPTIONAL :: failures(:)
@@ -12466,7 +12472,7 @@ CONTAINS
     INTEGER, ALLOCATABLE :: stf_lines(:)
     INTEGER :: n_stf
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
-    LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok
+    LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok, tors_marched
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
     CHARACTER(DECK_RECLEN) :: line
     ! list_safe_row output: every token may gain a pair of quotes
@@ -12809,7 +12815,9 @@ CONTAINS
       END IF
     END DO
     CALL normalize_stock_endpoint_order(points, lines, sections, types)
-    CALL resolve_one_end_torsion(types, bodies, rods, points, lines, sections, opts, ext_march)
+    tors_marched = ext_march
+    IF (PRESENT(static_run)) tors_marched = ext_march .AND. .NOT. static_run
+    CALL resolve_one_end_torsion(types, bodies, rods, points, lines, sections, opts, tors_marched)
     CALL finalize_and_validate(types, bodies, rod_types, rods, points, lines, sections, opts, channels, ext_march, &
                                static_finite_ok, ErrStat, ErrMsg, channel_lines)
     IF (ErrStat == 0) CALL set_azimuth_ranges(points, lines)

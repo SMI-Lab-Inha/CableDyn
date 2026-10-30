@@ -29,7 +29,9 @@
 !>     static interior: FairTen 3.5 MN against 29 kN) and agree to the printed precision, and
 !>     both write the .static.out of the static solve (fairlead x = 0) before it.
 !>  6. Without the force blend a line restrained in torsion runs a static mixed deck (TMax = 0,
-!>     no step) and its torque, as the single-line route, and a dynamic one stops by name.
+!>     no step) and its torque, as the single-line route, and a dynamic one stops by name; so
+!>     does a line restrained at one end only (static: Torq/Twist channels, no torque at the
+!>     free end), which the caller-driven parse must still resolve as a static run.
 !>  7. ATTACHMENTS: the gate 2 line carrying three buoyancy modules (ATTACHMENTS, with drag and
 !>     added mass), its torsion stage after the attachment polish on both routes, gives the gate 2
 !>     agreement between the single-line route and the mixed route beside the chain.
@@ -773,5 +775,36 @@ CONTAINS
     CALL require(.NOT. ok, '6: a dynamic mixed deck with torsion and the configuration blend stops')
     CALL require(log_has('tmrt_blend_d', 'torsion in a dynamic run needs the force-blended'), &
                  '6: the configuration blend of a dynamic torsion run is named')
+    ! one restrained end: the aggregate parses the deck caller-driven, so the static run must
+    ! reach the one-end resolution, or the line is left unsolved in torsion and its channels
+    ! refused; the free End B carries no torque
+    CALL write_deck('tmrt_blend_s1.dat', [CHARACTER(160) :: neutral_t, CHAIN_T], points, &
+                    [CHARACTER(16) :: '1 1 2 -', '2 3 4 -'], [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Free 0 0 1'], &
+                    [CHARACTER(48) :: '0.1 dtM', '0.0 TMax', 'False alpha_force_blend'], &
+                    [CHARACTER(16) :: 'Torq1N1', 'Twist1'])
+    BLOCK
+      INTEGER :: u, ios
+      ! no output of an earlier run may stand in for this one
+      OPEN (NEWUNIT=u, FILE='tmrt_blend_s1.out', STATUS='OLD', IOSTAT=ios)
+      IF (ios == 0) CLOSE (u, STATUS='DELETE')
+    END BLOCK
+    CALL run_driver('tmrt_blend_s1.dat', 'tmrt_blend_s1', ok)
+    CALL require(ok, '6: a static mixed deck with one restrained end runs without the force blend')
+    terr = HUGE(1.0_wp)
+    nrow = 0
+    IF (ok) CALL read_out('tmrt_blend_s1.out', names, vals, nrow)
+    IF (nrow == 1) terr = ABS(vals(1, col_of(names, 'Torq1N1')))
+    WRITE (*, '(A,ES10.3,A)') '  6 static mixed deck, one restrained end: torque ', terr, ' N m'
+    CALL require(terr <= 1.0e-6_wp*GJ*90.0_wp*D2R/L, '6: the free end of a static one-end line carries no torque')
+    CALL write_deck('tmrt_blend_d1.dat', [CHARACTER(160) :: neutral_t, CHAIN_T], points, &
+                    [CHARACTER(16) :: '1 1 2 -', '2 3 4 -'], [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Free 0 0 1'], &
+                    [CHARACTER(48) :: '0.1 dtM', '1.0 TMax', 'False alpha_force_blend'], &
+                    [CHARACTER(16) :: 'Torq1N1', 'Twist1'])
+    CALL run_driver('tmrt_blend_d1.dat', 'tmrt_blend_d1', ok)
+    CALL require(.NOT. ok, '6: a dynamic one-end torsion run with the configuration blend stops')
+    CALL require(log_has('tmrt_blend_d1', 'torsion in a dynamic run needs the force-blended'), &
+                 '6: the configuration blend of a dynamic one-end torsion run is named')
   END SUBROUTINE check_static_blend
 END PROGRAM test_mixed_route_torsion
