@@ -2182,6 +2182,11 @@ add_test(NAME parity_integration
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/parity_integration)
 set_tests_properties(parity_integration PROPERTIES LABELS "fortran;driver;integration;dynamic;openfast")
 
+add_executable(test_two_moving_ends tests/test_two_moving_ends.f90)
+target_link_libraries(test_two_moving_ends PRIVATE cabledyn_core)
+add_test(NAME two_moving_ends COMMAND test_two_moving_ends)
+set_tests_properties(two_moving_ends PROPERTIES LABELS "fortran;driver;integration;dynamic;openfast")
+
 add_executable(test_section_curvature tests/test_section_curvature.f90)
 target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
 add_test(NAME section_curvature COMMAND test_section_curvature)
@@ -2696,10 +2701,11 @@ cabledyn_msg_test(quiet_catenary ../../examples/chain_catenary_r3_100m.dat 0 ""
 cabledyn_msg_test(shared_line msg_shared_line.dat 1
   "LINE 1 End B .NodeB, POINT 2, coupled. must be a Fixed .anchor. point;Workaround for this EI=0 line: split it into two lines that meet at a Connect point"
   "cannot be split")
-# A finite-EI shared line cannot be split at a Connect point: that advice is not given.
+# A finite-EI line between two Coupled points has both ends driven: neither the End B refusal nor
+# the Connect-point split advice is given; as a static deck it asks for dtM and TMax.
 cabledyn_msg_test(shared_line_finite_ei msg_shared_line_finite_ei.dat 1
-  "finite-EI LINE 1 End B .NodeB, POINT 2, coupled. must be a Fixed .anchor. point;A finite-EI line cannot be split at a Connect point either;anchor it on a Fixed point"
-  "Workaround")
+  "finite-EI section .EI>0. requires a dynamic deck with dtM and TMax"
+  "Workaround;must be a Fixed")
 cabledyn_msg_test(pliant_connect_end_b msg_pliant_connect_end_b.dat 1
   "finite-EI LINE 1 in a mixed-topology deck needs a Fixed End B;End B is POINT 2 .connect.;Anchor the cable on a Fixed point"
   "")
@@ -2908,7 +2914,8 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_control_torsion
       test_endconn_spring
       test_torsion_coupling
-      test_torsion_one_end)
+      test_torsion_one_end
+      test_two_moving_ends)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
   endforeach()
   target_compile_options(test_openfast_aggregate PRIVATE

@@ -61,16 +61,11 @@ The driver names every file from the ``<out_root>`` argument. Which files appear
      - --
      - --
      - --
-   * - Dynamic, all lines finite-EI, every End B on a ``Fixed`` point (cubic-Hermite route)
+   * - Dynamic, all lines finite-EI, every End B on a ``Fixed``, ``Coupled`` or ``Vessel`` point
+       (cubic-Hermite route; a ``Coupled``/``Vessel`` End B is a second driven end)
      - time series
      - yes (the converged initial state)
      - yes
-     - time series
-     - --
-   * - Dynamic, all lines finite-EI, some End B not ``Fixed``
-     - time series
-     - no
-     - --
      - time series
      - --
    * - Mixed ``EI = 0`` and finite-EI lines (static or dynamic)
@@ -149,11 +144,8 @@ The title line identifies the route that produced the file:
    * - rods
      - ``# CableDyn driver output (rod dynamic; convergence quality is reported by status
        message)``
-   * - finite-EI (cubic-Hermite)
+   * - finite-EI (cubic-Hermite, one or two moving ends)
      - ``# CableDyn driver output (finite-EI dynamic; production cubic-Hermite route)``
-   * - finite-EI, two moving ends
-     - ``# CableDyn driver output (finite-EI dynamic; convergence quality in the status
-       message)``
    * - mixed ``EI = 0`` + finite-EI
      - ``# CableDyn driver output (mixed aggregate dynamic; convergence quality is reported by
        status message)``
@@ -345,8 +337,7 @@ write. Any other letter is a parse error. Mixed ``EI = 0`` + finite-EI decks rej
        flag ``V``; a static run carries no lift and writes no file). On an ``EI = 0`` line the
        end nodes carry none, as in MoorDyn; on a finite-EI line each element's lift is lumped to
        its two nodes (the translational part of its consistent load), so the end nodes carry
-       the lift of their half-elements. Zero on a line without VIV (``Cl = 0``); a finite-EI
-       line with two moving ends carries no VIV and refuses the flag
+       the lift of their half-elements. Zero on a line without VIV (``Cl = 0``)
    * - ``r``
      - ``<out_root>.Line<L>.range.out``
      - range graph: minimum, maximum and mean over the run of the node tension, curvature, bend
@@ -578,10 +569,7 @@ Line-end channels
        matches the magnitude of its end ``GX``/``GZ`` force. Seabed friction at a grounded end
        node is part of the ``EI = 0`` end force but not of the finite-EI (cubic-Hermite) end
        force, which leaves the end node's friction, like its inertia, in the coupled load; the
-       two agree whenever the end node is off the seabed or friction is off. On the
-       two-moving-end finite-EI route (End B not ``Fixed``) the value is instead the signed
-       chord-stretch axial tension ``EA (chord/L0 − 1)`` of the end element, without end shear,
-       axial damping or the end node's lumped loads
+       two agree whenever the end node is off the seabed or friction is off
      - N
    * - ``AnchTen<L>``
      - line-end tension at End B (anchor) of line ``L``, defined as for ``FairTen``. On a
@@ -593,8 +581,8 @@ Line-end channels
    * - ``AnchFz<L>``
      - vertical component of the ``AnchTen<L>`` end force, the force line ``L`` exerts on its
        End-B point: positive upward (the line lifts the anchor), negative downward. On every
-       route that reports ``AnchTen`` except the two-moving-end finite-EI route, which rejects it
-       by name; for an anchor that holds one line it equals ``Point<P>Fz``
+       route that reports ``AnchTen``, a moving End B included; for an anchor that holds one line
+       it equals ``Point<P>Fz``
      - N
    * - ``AnchFH<L>``
      - horizontal magnitude of the same end force, :math:`\sqrt{F_x^2 + F_y^2}`, with the same
@@ -690,9 +678,7 @@ Line-node channels
        :math:`EA(|\mathbf r'| - 1)`. An end node reports the line-end force of ``FairTen`` /
        ``AnchTen``, the end reaction on the support or platform, which excludes inertia, added
        mass and seabed friction (the interior values are the recovered section force, whose
-       element end forces include inertia and added mass). On the two-moving-end finite-EI route
-       every value is the chord-stretch tension of ``FairTen`` there: the adjacent element at an
-       end node and the unweighted mean of the two neighbouring elements at an interior node
+       element end forces include inertia and added mass)
      - N
    * - ``Curv<L>N<J>``
      - curvature at node ``J``. ``EI = 0`` lines: discrete curvature of the circle through
@@ -712,8 +698,8 @@ Line-node channels
        length is ``Curv<L>N<J>`` (``CurvX² + CurvY² = Curv²``), and a section point at (x, y)
        has the bending strain ``−(CurvX x + CurvY y)``. The axes start at End A from the end
        connection, follow the hang-off when End A is clamped, and are carried along the line,
-       turned by the twist when the line is restrained in torsion. ``EI = 0`` lines and
-       finite-EI lines with two moving ends refuse the channels. ``CD_HFMF_Section_Curvature``
+       turned by the twist when the line is restrained in torsion. ``EI = 0`` lines refuse the
+       channels. ``CD_HFMF_Section_Curvature``
        returns them for every node
      - 1/m
    * - ``BendMom<L>N<J>``
@@ -852,8 +838,7 @@ Point channels
      - resultant of the forces of the lines and finite-EI cables attached to point ``P`` (each
        the ``FairTen``/``AnchTen`` end force): the load on a shared anchor, or the line load a
        free point balances; ``FH`` is the horizontal magnitude. Available on every route
-       (static, ``EI = 0``, finite-EI, multibody and OpenFAST) except the two-moving-end
-       finite-EI route, which rejects it by name
+       (static, ``EI = 0``, finite-EI, multibody and OpenFAST)
      - N
 
 Body and rod channels

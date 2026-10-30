@@ -46,8 +46,8 @@ driver:
   1e-6 m, end forces) and a march from it stays at rest;
 * input checks: ``layAzimuth<ID>`` of a line that does not exist (also one too large for an
   integer), an unknown suffix and an unknown policy are rejected, and the ``<ID>`` rows take
-  effect; a finite-EI line shared between two turbines (End B not Fixed, the compatibility route,
-  whose statics have no seabed friction) rejects asLaid by name and runs with none.
+  effect; a finite-EI line shared between two turbines (both ends moving: no anchored end to lay
+  the line from) rejects asLaid by name and runs with none.
 
 usage: test_static_friction_as_laid.py --exe <cabledyn> --output <dir>
 """
@@ -704,8 +704,8 @@ def main() -> int:
                                               extra="nan layAzimuth1\n30.0 layAzimuth1\n"))
     check(rc != 0 and "layAzimuth1" in log, "a NaN layAzimuth1 shadowed by a valid row is rejected")
 
-    # a finite-EI line shared between two turbines (End B not Fixed) runs the compatibility route,
-    # whose statics carry no seabed friction: asLaid fails closed there by name, none runs
+    # a finite-EI line shared between two turbines (both ends moving) has no anchored end to lay it
+    # from: asLaid fails closed by name, none runs
     shared = dict(ei=1.0e4, length=600.0, nseg=60, fair=(0, 0, -10), anch=(0, 0, -10), seabed="200.0 WtrDpth", mu=0.5)
     for tag, extra in (("shared", ""), ("shared_none", "none staticsFriction\n")):
         txt = deck("shared " + tag, **shared, extra=extra, tmax=0.2)

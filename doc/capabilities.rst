@@ -62,8 +62,9 @@ Line and constitutive capability
    * - Finite-EI bending cable
      - Supported
      - production cubic-Hermite static/dynamic path for suspended and flat/structured
-       seabed-contact cables in standalone and OpenFAST-coupled use; the uncommon
-       two-moving-end standalone topology uses a separate compatibility solver
+       seabed-contact cables in standalone and OpenFAST-coupled use; standalone, a line between
+       two moving points (End B on a ``Coupled``/``Vessel`` point, a cable shared by two
+       floaters) has both ends driven, with end connections and torsion at both ends
    * - Mixed ``EI = 0`` + finite-EI deck
      - Supported with route limits
      - a mixed deck of lines between held or coupled points only (no bodies, rods, or
@@ -116,14 +117,12 @@ Line and constitutive capability
    * - Discrete attachments (``ATTACHMENTS``: buoyancy modules, clumps)
      - Supported
      - lumped at nodes of a finite-EI cable, standalone and coupled, also on a line restrained in
-       torsion (they add no polar inertia to its twist); rejected on the two-moving-end
-       compatibility solver
+       torsion (they add no polar inertia to its twist)
    * - Bend stiffeners (``STIFFENERS``)
      - Supported with limits
      - tapered linear-elastic sleeve over a finite-EI line end, adding bending stiffness, mass,
        buoyancy and drag per element, standalone and coupled; nonlinear (moment–curvature)
-       materials and bend restrictors are not provided; rejected on the two-moving-end
-       compatibility solver
+       materials and bend restrictors are not provided
    * - Modal analysis (``nModes``)
      - Standalone only
      - natural frequencies and mode shapes of each line about its static equilibrium (all
@@ -135,7 +134,7 @@ Line and constitutive capability
      - MoorDyn v2's synchronisation model on ``EI = 0`` lines and, as a distributed lift, on
        finite-EI cables of the Hermite and multibody marches (:ref:`theory-viv`), with the
        host's fluid field on the coupled routes and its state in the checkpoint; in-line VIV is
-       not provided; a finite-EI line with two moving ends refuses ``Cl > 0`` by name
+       not provided
 
 Loads and environment
 ---------------------

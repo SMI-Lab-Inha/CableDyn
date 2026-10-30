@@ -532,7 +532,9 @@ def test_modal_analysis_follows_the_native_deck_rules():
     _rejects(_modes(_section(_HELD, *_FAILURE)), "no BODIES, RODS, Connect/Free points or FAILURE")
 
 
-def test_modal_analysis_needs_a_fixed_end_b_on_finite_ei_lines():
+def test_modal_analysis_holds_a_moving_end_b_of_a_finite_ei_line():
+    # the modes hold both line ends: a finite-EI line shared by two turbines is accepted (its
+    # moving End B held at its static position, as End A is)
     text = (
         "title\n"
         f"{_BAR} LINE TYPES {_BAR}\n"
@@ -549,7 +551,7 @@ def test_modal_analysis_needs_a_fixed_end_b_on_finite_ei_lines():
         "100 WtrDpth\n0.1 dtM\n1.0 TMax\n5 nModes\n"
         f"{_BAR} need this line {_BAR}\n"
     )
-    _rejects(text, "nModes on finite-EI lines needs every End B Fixed")
+    assert DeckFile.from_text(text).option("nModes").values == ("5",)
 
 
 def test_mixed_aggregate_route_takes_no_modal_analysis():
@@ -1203,11 +1205,11 @@ def test_torsion_scope_rules_follow_the_native_checks():
         ),
     )
     DeckFile.from_text(attachments)  # a torsional line with ATTACHMENTS is accepted
-    # restrained at both ends, End B must be Fixed
+    # restrained at both ends, End B must hold its frame: Fixed, or Coupled/Vessel (driven)
     _rejects(
         _torsion_two_moving("1 A Pinned 1 0 0 Rigid 0 0 1 0\n"),
-        "torsional END CONNECTIONS require a finite-EI line with Fixed End B; line 1 has two "
-        "moving ends",
+        "torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; line 1 ends "
+        'on a "free" point',
     )
     # one restrained end only, or none, is ignored: the same verdict as the six-column rows
     one_end = _edit(_torsion_two_moving("1 A Pinned 1 0 0 Free 0 0 1 0\n"), _NO_TORSION_OUTPUTS)

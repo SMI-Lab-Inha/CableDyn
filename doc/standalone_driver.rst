@@ -47,8 +47,8 @@ digits so time stamps stay exact on long records. The static configuration profi
 ``results\spread3.static.out`` is written by three routes: a static-only ``EI = 0`` deck (no
 ``dtM``/``TMax``), every production Hermite finite-EI deck (its initial configuration, together
 with the element-extrema file ``spread3.elements.out``), and a mixed ``EI = 0`` plus finite-EI
-deck. The independent ``EI = 0`` dynamic, point-system, rod, ``Rigid6`` and multibody routes, and
-the two-moving-end finite-EI compatibility route, write no ``.static.out``. A deck
+deck. The independent ``EI = 0`` dynamic, point-system, rod, ``Rigid6`` and multibody routes write
+no ``.static.out``. A deck
 requesting per-line position or tension output can add ``spread3.Line<L>.p.out`` and
 ``spread3.Line<L>.t.out``; a dynamic rod deck can add ``spread3.Rod<R>.p.out``. See
 :doc:`outputs` for channel names, units, and file layouts.
@@ -153,9 +153,7 @@ horizontal, and 180 degrees down. ``azimuth`` is measured from global ``+X`` tow
 together deliberately so the convention is auditable.
 
 For the production Hermite finite-EI route, the reported vector is the complete fairlead reaction,
-including bending and distributed-load effects. The two-moving-end finite-EI compatibility route
-(a finite-EI line whose End B is not ``Fixed``) reports only the axial endpoint contribution and
-labels that row ``axial force component`` so it cannot be mistaken for a complete reaction.
+including bending and distributed-load effects, also on a line whose End B moves.
 
 Input-record style
 ~~~~~~~~~~~~~~~~~~

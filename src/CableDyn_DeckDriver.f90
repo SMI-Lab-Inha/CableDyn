@@ -132,6 +132,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_GetNodePositions, CD_HFMF_UpdateStates, &
                                           CD_HFMF_CalcOutput, CD_HFMF_Snapshot, CD_HFMF_Restore, &
                                           CD_HFMF_SetCoupledKinematics, CD_HFMF_GetCoupledKinematics, &
+                                          CD_HFMF_Set_Moving_End_B, CD_HFMF_GetEndBKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Component_Wave_Kinematics, &
@@ -498,11 +499,12 @@ MODULE CableDyn_DeckDriver
   REAL(wp), PARAMETER :: TORS_NX_PARALLEL_TOL = 1.0e-3_wp
   REAL(wp), PARAMETER :: DEG2RAD_TORS = 3.14159265358979323846264338327950288_wp/180.0_wp
   ! A finite-EI line with a bending or torsional END CONNECTION whose End B is a rod end (also a
-  ! line between two rods, a J-tube to a J-tube): the cable holds End B at a Fixed point only.
+  ! line between two rods, a J-tube to a J-tube): the cable holds End B at a Fixed, Coupled or
+  ! Vessel point only.
   CHARACTER(*), PARAMETER :: ROD_END_B_NOTE = ' ends (End B) on a rod end: a line between two rods is not '// &
-                             'supported in this build (the cable holds its End B at a Fixed point only); for a '// &
-                             'Fixed rod, end the line on a Fixed point at the rod end''s position (its force then '// &
-                             'stays out of that rod''s Rod<N> loads)'
+                             'supported in this build (the cable holds its End B at a Fixed, Coupled or Vessel '// &
+                             'point only); for a Fixed rod, end the line on a Fixed point at the rod end''s '// &
+                             'position (its force then stays out of that rod''s Rod<N> loads)'
 
   TYPE :: DeckLine
     INTEGER :: id = 0, nodeA = 0, nodeB = 0
@@ -1769,7 +1771,8 @@ CONTAINS
   RECURSIVE SUBROUTINE build_one_hermite_cable(ln, sections, types, points, opts, dt, cable, coupled_node, &
                                                ErrStat, ErrMsg, standalone_controls, bathymetry, &
                                                fairlead_orientation, init_note, coarse_pass, fold_support, &
-                                               install_viv, aux_weight, fixed_fairlead)
+                                               install_viv, aux_weight, fixed_fairlead, allow_moving_end_b, &
+                                               end_b_orientation)
     !! Build one COUPLED cubic-Hermite lazy-wave cable (CD_HFMF) from a finite-EI deck
     !! LINE -- the production Hermite bending path shared by the coupled route and
     !! standalone and coupled finite-EI dynamics, including flat/structured seabed contact.
@@ -1779,6 +1782,12 @@ CONTAINS
     !! held) -> fairlead (node nn, the platform-driven coupled node), matching
     !! init_one_finite_model. Both call routes install flat/structured nodal contact when
     !! the host/deck declares a seabed; a cable that remains clear sees exactly zero reaction.
+    !! With allow_moving_end_b, an End B on a Coupled/Vessel point is a second host-driven end
+    !! (CD_HFMF_Set_Moving_End_B): a line between two moving points. Its static problem is the one
+    !! of a Fixed End B at that position (both end translations are held in every static solve),
+    !! so the statics, seeds, continuations and audits run unchanged; End B's connection direction
+    !! Ez and torsion normal Nx are in End B's parent axes, whose global-to-parent DCM at the static
+    !! state is end_b_orientation (identity by default), and turn with that parent in the dynamics.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
@@ -1809,6 +1818,10 @@ CONTAINS
     ! Admit a Fixed End A as a standalone build does (the recursive builds of a standalone
     ! line, which run without its standalone controls).
     LOGICAL, INTENT(IN), OPTIONAL :: fixed_fairlead
+    ! Admit a Coupled/Vessel End B as a second host-driven end, and the global-to-parent DCM of
+    ! End B's parent at the static state (see above).
+    LOGICAL, INTENT(IN), OPTIONAL :: allow_moving_end_b
+    REAL(wp), INTENT(IN), OPTIONAL :: end_b_orientation(3, 3)
 
     INTEGER, ALLOCATABLE :: conn(:, :), fixed_dofs(:), dynamic_fixed_dofs(:)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), ei(:), gas_in(:), gj_in(:), i_rt_in(:), i_rn_in(:)
@@ -1824,6 +1837,9 @@ CONTAINS
     REAL(wp) :: endconn_k(2), endconn_d0_global(3, 2), endconn_d0_local(3, 2)
     INTEGER :: endconn_mode(2)
     REAL(wp) :: fairlead_dcm(3, 3), dcm_gram(3, 3), dcm_det
+    ! a moving End B (allow_moving_end_b) and its parent's global-to-parent DCM at the static state
+    LOGICAL :: moving_b
+    REAL(wp) :: end_b_dcm(3, 3)
     REAL(wp) :: bending_mesh_limit, proposed_coarse_max
     INTEGER :: pa, pb, nnode, ndof, es, iters, i, applied_scale, step_max_iter, sequence_levels, coarse_ne, next_ne
     INTEGER :: nfixed, kfixed
@@ -1934,6 +1950,26 @@ CONTAINS
       END IF
       fairlead_dcm = fairlead_orientation
     END IF
+    end_b_dcm = CD_ZERO
+    end_b_dcm(1, 1) = CD_ONE
+    end_b_dcm(2, 2) = CD_ONE
+    end_b_dcm(3, 3) = CD_ONE
+    IF (PRESENT(end_b_orientation)) THEN
+      IF (.NOT. ALL(IEEE_IS_FINITE(end_b_orientation))) THEN
+        CALL fail(ErrStat, ErrMsg, 'finite-EI End B orientation must be finite'); RETURN
+      END IF
+      dcm_gram = MATMUL(end_b_orientation, TRANSPOSE(end_b_orientation))
+      dcm_det = end_b_orientation(1, 1)*(end_b_orientation(2, 2)*end_b_orientation(3, 3) - &
+                                         end_b_orientation(2, 3)*end_b_orientation(3, 2)) - &
+                end_b_orientation(1, 2)*(end_b_orientation(2, 1)*end_b_orientation(3, 3) - &
+                                         end_b_orientation(2, 3)*end_b_orientation(3, 1)) + &
+                end_b_orientation(1, 3)*(end_b_orientation(2, 1)*end_b_orientation(3, 2) - &
+                                         end_b_orientation(2, 2)*end_b_orientation(3, 1))
+      IF (MAXVAL(ABS(dcm_gram - end_b_dcm)) > 1.0e-8_wp .OR. ABS(dcm_det - CD_ONE) > 1.0e-8_wp) THEN
+        CALL fail(ErrStat, ErrMsg, 'finite-EI End B orientation must be a proper orthogonal DCM'); RETURN
+      END IF
+      end_b_dcm = end_b_orientation
+    END IF
     contact_z = -2000.0_wp
     IF (PRESENT(standalone_controls)) THEN
       IF (standalone_controls) THEN
@@ -1974,7 +2010,10 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI coupled cable requires End A (the fairlead) to be a '// &
                 'Coupled/Vessel point; got "'//TRIM(points(pb)%ptype)//'"'); RETURN
     END IF
-    IF (TRIM(points(pa)%ptype) /= 'fixed') THEN
+    moving_b = .FALSE.
+    IF (PRESENT(allow_moving_end_b)) moving_b = allow_moving_end_b .AND. &
+                                           (TRIM(points(pa)%ptype) == 'coupled' .OR. TRIM(points(pa)%ptype) == 'vessel')
+    IF (TRIM(points(pa)%ptype) /= 'fixed' .AND. .NOT. moving_b) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI coupled cable requires End B (the anchor) to be a '// &
                 'Fixed point; got "'//TRIM(points(pa)%ptype)//'"'); RETURN
     END IF
@@ -2026,6 +2065,8 @@ CONTAINS
     endconn_mode = [ln%endconn_mode(2), ln%endconn_mode(1)]
     endconn_d0_global = CD_ZERO
     endconn_d0_global(:, 1) = -ln%endconn_ez_ref(:, 2)
+    ! a moving End B's Ez is in its parent's axes, as End A's is
+    IF (moving_b) endconn_d0_global(:, 1) = MATMUL(TRANSPOSE(end_b_dcm), -ln%endconn_ez_ref(:, 2))
     endconn_d0_global(:, 2) = MATMUL(TRANSPOSE(fairlead_dcm), -ln%endconn_ez_ref(:, 1))
     DO i = 1, 2
       endconn_d0_local(:, i) = [frame_cs(1)*endconn_d0_global(1, i) + &
@@ -2351,6 +2392,13 @@ CONTAINS
     ! springs. Their forces then seed the stick-slip anchors of the march (standalone and
     ! coupled alike).
     as_laid = contact_enabled .AND. opts%has_friction .AND. opts%static_friction == CD_STATIC_FRICTION_AS_LAID
+    ! The as-laid reference is the line laid on the seabed from its lower, anchored end; a line
+    ! between two moving points has no such end.
+    IF (as_laid .AND. moving_b) THEN
+      CALL fail(ErrStat, ErrMsg, 'OPTION staticsFriction asLaid lays a line on the seabed from its anchored end; '// &
+                'finite-EI LINE '//TRIM(int_to_str(ln%id))//' has a moving End B (both ends on moving points): '// &
+                'use staticsFriction none'); RETURN
+    END IF
     static_friction = contact_enabled .AND. opts%has_friction .AND. (opts%has_current .OR. as_laid)
     IF (opts%has_current .OR. as_laid) THEN
       ALLOCATE (cur_obj)
@@ -3248,6 +3296,12 @@ CONTAINS
     IF (es /= CD_HFMF_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable coupled-shell init failed: '//TRIM(em)); RETURN
     END IF
+    IF (moving_b) THEN
+      CALL CD_HFMF_Set_Moving_End_B(cable, es, em)
+      IF (es /= CD_HFMF_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'finite-EI cable moving End B wiring failed: '//TRIM(em)); RETURN
+      END IF
+    END IF
     IF (ALLOCATED(deck_map)) CALL MOVE_ALLOC(deck_map, cable%deck_node)
     cable%azimuth_signed = ln%azi_signed
     ! a stiffened line: the outputs report the cable's own share of the bend moment
@@ -3259,7 +3313,17 @@ CONTAINS
       END IF
     END IF
     IF (ANY(endconn_mode /= CD_ENDCONN_PINNED)) THEN
-      IF (endconn_mode(2) /= CD_ENDCONN_PINNED) THEN
+      ! a connected moving End B is attached to its own parent (end_b_d0_parent), as End A to its
+      IF (moving_b .AND. endconn_mode(1) /= CD_ENDCONN_PINNED .AND. endconn_mode(2) /= CD_ENDCONN_PINNED) THEN
+        CALL CD_HFMF_Set_EndConnection(cable, endconn_k, endconn_d0_global, es, em, &
+                                       coupled_d0_parent=-ln%endconn_ez_ref(:, 1), &
+                                       parent_orientation=fairlead_dcm, connection_mode=endconn_mode, &
+                                       end_b_d0_parent=-ln%endconn_ez_ref(:, 2), end_b_parent_orientation=end_b_dcm)
+      ELSE IF (moving_b .AND. endconn_mode(1) /= CD_ENDCONN_PINNED) THEN
+        CALL CD_HFMF_Set_EndConnection(cable, endconn_k, endconn_d0_global, es, em, &
+                                       connection_mode=endconn_mode, &
+                                       end_b_d0_parent=-ln%endconn_ez_ref(:, 2), end_b_parent_orientation=end_b_dcm)
+      ELSE IF (endconn_mode(2) /= CD_ENDCONN_PINNED) THEN
         CALL CD_HFMF_Set_EndConnection(cable, endconn_k, endconn_d0_global, es, em, &
                                        coupled_d0_parent=-ln%endconn_ez_ref(:, 1), &
                                        parent_orientation=fairlead_dcm, connection_mode=endconn_mode)
@@ -3279,13 +3343,22 @@ CONTAINS
       END IF
     ELSE IF (tors_line) THEN
       ! The End A torsion frame (director -Ez, reference normal Nx, in the frame of Ez) is held
-      ! by End A's parent and turns with it in the dynamics, whatever the bending connection.
+      ! by End A's parent and turns with it in the dynamics, whatever the bending connection; a
+      ! moving End B's frame (director -Ez, normal Nx of End B) is held by End B's parent likewise.
       BLOCK
-        REAL(wp) :: tframe(3, 2)
+        REAL(wp) :: tframe(3, 2), bframe(3, 2)
         tframe(:, 1) = -ln%endconn_ez_ref(:, 1)/NORM2(ln%endconn_ez_ref(:, 1))
         tframe(:, 2) = ln%tors_nx(:, 1) - DOT_PRODUCT(ln%tors_nx(:, 1), tframe(:, 1))*tframe(:, 1)
         tframe(:, 2) = tframe(:, 2)/NORM2(tframe(:, 2))
-        CALL CD_HFMF_Set_Torsion(cable, tors, es, em, coupled_frame_parent=tframe, parent_orientation=fairlead_dcm)
+        IF (moving_b) THEN
+          bframe(:, 1) = -ln%endconn_ez_ref(:, 2)/NORM2(ln%endconn_ez_ref(:, 2))
+          bframe(:, 2) = ln%tors_nx(:, 2) - DOT_PRODUCT(ln%tors_nx(:, 2), bframe(:, 1))*bframe(:, 1)
+          bframe(:, 2) = bframe(:, 2)/NORM2(bframe(:, 2))
+          CALL CD_HFMF_Set_Torsion(cable, tors, es, em, coupled_frame_parent=tframe, parent_orientation=fairlead_dcm, &
+                                   end_b_frame_parent=bframe, end_b_parent_orientation=end_b_dcm)
+        ELSE
+          CALL CD_HFMF_Set_Torsion(cable, tors, es, em, coupled_frame_parent=tframe, parent_orientation=fairlead_dcm)
+        END IF
       END BLOCK
       IF (es /= CD_HFMF_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable torsion wiring failed: '//TRIM(em)); RETURN
@@ -3495,7 +3568,9 @@ CONTAINS
       DO k = 1, 2
         IF (k == kf) CYCLE
         dvec = endconn_d0_local(:, k)/NORM2(endconn_d0_local(:, k))
-        IF (k == 1) THEN
+        IF (k == 1 .AND. moving_b) THEN
+          nvec = MATMUL(TRANSPOSE(end_b_dcm), ln%tors_nx(:, 2))
+        ELSE IF (k == 1) THEN
           nvec = ln%tors_nx(:, 2)
         ELSE
           nvec = MATMUL(TRANSPOSE(fairlead_dcm), ln%tors_nx(:, 1))
@@ -3993,11 +4068,13 @@ CONTAINS
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esw, emw, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
-                                     bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, init_note=sw_note)
+                                     bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, init_note=sw_note, &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       ELSE
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esw, emw, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
-                                     fairlead_orientation=fairlead_dcm, init_note=sw_note)
+                                     fairlead_orientation=fairlead_dcm, init_note=sw_note, &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       END IF
       IF (esw == CD_DECKDRV_OK) THEN
         CALL CD_HermiteCable_Mean_Axial_Extremes(sw_cable%line%l0, sw_cable%line%EA, sw_cable%line%q, t_min, &
@@ -4073,11 +4150,13 @@ CONTAINS
         CALL build_one_hermite_cable(ln, sections, types, points, opts, dt, aux_cable, aux_node, es_r, em_r, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
                                      bathymetry=bathymetry, &
-                                     fairlead_orientation=fairlead_dcm, init_note=aux_note, aux_weight=aux)
+                                     fairlead_orientation=fairlead_dcm, init_note=aux_note, aux_weight=aux, &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       ELSE
         CALL build_one_hermite_cable(ln, sections, types, points, opts, dt, aux_cable, aux_node, es_r, em_r, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
-                                     fairlead_orientation=fairlead_dcm, init_note=aux_note, aux_weight=aux)
+                                     fairlead_orientation=fairlead_dcm, init_note=aux_note, aux_weight=aux, &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       END IF
       IF (es_r /= CD_DECKDRV_OK) THEN
         WRITE (why, '(A,ES10.3,A)') 'the line with an auxiliary weight of ', aux, ' N/m found no equilibrium: '
@@ -4665,11 +4744,13 @@ CONTAINS
         CALL build_one_hermite_cable(ln, sec_c, types, points, opts_c, dt, c_cable, c_node, esc, emc, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
                                      bathymetry=bathymetry, &
-                                     fairlead_orientation=fairlead_dcm, init_note=c_note, coarse_pass=.TRUE.)
+                                     fairlead_orientation=fairlead_dcm, init_note=c_note, coarse_pass=.TRUE., &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       ELSE
         CALL build_one_hermite_cable(ln, sec_c, types, points, opts_c, dt, c_cable, c_node, esc, emc, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
-                                     fairlead_orientation=fairlead_dcm, init_note=c_note, coarse_pass=.TRUE.)
+                                     fairlead_orientation=fairlead_dcm, init_note=c_note, coarse_pass=.TRUE., &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       END IF
       IF (esc /= CD_DECKDRV_OK) THEN
         CALL CD_HFMF_End(c_cable)
@@ -4802,11 +4883,13 @@ CONTAINS
       IF (PRESENT(bathymetry)) THEN
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esr, emr, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
-                                     bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, init_note=sw_note)
+                                     bathymetry=bathymetry, fairlead_orientation=fairlead_dcm, init_note=sw_note, &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       ELSE
         CALL build_one_hermite_cable(ln, sections, types, points, opts_sw, dt, sw_cable, sw_node, esr, emr, &
                                      standalone_controls=.FALSE., fixed_fairlead=fixed_fairlead_ok, &
-                                     fairlead_orientation=fairlead_dcm, init_note=sw_note)
+                                     fairlead_orientation=fairlead_dcm, init_note=sw_note, &
+                                     allow_moving_end_b=moving_b, end_b_orientation=end_b_dcm)
       END IF
       IF (esr /= CD_DECKDRV_OK) THEN
         CALL CD_HFMF_End(sw_cable)
@@ -7145,20 +7228,23 @@ CONTAINS
     END IF
   END FUNCTION short_message
 
-  SUBROUTINE CD_Init_Deck_HermiteCable(deck_path, dt, cable, coupled_node, ErrStat, ErrMsg, host_orientation)
+  SUBROUTINE CD_Init_Deck_HermiteCable(deck_path, dt, cable, coupled_node, ErrStat, ErrMsg, host_orientation, &
+                                       moving_end_b)
     !! Parse a single-cable deck (exactly one finite-EI LINE) and build it as a COUPLED
     !! cubic-Hermite lazy-wave cable driven at the fairlead. Fails closed on an EI=0 deck (use
     !! CD_Init_Deck_System) or a deck with more than one line (use the aggregate facade).
     !! host_orientation: the caller passes the fairlead orientation with every update
     !! (CD_HFMF_UpdateStates u_orientation), which a line restrained in torsion needs to turn
-    !! its End A frame; without it a torsion deck fails closed.
+    !! its End A frame; without it a torsion deck fails closed. moving_end_b: the caller also
+    !! drives End B (CD_HFMF_UpdateStates ub_*), so a Coupled/Vessel End B is built as a second
+    !! host-driven end (CD_HFMF_Set_Moving_End_B); without it such a deck fails closed.
     CHARACTER(*), INTENT(IN) :: deck_path
     REAL(wp), INTENT(IN) :: dt
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     INTEGER, INTENT(OUT) :: coupled_node
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
+    LOGICAL, INTENT(IN), OPTIONAL :: host_orientation, moving_end_b
 
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
@@ -7233,10 +7319,11 @@ CONTAINS
                                 points=points)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       CALL build_one_hermite_cable(lines(1), sections, types, points, opts, dt, cable, coupled_node, &
-                                   ErrStat, ErrMsg, bathymetry=bathymetry)
+                                   ErrStat, ErrMsg, bathymetry=bathymetry, allow_moving_end_b=moving_end_b)
       CALL CD_End_Bathymetry(bathymetry)
     ELSE
-      CALL build_one_hermite_cable(lines(1), sections, types, points, opts, dt, cable, coupled_node, ErrStat, ErrMsg)
+      CALL build_one_hermite_cable(lines(1), sections, types, points, opts, dt, cable, coupled_node, ErrStat, ErrMsg, &
+                                   allow_moving_end_b=moving_end_b)
     END IF
   END SUBROUTINE CD_Init_Deck_HermiteCable
 
@@ -8662,7 +8749,7 @@ CONTAINS
     CALL read_motion_file(opts%motion_file, points, opts, rt%motion, ErrStat, ErrMsg, &
                           with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]))
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    CALL check_motion_roll_lines(rt%motion, lines, ErrStat, ErrMsg)
+    CALL check_motion_roll_lines(rt%motion, lines, points, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     ! pass 1 counts the moving columns, pass 2 fills them
     DO pass = 1, 2
@@ -8865,13 +8952,12 @@ CONTAINS
     INTEGER, ALLOCATABLE :: q_off(:), ten_off(:), nn(:), ne(:)
     CHARACTER(1024) :: fail_msg
     TYPE(CD_ModelType), ALLOCATABLE :: models(:)
-    TYPE(FiniteDeckModel), ALLOCATABLE :: finite_models(:)
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: hermite_models(:)
     TYPE(CD_SystemType) :: point_system
     TYPE(CD_BathymetryType) :: bathymetry
     TYPE(DeckFailure), ALLOCATABLE :: fails(:)
     TYPE(CD_LineInitSummary), ALLOCATABLE :: init_summaries(:)
-    INTEGER :: nl, li, es, j, n_finite, node_sc, kind_sc, comp_sc
+    INTEGER :: nl, li, es, j, n_finite
     LOGICAL :: line_conv, has_line_outputs, has_finite, has_dyn_points, has_rigid6, hermite_standalone_eligible
     CHARACTER(1024) :: em
 
@@ -8980,7 +9066,7 @@ CONTAINS
     IF (opts%n_modes > 0) THEN
       ! modal analysis about the static equilibrium: EI = 0 lines here, finite-EI lines on
       ! the cubic-Hermite route below
-      CALL check_modal_deck(bodies, rods, points, lines, opts, n_finite, has_dyn_points, SIZE(fails) > 0, &
+      CALL check_modal_deck(bodies, rods, lines, opts, n_finite, has_dyn_points, SIZE(fails) > 0, &
                             ErrStat, ErrMsg)
       IF (ErrStat == CD_DECKDRV_OK .AND. n_finite == 0) &
         CALL write_deck_modes_ei0(out_root, types, points, lines, sections, opts, ErrStat, ErrMsg)
@@ -9021,8 +9107,8 @@ CONTAINS
       IF (has_finite) THEN
         ! The standalone finite-EI march owns one homogeneous family of bending
         ! lines. Mixed EI=0/EI>0 composition belongs to the aggregate route; keep
-        ! this guard ahead of BOTH the Hermite and compatibility dispatches so an
-        ! EI=0 line can never be coerced through the all-lines Hermite builder.
+        ! this guard ahead of the Hermite dispatch so an EI=0 line can never be
+        ! coerced through the all-lines Hermite builder.
         IF (.NOT. all_lines_have_finite_ei(types, lines, sections)) THEN
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
           CALL fail(ErrStat, ErrMsg, 'mixed EI=0 and finite-EI dynamic decks are not supported by this entry point')
@@ -9030,87 +9116,52 @@ CONTAINS
         END IF
         ! (bodies, rods and Free/Connect points beside finite-EI lines never reach here:
         ! deck_needs_multibody routes them to the multibody march above)
-        hermite_standalone_eligible = .TRUE.
+        ! The production cubic-Hermite route owns every standalone finite-EI dynamic deck,
+        ! including flat/structured contact, damping, friction, motion and deck-owned fluid
+        ! fields: the HFMF lifecycle drives End A and holds a Fixed End B or drives a
+        ! Coupled/Vessel one (a line between two moving points, CD_HFMF_Set_Moving_End_B).
         DO li = 1, SIZE(lines)
-          ! The HFMF lifecycle drives End A and holds End B. Decks with two moving
-          ! ends use the compatibility route, which supports that topology.
           j = find_point(points, lines(li)%nodeB)
-          IF (j < 1 .OR. TRIM(points(j)%ptype) /= 'fixed') hermite_standalone_eligible = .FALSE.
+          IF (j < 1) THEN
+            hermite_standalone_eligible = .FALSE.
+          ELSE
+            hermite_standalone_eligible = TRIM(points(j)%ptype) == 'fixed' .OR. &
+                                          TRIM(points(j)%ptype) == 'coupled' .OR. TRIM(points(j)%ptype) == 'vessel'
+          END IF
+          IF (.NOT. hermite_standalone_eligible) THEN
+            IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
+            CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(li)%id))//' End B must be a '// &
+                      'Fixed, Coupled or Vessel point on the standalone finite-EI route')
+            RETURN
+          END IF
         END DO
-        ! The production cubic-Hermite route owns every eligible standalone finite-EI
-        ! dynamic deck, including flat/structured contact, damping, friction, motion,
-        ! and deck-owned fluid fields. The compatibility route remains only for the
-        ! two-moving-end topology that the HFMF boundary cannot represent.
-        IF (.NOT. hermite_standalone_eligible) THEN
-          DO li = 1, SIZE(lines)
-            IF (.NOT. line_has_viv(lines(li), types, sections)) CYCLE
-            IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
-            CALL fail(ErrStat, ErrMsg, 'VIV (LINE TYPES Cl > 0) of a finite-EI line needs its End B fixed '// &
-                      '(the cubic-Hermite march); set Cl = 0 for a line with two moving ends')
-            RETURN
-          END DO
-          ! the compatibility route carries no section frame for the curvature components
-          DO li = 1, SIZE(channels)
-            CALL parse_line_node_channel(channels(li), j, node_sc, kind_sc, comp_sc)
-            IF (kind_sc /= 13 .AND. kind_sc /= 14) CYCLE
-            IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
-            CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(channels(li))//'": the section curvature components '// &
-                      'need a finite-EI line with a Fixed End B (the cubic-Hermite march); a line with two '// &
-                      'moving ends reports Curv<L>N<J>')
-            RETURN
-          END DO
-        END IF
-        IF (hermite_standalone_eligible) THEN
-          ALLOCATE (hermite_models(SIZE(lines)))
-          DO li = 1, SIZE(lines)
-            IF (opts%has_bathymetry_file) THEN
-              CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
-                                           hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
-                                           bathymetry=bathymetry, install_viv=.TRUE.)
-            ELSE
-              CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
-                                           hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
-                                           install_viv=.TRUE.)
-            END IF
-            IF (ErrStat /= CD_DECKDRV_OK) EXIT
-          END DO
-          IF (ErrStat == CD_DECKDRV_OK) THEN
-            CALL collect_hermite_init_summaries(lines, hermite_models, init_summaries, ErrStat, ErrMsg)
+        ALLOCATE (hermite_models(SIZE(lines)))
+        DO li = 1, SIZE(lines)
+          IF (opts%has_bathymetry_file) THEN
+            CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
+                                         hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
+                                         bathymetry=bathymetry, install_viv=.TRUE., allow_moving_end_b=.TRUE.)
+          ELSE
+            CALL build_one_hermite_cable(lines(li), sections, types, points, opts, opts%dtM, &
+                                         hermite_models(li), j, ErrStat, ErrMsg, standalone_controls=.TRUE., &
+                                         install_viv=.TRUE., allow_moving_end_b=.TRUE.)
           END IF
-          IF (ErrStat == CD_DECKDRV_OK .AND. opts%n_modes > 0) &
-            CALL write_deck_modes_hermite(out_root, lines, opts, hermite_models, ErrStat, ErrMsg)
-          IF (ErrStat == CD_DECKDRV_OK) THEN
-            CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
-                                        types=types, opts=opts)
-            CALL write_hermite_dynamic_out(out_root, channels, lines, points, opts, hermite_models, &
-                                           converged, ErrStat, ErrMsg, bathymetry=bathymetry)
-          END IF
-          CALL end_hermite_cables(hermite_models)
-        ELSE IF (opts%has_bathymetry_file) THEN
-          CALL init_finite_deck_models(types, points, lines, sections, opts, finite_models, ErrStat, ErrMsg, &
-                                       bathymetry=bathymetry)
-        ELSE
-          CALL init_finite_deck_models(types, points, lines, sections, opts, finite_models, ErrStat, ErrMsg)
+          IF (ErrStat /= CD_DECKDRV_OK) EXIT
+        END DO
+        IF (ErrStat == CD_DECKDRV_OK) THEN
+          CALL collect_hermite_init_summaries(lines, hermite_models, init_summaries, ErrStat, ErrMsg)
         END IF
-        IF (.NOT. ALLOCATED(finite_models)) THEN
-          IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
-          RETURN
+        IF (ErrStat == CD_DECKDRV_OK .AND. opts%n_modes > 0) &
+          CALL write_deck_modes_hermite(out_root, lines, opts, hermite_models, ErrStat, ErrMsg)
+        IF (ErrStat == CD_DECKDRV_OK) THEN
+          CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
+                                      types=types, opts=opts)
+          CALL write_hermite_dynamic_out(out_root, channels, lines, points, opts, hermite_models, &
+                                         converged, ErrStat, ErrMsg, bathymetry=bathymetry)
         END IF
-        IF (ErrStat /= 0) THEN
-          IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
-          RETURN
-        END IF
-        CALL collect_finite_init_summaries(lines, points, finite_models, init_summaries, ErrStat, ErrMsg)
-        IF (ErrStat /= CD_DECKDRV_OK) THEN
-          CALL end_finite_models(finite_models)
-          IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
-          RETURN
-        END IF
-        CALL print_deck_init_report(deck_path, lines, points, sections, n_finite, init_summaries, &
-                                    types=types, opts=opts)
-        CALL write_finite_dynamic_out(out_root, channels, lines, points, opts, finite_models, &
-                                      converged, ErrStat, ErrMsg, bathymetry=bathymetry)
-        CALL end_finite_models(finite_models)
+        CALL end_hermite_cables(hermite_models)
+        IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
+        RETURN
       ELSE IF (SIZE(lines) == 0 .AND. (SIZE(rods) > 0 .OR. has_rigid6)) THEN
         ! bodies (with rods fixed to them) and free or pinned rods, no lines
         IF (opts%has_bathymetry_file) THEN
@@ -17417,6 +17468,8 @@ CONTAINS
     INTEGER :: i, j, idx, nsec_for_line, body_id, body_idx, rod_id, rod_idx, na_ref, nb_ref
     INTEGER :: nstep
     LOGICAL :: grid_ok
+    ! a finite-EI line (some section with EI > 0), for the End B rule of a line between moving points
+    LOGICAL :: shared_finite
     REAL(wp) :: displaced_mass
     CHARACTER(NAMELEN) :: ta, tb
     ErrStat = 0; ErrMsg = ''
@@ -18097,6 +18150,7 @@ CONTAINS
     ! lines: positive unique ids, endpoints resolve, >=1 section, known output flags
     DO i = 1, SIZE(lines)
       at_line = lines(i)%deck_line
+      shared_finite = .FALSE.
       IF (lines(i)%id < 1) THEN
         CALL fail(ErrStat, ErrMsg, 'LINE id must be >= 1'); RETURN
       END IF
@@ -18150,34 +18204,34 @@ CONTAINS
           RETURN
         END IF
         IF (tb /= 'fixed') THEN
-          ! FAST.Farm SHARED line: both ends coupled is legal iff BOTH endpoints carry
-          ! the Turbine<J> vocabulary (the fairlead-to-fairlead line between turbines);
-          ! any other non-anchor End B stays rejected.
+          ! A line between two moving points: legal for a FAST.Farm SHARED line, whose endpoints both
+          ! carry the Turbine<J> vocabulary (the fairlead-to-fairlead line between turbines), and for
+          ! a finite-EI line between two Coupled/Vessel points (the cubic-Hermite cable drives both
+          ! ends); any other non-anchor End B stays rejected.
+          BLOCK
+            INTEGER :: js, ks
+            shared_finite = .FALSE.
+            DO js = 1, SIZE(sections)
+              IF (sections(js)%line_id /= lines(i)%id) CYCLE
+              ks = find_type(types, sections(js)%ltype_name)
+              IF (ks < 1) CYCLE
+              IF (types(ks)%ei > CD_ZERO) shared_finite = .TRUE.
+            END DO
+          END BLOCK
           IF (.NOT. ((tb == 'coupled' .OR. tb == 'vessel') .AND. &
-                     points(find_point(points, lines(i)%nodeA))%turbine_id > 0 .AND. &
-                     points(find_point(points, lines(i)%nodeB))%turbine_id > 0)) THEN
+                     ((points(find_point(points, lines(i)%nodeA))%turbine_id > 0 .AND. &
+                       points(find_point(points, lines(i)%nodeB))%turbine_id > 0) .OR. shared_finite))) THEN
             ! The Connect-point split is a workaround only for an EI=0 line: in a deck with
             ! Connect points a finite-EI cable needs a Fixed End B and cannot end on a Connect point.
-            BLOCK
-              INTEGER :: js, ks
-              LOGICAL :: shared_finite
-              shared_finite = .FALSE.
-              DO js = 1, SIZE(sections)
-                IF (sections(js)%line_id /= lines(i)%id) CYCLE
-                ks = find_type(types, sections(js)%ltype_name)
-                IF (ks < 1) CYCLE
-                IF (types(ks)%ei > CD_ZERO) shared_finite = .TRUE.
-              END DO
-              IF (shared_finite) THEN
-                CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//' End B (NodeB, '// &
-                          'POINT '//TRIM(int_to_str(lines(i)%nodeB))//', '//TRIM(tb)//') must be a Fixed '// &
-                          '(anchor) point: a line between two moving points (a shared line) is not supported, '// &
-                          'except a FAST.Farm shared line between two Turbine<J> fairleads. A finite-EI line '// &
-                          'cannot be split at a Connect point either (beside Connect points a finite-EI cable '// &
-                          'needs a Fixed End B and cannot end on a Connect point): anchor it on a Fixed point, '// &
-                          'or model the shared span with EI=0 line types split at a Connect point'); RETURN
-              END IF
-            END BLOCK
+            IF (shared_finite) THEN
+              CALL fail(ErrStat, ErrMsg, 'finite-EI LINE '//TRIM(int_to_str(lines(i)%id))//' End B (NodeB, '// &
+                        'POINT '//TRIM(int_to_str(lines(i)%nodeB))//', '//TRIM(tb)//') must be a Fixed '// &
+                        '(anchor), Coupled or Vessel point (a finite-EI line between two Coupled/Vessel points '// &
+                        'has both ends driven). A finite-EI line cannot be split at a Connect point (beside '// &
+                        'Connect points a finite-EI cable needs a Fixed End B and cannot end on a Connect '// &
+                        'point): anchor it on a Fixed point, or model the shared span with EI=0 line types '// &
+                        'split at a Connect point'); RETURN
+            END IF
             CALL fail(ErrStat, ErrMsg, 'LINE '//TRIM(int_to_str(lines(i)%id))//' End B (NodeB, POINT '// &
                       TRIM(int_to_str(lines(i)%nodeB))//', '//TRIM(tb)//') must be a Fixed (anchor) point: a line '// &
                       'between two moving points (a shared line) is not supported, except a FAST.Farm shared line '// &
@@ -18330,23 +18384,25 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'END CONNECTIONS requires a finite-EI line')
         RETURN
       END IF
-      ! The production Hermite boundary supports a moving End A and a held End B.
-      ! The two-moving-end route does not assemble bending
-      ! connection forces or moments. Reject that topology at the common parser
-      ! boundary so no entry point can silently reinterpret a declared connection
-      ! as pinned, while retaining finite/rigid connections at either end of every
-      ! supported Fixed-End-B cable.
+      ! The production Hermite boundary connects End A to its moving parent and End B to a
+      ! Fixed point or to its own moving parent (a Coupled/Vessel End B, a line between two
+      ! moving points). Any other End B fails closed here, at the common parser boundary, so
+      ! no entry point can silently reinterpret a declared connection as pinned.
       j = find_point(points, lines(i)%nodeB)
       IF (j > 0) THEN
         IF (is_rod_point_type(points(j)%ptype)) THEN
-          CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS require a finite-EI line with Fixed End B; '// &
-                    'line '//TRIM(int_to_str(lines(i)%id))//ROD_END_B_NOTE)
+          CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel '// &
+                    'point; line '//TRIM(int_to_str(lines(i)%id))//ROD_END_B_NOTE)
           RETURN
         END IF
       END IF
-      IF (j < 1 .OR. TRIM(points(j)%ptype) /= 'fixed') THEN
-        CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS require a finite-EI line with Fixed End B; '// &
-                  'the two-moving-end compatibility solver does not apply bending connections')
+      IF (j < 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel point')
+        RETURN
+      ELSE IF (TRIM(points(j)%ptype) /= 'fixed' .AND. TRIM(points(j)%ptype) /= 'coupled' .AND. &
+               TRIM(points(j)%ptype) /= 'vessel') THEN
+        CALL fail(ErrStat, ErrMsg, 'non-pinned END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; '// &
+                  'line '//TRIM(int_to_str(lines(i)%id))//' ends on a "'//TRIM(points(j)%ptype)//'" point')
         RETURN
       END IF
     END DO
@@ -18381,7 +18437,7 @@ CONTAINS
       !! A line with a torsional END CONNECTIONS restraint: a finite-EI (cubic-Hermite) line. With
       !! both ends restrained (torsion active) End B must be Fixed, every section's LINE TYPES row
       !! must give an explicit GJ, a body End A must be a Rigid6 body, and a rod End A must be on a
-      !! Fixed rod.
+      !! Fixed rod, with a Fixed End B.
       !!
       !! The End A torsion frame (director, reference normal) is held by End A's parent and turns
       !! with its whole orientation, its roll about the line included. A Fixed rod holds it still,
@@ -18436,16 +18492,19 @@ CONTAINS
         END BLOCK
         RETURN
       END IF
+      ! End B is held at a Fixed point or driven with its own frame at a Coupled/Vessel point (a
+      ! line between two moving points: both end frames turn with their parents)
       jp = find_point(points, ln%nodeB)
       IF (jp < 1) RETURN
       IF (is_rod_point_type(points(jp)%ptype)) THEN
-        CALL fail(es_t, em_t, 'torsional END CONNECTIONS require a finite-EI line with Fixed End B; line '// &
+        CALL fail(es_t, em_t, 'torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; line '// &
                   TRIM(lid)//ROD_END_B_NOTE)
         RETURN
       END IF
-      IF (TRIM(points(jp)%ptype) /= 'fixed') THEN
-        CALL fail(es_t, em_t, 'torsional END CONNECTIONS require a finite-EI line with Fixed End B; line '// &
-                  TRIM(lid)//' has two moving ends')
+      IF (TRIM(points(jp)%ptype) /= 'fixed' .AND. TRIM(points(jp)%ptype) /= 'coupled' .AND. &
+          TRIM(points(jp)%ptype) /= 'vessel') THEN
+        CALL fail(es_t, em_t, 'torsional END CONNECTIONS need End B on a Fixed, Coupled or Vessel point; line '// &
+                  TRIM(lid)//' ends on a "'//TRIM(points(jp)%ptype)//'" point')
         RETURN
       END IF
       DO js = 1, SIZE(sections)
@@ -18480,6 +18539,15 @@ CONTAINS
                       'body point or on a Fixed point')
             RETURN
           END SELECT
+        END IF
+        jb = find_point(points, ln%nodeB)
+        IF (jb > 0) THEN
+          IF (TRIM(points(jb)%ptype) /= 'fixed') THEN
+            CALL fail(es_t, em_t, 'line '//TRIM(lid)//': a torsional END CONNECTION on a rod end needs a Fixed '// &
+                      'End B (a line restrained in torsion between a rod end and a moving object is not '// &
+                      'supported in this build)')
+            RETURN
+          END IF
         END IF
       END IF
       IF (starts_with(TRIM(points(jp)%ptype), 'body')) THEN
@@ -30209,6 +30277,8 @@ CONTAINS
     CHARACTER(LEN(out_root) + 8) :: path
     CHARACTER(1024) :: em
     REAL(wp) :: t, up(3), uv(3), ua(3), tensile_force, tensile_threshold, tensile_xi, tensile_time, turn
+    ! a moving End B's kinematics (CD_HFMF_Set_Moving_End_B), unused on a line with a Fixed End B
+    REAL(wp) :: ubp(3), ubv(3), uba(3)
     ! Per-step tangent turn [deg] above which the time-step note is printed (see below).
     REAL(wp), PARAMETER :: TURN_NOTE_FORCE_BLEND = 0.25_wp, TURN_NOTE_CONFIG_BLEND = 0.1_wp
     REAL(wp), PARAMETER :: RAD2DEG = 57.29577951308232_wp
@@ -30288,33 +30358,47 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
       CALL CD_Profile_Enter(CD_PROF_SOLVE)
       DO i = 1, SIZE(cables)
+        ubp = CD_ZERO; ubv = CD_ZERO; uba = CD_ZERO
         IF (opts%has_motion_file) THEN
           pidx = find_point(points, lines(i)%nodeA)
           CALL prescribed_point_state(points(pidx), motion, step + 1, up, uv, ua, ErrStat, ErrMsg)
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
+          IF (cables(i)%moving_b) THEN
+            pidx = find_point(points, lines(i)%nodeB)
+            CALL prescribed_point_state(points(pidx), motion, step + 1, ubp, ubv, uba, ErrStat, ErrMsg)
+            IF (ErrStat /= CD_DECKDRV_OK) EXIT
+          END IF
         ELSE
           CALL CD_HFMF_GetCoupledKinematics(cables(i), up, uv, ua, es, em)
+         IF (es == CD_HFMF_OK .AND. cables(i)%moving_b) CALL CD_HFMF_GetEndBKinematics(cables(i), ubp, ubv, uba, es, em)
           IF (es /= CD_HFMF_OK) THEN
             ErrStat = CD_DECKDRV_SOLVEFAIL
             ErrMsg = 'CableDyn_DeckDriver: Hermite endpoint query failed: '//TRIM(em); EXIT
           END IF
           uv = CD_ZERO; ua = CD_ZERO
+          ubv = CD_ZERO; uba = CD_ZERO
         END IF
         IF (motion%has_rot) THEN
           ! vessel motion: the fairlead end connection turns with the vessel (the DCM is
-          ! global-to-vessel, the transpose of the vessel rotation)
-          CALL CD_HFMF_UpdateStates(cables(i), up, uv, ua, es, em, &
-                                    u_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
-                                    u_angular_velocity=motion%omega(:, step + 1), &
-                                    u_angular_acceleration=motion%alpha(:, step + 1))
-        ELSE IF (motion%has_roll .AND. line_torsion_at_a(lines(i)) .AND. &
-                 find_motion_point(motion, lines(i)%nodeA) > 0) THEN
-          ! imposed roll of End A about its director: Phi = Pretwist(B) - (Pretwist(A) + roll)
-          CALL CD_HFMF_UpdateStates(cables(i), up, uv, ua, es, em, &
-                                    u_twist=lines(i)%tors_pretwist(2) - lines(i)%tors_pretwist(1) - &
-                                    motion%roll(find_motion_point(motion, lines(i)%nodeA), step + 1))
+          ! vessel motion: the fairlead end connection turns with the vessel (the DCM is
+          ! global-to-vessel, the transpose of the vessel rotation); a moving End B rides on the
+          ! same vessel
+          CALL hermite_step_ends(cables(i), up, uv, ua, ubp, ubv, uba, es, em, &
+                                 u_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
+                                 u_angular_velocity=motion%omega(:, step + 1), &
+                                 u_angular_acceleration=motion%alpha(:, step + 1), &
+                                 ub_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
+                                 ub_angular_velocity=motion%omega(:, step + 1), &
+                                 ub_angular_acceleration=motion%alpha(:, step + 1))
+        ELSE IF (motion%has_roll .AND. ((line_torsion_at_a(lines(i)) .AND. &
+                                         find_motion_point(motion, lines(i)%nodeA) > 0) .OR. &
+                                        (line_torsion_at_b(lines(i)) .AND. cables(i)%moving_b))) THEN
+          ! imposed roll of each moving end restrained in torsion about its inward tangent:
+          ! Phi = Pretwist(B) - Pretwist(A) - roll(A) - roll(B)
+          CALL hermite_step_ends(cables(i), up, uv, ua, ubp, ubv, uba, es, em, &
+                                 u_twist=line_roll_twist(lines(i), motion, step + 1))
         ELSE
-          CALL CD_HFMF_UpdateStates(cables(i), up, uv, ua, es, em)
+          CALL hermite_step_ends(cables(i), up, uv, ua, ubp, ubv, uba, es, em)
         END IF
         IF (es /= CD_HFMF_OK) THEN
           ErrStat = CD_DECKDRV_SOLVEFAIL
@@ -30390,20 +30474,22 @@ CONTAINS
     SUBROUTINE check_motion_roll(est, emt)
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
-      CALL check_motion_roll_lines(motion, lines, est, emt)
+      CALL check_motion_roll_lines(motion, lines, points, est, emt)
     END SUBROUTINE check_motion_roll
   END SUBROUTINE write_hermite_dynamic_out
 
-  SUBROUTINE check_motion_roll_lines(motion, lines, est, emt)
-    !! The motionFile roll column drives a torsional line through its moving end only (internal
-    !! End A after the anchor-first swap: the user's End A, or End B of an anchor-first deck),
-    !! right-handed about the tangent pointing into the line, so Phi = Pretwist(B) -
-    !! Pretwist(A) - roll in either order; it starts from the static state (roll 0 at t = 0).
+  SUBROUTINE check_motion_roll_lines(motion, lines, points, est, emt)
+    !! The motionFile roll column drives a torsional line through its moving ends restrained in
+    !! torsion only (internal End A after the anchor-first swap: the user's End A, or End B of an
+    !! anchor-first deck, and a Coupled/Vessel End B of a line between two moving points),
+    !! right-handed about the tangent pointing into the line from that end, so Phi = Pretwist(B)
+    !! - Pretwist(A) - roll(A) - roll(B); it starts from the static state (roll 0 at t = 0).
     TYPE(MotionTable), INTENT(IN) :: motion
     TYPE(DeckLine), INTENT(IN) :: lines(:)
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
     INTEGER, INTENT(OUT) :: est
     CHARACTER(*), INTENT(OUT) :: emt
-    INTEGER :: ip, li
+    INTEGER :: ip, li, jp
     LOGICAL :: used
     est = CD_DECKDRV_OK
     emt = ''
@@ -30413,6 +30499,12 @@ CONTAINS
       used = .FALSE.
       DO li = 1, SIZE(lines)
         IF (lines(li)%nodeA == motion%point_ids(ip) .AND. line_torsion_at_a(lines(li))) used = .TRUE.
+        IF (lines(li)%nodeB == motion%point_ids(ip) .AND. line_torsion_at_b(lines(li))) THEN
+          jp = find_point(points, lines(li)%nodeB)
+          IF (jp > 0) THEN
+            IF (TRIM(points(jp)%ptype) == 'coupled' .OR. TRIM(points(jp)%ptype) == 'vessel') used = .TRUE.
+          END IF
+        END IF
       END DO
       IF (.NOT. used) THEN
         CALL fail(est, emt, 'motionFile: point '//TRIM(int_to_str(motion%point_ids(ip)))//' has a non-zero roll '// &
@@ -30426,6 +30518,70 @@ CONTAINS
       END IF
     END DO
   END SUBROUTINE check_motion_roll_lines
+
+  SUBROUTINE hermite_step_ends(cable, up, uv, ua, ubp, ubv, uba, es, em, u_orientation, u_angular_velocity, &
+                               u_angular_acceleration, u_twist, ub_orientation, ub_angular_velocity, &
+                               ub_angular_acceleration)
+    !! CD_HFMF_UpdateStates of a standalone cable: End A's kinematics, and End B's (ub*) for a cable
+    !! whose End B moves (CD_HFMF_Set_Moving_End_B); a Fixed End B's ub* are not passed.
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
+    REAL(wp), INTENT(IN) :: up(3), uv(3), ua(3), ubp(3), ubv(3), uba(3)
+    INTEGER, INTENT(OUT) :: es
+    CHARACTER(*), INTENT(OUT) :: em
+    REAL(wp), INTENT(IN), OPTIONAL :: u_orientation(3, 3), u_angular_velocity(3), u_angular_acceleration(3)
+    REAL(wp), INTENT(IN), OPTIONAL :: u_twist
+    REAL(wp), INTENT(IN), OPTIONAL :: ub_orientation(3, 3), ub_angular_velocity(3), ub_angular_acceleration(3)
+    IF (cable%moving_b) THEN
+      CALL CD_HFMF_UpdateStates(cable, up, uv, ua, es, em, u_orientation=u_orientation, &
+                                u_angular_velocity=u_angular_velocity, u_angular_acceleration=u_angular_acceleration, &
+                                u_twist=u_twist, ub_pos=ubp, ub_vel=ubv, ub_acc=uba, ub_orientation=ub_orientation, &
+                               ub_angular_velocity=ub_angular_velocity, ub_angular_acceleration=ub_angular_acceleration)
+    ELSE
+      CALL CD_HFMF_UpdateStates(cable, up, uv, ua, es, em, u_orientation=u_orientation, &
+                                u_angular_velocity=u_angular_velocity, u_angular_acceleration=u_angular_acceleration, &
+                                u_twist=u_twist)
+    END IF
+  END SUBROUTINE hermite_step_ends
+
+  SUBROUTINE hermite_set_ends(cable, up, uv, ua, ubp, ubv, uba, es, em, u_orientation, u_angular_velocity, &
+                              u_angular_acceleration, ub_orientation, ub_angular_velocity, ub_angular_acceleration)
+    !! CD_HFMF_SetCoupledKinematics with End B's kinematics for a cable whose End B moves.
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
+    REAL(wp), INTENT(IN) :: up(3), uv(3), ua(3), ubp(3), ubv(3), uba(3)
+    INTEGER, INTENT(OUT) :: es
+    CHARACTER(*), INTENT(OUT) :: em
+    REAL(wp), INTENT(IN), OPTIONAL :: u_orientation(3, 3), u_angular_velocity(3), u_angular_acceleration(3)
+    REAL(wp), INTENT(IN), OPTIONAL :: ub_orientation(3, 3), ub_angular_velocity(3), ub_angular_acceleration(3)
+    IF (cable%moving_b) THEN
+      CALL CD_HFMF_SetCoupledKinematics(cable, up, uv, ua, es, em, u_orientation=u_orientation, &
+                                        u_angular_velocity=u_angular_velocity, &
+                                        u_angular_acceleration=u_angular_acceleration, ub_pos=ubp, ub_vel=ubv, &
+                                        ub_acc=uba, ub_orientation=ub_orientation, &
+                                        ub_angular_velocity=ub_angular_velocity, &
+                                        ub_angular_acceleration=ub_angular_acceleration)
+    ELSE
+      CALL CD_HFMF_SetCoupledKinematics(cable, up, uv, ua, es, em, u_orientation=u_orientation, &
+                                        u_angular_velocity=u_angular_velocity, &
+                                        u_angular_acceleration=u_angular_acceleration)
+    END IF
+  END SUBROUTINE hermite_set_ends
+
+  REAL(wp) FUNCTION line_roll_twist(ln, motion, time_index) RESULT(phi)
+    !! The imposed twist of a torsional line at a motion row: Phi = Pretwist(B) - Pretwist(A) -
+    !! roll(A) - roll(B), each roll the motionFile roll column of the end's point (zero for a point
+    !! without one, a Fixed point included), right-handed about the tangent pointing into the line
+    !! from that end: a common roll of both ends about the line axis cancels. The roll of an
+    !! end free in torsion (a line restrained at one end only) twists nothing.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(MotionTable), INTENT(IN) :: motion
+    INTEGER, INTENT(IN) :: time_index
+    INTEGER :: ia, ib
+    phi = ln%tors_pretwist(2) - ln%tors_pretwist(1)
+    ia = find_motion_point(motion, ln%nodeA)
+    ib = find_motion_point(motion, ln%nodeB)
+    IF (ia > 0 .AND. ln%tors_mode(1) /= TORS_FREE) phi = phi - motion%roll(ia, time_index)
+    IF (ib > 0 .AND. ln%tors_mode(2) /= TORS_FREE) phi = phi - motion%roll(ib, time_index)
+  END FUNCTION line_roll_twist
 
   SUBROUTINE write_hermite_static_profile(out_root, lines, cables, ErrStat, ErrMsg)
     !! Persist the converged finite-EI initialization as the same engineering range
@@ -30607,7 +30763,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i, pidx, es
-    REAL(wp) :: q(3), v(3), a(3)
+    REAL(wp) :: q(3), v(3), a(3), qb(3), vb(3), ab(3)
     CHARACTER(1024) :: em
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
@@ -30621,14 +30777,23 @@ CONTAINS
       END IF
       CALL prescribed_point_state(points(pidx), motion, time_index, q, v, a, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      qb = CD_ZERO; vb = CD_ZERO; ab = CD_ZERO
+      IF (cables(i)%moving_b) THEN
+        pidx = find_point(points, lines(i)%nodeB)
+        CALL prescribed_point_state(points(pidx), motion, time_index, qb, vb, ab, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      END IF
       IF (motion%has_rot) THEN
-        ! vessel motion: an end connection at the fairlead turns with the vessel
-        CALL CD_HFMF_SetCoupledKinematics(cables(i), q, v, a, es, em, &
-                                          u_orientation=TRANSPOSE(motion%rot(:, :, time_index)), &
-                                          u_angular_velocity=motion%omega(:, time_index), &
-                                          u_angular_acceleration=motion%alpha(:, time_index))
+        ! vessel motion: an end connection at the fairlead (and at a moving End B) turns with the vessel
+        CALL hermite_set_ends(cables(i), q, v, a, qb, vb, ab, es, em, &
+                              u_orientation=TRANSPOSE(motion%rot(:, :, time_index)), &
+                              u_angular_velocity=motion%omega(:, time_index), &
+                              u_angular_acceleration=motion%alpha(:, time_index), &
+                              ub_orientation=TRANSPOSE(motion%rot(:, :, time_index)), &
+                              ub_angular_velocity=motion%omega(:, time_index), &
+                              ub_angular_acceleration=motion%alpha(:, time_index))
       ELSE
-        CALL CD_HFMF_SetCoupledKinematics(cables(i), q, v, a, es, em)
+        CALL hermite_set_ends(cables(i), q, v, a, qb, vb, ab, es, em)
       END IF
       IF (es /= CD_HFMF_OK) THEN
         ErrStat = CD_DECKDRV_SOLVEFAIL
@@ -31247,21 +31412,20 @@ CONTAINS
     ramp_rate = 2.0_wp*QUARTER_PI*SIN(arg)/ramp_time
   END SUBROUTINE deck_wave_ramp
 
-  SUBROUTINE check_modal_deck(bodies, rods, points, lines, opts, n_finite, has_dyn_points, has_failures, &
+  SUBROUTINE check_modal_deck(bodies, rods, lines, opts, n_finite, has_dyn_points, has_failures, &
                               ErrStat, ErrMsg)
     !! OPTION nModes runs on decks of lines between fixed and prescribed points: all
     !! EI = 0 lines (static or dynamic deck), or all finite-EI lines on the standalone
-    !! cubic-Hermite route (dynamic deck, every End B Fixed); flat seabed only.
+    !! cubic-Hermite route (dynamic deck); flat seabed only. The modes hold both line ends, so a
+    !! moving (Coupled/Vessel) End B is held at its static position as End A is.
     TYPE(DeckBody), INTENT(IN) :: bodies(:)
     TYPE(DeckRod), INTENT(IN) :: rods(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
     INTEGER, INTENT(IN) :: n_finite
     LOGICAL, INTENT(IN) :: has_dyn_points, has_failures
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: li, j
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     IF (SIZE(bodies) > 0 .OR. SIZE(rods) > 0 .OR. has_dyn_points .OR. has_failures .OR. SIZE(lines) == 0) THEN
@@ -31276,13 +31440,6 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'OPTION nModes on finite-EI lines needs a dynamic deck (dtM, TMax) whose '// &
                   'lines are all finite-EI'); RETURN
       END IF
-      DO li = 1, SIZE(lines)
-        j = find_point(points, lines(li)%nodeB)
-        IF (j < 1) CYCLE
-        IF (TRIM(points(j)%ptype) /= 'fixed') THEN
-          CALL fail(ErrStat, ErrMsg, 'OPTION nModes on finite-EI lines needs every End B Fixed'); RETURN
-        END IF
-      END DO
     END IF
   END SUBROUTINE check_modal_deck
 
@@ -38162,6 +38319,14 @@ CONTAINS
     TYPE(DeckLine), INTENT(IN) :: ln
     at_a = line_torsion_active(ln) .AND. ln%tors_mode(1) /= TORS_FREE
   END FUNCTION line_torsion_at_a
+
+  PURE LOGICAL FUNCTION line_torsion_at_b(ln) RESULT(at_b)
+    !! The line is solved in torsion and its End B is restrained in torsion: a moving End B's
+    !! object (a line between two moving points) takes the torque, and its turn or roll twists
+    !! the line.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    at_b = line_torsion_active(ln) .AND. ln%tors_mode(2) /= TORS_FREE
+  END FUNCTION line_torsion_at_b
 
   SUBROUTINE resolve_one_end_torsion(types, bodies, rods, points, lines, sections, opts, caller_driven)
     !! A finite-EI line restrained in torsion at one end only (the other end TorsStiffness Free,

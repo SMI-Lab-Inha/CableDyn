@@ -126,8 +126,8 @@ Environment and seabed
      - finite, ≥ 0. Anisotropic seabed friction of line nodes (the axial/normal pair of
        OrcaFlex, by Orcina): the coefficient along the line and across it. A row omitted takes
        ``frictionMu``; both must then be positive, or both zero. An equal pair is the isotropic
-       law bit-for-bit. Rods and bodies, which have no line axis, use the lateral coefficient;
-       the finite-EI two-moving-end route rejects an unequal pair. The route limits of
+       law bit-for-bit. Rods and bodies, which have no line axis, use the lateral coefficient.
+       The route limits of
        ``frictionMu`` apply. Aliases: ``frictionMu_axial``, ``mu_axial``, ``muaxial`` for the
        axial coefficient; ``frictionMu_lateral``, ``mu_lateral``, ``mulateral``,
        ``frictionMuNormal``, ``frictionMu_normal`` for the lateral one. See :doc:`theory`
@@ -156,8 +156,9 @@ Environment and seabed
        known. Used only with ``frictionMu > 0`` and a seabed; rejected where the static
        equilibrium solves the lines without seabed friction: on decks with bodies, rods or
        ``Connect``/``Free`` points (``frictionMu`` itself is accepted on the default monolithic
-       body and rod march), and on the finite-EI two-moving-end route (a line whose End B is
-       not ``Fixed``, as a line shared between two turbines). See
+       body and rod march), and on a finite-EI line between two moving points (End B on a
+       ``Coupled``/``Vessel`` point, as a line shared between two turbines), which has no anchored
+       end to lay it from. See
        :ref:`friction in statics <static-friction>`
      - both
      - ``asLaid staticsFriction``
@@ -612,8 +613,9 @@ Ambient fluid and prescribed motion
        tangent stiffness, structural plus added mass, ends held), written to
        ``<root>.modes.out`` before any dynamic march. Decks of lines between Fixed and
        Coupled/Vessel points on a flat ``WtrDpth`` seabed: all ``EI = 0`` lines (static or
-       dynamic deck), or all finite-EI lines on the cubic-Hermite route (dynamic deck, every
-       End B Fixed). Other decks are rejected; a deck that mixes ``EI = 0`` and finite-EI
+       dynamic deck), or all finite-EI lines on the cubic-Hermite route (dynamic deck; a moving
+       End B is held at its static position, as End A is). Other decks are rejected; a deck that
+       mixes ``EI = 0`` and finite-EI
        lines stops with ``OPTION nModes is not supported for mixed EI=0/finite-EI decks;
        remove it or set it to 0``. A line restrained in torsion adds the twist angle of every
        node to its modes (``PolarShare`` and ``dTwist`` in :doc:`outputs`). The banded solver has

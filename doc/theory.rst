@@ -971,8 +971,7 @@ needed: the Hermite tangent and the integrated lift leave no mesh-scale mode for
 pump, and the response is the same from ``dtM`` 5e-4 to 1e-2 s. A finite-EI line with
 :math:`EI \to 0` reproduces the ``EI = 0`` line's lock-in. The standalone Hermite march
 and the multibody march (a cable on a body or rod, or beside free points) carry it, including
-deck waves and current through the held fluid field; a finite-EI line with two moving ends
-refuses :math:`C_L > 0`.
+deck waves and current through the held fluid field, on a line with one or two moving ends.
 
 VIV runs on every route that carries the line: the standalone driver, the coupled OpenFAST
 and FAST.Farm routes and the standalone runner of a mixed ``EI = 0`` / finite-EI deck. On the

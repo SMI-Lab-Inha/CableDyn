@@ -21,7 +21,10 @@ Gates, each on the driver's own output files:
   ``TDP<L>Grd = 0``, and the held end state is the suspended elastic catenary;
 * sloped seabed: a finite-EI cable laid down a slope from its anchor keeps the down-slope pull,
   so its anchor force runs along the floor and ``AnchTen`` continues the line tension;
-* fail-closed contracts: unknown lines and the two-moving-end finite-EI route reject the names.
+* fail-closed contracts: unknown lines reject the names;
+* a finite-EI line shared by two turbines (both ends moving, the cubic-Hermite route drives End B
+  too): AnchFz is the vertical force on its End B point, minus half the line's submerged weight
+  for the symmetric hang at rest (the end force carries the end node's share of the weight).
 
 usage: test_anchor_uplift.py --exe <cabledyn> --examples <examples dir> --output <dir>
 """
@@ -579,8 +582,17 @@ AnchTen1 AnchFz1
     (out / "two_end.dat").write_text(two_end, encoding="utf-8", newline="\n")
     proc = subprocess.run([args.exe, str(out / "two_end.dat"), str(out / "two_end")], capture_output=True,
                           text=True, env=env)
-    check(proc.returncode != 0 and "AnchFz/AnchFH channels are not available on the two-moving-end" in
-          proc.stdout + proc.stderr, "the two-moving-end finite-EI route rejects AnchFz by name")
+    check(proc.returncode == 0, "the finite-EI line between two turbines runs (rc %d)" % proc.returncode)
+    if proc.returncode == 0:
+        rows = [ln.split() for ln in (out / "two_end.out").read_text(encoding="utf-8").splitlines()[2:]]
+        anch_ten, anch_fz = float(rows[0][1]), float(rows[0][2])
+        # the symmetric hang: each end carries half the submerged weight w L / 2
+        w_sub = (250.0 - 1025.0 * math.pi * 0.2**2 / 4.0) * 9.80665
+        half = 0.5 * w_sub * 75.0
+        print(f"two moving ends: AnchFz1 {anch_fz:.6e} N, -w L / 2 = {-half:.6e} N, AnchTen1 {anch_ten:.6e} N")
+        check(abs(anch_fz + half) <= 1.0e-6 * half,
+              "AnchFz of a moving End B is the vertical end force, -w L / 2 for the symmetric hang")
+        check(abs(anch_fz) < anch_ten, "the vertical End B force is below the End B tension")
 
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0

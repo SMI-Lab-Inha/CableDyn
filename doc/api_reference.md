@@ -77,8 +77,8 @@ follow `CD_[Action]_[Object]`.
 
 ## Secondary Cosserat path
 
-The rotation-DOF Cosserat rod path (CTest label `cosserat`) backs the finite-EI compatibility
-route for lines with two moving ends.
+The rotation-DOF Cosserat rod path (CTest label `cosserat`) is a separate, verified library path;
+no deck route runs on it (a finite-EI line with two moving ends runs on the cubic-Hermite route).
 
 ```{list-table}
 :header-rows: 1
@@ -95,7 +95,7 @@ route for lines with two moving ends.
 * - `CableDyn_CosseratDynamic`, `CableDyn_CosseratEMC`
   - generalised-α dynamics and an energy-conserving integrator option
 * - `CableDyn_FiniteEIModel`, `CableDyn_FiniteEIStatic`
-  - the finite-EI compatibility-route model and grounded static equilibrium
+  - the Cosserat-path line model and its grounded static equilibrium
 ```
 
 ## Hydrodynamics and contact
