@@ -54,15 +54,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   continues bit for bit.
 - OpenFAST linearisation of finite-EI lines restrained in torsion: the twist angles of the nodes
   the end frames do not hold, and their rates, are continuous states (`Cable 1 node 2 twist,
-  rad`); the coupled point's orientation turns the line's End A frame, its angular velocity and
-  acceleration reach the torsional damping and the held end section's inertia, and the fairlead
+  rad`); the coupled point's orientation turns the torsion frame of the line's coupled
+  (host-driven) end, its angular velocity and acceleration reach the torsional damping and the
+  held end section's inertia, and the fairlead
   moment carries the torque. A straight line's torsional modes from the eigenvalues of `A` are
   the lumped chain's to 5e-14 (the continuum's `nπ/L √(GJ/Irn)` less the discretisation error,
   1.6e-4 for the first mode at 50 elements) and its roll stiffness `D − C A⁻¹ B` is `GJ/L` to
   1.5e-14; a 90° twisted lazy wave matches the deck's static solutions for a rolled and a moved
-  fairlead to 4.9e-4. Under linearisation the coupled-point rotation is stepped by 1e-4 rad
-  instead of 0.1 rad, which changes the rotation columns of a deck with a hang-off spring by up
-  to 0.17 %.
+  fairlead to 4.9e-4. In a `Linearize = True` run every input Jacobian, those of the time march
+  included, steps the coupled-point rotation by 1e-4 rad instead of 0.1 rad, which changes the
+  rotation columns of a deck with a hang-off spring by up to 0.17 %.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their

@@ -27,7 +27,8 @@ angle convention visible directly in an OpenFAST run log. The module covers Moor
 integration surface: coupled time-domain analysis at a 0.1 s CableDyn step by default (with deck
 ``dtM`` control), a nonzero initial platform displacement (``PtfmInit``), glue correction iterations
 (``NumCrctn > 0``), SeaState wave/current kinematics on the moorings and finite-EI cables,
-checkpoint-restart, quasi-static linearisation (``dYdu``), FAST.Farm farm-level shared moorings
+checkpoint-restart, linearisation with the line dynamics (the line, cable and twist states, as
+MoorDyn-F's; see :doc:`openfast`), FAST.Farm farm-level shared moorings
 (``Mod_SharedMooring = 5``), coupled ``Rigid6`` 6-DOF rigid bodies (buoyancy,
 ``C33``/``C44``/``C55`` hydrostatic restoring, restart state, and SeaState drag / Froude-Krylov /
 added-mass), including MoorDyn-F's coupled pinned bodies (``CoupledPinned``, force only), coupled
@@ -36,12 +37,14 @@ coupled rigid rods with host-driven endpoints, correction rewind, checkpoint sta
 Gauss SeaState sampling, including MoorDyn-F's coupled pinned rods (``CoupledPinned``, force only)
 and rods pinned to a fixed point.
 
-The input/output Jacobian has two deliberately different contracts. During an ordinary nonlinear
-OpenFAST run, CableDyn returns the partial direct-feedthrough derivative at fixed committed internal
-state, which is the derivative required by OpenFAST's algebraic input/output solve. During formal
-linearisation, where CableDyn exposes a zero-state quasi-static representation, it instead returns
-the re-equilibrated zero-frequency mooring stiffness. Substituting the latter into the runtime glue
-solve is mathematically incorrect; changing ``NumCrctn`` does not change that derivative contract.
+The input/output Jacobian is a partial derivative in both kinds of run. During an ordinary
+nonlinear OpenFAST run, CableDyn returns the direct-feedthrough derivative at fixed committed
+internal state, which is the derivative OpenFAST's algebraic input/output solve requires. During
+formal linearisation (``Linearize = True``) the line and cable degrees of freedom, and the twist
+angles of a line restrained in torsion, are continuous states, and ``A``, ``B``, ``C`` and ``D``
+are partial derivatives of the line dynamics at the operating point; the static mooring stiffness
+is their zero-frequency reduction ``D − C A⁻¹ B``, not a derivative CableDyn returns. Changing
+``NumCrctn`` does not change either contract.
 
 .. admonition:: Remaining integration surface
    :class: warning

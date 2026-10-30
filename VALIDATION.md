@@ -410,7 +410,7 @@ scripts, results, and source provenance are in
   - *Linearisation of a line restrained in torsion*
     ([`validation/scripts/openfast_lin_torsion.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/openfast_lin_torsion.py),
     same case): the twist angles of the free nodes and their rates are states, and the platform
-    rotation turns the End A frame. A straight, taut 100 m line (`GJ` 5e4 N·m², `Irn` 2 kg·m, 50
+    rotation turns the torsion frame of the coupled (host-driven) end. A straight, taut 100 m line (`GJ` 5e4 N·m², `Irn` 2 kg·m, 50
     elements, rigid in torsion at both ends) has torsional modes in the eigenvalues of `A` equal
     to the lumped chain's `2 √(GJ/Irn)/h sin(nπ/2N)` to 5e-14. They lie −1.6e-4, −6.6e-4 and
     −1.5e-3 below the continuum's `nπ/L √(GJ/Irn)`, the discretisation error. The fairlead moment
@@ -424,8 +424,9 @@ scripts, results, and source provenance are in
     reciprocal moment row. `tests/test_lin_torsion.f90` repeats the straight-line gates with the
     shell's evaluation sequence on the aggregate. It adds the condensed torsion, an elastic
     torsional end (`1/(L/GJ + 1/kₜ)`), and the platform's angular rates: `Bt/L` per unit angular
-    velocity and the held end section's `Irn lₑ/2` per unit angular acceleration. Under
-    linearisation the platform rotation is stepped by 1e-4 rad instead of 0.1 rad. On a straight
+    velocity and the held end section's `Irn lₑ/2` per unit angular acceleration. In a
+    `Linearize = True` run every input Jacobian steps the platform rotation by 1e-4 rad instead of
+    0.1 rad. On a straight
     line with a 2e5 N·m/rad hang-off spring, this brings the force per unit rotation to 4e-8 of
     the static solutions (6.8e-6 with 0.1 rad).
 

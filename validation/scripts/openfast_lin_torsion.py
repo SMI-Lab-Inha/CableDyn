@@ -54,7 +54,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -62,7 +61,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import openfast_lin_ab as ab  # noqa: E402
+import openfast_lin_ab as ab
 
 RHOW = 1025.0
 GJ = 5.0e4
@@ -202,7 +201,7 @@ def driver_solve(driver: Path, text: str, work: Path) -> dict:
                         "--------------------- OUTPUTS", 1)
     (work / "trial.dat").write_text(text)
     proc = subprocess.run([str(driver), "trial.dat", "trial"], cwd=work, capture_output=True, text=True,
-                          timeout=3600)
+                          timeout=3600, check=False)
     if proc.returncode != 0:
         tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-15:])
         ab.die(f"driver failed:\n{tail}")

@@ -59,10 +59,12 @@ contributions. The `eps_fd` argument must be non-negative and does not affect th
 call leaves the handle at the supplied operating point; a caller that needs its previous state
 must save and restore it.
 
-**Two derivative contracts in OpenFAST.** During a nonlinear OpenFAST run the shell returns the
+**Derivatives in OpenFAST.** During a nonlinear OpenFAST run the shell returns the
 direct-feedthrough derivative at fixed committed internal state, which the host's input–output
-solve requires. During linearisation it returns the re-equilibrated zero-frequency mooring
-stiffness. The two are not interchangeable.
+solve requires. During linearisation the line and cable degrees of freedom (with the twist angles
+of a line restrained in torsion) are continuous states and the shell returns the partial
+derivatives `A`, `B`, `C`, `D` of the line dynamics; the static mooring stiffness is their
+zero-frequency reduction `D − C A⁻¹ B` (see [OpenFAST](openfast.rst)).
 
 ## Cadence
 
@@ -126,7 +128,7 @@ point mesh. It supports:
 - nonzero `PtfmInit` and correction iterations;
 - checkpoint/restart, with continuous states (including constitutive and rigid-body states)
   stored in the OpenFAST state record;
-- quasi-static linearisation;
+- linearisation with the line dynamics (line, cable and twist states, as MoorDyn-F's);
 - FAST.Farm shared moorings;
 - line failures, and active tension control of `EI = 0` lines and finite-EI cables;
 - WaterKin files with independent selection of host wave and host current. SeaState's standard

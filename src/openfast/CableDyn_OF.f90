@@ -2949,9 +2949,18 @@ CONTAINS
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
          CALL restore; RETURN
       END IF
+      ! (The operating-point outputs of the .lin file come from CD_CalcOutput, which keeps the
+      ! committed state's accelerations and the end-frame rates of its last step's turn; at a
+      ! settled operating point, such as the still-water start the documentation prescribes,
+      ! they are those of this surface, and the matrices are differences of this surface alone.)
       DO ic = 1, Inst(id)%agg%ncable
          CALL CD_HFMF_Set_Twist_Frame_Rates( Inst(id)%agg%cables(ic), es, em )
-         IF (es == CD_HFMF_OK) CALL CD_HFMF_Refresh_Acceleration( Inst(id)%agg%cables(ic), es, em )
+         IF (es /= CD_HFMF_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
+                             ' torsion end-frame rates: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+            CALL restore; RETURN
+         END IF
+         CALL CD_HFMF_Refresh_Acceleration( Inst(id)%agg%cables(ic), es, em )
          IF (es /= CD_HFMF_OK) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: cable '//TRIM(Num2LStr(ic))// &
                              ' acceleration: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
@@ -3532,16 +3541,21 @@ CONTAINS
       ! the constitutive states: a viscoelastic slow-branch stretch (m) takes the position step,
       ! a Syrope slow strain the strain of a micrometre over a metre
       REAL(R8Ki), PARAMETER     :: LIN_DSLOW = 1.0E-6_R8Ki
-      ! the nodal twist: an angle enters the element twists and torques linearly, so the angle
-      ! step takes the position step's 1e-6 (rad), and its rate only the linear torsional
-      ! damping, so any rate step is exact up to round-off: 0.01 rad/s
+      ! the nodal twist: at a fixed configuration the element twist phi_{e+1} - phi_e + rho_e(q)
+      ! (with GJ|K, + (K/GJ)(l_e - l0), which the angles do not change) and so the torques and
+      ! their forces M_e drho_e/dq on the cable are affine in the angles; the coupling of the
+      ! angles to the configuration (rho_e, the stretch) is not, and the angle takes the
+      ! position step's 1e-6 rad, as the r and m it is differenced with. A rate enters only the
+      ! linear torsional damping, so any rate step is exact up to round-off: 0.01 rad/s
       REAL(R8Ki), PARAMETER     :: LIN_DPHI = 1.0E-6_R8Ki, LIN_DW = 1.0E-2_R8Ki
-      ! the coupled-point rotation step under linearization: a rotation moves no node, so
+      ! the coupled-point rotation step of a linearization run: a rotation moves no node, so
       ! neither contact nor slack constrains it, and the turn of a torsion end frame about axes
       ! across its director (a solid angle) or of an end connection's direction is nonlinear:
       ! 1e-4 rad keeps the central difference's O(h^2) error near 1e-9 and the difference of the
-      ! moments and accelerations some eight digits above round-off (the time-domain input
-      ! Jacobian keeps 0.1 rad)
+      ! moments and accelerations some eight digits above round-off. In a Linearize run every
+      ! input Jacobian goes through lin_eval with this step, the glue's time-domain
+      ! input-output solves before the linearization times included; a run without
+      ! Linearize keeps 0.1 rad
       REAL(R8Ki), PARAMETER     :: LIN_DROT = 1.0E-4_R8Ki
       LOGICAL, ALLOCATABLE      :: lin1m(:)
       INTEGER(IntKi)            :: kind1, ntw

@@ -451,12 +451,17 @@ A line restrained in torsion adds the twist angle of every node that its end fra
 (all nodes but a torsionally ``Rigid`` end), after the cables' positions and tangents, and their
 rates after the cables' velocities: ``Cable 1 node 2 twist, rad`` and ``Cable 1 node 2 twist
 rate, rad/s``. The angles' accelerations come from the same evaluation as the cable's, with their
-polar inertia ``Irn``. The coupled point's orientation turns the line's End A frame, so a platform
-rotation twists the line; the point's angular velocity and acceleration turn the frame too, for the
-torsional damping ``Bt`` and the held end section's polar inertia. The fairlead moment carries the
-torque. Angles are stepped by 1 µrad and their rates by 0.01 rad/s, both of which enter linearly; the
-coupled-point rotation is stepped by 1e-4 rad (a rotation moves no node, so no contact or slack
-limits it, and the turn of an end frame or connection direction is nonlinear).
+polar inertia ``Irn``. The coupled point's orientation turns the torsion frame of the line's
+coupled (host-driven) end, so a platform rotation twists the line; the point's angular velocity and
+acceleration turn that frame too, for the torsional damping ``Bt`` and the held end section's polar
+inertia. The fairlead moment carries the torque. Angles are stepped by 1 µrad, as positions, and
+their rates by 0.01 rad/s (they enter only the linear damping). In a ``Linearize = True`` run the
+coupled-point rotation is stepped by 1e-4 rad, also in the input Jacobians of the time march
+before the linearisation times (a rotation moves no node, so no contact or slack limits it, and the
+turn of an end frame or connection direction is nonlinear); a run without linearisation keeps
+0.1 rad. The ``.lin`` operating-point outputs are those of the committed step; at a settled
+operating point, such as the still-water start, they lie on the linearised surface, while at a
+moving one the accelerations and the end-frame rates of the last step enter them.
 
 The zero-frequency reduction ``D − C A⁻¹ B`` is the static mooring stiffness. It agrees with
 MoorDyn-F and with CableDyn's own static solutions (:doc:`validation`). Quadratic drag has no
