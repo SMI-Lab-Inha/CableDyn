@@ -442,7 +442,8 @@ post-buckled states of the validation (see :doc:`validation`) that rate is 0.05 
 same term enters the dynamic effective tangent, scaled by :math:`1 - \alpha_f` of the force
 blend, and is frozen together with a reused factorisation.
 
-**Statics and stability.** The imposed twist is the last static load stage, ramped from the
+**Statics and stability.** The imposed twist is the last static load stage (on a line with
+``ATTACHMENTS``, after the attachment polish, on the discrete equilibrium), ramped from the
 geometric twist of the untwisted equilibrium in steps of at most :math:`\pi/4`. Each converged
 stage is tested for stability by the inertia of :math:`\mathbf{K}` on the free DOFs,
 :math:`\operatorname{neg}(\mathbf{K}) = \operatorname{neg}(\mathbf{B}) -

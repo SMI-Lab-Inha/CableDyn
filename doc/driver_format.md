@@ -862,7 +862,7 @@ Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B
 `GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point or a Rigid6
 `Body<N>` point; in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
 (see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
-torsion on an `EI = 0` line, on a rod end or on a `Point3` body, a line with `ATTACHMENTS`,
+torsion on an `EI = 0` line, on a rod end or on a `Point3` body,
 modal analysis (`nModes`), a dynamic or coupled run with `False alpha_force_blend`, any
 restrained end (one end included) in a standalone deck mixing `EI = 0` and finite-EI lines
 without a body or through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line
@@ -945,7 +945,10 @@ Behaviour:
 - The static equilibrium is solved first with each attachment's net weight spread over the two
   elements at its node, then carried to the discrete loads by continuation. The current drag
   depends on the node's depth and line direction, so the final solve is repeated until the
-  node positions change by less than 1e-9 m.
+  node positions change by less than 1e-9 m. On a line restrained in torsion the torsion stage
+  (the imposed twist) follows on the discrete equilibrium, with the attachments' net weights
+  and drag as nodal loads (the drag again to a fixed point), so a run starts in the twisted
+  equilibrium. An attachment adds no polar inertia to the line's twist.
 - A row fails if the line is not finite-EI, the arc lies beyond the line, every one of `Mass`,
   `Volume`, `CdA` and `CdAx` is zero, a value is negative or non-finite, or a series has a
   non-positive

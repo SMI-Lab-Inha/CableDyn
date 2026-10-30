@@ -393,10 +393,9 @@ Torsion
        with Fixed End B``
      - torsion is solved on cubic-Hermite lines whose End B is an anchor.
    * - ``a torsional END CONNECTION on a rod end is not supported`` / ``on a body needs a Rigid6
-       body`` / ``torsion is not combined with ATTACHMENTS in this build``
+       body``
      - outside the torsion scope (:doc:`capabilities`). Move End A to a ``Fixed``,
-       ``Coupled``/``Vessel`` point or a Rigid6 body, or represent the modules as a smeared
-       buoyancy section.
+       ``Coupled``/``Vessel`` point or a Rigid6 body.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
      - the standalone deck that mixes ``EI = 0`` and finite-EI lines without a body, and the C
        API's ``CableDyn_InitDeck``/``InitDeckAt``, move the line ends by translation only. Run the
