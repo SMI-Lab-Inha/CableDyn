@@ -246,9 +246,11 @@ MODULE CableDyn_OpenFAST_Aggregate
     REAL(wp), ALLOCATABLE :: hf_q(:), hf_v(:), hf_a(:)
     REAL(wp), ALLOCATABLE :: hb_pos(:, :), hb_vel(:, :), hb_acc(:, :), hb_load(:, :)
     ! The bodies and rods carry the accelerations of a committed step or of a restored state mirror;
-    ! until then a transfer of the step-start host kinematics re-solves their start accelerations
-    ! (start_object_accelerations), so the mirror carries them from t = 0.
+    ! until then a transfer of the step-start host kinematics or new host fluid fields re-solve
+    ! their start accelerations (start_object_accelerations), so the mirror carries them from
+    ! t = 0, in the host's field. snap_objects_committed joins the aggregate snapshot.
     LOGICAL :: objects_committed = .FALSE.
+    LOGICAL :: snap_objects_committed = .FALSE.
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_AGG_ModuleType
 
@@ -1304,6 +1306,9 @@ CONTAINS
     ! only sys%fast%system); capture them so a correction rewind un-advances the body too.
     IF (self%has_rigid6) CALL CD_Rigid6_Snapshot(self%rigid6)
     IF (self%has_rod) CALL CD_Rod_Snapshot(self%rod)
+    ! a rewind to a state before the first step takes the start accelerations open again (new
+    ! fluid fields re-solve them)
+    self%snap_objects_committed = self%objects_committed
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_Snapshot
@@ -1338,6 +1343,7 @@ CONTAINS
     IF (ALLOCATED(self%snap_failures)) self%failures = self%snap_failures
     IF (self%has_rigid6) CALL CD_Rigid6_Restore(self%rigid6)
     IF (self%has_rod) CALL CD_Rod_Restore(self%rod)
+    self%objects_committed = self%snap_objects_committed
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_Restore
@@ -1557,6 +1563,9 @@ CONTAINS
     !! drag configuration, so the model layer alone cannot catch them).
     !! dynamic_pressure (optional, Pa, shaped (nfluid)): the wave dynamic pressure at the nodes;
     !! the rod blocks use it for the end-cap pressure (other blocks ignore it).
+    !! Before the first committed step (and before a state mirror is restored) the integrated
+    !! bodies and rods re-solve their start accelerations in the new fields: the accelerations
+    !! solved at Init saw the zero fields of the build, and the first step starts from them.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: fluid_velocity(:, :), fluid_acceleration(:, :), waterline_z(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1681,9 +1690,50 @@ CONTAINS
         RETURN
       END IF
     END IF
+    ! the start of the first step: the bodies' and rods' accelerations in the host's field (the
+    ! OpenFAST shell sets its t = 0 field at Init, before the output call and its mirror restore)
+    IF (.NOT. self%objects_committed .AND. (self%has_rigid6 .OR. self%has_rod)) THEN
+      CALL start_in_fluid_fields(self, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) RETURN
+    END IF
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_SetFluidFields
+
+  SUBROUTINE start_in_fluid_fields(self, ErrStat, ErrMsg)
+    !! The start of the first step in new host fluid fields (CD_AGG_SetFluidFields before the first
+    !! committed step): a committed transfer of the EI=0 system's present moving-point kinematics,
+    !! which solves the line interior accelerations in the fields (the end-node loads on the
+    !! objects carry their consistent inertia), then the bodies' and rods' start accelerations --
+    !! the start a step-start transfer (CD_AGG_UpdateStates_Moving) gives in the same fields.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: pos(:, :), vel(:, :), acc(:, :), load(:, :)
+    INTEGER :: n, es, stat
+    CHARACTER(1024) :: em
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+    IF (.NOT. self%has_sys) RETURN
+    n = CD_FMF_NMovingPoints(self%sys, es, em)
+    IF (es /= CD_FMF_OK) THEN
+      CALL map_fmf_status(es, em, ErrStat, ErrMsg)
+      RETURN
+    END IF
+    ALLOCATE (pos(3, n), vel(3, n), acc(3, n), load(3, n), STAT=stat)
+    IF (stat /= 0) THEN
+      ErrStat = CD_AGG_ALLOCFAIL
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: start-state workspace allocation failed'
+      RETURN
+    END IF
+    CALL CD_FMF_GetMovingPointMesh(self%sys, pos, vel, acc, load, es, em)
+    IF (es == CD_FMF_OK) CALL CD_FMF_UpdateStates_Moving(self%sys, pos, vel, acc, es, em)
+    IF (es /= CD_FMF_OK) THEN
+      CALL map_fmf_status(es, em, ErrStat, ErrMsg)
+      RETURN
+    END IF
+    CALL start_object_accelerations(self, ErrStat, ErrMsg)
+  END SUBROUTINE start_in_fluid_fields
 
   SUBROUTINE CD_AGG_CalcOutput(self, ErrStat, ErrMsg)
     !! Compute the EI=0 system loads at the current committed state (stored in the system's
@@ -2444,8 +2494,9 @@ CONTAINS
 
   SUBROUTINE start_object_accelerations(self, ErrStat, ErrMsg)
     !! Solve the start accelerations of the integrated bodies and rods at the current state
-    !! (CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations): at Init and at a committed
-    !! transfer of the step-start kinematics before the first step. The OpenFAST shell restores
+    !! (CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations), in the held fluid fields: at
+    !! Init and, before the first step, at a committed transfer of the step-start kinematics and
+    !! at new host fluid fields (CD_AGG_SetFluidFields). The OpenFAST shell restores
     !! the state mirror after every CalcOutput, which marks the object accelerations committed;
     !! solved here, the mirror carries the start accelerations, and the first step starts from them
     !! instead of from zero.

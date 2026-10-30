@@ -35,7 +35,16 @@ PROGRAM test_openfast_pinned_body
   !!      CoupledPinned rods march bit for bit as without the restore;
   !!  11) a CoupledPinned body outside a coupled host, without inertia, or under the linearisation
   !!      probe (coupled_positions) is refused by name, and so is MoorDyn-F's inertialF 0 (CableDyn
-  !!      always returns the inertia; inertialF 1 is accepted).
+  !!      always returns the inertia; inertialF 1 is accepted);
+  !!  12) in a host fluid field (a current and a fluid acceleration at every node) a Free Rigid6 body
+  !!      and a Free rod start from their accelerations in that field: after CD_AGG_SetFluidFields
+  !!      the body's start acceleration differs from the still-water one by the drag over the
+  !!      effective mass, 0.5 rhoW CdA |U| U / (m + rhoW V Ca) (1e-5: the lines' end-node mass is
+  !!      left out), and the first steps of
+  !!      SetFluidFields then Step, of the shell's order (the t = 0 field at Init, the output call
+  !!      and its mirror restore, the field again before the step) and of a correction rewind to
+  !!      before the first step are those of a run whose start accelerations are solved in the
+  !!      field at a step-start transfer, bit for bit, and differ from the still-water start.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -44,7 +53,7 @@ PROGRAM test_openfast_pinned_body
                                          CD_AGG_End, CD_AGG_OK, CD_AGG_HasRigid6, CD_AGG_HasRod, &
                                          CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
                                          CD_AGG_Set_Rigid6_States, CD_AGG_Rod_MirrorSize, CD_AGG_Get_Rod_States, &
-                                         CD_AGG_Set_Rod_States
+                                         CD_AGG_Set_Rod_States, CD_AGG_NFluidNodes, CD_AGG_SetFluidFields
   USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_Get_System_Line_State, &
                              CD_Update_System_Line_Interior_State, CD_SYSTEM_OK, CD_System_NSystemCoupledDOF, &
                              CD_Get_System_CoupledMotion, CD_Update_System_CoupledMotion, CD_Calc_System_CoupledLoads
@@ -55,6 +64,11 @@ PROGRAM test_openfast_pinned_body
   REAL(wp), PARAMETER :: MB = 1000.0_wp, HCG = 2.0_wp, IYY = 500.0_wp, ZPIN = 20.0_wp
   ! the arm of the second route: a 4 m rod, 0.3 m diameter, 75 kg/m, pinned at z = 5 m, 20 deg
   REAL(wp), PARAMETER :: LA = 4.0_wp, DA = 0.3_wp, MA = 300.0_wp, ZA = 5.0_wp, THA = 20.0_wp
+  ! the Free body of gate 12: mass, volume, CdA and Ca
+  REAL(wp), PARAMETER :: FB_M = 5000.0_wp, FB_V = 4.0_wp, FB_CDA = 6.0_wp, FB_CA = 0.8_wp
+  ! gate 12's host field (a current and a fluid acceleration), coupling step and step count
+  REAL(wp), PARAMETER :: FS_U(3) = [0.8_wp, 0.3_wp, 0.0_wp], FS_A(3) = [0.2_wp, 0.0_wp, 0.1_wp], FS_DT = 0.01_wp
+  INTEGER, PARAMETER :: FS_NSTEP = 5
   INTEGER :: nfail
 
   nfail = 0
@@ -69,6 +83,8 @@ PROGRAM test_openfast_pinned_body
   CALL case_mixed_hosts()
   CALL case_shell_start()
   CALL case_refusals()
+  CALL case_fluid_start('pinbody_fluid_body.dat', .FALSE.)
+  CALL case_fluid_start('pinbody_fluid_rod.dat', .TRUE.)
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -1438,5 +1454,215 @@ CONTAINS
     END DO
     CLOSE (u)
   END SUBROUTINE write_zero_inertia
+
+  ! --------------------------------------------------------------------------------------------- !
+  ! 12: start accelerations in the host's fluid field                                             !
+  ! --------------------------------------------------------------------------------------------- !
+
+  SUBROUTINE write_fluid_deck(path, rod)
+    !! A submerged Free object on two taut, nearly massless lines (0.01 kg/m, EA 1e5 N) without
+    !! hydrodynamic coefficients (their end forces neither see the field nor add inertia) to
+    !! anchors at x = +-40 m on the 50 m seabed: rod a horizontal
+    !! Free rod (6 m, 0.5 m diameter, 200 kg/m, Cd 1.2, Ca 1) at z = -20 m, else a Free Rigid6
+    !! body (5000 kg, 4 m^3, CdA 6 m^2, Ca 0.8, CG at the reference point) there with its line
+    !! points 3 m out along x. Released at its deck pose (out of balance).
+    CHARACTER(*), INTENT(IN) :: path
+    LOGICAL, INTENT(IN) :: rod
+    INTEGER :: u
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Free object in a host fluid field'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'dry 0.002 0.01 1.0e5 0.0 0.0 0.0 0.0 0.0 0.0'
+    IF (rod) THEN
+      WRITE (u, '(A)') '--- ROD TYPES ---'
+      WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-)'
+      WRITE (u, '(A)') 'arm 0.5 200.0 1.2 1.0 0 0'
+      WRITE (u, '(A)') '--- RODS ---'
+      WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
+      WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+      WRITE (u, '(A)') '1 arm Free -3.0 0.0 -20.0 3.0 0.0 -20.0 6 -'
+    ELSE
+      WRITE (u, '(A)') '--- BODIES ---'
+      WRITE (u, '(A)') 'ID Type X Y Z Rot1 Rot2 Rot3 Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
+      WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm/rad) (Nm/rad) (m2) (-) '// &
+        '(kgm2) (kgm2) (kgm2)'
+      WRITE (u, '(A,ES24.16,1X,ES24.16,A,ES24.16,1X,ES24.16,A)') '1 Rigid6 0.0 0.0 -20.0 0.0 0.0 0.0 ', FB_M, &
+        FB_V, ' 0.0 0.0 0.0 ', FB_CDA, FB_CA, ' 1.0e4 1.0e4 1.0e4'
+    END IF
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    IF (.NOT. rod) THEN
+      WRITE (u, '(A)') '1 Body1 3.0 0.0 0.0 0 0 0 0'
+      WRITE (u, '(A)') '2 Body1 -3.0 0.0 0.0 0 0 0 0'
+    END IF
+    WRITE (u, '(A)') '3 Fixed 40.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '4 Fixed -40.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    IF (rod) THEN
+      WRITE (u, '(A)') '1 R1B 3 -'
+      WRITE (u, '(A)') '2 R1A 4 -'
+    ELSE
+      WRITE (u, '(A)') '1 1 3 -'
+      WRITE (u, '(A)') '2 2 4 -'
+    END IF
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 dry 47.0 10'
+    WRITE (u, '(A)') '2 dry 47.0 10'
+    CALL write_options(u, 50.0_wp, 'deck')
+    CLOSE (u)
+  END SUBROUTINE write_fluid_deck
+
+  SUBROUTINE set_field(agg, u_c, a_c)
+    !! The uniform host field u_c, a_c at every fluid node, the free surface at z = 0.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
+    REAL(wp), INTENT(IN) :: u_c(3), a_c(3)
+    REAL(wp), ALLOCATABLE :: uf(:, :), af(:, :), wz(:)
+    INTEGER :: nf, es, i
+    CHARACTER(512) :: em
+    nf = CD_AGG_NFluidNodes(agg, es, em)
+    ALLOCATE (uf(3, nf), af(3, nf), wz(nf))
+    DO i = 1, nf
+      uf(:, i) = u_c
+      af(:, i) = a_c
+    END DO
+    wz = 0.0_wp
+    CALL CD_AGG_SetFluidFields(agg, uf, af, wz, es, em)
+    CALL require(es == CD_AGG_OK, 'fluid-start:the host field is accepted: '//TRIM(em))
+  END SUBROUTINE set_field
+
+  SUBROUTINE get_mirror(agg, rod, s)
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
+    LOGICAL, INTENT(IN) :: rod
+    REAL(wp), INTENT(OUT) :: s(:)
+    INTEGER :: es
+    CHARACTER(512) :: em
+    IF (rod) THEN
+      CALL CD_AGG_Get_Rod_States(agg, s, es, em)
+    ELSE
+      CALL CD_AGG_Get_Rigid6_States(agg, s, es, em)
+    END IF
+  END SUBROUTINE get_mirror
+
+  SUBROUTINE case_fluid_start(path, rod)
+    !! Gate 12 for one deck (rod: the Free rod, else the Free Rigid6 body). Every run in the field
+    !! holds FS_U, FS_A and takes FS_NSTEP steps; the mirror after them is compared.
+    CHARACTER(*), INTENT(IN) :: path
+    LOGICAL, INTENT(IN) :: rod
+    TYPE(CD_AGG_ModuleType) :: still, direct, oracle, shell, rewound, drag_only
+    REAL(wp), ALLOCATABLE :: p(:, :), v(:, :), a(:, :), f(:, :)
+    REAL(wp) :: s_still(24), s_dir(24), s_or(24), s_sh(24), s_rw(24)
+    REAL(wp) :: s0(24), s1(24), da(3), da_o(3), ms(24), err_drag
+    INTEGER :: es, n, it
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+
+    CALL write_fluid_deck(path, rod)
+    CALL CD_AGG_Init_From_Deck(still, path, FS_DT, es, em, external_fluid=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'fluid-start:init '//path//': '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_Init_From_Deck(direct, path, FS_DT, es, em, external_fluid=.TRUE.)
+    CALL CD_AGG_Init_From_Deck(oracle, path, FS_DT, es, em, external_fluid=.TRUE.)
+    CALL CD_AGG_Init_From_Deck(shell, path, FS_DT, es, em, external_fluid=.TRUE.)
+    CALL CD_AGG_Init_From_Deck(rewound, path, FS_DT, es, em, external_fluid=.TRUE.)
+    n = CD_AGG_NMovingPoints(still, es, em)
+    CALL require(n == 0, 'fluid-start:no host node '//path)
+    ALLOCATE (p(3, n), v(3, n), a(3, n), f(3, n))
+    p = 0.0_wp
+    v = 0.0_wp
+    a = 0.0_wp
+    ! the body: the start acceleration in a current over the still-water one, against the drag
+    IF (.NOT. rod) THEN
+      CALL CD_AGG_Init_From_Deck(drag_only, path, FS_DT, es, em, external_fluid=.TRUE.)
+      CALL get_mirror(drag_only, rod, s0)
+      CALL set_field(drag_only, FS_U, [0.0_wp, 0.0_wp, 0.0_wp])
+      CALL get_mirror(drag_only, rod, s1)
+      da = s1(7:9) - s0(7:9)
+      da_o = 0.5_wp*RHO*FB_CDA*NORM2(FS_U)*FS_U/(FB_M + RHO*FB_V*FB_CA)
+      err_drag = NORM2(da - da_o)/NORM2(da_o)
+      WRITE (*, '(A,3ES14.6,A,ES10.3)') 'start acceleration in a current, Free body: change ', da, &
+        ' m/s^2, against the drag over the effective mass ', err_drag
+      CALL require(err_drag <= 1.0e-5_wp, 'fluid-start:the body starts from its acceleration in the current')
+      CALL require(MAXVAL(ABS(s1(13:15) - s0(13:15))) <= 1.0e-12_wp*MAX(1.0_wp, MAXVAL(ABS(s0(13:15)))), &
+                   'fluid-start:the drag at the reference point turns nothing')
+      CALL CD_AGG_End(drag_only, es, em)
+    END IF
+    ! still water
+    CALL march_in_field(still, .FALSE., path, p, v, a)
+    CALL get_mirror(still, rod, s_still)
+    ! the host's field, then the steps
+    CALL set_field(direct, FS_U, FS_A)
+    CALL march_in_field(direct, .FALSE., path, p, v, a)
+    CALL get_mirror(direct, rod, s_dir)
+    ! the oracle: the field, then a committed step-start transfer solves the start accelerations
+    CALL set_field(oracle, FS_U, FS_A)
+    CALL CD_AGG_UpdateStates_Moving(oracle, p, v, a, es, em)
+    CALL require(es == CD_AGG_OK, 'fluid-start:step-start transfer: '//TRIM(em))
+    CALL march_in_field(oracle, .FALSE., path, p, v, a)
+    CALL get_mirror(oracle, rod, s_or)
+    ! the OpenFAST shell: the t = 0 field at Init, the output call and its mirror restore, the
+    ! field of the step's end before the step
+    CALL set_field(shell, FS_U, FS_A)
+    CALL CD_AGG_CalcOutput(shell, es, em)
+    CALL CD_AGG_GetMovingPointMesh(shell, p, v, a, f, es, em)
+    CALL get_mirror(shell, rod, ms)
+    IF (rod) THEN
+      CALL CD_AGG_Set_Rod_States(shell, ms, es, em)
+    ELSE
+      CALL CD_AGG_Set_Rigid6_States(shell, ms, es, em)
+    END IF
+    CALL require(es == CD_AGG_OK, 'fluid-start:mirror restore: '//TRIM(em))
+    CALL march_in_field(shell, .TRUE., path, p, v, a)
+    CALL get_mirror(shell, rod, s_sh)
+    ! a correction rewind of the first step to the snapshot before it, then the field and the steps
+    ! again
+    CALL CD_AGG_Snapshot(rewound, es, em)
+    CALL set_field(rewound, FS_U, FS_A)
+    CALL CD_AGG_Step_Moving(rewound, FS_DT, p, v, a, cv, st, it, es, em, t_committed=FS_DT)
+    CALL require(es == CD_AGG_OK .AND. cv, 'fluid-start:first step before the rewind: '//TRIM(em))
+    CALL CD_AGG_Restore(rewound, es, em)
+    CALL require(es == CD_AGG_OK, 'fluid-start:rewind: '//TRIM(em))
+    CALL set_field(rewound, FS_U, FS_A)
+    CALL march_in_field(rewound, .FALSE., path, p, v, a)
+    CALL get_mirror(rewound, rod, s_rw)
+    WRITE (*, '(A,A,A,ES10.3,A,3ES10.3)') 'start in the host field, ', path, ': field vs still water ', &
+      nan_max_abs(s_dir - s_still), '; vs the transfer-solved start: direct, shell order, rewind ', &
+      nan_max_abs(s_dir - s_or), nan_max_abs(s_sh - s_or), nan_max_abs(s_rw - s_or)
+    CALL require(nan_max_abs(s_dir - s_still) > 1.0e-6_wp, 'fluid-start:the field changes the first steps '//path)
+    CALL require(nan_max_abs(s_dir - s_or) <= 0.0_wp, &
+                 'fluid-start:SetFluidFields then Step starts from the accelerations in the field '//path)
+    CALL require(nan_max_abs(s_sh - s_or) <= 0.0_wp, 'fluid-start:the shell order starts from them '//path)
+    CALL require(nan_max_abs(s_rw - s_or) <= 0.0_wp, 'fluid-start:a rewind before the first step too '//path)
+    CALL CD_AGG_End(still, es, em)
+    CALL CD_AGG_End(direct, es, em)
+    CALL CD_AGG_End(oracle, es, em)
+    CALL CD_AGG_End(shell, es, em)
+    CALL CD_AGG_End(rewound, es, em)
+  END SUBROUTINE case_fluid_start
+
+  SUBROUTINE march_in_field(agg, refresh, path, p, v, a)
+    !! FS_NSTEP steps of gate 12 with the host node set (p, v, a) held; refresh sets the field
+    !! again before each step, as the shell samples it at every step's end.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
+    LOGICAL, INTENT(IN) :: refresh
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), INTENT(IN) :: p(:, :), v(:, :), a(:, :)
+    INTEGER :: step, it, es
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+    DO step = 1, FS_NSTEP
+      IF (refresh) CALL set_field(agg, FS_U, FS_A)
+      CALL CD_AGG_Step_Moving(agg, FS_DT, p, v, a, cv, st, it, es, em, t_committed=REAL(step, wp)*FS_DT)
+      CALL require(es == CD_AGG_OK .AND. cv, 'fluid-start:step '//path//': '//TRIM(em))
+      IF (es /= CD_AGG_OK) RETURN
+    END DO
+  END SUBROUTINE march_in_field
 
 END PROGRAM test_openfast_pinned_body

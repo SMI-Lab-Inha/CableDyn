@@ -1137,7 +1137,8 @@ set_tests_properties(openfast_pinned_rod PROPERTIES LABELS "fortran;dynamic;open
 # a held node, a constant node acceleration against closed forms, a CoupledPinned rod of the same
 # inertia as a second route, a symmetric mooring that does not turn the body, the output probe,
 # snapshot/restore and restart, PtfmInit with the static start, sub-cycling, the OpenFAST shell's
-# state-mirror restore before the first step, and the refusals.
+# state-mirror restore before the first step, the refusals, and the start of Free bodies and rods
+# in a host fluid field.
 add_executable(test_openfast_pinned_body tests/test_openfast_pinned_body.f90)
 target_link_libraries(test_openfast_pinned_body PRIVATE cabledyn_core)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/openfast_pinned_body)

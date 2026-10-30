@@ -2575,8 +2575,11 @@ added mass and line ends at their own points; MoorDyn-F applies the full buoyanc
 MoorDyn's); and the attached ``EI = 0`` lines carry their consistent end-node inertia
 (:math:`m l/3` of the end element, less with the interior following in a step) against
 MoorDyn-F's lumped :math:`m l/2`. The aggregate solves the start accelerations of its bodies and
-rods at initialisation and at a committed transfer of the step-start kinematics, so the state
-mirror the OpenFAST shell restores after its first output call already carries them. The sub-step estimate
+rods at initialisation and, before the first step, at a committed transfer of the step-start
+kinematics and at new host fluid fields (with the line interior accelerations in those fields), so
+the first step starts from the accelerations in the host's field and the state mirror the OpenFAST
+shell restores after its first output call (its ``t = 0`` field is set at initialisation) already
+carries them. The sub-step estimate
 takes the diagonal of :math:`\mathbf{I}_p` against the line springs through their arms from the
 node, the waterplane restoring, and the swing stiffness of the weight and buoyancy turning with
 the body, :math:`|\mathbf{K}_{kk}|` of :math:`\mathbf{K} = -\sum_i[\mathbf{f}_i]_\times[\mathbf{p}_i]_\times`

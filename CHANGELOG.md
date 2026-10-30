@@ -205,8 +205,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations
-  were solved. They are now solved when the module initialises (and at a committed step-start
-  transfer before the first step), and the line ends on a CoupledPinned object move with them.
+  were solved. They are now solved when the module initialises (and, before the first step, at a
+  committed step-start transfer and in new host fluid fields, so a SeaState current or wave starts
+  them in that field), and the line ends on a CoupledPinned object move with them.
   An object in its static equilibrium changes at round-off (1e-12 m and 1e-6 deg over 10 s); one
   started out of balance (`bodyIC deck`) changes by the first step's velocity error, 0.02 m/s and
   0.05 deg for a hanging Pinned rod and up to 0.6 m/s for bodies and rods released far out of
