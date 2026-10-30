@@ -4225,7 +4225,6 @@ class DeckFile:
         and FAST.Farm routes turn the fairlead frame with the platform and accept it.
         """
         # _check_attachments has already accepted every LineID as an integer
-        attachment_lines = {str(_native_int(row.tokens[0])) for row in self._rows("ATTACHMENTS")}
         torsion_lines: set[str] = set()
         has_torsion_column = False
         for line_id, ends in torsion_ends.items():
@@ -4259,11 +4258,6 @@ class DeckFile:
                         f'its LINE TYPES row "{name}" must give an explicit GJ > 0 (the 14-column '
                         "row; torsion has no EI/1.3 default)"
                     )
-            if line_id in attachment_lines:
-                raise DeckFormatError(
-                    f"{self._label}: line {line_id}: torsion is not combined with ATTACHMENTS "
-                    "in this build"
-                )
             if _rod_point(point_types[end_a]) is not None:
                 raise DeckFormatError(
                     f"{self._label}: line {line_id}: a torsional END CONNECTION on a rod end is "

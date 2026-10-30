@@ -2095,6 +2095,13 @@ target_link_libraries(test_torsion_deck PRIVATE cabledyn_core)
 add_test(NAME torsion_deck COMMAND test_torsion_deck)
 set_tests_properties(torsion_deck PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+add_executable(test_torsion_attachments tests/test_torsion_attachments.f90)
+target_link_libraries(test_torsion_attachments PRIVATE cabledyn_core)
+add_test(NAME torsion_attachments
+         COMMAND test_torsion_attachments ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_torsion_attachments.dat
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(torsion_attachments PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
+
 add_executable(test_section_curvature tests/test_section_curvature.f90)
 target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
 add_test(NAME section_curvature COMMAND test_section_curvature)

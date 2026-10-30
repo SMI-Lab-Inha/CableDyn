@@ -1057,7 +1057,7 @@ def test_torsion_scope_rules_follow_the_native_checks():
             f"1 50.0 10.0 0.0 0.0 0.0\n{_BAR} OPTIONS {_BAR}",
         ),
     )
-    _rejects(attachments, "torsion is not combined with ATTACHMENTS")
+    DeckFile.from_text(attachments)  # a torsional line with ATTACHMENTS is accepted
     # restrained at both ends, End B must be Fixed
     _rejects(
         _torsion_two_moving("1 A Pinned 1 0 0 Rigid 0 0 1 0\n"),

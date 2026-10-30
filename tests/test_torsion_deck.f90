@@ -1005,8 +1005,8 @@ CONTAINS
   END SUBROUTINE write_lines
 
   SUBROUTINE check_scope_refusals()
-    !! 6 (continued). Torsion outside its scope stops by name: End A on a rod end, End A on a
-    !! Point3 body, and a torsional line carrying ATTACHMENTS.
+    !! 6 (continued). Torsion outside its scope stops by name: End A on a rod end and End A on a
+    !! Point3 body; a torsional line carrying ATTACHMENTS solves (test_torsion_attachments).
     CHARACTER(120) :: tail(9), ty(4)
     ty(1) = '--- LINE TYPES ---'
     ty(2) = 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
@@ -1055,8 +1055,12 @@ CONTAINS
                      '--- END CONNECTIONS ---', 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist', &
                          '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)', '1 A Rigid 1 0 0 Rigid 0 0 1 0', &
                                       '1 B Rigid 1 0 0 Rigid 0 0 1 0', tail(5:9)])
-    CALL expect_error('a torsional line with ATTACHMENTS is named', 'tdeck_s3.dat', 'tdeck_s3', &
-                      'not combined with ATTACHMENTS')
+    BLOCK
+      LOGICAL :: ok
+      CHARACTER(512) :: em
+      CALL run_deck('tdeck_s3.dat', 'tdeck_s3', ok, em)
+      CALL require(ok, 'a torsional line with ATTACHMENTS solves (got: '//TRIM(em)//')')
+    END BLOCK
   END SUBROUTINE check_scope_refusals
 
 END PROGRAM test_torsion_deck

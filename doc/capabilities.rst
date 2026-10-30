@@ -96,7 +96,7 @@ Line and constitutive capability
        range graphs. Stopped by name: the standalone mixed ``EI = 0`` + finite-EI aggregate and
        ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by translation only),
        OpenFAST linearisation of a line restrained in torsion,
-       rod ends, bodies other than Rigid6, lines with ``ATTACHMENTS``, modal analysis, and
+       rod ends, bodies other than Rigid6, modal analysis, and
        ``False alpha_force_blend``. Not modelled: seabed friction against twist, anisotropic
        sections, self-contact of a loop (see :ref:`theory-torsion`)
    * - Hockling loops, nonlinear cross-section laws
@@ -106,7 +106,8 @@ Line and constitutive capability
        production route
    * - Discrete attachments (``ATTACHMENTS``: buoyancy modules, clumps)
      - Supported
-     - lumped at nodes of a finite-EI cable, standalone and coupled; rejected on the two-moving-end
+     - lumped at nodes of a finite-EI cable, standalone and coupled, also on a line restrained in
+       torsion (they add no polar inertia to its twist); rejected on the two-moving-end
        compatibility solver
    * - Bend stiffeners (``STIFFENERS``)
      - Supported with limits

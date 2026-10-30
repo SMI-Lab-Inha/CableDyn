@@ -1824,6 +1824,10 @@ CONTAINS
     ! static load stage on the final mesh, then installed in the cable.
     LOGICAL :: tors_line
     TYPE(CD_HermiteTorsionType) :: tors
+    ! the residual tolerance the accepted torsion stage met (torsion_note)
+    REAL(wp) :: tors_tol_used
+    CHARACTER(*), PARAMETER :: TWISTED_WHAT = 'finite-EI static solve with discrete ATTACHMENTS: the twisted '// &
+                               'discrete equilibrium '
     ! the torque-tension coupling force (K/GJ) M_t of every element of the twisted static state
     ! (allocated by torsion_stage under coupling only), for the final mesh safety diagnosis
     REAL(wp), ALLOCATABLE :: tors_axial_offset(:)
@@ -2968,7 +2972,9 @@ CONTAINS
         'found, so a cross-flow or a lateral disturbance can move the line away from it'
       CALL report_note(note_text)
     END IF
-    IF (tors_line) THEN
+    ! A line with ATTACHMENTS takes its torsion stage on the discrete equilibrium, after the
+    ! attachment polish (torsion_after_attachments).
+    IF (tors_line .AND. .NOT. has_att) THEN
       CALL torsion_stage(es, em)
       IF (es /= CD_DECKDRV_OK) THEN
         ErrStat = es
@@ -2976,6 +2982,7 @@ CONTAINS
         ErrMsg = 'CableDyn_DeckDriver: line '//TRIM(int_to_str(ln%id))//': '//TRIM(em)
         RETURN
       END IF
+      CALL torsion_note()
     END IF
     IF (contact_enabled) CALL anchor_overshoot_note()
     ! Safety is independent of the opt-in adaptive accuracy policy. Diagnose the
@@ -3116,9 +3123,24 @@ CONTAINS
                          'load steps) and passed the acceptance checks of the smeared state')
       END IF
       ! On the final mesh, with the bare weights the polished state carries; the bending-length
-      ! rule of the note uses the smeared section weights w.
-      CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, fixed_dofs, &
-                                .TRUE.)
+      ! rule of the note uses the smeared section weights w. A line restrained in torsion starts
+      ! from the twisted state, whose stability the torsion stage tests (with the same static
+      ! constraints: its static solve runs in 3D), so the note of the untwisted state is not
+      ! written for it.
+      IF (.NOT. tors_line) &
+        CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, &
+                                  fixed_dofs, .TRUE.)
+      IF (tors_line) THEN
+        CALL torsion_after_attachments(es, em)
+        IF (es == CD_DECKDRV_OK) CALL twisted_attachment_checks(es, em)
+        IF (es /= CD_DECKDRV_OK) THEN
+          ErrStat = es
+          IF (INDEX(em, 'CableDyn_DeckDriver: ') == 1) em = em(LEN('CableDyn_DeckDriver: ') + 1:)
+          ErrMsg = 'CableDyn_DeckDriver: line '//TRIM(int_to_str(ln%id))//': '//TRIM(em)
+          RETURN
+        END IF
+        CALL torsion_note()
+      END IF
       w = w_bare
       WRITE (note_text, '(A,I0,A,I0,A,ES10.3,A)') 'line ', ln%id, ': ', SIZE(att_node), &
         ' attachment(s) lumped at the nearest nodes (largest arc offset ', att_offset, ' m)'
@@ -3306,42 +3328,57 @@ CONTAINS
     END IF
   CONTAINS
 
-    SUBROUTINE torsion_stage(est, emt)
+    SUBROUTINE torsion_stage(est, emt, f_nodal)
       !! The condensed-torsion load stage of a line restrained in torsion at both ends: from the
       !! converged untwisted state on the final mesh (l0_am), CD_HermiteCable_Static_Solve ramps
       !! the imposed twist Phi = Pretwist(End B) - Pretwist(End A) with the same loads, contact,
       !! end connections and current as the untwisted solve, tests every stage for stability and
       !! descends from an unstable one. End frames are taken in the solve frame: internal end 1
       !! is deck End B (global axes), end 2 deck End A (its parent's axes, turned with it).
+      !! f_nodal: the stage of a line with ATTACHMENTS, after the attachment polish (the final
+      !! mesh then is l0, with the bare weights w_bare and the deck mesh l0_deck_att), with the
+      !! attachments' lumped loads.
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
+      REAL(wp), INTENT(IN), OPTIONAL :: f_nodal(:)
       REAL(wp) :: nvec(3), dvec(3), tol_t
       INTEGER :: k, attempt
-      CHARACTER(320) :: tnote
+      LOGICAL :: nodal_loads
       TYPE(CD_HermiteTorsionType) :: tors0
+      ! the deck mesh, the final mesh and its per-element arrays of this stage
+      REAL(wp), ALLOCATABLE :: ld(:), lf(:), w_fin(:)
       est = CD_DECKDRV_OK
       emt = ''
+      IF (PRESENT(f_nodal)) THEN
+        ld = l0_deck_att
+        lf = l0
+        w_fin = w_bare
+      ELSE
+        ld = l0
+        lf = l0_am
+        w_fin = w_am
+      END IF
       tors = CD_HermiteTorsionType()
       tors%active = .TRUE.
       tors%quadrature_order = opts%bending_quadrature_order
       tors%gj = gj_in
-      IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%gj, l0, l0_am)
+      IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%gj, ld, lf)
       ! torque-tension coupling: K/GJ per element (left unallocated without coupling)
       IF (ANY(ABS(ktt_in) > CD_ZERO)) THEN
         tors%couple = ktt_in/gj_in
-        IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%couple, l0, l0_am)
+        IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%couple, ld, lf)
       END IF
       ! the polar rotary inertia Irn per element: the dynamics then carries a twist angle at
       ! every node (CD_HermiteCable_Dyn_Set_Torsion)
       tors%irn = i_rn_in
-      IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%irn, l0, l0_am)
+      IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%irn, ld, lf)
       ! torsional damping (GJ|K|Bt): a negative value is -zeta of an element's critical torsional
       ! damping l0 sqrt(GJ Irn), on the final mesh
       IF (ANY(ABS(bt_in) > CD_ZERO)) THEN
         tors%bt = bt_in
-        IF (SIZE(l0_am) /= SIZE(l0)) CALL remap_elem_by_reference_arc(tors%bt, l0, l0_am)
+        IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%bt, ld, lf)
         DO k = 1, SIZE(tors%bt)
-          IF (tors%bt(k) < CD_ZERO) tors%bt(k) = -tors%bt(k)*l0_am(k)*SQRT(tors%gj(k)*tors%irn(k))
+          IF (tors%bt(k) < CD_ZERO) tors%bt(k) = -tors%bt(k)*lf(k)*SQRT(tors%gj(k)*tors%irn(k))
         END DO
       END IF
       DO k = 1, 2
@@ -3367,8 +3404,10 @@ CONTAINS
       tors%phi = ln%tors_pretwist(2) - ln%tors_pretwist(1)
       ! Rotating a buckled shape about a common clamp axis is an exact symmetry only without
       ! weight or current, with both ends clamped on one axis.
-      tors%zero_mode_allowed = .NOT. ANY(ABS(w_am) > CD_ZERO) .AND. .NOT. opts%has_current .AND. &
-                               ALL(endconn_mode == CD_ENDCONN_RIGID) .AND. &
+      nodal_loads = .FALSE.
+      IF (PRESENT(f_nodal)) nodal_loads = ANY(ABS(f_nodal) > CD_ZERO)
+      tors%zero_mode_allowed = .NOT. ANY(ABS(w_fin) > CD_ZERO) .AND. .NOT. opts%has_current .AND. &
+                               .NOT. nodal_loads .AND. ALL(endconn_mode == CD_ENDCONN_RIGID) .AND. &
                                DOT_PRODUCT(tors%ends(:, 1), tors%ends(:, 3)) > CD_ONE - 1.0e-12_wp
       ! As for the untwisted solve: a residual stall at the tight standalone tolerance is
       ! repeated at the coupled static tolerance (a round-off floor of a stiff, light line).
@@ -3378,7 +3417,20 @@ CONTAINS
         tors = tors0
         tol_t = static_tol_target
         IF (attempt == 2) tol_t = COUPLED_STATIC_TOL
-        IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+        IF (PRESENT(f_nodal)) THEN
+          ! after the attachment polish every array is on the final mesh l0
+          IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+            CALL hermite_static_torsion(l0, l0, ea, ei, w_bare, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, &
+                                        q_static, curv, fixed_dofs, contact_enabled, contact_z, frame_cs, &
+                                        endconn_k, endconn_d0_local, endconn_mode, opts, tol_t, tors, est, emt, &
+                                        bathymetry=bathymetry, cur_obj=cur_obj, f_nodal=f_nodal)
+          ELSE
+            CALL hermite_static_torsion(l0, l0, ea, ei, w_bare, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, &
+                                        q_static, curv, fixed_dofs, contact_enabled, contact_z, frame_cs, &
+                                        endconn_k, endconn_d0_local, endconn_mode, opts, tol_t, tors, est, emt, &
+                                        cur_obj=cur_obj, f_nodal=f_nodal)
+          END IF
+        ELSE IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
           CALL hermite_static_torsion(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, curv, fixed_am, &
                                       contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
                                       endconn_mode, opts, tol_t, tors, est, emt, bathymetry=bathymetry, &
@@ -3391,18 +3443,99 @@ CONTAINS
         IF (est == CD_DECKDRV_OK .OR. est == CD_DECKDRV_BADINPUT) EXIT
         IF (static_tol_target >= COUPLED_STATIC_TOL) EXIT
       END DO
-      IF (est == CD_DECKDRV_OK .AND. tol_t > static_tol_target) THEN
-        WRITE (tnote, '(A,I0,A,ES9.2,A,ES9.2)') 'line ', ln%id, ': torsion static residual floor above the '// &
-          'tolerance ', static_tol_target, '; twisted equilibrium accepted at ', tol_t
-        CALL report_note(tnote)
-      END IF
+      tors_tol_used = tol_t
       IF (est /= CD_DECKDRV_OK) RETURN
       IF (ALLOCATED(tors%couple)) tors_axial_offset = tors%couple*tors%torque
+    END SUBROUTINE torsion_stage
+
+    SUBROUTINE torsion_note()
+      !! The notes of the accepted torsion stage: a residual floor above the tolerance, and the
+      !! imposed twist and torque.
+      CHARACTER(320) :: tnote
+      IF (tors_tol_used > static_tol_target) THEN
+        WRITE (tnote, '(A,I0,A,ES9.2,A,ES9.2)') 'line ', ln%id, ': torsion static residual floor above the '// &
+          'tolerance ', static_tol_target, '; twisted equilibrium accepted at ', tors_tol_used
+        CALL report_note(tnote)
+      END IF
       WRITE (tnote, '(A,I0,A,ES12.5,A,ES12.5,A,I0,A,I0,A)') 'line ', ln%id, ': torsion solved, imposed twist ', &
         tors%phi*45.0_wp/QUARTER_PI, ' deg, torque ', tors%torque, ' N m (', tors%ramp_steps, &
         ' twist stage(s), ', tors%descents, ' buckling descent(s))'
       CALL report_note(tnote)
-    END SUBROUTINE torsion_stage
+    END SUBROUTINE torsion_note
+
+    SUBROUTINE torsion_after_attachments(est, emt)
+      !! The torsion stage of a line with ATTACHMENTS, on its discrete equilibrium (after the
+      !! attachment polish): the attachments' net weights -(m - rho V) g e_z at their nodes and,
+      !! in a deck current, their drag at the twisted state as nodal loads. The drag depends on
+      !! the node's depth and line tangent, so the stage is repeated, each time a fresh torsion
+      !! solve from the last state, with the drag of the last solution until the solution stops
+      !! moving (fixed point, as in attachment_static_polish).
+      INTEGER, INTENT(OUT) :: est
+      CHARACTER(*), INTENT(OUT) :: emt
+      INTEGER, PARAMETER :: MAX_FIXED_POINT = 60
+      REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
+      REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), q_prev(:), q_polished(:)
+      LOGICAL :: has_drag
+      INTEGER :: k, fp
+      est = CD_DECKDRV_OK
+      emt = ''
+      ! every pass starts from the polished, untwisted discrete state (a pass from the last twisted
+      ! state would first relax it, and a writhe a buckling descent left could put Theta_0 a turn
+      ! away, on another branch)
+      q_polished = q_static
+      ALLOCATE (f_att(SIZE(q_static)), f_drag(SIZE(q_static)))
+      f_att = CD_ZERO
+      DO k = 1, SIZE(att_node)
+        f_att(6*(att_node(k) - 1) + 3) = f_att(6*(att_node(k) - 1) + 3) - &
+                                         (ln%att(2, k) - opts%rhoW*ln%att(3, k))*opts%g
+      END DO
+      has_drag = opts%has_current .AND. ANY(ln%att(4, :) > CD_ZERO .OR. ln%att(6, :) > CD_ZERO)
+      DO fp = 1, MAX_FIXED_POINT
+        f_drag = CD_ZERO
+        IF (has_drag) THEN
+          CALL attachment_static_drag(q_static, att_node, ln%att, opts, frame_cs, f_drag, est, emt)
+          IF (est /= CD_DECKDRV_OK) THEN
+            emt = 'finite-EI static attachment drag failed: '//TRIM(emt)
+            RETURN
+          END IF
+        END IF
+        q_prev = q_static
+        q_static = q_polished
+        CALL torsion_stage(est, emt, f_att + f_drag)
+        IF (est /= CD_DECKDRV_OK) RETURN
+        IF (.NOT. has_drag) RETURN
+        IF (MAXVAL(ABS(q_static - q_prev)) <= FIXED_POINT_TOL) RETURN
+      END DO
+      est = CD_DECKDRV_SOLVEFAIL
+      emt = 'finite-EI torsion static solve with discrete ATTACHMENTS: the attachment current drag did not '// &
+            'settle to a fixed point'
+    END SUBROUTINE torsion_after_attachments
+
+    SUBROUTINE twisted_attachment_checks(est, emt)
+      !! The mesh safety diagnosis of the twisted discrete start of a line with ATTACHMENTS (the
+      !! smeared-state diagnosis above saw the untwisted state): the kink limit away from the
+      !! attachment nodes and, under tensile_safety True, no axial compression, the
+      !! torque-tension coupling force (K/GJ) M_t added (attachment_mesh_checks).
+      INTEGER, INTENT(OUT) :: est
+      CHARACTER(*), INTENT(OUT) :: emt
+      LOGICAL :: accepted_t
+      CHARACTER(1024) :: msg_t
+      est = CD_DECKDRV_OK
+      emt = ''
+      IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
+        CALL attachment_mesh_checks(l0, q_static, ea, ei, att_node, contact_z, &
+                                    opts%tensile_mode == CD_HCDYN_TENSILE_ERROR, TWISTED_WHAT, accepted_t, msg_t, &
+                                    bathymetry=bathymetry, frame_cs=frame_cs, axial_offset=tors_axial_offset)
+      ELSE
+        CALL attachment_mesh_checks(l0, q_static, ea, ei, att_node, contact_z, &
+                                    opts%tensile_mode == CD_HCDYN_TENSILE_ERROR, TWISTED_WHAT, accepted_t, msg_t, &
+                                    axial_offset=tors_axial_offset)
+      END IF
+      IF (.NOT. accepted_t) THEN
+        est = CD_DECKDRV_SOLVEFAIL
+        emt = TRIM(msg_t)
+      END IF
+    END SUBROUTINE twisted_attachment_checks
 
     SUBROUTINE bow_route(done, why)
       !! A line too long for its span whose anchor walk failed or reached an equilibrium the
@@ -6458,12 +6591,13 @@ CONTAINS
 
   SUBROUTINE hermite_static_torsion(l0_deck, l0, ea, ei, w, diam_deck, dry_deck, q, curv, fixed_dofs, &
                                     contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, opts, &
-                                    tol, tors, ErrStat, ErrMsg, bathymetry, cur_obj)
+                                    tol, tors, ErrStat, ErrMsg, bathymetry, cur_obj, f_nodal)
     !! Torsion stage of a deck cable on its final mesh l0: CD_HermiteCable_Static_Solve from the
     !! converged untwisted state q (one EI and buoyancy stage, a polish) with the torsion
     !! description tors, under the same contact, dry-buoyancy, end-connection and current terms
-    !! as hermite_static_stable. On success q and curv hold the twisted equilibrium and tors its
-    !! accepted Theta, torque and stability report.
+    !! as hermite_static_stable, and the nodal loads f_nodal (the discrete ATTACHMENTS). On
+    !! success q and curv hold the twisted equilibrium and tors its accepted Theta, torque and
+    !! stability report.
     REAL(wp), INTENT(IN) :: l0_deck(:), l0(:), ea(:), ei(:), w(:), diam_deck(:), dry_deck(:)
     REAL(wp), INTENT(INOUT) :: q(:), curv(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
@@ -6476,6 +6610,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
+    REAL(wp), INTENT(IN), OPTIONAL :: f_nodal(:)
     REAL(wp), ALLOCATABLE :: diam(:), dry(:), knnode(:), q_out(:)
     REAL(wp) :: res
     INTEGER :: i, ne, it, es
@@ -6505,7 +6640,8 @@ CONTAINS
                                         bending_quadrature_order=opts%bending_quadrature_order, &
                                         endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                         endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                        water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors)
+                                        water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors, &
+                                        f_nodal=f_nodal)
     ELSE
       CALL CD_HermiteCable_Static_Solve(l0, ea, ei, w, q, fixed_dofs, contact_z, CD_ZERO, 1, 200, &
                                         tol, 0.7_wp, q_out, curv, res, it, es, em, n_buoy_steps=1, &
@@ -6513,7 +6649,8 @@ CONTAINS
                                         bending_quadrature_order=opts%bending_quadrature_order, &
                                         endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                         endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                        water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors)
+                                        water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors, &
+                                        f_nodal=f_nodal)
     END IF
     IF (es == CD_HCSTAT_BADINPUT) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI torsion static solve rejected the input: '//TRIM(em)); RETURN
@@ -6553,12 +6690,52 @@ CONTAINS
     CHARACTER(*), PARAMETER :: WHAT = 'finite-EI static solve with discrete ATTACHMENTS: the discrete '// &
                                'equilibrium reached after a failed Newton solve (pseudo-transient '// &
                                'continuation, line search or smaller load steps) '
+    LOGICAL :: physical, mesh_ok
+    CHARACTER(1024) :: em
+    accepted = .FALSE.
+    message = ''
+    IF (PRESENT(bathymetry) .AND. PRESENT(frame_cs)) THEN
+      CALL attachment_mesh_checks(l0, q, ea, ei, att_node, contact_z, tensile_error, WHAT, mesh_ok, message, &
+                                  bathymetry=bathymetry, frame_cs=frame_cs)
+    ELSE
+      CALL attachment_mesh_checks(l0, q, ea, ei, att_node, contact_z, tensile_error, WHAT, mesh_ok, message)
+    END IF
+    IF (.NOT. mesh_ok) RETURN
+    CALL audit_hermite_static(l0, q, ea, ei, w, diam, endconn_mode, physical, em, ignore_kink=.TRUE.)
+    IF (.NOT. physical) THEN
+      message = WHAT//'is rejected: '//TRIM(em); RETURN
+    END IF
+    IF (.NOT. stable) THEN
+      message = WHAT//'is an unstable equilibrium (tangent stiffness not positive definite)'; RETURN
+    END IF
+    accepted = .TRUE.
+  END SUBROUTINE CD_Attachment_Discrete_Verdict
+
+  SUBROUTINE attachment_mesh_checks(l0, q, ea, ei, att_node, contact_z, tensile_error, what, accepted, message, &
+                                    bathymetry, frame_cs, axial_offset)
+    !! The mesh safety checks of a discrete attachment equilibrium on its mesh l0 with state q:
+    !!  1. the kink limit (h*kappa <= CD_HC_KINK_LIMIT), except on the elements beside an
+    !!     attachment node att_node, where the lumped load turns the line by a slope jump that the
+    !!     C1 Hermite elements carry as curvature (h*kappa of about twice the jump) at any mesh
+    !!     size;
+    !!  2. with tensile_error (tensile_safety True), no axial compression in the mesh safety
+    !!     diagnosis (the strict, smoothed compression mode), axial_offset (the torque-tension
+    !!     coupling force (K/GJ) M_t of a twisted line, per element) added to the resultant.
+    !! accepted is false when a check fails, and message (what, then the check) names it.
+    REAL(wp), INTENT(IN) :: l0(:), q(:), ea(:), ei(:), contact_z
+    INTEGER, INTENT(IN) :: att_node(:)
+    LOGICAL, INTENT(IN) :: tensile_error
+    CHARACTER(*), INTENT(IN) :: what
+    LOGICAL, INTENT(OUT) :: accepted
+    CHARACTER(*), INTENT(OUT) :: message
+    TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), INTENT(IN), OPTIONAL :: frame_cs(2)
+    REAL(wp), INTENT(IN), OPTIONAL :: axial_offset(:)
     TYPE(CD_HermiteResolutionType) :: diag
     REAL(wp), ALLOCATABLE :: hk(:)
     LOGICAL, ALLOCATABLE :: beside(:)
     REAL(wp) :: hk_peak
     INTEGER :: ne, e, k, es, e_peak
-    LOGICAL :: physical
     CHARACTER(1024) :: em
     accepted = .FALSE.
     message = ''
@@ -6567,13 +6744,15 @@ CONTAINS
     IF (PRESENT(bathymetry) .AND. PRESENT(frame_cs)) THEN
       CALL CD_HermiteCable_Resolution_Metrics(l0, q, contact_z, CD_ZERO, CD_HC_KINK_LIMIT, diag, es, em, &
                                               bathymetry=bathymetry, contact_frame_cs=frame_cs, EA=ea, EI=ei, &
-                                              compression_mode=CD_HC_COMPRESSION_STRICT, elem_h_kappa=hk)
+                                              compression_mode=CD_HC_COMPRESSION_STRICT, elem_h_kappa=hk, &
+                                              axial_offset=axial_offset)
     ELSE
       CALL CD_HermiteCable_Resolution_Metrics(l0, q, contact_z, CD_ZERO, CD_HC_KINK_LIMIT, diag, es, em, &
-                                              EA=ea, EI=ei, compression_mode=CD_HC_COMPRESSION_STRICT, elem_h_kappa=hk)
+                                             EA=ea, EI=ei, compression_mode=CD_HC_COMPRESSION_STRICT, elem_h_kappa=hk, &
+                                              axial_offset=axial_offset)
     END IF
     IF (es /= CD_HCSTAT_OK) THEN
-      message = WHAT//'could not be diagnosed: '//TRIM(em); RETURN
+      message = what//'could not be diagnosed: '//TRIM(em); RETURN
     END IF
     beside = .FALSE.
     DO k = 1, SIZE(att_node)
@@ -6593,24 +6772,17 @@ CONTAINS
     IF (hk_peak > CD_HC_KINK_LIMIT) THEN
       WRITE (em, '(A,ES12.5,A,ES12.5,A,I0,A)') 'is unresolved/kinked: max(h*kappa)=', hk_peak, &
         ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', e_peak, ' (away from the attachment nodes)'
-      message = WHAT//TRIM(em); RETURN
+      message = what//TRIM(em); RETURN
     END IF
     IF (tensile_error .AND. diag%axial_compression) THEN
       WRITE (em, '(A,ES12.5,A,ES12.5,A,I0,A,F8.5,A,ES12.5)') &
         'carries axial compression under tensile_safety True: element-mean axial force=', &
         diag%axial_strain_min_resultant, ' N below tolerance=', diag%axial_tolerance, ' N at element ', &
         diag%axial_strain_min_elem, ', xi=', diag%axial_strain_min_xi, ', strain=', diag%axial_strain_min
-      message = WHAT//TRIM(em); RETURN
-    END IF
-    CALL audit_hermite_static(l0, q, ea, ei, w, diam, endconn_mode, physical, em, ignore_kink=.TRUE.)
-    IF (.NOT. physical) THEN
-      message = WHAT//'is rejected: '//TRIM(em); RETURN
-    END IF
-    IF (.NOT. stable) THEN
-      message = WHAT//'is an unstable equilibrium (tangent stiffness not positive definite)'; RETURN
+      message = what//TRIM(em); RETURN
     END IF
     accepted = .TRUE.
-  END SUBROUTINE CD_Attachment_Discrete_Verdict
+  END SUBROUTINE attachment_mesh_checks
 
   SUBROUTINE audit_hermite_static(l0, q, ea, ei, w, diam, endconn_mode, physical, message, compression_note, &
                                   ignore_kink)
@@ -17280,8 +17452,8 @@ CONTAINS
     SUBROUTINE check_torsion_line(ln, es_t, em_t)
       !! A line with a torsional END CONNECTIONS restraint: a finite-EI (cubic-Hermite) line. With
       !! both ends restrained (torsion active) End B must be Fixed, every section's LINE TYPES row
-      !! must give an explicit GJ, End A may not be a rod end, a body End A must be a Rigid6 body,
-      !! and ATTACHMENTS are not combined with it.
+      !! must give an explicit GJ, End A may not be a rod end, and a body End A must be a Rigid6
+      !! body.
       TYPE(DeckLine), INTENT(IN) :: ln
       INTEGER, INTENT(OUT) :: es_t
       CHARACTER(*), INTENT(OUT) :: em_t
@@ -17326,10 +17498,6 @@ CONTAINS
           RETURN
         END IF
       END DO
-      IF (ALLOCATED(ln%att)) THEN
-        CALL fail(es_t, em_t, 'line '//TRIM(lid)//': torsion is not combined with ATTACHMENTS in this build')
-        RETURN
-      END IF
       jp = find_point(points, ln%nodeA)
       IF (jp < 1) RETURN
       IF (is_rod_point_type(points(jp)%ptype)) THEN

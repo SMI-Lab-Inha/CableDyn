@@ -19,6 +19,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   line rolled at 60 deg/s the coupled torque is the quasi-static `GJ phi / L` to 3e-6 N m, and
   `SaveState`/`RestoreState` carry the rotations. Python: `CableDyn.init_deck_rotating`,
   `update_rotations`, `coupled_moments`.
+- `ATTACHMENTS` on a finite-EI line restrained in torsion: the torsion stage of the static start
+  runs on the discrete equilibrium, after the attachment polish, with the modules' net weights
+  and current drag (to a fixed point) as nodal loads. A lazy wave with 25 buoyancy modules and
+  one turn of pretwist, in still water and in a cross-flow current, keeps its torque, twist and
+  fairlead tension over a still 10 s run to the output precision (a torsion stage before the
+  polish would ring by 3e-3 of the torque); neutral modules reproduce the bare line's GJ Phi / L.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their
