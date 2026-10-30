@@ -81,7 +81,7 @@ a named error rather than running approximately.
 
 4. Optionally, script runs from Python. The package on PyPI carries the solver
    library and the driver (wheels for Windows x64 and Linux x86-64 with an AVX2
-   processor, and macOS on Apple silicon), so nothing else is needed. A relative
+   processor, and macOS 15 or newer on Apple silicon), so nothing else is needed. A relative
    output root is resolved against the deck's folder, so this run writes
    `examples\wd0050.out`:
 

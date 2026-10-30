@@ -96,7 +96,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Check out CableDyn
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -112,7 +112,7 @@ jobs:
           # deployment target is the runner's macOS, the oldest the Homebrew libraries support.
           CIBW_BEFORE_ALL_MACOS: brew install gcc openblas
           CIBW_ENVIRONMENT_MACOS: >-
-            MACOSX_DEPLOYMENT_TARGET=14.0
+            MACOSX_DEPLOYMENT_TARGET=15.0
             FC=gfortran
             CMAKE_PREFIX_PATH=$(brew --prefix openblas)
           CIBW_TEST_COMMAND: >-
