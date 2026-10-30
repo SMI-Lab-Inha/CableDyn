@@ -930,7 +930,7 @@ The deck is validated under the standalone-deck rules:
      - Where it is supported
    * - ``Coupled``/``Vessel`` bodies or rods (6-DOF host nodes)
      - the OpenFAST module; the standalone driver with a ``motionFile``
-   * - ``CoupledPinned``/``VesselPinned`` rods (a pin the host moves)
+   * - ``CoupledPinned``/``VesselPinned`` rods or bodies (a pin the host moves)
      - the OpenFAST module
    * - a ``motionFile`` option
      - the standalone driver (prescribe motion through ``CableDyn_Step`` instead)
@@ -943,6 +943,9 @@ The deck is validated under the standalone-deck rules:
    * - a ``waves`` option (regular or JONSWAP deck waves)
      - the standalone driver; supply time-varying fluid kinematics through
        ``CableDyn_UpdatePointFluidFields``
+   * - a MoorDyn-C ``Currents 2``/``5`` table that varies in time
+     - the standalone driver; supply time-varying fluid kinematics through
+       ``CableDyn_UpdatePointFluidFields``
    * - FAST.Farm ``Turbine<J>`` points
      - the OpenFAST module in FAST.Farm
    * - ``frictionMu`` in a deck that has ``Free`` or ``Connect`` points
@@ -952,8 +955,9 @@ The deck is validated under the standalone-deck rules:
 .. important::
 
    The C ABI has no simulation clock and no per-node fluid input. A deck's current is applied
-   as a steady field. A deck with a ``waves`` option is rejected with ``CD_C_BAD_INPUT``,
-   because its waves could not be evaluated. Time-varying fluid kinematics reach the ``Free``
+   as a steady field. A deck with a ``waves`` option, or a MoorDyn-C ``Currents 2``/``5`` table
+   that varies in time, is rejected with ``CD_C_BAD_INPUT``, because it could not be evaluated
+   in time; such a table constant in time is applied as the steady field. Time-varying fluid kinematics reach the ``Free``
    and ``Connect`` points through ``CableDyn_UpdatePointFluidFields``.
 
 Parse and validation failures, including a file that cannot be opened, return

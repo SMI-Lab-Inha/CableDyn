@@ -1133,6 +1133,19 @@ add_test(NAME openfast_pinned_rod COMMAND test_openfast_pinned_rod
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/openfast_pinned_rod)
 set_tests_properties(openfast_pinned_rod PROPERTIES LABELS "fortran;dynamic;openfast;validation")
 
+# CoupledPinned bodies on the coupled aggregate: the compound-pendulum period and pin reaction of
+# a held node, a constant node acceleration against closed forms, a CoupledPinned rod of the same
+# inertia as a second route, a symmetric mooring that does not turn the body, the output probe,
+# snapshot/restore and restart, PtfmInit with the static start, sub-cycling, the OpenFAST shell's
+# state-mirror restore before the first step, the refusals, and the start of Free bodies and rods
+# in a host fluid field.
+add_executable(test_openfast_pinned_body tests/test_openfast_pinned_body.f90)
+target_link_libraries(test_openfast_pinned_body PRIVATE cabledyn_core)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/openfast_pinned_body)
+add_test(NAME openfast_pinned_body COMMAND test_openfast_pinned_body
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/openfast_pinned_body)
+set_tests_properties(openfast_pinned_body PROPERTIES LABELS "fortran;dynamic;openfast;validation")
+
 # Maintained IEA-15 MW mixed deck: the finite-EI power cable has a genuine multi-node
 # grounded run and marches through the OpenFAST aggregate at 40 Hz with host current.
 add_executable(test_openfast_touchdown tests/test_openfast_touchdown.f90)
@@ -1418,6 +1431,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
   # And with the nodal twist (polar inertia, torsional damping, the 7-DOF-per-node band).
   add_test(NAME step_allocations_nodal_twist COMMAND test_step_allocations nodal)
   set_tests_properties(step_allocations_nodal_twist PROPERTIES LABELS "fortran;dynamic;memory")
+  # And the MoorDyn-C current grid (Currents 2 and 5) every standalone step samples at the nodes.
+  add_test(NAME step_allocations_current_grid COMMAND test_step_allocations current_grid)
+  set_tests_properties(step_allocations_current_grid PROPERTIES LABELS "fortran;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)
@@ -1701,6 +1717,17 @@ if(Python3_Interpreter_FOUND)
                      --output ${CMAKE_BINARY_DIR}/viv_riser)
     set_tests_properties(viv_riser PROPERTIES
       LABELS "python;integration;dynamic;viv;validation"
+      TIMEOUT ${_viv_lockin_timeout}
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+    # MoorDyn-C Currents 2 and 5 runs: tensions against MoorDyn-C v2.7.1, two sources of one
+    # field, and the static start in a sheared grid on the EI = 0 and finite-EI routes
+    add_test(NAME mdc_currents_runs
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mdc_currents_runs.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --data ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/currents_mdc
+                     --output ${CMAKE_BINARY_DIR}/mdc_currents_runs)
+    set_tests_properties(mdc_currents_runs PROPERTIES
+      LABELS "python;integration;dynamic;validation"
       TIMEOUT ${_viv_lockin_timeout}
       ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
@@ -2085,6 +2112,19 @@ target_link_libraries(test_wavekin_modes PRIVATE cabledyn_core)
 add_test(NAME wavekin_modes COMMAND test_wavekin_modes WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(wavekin_modes PROPERTIES LABELS "fortran;driver;validation;dynamic")
 
+# MoorDyn-C Currents 2 and 5 vs MoorDyn-C v2.7.1 and an independent evaluation on shared inputs
+# (the reference rows come from validation/scripts/currents_mdc_reference.py)
+file(GLOB_RECURSE CD_CURRENTS_MDC_FILES RELATIVE ${CMAKE_SOURCE_DIR}/tests/data/currents_mdc
+     ${CMAKE_SOURCE_DIR}/tests/data/currents_mdc/*)
+foreach(f IN LISTS CD_CURRENTS_MDC_FILES)
+  configure_file(tests/data/currents_mdc/${f} ${CMAKE_BINARY_DIR}/currents_mdc/${f} COPYONLY)
+endforeach()
+add_executable(test_mdc_currents tests/test_mdc_currents.f90)
+target_link_libraries(test_mdc_currents PRIVATE cabledyn_core)
+add_test(NAME mdc_currents COMMAND test_mdc_currents WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/mdc_currents_work)
+set_tests_properties(mdc_currents PROPERTIES LABELS "fortran;driver;validation;dynamic")
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/mdc_currents_work)
+
 add_executable(test_clamped_cable_ends tests/test_clamped_cable_ends.f90)
 target_link_libraries(test_clamped_cable_ends PRIVATE cabledyn_core)
 add_test(NAME clamped_cable_ends COMMAND test_clamped_cable_ends)
@@ -2102,6 +2142,18 @@ add_test(NAME torsion_attachments
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(torsion_attachments PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
+# Where the MoorDyn-parity features meet: a CoupledPinned body in a Currents 2/5 deck (refused on
+# the coupled aggregate for the current files, standalone for the body), CONTROL on viscoelastic
+# and Syrope segments in the host's cross-flow against the static start of the changed deck, and
+# ATTACHMENTS on a turned torsion line in a sheared Currents 5 grid (a still run keeps the start)
+add_executable(test_parity_integration tests/test_parity_integration.f90)
+target_link_libraries(test_parity_integration PRIVATE cabledyn_core)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/parity_integration)
+add_test(NAME parity_integration
+         COMMAND test_parity_integration ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_torsion_attachments.dat
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/parity_integration)
+set_tests_properties(parity_integration PROPERTIES LABELS "fortran;driver;integration;dynamic;openfast")
+
 add_executable(test_section_curvature tests/test_section_curvature.f90)
 target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
 add_test(NAME section_curvature COMMAND test_section_curvature)
@@ -2111,6 +2163,20 @@ add_executable(test_syrope_composite tests/test_syrope_composite.f90)
 target_link_libraries(test_syrope_composite PRIVATE cabledyn_core)
 add_test(NAME syrope_composite COMMAND test_syrope_composite)
 set_tests_properties(syrope_composite PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
+
+# Active line control of Syrope segments on the coupled route (the slow stretch carried over a
+# length change, as MoorDyn-F/C carry it): quasi-static cycle, length step, restart, composites
+add_executable(test_syrope_control tests/test_syrope_control.f90)
+target_link_libraries(test_syrope_control PRIVATE cabledyn_core)
+add_test(NAME syrope_control COMMAND test_syrope_control)
+set_tests_properties(syrope_control PROPERTIES LABELS "fortran;integration;dynamic;openfast")
+
+# Active line control of viscoelastic (ElasticMod 2/3) segments on the coupled route (the dl_1
+# stretch carried over a length change, as MoorDyn-F/C carry it): quasi-static cycle, step, restart
+add_executable(test_viscoelastic_control tests/test_viscoelastic_control.f90)
+target_link_libraries(test_viscoelastic_control PRIVATE cabledyn_core)
+add_test(NAME viscoelastic_control COMMAND test_viscoelastic_control)
+set_tests_properties(viscoelastic_control PROPERTIES LABELS "fortran;integration;dynamic;openfast")
 
 add_executable(test_torsion_coupling tests/test_torsion_coupling.f90)
 target_link_libraries(test_torsion_coupling PRIVATE cabledyn_core)
@@ -2781,6 +2847,8 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                          -Wno-maybe-uninitialized)
   target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_syrope_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_viscoelastic_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
 endif()
 
 if(CABLEDYN_ENABLE_COVERAGE)
@@ -2860,6 +2928,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_hermite_fmf
       test_openfast_aggregate
       test_openfast_pinned_rod
+      test_openfast_pinned_body
       test_of_mooring_counters
       test_ei0_mesh_scaling_counters
       test_c_api

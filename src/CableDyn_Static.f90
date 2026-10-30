@@ -33,7 +33,8 @@ MODULE CableDyn_Static
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
                                  CD_Bathymetry_Floor_Gradient, CD_BATHY_OK
   USE CableDyn_Hydro, ONLY: CD_Cable_Morison_Drag_Force, CD_Morison_Drag_Element_Load, CD_Current_Profile_Velocity, &
-                            CD_HYDRO_OK
+                            CD_CurrentGridType, CD_Current_Grid_Velocity, CD_Current_Grid_Gradient, &
+                            CD_Current_Profile_Gradient, CD_HYDRO_OK
   USE CableDyn_Linalg, ONLY: CD_Solve_Banded
   USE CableDyn_Mesh, ONLY: CD_Partition_Free_Dofs
   USE CableDyn_Catenary, ONLY: CD_Catenary_Seed, CD_CAT_OK
@@ -90,6 +91,11 @@ MODULE CableDyn_Static
     ! residual evaluation (the dynamic march samples it at the actual node depths too), so the
     ! static state is an equilibrium of the marched model. It replaces node_velocity/velocity.
     REAL(wp), ALLOCATABLE :: profile_z(:), profile_velocity(:, :)
+    ! A current grid in space and time (MoorDyn-C Currents 2 and 5, CD_CurrentGridType): when
+    ! allocated, each node's current is its value at the node's own position at t = 0 (the
+    ! static start), re-sampled in every residual evaluation like the depth profile, which it
+    ! replaces.
+    TYPE(CD_CurrentGridType), ALLOCATABLE :: grid
     ! drag = .FALSE.: the object carries only the static seabed friction below (a line in
     ! still water); the drag fields are then ignored and need not be set.
     LOGICAL :: drag = .TRUE.
@@ -397,8 +403,8 @@ CONTAINS
           fluidvel(:, k) = current%velocity
         END DO
       END IF
-      profile_active = ALLOCATED(current%profile_z)
-      IF (profile_active) THEN
+      profile_active = ALLOCATED(current%profile_z) .OR. ALLOCATED(current%grid)
+      IF (profile_active .AND. .NOT. ALLOCATED(current%grid)) THEN
         IF (.NOT. ALLOCATED(current%profile_velocity)) THEN
           CALL fail(ErrStat, ErrMsg, 'current profile_z requires profile_velocity')
           RETURN
@@ -408,6 +414,8 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'current profile_velocity must have shape (3, SIZE(profile_z))')
           RETURN
         END IF
+      END IF
+      IF (profile_active) THEN
         CALL sample_profile(q0, es, em)
         IF (es /= CD_HYDRO_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'current profile: '//TRIM(em))
@@ -972,13 +980,21 @@ CONTAINS
     END SUBROUTINE add_friction
 
     SUBROUTINE sample_profile(qe, es_out, em_out)
-      !! Current of every node at its own elevation in state qe (depth-profile current).
+      !! Current of every node at its own elevation in state qe (depth-profile current), or at
+      !! its own position at t = 0 (current grid).
       REAL(wp), INTENT(IN) :: qe(:)
       INTEGER, INTENT(OUT) :: es_out
       CHARACTER(*), INTENT(OUT) :: em_out
       INTEGER :: i
       es_out = CD_HYDRO_OK
       em_out = ''
+      IF (ALLOCATED(current%grid)) THEN
+        DO i = 1, n_nodes
+          CALL CD_Current_Grid_Velocity(current%grid, qe(3*i - 2:3*i), CD_ZERO, fluidvel(:, i), es_out, em_out)
+          IF (es_out /= CD_HYDRO_OK) RETURN
+        END DO
+        RETURN
+      END IF
       DO i = 1, n_nodes
         CALL CD_Current_Profile_Velocity(qe(3*i), current%profile_z, current%profile_velocity, fluidvel(:, i), &
                                          es_out, em_out)
@@ -1027,7 +1043,7 @@ CONTAINS
       INTEGER, INTENT(OUT) :: es_out
       CHARACTER(*), INTENT(OUT) :: em_out
       INTEGER :: e, a, b, i, j, fi, fj, gmap(6)
-      REAL(wp) :: f2(6), jq2(6, 6), jv2(6, 6), de, cn, ct
+      REAL(wp) :: f2(6), jq2(6, 6), jv2(6, 6), de, cn, ct, grad_a(3, 3), grad_b(3, 3)
 
       drag_kq_band = CD_ZERO
       es_out = CD_HYDRO_OK
@@ -1048,6 +1064,23 @@ CONTAINS
                                           fluidvel(:, a), fluidvel(:, b), waterln(a), waterln(b), &
                                           current%rho, de, cn, ct, f2, jq2, jv2, es_out, em_out)
         IF (es_out /= CD_HYDRO_OK) RETURN
+        IF (profile_active) THEN
+          ! A current re-sampled at the node positions moves with them: the load depends on
+          ! position through the fluid velocity too, d(load)/du_a = -d(load)/dv_a, so
+          ! -d(load)/dq_a gains -(jac_v block a) G_a with G = du/dx the field's gradient at the node
+          ! (without it the Newton iteration can fail in a current sheared across the line).
+          IF (ALLOCATED(current%grid)) THEN
+            CALL CD_Current_Grid_Gradient(current%grid, qe(3*a - 2:3*a), CD_ZERO, grad_a, es_out, em_out)
+            IF (es_out == CD_HYDRO_OK) &
+              CALL CD_Current_Grid_Gradient(current%grid, qe(3*b - 2:3*b), CD_ZERO, grad_b, es_out, em_out)
+            IF (es_out /= CD_HYDRO_OK) RETURN
+          ELSE
+            CALL CD_Current_Profile_Gradient(qe(3*a), current%profile_z, current%profile_velocity, grad_a)
+            CALL CD_Current_Profile_Gradient(qe(3*b), current%profile_z, current%profile_velocity, grad_b)
+          END IF
+          jq2(:, 1:3) = jq2(:, 1:3) - MATMUL(jv2(:, 1:3), grad_a)
+          jq2(:, 4:6) = jq2(:, 4:6) - MATMUL(jv2(:, 4:6), grad_b)
+        END IF
         DO i = 1, 3
           gmap(i) = 3*a - 3 + i
           gmap(3 + i) = 3*b - 3 + i
@@ -2532,7 +2565,14 @@ CONTAINS
         a = elem_conn(1, e)
         b = elem_conn(2, e)
         IF (.NOT. (ANY(ends == a) .OR. ANY(ends == b))) CYCLE
-        IF (ALLOCATED(current%profile_z) .AND. ALLOCATED(current%profile_velocity)) THEN
+        IF (ALLOCATED(current%grid)) THEN
+          CALL CD_Current_Grid_Velocity(current%grid, q(3*a - 2:3*a), CD_ZERO, va, es, em)
+          IF (es == CD_HYDRO_OK) CALL CD_Current_Grid_Velocity(current%grid, q(3*b - 2:3*b), CD_ZERO, vb, es, em)
+          IF (es /= CD_HYDRO_OK) THEN
+            CALL fail(ErrStat, ErrMsg, 'end forces: '//TRIM(em))
+            RETURN
+          END IF
+        ELSE IF (ALLOCATED(current%profile_z) .AND. ALLOCATED(current%profile_velocity)) THEN
           CALL CD_Current_Profile_Velocity(q(3*a), current%profile_z, current%profile_velocity, va, es, em)
           IF (es == CD_HYDRO_OK) CALL CD_Current_Profile_Velocity(q(3*b), current%profile_z, &
                                                                   current%profile_velocity, vb, es, em)

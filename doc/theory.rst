@@ -757,7 +757,9 @@ The slow strain is eliminated implicitly in every in-step evaluation: a projecte
 backward-Euler solve,
 :math:`\varepsilon_\text{slow}^{n+1} = \varepsilon_\text{slow}^{n} + \Delta t\,\dot\varepsilon_\text{slow}(\varepsilon_\text{slow}^{n+1}, \varepsilon, \dot\varepsilon)`
 constrained to :math:`\varepsilon_\text{slow} \ge 0`, gives the slow strain that the force
-uses. The tangent carries :math:`\partial\varepsilon_\text{slow}^{n+1}/\partial(\varepsilon, \dot\varepsilon)`
+uses (safeguarded Newton steps, finished by bisection where they stall next to a kink of the
+interpolated curves, as at the top of the working curve; a residual so steep that it changes
+sign between two adjacent reals gives the root to machine precision). The tangent carries :math:`\partial\varepsilon_\text{slow}^{n+1}/\partial(\varepsilon, \dot\varepsilon)`
 from the implicit-function theorem. The step commits that same slow strain, so the force applied
 to the nodes equals the reported tension. The working curve is the one regenerated at the
 committed :math:`T_\text{max}`. The branch follows the evaluated slow strain: the working curve
@@ -2303,7 +2305,15 @@ body's position and a rotation-vector increment on SO(3) (for a free rod only th
 normal to its axis), each pinned rod's two rotations about its pin, and each point's position.
 A pinned rod's residual rows are its moment about the pin; its net force acts on its parent body
 at the pin (a rod pinned to a fixed point has none, and a ``CoupledPinned`` rod in OpenFAST is
-balanced about its pin at the platform's initial pose). A free or pinned rod that no line
+balanced about its pin at the platform's initial pose). A ``CoupledPinned`` body in OpenFAST
+keeps its position unknowns held at its node (their force rows carry the host's reaction, not a
+residual) and balances the moment about the node with its three rotations. Its lines and its
+centre of gravity may lie on one axis through the node, about which it then turns neutrally: the
+Jacobian has that spin as a null vector, to which the residual is orthogonal, and the Newton
+step of a deck with such a body is the minimum-norm Gauss-Newton step
+:math:`(\mathbf{J}^T\mathbf{J} + 10^{-10}\mathbf{D})\,\delta\mathbf{x} = -\mathbf{J}^T\mathbf{r}`
+(:math:`\mathbf{D}` the floored diagonal of :math:`\mathbf{J}^T\mathbf{J}`), which does not spin it.
+A free or pinned rod that no line
 attaches to (nor, for a rod pinned to a body, any line of its body) is not an unknown: it keeps
 its deck pose and starts at rest there. A deck with pinned rods takes the
 central-difference Jacobian of the full residual. A finite-EI line enters with its axial
@@ -2542,6 +2552,41 @@ the same pin acceleration term in its rotation equation and returns the same for
 call evaluates the rod's state derivative at the current input first (its lumped line mass has
 no interior coupling).
 
+A ``CoupledPinned`` body is pinned the same way at its reference point, which is its node: its
+translation is the host's, :math:`\mathbf{a} = \mathbf{a}_p`, and its rotation solves the moment
+equation about the node,
+:math:`\mathbf{M}_{rr}\boldsymbol{\alpha} = \mathbf{M} - \mathbf{M}_{rt}\mathbf{a}_p - \boldsymbol{\omega}\times(\mathbf{I}_p\boldsymbol{\omega})`,
+with :math:`\mathbf{I}_p = \mathbf{R}\mathbf{J}\mathbf{R}^T - m[\mathbf{c}]_\times^2` the inertia
+about the node for the centre of gravity at :math:`\mathbf{c}`,
+:math:`\mathbf{M}_{rr} = \mathbf{I}_p` plus the attached lines' end-node inertia through their
+arms, and :math:`\mathbf{M}_{rt} = m[\mathbf{c}]_\times` (MoorDyn-F's
+:math:`\mathbf{M}_{(4:6,4:6)}\mathbf{a}_{(4:6)} = \mathbf{F}_{(4:6)} - \mathbf{M}_{(4:6,1:3)}\mathbf{a}_{(1:3)}`).
+The node receives
+:math:`\mathbf{F} - (m + m_a)\mathbf{a}_p - m(\boldsymbol{\alpha}\times\mathbf{c} + \boldsymbol{\omega}\times(\boldsymbol{\omega}\times\mathbf{c}))`
+and no moment, :math:`m_a` the body's translational added mass, with the angular acceleration
+solved again for the current node acceleration as for the rod. This is MoorDyn-F's coupled pinned
+body with ``inertialF 1`` (its default ``inertialF 0`` leaves the inertia out of the coupled
+force; CableDyn always includes it) but for three modelling differences, where CableDyn keeps the
+consistent form: MoorDyn-F's centripetal force :math:`-\mathbf{M}_{(1:3,1:3)}\,\boldsymbol{\omega}\times(\boldsymbol{\omega}\times\mathbf{c})`
+takes its translational mass block, with the added mass :math:`\rho V C_a` and the attached
+points' masses, at the centre of gravity, where CableDyn takes the structural mass there and the
+added mass and line ends at their own points; MoorDyn-F applies the full buoyancy
+:math:`\rho g V` at any elevation, CableDyn the wetted one (``bodyWetting moordyn`` restores
+MoorDyn's); and the attached ``EI = 0`` lines carry their consistent end-node inertia
+(:math:`m l/3` of the end element, less with the interior following in a step) against
+MoorDyn-F's lumped :math:`m l/2`. The aggregate solves the start accelerations of its bodies and
+rods at initialisation and, before the first step, at a committed transfer of the step-start
+kinematics and at new host fluid fields (with the line interior accelerations in those fields), so
+the first step starts from the accelerations in the host's field and the state mirror the OpenFAST
+shell restores after its first output call (its ``t = 0`` field is set at initialisation) already
+carries them. The sub-step estimate
+takes the diagonal of :math:`\mathbf{I}_p` against the line springs through their arms from the
+node, the waterplane restoring, and the swing stiffness of the weight and buoyancy turning with
+the body, :math:`|\mathbf{K}_{kk}|` of :math:`\mathbf{K} = -\sum_i[\mathbf{f}_i]_\times[\mathbf{p}_i]_\times`
+at the step-start and end-of-step node poses, plus :math:`|\mathbf{a}_p|\,m|\mathbf{c}|`; the
+node moves linearly within the sub-steps from the committed reference-point motion, and that
+motion, which the body state mirror carries, starts the next step.
+
 **Mixed topologies.** One step marches every object of a deck together: bodies with their fixed
 and pinned rods, free and pinned rods, the ``EI = 0`` lines with their ``Free``/``Connect``
 points, and the finite-EI cables. In the monolithic scheme the points are junctions of the
@@ -2752,6 +2797,45 @@ of the step to 3e-8 N, where applying the whole change in the first sub-step dep
 22 N (2.2 times the tension change per step). A step recovered after a stall and the halves of a
 line-system step halved after a failure, which take their sub-steps as given, apply the whole
 change in their first part.
+
+A Syrope segment keeps its states over a length change as MoorDyn-F and MoorDyn-C keep them.
+Their state is the segment's slow stretch :math:`\Delta l_1 = \varepsilon_\text{slow} L_0`, which a
+change of :math:`L_0` leaves as it is, and the mean tension reads the slow strain
+:math:`\Delta l_1/L_0` at the new length. CableDyn stores the slow strain of the committed state,
+a strain of :math:`L_{0,c}`, and reads it at the present length,
+
+.. math::
+
+   \varepsilon_\text{slow}(L_0) = \varepsilon_\text{slow}\,\frac{L_{0,c}}{L_0},
+
+so the step's backward-Euler update
+:math:`\varepsilon_\text{slow}^{n+1} = \varepsilon_\text{slow}^{n} L_{0,c}/L_0 + \Delta t\,\dot\varepsilon_\text{slow}`
+is that of MoorDyn's :math:`\mathrm{d}\Delta l_1/\mathrm{d}t = L_0\,\dot\varepsilon_\text{slow}`; the
+committed force of the force blend reads the state at :math:`L_{0,c}` as it is. The running
+maximum, a tension, is kept, and the slow-strain rate takes the chord rate
+:math:`\dot\varepsilon = \mathbf{t}\cdot\Delta\mathbf{v}/L_0` without the paid-out term, as
+MoorDyn's Syrope rate does. A slow pay-out therefore unloads the segment along the working curve
+of its load history, and a haul-in beyond :math:`T_\text{max}` follows the OWC and raises it. On a
+taut 100 m polyester line whose fairlead segment is paid out by 0.5 m, hauled in to −1 m and paid
+back over 80 s, every element's tension follows the rest curve of its history at the line strain
+to 2.5e-4 of the initial tension along the ramps and to 6e-7 at rest; after a length step it is
+MoorDyn's at the carried stretch to round-off, where carrying the strain instead would be off by
+0.4 to 2.4 %.
+
+A viscoelastic segment keeps its slow-branch stretch :math:`\Delta l_1` over a length change, as
+MoorDyn-F (``MD_CalcContStateDeriv`` sets the controlled segment's ``l`` and ``ld``,
+``Line_GetStateDeriv`` reads ``dl_1`` against ``l``) and MoorDyn-C
+(``Line::setUnstretchedLength``, ``Line::getStateDeriv``) keep it: :math:`\Delta l_1` is a
+stretch, so no rescaling arises, and the law reads it at the present length,
+:math:`T = EA_1\,\Delta l_1/L_0 + BA\,\dot{\Delta l}_1/L_0` with
+:math:`\dot{\Delta l}_1 = (EA_D (l - L_0) - (EA_D + EA_1)\Delta l_1 + BA_D\,\dot l)/(BA_D + BA)`
+and, for the load-dependent stiffness, :math:`EA_D(\Delta l_1, L_0)`; the committed force of the
+force blend reads the same :math:`\Delta l_1` at :math:`L_{0,c}`. The rate :math:`\dot l` is the
+chord rate, without the paid-out term, as in MoorDyn. On the taut 100 m line above with
+:math:`E_s = 10^8` N, the same pay-out and haul-in cycle follows the static law
+:math:`E_s(D/L - 1)` to 1.7e-4 of the initial tension along the ramps (4.6e-4 with the
+load-dependent stiffness) and to 4e-9 at rest; after a length step the tension is MoorDyn's at
+the carried stretch to round-off, where carrying the strain instead would be off by 0.4 to 4.6 %.
 
 On a finite-EI cable, whose fairlead is End A, the command acts on the cable elements that make
 up the End-A segment of the deck mesh, of initial length :math:`S`. Each element scales by

@@ -98,9 +98,13 @@ def test_dtwave_must_be_positive(value):
         (("7 WaterKin",), None),
         (("3 WaveKin", "0.1 dtWave"), None),
         (("1 Currents",), None),
+        (("2 Currents",), None),
+        (("5 Currents",), None),
         (("airy 2 8 0 waves", "7 WaterKin"), r"both a waves \(or wavetrain\) OPTION and WaveKin 7"),
         (("airy 2 8 0 wavetrain", "3 WaveKin"), "double-counting"),
         (("uniform 0.1 0 0 current", "1 Currents"), "both a current OPTION and Currents 1"),
+        (("uniform 0.1 0 0 current", "2 Currents"), "both a current OPTION and Currents 2"),
+        (("uniform 0.1 0 0 current", "5 Currents"), "both a current OPTION and Currents 5"),
     ],
 )
 def test_moordyn_c_kinematics_follow_the_native_rules(rows, message):
@@ -116,9 +120,10 @@ def test_moordyn_c_kinematics_need_the_dynamic_sea_setup():
     no_depth = _edit(_HELD, ("50.0 WtrDpth\n", "7 WaterKin\n"))
     _rejects(no_depth.replace("-50.0", "-80.0"), "WaveKin 7 waves require dtM, TMax and WtrDpth")
     _rejects(_options(_STATIC, "1 Currents"), "standalone Currents 1 requires dtM and TMax")
+    _rejects(_options(_STATIC, "5 Currents"), "standalone Currents 5 requires dtM and TMax")
 
 
-@pytest.mark.parametrize("row", ["7 WaterKin", "1 Currents"])
+@pytest.mark.parametrize("row", ["7 WaterKin", "1 Currents", "2 Currents", "5 Currents"])
 def test_moordyn_c_kinematics_are_not_certified_for_the_coupled_route(row):
     _rejects(_options(_HELD, row), "not supported on the coupled route", caller_driven=True)
 
@@ -599,6 +604,19 @@ def test_generated_cases_carry_the_fixed_name_kinematics_files(tmp_path):
     (out / "wave_frequencies.txt").write_text("0 0 0 0\n", encoding="utf-8")
     with pytest.raises(StudyFormatError, match="companion file"):
         run_study(out / "cases.json", executable=tmp_path / "missing.exe")
+
+
+@pytest.mark.parametrize(
+    ("mode", "name"), [("2", "current_profile_dynamic.txt"), ("5", "current_profile_4d.txt")]
+)
+def test_generated_cases_carry_the_moordyn_c_current_tables(tmp_path, mode, name):
+    table = "a MoorDyn-C current table\n"
+    base = _kinematic_base(tmp_path / "src", f"{mode} Currents", files={name: table})
+    out = tmp_path / "cases"
+    generate_deck_cases(base, out, {"a": {"option.dtM": 0.05}})
+    assert (out / name).read_text(encoding="utf-8") == table
+    manifest = json.loads((out / "cases.json").read_text(encoding="utf-8"))
+    assert set(manifest["cases"][0]["companion_files"]) == {name}
 
 
 def test_study_manifest_companion_entries_are_checked(tmp_path):

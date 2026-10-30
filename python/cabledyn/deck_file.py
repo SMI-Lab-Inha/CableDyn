@@ -294,6 +294,8 @@ _SCALAR_OPTION_KEYWORDS = frozenset(_OPTION_ALIASES) | {
     "writelog",
     "dtout",
     "currents",
+    "inertialf",
+    "inertialf_rampt",
 }
 # Native CD_DECK_NAMELEN: the longest OUTPUTS channel name the reader stores.
 _NATIVE_NAME_LENGTH = 64
@@ -337,6 +339,22 @@ _END_CONNECTION_ENDS = {
 _PINNED_END_CONNECTIONS = frozenset({"pinned", "free", "zero"})
 # Host-driven (platform-borne) BODIES types, MoorDyn aliases included (native append_body)
 _HOST_BODY_TYPES = frozenset({"coupled", "vessel", "cpld", "ves"})
+# native apply_option: MoorDyn-F's inertialF other than 1
+_INERTIAL_F_MESSAGE = (
+    "CableDyn returns the inertia of coupled bodies and rods with their coupled loads, as "
+    "MoorDyn-F's inertialF 1; inertialF 0 (MoorDyn-F's default: no inertia) and 2 (the inertia "
+    "ramped in) are not supported: use 1 or remove the row"
+)
+# Bodies pinned to a host node (MoorDyn CoupledPinned/VesselPinned): coupled hosts only
+_PINNED_BODY_TYPES = frozenset({"coupledpinned", "cpldpin", "vesselpinned", "vespin"})
+_PINNED_BODY_HOST_MESSAGE = (
+    "CoupledPinned/VesselPinned BODY requires a coupled host (OpenFAST CompMooring = 5); in a "
+    "standalone deck use a Free body, or a Coupled body with a motionFile"
+)
+_RIGID6_DYNAMIC_MESSAGE = "Rigid6 BODY requires a dynamic deck with dtM and TMax"
+_PINNED_BODY_VALUE_MESSAGE = (
+    "CoupledPinned/VesselPinned BODY requires Ixx/Iyy/Izz > 0 and non-negative Mass/Vol/CdA/Ca"
+)
 
 # MoorDyn RODS attachment aliases (native append_rod)
 _ROD_ATTACHMENT_ALIASES = {
@@ -360,9 +378,13 @@ _MAX_STATIC_TWIST_DEG = 360000.0
 _TORSION_NORMAL_PARALLEL_TOL = 1.0e-3
 _WATERKIN_FILENAME_LETTERS = frozenset("abcdfghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
 # MoorDyn-C kinematics files the native reader opens by fixed name in the deck folder
-# (read_moordyn_c_kinematics): WaveKin 3, WaveKin 7 and Currents 1.
+# (read_moordyn_c_kinematics): WaveKin 3, WaveKin 7 and Currents 1, 2 and 5.
 _MOORDYN_C_WAVE_FILES = {3: "wave_elevation.txt", 7: "wave_frequencies.txt"}
-_MOORDYN_C_CURRENT_FILE = "current_profile.txt"
+_MOORDYN_C_CURRENT_FILES = {
+    1: "current_profile.txt",
+    2: "current_profile_dynamic.txt",
+    5: "current_profile_4d.txt",
+}
 
 
 def _moordyn_c_wave_kin(value: str | None) -> int:
@@ -379,10 +401,11 @@ def _moordyn_c_wave_kin(value: str | None) -> int:
 
 
 def _moordyn_c_currents(value: str | None) -> int:
-    """Return the MoorDyn-C ``Currents`` mode (0 or 1) of a validated row value."""
+    """Return the MoorDyn-C ``Currents`` mode (0, 1, 2 or 5) of a validated row value."""
     if value is None:
         return 0
-    return 1 if round(_native_float(value)) == 1 else 0
+    mode = round(_native_float(value))
+    return mode if mode in _MOORDYN_C_CURRENT_FILES else 0
 
 
 def _comment_position(text: str) -> int | None:
@@ -1147,7 +1170,16 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         lower, upper = 0.0, None
     elif key == "rhoinf":
         lower, upper = 0.0, 1.0
-    elif raw in {"dtic", "tmaxic", "cdscaleic", "threshic", "writelog", "dtout"}:
+    elif raw in {
+        "dtic",
+        "tmaxic",
+        "cdscaleic",
+        "threshic",
+        "writelog",
+        "dtout",
+        "inertialf",
+        "inertialf_rampt",
+    }:
         lower, upper = None, None
     else:
         lower = upper = None
@@ -1180,6 +1212,8 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "dtout",
         "dtwave",
         "wvhicoff",
+        "inertialf",
+        "inertialf_rampt",
     }:
         try:
             numeric = _native_float(value)
@@ -1361,9 +1395,13 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
             numeric = _native_float(value)
         except ValueError:
             return "must be numeric"
+        # native apply_option: 0 none and the MoorDyn-C current files 1, 2 and 5; 3 and 4
+        # (MoorDyn-C's node approaches) have no current source in MoorDyn-C v2.7.1
         if not math.isfinite(numeric) or abs(numeric - round(numeric)) > 1.0e-9:
-            return "supports only mode 0 or 1"
-        return None if round(numeric) in {0, 1} else "supports only mode 0 or 1"
+            return "supports only mode 0, 1, 2 or 5"
+        if round(numeric) in {3, 4}:
+            return f"{round(numeric)} has no current source in MoorDyn-C v2.7.1; use 1, 2 or 5"
+        return None if round(numeric) in {0, 1, 2, 5} else "supports only mode 0, 1, 2 or 5"
     if key == "waterkin":
         lowered = value.lower()
         if lowered in {"none", "seastate"} or any(
@@ -1567,7 +1605,9 @@ class DeckFile:
     rule depends on the host and is checked when OpenFAST initialises the module: the
     current is kept as a steady field when SeaState carries no waves or current and is
     rejected otherwise. The native C API (:class:`cabledyn.CableDyn`) reads decks with the
-    standalone rules.
+    standalone rules, so it rejects the ``CoupledPinned``/``VesselPinned`` bodies and rods
+    that ``caller_driven=True`` accepts; FAST.Farm, in turn, refuses bodies and rods when it
+    initialises the module.
     """
 
     def __init__(
@@ -1855,15 +1895,18 @@ class DeckFile:
         row: DeckRecord,
         numeric: Callable[[str, DeckRecord, str], float],
         has_motion_file: bool = False,
+        has_dtm: bool = True,
     ) -> None:
         """Validate a 14-column MoorDyn BODIES row as the native reader does."""
         attachment = row.tokens[1].lower()
-        if attachment not in {"free", *_HOST_BODY_TYPES}:
+        if attachment not in {"free", *_HOST_BODY_TYPES, *_PINNED_BODY_TYPES}:
             raise DeckFormatError(
                 f"{self._at(row)}: BODIES attachment {row.tokens[1]!r} is not supported in the "
-                "14-column MoorDyn row (Free, Coupled, or Vessel bodies)"
+                "14-column MoorDyn row (Free, Coupled, Vessel, CoupledPinned or VesselPinned "
+                "bodies)"
             )
         host = attachment in _HOST_BODY_TYPES
+        pinned = attachment in _PINNED_BODY_TYPES
         if host and not (has_motion_file or self.caller_driven):
             raise DeckFormatError(
                 f"{self._at(row)}: Coupled/Vessel BODY requires a motionFile (or a coupled host)"
@@ -1897,6 +1940,16 @@ class DeckFile:
             coordinates + lists["CG"], [mass, volume, cda[0], *lists["I"]], ca[0]
         ):
             raise DeckFormatError(f"{self._at(row)}: {_BODY_RANGE_MESSAGE}")
+        if pinned:
+            # native finalize_checks: the Rigid6 dynamic-deck rule first, then only a coupled
+            # host moves the reference point; the rotation is integrated
+            if not (has_dtm or self.caller_driven):
+                raise DeckFormatError(f"{self._at(row)}: {_RIGID6_DYNAMIC_MESSAGE}")
+            if not self.caller_driven:
+                raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_HOST_MESSAGE}")
+            if min(mass, volume, cda[0], ca[0]) < 0.0 or any(v <= 0.0 for v in lists["I"]):
+                raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_VALUE_MESSAGE}")
+            return
         if host:
             # a platform-borne body may be a massless attachment frame
             if min(mass, volume, cda[0], ca[0], *lists["I"]) < 0.0:
@@ -2293,6 +2346,9 @@ class DeckFile:
             raise DeckFormatError(f"{where}: unknown OPTION keyword {keyword!r}")
         if error := _scalar_option_value_error(keyword, tokens[0]):
             raise DeckFormatError(f"{where}: OPTION {keyword} {error}")
+        if keyword.lower() == "inertialf" and _native_float(tokens[0]) != 1.0:
+            # native apply_option: CableDyn always returns the coupled objects' inertia
+            raise DeckFormatError(f"{where}: OPTION inertialF {tokens[0]}: {_INERTIAL_F_MESSAGE}")
         _raise_option_defect(where, tokens)
         value = _strip_quotes(tokens[0]) if keyword.lower() in _PATH_OPTIONS else tokens[0]
         return OptionRecord(index, keyword, (value,), description, False, tuple(tokens[2:]))
@@ -2351,7 +2407,7 @@ class DeckFile:
         that depend on their contents stay with the solver: for example the
         anchor height on a bathymetry surface, whether a WaterKin file carries
         waves (``WaveKinMod``) for ``vesselRAO``, and whether its current
-        doubles a ``current`` row or ``Currents 1``.
+        doubles a ``current`` row or ``Currents 1``, ``2`` or ``5``.
 
         Raises
         ------
@@ -2450,8 +2506,8 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{self._label}: OPTION TMax must be an integer multiple of dtM"
                 )
-        # MoorDyn-C WaveKin 3/7 and Currents 1 (native read_moordyn_c_kinematics): component
-        # waves and a steady current profile read from fixed-name files in the deck folder.
+        # MoorDyn-C WaveKin 3/7 and Currents 1/2/5 (native read_moordyn_c_kinematics): component
+        # waves and a current profile or grid read from fixed-name files in the deck folder.
         # The coupled aggregate takes its water kinematics from the host and rejects both.
         waterkin_row = option_by_key.get("waterkin")
         currents_row = option_by_key.get("currents")
@@ -2459,8 +2515,8 @@ class DeckFile:
         mdc_currents = _moordyn_c_currents(None if currents_row is None else currents_row.values[0])
         if self.caller_driven and (mdc_wave_kin or mdc_currents):
             raise DeckFormatError(
-                f"{self._label}: the MoorDyn-C WaveKin 3/7 and Currents 1 files are not supported "
-                "on the coupled route (coupled runs take water kinematics from the host)"
+                f"{self._label}: the MoorDyn-C WaveKin 3/7 and Currents 1/2/5 files are not "
+                "supported on the coupled route (coupled runs take water kinematics from the host)"
             )
         # Native apply_option: motionFile, vesselMotion and vesselRAO are alternative
         # sources of one prescribed motion; activating a second one is an error, and a
@@ -2578,7 +2634,7 @@ class DeckFile:
         ):
             raise DeckFormatError(f"{self._label}: a wave train needs |direction| <= 1e6 deg")
         # native read_moordyn_c_kinematics: WaveKin 3/7 components add to no other deck sea,
-        # and Currents 1 to no other current; each then needs the dynamic sea/current setup.
+        # and Currents 1/2/5 to no other current; each then needs the dynamic sea/current setup.
         if mdc_wave_kin:
             if has_waves or trains:
                 raise DeckFormatError(
@@ -2592,11 +2648,13 @@ class DeckFile:
         if mdc_currents:
             if current is not None and current.values[0].lower() != "none":
                 raise DeckFormatError(
-                    f"{self._label}: the deck declares both a current OPTION and Currents 1 "
-                    "(double-counting); keep one"
+                    f"{self._label}: the deck declares both a current OPTION and Currents "
+                    f"{mdc_currents} (double-counting); keep one"
                 )
             if not has_dtm:
-                raise DeckFormatError(f"{self._label}: standalone Currents 1 requires dtM and TMax")
+                raise DeckFormatError(
+                    f"{self._label}: standalone Currents {mdc_currents} requires dtM and TMax"
+                )
         friction = option_by_key.get("friction")
         friction_active = False
         iso = 0.0
@@ -3302,15 +3360,32 @@ class DeckFile:
         bodies = self._rows("BODIES")
         for row in bodies:
             if len(row.tokens) == 14:
-                self._check_moordyn_body_row(row, numeric, has_motion_file)
+                self._check_moordyn_body_row(row, numeric, has_motion_file, has_dtm)
                 continue
             if len(row.tokens) not in {15, 18}:
                 raise DeckFormatError(f"{self._at(row)}: BODIES row needs 14, 15 or 18 fields")
             body_type = row.tokens[1].lower()
-            if body_type in {"coupledpinned", "cpldpin"}:
-                raise DeckFormatError(
-                    f"{self._at(row)}: CoupledPinned BODY is not supported (use Coupled or Free)"
-                )
+            if body_type in _PINNED_BODY_TYPES:
+                # native finalize_checks: the host moves the reference point of a CoupledPinned
+                # body, so only a coupled host runs it; its rotation is integrated
+                values = [
+                    numeric(row.tokens[index], row, f"BODIES column {index + 1}")
+                    for index in range(2, len(row.tokens))
+                ]
+                if _body_outside_admissible_range(
+                    values[:6], values[6:12] + values[13:], values[12]
+                ):
+                    raise DeckFormatError(f"{self._at(row)}: {_BODY_RANGE_MESSAGE}")
+                if not (has_dtm or self.caller_driven):
+                    raise DeckFormatError(f"{self._at(row)}: {_RIGID6_DYNAMIC_MESSAGE}")
+                if not self.caller_driven:
+                    raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_HOST_MESSAGE}")
+                inertia = values[13:16] if len(values) >= 16 else [0.0, 0.0, 0.0]
+                if min(values[6], values[7], values[11], values[12]) < 0.0 or any(
+                    value <= 0.0 for value in inertia
+                ):
+                    raise DeckFormatError(f"{self._at(row)}: {_PINNED_BODY_VALUE_MESSAGE}")
+                continue
             if body_type in _HOST_BODY_TYPES:
                 if not (has_motion_file or self.caller_driven):
                     raise DeckFormatError(
@@ -3356,7 +3431,8 @@ class DeckFile:
         body_types = {
             str(_native_int(row.tokens[0])): (
                 "rigid6"
-                if len(row.tokens) == 14 or row.tokens[1].lower() in _HOST_BODY_TYPES
+                if len(row.tokens) == 14
+                or row.tokens[1].lower() in _HOST_BODY_TYPES | _PINNED_BODY_TYPES
                 else row.tokens[1].lower()
             )
             for row in bodies
@@ -4818,9 +4894,10 @@ class DeckFile:
         """Return the fixed-name kinematics files this deck reads from its own folder.
 
         MoorDyn-C ``WaveKin 3`` reads ``wave_elevation.txt``, ``WaveKin 7`` reads
-        ``wave_frequencies.txt`` and ``Currents 1`` reads ``current_profile.txt``;
-        the native reader opens them by name next to the deck, so a deck written
-        to another folder needs them copied there.
+        ``wave_frequencies.txt``, ``Currents 1`` reads ``current_profile.txt``,
+        ``Currents 2`` ``current_profile_dynamic.txt`` and ``Currents 5``
+        ``current_profile_4d.txt``; the native reader opens them by name next to the
+        deck, so a deck written to another folder needs them copied there.
         """
         effective = {_option_key(record.keyword): record for record in self.options}
         names: list[str] = []
@@ -4829,8 +4906,9 @@ class DeckFile:
         if mode:
             names.append(_MOORDYN_C_WAVE_FILES[mode])
         currents = effective.get("currents")
-        if _moordyn_c_currents(None if currents is None else currents.values[0]):
-            names.append(_MOORDYN_C_CURRENT_FILE)
+        mode = _moordyn_c_currents(None if currents is None else currents.values[0])
+        if mode:
+            names.append(_MOORDYN_C_CURRENT_FILES[mode])
         return tuple(names)
 
     def _rebase_relative_inputs(self, target_directory: str | os.PathLike[str]) -> None:
@@ -4949,7 +5027,8 @@ def generate_deck_cases(
     rewritten so they still resolve from the new location. The MoorDyn-C
     kinematics files that the solver reads by fixed name from the deck folder
     (``wave_elevation.txt`` for ``WaveKin 3``, ``wave_frequencies.txt`` for
-    ``WaveKin 7``, ``current_profile.txt`` for ``Currents 1``) are copied into
+    ``WaveKin 7``, ``current_profile.txt``, ``current_profile_dynamic.txt`` and
+    ``current_profile_4d.txt`` for ``Currents 1``, ``2`` and ``5``) are copied into
     ``output_directory``. A ``cases.json`` manifest records the source deck,
     its SHA-256 digest, and every case's changes and digest (with the digests
     of the copied kinematics files it reads); :func:`cabledyn.run_study`

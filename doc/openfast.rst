@@ -385,7 +385,9 @@ without an auxiliary process:
 * **Active tensioning** maps ServoDyn ``CableDeltaL``/``CableDeltaLdot`` control onto the
   fairlead-side segment of ``EI = 0`` lines and finite-EI cables, the segment at the line's end
   on a host-driven point, or at the ``NodeB`` written in the deck when both or neither ends are
-  (:doc:`driver_format`, CONTROL). On a finite-EI cable the command scales every cable element
+  (:doc:`driver_format`, CONTROL). A viscoelastic or Syrope polyester segment carries its
+  slow stretch over the length change, as MoorDyn-F and MoorDyn-C do.
+  On a finite-EI cable the command scales every cable element
   of that segment, and needs the force-blended generalised-α (the default). On both kinds a
   command outside MoorDyn-F's bounds, from minus half to plus one ``UnstrLen``/N of the line
   (the controlled segment's initial length on a line of one section), stops the run with a
@@ -394,8 +396,9 @@ without an auxiliary process:
   CONTROL.
 * **Rigid6 bodies, Point3 bodies, and rigid rods** are translated at the deck boundary; their
   supported loads and restrictions in coupled runs are listed in :doc:`capabilities`. Free
-  Rigid6 bodies, free rods and pinned rods start at their static equilibrium with the platform
-  at ``PtfmInit`` (``bodyIC static``, the default), as in standalone runs; one that carries no
+  Rigid6 bodies, free and pinned rods and pinned bodies start at their static equilibrium with
+  the platform at ``PtfmInit`` (``bodyIC static``, the default), as in standalone runs; one that
+  carries no
   line is not part of that solve and starts at rest in its deck pose. ``Coupled``/``Vessel``
   rods are platform-borne: each is a node of the coupling mesh at its End A that follows the
   platform position and orientation and returns a force and a moment (MoorDyn-F's coupled rod,
@@ -410,7 +413,19 @@ without an auxiliary process:
   the platform before the static solve balances it about its pin. ``Pinned`` rods turn about a
   fixed End A. ``Coupled``/``Vessel`` bodies are platform-borne the same way as ``Coupled`` rods,
   with the node at the body reference point, and may share a deck with ``Free`` bodies.
-  ``CoupledPinned`` bodies are not supported on this route.
+  ``CoupledPinned``/``VesselPinned`` bodies are pinned to the platform like ``CoupledPinned`` rods:
+  the node at the body reference point follows the platform position only, the body turns about
+  it with its own three rotations (its inertia about the node, its weight and buoyancy at the
+  centre of gravity, the node acceleration and the moments of its lines; MoorDyn-F's coupled pinned
+  body), and the node returns the body's net load less its inertia, with zero moment, the angular
+  acceleration again solved for the node's current acceleration. ``PtfmInit`` moves and turns such
+  a body with the platform before the static solve balances it about its node (MoorDyn-F's
+  driver keeps the deck orientation of a coupled pinned body: with ``bodyIC deck`` and a
+  ``PtfmInit`` rotation the start poses differ). Its inertias ``Ixx``/``Iyy``/``Izz`` must be
+  positive. Linearisation fails closed on decks with bodies. The force follows MoorDyn-F's
+  coupled pinned body with ``inertialF 1`` (CableDyn always includes the inertia), with the
+  differences given in :doc:`theory` (the centripetal force of the structural mass only, the
+  wetted buoyancy, the lines' consistent end-node inertia).
 
 Each is a separate qualification: a successful ordinary run does not qualify restart,
 linearisation, control, failure, or farm behaviour for a new model.

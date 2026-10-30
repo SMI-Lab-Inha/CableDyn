@@ -757,10 +757,13 @@ Ambient fluid and prescribed motion
      - standalone
      - ``6.2832 WvHiCOff``
    * - ``Currents``
-     - ``0`` or ``1``
+     - ``0``, ``1``, ``2`` or ``5``
      - ``0``
-     - ``1`` reads the MoorDyn-C steady profile ``current_profile.txt`` in the deck folder; the
-       other MoorDyn-C modes fail closed by name. ``current`` and a WaterKin table are the other
+     - the MoorDyn-C current file in the deck folder: ``1`` the steady profile
+       ``current_profile.txt``, ``2`` the depth profile in time ``current_profile_dynamic.txt``,
+       ``5`` the grid in x, y, z and time ``current_profile_4d.txt``, each interpolated as
+       MoorDyn-C v2.7.1 does (:ref:`moordyn-c-wavekin`); ``3`` and ``4`` (no current source in
+       MoorDyn-C v2.7.1) fail closed by name. ``current`` and a WaterKin table are the other
        sources; two sources in one deck are rejected
      - standalone
      - ``1 Currents``
@@ -788,6 +791,13 @@ These names exist so a migrated MoorDyn deck fails less often at the syntax boun
    * - ``WriteLog``
      - plain number
      - Parsed strictly and ignored; reporting uses the normal CableDyn/OpenFAST diagnostics.
+   * - ``inertialF``, ``inertialF_rampT``
+     - plain number
+     - ``inertialF 1`` is accepted without effect: CableDyn always returns the inertia of coupled
+       bodies and rods (``Coupled``/``Vessel`` and ``CoupledPinned``/``VesselPinned``) with
+       their coupled loads, as MoorDyn-F's ``inertialF 1``. ``0`` (MoorDyn-F's default, no
+       inertia) and ``2`` (the inertia ramped in) are rejected by name. ``inertialF_rampT``, the
+       ramp time of ``inertialF 2``, is parsed strictly and ignored.
    * - ``dtOut``
      - plain number
      - Parsed strictly and ignored. Standalone output follows ``dtM``; coupled ``.CD.out``
@@ -802,9 +812,9 @@ These names exist so a migrated MoorDyn deck fails less often at the syntax boun
        ``frictionMu``, ``frictionMuLateral`` and ``frictionMuAxial``, with no static-to-kinetic
        ratio or friction damping. Remove the row.
 
-Other MoorDyn constructs that fail by name rather than as unknown input: ``CoupledPinned`` bodies,
-and ``CoupledPinned``/``VesselPinned`` rods outside a coupled host (they run in OpenFAST, see
-:doc:`openfast`). Line-node output channels start at node 1 (``N0`` is rejected; MoorDyn numbers from 0, see
+Other MoorDyn constructs that fail by name rather than as unknown input:
+``CoupledPinned``/``VesselPinned`` rods and bodies outside a coupled host (they run in OpenFAST,
+see :doc:`openfast`). Line-node output channels start at node 1 (``N0`` is rejected; MoorDyn numbers from 0, see
 :ref:`node numbering <outputs-moordyn-node-numbers>`), and a number
 with a sign inside its mantissa (such as ``1+2``) is rejected instead of being read up to the sign.
 

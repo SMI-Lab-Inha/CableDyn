@@ -20,7 +20,10 @@ MODULE CableDyn_OpenFAST_Aggregate
   !!                                          (translation in, force out, zero moment; the rod
   !!                                          turns about it on its own),
   !!   last nhost_body columns              -> the k-th Coupled/Vessel BODY's reference point
-  !!                                          (6-DOF host node, force and moment about it),
+  !!                                          (6-DOF host node, force and moment about it) or
+  !!                                          CoupledPinned BODY's reference point (translation
+  !!                                          in, force out, zero moment; the body turns about
+  !!                                          it on its own),
   !! with ncp_total = ncp_sys + ncable + nhost_rod + nhost_body. All facade arrays are shaped
   !! (3, ncp_total).
   !!
@@ -78,6 +81,7 @@ MODULE CableDyn_OpenFAST_Aggregate
                                  CD_Rod_GetFluidPositions, CD_Rod_SetHeldFluid, &
                                  CD_Rod_NHost, CD_Rod_SetHostKinematics, CD_Rod_GetHostKinematics, &
                                  CD_Rod_ScatterHostPoints, CD_Rod_HostWrench, CD_Rod_Stage, CD_Rod_Unstage, &
+                                 CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations, &
                                  CD_Deck_Range_Sample_Aggregate, CD_Deck_Range_Write
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
   USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
@@ -235,12 +239,18 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! the full EI=0 coupled-block scratch (3, n_system_coupled_dof/3) their Rod<N>A/B points are
     ! overlaid on.
     INTEGER :: nhost_rod = 0
-    INTEGER :: nhost_body = 0   ! Coupled/Vessel bodies: the trailing host nodes after the rods
+    INTEGER :: nhost_body = 0   ! Coupled/Vessel and CoupledPinned bodies: the trailing host nodes
     ! Body/rod marches: the host fairleads' t + dt motion as a flat coupled-DOF overlay
     ! (hf_mask marks the moving DOFs), passed into the march as the line step's end motion.
     LOGICAL, ALLOCATABLE :: hf_mask(:)
     REAL(wp), ALLOCATABLE :: hf_q(:), hf_v(:), hf_a(:)
     REAL(wp), ALLOCATABLE :: hb_pos(:, :), hb_vel(:, :), hb_acc(:, :), hb_load(:, :)
+    ! The bodies and rods carry the accelerations of a committed step or of a restored state mirror;
+    ! until then a transfer of the step-start host kinematics or new host fluid fields re-solve
+    ! their start accelerations (start_object_accelerations), so the mirror carries them from
+    ! t = 0, in the host's field. snap_objects_committed joins the aggregate snapshot.
+    LOGICAL :: objects_committed = .FALSE.
+    LOGICAL :: snap_objects_committed = .FALSE.
     LOGICAL :: initialized = .FALSE.
   END TYPE CD_AGG_ModuleType
 
@@ -518,6 +528,13 @@ CONTAINS
       CALL CD_AGG_End(candidate, es, em)
       RETURN
     END IF
+    ! the bodies and rods start from their accelerations at the initial state, the host at rest in its
+    ! Init pose (the first step's start; the state mirror then carries them from t = 0)
+    CALL start_object_accelerations(candidate, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_AGG_OK) THEN
+      CALL CD_AGG_End(candidate, es, em)
+      RETURN
+    END IF
     candidate%dt = dt                  ! freeze the coupling step for the fixed-dt Step_Moving guard
     candidate%initialized = .TRUE.
     CALL CD_AGG_End(self, es, em)
@@ -717,7 +734,8 @@ CONTAINS
         IF (PRESENT(moment)) moment(:, col) = y_fair
       END DO
     END IF
-    ! Host body nodes: the reference-point kinematics and the wrench about it.
+    ! Host body nodes: the reference-point kinematics and the wrench about it (a CoupledPinned
+    ! body: its force, with zero moment).
     IF (self%nhost_body > 0) THEN
       CALL CD_FMF_GetPointMesh(self%sys, self%hb_pos, self%hb_vel, self%hb_acc, self%hb_load, es, em)
       IF (es /= CD_FMF_OK) THEN
@@ -863,7 +881,7 @@ CONTAINS
     END IF
     IF (self%nhost_rod + self%nhost_body > 0) THEN
       ! a transfer without advancing: the host kinematics of the committed time, from which the
-      ! next step of a CoupledPinned rod starts (an output probe is restored by its caller)
+      ! next step of a CoupledPinned rod or body starts (an output probe is restored by its caller)
       IF (PRESENT(orientation)) THEN
         CALL set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, orientation=orientation, &
                               angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha, step_start=.TRUE.)
@@ -873,6 +891,12 @@ CONTAINS
       END IF
       IF (ErrStat /= CD_AGG_OK) RETURN
       CALL overlay_host_objects(self, is_output_probe, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) RETURN
+    END IF
+    ! before the first step, a committed (non-probe) transfer of the step-start kinematics moves
+    ! the start of the first step: the start accelerations follow it
+    IF (.NOT. (is_output_probe .OR. self%objects_committed)) THEN
+      CALL start_object_accelerations(self, ErrStat, ErrMsg)
       IF (ErrStat /= CD_AGG_OK) RETURN
     END IF
     DO c = 1, self%ncable
@@ -1044,7 +1068,8 @@ CONTAINS
       ! start the generalized-alpha step from the t + dt end state and corrupt the ends' history.
       CALL host_fairlead_motion(self, position, velocity, acceleration)
       ! The step-start bodies are staged before anything moves them: host-driven
-      ! (Coupled/Vessel) bodies take the t+dt host kinematics before the march, and a check
+      ! (Coupled/Vessel) bodies take the t+dt host kinematics before the march (CoupledPinned ones
+      ! their t+dt node translation), and a check
       ! after a successful march (plausibility, FAILURE rows) can still reject the step, so
       ! every failure path below un-stages them together with the system rewind.
       CALL CD_Rigid6_Stage(self%rigid6)
@@ -1230,6 +1255,7 @@ CONTAINS
         RETURN
       END IF
     END IF
+    IF (self%has_rigid6 .OR. self%has_rod) self%objects_committed = .TRUE.
     ErrStat = CD_AGG_OK
     ErrMsg = ''
 
@@ -1280,6 +1306,9 @@ CONTAINS
     ! only sys%fast%system); capture them so a correction rewind un-advances the body too.
     IF (self%has_rigid6) CALL CD_Rigid6_Snapshot(self%rigid6)
     IF (self%has_rod) CALL CD_Rod_Snapshot(self%rod)
+    ! a rewind to a state before the first step takes the start accelerations open again (new
+    ! fluid fields re-solve them)
+    self%snap_objects_committed = self%objects_committed
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_Snapshot
@@ -1314,6 +1343,7 @@ CONTAINS
     IF (ALLOCATED(self%snap_failures)) self%failures = self%snap_failures
     IF (self%has_rigid6) CALL CD_Rigid6_Restore(self%rigid6)
     IF (self%has_rod) CALL CD_Rod_Restore(self%rod)
+    self%objects_committed = self%snap_objects_committed
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_Restore
@@ -1533,6 +1563,9 @@ CONTAINS
     !! drag configuration, so the model layer alone cannot catch them).
     !! dynamic_pressure (optional, Pa, shaped (nfluid)): the wave dynamic pressure at the nodes;
     !! the rod blocks use it for the end-cap pressure (other blocks ignore it).
+    !! Before the first committed step (and before a state mirror is restored) the integrated
+    !! bodies and rods re-solve their start accelerations in the new fields: the accelerations
+    !! solved at Init saw the zero fields of the build, and the first step starts from them.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: fluid_velocity(:, :), fluid_acceleration(:, :), waterline_z(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1657,9 +1690,50 @@ CONTAINS
         RETURN
       END IF
     END IF
+    ! the start of the first step: the bodies' and rods' accelerations in the host's field (the
+    ! OpenFAST shell sets its t = 0 field at Init, before the output call and its mirror restore)
+    IF (.NOT. self%objects_committed .AND. (self%has_rigid6 .OR. self%has_rod)) THEN
+      CALL start_in_fluid_fields(self, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) RETURN
+    END IF
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_SetFluidFields
+
+  SUBROUTINE start_in_fluid_fields(self, ErrStat, ErrMsg)
+    !! The start of the first step in new host fluid fields (CD_AGG_SetFluidFields before the first
+    !! committed step): a committed transfer of the EI=0 system's present moving-point kinematics,
+    !! which solves the line interior accelerations in the fields (the end-node loads on the
+    !! objects carry their consistent inertia), then the bodies' and rods' start accelerations --
+    !! the start a step-start transfer (CD_AGG_UpdateStates_Moving) gives in the same fields.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: pos(:, :), vel(:, :), acc(:, :), load(:, :)
+    INTEGER :: n, es, stat
+    CHARACTER(1024) :: em
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+    IF (.NOT. self%has_sys) RETURN
+    n = CD_FMF_NMovingPoints(self%sys, es, em)
+    IF (es /= CD_FMF_OK) THEN
+      CALL map_fmf_status(es, em, ErrStat, ErrMsg)
+      RETURN
+    END IF
+    ALLOCATE (pos(3, n), vel(3, n), acc(3, n), load(3, n), STAT=stat)
+    IF (stat /= 0) THEN
+      ErrStat = CD_AGG_ALLOCFAIL
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: start-state workspace allocation failed'
+      RETURN
+    END IF
+    CALL CD_FMF_GetMovingPointMesh(self%sys, pos, vel, acc, load, es, em)
+    IF (es == CD_FMF_OK) CALL CD_FMF_UpdateStates_Moving(self%sys, pos, vel, acc, es, em)
+    IF (es /= CD_FMF_OK) THEN
+      CALL map_fmf_status(es, em, ErrStat, ErrMsg)
+      RETURN
+    END IF
+    CALL start_object_accelerations(self, ErrStat, ErrMsg)
+  END SUBROUTINE start_in_fluid_fields
 
   SUBROUTINE CD_AGG_CalcOutput(self, ErrStat, ErrMsg)
     !! Compute the EI=0 system loads at the current committed state (stored in the system's
@@ -2418,11 +2492,55 @@ CONTAINS
     IF (es /= CD_FMF_OK) CALL map_fmf_status(es, em, ErrStat, ErrMsg)
   END SUBROUTINE overlay_host_objects
 
+  SUBROUTINE start_object_accelerations(self, ErrStat, ErrMsg)
+    !! Solve the start accelerations of the integrated bodies and rods at the current state
+    !! (CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations), in the held fluid fields: at
+    !! Init and, before the first step, at a committed transfer of the step-start kinematics and
+    !! at new host fluid fields (CD_AGG_SetFluidFields). The OpenFAST shell restores
+    !! the state mirror after every CalcOutput, which marks the object accelerations committed;
+    !! solved here, the mirror carries the start accelerations, and the first step starts from them
+    !! instead of from zero.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    LOGICAL :: pin_b, pin_r
+    CHARACTER(1024) :: em
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+    pin_b = .FALSE.
+    pin_r = .FALSE.
+    IF (.NOT. self%has_sys) RETURN
+    IF (self%has_rigid6) THEN
+      CALL CD_Rigid6_StartAccelerations(self%sys%fast%system, self%rigid6, es, em, pinned=pin_b)
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL map_deck_status(es, em, ErrStat, ErrMsg)
+        RETURN
+      END IF
+    END IF
+    IF (self%has_rod) THEN
+      CALL CD_Rod_StartAccelerations(self%sys%fast%system, self%rod, es, em, pinned=pin_r)
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL map_deck_status(es, em, ErrStat, ErrMsg)
+        RETURN
+      END IF
+    END IF
+    ! the line ends on a CoupledPinned rod or body move with its solved acceleration (a mirror
+    ! restore puts them there too, CD_AGG_Set_Rigid6_States, CD_AGG_Set_Rod_States), and the line
+    ! interior accelerations follow them (a committed transfer); Coupled/Vessel objects keep the
+    ! host's (Init) motion
+    IF (.NOT. (pin_b .OR. pin_r)) RETURN
+    CALL overlay_host_objects(self, .FALSE., ErrStat, ErrMsg)
+    IF (ErrStat == CD_AGG_OK) CALL CD_FMF_Refresh_PointMesh(self%sys, ErrStat, ErrMsg)
+  END SUBROUTINE start_object_accelerations
+
   SUBROUTINE set_host_objects(self, position, velocity, acceleration, ErrStat, ErrMsg, orientation, &
                               angular_velocity, angular_acceleration, step_start)
-    !! Impose the host-rod columns (the trailing nhost_rod moving columns) on the rod runtime.
+    !! Impose the host-rod and host-body columns (the trailing nhost_rod + nhost_body moving
+    !! columns) on the rod and Rigid6 runtimes.
     !! step_start: a transfer that does not advance (CD_AGG_UpdateStates_Moving), whose host
-    !! kinematics the next step of a CoupledPinned rod starts from (CD_Rod_SetHostKinematics).
+    !! kinematics the next step of a CoupledPinned rod or body starts from
+    !! (CD_Rod_SetHostKinematics, CD_Rigid6_SetHostKinematics).
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -2443,12 +2561,13 @@ CONTAINS
       IF (PRESENT(orientation)) THEN
         CALL CD_Rigid6_SetHostKinematics(self%rigid6, position(:, c0:c1), velocity(:, c0:c1), &
                                          acceleration(:, c0:c1), es, em, orientation(:, :, c0:c1), &
-                                         angular_velocity(:, c0:c1), angular_acceleration(:, c0:c1))
+                                         angular_velocity(:, c0:c1), angular_acceleration(:, c0:c1), &
+                                         step_start=at_start)
       ELSE
         CALL CD_Rigid6_SetHostKinematics(self%rigid6, position(:, c0:c1), velocity(:, c0:c1), &
                                          acceleration(:, c0:c1), es, em, &
                                          angular_velocity=angular_velocity(:, c0:c1), &
-                                         angular_acceleration=angular_acceleration(:, c0:c1))
+                                         angular_acceleration=angular_acceleration(:, c0:c1), step_start=at_start)
       END IF
       IF (es /= CD_DECKDRV_OK) THEN
         CALL map_deck_status(es, em, ErrStat, ErrMsg)
@@ -2647,7 +2766,9 @@ CONTAINS
     ErrMsg = ''
     IF (.NOT. self%has_rigid6) RETURN
     CALL CD_Rigid6_Set_States(self%rigid6, states, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_AGG_OK .OR. self%nhost_body == 0) RETURN
+    IF (ErrStat /= CD_AGG_OK) RETURN
+    self%objects_committed = .TRUE.
+    IF (self%nhost_body == 0) RETURN
     ! Host-driven bodies: their Body<N> line ends follow the restored body state exactly.
     CALL overlay_host_objects(self, .TRUE., ErrStat, ErrMsg)
     IF (ErrStat == CD_AGG_OK) CALL CD_FMF_Refresh_PointMesh(self%sys, ErrStat, ErrMsg)
@@ -2681,6 +2802,7 @@ CONTAINS
     IF (.NOT. self%has_rod) RETURN
     CALL CD_Rod_Set_States(self%rod, states, ErrStat, ErrMsg)
     IF (ErrStat /= CD_AGG_OK) RETURN
+    self%objects_committed = .TRUE.
     CALL CD_Rod_Apply_States(self%sys%fast%system, self%rod, ErrStat, ErrMsg)
     IF (ErrStat /= CD_AGG_OK) RETURN
     ! Host-driven rods: their Rod<N>A/B line ends follow the restored rod state exactly (an

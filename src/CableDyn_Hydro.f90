@@ -26,6 +26,8 @@ MODULE CableDyn_Hydro
   PUBLIC :: CD_Froude_Krylov_Per_Length
   PUBLIC :: CD_Solve_Dispersion_Wavenumber
   PUBLIC :: CD_Current_Profile_Velocity
+  PUBLIC :: CD_CurrentGridType, CD_Current_Grid_Resample, CD_Current_Grid_Velocity
+  PUBLIC :: CD_Current_Grid_Gradient, CD_Current_Profile_Gradient
   PUBLIC :: CD_SeaState_Steady_Current
   PUBLIC :: CD_Airy_Wave_Kinematics
   PUBLIC :: CD_Airy_Wave_Kinematics_Precomputed
@@ -61,6 +63,24 @@ MODULE CableDyn_Hydro
   REAL(wp), PARAMETER :: DEG2RAD = PI/180.0_wp
   REAL(wp), PARAMETER :: MIN_TANGENT_NORM = 1.0e-12_wp
   INTEGER, PARAMETER :: CD_JONSWAP_COMPONENTS = 200
+  ! largest resampled current grid (nx ny nz nt samples of three velocity components, 48 MB):
+  ! every static current object (each line's static solve) holds its own copy of the grid
+  INTEGER(INT64), PARAMETER :: MAX_CURRENT_GRID_SAMPLES = 2000000_INT64
+
+  ! A current tabulated on a rectilinear grid in space and time, as MoorDyn-C (v2.7.1) holds its
+  ! time-varying currents (moordyn::waves::CurrentGrid of source/Waves.hpp): coordinates x, y, z
+  ! (each strictly increasing; a single coordinate makes the current uniform along that axis) and
+  ! velocity(:, i, j, k, n) at (x(i), y(j), z(k)) and time (n - 1) dt, n = 1..nt. The MoorDyn-C
+  ! tables are resampled onto this uniform time base by CD_Current_Grid_Resample and evaluated by
+  ! CD_Current_Grid_Velocity, which mirror constructDynamicCurrentGrid / construct4DCurrentGrid
+  ! (source/Waves/WaveGrid.cpp) and CurrentGrid::getCurrentKin (source/Waves.cpp). The fluid
+  ! acceleration of such a current is zero, as MoorDyn-C sets it.
+  TYPE :: CD_CurrentGridType
+    REAL(wp), ALLOCATABLE :: x(:), y(:), z(:)
+    REAL(wp) :: dt = 1.0_wp
+    INTEGER :: nt = 1
+    REAL(wp), ALLOCATABLE :: velocity(:, :, :, :, :)
+  END TYPE CD_CurrentGridType
 
 CONTAINS
 
@@ -1665,6 +1685,285 @@ CONTAINS
     alpha = MAX(CD_ZERO, MIN(CD_ONE, (z - z_profile(seg))/denom))
     velocity = (CD_ONE - alpha)*velocity_profile(:, seg) + alpha*velocity_profile(:, seg + 1)
   END SUBROUTINE CD_Current_Profile_Velocity
+
+  SUBROUTINE CD_Current_Grid_Resample(x, y, z, t_in, v_in, grid, ErrStat, ErrMsg)
+    !! Build a current grid from velocities v_in(3, nx, ny, nz, m) tabulated at the times t_in(m),
+    !! as MoorDyn-C v2.7.1 does (constructDynamicCurrentGrid, construct4DCurrentGrid): the time
+    !! step is the smallest interval of t_in, dt = min(t_in(n+1) - t_in(n)), the grid holds
+    !! nt = floor(t_in(m)/dt) + 1 samples at the times (n - 1) dt from t = 0, and each sample is
+    !! the table interpolated linearly in time, a (1 - f) + b f, held at the end rows (the value
+    !! of the first row before t_in(1)). x, y, z and t_in must be strictly increasing, with at
+    !! least two times (MoorDyn-C reads before its table with one).
+    REAL(wp), INTENT(IN) :: x(:), y(:), z(:), t_in(:), v_in(:, :, :, :, :)
+    TYPE(CD_CurrentGridType), INTENT(OUT) :: grid
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: dt, ts, f
+    INTEGER(INT64) :: nt64
+    INTEGER :: m, n, iu
+
+    ErrStat = CD_HYDRO_OK
+    ErrMsg = ''
+    m = SIZE(t_in)
+    IF (SIZE(x) < 1 .OR. SIZE(y) < 1 .OR. SIZE(z) < 1) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid needs at least one x, y and z coordinate'); RETURN
+    END IF
+    IF (m < 2) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid needs at least two times'); RETURN
+    END IF
+    IF (SIZE(v_in, 1) /= 3 .OR. SIZE(v_in, 2) /= SIZE(x) .OR. SIZE(v_in, 3) /= SIZE(y) .OR. &
+        SIZE(v_in, 4) /= SIZE(z) .OR. SIZE(v_in, 5) /= m) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid velocities must be shaped (3, nx, ny, nz, nt)'); RETURN
+    END IF
+    IF (.NOT. (CD_All_Finite(x) .AND. CD_All_Finite(y) .AND. CD_All_Finite(z) .AND. CD_All_Finite(t_in))) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid coordinates and times must be finite'); RETURN
+    END IF
+    IF (.NOT. (increasing(x) .AND. increasing(y) .AND. increasing(z))) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid x, y and z coordinates must be strictly increasing'); RETURN
+    END IF
+    IF (.NOT. increasing(t_in)) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid times must be strictly increasing'); RETURN
+    END IF
+    dt = HUGE(dt)
+    DO n = 2, m
+      IF (t_in(n) - t_in(n - 1) < dt) dt = t_in(n) - t_in(n - 1)
+    END DO
+    IF (t_in(m) < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid: the last time must not be negative (MoorDyn-C samples from t = 0)')
+      RETURN
+    END IF
+    ! range first, without dividing by dt (a tiny dt would overflow)
+    IF (.NOT. (t_in(m)/REAL(MAX_CURRENT_GRID_SAMPLES, wp) < dt)) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid: the last time over the smallest time interval exceeds the '// &
+                'sample limit'); RETURN
+    END IF
+    nt64 = FLOOR(t_in(m)/dt, KIND=INT64) + 1_INT64
+    IF (nt64*INT(SIZE(x), INT64)*INT(SIZE(y), INT64)*INT(SIZE(z), INT64) > MAX_CURRENT_GRID_SAMPLES) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid: more than 2e6 resampled space-time samples; coarsen the grid or '// &
+                'its smallest time interval'); RETURN
+    END IF
+    IF (.NOT. CD_All_Finite(RESHAPE(v_in, [SIZE(v_in)]))) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid velocities must be finite'); RETURN
+    END IF
+    grid%x = x
+    grid%y = y
+    grid%z = z
+    grid%dt = dt
+    grid%nt = INT(nt64)
+    ALLOCATE (grid%velocity(3, SIZE(x), SIZE(y), SIZE(z), grid%nt))
+    DO n = 1, grid%nt
+      ts = REAL(n - 1, wp)*dt
+      CALL grid_factor(t_in, ts, iu, f)
+      grid%velocity(:, :, :, :, n) = v_in(:, :, :, :, iu - 1)*(CD_ONE - f) + v_in(:, :, :, :, iu)*f
+    END DO
+
+  CONTAINS
+
+    LOGICAL FUNCTION increasing(c)
+      REAL(wp), INTENT(IN) :: c(:)
+      INTEGER :: k
+      increasing = .TRUE.
+      DO k = 2, SIZE(c)
+        IF (.NOT. c(k) > c(k - 1)) increasing = .FALSE.
+      END DO
+    END FUNCTION increasing
+  END SUBROUTINE CD_Current_Grid_Resample
+
+  SUBROUTINE CD_Current_Grid_Velocity(grid, pos, time, velocity, ErrStat, ErrMsg)
+    !! The current of a grid at pos and time, as MoorDyn-C v2.7.1 evaluates it
+    !! (CurrentGrid::getCurrentKin with interp_factor and interp4Vec, source/Util/Interp.hpp):
+    !!  - in x, y and z, linear between the bracketing coordinates and held beyond the end ones,
+    !!    the node elevation taken as it is (no stretching);
+    !!  - in time, with q = time/dt, n = floor(q) and f = q - n, the samples n and n + 1
+    !!    (0-based) blended a (1 - f) + b f, the upper index taken modulo nt: past the last sample
+    !!    the grid repeats with period nt dt, and over [(nt - 1) dt, nt dt) of each period it holds
+    !!    the first sample (both indices are 0 there);
+    !!  - blended in time at the 8 corners first, then in x, y and z, in MoorDyn-C's order.
+    !! A time before 0 takes the t = 0 sample (MoorDyn-C's runs start at t = 0).
+    TYPE(CD_CurrentGridType), INTENT(IN) :: grid
+    REAL(wp), INTENT(IN) :: pos(3), time
+    REAL(wp), INTENT(OUT) :: velocity(3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: fx, fy, fz, ft, q
+    REAL(wp) :: c000(3), c001(3), c010(3), c011(3), c100(3), c101(3), c110(3), c111(3)
+    REAL(wp) :: c00(3), c01(3), c10(3), c11(3), c0(3), c1(3)
+    INTEGER :: ix, iy, iz, ix0, iy0, iz0, it, it0
+    INTEGER(INT64) :: n
+
+    velocity = CD_ZERO
+    ErrStat = CD_HYDRO_OK
+    ErrMsg = ''
+    IF (.NOT. (CD_All_Finite(pos) .AND. CD_Is_Finite(time))) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid: position and time must be finite'); RETURN
+    END IF
+    IF (.NOT. ALLOCATED(grid%velocity)) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid is not set'); RETURN
+    END IF
+    CALL grid_factor(grid%x, pos(1), ix, fx)
+    CALL grid_factor(grid%y, pos(2), iy, fy)
+    CALL grid_factor(grid%z, pos(3), iz, fz)
+    ! 1-based upper (it) and lower (it0) time samples
+    it = 1
+    ft = CD_ZERO
+    IF (grid%nt > 1) THEN
+      ! range first, without dividing by dt
+      IF (.NOT. MAX(time, CD_ZERO)/1.0e18_wp < grid%dt) THEN
+        CALL fail(ErrStat, ErrMsg, 'current grid: time beyond 1e18 grid time steps'); RETURN
+      END IF
+      q = MAX(time, CD_ZERO)/grid%dt
+      n = FLOOR(q, KIND=INT64)
+      ft = q - REAL(n, wp)
+      it = INT(MOD(n + 1_INT64, INT(grid%nt, INT64))) + 1
+    END IF
+    it0 = MAX(it - 1, 1)
+    ix0 = MAX(ix - 1, 1)
+    iy0 = MAX(iy - 1, 1)
+    iz0 = MAX(iz - 1, 1)
+    c000 = grid%velocity(:, ix0, iy0, iz0, it0)*(CD_ONE - ft) + grid%velocity(:, ix0, iy0, iz0, it)*ft
+    c001 = grid%velocity(:, ix0, iy0, iz, it0)*(CD_ONE - ft) + grid%velocity(:, ix0, iy0, iz, it)*ft
+    c010 = grid%velocity(:, ix0, iy, iz0, it0)*(CD_ONE - ft) + grid%velocity(:, ix0, iy, iz0, it)*ft
+    c011 = grid%velocity(:, ix0, iy, iz, it0)*(CD_ONE - ft) + grid%velocity(:, ix0, iy, iz, it)*ft
+    c100 = grid%velocity(:, ix, iy0, iz0, it0)*(CD_ONE - ft) + grid%velocity(:, ix, iy0, iz0, it)*ft
+    c101 = grid%velocity(:, ix, iy0, iz, it0)*(CD_ONE - ft) + grid%velocity(:, ix, iy0, iz, it)*ft
+    c110 = grid%velocity(:, ix, iy, iz0, it0)*(CD_ONE - ft) + grid%velocity(:, ix, iy, iz0, it)*ft
+    c111 = grid%velocity(:, ix, iy, iz, it0)*(CD_ONE - ft) + grid%velocity(:, ix, iy, iz, it)*ft
+    c00 = c000*(CD_ONE - fx) + c100*fx
+    c01 = c001*(CD_ONE - fx) + c101*fx
+    c10 = c010*(CD_ONE - fx) + c110*fx
+    c11 = c011*(CD_ONE - fx) + c111*fx
+    c0 = c00*(CD_ONE - fy) + c10*fy
+    c1 = c01*(CD_ONE - fy) + c11*fy
+    velocity = c0*(CD_ONE - fz) + c1*fz
+  END SUBROUTINE CD_Current_Grid_Velocity
+
+  SUBROUTINE CD_Current_Profile_Gradient(z, z_profile, velocity_profile, gradient)
+    !! The gradient d(velocity)/d(position) (3 x 3, column j the derivative along x_j) of the
+    !! depth profile of CD_Current_Profile_Velocity at elevation z: (u_(k+1) - u_k)/(z_(k+1) - z_k)
+    !! in the z column inside a segment, zero where the profile is held beyond its end levels.
+    !! For a Newton tangent: the caller has validated the profile.
+    REAL(wp), INTENT(IN) :: z, z_profile(:), velocity_profile(:, :)
+    REAL(wp), INTENT(OUT) :: gradient(3, 3)
+    INTEGER :: n, k, seg
+    REAL(wp) :: denom, alpha
+    gradient = CD_ZERO
+    n = SIZE(z_profile)
+    IF (n < 2) RETURN
+    seg = 1
+    DO k = 2, n - 1
+      IF (z >= z_profile(k)) seg = k
+    END DO
+    denom = z_profile(seg + 1) - z_profile(seg)
+    alpha = (z - z_profile(seg))/denom
+    IF (alpha > CD_ZERO .AND. alpha < CD_ONE) &
+      gradient(:, 3) = (velocity_profile(:, seg + 1) - velocity_profile(:, seg))/denom
+  END SUBROUTINE CD_Current_Profile_Gradient
+
+  SUBROUTINE CD_Current_Grid_Gradient(grid, pos, time, gradient, ErrStat, ErrMsg)
+    !! The gradient d(velocity)/d(position) (3 x 3, column j the derivative along x_j) of the
+    !! current of CD_Current_Grid_Velocity at pos and time: the derivative of its trilinear
+    !! blend, zero along an axis where the grid is held beyond its end coordinates (or has a
+    !! single coordinate). For a Newton tangent.
+    TYPE(CD_CurrentGridType), INTENT(IN) :: grid
+    REAL(wp), INTENT(IN) :: pos(3), time
+    REAL(wp), INTENT(OUT) :: gradient(3, 3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: f(3), g(3), ft, q, c(3, 0:1, 0:1, 0:1), w(0:1, 3), dw(0:1, 3)
+    INTEGER :: iu(3), il(3), it, it0, i, j, k, a
+    INTEGER(INT64) :: n
+
+    gradient = CD_ZERO
+    ErrStat = CD_HYDRO_OK
+    ErrMsg = ''
+    IF (.NOT. (CD_All_Finite(pos) .AND. CD_Is_Finite(time))) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid: position and time must be finite'); RETURN
+    END IF
+    IF (.NOT. ALLOCATED(grid%velocity)) THEN
+      CALL fail(ErrStat, ErrMsg, 'current grid is not set'); RETURN
+    END IF
+    CALL axis(grid%x, pos(1), 1)
+    CALL axis(grid%y, pos(2), 2)
+    CALL axis(grid%z, pos(3), 3)
+    it = 1
+    ft = CD_ZERO
+    IF (grid%nt > 1) THEN
+      IF (.NOT. MAX(time, CD_ZERO)/1.0e18_wp < grid%dt) THEN
+        CALL fail(ErrStat, ErrMsg, 'current grid: time beyond 1e18 grid time steps'); RETURN
+      END IF
+      q = MAX(time, CD_ZERO)/grid%dt
+      n = FLOOR(q, KIND=INT64)
+      ft = q - REAL(n, wp)
+      it = INT(MOD(n + 1_INT64, INT(grid%nt, INT64))) + 1
+    END IF
+    it0 = MAX(it - 1, 1)
+    DO k = 0, 1
+      DO j = 0, 1
+        DO i = 0, 1
+          c(:, i, j, k) = grid%velocity(:, MERGE(iu(1), il(1), i == 1), MERGE(iu(2), il(2), j == 1), &
+                                        MERGE(iu(3), il(3), k == 1), it0)*(CD_ONE - ft) + &
+                          grid%velocity(:, MERGE(iu(1), il(1), i == 1), MERGE(iu(2), il(2), j == 1), &
+                                        MERGE(iu(3), il(3), k == 1), it)*ft
+        END DO
+      END DO
+    END DO
+    DO a = 1, 3
+      w(0, a) = CD_ONE - f(a)
+      w(1, a) = f(a)
+      dw(0, a) = -g(a)
+      dw(1, a) = g(a)
+    END DO
+    DO k = 0, 1
+      DO j = 0, 1
+        DO i = 0, 1
+          gradient(:, 1) = gradient(:, 1) + dw(i, 1)*w(j, 2)*w(k, 3)*c(:, i, j, k)
+          gradient(:, 2) = gradient(:, 2) + w(i, 1)*dw(j, 2)*w(k, 3)*c(:, i, j, k)
+          gradient(:, 3) = gradient(:, 3) + w(i, 1)*w(j, 2)*dw(k, 3)*c(:, i, j, k)
+        END DO
+      END DO
+    END DO
+
+  CONTAINS
+
+    SUBROUTINE axis(xp, x, a_)
+      !! Bracket, factor and d(factor)/dx along axis a_ (zero where the grid is held).
+      REAL(wp), INTENT(IN) :: xp(:), x
+      INTEGER, INTENT(IN) :: a_
+      CALL grid_factor(xp, x, iu(a_), f(a_))
+      il(a_) = MAX(iu(a_) - 1, 1)
+      g(a_) = CD_ZERO
+      IF (SIZE(xp) > 1) THEN
+        IF (x > xp(1) .AND. x < xp(SIZE(xp))) g(a_) = CD_ONE/(xp(iu(a_)) - xp(il(a_)))
+      END IF
+    END SUBROUTINE axis
+  END SUBROUTINE CD_Current_Grid_Gradient
+
+  PURE SUBROUTINE grid_factor(xp, x, iu, f)
+    !! MoorDyn-C's interp_factor (source/Util/Interp.hpp) on 1-based coordinates xp: the upper
+    !! bracketing index iu and the factor f of the blend a (1 - f) + b f between xp(iu - 1) and
+    !! xp(iu): iu = 1, f = 0 for a single coordinate; iu = 2, f = 0 at or below xp(1); iu = n,
+    !! f = 1 at or above xp(n); else the first iu with x <= xp(iu).
+    REAL(wp), INTENT(IN) :: xp(:), x
+    INTEGER, INTENT(OUT) :: iu
+    REAL(wp), INTENT(OUT) :: f
+    INTEGER :: n, i
+    n = SIZE(xp)
+    iu = 1
+    f = CD_ZERO
+    IF (n == 1) RETURN
+    iu = 2
+    IF (x <= xp(1)) RETURN
+    iu = n
+    f = CD_ONE
+    IF (x >= xp(n)) RETURN
+    DO i = 2, n
+      IF (x <= xp(i)) THEN
+        iu = i
+        f = (x - xp(i - 1))/(xp(i) - xp(i - 1))
+        RETURN
+      END IF
+    END DO
+  END SUBROUTINE grid_factor
 
   SUBROUTINE CD_JONSWAP_Wave_Kinematics(x, y, z, t, hs, tp, gamma, depth, gravity, direction_deg, &
                                         stretch, eta, velocity, acceleration, ErrStat, ErrMsg)

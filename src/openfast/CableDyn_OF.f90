@@ -40,9 +40,10 @@ MODULE CableDyn
    !! construct is routed into the corresponding CableDyn feature (bodies and rods,
    !! viscoelastic and Syrope ropes, line failures, active tension through the CONTROL
    !! section, SeaState water kinematics), or, where CableDyn has no counterpart (for
-   !! example a CoupledPinned body), fails closed with a named error. A CoupledPinned rod
-   !! is a coupling-mesh node like a Coupled rod but takes only the translation of its
-   !! node and returns force with zero moment: it turns about the node on its own.
+   !! example a rotational body drag area), fails closed with a named error. A CoupledPinned
+   !! rod or body is a coupling-mesh node like a Coupled rod or body but takes only the
+   !! translation of its node and returns force with zero moment: it turns about the node on
+   !! its own.
    !!
    !! Supported coupled surface (each verified against stock MoorDyn or a named gate):
    !! Fixed/Coupled(Vessel) points, EI=0 mooring lines (BA damping + the Morison set),

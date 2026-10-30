@@ -2615,8 +2615,9 @@ class DeckModel:
             Syrope files) so they still resolve from the target folder, and
             copy the MoorDyn-C kinematics files the solver reads by fixed name
             from the deck folder (``wave_elevation.txt`` for ``WaveKin 3``,
-            ``wave_frequencies.txt`` for ``WaveKin 7``, ``current_profile.txt``
-            for ``Currents 1``) into it.
+            ``wave_frequencies.txt`` for ``WaveKin 7``, ``current_profile.txt``,
+            ``current_profile_dynamic.txt`` and ``current_profile_4d.txt`` for
+            ``Currents 1``, ``2`` and ``5``) into it.
 
         Returns
         -------

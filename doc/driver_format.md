@@ -302,7 +302,8 @@ and `BA = BA_s|BA_d`:
   initialisation, or a composite line whose other sections are linear-elastic `EI = 0` sections (a
   chain–polyester–chain mooring), with every Syrope element in tension at initialisation. It runs
   on a dynamic deck (`dtM`/`TMax`) and takes the seabed, `bathymetryFile`, Morison loads, current,
-  waves, host fluid fields and VIV of any `EI = 0` line.
+  waves, host fluid fields and VIV of any `EI = 0` line, and active line control of a Syrope
+  segment on the OpenFAST route ([CONTROL](#control-optional-openfast-line-control)).
 - The static start solves each Syrope element on the rest curve of its load history (the OWC, or
   the `Tmax0` working curve under `SYROPE IC`). A single-section line takes one secant EA from the
   curve at its mean strain; on a composite line, where the tension varies along a sagging Syrope
@@ -339,7 +340,7 @@ points only): the deck is partitioned through the same atomic aggregate used by 
 `Coupled`/`Vessel` endpoints are held at their deck positions. The run writes the common `.out`
 and the all-line `.static.out` tables, plus the range graph of every line with the `r` flag.
 Mixed decks reject, by name, `motionFile`, deck wave/current OPTIONS, WaterKin `WaveKinMod 1`,
-MoorDyn-C `WaveKin 3`/`7` and `Currents 1`, and per-line `p`/`t` flags.
+MoorDyn-C `WaveKin 3`/`7` and `Currents 1`/`2`/`5`, and per-line `p`/`t` flags.
 
 (multibody-march)=
 **Multibody march** (bodies, rods, `Connect`/`Free` points, EI = 0 lines and finite-EI cables in
@@ -438,6 +439,17 @@ row. On this route:
   and added-mass inertia (MoorDyn-F's coupled body). They may share a deck with `Free` bodies:
   when the free bodies sub-cycle the coupling step, the host-driven bodies follow the host motion
   interpolated from the step start;
+- `CoupledPinned`/`VesselPinned` bodies are pinned to the platform as `CoupledPinned` rods are:
+  a mesh node at the body reference point (moved and turned by `PtfmInit` with the body) that
+  takes the platform position only. The body turns about it with its own three rotations, the
+  node orientation and angular rates are ignored, and the node returns the body's net load less
+  its inertia, with no moment (MoorDyn-F's coupled pinned body); the angular acceleration in that
+  inertia is solved for the node's current acceleration. With `bodyIC static` the body starts
+  balanced about its node. `PtfmInit` turns the body with the platform, as it turns the body's
+  attachment points (M^T R0 for the deck orientation R0 and the platform's global-to-local DCM
+  M); MoorDyn-F's driver instead starts a coupled pinned body at its deck orientation, so with
+  `bodyIC deck` and a rotation in `PtfmInit` the two start from different poses. Outside a
+  coupled host such a body is rejected by name ("requires a coupled host");
 - cables may be suspended or use the same flat/structured seabed contact, normal damping, and
   stick-slip friction as the standalone Hermite route.
 
@@ -450,22 +462,23 @@ columns, or 18 with the trailing inertias, or the 14 columns of a MoorDyn v2 row
 | Column | Meaning |
 |--------|---------|
 | `ID` | unique body id ≥ 1 (referenced by `Body<ID>` points) |
-| `Type` | `Point3` (3-DOF translational buoy or clump), `Rigid6` (6-DOF rigid body), or `Coupled`/`Vessel` (a `Rigid6` body whose pose follows the host: the OpenFAST platform, or `motionFile` rows for its `Body<ID>` points in the standalone driver) |
+| `Type` | `Point3` (3-DOF translational buoy or clump), `Rigid6` (6-DOF rigid body), `Coupled`/`Vessel` (a `Rigid6` body whose pose follows the host: the OpenFAST platform, or `motionFile` rows for its `Body<ID>` points in the standalone driver), or `CoupledPinned`/`VesselPinned` (MoorDyn aliases `CpldPin`, `VesPin`: a `Rigid6` body whose reference point follows the OpenFAST platform position while it turns about that point; OpenFAST only) |
 | `X,Y,Z` | reference position [m] |
 | `Roll,Pitch,Yaw` | reference orientation [deg] (`Rigid6`; ignored for `Point3`) |
-| `Mass` | body mass [kg]; > 0 |
+| `Mass` | body mass [kg]; > 0 (≥ 0 for `Coupled`/`Vessel` and `CoupledPinned`/`VesselPinned`) |
 | `Vol` | displaced volume [m³] (buoyancy ρ_w·g·Vol); ≥ 0 |
 | `C33` | heave hydrostatic restoring ρ_w·g·A_wp [N/m] |
 | `C44/55` | roll/pitch restoring [N·m/rad] (`Rigid6`) |
 | `CdA`, `Ca` | drag area and added-mass coefficient (dynamic); ≥ 0 |
-| `Ixx,Iyy,Izz` | trailing diagonal rotational inertias [kg·m²]; required and > 0 for `Rigid6` (≥ 0, like `Mass`, for `Coupled`/`Vessel`) |
+| `Ixx,Iyy,Izz` | trailing diagonal rotational inertias [kg·m²]; required and > 0 for `Rigid6` and `CoupledPinned`/`VesselPinned` (≥ 0, like `Mass`, for `Coupled`/`Vessel`) |
 
 Every body value must be finite. Both body types require a dynamic deck (`dtM`/`TMax`) in the
 standalone driver.
 
 The MoorDyn v2 row `ID Attachment X0 Y0 Z0 r0 p0 y0 Mass CG* I* Volume CdA* Ca*` defines a
-`Rigid6` body with a centre of gravity: `Attachment` is `Free`, or `Coupled`/`Vessel` for a
-host-driven body (`CoupledPinned` fails closed); `CG` is `z` or `x|y|z` in
+`Rigid6` body with a centre of gravity: `Attachment` is `Free`, `Coupled`/`Vessel` for a
+host-driven body, or `CoupledPinned`/`VesselPinned` for a body pinned to a host node; `CG` is `z`
+or `x|y|z` in
 the body frame from the reference point (it is also the centre of buoyancy, as in MoorDyn);
 `I` is one value or `Ixx|Iyy|Izz` about the CG; `CdA` is one value, `CdA|CdA_rot`, or 3 or 6
 entries, and `Ca` one value or 3 entries. The body model is isotropic, so direction-dependent
@@ -938,13 +951,14 @@ Behaviour:
 - Loads: the net weight `(Mass − rhoW Volume) g` downward; with the dry mass, the added mass
   `Ca rhoW Volume` (a constant nodal mass); the fluid-inertia force
   `rhoW Volume (1 + Ca) du/dt` and the drag against the current and wave velocity at the node.
-  A deck `current` (uniform or profile) loads the attachments in the static initial condition
+  A deck current (a `current` row, uniform or profile, or a MoorDyn-C `Currents` field at
+  `t = 0`, sampled at the attachment node) loads the attachments in the static initial condition
   with the same drag law at rest, so a run in a current starts in equilibrium.
   An attachment above the free surface carries its weight only. Attachments have no seabed
   contact of their own; the node's contact acts on the line.
 - The static equilibrium is solved first with each attachment's net weight spread over the two
   elements at its node, then carried to the discrete loads by continuation. The current drag
-  depends on the node's depth and line direction, so the final solve is repeated until the
+  depends on the node's position and line direction, so the final solve is repeated until the
   node positions change by less than 1e-9 m. On a line restrained in torsion the torsion stage
   (the imposed twist) follows on the discrete equilibrium, with the attachments' net weights
   and drag as nodal loads (the drag again to a fixed point), so a run starts in the twisted
@@ -1081,8 +1095,10 @@ the `NodeB` written in the deck. A line written in the stock MoorDyn order, with
 end at `NodeB`, is therefore controlled where MoorDyn-F controls it, at its last segment N at
 `AttachB`; so is a line with both or no host-driven ends. A line written fairlead first, with its
 only host-driven end at `NodeA`, is controlled at that end. The length is held over the advance.
-Axial damping on that segment acts on the strain rate, as in MoorDyn-F, so a segment paid out at
-constant strain carries no damping tension.
+On a linear-elastic segment the axial damping acts on the strain rate, as in MoorDyn-F
+(`BA (lstrd − lstr ld/l)/l`), so a segment paid out at constant strain carries no damping
+tension; the viscoelastic and Syrope laws take the plain chord rate `lstrd`, as MoorDyn-F and
+MoorDyn-C do (see the bullets below).
 
 A command outside MoorDyn-F's bounds stops the run with a message that names the channel, the
 line, the command and the bound, as MoorDyn-F stops there. With `UnstrLen` the line's unstretched
@@ -1099,6 +1115,19 @@ bounds that would make it zero or negative (possible when it is shorter than hal
   advance (with the force blend, the default, the step-start force; under
   `False alpha_force_blend`, lengths blended with the configuration), so a length ramp is
   followed without lag at any `rhoInf`.
+- A Syrope polyester segment (a Syrope line, or a composite line whose fairlead-side section is
+  Syrope) carries its slow stretch over the length change, as MoorDyn-F and MoorDyn-C carry it:
+  they keep the stretch `dl_1` of the segment as its state and read its slow strain as `dl_1`
+  over the new length. The running maximum tension is kept, and the slow-strain rate takes the
+  chord rate without the paid-out term, as MoorDyn's Syrope rate does. A slow pay-out therefore
+  unloads the segment along the working curve of its load history, and a haul-in beyond the
+  running maximum follows the OWC and raises it.
+- A viscoelastic segment (`Es|Ed` or `Es|alphaMBL|vbeta`) keeps its slow-branch stretch `dl_1`
+  as it is over the length change and reads it at the new length, as MoorDyn-F and MoorDyn-C do:
+  the tension `EA_1 dl_1/L0 + BA ld_1/L0`, the rate `ld_1` with `dl` = stretched length − `L0`,
+  and the load-dependent `EA_D` all take the new `L0`, and the rate takes the chord rate without
+  the paid-out term. A slow pay-out or haul-in therefore follows the static law `Es` times the
+  strain; a fast change first meets the dynamic stiffness and relaxes to it.
 - On a finite-EI cable, which runs from a `Fixed` anchor to a host-driven fairlead, the segment
   is the fairlead segment of the deck mesh (the length of the `SECTIONS` row at the fairlead over
   its `NumSegs`). Where the static initialisation refined the mesh, it is the cable elements that
@@ -1194,33 +1223,70 @@ in, so keys such as `staticRelTol` or `staticMaxIter` are rejected like any othe
 set the dynamic Newton controls with `dynamic_solver`. The stock MoorDyn keywords `dtIC`,
 `TmaxIC`, `CdScaleIC`, `threshIC`, `TScheme`, `WriteLog`, and `dtOut` are accepted and ignored,
 because CableDyn uses a Newton static initial condition, an implicit integrator, and
-caller-controlled output cadence.
+caller-controlled output cadence. MoorDyn-F's `inertialF` is accepted as `1` only (CableDyn
+always returns the inertia of coupled bodies and rods; `0` and `2` are rejected by name), and
+`inertialF_rampT` is accepted and ignored.
 
 (moordyn-c-wavekin)=
 ### MoorDyn-C `WaveKin` and `Currents` modes
 
 A MoorDyn-C deck selects its water kinematics with the numeric `WaveKin` and `Currents` options
-and fixed-name files in the deck folder. CableDyn reduces each file to wave components or a depth
-profile and evaluates them exactly at every node, with Wheeler stretching; MoorDyn-C tabulates
-them on `water_grid.txt` and interpolates, so that file is not read. Standalone decks only.
+and fixed-name files in the deck folder. CableDyn reduces each wave file to wave components and
+evaluates them exactly at every node, with Wheeler stretching; MoorDyn-C tabulates them on
+`water_grid.txt` and interpolates, so that file is not read. The current files are evaluated at
+every node's position and time as MoorDyn-C interpolates them. Standalone decks only.
 
 | Option | File | Meaning |
 |---|---|---|
 | `WaveKin 3` | `wave_elevation.txt` | `time elevation` rows from `t = 0` (no header rows), resampled linearly at `dtWave` to `floor(t_last/dtWave) + 1` samples (the last dropped when the count is odd) and reduced to its Fourier components; components above `WvHiCOff` (default 0.5 Hz, MoorDyn-C's fixed cut) are dropped and the mean is a mean-level offset, as MoorDyn-C does. Waves travel along +x |
 | `WaveKin 7` | `wave_frequencies.txt` | `omega Re Im [beta]` rows [rad/s, m, m, rad], the first at `omega = 0`: each row is the component `\|c\| sin(omega t - k d + arg c)`, `d = x cos(beta) + y sin(beta)`; the `omega = 0` row is a mean-level offset. All rows must share one `beta` |
 | `Currents 1` | `current_profile.txt` | `z ux uy uz` rows after its header rows, strictly increasing `z`; linear in `z` and held beyond the end rows |
+| `Currents 2` | `current_profile_dynamic.txt` | a depth profile in time: lines 1-4 and 6 are free text, line 5 lists the depths `z1 ... zn` (strictly increasing, read in single precision as MoorDyn-C does), and each later row is `t ux1 ... uxn [uy1 ... uyn [uz1 ... uzn]]` (missing components zero), at least two rows with strictly increasing `t` |
+| `Currents 5` | `current_profile_4d.txt` | a grid in x, y, z and time: line 1 is `nx ny nz nt`, lines 2-5 the x, y, z and t coordinates (each strictly increasing, at least two times), then one `x y z t ux uy uz` row per grid point, in any order, matched to the grid by value; a text line 6 is a header |
+
+`Currents 2` and `5` follow MoorDyn-C v2.7.1 (`constructDynamicCurrentGrid`,
+`construct4DCurrentGrid` and `CurrentGrid::getCurrentKin`):
+
+- the table is resampled in time at its smallest time interval `dt`, from `t = 0` to
+  `floor(t_last/dt) dt` (a last time that is not a multiple of `dt` is not reached), linearly
+  between rows and held at the first and last rows;
+- between samples the current is linear in time; past the last sample the grid repeats with
+  period `nt dt` (`nt` samples), holding its `t = 0` value over the last interval of each period,
+  as MoorDyn-C's index wrap does. A run longer than the last sample prints a note;
+- in x, y and z the current is linear between grid coordinates and held beyond the end ones; the
+  node elevation is not stretched;
+- the current has no fluid acceleration (MoorDyn-C sets it to zero), so its time variation adds
+  no Froude-Krylov or added-mass load;
+- the static start takes the current at `t = 0`, as MoorDyn-C's default stationary initial
+  condition does (its legacy dynamic relaxation, `ICgenDynamic 1`, samples the current over the
+  relaxation time instead);
+- a grid holds at most 2e6 resampled points in space and time (every static solve holds a copy,
+  48 MB at the limit);
+- the C API and the OpenFAST point-system shells have no simulation clock: they apply a current
+  constant in time as a steady field, as `Currents 1`, and refuse one that varies in time;
+- `current_profile_4d.txt` is read as MoorDyn-C documents it, which MoorDyn-C v2.7.1 does not
+  quite do: it reads its rows from line 7, so a row on line 6 leaves that grid point at zero, and
+  it matches a row to the grid by the text of its coordinates, so a row writing `-0` for `0` or
+  `1.0` for `1` lands on the first grid point. CableDyn reads line 6 as a row unless it is text
+  and matches by value, and it rejects a missing, repeated or off-grid point. A file with a text
+  line 6 and its coordinates written as on lines 2-5 reads the same in both codes.
+
+With `WaveKin 3`, MoorDyn-C (its default `UnifyCurrentGrid 1`) adds a current to the wave grid,
+where it is sampled on `water_grid.txt`; CableDyn adds the current at the nodes, as MoorDyn-C's
+`UnifyCurrentGrid 0`.
 
 Rejected by name: `WaveKin 1` (kinematics set node by node through the MoorDyn-C API; a deck has
 no source for them), `WaveKin 2` (the FFT grid: `wave_frequencies.txt` resampled to an even
 spectrum; `WaveKin 7` evaluates the same file's components exactly), `WaveKin 4`-`6` and
-`Currents 3`-`4` (no kinematics source in MoorDyn-C v2.7.1), `Currents 2` (the
-time-varying profile `current_profile_dynamic.txt`), `Currents 5` (the 4-D current grid), and a
-`wave_frequencies.txt` whose rows have different directions. A deck that also declares a `waves`
-option, a WaterKin file, or a second current source is rejected as double counting. On shared
-inputs the `wavekin_modes` test holds `WaveKin 7` and `Currents 1` identical to MoorDyn-C v2.7.1
-(`5e-12` relative) and `WaveKin 3` within `3e-7` m in elevation and `1e-4` in velocity and
-acceleration at MoorDyn-C's grid points, the remainder being MoorDyn-C's grid interpolation and
-its approximate wave number.
+`Currents 3`-`4` (no kinematics source in MoorDyn-C v2.7.1), and a `wave_frequencies.txt` whose
+rows have different directions. A deck that also declares a `waves` option, a WaterKin file, or a
+second current source is rejected as double counting. On shared inputs the `wavekin_modes` test
+holds `WaveKin 7` and `Currents 1` identical to MoorDyn-C v2.7.1 (`5e-12` relative) and `WaveKin 3`
+within `3e-7` m in elevation and `1e-4` in velocity and acceleration at MoorDyn-C's grid points,
+the remainder being MoorDyn-C's grid interpolation and its approximate wave number. The
+`mdc_currents` test holds `Currents 2` and `5` identical to MoorDyn-C v2.7.1 at 739 points and
+times (including past the last sample), and `mdc_currents_runs` matches the tension change of a
+time-varying and of a sheared current to MoorDyn-C's within 0.9 % on a 70 m rope.
 
 (waterkin-file-modes)=
 ### MoorDyn-F `WaterKin` file modes

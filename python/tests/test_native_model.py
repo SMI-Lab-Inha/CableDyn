@@ -58,18 +58,52 @@ def test_array_shapes_are_validated_before_the_library():
 
 
 def test_failed_initialization_in_the_constructor_releases_the_handle(monkeypatch):
-    closed: list[bool] = []
-    original = model_module.CableDyn.close
+    # The constructor's own instance is captured when it calls init_deck, and only its closes
+    # count: instances other tests left behind may be finalized (and closed) at any point, with
+    # or without the cyclic collector running.
+    own: list[model_module.CableDyn] = []
+    closes: list[tuple[model_module.CableDyn, bool]] = []
+    original_init_deck = model_module.CableDyn.init_deck
+    original_close = model_module.CableDyn.close
+
+    def tracking_init_deck(self: model_module.CableDyn, deck: str | os.PathLike[str]) -> None:
+        own.append(self)
+        original_init_deck(self, deck)
 
     def tracking_close(self: model_module.CableDyn) -> None:
-        closed.append(bool(self._handle))
-        original(self)
+        closes.append((self, bool(self._handle)))
+        original_close(self)
 
+    monkeypatch.setattr(model_module.CableDyn, "init_deck", tracking_init_deck)
     monkeypatch.setattr(model_module.CableDyn, "close", tracking_close)
     with pytest.raises(CableDynError, match="CableDyn_InitDeck failed") as caught:
         cabledyn.CableDyn("no_such_deck_anywhere.dat")
-    assert closed[0] is True
+    assert len(own) == 1
+    own_closes = [held for instance, held in closes if instance is own[0]]
+    # the failed constructor closed its instance while it still held the handle
+    assert own_closes and own_closes[0] is True
+    assert not own[0]._handle
     assert caught.value.status != 0 and caught.value.detail
+
+
+def test_a_deck_current_that_varies_in_time_is_refused_without_a_clock(tmp_path):
+    # The C ABI has no simulation clock: a MoorDyn-C Currents 2 table that varies in time is
+    # refused like deck waves; the same deck with a table constant in time applies it steadily.
+    case = REPO / "tests" / "data" / "currents_mdc" / "tension_c2"
+    deck = tmp_path / "tension.dat"
+    deck.write_bytes((case / "tension.dat").read_bytes())
+    table = tmp_path / "current_profile_dynamic.txt"
+    table.write_bytes((case / "current_profile_dynamic.txt").read_bytes())
+    with cabledyn.CableDyn() as m:
+        with pytest.raises(CableDynError):
+            m.init_deck(deck)
+        assert "no simulation clock" in m.last_error()
+        assert "Currents 2" in m.last_error()
+    table.write_text(
+        "h\nh\n\n\n-50.0 0.0\nt ux\n0.0 0.4 0.6\n10.0 0.4 0.6\n", encoding="utf-8", newline="\n"
+    )
+    with cabledyn.CableDyn(deck) as m:
+        assert m.n_lines == 1
 
 
 def test_last_error_reports_the_library_diagnostic():

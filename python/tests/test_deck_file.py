@@ -653,8 +653,10 @@ def test_unknown_scalar_option_keyword_fails_closed(tmp_path):
         ("x", "dtWave", "must be numeric"),
         ("0", "WvHiCOff", "must be positive"),
         ("off", "WvHiCOff", "must be numeric"),
-        ("2", "Currents", "supports only mode 0 or 1"),
-        ("1.5", "Currents", "supports only mode 0 or 1"),
+        ("3", "Currents", "no current source in MoorDyn-C v2.7.1"),
+        ("4", "Currents", "no current source in MoorDyn-C v2.7.1"),
+        ("6", "Currents", "supports only mode 0, 1, 2 or 5"),
+        ("1.5", "Currents", "supports only mode 0, 1, 2 or 5"),
         ("4", "WaterKin", "numeric mode 0, 3 or 7"),
         ("1", "WaterKin", "numeric mode 0"),
         ("1e0", "WaterKin", "numeric mode 0"),
@@ -1535,11 +1537,63 @@ def test_coupled_rods_and_bodies_need_a_motion_file_or_a_coupled_host(tmp_path):
     for row, message in (
         ("1 Coupled 0 0 0 0 0 0 -1 0 0 0 0 0 0\n", "requires non-negative"),
         ("1 Coupled 0 0 -20 0 0 0 -1 0 0 0 0 0\n", "requires non-negative"),
-        ("1 CoupledPinned 0 0 0 0 0 0 0 0 0 0 0 0 0\n", "CoupledPinned BODY is not supported"),
     ):
         path.write_text(source.replace(marker, bodies + row + marker), encoding="utf-8")
         with pytest.raises(DeckFormatError, match=message):
             DeckFile.read(path, caller_driven=True)
+
+
+@pytest.mark.parametrize("kind", ["CoupledPinned", "CpldPin", "VesselPinned", "VesPin"])
+def test_coupled_pinned_bodies_need_a_coupled_host_and_inertia(tmp_path, kind):
+    # native finalize_checks: the host moves the reference point of a CoupledPinned body and
+    # its rotation is integrated, so the standalone driver refuses it and the coupled route
+    # takes it with positive inertias (18- and 14-column rows)
+    static = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
+    marker = "--------------------- POINTS -------------------------------------------"
+    clock = "--------------------- OUTPUTS ------------------------------------------"
+    dynamic = static.replace(clock, "0.01 dtM\n1.0 TMax\n" + clock)
+    bodies = "--------------------- BODIES -------------------------------------------\n"
+    path = tmp_path / "pinned.dat"
+    for row in (
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0 1 1 1\n",
+        f"1 {kind} 0 0 -20 0 0 0 10 0|0|-1 1|2|3 0 0 0\n",
+    ):
+        path.write_text(dynamic.replace(marker, bodies + row + marker), encoding="utf-8")
+        with pytest.raises(DeckFormatError, match="requires a coupled host"):
+            DeckFile.read(path)
+        DeckFile.read(path, caller_driven=True)
+        # without a clock the native Rigid6 dynamic-deck rule comes first
+        path.write_text(static.replace(marker, bodies + row + marker), encoding="utf-8")
+        with pytest.raises(DeckFormatError, match="Rigid6 BODY requires a dynamic deck"):
+            DeckFile.read(path)
+        DeckFile.read(path, caller_driven=True)
+    source = dynamic
+    for row in (
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0\n",
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0 0 1 0 1\n",
+        f"1 {kind} 0 0 -20 0 0 0 -1 0 0 0 0 0 0 1 1 1\n",
+        f"1 {kind} 0 0 -20 0 0 0 10 0 0 0 0 0\n",
+    ):
+        path.write_text(source.replace(marker, bodies + row + marker), encoding="utf-8")
+        with pytest.raises(DeckFormatError, match=r"requires Ixx/Iyy/Izz > 0"):
+            DeckFile.read(path, caller_driven=True)
+
+
+@pytest.mark.parametrize(
+    "value, accepted", [("1", True), ("1.0", True), ("0", False), ("2", False)]
+)
+def test_moordyn_inertial_f_option(tmp_path, value, accepted):
+    # native apply_option: CableDyn always returns the coupled objects' inertia (inertialF 1)
+    source = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
+    clock = "--------------------- OUTPUTS ------------------------------------------"
+    path = tmp_path / "inertial.dat"
+    text = source.replace(clock, f"{value} inertialF\n30.0 inertialF_rampT\n" + clock)
+    path.write_text(text, encoding="utf-8")
+    if accepted:
+        DeckFile.read(path)
+    else:
+        with pytest.raises(DeckFormatError, match=r"inertialF 0 \(MoorDyn-F's default"):
+            DeckFile.read(path)
 
 
 @pytest.mark.parametrize(
@@ -3354,7 +3408,7 @@ def test_moordyn_body_rows_are_accepted(row):
 @pytest.mark.parametrize(
     ("row", "message"),
     [
-        (_MD_BODY.replace("Free", "Fixed"), "Free, Coupled, or Vessel bodies"),
+        (_MD_BODY.replace("Free", "Fixed"), "Free, Coupled, Vessel, CoupledPinned or VesselPinned"),
         (_MD_BODY.replace("Free", "Coupled"), "Coupled/Vessel BODY requires a motionFile"),
         (_MD_BODY.replace("0|0|-0.5", "0|-0.5"), "BODIES CG has 2 entries"),
         (_MD_BODY.replace("8|0", "8|1"), "isotropic without rotational drag"),
@@ -3508,6 +3562,23 @@ def test_control_rows_may_name_finite_ei_cables_on_the_coupled_route():
     text = (ROOT / "examples/iea15mw_umaine_mixed_cabledyn.dat").read_text(encoding="utf-8")
     deck = DeckFile.from_text(text.replace(marker, block + marker, 1), caller_driven=True)
     assert [row.tokens for row in deck._rows("CONTROL")] == [("1", "4"), ("2", "1,3")]
+
+
+@pytest.mark.parametrize(
+    "example", ["syrope_polyester_mooring.dat", "ve_polyester_catenary_mooring.dat"]
+)
+def test_control_rows_may_name_syrope_and_viscoelastic_lines_on_the_coupled_route(example):
+    # native CD_Init_Deck_Aggregate controls a Syrope or viscoelastic segment too (its slow
+    # stretch carries over the length change, as in MoorDyn-F/C), so the mirror accepts the row
+    source = (ROOT / "examples" / example).read_text(encoding="utf-8")
+    marker = "--------------------- OPTIONS"
+    assert source.count(marker) == 1
+    block = (
+        "--------------------- CONTROL ----------------------------------------\n"
+        "ChannelID Lines\n(-) (-)\n1 1\n"
+    )
+    deck = DeckFile.from_text(source.replace(marker, block + marker, 1), caller_driven=True)
+    assert [row.tokens for row in deck._rows("CONTROL")] == [("1", "1")]
 
 
 # ---------------------------------------------------------------------------

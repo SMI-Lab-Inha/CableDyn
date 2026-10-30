@@ -257,8 +257,8 @@ CONTAINS
     CALL expect_failure('2', '0', 'FFT_GRID')
     CALL expect_failure('4', '0', 'no kinematics source in MoorDyn-C')
     CALL expect_failure('6', '0', 'no kinematics source in MoorDyn-C')
-    CALL expect_failure('0', '2', 'current_profile_dynamic.txt')
-    CALL expect_failure('0', '5', 'current_profile_4d.txt')
+    CALL expect_failure('0', '3', 'no current source in MoorDyn-C')
+    CALL expect_failure('0', '4', 'no current source in MoorDyn-C')
     ! short-crested components (rows with different directions)
     OPEN (NEWUNIT=u, FILE='wave_frequencies.txt', STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') '0.0 0.0 0.0 0.0'

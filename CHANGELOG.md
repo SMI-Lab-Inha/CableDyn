@@ -25,6 +25,33 @@ All notable changes to CableDyn are recorded in this file. The format follows
   one turn of pretwist, in still water and in a cross-flow current, keeps its torque, twist and
   fairlead tension over a still 10 s run to the output precision (a torsion stage before the
   polish would ring by 3e-3 of the torque); neutral modules reproduce the bare line's GJ Phi / L.
+- `CoupledPinned`/`VesselPinned` bodies in OpenFAST, as MoorDyn-F's coupled pinned body: the
+  body reference point is a node of the coupling mesh that takes the platform position only, the
+  body turns about it with its own three rotations, and the node returns the body's net load
+  less its inertia, with no moment. `PtfmInit` moves and turns the body, `bodyIC static` balances
+  it about its node, and the checkpoint state and correction rewind carry it. A dry compound
+  pendulum keeps the elliptic-integral period to 1.6e-4 at `dt = T/100`, a body with a
+  `CoupledPinned` rod's mass and inertia follows the rod to 2e-12, and against MoorDyn-F
+  (`inertialF 1`) a pendulum swinging through 120 deg agrees to 0.09 deg (0.15 deg when its node
+  surges). Outside a coupled host, without inertias, and in linearisation the body fails closed
+  by name.
+- Active line control (`CONTROL`, OpenFAST `CableDeltaL`/`CableDeltaLdot`) of a Syrope
+  polyester segment, which stopped at initialisation before. As in MoorDyn-F and MoorDyn-C the
+  segment's slow stretch carries over the length change (its slow strain is read at the new
+  length) and the running maximum is kept. On a taut 100 m line whose fairlead segment is paid
+  out by 0.5 m, hauled in to -1 m and paid back, the tension follows the rest curve of its load
+  history (working curve, OWC, then the working curve of the new maximum) to 2.5e-4 along the
+  ramps and 6e-7 at rest; after a length step it is MoorDyn's at the carried stretch to 1e-15
+  (carrying the strain instead would be off by 0.4 to 2.4 %); a restart in the ramp continues
+  bit for bit; a polyester-chain line with a Syrope fairlead segment and a
+  chain-polyester-chain line run.
+- Active line control of a viscoelastic segment (`Es|Ed` and `Es|alphaMBL|vbeta`), which
+  stopped at initialisation before. As in MoorDyn-F and MoorDyn-C the slow-branch stretch
+  `dl_1` is left as it is and read at the new length. On the same taut line and cycle the
+  tension follows the static law `Es` times the strain to 1.7e-4 along the ramps (4.6e-4
+  load-dependent) and 4e-9 at rest; after a length step it is MoorDyn's at the carried stretch
+  to 4e-16 (carrying the strain instead would be off by 0.4 to 4.6 %); a restart in the ramp
+  continues bit for bit.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their
@@ -115,6 +142,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Output channels `StfMom<L>N<J>`, the share of the section moment a bend stiffener carries,
   and `FairDefl<L>`/`AnchDefl<L>`, the deflection of the end force from the direction a held
   END CONNECTIONS row declares (with the end tension, a stiffener's load case).
+- MoorDyn-C time-varying and gridded currents on the standalone routes: `Currents 2` (the depth
+  profile in time `current_profile_dynamic.txt`) and `Currents 5` (the grid in x, y, z and time
+  `current_profile_4d.txt`), read and interpolated as MoorDyn-C v2.7.1 does (resampled at the
+  smallest time interval, repeating past the last sample, held beyond the grid, no fluid
+  acceleration) at every node's position and time, the static start included. At 739 points and
+  times the current is identical to MoorDyn-C v2.7.1's; a constant table equals `Currents 1` and a
+  grid uniform in x and y equals `Currents 2`; on a 70 m rope the tension change of a time-varying
+  and of a sheared current matches MoorDyn-C's within 0.9 %, and the static start in a sheared grid
+  holds the tensions to 1.4e-7 of the change the current makes. The C API, without a clock,
+  refuses a table that varies in time.
 
 ### Changed
 
@@ -165,6 +202,34 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
+  step from zero acceleration: the module restores its state mirror after the output call at
+  `t = 0`, which marked the objects' accelerations as committed before the start accelerations
+  were solved. They are now solved when the module initialises (and, before the first step, at a
+  committed step-start transfer and in new host fluid fields, so a SeaState current or wave starts
+  them in that field), and the line ends on a CoupledPinned object move with them.
+  An object in its static equilibrium changes at round-off (1e-12 m and 1e-6 deg over 10 s); one
+  started out of balance (`bodyIC deck`) changes by the first step's velocity error, 0.02 m/s and
+  0.05 deg for a hanging Pinned rod and up to 0.6 m/s for bodies and rods released far out of
+  balance. The committed host kinematics at the first step are those of the initial state, so a
+  host acceleration at `t = 0` enters neither version.
+- MoorDyn-F's `inertialF` option was an unknown keyword; `inertialF 1` (CableDyn's behaviour)
+  is now accepted, and `0` and `2` are rejected by name.
+- A Syrope line held at its running maximum (the fairlead pulled out and held) under
+  `False alpha_force_blend` stopped with "Syrope backward-Euler state solve did not converge":
+  next to the top sample of the working curve the Newton step's difference quotient straddled
+  the kink and crept along one side of the bracket. The solve now finishes by bisection there,
+  and where a light rope's steep residual (BA_s|BA_d = 1e4|1e3) changes sign between two
+  adjacent reals it returns that root to machine precision. Over 440,000 fuzzed states every
+  solve that converged before is bit-identical, and the 26 that failed now converge.
+- The static start of an `EI = 0` line now carries a deck current that is zero along the
+  straight chord between its ends but not where the line sags (a depth profile or a current
+  grid): it was solved in still water and the march drifted toward the current's equilibrium.
+  On a 70 m rope with its ends at z = -20 m in 0.8 m/s below z = -32 m the start now holds to
+  machine precision (it drifted 192 N in 4 s) and agrees with the finite-EI route within 0.14 %.
+  The static tangent takes the current's gradient along the line, so the Newton iteration also
+  converges in a current sheared across the line. A later `current` row now discards the levels
+  of an earlier profile row.
 - A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
   start, reduces the record over its own length instead of failing for want of a positive
   `TMax`.

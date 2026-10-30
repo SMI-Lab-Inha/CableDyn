@@ -42,15 +42,15 @@ page.
      - the ``OWC`` row of the Syrope settings file
      - the directory of the settings file
    * - MoorDyn-C kinematics files ``wave_elevation.txt``, ``wave_frequencies.txt``,
-       ``current_profile.txt``
-     - OPTIONS ``3 WaveKin``, ``7 WaveKin`` and ``1 Currents`` (grammar in
-       :ref:`moordyn-c-wavekin`); the file names are fixed
+       ``current_profile.txt``, ``current_profile_dynamic.txt``, ``current_profile_4d.txt``
+     - OPTIONS ``3 WaveKin``, ``7 WaveKin``, ``1 Currents``, ``2 Currents`` and ``5 Currents``
+       (grammar in :ref:`moordyn-c-wavekin`); the file names are fixed
      - the deck directory
 
 The parser reads no other input files. Line-type properties, nonlinear ``EA`` data
 other than the Syrope OWC table, wave spectra, and control-channel values all come
 from the deck itself or from the coupling host. Because the MoorDyn-C file names are
-fixed, a deck that uses ``WaveKin 3``/``7`` or ``Currents 1`` must sit in the same
+fixed, a deck that uses ``WaveKin 3``/``7`` or ``Currents 1``/``2``/``5`` must sit in the same
 folder as its kinematics file; a copied or generated deck needs a copy of that file
 beside it.
 

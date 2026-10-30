@@ -74,13 +74,16 @@ Line and constitutive capability
    * - Viscoelastic rope (MoorDyn ``ElasticMod`` 2/3)
      - Supported
      - per-element series-Kelvin state (standard linear solid only when ``BA_D = 0``),
-       including load-dependent dynamic stiffness; ``EI = 0`` lines
+       including load-dependent dynamic stiffness; ``EI = 0`` lines, with active line control
+       in coupled OpenFAST runs (the slow-branch stretch carried over the length change, as in
+       MoorDyn)
    * - Syrope polyester
      - Supported with limits
      - dynamic line with OWC and two history states, single-section and taut or between
        linear-elastic ``EI = 0`` sections (chain–polyester–chain), with the seabed, Morison loads,
-       current, waves, host fluid fields and VIV of any ``EI = 0`` line; finite-EI combinations
-       fail closed by name
+       current, waves, host fluid fields and VIV of any ``EI = 0`` line, and active line control
+       of a Syrope segment in coupled OpenFAST runs (its slow stretch carried over the length
+       change, as in MoorDyn); finite-EI combinations fail closed by name
    * - Torsion of finite-EI lines
      - Supported with limits
      - isotropic torsion of a finite-EI line restrained in torsion at both ends
@@ -158,6 +161,11 @@ Loads and environment
    * - Uniform/profile current
      - Supported
      - standalone deck source; coupled runs use explicitly selected host/file sources
+   * - MoorDyn-C currents in time and space (``Currents 2``, ``Currents 5``)
+     - Standalone only
+     - ``current_profile_dynamic.txt`` and ``current_profile_4d.txt``, interpolated as MoorDyn-C
+       v2.7.1 does at every node's position and time, the static start included; see
+       :ref:`moordyn-c-wavekin`
    * - Airy and JONSWAP waves
      - Supported
      - standalone deck source or OpenFAST SeaState, never an accidental double source
@@ -196,8 +204,9 @@ alternative discretisation of the line. Supported translations include fixed/cou
 attachments, free or connecting masses and clumps, ``Point3`` buoys, ``Rigid6`` bodies, and coupled
 rigid rods. In OpenFAST, ``Coupled``/``Vessel`` bodies and rods are platform-borne 6-DOF nodes that
 return a force and a moment, ``CoupledPinned``/``VesselPinned`` rods turn about a platform-borne
-node that takes the platform position only and returns a force with zero moment, and ``Pinned``
-rods turn about a fixed End A; ``CoupledPinned`` bodies are not supported. The C API and Python
+node that takes the platform position only and returns a force with zero moment, as do
+``CoupledPinned``/``VesselPinned`` bodies about a node at their reference point, and ``Pinned``
+rods turn about a fixed End A. The C API and Python
 run free, fixed and pinned rods and free bodies in still water. The coupled body/rod routes carry
 checkpoint state and SeaState drag, Froude–Krylov, and added mass.
 ``Rigid6`` also carries the documented hydrostatic restoring terms. Consult :doc:`driver_format`
@@ -209,7 +218,8 @@ OpenFAST coverage
 The ``CompMooring = 5`` shell covers normal coupled time-domain stepping with its own ``dtM``,
 nonzero ``PtfmInit``, correction iterations, SeaState fields, checkpoint/restart, scoped
 quasi-static ``dYdu`` linearisation, line failures, active-tension control of ``EI = 0`` lines
-and finite-EI cables, and FAST.Farm shared moorings. Restart and linearisation do not arise under
+(linear-elastic, viscoelastic or Syrope segments) and finite-EI cables, and FAST.Farm shared
+moorings. Restart and linearisation do not arise under
 FAST.Farm, which does not call those module operations, and active-tension control is rejected
 there. See :doc:`openfast` for setup and :doc:`coupling_boundary` for the interface contract.
 

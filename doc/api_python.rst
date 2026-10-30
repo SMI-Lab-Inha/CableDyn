@@ -336,7 +336,8 @@ Deck editing and case generation
 family of edited decks for a batch study. It and :meth:`DeckModel.save` (with ``rebase=True``)
 rewrite relative ancillary paths for the new folder and copy the fixed-name MoorDyn-C
 kinematics files (``wave_elevation.txt`` for ``3 WaveKin``, ``wave_frequencies.txt`` for
-``7 WaveKin``, ``current_profile.txt`` for ``1 Currents``), which the solver reads from the deck's
+``7 WaveKin``, ``current_profile.txt``, ``current_profile_dynamic.txt`` and ``current_profile_4d.txt``
+for ``1``, ``2`` and ``5 Currents``), which the solver reads from the deck's
 own folder, next to the new decks (:doc:`python`).
 
 .. autoclass:: cabledyn.DeckFile

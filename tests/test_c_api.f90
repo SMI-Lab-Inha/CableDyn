@@ -26,6 +26,7 @@ PROGRAM test_c_api
   CALL case_lifecycle()
   CALL case_deck_init()
   CALL case_deck_dynamic_point_fluid()
+  CALL case_deck_current_in_time()
   CALL case_deck_bodies_rods()
   CALL case_init_update_output_step()
   CALL case_multiline_shared_map()
@@ -202,6 +203,87 @@ CONTAINS
     CALL CableDyn_Close(hydro_handle, es)
     CALL require(es == 0_C_INT .AND. .NOT. C_ASSOCIATED(hydro_handle), 'c-api-deck-fluid:close-hydro')
   END SUBROUTINE case_deck_dynamic_point_fluid
+
+  SUBROUTINE case_deck_current_in_time()
+    !! The C ABI has no simulation clock: a deck current that varies in time (MoorDyn-C
+    !! Currents 2) is refused, as deck waves are, rather than held at its t = 0 value; the same
+    !! table constant in time is the steady field the ABI applies, as Currents 1.
+    CHARACTER(*), PARAMETER :: DECK_PATH = 'capi_currents2_deck.dat'
+    CHARACTER(KIND=C_CHAR), TARGET :: c_path(LEN(DECK_PATH))
+    CHARACTER(KIND=C_CHAR), TARGET :: msg(300)
+    TYPE(C_PTR) :: handle
+    INTEGER(C_INT) :: es
+    INTEGER :: i
+
+    DO i = 1, LEN(DECK_PATH)
+      c_path(i) = DECK_PATH(i:i)
+    END DO
+    CALL write_capi_currents_deck(DECK_PATH, '0.2 0.2 0.0 0.0')
+    CALL CableDyn_Create(handle, es)
+    CALL require(es == 0_C_INT .AND. C_ASSOCIATED(handle), 'c-api-currents2:create')
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN(DECK_PATH), C_INT), es)
+    CALL require(es == 3_C_INT, 'c-api-currents2:varying-in-time-rejected')
+    CALL CableDyn_GetLastError(handle, C_LOC(msg), INT(SIZE(msg), C_INT))
+    CALL require(INDEX(c_text(msg), 'no simulation clock') > 0 .AND. INDEX(c_text(msg), 'Currents 2') > 0, &
+                 'c-api-currents2:varying-in-time-message')
+    CALL write_capi_currents_deck(DECK_PATH, '0.1 0.1 0.0 0.0')
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN(DECK_PATH), C_INT), es)
+    CALL require(es == 0_C_INT, 'c-api-currents2:constant-in-time-applied')
+    CALL CableDyn_Close(handle, es)
+    CALL require(es == 0_C_INT .AND. .NOT. C_ASSOCIATED(handle), 'c-api-currents2:close')
+  END SUBROUTINE case_deck_current_in_time
+
+  SUBROUTINE write_capi_currents_deck(path, row_later)
+    !! The smoke deck with Currents 2 and its current_profile_dynamic.txt: x velocities
+    !! 0.1 m/s at the two depths at t = 0 and the given row at t = 5 s.
+    CHARACTER(*), INTENT(IN) :: path, row_later
+    INTEGER :: u, ios
+
+    OPEN (NEWUNIT=u, FILE='current_profile_dynamic.txt', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL require(ios == 0, 'c-api-currents2:create-table')
+    IF (ios /= 0) RETURN
+    WRITE (u, '(A)') 'MoorDyn dynamic currents'
+    WRITE (u, '(A)') 'header'
+    WRITE (u, '(A)') ''
+    WRITE (u, '(A)') ''
+    WRITE (u, '(A)') '-5.0 0.0'
+    WRITE (u, '(A)') 't ux uy'
+    WRITE (u, '(A)') '0.0 0.1 0.1 0.0 0.0'
+    WRITE (u, '(A)') '5.0 '//row_later
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    CALL require(ios == 0, 'c-api-currents2:create-file')
+    IF (ios /= 0) RETURN
+    WRITE (u, '(A)') 'C API deck with a MoorDyn-C current table'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'line 0.10 80.0 1.0e5 0.0 0.0 1.0 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Fixed 0.0 0.0 -1.0'
+    WRITE (u, '(A)') '2 Coupled 0.8 0.0 -1.0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 2 1 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 line 1.0 4'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '5.0 WtrDpth'
+    WRITE (u, '(A)') '0.01 dtM'
+    WRITE (u, '(A)') '1.0 TMax'
+    WRITE (u, '(A)') '2 Currents'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1 AnchTen1'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+  END SUBROUTINE write_capi_currents_deck
 
   SUBROUTINE case_init_update_output_step()
     TYPE(C_PTR) :: handle
@@ -543,11 +625,11 @@ CONTAINS
     !! deck dtM, and 20 driven steps reproduce CD_AGG driven directly bit-for-bit (loads and
     !! coupled motion), also across a SaveState / three trial steps / RestoreState rewind half
     !! way. A mismatched dt, load derivatives and point fluid fields fail closed by name; a
-    !! Coupled rod (a 6-DOF host node) and a CoupledPinned rod (a host-driven pin) are rejected
-    !! by the standalone deck rules.
+    !! Coupled rod (a 6-DOF host node), a CoupledPinned rod (a host-driven pin) and a
+    !! CoupledPinned body (a host-driven reference point) are rejected by the standalone deck rules.
     CHARACTER(*), PARAMETER :: ROD_DECK = 'capi_rod_deck.dat', BODY_DECK = 'capi_body_deck.dat', &
                                HOST_DECK = 'capi_hostrod_deck.dat', PIN_DECK = 'capi_pinrod_deck.dat', &
-                               HOST_PIN_DECK = 'capi_hostpin_deck.dat'
+                               HOST_PIN_DECK = 'capi_hostpin_deck.dat', PIN_BODY_DECK = 'capi_pinbody_deck.dat'
     CHARACTER(KIND=C_CHAR), TARGET :: c_path(64)
     CHARACTER(KIND=C_CHAR), TARGET :: msg(300)
     TYPE(C_PTR) :: handle
@@ -566,6 +648,7 @@ CONTAINS
     CALL write_capi_object_deck(HOST_DECK, 3)
     CALL write_capi_object_deck(PIN_DECK, 4)
     CALL write_capi_object_deck(HOST_PIN_DECK, 5)
+    CALL write_capi_object_deck(PIN_BODY_DECK, 6)
     DO ideck = 1, 3
       SELECT CASE (ideck)
       CASE (1)
@@ -670,12 +753,25 @@ CONTAINS
     CALL require(es == 3_C_INT .AND. INDEX(c_text(msg), 'requires a coupled host') > 0, &
                  'c-api-objects:host-pinned-rod-rejected')
     CALL CableDyn_Close(handle, es)
+    ! and a CoupledPinned body, whose reference point a coupled host moves
+    path = PIN_BODY_DECK
+    c_path = C_NULL_CHAR
+    DO i = 1, LEN_TRIM(path)
+      c_path(i) = path(i:i)
+    END DO
+    CALL CableDyn_Create(handle, es)
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN_TRIM(path), C_INT), es)
+    CALL CableDyn_GetLastError(handle, C_LOC(msg), INT(SIZE(msg), C_INT))
+    CALL require(es == 3_C_INT .AND. INDEX(c_text(msg), 'BODY requires a coupled host') > 0, &
+                 'c-api-objects:host-pinned-body-rejected')
+    CALL CableDyn_Close(handle, es)
   END SUBROUTINE case_deck_bodies_rods
 
   SUBROUTINE write_capi_object_deck(path, kind)
     !! kind 1: a submerged free rod between a Fixed anchor and a Coupled fairlead; kind 2: the same
     !! with a free Rigid6 body; kind 3: a Coupled rod (a 6-DOF host node); kind 4: a Pinned rod
-    !! (End A on a fixed pin); kind 5: a CoupledPinned rod (its pin a host node).
+    !! (End A on a fixed pin); kind 5: a CoupledPinned rod (its pin a host node); kind 6: the
+    !! body of kind 2 as a CoupledPinned body (its reference point a host node).
     CHARACTER(*), INTENT(IN) :: path
     INTEGER, INTENT(IN) :: kind
     INTEGER :: u
@@ -685,12 +781,16 @@ CONTAINS
     WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
     WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
     WRITE (u, '(A)') 'line 0.10 80.0 1.0e5 0.0 0.0 1.0 0.0 1.0 0.0'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '--- BODIES ---'
       WRITE (u, '(A)') 'ID Type X Y Z Rot1 Rot2 Rot3 Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
       WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm/rad) (Nm/rad) (m2) (-) '// &
         '(kgm2) (kgm2) (kgm2)'
-      WRITE (u, '(A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 0.0 0.0 20.0 20.0 20.0'
+      IF (kind == 2) THEN
+        WRITE (u, '(A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 0.0 0.0 20.0 20.0 20.0'
+      ELSE
+        WRITE (u, '(A)') '1 CoupledPinned 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 0.0 0.0 0.0 0.0 20.0 20.0 20.0'
+      END IF
     ELSE
       WRITE (u, '(A)') '--- ROD TYPES ---'
       WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd'
@@ -714,7 +814,7 @@ CONTAINS
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
     WRITE (u, '(A)') '1 Fixed 2.0 0.0 -5.0 0.0 0.0 0.0 0.0'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '2 Body1 0.0 0.0 0.0 0.0 0.0 0.0 0.0'
       WRITE (u, '(A)') '3 Coupled 0.0 0.0 -1.0 0.0 0.0 0.0 0.0'
     ELSE
@@ -726,7 +826,7 @@ CONTAINS
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
     WRITE (u, '(A)') '1 2 1 -'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '2 3 2 -'
     ELSE
       WRITE (u, '(A)') '2 3 4 -'
@@ -734,7 +834,7 @@ CONTAINS
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
-    IF (kind == 2) THEN
+    IF (kind == 2 .OR. kind == 6) THEN
       WRITE (u, '(A)') '1 line 2.5 3'
       WRITE (u, '(A)') '2 line 2.95 3'
     ELSE

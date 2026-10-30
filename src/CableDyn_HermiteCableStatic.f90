@@ -49,7 +49,7 @@ MODULE CableDyn_HermiteCableStatic
                                  CD_Bathymetry_Rotate_Curvature
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
   USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK
-  USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_HYDRO_OK
+  USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Velocity, CD_HYDRO_OK
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
                                      CD_HermiteTorsion_Coupling_Twist, &
                                      CD_HermiteTorsion_Accept, CD_HermiteTorsion_Compliance, &
@@ -159,9 +159,12 @@ MODULE CableDyn_HermiteCableStatic
   ! static solvers): the Morison drag of the relative velocity u_f - 0 on every element,
   ! through CD_HermiteCable_Drag_Element with the element fluid velocity taken as the mean
   ! of the current at its two nodes -- the held-field drag of the dynamic path. The current
-  ! is uniform (velocity) or a depth profile (profile_z, profile_velocity) sampled at the
-  ! iterate's node elevations. frame_cs = (cos, sin) rotates the global current into the
-  ! solve frame (global x = c xl - s yl, y = s xl + c yl). The section properties are given
+  ! is uniform (velocity), a depth profile (profile_z, profile_velocity) sampled at the
+  ! iterate's node elevations, or a current grid (grid, MoorDyn-C Currents 2 and 5) sampled at
+  ! the iterate's node positions at t = 0, the static start. frame_cs = (cos, sin) rotates the
+  ! global current into the solve frame (global x = c xl - s yl, y = s xl + c yl), and the solve
+  ! frame's node positions, shifted by origin (the solve frame's horizontal origin in the turned
+  ! frame, where a solve translates it), into the global ones the grid is sampled at. The section properties are given
   ! per reference-arc interval (arc_end, the cumulative rest length at each interval end,
   ! with diam/cdn/cdt), so a refined or coarsened mesh of the same line looks them up by
   ! its element midpoints. load_factor scales the drag load (a continuation parameter; 1 is
@@ -209,9 +212,11 @@ MODULE CableDyn_HermiteCableStatic
     REAL(wp) :: waterline_z = 0.0_wp
     REAL(wp) :: velocity(3) = 0.0_wp
     REAL(wp) :: frame_cs(2) = [1.0_wp, 0.0_wp]
+    REAL(wp) :: origin(2) = [0.0_wp, 0.0_wp]
     ! drag = .FALSE.: a zero-velocity carrier of the as-laid seabed friction in still water
     LOGICAL :: drag = .TRUE.
     REAL(wp), ALLOCATABLE :: profile_z(:), profile_velocity(:, :)
+    TYPE(CD_CurrentGridType), ALLOCATABLE :: grid
     REAL(wp), ALLOCATABLE :: arc_end(:), diam(:), cdn(:), cdt(:)
     ! Seabed friction held by the line against the current (allocated: active).
     TYPE(CD_HermiteStaticFrictionType), ALLOCATABLE :: friction
@@ -2961,7 +2966,15 @@ CONTAINS
     ve = CD_ZERO
     ! no drag on a friction-only carrier (current_element_props)
     IF (.NOT. current%drag) RETURN
-    IF (ALLOCATED(current%profile_z)) THEN
+    IF (ALLOCATED(current%grid)) THEN
+      CALL CD_Current_Grid_Velocity(current%grid, global_position(qe(1:3)), 0.0_wp, ua, es, em)
+      IF (es == CD_HYDRO_OK) CALL CD_Current_Grid_Velocity(current%grid, global_position(qe(7:9)), 0.0_wp, ub, &
+                                                           es, em)
+      IF (es /= CD_HYDRO_OK) THEN
+        ErrStat = CD_HCSTAT_NOCONVERGE; ErrMsg = TRIM(em); RETURN
+      END IF
+      ug = 0.5_wp*(ua + ub)
+    ELSE IF (ALLOCATED(current%profile_z)) THEN
       CALL CD_Current_Profile_Velocity(qe(3), current%profile_z, current%profile_velocity, ua, es, em)
       IF (es == CD_HYDRO_OK) CALL CD_Current_Profile_Velocity(qe(9), current%profile_z, current%profile_velocity, &
                                                               ub, es, em)
@@ -2986,6 +2999,18 @@ CONTAINS
     END IF
     fd = current%load_factor*fd
     IF (want_jac) djq = current%load_factor*djq
+
+  CONTAINS
+
+    PURE FUNCTION global_position(xl) RESULT(xg)
+      !! The global position of a solve-frame node position xl (shifted by the frame's origin,
+      !! then turned back by frame_cs).
+      REAL(wp), INTENT(IN) :: xl(3)
+      REAL(wp) :: xg(3), xs(2)
+      xs = xl(1:2) + current%origin
+      xg = [current%frame_cs(1)*xs(1) - current%frame_cs(2)*xs(2), &
+            current%frame_cs(2)*xs(1) + current%frame_cs(1)*xs(2), xl(3)]
+    END FUNCTION global_position
   END SUBROUTINE current_element_load
 
   SUBROUTINE CD_HermiteCable_Current_Load(l0, q, current, load, ErrStat, ErrMsg)

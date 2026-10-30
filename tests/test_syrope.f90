@@ -7,7 +7,10 @@ PROGRAM test_syrope
   !! constants -- working-curve generation for all three shapes, the static strain split, the
   !! rate/tension evaluation on
   !! both branches, the running-max regeneration event, and the fail-closed
-  !! battery.
+  !! battery. The backward-Euler state solve also converges when its root sits at the top
+  !! sample of the working curve (a rope at rest on its OWC at its running maximum), where the
+  !! safeguarded Newton step alone crept along one side of the bracket and the solve failed, and
+  !! when R is so steep (light BA) that it changes sign between two adjacent reals.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Syrope, ONLY: CD_SyropeType, CD_Syrope_Init, CD_Syrope_End, &
                              CD_Syrope_Working_Curve, CD_Syrope_Find_Strains, &
@@ -68,6 +71,8 @@ PROGRAM test_syrope
   CALL case_owc_branch_and_running_max()
   CALL case_interp_clamps()
   CALL case_projected_state_advance()
+  CALL case_state_advance_at_wc_top()
+  CALL case_state_advance_steep()
   CALL case_element_load()
   CALL case_model_legacy_ba_mask()
   CALL case_model_held()
@@ -352,6 +357,118 @@ CONTAINS
     CALL require(es /= CD_SYROPE_OK .AND. INDEX(em, 'slow_old >= 0') > 0, 'projected:negative-old-fails')
     CALL CD_Syrope_End(td)
   END SUBROUTINE case_projected_state_advance
+
+  SUBROUTINE case_state_advance_at_wc_top()
+    !! A rope held at rest on its OWC at its running maximum: the backward-Euler root lies just
+    !! above the top sample of the working curve's slow strains, where T_mean(eps_slow) stops
+    !! rising (it clamps at T_max up to the branch divider), closer to it than the Newton
+    !! step's difference interval. The state of a run (LINEAR, k1 = 0.5, BA_s|BA_d = 1e6|1e5,
+    !! a line hauled in and held) on which the safeguarded Newton step crept 80 iterations
+    !! along that kink and the solve failed; the bisection that finishes the solve meets the
+    !! residual test, between the kink and the divider, at the curve's top tension.
+    TYPE(CD_SyropeType) :: td
+    REAL(wp), PARAMETER :: TMAX = 1.7790941510791376e6_wp, SLOW0 = 2.0004433178640910e-2_wp, &
+                           EPS = 3.0303024894996432e-2_wp, DEPS = -1.4208693414705444e-13_wp, DT = 5.0e-2_wp
+    REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
+    REAL(wp) :: slow_next, t_mean, divider, rate, tension, mean, residual
+    INTEGER :: es
+    CHARACTER(200) :: em
+    CALL CD_Syrope_Init(td, OWC_EPS, OWC_TEN, CD_SYROPE_WC_LINEAR, 0.5_wp, 0.0_wp, &
+                        ALPHA, BETA, 1.0e6_wp, 1.0e5_wp, es, em)
+    CALL require(es == CD_SYROPE_OK, 'wc-top:init')
+    CALL CD_Syrope_Working_Curve(td, TMAX, ws, wt, wsl, es, em)
+    CALL require(es == CD_SYROPE_OK, 'wc-top:wc')
+    divider = CD_Syrope_Branch_Divider(td, TMAX)
+    CALL CD_Syrope_State_Advance(td, SLOW0 < divider, ws, wt, wsl, SLOW0, EPS, DEPS, DT, slow_next, t_mean, &
+                                 es, em, divider=divider)
+    CALL require(es == CD_SYROPE_OK, 'wc-top:the solve converges: '//TRIM(em))
+    CALL CD_Syrope_Rate_And_Tension(td, slow_next < divider, ws, wt, wsl, slow_next, EPS, DEPS, rate, tension, &
+                                    mean, es, em)
+    residual = slow_next - SLOW0 - DT*rate
+    WRITE (*, '(A,ES16.9,A,ES10.3,A,ES12.5,A)') '  wc-top: slow strain ', slow_next, ', residual ', residual, &
+      ', mean tension ', mean, ' N'
+    CALL require(ABS(residual) <= 5.0e-13_wp .AND. slow_next > wsl(CD_SYROPE_NWC) .AND. slow_next < divider .AND. &
+                 bits_same(mean, wt(CD_SYROPE_NWC)) .AND. bits_same(mean, t_mean), 'wc-top:root at the curve top')
+    CALL CD_Syrope_End(td)
+  END SUBROUTINE case_state_advance_at_wc_top
+
+  SUBROUTINE case_state_advance_steep()
+    !! Twelve states of a light rope (QUADRATIC, p2 = 0.5, BA_s|BA_d = 1e4|1e3) next to the top
+    !! of the working curve, from a fuzz of the solve, on which it failed: R' = 1 - dt
+    !! d(rate)/d(eps_slow) is of order 1e6, so R changes sign between two adjacent reals with |R|
+    !! above the residual test on both. The solve returns the root to machine precision: R
+    !! changes sign between the result and its neighbour on the other side, and the returned
+    !! mean tension is the one at the result.
+    INTEGER, PARAMETER :: NS = 12
+    ! k1, T_max, slow_old, eps, deps, dt
+    REAL(wp), PARAMETER :: ST(6, NS) = RESHAPE([ &
+                                               0.5_wp, 1.36633017834277474e6_wp, 1.39304174224812102e-2_wp, &
+                                     2.20484956584058520e-2_wp, -2.91917316204991001e-5_wp, 5.00000000000000028e-2_wp, &
+                                               0.5_wp, 1.37680196069096052e6_wp, 5.35760113574383894e-3_wp, &
+                                    2.22609221334421868e-2_wp, -5.34676314308176825e-13_wp, 2.00000000000000011e-1_wp, &
+                                               0.5_wp, 1.36922682379846880e6_wp, 1.39737625858687414e-2_wp, &
+                                    2.21031832264193540e-2_wp, -1.54171755685975461e-10_wp, 2.00000000000000011e-1_wp, &
+                                               0.5_wp, 1.37055211343974154e6_wp, 1.39940856061747162e-2_wp, &
+                                     2.21297981068623792e-2_wp, -1.34624093812978118e-5_wp, 2.00000000000000011e-1_wp, &
+                                               0.5_wp, 1.37527118954379787e6_wp, 6.58388926223281434e-3_wp, &
+                                     2.22260959754430436e-2_wp, 9.20479632170825829e-10_wp, 2.00000000000000011e-1_wp, &
+                                               0.5_wp, 1.37087072085890593e6_wp, 1.35832674506310615e-2_wp, &
+                                      2.21347560532284236e-2_wp, 2.40447604051167914e-5_wp, 2.00000000000000011e-1_wp, &
+                                               0.5_wp, 1.36645106216464797e6_wp, 1.39322344956098881e-2_wp, &
+                                    2.20511942008235519e-2_wp, -2.02603337569392040e-13_wp, 5.00000000000000028e-2_wp, &
+                                               0.5_wp, 1.36815732104760036e6_wp, 1.39584978679733341e-2_wp, &
+                                     2.20753893183824081e-2_wp, -5.23605833892740875e-6_wp, 2.00000000000000011e-1_wp, &
+                                               0.5_wp, 1.37059169344443991e6_wp, 1.39949247390703350e-2_wp, &
+                                       2.21338733365970056e-2_wp, 0.00000000000000000e0_wp, 2.00000000000000011e-1_wp, &
+                                               0.5_wp, 1.38033403057004604e6_wp, 1.35405334447999213e-2_wp, &
+                                       2.23240330306617440e-2_wp, 0.00000000000000000e0_wp, 2.00000000000000011e-1_wp, &
+                                               0.3_wp, 4.73718757443073089e5_wp, 3.14555534663941896e-3_wp, &
+                                    6.13349734479911885e-3_wp, -1.55116580233012027e-13_wp, 2.00000000000000011e-1_wp, &
+                                               0.3_wp, 4.71172300428577990e5_wp, 6.16859346183203398e-4_wp, &
+                             6.09875211747266683e-3_wp, -2.98940253643357627e-5_wp, 2.00000000000000011e-1_wp], [6, NS])
+    TYPE(CD_SyropeType) :: td
+    REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
+    REAL(wp) :: slow_next, t_mean, divider, rate, tension, mean, r0, r1, other, worst
+    INTEGER :: es, k, n_ok
+    CHARACTER(200) :: em
+    n_ok = 0
+    worst = 0.0_wp
+    DO k = 1, NS
+      CALL CD_Syrope_Init(td, OWC_EPS, OWC_TEN, CD_SYROPE_WC_QUADRATIC, ST(1, k), 0.5_wp, &
+                          ALPHA, BETA, 1.0e4_wp, 1.0e3_wp, es, em)
+      CALL require(es == CD_SYROPE_OK, 'steep:init')
+      CALL CD_Syrope_Working_Curve(td, ST(2, k), ws, wt, wsl, es, em)
+      CALL require(es == CD_SYROPE_OK, 'steep:wc')
+      divider = CD_Syrope_Branch_Divider(td, ST(2, k))
+      CALL CD_Syrope_State_Advance(td, ST(3, k) < divider, ws, wt, wsl, ST(3, k), ST(4, k), ST(5, k), ST(6, k), &
+                                   slow_next, t_mean, es, em, divider=divider)
+      IF (es /= CD_SYROPE_OK) THEN
+        CALL require(.FALSE., 'steep:the solve converges: '//TRIM(em))
+        CALL CD_Syrope_End(td)
+        CYCLE
+      END IF
+      CALL CD_Syrope_Rate_And_Tension(td, slow_next < divider, ws, wt, wsl, slow_next, ST(4, k), ST(5, k), rate, &
+                                      tension, mean, es, em)
+      r0 = slow_next - ST(3, k) - ST(6, k)*rate
+      other = NEAREST(slow_next, MERGE(1.0_wp, -1.0_wp, r0 < 0.0_wp))
+      CALL CD_Syrope_Rate_And_Tension(td, other < divider, ws, wt, wsl, other, ST(4, k), ST(5, k), rate, &
+                                      tension, mean, es, em)
+      r1 = other - ST(3, k) - ST(6, k)*rate
+      worst = MAX(worst, ABS(r0))
+      CALL CD_Syrope_Rate_And_Tension(td, slow_next < divider, ws, wt, wsl, slow_next, ST(4, k), ST(5, k), rate, &
+                                      tension, mean, es, em)
+      IF ((r0 < 0.0_wp .NEQV. r1 < 0.0_wp) .AND. bits_same(mean, t_mean)) n_ok = n_ok + 1
+      CALL CD_Syrope_End(td)
+    END DO
+    WRITE (*, '(A,I0,A,I0,A,ES10.3)') '  steep: ', n_ok, ' of ', NS, &
+      ' roots located to machine precision, largest |R| ', worst
+    CALL require(n_ok == NS, 'steep:roots to machine precision')
+  END SUBROUTINE case_state_advance_steep
+
+  LOGICAL FUNCTION bits_same(a, b) RESULT(same)
+    REAL(wp), INTENT(IN) :: a, b
+    same = TRANSFER(a, 0_8) == TRANSFER(b, 0_8)
+  END FUNCTION bits_same
 
   SUBROUTINE case_element_load()
     !! The element load wraps the kernel: a colinear element stretched to a
