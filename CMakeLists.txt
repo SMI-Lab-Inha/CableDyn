@@ -1240,6 +1240,17 @@ add_test(NAME c_api_host_coupling
                  ${CMAKE_CURRENT_SOURCE_DIR}/examples/clump_weight_free_point.dat)
 set_tests_properties(c_api_host_coupling PROPERTIES LABELS "c;unit;capi;shared;dynamic")
 
+add_executable(test_c_api_host_rotation tests/test_c_api_host_rotation.c)
+target_include_directories(test_c_api_host_rotation PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(test_c_api_host_rotation PRIVATE cabledyn_shared)
+if(NOT WIN32)
+  target_link_libraries(test_c_api_host_rotation PRIVATE m)
+endif()
+add_test(NAME c_api_host_rotation
+         COMMAND test_c_api_host_rotation ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/foam_esflowc_box_points.dat
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(c_api_host_rotation PROPERTIES LABELS "c;unit;capi;shared;dynamic;torsion")
+
 find_package(Threads QUIET)
 if(Threads_FOUND AND CMAKE_USE_PTHREADS_INIT)
   add_executable(test_c_api_concurrency tests/test_c_api_concurrency.c)

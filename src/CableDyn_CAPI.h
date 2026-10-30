@@ -127,8 +127,9 @@ int CableDyn_NLines(void *handle, int *err_stat);
  * aggregate (it needs dtM); other decks keep the point route. Check
  * CableDyn_GetAbiMinor() >= 1 before using these on a library of unknown
  * vintage. CABLEDYN_CAPI_ABI_MINOR is the extension level this header
- * declares (2: the host-coupling calls below are present too). */
-#define CABLEDYN_CAPI_ABI_MINOR 2
+ * declares (3: the host-coupling and host-rotation calls below are present
+ * too). */
+#define CABLEDYN_CAPI_ABI_MINOR 3
 
 #define CD_C_OBJ_LINE 1
 #define CD_C_OBJ_POINT 2
@@ -217,6 +218,43 @@ void CableDyn_RestoreState(void *handle, int *err_stat);
  * skips an output. Not available on a raw-array (InitLine/InitLines) handle. */
 void CableDyn_GetCoupledLayout(void *handle, int *point_id, int *point_type,
                                int n_block, int *err_stat);
+
+/* ---- ABI 1, minor extension 3: host rotations ------------------------------
+ *
+ * For a host that turns the bodies its Coupled points are fixed to: a line
+ * restrained in torsion (END CONNECTIONS TorsStiffness) and a Rigid bending END
+ * CONNECTION turn with the host at their coupled end, as on the coupled
+ * OpenFAST route. Check CableDyn_GetAbiMinor() >= 3 before using these on a
+ * library of unknown vintage. */
+
+/* CableDyn_InitDeckAt for a host that passes rotations: the handle takes each
+ * coupled block's rotation from CableDyn_UpdateRotations and passes it with
+ * every CableDyn_UpdateStates and CableDyn_Step. The rotations start at
+ * identity (the deck's axes at the static start) and rest. n_q0 = 0 (q0 may be
+ * NULL) solves the statics at the deck positions, as CableDyn_InitDeck. A deck
+ * with a line restrained in torsion needs this initialization. */
+void CableDyn_InitDeckRotating(void *handle, const char *deck_path,
+                               int deck_path_len, const double *q0, int n_q0,
+                               int *err_stat);
+/* The rotation of each 3-DOF block k of the coupled vector for the following
+ * UpdateStates and Step calls (kept until the next call; SaveState/RestoreState
+ * carry it): dcm[9k + 3i + j] = R_ij of the global-to-body DCM (row-major; the
+ * rows are the body axes in global axes), omega[3k + i] and alpha[3k + i] the
+ * body's angular velocity and acceleration in global axes. Only a finite-EI
+ * line's host-driven end uses its block; the other blocks are checked and not
+ * used. n_block = CableDyn_NCoupledDOF / 3. All or nothing: a DCM that is not
+ * finite and proper orthogonal (to 1e-8) or a non-finite rate leaves the
+ * rotations unchanged. */
+void CableDyn_UpdateRotations(void *handle, const double *dcm,
+                              const double *omega, const double *alpha,
+                              int n_block, int *err_stat);
+/* The moment each block of the coupled vector applies to the host, about the
+ * coupled point in global axes, at the state CableDyn_CalcOutput reports: a
+ * finite-EI line's torsional and bending reaction at its host-driven end, zero
+ * for the other blocks and on the point route. Available on any initialized
+ * handle. */
+void CableDyn_GetCoupledMoments(void *handle, double *coupled_moments,
+                                int n_coupled_dof, int *err_stat);
 
 #ifdef __cplusplus
 }

@@ -4282,7 +4282,8 @@ class DeckFile:
         if has_torsion_column and aggregate_route and not self.caller_driven:
             raise DeckFormatError(
                 f"{self._label}: a line restrained in torsion needs a host that turns its fairlead "
-                "frame: coupled OpenFAST and FAST.Farm runs do, while the C API and a standalone "
+                "frame: coupled OpenFAST and FAST.Farm runs do, and a C API host initialised with "
+                "CableDyn_InitDeckRotating, while CableDyn_InitDeck/InitDeckAt and a standalone "
                 "deck that mixes EI = 0 and finite-EI lines without a BODY move the line ends by "
                 "translation only (with a BODY such a deck runs on the multibody route, which "
                 "supports torsion); set TorsStiffness Free in every END CONNECTIONS row"

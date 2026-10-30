@@ -10,6 +10,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- C API host rotations (ABI 1.3): `CableDyn_InitDeckRotating` initialises a handle whose host
+  passes each coupled point's rotation (`CableDyn_UpdateRotations`: the global-to-body DCM and
+  the angular velocity and acceleration) with every update and step, so a line restrained in
+  torsion and a `Rigid` end connection turn with the host, as on the coupled OpenFAST route; a
+  torsion deck, refused by `CableDyn_InitDeck`/`InitDeckAt`, runs there.
+  `CableDyn_GetCoupledMoments` returns the moments the lines apply to the host. On a straight
+  line rolled at 60 deg/s the coupled torque is the quasi-static `GJ phi / L` to 3e-6 N m, and
+  `SaveState`/`RestoreState` carry the rotations. Python: `CableDyn.init_deck_rotating`,
+  `update_rotations`, `coupled_moments`.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their

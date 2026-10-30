@@ -540,6 +540,57 @@ library is located. Array ordering, frames, and units at the coupling boundary f
          multiple of 3; or if ``q0`` is not finite.
       :raises RuntimeError: if the loaded library predates ABI 1 minor extension 2.
 
+   .. py:method:: init_deck_rotating(deck, q0=None)
+
+      Initialise from a deck for a host that turns the bodies its coupled points are fixed to
+      (``CableDyn_InitDeckRotating``): :meth:`init_deck_at`, or :meth:`init_deck` with
+      ``q0=None``, whose model takes each coupled block's rotation from
+      :meth:`update_rotations` and passes it with every :meth:`update_states` and :meth:`step`.
+      A line restrained in torsion (``END CONNECTIONS`` ``TorsStiffness``) and a ``Rigid`` bending
+      end connection then turn with the host at their host-driven end, as on the coupled
+      OpenFAST route; the other initialisations refuse a deck with a line restrained in torsion.
+      The rotations start at identity (the deck's axes at the static start) and rest.
+
+      :param deck: Path of the ``.dat`` deck, as for :meth:`init_deck`.
+      :type deck: str | os.PathLike
+      :param q0: The host positions of :meth:`init_deck_at`, or ``None`` for the deck positions.
+      :type q0: array_like | None
+      :raises CableDynError: as :meth:`init_deck_at`.
+      :raises ValueError: as :meth:`init_deck_at`.
+      :raises RuntimeError: if the loaded library predates ABI 1 minor extension 3.
+
+   .. py:method:: update_rotations(dcm, omega, alpha)
+
+      Set the host's rotation of every coupled block for the following :meth:`update_states`
+      and :meth:`step` calls (``CableDyn_UpdateRotations``); it is kept until the next call and
+      saved and restored with :meth:`save_state` and :meth:`restore_state`. Only a finite-EI
+      line's host-driven end uses its block.
+
+      :param dcm: ``(n_block, 3, 3)``: block ``k``'s global-to-body direction cosine matrix, its
+         rows the body axes in global axes (the OpenFAST mesh orientation); identity is the body
+         at its static-start attitude.
+      :type dcm: array_like
+      :param omega: ``(n_block, 3)``: the body's angular velocity in global axes (rad/s).
+      :type omega: array_like
+      :param alpha: ``(n_block, 3)``: the body's angular acceleration in global axes (rad/s²).
+      :type alpha: array_like
+      :raises ValueError: if an array has the wrong shape.
+      :raises CableDynError: on a model not initialised by :meth:`init_deck_rotating`, or a
+         matrix that is not proper orthogonal to 1e-8 or a non-finite value (the rotations are
+         then unchanged).
+      :raises RuntimeError: if the loaded library predates ABI 1 minor extension 3.
+
+   .. py:method:: coupled_moments()
+
+      Return the moments the lines apply to the host at the coupled points
+      (``CableDyn_GetCoupledMoments``), at the state :meth:`calc_output` reports: block ``k``
+      (entries ``3k .. 3k+2``, N m, global axes) is a finite-EI line's torsional and bending
+      reaction about the coupled point at its host-driven end, zero for the other blocks and for
+      ``EI = 0`` lines.
+
+      :rtype: numpy.ndarray
+      :raises RuntimeError: if the loaded library predates ABI 1 minor extension 3.
+
    .. py:method:: save_state()
                   restore_state()
 
@@ -776,7 +827,9 @@ imports without the shared library.
 
 .. py:function:: abi_minor()
 
-   Return the extension level of ABI 1 of the loaded library: 2 when it also has the
+   Return the extension level of ABI 1 of the loaded library: 3 when it also has the
+   host-rotation calls behind :meth:`CableDyn.init_deck_rotating`,
+   :meth:`CableDyn.update_rotations` and :meth:`CableDyn.coupled_moments`, 2 when it has the
    host-coupling calls behind :meth:`CableDyn.init_deck_at`, :meth:`CableDyn.save_state` and
    :meth:`CableDyn.coupled_layout`, 1 when it has the object queries behind
    :attr:`CableDyn.lines` and :meth:`CableDyn.channel`, 0 for an older library.
