@@ -2571,10 +2571,14 @@ linear spring-mass body conserved to :math:`5\times10^{-10}` at :math:`\Delta t`
 :math:`\rho_\infty`; observed order 2 in positions and fairlead tensions on the moored buoy and in
 surge, heave and pitch on the V-SP spar; gyroscopic precession of a torque-free symmetric top
 at second order; and an error no larger than the staggered scheme's at :math:`\Delta t` = 0.1 s and
-0.05 s on the moored buoy and rod spar. A finite-EI cable pinned to its object is stepped once
-per step with the attachment motion of the Newmark predictor, and its end force is held
-through the iterations; a cable clamped to its object is re-stepped at every outer iteration
-(*Cables clamped to bodies and rods*, below). Standalone decks with a ``motionFile``, a
+0.05 s on the moored buoy and rod spar. A finite-EI cable with an end on a moving object, pinned
+or clamped, is re-stepped at every outer iteration (*Cables clamped to bodies and rods*, below;
+a pinned end returns no moment). Coupling a pinned cable at the predictor instead (stepped once
+with the predicted end motion, its end force held through the iterations) is explicit: with
+:math:`K_e` the cable's condensed dynamic end stiffness and :math:`m_e` the object's effective mass
+along it at the attachment, the error grows from step to step once :math:`K_e\Delta t^2/m_e`
+exceeds about 0.85, so a light rod or buoy on a stiff cable diverges from a balanced start.
+Standalone decks with a ``motionFile``, a
 ``FAILURE`` section, or Coupled/Vessel rods, and the OpenFAST and C-API coupled routes, use the
 staggered scheme.
 
@@ -2764,7 +2768,8 @@ stretch) stays free. The cable returns to the object its end force at the attach
 connection moment :math:`\mathbf{M}_e = \mathbf{m}\times\mathbf{g}_m`, with
 :math:`\mathbf{g}_m` the constraint (or spring) force on the tangent coordinates. In the
 monolithic step the cable is re-stepped from the step entry at every outer iteration with the
-iterate's end-of-step motion, orientation, angular velocity and angular acceleration, and its
+iterate's end-of-step motion, orientation, angular velocity and angular acceleration (a pinned
+end, which the monolithic step couples the same way, takes the motion only), and its
 end force and moment load the object at the force level
 :math:`(1-\alpha_f)\,\mathbf{f}_{n+1} + \alpha_f\,\mathbf{f}_n`. Its condensed dynamic end
 stiffness with respect to the object's translation and rotation enters the Newton matrix by

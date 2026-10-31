@@ -988,7 +988,8 @@ MODULE CableDyn_DeckDriver
     ! End A (cab_kind_b 0: a Fixed End B, held), cab_clamp_b its connection or torsion frame on its
     ! object, and the *_b loads those of End B on its object. cab_imp: the cable is re-stepped at
     ! every outer iteration of the monolithic step with its end stiffness in the Newton matrix
-    ! (cab_clamp, or an End B on an object: the cable then couples the groups of its two objects).
+    ! (an end, pinned or connected, on an object the march moves; with both ends on objects the
+    ! cable couples the groups of its two objects).
     INTEGER, ALLOCATABLE :: cab_kind_b(:), cab_obj_b(:)
     REAL(wp), ALLOCATABLE :: cab_off_b(:, :)
     LOGICAL, ALLOCATABLE :: cab_clamp_b(:), cab_imp(:)
@@ -21530,9 +21531,7 @@ CONTAINS
         pc(pb)%ptype = 'coupled'
         mb%cab_clamp_b(c) = cab_lines(c)%endconn_mode(2) /= CD_ENDCONN_PINNED .OR. line_torsion_at_b(cab_lines(c))
         ! re-stepped inside the outer Newton when End A is connected, otherwise set with the
-        ! attachments below: when End B is connected on an object that moves, or both ends' objects
-        ! move; a cable with one moving end on an object is coupled at the predictor (pinned) or
-        ! implicitly (connected) whichever end that is
+        ! attachments below: whenever either end's object moves (implicit coupling, see there)
         mb%cab_imp(c) = mb%cab_clamp(c)
         BLOCK
           TYPE(DeckLine) :: lnc
@@ -21692,11 +21691,23 @@ CONTAINS
                     'unresolved rod end'); GOTO 900
         END IF
       END IF
-      ! a cable connected at End B on a moving object, or between two moving objects, couples
-      ! them implicitly
-      IF (mb%cab_kind_b(c) > 0 .AND. .NOT. mb%cab_imp(c)) THEN
-        mb%cab_imp(c) = attachment_moves(mb%cab_kind_b(c), mb%cab_obj_b(c)) .AND. &
-                        (mb%cab_clamp_b(c) .OR. attachment_moves(mb%cab_kind(c), mb%cab_obj(c)))
+      ! A cable with an end on an object that the march moves couples it implicitly, pinned or
+      ! connected, at either end: it is re-stepped at every outer iteration with the iterate's
+      ! motion, its end stiffness in the Newton matrix. A pinned cable coupled at the predictor
+      ! instead (stepped once with the predicted attachment motion, its end force held through
+      ! the iterations) is a partitioned explicit coupling: the object sees the end force of the
+      ! predicted end position, F = -K_e x_pred, K_e the cable's condensed dynamic end stiffness
+      ! (the end element's EA/l_e condensed onto the inertia of the nodes behind it). On a mass
+      ! m_e (the object's effective mass along the cable at the attachment) that recurrence, with
+      ! the trapezoidal object update, has a step amplification above 1 once K_e dt^2/m_e exceeds
+      ! about 0.85 (1.5 at 1.3, 2.5 at 2): a light object on a stiff cable diverges whatever its
+      ! static balance (a 3 t free rod spar on a cable of EA 5e8 N in 1.4 m elements, dtM 0.01 s:
+      ! the step change of the cable tension alternated in sign and grew 2.3 times per step, the
+      ! tension rose from 11 kN past 1 MN and the rod top moved 6 m in 2 s).
+      IF (.NOT. mb%cab_imp(c)) THEN
+        mb%cab_imp(c) = attachment_moves(mb%cab_kind(c), mb%cab_obj(c))
+        IF (mb%cab_kind_b(c) > 0) &
+          mb%cab_imp(c) = mb%cab_imp(c) .OR. attachment_moves(mb%cab_kind_b(c), mb%cab_obj_b(c))
         IF (mb%cab_imp(c)) mb%cables(c)%tol = MIN(mb%cables(c)%tol, CLAMPED_CABLE_TOL)
       END IF
     END DO
@@ -23665,12 +23676,11 @@ CONTAINS
         IF (.NOT. lconv) EXIT
         mb%loads = mb%floads
       END IF
-      ! finite-EI cables with a pinned End A and a Fixed End B: stepped once, with the attachment
-      ! motion of the Newmark predictor; their end force is held through the outer iterations
-      ! (explicit coupling at the predictor). A cable clamped (or elastically connected) to its
-      ! object, or one between two objects, is re-stepped from the step entry at every outer
-      ! iteration with the iterate's motion and orientation of its objects, and loads the
-      ! junction at both ends at the alpha level (implicit coupling)
+      ! finite-EI cables: a cable with an end on a moving object (cab_imp: pinned or connected,
+      ! at either end) is re-stepped from the step entry at every outer iteration with the
+      ! iterate's motion and orientation of its objects, and loads the junction at both ends at
+      ! the alpha level (implicit coupling). A cable with no moving end (both ends held: on Fixed
+      ! points or rods fixed in place) is stepped once, its end force held
       DO c = 1, SIZE(mb%cables)
         IF (.NOT. (first .OR. mb%cab_imp(c))) CYCLE
         IF (.NOT. first) THEN

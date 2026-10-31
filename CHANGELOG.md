@@ -31,9 +31,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   re-steps such a cable at every outer iteration and couples the junction coordinates of its two
   objects through its finite-difference end-to-end stiffness in one Newton matrix (on a stiff taut
   cable between light bodies, dropping that coupling took 9.2 mean outer iterations and 300 step
-  halvings over 100 steps, against 3.9 and none); a pinned cable with one moving end is coupled at
-  the predictor whichever end that is, and an end on a fixed rod's end is the `Fixed` end there
-  (byte for byte). `bodyIC static` balances both objects on the cubic-Hermite cable, its passes
+  halvings over 100 steps, against 3.9 and none); an end on a fixed rod's end is the `Fixed` end
+  there (byte for byte). `bodyIC static` balances both objects on the cubic-Hermite cable, its passes
   accelerated by Anderson mixing: a stiff (EI 1e6 N m^2) clamped cable between two unequal moored
   bodies, out of their plane, converges in 8 passes, written in either direction, to the same
   equilibrium. Two identical bodies stay mirror images to the output precision, a body joined to
@@ -354,6 +353,24 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- A finite-EI cable pinned to a light moving object no longer throws it off its static start in
+  the monolithic multibody step. Such a cable (pinned at a Rigid6 body point or a free or pinned
+  rod end, the other end held) was stepped once per step with the predicted motion of its
+  attachment and its end force held through the iterations, an explicit coupling that diverges
+  once the cable's dynamic end stiffness times `dtM^2` exceeds about 0.85 of the object's mass
+  along the cable. It is now re-stepped at every outer iteration with its end stiffness in the
+  Newton matrix, as a clamped cable already was. A 3 t free rod spar with a 55 m cable (EA 5e8 N)
+  pinned at either rod end, at `dtM` 0.01 s: the cable tension rose from 11 kN past 1 MN in
+  0.7 s and the rod end moved 6.3 to 6.5 m in 2 s (5.4 m in a current, 6.1 m with the cable from
+  a fixed rod's end); it now holds to 2e-10 m and 3e-8 of the tension (6e-4 m in the current,
+  as on the staggered scheme), and the monolithic and staggered schemes agree to 2e-10 m. With a
+  1500 kg clump on that cable the rod moved 15 m in 3 s; it holds to 1.1e-6 m (`line_attachments`
+  11 and 12 march at `dtM` 0.01 s again). A 4 t buoy with a pinned keel cable moved 0.22 m and
+  its cable tension reached 38 times its start; it now holds to 1e-9 m. Decks with a pinned cable
+  on a heavy body change at the accuracy of the old coupling: on the `mixed_body_rods_points`
+  example (150 t buoy) the body motion changes by 3.5e-5 m, its error against a run at `dtM` / 4
+  falling from 3.7e-5 m to 1.6e-6 m, and the cable top tension by 0.6 N of 8.1 kN; that deck runs
+  about 45 % longer.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's

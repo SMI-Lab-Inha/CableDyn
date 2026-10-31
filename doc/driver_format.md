@@ -412,10 +412,10 @@ connection moment at every connected end, and at both ends of a cable between tw
   spring to its own object, so a stiff cable with both ends on one body (or between two light
   objects) is resolved there only as far as `dtM` allows; the monolithic scheme couples it in its
   Newton matrix;
-- a cable re-stepped at every outer iteration of the monolithic step is one connected at an end
-  on a moving object or one between two moving objects (Rigid6 bodies, free or pinned rods);
-  a pinned cable with one moving end is coupled at the predictor, whichever end that is, and an
-  end on a fixed rod's end is the `Fixed` end there;
+- the monolithic step re-steps at every outer iteration every cable with an end, pinned or
+  connected, on a moving object (a Rigid6 body, a free or pinned rod), with its end stiffness in
+  the Newton matrix, so a light object on a stiff cable is as stable as a heavy one; an end on a
+  fixed rod's end is the `Fixed` end there;
 - every `Free`/`Connect` point carries at least one EI = 0 line;
 - `motionFile` and `Coupled`/`Vessel` rods are rejected by name.
 
