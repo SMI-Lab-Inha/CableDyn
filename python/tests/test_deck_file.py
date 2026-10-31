@@ -157,7 +157,8 @@ def test_end_connection_duplicate_and_unsupported_topology_fail_preflight(tmp_pa
     )
     moving = tmp_path / "moving-end-connection.dat"
     moving.write_text(moving_source, encoding="utf-8")
-    with pytest.raises(DeckFormatError, match="Fixed End B"):
+    # a Connect End B can neither hold the connection nor drive it (a Coupled/Vessel one can)
+    with pytest.raises(DeckFormatError, match="need End B on a Fixed, Coupled or Vessel point"):
         DeckFile.read(moving)
 
 
@@ -2122,10 +2123,9 @@ def test_invalid_output_channels_fail_before_case_generation(tmp_path, channel, 
 
 
 @pytest.mark.parametrize("channel", ["FairTen1", "AnchFz1", "AnchFH1"])
-def test_finite_ei_cable_shared_by_two_turbines_is_refused(tmp_path, channel):
-    # native build_one_hermite_cable: the coupled aggregate holds a finite-EI cable at a Fixed
-    # anchor, so a cable between two turbines (End B moving) is refused, end-force channels
-    # included
+def test_finite_ei_cable_shared_by_two_turbines_runs_coupled(tmp_path, channel):
+    # native build_one_hermite_cable: the coupled aggregate drives a finite-EI cable between two
+    # turbines at both ends (End B on its own moving column), end-force channels included
     path = _chain_variant(
         tmp_path,
         ("1.607e9    -1.0       0.0 ", "1.607e9    -1.0       2.0e5 "),
@@ -2133,8 +2133,7 @@ def test_finite_ei_cable_shared_by_two_turbines_is_refused(tmp_path, channel):
         ("2     Coupled   0.0", "2     Turbine1  0.0"),
         ('"FairTen1"', f'"{channel}"'),
     )
-    with pytest.raises(DeckFormatError, match=r"requires End B \(the anchor\) to be a Fixed point"):
-        DeckFile.read(path, caller_driven=True)
+    assert channel in DeckFile.read(path, caller_driven=True).outputs
 
 
 def test_ei0_line_shared_by_two_turbines_keeps_its_end_force_channels(tmp_path):
@@ -3979,7 +3978,7 @@ def test_stock_anchor_to_free_swap_needs_the_free_point_at_or_above_the_anchor()
     DeckFile.from_text(_free_leg_deck("-30.0", "-30.0"))
     # Fixed NodeA above the Free NodeB: an elevated hang-off already written upper end
     # first, so End B stays the Free point.
-    with pytest.raises(DeckFormatError, match="Fixed End B"):
+    with pytest.raises(DeckFormatError, match="need End B on a Fixed, Coupled or Vessel point"):
         DeckFile.from_text(_free_leg_deck("-10.0", "-30.0"))
 
 
@@ -4188,7 +4187,8 @@ def test_section_curvature_channels_need_a_finite_ei_line():
     ei0 = _edit(_TIMED, ("\nFairTen1\n", "\nFairTen1\nCurvX1N2\n"))
     with pytest.raises(DeckFormatError, match="section curvature components need a finite-EI line"):
         DeckFile.from_text(ei0)
-    # a farm-shared cable (two moving ends) runs on the compatibility route, which has no frame
+    # a farm-shared cable (two moving ends) runs on the cubic-Hermite route, which drives End B
+    # as a second moving end and carries the section frame from End A
     shared = _edit(
         _TURBINE_DECK,
         ("chain 0.1 20.0 1.0e9 -1.0 0.0 1.2", "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2"),
@@ -4197,13 +4197,13 @@ def test_section_curvature_channels_need_a_finite_ei_line():
         ("100 WtrDpth\n", "100 WtrDpth\n0.1 dtM\n10.0 TMax\n"),
         ('"Point3FH"', '"CurvY1N5"'),
     )
-    with pytest.raises(DeckFormatError, match="Fixed End B"):
-        DeckFile.from_text(shared)
+    assert "CurvY1N5" in DeckFile.from_text(shared).outputs
 
 
-def test_viv_and_lift_flag_refused_on_a_finite_ei_line_with_two_moving_ends():
+def test_viv_and_lift_flag_on_a_finite_ei_line_with_two_moving_ends():
     # native run_deck_driver: a farm-shared finite-EI line (Turbine1 to Turbine2) runs on the
-    # compatibility route, which carries no VIV: Cl > 0 and the lift file V are refused
+    # cubic-Hermite march with both ends driven, which carries VIV: Cl > 0 and the lift file V
+    # are accepted as on a line with a Fixed End B
     shared = _edit(
         _TURBINE_DECK,
         ("chain 0.1 20.0 1.0e9 -1.0 0.0 1.2", "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2"),
@@ -4212,12 +4212,38 @@ def test_viv_and_lift_flag_refused_on_a_finite_ei_line_with_two_moving_ends():
         ("100 WtrDpth\n", "100 WtrDpth\n0.1 dtM\n10.0 TMax\n"),
     )
     DeckFile.from_text(shared)
-    with pytest.raises(DeckFormatError, match="needs its End B fixed"):
-        DeckFile.from_text(_edit(shared, ("1.2 0.2 1.0 0.0\n", "1.2 0.2 1.0 0.0 0.8\n")))
-    with pytest.raises(DeckFormatError, match=r"flag V \(VIV lift\) needs a line that carries VIV"):
-        DeckFile.from_text(_edit(shared, ("1 1 2 -\n", "1 1 2 V\n")))
+    viv = _edit(shared, ("1.2 0.2 1.0 0.0\n", "1.2 0.2 1.0 0.0 0.8\n"))
+    DeckFile.from_text(viv)
+    DeckFile.from_text(_edit(viv, ("1 1 2 -\n", "1 1 2 V\n")))
     # the same flag on a line with a Fixed End B is accepted
     DeckFile.from_text(_edit(_DYNAMIC, ("1 2 1 -\n", "1 2 1 V\n")))
+
+
+def test_finite_ei_line_between_two_coupled_points():
+    # native finalize_checks: a finite-EI line may join two Coupled/Vessel points (both ends
+    # driven on the cubic-Hermite route); an EI = 0 line between them, or a finite-EI line to a
+    # Connect point, stays refused
+    deck = (
+        "title\n"
+        "--------------------- LINE TYPES ---------------------------------------\n"
+        "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2 0.2 1.0 0.0\n"
+        "--------------------- POINTS -------------------------------------------\n"
+        "1 Coupled 0 0 -10 0 0 0 0\n"
+        "2 Vessel 300 0 -10 0 0 0 0\n"
+        "--------------------- LINES --------------------------------------------\n"
+        "1 1 2 -\n"
+        "--------------------- SECTIONS -----------------------------------------\n"
+        "1 chain 620 30\n"
+        "--------------------- OPTIONS ------------------------------------------\n"
+        "100 WtrDpth\n0.1 dtM\n10.0 TMax\n"
+        "--------------------- OUTPUTS ------------------------------------------\n"
+        "FairTen1\n"
+        "--------------------- need this line -----------------------------------\n"
+    )
+    DeckFile.from_text(deck)
+    ei0 = _edit(deck, ("chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2", "chain 0.1 20.0 1.0e9 -1.0 0.0 1.2"))
+    with pytest.raises(DeckFormatError, match="End B must be Fixed"):
+        DeckFile.from_text(ei0)
 
 
 @pytest.mark.parametrize(
@@ -4774,3 +4800,27 @@ def test_viv_rms_window_option_is_non_negative():
     DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n0.25 VIVrmsWindow\n")))
     with pytest.raises(DeckFormatError, match="VIVrmsWindow"):
         DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n-1.0 VIVrmsWindow\n")))
+
+
+def test_as_laid_statics_refused_on_a_finite_ei_line_between_two_moving_points():
+    # native build_one_hermite_cable: no anchored end to lay the line from
+    deck = (
+        "title\n"
+        "--------------------- LINE TYPES ---------------------------------------\n"
+        "chain 0.1 20.0 1.0e9 -1.0 1.0e4 1.2 0.2 1.0 0.0\n"
+        "--------------------- POINTS -------------------------------------------\n"
+        "1 Coupled 0 0 -10 0 0 0 0\n"
+        "2 Vessel 300 0 -10 0 0 0 0\n"
+        "--------------------- LINES --------------------------------------------\n"
+        "1 1 2 -\n"
+        "--------------------- SECTIONS -----------------------------------------\n"
+        "1 chain 620 30\n"
+        "--------------------- OPTIONS ------------------------------------------\n"
+        "100 WtrDpth\n0.1 dtM\n10.0 TMax\n0.5 frictionMu\nasLaid staticsFriction\n"
+        "--------------------- OUTPUTS ------------------------------------------\n"
+        "FairTen1\n"
+        "--------------------- need this line -----------------------------------\n"
+    )
+    with pytest.raises(DeckFormatError, match="has a moving End B"):
+        DeckFile.from_text(deck)
+    DeckFile.from_text(deck.replace("asLaid staticsFriction", "none staticsFriction"))

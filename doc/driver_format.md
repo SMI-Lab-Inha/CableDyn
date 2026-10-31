@@ -260,7 +260,7 @@ torsional stiffness, transverse and polar (axial) rotary inertia per length):
 `Name Diam Mass EA BA EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t`. The four extra values must be finite
 and either all `0` or all `> 0`. All zero, or the 10-column row, selects the circular-section
 closure `GAs = EA/(2(1+0.3))`, `GJ = EI/(1+0.3)`, `Irt = m d²/16`, `Irn = m d²/8`. The closure
-serves the secondary Cosserat path only: a finite-EI line restrained in torsion
+serves the secondary Cosserat library path only: a finite-EI line restrained in torsion
 ([END CONNECTIONS](#end-connections-optional-finite-ei-lines)) takes `GJ` [N·m²/rad] from the
 14-column row of each of its sections and stops by name without it. In the dynamics such a line
 carries a twist angle at every node, whose polar rotary inertia is `Irn` [kg·m²/m]
@@ -270,7 +270,7 @@ used by the cubic-Hermite route, but the all-or-nothing rule still asks for posi
 The `GJ` column may be written `GJ|K`, with `K` [N·m] the torque–tension coupling of an armoured
 cable or wire rope (`T = EA ε + K τ`, `M = GJ τ + K ε`; see
 [Torque–tension coupling](theory.rst)). It needs a finite-EI, linear-elastic type with
-`K² < EA·GJ`; the two-moving-end compatibility route refuses it. `GJ|0` is the plain `GJ`.
+`K² < EA·GJ`. `GJ|0` is the plain `GJ`.
 `GJ|K|Bt` adds the torsional damping `Bt` [N·m²·s] of the nodal twist (the torque
 `Bt dτ/dt`, stiffness-proportional: a torsional mode of frequency `ω` has the damping ratio
 `ω Bt/(2 GJ)`); a negative `Bt` is `-ζ`, the fraction of an element's critical torsional damping
@@ -321,13 +321,19 @@ rejected. `EI > 0` is routed as follows.
 
 **Standalone dynamic run** (`dtM`/`TMax` set):
 
-- When every line's End B is a `Fixed` point, finite-EI lines run on the cubic-Hermite route. It
+- Finite-EI lines whose End B is a `Fixed`, `Coupled` or `Vessel` point run on the cubic-Hermite
+  route. It
   covers suspended spans, motion-file, current, and wave cases, and flat or structured seabed
   contact. Contact uses a C1 normal penalty, compression-only normal damping, and stick-slip
   seabed friction, each scaled by nodal diameter × tributary length. Slack spans with
   both endpoints above the bed start from an isometric two-touchdown seed.
-- A line whose End B is not `Fixed` (both ends moving) runs on the finite-EI compatibility route:
-  End A is driven and End B is held.
+- A line whose End B is a `Coupled`/`Vessel` point (a line between two moving points, such as a
+  cable shared by two floaters or a `TURBINES` shared line) has both ends driven: End B moves with
+  the same motion table as End A (`motionFile` rows, the `vesselMotion`/`vesselRAO` vessel and its
+  rotation, `TURBINES` rows, the `motionFile` roll column) and is held where no motion is given.
+  Its static solve is that of a `Fixed` End B at its deck position, so a `Coupled` End B the motion
+  leaves at rest is the `Fixed` End B, byte for byte. `staticsFriction asLaid` is refused on such a
+  line (it has no anchored end to lay the line from).
 - A deck whose finite-EI lines are its only lines and whose endpoints are all
   `Fixed`/`Coupled`/`Vessel` runs on this route; with EI = 0 lines beside them it is a
   standalone mixed deck (below). With BODIES, RODS, or `Connect`/`Free` points it runs on the
@@ -385,19 +391,31 @@ With `bodyScheme staggered` each step is a predictor-corrector:
 
 The staggered steps are sub-cycled so the explicit object positions resolve the stiffest
 object-mooring mode of the EI = 0 lines. A finite-EI cable end on a body point or a rod end is
-pinned unless its
-End A has an [END CONNECTIONS](#end-connections-optional-finite-ei-lines) row: a pinned end passes
-its end force to the object at the attachment and no moment. A `Rigid` or spring End A is fixed
-in the object: its direction turns with the object, the connection moment is returned to it, and
-the monolithic step re-steps the cable at every outer iteration with its end stiffness in the
-Newton matrix. The static solve (`bodyIC static`) balances the cable's bending end force and
-connection moment. On this route:
+pinned unless it has an [END CONNECTIONS](#end-connections-optional-finite-ei-lines) row: a pinned
+end passes its end force to the object at the attachment and no moment. A `Rigid` or spring end
+is fixed in the object: its direction turns with the object, the connection moment is returned to
+it, and the monolithic step re-steps the cable at every outer iteration with its end stiffness in
+the Newton matrix. A cable between two objects (End B on a body point or a rod end as well) is
+driven at both ends and re-stepped at every outer iteration whatever its connections; its
+end-to-end stiffness couples the two objects' coordinates in the one Newton matrix of the step,
+and its end loads (and, at a connected or torsional end, the connection moment and torque) return
+to each object. The static solve (`bodyIC static`) balances the cable's bending end force and
+connection moment at every connected end, and at both ends of a cable between two objects
+(passes accelerated by Anderson mixing when the deck has such a cable). On this route:
 
-- a finite-EI cable needs a `Fixed` End B, and its End A may be a `Fixed` point, a Rigid6
-  `Body<N>` point or a rod end, not a `Free`/`Connect` point or a `Point3` buoy;
-- a clamped or elastic End A on a body or rod, or one restrained in torsion (bending-pinned
-  included), needs `bodyScheme monolithic` (the default); `staggered`, which drives a cable end by
-  translation, rejects it by name;
+- a finite-EI cable's ends may be `Fixed` points, Rigid6 `Body<N>` points or rod ends, not
+  `Free`/`Connect` points or `Point3` buoys; a `Coupled`/`Vessel` end, which this march has no
+  motion to drive, is rejected by name;
+- a clamped or elastic end, or a torsional one (bending-pinned included), on a body or rod needs
+  `bodyScheme monolithic` (the default); `staggered` rejects it by name, at either end. The
+  staggered scheme passes cable end forces explicitly and sizes its sub-steps from each end's
+  spring to its own object, so a stiff cable with both ends on one body (or between two light
+  objects) is resolved there only as far as `dtM` allows; the monolithic scheme couples it in its
+  Newton matrix;
+- a cable re-stepped at every outer iteration of the monolithic step is one connected at an end
+  on a moving object or one between two moving objects (Rigid6 bodies, free or pinned rods);
+  a pinned cable with one moving end is coupled at the predictor, whichever end that is, and an
+  end on a fixed rod's end is the `Fixed` end there;
 - every `Free`/`Connect` point carries at least one EI = 0 line;
 - `motionFile` and `Coupled`/`Vessel` rods are rejected by name.
 
@@ -565,8 +583,12 @@ degrees). Turbines not in the section are an error naming the point. With a `mot
 rows are per-turbine rigid-body records
 `time J x y z q0 q1 q2 q3 vx vy vz wx wy wz ax ay az alx aly alz` (reference position,
 unit quaternion, velocity, angular velocity, and their rates); each Turbine<J> fairlead
-follows `x + R(q) p`, with the rigid-body velocity and acceleration. In FAST.Farm the host
-supplies the turbine positions and the section is not used.
+follows `x + R(q) p`, with the rigid-body velocity and acceleration. A finite-EI line end on a
+`Turbine<J>` point takes its `END CONNECTIONS` direction `Ez` and torsion normal `Nx` in that
+turbine's axes: turned by the `PtfmInit` rotation at the static start and by `R(q)`, with the
+row's angular velocity and acceleration, in the run (End A and End B alike), as the FAST.Farm
+host's orientations turn them. In FAST.Farm the host supplies the turbine positions and the
+section is not used.
 
 ### ROD TYPES + RODS (rigid cylindrical rods)
 
@@ -720,8 +742,9 @@ rod end, and `Free`/`Connect`-to-`Coupled` lines are left as written.
 
 - In a deck without dynamic points (`Connect`, `Free`, `Body<N>`, or `Rod<N>A/B`), End A must be a
   `Coupled`, `Vessel`, or `Body<N>` point and End B a `Fixed` point. A fairlead below its anchor
-  fails with `LINE End A fairlead (NodeA) must not be below End B anchor (NodeB)`. The exception
-  is a FAST.Farm shared line with both ends on `Turbine<J>` points.
+  fails with `LINE End A fairlead (NodeA) must not be below End B anchor (NodeB)`. The exceptions
+  are a FAST.Farm shared line with both ends on `Turbine<J>` points and a finite-EI line whose End
+  B is also a `Coupled`/`Vessel` point (a line between two moving points, driven at both ends).
 - In a deck with dynamic points, line ends may be `Fixed`, `Coupled`, `Vessel`, `Connect`, `Free`,
   `Body<N>`, or `Rod<N>A/B`.
 
@@ -783,8 +806,12 @@ rope: its static solve uses the OWC, and each element's running maximum is its s
 
 `END CONNECTIONS` sets the bending boundary at either end of a finite-EI line. Omitted ends are
 pinned. At most one row may name a given line end. A non-pinned connection requires a finite-EI
-line whose End B is a `Fixed` point; a finite-EI line with two moving ends fails deck validation.
-End A may be a `Fixed` or `Coupled` point, a Rigid6 `Body<N>` point or a rod end.
+line whose End B is a `Fixed` point or a `Coupled`/`Vessel` point, whose connection is held by
+that point's parent and turns with it as End A's does (the `vesselMotion`/`vesselRAO` vessel
+standalone, the host orientation of End B's point when coupled), or a Rigid6 `Body<N>` point or a
+rod end on the [multibody march](#multibody-march) (a line between two objects, whose connection
+turns with End B's object); any other End B fails deck validation. End A may be a `Fixed` or
+`Coupled` point, a Rigid6 `Body<N>` point or a rod end.
 
 ```text
 --------------------- END CONNECTIONS -------------------------------
@@ -911,23 +938,26 @@ Behaviour:
   buckled one. Dynamics carry the torsion in every step with a twist angle at every node and the
   polar inertia `Irn` of the `LINE TYPES` row (see [theory](theory.rst)).
 
-Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B, an explicit
-`GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point, a Rigid6 `Body<N>`
-point (the ends of a `Body<N>` rod included) or an end of a `Fixed` rod; in a coupled OpenFAST
-or FAST.Farm run the End A frame turns with the platform (see the manual's OpenFAST page, Line
-torsion). Each of the following stops with a named error: torsion on an `EI = 0` line, on an end
-of a `Free`, `Pinned`, `Body<N>Pinned` or `CoupledPinned` rod (an axisymmetric rod has no roll
-angle about its own axis: no load acts about the axis and its static solve has none, so it
-cannot hold the torque) or of a `Coupled`/`Vessel` rod (no route carries a finite-EI line on a
-host-driven rod), a line whose End B is a rod end (a line between two rods: put a `Fixed` point
-at the rod end), on a `Point3` body, a dynamic or coupled run with `False alpha_force_blend`,
-any restrained end (one end included) through the C API's `CableDyn_InitDeck`/`InitDeckAt`,
-which move the line ends by translation only (`a line restrained in torsion needs a host that
-turns its fairlead frame ...`; a C API host passes its rotations after
-`CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel on a line whose torsion is not
-solved. OpenFAST linearisation includes the twist angles as states; like any cable, the line
-must not have a `Rigid` bending connection there. Seabed friction does not resist twist (the
-laid part of a line twists freely).
+Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B or, restrained
+at both ends, a `Coupled`/`Vessel` or Rigid6 `Body<N>` End B (both end frames then turn with
+their parents, and standalone the `motionFile` roll column rolls either end: `Φ = Pretwist(B) −
+Pretwist(A) − roll(A) − roll(B)`, each roll about the tangent pointing into the line from that
+end), an explicit `GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point, a
+Rigid6 `Body<N>` point (the ends of a `Body<N>` rod included) or an end of a `Fixed` rod (with a
+`Fixed` End B); in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
+(see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
+torsion on an `EI = 0` line, on an end of a `Free`, `Pinned`, `Body<N>Pinned` or `CoupledPinned`
+rod (an axisymmetric rod has no roll angle about its own axis: no load acts about the axis and
+its static solve has none, so it cannot hold the torque) or of a `Coupled`/`Vessel` rod (no route
+carries a finite-EI line on a host-driven rod), at End B on a rod end (a line between two rods:
+restrain it through End A, or put a `Fixed` point at the rod end), on a `Point3` body, a dynamic
+or coupled run with `False alpha_force_blend`, any restrained end (one end included) through the
+C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line ends by translation only (`a line
+restrained in torsion needs a host that turns its fairlead frame ...`; a C API host passes its
+rotations after `CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel on a line whose
+torsion is not solved. OpenFAST linearisation includes the twist angles as states; like any
+cable, the line must not have a `Rigid` bending connection there, nor a second moving end. Seabed
+friction does not resist twist (the laid part of a line twists freely).
 
 ### EQUIVALENT BUOYANCY (optional)
 
@@ -1011,10 +1041,9 @@ Behaviour:
   non-positive
   pitch or `first > last`. A stock-order line (anchor as `NodeA`) measures the arc from that
   anchor. Attachments run on the cubic-Hermite cable route, standalone (End A `Coupled`/
-  `Vessel` or `Fixed`, End B `Fixed`) and coupled (OpenFAST `CompMooring = 5`, the C API and
-  Python), where the SeaState kinematics the host samples at every cable node reach the
-  attachments at theirs; a checkpoint restart is bit-identical. They are rejected on the
-  two-moving-end compatibility route.
+  `Vessel` or `Fixed`, End B `Fixed`, `Coupled` or `Vessel`) and coupled (OpenFAST
+  `CompMooring = 5`, the C API and Python), where the SeaState kinematics the host samples at
+  every cable node reach the attachments at theirs; a checkpoint restart is bit-identical.
 
 ### STIFFENERS (optional, finite-EI lines)
 
@@ -1072,8 +1101,7 @@ Behaviour:
   `InnerD` and `Density` non-negative, `InnerD` below both outer diameters), or the stiffeners
   of End A and End B together are longer than the line. On a stock-order line (anchor as
   `NodeA`) the `End` column follows the written row, so the stiffener stays on the same physical
-  end. Stiffeners run wherever the cubic-Hermite cable does, standalone and coupled; they are
-  rejected on the two-moving-end compatibility route.
+  end. Stiffeners run wherever the cubic-Hermite cable does, standalone and coupled.
 
 ### FAILURE (optional, EI = 0 decks)
 
@@ -1396,11 +1424,14 @@ cases. With an active path:
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
 plain numbers; tokens after the eleventh are ignored, except that a deck with a line solved in
 torsion reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the line's moving
-end, restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A),
-right-handed about the line tangent pointing into the line from that end. Either way it imposes
-`Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`: the roll has the sense of `Pretwist(A)` at End A
-(where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)` at End B (where it is
-`−Ez`). The roll is 0 at
+end restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A; both
+ends of a line between two moving points), right-handed about the line tangent pointing into the
+line from that end. It imposes `Phi(t) = Pretwist(B) − Pretwist(A) − roll(A)(t) − roll(B)(t)`,
+the roll of a `Fixed` end, or of an end free in torsion, being 0: the roll has the sense of
+`Pretwist(A)` at End A (where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)`
+at End B (where it is `−Ez`), so equal rolls of the two ends of a line between two moving points
+twist it by twice the roll, and a rigid roll of the line about its axis (opposite rolls) does not
+twist it. The roll is 0 at
 `t = 0` and is given on every row of the point or on none. Header lines must be comments. `time` must
 lie on the `0, dtM, 2·dtM, …` grid (rows after `TMax` are read and not used) and `point_id` must be
 a prescribed point. Each
@@ -1491,9 +1522,9 @@ bending moment. None of these channels is mandatory.
 
 | Channel | Meaning | Unit |
 |---------|---------|------|
-| `FairTen<L>` | line L fairlead (End A) line-end tension: the magnitude of the force the line actually exerts on its End-A point (end element force with axial damping, including the bending shear of a finite-EI line, plus the end node's share of the submerged weight, seabed contact and drag at the actual velocity; without the end node's inertia), the static end reaction at rest. Route differences (seabed friction, the two-moving-end route) are in [Outputs](outputs.rst) | N |
+| `FairTen<L>` | line L fairlead (End A) line-end tension: the magnitude of the force the line actually exerts on its End-A point (end element force with axial damping, including the bending shear of a finite-EI line, plus the end node's share of the submerged weight, seabed contact and drag at the actual velocity; without the end node's inertia), the static end reaction at rest. Route differences (seabed friction) are in [Outputs](outputs.rst) | N |
 | `AnchTen<L>` | line L anchor (End B) line-end tension, as `FairTen` | N |
-| `AnchFz<L>` | line L vertical component of the `AnchTen` end force, positive upward (the line lifts its End-B point). Not available on the two-moving-end finite-EI route, which rejects it by name | N |
+| `AnchFz<L>` | line L vertical component of the `AnchTen` end force, positive upward (the line lifts its End-B point) | N |
 | `AnchFH<L>` | line L horizontal magnitude of the `AnchTen` end force (same availability as `AnchFz`) | N |
 | `FairIncl<L>` | line L fairlead (End A) signed inclination below horizontal (0 = horizontal; positive = downward) | deg |
 | `AnchIncl<L>` | line L anchor (End B) signed inclination below horizontal (0 = horizontal; positive = downward) | deg |
@@ -1504,7 +1535,7 @@ bending moment. None of these channels is mandatory.
 | `Point<P>p{x,y,z}` | point P position component | m |
 | `Con<P>p{x,y,z}` | alias of `Point<P>p{x,y,z}` (MoorDyn v1 spelling) | m |
 | `Body<N>…`, `Rod<N>…` | Rigid6 body and rod channels in the MoorDyn-F names: position, attitude, velocity and acceleration (`P`, `R`, `V`, `RV`, `A`, `RA`), net force and moment (`F`, `M`), rod end tensions (`TenA`, `TenB`), submerged fraction (`Sub`) and rod node positions (`Rod<N>N<k>P`). Available on every route that carries bodies or rods, OpenFAST included; the full list and units are in [Outputs](outputs.rst) | see Outputs |
-| `Point<P>F{x,y,z}`, `Point<P>FH` | resultant of the line-end and cable end forces on point P (each the `FairTen`/`AnchTen` end force): the anchor load of a Fixed point shared by several lines, the line load a free point balances; `FH` is its horizontal magnitude. Available on every route (static, `EI = 0`, finite-EI, multibody and OpenFAST) except the two-moving-end finite-EI route, which rejects it by name | N |
+| `Point<P>F{x,y,z}`, `Point<P>FH` | resultant of the line-end and cable end forces on point P (each the `FairTen`/`AnchTen` end force): the anchor load of a Fixed point shared by several lines, the line load a free point balances; `FH` is its horizontal magnitude. Available on every route (static, `EI = 0`, finite-EI, multibody and OpenFAST) | N |
 | `Ten<L>N<J>` | line L effective tension at node J. EI = 0 lines: the mean of the two adjacent segment tensions. Finite-EI lines: the axial component of the section force recovered from nodal equilibrium (`OutputRecovery element`: the length-weighted mean of the adjacent element-mean axial forces). End nodes report the line-end force of `FairTen`/`AnchTen` | N |
 | `Curv<L>N<J>` | line L curvature at node J. `EI = 0` lines: geometric curvature of the circle through the node and its two neighbours (end nodes take the adjacent interior value). Cubic-Hermite lines: `BendMom<L>N<J>` / EI, the larger of the two sides at a section junction (`OutputRecovery element`: exact curvature of the continuous centreline, the larger one-sided element value at an interior node) | 1/m |
 | `BendMom<L>N<J>` | line L bend moment = EI × curvature **relative to the stress-free reference shape** (≈ 0 at the reference; the finite-EI reference is straight). Finite-EI lines: recovered from nodal equilibrium, the moment the neighbouring elements carry (`OutputRecovery element`: EI × the larger one-sided exact curvature); 0 on EI = 0 lines. Under a bend stiffener: the cable's own share, the line type's EI × curvature | N·m |
@@ -1560,8 +1591,8 @@ Azimuth` ([Outputs](outputs.rst) defines each one). These standalone routes writ
   the element-extrema file `<out_root>.elements.out`;
 - a mixed `EI = 0` + finite-EI deck.
 
-The independent `EI = 0` dynamic, point-system, rod, and Rigid6 routes, and the two-moving-end
-finite-EI compatibility route, do not write it. The file is additive; `<out_root>.out` is
+The independent `EI = 0` dynamic, point-system, rod, and Rigid6 routes do not write it. The file
+is additive; `<out_root>.out` is
 unchanged.
 
 An OpenFAST `CompMooring = 5` run always writes `<OpenFASTRoot>.CD.static.out` after coupled

@@ -10,6 +10,40 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Finite-EI lines with two moving ends on the cubic-Hermite route: a line whose End B is a
+  `Coupled`/`Vessel` point (a cable shared by two floaters, a FAST.Farm shared line) is driven at
+  both ends standalone, in OpenFAST, FAST.Farm and the C API (End B on a moving column of its
+  own), with `END CONNECTIONS` and torsion at both ends (both end frames turn with their
+  parents) and every Hermite feature. A `Coupled` End B held at rest writes the `Fixed` End B's
+  files byte for byte; a symmetric cable whose ends move apart stays mirror-symmetric to 4e-11 m;
+  a rigidly translating line keeps its
+  end loads to 4e-5 N of 1.6e4 N; driving End B matches the reversed line driven at End A to
+  1e-3 N, with a turning clamped End B to 2e-5 N and 4e-7 N m; equal rolls of both end frames
+  keep the torque to 3e-6 N m and opposite rolls change it by `GJ (2 phi)/L` to 5e-6 N m; a
+  FAST.Farm aggregate driven by prescribed turbine motions reports the standalone deck's end
+  tensions to 7e-3 N of 1.9e4 N; restarts are bit-identical. The compatibility (Cosserat) route
+  these decks ran on is retired: on four shared-line decks it failed to converge or reached a
+  compressive static state (-6.1e8 N), and the Hermite route runs all four.
+- A finite-EI line between two objects on the standalone multibody march: End B on a Rigid6
+  `Body<N>` point or a rod end as well as End A, both ends driven by their objects and their end
+  forces, connection moments and torques returned to them, with `END CONNECTIONS` and torsion at
+  both ends (`bodyScheme monolithic`; the staggered scheme takes pinned ends). The monolithic step
+  re-steps such a cable at every outer iteration and couples the junction coordinates of its two
+  objects through its finite-difference end-to-end stiffness in one Newton matrix (on a stiff taut
+  cable between light bodies, dropping that coupling took 9.2 mean outer iterations and 300 step
+  halvings over 100 steps, against 3.9 and none); a pinned cable with one moving end is coupled at
+  the predictor whichever end that is, and an end on a fixed rod's end is the `Fixed` end there
+  (byte for byte). `bodyIC static` balances both objects on the cubic-Hermite cable, its passes
+  accelerated by Anderson mixing: a stiff (EI 1e6 N m^2) clamped cable between two unequal moored
+  bodies, out of their plane, converges in 8 passes, written in either direction, to the same
+  equilibrium. Two identical bodies stay mirror images to the output precision, a body joined to
+  an immobile body (1e15 kg) moves as on a `Fixed` End B to 8e-9, two free bodies keep the total
+  linear momentum to 3e-5 and the energy to 0.2 %, a cable twisted 90 deg returns equal and
+  opposite torques (`GJ Phi/L` at the start, their sum below 2e-10 N m), and a moored pair starts
+  and stays at rest. An End B on a `Free`/`Connect` point, a `Point3` buoy or a `Coupled`/`Vessel`
+  point stays refused there by name (this march drives no `Coupled` point), and so are, by name,
+  torsion at an End B on a rod end and a line restrained in torsion at a rod End A with a moving
+  End B, which no route of this build solves.
 - C API host rotations (ABI 1.3): `CableDyn_InitDeckRotating` initialises a handle whose host
   passes each coupled point's rotation (`CableDyn_UpdateRotations`: the global-to-body DCM and
   the angular velocity and acceleration) with every update and step, so a line restrained in
@@ -78,7 +112,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   (3 to 11 % in the cases tried) under the coupled Newton tolerance. A straight line rolled
   slowly gives `Torq = GJ Phi / L` to 5e-6 N m. A static mixed run (`TMax = 0`) with torsion
   takes `False alpha_force_blend`, as the single-line route and the Python reader do.
-  `vesselRAO` stays refused with the deck waves.
+  `vesselRAO` stays refused with the deck waves. A line between two moving points there takes the
+  roll columns of both ends, `Phi = Pretwist(B) − Pretwist(A) − roll(A) − roll(B)`: rolled
+  oppositely (a rigid roll about its axis) a line twisted 90 deg keeps its twist exactly, and rolled
+  equally it twists by twice the roll to 5e-7 deg, with `Torq = GJ Phi / L` at both ends to
+  5e-6 N m.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their
@@ -247,6 +285,21 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the fairlead already moved to row 1. A deck whose row 1 is off the deck fairlead changes
   `.static.out` only (a 2 cm offset changed the fairlead x by 0.02 m and its tension from 3.5 MN
   back to the static 29 kN); the example decks are unchanged.
+- Standalone `TURBINES` decks read the `END CONNECTIONS` direction `Ez` and torsion normal `Nx`
+  of an end on a `Turbine<J>` point in that turbine's axes, turned by its `PtfmInit` rotation at
+  the static start, as the FAST.Farm aggregate does (they were global). A deck whose turbines
+  start rotated and whose finite-EI lines carry end connections or torsion changes; on a clamped
+  line twisted 90 deg between turbines yawed +15 and -8 deg the standalone run now matches the
+  FAST.Farm aggregate to 8e-9 in every channel. Decks without a `PtfmInit` rotation, or without
+  end connections and torsion, are unchanged.
+- Standalone `TURBINES` motion rows turn the `END CONNECTIONS` and torsion frames of a finite-EI
+  line end on a `Turbine<J>` point with the row's rotation, angular velocity and acceleration (End A
+  and End B), as `vesselMotion` and the OpenFAST and FAST.Farm hosts do; they were held at their
+  start orientation while the end moved. A `TURBINES` deck whose rows rotate the turbines and whose
+  finite-EI lines carry end connections or torsion changes: a clamped line twisted 90 deg between
+  turbines that roll 10 deg in opposite senses over 1 s ends at 613.6 N m of torque (788.1 N m
+  before; the tensions change by under 5e-7) and matches the FAST.Farm aggregate to 3.4e-8 in every channel.
+  No example deck uses `TURBINES` rows; the examples are unchanged.
 - `TMax = 0` checks the static start of any dynamic deck as it stands: a `motionFile` or
   `vesselMotion` record may run past `TMax` (its later rows are checked on the `dtM` grid and
   not used, so a long record also serves a shorter run), and `RangeStart` is accepted at
@@ -294,6 +347,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
+  keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
+  every point with its id: a rod end POINT row listed before the body's points became the body's
+  first point, and the list overran its allocation (also in 0.3.0). A free body on three legs with
+  a pinned arm rod numbered 1, its tether on an explicit `Rod1B` POINT listed first, now writes
+  the outputs of the same deck with the arm as rod 3 bit for bit; before, the arm turned 172 deg
+  in pitch, the body 1.06 deg, and a leg tension moved 3.0 kN in 1 s.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations
@@ -328,6 +388,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and buoyancy modules had no mass (with `nModes`, the first six frequencies of
   `lazy_wave_buoyancy_modules.dat` drop by 13 % to 29 %). The positions and translations of a
   line with a heading are written in the deck's axes, not the line's.
+- A finite-EI line restrained in torsion whose bending-pinned End A is on a body or a rod is
+  refused on `bodyScheme staggered`, as a clamped End A is: that scheme passes cable ends as point
+  forces and held the torsion frame still while the body turned (a body could spin through +-180
+  deg); `bodyScheme monolithic` turns the frame with the body.
 - A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
   start, reduces the record over its own length instead of failing for want of a positive
   `TMax`.

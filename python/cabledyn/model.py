@@ -655,8 +655,10 @@ class CableDyn:
         ``"fixed"``, ``"coupled"`` (Coupled or Vessel), ``"free"`` or
         ``"connect"``. On a point-system deck every line-bound point has a block,
         in deck POINTS order; on the coupled aggregate (finite-EI lines, bodies or
-        rods) only the Coupled points do. The host drives the ``"coupled"``
-        blocks (:meth:`host_dofs`).
+        rods) only the Coupled points do: those of the ``EI = 0`` lines, then the
+        End A of every finite-EI line, then the End B of every finite-EI line
+        between two Coupled points (so such a point id appears once per line end).
+        The host drives the ``"coupled"`` blocks (:meth:`host_dofs`).
         """
         with self._lock:
             self._require_host_coupling()

@@ -372,12 +372,6 @@ _ROD_ATTACHMENT_ALIASES = {
 _RIGID_END_CONNECTIONS = frozenset({"rigid", "infinity", "inf"})
 # TorsStiffness keywords of an end free to twist (a numeric 0 is free too)
 _FREE_TORSION_KEYWORDS = frozenset({"free", "zero"})
-# native ROD_END_B_NOTE: a finite-EI line with an END CONNECTION whose End B is a rod end
-_ROD_END_B_NOTE = (
-    " ends (End B) on a rod end: a line between two rods is not supported in this build (the "
-    "cable holds its End B at a Fixed point only); for a Fixed rod, end the line on a Fixed "
-    "point at the rod end's position (its force then stays out of that rod's Rod<N> loads)"
-)
 # native CD_HTORS_MAX_TWIST: the largest imposed static twist, 1000 turns
 _MAX_STATIC_TWIST_DEG = 360000.0
 # Native TORS_NX_PARALLEL_TOL: smallest |Nx x Ez| of unit vectors (about 0.06 degrees off Ez).
@@ -833,6 +827,23 @@ def _row_key(token: str) -> str:
 def _channel_id(digits: str) -> str:
     """Return a channel's digit-string id by value (native ``int_suffix``; 0 = no id)."""
     return str(_native_id_suffix(digits))
+
+
+def _end_b_holds_connection(point_type: str) -> bool:
+    """Native finalize_checks: an End B that holds a connection or a torsion frame -- a Fixed point,
+    or a Coupled/Vessel (Turbine<J>) point that drives it as a second moving end."""
+    return point_type in {"fixed", "coupled", "vessel"} or _is_turbine_point_type(point_type)
+
+
+def _end_b_holds_frame(point_type: str) -> bool:
+    """Native end_b_holds_frame: an End B that can hold an END CONNECTION or a torsion frame -- as
+    _end_b_holds_connection, or a body point or a rod end (a line between two objects on the
+    multibody march, which checks the object)."""
+    return (
+        _end_b_holds_connection(point_type)
+        or point_type.startswith("body")
+        or _rod_point(point_type) is not None
+    )
 
 
 def _is_turbine_point_type(point_type: str) -> bool:
@@ -3037,6 +3048,8 @@ class DeckFile:
                     finite_ei_lines.add(str(_native_int(section.tokens[0])))
         range_lines = 0
         lift_lines = 0  # lines with the VIV lift file (flag V)
+        # LINES whose End B is a moving point (row, line id, End B point type), checked below
+        moving_b_lines: list[tuple[DeckRecord, str, str]] = []
         series_lines = 0  # lines with per-line time-series files (flags p, t, V)
         for row in self.lines:
             if len(row.tokens) not in {3, 4, 7}:
@@ -3141,7 +3154,9 @@ class DeckFile:
                     )
                 farm_shared = _is_turbine_point_type(type_a) and _is_turbine_point_type(type_b)
                 if type_b != "fixed" and not farm_shared:
-                    raise DeckFormatError(f"{self._at(row)}: static LINE End B must be Fixed")
+                    # native finalize_checks: a finite-EI line may end on two Coupled/Vessel
+                    # points (both ends driven); decided once the SECTIONS give its line types
+                    moving_b_lines.append((row, str(_native_int(row.tokens[0])), type_b))
                 if type_b == "fixed" and point_z[node_a] < point_z[node_b]:
                     raise DeckFormatError(f"{self._at(row)}: fairlead must not be below its anchor")
         for row in self.sections:
@@ -3208,6 +3223,37 @@ class DeckFile:
             any(line_type_meta[line_type][3] > 0.0 for line_type in section_types)
             for section_types in section_types_by_line.values()
         ]
+        # native finalize_checks: a line between two moving points is a FAST.Farm shared line
+        # (accepted above) or a finite-EI line between two Coupled/Vessel points
+        for row, line_id, type_b in moving_b_lines:
+            finite = any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id])
+            if finite and type_b in {"coupled", "vessel"}:
+                continue
+            if finite:
+                raise DeckFormatError(
+                    f"{self._at(row)}: static LINE End B of a finite-EI line must be Fixed, "
+                    "Coupled or Vessel"
+                )
+            raise DeckFormatError(f"{self._at(row)}: static LINE End B must be Fixed")
+        # native build_one_hermite_cable: the as-laid reference lays a line on the seabed from its
+        # anchored end, which a finite-EI line between two moving points does not have
+        statics_row = option_by_key.get("statics_friction")
+        if (
+            statics_row is not None
+            and _strip_quotes(statics_row.values[0]).lower() != "none"
+            and friction_active
+            and (has_depth or has_bathymetry)
+        ):
+            for line_id, (_, end_b) in normalized_line_endpoints.items():
+                end_b_type = point_types.get(end_b, end_b)
+                if end_b_type == "fixed" or not _end_b_holds_connection(end_b_type):
+                    continue
+                if any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id]):
+                    raise DeckFormatError(
+                        f"{self._label}: OPTION staticsFriction asLaid lays a line on the seabed "
+                        f"from its anchored end; finite-EI LINE {line_id} has a moving End B (both "
+                        "ends on moving points): use staticsFriction none"
+                    )
         # native CD_Deck_Query_dtM has_objects, on the parsed (zero-length rods collapsed) deck
         has_objects = (
             bool(self._rows("BODIES"))
@@ -3223,18 +3269,18 @@ class DeckFile:
         ]
         # Native build_one_hermite_cable, which builds every finite-EI line of the coupled
         # aggregate (OpenFAST, FAST.Farm, the C API and the standalone mixed deck): the cable
-        # is held at a Fixed End B (the anchor) and driven at End A. A finite-EI line shared by
-        # two turbines is refused here, before its end-force channels (AnchFz, AnchFH) could be
-        # accepted for an end the aggregate cannot hold. (A standalone line's moving End B is
-        # refused by the static LINE checks above.)
+        # is driven at End A and either held at a Fixed End B (the anchor) or driven at a
+        # Coupled/Vessel End B (its own moving column: a line between two moving points, such
+        # as a line shared by two turbines). Any other End B is refused here.
         if self.caller_driven or mixed_route:
             for line_id in finite_line_ids:
                 end_b = normalized_line_endpoints[line_id][1]
                 end_b_type = point_types.get(end_b, end_b)
-                if end_b_type != "fixed":
+                if not _end_b_holds_connection(end_b_type):
                     raise DeckFormatError(
                         f"{self._label}: line {line_id}: finite-EI coupled cable requires End B "
-                        f'(the anchor) to be a Fixed point; got "{end_b_type}"'
+                        "to be a Fixed point or a Coupled/Vessel point (a second driven end); "
+                        f'got "{end_b_type}"'
                     )
         for line_type in used_type_names:
             _, _, ea_static, ei = line_type_meta[line_type]
@@ -3378,16 +3424,14 @@ class DeckFile:
                 )
                 if not has_finite_ei:
                     raise DeckFormatError(f"{where} END CONNECTIONS requires a finite-EI line")
+                # native finalize_checks: End B is held at a Fixed point or driven with its
+                # own parent at a Coupled/Vessel point (a line between two moving points) or on
+                # a body point or a rod end (a line between two objects)
                 end_b = normalized_line_endpoints[line_id][1]
-                if _rod_point(point_types[end_b]) is not None:
+                if not _end_b_holds_frame(point_types[end_b]):
                     raise DeckFormatError(
-                        f"{where} non-pinned END CONNECTIONS require a finite-EI line with Fixed "
-                        f"End B; line {line_id}{_ROD_END_B_NOTE}"
-                    )
-                if point_types[end_b] != "fixed":
-                    raise DeckFormatError(
-                        f"{where} non-pinned END CONNECTIONS require "
-                        "a finite-EI line with Fixed End B"
+                        f"{where} non-pinned END CONNECTIONS need End B on a Fixed, Coupled or "
+                        "Vessel point, a Rigid6 body point or a rod end"
                     )
 
         # Advanced native sections are preserved, but preservation must not mean
@@ -3771,32 +3815,6 @@ class DeckFile:
                 )
             elif has_rigid6:
                 needs_multibody = non_rigid6_points
-        if deck_driver_route and has_dtm and has_tmax and line_ids and all(finite_lines):
-            # native run_deck_driver: a finite-EI deck the multibody march does not take, with a
-            # line whose End B moves, runs on the compatibility route, which carries no VIV
-            moving_end_b = not needs_multibody and any(
-                point_types[node_b] != "fixed" for _, node_b in normalized_line_endpoints.values()
-            )
-            if moving_end_b and any(
-                viv_type_names.intersection(types) for types in section_types_by_line.values()
-            ):
-                raise DeckFormatError(
-                    f"{self._label}: VIV (LINE TYPES Cl > 0) of a finite-EI line needs its End B "
-                    "fixed (the cubic-Hermite march); set Cl = 0 for a line with two moving ends"
-                )
-            if moving_end_b and lift_lines:
-                raise DeckFormatError(
-                    f"{self._label}: the LINES Outputs flag V (VIV lift) needs a line that carries "
-                    "VIV, which a finite-EI line with two moving ends does not"
-                )
-            if moving_end_b:
-                for channel in channels:
-                    if _parse_line_node_channel(channel.lower())[2] in (13, 14):
-                        raise DeckFormatError(
-                            f"{self._label}: OUTPUT {channel!r}: the section curvature components "
-                            "need a finite-EI line with a Fixed End B (the cubic-Hermite march); a "
-                            "line with two moving ends reports Curv<L>N<J>"
-                        )
         if failures and deck_driver_route:
             # native CD_Run_Deck_Driver: FAILURE runs on the point-system object graph only
             if not has_dtm:
@@ -3824,6 +3842,21 @@ class DeckFile:
             raise DeckFormatError(
                 f"{self._label}: a mixed-topology deck (bodies, rods, dynamic points, EI=0 and "
                 "finite-EI lines together) does not support motionFile coupling"
+            )
+        if deck_driver_route and needs_multibody and (has_dtm or has_tmax):
+            self._check_multibody_cable_ends(
+                finite_line_ids,
+                normalized_line_endpoints,
+                point_types,
+                body_types,
+                held_ends,
+                {
+                    (line_id, end)
+                    for line_id in torsion_lines
+                    for end in ("a", "b")
+                    if torsion_ends.get(line_id, {}).get(end, False)
+                },
+                option_by_key.get("bodyscheme"),
             )
         # Native standalone dispatch: ROD and Rigid6 decks take prescribed motion; the
         # Connect/Free point-system route does not.
@@ -3853,13 +3886,8 @@ class DeckFile:
                     "(not bathymetryFile)"
                 )
             # (native also requires all-finite-EI lines and dtM here; on this route the
-            # finite-EI clock rule and the object checks above already enforce both)
-            if any(finite_lines) and any(
-                point_types[end_b] != "fixed" for _, end_b in normalized_line_endpoints.values()
-            ):
-                raise DeckFormatError(
-                    f"{self._label}: OPTION nModes on finite-EI lines needs every End B Fixed"
-                )
+            # finite-EI clock rule and the object checks above already enforce both; the modes
+            # hold both line ends, a moving End B included)
         rod_ids = unique(rods, "rod", True) if rods else set()
 
         body_refs: dict[str, int] = dict.fromkeys(body_ids, 0)
@@ -4309,6 +4337,59 @@ class DeckFile:
                 f"direction Ez ({', '.join(row.tokens[3:6])})"
             )
 
+    def _check_multibody_cable_ends(
+        self,
+        finite_line_ids: list[str],
+        normalized_line_endpoints: dict[str, tuple[str, str]],
+        point_types: dict[str, str],
+        body_types: dict[str, str],
+        held_ends: set[tuple[str, str]],
+        torsion_held: set[tuple[str, str]],
+        scheme_row: OptionRecord | None,
+    ) -> None:
+        """Native write_multibody_dynamic_out: the ends of a finite-EI cable on the multibody march.
+
+        End B may be a Fixed point, a Rigid6 body point or a rod end; a Free/Connect point or a
+        Point3 buoy, and a Coupled/Vessel point (no motion drives it there), are refused. A
+        connected (Rigid or spring) or torsional end on a body or rod needs bodyScheme
+        monolithic; torsion_held lists the (line, end) pairs restrained in torsion of the lines
+        solved in torsion (an end free in torsion holds no frame).
+        """
+        staggered = (
+            scheme_row is not None and _strip_quotes(scheme_row.values[0]).lower() == "staggered"
+        )
+        for line_id in finite_line_ids:
+            end_a, end_b = normalized_line_endpoints[line_id]
+            type_a = point_types.get(end_a, end_a)
+            type_b = point_types.get(end_b, end_b)
+            body_b = _body_point_id(type_b)
+            if type_b in {"free", "connect"} or (
+                body_b > 0 and body_types.get(str(body_b), "rigid6") == "point3"
+            ):
+                raise DeckFormatError(
+                    f"{self._label}: finite-EI LINE {line_id} in a mixed-topology deck: End B is "
+                    f"POINT {end_b} ({type_b}); a cable end on a Free/Connect point or a Point3 "
+                    "buoy is not supported on the multibody march. End the cable on a Fixed "
+                    "point, a Rigid6 body point or a rod end"
+                )
+            if type_b in {"coupled", "vessel"}:
+                raise DeckFormatError(
+                    f"{self._label}: finite-EI LINE {line_id}: a Coupled/Vessel End B (POINT "
+                    f"{end_b}) would need motionFile coupling to drive it, which a mixed-topology "
+                    "deck marched as one multibody system does not support"
+                )
+            if not staggered:
+                continue
+            for end, point_type in (("a", type_a), ("b", type_b)):
+                if point_type == "fixed":
+                    continue
+                if (line_id, end) in held_ends or (line_id, end) in torsion_held:
+                    raise DeckFormatError(
+                        f"{self._label}: finite-EI LINE {line_id}: a clamped or elastic END "
+                        "CONNECTION or a torsional one on a body or rod needs bodyScheme "
+                        "monolithic (the staggered scheme couples cable ends as point forces)"
+                    )
+
     def _check_torsion_lines(
         self,
         torsion_ends: dict[str, dict[str, bool]],
@@ -4329,16 +4410,17 @@ class DeckFile:
 
         A line with a torsional END CONNECTIONS restraint (TorsStiffness Rigid or a
         stiffness) must be finite-EI. Restrained at both ends, torsion is solved: End B must
-        be Fixed, every section type needs an explicit GJ > 0, End A neither on a rod other than
-        a Fixed one (a free or pinned rod has no roll angle, a Coupled/Vessel rod carries no
-        finite-EI line; the ends of a rod fixed to a body are body points) nor on a body other
-        than Rigid6. Restrained at one end only (its other end free to twist), it is solved in
-        torsion under the same rules and with a force-blended march; otherwise it keeps the
-        meaning of the 6-column rows (no error). ATTACHMENTS, CONTROL and the modal analysis
-        (nModes, whose modes carry the twist) take a line solved in torsion. A deck with torsion
-        runs dynamics only with the force-blended generalised-alpha (a coupled run is always
-        dynamic). The coupled OpenFAST and FAST.Farm routes turn the fairlead frame with the
-        platform, and the standalone mixed EI = 0 + finite-EI deck without bodies (run on the
+        be Fixed, Coupled/Vessel or a Rigid6 body point (not a rod end), every section type
+        needs an explicit GJ > 0, End A neither on a rod other than a Fixed one (a free or
+        pinned rod has no roll angle, a Coupled/Vessel rod carries no finite-EI line; the ends of
+        a rod fixed to a body are body points; a Fixed rod's with a Fixed End B) nor either end
+        on a body other than Rigid6. Restrained at one end only (its other end free to twist), it
+        is solved in torsion under the same rules and with a force-blended march; otherwise it
+        keeps the meaning of the 6-column rows (no error). ATTACHMENTS, CONTROL and the modal
+        analysis (nModes, whose modes carry the twist) take a line solved in torsion. A deck with
+        torsion runs dynamics only with the force-blended generalised-alpha (a coupled run is
+        always dynamic). The coupled OpenFAST and FAST.Farm routes turn the fairlead frame with
+        the platform, and the standalone mixed EI = 0 + finite-EI deck without bodies (run on the
         aggregate) holds it or turns it with its vesselMotion and rolls it with the motionFile
         roll column, as the standalone cubic-Hermite route does.
         """
@@ -4421,15 +4503,13 @@ class DeckFile:
                     f"{twist:.5e} deg exceeds 1000 turns (360000 deg), the largest static twist"
                 )
             end_a, end_b = normalized_line_endpoints[line_id]
-            if _rod_point(point_types[end_b]) is not None:
+            # End B is held at a Fixed point or driven with its own frame at a Coupled/Vessel point
+            # (a line between two moving points) or on a body point (a line between two objects)
+            if not _end_b_holds_frame(point_types[end_b]):
                 raise DeckFormatError(
-                    f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
-                    f"End B; line {line_id}{_ROD_END_B_NOTE}"
-                )
-            if point_types[end_b] != "fixed":
-                raise DeckFormatError(
-                    f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
-                    f"End B; line {line_id} has two moving ends"
+                    f"{self._label}: torsional END CONNECTIONS need End B on a Fixed, Coupled or "
+                    f"Vessel point or a Rigid6 body point; line {line_id} ends on a "
+                    f'"{point_types[end_b]}" point'
                 )
             for name in section_types_by_line[line_id]:
                 if not line_type_gj[name] > 0.0:
@@ -4438,6 +4518,14 @@ class DeckFile:
                         f'its LINE TYPES row "{name}" must give an explicit GJ > 0 (the 14-column '
                         "row; torsion has no EI/1.3 default)"
                     )
+            if _rod_point(point_types[end_b]) is not None:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a rod end is "
+                    "not supported at End B: restrain the line at the rod end through its End A "
+                    "(a Fixed rod, or a rod fixed to a Rigid6 body, RODS type Body<N>), or end it "
+                    "on a Fixed point at a Fixed rod end's position (its force then stays out of "
+                    "that rod's Rod<N> loads)"
+                )
             rod_end = _rod_point(point_types[end_a])
             rod_kind = None if rod_end is None else rod_kinds.get(rod_end[0], (None, 0))[0]
             if rod_end is not None and rod_kind is not None and rod_kind != "fixed":
@@ -4457,12 +4545,20 @@ class DeckFile:
                     "restrain End A on a Fixed rod, on a rod fixed to a Rigid6 body (RODS type "
                     "Body<N>), on a Rigid6 body point or on a Fixed point"
                 )
-            body_id = _body_point_id(point_types[end_a])
-            if body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
+            if rod_end is not None and point_types[end_b] != "fixed":
                 raise DeckFormatError(
-                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a body needs "
-                    "a Rigid6 body"
+                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a rod end needs "
+                    "a Fixed End B (a line restrained in torsion between a rod end and a moving "
+                    "object is not supported in this build)"
                 )
+            # either end on a non-Rigid6 body (End B on a body point: a line between two objects)
+            for end_point in (end_a, end_b):
+                body_id = _body_point_id(point_types[end_point])
+                if body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id}: a torsional END CONNECTION on a body "
+                        "needs a Rigid6 body"
+                    )
             torsion_lines.add(line_id)
         if not torsion_lines:
             return torsion_lines, torsion_notes

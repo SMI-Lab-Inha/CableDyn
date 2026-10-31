@@ -1710,7 +1710,7 @@ PROGRAM test_deck_driver
   CALL expect_badinput('deck_equiv_bad.dat', deck_with_bad_equivalent_buoyancy(), 'negative dry mass')
   CALL expect_badinput('deck_finite_connect.dat', deck_with_finite_ei_connect(), 'finite-EI dynamic')
   CALL expect_badinput('deck_endconn_two_moving.dat', deck_with_two_moving_end_connection(), &
-                       'two-moving-end finite-EI END CONNECTIONS', 'Fixed End B')
+                       'END CONNECTIONS with End B on a Free point', 'need End B on a Fixed, Coupled or Vessel point')
   CALL expect_badinput('deck_finite_body_mix.dat', deck_with_finite_ei_body_mix(), 'finite-EI dynamic deck')
   CALL expect_badinput('deck_finite_rod_mix.dat', deck_with_finite_ei_rod_mix(), 'finite-EI dynamic deck')
   CALL expect_badinput('deck_rigid6_connect.dat', deck_with_rigid6_connect(), 'Rigid6 dynamic deck')
@@ -7090,8 +7090,8 @@ CONTAINS
   END FUNCTION deck_with_finite_ei_connect
 
   CHARACTER(1800) FUNCTION deck_with_two_moving_end_connection() RESULT(s)
-    !! A non-pinned connection must never fall through to the compatibility model,
-    !! which prescribes both endpoint translations but has no end-moment residual.
+    !! A non-pinned connection on a line whose End B is a Free point (a dynamic point the cubic-Hermite
+    !! boundary cannot hold or drive) is refused by name, never run as a pinned end.
     s = 'two-moving-end-connection'//NEW_LINE('a')//'--- LINE TYPES ---'//NEW_LINE('a')// &
         'Name Diam Mass EA BA EI Cdn Cdt Can Cat'//NEW_LINE('a')// &
         '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'//NEW_LINE('a')// &

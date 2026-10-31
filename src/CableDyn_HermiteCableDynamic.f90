@@ -136,7 +136,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_VIV
   PUBLIC :: CD_HermiteCable_Dyn_VIV_Node_Lift
   PUBLIC :: CD_HermiteCable_Dyn_Restore
-  PUBLIC :: CD_HermiteCable_Dyn_Energy
+  PUBLIC :: CD_HermiteCable_Dyn_Energy, CD_HermiteCable_Dyn_Momentum
   PUBLIC :: CD_HermiteCable_Dyn_Curvature
   PUBLIC :: CD_HermiteCable_Dyn_Section_Curvature
   PUBLIC :: CD_HermiteCable_Dyn_Reaction
@@ -5860,6 +5860,30 @@ CONTAINS
     END IF
     IF (PRESENT(connection)) connection = connection_energy
   END SUBROUTINE CD_HermiteCable_Dyn_Energy
+
+  SUBROUTINE CD_HermiteCable_Dyn_Momentum(model, p, ErrStat, ErrMsg)
+    !! Linear momentum of the line at the current state (solve frame) with the mass matrix of
+    !! CD_HermiteCable_Dyn_Energy (the consistent structural mass plus any discrete attachment's
+    !! mass and added mass): the sum over the nodes of the translation rows of M v (the position
+    !! shape functions of an element sum to one, its tangent ones to zero). A conservation
+    !! diagnostic, as the energy.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: p(3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: i
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''; p = CD_ZERO
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Momentum: model not initialised'; RETURN
+    END IF
+    BLOCK
+      REAL(wp) :: Mv(model%ndof)
+      CALL band_matvec(model%Mgb, model%v, Mv)
+      DO i = 1, model%nn
+        p = p + Mv(6*(i - 1) + 1:6*(i - 1) + 3)
+      END DO
+    END BLOCK
+  END SUBROUTINE CD_HermiteCable_Dyn_Momentum
 
   SUBROUTINE CD_HermiteCable_Dyn_Curvature(model, curv_out, ErrStat, ErrMsg)
     !! Per-node curvature at the current state, the definition of the Curv<L>N<J> channels: the

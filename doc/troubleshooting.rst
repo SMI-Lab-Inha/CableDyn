@@ -263,22 +263,33 @@ Model data
        anchor. Check the point coordinates.
    * - ``LINE End A (NodeA) must be Coupled/Vessel/Body<N> ...`` / ``LINE <L> End B (NodeB, POINT
        <n>, <type>) must be a Fixed (anchor) point``
-     - in a deck without dynamic points every line runs from a fairlead to an anchor. A line
-       between two Coupled points (a shared line) is supported only between two ``Turbine<J>``
-       fairleads of a FAST.Farm deck. An ``EI = 0`` line can be split into two lines that meet at
-       a ``Connect`` point in the middle; each line then ends on one Coupled point, and the deck
-       becomes dynamic and needs ``dtM`` and ``TMax``. A finite-EI line cannot be split that way
-       (beside ``Connect`` points a finite-EI cable needs a Fixed End B and cannot end on a
-       ``Connect`` point; the message then starts ``finite-EI LINE <L>``): anchor it on a Fixed
-       point, or model the shared span with ``EI = 0`` line types split at a ``Connect`` point.
-   * - ``finite-EI LINE <L> in a mixed-topology deck needs a Fixed End B ... End B is POINT <n>
-       (<type>)``
-     - a deck with ``Connect``/``Free`` points, bodies or rods that also has finite-EI cables drives
-       each cable at End A, so End B must be a ``Fixed`` point. A cable that ends on a ``Connect``/``Free``/``Coupled``
-       point (a junction with other lines, a buoy, a pliant-wave hang-off) is not supported in a
-       deck with ``Connect``/``Free`` points, bodies or rods, which is marched as one multibody
-       system. Anchor the cable on a Fixed point, or run the cable and the lines it joins as
-       separate decks.
+     - in a deck without dynamic points every ``EI = 0`` line runs from a fairlead to an anchor. An
+       ``EI = 0`` line between two Coupled points (a shared line) is supported only between two
+       ``Turbine<J>`` fairleads of a FAST.Farm deck; it can also be split into two lines that meet
+       at a ``Connect`` point in the middle (each line then ends on one Coupled point, and the deck
+       becomes dynamic and needs ``dtM`` and ``TMax``). A finite-EI line may join two
+       ``Coupled``/``Vessel`` points (both ends driven); its End B on any other moving point is
+       refused (``finite-EI LINE <L> End B ... must be a Fixed (anchor), Coupled or Vessel
+       point``), and it cannot be split at a ``Connect`` point (beside ``Connect`` points a
+       finite-EI cable needs a Fixed End B): anchor it, or end it on a ``Coupled``/``Vessel`` point.
+   * - ``finite-EI LINE <L> in a mixed-topology deck: End B is POINT <n> (<type>); a cable end on a
+       Free/Connect point or a Point3 buoy ... is not supported``
+     - a deck with ``Connect``/``Free`` points, bodies or rods that also has finite-EI cables
+       drives each cable by the objects at its ends: End B must be a ``Fixed`` point, a Rigid6
+       ``Body<N>`` point or a rod end. A cable that ends on a ``Connect``/``Free`` point or a
+       ``Point3`` buoy (a junction with other lines, a buoy, a pliant-wave hang-off) is not
+       supported in a deck marched as one multibody system. End the cable on a Fixed point, a
+       body or a rod end, or run the cable and the lines it joins as separate decks.
+   * - ``static body/rod equilibrium with the bending end loads of finite-EI LINE <L> (its End A|B,
+       on a body or rod) did not converge after 60 passes``
+     - the static passes that balance a finite-EI line between two objects on its cubic-Hermite
+       end loads (Anderson-accelerated) did not settle; the line's bending couples the objects
+       more strongly than their own restoring holds them. Check the connection directions and
+       the mooring, or start from the deck pose (``deck bodyIC``).
+   * - ``finite-EI LINE <L>: a Coupled/Vessel End B (POINT <n>) would need motionFile coupling to
+       drive it``
+     - the multibody march takes no ``motionFile``, so it has nothing to drive a ``Coupled``/
+       ``Vessel`` end with. End the cable on a Fixed point, a Rigid6 body point or a rod end.
    * - ``finite-EI LINE <L>: a Coupled/Vessel End A (POINT <n>) would need motionFile coupling
        to drive it``
      - a mixed-topology deck that has ``Connect``/``Free`` points or bodies is marched as one
@@ -356,9 +367,10 @@ Model data
    * - ``FAST.Farm Turbine<J> decks are consumed by the CompMooring=5 aggregate path only``
      - ``Turbine<J>`` points use turbine-local coordinates. Run the deck through FAST.Farm, or
        replace them with ``Coupled`` points in global coordinates for a standalone run.
-   * - ``END CONNECTIONS requires a finite-EI line`` / ``non-pinned END CONNECTIONS require a
-       finite-EI line with Fixed End B``
-     - bending end connections apply only to ``EI > 0`` lines whose End B is an anchor.
+   * - ``END CONNECTIONS requires a finite-EI line`` / ``non-pinned END CONNECTIONS need End B on
+       a Fixed, Coupled or Vessel point``
+     - bending end connections apply only to ``EI > 0`` lines whose End B is an anchor or a
+       ``Coupled``/``Vessel`` point (a second driven end), not a ``Connect``/``Free`` point.
    * - ``a clamped or elastic END CONNECTION on a body or rod needs bodyScheme monolithic`` /
        ``a torsional END CONNECTION on a body or rod needs bodyScheme monolithic`` /
        ``the END CONNECTION direction on a rod end must be parallel to the rod axis``
@@ -389,9 +401,10 @@ Torsion
        explicit GJ > 0``
      - torsion has no ``EI/1.3`` default: use the 14-column ``LINE TYPES`` row with ``GJ`` (and
        positive ``GAs``, ``Irt``, ``Irn``) for every section of the line.
-   * - ``torsional END CONNECTIONS ... require a finite-EI line`` / ``require a finite-EI line
-       with Fixed End B``
-     - torsion is solved on cubic-Hermite lines whose End B is an anchor.
+   * - ``torsional END CONNECTIONS ... require a finite-EI line`` / ``need End B on a Fixed,
+       Coupled or Vessel point or a Rigid6 body point``
+     - torsion is solved on cubic-Hermite lines whose End B is an anchor, a ``Coupled``/
+       ``Vessel`` point or a Rigid6 body point (both end frames then turn with their parents).
    * - ``a torsional END CONNECTION on the end of ROD <N> (...) is not supported: a free or
        pinned rod is axisymmetric`` / ``on the end of Coupled/Vessel ROD <N> is not supported`` /
        ``on a body needs a Rigid6 body``
@@ -400,10 +413,11 @@ Torsion
        to a Rigid6 body (``RODS`` type ``Body<N>``), a Rigid6 body or a ``Fixed`` point (a
        ``Coupled``/``Vessel`` End A only in a deck without bodies and rods: a deck with them runs
        on the multibody march, which takes no ``Coupled`` End A for a finite-EI line).
-   * - ``... require a finite-EI line with Fixed End B; line <L> ends (End B) on a rod end``
-     - the cable holds its End B at a ``Fixed`` point only, so a line between two rods (a J-tube
-       to a J-tube) is not supported. For a ``Fixed`` rod, end the line on a ``Fixed`` point at
-       the rod end's position; that rod's ``Rod<N>`` loads then leave its force out.
+   * - ``a torsional END CONNECTION on a rod end is not supported at End B`` / ``on a rod end
+       needs a Fixed End B``
+     - a rod end holds a torsion frame at End A only, with a ``Fixed`` End B. Restrain the line
+       through its End A at the rod end, or end it on a ``Fixed`` point at a ``Fixed`` rod end's
+       position; that rod's ``Rod<N>`` loads then leave its force out.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
      - the C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by translation only.
        Run the line in a coupled OpenFAST or FAST.Farm run or in the standalone driver,
@@ -873,8 +887,11 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
        support all of them
    * - a ``Rigid`` end-connection direction reversed by exactly 180 degrees in one host update
      - drive the platform through intermediate orientations
-   * - VIV on a finite-EI line with two moving ends (``needs its End B fixed``)
-     - fix End B of the line, or set ``Cl = 0`` for its line type
+   * - ``OPTION staticsFriction asLaid lays a line on the seabed from its anchored end; ... has a
+       moving End B``
+     - a line between two moving points has no anchored end to lay it from: use
+       ``staticsFriction none`` (the march then starts from the frictionless static equilibrium,
+       and the friction acts from there)
    * - a host/file fluid combination named as inseparable
      - select host wave/current and file wave/current independently as documented, or place the
        whole field in SeaState
