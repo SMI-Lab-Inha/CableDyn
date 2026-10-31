@@ -356,8 +356,14 @@ first steps differ from that route's. A static run (`TMax = 0`) of a line restra
 takes `False alpha_force_blend`, as on the single-line route.
 The run writes the common `.out` and the all-line `.static.out` tables, plus the range graph of
 every line with the `r` flag.
-Mixed decks reject, by name, deck wave/current OPTIONS (so `vesselRAO`), WaterKin `WaveKinMod 1`,
-MoorDyn-C `WaveKin 3`/`7` and `Currents 1`/`2`/`5`, and per-line `p`/`t` flags.
+A mixed deck takes every deck current the single-line routes take: a `current` OPTION (uniform or
+profile), a WaterKin `CurrentMod 1` table and MoorDyn-C `Currents 1`/`2`/`5`. The static start of
+its `EI = 0` lines and finite-EI cables is solved in the current at `t = 0`, and before every step
+the current at the step's end time is sampled at every node of the step-start state and held
+over the step, as on the single-line routes and with the same field evaluation (a `Currents 2`/`5`
+table that varies in time repeats past its last sample there too). Mixed decks reject, by name,
+deck waves (so `vesselRAO`), WaterKin `WaveKinMod 1`, MoorDyn-C `WaveKin 3`/`7`, and per-line
+`p`/`t` flags.
 
 (multibody-march)=
 **Multibody march** (bodies, rods, `Connect`/`Free` points, EI = 0 lines and finite-EI cables in

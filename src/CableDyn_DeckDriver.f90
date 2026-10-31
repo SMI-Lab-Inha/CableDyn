@@ -219,6 +219,11 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_MotionRuntimeType
   PUBLIC :: CD_Motion_Active, CD_Motion_NColumns, CD_Motion_Has_Rotation, CD_Motion_Has_Roll
   PUBLIC :: CD_Motion_Kinematics, CD_Motion_Deck_Positions, CD_Motion_End
+  ! Deck current of a standalone mixed deck: the aggregate samples it at every node before each
+  ! step with the updaters of the single-line routes (opaque; DeckOptions stays private).
+  PUBLIC :: CD_DeckCurrentRuntimeType
+  PUBLIC :: CD_Deck_Current_Active, CD_Deck_Current_Sample_System, CD_Deck_Current_Sample_Cables
+  PUBLIC :: CD_Deck_Current_End
   PUBLIC :: CD_Init_Deck_Aggregate_Rod, CD_Step_Aggregate_Rod
   PUBLIC :: CD_Rod_NRods, CD_Rod_Snapshot, CD_Rod_Restore, CD_Rod_End
   PUBLIC :: CD_Rod_MirrorSize, CD_Rod_Get_States, CD_Rod_Set_States, CD_Rod_Apply_States
@@ -791,6 +796,8 @@ MODULE CableDyn_DeckDriver
   TYPE :: HydroUpdateWorkspace
     REAL(wp), ALLOCATABLE :: q(:), v(:), a(:)
     REAL(wp), ALLOCATABLE :: fluid_velocity(:, :), fluid_acceleration(:, :), waterline(:)
+    ! node positions of a finite-EI cable (update_hermite_deck_fluid with a workspace)
+    REAL(wp), ALLOCATABLE :: node_pos(:, :)
   END TYPE
 
   TYPE :: ModelOutputWorkspace
@@ -1092,6 +1099,22 @@ MODULE CableDyn_DeckDriver
     LOGICAL, ALLOCATABLE :: col_roll(:)
   END TYPE
 
+  !> Opaque deck current of a standalone mixed deck, which the standalone driver marches on the
+  !> coupled aggregate (CD_Init_Deck_Aggregate with deck_current): the deck's current OPTION
+  !> (uniform or profile), WaterKin CurrentMod 1 table or MoorDyn-C Currents 1/2/5 field, as the
+  !> deck options that carry it, and the workspace of its samples. Before every step the
+  !> aggregate samples it at time t + dt at every node of the step-start state and holds it over
+  !> the step (CD_Deck_Current_Sample_System on the EI = 0 lines, CD_Deck_Current_Sample_Cables
+  !> on the finite-EI cables), with the updaters of the single-line EI = 0 and cubic-Hermite
+  !> routes (update_wave_models' system twin update_system_line_hydro, update_hermite_deck_fluid),
+  !> so every route evaluates the same field the same way (deck_current_velocity).
+  TYPE :: CD_DeckCurrentRuntimeType
+    PRIVATE
+    LOGICAL :: active = .FALSE.
+    TYPE(DeckOptions) :: opts
+    TYPE(HydroUpdateWorkspace) :: work
+  END TYPE
+
   TYPE :: CD_LineInitSummary
     !! Engineering quantities at the converged static initial condition.  The
     !! fairlead force is the force exerted by the line on public End A and the
@@ -1209,6 +1232,9 @@ MODULE CableDyn_DeckDriver
     ! The deck's own prescribed motion (prescribed_motion: the standalone driver), in the
     ! aggregate moving-set order; inactive otherwise.
     TYPE(CD_MotionRuntimeType) :: motion
+    ! The deck's own current (deck_current: the standalone driver), sampled by the facade at
+    ! every node before each step; inactive otherwise.
+    TYPE(CD_DeckCurrentRuntimeType) :: current
   END TYPE
 
 CONTAINS
@@ -7248,7 +7274,7 @@ CONTAINS
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                     range_files, host_orientation, static_current, prescribed_motion, &
-                                    static_run)
+                                    static_run, deck_current)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -7267,6 +7293,8 @@ CONTAINS
     !! a deck with a finite-EI cable, a Rigid6 body or a rod, under a host fluid field, or in
     !! FAST.Farm mode; a deck with a finite-EI cable that also carries Free/Connect dynamic
     !! points. A deck current on any other deck is a steady field applied through the lines.
+    !! With deck_current (the standalone driver) a deck current of every kind the standalone
+    !! routes take is the deck's own, on the EI = 0 lines and the finite-EI cables alike.
     !! Coupled finite-EI flat/structured contact and friction use the same production
     !! Hermite residual as the standalone route.
     !! ptfm_init (optional, 6): initial platform displacement [surge, sway, heave,
@@ -7338,9 +7366,17 @@ CONTAINS
     ! restrained in torsion needs no force-blended step, as on the single-line standalone route;
     ! a coupled host always marches.
     LOGICAL, INTENT(IN), OPTIONAL :: static_run
+    ! deck_current: the caller marches the deck's own current (the standalone driver on a mixed
+    ! deck of lines between Fixed/Coupled/Vessel points): a current OPTION (uniform or profile), a
+    ! WaterKin CurrentMod 1 table or a MoorDyn-C Currents 1/2/5 field is taken instead of refused.
+    ! The static solves of the EI = 0 lines and of the finite-EI cables take it at t = 0, as on
+    ! the single-line routes, and agg%current carries it for the facade, which samples it at
+    ! every node before each step (CD_Deck_Current_Sample_System/_Cables). A coupled host keeps
+    ! supplying its own field and passes no deck_current.
+    LOGICAL, INTENT(IN), OPTIONAL :: deck_current
 
     INTEGER :: nturb
-    LOGICAL :: host_turns, own_motion, dynamic_points, static_only
+    LOGICAL :: host_turns, own_motion, dynamic_points, static_only, own_current
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
     TYPE(DeckRodType), ALLOCATABLE :: rod_types(:)
@@ -7478,11 +7514,48 @@ CONTAINS
                 'coupled aggregate runs must use WaveKinMod 2/SEASTATE through external_fluid')
       RETURN
     END IF
-    IF (opts%mdc_wave_kin > 0 .OR. opts%mdc_currents > 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'the MoorDyn-C WaveKin 3/7 and Currents 1/2/5 files are not supported on the '// &
-                'aggregate route (coupled runs take water kinematics from the host; standalone mixed '// &
-                'EI=0/finite-EI decks reject deck water kinematics)')
+    own_current = .FALSE.
+    IF (PRESENT(deck_current)) own_current = deck_current
+    IF (opts%mdc_wave_kin > 0 .AND. own_current) THEN
+      CALL fail(ErrStat, ErrMsg, 'the MoorDyn-C WaveKin '//TRIM(int_to_str(opts%mdc_wave_kin))//' waves are '// &
+                'not supported for a standalone mixed EI=0/finite-EI deck (it takes a deck current but no '// &
+                'deck waves): remove WaveKin, run a deck whose lines are all EI=0 or all finite-EI, or '// &
+                'couple the deck to OpenFAST (CompMooring = 5) with SeaState, which supplies the waves')
       RETURN
+    END IF
+    IF ((opts%mdc_wave_kin > 0 .OR. opts%mdc_currents > 0) .AND. .NOT. own_current) THEN
+      CALL fail(ErrStat, ErrMsg, 'the MoorDyn-C WaveKin 3/7 and Currents 1/2/5 files are not supported on the '// &
+                'aggregate route (coupled runs take water kinematics from the host)')
+      RETURN
+    END IF
+    ! The deck's own current (deck_current) is marched by the standalone driver over lines between
+    ! Fixed/Coupled/Vessel points held or moved by the deck's motion, from the deck pose: no host
+    ! field, placement or farm, and no body, rod or Connect/Free point (those decks run on the
+    ! standalone multibody or point-system march, which take the current themselves).
+    IF (own_current .AND. (opts%has_current .OR. opts%has_current_profile)) THEN
+      IF (PRESENT(external_fluid)) THEN
+        IF (external_fluid) THEN
+          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a deck-owned current (deck_current) and a '// &
+                    'host fluid field (external_fluid) would double-count the current'); RETURN
+        END IF
+      END IF
+      IF (nturb > 0 .OR. PRESENT(ptfm_init) .OR. PRESENT(coupled_positions) .OR. PRESENT(static_current)) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a deck-owned current (deck_current) is marched '// &
+                  'from the deck pose of a standalone deck (no host placement, farm or host current)'); RETURN
+      END IF
+      IF (deck_has_dynamic_points(points) .OR. SIZE(bodies) > 0 .OR. SIZE(rods) > 0) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a deck-owned current (deck_current) drives lines '// &
+                  'between Fixed/Coupled/Vessel points only (bodies, rods and Connect/Free points take it on '// &
+                  'the standalone multibody or point-system march)'); RETURN
+      END IF
+      ! the standalone routes' clock: the current is a dynamic-deck option
+      IF (.NOT. opts%has_dtm) THEN
+        IF (opts%mdc_currents > 0) THEN
+          CALL fail(ErrStat, ErrMsg, 'standalone Currents '//TRIM(int_to_str(opts%mdc_currents))// &
+                    ' requires dtM and TMax'); RETURN
+        END IF
+        CALL fail(ErrStat, ErrMsg, 'standalone OPTION current requires dtM and TMax'); RETURN
+      END IF
     END IF
 
     IF (opts%waterkin_seastate) THEN
@@ -7529,6 +7602,8 @@ CONTAINS
       IF (forbid_deck_ambient) THEN
         ! The two callers that forbid deck ambient fluid: the FAST.Farm shell (n_turbines >= 1) and
         ! the standalone runner of a mixed EI=0/finite-EI deck. Each gets the advice of its route.
+        ! The standalone runner marches the deck current itself (deck_current), so only a caller
+        ! without it is refused one.
         IF (opts%has_wave) THEN
           IF (nturb > 0) THEN
             CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck waves OPTION is not supported in '// &
@@ -7536,22 +7611,21 @@ CONTAINS
                       'farm). Remove the waves OPTION'); RETURN
           END IF
           CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck waves OPTION is not supported for a '// &
-                    'standalone mixed EI=0/finite-EI deck: this route runs the mooring in STILL WATER, because '// &
-                    'no ambient fluid field covers its span. Remove the waves OPTION, run a deck whose lines are '// &
+                    'standalone mixed EI=0/finite-EI deck: this route takes the deck current but evaluates no '// &
+                    'deck waves. Remove the waves OPTION, run a deck whose lines are '// &
                     'all EI=0 or all finite-EI (those standalone routes evaluate the deck waves), or couple the '// &
                     'deck to OpenFAST (CompMooring = 5) with SeaState, which supplies the waves'); RETURN
         END IF
-        IF (opts%has_current .OR. opts%has_current_profile) THEN
+        IF ((opts%has_current .OR. opts%has_current_profile) .AND. .NOT. own_current) THEN
           IF (nturb > 0) THEN
             CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported in '// &
                       'FAST.Farm: the shared mooring of a farm runs in STILL WATER (no fluid field spans the '// &
                       'farm). Remove the current OPTION'); RETURN
           END IF
-          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported for a '// &
-                    'standalone mixed EI=0/finite-EI deck: this route runs the mooring in STILL WATER, because '// &
-                    'no ambient fluid field covers its span. Remove the current OPTION, run a deck whose lines are '// &
-                    'all EI=0 or all finite-EI (those standalone routes evaluate the deck current), or couple the '// &
-                    'deck to OpenFAST (CompMooring = 5) with SeaState, which supplies the current'); RETURN
+          ! (the standalone mixed route passes deck_current; this is a library caller without it)
+          CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not marched by a '// &
+                    'caller that forbids deck ambient fluid without deck_current; remove the current OPTION, '// &
+                    'or pass deck_current to march the deck''s own current'); RETURN
         END IF
       END IF
     END IF
@@ -7786,7 +7860,8 @@ CONTAINS
     ! closed rather than silently drop the physics. A PURE mooring deck (n_fin == 0) keeps
     ! the full EI=0 feature set so it composes to the plain CD_FMF_Init_From_Deck system.
     IF (n_fin > 0) THEN
-      IF (opts%has_current .OR. opts%has_current_profile) THEN
+      ! (a deck-owned current, deck_current, reaches the cables through their held field)
+      IF ((opts%has_current .OR. opts%has_current_profile) .AND. .NOT. own_current) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: ambient current on a deck with a finite-EI '// &
                   'cable is not supported (the cable does not receive a deck-owned current)'); RETURN
       END IF
@@ -8087,6 +8162,12 @@ CONTAINS
     CALL fill_turbine_of_moving(points, lines, is_fin, agg, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) THEN
       CALL CD_End_Deck_Aggregate(agg); RETURN
+    END IF
+    ! The deck's own current, sampled by the facade at every node before each step (the
+    ! static solves above took it at t = 0 through opts).
+    IF (own_current .AND. opts%has_current) THEN
+      agg%current%active = .TRUE.
+      agg%current%opts = opts
     END IF
     ! The deck's own prescribed motion over the same moving-set order.
     IF (own_motion) THEN
@@ -8676,6 +8757,7 @@ CONTAINS
     agg%has_point3 = .FALSE.
     CALL CD_Range_End(agg%ranges)
     CALL CD_Motion_End(agg%motion)
+    CALL CD_Deck_Current_End(agg%current)
     agg%gravity = CD_ZERO
     agg%rho_water = CD_ZERO
   END SUBROUTINE CD_End_Deck_Aggregate
@@ -8880,6 +8962,61 @@ CONTAINS
     IF (ALLOCATED(rt%col_roll)) DEALLOCATE (rt%col_roll)
     rt%active = .FALSE.
   END SUBROUTINE CD_Motion_End
+
+  LOGICAL FUNCTION CD_Deck_Current_Active(rt) RESULT(active)
+    !! The aggregate carries the deck's own current (CD_Init_Deck_Aggregate deck_current).
+    TYPE(CD_DeckCurrentRuntimeType), INTENT(IN) :: rt
+    active = rt%active
+  END FUNCTION CD_Deck_Current_Active
+
+  SUBROUTINE CD_Deck_Current_Sample_System(rt, system, time, ErrStat, ErrMsg, initial_condition)
+    !! The deck current u(x_j, time) at every node x_j of the EI = 0 system's lines, held over the
+    !! coming step as the drag's fluid velocity (update_system_line_hydro, the updater of the
+    !! standalone point-system march): before a step from t to t + dt the caller passes time =
+    !! t + dt and the step-start node positions, as the single-line EI = 0 march does. With
+    !! initial_condition (the t = 0 sample at the start state) a line whose field changed
+    !! re-derives its acceleration; a march-step sample keeps the committed generalised-alpha
+    !! acceleration. A no-op without a deck current.
+    TYPE(CD_DeckCurrentRuntimeType), INTENT(INOUT) :: rt
+    TYPE(CD_SystemType), INTENT(INOUT) :: system
+    REAL(wp), INTENT(IN) :: time
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: initial_condition
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (.NOT. rt%active) RETURN
+    CALL update_system_line_hydro(system, rt%opts, time, rt%work, ErrStat, ErrMsg, &
+                                  initial_condition=initial_condition)
+  END SUBROUTINE CD_Deck_Current_Sample_System
+
+  SUBROUTINE CD_Deck_Current_Sample_Cables(rt, cables, time, ErrStat, ErrMsg)
+    !! The deck current u(x_j, time) at every node x_j of each finite-EI cable, installed as its
+    !! held fluid field over the coming step (update_hermite_deck_fluid, the updater of the
+    !! standalone cubic-Hermite march; time = t + dt at the step-start nodes). The first held
+    !! field of a cable completes its dynamic initialisation (the consistent start acceleration
+    !! in the current); a later one keeps the committed acceleration. A no-op without a deck
+    !! current.
+    TYPE(CD_DeckCurrentRuntimeType), INTENT(INOUT) :: rt
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
+    REAL(wp), INTENT(IN) :: time
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    IF (.NOT. rt%active) RETURN
+    CALL update_hermite_deck_fluid(cables, rt%opts, time, ErrStat, ErrMsg, work=rt%work)
+  END SUBROUTINE CD_Deck_Current_Sample_Cables
+
+  SUBROUTINE CD_Deck_Current_End(rt)
+    !! Release the deck current. Idempotent.
+    TYPE(CD_DeckCurrentRuntimeType), INTENT(INOUT) :: rt
+    TYPE(DeckOptions) :: none
+    TYPE(HydroUpdateWorkspace) :: empty
+    rt%opts = none
+    rt%work = empty
+    rt%active = .FALSE.
+  END SUBROUTINE CD_Deck_Current_End
 
   SUBROUTINE CD_Run_Deck_Driver(deck_path, out_root, converged, ErrStat, ErrMsg)
     !! Parse a MoorDyn-style deck, run static IC and optional held-end dynamic march,
@@ -31381,49 +31518,75 @@ CONTAINS
     END DO
   END SUBROUTINE apply_motion_to_hermite_cables
 
-  SUBROUTINE update_hermite_deck_fluid(cables, opts, time, ErrStat, ErrMsg)
+  SUBROUTINE update_hermite_deck_fluid(cables, opts, time, ErrStat, ErrMsg, work)
+    !! The deck current and waves at time at every node of each cable, installed as its held
+    !! fluid field (CD_HFMF_Set_Held_Fluid). work (optional): the scratch of the samples, sized at
+    !! the first call, so a march that passes it makes no heap allocation per step.
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(IN) :: time
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, j, nn, es
-    REAL(wp) :: eta, wv(3), wa(3)
-    CHARACTER(1024) :: em
-    CHARACTER(200) :: em_k ! a per-node current or wave kinematics message (at most 160 characters)
+    TYPE(HydroUpdateWorkspace), INTENT(INOUT), OPTIONAL :: work
+    INTEGER :: i, nn
+    LOGICAL :: grow
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (.NOT. (opts%has_current .OR. opts%has_wave)) RETURN
     DO i = 1, SIZE(cables)
       nn = CD_HFMF_NNodes(cables(i))
-      BLOCK
-        REAL(wp) :: xyz(3, nn), fv(3, nn), fa(3, nn), wl(nn)
-        CALL CD_HFMF_GetNodePositions(cables(i), xyz, es, em)
-        IF (es /= CD_HFMF_OK) THEN
-          CALL hermite_fluid_fail('node-position query', em); RETURN
+      IF (PRESENT(work)) THEN
+        CALL ensure_hydro_workspace(work, 0, nn)
+        grow = .NOT. ALLOCATED(work%node_pos)
+        IF (.NOT. grow) grow = SIZE(work%node_pos, 2) < nn
+        IF (grow) THEN
+          IF (ALLOCATED(work%node_pos)) DEALLOCATE (work%node_pos)
+          ALLOCATE (work%node_pos(3, nn))
         END IF
-        fv = CD_ZERO; fa = CD_ZERO; wl = CD_ZERO
-        DO j = 1, nn
-          IF (opts%has_current) THEN
-            fv(:, j) = deck_current_velocity(opts, xyz(:, j), time, es, em_k)
-            IF (es /= CD_HYDRO_OK) THEN
-              CALL hermite_fluid_fail('current profile', em_k); RETURN
-            END IF
-          END IF
-          IF (opts%has_wave) THEN
-            CALL deck_wave_kinematics(opts, xyz(1, j), xyz(2, j), xyz(3, j), time, eta, wv, wa, es, em_k)
-            IF (es /= CD_HYDRO_OK) THEN
-              CALL hermite_fluid_fail('wave kinematics', em_k); RETURN
-            END IF
-            fv(:, j) = fv(:, j) + wv; fa(:, j) = wa; wl(j) = eta
-          END IF
-        END DO
-        CALL CD_HFMF_Set_Held_Fluid(cables(i), fv, fa, wl, es, em)
-        IF (es /= CD_HFMF_OK) THEN
-          CALL hermite_fluid_fail('held-field update', em); RETURN
-        END IF
-      END BLOCK
+        CALL hermite_cable_fluid(cables(i), nn, work%node_pos(:, 1:nn), work%fluid_velocity(:, 1:nn), &
+                                 work%fluid_acceleration(:, 1:nn), work%waterline(1:nn))
+      ELSE
+        BLOCK
+          REAL(wp) :: xyz(3, nn), fv(3, nn), fa(3, nn), wl(nn)
+          CALL hermite_cable_fluid(cables(i), nn, xyz, fv, fa, wl)
+        END BLOCK
+      END IF
+      IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
   CONTAINS
+    SUBROUTINE hermite_cable_fluid(cable, n, xyz, fv, fa, wl)
+      !! One cable's sample: u(x_j, time) (current plus wave velocity), the wave acceleration and
+      !! elevation at its node positions x_j, held as its fluid field.
+      TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
+      INTEGER, INTENT(IN) :: n
+      REAL(wp), INTENT(OUT) :: xyz(3, n), fv(3, n), fa(3, n), wl(n)
+      INTEGER :: j, es
+      REAL(wp) :: eta, wv(3), wa(3)
+      CHARACTER(1024) :: em
+      CHARACTER(200) :: em_k ! a per-node current or wave kinematics message (at most 160 characters)
+      CALL CD_HFMF_GetNodePositions(cable, xyz, es, em)
+      IF (es /= CD_HFMF_OK) THEN
+        CALL hermite_fluid_fail('node-position query', em); RETURN
+      END IF
+      fv = CD_ZERO; fa = CD_ZERO; wl = CD_ZERO
+      DO j = 1, n
+        IF (opts%has_current) THEN
+          fv(:, j) = deck_current_velocity(opts, xyz(:, j), time, es, em_k)
+          IF (es /= CD_HYDRO_OK) THEN
+            CALL hermite_fluid_fail('current profile', em_k); RETURN
+          END IF
+        END IF
+        IF (opts%has_wave) THEN
+          CALL deck_wave_kinematics(opts, xyz(1, j), xyz(2, j), xyz(3, j), time, eta, wv, wa, es, em_k)
+          IF (es /= CD_HYDRO_OK) THEN
+            CALL hermite_fluid_fail('wave kinematics', em_k); RETURN
+          END IF
+          fv(:, j) = fv(:, j) + wv; fa(:, j) = wa; wl(j) = eta
+        END IF
+      END DO
+      CALL CD_HFMF_Set_Held_Fluid(cable, fv, fa, wl, es, em)
+      IF (es /= CD_HFMF_OK) CALL hermite_fluid_fail('held-field update', em)
+    END SUBROUTINE hermite_cable_fluid
+
     SUBROUTINE hermite_fluid_fail(where, msg)
       CHARACTER(*), INTENT(IN) :: where, msg
       ErrStat = CD_DECKDRV_SOLVEFAIL

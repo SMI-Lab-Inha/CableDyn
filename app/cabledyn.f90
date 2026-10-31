@@ -459,8 +459,10 @@ CONTAINS
     !! motion as the standalone cubic-Hermite route does: the point rows' translations, the
     !! vessel's rotation (the orientation and angular rates the fairlead end connection and
     !! torsion frames turn with) and the motionFile roll column (the imposed twist of a line
-    !! restrained in torsion). Deck-owned ambient fields require separate updaters and
-    !! therefore remain an explicit fail-closed boundary.
+    !! restrained in torsion). The deck's own current (a current OPTION, a WaterKin CurrentMod 1
+    !! table, MoorDyn-C Currents 1/2/5) is the aggregate's deck_current: its static solves take
+    !! it and every step samples it at the nodes. Deck waves remain an explicit fail-closed
+    !! boundary.
     CHARACTER(*), INTENT(IN) :: deck, root
     REAL(wp), INTENT(IN) :: dt, run_time
     LOGICAL, INTENT(IN) :: has_dt, has_run_time, has_motion, line_outputs
@@ -527,13 +529,14 @@ CONTAINS
         run_msg = 'CableDyn_driver: cannot allocate the mixed aggregate'
         EXIT mixed_run
       END IF
-      ! The aggregate is caller-driven and cannot refresh standalone wave/current
-      ! OPTIONS. Reject such decks by name instead of silently holding zero fluid. The driver
-      ! holds the line end frames or turns them with the deck's vesselMotion table
+      ! The aggregate is caller-driven and evaluates no deck waves: a waves OPTION is refused by
+      ! name instead of silently holding zero fluid. The deck's own current is the aggregate's
+      ! (deck_current), sampled at the nodes before every step at the step's t_committed. The
+      ! driver holds the line end frames or turns them with the deck's vesselMotion table
       ! (host_orientation), and marches the deck's prescribed motion (prescribed_motion).
       CALL CD_AGG_Init_From_Deck(aggregate, deck, step_dt, es, em, forbid_deck_ambient=.TRUE., &
                                  run_tmax=MAX(CD_ZERO, run_time), range_files=.TRUE., host_orientation=.TRUE., &
-                                 prescribed_motion=has_motion, static_run=nstep == 0)
+                                 prescribed_motion=has_motion, static_run=nstep == 0, deck_current=.TRUE.)
       IF (es /= CD_AGG_OK) THEN
         CALL set_aggregate_error(es, em, run_stat, run_msg)
         EXIT mixed_run
@@ -633,7 +636,7 @@ CONTAINS
       max_consecutive_miss = 0
       first_miss_time = CD_ZERO
       last_miss_time = CD_ZERO
-      ! the march (no fluid sampled by the driver on this route) or, without one, finalisation
+      ! the march (the aggregate samples the deck current itself) or, without one, finalisation
       CALL CD_Profile_Enter(MERGE(CD_PROF_SOLVE, CD_PROF_FINAL, nstep > 0))
       IF (nstep > 0) CALL start_standalone_progress(progress, nstep, step_dt)
       DO step = 1, nstep

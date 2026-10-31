@@ -109,9 +109,11 @@ to march held-end dynamics. A static-only mixed deck with no dynamic-only option
 both ``dtM`` and ``TMax``; the time-step option becomes mandatory when a positive-duration march
 is requested.
 
-A mixed deck rejects deck-owned wave/current OPTIONS by name, and with them ``vesselRAO``,
-which needs deck waves. A ``vesselMotion`` record moves every ``Coupled``/``Vessel`` point
-rigidly with the vessel (translation and rotation of each hang-off); a ``motionFile`` gives the
+A mixed deck takes the deck current (a ``current`` OPTION, a WaterKin ``CurrentMod 1`` table or
+MoorDyn-C ``Currents 1``/``2``/``5``) in its static start and its march, as the single-line
+routes do. It rejects deck waves by name, and with them ``vesselRAO``, which needs deck waves.
+A ``vesselMotion`` record moves every ``Coupled``/``Vessel`` point rigidly with the vessel
+(translation and rotation of each hang-off); a ``motionFile`` gives the
 rows of each point. Row 1 is installed before ``t = 0``, also with ``TMax = 0``, after the
 ``.static.out`` of the static solve is written. On the ``EI = 0`` lines that transfer re-derives
 the interior accelerations, which the ``EI = 0``-only route does not, so with row 1 off the deck

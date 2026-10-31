@@ -863,10 +863,23 @@ stop with a named error.
 **Standalone mixed aggregate.** `CableDyn_driver.exe` partitions and steps the
 same aggregate used by OpenFAST. The IEA-15 three-chain + touchdown-cable deck
 writes all four static profiles and a one-step `dtM=0.025 s` dynamic test with
-progress/ETA. On this held-end mixed route (mixed lines without bodies, rods or
-free points), `motionFile` and deck-owned waves/current stop with an error. Mixed
-decks that also contain bodies, rods or free points run on the multibody march,
+progress/ETA. On this mixed route (mixed lines without bodies, rods or free points)
+the deck's prescribed motion (`motionFile`, `vesselMotion`; `mixed_route_torsion`) and
+its current (`mixed_route_currents`, below) are marched; deck waves stop with an error.
+Mixed decks that also contain bodies, rods or free points run on the multibody march,
 which accepts deck waves and current (`mixed_body_rods_points.dat`).
+`mixed_route_currents` runs a cable (100 m, 40 elements) and a chain (110 m) surging 1 m from
+rest in cross currents (OPTION `uniform` and `profile`, MoorDyn-C `Currents 1`, `2` and `5`) on
+the mixed route and on their single-line routes: the static start agrees exactly for the chain
+and to 4.9e-6 of each channel's range for the cable (its out-of-plane offset, 4 um of 0.55 m, at
+the stopping point of the coupled build's static polish; exactly in still water); the march
+differs by 1.1e-3 for the cable on the coupled Newton controls (1.2e-3 in still water too) and
+keeps the static start's 4.9e-6 with the deck's; the chain agrees to 2.1e-5 (exactly in a sheared
+current; the row-1 transfer, 5.4e-5 in still water). A `Currents 2` table wrapping past its last
+sample equals the unrolled table bit for bit and departs from the held one by 0.39 of the chain
+tension range; a uniform `Currents 1` profile equals `uniform` bit for bit, a uniform `Currents 5`
+grid to 3.9e-8; ten correction rewinds repeat their steps bit for bit; the march of a mixed deck
+in a `Currents 5` grid makes no heap allocation per step (`step_allocations_mixed_current`).
 
 ### WaterKin and SeaState modes
 

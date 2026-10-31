@@ -36,8 +36,13 @@ PROGRAM test_step_allocations
   !! CD_AGG_Step_Moving with the roll column or with the vessel orientation and rates): a straight
   !! line restrained in torsion whose End A rolls about its axis, beside an EI = 0 chain.
   !!
+  !! With "mixed_current" the same march of a mixed deck takes the deck's own current
+  !! (deck_current): a MoorDyn-C Currents 5 grid that varies in space and time, sampled at every
+  !! node of the chain and of the finite-EI cable before each step, past its last sample too.
+  !!
   !! Usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]
-  !!        test_step_allocations torsion | nodal | free | current_grid | motion_roll | motion_vessel
+  !!        test_step_allocations torsion | nodal | free | current_grid | motion_roll | motion_vessel |
+  !!                              mixed_current
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT, C_LONG_LONG
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
@@ -88,9 +93,11 @@ PROGRAM test_step_allocations
       CALL current_grid_gate()
     CASE ('motion_roll', 'motion_vessel')
       CALL motion_gate(TRIM(arg) == 'motion_vessel')
+    CASE ('mixed_current')
+      CALL mixed_current_gate()
     CASE DEFAULT
-      ERROR STOP 'a single argument must be "torsion", "nodal", "free", "current_grid", "motion_roll" or '// &
-        '"motion_vessel"'
+      ERROR STOP 'a single argument must be "torsion", "nodal", "free", "current_grid", "motion_roll", '// &
+        '"motion_vessel" or "mixed_current"'
     END SELECT
     STOP
   END IF
@@ -467,6 +474,124 @@ CONTAINS
     END IF
     PRINT '(A)', 'PASS: no heap allocation in the prescribed-motion march of a mixed deck after warm-up'
   END SUBROUTINE motion_gate
+
+  SUBROUTINE mixed_current_gate()
+    !! Zero heap allocation in the standalone driver's per-step march of a mixed deck in its own
+    !! current: a sagging finite-EI line beside a chain, both fairleads surging (motionFile), in
+    !! a Currents 5 grid (x, y, z, t) whose last sample (6 s) the 10 s march passes.
+    INTEGER, PARAMETER :: N_WARM = 40, N_COUNT = 160, NT = N_WARM + N_COUNT
+    REAL(wp), PARAMETER :: DTM = 0.05_wp, PI = 3.14159265358979323846_wp
+    REAL(wp), PARAMETER :: XS(2) = [-10.0_wp, 110.0_wp], YS(2) = [-10.0_wp, 120.0_wp], &
+                           ZS(3) = [-210.0_wp, -100.0_wp, 0.0_wp], TS(3) = [0.0_wp, 3.0_wp, 6.0_wp]
+    CHARACTER(*), PARAMETER :: DIR = 'step_alloc_mixed_current/'
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: mag
+    REAL(wp), ALLOCATABLE :: p(:, :), v(:, :), a(:, :), ld(:, :), o(:, :, :), w(:, :), al(:, :), roll(:)
+    REAL(wp) :: t, x, vx, ax, om
+    INTEGER :: u, k, n, n_it, ix, iy, iz, it
+    INTEGER(C_LONG_LONG) :: c0, n_alloc
+    LOGICAL :: turns, rolls, converged, stalled
+    om = 2.0_wp*PI/10.0_wp
+    OPEN (NEWUNIT=u, FILE=DIR//'motion.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, NT
+      t = DTM*k
+      x = 0.5_wp*(1.0_wp - COS(om*t))
+      vx = 0.5_wp*om*SIN(om*t)
+      ax = 0.5_wp*om*om*COS(om*t)
+      WRITE (u, '(F8.3,A,ES25.16E3,A,ES25.16E3,A,ES25.16E3,A)') t, ' 1 ', x, ' 0 -50 ', vx, ' 0 0 ', ax, ' 0 0'
+      WRITE (u, '(F8.3,A,ES25.16E3,A,ES25.16E3,A,ES25.16E3,A)') t, ' 3 ', x, ' 20 -50 ', vx, ' 0 0 ', ax, ' 0 0'
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=DIR//'current_profile_4d.txt', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') '2 2 3 3'
+    WRITE (u, '(A)') '-10.0 110.0'
+    WRITE (u, '(A)') '-10.0 120.0'
+    WRITE (u, '(A)') '-210.0 -100.0 0.0'
+    WRITE (u, '(A)') '0.0 3.0 6.0'
+    WRITE (u, '(A)') 'x y z t ux uy uz'
+    DO it = 1, 3
+      DO iz = 1, 3
+        DO iy = 1, 2
+          DO ix = 1, 2
+            WRITE (u, '(4F10.3,3F12.6)') XS(ix), YS(iy), ZS(iz), TS(it), &
+              (1.0_wp + ZS(iz)/250.0_wp)*(0.3_wp + 0.002_wp*XS(ix) + 0.1_wp*(it - 1)), &
+              (1.0_wp + ZS(iz)/250.0_wp)*(0.2_wp - 0.001_wp*YS(iy)), 0.0_wp
+          END DO
+        END DO
+      END DO
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=DIR//'deck.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'step allocation gate: mixed deck in its own current'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'cab 0.2 60.0 4.0e8 0.0 1.0e4 1.2 0.1 1.0 0.0'
+    WRITE (u, '(A)') 'chain 0.1 50.0 1.0e9 -1.0 0.0 1.37 0.64 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Coupled 0.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Fixed 95.0 0.0 -60.0 0 0 0 0'
+    WRITE (u, '(A)') '3 Coupled 0.0 20.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '4 Fixed 0.0 110.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '2 3 4 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 cab 100.0 40'
+    WRITE (u, '(A)') '2 chain 110.0 20'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '200.0 WtrDpth'
+    WRITE (u, '(A)') '0.05 dtM'
+    WRITE (u, '(A)') '10.0 TMax'
+    WRITE (u, '(A)') '5 Currents'
+    WRITE (u, '(A)') 'motion.txt motionFile'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    ALLOCATE (mag)
+    CALL CD_AGG_Init_From_Deck(mag, DIR//'deck.dat', DTM, es, em, forbid_deck_ambient=.TRUE., &
+                               run_tmax=10.0_wp, host_orientation=.TRUE., prescribed_motion=.TRUE., &
+                               deck_current=.TRUE.)
+    CALL check('current deck initialization')
+    n = CD_AGG_NMovingPoints(mag, es, em)
+    CALL check('current moving-point count')
+    ALLOCATE (p(3, n), v(3, n), a(3, n), ld(3, n), o(3, 3, n), w(3, n), al(3, n), roll(n))
+    CALL CD_AGG_GetMovingPointMesh(mag, p, v, a, ld, es, em)
+    CALL check('current initial mesh')
+    CALL CD_AGG_MotionKinematics(mag, 1, p, v, a, o, w, al, roll, turns, rolls, es, em)
+    CALL check('current row 1')
+    CALL CD_AGG_UpdateStates_Moving(mag, p, v, a, es, em)
+    CALL check('current row 1 transfer')
+    CALL CD_AGG_Refresh_Accelerations(mag, es, em)
+    CALL check('current row 1 accelerations')
+    n_alloc = 0
+    DO k = 1, NT
+      c0 = cd_test_allocation_count()
+      IF (k > N_WARM) CALL cd_test_allocation_counting(1_C_INT)
+      CALL CD_AGG_MotionKinematics(mag, k + 1, p, v, a, o, w, al, roll, turns, rolls, es, em)
+      IF (es == 0) CALL CD_AGG_Step_Moving(mag, DTM, p, v, a, converged, stalled, n_it, es, em, t_committed=DTM*k)
+      CALL cd_test_allocation_counting(0_C_INT)
+      CALL check('current step')
+      IF (.NOT. converged .OR. stalled) ERROR STOP 'current step did not converge'
+      n_alloc = n_alloc + (cd_test_allocation_count() - c0)
+    END DO
+    CALL CD_AGG_End(mag, es, em)
+    PRINT '(A,I0,A,I0,A)', 'mixed deck in a Currents 5 grid: ', N_COUNT, ' counted steps, ', n_alloc, &
+      ' heap allocations in the steps'
+    IF (n_alloc /= 0) THEN
+      PRINT '(A)', 'FAIL: the march of a mixed deck in its own current allocated after warm-up'
+      ERROR STOP 1
+    END IF
+    PRINT '(A)', 'PASS: no heap allocation in the march of a mixed deck in its own current after warm-up'
+  END SUBROUTINE mixed_current_gate
 
   SUBROUTINE check(stage)
     CHARACTER(*), INTENT(IN) :: stage

@@ -1459,6 +1459,10 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
   set_tests_properties(step_allocations_motion_roll PROPERTIES LABELS "fortran;dynamic;memory")
   add_test(NAME step_allocations_motion_vessel COMMAND test_step_allocations motion_vessel)
   set_tests_properties(step_allocations_motion_vessel PROPERTIES LABELS "fortran;dynamic;memory")
+  # And with the deck's own current on that march (a Currents 5 grid that varies in time).
+  add_test(NAME step_allocations_mixed_current COMMAND test_step_allocations mixed_current)
+  file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/step_alloc_mixed_current)
+  set_tests_properties(step_allocations_mixed_current PROPERTIES LABELS "fortran;dynamic;memory")
   # And with the nodal twist of a line free in torsion at one end.
   add_test(NAME step_allocations_torsion_one_end COMMAND test_step_allocations free)
   set_tests_properties(step_allocations_torsion_one_end PROPERTIES LABELS "fortran;dynamic;memory")
@@ -2256,6 +2260,19 @@ target_link_libraries(test_mixed_route_torsion PRIVATE cabledyn_core)
 add_test(NAME mixed_route_torsion COMMAND test_mixed_route_torsion $<TARGET_FILE:cabledyn>)
 set_tests_properties(mixed_route_torsion PROPERTIES LABELS "fortran;driver;integration;dynamic")
 
+# Deck currents on the standalone mixed route (the aggregate samples the deck current at every
+# node before each step): OPTION uniform and profile and MoorDyn-C Currents 1/2/5 against the
+# single-line routes, the wrap of a time-varying table, uniform writings of one field, snapshot
+# and restore, and the refusals that remain (deck waves, double counting, no dtM).
+add_executable(test_mixed_route_currents tests/test_mixed_route_currents.f90)
+target_link_libraries(test_mixed_route_currents PRIVATE cabledyn_core)
+add_test(NAME mixed_route_currents COMMAND test_mixed_route_currents $<TARGET_FILE:cabledyn>
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/mixed_route_currents_work)
+set_tests_properties(mixed_route_currents PROPERTIES LABELS "fortran;driver;integration;dynamic")
+foreach(_mrc_case uni prof still wav c1 c2 c2u c2h c2d c5 c1u c5u)
+  file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/mixed_route_currents_work/${_mrc_case})
+endforeach()
+
 add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
 target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)
 add_test(NAME coupled_torsion COMMAND test_coupled_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -2741,8 +2758,13 @@ cabledyn_msg_test(shared_line_finite_ei msg_shared_line_finite_ei.dat 1
 cabledyn_msg_test(pliant_connect_end_b msg_pliant_connect_end_b.dat 1
   "finite-EI LINE 1 in a mixed-topology deck: End B is POINT 2 .connect.;is not supported on the multibody march;End the cable on a Fixed point"
   "")
-cabledyn_msg_test(mixed_current msg_mixed_current.dat 1
-  "the deck current OPTION is not supported for a standalone mixed EI=0/finite-EI deck;runs the mooring in STILL WATER;couple the deck to OpenFAST .CompMooring = 5. with SeaState"
+# The standalone mixed route takes a deck current (here the static start of the lazy-wave deck)
+# and refuses deck waves by name.
+cabledyn_msg_test(mixed_current msg_mixed_current.dat 0
+  "CableDyn mixed standalone aggregate: 3 line.s. .2 EI=0, 1 finite-EI."
+  "STILL WATER")
+cabledyn_msg_test(mixed_waves msg_mixed_waves.dat 1
+  "the deck waves OPTION is not supported for a standalone mixed EI=0/finite-EI deck;takes the deck current but evaluates no deck waves;couple the deck to OpenFAST .CompMooring = 5. with SeaState"
   "this coupled mode;the C API;FAST.Farm")
 cabledyn_msg_test(mixed_connect_coupled_cable msg_mixed_connect_coupled_cable.dat 1
   "finite-EI LINE 3: a Coupled/Vessel End A .POINT 1. would need motionFile coupling to drive it;remove the Connect/Free points;held still .that route takes no motionFile either."

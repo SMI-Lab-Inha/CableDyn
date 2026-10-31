@@ -3756,18 +3756,20 @@ class DeckFile:
                     f"{self._label}: OPTION nModes is not supported for mixed EI=0/finite-EI "
                     "decks; remove it or set it to 0"
                 )
-            # native run_mixed_held_deck: the standalone mixed deck runs on the aggregate in
-            # still water and writes the main OUTPUTS only
-            if (
-                has_waves
-                or trains
-                or mdc_wave_kin
-                or (current is not None and current.values[0].lower() != "none")
-                or mdc_currents
-            ):
+            # native run_mixed_held_deck: the standalone mixed deck runs on the aggregate, which
+            # marches the deck current (a current OPTION or Currents 1/2/5, deck_current) but
+            # evaluates no deck waves, and writes the main OUTPUTS only
+            if mdc_wave_kin:
                 raise DeckFormatError(
-                    f"{self._label}: a mixed EI=0/finite-EI deck runs in still water; remove "
-                    "the deck waves and current"
+                    f"{self._label}: the MoorDyn-C WaveKin {mdc_wave_kin} waves are not supported "
+                    "for a standalone mixed EI=0/finite-EI deck (it takes a deck current but no "
+                    "deck waves)"
+                )
+            if has_waves or trains:
+                raise DeckFormatError(
+                    f"{self._label}: the deck waves OPTION is not supported for a standalone mixed "
+                    "EI=0/finite-EI deck: this route takes the deck current but evaluates no deck "
+                    "waves"
                 )
             if series_lines:
                 raise DeckFormatError(

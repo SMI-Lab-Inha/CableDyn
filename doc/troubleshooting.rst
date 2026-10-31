@@ -299,13 +299,13 @@ Model data
        deck (the ``EI = 0`` lines on the Coupled point directly): a host (OpenFAST
        ``CompMooring = 5`` or the C API) drives its Coupled points, and the standalone driver
        runs it with them held still (that route takes no ``motionFile`` either).
-   * - ``the deck current OPTION is not supported for a standalone mixed EI=0/finite-EI deck`` /
-       ``the deck waves OPTION ...``
-     - the standalone driver runs a mixed ``EI = 0``/finite-EI deck in still water: no ambient
-       fluid field covers its span. Remove the ``waves``/``current`` OPTION, run a deck whose
-       lines are all ``EI = 0`` or all finite-EI (those standalone routes evaluate the deck waves
-       and current), or couple the deck to OpenFAST (``CompMooring = 5``) with SeaState, which
-       supplies them.
+   * - ``the deck waves OPTION is not supported for a standalone mixed EI=0/finite-EI deck`` /
+       ``the MoorDyn-C WaveKin <n> waves are not supported for a standalone mixed EI=0/finite-EI
+       deck``
+     - the standalone driver marches the deck current of a mixed ``EI = 0``/finite-EI deck but no
+       deck waves. Remove the ``waves`` OPTION (or ``WaveKin``), run a deck whose lines are all
+       ``EI = 0`` or all finite-EI (those standalone routes evaluate the deck waves), or couple
+       the deck to OpenFAST (``CompMooring = 5``) with SeaState, which supplies them.
    * - ``the deck current OPTION is not supported in FAST.Farm`` / ``the deck waves OPTION ...``
      - the shared mooring of a FAST.Farm farm runs in still water (no fluid field spans the
        farm). Remove the ``waves``/``current`` OPTION.

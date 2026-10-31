@@ -10,6 +10,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Deck currents on the standalone mixed `EI = 0` + finite-EI deck: a `current` OPTION (uniform or
+  profile), a WaterKin `CurrentMod 1` table and MoorDyn-C `Currents 1`/`2`/`5`, which the mixed
+  route refused, are taken in the static start of the chains and cables and sampled at every node
+  before each step with the single-line routes' updaters. Against the single-line routes on a
+  chain and a cable in a cross current: the static start agrees exactly for the chain and to
+  4.9e-6 of the range for the cable (the coupled build's static polish), the march with the
+  same Newton controls to 4.9e-6 (cable) and 2.1e-5 (chain); a `Currents 2` table wrapping past
+  its last sample equals the unrolled table bit for bit; a uniform `Currents 1` profile equals
+  `uniform` bit for bit, a uniform `Currents 5` grid to 3.9e-8; a correction rewind repeats the
+  step bit for bit; the march allocates nothing per step. Deck waves stay refused; the coupled
+  route keeps taking the host's field.
 - Finite-EI lines with two moving ends on the cubic-Hermite route: a line whose End B is a
   `Coupled`/`Vessel` point (a cable shared by two floaters, a FAST.Farm shared line) is driven at
   both ends standalone, in OpenFAST, FAST.Farm and the C API (End B on a moving column of its

@@ -86,7 +86,10 @@ MODULE CableDyn_OpenFAST_Aggregate
                                  CD_Deck_Range_Sample_Aggregate, CD_Deck_Range_Write, &
                                  CD_MotionRuntimeType, CD_Motion_Active, CD_Motion_NColumns, &
                                  CD_Motion_Has_Rotation, CD_Motion_Has_Roll, CD_Motion_Kinematics, &
-                                 CD_Motion_Deck_Positions, CD_Motion_End
+                                 CD_Motion_Deck_Positions, CD_Motion_End, &
+                                 CD_DeckCurrentRuntimeType, CD_Deck_Current_Active, &
+                                 CD_Deck_Current_Sample_System, CD_Deck_Current_Sample_Cables, &
+                                 CD_Deck_Current_End
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
   USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
                              CD_Get_System_Line_State, &
@@ -181,6 +184,11 @@ MODULE CableDyn_OpenFAST_Aggregate
     REAL(wp), ALLOCATABLE :: cable_phi0(:)
     ! The deck's own prescribed motion (standalone mixed route; inactive for a coupled host).
     TYPE(CD_MotionRuntimeType) :: motion
+    ! The deck's own current (standalone mixed route, Init deck_current; inactive for a coupled
+    ! host, which supplies its field through CD_AGG_SetFluidFields): sampled at every node of the
+    ! EI = 0 lines and the cables at t = 0 by Init and CD_AGG_Refresh_Accelerations, and at
+    ! t_committed before every step (sample_deck_current).
+    TYPE(CD_DeckCurrentRuntimeType) :: current
     ! Per-cable status staging lets independent finite-EI cables advance concurrently while
     ! preserving deterministic, cable-order error reporting after the parallel region.
     INTEGER, ALLOCATABLE :: cable_stat(:)
@@ -280,7 +288,8 @@ CONTAINS
   SUBROUTINE CD_AGG_Init_From_Deck(self, deck_path, dt, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                   range_files, host_orientation, static_current, prescribed_motion, static_run)
+                                   range_files, host_orientation, static_current, prescribed_motion, static_run, &
+                                   deck_current)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -311,8 +320,8 @@ CONTAINS
     INTEGER, INTENT(IN), OPTIONAL :: n_turbines
     REAL(wp), INTENT(IN), OPTIONAL :: turbine_ref_pos(:, :)
     REAL(wp), INTENT(IN), OPTIONAL :: farm_ptfm_init(:, :)
-    ! forbid_deck_ambient: the caller's documented scope is still water, so reject a
-    ! deck that declares its own waves/current OPTIONS (see CD_Init_Deck_Aggregate).
+    ! forbid_deck_ambient: the caller evaluates no deck waves (and, without deck_current, no
+    ! deck current), so reject a deck that declares them (see CD_Init_Deck_Aggregate).
     LOGICAL, INTENT(IN), OPTIONAL :: forbid_deck_ambient
     ! range_files: the caller writes the range graphs of the LINES flag r (CD_AGG_Range_*)
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
@@ -328,6 +337,9 @@ CONTAINS
     ! static_run: the caller marches no step (the standalone TMax = 0 run; see
     ! CD_Init_Deck_Aggregate)
     LOGICAL, INTENT(IN), OPTIONAL :: static_run
+    ! deck_current: the caller marches the deck's own current (the standalone driver; see
+    ! CD_Init_Deck_Aggregate): every step samples it at the nodes, at its t_committed
+    LOGICAL, INTENT(IN), OPTIONAL :: deck_current
 
     ! Both bundles (about 70 KB together) are built on the heap: initialisation runs on the
     ! thread of the calling host, whose stack size CableDyn does not choose.
@@ -368,7 +380,7 @@ CONTAINS
                                 forbid_deck_ambient=forbid_deck_ambient, run_tmax=run_tmax, &
                                 range_files=range_files, host_orientation=host_orientation, &
                                 static_current=static_current, prescribed_motion=prescribed_motion, &
-                                static_run=static_run)
+                                static_run=static_run, deck_current=deck_current)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF
@@ -503,6 +515,7 @@ CONTAINS
     IF (ALLOCATED(parts%line_obj_index)) CALL MOVE_ALLOC(parts%line_obj_index, candidate%line_obj_index)
     candidate%ranges = parts%ranges
     candidate%motion = parts%motion
+    candidate%current = parts%current
     IF (ALLOCATED(parts%cable_points)) THEN
       CALL MOVE_ALLOC(parts%cable_points, candidate%cable_points)
     ELSE
@@ -586,6 +599,16 @@ CONTAINS
     IF (ErrStat /= CD_AGG_OK) THEN
       CALL CD_AGG_End(candidate, es, em)
       RETURN
+    END IF
+    ! the deck's own current at t = 0 at the static state: the EI = 0 lines re-derive their start
+    ! accelerations in it and the cables take it as their first held field, as the single-line
+    ! routes' t = 0 samples do before their march
+    IF (CD_Deck_Current_Active(candidate%current)) THEN
+      CALL sample_deck_current(candidate, CD_ZERO, .TRUE., ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) THEN
+        CALL CD_AGG_End(candidate, es, em)
+        RETURN
+      END IF
     END IF
     candidate%dt = dt                  ! freeze the coupling step for the fixed-dt Step_Moving guard
     candidate%initialized = .TRUE.
@@ -1087,6 +1110,13 @@ CONTAINS
                'threaded into every step'
       RETURN
     END IF
+    ! a deck-owned current is sampled at the end-of-step time
+    IF (CD_Deck_Current_Active(self%current) .AND. .NOT. PRESENT(t_committed)) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: a deck-owned current requires the committed time (t_committed) '// &
+               'threaded into every step'
+      RETURN
+    END IF
     IF (.NOT. (moving_cols_ok(position, self) .AND. moving_cols_ok(velocity, self) .AND. &
                moving_cols_ok(acceleration, self))) THEN
       ErrStat = CD_AGG_BADINPUT
@@ -1149,6 +1179,15 @@ CONTAINS
     END IF
     self%mv_roll = CD_ZERO
     IF (use_roll) self%mv_roll = roll
+    ! The deck's own current over this step: u(x_j, t + dt) at every node x_j of the step-start
+    ! state, held over the step on the EI = 0 lines and the cables, as the single-line EI = 0
+    ! and cubic-Hermite marches sample it before their steps. It is an input of the step (a
+    ! function of the committed state and the clock), so a rewound or restored step samples
+    ! the same field again.
+    IF (CD_Deck_Current_Active(self%current)) THEN
+      CALL sample_deck_current(self, t_committed, .FALSE., ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) RETURN
+    END IF
     ! stage: snapshot every sub-object before any of them steps (multi-object only; a
     ! single sub-object is already atomic -- the hot mooring-only path skips this).
     ! A Rigid6 deck is single-subobject (ncable == 0) yet still needs staging: its branch
@@ -1503,13 +1542,21 @@ CONTAINS
     !! committed state, keeping the coupled node's prescribed acceleration
     !! (CD_HFMF_Refresh_Acceleration): after CD_AGG_UpdateStates_Moving installs the first row
     !! of a prescribed motion, so the first step does not start from the static acceleration
-    !! (the standalone cubic-Hermite route's row-1 station). The EI = 0 system is unchanged.
+    !! (the standalone cubic-Hermite route's row-1 station). The EI = 0 system is unchanged,
+    !! except under a deck-owned current: the row-1 station is t = 0, so the current is sampled
+    !! again at t = 0 at the installed row (as the single-line routes sample it after installing
+    !! row 1), an EI = 0 line whose field changed re-deriving its acceleration in it, before the
+    !! cables' refresh.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: c, es
     CHARACTER(1024) :: em
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    IF (CD_Deck_Current_Active(self%current)) THEN
+      CALL sample_deck_current(self, CD_ZERO, .TRUE., ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) RETURN
+    END IF
     DO c = 1, self%ncable
       CALL CD_HFMF_Refresh_Acceleration(self%cables(c), es, em)
       IF (es /= CD_HFMF_OK) THEN
@@ -1520,6 +1567,33 @@ CONTAINS
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_Refresh_Accelerations
+
+  SUBROUTINE sample_deck_current(self, time, initial_condition, ErrStat, ErrMsg)
+    !! The deck's own current at time over every node: the EI = 0 system's lines
+    !! (CD_Deck_Current_Sample_System; initial_condition re-derives the acceleration of a line
+    !! whose field changed) and the finite-EI cables (CD_Deck_Current_Sample_Cables).
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    REAL(wp), INTENT(IN) :: time
+    LOGICAL, INTENT(IN) :: initial_condition
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(1024) :: em
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+    IF (self%has_sys) THEN
+      CALL CD_Deck_Current_Sample_System(self%current, self%sys%fast%system, time, es, em, &
+                                         initial_condition=initial_condition)
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL map_deck_status(es, em, ErrStat, ErrMsg)
+        RETURN
+      END IF
+    END IF
+    IF (self%ncable > 0) THEN
+      CALL CD_Deck_Current_Sample_Cables(self%current, self%cables, time, es, em)
+      IF (es /= CD_DECKDRV_OK) CALL map_deck_status(es, em, ErrStat, ErrMsg)
+    END IF
+  END SUBROUTINE sample_deck_current
 
   SUBROUTINE check_motion_columns(self, ErrStat, ErrMsg)
     !! The prescribed-motion columns match the moving surface: one column per moving point, and
@@ -2310,6 +2384,7 @@ CONTAINS
     IF (ALLOCATED(self%mv_roll)) DEALLOCATE (self%mv_roll)
     IF (ALLOCATED(self%cable_phi0)) DEALLOCATE (self%cable_phi0)
     CALL CD_Motion_End(self%motion)
+    CALL CD_Deck_Current_End(self%current)
     IF (ALLOCATED(self%cable_stat)) DEALLOCATE (self%cable_stat)
     IF (ALLOCATED(self%cable_msg)) DEALLOCATE (self%cable_msg)
     IF (ALLOCATED(self%channels)) DEALLOCATE (self%channels)
