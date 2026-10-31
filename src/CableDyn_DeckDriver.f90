@@ -8548,9 +8548,10 @@ CONTAINS
   SUBROUTINE build_aggregate_motion(points, lines, is_fin, opts, rt, ErrStat, ErrMsg)
     !! The deck's motionFile or vesselMotion table, keyed to the aggregate moving-set order (the
     !! enumeration of apply_coupled_positions: the system's BOUND Coupled/Vessel points in deck
-    !! POINT order, then one coupled fairlead per finite-EI cable in deck LINE order). The roll
-    !! column of a motionFile drives the moving End A of a line solved in torsion whose End A is
-    !! restrained, as on the standalone cubic-Hermite route (check_motion_roll_lines).
+    !! POINT order, then one coupled fairlead per finite-EI cable in deck LINE order, then the
+    !! moving End B of each cable between two moving points). The roll column of a motionFile
+    !! drives a moving end restrained in torsion of a line solved in torsion, as on the
+    !! standalone cubic-Hermite route (check_motion_roll_lines).
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     LOGICAL, INTENT(IN) :: is_fin(:)
@@ -8588,17 +8589,24 @@ CONTAINS
           END IF
         END SELECT
       END DO
+      ! one coupled fairlead (End A) per finite-EI cable, then the moving End B of each cable
+      ! between two moving points (apply_coupled_positions)
       DO l = 1, SIZE(lines)
         IF (.NOT. is_fin(l)) CYCLE
-        DO i = 1, SIZE(points)
-          IF (points(i)%id /= lines(l)%nodeA .AND. points(i)%id /= lines(l)%nodeB) CYCLE
-          SELECT CASE (TRIM(points(i)%ptype))
-          CASE ('coupled', 'vessel')
-            n = n + 1
-            IF (pass == 2) CALL set_column(n, i, rt%motion%has_roll .AND. line_torsion_at_a(lines(l)) .AND. &
-                                           points(i)%id == lines(l)%nodeA)
-          END SELECT
-        END DO
+        i = find_point(points, lines(l)%nodeA)
+        IF (i < 1) CYCLE
+        SELECT CASE (TRIM(points(i)%ptype))
+        CASE ('coupled', 'vessel')
+          n = n + 1
+          IF (pass == 2) CALL set_column(n, i, rt%motion%has_roll .AND. line_torsion_at_a(lines(l)))
+        END SELECT
+      END DO
+      DO l = 1, SIZE(lines)
+        IF (.NOT. is_fin(l)) CYCLE
+        IF (.NOT. moving_end_b_point(points, lines(l))) CYCLE
+        n = n + 1
+        IF (pass == 2) CALL set_column(n, find_point(points, lines(l)%nodeB), &
+                                       rt%motion%has_roll .AND. line_torsion_at_b(lines(l)))
       END DO
       IF (pass == 1) ALLOCATE (rt%col_point(n), rt%col_pos(3, n), rt%col_roll(n))
     END DO

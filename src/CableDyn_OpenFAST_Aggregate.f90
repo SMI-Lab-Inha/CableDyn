@@ -1308,9 +1308,16 @@ CONTAINS
       DO c = 1, self%ncable
         col = self%ncp_sys + c
         IF (self%cable_col_b(c) > 0) THEN
-          CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
-                              acceleration, es, em, orientation, &
-                              self%mv_omega, self%mv_alpha)
+          IF (use_roll .AND. self%cables(c)%line%torsion%active) THEN
+            ! the roll of each moving end restrained in torsion: Phi_0 - roll(A) - roll(B)
+            CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
+                                acceleration, es, em, orientation, self%mv_omega, self%mv_alpha, &
+                                twist=self%cable_phi0(c) - self%mv_roll(col) - self%mv_roll(self%cable_col_b(c)))
+          ELSE
+            CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
+                                acceleration, es, em, orientation, &
+                                self%mv_omega, self%mv_alpha)
+          END IF
         ELSE
           CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em, &
                           orientation(:, :, col))
@@ -1329,9 +1336,16 @@ CONTAINS
       DO c = 1, self%ncable
         col = self%ncp_sys + c
         IF (self%cable_col_b(c) > 0) THEN
-          CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
-                              acceleration, es, em, &
-                              angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha)
+          IF (use_roll .AND. self%cables(c)%line%torsion%active) THEN
+            CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
+                                acceleration, es, em, &
+                                angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha, &
+                                twist=self%cable_phi0(c) - self%mv_roll(col) - self%mv_roll(self%cable_col_b(c)))
+          ELSE
+            CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_STEP, position, velocity, &
+                                acceleration, es, em, &
+                                angular_velocity=self%mv_omega, angular_acceleration=self%mv_alpha)
+          END IF
         ELSE
           CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em)
         END IF
@@ -2739,11 +2753,12 @@ CONTAINS
   END FUNCTION ncp_all
 
   SUBROUTINE cable_two_ends(cable, ca, cb, mode, position, velocity, acceleration, es, em, orientation, &
-                            angular_velocity, angular_acceleration)
+                            angular_velocity, angular_acceleration, twist)
     !! The HFMF boundary call of a cable with a moving End B (CD_HFMF_Set_Moving_End_B): End A takes
     !! the moving column ca, End B column cb, each with its orientation and rates (the
     !! committed parent orientation and zero rates where the host passes none). mode CABLE_PREFLIGHT
-    !! validates, CABLE_SET transfers without a step (direct feedthrough), CABLE_STEP advances.
+    !! validates, CABLE_SET transfers without a step (direct feedthrough), CABLE_STEP advances,
+    !! with twist the imposed twist of a cable restrained in torsion (the deck's roll columns).
     !! Touches only that cable (safe inside the cables' parallel loop).
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     INTEGER, INTENT(IN) :: ca, cb, mode
@@ -2752,6 +2767,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: em
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    REAL(wp), INTENT(IN), OPTIONAL :: twist
     REAL(wp) :: dcm_a(3, 3), dcm_b(3, 3), w_a(3), al_a(3), w_b(3), al_b(3)
     dcm_a = cable%parent_dcm
     dcm_b = cable%parent_dcm_b
@@ -2782,7 +2798,7 @@ CONTAINS
       CALL CD_HFMF_UpdateStates(cable, position(:, ca), velocity(:, ca), acceleration(:, ca), es, em, &
                                 dcm_a, w_a, al_a, ub_pos=position(:, cb), ub_vel=velocity(:, cb), &
                                 ub_acc=acceleration(:, cb), ub_orientation=dcm_b, ub_angular_velocity=w_b, &
-                                ub_angular_acceleration=al_b)
+                                ub_angular_acceleration=al_b, u_twist=twist)
     END SELECT
   END SUBROUTINE cable_two_ends
 

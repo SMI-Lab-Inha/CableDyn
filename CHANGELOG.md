@@ -112,7 +112,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   (3 to 11 % in the cases tried) under the coupled Newton tolerance. A straight line rolled
   slowly gives `Torq = GJ Phi / L` to 5e-6 N m. A static mixed run (`TMax = 0`) with torsion
   takes `False alpha_force_blend`, as the single-line route and the Python reader do.
-  `vesselRAO` stays refused with the deck waves.
+  `vesselRAO` stays refused with the deck waves. A line between two moving points there takes the
+  roll columns of both ends, `Phi = Pretwist(B) − Pretwist(A) − roll(A) − roll(B)`: rolled
+  oppositely (a rigid roll about its axis) a line twisted 90 deg keeps its twist exactly, and rolled
+  equally it twists by twice the roll to 5e-7 deg, with `Torq = GJ Phi / L` at both ends to
+  5e-6 N m.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their

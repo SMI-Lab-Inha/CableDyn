@@ -35,6 +35,13 @@
 !>  7. ATTACHMENTS: the gate 2 line carrying three buoyancy modules (ATTACHMENTS, with drag and
 !>     added mass), its torsion stage after the attachment polish on both routes, gives the gate 2
 !>     agreement between the single-line route and the mixed route beside the chain.
+!>  8. The gate 3 line between two moving points (End B on a Coupled point, its own aggregate
+!>     column): the roll columns of both ends impose Phi = Pretwist(B) - Pretwist(A) - roll(A) -
+!>     roll(B). Opposite rolls (a rigid roll of the line about its axis) keep Twist1 = 90 deg and
+!>     equal rolls give 90 - 2 roll, with Torq = GJ Twist / L at both ends (1e-6 GJ); the same
+!>     with End B's point listed first in POINTS (the moving columns follow the cables, End A
+!>     columns then End B columns, not the POINTS order). Fails if the roll of a two-moving-end
+!>     cable is dropped or an end's motion is read from another moving column.
 PROGRAM test_mixed_route_torsion
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -82,6 +89,9 @@ PROGRAM test_mixed_route_torsion
   CALL check_static_row1()
   CALL check_static_blend()
   CALL check_attachment_routes()
+  CALL check_two_moving_roll(-1.0_wp)
+  CALL check_two_moving_roll(1.0_wp)
+  CALL check_two_moving_roll(1.0_wp, b_first=.TRUE.)
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' mixed-route torsion gate(s) failed'
     ERROR STOP 1
@@ -653,6 +663,72 @@ CONTAINS
     CALL require(werr <= 1.0e-6_wp, TRIM(label)//': Twist1 = Pretwist - roll at every step')
     CALL require(terr <= 1.0e-6_wp*GJ, TRIM(label)//': Torq = GJ Twist / L at both ends at every step')
   END SUBROUTINE check_quasi_static
+
+  SUBROUTINE check_two_moving_roll(sense, b_first)
+    !! Gate 8: the gate 3 line with End B on the Coupled point 2 at (100, 0, -50), rolled with End
+    !! A by the roll column, roll(B) = sense roll(A): Twist1 = 90 - (1 + sense) roll. b_first: the
+    !! same line with the point ids of its ends exchanged (End B on point 1, End A on point 2), so
+    !! End B's point comes first in POINTS.
+    REAL(wp), INTENT(IN) :: sense
+    LOGICAL, INTENT(IN), OPTIONAL :: b_first
+    REAL(wp), PARAMETER :: GJ = 5.0e4_wp, L = 100.0_wp
+    CHARACTER(48) :: points(4)
+    CHARACTER(32) :: names(MAXCOL)
+    REAL(wp), ALLOCATABLE :: vals(:, :)
+    REAL(wp) :: t, ro, dro, d2ro, werr, terr, twist
+    INTEGER :: u, k, nrow, pa, pb
+    LOGICAL :: ok, bf
+    CHARACTER(24) :: label
+    CHARACTER(16) :: line1
+    bf = .FALSE.
+    IF (PRESENT(b_first)) bf = b_first
+    label = MERGE('8 equal rolls   ', '8 opposite rolls', sense > 0.0_wp)
+    IF (bf) label = '8 End B first'
+    ! the point ids of End A and End B
+    pa = MERGE(2, 1, bf)
+    pb = 3 - pa
+    OPEN (NEWUNIT=u, FILE='tmrt_two_motion.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, 100
+      t = 0.1_wp*k
+      CALL smooth(15.0_wp, t, ro, dro, d2ro)
+      WRITE (u, '(F8.3,1X,I0,A,ES25.16E3)') t, pa, ' 0 0 -50 0 0 0 0 0 0 ', ro
+      WRITE (u, '(F8.3,1X,I0,A,ES25.16E3)') t, pb, ' 100 0 -50 0 0 0 0 0 0 ', sense*ro
+      WRITE (u, '(F8.3,A)') t, ' 3 0 10 -50 0 0 0 0 0 0'
+    END DO
+    CLOSE (u)
+    points(pa) = ACHAR(48 + pa)//' Coupled 0.0 0.0 -50.0 0 0 0 0'
+    points(pb) = ACHAR(48 + pb)//' Coupled 100.0 0.0 -50.0 0 0 0 0'
+    points(3) = '3 Coupled 0.0 10.0 -50.0 0 0 0 0'
+    points(4) = '4 Fixed 0.0 100.0 -100.0 0 0 0 0'
+    line1 = '1 '//ACHAR(48 + pa)//' '//ACHAR(48 + pb)//' -'
+    CALL write_deck('tmrt_two.dat', [CHARACTER(160) :: neutral_t, CHAIN_T], points, &
+                    [CHARACTER(16) :: line1, '2 3 4 -'], [CHARACTER(24) :: '1 cab 100.0 40', '2 chain 110.0 20'], &
+                    [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
+                    [CHARACTER(48) :: '0.1 dtM', '10.0 TMax', 'tmrt_two_motion.txt motionFile'], &
+                    [CHARACTER(16) :: 'Torq1N1', 'Torq1N41', 'Twist1', 'FairTen2'])
+    CALL run_driver('tmrt_two.dat', 'tmrt_two', ok)
+    CALL require(ok, TRIM(label)//': the mixed deck with a line between two moving points runs')
+    ALLOCATE (vals(MAXROW, MAXCOL))
+    CALL read_out('tmrt_two.out', names, vals, nrow)
+    CALL require(nrow == 101, TRIM(label)//': every row written')
+    werr = 0.0_wp
+    terr = 0.0_wp
+    DO k = 1, nrow
+      CALL smooth(15.0_wp, vals(k, 1), ro, dro, d2ro)
+      twist = 90.0_wp - (1.0_wp + sense)*ro
+      werr = MAX(werr, ABS(vals(k, col_of(names, 'Twist1')) - twist))
+      terr = MAX(terr, ABS(vals(k, col_of(names, 'Torq1N1')) - GJ*twist*D2R/L), &
+                 ABS(vals(k, col_of(names, 'Torq1N41')) - GJ*twist*D2R/L))
+    END DO
+    IF (nrow == 0) THEN
+      werr = HUGE(1.0_wp)
+      terr = HUGE(1.0_wp)
+    END IF
+    WRITE (*, '(A,A,ES10.3,A,ES10.3,A)') '  ', TRIM(label)//': Twist1 error ', werr, ' deg, torque error ', terr, &
+      ' N m'
+    CALL require(werr <= 1.0e-6_wp, TRIM(label)//': Twist1 = Pretwist - roll(A) - roll(B) at every step')
+    CALL require(terr <= 1.0e-6_wp*GJ, TRIM(label)//': Torq = GJ Twist / L at both ends at every step')
+  END SUBROUTINE check_two_moving_roll
 
   SUBROUTINE check_refusal()
     !! Gate 4.
