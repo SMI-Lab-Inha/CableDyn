@@ -15,7 +15,8 @@
 #                to openfast.exe with no errors;
 #   2. IDENTITY -- a coupled smoke run actually initializes the CableDyn module (the
 #                DispNVD identity banner appears in the OpenFAST log output; a build that
-#                silently fell back to another mooring module fails here);
+#                silently fell back to another mooring module fails here), and the
+#                executable names itself OpenFAST-<OpenFAST base>-CableDyn-<version>;
 #   3. RUN    -- the smoke case completes (exit 0) and its .out carries finite data to the
 #                final row (no NaN/Infinity).
 #
@@ -191,6 +192,14 @@ Step ("run smoke (TMax = {0} s)" -f $TMax) {
     # echoed path or file name must never satisfy the identity check
     if ($logText -notmatch 'Running CableDyn \(') {
         $script:failures += 'IDENTITY: the CableDyn module banner never appeared -- CompMooring=5 did not initialize'
+    }
+    # the executable names its OpenFAST base and the CableDyn version (patch 0021), never a
+    # '-dirty' describe of the patched tree
+    $cdCMake = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\CMakeLists.txt') -Raw
+    $cdVersion = [regex]::Match($cdCMake, 'project\(CableDynCore VERSION (\d+\.\d+\.\d+)').Groups[1].Value
+    $idPattern = '(?m)^\s*OpenFAST-v\d+\.\d+\.\d+(-\d+-g[0-9a-f]+)?-CableDyn-' + [regex]::Escape($cdVersion) + '\s*$'
+    if ($logText -notmatch $idPattern -or $logText -match 'OpenFAST-\S*dirty') {
+        $script:failures += "IDENTITY: the OpenFAST banner does not read OpenFAST-<base>-CableDyn-$cdVersion"
     }
 }
 

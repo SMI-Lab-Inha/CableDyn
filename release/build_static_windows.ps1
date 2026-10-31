@@ -190,6 +190,18 @@ Invoke-StaticToolchain "cmake --build `"$cdBuild`" --target cabledyn_core cabled
     -OpenFASTRoot $OpenFASTRoot -CableDynRoot $CableDynRoot -CableDynBuildDir $cdBuild `
     -LinkLibraries $lapackLibraries
 
+# The identity openfast.exe must report, derived here independently of the integration script:
+# the describe of the pinned OpenFAST commit (never '-dirty') and the CableDyn project version.
+$ofDescribe = "$(& git -C $OpenFASTRoot describe --tags --abbrev=8)".Trim()
+if ($LASTEXITCODE -ne 0 -or $ofDescribe -notmatch '^v\d+\.\d+\.\d+') {
+    throw "the OpenFAST checkout $OpenFASTRoot is not described by a release tag ('$ofDescribe')"
+}
+if ((Get-Content -LiteralPath (Join-Path $CableDynRoot 'CMakeLists.txt') -Raw) -notmatch
+        'project\(CableDynCore VERSION (\d+\.\d+\.\d+)') {
+    throw 'CableDyn project version not found in CMakeLists.txt'
+}
+$expectedOpenFASTVersion = "$ofDescribe-CableDyn-$($Matches[1])"
+
 $devenv = Join-Path $vsRoot 'Common7\IDE\devenv.com'
 if (-not (Test-Path -LiteralPath $devenv)) { throw "Visual Studio command-line builder not found: $devenv" }
 $openFastBuild = "`"$devenv`" `"$OpenFASTRoot\vs-build\OpenFAST.sln`" /Build `"Release|x64`" " +
@@ -228,6 +240,14 @@ try {
     if ($versionRun.Text -notmatch 'Build\s+x86-64-v3') {
         throw "CableDyn_driver.exe is not the x86-64-v3 build with the processor check`n$($versionRun.Text)"
     }
+    # Identity gate: openfast.exe names its OpenFAST base and the CableDyn version.
+    $ofVersionRun = Invoke-NativeCapture $openfast @('-v')
+    Write-Host $ofVersionRun.Text
+    if ($ofVersionRun.ExitCode -ne 0 -or $ofVersionRun.Text -match 'dirty' -or
+        $ofVersionRun.Text -notmatch "(?m)^\s*OpenFAST-$([regex]::Escape($expectedOpenFASTVersion))\s*$") {
+        throw "openfast.exe -v does not report OpenFAST-$expectedOpenFASTVersion`n$($ofVersionRun.Text)"
+    }
+    Write-Host "PASS openfast.exe identity: OpenFAST-$expectedOpenFASTVersion"
     # On a processor without x86-64-v3 both executables stop at start with the message
     # (simulated here): exit 3 before any CableDyn or OpenFAST code prints.
     $env:CABLEDYN_CPU_GUARD_SIMULATE = 'SIMULATED-FEATURE'
