@@ -7,8 +7,9 @@
 !>     pretwist: Torq = GJ Phi / L at every node, Twist<L> = 720 deg, Twist<L>N<J> linear from
 !>     End A; torsional end springs add their compliance;
 !>  2. backward compatibility: the same deck with Free torsion columns (any normal), or with one
-!>     end restrained only, writes the same .out bytes as the 6-column rows; Rigid, Infinity,
-!>     Inf and a quoted "Rigid" are one restraint;
+!>     end restrained only on a 10-column LINE TYPES row (no GJ, so its torsion is not solved),
+!>     writes the same .out bytes as the 6-column rows; Rigid, Infinity, Inf and a quoted
+!>     "Rigid" are one restraint;
 !>  3. a pretwist sweep to three turns on a sagging clamped line: the torque grows in equal
 !>     steps (no 2 pi slip) and Twist<L> follows the pretwist;
 !>  4. body torque return: a massive Rigid6 body (attitude rolled, pitched and yawed) holding a
@@ -845,8 +846,8 @@ CONTAINS
   END SUBROUTINE expect_error
 
   SUBROUTINE check_one_end_two_moving()
-    !! One restrained end is ignored before the torsion rules: on a line with two moving ends
-    !! (Coupled to Free, dynamic) the one-end row gets exactly the verdict of the six-column rows,
+    !! One restrained end on a line with two moving ends (Coupled to Free, dynamic) is not solved
+    !! in torsion (it is noted): the one-end row gets exactly the verdict of the six-column rows,
     !! not the torsion rule "two moving ends".
     LOGICAL :: ok0, ok1
     CHARACTER(512) :: em0, em1
@@ -926,7 +927,8 @@ CONTAINS
     CALL straight_deck('tdeck_e8.dat', 'Pinned 1 0 0 Rigid 0 0 1 0', 'Pinned 1 0 0 Free 0 0 1 0', &
                        [CHARACTER(16) :: 'FairTen1'], tei0)
     CALL expect_error('torsion on an EI = 0 line is named', 'tdeck_e8.dat', 'tdeck_e8', 'require a finite-EI line')
-    CALL straight_deck('tdeck_e9.dat', 'Rigid 1 0 0 Rigid 0 0 1 0', 'Rigid 1 0 0 Free 0 0 1 720', OUTS)
+    ! (a line restrained at one end only is solved in torsion: test_torsion_one_end)
+    CALL straight_deck('tdeck_e9.dat', 'Rigid 1 0 0 Free 0 0 1 0', 'Rigid 1 0 0 Free 0 0 1 720', OUTS)
     CALL expect_error('a torque channel on a line without torsion is named', 'tdeck_e9.dat', 'tdeck_e9', &
                       'carries no torque')
     CALL write_deck('tdeck_e10.dat', [neutral_type], no_rows, &
@@ -968,9 +970,9 @@ CONTAINS
                     [CHARACTER(16) :: '1 1 2 -'], [CHARACTER(24) :: '1 cab 100.0 40'], &
                     [CHARACTER(96) :: '1 A Rigid 1 0 0 Rigid 0 0 1 0', '1 B Rigid 1 0 0 Rigid 0 0 1 90'], &
                     [CHARACTER(24) :: '0.1 dtM'], [CHARACTER(16) :: 'FairTen1'])
-    ! a caller that does not pass the fairlead orientation (the C API, the standalone mixed
-    ! route) is refused by name; one that does (the OpenFAST and FAST.Farm shells) builds the
-    ! line with its torsion
+    ! a caller that does not pass the fairlead orientation (the C API) is refused by name; one
+    ! that does (the OpenFAST and FAST.Farm shells, the standalone mixed route) builds the line
+    ! with its torsion
     CALL CD_Init_Deck_Aggregate('tdeck_e12.dat', 0.1_wp, agg, es, em)
     CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'needs a host that turns its fairlead frame') > 0, &
                  'an aggregate caller without orientations refuses torsion by name (got: '//TRIM(em)//')')
@@ -1021,8 +1023,9 @@ CONTAINS
   END SUBROUTINE write_lines
 
   SUBROUTINE check_scope_refusals()
-    !! 6 (continued). Torsion outside its scope stops by name: End A on a rod end and End A on a
-    !! Point3 body; a torsional line carrying ATTACHMENTS solves (test_torsion_attachments).
+    !! 6 (continued). Torsion outside its scope stops by name: End A on a pinned rod (a Fixed rod
+    !! end is supported, test_rod_end_torsion) and End A on a Point3 body; a torsional line
+    !! carrying ATTACHMENTS solves (test_torsion_attachments).
     CHARACTER(120) :: tail(9), ty(4)
     ty(1) = '--- LINE TYPES ---'
     ty(2) = 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
@@ -1042,14 +1045,15 @@ CONTAINS
                                       'Name Diam Mass Cd Ca CdEnd CaEnd', '(-) (m) (kg/m) (-) (-) (-) (-)', &
                                       'arm 0.6 400.0 1.0 1.0 0.0 0.0', '--- RODS ---', &
                                       'ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs', &
-                                     '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)', '1 arm Fixed 0 0 -40 0 0 -50 4 -', &
+                                    '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)', '1 arm Pinned 0 0 -40 0 0 -50 4 -', &
                           '--- POINTS ---', 'ID Type X Y Z Mass Vol CdA Ca', '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)', &
                       '2 Fixed 100.0 0.0 -50.0 0 0 0 0', '--- LINES ---', 'ID NodeA NodeB Outputs', '(-) (-) (-) (-)', &
                                       '1 R1B 2 -', tail(1:4), '--- END CONNECTIONS ---', &
                                       'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist', &
                         '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)', '1 A Rigid 0 0 -1 Rigid 1 0 0 0', &
                                       '1 B Rigid 1 0 0 Rigid 0 0 1 0', tail(5:9)])
-    CALL expect_error('a torsional end on a rod is named', 'tdeck_s1.dat', 'tdeck_s1', 'on a rod end is not supported')
+    CALL expect_error('a torsional end on a pinned rod is named', 'tdeck_s1.dat', 'tdeck_s1', &
+                      'on the end of ROD 1 (pinned) is not supported')
     ! End A on a Point3 body
     CALL write_lines('tdeck_s2.dat', [CHARACTER(120) :: 'torsion scope', ty, '--- BODIES ---', &
                                       'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca', &

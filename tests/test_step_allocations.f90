@@ -23,15 +23,21 @@ PROGRAM test_step_allocations
   !! committed-state outputs (CD_HFMF_SetCoupledKinematics, CD_HFMF_CalcOutput with the connection
   !! moment, both end forces, the energy and the torque query) are gated as well. With "nodal"
   !! the same cable carries the nodal twist (polar inertia and torsional damping), with its
-  !! 7-DOF-per-node band and the node-torque and element-twist queries.
+  !! 7-DOF-per-node band and the node-torque and element-twist queries; with "free" the nodal
+  !! twist of the same cable free in torsion at its held end (restrained at the coupled end only).
   !!
   !! With "current_grid" the gate runs the evaluation of a MoorDyn-C current grid (Currents 2 and
   !! 5) that every standalone step makes at every node: CD_Current_Grid_Velocity, and the gradient
   !! of the EI = 0 static tangent (CD_Current_Grid_Gradient), at points inside and outside a
   !! sheared grid and at times before, inside and past its last sample.
   !!
+  !! With "motion_roll" or "motion_vessel" the gate runs the standalone driver's march of a mixed
+  !! EI = 0 + finite-EI deck with the deck's prescribed motion (CD_AGG_MotionKinematics, then
+  !! CD_AGG_Step_Moving with the roll column or with the vessel orientation and rates): a straight
+  !! line restrained in torsion whose End A rolls about its axis, beside an EI = 0 chain.
+  !!
   !! Usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]
-  !!        test_step_allocations torsion | nodal | current_grid
+  !!        test_step_allocations torsion | nodal | free | current_grid | motion_roll | motion_vessel
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT, C_LONG_LONG
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
@@ -48,7 +54,8 @@ PROGRAM test_step_allocations
                                          CD_AGG_NFluidNodes, CD_AGG_NumChannels, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_Snapshot, CD_AGG_SetFluidFields, CD_AGG_Step_Moving, &
                                          CD_AGG_CalcOutput, CD_AGG_EvalChannel, CD_AGG_End, &
-                                         CD_AGG_Range_Sample
+                                         CD_AGG_Range_Sample, CD_AGG_UpdateStates_Moving, CD_AGG_MotionKinematics, &
+                                         CD_AGG_Refresh_Accelerations
   IMPLICIT NONE
   INTERFACE
     FUNCTION cd_test_allocation_count() BIND(C, NAME='cd_test_allocation_count') RESULT(n)
@@ -74,13 +81,17 @@ PROGRAM test_step_allocations
 
   IF (COMMAND_ARGUMENT_COUNT() == 1) THEN
     CALL GET_COMMAND_ARGUMENT(1, arg)
-    IF (TRIM(arg) == 'current_grid') THEN
+    SELECT CASE (TRIM(arg))
+    CASE ('torsion', 'nodal', 'free')
+      CALL torsion_gate(TRIM(arg) /= 'torsion', TRIM(arg) == 'free')
+    CASE ('current_grid')
       CALL current_grid_gate()
-      STOP
-    END IF
-    IF (TRIM(arg) /= 'torsion' .AND. TRIM(arg) /= 'nodal') &
-      ERROR STOP 'a single argument must be "torsion", "nodal" or "current_grid"'
-    CALL torsion_gate(TRIM(arg) == 'nodal')
+    CASE ('motion_roll', 'motion_vessel')
+      CALL motion_gate(TRIM(arg) == 'motion_vessel')
+    CASE DEFAULT
+      ERROR STOP 'a single argument must be "torsion", "nodal", "free", "current_grid", "motion_roll" or '// &
+        '"motion_vessel"'
+    END SELECT
     STOP
   END IF
   IF (COMMAND_ARGUMENT_COUNT() /= 3 .AND. COMMAND_ARGUMENT_COUNT() /= 4) THEN
@@ -184,10 +195,10 @@ CONTAINS
     END DO
   END SUBROUTINE march
 
-  SUBROUTINE torsion_gate(nodal)
+  SUBROUTINE torsion_gate(nodal, free_end)
     !! Zero heap allocation in CD_HFMF_UpdateStates of a cable with condensed torsion, or with the
-    !! nodal twist.
-    LOGICAL, INTENT(IN) :: nodal
+    !! nodal twist (free_end: free in torsion at the held end 1).
+    LOGICAL, INTENT(IN) :: nodal, free_end
     INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NDOF = 6*NN, N_WARM = 40, N_COUNT = 200
     REAL(wp), PARAMETER :: LL = 10.0_wp, DTT = 0.01_wp
     TYPE(CD_HFMF_ModuleType) :: cab
@@ -228,6 +239,7 @@ CONTAINS
       tors%irn = 0.05_wp
       tors%bt = 0.5_wp
     END IF
+    IF (free_end) tors%end_free(1) = .TRUE.
     tors%has_theta = .TRUE.
     frame(:, 1) = [1.0_wp, 0.0_wp, 0.0_wp]
     frame(:, 2) = [0.0_wp, 0.0_wp, 1.0_wp]
@@ -334,6 +346,127 @@ CONTAINS
     END IF
     PRINT '(A)', 'PASS: no heap allocation in the current grid evaluation'
   END SUBROUTINE current_grid_gate
+
+  SUBROUTINE motion_gate(vessel)
+    !! Zero heap allocation in the standalone driver's per-step march of a mixed deck with its
+    !! prescribed motion: the 100 m straight neutral line of test_mixed_route_torsion, clamped and
+    !! restrained in torsion at both ends, End A rolled about the line axis (by a vessel, or by the
+    !! motionFile roll column), beside a chain on a second moving point.
+    LOGICAL, INTENT(IN) :: vessel
+    INTEGER, PARAMETER :: N_WARM = 40, N_COUNT = 160, NT = N_WARM + N_COUNT
+    REAL(wp), PARAMETER :: DTM = 0.05_wp, PI = 3.14159265358979323846_wp
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: mag
+    REAL(wp), ALLOCATABLE :: p(:, :), v(:, :), a(:, :), ld(:, :), o(:, :, :), w(:, :), al(:, :), roll(:)
+    REAL(wp) :: t, ro, dro, d2ro, om
+    INTEGER :: u, k, n, n_it
+    INTEGER(C_LONG_LONG) :: c0, n_alloc
+    LOGICAL :: turns, rolls, converged, stalled
+    ! one file root per mode: the two gates may run at once in one directory
+    CHARACTER(32) :: root
+    root = MERGE('step_alloc_motion_vessel', 'step_alloc_motion_roll  ', vessel)
+    om = 2.0_wp*PI/10.0_wp
+    OPEN (NEWUNIT=u, FILE=TRIM(root)//'.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, NT
+      t = DTM*k
+      ro = 15.0_wp*(1.0_wp - COS(om*t))
+      dro = 15.0_wp*om*SIN(om*t)
+      d2ro = 15.0_wp*om*om*COS(om*t)
+      IF (vessel) THEN
+        WRITE (u, '(F8.3,A,ES25.16E3,A,ES25.16E3,A,ES25.16E3,A)') t, ' 0 0 -50 ', ro, ' 0 0 0 0 0 ', dro*PI/180.0_wp, &
+          ' 0 0 0 0 0 ', d2ro*PI/180.0_wp, ' 0 0'
+      ELSE
+        WRITE (u, '(F8.3,A,ES25.16E3)') t, ' 1 0 0 -50 0 0 0 0 0 0 ', ro
+        WRITE (u, '(F8.3,A)') t, ' 3 0 10 -50 0 0 0 0 0 0'
+      END IF
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=TRIM(root)//'.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'step allocation gate: mixed deck with prescribed motion'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    WRITE (u, '(A,ES24.16,A)') 'cab 0.2 ', 1025.0_wp*0.01_wp*PI, ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-12 0 0 0 0'
+    WRITE (u, '(A)') 'chain 0.1 50.0 1.0e9 -1.0 0.0 0 0 0 0 1.37 0.64 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 '//MERGE('Vessel ', 'Coupled', vessel)//' 0.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Fixed 100.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '3 '//MERGE('Vessel ', 'Coupled', vessel)//' 0.0 10.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '4 Fixed 0.0 100.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '2 3 4 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 cab 100.0 40'
+    WRITE (u, '(A)') '2 chain 110.0 20'
+    WRITE (u, '(A)') '--- END CONNECTIONS ---'
+    WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+    WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
+    WRITE (u, '(A)') '1 A Rigid 1 0 0 Rigid 0 0 1 0'
+    WRITE (u, '(A)') '1 B Rigid 1 0 0 Rigid 0 0 1 90'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '0.05 dtM'
+    WRITE (u, '(A)') '10.0 TMax'
+    IF (vessel) THEN
+      WRITE (u, '(A)') TRIM(root)//'.txt vesselMotion'
+      WRITE (u, '(A)') '0|0|-50 vesselRef'
+    ELSE
+      WRITE (u, '(A)') TRIM(root)//'.txt motionFile'
+    END IF
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Torq1N1'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    ALLOCATE (mag)
+    CALL CD_AGG_Init_From_Deck(mag, TRIM(root)//'.dat', DTM, es, em, forbid_deck_ambient=.TRUE., &
+                               run_tmax=10.0_wp, host_orientation=.TRUE., prescribed_motion=.TRUE.)
+    CALL check('motion deck initialization')
+    n = CD_AGG_NMovingPoints(mag, es, em)
+    CALL check('motion moving-point count')
+    ALLOCATE (p(3, n), v(3, n), a(3, n), ld(3, n), o(3, 3, n), w(3, n), al(3, n), roll(n))
+    CALL CD_AGG_GetMovingPointMesh(mag, p, v, a, ld, es, em)
+    CALL check('motion initial mesh')
+    CALL CD_AGG_MotionKinematics(mag, 1, p, v, a, o, w, al, roll, turns, rolls, es, em)
+    CALL check('motion row 1')
+    IF (turns .EQV. rolls) ERROR STOP 'the motion gate drives neither or both frame inputs'
+    CALL CD_AGG_UpdateStates_Moving(mag, p, v, a, es, em)
+    CALL check('motion row 1 transfer')
+    CALL CD_AGG_Refresh_Accelerations(mag, es, em)
+    CALL check('motion row 1 accelerations')
+    n_alloc = 0
+    DO k = 1, NT
+      c0 = cd_test_allocation_count()
+      IF (k > N_WARM) CALL cd_test_allocation_counting(1_C_INT)
+      CALL CD_AGG_MotionKinematics(mag, k + 1, p, v, a, o, w, al, roll, turns, rolls, es, em)
+      IF (es == 0) THEN
+        IF (turns) THEN
+          CALL CD_AGG_Step_Moving(mag, DTM, p, v, a, converged, stalled, n_it, es, em, t_committed=DTM*k, &
+                                  orientation=o, angular_velocity=w, angular_acceleration=al)
+        ELSE
+          CALL CD_AGG_Step_Moving(mag, DTM, p, v, a, converged, stalled, n_it, es, em, t_committed=DTM*k, roll=roll)
+        END IF
+      END IF
+      CALL cd_test_allocation_counting(0_C_INT)
+      CALL check('motion step')
+      IF (.NOT. converged .OR. stalled) ERROR STOP 'motion step did not converge'
+      n_alloc = n_alloc + (cd_test_allocation_count() - c0)
+    END DO
+    CALL CD_AGG_End(mag, es, em)
+    PRINT '(A,I0,A,I0,A)', 'mixed deck with '//MERGE('vessel motion', 'roll column  ', vessel)//': ', N_COUNT, &
+      ' counted steps, ', n_alloc, ' heap allocations in the steps'
+    IF (n_alloc /= 0) THEN
+      PRINT '(A)', 'FAIL: the prescribed-motion march of a mixed deck allocated after warm-up'
+      ERROR STOP 1
+    END IF
+    PRINT '(A)', 'PASS: no heap allocation in the prescribed-motion march of a mixed deck after warm-up'
+  END SUBROUTINE motion_gate
 
   SUBROUTINE check(stage)
     CHARACTER(*), INTENT(IN) :: stage

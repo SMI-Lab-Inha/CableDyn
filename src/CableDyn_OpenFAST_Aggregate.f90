@@ -57,7 +57,7 @@ MODULE CableDyn_OpenFAST_Aggregate
                                           CD_HFMF_End, CD_HFMF_OK, CD_HFMF_BADINPUT, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, &
                                           CD_HFMF_Set_Held_Fluid, CD_HFMF_NNodes, CD_HFMF_GetNodePositions, &
-                                          CD_HFMF_Set_SegmentLength
+                                          CD_HFMF_Set_SegmentLength, CD_HFMF_Refresh_Acceleration
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Profile_Enabled, CD_HermiteCableControlSaveType, &
                                           CD_HermiteCable_Dyn_Save_Control, CD_HermiteCable_Dyn_Restore_Control, &
                                           CD_HCDYN_OK
@@ -82,7 +82,10 @@ MODULE CableDyn_OpenFAST_Aggregate
                                  CD_Rod_NHost, CD_Rod_SetHostKinematics, CD_Rod_GetHostKinematics, &
                                  CD_Rod_ScatterHostPoints, CD_Rod_HostWrench, CD_Rod_Stage, CD_Rod_Unstage, &
                                  CD_Rigid6_StartAccelerations, CD_Rod_StartAccelerations, &
-                                 CD_Deck_Range_Sample_Aggregate, CD_Deck_Range_Write
+                                 CD_Deck_Range_Sample_Aggregate, CD_Deck_Range_Write, &
+                                 CD_MotionRuntimeType, CD_Motion_Active, CD_Motion_NColumns, &
+                                 CD_Motion_Has_Rotation, CD_Motion_Has_Roll, CD_Motion_Kinematics, &
+                                 CD_Motion_Deck_Positions, CD_Motion_End
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
   USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
                              CD_Get_System_Line_State, &
@@ -121,6 +124,8 @@ MODULE CableDyn_OpenFAST_Aggregate
   PUBLIC :: CD_AGG_Get_Failure_Flags, CD_AGG_Set_Failure_Flags
   PUBLIC :: CD_AGG_NCtrlChans, CD_AGG_Apply_LineControl
   PUBLIC :: CD_AGG_IsInitialized
+  ! The deck's own prescribed motion on the standalone mixed route (not a coupled-host surface)
+  PUBLIC :: CD_AGG_HasMotion, CD_AGG_MotionKinematics, CD_AGG_Refresh_Accelerations
   ! OpenFAST CompMooring=5 output-channel surface (consumed by CableDyn_OF): the deck OUTPUTS
   ! channel count/header/unit for registration, and the per-channel evaluator for CalcOutput.
   PUBLIC :: CD_AGG_NumChannels
@@ -160,6 +165,13 @@ MODULE CableDyn_OpenFAST_Aggregate
     REAL(wp), ALLOCATABLE :: mv_pos(:, :), mv_vel(:, :), mv_acc(:, :), mv_load(:, :), mv_moment(:, :)
     REAL(wp), ALLOCATABLE :: mv_omega(:, :), mv_alpha(:, :)
     REAL(wp), ALLOCATABLE :: mv_orient(:, :, :)
+    ! The roll of each moving column of a step (CD_AGG_Step_Moving roll), and the static
+    ! imposed twist Phi_0 = Pretwist(B) - Pretwist(A) of each cable restrained in torsion: the
+    ! step's imposed twist is Phi_0 - roll.
+    REAL(wp), ALLOCATABLE :: mv_roll(:)
+    REAL(wp), ALLOCATABLE :: cable_phi0(:)
+    ! The deck's own prescribed motion (standalone mixed route; inactive for a coupled host).
+    TYPE(CD_MotionRuntimeType) :: motion
     ! Per-cable status staging lets independent finite-EI cables advance concurrently while
     ! preserving deterministic, cable-order error reporting after the parallel region.
     INTEGER, ALLOCATABLE :: cable_stat(:)
@@ -259,7 +271,7 @@ CONTAINS
   SUBROUTINE CD_AGG_Init_From_Deck(self, deck_path, dt, ErrStat, ErrMsg, env_gravity, env_rho_water, env_wtrdpth, &
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
-                                   range_files, host_orientation, static_current)
+                                   range_files, host_orientation, static_current, prescribed_motion, static_run)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -301,6 +313,12 @@ CONTAINS
     ! static_current (4, n): the host's steady current (z, ux, uy, uz by ascending z) for the
     ! static solves only (see CD_Init_Deck_Aggregate)
     REAL(wp), INTENT(IN), OPTIONAL :: static_current(:, :)
+    ! prescribed_motion: the caller marches the deck's own motionFile or vesselMotion table
+    ! (CD_AGG_MotionKinematics; the standalone driver, see CD_Init_Deck_Aggregate)
+    LOGICAL, INTENT(IN), OPTIONAL :: prescribed_motion
+    ! static_run: the caller marches no step (the standalone TMax = 0 run; see
+    ! CD_Init_Deck_Aggregate)
+    LOGICAL, INTENT(IN), OPTIONAL :: static_run
 
     ! Both bundles (about 70 KB together) are built on the heap: initialisation runs on the
     ! thread of the calling host, whose stack size CableDyn does not choose.
@@ -340,7 +358,8 @@ CONTAINS
                                 turbine_ref_pos=turbine_ref_pos, farm_ptfm_init=farm_ptfm_init, &
                                 forbid_deck_ambient=forbid_deck_ambient, run_tmax=run_tmax, &
                                 range_files=range_files, host_orientation=host_orientation, &
-                                static_current=static_current)
+                                static_current=static_current, prescribed_motion=prescribed_motion, &
+                                static_run=static_run)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF
@@ -458,6 +477,7 @@ CONTAINS
     IF (ALLOCATED(parts%line_is_cable)) CALL MOVE_ALLOC(parts%line_is_cable, candidate%line_is_cable)
     IF (ALLOCATED(parts%line_obj_index)) CALL MOVE_ALLOC(parts%line_obj_index, candidate%line_obj_index)
     candidate%ranges = parts%ranges
+    candidate%motion = parts%motion
     IF (ALLOCATED(parts%cable_points)) THEN
       CALL MOVE_ALLOC(parts%cable_points, candidate%cable_points)
     ELSE
@@ -501,13 +521,19 @@ CONTAINS
     ALLOCATE (candidate%mv_pos(3, ncp_total), candidate%mv_vel(3, ncp_total), candidate%mv_acc(3, ncp_total), &
               candidate%mv_load(3, ncp_total), candidate%mv_moment(3, ncp_total), &
               candidate%mv_omega(3, ncp_total), candidate%mv_alpha(3, ncp_total), &
-              candidate%mv_orient(3, 3, ncp_total), STAT=istat)
+              candidate%mv_orient(3, 3, ncp_total), candidate%mv_roll(ncp_total), &
+              candidate%cable_phi0(candidate%ncable), STAT=istat)
     IF (istat /= 0) THEN
       ErrStat = CD_AGG_ALLOCFAIL
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: moving-surface scratch allocation failed'
       CALL CD_AGG_End(candidate, es, em)
       RETURN
     END IF
+    candidate%mv_roll = CD_ZERO
+    candidate%cable_phi0 = CD_ZERO
+    DO ich = 1, candidate%ncable
+      IF (candidate%cables(ich)%line%torsion%active) candidate%cable_phi0(ich) = candidate%cables(ich)%line%torsion%phi
+    END DO
     IF (candidate%ncable > 0) THEN
       ALLOCATE (candidate%cable_stat(candidate%ncable), candidate%cable_msg(candidate%ncable), STAT=istat)
       IF (istat /= 0) THEN
@@ -537,6 +563,13 @@ CONTAINS
     END IF
     candidate%dt = dt                  ! freeze the coupling step for the fixed-dt Step_Moving guard
     candidate%initialized = .TRUE.
+    IF (CD_Motion_Active(candidate%motion)) THEN
+      CALL check_motion_columns(candidate, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) THEN
+        CALL CD_AGG_End(candidate, es, em)
+        RETURN
+      END IF
+    END IF
     CALL CD_AGG_End(self, es, em)
     self = candidate
     CALL CD_AGG_End(candidate, es, em)
@@ -921,7 +954,7 @@ CONTAINS
   END SUBROUTINE CD_AGG_UpdateStates_Moving
 
   SUBROUTINE CD_AGG_Step_Moving(self, dt, position, velocity, acceleration, converged, stalled, n_iter, ErrStat, &
-                                ErrMsg, t_committed, orientation, angular_velocity, angular_acceleration)
+                                ErrMsg, t_committed, orientation, angular_velocity, angular_acceleration, roll)
     !! Advance every owned object one coupling step of dt with the moving points prescribed.
     !! The EI=0 system columns route to CD_FMF_Step_Moving; each cable's fairlead column
     !! routes to CD_HFMF_UpdateStates (the implicit prescribed-motion step). Aggregate
@@ -951,9 +984,16 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: t_committed
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    ! roll (ncp_total) [rad]: the roll of the line end frames at each moving point about their
+    ! directors at t + dt, from the static state, right-handed about the tangent into the line
+    ! (the standalone motionFile roll column). A cable restrained in torsion takes the imposed
+    ! twist Phi = Phi_0 - roll of its column, Phi_0 = Pretwist(B) - Pretwist(A), as on the
+    ! standalone cubic-Hermite route; the other columns carry no twist and ignore it. Without
+    ! it the imposed twist is held.
+    REAL(wp), INTENT(IN), OPTIONAL :: roll(:)
 
     INTEGER :: c, col, es, nsys, nsub
-    LOGICAL :: csys, ssys, staged
+    LOGICAL :: csys, ssys, staged, use_roll
     REAL(wp) :: t_start
     CHARACTER(1024) :: em
 
@@ -1021,12 +1061,27 @@ CONTAINS
         RETURN
       END IF
     END IF
+    use_roll = PRESENT(roll)
+    IF (use_roll) THEN
+      IF (SIZE(roll) /= ncp_all(self)) THEN
+        ErrStat = CD_AGG_BADINPUT
+        ErrMsg = 'CableDyn_OpenFAST_Aggregate: roll must be shaped (ncp_total)'
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(roll)) THEN
+        ErrStat = CD_AGG_BADINPUT
+        ErrMsg = 'CableDyn_OpenFAST_Aggregate: roll must be finite'
+        RETURN
+      END IF
+    END IF
     self%mv_omega = CD_ZERO
     self%mv_alpha = CD_ZERO
     IF (PRESENT(angular_velocity)) THEN
       self%mv_omega = angular_velocity
       self%mv_alpha = angular_acceleration
     END IF
+    self%mv_roll = CD_ZERO
+    IF (use_roll) self%mv_roll = roll
     ! stage: snapshot every sub-object before any of them steps (multi-object only; a
     ! single sub-object is already atomic -- the hot mooring-only path skips this).
     ! A Rigid6 deck is single-subobject (ncable == 0) yet still needs staging: its branch
@@ -1178,30 +1233,29 @@ CONTAINS
       n_iter = MAX(n_iter, nsys)
     END IF
     IF (PRESENT(orientation)) THEN
-      !$OMP PARALLEL DEFAULT(NONE) SHARED(self, position, velocity, acceleration, orientation) &
+      !$OMP PARALLEL DEFAULT(NONE) SHARED(self, position, velocity, acceleration, orientation, use_roll) &
       !$OMP   PRIVATE(c, col, es, em) &
       !$OMP   IF(self%ncable > 1 .AND. .NOT. CD_HermiteCable_Dyn_Profile_Enabled())
       CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       !$OMP DO SCHEDULE(STATIC)
       DO c = 1, self%ncable
         col = self%ncp_sys + c
-        CALL CD_HFMF_UpdateStates(self%cables(c), position(:, col), velocity(:, col), acceleration(:, col), &
-                                  es, em, orientation(:, :, col), self%mv_omega(:, col), self%mv_alpha(:, col))
+        CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em, &
+                        orientation(:, :, col))
         self%cable_stat(c) = es
         self%cable_msg(c) = em
       END DO
       !$OMP END DO
       !$OMP END PARALLEL
     ELSE
-      !$OMP PARALLEL DEFAULT(NONE) SHARED(self, position, velocity, acceleration) PRIVATE(c, col, es, em) &
+      !$OMP PARALLEL DEFAULT(NONE) SHARED(self, position, velocity, acceleration, use_roll) &
+      !$OMP   PRIVATE(c, col, es, em) &
       !$OMP   IF(self%ncable > 1 .AND. .NOT. CD_HermiteCable_Dyn_Profile_Enabled())
       CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       !$OMP DO SCHEDULE(STATIC)
       DO c = 1, self%ncable
         col = self%ncp_sys + c
-        CALL CD_HFMF_UpdateStates(self%cables(c), position(:, col), velocity(:, col), acceleration(:, col), es, em, &
-                                  u_angular_velocity=self%mv_omega(:, col), &
-                                  u_angular_acceleration=self%mv_alpha(:, col))
+        CALL step_cable(self, c, position(:, col), velocity(:, col), acceleration(:, col), use_roll, es, em)
         self%cable_stat(c) = es
         self%cable_msg(c) = em
       END DO
@@ -1269,6 +1323,146 @@ CONTAINS
       CALL undo_staged_step(self, ErrMsg)
     END SUBROUTINE rewind_step
   END SUBROUTINE CD_AGG_Step_Moving
+
+  SUBROUTINE step_cable(self, c, u_pos, u_vel, u_acc, use_roll, ErrStat, ErrMsg, u_orientation)
+    !! One cable's implicit step to its column's t + dt kinematics (CD_HFMF_UpdateStates): the
+    !! parent orientation when given, the column's angular rates, and with use_roll the imposed
+    !! twist Phi_0 - roll of a cable restrained in torsion. Touches cable c alone, so the cables
+    !! step concurrently.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(IN) :: c
+    REAL(wp), INTENT(IN) :: u_pos(3), u_vel(3), u_acc(3)
+    LOGICAL, INTENT(IN) :: use_roll
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(IN), OPTIONAL :: u_orientation(3, 3)
+    INTEGER :: col
+    REAL(wp) :: twist
+    col = self%ncp_sys + c
+    IF (use_roll .AND. self%cables(c)%line%torsion%active) THEN
+      twist = self%cable_phi0(c) - self%mv_roll(col)
+      IF (PRESENT(u_orientation)) THEN
+        CALL CD_HFMF_UpdateStates(self%cables(c), u_pos, u_vel, u_acc, ErrStat, ErrMsg, u_orientation, &
+                                  self%mv_omega(:, col), self%mv_alpha(:, col), u_twist=twist)
+      ELSE
+        CALL CD_HFMF_UpdateStates(self%cables(c), u_pos, u_vel, u_acc, ErrStat, ErrMsg, &
+                                  u_angular_velocity=self%mv_omega(:, col), &
+                                  u_angular_acceleration=self%mv_alpha(:, col), u_twist=twist)
+      END IF
+    ELSE IF (PRESENT(u_orientation)) THEN
+      CALL CD_HFMF_UpdateStates(self%cables(c), u_pos, u_vel, u_acc, ErrStat, ErrMsg, u_orientation, &
+                                self%mv_omega(:, col), self%mv_alpha(:, col))
+    ELSE
+      CALL CD_HFMF_UpdateStates(self%cables(c), u_pos, u_vel, u_acc, ErrStat, ErrMsg, &
+                                u_angular_velocity=self%mv_omega(:, col), &
+                                u_angular_acceleration=self%mv_alpha(:, col))
+    END IF
+  END SUBROUTINE step_cable
+
+  LOGICAL FUNCTION CD_AGG_HasMotion(self) RESULT(has)
+    !! The aggregate carries the deck's own prescribed motion (Init prescribed_motion).
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    has = self%initialized .AND. CD_Motion_Active(self%motion)
+  END FUNCTION CD_AGG_HasMotion
+
+  SUBROUTINE CD_AGG_MotionKinematics(self, time_index, position, velocity, acceleration, orientation, &
+                                     angular_velocity, angular_acceleration, roll, has_rotation, has_roll, &
+                                     ErrStat, ErrMsg)
+    !! Grid row time_index (1 = t 0) of the deck's prescribed motion over the moving surface,
+    !! shaped as CD_AGG_Step_Moving takes it: translations (3, ncp_total), the global-to-parent
+    !! DCM (3, 3, ncp_total) with the global-axis angular velocity and acceleration (3,
+    !! ncp_total), and the roll (ncp_total). has_rotation: a vesselMotion table, whose
+    !! orientation and rates the step takes (the fairlead end connection and torsion frames
+    !! turn with the vessel, as on the standalone cubic-Hermite route); has_roll: a motionFile
+    !! roll column the step takes as roll. Without them (motionFile point rows) the frames are
+    !! held and the step takes the translations alone.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    INTEGER, INTENT(IN) :: time_index
+    REAL(wp), INTENT(OUT) :: position(:, :), velocity(:, :), acceleration(:, :)
+    REAL(wp), INTENT(OUT) :: orientation(:, :, :), angular_velocity(:, :), angular_acceleration(:, :), roll(:)
+    LOGICAL, INTENT(OUT) :: has_rotation, has_roll
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(1024) :: em
+    has_rotation = .FALSE.
+    has_roll = .FALSE.
+    IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    IF (.NOT. CD_Motion_Active(self%motion)) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: the aggregate carries no prescribed motion'
+      RETURN
+    END IF
+    CALL CD_Motion_Kinematics(self%motion, time_index, position, velocity, acceleration, orientation, &
+                              angular_velocity, angular_acceleration, roll, es, em)
+    IF (es /= CD_DECKDRV_OK) THEN
+      CALL map_deck_status(es, em, ErrStat, ErrMsg)
+      RETURN
+    END IF
+    has_rotation = CD_Motion_Has_Rotation(self%motion)
+    has_roll = CD_Motion_Has_Roll(self%motion)
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_AGG_MotionKinematics
+
+  SUBROUTINE CD_AGG_Refresh_Accelerations(self, ErrStat, ErrMsg)
+    !! Recompute every cable's free-node acceleration from its complete residual at the
+    !! committed state, keeping the coupled node's prescribed acceleration
+    !! (CD_HFMF_Refresh_Acceleration): after CD_AGG_UpdateStates_Moving installs the first row
+    !! of a prescribed motion, so the first step does not start from the static acceleration
+    !! (the standalone cubic-Hermite route's row-1 station). The EI = 0 system is unchanged.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: c, es
+    CHARACTER(1024) :: em
+    IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    DO c = 1, self%ncable
+      CALL CD_HFMF_Refresh_Acceleration(self%cables(c), es, em)
+      IF (es /= CD_HFMF_OK) THEN
+        CALL map_hfmf_status(es, em, ErrStat, ErrMsg)
+        RETURN
+      END IF
+    END DO
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_AGG_Refresh_Accelerations
+
+  SUBROUTINE check_motion_columns(self, ErrStat, ErrMsg)
+    !! The prescribed-motion columns match the moving surface: one column per moving point, and
+    !! each column's driving point at that moving point's static position (a column map that
+    !! drifted from the aggregate's moving-set order would drive the wrong point).
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es, col
+    REAL(wp), ALLOCATABLE :: deck_pos(:, :)
+    CHARACTER(1024) :: em
+    IF (CD_Motion_NColumns(self%motion) /= ncp_all(self) .OR. self%nhost_rod + self%nhost_body > 0) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: the prescribed motion does not cover the moving surface'
+      RETURN
+    END IF
+    CALL CD_AGG_GetMovingPointMesh(self, self%mv_pos, self%mv_vel, self%mv_acc, self%mv_load, ErrStat, ErrMsg, &
+                                   cable_loads=.FALSE.)
+    IF (ErrStat /= CD_AGG_OK) RETURN
+    ALLOCATE (deck_pos(3, ncp_all(self)))
+    CALL CD_Motion_Deck_Positions(self%motion, deck_pos, es, em)
+    IF (es /= CD_DECKDRV_OK) THEN
+      CALL map_deck_status(es, em, ErrStat, ErrMsg)
+      RETURN
+    END IF
+    DO col = 1, ncp_all(self)
+      IF (ANY(ABS(deck_pos(:, col) - self%mv_pos(:, col)) > 1.0e-9_wp*(CD_ONE + MAXVAL(ABS(deck_pos(:, col)))))) THEN
+        ErrStat = CD_AGG_BADINPUT
+        WRITE (ErrMsg, '(A,I0,A)') 'CableDyn_OpenFAST_Aggregate: the prescribed motion of moving point ', col, &
+          ' is not keyed to that point'
+        RETURN
+      END IF
+    END DO
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+  END SUBROUTINE check_motion_columns
 
   SUBROUTINE CD_AGG_Snapshot(self, ErrStat, ErrMsg)
     !! Capture the committed state of EVERY sub-object (system + all cables), any
@@ -2020,6 +2214,9 @@ CONTAINS
     IF (ALLOCATED(self%mv_orient)) DEALLOCATE (self%mv_orient)
     IF (ALLOCATED(self%mv_omega)) DEALLOCATE (self%mv_omega)
     IF (ALLOCATED(self%mv_alpha)) DEALLOCATE (self%mv_alpha)
+    IF (ALLOCATED(self%mv_roll)) DEALLOCATE (self%mv_roll)
+    IF (ALLOCATED(self%cable_phi0)) DEALLOCATE (self%cable_phi0)
+    CALL CD_Motion_End(self%motion)
     IF (ALLOCATED(self%cable_stat)) DEALLOCATE (self%cable_stat)
     IF (ALLOCATED(self%cable_msg)) DEALLOCATE (self%cable_msg)
     IF (ALLOCATED(self%channels)) DEALLOCATE (self%channels)

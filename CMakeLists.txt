@@ -1443,6 +1443,14 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
   # And the MoorDyn-C current grid (Currents 2 and 5) every standalone step samples at the nodes.
   add_test(NAME step_allocations_current_grid COMMAND test_step_allocations current_grid)
   set_tests_properties(step_allocations_current_grid PROPERTIES LABELS "fortran;dynamic;memory")
+  # The standalone driver's march of a mixed deck with its prescribed motion (roll column, vessel).
+  add_test(NAME step_allocations_motion_roll COMMAND test_step_allocations motion_roll)
+  set_tests_properties(step_allocations_motion_roll PROPERTIES LABELS "fortran;dynamic;memory")
+  add_test(NAME step_allocations_motion_vessel COMMAND test_step_allocations motion_vessel)
+  set_tests_properties(step_allocations_motion_vessel PROPERTIES LABELS "fortran;dynamic;memory")
+  # And with the nodal twist of a line free in torsion at one end.
+  add_test(NAME step_allocations_torsion_one_end COMMAND test_step_allocations free)
+  set_tests_properties(step_allocations_torsion_one_end PROPERTIES LABELS "fortran;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)
@@ -2157,6 +2165,10 @@ add_test(NAME torsion_attachments
          COMMAND test_torsion_attachments ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_torsion_attachments.dat
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(torsion_attachments PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
+add_executable(test_rod_end_torsion tests/test_rod_end_torsion.f90)
+target_link_libraries(test_rod_end_torsion PRIVATE cabledyn_core)
+add_test(NAME rod_end_torsion COMMAND test_rod_end_torsion)
+set_tests_properties(rod_end_torsion PROPERTIES LABELS "fortran;driver;integration;static;dynamic")
 
 # Where the MoorDyn-parity features meet: a CoupledPinned body in a Currents 2/5 deck (refused on
 # the coupled aggregate for the current files, standalone for the body), CONTROL on viscoelastic
@@ -2199,6 +2211,14 @@ target_link_libraries(test_torsion_coupling PRIVATE cabledyn_core)
 add_test(NAME torsion_coupling COMMAND test_torsion_coupling)
 set_tests_properties(torsion_coupling PROPERTIES LABELS "fortran;unit;driver;integration;static")
 
+# Torsion and prescribed motion on the standalone mixed EI = 0 + finite-EI route (the driver
+# executable marches the aggregate): route equivalence with the cubic-Hermite route under vessel
+# and roll-column motion, quasi-static torque, roll-column refusal.
+add_executable(test_mixed_route_torsion tests/test_mixed_route_torsion.f90)
+target_link_libraries(test_mixed_route_torsion PRIVATE cabledyn_core)
+add_test(NAME mixed_route_torsion COMMAND test_mixed_route_torsion $<TARGET_FILE:cabledyn>)
+set_tests_properties(mixed_route_torsion PROPERTIES LABELS "fortran;driver;integration;dynamic")
+
 add_executable(test_coupled_torsion tests/test_coupled_torsion.f90)
 target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)
 add_test(NAME coupled_torsion COMMAND test_coupled_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -2211,6 +2231,13 @@ add_executable(test_lin_torsion tests/test_lin_torsion.f90)
 target_link_libraries(test_lin_torsion PRIVATE cabledyn_core)
 add_test(NAME lin_torsion COMMAND test_lin_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(lin_torsion PROPERTIES LABELS "fortran;unit;dynamic;openfast")
+# A line restrained in torsion at one end only: the clamped-free torsional modes and waves of the
+# nodal twist, the free end's coupling twist, the deck channels, the standalone driver and the
+# coupled aggregate.
+add_executable(test_torsion_one_end tests/test_torsion_one_end.f90)
+target_link_libraries(test_torsion_one_end PRIVATE cabledyn_core)
+add_test(NAME torsion_one_end COMMAND test_torsion_one_end WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(torsion_one_end PROPERTIES LABELS "fortran;unit;driver;integration;static;dynamic;openfast")
 
 add_executable(test_torsion_orcaflex tests/test_torsion_orcaflex.f90)
 target_link_libraries(test_torsion_orcaflex PRIVATE cabledyn_core)
@@ -2880,7 +2907,8 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_hermite_cable_control
       test_control_torsion
       test_endconn_spring
-      test_torsion_coupling)
+      test_torsion_coupling
+      test_torsion_one_end)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
   endforeach()
   target_compile_options(test_openfast_aggregate PRIVATE
@@ -2888,6 +2916,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                          -Wno-uninitialized
                          -Wno-maybe-uninitialized)
   target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
+  target_compile_options(test_torsion_one_end PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_syrope_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
   target_compile_options(test_viscoelastic_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
@@ -2933,6 +2962,7 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_hermite_torsion_kernel
       test_hermite_twist_kernel
       test_nodal_twist_dynamic
+      test_torsion_one_end
       test_hermite_torsion_static
       test_hermite_torsion_dynamic
       test_hermite_cable_static

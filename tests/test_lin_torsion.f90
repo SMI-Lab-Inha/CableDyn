@@ -28,6 +28,14 @@ PROGRAM test_lin_torsion
   !!      velocity of the platform about the line axis is Bt/L, the steady-roll torque of the
   !!      march (test_nodal_twist_dynamic D), and it vanishes without the frame rates; the moment
   !!      per unit angular acceleration is the held end section's polar inertia Irn l_e/2.
+  !!   O  one restrained end: the line of F free in torsion at End B (the anchor), then at End A
+  !!      (the fairlead); the free end's angle is a state too (N of them), and the twist modes of
+  !!      A are the clamped-free ones, the continuum's quarter-wave (2n - 1) pi/(2L) sqrt(GJ/Irn)
+  !!      within the lumped-inertia error and the lumped chain's 2 sqrt(GJ/Irn)/h
+  !!      sin((2n - 1) pi/(4N)) to 1e-6; a free end carries no torque, so the reduced roll
+  !!      stiffness vanishes (to 1e-6 of GJ/L): with End B free the platform turns the line as a
+  !!      whole (the feedthrough D, GJ/l_e, is cancelled by C A^-1 B), with End A free the platform
+  !!      roll does not reach the line at all.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_UpdateStates_Moving, &
@@ -59,13 +67,15 @@ PROGRAM test_lin_torsion
   CALL check_condensed()
   CALL check_elastic_end()
   CALL check_frame_rates()
+  CALL check_free_end(2)
+  CALL check_free_end(1)
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
   END IF
   WRITE (*, '(A)') 'PASS: linearisation of a line restrained in torsion (modes, roll stiffness, condensed, '// &
-    'elastic end, frame rates)'
+    'elastic end, frame rates, one restrained end)'
 
 CONTAINS
 
@@ -77,13 +87,13 @@ CONTAINS
     WRITE (*, '(A)') 'FAIL: '//TRIM(label)
   END SUBROUTINE require
 
-  SUBROUTINE write_deck(path, irn_v, bt_v, tors_b)
+  SUBROUTINE write_deck(path, irn_v, bt_v, tors_b, tors_a)
     !! The straight vertical line, neutrally buoyant (mass rhoW pi d^2/4) and without drag or
     !! added mass, so the 0.5 % strain is uniform; Irn irn_v, torsional damping bt_v, and the
-    !! torsional restraint of End B tors_b (default Rigid).
+    !! torsional restraints of End B tors_b and End A tors_a (default Rigid).
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: irn_v, bt_v
-    CHARACTER(*), INTENT(IN), OPTIONAL :: tors_b
+    CHARACTER(*), INTENT(IN), OPTIONAL :: tors_b, tors_a
     INTEGER :: u
     CHARACTER(240) :: ltype
     CHARACTER(40) :: gj_col
@@ -113,7 +123,11 @@ CONTAINS
     WRITE (u, '(A)') '--- END CONNECTIONS ---'
     WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
     WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
-    WRITE (u, '(A)') '1 A Pinned 0 0 -1 Rigid 1 0 0 0'
+    IF (PRESENT(tors_a)) THEN
+      WRITE (u, '(A)') '1 A Pinned 0 0 -1 '//tors_a//' 1 0 0 0'
+    ELSE
+      WRITE (u, '(A)') '1 A Pinned 0 0 -1 Rigid 1 0 0 0'
+    END IF
     IF (PRESENT(tors_b)) THEN
       WRITE (u, '(A)') '1 B Pinned 0 0 -1 '//tors_b//' 1 0 0 0'
     ELSE
@@ -583,4 +597,57 @@ CONTAINS
     CALL require(.NOT. MAXVAL(ABS(b)) > 0.0_wp, 'R: the angular acceleration does not drive the line states')
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE check_frame_rates
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_free_end(kfree)
+    !! O: the line of F free in torsion at deck End kfree (1 = A, 2 = B).
+    INTEGER, INTENT(IN) :: kfree
+    REAL(wp), ALLOCATABLE :: amat(:, :), cmom(:, :), b(:), omega(:)
+    REAL(wp) :: dmom(3), coupling, w_cont, w_disc, e_cont, e_disc, k_red, h, x
+    INTEGER :: n, es
+    LOGICAL :: ok
+    CHARACTER(512) :: em
+    CHARACTER(5) :: tag
+    tag = MERGE('End A', 'End B', kfree == 1)
+    IF (kfree == 1) THEN
+      CALL write_deck('lin_torsion_free.dat', IRN, 0.0_wp, tors_a='Free')
+    ELSE
+      CALL write_deck('lin_torsion_free.dat', IRN, 0.0_wp, tors_b='Free')
+    END IF
+    CALL setup('lin_torsion_free.dat', ok)
+    IF (.NOT. ok) RETURN
+    CALL require(agg%cables(1)%line%torsion%end_free(3 - kfree), 'O ('//tag//' free): the line is solved free there')
+    ! the held end's angle is not a state, the free end's is
+    CALL require(ntw == NE, 'O ('//tag//' free): the free end''s angle is a state')
+    IF (ntw /= NE) THEN
+      CALL CD_AGG_End(agg, es, em)
+      RETURN
+    END IF
+    ALLOCATE (amat(2*nx2, 2*nx2), cmom(3, 2*nx2), b(2*nx2), omega(ntw))
+    CALL state_matrix(amat, cmom)
+    CALL twist_eigen(amat, omega, coupling)
+    h = L/REAL(NE, wp)
+    WRITE (*, '(A,A,A,I0,A,I0,A,ES10.3)') 'O: ', tag, ' free: ', 2*nx2, ' states (', 2*ntw, &
+      ' twist); twist-line coupling / block ', coupling
+    CALL require(coupling <= 1.0e-8_wp, 'O: the twist block is decoupled from the line states')
+    DO n = 1, 3
+      x = REAL(2*n - 1, wp)*PI/(4.0_wp*REAL(NE, wp))
+      w_cont = REAL(2*n - 1, wp)*PI/(2.0_wp*L)*SQRT(GJ/IRN)
+      w_disc = 2.0_wp/h*SQRT(GJ/IRN)*SIN(x)
+      e_cont = omega(n)/w_cont - 1.0_wp
+      e_disc = omega(n)/w_disc - 1.0_wp
+      WRITE (*, '(A,A,A,I0,A,F12.8,A,F12.8,A,ES10.3,A,F12.8,A,ES10.3,A)') 'O: ', tag, ' free: mode ', n, ' omega ', &
+        omega(n), ' rad/s; quarter-wave ', w_cont, ' (', e_cont, '); clamped-free chain ', w_disc, ' (', e_disc, ')'
+      CALL require(ABS(e_disc) <= 1.0e-6_wp, 'O: the twist mode matches the clamped-free chain')
+      ! the lumped-inertia chain lies x^2/6 below the continuum
+      CALL require(ABS(e_cont) <= 1.2_wp*x**2/6.0_wp + 1.0e-6_wp, &
+                   'O: the twist mode matches the quarter-wave (2n - 1) pi/(2L) sqrt(GJ/Irn)')
+    END DO
+    CALL input_columns(3, 1, b, dmom)
+    k_red = reduced(amat, cmom, b, dmom, 3)
+    WRITE (*, '(A,A,A,ES12.4,A,ES16.9,A,ES16.9)') 'O: ', tag, ' free: -(D - C A^-1 B) ', k_red, &
+      ' N m/rad (GJ/L ', GJ/L, '); feedthrough D alone ', -dmom(3)
+    CALL require(ABS(k_red) <= 1.0e-6_wp*GJ/L, 'O: a line free at one end has no roll stiffness')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE check_free_end
+
 END PROGRAM test_lin_torsion

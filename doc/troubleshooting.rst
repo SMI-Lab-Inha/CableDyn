@@ -215,9 +215,8 @@ Clock, motion, and environment
        header lines with ``#``.
    * - motionFile ``... which is not Coupled/Vessel`` / ``duplicate row for point``
      - the ``point_id`` is not a prescribed point, or a (point, time) pair appears twice.
-   * - ``Connect/Free dynamic-point deck does not support motionFile coupling`` /
-       ``mixed-deck motionFile is not supported``
-     - these routes hold their coupled endpoints. Remove ``motionFile`` or separate the model.
+   * - ``Connect/Free dynamic-point deck does not support motionFile coupling``
+     - this route holds its coupled endpoints. Remove ``motionFile`` or separate the model.
    * - ``bathymetry file must define one complete rectangular grid`` / ``grid is incomplete`` /
        ``duplicate x/y entries`` / ``needs at least a 2x2 grid`` / ``depths must be positive``
      - the ``x y depth`` rows must cover every combination of the distinct ``x`` and ``y``
@@ -361,6 +360,7 @@ Model data
        finite-EI line with Fixed End B``
      - bending end connections apply only to ``EI > 0`` lines whose End B is an anchor.
    * - ``a clamped or elastic END CONNECTION on a body or rod needs bodyScheme monolithic`` /
+       ``a torsional END CONNECTION on a body or rod needs bodyScheme monolithic`` /
        ``the END CONNECTION direction on a rod end must be parallel to the rod axis``
      - remove ``staggered bodyScheme``; on a rod end give the direction along the rod axis
        (either sense).
@@ -392,17 +392,23 @@ Torsion
    * - ``torsional END CONNECTIONS ... require a finite-EI line`` / ``require a finite-EI line
        with Fixed End B``
      - torsion is solved on cubic-Hermite lines whose End B is an anchor.
-   * - ``a torsional END CONNECTION on a rod end is not supported`` / ``on a body needs a Rigid6
-       body``
-     - outside the torsion scope (:doc:`capabilities`). Move End A to a ``Fixed``,
-       ``Coupled``/``Vessel`` point or a Rigid6 body.
+   * - ``a torsional END CONNECTION on the end of ROD <N> (...) is not supported: a free or
+       pinned rod is axisymmetric`` / ``on the end of Coupled/Vessel ROD <N> is not supported`` /
+       ``on a body needs a Rigid6 body``
+     - outside the torsion scope (:doc:`capabilities`). A free or pinned rod has no roll angle
+       about its own axis, so it cannot hold the torque. Move End A to a ``Fixed`` rod, a rod fixed
+       to a Rigid6 body (``RODS`` type ``Body<N>``), a Rigid6 body or a ``Fixed`` point (a
+       ``Coupled``/``Vessel`` End A only in a deck without bodies and rods: a deck with them runs
+       on the multibody march, which takes no ``Coupled`` End A for a finite-EI line).
+   * - ``... require a finite-EI line with Fixed End B; line <L> ends (End B) on a rod end``
+     - the cable holds its End B at a ``Fixed`` point only, so a line between two rods (a J-tube
+       to a J-tube) is not supported. For a ``Fixed`` rod, end the line on a ``Fixed`` point at
+       the rod end's position; that rod's ``Rod<N>`` loads then leave its force out.
    * - ``a line restrained in torsion needs a host that turns its fairlead frame``
-     - the standalone deck that mixes ``EI = 0`` and finite-EI lines without a body, and the C
-       API's ``CableDyn_InitDeck``/``InitDeckAt``, move the line ends by translation only. Run the
-       line in a coupled OpenFAST or FAST.Farm run, initialise a C API handle with
-       ``CableDyn_InitDeckRotating`` and pass the host's rotations, add a body (such a deck runs
-       on the multibody route, which supports torsion), or set ``TorsStiffness Free`` in every
-       ``END CONNECTIONS`` row.
+     - the C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by translation only.
+       Run the line in a coupled OpenFAST or FAST.Farm run or in the standalone driver,
+       initialise a C API handle with ``CableDyn_InitDeckRotating`` and pass the host's
+       rotations, or set ``TorsStiffness Free`` in every ``END CONNECTIONS`` row.
    * - ``torsion: the twist would move more than pi/2 from its committed value``
      - the host turned a fairlead by more than 90° about the line's end direction without a
        step (an output probe or a non-stepping input update). Keep the platform turn per
@@ -413,11 +419,15 @@ Torsion
    * - ``torsion in a dynamic run needs the force-blended generalised-alpha (OPTION
        alpha_force_blend True)``
      - remove ``False alpha_force_blend`` from a deck with torsion.
-   * - ``OUTPUT "Torq...": line <L> is not torsionally restrained at both ends ..., so it carries
-       no torque``
-     - a ``Torq``/``Twist`` channel needs a line with a torsional restraint at both ends.
-   * - ``motionFile: point <id> has a non-zero roll column, but no line restrained in torsion at
-       both ends ... has its moving (non-Fixed) end there`` / ``the roll column of point <id> must
+   * - ``OUTPUT "Torq...": line <L> is not torsionally restrained (END CONNECTIONS
+       TorsStiffness), so it carries no torque`` / ``... line <L> is torsionally restrained at
+       one end only and its torsion is not solved: <reason>``
+     - a ``Torq``/``Twist`` channel needs a line solved in torsion: restrained at both ends, or
+       at one end with the other free to twist; the second message gives the rule a line
+       restrained at one end missed (see the note below).
+   * - ``motionFile: point <id> has a non-zero roll column, but no line restrained in torsion
+       (END CONNECTIONS TorsStiffness) at its moving (non-Fixed) end has that end there`` /
+       ``the roll column of point <id> must
        be 0 at t = 0`` / ``gives the roll column (12th) on some rows only`` / ``the roll column
        (12th, degrees) must be a finite number``
      - the roll column drives the frame of a torsional line's moving end, starts from 0 (put a
@@ -620,9 +630,20 @@ Warnings and notes that do not stop a run
 
    * - Message
      - Cause and fix
-   * - ``Note: line <L> is torsionally restrained at one end only; ... no torsion is solved``
-     - with the other end free to twist the line carries no torque, so the torsion columns of the
-       restrained end have no effect. Restrain both ends to solve torsion.
+   * - ``Note: line <L> is torsionally restrained at one end only and its torsion is not solved:
+       <reason>``
+     - a line restrained at one end, its other end free to twist, is solved in torsion (its free
+       end turns with the twist of the line) where a line restrained at both ends would be; the
+       reason names the rule it misses: no ``GJ`` in its ``LINE TYPES`` rows (give the 14-column
+       row), two moving ends, ``False alpha_force_blend`` in a dynamic run, or a restrained End A
+       on the end of a free, pinned or ``Coupled``/``Vessel`` rod or on a body other than Rigid6.
+       The line is then solved as without the torsion columns.
+   * - ``Note: line <L>: torsion restrained at End <B|A> only: no static torque; Twist<L> = <x>
+       deg (End B relative to End A, right-handed about the End A -> End B tangent)``
+     - a line restrained in torsion at one end: it carries no static torque, and under
+       torque–tension coupling (``GJ|K``) its stretch twists it by
+       :math:`-\sum (K/GJ)(l - L)`, so a free End B turns by :math:`+x` and a free End A by
+       :math:`-x` about the End A → End B tangent.
    * - ``Note: line <L>: torsion solved, imposed twist ... deg, torque ... N m (<n> twist
        stage(s), <m> buckling descent(s))``
      - the static twist stage of a torsional line. A non-zero descent count means the straight or

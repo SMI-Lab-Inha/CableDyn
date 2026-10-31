@@ -109,6 +109,12 @@ MODULE CableDyn_HermiteTorsion
     REAL(wp) :: ends(3, 4) = CD_ZERO
     !! Torsional end compliances 1/k_t [rad/(N m)] at ends 1 and 2 (0 for a rigid end).
     REAL(wp) :: end_compliance(2) = CD_ZERO
+    !! A free end (no torsional restraint, at most one of the two): an infinite end compliance.
+    !! The line then carries no condensed torque, C = +Inf, and its twist is carried by the nodal
+    !! twist alone (irn required): torque-tension coupling and the torsional inertia twist it, and
+    !! the free end turns by the element twists, sum (M_e l0/GJ - (K/GJ)(l_e - l0)). Its end
+    !! frame is a gauge only (no spring, no held angle) and end_compliance there stays 0.
+    LOGICAL :: end_free(2) = .FALSE.
     !! Torsional stiffness GJ of every element [N m^2/rad] (the line compliance is the sum of
     !! l0/GJ over the elements plus the end compliances).
     REAL(wp), ALLOCATABLE :: gj(:)
@@ -167,15 +173,20 @@ CONTAINS
   ! ------------------------------------------------------------------------------------------
 
   PURE REAL(wp) FUNCTION CD_HermiteTorsion_Compliance(tors, l0) RESULT(c)
-    !! Line torsional compliance C = sum_e l0_e/GJ_e + 1/k_t1 + 1/k_t2 [rad/(N m)]. Meant for a
-    !! description that passed CD_HermiteTorsion_Validate: without one GJ per element it
-    !! returns NaN (so no caller can take the end compliances alone for the line's).
-    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
+    !! Line torsional compliance C = sum_e l0_e/GJ_e + 1/k_t1 + 1/k_t2 [rad/(N m)]; +Inf with a
+    !! free end (end_free), so the condensed torque (Phi - Theta)/C and stiffness 1/C are zero.
+    !! Meant for a description that passed CD_HermiteTorsion_Validate: without one GJ per
+    !! element it returns NaN (so no caller can take the end compliances alone for the line's).
+    USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN, IEEE_POSITIVE_INF
     TYPE(CD_HermiteTorsionType), INTENT(IN) :: tors
     REAL(wp), INTENT(IN) :: l0(:)
     c = IEEE_VALUE(c, IEEE_QUIET_NAN)
     IF (.NOT. ALLOCATED(tors%gj)) RETURN
     IF (SIZE(tors%gj) /= SIZE(l0)) RETURN
+    IF (ANY(tors%end_free)) THEN
+      c = IEEE_VALUE(c, IEEE_POSITIVE_INF)
+      RETURN
+    END IF
     c = tors%end_compliance(1) + tors%end_compliance(2) + SUM(l0/tors%gj)
   END FUNCTION CD_HermiteTorsion_Compliance
 
@@ -280,6 +291,19 @@ CONTAINS
     END IF
     IF (ANY(tors%end_compliance < CD_ZERO)) THEN
       ErrMsg = 'torsion: end compliances must be non-negative'
+      RETURN
+    END IF
+    IF (ALL(tors%end_free)) THEN
+      ErrMsg = 'torsion: both ends are free, so the line carries no torque (describe it without torsion)'
+      RETURN
+    END IF
+    IF (ANY(tors%end_free .AND. tors%end_compliance > CD_ZERO)) THEN
+      ErrMsg = 'torsion: a free end has no end compliance'
+      RETURN
+    END IF
+    IF (ANY(tors%end_free) .AND. .NOT. ALLOCATED(tors%irn)) THEN
+      ErrMsg = 'torsion: a line free at one end carries no condensed torque; its twist needs the nodal twist '// &
+               '(the polar rotary inertia irn)'
       RETURN
     END IF
     IF (tors%quadrature_order < 1 .OR. tors%quadrature_order > NG_MAX) THEN

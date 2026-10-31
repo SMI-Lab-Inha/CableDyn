@@ -431,11 +431,12 @@ End A -> End B)``.
        Present only when the deck defines a seabed
    * - ``TorqueMin`` ``TorqueMax`` ``TorqueMean``
      - ``(N.m)``
-     - torque, as ``Torq<L>N<J>``. Present only on a line restrained in torsion at both ends
+     - torque, as ``Torq<L>N<J>``. Present only on a line solved in torsion (restrained at both
+       ends, or at one end with the other free)
    * - ``TwistMin`` ``TwistMax`` ``TwistMean``
      - ``(deg)``
      - twist of the cable from End A to the node, as ``Twist<L>N<J>``. Present only on a line
-       restrained in torsion at both ends
+       solved in torsion
 
 The accumulation keeps three numbers per node and quantity and makes no heap allocation per step.
 Sampling a line evaluates its node channels once per output row; on the 1024-element cubic-Hermite
@@ -747,8 +748,9 @@ Line-node channels
        (:ref:`outputs-azimuth-range`)
      - deg
    * - ``Torq<L>N<J>``
-     - torque (twisting moment) at node ``J`` of a line restrained in torsion at both ends
-       (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`). In the statics it is
+     - torque (twisting moment) at node ``J`` of a line restrained in torsion at both ends, or at
+       one end with the other free to twist (``END CONNECTIONS`` ``TorsStiffness``, see
+       :doc:`driver_format`; zero in the statics of a line free at one end). In the statics it is
        uniform along the line, :math:`M = (\Phi - \Theta_{\text{eff}})/C`
        (:math:`\Theta_{\text{eff}} = \Theta` without torque–tension coupling); in the dynamics it
        is the nodal twist's torque at the node, the mean of its two elements' (an end node's
@@ -767,7 +769,11 @@ Line-node channels
      - total twist of the line, :math:`\Phi - \Theta = M C`, including the windup of
        torsional end springs: the imposed twist :math:`\Phi` less the geometric twist
        :math:`\Theta` the line takes up by writhing out of its plane (in the dynamics the
-       element twists plus the end springs' windup)
+       element twists plus the end springs' windup). On a line free in torsion at one end, the
+       twist of its elements (no windup at the free end), still the turn of End B relative to
+       End A: a free End B turns by ``+Twist<L>`` and a free End A by ``−Twist<L>`` against
+       the restrained end's frame carried along the line; statically
+       :math:`-\sum (K/GJ)(l_e - L_e)` under torque–tension coupling
      - deg
 
 Touchdown channels
@@ -895,8 +901,9 @@ output time.
      - deg/s, deg/s²
    * - ``Rod<N>Fx`` / ``Fy`` / ``Fz``, ``Mx`` / ``My`` / ``Mz``
      - net external force on the rod and its moment about End A: weight, buoyancy, Morison and
-       seabed loads and the line and cable end forces (not the pin reaction of a pinned rod,
-       whose ``M`` therefore vanishes at a static equilibrium)
+       seabed loads, the line and cable end forces and the connection moment (bending and
+       torque) of a cable clamped at its ends, on a rod fixed to a body too (not the pin
+       reaction of a pinned rod, whose ``M`` therefore vanishes at a static equilibrium)
      - N, N·m
    * - ``Rod<N>TenA`` / ``TenB``
      - magnitude of the summed line and cable end force at End A / End B
@@ -927,7 +934,8 @@ with exit code 1. A name is rejected when:
   count, or is a ``TDP<L>`` name with a suffix other than ``s``, ``x``, ``y``, ``z``, ``Lay``,
   ``Exc`` or ``Grd``;
 * it is a ``Torq<L>N<J>``, ``Twist<L>N<J>`` or ``Twist<L>`` channel of a line that is not
-  restrained in torsion at both ends (``... carries no torque``);
+  solved in torsion (``... carries no torque``, or ``... restrained at one end only and its
+  torsion is not solved: <reason>``);
 * on a mixed ``EI = 0`` + finite-EI deck (and in OpenFAST), it is a ``Point<P>`` channel of a
   ``Coupled``/``Vessel`` point attached **only** to finite-EI lines — that point is not part of
   the ``EI = 0`` point system that serves point channels. Use the cable's

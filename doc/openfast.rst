@@ -333,9 +333,12 @@ Line torsion
 ------------
 
 A finite-EI line restrained in torsion at both ends (``END CONNECTIONS`` torsion columns, see
-:ref:`theory-torsion`) runs coupled as it does standalone. Its End A frame is given in platform
-axes and turns with the OpenFAST point-mesh orientation, whatever the bending connection, so a
-platform roll, pitch or yaw about the line's end direction twists the line. The torque moment is
+:ref:`theory-torsion`), or at one end with the other free to twist, runs coupled as it does
+standalone. A restrained End A frame is given in platform axes and turns with the OpenFAST
+point-mesh orientation, whatever the bending connection, so a platform roll, pitch or yaw about
+the line's end direction twists the line (on a line free at End B it spins the line, whose
+torsional inertia loads the platform); a free End A transmits no torque, and the platform's
+turn does not reach the line. The torque moment is
 returned to OpenFAST with the connection moment, the ``Torq<L>N<J>`` and ``Twist<L>``
 channels are available, ``PtfmInit`` twists the line in the static initialisation, and the
 unwrapped twist is part of the checkpoint state. End B must be a ``Fixed`` point. Within one
@@ -344,10 +347,12 @@ substeps; an output probe moves the frame without a step, is limited to 90° fro
 committed twist, and stops by name beyond it (a restart first restores the checkpoint's twist,
 so it is not limited this way). Formal
 linearisation takes the line's twist angles as states and the platform rotation as an input
-(see `Linearisation`_). The C API's ``CableDyn_InitDeck``/``InitDeckAt`` and the standalone
-deck that mixes ``EI = 0`` and finite-EI lines without a body move the line ends by translation
-only and refuse torsion columns; a C API host that initialises with
-``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`).
+(see `Linearisation`_). The C API's ``CableDyn_InitDeck``/``InitDeckAt`` move the line ends by
+translation only and refuse torsion columns; a C API host that initialises with
+``CableDyn_InitDeckRotating`` passes its rotations (:doc:`capi`). The standalone driver runs a
+deck that mixes ``EI = 0`` and finite-EI lines on the same aggregate, holding the line end
+frames or turning them with its ``vesselMotion``, and imposing the twist of its ``motionFile``
+roll column.
 
 Lifecycle features
 ------------------

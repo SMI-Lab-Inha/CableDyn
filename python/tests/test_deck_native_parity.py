@@ -846,7 +846,11 @@ def test_standalone_mixed_deck_runs_on_the_still_water_aggregate():
     _rejects(_options(_MIXED, "uniform 0.5 0 0 current"), "runs in still water")
     _rejects(_options(_MIXED, "airy 2 8 0 waves"), "runs in still water")
     _rejects(_edit(_MIXED, ("2 2 3 -", "2 2 3 pt")), "writes no per-line files")
-    _rejects(_options(_MIXED, "m.txt motionFile"), "mixed EI=0/finite-EI deck does not support")
+    # the driver marches the deck's motionFile or vesselMotion; vesselRAO needs deck waves
+    DeckFile.from_text(_options(_MIXED, "m.txt motionFile"))
+    DeckFile.from_text(_options(_MIXED, "v.txt vesselMotion", "0|0|0 vesselRef"))
+    _rejects(_options(_MIXED, "r.txt vesselRAO"), "vesselRAO needs deck waves")
+    _rejects(_options(_MIXED, "r.txt vesselRAO", "airy 2 8 0 waves"), "runs in still water")
 
 
 def test_coupled_route_takes_no_motion_file_and_needs_a_line():
@@ -970,6 +974,9 @@ def test_end_connection_errors_name_the_line_end_and_value(row, message):
     _rejects(_edit(_TORSION, (_TORSION_ROW_A, row)), message)
 
 
+_NO_TORSION_OUTPUTS_ONE_END = ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")
+
+
 def test_torsion_line_rules_follow_the_native_checks():
     # torsion has no EI/1.3 default: the 10-column LINE TYPES row has no GJ
     no_gj = _edit(
@@ -992,10 +999,53 @@ def test_torsion_line_rules_follow_the_native_checks():
         ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n"),
     )
     _rejects(ei0, "require a finite-EI line; line 1 has EI = 0")
-    # one restrained end is accepted (it carries no torque), but takes no torsion channel
+    # one restrained end, the other free to twist, is solved in torsion with its channels ...
     one_end = _edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"))
-    _rejects(one_end, "is not torsionally restrained at both ends")
-    DeckFile.from_text(_edit(one_end, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")))
+    DeckFile.from_text(one_end)
+    # ... where both-end torsion would be; otherwise it is not, and its channels are refused
+    one_end_no_gj = _edit(
+        one_end,
+        (
+            "Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat\n",
+            "Name Diam Mass EA BA EI Cdn Cdt Can Cat\n",
+        ),
+        (
+            "cab 0.2 32.2 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0",
+            "cab 0.2 32.2 1.0e7 0.0 1.0e6 0 0 0 0",
+        ),
+    )
+    _rejects(
+        one_end_no_gj, "restrained at one end only and its torsion is not solved: its LINE TYPES"
+    )
+    DeckFile.from_text(_edit(one_end_no_gj, ("Torq1N1\nTwist1N41\nTwist1\n", "FairTen1\n")))
+    one_end_dyn = _edit(one_end, ("0.0 TMax\n", "10.0 TMax\n"))
+    DeckFile.from_text(one_end_dyn)
+    _rejects(
+        _options(one_end_dyn, "False alpha_force_blend"),
+        "torsion is not solved: torsion in a dynamic run needs the force-blended",
+    )
+    # the modal analysis, ATTACHMENTS and CONTROL take a line solved at one end, its channels too
+    DeckFile.from_text(_options(one_end, "3 nModes"))
+    DeckFile.from_text(
+        _edit(
+            one_end,
+            (
+                f"{_BAR} OPTIONS {_BAR}",
+                f"{_BAR} ATTACHMENTS {_BAR}\nLineID ArcLength Mass Volume CdA Ca\n"
+                f"1 50.0 10.0 0.0 0.0 0.0\n{_BAR} OPTIONS {_BAR}",
+            ),
+        )
+    )
+    DeckFile.from_text(
+        _edit(
+            one_end,
+            (
+                f"{_BAR} OPTIONS {_BAR}",
+                f"{_BAR} CONTROL {_BAR}\nChannelID Line(s)\n(-) (-)\n1 1\n{_BAR} OPTIONS {_BAR}",
+            ),
+        ),
+        caller_driven=True,
+    )
     # the dynamic run needs the force blend; modal analysis carries the twist
     dynamic = _edit(_TORSION, ("0.0 TMax\n", "10.0 TMax\n"))
     DeckFile.from_text(dynamic)
@@ -1045,6 +1095,24 @@ def _torsion_two_moving(row_a: str) -> str:
     )
 
 
+def _one_end_rod(rod_kind: str) -> str:
+    """The pure-torsion line hung from End B of a rod of the given kind along its axis (+x),
+    restrained in torsion there only (End B of the line free to twist)."""
+    return _edit(
+        _TORSION_DYN,
+        (
+            f"{_BAR} POINTS {_BAR}",
+            f"{_BAR} ROD TYPES {_BAR}\nName Diam Mass Cd Ca CdEnd CaEnd\n"
+            "spar 1.0 300.0 0.8 1.0 0.0 0.0\n"
+            f"{_BAR} RODS {_BAR}\nID RodType Type XA YA ZA XB YB ZB NumSegs Outputs\n"
+            f"1 spar {rod_kind} -10 0 -50 0 0 -50 2 -\n{_BAR} POINTS {_BAR}",
+        ),
+        ("1 1 2 -", "1 R1B 2 -"),
+        ("1 Coupled 0.0 0.0 -50.0 0 0 0 0\n", ""),
+        ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Free 0 0 1 0"),
+    )
+
+
 def test_torsion_scope_rules_follow_the_native_checks():
     # End A on a Rigid6 body is supported, on a Point3 body or a rod end it stops by name
     DeckFile.from_text(
@@ -1066,7 +1134,66 @@ def test_torsion_scope_rules_follow_the_native_checks():
         ("1 1 2 -", "1 R1A 2 -"),
         ("1 Coupled 0.0 0.0 -50.0 0 0 0 0\n", ""),
     )
-    _rejects(rod_end, "a torsional END CONNECTION on a rod end is not supported")
+    # a Fixed rod holds the End A torsion frame still; a free or pinned rod has no roll angle,
+    # and a Coupled rod carries no finite-EI line on any route
+    DeckFile.from_text(rod_end)
+    axisymmetric = "is not supported: a free or pinned rod is axisymmetric, with no roll about"
+    _rejects(
+        _edit(rod_end, ("1 spar Fixed", "1 spar Pinned")),
+        rf"line 1: a torsional END CONNECTION on the end of ROD 1 \(pinned\) {axisymmetric}",
+    )
+    _rejects(
+        _edit(rod_end, ("1 spar Fixed", "1 spar Free")),
+        rf"on the end of ROD 1 \(free\) {axisymmetric}",
+    )
+    _rejects(
+        _edit(
+            rod_end,
+            (
+                f"{_BAR} ROD TYPES {_BAR}",
+                f"{_BAR} BODIES {_BAR}\n"
+                "ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz\n"
+                "1 Rigid6 0 0 -30 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3\n"
+                f"{_BAR} ROD TYPES {_BAR}",
+            ),
+            ("1 spar Fixed 0 0 -50 0 0 -40", "1 spar Body1Pin 0 0 -20 0 0 -10"),
+        ),
+        rf"on the end of ROD 1 \(body1pinned\) {axisymmetric}",
+    )
+    # written anchor first (MoorDyn's order) the finite-EI line is turned around, onto the Fixed
+    # rod as onto a pinned one; a line between two rods ends on a rod end
+    anchor_first = _edit(rod_end, ("1 R1A 2 -", "1 2 R1A -"))
+    DeckFile.from_text(anchor_first)
+    _rejects(
+        _edit(anchor_first, ("1 spar Fixed", "1 spar Pinned")),
+        rf"on the end of ROD 1 \(pinned\) {axisymmetric}",
+    )
+    _rejects(
+        _edit(
+            rod_end,
+            (
+                "1 spar Fixed 0 0 -50 0 0 -40 2 -\n",
+                "1 spar Fixed 0 0 -50 0 0 -40 2 -\n2 spar Fixed 100 0 -50 100 0 -60 2 -\n",
+            ),
+            ("1 R1A 2 -", "1 R1A R2A -"),
+        ),
+        # the bending row is checked first here, the torsion first natively: one remedy
+        r"END CONNECTIONS require a finite-EI line with Fixed End B; line 1 ends \(End B\) on a "
+        "rod end: a line between two rods is not supported in this build",
+    )
+    _rejects(
+        _options(_edit(rod_end, ("1 spar Fixed", "1 spar Coupled")), "rod.motion motionFile"),
+        "a torsional END CONNECTION on the end of Coupled/Vessel ROD 1 is not supported: no route "
+        "of this build carries a finite-EI line on a host-driven rod",
+    )
+    # restrained at the rod end only (End B free to twist): solved on a Fixed rod, noted on a
+    # pinned one, whose twist channels are then refused with the reason
+    DeckFile.from_text(_one_end_rod("Fixed"))
+    _rejects(
+        _one_end_rod("Pinned"),
+        "its torsion is not solved: its restrained End A is on the end of a free or pinned rod",
+    )
+    DeckFile.from_text(_edit(_one_end_rod("Pinned"), _NO_TORSION_OUTPUTS))
     attachments = _edit(
         _TORSION,
         (
@@ -1096,12 +1223,14 @@ def test_torsion_scope_rules_follow_the_native_checks():
         (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
         ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Free 0 0 1 720"),
     )
-    _rejects(both_free, "is not torsionally restrained at both ends")
+    _rejects(both_free, "is not torsionally restrained \\(END CONNECTIONS")
     DeckFile.from_text(_edit(both_free, _NO_TORSION_OUTPUTS))
 
 
-def test_torsion_on_a_standalone_mixed_deck_is_refused():
-    # a mixed EI = 0 + finite-EI deck without bodies runs on the aggregate, which has no torsion
+def test_torsion_on_a_standalone_mixed_deck_is_accepted():
+    # a mixed EI = 0 + finite-EI deck without bodies runs on the aggregate, whose driver holds the
+    # line end frames or turns them with the deck's vesselMotion and rolls them with the
+    # motionFile roll column (test_mixed_route_torsion)
     gj_cable = _edit(
         _MIXED,
         (
@@ -1128,8 +1257,21 @@ def test_torsion_on_a_standalone_mixed_deck_is_refused():
             "LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist",
             *rows,
         )
-        _rejects(text, "mixes EI = 0 and finite-EI lines without a BODY")
-        _rejects(_options(text, "10.0 TMax"), "mixes EI = 0 and finite-EI lines without a BODY")
+        DeckFile.from_text(text)
+        DeckFile.from_text(_edit(text, ("10.0 TMax\n", "0.0 TMax\n")))
+        DeckFile.from_text(_options(text, "m.txt motionFile"))
+        DeckFile.from_text(_options(text, "v.txt vesselMotion", "0|0|0 vesselRef"))
+        # a static run (TMax = 0) marches no step and takes the configuration blend, as native
+        # CD_Init_Deck_Aggregate with static_run (test_mixed_route_torsion gate 6)
+        DeckFile.from_text(
+            _options(_edit(text, ("10.0 TMax\n", "0.0 TMax\n")), "False alpha_force_blend")
+        )
+        if "Free" not in rows[1]:
+            # restrained at both ends, the dynamic run needs the force blend, as on every route
+            _rejects(
+                _options(text, "False alpha_force_blend"),
+                "needs the force-blended generalised-alpha",
+            )
 
 
 @pytest.mark.parametrize(
@@ -1250,7 +1392,7 @@ _PARITY_DRIVER = (
 def test_torsion_rows_get_the_native_verdict(row_a, tmp_path):
     text = _edit(_TORSION, (_TORSION_ROW_A, f"{row_a}\n"))
     if row_a.split()[6].lower() in {"free", "zero"}:
-        # one restrained end carries no torque: judge the row, not the torsion channels
+        # a Free End A: judge the row (its normal and pretwist), not the torsion channels
         text = _edit(text, _NO_TORSION_OUTPUTS)
     try:
         DeckFile.from_text(text)
@@ -1308,6 +1450,122 @@ def _native_exit(text: str, tmp_path: Path) -> int:
 )
 def test_torsion_channels_get_the_native_verdict(channel, tmp_path):
     text = _edit(_TORSION, ("Twist1\n", f"{channel}\n"))
+    try:
+        DeckFile.from_text(text)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    # exit code 1 is an input refusal; 0 a run and 2 a solve failure after validation
+    assert python_accepts == (_native_exit(text, tmp_path) != 1)
+
+
+def _stock_body(body_row: str, row_a: str, row_b: str) -> str:
+    """A line written anchor first (NodeA the Fixed anchor, NodeB on body 1), which the reader
+    turns around: its deck End B becomes End A."""
+    return f"""{_BAR} CableDyn Input File {_BAR}
+in-memory fixture: an anchor-first line restrained in torsion at one end
+{_BAR} LINE TYPES {_BAR}
+Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat
+cab 0.2 32.2 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0 0.0 0.0 0.0 0.0
+{_BAR} BODIES {_BAR}
+ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz
+{body_row}
+{_BAR} POINTS {_BAR}
+ID Type X Y Z Mass Vol CdA Ca
+1 Body1 0.0 0.0 0.0 0 0 0 0
+2 Fixed 100.0 0.0 -50.0 0 0 0 0
+{_BAR} LINES {_BAR}
+ID NodeA NodeB Outputs
+1 2 1 -
+{_BAR} SECTIONS {_BAR}
+LineID LineType Length NumSegs
+1 cab 100.0 40
+{_BAR} END CONNECTIONS {_BAR}
+LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist
+{row_a}
+{row_b}
+{_BAR} OPTIONS {_BAR}
+9.80665 g
+1025.0 rhoW
+50.0 WtrDpth
+0.1 dtM
+1.0 TMax
+{_BAR} OUTPUTS {_BAR}
+FairTen1
+Twist1
+{_BAR} need this line {_BAR}
+"""
+
+
+# restrained at the deck's End B, the body, which the anchor-first swap makes End A
+_STOCK_POINT3_AT_BODY = _stock_body(
+    "1 Point3 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0",
+    "1 A Rigid -1 0 0 Free 0 0 1 0",
+    "1 B Rigid -1 0 0 Rigid 0 0 1 0",
+)
+_STOCK_RIGID6_AT_BODY = _stock_body(
+    "1 Rigid6 0 0 -50 0 0 0 1.0e5 97.56 0 0 0 0 0 1.0e3 1.0e3 1.0e3",
+    "1 A Rigid -1 0 0 Free 0 0 1 0",
+    "1 B Rigid -1 0 0 Rigid 0 0 1 0",
+)
+
+
+def test_one_end_torsion_follows_the_anchor_first_swap():
+    # a Point3 body does not carry torsion: the line restrained there is not solved, and its
+    # twist channel is refused; on a Rigid6 body it is solved
+    _rejects(_STOCK_POINT3_AT_BODY, "its restrained End A is on a body that is not Rigid6")
+    DeckFile.from_text(_STOCK_RIGID6_AT_BODY)
+
+
+def test_one_end_pretwist_stays_within_1000_turns():
+    one_end = _edit(
+        _TORSION,
+        (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
+        ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Rigid 0 0 1 1e8"),
+    )
+    _rejects(one_end, "the Pretwist of its restrained End B = 1.00000e\\+08 deg exceeds 1000 turns")
+    # the free end's pretwist rolls nothing and is not checked
+    DeckFile.from_text(_edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 1e8\n")))
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the native torsion parity",
+)
+@pytest.mark.parametrize(
+    "text",
+    [
+        _STOCK_POINT3_AT_BODY,
+        _STOCK_RIGID6_AT_BODY,
+        _edit(
+            _TORSION,
+            (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
+            ("1 B Rigid 1 0 0 Rigid 0 0 1 720", "1 B Rigid 1 0 0 Rigid 0 0 1 1e8"),
+        ),
+        _options(_edit(_TORSION, (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n")), "3 nModes"),
+        _edit(
+            _TORSION,
+            (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
+            (
+                f"{_BAR} OPTIONS {_BAR}",
+                f"{_BAR} ATTACHMENTS {_BAR}\nLineID ArcLength Mass Volume CdA Ca\n"
+                f"1 50.0 10.0 0.0 0.0 0.0\n{_BAR} OPTIONS {_BAR}",
+            ),
+        ),
+        _one_end_rod("Fixed"),
+        _one_end_rod("Pinned"),
+    ],
+    ids=[
+        "stock-point3-body",
+        "stock-rigid6-body",
+        "one-end-huge-pretwist",
+        "one-end-nmodes",
+        "one-end-attachments",
+        "one-end-fixed-rod",
+        "one-end-pinned-rod",
+    ],
+)
+def test_one_end_torsion_gets_the_native_verdict(text, tmp_path):
     try:
         DeckFile.from_text(text)
         python_accepts = True

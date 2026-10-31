@@ -85,7 +85,8 @@ What CableDyn does
      - static and dynamic
      - coupled dynamic
    * - Mixed deck: moorings and power cables together
-     - static and dynamic (held ends; moving bodies, rods, and points on the multibody march)
+     - static and dynamic (held ends or a ``motionFile``/``vesselMotion``; moving bodies, rods,
+       and points on the multibody march)
      - coupled dynamic
    * - Automatic Newton static equilibrium, no initial shape or relaxation
      - yes

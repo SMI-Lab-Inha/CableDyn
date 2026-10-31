@@ -174,10 +174,10 @@ Each data row has eleven whitespace-separated numbers:
 Every row must start with a number, so any header or column-label line must be a comment.
 Tokens after the eleventh are ignored, except on a deck with a torsional line (below).
 
-**Roll column (torsion).** On a deck where some finite-EI line is restrained in torsion at both
-ends (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`), a numeric twelfth token is
-read as the roll of the frame of that line's moving end (End A, or End B in a deck that lists the
-anchor as End A), in degrees, right-handed about the line tangent pointing into the line from that
+**Roll column (torsion).** On a deck where some finite-EI line is solved in torsion, restrained
+at both ends or at one (``END CONNECTIONS`` ``TorsStiffness``, see :doc:`driver_format`), a numeric
+twelfth token is read as the roll of the frame of a line's moving end (End A, or End B in a deck
+that lists the anchor as End A), in degrees, right-handed about the line tangent pointing into the line from that
 end. It imposes a twist history without turning the point: the line's imposed twist is
 
 .. math::
@@ -193,12 +193,11 @@ inward tangent is ``−Ez``, it has the opposite sense to ``Pretwist`` (B). Rule
 * the roll must be 0 at ``t = 0``, because the static initial condition uses the deck
   ``Pretwist``; give a constant twist there (``the roll column of point <id> must be 0 at
   t = 0``);
-* a non-zero roll is accepted only at the moving end of a line restrained in torsion at both
-  ends (``has a non-zero roll column, but no line restrained in torsion at both ends ... has its
-  moving (non-Fixed) end there``);
-* the roll is real valued and not wrapped, so several turns are written as they accumulate.
-  Torsion carries no inertia (see :doc:`theory`), so the torque follows the roll at once and no
-  roll rate or acceleration column is needed.
+* a non-zero roll is accepted only at the moving end of a line solved in torsion, restrained
+  there (``has a non-zero roll column, but no line restrained in torsion ... at its moving
+  (non-Fixed) end has that end there``): a free end has no torsion frame to roll;
+* the roll is real valued and not wrapped, so several turns are written as they accumulate; the
+  time integration takes its rate and acceleration from the roll history (no column).
 
 :file:`examples/data/torsion/hangoff_roll_2turns_60s_dt01.txt`, used by
 :file:`examples/torsion_lazy_wave_hangoff_twist.dat`, holds the hang-off in place and rolls it

@@ -372,6 +372,12 @@ _ROD_ATTACHMENT_ALIASES = {
 _RIGID_END_CONNECTIONS = frozenset({"rigid", "infinity", "inf"})
 # TorsStiffness keywords of an end free to twist (a numeric 0 is free too)
 _FREE_TORSION_KEYWORDS = frozenset({"free", "zero"})
+# native ROD_END_B_NOTE: a finite-EI line with an END CONNECTION whose End B is a rod end
+_ROD_END_B_NOTE = (
+    " ends (End B) on a rod end: a line between two rods is not supported in this build (the "
+    "cable holds its End B at a Fixed point only); for a Fixed rod, end the line on a Fixed "
+    "point at the rod end's position (its force then stays out of that rod's Rod<N> loads)"
+)
 # native CD_HTORS_MAX_TWIST: the largest imposed static twist, 1000 turns
 _MAX_STATIC_TWIST_DEG = 360000.0
 # Native TORS_NX_PARALLEL_TOL: smallest |Nx x Ez| of unit vectors (about 0.06 degrees off Ez).
@@ -3019,6 +3025,16 @@ class DeckFile:
         normalized_line_endpoints: dict[str, tuple[str, str]] = {}
         # lines whose stock anchor-first row the native reader turns around (its ends swap)
         swapped_lines: set[str] = set()
+        # native finite_ei_by_name (normalize_stock_endpoint_order): the lines whose SECTIONS
+        # rows name a line type with EI > 0
+        finite_ei_lines: set[str] = set()
+        for section in self._rows("SECTIONS"):
+            if len(section.tokens) < 2:
+                continue
+            meta = line_type_meta.get(section.tokens[1].lower())
+            if meta is not None and meta[3] > 0.0:
+                with contextlib.suppress(ValueError):
+                    finite_ei_lines.add(str(_native_int(section.tokens[0])))
         range_lines = 0
         lift_lines = 0  # lines with the VIV lift file (flag V)
         series_lines = 0  # lines with per-line time-series files (flags p, t, V)
@@ -3096,11 +3112,19 @@ class DeckFile:
             # when NodeB is a fairlead (Coupled/Vessel/Body/Turbine), or a Free/Connect
             # point at or above the Fixed NodeA. A Fixed NodeA above a Free/Connect
             # NodeB is an elevated hang-off already in CableDyn (upper-end-first) order.
+            # A finite-EI line to a rod end swaps too (it runs only from the rod, End A, to a
+            # Fixed End B); an EI = 0 line to a rod end keeps its written order.
+            line_key = str(_native_int(row.tokens[0]))
+            line_is_finite_ei = line_key in finite_ei_lines or (
+                len(row.tokens) == 7
+                and line_type_meta.get(row.tokens[1].lower(), (0.0, 0.0, 0.0, 0.0))[3] > 0.0
+            )
             upper_b = (
                 type_b in {"coupled", "vessel"}
                 or type_b.startswith("body")
                 or _is_turbine_point_type(type_b)
                 or (type_b in {"connect", "free"} and point_z[node_a] <= point_z[node_b])
+                or (line_is_finite_ei and _rod_point(type_b) is not None)
             )
             if type_a == "fixed" and upper_b:
                 node_a, node_b = node_b, node_a
@@ -3245,7 +3269,9 @@ class DeckFile:
         assigned_end_connections: set[tuple[str, str]] = set()
         # (line, end) held by a Rigid or rotational-spring row, in native End A/B order
         held_ends: set[tuple[str, str]] = set()
-        # line id -> {end: torsionally restrained} from the optional torsion columns
+        # line id -> {end: torsionally restrained} from the optional torsion columns, and the
+        # pretwists, in native End A/B order (after the anchor-first swap, which reverses Ez and
+        # so negates a pretwist)
         torsion_ends: dict[str, dict[str, bool]] = {}
         torsion_pretwist: dict[str, dict[str, float]] = {}
         for row in self.end_connections:
@@ -3334,11 +3360,15 @@ class DeckFile:
                 pretwist = 0.0
                 if len(row.tokens) == 11:
                     pretwist = numeric(row.tokens[10], row, "END CONNECTIONS pretwist")
-                torsion_pretwist.setdefault(line_id, {})[end] = pretwist
+                native_end = end
+                if line_id in swapped_lines:
+                    native_end = {"a": "b", "b": "a"}[end]
+                    pretwist = -pretwist
+                torsion_pretwist.setdefault(line_id, {})[native_end] = pretwist
                 if restrained:
                     # a Free end has no torsion frame: its normal is not checked (native)
                     self._check_torsion_normal(where, row, normal, direction, norm)
-                torsion_ends.setdefault(line_id, {})[end] = restrained
+                torsion_ends.setdefault(line_id, {})[native_end] = restrained
             if non_pinned:
                 swapped = line_id in swapped_lines
                 held_ends.add((line_id, {"a": "b", "b": "a"}[end] if swapped else end))
@@ -3349,6 +3379,11 @@ class DeckFile:
                 if not has_finite_ei:
                     raise DeckFormatError(f"{where} END CONNECTIONS requires a finite-EI line")
                 end_b = normalized_line_endpoints[line_id][1]
+                if _rod_point(point_types[end_b]) is not None:
+                    raise DeckFormatError(
+                        f"{where} non-pinned END CONNECTIONS require a finite-EI line with Fixed "
+                        f"End B; line {line_id}{_ROD_END_B_NOTE}"
+                    )
                 if point_types[end_b] != "fixed":
                     raise DeckFormatError(
                         f"{where} non-pinned END CONNECTIONS require "
@@ -3437,7 +3472,7 @@ class DeckFile:
             )
             for row in bodies
         }
-        torsion_lines = self._check_torsion_lines(
+        torsion_lines, torsion_notes = self._check_torsion_lines(
             torsion_ends,
             torsion_pretwist,
             section_types_by_line,
@@ -3448,7 +3483,6 @@ class DeckFile:
             body_types,
             option_by_key,
             has_tmax,
-            mixed_route,
         )
 
         rod_types = self._rows("ROD TYPES")
@@ -3622,17 +3656,14 @@ class DeckFile:
         # deck driver, whose dispatch gates follow.
         deck_driver_route = not self.caller_driven and not mixed_route
         if self.caller_driven or mixed_route:
-            # native CD_Init_Deck_Aggregate: the host (or, for a standalone mixed deck, the
-            # driver holding the initialized ends) drives the coupled boundary
+            # native CD_Init_Deck_Aggregate: the host drives the coupled boundary; a standalone
+            # mixed deck is driven by the driver, which holds the initialized ends or marches
+            # the deck's motionFile/vesselMotion (prescribed_motion; vesselRAO needs deck
+            # waves, which the still-water mixed route refuses below)
             if has_motion_file and self.caller_driven:
                 raise DeckFormatError(
                     f"{self._label}: the coupled boundary is driven by the host, not a deck "
                     "motionFile; remove the motionFile OPTION"
-                )
-            if has_motion_file:
-                raise DeckFormatError(
-                    f"{self._label}: a mixed EI=0/finite-EI deck does not support motionFile "
-                    "(the driver holds its coupled ends)"
                 )
             if not line_ids:
                 raise DeckFormatError(f"{self._label}: the coupled route needs at least one line")
@@ -4201,11 +4232,16 @@ class DeckFile:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r} node exceeds the line node count"
                     )
+                if line_id in torsion_notes:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: line {line_id} is torsionally "
+                        "restrained at one end only and its torsion is not solved: "
+                        f"{torsion_notes[line_id]}"
+                    )
                 if line_id not in torsion_lines:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r}: line {line_id} is not torsionally "
-                        "restrained at both ends (END CONNECTIONS TorsStiffness), so it carries "
-                        "no torque"
+                        "restrained (END CONNECTIONS TorsStiffness), so it carries no torque"
                     )
                 continue
             if lowered.startswith(("ten", "curv", "bendmom", "stfmom", "l")):
@@ -4285,81 +4321,28 @@ class DeckFile:
         body_types: dict[str, str],
         option_by_key: dict[str, OptionRecord],
         has_tmax: bool,
-        aggregate_route: bool,
-    ) -> set[str]:
-        """Native ``check_torsion_line`` and the driver's torsion scope; the torsional lines.
+    ) -> tuple[set[str], dict[str, str]]:
+        """Native ``check_torsion_line`` and the driver's torsion scope.
+
+        Returns the lines solved in torsion and, for a line restrained at one end only whose
+        torsion is not solved, why (native ``resolve_one_end_torsion``).
 
         A line with a torsional END CONNECTIONS restraint (TorsStiffness Rigid or a
-        stiffness) must be finite-EI. With one restrained end it carries no torque and is
-        solved as without the columns. Restrained at both ends, torsion is solved: End B must
-        be Fixed, every section type needs an explicit GJ > 0, no ATTACHMENTS, End A neither a
-        rod end nor on a body other than Rigid6. A deck with torsion runs dynamics only with
-        the force-blended generalised-alpha (a coupled run is always dynamic); its modal
-        analysis (nModes) carries the twist. A standalone mixed EI = 0 + finite-EI deck
-        without bodies (``aggregate_route``, run on the aggregate, which moves the line ends by
-        translation only) refuses any torsion column, one restrained end included; the coupled
-        OpenFAST and FAST.Farm routes turn the fairlead frame with the platform and accept it.
+        stiffness) must be finite-EI. Restrained at both ends, torsion is solved: End B must
+        be Fixed, every section type needs an explicit GJ > 0, End A neither on a rod other than
+        a Fixed one (a free or pinned rod has no roll angle, a Coupled/Vessel rod carries no
+        finite-EI line; the ends of a rod fixed to a body are body points) nor on a body other
+        than Rigid6. Restrained at one end only (its other end free to twist), it is solved in
+        torsion under the same rules and with a force-blended march; otherwise it keeps the
+        meaning of the 6-column rows (no error). ATTACHMENTS, CONTROL and the modal analysis
+        (nModes, whose modes carry the twist) take a line solved in torsion. A deck with torsion
+        runs dynamics only with the force-blended generalised-alpha (a coupled run is always
+        dynamic). The coupled OpenFAST and FAST.Farm routes turn the fairlead frame with the
+        platform, and the standalone mixed EI = 0 + finite-EI deck without bodies (run on the
+        aggregate) holds it or turns it with its vesselMotion and rolls it with the motionFile
+        roll column, as the standalone cubic-Hermite route does.
         """
-        # _check_attachments has already accepted every LineID as an integer
-        torsion_lines: set[str] = set()
-        has_torsion_column = False
-        for line_id, ends in torsion_ends.items():
-            if not any(ends.values()):
-                continue
-            has_torsion_column = True
-            if not any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id]):
-                raise DeckFormatError(
-                    f"{self._label}: torsional END CONNECTIONS (TorsStiffness Rigid or a "
-                    f"stiffness) require a finite-EI line; line {line_id} has EI = 0"
-                )
-            # one restrained end only carries no torque: noted and ignored
-            if not (ends.get("a", False) and ends.get("b", False)):
-                continue
-            twist = torsion_pretwist[line_id]["b"] - torsion_pretwist[line_id]["a"]
-            if abs(twist) > _MAX_STATIC_TWIST_DEG:
-                raise DeckFormatError(
-                    f"{self._label}: line {line_id}: the imposed twist Pretwist(B) - Pretwist(A) = "
-                    f"{twist:.5e} deg exceeds 1000 turns (360000 deg), the largest static twist"
-                )
-            end_a, end_b = normalized_line_endpoints[line_id]
-            if point_types[end_b] != "fixed":
-                raise DeckFormatError(
-                    f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
-                    f"End B; line {line_id} has two moving ends"
-                )
-            for name in section_types_by_line[line_id]:
-                if not line_type_gj[name] > 0.0:
-                    raise DeckFormatError(
-                        f"{self._label}: line {line_id} is torsionally restrained at both ends: "
-                        f'its LINE TYPES row "{name}" must give an explicit GJ > 0 (the 14-column '
-                        "row; torsion has no EI/1.3 default)"
-                    )
-            if _rod_point(point_types[end_a]) is not None:
-                raise DeckFormatError(
-                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a rod end is "
-                    "not supported (a rod has no spin angle in this build)"
-                )
-            body_id = _body_point_id(point_types[end_a])
-            if body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
-                raise DeckFormatError(
-                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a body needs "
-                    "a Rigid6 body"
-                )
-            torsion_lines.add(line_id)
-        # native CD_Init_Deck_Aggregate (deck_has_torsion_columns): a standalone mixed EI = 0 +
-        # finite-EI deck without bodies moves its line ends by translation only and refuses any
-        # restrained end; the OpenFAST and FAST.Farm hosts turn the fairlead frame
-        if has_torsion_column and aggregate_route and not self.caller_driven:
-            raise DeckFormatError(
-                f"{self._label}: a line restrained in torsion needs a host that turns its fairlead "
-                "frame: coupled OpenFAST and FAST.Farm runs do, and a C API host initialised with "
-                "CableDyn_InitDeckRotating, while CableDyn_InitDeck/InitDeckAt and a standalone "
-                "deck that mixes EI = 0 and finite-EI lines without a BODY move the line ends by "
-                "translation only (with a BODY such a deck runs on the multibody route, which "
-                "supports torsion); set TorsStiffness Free in every END CONNECTIONS row"
-            )
-        if not torsion_lines:
-            return torsion_lines
+        rod_kinds = self._rod_rows_by_id()
         tmax_row = option_by_key.get("tmax")
         # a coupled run is always dynamic (the host owns TMax)
         dynamic = self.caller_driven or (
@@ -4374,12 +4357,121 @@ class DeckFile:
             "on",
             "1",
         }
+        torsion_lines: set[str] = set()
+        torsion_notes: dict[str, str] = {}
+        for line_id, ends in torsion_ends.items():
+            if not any(ends.values()):
+                continue
+            if not any(line_type_meta[name][3] > 0.0 for name in section_types_by_line[line_id]):
+                raise DeckFormatError(
+                    f"{self._label}: torsional END CONNECTIONS (TorsStiffness Rigid or a "
+                    f"stiffness) require a finite-EI line; line {line_id} has EI = 0"
+                )
+            if not (ends.get("a", False) and ends.get("b", False)):
+                # one restrained end: solved where the rules hold, noted otherwise
+                end_a, end_b = normalized_line_endpoints[line_id]
+                note = ""
+                if not all(line_type_gj[name] > 0.0 for name in section_types_by_line[line_id]):
+                    note = (
+                        "its LINE TYPES rows give no GJ (the 14-column row; torsion has no "
+                        "EI/1.3 default)"
+                    )
+                elif point_types[end_b] != "fixed":
+                    note = "it has two moving ends (torsion needs a Fixed End B)"
+                elif dynamic and not force_blend:
+                    note = (
+                        "torsion in a dynamic run needs the force-blended generalised-alpha "
+                        "(alpha_force_blend True)"
+                    )
+                elif ends.get("a", False):
+                    body_id = _body_point_id(point_types[end_a])
+                    rod_end = _rod_point(point_types[end_a])
+                    rod_kind = None if rod_end is None else rod_kinds.get(rod_end[0], (None, 0))[0]
+                    if rod_end is not None and rod_kind is not None and rod_kind != "fixed":
+                        if rod_kind in {"coupled", "vessel"}:
+                            note = (
+                                "its restrained End A is on a Coupled/Vessel rod end (no route "
+                                "carries a finite-EI line on a host-driven rod)"
+                            )
+                        else:
+                            note = (
+                                "its restrained End A is on the end of a free or pinned rod "
+                                "(axisymmetric, with no roll angle to hold the torque)"
+                            )
+                    elif body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
+                        note = "its restrained End A is on a body that is not Rigid6"
+                if note:
+                    torsion_notes[line_id] = note
+                    continue
+                # native check_torsion_line: the restrained end's pretwist is the imposed twist
+                restrained_end = "a" if ends.get("a", False) else "b"
+                twist = torsion_pretwist[line_id].get(restrained_end, 0.0)
+                if abs(twist) > _MAX_STATIC_TWIST_DEG:
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id}: the Pretwist of its restrained End "
+                        f"{restrained_end.upper()} = {twist:.5e} deg exceeds 1000 turns "
+                        "(360000 deg), the largest twist"
+                    )
+                torsion_lines.add(line_id)
+                continue
+            twist = torsion_pretwist[line_id]["b"] - torsion_pretwist[line_id]["a"]
+            if abs(twist) > _MAX_STATIC_TWIST_DEG:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: the imposed twist Pretwist(B) - Pretwist(A) = "
+                    f"{twist:.5e} deg exceeds 1000 turns (360000 deg), the largest static twist"
+                )
+            end_a, end_b = normalized_line_endpoints[line_id]
+            if _rod_point(point_types[end_b]) is not None:
+                raise DeckFormatError(
+                    f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
+                    f"End B; line {line_id}{_ROD_END_B_NOTE}"
+                )
+            if point_types[end_b] != "fixed":
+                raise DeckFormatError(
+                    f"{self._label}: torsional END CONNECTIONS require a finite-EI line with Fixed "
+                    f"End B; line {line_id} has two moving ends"
+                )
+            for name in section_types_by_line[line_id]:
+                if not line_type_gj[name] > 0.0:
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id} is torsionally restrained at both ends: "
+                        f'its LINE TYPES row "{name}" must give an explicit GJ > 0 (the 14-column '
+                        "row; torsion has no EI/1.3 default)"
+                    )
+            rod_end = _rod_point(point_types[end_a])
+            rod_kind = None if rod_end is None else rod_kinds.get(rod_end[0], (None, 0))[0]
+            if rod_end is not None and rod_kind is not None and rod_kind != "fixed":
+                if re.fullmatch(r"body[0-9]+pin", rod_kind):
+                    rod_kind += "ned"
+                if rod_kind in {"coupled", "vessel"}:
+                    raise DeckFormatError(
+                        f"{self._label}: line {line_id}: a torsional END CONNECTION on the end of "
+                        f"Coupled/Vessel ROD {rod_end[0]} is not supported: no route of this build "
+                        "carries a finite-EI line on a host-driven rod"
+                    )
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: a torsional END CONNECTION on the end of ROD "
+                    f"{rod_end[0]} ({rod_kind}) is not supported: a free or pinned rod is "
+                    "axisymmetric, with no roll about its own axis (no load acts about the axis "
+                    "and its static solve has no roll angle), so it cannot hold the line's torque; "
+                    "restrain End A on a Fixed rod, on a rod fixed to a Rigid6 body (RODS type "
+                    "Body<N>), on a Rigid6 body point or on a Fixed point"
+                )
+            body_id = _body_point_id(point_types[end_a])
+            if body_id > 0 and body_types.get(str(body_id), "rigid6") != "rigid6":
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: a torsional END CONNECTION on a body needs "
+                    "a Rigid6 body"
+                )
+            torsion_lines.add(line_id)
+        if not torsion_lines:
+            return torsion_lines, torsion_notes
         if dynamic and not force_blend:
             raise DeckFormatError(
                 f"{self._label}: torsion in a dynamic run needs the force-blended "
                 "generalised-alpha (OPTION alpha_force_blend True)"
             )
-        return torsion_lines
+        return torsion_lines, torsion_notes
 
     def _line_type_fields(self, record: DeckRecord) -> tuple[str, ...]:
         fields = _FIELDS["line_type"]

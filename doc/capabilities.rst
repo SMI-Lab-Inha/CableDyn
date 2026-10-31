@@ -67,10 +67,11 @@ Line and constitutive capability
    * - Mixed ``EI = 0`` + finite-EI deck
      - Supported with route limits
      - a mixed deck of lines between held or coupled points only (no bodies, rods, or
-       ``Free``/``Connect`` points) runs in OpenFAST and standalone as a static or held-end
-       dynamic run, and rejects a standalone ``motionFile`` or deck waves; a mixed deck with
-       bodies, rods, or ``Free``/``Connect`` points runs standalone on the multibody march, with
-       moving objects and deck waves/current, but not with a ``motionFile``
+       ``Free``/``Connect`` points) runs in OpenFAST and standalone as a static run or a dynamic
+       run with held ends or a ``motionFile``/``vesselMotion`` prescription, and rejects deck
+       waves standalone (so ``vesselRAO`` too); a mixed deck with bodies, rods, or
+       ``Free``/``Connect`` points runs standalone on the multibody march, with moving objects
+       and deck waves/current, but not with a ``motionFile``
    * - Viscoelastic rope (MoorDyn ``ElasticMod`` 2/3)
      - Supported
      - per-element series-Kelvin state (standard linear solid only when ``BA_D = 0``),
@@ -86,20 +87,25 @@ Line and constitutive capability
        change, as in MoorDyn); finite-EI combinations fail closed by name
    * - Torsion of finite-EI lines
      - Supported with limits
-     - isotropic torsion of a finite-EI line restrained in torsion at both ends
+     - isotropic torsion of a finite-EI line restrained in torsion at both ends, or at one end
+       with the other free to twist (the free end carries no torque and turns with the twist of
+       the line: the stretch's under ``GJ|K``, and torsional waves in dynamics; on every route
+       and with every feature below that takes a line restrained at both ends)
        (``END CONNECTIONS`` torsion columns, explicit ``GJ``), with torque–tension coupling
        (``GJ|K``): condensed (uniform torque) in statics with a stability check and buckling
        descent, and a twist angle at every node in dynamics, with the polar inertia ``Irn`` and
        torsional damping (``GJ|K|Bt``),
-       with turning Rigid6 bodies, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll
-       column standalone, and with the platform orientation in coupled OpenFAST and FAST.Farm
-       runs (torque returned to the platform, ``PtfmInit``, checkpoints, linearisation with the
-       twist angles as states; see :doc:`openfast`) and through the C API with the host's
-       rotations (``CableDyn_InitDeckRotating``, :doc:`capi`), active line control
-       (``CONTROL``) of the fairlead segment on the coupled route; ``Torq``/``Twist`` channels and
-       standalone range graphs. Stopped by name: the standalone mixed ``EI = 0`` + finite-EI
-       aggregate and ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
-       translation only), rod ends, bodies other than Rigid6 and ``False alpha_force_blend``.
+       with turning Rigid6 bodies (the ends of rods fixed to them included), ends of ``Fixed``
+       rods, ``vesselMotion``/``vesselRAO`` and the ``motionFile`` roll column standalone
+       (``vesselMotion`` and the roll column also on a mixed ``EI = 0`` + finite-EI deck), and
+       with the platform orientation in coupled OpenFAST and FAST.Farm runs (torque returned to
+       the platform, ``PtfmInit``, checkpoints, linearisation with the twist angles as states;
+       see :doc:`openfast`) and through the C API with the host's rotations
+       (``CableDyn_InitDeckRotating``, :doc:`capi`), active line control (``CONTROL``) of the
+       fairlead segment on the coupled route; ``Torq``/``Twist`` channels and standalone range
+       graphs. Stopped by name: ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
+       translation only), ends of free and pinned rods (axisymmetric, no roll angle) and of
+       ``Coupled``/``Vessel`` rods, bodies other than Rigid6 and ``False alpha_force_blend``.
        Modal analysis carries the twist angle of every node. Not modelled: seabed friction
        against twist, anisotropic sections, self-contact of a loop (see :ref:`theory-torsion`)
    * - Hockling loops, nonlinear cross-section laws

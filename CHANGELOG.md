@@ -64,6 +64,21 @@ All notable changes to CableDyn are recorded in this file. The format follows
   fairlead to 4.9e-4. In a `Linearize = True` run every input Jacobian, those of the time march
   included, steps the coupled-point rotation by 1e-4 rad instead of 0.1 rad, which changes the
   rotation columns of a deck with a hang-off spring by up to 0.17 %.
+- Prescribed motion and torsion on the standalone mixed deck (`EI = 0` and finite-EI lines between
+  `Fixed`/`Coupled`/`Vessel` points, run on the coupled aggregate): the driver marches a
+  `motionFile` or `vesselMotion` as on the cubic-Hermite route, row 1 installed before `t = 0`
+  (also with `TMax = 0`). A vessel turns the end connection and torsion frames of the cables on
+  its points, and the roll column imposes the twist of a line restrained in torsion, which these
+  decks no longer refuse.
+  Under vessel roll, pitch and heave, or a surge with the roll column, a clamped line gives the
+  single-line route's torque, twist and node positions to the printed eight digits and its end
+  tensions and bend moment within 8.2e-6 of their range (the coupled cables' Newton tolerance; with
+  the single-line route's, every channel to the printed digits). These figures are for motions
+  that start from rest; a start with a jump in velocity differs by several percent of the range
+  (3 to 11 % in the cases tried) under the coupled Newton tolerance. A straight line rolled
+  slowly gives `Torq = GJ Phi / L` to 5e-6 N m. A static mixed run (`TMax = 0`) with torsion
+  takes `False alpha_force_blend`, as the single-line route and the Python reader do.
+  `vesselRAO` stays refused with the deck waves.
 - OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
   interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
   degrees of freedom of every finite-EI cable (node positions and tangents), then their
@@ -112,6 +127,49 @@ All notable changes to CableDyn are recorded in this file. The format follows
   modes match the clamped Greenhill cable to 3e-7; eliminating the angles reproduces the
   condensed static tangent to 1e-16. `<root>.modes.out` adds `PolarShare` and `dTwist` when a
   line carries twist.
+- Torsion of a finite-EI line restrained at one end only, the other free to twist (`TorsStiffness`
+  `Free` there, or no row): solved where a line restrained at both ends is and its LINE TYPES
+  rows give `GJ`, instead of being ignored. The free end carries no torque and turns with the
+  twist of the line: statically `Twist<L> = −Σ (K/GJ)(l − L)` under `GJ|K` (End B relative to
+  End A; to 1e-8 on a stretched straight cable, the moving end free or the anchored one), and in
+  the dynamics with torsional waves that reflect at it. A straight line held rigidly at the other end rings at the
+  clamped–free frequencies `(2n − 1) π/(2L) √(GJ/Irn)` (3e-4 and 3e-3 for n = 1, 2), and a roll
+  of the restrained end gives the continuum's free-end turn `A/cos kL` and reaction
+  `GJ A k tan kL` to 0.5 % below and above the first mode, in the standalone driver and on the
+  coupled aggregate. The `Torq`/`Twist` channels and range columns work on such a line, and
+  its `CurvX`/`CurvY` axes follow its twist. Results change on such decks: the dynamics carry
+  the twist (on a swaying lazy-wave cable with `GJ|K` the tensions move by up to 1.5e-4, 7e-8
+  in a planar heave), and a line restrained at End A on a Rigid6 body joins the static body
+  balance of the clamped ends: bending-Pinned there, its body's static moment now balances
+  (Body1My −103.9 N m to 1e-6 on a buoy, FairTen1 126885 to 126857 N, 2.2e-4, Body1Ry
+  0.3004 to 0.2984 deg; the march then differs by up to 2.6 % at dtM 0.05 s, 0.5 % at
+  0.0125 s); clamped there, by about 1e-7. OpenFAST checkpoints of such decks written before
+  this change do not reload: the cable's state mirror now carries the nodal twist, and the
+  rebuild stops at a mirror-extent check (`... mirror extends past the state vector`). A line
+  restrained at one end that misses a rule (no `GJ`, two moving ends, the configuration blend,
+  a restrained End A on a free, pinned or Coupled rod end or a non-Rigid6 body) is solved
+  without torsion as before, with a note naming the rule; a solved one's restrained `Pretwist`
+  is held within 1000 turns.
+- Torsion at a rod end: a line restrained in torsion may hang from an end of a `Fixed` rod (an
+  I-tube or J-tube), whose frame holds the End A torsion frame, with `Nx` in the rod's deck
+  axes. Two turns on an inclined J-tube give `GJ Phi / L` to 1.2e-9, the same torque as from a
+  held Coupled point, and `Rod<N>M` the torque along the line axis; the line written anchor
+  first (MoorDyn's order) runs bit for bit as written rod first. On a rod fixed to a rolling Rigid6
+  body the torque follows `GJ (Phi - theta)/L` to 4e-11, and `Rod<N>M` of a rod fixed to a body
+  now includes the connection moment of a cable clamped at its end (it read 0). Free, pinned
+  and Coupled rods refuse the torsion by name, and so does `staggered bodyScheme` on a body or
+  rod (it drove the cable end by translation, so the torsion frame did not turn); a line between
+  two rods is refused as ending on a rod end, not as having two moving ends.
+- The torsion routes combined: a line restrained in torsion at one end only takes `ATTACHMENTS`,
+  `CONTROL`, `nModes` and a `Fixed` rod end, which left it unsolved in torsion. With modules of
+  net weights 14.6, −9.1 and 5.8 kN on a vertical cable its free end turns by `−(K/GJ)(H − L)`
+  to 8.5e-9 and its mid-line node with the module tensions to 3.9e-4 (a first-order mesh
+  error); a paid-out fairlead turns it by `−(K/GJ)(H − L(t))` to 4e-11 with no torque; its modes
+  and the eigenvalues of the OpenFAST `A` are the clamped–free chain's to 8e-10 and 2e-14 and
+  the quarter-wave `(2n − 1)π/(2L) √(GJ/Irn)` within the lumped-inertia error, with no roll
+  stiffness. The modal twist Hessian no longer takes a free end for an elastic one of infinite
+  stiffness. `ATTACHMENTS` on a line restrained at both ends run on the mixed `EI = 0` +
+  finite-EI route and on a `Fixed` rod end as on the single-line route (to the printed digits).
 - Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
   `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
   `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.
@@ -184,6 +242,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- With a `motionFile` or `vesselMotion`, the single-line finite-EI route writes `.static.out`
+  before it installs the first motion row, so the file holds the static solve; before, it showed
+  the fairlead already moved to row 1. A deck whose row 1 is off the deck fairlead changes
+  `.static.out` only (a 2 cm offset changed the fairlead x by 0.02 m and its tension from 3.5 MN
+  back to the static 29 kN); the example decks are unchanged.
 - `TMax = 0` checks the static start of any dynamic deck as it stands: a `motionFile` or
   `vesselMotion` record may run past `TMax` (its later rows are checked on the `dtM` grid and
   not used, so a long record also serves a shorter run), and `RangeStart` is accepted at

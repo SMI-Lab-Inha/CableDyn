@@ -334,13 +334,23 @@ rejected. `EI > 0` is routed as follows.
   [multibody march](#multibody-march).
 - When `motionFile` row 1 differs from the deck fairlead, CableDyn installs that boundary state
   and the initial fluid field, then recomputes the free-node acceleration from the full
-  structural, contact, and hydrodynamic residual before writing `t = 0`.
+  structural, contact, and hydrodynamic residual before writing `t = 0` (also with `TMax = 0`).
+  The `.static.out` profile is written before that, so it holds the static solve.
 
 **Standalone mixed deck** (separate `EI = 0` and `EI > 0` lines between `Fixed`/`Coupled`/`Vessel`
 points only): the deck is partitioned through the same atomic aggregate used by OpenFAST.
-`Coupled`/`Vessel` endpoints are held at their deck positions. The run writes the common `.out`
-and the all-line `.static.out` tables, plus the range graph of every line with the `r` flag.
-Mixed decks reject, by name, `motionFile`, deck wave/current OPTIONS, WaterKin `WaveKinMod 1`,
+`Coupled`/`Vessel` endpoints are held at their deck positions, or follow a `motionFile` or
+`vesselMotion` as on the cubic-Hermite route: row 1 is installed and the cables' free-node
+accelerations recomputed before `t = 0` (also with `TMax = 0`, whose `.out` row is then that
+state; `.static.out` holds the static solve), a vessel turns the end connection and torsion
+frames of the cables on its points, and the roll column imposes the twist of a line restrained
+in torsion. The row-1 transfer also re-derives the interior accelerations of the `EI = 0` lines
+at that state, which the `EI = 0`-only route does not, so when row 1 is off the deck pose their
+first steps differ from that route's. A static run (`TMax = 0`) of a line restrained in torsion
+takes `False alpha_force_blend`, as on the single-line route.
+The run writes the common `.out` and the all-line `.static.out` tables, plus the range graph of
+every line with the `r` flag.
+Mixed decks reject, by name, deck wave/current OPTIONS (so `vesselRAO`), WaterKin `WaveKinMod 1`,
 MoorDyn-C `WaveKin 3`/`7` and `Currents 1`/`2`/`5`, and per-line `p`/`t` flags.
 
 (multibody-march)=
@@ -385,8 +395,9 @@ connection moment. On this route:
 
 - a finite-EI cable needs a `Fixed` End B, and its End A may be a `Fixed` point, a Rigid6
   `Body<N>` point or a rod end, not a `Free`/`Connect` point or a `Point3` buoy;
-- a clamped or elastic End A on a body or rod needs `bodyScheme monolithic` (the default);
-  `staggered` rejects it by name;
+- a clamped or elastic End A on a body or rod, or one restrained in torsion (bending-pinned
+  included), needs `bodyScheme monolithic` (the default); `staggered`, which drives a cable end by
+  translation, rejects it by name;
 - every `Free`/`Connect` point carries at least one EI = 0 line;
 - `motionFile` and `Coupled`/`Vessel` rods are rejected by name.
 
@@ -699,10 +710,11 @@ never both: a `SECTIONS` row for a 7-column line is an error naming the line.
 
 **Automatic anchor-first swap.** Stock MoorDyn decks list lines anchor first. When a line's
 `NodeA` is a `Fixed` point and its `NodeB` is a `Coupled`, `Vessel`, `Body<N>`, `Free`, or
-`Connect` point (`Turbine<J>` points count as coupled), the parser swaps the two ends, reverses
-that line's `SECTIONS` rows, and swaps its `END CONNECTIONS` ends, negating their reference
-directions. Lines already listed fairlead first, and `Free`/`Connect`-to-`Coupled` lines, are left
-as written.
+`Connect` point (`Turbine<J>` points count as coupled), or a finite-EI line's `NodeB` is a rod
+end (`R<N>A`/`R<N>B`), the parser swaps the two ends, reverses that line's `SECTIONS` rows, and
+swaps its `END CONNECTIONS` ends, negating their reference directions and pretwists (the
+torsion normals swap with their ends). Lines already listed fairlead first, `EI = 0` lines to a
+rod end, and `Free`/`Connect`-to-`Coupled` lines are left as written.
 
 **Endpoint rules.**
 
@@ -802,8 +814,8 @@ Behaviour:
 - On a `Body<N>` point the direction is given in the body frame, like the point offset, and
   turns with the body. On a rod end it must be parallel to the rod axis (either sense, in the
   frame of the rod's deck coordinates); another direction is rejected by name. The connection
-  moment is part of `Body<N>M*`/`Rod<N>M*`, and the body or rod carries it in the dynamics and in
-  the static solve.
+  moment is part of `Body<N>M*`/`Rod<N>M*` (of both on an end of a rod fixed to a body), and the
+  body or rod carries it in the dynamics and in the static solve.
 - A finite stiffness is an isotropic rotational spring on the tangent direction; the tangent
   magnitude stays free.
 - `Rigid` is an exact two-coordinate direction constraint, not a large penalty; the tangent
@@ -839,10 +851,31 @@ used.
 
 Behaviour:
 
-- Torsion is solved only on a line restrained at **both** ends. With one end restrained the
-  other end is free to twist, the line carries no torque, and the driver prints a note and
-  solves the line as without the columns (the rules below then do not apply). `Free` columns,
-  or no columns, reproduce the 6-column results exactly.
+- Torsion is solved on a line restrained at both ends, and on a line restrained at **one** end
+  whose other end is free to twist (`TorsStiffness` `Free` there, or no row), under the rules
+  below. A free end carries no torque. In statics the line then has none, and its static state
+  is that of the line without the columns; under torque–tension coupling (`GJ|K`) the stretch
+  twists it by `Twist<L> = −Σ (K/GJ)(l − L)` over the elements (`l` stretched, `L`
+  unstretched). `Twist<L>` keeps its sign, the turn of End B relative to End A, right-handed
+  about the End A → End B tangent: a free End B turns by `+Twist<L>` against End A's frame
+  carried along the line, a free End A by `−Twist<L>` against End B's. In the dynamics the
+  polar inertia `Irn` carries torsional waves that reflect at the free end, and the restrained
+  end (and the body or vessel holding it) takes their torque. The free end's `Nx` and
+  `Pretwist` are not used. The section axes of `CurvX`/`CurvY` start, with End A restrained,
+  from End A's `Nx` (not rolled by its `Pretwist`, as on a line restrained at both ends) and,
+  with End B restrained, from End B's `Nx` rolled by End B's `Pretwist`; either way they are
+  carried along the line and turned by its twist. `ATTACHMENTS`, `CONTROL`, `nModes` (the
+  free end's angle is a mode coordinate, with the clamped–free modes) and OpenFAST
+  linearisation (the free end's angle is a state) take such a line as they take one
+  restrained at both ends. A line restrained at one end that misses a rule (its `LINE TYPES`
+  rows give no `GJ`, two moving ends, a dynamic or coupled run with `False alpha_force_blend`,
+  a restrained End A on a rod end other than a `Fixed` rod's or on a non-Rigid6 body) is
+  solved as without the columns, and the standalone driver prints a note with the reason. A
+  solved one's imposed twist, its restrained end's `Pretwist`, must lie within 1000 turns, as
+  `Pretwist(B) − Pretwist(A)` must on a line restrained at both ends. A line restrained at End A
+  on a Rigid6 body joins the static balance of the body's clamped and elastic ends, also at a
+  bending-`Pinned` End A (the body takes its torque).
+  `Free` columns, or no columns, reproduce the 6-column results exactly.
 - The imposed twist is `Phi = Pretwist(B) − Pretwist(A)`, measured against the line's own
   geometric twist `Theta`, the parallel-transport rotation of the End A normal carried along the
   centreline to End B (zero for a line that stays in a plane, with both normals perpendicular to
@@ -853,9 +886,15 @@ Behaviour:
   set the End B pretwist to minus the static `Twist<L>` of a run with zero pretwist (in degrees);
   the line then keeps its untwisted shape.
 - The torsion end frame turns with what carries the end: a Rigid6 body, the vessel of
-  `vesselMotion`/`vesselRAO`, or nothing at a `Fixed` or held point. The `motionFile` roll
-  column rolls the frame of the line's moving end
+  `vesselMotion`/`vesselRAO`, or nothing at a `Fixed` or held point or on a `Fixed` rod. The
+  `motionFile` roll column rolls the frame of the line's moving end
   ([Prescribed motion](#prescribed-motion-motionfile)).
+- On a rod end (an I-tube or J-tube modelled as a rod), `Ez` lies along the rod axis and `Nx`
+  is given in the frame of the rod's deck coordinates, as `Ez` is. A `Fixed` rod holds the frame
+  still, and its `Rod<N>M*` carries the torque about the line axis. The ends of a rod fixed to a
+  Rigid6 body (`RODS` type `Body<N>`) are points of the body: `Ez` and `Nx` are given in the body
+  frame, the frame rolls with the body, and the torque reaches the body (`Body<N>M*`) and appears
+  in the rod's `Rod<N>M*`.
 - A Rigid6 body holding such a line turns by less than 90° per step: a step whose turn would be
   larger is halved (the twist is read from the body's orientation, which repeats every turn), and
   a run that still needs more after six halvings stops by name; reduce `dtM`.
@@ -869,24 +908,26 @@ Behaviour:
   dynamics; it is part of `Body<N>M*`.
 - Statics solve the imposed twist as the last load stage, in steps of at most 45°, test every
   stage for stability and, above a buckling onset, leave the unstable straight state for the
-  buckled one. Dynamics carry the torque in every step; torsion has no inertia (quasi-static
-  torsion), so the torque follows the imposed twist without a torsional wave.
+  buckled one. Dynamics carry the torsion in every step with a twist angle at every node and the
+  polar inertia `Irn` of the `LINE TYPES` row (see [theory](theory.rst)).
 
 Scope. A torsionally restrained line needs a finite-EI line with a `Fixed` End B, an explicit
-`GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point or a Rigid6
-`Body<N>` point; in a coupled OpenFAST or FAST.Farm run the End A frame turns with the platform
-(see the manual's OpenFAST page, Line torsion). Each of the following stops with a named error:
-torsion on an `EI = 0` line, on a rod end or on a `Point3` body,
-a dynamic or coupled run with `False alpha_force_blend`, any
-restrained end (one end included) in a standalone deck mixing `EI = 0` and finite-EI lines
-without a body or through the C API's `CableDyn_InitDeck`/`InitDeckAt`, which move the line
-ends by translation only (`a line restrained in torsion needs a host that turns its fairlead
-frame ...`; with a body such a deck runs on the multibody route, which supports torsion, and a C
-API host passes its rotations after `CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel
-on a line that is not restrained at both ends. OpenFAST linearisation includes the twist angles
-as states; like any cable, the line must not have a `Rigid` bending connection there. Seabed
-friction does not resist twist (the laid part of a line twists freely), and there
-is no torque–tension coupling.
+`GJ` on every section, and, at End A, a `Fixed`, `Coupled`/`Vessel` point, a Rigid6 `Body<N>`
+point (the ends of a `Body<N>` rod included) or an end of a `Fixed` rod; in a coupled OpenFAST
+or FAST.Farm run the End A frame turns with the platform (see the manual's OpenFAST page, Line
+torsion). Each of the following stops with a named error: torsion on an `EI = 0` line, on an end
+of a `Free`, `Pinned`, `Body<N>Pinned` or `CoupledPinned` rod (an axisymmetric rod has no roll
+angle about its own axis: no load acts about the axis and its static solve has none, so it
+cannot hold the torque) or of a `Coupled`/`Vessel` rod (no route carries a finite-EI line on a
+host-driven rod), a line whose End B is a rod end (a line between two rods: put a `Fixed` point
+at the rod end), on a `Point3` body, a dynamic or coupled run with `False alpha_force_blend`,
+any restrained end (one end included) through the C API's `CableDyn_InitDeck`/`InitDeckAt`,
+which move the line ends by translation only (`a line restrained in torsion needs a host that
+turns its fairlead frame ...`; a C API host passes its rotations after
+`CableDyn_InitDeckRotating`), and a `Torq`/`Twist` channel on a line whose torsion is not
+solved. OpenFAST linearisation includes the twist angles as states; like any cable, the line
+must not have a `Rigid` bending connection there. Seabed friction does not resist twist (the
+laid part of a line twists freely).
 
 ### EQUIVALENT BUOYANCY (optional)
 
@@ -1347,14 +1388,16 @@ cases. With an active path:
   `Free` rods in the same deck are integrated dynamically.
 - Rigid6 decks prescribe the full 6-DOF body motion from `Body<N>` rows (see
   [BODIES](#deck-bodies)).
-- `Connect`/`Free` point-system decks, FAILURE decks, and mixed `EI = 0` + finite-EI decks reject
-  `motionFile`.
+- A mixed `EI = 0` + finite-EI deck of lines between `Fixed`/`Coupled`/`Vessel` points moves the
+  points of both line kinds from their rows, and a finite-EI line on them as on the finite-EI
+  route (row 1 installed before `t = 0`, the roll column below).
+- `Connect`/`Free` point-system decks and FAILURE decks reject `motionFile`.
 
 Every non-comment record of the motion file is one row `time point_id x y z vx vy vz ax ay az` of
-plain numbers; tokens after the eleventh are ignored, except that a deck with a line restrained
-in torsion at both ends reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the
-line's moving end (End A, or End B in a deck that lists the `Fixed` anchor as End A), right-handed
-about the line tangent pointing into the line from that end. Either way it imposes
+plain numbers; tokens after the eleventh are ignored, except that a deck with a line solved in
+torsion reads a twelfth, `roll` [deg]: at the point, the roll of the frame of the line's moving
+end, restrained in torsion (End A, or End B in a deck that lists the `Fixed` anchor as End A),
+right-handed about the line tangent pointing into the line from that end. Either way it imposes
 `Phi(t) = Pretwist(B) − Pretwist(A) − roll(t)`: the roll has the sense of `Pretwist(A)` at End A
 (where the inward tangent is `Ez`) and the opposite sense to `Pretwist(B)` at End B (where it is
 `−Ez`). The roll is 0 at
@@ -1476,9 +1519,9 @@ bending moment. None of these channels is mandatory.
 | `TDP<L>Lay` | line L layback: horizontal distance from the TDP to the suspended end | m |
 | `TDP<L>Exc` | line L TDP excursion: horizontal TDP displacement from its initial position, along the initial direction toward the suspended end | m |
 | `TDP<L>Grd` | line L grounded length: deformed chord length along the nodes from the grounded end to the TDP; continuous with the TDP, 0 only when nothing touches (the grounded end has lifted off) | m |
-| `Torq<L>N<J>` | line L torque at node J (uniform along the line); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line restrained in torsion at both ends | N·m |
-| `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` over the elements in between; 0 at End A, without the end-spring windup. Only on a line restrained in torsion at both ends | deg |
-| `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included. Only on a line restrained in torsion at both ends | deg |
+| `Torq<L>N<J>` | line L torque at node J (uniform along the line in statics); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line solved in torsion (restrained at both ends, or at one end with the other free) | N·m |
+| `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` (less `(K/GJ)(l − L)` under coupling) over the elements in between; 0 at End A, without the end-spring windup. Only on a line solved in torsion | deg |
+| `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included; on a line free at one end the twist of its elements, the free end's turn. Only on a line solved in torsion | deg |
 
 - `<L>`/`<P>` are deck LINE/POINT **ids**, not array positions. A channel that matches no
   supported form, names an unknown id, or carries trailing text (for example `Point2px_raw`) is a

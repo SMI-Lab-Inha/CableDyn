@@ -743,6 +743,11 @@ CONTAINS
       IF (es /= CD_HTORS_OK) THEN
         CALL fail(TRIM(ErrMsg)); RETURN
       END IF
+      ! a free end (infinite end compliance): the static torque is zero, nothing to solve
+      IF (ANY(torsion%end_free)) THEN
+        CALL fail('torsion: a line free in torsion at one end carries no static torque; solve it without '// &
+                  'torsion'); RETURN
+      END IF
       tors_c = CD_HermiteTorsion_Compliance(torsion, l0)
       IF (.NOT. (tors_c > CD_ZERO) .OR. .NOT. CD_Is_Finite(tors_c)) THEN
         CALL fail('torsion: the line compliance must be finite and positive'); RETURN
