@@ -2388,6 +2388,10 @@ add_executable(test_mixed_route_torsion tests/test_mixed_route_torsion.f90)
 target_link_libraries(test_mixed_route_torsion PRIVATE cabledyn_core)
 add_test(NAME mixed_route_torsion COMMAND test_mixed_route_torsion $<TARGET_FILE:cabledyn>)
 set_tests_properties(mixed_route_torsion PROPERTIES LABELS "fortran;driver;integration;dynamic")
+# A standalone TURBINES deck of a finite-EI cable between two turbines and chain legs on the mixed
+# route, against its cable-only and legs-only decks (gate 9).
+add_test(NAME mixed_route_turbines COMMAND test_mixed_route_torsion $<TARGET_FILE:cabledyn> turbines)
+set_tests_properties(mixed_route_turbines PROPERTIES LABELS "fortran;driver;integration;dynamic")
 
 # Deck currents on the standalone mixed route (the aggregate samples the deck current at every
 # node before each step): OPTION uniform and profile and MoorDyn-C Currents 1/2/5 against the

@@ -483,6 +483,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   start with the same torques on every kernel, proportional to the pretwist.
 - The "unresolved/kinked equilibrium" refusal names the element and the factor to refine its
   section's `NumSegs` by.
+- A standalone `TURBINES` deck that mixes `EI = 0` lines and finite-EI cables (a power cable
+  shared by two turbines beside their chain legs, the usual farm deck) runs. It stopped with the
+  internal message `no farm init was given (pass n_turbines + turbine_ref_pos)`: the mixed route
+  did not take the `TURBINES` rows. It now places the `Turbine<J>` points from them and moves the
+  points and turns the cable end frames with the per-turbine `motionFile` records, as the decks of
+  the cables alone and of the `EI = 0` lines alone do. The IEA 15 MW two-turbine deck (a 1530 m
+  cable restrained in torsion and four chains, 60 s of FAST.Farm platform motion) reproduces those
+  two decks to 3.2e-6 of the channel maxima and the FAST.Farm `Mod_SharedMooring = 5` run to
+  2.3e-5. On a two-turbine test deck whose turbines heave and roll, the chains match their deck
+  bit for bit and the cable, marched with the single-cable route's Newton controls, matches its
+  deck to 0.44 of the last printed digit. A `Turbine<J>` point in a run without a farm
+  (single-turbine OpenFAST, the C API) is now refused by point, naming FAST.Farm and the
+  `TURBINES` section.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's

@@ -292,7 +292,7 @@ CONTAINS
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                    range_files, host_orientation, static_current, prescribed_motion, static_run, &
-                                   deck_current)
+                                   deck_current, deck_turbines)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -343,6 +343,9 @@ CONTAINS
     ! deck_current: the caller marches the deck's own current (the standalone driver; see
     ! CD_Init_Deck_Aggregate): every step samples it at the nodes, at its t_committed
     LOGICAL, INTENT(IN), OPTIONAL :: deck_current
+    ! deck_turbines: the standalone driver runs a TURBINES deck, whose TURBINES rows place the
+    ! Turbine<J> points and whose per-turbine records move them (see CD_Init_Deck_Aggregate)
+    LOGICAL, INTENT(IN), OPTIONAL :: deck_turbines
 
     ! Both bundles (about 70 KB together) are built on the heap: initialisation runs on the
     ! thread of the calling host, whose stack size CableDyn does not choose.
@@ -383,7 +386,8 @@ CONTAINS
                                 forbid_deck_ambient=forbid_deck_ambient, run_tmax=run_tmax, &
                                 range_files=range_files, host_orientation=host_orientation, &
                                 static_current=static_current, prescribed_motion=prescribed_motion, &
-                                static_run=static_run, deck_current=deck_current)
+                                static_run=static_run, deck_current=deck_current, &
+                                deck_turbines=deck_turbines)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF
@@ -1522,7 +1526,9 @@ CONTAINS
     !! DCM (3, 3, ncp_total) with the global-axis angular velocity and acceleration (3,
     !! ncp_total), and the roll (ncp_total). has_rotation: a vesselMotion table, whose
     !! orientation and rates the step takes (the fairlead end connection and torsion frames
-    !! turn with the vessel, as on the standalone cubic-Hermite route); has_roll: a motionFile
+    !! turn with the vessel, as on the standalone cubic-Hermite route), or the per-turbine
+    !! records of a TURBINES deck whose lines carry end frames (each column turns with its
+    !! turbine); has_roll: a motionFile
     !! roll column the step takes as roll. Without them (motionFile point rows) the frames are
     !! held and the step takes the translations alone.
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self

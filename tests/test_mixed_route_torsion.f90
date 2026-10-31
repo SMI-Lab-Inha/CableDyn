@@ -42,6 +42,19 @@
 !>     with End B's point listed first in POINTS (the moving columns follow the cables, End A
 !>     columns then End B columns, not the POINTS order). Fails if the roll of a two-moving-end
 !>     cable is dropped or an end's motion is read from another moving column.
+!>  9. Run alone (second argument "turbines", ctest mixed_route_turbines): a TURBINES deck (two
+!>     turbines, PtfmInit offsets and yaws, per-turbine motionFile records of heave and roll from
+!>     rest) with a finite-EI cable between the turbines, clamped (Rigid) and restrained in torsion
+!>     at both ends, and an EI = 0 chain from each turbine to an anchor. The driver runs it on the
+!>     mixed route (it used to stop for want of a farm context) and the deck's cable alone on the
+!>     standalone cubic-Hermite route and its chains alone on the standalone EI = 0 route, both of
+!>     which consume the TURBINES rows. The chains' tensions agree to LOAD_TOL of their range; the
+!>     cable's channels agree to the coupled cable's Newton controls (relative tolerance 5e-3; the
+!>     standalone route given those controls writes the mixed run's cable byte for byte, about 1e-2
+!>     of the range from its own). The aggregate library marched with the standalone controls, as
+!>     in gate 1, reproduces the cable-only run's cable channels to the printed precision. Each
+!>     turbine's yaw and roll turn the clamped end on it (End A on turbine 1, End B on turbine 2),
+!>     so the end bend moments and the torque carry each end's own turbine.
 PROGRAM test_mixed_route_torsion
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -66,20 +79,46 @@ PROGRAM test_mixed_route_torsion
   ! the gate 1 and 2 channels of line 1 (the same in both decks) and the chain's
   CHARACTER(16), PARAMETER :: OUTS(10) = [LOADS, EXACT(1:3), [CHARACTER(16) :: 'L1N21px', 'L1N21py', 'L1N21pz']]
   CHARACTER(16), PARAMETER :: CHAIN_OUTS(2) = [CHARACTER(16) :: 'FairTen2', 'Point3pz']
+  ! gate 9: the cable's end loads and bend moments (compared to LOAD_TOL), its torque, twist and
+  ! mid node (to TURB_TOL), and the chains' tensions (to LOAD_TOL)
+  CHARACTER(16), PARAMETER :: TURB_LOADS(4) = [CHARACTER(16) :: 'FairTen1', 'AnchTen1', 'BendMom1N1', 'BendMom1N41']
+  CHARACTER(16), PARAMETER :: TURB_TWIST(4) = [CHARACTER(16) :: 'Torq1N1', 'Twist1', 'L1N21py', 'L1N21pz']
+  CHARACTER(16), PARAMETER :: TURB_CABLE(8) = [TURB_LOADS, TURB_TWIST]
+  CHARACTER(16), PARAMETER :: TURB_CHAINS(4) = [CHARACTER(16) :: 'FairTen2', 'AnchTen2', 'FairTen3', 'AnchTen3']
+  ! gate 9: the driver's mixed run against the cable-only run (the coupled cable's Newton controls)
+  REAL(wp), PARAMETER :: TURB_TOL = 5.0e-2_wp
   REAL(wp), PARAMETER :: LOAD_TOL = 5.0e-5_wp, POS_TOL = 1.0e-6_wp
   ! printed precision of ES15.7E3: half a unit in the 8th significant digit of each value, with a
   ! unit of the 8th digit of the channel's range for a value that crosses zero
   REAL(wp), PARAMETER :: PRINT_TOL = 6.0e-8_wp, PRINT_FLOOR = 1.0e-7_wp
   CHARACTER(1024) :: driver
+  ! the run's gates: 1-8, or with the second argument "turbines" gate 9 alone
+  CHARACTER(16) :: mode
+  LOGICAL :: turbines_only
   CHARACTER(160) :: neutral_t
   INTEGER :: n_fail = 0
 
   IF (COMMAND_ARGUMENT_COUNT() < 1) ERROR STOP 'usage: test_mixed_route_torsion <CableDyn_driver executable>'
   CALL GET_COMMAND_ARGUMENT(1, driver)
+  ! "turbines": gate 9 alone (its own ctest entry, mixed_route_turbines); the other gates otherwise
+  turbines_only = .FALSE.
+  IF (COMMAND_ARGUMENT_COUNT() >= 2) THEN
+    CALL GET_COMMAND_ARGUMENT(2, mode)
+    turbines_only = TRIM(mode) == 'turbines'
+  END IF
   ! neutral 0.2 m section of test_torsion_deck: EA 1e7, EI 1e6, GAs 1e8, GJ 5e4, Irn 1e-12
   WRITE (neutral_t, '(A,ES24.16,A)') 'cab 0.2 ', RHOW*0.25_wp*PI*0.04_wp, &
     ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-12 0.0 0.0 0.0 0.0'
 
+  IF (turbines_only) THEN
+    CALL check_turbines()
+    IF (n_fail > 0) THEN
+      WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' mixed-route TURBINES gate(s) failed'
+      ERROR STOP 1
+    END IF
+    WRITE (*, '(A)') 'PASS: the standalone TURBINES deck of EI = 0 and finite-EI lines on the mixed route'
+    STOP
+  END IF
   CALL check_vessel_routes()
   CALL check_roll_routes()
   CALL check_quasi_static(QS_HELD)
@@ -109,10 +148,12 @@ CONTAINS
     END IF
   END SUBROUTINE require
 
-  SUBROUTINE write_deck(path, types, points, lines, sections, endconns, options, outs, atts)
+  SUBROUTINE write_deck(path, types, points, lines, sections, endconns, options, outs, atts, turbs)
     CHARACTER(*), INTENT(IN) :: path, types(:), points(:), lines(:), sections(:), endconns(:), options(:), outs(:)
     ! ATTACHMENTS rows (none when absent)
     CHARACTER(*), INTENT(IN), OPTIONAL :: atts(:)
+    ! TURBINES rows (none when absent)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: turbs(:)
     INTEGER :: u, i
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'mixed-route torsion gate'
@@ -128,6 +169,13 @@ CONTAINS
     DO i = 1, SIZE(points)
       WRITE (u, '(A)') TRIM(points(i))
     END DO
+    IF (PRESENT(turbs)) THEN
+      WRITE (u, '(A)') '--- TURBINES ---'
+      WRITE (u, '(A)') 'J X0 Y0 Z0 PtfmSurge PtfmSway PtfmHeave PtfmRoll PtfmPitch PtfmYaw'
+      DO i = 1, SIZE(turbs)
+        WRITE (u, '(A)') TRIM(turbs(i))
+      END DO
+    END IF
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
@@ -883,4 +931,219 @@ CONTAINS
     CALL require(log_has('tmrt_blend_d1', 'torsion in a dynamic run needs the force-blended'), &
                  '6: the configuration blend of a dynamic one-end torsion run is named')
   END SUBROUTINE check_static_blend
+
+  PURE SUBROUTINE smooth_start(amplitude, t, f, df, d2f)
+    !! f = F (1 - cos w t)^2 / 4 and its rates, w = 2 pi / PERIOD: a motion from rest with no
+    !! acceleration at t = 0 (f'' = F w^2 (sin^2 w t + (1 - cos w t) cos w t) / 2).
+    REAL(wp), INTENT(IN) :: amplitude, t
+    REAL(wp), INTENT(OUT) :: f, df, d2f
+    REAL(wp) :: w, c, sn
+    w = 2.0_wp*PI/PERIOD
+    c = COS(w*t)
+    sn = SIN(w*t)
+    f = 0.25_wp*amplitude*(1.0_wp - c)**2
+    df = 0.5_wp*amplitude*w*(1.0_wp - c)*sn
+    d2f = 0.5_wp*amplitude*w*w*(sn*sn + (1.0_wp - c)*c)
+  END SUBROUTINE smooth_start
+
+  SUBROUTINE turbine_record(j, t, row)
+    !! Gate 9: the motionFile record of turbine j at time t (time J x y z q0 q1 q2 q3 vx vy vz wx wy
+    !! wz ax ay az alx aly alz). Turbine 1 at (0, 0, 0) with PtfmInit surge 2 m, heave -0.5 m and
+    !! yaw 180 deg, turbine 2 at (300, 0, 0) with PtfmInit sway 1 m and yaw 5 deg; from rest, with
+    !! no acceleration at t = 0 (smooth_start), each heaves 1 m (turbine 2: -0.8 m) and rolls 10 deg
+    !! (turbine 2: -8 deg) about its own x axis:
+    !! R = Rz(yaw) Rx(roll), the quaternion [cz cx, cz sx, sz sx, sz cx] of the half angles, the
+    !! global angular velocity Rz(yaw) (roll', 0, 0) and acceleration Rz(yaw) (roll'', 0, 0).
+    INTEGER, INTENT(IN) :: j
+    REAL(wp), INTENT(IN) :: t
+    REAL(wp), INTENT(OUT) :: row(21)
+    REAL(wp) :: x0(3), yaw, zh, vz, az, ro, dro, d2ro, ex(3)
+    IF (j == 1) THEN
+      x0 = [2.0_wp, 0.0_wp, -0.5_wp]
+      yaw = 180.0_wp*D2R
+      CALL smooth_start(1.0_wp, t, zh, vz, az)
+      CALL smooth_start(10.0_wp*D2R, t, ro, dro, d2ro)
+    ELSE
+      x0 = [300.0_wp, 1.0_wp, 0.0_wp]
+      yaw = 5.0_wp*D2R
+      CALL smooth_start(-0.8_wp, t, zh, vz, az)
+      CALL smooth_start(-8.0_wp*D2R, t, ro, dro, d2ro)
+    END IF
+    ex = [COS(yaw), SIN(yaw), 0.0_wp]
+    row = 0.0_wp
+    row(1) = t
+    row(2) = REAL(j, wp)
+    row(3:5) = x0 + [0.0_wp, 0.0_wp, zh]
+    row(6:9) = [COS(0.5_wp*yaw)*COS(0.5_wp*ro), COS(0.5_wp*yaw)*SIN(0.5_wp*ro), SIN(0.5_wp*yaw)*SIN(0.5_wp*ro), &
+                SIN(0.5_wp*yaw)*COS(0.5_wp*ro)]
+    row(10:12) = [0.0_wp, 0.0_wp, vz]
+    row(13:15) = dro*ex
+    row(16:18) = [0.0_wp, 0.0_wp, az]
+    row(19:21) = d2ro*ex
+  END SUBROUTINE turbine_record
+
+  SUBROUTINE turbine_deck(path, cable, chains)
+    !! Gate 9: the TURBINES deck (the turbines of turbine_record) with the finite-EI cable (line
+    !! 1, 300 m, 40 elements) from point 1 on turbine 1 to point 2 on turbine 2, both clamped and
+    !! restrained in torsion (Pretwist 30 deg at End B), and/or the chains 2 and 3 from points 3 (on
+    !! turbine 1) and 5 (on turbine 2) to the anchors 4 and 6. Coordinates of a Turbine<J> point and
+    !! its Ez and Nx are in its turbine's axes.
+    CHARACTER(*), INTENT(IN) :: path
+    LOGICAL, INTENT(IN) :: cable, chains
+    CHARACTER(48) :: pts(6), opts(5)
+    CHARACTER(96) :: turbs(2), ec(2)
+    pts(1) = '1 Turbine1 -20.0 0.0 -15.0 0 0 0 0'
+    pts(2) = '2 Turbine2 -20.0 0.0 -15.0 0 0 0 0'
+    pts(3) = '3 Turbine1 20.0 0.0 -15.0 0 0 0 0'
+    pts(4) = '4 Fixed -250.0 0.0 -200.0 0 0 0 0'
+    pts(5) = '5 Turbine2 20.0 0.0 -15.0 0 0 0 0'
+    pts(6) = '6 Fixed 550.0 0.0 -200.0 0 0 0 0'
+    turbs(1) = '1 0.0 0.0 0.0 2.0 0.0 -0.5 0.0 0.0 180.0'
+    turbs(2) = '2 300.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 5.0'
+    ec(1) = '1 A Rigid -1 0 -0.4 Rigid 0 -1 0 0'
+    ec(2) = '1 B Rigid 1 0 0.4 Rigid 0 1 0 30'
+    opts = [CHARACTER(48) :: '200.0 WtrDpth', '0.05 dtM', '10.0 TMax', 'tmrt_turb.txt motionFile', '3.0e6 kBot']
+    IF (cable .AND. chains) THEN
+      CALL write_deck(path, [CHARACTER(96) :: CAB_T, CHAIN_T], pts, &
+                      [CHARACTER(16) :: '1 1 2 -', '2 3 4 -', '3 5 6 -'], &
+                      [CHARACTER(24) :: '1 cab 300.0 40', '2 chain 320.0 20', '3 chain 320.0 20'], ec, opts, &
+                      [TURB_CABLE, TURB_CHAINS], turbs=turbs)
+    ELSE IF (cable) THEN
+      CALL write_deck(path, [CHARACTER(96) :: CAB_T], pts(1:2), [CHARACTER(16) :: '1 1 2 -'], &
+                      [CHARACTER(24) :: '1 cab 300.0 40'], ec, opts, TURB_CABLE, turbs=turbs)
+    ELSE
+      CALL write_deck(path, [CHARACTER(96) :: CHAIN_T], pts(3:6), [CHARACTER(16) :: '2 3 4 -', '3 5 6 -'], &
+                      [CHARACTER(24) :: '2 chain 320.0 20', '3 chain 320.0 20'], [CHARACTER(8) ::], opts, &
+                      TURB_CHAINS, turbs=turbs)
+    END IF
+  END SUBROUTINE turbine_deck
+
+  SUBROUTINE check_turbines()
+    !! Gate 9.
+    CHARACTER(32) :: nm(MAXCOL), nc(MAXCOL), nl(MAXCOL)
+    REAL(wp), ALLOCATABLE :: vm(:, :), vc(:, :), vl(:, :)
+    REAL(wp) :: row(21), e, e_turb, e_leg
+    INTEGER :: u, k, j, rm, rc, rl, cm, cx
+    LOGICAL :: ok
+    OPEN (NEWUNIT=u, FILE='tmrt_turb.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, NSTEP
+      DO j = 1, 2
+        CALL turbine_record(j, DT*k, row)
+        WRITE (u, '(F8.3,I3,19ES25.16E3)') row(1), j, row(3:21)
+      END DO
+    END DO
+    CLOSE (u)
+    CALL turbine_deck('tmrt_turb_m.dat', .TRUE., .TRUE.)
+    CALL turbine_deck('tmrt_turb_c.dat', .TRUE., .FALSE.)
+    CALL turbine_deck('tmrt_turb_l.dat', .FALSE., .TRUE.)
+    CALL run_driver('tmrt_turb_c.dat', 'tmrt_turb_c', ok)
+    CALL require(ok, '9: the cable of the TURBINES deck runs on the standalone cubic-Hermite route')
+    CALL run_driver('tmrt_turb_l.dat', 'tmrt_turb_l', ok)
+    CALL require(ok, '9: the chains of the TURBINES deck run on the standalone EI = 0 route')
+    CALL run_driver('tmrt_turb_m.dat', 'tmrt_turb_m', ok)
+    CALL require(ok, '9: the TURBINES deck of the cable and the chains runs on the mixed route')
+    CALL require(log_has('tmrt_turb_m', 'mixed standalone aggregate'), '9: the TURBINES deck runs on the aggregate')
+    ALLOCATE (vm(MAXROW, MAXCOL), vc(MAXROW, MAXCOL), vl(MAXROW, MAXCOL))
+    CALL read_out('tmrt_turb_m.out', nm, vm, rm)
+    CALL read_out('tmrt_turb_c.out', nc, vc, rc)
+    CALL read_out('tmrt_turb_l.out', nl, vl, rl)
+    CALL require(rm == NSTEP + 1 .AND. rc == NSTEP + 1 .AND. rl == NSTEP + 1, '9: the three runs write every row')
+    IF (rm /= NSTEP + 1 .OR. rc /= NSTEP + 1 .OR. rl /= NSTEP + 1) RETURN
+    e_turb = 0.0_wp
+    DO k = 1, SIZE(TURB_CABLE)
+      cm = col_of(nm, TURB_CABLE(k))
+      cx = col_of(nc, TURB_CABLE(k))
+      CALL require(cm > 0 .AND. cx > 0, '9: channel '//TRIM(TURB_CABLE(k))//' in both outputs')
+      IF (cm == 0 .OR. cx == 0) CYCLE
+      e = range_error(vc(:, cx), vm(:, cm), rm)
+      WRITE (*, '(A,A,A,ES10.3,A)') '  9 TURBINES driver: ', TRIM(TURB_CABLE(k)), ' difference ', e, &
+        ' of its range (the coupled Newton controls)'
+      e_turb = MAX(e_turb, e)
+    END DO
+    e_leg = 0.0_wp
+    DO k = 1, SIZE(TURB_CHAINS)
+      cm = col_of(nm, TURB_CHAINS(k))
+      cx = col_of(nl, TURB_CHAINS(k))
+      CALL require(cm > 0 .AND. cx > 0, '9: channel '//TRIM(TURB_CHAINS(k))//' in both outputs')
+      IF (cm == 0 .OR. cx == 0) CYCLE
+      e = range_error(vl(:, cx), vm(:, cm), rm)
+      WRITE (*, '(A,A,A,ES10.3,A)') '  9 TURBINES driver: ', TRIM(TURB_CHAINS(k)), ' difference ', e, ' of its range'
+      e_leg = MAX(e_leg, e)
+    END DO
+    CALL require(e_turb <= TURB_TOL, '9: the cable agrees with the cable-only deck within the coupled Newton controls')
+    CALL require(e_leg <= LOAD_TOL, '9: the chain tensions agree with the legs-only deck')
+    CALL march_turbines(nc, vc, rc)
+  END SUBROUTINE check_turbines
+
+  SUBROUTINE march_turbines(nc, vc, rc)
+    !! Gate 9: the mixed route's march of the TURBINES deck (deck_turbines, the driver's call)
+    !! through the aggregate library, its cable given the standalone route's Newton controls (as
+    !! march_library): every cable channel is compared at every step with the cable-only run's
+    !! output (nc, vc, rc rows) to its printed precision.
+    CHARACTER(32), INTENT(IN) :: nc(:)
+    REAL(wp), INTENT(IN) :: vc(:, :)
+    INTEGER, INTENT(IN) :: rc
+    TYPE(CD_AGG_ModuleType), ALLOCATABLE :: agg
+    REAL(wp), ALLOCATABLE :: pos(:, :), vel(:, :), acc(:, :), load(:, :), orient(:, :, :), omega(:, :), alpha(:, :)
+    REAL(wp), ALLOCATABLE :: roll(:), got(:, :)
+    CHARACTER(2048) :: em
+    INTEGER :: es, n, c, step, k, cx, nch, n_iter
+    LOGICAL :: turns, rolls, conv, stalled
+    REAL(wp) :: worst, v
+    ALLOCATE (agg)
+    CALL CD_AGG_Init_From_Deck(agg, 'tmrt_turb_m.dat', DT, es, em, forbid_deck_ambient=.TRUE., run_tmax=TMAX, &
+                               host_orientation=.TRUE., prescribed_motion=.TRUE., deck_turbines=.TRUE.)
+    CALL require(es == CD_AGG_OK .AND. CD_AGG_HasMotion(agg), '9: the aggregate takes the TURBINES deck and its '// &
+                 'records: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    DO c = 1, agg%ncable
+      agg%cables(c)%tol = 1.0e-8_wp
+      agg%cables(c)%max_iter = 30
+      agg%cables(c)%line%tangent_reuse = .TRUE.
+    END DO
+    n = CD_AGG_NMovingPoints(agg, es, em)
+    nch = CD_AGG_NumChannels(agg)
+    ALLOCATE (pos(3, n), vel(3, n), acc(3, n), load(3, n), orient(3, 3, n), omega(3, n), alpha(3, n), roll(n), &
+              got(NSTEP + 1, nch))
+    CALL CD_AGG_GetMovingPointMesh(agg, pos, vel, acc, load, es, em)
+    CALL CD_AGG_MotionKinematics(agg, 1, pos, vel, acc, orient, omega, alpha, roll, turns, rolls, es, em)
+    CALL require(turns, '9: the TURBINES records turn the moving columns')
+    CALL CD_AGG_UpdateStates_Moving(agg, pos, vel, acc, es, em, orientation=orient, angular_velocity=omega, &
+                                    angular_acceleration=alpha)
+    IF (es == CD_AGG_OK) CALL CD_AGG_Refresh_Accelerations(agg, es, em)
+    CALL require(es == CD_AGG_OK, '9: the first TURBINES records install: '//TRIM(em))
+    DO step = 0, NSTEP
+      IF (step > 0) THEN
+        CALL CD_AGG_MotionKinematics(agg, step + 1, pos, vel, acc, orient, omega, alpha, roll, turns, rolls, es, em)
+        CALL CD_AGG_Step_Moving(agg, DT, pos, vel, acc, conv, stalled, n_iter, es, em, t_committed=DT*step, &
+                                orientation=orient, angular_velocity=omega, angular_acceleration=alpha)
+        IF (es /= CD_AGG_OK .OR. .NOT. conv) THEN
+          CALL require(.FALSE., '9: library march step: '//TRIM(em))
+          EXIT
+        END IF
+      END IF
+      CALL CD_AGG_CalcOutput(agg, es, em)
+      DO k = 1, nch
+        CALL CD_AGG_EvalChannel(agg, k, v, es, em)
+        got(step + 1, k) = v
+      END DO
+    END DO
+    ! the mixed deck's channels are TURB_CABLE then TURB_CHAINS, in OUTPUTS order
+    worst = HUGE(1.0_wp)
+    IF (rc == NSTEP + 1) THEN
+      worst = 0.0_wp
+      DO k = 1, SIZE(TURB_CABLE)
+        cx = col_of(nc, TURB_CABLE(k))
+        IF (cx > 0) THEN
+          worst = MAX(worst, print_error(vc(:, cx), got(:, k), rc))
+        ELSE
+          worst = HUGE(1.0_wp)
+        END IF
+      END DO
+    END IF
+    WRITE (*, '(A,ES10.3,A)') '  9 TURBINES library march with the standalone Newton controls: largest cable '// &
+      'difference ', worst, ' printed units'
+    CALL require(worst <= 2.0_wp, '9: with the same Newton controls the mixed route reproduces the cable-only deck')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE march_turbines
 END PROGRAM test_mixed_route_torsion
