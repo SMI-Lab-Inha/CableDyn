@@ -545,6 +545,34 @@ order, End B, and :math:`\Phi` at End A), so a turn of the frame enters the end 
 reference twist through the same solid angles. A turn of an end frame by more than
 :math:`\pi/2` about the line within one step is refused, and the step is cut.
 
+The held end section turns with its frame. Its spin about the tangent, relative to the
+time-parallel reference, is the frame's angular velocity projected by the derivative of the end
+element's reference twist with respect to the frame's rotation. Its polar inertia (half the end
+element's) carries the kinetic energy of that spin and loads the frame through the reaction
+moment. A bending-pinned or elastic end lets the end tangent :math:`\mathbf{t}` move off the
+director :math:`\mathbf{d}`, and the section's director, the frame's normal carried by the
+smallest rotation :math:`G(\mathbf{d} \to \mathbf{t})`, then spins about :math:`\mathbf{t}` as
+well:
+
+.. math::
+
+   c = \frac{(\mathbf{t} \times \mathbf{d})\cdot\dot{\mathbf{t}}}{1 + \mathbf{d}\cdot\mathbf{t}},
+   \qquad \lvert c\rvert \le \tan\tfrac{\theta}{2}\,\lvert\dot{\mathbf{t}}\rvert ,
+
+with :math:`\theta` the end bend angle. The model leaves this carry spin out of the kinetic
+energy, out of the line's equations of motion and out of the reaction moment alike, so the
+three stay consistent: with the end frames held, the energy without the carry spin keeps the
+same band at a polar inertia of 0.02 and of 1 kg m. Including the spin would give the end tangent
+a configuration-dependent rank-one polar mass :math:`I\,\nabla c\,\nabla c^{\mathsf T}` with its
+gyroscopic velocity terms. Its kinetic energy :math:`\tfrac12 I c^2` is of order
+:math:`(d^2/2l^2)\tan^2(\theta/2)` of the end element's translational kinetic energy (section
+diameter :math:`d`, element length :math:`l`). The test suite measures it on a 10 m line pinned
+in bending and rigid in torsion at both ends, twisted by 4 rad and swinging with a 13° end bend
+angle: 6e-8 of the peak kinetic energy at :math:`I_{rn} = 0.02` kg m and 4e-6 at an extreme
+1 kg m, against the step's own energy band of 6e-3 at :math:`\rho_\infty = 1`. The modal analysis
+and the OpenFAST linearisation take the same lumped polar mass on the angles, with a held end's
+angle not a coordinate, so they leave the carry spin out too.
+
 .. _theory-free-end:
 
 **A free end.** A line restrained in torsion at one end only has its other end free to twist:

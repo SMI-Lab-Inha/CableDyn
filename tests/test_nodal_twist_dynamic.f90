@@ -21,6 +21,12 @@ PROGRAM test_nodal_twist_dynamic
   !!      (with the polar part) + elastic (with the twist) stays within the band of the line
   !!      without torsion; a parent rolling the clamped line's end frame at a steady rate puts
   !!      the continuum's polar kinetic energy into it, the held end section's spin included;
+  !!      a line pinned in bending and rigid in torsion at both ends, twisted and swinging (13 deg
+  !!      end bend angle): the spin c = (t x d).dt/dt / (1 + d.t) of the end section that the
+  !!      carry G(d -> t) adds as the end tangent t moves, which the model leaves out of the
+  !!      kinetic energy, the line's equations and the reaction alike (theory, Nodal twist),
+  !!      carries at most 4e-6 of the peak kinetic energy with an extreme Irn = 1 kg m (6e-8 at
+  !!      0.02 kg m), below the step's own energy band;
   !!   R  restart: a rolling, torsionally damped run restored from a snapshot, and one rebuilt
   !!      from the checkpoint mirror, continue bit-identically.
   USE CableDyn_Precision, ONLY: wp
@@ -53,6 +59,7 @@ PROGRAM test_nodal_twist_dynamic
   CALL check_frame_damping()
   CALL check_energy()
   CALL check_frame_energy()
+  CALL check_pinned_energy()
   CALL check_restart()
 
   IF (nfail > 0) THEN
@@ -579,6 +586,87 @@ CONTAINS
     CALL require(err <= 1.0e-2_wp, 'E: a held end section spinning with its frame carries its kinetic energy')
     CALL CD_HFMF_End(cab)
   END SUBROUTINE check_frame_energy
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_pinned_energy()
+    REAL(wp) :: band_lo, band_hi
+    CALL check_pinned_carry(0.02_wp, 1.0e-6_wp, band_lo)
+    CALL check_pinned_carry(1.0_wp, 1.0e-5_wp, band_hi)
+    CALL require(ABS(band_hi - band_lo) <= 0.05_wp*band_lo, &
+                 'E pinned: the energy band does not depend on the held sections'' polar inertia')
+  END SUBROUTINE check_pinned_energy
+
+  SUBROUTINE check_pinned_carry(irn, bound, band)
+    !! E: the straight line pinned in bending and rigid in torsion at both ends (no gravity, no
+    !! fluid, rho_inf = 1), twisted by 4 rad and released with the first pinned bending mode's
+    !! velocity, 6 m/s at mid-span, for ten periods. Each step evaluates, from the end tangents
+    !! m and their rates, the spin c = (t x d).dt/dt / (1 + d.t) of the carry G(d -> t) at both
+    !! ends (d the end director +x) and the kinetic energy 1/2 I c^2 of the held end sections
+    !! (I = Irn l0/2) that the model omits; its largest value against the peak kinetic energy
+    !! must stay below bound. band: (max - min) of kinetic + elastic over E0.
+    REAL(wp), INTENT(IN) :: irn, bound
+    REAL(wp), INTENT(OUT) :: band
+    TYPE(CD_HermiteCableDynType) :: m
+    TYPE(CD_HermiteTorsionType) :: tors
+    REAL(wp) :: q(NDOF), l0(NE), s, ke, se, e0, emax, emin, ke_max, tc, tc_max, th_max, dt, mm(3), mv(3), t(3)
+    REAL(wp) :: td(3), c
+    INTEGER :: k, es, iend, b
+    CHARACTER(300) :: em
+    l0 = LL/REAL(NE, wp)
+    CALL line_seed(0.0_wp, 0.0_wp, q)
+    CALL CD_HermiteCable_Dyn_Init(m, l0, [(EA, k=1, NE)], [(EI, k=1, NE)], [(RHOA, k=1, NE)], [(0.0_wp, k=1, NE)], q, &
+                                  [1, 2, 3, NDOF - 5, NDOF - 4, NDOF - 3], 0.0_wp, 0.0_wp, 1.0_wp, es, em)
+    CALL require(es == CD_HCDYN_OK, 'E pinned: init: '//TRIM(em))
+    CALL torsion_of(q, 4.0_wp, tors, irn, 0.0_wp)
+    CALL CD_HermiteCable_Dyn_Set_Torsion(m, tors, es, em)
+    CALL require(es == CD_HCDYN_OK, 'E pinned: torsion: '//TRIM(em))
+    band = HUGE(1.0_wp)
+    IF (es /= CD_HCDYN_OK) RETURN
+    DO k = 1, NN
+      s = LL*REAL(k - 1, wp)/REAL(NE, wp)
+      m%v(6*k - 4) = 6.0_wp*SIN(PI*s/LL)
+      m%v(6*k - 1) = 6.0_wp*(PI/LL)*COS(PI*s/LL)
+    END DO
+    dt = 2.0_wp*PI/(PI*PI*SQRT(EI/(RHOA*LL**4)))/400.0_wp
+    CALL CD_HermiteCable_Dyn_Energy(m, ke, se, es, em)
+    e0 = ke + se
+    emax = e0
+    emin = e0
+    ke_max = ke
+    tc_max = 0.0_wp
+    th_max = 0.0_wp
+    DO k = 1, 4000
+      CALL CD_HermiteCable_Dyn_Step(m, dt, 40, 1.0e-11_wp, es, em)
+      IF (es /= CD_HCDYN_OK) THEN
+        CALL require(.FALSE., 'E pinned: step: '//TRIM(em))
+        EXIT
+      END IF
+      CALL CD_HermiteCable_Dyn_Energy(m, ke, se, es, em)
+      emax = nan_max_abs([emax, ke + se])
+      emin = MIN(emin, ke + se)
+      ke_max = MAX(ke_max, ke)
+      tc = 0.0_wp
+      DO iend = 1, 2
+        b = MERGE(3, 6*(NN - 1) + 3, iend == 1)
+        mm = m%q(b + 1:b + 3)
+        mv = m%v(b + 1:b + 3)
+        t = mm/NORM2(mm)
+        td = (mv - DOT_PRODUCT(t, mv)*t)/NORM2(mm)
+        ! (t x d) . td with d = +x: (0, t3, -t2) . td
+        c = (t(3)*td(2) - t(2)*td(3))/(1.0_wp + t(1))
+        tc = tc + 0.25_wp*irn*l0(1)*c*c
+        th_max = MAX(th_max, ACOS(MIN(1.0_wp, t(1))))
+      END DO
+      tc_max = MAX(tc_max, tc)
+    END DO
+    WRITE (*, '(A,ES9.2,A,F5.1,A,ES10.3,A,ES10.3)') 'E pinned, Irn ', irn, ' kg m: end bend angle up to ', &
+      th_max*180.0_wp/PI, ' deg; omitted carry-spin energy / peak kinetic energy ', tc_max/ke_max, &
+      ', energy band / E0 ', (emax - emin)/e0
+    CALL require(tc_max <= bound*ke_max, 'E pinned: the end sections'' carry spin holds a negligible energy')
+    CALL require(th_max > 0.2_wp, 'E pinned: the end tangents swing off their directors')
+    band = (emax - emin)/e0
+    CALL CD_HermiteCable_Dyn_End(m)
+  END SUBROUTINE check_pinned_carry
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE check_restart()
