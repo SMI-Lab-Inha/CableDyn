@@ -46,6 +46,12 @@ PROGRAM test_line_attachments
   !!      supported: the deck is refused by that name. Before, the body passes of case 9 took the
   !!      line and refused it as a clamped or elastic END CONNECTION on a body that is not Rigid6,
   !!      which the deck does not have.
+  !!  11. A free buoyant spar rod (10 m, 1 m diameter) on four taut legs with a finite-EI cable
+  !!      pinned at its upper end carrying a 1500 kg clump 25 m along it; bodyIC static: the body
+  !!      static passes converge (Anderson-mixed, 26 passes) and the rod holds its static pose
+  !!      over 0.3 s of the march to 1e-6 m (measured 0) and the leg tensions to 1e-6 (measured
+  !!      1e-8, the output's 8 digits). Before, the plain passes diverged (end-load change 2.9 of
+  !!      the force scale after 60 passes) and the deck stopped.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Attachment_Discrete_Verdict
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED
@@ -77,6 +83,7 @@ PROGRAM test_line_attachments
   CALL case_zero_strain_moving()
   CALL case_pinned_body_clump()
   CALL case_pinned_point3_clump()
+  CALL case_pinned_rod_clump()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -490,6 +497,88 @@ CONTAINS
     CALL require(.NOT. ok .AND. INDEX(msg, 'Point3 buoy is not supported') > 0, &
                  '10 pinned cable with a clump on a Point3 buoy: refused by that name')
   END SUBROUTINE case_pinned_point3_clump
+
+  SUBROUTINE case_pinned_rod_clump()
+    !! 11: the spar rod from z = -30 m to -20 m in 50 m of water, two legs from each end, the
+    !! cable from its upper end towards a Fixed point at (-40, 0, -50) m; 0.3 s (dtM 0.01 s).
+    INTEGER :: u, nrow
+    REAL(wp), ALLOCATABLE :: d(:, :)
+    REAL(wp) :: dpos, dten
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    OPEN (NEWUNIT=u, FILE='att_rod_pin.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'pinned cable with a clump on a free spar rod'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'poly 0.10 10.0 2.0e7 -1.0 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') 'cab 0.20 60.0 5.0e8 -1.0 2.0e4 1.2 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- ROD TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass Cd Ca CdEnd CaEnd CdAx CaAx'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (-) (-) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'spar 1.0 300.0 0.8 1.0 0.0 0.0 0.2 0.0'
+    WRITE (u, '(A)') '--- RODS ---'
+    WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
+    WRITE (u, '(A)') '1 spar Free 0.0 0.0 -30.0 0.0 0.0 -20.0 1 -'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m^3) (m^2) (-)'
+    WRITE (u, '(A)') '1 Rod1A 0.0 0.0 -30.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Rod1B 0.0 0.0 -20.0 0 0 0 0'
+    WRITE (u, '(A)') '3 Fixed 25.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '4 Fixed -25.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '5 Fixed 0.0 30.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '6 Fixed 0.0 -30.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '7 Fixed -40.0 0.0 -50.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 3 -'
+    WRITE (u, '(A)') '2 1 4 -'
+    WRITE (u, '(A)') '3 2 5 -'
+    WRITE (u, '(A)') '4 2 6 -'
+    WRITE (u, '(A)') '5 2 7 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 poly 31.95 16'
+    WRITE (u, '(A)') '2 poly 31.95 16'
+    WRITE (u, '(A)') '3 poly 42.40 20'
+    WRITE (u, '(A)') '4 poly 42.40 20'
+    WRITE (u, '(A)') '5 cab 55.0 40'
+    WRITE (u, '(A)') '--- ATTACHMENTS ---'
+    WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+    WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+    WRITE (u, '(A)') '5 25.0 1500.0 0.0 0.0 0.0'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '50.0 WtrDpth'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') '1.0e4 cBot'
+    WRITE (u, '(A)') '0.01 dtM'
+    WRITE (u, '(A)') '0.3 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Point2px'
+    WRITE (u, '(A)') 'Point2pz'
+    WRITE (u, '(A)') 'FairTen1'
+    WRITE (u, '(A)') 'FairTen2'
+    WRITE (u, '(A)') 'FairTen3'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    CALL run('att_rod_pin.dat', 'att_rod_pin', ok, msg)
+    CALL require(ok, '11 pinned cable with a clump on a free rod: runs: '//TRIM(msg))
+    IF (.NOT. ok) RETURN
+    CALL read_out('att_rod_pin.out', d, nrow, 6)
+    CALL require(nrow >= 31, '11 pinned cable with a clump on a free rod: 0.3 s written')
+    IF (nrow < 31) RETURN
+    dpos = MAXVAL(ABS(d(2:3, 1:nrow) - SPREAD(d(2:3, 1), 2, nrow)))
+    dten = MAXVAL(ABS(d(4:6, 1:nrow) - SPREAD(d(4:6, 1), 2, nrow))/SPREAD(ABS(d(4:6, 1)), 2, nrow))
+    WRITE (*, '(A,ES10.3,A,ES10.3)') '  11 att_rod_pin: rod top drift over 0.3 s ', dpos, ' m, rel. leg tension ', dten
+    CALL require(dpos <= 1.0e-6_wp .AND. dten <= 1.0e-6_wp, &
+                 '11 pinned cable with a clump on a free rod: the rod starts in the march''s equilibrium')
+  END SUBROUTINE case_pinned_rod_clump
 
   SUBROUTINE case_fallback_verdict()
     !! A straight 10 m line on 1 m elements whose tangent at node 6 is turned by 0.6 rad: the

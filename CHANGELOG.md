@@ -406,7 +406,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   bending stiffness: on a moored body with a 2 t clump 50 m along a pinned cable the body started
   at the pose of the line without the clump and drifted by up to 2.9e-2 m and 0.20 deg in 5 s.
   Such a line now takes the static passes of a connected end, which balance the body on the
-  cubic-Hermite cable's end loads; the body holds its pose to the output's 8 digits.
+  cubic-Hermite cable's end loads; the body holds its pose to the output's 8 digits. Their
+  passes are Anderson-mixed, as those of a line between two objects: on a free spar rod with a
+  1500 kg clump on a cable pinned at its upper end the plain passes diverged (the deck stopped),
+  the mixed ones converge in 26 and the rod holds its pose to 8 digits.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations

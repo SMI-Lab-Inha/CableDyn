@@ -27727,7 +27727,8 @@ CONTAINS
     !! (Anderson mixing of the last ANDERSON_DEPTH passes on the extra loads, ext_fm, a secant
     !! method that a pass map oscillating about its fixed point does not defeat: a stiff cable
     !! between two moored bodies turns them through an out-of-plane mode that the plain passes
-    !! overshoot); a deck without one keeps the plain passes.
+    !! overshoot), and so does a deck with a bending-pinned line listed for its ATTACHMENTS; a
+    !! deck without either keeps the plain passes.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckBody), INTENT(INOUT) :: bodies(:)
     TYPE(DeckRodType), INTENT(IN) :: rod_types(:)
@@ -27755,6 +27756,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: new_km(:, :, :), new_rot(:, :, :), fsb(:, :)
     INTEGER :: j, pa, e, pass, ncl, eworst, pb, ne, nb
     LOGICAL :: only_points, held
+    ! the passes are Anderson-mixed (lines between two objects, pinned lines with ATTACHMENTS)
+    LOGICAL :: mix
     REAL(wp) :: scale, change, pass_tol_eff
     CHARACTER(24) :: b1
 
@@ -27837,7 +27840,18 @@ CONTAINS
     n_and = 0
     max_pass_eff = MAX_PASS
     IF (body_static_pass_limit > 0) max_pass_eff = body_static_pass_limit
-    IF (nb > 0) ALLOCATE (and_x(6*ne, ANDERSON_DEPTH + 1), and_f(6*ne, ANDERSON_DEPTH + 1))
+    ! A bending-pinned line with ATTACHMENTS (listed for them alone) is carried by a core cable
+    ! without them: its pass correction is the attachments' whole load, which turns with the
+    ! object as the heavier or lighter cable does and not as the core's, so the plain passes can
+    ! overshoot without bound on a soft object (a free spar rod with a 1500 kg clump 25 m along
+    ! a pinned cable from its upper end: the end-load change grew to 2.9 of the force scale in
+    ! 60 passes); the Anderson mixing of the lines between two objects converges them.
+    mix = nb > 0
+    DO e = 1, ncl
+      IF (lines(cl(e))%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(cl(e)))) &
+        mix = .TRUE.
+    END DO
+    IF (mix) ALLOCATE (and_x(6*ne, ANDERSON_DEPTH + 1), and_f(6*ne, ANDERSON_DEPTH + 1))
     ext_fm = CD_ZERO
     ext_km = CD_ZERO
     ext_rot = CD_ZERO
@@ -27889,7 +27903,7 @@ CONTAINS
         ext_fm = new_fm
         EXIT
       END IF
-      IF (nb > 0) THEN
+      IF (mix) THEN
         CALL anderson_next(ext_fm, new_fm)
       ELSE
         ext_fm = new_fm
