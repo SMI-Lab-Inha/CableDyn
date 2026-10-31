@@ -410,6 +410,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   passes are Anderson-mixed, as those of a line between two objects: on a free spar rod with a
   1500 kg clump on a cable pinned at its upper end the plain passes diverged (the deck stopped),
   the mixed ones converge in 26 and the rod holds its pose to 8 digits.
+- A bending-pinned finite-EI line on a Rigid6 body or a rod end without `ATTACHMENTS` was left to
+  the body static solve's cable without bending stiffness, whose end force lacks the bending's
+  share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
+  equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
+  static passes too (4 here); the rod holds its pose to the output's 8 digits.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations

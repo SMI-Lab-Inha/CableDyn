@@ -2778,9 +2778,12 @@ carries the cable first without bending; passes then add the difference between 
 cable's end force and that surrogate, and the Hermite connection moment, at the previous
 pass's pose, until these loads change by less than :math:`10^{-7}` of the force scale. At the
 fixed point the object balances the Hermite cable exactly. A bending-pinned end carries no
-moment, and the surrogate gives its end force but for the small share of the bending, so it is
-left to the surrogate, unless the line carries ``ATTACHMENTS``, which the surrogate does not:
-such a line takes the passes too.
+moment, but the surrogate gives its end force without the share of the bending, which on a soft
+object is not small (a free spar rod with a pinned 55 m cable of :math:`EI = 2\times10^4` N m\ :sup:`2`
+started 5.7 cm off its equilibrium), and without the line's ``ATTACHMENTS``: on a Rigid6 body or
+a rod end such a line takes the passes too, Anderson-mixed (the correction of a heavy clump the
+surrogate lacks turns with the object differently from the surrogate, which the plain passes
+overshoot).
 
 **End connections (Hermite lines).** A line end may carry an isotropic rotational spring with
 potential :math:`U = \tfrac{1}{2}k\,\theta^2`, where :math:`\theta` is the angle between the end

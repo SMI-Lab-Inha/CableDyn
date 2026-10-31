@@ -425,7 +425,7 @@ together. A finite-EI line enters it with its axial stiffness and weight (its pa
 surface with its dry weight), without its bending stiffness (a note names the line); its own
 shape is then solved with the bending stiffness at the equilibrium end positions. A line
 connected (clamped, elastic or restrained in torsion) at a body or rod end, a line between two
-objects, and a bending-pinned line with `ATTACHMENTS` on a body or rod are balanced on their
+objects, and a bending-pinned line on a Rigid6 body or a rod end are balanced on their
 cubic-Hermite end loads in static passes.
 
 **OpenFAST `CompMooring = 5` (aggregate route):** finite-EI cables run on the cubic-Hermite path:

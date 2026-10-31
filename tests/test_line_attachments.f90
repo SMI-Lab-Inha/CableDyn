@@ -52,6 +52,12 @@ PROGRAM test_line_attachments
   !!      over 0.3 s of the march to 1e-6 m (measured 0) and the leg tensions to 1e-6 (measured
   !!      1e-8, the output's 8 digits). Before, the plain passes diverged (end-load change 2.9 of
   !!      the force scale after 60 passes) and the deck stopped.
+  !!  12. The spar rod of case 11 with the cable and no clump: the bending share of the pinned
+  !!      cable's end force is in the rod's static balance too, so the rod holds its pose over
+  !!      0.1 s to 1e-6 m (measured 0) and its leg tensions to 1e-6 (measured 0). Before, the
+  !!      body passes left a pinned line without ATTACHMENTS to the core's cable without bending
+  !!      stiffness: the rod started 5.7e-2 m off its equilibrium and its top moved 1.8e-4 m in 0.1 s
+  !!      (7e-2 m and a 2.3 % leg tension change in 3 s with the implicit object coupling).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Attachment_Discrete_Verdict
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED
@@ -83,7 +89,8 @@ PROGRAM test_line_attachments
   CALL case_zero_strain_moving()
   CALL case_pinned_body_clump()
   CALL case_pinned_point3_clump()
-  CALL case_pinned_rod_clump()
+  CALL case_pinned_rod_clump(.TRUE.)
+  CALL case_pinned_rod_clump(.FALSE.)
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -498,15 +505,20 @@ CONTAINS
                  '10 pinned cable with a clump on a Point3 buoy: refused by that name')
   END SUBROUTINE case_pinned_point3_clump
 
-  SUBROUTINE case_pinned_rod_clump()
-    !! 11: the spar rod from z = -30 m to -20 m in 50 m of water, two legs from each end, the
-    !! cable from its upper end towards a Fixed point at (-40, 0, -50) m; 0.3 s (dtM 0.01 s).
+  SUBROUTINE case_pinned_rod_clump(clump)
+    !! 11 (clump) and 12: the spar rod from z = -30 m to -20 m in 50 m of water, two legs from
+    !! each end, the cable from its upper end towards a Fixed point at (-40, 0, -50) m; 0.3 s
+    !! (0.1 s without the clump; dtM 0.01 s).
+    LOGICAL, INTENT(IN) :: clump
     INTEGER :: u, nrow
     REAL(wp), ALLOCATABLE :: d(:, :)
     REAL(wp) :: dpos, dten
     LOGICAL :: ok
     CHARACTER(1024) :: msg
-    OPEN (NEWUNIT=u, FILE='att_rod_pin.dat', STATUS='REPLACE', ACTION='WRITE')
+    CHARACTER(16) :: root, gate
+    root = MERGE('att_rod_pin   ', 'att_rod_pin_no', clump)
+    gate = MERGE('11 with a clump', '12 alone       ', clump)
+    OPEN (NEWUNIT=u, FILE=TRIM(root)//'.dat', STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'pinned cable with a clump on a free spar rod'
     WRITE (u, '(A)') '--- LINE TYPES ---'
     WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
@@ -547,10 +559,12 @@ CONTAINS
     WRITE (u, '(A)') '3 poly 42.40 20'
     WRITE (u, '(A)') '4 poly 42.40 20'
     WRITE (u, '(A)') '5 cab 55.0 40'
-    WRITE (u, '(A)') '--- ATTACHMENTS ---'
-    WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
-    WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
-    WRITE (u, '(A)') '5 25.0 1500.0 0.0 0.0 0.0'
+    IF (clump) THEN
+      WRITE (u, '(A)') '--- ATTACHMENTS ---'
+      WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+      WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+      WRITE (u, '(A)') '5 25.0 1500.0 0.0 0.0 0.0'
+    END IF
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
@@ -558,7 +572,7 @@ CONTAINS
     WRITE (u, '(A)') '1.0e5 kBot'
     WRITE (u, '(A)') '1.0e4 cBot'
     WRITE (u, '(A)') '0.01 dtM'
-    WRITE (u, '(A)') '0.3 TMax'
+    WRITE (u, '(A)') MERGE('0.3 TMax', '0.1 TMax', clump)
     WRITE (u, '(A)') '--- OUTPUTS ---'
     WRITE (u, '(A)') 'Point2px'
     WRITE (u, '(A)') 'Point2pz'
@@ -567,17 +581,18 @@ CONTAINS
     WRITE (u, '(A)') 'FairTen3'
     WRITE (u, '(A)') '--- END ---'
     CLOSE (u)
-    CALL run('att_rod_pin.dat', 'att_rod_pin', ok, msg)
-    CALL require(ok, '11 pinned cable with a clump on a free rod: runs: '//TRIM(msg))
+    CALL run(TRIM(root)//'.dat', TRIM(root), ok, msg)
+    CALL require(ok, TRIM(gate)//', a pinned cable on a free rod: runs: '//TRIM(msg))
     IF (.NOT. ok) RETURN
-    CALL read_out('att_rod_pin.out', d, nrow, 6)
-    CALL require(nrow >= 31, '11 pinned cable with a clump on a free rod: 0.3 s written')
-    IF (nrow < 31) RETURN
+    CALL read_out(TRIM(root)//'.out', d, nrow, 6)
+    CALL require(nrow >= MERGE(31, 11, clump), TRIM(gate)//', a pinned cable on a free rod: the run written')
+    IF (nrow < MERGE(31, 11, clump)) RETURN
     dpos = MAXVAL(ABS(d(2:3, 1:nrow) - SPREAD(d(2:3, 1), 2, nrow)))
     dten = MAXVAL(ABS(d(4:6, 1:nrow) - SPREAD(d(4:6, 1), 2, nrow))/SPREAD(ABS(d(4:6, 1)), 2, nrow))
-    WRITE (*, '(A,ES10.3,A,ES10.3)') '  11 att_rod_pin: rod top drift over 0.3 s ', dpos, ' m, rel. leg tension ', dten
+    WRITE (*, '(A,A,A,ES10.3,A,ES10.3)') '  ', TRIM(gate), ', a pinned cable on a free rod: rod top drift ', dpos, &
+      ' m, rel. leg tension ', dten
     CALL require(dpos <= 1.0e-6_wp .AND. dten <= 1.0e-6_wp, &
-                 '11 pinned cable with a clump on a free rod: the rod starts in the march''s equilibrium')
+                 TRIM(gate)//', a pinned cable on a free rod: the rod starts in the march''s equilibrium')
   END SUBROUTINE case_pinned_rod_clump
 
   SUBROUTINE case_fallback_verdict()

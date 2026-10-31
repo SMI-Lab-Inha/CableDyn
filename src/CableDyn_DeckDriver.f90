@@ -27700,14 +27700,16 @@ CONTAINS
     !! the finite-EI lines whose End A is clamped (Rigid) or elastically connected to a body or a
     !! rod. The core solve carries a finite-EI line as a cable without bending stiffness; for a
     !! connected End A the bending changes the end force and adds the connection moment, which
-    !! the object must carry. A bending-pinned End A carries no moment, and the core's cable gives
-    !! its end force but for the bending's small share, so it is left to the core, unless the line
-    !! carries ATTACHMENTS: the core's cable does not, and their weight, buoyancy and drag reach
-    !! the object through the line (a 2 t clump 50 m along a pinned cable from a moored body: the
-    !! body started at the pose of the line without it and drifted by up to 2.9e-2 m and 0.20 deg
-    !! in 5 s).
-    !! Such a line takes the passes too. Each pass solves the core with extra loads on the End A
-    !! points: the
+    !! the object must carry. A bending-pinned End A carries no moment, but the core's cable gives
+    !! its end force without the bending's share, which on a soft object is not small (a free spar
+    !! rod on four taut legs with a 55 m cable, EI 2e4 N m^2, pinned at its upper end: the rod
+    !! started 5.7e-2 m off its equilibrium, its top drifted 7e-2 m in 3 s and a leg tension moved
+    !! by 2.3 %),
+    !! and without its ATTACHMENTS, whose weight, buoyancy and drag reach the object through the
+    !! line (a 2 t clump 50 m along a pinned cable from a moored body: the body started at the pose
+    !! of the line without it and drifted by up to 2.9e-2 m and 0.20 deg in 5 s). Such a line on a
+    !! Rigid6 body or a rod end takes the passes too. Each pass solves the core with extra loads on
+    !! the End A points: the
     !! difference between the cubic-Hermite cable's static end force (bending, the connection
     !! direction turned with the object) and the core's own end force of that line, and the
     !! Hermite connection moment, both evaluated at the previous pass's equilibrium. The passes
@@ -27779,12 +27781,9 @@ CONTAINS
             CYCLE
           END IF
         END IF
-        ! a bending-pinned End A free in torsion is the core's, unless the line carries ATTACHMENTS
-        ! and its End A is on a Rigid6 body or a rod end (a finite-EI end on a Point3 buoy is refused
-        ! by name after this solve; the passes, which turn a body frame, would refuse it as a
-        ! clamped end instead)
-        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j)) .AND. &
-            .NOT. ALLOCATED(lines(j)%att)) CYCLE
+        ! a bending-pinned End A free in torsion takes the passes on a Rigid6 body or a rod end (a
+        ! finite-EI end on a Point3 buoy is refused by name after this solve; the passes, which turn
+        ! a body frame, would refuse it as a clamped end instead)
         pa = find_point(points, lines(j)%nodeA)
         IF (pa < 1) CYCLE
         IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j))) THEN
@@ -27840,12 +27839,13 @@ CONTAINS
     n_and = 0
     max_pass_eff = MAX_PASS
     IF (body_static_pass_limit > 0) max_pass_eff = body_static_pass_limit
-    ! A bending-pinned line with ATTACHMENTS (listed for them alone) is carried by a core cable
-    ! without them: its pass correction is the attachments' whole load, which turns with the
-    ! object as the heavier or lighter cable does and not as the core's, so the plain passes can
-    ! overshoot without bound on a soft object (a free spar rod with a 1500 kg clump 25 m along
-    ! a pinned cable from its upper end: the end-load change grew to 2.9 of the force scale in
-    ! 60 passes); the Anderson mixing of the lines between two objects converges them.
+    ! A bending-pinned line is carried by a core cable without its ATTACHMENTS: its pass
+    ! correction is then the attachments' whole load, which turns with the object as the heavier
+    ! or lighter cable does and not as the core's, so the plain passes can overshoot without
+    ! bound on a soft object (a free spar rod with a 1500 kg clump 25 m along a pinned cable from
+    ! its upper end: the end-load change grew to 2.9 of the force scale in 60 passes); the
+    ! Anderson mixing of the lines between two objects converges them, and the passes of every
+    ! pinned line are mixed alike.
     mix = nb > 0
     DO e = 1, ncl
       IF (lines(cl(e))%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(cl(e)))) &
@@ -27928,7 +27928,7 @@ CONTAINS
     END IF
     IF (nb == 0 .AND. ANY([(lines(cl(e))%endconn_mode(1) == CD_ENDCONN_PINNED .AND. &
                             .NOT. line_torsion_at_a(lines(cl(e))), e=1, ncl)])) THEN
-      ! a bending-pinned line among them takes the passes for its ATTACHMENTS
+      ! a bending-pinned line among them (its bending share of the end force, its ATTACHMENTS)
       WRITE (output_unit, '(A)') '   Initial conditions: the end loads (bending, connection moments, torsion, '// &
         'ATTACHMENTS) of '//TRIM(int_to_str(ncl))//' finite-EI line end(s) on bodies and rods balanced in '// &
         TRIM(int_to_str(pass))//' static pass(es).'
