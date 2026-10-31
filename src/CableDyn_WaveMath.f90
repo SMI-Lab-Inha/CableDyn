@@ -27,8 +27,10 @@ MODULE CableDyn_WaveMath
   !! |theta| <= 4e4 (sine, cosine) and 1.1 ulp over -708 <= x <= 709 (exponential); a phase
   !! formed as k x - omega t + phi already carries a rounding error of |theta| ulp(1), far above
   !! that. Elements beyond the reduction (|theta| > 2^20 pi/2) or the normal range (x < -708,
-  !! x > 709) take the intrinsic. The arrays are explicit-shape: inlined into a caller's loops,
-  !! the blocks then still vectorise.
+  !! x > 709), and NaN, take the intrinsic, so a NaN argument gives NaN as the intrinsic does (the
+  !! clamp to the range may turn it into a finite bound: Fortran leaves MIN and MAX of a NaN
+  !! unspecified, and gfortran returns the other argument). The arrays are explicit-shape:
+  !! inlined into a caller's loops, the blocks then still vectorise.
   USE CableDyn_Precision, ONLY: wp
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   IMPLICIT NONE
@@ -89,13 +91,14 @@ CONTAINS
       s(i) = MERGE(-ss, ss, BTEST(q, 1))
       c(i) = MERGE(-cc, cc, BTEST(q + 1, 1))
     END DO
+    ! beyond the reduction, or NaN (every comparison with a NaN is false)
     far = .FALSE.
     DO i = 1, n
-      far = far .OR. ABS(theta(i)) > THETA_MAX
+      far = far .OR. .NOT. (ABS(theta(i)) <= THETA_MAX)
     END DO
     IF (.NOT. far) RETURN
     DO i = 1, n
-      IF (ABS(theta(i)) > THETA_MAX) THEN
+      IF (.NOT. (ABS(theta(i)) <= THETA_MAX)) THEN
         s(i) = SIN(theta(i))
         c(i) = COS(theta(i))
       END IF
@@ -123,13 +126,14 @@ CONTAINS
       m = INT(fn, INT64) + 1023_INT64
       e(i) = p*TRANSFER(ISHFT(m, 52), p)
     END DO
+    ! outside the normal range, or NaN
     outside = .FALSE.
     DO i = 1, n
-      outside = outside .OR. (x(i) < X_LOW .OR. x(i) > X_HIGH)
+      outside = outside .OR. .NOT. (x(i) >= X_LOW .AND. x(i) <= X_HIGH)
     END DO
     IF (.NOT. outside) RETURN
     DO i = 1, n
-      IF (x(i) < X_LOW .OR. x(i) > X_HIGH) e(i) = EXP(x(i))
+      IF (.NOT. (x(i) >= X_LOW .AND. x(i) <= X_HIGH)) e(i) = EXP(x(i))
     END DO
   END SUBROUTINE CD_Wave_Exp
 

@@ -12,8 +12,12 @@ PROGRAM test_wave_math
   !!   3. exp over -745 <= x <= 709 within 2 ulp (in the normal range), the subnormal tail and
   !!      underflow to zero as the intrinsic gives them, exp(0) = 1;
   !!   4. phases beyond the reduction's range (|theta| > 2^20 pi/2) take the intrinsic (to 1e-6:
-  !!      a clamped reduction would be off by O(1)).
+  !!      a clamped reduction would be off by O(1));
+  !!   5. a NaN argument gives NaN (sine, cosine and exponential) and an infinite phase NaN, as
+  !!      the intrinsics: the clamp to the reduction's range must not turn a NaN into a finite
+  !!      value (gfortran's MIN and MAX return the non-NaN argument).
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN, IEEE_POSITIVE_INF, IEEE_IS_NAN
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_WaveMath, ONLY: CD_Wave_SinCos, CD_Wave_Exp
   IMPLICIT NONE
@@ -99,6 +103,19 @@ PROGRAM test_wave_math
   END DO
   WRITE (*, '(A,ES9.2)') '    beyond 2^20 pi/2 (the intrinsic): max |error| ', ulp_s
   CALL require(ulp_s <= 1.0e-6_wp, 'phases beyond 2^20 pi/2 are not reduced as near ones')
+
+  ! 5. NaN and infinite arguments, alone and within a block of finite ones
+  th(1:5) = [0.5_wp, IEEE_VALUE(1.0_wp, IEEE_QUIET_NAN), 1.0e3_wp, -IEEE_VALUE(1.0_wp, IEEE_POSITIVE_INF), 2.0_wp]
+  CALL CD_Wave_SinCos(5, th, s, c)
+  WRITE (*, '(A,4ES11.3)') '    sin, cos of NaN and of -Inf: ', s(2), c(2), s(4), c(4)
+  CALL require(IEEE_IS_NAN(s(2)) .AND. IEEE_IS_NAN(c(2)) .AND. IEEE_IS_NAN(s(4)) .AND. IEEE_IS_NAN(c(4)), &
+               'sine and cosine of NaN and of an infinite phase are NaN')
+  CALL require(ABS(REAL(s(3), qp) - SIN(REAL(th(3), qp))) <= REAL(4.0_wp*SPACING(1.0_wp), qp), &
+               'finite phases of the same block unaffected')
+  x(1:3) = [-1.0_wp, IEEE_VALUE(1.0_wp, IEEE_QUIET_NAN), 2.0_wp]
+  CALL CD_Wave_Exp(3, x, e)
+  WRITE (*, '(A,ES11.3)') '    exp of NaN: ', e(2)
+  CALL require(IEEE_IS_NAN(e(2)) .AND. .NOT. IEEE_IS_NAN(e(1)) .AND. .NOT. IEEE_IS_NAN(e(3)), 'exp of NaN is NaN')
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'test_wave_math: ', nfail, ' check(s) FAILED'
