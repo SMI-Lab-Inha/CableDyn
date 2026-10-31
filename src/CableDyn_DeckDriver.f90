@@ -27777,10 +27777,16 @@ CONTAINS
           END IF
         END IF
         ! a bending-pinned End A free in torsion is the core's, unless the line carries ATTACHMENTS
+        ! and its End A is on a Rigid6 body or a rod end (a finite-EI end on a Point3 buoy is refused
+        ! by name after this solve; the passes, which turn a body frame, would refuse it as a
+        ! clamped end instead)
         IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j)) .AND. &
             .NOT. ALLOCATED(lines(j)%att)) CYCLE
         pa = find_point(points, lines(j)%nodeA)
         IF (pa < 1) CYCLE
+        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j))) THEN
+          IF (point_on_point3_body(points(pa), bodies)) CYCLE
+        END IF
         IF (starts_with(TRIM(points(pa)%ptype), 'body')) THEN
           cl = [cl, j]
         ELSE IF (is_rod_point_type(points(pa)%ptype)) THEN

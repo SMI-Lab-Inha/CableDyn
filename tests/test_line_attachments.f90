@@ -42,6 +42,10 @@ PROGRAM test_line_attachments
   !!      1e-4 deg (measured 0, the output's 8 digits). The cable without bending stiffness that
   !!      the body solve otherwise takes for a pinned line does not carry the clump: the body
   !!      started at the pose of the line without it and drifted by up to 2.9e-2 m and 0.20 deg.
+  !!  10. The pinned cable with the clump of case 9 from a Point3 buoy, where a finite-EI end is not
+  !!      supported: the deck is refused by that name. Before, the body passes of case 9 took the
+  !!      line and refused it as a clamped or elastic END CONNECTION on a body that is not Rigid6,
+  !!      which the deck does not have.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Attachment_Discrete_Verdict
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED
@@ -72,6 +76,7 @@ PROGRAM test_line_attachments
   CALL case_zero_strain()
   CALL case_zero_strain_moving()
   CALL case_pinned_body_clump()
+  CALL case_pinned_point3_clump()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -429,6 +434,62 @@ CONTAINS
                    '9 '//TRIM(root)//': the clump on a pinned cable is in the body''s static balance')
     END DO
   END SUBROUTINE case_pinned_body_clump
+
+  SUBROUTINE case_pinned_point3_clump()
+    !! 10: a Point3 buoy (2 t, 10 m^3) on an EI = 0 leg, with the finite-EI cable of case 9 pinned
+    !! at it carrying the 2 t clump; bodyIC static.
+    INTEGER :: u
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    OPEN (NEWUNIT=u, FILE='att_point3_pin.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'pinned cable with a clump on a Point3 buoy'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'poly 0.12 15.0 5.0e7 -1.0 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') 'cab 0.2 60.0 5.0e8 -1.0 2.0e4 1.2 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- BODIES ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm) (Nm) (m2) (-) (kgm2) (kgm2) (kgm2)'
+    WRITE (u, '(A)') '1 Point3 0 0 -20 0 0 0 2.0e3 10.0 0.0 0.0 0.0 8.0 0.5 0 0 0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Body1 0.0 0.0 0.0 0 0 0 0'
+    WRITE (u, '(A)') '4 Fixed 60.0 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '8 Fixed -60.0 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 4 -'
+    WRITE (u, '(A)') '4 1 8 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 poly 105.0 20'
+    WRITE (u, '(A)') '4 cab 110.0 50'
+    WRITE (u, '(A)') '--- ATTACHMENTS ---'
+    WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+    WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+    WRITE (u, '(A)') '4 50.0 2000.0 0.0 0.0 0.0'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '100.0 WtrDpth'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') '1.0e4 cBot'
+    WRITE (u, '(A)') '0.05 dtM'
+    WRITE (u, '(A)') '1.0 TMax'
+    WRITE (u, '(A)') 'static bodyIC'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Point1Pz'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    CALL run('att_point3_pin.dat', 'att_point3_pin', ok, msg)
+    WRITE (*, '(2A)') '  10 pinned cable on a Point3 buoy: ', TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'Point3 buoy is not supported') > 0, &
+                 '10 pinned cable with a clump on a Point3 buoy: refused by that name')
+  END SUBROUTINE case_pinned_point3_clump
 
   SUBROUTINE case_fallback_verdict()
     !! A straight 10 m line on 1 m elements whose tangent at node 6 is turned by 0.6 rad: the
