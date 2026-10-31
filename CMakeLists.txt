@@ -477,6 +477,15 @@ set_target_properties(cabledyn_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(cabledyn_obj PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 target_include_directories(cabledyn_obj PUBLIC "${CMAKE_Fortran_MODULE_DIRECTORY}")
 target_link_libraries(cabledyn_obj PUBLIC ${CABLEDYN_LAPACK})
+# The block sine, cosine and exponential of the wave kinematics (src/CableDyn_WaveMath.f90)
+# round to an integer as (y + 1.5*2^52) - 1.5*2^52 and reduce the phase by pi/2 in exact parts.
+# A value-unsafe floating-point model may reassociate both and fold the rounding to y, so that
+# every sine, cosine and exponential is wrong by O(1). Every IFX build compiles with
+# /fp:precise (-fp-model precise) already (above); a GNU build given -ffast-math (or -Ofast)
+# in its flags still compiles this file with IEEE semantics.
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(src/CableDyn_WaveMath.f90 PROPERTIES COMPILE_OPTIONS "-fno-fast-math")
+endif()
 if(CABLEDYN_HAVE_OPENBLAS_SET_NUM_THREADS)
   target_compile_definitions(cabledyn_obj PRIVATE CABLEDYN_HAVE_OPENBLAS_SET_NUM_THREADS=1)
 endif()
