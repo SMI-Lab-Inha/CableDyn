@@ -27296,6 +27296,18 @@ CONTAINS
       IF (es_l /= 0) THEN
         CALL fail(es_out, em_out, 'submerged weight: '//TRIM(em_l)); RETURN
       END IF
+      ! A finite-EI line's ATTACHMENTS, smeared over the elements beside their nodes with their
+      ! net weight (m - rho V) g, as in the smeared start of its cubic-Hermite statics: the cable
+      ! of the body passes (solve_body_equilibrium) carries them, so their correction is only the
+      ! bending's share and the difference of the lumped, side-of-the-surface and drag loads.
+      IF (ALLOCATED(lines(jl)%att)) THEN
+        BLOCK
+          INTEGER, ALLOCATABLE :: anode(:)
+          REAL(wp) :: aoff
+          CALL attachment_nodes(lc(jl)%l0, lines(jl)%att(1, :), anode, aoff)
+          CALL smear_attachments(lc(jl)%w, lc(jl)%l0, anode, lines(jl)%att, opts%rhoW, opts%g)
+        END BLOCK
+      END IF
       DO ii = 1, ne
         load(:, ii) = [CD_ZERO, CD_ZERO, -lc(jl)%w(ii)]
       END DO
@@ -27704,12 +27716,16 @@ CONTAINS
     !! its end force without the bending's share, which on a soft object is not small (a free spar
     !! rod on four taut legs with a 55 m cable, EI 2e4 N m^2, pinned at its upper end: the rod
     !! started 5.7e-2 m off its equilibrium, its top drifted 7e-2 m in 3 s and a leg tension moved
-    !! by 2.3 %),
-    !! and without its ATTACHMENTS, whose weight, buoyancy and drag reach the object through the
-    !! line (a 2 t clump 50 m along a pinned cable from a moored body: the body started at the pose
-    !! of the line without it and drifted by up to 2.9e-2 m and 0.20 deg in 5 s). Such a line on a
-    !! Rigid6 body or a rod end takes the passes too. Each pass solves the core with extra loads on
-    !! the End A points: the
+    !! by 2.3 %), and its ATTACHMENTS only smeared, without their lumped, side-of-the-surface and
+    !! drag loads (a 2 t clump 50 m along a pinned cable from a moored body, which the core's
+    !! cable once left out: the body started at the pose of the line without it and drifted by up
+    !! to 2.9e-2 m and 0.20 deg in 5 s). Such a line on a Rigid6 body or a rod end takes the passes
+    !! too. The core's cable carries a line's ATTACHMENTS smeared, so the passes correct only the
+    !! differences: without them the correction was the clump's whole load, which the core's end
+    !! stiffness did not see, and on a free spar rod with a 1500 kg clump the passes converged in
+    !! 26 or stopped, by round-off; with them in 6. Should the passes fail on that cable, they are
+    !! repeated once on the core cable without the ATTACHMENTS. Each pass solves the core with
+    !! extra loads on the End A points: the
     !! difference between the cubic-Hermite cable's static end force (bending, the connection
     !! direction turned with the object) and the core's own end force of that line, and the
     !! Hermite connection moment, both evaluated at the previous pass's equilibrium. The passes
@@ -27745,7 +27761,7 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: points_only
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_check_err
     INTEGER, PARAMETER :: MAX_PASS = 60, ANDERSON_DEPTH = 6
-    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp
+    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp, ANDERSON_DROP = 1.0e-6_wp
     TYPE(DeckBody), ALLOCATABLE :: bodies0(:)
     TYPE(DeckRod), ALLOCATABLE :: rods0(:)
     TYPE(DeckPoint), ALLOCATABLE :: points0(:)
@@ -27760,6 +27776,11 @@ CONTAINS
     LOGICAL :: only_points, held
     ! the passes are Anderson-mixed (lines between two objects, pinned lines with ATTACHMENTS)
     LOGICAL :: mix
+    ! the lines the core solve carries (lines_core: with or without their ATTACHMENTS), the
+    ! attempt of the passes, and the failure of the first
+    TYPE(DeckLine), ALLOCATABLE :: lines_core(:)
+    INTEGER :: attempt, n_attempt, first_stat
+    CHARACTER(1024) :: first_msg
     REAL(wp) :: scale, change, pass_tol_eff
     CHARACTER(24) :: b1
 
@@ -27839,93 +27860,124 @@ CONTAINS
     n_and = 0
     max_pass_eff = MAX_PASS
     IF (body_static_pass_limit > 0) max_pass_eff = body_static_pass_limit
-    ! A bending-pinned line is carried by a core cable without its ATTACHMENTS: its pass
-    ! correction is then the attachments' whole load, which turns with the object as the heavier
-    ! or lighter cable does and not as the core's, so the plain passes can overshoot without
-    ! bound on a soft object (a free spar rod with a 1500 kg clump 25 m along a pinned cable from
-    ! its upper end: the end-load change grew to 2.9 of the force scale in 60 passes); the
-    ! Anderson mixing of the lines between two objects converges them, and the passes of every
-    ! pinned line are mixed alike.
+    ! The passes of a bending-pinned line are Anderson-mixed, as those of the lines between two
+    ! objects: on the core cable without its ATTACHMENTS (the second attempt below) the
+    ! correction is the attachments' whole load, which turns with the object as the heavier or
+    ! lighter cable does and not as the core's, and the plain passes overshoot without bound on
+    ! a soft object (a free spar rod with a 1500 kg clump 25 m along a pinned cable from its upper
+    ! end: the end-load change grew to 2.9 of the force scale in 60 passes).
     mix = nb > 0
     DO e = 1, ncl
       IF (lines(cl(e))%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(cl(e)))) &
         mix = .TRUE.
     END DO
     IF (mix) ALLOCATE (and_x(6*ne, ANDERSON_DEPTH + 1), and_f(6*ne, ANDERSON_DEPTH + 1))
-    ext_fm = CD_ZERO
-    ext_km = CD_ZERO
-    ext_rot = CD_ZERO
-    DO e = 1, ne
-      ext_rot(1, 1, e) = CD_ONE
-      ext_rot(2, 2, e) = CD_ONE
-      ext_rot(3, 3, e) = CD_ONE
-    END DO
-    DO pass = 1, max_pass_eff
-      bodies = bodies0
-      rods = rods0
-      points = points0
-      ! the torque stiffness only with torsion: without it the core's arithmetic is exactly that
-      ! of a deck before torsion existed (no zero-stiffness correction, signed zeros kept)
-      IF (pass_tol_eff < PASS_TOL) THEN
-        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
-                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                         quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot, &
-                                         end_force_b=fsb)
-      ELSE
-        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
-                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                         quiet=pass > 1, skipped=held, end_force_b=fsb)
+    ! The core carries a finite-EI line's ATTACHMENTS smeared (prepare_line). Should the passes
+    ! fail on that cable (its equilibrium of the object unstable or not found, or the passes not
+    ! converging), they are repeated once on the core cable without them, whose correction is the
+    ! attachments' whole load: that solve keeps the object balanced by its lines without the
+    ! attachments' load, where a heavy clump on a slack cable from a free spar rod tilted the
+    ! rod's balance on the smeared cable past its stability test.
+    lines_core = lines
+    n_attempt = 1
+    IF (ANY([(ALLOCATED(lines(eline(e))%att), e=1, ne)])) n_attempt = 2
+    first_stat = CD_DECKDRV_OK
+    first_msg = ''
+    DO attempt = 1, n_attempt
+      IF (attempt == 2) THEN
+        first_stat = ErrStat
+        first_msg = ErrMsg
+        ErrStat = CD_DECKDRV_OK
+        ErrMsg = ''
+        DO j = 1, SIZE(lines_core)
+          IF (ALLOCATED(lines_core(j)%att)) DEALLOCATE (lines_core(j)%att)
+        END DO
+        n_and = 0
       END IF
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      ! the objects stay at their deck poses (the core has already said why): nothing to balance
-      IF (held) RETURN
-      scale = CD_ONE
-      DO e = 1, ncl
-        IF (eb(e) > 0) THEN
-          CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e), new_fm(:, eb(e)), &
-                                 new_km(:, :, eb(e)), new_rot(:, :, eb(e)))
+      ext_fm = CD_ZERO
+      ext_km = CD_ZERO
+      ext_rot = CD_ZERO
+      DO e = 1, ne
+        ext_rot(1, 1, e) = CD_ONE
+        ext_rot(2, 2, e) = CD_ONE
+        ext_rot(3, 3, e) = CD_ONE
+      END DO
+      DO pass = 1, max_pass_eff
+        bodies = bodies0
+        rods = rods0
+        points = points0
+        ! the torque stiffness only with torsion: without it the core's arithmetic is exactly that
+        ! of a deck before torsion existed (no zero-stiffness correction, signed zeros kept)
+        IF (pass_tol_eff < PASS_TOL) THEN
+          CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines_core, sections, opts, &
+                                           ErrStat, ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, &
+                                           end_force_a=fs, quiet=pass > 1, skipped=held, ext_km=ext_km, &
+                                           ext_rot=ext_rot, end_force_b=fsb)
         ELSE
-          CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
+          CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines_core, sections, opts, &
+                                           ErrStat, ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, &
+                                           end_force_a=fs, quiet=pass > 1, skipped=held, end_force_b=fsb)
         END IF
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        new_fm(1:3, e) = new_fm(1:3, e) - fs(:, cl(e))
-        scale = MAX(scale, NORM2(fs(:, cl(e))), NORM2(new_fm(1:3, e) + fs(:, cl(e))))
-        IF (eb(e) > 0) THEN
-          new_fm(1:3, eb(e)) = new_fm(1:3, eb(e)) - fsb(:, cl(e))
-          scale = MAX(scale, NORM2(fsb(:, cl(e))), NORM2(new_fm(1:3, eb(e)) + fsb(:, cl(e))))
+        IF (ErrStat /= CD_DECKDRV_OK) EXIT
+        ! the objects stay at their deck poses (the core has already said why): nothing to balance
+        IF (held) RETURN
+        scale = CD_ONE
+        DO e = 1, ncl
+          IF (eb(e) > 0) THEN
+            CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e), new_fm(:, eb(e)), &
+                                   new_km(:, :, eb(e)), new_rot(:, :, eb(e)))
+          ELSE
+            CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
+          END IF
+          IF (ErrStat /= CD_DECKDRV_OK) EXIT
+          new_fm(1:3, e) = new_fm(1:3, e) - fs(:, cl(e))
+          scale = MAX(scale, NORM2(fs(:, cl(e))), NORM2(new_fm(1:3, e) + fs(:, cl(e))))
+          IF (eb(e) > 0) THEN
+            new_fm(1:3, eb(e)) = new_fm(1:3, eb(e)) - fsb(:, cl(e))
+            scale = MAX(scale, NORM2(fsb(:, cl(e))), NORM2(new_fm(1:3, eb(e)) + fsb(:, cl(e))))
+          END IF
+        END DO
+        IF (ErrStat /= CD_DECKDRV_OK) EXIT
+        change = MAXVAL(ABS(new_fm - ext_fm))
+        eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
+        ext_km = new_km
+        ext_rot = new_rot
+        IF (change <= pass_tol_eff*scale) THEN
+          ext_fm = new_fm
+          EXIT
+        END IF
+        IF (mix) THEN
+          CALL anderson_next(ext_fm, new_fm)
+        ELSE
+          ext_fm = new_fm
         END IF
       END DO
-      change = MAXVAL(ABS(new_fm - ext_fm))
-      eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
-      ext_km = new_km
-      ext_rot = new_rot
-      IF (change <= pass_tol_eff*scale) THEN
-        ext_fm = new_fm
-        EXIT
+      IF (ErrStat == CD_DECKDRV_OK) THEN
+        IF (change <= pass_tol_eff*scale) EXIT
+        WRITE (b1, '(ES10.3)') change/scale
+        IF (nb == 0) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the END CONNECTION or ATTACHMENTS '// &
+                          'of finite-EI LINE '//TRIM(int_to_str(lines(eline(eworst))%id))// &
+                          ' did not converge after '//TRIM(int_to_str(max_pass_eff))//' passes (relative end-load '// &
+                          'change '//TRIM(ADJUSTL(b1))//'); OPTION bodyIC deck starts from the deck pose instead')
+        ELSE
+          ! the worst entry may be the End B of a line between two objects, connected or pinned
+          CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the bending end loads of finite-EI '// &
+                          'LINE '//TRIM(int_to_str(lines(eline(eworst))%id))//' (its End '// &
+                          MERGE('B', 'A', eworst > ncl)//', on a body or rod) did not converge after '// &
+                          TRIM(int_to_str(max_pass_eff))//' passes (relative end-load change '//TRIM(ADJUSTL(b1))// &
+                          '); OPTION bodyIC deck starts from the deck pose instead')
+        END IF
       END IF
-      IF (mix) THEN
-        CALL anderson_next(ext_fm, new_fm)
-      ELSE
-        ext_fm = new_fm
+      IF (attempt == n_attempt) THEN
+        ! both failed: the failure on the cable that carries the attachments
+        IF (attempt == 2) THEN
+          ErrStat = first_stat
+          ErrMsg = first_msg
+        END IF
+        RETURN
       END IF
     END DO
-    IF (change > pass_tol_eff*scale) THEN
-      WRITE (b1, '(ES10.3)') change/scale
-      IF (nb == 0) THEN
-        CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the END CONNECTION or ATTACHMENTS '// &
-                        'of finite-EI LINE '//TRIM(int_to_str(lines(eline(eworst))%id))// &
-                        ' did not converge after '//TRIM(int_to_str(max_pass_eff))//' passes (relative end-load '// &
-                        'change '//TRIM(ADJUSTL(b1))//'); OPTION bodyIC deck starts from the deck pose instead')
-      ELSE
-        ! the worst entry may be the End B of a line between two objects, connected or pinned
-        CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the bending end loads of finite-EI '// &
-                        'LINE '//TRIM(int_to_str(lines(eline(eworst))%id))//' (its End '// &
-                        MERGE('B', 'A', eworst > ncl)//', on a body or rod) did not converge after '// &
-                        TRIM(int_to_str(max_pass_eff))//' passes (relative end-load change '//TRIM(ADJUSTL(b1))// &
-                        '); OPTION bodyIC deck starts from the deck pose instead')
-      END IF
-      RETURN
-    END IF
     IF (nb == 0 .AND. ANY([(lines(cl(e))%endconn_mode(1) == CD_ENDCONN_PINNED .AND. &
                             .NOT. line_torsion_at_a(lines(cl(e))), e=1, ncl)])) THEN
       ! a bending-pinned line among them (its bending share of the end force, its ATTACHMENTS)
@@ -27949,8 +28001,14 @@ CONTAINS
       !! loads x it was given): Anderson mixing, x+ = g - dG gamma with gamma the least-squares
       !! fit of the residual f = g - x by the differences of the last residuals, dF gamma ~ f
       !! (at most ANDERSON_DEPTH of them, the oldest dropped first). The fit is solved by
-      !! modified Gram-Schmidt on dF; a column that adds no new direction is dropped. A residual
-      !! that grows tenfold over the last one restarts the mixing from the plain pass.
+      !! modified Gram-Schmidt on dF; a column that adds no new direction, its part normal to the
+      !! kept ones below ANDERSON_DROP of its length, is dropped. A residual that grows tenfold
+      !! over the last one restarts the mixing from the plain pass. The drop bound keeps the fit
+      !! well conditioned: residuals that span fewer directions than the history (a pinned end's
+      !! moment rows are zero, its force acts in the line's plane) leave the later columns a
+      !! normal part of round-off size, and with a bound of 1e-10 their coefficients reached
+      !! 1e12, so the mixed loads jumped by 1e6 N and the passes converged or stopped by 1 ulp of
+      !! an anchor coordinate (a free spar rod with a 1500 kg clump on a pinned cable).
       REAL(wp), INTENT(INOUT) :: x(:, :)
       REAL(wp), INTENT(IN) :: g(:, :)
       REAL(wp) :: xv(SIZE(x)), gv(SIZE(x)), fv(SIZE(x)), q(SIZE(x), ANDERSON_DEPTH), rr(ANDERSON_DEPTH, ANDERSON_DEPTH)
@@ -27987,7 +28045,7 @@ CONTAINS
           rr(k, kept + 1) = DOT_PRODUCT(q(:, k), dfi)
           dfi = dfi - rr(k, kept + 1)*q(:, k)
         END DO
-        IF (NORM2(dfi) <= 1.0e-10_wp*nrm) CYCLE
+        IF (NORM2(dfi) <= ANDERSON_DROP*nrm) CYCLE
         kept = kept + 1
         rr(kept, kept) = NORM2(dfi)
         q(:, kept) = dfi/rr(kept, kept)

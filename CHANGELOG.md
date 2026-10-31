@@ -407,9 +407,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   at the pose of the line without the clump and drifted by up to 2.9e-2 m and 0.20 deg in 5 s.
   Such a line now takes the static passes of a connected end, which balance the body on the
   cubic-Hermite cable's end loads; the body holds its pose to the output's 8 digits. Their
-  passes are Anderson-mixed, as those of a line between two objects: on a free spar rod with a
-  1500 kg clump on a cable pinned at its upper end the plain passes diverged (the deck stopped),
-  the mixed ones converge in 26 and the rod holds its pose to 8 digits.
+  passes are Anderson-mixed, as those of a line between two objects, and the core cable of the
+  passes carries the line's `ATTACHMENTS` smeared, so the passes correct only the lumped,
+  side-of-the-surface and bending differences: on a free spar rod with a 1500 kg clump on a cable
+  pinned at its upper end the plain passes on a core cable without the clump diverged (the deck
+  stopped), and Anderson-mixed ones converged in 26 passes or stopped by round-off (a 1-ulp
+  change of an anchor coordinate; the Linux build stopped). They now converge in 6, the same
+  for those 1-ulp changes, and the rod holds its pose to 8 digits. The mixing drops history
+  columns that add less than 1e-6 of a new direction (1e-10 before), which had let round-off
+  columns drive the mixed loads to 1e6 N. Across a sweep of the rod deck (clump 0 to 4 t, cable
+  50 to 70 m, rod mass, clump position, start offsets, 1-ulp changes) 42 of 45 decks converge
+  (34 before), the three left with no stable equilibrium found on either core cable.
 - A bending-pinned finite-EI line on a Rigid6 body or a rod end without `ATTACHMENTS` was left to
   the body static solve's cable without bending stiffness, whose end force lacks the bending's
   share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its

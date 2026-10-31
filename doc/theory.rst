@@ -2780,10 +2780,16 @@ pass's pose, until these loads change by less than :math:`10^{-7}` of the force 
 fixed point the object balances the Hermite cable exactly. A bending-pinned end carries no
 moment, but the surrogate gives its end force without the share of the bending, which on a soft
 object is not small (a free spar rod with a pinned 55 m cable of :math:`EI = 2\times10^4` N m\ :sup:`2`
-started 5.7 cm off its equilibrium), and without the line's ``ATTACHMENTS``: on a Rigid6 body or
-a rod end such a line takes the passes too, Anderson-mixed (the correction of a heavy clump the
-surrogate lacks turns with the object differently from the surrogate, which the plain passes
-overshoot).
+started 5.7 cm off its equilibrium), and with the line's ``ATTACHMENTS`` only smeared: on a
+Rigid6 body or a rod end such a line takes the passes too, Anderson-mixed. The surrogate carries
+the attachments' net weight smeared over the elements beside their nodes, as the smeared start of
+the Hermite statics, so the passes correct only the lumped, side-of-the-surface, drag and bending
+differences; a surrogate without them left the passes a heavy clump's whole load, whose change
+with the object's pose its end stiffness did not see, and the passes converged or stopped by
+round-off. Should the passes fail on that surrogate, they are repeated once on the surrogate
+without the attachments. The mixing drops history columns that add less than :math:`10^{-6}` of
+a new direction, which keeps its least-squares fit well conditioned when the residuals span fewer
+directions than the history.
 
 **End connections (Hermite lines).** A line end may carry an isotropic rotational spring with
 potential :math:`U = \tfrac{1}{2}k\,\theta^2`, where :math:`\theta` is the angle between the end
