@@ -37369,10 +37369,13 @@ CONTAINS
     INTEGER, INTENT(IN) :: body_id
     INTEGER, ALLOCATABLE, INTENT(OUT) :: indices(:)
     INTEGER :: i, n
+    ! the Body<N> points only, as count_body_point_refs counts them: a Rod<N>A/B end point keeps
+    ! its rod's id in body_id, so a rod numbered as the body is not one of the body's points
     n = count_body_point_refs(points, body_id)
     ALLOCATE (indices(n))
     n = 0
     DO i = 1, SIZE(points)
+      IF (.NOT. starts_with(TRIM(points(i)%ptype), 'body')) CYCLE
       IF (points(i)%body_id == body_id) THEN
         n = n + 1
         indices(n) = i

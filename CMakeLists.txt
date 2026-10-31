@@ -1682,6 +1682,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # A rod numbered as a body is not one of the body's points: a Rod1B end POINT listed before
+  # the Body1 points gives the run of the same deck with the rod renumbered, bit for bit.
+  add_test(NAME body_rod_numbering
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_body_rod_numbering.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/body_rod_numbering)
+  set_tests_properties(body_rod_numbering PROPERTIES
+    LABELS "python;driver;integration;dynamic"
+    TIMEOUT 600
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # Anchor uplift channels (AnchFz/AnchFH, TDP<L>Grd): the analytic laid and suspended elastic
   # catenaries, the Point<P>F identity on every standalone route, and a surge that lifts the
   # anchor of a catenary (needs numpy).

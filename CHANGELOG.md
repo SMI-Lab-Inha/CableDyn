@@ -347,6 +347,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
+  keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
+  every point with its id: a rod end POINT row listed before the body's points became the body's
+  first point, and the list overran its allocation (also in 0.3.0). A free body on three legs with
+  a pinned arm rod numbered 1, its tether on an explicit `Rod1B` POINT listed first, now writes
+  the outputs of the same deck with the arm as rod 3 bit for bit; before, the arm turned 172 deg
+  in pitch, the body 1.06 deg, and a leg tension moved 3.0 kN in 1 s.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations
