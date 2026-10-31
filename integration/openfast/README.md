@@ -51,7 +51,10 @@ whose size is known only at run time are placed on the heap rather than on the `
 Every configuration also makes local variables automatic (`/Qauto`, as the CMake build of the
 core does with every compiler): without OpenMP, ifx keeps fixed-size local arrays and `CHARACTER`
 locals in static storage, which every thread shares, and the turbines of a FAST.Farm run, like
-separate C API handles, may step on several threads at once.
+separate C API handles, may step on several threads at once. Every configuration, and the
+adapter target of the CMake route, compiles with the value-safe floating-point model
+(`/fp:precise`, `-fp-model precise` off Windows), as every Intel build of the core does: the
+ifx default, `/fp:fast`, may reassociate sums and flush subnormals to zero.
 
 ## License of modified files
 

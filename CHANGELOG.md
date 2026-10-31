@@ -294,6 +294,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- Every Intel ifx build compiles CableDyn with the value-safe floating-point model,
+  `/fp:precise` (`-fp-model precise` off Windows): the static Windows release and wheel, every
+  other CMake build and configuration with ifx (with or without OpenMP, including the core that
+  the OpenFAST CMake route builds, and its adapter), and every configuration of the OpenFAST
+  Visual Studio project. The ifx default, `/fp:fast`, reassociates sums, divides by
+  multiplying with the reciprocal and flushes subnormals to zero, differently at every inlined
+  call site, so the gates that hold two routes to the same bits failed (a zero control command
+  against an uncontrolled cable, a held Coupled End B against a Fixed one, a committed against a
+  re-derived torque), subnormal deck values read as zero and the clamped-cable elastica secant
+  stalled. Results of ifx builds change at round-off; gfortran builds are unchanged.
 - The macOS wheel needs macOS 15 or newer on Apple silicon (0.3.0: macOS 14). It is built on
   the macOS 15 runner, as GitHub retires the macOS 14 runner image on 2 November 2026, and its
   Homebrew gfortran and OpenBLAS support no older macOS. On macOS 14, build from source.

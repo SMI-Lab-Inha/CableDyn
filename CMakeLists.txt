@@ -46,14 +46,9 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   # driver below, or the OpenFAST Release|x64 project, which enables whole-program
   # optimisation).
   #
-  # /fp:precise: IFX defaults to /fp:fast, which lets it reassociate sums, replace a division by
-  # a multiplication with the reciprocal, and flush subnormals to zero, differently at every
-  # inlined call site. The same expression then rounds differently on two code paths, so the
-  # gates that hold two routes to the same bits (a zero control command and an uncontrolled
-  # cable, a held Coupled End B and a Fixed one, a committed and a re-derived torque) fail, a
-  # subnormal deck value reads as zero, and a secant iteration can stall on equal residuals.
-  # The reference LAPACK is built with /fp:precise as well.
-  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /heap-arrays:1024 /Qipo /fp:precise")
+  # The floating-point model is /fp:precise, as in every IFX build (below); the reference
+  # LAPACK is built with /fp:precise as well.
+  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /heap-arrays:1024 /Qipo")
   # CMake does not pass the compile flags to an IFX executable link on Windows. The shared
   # library (the Windows wheel's cabledyn.dll) links the same IPO objects, so it needs the
   # flag as well: without it IFX hands the intermediate objects to link.exe (LNK1107).
@@ -164,6 +159,22 @@ elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
     add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:/Qauto>)
   else()
     add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-auto>)
+  endif()
+endif()
+# The value-safe floating-point model in every IFX build and configuration: /fp:precise
+# (-fp-model precise off Windows), for the core, the driver, the tests, the wheel and the
+# OpenFAST build of the core alike. IFX defaults to /fp:fast, which lets it reassociate sums,
+# replace a division by a multiplication with the reciprocal and flush subnormals to zero,
+# differently at every inlined call site. The same expression then rounds differently on two
+# code paths, so the gates that hold two routes to the same bits (a zero control command and
+# an uncontrolled cable, a held Coupled End B and a Fixed one, a committed and a re-derived
+# torque) fail, a subnormal deck value reads as zero, and a secant iteration can stall on
+# equal residuals. GNU builds keep their default, value-safe model (no -ffast-math).
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
+  if(WIN32)
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:/fp:precise>)
+  else()
+    add_compile_options("$<$<COMPILE_LANGUAGE:Fortran>:SHELL:-fp-model precise>")
   endif()
 endif()
 # GNU builds on Windows (MinGW-w64): every executable gets a 64 MiB stack reserve instead of
