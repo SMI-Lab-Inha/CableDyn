@@ -31,13 +31,8 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   # The release executables target x86-64-v3 (CABLEDYN_TARGET_AVX2 below).
   set(CABLEDYN_TARGET_AVX2 ON CACHE BOOL "" FORCE)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded" CACHE STRING "" FORCE)
-  # Large finite-EI meshes create compiler-generated array temporaries in deeply
-  # nested residual/assembly calls. Keep those temporaries off the process stack;
-  # the released executable also receives a generous reserve below. The size
-  # threshold keeps run-time-sized arrays and temporaries on the heap but leaves
-  # compile-time-sized locals up to 1 MiB on the stack: with a bare /heap-arrays,
-  # IFX 2025.3 heap-allocates the host frame of every procedure with internal
-  # procedures and never frees it, leaking memory on each call.
+  # Run-time-sized arrays and array temporaries go to the heap (/heap-arrays:1024), as in
+  # every IFX build (below); the released executable also receives a generous reserve below.
   #
   # /Qipo: the element, hydrodynamic, and assembly kernels live in separate modules
   # and are called per element and per Newton iteration; without interprocedural
@@ -48,7 +43,7 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   #
   # The floating-point model is /fp:precise, as in every IFX build (below); the reference
   # LAPACK is built with /fp:precise as well.
-  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /heap-arrays:1024 /Qipo")
+  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /Qipo")
   # CMake does not pass the compile flags to an IFX executable link on Windows. The shared
   # library (the Windows wheel's cabledyn.dll) links the same IPO objects, so it needs the
   # flag as well: without it IFX hands the intermediate objects to link.exe (LNK1107).
@@ -170,11 +165,22 @@ endif()
 # an uncontrolled cable, a held Coupled End B and a Fixed one, a committed and a re-derived
 # torque) fail, a subnormal deck value reads as zero, and a secant iteration can stall on
 # equal residuals. GNU builds keep their default, value-safe model (no -ffast-math).
+#
+# Run-time-sized arrays and the compiler's array temporaries on the heap, in every IFX build:
+# /heap-arrays:1024 (-heap-arrays 1024 off Windows). The library runs on threads whose stack the
+# host sets (1 MiB for python.exe and an MSVC-linked program: the stack_c_api and c_api_threads
+# gates), and large finite-EI meshes create array temporaries in deeply nested residual and
+# assembly calls; without the option a non-static IFX build overflows those stacks. The size
+# threshold leaves compile-time-sized locals up to 1 MiB on the stack: with a bare /heap-arrays,
+# IFX 2025.3 heap-allocates the host frame of every procedure with internal procedures and
+# never frees it, leaking memory on each call.
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
   if(WIN32)
-    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:/fp:precise>)
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:/fp:precise>
+                        $<$<COMPILE_LANGUAGE:Fortran>:/heap-arrays:1024>)
   else()
-    add_compile_options("$<$<COMPILE_LANGUAGE:Fortran>:SHELL:-fp-model precise>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:Fortran>:SHELL:-fp-model precise>"
+                        "$<$<COMPILE_LANGUAGE:Fortran>:SHELL:-heap-arrays 1024>")
   endif()
 endif()
 # GNU builds on Windows (MinGW-w64): every executable gets a 64 MiB stack reserve instead of

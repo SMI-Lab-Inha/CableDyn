@@ -401,6 +401,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   is now laid from End A, the line seen from its other end, and its nodes put back in order. The
   deck starts at the same equilibrium as before on Windows (1e-7 m, 6e-4 N), and moving the fixed
   rod by 1 ulp either way or 1e-12 m up leaves the rod's start unchanged (0 m).
+- A non-static ifx build (a plain CMake build with ifx, or the core of the OpenFAST CMake route)
+  kept run-time-sized arrays and array temporaries on the stack, as only the static Windows
+  release compiled with `/heap-arrays`: the 2835-node mixed IEA-15 MW deck and a fine-mesh deck of
+  the statics matrix overflowed the 1 MiB stack of an MSVC-linked program. Every ifx build now
+  compiles with `/heap-arrays:1024` (`-heap-arrays 1024` off Windows), as the static release and
+  the OpenFAST Visual Studio project did; the static release is unchanged.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's
