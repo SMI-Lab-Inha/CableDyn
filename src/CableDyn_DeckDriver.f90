@@ -37,7 +37,7 @@ MODULE CableDyn_DeckDriver
                                CD_Assemble_Cable_Tangent_Force_Banded_Free
   USE CableDyn_Static, ONLY: CableSolverConfig, CableCurrentLoad, CD_StaticLineReport, CD_Static_Line_Equilibrium, &
                              CD_Static_Line_End_Forces, CD_Static_Anchor_Seabed_Tolerance, CD_Static_Cable_Solve, &
-                             CD_STATIC_OK, CD_STATIC_BADINPUT, &
+                             CD_Static_Line_Dry_Load, CD_STATIC_OK, CD_STATIC_BADINPUT, &
                              CD_STATIC_FRICTION_AS_LAID, CD_STATIC_FRICTION_NONE
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, &
                                  CD_Bathymetry_Is_Initialized, CD_Bathymetry_Floor, &
@@ -3440,32 +3440,37 @@ CONTAINS
 
     SUBROUTINE torsion_after_attachments(est, emt)
       !! The torsion stage of a line with ATTACHMENTS, on its discrete equilibrium (after the
-      !! attachment polish): the attachments' net weights -(m - rho V) g e_z at their nodes and,
-      !! in a deck current, their drag at the twisted state as nodal loads. The drag depends on
-      !! the node's position and line tangent, so the stage is repeated, each time a fresh torsion
-      !! solve from the last state, with the drag of the last solution until the solution stops
-      !! moving (fixed point, as in attachment_static_polish).
+      !! attachment polish): the attachments' net weights -(m - rho V) g e_z at their nodes (-m g
+      !! e_z above the still-water level, attachment_static_weight) and, in a deck current, their
+      !! drag at the twisted state as nodal loads. The drag depends on the node's position and
+      !! line tangent, and the weight on the side of the surface, so the stage is repeated, each
+      !! time a fresh torsion solve from the last state, with the loads of the last solution until
+      !! the solution stops moving and no attachment changes side (fixed point, as in
+      !! attachment_static_polish).
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
       INTEGER, PARAMETER :: MAX_FIXED_POINT = 60
       REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
       REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), q_prev(:), q_polished(:)
+      LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
       LOGICAL :: has_drag
-      INTEGER :: k, fp
+      INTEGER :: fp, k_cross
+      ! the first attachment a pass moved across the still-water level, which names a failure of
+      ! the stage after it (as in attachment_static_polish)
+      CHARACTER(512) :: cause
+      CHARACTER(64) :: mv
       est = CD_DECKDRV_OK
+      k_cross = 0
+      cause = ''
       emt = ''
       ! every pass starts from the polished, untwisted discrete state (a pass from the last twisted
       ! state would first relax it, and a writhe a buckling descent left could put Theta_0 a turn
       ! away, on another branch)
       q_polished = q_static
-      ALLOCATE (f_att(SIZE(q_static)), f_drag(SIZE(q_static)))
-      f_att = CD_ZERO
-      DO k = 1, SIZE(att_node)
-        f_att(6*(att_node(k) - 1) + 3) = f_att(6*(att_node(k) - 1) + 3) - &
-                                         (ln%att(2, k) - opts%rhoW*ln%att(3, k))*opts%g
-      END DO
+      ALLOCATE (f_att(SIZE(q_static)), f_drag(SIZE(q_static)), att_dry(SIZE(att_node)), att_dry_now(SIZE(att_node)))
       has_drag = opts%has_current .AND. ANY(ln%att(4, :) > CD_ZERO .OR. ln%att(6, :) > CD_ZERO)
       DO fp = 1, MAX_FIXED_POINT
+        CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att, att_dry)
         f_drag = CD_ZERO
         IF (has_drag) THEN
           CALL attachment_static_drag(q_static, att_node, ln%att, opts, frame_cs, f_drag, est, emt)
@@ -3477,13 +3482,35 @@ CONTAINS
         q_prev = q_static
         q_static = q_polished
         CALL torsion_stage(est, emt, f_att + f_drag)
-        IF (est /= CD_DECKDRV_OK) RETURN
+        IF (est /= CD_DECKDRV_OK) THEN
+          IF (k_cross > 0) emt = TRIM(cause)//'; '//TRIM(emt)
+          RETURN
+        END IF
+        ! an attachment the twist moved across the still-water level: once more, with its weight on
+        ! its new side
+        CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att, att_dry_now)
+        IF (.NOT. ALL(att_dry_now .EQV. att_dry)) THEN
+          IF (k_cross == 0) THEN
+            k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
+            WRITE (mv, '(ES9.3,A,ES9.3)') ln%att(2, k_cross), ' kg, Volume ', ln%att(3, k_cross)
+            cause = 'finite-EI torsion static solve with discrete ATTACHMENTS: attachment '// &
+                    TRIM(int_to_str(k_cross))//' of the line (Mass '//TRIM(ADJUSTL(mv))//' m^3) crossed the '// &
+                    'still-water level, where the dynamics drops its buoyancy; a point attachment that its weight '// &
+                    'in air takes below the surface and its weight in water above it has no static position (move '// &
+                    'it along the line or change its Mass or Volume)'
+          END IF
+          CYCLE
+        END IF
         IF (.NOT. has_drag) RETURN
         IF (MAXVAL(ABS(q_static - q_prev)) <= FIXED_POINT_TOL) RETURN
       END DO
       est = CD_DECKDRV_SOLVEFAIL
-      emt = 'finite-EI torsion static solve with discrete ATTACHMENTS: the attachment current drag did not '// &
-            'settle to a fixed point'
+      IF (ALL(att_dry_now .EQV. att_dry)) THEN
+        emt = 'finite-EI torsion static solve with discrete ATTACHMENTS: the attachment current drag did not '// &
+              'settle to a fixed point'
+      ELSE
+        emt = cause
+      END IF
     END SUBROUTINE torsion_after_attachments
 
     SUBROUTINE twisted_attachment_checks(est, emt)
@@ -5121,11 +5148,14 @@ CONTAINS
                                       opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj, fell_back)
     !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in warm-started
     !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
-    !! forces -(m - rho V) g e_z and, in a deck current, the attachment current drag grow from
+    !! forces -(m - rho V) g e_z (-m g e_z for an attachment above the still-water level,
+    !! attachment_static_weight) and, in a deck current, the attachment current drag grow from
     !! zero to full, with the contact, dry-buoyancy, end-connection and line current terms of
     !! the builder's static problem. The drag depends on the node's position (profile current,
-    !! current grid) and line tangent, so the full-load solve is repeated with the drag of the
-    !! last solution until the solution stops moving (fixed point).
+    !! current grid) and line tangent, and the weight on the side of the surface the node is on,
+    !! so each solve takes them at its incoming state and the full-load solve is repeated with
+    !! those of the last solution until the solution stops moving and no attachment changes
+    !! side (fixed point).
     !!
     !! The load fraction advances in steps of 1/NSTEP. A step whose damped Newton solve does
     !! not converge is repeated from the last converged state with pseudo-transient
@@ -5169,8 +5199,14 @@ CONTAINS
     REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
     REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), dry(:), knnode(:), wl(:), q_out(:), curv(:)
     REAL(wp) :: lam, lam_done, dlam, res, change
-    INTEGER :: i, k, ne, fp, n_failed, n_ok, grow_after
+    INTEGER :: i, ne, fp, n_failed, n_ok, grow_after
     LOGICAL :: has_drag, converged, newton_failed, grown
+    ! which attachments are above the still-water level: in the state the last solve took its
+    ! loads at, and in the state it returned
+    LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
+    ! the first attachment a solve moved across the still-water level (0: none), which names a
+    ! failure of the polish after it
+    INTEGER :: k_cross
     ! The damped Newton failure of the first failed solve, and of the last one.
     CHARACTER(1024) :: first_msg, last_msg
     CHARACTER(48) :: step_buf, lam_buf
@@ -5183,10 +5219,9 @@ CONTAINS
     n_failed = 0
     ne = SIZE(l0)
     ALLOCATE (f_att(6*(ne + 1)), f_drag(6*(ne + 1)), dry(ne), q_out(SIZE(q)), curv(ne + 1))
-    f_att = CD_ZERO
-    DO k = 1, SIZE(node)
-      f_att(6*(node(k) - 1) + 3) = f_att(6*(node(k) - 1) + 3) - (att(2, k) - opts%rhoW*att(3, k))*opts%g
-    END DO
+    ALLOCATE (att_dry(SIZE(node)), att_dry_now(SIZE(node)))
+    CALL attachment_static_weight(q, node, att, opts, f_att, att_dry)
+    k_cross = 0
     has_drag = opts%has_current .AND. ANY(att(4, :) > CD_ZERO .OR. att(6, :) > CD_ZERO)
     dry = opts%rhoW*opts%g*QUARTER_PI*diam**2
     IF (contact_enabled) THEN
@@ -5228,30 +5263,67 @@ CONTAINS
           WRITE (lam_buf, '(F8.6)') lam_done
           IF (dlam < MIN_STEP) THEN
             WRITE (step_buf, '(ES9.2)') MIN_STEP
-            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
-                            TRIM(ADJUSTL(lam_buf))//', where load steps down to '//TRIM(ADJUSTL(step_buf))// &
-                            ' did not converge either')
+            CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(first_msg)//'; the homotopy stopped at '// &
+                            'load fraction '//TRIM(ADJUSTL(lam_buf))//', where load steps down to '// &
+                            TRIM(ADJUSTL(step_buf))//' did not converge either')
           ELSE
             WRITE (step_buf, '(I0)') MAX_FAILED_STEPS
-            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
-                            TRIM(ADJUSTL(lam_buf))//' after '//TRIM(step_buf)//' load steps had failed')
+            CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(first_msg)//'; the homotopy stopped at '// &
+                            'load fraction '//TRIM(ADJUSTL(lam_buf))//' after '//TRIM(step_buf)// &
+                            ' load steps had failed')
           END IF
           RETURN
         END IF
       END IF
     END DO
-    IF (.NOT. has_drag) RETURN
+    ! An attachment whose node the last solve moved across the still-water level was loaded with
+    ! the weight of the other side: the full-load solve is repeated (below) until none does. A
+    ! line below the surface (or wholly above it) without attachment drag is done.
+    CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
+    IF (.NOT. has_drag .AND. ALL(att_dry_now .EQV. att_dry)) RETURN
     DO fp = 1, MAX_FIXED_POINT
       CALL solve_with(CD_ONE, converged, change)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       IF (.NOT. converged) THEN
-        CALL fail_solve(ErrStat, ErrMsg, TRIM(last_msg)//' (attachment current drag fixed point)'); RETURN
+        CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(last_msg)// &
+                        ' (attachment current drag and surface fixed point)')
+        RETURN
       END IF
-      IF (change <= FIXED_POINT_TOL) RETURN
+      CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
+      ! the weight is constant on either side of the surface: with no attachment changing side the
+      ! solve took the weights of its own solution, and without drag it is the equilibrium
+      IF (ALL(att_dry_now .EQV. att_dry) .AND. (.NOT. has_drag .OR. change <= FIXED_POINT_TOL)) RETURN
     END DO
-    CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static solve with discrete ATTACHMENTS: the attachment '// &
-                    'current drag did not settle to a fixed point')
+    IF (ALL(att_dry_now .EQV. att_dry)) THEN
+      CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static solve with discrete ATTACHMENTS: the attachment '// &
+                      'current drag did not settle to a fixed point')
+    ELSE
+      IF (k_cross == 0) k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
+      CALL fail_solve(ErrStat, ErrMsg, surface_note(''))
+    END IF
   CONTAINS
+    FUNCTION surface_note(sep) RESULT(msg)
+      !! The cause of a failed polish in which a solve moved an attachment across the still-water
+      !! level (k_cross; empty without one), followed by sep: a point attachment that its weight
+      !! in air takes below the surface and its weight in water above it (a net-buoyant module
+      !! that would float, or any module whose node lies nearer the surface than the deflection
+      !! its buoyancy rho V g gives the line) has no static position. Without this the failure
+      !! read as a homotopy that stopped (a 200 kg, 2 m^3 module on a slack cable, which the
+      !! solves carried above and below the surface in turn).
+      CHARACTER(*), INTENT(IN) :: sep
+      CHARACTER(:), ALLOCATABLE :: msg
+      CHARACTER(64) :: mv
+      msg = ''
+      IF (k_cross < 1) RETURN
+      WRITE (mv, '(ES9.3,A,ES9.3)') att(2, k_cross), ' kg, Volume ', att(3, k_cross)
+      msg = 'finite-EI static solve with discrete ATTACHMENTS: attachment '//TRIM(int_to_str(k_cross))// &
+            ' of the line (Mass '//TRIM(ADJUSTL(mv))//' m^3) crossed the still-water level, where the '// &
+            'dynamics drops its buoyancy; a point attachment that its weight in air takes below the surface '// &
+            'and its weight in water above it has no static position (move it along the line or change its '// &
+            'Mass or Volume)'
+      msg = msg//sep
+    END FUNCTION surface_note
+
     SUBROUTINE solve_with(scale, ok, dq_max)
       !! One warm-started solve at load fraction scale, with the attachment current drag
       !! evaluated on the incoming state: the damped Newton iteration and, when it does not
@@ -5269,6 +5341,12 @@ CONTAINS
       CHARACTER(48) :: num_buf
       ok = .FALSE.
       max_it = [MERGE(NEWTON_RETRY_ITER, 200, newton_failed), 200, 200]
+      ! the attachments' weights on the side of the surface of the incoming state (the first one the
+      ! last solve moved across the surface is recorded for the failure message)
+      CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
+      IF (k_cross == 0 .AND. .NOT. ALL(att_dry_now .EQV. att_dry)) &
+        k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
+      att_dry = att_dry_now
       f_drag = CD_ZERO
       IF (has_drag) THEN
         CALL attachment_static_drag(q, node, att, opts, frame_cs, f_drag, es, em)
@@ -5359,6 +5437,34 @@ CONTAINS
       f(base + 1:base + 3) = f(base + 1:base + 3) + fd
     END DO
   END SUBROUTINE attachment_static_drag
+
+  SUBROUTINE attachment_static_weight(q, node, att, opts, f, dry)
+    !! The attachments' weight at rest as nodal loads (f, the generalized load vector of the
+    !! cable solve, set here): -(m - rho V) g e_z at the node of an attachment at or below the
+    !! still-water level and -m g e_z above it, as the dynamics loads it (attachment_residual of
+    !! the cubic-Hermite model: above the free surface its weight only, no buoyancy, and no drag,
+    !! which attachment_static_drag skips there too). Without it the static start kept the
+    !! buoyancy of an attachment above the surface: a 500 kg, 0.2 m^3 module 3 m above it on a
+    !! cable hung from 5 m above the surface moved the fairlead load by up to 6.1 % in the first
+    !! second.
+    !! dry(k): attachment k is above the surface in q.
+    REAL(wp), INTENT(IN) :: q(:), att(:, :)
+    INTEGER, INTENT(IN) :: node(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    REAL(wp), INTENT(OUT) :: f(:)
+    LOGICAL, INTENT(OUT) :: dry(:)
+    INTEGER :: k, base
+    f = CD_ZERO
+    DO k = 1, SIZE(node)
+      base = 6*(node(k) - 1)
+      dry(k) = q(base + 3) > CD_ZERO
+      IF (dry(k)) THEN
+        f(base + 3) = f(base + 3) - att(2, k)*opts%g
+      ELSE
+        f(base + 3) = f(base + 3) - (att(2, k) - opts%rhoW*att(3, k))*opts%g
+      END IF
+    END DO
+  END SUBROUTINE attachment_static_weight
 
   PURE INTEGER FUNCTION bending_refine_scale(l0, ei, w) RESULT(scale)
     !! The power-of-two refinement factor (at most CD_HC_REFINE_CAP, and at most
@@ -11259,8 +11365,10 @@ CONTAINS
 
   SUBROUTINE print_static_input_warnings(types, points, lines, sections, opts)
     !! Standard-output WARNINGS (never failures) for admissible but non-physical or
-    !! questionable inputs: a line end above the still-water level (the line is modelled
-    !! fully submerged), a line type that sinks into the penalty seabed by more than its
+    !! questionable inputs: an EI = 0 line end above the still-water level on a deck without a
+    !! seabed (the line is then modelled fully submerged; with WtrDpth or a bathymetry, and on
+    !! a finite-EI line, the part above the surface carries its dry weight), a line type that
+    !! sinks into the penalty seabed by more than its
     !! diameter (kBot too soft for its submerged weight), a slack anchored line that hangs
     !! below its anchor on a deck with no seabed (reported after the static solve by
     !! warn_line_below_anchor), and a line with fewer than three segments (a straight
@@ -11272,14 +11380,23 @@ CONTAINS
     TYPE(DeckOptions), INTENT(IN) :: opts
     INTEGER :: i, j, k, nseg
     REAL(wp) :: w, pen
+    LOGICAL :: dry_weight
     CHARACTER(32) :: b1, b2
 
     DO i = 1, SIZE(lines)
+      ! the line's model carries the dry weight above the surface: a finite-EI line always, an
+      ! EI = 0 line with a seabed (its buoyancy recovery)
+      dry_weight = opts%has_wtrdpth .OR. opts%has_bathymetry_file
+      DO j = 1, SIZE(sections)
+        IF (sections(j)%line_id /= lines(i)%id) CYCLE
+        IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
+        IF (types(sections(j)%ltype)%ei > CD_ZERO) dry_weight = .TRUE.
+      END DO
       DO k = 1, 2
         IF (k == 1) j = find_point(points, lines(i)%nodeA)
         IF (k == 2) j = find_point(points, lines(i)%nodeB)
         IF (j < 1) CYCLE
-        IF (points(j)%pos(3) > CD_ZERO) THEN
+        IF (points(j)%pos(3) > CD_ZERO .AND. .NOT. dry_weight) THEN
           WRITE (b1, '(ES10.3)') points(j)%pos(3)
           WRITE (output_unit, '(A)') ' WARNING: LINE '//TRIM(int_to_str(lines(i)%id))//' end POINT '// &
             TRIM(int_to_str(points(j)%id))//' is above the still-water level (z = '//TRIM(ADJUSTL(b1))// &
@@ -11885,6 +12002,9 @@ CONTAINS
     INTEGER, ALLOCATABLE :: conn(:, :)
     REAL(wp), ALLOCATABLE :: l0(:), ea(:), mpl(:), diam(:), w(:), load(:, :), f_ext(:)
     REAL(wp), ALLOCATABLE :: kn(:)
+    ! the dry part's weight (with a seabed, as the dynamic model's buoyancy recovery): the
+    ! waterline per node and the recovery load of the solution
+    REAL(wp), ALLOCATABLE :: dry_wl(:), f_dry(:)
     REAL(wp) :: anchor(3), fairlead(3), force_a(3), force_b(3)
     INTEGER :: ne, n_dof, i, j, ns, es
     CHARACTER(1024) :: em
@@ -11998,28 +12118,43 @@ CONTAINS
       cur%elem_cdn = cur%elem_cdn(ne:1:-1)
       cur%elem_cdt = cur%elem_cdt(ne:1:-1)
     END IF
+    ALLOCATE (f_dry(n_dof))
+    f_dry = CD_ZERO
     IF (PRESENT(bathymetry) .OR. opts%has_wtrdpth) THEN
       CALL CD_Nodal_Seabed_Stiffness(opts%kbot, diam, l0, kn, es, em)
       IF (es /= CD_LINE_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'seabed stiffness: '//TRIM(em)); RETURN
       END IF
+      ! the line's model has a seabed and so the buoyancy recovery of its dry part
+      ! (init_deck_models_from_parsed): the part above the still-water level takes its dry
+      ! weight here too, so that the static-only start is the dynamic route's
+      ALLOCATE (dry_wl(ne + 1))
+      dry_wl = CD_ZERO
     END IF
 
     IF (PRESENT(bathymetry)) THEN
       IF (opts%has_current) THEN
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry, current=cur)
+                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry, current=cur, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       ELSE
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry)
+                                        report, es, em, seabed_kn=kn, bathymetry=bathymetry, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       END IF
     ELSE IF (opts%has_wtrdpth) THEN
       IF (opts%has_current) THEN
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, current=cur)
+                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, current=cur, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       ELSE
         CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn)
+                                        report, es, em, seabed_z_floor=-opts%wtrdpth, seabed_kn=kn, &
+                                        dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                        dry_diameter=diam, dry_load=f_dry)
       END IF
     ELSE IF (opts%has_current) THEN
       CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
@@ -12045,6 +12180,8 @@ CONTAINS
       CALL fail_solve(ErrStat, ErrMsg, 'tension recovery: '//TRIM(em)); RETURN
     END IF
     IF (PRESENT(end_ten) .OR. PRESENT(end_force)) THEN
+      ! the equilibrium's external load: the submerged weight and the dry part's recovery
+      f_ext = f_ext + f_dry
       IF (PRESENT(bathymetry) .AND. opts%has_current) THEN
         CALL CD_Static_Line_End_Forces(q, conn, l0, ea, f_ext, .TRUE., force_a, force_b, es, em, &
                                        seabed_kn=kn, bathymetry=bathymetry, current=cur)
@@ -25950,7 +26087,8 @@ CONTAINS
     !! = -K_c, mapped to the object unknowns through the attachment arms, plus the moment of
     !! the end force under a rotation of the arm. The objects' own loads (no lines, cheap) are
     !! differentiated by central differences. The line's steady-current drag stiffness is not in
-    !! K_c; the residual is exact, so it only slows convergence in a current. A line exactly at
+    !! K_c, nor the stiffness of its dry part's weight above the still-water level (with a seabed,
+    !! cached_line_solve); the residual is exact, so they only slow convergence. A line exactly at
     !! its slack/taut kink has no one-sided stiffness: when the analytic Newton system is
     !! singular or its step fails, the iteration falls back to a central-difference Jacobian of
     !! the full residual (warm-started line solves per column). Newton steps in a trust region
@@ -26011,6 +26149,10 @@ CONTAINS
       INTEGER, ALLOCATABLE :: conn(:, :)
       REAL(wp), ALLOCATABLE :: l0(:), ea(:), w(:), f_ext(:), kn(:), q(:), s(:)
       REAL(wp), ALLOCATABLE :: dia(:), cdn(:), cdt(:)
+      ! with a seabed, the dry part's weight above the still-water level (as the dynamic model's
+      ! buoyancy recovery): the element diameters and the waterline per node (unallocated: the
+      ! line keeps its buoyancy everywhere)
+      REAL(wp), ALLOCATABLE :: dry_d(:), dry_wl(:)
       REAL(wp) :: anchor(3) = CD_ZERO, fairlead(3) = CD_ZERO
       REAL(wp) :: ef(3, 2) = CD_ZERO, kc(6, 6) = CD_ZERO
     END TYPE
@@ -27154,6 +27296,18 @@ CONTAINS
       IF (es_l /= 0) THEN
         CALL fail(es_out, em_out, 'submerged weight: '//TRIM(em_l)); RETURN
       END IF
+      ! A finite-EI line's ATTACHMENTS, smeared over the elements beside their nodes with their
+      ! net weight (m - rho V) g, as in the smeared start of its cubic-Hermite statics: the cable
+      ! of the body passes (solve_body_equilibrium) carries them, so their correction is only the
+      ! bending's share and the difference of the lumped, side-of-the-surface and drag loads.
+      IF (ALLOCATED(lines(jl)%att)) THEN
+        BLOCK
+          INTEGER, ALLOCATABLE :: anode(:)
+          REAL(wp) :: aoff
+          CALL attachment_nodes(lc(jl)%l0, lines(jl)%att(1, :), anode, aoff)
+          CALL smear_attachments(lc(jl)%w, lc(jl)%l0, anode, lines(jl)%att, opts%rhoW, opts%g)
+        END BLOCK
+      END IF
       DO ii = 1, ne
         load(:, ii) = [CD_ZERO, CD_ZERO, -lc(jl)%w(ii)]
       END DO
@@ -27188,6 +27342,17 @@ CONTAINS
           CALL fail(es_out, em_out, 'seabed stiffness: '//TRIM(em_l)); RETURN
         END IF
       END IF
+      ! The part above the still-water level takes its dry weight here, as in solve_one_line,
+      ! where the line's own model gives it that weight, so that the objects start balanced
+      ! against the loads the march applies: an EI = 0 line with a seabed (its model's buoyancy
+      ! recovery, init_deck_models_from_parsed) and a finite-EI line always (its cubic-Hermite
+      ! cable's dry buoyancy, with or without a seabed). Without a seabed this surrogate of a
+      ! finite-EI line kept its buoyancy above the surface, while its cable did not.
+      IF (PRESENT(bathymetry) .OR. opts%has_wtrdpth .OR. line_is_finite_ei(lines(jl), types, sections)) THEN
+        lc(jl)%dry_d = diam
+        ALLOCATE (lc(jl)%dry_wl(ne + 1))
+        lc(jl)%dry_wl = CD_ZERO
+      END IF
       lc(jl)%ready = .TRUE.
     END SUBROUTINE prepare_line
 
@@ -27204,14 +27369,14 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: em_out
       LOGICAL, INTENT(IN), OPTIONAL :: want_k
       LOGICAL, INTENT(OUT), OPTIONAL :: k_ok
-      TYPE(CableSolverConfig) :: cfg, cfg_w
+      TYPE(CableSolverConfig) :: cfg
       TYPE(CD_StaticLineReport) :: report
       TYPE(CableCurrentLoad), ALLOCATABLE :: curp
-      REAL(wp), ALLOCATABLE :: zf, q0(:), q(:), tq(:)
+      REAL(wp), ALLOCATABLE :: zf, q0(:), q(:), f_dry(:), f_prev(:), q_prev(:)
       REAL(wp) :: c_old(3), c_new(3), rot_w(3, 3), sc_w
       REAL(wp) :: anchor(3), fairlead(3), fa(3), fb(3)
-      INTEGER :: nn, ii, es_l, nit
-      LOGICAL :: conv, stalled, at_floor
+      INTEGER :: nn, ii, es_l, kd
+      LOGICAL :: conv
       CHARACTER(1024) :: em_l
 
       es_out = CD_DECKDRV_OK
@@ -27266,37 +27431,53 @@ CONTAINS
         END DO
         q0(1:3) = anchor
         q0(3*nn - 2:3*nn) = fairlead
-        ! (a) plain Newton with the compression-capable law, accepted when no element is
-        ! compressed beyond the 1e-6 round-off band (every element taut: it is then the
-        ! tension-only equilibrium), as the cold initializer's first stage accepts it
-        CALL CD_Static_Cable_Solve(q0, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., lc(jl)%f_ext, &
-                                   [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg, q, conv, stalled, at_floor, nit, &
-                                   es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
-                                   bathymetry=bathymetry)
-        IF (es_l /= CD_STATIC_OK) conv = .FALSE.
-        IF (conv) conv = ALL(IEEE_IS_FINITE(q))
-        IF (conv) THEN
-          ALLOCATE (tq(nn - 1))
-          CALL CD_Compute_Cable_Tension(RESHAPE(q, [3, nn]), lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., tq, &
-                                        es_l, em_l)
-          conv = es_l == 0
-          IF (conv) conv = MINVAL(tq) >= -1.0e-6_wp*MAX(MAXVAL(ABS(tq)), TINY(CD_ONE))
-        END IF
-        IF (.NOT. conv) THEN
-          ! (b) the exact tension-only law (a slack run), Levenberg-Marquardt, short budget
-          cfg_w%max_iter = 10
-          CALL CD_Static_Cable_Solve(q0, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .TRUE., lc(jl)%f_ext, &
-                                     [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg_w, q, conv, stalled, at_floor, nit, &
-                                     es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
-                                     bathymetry=bathymetry, regularized=.TRUE.)
+        ALLOCATE (f_dry(3*nn))
+        f_dry = CD_ZERO
+        CALL warm_line_solve(jl, q0, lc(jl)%f_ext, zf, curp, q, conv)
+        ! With the dry part's weight (a line above the still-water level), the warm solve is
+        ! repeated with the recovery of the last solution as a constant load until the nodes move
+        ! by less than 1e-9 m or the recovery changes by less than 1e-10 of the largest nodal
+        ! load, as CD_Static_Line_Equilibrium iterates it; f_dry is then the recovery the
+        ! returned shape was solved with. A line wholly below the surface is solved once.
+        IF (conv .AND. ALLOCATED(lc(jl)%dry_d)) THEN
+          CALL CD_Static_Line_Dry_Load(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%dry_wl, opts%rhoW, opts%g, lc(jl)%dry_d, &
+                                       f_dry, es_l, em_l)
           IF (es_l /= CD_STATIC_OK) conv = .FALSE.
-          IF (conv) conv = ALL(IEEE_IS_FINITE(q))
+          IF (conv .AND. ANY(f_dry /= CD_ZERO)) THEN
+            conv = .FALSE.
+            DO kd = 1, 50
+              q_prev = q
+              f_prev = f_dry
+              CALL warm_line_solve(jl, q_prev, lc(jl)%f_ext + f_prev, zf, curp, q, conv)
+              IF (.NOT. conv) EXIT
+              CALL CD_Static_Line_Dry_Load(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%dry_wl, opts%rhoW, opts%g, &
+                                           lc(jl)%dry_d, f_dry, es_l, em_l)
+              IF (es_l /= CD_STATIC_OK) THEN
+                conv = .FALSE.
+                EXIT
+              END IF
+              conv = MAXVAL(ABS(q - q_prev)) <= 1.0e-9_wp .OR. &
+                     MAXVAL(ABS(f_dry - f_prev)) <= 1.0e-10_wp*MAXVAL(ABS(lc(jl)%f_ext))
+              IF (conv) EXIT
+            END DO
+            f_dry = f_prev
+          END IF
         END IF
       END IF
       IF (.NOT. conv) THEN
-        CALL CD_Static_Line_Equilibrium(anchor, fairlead, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%w, &
-                                        lc(jl)%f_ext, cfg, .TRUE., q, conv, report, es_l, em_l, seabed_z_floor=zf, &
-                                        seabed_kn=lc(jl)%kn, bathymetry=bathymetry, current=curp)
+        IF (.NOT. ALLOCATED(f_dry)) ALLOCATE (f_dry(3*nn))
+        f_dry = CD_ZERO
+        IF (ALLOCATED(lc(jl)%dry_d)) THEN
+          CALL CD_Static_Line_Equilibrium(anchor, fairlead, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%w, &
+                                          lc(jl)%f_ext, cfg, .TRUE., q, conv, report, es_l, em_l, seabed_z_floor=zf, &
+                                          seabed_kn=lc(jl)%kn, bathymetry=bathymetry, current=curp, &
+                                          dry_waterline_z=lc(jl)%dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                          dry_diameter=lc(jl)%dry_d, dry_load=f_dry)
+        ELSE
+          CALL CD_Static_Line_Equilibrium(anchor, fairlead, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%w, &
+                                          lc(jl)%f_ext, cfg, .TRUE., q, conv, report, es_l, em_l, seabed_z_floor=zf, &
+                                          seabed_kn=lc(jl)%kn, bathymetry=bathymetry, current=curp)
+        END IF
         IF (es_l /= CD_STATIC_OK) THEN
           CALL fail(es_out, em_out, 'static equilibrium: line '//TRIM(int_to_str(lines(jl)%id))// &
                     ' static solve rejected the input: '//TRIM(em_l)); RETURN
@@ -27308,8 +27489,9 @@ CONTAINS
           RETURN
         END IF
       END IF
-      CALL CD_Static_Line_End_Forces(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%f_ext, .TRUE., fa, fb, es_l, &
-                                     em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, bathymetry=bathymetry, &
+      ! the equilibrium's external load: the submerged weight and the dry part's recovery
+      CALL CD_Static_Line_End_Forces(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, lc(jl)%f_ext + f_dry, .TRUE., fa, fb, &
+                                     es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, bathymetry=bathymetry, &
                                      current=curp)
       IF (es_l /= 0 .OR. .NOT. (ALL(IEEE_IS_FINITE(fa)) .AND. ALL(IEEE_IS_FINITE(fb)))) THEN
         CALL fail_solve(es_out, em_out, 'static equilibrium: line '//TRIM(int_to_str(lines(jl)%id))// &
@@ -27328,6 +27510,49 @@ CONTAINS
         END IF
       END IF
     END SUBROUTINE cached_line_solve
+
+    SUBROUTINE warm_line_solve(jl, qs, fl, zf, curp, q, conv)
+      !! One warm solve of line jl from the seed qs (both ends held) under the constant load fl
+      !! (cached_line_solve): q the shape, conv whether it was accepted.
+      INTEGER, INTENT(IN) :: jl
+      REAL(wp), INTENT(IN) :: qs(:), fl(:)
+      REAL(wp), ALLOCATABLE, INTENT(IN) :: zf
+      TYPE(CableCurrentLoad), ALLOCATABLE, INTENT(IN) :: curp
+      REAL(wp), INTENT(OUT) :: q(:)
+      LOGICAL, INTENT(OUT) :: conv
+      TYPE(CableSolverConfig) :: cfg, cfg_w
+      REAL(wp), ALLOCATABLE :: tq(:)
+      INTEGER :: nn, es_l, nit
+      LOGICAL :: stalled, at_floor
+      CHARACTER(1024) :: em_l
+      nn = lc(jl)%nn
+      ! (a) plain Newton with the compression-capable law, accepted when no element is
+      ! compressed beyond the 1e-6 round-off band (every element taut: it is then the
+      ! tension-only equilibrium), as the cold initializer's first stage accepts it
+      CALL CD_Static_Cable_Solve(qs, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., fl, &
+                                 [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg, q, conv, stalled, at_floor, nit, &
+                                 es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
+                                 bathymetry=bathymetry)
+      IF (es_l /= CD_STATIC_OK) conv = .FALSE.
+      IF (conv) conv = ALL(IEEE_IS_FINITE(q))
+      IF (conv) THEN
+        ALLOCATE (tq(nn - 1))
+        CALL CD_Compute_Cable_Tension(RESHAPE(q, [3, nn]), lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .FALSE., tq, &
+                                      es_l, em_l)
+        conv = es_l == 0
+        IF (conv) conv = MINVAL(tq) >= -1.0e-6_wp*MAX(MAXVAL(ABS(tq)), TINY(CD_ONE))
+      END IF
+      IF (.NOT. conv) THEN
+        ! (b) the exact tension-only law (a slack run), Levenberg-Marquardt, short budget
+        cfg_w%max_iter = 10
+        CALL CD_Static_Cable_Solve(qs, lc(jl)%conn, lc(jl)%l0, lc(jl)%ea, .TRUE., fl, &
+                                   [1, 2, 3, 3*nn - 2, 3*nn - 1, 3*nn], cfg_w, q, conv, stalled, at_floor, nit, &
+                                   es_l, em_l, seabed_z_floor=zf, seabed_kn=lc(jl)%kn, current=curp, &
+                                   bathymetry=bathymetry, regularized=.TRUE.)
+        IF (es_l /= CD_STATIC_OK) conv = .FALSE.
+        IF (conv) conv = ALL(IEEE_IS_FINITE(q))
+      END IF
+    END SUBROUTINE warm_line_solve
 
     SUBROUTINE condensed_end_stiffness(jl, zf, ok)
       !! lc(jl)%kc: the static tangent of line jl at its stored shape condensed onto its end
@@ -27487,7 +27712,20 @@ CONTAINS
     !! the finite-EI lines whose End A is clamped (Rigid) or elastically connected to a body or a
     !! rod. The core solve carries a finite-EI line as a cable without bending stiffness; for a
     !! connected End A the bending changes the end force and adds the connection moment, which
-    !! the object must carry. Each pass solves the core with extra loads on the End A points: the
+    !! the object must carry. A bending-pinned End A carries no moment, but the core's cable gives
+    !! its end force without the bending's share, which on a soft object is not small (a free spar
+    !! rod on four taut legs with a 55 m cable, EI 2e4 N m^2, pinned at its upper end: the rod
+    !! started 5.7e-2 m off its equilibrium, its top drifted 7e-2 m in 3 s and a leg tension moved
+    !! by 2.3 %), and its ATTACHMENTS only smeared, without their lumped, side-of-the-surface and
+    !! drag loads (a 2 t clump 50 m along a pinned cable from a moored body, which the core's
+    !! cable once left out: the body started at the pose of the line without it and drifted by up
+    !! to 2.9e-2 m and 0.20 deg in 5 s). Such a line on a Rigid6 body or a rod end takes the passes
+    !! too. The core's cable carries a line's ATTACHMENTS smeared, so the passes correct only the
+    !! differences: without them the correction was the clump's whole load, which the core's end
+    !! stiffness did not see, and on a free spar rod with a 1500 kg clump the passes converged in
+    !! 26 or stopped, by round-off; with them in 6. Should the passes fail on that cable, they are
+    !! repeated once on the core cable without the ATTACHMENTS. Each pass solves the core with
+    !! extra loads on the End A points: the
     !! difference between the cubic-Hermite cable's static end force (bending, the connection
     !! direction turned with the object) and the core's own end force of that line, and the
     !! Hermite connection moment, both evaluated at the previous pass's equilibrium. The passes
@@ -27507,7 +27745,8 @@ CONTAINS
     !! (Anderson mixing of the last ANDERSON_DEPTH passes on the extra loads, ext_fm, a secant
     !! method that a pass map oscillating about its fixed point does not defeat: a stiff cable
     !! between two moored bodies turns them through an out-of-plane mode that the plain passes
-    !! overshoot); a deck without one keeps the plain passes.
+    !! overshoot), and so does a deck with a bending-pinned line listed for its ATTACHMENTS; a
+    !! deck without either keeps the plain passes.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckBody), INTENT(INOUT) :: bodies(:)
     TYPE(DeckRodType), INTENT(IN) :: rod_types(:)
@@ -27522,7 +27761,7 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: points_only
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_check_err
     INTEGER, PARAMETER :: MAX_PASS = 60, ANDERSON_DEPTH = 6
-    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp
+    REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp, ANDERSON_DROP = 1.0e-6_wp
     TYPE(DeckBody), ALLOCATABLE :: bodies0(:)
     TYPE(DeckRod), ALLOCATABLE :: rods0(:)
     TYPE(DeckPoint), ALLOCATABLE :: points0(:)
@@ -27535,6 +27774,13 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: new_km(:, :, :), new_rot(:, :, :), fsb(:, :)
     INTEGER :: j, pa, e, pass, ncl, eworst, pb, ne, nb
     LOGICAL :: only_points, held
+    ! the passes are Anderson-mixed (lines between two objects, pinned lines with ATTACHMENTS)
+    LOGICAL :: mix
+    ! the lines the core solve carries (lines_core: with or without their ATTACHMENTS), the
+    ! attempt of the passes, and the failure of the first
+    TYPE(DeckLine), ALLOCATABLE :: lines_core(:)
+    INTEGER :: attempt, n_attempt, first_stat
+    CHARACTER(1024) :: first_msg
     REAL(wp) :: scale, change, pass_tol_eff
     CHARACTER(24) :: b1
 
@@ -27556,9 +27802,14 @@ CONTAINS
             CYCLE
           END IF
         END IF
-        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j))) CYCLE
+        ! a bending-pinned End A free in torsion takes the passes on a Rigid6 body or a rod end (a
+        ! finite-EI end on a Point3 buoy is refused by name after this solve; the passes, which turn
+        ! a body frame, would refuse it as a clamped end instead)
         pa = find_point(points, lines(j)%nodeA)
         IF (pa < 1) CYCLE
+        IF (lines(j)%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(j))) THEN
+          IF (point_on_point3_body(points(pa), bodies)) CYCLE
+        END IF
         IF (starts_with(TRIM(points(pa)%ptype), 'body')) THEN
           cl = [cl, j]
         ELSE IF (is_rod_point_type(points(pa)%ptype)) THEN
@@ -27609,82 +27860,131 @@ CONTAINS
     n_and = 0
     max_pass_eff = MAX_PASS
     IF (body_static_pass_limit > 0) max_pass_eff = body_static_pass_limit
-    IF (nb > 0) ALLOCATE (and_x(6*ne, ANDERSON_DEPTH + 1), and_f(6*ne, ANDERSON_DEPTH + 1))
-    ext_fm = CD_ZERO
-    ext_km = CD_ZERO
-    ext_rot = CD_ZERO
-    DO e = 1, ne
-      ext_rot(1, 1, e) = CD_ONE
-      ext_rot(2, 2, e) = CD_ONE
-      ext_rot(3, 3, e) = CD_ONE
+    ! The passes of a bending-pinned line are Anderson-mixed, as those of the lines between two
+    ! objects: on the core cable without its ATTACHMENTS (the second attempt below) the
+    ! correction is the attachments' whole load, which turns with the object as the heavier or
+    ! lighter cable does and not as the core's, and the plain passes overshoot without bound on
+    ! a soft object (a free spar rod with a 1500 kg clump 25 m along a pinned cable from its upper
+    ! end: the end-load change grew to 2.9 of the force scale in 60 passes).
+    mix = nb > 0
+    DO e = 1, ncl
+      IF (lines(cl(e))%endconn_mode(1) == CD_ENDCONN_PINNED .AND. .NOT. line_torsion_at_a(lines(cl(e)))) &
+        mix = .TRUE.
     END DO
-    DO pass = 1, max_pass_eff
-      bodies = bodies0
-      rods = rods0
-      points = points0
-      ! the torque stiffness only with torsion: without it the core's arithmetic is exactly that
-      ! of a deck before torsion existed (no zero-stiffness correction, signed zeros kept)
-      IF (pass_tol_eff < PASS_TOL) THEN
-        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
-                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                         quiet=pass > 1, skipped=held, ext_km=ext_km, ext_rot=ext_rot, &
-                                         end_force_b=fsb)
-      ELSE
-        CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
-                                         ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, end_force_a=fs, &
-                                         quiet=pass > 1, skipped=held, end_force_b=fsb)
+    IF (mix) ALLOCATE (and_x(6*ne, ANDERSON_DEPTH + 1), and_f(6*ne, ANDERSON_DEPTH + 1))
+    ! The core carries a finite-EI line's ATTACHMENTS smeared (prepare_line). Should the passes
+    ! fail on that cable (its equilibrium of the object unstable or not found, or the passes not
+    ! converging), they are repeated once on the core cable without them, whose correction is the
+    ! attachments' whole load: that solve keeps the object balanced by its lines without the
+    ! attachments' load, where a heavy clump on a slack cable from a free spar rod tilted the
+    ! rod's balance on the smeared cable past its stability test.
+    lines_core = lines
+    n_attempt = 1
+    IF (ANY([(ALLOCATED(lines(eline(e))%att), e=1, ne)])) n_attempt = 2
+    first_stat = CD_DECKDRV_OK
+    first_msg = ''
+    DO attempt = 1, n_attempt
+      IF (attempt == 2) THEN
+        first_stat = ErrStat
+        first_msg = ErrMsg
+        ErrStat = CD_DECKDRV_OK
+        ErrMsg = ''
+        DO j = 1, SIZE(lines_core)
+          IF (ALLOCATED(lines_core(j)%att)) DEALLOCATE (lines_core(j)%att)
+        END DO
+        n_and = 0
       END IF
-      IF (ErrStat /= CD_DECKDRV_OK) RETURN
-      ! the objects stay at their deck poses (the core has already said why): nothing to balance
-      IF (held) RETURN
-      scale = CD_ONE
-      DO e = 1, ncl
-        IF (eb(e) > 0) THEN
-          CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e), new_fm(:, eb(e)), &
-                                 new_km(:, :, eb(e)), new_rot(:, :, eb(e)))
+      ext_fm = CD_ZERO
+      ext_km = CD_ZERO
+      ext_rot = CD_ZERO
+      DO e = 1, ne
+        ext_rot(1, 1, e) = CD_ONE
+        ext_rot(2, 2, e) = CD_ONE
+        ext_rot(3, 3, e) = CD_ONE
+      END DO
+      DO pass = 1, max_pass_eff
+        bodies = bodies0
+        rods = rods0
+        points = points0
+        ! the torque stiffness only with torsion: without it the core's arithmetic is exactly that
+        ! of a deck before torsion existed (no zero-stiffness correction, signed zeros kept)
+        IF (pass_tol_eff < PASS_TOL) THEN
+          CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines_core, sections, opts, &
+                                           ErrStat, ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, &
+                                           end_force_a=fs, quiet=pass > 1, skipped=held, ext_km=ext_km, &
+                                           ext_rot=ext_rot, end_force_b=fsb)
         ELSE
-          CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
+          CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines_core, sections, opts, &
+                                           ErrStat, ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, &
+                                           end_force_a=fs, quiet=pass > 1, skipped=held, end_force_b=fsb)
         END IF
-        IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        new_fm(1:3, e) = new_fm(1:3, e) - fs(:, cl(e))
-        scale = MAX(scale, NORM2(fs(:, cl(e))), NORM2(new_fm(1:3, e) + fs(:, cl(e))))
-        IF (eb(e) > 0) THEN
-          new_fm(1:3, eb(e)) = new_fm(1:3, eb(e)) - fsb(:, cl(e))
-          scale = MAX(scale, NORM2(fsb(:, cl(e))), NORM2(new_fm(1:3, eb(e)) + fsb(:, cl(e))))
+        IF (ErrStat /= CD_DECKDRV_OK) EXIT
+        ! the objects stay at their deck poses (the core has already said why): nothing to balance
+        IF (held) RETURN
+        scale = CD_ONE
+        DO e = 1, ncl
+          IF (eb(e) > 0) THEN
+            CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e), new_fm(:, eb(e)), &
+                                   new_km(:, :, eb(e)), new_rot(:, :, eb(e)))
+          ELSE
+            CALL hermite_end_loads(cl(e), new_fm(:, e), new_km(:, :, e), new_rot(:, :, e))
+          END IF
+          IF (ErrStat /= CD_DECKDRV_OK) EXIT
+          new_fm(1:3, e) = new_fm(1:3, e) - fs(:, cl(e))
+          scale = MAX(scale, NORM2(fs(:, cl(e))), NORM2(new_fm(1:3, e) + fs(:, cl(e))))
+          IF (eb(e) > 0) THEN
+            new_fm(1:3, eb(e)) = new_fm(1:3, eb(e)) - fsb(:, cl(e))
+            scale = MAX(scale, NORM2(fsb(:, cl(e))), NORM2(new_fm(1:3, eb(e)) + fsb(:, cl(e))))
+          END IF
+        END DO
+        IF (ErrStat /= CD_DECKDRV_OK) EXIT
+        change = MAXVAL(ABS(new_fm - ext_fm))
+        eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
+        ext_km = new_km
+        ext_rot = new_rot
+        IF (change <= pass_tol_eff*scale) THEN
+          ext_fm = new_fm
+          EXIT
+        END IF
+        IF (mix) THEN
+          CALL anderson_next(ext_fm, new_fm)
+        ELSE
+          ext_fm = new_fm
         END IF
       END DO
-      change = MAXVAL(ABS(new_fm - ext_fm))
-      eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
-      ext_km = new_km
-      ext_rot = new_rot
-      IF (change <= pass_tol_eff*scale) THEN
-        ext_fm = new_fm
-        EXIT
+      IF (ErrStat == CD_DECKDRV_OK) THEN
+        IF (change <= pass_tol_eff*scale) EXIT
+        WRITE (b1, '(ES10.3)') change/scale
+        IF (nb == 0) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the END CONNECTION or ATTACHMENTS '// &
+                          'of finite-EI LINE '//TRIM(int_to_str(lines(eline(eworst))%id))// &
+                          ' did not converge after '//TRIM(int_to_str(max_pass_eff))//' passes (relative end-load '// &
+                          'change '//TRIM(ADJUSTL(b1))//'); OPTION bodyIC deck starts from the deck pose instead')
+        ELSE
+          ! the worst entry may be the End B of a line between two objects, connected or pinned
+          CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the bending end loads of finite-EI '// &
+                          'LINE '//TRIM(int_to_str(lines(eline(eworst))%id))//' (its End '// &
+                          MERGE('B', 'A', eworst > ncl)//', on a body or rod) did not converge after '// &
+                          TRIM(int_to_str(max_pass_eff))//' passes (relative end-load change '//TRIM(ADJUSTL(b1))// &
+                          '); OPTION bodyIC deck starts from the deck pose instead')
+        END IF
       END IF
-      IF (nb > 0) THEN
-        CALL anderson_next(ext_fm, new_fm)
-      ELSE
-        ext_fm = new_fm
+      IF (attempt == n_attempt) THEN
+        ! both failed: the failure on the cable that carries the attachments
+        IF (attempt == 2) THEN
+          ErrStat = first_stat
+          ErrMsg = first_msg
+        END IF
+        RETURN
       END IF
     END DO
-    IF (change > pass_tol_eff*scale) THEN
-      WRITE (b1, '(ES10.3)') change/scale
-      IF (nb == 0) THEN
-        CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the clamped or elastic END '// &
-                        'CONNECTION of finite-EI LINE '//TRIM(int_to_str(lines(eline(eworst))%id))// &
-                        ' did not converge after '//TRIM(int_to_str(max_pass_eff))//' passes (relative end-load '// &
-                        'change '//TRIM(ADJUSTL(b1))//'); OPTION bodyIC deck starts from the deck pose instead')
-      ELSE
-        ! the worst entry may be the End B of a line between two objects, connected or pinned
-        CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the bending end loads of finite-EI '// &
-                        'LINE '//TRIM(int_to_str(lines(eline(eworst))%id))//' (its End '// &
-                        MERGE('B', 'A', eworst > ncl)//', on a body or rod) did not converge after '// &
-                        TRIM(int_to_str(max_pass_eff))//' passes (relative end-load change '//TRIM(ADJUSTL(b1))// &
-                        '); OPTION bodyIC deck starts from the deck pose instead')
-      END IF
-      RETURN
-    END IF
-    IF (nb == 0) THEN
+    IF (nb == 0 .AND. ANY([(lines(cl(e))%endconn_mode(1) == CD_ENDCONN_PINNED .AND. &
+                            .NOT. line_torsion_at_a(lines(cl(e))), e=1, ncl)])) THEN
+      ! a bending-pinned line among them (its bending share of the end force, its ATTACHMENTS)
+      WRITE (output_unit, '(A)') '   Initial conditions: the end loads (bending, connection moments, torsion, '// &
+        'ATTACHMENTS) of '//TRIM(int_to_str(ncl))//' finite-EI line end(s) on bodies and rods balanced in '// &
+        TRIM(int_to_str(pass))//' static pass(es).'
+    ELSE IF (nb == 0) THEN
       WRITE (output_unit, '(A)') '   Initial conditions: the end moments and bending end forces of '// &
         TRIM(int_to_str(ncl))//' clamped or elastic finite-EI line end(s) balanced in '// &
         TRIM(int_to_str(pass))//' static pass(es).'
@@ -27701,8 +28001,14 @@ CONTAINS
       !! loads x it was given): Anderson mixing, x+ = g - dG gamma with gamma the least-squares
       !! fit of the residual f = g - x by the differences of the last residuals, dF gamma ~ f
       !! (at most ANDERSON_DEPTH of them, the oldest dropped first). The fit is solved by
-      !! modified Gram-Schmidt on dF; a column that adds no new direction is dropped. A residual
-      !! that grows tenfold over the last one restarts the mixing from the plain pass.
+      !! modified Gram-Schmidt on dF; a column that adds no new direction, its part normal to the
+      !! kept ones below ANDERSON_DROP of its length, is dropped. A residual that grows tenfold
+      !! over the last one restarts the mixing from the plain pass. The drop bound keeps the fit
+      !! well conditioned: residuals that span fewer directions than the history (a pinned end's
+      !! moment rows are zero, its force acts in the line's plane) leave the later columns a
+      !! normal part of round-off size, and with a bound of 1e-10 their coefficients reached
+      !! 1e12, so the mixed loads jumped by 1e6 N and the passes converged or stopped by 1 ulp of
+      !! an anchor coordinate (a free spar rod with a 1500 kg clump on a pinned cable).
       REAL(wp), INTENT(INOUT) :: x(:, :)
       REAL(wp), INTENT(IN) :: g(:, :)
       REAL(wp) :: xv(SIZE(x)), gv(SIZE(x)), fv(SIZE(x)), q(SIZE(x), ANDERSON_DEPTH), rr(ANDERSON_DEPTH, ANDERSON_DEPTH)
@@ -27739,7 +28045,7 @@ CONTAINS
           rr(k, kept + 1) = DOT_PRODUCT(q(:, k), dfi)
           dfi = dfi - rr(k, kept + 1)*q(:, k)
         END DO
-        IF (NORM2(dfi) <= 1.0e-10_wp*nrm) CYCLE
+        IF (NORM2(dfi) <= ANDERSON_DROP*nrm) CYCLE
         kept = kept + 1
         rr(kept, kept) = NORM2(dfi)
         q(:, kept) = dfi/rr(kept, kept)

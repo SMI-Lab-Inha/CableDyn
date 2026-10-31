@@ -624,6 +624,13 @@ but a few geometries are genuinely hard:
   reported in the note ``... was reached after a failed Newton solve ... and passed the
   acceptance checks of the smeared state``. Check that the deck with the modules replaced by the equivalent
   smeared buoyancy section solves; if it does, the discrete layout itself is the difficulty.
+  ``... attachment <k> of the line (Mass ..., Volume ...) crossed the still-water level ...``
+  means the solves carried that attachment across the surface, where the dynamics drops its
+  buoyancy: its weight in air takes it below the surface and its weight in water above it, so a
+  point attachment has no static position there (the dynamics would bob it there). It is a
+  net-buoyant module that would float, or a module whose node lies nearer the surface than the
+  deflection its buoyancy gives the line. The message of the failed solve follows it. Move it
+  along the line or change its ``Mass`` or ``Volume``.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
   from the catenary/arch seed.

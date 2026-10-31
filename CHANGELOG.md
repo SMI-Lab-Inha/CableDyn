@@ -123,8 +123,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   velocities, with `A`, `B`, `C` and `D` by central differences of the accelerations solved at the
   perturbed state. On the UMaine chains the stiffness `D - C A^-1 B` matches MoorDyn-F's to 0.1 %
   and the lowest nine line-mode frequencies to 0.3 %; with a lazy-wave power cable every coupled
-  point matches the deck's own static solutions to 3e-4, also with a hang-off spring. A cable
-  end connection with a numeric stiffness now linearises. The viscoelastic slow-branch stretch
+  point matches the deck's own static solutions to 3e-4, also with a hang-off spring. The
+  reduction is the static stiffness at an operating point whose coupled points do not
+  accelerate: the coupled load includes the line's inertia, so at the accelerating `t = 0`
+  platform the lazy wave's force per unit rotation reads 1.2 % off, and 2.7e-4 with the platform
+  DOFs disabled (`doc/openfast.rst`). A cable end connection with a numeric stiffness now
+  linearises. The viscoelastic slow-branch stretch
   and the Syrope slow strain are first-order states, so the reduction gives these ropes' relaxed
   static stiffness (each matches its deck's static solutions to 7e-5; held, they would read the
   chain 0.6 % and the polyester 2.9 times too stiff). Free/Connect points, a `Rigid` cable end
@@ -357,6 +361,68 @@ All notable changes to CableDyn are recorded in this file. The format follows
   a pinned arm rod numbered 1, its tether on an explicit `Rod1B` POINT listed first, now writes
   the outputs of the same deck with the arm as rod 3 bit for bit; before, the arm turned 172 deg
   in pitch, the body 1.06 deg, and a leg tension moved 3.0 kN in 1 s.
+- The static start of a neutral finite-EI line whose length equals its span (straight at zero
+  strain, so with neither weight nor tension) failed with neutral `ATTACHMENTS` or with
+  attachments that only carry a drag area: the attachment polish stalled at the round-off of the
+  axial forces, 7.6e-8 N, against a tolerance of 1e-8 times the solver's 1 N force floor, at
+  every load step. For a line whose chord is at least its length the force scale of the
+  convergence test now includes that round-off floor over the tolerance
+  (`16 eps max(EA/L0) |x| / tol`, as on the `EI = 0` path), so these lines start straight and
+  unloaded, also between two moving ends, restrained in torsion at one or both ends, and with a
+  chord 1e-8 longer than the line (its 0.1 N tension to 2.2e-7 N); slack lines and lines that
+  carry weight or tension above the floor are unchanged.
+- The Newton tangent of the finite-EI static solve in a depth-profile current or a current grid
+  carries the current's gradient: the drag samples the current at the node positions, so it moves
+  with them. The drag part of the tangent now matches central differences of the residual to
+  8e-10 (before off by 5e-2 to 0.2 in sheared profiles). Newton takes up to a third fewer
+  iterations on a light cable in a strong shear (16 instead of 23); the equilibria are unchanged
+  within the solver tolerance.
+- The static start of an `EI = 0` line held above the still-water level kept the buoyancy of its
+  dry part, while the march (with `WtrDpth` or a bathymetry) gives that part its dry weight. The
+  start was not the march's equilibrium: a chain hung from 5 m above the surface onto the
+  seabed moved by 1e-3 of its fairlead load in the first step, and the coupled start differed
+  from the standalone one by 2.4e-4. The static solve now carries the dry weight (a fixed point
+  on the wetted lengths): the start holds to 1e-10, the two routes agree to 1.4e-8, and a
+  vertical chain's end loads sum to its weight to 1.5e-8 (before 1.4 % low). The force balance
+  of `Connect` and `Free` points and free bodies and rods takes the same dry weight: a 50 t
+  `Connect` point hung by two chains from 10 m above the surface holds its position to the
+  output's 8 digits over 2 s (before it sank 1.1e-2 m). There a finite-EI line, carried without
+  its bending stiffness, takes its dry weight with or without a seabed, as its cubic-Hermite
+  cable does: a stiff body with a light cable pinned 5 m above the surface on a deck without a
+  seabed holds its heave to 7e-6 m over 3 s (before it moved 2.8e-3 m), and an `EI = 0` chain
+  between that body 5 m above the surface and a `Connect` clump holds both to the output's 8
+  digits (before 5.5e-3 m). Lines below the surface are unchanged.
+- `ATTACHMENTS` above the still-water level kept their buoyancy in the static start of a
+  finite-EI line, while the march loads them with their weight alone. A 500 kg, 0.2 m^3 module
+  3 m above the surface on a cable hung from 5 m above it moved the fairlead load by up to
+  6.1 % in the first second, and as much on the same cable restrained in torsion. The
+  attachment polish and the torsion stage after it now give each attachment the load of its side
+  of the surface (a fixed point that repeats the solve until none changes side); both starts
+  hold to the output's 8 digits. An attachment that its weight in air takes below the surface
+  and its weight in water above it (a net-buoyant module that would float) has no static
+  position and fails closed, naming the attachment that crossed the surface.
+- A bending-pinned finite-EI line with `ATTACHMENTS` from a Rigid6 body or a rod end left its
+  attachments out of the body static balance, which carries such a line as a cable without
+  bending stiffness: on a moored body with a 2 t clump 50 m along a pinned cable the body started
+  at the pose of the line without the clump and drifted by up to 2.9e-2 m and 0.20 deg in 5 s.
+  Such a line now takes the static passes of a connected end, which balance the body on the
+  cubic-Hermite cable's end loads; the body holds its pose to the output's 8 digits. Their
+  passes are Anderson-mixed, as those of a line between two objects, and the core cable of the
+  passes carries the line's `ATTACHMENTS` smeared, so the passes correct only the lumped,
+  side-of-the-surface and bending differences: on a free spar rod with a 1500 kg clump on a cable
+  pinned at its upper end the plain passes on a core cable without the clump diverged (the deck
+  stopped), and Anderson-mixed ones converged in 26 passes or stopped by round-off (a 1-ulp
+  change of an anchor coordinate; the Linux build stopped). They now converge in 6, the same
+  for those 1-ulp changes, and the rod holds its pose to 8 digits. The mixing drops history
+  columns that add less than 1e-6 of a new direction (1e-10 before), which had let round-off
+  columns drive the mixed loads to 1e6 N. Across a sweep of the rod deck (clump 0 to 4 t, cable
+  50 to 70 m, rod mass, clump position, start offsets, 1-ulp changes) 42 of 45 decks converge
+  (34 before), the three left with no stable equilibrium found on either core cable.
+- A bending-pinned finite-EI line on a Rigid6 body or a rod end without `ATTACHMENTS` was left to
+  the body static solve's cable without bending stiffness, whose end force lacks the bending's
+  share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
+  equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
+  static passes too (4 here); the rod holds its pose to the output's 8 digits.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations

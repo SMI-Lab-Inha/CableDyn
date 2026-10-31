@@ -545,6 +545,34 @@ order, End B, and :math:`\Phi` at End A), so a turn of the frame enters the end 
 reference twist through the same solid angles. A turn of an end frame by more than
 :math:`\pi/2` about the line within one step is refused, and the step is cut.
 
+The held end section turns with its frame. Its spin about the tangent, relative to the
+time-parallel reference, is the frame's angular velocity projected by the derivative of the end
+element's reference twist with respect to the frame's rotation. Its polar inertia (half the end
+element's) carries the kinetic energy of that spin and loads the frame through the reaction
+moment. A bending-pinned or elastic end lets the end tangent :math:`\mathbf{t}` move off the
+director :math:`\mathbf{d}`, and the section's director, the frame's normal carried by the
+smallest rotation :math:`G(\mathbf{d} \to \mathbf{t})`, then spins about :math:`\mathbf{t}` as
+well:
+
+.. math::
+
+   c = \frac{(\mathbf{t} \times \mathbf{d})\cdot\dot{\mathbf{t}}}{1 + \mathbf{d}\cdot\mathbf{t}},
+   \qquad \lvert c\rvert \le \tan\tfrac{\theta}{2}\,\lvert\dot{\mathbf{t}}\rvert ,
+
+with :math:`\theta` the end bend angle. The model leaves this carry spin out of the kinetic
+energy, out of the line's equations of motion and out of the reaction moment alike, so the
+three stay consistent: with the end frames held, the energy without the carry spin keeps the
+same band at a polar inertia of 0.02 and of 1 kg m. Including the spin would give the end tangent
+a configuration-dependent rank-one polar mass :math:`I\,\nabla c\,\nabla c^{\mathsf T}` with its
+gyroscopic velocity terms. Its kinetic energy :math:`\tfrac12 I c^2` is of order
+:math:`(d^2/2l^2)\tan^2(\theta/2)` of the end element's translational kinetic energy (section
+diameter :math:`d`, element length :math:`l`). The test suite measures it on a 10 m line pinned
+in bending and rigid in torsion at both ends, twisted by 4 rad and swinging with a 13° end bend
+angle: 6e-8 of the peak kinetic energy at :math:`I_{rn} = 0.02` kg m and 4e-6 at an extreme
+1 kg m, against the step's own energy band of 6e-3 at :math:`\rho_\infty = 1`. The modal analysis
+and the OpenFAST linearisation take the same lumped polar mass on the angles, with a held end's
+angle not a coordinate, so they leave the carry spin out too.
+
 .. _theory-free-end:
 
 **A free end.** A line restrained in torsion at one end only has its other end free to twist:
@@ -1520,6 +1548,22 @@ beyond a :math:`10^{-6}` relative round-off band; a slack element reports zero t
    A line with no admissible equilibrium fails closed, naming the line, the seeds and stages
    tried, and the reason.
 
+With a seabed (``WtrDpth`` or a bathymetry) the march gives the part of a line above the
+still-water level its dry weight, through the recovery load of *Buoyancy and wetting* above, and
+the static start does the same. The recovery depends on the wetted lengths, so the line is
+solved again with the recovery of the last solution as a constant load until its nodes move by
+less than :math:`10^{-9}` m. This fixed point contracts at the ratio of the recovery's stiffness
+:math:`\rho g A/\sin\theta` (:math:`\theta` the inclination at the surface) to the line's own,
+a few :math:`10^{-3}` for a hanging chain. A chain hung from 5 m above the surface then starts in
+the equilibrium its march holds, and the coupled and standalone starts agree; with its buoyancy
+kept above the surface it moved by :math:`10^{-3}` of its fairlead load in the first step. A line
+wholly below the surface has no recovery and is solved once. Without a seabed the march, and so
+the static start, keeps the buoyancy everywhere (the driver warns about a line end above the
+surface then). The force balance of ``Connect`` and ``Free`` points and of free bodies and rods
+below takes its lines with the same dry weight, so these objects start balanced against the march
+too; a finite-EI line, which enters it without its bending stiffness, takes its dry weight there
+with or without a seabed, as its cubic-Hermite cable does.
+
 A steady current (uniform, or a depth profile sampled at each node's own elevation as in the
 march) enters the static equilibrium as Morison drag on the line at rest, so the out-of-plane
 offset is part of the initial condition. ``Connect`` and ``Free`` points are then placed at
@@ -1722,7 +1766,13 @@ the current itself; the element fluid velocity is the mean of the current at its
 as in the dynamics). The drag follows the line and is not a potential force: it is carried
 along the stiffness continuation frozen at the last accepted configuration, then converged
 at full stiffness by a fixed-point iteration on the frozen drag and a final Newton solve with
-the configuration-dependent drag and its Jacobian. If the frozen-drag continuation fails, the
+the configuration-dependent drag and its Jacobian. A depth profile is sampled at the node
+elevations and a current grid at the node positions, so the drag moves with the nodes through the
+current too; the Jacobian carries it as the drag's derivative with respect to the fluid velocity,
+:math:`-(\partial\mathbf{f}/\partial\dot{\mathbf{r}}_a + \partial\mathbf{f}/\partial
+\dot{\mathbf{r}}_b)`, times the element velocity's gradient
+:math:`\tfrac12\,\mathbf{R}^{\mathsf T}(\partial\mathbf{U}/\partial\mathbf{x})\,\mathbf{R}` at each
+node (:math:`\mathbf{R}` the turn of the solve frame). If the frozen-drag continuation fails, the
 still-water equilibrium is found first and the drag is brought in by load steps. A load step
 that stalls hands over to a pseudo-arclength continuation in the drag fraction
 :math:`\lambda`: each corrector solves the bordered system
@@ -1805,7 +1855,15 @@ The fallback and the dynamic Hermite path use
   fallback hierarchies are tried before a direct cold solve; every attempt uses the same
   physical inputs and tolerance;
 - a **dimensionless per-DOF residual norm**, with tangent-DOF residuals divided by the nodal
-  tributary length.
+  tributary length. The force scale is the largest of 1 N, the line's weight, the applied nodal
+  loads, and, for a line held at both ends whose chord is at least its length, the tension the
+  chord implies and the round-off floor of the axial forces over the tolerance,
+  :math:`16\,\epsilon\,\max(EA/L_0)\max(\lvert x\rvert, L_0)/\text{tol}` with
+  :math:`\lvert x\rvert` the largest coordinate (the floor of the ``EI = 0`` path). A neutral line
+  of the length of its span, straight at zero strain, carries neither weight nor tension, and
+  without the floor its residual could not meet the tolerance: its attachment polish stalled at
+  7.6e-8 N against :math:`10^{-8}` N. A slack weightless line keeps its scale, so its round-off
+  stall on the straight compressed strut fails over to the weight continuation above.
 
 The static tolerance is :math:`\min(10^{-6},\ \text{tol}_\text{dyn})`, where
 :math:`\text{tol}_\text{dyn}` is the dynamic Newton tolerance, so the dynamics start from an
@@ -2719,7 +2777,19 @@ whose frame rolls with it. The static solve
 carries the cable first without bending; passes then add the difference between the cubic-Hermite
 cable's end force and that surrogate, and the Hermite connection moment, at the previous
 pass's pose, until these loads change by less than :math:`10^{-7}` of the force scale. At the
-fixed point the object balances the Hermite cable exactly.
+fixed point the object balances the Hermite cable exactly. A bending-pinned end carries no
+moment, but the surrogate gives its end force without the share of the bending, which on a soft
+object is not small (a free spar rod with a pinned 55 m cable of :math:`EI = 2\times10^4` N m\ :sup:`2`
+started 5.7 cm off its equilibrium), and with the line's ``ATTACHMENTS`` only smeared: on a
+Rigid6 body or a rod end such a line takes the passes too, Anderson-mixed. The surrogate carries
+the attachments' net weight smeared over the elements beside their nodes, as the smeared start of
+the Hermite statics, so the passes correct only the lumped, side-of-the-surface, drag and bending
+differences; a surrogate without them left the passes a heavy clump's whole load, whose change
+with the object's pose its end stiffness did not see, and the passes converged or stopped by
+round-off. Should the passes fail on that surrogate, they are repeated once on the surrogate
+without the attachments. The mixing drops history columns that add less than :math:`10^{-6}` of
+a new direction, which keeps its least-squares fit well conditioned when the residuals span fewer
+directions than the history.
 
 **End connections (Hermite lines).** A line end may carry an isotropic rotational spring with
 potential :math:`U = \tfrac{1}{2}k\,\theta^2`, where :math:`\theta` is the angle between the end
@@ -2799,10 +2869,17 @@ with the fluid velocity :math:`\mathbf{u}` and acceleration :math:`\dot{\mathbf{
 the relative velocity :math:`\mathbf{w} = \mathbf{u} - \dot{\mathbf{r}}_j` split normal and along
 the nodal tangent :math:`\mathbf{m}_j/\lvert\mathbf{m}_j\rvert` (the line's Morison law with
 :math:`C_dA = C_{d,n} d` and :math:`C_dA_x = \pi C_{d,t} d`). The drag enters the velocity tangent
-and, through :math:`\mathbf{m}_j`, the position tangent exactly. The statics start from the
+and, through :math:`\mathbf{m}_j`, the position tangent exactly. Above the free surface an
+attachment carries its weight :math:`-m g\,\mathbf{e}_z` alone. The statics start from the
 equilibrium with the net weight smeared over the node's two elements and continue to the lumped
-load in warm-started Newton solves; in a deck current the drag at rest is added and the final
-solve is repeated with the drag of its own solution until the nodes stop moving. The load moves
+load in warm-started Newton solves; in a deck current the drag at rest is added, each solve takes
+every attachment's load on the side of the still-water level its node is on, and the final
+solve is repeated with the loads of its own solution until the nodes stop moving and no
+attachment changes side (an attachment that its weight in air takes below the surface and its
+weight in water above it has no static position, and the solve fails closed, naming the
+attachment that crossed the surface). Before, an attachment above the surface
+kept its buoyancy in the statics: a 500 kg, 0.2 m\ :sup:`3` module 3 m above it moved the
+fairlead load by up to 6.1 % in the first second of the march. The load moves
 in eighths; a step whose damped Newton solve does not converge is repeated from the last
 converged state with pseudo-transient continuation and then with a residual-merit line search,
 and is halved (down to 1/1024) when neither converges. A halved step doubles again (up to 1/8)

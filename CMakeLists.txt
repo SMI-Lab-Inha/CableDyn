@@ -663,6 +663,13 @@ target_link_libraries(test_hermite_cable_static PRIVATE cabledyn_core)
 add_test(NAME hermite_cable_static COMMAND test_hermite_cable_static)
 set_tests_properties(hermite_cable_static PROPERTIES LABELS "fortran;unit;static")
 
+# Finite-EI static tangent of a depth-profile current: the profile's vertical gradient in the drag
+# tangent, against central differences of the residual
+add_executable(test_hermite_static_current_gradient tests/test_hermite_static_current_gradient.f90)
+target_link_libraries(test_hermite_static_current_gradient PRIVATE cabledyn_core)
+add_test(NAME hermite_static_current_gradient COMMAND test_hermite_static_current_gradient)
+set_tests_properties(hermite_static_current_gradient PROPERTIES LABELS "fortran;unit;static;hermite")
+
 # Finite-EI mesh-resolution diagnosis: h*kappa peak / curvature-jump / contact-island metrics
 # and the power-of-two refinement recommendation -- the preflight trigger for the adaptive mesh
 # policy. Synthetic controlled profiles + fail-closed validation.
@@ -1201,6 +1208,10 @@ target_link_libraries(test_flagship_compression_note PRIVATE cabledyn_core)
 add_test(NAME flagship_compression_note
          COMMAND test_flagship_compression_note ${CMAKE_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat)
 set_tests_properties(flagship_compression_note PROPERTIES LABELS "fortran;integration;static;contact")
+add_executable(test_static_dry_weight tests/test_static_dry_weight.f90)
+target_link_libraries(test_static_dry_weight PRIVATE cabledyn_core)
+add_test(NAME static_dry_weight COMMAND test_static_dry_weight WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(static_dry_weight PROPERTIES LABELS "fortran;integration;static;openfast")
 
 add_executable(test_viv_kernels tests/test_viv_kernels.f90)
 target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)

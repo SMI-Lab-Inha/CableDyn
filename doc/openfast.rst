@@ -484,8 +484,20 @@ turn of an end frame or connection direction is nonlinear); a run without linear
 operating point, such as the still-water start, they lie on the linearised surface, while at a
 moving one the accelerations and the end-frame rates of the last step enter them.
 
-The zero-frequency reduction ``D − C A⁻¹ B`` is the static mooring stiffness. It agrees with
-MoorDyn-F and with CableDyn's own static solutions (:doc:`validation`). Quadratic drag has no
+The zero-frequency reduction ``D − C A⁻¹ B`` is the static mooring stiffness at an operating point
+whose coupled points do not accelerate. It agrees with MoorDyn-F and with CableDyn's own static
+solutions (:doc:`validation`). A cable's coupled load is its support reaction, which includes the
+inertia ``−M(q) a`` of the line, and the mass moves with the configuration: the added mass turns
+with each element, and the end tangent's mass couples to the fairlead. At a coupled-point
+acceleration ``a`` the force rows therefore also carry the configuration derivative of that
+inertial reaction. The rotation columns, which turn the end tangent, show it most. An OpenFAST run
+generally starts out of balance, so its platform accelerates at ``t = 0``. On the lazy-wave cable of
+the mixed example, held by a 5e4 N·m/rad hang-off spring, a fairlead acceleration of 0.025 m/s²
+moves the force per unit rotation by 1.2 % out of plane and by 0.08–0.32 % in plane. The translation
+columns and the moments per unit translation stay within 3e-4 of the static solutions. At zero
+acceleration the rotation columns match them too, to 2.7e-4 out of plane and 1.1e-5 in plane.
+Compare a reduction with static solutions only at an operating point whose coupled points do not
+accelerate, for example with the platform degrees of freedom disabled. Quadratic drag has no
 slope at rest, so the 0.1 m/s step gives its equivalent linear damping at that velocity amplitude.
 CableDyn integrates the drag over the element, and a one-node step then gives about half of
 MoorDyn-F's lumped value.
