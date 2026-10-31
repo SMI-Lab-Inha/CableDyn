@@ -34,7 +34,8 @@ What is on the release page
    * - ``openfast.exe``
      - OpenFAST v5.0.0 (maintained by NLR, the National Laboratory of the Rockies, formerly
        NREL) with CableDyn built in as ``CompMooring = 5``; stock MoorDyn
-       (``CompMooring = 3``) is still available in the same binary (:doc:`openfast`)
+       (``CompMooring = 3``) is still available in the same binary (:doc:`openfast`). It names
+       itself ``OpenFAST-v5.0.0-CableDyn-0.3.0`` (``openfast.exe -v`` and the start of every run).
    * - ``cabledyn-0.3.0-py3-none-any.whl``
      - the pure-Python package: deck editing, case generation, driver automation, result
        readers, fatigue and spectral post-processing (:doc:`python`)

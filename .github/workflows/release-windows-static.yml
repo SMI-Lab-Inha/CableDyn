@@ -32,6 +32,8 @@ jobs:
           repository: OpenFAST/openfast
           ref: 2895884d2be01862173c88d70f86b358d2f1a50a
           path: openfast
+          # the history and tags: openfast.exe names its base by `git describe --tags`
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Check out the pinned OpenFAST regression model

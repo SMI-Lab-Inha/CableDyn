@@ -433,6 +433,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   side, or by the sign of a round-off component: in OpenFAST about half the rows of a cable in
   the x-z plane read 359.9x. A line whose chord heads within 45° of +X now reports its azimuths
   in (−180, 180], every other line in [0, 360) as before.
+- The CableDyn-enabled `openfast.exe` named itself `OpenFAST-v5.0.0-dirty`: OpenFAST stamps its
+  version with `git describe --dirty`, and the integration patches modify the checkout. Built
+  through the Visual Studio solution or through CMake it now reads
+  `OpenFAST-v5.0.0-CableDyn-<CableDyn version>`, the describe of the unpatched OpenFAST base and
+  the CableDyn version, and the release build fails unless `openfast.exe -v` prints exactly that.
 
 ## [0.3.0] - 2026-10-23
 

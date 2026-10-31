@@ -16,7 +16,7 @@ this repository.
 | --- | --- |
 | `patches/*.patch` | Patch series, one file per patch; `0006` and `0016`–`0020` add new CableDyn-owned files, the others modify upstream files |
 | `prepare_openfast_source.ps1` | Checks the upstream revision and a clean worktree, then applies the series |
-| `integrate_openfast_vs_solution.ps1` | Adds CableDyn to the Intel Fortran Visual Studio solution of the Windows release |
+| `integrate_openfast_vs_solution.ps1` | Adds CableDyn to the Intel Fortran Visual Studio solution of the Windows release and sets its version string |
 | `vs-build/CableDyn.vfproj.in` | Visual Studio project template used by that script |
 | `openfast_build_gate.ps1` | Builds a configured OpenFAST tree and runs a coupled `CompMooring = 5` smoke case |
 
@@ -48,6 +48,19 @@ For the static Windows release, pass a clean, unpatched checkout to
 [Installation](../../doc/installation.rst)). Its Visual Studio project compiles the CableDyn
 adapter with `/heap-arrays:1024`, as the static CMake build compiles the CableDyn core, so arrays
 whose size is known only at run time are placed on the heap rather than on the `openfast.exe` stack.
+
+## Version string
+
+OpenFAST names its version with `git describe --dirty`, which would read `v5.0.0-dirty` on
+the patched tree. A CableDyn-enabled executable names itself
+`OpenFAST-<OpenFAST base>-CableDyn-<CableDyn version>` instead, here
+`OpenFAST-v5.0.0-CableDyn-0.3.0` (printed by `openfast.exe -v` and at the start of every run).
+The OpenFAST part is `git describe --tags --abbrev=8` of the checked-out commit, the
+unpatched base; the CableDyn part is the project version in the CableDyn `CMakeLists.txt`.
+Patch `0021` sets it in the CMake build, and `integrate_openfast_vs_solution.ps1` in the
+Visual Studio solution, whose `vs-build/CreateGitVersion.bat` it replaces. Both stop unless
+the base is described by a release tag (`vX.Y.Z` or `vX.Y.Z-N-g<hash>`), so the checkout
+needs its tags: a `git clone` has them, a single-commit shallow fetch does not.
 
 ## License of modified files
 

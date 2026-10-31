@@ -242,8 +242,8 @@ and a MinGW `FAST.Farm.exe` (`-DBUILD_FASTFARM=ON`) with the default stack stops
 stack overflow while ElastoDyn initialises.
 
 `openfast_build_gate.ps1` builds `openfast.exe`, runs a `CompMooring = 5` case,
-checks that the CableDyn banner appears in the log, and checks that the output is
-finite.
+checks that the CableDyn banner appears in the log, that the executable names itself
+`OpenFAST-<OpenFAST base>-CableDyn-<CableDyn version>`, and that the output is finite.
 
 An `openfast.exe` built this way through CMake does not embed the UTF-8
 active-code-page manifest (`app/utf8_code_page.manifest`), so on Windows it may not

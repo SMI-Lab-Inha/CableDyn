@@ -144,6 +144,20 @@ class DocumentationTests(unittest.TestCase):
             build_script.index("integrate_openfast_vs_solution.ps1"),
             "the host glue patch must be applied before adding the Visual Studio project",
         )
+        # openfast.exe names its OpenFAST base and the CableDyn version, never '-dirty':
+        # both build routes stamp it, the release build checks it, and the release
+        # checkout carries the tags `git describe` needs.
+        integrate_script = (
+            ROOT / "integration" / "openfast" / "integrate_openfast_vs_solution.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("CreateGitVersion.bat", integrate_script)
+        self.assertIn("describe --tags --abbrev=8", integrate_script)
+        version_patch = (
+            ROOT / "integration" / "openfast" / "patches" / "0021-version-cmake.patch"
+        ).read_text(encoding="utf-8")
+        self.assertIn('-CableDyn-${_cabledyn_version}', version_patch)
+        self.assertIn("@('-v')", build_script)
+        self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("devenv.com", build_script)
         self.assertIn("Release|x64", build_script)
         self.assertNotIn('cmake --build `"$ofBuild`"', build_script)

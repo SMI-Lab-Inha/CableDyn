@@ -22,9 +22,9 @@ OpenFAST (Apache License, Version 2.0)
   https://github.com/OpenFAST/openfast
 
   * integration/openfast/patches/ contains patches that MODIFY OpenFAST source
-    files (the root and openfast-library CMakeLists.txt; FAST_AeroMap.f90,
-    FAST_Funcs.f90, FAST_Mapping.f90, FAST_ModGlue.f90, FAST_Registry.txt,
-    FAST_Solver.f90, FAST_Subs.f90, and FAST_Types.f90 in
+    files (the root, openfast-library, and version CMakeLists.txt;
+    FAST_AeroMap.f90, FAST_Funcs.f90, FAST_Mapping.f90, FAST_ModGlue.f90,
+    FAST_Registry.txt, FAST_Solver.f90, FAST_Subs.f90, and FAST_Types.f90 in
     modules/openfast-library/src; FAST_Farm_IO.f90, FAST_Farm_Registry.txt,
     FAST_Farm_Subs.f90, and FAST_Farm_Types.f90 in glue-codes/fast-farm/src).
     The modified files remain under the Apache License, Version 2.0, and

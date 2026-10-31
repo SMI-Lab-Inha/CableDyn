@@ -41,6 +41,29 @@ $LinkLibraries = @($LinkLibraries | ForEach-Object {
     (Resolve-Path -LiteralPath $_).Path
 })
 
+# Version stamp. The pre-build step of the VersionInfo project, vs-build\CreateGitVersion.bat,
+# writes vs-build\gitVersionInfo.h from `git describe --dirty`, so a patched tree would call
+# itself '<tag>-dirty'. Name the build after its OpenFAST base and the CableDyn version instead,
+# '<OpenFAST describe>-CableDyn-<version>'. `git describe` without --dirty describes the
+# checked-out commit, the unpatched base, whether or not the patch series is applied; the
+# CableDyn version is the project version of the CableDyn CMakeLists.txt. The pre-build script
+# is replaced as a whole and the header written from the same string (at the end of this
+# script), so a rerun leaves both unchanged.
+$describeOut = & git -C $OpenFASTRoot describe --tags --abbrev=8
+if ($LASTEXITCODE -ne 0 -or $null -eq $describeOut) {
+    throw "git describe found no tag for the OpenFAST checkout $OpenFASTRoot (fetch its tags)"
+}
+$baseDescribe = "$describeOut".Trim()
+if ($baseDescribe -notmatch '^v\d+\.\d+\.\d+(-\d+-g[0-9a-f]{8,})?$') {
+    throw "the OpenFAST base describes as '$baseDescribe', not as a release tag vX.Y.Z or vX.Y.Z-N-gHASH"
+}
+$cableDynCMake = Get-Content -LiteralPath (Join-Path $CableDynRoot 'CMakeLists.txt') -Raw
+if ($cableDynCMake -notmatch 'project\(CableDynCore VERSION (\d+\.\d+\.\d+)') {
+    throw 'CableDyn project version not found in CMakeLists.txt'
+}
+$versionStamp = "$baseDescribe-CableDyn-$($Matches[1])"
+$versionDefine = "#define GIT_VERSION_INFO '$versionStamp'"
+
 function Escape-Xml([string]$Value) {
     return [Security.SecurityElement]::Escape($Value)
 }
@@ -175,4 +198,21 @@ $settings.Encoding = New-Object Text.UTF8Encoding($false)
 $writer = [Xml.XmlWriter]::Create($openfastProject, $settings)
 try { $vf.Save($writer) } finally { $writer.Dispose() }
 
-Write-Host 'PASS: CableDyn added to OpenFAST Visual Studio Release solution'
+# The pre-build step runs in vs-build\modules; the VersionInfo project includes the header
+# through GIT_INCLUDE_FILE='..\gitVersionInfo.h'.
+$versionScript = @(
+    '@ECHO off'
+    'REM Written by CableDyn integration/openfast/integrate_openfast_vs_solution.ps1: the OpenFAST'
+    'REM base and the CableDyn version this executable is built from.'
+    ">..\gitVersionInfo.h ECHO $versionDefine"
+    'EXIT /B 0'
+) -join "`r`n"
+[IO.File]::WriteAllText((Join-Path $OpenFASTRoot 'vs-build\CreateGitVersion.bat'), "$versionScript`r`n",
+                        [Text.Encoding]::ASCII)
+$versionHeader = Join-Path $OpenFASTRoot 'vs-build\gitVersionInfo.h'
+if (-not (Test-Path -LiteralPath $versionHeader) -or
+    (Get-Content -LiteralPath $versionHeader -Raw) -ne "$versionDefine`r`n") {
+    [IO.File]::WriteAllText($versionHeader, "$versionDefine`r`n", [Text.Encoding]::ASCII)
+}
+
+Write-Host "PASS: CableDyn added to OpenFAST Visual Studio Release solution (version $versionStamp)"

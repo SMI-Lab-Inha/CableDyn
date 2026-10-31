@@ -171,6 +171,11 @@ def main() -> int:
         "OpenFAST example banner": f"Running CableDyn (v{version}," in read(
             "examples/openfast/README.md"
         ),
+        # The name openfast.exe reports (release/build_static_windows.ps1 checks the binary).
+        "OpenFAST executable identity": all(
+            re.search(rf"OpenFAST-v\d+\.\d+\.\d+-CableDyn-{re.escape(version)}\b", read(name))
+            for name in ("doc/installation.rst", "RELEASE.md", "integration/openfast/README.md")
+        ),
         "Python licence metadata": 'license-files = ["LICENSE"]' in read(
             "python/pyproject.toml"
         ),

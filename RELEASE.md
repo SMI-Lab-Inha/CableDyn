@@ -102,7 +102,9 @@ solution, which still supplies the single-precision routines they do not build.
 The build fails if either executable imports a non-system DLL or lacks the UTF-8
 active-code-page manifest (`release/check_static_windows_binary.ps1`), or if the
 standalone and `CompMooring = 5` smoke cases fail with a system-only `PATH` or from
-a folder named in mixed scripts.
+a folder named in mixed scripts. It also fails unless `openfast.exe -v` names the
+executable `OpenFAST-v5.0.0-CableDyn-0.3.0`: the OpenFAST base and the CableDyn version,
+never a `-dirty` describe of the patched tree.
 
 The release workflow (`.github/workflows/release-windows-static.yml`) produces
 exactly these assets:
