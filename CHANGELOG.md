@@ -398,8 +398,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   6.1 % in the first second, and as much on the same cable restrained in torsion. The
   attachment polish and the torsion stage after it now give each attachment the load of its side
   of the surface (a fixed point that repeats the solve until none changes side); both starts
-  hold to the output's 8 digits. An attachment at the surface that its weight sinks and its
-  buoyancy lifts has no static side and fails closed by name.
+  hold to the output's 8 digits. An attachment that its weight in air takes below the surface
+  and its weight in water above it (a net-buoyant module that would float) has no static
+  position and fails closed, naming the attachment that crossed the surface.
 - A bending-pinned finite-EI line with `ATTACHMENTS` from a Rigid6 body or a rod end left its
   attachments out of the body static balance, which carries such a line as a cable without
   bending stiffness: on a moored body with a 2 t clump 50 m along a pinned cable the body started

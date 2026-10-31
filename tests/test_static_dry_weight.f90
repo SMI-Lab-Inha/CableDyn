@@ -50,6 +50,13 @@ PROGRAM test_static_dry_weight
   !!      solved with its dry part between them: both hold their static positions over 3 s of the
   !!      march to 1e-4 m (measured 0); with the buoyancy kept above the surface (dev before the
   !!      dry-weight fix) they moved by 5.5e-3 m.
+  !!   9. A net-buoyant module (200 kg, 2 m^3) 50 m along a slack finite-EI cable from 20 m below
+  !!      the surface: in water it lifts its node 4.5 m above the surface, where the dynamics gives
+  !!      it its weight alone, which sinks it: a point attachment has no static position there.
+  !!      The static start fails closed and its message names the attachment that crossed the
+  !!      still-water level. Before, the solves carried the module above and below the surface in
+  !!      turn until a load step failed, and the message read as a homotopy that stopped (dev
+  !!      started the module 4.5 m above the surface with its buoyancy and ran).
   !! A deck whose lines are all submerged is solved once, bit-identically (the example A/B).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
@@ -132,6 +139,9 @@ PROGRAM test_static_dry_weight
   WRITE (*, '(A,ES10.2,A)') '  chain between a body above the surface and a Connect point: largest drift ', dmax, ' m'
   CALL check(dmax <= 1.0e-4_wp, 'chain between two moving objects across the surface: both start in the march''s '// &
              'equilibrium')
+
+  ! 9. a module that would float: no static position, failed by name
+  CALL floating_module()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAILED: ', nfail, ' check(s)'
@@ -466,6 +476,54 @@ CONTAINS
     END DO
     CLOSE (u)
   END SUBROUTINE body_cable_heave
+
+  SUBROUTINE floating_module()
+    !! Gate 9: a 160 m finite-EI cable (80 elements) from a Coupled point at (0, 0, -20) m to a
+    !! Fixed one at (100, 0, -50) m on a 50 m seabed, a 200 kg, 2 m^3 module 50 m along it.
+    INTEGER :: u, es
+    LOGICAL :: conv
+    CHARACTER(1024) :: em
+    OPEN (NEWUNIT=u, FILE='dry_float.dat', STATUS='replace', ACTION='write')
+    WRITE (u, '(A)') 'test_static_dry_weight: a net-buoyant module that would float'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'bare 0.16 36.70 4.69e8 0.0 1.99e4 1.2 0.1 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 0.0 0.0 -20.0'
+    WRITE (u, '(A)') '2 Fixed 100.0 0.0 -50.0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 bare 160.0 80'
+    WRITE (u, '(A)') '--- ATTACHMENTS ---'
+    WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+    WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+    WRITE (u, '(A)') '1 50.0 200.0 2.0 0.0 0.0 0.0'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '3.0e6 kBot'
+    WRITE (u, '(A)') '3.0e5 cBot'
+    WRITE (u, '(A)') '0.01 dtM'
+    WRITE (u, '(A)') '50.0 WtrDpth'
+    WRITE (u, '(A)') '0.1 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Point1Fz'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    CALL CD_Run_Deck_Driver('dry_float.dat', 'dry_float', conv, es, em)
+    WRITE (*, '(2A)') '  module that would float: ', TRIM(em)
+    CALL check(es /= CD_DECKDRV_OK, 'module that would float: the static start fails closed')
+    CALL check(INDEX(em, 'attachment 1 of the line') > 0 .AND. INDEX(em, 'crossed the still-water level') > 0, &
+               'module that would float: the failure names the attachment that crossed the surface')
+  END SUBROUTINE floating_module
 
   SUBROUTINE two_objects_drift(dmax)
     !! Gate 8: the body of gate 7, a 65 m chain (EI = 0, 30 segments) from its point (0, 0, 8) m to

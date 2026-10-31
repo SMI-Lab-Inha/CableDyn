@@ -3454,8 +3454,14 @@ CONTAINS
       REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), q_prev(:), q_polished(:)
       LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
       LOGICAL :: has_drag
-      INTEGER :: fp
+      INTEGER :: fp, k_cross
+      ! the first attachment a pass moved across the still-water level, which names a failure of
+      ! the stage after it (as in attachment_static_polish)
+      CHARACTER(512) :: cause
+      CHARACTER(64) :: mv
       est = CD_DECKDRV_OK
+      k_cross = 0
+      cause = ''
       emt = ''
       ! every pass starts from the polished, untwisted discrete state (a pass from the last twisted
       ! state would first relax it, and a writhe a buckling descent left could put Theta_0 a turn
@@ -3476,11 +3482,25 @@ CONTAINS
         q_prev = q_static
         q_static = q_polished
         CALL torsion_stage(est, emt, f_att + f_drag)
-        IF (est /= CD_DECKDRV_OK) RETURN
+        IF (est /= CD_DECKDRV_OK) THEN
+          IF (k_cross > 0) emt = TRIM(cause)//'; '//TRIM(emt)
+          RETURN
+        END IF
         ! an attachment the twist moved across the still-water level: once more, with its weight on
         ! its new side
         CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att, att_dry_now)
-        IF (.NOT. ALL(att_dry_now .EQV. att_dry)) CYCLE
+        IF (.NOT. ALL(att_dry_now .EQV. att_dry)) THEN
+          IF (k_cross == 0) THEN
+            k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
+            WRITE (mv, '(ES9.3,A,ES9.3)') ln%att(2, k_cross), ' kg, Volume ', ln%att(3, k_cross)
+            cause = 'finite-EI torsion static solve with discrete ATTACHMENTS: attachment '// &
+                    TRIM(int_to_str(k_cross))//' of the line (Mass '//TRIM(ADJUSTL(mv))//' m^3) crossed the '// &
+                    'still-water level, where the dynamics drops its buoyancy; a point attachment that its weight '// &
+                    'in air takes below the surface and its weight in water above it has no static position (move '// &
+                    'it along the line or change its Mass or Volume)'
+          END IF
+          CYCLE
+        END IF
         IF (.NOT. has_drag) RETURN
         IF (MAXVAL(ABS(q_static - q_prev)) <= FIXED_POINT_TOL) RETURN
       END DO
@@ -3489,8 +3509,7 @@ CONTAINS
         emt = 'finite-EI torsion static solve with discrete ATTACHMENTS: the attachment current drag did not '// &
               'settle to a fixed point'
       ELSE
-        emt = 'finite-EI torsion static solve with discrete ATTACHMENTS: an attachment at the still-water level '// &
-              'has no static side of it (its weight above the surface sinks it, its buoyancy below lifts it)'
+        emt = cause
       END IF
     END SUBROUTINE torsion_after_attachments
 
@@ -5185,6 +5204,9 @@ CONTAINS
     ! which attachments are above the still-water level: in the state the last solve took its
     ! loads at, and in the state it returned
     LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
+    ! the first attachment a solve moved across the still-water level (0: none), which names a
+    ! failure of the polish after it
+    INTEGER :: k_cross
     ! The damped Newton failure of the first failed solve, and of the last one.
     CHARACTER(1024) :: first_msg, last_msg
     CHARACTER(48) :: step_buf, lam_buf
@@ -5199,6 +5221,7 @@ CONTAINS
     ALLOCATE (f_att(6*(ne + 1)), f_drag(6*(ne + 1)), dry(ne), q_out(SIZE(q)), curv(ne + 1))
     ALLOCATE (att_dry(SIZE(node)), att_dry_now(SIZE(node)))
     CALL attachment_static_weight(q, node, att, opts, f_att, att_dry)
+    k_cross = 0
     has_drag = opts%has_current .AND. ANY(att(4, :) > CD_ZERO .OR. att(6, :) > CD_ZERO)
     dry = opts%rhoW*opts%g*QUARTER_PI*diam**2
     IF (contact_enabled) THEN
@@ -5240,13 +5263,14 @@ CONTAINS
           WRITE (lam_buf, '(F8.6)') lam_done
           IF (dlam < MIN_STEP) THEN
             WRITE (step_buf, '(ES9.2)') MIN_STEP
-            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
-                            TRIM(ADJUSTL(lam_buf))//', where load steps down to '//TRIM(ADJUSTL(step_buf))// &
-                            ' did not converge either')
+            CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(first_msg)//'; the homotopy stopped at '// &
+                            'load fraction '//TRIM(ADJUSTL(lam_buf))//', where load steps down to '// &
+                            TRIM(ADJUSTL(step_buf))//' did not converge either')
           ELSE
             WRITE (step_buf, '(I0)') MAX_FAILED_STEPS
-            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at load fraction '// &
-                            TRIM(ADJUSTL(lam_buf))//' after '//TRIM(step_buf)//' load steps had failed')
+            CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(first_msg)//'; the homotopy stopped at '// &
+                            'load fraction '//TRIM(ADJUSTL(lam_buf))//' after '//TRIM(step_buf)// &
+                            ' load steps had failed')
           END IF
           RETURN
         END IF
@@ -5261,7 +5285,8 @@ CONTAINS
       CALL solve_with(CD_ONE, converged, change)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       IF (.NOT. converged) THEN
-        CALL fail_solve(ErrStat, ErrMsg, TRIM(last_msg)//' (attachment current drag and surface fixed point)')
+        CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(last_msg)// &
+                        ' (attachment current drag and surface fixed point)')
         RETURN
       END IF
       CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
@@ -5273,11 +5298,32 @@ CONTAINS
       CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static solve with discrete ATTACHMENTS: the attachment '// &
                       'current drag did not settle to a fixed point')
     ELSE
-      CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static solve with discrete ATTACHMENTS: an attachment at '// &
-                      'the still-water level has no static side of it (its weight above the surface sinks it, its '// &
-                      'buoyancy below lifts it); move it along the line or change its Volume')
+      IF (k_cross == 0) k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
+      CALL fail_solve(ErrStat, ErrMsg, surface_note(''))
     END IF
   CONTAINS
+    FUNCTION surface_note(sep) RESULT(msg)
+      !! The cause of a failed polish in which a solve moved an attachment across the still-water
+      !! level (k_cross; empty without one), followed by sep: a point attachment that its weight
+      !! in air takes below the surface and its weight in water above it (a net-buoyant module
+      !! that would float, or any module whose node lies nearer the surface than the deflection
+      !! its buoyancy rho V g gives the line) has no static position. Without this the failure
+      !! read as a homotopy that stopped (a 200 kg, 2 m^3 module on a slack cable, which the
+      !! solves carried above and below the surface in turn).
+      CHARACTER(*), INTENT(IN) :: sep
+      CHARACTER(:), ALLOCATABLE :: msg
+      CHARACTER(64) :: mv
+      msg = ''
+      IF (k_cross < 1) RETURN
+      WRITE (mv, '(ES9.3,A,ES9.3)') att(2, k_cross), ' kg, Volume ', att(3, k_cross)
+      msg = 'finite-EI static solve with discrete ATTACHMENTS: attachment '//TRIM(int_to_str(k_cross))// &
+            ' of the line (Mass '//TRIM(ADJUSTL(mv))//' m^3) crossed the still-water level, where the '// &
+            'dynamics drops its buoyancy; a point attachment that its weight in air takes below the surface '// &
+            'and its weight in water above it has no static position (move it along the line or change its '// &
+            'Mass or Volume)'
+      msg = msg//sep
+    END FUNCTION surface_note
+
     SUBROUTINE solve_with(scale, ok, dq_max)
       !! One warm-started solve at load fraction scale, with the attachment current drag
       !! evaluated on the incoming state: the damped Newton iteration and, when it does not
@@ -5295,8 +5341,12 @@ CONTAINS
       CHARACTER(48) :: num_buf
       ok = .FALSE.
       max_it = [MERGE(NEWTON_RETRY_ITER, 200, newton_failed), 200, 200]
-      ! the attachments' weights on the side of the surface of the incoming state
-      CALL attachment_static_weight(q, node, att, opts, f_att, att_dry)
+      ! the attachments' weights on the side of the surface of the incoming state (the first one the
+      ! last solve moved across the surface is recorded for the failure message)
+      CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
+      IF (k_cross == 0 .AND. .NOT. ALL(att_dry_now .EQV. att_dry)) &
+        k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
+      att_dry = att_dry_now
       f_drag = CD_ZERO
       IF (has_drag) THEN
         CALL attachment_static_drag(q, node, att, opts, frame_cs, f_drag, es, em)

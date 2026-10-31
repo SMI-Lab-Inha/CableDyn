@@ -2866,8 +2866,9 @@ equilibrium with the net weight smeared over the node's two elements and continu
 load in warm-started Newton solves; in a deck current the drag at rest is added, each solve takes
 every attachment's load on the side of the still-water level its node is on, and the final
 solve is repeated with the loads of its own solution until the nodes stop moving and no
-attachment changes side (an attachment at the surface that its weight sinks and its buoyancy
-lifts has no static side, and the solve fails closed). Before, an attachment above the surface
+attachment changes side (an attachment that its weight in air takes below the surface and its
+weight in water above it has no static position, and the solve fails closed, naming the
+attachment that crossed the surface). Before, an attachment above the surface
 kept its buoyancy in the statics: a 500 kg, 0.2 m\ :sup:`3` module 3 m above it moved the
 fairlead load by up to 6.1 % in the first second of the march. The load moves
 in eighths; a step whose damped Newton solve does not converge is repeated from the last
