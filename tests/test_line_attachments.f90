@@ -28,7 +28,20 @@ PROGRAM test_line_attachments
   !!      load step; the convergence scale now keeps tol x scale at 16 times that floor. Heavy
   !!      modules on the same line (which carry it into tension) still solve. Restrained in
   !!      torsion (GJ 5e4 N m^2, a quarter turn at End B), the neutral-module line carries the
-  !!      torque GJ Phi / L to 1e-6.
+  !!      torque GJ Phi / L to 1e-6. The same with End B on a Coupled point (two moving ends):
+  !!      neutral modules and a drag area alone stay unloaded, the line restrained in torsion at
+  !!      both ends carries GJ Phi / L to 1e-6, and a span 1e-8 longer than the line (two moving
+  !!      ends whose chord exceeds the length, a 0.1 N tension that the tension bound of the
+  !!      convergence scale alone put below the floor) carries EA (chord / L - 1) to 2e-6 N
+  !!      (measured 2.2e-7 N). Restrained in torsion at End A only (End B free in torsion), the
+  !!      line starts untwisted. Each of these failed in the polish before the floor.
+  !!   9. A bending-pinned cable from a moored body (a keel point, 45 deg towards a Fixed anchor)
+  !!      carrying a 2 t clump 50 m along it, with and without its END CONNECTIONS row: the body
+  !!      static solve balances the body on the cubic-Hermite cable's end loads (the passes of the
+  !!      connected ends), so the body holds its static pose over 5 s of the march to 1e-5 m and
+  !!      1e-4 deg (measured 0, the output's 8 digits). The cable without bending stiffness that
+  !!      the body solve otherwise takes for a pinned line does not carry the clump: the body
+  !!      started at the pose of the line without it and drifted by up to 2.9e-2 m and 0.20 deg.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Attachment_Discrete_Verdict
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED
@@ -57,6 +70,8 @@ PROGRAM test_line_attachments
   CALL case_coupled()
   CALL case_fallback_verdict()
   CALL case_zero_strain()
+  CALL case_zero_strain_moving()
+  CALL case_pinned_body_clump()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -196,6 +211,224 @@ CONTAINS
     CALL require(ABS(d(3, 1) - 5.0e4_wp*0.5_wp*PI/100.0_wp) <= 1.0e-6_wp*5.0e4_wp*0.5_wp*PI/100.0_wp, &
                  '8 torsion: the straight line carries GJ Phi / L')
   END SUBROUTINE case_zero_strain
+
+  SUBROUTINE case_zero_strain_moving()
+    !! 8 (continued): the line of case 8 with End B on a Coupled point (two moving ends), and
+    !! restrained in torsion at End A only.
+    CHARACTER(*), PARAMETER :: NEUTRAL = '1 25.0:25.0:75.0 102.5 0.1 0.0 0.0 0.0'
+    CHARACTER(*), PARAMETER :: DRAG = '1 25.0:25.0:75.0 0.0 0.0 0.1 0.0 0.0'
+    CHARACTER(*), PARAMETER :: TORS_HDR = 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+    CHARACTER(*), PARAMETER :: TORS_UNITS = '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
+    REAL(wp), ALLOCATABLE :: d(:, :)
+    REAL(wp) :: chord, ten
+    INTEGER :: nrow
+    LOGICAL :: ok
+    ! two moving ends: neutral modules, a drag area alone
+    CALL span_deck('att_span_b1', 'Coupled', '100.0', NEUTRAL, .FALSE., [CHARACTER(64) ::], ['FairTen1'])
+    CALL span_run('att_span_b1', 'two moving ends, neutral modules', 2, d, nrow, ok)
+    IF (ok) CALL require(ABS(d(2, 1)) < 1.0e-3_wp, '8 two moving ends, neutral modules: the line stays unloaded')
+    CALL span_deck('att_span_b2', 'Coupled', '100.0', DRAG, .FALSE., [CHARACTER(64) ::], ['FairTen1'])
+    CALL span_run('att_span_b2', 'two moving ends, drag area alone', 2, d, nrow, ok)
+    IF (ok) CALL require(ABS(d(2, 1)) < 1.0e-3_wp, '8 two moving ends, drag area alone: the line stays unloaded')
+    ! two moving ends whose chord exceeds the length by 1e-8: tension EA (chord/L - 1) = 0.1 N
+    CALL span_deck('att_span_b3', 'Coupled', '100.000001', NEUTRAL, .FALSE., [CHARACTER(64) ::], ['FairTen1'])
+    CALL span_run('att_span_b3', 'two moving ends, chord above the length', 2, d, nrow, ok)
+    IF (ok) THEN
+      chord = 100.000001_wp
+      ten = 1.0e7_wp*(chord/100.0_wp - 1.0_wp)
+      WRITE (*, '(A,ES16.8,A,ES16.8,A)') '  8 two moving ends, chord above the length: tension ', d(2, 1), &
+        ' N, EA (chord/L - 1) ', ten, ' N'
+      CALL require(ABS(d(2, 1) - ten) <= 2.0e-6_wp, '8 two moving ends, chord above the length: EA (chord/L - 1)')
+    END IF
+    ! two moving ends restrained in torsion at both ends, a quarter turn at End B
+    CALL span_deck('att_span_b4', 'Coupled', '100.0', NEUTRAL, .TRUE., &
+                   [CHARACTER(80) :: TORS_HDR, TORS_UNITS, '1 A Pinned 1 0 0 Rigid 0 0 1 0', &
+                    '1 B Pinned 1 0 0 Rigid 0 0 1 90'], ['FairTen1', 'Torq1N1 '])
+    CALL span_run('att_span_b4', 'two moving ends, torsion', 3, d, nrow, ok)
+    IF (ok) THEN
+      WRITE (*, '(A,ES16.8,A,ES16.8,A)') '  8 two moving ends, torsion: torque ', d(3, 1), ' N m, GJ Phi / L ', &
+        5.0e4_wp*0.5_wp*PI/100.0_wp, ' N m'
+      CALL require(ABS(d(3, 1) - 5.0e4_wp*0.5_wp*PI/100.0_wp) <= 1.0e-6_wp*5.0e4_wp*0.5_wp*PI/100.0_wp, &
+                   '8 two moving ends, torsion: the straight line carries GJ Phi / L')
+    END IF
+    ! restrained in torsion at End A only
+    CALL span_deck('att_span_b5', 'Fixed', '100.0', NEUTRAL, .TRUE., &
+                   [CHARACTER(80) :: TORS_HDR, TORS_UNITS, '1 A Pinned 1 0 0 Rigid 0 0 1 0', &
+                    '1 B Pinned 1 0 0 Free 0 0 1 0'], ['FairTen1', 'Twist1  '])
+    CALL span_run('att_span_b5', 'torsion at End A only', 3, d, nrow, ok)
+    IF (ok) THEN
+      WRITE (*, '(A,ES12.4,A,ES12.4,A)') '  8 torsion at End A only: tension ', d(2, 1), ' N, twist ', d(3, 1), ' deg'
+      CALL require(ABS(d(2, 1)) < 1.0e-3_wp .AND. ABS(d(3, 1)) < 1.0e-6_wp, &
+                   '8 torsion at End A only: the line starts straight, unloaded and untwisted')
+    END IF
+  END SUBROUTINE case_zero_strain_moving
+
+  SUBROUTINE span_deck(root, end_b_type, end_b_x, att_row, torsion, endconn_rows, outputs)
+    !! The neutral 100 m line of case 8 (40 elements, TMax 0) from a Coupled End A at
+    !! (0, 0, -50) m to End B of type end_b_type at (end_b_x, 0, -50) m, with one ATTACHMENTS row;
+    !! torsion: the line type with GJ 5e4 N m^2 (and its END CONNECTIONS rows).
+    CHARACTER(*), INTENT(IN) :: root, end_b_type, end_b_x, att_row
+    LOGICAL, INTENT(IN) :: torsion
+    CHARACTER(*), INTENT(IN) :: endconn_rows(:), outputs(:)
+    CHARACTER(160) :: trow
+    INTEGER :: u, i
+    OPEN (NEWUNIT=u, FILE=root//'.dat', STATUS='replace', ACTION='write')
+    WRITE (u, '(A)') '--------------------- CableDyn Input File ------------------------------------'
+    WRITE (u, '(A)') 'neutral line of the length of its span with attachments'
+    WRITE (u, '(A)') '--------------------- LINE TYPES ---------------------------------------------'
+    IF (torsion) THEN
+      WRITE (trow, '(A,ES24.16,A)') 'cab 0.2 ', 1025.0_wp*0.25_wp*PI*0.04_wp, &
+        ' 1.0e7 0.0 1.0e6 1.0e8 5.0e4 1.0 1.0e-12 0.0 0.0 0.0 0.0'
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+    ELSE
+      WRITE (trow, '(A,ES24.16,A)') 'cab 0.2 ', 1025.0_wp*0.25_wp*PI*0.04_wp, ' 1.0e7 0.0 1.0e6 0.0 0.0 0.0 0.0'
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    END IF
+    WRITE (u, '(A)') TRIM(trow)
+    WRITE (u, '(A)') '--------------------- POINTS -------------------------------------------------'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 0.0 0.0 -50.0'
+    WRITE (u, '(A)') '2 '//end_b_type//' '//end_b_x//' 0.0 -50.0'
+    WRITE (u, '(A)') '--------------------- LINES --------------------------------------------------'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--------------------- SECTIONS -----------------------------------------------'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 cab 100.0 40'
+    WRITE (u, '(A)') '--------------------- ATTACHMENTS -------------------------------------------'
+    WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+    WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+    WRITE (u, '(A)') att_row
+    IF (SIZE(endconn_rows) > 0) THEN
+      WRITE (u, '(A)') '--------------------- END CONNECTIONS ----------------------------------------'
+      DO i = 1, SIZE(endconn_rows)
+        WRITE (u, '(A)') TRIM(endconn_rows(i))
+      END DO
+    END IF
+    WRITE (u, '(A)') '--------------------- OPTIONS ------------------------------------------------'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '0.1 dtM'
+    WRITE (u, '(A)') '0.0 TMax'
+    WRITE (u, '(A)') '--------------------- OUTPUTS ------------------------------------------------'
+    DO i = 1, SIZE(outputs)
+      WRITE (u, '(A)') TRIM(outputs(i))
+    END DO
+    WRITE (u, '(A)') '--------------------- END ----------------------------------------------------'
+    CLOSE (u)
+  END SUBROUTINE span_deck
+
+  SUBROUTINE span_run(root, label, ncol, d, nrow, ok)
+    !! Run a span_deck deck and read its static row (ncol columns, time first).
+    CHARACTER(*), INTENT(IN) :: root, label
+    INTEGER, INTENT(IN) :: ncol
+    REAL(wp), ALLOCATABLE, INTENT(OUT) :: d(:, :)
+    INTEGER, INTENT(OUT) :: nrow
+    LOGICAL, INTENT(OUT) :: ok
+    CHARACTER(1024) :: msg
+    nrow = 0
+    CALL run(root//'.dat', root, ok, msg)
+    CALL require(ok, '8 '//label//': the static start of a line as long as its span converges: '//TRIM(msg))
+    IF (.NOT. ok) RETURN
+    CALL read_out(root//'.out', d, nrow, ncol)
+    ok = nrow >= 1
+    CALL require(ok, '8 '//label//': static row written')
+    IF (ok) WRITE (*, '(A,A,A,ES12.4,A)') '  8 ', label, ': ', d(2, 1), ' N fairlead tension'
+  END SUBROUTINE span_run
+
+  SUBROUTINE case_pinned_body_clump()
+    !! 9: a buoyant body (hydrostatic C44 = C55 = 2e6 N m/rad) on three EI = 0 legs, with a
+    !! finite-EI cable from its keel point at 45 deg towards a Fixed anchor, pinned in bending at
+    !! the body, carrying a 2 t clump 50 m along it; bodyIC static, 5 s of the march (dtM 0.05 s).
+    INTEGER :: u, k, nrow
+    REAL(wp), ALLOCATABLE :: d(:, :)
+    REAL(wp) :: dpos, dpitch
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CHARACTER(32) :: root
+    DO k = 1, 2
+      root = MERGE('att_body_pin_row', 'att_body_pin    ', k == 1)
+      OPEN (NEWUNIT=u, FILE=TRIM(root)//'.dat', STATUS='REPLACE', ACTION='WRITE')
+      WRITE (u, '(A)') 'pinned cable with a clump on a moored body'
+      WRITE (u, '(A)') '--- LINE TYPES ---'
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+      WRITE (u, '(A)') 'poly 0.12 15.0 5.0e7 -1.0 0.0 1.2 0.2 1.0 0.0'
+      WRITE (u, '(A)') 'cab 0.2 60.0 5.0e8 -1.0 2.0e4 1.2 0.0 1.0 0.0'
+      WRITE (u, '(A)') '--- BODIES ---'
+      WRITE (u, '(A)') 'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
+      WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm) (Nm) (m2) (-) (kgm2) (kgm2) (kgm2)'
+      WRITE (u, '(A)') '1 Rigid6 0 0 -20 0 0 0 2.0e4 40.0 0.0 2.0e6 2.0e6 8.0 0.5 3.5e4 3.5e4 3.5e4'
+      WRITE (u, '(A)') '--- POINTS ---'
+      WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+      WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+      WRITE (u, '(A)') '1 Body1 1.5 0.0 -2.0 0 0 0 0'
+      WRITE (u, '(A)') '2 Body1 -0.75 1.299 -2.0 0 0 0 0'
+      WRITE (u, '(A)') '3 Body1 -0.75 -1.299 -2.0 0 0 0 0'
+      WRITE (u, '(A)') '4 Fixed 40.0 0.0 -100.0 0 0 0 0'
+      WRITE (u, '(A)') '5 Fixed -20.0 34.641 -100.0 0 0 0 0'
+      WRITE (u, '(A)') '6 Fixed -20.0 -34.641 -100.0 0 0 0 0'
+      WRITE (u, '(A)') '7 Body1 0.0 0.0 -3.0 0 0 0 0'
+      WRITE (u, '(A)') '8 Fixed -40.0 0.0 -100.0 0 0 0 0'
+      WRITE (u, '(A)') '--- LINES ---'
+      WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+      WRITE (u, '(A)') '(-) (-) (-) (-)'
+      WRITE (u, '(A)') '1 1 4 -'
+      WRITE (u, '(A)') '2 2 5 -'
+      WRITE (u, '(A)') '3 3 6 -'
+      WRITE (u, '(A)') '4 7 8 -'
+      WRITE (u, '(A)') '--- SECTIONS ---'
+      WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+      WRITE (u, '(A)') '(-) (-) (m) (-)'
+      WRITE (u, '(A)') '1 poly 86.85 20'
+      WRITE (u, '(A)') '2 poly 86.85 20'
+      WRITE (u, '(A)') '3 poly 86.85 20'
+      WRITE (u, '(A)') '4 cab 100.0 50'
+      WRITE (u, '(A)') '--- ATTACHMENTS ---'
+      WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+      WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+      WRITE (u, '(A)') '4 50.0 2000.0 0.0 0.0 0.0'
+      IF (k == 1) THEN
+        WRITE (u, '(A)') '--- END CONNECTIONS ---'
+        WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ'
+        WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-)'
+        WRITE (u, '(A)') '4 A Pinned -0.7071067811865476 0.0 -0.7071067811865476'
+      END IF
+      WRITE (u, '(A)') '--- OPTIONS ---'
+      WRITE (u, '(A)') '100.0 WtrDpth'
+      WRITE (u, '(A)') '9.80665 g'
+      WRITE (u, '(A)') '1025.0 rhoW'
+      WRITE (u, '(A)') '1.0e5 kBot'
+      WRITE (u, '(A)') '1.0e4 cBot'
+      WRITE (u, '(A)') '0.05 dtM'
+      WRITE (u, '(A)') '5.0 TMax'
+      WRITE (u, '(A)') 'static bodyIC'
+      WRITE (u, '(A)') 'monolithic bodyScheme'
+      WRITE (u, '(A)') '--- OUTPUTS ---'
+      WRITE (u, '(A)') 'Body1Px'
+      WRITE (u, '(A)') 'Body1Pz'
+      WRITE (u, '(A)') 'Body1Ry'
+      WRITE (u, '(A)') '--- END ---'
+      CLOSE (u)
+      CALL run(TRIM(root)//'.dat', TRIM(root), ok, msg)
+      CALL require(ok, '9 '//TRIM(root)//': runs: '//TRIM(msg))
+      IF (.NOT. ok) CYCLE
+      CALL read_out(TRIM(root)//'.out', d, nrow, 4)
+      CALL require(nrow >= 101, '9 '//TRIM(root)//': 5 s written')
+      IF (nrow < 101) CYCLE
+      dpos = MAXVAL(ABS(d(2:3, 1:nrow) - SPREAD(d(2:3, 1), 2, nrow)))
+      dpitch = MAXVAL(ABS(d(4, 1:nrow) - d(4, 1)))
+      WRITE (*, '(A,A,A,ES10.3,A,ES10.3,A)') '  9 ', TRIM(root), ': body drift over 5 s ', dpos, ' m, pitch ', &
+        dpitch, ' deg'
+      CALL require(dpos <= 1.0e-5_wp .AND. dpitch <= 1.0e-4_wp, &
+                   '9 '//TRIM(root)//': the clump on a pinned cable is in the body''s static balance')
+    END DO
+  END SUBROUTINE case_pinned_body_clump
 
   SUBROUTINE case_fallback_verdict()
     !! A straight 10 m line on 1 m elements whose tangent at node 6 is turned by 0.6 rad: the

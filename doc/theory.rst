@@ -1561,7 +1561,8 @@ wholly below the surface has no recovery and is solved once. Without a seabed th
 the static start, keeps the buoyancy everywhere (the driver warns about a line end above the
 surface then). The force balance of ``Connect`` and ``Free`` points and of free bodies and rods
 below takes its lines with the same dry weight, so these objects start balanced against the march
-too.
+too; a finite-EI line, which enters it without its bending stiffness, takes its dry weight there
+with or without a seabed, as its cubic-Hermite cable does.
 
 A steady current (uniform, or a depth profile sampled at each node's own elevation as in the
 march) enters the static equilibrium as Morison drag on the line at rest, so the out-of-plane
@@ -2776,7 +2777,10 @@ whose frame rolls with it. The static solve
 carries the cable first without bending; passes then add the difference between the cubic-Hermite
 cable's end force and that surrogate, and the Hermite connection moment, at the previous
 pass's pose, until these loads change by less than :math:`10^{-7}` of the force scale. At the
-fixed point the object balances the Hermite cable exactly.
+fixed point the object balances the Hermite cable exactly. A bending-pinned end carries no
+moment, and the surrogate gives its end force but for the small share of the bending, so it is
+left to the surrogate, unless the line carries ``ATTACHMENTS``, which the surrogate does not:
+such a line takes the passes too.
 
 **End connections (Hermite lines).** A line end may carry an isotropic rotational spring with
 potential :math:`U = \tfrac{1}{2}k\,\theta^2`, where :math:`\theta` is the angle between the end
@@ -2856,10 +2860,16 @@ with the fluid velocity :math:`\mathbf{u}` and acceleration :math:`\dot{\mathbf{
 the relative velocity :math:`\mathbf{w} = \mathbf{u} - \dot{\mathbf{r}}_j` split normal and along
 the nodal tangent :math:`\mathbf{m}_j/\lvert\mathbf{m}_j\rvert` (the line's Morison law with
 :math:`C_dA = C_{d,n} d` and :math:`C_dA_x = \pi C_{d,t} d`). The drag enters the velocity tangent
-and, through :math:`\mathbf{m}_j`, the position tangent exactly. The statics start from the
+and, through :math:`\mathbf{m}_j`, the position tangent exactly. Above the free surface an
+attachment carries its weight :math:`-m g\,\mathbf{e}_z` alone. The statics start from the
 equilibrium with the net weight smeared over the node's two elements and continue to the lumped
-load in warm-started Newton solves; in a deck current the drag at rest is added and the final
-solve is repeated with the drag of its own solution until the nodes stop moving. The load moves
+load in warm-started Newton solves; in a deck current the drag at rest is added, each solve takes
+every attachment's load on the side of the still-water level its node is on, and the final
+solve is repeated with the loads of its own solution until the nodes stop moving and no
+attachment changes side (an attachment at the surface that its weight sinks and its buoyancy
+lifts has no static side, and the solve fails closed). Before, an attachment above the surface
+kept its buoyancy in the statics: a 500 kg, 0.2 m\ :sup:`3` module 3 m above it moved the
+fairlead load by up to 6.1 % in the first second of the march. The load moves
 in eighths; a step whose damped Newton solve does not converge is repeated from the last
 converged state with pseudo-transient continuation and then with a residual-merit line search,
 and is halved (down to 1/1024) when neither converges. A halved step doubles again (up to 1/8)

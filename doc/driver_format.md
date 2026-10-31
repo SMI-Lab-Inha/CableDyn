@@ -421,9 +421,12 @@ connection moment at every connected end, and at both ends of a cable between tw
 
 Static initial condition: the static solve moves the free bodies, the free rods, the pinned rods
 (two rotations about the pin, the pin force on the parent body) and the `Free`/`Connect` points
-together. A finite-EI line enters it with its axial stiffness and weight, without its bending
-stiffness (a note names the line); its own shape is then solved with the bending stiffness at
-the equilibrium end positions.
+together. A finite-EI line enters it with its axial stiffness and weight (its part above the
+surface with its dry weight), without its bending stiffness (a note names the line); its own
+shape is then solved with the bending stiffness at the equilibrium end positions. A line
+connected (clamped, elastic or restrained in torsion) at a body or rod end, a line between two
+objects, and a bending-pinned line with `ATTACHMENTS` on a body or rod are balanced on their
+cubic-Hermite end loads in static passes.
 
 **OpenFAST `CompMooring = 5` (aggregate route):** finite-EI cables run on the cubic-Hermite path:
 lazy-wave statics and generalised-α dynamics driven by the coupled fairlead, including platform
@@ -1027,12 +1030,13 @@ Behaviour:
   A deck current (a `current` row, uniform or profile, or a MoorDyn-C `Currents` field at
   `t = 0`, sampled at the attachment node) loads the attachments in the static initial condition
   with the same drag law at rest, so a run in a current starts in equilibrium.
-  An attachment above the free surface carries its weight only. Attachments have no seabed
-  contact of their own; the node's contact acts on the line.
+  An attachment above the free surface carries its weight only, in the static initial condition
+  too. Attachments have no seabed contact of their own; the node's contact acts on the line.
 - The static equilibrium is solved first with each attachment's net weight spread over the two
   elements at its node, then carried to the discrete loads by continuation. The current drag
-  depends on the node's position and line direction, so the final solve is repeated until the
-  node positions change by less than 1e-9 m. On a line restrained in torsion the torsion stage
+  depends on the node's position and line direction, and the weight on the side of the surface
+  an attachment is on, so the final solve is repeated until the node positions change by less
+  than 1e-9 m and no attachment changes side. On a line restrained in torsion the torsion stage
   (the imposed twist) follows on the discrete equilibrium, with the attachments' net weights
   and drag as nodal loads (the drag again to a fixed point), so a run starts in the twisted
   equilibrium. An attachment adds no polar inertia to the line's twist.

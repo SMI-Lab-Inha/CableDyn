@@ -28,6 +28,28 @@ PROGRAM test_static_dry_weight
   !!      of the march to 1e-4 m, the output's 8 digits (measured 0), and the fairlead tension to
   !!      1e-6 (measured 0). With the dry weight only in the line starts the point sank 1.1e-2 m
   !!      and the tension moved by 9.6e-4.
+  !!   6. A finite-EI cable hung from 5 m above the surface carrying a module (500 kg, 0.2 m^3)
+  !!      2 m along it, above the surface, which the dynamics loads with its weight alone (no
+  !!      buoyancy, no drag), held still for 1 s (dtM 0.01 s): the fairlead load stays at its
+  !!      static value to 1e-7 (measured 0, the output's 8 digits); before, the static start gave
+  !!      the module its buoyancy and the load moved by up to 6.1e-2 (Fz -44269 to -46272 N at
+  !!      1 s). The same cable restrained in torsion at both ends (GJ 1e4 N m^2, a quarter turn,
+  !!      the torsion stage after the attachment polish): the same, measured 0, before 6.1e-2. A
+  !!      module 30 m along the line, under water, keeps its net weight: the guard of both
+  !!      (measured 0).
+  !!   7. A stiff body (C44 = C55 = 2e8 N m/rad) on three EI = 0 legs, with a light finite-EI cable
+  !!      (EI 100 N m^2, whose bending changes its end force little) pinned at a body point 5 m
+  !!      above the surface, on a deck without a seabed: the body static solve gives the cable's
+  !!      part above the surface its dry weight, as its cubic-Hermite cable has it, so the body
+  !!      holds its heave over 3 s to 1e-4 m (measured 7e-6 m); before the solve kept the buoyancy
+  !!      of that part (the cable's EI = 0 surrogate took the dry weight only with a seabed) and the
+  !!      body's heave moved by 2.8e-3 m.
+  !!   8. An EI = 0 chain between two moving objects across the surface: from a body point 5 m above
+  !!      it (the stiff body of gate 7) to a 3 t Connect clump that a second chain holds to an
+  !!      anchor, WtrDpth 100 m. The object solve moves the body and the point together, the chain
+  !!      solved with its dry part between them: both hold their static positions over 3 s of the
+  !!      march to 1e-4 m (measured 0); with the buoyancy kept above the surface (dev before the
+  !!      dry-weight fix) they moved by 5.5e-3 m.
   !! A deck whose lines are all submerged is solved once, bit-identically (the example A/B).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
@@ -87,6 +109,29 @@ PROGRAM test_static_dry_weight
     ' m, largest rel. fairlead tension change ', err
   CALL check(dmax <= 1.0e-4_wp, 'Connect point above the surface: its static position is the equilibrium of the march')
   CALL check(err <= 1.0e-6_wp, 'Connect point above the surface: the fairlead tension holds its static value')
+
+  ! 6. an attachment above the surface, untwisted and restrained in torsion; under water, the guard
+  CALL attachment_hold('dry_att', '1 2.0 500.0 0.2 0.0 0.0', .FALSE., err)
+  WRITE (*, '(A,ES10.2)') '  module above the surface, held 1 s: largest rel. fairlead load change ', err
+  CALL check(err <= 1.0e-7_wp, 'module above the surface: the static start is the equilibrium of the march')
+  CALL attachment_hold('dry_att_tors', '1 2.0 500.0 0.2 0.0 0.0', .TRUE., err)
+  WRITE (*, '(A,ES10.2)') '  module above the surface, torsion, held 1 s: largest rel. fairlead load change ', err
+  CALL check(err <= 1.0e-7_wp, 'module above the surface, torsion: the static start is the equilibrium of the march')
+  CALL attachment_hold('wet_att', '1 30.0 500.0 0.2 0.0 0.0', .FALSE., err)
+  WRITE (*, '(A,ES10.2)') '  module under water, held 1 s: largest rel. fairlead load change ', err
+  CALL check(err <= 1.0e-7_wp, 'module under water: the static start is the equilibrium of the march')
+
+  ! 7. a pinned finite-EI cable above the surface on a body, no seabed
+  CALL body_cable_heave(dmax)
+  WRITE (*, '(A,ES10.2,A)') '  body with a pinned cable above the surface, no seabed: largest heave change ', dmax, ' m'
+  CALL check(dmax <= 1.0e-4_wp, 'pinned cable above the surface on a body: the body static balance carries its '// &
+             'dry weight')
+
+  ! 8. an EI = 0 chain between a body above the surface and a Connect point
+  CALL two_objects_drift(dmax)
+  WRITE (*, '(A,ES10.2,A)') '  chain between a body above the surface and a Connect point: largest drift ', dmax, ' m'
+  CALL check(dmax <= 1.0e-4_wp, 'chain between two moving objects across the surface: both start in the march''s '// &
+             'equilibrium')
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAILED: ', nfail, ' check(s)'
@@ -253,6 +298,262 @@ CONTAINS
     END DO
     CLOSE (u)
   END SUBROUTINE connect_point_drift
+
+  SUBROUTINE attachment_hold(root, att_row, torsion, dmax_rel)
+    !! Gate 6: a 600 m finite-EI cable (240 elements) from a Coupled point at (30, 0, 5) m to a
+    !! Fixed one at (500, 0, -200) m on a 200 m seabed with one ATTACHMENTS row, held 1 s (dtM
+    !! 0.01 s); torsion: restrained at both ends, a quarter turn at End B. dmax_rel: the largest
+    !! change of the fairlead load over its t = 0 value, relative.
+    CHARACTER(*), INTENT(IN) :: root, att_row
+    LOGICAL, INTENT(IN) :: torsion
+    REAL(wp), INTENT(OUT) :: dmax_rel
+    INTEGER :: u, ios, es
+    LOGICAL :: conv, first
+    REAL(wp) :: row(3), f0(2)
+    CHARACTER(1024) :: em
+    CHARACTER(4096) :: line
+    dmax_rel = HUGE(1.0_wp)
+    OPEN (NEWUNIT=u, FILE=root//'.dat', STATUS='replace', ACTION='write')
+    WRITE (u, '(A)') '--------------------- CableDyn Input File ------------------------------------'
+    WRITE (u, '(A)') 'test_static_dry_weight: a module above the still-water level'
+    WRITE (u, '(A)') '--------------------- LINE TYPES ---------------------------------------------'
+    IF (torsion) THEN
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI GAs GJ Irt Irn Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (N) (Nm2) (kgm) (kgm) (-) (-) (-) (-)'
+      WRITE (u, '(A)') 'bare 0.16 36.70 4.69e8 0.0 1.99e4 1.0e8 1.0e4 1.0 0.1 1.2 0.1 1.0 0.0'
+    ELSE
+      WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+      WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+      WRITE (u, '(A)') 'bare 0.16 36.70 4.69e8 0.0 1.99e4 1.2 0.1 1.0 0.0'
+    END IF
+    WRITE (u, '(A)') '--------------------- POINTS ------------------------------------------------'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    WRITE (u, '(A)') '1 Coupled 30.0 0.0 5.0'
+    WRITE (u, '(A)') '2 Fixed 500.0 0.0 -200.0'
+    WRITE (u, '(A)') '--------------------- LINES -------------------------------------------------'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--------------------- SECTIONS ----------------------------------------------'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 bare 600.0 240'
+    WRITE (u, '(A)') '--------------------- ATTACHMENTS -------------------------------------------'
+    WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
+    WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
+    WRITE (u, '(A)') att_row
+    IF (torsion) THEN
+      WRITE (u, '(A)') '--------------------- END CONNECTIONS ----------------------------------------'
+      WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+      WRITE (u, '(A)') '(-) (-) (N-m/rad) (-) (-) (-) (N-m/rad) (-) (-) (-) (deg)'
+      WRITE (u, '(A)') '1 A Pinned 0.7071067811865476 0 -0.7071067811865476 Rigid 0 1 0 0'
+      WRITE (u, '(A)') '1 B Pinned 1 0 0 Rigid 0 1 0 90'
+    END IF
+    WRITE (u, '(A)') '--------------------- OPTIONS -----------------------------------------------'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '3.0e6 kBot'
+    WRITE (u, '(A)') '3.0e5 cBot'
+    WRITE (u, '(A)') '0.01 dtM'
+    WRITE (u, '(A)') '200.0 WtrDpth'
+    WRITE (u, '(A)') '1.0 TMax'
+    WRITE (u, '(A)') '--------------------- OUTPUTS -----------------------------------------------'
+    WRITE (u, '(A)') '"Point1Fx"'
+    WRITE (u, '(A)') '"Point1Fz"'
+    WRITE (u, '(A)') 'END'
+    WRITE (u, '(A)') '--------------------- need this line ----------------------------------------'
+    CLOSE (u)
+    CALL CD_Run_Deck_Driver(root//'.dat', root, conv, es, em)
+    CALL check(es == CD_DECKDRV_OK .AND. conv, root//': run: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    OPEN (NEWUNIT=u, FILE=root//'.out', STATUS='old', ACTION='read')
+    first = .TRUE.
+    f0 = 0.0_wp
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      IF (line(1:1) == '#' .OR. INDEX(line, 'Time') > 0 .OR. LEN_TRIM(line) == 0) CYCLE
+      READ (line, *) row
+      IF (first) THEN
+        f0 = row(2:3)
+        dmax_rel = 0.0_wp
+        first = .FALSE.
+      END IF
+      dmax_rel = MAX(dmax_rel, NORM2(row(2:3) - f0)/NORM2(f0))
+    END DO
+    CLOSE (u)
+  END SUBROUTINE attachment_hold
+
+  SUBROUTINE body_cable_heave(dz_max)
+    !! Gate 7: a body at z = -3 m on three 103 m polyester legs to anchors at -100 m, with a
+    !! 120 m finite-EI cable (EI 100 N m^2, 60 elements) pinned at the body point (0, 0, 8) m (5 m
+    !! above the surface) towards a Fixed point at (-40, 0, -100) m, no seabed, bodyIC static,
+    !! 3 s of the march (dtM 0.05 s). dz_max: the largest change of the body's heave [m].
+    REAL(wp), INTENT(OUT) :: dz_max
+    INTEGER :: u, ios, es
+    LOGICAL :: conv, first
+    REAL(wp) :: row(4), z0
+    CHARACTER(1024) :: em
+    CHARACTER(4096) :: line
+    dz_max = HUGE(1.0_wp)
+    OPEN (NEWUNIT=u, FILE='dry_body_cable.dat', STATUS='replace', ACTION='write')
+    WRITE (u, '(A)') 'test_static_dry_weight: a pinned finite-EI cable above the surface on a body, no seabed'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'poly 0.12 15.0 5.0e7 -1.0 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') 'cab 0.2 60.0 5.0e8 -1.0 1.0e2 1.2 0.0 1.0 0.0'
+    WRITE (u, '(A)') '--- BODIES ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm) (Nm) (m2) (-) (kgm2) (kgm2) (kgm2)'
+    WRITE (u, '(A)') '1 Rigid6 0 0 -3 0 0 0 2.0e4 40.0 0.0 2.0e8 2.0e8 8.0 0.5 3.5e4 3.5e4 3.5e4'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Body1 1.5 0.0 -2.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Body1 -0.75 1.299 -2.0 0 0 0 0'
+    WRITE (u, '(A)') '3 Body1 -0.75 -1.299 -2.0 0 0 0 0'
+    WRITE (u, '(A)') '4 Fixed 40.0 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '5 Fixed -20.0 34.641 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '6 Fixed -20.0 -34.641 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '7 Body1 0.0 0.0 8.0 0 0 0 0'
+    WRITE (u, '(A)') '8 Fixed -40.0 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 4 -'
+    WRITE (u, '(A)') '2 2 5 -'
+    WRITE (u, '(A)') '3 3 6 -'
+    WRITE (u, '(A)') '4 7 8 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 poly 103.0 20'
+    WRITE (u, '(A)') '2 poly 103.0 20'
+    WRITE (u, '(A)') '3 poly 103.0 20'
+    WRITE (u, '(A)') '4 cab 120.0 60'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '0.05 dtM'
+    WRITE (u, '(A)') '3.0 TMax'
+    WRITE (u, '(A)') 'static bodyIC'
+    WRITE (u, '(A)') 'monolithic bodyScheme'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Body1Px'
+    WRITE (u, '(A)') 'Body1Pz'
+    WRITE (u, '(A)') 'Body1Ry'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    CALL CD_Run_Deck_Driver('dry_body_cable.dat', 'dry_body_cable', conv, es, em)
+    CALL check(es == CD_DECKDRV_OK .AND. conv, 'dry_body_cable: run: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    OPEN (NEWUNIT=u, FILE='dry_body_cable.out', STATUS='old', ACTION='read')
+    first = .TRUE.
+    z0 = 0.0_wp
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      IF (line(1:1) == '#' .OR. INDEX(line, 'Time') > 0 .OR. LEN_TRIM(line) == 0) CYCLE
+      READ (line, *) row
+      IF (first) THEN
+        z0 = row(3)
+        dz_max = 0.0_wp
+        first = .FALSE.
+      END IF
+      dz_max = MAX(dz_max, ABS(row(3) - z0))
+    END DO
+    CLOSE (u)
+  END SUBROUTINE body_cable_heave
+
+  SUBROUTINE two_objects_drift(dmax)
+    !! Gate 8: the body of gate 7, a 65 m chain (EI = 0, 30 segments) from its point (0, 0, 8) m to
+    !! a Connect point (3 t) at (-30, 0, -50) m, and an 85 m chain from there to a Fixed point at
+    !! (-90, 0, -100) m, WtrDpth 100 m, bodyIC static, 3 s of the march (dtM 0.02 s). dmax: the
+    !! largest change of the body's x and z and the point's z [m].
+    REAL(wp), INTENT(OUT) :: dmax
+    INTEGER :: u, ios, es
+    LOGICAL :: conv, first
+    REAL(wp) :: row(4), r0(3)
+    CHARACTER(1024) :: em
+    CHARACTER(4096) :: line
+    dmax = HUGE(1.0_wp)
+    OPEN (NEWUNIT=u, FILE='dry_two_objects.dat', STATUS='replace', ACTION='write')
+    WRITE (u, '(A)') 'test_static_dry_weight: an EI = 0 chain between a body above the surface and a Connect point'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'poly 0.12 15.0 5.0e7 -1.0 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') 'chain 0.1 60.0 8.0e8 -1.0 0.0 1.2 0.4 1.0 0.5'
+    WRITE (u, '(A)') '--- BODIES ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Roll Pitch Yaw Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm) (Nm) (m2) (-) (kgm2) (kgm2) (kgm2)'
+    WRITE (u, '(A)') '1 Rigid6 0 0 -3 0 0 0 2.0e4 40.0 0.0 2.0e8 2.0e8 8.0 0.5 3.5e4 3.5e4 3.5e4'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Body1 1.5 0.0 -2.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Body1 -0.75 1.299 -2.0 0 0 0 0'
+    WRITE (u, '(A)') '3 Body1 -0.75 -1.299 -2.0 0 0 0 0'
+    WRITE (u, '(A)') '4 Fixed 40.0 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '5 Fixed -20.0 34.641 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '6 Fixed -20.0 -34.641 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '7 Body1 0.0 0.0 8.0 0 0 0 0'
+    WRITE (u, '(A)') '8 Connect -30.0 0.0 -50.0 3000.0 0.0 0 0'
+    WRITE (u, '(A)') '9 Fixed -90.0 0.0 -100.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 4 -'
+    WRITE (u, '(A)') '2 2 5 -'
+    WRITE (u, '(A)') '3 3 6 -'
+    WRITE (u, '(A)') '4 7 8 -'
+    WRITE (u, '(A)') '5 8 9 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 poly 103.0 20'
+    WRITE (u, '(A)') '2 poly 103.0 20'
+    WRITE (u, '(A)') '3 poly 103.0 20'
+    WRITE (u, '(A)') '4 chain 65.0 30'
+    WRITE (u, '(A)') '5 chain 85.0 30'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '100.0 WtrDpth'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '1.0e5 kBot'
+    WRITE (u, '(A)') '1.0e4 cBot'
+    WRITE (u, '(A)') '0.02 dtM'
+    WRITE (u, '(A)') '3.0 TMax'
+    WRITE (u, '(A)') 'static bodyIC'
+    WRITE (u, '(A)') 'monolithic bodyScheme'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'Body1Px'
+    WRITE (u, '(A)') 'Body1Pz'
+    WRITE (u, '(A)') 'Point8pz'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    CALL CD_Run_Deck_Driver('dry_two_objects.dat', 'dry_two_objects', conv, es, em)
+    CALL check(es == CD_DECKDRV_OK .AND. conv, 'dry_two_objects: run: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    OPEN (NEWUNIT=u, FILE='dry_two_objects.out', STATUS='old', ACTION='read')
+    first = .TRUE.
+    r0 = 0.0_wp
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      IF (line(1:1) == '#' .OR. INDEX(line, 'Time') > 0 .OR. LEN_TRIM(line) == 0) CYCLE
+      READ (line, *) row
+      IF (first) THEN
+        r0 = row(2:4)
+        dmax = 0.0_wp
+        first = .FALSE.
+      END IF
+      dmax = MAX(dmax, MAXVAL(ABS(row(2:4) - r0)))
+    END DO
+    CLOSE (u)
+  END SUBROUTINE two_objects_drift
 
   SUBROUTINE coupled_force(path, nstep, f0, dmax_rel)
     !! The coupled aggregate's static start (OpenFAST host environment): the fairlead load, and

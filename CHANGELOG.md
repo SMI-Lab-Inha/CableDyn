@@ -368,7 +368,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   every load step. For a line whose chord is at least its length the force scale of the
   convergence test now includes that round-off floor over the tolerance
   (`16 eps max(EA/L0) |x| / tol`, as on the `EI = 0` path), so these lines start straight and
-  unloaded; slack lines and lines that carry weight or tension are unchanged.
+  unloaded, also between two moving ends, restrained in torsion at one or both ends, and with a
+  chord 1e-8 longer than the line (its 0.1 N tension to 2.2e-7 N); slack lines and lines that
+  carry weight or tension above the floor are unchanged.
 - The Newton tangent of the finite-EI static solve in a depth-profile current or a current grid
   carries the current's gradient: the drag samples the current at the node positions, so it moves
   with them. The drag part of the tangent now matches central differences of the residual to
@@ -384,7 +386,26 @@ All notable changes to CableDyn are recorded in this file. The format follows
   vertical chain's end loads sum to its weight to 1.5e-8 (before 1.4 % low). The force balance
   of `Connect` and `Free` points and free bodies and rods takes the same dry weight: a 50 t
   `Connect` point hung by two chains from 10 m above the surface holds its position to the
-  output's 8 digits over 2 s (before it sank 1.1e-2 m). Lines below the surface are unchanged.
+  output's 8 digits over 2 s (before it sank 1.1e-2 m). There a finite-EI line, carried without
+  its bending stiffness, takes its dry weight with or without a seabed, as its cubic-Hermite
+  cable does: a stiff body with a light cable pinned 5 m above the surface on a deck without a
+  seabed holds its heave to 7e-6 m over 3 s (before it moved 2.8e-3 m), and an `EI = 0` chain
+  between that body 5 m above the surface and a `Connect` clump holds both to the output's 8
+  digits (before 5.5e-3 m). Lines below the surface are unchanged.
+- `ATTACHMENTS` above the still-water level kept their buoyancy in the static start of a
+  finite-EI line, while the march loads them with their weight alone. A 500 kg, 0.2 m^3 module
+  3 m above the surface on a cable hung from 5 m above it moved the fairlead load by up to
+  6.1 % in the first second, and as much on the same cable restrained in torsion. The
+  attachment polish and the torsion stage after it now give each attachment the load of its side
+  of the surface (a fixed point that repeats the solve until none changes side); both starts
+  hold to the output's 8 digits. An attachment at the surface that its weight sinks and its
+  buoyancy lifts has no static side and fails closed by name.
+- A bending-pinned finite-EI line with `ATTACHMENTS` from a Rigid6 body or a rod end left its
+  attachments out of the body static balance, which carries such a line as a cable without
+  bending stiffness: on a moored body with a 2 t clump 50 m along a pinned cable the body started
+  at the pose of the line without the clump and drifted by up to 2.9e-2 m and 0.20 deg in 5 s.
+  Such a line now takes the static passes of a connected end, which balance the body on the
+  cubic-Hermite cable's end loads; the body holds its pose to the output's 8 digits.
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations

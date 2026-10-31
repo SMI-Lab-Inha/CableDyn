@@ -19,8 +19,17 @@ PROGRAM test_hermite_static_current_gradient
   !! solve frame turned by 30 deg about z and shifted from the global origin, where the gradient
   !! enters every position column as R^T (dU/dx) R / 2: gate 1 over all the free position
   !! columns (measured 1.7e-9; without the gradient term 3.9e-2).
+  !! A fifth case restrains the cable in torsion at both ends (GJ 1e5 N m^2 with the torque-tension
+  !! coupling K/GJ = 0.02, ends pinned in bending, a quarter turn) in the cross-flow shear of case 1.
+  !! The twisted solve assembles the drag and its tangent in the same residual as the untwisted one
+  !! (its condensed-torsion Newton system and stability test add the torque's terms to it), so the
+  !! gate is the twisted solve's convergence, stable, with a torque, and gate 1 at its twisted, out
+  !! of plane equilibrium (the solver returns no tangent with torsion: the drag part is evaluated
+  !! there without it), over the vertical columns.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve, CD_HermiteStaticCurrentType, CD_HCSTAT_OK
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType
+  USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED
   USE CableDyn_Hydro, ONLY: CD_CurrentGridType
   IMPLICIT NONE
   INTEGER, PARAMETER :: NE = 60, NN = NE + 1, NDOF = 6*NN, KL = 11, KU = 11, LDAB = 2*KL + KU + 1
@@ -31,6 +40,9 @@ PROGRAM test_hermite_static_current_gradient
   INTEGER, ALLOCATABLE :: fixed(:)
   CHARACTER(1024) :: em
   TYPE(CD_HermiteStaticCurrentType) :: cur
+  ! case 5: the torsion of the twisted solve and its end directions
+  TYPE(CD_HermiteTorsionType) :: tors
+  REAL(wp) :: tdir(3, 2)
 
   nfail = 0
   l0 = LEN/NE
@@ -63,6 +75,35 @@ PROGRAM test_hermite_static_current_gradient
       ', residual ', res, ', mid-span node ', q(6*(NE/2) + 1:6*(NE/2) + 3)
     CALL check_drag_tangent(icase, q)
   END DO
+
+  ! 5. restrained in torsion (GJ|K), a quarter turn, in the cross-flow shear of case 1
+  IF (ALLOCATED(cur%grid)) DEALLOCATE (cur%grid)
+  cur%frame_cs = [1.0_wp, 0.0_wp]
+  cur%origin = [0.0_wp, 0.0_wp]
+  CALL set_current(1)
+  tdir(:, 1) = q_sw(4:6)/NORM2(q_sw(4:6))
+  tdir(:, 2) = q_sw(NDOF - 2:NDOF)/NORM2(q_sw(NDOF - 2:NDOF))
+  tors%active = .TRUE.
+  ALLOCATE (tors%gj(NE), tors%couple(NE))
+  tors%gj = 1.0e5_wp
+  tors%couple = 0.02_wp
+  tors%phi = 0.5_wp*PI
+  tors%ends(:, 1) = tdir(:, 1)
+  tors%ends(:, 2) = [0.0_wp, 1.0_wp, 0.0_wp]
+  tors%ends(:, 3) = tdir(:, 2)
+  tors%ends(:, 4) = [0.0_wp, 1.0_wp, 0.0_wp]
+  CALL CD_HermiteCable_Static_Solve(l0, EA, EI, w, q_sw, fixed, -1.0e4_wp, 0.0_wp, 1, 400, 1.0e-8_wp, 1.0_wp, &
+                                    q, curv, res, it, es, em, current=cur, endconn_stiffness=[0.0_wp, 0.0_wp], &
+                                    endconn_direction=tdir, endconn_mode=[CD_ENDCONN_PINNED, CD_ENDCONN_PINNED], &
+                                    torsion=tors)
+  CALL check(es == CD_HCSTAT_OK, 'twisted equilibrium in the current: '//TRIM(em))
+  IF (es == CD_HCSTAT_OK) THEN
+    WRITE (*, '(A,I0,A,ES10.2,A,ES12.5,A,L1)') '  case 5 (torsion): Newton iterations ', it, ', residual ', res, &
+      ', torque ', tors%torque, ' N m, stable ', tors%stable
+    CALL check(ABS(tors%torque) > 1.0e2_wp, 'the twisted line carries a torque')
+    CALL check(tors%stable, 'the twisted equilibrium in the current is stable')
+    CALL check_drag_tangent(5, q)
+  END IF
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAILED: ', nfail, ' check(s)'

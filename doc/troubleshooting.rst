@@ -624,6 +624,10 @@ but a few geometries are genuinely hard:
   reported in the note ``... was reached after a failed Newton solve ... and passed the
   acceptance checks of the smeared state``. Check that the deck with the modules replaced by the equivalent
   smeared buoyancy section solves; if it does, the discrete layout itself is the difficulty.
+  ``... an attachment at the still-water level has no static side of it`` means an attachment
+  sits at the surface: above it, where it carries its weight alone, it sinks, and below it its
+  buoyancy lifts it, so the statics find no side for it (the dynamics would bob it there). Move
+  it along the line or change its ``Volume``.
 - **A cold start at full load.** The static solve continues the load in stages; if you have
   hand-tuned a case into a bad basin, remove the tuning and let the default continuation run
   from the catenary/arch seed.
