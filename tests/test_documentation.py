@@ -199,6 +199,16 @@ class DocumentationTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("usefrom CableDyn_Registry.txt", farm_registry)
         self.assertIn("USE CableDyn_Types", farm_types)
+        # the CMake route links openfast.exe and FAST.Farm.exe with a stack reserve on Windows
+        # GNU: MinGW's 2 MiB default overflows while FAST.Farm initialises its turbines
+        stack_patch = (
+            ROOT / "integration" / "openfast" / "patches" / "0022-glue-stack-cmake.patch"
+        ).read_text(encoding="utf-8")
+        for target in ("openfast", "FAST.Farm"):
+            self.assertIn(
+                f'target_link_options({target} PRIVATE "LINKER:--stack,268435456")',
+                stack_patch,
+            )
 
     def test_public_documentation_has_one_source_tree(self) -> None:
         self.assertFalse(

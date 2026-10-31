@@ -39,7 +39,13 @@ check the build:
 ```
 
 The script fails unless `openfast.exe` builds, the smoke case initialises the CableDyn module, and
-the output is finite to the last row. An `openfast.exe` built through CMake does not embed the
+the output is finite to the last row. Configure with `-DBUILD_FASTFARM=ON` to build `FAST.Farm`
+as well (target `FAST.Farm`); the release does not ship it, so FAST.Farm users take this route.
+On Windows with the GNU compilers, patch `0022` links `openfast.exe` and `FAST.Farm.exe` with a
+256 MiB stack reserve (`-Wl,--stack,268435456`, as the CableDyn driver): with the MinGW default
+of 2 MiB, `FAST.Farm.exe` stops with `0xC00000FD` (stack overflow) while it initialises the
+turbines of a farm, before any output. The reserve is address space, not committed memory; the
+Visual Studio projects of the release set their own. An `openfast.exe` built through CMake does not embed the
 UTF-8 active-code-page manifest, so on Windows it may not open input files in folders whose names
 the system code page cannot spell; the static release build embeds it.
 
