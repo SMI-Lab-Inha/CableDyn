@@ -1042,8 +1042,12 @@ CONTAINS
   END SUBROUTINE end_b_inputs
 
   PURE LOGICAL FUNCTION end_b_at_rest(self) RESULT(at_rest)
-    !! The committed End B is at rest: zero velocity and acceleration of its translations.
+    !! The committed End B is at rest: zero velocity and acceleration of its translations. An End B
+    !! that is not driven (moving_b false, pdof_b unset) is at rest; Fortran does not short-circuit
+    !! a caller's moving_b .AND. ..., so the test must not index pdof_b then.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
+    at_rest = .TRUE.
+    IF (.NOT. self%moving_b) RETURN
     at_rest = .NOT. (ANY(ABS(self%line%v(self%pdof_b)) > CD_ZERO) .OR. ANY(ABS(self%line%a(self%pdof_b)) > CD_ZERO))
   END FUNCTION end_b_at_rest
 
