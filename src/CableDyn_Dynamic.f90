@@ -53,6 +53,7 @@ MODULE CableDyn_Dynamic
   PUBLIC :: CD_Cable_Dynamic_Force_Proc
   PUBLIC :: CD_Cable_Added_Mass_Proc
   PUBLIC :: CD_Cable_Added_Mass_Banded_Proc
+  PUBLIC :: CD_Cable_Step_Loads
 
   TYPE :: GenAlphaConfig
     !! Generalized-alpha policy. The Chung-Hulbert parameters (alpha_m, alpha_f, beta, gamma) are derived from
@@ -303,6 +304,60 @@ MODULE CableDyn_Dynamic
     END SUBROUTINE CD_Cable_Added_Mass_Banded_Proc
   END INTERFACE
 
+  !> The banded dynamic loads of a step as an object (the `loads` argument of
+  !> CD_Cable_Gen_Alpha_Step and CD_Cable_Initial_Acceleration), for a caller whose loads are
+  !> computed from its own data, such as a line model: an extension carries that data as
+  !> components. Such a caller does not pass internal procedures as the callbacks: an internal
+  !> procedure passed as an argument is a closure over its host's frame, which Intel ifx
+  !> (2025.3, Windows) calls through a trampoline kept in memory every thread shares, so two
+  !> threads stepping distinct models through closures corrupt each other's calls.
+  !> has_force: the object gives the force and the banded load (load_force_proc and
+  !> load_band_proc); has_added_mass: the banded added mass (added_mass_band_proc).
+  TYPE, ABSTRACT :: CD_Cable_Step_Loads
+    LOGICAL :: has_force = .FALSE.
+    LOGICAL :: has_added_mass = .FALSE.
+  CONTAINS
+    PROCEDURE(step_loads_force), DEFERRED :: force
+    PROCEDURE(step_loads_load_banded), DEFERRED :: load_banded
+    PROCEDURE(step_loads_added_mass_banded), DEFERRED :: added_mass_banded
+  END TYPE CD_Cable_Step_Loads
+
+  ABSTRACT INTERFACE
+    SUBROUTINE step_loads_force(self, q, v, force, ErrStat, ErrMsg)
+      !! CD_Cable_Dynamic_Force_Proc of the object.
+      IMPORT :: wp, CD_Cable_Step_Loads
+      CLASS(CD_Cable_Step_Loads), INTENT(INOUT) :: self
+      REAL(wp), INTENT(IN) :: q(:), v(:)
+      REAL(wp), INTENT(OUT) :: force(:)
+      INTEGER, INTENT(OUT) :: ErrStat
+      CHARACTER(*), INTENT(OUT) :: ErrMsg
+    END SUBROUTINE step_loads_force
+
+    SUBROUTINE step_loads_load_banded(self, q, v, free, kl, ku, force, jac_q_band, jac_v_band, ErrStat, ErrMsg)
+      !! CD_Cable_Dynamic_Load_Banded_Proc of the object.
+      IMPORT :: wp, CD_Cable_Step_Loads
+      CLASS(CD_Cable_Step_Loads), INTENT(INOUT) :: self
+      REAL(wp), INTENT(IN) :: q(:), v(:)
+      INTEGER, INTENT(IN) :: free(:), kl, ku
+      REAL(wp), INTENT(OUT) :: force(:), jac_q_band(:, :), jac_v_band(:, :)
+      INTEGER, INTENT(OUT) :: ErrStat
+      CHARACTER(*), INTENT(OUT) :: ErrMsg
+    END SUBROUTINE step_loads_load_banded
+
+    SUBROUTINE step_loads_added_mass_banded(self, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
+                                            ErrStat, ErrMsg, need_tangent)
+      !! CD_Cable_Added_Mass_Banded_Proc of the object.
+      IMPORT :: wp, CD_Cable_Step_Loads
+      CLASS(CD_Cable_Step_Loads), INTENT(INOUT) :: self
+      REAL(wp), INTENT(IN) :: q(:), accel(:)
+      INTEGER, INTENT(IN) :: free(:), kl, ku
+      REAL(wp), INTENT(OUT) :: M_add_a(:), M_add_band(:, :), dMa_a_dq_band(:, :)
+      INTEGER, INTENT(OUT) :: ErrStat
+      CHARACTER(*), INTENT(OUT) :: ErrMsg
+      LOGICAL, INTENT(IN), OPTIONAL :: need_tangent
+    END SUBROUTINE step_loads_added_mass_banded
+  END INTERFACE
+
 CONTAINS
 
   SUBROUTINE CD_Clear_GenAlpha_Workspace(work)
@@ -409,11 +464,13 @@ CONTAINS
   SUBROUTINE CD_Cable_Initial_Acceleration(q, v, elem_conn, l0, ea, rho_a, tension_only, &
                                            f_ext, fixed_dofs, a0, ErrStat, ErrMsg, &
                                            load_proc, added_mass_proc, load_force_proc, structural_mass, workspace, &
-                                           added_mass_band_proc)
+                                           added_mass_band_proc, loads)
     !! Consistent-mass initial acceleration: solve M a = f_ext - f_int(q) on the free
     !! DOFs (fixed DOFs get a = 0), without load callbacks. Gives the caller a
     !! consistent a_n to seed CD_Cable_Gen_Alpha_Step; ``v`` is accepted for
     !! signature parity with the loaded case but does not enter the structural solve.
+    !! loads (CD_Cable_Step_Loads) stands for load_force_proc (has_force) and
+    !! added_mass_band_proc (has_added_mass), which are then not passed.
     REAL(wp), INTENT(IN)  :: q(:), v(:)
     INTEGER, INTENT(IN)  :: elem_conn(:, :)
     REAL(wp), INTENT(IN)  :: l0(:), ea(:), rho_a(:)
@@ -429,6 +486,7 @@ CONTAINS
     PROCEDURE(CD_Cable_Added_Mass_Banded_Proc), OPTIONAL :: added_mass_band_proc
     REAL(wp), INTENT(IN), OPTIONAL :: structural_mass(:, :)
     TYPE(CD_CableGenAlphaWorkspace), INTENT(INOUT), TARGET, OPTIONAL :: workspace
+    CLASS(CD_Cable_Step_Loads), INTENT(INOUT), OPTIONAL :: loads
 
     INTEGER  :: n_dof, n_elem, n_free, kl, ku, ldab
     INTEGER, POINTER :: free(:)
@@ -439,10 +497,25 @@ CONTAINS
     INTEGER  :: es
     CHARACTER(1024) :: em
     LOGICAL :: use_element_mass_band
+    ! the force and the banded added mass: from a callback, or from loads (loads_force, loads_mass)
+    LOGICAL :: has_force, has_mass_band, loads_force, loads_mass
 
     a0 = CD_ZERO
     ErrStat = CD_DYN_OK
     ErrMsg = ''
+    loads_force = .FALSE.
+    loads_mass = .FALSE.
+    IF (PRESENT(loads)) THEN
+      loads_force = loads%has_force
+      loads_mass = loads%has_added_mass
+    END IF
+    IF ((loads_force .AND. (PRESENT(load_proc) .OR. PRESENT(load_force_proc))) .OR. &
+        (loads_mass .AND. (PRESENT(added_mass_proc) .OR. PRESENT(added_mass_band_proc)))) THEN
+      CALL fail(ErrStat, ErrMsg, 'pass a load either as a callback or in loads, not both')
+      RETURN
+    END IF
+    has_force = PRESENT(load_force_proc) .OR. loads_force
+    has_mass_band = PRESENT(added_mass_band_proc) .OR. loads_mass
     n_dof = SIZE(q)
     CALL check_state_shapes(n_dof, [SIZE(v), SIZE(a0), SIZE(f_ext)], ErrStat, ErrMsg)
     IF (ErrStat /= 0) RETURN
@@ -463,14 +536,14 @@ CONTAINS
                                        work%dof_marker, ErrStat, ErrMsg)
     IF (ErrStat /= 0) RETURN
     free => work%free(1:n_free)
-    IF (PRESENT(added_mass_proc) .AND. PRESENT(added_mass_band_proc)) THEN
+    IF (PRESENT(added_mass_proc) .AND. has_mass_band) THEN
       CALL fail(ErrStat, ErrMsg, 'pass either added_mass_proc or added_mass_band_proc, not both')
       RETURN
     END IF
     ! Banded added mass requires the banded path; a dense load_proc is incompatible
     ! (mirrors CD_Cable_Gen_Alpha_Step). Keep validation consistent across both entry
     ! points so a banded callback is never mixed with a dense one.
-    IF (PRESENT(added_mass_band_proc) .AND. PRESENT(load_proc)) THEN
+    IF (has_mass_band .AND. PRESENT(load_proc)) THEN
       CALL fail(ErrStat, ErrMsg, 'added_mass_band_proc cannot be mixed with a dense load_proc; use one path')
       RETURN
     END IF
@@ -506,7 +579,7 @@ CONTAINS
       M_add => work%M_add_eval(1:n_dof, 1:n_dof)
       dMa_a_dq => work%dMa_a_dq_eval(1:n_dof, 1:n_dof)
     END IF
-    IF (PRESENT(added_mass_band_proc)) THEN
+    IF (has_mass_band) THEN
       M_add_a => work%M_add_a_eval(1:n_dof)
       M_add_band => work%M_add_band(1:ldab, 1:n_free)
       dMa_band => work%dMa_a_dq_band(1:ldab, 1:n_free)
@@ -538,8 +611,12 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'internal-force assembly failed: '//TRIM(em))
       RETURN
     END IF
-    IF (PRESENT(load_force_proc)) THEN
-      CALL load_force_proc(q, v, load, es, em)
+    IF (has_force) THEN
+      IF (loads_force) THEN
+        CALL loads%force(q, v, load, es, em)
+      ELSE
+        CALL load_force_proc(q, v, load, es, em)
+      END IF
       IF (es /= 0) THEN
         CALL fail_callback(ErrStat, ErrMsg, 'dynamic force load failed: '//TRIM(em), es)
         RETURN
@@ -574,10 +651,15 @@ CONTAINS
         RETURN
       END IF
       M = M + M_add
-    ELSE IF (PRESENT(added_mass_band_proc)) THEN
+    ELSE IF (has_mass_band) THEN
       zero_accel = CD_ZERO
-      CALL added_mass_band_proc(q, zero_accel, free, kl, ku, M_add_a, M_add_band, dMa_band, es, em, &
-                                need_tangent=.TRUE.)
+      IF (loads_mass) THEN
+        CALL loads%added_mass_banded(q, zero_accel, free, kl, ku, M_add_a, M_add_band, dMa_band, es, em, &
+                                     need_tangent=.TRUE.)
+      ELSE
+        CALL added_mass_band_proc(q, zero_accel, free, kl, ku, M_add_a, M_add_band, dMa_band, es, em, &
+                                  need_tangent=.TRUE.)
+      END IF
       IF (es /= 0) THEN
         CALL fail_callback(ErrStat, ErrMsg, 'banded added mass failed: '//TRIM(em), es)
         RETURN
@@ -612,7 +694,7 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'mass band packing failed: '//TRIM(em))
         RETURN
       END IF
-      IF (PRESENT(added_mass_band_proc)) M_band = M_band + M_add_band
+      IF (has_mass_band) M_band = M_band + M_add_band
       CALL CD_Solve_Banded(M_band, kl, ku, rhs, es, em)
     END IF
     IF (es /= 0 .OR. .NOT. CD_All_Finite(rhs)) THEN
@@ -630,9 +712,11 @@ CONTAINS
                                      load_band_proc, prescribed_q, prescribed_v, prescribed_a, structural_mass, &
                                      workspace, added_mass_band_proc, start_load, start_tension, &
                                      probe_q, probe_R, probe_K, start_stiffness, axial_damping, &
-                                     axial_l0_rate, start_l0, mass_l0, start_l0_rate)
+                                     axial_l0_rate, start_l0, mass_l0, start_l0_rate, loads)
     !! One generalized-alpha step: the constant load f_ext plus the optional load,
     !! banded-load, force-only and added-mass callbacks (hydrodynamics, damping, contact).
+    !! loads (CD_Cable_Step_Loads) stands for load_force_proc and load_band_proc (has_force)
+    !! and for added_mass_band_proc (has_added_mass), which are then not passed.
     !! On a singular effective tangent returns CD_DYN_SINGULAR; on a line-search
     !! stall returns converged=.FALSE., stalled=.TRUE.
     !!
@@ -723,6 +807,7 @@ CONTAINS
     !! with, for T_d,n; axial_l0_rate stays the rate at t_{n+1}, for T_d,n+1. Absent:
     !! axial_l0_rate.
     REAL(wp), INTENT(IN), OPTIONAL :: start_l0(:), mass_l0(:), start_l0_rate(:)
+    CLASS(CD_Cable_Step_Loads), INTENT(INOUT), OPTIONAL :: loads
 
     INTEGER  :: n_dof, n_elem, n_free, bt, kl, ku, ldab
     INTEGER, POINTER :: free(:), fixed(:), ipiv(:)
@@ -757,6 +842,8 @@ CONTAINS
     REAL(wp) :: diag_scale_cached, op_norm, op_norm_cached
     LOGICAL  :: accepted, has_load_proc, has_load_band_proc, has_added_mass_proc, has_added_mass_band_proc
     LOGICAL  :: has_load_force_proc
+    ! the force and banded load (loads_force) and the banded added mass (loads_mass) from loads
+    LOGICAL  :: loads_force, loads_mass
     LOGICAL  :: has_prescribed, direct_banded, have_eff, tangent_fresh, use_element_mass_band
     ! clock at the start of a profiled kernel (CABLEDYN_PROFILE; zero when not profiling)
     INTEGER(int64) :: prof_k0
@@ -778,17 +865,28 @@ CONTAINS
     ! call that fails early cannot leave an older step's data to a later armed re-solve.
     IF (PRESENT(workspace)) workspace%start_valid = workspace%start_valid .AND. workspace%guess_armed
     n_dof = SIZE(q)
+    loads_force = .FALSE.
+    loads_mass = .FALSE.
+    IF (PRESENT(loads)) THEN
+      loads_force = loads%has_force
+      loads_mass = loads%has_added_mass
+    END IF
+    IF ((loads_force .AND. (PRESENT(load_proc) .OR. PRESENT(load_band_proc) .OR. PRESENT(load_force_proc))) .OR. &
+        (loads_mass .AND. (PRESENT(added_mass_proc) .OR. PRESENT(added_mass_band_proc)))) THEN
+      CALL fail(ErrStat, ErrMsg, 'pass a load either as a callback or in loads, not both')
+      RETURN
+    END IF
     has_load_proc = PRESENT(load_proc)
-    has_load_band_proc = PRESENT(load_band_proc)
+    has_load_band_proc = PRESENT(load_band_proc) .OR. loads_force
     has_added_mass_proc = PRESENT(added_mass_proc)
-    has_added_mass_band_proc = PRESENT(added_mass_band_proc)
-    has_load_force_proc = PRESENT(load_force_proc)
+    has_added_mass_band_proc = PRESENT(added_mass_band_proc) .OR. loads_mass
+    has_load_force_proc = PRESENT(load_force_proc) .OR. loads_force
     NULLIFY (load_proc_cb, added_mass_proc_cb, load_force_proc_cb, load_band_proc_cb, added_mass_band_proc_cb)
     IF (has_load_proc) load_proc_cb => load_proc
-    IF (has_load_band_proc) load_band_proc_cb => load_band_proc
+    IF (PRESENT(load_band_proc)) load_band_proc_cb => load_band_proc
     IF (has_added_mass_proc) added_mass_proc_cb => added_mass_proc
-    IF (has_added_mass_band_proc) added_mass_band_proc_cb => added_mass_band_proc
-    IF (has_load_force_proc) load_force_proc_cb => load_force_proc
+    IF (PRESENT(added_mass_band_proc)) added_mass_band_proc_cb => added_mass_band_proc
+    IF (PRESENT(load_force_proc)) load_force_proc_cb => load_force_proc
     IF (has_load_proc .AND. has_load_band_proc) THEN
       CALL fail(ErrStat, ErrMsg, 'pass either load_proc or load_band_proc, not both')
       RETURN
@@ -1721,7 +1819,11 @@ CONTAINS
           load_n(i) = start_load(i)
         END DO
       ELSE IF (has_load_force_proc) THEN
-        CALL load_force_proc_cb(q_n, v_n, load_n, es_s, em_s)
+        IF (loads_force) THEN
+          CALL loads%force(q_n, v_n, load_n, es_s, em_s)
+        ELSE
+          CALL load_force_proc_cb(q_n, v_n, load_n, es_s, em_s)
+        END IF
         IF (es_s /= 0) THEN
           em_s = 'step-start dynamic force load failed: '//TRIM(em_s)
           RETURN
@@ -2002,7 +2104,11 @@ CONTAINS
         END IF
         IF (has_load_band_proc) THEN
           ! the callback defines every INTENT(OUT) band entry itself
-          CALL load_band_proc_cb(qf, vf, free, kl, ku, load_eval, jq_band, jv_band, es_e, em_e)
+          IF (loads_force) THEN
+            CALL loads%load_banded(qf, vf, free, kl, ku, load_eval, jq_band, jv_band, es_e, em_e)
+          ELSE
+            CALL load_band_proc_cb(qf, vf, free, kl, ku, load_eval, jq_band, jv_band, es_e, em_e)
+          END IF
           IF (es_e /= 0) THEN
             em_e = 'dynamic banded load failed: '//TRIM(em_e)
             Rout = CD_ZERO
@@ -2059,7 +2165,11 @@ CONTAINS
           RETURN
         END IF
       ELSE IF (has_load_force_proc .AND. .NOT. tangent_requested) THEN
-        CALL load_force_proc_cb(qf, vf, load_eval, es_e, em_e)
+        IF (loads_force) THEN
+          CALL loads%force(qf, vf, load_eval, es_e, em_e)
+        ELSE
+          CALL load_force_proc_cb(qf, vf, load_eval, es_e, em_e)
+        END IF
         IF (es_e /= 0) THEN
           em_e = 'dynamic force load failed: '//TRIM(em_e)
           Rout = CD_ZERO
@@ -2109,8 +2219,13 @@ CONTAINS
         END IF
         M_eff_eval = M_eff_eval + M_add_eval
       ELSE IF (has_added_mass_band_proc) THEN
-        CALL added_mass_band_proc_cb(q_alpha, a_alpha, free, kl, ku, M_add_a_eval, M_add_band, &
-                                     dMa_a_dq_band, es_e, em_e, PRESENT(effbandout))
+        IF (loads_mass) THEN
+          CALL loads%added_mass_banded(q_alpha, a_alpha, free, kl, ku, M_add_a_eval, M_add_band, &
+                                       dMa_a_dq_band, es_e, em_e, PRESENT(effbandout))
+        ELSE
+          CALL added_mass_band_proc_cb(q_alpha, a_alpha, free, kl, ku, M_add_a_eval, M_add_band, &
+                                       dMa_a_dq_band, es_e, em_e, PRESENT(effbandout))
+        END IF
         IF (es_e /= 0) THEN
           em_e = 'banded added mass failed: '//TRIM(em_e)
           Rout = CD_ZERO

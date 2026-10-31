@@ -59,7 +59,8 @@ MODULE CableDyn_Model
   USE CableDyn_VIV, ONLY: CD_VIV_Node_Lift, CD_VIV_Crossflow_Motion, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
                           CD_VIV_Wrap_Phase, CD_VIV_NM, CD_VIV_TWO_PI
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Clear_GenAlpha_Workspace, &
-                              CD_Cable_Initial_Acceleration, CD_Cable_Gen_Alpha_Step, CD_DYN_OK, CD_DYN_ALLOCFAIL, &
+                              CD_Cable_Initial_Acceleration, CD_Cable_Gen_Alpha_Step, CD_Cable_Step_Loads, &
+                              CD_DYN_OK, CD_DYN_ALLOCFAIL, &
                               CD_EI0_SUBSTEPS_AUTO, CD_EI0_SUBSTEPS_OFF
   USE CableDyn_Mesh, ONLY: CD_Partition_Free_Dofs, CD_Validate_Connectivity
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
@@ -454,6 +455,20 @@ MODULE CableDyn_Model
     LOGICAL :: sub_test_repeat = .FALSE., sub_test_more = .FALSE.
   END TYPE CD_ModelType
 
+  !> The load contributors and added mass of a model as the dynamic loads of its steps
+  !> (CD_Cable_Step_Loads): the integrator calls them on the model this object points to, with
+  !> the added mass on the lengths l0_mass when associated (the blended lengths of the inertia
+  !> after a length change under the force blend). The model passes this object, never
+  !> internal procedures, so that distinct models step concurrently (see CD_Cable_Step_Loads).
+  TYPE, EXTENDS(CD_Cable_Step_Loads) :: model_step_loads
+    TYPE(CD_ModelType), POINTER :: model => NULL()
+    REAL(wp), POINTER :: l0_mass(:) => NULL()
+  CONTAINS
+    PROCEDURE :: force => model_step_force
+    PROCEDURE :: load_banded => model_step_load_banded
+    PROCEDURE :: added_mass_banded => model_step_added_mass_banded
+  END TYPE model_step_loads
+
 CONTAINS
 
   SUBROUTINE CD_Init_Model(model, q0, v0, elem_conn, l0, ea, rho_a, tension_only, &
@@ -475,7 +490,7 @@ CONTAINS
     !! initial acceleration is computed consistently from the current structure,
     !! load, and fixed DOFs; callers do not provide a0. Existing model storage is
     !! released before the new model is populated.
-    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    TYPE(CD_ModelType), INTENT(INOUT), TARGET :: model
     REAL(wp), INTENT(IN) :: q0(:), v0(:)
     INTEGER, INTENT(IN) :: elem_conn(:, :)
     REAL(wp), INTENT(IN) :: l0(:), ea(:), rho_a(:)
@@ -531,6 +546,7 @@ CONTAINS
     INTEGER :: n_dof, n_elem, n_nodes, es, istat, e
     INTEGER, ALLOCATABLE :: free(:)
     TYPE(CD_ModelType) :: old_model
+    TYPE(model_step_loads) :: step_loads
     CHARACTER(1024) :: em
     LOGICAL :: use_seabed, use_seabed_damping, use_seabed_friction
     LOGICAL :: use_damping, use_drag, use_fk, use_buoyancy, use_added_mass, has_load
@@ -1395,22 +1411,24 @@ CONTAINS
     has_load = model%has_seabed .OR. model%has_seabed_damping .OR. model%has_seabed_friction .OR. &
                model%has_damping .OR. model%has_viscoelastic .OR. model%has_syrope .OR. model%has_morison_drag .OR. &
                model%has_froude_krylov .OR. model%has_buoyancy_recovery
+    step_loads%model => model
+    step_loads%has_force = has_load
+    step_loads%has_added_mass = model%has_added_mass
     IF (has_load .AND. model%has_added_mass) THEN
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
                                          model%fixed_dofs, model%a, es, em, &
-                                         load_force_proc=model_force, workspace=model%dynamic_workspace, &
-                                         added_mass_band_proc=model_added_mass_band)
+                                         workspace=model%dynamic_workspace, loads=step_loads)
     ELSE IF (has_load) THEN
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
                                          model%fixed_dofs, model%a, es, em, &
-                                         load_force_proc=model_force, workspace=model%dynamic_workspace)
+                                         workspace=model%dynamic_workspace, loads=step_loads)
     ELSE IF (model%has_added_mass) THEN
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
                                          model%fixed_dofs, model%a, es, em, &
-                                         workspace=model%dynamic_workspace, added_mass_band_proc=model_added_mass_band)
+                                         workspace=model%dynamic_workspace, loads=step_loads)
     ELSE
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
@@ -1426,30 +1444,6 @@ CONTAINS
     model%initialized = .TRUE.
     ! the line's initial tension, the floor of the tension scale of the sub-stepping (sub_count)
     model%sub_t_init = initial_tension(model)
-
-  CONTAINS
-
-    SUBROUTINE model_force(q, v, force, ErrStat, ErrMsg)
-      REAL(wp), INTENT(IN) :: q(:), v(:)
-      REAL(wp), INTENT(OUT) :: force(:)
-      INTEGER, INTENT(OUT) :: ErrStat
-      CHARACTER(*), INTENT(OUT) :: ErrMsg
-      CALL model_contributor_force(model, q, v, force, ErrStat, ErrMsg)
-      ErrStat = as_dyn_callback_status(ErrStat)
-    END SUBROUTINE model_force
-
-    SUBROUTINE model_added_mass_band(q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, ErrStat, ErrMsg, &
-                                     need_tangent)
-      REAL(wp), INTENT(IN) :: q(:), accel(:)
-      INTEGER, INTENT(IN) :: free(:), kl, ku
-      REAL(wp), INTENT(OUT) :: M_add_a(:), M_add_band(:, :), dMa_a_dq_band(:, :)
-      INTEGER, INTENT(OUT) :: ErrStat
-      CHARACTER(*), INTENT(OUT) :: ErrMsg
-      LOGICAL, INTENT(IN), OPTIONAL :: need_tangent
-      CALL model_added_mass_banded(model, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
-                                   ErrStat, ErrMsg, need_tangent=need_tangent)
-      ErrStat = as_dyn_callback_status(ErrStat)
-    END SUBROUTINE model_added_mass_band
   END SUBROUTINE CD_Init_Model
 
   SUBROUTINE CD_Init_Line_Model(model, anchor, fairlead, line_types, sections, gravity, rho_water, &
@@ -2643,7 +2637,7 @@ CONTAINS
                               prescribed_q, prescribed_v, prescribed_a)
     !! One generalized-alpha step of the model over dt, as given (CD_Step_Model without its
     !! resolved sub-stepping).
-    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    TYPE(CD_ModelType), INTENT(INOUT), TARGET :: model
     REAL(wp), INTENT(IN) :: dt
     LOGICAL, INTENT(OUT) :: converged, stalled
     INTEGER, INTENT(OUT) :: n_iter, ErrStat
@@ -2654,9 +2648,11 @@ CONTAINS
     CHARACTER(1024) :: em
     LOGICAL :: has_load, blend, force_lengths
     REAL(wp) :: af
-    REAL(wp), ALLOCATABLE :: l0_new(:), l0_dot_new(:), l0_start(:), l0_mass(:), f_ext_new(:), f_ext_c(:)
+    REAL(wp), ALLOCATABLE :: l0_new(:), l0_dot_new(:), l0_start(:), f_ext_new(:), f_ext_c(:)
+    REAL(wp), ALLOCATABLE, TARGET :: l0_mass(:)
     REAL(wp), ALLOCATABLE :: l0_dot_start(:)
     TYPE(model_lengths_aside) :: aside
+    TYPE(model_step_loads) :: step_loads
 
     converged = .FALSE.
     stalled = .FALSE.
@@ -2773,13 +2769,16 @@ CONTAINS
           model%l0_dot(e) = (CD_ONE - af)*l0_dot_new(e) + af*model%l0_dot_c(e)
       END DO
     END IF
+    step_loads%model => model
+    step_loads%has_force = has_load
+    step_loads%has_added_mass = model%has_added_mass
+    IF (ALLOCATED(l0_mass)) step_loads%l0_mass => l0_mass
     IF (PRESENT(prescribed_q) .AND. has_load .AND. model%has_added_mass) THEN
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, &
-                                   es, em, load_force_proc=model_force, load_band_proc=model_load_band, &
-                                   added_mass_band_proc=model_added_mass_band, prescribed_q=prescribed_q, &
+                                   es, em, loads=step_loads, prescribed_q=prescribed_q, &
                                    prescribed_v=prescribed_v, prescribed_a=prescribed_a, &
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
                                    start_tension=model%tension_start_work, &
@@ -2791,7 +2790,7 @@ CONTAINS
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, &
-                                   es, em, load_force_proc=model_force, load_band_proc=model_load_band, &
+                                   es, em, loads=step_loads, &
                                    prescribed_q=prescribed_q, prescribed_v=prescribed_v, &
                                    prescribed_a=prescribed_a, workspace=model%dynamic_workspace, &
                                    start_load=model%load_start_work, start_tension=model%tension_start_work, &
@@ -2803,7 +2802,7 @@ CONTAINS
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, &
-                                   es, em, added_mass_band_proc=model_added_mass_band, prescribed_q=prescribed_q, &
+                                   es, em, loads=step_loads, prescribed_q=prescribed_q, &
                                    prescribed_v=prescribed_v, prescribed_a=prescribed_a, &
                                    workspace=model%dynamic_workspace, &
                                    start_l0=l0_start, mass_l0=l0_mass)
@@ -2820,8 +2819,7 @@ CONTAINS
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
-                                   load_force_proc=model_force, load_band_proc=model_load_band, &
-                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
+                                   loads=step_loads, workspace=model%dynamic_workspace, &
                                    start_load=model%load_start_work, start_tension=model%tension_start_work, &
                                    start_stiffness=model%stiffness_start_work, &
                                    axial_damping=model%ba_dyn, axial_l0_rate=model%l0_dot, &
@@ -2831,7 +2829,7 @@ CONTAINS
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
-                                   load_force_proc=model_force, load_band_proc=model_load_band, &
+                                   loads=step_loads, &
                                    workspace=model%dynamic_workspace, start_load=model%load_start_work, &
                                    start_tension=model%tension_start_work, &
                                    start_stiffness=model%stiffness_start_work, &
@@ -2842,7 +2840,7 @@ CONTAINS
                                    model%rho_a, model%tension_only, model%f_ext, model%fixed_dofs, &
                                    dt, model%cfg, model%q_step, model%v_step, model%a_step, converged, stalled, &
                                    n_iter, es, em, &
-                                   added_mass_band_proc=model_added_mass_band, workspace=model%dynamic_workspace, &
+                                   loads=step_loads, workspace=model%dynamic_workspace, &
                                    start_l0=l0_start, mass_l0=l0_mass)
     ELSE
       CALL CD_Cable_Gen_Alpha_Step(model%q, model%v, model%a, model%elem_conn, model%l0, model%ea_dyn, &
@@ -3079,40 +3077,6 @@ CONTAINS
       END IF
       model%load_start_valid = .TRUE.
     END SUBROUTINE step_start_load
-
-    SUBROUTINE model_force(q, v, force, ErrStat, ErrMsg)
-      REAL(wp), INTENT(IN) :: q(:), v(:)
-      REAL(wp), INTENT(OUT) :: force(:)
-      INTEGER, INTENT(OUT) :: ErrStat
-      CHARACTER(*), INTENT(OUT) :: ErrMsg
-      CALL model_contributor_force(model, q, v, force, ErrStat, ErrMsg)
-      ErrStat = as_dyn_callback_status(ErrStat)
-    END SUBROUTINE model_force
-
-    SUBROUTINE model_load_band(q, v, free, kl, ku, force, jac_q_band, jac_v_band, ErrStat, ErrMsg)
-      REAL(wp), INTENT(IN) :: q(:), v(:)
-      INTEGER, INTENT(IN) :: free(:), kl, ku
-      REAL(wp), INTENT(OUT) :: force(:), jac_q_band(:, :), jac_v_band(:, :)
-      INTEGER, INTENT(OUT) :: ErrStat
-      CHARACTER(*), INTENT(OUT) :: ErrMsg
-      CALL model_contributor_load_banded(model, q, v, free, kl, ku, force, jac_q_band, jac_v_band, &
-                                         ErrStat, ErrMsg)
-    END SUBROUTINE model_load_band
-
-    SUBROUTINE model_added_mass_band(q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, ErrStat, ErrMsg, &
-                                     need_tangent)
-      !! The added mass at q_alpha; after a length change under the force blend with the
-      !! blended lengths of the inertia (l0_mass, unallocated and so absent otherwise).
-      REAL(wp), INTENT(IN) :: q(:), accel(:)
-      INTEGER, INTENT(IN) :: free(:), kl, ku
-      REAL(wp), INTENT(OUT) :: M_add_a(:), M_add_band(:, :), dMa_a_dq_band(:, :)
-      INTEGER, INTENT(OUT) :: ErrStat
-      CHARACTER(*), INTENT(OUT) :: ErrMsg
-      LOGICAL, INTENT(IN), OPTIONAL :: need_tangent
-      CALL model_added_mass_banded(model, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
-                                   ErrStat, ErrMsg, need_tangent=need_tangent, l0_elem=l0_mass)
-      ErrStat = as_dyn_callback_status(ErrStat)
-    END SUBROUTINE model_added_mass_band
   END SUBROUTINE step_model_plain
 
   SUBROUTINE CD_Step_Model_Recovering(model, dt, converged, stalled, n_iter, ErrStat, ErrMsg, &
@@ -6099,7 +6063,7 @@ CONTAINS
 
   SUBROUTINE recompute_model_acceleration_now(model, ErrStat, ErrMsg)
     !! CD_Recompute_Model_Acceleration with the lengths and rates in place.
-    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    TYPE(CD_ModelType), INTENT(INOUT), TARGET :: model
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
@@ -6111,6 +6075,7 @@ CONTAINS
     ! Entry acceleration: every failure below restores it whole, so a failed
     ! recompute leaves the committed state untouched.
     REAL(wp) :: a_entry(model%n_dof)
+    TYPE(model_step_loads) :: step_loads
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -6131,22 +6096,24 @@ CONTAINS
     END IF
     a_entry = model%a
     model%a_prescribed_work(1:nc) = model%a(model%fixed_dofs)
+    step_loads%model => model
+    step_loads%has_force = has_load
+    step_loads%has_added_mass = model%has_added_mass
     IF (has_load .AND. model%has_added_mass) THEN
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
                                          model%fixed_dofs, model%a, es, em, &
-                                         load_force_proc=model_force, workspace=model%dynamic_workspace, &
-                                         added_mass_band_proc=model_added_mass_band)
+                                         workspace=model%dynamic_workspace, loads=step_loads)
     ELSE IF (has_load) THEN
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
                                          model%fixed_dofs, model%a, es, em, &
-                                         load_force_proc=model_force, workspace=model%dynamic_workspace)
+                                         workspace=model%dynamic_workspace, loads=step_loads)
     ELSE IF (model%has_added_mass) THEN
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
                                          model%fixed_dofs, model%a, es, em, &
-                                         workspace=model%dynamic_workspace, added_mass_band_proc=model_added_mass_band)
+                                         workspace=model%dynamic_workspace, loads=step_loads)
     ELSE
       CALL CD_Cable_Initial_Acceleration(model%q, model%v, model%elem_conn, model%l0, model%ea_dyn, &
                                          model%rho_a, model%tension_only, model%f_ext, &
@@ -6348,28 +6315,6 @@ CONTAINS
         END IF
       END IF
     END SUBROUTINE ensure_support_acceleration_workspace
-
-    SUBROUTINE model_force(q, v, force, ErrStat, ErrMsg)
-      REAL(wp), INTENT(IN) :: q(:), v(:)
-      REAL(wp), INTENT(OUT) :: force(:)
-      INTEGER, INTENT(OUT) :: ErrStat
-      CHARACTER(*), INTENT(OUT) :: ErrMsg
-      CALL model_contributor_force(model, q, v, force, ErrStat, ErrMsg)
-      ErrStat = as_dyn_callback_status(ErrStat)
-    END SUBROUTINE model_force
-
-    SUBROUTINE model_added_mass_band(q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, ErrStat, ErrMsg, &
-                                     need_tangent)
-      REAL(wp), INTENT(IN) :: q(:), accel(:)
-      INTEGER, INTENT(IN) :: free(:), kl, ku
-      REAL(wp), INTENT(OUT) :: M_add_a(:), M_add_band(:, :), dMa_a_dq_band(:, :)
-      INTEGER, INTENT(OUT) :: ErrStat
-      CHARACTER(*), INTENT(OUT) :: ErrMsg
-      LOGICAL, INTENT(IN), OPTIONAL :: need_tangent
-      CALL model_added_mass_banded(model, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
-                                   ErrStat, ErrMsg, need_tangent=need_tangent)
-      ErrStat = as_dyn_callback_status(ErrStat)
-    END SUBROUTINE model_added_mass_band
   END SUBROUTINE recompute_model_acceleration_now
 
   SUBROUTINE CD_Audit_Model_Step(model, time, dt, new_spike)
@@ -9364,6 +9309,46 @@ CONTAINS
     ErrStat = CD_MODEL_ALLOCFAIL
     ErrMsg = 'CableDyn_Model: '//msg
   END SUBROUTINE alloc_fail
+
+  SUBROUTINE model_step_force(self, q, v, force, ErrStat, ErrMsg)
+    !! The force of the model's load contributors at (q, v) (model_step_loads).
+    CLASS(model_step_loads), INTENT(INOUT) :: self
+    REAL(wp), INTENT(IN) :: q(:), v(:)
+    REAL(wp), INTENT(OUT) :: force(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CALL model_contributor_force(self%model, q, v, force, ErrStat, ErrMsg)
+    ErrStat = as_dyn_callback_status(ErrStat)
+  END SUBROUTINE model_step_force
+
+  SUBROUTINE model_step_load_banded(self, q, v, free, kl, ku, force, jac_q_band, jac_v_band, ErrStat, ErrMsg)
+    !! The force and banded Jacobians of the model's load contributors at (q, v)
+    !! (model_step_loads).
+    CLASS(model_step_loads), INTENT(INOUT) :: self
+    REAL(wp), INTENT(IN) :: q(:), v(:)
+    INTEGER, INTENT(IN) :: free(:), kl, ku
+    REAL(wp), INTENT(OUT) :: force(:), jac_q_band(:, :), jac_v_band(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CALL model_contributor_load_banded(self%model, q, v, free, kl, ku, force, jac_q_band, jac_v_band, &
+                                       ErrStat, ErrMsg)
+  END SUBROUTINE model_step_load_banded
+
+  SUBROUTINE model_step_added_mass_banded(self, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
+                                          ErrStat, ErrMsg, need_tangent)
+    !! The model's banded added mass at q (model_step_loads), on the lengths l0_mass when
+    !! associated (a disassociated pointer is an absent l0_elem).
+    CLASS(model_step_loads), INTENT(INOUT) :: self
+    REAL(wp), INTENT(IN) :: q(:), accel(:)
+    INTEGER, INTENT(IN) :: free(:), kl, ku
+    REAL(wp), INTENT(OUT) :: M_add_a(:), M_add_band(:, :), dMa_a_dq_band(:, :)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: need_tangent
+    CALL model_added_mass_banded(self%model, q, accel, free, kl, ku, M_add_a, M_add_band, dMa_a_dq_band, &
+                                 ErrStat, ErrMsg, need_tangent=need_tangent, l0_elem=self%l0_mass)
+    ErrStat = as_dyn_callback_status(ErrStat)
+  END SUBROUTINE model_step_added_mass_banded
 
   PURE INTEGER FUNCTION as_dyn_callback_status(model_es) RESULT(dyn_es)
     !! Translate a model load-callback status into the integrator's namespace so an allocation

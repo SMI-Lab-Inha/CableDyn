@@ -460,6 +460,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
   equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
   static passes too (4 here); the rod holds its pose to the output's 8 digits.
+- Concurrent steps of separate handles crashed the ifx builds with access violations: an `EI = 0`
+  line model passed its load and added-mass callbacks to the integrator as internal procedures,
+  and ifx calls such a closure through a trampoline kept in memory every thread shares, so two
+  threads stepping distinct models called each other's half-written trampolines (a 40-line
+  reproducer crashes with two threads under every ifx option). The model now hands its loads to
+  the integrator as an object (`CD_Cable_Step_Loads`); results are unchanged. Seven decks
+  stepped together on 28 threads (`c_api_threads_mixed`) failed every run before and pass 50 of
+  50.
 - Separate handles used on several threads at once failed in the Windows wheel and the release
   binaries (Intel ifx without OpenMP): ifx kept the fixed-size local arrays and `CHARACTER` locals
   of every procedure in static storage, which all threads share, so an initialisation that ran
