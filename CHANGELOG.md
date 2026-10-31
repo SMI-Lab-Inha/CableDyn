@@ -280,6 +280,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- The macOS wheel needs macOS 15 or newer on Apple silicon (0.3.0: macOS 14). It is built on
+  the macOS 15 runner, as GitHub retires the macOS 14 runner image on 2 November 2026, and its
+  Homebrew gfortran and OpenBLAS support no older macOS. On macOS 14, build from source.
 - With a `motionFile` or `vesselMotion`, the single-line finite-EI route writes `.static.out`
   before it installs the first motion row, so the file holds the static solve; before, it showed
   the fairlead already moved to row 1. A deck whose row 1 is off the deck fairlead changes

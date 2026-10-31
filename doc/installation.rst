@@ -171,7 +171,7 @@ Install it from PyPI (Python 3.10 or newer; NumPy is the only required dependenc
 
 This installs the ``cabledyn`` package and four console commands: ``cabledyn-run``,
 ``cabledyn-deck``, ``cabledyn-study``, and ``cabledyn-post``. The wheels for Windows x64 and
-Linux x86-64 (both for processors with AVX2) and for macOS on Apple silicon carry the solver:
+Linux x86-64 (both for processors with AVX2) and for macOS 15 or newer on Apple silicon carry the solver:
 the CableDyn shared library and the standalone driver, so the package runs decks without the
 release executables. On another platform pip builds from the source distribution, which needs a
 Fortran compiler and LAPACK.
