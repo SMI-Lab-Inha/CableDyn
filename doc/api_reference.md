@@ -113,6 +113,9 @@ no deck route runs on it (a finite-EI line with two moving ends runs on the cubi
     spreading and multi-train seas of the standalone deck
 * - `CableDyn_StreamWave`
   - regular nonlinear waves by the stream-function (Fourier) method
+* - `CableDyn_WaveMath`
+  - the phase sines and cosines and depth exponentials of the wave kinematics, in vectorised
+    blocks
 * - `CableDyn_Bathymetry`
   - the seabed elevation field
 * - `CableDyn_SeabedContact`

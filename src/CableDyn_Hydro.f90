@@ -14,6 +14,7 @@ MODULE CableDyn_Hydro
   !! * Dean & Dalrymple (1991), linear Airy wave theory.
   !! * Wheeler (1970), vertical stretching through the splash zone.
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite, CD_Is_Finite
+  USE CableDyn_WaveMath, ONLY: CD_Wave_SinCos, CD_Wave_Exp
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   IMPLICIT NONE
   PRIVATE
@@ -2257,11 +2258,11 @@ CONTAINS
     !! remains full validation for public/direct calls. `amplitude_scale` multiplies every
     !! amplitude (a start-up ramp) without the caller forming a scaled copy of the table; the
     !! result equals passing amplitude_scale*amplitude.
-    !! Each component's phase cosine and sine and its depth-profile ratios are evaluated in
-    !! element-wise loops (vectorisable, one trigonometric pair per component) into fixed-size
-    !! local buffers, and the sums then run in component order. Components beyond the buffer
-    !! length are evaluated one at a time with the same expressions, so the result does not
-    !! depend on the buffer. exp_m2kd is the caller's table of EXP(-2 k_comp(i) depth) for this
+    !! Each component's phase sine and cosine (one argument reduction for both) and its depth
+    !! exponential come from the block kernels of CableDyn_WaveMath into fixed-size local
+    !! buffers, and the sums then run in component order. Components beyond the buffer length
+    !! are evaluated block by block with the same expressions, so the result does not depend on
+    !! the buffer. exp_m2kd is the caller's table of EXP(-2 k_comp(i) depth) for this
     !! depth (constant for a fixed table): it replaces the per-call exponential with the same
     !! value, so the result is bit-identical.
     !! tail_sums(:, i) holds the sums over components j >= i of a_j omega_j, a_j omega_j^2 and
@@ -2285,13 +2286,14 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(:), tail_sums(:, :)
     INTEGER :: i, n, nb, n_small, i0, j, nk
     REAL(wp) :: amp
-    REAL(wp) :: cb, sb, x_along, theta, z_eval
+    REAL(wp) :: cb, sb, x_along, z_eval
     ! the elevation keeps the cosines of the first NBUF components; the velocity sums run in
     ! blocks of NBLK (NBUF a multiple of NBLK, so a block lies wholly inside or past the buffer)
     INTEGER, PARAMETER :: NBUF = 1024, NBLK = 32
     REAL(wp), PARAMETER :: HALF_ULP = 0.5_wp*EPSILON(CD_ONE)
     REAL(wp) :: scl, e_neg, denom
-    REAL(wp) :: cth(NBUF), bc(NBLK), bs(NBLK), ch(NBLK), sh(NBLK), mag(3), rest(3)
+    REAL(wp) :: cth(NBUF), sth(NBUF), thb(NBUF), th(NBLK), bc(NBLK), bs(NBLK), ch(NBLK), sh(NBLK)
+    REAL(wp) :: mag(3), rest(3)
     LOGICAL :: trust_inputs, at_bed, use_tail, small(NBLK)
 
     eta = CD_ZERO
@@ -2358,16 +2360,24 @@ CONTAINS
     sb = SIN(direction_deg*DEG2RAD)
     x_along = x*cb + y*sb
     nb = MIN(n, NBUF)
-    ! the elevation sums every component (Wheeler stretching needs the total eta)
+    ! the elevation sums every component (Wheeler stretching needs the total eta); the phase
+    ! sines of the first NBUF components are kept for the velocity sums
     DO i = 1, nb
-      cth(i) = COS(k_comp(i)*x_along - omega_comp(i)*t + phase(i))
+      thb(i) = k_comp(i)*x_along - omega_comp(i)*t + phase(i)
     END DO
+    CALL CD_Wave_SinCos(nb, thb, sth, cth)
     DO i = 1, nb
       eta = eta + (scl*amplitude(i))*cth(i)
     END DO
-    DO i = nb + 1, n
-      theta = k_comp(i)*x_along - omega_comp(i)*t + phase(i)
-      eta = eta + (scl*amplitude(i))*COS(theta)
+    DO i0 = nb + 1, n, NBLK
+      nk = MIN(n - i0 + 1, NBLK)
+      DO j = 1, nk
+        th(j) = k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1)
+      END DO
+      CALL CD_Wave_SinCos(nk, th, bs, bc)
+      DO j = 1, nk
+        eta = eta + (scl*amplitude(i0 + j - 1))*bc(j)
+      END DO
     END DO
 
     IF (stretch) THEN
@@ -2393,24 +2403,22 @@ CONTAINS
       nk = MIN(n - i0 + 1, NBLK)
       IF (i0 <= nb) THEN
         bc(1:nk) = cth(i0:i0 + nk - 1)
+        bs(1:nk) = sth(i0:i0 + nk - 1)
       ELSE
         DO j = 1, nk
-          bc(j) = COS(k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1))
+          th(j) = k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1)
         END DO
+        CALL CD_Wave_SinCos(nk, th, bs, bc)
       END IF
-      ! the sine in its own loop: a compiler fuses COS and SIN of one argument into a sincos
-      ! call, which in the MinGW runtime costs several times a cos plus a sin
       DO j = 1, nk
-        bs(j) = SIN(k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1))
+        th(j) = k_comp(i0 + j - 1)*z_eval
       END DO
+      CALL CD_Wave_Exp(nk, th, ch)
       IF (PRESENT(exp_m2kd)) THEN
-        DO j = 1, nk
-          ch(j) = EXP(k_comp(i0 + j - 1)*z_eval)
-          sh(j) = exp_m2kd(i0 + j - 1)
-        END DO
+        sh(1:nk) = exp_m2kd(i0:i0 + nk - 1)
       ELSE
+        ! the intrinsic, as the caller's table exp_m2kd is built, so both give the same bits
         DO j = 1, nk
-          ch(j) = EXP(k_comp(i0 + j - 1)*z_eval)
           sh(j) = EXP(-2.0_wp*(k_comp(i0 + j - 1)*depth))
         END DO
       END IF

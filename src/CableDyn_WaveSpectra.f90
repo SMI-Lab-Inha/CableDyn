@@ -30,6 +30,7 @@ MODULE CableDyn_WaveSpectra
   !! |theta - theta_p| <= pi/2, K(s) = Gamma(s+1)/(sqrt(pi) Gamma(s+1/2)).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_Is_Finite
   USE CableDyn_Hydro, ONLY: CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
+  USE CableDyn_WaveMath, ONLY: CD_Wave_SinCos, CD_Wave_Exp
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   IMPLICIT NONE
   PRIVATE
@@ -621,6 +622,8 @@ CONTAINS
     !! Linear multi-directional sea kinematics at (x, y, z, t) with Wheeler stretching.
     !! scale multiplies every amplitude (the start-up ramp). pdyn: the linear dynamic
     !! pressure per unit density at the stretched depth [m^2/s^2]; zero above the surface.
+    !! The phase sines and cosines (one argument reduction for both) and the depth exponentials
+    !! come from the block kernels of CableDyn_WaveMath.
     TYPE(CD_SeaType), INTENT(IN) :: sea
     REAL(wp), INTENT(IN) :: x, y, z, t, depth, scale
     REAL(wp), INTENT(OUT) :: eta, velocity(3), acceleration(3)
@@ -628,11 +631,11 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: pdyn
     INTEGER, PARAMETER :: NB = 256
-    ! The phase cosines of the elevation pass, kept for the kinematics pass (whose chunk loop
-    ! would compute the same values again), for the first NKEEP components; the rest are
-    ! recomputed there. A multiple of NB, so each chunk is either kept whole or recomputed.
+    ! The phase cosines and sines of the elevation pass, kept for the kinematics pass (whose
+    ! chunk loop would compute the same values again), for the first NKEEP components; the rest
+    ! are recomputed there. A multiple of NB, so each chunk is either kept whole or recomputed.
     INTEGER, PARAMETER :: NKEEP = 16*NB
-    REAL(wp) :: cth(NB), sth(NB), ch(NB), sh(NB), ckeep(NKEEP)
+    REAL(wp) :: th(NB), cth(NB), sth(NB), ch(NB), sh(NB), ckeep(NKEEP), skeep(NKEEP)
     INTEGER :: i0, i1, i, m, n_small
     REAL(wp) :: z_eval, a, e1, e2, den, uh
 
@@ -648,13 +651,18 @@ CONTAINS
     END IF
     DO i0 = 1, sea%n_comp, NB
       i1 = MIN(sea%n_comp, i0 + NB - 1)
+      m = i1 - i0 + 1
       DO i = i0, i1
-        cth(i - i0 + 1) = COS(sea%k(i)*(x*sea%cosb(i) + y*sea%sinb(i)) - sea%omega(i)*t + sea%phase(i))
+        th(i - i0 + 1) = sea%k(i)*(x*sea%cosb(i) + y*sea%sinb(i)) - sea%omega(i)*t + sea%phase(i)
       END DO
+      CALL CD_Wave_SinCos(m, th, sth, cth)
       DO i = i0, i1
         eta = eta + (scale*sea%amplitude(i))*cth(i - i0 + 1)
       END DO
-      IF (i1 <= NKEEP) ckeep(i0:i1) = cth(1:i1 - i0 + 1)
+      IF (i1 <= NKEEP) THEN
+        ckeep(i0:i1) = cth(1:m)
+        skeep(i0:i1) = sth(1:m)
+      END IF
     END DO
     IF (z > eta) RETURN
     IF (.NOT. (depth + eta > EPSILON(depth)*depth)) THEN
@@ -668,21 +676,21 @@ CONTAINS
       m = i1 - i0 + 1
       IF (i1 <= NKEEP) THEN
         cth(1:m) = ckeep(i0:i1)
+        sth(1:m) = skeep(i0:i1)
       ELSE
         DO i = i0, i1
-          cth(i - i0 + 1) = COS(sea%k(i)*(x*sea%cosb(i) + y*sea%sinb(i)) - sea%omega(i)*t + sea%phase(i))
+          th(i - i0 + 1) = sea%k(i)*(x*sea%cosb(i) + y*sea%sinb(i)) - sea%omega(i)*t + sea%phase(i)
         END DO
+        CALL CD_Wave_SinCos(m, th, sth, cth)
       END IF
-      DO i = i0, i1
-        sth(i - i0 + 1) = SIN(sea%k(i)*(x*sea%cosb(i) + y*sea%sinb(i)) - sea%omega(i)*t + sea%phase(i))
-      END DO
       ! cosh(k(z+h))/sinh(kh) and sinh(k(z+h))/sinh(kh) without overflow, from e1 = EXP(k z)
       ! and e2 = EXP(-k (z + 2h)) = e2kd/e1 at the synthesis depth: one exponential per
       ! component. A component whose e1 or e2kd underflows, or a call at another depth than the
       ! synthesis, takes the second exponential instead.
       DO i = i0, i1
-        ch(i - i0 + 1) = EXP(sea%k(i)*z_eval)
+        th(i - i0 + 1) = sea%k(i)*z_eval
       END DO
+      CALL CD_Wave_Exp(m, th, ch)
       n_small = 0
       IF (ABS(depth - sea%depth) <= CD_ZERO) THEN
         n_small = COUNT(ch(1:m) <= TINY(CD_ONE) .OR. sea%e2kd(i0:i1) <= TINY(CD_ONE))

@@ -445,6 +445,7 @@ add_library(cabledyn_obj OBJECT
   src/CableDyn_Assemble.f90
   src/CableDyn_Loads.f90
   src/CableDyn_Bathymetry.f90
+  src/CableDyn_WaveMath.f90
   src/CableDyn_Hydro.f90
   src/CableDyn_WaveSpectra.f90
   src/CableDyn_StreamWave.f90
@@ -818,6 +819,12 @@ add_executable(test_hydro tests/test_hydro.f90)
 target_link_libraries(test_hydro PRIVATE cabledyn_core)
 add_test(NAME hydro COMMAND test_hydro)
 set_tests_properties(hydro PROPERTIES LABELS "fortran;unit;hydro")
+
+# The block sine, cosine and exponential of the wave kinematics against quadruple precision.
+add_executable(test_wave_math tests/test_wave_math.f90)
+target_link_libraries(test_wave_math PRIVATE cabledyn_core)
+add_test(NAME wave_math COMMAND test_wave_math)
+set_tests_properties(wave_math PROPERTIES LABELS "fortran;unit;hydro")
 
 add_executable(test_cable_static tests/test_cable_static.f90)
 target_link_libraries(test_cable_static PRIVATE cabledyn_core)
@@ -3041,7 +3048,8 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_endconn_spring
       test_torsion_coupling
       test_torsion_one_end
-      test_two_moving_ends)
+      test_two_moving_ends
+      test_wave_math)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
   endforeach()
   target_compile_options(test_openfast_aggregate PRIVATE
