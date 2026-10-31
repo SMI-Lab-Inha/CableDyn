@@ -496,6 +496,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   deck to 0.44 of the last printed digit. A `Turbine<J>` point in a run without a farm
   (single-turbine OpenFAST, the C API) is now refused by point, naming FAST.Farm and the
   `TURBINES` section.
+- A coupled deck with both bodies and rods stopped at init with `a coupled deck mixing RODs and
+  Rigid6/point3 bodies is not supported (the aggregate marches one body/rod family per step)`,
+  a limit the OpenFAST and capability pages did not state. The message now says what the coupled
+  route takes (bodies or rods, a rod fixed to a body counting as a rod) and where such a deck runs
+  (MoorDyn `CompMooring = 3`, the standalone driver); the OpenFAST, capability and troubleshooting
+  pages state the limit, and the Python validator (`caller_driven=True`) refuses the deck.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's

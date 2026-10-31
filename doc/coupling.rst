@@ -57,6 +57,7 @@ is their zero-frequency reduction ``D − C A⁻¹ B``, not a derivative CableDy
      command outside MoorDyn-F's bounds or one that would make a controlled segment
      non-positive, and ``CONTROL`` of a finite-EI cable under ``False alpha_force_blend``,
    - coupled ``Rigid6`` bodies and rods in a FAST.Farm deck,
+   - a deck with both bodies (Rigid6 or Point3) and rods, a rod fixed to a body included,
    - deck ``waves``/``wavetrain`` OPTIONS (the host SeaState supplies the waves), and a deck
      ``current`` except as a steady current on a single-turbine, pure ``EI = 0`` deck without
      Rigid6 bodies or rods in a SeaState without waves or current (a WaterKin ``CurrentMod 1``

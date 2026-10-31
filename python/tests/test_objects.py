@@ -476,3 +476,32 @@ def test_zero_length_rod_axis_is_a_value_error(tmp_path, monkeypatch):
         monkeypatch.setattr(type(rod), "node_positions", lambda self, out=None: np.zeros((3, 3)))
         with pytest.raises(ValueError, match="zero length"):
             rod.axis()
+
+
+def test_c_api_takes_bodies_or_rods_not_both(tmp_path):
+    # the C API runs a deck with bodies or rods on the coupled aggregate, which marches one of the
+    # two families: a rod fixed to the buoy is refused by name, saying where such a deck runs
+    bar = "-" * 21
+    base = (EXAMPLES / "rigid6_buoy.dat").read_text(encoding="utf-8")
+    # still water and a fluid-inert buoy (the aggregate refuses CdA/Ca without a host field)
+    base = base.replace("uniform 0.6 0.0 0.0  current", "none  current", 1)
+    base = base.replace("0.0  0.0  0.0  8.0   0.5  3.5e4", "0.0  0.0  0.0  0.0   0.0  3.5e4", 1)
+    marker = f"{bar} POINTS"
+    rods = (
+        f"{bar} ROD TYPES {bar}\nName Diam Mass Cd Ca CdEnd CaEnd\n"
+        "spar 1.0 300.0 0.8 1.0 0.0 0.0\n"
+        f"{bar} RODS {bar}\nID RodType Type XA YA ZA XB YB ZB NumSegs Outputs\n"
+        "1 spar Body1 0 0 -2 0 0 -8 2 -\n"
+    )
+    assert base.count(marker) == 1
+    deck = tmp_path / "buoy_rod.dat"
+    deck.write_text(base.replace(marker, rods + marker), encoding="utf-8")
+    with CableDyn() as model, pytest.raises(CableDynError) as err:
+        model.init_deck(deck)
+    message = str(err.value)
+    assert "a coupled deck with both BODIES and RODS is not supported" in message
+    assert "CompMooring = 3" in message and "standalone driver" in message
+    still = tmp_path / "buoy.dat"
+    still.write_text(base, encoding="utf-8")
+    with CableDyn() as model:
+        model.init_deck(still)

@@ -7803,8 +7803,8 @@ CONTAINS
       END SELECT
     END DO
     ! RODS are marched on the coupled aggregate (the rod twin of the Rigid6 march), scope-validated
-    ! below (n_rod block) and built into agg%rod. A rod deck mixed with Rigid6 bodies fails closed
-    ! there (the aggregate marches one body/rod family per step).
+    ! below (n_rod block) and built into agg%rod. A rod deck with Rigid6 or Point3 bodies fails
+    ! closed there (the aggregate marches one body/rod family per step).
     n_rod = SIZE(rods)
     n_host_rod = COUNT(rods%rod_type == 'coupled' .OR. rods%rod_type == 'vessel' .OR. &
                        rods%rod_type == 'coupledpinned')
@@ -7909,9 +7909,16 @@ CONTAINS
     ! field, another dynamic point, a Rigid6/point3 body, or line FAILURE is not composed with a rod march
     ! yet -- fail closed by name.
     IF (n_rod > 0) THEN
+      ! The step replaces the mooring step with either the body march or the rod march: a deck
+      ! with both (a rod fixed to a body included; a zero-length rod is a point by now) has no
+      ! coupled march. The standalone multibody march and MoorDyn-F take it.
       IF (n_rigid6 > 0 .OR. n_point3 > 0) THEN
-        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a coupled deck mixing RODs and Rigid6/point3 '// &
-                  'bodies is not supported (the aggregate marches one body/rod family per step)'); RETURN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a coupled deck with both BODIES and RODS is not '// &
+                  'supported: the coupled march advances the bodies (Rigid6, Point3) or the rods of a deck, '// &
+                  'not both, and a rod fixed to a body counts as a rod. Coupled runs (OpenFAST CompMooring = 5, '// &
+                  'the C API and Python) take a deck with bodies or a deck with rods; run this one with MoorDyn '// &
+                  '(CompMooring = 3) in the same OpenFAST binary, or, without CoupledPinned objects, with the '// &
+                  'standalone driver, whose multibody march takes both'); RETURN
       END IF
       IF (n_fin > 0) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a coupled ROD with a finite-EI cable in the '// &

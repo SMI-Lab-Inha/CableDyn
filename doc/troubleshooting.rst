@@ -901,6 +901,12 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
    * - a finite-EI cable in the same deck as Rigid6 bodies, rods, or ``Connect``/``Free`` points
      - model the cable and the body/point system in separate decks or use the supported
        combinations in :doc:`capabilities`
+   * - ``a coupled deck with both BODIES and RODS is not supported``: bodies (Rigid6 or Point3)
+       and rods in one deck, a rod fixed to a body (``Body<N>``, ``Body<N>Pinned``) included
+     - the coupled march advances the bodies or the rods of a deck, not both (also in the C API and
+       Python). Run the deck with stock MoorDyn (``CompMooring = 3``) in the same binary, or, without
+       ``CoupledPinned`` objects, with the standalone driver, whose multibody march takes both; a
+       deck with only bodies or only rods runs coupled
    * - OpenFAST linearisation of a cable with a ``Rigid`` ``END CONNECTIONS`` row (``formal
        OpenFAST linearization of a cable with a rigid end connection is not supported``), of a deck
        with ``Free`` or ``Connect`` points or a line with VIV (``Cl > 0``), or with a ``CONTROL``

@@ -427,7 +427,13 @@ without an auxiliary process:
   held fluid stay those of the committed step). ``PtfmInit`` moves and turns such a rod with
   the platform before the static solve balances it about its pin. ``Pinned`` rods turn about a
   fixed End A. ``Coupled``/``Vessel`` bodies are platform-borne the same way as ``Coupled`` rods,
-  with the node at the body reference point, and may share a deck with ``Free`` bodies.
+  with the node at the body reference point, and may share a deck with ``Free`` bodies. A deck
+  carries bodies (Rigid6 or Point3) or rods, not both: the coupled march advances one of the two
+  families, and a rod fixed to a body (``RODS`` type ``Body<N>`` or ``Body<N>Pinned``) counts as a
+  rod, so such a deck stops at init (``a coupled deck with both BODIES and RODS is not
+  supported``). MoorDyn (``CompMooring = 3``) in the same binary runs it, and so does the
+  standalone driver's multibody march when the deck has no ``CoupledPinned`` objects (those run in
+  OpenFAST only).
   ``CoupledPinned``/``VesselPinned`` bodies are pinned to the platform like ``CoupledPinned`` rods:
   the node at the body reference point follows the platform position only, the body turns about
   it with its own three rotations (its inertia about the node, its weight and buoyancy at the
