@@ -346,23 +346,23 @@ All notable changes to CableDyn are recorded in this file. The format follows
   0.1 s drops from 18,000 components to 1,800. On the 300 s lazy-wave case both records then run
   in 72 s, and every output channel's standard deviation moves by at most 0.002 %. A record with
   no component at or below the cut-off is refused by name.
-- Waves run faster under every compiler: the wave kinematics evaluate their phase sines and
-  cosines and depth exponentials in blocks of plain arithmetic that vectorise under any
+- Waves run faster under every compiler: the wave kinematics evaluate their phase sines and cosines
+  and depth exponentials in blocks of plain arithmetic that vectorise under any value-safe
   floating-point model (`CableDyn_WaveMath`: one argument reduction for each sine-cosine pair,
-  polynomials, the power of two from its bits) in place of one library call per component,
-  which ifx makes under `/fp:precise`. At one thread, best of five, an irregular sea runs 31 to
-  33 % faster with ifx (`chain_two_train_sea` 1.83 s to 1.22 s, `chain_torsethaugen_spread`
-  1.64 s to 1.13 s) and 20 to 21 % faster with gfortran (4.09 s to 3.22 s, 3.56 s to 2.86 s);
-  the VolturnUS line-break decks 14 % (ifx, 31.0 s to 26.8 s) and 9 % (gfortran);
-  `lazy_wave_vessel_rao` and `lazy_wave_bend_stiffener` 9 % with ifx and within 1 % of before
-  with gfortran; decks without waves run as before. This recovers about two thirds of what
-  `/fp:precise` cost the Windows release (`chain_two_train_sea` +83 % over `/fp:fast` before,
-  +24 % now). The sines and cosines are within 2.3 ulp and the exponentials within 1.1 ulp of
-  quadruple precision, so wave decks change at round-off: 49 of the 53 example decks give
-  identical files, two lazy-wave decks differ by one unit in the last printed digit (7e-8 of a
-  tension's scale), and in the two VolturnUS line-break decks the drifting platform amplifies
-  round-off after t = 860 s to 0.15 to 0.21 of the anchor-2 tension's scale, as much as the
-  gfortran and ifx builds of the unchanged code differ by.
+  polynomials, the power of two from its bits) in place of one library call per component, which ifx
+  makes under `/fp:precise`. At one thread, best of five, an irregular sea runs 31 to 33 % faster
+  with ifx (`chain_two_train_sea` 1.83 s to 1.22 s, `chain_torsethaugen_spread` 1.64 s to 1.13 s)
+  and 20 to 21 % faster with gfortran (4.09 s to 3.22 s, 3.56 s to 2.86 s); the VolturnUS line-break
+  decks 14 % (ifx, 31.0 s to 26.8 s) and 9 % (gfortran); `lazy_wave_vessel_rao` and
+  `lazy_wave_bend_stiffener` 9 % with ifx and within 1 % of before with gfortran; decks without
+  waves run as before. This recovers about two thirds of what `/fp:precise` cost the Windows release
+  (`chain_two_train_sea` +83 % over `/fp:fast` before, +24 % now). The sines and cosines are within
+  2.4 ulp (within 9e-26 next to their zeros) and the exponentials within 1.1 ulp of quadruple
+  precision, so wave decks change at round-off: 49 of the 53 example decks give identical files, two
+  lazy-wave decks differ by one unit in the last printed digit (7e-8 of a tension's scale), and in
+  the two VolturnUS line-break decks the drifting platform amplifies round-off after t = 860 s to
+  0.15 to 0.21 of the anchor-2 tension's scale, as much as the gfortran and ifx builds of the
+  unchanged code differ by.
 - Coupled OpenFAST runs start from the equilibrium in SeaState's steady current (`CurrMod 1`),
   as standalone decks start in their `current` option, instead of from the still-water shape.
   The current is evaluated at SeaState's vertical grid levels for the static solves only; the

@@ -23,10 +23,14 @@ MODULE CableDyn_WaveMath
   !!   parts, |r| <= ln(2)/2), exp r by its Taylor series through r^13 (truncation below 1e-17)
   !!   and 2^n from its IEEE bits.
   !!
-  !! Against quadruple precision (test_wave_math) the results are within 2.3 ulp over
-  !! |theta| <= 4e4 (sine, cosine) and 1.1 ulp over -708 <= x <= 709 (exponential); a phase
-  !! formed as k x - omega t + phi already carries a rounding error of |theta| ulp(1), far above
-  !! that. Elements beyond the reduction (|theta| > 2^20 pi/2) or the normal range (x < -708,
+  !! Against quadruple precision (test_wave_math, and sweeps of 10^6 phases per decade) the
+  !! results are within 2.4 ulp over |theta| <= 2^20 pi/2 (sine, cosine) and 1.1 ulp over
+  !! -708 <= x <= 709 (exponential). Next to a zero of the sine or cosine, the double nearest
+  !! n pi/2, the value is as small as theta's distance from the multiple (down to 6.2e-19) and the
+  !! part of pi/2 below P1 + P2 + P3, 8.5e-32, adds |n| 8.5e-32 (at most 9e-26) to the error:
+  !! up to 2.8e6 ulp of that tiny value, 4e-10 ulp of 1. A phase formed as k x - omega t + phi
+  !! already carries a rounding error of |theta| ulp(1), far above both.
+  !! Elements beyond the reduction (|theta| > 2^20 pi/2) or the normal range (x < -708,
   !! x > 709), and NaN, take the intrinsic, so a NaN argument gives NaN as the intrinsic does (the
   !! clamp to the range may turn it into a finite bound: Fortran leaves MIN and MAX of a NaN
   !! unspecified, and gfortran returns the other argument). The arrays are explicit-shape:

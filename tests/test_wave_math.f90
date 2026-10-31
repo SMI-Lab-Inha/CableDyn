@@ -5,12 +5,18 @@ PROGRAM test_wave_math
   !! Gate for the block kernels of CableDyn_WaveMath against an independent oracle, the
   !! quadruple-precision intrinsics (a double argument is exact in quadruple precision):
   !!   1. sine and cosine of 400,000 phases over |theta| <= 4e4 (the phases of a 3-hour sea)
-  !!      within 3 ulp of the correctly rounded values, and the identities sin^2 + cos^2 = 1
-  !!      to 4 ulp and sin(-theta) = -sin(theta), cos(-theta) = cos(theta) bit for bit;
+  !!      and of 400,000 over 4e4 < |theta| < 2^20 pi/2 (long records, short waves) within 3 ulp
+  !!      of the correctly rounded values, and the identities sin^2 + cos^2 = 1 to 4 ulp and
+  !!      sin(-theta) = -sin(theta), cos(-theta) = cos(theta) bit for bit;
   !!   2. the quadrant boundaries (theta = n pi/2 rounded, n up to 2^19) and tiny phases
-  !!      (sin theta = theta, cos theta = 1 below 2^-27, signed zero kept);
-  !!   3. exp over -745 <= x <= 709 within 2 ulp (in the normal range), the subnormal tail and
-  !!      underflow to zero as the intrinsic gives them, exp(0) = 1;
+  !!      (sin theta = theta, cos theta = 1 below 2^-27, signed zero kept); at the double
+  !!      nearest n pi/2 for every 1 <= n < 2^20, where sine or cosine falls to the distance from
+  !!      the multiple (down to 6.2e-19), the error within the reduction's bound: 3 ulp of the
+  !!      value plus |n| 8.5e-32, the part of pi/2 below P1 + P2 + P3 (with P3 dropped the
+  !!      error would be |n| 2e-21, with P3 rounded to 53 bits n P3 inexact);
+  !!   3. exp over -745 <= x <= 709 within 2 ulp (in the normal range; the ulp from the
+  !!      exponent, since SPACING returns TINY below 2^-969), the subnormal tail and underflow
+  !!      to zero as the intrinsic gives them, exp(0) = 1;
   !!   4. phases beyond the reduction's range (|theta| > 2^20 pi/2) take the intrinsic (to 1e-6:
   !!      a clamped reduction would be off by O(1));
   !!   5. a NaN argument gives NaN (sine, cosine and exponential) and an infinite phase NaN, as
@@ -24,9 +30,10 @@ PROGRAM test_wave_math
   INTEGER, PARAMETER :: qp = SELECTED_REAL_KIND(30)
   INTEGER, PARAMETER :: N = 400000
   INTEGER :: nfail, i
-  REAL(wp), ALLOCATABLE :: th(:), s(:), c(:), x(:), e(:), s2(:), c2(:)
+  REAL(wp), ALLOCATABLE :: th(:), s(:), c(:), x(:), e(:), s2(:), c2(:), tb(:), sb(:), cb(:)
   REAL(wp) :: ulp_s, ulp_c, ulp_e, ulp_id, pi_wp
-  REAL(qp) :: pi_q
+  REAL(qp) :: pi_q, sq, cq
+  REAL(wp), PARAMETER :: THETA_MAX = 1.6470993291652855e6_wp   ! 2^20 pi/2
 
   nfail = 0
   ALLOCATE (th(N), s(N), c(N), x(N), e(N), s2(N), c2(N))
@@ -47,8 +54,24 @@ PROGRAM test_wave_math
     ' ulp; sin^2 + cos^2 - 1 within ', ulp_id, ' ulp'
   CALL require(ulp_s <= 3.0_wp .AND. ulp_c <= 3.0_wp, 'sine and cosine within 3 ulp')
   CALL require(ulp_id <= 4.0_wp, 'sin^2 + cos^2 = 1 within 4 ulp')
-  CALL CD_Wave_SinCos(N, -th, s2, c2)
+  x = -th   ! (not -th as the actual argument: a 3 MB temporary on the stack)
+  CALL CD_Wave_SinCos(N, x, s2, c2)
   CALL require(ALL(s2 == -s) .AND. ALL(c2 == c), 'sine odd and cosine even bit for bit')
+  ! 1b. 4e4 < |theta| < 2^20 pi/2, geometric spacing, alternating sign
+  DO i = 1, N
+    th(i) = 4.0e4_wp*(0.99999_wp*THETA_MAX/4.0e4_wp)**(REAL(i, wp)/REAL(N, wp))
+    IF (MOD(i, 2) == 0) th(i) = -th(i)
+  END DO
+  CALL CD_Wave_SinCos(N, th, s, c)
+  ulp_s = 0.0_wp
+  ulp_c = 0.0_wp
+  DO i = 1, N
+    ulp_s = MAX(ulp_s, ulp_error(s(i), SIN(REAL(th(i), qp))))
+    ulp_c = MAX(ulp_c, ulp_error(c(i), COS(REAL(th(i), qp))))
+  END DO
+  WRITE (*, '(A,F6.3,A,F6.3,A)') '    sin, cos over 4e4 < |theta| < 2^20 pi/2: max error ', ulp_s, ' and ', ulp_c, &
+    ' ulp'
+  CALL require(ulp_s <= 3.0_wp .AND. ulp_c <= 3.0_wp, 'sine and cosine within 3 ulp up to 2^20 pi/2')
 
   ! 2. quadrant boundaries and tiny phases
   pi_wp = 4.0_wp*ATAN(1.0_wp)
@@ -64,6 +87,25 @@ PROGRAM test_wave_math
   END DO
   WRITE (*, '(A,ES9.2)') '    at the quadrant boundaries (|n| <= 2^18): max |error| / ulp(theta) ', ulp_s
   CALL require(ulp_s <= 1.0_wp, 'quadrant boundaries: error below ulp(theta)')
+  ! the double nearest n pi/2: the smallest sines and cosines the reduction meets
+  ALLOCATE (tb(2**20 - 1), sb(2**20 - 1), cb(2**20 - 1))
+  DO i = 1, 2**20 - 1
+    tb(i) = REAL(REAL(i, qp)*pi_q/2.0_qp, wp)
+  END DO
+  CALL CD_Wave_SinCos(2**20 - 1, tb, sb, cb)
+  ulp_s = 0.0_wp
+  ulp_c = 0.0_wp
+  DO i = 1, 2**20 - 1
+    sq = SIN(REAL(tb(i), qp))
+    cq = COS(REAL(tb(i), qp))
+    ulp_s = MAX(ulp_s, ulp_error(sb(i), sq), ulp_error(cb(i), cq))
+    ulp_c = MAX(ulp_c, REAL(ABS(REAL(sb(i), qp) - sq)/(3.0_qp*ulp_q(REAL(sq, wp)) + REAL(i, qp)*8.5e-32_qp), wp), &
+                REAL(ABS(REAL(cb(i), qp) - cq)/(3.0_qp*ulp_q(REAL(cq, wp)) + REAL(i, qp)*8.5e-32_qp), wp))
+  END DO
+  WRITE (*, '(A,ES9.2,A,F6.3,A,ES9.2,A)') '    at the doubles nearest n pi/2 (1 <= n < 2^20): max error ', ulp_s, &
+    ' ulp, ', ulp_c, ' of 3 ulp + |n| 8.5e-32 (|sin| or |cos| down to ', MINVAL(MIN(ABS(sb), ABS(cb))), ')'
+  CALL require(ulp_c <= 1.0_wp, 'nearest n pi/2: within 3 ulp + |n| 8.5e-32')
+  DEALLOCATE (tb, sb, cb)
   th(1:4) = [0.0_wp, -0.0_wp, 1.0e-10_wp, -2.0_wp**(-30)]
   CALL CD_Wave_SinCos(4, th, s, c)
   ! the sign bits themselves: ifx's SIGN treats -0 as +0 by default (/assume:nominus0)
@@ -134,9 +176,16 @@ CONTAINS
     IF (rounded == 0.0_wp) THEN
       ulps = REAL(ABS(REAL(value, qp) - exact), wp)/TINY(1.0_wp)
     ELSE
-      ulps = REAL(ABS(REAL(value, qp) - exact)/REAL(SPACING(rounded), qp), wp)
+      ulps = REAL(ABS(REAL(value, qp) - exact)/ulp_q(rounded), wp)
     END IF
   END FUNCTION ulp_error
+
+  REAL(qp) FUNCTION ulp_q(r) RESULT(u)
+    !! The spacing of the doubles at r, 2^(e - 53), down to the subnormal spacing 2^-1074 (SPACING
+    !! returns TINY wherever that spacing is subnormal, below 2^-969).
+    REAL(wp), INTENT(IN) :: r
+    u = SCALE(1.0_qp, MAX(EXPONENT(r), MINEXPONENT(r)) - DIGITS(r))
+  END FUNCTION ulp_q
 
   REAL(wp) FUNCTION abs_error(value, exact, arg) RESULT(rel)
     !! |value - exact| over ulp(arg): near a zero of sine or cosine the phase's own rounding
