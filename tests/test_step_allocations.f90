@@ -39,10 +39,15 @@ PROGRAM test_step_allocations
   !! With "mixed_current" the same march of a mixed deck takes the deck's own current
   !! (deck_current): a MoorDyn-C Currents 5 grid that varies in space and time, sampled at every
   !! node of the chain and of the finite-EI cable before each step, past its last sample too.
+  !! With "driver_vessel" the gate runs a whole standalone driver run in process
+  !! (CD_Run_Deck_Driver) of a finite-EI line on the cubic-Hermite route moved by a vesselMotion
+  !! record, and counts the step phase of every step after warm-up (tests/allocation_phase_counter.c:
+  !! the end kinematics, the vessel orientation and rates handed to the cable, its implicit step).
   !!
   !! Usage: test_step_allocations <deck.dat> <water_depth_m> <n_steps> [ranges]
   !!        test_step_allocations torsion | nodal | free | current_grid | motion_roll | motion_vessel |
   !!                              mixed_current
+  !!        test_step_allocations driver_vessel
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_INT, C_LONG_LONG
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
@@ -53,6 +58,7 @@ PROGRAM test_step_allocations
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_End_Force, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Dyn_Torsion_State, CD_HermiteCable_Dyn_Node_Torque, &
                                           CD_HermiteCable_Dyn_Element_Twist
+  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver
   USE CableDyn_Hydro, ONLY: CD_CurrentGridType, CD_Current_Grid_Resample, CD_Current_Grid_Velocity, &
                             CD_Current_Grid_Gradient
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -71,6 +77,15 @@ PROGRAM test_step_allocations
       IMPORT :: C_INT
       INTEGER(C_INT), VALUE :: on
     END SUBROUTINE cd_test_allocation_counting
+    SUBROUTINE cd_test_phase_counting(on, warm) BIND(C, NAME='cd_test_phase_counting')
+      IMPORT :: C_INT, C_LONG_LONG
+      INTEGER(C_INT), VALUE :: on
+      INTEGER(C_LONG_LONG), VALUE :: warm
+    END SUBROUTINE cd_test_phase_counting
+    FUNCTION cd_test_phase_solve_entries() BIND(C, NAME='cd_test_phase_solve_entries') RESULT(n)
+      IMPORT :: C_LONG_LONG
+      INTEGER(C_LONG_LONG) :: n
+    END FUNCTION cd_test_phase_solve_entries
   END INTERFACE
   INTEGER, PARAMETER :: WARMUP_STEPS = 40
   REAL(wp), PARAMETER :: DT = 0.025_wp, SURGE_AMPLITUDE = 0.5_wp, SURGE_PERIOD = 20.0_wp
@@ -95,9 +110,11 @@ PROGRAM test_step_allocations
       CALL motion_gate(TRIM(arg) == 'motion_vessel')
     CASE ('mixed_current')
       CALL mixed_current_gate()
+    CASE ('driver_vessel')
+      CALL driver_vessel_gate()
     CASE DEFAULT
       ERROR STOP 'a single argument must be "torsion", "nodal", "free", "current_grid", "motion_roll", '// &
-        '"motion_vessel" or "mixed_current"'
+        '"motion_vessel", "mixed_current" or "driver_vessel"'
     END SELECT
     STOP
   END IF
@@ -474,6 +491,85 @@ CONTAINS
     END IF
     PRINT '(A)', 'PASS: no heap allocation in the prescribed-motion march of a mixed deck after warm-up'
   END SUBROUTINE motion_gate
+
+  SUBROUTINE driver_vessel_gate()
+    !! Zero heap allocation in the step phase of the standalone driver's march of a finite-EI line on
+    !! the cubic-Hermite route (a lazy cable from a Vessel fairlead to a Fixed anchor on the seabed),
+    !! moved by a vesselMotion record (surge 1 m and roll 3 deg from rest): every step hands the
+    !! cable the vessel's orientation, angular velocity and acceleration with its fairlead state.
+    INTEGER, PARAMETER :: N_WARM = 40, NT = 200
+    REAL(wp), PARAMETER :: DTM = 0.05_wp, PI = 3.14159265358979323846_wp
+    CHARACTER(*), PARAMETER :: ROOT = 'step_alloc_driver_vessel'
+    REAL(wp) :: t, x, vx, ax, ro, dro, d2ro, om
+    INTEGER :: u, k
+    INTEGER(C_LONG_LONG) :: c0, n_alloc, n_steps
+    LOGICAL :: converged
+    om = 2.0_wp*PI/10.0_wp
+    OPEN (NEWUNIT=u, FILE=ROOT//'.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO k = 0, NT + 1
+      t = DTM*k
+      x = 0.5_wp*(1.0_wp - COS(om*t))
+      vx = 0.5_wp*om*SIN(om*t)
+      ax = 0.5_wp*om*om*COS(om*t)
+      ro = 1.5_wp*(1.0_wp - COS(om*t))
+      dro = 1.5_wp*om*SIN(om*t)*PI/180.0_wp
+      d2ro = 1.5_wp*om*om*COS(om*t)*PI/180.0_wp
+      ! time x y z roll pitch yaw vx vy vz wx wy wz ax ay az alx aly alz
+      WRITE (u, '(F8.3,ES25.16E3,A,ES25.16E3,A,ES25.16E3,A,ES25.16E3,A,ES25.16E3,A,ES25.16E3,A)') t, x, &
+        ' 0 -10 ', ro, ' 0 0 ', vx, ' 0 0 ', dro, ' 0 0 ', ax, ' 0 0 ', d2ro, ' 0 0'
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE=ROOT//'.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'step allocation gate: finite-EI line on a vessel, standalone driver'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'cab 0.16 36.7 469000000 -0.5 19900 1.2 0.1 1 0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Vessel -20 0 -10 0 0 0 0'
+    WRITE (u, '(A)') '2 Fixed -200 0 -100 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 1 2 -'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 cab 260 80'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '100 WtrDpth'
+    WRITE (u, '(F5.3,A)') DTM, ' dtM'
+    WRITE (u, '(F6.2,A)') DTM*NT, ' TMax'
+    WRITE (u, '(A)') ROOT//'.txt vesselMotion'
+    WRITE (u, '(A)') '0|0|-10 vesselRef'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1'
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+    c0 = cd_test_allocation_count()
+    CALL cd_test_phase_counting(1_C_INT, INT(N_WARM, C_LONG_LONG))
+    CALL CD_Run_Deck_Driver(ROOT//'.dat', ROOT, converged, es, em)
+    n_steps = cd_test_phase_solve_entries()
+    CALL cd_test_phase_counting(0_C_INT, 0_C_LONG_LONG)
+    n_alloc = cd_test_allocation_count() - c0
+    CALL check('driver run')
+    IF (.NOT. converged) ERROR STOP 'the driver run did not converge'
+    PRINT '(A,I0,A,I0,A,I0,A)', 'standalone driver, finite-EI line on a vessel: ', n_steps, ' steps (', &
+      n_steps - N_WARM, ' counted), ', n_alloc, ' heap allocations in their step phase'
+    IF (n_steps /= NT) THEN
+      PRINT '(A)', 'FAIL: the step phase window did not see every step (CD_Profile_Enter not wrapped?)'
+      ERROR STOP 1
+    END IF
+    IF (n_alloc /= 0) THEN
+      PRINT '(A)', 'FAIL: the step phase of the standalone Hermite march allocated after warm-up'
+      ERROR STOP 1
+    END IF
+    PRINT '(A)', 'PASS: no heap allocation in the step phase of the standalone Hermite march after warm-up'
+  END SUBROUTINE driver_vessel_gate
 
   SUBROUTINE mixed_current_gate()
     !! Zero heap allocation in the standalone driver's per-step march of a mixed deck in its own

@@ -31035,12 +31035,14 @@ CONTAINS
         IF (motion%has_rot) THEN
           ! vessel motion: the fairlead end connection turns with the vessel (the DCM is
           ! global-to-vessel, the transpose of the vessel rotation); a moving End B rides on the
-          ! same vessel
+          ! same vessel. The DCM is formed in a local array: TRANSPOSE as an actual argument is
+          ! a strided view the compiler packs into a heap temporary at every step.
+          dcm_a = TRANSPOSE(motion%rot(:, :, step + 1))
           CALL hermite_step_ends(cables(i), up, uv, ua, ubp, ubv, uba, es, em, &
-                                 u_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
+                                 u_orientation=dcm_a, &
                                  u_angular_velocity=motion%omega(:, step + 1), &
                                  u_angular_acceleration=motion%alpha(:, step + 1), &
-                                 ub_orientation=TRANSPOSE(motion%rot(:, :, step + 1)), &
+                                 ub_orientation=dcm_a, &
                                  ub_angular_velocity=motion%omega(:, step + 1), &
                                  ub_angular_acceleration=motion%alpha(:, step + 1))
         ELSE IF (motion%has_turb_rot) THEN
@@ -31498,11 +31500,13 @@ CONTAINS
       END IF
       IF (motion%has_rot) THEN
         ! vessel motion: an end connection at the fairlead (and at a moving End B) turns with the vessel
+        ! (the DCM in a local array, as in the march: no packed temporary)
+        dcm_a = TRANSPOSE(motion%rot(:, :, time_index))
         CALL hermite_set_ends(cables(i), q, v, a, qb, vb, ab, es, em, &
-                              u_orientation=TRANSPOSE(motion%rot(:, :, time_index)), &
+                              u_orientation=dcm_a, &
                               u_angular_velocity=motion%omega(:, time_index), &
                               u_angular_acceleration=motion%alpha(:, time_index), &
-                              ub_orientation=TRANSPOSE(motion%rot(:, :, time_index)), &
+                              ub_orientation=dcm_a, &
                               ub_angular_velocity=motion%omega(:, time_index), &
                               ub_angular_acceleration=motion%alpha(:, time_index))
       ELSE IF (motion%has_turb_rot) THEN

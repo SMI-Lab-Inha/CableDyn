@@ -1522,9 +1522,12 @@ set_tests_properties(memory_growth_aggregate PROPERTIES LABELS "fortran;openfast
 # Zero heap allocations in the per-step aggregate advance after warm-up, counted through
 # GNU ld --wrap malloc/calloc/realloc wrappers (GNU toolchains only).
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
-  add_executable(test_step_allocations tests/test_step_allocations.f90 tests/allocation_counter.c)
+  add_executable(test_step_allocations tests/test_step_allocations.f90 tests/allocation_counter.c
+                 tests/allocation_phase_counter.c)
   target_link_libraries(test_step_allocations PRIVATE cabledyn_core)
-  target_link_options(test_step_allocations PRIVATE "-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc")
+  # the phase window of a whole driver run (tests/allocation_phase_counter.c) wraps CD_Profile_Enter
+  target_link_options(test_step_allocations PRIVATE
+                      "-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=__cabledyn_profile_MOD_cd_profile_enter")
   add_test(NAME step_allocations
            COMMAND test_step_allocations ${CMAKE_CURRENT_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat
                    200.0 200)
@@ -1555,6 +1558,10 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_ID STREQUAL "GN
   # And with the nodal twist of a line free in torsion at one end.
   add_test(NAME step_allocations_torsion_one_end COMMAND test_step_allocations free)
   set_tests_properties(step_allocations_torsion_one_end PROPERTIES LABELS "fortran;dynamic;memory")
+  # The standalone driver's march of a finite-EI line on the cubic-Hermite route moved by a vessel,
+  # run in process: the step phase of every step after warm-up.
+  add_test(NAME step_allocations_driver_vessel COMMAND test_step_allocations driver_vessel)
+  set_tests_properties(step_allocations_driver_vessel PROPERTIES LABELS "fortran;driver;dynamic;memory")
 endif()
 
 add_executable(test_snap_load tests/test_snap_load.f90)
