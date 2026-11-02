@@ -1623,7 +1623,9 @@ mesh-sequenced route described below first and this route as its fallback):
    declared seabed plane (flat ``WtrDpth``, or the least-squares plane of a structured bathymetry
    along the chord) or hung in mid-water when there is no seabed. The solve runs in the vertical
    plane of the chord, translated to the anchor, so a translated or rotated deck gives the same
-   numbers to round-off. Over a bathymetry that is not a plane along the chord (a surveyed
+   numbers to round-off. A line whose End A (the fairlead) rests on the seabed below its End B,
+   such as a cable written from a seabed termination up to a floater, is seeded from End A, the
+   same catenary seen from its other end, with its nodes put back in order. Over a bathymetry that is not a plane along the chord (a surveyed
    seabed with roughness, bumps or dips), the seed laid on the fitted plane meets the actual bed
    wherever the bed rises above that plane: every seed node deeper below the actual bed than its
    static penalty penetration (nodal submerged weight over the nodal contact stiffness

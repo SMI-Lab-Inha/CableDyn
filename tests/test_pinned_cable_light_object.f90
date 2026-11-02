@@ -22,7 +22,14 @@
 !>  D  the cable written from its anchor is turned around to start at the rod end and writes
 !>     the same output (byte for byte); a cable from a fixed rod's end to the free rod's end
 !>     (an End B on the moving object) holds to 1e-5 m and its tension to 1e-4 (measured 2e-7
-!>     m and 9e-8; old: 6.1 m, 1190 times);
+!>     m and 9e-8; old: 6.1 m, 1190 times). That cable's End A (the fixed rod's end) lies on
+!>     the seabed below its End B: its catenary seed is laid from End A, the line seen from
+!>     its other end. Before, the catenary route refused it (fairlead on the bed) and the
+!>     mesh-sequenced route took over, whose branch depended on platform round-off: Linux
+!>     gfortran reached a kinked state (max h kappa 1.96) and failed the deck, Windows the
+!>     cable's equilibrium;
+!>  R  the static start of that deck with the fixed rod moved by 1 ulp in x either way or by
+!>     1e-12 m up is the same rod pose to 1e-9 m;
 !>  B  a light Rigid6 buoy (4 t) with a pinned keel cable holds over 4 s (move at most 1e-5 m,
 !>     tension within 1e-5; measured 1e-9 m and 3.3e-8; old: 0.22 m, 38 times);
 !>  S  second route: the staggered scheme, whose sub-stepped central difference resolves the
@@ -46,6 +53,7 @@ PROGRAM test_pinned_cable_light_object
   CALL check_hold('lower', 'pcl_lower', .FALSE., 1.0e-5_wp, 1.0e-5_wp)
   CALL check_reversed()
   CALL check_hold('fixrod', 'pcl_fixrod', .FALSE., 1.0e-5_wp, 1.0e-4_wp)
+  CALL check_fixrod_roundoff()
   CALL check_buoy()
   CALL check_staggered('upper', 'pcl_upper')
   CALL check_staggered('lower', 'pcl_lower')
@@ -131,18 +139,25 @@ CONTAINS
   END FUNCTION same_text
 
   ! ------------------------------------------------------------------------------------------
-  SUBROUTINE write_spar_deck(path, cable_at, current, scheme, ei0, clamp, from_anchor)
+  SUBROUTINE write_spar_deck(path, cable_at, current, scheme, ei0, clamp, from_anchor, rod2_a, tmax)
     !! The free rod spar between z = -30 m (End A) and -20 m (End B) on four taut EI = 0 legs
     !! (from End A to anchors 25 m up- and downstream, from End B to anchors 30 m to either side)
     !! and the finite-EI cable (line 5, 55 m) to the anchor (-40, 0, -50): from the rod's upper
     !! end (cable_at 'upper'), its lower end ('lower'), or from the end of a fixed rod at that
     !! anchor to the upper end ('fixrod', End B on the free rod). current: 0.5 m/s in +X;
     !! scheme: bodyScheme; ei0: the cable without bending stiffness; clamp: a Rigid End A
-    !! connection along the rod axis (EzZ given); from_anchor: line 5 written from the anchor.
+    !! connection along the rod axis (EzZ given); from_anchor: line 5 written from the anchor;
+    !! rod2_a: the fixed rod's End A (default the anchor; its End B 1 m above); tmax: TMax
+    !! (default 2 s).
     CHARACTER(*), INTENT(IN) :: path, cable_at, scheme, clamp
     LOGICAL, INTENT(IN) :: current, ei0, from_anchor
+    REAL(wp), INTENT(IN), OPTIONAL :: rod2_a(3)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: tmax
     INTEGER :: u
     CHARACTER(8) :: rod_end
+    REAL(wp) :: r2(3)
+    r2 = [-40.0_wp, 0.0_wp, -50.0_wp]
+    IF (PRESENT(rod2_a)) r2 = rod2_a
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'free rod spar with a finite-EI cable pinned at a rod end'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -162,7 +177,8 @@ CONTAINS
     WRITE (u, '(A)') 'ID RodType Type XA YA ZA XB YB ZB NumSegs Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)'
     WRITE (u, '(A)') '1 spar Free 0.0 0.0 -30.0 0.0 0.0 -20.0 1 -'
-    IF (cable_at == 'fixrod') WRITE (u, '(A)') '2 spar Fixed -40.0 0.0 -50.0 -40.0 0.0 -49.0 1 -'
+    IF (cable_at == 'fixrod') WRITE (u, '(A,6(ES24.16,1X),A)') '2 spar Fixed ', r2, r2 + [0.0_wp, 0.0_wp, 1.0_wp], &
+      ' 1 -'
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
@@ -173,7 +189,7 @@ CONTAINS
     WRITE (u, '(A)') '5 Fixed 0.0 30.0 -50.0 0 0 0 0'
     WRITE (u, '(A)') '6 Fixed 0.0 -30.0 -50.0 0 0 0 0'
     IF (cable_at == 'fixrod') THEN
-      WRITE (u, '(A)') '7 Rod2A -40.0 0.0 -50.0 0 0 0 0'
+      WRITE (u, '(A,3(ES24.16,1X),A)') '7 Rod2A ', r2, ' 0 0 0 0'
     ELSE
       WRITE (u, '(A)') '7 Fixed -40.0 0.0 -50.0 0 0 0 0'
     END IF
@@ -209,7 +225,11 @@ CONTAINS
     WRITE (u, '(A)') '1025.0 rhoW'
     WRITE (u, '(A)') '50.0 WtrDpth'
     WRITE (u, '(A)') '0.01 dtM'
-    WRITE (u, '(A)') '2.0 TMax'
+    IF (PRESENT(tmax)) THEN
+      WRITE (u, '(A)') tmax//' TMax'
+    ELSE
+      WRITE (u, '(A)') '2.0 TMax'
+    END IF
     WRITE (u, '(A)') 'static bodyIC'
     WRITE (u, '(A)') scheme//' bodyScheme'
     WRITE (u, '(A)') '0.4 rhoInf'
@@ -281,6 +301,44 @@ CONTAINS
     WRITE (*, '(A,L1)') 'D: cable written from its anchor writes the same output: ', ok
     CALL require(ok, 'D: the cable written from its anchor writes the same output as from the rod end')
   END SUBROUTINE check_reversed
+
+  SUBROUTINE check_fixrod_roundoff()
+    !! R. The fixed-rod-to-free-rod cable of D, its End A on the seabed below End B: its static
+    !!    start with the fixed rod moved by 1 ulp in x either way and by 1e-12 m up is the
+    !!    same rod pose to 1e-9 m.
+    REAL(wp), PARAMETER :: X0 = -40.0_wp, Z0 = -50.0_wp
+    REAL(wp) :: r2(3, 3), rows(7, 4), p0(4), dmax
+    INTEGER :: k, n
+    LOGICAL :: ok
+    CHARACTER(1024) :: em
+    CHARACTER(24) :: root
+    r2(:, 1) = [NEAREST(X0, 1.0_wp), 0.0_wp, Z0]
+    r2(:, 2) = [NEAREST(X0, -1.0_wp), 0.0_wp, Z0]
+    r2(:, 3) = [X0, 0.0_wp, Z0 + 1.0e-12_wp]
+    CALL write_spar_deck('pcl_fixrod_r0.dat', 'fixrod', .FALSE., 'monolithic', .FALSE., '', .FALSE., tmax='0.0')
+    CALL run_deck('pcl_fixrod_r0.dat', 'pcl_fixrod_r0', ok, em)
+    CALL require(ok, 'R: the fixed-rod deck static start runs: '//TRIM(em))
+    IF (.NOT. ok) RETURN
+    CALL read_rows('pcl_fixrod_r0.out', rows, n, ok)
+    CALL require(ok, 'R: static row written')
+    IF (.NOT. ok) RETURN
+    p0 = rows(2:5, 1)
+    dmax = 0.0_wp
+    DO k = 1, 3
+      WRITE (root, '(A,I0)') 'pcl_fixrod_r', k
+      CALL write_spar_deck(TRIM(root)//'.dat', 'fixrod', .FALSE., 'monolithic', .FALSE., '', .FALSE., &
+                           rod2_a=r2(:, k), tmax='0.0')
+      CALL run_deck(TRIM(root)//'.dat', TRIM(root), ok, em)
+      CALL require(ok, 'R: '//TRIM(root)//' (the fixed rod moved by round-off) runs: '//TRIM(em))
+      IF (.NOT. ok) RETURN
+      CALL read_rows(TRIM(root)//'.out', rows, n, ok)
+      CALL require(ok, 'R: '//TRIM(root)//' static row written')
+      IF (.NOT. ok) RETURN
+      dmax = MAX(dmax, MAXVAL(ABS(rows(2:5, 1) - p0)))
+    END DO
+    WRITE (*, '(A,ES10.3,A)') 'R: fixed rod moved by 1 ulp or 1e-12 m: rod pose change ', dmax, ' m'
+    CALL require(dmax <= 1.0e-9_wp, 'R: the fixed rod moved by round-off gives the same static start')
+  END SUBROUTINE check_fixrod_roundoff
 
   SUBROUTINE check_staggered(cable_at, mono_root)
     !! S. The spar deck (cable_at) on the staggered scheme: rod end positions within 1e-5 m and

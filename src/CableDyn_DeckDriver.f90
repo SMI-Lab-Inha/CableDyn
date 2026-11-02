@@ -5596,7 +5596,7 @@ CONTAINS
     INTEGER :: nnode, ne, i, es, cont_iters, polish_iters, budget_cont, cmode, k_walk
     ! Anchor retreats tried for a line too long for its span (see seed_walk).
     INTEGER, PARAMETER :: WALK_MAX_TRIES = 6
-    LOGICAL :: walk_ok, fold
+    LOGICAL :: walk_ok, fold, rev_seed
     CHARACTER(1024) :: walk_msg_c
     REAL(wp) :: walk_d, a_seed(3)
     CHARACTER(1024) :: walk_msg
@@ -5607,6 +5607,7 @@ CONTAINS
     REAL(wp) :: lambda0, ratio, span(2), span_len, t, xg, yg, zf, sx, sz, sxx, sxz, xl, yl
     REAL(wp) :: res_cont, cont_tol, phi, penetration, zfit(NFIT), fit_misfit, fine_limit, seed_bed, anchor_bed
     REAL(wp), ALLOCATABLE :: pos(:), q_seed(:), q_cont(:), curv_cont(:), knnode(:), tdir(:, :), stretch(:)
+    REAL(wp), ALLOCATABLE :: pos_r(:), l0_r(:), ea_r(:), w_r(:)
     CHARACTER(1024) :: em
 
     ErrStat = CD_HCSTAT_OK
@@ -5734,6 +5735,7 @@ CONTAINS
     walk_d = CD_ZERO
     a_seed = a_l
     walk_msg = ''
+    rev_seed = .FALSE.
     seed_walk: DO k_walk = 0, WALK_MAX_TRIES
       IF (laid) THEN
         ErrStat = CD_HCSTAT_OK
@@ -5781,7 +5783,33 @@ CONTAINS
           seed_bed = zf
         END IF
       END IF
-      IF (contact_enabled) THEN
+      ! A fairlead (End A) on or below the seabed plane under a raised anchor (End B): a cable
+      ! from a seabed termination up to a floater, written from the seabed end. The catenary is
+      ! the same line seen from its other end, so it is seeded with the ends exchanged (End A
+      ! the anchor on the bed, the bed plane and its slope seen from there) and its nodes put
+      ! back in order. Without it the route refused the seed (the fairlead must be above the
+      ! bed) and left the line to the mesh-sequenced route, whose branch on such a line
+      ! depended on platform round-off (a kinked equilibrium on one, the cable's own on
+      ! another). No anchor walk follows a reversed seed.
+      rev_seed = contact_enabled .AND. k_walk == 0 .AND. .NOT. fold .AND. &
+                 f_l(3) <= seed_bed + seabed_slope*span_len .AND. a_l(3) > seed_bed
+      IF (rev_seed) THEN
+        ALLOCATE (pos_r(3*nnode))
+        l0_r = l0(ne:1:-1)
+        ea_r = ea(ne:1:-1)
+        w_r = w(ne:1:-1)
+        CALL CD_Catenary_Seed(f_l, a_seed, l0_r, ea_r, w_r, pos_r, horizontal_tension, grounded_length, es, em, &
+                              seabed_z=seed_bed + seabed_slope*span_len, seabed_slope=-seabed_slope)
+        IF (es == CD_CAT_OK) THEN
+          DO i = 1, nnode
+            pos(3*(i - 1) + 1:3*i) = pos_r(3*(nnode - i) + 1:3*(nnode - i + 1))
+          END DO
+        ELSE
+          ErrStat = CD_HCSTAT_NOCONVERGE
+          ErrMsg = 'catenary seed unavailable (the line seeded from its End A on the seabed): '//TRIM(em)
+          RETURN
+        END IF
+      ELSE IF (contact_enabled) THEN
         CALL CD_Catenary_Seed(a_seed, f_l, l0, ea, w, pos, horizontal_tension, grounded_length, es, em, &
                               seabed_z=seed_bed, seabed_slope=seabed_slope)
       ELSE

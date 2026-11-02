@@ -371,6 +371,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   example (150 t buoy) the body motion changes by 3.5e-5 m, its error against a run at `dtM` / 4
   falling from 3.7e-5 m to 1.6e-6 m, and the cable top tension by 0.6 N of 8.1 kN; that deck runs
   about 45 % longer.
+- A finite-EI cable whose End A rests on the seabed below its End B (a cable written from a seabed
+  termination, such as a fixed rod's end, up to a floater) takes the catenary-continuation static
+  route again. Its catenary seed refused the line (the fairlead, End A, must sit above the bed),
+  so the mesh-sequenced route alone solved it, and its branch depended on platform round-off: a
+  55 m cable from a fixed rod's end on the seabed to a free spar rod solved on Windows and
+  reached a kinked state (max h kappa 1.96) on Linux gfortran, which failed the deck. The seed
+  is now laid from End A, the line seen from its other end, and its nodes put back in order. The
+  deck starts at the same equilibrium as before on Windows (1e-7 m, 6e-4 N), and moving the fixed
+  rod by 1 ulp either way or 1e-12 m up leaves the rod's start unchanged (0 m).
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's
