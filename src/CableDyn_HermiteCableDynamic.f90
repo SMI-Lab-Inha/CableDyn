@@ -4761,7 +4761,7 @@ CONTAINS
       REAL(wp), POINTER :: Gout(:)
       INTEGER :: ii, nd
       INTEGER(INT64) :: ec0, ec1
-      REAL(wp) :: xref, xd
+      REAL(wp) :: xref, xd, xc, ea_r, kt, tw_round
       REAL(wp), PARAMETER :: RESID_ROUNDOFF = 16.0_wp
       REAL(wp), PARAMETER :: STATE_DIVERGED = 1.0e12_wp
       ec0 = 0_INT64      ! defined even with profiling off (see the step-entry note)
@@ -4875,18 +4875,37 @@ CONTAINS
         ! so its rounding error is about eps*|r|/l0*EA per element. On a finely meshed, stiff,
         ! long cable at rest (e.g. 1024 elements, EA ~ 5e8 N, coordinates ~ 1e3 m) that exceeds
         ! tol*|w|*l0 and a held step stagnates at the floor forever. Raise fscale so tol*fscale
-        ! is never below RESID_ROUNDOFF times that error; the floor binds only there.
+        ! is never below RESID_ROUNDOFF times that error; the floor binds only there. With the
+        ! torque-tension coupling K the kernel carries EA - K^2/GJ and the torque the rest: the
+        ! coupling force (K/GJ) M_t takes the stretch through M_t = (GJ/l0)(... - (K/GJ)(l - l0)),
+        ! whose rounding is (K^2/GJ) eps |r|/l0, so the floor takes the whole axial stiffness
+        ! EA - K^2/GJ + K^2/GJ of the line (without it the floor fell by 1 - K^2/(EA GJ): at
+        ! K = 0.99 sqrt(EA GJ) to 2 % of the rounding it bounds, and a held line failed its step).
         xref = MAXVAL(model%l0)
         DO ii = 1, ndof
           IF (MOD(ii - 1, 6) < 3) xref = MAX(xref, ABS(qcur(ii)))
         END DO
-        fscale = MAX(fscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*MAXVAL(model%EA/model%l0)*xref/tol)
+        IF (model%torsion%active .AND. ALLOCATED(model%torsion%couple)) THEN
+          ea_r = CD_ZERO
+          DO ii = 1, SIZE(model%l0)
+            ea_r = MAX(ea_r, (ABS(model%EA(ii)) + model%torsion%couple(ii)**2*model%torsion%gj(ii))/model%l0(ii))
+          END DO
+        ELSE
+          ea_r = MAXVAL(model%EA/model%l0)
+        END IF
+        fscale = MAX(fscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*ea_r*xref/tol)
         ! Nodal twist: the torque scale of the angle rows, frozen with fscale and formed like it
         ! from the nodal loads (a node's torque imbalance, not the torque the line carries,
         ! which accumulates the imbalances along the line as the tension does the force's): the
         ! inertial torques and the predictor's imbalance, at least 1 N m, and the round-off
         ! floor of an element twist, (GJ/l0 + Bt/l0 gamma/(beta dt)) eps (max|phi| + max|x|/l0)
-        ! (the damping takes the twist rate, whose Newmark rate amplifies the rounding).
+        ! (the damping takes the twist rate, whose Newmark rate amplifies the rounding). With the
+        ! torque-tension coupling the twist tau also takes -(K/GJ)(l - l0), the element length l
+        ! formed from coordinates with the rounding eps max|x|, so the floor adds
+        ! (GJ/l0 + Bt/l0 gamma/(beta dt)) |K/GJ| eps max|x| = |K| eps max|x|/l0 (static share):
+        ! K/l0 exceeds GJ/l0^2 by K l0/GJ (165 on a 2 m mesh at K = 0.85 sqrt(EA GJ), EA/GJ =
+        ! 9.4e3 m^-2), and without it a held line's rounding of 2.4e-8 N m stood above the
+        ! tolerance of its 1 N m scale and the step failed.
         IF (model%tw_active) THEN
           model%tw_tscale = CD_ONE
           DO ii = 1, model%nn
@@ -4897,8 +4916,18 @@ CONTAINS
           END DO
           xd = MAXVAL(model%torsion%gj/model%l0)
           IF (ALLOCATED(model%torsion%bt)) xd = xd + MAXVAL(model%torsion%bt/model%l0)*gm/(bt*dt)
-          model%tw_tscale = MAX(model%tw_tscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*xd* &
-                                (MAX(CD_ONE, MAXVAL(ABS(model%tw_pe))) + xref/MINVAL(model%l0))/tol)
+          xc = CD_ZERO
+          IF (ALLOCATED(model%torsion%couple)) THEN
+            DO ii = 1, SIZE(model%l0)
+              kt = model%torsion%gj(ii)/model%l0(ii)
+              IF (ALLOCATED(model%torsion%bt)) kt = kt + model%torsion%bt(ii)/model%l0(ii)*gm/(bt*dt)
+              xc = MAX(xc, ABS(model%torsion%couple(ii))*kt)
+            END DO
+          END IF
+          tw_round = MAX(CD_ONE, MAXVAL(ABS(model%tw_pe))) + xref/MINVAL(model%l0)
+          model%tw_tscale = MAX(model%tw_tscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*xd*tw_round/tol)
+          IF (xc > CD_ZERO) &
+            model%tw_tscale = MAX(model%tw_tscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*(xd*tw_round + xc*xref)/tol)
         END IF
         scale_set = .TRUE.
       END IF

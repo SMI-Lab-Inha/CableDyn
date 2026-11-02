@@ -78,8 +78,8 @@ MODULE CableDyn_DeckDriver
                                    CD_HermiteCable_Axial_Resultant_Range, CD_HermiteCable_Element, CD_HCABLE_OK, &
                                    CD_HermiteCable_Gauss_Rule
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve_AutoMesh, CD_HermiteCable_Static_Solve, &
-                                         CD_HermiteCable_Prolong_Arc, &
-                                         CD_HC_OSCILLATION_REL_TOL, &
+                                         CD_HermiteCable_Prolong_Arc, CD_HermiteCable_Kink_Advice, &
+                                         CD_HermiteCable_Element_Ratio, CD_HC_OSCILLATION_REL_TOL, &
                                          CD_HermiteCable_Static_Solve_Sequenced, CD_HCSTAT_OK, &
                                          CD_HCSTAT_BADINPUT, &
                                          CD_HermiteCable_Sequence_Coarse_Max_Length, &
@@ -1667,6 +1667,8 @@ CONTAINS
     ! Set when the attachment polish needed its fallbacks (attachment_fallback_checks).
     LOGICAL :: att_fell_back
     LOGICAL :: bathymetry_flat, require_3d_static, sym_broken, planar_unstable, saddle_kept
+    ! whether the line would be solved in 3D without its torsion (a twisted line always is)
+    LOGICAL :: require_3d_untwisted
     ! A planar equilibrium in a current that is a saddle out of its plane (see route_pass).
     REAL(wp), ALLOCATABLE :: l0_saddle(:), ea_saddle(:), ei_saddle(:), w_saddle(:), q_saddle(:), curv_saddle(:)
     INTEGER, ALLOCATABLE :: fixed_saddle(:)
@@ -1897,7 +1899,6 @@ CONTAINS
     ! torsional line is solved in 3D from the start; a line free in torsion at one end carries no
     ! static torque, so its statics are those of the line without torsion.
     tors_line = line_torsion_active(ln)
-    IF (tors_line .AND. ln%tors_free_end == 0) require_3d_static = .TRUE.
     ! A current with a component across the vertical plane of the chord pushes the line out
     ! of that plane, which the dynamics (endpoints held, every other DOF free) follow: the
     ! static equilibrium is then solved in 3D as well.
@@ -1934,6 +1935,8 @@ CONTAINS
     ! reference, and the friction it holds, out of that plane: solved in 3D as well. This is
     ! decided here, before the held (planar) DOFs below are chosen.
     IF (as_laid_off_plane()) require_3d_static = .TRUE.
+    require_3d_untwisted = require_3d_static
+    IF (tors_line .AND. ln%tors_free_end == 0) require_3d_static = .TRUE.
 
     CALL build_finite_section_mesh(ln, sections, types, conn, l0, ea, mpl, diam, ei, &
                                    gas_in, gj_in, i_rt_in, i_rn_in, ErrStat, ErrMsg, ktt=ktt_in, bt=bt_in)
@@ -2959,6 +2962,8 @@ CONTAINS
       WRITE (em, '(A,ES12.5,A,ES12.5,A,I0)') &
         'unresolved/kinked finite-EI equilibrium: max(h*kappa)=', diag%h_kappa_peak, &
         ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', diag%h_kappa_elem
+      em = TRIM(em)//TRIM(CD_HermiteCable_Kink_Advice(diag%h_kappa_peak, diag%h_kappa_elem, SIZE(l0_am), &
+                                                      CD_HermiteCable_Element_Ratio(l0, l0_am, diag%h_kappa_elem)))
       CALL fail_solve(ErrStat, ErrMsg, TRIM(em)); RETURN
     END IF
     IF (opts%tensile_mode == CD_HCDYN_TENSILE_ERROR .AND. diag%axial_compression) THEN
@@ -3348,6 +3353,14 @@ CONTAINS
       tors = CD_HermiteTorsionType()
       tors%active = .TRUE.
       tors%quadrature_order = opts%bending_quadrature_order
+      ! The untwisted state was accepted by the checks of a line without torsion, which start a
+      ! state that is unstable out of its vertical plane with a note (handoff_lateral_note, a
+      ! kept planar saddle): the stage refuses, or descends from, only an instability the twist
+      ! adds, and keeps the untwisted state's own (torsion_note names it). A lazy wave with 25
+      ! modules in an in-plane 0.5 m/s current, whose discrete planar equilibrium has one
+      ! out-of-plane negative mode with or without torsion, was refused at Phi = 0 ("the twisted
+      ! equilibrium is unstable", with no twist to impose).
+      tors%keep_untwisted_instability = .TRUE.
       tors%gj = gj_in
       IF (SIZE(lf) /= SIZE(ld)) CALL remap_elem_by_reference_arc(tors%gj, ld, lf)
       ! torque-tension coupling: K/GJ per element (left unallocated without coupling)
@@ -3468,6 +3481,12 @@ CONTAINS
         tors%phi*45.0_wp/QUARTER_PI, ' deg, torque ', tors%torque, ' N m (', tors%ramp_steps, &
         ' twist stage(s), ', tors%descents, ' buckling descent(s))'
       CALL report_note(tnote)
+      IF (tors%untwisted_instability) THEN
+        WRITE (tnote, '(A,I0,A,I0,A)') 'line ', ln%id, ': the twisted static state keeps the instability of '// &
+          'its untwisted state (', tors%n_negative, ' negative stiffness mode(s), none added by the twist), '// &
+          'which a line without torsion starts from as well; a disturbance can move the line away from it'
+        CALL report_note(tnote)
+      END IF
     END SUBROUTINE torsion_note
 
     SUBROUTINE torsion_after_attachments(est, emt)
@@ -3559,11 +3578,12 @@ CONTAINS
       IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
         CALL attachment_mesh_checks(l0, q_static, ea, ei, att_node, contact_z, &
                                     opts%tensile_mode == CD_HCDYN_TENSILE_ERROR, TWISTED_WHAT, accepted_t, msg_t, &
-                                    bathymetry=bathymetry, frame_cs=frame_cs, axial_offset=tors_axial_offset)
+                                    bathymetry=bathymetry, frame_cs=frame_cs, axial_offset=tors_axial_offset, &
+                                    l0_deck=l0_deck_att)
       ELSE
         CALL attachment_mesh_checks(l0, q_static, ea, ei, att_node, contact_z, &
                                     opts%tensile_mode == CD_HCDYN_TENSILE_ERROR, TWISTED_WHAT, accepted_t, msg_t, &
-                                    axial_offset=tors_axial_offset)
+                                    axial_offset=tors_axial_offset, l0_deck=l0_deck_att)
       END IF
       IF (.NOT. accepted_t) THEN
         est = CD_DECKDRV_SOLVEFAIL
@@ -4483,8 +4503,30 @@ CONTAINS
       !! dead loads), the rest there. Fails closed with the verdict's message.
       LOGICAL :: stable_f, accepted_f
       CHARACTER(1024) :: msg_f
+      INTEGER, ALLOCATABLE :: fixed_f(:)
+      INTEGER :: nn_f, i_f
+      ! A line restrained in torsion is solved in 3D, but where the same line free in torsion is
+      ! solved in its vertical plane, its untwisted discrete state is tested as that line's is, with
+      ! the out-of-plane DOFs held: the torsion stage that follows tests the twisted state in 3D and
+      ! keeps only an instability its untwisted state has (a planar state unstable out of its plane,
+      ! which the line free in torsion starts from with a note). Without it the lazy wave with 25
+      ! modules restrained in torsion, Pretwist 360 deg, in an in-plane 0.5 m/s current, whose polish
+      ! needed its fallbacks, was refused for its out-of-plane mode before any twist.
+      fixed_f = fixed_dofs
+      IF (tors_line .AND. ln%tors_free_end == 0 .AND. .NOT. require_3d_untwisted) THEN
+        IF (.NOT. as_laid_cross_slope()) THEN
+          nn_f = SIZE(l0) + 1
+          fixed_f = [1, 2, 3, 6*nn_f - 5, 6*nn_f - 4, 6*nn_f - 3]
+          DO i_f = 1, nn_f
+            fixed_f = [fixed_f, 6*(i_f - 1) + 2]
+            IF ((i_f == 1 .AND. endconn_mode(1) == CD_ENDCONN_RIGID) .OR. &
+                (i_f == nn_f .AND. endconn_mode(2) == CD_ENDCONN_RIGID)) CYCLE
+            fixed_f = [fixed_f, 6*(i_f - 1) + 5]
+          END DO
+        END IF
+      END IF
       IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
-        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_dofs, &
+        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_f, &
                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, &
                                    opts, stable_f, ErrStat, ErrMsg, bathymetry=bathymetry, cur_obj=cur_obj)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
@@ -4492,7 +4534,7 @@ CONTAINS
                                             opts%tensile_mode == CD_HCDYN_TENSILE_ERROR, stable_f, accepted_f, msg_f, &
                                             bathymetry=bathymetry, frame_cs=frame_cs)
       ELSE
-        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_dofs, &
+        CALL hermite_static_stable(l0, l0, ea, ei, w_bare, diam, dry_b_final(), q_static, fixed_f, &
                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, endconn_mode, &
                                    opts, stable_f, ErrStat, ErrMsg, cur_obj=cur_obj)
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
@@ -6896,7 +6938,7 @@ CONTAINS
     ELSE IF (es /= CD_HCSTAT_OK) THEN
       CALL fail_solve(ErrStat, ErrMsg, 'finite-EI torsion static solve failed: '//TRIM(em)); RETURN
     END IF
-    IF (.NOT. tors%stable) THEN
+    IF (.NOT. tors%stable .AND. .NOT. tors%untwisted_instability) THEN
       CALL fail_solve(ErrStat, ErrMsg, 'finite-EI torsion static solve ended on an unstable equilibrium'); RETURN
     END IF
     q = q_out
@@ -6951,7 +6993,7 @@ CONTAINS
   END SUBROUTINE CD_Attachment_Discrete_Verdict
 
   SUBROUTINE attachment_mesh_checks(l0, q, ea, ei, att_node, contact_z, tensile_error, what, accepted, message, &
-                                    bathymetry, frame_cs, axial_offset)
+                                    bathymetry, frame_cs, axial_offset, l0_deck)
     !! The mesh safety checks of a discrete attachment equilibrium on its mesh l0 with state q:
     !!  1. the kink limit (h*kappa <= CD_HC_KINK_LIMIT), except on the elements beside an
     !!     attachment node att_node, where the lumped load turns the line by a slope jump that the
@@ -6970,6 +7012,8 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     REAL(wp), INTENT(IN), OPTIONAL :: frame_cs(2)
     REAL(wp), INTENT(IN), OPTIONAL :: axial_offset(:)
+    ! the deck mesh l0 refines (the kink advice names the factor for its NumSegs)
+    REAL(wp), INTENT(IN), OPTIONAL :: l0_deck(:)
     TYPE(CD_HermiteResolutionType) :: diag
     REAL(wp), ALLOCATABLE :: hk(:)
     LOGICAL, ALLOCATABLE :: beside(:)
@@ -7011,6 +7055,12 @@ CONTAINS
     IF (hk_peak > CD_HC_KINK_LIMIT) THEN
       WRITE (em, '(A,ES12.5,A,ES12.5,A,I0,A)') 'is unresolved/kinked: max(h*kappa)=', hk_peak, &
         ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', e_peak, ' (away from the attachment nodes)'
+      IF (PRESENT(l0_deck)) THEN
+        em = TRIM(em)//TRIM(CD_HermiteCable_Kink_Advice(hk_peak, e_peak, ne, &
+                                                        CD_HermiteCable_Element_Ratio(l0_deck, l0, e_peak)))
+      ELSE
+        em = TRIM(em)//TRIM(CD_HermiteCable_Kink_Advice(hk_peak, e_peak, ne))
+      END IF
       message = what//TRIM(em); RETURN
     END IF
     IF (tensile_error .AND. diag%axial_compression) THEN
@@ -7130,6 +7180,7 @@ CONTAINS
     CASE (CD_HC_AUDIT_KINK)
       WRITE (message, '(A,ES10.3,A,ES10.3,A,I0)') 'unresolved/kinked equilibrium: max(h*kappa)=', &
         audit%h_kappa_peak, ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', audit%h_kappa_elem
+      message = TRIM(message)//TRIM(CD_HermiteCable_Kink_Advice(audit%h_kappa_peak, audit%h_kappa_elem, SIZE(l0)))
     END SELECT
     IF (physical) message = ''
   END SUBROUTINE audit_hermite_static
@@ -26238,7 +26289,7 @@ CONTAINS
 
   SUBROUTINE solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                          ErrMsg, bathymetry, points_only, jac_check_err, ext_pt, ext_fm, &
-                                         end_force_a, quiet, skipped, ext_km, ext_rot, end_force_b)
+                                         end_force_a, quiet, skipped, ext_km, ext_rot, end_force_b, res_left)
     !! Static equilibrium of the free objects of a deck: free Rigid6 bodies (six DOFs: position
     !! and a rotation-vector increment on SO(3); a CoupledPinned body holds its position at its
     !! host node and balances its moment about it), free rods (position and the two rotations
@@ -26321,6 +26372,10 @@ CONTAINS
     ! skipped: the objects were held at their deck poses (a moving line has no moving-end
     ! static solve), so nothing was balanced
     LOGICAL, INTENT(OUT), OPTIONAL :: skipped
+    ! res_left: the net load the solve leaves on the objects, the largest force [N] or moment
+    ! [N m] of an object at the returned poses (zero when nothing was balanced): the resolution of
+    ! the balance, which the passes of solve_body_equilibrium cannot refine
+    REAL(wp), INTENT(OUT), OPTIONAL :: res_left
 
     TYPE :: LineStaticCache
       !! A moving line's mesh and loads (fixed) and its last converged shape (the warm seed).
@@ -26365,6 +26420,7 @@ CONTAINS
     silent = .FALSE.
     IF (PRESENT(quiet)) silent = quiet
     IF (PRESENT(skipped)) skipped = .FALSE.
+    IF (PRESENT(res_left)) res_left = CD_ZERO
     IF (.NOT. (only_points .OR. opts%body_ic_static)) RETURN
     ! the objects that move: free Rigid6 bodies and free rods with a line, then Free/Connect points
     ALLOCATE (okind(SIZE(bodies) + SIZE(rods) + SIZE(points)), idx(SIZE(bodies) + SIZE(rods) + SIZE(points)))
@@ -26693,6 +26749,18 @@ CONTAINS
       END IF
       EXIT
     END DO
+    IF (PRESENT(res_left)) THEN
+      ! the force rows of r are in N, the moment rows scaled by the object length lsc
+      res_left = CD_ZERO
+      DO k = 1, nobj
+        IF (okind(k) == OBJ_PIN) THEN
+          res_left = MAX(res_left, MAXVAL(ABS(r(off(k) + 1:off(k) + ndof(k))))*lsc(k))
+        ELSE
+          res_left = MAX(res_left, MAXVAL(ABS(r(off(k) + 1:off(k) + MIN(3, ndof(k))))))
+          IF (ndof(k) > 3) res_left = MAX(res_left, MAXVAL(ABS(r(off(k) + 4:off(k) + ndof(k))))*lsc(k))
+        END IF
+      END DO
+    END IF
     IF (unstable) THEN
       IF (only_points) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'static point equilibrium found is unstable: '// &
@@ -27911,13 +27979,22 @@ CONTAINS
     !! Hermite connection moment, both evaluated at the previous pass's equilibrium. The passes
     !! repeat from the deck state until these loads change by at most 1e-7 of the force scale
     !! (moments of the force scale times 1 m), so the converged pose balances the Hermite cable
-    !! exactly: at the fixed point the core's surrogate end force cancels. A deck without such a
+    !! exactly: at the fixed point the core's surrogate end force cancels. A change is resolved
+    !! only down to the net load each pass's core solve leaves on the objects (res_left, its
+    !! tolerance 1e-9 of the core's own force scale, the largest net weight or line end force, or
+    !! its round-off): the end loads are those of poses balanced to that load, so two passes
+    !! differ by up to twice it (the end stiffness at most the stiffness that balances the
+    !! objects), and the passes stop on a change of at most PASS_RES_FACTOR times the larger of
+    !! the last two passes' res_left when that is above the tolerance. A deck without such a
     !! line is the core solve unchanged. A line with condensed torsion also returns its torque,
     !! which depends on the object's rotation as strongly as GJ/L: each pass then also gives the
     !! core the torque's moment stiffness (1/C) a a^T about the previous pass's pose (a = dTheta/dw
     !! of the cable at that pose, its shape held; C the line torsional compliance), so the passes
     !! converge whatever the ratio of the object's own restoring stiffness to GJ/L (the passes
-    !! alone would need it far above GJ/L), to 1e-10 of the force scale. A finite-EI line between
+    !! alone would need it far above GJ/L), to 1e-10 of the force scale (two moored 20 t bodies,
+    !! whose net weights set the core's scale to 13 times the line's end force, leave a res_left
+    !! of up to 5e-9 of that end force: their passes stalled at a change of 1-4e-9 for 60 passes,
+    !! the torque settled to six digits from the fourth). A finite-EI line between
     !! two objects (End B on a body point or a rod end) takes the same corrections at both ends,
     !! whatever its connections (the passes balance both objects on the cubic-Hermite cable); the
     !! torque's stiffness at each end is about that end's object with the other's held, the
@@ -27942,6 +28019,8 @@ CONTAINS
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_check_err
     INTEGER, PARAMETER :: MAX_PASS = 60, ANDERSON_DEPTH = 6
     REAL(wp), PARAMETER :: PASS_TOL = 1.0e-7_wp, PASS_TOL_TORSION = 1.0e-10_wp, ANDERSON_DROP = 1.0e-6_wp
+    ! twice the res_left of a pass (two passes, each off by its own) and a margin of 2
+    REAL(wp), PARAMETER :: PASS_RES_FACTOR = 4.0_wp
     TYPE(DeckBody), ALLOCATABLE :: bodies0(:)
     TYPE(DeckRod), ALLOCATABLE :: rods0(:)
     TYPE(DeckPoint), ALLOCATABLE :: points0(:)
@@ -27961,8 +28040,17 @@ CONTAINS
     TYPE(DeckLine), ALLOCATABLE :: lines_core(:)
     INTEGER :: attempt, n_attempt, first_stat
     CHARACTER(1024) :: first_msg
-    REAL(wp) :: scale, change, pass_tol_eff
-    CHARACTER(24) :: b1
+    REAL(wp) :: scale, change, pass_tol_eff, res_core, res_core_prev, pass_floor
+    CHARACTER(24) :: b1, b2
+    ! the failure's advice: the passes balance each object against the line's end loads at the
+    ! last pose, so they settle only where the object's own restoring stiffness and its other
+    ! lines hold it against the change of those loads with its pose
+    CHARACTER(*), PARAMETER :: PASS_REMEDY = 'the end loads of the line change with the pose of its object(s) '// &
+                               'faster than the object''s restoring stiffness and its other lines settle them; '// &
+                               'restrain the object more stiffly (its moorings or C44/C55) or soften the '// &
+                               'connection (a finite Stiffness, a Pinned end or a finite TorsStiffness); OPTION '// &
+                               'bodyIC deck skips this balance and starts the objects out of equilibrium at their '// &
+                               'deck poses'
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -28077,6 +28165,8 @@ CONTAINS
       ext_fm = CD_ZERO
       ext_km = CD_ZERO
       ext_rot = CD_ZERO
+      res_core = CD_ZERO
+      pass_floor = CD_ZERO
       DO e = 1, ne
         ext_rot(1, 1, e) = CD_ONE
         ext_rot(2, 2, e) = CD_ONE
@@ -28086,17 +28176,19 @@ CONTAINS
         bodies = bodies0
         rods = rods0
         points = points0
+        res_core_prev = res_core
         ! the torque stiffness only with torsion: without it the core's arithmetic is exactly that
         ! of a deck before torsion existed (no zero-stiffness correction, signed zeros kept)
         IF (pass_tol_eff < PASS_TOL) THEN
           CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines_core, sections, opts, &
                                            ErrStat, ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, &
                                            end_force_a=fs, quiet=pass > 1, skipped=held, ext_km=ext_km, &
-                                           ext_rot=ext_rot, end_force_b=fsb)
+                                           ext_rot=ext_rot, end_force_b=fsb, res_left=res_core)
         ELSE
           CALL solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines_core, sections, opts, &
                                            ErrStat, ErrMsg, bathymetry, ext_pt=ext_pt, ext_fm=ext_fm, &
-                                           end_force_a=fs, quiet=pass > 1, skipped=held, end_force_b=fsb)
+                                           end_force_a=fs, quiet=pass > 1, skipped=held, end_force_b=fsb, &
+                                           res_left=res_core)
         END IF
         IF (ErrStat /= CD_DECKDRV_OK) EXIT
         ! the objects stay at their deck poses (the core has already said why): nothing to balance
@@ -28122,7 +28214,9 @@ CONTAINS
         eworst = MAXLOC(MAXVAL(ABS(new_fm - ext_fm), DIM=1), DIM=1)
         ext_km = new_km
         ext_rot = new_rot
-        IF (change <= pass_tol_eff*scale) THEN
+        ! the resolution of the passes: the net load the last two core solves left
+        pass_floor = PASS_RES_FACTOR*MAX(res_core, MERGE(res_core_prev, res_core, pass > 1))
+        IF (change <= MAX(pass_tol_eff*scale, pass_floor)) THEN
           ext_fm = new_fm
           EXIT
         END IF
@@ -28133,20 +28227,21 @@ CONTAINS
         END IF
       END DO
       IF (ErrStat == CD_DECKDRV_OK) THEN
-        IF (change <= pass_tol_eff*scale) EXIT
+        IF (change <= MAX(pass_tol_eff*scale, pass_floor)) EXIT
         WRITE (b1, '(ES10.3)') change/scale
+        WRITE (b2, '(ES10.3)') MAX(pass_tol_eff*scale, pass_floor)/scale
         IF (nb == 0) THEN
           CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the END CONNECTION or ATTACHMENTS '// &
                           'of finite-EI LINE '//TRIM(int_to_str(lines(eline(eworst))%id))// &
                           ' did not converge after '//TRIM(int_to_str(max_pass_eff))//' passes (relative end-load '// &
-                          'change '//TRIM(ADJUSTL(b1))//'); OPTION bodyIC deck starts from the deck pose instead')
+                          'change '//TRIM(ADJUSTL(b1))//', tolerance '//TRIM(ADJUSTL(b2))//'): '//PASS_REMEDY)
         ELSE
           ! the worst entry may be the End B of a line between two objects, connected or pinned
           CALL fail_solve(ErrStat, ErrMsg, 'static body/rod equilibrium with the bending end loads of finite-EI '// &
                           'LINE '//TRIM(int_to_str(lines(eline(eworst))%id))//' (its End '// &
                           MERGE('B', 'A', eworst > ncl)//', on a body or rod) did not converge after '// &
                           TRIM(int_to_str(max_pass_eff))//' passes (relative end-load change '//TRIM(ADJUSTL(b1))// &
-                          '); OPTION bodyIC deck starts from the deck pose instead')
+                          ', tolerance '//TRIM(ADJUSTL(b2))//'): '//PASS_REMEDY)
         END IF
       END IF
       IF (attempt == n_attempt) THEN
