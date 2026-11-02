@@ -72,8 +72,10 @@ Line and constitutive capability
      - Supported with route limits
      - a mixed deck of lines between held or coupled points only (no bodies, rods, or
        ``Free``/``Connect`` points) runs in OpenFAST and standalone as a static run or a dynamic
-       run with held ends or a ``motionFile``/``vesselMotion`` prescription, and rejects deck
-       waves standalone (so ``vesselRAO`` too); a mixed deck with bodies, rods, or
+       run with held ends or a ``motionFile``/``vesselMotion`` prescription; standalone it takes
+       the deck current (``current`` OPTION, WaterKin ``CurrentMod 1``, MoorDyn-C ``Currents``
+       ``1``/``2``/``5``) as the single-line routes do and rejects deck waves (so ``vesselRAO``
+       too); a mixed deck with bodies, rods, or
        ``Free``/``Connect`` points runs standalone on the multibody march, with moving objects
        and deck waves/current, but not with a ``motionFile``
    * - Viscoelastic rope (MoorDyn ``ElasticMod`` 2/3)
@@ -173,7 +175,8 @@ Loads and environment
    * - MoorDyn-C currents in time and space (``Currents 2``, ``Currents 5``)
      - Standalone only
      - ``current_profile_dynamic.txt`` and ``current_profile_4d.txt``, interpolated as MoorDyn-C
-       v2.7.1 does at every node's position and time, the static start included; see
+       v2.7.1 does at every node's position and time, the static start included, on every
+       standalone route (the mixed ``EI = 0`` + finite-EI deck too); see
        :ref:`moordyn-c-wavekin`
    * - Airy and JONSWAP waves
      - Supported

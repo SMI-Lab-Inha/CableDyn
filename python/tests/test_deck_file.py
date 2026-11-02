@@ -940,9 +940,8 @@ def test_attachments_accept_an_axial_drag_area_and_a_deck_current(tmp_path):
     # all finite-EI lines: the deck driver takes a deck current
     path.write_text(text.replace("1.0e8 0.0 0.0 1.2", "1.0e8 0.0 1.0e3 1.2"), encoding="utf-8")
     DeckFile.read(path)
-    # a mixed EI=0/finite-EI deck runs on the aggregate in still water
-    with pytest.raises(DeckFormatError, match="runs in still water"):
-        DeckFile.from_text(text)
+    # a mixed EI=0/finite-EI deck runs on the aggregate in its current too
+    DeckFile.from_text(text)
 
 
 def test_viv_lift_flag_is_upper_case_and_standalone():

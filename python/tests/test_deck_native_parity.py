@@ -842,17 +842,27 @@ _MIXED = _edit(
 )
 
 
-def test_standalone_mixed_deck_runs_on_the_still_water_aggregate():
+def test_standalone_mixed_deck_runs_on_the_aggregate_in_its_current():
     DeckFile.from_text(_MIXED)
     DeckFile.from_text(_edit(_MIXED, ("2 2 3 -", "2 2 3 r")))
-    _rejects(_options(_MIXED, "uniform 0.5 0 0 current"), "runs in still water")
-    _rejects(_options(_MIXED, "airy 2 8 0 waves"), "runs in still water")
+    # the aggregate marches the deck current (deck_current) but evaluates no deck waves
+    DeckFile.from_text(_options(_MIXED, "uniform 0.5 0 0 current"))
+    DeckFile.from_text(_options(_MIXED, "profile -50 0.1 0 0 0 0.5 0.2 0 current"))
+    for mode in (1, 2, 5):
+        DeckFile.from_text(_options(_MIXED, f"{mode} Currents"))
+    _rejects(_options(_MIXED, "airy 2 8 0 waves"), "evaluates no deck waves")
+    _rejects(_options(_MIXED, "7 WaveKin"), "WaveKin 7 waves are not supported")
+    _rejects(_options(_MIXED, "uniform 0.5 0 0 current", "2 Currents"), "double-counting")
+    _rejects(
+        _edit(_options(_MIXED, "uniform 0.5 0 0 current"), ("0.1 dtM\n10.0 TMax\n", "")),
+        "standalone OPTION current requires dtM and TMax",
+    )
     _rejects(_edit(_MIXED, ("2 2 3 -", "2 2 3 pt")), "writes no per-line files")
     # the driver marches the deck's motionFile or vesselMotion; vesselRAO needs deck waves
     DeckFile.from_text(_options(_MIXED, "m.txt motionFile"))
     DeckFile.from_text(_options(_MIXED, "v.txt vesselMotion", "0|0|0 vesselRef"))
     _rejects(_options(_MIXED, "r.txt vesselRAO"), "vesselRAO needs deck waves")
-    _rejects(_options(_MIXED, "r.txt vesselRAO", "airy 2 8 0 waves"), "runs in still water")
+    _rejects(_options(_MIXED, "r.txt vesselRAO", "airy 2 8 0 waves"), "evaluates no deck waves")
 
 
 def test_coupled_route_takes_no_motion_file_and_needs_a_line():
@@ -1710,3 +1720,75 @@ def test_model_round_trips_the_torsion_columns():
     )
     assert added.torsion_stiffness == 1.0e4
     assert "TorsStiffness" in plain.to_text()
+
+
+# MoorDyn-C current files of the mixed-route parity decks (written beside the deck)
+_MIXED_CURRENT_FILES = {
+    1: ("current_profile.txt", "steady\nz ux uy uz\n-50.0 0.1 0.05 0.0\n0.0 0.4 0.2 0.0\n"),
+    2: (
+        "current_profile_dynamic.txt",
+        "dynamic\n\n\n\n-50.0 0.0\nt ux... uy...\n0.0 0.1 0.3 0.0 0.1\n1.0 0.2 0.4 0.05 0.15\n",
+    ),
+    5: (
+        "current_profile_4d.txt",
+        "2 2 2 2\n-500.0 500.0\n-50.0 50.0\n-60.0 0.0\n0.0 1.0\nx y z t ux uy uz\n"
+        + "".join(
+            f"{x} {y} {z} {t} {0.1 + 0.1 * t} 0.05 0.0\n"
+            for t in (0.0, 1.0)
+            for z in (-60.0, 0.0)
+            for y in (-50.0, 50.0)
+            for x in (-500.0, 500.0)
+        ),
+    ),
+}
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the native mixed-route parity",
+)
+@pytest.mark.parametrize(
+    "rows",
+    [
+        ("uniform 0.5 0 0 current",),
+        ("profile -50 0.1 0 0 0 0.5 0.2 0 current",),
+        ("1 Currents",),
+        ("2 Currents",),
+        ("5 Currents",),
+        ("2 Currents", "uniform 0.5 0 0 current"),
+        ("3 Currents",),
+        ("airy 2 8 0 waves",),
+        ("7 WaveKin",),
+        ("no dtM", "uniform 0.5 0 0 current"),
+    ],
+)
+def test_mixed_route_currents_get_the_native_verdict(rows, tmp_path):
+    # the deck currents of the single-line routes run on the mixed route too; deck waves do not
+    text = _edit(_MIXED, ("0.1 dtM\n10.0 TMax\n", "0.1 dtM\n0.2 TMax\n"))
+    if rows[0] == "no dtM":
+        text = _edit(text, ("0.1 dtM\n0.2 TMax\n", ""))
+        rows = rows[1:]
+    text = _options(text, *rows)
+    for row in rows:
+        if row.endswith("Currents") and int(row.split()[0]) in _MIXED_CURRENT_FILES:
+            name, content = _MIXED_CURRENT_FILES[int(row.split()[0])]
+            (tmp_path / name).write_text(content, encoding="utf-8")
+    try:
+        DeckFile.from_text(text)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    deck = tmp_path / "mixed.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "mixed")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=600,
+        check=False,
+    )
+    # exit code 1 is an input refusal; 0 a run and 2 a solve failure after validation
+    assert python_accepts == (completed.returncode != 1), completed.stdout + completed.stderr
+    if python_accepts:
+        assert "mixed standalone aggregate" in completed.stdout, completed.stdout
