@@ -418,6 +418,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   is now laid from End A, the line seen from its other end, and its nodes put back in order. The
   deck starts at the same equilibrium as before on Windows (1e-7 m, 6e-4 N), and moving the fixed
   rod by 1 ulp either way or 1e-12 m up leaves the rod's start unchanged (0 m).
+- `CableDyn_Close` no longer pauses the OpenMP runtime of the whole process under the Intel and
+  LLVM OpenMP runtimes (ifx and other non-GNU builds with OpenMP). Every close called
+  `omp_pause_resource_all` (since 0.1.0) to join the calling thread's pool, a fix for GNU
+  OpenMP's process exit on MinGW-w64; libiomp5 and libomp pause the runtime of every thread
+  instead, so closing one handle paused the OpenMP of every other handle and of the host, and the
+  next parallel region on another thread deadlocked resuming it. An ifx build with OpenMP that
+  stepped a handle on a second thread after a close hung every time (the threading gate, 20 of
+  20 runs); it now passes 20 of 20 with 1 and with 4 OpenMP threads. GNU builds keep the pool join.
 - A non-static ifx build (a plain CMake build with ifx, or the core of the OpenFAST CMake route)
   kept run-time-sized arrays and array temporaries on the stack, as only the static Windows
   release compiled with `/heap-arrays`: the 2835-node mixed IEA-15 MW deck and a fine-mesh deck of
