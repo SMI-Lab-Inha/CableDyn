@@ -17,8 +17,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   chain and a cable in a cross current: the static start agrees exactly for the chain and to
   4.9e-6 of the range for the cable (the coupled build's static polish), the march with the
   same Newton controls to 4.9e-6 (cable) and 2.1e-5 (chain); a `Currents 2` table wrapping past
-  its last sample equals the unrolled table bit for bit; a uniform `Currents 1` profile equals
-  `uniform` bit for bit, a uniform `Currents 5` grid to 3.9e-8; a correction rewind repeats the
+  its last sample equals the unrolled table bit for bit; a uniform `Currents 1` profile and a
+  uniform `Currents 5` grid equal `uniform` to round-off (at most 3.9e-8); a correction rewind repeats the
   step bit for bit; the march allocates nothing per step. Deck waves stay refused; the coupled
   route keeps taking the host's field.
 - Finite-EI lines with two moving ends on the cubic-Hermite route: a line whose End B is a

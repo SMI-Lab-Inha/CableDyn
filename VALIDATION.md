@@ -877,8 +877,8 @@ differs by 1.1e-3 for the cable on the coupled Newton controls (1.2e-3 in still 
 keeps the static start's 4.9e-6 with the deck's; the chain agrees to 2.1e-5 (exactly in a sheared
 current; the row-1 transfer, 5.4e-5 in still water). A `Currents 2` table wrapping past its last
 sample equals the unrolled table bit for bit and departs from the held one by 0.39 of the chain
-tension range; a uniform `Currents 1` profile equals `uniform` bit for bit, a uniform `Currents 5`
-grid to 3.9e-8; ten correction rewinds repeat their steps bit for bit; the march of a mixed deck
+tension range; a uniform `Currents 1` profile equals `uniform` to round-off (0 on Windows,
+3.9e-8 on Linux), a uniform `Currents 5` grid to 3.9e-8; ten correction rewinds repeat their steps bit for bit; the march of a mixed deck
 in a `Currents 5` grid makes no heap allocation per step (`step_allocations_mixed_current`).
 
 ### WaterKin and SeaState modes

@@ -32,7 +32,9 @@
 !>     departs from the same table held after its last sample (beyond 6 s, by more than 1 % of the
 !>     chain's tension range): the march samples the wrapped field at every step.
 !>  4. A uniform field written as a Currents 1 profile equals the OPTION uniform current on the
-!>     mixed route bit for bit; written as a Currents 5 grid (constant in space and time), its static
+!>     mixed route to GRID_TOL of each channel's range (the profile's linear interpolation between
+!>     equal levels is exact on some platforms and one ulp off on others, which the march carries:
+!>     0 on Windows, 3.9e-8 on Linux gfortran); written as a Currents 5 grid (constant in space and time), its static
 !>     start bit for bit and its march to GRID_TOL of each channel's range (the round-off of the
 !>     grid's trilinear weights).
 !>  5. The correction rewind of the aggregate (CD_AGG_Snapshot, a step, CD_AGG_Restore, the step
@@ -708,9 +710,10 @@ CONTAINS
     e1 = outs_difference('uni/mixed', 'c1u/mixed', 1, NSTEP + 1)
     WRITE (*, '(A,ES10.3,A,ES10.3,A,ES10.3,A)') '  4 uniform field: Currents 5 grid ', e5, ' (static start ', &
       e5_static, '), Currents 1 profile ', e1, ' of each channel''s range from OPTION uniform'
-    ! the grid's trilinear weights reproduce the uniform field to round-off, which the march carries
+    ! the grid's trilinear weights and the profile's linear ones reproduce the uniform field to
+    ! round-off, which the march carries
     CALL require(e5_static == 0.0_wp .AND. e5 <= GRID_TOL, '4: a uniform Currents 5 grid is OPTION uniform')
-    CALL require(e1 <= SAME_TOL, '4: a uniform Currents 1 profile is OPTION uniform')
+    CALL require(e1 <= GRID_TOL, '4: a uniform Currents 1 profile is OPTION uniform')
   END SUBROUTINE check_uniform_writings
 
   SUBROUTINE check_snapshot(deck, label)
