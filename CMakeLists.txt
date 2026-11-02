@@ -1302,6 +1302,15 @@ target_link_libraries(test_c_api PRIVATE cabledyn_core)
 add_test(NAME c_api COMMAND test_c_api)
 set_tests_properties(c_api PROPERTIES LABELS "fortran;unit;dynamic;capi")
 
+# One Newton tolerance for a finite-EI cable on every route: the mixed deck's cable (coupled
+# aggregate) against the same cable alone (standalone cubic-Hermite route) at rhoInf 1 / dtM 0.05
+# and rhoInf 0.4 / dtM 0.1, and the C API, OpenFAST and FAST.Farm builds of the aggregate driven
+# by a host through the same motion, against the driver.
+add_executable(test_coupled_cable_tolerance tests/test_coupled_cable_tolerance.f90)
+target_link_libraries(test_coupled_cable_tolerance PRIVATE cabledyn_core)
+add_test(NAME coupled_cable_tolerance COMMAND test_coupled_cable_tolerance $<TARGET_FILE:cabledyn>)
+set_tests_properties(coupled_cable_tolerance PROPERTIES LABELS "fortran;driver;integration;dynamic;capi;openfast")
+
 # Compile and run through the installed-style C header against the SHARED ABI
 # product. This catches missing Windows exports, C/Fortran prototype drift, ABI
 # version drift, and loader failures that the Fortran-native lifecycle gate cannot.

@@ -1601,6 +1601,11 @@ CONTAINS
     INTEGER, INTENT(OUT) :: coupled_node
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ! TRUE: a standalone build (its notes printed, a Fixed End A admitted). FALSE: a static helper
+    ! build inside this one (still-water, light-line, coarse pass), whose cable is never stepped:
+    ! its static tolerance stays at COUPLED_STATIC_TOL. Absent: a coupled build (aggregate, OpenFAST,
+    ! FAST.Farm, C API, mixed deck). Every build that is stepped takes the deck's dynamic_solver
+    ! rel and max_iter, so a cable steps to the same Newton tolerance on every route.
     LOGICAL, INTENT(IN), OPTIONAL :: standalone_controls
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     REAL(wp), INTENT(IN), OPTIONAL :: fairlead_orientation(3, 3)
@@ -1651,8 +1656,8 @@ CONTAINS
     REAL(wp) :: step_tol, static_tol, static_tol_target
     REAL(wp), ALLOCATABLE :: q_coupled_tol(:)
     INTEGER :: polish_iters
-    ! Static tolerance of the coupled route (step_tol 5e-3 there), on which the mesh-
-    ! sequenced hierarchy's intermediate readiness and recovery budgets are exercised.
+    ! Loosest static tolerance (that of a static helper build), on which the mesh-sequenced
+    ! hierarchy's intermediate readiness and recovery budgets are exercised.
     REAL(wp), PARAMETER :: COUPLED_STATIC_TOL = 1.0e-6_wp
     ! Newton-iteration budget of one mesh-sequenced fallback solve: a bounded failure path.
     INTEGER, PARAMETER :: FALLBACK_SEQUENCE_BUDGET = 2000
@@ -1724,8 +1729,8 @@ CONTAINS
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
-    step_max_iter = 200
-    step_tol = 5.0e-3_wp
+    step_max_iter = opts%dynamic_max_iter
+    step_tol = opts%dynamic_rel_tol
     standalone_mode = .FALSE.
     weightless_bow = .FALSE.
     contact_enabled = .FALSE.
@@ -1774,20 +1779,19 @@ CONTAINS
       end_b_dcm = end_b_orientation
     END IF
     contact_z = -2000.0_wp
-    IF (PRESENT(standalone_controls)) THEN
-      IF (standalone_controls) THEN
-        standalone_mode = .TRUE.
-        step_max_iter = opts%dynamic_max_iter
-        step_tol = opts%dynamic_rel_tol
-      END IF
-    END IF
-    fixed_fairlead_ok = standalone_mode
-    IF (PRESENT(fixed_fairlead)) fixed_fairlead_ok = fixed_fairlead_ok .OR. fixed_fairlead
     ! Hand the dynamic integrator an equilibrium converged at least as tightly as
     ! its own Newton stopping criterion.  A looser static tolerance can otherwise
     ! appear as an artificial load impulse on the first nominally stationary step,
     ! particularly after local refinement of a light, bending-stiff cable.
     static_tol = MIN(COUPLED_STATIC_TOL, step_tol)
+    IF (PRESENT(standalone_controls)) THEN
+      standalone_mode = standalone_controls
+      ! a static helper build is never stepped: the static state it hands back is the one of
+      ! the loosest static tolerance, as before (the parent build polishes its own)
+      IF (.NOT. standalone_controls) static_tol = COUPLED_STATIC_TOL
+    END IF
+    fixed_fairlead_ok = standalone_mode
+    IF (PRESENT(fixed_fairlead)) fixed_fairlead_ok = fixed_fairlead_ok .OR. fixed_fairlead
     contact_enabled = opts%has_wtrdpth .OR. PRESENT(bathymetry)
     IF (opts%has_wtrdpth) contact_z = -opts%wtrdpth
     IF (PRESENT(bathymetry)) THEN
@@ -3093,11 +3097,12 @@ CONTAINS
         ' attachment(s) lumped at the nearest nodes (largest arc offset ', att_offset, ' m)'
       CALL report_note(note_text)
     END IF
-    ! Dynamic step controls: a relative Newton tolerance of 5e-3 (0.5% of the physical weight
-    ! force scale, on the coupling boundary) with a generous iteration budget. This is the
-    ! usual order for a coupling-boundary force residual; a stiffer 1e-4/1e-3 would demand a
-    ! static seed tighter than the static solve delivers and add
-    ! no coupling-force accuracy. The 1e-6 static seed sits far inside it at rest.
+    ! Dynamic step controls: the deck's dynamic_solver relative tolerance and iteration budget
+    ! (default 1e-8 and 30) on every route, standalone or coupled, so that a cable driven by the
+    ! same motion steps to the same state on each. The tolerance is not a coupling-force accuracy
+    ! alone: at rhoInf near 1 the march does not damp the residual a step leaves in the modes dtM
+    ! does not resolve, and a lazy wave stepped to 5e-3 under the same motion peaked at 4.3e5 N
+    ! against 1.9e4 N (the subdivision ladder takes the steps that do not converge in max_iter).
     CALL CD_HFMF_Init(cable, l0, ea, ei, rho_a, w, q_static, dynamic_fixed_dofs, contact_z, CD_ZERO, &
                       opts%rho_inf, dt, coupled_node, es, em, max_iter=step_max_iter, tol=step_tol, &
                       frame_cs=frame_cs, axial_quadrature_order=opts%axial_quadrature_order, &
