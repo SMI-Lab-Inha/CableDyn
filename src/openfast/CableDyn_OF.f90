@@ -552,6 +552,12 @@ CONTAINS
       REAL(wp)                  :: cval, dtC, deck_dtm, dt_moor
       REAL(wp)                  :: fair_ten, fair_force(3), fair_incl, fair_decl, fair_azi, force_incl
       LOGICAL                   :: has_dtm, has_ptfm, use_extf
+      ! the coupling step's name on the console: the glue DT, or FAST.Farm's DT_Mooring
+      CHARACTER(24)             :: dtc_name, dtc_short
+      ! the deck's WaterKin policy takes SeaState waves or current (host_seastate), or a
+      ! WaterKin current table (host_table); neither is still water
+      LOGICAL                   :: host_seastate, host_table
+      CHARACTER(16)             :: host_kin
       REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static start
       CHARACTER(ChanLen)        :: chan_hdr, chan_unt
       CHARACTER(1024)           :: native_root, init_note
@@ -559,6 +565,7 @@ CONTAINS
 
       ErrStat = ErrID_None
       ErrMsg  = ''
+      host_seastate = .FALSE.
       profile_requested = profile_environment_requested()
       IF (profile_requested) THEN
          CALL SYSTEM_CLOCK(prof_c0, prof_rate)
@@ -663,6 +670,14 @@ CONTAINS
       ! endpoint motion into a lagged line interior creates nonphysical stiff-EA chatter.
       ! ------------------------------------------------------------------------------
       dtC = REAL(DTcoupling, wp)
+      ! In FAST.Farm the coupling step is the farm's mooring step DT_Mooring, not a turbine's DT.
+      IF (nT > 0_IntKi) THEN
+         dtc_name = 'FAST.Farm DT_Mooring'
+         dtc_short = 'DT_Mooring'
+      ELSE
+         dtc_name = 'glue DT'
+         dtc_short = 'DT'
+      END IF
       CALL CD_Deck_Query_dtM( TRIM(InitInp%FileName), deck_dtm, has_dtm, es, em, &
                               env_gravity=REAL(InitInp%g, wp), env_rho_water=REAL(InitInp%rhoW, wp), &
                               env_wtrdpth=REAL(InitInp%WtrDepth, wp) )
@@ -678,25 +693,26 @@ CONTAINS
          ! documented implicit-solver floor for MoorDyn-migrated explicit dtM values).
          nsuper = MAX(1_IntKi, FLOOR(deck_dtm/dtC*(1.0_wp + 1.0e-6_wp), IntKi))
          IF (deck_dtm < dtC*(1.0_wp - 1.0e-6_wp)) THEN
-            CALL WrScr( '   CableDyn: deck dtM = '//TRIM(Num2LStr(deck_dtm))//' s is below the glue DT = '// &
-                        TRIM(Num2LStr(dtC))//' s; the implicit mooring step uses dtM = DT.' )
+            CALL WrScr( '   CableDyn: deck dtM = '//TRIM(Num2LStr(deck_dtm))//' s is below the '// &
+                        TRIM(dtc_name)//' = '//TRIM(Num2LStr(dtC))//' s; the implicit mooring step uses dtM = '// &
+                        TRIM(dtc_short)//'.' )
          ELSE IF (ABS(REAL(nsuper, wp)*dtC - deck_dtm) > 1.0e-6_wp*MAX(dtC, deck_dtm)) THEN
             CALL SetErrStat( ErrID_Warn, 'CableDyn mooring module: deck dtM = '//TRIM(Num2LStr(deck_dtm))// &
-                             ' s is not an integer multiple of the glue DT = '//TRIM(Num2LStr(dtC))// &
+                             ' s is not an integer multiple of the '//TRIM(dtc_name)//' = '//TRIM(Num2LStr(dtC))// &
                              ' s; using dtM = '//TRIM(Num2LStr(REAL(nsuper, wp)*dtC))//' s ('// &
-                             TRIM(Num2LStr(nsuper))//' x DT), the largest multiple not exceeding the '// &
-                             'requested step. Set dtM to a multiple of DT to silence this warning.', &
-                             ErrStat, ErrMsg, RoutineName )
+                             TRIM(Num2LStr(nsuper))//' x '//TRIM(dtc_short)//'), the largest multiple not '// &
+                             'exceeding the requested step. Set dtM to a multiple of '//TRIM(dtc_short)// &
+                             ' to silence this warning.', ErrStat, ErrMsg, RoutineName )
             CALL WrScr( '   WARNING: CableDyn deck dtM = '//TRIM(Num2LStr(deck_dtm))//' s changed to '// &
                         TRIM(Num2LStr(REAL(nsuper, wp)*dtC))//' s ('//TRIM(Num2LStr(nsuper))// &
-                        ' x glue DT = '//TRIM(Num2LStr(dtC))//' s).' )
+                        ' x '//TRIM(dtc_name)//' = '//TRIM(Num2LStr(dtC))//' s).' )
          END IF
       ELSE
          nsuper = 1_IntKi
       END IF
       dt_moor = REAL(nsuper, wp)*dtC
       CALL WrScr( '   CableDyn time step dtM = '//TRIM(Num2LStr(dt_moor))//' s ('//TRIM(Num2LStr(nsuper))// &
-                  ' x glue DT'//TRIM(MERGE('; deck dtM   ', '; the default', has_dtm))//')' )
+                  ' x '//TRIM(dtc_name)//TRIM(MERGE('; deck dtM   ', '; the default', has_dtm))//')' )
       ! The run must END on a mooring boundary: with supercycling, a trailing partial
       ! interval would take only skipped glue steps, leaving the committed mooring state --
       ! and the held (zero-order-hold) loads -- up to dtM stale at TMax, silently. Fail
@@ -707,7 +723,8 @@ CONTAINS
              MOD(nglue, nsuper) /= 0_IntKi) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: TMax = '//TRIM(Num2LStr(InitInp%Tmax))// &
                              ' s is not a whole number of CableDyn steps (dtM = '//TRIM(Num2LStr(dt_moor))// &
-                             ' s = '//TRIM(Num2LStr(nsuper))//' x DT): the run would end inside a mooring '// &
+                             ' s = '//TRIM(Num2LStr(nsuper))//' x '//TRIM(dtc_short)//'): the run would end '// &
+                             'inside a mooring '// &
                              'interval with the committed state up to dtM stale. Choose TMax as a multiple '// &
                              'of dtM, or set the deck OPTIONS dtM accordingly.', ErrStat, ErrMsg, RoutineName )
             RETURN
@@ -930,8 +947,32 @@ CONTAINS
                              ErrStat, ErrMsg, RoutineName )
             RETURN
          END IF
-         CALL WrScr( '   CableDyn: SeaState wave/current kinematics drive the mooring hydro ('// &
-                     TRIM(Num2LStr(Inst(id)%nfluid))//' sampling nodes, refreshed every mooring step).' )
+         ! Say what the lines take, as the deck's WaterKin policy decides it (sample_wavefield): an
+         ! explicit WaterKin file may take no SeaState component (WaveKinMod 0, CurrentMod 0), and its
+         ! CurrentMod 1 table gives the current itself.
+         host_seastate = Inst(id)%agg%host_wave_enabled .OR. Inst(id)%agg%host_current_enabled
+         host_table = ALLOCATED(Inst(id)%agg%host_current_profile_z)
+         IF (Inst(id)%agg%host_wave_enabled .AND. Inst(id)%agg%host_current_enabled) THEN
+            host_kin = 'wave/current'
+         ELSE IF (Inst(id)%agg%host_wave_enabled) THEN
+            host_kin = 'wave'
+         ELSE
+            host_kin = 'current'
+         END IF
+         IF (host_seastate .AND. host_table) THEN
+            CALL WrScr( '   CableDyn: SeaState '//TRIM(host_kin)//' kinematics drive the mooring hydro ('// &
+                        TRIM(Num2LStr(Inst(id)%nfluid))//' sampling nodes, refreshed every mooring step); '// &
+                        'the WaterKin current table gives the current.' )
+         ELSE IF (host_seastate) THEN
+            CALL WrScr( '   CableDyn: SeaState '//TRIM(host_kin)//' kinematics drive the mooring hydro ('// &
+                        TRIM(Num2LStr(Inst(id)%nfluid))//' sampling nodes, refreshed every mooring step).' )
+         ELSE IF (host_table) THEN
+            CALL WrScr( '   CableDyn: the WaterKin current table gives the mooring lines their current; '// &
+                        'no SeaState kinematics are sampled (WaterKin WaveKinMod 0).' )
+         ELSE
+            CALL WrScr( '   CableDyn: the WaterKin file takes no SeaState waves or current (WaveKinMod 0, '// &
+                        'CurrentMod 0): the mooring lines are in still water.' )
+         END IF
          ! Seed the held fields at t = 0 (the static-IC positions): with supercycling
          ! (nsuper > 1) the first mooring advance happens only at the END of the first
          ! interval, and every CalcOutput before it would otherwise serve loads from the
@@ -1297,10 +1338,11 @@ CONTAINS
                   TRIM(Num2LStr(npoints))//' point(s), '//TRIM(Num2LStr(nsections))//' section(s) [EI=0: '// &
                   TRIM(Num2LStr(nei0))//', finite-EI: '//TRIM(Num2LStr(nfinite))//'].' )
       CALL WrScr( '   Initial conditions: Newton static equilibrium with load continuation completed.' )
-      IF (use_extf) THEN
+      IF (use_extf .AND. host_seastate) THEN
          ! The equilibrium is solved at zero SeaState fields and the SeaState kinematics act
          ! from t = 0, so the t = 0 outputs below differ from these equilibrium values by
-         ! the hydrodynamic load of the t = 0 kinematics on the line end nodes.
+         ! the hydrodynamic load of the t = 0 kinematics on the line end nodes (none when the
+         ! WaterKin policy takes no SeaState component).
          CALL WrScr( '   Line results below are at this equilibrium; SeaState kinematics act from t = 0.' )
       END IF
       CALL WrScr( '   Fairlead convention: force is on End A toward End B; inclinations are signed below horizontal.' )

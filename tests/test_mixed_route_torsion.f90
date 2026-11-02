@@ -54,7 +54,9 @@
 !>     of the range from its own). The aggregate library marched with the standalone controls, as
 !>     in gate 1, reproduces the cable-only run's cable channels to the printed precision. Each
 !>     turbine's yaw and roll turn the clamped end on it (End A on turbine 1, End B on turbine 2),
-!>     so the end bend moments and the torque carry each end's own turbine.
+!>     so the end bend moments and the torque carry each end's own turbine. The torsion note of
+!>     the cable-only run gives the line's total twist (Twist1 at t = 0, to 1e-5 of it), which the
+!>     turbines' PtfmInit yaws turn away from the 30 deg Pretwist(B) - Pretwist(A) it also names.
 PROGRAM test_mixed_route_torsion
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -377,6 +379,27 @@ CONTAINS
     END DO
     CLOSE (u)
   END FUNCTION log_has
+
+  REAL(wp) FUNCTION log_value(root, needle) RESULT(v)
+    !! The number after needle on the first line of <root>.log that carries it (HUGE when none).
+    CHARACTER(*), INTENT(IN) :: root, needle
+    CHARACTER(4096) :: line
+    INTEGER :: u, ios, k
+    v = HUGE(1.0_wp)
+    OPEN (NEWUNIT=u, FILE=root//'.log', STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    IF (ios /= 0) RETURN
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      k = INDEX(line, needle)
+      IF (k > 0) THEN
+        READ (line(k + LEN(needle):), *, IOSTAT=ios) v
+        IF (ios /= 0) v = HUGE(1.0_wp)
+        EXIT
+      END IF
+    END DO
+    CLOSE (u)
+  END FUNCTION log_value
 
   SUBROUTINE read_out(path, names, vals, nrow)
     !! The channel names and rows of a driver .out file (Time first).
@@ -1071,6 +1094,18 @@ CONTAINS
       e_leg = MAX(e_leg, e)
     END DO
     CALL require(e_turb <= TURB_TOL, '9: the cable agrees with the cable-only deck within the coupled Newton controls')
+    ! the torsion note: the total twist (Twist1), not the Pretwist difference alone
+    BLOCK
+      REAL(wp) :: tw_note, tw_out, pre_note
+      tw_note = log_value('tmrt_turb_c', 'total twist Twist1 =')
+      pre_note = log_value('tmrt_turb_c', 'Pretwist(B) - Pretwist(A) =')
+      tw_out = vc(1, col_of(nc, 'Twist1'))
+      WRITE (*, '(A,3F12.6,A)') '  9 TURBINES torsion note: total twist, Twist1 at t = 0, pretwist ', tw_note, &
+        tw_out, pre_note, ' deg'
+      CALL require(ABS(tw_note - tw_out) <= 1.0e-5_wp*ABS(tw_out), '9: the torsion note gives the total twist Twist1')
+      CALL require(ABS(pre_note - 30.0_wp) <= 1.0e-9_wp .AND. ABS(tw_note - 30.0_wp) > 1.0_wp, &
+                   '9: the note names the pretwist and a total twist that carries the end frames'' turn')
+    END BLOCK
     CALL require(e_leg <= LOAD_TOL, '9: the chain tensions agree with the legs-only deck')
     CALL march_turbines(nc, vc, rc)
   END SUBROUTINE check_turbines

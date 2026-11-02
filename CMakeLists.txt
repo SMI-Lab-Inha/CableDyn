@@ -2627,7 +2627,7 @@ set_tests_properties(driver_cli_mixed_nmodes PROPERTIES LABELS "fortran;driver;c
 add_test(NAME driver_cli_torsion_nmodes
   COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
     "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/torsion_lazy_wave_modes.dat|${CMAKE_CURRENT_BINARY_DIR}/driver_cli_torsion_nmodes"
-    "-DMUST_MATCH=torsion solved, imposed twist  7.20000E\\+02 deg;converged run written"
+    "-DMUST_MATCH=torsion solved, total twist Twist1 =;imposed Pretwist.B. - Pretwist.A. = +7.20000E\\+02 deg;converged run written"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
 set_tests_properties(driver_cli_torsion_nmodes PROPERTIES LABELS "fortran;driver;cli")
 # Non-ASCII, reserved-device, input-clobbering, and concurrently used output paths.
@@ -2902,6 +2902,11 @@ cabledyn_msg_test(mixed_waves msg_mixed_waves.dat 1
 cabledyn_msg_test(mixed_connect_coupled_cable msg_mixed_connect_coupled_cable.dat 1
   "finite-EI LINE 3: a Coupled/Vessel End A .POINT 1. would need motionFile coupling to drive it;remove the Connect/Free points;held still .that route takes no motionFile either."
   "is driven by a motionFile")
+# A Pinned rod that its line turns at the static start: the completion line reports the move of its
+# End B and its turn, not the zero translation of its pin.
+cabledyn_msg_test(pinned_rod_turn msg_pinned_rod_turn.dat 0
+  "body/rod static equilibrium .1 object.s., largest move [1-9].[0-9]+E[-+][0-9]+ m, largest turn [1-9]"
+  "largest move 0.000E\\+00")
 # The standalone mixed route warns about a coarse section and notes a static strain above maxStrain.
 cabledyn_msg_test(mixed_coarse_strain msg_mixed_coarse_strain.dat 0
   "WARNING: LINE 1 section of type \"chain\" .150.00 m in 1 segment.s.. has segments of 150.00 m, 17.6 %;Note: LINE 1 is stretched to a static strain of;above 1.00E-02 % .OPTION maxStrain."

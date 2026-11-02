@@ -681,11 +681,15 @@ Warnings and notes that do not stop a run
        torque–tension coupling (``GJ|K``) its stretch twists it by
        :math:`-\sum (K/GJ)(l - L)`, so a free End B turns by :math:`+x` and a free End A by
        :math:`-x` about the End A → End B tangent.
-   * - ``Note: line <L>: torsion solved, imposed twist ... deg, torque ... N m (<n> twist
-       stage(s), <m> buckling descent(s))``
-     - the static twist stage of a torsional line. A non-zero descent count means the straight or
-       untwisted branch was unstable at the imposed twist and the solve moved to a buckled shape;
-       check the shape and the ``Twist<L>`` channel.
+   * - ``Note: line <L>: torsion solved, total twist Twist<L> = ... deg (imposed Pretwist(B) -
+       Pretwist(A) = ... deg, with the end frames' turn and the shape's geometric twist), torque
+       ... N m (<n> twist stage(s), <m> buckling descent(s))``
+     - the static twist stage of a torsional line. The total twist is the ``Twist<L>`` channel at
+       the static state: the imposed pretwist difference plus the turn of the end frames (a
+       ``PtfmInit`` or ``TURBINES`` rotation of a parent turns its end) less the geometric twist the
+       line takes up by its shape; the torque follows from it. A non-zero descent count means the
+       straight or untwisted branch was unstable at the imposed twist and the solve moved to a
+       buckled shape; check the shape and the ``Twist<L>`` channel.
    * - ``WARNING: CableDyn mooring module: <n> of the <N> CableDyn sampling nodes in the water
        lie outside the SeaState wave-kinematics grid at t = ... s (warned once)`` (OpenFAST)
      - the SeaState grid (``X_HalfWidth``, ``Y_HalfWidth``, ``Z_Depth``) does not cover the

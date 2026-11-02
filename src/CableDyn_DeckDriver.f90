@@ -111,7 +111,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
                                      CD_HTORS_MAX_TWIST, CD_HermiteTorsion_Zeta_Damping, CD_HermiteTorsion_Line, &
-                                     CD_HermiteTorsion_Unwrap, CD_HermiteTorsion_Element_Stretch, CD_HTORS_OK
+                                     CD_HermiteTorsion_Unwrap, CD_HermiteTorsion_Element_Stretch, CD_HTORS_OK, &
+                                     CD_HermiteTorsion_Coupling_Twist
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -3484,18 +3485,35 @@ CONTAINS
 
     SUBROUTINE torsion_note()
       !! The notes of the accepted torsion stage: a residual floor above the tolerance, and the
-      !! imposed twist and torque. A line restrained at one end only solves no twist stage; its
-      !! note is one_end_state's.
+      !! twist and torque. The twist is the line's total twist Twist<L> = Phi - Theta (the Twist<L>
+      !! channel at the static state): the imposed Phi = Pretwist(B) - Pretwist(A), which the note
+      !! also gives, with the turn of the end frames (a PtfmInit or TURBINES rotation of a parent)
+      !! and the shape's geometric twist, both in the holonomy Theta. The accepted theta is
+      !! Theta_eff = Theta + tw_K under torque-tension coupling, tw_K = -sum (K/GJ)(l - L)
+      !! (CD_HermiteTorsion_Coupling_Twist), so Phi - Theta = Phi - Theta_eff + tw_K. A line
+      !! restrained at one end only solves no twist stage; its note is one_end_state's.
       CHARACTER(320) :: tnote
+      REAL(wp) :: twist
       IF (ln%tors_free_end > 0) RETURN
+      twist = tors%phi - tors%theta
+      IF (ALLOCATED(tors%couple)) THEN
+        ! the final mesh of the stage: l0 after the attachment polish, l0_am otherwise
+        IF (has_att) THEN
+          twist = twist + CD_HermiteTorsion_Coupling_Twist(q_static, l0, tors%couple, tors%quadrature_order)
+        ELSE
+          twist = twist + CD_HermiteTorsion_Coupling_Twist(q_static, l0_am, tors%couple, tors%quadrature_order)
+        END IF
+      END IF
       IF (tors_tol_used > static_tol_target) THEN
         WRITE (tnote, '(A,I0,A,ES9.2,A,ES9.2)') 'line ', ln%id, ': torsion static residual floor above the '// &
           'tolerance ', static_tol_target, '; twisted equilibrium accepted at ', tors_tol_used
         CALL report_note(tnote)
       END IF
-      WRITE (tnote, '(A,I0,A,ES12.5,A,ES12.5,A,I0,A,I0,A)') 'line ', ln%id, ': torsion solved, imposed twist ', &
-        tors%phi*45.0_wp/QUARTER_PI, ' deg, torque ', tors%torque, ' N m (', tors%ramp_steps, &
-        ' twist stage(s), ', tors%descents, ' buckling descent(s))'
+      WRITE (tnote, '(A,I0,A,I0,A,ES12.5,A,ES12.5,A,ES12.5,A,I0,A,I0,A)') 'line ', ln%id, &
+        ': torsion solved, total twist Twist', ln%id, ' =', twist*45.0_wp/QUARTER_PI, &
+        ' deg (imposed Pretwist(B) - Pretwist(A) =', tors%phi*45.0_wp/QUARTER_PI, &
+        ' deg, with the end frames'' turn and the shape''s geometric twist), torque ', tors%torque, ' N m (', &
+        tors%ramp_steps, ' twist stage(s), ', tors%descents, ' buckling descent(s))'
       CALL report_note(tnote)
       IF (tors%untwisted_instability) THEN
         WRITE (tnote, '(A,I0,A,I0,A)') 'line ', ln%id, ': the twisted static state keeps the instability of '// &
@@ -7717,9 +7735,9 @@ CONTAINS
         END IF
         IF ((opts%has_current .OR. opts%has_current_profile) .AND. .NOT. own_current) THEN
           IF (nturb > 0) THEN
-            CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported in '// &
-                      'FAST.Farm: the shared mooring of a farm runs in STILL WATER (no fluid field spans the '// &
-                      'farm). Remove the current OPTION'); RETURN
+            CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck '//deck_current_source(opts)// &
+                      ' is not supported in FAST.Farm: the shared mooring of a farm runs in STILL WATER (no '// &
+                      'fluid field spans the farm). Remove the '//deck_current_source(opts)); RETURN
           END IF
           ! (the standalone mixed route passes deck_current; this is a library caller without it)
           CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not marched by a '// &
@@ -26483,8 +26501,11 @@ CONTAINS
     INTEGER :: nobj, n, i, j, k, it, inner, info, worst, jk
     LOGICAL :: ok, only_points
     REAL(wp) :: sc, rnorm, rnorm_try, mu, step_cap, len_min, dmax, trust, pred
+    ! the completion line: the deck pose of every point, and the largest turn of a body or rod
+    REAL(wp), ALLOCATABLE :: pos_deck(:, :)
+    REAL(wp) :: turn_rot(3, 3), turn_max
     CHARACTER(1024) :: lin_msg
-    CHARACTER(24) :: b1
+    CHARACTER(24) :: b1, b2
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -26884,15 +26905,41 @@ CONTAINS
         END DO
       END IF
     END IF
+    ALLOCATE (pos_deck(3, SIZE(points)))
+    DO i = 1, SIZE(points)
+      pos_deck(:, i) = points(i)%pos
+    END DO
     CALL apply_state(x, bodies, rods, points)
     IF (only_points .OR. silent) RETURN
+    ! The largest move from the deck pose: of a body reference point or rod centre (the
+    ! translation unknowns) and of every point the objects carry (attachment points, rod ends,
+    ! Free/Connect points), so a pinned rod that only turns reports its End B's move. The largest
+    ! turn: the rotation angle |log(R R0^T)| of a body or rod from its deck orientation R0.
     dmax = CD_ZERO
     DO k = 1, nobj
       IF (ndof(k) >= 3) dmax = MAX(dmax, NORM2(x(off(k) + 1:off(k) + 3)))
     END DO
+    DO i = 1, SIZE(points)
+      dmax = MAX(dmax, NORM2(points(i)%pos - pos_deck(:, i)))
+    END DO
+    turn_max = CD_ZERO
+    DO k = 1, nobj
+      SELECT CASE (okind(k))
+      CASE (OBJ_BODY)
+        turn_rot = MATMUL(CD_Exp_SO3(x(off(k) + 4:off(k) + 6)/lsc(k)), base_rot(:, :, k))
+      CASE (OBJ_ROD)
+        turn_rot = MATMUL(CD_Exp_SO3((x(off(k) + 4)*e1(:, k) + x(off(k) + 5)*e2(:, k))/lsc(k)), base_rot(:, :, k))
+      CASE (OBJ_PIN)
+        turn_rot = MATMUL(CD_Exp_SO3((x(off(k) + 1)*e1(:, k) + x(off(k) + 2)*e2(:, k))/lsc(k)), base_rot(:, :, k))
+      CASE DEFAULT
+        CYCLE
+      END SELECT
+      turn_max = MAX(turn_max, NORM2(CD_Log_SO3(MATMUL(turn_rot, TRANSPOSE(base_rot0(:, :, k))))))
+    END DO
     WRITE (b1, '(ES10.3)') dmax
+    WRITE (b2, '(ES10.3)') turn_max*45.0_wp/QUARTER_PI
     WRITE (output_unit, '(A)') '   Initial conditions: body/rod static equilibrium ('//TRIM(int_to_str(nobj))// &
-      ' object(s), largest move '//TRIM(ADJUSTL(b1))//' m) completed.'
+      ' object(s), largest move '//TRIM(ADJUSTL(b1))//' m, largest turn '//TRIM(ADJUSTL(b2))//' deg) completed.'
 
   CONTAINS
 
@@ -31379,6 +31426,18 @@ CONTAINS
     omega = motion%turb_omega(:, k, time_index)
     alpha = motion%turb_alpha(:, k, time_index)
   END SUBROUTINE turbine_end_rotation
+
+  PURE FUNCTION deck_current_source(opts) RESULT(src)
+    !! The deck input that declares the deck's current, for a refusal: the CurrentMod 1 table of
+    !! its WaterKin file, or its current OPTION.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    CHARACTER(:), ALLOCATABLE :: src
+    IF (opts%has_waterkin_file .AND. opts%waterkin_current_mode == 1 .AND. opts%has_current_profile) THEN
+      src = 'WaterKin current table (CurrentMod 1)'
+    ELSE
+      src = 'current OPTION'
+    END IF
+  END FUNCTION deck_current_source
 
   PURE FUNCTION turbine_end_dcm(points, opts, point_id) RESULT(dcm)
     !! The global-to-parent DCM, at the static start, of a line end on point point_id: on a

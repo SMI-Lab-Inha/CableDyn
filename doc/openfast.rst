@@ -81,7 +81,9 @@ solves once per that many glue steps, which is faster. Between commits the coupl
 extrapolated from the last two commits (deck ``OPTIONS predictLoads``, the default) or, with
 ``predictLoads False``, held at the last commit, which delays them (see the note below). The
 console reports the result, for
-example ``CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)``. A deck ``dtM``
+example ``CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)``; in FAST.Farm the
+coupling step is the farm's mooring step ``DT_Mooring``, and the line reads ``1 x FAST.Farm
+DT_Mooring``. A deck ``dtM``
 larger than ``DT`` but not a whole multiple of it is never coarsened: CableDyn uses the largest
 multiple of ``DT`` that does not exceed it and reports a warning with both values (``dtM = 0.025``
 with ``DT = 0.01`` runs at 0.02 s), matching MoorDyn, which only ever shortens its step to fit the
