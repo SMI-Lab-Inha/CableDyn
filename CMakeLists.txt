@@ -2214,6 +2214,11 @@ target_link_libraries(test_cable_between_bodies PRIVATE cabledyn_core)
 add_test(NAME cable_between_bodies COMMAND test_cable_between_bodies)
 set_tests_properties(cable_between_bodies PROPERTIES LABELS "fortran;driver;integration;dynamic;static")
 
+add_executable(test_pinned_cable_light_object tests/test_pinned_cable_light_object.f90)
+target_link_libraries(test_pinned_cable_light_object PRIVATE cabledyn_core)
+add_test(NAME pinned_cable_light_object COMMAND test_pinned_cable_light_object)
+set_tests_properties(pinned_cable_light_object PROPERTIES LABELS "fortran;driver;integration;dynamic")
+
 add_executable(test_section_curvature tests/test_section_curvature.f90)
 target_link_libraries(test_section_curvature PRIVATE cabledyn_core)
 add_test(NAME section_curvature COMMAND test_section_curvature)

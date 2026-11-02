@@ -49,12 +49,12 @@ PROGRAM test_line_attachments
   !!  11. A free buoyant spar rod (10 m, 1 m diameter) on four taut legs with a finite-EI cable
   !!      pinned at its upper end carrying a 1500 kg clump 25 m along it; bodyIC static: the body
   !!      static passes converge (6, on the core cable that carries the clump smeared) and the rod
-  !!      holds its static pose over 0.3 s of the march (dtM 0.002 s) to 1e-6 m (measured 0) and
-  !!      the leg tensions to 1e-5 (measured 3e-7). Before, the plain passes diverged (end-load
+  !!      holds its static pose over 1 s of the march (dtM 0.01 s) to 1e-6 m (measured 1e-7) and
+  !!      the leg tensions to 1e-5 (measured 2.9e-7). Before, the plain passes diverged (end-load
   !!      change 2.9 of the force scale after 60 passes) and the deck stopped.
   !!  12. The spar rod of case 11 with the cable and no clump: the bending share of the pinned
   !!      cable's end force is in the rod's static balance too, so the rod holds its pose over
-  !!      0.3 s to 1e-6 m (measured 0) and its leg tensions to 1e-5 (measured 0). Before, the
+  !!      1 s to 1e-6 m (measured 0) and its leg tensions to 1e-5 (measured 3.8e-8). Before, the
   !!      body passes left a pinned line without ATTACHMENTS to the core's cable without bending
   !!      stiffness: the rod started 5.7e-2 m off its equilibrium and its top moved 1.8e-4 m in 0.1 s
   !!      (dtM 0.01 s; 7e-2 m and a 2.3 % leg tension change in 3 s with the implicit object
@@ -514,8 +514,8 @@ CONTAINS
   END SUBROUTINE case_pinned_point3_clump
 
   SUBROUTINE case_pinned_rod_clump(clump)
-    !! 11 (clump) and 12: 0.3 s of the march of pinned_rod_deck (dtM 0.002 s, which the explicit
-    !! coupling of the cable to the rod on this route needs to stay stable).
+    !! 11 (clump) and 12: 1 s of the march of pinned_rod_deck (dtM 0.01 s; the pinned cable is
+    !! coupled to the free rod implicitly, test_pinned_cable_light_object).
     LOGICAL, INTENT(IN) :: clump
     INTEGER :: nrow
     REAL(wp), ALLOCATABLE :: d(:, :)
@@ -525,13 +525,13 @@ CONTAINS
     CHARACTER(16) :: root, gate
     root = MERGE('att_rod_pin   ', 'att_rod_pin_no', clump)
     gate = MERGE('11 with a clump', '12 alone       ', clump)
-    CALL pinned_rod_deck(TRIM(root), clump, '25.0', '0.002', '0.3')
+    CALL pinned_rod_deck(TRIM(root), clump, '25.0', '0.01', '1.0')
     CALL run(TRIM(root)//'.dat', TRIM(root), ok, msg)
     CALL require(ok, TRIM(gate)//', a pinned cable on a free rod: runs: '//TRIM(msg))
     IF (.NOT. ok) RETURN
     CALL read_out(TRIM(root)//'.out', d, nrow, 6)
-    CALL require(nrow >= 151, TRIM(gate)//', a pinned cable on a free rod: the run written')
-    IF (nrow < 151) RETURN
+    CALL require(nrow >= 101, TRIM(gate)//', a pinned cable on a free rod: the run written')
+    IF (nrow < 101) RETURN
     dpos = MAXVAL(ABS(d(2:3, 1:nrow) - SPREAD(d(2:3, 1), 2, nrow)))
     dten = MAXVAL(ABS(d(4:6, 1:nrow) - SPREAD(d(4:6, 1), 2, nrow))/SPREAD(ABS(d(4:6, 1)), 2, nrow))
     WRITE (*, '(A,A,A,ES10.3,A,ES10.3)') '  ', TRIM(gate), ', a pinned cable on a free rod: rod top drift ', dpos, &
