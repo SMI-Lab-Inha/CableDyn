@@ -12,7 +12,7 @@ LAPACK are those of [v0.3.0](RELEASE_0_3_0.md); the OpenFAST patch set grows fro
 | Item | Value |
 | --- | --- |
 | CableDyn | `0.4.0` (2026-11-04), C ABI 1, minor extension 3 |
-| Source | The release-preparation tree (`release/0.4.0` at `edd0d62`): dev with #48 to #85 and the version, documentation and test-build changes of the release. The assets and the Windows gates were produced from this tree; afterwards only `doc/conf.py` (a Sphinx cross-reference setting) and this record changed, which no build reads |
+| Source | The release-preparation tree (`release/0.4.0` at `8e40e33`): dev with #50 to #85 and the version, documentation, test-build and Python deck-model changes of the release. The assets and the Windows gates were produced from this tree; afterwards only this record changed, which no build reads. The local CTest, Debug and kernel-sweep runs below used `edd0d62`; the two later commits change only `doc/conf.py` and the Python deck model, whose suite was re-run at `8e40e33` |
 | OpenFAST base | `2895884d2be01862173c88d70f86b358d2f1a50a`; the 22 patches of [`integration/openfast/patches`](../integration/openfast/patches) applied to a clean checkout by `prepare_openfast_source.ps1` |
 | OpenFAST r-test | `dd5feaaaa500ba7283140107806300d551cff0a7` |
 | Reference LAPACK/BLAS | 3.12.1, release-tag archive with SHA-256 `2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422`, built with IFX for x86-64-v3 (`/fp:precise /arch:CORE-AVX2`) |
@@ -34,7 +34,7 @@ LAPACK are those of [v0.3.0](RELEASE_0_3_0.md); the OpenFAST patch set grows fro
 | GNU Release CTest, including the slow tier (Windows, local, fresh build directory) | 359 of 359 passed on the release tree; 0 compiler warnings |
 | GNU Debug CTest (`-fcheck=all`), including the slow tier (Windows, local, fresh build directory) | 359 of 359 passed; 0 compiler warnings |
 | Round-off fragility (GNU Release build of the release tree on the OpenBLAS kernels Prescott, Nehalem, Sandybridge, Haswell, SkylakeX and Zen, through `OPENBLAS_CORETYPE`) | on each kernel the full CTest passes 359 of 359, the two kernel-pinned tests (`openfast_touchdown`, `hermite_node_reaction`) pass unpinned, and all 53 shipped example decks run with no fallback, stall or relaxed-tolerance note and the same exit status |
-| Python package tests (local, native library and driver of the release tree) | 2162 passed, 47 skipped (platform- and tool-dependent cases) |
+| Python package tests (local, native library and driver of the release tree) | 2163 passed, 47 skipped (platform- and tool-dependent cases) |
 | CI matrix of #85 (the last change before the release tree) | Linux and Windows, Release and Debug; Python on three platforms with coverage and strict type checks |
 | Sphinx documentation (`-W -n`) | built with no warnings |
 | pre-commit, all files | passed |
@@ -48,7 +48,7 @@ LAPACK are those of [v0.3.0](RELEASE_0_3_0.md); the OpenFAST patch set grows fro
 ## Windows executable gates
 
 Every gate of `build_static_windows.ps1` passed in the release workflow (`release-windows-static.yml`,
-run 41672938269). The smoke runs used a system-only `PATH`.
+run 41687653164). The smoke runs used a system-only `PATH`.
 
 | Gate | Result |
 | --- | --- |
@@ -58,7 +58,7 @@ run 41672938269). The smoke runs used a system-only `PATH`.
 | `openfast.exe` imports | `KERNEL32.dll` and `imagehlp.dll` only; `-v` reports `OpenFAST-v5.0.0-CableDyn-0.4.0`; reports `CableDyn build: x86-64-v3 (AVX2).` |
 | Processor check | both executables stop at start with exit 3 and the message on a simulated missing x86-64-v3 feature |
 | Standalone smoke | the shallow-chain static deck (`chain_catenary_shallow_30m.dat`) converges |
-| Memory growth over a 10x longer run | 2.6 -> 2.6 MiB (`dynamic_chain_current.dat`), 35.3 -> 20.7 MiB (`lozon_gomex80_power_cable.dat`); limit +16 MiB |
+| Memory growth over a 10x longer run | 2.6 -> 2.6 MiB (`dynamic_chain_current.dat`), 20.7 -> 20.7 MiB (`lozon_gomex80_power_cable.dat`); limit +16 MiB |
 | Exit contract | a run states the exit contract after the banner; a refused input ends stderr with the closing line |
 | `CompMooring = 5` smoke | CableDyn banner, `dtM` 0.025 s (one glue step), equilibrium fairlead tensions 2.436 MN, normal termination |
 
@@ -76,23 +76,23 @@ environment, where it imports as 0.4.0 and runs the release driver. All 12 check
 
 The PyPI distribution is built by `.github/workflows/wheels.yml`; each wheel is installed into a
 clean environment and smoke-tested on its own platform (the library and the driver it carries
-load and run a deck, and the driver reports the expected build). The preflight run (41672945382)
+load and run a deck, and the driver reports the expected build). The preflight run (41687659235)
 built the files below; the release run rebuilds them from the tag before the upload. The 0.4.0
 dry run through TestPyPI installed the Windows wheel into a new environment and passed the same
 smoke test.
 
 | File | SHA-256 (preflight) |
 | --- | --- |
-| `cabledyn-0.4.0.tar.gz` | `f9c259133bf2b83d635656fbf533f4e29867c505a5828640271a8d9e4351e0bd` |
-| `cabledyn-0.4.0-py3-none-win_amd64.whl` | `61d05cdd8a048633f2559809afaf094558b6893d1a1e247bbe10ee2c1490e3d5` |
-| `cabledyn-0.4.0-py3-none-macosx_15_0_arm64.whl` | `568cb1e7d81a41a46c8c3c7186f4b354521a528ebf398271b54dfdfa4944b5c4` |
-| `cabledyn-0.4.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl` | `b491d167b501c134519c4dbaff8f17fb01667005362dafbc71aad45b58b0febc` |
+| `cabledyn-0.4.0.tar.gz` | `8a007c0f0b9f5e5de5bf63465c7473adfc2412d5825fa018782865783bdc24b7` |
+| `cabledyn-0.4.0-py3-none-win_amd64.whl` | `1058350e848459c19d1053f5561bb1f71eac4f7c7be9adcd2d799eb9917ed050` |
+| `cabledyn-0.4.0-py3-none-macosx_15_0_arm64.whl` | `c1b3c45c6282d1032312fd53fdba526324efb8056de88f2f6aa9f2c054972371` |
+| `cabledyn-0.4.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl` | `c0a5e8b8748598771b5f7962c1b1f634f9293303f3473bbed080ea68d3da14fb` |
 
 ## Assets
 
 | File | SHA-256 |
 | --- | --- |
-| `CableDyn_driver.exe` | `c20385caa8badf4947f3c3485489768eed74d3aa60c913003564a81eb5b9c04f` |
-| `openfast.exe` | `7322948dd7bbf24c32847d0213d31bd2e12706360015c5e5e6128851214b68b9` |
-| `cabledyn-0.4.0-py3-none-any.whl` | `dbc879d96fb9501532c718144f2d22ec80bdd33e46464c8463c9529c3dc5fd7a` |
-| `cabledyn-0.4.0.tar.gz` | `bc54da985d797fdb98e65722ced1fe5282edc75f8611290112f6df90177f34a8` |
+| `CableDyn_driver.exe` | `65c7b30790e447ba1b8bf000451d37c07c103e00b0d6bba6f474817c982a58bf` |
+| `openfast.exe` | `79942e44a9d7fc8e98c64baf1fc90dd8c724f690388b4c7cc880528c96965682` |
+| `cabledyn-0.4.0-py3-none-any.whl` | `bf8867075b0988c722237083a5103f82ad4301ba426c5ebe60faf1a013f85d58` |
+| `cabledyn-0.4.0.tar.gz` | `46a4e3d56c8ed60d7c9bf8510482aa9619995acaff6b5004ae434ade4bd09385` |
