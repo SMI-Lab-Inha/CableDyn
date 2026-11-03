@@ -111,7 +111,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_End_Twist
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HTORS_MAX_STEP, &
                                      CD_HTORS_MAX_TWIST, CD_HermiteTorsion_Zeta_Damping, CD_HermiteTorsion_Line, &
-                                     CD_HermiteTorsion_Unwrap, CD_HermiteTorsion_Element_Stretch, CD_HTORS_OK
+                                     CD_HermiteTorsion_Unwrap, CD_HermiteTorsion_Element_Stretch, CD_HTORS_OK, &
+                                     CD_HermiteTorsion_Coupling_Twist
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -1097,6 +1098,9 @@ MODULE CableDyn_DeckDriver
     ! End A of a finite-EI line restrained in torsion at both ends, as on the standalone
     ! cubic-Hermite route)
     LOGICAL, ALLOCATABLE :: col_roll(:)
+    ! per aggregate moving column of a TURBINES deck: the turbine whose motionFile records turn the
+    ! column's frames (its point's Turbine<J>; 0 for a column whose frames are held)
+    INTEGER, ALLOCATABLE :: col_turb(:)
   END TYPE
 
   !> Opaque deck current of a standalone mixed deck, which the standalone driver marches on the
@@ -3481,18 +3485,35 @@ CONTAINS
 
     SUBROUTINE torsion_note()
       !! The notes of the accepted torsion stage: a residual floor above the tolerance, and the
-      !! imposed twist and torque. A line restrained at one end only solves no twist stage; its
-      !! note is one_end_state's.
+      !! twist and torque. The twist is the line's total twist Twist<L> = Phi - Theta (the Twist<L>
+      !! channel at the static state): the imposed Phi = Pretwist(B) - Pretwist(A), which the note
+      !! also gives, with the turn of the end frames (a PtfmInit or TURBINES rotation of a parent)
+      !! and the shape's geometric twist, both in the holonomy Theta. The accepted theta is
+      !! Theta_eff = Theta + tw_K under torque-tension coupling, tw_K = -sum (K/GJ)(l - L)
+      !! (CD_HermiteTorsion_Coupling_Twist), so Phi - Theta = Phi - Theta_eff + tw_K. A line
+      !! restrained at one end only solves no twist stage; its note is one_end_state's.
       CHARACTER(320) :: tnote
+      REAL(wp) :: twist
       IF (ln%tors_free_end > 0) RETURN
+      twist = tors%phi - tors%theta
+      IF (ALLOCATED(tors%couple)) THEN
+        ! the final mesh of the stage: l0 after the attachment polish, l0_am otherwise
+        IF (has_att) THEN
+          twist = twist + CD_HermiteTorsion_Coupling_Twist(q_static, l0, tors%couple, tors%quadrature_order)
+        ELSE
+          twist = twist + CD_HermiteTorsion_Coupling_Twist(q_static, l0_am, tors%couple, tors%quadrature_order)
+        END IF
+      END IF
       IF (tors_tol_used > static_tol_target) THEN
         WRITE (tnote, '(A,I0,A,ES9.2,A,ES9.2)') 'line ', ln%id, ': torsion static residual floor above the '// &
           'tolerance ', static_tol_target, '; twisted equilibrium accepted at ', tors_tol_used
         CALL report_note(tnote)
       END IF
-      WRITE (tnote, '(A,I0,A,ES12.5,A,ES12.5,A,I0,A,I0,A)') 'line ', ln%id, ': torsion solved, imposed twist ', &
-        tors%phi*45.0_wp/QUARTER_PI, ' deg, torque ', tors%torque, ' N m (', tors%ramp_steps, &
-        ' twist stage(s), ', tors%descents, ' buckling descent(s))'
+      WRITE (tnote, '(A,I0,A,I0,A,ES12.5,A,ES12.5,A,ES12.5,A,I0,A,I0,A)') 'line ', ln%id, &
+        ': torsion solved, total twist Twist', ln%id, ' =', twist*45.0_wp/QUARTER_PI, &
+        ' deg (imposed Pretwist(B) - Pretwist(A) =', tors%phi*45.0_wp/QUARTER_PI, &
+        ' deg, with the end frames'' turn and the shape''s geometric twist), torque ', tors%torque, ' N m (', &
+        tors%ramp_steps, ' twist stage(s), ', tors%descents, ' buckling descent(s))'
       CALL report_note(tnote)
       IF (tors%untwisted_instability) THEN
         WRITE (tnote, '(A,I0,A,I0,A)') 'line ', ln%id, ': the twisted static state keeps the instability of '// &
@@ -7354,7 +7375,7 @@ CONTAINS
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                     range_files, host_orientation, static_current, prescribed_motion, &
-                                    static_run, deck_current)
+                                    static_run, deck_current, deck_turbines)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -7455,8 +7476,16 @@ CONTAINS
     ! supplying its own field and passes no deck_current.
     LOGICAL, INTENT(IN), OPTIONAL :: deck_current
 
+    ! deck_turbines: the caller is the standalone driver, which runs a TURBINES deck by itself: the
+    ! deck's TURBINES rows place every Turbine<J> point at ref_J + PtfmInit_J(p) as the parse of
+    ! the single-route decks does (place_standalone_turbine_points), the end frames of a finite-EI
+    ! line on a Turbine<J> point start turned by turbine J's PtfmInit rotation (turbine_end_dcm),
+    ! and the per-turbine motionFile records move the points and turn those frames
+    ! (build_aggregate_motion). Ignored in FAST.Farm mode (n_turbines >= 1).
+    LOGICAL, INTENT(IN), OPTIONAL :: deck_turbines
+
     INTEGER :: nturb
-    LOGICAL :: host_turns, own_motion, dynamic_points, static_only, own_current
+    LOGICAL :: host_turns, own_motion, dynamic_points, static_only, own_current, own_turbines
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
     TYPE(DeckRodType), ALLOCATABLE :: rod_types(:)
@@ -7486,9 +7515,15 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate requires a positive coupling dt'); RETURN
     END IF
+    nturb = 0
+    IF (PRESENT(n_turbines)) nturb = MAX(0, n_turbines)
+    ! a standalone TURBINES deck: the parse places the Turbine<J> points from the TURBINES rows (and
+    ! refuses Turbine<J> points without them), as for the single-route decks
+    own_turbines = .FALSE.
+    IF (PRESENT(deck_turbines)) own_turbines = deck_turbines .AND. nturb == 0
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, caller_driven=.TRUE., env_gravity=env_gravity, &
-                    env_rho_water=env_rho_water, env_wtrdpth=env_wtrdpth, allow_turbine=.TRUE., &
+                    env_rho_water=env_rho_water, env_wtrdpth=env_wtrdpth, allow_turbine=.NOT. own_turbines, &
                     failures=fails, controls=ctrls, run_tmax=run_tmax, host_coupled_objects=.TRUE., &
                     static_run=static_run)
     IF (ErrStat == CD_DECKDRV_OK) THEN
@@ -7529,8 +7564,6 @@ CONTAINS
       END IF
     END IF
     ! ---- FAST.Farm mode -------------------------------------------------------
-    nturb = 0
-    IF (PRESENT(n_turbines)) nturb = MAX(0, n_turbines)
     IF (nturb > 0) THEN
       IF (PRESENT(ptfm_init)) THEN
         IF (MAXVAL(ABS(ptfm_init)) > CD_ZERO) THEN
@@ -7571,11 +7604,15 @@ CONTAINS
       END DO
       CALL revalidate_ptfm_points(points, lines, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
-    ELSE
+    ELSE IF (.NOT. own_turbines) THEN
+      ! Turbine<J> coordinates are turbine-local: only a farm context (FAST.Farm) or the standalone
+      ! driver's TURBINES rows place them
       DO i = 1, SIZE(points)
         IF (points(i)%turbine_id > 0) THEN
-          CALL fail(ErrStat, ErrMsg, 'the deck carries Turbine<J> points but no farm init was '// &
-                    'given (pass n_turbines + turbine_ref_pos)'); RETURN
+          CALL fail(ErrStat, ErrMsg, 'POINT '//TRIM(int_to_str(points(i)%id))//' is a Turbine<J> point, whose '// &
+                    'coordinates are local to turbine J of a farm, but this run has no farm: run the deck in '// &
+                    'FAST.Farm (Mod_SharedMooring = 5) or with the standalone driver and a TURBINES section; '// &
+                    'a single-turbine OpenFAST model and the C API take Coupled/Vessel points'); RETURN
         END IF
       END DO
     END IF
@@ -7698,9 +7735,9 @@ CONTAINS
         END IF
         IF ((opts%has_current .OR. opts%has_current_profile) .AND. .NOT. own_current) THEN
           IF (nturb > 0) THEN
-            CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not supported in '// &
-                      'FAST.Farm: the shared mooring of a farm runs in STILL WATER (no fluid field spans the '// &
-                      'farm). Remove the current OPTION'); RETURN
+            CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck '//deck_current_source(opts)// &
+                      ' is not supported in FAST.Farm: the shared mooring of a farm runs in STILL WATER (no '// &
+                      'fluid field spans the farm). Remove the '//deck_current_source(opts)); RETURN
           END IF
           ! (the standalone mixed route passes deck_current; this is a library caller without it)
           CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current OPTION is not marched by a '// &
@@ -7784,8 +7821,8 @@ CONTAINS
       END SELECT
     END DO
     ! RODS are marched on the coupled aggregate (the rod twin of the Rigid6 march), scope-validated
-    ! below (n_rod block) and built into agg%rod. A rod deck mixed with Rigid6 bodies fails closed
-    ! there (the aggregate marches one body/rod family per step).
+    ! below (n_rod block) and built into agg%rod. A rod deck with Rigid6 or Point3 bodies fails
+    ! closed there (the aggregate marches one body/rod family per step).
     n_rod = SIZE(rods)
     n_host_rod = COUNT(rods%rod_type == 'coupled' .OR. rods%rod_type == 'vessel' .OR. &
                        rods%rod_type == 'coupledpinned')
@@ -7890,9 +7927,16 @@ CONTAINS
     ! field, another dynamic point, a Rigid6/point3 body, or line FAILURE is not composed with a rod march
     ! yet -- fail closed by name.
     IF (n_rod > 0) THEN
+      ! The step replaces the mooring step with either the body march or the rod march: a deck
+      ! with both (a rod fixed to a body included; a zero-length rod is a point by now) has no
+      ! coupled march. The standalone multibody march and MoorDyn-F take it.
       IF (n_rigid6 > 0 .OR. n_point3 > 0) THEN
-        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a coupled deck mixing RODs and Rigid6/point3 '// &
-                  'bodies is not supported (the aggregate marches one body/rod family per step)'); RETURN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a coupled deck with both BODIES and RODS is not '// &
+                  'supported: the coupled march advances the bodies (Rigid6, Point3) or the rods of a deck, '// &
+                  'not both, and a rod fixed to a body counts as a rod. Coupled runs (OpenFAST CompMooring = 5, '// &
+                  'the C API and Python) take a deck with bodies or a deck with rods; run this one with MoorDyn '// &
+                  '(CompMooring = 3) in the same OpenFAST binary, or, without CoupledPinned objects, with the '// &
+                  'standalone driver, whose multibody march takes both'); RETURN
       END IF
       IF (n_fin > 0) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a coupled ROD with a finite-EI cable in the '// &
@@ -8124,6 +8168,10 @@ CONTAINS
             j = find_point(points, lines(i)%nodeA)
             IF (j > 0 .AND. points(j)%turbine_id > 0) &
               fairlead_dcm = ptfm_zyx_dcm(farm_ptfm_init(4:6, points(j)%turbine_id))
+          ELSE IF (own_turbines) THEN
+            ! a standalone TURBINES deck: the PtfmInit rotation of the end's turbine, as on the
+            ! standalone cubic-Hermite route
+            fairlead_dcm = turbine_end_dcm(points, opts, lines(i)%nodeA)
           ELSE IF (PRESENT(ptfm_init)) THEN
             fairlead_dcm = ptfm_zyx_dcm(ptfm_init(4:6))
           END IF
@@ -8137,6 +8185,8 @@ CONTAINS
             j = find_point(points, lines(i)%nodeB)
             IF (j > 0 .AND. points(j)%turbine_id > 0) &
               end_b_dcm = ptfm_zyx_dcm(farm_ptfm_init(4:6, points(j)%turbine_id))
+          ELSE IF (own_turbines) THEN
+            end_b_dcm = turbine_end_dcm(points, opts, lines(i)%nodeB)
           ELSE IF (PRESENT(ptfm_init)) THEN
             end_b_dcm = ptfm_zyx_dcm(ptfm_init(4:6))
           END IF
@@ -8848,7 +8898,9 @@ CONTAINS
     !! POINT order, then one coupled fairlead per finite-EI cable in deck LINE order, then the
     !! moving End B of each cable between two moving points). The roll column of a motionFile
     !! drives a moving end restrained in torsion of a line solved in torsion, as on the
-    !! standalone cubic-Hermite route (check_motion_roll_lines).
+    !! standalone cubic-Hermite route (check_motion_roll_lines). On a TURBINES deck the
+    !! per-turbine records also turn the frames of each column with the column's turbine when a
+    !! line carries end-connection or torsion frames (with_turbine_frames, as on that route).
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     LOGICAL, INTENT(IN) :: is_fin(:)
@@ -8863,7 +8915,10 @@ CONTAINS
     ErrMsg = ''
     CALL CD_Motion_End(rt)
     CALL read_motion_file(opts%motion_file, points, opts, rt%motion, ErrStat, ErrMsg, &
-                          with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]))
+                          with_roll=ANY([(line_torsion_active(lines(i)), i=1, SIZE(lines))]), &
+                          with_turbine_frames=ANY([(line_torsion_active(lines(i)) .OR. &
+                                                    ANY(lines(i)%endconn_mode /= CD_ENDCONN_PINNED), &
+                                                    i=1, SIZE(lines))]))
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     CALL check_motion_roll_lines(rt%motion, lines, points, ErrStat, ErrMsg)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
@@ -8905,7 +8960,7 @@ CONTAINS
         IF (pass == 2) CALL set_column(n, find_point(points, lines(l)%nodeB), &
                                        rt%motion%has_roll .AND. line_torsion_at_b(lines(l)))
       END DO
-      IF (pass == 1) ALLOCATE (rt%col_point(n), rt%col_pos(3, n), rt%col_roll(n))
+      IF (pass == 1) ALLOCATE (rt%col_point(n), rt%col_pos(3, n), rt%col_roll(n), rt%col_turb(n))
     END DO
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     rt%active = .TRUE.
@@ -8923,6 +8978,8 @@ CONTAINS
       rt%col_point(col) = ip
       rt%col_pos(:, col) = points(ipt)%pos
       rt%col_roll(col) = takes_roll
+      rt%col_turb(col) = 0
+      IF (rt%motion%has_turb_rot) rt%col_turb(col) = points(ipt)%turbine_id
     END SUBROUTINE set_column
   END SUBROUTINE build_aggregate_motion
 
@@ -8940,10 +8997,11 @@ CONTAINS
   END FUNCTION CD_Motion_NColumns
 
   LOGICAL FUNCTION CD_Motion_Has_Rotation(rt) RESULT(has)
-    !! A vesselMotion table: the moving points turn with the vessel.
+    !! A vesselMotion table (the moving points turn with the vessel), or the per-turbine records of
+    !! a TURBINES deck whose lines carry end frames (each point turns with its turbine).
     TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
     has = .FALSE.
-    IF (rt%active) has = rt%motion%has_rot
+    IF (rt%active) has = rt%motion%has_rot .OR. rt%motion%has_turb_rot
   END FUNCTION CD_Motion_Has_Rotation
 
   LOGICAL FUNCTION CD_Motion_Has_Roll(rt) RESULT(has)
@@ -8978,16 +9036,17 @@ CONTAINS
     !! Grid row time_index (1 = t 0) of the moving surface, columns in the aggregate moving-set
     !! order: position, velocity and acceleration of each driving point (3, n); the
     !! global-to-parent DCM (3, 3, n) and the global-axis angular velocity and acceleration
-    !! (3, n) -- the vessel's under a vesselMotion table, the identity and zero otherwise, so a
-    !! motionFile turns no frame -- and the motionFile roll [rad] of each column that takes one
-    !! (zero elsewhere). Allocation free.
+    !! (3, n) -- the vessel's under a vesselMotion table, the column's turbine's under the
+    !! records of a TURBINES deck, the identity and zero otherwise, so motionFile point rows turn
+    !! no frame -- and the motionFile roll [rad] of each column that takes one (zero elsewhere).
+    !! Allocation free.
     TYPE(CD_MotionRuntimeType), INTENT(IN) :: rt
     INTEGER, INTENT(IN) :: time_index
     REAL(wp), INTENT(OUT) :: position(:, :), velocity(:, :), acceleration(:, :)
     REAL(wp), INTENT(OUT) :: orientation(:, :, :), angular_velocity(:, :), angular_acceleration(:, :), roll(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: col, ip, n
+    INTEGER :: col, ip, n, j
 
     ErrStat = CD_DECKDRV_BADINPUT
     ErrMsg = ''
@@ -9025,6 +9084,16 @@ CONTAINS
         orientation(3, 3, col) = CD_ONE
         angular_velocity(:, col) = CD_ZERO
         angular_acceleration(:, col) = CD_ZERO
+        IF (rt%motion%has_turb_rot) THEN
+          ! TURBINES records: the column turns with its own turbine J (turbine_end_rotation), the
+          ! parent DCM being the transpose of the record's turbine-to-global rotation
+          j = rt%col_turb(col)
+          IF (j >= 1 .AND. j <= SIZE(rt%motion%turb_rot, 3)) THEN
+            orientation(:, :, col) = TRANSPOSE(rt%motion%turb_rot(:, :, j, time_index))
+            angular_velocity(:, col) = rt%motion%turb_omega(:, j, time_index)
+            angular_acceleration(:, col) = rt%motion%turb_alpha(:, j, time_index)
+          END IF
+        END IF
       END IF
       roll(col) = CD_ZERO
       IF (rt%col_roll(col)) roll(col) = rt%motion%roll(ip, time_index)
@@ -9040,6 +9109,7 @@ CONTAINS
     IF (ALLOCATED(rt%col_point)) DEALLOCATE (rt%col_point)
     IF (ALLOCATED(rt%col_pos)) DEALLOCATE (rt%col_pos)
     IF (ALLOCATED(rt%col_roll)) DEALLOCATE (rt%col_roll)
+    IF (ALLOCATED(rt%col_turb)) DEALLOCATE (rt%col_turb)
     rt%active = .FALSE.
   END SUBROUTINE CD_Motion_End
 
@@ -26431,8 +26501,11 @@ CONTAINS
     INTEGER :: nobj, n, i, j, k, it, inner, info, worst, jk
     LOGICAL :: ok, only_points
     REAL(wp) :: sc, rnorm, rnorm_try, mu, step_cap, len_min, dmax, trust, pred
+    ! the completion line: the deck pose of every point, and the largest turn of a body or rod
+    REAL(wp), ALLOCATABLE :: pos_deck(:, :)
+    REAL(wp) :: turn_rot(3, 3), turn_max
     CHARACTER(1024) :: lin_msg
-    CHARACTER(24) :: b1
+    CHARACTER(24) :: b1, b2
 
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
@@ -26832,15 +26905,41 @@ CONTAINS
         END DO
       END IF
     END IF
+    ALLOCATE (pos_deck(3, SIZE(points)))
+    DO i = 1, SIZE(points)
+      pos_deck(:, i) = points(i)%pos
+    END DO
     CALL apply_state(x, bodies, rods, points)
     IF (only_points .OR. silent) RETURN
+    ! The largest move from the deck pose: of a body reference point or rod centre (the
+    ! translation unknowns) and of every point the objects carry (attachment points, rod ends,
+    ! Free/Connect points), so a pinned rod that only turns reports its End B's move. The largest
+    ! turn: the rotation angle |log(R R0^T)| of a body or rod from its deck orientation R0.
     dmax = CD_ZERO
     DO k = 1, nobj
       IF (ndof(k) >= 3) dmax = MAX(dmax, NORM2(x(off(k) + 1:off(k) + 3)))
     END DO
+    DO i = 1, SIZE(points)
+      dmax = MAX(dmax, NORM2(points(i)%pos - pos_deck(:, i)))
+    END DO
+    turn_max = CD_ZERO
+    DO k = 1, nobj
+      SELECT CASE (okind(k))
+      CASE (OBJ_BODY)
+        turn_rot = MATMUL(CD_Exp_SO3(x(off(k) + 4:off(k) + 6)/lsc(k)), base_rot(:, :, k))
+      CASE (OBJ_ROD)
+        turn_rot = MATMUL(CD_Exp_SO3((x(off(k) + 4)*e1(:, k) + x(off(k) + 5)*e2(:, k))/lsc(k)), base_rot(:, :, k))
+      CASE (OBJ_PIN)
+        turn_rot = MATMUL(CD_Exp_SO3((x(off(k) + 1)*e1(:, k) + x(off(k) + 2)*e2(:, k))/lsc(k)), base_rot(:, :, k))
+      CASE DEFAULT
+        CYCLE
+      END SELECT
+      turn_max = MAX(turn_max, NORM2(CD_Log_SO3(MATMUL(turn_rot, TRANSPOSE(base_rot0(:, :, k))))))
+    END DO
     WRITE (b1, '(ES10.3)') dmax
+    WRITE (b2, '(ES10.3)') turn_max*45.0_wp/QUARTER_PI
     WRITE (output_unit, '(A)') '   Initial conditions: body/rod static equilibrium ('//TRIM(int_to_str(nobj))// &
-      ' object(s), largest move '//TRIM(ADJUSTL(b1))//' m) completed.'
+      ' object(s), largest move '//TRIM(ADJUSTL(b1))//' m, largest turn '//TRIM(ADJUSTL(b2))//' deg) completed.'
 
   CONTAINS
 
@@ -31327,6 +31426,18 @@ CONTAINS
     omega = motion%turb_omega(:, k, time_index)
     alpha = motion%turb_alpha(:, k, time_index)
   END SUBROUTINE turbine_end_rotation
+
+  PURE FUNCTION deck_current_source(opts) RESULT(src)
+    !! The deck input that declares the deck's current, for a refusal: the CurrentMod 1 table of
+    !! its WaterKin file, or its current OPTION.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    CHARACTER(:), ALLOCATABLE :: src
+    IF (opts%has_waterkin_file .AND. opts%waterkin_current_mode == 1 .AND. opts%has_current_profile) THEN
+      src = 'WaterKin current table (CurrentMod 1)'
+    ELSE
+      src = 'current OPTION'
+    END IF
+  END FUNCTION deck_current_source
 
   PURE FUNCTION turbine_end_dcm(points, opts, point_id) RESULT(dcm)
     !! The global-to-parent DCM, at the static start, of a line end on point point_id: on a

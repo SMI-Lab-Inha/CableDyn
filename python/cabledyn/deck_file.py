@@ -1624,7 +1624,9 @@ class DeckFile:
     rejected otherwise. The native C API (:class:`cabledyn.CableDyn`) reads decks with the
     standalone rules, so it rejects the ``CoupledPinned``/``VesselPinned`` bodies and rods
     that ``caller_driven=True`` accepts; FAST.Farm, in turn, refuses bodies and rods when it
-    initialises the module.
+    initialises the module. A coupled deck carries bodies or rods, not both (a rod fixed to a
+    body counts as a rod): ``caller_driven=True`` rejects a deck with both, as the coupled
+    route and the C API do, while the standalone driver's multibody march takes them.
     """
 
     def __init__(
@@ -3729,6 +3731,16 @@ class DeckFile:
                     f"{self._label}: a deck current on the coupled route is kept only on a "
                     "single-turbine pure EI=0 deck without Rigid6 bodies or rods; remove the "
                     "deck current OPTION (the host SeaState supplies the current)"
+                )
+            # native CD_Init_Deck_Aggregate: the coupled march advances the bodies or the rods
+            # of a deck, not both (a rod fixed to a body counts; a zero-length rod is a point)
+            if has_rods and body_types:
+                raise DeckFormatError(
+                    f"{self._label}: a coupled deck with both BODIES and RODS is not "
+                    "supported: the coupled march advances the bodies (Rigid6, Point3) or the "
+                    "rods of a deck, not both, and a rod fixed to a body counts as a rod; run "
+                    "the deck with MoorDyn (CompMooring = 3) or, without CoupledPinned objects, "
+                    "with the standalone driver, whose multibody march takes both"
                 )
         if has_viv_ei0 and not self.caller_driven:
             # native init_one_model: the lift acts with the line's Morison drag, which the

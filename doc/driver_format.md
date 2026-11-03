@@ -596,8 +596,11 @@ follows `x + R(q) p`, with the rigid-body velocity and acceleration. A finite-EI
 `Turbine<J>` point takes its `END CONNECTIONS` direction `Ez` and torsion normal `Nx` in that
 turbine's axes: turned by the `PtfmInit` rotation at the static start and by `R(q)`, with the
 row's angular velocity and acceleration, in the run (End A and End B alike), as the FAST.Farm
-host's orientations turn them. In FAST.Farm the host supplies the turbine positions and the
-section is not used.
+host's orientations turn them. A `TURBINES` deck that mixes `EI = 0` lines and finite-EI cables (a
+power cable shared by two turbines beside their chain legs) runs on the standalone mixed route,
+the aggregate of FAST.Farm, with the same placement, records and end frames as the decks of its
+cables alone and of its `EI = 0` lines alone. In FAST.Farm the host supplies the turbine positions
+and the section is not used.
 
 ### ROD TYPES + RODS (rigid cylindrical rods)
 

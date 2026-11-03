@@ -443,6 +443,27 @@ def test_body_fixed_rod_ends_resolve_to_body_points():
     assert keys["rod1b"] == "rod1b" and types["rod1b"] == "body1" and merged == {}
 
 
+def test_coupled_decks_take_bodies_or_rods_not_both():
+    # native CD_Init_Deck_Aggregate (OpenFAST CompMooring = 5, FAST.Farm, the C API): the coupled
+    # march advances the bodies or the rods of a deck; a rod fixed to the body counts as a rod
+    rods = (
+        f"{_BAR} ROD TYPES {_BAR}\nName Diam Mass Cd Ca CdEnd CaEnd\n"
+        "spar 1.0 300.0 0.8 1.0 0.0 0.0\n"
+        f"{_BAR} RODS {_BAR}\nID RodType Type XA YA ZA XB YB ZB NumSegs Outputs\n"
+        "1 spar Body1 0 0 -2 0 0 -8 2 -\n"
+    )
+    # (in still water: a coupled deck current on a deck with bodies is refused first)
+    still = ("uniform 0.6 0.0 0.0  current", "none  current")
+    text = _buoy(still, (f"{_BAR} POINTS", rods + f"{_BAR} POINTS"))
+    DeckFile.from_text(text)  # the standalone multibody march
+    _rejects(text, "a coupled deck with both BODIES and RODS", caller_driven=True)
+    DeckFile.from_text(_buoy(still), caller_driven=True)
+    # a zero-length rod is a point, not a rod
+    zero = rods.replace("0 0 -8 2 -", "0 0 -2 0 -")
+    zero_text = _buoy(still, (f"{_BAR} POINTS", zero + f"{_BAR} POINTS"))
+    DeckFile.from_text(zero_text, caller_driven=True)
+
+
 # --------------------------------------------------------------------------- dispatch gates
 
 

@@ -2727,6 +2727,13 @@ CONTAINS
                                turbine_ref_pos=refpos, forbid_deck_ambient=.TRUE.)
     CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'STILL WATER') > 0, &
                  'farm: forbid_deck_ambient rejects a deck current OPTION')
+    ! a WaterKin CurrentMod 1 table is named as such, not as a current OPTION the deck lacks
+    CALL write_farm_deck('agg_farm_wk.dat', plain_coupled=.FALSE., ambient='waterkin')
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_farm_wk.dat', DT, es, em, n_turbines=2, &
+                               turbine_ref_pos=refpos, forbid_deck_ambient=.TRUE., external_fluid=.FALSE.)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'WaterKin current table') > 0 .AND. &
+                 INDEX(em, 'current OPTION') == 0, 'farm: a WaterKin current table is refused by its name: '// &
+                 TRIM(em))
     CALL write_farm_deck('agg_farm_wav.dat', plain_coupled=.FALSE., ambient='waves')
     CALL CD_AGG_Init_From_Deck(agg, 'agg_farm_wav.dat', DT, es, em, n_turbines=2, &
                                turbine_ref_pos=refpos, forbid_deck_ambient=.TRUE.)
@@ -4100,6 +4107,34 @@ CONTAINS
         WRITE (u, '(A)') 'uniform 0.5 0.0 0.0 current'
       CASE ('waves')
         WRITE (u, '(A)') 'airy 2.0 8.0 0.0 waves'
+      CASE ('waterkin')
+        ! a WaterKin file without waves and with a CurrentMod 1 depth table
+        WRITE (u, '(A)') 'agg_farm_wk_kin.dat WaterKin'
+        BLOCK
+          INTEGER :: uk
+          OPEN (NEWUNIT=uk, FILE='agg_farm_wk_kin.dat', STATUS='REPLACE', ACTION='WRITE')
+          WRITE (uk, '(A)') 'WaterKin file: no waves, a current table'
+          WRITE (uk, '(A)') '-'
+          WRITE (uk, '(A)') '--- WAVES ---'
+          WRITE (uk, '(A)') '0    WaveKinMod'
+          WRITE (uk, '(A)') '""   WaveKinFile'
+          WRITE (uk, '(A)') '0.0  dtWave'
+          WRITE (uk, '(A)') '0.0  WaveDir'
+          WRITE (uk, '(A)') '1    X grid type'
+          WRITE (uk, '(A)') '0'
+          WRITE (uk, '(A)') '1    Y grid type'
+          WRITE (uk, '(A)') '0'
+          WRITE (uk, '(A)') '1    Z grid type'
+          WRITE (uk, '(A)') '0'
+          WRITE (uk, '(A)') '--- CURRENT ---'
+          WRITE (uk, '(A)') '1    CurrentMod'
+          WRITE (uk, '(A)') 'z-depth x-current y-current'
+          WRITE (uk, '(A)') '(m) (m/s) (m/s)'
+          WRITE (uk, '(A)') '0.0 0.3 0.0'
+          WRITE (uk, '(A)') '-200.0 0.1 0.0'
+          WRITE (uk, '(A)') '--- need this line ---'
+          CLOSE (uk)
+        END BLOCK
       END SELECT
     END IF
     WRITE (u, '(A)') '--- need this line ---'

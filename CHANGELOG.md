@@ -483,6 +483,44 @@ All notable changes to CableDyn are recorded in this file. The format follows
   start with the same torques on every kernel, proportional to the pretwist.
 - The "unresolved/kinked equilibrium" refusal names the element and the factor to refine its
   section's `NumSegs` by.
+- Console messages that said something untrue now say what happens:
+  - OpenFAST: "SeaState wave/current kinematics drive the mooring hydro" is printed only when the
+    deck's `WaterKin` policy takes a SeaState component (a `WaterKin` file with `WaveKinMod 0` and
+    `CurrentMod 0` gives still water and says so);
+  - the body/rod static start reports the largest turn of a body or rod and the move of every
+    point the objects carry, so a pinned rod that only rotated no longer reads "largest move
+    0.000E+00 m";
+  - a mixed or FAST.Farm deck refused for a deck current names the input that declares it (the
+    `CurrentMod 1` table of its `WaterKin` file, or the `current` OPTION), not always "the current
+    OPTION";
+  - the torsion note reports the line's total twist `Twist<L>` at the static state, beside the
+    imposed `Pretwist(B) - Pretwist(A)` and with the end frames' turn (a `PtfmInit` or `TURBINES`
+    rotation) and the shape's geometric twist, not the pretwist alone;
+  - in FAST.Farm the time-step messages name the farm's `DT_Mooring`, not a "glue DT".
+- A standalone `TURBINES` deck that mixes `EI = 0` lines and finite-EI cables (a power cable
+  shared by two turbines beside their chain legs, the usual farm deck) runs. It stopped with the
+  internal message `no farm init was given (pass n_turbines + turbine_ref_pos)`: the mixed route
+  did not take the `TURBINES` rows. It now places the `Turbine<J>` points from them and moves the
+  points and turns the cable end frames with the per-turbine `motionFile` records, as the decks of
+  the cables alone and of the `EI = 0` lines alone do. The IEA 15 MW two-turbine deck (a 1530 m
+  cable restrained in torsion and four chains, 60 s of FAST.Farm platform motion) reproduces those
+  two decks to 3.2e-6 of the channel maxima and the FAST.Farm `Mod_SharedMooring = 5` run to
+  2.3e-5. On a two-turbine test deck whose turbines heave and roll, the chains match their deck
+  bit for bit and the cable, marched with the single-cable route's Newton controls, matches its
+  deck to 0.44 of the last printed digit. A `Turbine<J>` point in a run without a farm
+  (single-turbine OpenFAST, the C API) is now refused by point, naming FAST.Farm and the
+  `TURBINES` section.
+- A coupled deck with both bodies and rods stopped at init with `a coupled deck mixing RODs and
+  Rigid6/point3 bodies is not supported (the aggregate marches one body/rod family per step)`,
+  a limit the OpenFAST and capability pages did not state. The message now says what the coupled
+  route takes (bodies or rods, a rod fixed to a body counting as a rod) and where such a deck runs
+  (MoorDyn `CompMooring = 3`, the standalone driver); the OpenFAST, capability and troubleshooting
+  pages state the limit, and the Python validator (`caller_driven=True`) refuses the deck.
+- `FAST.Farm.exe` built through the CMake route of `integration/openfast` with the GNU compilers
+  on Windows stopped at start with `0xC00000FD` (stack overflow) while initialising the first
+  turbine: MinGW links it with a 2 MiB stack. The new patch `0022` gives `openfast.exe` and
+  `FAST.Farm.exe` a 256 MiB stack reserve on that toolchain, and the shared-mooring farm (two IEA
+  15 MW turbines) runs to normal termination.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's

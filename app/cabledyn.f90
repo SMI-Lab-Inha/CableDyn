@@ -533,10 +533,13 @@ CONTAINS
       ! name instead of silently holding zero fluid. The deck's own current is the aggregate's
       ! (deck_current), sampled at the nodes before every step at the step's t_committed. The
       ! driver holds the line end frames or turns them with the deck's vesselMotion table
-      ! (host_orientation), and marches the deck's prescribed motion (prescribed_motion).
+      ! (host_orientation), and marches the deck's prescribed motion (prescribed_motion). A
+      ! TURBINES section places the Turbine<J> points and its records move and turn them
+      ! (deck_turbines), as on the single-route decks.
       CALL CD_AGG_Init_From_Deck(aggregate, deck, step_dt, es, em, forbid_deck_ambient=.TRUE., &
                                  run_tmax=MAX(CD_ZERO, run_time), range_files=.TRUE., host_orientation=.TRUE., &
-                                 prescribed_motion=has_motion, static_run=nstep == 0, deck_current=.TRUE.)
+                                 prescribed_motion=has_motion, static_run=nstep == 0, deck_current=.TRUE., &
+                                 deck_turbines=.TRUE.)
       IF (es /= CD_AGG_OK) THEN
         CALL set_aggregate_error(es, em, run_stat, run_msg)
         EXIT mixed_run

@@ -102,6 +102,10 @@ formerly NREL) and advances the objects atomically. Every ``Coupled``/``Vessel``
 at its initialised position, or follows the deck's ``motionFile`` or ``vesselMotion`` (a vessel
 turns the end connection and torsion frames of the power cables on its points, and the
 ``motionFile`` roll column twists a cable restrained in torsion, as on the single-cable route).
+A ``TURBINES`` deck (:doc:`driver_format`) places its ``Turbine<J>`` points from the section, and
+its per-turbine ``motionFile`` records move them and turn the frames of the cable ends on them
+with their turbine, so a FAST.Farm shared-mooring deck of power cables and chain legs runs here
+as a whole.
 A mixed deck that also has bodies, rods or ``Connect``/``Free`` points runs on the multibody
 march instead (:doc:`driver_format`), which accepts deck waves and current. ``examples/iea15mw_umaine_mixed_cabledyn.dat`` is the maintained four-line
 example; its ``TMax = 0`` setting writes the common static configuration. Give a positive ``TMax``

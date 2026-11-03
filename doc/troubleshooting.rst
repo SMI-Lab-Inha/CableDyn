@@ -681,11 +681,15 @@ Warnings and notes that do not stop a run
        torque–tension coupling (``GJ|K``) its stretch twists it by
        :math:`-\sum (K/GJ)(l - L)`, so a free End B turns by :math:`+x` and a free End A by
        :math:`-x` about the End A → End B tangent.
-   * - ``Note: line <L>: torsion solved, imposed twist ... deg, torque ... N m (<n> twist
-       stage(s), <m> buckling descent(s))``
-     - the static twist stage of a torsional line. A non-zero descent count means the straight or
-       untwisted branch was unstable at the imposed twist and the solve moved to a buckled shape;
-       check the shape and the ``Twist<L>`` channel.
+   * - ``Note: line <L>: torsion solved, total twist Twist<L> = ... deg (imposed Pretwist(B) -
+       Pretwist(A) = ... deg, with the end frames' turn and the shape's geometric twist), torque
+       ... N m (<n> twist stage(s), <m> buckling descent(s))``
+     - the static twist stage of a torsional line. The total twist is the ``Twist<L>`` channel at
+       the static state: the imposed pretwist difference plus the turn of the end frames (a
+       ``PtfmInit`` or ``TURBINES`` rotation of a parent turns its end) less the geometric twist the
+       line takes up by its shape; the torque follows from it. A non-zero descent count means the
+       straight or untwisted branch was unstable at the imposed twist and the solve moved to a
+       buckled shape; check the shape and the ``Twist<L>`` channel.
    * - ``WARNING: CableDyn mooring module: <n> of the <N> CableDyn sampling nodes in the water
        lie outside the SeaState wave-kinematics grid at t = ... s (warned once)`` (OpenFAST)
      - the SeaState grid (``X_HalfWidth``, ``Y_HalfWidth``, ``Z_Depth``) does not cover the
@@ -901,6 +905,12 @@ aborts with a CableDyn fatal error, check whether the deck uses one of these com
    * - a finite-EI cable in the same deck as Rigid6 bodies, rods, or ``Connect``/``Free`` points
      - model the cable and the body/point system in separate decks or use the supported
        combinations in :doc:`capabilities`
+   * - ``a coupled deck with both BODIES and RODS is not supported``: bodies (Rigid6 or Point3)
+       and rods in one deck, a rod fixed to a body (``Body<N>``, ``Body<N>Pinned``) included
+     - the coupled march advances the bodies or the rods of a deck, not both (also in the C API and
+       Python). Run the deck with stock MoorDyn (``CompMooring = 3``) in the same binary, or, without
+       ``CoupledPinned`` objects, with the standalone driver, whose multibody march takes both; a
+       deck with only bodies or only rods runs coupled
    * - OpenFAST linearisation of a cable with a ``Rigid`` ``END CONNECTIONS`` row (``formal
        OpenFAST linearization of a cable with a rigid end connection is not supported``), of a deck
        with ``Free`` or ``Connect`` points or a line with VIV (``Cl > 0``), or with a ``CONTROL``

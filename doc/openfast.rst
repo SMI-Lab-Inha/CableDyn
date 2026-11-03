@@ -81,7 +81,9 @@ solves once per that many glue steps, which is faster. Between commits the coupl
 extrapolated from the last two commits (deck ``OPTIONS predictLoads``, the default) or, with
 ``predictLoads False``, held at the last commit, which delays them (see the note below). The
 console reports the result, for
-example ``CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)``. A deck ``dtM``
+example ``CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)``; in FAST.Farm the
+coupling step is the farm's mooring step ``DT_Mooring``, and the line reads ``1 x FAST.Farm
+DT_Mooring``. A deck ``dtM``
 larger than ``DT`` but not a whole multiple of it is never coarsened: CableDyn uses the largest
 multiple of ``DT`` that does not exceed it and reports a warning with both values (``dtM = 0.025``
 with ``DT = 0.01`` runs at 0.02 s), matching MoorDyn, which only ever shortens its step to fit the
@@ -427,7 +429,13 @@ without an auxiliary process:
   held fluid stay those of the committed step). ``PtfmInit`` moves and turns such a rod with
   the platform before the static solve balances it about its pin. ``Pinned`` rods turn about a
   fixed End A. ``Coupled``/``Vessel`` bodies are platform-borne the same way as ``Coupled`` rods,
-  with the node at the body reference point, and may share a deck with ``Free`` bodies.
+  with the node at the body reference point, and may share a deck with ``Free`` bodies. A deck
+  carries bodies (Rigid6 or Point3) or rods, not both: the coupled march advances one of the two
+  families, and a rod fixed to a body (``RODS`` type ``Body<N>`` or ``Body<N>Pinned``) counts as a
+  rod, so such a deck stops at init (``a coupled deck with both BODIES and RODS is not
+  supported``). MoorDyn (``CompMooring = 3``) in the same binary runs it, and so does the
+  standalone driver's multibody march when the deck has no ``CoupledPinned`` objects (those run in
+  OpenFAST only).
   ``CoupledPinned``/``VesselPinned`` bodies are pinned to the platform like ``CoupledPinned`` rods:
   the node at the body reference point follows the platform position only, the body turns about
   it with its own three rotations (its inertia about the node, its weight and buoyancy at the
