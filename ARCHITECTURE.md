@@ -446,6 +446,7 @@ src/
     CableDyn_Hydro.f90         Morison loads, Airy and JONSWAP waves, currents
     CableDyn_WaveSpectra.f90   spectra, spreading, and multi-train seas
     CableDyn_StreamWave.f90    stream-function regular nonlinear waves
+    CableDyn_WaveMath.f90      block sine/cosine and exponential of the wave kinematics
     CableDyn_Vessel.f90        vessel kinematics, 6-DOF motion, displacement RAOs
     CableDyn_SeabedContact.f90 C1 normal contact and stick-slip friction laws
     CableDyn_Bathymetry.f90    gridded bathymetry

@@ -11,7 +11,7 @@ MODULE CableDyn_CAPI
   !! the point-system object graph used by OpenFAST-facing integrations.
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_BOOL, C_CHAR, C_DOUBLE, C_INT, C_NULL_CHAR, C_NULL_PTR, C_PTR, &
                                                                             C_ASSOCIATED, C_LOC, C_F_POINTER
-  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64, COMPILER_VERSION
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_System, CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, &
                                  CD_Deck_Query_dtM, CD_DECK_NAMELEN, CD_Eval_Aggregate_Channel, &
@@ -1366,13 +1366,17 @@ CONTAINS
     !! it is never dereferenced or deallocated. Only a validated live handle is
     !! de-registered, finalized, deallocated, and nulled.
     !!
-    !! Closing a live handle also releases the OpenMP thread pool of the calling
-    !! thread (outside a parallel region only; the next parallel region starts a new
-    !! one). A pool left to the runtime is torn down when its host thread exits, and
-    !! its threads then end detached: a process that exits while one of them is
-    !! still ending can hang in the OpenMP runtime's exit handler (MinGW-w64 libgomp
-    !! with winpthreads). Joining the pool here means a host thread that closes its
-    !! handles before it ends leaves no such thread behind.
+    !! With GNU OpenMP (libgomp), closing a live handle also releases the OpenMP thread
+    !! pool of the calling thread (outside a parallel region only; the next parallel
+    !! region starts a new one). A pool left to the runtime is torn down when its host
+    !! thread exits, and its threads then end detached: a process that exits while one
+    !! of them is still ending can hang in the OpenMP runtime's exit handler (MinGW-w64
+    !! libgomp with winpthreads). Joining the pool here means a host thread that closes
+    !! its handles before it ends leaves no such thread behind. The Intel and LLVM
+    !! runtime (libiomp5/libomp) pauses the whole process instead: one handle's Close
+    !! then paused the OpenMP of every other handle and of the host, and the first
+    !! parallel region of another thread deadlocked resuming it. Those runtimes are not
+    !! paused here.
 !$  USE OMP_LIB, ONLY: omp_pause_resource_all, omp_pause_soft
     TYPE(C_PTR), INTENT(INOUT) :: handle
     INTEGER(C_INT), INTENT(OUT) :: err_stat
@@ -1380,6 +1384,8 @@ CONTAINS
     INTEGER :: es
     CHARACTER(CD_C_MSG_LEN) :: em
 !$  INTEGER :: omp_stat
+    ! libgomp only (see above): COMPILER_VERSION names the compiler that built this unit
+    LOGICAL, PARAMETER :: OMP_POOL_JOIN_ON_CLOSE = INDEX(COMPILER_VERSION(), 'GCC') > 0
 
     err_stat = CD_C_OK
     IF (.NOT. C_ASSOCIATED(handle)) RETURN
@@ -1401,7 +1407,7 @@ CONTAINS
     DEALLOCATE (h)
     handle = C_NULL_PTR
     ! Nonzero inside an active parallel region, where the pool is left alone.
-!$  omp_stat = omp_pause_resource_all(omp_pause_soft)
+!$  IF (OMP_POOL_JOIN_ON_CLOSE) omp_stat = omp_pause_resource_all(omp_pause_soft)
   END SUBROUTINE CableDyn_Close
 
   FUNCTION CableDyn_IsInitialized(handle) RESULT(is_initialized) BIND(C, NAME='CableDyn_IsInitialized')

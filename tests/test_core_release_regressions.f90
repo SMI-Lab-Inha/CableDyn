@@ -178,12 +178,12 @@ CONTAINS
     END DO
     ac = 0.0_wp
 
-    CALL CD_System_Fallback_Reset()
+    CALL CD_System_Fallback_Reset(system)
     CALL CD_Step_System(system, DT, qc, vc, ac, conv, stalled, n_iter, es, em)
     CALL require(es == CD_SYSTEM_OK, 'fallback:system-step '//TRIM(em))
     CALL require(.NOT. conv, 'fallback:step-stalls-at-every-depth')
-    CALL require(CD_System_Fallback_Count() > 0, 'fallback:subdivision-entered')
-    CALL CD_System_Fallback_Reset()
+    CALL require(CD_System_Fallback_Count(system) > 0, 'fallback:subdivision-entered')
+    CALL CD_System_Fallback_Reset(system)
 
     DO i = 1, 2
       CALL CD_Get_Model_State(ref(i), pq, pv, pa, es, em)
@@ -264,12 +264,12 @@ CONTAINS
     vc(4) = 0.2_wp
     ac = 0.0_wp
 
-    CALL CD_System_Fallback_Reset()
+    CALL CD_System_Fallback_Reset(system)
     CALL CD_Step_System(system, DT, qc, vc, ac, conv, stalled, n_iter, es, em)
     CALL require(es == CD_SYSTEM_OK, 'fallback-lengths:system-step '//TRIM(em))
     CALL require(.NOT. conv, 'fallback-lengths:step-stalls-at-every-depth')
-    CALL require(CD_System_Fallback_Count() > 0, 'fallback-lengths:subdivision-entered')
-    CALL CD_System_Fallback_Reset()
+    CALL require(CD_System_Fallback_Count(system) > 0, 'fallback-lengths:subdivision-entered')
+    CALL CD_System_Fallback_Reset(system)
 
     CALL CD_Get_Model_State(ref, pq, pv, pa, es, em)
     DO j = 1, 6

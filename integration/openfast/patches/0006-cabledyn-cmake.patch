@@ -1,9 +1,9 @@
 diff --git a/modules/cabledyn/CMakeLists.txt b/modules/cabledyn/CMakeLists.txt
 new file mode 100644
-index 000000000..40f9728a6
+index 000000000..be1a9133b
 --- /dev/null
 +++ b/modules/cabledyn/CMakeLists.txt
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,194 @@
 +#
 +# Copyright (C) 2026 Jae Hoon Seo, SMI Lab, Inha University
 +#
@@ -148,6 +148,15 @@ index 000000000..40f9728a6
 +  ${CABLEDYN_ROOT}/src/openfast/CableDyn_Types.f90
 +)
 +target_link_libraries(cabledynlib cabledyn_core seastlib nwtclibs)
++if (CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
++  # The value-safe floating-point model for the adapter, as the core's own build sets for
++  # every IFX build (see CableDyn's CMakeLists.txt): IFX defaults to /fp:fast.
++  if (WIN32)
++    target_compile_options(cabledynlib PRIVATE /fp:precise)
++  else()
++    target_compile_options(cabledynlib PRIVATE "SHELL:-fp-model precise")
++  endif()
++endif()
 +if (TARGET cabledyn_core_ep)
 +  # the imported core cannot carry dependencies itself; the consumer orders the build
 +  add_dependencies(cabledynlib cabledyn_core_ep)

@@ -15,8 +15,8 @@ PROGRAM test_cosserat_assemble
                                        CD_Assemble_Cosserat_Tangent_Force_Banded_Free, &
                                        CD_Assemble_Cosserat_Internal_Force, &
                                        CD_Cosserat_Free_Bandwidth, &
-                                       CD_COSASM_N_FORCE, CD_COSASM_N_TANGENT, &
-                                       CD_Reset_Cosserat_Asm_Counts
+                                       CD_Assemble_Cosserat_Internal_Force_Workspace, &
+                                       CD_CosseratAssemblyWorkspace, CD_Reset_Cosserat_Asm_Counts
   IMPLICIT NONE
 
   REAL(wp), PARAMETER :: EA = 1.0e3_wp, GAS = 5.0e2_wp, EI = 2.0e2_wp, GJ = 1.5e2_wp
@@ -30,6 +30,7 @@ PROGRAM test_cosserat_assemble
   REAL(wp) :: fplus(NDOF), fminus(NDOF), ffd(NDOF), fref(NDOF), kd(NDOF), frob, ksum, h
   REAL(wp), ALLOCATABLE :: Kb(:, :), Kfree(:, :), Kfrom_band(:, :)
   CHARACTER(120) :: em
+  TYPE(CD_CosseratAssemblyWorkspace) :: asm_work
   nfail = 0
 
   nodes_ref(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
@@ -131,10 +132,10 @@ PROGRAM test_cosserat_assemble
 
   ! Force-only assembly must remain a true residual-only path: it should not
   ! increment the tangent assembly counter or route through the Hessian path.
-  CALL CD_Reset_Cosserat_Asm_Counts()
-  CALL CD_Assemble_Cosserat_Internal_Force(nodes_ref, conn, ea_a, gas_a, ei_a, gj_a, q, .TRUE., &
-                                           fint2, es, em)
-  CALL require(es == 0 .AND. CD_COSASM_N_FORCE == 1 .AND. CD_COSASM_N_TANGENT == 0, &
+  CALL CD_Reset_Cosserat_Asm_Counts(asm_work)
+  CALL CD_Assemble_Cosserat_Internal_Force_Workspace(nodes_ref, conn, ea_a, gas_a, ei_a, gj_a, q, .TRUE., &
+                                                     asm_work, fint2, es, em)
+  CALL require(es == 0 .AND. asm_work%n_force == 1 .AND. asm_work%n_tangent == 0, &
                'force-only-does-not-touch-tangent-counter')
 
   ! === fail-closed connectivity / property validation (mirrors the reference mesh

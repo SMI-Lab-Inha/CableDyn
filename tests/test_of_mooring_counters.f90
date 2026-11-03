@@ -22,10 +22,10 @@ PROGRAM test_of_mooring_counters
   !!     subdivides) and its reset semantics hold;
   !!   * loads out are finite every step.
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
+  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_Fallback_Count, CD_AGG_Fallback_Reset, &
+                                         CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
                                          CD_AGG_End, CD_AGG_OK
-  USE CableDyn_System, ONLY: CD_System_Fallback_Count, CD_System_Fallback_Reset
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
 
@@ -62,8 +62,8 @@ PROGRAM test_of_mooring_counters
   CALL require(es == CD_AGG_OK, 'initial mesh read')
 
   ! reset semantics: the tripwire starts a measured window at zero
-  CALL CD_System_Fallback_Reset()
-  CALL require(CD_System_Fallback_Count() == 0, 'fallback tripwire zero after reset')
+  CALL CD_AGG_Fallback_Reset(agg)
+  CALL require(CD_AGG_Fallback_Count(agg) == 0, 'fallback tripwire zero after reset')
 
   nstep = NINT(DURATION/DTM)
   w = 2.0_wp*pi/PERIOD
@@ -109,11 +109,11 @@ PROGRAM test_of_mooring_counters
 
   WRITE (*, '(A,F6.2,A,I0)') 'counters: newton/step mean = ', iter_sum/REAL(nstep, wp), &
     '   max = ', iter_max
-  WRITE (*, '(A,I0)') 'counters: substep fallbacks = ', CD_System_Fallback_Count()
+  WRITE (*, '(A,I0)') 'counters: substep fallbacks = ', CD_AGG_Fallback_Count(agg)
 
   CALL require(iter_sum/REAL(nstep, wp) <= MEAN_ITER_GATE, 'mean Newton/step within the band')
   CALL require(iter_max <= MAX_ITER_GATE, 'max Newton/step within the band')
-  CALL require(CD_System_Fallback_Count() == 0, 'no substep fallback over the healthy window')
+  CALL require(CD_AGG_Fallback_Count(agg) == 0, 'no substep fallback over the healthy window')
 
   CALL CD_AGG_End(agg, es, em)
   CALL require(es == CD_AGG_OK, 'aggregate End')

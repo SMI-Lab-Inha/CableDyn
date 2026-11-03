@@ -31,13 +31,8 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   # The release executables target x86-64-v3 (CABLEDYN_TARGET_AVX2 below).
   set(CABLEDYN_TARGET_AVX2 ON CACHE BOOL "" FORCE)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded" CACHE STRING "" FORCE)
-  # Large finite-EI meshes create compiler-generated array temporaries in deeply
-  # nested residual/assembly calls. Keep those temporaries off the process stack;
-  # the released executable also receives a generous reserve below. The size
-  # threshold keeps run-time-sized arrays and temporaries on the heap but leaves
-  # compile-time-sized locals up to 1 MiB on the stack: with a bare /heap-arrays,
-  # IFX 2025.3 heap-allocates the host frame of every procedure with internal
-  # procedures and never frees it, leaking memory on each call.
+  # Run-time-sized arrays and array temporaries go to the heap (/heap-arrays:1024), as in
+  # every IFX build (below); the released executable also receives a generous reserve below.
   #
   # /Qipo: the element, hydrodynamic, and assembly kernels live in separate modules
   # and are called per element and per Newton iteration; without interprocedural
@@ -45,7 +40,10 @@ if(CABLEDYN_STATIC_WINDOWS_RELEASE)
   # then holds IPO objects, so it links only through an IPO-capable IFX link (the
   # driver below, or the OpenFAST Release|x64 project, which enables whole-program
   # optimisation).
-  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /heap-arrays:1024 /Qipo")
+  #
+  # The floating-point model is /fp:precise, as in every IFX build (below); the reference
+  # LAPACK is built with /fp:precise as well.
+  string(APPEND CMAKE_Fortran_FLAGS " /libs:static /Qipo")
   # CMake does not pass the compile flags to an IFX executable link on Windows. The shared
   # library (the Windows wheel's cabledyn.dll) links the same IPO objects, so it needs the
   # flag as well: without it IFX hands the intermediate objects to link.exe (LNK1107).
@@ -139,6 +137,51 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
                       $<$<COMPILE_LANGUAGE:Fortran>:-fimplicit-none>
                       $<$<COMPILE_LANGUAGE:C>:-Wall>
                       $<$<COMPILE_LANGUAGE:C>:-Wextra>)
+endif()
+# Local variables are automatic in every procedure, whatever the OpenMP setting: separate
+# models (C API handles, Python objects, FAST.Farm turbines) may step concurrently on
+# several threads, and a local in static storage is shared by every thread that runs its
+# procedure. Without OpenMP, IFX keeps fixed-size local arrays and CHARACTER locals in
+# static storage (its default, /Qauto-scalar, makes only the numeric and LOGICAL scalars
+# automatic), and gfortran moves a local array larger than -fmax-stack-var-size (64 KiB)
+# there; /Qauto (-auto) and -frecursive put them on the stack (-fopenmp already implies
+# -frecursive, so the default GNU build is unchanged). A value that must persist between
+# calls is SAVEd explicitly.
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+  add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-frecursive>)
+elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
+  if(WIN32)
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:/Qauto>)
+  else()
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-auto>)
+  endif()
+endif()
+# The value-safe floating-point model in every IFX build and configuration: /fp:precise
+# (-fp-model precise off Windows), for the core, the driver, the tests, the wheel and the
+# OpenFAST build of the core alike. IFX defaults to /fp:fast, which lets it reassociate sums,
+# replace a division by a multiplication with the reciprocal and flush subnormals to zero,
+# differently at every inlined call site. The same expression then rounds differently on two
+# code paths, so the gates that hold two routes to the same bits (a zero control command and
+# an uncontrolled cable, a held Coupled End B and a Fixed one, a committed and a re-derived
+# torque) fail, a subnormal deck value reads as zero, and a secant iteration can stall on
+# equal residuals. GNU builds keep their default, value-safe model (no -ffast-math).
+#
+# Run-time-sized arrays and the compiler's array temporaries on the heap, in every IFX build:
+# /heap-arrays:1024 (-heap-arrays 1024 off Windows). The library runs on threads whose stack the
+# host sets (1 MiB for python.exe and an MSVC-linked program: the stack_c_api and c_api_threads
+# gates), and large finite-EI meshes create array temporaries in deeply nested residual and
+# assembly calls; without the option a non-static IFX build overflows those stacks. The size
+# threshold leaves compile-time-sized locals up to 1 MiB on the stack: with a bare /heap-arrays,
+# IFX 2025.3 heap-allocates the host frame of every procedure with internal procedures and
+# never frees it, leaking memory on each call.
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
+  if(WIN32)
+    add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:/fp:precise>
+                        $<$<COMPILE_LANGUAGE:Fortran>:/heap-arrays:1024>)
+  else()
+    add_compile_options("$<$<COMPILE_LANGUAGE:Fortran>:SHELL:-fp-model precise>"
+                        "$<$<COMPILE_LANGUAGE:Fortran>:SHELL:-heap-arrays 1024>")
+  endif()
 endif()
 # GNU builds on Windows (MinGW-w64): every executable gets a 64 MiB stack reserve instead of
 # the 2 MiB MinGW default. With OpenMP, gfortran places fixed-size local arrays on the stack
@@ -402,6 +445,7 @@ add_library(cabledyn_obj OBJECT
   src/CableDyn_Assemble.f90
   src/CableDyn_Loads.f90
   src/CableDyn_Bathymetry.f90
+  src/CableDyn_WaveMath.f90
   src/CableDyn_Hydro.f90
   src/CableDyn_WaveSpectra.f90
   src/CableDyn_StreamWave.f90
@@ -433,6 +477,15 @@ set_target_properties(cabledyn_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(cabledyn_obj PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 target_include_directories(cabledyn_obj PUBLIC "${CMAKE_Fortran_MODULE_DIRECTORY}")
 target_link_libraries(cabledyn_obj PUBLIC ${CABLEDYN_LAPACK})
+# The block sine, cosine and exponential of the wave kinematics (src/CableDyn_WaveMath.f90)
+# round to an integer as (y + 1.5*2^52) - 1.5*2^52 and reduce the phase by pi/2 in exact parts.
+# A value-unsafe floating-point model may reassociate both and fold the rounding to y, so that
+# every sine, cosine and exponential is wrong by O(1). Every IFX build compiles with
+# /fp:precise (-fp-model precise) already (above); a GNU build given -ffast-math (or -Ofast)
+# in its flags still compiles this file with IEEE semantics.
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(src/CableDyn_WaveMath.f90 PROPERTIES COMPILE_OPTIONS "-fno-fast-math")
+endif()
 if(CABLEDYN_HAVE_OPENBLAS_SET_NUM_THREADS)
   target_compile_definitions(cabledyn_obj PRIVATE CABLEDYN_HAVE_OPENBLAS_SET_NUM_THREADS=1)
 endif()
@@ -775,6 +828,12 @@ add_executable(test_hydro tests/test_hydro.f90)
 target_link_libraries(test_hydro PRIVATE cabledyn_core)
 add_test(NAME hydro COMMAND test_hydro)
 set_tests_properties(hydro PROPERTIES LABELS "fortran;unit;hydro")
+
+# The block sine, cosine and exponential of the wave kinematics against quadruple precision.
+add_executable(test_wave_math tests/test_wave_math.f90)
+target_link_libraries(test_wave_math PRIVATE cabledyn_core)
+add_test(NAME wave_math COMMAND test_wave_math)
+set_tests_properties(wave_math PROPERTIES LABELS "fortran;unit;hydro")
 
 add_executable(test_cable_static tests/test_cable_static.f90)
 target_link_libraries(test_cable_static PRIVATE cabledyn_core)
@@ -1358,6 +1417,21 @@ add_test(NAME c_api_threads_stress
                  $<IF:$<BOOL:${CABLEDYN_HAVE_OPENBLAS_SET_NUM_THREADS}>,1,0>)
 set_tests_properties(c_api_threads_stress PROPERTIES LABELS "c;unit;capi;threading" TIMEOUT 600
                      ENVIRONMENT "CABLEDYN_THREAD_TEST_LOOPS=5;CABLEDYN_THREAD_TEST_TIMEOUT=540")
+# Concurrent steps on every per-handle route at once, 4 threads per deck, each trajectory against
+# its deck's serial reference: EI = 0 chain and finite-EI cable on the coupled aggregate,
+# viscoelastic and Syrope segments, a mixed EI = 0/finite-EI deck, Free points, a finite-EI
+# power cable and a Free rod. Static locals or closure trampolines shared by the threads fail it.
+add_test(NAME c_api_threads_mixed
+         COMMAND test_c_api_threads --mixed 40
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/host_coupling_chain_cable.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/ve_polyester_catenary_mooring.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/syrope_polyester_mooring.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/iea15mw_umaine_mixed_cabledyn.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/foam_esflowc_box_points.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/lozon_gomaine200_power_cable.dat
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/c_api_free_rod.dat)
+set_tests_properties(c_api_threads_mixed PROPERTIES LABELS "c;unit;capi;threading" TIMEOUT 600
+                     ENVIRONMENT "CABLEDYN_THREAD_TEST_TIMEOUT=540")
 if(WIN32)
   # Host threads that ran OpenMP teams, then an immediate process exit: MinGW-w64
   # libgomp could hang in its exit handler when a pool thread was still ending.
@@ -1419,6 +1493,12 @@ if(NOT WIN32)
 endif()
 # Growth bounds [MiB]: observed 0.0 MiB over 20000 C-API steps and 0.11 MiB over 1000
 # aggregate steps; 2 MiB leaves room for allocator page granularity.
+if(CABLEDYN_STATIC_WINDOWS_RELEASE)
+  # The static IFX core archive holds /Qipo objects, which only an IFX link reads (link.exe,
+  # the C linker, reports every CableDyn_* symbol unresolved): the C tests that link the core
+  # directly link through IFX there.
+  set_target_properties(test_c_api_raw_small_dt test_memory_growth PROPERTIES LINKER_LANGUAGE Fortran)
+endif()
 add_test(NAME memory_growth
          COMMAND test_memory_growth 2 ${CMAKE_CURRENT_SOURCE_DIR}/examples/spread_3line_chain.dat 20000)
 set_tests_properties(memory_growth PROPERTIES LABELS "c;capi;dynamic;memory" SKIP_RETURN_CODE 77)
@@ -1549,6 +1629,14 @@ if(Python3_Interpreter_FOUND)
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_omp_fatal_init.py)
   set_tests_properties(omp_fatal_init PROPERTIES
     LABELS "python;unit;stack"
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
+  # Storage that concurrent models could share: closures, implicit SAVE, unreviewed static
+  # variables, and the automatic-locals flags (tests/test_thread_safe_sources.py).
+  add_test(NAME thread_safe_sources
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_thread_safe_sources.py)
+  set_tests_properties(thread_safe_sources PROPERTIES
+    LABELS "python;unit;threading"
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
   add_test(NAME documentation_sources
@@ -2969,7 +3057,8 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
       test_endconn_spring
       test_torsion_coupling
       test_torsion_one_end
-      test_two_moving_ends)
+      test_two_moving_ends
+      test_wave_math)
     target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
   endforeach()
   target_compile_options(test_openfast_aggregate PRIVATE

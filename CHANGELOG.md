@@ -294,6 +294,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Changed
 
+- Every Intel ifx build compiles CableDyn with the value-safe floating-point model,
+  `/fp:precise` (`-fp-model precise` off Windows): the static Windows release and wheel, every
+  other CMake build and configuration with ifx (with or without OpenMP, including the core that
+  the OpenFAST CMake route builds, and its adapter), and every configuration of the OpenFAST
+  Visual Studio project. The ifx default, `/fp:fast`, reassociates sums, divides by
+  multiplying with the reciprocal and flushes subnormals to zero, differently at every inlined
+  call site, so the gates that hold two routes to the same bits failed (a zero control command
+  against an uncontrolled cable, a held Coupled End B against a Fixed one, a committed against a
+  re-derived torque), subnormal deck values read as zero and the clamped-cable elastica secant
+  stalled. Results of ifx builds change at round-off; gfortran builds are unchanged.
 - The macOS wheel needs macOS 15 or newer on Apple silicon (0.3.0: macOS 14). It is built on
   the macOS 15 runner, as GitHub retires the macOS 14 runner image on 2 November 2026, and its
   Homebrew gfortran and OpenBLAS support no older macOS. On macOS 14, build from source.
@@ -336,6 +346,23 @@ All notable changes to CableDyn are recorded in this file. The format follows
   0.1 s drops from 18,000 components to 1,800. On the 300 s lazy-wave case both records then run
   in 72 s, and every output channel's standard deviation moves by at most 0.002 %. A record with
   no component at or below the cut-off is refused by name.
+- Waves run faster under every compiler: the wave kinematics evaluate their phase sines and cosines
+  and depth exponentials in blocks of plain arithmetic that vectorise under any value-safe
+  floating-point model (`CableDyn_WaveMath`: one argument reduction for each sine-cosine pair,
+  polynomials, the power of two from its bits) in place of one library call per component, which ifx
+  makes under `/fp:precise`. At one thread, best of five, an irregular sea runs 31 to 33 % faster
+  with ifx (`chain_two_train_sea` 1.83 s to 1.22 s, `chain_torsethaugen_spread` 1.64 s to 1.13 s)
+  and 20 to 21 % faster with gfortran (4.09 s to 3.22 s, 3.56 s to 2.86 s); the VolturnUS line-break
+  decks 14 % (ifx, 31.0 s to 26.8 s) and 9 % (gfortran); `lazy_wave_vessel_rao` and
+  `lazy_wave_bend_stiffener` 9 % with ifx and within 1 % of before with gfortran; decks without
+  waves run as before. This recovers about two thirds of what `/fp:precise` cost the Windows release
+  (`chain_two_train_sea` +83 % over `/fp:fast` before, +24 % now). The sines and cosines are within
+  2.4 ulp (within 9e-26 next to their zeros) and the exponentials within 1.1 ulp of quadruple
+  precision, so wave decks change at round-off: 49 of the 53 example decks give identical files, two
+  lazy-wave decks differ by one unit in the last printed digit (7e-8 of a tension's scale), and in
+  the two VolturnUS line-break decks the drifting platform amplifies round-off after t = 860 s to
+  0.15 to 0.21 of the anchor-2 tension's scale, as much as the gfortran and ifx builds of the
+  unchanged code differ by.
 - Coupled OpenFAST runs start from the equilibrium in SeaState's steady current (`CurrMod 1`),
   as standalone decks start in their `current` option, instead of from the still-water shape.
   The current is evaluated at SeaState's vertical grid levels for the static solves only; the
@@ -391,6 +418,20 @@ All notable changes to CableDyn are recorded in this file. The format follows
   is now laid from End A, the line seen from its other end, and its nodes put back in order. The
   deck starts at the same equilibrium as before on Windows (1e-7 m, 6e-4 N), and moving the fixed
   rod by 1 ulp either way or 1e-12 m up leaves the rod's start unchanged (0 m).
+- `CableDyn_Close` no longer pauses the OpenMP runtime of the whole process under the Intel and
+  LLVM OpenMP runtimes (ifx and other non-GNU builds with OpenMP). Every close called
+  `omp_pause_resource_all` (since 0.1.0) to join the calling thread's pool, a fix for GNU
+  OpenMP's process exit on MinGW-w64; libiomp5 and libomp pause the runtime of every thread
+  instead, so closing one handle paused the OpenMP of every other handle and of the host, and the
+  next parallel region on another thread deadlocked resuming it. An ifx build with OpenMP that
+  stepped a handle on a second thread after a close hung every time (the threading gate, 20 of
+  20 runs); it now passes 20 of 20 with 1 and with 4 OpenMP threads. GNU builds keep the pool join.
+- A non-static ifx build (a plain CMake build with ifx, or the core of the OpenFAST CMake route)
+  kept run-time-sized arrays and array temporaries on the stack, as only the static Windows
+  release compiled with `/heap-arrays`: the 2835-node mixed IEA-15 MW deck and a fine-mesh deck of
+  the statics matrix overflowed the 1 MiB stack of an MSVC-linked program. Every ifx build now
+  compiles with `/heap-arrays:1024` (`-heap-arrays 1024` off Windows), as the static release and
+  the OpenFAST Visual Studio project did; the static release is unchanged.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's
@@ -460,6 +501,36 @@ All notable changes to CableDyn are recorded in this file. The format follows
   share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
   equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
   static passes too (4 here); the rod holds its pose to the output's 8 digits.
+- Diagnostic counts that concurrent models shared: the adaptive-substep fallbacks of an `EI = 0`
+  system and the assembly and modified-Newton counts of the finite-EI Cosserat solver were
+  process-wide (and lost increments without OpenMP); they are now kept per system and per solver
+  workspace. The count of finite-EI intervals recovered by substeps is reported only by the opt-in
+  run profile (`CABLEDYN_PROFILE`), whose figures stay process-wide by design; each model keeps its
+  own. No result changes.
+- A failing `OPEN` of a file name of about 600 characters or more (the extended-length spelling of
+  a path beyond the Windows limit) ended an ifx-built program or the wheel's DLL with
+  `STATUS_STACK_BUFFER_OVERRUN` inside the Intel Fortran run-time, for example an output root in
+  a folder that does not exist. Every `OPEN` of a user-supplied name now first asks the system
+  whether the file opens (`CD_Path_Openable`) and reports the failure without attempting the
+  `OPEN`; the messages are unchanged.
+- Concurrent steps of separate handles crashed the ifx builds with access violations: an `EI = 0`
+  line model passed its load and added-mass callbacks to the integrator as internal procedures,
+  and ifx calls such a closure through a trampoline kept in memory every thread shares, so two
+  threads stepping distinct models called each other's half-written trampolines (a 40-line
+  reproducer crashes with two threads under every ifx option). The model now hands its loads to
+  the integrator as an object (`CD_Cable_Step_Loads`); results are unchanged. Seven decks
+  stepped together on 28 threads (`c_api_threads_mixed`) failed every run before and pass 50 of
+  50.
+- Separate handles used on several threads at once failed in the Windows wheel and the release
+  binaries (Intel ifx without OpenMP): ifx kept the fixed-size local arrays and `CHARACTER` locals
+  of every procedure in static storage, which all threads share, so an initialisation that ran
+  while other handles stepped stopped with "tangent assembly failed" or "band scatter" errors
+  (gfortran builds were not affected: `-fopenmp` makes every local automatic). Every build now
+  makes local variables automatic, `/Qauto` (`-auto`) with ifx and `-frecursive` with gfortran,
+  which `-fopenmp` already implied, so the default gfortran build is unchanged, and so does every
+  configuration of the OpenFAST Visual Studio project (`LocalVariableStorage`). The release
+  benchmark decks run as fast or faster (0.3 to 21 %); ifx results change at round-off (with
+  `/fp:precise` every example is bit-identical).
 - In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
   step from zero acceleration: the module restores its state mirror after the output call at
   `t = 0`, which marked the objects' accelerations as committed before the start accelerations
@@ -536,6 +607,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   side, or by the sign of a round-off component: in OpenFAST about half the rows of a cable in
   the x-z plane read 359.9x. A line whose chord heads within 45° of +X now reports its azimuths
   in (−180, 180], every other line in [0, 360) as before.
+- The CableDyn-enabled `openfast.exe` named itself `OpenFAST-v5.0.0-dirty`: OpenFAST stamps its
+  version with `git describe --dirty`, and the integration patches modify the checkout. Built
+  through the Visual Studio solution or through CMake it now reads
+  `OpenFAST-v5.0.0-CableDyn-<CableDyn version>`, the describe of the unpatched OpenFAST base and
+  the CableDyn version, and the release build fails unless `openfast.exe -v` prints exactly that.
 
 ## [0.3.0] - 2026-10-23
 

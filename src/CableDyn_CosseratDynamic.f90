@@ -40,24 +40,11 @@ MODULE CableDyn_CosseratDynamic
   PUBLIC :: CD_Cosserat_Mechanical_Energy
   PUBLIC :: CD_Spatial_Inertia, CD_Spatial_Inertia_Dir, CD_Gyro_Torque, CD_Gyro_Torque_DOmega
   PUBLIC :: CD_Reset_Cosserat_Dyn_Counts
-  PUBLIC :: CD_COSDYN_HIST_MAX, CD_COSDYN_N_STALE_ACCEPT, CD_COSDYN_N_STALE_REJECT
-  PUBLIC :: CD_COSDYN_N_DEFERRED_REFRESH
-  PUBLIC :: CD_COSDYN_STALE_ACCEPT_HIST, CD_COSDYN_STALE_REJECT_HIST
-  PUBLIC :: CD_COSDYN_DEFERRED_REFRESH_HIST
+  PUBLIC :: CD_COSDYN_HIST_MAX
 
-  ! Modified-Newton stale-tangent diagnostics. CONTRACT: like the assembly counters in
-  ! CableDyn_CosseratAssemble, these are PROCESS-GLOBAL, single-run, single-threaded
-  ! instrumentation -- not per-model and not synchronized. They are only meaningful for
-  ! one model stepped on one thread (reset via CD_Reset_Cosserat_Dyn_Counts, then read);
-  ! concurrent multi-model or multi-threaded stepping would interleave them. Diagnostics
-  ! only -- a corrupted count never affects a physics result.
+  ! Histogram bins of the modified-Newton diagnostics of CD_CosseratGenAlphaWorkspace: the
+  ! Newton iteration of a stale-tangent outcome, the last bin collecting the later ones.
   INTEGER, PARAMETER :: CD_COSDYN_HIST_MAX = 16
-  INTEGER, SAVE :: CD_COSDYN_N_STALE_ACCEPT = 0
-  INTEGER, SAVE :: CD_COSDYN_N_STALE_REJECT = 0
-  INTEGER, SAVE :: CD_COSDYN_N_DEFERRED_REFRESH = 0
-  INTEGER, SAVE :: CD_COSDYN_STALE_ACCEPT_HIST(0:CD_COSDYN_HIST_MAX) = 0
-  INTEGER, SAVE :: CD_COSDYN_STALE_REJECT_HIST(0:CD_COSDYN_HIST_MAX) = 0
-  INTEGER, SAVE :: CD_COSDYN_DEFERRED_REFRESH_HIST(0:CD_COSDYN_HIST_MAX) = 0
 
   ABSTRACT INTERFACE
     SUBROUTINE CD_Cosserat_Dynamic_Force_Proc(q, v, force, ErrStat, ErrMsg)
@@ -123,6 +110,15 @@ MODULE CableDyn_CosseratDynamic
     REAL(wp), ALLOCATABLE :: load_jv_band(:, :)
     REAL(wp), ALLOCATABLE :: eff_band(:, :)
     TYPE(CD_CosseratAssemblyWorkspace) :: assembly
+    ! Modified-Newton stale-tangent diagnostics of the steps run on this workspace (one per
+    ! model, so concurrent models never mix their counts) since CD_Reset_Cosserat_Dyn_Counts:
+    ! stale-tangent steps accepted and rejected, refreshes before the first solve (no path
+    ! takes one), and histograms over the Newton iteration of each outcome. No result
+    ! depends on them.
+    INTEGER :: n_stale_accept = 0, n_stale_reject = 0, n_deferred_refresh = 0
+    INTEGER :: stale_accept_hist(0:CD_COSDYN_HIST_MAX) = 0
+    INTEGER :: stale_reject_hist(0:CD_COSDYN_HIST_MAX) = 0
+    INTEGER :: deferred_refresh_hist(0:CD_COSDYN_HIST_MAX) = 0
   END TYPE CD_CosseratGenAlphaWorkspace
 
 CONTAINS
@@ -167,15 +163,16 @@ CONTAINS
     work%ldab_capacity = 0
   END SUBROUTINE CD_Clear_CosseratGenAlpha_Workspace
 
-  SUBROUTINE CD_Reset_Cosserat_Dyn_Counts()
-    !! Zero modified-Newton diagnostic counters. These are benchmark-only
+  SUBROUTINE CD_Reset_Cosserat_Dyn_Counts(work)
+    !! Zero the modified-Newton diagnostic counters of a workspace. These are benchmark-only
     !! diagnostics and do not affect the numerical path.
-    CD_COSDYN_N_STALE_ACCEPT = 0
-    CD_COSDYN_N_STALE_REJECT = 0
-    CD_COSDYN_N_DEFERRED_REFRESH = 0
-    CD_COSDYN_STALE_ACCEPT_HIST = 0
-    CD_COSDYN_STALE_REJECT_HIST = 0
-    CD_COSDYN_DEFERRED_REFRESH_HIST = 0
+    TYPE(CD_CosseratGenAlphaWorkspace), INTENT(INOUT) :: work
+    work%n_stale_accept = 0
+    work%n_stale_reject = 0
+    work%n_deferred_refresh = 0
+    work%stale_accept_hist = 0
+    work%stale_reject_hist = 0
+    work%deferred_refresh_hist = 0
   END SUBROUTINE CD_Reset_Cosserat_Dyn_Counts
 
   SUBROUTINE CD_Cosserat_Mechanical_Energy(nodes_ref, elem_conn, ea, gas, ei, gj, rho_a, &
@@ -1216,7 +1213,7 @@ CONTAINS
       CALL CD_Solve_Factored_Banded(eff_band, kl, ku, ipiv, dq, es, em)
       IF (es /= 0 .OR. .NOT. CD_All_Finite(dq)) THEN
         IF (cfg%modified_newton .AND. .NOT. tangent_fresh) THEN
-          CALL record_stale_reject(n_iter)
+          CALL record_stale_reject(work, n_iter)
           have_eff = .FALSE.
           CYCLE
         END IF
@@ -1246,13 +1243,13 @@ CONTAINS
       n_iter = n_iter + 1
       IF (.NOT. accepted) THEN
         IF (cfg%modified_newton .AND. .NOT. tangent_fresh) THEN
-          CALL record_stale_reject(n_iter - 1)
+          CALL record_stale_reject(work, n_iter - 1)
           have_eff = .FALSE.
           CYCLE
         END IF
         stalled = .TRUE.; EXIT
       END IF
-      IF (cfg%modified_newton .AND. .NOT. tangent_fresh) CALL record_stale_accept(n_iter - 1)
+      IF (cfg%modified_newton .AND. .NOT. tangent_fresh) CALL record_stale_accept(work, n_iter - 1)
       qk = q_trial
       IF (cfg%modified_newton) THEN
         R = R_trial
@@ -1689,20 +1686,22 @@ CONTAINS
     END IF
   END SUBROUTINE ensure_real_matrix
 
-  SUBROUTINE record_stale_accept(iter)
+  SUBROUTINE record_stale_accept(work, iter)
+    TYPE(CD_CosseratGenAlphaWorkspace), INTENT(INOUT) :: work
     INTEGER, INTENT(IN) :: iter
     INTEGER :: idx
     idx = MIN(MAX(iter, 0), CD_COSDYN_HIST_MAX)
-    CD_COSDYN_N_STALE_ACCEPT = CD_COSDYN_N_STALE_ACCEPT + 1
-    CD_COSDYN_STALE_ACCEPT_HIST(idx) = CD_COSDYN_STALE_ACCEPT_HIST(idx) + 1
+    work%n_stale_accept = work%n_stale_accept + 1
+    work%stale_accept_hist(idx) = work%stale_accept_hist(idx) + 1
   END SUBROUTINE record_stale_accept
 
-  SUBROUTINE record_stale_reject(iter)
+  SUBROUTINE record_stale_reject(work, iter)
+    TYPE(CD_CosseratGenAlphaWorkspace), INTENT(INOUT) :: work
     INTEGER, INTENT(IN) :: iter
     INTEGER :: idx
     idx = MIN(MAX(iter, 0), CD_COSDYN_HIST_MAX)
-    CD_COSDYN_N_STALE_REJECT = CD_COSDYN_N_STALE_REJECT + 1
-    CD_COSDYN_STALE_REJECT_HIST(idx) = CD_COSDYN_STALE_REJECT_HIST(idx) + 1
+    work%n_stale_reject = work%n_stale_reject + 1
+    work%stale_reject_hist(idx) = work%stale_reject_hist(idx) + 1
   END SUBROUTINE record_stale_reject
 
   PURE REAL(wp) FUNCTION infnorm(x)

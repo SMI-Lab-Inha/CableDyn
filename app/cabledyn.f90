@@ -24,7 +24,7 @@ PROGRAM cabledyn
                                  CD_Classify_Dynamic_Completion, CD_DECKDRV_OK, &
                                  CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, CD_DECK_PATHLEN
   USE CableDyn_PathIO, ONLY: CD_Get_Argument, CD_Native_Path, CD_Lock_Path, CD_PATH_OK, &
-                             CD_LOCK_ACQUIRED, CD_LOCK_HELD
+                             CD_LOCK_ACQUIRED, CD_LOCK_HELD, CD_Open_Read, CD_Open_Write
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, &
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_End, &
@@ -271,7 +271,7 @@ CONTAINS
     ! A probe file beside the outputs proves the directory exists and is writable.
     probe = root_spelling//'.write_check.tmp'
     INQUIRE (FILE=probe, EXIST=exists)
-    OPEN (NEWUNIT=unit, FILE=probe, STATUS='UNKNOWN', ACTION='WRITE', IOSTAT=ios)
+    CALL CD_Open_Write(unit, probe, ios, status='UNKNOWN')
     IF (ios /= 0) THEN
       WRITE (error_unit, '(A)') PROG//': cannot write output files at "'//root// &
         '" (check that the directory exists and is writable)'
@@ -423,7 +423,7 @@ CONTAINS
     IF (.NOT. (exists_a .AND. exists_b)) RETURN
     same = normalized_path(a) == normalized_path(b)
     IF (same) RETURN
-    OPEN (NEWUNIT=unit, FILE=a, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL CD_Open_Read(unit, a, ios)
     IF (ios /= 0) RETURN
     opened = .FALSE.
     INQUIRE (FILE=b, OPENED=opened)
@@ -600,7 +600,7 @@ CONTAINS
         acceleration = CD_ZERO
       END IF
       dynamic_path = TRIM(root)//'.out'
-      OPEN (NEWUNIT=unit, FILE=TRIM(dynamic_path), STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+      CALL CD_Open_Write(unit, TRIM(dynamic_path), ios)
       IF (ios /= 0) THEN
         run_stat = CD_DECKDRV_BADINPUT
         run_msg = 'CableDyn_driver: cannot open mixed dynamic output: '//TRIM(dynamic_path)
@@ -726,7 +726,7 @@ CONTAINS
     REAL(wp) :: x
     requested = .FALSE.
     in_options = .FALSE.
-    OPEN (NEWUNIT=u, FILE=deck, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL CD_Open_Read(u, deck, ios)
     IF (ios /= 0) RETURN
     DO
       READ (u, '(A)', IOSTAT=ios) line

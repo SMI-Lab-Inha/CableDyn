@@ -223,10 +223,11 @@ MODULE CableDyn_HermiteCableDynamic
                                                                  'end_conn', 'wave_fk', 'held_fk', 'torsion']
   REAL(wp), SAVE :: prof_t_asm(HC_ASM_NSEC) = 0.0_wp
 
-  ! Number of coupling intervals completed by internal generalised-alpha substeps after the nominal
-  ! interval was too large for the prescribed boundary motion or environmental load. This counter is
-  ! independent of prof_enabled so temporal-refinement studies can report the actual line advances.
-  INTEGER, SAVE :: n_substep_recoveries = 0
+  ! Coupling intervals completed by internal generalised-alpha substeps (the nominal interval was
+  ! too large for the prescribed boundary motion or environmental load), summed over every model
+  ! while the profile is armed, for the profile reports of the driver and the OpenFAST module.
+  ! Each model counts its own in recovery_event_count (CD_HermiteCable_Dyn_Get_Recovery_Diagnostics).
+  INTEGER, SAVE :: prof_n_recover = 0
 
   TYPE :: CD_HermiteCableDynType
     !! Persistent finite-EI Hermite dynamic model: geometry, gen-alpha constants, and state.
@@ -623,7 +624,7 @@ CONTAINS
     !! the SYSTEM_CLOCK overhead in the step/residual hot path.
     prof_enabled = .TRUE.
     prof_n_step = 0; prof_n_resid = 0; prof_n_solve = 0; prof_n_am = 0; prof_n_alloc = 0
-    prof_n_tan = 0; prof_n_factor = 0; prof_n_correct = 0
+    prof_n_tan = 0; prof_n_factor = 0; prof_n_correct = 0; prof_n_recover = 0
     prof_t_step = 0.0_wp; prof_t_resid = 0.0_wp; prof_t_eff = 0.0_wp
     prof_t_tan = 0.0_wp; prof_t_factor = 0.0_wp
     prof_t_solve = 0.0_wp; prof_t_am = 0.0_wp
@@ -5486,8 +5487,10 @@ CONTAINS
         END IF
       END DO
       IF (es == CD_HCDYN_OK) THEN
-        !$OMP ATOMIC UPDATE
-        n_substep_recoveries = n_substep_recoveries + 1
+        IF (prof_enabled) THEN
+          !$OMP ATOMIC UPDATE
+          prof_n_recover = prof_n_recover + 1
+        END IF
         model%recovery_event_count = model%recovery_event_count + 1
         model%recovery_max_substeps_used = MAX(model%recovery_max_substeps_used, nsub)
         ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -5734,15 +5737,18 @@ CONTAINS
   END FUNCTION temporal_increment_ok
 
   PURE FUNCTION CD_HermiteCable_Dyn_Recovery_Count() RESULT(n)
-    !! Coupling intervals that completed only via internal substepping since the last
-    !! CD_HermiteCable_Dyn_Recovery_Reset (the finite-EI analogue of CD_System_Fallback_Count).
+    !! Coupling intervals of every model that completed only via internal substepping while the
+    !! step profile was armed (CD_HermiteCable_Dyn_Reset_Profile), since the last
+    !! CD_HermiteCable_Dyn_Recovery_Reset: a process-wide figure of the opt-in profile, like
+    !! the other profile counts (a profiled run steps its cables serially). One model's own
+    !! count is CD_HermiteCable_Dyn_Get_Recovery_Diagnostics.
     INTEGER :: n
-    n = n_substep_recoveries
+    n = prof_n_recover
   END FUNCTION CD_HermiteCable_Dyn_Recovery_Count
 
   SUBROUTINE CD_HermiteCable_Dyn_Recovery_Reset()
-    !! Zero the substep-recovery tripwire (start of a measured window).
-    n_substep_recoveries = 0
+    !! Zero the profile's substep-recovery count (start of a measured window).
+    prof_n_recover = 0
   END SUBROUTINE CD_HermiteCable_Dyn_Recovery_Reset
 
   SUBROUTINE CD_HermiteCable_Dyn_Energy(model, kinetic, strain, ErrStat, ErrMsg, connection)

@@ -21,6 +21,13 @@
  *   5. 24 threads step distinct handles concurrently while other threads keep
  *      failing to open a missing deck; every trajectory matches a serial reference.
  *
+ * test_c_api_threads --mixed <n_steps> <deck> [<deck> ...] instead steps every deck on
+ * several threads at once, all decks concurrently (each handle its own model: EI = 0
+ * lines, finite-EI cables, Syrope and viscoelastic segments, points, bodies and rods take
+ * their own code paths), n_steps steps each, and checks every trajectory against the
+ * deck's serial reference. A procedure whose locals or callbacks live in storage that
+ * every thread shares (static locals, closure trampolines) fails it.
+ *
  * CABLEDYN_THREAD_TEST_LOOPS=<n> repeats checks 2-5 n times in one process (stress
  * mode). A watchdog thread ends the process with a failure naming the phase in
  * progress when the run exceeds CABLEDYN_THREAD_TEST_TIMEOUT seconds (default 300),
@@ -252,8 +259,8 @@ static double private_mb(void)
 #endif
 }
 
-/* Initialises `path`, takes N_STEP held steps, and records the final coupled loads. */
-static int step_deck(const char *path, double *loads, int *ndof_out, char *msg, size_t msg_len)
+/* Initialises `path`, takes n_step steps, and records the final coupled loads. */
+static int step_deck(const char *path, int n_step, double *loads, int *ndof_out, char *msg, size_t msg_len)
 {
     void *h = NULL;
     int err = -1, ndof, k, n_iter = 0;
@@ -273,7 +280,7 @@ static int step_deck(const char *path, double *loads, int *ndof_out, char *msg, 
         return 1;
     }
     CableDyn_GetCoupledMotion(h, q, v, a, ndof, &err);
-    for (k = 0; k < N_STEP && err == CD_C_OK; ++k) {
+    for (k = 0; k < n_step && err == CD_C_OK; ++k) {
         /* A slow surge of every coupled x DOF keeps the lines working. */
         int i;
         for (i = 0; i < ndof; i += 3) q[i] += 0.002;
@@ -326,6 +333,7 @@ static void init_worker(void *raw)
 struct step_job {
     const char *path;
     const char *missing_path;
+    int n_step;
     int ndof;
     int failed;
     double loads[MAX_DOF];
@@ -335,7 +343,7 @@ struct step_job {
 static void step_worker(void *raw)
 {
     struct step_job *job = (struct step_job *)raw;
-    job->failed = step_deck(job->path, job->loads, &job->ndof, job->msg, sizeof job->msg);
+    job->failed = step_deck(job->path, job->n_step, job->loads, &job->ndof, job->msg, sizeof job->msg);
 }
 
 static void missing_worker(void *raw)
@@ -478,7 +486,7 @@ static int check_concurrent_steps(const char *deck)
     char msg[512] = {0};
     int i, j, ndof = 0, failed = 0;
 
-    if (step_deck(deck, reference, &ndof, msg, sizeof msg) != 0) {
+    if (step_deck(deck, N_STEP, reference, &ndof, msg, sizeof msg) != 0) {
         fprintf(stderr, "FAIL serial reference run: %s\n", msg);
         return 1;
     }
@@ -486,6 +494,7 @@ static int check_concurrent_steps(const char *deck)
     for (i = 0; i < N_STEPPERS + N_MISSING; ++i) {
         jobs[i].path = deck;
         jobs[i].missing_path = "missing_deck_for_thread_test.dat";
+        jobs[i].n_step = N_STEP;
         tasks[i].fn = i < N_STEPPERS ? step_worker : missing_worker;
         tasks[i].arg = &jobs[i];
     }
@@ -518,6 +527,67 @@ static int check_concurrent_steps(const char *deck)
            N_STEPPERS, N_STEP, N_MISSING, failed);
     if (failed != 0) {
         fprintf(stderr, "FAIL concurrent Step on distinct handles\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* Steps every deck on MAX_THREADS / n_decks threads at once, all decks concurrently, and
+ * checks every final coupled load against the deck's serial reference. */
+static int check_mixed_steps(int n_decks, char **decks, int n_step)
+{
+    enum { MAX_DECKS = 8 };
+    static struct step_job jobs[MAX_THREADS];
+    static double reference[MAX_DECKS][MAX_DOF];
+    struct task tasks[MAX_THREADS];
+    int ndof[MAX_DECKS];
+    char msg[512] = {0};
+    int d, i, j, per_deck, n, failed = 0;
+
+    if (n_decks < 1 || n_decks > MAX_DECKS) {
+        fprintf(stderr, "FAIL --mixed takes 1 to %d decks\n", MAX_DECKS);
+        return 1;
+    }
+    for (d = 0; d < n_decks; ++d) {
+        if (step_deck(decks[d], n_step, reference[d], &ndof[d], msg, sizeof msg) != 0) {
+            fprintf(stderr, "FAIL serial reference run of %s: %s\n", decks[d], msg);
+            return 1;
+        }
+    }
+    per_deck = MAX_THREADS / n_decks;
+    if (per_deck > 6) per_deck = 6;
+    n = per_deck * n_decks;
+    memset(jobs, 0, sizeof jobs);
+    for (i = 0; i < n; ++i) {
+        jobs[i].path = decks[i % n_decks];
+        jobs[i].n_step = n_step;
+        tasks[i].fn = step_worker;
+        tasks[i].arg = &jobs[i];
+    }
+    if (run_tasks(n, tasks) != 0) {
+        fprintf(stderr, "FAIL could not start the mixed stepping threads\n");
+        return 1;
+    }
+    for (i = 0; i < n; ++i) {
+        d = i % n_decks;
+        if (jobs[i].failed || jobs[i].ndof != ndof[d]) {
+            fprintf(stderr, "  thread %d (%s) failed: %s\n", i, decks[d], jobs[i].msg);
+            ++failed;
+            continue;
+        }
+        for (j = 0; j < ndof[d]; ++j) {
+            if (fabs(jobs[i].loads[j] - reference[d][j]) > 1.0e-9 * (1.0 + fabs(reference[d][j]))) {
+                fprintf(stderr, "  thread %d (%s): load %d = %.17g, reference %.17g\n", i, decks[d], j,
+                        jobs[i].loads[j], reference[d][j]);
+                ++failed;
+                break;
+            }
+        }
+    }
+    printf("mixed concurrent steps: %d decks x %d threads x %d steps: failed=%d\n", n_decks, per_deck, n_step,
+           failed);
+    if (failed != 0) {
+        fprintf(stderr, "FAIL concurrent Step of mixed decks on distinct handles\n");
         return 1;
     }
     return 0;
@@ -666,6 +736,20 @@ int main(int argc, char **argv)
         return exit_stress(argv[2], atoi(argv[3]));
     }
 #endif
+    /* test_c_api_threads --mixed <n_steps> <deck> [<deck> ...]: concurrent steps of mixed decks. */
+    if (argc >= 4 && strcmp(argv[1], "--mixed") == 0) {
+        setvbuf(stdout, NULL, _IONBF, 0);
+        if (watchdog_start() != 0) return 1;
+        loops = env_seconds("CABLEDYN_THREAD_TEST_LOOPS", 1);
+        if (loops < 1) loops = 1;
+        for (loop = 0; loop < loops; ++loop) {
+            if (loops > 1) printf("loop %ld of %ld\n", loop + 1, loops);
+            current_phase = "concurrent Step (mixed decks)";
+            if (check_mixed_steps(argc - 3, argv + 3, atoi(argv[2])) != 0) return 1;
+        }
+        printf("PASS c_api_threads --mixed\n");
+        return 0;
+    }
     if (argc != 4) {
         fprintf(stderr, "usage: test_c_api_threads <chain_deck.dat> <syrope_deck.dat> <expected_blas_threads>\n");
         return 2;

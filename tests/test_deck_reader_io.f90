@@ -7,10 +7,15 @@ PROGRAM test_deck_reader_io
   !! whitespace-only rows, ASCII whitespace separators), rejected characters (NUL and
   !! non-ASCII whitespace outside comments), whole-record section headers, row-level
   !! diagnostics that name the deck line, per-row OPTIONS validation (a shadowed invalid
-  !! row still fails), bathymetry grids in any row order, and reserved device names.
+  !! row still fails), bathymetry grids in any row order, reserved device names, and files
+  !! that do not open: a failing OPEN of a name of 600 characters or more ends an ifx-built
+  !! program inside the Intel run-time (0xC0000409), so the opens of names beyond the Windows
+  !! path limit in a folder that does not exist, and of a folder, must return a status (and
+  !! the deck run with such an output root a message) instead; this program then ends.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_DECKDRV_BADINPUT
-  USE CableDyn_PathIO, ONLY: CD_Path_Is_Device, CD_Native_Path, CD_PATH_OK, CD_PATH_ERR_DEVICE
+  USE CableDyn_PathIO, ONLY: CD_Path_Is_Device, CD_Native_Path, CD_PATH_OK, CD_PATH_ERR_DEVICE, &
+                             CD_Open_Read, CD_Open_Write, CD_Open_Input, CD_Path_Openable
   IMPLICIT NONE
 
   CHARACTER(*), PARAMETER :: ANCHOR = '1 Fixed 400.0 0.0 -50.0', SECTION = '1 chain 410.0 41'
@@ -26,6 +31,7 @@ PROGRAM test_deck_reader_io
   CALL check_bathymetry_row_order()
   CALL check_waterkin_diagnostics()
   CALL check_device_names()
+  CALL check_files_that_do_not_open()
   CALL check_nonfinite_and_subnormal_values()
   CALL check_admissible_magnitudes()
   CALL check_strict_line_attachments()
@@ -283,6 +289,54 @@ CONTAINS
                                                              'nul.xyz bathymetryFile'), 'bathymetryFile nul.xyz', &
                         'reserved Windows device')
   END SUBROUTINE check_device_names
+
+  SUBROUTINE check_files_that_do_not_open()
+    !! Opens that fail return a status without attempting the OPEN (CD_Path_Openable): a
+    !! folder, and names of about 680 characters (three 200-character folders that do not
+    !! exist, spelt for the runtime as CD_Native_Path spells them, extended-length on Windows)
+    !! for writing, for reading and as a deck run's output root. A short name still writes
+    !! and reads back, and a probe for writing leaves an existing file as it is.
+    CHARACTER(:), ALLOCATABLE :: native, long_name
+    CHARACTER(512) :: why
+    CHARACTER(64) :: line
+    INTEGER :: stat, unit, ios, es
+    CHARACTER(1024) :: em
+    LOGICAL :: conv
+
+    long_name = 'reader_missing_folder/'//REPEAT('a', 200)//'/'//REPEAT('b', 200)//'/'//REPEAT('c', 200)//'/run'
+    CALL CD_Native_Path(long_name, native, stat, why, for_output=.TRUE.)
+    CALL require(stat == CD_PATH_OK .AND. LEN(native) >= LEN(long_name), &
+                 'a long output name has a runtime spelling: '//TRIM(why))
+    IF (stat /= CD_PATH_OK) RETURN
+    WRITE (*, '(A,I0,A)') '    files that do not open: a runtime spelling of ', LEN(native), ' characters'
+    CALL require(.NOT. CD_Path_Openable(native//'.out', .TRUE.), 'a name in a missing folder does not open')
+    CALL CD_Open_Write(unit, native//'.out', ios)
+    CALL require(ios /= 0, 'writing a long name in a missing folder fails with a status')
+    CALL CD_Open_Read(unit, native//'.out', ios)
+    CALL require(ios /= 0, 'reading a long missing name fails with a status')
+    CALL CD_Open_Input(unit, long_name//'.dat', ios, why)
+    CALL require(ios /= 0, 'a long missing input fails with a status')
+    CALL CD_Open_Read(unit, '.', ios)
+    CALL require(ios /= 0, 'a folder does not open for reading')
+    CALL write_bytes('reader_long_root.dat', chain_deck(ANCHOR, '', 'FairTen1'))
+    CALL CD_Run_Deck_Driver('reader_long_root.dat', native, conv, es, em)
+    CALL require(es /= CD_DECKDRV_OK .AND. INDEX(em, 'cannot open output file') > 0, &
+                 'a deck run with a long output root in a missing folder reports it: '//TRIM(em(1:200)))
+    ! a short name still opens, and a write probe leaves the file as it is
+    CALL CD_Open_Write(unit, 'reader_open_probe.txt', ios)
+    CALL require(ios == 0, 'a short name opens for writing')
+    IF (ios /= 0) RETURN
+    WRITE (unit, '(A)') 'kept'
+    CLOSE (unit)
+    CALL require(CD_Path_Openable('reader_open_probe.txt', .TRUE.), 'an existing file opens for writing')
+    CALL CD_Open_Read(unit, 'reader_open_probe.txt', ios)
+    CALL require(ios == 0, 'a short name opens for reading')
+    IF (ios /= 0) RETURN
+    line = ''
+    READ (unit, '(A)', IOSTAT=ios) line
+    CLOSE (unit, STATUS='DELETE')
+    CALL require(ios == 0 .AND. line == 'kept', 'a write probe leaves the file as it is')
+  END SUBROUTINE check_files_that_do_not_open
 
   SUBROUTINE check_nonfinite_and_subnormal_values()
     !! Every number of an OPTIONS row and of a numeric table column must be finite and

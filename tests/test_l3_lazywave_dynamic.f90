@@ -55,7 +55,7 @@ PROGRAM test_l3_lazywave_dynamic
                                           CD_HermiteCable_Dyn_Set_ForceBlend, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Step_Recovering, &
-                                          CD_HermiteCable_Dyn_Recovery_Count, CD_HermiteCable_Dyn_Recovery_Reset, &
+                                          CD_HermiteCable_Dyn_Get_Recovery_Diagnostics, &
                                           CD_HermiteCable_Dyn_Curvature_Exact, &
                                           CD_HermiteCable_Dyn_End, CD_HCDYN_OK
   IMPLICIT NONE
@@ -752,7 +752,7 @@ CONTAINS
     TYPE(CD_HermiteCableDynType) :: dyn
     REAL(wp) :: t, z0, zt, vt, at, pq(1), pv(1), pa(1), k, arc, mnorm, tension, axial_now
     REAL(wp) :: cycle_tsum(3), nodal_curvature(SIZE(l0) + 1)
-    INTEGER :: pdof(1), step, nscore, cycle_count(3), cycle_index
+    INTEGER :: pdof(1), step, nscore, cycle_count(3), cycle_index, recovery_max_used
 
     CALL CD_HermiteCable_Dyn_Init(dyn, l0, eav, eiv, rhoa, w, q0, fixed, -2000.0_wp, 0.0_wp, 0.5_wp, es, em)
     IF (es /= CD_HCDYN_OK) RETURN
@@ -763,7 +763,6 @@ CONTAINS
     CALL CD_HermiteCable_Dyn_Set_ForceBlend(dyn, force_blend, es, em)
     IF (es /= CD_HCDYN_OK) THEN; CALL CD_HermiteCable_Dyn_End(dyn); RETURN; END IF
     z0 = q0(3); pdof = [3]
-    CALL CD_HermiteCable_Dyn_Recovery_Reset()
     peak = 0.0_wp; peak_arc = 0.0_wp; tmean = 0.0_wp; minimum_axial = HUGE(1.0_wp)
     tmin = HUGE(1.0_wp); tmax = -HUGE(1.0_wp); nscore = 0
     curvature_profile = 0.0_wp; cycle_peak = 0.0_wp; cycle_tsum = 0.0_wp
@@ -802,7 +801,8 @@ CONTAINS
     DO cycle_index = 1, 3
       cycle_tmean(cycle_index) = cycle_tsum(cycle_index)/REAL(MAX(1, cycle_count(cycle_index)), wp)
     END DO
-    recoveries = CD_HermiteCable_Dyn_Recovery_Count()
+    ! the model's own count of intervals recovered by substeps
+    CALL CD_HermiteCable_Dyn_Get_Recovery_Diagnostics(dyn, recoveries, recovery_max_used, es, em)
     CALL CD_HermiteCable_Dyn_End(dyn)
   END SUBROUTINE refined_dynamic_response
 

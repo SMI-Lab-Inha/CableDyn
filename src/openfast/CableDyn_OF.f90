@@ -77,6 +77,7 @@ MODULE CableDyn
    USE CableDyn_Types
    USE NWTC_Library
    USE CableDyn_Precision, ONLY: wp
+   USE CableDyn_PathIO, ONLY: CD_Path_Openable
    USE CableDyn_Conventions, ONLY: CD_NATIVE_CHANNEL_FMT
    USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_SeaState_Steady_Current, CD_HYDRO_OK
    USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_Is_Line_Node_Channel, &
@@ -359,8 +360,14 @@ CONTAINS
       ! BACKSPACE and replace the abandoned row. OpenFOutFile opens write-only and
       ! therefore makes that standard record-positioning operation fail on gfortran.
       iomsg = ''
-      OPEN (un, FILE=TRIM(root)//'.out', STATUS='REPLACE', FORM='FORMATTED', &
-            ACTION='READWRITE', POSITION='REWIND', IOSTAT=ios, IOMSG=iomsg)
+      ! CD_Path_Openable: a failing OPEN of a long name ends the ifx run-time (CableDyn_PathIO)
+      IF (CD_Path_Openable(TRIM(root)//'.out', .TRUE.)) THEN
+         OPEN (un, FILE=TRIM(root)//'.out', STATUS='REPLACE', FORM='FORMATTED', &
+               ACTION='READWRITE', POSITION='REWIND', IOSTAT=ios, IOMSG=iomsg)
+      ELSE
+         ios = 1
+         iomsg = 'The file cannot be created or written.'
+      END IF
       IF (ios /= 0) THEN
          CALL SetErrStat( ErrID_Fatal, 'Cannot open native output file "'//TRIM(root)// &
                           '.out" for transactional read/write access. '//TRIM(iomsg), &
@@ -5089,6 +5096,7 @@ CONTAINS
    SUBROUTINE delete_file( path )
       CHARACTER(*), INTENT(IN) :: path
       INTEGER(IntKi) :: un, ios
+      IF (.NOT. CD_Path_Openable(TRIM(path), .FALSE.)) RETURN   ! no OPEN that fails (CableDyn_PathIO)
       CALL GetNewUnit( un )
       OPEN (un, FILE=TRIM(path), STATUS='OLD', IOSTAT=ios)
       IF (ios == 0) CLOSE (un, STATUS='DELETE', IOSTAT=ios)
