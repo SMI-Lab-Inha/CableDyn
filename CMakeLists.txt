@@ -1804,7 +1804,9 @@ if(Python3_Interpreter_FOUND)
   # A rod numbered as a body is not one of the body's points: a Rod1B end POINT listed before
   # the Body1 points gives the run of the same deck with the rod renumbered, bit for bit.
   # A lazy wave restrained in torsion starts in an in-plane current (its untwisted state's
-  # out-of-plane instability is kept, not refused by the torsion stage).
+  # out-of-plane instability is kept, not refused by the torsion stage). The four pretwists run
+  # at once: PROCESSORS reserves them, so no other test shares the cores (on a four-core runner
+  # the Debug build took up to 900 s when it did).
   add_test(NAME torsion_current_start
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_torsion_current_start.py
                    --exe $<TARGET_FILE:cabledyn>
@@ -1812,7 +1814,8 @@ if(Python3_Interpreter_FOUND)
                    --output ${CMAKE_BINARY_DIR}/torsion_current_start)
   set_tests_properties(torsion_current_start PROPERTIES
     LABELS "python;driver;integration;static"
-    TIMEOUT 900
+    PROCESSORS 4
+    TIMEOUT 1800
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
   # An EI = 0 line above the still-water level on a deck without a seabed carries its dry weight
