@@ -143,7 +143,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   static stiffness (each matches its deck's static solutions to 7e-5; held, they would read the
   chain 0.6 % and the polyester 2.9 times too stiff). Free/Connect points, a `Rigid` cable end
   connection, VIV lines, bodies, rods, buoys and `CONTROL` fail closed with named messages. This
-  replaces the quasi-static linearisation without states.
+  replaces the quasi-static linearisation without states. The output differences use
+  CableDyn's double-precision loads, so a single-precision OpenFAST build (the release
+  `openfast.exe`, Visual Studio `Release`) linearises as a double-precision one; through its
+  7-digit output mesh the UMaine chains' surge stiffness read 3.2e3 instead of 7.7e4 N/m.
 - Composite Syrope lines: a Syrope polyester section between plain `EI = 0` sections, such as a
   chain-polyester-chain mooring, in one LINE. The static start puts every Syrope element on the
   rest curve of its load history with its own secant EA (the tension varies along a sagging

@@ -179,6 +179,11 @@ MODULE CableDyn
       REAL(wp), ALLOCATABLE   :: ws_pos(:,:), ws_vel(:,:), ws_acc(:,:), ws_fld(:,:), ws_moment(:,:)
       REAL(wp), ALLOCATABLE   :: ws_omega(:,:), ws_alpha(:,:)
       REAL(wp), ALLOCATABLE   :: ws_orient(:,:,:)
+      ! the coupled loads (3, ncp) and deck channels of the last lin_eval, in double precision:
+      ! the linearization Jacobians difference these (pack_lin_outputs), not the ReKi output
+      ! mesh, which a single-precision OpenFAST build (the Visual Studio Release configuration)
+      ! rounds to 7 digits, too few for loads of order 1e6 N over a 1 um step
+      REAL(wp), ALLOCATABLE   :: lin_fld(:,:), lin_moment(:,:), lin_chan(:)
       ! saved committed coupled kinematics for the state-const CalcOutput at nsuper = 1
       ! (save -> transfer u -> evaluate -> restore; see CD_CalcOutput)
       REAL(wp), ALLOCATABLE   :: sv_pos(:,:), sv_vel(:,:), sv_acc(:,:), sv_orient(:,:,:)
@@ -3066,9 +3071,18 @@ CONTAINS
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
             CALL restore; RETURN
          END IF
+         IF (ALLOCATED(Inst(id)%lin_fld)) THEN
+            IF (SIZE(Inst(id)%lin_fld, 2) /= Inst(id)%ncp .OR. SIZE(Inst(id)%lin_chan) /= p%NumOuts) &
+               DEALLOCATE (Inst(id)%lin_fld, Inst(id)%lin_moment, Inst(id)%lin_chan)
+         END IF
+         IF (.NOT. ALLOCATED(Inst(id)%lin_fld)) &
+            ALLOCATE (Inst(id)%lin_fld(3, Inst(id)%ncp), Inst(id)%lin_moment(3, Inst(id)%ncp), &
+                      Inst(id)%lin_chan(p%NumOuts))
          DO i = 1, Inst(id)%ncp
             y_out%CoupledLoads(1)%Force(:, i) = REAL(Inst(id)%ws_fld(:, i), ReKi)
             y_out%CoupledLoads(1)%Moment(:, i) = REAL(Inst(id)%ws_moment(:, i), ReKi)
+            Inst(id)%lin_fld(:, i) = Inst(id)%ws_fld(:, i)
+            Inst(id)%lin_moment(:, i) = Inst(id)%ws_moment(:, i)
          END DO
          DO i = 1, p%NumOuts
             CALL CD_AGG_EvalChannel( Inst(id)%agg, i, cval, es, em )
@@ -3078,6 +3092,7 @@ CONTAINS
                CALL restore; RETURN
             END IF
             y_out%WriteOutput(i) = REAL(cval, ReKi)
+            Inst(id)%lin_chan(i) = cval
          END DO
       END IF
       CALL restore
@@ -3096,6 +3111,38 @@ CONTAINS
          Inst(id)%loads_cached = .FALSE.
       END SUBROUTINE restore
    END SUBROUTINE lin_eval
+
+   SUBROUTINE pack_lin_outputs( id, Vars, y_lin, ValAry )
+      !! The outputs of the last lin_eval packed as CD_VarsPackOutput packs y_lin, with the
+      !! coupled loads and the deck channels taken from lin_eval's double-precision copies: the
+      !! central differences of the loads over a 1 um position step resolve the stiffness of a
+      !! fairlead carrying a few MN in every build, the single-precision one included, where
+      !! the ReKi mesh carries 7 digits (the stiffness of the IEA-15 MW UMaine chains read 3.2e3
+      !! instead of 7.7e4 N/m in surge). The other outputs (visualisation meshes) keep y_lin's.
+      INTEGER(IntKi),         INTENT(IN   ) :: id
+      TYPE(ModVarsType),      INTENT(IN   ) :: Vars
+      TYPE(CD_OutputType),    INTENT(IN   ) :: y_lin
+      REAL(R8Ki),             INTENT(INOUT) :: ValAry(:)
+      INTEGER(IntKi)                        :: i, n
+      CALL CD_VarsPackOutput( Vars, y_lin, ValAry )
+      IF (.NOT. ALLOCATED(Inst(id)%lin_fld)) RETURN
+      DO i = 1, SIZE(Vars%y)
+         n = Vars%y(i)%iLoc(2) - Vars%y(i)%iLoc(1) + 1
+         SELECT CASE (Vars%y(i)%DL%Num)
+         CASE (CD_y_CoupledLoads)
+            IF (Vars%y(i)%DL%i1 /= 1 .OR. n /= SIZE(Inst(id)%lin_fld)) CYCLE
+            IF (Vars%y(i)%Field == FieldForce) THEN
+               ValAry(Vars%y(i)%iLoc(1):Vars%y(i)%iLoc(2)) = PACK(REAL(Inst(id)%lin_fld, R8Ki), .TRUE.)
+            ELSE IF (Vars%y(i)%Field == FieldMoment) THEN
+               ValAry(Vars%y(i)%iLoc(1):Vars%y(i)%iLoc(2)) = PACK(REAL(Inst(id)%lin_moment, R8Ki), .TRUE.)
+            END IF
+         CASE (CD_y_WriteOutput)
+            IF (Vars%y(i)%iLB < 1 .OR. Vars%y(i)%iUB > SIZE(Inst(id)%lin_chan) .OR. &
+                n /= Vars%y(i)%iUB - Vars%y(i)%iLB + 1) CYCLE
+            ValAry(Vars%y(i)%iLoc(1):Vars%y(i)%iLoc(2)) = REAL(Inst(id)%lin_chan(Vars%y(i)%iLB:Vars%y(i)%iUB), R8Ki)
+         END SELECT
+      END DO
+   END SUBROUTINE pack_lin_outputs
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_End(u, p, x, xd, z, other, y, m, ErrStat , ErrMsg)
@@ -3306,13 +3353,13 @@ CONTAINS
                CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
                CALL lin_eval( m%CDInst, p, m, m%u_perturb, x, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
                IF (Failed()) RETURN
-               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
+               CALL pack_lin_outputs( m%CDInst, Vars, m%y_lin, m%Jac%y_pos )
                CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_pos )
                CALL MV_Perturb( Vars%u(i), j, -1, m%Jac%u, m%Jac%u_perturb )
                CALL CD_VarsUnpackInput( Vars, m%Jac%u_perturb, m%u_perturb )
                CALL lin_eval( m%CDInst, p, m, m%u_perturb, x, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
                IF (Failed()) RETURN
-               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
+               CALL pack_lin_outputs( m%CDInst, Vars, m%y_lin, m%Jac%y_neg )
                CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_neg )
                IF (PRESENT(dYdu)) CALL MV_ComputeCentralDiff( Vars%y, Vars%u(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
                                                               dYdu(:, iCol) )
@@ -3452,14 +3499,14 @@ CONTAINS
                CALL lin_eval( m%CDInst, p, m, u, m%x_perturb, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
                CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
                IF (ErrStat >= AbortErrLev) RETURN
-               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_pos )
+               CALL pack_lin_outputs( m%CDInst, Vars, m%y_lin, m%Jac%y_pos )
                CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_pos )
                CALL MV_Perturb( Vars%x(i), j, -1, m%Jac%x, m%Jac%x_perturb )
                CALL CD_VarsUnpackContState( Vars, m%Jac%x_perturb, m%x_perturb )
                CALL lin_eval( m%CDInst, p, m, u, m%x_perturb, ErrStat2, ErrMsg2, dxdt=m%dxdt_lin, y_out=m%y_lin )
                CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
                IF (ErrStat >= AbortErrLev) RETURN
-               CALL CD_VarsPackOutput( Vars, m%y_lin, m%Jac%y_neg )
+               CALL pack_lin_outputs( m%CDInst, Vars, m%y_lin, m%Jac%y_neg )
                CALL CD_VarsPackContStateDeriv( Vars, m%dxdt_lin, m%Jac%x_neg )
                IF (PRESENT(dYdx)) CALL MV_ComputeCentralDiff( Vars%y, Vars%x(i)%Perturb, m%Jac%y_pos, m%Jac%y_neg, &
                                                               dYdx(:, iCol) )

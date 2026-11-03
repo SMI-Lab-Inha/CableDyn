@@ -67,7 +67,8 @@ only the `cabledyn` package and its metadata.
    [DEVELOPMENT.md](DEVELOPMENT.md#openfast-integration)). It builds
    `openfast.exe` with CableDyn, checks that a coupled run prints the CableDyn
    banner, and checks that the output is finite.
-2. **Linearisation check**: with the built executable, run
+2. **Linearisation check**: with the built executable and again with the release workflow's
+   `openfast.exe` (single precision, the Visual Studio `Release` configuration), run
    `python validation/scripts/openfast_lin_ab.py --exe <openfast.exe> --case-dir <case-dir>`,
    where `<case-dir>` holds the `examples/openfast` IEA-15 UMaine twin decks and
    the r-test `MD_Shared` turbine-1 ElastoDyn, HydroDyn, SeaState and HydroData
