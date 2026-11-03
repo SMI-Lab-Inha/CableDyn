@@ -287,8 +287,9 @@ CONTAINS
   SUBROUTINE check_input_not_output(input, root, root_spelling, what, input_spelling)
     !! Stop before any solve when the input file (the deck or a file the deck names)
     !! is one the run would overwrite. The run writes <root>.out, <root>.static.out,
-    !! <root>.elements.out, <root>.Line<N>.p.out / .t.out / .range.out, <root>.Rod<N>.p.out, plus
-    !! the transient <root>.write_check.tmp probe and the <root>.cabledyn.lock lock.
+    !! <root>.elements.out, <root>.modes.out, <root>.Line<N>.p.out / .t.out / .V.out / .range.out,
+    !! <root>.Rod<N>.p.out, plus the transient <root>.write_check.tmp probe and the
+    !! <root>.cabledyn.lock lock.
     !! Each fixed name is compared with the input by file identity; the numbered
     !! per-line and per-rod names are recognized from the input's own name and then
     !! confirmed by identity, so every spelling of one file (relative, absolute,
@@ -296,7 +297,8 @@ CONTAINS
     CHARACTER(*), INTENT(IN) :: input, root, root_spelling, what
     CHARACTER(*), INTENT(IN), OPTIONAL :: input_spelling
     ! The fixed output suffixes, blank-separated.
-    CHARACTER(*), PARAMETER :: FIXED = '.out .static.out .elements.out .write_check.tmp '//LOCK_SUFFIX//' '
+    CHARACTER(*), PARAMETER :: FIXED = '.out .static.out .elements.out .modes.out .write_check.tmp '// &
+                               LOCK_SUFFIX//' '
     CHARACTER(:), ALLOCATABLE :: spelling, base_in, base_root, suffix
     CHARACTER(512) :: why
     INTEGER :: stat, first, last
@@ -339,8 +341,9 @@ CONTAINS
   END SUBROUTINE check_input_not_output
 
   PURE LOGICAL FUNCTION is_numbered_output_suffix(suffix) RESULT(yes)
-    !! True for ".line<digits>.p.out", ".line<digits>.t.out", ".line<digits>.range.out" and
-    !! ".rod<digits>.p.out" (lower case), the per-line and per-rod output names.
+    !! True for ".line<digits>.p.out", ".line<digits>.t.out", ".line<digits>.v.out",
+    !! ".line<digits>.range.out" and ".rod<digits>.p.out" (lower case), the per-line and
+    !! per-rod output names.
     CHARACTER(*), INTENT(IN) :: suffix
     INTEGER :: first, n
     yes = .FALSE.
@@ -366,7 +369,7 @@ CONTAINS
     IF (VERIFY(suffix(first:n - 6), '0123456789') /= 0) RETURN
     IF (suffix(n - 5:n) == '.p.out') THEN
       yes = .TRUE.
-    ELSE IF (suffix(n - 5:n) == '.t.out') THEN
+    ELSE IF (suffix(n - 5:n) == '.t.out' .OR. suffix(n - 5:n) == '.v.out') THEN
       yes = suffix(1:5) == '.line'
     END IF
   END FUNCTION is_numbered_output_suffix
