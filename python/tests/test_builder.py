@@ -421,6 +421,16 @@ def _finite_ei_model() -> DeckModel:
     return model
 
 
+def test_section_curvature_channels_follow_rename_and_removal() -> None:
+    model = _finite_ei_model()
+    model.outputs.add("CurvX1N2", "curvy1n2", "Curv1N2", "BendMom1N2")
+    model.rename(model.lines[1], 3)
+    assert list(model.outputs)[-4:] == ["CurvX3N2", "curvy3n2", "Curv3N2", "BendMom3N2"]
+    model.validate()
+    model.remove(model.lines[3], cascade=True)
+    assert not any(name.lower().startswith(("curv", "bendmom")) for name in model.outputs)
+
+
 def test_end_connections_attachments_and_equivalent_buoyancy() -> None:
     model = _finite_ei_model()
     model.add_end_connection(1, "EndA", 2.0e4, (-0.25, 0.0, -0.97))
