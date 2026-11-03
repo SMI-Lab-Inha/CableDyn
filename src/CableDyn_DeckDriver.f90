@@ -1720,6 +1720,13 @@ CONTAINS
     ! static load stage on the final mesh, then installed in the cable; a line restrained at one
     ! end only (ln%tors_free_end) has no static torque and installs its free end.
     LOGICAL :: tors_line
+    ! whether this build twists the line: not in a static helper build (standalone_controls
+    ! .FALSE.: the coarse branch selection, the auxiliary-weight seed, the friction reference and
+    ! the no-current diagnosis), whose callers take the untwisted equilibrium. A coarse state
+    ! twisted by the line's pretwist seeded the untwisted solve on the deck mesh, which then
+    ! depended on the pretwist (a lazy wave restrained in torsion in an in-plane current stopped
+    ! at 180 deg).
+    LOGICAL :: twist_here
     TYPE(CD_HermiteTorsionType) :: tors
     ! the residual tolerance the accepted torsion stage met (torsion_note)
     REAL(wp) :: tors_tol_used
@@ -1899,6 +1906,8 @@ CONTAINS
     ! torsional line is solved in 3D from the start; a line free in torsion at one end carries no
     ! static torque, so its statics are those of the line without torsion.
     tors_line = line_torsion_active(ln)
+    twist_here = tors_line
+    IF (PRESENT(standalone_controls)) twist_here = tors_line .AND. standalone_controls
     ! A current with a component across the vertical plane of the chord pushes the line out
     ! of that plane, which the dynamics (endpoints held, every other DOF free) follow: the
     ! static equilibrium is then solved in 3D as well.
@@ -2928,7 +2937,7 @@ CONTAINS
     END IF
     ! A line with ATTACHMENTS takes its torsion stage on the discrete equilibrium, after the
     ! attachment polish (torsion_after_attachments).
-    IF (tors_line .AND. .NOT. has_att) THEN
+    IF (twist_here .AND. .NOT. has_att) THEN
       CALL torsion_stage(es, em)
       IF (es /= CD_DECKDRV_OK) THEN
         ErrStat = es
@@ -3086,7 +3095,7 @@ CONTAINS
       IF (.NOT. tors_line) &
         CALL handoff_lateral_note(l0, l0, ea, ei, w_bare, w, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, &
                                   fixed_dofs, .TRUE.)
-      IF (tors_line) THEN
+      IF (twist_here) THEN
         CALL torsion_after_attachments(es, em)
         IF (es == CD_DECKDRV_OK) CALL twisted_attachment_checks(es, em)
         IF (es /= CD_DECKDRV_OK) THEN
@@ -3154,13 +3163,13 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable end-connection wiring failed: '//TRIM(em)); RETURN
       END IF
     END IF
-    IF (tors_line .AND. ln%tors_free_end == 1) THEN
+    IF (twist_here .AND. ln%tors_free_end == 1) THEN
       ! a free End A: its torsion frame is a gauge, which no parent turns
       CALL CD_HFMF_Set_Torsion(cable, tors, es, em)
       IF (es /= CD_HFMF_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable torsion wiring failed: '//TRIM(em)); RETURN
       END IF
-    ELSE IF (tors_line) THEN
+    ELSE IF (twist_here) THEN
       ! The End A torsion frame (director -Ez, reference normal Nx, in the frame of Ez) is held
       ! by End A's parent and turns with it in the dynamics, whatever the bending connection; a
       ! moving End B's frame (director -Ez, normal Nx of End B) is held by End B's parent likewise.
@@ -3316,7 +3325,7 @@ CONTAINS
     END IF
   CONTAINS
 
-    SUBROUTINE torsion_stage(est, emt, f_nodal)
+    SUBROUTINE torsion_stage(est, emt, f_nodal, f_twist)
       !! The condensed-torsion load stage of a line restrained in torsion at both ends: from the
       !! converged untwisted state on the final mesh (l0_am), CD_HermiteCable_Static_Solve ramps
       !! the imposed twist Phi = Pretwist(End B) - Pretwist(End A) with the same loads, contact,
@@ -3325,7 +3334,8 @@ CONTAINS
       !! is deck End B (global axes), end 2 deck End A (its parent's axes, turned with it).
       !! f_nodal: the stage of a line with ATTACHMENTS, after the attachment polish (the final
       !! mesh then is l0, with the bare weights w_bare and the deck mesh l0_deck_att), with the
-      !! attachments' lumped loads.
+      !! attachments' lumped loads; f_twist, with f_nodal, a change of those loads ramped with
+      !! the imposed twist (torsion_after_attachments).
       !! A line restrained at one end only (ln%tors_free_end) carries no static torque: the
       !! untwisted state is its static state, Theta is evaluated there, and the free end's frame
       !! is a gauge (end_free): the end's connection direction, or its static tangent at a
@@ -3333,6 +3343,7 @@ CONTAINS
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
       REAL(wp), INTENT(IN), OPTIONAL :: f_nodal(:)
+      REAL(wp), INTENT(IN), OPTIONAL :: f_twist(:)
       REAL(wp) :: nvec(3), dvec(3), tol_t
       INTEGER :: k, attempt, kf
       LOGICAL :: nodal_loads
@@ -3441,12 +3452,14 @@ CONTAINS
             CALL hermite_static_torsion(l0, l0, ea, ei, w_bare, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, &
                                         q_static, curv, fixed_dofs, contact_enabled, contact_z, frame_cs, &
                                         endconn_k, endconn_d0_local, endconn_mode, opts, tol_t, tors, est, emt, &
-                                        bathymetry=bathymetry, cur_obj=cur_obj, f_nodal=f_nodal)
+                                        bathymetry=bathymetry, cur_obj=cur_obj, f_nodal=f_nodal, &
+                                        f_nodal_twist=f_twist)
           ELSE
             CALL hermite_static_torsion(l0, l0, ea, ei, w_bare, diam, opts%rhoW*opts%g*QUARTER_PI*diam**2, &
                                         q_static, curv, fixed_dofs, contact_enabled, contact_z, frame_cs, &
                                         endconn_k, endconn_d0_local, endconn_mode, opts, tol_t, tors, est, emt, &
-                                        cur_obj=cur_obj, f_nodal=f_nodal)
+                                        cur_obj=cur_obj, f_nodal=f_nodal, &
+                                        f_nodal_twist=f_twist)
           END IF
         ELSE IF (PRESENT(bathymetry) .AND. .NOT. bathymetry_flat) THEN
           CALL hermite_static_torsion(l0, l0_am, ea_am, ei_am, w_am, diam, dry_b, q_static, curv, fixed_am, &
@@ -3497,12 +3510,16 @@ CONTAINS
       !! line tangent, and the weight on the side of the surface, so the stage is repeated, each
       !! time a fresh torsion solve from the last state, with the loads of the last solution until
       !! the solution stops moving and no attachment changes side (fixed point, as in
-      !! attachment_static_polish).
+      !! attachment_static_polish). Every pass starts from the polished state, in equilibrium
+      !! under the loads at that state: the change to the loads of the last solution is ramped
+      !! with the imposed twist, in full at the target. Taken in full from the untwisted start, the
+      !! drag of a twisted shape pushed a lazy wave whose untwisted state is unstable out of its
+      !! plane off that state before any twist (pretwist 270 deg and more in a 0.5 m/s current).
       INTEGER, INTENT(OUT) :: est
       CHARACTER(*), INTENT(OUT) :: emt
       INTEGER, PARAMETER :: MAX_FIXED_POINT = 60
       REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
-      REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), q_prev(:), q_polished(:)
+      REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), q_prev(:), q_polished(:), f_untwisted(:)
       LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
       LOGICAL :: has_drag
       INTEGER :: fp, k_cross
@@ -3532,7 +3549,12 @@ CONTAINS
         END IF
         q_prev = q_static
         q_static = q_polished
-        CALL torsion_stage(est, emt, f_att + f_drag)
+        IF (fp == 1) THEN
+          f_untwisted = f_att + f_drag
+          CALL torsion_stage(est, emt, f_untwisted)
+        ELSE
+          CALL torsion_stage(est, emt, f_untwisted, f_att + f_drag - f_untwisted)
+        END IF
         IF (est /= CD_DECKDRV_OK) THEN
           IF (k_cross > 0) emt = TRIM(cause)//'; '//TRIM(emt)
           RETURN
@@ -4510,8 +4532,8 @@ CONTAINS
       ! the out-of-plane DOFs held: the torsion stage that follows tests the twisted state in 3D and
       ! keeps only an instability its untwisted state has (a planar state unstable out of its plane,
       ! which the line free in torsion starts from with a note). Without it the lazy wave with 25
-      ! modules restrained in torsion, Pretwist 360 deg, in an in-plane 0.5 m/s current, whose polish
-      ! needed its fallbacks, was refused for its out-of-plane mode before any twist.
+      ! modules restrained in torsion, Pretwist 360 deg, in an in-plane 0.5 m/s current, was refused
+      ! for its out-of-plane mode before any twist whenever its polish needed its fallbacks.
       fixed_f = fixed_dofs
       IF (tors_line .AND. ln%tors_free_end == 0 .AND. .NOT. require_3d_untwisted) THEN
         IF (.NOT. as_laid_cross_slope()) THEN
@@ -6872,7 +6894,7 @@ CONTAINS
 
   SUBROUTINE hermite_static_torsion(l0_deck, l0, ea, ei, w, diam_deck, dry_deck, q, curv, fixed_dofs, &
                                     contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, opts, &
-                                    tol, tors, ErrStat, ErrMsg, bathymetry, cur_obj, f_nodal)
+                                    tol, tors, ErrStat, ErrMsg, bathymetry, cur_obj, f_nodal, f_nodal_twist)
     !! Torsion stage of a deck cable on its final mesh l0: CD_HermiteCable_Static_Solve from the
     !! converged untwisted state q (one EI and buoyancy stage, a polish) with the torsion
     !! description tors, under the same contact, dry-buoyancy, end-connection and current terms
@@ -6892,6 +6914,8 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
     REAL(wp), INTENT(IN), OPTIONAL :: f_nodal(:)
+    ! with f_nodal: its change ramped with the imposed twist (CD_HermiteCable_Static_Solve)
+    REAL(wp), INTENT(IN), OPTIONAL :: f_nodal_twist(:)
     REAL(wp), ALLOCATABLE :: diam(:), dry(:), knnode(:), q_out(:)
     REAL(wp) :: res
     INTEGER :: i, ne, it, es
@@ -6922,7 +6946,7 @@ CONTAINS
                                         endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                         endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
                                         water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors, &
-                                        f_nodal=f_nodal)
+                                        f_nodal=f_nodal, f_nodal_twist=f_nodal_twist)
     ELSE
       CALL CD_HermiteCable_Static_Solve(l0, ea, ei, w, q, fixed_dofs, contact_z, CD_ZERO, 1, 200, &
                                         tol, 0.7_wp, q_out, curv, res, it, es, em, n_buoy_steps=1, &
@@ -6931,7 +6955,7 @@ CONTAINS
                                         endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                         endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
                                         water_weight=opts%rhoW*opts%g, current=cur_obj, torsion=tors, &
-                                        f_nodal=f_nodal)
+                                        f_nodal=f_nodal, f_nodal_twist=f_nodal_twist)
     END IF
     IF (es == CD_HCSTAT_BADINPUT) THEN
       CALL fail(ErrStat, ErrMsg, 'finite-EI torsion static solve rejected the input: '//TRIM(em)); RETURN

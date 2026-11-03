@@ -9,10 +9,17 @@ the vertical plane, is unstable out of that plane on its mesh (one negative stif
 the same deck without torsion accepts with a note. The twist stage added no instability, yet the
 torsion stage refused it: at pretwist 0 "torsion continuation stalled at Phi = 0 (target 0): the
 twisted equilibrium is unstable", at 360 deg an unstable equilibrium after a failed Newton solve.
+Two causes made the start depend on the pretwist and on the round-off of the BLAS kernel: the
+coarse branch-selection build twisted its line, and that twisted state seeded the untwisted solve
+on the deck mesh (180 deg stopped in the attachment polish; 360 deg needed its fallbacks, and
+stopped under OPENBLAS_CORETYPE=Prescott); and every pass of the attachment fixed point after the
+first applied the drag of the last twisted shape in full at the untwisted start (270 deg and more
+stopped before any twist).
 
-Gate, on the driver's own output: at pretwist 0 and 360 deg the deck starts and runs (it stopped
-before), the torsion note reports the twist solved, and the instability is named as the untwisted
-state's own.
+Gate, on the driver's own output: at pretwist 0, 180, 360 and 720 deg the deck starts and runs,
+the torsion note reports the twist solved, the instability is named as the untwisted state's own,
+the attachment polish converges without its fallbacks, and the end torque is proportional to the
+pretwist (to 1 % of the torque at 720 deg).
 
 usage: test_torsion_current_start.py --exe <cabledyn> --data <tests/data> --output <dir>
 """
@@ -20,6 +27,7 @@ usage: test_torsion_current_start.py --exe <cabledyn> --data <tests/data> --outp
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -55,7 +63,8 @@ def main() -> int:
         encoding="utf-8"
     )
     failures = []
-    for pretwist in ("0", "360"):
+    torques = {}
+    for pretwist in ("0", "180", "360", "720"):
         deck = out / f"lw_current_twist{pretwist}.dat"
         deck.write_text(deck_text(base, pretwist), encoding="utf-8", newline="\n")
         if "uniform 0.5 0 0 current" not in deck.read_text(encoding="utf-8"):
@@ -70,9 +79,16 @@ def main() -> int:
         log = p.stdout + p.stderr
         solved = "torsion solved" in log
         named = "keeps the instability of its untwisted state" in log
+        fell_back = "reached after a failed Newton solve" in log
+        m = re.search(r"torsion solved, imposed twist\s+\S+ deg, torque\s+(\S+) N m", log)
+        if m:
+            torques[pretwist] = float(m.group(1))
         print(
-            f"pretwist {pretwist}: exit {p.returncode}, solved {solved}, untwisted instability named {named}"
+            f"pretwist {pretwist}: exit {p.returncode}, solved {solved}, untwisted instability named {named}, "
+            f"polish fallbacks {fell_back}, torque {torques.get(pretwist)}"
         )
+        if fell_back:
+            failures.append(f"pretwist {pretwist}: the attachment polish needed its fallbacks")
         if p.returncode != 0:
             failures.append(f"pretwist {pretwist}: the deck stopped: {log[-400:]}")
         if not solved:
@@ -85,6 +101,14 @@ def main() -> int:
             failures.append(
                 f"pretwist {pretwist}: a stalled torsion continuation is reported"
             )
+    if len(torques) == 4:
+        rate = torques["720"] / 720.0
+        for pt, tq in torques.items():
+            if abs(tq - rate * float(pt)) > 0.01 * abs(torques["720"]):
+                failures.append(
+                    f"pretwist {pt}: torque {tq} N m not proportional to the pretwist "
+                    f"({rate * float(pt)} N m from 720 deg)"
+                )
     for f in failures:
         print("FAIL: " + f)
     if not failures:

@@ -472,7 +472,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   continuation stalled at Phi = 0 (target 0)" at pretwist 0, an unstable equilibrium after a
   failed Newton solve at 360 deg). A twisted state with no more negative modes than its untwisted
   one is now kept, and the note names the instability as the untwisted state's
-  (`torsion_current_start`).
+  (`torsion_current_start`). Its start also depended on the pretwist and on the round-off of the
+  BLAS kernel: the coarse branch-selection build of a line restrained in torsion twisted it, and
+  that twisted state seeded the untwisted solve on the deck mesh (pretwist 180 deg stopped in the
+  attachment polish, 360 deg needed the polish's fallbacks and stopped with
+  `OPENBLAS_CORETYPE=Prescott`); and each pass of the attachment fixed point after the first
+  applied the drag of the last twisted shape in full at the untwisted start (270 deg and more
+  stopped before any twist). The static helper builds now solve the untwisted line, and the
+  change of the attachment loads is ramped with the imposed twist: pretwists from 0 to 720 deg
+  start with the same torques on every kernel, proportional to the pretwist.
 - The "unresolved/kinked equilibrium" refusal names the element and the factor to refine its
   section's `NumSegs` by.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point

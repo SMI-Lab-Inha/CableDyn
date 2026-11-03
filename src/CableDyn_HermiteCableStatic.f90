@@ -302,7 +302,7 @@ CONTAINS
                                           waterline_z, dry_buoyancy, merit_line_search, pseudo_transient, &
                                           energy_minimization, stable, water_weight, current, residual_out, &
                                           tangent_out, friction, residual_unmet, torsion, energy_out, &
-                                          end_share_hold)
+                                          end_share_hold, f_nodal_twist)
     !! Solve the finite-EI static equilibrium of a Hermite bending-cable line.
     !!
     !! l0(ne), EA(ne), EI(ne), w(ne) : per-element rest length, axial/bending stiffness,
@@ -436,6 +436,14 @@ CONTAINS
     !!                                  resting on the seabed; the residual keeps the shares of
     !!                                  each iterate (CD_Seabed_End_Element_Share). Omitted, an
     !!                                  energy line search holds the shares of its start.
+    !! f_nodal_twist (optional, 6*nn)  : with torsion, generalized nodal loads (as f_nodal)
+    !!                                  ramped with the imposed twist: none at the untwisted
+    !!                                  state, the fraction of the twist continuation at each
+    !!                                  stage, in full at the target Phi. The change of a load
+    !!                                  that follows the line's shape (the drag of discrete
+    !!                                  attachments in a current, evaluated at a twisted state)
+    !!                                  then leaves the untwisted state in equilibrium under
+    !!                                  f_nodal alone.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping
@@ -473,6 +481,7 @@ CONTAINS
     REAL(wp), INTENT(OUT), OPTIONAL :: energy_out
     REAL(wp), INTENT(IN), OPTIONAL :: end_share_hold(2)
     TYPE(CD_HermiteTorsionType), INTENT(INOUT), OPTIONAL :: torsion
+    REAL(wp), INTENT(IN), OPTIONAL :: f_nodal_twist(:)
 
     INTEGER :: ne, nn, ndof, c, it, es, i, b, nci, n_buoy, omp_threads, axial_order, bending_order
     REAL(wp) :: eifac, rnorm, fscale, bfac, rmerit, ptc_tau, ptc_rprev, pi_total, pi_abs, lm_mu, chord
@@ -514,6 +523,8 @@ CONTAINS
     ! tors_v the lowest mode of an unstable tangent (descent direction).
     LOGICAL :: use_tors, tors_on, tors_have_mode, tors_descending
     REAL(wp) :: tors_c, tors_phi_cur, tors_theta_acc, tors_theta_eval, tors_mt, tors_lambda
+    ! the share of f_nodal_twist the residual takes: the twist continuation's fraction
+    REAL(wp) :: tors_load_frac
     REAL(wp), ALLOCATABLE :: tors_g(:), tors_gr(:), tors_h(:, :), tors_v(:), tors_rhs(:), tors_q(:), tors_gs(:)
     REAL(wp), ALLOCATABLE :: tors_grs(:), tors_gt(:)
     REAL(wp), ALLOCATABLE :: tors_rhs2(:, :)
@@ -625,6 +636,17 @@ CONTAINS
       END IF
       IF (.NOT. CD_All_Finite(f_nodal)) THEN
         CALL fail('f_nodal must be finite'); RETURN
+      END IF
+    END IF
+    IF (PRESENT(f_nodal_twist)) THEN
+      IF (.NOT. PRESENT(torsion)) THEN
+        CALL fail('f_nodal_twist needs torsion'); RETURN
+      END IF
+      IF (SIZE(f_nodal_twist) /= ndof) THEN
+        CALL fail('f_nodal_twist must be 6*(ne+1)'); RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(f_nodal_twist)) THEN
+        CALL fail('f_nodal_twist must be finite'); RETURN
       END IF
     END IF
     IF (use_nodal_contact) THEN
@@ -739,6 +761,7 @@ CONTAINS
     tors_descending = .FALSE.
     tors_c = CD_ZERO
     tors_phi_cur = CD_ZERO
+    tors_load_frac = CD_ZERO
     tors_theta_acc = CD_ZERO
     tors_theta_eval = CD_ZERO
     tors_mt = CD_ZERO
@@ -907,6 +930,12 @@ CONTAINS
       DO i = 1, nn
         fscale = MAX(fscale, MAXVAL(ABS(f_nodal(6*(i - 1) + 1:6*(i - 1) + 3))))
         fscale = MAX(fscale, MAXVAL(ABS(f_nodal(6*(i - 1) + 4:6*(i - 1) + 6)))/trib(i))
+      END DO
+    END IF
+    IF (PRESENT(f_nodal_twist)) THEN
+      DO i = 1, nn
+        fscale = MAX(fscale, MAXVAL(ABS(f_nodal_twist(6*(i - 1) + 1:6*(i - 1) + 3))))
+        fscale = MAX(fscale, MAXVAL(ABS(f_nodal_twist(6*(i - 1) + 4:6*(i - 1) + 6)))/trib(i))
       END DO
     END IF
     ! The tension a taut line must carry: with its ends farther apart than its length L, a line
@@ -1273,6 +1302,14 @@ CONTAINS
         e_term = eifac*DOT_PRODUCT(f_nodal, q)
         pi_total = pi_total - e_term
         pi_abs = pi_abs + ABS(e_term)
+      END IF
+      IF (PRESENT(f_nodal_twist)) THEN
+        IF (tors_load_frac > CD_ZERO) THEN
+          R = R - eifac*tors_load_frac*f_nodal_twist
+          e_term = eifac*tors_load_frac*DOT_PRODUCT(f_nodal_twist, q)
+          pi_total = pi_total - e_term
+          pi_abs = pi_abs + ABS(e_term)
+        END IF
       END IF
 
       ! ---- optional rotational line-end connections ----
@@ -1934,8 +1971,10 @@ CONTAINS
         lam_try = MIN(CD_ONE, lam + dlam)
         IF (lam_try >= CD_ONE) THEN
           tors_phi_cur = torsion%phi
+          tors_load_frac = CD_ONE
         ELSE
           tors_phi_cur = phi0 + lam_try*total
+          tors_load_frac = lam_try
         END IF
         q_keep = q
         th_keep = tors_theta_acc
