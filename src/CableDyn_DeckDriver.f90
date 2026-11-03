@@ -9290,7 +9290,7 @@ CONTAINS
       IF (ErrStat /= 0) RETURN
       CALL CD_Profile_Enter(CD_PROF_INIT)
     END IF
-    CALL print_static_input_warnings(types, points, lines, sections, opts)
+    CALL print_static_input_warnings(types, lines, sections, opts)
     CALL warn_coarse_sections(lines, sections)
     ! free Rigid6 bodies and rods (jointly with Free/Connect points) start at their static
     ! equilibrium on every route: static-only, TMax = 0 and the dynamic march (pinned rods turn
@@ -9867,20 +9867,21 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'host-driven ambient fluid (external_fluid) requires a seabed '// &
                 '(WtrDpth or bathymetryFile) -- the coupled host always supplies one'); RETURN
     END IF
-    IF (opts%has_current .OR. want_wave_cfg .OR. opts%has_wtrdpth .OR. PRESENT(bathymetry)) THEN
-      ALLOCATE (fluid_velocity(3, SIZE(l0) + 1), drag_waterline(SIZE(l0) + 1))
-      DO i = 1, SIZE(l0) + 1
-        IF (opts%has_current) THEN
-          fluid_velocity(:, i) = deck_current_velocity(opts, line_node_pos(anchor, fairlead, l0, i), CD_ZERO, es, em)
-          IF (es /= CD_HYDRO_OK) THEN
-            CALL fail(ErrStat, ErrMsg, 'current profile for model init: '//TRIM(em)); RETURN
-          END IF
-        ELSE
-          fluid_velocity(:, i) = CD_ZERO
+    ! Every line has the still-water level: its drag, added mass and buoyancy act on the wetted
+    ! part only, with or without a seabed (a line hung above the surface on a deck without a
+    ! seabed was modelled fully submerged).
+    ALLOCATE (fluid_velocity(3, SIZE(l0) + 1), drag_waterline(SIZE(l0) + 1))
+    DO i = 1, SIZE(l0) + 1
+      IF (opts%has_current) THEN
+        fluid_velocity(:, i) = deck_current_velocity(opts, line_node_pos(anchor, fairlead, l0, i), CD_ZERO, es, em)
+        IF (es /= CD_HYDRO_OK) THEN
+          CALL fail(ErrStat, ErrMsg, 'current profile for model init: '//TRIM(em)); RETURN
         END IF
-      END DO
-      drag_waterline = CD_ZERO
-    END IF
+      ELSE
+        fluid_velocity(:, i) = CD_ZERO
+      END IF
+    END DO
+    drag_waterline = CD_ZERO
     IF (want_wave_cfg) THEN
       ALLOCATE (fluid_acceleration(3, SIZE(l0) + 1))
       fluid_acceleration = CD_ZERO
@@ -10066,7 +10067,11 @@ CONTAINS
                               added_mass_diameter_elem=hydro_diam, added_mass_can_elem=hydro_can, &
                               added_mass_cat_elem=hydro_cat, buoyancy_waterline_z=waterline, &
                               buoyancy_rho=opts%rhoW, buoyancy_diameter_elem=hydro_diam, buoyancy_gravity=opts%g)
-    ELSE IF (opts%has_current) THEN
+    ELSE
+      ! no seabed (deck waves and a host fluid field need one): the still-water level as on the
+      ! WtrDpth route above, without the seabed contact
+      ALLOCATE (waterline(SIZE(l0) + 1))
+      waterline = CD_ZERO
       CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
                               static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
                               syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
@@ -10075,13 +10080,11 @@ CONTAINS
                               current_profile_z=opts%current_profile_z, &
                               current_profile_velocity=opts%current_profile_velocity, current_grid=opts%current_grid, &
                               fluid_velocity=fluid_velocity, drag_waterline_z=drag_waterline, drag_rho=opts%rhoW, &
-                              drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt)
-    ELSE
-      CALL CD_Init_Line_Model(model, anchor, fairlead, lts, secs, opts%g, opts%rhoW, .FALSE., &
-                              static_cfg, dynamic_cfg, factors, ErrStat, ErrMsg, &
-                              syrope_is=syrope_is, syrope_type=syrope_type, syrope_slow0=syrope_slow0, &
-                              syrope_tmax0=syrope_tmax0, dynamic_tension_only=.TRUE., anchor_is_end_b=.TRUE., ba=ba, &
-                              ve_ea_d=ve_ead, ve_ba=ve_bas, ve_ba_d=ve_bad, ve_alpha_mbl=ve_ambl, ve_vbeta=ve_vbet)
+                              drag_diameter_elem=hydro_diam, drag_cdn_elem=hydro_cdn, drag_cdt_elem=hydro_cdt, &
+                              added_mass_waterline_z=waterline, added_mass_rho=opts%rhoW, &
+                              added_mass_diameter_elem=hydro_diam, added_mass_can_elem=hydro_can, &
+                              added_mass_cat_elem=hydro_cat, buoyancy_waterline_z=waterline, &
+                              buoyancy_rho=opts%rhoW, buoyancy_diameter_elem=hydro_diam, buoyancy_gravity=opts%g)
     END IF
     IF (ErrStat /= CD_MODEL_OK) THEN
       ErrMsg = 'CableDyn_DeckDriver: model init failed: '//TRIM(ErrMsg)
@@ -11679,46 +11682,22 @@ CONTAINS
     END FUNCTION point_moves
   END SUBROUTINE solve_point_equilibrium
 
-  SUBROUTINE print_static_input_warnings(types, points, lines, sections, opts)
+  SUBROUTINE print_static_input_warnings(types, lines, sections, opts)
     !! Standard-output WARNINGS (never failures) for admissible but non-physical or
-    !! questionable inputs: an EI = 0 line end above the still-water level on a deck without a
-    !! seabed (the line is then modelled fully submerged; with WtrDpth or a bathymetry, and on
-    !! a finite-EI line, the part above the surface carries its dry weight), a line type that
-    !! sinks into the penalty seabed by more than its
+    !! questionable inputs: a line type that sinks into the penalty seabed by more than its
     !! diameter (kBot too soft for its submerged weight), a slack anchored line that hangs
     !! below its anchor on a deck with no seabed (reported after the static solve by
     !! warn_line_below_anchor), and a line with fewer than three segments (a straight
     !! chord: a slack coarse line carries no tension).
     TYPE(DeckLineType), INTENT(IN) :: types(:)
-    TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
     INTEGER :: i, j, k, nseg
     REAL(wp) :: w, pen
-    LOGICAL :: dry_weight
     CHARACTER(32) :: b1, b2
 
     DO i = 1, SIZE(lines)
-      ! the line's model carries the dry weight above the surface: a finite-EI line always, an
-      ! EI = 0 line with a seabed (its buoyancy recovery)
-      dry_weight = opts%has_wtrdpth .OR. opts%has_bathymetry_file
-      DO j = 1, SIZE(sections)
-        IF (sections(j)%line_id /= lines(i)%id) CYCLE
-        IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
-        IF (types(sections(j)%ltype)%ei > CD_ZERO) dry_weight = .TRUE.
-      END DO
-      DO k = 1, 2
-        IF (k == 1) j = find_point(points, lines(i)%nodeA)
-        IF (k == 2) j = find_point(points, lines(i)%nodeB)
-        IF (j < 1) CYCLE
-        IF (points(j)%pos(3) > CD_ZERO .AND. .NOT. dry_weight) THEN
-          WRITE (b1, '(ES10.3)') points(j)%pos(3)
-          WRITE (output_unit, '(A)') ' WARNING: LINE '//TRIM(int_to_str(lines(i)%id))//' end POINT '// &
-            TRIM(int_to_str(points(j)%id))//' is above the still-water level (z = '//TRIM(ADJUSTL(b1))// &
-            ' m); the line is modelled fully submerged (submerged weight, drag) up to it'
-        END IF
-      END DO
       nseg = 0
       DO j = 1, SIZE(sections)
         IF (sections(j)%line_id == lines(i)%id) nseg = nseg + sections(j)%nsegs
@@ -12441,12 +12420,12 @@ CONTAINS
       IF (es /= CD_LINE_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'seabed stiffness: '//TRIM(em)); RETURN
       END IF
-      ! the line's model has a seabed and so the buoyancy recovery of its dry part
-      ! (init_deck_models_from_parsed): the part above the still-water level takes its dry
-      ! weight here too, so that the static-only start is the dynamic route's
-      ALLOCATE (dry_wl(ne + 1))
-      dry_wl = CD_ZERO
     END IF
+    ! the line's model has the buoyancy recovery of its dry part, with or without a seabed
+    ! (init_one_model): the part above the still-water level takes its dry weight here too, so
+    ! that the static-only start is the dynamic route's
+    ALLOCATE (dry_wl(ne + 1))
+    dry_wl = CD_ZERO
 
     IF (PRESENT(bathymetry)) THEN
       IF (opts%has_current) THEN
@@ -12474,10 +12453,14 @@ CONTAINS
       END IF
     ELSE IF (opts%has_current) THEN
       CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                      report, es, em, current=cur)
+                                      report, es, em, current=cur, &
+                                      dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                      dry_diameter=diam, dry_load=f_dry)
     ELSE
       CALL CD_Static_Line_Equilibrium(anchor, fairlead, conn, l0, ea, w, f_ext, cfg, .TRUE., q, converged, &
-                                      report, es, em)
+                                      report, es, em, &
+                                      dry_waterline_z=dry_wl, dry_rho=opts%rhoW, dry_gravity=opts%g, &
+                                      dry_diameter=diam, dry_load=f_dry)
     END IF
     IF (es /= CD_STATIC_OK) THEN
       CALL fail(ErrStat, ErrMsg, 'static solve rejected the input: '//TRIM(em))
@@ -27715,15 +27698,12 @@ CONTAINS
       END IF
       ! The part above the still-water level takes its dry weight here, as in solve_one_line,
       ! where the line's own model gives it that weight, so that the objects start balanced
-      ! against the loads the march applies: an EI = 0 line with a seabed (its model's buoyancy
-      ! recovery, init_deck_models_from_parsed) and a finite-EI line always (its cubic-Hermite
-      ! cable's dry buoyancy, with or without a seabed). Without a seabed this surrogate of a
-      ! finite-EI line kept its buoyancy above the surface, while its cable did not.
-      IF (PRESENT(bathymetry) .OR. opts%has_wtrdpth .OR. line_is_finite_ei(lines(jl), types, sections)) THEN
-        lc(jl)%dry_d = diam
-        ALLOCATE (lc(jl)%dry_wl(ne + 1))
-        lc(jl)%dry_wl = CD_ZERO
-      END IF
+      ! against the loads the march applies: an EI = 0 line through its model's buoyancy
+      ! recovery (init_one_model) and a finite-EI line through its cubic-Hermite cable's dry
+      ! buoyancy, both with or without a seabed.
+      lc(jl)%dry_d = diam
+      ALLOCATE (lc(jl)%dry_wl(ne + 1))
+      lc(jl)%dry_wl = CD_ZERO
       lc(jl)%ready = .TRUE.
     END SUBROUTINE prepare_line
 

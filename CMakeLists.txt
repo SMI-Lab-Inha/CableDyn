@@ -1815,6 +1815,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 900
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # An EI = 0 line above the still-water level on a deck without a seabed carries its dry weight
+  # (it was modelled fully submerged), as with a seabed and as a finite-EI line.
+  add_test(NAME no_seabed_surface
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_no_seabed_surface.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/no_seabed_surface)
+  set_tests_properties(no_seabed_surface PROPERTIES
+    LABELS "python;driver;integration;dynamic"
+    TIMEOUT 300
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   add_test(NAME body_rod_numbering
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_body_rod_numbering.py
                    --exe $<TARGET_FILE:cabledyn>

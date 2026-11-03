@@ -559,6 +559,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   seabed holds its heave to 7e-6 m over 3 s (before it moved 2.8e-3 m), and an `EI = 0` chain
   between that body 5 m above the surface and a `Connect` clump holds both to the output's 8
   digits (before 5.5e-3 m). Lines below the surface are unchanged.
+- An `EI = 0` line above the still-water level on a deck without a seabed (no `WtrDpth` or
+  bathymetry) carries its dry weight, and its drag and added mass act on the wetted part only, as
+  with a seabed and as on a finite-EI line. It was modelled fully submerged up to an end above
+  the surface, with a warning: a 42 m chain hung wholly above the surface carried 13 % less than
+  its weight in air, a chain sagging through the surface differed by 7.7 % from the same deck
+  with a seabed, and a 50 t `Connect` clump hung above the surface started 2 cm off. The march,
+  the static start and the force balance of points and objects now take the dry weight; the
+  three agree with the seabed deck exactly and hold their start (`no_seabed_surface`). The
+  warning is gone. Lines wholly below the surface are unchanged.
 - `ATTACHMENTS` above the still-water level kept their buoyancy in the static start of a
   finite-EI line, while the march loads them with their weight alone. A 500 kg, 0.2 m^3 module
   3 m above the surface on a cable hung from 5 m above it moved the fairlead load by up to
