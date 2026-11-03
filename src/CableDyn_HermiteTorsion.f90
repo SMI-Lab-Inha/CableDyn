@@ -146,11 +146,22 @@ MODULE CableDyn_HermiteTorsion
     LOGICAL :: check_stability = .TRUE.
     LOGICAL :: descend = .TRUE.
     LOGICAL :: zero_mode_allowed = .FALSE.
+    !! keep_untwisted_instability: a twist stage that is unstable with no more negative
+    !! eigenvalues than the untwisted equilibrium it starts from (the twist adds no instability:
+    !! the untwisted state's own, which its caller accepted, a planar state unstable out of its
+    !! plane for example) is kept as it is, not descended from or refused; the report then sets
+    !! untwisted_instability.
+    LOGICAL :: keep_untwisted_instability = .FALSE.
     !! Static report at the returned state: stability, negative-eigenvalue count of the tangent
     !! on the free DOFs, the lowest Jacobi-scaled eigenvalue when it was computed (0 otherwise),
     !! the total potential energy, the twist-continuation stage count and the descents taken.
     LOGICAL :: stable = .FALSE.
     INTEGER :: n_negative = 0
+    !! The negative-eigenvalue count of the untwisted equilibrium the twist starts from (-1: not
+    !! evaluated, which it is only once a twist stage is unstable), and whether the returned
+    !! unstable state was kept under keep_untwisted_instability (its count at most that one).
+    INTEGER :: n_negative_untwisted = -1
+    LOGICAL :: untwisted_instability = .FALSE.
     REAL(wp) :: lambda_min = CD_ZERO
     REAL(wp) :: energy = CD_ZERO
     INTEGER :: ramp_steps = 0

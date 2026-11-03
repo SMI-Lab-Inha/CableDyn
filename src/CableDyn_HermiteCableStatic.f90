@@ -75,6 +75,7 @@ MODULE CableDyn_HermiteCableStatic
   PUBLIC :: CD_HermiteCable_Current_Load
   PUBLIC :: CD_HermiteCable_Friction_Anchors, CD_HermiteCable_Friction_Reference, CD_HermiteCable_As_Laid_Offsets
   PUBLIC :: CD_HermiteCable_Mean_Axial_Extremes
+  PUBLIC :: CD_HermiteCable_Kink_Advice, CD_HermiteCable_Element_Ratio
   PUBLIC :: CD_Arclength_Dot, CD_Arclength_Unit_Tangent, CD_Arclength_Bordered_Update
   INTEGER, PARAMETER, PUBLIC :: CD_HCSTAT_OK = 0, CD_HCSTAT_BADINPUT = 1, CD_HCSTAT_NOCONVERGE = 2
 
@@ -301,7 +302,7 @@ CONTAINS
                                           waterline_z, dry_buoyancy, merit_line_search, pseudo_transient, &
                                           energy_minimization, stable, water_weight, current, residual_out, &
                                           tangent_out, friction, residual_unmet, torsion, energy_out, &
-                                          end_share_hold)
+                                          end_share_hold, f_nodal_twist)
     !! Solve the finite-EI static equilibrium of a Hermite bending-cable line.
     !!
     !! l0(ne), EA(ne), EI(ne), w(ne) : per-element rest length, axial/bending stiffness,
@@ -435,6 +436,14 @@ CONTAINS
     !!                                  resting on the seabed; the residual keeps the shares of
     !!                                  each iterate (CD_Seabed_End_Element_Share). Omitted, an
     !!                                  energy line search holds the shares of its start.
+    !! f_nodal_twist (optional, 6*nn)  : with torsion, generalized nodal loads (as f_nodal)
+    !!                                  ramped with the imposed twist: none at the untwisted
+    !!                                  state, the fraction of the twist continuation at each
+    !!                                  stage, in full at the target Phi. The change of a load
+    !!                                  that follows the line's shape (the drag of discrete
+    !!                                  attachments in a current, evaluated at a twisted state)
+    !!                                  then leaves the untwisted state in equilibrium under
+    !!                                  f_nodal alone.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping
@@ -472,6 +481,7 @@ CONTAINS
     REAL(wp), INTENT(OUT), OPTIONAL :: energy_out
     REAL(wp), INTENT(IN), OPTIONAL :: end_share_hold(2)
     TYPE(CD_HermiteTorsionType), INTENT(INOUT), OPTIONAL :: torsion
+    REAL(wp), INTENT(IN), OPTIONAL :: f_nodal_twist(:)
 
     INTEGER :: ne, nn, ndof, c, it, es, i, b, nci, n_buoy, omp_threads, axial_order, bending_order
     REAL(wp) :: eifac, rnorm, fscale, bfac, rmerit, ptc_tau, ptc_rprev, pi_total, pi_abs, lm_mu, chord
@@ -513,9 +523,15 @@ CONTAINS
     ! tors_v the lowest mode of an unstable tangent (descent direction).
     LOGICAL :: use_tors, tors_on, tors_have_mode, tors_descending
     REAL(wp) :: tors_c, tors_phi_cur, tors_theta_acc, tors_theta_eval, tors_mt, tors_lambda
+    ! the share of f_nodal_twist the residual takes: the twist continuation's fraction
+    REAL(wp) :: tors_load_frac
     REAL(wp), ALLOCATABLE :: tors_g(:), tors_gr(:), tors_h(:, :), tors_v(:), tors_rhs(:), tors_q(:), tors_gs(:)
     REAL(wp), ALLOCATABLE :: tors_grs(:), tors_gt(:)
     REAL(wp), ALLOCATABLE :: tors_rhs2(:, :)
+    ! the untwisted equilibrium the twist starts from (its state, accepted Theta and Phi = Theta_0),
+    ! whose inertia an unstable twist stage is compared with (untwisted_inertia)
+    REAL(wp), ALLOCATABLE :: tors_q_untw(:)
+    REAL(wp) :: tors_th_untw, tors_phi_untw
     REAL(wp) :: contact_cs(2), end_support(3, 2), end_floor(3), end_g(2), end_sfac
     ! Floor-carried end moments in the potential: the end element shares of the last
     ! evaluation, and the shares held (end_share_held) by an energy line search or the caller.
@@ -620,6 +636,17 @@ CONTAINS
       END IF
       IF (.NOT. CD_All_Finite(f_nodal)) THEN
         CALL fail('f_nodal must be finite'); RETURN
+      END IF
+    END IF
+    IF (PRESENT(f_nodal_twist)) THEN
+      IF (.NOT. PRESENT(torsion)) THEN
+        CALL fail('f_nodal_twist needs torsion'); RETURN
+      END IF
+      IF (SIZE(f_nodal_twist) /= ndof) THEN
+        CALL fail('f_nodal_twist must be 6*(ne+1)'); RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(f_nodal_twist)) THEN
+        CALL fail('f_nodal_twist must be finite'); RETURN
       END IF
     END IF
     IF (use_nodal_contact) THEN
@@ -734,6 +761,7 @@ CONTAINS
     tors_descending = .FALSE.
     tors_c = CD_ZERO
     tors_phi_cur = CD_ZERO
+    tors_load_frac = CD_ZERO
     tors_theta_acc = CD_ZERO
     tors_theta_eval = CD_ZERO
     tors_mt = CD_ZERO
@@ -902,6 +930,12 @@ CONTAINS
       DO i = 1, nn
         fscale = MAX(fscale, MAXVAL(ABS(f_nodal(6*(i - 1) + 1:6*(i - 1) + 3))))
         fscale = MAX(fscale, MAXVAL(ABS(f_nodal(6*(i - 1) + 4:6*(i - 1) + 6)))/trib(i))
+      END DO
+    END IF
+    IF (PRESENT(f_nodal_twist)) THEN
+      DO i = 1, nn
+        fscale = MAX(fscale, MAXVAL(ABS(f_nodal_twist(6*(i - 1) + 1:6*(i - 1) + 3))))
+        fscale = MAX(fscale, MAXVAL(ABS(f_nodal_twist(6*(i - 1) + 4:6*(i - 1) + 6)))/trib(i))
       END DO
     END IF
     ! The tension a taut line must carry: with its ends farther apart than its length L, a line
@@ -1091,6 +1125,10 @@ CONTAINS
       ELSE
         torsion%stable = stable
       END IF
+      ! an unstable state kept as the untwisted equilibrium's own instability (torsion_stage)
+      torsion%untwisted_instability = torsion%keep_untwisted_instability .AND. .NOT. torsion%stable .AND. &
+                                      torsion%n_negative_untwisted > 0 .AND. &
+                                      torsion%n_negative <= torsion%n_negative_untwisted
     END IF
 
     IF (res_out >= tol) THEN
@@ -1264,6 +1302,14 @@ CONTAINS
         e_term = eifac*DOT_PRODUCT(f_nodal, q)
         pi_total = pi_total - e_term
         pi_abs = pi_abs + ABS(e_term)
+      END IF
+      IF (PRESENT(f_nodal_twist)) THEN
+        IF (tors_load_frac > CD_ZERO) THEN
+          R = R - eifac*tors_load_frac*f_nodal_twist
+          e_term = eifac*tors_load_frac*DOT_PRODUCT(f_nodal_twist, q)
+          pi_total = pi_total - e_term
+          pi_abs = pi_abs + ABS(e_term)
+        END IF
       END IF
 
       ! ---- optional rotational line-end connections ----
@@ -1879,6 +1925,8 @@ CONTAINS
       torsion%stable = .FALSE.
       torsion%n_negative = 0
       torsion%lambda_min = CD_ZERO
+      torsion%n_negative_untwisted = -1
+      torsion%untwisted_instability = .FALSE.
       CALL CD_HermiteTorsion_Line(q, l0, torsion%ends, raw, tors_g, ks, km, &
                                   couple=torsion%couple, quadrature_order=torsion%quadrature_order)
       IF (ks /= CD_HTORS_OK) THEN
@@ -1908,6 +1956,9 @@ CONTAINS
       phi0 = tors_theta_acc
       total = torsion%phi - phi0
       tors_on = .TRUE.
+      tors_q_untw = q
+      tors_th_untw = tors_theta_acc
+      tors_phi_untw = phi0
       ! |total| <= 4000 pi (Phi and Theta_0 within 1000 turns of zero, Theta_0 within pi of its
       ! start): at most 16000 stages, so the integer stage count cannot overflow
       dlam_max = CD_ONE/REAL(MAX(1, CEILING(MIN(ABS(total), 2.0_wp*CD_HTORS_MAX_TWIST + CD_HTORS_PI)/ &
@@ -1920,8 +1971,10 @@ CONTAINS
         lam_try = MIN(CD_ONE, lam + dlam)
         IF (lam_try >= CD_ONE) THEN
           tors_phi_cur = torsion%phi
+          tors_load_frac = CD_ONE
         ELSE
           tors_phi_cur = phi0 + lam_try*total
+          tors_load_frac = lam_try
         END IF
         q_keep = q
         th_keep = tors_theta_acc
@@ -1944,6 +1997,16 @@ CONTAINS
                 'CD_HermiteCable_Static_Solve: torsion continuation could not start: the untwisted '// &
                 'equilibrium ends at ||R|| = ', res_untwisted, ' above tol = ', tol, &
                 ' (a residual floor of this line); a looser tolerance is needed'
+              ecm = wbuf
+              RETURN
+            END IF
+            IF (lam <= CD_ZERO .AND. torsion%n_negative_untwisted > 0) THEN
+              ! the first stage failed on an instability the untwisted state already has: not a
+              ! loop of the twist (with no twist to impose, not a twist at all)
+              WRITE (wbuf, '(A,I0,A,ES12.5,A,ES12.5,A)', IOSTAT=wios) &
+                'CD_HermiteCable_Static_Solve: torsion stage failed: the untwisted equilibrium it starts '// &
+                'from is itself unstable (', torsion%n_negative_untwisted, ' negative stiffness mode(s) at '// &
+                'Phi = Theta_0 = ', phi0, ' rad, target Phi ', torsion%phi, ' rad): '//TRIM(why)
               ecm = wbuf
               RETURN
             END IF
@@ -2009,9 +2072,53 @@ CONTAINS
         RETURN
       END IF
       torsion%stable = st
-      IF (st .OR. .NOT. torsion%descend) RETURN
+      IF (st) RETURN
+      ! An unstable stage: is the instability the twist's? The untwisted state's negative count
+      ! (once, at the start of the twist) tells; a stage with no more negative eigenvalues than
+      ! it is kept under keep_untwisted_instability (a descent would leave an instability the
+      ! twist did not bring, and with current drag cannot run at all).
+      IF (torsion%keep_untwisted_instability .OR. torsion%descend) THEN
+        CALL untwisted_inertia(ks, km)
+        IF (ks /= CD_HCSTAT_OK) THEN
+          ok = .FALSE.
+          why = km
+          RETURN
+        END IF
+      END IF
+      IF (torsion%keep_untwisted_instability .AND. torsion%n_negative_untwisted >= 0 .AND. &
+          torsion%n_negative <= torsion%n_negative_untwisted) RETURN
+      IF (.NOT. torsion%descend) RETURN
       CALL torsion_descent(ok, why)
     END SUBROUTINE torsion_stage
+
+    SUBROUTINE untwisted_inertia(ecs, ecm)
+      !! torsion%n_negative_untwisted, once: the stability test of the untwisted equilibrium the
+      !! twist started from (tors_q_untw at Phi = Theta_0, no torque); the current state, its
+      !! accepted Theta and Phi are then restored and tested again, which restores its report
+      !! and the lowest mode the descent takes.
+      INTEGER, INTENT(OUT) :: ecs
+      CHARACTER(*), INTENT(OUT) :: ecm
+      REAL(wp), ALLOCATABLE :: q_now(:)
+      REAL(wp) :: th_now, phi_now
+      LOGICAL :: st0
+      ecs = CD_HCSTAT_OK
+      ecm = ''
+      IF (torsion%n_negative_untwisted >= 0 .OR. .NOT. ALLOCATED(tors_q_untw)) RETURN
+      q_now = q
+      th_now = tors_theta_acc
+      phi_now = tors_phi_cur
+      q = tors_q_untw
+      tors_theta_acc = tors_th_untw
+      tors_phi_cur = tors_phi_untw
+      CALL torsion_stability(st0, ecs, ecm)
+      q = q_now
+      tors_theta_acc = th_now
+      tors_phi_cur = phi_now
+      IF (ecs /= CD_HCSTAT_OK) RETURN
+      torsion%n_negative_untwisted = MERGE(0, MAX(1, torsion%n_negative), st0)
+      CALL torsion_stability(st0, ecs, ecm)
+      torsion%stable = st0
+    END SUBROUTINE untwisted_inertia
 
     SUBROUTINE torsion_stability(st, ecs, ecm)
       !! Stability of the state q with torsion: the inertia of the symmetric tangent
@@ -5199,10 +5306,56 @@ CONTAINS
         WRITE (wbuf, '(A,ES12.5,A,ES12.5,A,I0)', IOSTAT=wios) &
           'mesh-sequenced equilibrium is unresolved/kinked: max(h*kappa)=', diag%h_kappa_peak, &
           ' > safety limit=', CD_HC_KINK_LIMIT, ' at element ', diag%h_kappa_elem
-        ErrMsg = wbuf
+        ErrMsg = TRIM(wbuf)//TRIM(CD_HermiteCable_Kink_Advice(diag%h_kappa_peak, diag%h_kappa_elem, SIZE(l0)))
       END BLOCK
     END IF
   END SUBROUTINE reject_unresolved_sequence
+
+  PURE FUNCTION CD_HermiteCable_Kink_Advice(h_kappa, elem, n_elem, deck_ratio) RESULT(advice)
+    !! The remedy of an unresolved/kinked refusal (max(h*kappa) = h_kappa above CD_HC_KINK_LIMIT
+    !! at element elem of n_elem): on a resolved bend the curvature kappa does not change with the
+    !! mesh, so h*kappa falls in proportion to the element length and a mesh n times finer there
+    !! clears the limit for n >= h_kappa/CD_HC_KINK_LIMIT; deck_ratio (default 1) is the deck
+    !! element's length over the solve element's (an automatically refined mesh), which the
+    !! factor for NumSegs takes. A fold that stays kinked on the finer mesh is a non-physical
+    !! branch, not a resolution limit. Starts with '; '.
+    REAL(wp), INTENT(IN) :: h_kappa
+    INTEGER, INTENT(IN) :: elem, n_elem
+    REAL(wp), INTENT(IN), OPTIONAL :: deck_ratio
+    CHARACTER(320) :: advice
+    REAL(wp) :: f
+    INTEGER :: n, ios
+    f = h_kappa/CD_HC_KINK_LIMIT
+    IF (PRESENT(deck_ratio)) f = f*MAX(CD_ONE, deck_ratio)
+    IF (.NOT. (f < 1.0e6_wp)) f = 1.0e6_wp
+    n = MAX(2, CEILING(f))
+    advice = ''
+    WRITE (advice, '(A,I0,A,I0,A,I0,A)', IOSTAT=ios) '; refine NumSegs at least ', n, 'x about element ', elem, &
+      ' (of ', n_elem, ' in the solve): h*kappa falls in proportion to the element length on a resolved bend '// &
+      '(a fold that stays kinked on the finer mesh is a non-physical branch)'
+  END FUNCTION CD_HermiteCable_Kink_Advice
+
+  PURE REAL(wp) FUNCTION CD_HermiteCable_Element_Ratio(l0_ref, l0_fin, elem) RESULT(ratio)
+    !! The length of the element of the mesh l0_ref (the deck's) that holds the rest-arc midpoint
+    !! of element elem of the mesh l0_fin (a refinement of it) over that element's length: the
+    !! refinement already applied there (1 outside the meshes or for one mesh).
+    REAL(wp), INTENT(IN) :: l0_ref(:), l0_fin(:)
+    INTEGER, INTENT(IN) :: elem
+    REAL(wp) :: s_mid, s_acc
+    INTEGER :: k
+    ratio = CD_ONE
+    IF (elem < 1 .OR. elem > SIZE(l0_fin) .OR. SIZE(l0_ref) < 1) RETURN
+    IF (.NOT. (l0_fin(elem) > CD_ZERO)) RETURN
+    s_mid = SUM(l0_fin(1:elem - 1)) + 0.5_wp*l0_fin(elem)
+    s_acc = CD_ZERO
+    DO k = 1, SIZE(l0_ref)
+      s_acc = s_acc + l0_ref(k)
+      IF (s_mid <= s_acc .OR. k == SIZE(l0_ref)) THEN
+        ratio = MAX(CD_ONE, l0_ref(k)/l0_fin(elem))
+        RETURN
+      END IF
+    END DO
+  END FUNCTION CD_HermiteCable_Element_Ratio
 
   SUBROUTINE CD_HermiteCable_Resolution_Metrics(l0, q, seabed_z, contact_band, &
                                                 h_kappa_target, diag, ErrStat, ErrMsg, &
@@ -6733,6 +6886,12 @@ CONTAINS
         diag_out%h_kappa_peak, ' > safety limit=', CD_HC_KINK_LIMIT, &
         ' at element ', diag_out%h_kappa_elem
       IF (LEN_TRIM(local_stop) > 0) wbuf = TRIM(wbuf)//' (local refinement stopped: '//TRIM(local_stop)//')'
+      BLOCK
+        REAL(wp) :: deck_ratio
+        deck_ratio = CD_HermiteCable_Element_Ratio(l0, l0_out, diag_out%h_kappa_elem)
+        wbuf = TRIM(wbuf)//TRIM(CD_HermiteCable_Kink_Advice(diag_out%h_kappa_peak, diag_out%h_kappa_elem, &
+                                                            SIZE(l0_out), deck_ratio))
+      END BLOCK
       ErrMsg = wbuf
       RETURN
     END IF

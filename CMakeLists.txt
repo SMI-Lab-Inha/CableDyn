@@ -1803,6 +1803,18 @@ if(Python3_Interpreter_FOUND)
 
   # A rod numbered as a body is not one of the body's points: a Rod1B end POINT listed before
   # the Body1 points gives the run of the same deck with the rod renumbered, bit for bit.
+  # A lazy wave restrained in torsion starts in an in-plane current (its untwisted state's
+  # out-of-plane instability is kept, not refused by the torsion stage).
+  add_test(NAME torsion_current_start
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_torsion_current_start.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --data ${CMAKE_CURRENT_SOURCE_DIR}/tests/data
+                   --output ${CMAKE_BINARY_DIR}/torsion_current_start)
+  set_tests_properties(torsion_current_start PROPERTIES
+    LABELS "python;driver;integration;static"
+    TIMEOUT 900
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   add_test(NAME body_rod_numbering
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_body_rod_numbering.py
                    --exe $<TARGET_FILE:cabledyn>
@@ -2321,6 +2333,12 @@ add_executable(test_cable_between_bodies tests/test_cable_between_bodies.f90)
 target_link_libraries(test_cable_between_bodies PRIVATE cabledyn_core)
 add_test(NAME cable_between_bodies COMMAND test_cable_between_bodies)
 set_tests_properties(cable_between_bodies PROPERTIES LABELS "fortran;driver;integration;dynamic;static")
+# The static passes of a cable restrained in torsion between two moored bodies converge at every
+# pretwist (they stop at the resolution of the core's balance): the mirror-symmetric start, held.
+add_executable(test_torsion_body_passes tests/test_torsion_body_passes.f90)
+target_link_libraries(test_torsion_body_passes PRIVATE cabledyn_core)
+add_test(NAME torsion_body_passes COMMAND test_torsion_body_passes)
+set_tests_properties(torsion_body_passes PROPERTIES LABELS "fortran;driver;integration;dynamic;static")
 
 add_executable(test_pinned_cable_light_object tests/test_pinned_cable_light_object.f90)
 target_link_libraries(test_pinned_cable_light_object PRIVATE cabledyn_core)
@@ -2355,6 +2373,13 @@ add_executable(test_torsion_coupling tests/test_torsion_coupling.f90)
 target_link_libraries(test_torsion_coupling PRIVATE cabledyn_core)
 add_test(NAME torsion_coupling COMMAND test_torsion_coupling)
 set_tests_properties(torsion_coupling PROPERTIES LABELS "fortran;unit;driver;integration;static")
+# A held line under strong torque-tension coupling (K up to 0.99 sqrt(EA GJ), either sense, one
+# end free in torsion) stays still at the default dtM and dynamic tolerance: the round-off floor of
+# the step's convergence norm carries the coupling's share of the axial force and of the torque.
+add_executable(test_torsion_coupling_still tests/test_torsion_coupling_still.f90)
+target_link_libraries(test_torsion_coupling_still PRIVATE cabledyn_core)
+add_test(NAME torsion_coupling_still COMMAND test_torsion_coupling_still)
+set_tests_properties(torsion_coupling_still PROPERTIES LABELS "fortran;driver;integration;dynamic")
 
 # Torsion and prescribed motion on the standalone mixed EI = 0 + finite-EI route (the driver
 # executable marches the aggregate): route equivalence with the cubic-Hermite route under vessel

@@ -451,6 +451,38 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the IEA-15 MW mixed example in a 60 s platform motion changes by 1.6e-6 of its cable tension.
   Cost: a coupled cable step takes about 2.0 tangent factorisations instead of 1.1, and the
   aggregate step of that example (chains included) 38 % more CPU time (the D03 deck: 19 %).
+- A held line under strong torque-tension coupling stays still in its dynamics. With
+  `K >= 0.85 sqrt(EA GJ)` (and at `-0.8` with one end free in torsion) a line in exact static
+  equilibrium failed its step within 0.05-0.9 s ("Newton did not converge, ||G|| = 2.4e-8 >
+  tol = 1e-8"): the round-off floor of the step's convergence norm took only the kernel's
+  `EA - K^2/GJ`, not the coupling's share of the axial force and of the torque. It now takes
+  both; at `K` up to `0.99 sqrt(EA GJ)` in either sense the held line holds at the default `dtM`
+  and tolerance (`torsion_coupling_still`), and lines with `|K| <= 0.8 sqrt(EA GJ)` step as before.
+- The static passes of a finite-EI cable restrained in torsion between two Rigid6 bodies
+  converge at every pretwist. They compared the change of the cable's end loads with 1e-10 of
+  their scale, below the resolution of the core's body balance (1e-9 of the bodies' net weight),
+  so at 360 deg (Rigid ends) and 300 deg (Pinned) they stalled near 2e-9 and the deck stopped,
+  with advice (`bodyIC deck`) that was not the remedy. They now stop at the resolution the core
+  leaves: the Rigid 360 deg case converges in 6 passes (torque 4886.24 N m), and the
+  pretwist sweep 120-720 deg of both end kinds converges (`torsion_body_passes`).
+- A lazy wave restrained in torsion starts in an in-plane current. In a 0.5 m/s current its
+  untwisted static state, solved in its vertical plane, is unstable out of that plane on its mesh
+  (one negative stiffness mode), which the deck without torsion accepts with a note; the torsion
+  stage refused the twisted state as unstable although the twist added no negative mode ("torsion
+  continuation stalled at Phi = 0 (target 0)" at pretwist 0, an unstable equilibrium after a
+  failed Newton solve at 360 deg). A twisted state with no more negative modes than its untwisted
+  one is now kept, and the note names the instability as the untwisted state's
+  (`torsion_current_start`). Its start also depended on the pretwist and on the round-off of the
+  BLAS kernel: the coarse branch-selection build of a line restrained in torsion twisted it, and
+  that twisted state seeded the untwisted solve on the deck mesh (pretwist 180 deg stopped in the
+  attachment polish, 360 deg needed the polish's fallbacks and stopped with
+  `OPENBLAS_CORETYPE=Prescott`); and each pass of the attachment fixed point after the first
+  applied the drag of the last twisted shape in full at the untwisted start (270 deg and more
+  stopped before any twist). The static helper builds now solve the untwisted line, and the
+  change of the attachment loads is ramped with the imposed twist: pretwists from 0 to 720 deg
+  start with the same torques on every kernel, proportional to the pretwist.
+- The "unresolved/kinked equilibrium" refusal names the element and the factor to refine its
+  section's `NumSegs` by.
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's

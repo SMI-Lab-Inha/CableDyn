@@ -281,11 +281,17 @@ Model data
        supported in a deck marched as one multibody system. End the cable on a Fixed point, a
        body or a rod end, or run the cable and the lines it joins as separate decks.
    * - ``static body/rod equilibrium with the bending end loads of finite-EI LINE <L> (its End A|B,
-       on a body or rod) did not converge after 60 passes``
+       on a body or rod) did not converge after 60 passes (relative end-load change ...,
+       tolerance ...)``
      - the static passes that balance a finite-EI line between two objects on its cubic-Hermite
        end loads (Anderson-accelerated) did not settle; the line's bending couples the objects
-       more strongly than their own restoring holds them. Check the connection directions and
-       the mooring, or start from the deck pose (``deck bodyIC``).
+       more strongly than their own restoring holds them. The passes stop at a change of 1e-7 of
+       the end-load scale (1e-10 with torsion), or at the resolution each pass's balance of the
+       objects leaves (four times its residual load) where that is larger, so a change above the
+       reported tolerance is not round-off. Restrain the object more stiffly (its moorings or
+       ``C44``/``C55``) or soften the connection (a finite ``Stiffness``, a ``Pinned`` end or a
+       finite ``TorsStiffness``); ``OPTION bodyIC deck`` skips the balance and starts the objects
+       out of equilibrium at their deck poses.
    * - ``finite-EI LINE <L>: a Coupled/Vessel End B (POINT <n>) would need motionFile coupling to
        drive it``
      - the multibody march takes no ``motionFile``, so it has nothing to drive a ``Coupled``/
@@ -546,9 +552,14 @@ but a few geometries are genuinely hard:
 - **A residual-converged folded branch.** CableDyn checks the element rotation measure after every
   finite-EI sequence attempt, every final deck-built equilibrium, and the public automatic-mesh
   route. ``max(h*kappa) > 0.7`` is rejected by name even if Newton's residual is small. This is a
-  mesh/branch safety failure, not permission to relax the tolerance. Increase resolution in the
-  reported high-curvature section and inspect the static profile. The check samples element
-  interiors adaptively, so a cubic-element fold cannot hide between output nodes.
+  mesh/branch safety failure, not permission to relax the tolerance. The refusal names the
+  element and the factor to refine ``NumSegs`` by there (``refine NumSegs at least <n>x about
+  element ...``): on a resolved bend the curvature does not change with the mesh, so ``h*kappa``
+  falls with the element length and ``n`` is ``max(h*kappa)/0.7`` rounded up, times the
+  refinement the solve already applied to the deck element. Refine the reported section by it
+  and inspect the static profile; a fold that stays kinked on the finer mesh is a non-physical
+  branch, not a resolution limit. The check samples element interiors adaptively, so a
+  cubic-element fold cannot hide between output nodes.
 - **Odd, prime, or section-wise nonuniform meshes.** These are supported; do not change
   ``NumSegs`` merely to make the total divisible by two. The nested hierarchy retains physical
   section interfaces and interpolates at the true cumulative rest-length coordinate. Its
@@ -595,7 +606,12 @@ but a few geometries are genuinely hard:
   equilibrium on the path, typically because a loop is forming (hockling), which needs a
   dynamic analysis and is not resolved as self-contact. ``finite-EI torsion static solve ended on
   an unstable equilibrium`` means the descent from a buckled (unstable) twisted state did not
-  find a stable one. ``the twist moved more than pi/2 from its committed value in one step``
+  find a stable one. The twist stages refuse, or descend from, only an instability the twist
+  adds: a twisted state with no more negative stiffness modes than its untwisted state (a
+  planar state that is unstable out of its plane, which a line without torsion starts from with
+  a note) starts with the note ``the twisted static state keeps the instability of its untwisted
+  state``. Where such a state cannot be kept, ``torsion stage failed: the untwisted equilibrium
+  it starts from is itself unstable`` names the untwisted state, not the twist, as the cause. ``the twist moved more than pi/2 from its committed value in one step``
   stops a dynamic step that would change the twist by more than a quarter turn (the unwrapping
   of the twist cannot be trusted beyond it): reduce ``dtM`` or slow the imposed roll.
   ``tangent turns by more than 120 degrees`` names an element or node pair where the twist of
