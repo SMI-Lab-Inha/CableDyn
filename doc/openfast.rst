@@ -474,7 +474,11 @@ are named ``Cable 1 node 2 Px, m``, ``Cable 1 node 2 Tx, -`` (tangent) and ``Cab
 differences: at each perturbed state or input, the accelerations are solved without a time step.
 Positions, tangents and coupled-point displacements are stepped by 1 µm, which stays inside the
 seabed penetration of a light cable and the stretch of every taut element. Velocities are stepped
-by 0.1 m/s, MoorDyn-F's step.
+by 0.1 m/s, MoorDyn-F's step. The output differences are taken from CableDyn's own
+double-precision loads and channels, not from the OpenFAST output mesh, so a single-precision
+OpenFAST build (the Visual Studio ``Release`` configuration, as the release ``openfast.exe``)
+linearises as a double-precision one: its mesh carries 7 digits, too few for loads of a few MN
+over a 1 µm step.
 
 A line restrained in torsion adds the twist angle of every node that its end frames do not hold
 (all nodes but a torsionally ``Rigid`` end), after the cables' positions and tangents, and their
