@@ -1,8 +1,8 @@
 {
-  "CableDyn_release": "v0.3.0",
-  "validation_date": "2026-10-23",
+  "CableDyn_release": "v0.4.0",
+  "validation_date": "2026-11-03",
   "executable_name": "cabledyn.exe",
-  "executable_sha256": "5f1d3b15b414ce7b7eb884db76e50901da6a0094c5548489f58cbfed7ac0546a",
+  "executable_sha256": "d6603f989f41b01e7921dc52c1c9e580182208c99b45e6ebdd93377b4cbc289f",
   "compiler": "GNU Fortran 16.2.0",
   "build_type": "Release",
   "platform": "Windows 11 x86-64",
@@ -12,13 +12,15 @@
   "completed_cases": 30,
   "nonlinear_misses": 0,
   "refinement_cases": 8,
-  "maximum_spatial_refinement_difference_percent": 0.5580722740928493,
-  "maximum_temporal_refinement_difference_percent": 0.18888172026785752,
-  "force_maxima_sha256": "978889378964c6d6749bc27c11d99d6584956e3c8eac146ae79bf5f7a05e2e95",
-  "aggregate_metrics_sha256": "35d800fa34137a3a1500cbd0081a490bc1b61cf636cfef5a923b5c18947ba1a7",
+  "maximum_spatial_refinement_difference_percent": 0.2923050211789211,
+  "maximum_temporal_refinement_difference_percent": 0.2699356319214836,
+  "force_maxima_sha256": "ebeaa2627e16506cc6689284791b437f4dc4d27f0f2fc039f7fd2ef09d35ea38",
+  "aggregate_metrics_sha256": "ad9a9baeb9cfe5dcd19af0a8dee5f02a5c942d0bc1d4b7560858860eb52aeb5b",
   "case_manifest_sha256": "8da5e7b4a8a92755363807902aba48e0ff42abab04ac44912041853db9e56604",
   "waveform_T1p25_sha256": "e6fad502f89d8796f2f7868dc9c9ca8e2ebc6969f4ebc3aa36e2bf30498a4522",
   "waveform_T3p50_sha256": "a21956ee9d7c0a41c0948eb2cae7fa1f25c0b8dc26714a4dce95fa0236e5434e",
   "waveform_metrics_sha256": "0fb6015cb30aa2bbb1cd8951b603f9201af50372ee6d3633a72fc70ea5280d1a",
-  "refinement_summary_sha256": "9039f6c9b91ed2d15d7c609dd8d2300eef34d0363700487a8dfc0a8f15be1087"
+  "refinement_summary_sha256": "75342ed4f3ebe2d7acb19af56394e24e6ce909bb3df7445bf3a1d884280f9eb6",
+  "waveform_comparison_release": "v0.3.0",
+  "waveform_comparison_note": "not rerun with 0.4.0: the supplement expData.dat was not available when the record was rerun; the waveform files and metrics are those of the v0.3.0 run"
 }
