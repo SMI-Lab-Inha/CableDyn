@@ -30,7 +30,7 @@ PROGRAM test_parity_integration
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_Step_Moving, CD_AGG_Apply_LineControl, CD_AGG_NFluidNodes, &
                                          CD_AGG_SetFluidFields, CD_AGG_End, CD_AGG_OK
-  USE CableDyn_System, ONLY: CD_System_Line_NElem, CD_Get_System_Line_Tension, CD_SYSTEM_OK
+  USE CableDyn_System, ONLY: CD_System_Line_NElem, CD_Get_System_Line_Tension
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
 

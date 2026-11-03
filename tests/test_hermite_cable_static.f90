@@ -520,7 +520,7 @@ CONTAINS
     !! (w l0^2/12) (dS/dgap) m_z, here near 1 MN: no potential of R.
     INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NDIR = 4
     REAL(wp), PARAMETER :: H = 1.0e-5_wp
-    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(6*NN), qa(6*NN), q(6*NN), c(NN), res, r0(6*NN)
+    REAL(wp) :: l0(NE), EA(NE), EI(NE), w(NE), seed(6*NN), qa(6*NN), c(NN), res, r0(6*NN)
     REAL(wp) :: trib(NN), kn, floor_z, gap, normal, normal_gap, share, dshare, ep, em_, rd, fd, fd_free, d(6*NN)
     INTEGER :: fixed(6 + 2*NN), nfix, i, es, it, k
     CHARACTER(512) :: em

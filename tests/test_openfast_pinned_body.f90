@@ -547,12 +547,6 @@ CONTAINS
     END DO
   END SUBROUTINE host_columns
 
-  FUNCTION host_rest(time) RESULT(k)
-    REAL(wp), INTENT(IN) :: time
-    REAL(wp) :: k(9)
-    k = 0.0_wp*time
-  END FUNCTION host_rest
-
   FUNCTION host_const(time) RESULT(k)
     !! The node accelerating uniformly along +x from rest: a = 2 m/s^2.
     REAL(wp), INTENT(IN) :: time

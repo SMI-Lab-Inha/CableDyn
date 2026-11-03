@@ -400,7 +400,7 @@ CONTAINS
     TYPE(CD_AGG_ModuleType), ALLOCATABLE :: agg
     CHARACTER(KIND=C_CHAR), TARGET :: c_path(64), c_tok(16), msg(512)
     TYPE(C_PTR) :: handle
-    INTEGER(C_INT) :: ces, n_iter
+    INTEGER(C_INT) :: ces, n_iter, ndof
     LOGICAL(C_BOOL) :: cconv, cstall
     REAL(C_DOUBLE), TARGET :: q(3), v(3), a(3)
     REAL(C_DOUBLE) :: cval
@@ -433,7 +433,9 @@ CONTAINS
           em(i:i) = msg(i)
         END DO
       END IF
-      CALL require(ces == 0_C_INT .AND. CableDyn_NCoupledDOF(handle, ces) == 3_C_INT, &
+      ndof = -1_C_INT
+      IF (ces == 0_C_INT) ndof = CableDyn_NCoupledDOF(handle, ces)
+      CALL require(ces == 0_C_INT .AND. ndof == 3_C_INT, &
                    'C API: the cable deck initialises with one coupled point: '//TRIM(em))
       IF (ces /= 0_C_INT) THEN
         CALL CableDyn_Close(handle, ces); RETURN

@@ -476,7 +476,8 @@ CONTAINS
     CALL CD_AGG_Init_From_Deck(held, 'pinrod_pendulum_held.dat', dt, es, em)
     CALL require(es == CD_AGG_OK, 'held:init: '//TRIM(em))
     IF (es /= CD_AGG_OK) RETURN
-    CALL require(CD_AGG_HasRod(pinned) .AND. CD_AGG_NMovingPoints(pinned, es, em) == 1, &
+    n = CD_AGG_NMovingPoints(pinned, es, em)
+    CALL require(CD_AGG_HasRod(pinned) .AND. n == 1, &
                  'pendulum:a Pinned rod adds no host node')
     n = CD_AGG_NMovingPoints(held, es, em)
     CALL require(n == 2, 'held:one host node for the CoupledPinned rod after the fairlead')

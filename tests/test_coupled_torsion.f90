@@ -184,13 +184,14 @@ CONTAINS
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
     CHARACTER(*), INTENT(IN) :: path
     LOGICAL, INTENT(OUT) :: ok
-    INTEGER :: es
+    INTEGER :: es, nmp
     CHARACTER(512) :: em
     CALL CD_AGG_Init_From_Deck(agg, path, DT, es, em, host_orientation=.TRUE.)
     ok = es == CD_AGG_OK
     CALL require(ok, 'coupled torsion deck builds on the aggregate: '//TRIM(em))
     IF (ok) THEN
-      ok = agg%ncable == 1 .AND. CD_AGG_NMovingPoints(agg, es, em) == 1
+      nmp = CD_AGG_NMovingPoints(agg, es, em)
+      ok = agg%ncable == 1 .AND. nmp == 1
       CALL require(ok, 'the deck is one coupled cable with one moving point')
     END IF
   END SUBROUTINE init_agg

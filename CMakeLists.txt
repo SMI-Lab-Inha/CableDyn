@@ -3104,36 +3104,6 @@ target_link_libraries(test_endconn_dynamic PRIVATE cabledyn_core)
 add_test(NAME endconn_dynamic COMMAND test_endconn_dynamic)
 set_tests_properties(endconn_dynamic PROPERTIES LABELS "fortran;endconnection;dynamic;integration")
 
-# These regression programs deliberately assert bit identity and exact-zero limits. GNU's
-# -Wcompare-reals warning is useful in the solver core but not for those stated test contracts.
-# GCC 15 also diagnoses allocatable descriptors nested in a default-initialized aggregate as
-# uninitialized even though Fortran initializes every allocatable component as unallocated.
-if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-  foreach(_cabledyn_exact_real_test IN ITEMS
-      test_hermite_cable
-      test_hermite_drag_dynamics
-      test_hermite_axial_damping
-      test_hermite_cable_control
-      test_control_torsion
-      test_endconn_spring
-      test_torsion_coupling
-      test_torsion_one_end
-      test_two_moving_ends
-      test_wave_math)
-    target_compile_options(${_cabledyn_exact_real_test} PRIVATE -Wno-compare-reals)
-  endforeach()
-  target_compile_options(test_openfast_aggregate PRIVATE
-                         -Wno-compare-reals
-                         -Wno-uninitialized
-                         -Wno-maybe-uninitialized)
-  target_compile_options(test_torsion_deck PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
-  target_compile_options(test_torsion_one_end PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
-  target_compile_options(test_hermite_cable_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
-  target_compile_options(test_syrope_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
-  target_compile_options(test_viscoelastic_control PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
-  target_compile_options(test_control_torsion PRIVATE -Wno-uninitialized -Wno-maybe-uninitialized)
-endif()
-
 if(CABLEDYN_ENABLE_COVERAGE)
   find_program(CABLEDYN_GCOVR gcovr)
   if(CABLEDYN_GCOVR)
@@ -3344,3 +3314,26 @@ foreach(_any_test IN LISTS _all_tests)
     set_tests_properties(${_any_test} PROPERTIES TIMEOUT 1800)
   endif()
 endforeach()
+
+# GNU warnings in the test programs. The solver core builds with no warning; these flags apply
+# to the test executables only, where the diagnosed patterns are intended: exact real
+# comparisons (bit identity and exact-zero limits are stated test contracts), integer
+# divisions of node counts, loops whose out-of-range indices sit in guarded branches, and
+# callback dummies the interface requires. GCC 15+ also reports allocatable descriptors nested
+# in a default-initialized aggregate as uninitialized, although Fortran initializes every
+# allocatable component as unallocated.
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+  get_property(_cabledyn_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(_cabledyn_target IN LISTS _cabledyn_targets)
+    get_target_property(_cabledyn_target_type ${_cabledyn_target} TYPE)
+    if(_cabledyn_target MATCHES "^test_" AND _cabledyn_target_type STREQUAL "EXECUTABLE")
+      target_compile_options(${_cabledyn_target} PRIVATE
+                             $<$<COMPILE_LANGUAGE:Fortran>:-Wno-compare-reals>
+                             $<$<COMPILE_LANGUAGE:Fortran>:-Wno-uninitialized>
+                             $<$<COMPILE_LANGUAGE:Fortran>:-Wno-maybe-uninitialized>
+                             $<$<COMPILE_LANGUAGE:Fortran>:-Wno-integer-division>
+                             $<$<COMPILE_LANGUAGE:Fortran>:-Wno-do-subscript>
+                             $<$<COMPILE_LANGUAGE:Fortran>:-Wno-unused-dummy-argument>)
+    endif()
+  endforeach()
+endif()
