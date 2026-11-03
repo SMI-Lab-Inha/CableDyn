@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -4780,12 +4781,23 @@ def test_viv_is_accepted_on_the_coupled_route():
     DeckFile.from_text(_edit(text, ("50.0 WtrDpth\n", "")), caller_driven=True)
 
 
-def test_viv_needs_water_on_an_ei0_line():
-    text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"), ("50.0 WtrDpth\n", ""))
-    with pytest.raises(DeckFormatError, match="acts with the line's Morison drag in water"):
-        DeckFile.from_text(text)
-    # without the lift the same dry deck stays valid
-    DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "")))
+def test_viv_on_an_ei0_line_needs_no_seabed(tmp_path):
+    # native init_one_model builds every EI = 0 line with the still-water Morison drag (the
+    # surface at z = 0), with or without a seabed, so its lift needs no WtrDpth either
+    DeckFile.from_text(_edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"), ("50.0 WtrDpth\n", "")))
+    # a MoorDyn-C Currents 1 profile without a depth row
+    source = ROOT / "tests" / "data" / "currents_mdc" / "c1"
+    for name in ("currents.dat", "current_profile.txt", "points.txt"):
+        shutil.copy(source / name, tmp_path / name)
+    row = (
+        "chain      0.1     50.0       1.0e7      0.0         0          1.2    1.0    0.2     0.0"
+    )
+    deck = tmp_path / "currents.dat"
+    text = deck.read_text(encoding="utf-8")
+    depth = "50            WtrDpth              water depth (m)\n"
+    assert row in text and depth in text
+    deck.write_text(text.replace(depth, "").replace(row, row + "    0.8"), encoding="utf-8")
+    DeckFile.read(deck)
 
 
 def test_finite_ei_viv_is_accepted_on_the_multibody_march():

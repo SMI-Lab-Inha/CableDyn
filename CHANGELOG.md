@@ -99,6 +99,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `read_output` reads a `.V.out` lift file; a study refuses a case name such as
   `base.Line1.V`, `base.Line1.range` or `base.modes` beside a case `base`; renaming a line in
   `DeckModel` carries its `CurvX`/`CurvY` channels.
+- Python deck validation accepts VIV on an EI = 0 line without a seabed (for example in a
+  MoorDyn-C `Currents` profile), as the driver does: the line has its still-water drag either way.
 
 ### Upgrading
 

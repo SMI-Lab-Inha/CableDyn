@@ -2725,9 +2725,6 @@ class DeckFile:
         line_type_scales: dict[str, tuple[float, float]] = {}  # name -> (BA, max Cd/Ca)
         line_type_meta: dict[str, tuple[float, float, float, float]] = {}
         line_type_gj: dict[str, float] = {}  # name -> explicit GJ of a 14-column row, else 0
-        # Cl > 0 on an EI = 0 row (native init_one_model, which needs the line's Morison drag in
-        # water)
-        has_viv_ei0 = False
         viv_type_names: set[str] = set()
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
@@ -2813,7 +2810,6 @@ class DeckFile:
                         f"{self._at(row)}: LINE TYPES VIV synchronisation band needs cF > 0 "
                         "and 0 <= dF < cF"
                     )
-                has_viv_ei0 = has_viv_ei0 or (cl > 0.0 and not ei > 0.0)
                 if cl > 0.0:
                     viv_type_names.add(row.tokens[0].lower())
             if ei > 0.0 and (is_syrope or len(ea_parts) > 1):
@@ -3741,25 +3737,6 @@ class DeckFile:
                     "rods of a deck, not both, and a rod fixed to a body counts as a rod; run "
                     "the deck with MoorDyn (CompMooring = 3) or, without CoupledPinned objects, "
                     "with the standalone driver, whose multibody march takes both"
-                )
-        if has_viv_ei0 and not self.caller_driven:
-            # native init_one_model: the lift acts with the line's Morison drag, which the
-            # deck switches on with water (a depth or bathymetry, a current, or waves); on the
-            # coupled route the host supplies the water
-            waterkin_option = option_by_key.get("waterkin")
-            waterkin_text = "" if waterkin_option is None else waterkin_option.values[0]
-            has_water = (
-                has_depth
-                or has_bathymetry
-                or has_waves
-                or bool(trains)
-                or (current is not None and current.values[0].lower() != "none")
-                or waterkin_text.lower() not in {"", "0", "none", "seastate"}
-            )
-            if not has_water:
-                raise DeckFormatError(
-                    f"{self._label}: VIV (LINE TYPES Cl > 0) acts with the line's Morison drag "
-                    "in water: declare WtrDpth (or bathymetryFile), a current or waves"
                 )
         if mixed_route and not self.caller_driven:
             n_modes_value = option_by_key.get("n_modes")
