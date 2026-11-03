@@ -104,7 +104,7 @@ The build fails if either executable imports a non-system DLL or lacks the UTF-8
 active-code-page manifest (`release/check_static_windows_binary.ps1`), or if the
 standalone and `CompMooring = 5` smoke cases fail with a system-only `PATH` or from
 a folder named in mixed scripts. It also fails unless `openfast.exe -v` names the
-executable `OpenFAST-v5.0.0-CableDyn-0.3.0`: the OpenFAST base and the CableDyn version,
+executable `OpenFAST-v5.0.0-CableDyn-0.4.0`: the OpenFAST base and the CableDyn version,
 never a `-dirty` describe of the patched tree.
 
 The release workflow (`.github/workflows/release-windows-static.yml`) produces
@@ -140,7 +140,7 @@ python release/smoke_test_wheel.py examples/dynamic_chain_current.dat --expect-b
 Tag only the commit that passed every check:
 
 ```powershell
-$ReleaseVersion = "0.2.0"
+$ReleaseVersion = "0.4.0"
 git tag -s "v$ReleaseVersion" -m "CableDyn v$ReleaseVersion"
 git push origin "v$ReleaseVersion"
 ```

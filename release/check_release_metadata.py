@@ -26,8 +26,8 @@ def capture(relative_path: str, pattern: str, label: str) -> str:
     return match.group(1)
 
 
-# Spellings that name a CableDyn release: "CableDyn 0.3.0", "CableDyn v0.3.0", "v0.3.0",
-# "cabledyn-0.3.0-py3-none-any.whl", ".../releases/tag/v0.3.0" and "libcabledyn.so.0.3.0".
+# Spellings that name a CableDyn release: "CableDyn 0.4.0", "CableDyn v0.4.0", "v0.4.0",
+# "cabledyn-0.4.0-py3-none-any.whl", ".../releases/tag/v0.4.0" and "libcabledyn.so.0.4.0".
 VERSION_REFERENCE = re.compile(
     r"(?i)(?:cabledyn[ _-]+v?|cabledyn-|releases/tag/v|libcabledyn\.(?:so\.)?|(?<![\w.])v)"
     r"(\d+\.\d+\.\d+)(?![\w.]*\d)"

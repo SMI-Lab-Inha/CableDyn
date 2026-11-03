@@ -24,7 +24,7 @@ in the MoorDyn v2 format and solves them with two line formulations:
 - **Finite-bending lines** (finite-EI): cubic-Hermite elements for dynamic power
   cables, including lazy-wave configurations, with continuous centreline curvature.
 
-The current stable release is `v0.3.0`. Interfaces are
+The current stable release is `v0.4.0`. Interfaces are
 versioned and may change before `1.0.0`.
 
 ## Capabilities
@@ -32,12 +32,12 @@ versioned and may change before `1.0.0`.
 | Area | Features |
 |---|---|
 | Statics | Catenary seeding, Newton solution, load continuation, mesh sequencing, adaptive meshing |
-| Dynamics | Implicit generalised-alpha integration, prescribed support motion, consistent mass, automatic step subdivision |
+| Dynamics | Implicit generalised-alpha integration, prescribed support motion, consistent mass, automatic step subdivision, torsion with a twist angle and rotary inertia at every node, cross-flow vortex-induced vibration |
 | Environment | Buoyancy, Morison drag, added mass, Froude–Krylov loading, regular and irregular waves, current profiles, seabed contact with friction |
-| Materials | Linear axial stiffness, Kelvin–Voigt damping, viscoelastic (series-Kelvin; MoorDyn `ElasticMod` 2/3), Syrope polyester model |
-| Topology | Fixed, coupled, free, and connected points; clump weights; rigid bodies and rods; end rotational stiffness; active line-length control; line failure |
-| Outputs | Effective tension, position, velocity, acceleration, curvature, bending moment, end angles, contact response, solver diagnostics |
-| Interfaces | Standalone driver, OpenFAST and FAST.Farm, C ABI, Python package |
+| Materials | Linear axial stiffness, Kelvin–Voigt damping, viscoelastic (series-Kelvin; MoorDyn `ElasticMod` 2/3), Syrope polyester model, torsional stiffness with torque–tension coupling, tapered bend stiffeners |
+| Topology | Fixed, coupled, free, and connected points; clump weights; buoyancy modules along cables; rigid bodies and rods; end rotational stiffness; cables between two moving ends; active line-length control; line failure |
+| Outputs | Effective tension, position, velocity, acceleration, curvature (also on the section's own axes), bending moment, torque and twist, end angles, contact response, natural modes, solver diagnostics |
+| Interfaces | Standalone driver, OpenFAST and FAST.Farm (with linearisation of the line dynamics), C ABI, Python package |
 
 Section and keyword names follow MoorDyn v2; unsupported combinations stop with
 a named error rather than running approximately.
@@ -51,8 +51,8 @@ a named error rather than running approximately.
    |---|---|
    | `CableDyn_driver.exe` | Standalone solver for Windows x64 (AVX2 processor) |
    | `openfast.exe` | OpenFAST with CableDyn available as `CompMooring = 5` |
-   | `cabledyn-0.3.0-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
-   | `cabledyn-0.3.0.tar.gz` | Python source distribution |
+   | `cabledyn-0.4.0-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
+   | `cabledyn-0.4.0.tar.gz` | Python source distribution |
    | `SHA256SUMS.txt` | Checksums for the assets above |
 
    Both executables are statically linked, need no installer, compiler, or runtime
@@ -90,7 +90,7 @@ a named error rather than running approximately.
    cabledyn-run examples\wd0050_chain.dat wd0050
    ```
 
-   The pure Python wheel on the release page (`cabledyn-0.3.0-py3-none-any.whl`)
+   The pure Python wheel on the release page (`cabledyn-0.4.0-py3-none-any.whl`)
    carries no driver: `cabledyn-run` then needs `--executable .\CableDyn_driver.exe`,
    the `CABLEDYN_DRIVER` environment variable, or the driver on `PATH`. A source
    build names the driver `cabledyn` (see [Build from source](#build-from-source));
@@ -157,7 +157,7 @@ If you use CableDyn in academic work, please cite:
 > offshore wind. *Ocean Engineering* 368 (Part 2), 128332, 2026.
 > <https://doi.org/10.1016/j.oceaneng.2026.128332>
 
-To identify the software version, also cite the release (CableDyn 0.3.0).
+To identify the software version, also cite the release (CableDyn 0.4.0).
 The [citation file](https://cabledyn.readthedocs.io/en/latest/citing.html) contains both entries (GitHub **Cite this
 repository**); BibTeX is on the manual's
 [How to cite](https://cabledyn.readthedocs.io/en/latest/citing.html) page.

@@ -7047,7 +7047,7 @@ CONTAINS
         IF (PRESENT(curvature_vector) .AND. section_moment/model%EI(e) > curvature) &
           curvature_vector = m_perp/model%EI(e)
         curvature = MAX(curvature, section_moment/model%EI(e))
-        IF (model%EI_line(e) == model%EI(e)) THEN
+        IF (ABS(model%EI_line(e) - model%EI(e)) <= CD_ZERO) THEN
           cable_moment = MAX(cable_moment, section_moment)
         ELSE
           cable_moment = MAX(cable_moment, model%EI_line(e)*(section_moment/model%EI(e)))
@@ -7060,7 +7060,7 @@ CONTAINS
         END IF
         IF (PRESENT(curvature_vector) .AND. trace > curvature) curvature_vector = kv
         curvature = MAX(curvature, trace)
-        IF (model%EI_line(e) == model%EI(e)) THEN
+        IF (ABS(model%EI_line(e) - model%EI(e)) <= CD_ZERO) THEN
           cable_moment = MAX(cable_moment, section_moment)
         ELSE
           cable_moment = MAX(cable_moment, model%EI_line(e)*trace)
@@ -9167,7 +9167,7 @@ CONTAINS
     IF (want_residual) model%tw_R = CD_ZERO
     model%tw_tsum = CD_ZERO
     om = MERGE(model%tw_som, model%tw_om, model%tors_use_step)
-    turning = ANY(om /= CD_ZERO) .AND. ALLOCATED(model%torsion%bt)
+    turning = ANY(ABS(om) > CD_ZERO) .AND. ALLOCATED(model%torsion%bt)
     DO e = 1, model%ne
       kd = CD_ZERO
       IF (ALLOCATED(model%torsion%bt)) kd = model%torsion%bt(e)/model%l0(e)
@@ -9654,7 +9654,7 @@ CONTAINS
     model%tw_som = CD_ZERO
     IF (.NOT. dt > CD_ZERO) RETURN
     DO k = 1, 2
-      IF (ALL(model%tors_step_ends(:, 2*k - 1:2*k) == model%torsion%ends(:, 2*k - 1:2*k))) CYCLE
+      IF (ALL(ABS(model%tors_step_ends(:, 2*k - 1:2*k) - model%torsion%ends(:, 2*k - 1:2*k)) <= CD_ZERO)) CYCLE
       r0(:, 1:2) = model%torsion%ends(:, 2*k - 1:2*k)
       r0(:, 3) = tw_cross(r0(:, 1), r0(:, 2))
       r1(:, 1:2) = model%tors_step_ends(:, 2*k - 1:2*k)

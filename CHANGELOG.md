@@ -8,711 +8,101 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-04
+
 ### Added
 
-- Deck currents on the standalone mixed `EI = 0` + finite-EI deck: a `current` OPTION (uniform or
-  profile), a WaterKin `CurrentMod 1` table and MoorDyn-C `Currents 1`/`2`/`5`, which the mixed
-  route refused, are taken in the static start of the chains and cables and sampled at every node
-  before each step with the single-line routes' updaters. Against the single-line routes on a
-  chain and a cable in a cross current: the static start agrees exactly for the chain and to
-  4.9e-6 of the range for the cable (the coupled build's static polish), the march with the
-  same Newton controls to 4.9e-6 (cable) and 2.1e-5 (chain); a `Currents 2` table wrapping past
-  its last sample equals the unrolled table bit for bit; a uniform `Currents 1` profile and a
-  uniform `Currents 5` grid equal `uniform` to round-off (at most 3.9e-8); a correction rewind repeats the
-  step bit for bit; the march allocates nothing per step. Deck waves stay refused; the coupled
-  route keeps taking the host's field.
-- Finite-EI lines with two moving ends on the cubic-Hermite route: a line whose End B is a
-  `Coupled`/`Vessel` point (a cable shared by two floaters, a FAST.Farm shared line) is driven at
-  both ends standalone, in OpenFAST, FAST.Farm and the C API (End B on a moving column of its
-  own), with `END CONNECTIONS` and torsion at both ends (both end frames turn with their
-  parents) and every Hermite feature. A `Coupled` End B held at rest writes the `Fixed` End B's
-  files byte for byte; a symmetric cable whose ends move apart stays mirror-symmetric to 4e-11 m;
-  a rigidly translating line keeps its
-  end loads to 4e-5 N of 1.6e4 N; driving End B matches the reversed line driven at End A to
-  1e-3 N, with a turning clamped End B to 2e-5 N and 4e-7 N m; equal rolls of both end frames
-  keep the torque to 3e-6 N m and opposite rolls change it by `GJ (2 phi)/L` to 5e-6 N m; a
-  FAST.Farm aggregate driven by prescribed turbine motions reports the standalone deck's end
-  tensions to 7e-3 N of 1.9e4 N; restarts are bit-identical. The compatibility (Cosserat) route
-  these decks ran on is retired: on four shared-line decks it failed to converge or reached a
-  compressive static state (-6.1e8 N), and the Hermite route runs all four.
-- A finite-EI line between two objects on the standalone multibody march: End B on a Rigid6
-  `Body<N>` point or a rod end as well as End A, both ends driven by their objects and their end
-  forces, connection moments and torques returned to them, with `END CONNECTIONS` and torsion at
-  both ends (`bodyScheme monolithic`; the staggered scheme takes pinned ends). The monolithic step
-  re-steps such a cable at every outer iteration and couples the junction coordinates of its two
-  objects through its finite-difference end-to-end stiffness in one Newton matrix (on a stiff taut
-  cable between light bodies, dropping that coupling took 9.2 mean outer iterations and 300 step
-  halvings over 100 steps, against 3.9 and none); an end on a fixed rod's end is the `Fixed` end
-  there (byte for byte). `bodyIC static` balances both objects on the cubic-Hermite cable, its passes
-  accelerated by Anderson mixing: a stiff (EI 1e6 N m^2) clamped cable between two unequal moored
-  bodies, out of their plane, converges in 8 passes, written in either direction, to the same
-  equilibrium. Two identical bodies stay mirror images to the output precision, a body joined to
-  an immobile body (1e15 kg) moves as on a `Fixed` End B to 8e-9, two free bodies keep the total
-  linear momentum to 3e-5 and the energy to 0.2 %, a cable twisted 90 deg returns equal and
-  opposite torques (`GJ Phi/L` at the start, their sum below 2e-10 N m), and a moored pair starts
-  and stays at rest. An End B on a `Free`/`Connect` point, a `Point3` buoy or a `Coupled`/`Vessel`
-  point stays refused there by name (this march drives no `Coupled` point), and so are, by name,
-  torsion at an End B on a rod end and a line restrained in torsion at a rod End A with a moving
-  End B, which no route of this build solves.
-- C API host rotations (ABI 1.3): `CableDyn_InitDeckRotating` initialises a handle whose host
-  passes each coupled point's rotation (`CableDyn_UpdateRotations`: the global-to-body DCM and
-  the angular velocity and acceleration) with every update and step, so a line restrained in
-  torsion and a `Rigid` end connection turn with the host, as on the coupled OpenFAST route; a
-  torsion deck, refused by `CableDyn_InitDeck`/`InitDeckAt`, runs there.
-  `CableDyn_GetCoupledMoments` returns the moments the lines apply to the host. On a straight
-  line rolled at 60 deg/s the coupled torque is the quasi-static `GJ phi / L` to 3e-6 N m, and
-  `SaveState`/`RestoreState` carry the rotations. Python: `CableDyn.init_deck_rotating`,
-  `update_rotations`, `coupled_moments`.
-- `ATTACHMENTS` on a finite-EI line restrained in torsion: the torsion stage of the static start
-  runs on the discrete equilibrium, after the attachment polish, with the modules' net weights
-  and current drag (to a fixed point) as nodal loads. A lazy wave with 25 buoyancy modules and
-  one turn of pretwist, in still water and in a cross-flow current, keeps its torque, twist and
-  fairlead tension over a still 10 s run to the output precision (a torsion stage before the
-  polish would ring by 3e-3 of the torque); neutral modules reproduce the bare line's GJ Phi / L.
-- `CoupledPinned`/`VesselPinned` bodies in OpenFAST, as MoorDyn-F's coupled pinned body: the
-  body reference point is a node of the coupling mesh that takes the platform position only, the
-  body turns about it with its own three rotations, and the node returns the body's net load
-  less its inertia, with no moment. `PtfmInit` moves and turns the body, `bodyIC static` balances
-  it about its node, and the checkpoint state and correction rewind carry it. A dry compound
-  pendulum keeps the elliptic-integral period to 1.6e-4 at `dt = T/100`, a body with a
-  `CoupledPinned` rod's mass and inertia follows the rod to 2e-12, and against MoorDyn-F
-  (`inertialF 1`) a pendulum swinging through 120 deg agrees to 0.09 deg (0.15 deg when its node
-  surges). Outside a coupled host, without inertias, and in linearisation the body fails closed
-  by name.
-- Active line control (`CONTROL`, OpenFAST `CableDeltaL`/`CableDeltaLdot`) of a Syrope
-  polyester segment, which stopped at initialisation before. As in MoorDyn-F and MoorDyn-C the
-  segment's slow stretch carries over the length change (its slow strain is read at the new
-  length) and the running maximum is kept. On a taut 100 m line whose fairlead segment is paid
-  out by 0.5 m, hauled in to -1 m and paid back, the tension follows the rest curve of its load
-  history (working curve, OWC, then the working curve of the new maximum) to 2.5e-4 along the
-  ramps and 6e-7 at rest; after a length step it is MoorDyn's at the carried stretch to 1e-15
-  (carrying the strain instead would be off by 0.4 to 2.4 %); a restart in the ramp continues
-  bit for bit; a polyester-chain line with a Syrope fairlead segment and a
-  chain-polyester-chain line run.
-- Active line control of a viscoelastic segment (`Es|Ed` and `Es|alphaMBL|vbeta`), which
-  stopped at initialisation before. As in MoorDyn-F and MoorDyn-C the slow-branch stretch
-  `dl_1` is left as it is and read at the new length. On the same taut line and cycle the
-  tension follows the static law `Es` times the strain to 1.7e-4 along the ramps (4.6e-4
-  load-dependent) and 4e-9 at rest; after a length step it is MoorDyn's at the carried stretch
-  to 4e-16 (carrying the strain instead would be off by 0.4 to 4.6 %); a restart in the ramp
-  continues bit for bit.
-- OpenFAST linearisation of finite-EI lines restrained in torsion: the twist angles of the nodes
-  the end frames do not hold, and their rates, are continuous states (`Cable 1 node 2 twist,
-  rad`); the coupled point's orientation turns the torsion frame of the line's coupled
-  (host-driven) end, its angular velocity and acceleration reach the torsional damping and the
-  held end section's inertia, and the fairlead
-  moment carries the torque. A straight line's torsional modes from the eigenvalues of `A` are
-  the lumped chain's to 5e-14 (the continuum's `nπ/L √(GJ/Irn)` less the discretisation error,
-  1.6e-4 for the first mode at 50 elements) and its roll stiffness `D − C A⁻¹ B` is `GJ/L` to
-  1.5e-14; a 90° twisted lazy wave matches the deck's static solutions for a rolled and a moved
-  fairlead to 4.9e-4. In a `Linearize = True` run every input Jacobian, those of the time march
-  included, steps the coupled-point rotation by 1e-4 rad instead of 0.1 rad, which changes the
-  rotation columns of a deck with a hang-off spring by up to 0.17 %.
-- Prescribed motion and torsion on the standalone mixed deck (`EI = 0` and finite-EI lines between
-  `Fixed`/`Coupled`/`Vessel` points, run on the coupled aggregate): the driver marches a
-  `motionFile` or `vesselMotion` as on the cubic-Hermite route, row 1 installed before `t = 0`
-  (also with `TMax = 0`). A vessel turns the end connection and torsion frames of the cables on
-  its points, and the roll column imposes the twist of a line restrained in torsion, which these
-  decks no longer refuse.
-  Under vessel roll, pitch and heave, or a surge with the roll column, a clamped line gives the
-  single-line route's torque, twist and node positions to the printed eight digits and its end
-  tensions and bend moment within 8.2e-6 of their range (the coupled cables' Newton tolerance; with
-  the single-line route's, every channel to the printed digits). These figures are for motions
-  that start from rest; a start with a jump in velocity differs by several percent of the range
-  (3 to 11 % in the cases tried) under the coupled Newton tolerance. A straight line rolled
-  slowly gives `Torq = GJ Phi / L` to 5e-6 N m. A static mixed run (`TMax = 0`) with torsion
-  takes `False alpha_force_blend`, as the single-line route and the Python reader do.
-  `vesselRAO` stays refused with the deck waves. A line between two moving points there takes the
-  roll columns of both ends, `Phi = Pretwist(B) − Pretwist(A) − roll(A) − roll(B)`: rolled
-  oppositely (a rigid roll about its axis) a line twisted 90 deg keeps its twist exactly, and rolled
-  equally it twists by twice the roll to 5e-7 deg, with `Torq = GJ Phi / L` at both ends to
-  5e-6 N m.
-- OpenFAST linearisation with the line dynamics, as MoorDyn-F's: the continuous states are the
-  interior-node positions of every `EI = 0` line (MoorDyn's names and order) and the free
-  degrees of freedom of every finite-EI cable (node positions and tangents), then their
-  velocities, with `A`, `B`, `C` and `D` by central differences of the accelerations solved at the
-  perturbed state. On the UMaine chains the stiffness `D - C A^-1 B` matches MoorDyn-F's to 0.1 %
-  and the lowest nine line-mode frequencies to 0.3 %; with a lazy-wave power cable every coupled
-  point matches the deck's own static solutions to 3e-4, also with a hang-off spring. The
-  reduction is the static stiffness at an operating point whose coupled points do not
-  accelerate: the coupled load includes the line's inertia, so at the accelerating `t = 0`
-  platform the lazy wave's force per unit rotation reads 1.2 % off, and 2.7e-4 with the platform
-  DOFs disabled (`doc/openfast.rst`). A cable end connection with a numeric stiffness now
-  linearises. The viscoelastic slow-branch stretch
-  and the Syrope slow strain are first-order states, so the reduction gives these ropes' relaxed
-  static stiffness (each matches its deck's static solutions to 7e-5; held, they would read the
-  chain 0.6 % and the polyester 2.9 times too stiff). Free/Connect points, a `Rigid` cable end
-  connection, VIV lines, bodies, rods, buoys and `CONTROL` fail closed with named messages. This
-  replaces the quasi-static linearisation without states. The output differences use
-  CableDyn's double-precision loads, so a single-precision OpenFAST build (the release
-  `openfast.exe`, Visual Studio `Release`) linearises as a double-precision one; through its
-  7-digit output mesh the UMaine chains' surge stiffness read 3.2e3 instead of 7.7e4 N/m.
-- Composite Syrope lines: a Syrope polyester section between plain `EI = 0` sections, such as a
-  chain-polyester-chain mooring, in one LINE. The static start puts every Syrope element on the
-  rest curve of its load history with its own secant EA (the tension varies along a sagging
-  section), so the dynamics start in the static equilibrium; the chains keep their `BA` damping,
-  and `SYROPE IC` applies to every Syrope section of the line. On a 400 m polyester section
-  between chains every element starts on its OWC to 2e-11, and a still run keeps the fairlead
-  tension. Example `composite_chain_syrope_chain.dat`, on a moving vessel.
-- Torsional inertia and damping of finite-EI lines: in the dynamics a line restrained in torsion
-  carries a twist angle at every node, against directors that follow the node tangents by the
-  smallest rotation over each step, with the polar rotary inertia `Irn` of its LINE TYPES row and
-  the torsional damping `Bt` of a new third part of the `GJ` column (`GJ|K|Bt`, negative for a
-  damping ratio). The torque now varies along the line (`Torq<L>N<J>` is the node's) and
-  travels as a torsional wave; the statics stay condensed, and in the limit of a negligible
-  inertia the dynamics reproduce the condensed torsion. The step solves the angles with the
-  cable in one band of half-width 13; the twist state joins the snapshot, the recovering step
-  and the OpenFAST checkpoint mirror. Decks with torsion whose `Irn` was a placeholder (the
-  column was unused before) need the section's real value. The Python deck reader and builder
-  take `GJ|K|Bt` (builder `gj=(GJ, K, Bt)`).
-- Active line control (`CONTROL`) of a finite-EI cable restrained in torsion, which was refused:
-  the torsional compliance, the nodal twist's `GJ`/l and `Bt`/l, the torque–tension coupling and
-  the polar inertia take the new lengths, a `-ζ` torsional damping keeps its `ζ`, and the damping
-  acts on the rate of the twist per length. A taut line paid out and hauled in carries
-  `GJ Φ/L(t) + K (H − L)/L` to 1.5e-12 and its tension to 4e-6; a constant pay-out carries the
-  Kelvin–Voigt torque to 6e-6 N m of its 0.64 N m damping share; a pay-out under a ringing twist
-  balances the energy to 8e-5 of the work done; restarts mid-ramp (snapshot, checkpoint mirror,
-  a coupled deck) are bit-identical. The checkpoint mirror of a line with the nodal twist gains
-  one value, its committed torque.
-- Modal analysis (`nModes`) of finite-EI lines restrained in torsion: the modes carry the twist
-  angle of every node, as the dynamics do, with the lumped polar inertia and the second variation
-  of the twist energy at the static torque. A clamped straight line's torsional modes match
-  `nπ/L √(GJ/Irn)` within the lumped chain's own error (2.6e-4 on the first), elastic ends and
-  the torque–tension coupling their continuum solutions to 1e-3, and under a torque its lateral
-  modes match the clamped Greenhill cable to 3e-7; eliminating the angles reproduces the
-  condensed static tangent to 1e-16. `<root>.modes.out` adds `PolarShare` and `dTwist` when a
-  line carries twist.
-- Torsion of a finite-EI line restrained at one end only, the other free to twist (`TorsStiffness`
-  `Free` there, or no row): solved where a line restrained at both ends is and its LINE TYPES
-  rows give `GJ`, instead of being ignored. The free end carries no torque and turns with the
-  twist of the line: statically `Twist<L> = −Σ (K/GJ)(l − L)` under `GJ|K` (End B relative to
-  End A; to 1e-8 on a stretched straight cable, the moving end free or the anchored one), and in
-  the dynamics with torsional waves that reflect at it. A straight line held rigidly at the other end rings at the
-  clamped–free frequencies `(2n − 1) π/(2L) √(GJ/Irn)` (3e-4 and 3e-3 for n = 1, 2), and a roll
-  of the restrained end gives the continuum's free-end turn `A/cos kL` and reaction
-  `GJ A k tan kL` to 0.5 % below and above the first mode, in the standalone driver and on the
-  coupled aggregate. The `Torq`/`Twist` channels and range columns work on such a line, and
-  its `CurvX`/`CurvY` axes follow its twist. Results change on such decks: the dynamics carry
-  the twist (on a swaying lazy-wave cable with `GJ|K` the tensions move by up to 1.5e-4, 7e-8
-  in a planar heave), and a line restrained at End A on a Rigid6 body joins the static body
-  balance of the clamped ends: bending-Pinned there, its body's static moment now balances
-  (Body1My −103.9 N m to 1e-6 on a buoy, FairTen1 126885 to 126857 N, 2.2e-4, Body1Ry
-  0.3004 to 0.2984 deg; the march then differs by up to 2.6 % at dtM 0.05 s, 0.5 % at
-  0.0125 s); clamped there, by about 1e-7. OpenFAST checkpoints of such decks written before
-  this change do not reload: the cable's state mirror now carries the nodal twist, and the
-  rebuild stops at a mirror-extent check (`... mirror extends past the state vector`). A line
-  restrained at one end that misses a rule (no `GJ`, two moving ends, the configuration blend,
-  a restrained End A on a free, pinned or Coupled rod end or a non-Rigid6 body) is solved
-  without torsion as before, with a note naming the rule; a solved one's restrained `Pretwist`
-  is held within 1000 turns.
-- Torsion at a rod end: a line restrained in torsion may hang from an end of a `Fixed` rod (an
-  I-tube or J-tube), whose frame holds the End A torsion frame, with `Nx` in the rod's deck
-  axes. Two turns on an inclined J-tube give `GJ Phi / L` to 1.2e-9, the same torque as from a
-  held Coupled point, and `Rod<N>M` the torque along the line axis; the line written anchor
-  first (MoorDyn's order) runs bit for bit as written rod first. On a rod fixed to a rolling Rigid6
-  body the torque follows `GJ (Phi - theta)/L` to 4e-11, and `Rod<N>M` of a rod fixed to a body
-  now includes the connection moment of a cable clamped at its end (it read 0). Free, pinned
-  and Coupled rods refuse the torsion by name, and so does `staggered bodyScheme` on a body or
-  rod (it drove the cable end by translation, so the torsion frame did not turn); a line between
-  two rods is refused as ending on a rod end, not as having two moving ends.
-- The torsion routes combined: a line restrained in torsion at one end only takes `ATTACHMENTS`,
-  `CONTROL`, `nModes` and a `Fixed` rod end, which left it unsolved in torsion. With modules of
-  net weights 14.6, −9.1 and 5.8 kN on a vertical cable its free end turns by `−(K/GJ)(H − L)`
-  to 8.5e-9 and its mid-line node with the module tensions to 3.9e-4 (a first-order mesh
-  error); a paid-out fairlead turns it by `−(K/GJ)(H − L(t))` to 4e-11 with no torque; its modes
-  and the eigenvalues of the OpenFAST `A` are the clamped–free chain's to 8e-10 and 2e-14 and
-  the quarter-wave `(2n − 1)π/(2L) √(GJ/Irn)` within the lumped-inertia error, with no roll
-  stiffness. The modal twist Hessian no longer takes a free end for an elastic one of infinite
-  stiffness. `ATTACHMENTS` on a line restrained at both ends run on the mixed `EI = 0` +
-  finite-EI route and on a `Fixed` rod end as on the single-line route (to the printed digits).
-- Torque–tension coupling of finite-EI cables: the 14-column LINE TYPES row's `GJ` column takes
-  `GJ|K`, with `K` the coupling of an armoured cable or wire rope (`T = EA ε + K τ`,
-  `M = GJ τ + K ε`). The cable carries the axial stiffness `EA − K²/GJ` of a section free to twist.
-  A line restrained in torsion adds the stretch's share of the twist, `−Σ (K/GJ)(l − L)`, to its
-  condensed torque, in statics and dynamics and on every route that carries torsion. The node
-  and element tensions, the element profile, the twist channels and the static and dynamic
-  `tensile_safety` audits include the coupling, so a stretched cable that opposite-sense torsion
-  puts into compression is caught. A stretched straight cable reproduces
-  `T = EA ε`, `M = K ε` between rigid ends and `T = (EA − K²/GJ) ε` with a free end. `GJ|0` is the
-  uncoupled cable bit for bit. The Python deck reader and builder take `GJ|K` (builder
-  `gj=(GJ, K)`).
-- Section-frame curvature channels `CurvX<L>N<J>` and `CurvY<L>N<J>` on finite-EI lines: the
-  curvature vector on the cable's cross-section axes, for the fatigue of an armour wire or
-  conductor at a fixed point of the section. The axes start at End A from the end connection
-  (the torsion normal, or the static start's upper normal), turn with a clamped hang-off, are
-  carried along the line by parallel transport and turn with the twist of a line restrained in
-  torsion; `CurvX^2 + CurvY^2 = Curv^2`. On a line twisted 90 degrees the carried axes reach
-  End B within 3e-6 rad of its pretwisted normal. `EI = 0` lines and finite-EI lines with two
-  moving ends refuse the channels.
-- Cross-flow vortex-induced vibration of `EI = 0` lines in the standalone driver: MoorDyn v2's
-  LINE TYPES columns `Cl` or `Cl dF cF` switch on the synchronisation model of Thorsen et al.,
-  with the same phase start and running-RMS window (`VIVrmsWindow`, default 500 steps of
-  `dtM`). On a taut 100 m line in a uniform current it follows MoorDyn-F's lock-in amplitude
-  and frequency to two to three digits through mode-1 and mode-3 lock-in, at any `dtM` from
-  5e-4 to 1e-2 s. The phases start from the deck's End A as MoorDyn's do, also on a line
-  written anchor first, which the reader turns around, and at the deck nodes of a refined
-  finite-EI mesh. MoorDyn-C's own VIV case, the catenary riser of Thorsen et al., reproduces
-  its mean tension and tension range and the measured lock-in frequency (period within 1 %).
-  The Python deck tools read and keep the columns.
-- Cross-flow VIV of finite-EI cables in the standalone driver: the same LINE TYPES columns on an
-  `EI > 0` type give a distributed lift, Gauss-integrated over each cubic-Hermite element with
-  exact tangents, and a shedding phase at each node driven along the node's own tangent. A taut
-  line with `EI` near zero reproduces the `EI = 0` lock-in to three digits, at any `dtM` from
-  5e-4 to 1e-2 s without smoothing; a bending-stiff line matches the string of equal first-mode
-  frequency in mode-1 lock-in and stays in mode 1 where that string jumps to mode 2. The
-  multibody march carries it too (a cable on a Rigid6 body or rod, or beside free points), with
-  the same lock-in. A finite-EI line with two moving ends refuses `Cl > 0`.
-- LINES Outputs flag `V` (MoorDyn's): the cross-flow VIV lift force at the nodes of a line,
-  written to `<root>.Line<L>.V.out` on dynamic runs of the standalone routes that carry VIV. On
-  a finite-EI line each element's lift is lumped to its nodes; at the interior nodes of a taut
-  line in lock-in it matches the `EI = 0` line's within 0.1 %. Upper case only, as in MoorDyn,
-  whose `v` (node velocities) CableDyn does not write.
-- Cross-flow VIV on the coupled routes: OpenFAST (`CompMooring = 5`), FAST.Farm and the
-  standalone runner of a mixed `EI = 0` / finite-EI deck carry the lift on both line kinds, with
-  the host's fluid field. The phases, running mean squares and averaging time are part of the
-  checkpoint state and of the correction rewind, so a restart continues bit for bit. A riser and
-  a cable in a 0.15 m/s host current lock in at A/D 0.665 and 0.292 Hz, MoorDyn-F's 0.662 and
-  0.293 Hz.
-- Bend stiffeners (`STIFFENERS` table): a tapered polyurethane sleeve over an end of a finite-EI
-  line, given as conical segments from the root outward (outer diameters, bore, modulus,
-  density). Each element it covers takes the compliance average of the cable-plus-sleeve
-  bending stiffness and the sleeve's mass, buoyancy and drag; standalone and coupled, with the
-  Python reader and builder. A hang-off clamped through a 5 m stiffener follows an independent
-  solution of the planar elastica within 0.2 % of the root moment, and its curvature follows
-  OrcaFlex 11.6d within 0.8 %. Initialisation notes name a stiffener spanning fewer than 10
-  elements and one at a pinned end. Example `lazy_wave_bend_stiffener.dat`.
-- Output channels `StfMom<L>N<J>`, the share of the section moment a bend stiffener carries,
-  and `FairDefl<L>`/`AnchDefl<L>`, the deflection of the end force from the direction a held
-  END CONNECTIONS row declares (with the end tension, a stiffener's load case).
-- MoorDyn-C time-varying and gridded currents on the standalone routes: `Currents 2` (the depth
-  profile in time `current_profile_dynamic.txt`) and `Currents 5` (the grid in x, y, z and time
-  `current_profile_4d.txt`), read and interpolated as MoorDyn-C v2.7.1 does (resampled at the
-  smallest time interval, repeating past the last sample, held beyond the grid, no fluid
-  acceleration) at every node's position and time, the static start included. At 739 points and
-  times the current is identical to MoorDyn-C v2.7.1's; a constant table equals `Currents 1` and a
-  grid uniform in x and y equals `Currents 2`; on a 70 m rope the tension change of a time-varying
-  and of a sheared current matches MoorDyn-C's within 0.9 %, and the static start in a sheared grid
-  holds the tensions to 1.4e-7 of the change the current makes. The C API, without a clock,
-  refuses a table that varies in time.
+- Full torsion of finite-EI lines: in the dynamics a twist angle at every node, with the polar
+  inertia `Irn` and torsional damping (`GJ|K|Bt`), so the torque varies along the line and
+  travels as a torsional wave; the statics stay condensed. Lines restrained at one end only
+  (the other free to twist), lines hanging from a `Fixed` rod end (I-tube, J-tube), `CONTROL`,
+  `ATTACHMENTS` and modal analysis all take torsion. Torsional modes match the continuum within
+  the lumped-inertia error (2.6e-4 on the first).
+- Torque–tension coupling of armoured cables and wire ropes (`GJ|K`: `T = EA ε + K τ`,
+  `M = GJ τ + K ε`) in statics, dynamics, linearisation and the tensile audits; `GJ|0` is the
+  uncoupled cable bit for bit.
+- OpenFAST linearisation with the line dynamics, as MoorDyn-F's: interior node positions and
+  velocities of `EI = 0` lines, the free degrees of freedom of finite-EI cables, and the twist
+  angles of lines restrained in torsion. On the UMaine chains the reduced stiffness matches
+  MoorDyn-F's to 0.1 % and the lowest nine line-mode frequencies to 0.3 %. Replaces the
+  quasi-static linearisation without states. A single-precision OpenFAST (the release
+  `openfast.exe`) linearises from CableDyn's double-precision loads, as a double-precision one.
+- Section-frame curvature channels `CurvX<L>N<J>`/`CurvY<L>N<J>` on finite-EI lines, for the
+  fatigue of an armour wire or conductor at a fixed point of the section; the axes follow the
+  twist.
+- Cross-flow VIV (the Thorsen et al. model of MoorDyn v2, LINE TYPES `Cl`, `dF`, `cF`) on
+  `EI = 0` lines and, as a distributed lift, on finite-EI cables, standalone and on the coupled
+  routes, with the LINES output flag `V`. Lock-in follows MoorDyn-F to two to three digits.
+- Bend stiffeners (`STIFFENERS`): a tapered linear-elastic sleeve over a finite-EI line end;
+  a clamped hang-off follows the planar elastica within 0.2 % of the root moment and OrcaFlex
+  11.6d's curvature within 0.8 %. Channels `StfMom`, `FairDefl`/`AnchDefl`.
+- Finite-EI lines with two moving ends (a cable shared by two floaters, a FAST.Farm shared
+  line) standalone, in OpenFAST, FAST.Farm and the C API; and between two objects on the
+  multibody march. The retired Cosserat compatibility route no longer runs them.
+- `CoupledPinned`/`VesselPinned` bodies in OpenFAST, as MoorDyn-F's coupled pinned body.
+- Active line control (`CONTROL`) of Syrope and viscoelastic segments and of finite-EI cables
+  restrained in torsion; composite Syrope lines (chain–polyester–chain).
+- Deck currents, prescribed motion, torsion and `TURBINES` rows on the standalone mixed
+  `EI = 0` + finite-EI deck; MoorDyn-C `Currents 2` and `5` (time-varying and gridded) on the
+  standalone routes, identical to MoorDyn-C v2.7.1 at 739 points and times.
+- C API host rotations (ABI 1.3, `CableDyn_InitDeckRotating`, `CableDyn_UpdateRotations`,
+  `CableDyn_GetCoupledMoments`), so torsion decks and `Rigid` end connections run there; Python
+  `init_deck_rotating`.
 
 ### Changed
 
-- Every Intel ifx build compiles CableDyn with the value-safe floating-point model,
-  `/fp:precise` (`-fp-model precise` off Windows): the static Windows release and wheel, every
-  other CMake build and configuration with ifx (with or without OpenMP, including the core that
-  the OpenFAST CMake route builds, and its adapter), and every configuration of the OpenFAST
-  Visual Studio project. The ifx default, `/fp:fast`, reassociates sums, divides by
-  multiplying with the reciprocal and flushes subnormals to zero, differently at every inlined
-  call site, so the gates that hold two routes to the same bits failed (a zero control command
-  against an uncontrolled cable, a held Coupled End B against a Fixed one, a committed against a
-  re-derived torque), subnormal deck values read as zero and the clamped-cable elastica secant
-  stalled. Results of ifx builds change at round-off; gfortran builds are unchanged.
-- The macOS wheel needs macOS 15 or newer on Apple silicon (0.3.0: macOS 14). It is built on
-  the macOS 15 runner, as GitHub retires the macOS 14 runner image on 2 November 2026, and its
-  Homebrew gfortran and OpenBLAS support no older macOS. On macOS 14, build from source.
-- With a `motionFile` or `vesselMotion`, the single-line finite-EI route writes `.static.out`
-  before it installs the first motion row, so the file holds the static solve; before, it showed
-  the fairlead already moved to row 1. A deck whose row 1 is off the deck fairlead changes
-  `.static.out` only (a 2 cm offset changed the fairlead x by 0.02 m and its tension from 3.5 MN
-  back to the static 29 kN); the example decks are unchanged.
-- Standalone `TURBINES` decks read the `END CONNECTIONS` direction `Ez` and torsion normal `Nx`
-  of an end on a `Turbine<J>` point in that turbine's axes, turned by its `PtfmInit` rotation at
-  the static start, as the FAST.Farm aggregate does (they were global). A deck whose turbines
-  start rotated and whose finite-EI lines carry end connections or torsion changes; on a clamped
-  line twisted 90 deg between turbines yawed +15 and -8 deg the standalone run now matches the
-  FAST.Farm aggregate to 8e-9 in every channel. Decks without a `PtfmInit` rotation, or without
-  end connections and torsion, are unchanged.
-- Standalone `TURBINES` motion rows turn the `END CONNECTIONS` and torsion frames of a finite-EI
-  line end on a `Turbine<J>` point with the row's rotation, angular velocity and acceleration (End A
-  and End B), as `vesselMotion` and the OpenFAST and FAST.Farm hosts do; they were held at their
-  start orientation while the end moved. A `TURBINES` deck whose rows rotate the turbines and whose
-  finite-EI lines carry end connections or torsion changes: a clamped line twisted 90 deg between
-  turbines that roll 10 deg in opposite senses over 1 s ends at 613.6 N m of torque (788.1 N m
-  before; the tensions change by under 5e-7) and matches the FAST.Farm aggregate to 3.4e-8 in every channel.
-  No example deck uses `TURBINES` rows; the examples are unchanged.
-- `TMax = 0` checks the static start of any dynamic deck as it stands: a `motionFile` or
-  `vesselMotion` record may run past `TMax` (its later rows are checked on the `dtM` grid and
-  not used, so a long record also serves a shorter run), and `RangeStart` is accepted at
-  `TMax = 0`, where the range graphs hold the `t = 0` row. A standalone deck without `TMax` that
-  asks for the march now says so: its error ends "to check a dynamic deck's static start only,
-  give dtM with TMax = 0".
-- Deck waves from a WaterKin elevation history (`WaveKinMod 1`) run two to four times faster.
-  Below the surface, the velocity and acceleration sums stop once the components still to come,
-  too short to reach that depth, cannot change them beyond round-off. On a 1024-element lazy-wave
-  cable over 300 s, a record at `dtWave` 0.25 s (600 components) runs in 103 s instead of 226 s,
-  and one at 0.1 s in 189 s instead of about 660 s, with output identical to the printed digits.
-  A `jonswap` sea changes at round-off.
-- An elevation record (WaterKin `WaveKinMod 1`) keeps only its Fourier components up to the new
-  `WvHiCOff` option, in rad/s as in SeaState, by default 0.5 Hz (MoorDyn-C's fixed cut for
-  `WaveKin 3`, which now follows the option too); `none WvHiCOff` keeps them up to the Nyquist
-  frequency of `dtWave`, as MoorDyn-F and earlier CableDyn did. A one-hour record at `dtWave`
-  0.1 s drops from 18,000 components to 1,800. On the 300 s lazy-wave case both records then run
-  in 72 s, and every output channel's standard deviation moves by at most 0.002 %. A record with
-  no component at or below the cut-off is refused by name.
-- Waves run faster under every compiler: the wave kinematics evaluate their phase sines and cosines
-  and depth exponentials in blocks of plain arithmetic that vectorise under any value-safe
-  floating-point model (`CableDyn_WaveMath`: one argument reduction for each sine-cosine pair,
-  polynomials, the power of two from its bits) in place of one library call per component, which ifx
-  makes under `/fp:precise`. At one thread, best of five, an irregular sea runs 31 to 33 % faster
-  with ifx (`chain_two_train_sea` 1.83 s to 1.22 s, `chain_torsethaugen_spread` 1.64 s to 1.13 s)
-  and 20 to 21 % faster with gfortran (4.09 s to 3.22 s, 3.56 s to 2.86 s); the VolturnUS line-break
-  decks 14 % (ifx, 31.0 s to 26.8 s) and 9 % (gfortran); `lazy_wave_vessel_rao` and
-  `lazy_wave_bend_stiffener` 9 % with ifx and within 1 % of before with gfortran; decks without
-  waves run as before. This recovers about two thirds of what `/fp:precise` cost the Windows release
-  (`chain_two_train_sea` +83 % over `/fp:fast` before, +24 % now). The sines and cosines are within
-  2.4 ulp (within 9e-26 next to their zeros) and the exponentials within 1.1 ulp of quadruple
-  precision, so wave decks change at round-off: 49 of the 53 example decks give identical files, two
-  lazy-wave decks differ by one unit in the last printed digit (7e-8 of a tension's scale), and in
-  the two VolturnUS line-break decks the drifting platform amplifies round-off after t = 860 s to
-  0.15 to 0.21 of the anchor-2 tension's scale, as much as the gfortran and ifx builds of the
-  unchanged code differ by.
-- Coupled OpenFAST runs start from the equilibrium in SeaState's steady current (`CurrMod 1`),
-  as standalone decks start in their `current` option, instead of from the still-water shape.
-  The current is evaluated at SeaState's vertical grid levels for the static solves only; the
-  dynamics take the SeaState field alone. On the IEA-15 MW mixed example in a 0.5 m/s cross
-  current, the lazy-wave cable starts 29 m across at its deepest monitored node and moves less
-  than 0.6 m over the first 30 s, where the still-water start has reached a third of that offset.
-  `CurrMod 2` and InflowWind currents keep the still-water start, with a note.
-- Syrope polyester lines take the seabed, Morison drag and added mass, deck current and waves,
-  a coupled host's fluid field, a `bathymetryFile` and VIV, as every `EI = 0` line does and as
-  MoorDyn's do; before, they ran without hydrodynamics and refused current, waves, host fluid
-  and bathymetry. The static initial condition includes the current's drag. A taut polyester
-  line whose fairlead sways 2 m in water matches MoorDyn-C's fairlead tension within 11 N on a
-  45 kN range (1.03 MN mean); without drag and added mass the range is 5 % larger.
-- Under a bend stiffener, `BendMom<L>N<J>` (and the `BendMoment` columns of the static profile,
-  range graphs and element file) report the cable's own moment, the line type's EI times the
-  curvature; lines without stiffeners are unchanged.
-- A run whose outputs name line nodes (`L<L>N<J>…`, `Ten<L>N<J>` and the other node channels, or a
-  LINES `Outputs` flag) notes that CableDyn numbers line nodes from 1 at End A while MoorDyn
-  numbers them from 0, so a MoorDyn deck's `N<J>` is CableDyn's `N<J+1>`, or `N<NumSegs+1-J>` on
-  a line written anchor-first. The numbering itself is unchanged; the outputs and migration pages
-  state it.
-- The run banner, README, manual, citation and package descriptions call CableDyn what it is: a
-  geometrically exact finite-element solver for the statics and dynamics of mooring lines and
-  dynamic power cables (its strain and curvature are the exact large-deformation measures), in
-  place of "geometrically nonlinear cable & mooring dynamics".
+- Coupled OpenFAST runs start from the equilibrium in SeaState's steady current (`CurrMod 1`)
+  instead of the still-water shape.
+- A finite-EI cable on the coupled aggregate (mixed decks, OpenFAST, FAST.Farm, the C API) steps
+  to the deck's `dynamic_solver` tolerance instead of a fixed 5e-3. The looser step gave wrong
+  tensions (a fairlead peak of 4.3e5 N against 1.9e4 N) and a coupled cable that did not damp
+  out its residual; the routes now agree to 5e-8 of the peak tension.
+- A finite-EI cable pinned to a light moving object is coupled implicitly in the multibody step
+  (it was explicit and diverged on light objects).
+- Waves: `WvHiCOff` (default 0.5 Hz) cuts an elevation record's components, and the wave
+  kinematics vectorise (irregular seas 20 to 33 % faster); `WaveKinMod 1` decks run two to four
+  times faster.
+- Every Intel ifx build uses the value-safe floating-point model (`/fp:precise`) and automatic
+  local variables; ifx results change at round-off.
+- Syrope lines take the seabed, Morison loads, current, waves, host fluid and VIV.
+- The macOS wheel needs macOS 15 or newer on Apple silicon.
+- `TURBINES` decks read and turn finite-EI end frames in each turbine's axes, as FAST.Farm does.
+- The CableDyn-enabled `openfast.exe` names itself `OpenFAST-v5.0.0-CableDyn-0.4.0`.
+- Speed: on the 51 example decks that 0.3.0 also runs, 0.4.0 is 6 % faster (geometric mean of
+  the per-deck times; gfortran, one thread), the wave decks 16 to 30 %. Two decks are slower for
+  the fixes above: `mixed_body_rods_points` 52 % (the implicit coupling of a pinned cable) and
+  `torsion_lazy_wave_hangoff_twist` 25 % (the nodal twist), and a coupled finite-EI cable step
+  costs about 38 % more (the deck tolerance).
 
 ### Fixed
 
-- A finite-EI cable pinned to a light moving object no longer throws it off its static start in
-  the monolithic multibody step. Such a cable (pinned at a Rigid6 body point or a free or pinned
-  rod end, the other end held) was stepped once per step with the predicted motion of its
-  attachment and its end force held through the iterations, an explicit coupling that diverges
-  once the cable's dynamic end stiffness times `dtM^2` exceeds about 0.85 of the object's mass
-  along the cable. It is now re-stepped at every outer iteration with its end stiffness in the
-  Newton matrix, as a clamped cable already was. A 3 t free rod spar with a 55 m cable (EA 5e8 N)
-  pinned at either rod end, at `dtM` 0.01 s: the cable tension rose from 11 kN past 1 MN in
-  0.7 s and the rod end moved 6.3 to 6.5 m in 2 s (5.4 m in a current, 6.1 m with the cable from
-  a fixed rod's end); it now holds to 2e-10 m and 3e-8 of the tension (6e-4 m in the current,
-  as on the staggered scheme), and the monolithic and staggered schemes agree to 2e-10 m. With a
-  1500 kg clump on that cable the rod moved 15 m in 3 s; it holds to 1.1e-6 m (`line_attachments`
-  11 and 12 march at `dtM` 0.01 s again). A 4 t buoy with a pinned keel cable moved 0.22 m and
-  its cable tension reached 38 times its start; it now holds to 1e-9 m. Decks with a pinned cable
-  on a heavy body change at the accuracy of the old coupling: on the `mixed_body_rods_points`
-  example (150 t buoy) the body motion changes by 3.5e-5 m, its error against a run at `dtM` / 4
-  falling from 3.7e-5 m to 1.6e-6 m, and the cable top tension by 0.6 N of 8.1 kN; that deck runs
-  about 45 % longer.
-- A finite-EI cable whose End A rests on the seabed below its End B (a cable written from a seabed
-  termination, such as a fixed rod's end, up to a floater) takes the catenary-continuation static
-  route again. Its catenary seed refused the line (the fairlead, End A, must sit above the bed),
-  so the mesh-sequenced route alone solved it, and its branch depended on platform round-off: a
-  55 m cable from a fixed rod's end on the seabed to a free spar rod solved on Windows and
-  reached a kinked state (max h kappa 1.96) on Linux gfortran, which failed the deck. The seed
-  is now laid from End A, the line seen from its other end, and its nodes put back in order. The
-  deck starts at the same equilibrium as before on Windows (1e-7 m, 6e-4 N), and moving the fixed
-  rod by 1 ulp either way or 1e-12 m up leaves the rod's start unchanged (0 m).
-- `CableDyn_Close` no longer pauses the OpenMP runtime of the whole process under the Intel and
-  LLVM OpenMP runtimes (ifx and other non-GNU builds with OpenMP). Every close called
-  `omp_pause_resource_all` (since 0.1.0) to join the calling thread's pool, a fix for GNU
-  OpenMP's process exit on MinGW-w64; libiomp5 and libomp pause the runtime of every thread
-  instead, so closing one handle paused the OpenMP of every other handle and of the host, and the
-  next parallel region on another thread deadlocked resuming it. An ifx build with OpenMP that
-  stepped a handle on a second thread after a close hung every time (the threading gate, 20 of
-  20 runs); it now passes 20 of 20 with 1 and with 4 OpenMP threads. GNU builds keep the pool join.
-- A non-static ifx build (a plain CMake build with ifx, or the core of the OpenFAST CMake route)
-  kept run-time-sized arrays and array temporaries on the stack, as only the static Windows
-  release compiled with `/heap-arrays`: the 2835-node mixed IEA-15 MW deck and a fine-mesh deck of
-  the statics matrix overflowed the 1 MiB stack of an MSVC-linked program. Every ifx build now
-  compiles with `/heap-arrays:1024` (`-heap-arrays 1024` off Windows), as the static release and
-  the OpenFAST Visual Studio project did; the static release is unchanged.
-- A finite-EI cable on the coupled aggregate (a mixed `EI = 0` + finite-EI standalone deck,
-  OpenFAST `CompMooring = 5`, FAST.Farm and the C API) stepped to a fixed relative Newton
-  tolerance of 5e-3 (200 iterations) whatever the deck's `dynamic_solver` row said, and its static
-  start to 1e-6; the same cable alone in a deck stepped to the deck's tolerance (default 1e-8, 30
-  iterations). Every route now takes the deck's `rel` and `max_iter` and the static tolerance
-  `min(1e-6, rel)`. A lazy cable beside a chain, both fairleads moved 3.5 m from rest: at
-  `rhoInf` 1, `dtM` 0.05 s the mixed route's fairlead tension peaked at 4.3e5 N (anchor 5.5e5 N)
-  against 1.9e4 N (2.1e3 N) for the cable alone; at `dtM` 0.1 s it fell to 8307 N against
-  10799 N and the fairlead bend moment rose to 1612 against 3.9 N m. The routes, and the C API,
-  OpenFAST and FAST.Farm builds driven through the same motion, now agree to 5e-8 of the peak
-  tension. The loose steps also made the coupled cable non-dissipative: held at both ends in still
-  water, the residual each step left grew at `rhoInf` 0.4 into a sustained oscillation (+-2.1 N on
-  1.5e4 N in 10 s on that cable; +-14 N at 8 Hz on 1.2e4 N on the IEA-15 MW mixed cable, also in
-  OpenFAST `CompMooring = 5`), and at `rhoInf` 1 a seeded march diverged; the held cable
-  now stays at its static tensions to 6e-5 N and a seeded one decays as on the single-line route.
-  On the default `rhoInf` 0.4 under motion the difference was 4.7e-4 of the anchor tension, and
-  the IEA-15 MW mixed example in a 60 s platform motion changes by 1.6e-6 of its cable tension.
-  Cost: a coupled cable step takes about 2.0 tangent factorisations instead of 1.1, and the
-  aggregate step of that example (chains included) 38 % more CPU time (the D03 deck: 19 %).
-- A held line under strong torque-tension coupling stays still in its dynamics. With
-  `K >= 0.85 sqrt(EA GJ)` (and at `-0.8` with one end free in torsion) a line in exact static
-  equilibrium failed its step within 0.05-0.9 s ("Newton did not converge, ||G|| = 2.4e-8 >
-  tol = 1e-8"): the round-off floor of the step's convergence norm took only the kernel's
-  `EA - K^2/GJ`, not the coupling's share of the axial force and of the torque. It now takes
-  both; at `K` up to `0.99 sqrt(EA GJ)` in either sense the held line holds at the default `dtM`
-  and tolerance (`torsion_coupling_still`), and lines with `|K| <= 0.8 sqrt(EA GJ)` step as before.
-- The static passes of a finite-EI cable restrained in torsion between two Rigid6 bodies
-  converge at every pretwist. They compared the change of the cable's end loads with 1e-10 of
-  their scale, below the resolution of the core's body balance (1e-9 of the bodies' net weight),
-  so at 360 deg (Rigid ends) and 300 deg (Pinned) they stalled near 2e-9 and the deck stopped,
-  with advice (`bodyIC deck`) that was not the remedy. They now stop at the resolution the core
-  leaves: the Rigid 360 deg case converges in 6 passes (torque 4886.24 N m), and the
-  pretwist sweep 120-720 deg of both end kinds converges (`torsion_body_passes`).
-- A lazy wave restrained in torsion starts in an in-plane current. In a 0.5 m/s current its
-  untwisted static state, solved in its vertical plane, is unstable out of that plane on its mesh
-  (one negative stiffness mode), which the deck without torsion accepts with a note; the torsion
-  stage refused the twisted state as unstable although the twist added no negative mode ("torsion
-  continuation stalled at Phi = 0 (target 0)" at pretwist 0, an unstable equilibrium after a
-  failed Newton solve at 360 deg). A twisted state with no more negative modes than its untwisted
-  one is now kept, and the note names the instability as the untwisted state's
-  (`torsion_current_start`). Its start also depended on the pretwist and on the round-off of the
-  BLAS kernel: the coarse branch-selection build of a line restrained in torsion twisted it, and
-  that twisted state seeded the untwisted solve on the deck mesh (pretwist 180 deg stopped in the
-  attachment polish, 360 deg needed the polish's fallbacks and stopped with
-  `OPENBLAS_CORETYPE=Prescott`); and each pass of the attachment fixed point after the first
-  applied the drag of the last twisted shape in full at the untwisted start (270 deg and more
-  stopped before any twist). The static helper builds now solve the untwisted line, and the
-  change of the attachment loads is ramped with the imposed twist: pretwists from 0 to 720 deg
-  start with the same torques on every kernel, proportional to the pretwist.
-- The "unresolved/kinked equilibrium" refusal names the element and the factor to refine its
-  section's `NumSegs` by.
-- Console messages that said something untrue now say what happens:
-  - OpenFAST: "SeaState wave/current kinematics drive the mooring hydro" is printed only when the
-    deck's `WaterKin` policy takes a SeaState component (a `WaterKin` file with `WaveKinMod 0` and
-    `CurrentMod 0` gives still water and says so);
-  - the body/rod static start reports the largest turn of a body or rod and the move of every
-    point the objects carry, so a pinned rod that only rotated no longer reads "largest move
-    0.000E+00 m";
-  - a mixed or FAST.Farm deck refused for a deck current names the input that declares it (the
-    `CurrentMod 1` table of its `WaterKin` file, or the `current` OPTION), not always "the current
-    OPTION";
-  - the torsion note reports the line's total twist `Twist<L>` at the static state, beside the
-    imposed `Pretwist(B) - Pretwist(A)` and with the end frames' turn (a `PtfmInit` or `TURBINES`
-    rotation) and the shape's geometric twist, not the pretwist alone;
-  - in FAST.Farm the time-step messages name the farm's `DT_Mooring`, not a "glue DT".
-- A standalone `TURBINES` deck that mixes `EI = 0` lines and finite-EI cables (a power cable
-  shared by two turbines beside their chain legs, the usual farm deck) runs. It stopped with the
-  internal message `no farm init was given (pass n_turbines + turbine_ref_pos)`: the mixed route
-  did not take the `TURBINES` rows. It now places the `Turbine<J>` points from them and moves the
-  points and turns the cable end frames with the per-turbine `motionFile` records, as the decks of
-  the cables alone and of the `EI = 0` lines alone do. The IEA 15 MW two-turbine deck (a 1530 m
-  cable restrained in torsion and four chains, 60 s of FAST.Farm platform motion) reproduces those
-  two decks to 3.2e-6 of the channel maxima and the FAST.Farm `Mod_SharedMooring = 5` run to
-  2.3e-5. On a two-turbine test deck whose turbines heave and roll, the chains match their deck
-  bit for bit and the cable, marched with the single-cable route's Newton controls, matches its
-  deck to 0.44 of the last printed digit. A `Turbine<J>` point in a run without a farm
-  (single-turbine OpenFAST, the C API) is now refused by point, naming FAST.Farm and the
-  `TURBINES` section.
-- A coupled deck with both bodies and rods stopped at init with `a coupled deck mixing RODs and
-  Rigid6/point3 bodies is not supported (the aggregate marches one body/rod family per step)`,
-  a limit the OpenFAST and capability pages did not state. The message now says what the coupled
-  route takes (bodies or rods, a rod fixed to a body counting as a rod) and where such a deck runs
-  (MoorDyn `CompMooring = 3`, the standalone driver); the OpenFAST, capability and troubleshooting
-  pages state the limit, and the Python validator (`caller_driven=True`) refuses the deck.
-- `FAST.Farm.exe` built through the CMake route of `integration/openfast` with the GNU compilers
-  on Windows stopped at start with `0xC00000FD` (stack overflow) while initialising the first
-  turbine: MinGW links it with a 2 MiB stack. The new patch `0022` gives `openfast.exe` and
-  `FAST.Farm.exe` a 256 MiB stack reserve on that toolchain, and the shared-mooring farm (two IEA
-  15 MW turbines) runs to normal termination.
-- A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
-  keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
-  every point with its id: a rod end POINT row listed before the body's points became the body's
-  first point, and the list overran its allocation (also in 0.3.0). A free body on three legs with
-  a pinned arm rod numbered 1, its tether on an explicit `Rod1B` POINT listed first, now writes
-  the outputs of the same deck with the arm as rod 3 bit for bit; before, the arm turned 172 deg
-  in pitch, the body 1.06 deg, and a leg tension moved 3.0 kN in 1 s.
-- The static start of a neutral finite-EI line whose length equals its span (straight at zero
-  strain, so with neither weight nor tension) failed with neutral `ATTACHMENTS` or with
-  attachments that only carry a drag area: the attachment polish stalled at the round-off of the
-  axial forces, 7.6e-8 N, against a tolerance of 1e-8 times the solver's 1 N force floor, at
-  every load step. For a line whose chord is at least its length the force scale of the
-  convergence test now includes that round-off floor over the tolerance
-  (`16 eps max(EA/L0) |x| / tol`, as on the `EI = 0` path), so these lines start straight and
-  unloaded, also between two moving ends, restrained in torsion at one or both ends, and with a
-  chord 1e-8 longer than the line (its 0.1 N tension to 2.2e-7 N); slack lines and lines that
-  carry weight or tension above the floor are unchanged.
-- The Newton tangent of the finite-EI static solve in a depth-profile current or a current grid
-  carries the current's gradient: the drag samples the current at the node positions, so it moves
-  with them. The drag part of the tangent now matches central differences of the residual to
-  8e-10 (before off by 5e-2 to 0.2 in sheared profiles). Newton takes up to a third fewer
-  iterations on a light cable in a strong shear (16 instead of 23); the equilibria are unchanged
-  within the solver tolerance.
-- The static start of an `EI = 0` line held above the still-water level kept the buoyancy of its
-  dry part, while the march (with `WtrDpth` or a bathymetry) gives that part its dry weight. The
-  start was not the march's equilibrium: a chain hung from 5 m above the surface onto the
-  seabed moved by 1e-3 of its fairlead load in the first step, and the coupled start differed
-  from the standalone one by 2.4e-4. The static solve now carries the dry weight (a fixed point
-  on the wetted lengths): the start holds to 1e-10, the two routes agree to 1.4e-8, and a
-  vertical chain's end loads sum to its weight to 1.5e-8 (before 1.4 % low). The force balance
-  of `Connect` and `Free` points and free bodies and rods takes the same dry weight: a 50 t
-  `Connect` point hung by two chains from 10 m above the surface holds its position to the
-  output's 8 digits over 2 s (before it sank 1.1e-2 m). There a finite-EI line, carried without
-  its bending stiffness, takes its dry weight with or without a seabed, as its cubic-Hermite
-  cable does: a stiff body with a light cable pinned 5 m above the surface on a deck without a
-  seabed holds its heave to 7e-6 m over 3 s (before it moved 2.8e-3 m), and an `EI = 0` chain
-  between that body 5 m above the surface and a `Connect` clump holds both to the output's 8
-  digits (before 5.5e-3 m). Lines below the surface are unchanged.
-- An `EI = 0` line above the still-water level on a deck without a seabed (no `WtrDpth` or
-  bathymetry) carries its dry weight, and its drag and added mass act on the wetted part only, as
-  with a seabed and as on a finite-EI line. It was modelled fully submerged up to an end above
-  the surface, with a warning: a 42 m chain hung wholly above the surface carried 13 % less than
-  its weight in air, a chain sagging through the surface differed by 7.7 % from the same deck
-  with a seabed, and a 50 t `Connect` clump hung above the surface started 2 cm off. The march,
-  the static start and the force balance of points and objects now take the dry weight; the
-  three agree with the seabed deck exactly and hold their start (`no_seabed_surface`). The
-  warning is gone. Lines wholly below the surface are unchanged.
-- `ATTACHMENTS` above the still-water level kept their buoyancy in the static start of a
-  finite-EI line, while the march loads them with their weight alone. A 500 kg, 0.2 m^3 module
-  3 m above the surface on a cable hung from 5 m above it moved the fairlead load by up to
-  6.1 % in the first second, and as much on the same cable restrained in torsion. The
-  attachment polish and the torsion stage after it now give each attachment the load of its side
-  of the surface (a fixed point that repeats the solve until none changes side); both starts
-  hold to the output's 8 digits. An attachment that its weight in air takes below the surface
-  and its weight in water above it (a net-buoyant module that would float) has no static
-  position and fails closed, naming the attachment that crossed the surface.
-- A bending-pinned finite-EI line with `ATTACHMENTS` from a Rigid6 body or a rod end left its
-  attachments out of the body static balance, which carries such a line as a cable without
-  bending stiffness: on a moored body with a 2 t clump 50 m along a pinned cable the body started
-  at the pose of the line without the clump and drifted by up to 2.9e-2 m and 0.20 deg in 5 s.
-  Such a line now takes the static passes of a connected end, which balance the body on the
-  cubic-Hermite cable's end loads; the body holds its pose to the output's 8 digits. Their
-  passes are Anderson-mixed, as those of a line between two objects, and the core cable of the
-  passes carries the line's `ATTACHMENTS` smeared, so the passes correct only the lumped,
-  side-of-the-surface and bending differences: on a free spar rod with a 1500 kg clump on a cable
-  pinned at its upper end the plain passes on a core cable without the clump diverged (the deck
-  stopped), and Anderson-mixed ones converged in 26 passes or stopped by round-off (a 1-ulp
-  change of an anchor coordinate; the Linux build stopped). They now converge in 6, the same
-  for those 1-ulp changes, and the rod holds its pose to 8 digits. The mixing drops history
-  columns that add less than 1e-6 of a new direction (1e-10 before), which had let round-off
-  columns drive the mixed loads to 1e6 N. Across a sweep of the rod deck (clump 0 to 4 t, cable
-  50 to 70 m, rod mass, clump position, start offsets, 1-ulp changes) 42 of 45 decks converge
-  (34 before), the three left with no stable equilibrium found on either core cable.
-- A bending-pinned finite-EI line on a Rigid6 body or a rod end without `ATTACHMENTS` was left to
-  the body static solve's cable without bending stiffness, whose end force lacks the bending's
-  share: a free spar rod with a 55 m pinned cable (EI 2e4 N m^2) started 5.7e-2 m off its
-  equilibrium, drifted 7e-2 m in 3 s and moved a leg tension by 2.3 %. Such a line now takes the
-  static passes too (4 here); the rod holds its pose to the output's 8 digits.
-- Diagnostic counts that concurrent models shared: the adaptive-substep fallbacks of an `EI = 0`
-  system and the assembly and modified-Newton counts of the finite-EI Cosserat solver were
-  process-wide (and lost increments without OpenMP); they are now kept per system and per solver
-  workspace. The count of finite-EI intervals recovered by substeps is reported only by the opt-in
-  run profile (`CABLEDYN_PROFILE`), whose figures stay process-wide by design; each model keeps its
-  own. No result changes.
-- A failing `OPEN` of a file name of about 600 characters or more (the extended-length spelling of
-  a path beyond the Windows limit) ended an ifx-built program or the wheel's DLL with
-  `STATUS_STACK_BUFFER_OVERRUN` inside the Intel Fortran run-time, for example an output root in
-  a folder that does not exist. Every `OPEN` of a user-supplied name now first asks the system
-  whether the file opens (`CD_Path_Openable`) and reports the failure without attempting the
-  `OPEN`; the messages are unchanged.
-- Concurrent steps of separate handles crashed the ifx builds with access violations: an `EI = 0`
-  line model passed its load and added-mass callbacks to the integrator as internal procedures,
-  and ifx calls such a closure through a trampoline kept in memory every thread shares, so two
-  threads stepping distinct models called each other's half-written trampolines (a 40-line
-  reproducer crashes with two threads under every ifx option). The model now hands its loads to
-  the integrator as an object (`CD_Cable_Step_Loads`); results are unchanged. Seven decks
-  stepped together on 28 threads (`c_api_threads_mixed`) failed every run before and pass 50 of
-  50.
-- Separate handles used on several threads at once failed in the Windows wheel and the release
-  binaries (Intel ifx without OpenMP): ifx kept the fixed-size local arrays and `CHARACTER` locals
-  of every procedure in static storage, which all threads share, so an initialisation that ran
-  while other handles stepped stopped with "tangent assembly failed" or "band scatter" errors
-  (gfortran builds were not affected: `-fopenmp` makes every local automatic). Every build now
-  makes local variables automatic, `/Qauto` (`-auto`) with ifx and `-frecursive` with gfortran,
-  which `-fopenmp` already implied, so the default gfortran build is unchanged, and so does every
-  configuration of the OpenFAST Visual Studio project (`LocalVariableStorage`). The release
-  benchmark decks run as fast or faster (0.3 to 21 %); ifx results change at round-off (with
-  `/fp:precise` every example is bit-identical).
-- In OpenFAST, Free Rigid6 bodies and Free, Pinned and CoupledPinned rods started their first
-  step from zero acceleration: the module restores its state mirror after the output call at
-  `t = 0`, which marked the objects' accelerations as committed before the start accelerations
-  were solved. They are now solved when the module initialises (and, before the first step, at a
-  committed step-start transfer and in new host fluid fields, so a SeaState current or wave starts
-  them in that field), and the line ends on a CoupledPinned object move with them.
-  An object in its static equilibrium changes at round-off (1e-12 m and 1e-6 deg over 10 s); one
-  started out of balance (`bodyIC deck`) changes by the first step's velocity error, 0.02 m/s and
-  0.05 deg for a hanging Pinned rod and up to 0.6 m/s for bodies and rods released far out of
-  balance. The committed host kinematics at the first step are those of the initial state, so a
-  host acceleration at `t = 0` enters neither version.
-- MoorDyn-F's `inertialF` option was an unknown keyword; `inertialF 1` (CableDyn's behaviour)
-  is now accepted, and `0` and `2` are rejected by name.
-- A Syrope line held at its running maximum (the fairlead pulled out and held) under
-  `False alpha_force_blend` stopped with "Syrope backward-Euler state solve did not converge":
-  next to the top sample of the working curve the Newton step's difference quotient straddled
-  the kink and crept along one side of the bracket. The solve now finishes by bisection there,
-  and where a light rope's steep residual (BA_s|BA_d = 1e4|1e3) changes sign between two
-  adjacent reals it returns that root to machine precision. Over 440,000 fuzzed states every
-  solve that converged before is bit-identical, and the 26 that failed now converge.
-- The static start of an `EI = 0` line now carries a deck current that is zero along the
-  straight chord between its ends but not where the line sags (a depth profile or a current
-  grid): it was solved in still water and the march drifted toward the current's equilibrium.
-  On a 70 m rope with its ends at z = -20 m in 0.8 m/s below z = -32 m the start now holds to
-  machine precision (it drifted 192 N in 4 s) and agrees with the finite-EI route within 0.14 %.
-  The static tangent takes the current's gradient along the line, so the Newton iteration also
-  converges in a current sheared across the line. A later `current` row now discards the levels
-  of an earlier profile row.
-- The modal analysis of finite-EI lines ignored the end connections and the discrete
-  attachments: a clamped end was solved pinned (the first twelve frequencies of the lazy wave
-  of `torsion_lazy_wave_hangoff_twist.dat`, untwisted, rise by 0.1 % to 3.8 % with its clamps)
-  and buoyancy modules had no mass (with `nModes`, the first six frequencies of
-  `lazy_wave_buoyancy_modules.dat` drop by 13 % to 29 %). The positions and translations of a
-  line with a heading are written in the deck's axes, not the line's.
-- A finite-EI line restrained in torsion whose bending-pinned End A is on a body or a rod is
-  refused on `bodyScheme staggered`, as a clamped End A is: that scheme passes cable ends as point
-  forces and held the torsion frame still while the body turned (a body could spin through +-180
-  deg); `bodyScheme monolithic` turns the frame with the body.
-- A deck with a WaterKin elevation history (`WaveKinMod 1`) at `TMax = 0`, a check of the static
-  start, reduces the record over its own length instead of failing for want of a positive
-  `TMax`.
-- Reading a WaterKin `WaveKinFile` no longer slows with the square of its length: the rows grow
-  by doubling instead of copying the whole record per row. A 10 s run on a 168,000-row record
-  took 107 s and now takes 3.5 s.
-- A weightless or near-neutral taut finite-EI line (a neutrally buoyant cable, a tendon) failed
-  its static solve, even straight along its chord: the convergence test scaled the residual by
-  the line's weight alone, far below the round-off of its axial forces. A taut line's scale now
-  includes the tension its stretched chord implies; slack lines are unchanged.
-- The anchor force of a finite-EI line resting on a sloped seabed (`bathymetryFile`). The floor
-  took the whole downward part of the end force, so a cable laid down the slope from its anchor
-  lost the down-slope pull: on a 10° slope `AnchTen` read 1.5 % low and `AnchFz`/`Point<P>Fz`
-  read 0. The floor now takes only the part pressing into it along its normal, and on a
-  frictional seabed the along-floor part of the end node's weight up to the friction it can
-  hold; flat seabeds are unchanged.
-- OpenFAST's native `<root>.CD.out` wrote a channel value below 1e-99 or from 1e100 on as a
-  field of asterisks (`ES15.6E2`): the round-off noise of a zero component, such as the y
-  position or tangent azimuth of a line in the x-z plane, broke every reader. Channel values now
-  have a three-digit exponent (`ES15.6E3`, same width). The mixed `EI = 0` + finite-EI `.out`,
-  the modal results, the static driver's mesh file and the OpenFAST module driver, which wrote
-  such values without the exponent letter, do too.
-- `openfast -restart` with a finite-EI cable continues the run bit for bit. The rebuild moved the
-  cable's fairlead to the restored input mesh, whose last bits differ from the boundary the
-  uninterrupted run committed, and the cable's `.CD.out` channels drifted by up to 1e-6
-  (relative) within seconds. The checkpoint now carries the cable's committed boundary.
-- A finite-EI line longer than its span with no net weight, or too little for its bending
-  stiffness (0.001 N/m on a 120 m line with `EI` 1e4 N m²), failed its static solve: both routes
-  reached the compressed straight strut or stalled at the round-off of the axial forces. Such a
-  line is now solved heavier and carried back to its own weight in the vertical plane of its
-  chord. A weightless line bows as the Euler elastica (end thrust and bow to 3e-5 of the exact
-  solution); nothing in the deck chooses the side of its bow, so it is solved bowed downward and
-  a note says so. With its ends one above the other it is still refused, by name.
-- A line along +X reported its tangent azimuth (`L<L>N<J>Azi`, the static profile's `Azimuth`)
-  at 0 or about 360 from one row to the next as it swayed a fraction of a degree to either
-  side, or by the sign of a round-off component: in OpenFAST about half the rows of a cable in
-  the x-z plane read 359.9x. A line whose chord heads within 45° of +X now reports its azimuths
-  in (−180, 180], every other line in [0, 360) as before.
-- The CableDyn-enabled `openfast.exe` named itself `OpenFAST-v5.0.0-dirty`: OpenFAST stamps its
-  version with `git describe --dirty`, and the integration patches modify the checkout. Built
-  through the Visual Studio solution or through CMake it now reads
-  `OpenFAST-v5.0.0-CableDyn-<CableDyn version>`, the describe of the unpatched OpenFAST base and
-  the CableDyn version, and the release build fails unless `openfast.exe -v` prints exactly that.
+- Thread safety of the Intel builds: concurrent handles crashed (shared closure trampolines,
+  static local storage), and `CableDyn_Close` paused the OpenMP runtime of the whole process.
+- Static starts that failed or depended on round-off: a cable whose End A rests on the seabed,
+  a lazy wave restrained in torsion in current (at any pretwist, on every BLAS kernel), torsion
+  between two bodies, neutral, weightless and straight lines, pinned and attachment-carrying
+  cables on bodies and rods.
+- Physics: an `EI = 0` line above the still-water level on a deck without a seabed was modelled
+  fully submerged (13 % light in air); lines and attachments above the surface now carry their
+  dry weight in the static start; the anchor force on a sloped seabed; the static start in a
+  sheared current; modal analysis with end connections and attachments.
+- OpenFAST: restarts with a finite-EI cable continue bit for bit; Free and pinned objects start
+  from their solved acceleration; channel values below 1e-99 no longer print as asterisks.
+- Stack overflows of non-static ifx builds and of `FAST.Farm.exe` built with MinGW, and a crash
+  of the ifx run-time on a failing `OPEN` of a long path.
+- Messages that said something untrue (SeaState kinematics, body/rod start moves, deck current
+  source, torsion twist, FAST.Farm `DT_Mooring`), and a coupled deck mixing bodies and rods now
+  says where it runs.
+
+### Upgrading
+
+- OpenFAST checkpoints written by 0.3.0 for decks with finite-EI lines restrained in torsion do
+  not reload.
+- Decks with torsion need the section's real polar inertia `Irn` (the column was unused).
+- Results change beyond round-off on decks with torsion, pinned cables on bodies, coupled
+  finite-EI cables (the tolerance), coupled runs in a SeaState current (the static start),
+  `TURBINES` decks with rotated turbines, elevation records with components above `WvHiCOff`,
+  and `EI = 0` lines above the surface without a seabed.
 
 ## [0.3.0] - 2026-10-23
 
@@ -1291,7 +681,8 @@ Corrections made during the pre-release review.
   values of the shipped example decks and states which tension (end element or
   `FairTen` end force) each comparison uses.
 
-[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.0
 [0.3.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.2.0
 [0.1.1]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.1.1

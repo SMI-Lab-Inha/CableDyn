@@ -1698,7 +1698,7 @@ CONTAINS
     CALL dry_recovery(q, f_dry)
     IF (ErrStat /= CD_STATIC_OK) RETURN
     ! fully submerged: no recovery, the solution stands as solved
-    IF (ALL(f_dry == CD_ZERO)) RETURN
+    IF (ALL(ABS(f_dry) <= CD_ZERO)) RETURN
     f_scale = MAXVAL(ABS(f_ext))
     n_it = report%n_iter
     DO k = 1, DRY_MAX

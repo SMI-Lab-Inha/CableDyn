@@ -25,7 +25,7 @@ CONTAINS
     CASE (1)
       s = ' ==================================================================='
     CASE (2)
-      s = '   CableDyn  v0.3.0'
+      s = '   CableDyn  v0.4.0'
     CASE (3)
       s = '   Geometrically exact finite-element statics and dynamics of'
     CASE (4)

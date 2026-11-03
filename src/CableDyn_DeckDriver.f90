@@ -26815,6 +26815,7 @@ CONTAINS
         CYCLE
       END IF
       unstable = .FALSE.
+      kbad = 0
       IF (MAXVAL(ABS(r)) <= 1.0e-6_wp*sc) unstable = .NOT. equilibrium_stable(kbad)
       IF (phase == 1 .AND. (unstable .OR. MAXVAL(ABS(r)) > 1.0e-6_wp*sc) .AND. ANY(ndof(1:nobj) > 3)) THEN
         phase = 2
@@ -27794,7 +27795,7 @@ CONTAINS
           CALL CD_Static_Line_Dry_Load(q, lc(jl)%conn, lc(jl)%l0, lc(jl)%dry_wl, opts%rhoW, opts%g, lc(jl)%dry_d, &
                                        f_dry, es_l, em_l)
           IF (es_l /= CD_STATIC_OK) conv = .FALSE.
-          IF (conv .AND. ANY(f_dry /= CD_ZERO)) THEN
+          IF (conv .AND. ANY(ABS(f_dry) > CD_ZERO)) THEN
             conv = .FALSE.
             DO kd = 1, 50
               q_prev = q
@@ -28135,7 +28136,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ext_fm(:, :), new_fm(:, :), fs(:, :), ext_km(:, :, :), ext_rot(:, :, :)
     REAL(wp), ALLOCATABLE :: new_km(:, :, :), new_rot(:, :, :), fsb(:, :)
     INTEGER :: j, pa, e, pass, ncl, eworst, pb, ne, nb
-    LOGICAL :: only_points, held
+    LOGICAL :: only_points, held, on_object
     ! the passes are Anderson-mixed (lines between two objects, pinned lines with ATTACHMENTS)
     LOGICAL :: mix
     ! the lines the core solve carries (lines_core: with or without their ATTACHMENTS), the
@@ -28167,7 +28168,9 @@ CONTAINS
         IF (.NOT. line_is_finite_ei(lines(j), types, sections)) CYCLE
         pb = find_point(points, lines(j)%nodeB)
         IF (pb > 0) THEN
-          IF (starts_with(TRIM(points(pb)%ptype), 'body') .OR. is_rod_point_type(points(pb)%ptype)) THEN
+          on_object = starts_with(TRIM(points(pb)%ptype), 'body')
+          IF (.NOT. on_object) on_object = is_rod_point_type(points(pb)%ptype)
+          IF (on_object) THEN
             cl = [cl, j]
             clb = [clb, j]
             CYCLE
@@ -28201,8 +28204,11 @@ CONTAINS
         REAL(wp) :: rclamp(3, 3), dclamp(3)
         IF (connected_end(cl(e), .FALSE.)) &
           CALL clamp_object_frame(lines(cl(e)), points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg)
-        IF (ErrStat == CD_DECKDRV_OK .AND. connected_end(cl(e), .TRUE.)) &
-          CALL clamp_object_frame(lines(cl(e)), points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, end_b=.TRUE.)
+        IF (ErrStat == CD_DECKDRV_OK) THEN
+          IF (connected_end(cl(e), .TRUE.)) &
+            CALL clamp_object_frame(lines(cl(e)), points, bodies, rods, rclamp, dclamp, ErrStat, ErrMsg, &
+                                    end_b=.TRUE.)
+        END IF
       END BLOCK
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END DO
@@ -28275,6 +28281,10 @@ CONTAINS
         ext_rot(2, 2, e) = CD_ONE
         ext_rot(3, 3, e) = CD_ONE
       END DO
+      ! defined if no pass runs (the passes then report that they did not converge)
+      scale = CD_ONE
+      change = HUGE(CD_ONE)
+      eworst = 1
       DO pass = 1, max_pass_eff
         bodies = bodies0
         rods = rods0
@@ -28461,7 +28471,9 @@ CONTAINS
       yes = .FALSE.
       ip = find_point(points, MERGE(lines(jl)%nodeB, lines(jl)%nodeA, at_b))
       IF (ip < 1) RETURN
-      IF (.NOT. (starts_with(TRIM(points(ip)%ptype), 'body') .OR. is_rod_point_type(points(ip)%ptype))) RETURN
+      IF (.NOT. starts_with(TRIM(points(ip)%ptype), 'body')) THEN
+        IF (.NOT. is_rod_point_type(points(ip)%ptype)) RETURN
+      END IF
       yes = lines(jl)%endconn_mode(MERGE(2, 1, at_b)) /= CD_ENDCONN_PINNED .OR. &
             MERGE(line_torsion_at_b(lines(jl)), line_torsion_at_a(lines(jl)), at_b)
     END FUNCTION connected_end
@@ -38207,7 +38219,8 @@ CONTAINS
     !! multibody march, which checks the object).
     CHARACTER(*), INTENT(IN) :: ptype
     ok = TRIM(ptype) == 'fixed' .OR. TRIM(ptype) == 'coupled' .OR. TRIM(ptype) == 'vessel' .OR. &
-         starts_with(TRIM(ptype), 'body') .OR. is_rod_point_type(ptype)
+         starts_with(TRIM(ptype), 'body')
+    IF (.NOT. ok) ok = is_rod_point_type(ptype)
   END FUNCTION end_b_holds_frame
 
   LOGICAL FUNCTION endpoint_type_supported_dynamic(ptype) RESULT(ok)

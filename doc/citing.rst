@@ -37,7 +37,7 @@ Software release
 ----------------
 
 Seo, J. H. (2026). *CableDyn: Geometrically exact finite-element statics and dynamics of
-mooring lines and dynamic power cables for floating offshore wind* (version 0.3.0) [Computer
+mooring lines and dynamic power cables for floating offshore wind* (version 0.4.0) [Computer
 software]. https://github.com/SMI-Lab-Inha/CableDyn
 
 .. code-block:: bibtex
@@ -46,14 +46,14 @@ software]. https://github.com/SMI-Lab-Inha/CableDyn
      author  = {Seo, Jae Hoon},
      title   = {{CableDyn}: Geometrically exact finite-element statics and dynamics of mooring
                 lines and dynamic power cables for floating offshore wind},
-     version = {0.3.0},
+     version = {0.4.0},
      year    = {2026},
      url     = {https://github.com/SMI-Lab-Inha/CableDyn},
      license = {Apache-2.0}
    }
 
 When results depend on a particular release, quote the version reported in the solver banner
-(``CableDyn v0.3.0``) together with the options recorded for the run.
+(``CableDyn v0.4.0``) together with the options recorded for the run.
 
 Relation to the journal article
 -------------------------------

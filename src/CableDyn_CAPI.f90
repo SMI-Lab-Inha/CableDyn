@@ -78,10 +78,10 @@ MODULE CableDyn_CAPI
   INTEGER(C_INT), PARAMETER :: CD_C_SOLVE_FAIL = 4_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_NOT_INITIALIZED = 5_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_VERSION_MAJOR = 0_C_INT
-  INTEGER(C_INT), PARAMETER :: CD_C_VERSION_MINOR = 3_C_INT
+  INTEGER(C_INT), PARAMETER :: CD_C_VERSION_MINOR = 4_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_VERSION_PATCH = 0_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_ABI_VERSION = 1_C_INT
-  CHARACTER(*), PARAMETER :: CD_C_VERSION_STRING = 'CableDyn 0.3.0 C-ABI 1'
+  CHARACTER(*), PARAMETER :: CD_C_VERSION_STRING = 'CableDyn 0.4.0 C-ABI 1'
   !> Minor extension level of ABI 1: 1 adds the in-process object queries, 2 the host-coupling
   !> calls (initialization at host positions, state save/restore, the coupled layout query), 3
   !> the host rotations (initialization for a host that turns its coupled points, their
@@ -2000,7 +2000,7 @@ CONTAINS
                       'with CableDyn_InitDeckRotating)', err_stat)
       RETURN
     END IF
-    IF (n_block < 0_C_INT .OR. n_block > HUGE(n_block)/9_C_INT) THEN
+    IF (n_block < 0_C_INT .OR. 9_INT64*INT(n_block, INT64) > INT(HUGE(n_block), INT64)) THEN
       CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateRotations: n_block does not match '// &
                       'CableDyn_NCoupledDOF / 3', err_stat)
       RETURN
