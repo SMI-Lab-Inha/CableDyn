@@ -12,7 +12,7 @@ LAPACK are those of [v0.3.0](RELEASE_0_3_0.md); the OpenFAST patch set grows fro
 | Item | Value |
 | --- | --- |
 | CableDyn | `0.4.0` (2026-11-04), C ABI 1, minor extension 3 |
-| Source | The release-preparation tree (`release/0.4.0` at `8e40e33`): dev with #50 to #85 and the version, documentation, test-build and Python deck-model changes of the release. The assets and the Windows gates were produced from this tree; afterwards only this record changed, which no build reads. The local CTest, Debug and kernel-sweep runs below used `edd0d62`; the two later commits change only `doc/conf.py` and the Python deck model, whose suite was re-run at `8e40e33` |
+| Source | The release-preparation tree (`release/0.4.0` at `476e2c5`): dev with #50 to #85 and the version, documentation, test-build, driver output-guard and Python changes of the release. The assets and the Windows gates were produced from this tree; afterwards only this record changed, which no build reads. The Debug CTest, the kernel sweep and the bodies suite below used `edd0d62`, the Release CTest `79760e0` (the driver output guard); the later commits change only the Python package, whose suite was re-run at `476e2c5` |
 | OpenFAST base | `2895884d2be01862173c88d70f86b358d2f1a50a`; the 22 patches of [`integration/openfast/patches`](../integration/openfast/patches) applied to a clean checkout by `prepare_openfast_source.ps1` |
 | OpenFAST r-test | `dd5feaaaa500ba7283140107806300d551cff0a7` |
 | Reference LAPACK/BLAS | 3.12.1, release-tag archive with SHA-256 `2ca6407a001a474d4d4d35f3a61550156050c48016d949f0da0529c0aa052422`, built with IFX for x86-64-v3 (`/fp:precise /arch:CORE-AVX2`) |
@@ -31,10 +31,10 @@ LAPACK are those of [v0.3.0](RELEASE_0_3_0.md); the OpenFAST patch set grows fro
 
 | Gate | Result |
 | --- | --- |
-| GNU Release CTest, including the slow tier (Windows, local, fresh build directory) | 359 of 359 passed on the release tree; 0 compiler warnings |
+| GNU Release CTest, including the slow tier (Windows, local; a fresh build directory at `edd0d62`, rebuilt at `79760e0`) | 359 of 359 passed at both; 0 compiler warnings |
 | GNU Debug CTest (`-fcheck=all`), including the slow tier (Windows, local, fresh build directory) | 359 of 359 passed; 0 compiler warnings |
 | Round-off fragility (GNU Release build of the release tree on the OpenBLAS kernels Prescott, Nehalem, Sandybridge, Haswell, SkylakeX and Zen, through `OPENBLAS_CORETYPE`) | on each kernel the full CTest passes 359 of 359, the two kernel-pinned tests (`openfast_touchdown`, `hermite_node_reaction`) pass unpinned, and all 53 shipped example decks run with no fallback, stall or relaxed-tolerance note and the same exit status |
-| Python package tests (local, native library and driver of the release tree) | 2163 passed, 47 skipped (platform- and tool-dependent cases) |
+| Python package tests (local, native library and driver of the release tree) | 2167 passed, 47 skipped (platform- and tool-dependent cases) |
 | CI matrix of #85 (the last change before the release tree) | Linux and Windows, Release and Debug; Python on three platforms with coverage and strict type checks |
 | Sphinx documentation (`-W -n`) | built with no warnings |
 | pre-commit, all files | passed |
@@ -48,7 +48,7 @@ LAPACK are those of [v0.3.0](RELEASE_0_3_0.md); the OpenFAST patch set grows fro
 ## Windows executable gates
 
 Every gate of `build_static_windows.ps1` passed in the release workflow (`release-windows-static.yml`,
-run 41687653164). The smoke runs used a system-only `PATH`.
+run 41709562272). The smoke runs used a system-only `PATH`.
 
 | Gate | Result |
 | --- | --- |
@@ -76,23 +76,23 @@ environment, where it imports as 0.4.0 and runs the release driver. All 12 check
 
 The PyPI distribution is built by `.github/workflows/wheels.yml`; each wheel is installed into a
 clean environment and smoke-tested on its own platform (the library and the driver it carries
-load and run a deck, and the driver reports the expected build). The preflight run (41687659235)
+load and run a deck, and the driver reports the expected build). The preflight run (41709568758)
 built the files below; the release run rebuilds them from the tag before the upload. The 0.4.0
 dry run through TestPyPI installed the Windows wheel into a new environment and passed the same
 smoke test.
 
 | File | SHA-256 (preflight) |
 | --- | --- |
-| `cabledyn-0.4.0.tar.gz` | `8a007c0f0b9f5e5de5bf63465c7473adfc2412d5825fa018782865783bdc24b7` |
-| `cabledyn-0.4.0-py3-none-win_amd64.whl` | `1058350e848459c19d1053f5561bb1f71eac4f7c7be9adcd2d799eb9917ed050` |
-| `cabledyn-0.4.0-py3-none-macosx_15_0_arm64.whl` | `c1b3c45c6282d1032312fd53fdba526324efb8056de88f2f6aa9f2c054972371` |
-| `cabledyn-0.4.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl` | `c0a5e8b8748598771b5f7962c1b1f634f9293303f3473bbed080ea68d3da14fb` |
+| `cabledyn-0.4.0.tar.gz` | `ad0e5e10fd7d6c8ed2788bc58f6d2328500bad16eb1d39984521b461a4a777a8` |
+| `cabledyn-0.4.0-py3-none-win_amd64.whl` | `bd08167a311ed1098dbf63052547d922275b46b055c31a220a80d1fcc819e3dc` |
+| `cabledyn-0.4.0-py3-none-macosx_15_0_arm64.whl` | `390759cb3b15fc2f86a4d6d21f6d9ae24fc765d54f91be9dac608e4fe866bf7a` |
+| `cabledyn-0.4.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl` | `d35868bdda8a07bdc052b1372b60e88bf788087e3c5eca01400d357fed328839` |
 
 ## Assets
 
 | File | SHA-256 |
 | --- | --- |
-| `CableDyn_driver.exe` | `65c7b30790e447ba1b8bf000451d37c07c103e00b0d6bba6f474817c982a58bf` |
-| `openfast.exe` | `79942e44a9d7fc8e98c64baf1fc90dd8c724f690388b4c7cc880528c96965682` |
-| `cabledyn-0.4.0-py3-none-any.whl` | `bf8867075b0988c722237083a5103f82ad4301ba426c5ebe60faf1a013f85d58` |
-| `cabledyn-0.4.0.tar.gz` | `46a4e3d56c8ed60d7c9bf8510482aa9619995acaff6b5004ae434ade4bd09385` |
+| `CableDyn_driver.exe` | `470c07fbcbd293b0b38012eb3a55ee919604736b6e6eef13c7900a77fe251502` |
+| `openfast.exe` | `02ca8ffd36ecc9a5d47b58df6c028878683dd8e41837bb84c9bc22116980fa77` |
+| `cabledyn-0.4.0-py3-none-any.whl` | `c43a37581377699e0337f2178953d33905477ce4beff810dbbb6cfcfb07ea4a9` |
+| `cabledyn-0.4.0.tar.gz` | `20398e8cee8fe35547b5f7064470ff9172adeb2dcc9af8ffff1a9013dd6c1bfa` |
