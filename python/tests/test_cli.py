@@ -116,6 +116,42 @@ def test_successful_overwrite_replaces_and_removes_stale_auxiliary_files(
     assert not list(deck.parent.glob(".base.previous-*"))
 
 
+_LIFT_RANGE_MODES = ("base.Line1.V.out", "base.Line2.range.out", "base.modes.out")
+
+
+def test_failed_overwrite_restores_lift_range_and_modal_outputs(fake_driver, deck, monkeypatch):
+    driver = CableDynDriver(fake_driver)
+    driver.run(deck, "base")
+    previous = {}
+    for name in _LIFT_RANGE_MODES:
+        (deck.parent / name).write_text(f"previous {name}\n", encoding="ascii")
+        previous[name] = (deck.parent / name).read_bytes()
+
+    def fails_after_writing(*args, **kwargs):
+        # the run writes partial lift, range and modal files over the previous ones, then fails
+        for name in _LIFT_RANGE_MODES:
+            (deck.parent / name).write_text("partial", encoding="ascii")
+        return subprocess.CompletedProcess(args[0], 3, "", "CableDyn_driver: synthetic failure")
+
+    monkeypatch.setattr(subprocess, "run", fails_after_writing)
+    with pytest.raises(DriverExecutionError):
+        driver.run(deck, "base", overwrite=True)
+    assert {name: (deck.parent / name).read_bytes() for name in _LIFT_RANGE_MODES} == previous
+    assert not list(deck.parent.glob(".base.previous-*"))
+
+
+def test_successful_overwrite_removes_stale_lift_range_and_modal_outputs(
+    fake_driver, deck, monkeypatch
+):
+    driver = CableDynDriver(fake_driver)
+    driver.run(deck, "base")
+    for name in _LIFT_RANGE_MODES:
+        (deck.parent / name).write_text(f"previous {name}\n", encoding="ascii")
+    driver.run(deck, "base", overwrite=True)
+    assert not [name for name in _LIFT_RANGE_MODES if (deck.parent / name).exists()]
+    assert not list(deck.parent.glob(".base.previous-*"))
+
+
 def test_interrupted_overwrite_restores_previous_results(fake_driver, deck, monkeypatch):
     driver = CableDynDriver(fake_driver)
     driver.run(deck, "base")

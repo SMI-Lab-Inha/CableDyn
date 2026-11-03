@@ -384,16 +384,27 @@ def _merged_environment(overrides: Mapping[str, str]) -> dict[str, str]:
 
 
 def _result_files(root: Path) -> list[Path]:
-    """Return every existing native result file of ``root``."""
-    candidates = [Path(f"{root}.{suffix}") for suffix in ("out", "static.out", "elements.out")]
-    candidates.extend(_auxiliary_outputs(root, "Line"))
+    """Return every existing native result file of ``root``.
+
+    These are the files a run with ``overwrite`` moves aside and restores: every name the
+    driver writes under the root, the VIV lift (``.Line<L>.V.out``), range
+    (``.Line<L>.range.out``) and modal (``.modes.out``) outputs included.
+    """
+    fixed = ("out", "static.out", "elements.out", "modes.out")
+    candidates = [Path(f"{root}.{suffix}") for suffix in fixed]
+    candidates.extend(_auxiliary_outputs(root, "Line", r"(?:[pt]|V|range)"))
     candidates.extend(_auxiliary_outputs(root, "Rod"))
     return [path for path in candidates if path.is_file()]
 
 
-def _auxiliary_outputs(root: Path, object_name: str) -> tuple[Path, ...]:
-    """Find literal ``<root>.<object_name>*.out`` files without glob expansion."""
-    flag = {"Line": "[pt]", "Rod": "p"}[object_name]
+def _auxiliary_outputs(root: Path, object_name: str, flag: str | None = None) -> tuple[Path, ...]:
+    """Find literal ``<root>.<object_name>*.out`` files without glob expansion.
+
+    ``flag`` is the regular expression of the part before ``.out``; by default the
+    node-position and tension files (``p``/``t`` for lines, ``p`` for rods).
+    """
+    if flag is None:
+        flag = {"Line": "[pt]", "Rod": "p"}[object_name]
     pattern = re.compile(rf"{re.escape(root.name)}\.{object_name}-?\d+\.{flag}\.out")
     return tuple(
         sorted(
