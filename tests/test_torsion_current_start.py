@@ -30,6 +30,7 @@ import argparse
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -64,18 +65,27 @@ def main() -> int:
     )
     failures = []
     torques = {}
-    for pretwist in ("0", "180", "360", "720"):
+    pretwists = ("0", "180", "360", "720")
+    for pretwist in pretwists:
         deck = out / f"lw_current_twist{pretwist}.dat"
         deck.write_text(deck_text(base, pretwist), encoding="utf-8", newline="\n")
         if "uniform 0.5 0 0 current" not in deck.read_text(encoding="utf-8"):
-            failures.append("the deck edit did not place the current")
-            continue
-        p = subprocess.run(
-            [args.exe, str(deck), str(out / f"lw_current_twist{pretwist}")],
+            print("FAIL: the deck edit did not place the current")
+            return 1
+
+    def run(pretwist: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [args.exe, str(out / f"lw_current_twist{pretwist}.dat"), str(out / f"lw_current_twist{pretwist}")],
             capture_output=True,
             text=True,
             check=False,
         )
+
+    # the four runs are independent: concurrently, so a Debug build stays within the test's timeout
+    with ThreadPoolExecutor(max_workers=len(pretwists)) as pool:
+        runs = dict(zip(pretwists, pool.map(run, pretwists)))
+    for pretwist in pretwists:
+        p = runs[pretwist]
         log = p.stdout + p.stderr
         solved = "torsion solved" in log
         named = "keeps the instability of its untwisted state" in log

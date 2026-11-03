@@ -1812,7 +1812,7 @@ if(Python3_Interpreter_FOUND)
                    --output ${CMAKE_BINARY_DIR}/torsion_current_start)
   set_tests_properties(torsion_current_start PROPERTIES
     LABELS "python;driver;integration;static"
-    TIMEOUT 600
+    TIMEOUT 900
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
   add_test(NAME body_rod_numbering
