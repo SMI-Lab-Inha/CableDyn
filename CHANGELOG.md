@@ -96,8 +96,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Output files: the driver refuses an output root whose `.modes.out` or `.Line<N>.V.out` would
   overwrite an input; the Python `overwrite` run keeps aside and restores the `.V.out`,
   `.range.out` and `.modes.out` files as well (an existing one now needs `overwrite`);
-  `read_output` reads a `.V.out` lift file; renaming a line in `DeckModel` carries its
-  `CurvX`/`CurvY` channels.
+  `read_output` reads a `.V.out` lift file; a study refuses a case name such as
+  `base.Line1.V`, `base.Line1.range` or `base.modes` beside a case `base`; renaming a line in
+  `DeckModel` carries its `CurvX`/`CurvY` channels.
 
 ### Upgrading
 

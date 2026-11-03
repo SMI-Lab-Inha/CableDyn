@@ -37,7 +37,9 @@ _COMPANION_FILES = frozenset(
         "current_profile_4d.txt",
     }
 )
-_OUTPUT_SUFFIX = re.compile(r"\.(?:static|elements|Line\d+\.[pt]|Rod-?\d+\.p)$", re.IGNORECASE)
+_OUTPUT_SUFFIX = re.compile(
+    r"\.(?:static|elements|modes|Line-?\d+\.(?:[pt]|V|range)|Rod-?\d+\.p)$", re.IGNORECASE
+)
 
 
 def _sha256(path: Path) -> str:

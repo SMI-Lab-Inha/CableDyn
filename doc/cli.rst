@@ -1145,7 +1145,8 @@ remaining cases.
 **Preflight.** Before any solver process starts, the command verifies the manifest schema, that
 the source deck and every generated deck exist and match their recorded SHA-256, that case names
 are safe and unique and deck paths distinct, that no case name collides with the output files
-of another case (for example ``base`` and ``base.static``), and the option values above. It
+of another case (for example ``base`` and ``base.static``, ``base.modes``, ``base.Line1.V`` or
+``base.Line1.range``), and the option values above. It
 refuses a non-empty output directory without ``--overwrite``, locates the driver, records its
 SHA-256, and queries its ``--version`` banner (10 s limit).
 

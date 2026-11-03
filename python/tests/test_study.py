@@ -227,7 +227,18 @@ def test_study_preserves_zero_exit_invalid_output_as_postprocess_failure(tmp_pat
     assert good.status == "completed"
 
 
-@pytest.mark.parametrize("derived", ["base.static", "BASE.elements", "base.Line2.t", "base.Rod1.p"])
+@pytest.mark.parametrize(
+    "derived",
+    [
+        "base.static",
+        "BASE.elements",
+        "base.modes",
+        "base.Line2.t",
+        "base.Line1.V",
+        "base.Line3.range",
+        "base.Rod1.p",
+    ],
+)
 def test_study_rejects_case_names_that_alias_another_cases_outputs(tmp_path, derived):
     manifest = _case_manifest(tmp_path, ("base", derived))
     driver = _driver(tmp_path)
