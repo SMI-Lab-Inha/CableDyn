@@ -338,13 +338,12 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
      - ``1e-8 1e-14 30 12``
      - ``rel`` and ``abs`` finite and > 0; ``max_iter`` an integer ≥ 1; ``backtracks`` an integer
        ≥ 0; the optional sixth token sets ``rhoInf`` (same range). ``EI = 0`` dynamic solves
-       use all four controls. A standalone finite-EI (Hermite) deck uses only ``rel`` and
-       ``max_iter`` for each step (``abs`` and ``backtracks`` are ignored on this route) and
-       converges its static equilibrium to at least ``min(1e-6, rel)``. Finite-EI cables in
-       OpenFAST and in mixed ``EI = 0`` + finite-EI standalone decks do not read ``rel``,
-       ``abs``, ``max_iter`` or ``backtracks``: they use a fixed step tolerance (relative
-       ``5e-3``, 200 Newton iterations) and a ``1e-6`` static tolerance; only the optional
-       ``rhoInf`` token applies to them. Use controls qualified for
+       use all four controls. A finite-EI (Hermite) cable uses only ``rel`` and ``max_iter``
+       for each step (``abs`` and ``backtracks`` are ignored on this route) and converges its
+       static equilibrium to at least ``min(1e-6, rel)``, on every route: alone in a standalone
+       deck, in a mixed ``EI = 0`` + finite-EI standalone deck, in OpenFAST
+       (``CompMooring = 5``), in FAST.Farm and behind the C API, so a cable driven by the same
+       motion steps to the same state on each. Use controls qualified for
        the mesh and load case; the maintained 952-element Gulf of Maine cable uses
        ``1e-4 1e-14 100 12``
      - both (see rules)

@@ -10,11 +10,11 @@
 !>     alone on the standalone cubic-Hermite route and beside a moving EI = 0 chain on the mixed
 !>     route. Torq, Twist and the mid-line node agree to the printed precision of the .out
 !>     (8 digits), the fairlead and anchor tension, fairlead inclination and End A bend moment
-!>     (the Rigid clamp turns with the vessel on both routes) to 5e-5 of their range: the
-!>     coupled cables step with the coupled Newton controls (relative tolerance 5e-3, a fresh
-!>     factor every step), the standalone line with the deck's (1e-8, a carried factor). With
-!>     the aggregate cables given the standalone controls the mixed route reproduces every
-!>     channel of the standalone route to the printed precision. The same chain moved by a
+!>     (the Rigid clamp turns with the vessel on both routes) to 5e-5 of their range: both step
+!>     to the deck's Newton tolerance (1e-8), the coupled cables with a fresh factor every step,
+!>     the standalone line with a carried factor. With the aggregate cables given the carried
+!>     factor too the mixed route reproduces every channel of the standalone route to the
+!>     printed precision. The same chain moved by a
 !>     motionFile of the same point translations holds the frames: the End A bend moment and
 !>     the twist then differ from the turning-vessel run (the rotation is not dropped).
 !>  2. A motionFile surge with a roll column (End A rolls 20 deg about its director, from

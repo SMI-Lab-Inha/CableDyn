@@ -432,6 +432,25 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the statics matrix overflowed the 1 MiB stack of an MSVC-linked program. Every ifx build now
   compiles with `/heap-arrays:1024` (`-heap-arrays 1024` off Windows), as the static release and
   the OpenFAST Visual Studio project did; the static release is unchanged.
+- A finite-EI cable on the coupled aggregate (a mixed `EI = 0` + finite-EI standalone deck,
+  OpenFAST `CompMooring = 5`, FAST.Farm and the C API) stepped to a fixed relative Newton
+  tolerance of 5e-3 (200 iterations) whatever the deck's `dynamic_solver` row said, and its static
+  start to 1e-6; the same cable alone in a deck stepped to the deck's tolerance (default 1e-8, 30
+  iterations). Every route now takes the deck's `rel` and `max_iter` and the static tolerance
+  `min(1e-6, rel)`. A lazy cable beside a chain, both fairleads moved 3.5 m from rest: at
+  `rhoInf` 1, `dtM` 0.05 s the mixed route's fairlead tension peaked at 4.3e5 N (anchor 5.5e5 N)
+  against 1.9e4 N (2.1e3 N) for the cable alone; at `dtM` 0.1 s it fell to 8307 N against
+  10799 N and the fairlead bend moment rose to 1612 against 3.9 N m. The routes, and the C API,
+  OpenFAST and FAST.Farm builds driven through the same motion, now agree to 5e-8 of the peak
+  tension. The loose steps also made the coupled cable non-dissipative: held at both ends in still
+  water, the residual each step left grew at `rhoInf` 0.4 into a sustained oscillation (+-2.1 N on
+  1.5e4 N in 10 s on that cable; +-14 N at 8 Hz on 1.2e4 N on the IEA-15 MW mixed cable, also in
+  OpenFAST `CompMooring = 5`), and at `rhoInf` 1 a seeded march diverged; the held cable
+  now stays at its static tensions to 6e-5 N and a seeded one decays as on the single-line route.
+  On the default `rhoInf` 0.4 under motion the difference was 4.7e-4 of the anchor tension, and
+  the IEA-15 MW mixed example in a 60 s platform motion changes by 1.6e-6 of its cable tension.
+  Cost: a coupled cable step takes about 2.0 tangent factorisations instead of 1.1, and the
+  aggregate step of that example (chains included) 38 % more CPU time (the D03 deck: 19 %).
 - A rod numbered as a body no longer joins the body's attachment points. A `Rod<N>A/B` end point
   keeps its rod's id where a `Body<N>` point keeps its body's, and the body's point list took
   every point with its id: a rod end POINT row listed before the body's points became the body's

@@ -11,14 +11,12 @@
 !>     cable along x, the chain along y), in the static start and the march: the mixed route
 !>     against the single-line routes, each channel to a fraction of its range, beside the same
 !>     comparison in still water (the route difference without a current). The static start agrees
-!>     within STATIC_TOL: the chain exactly, the cable to the stopping point of the coupled cable
-!>     build's static polish (its out-of-plane offset, the softest coordinate, by 4 um of 0.55 m;
-!>     in still water exactly). In the march the cable steps with the coupled Newton controls on
-!>     the mixed route (relative tolerance 5e-3, a fresh factor) and with the deck's on its own
-!>     (1e-8, a carried factor), which differ by about 1.2e-3 of the range in still water too
-!>     (DRIVER_CABLE_TOL); with the deck's controls given to the aggregate cable (the library
-!>     march of the driver's loop) the march keeps the static start's difference
-!>     (LIBRARY_CABLE_TOL). The chain agrees within CHAIN_TOL (exactly in a sheared current; its
+!>     within STATIC_TOL: the chain and the cable exactly (measured 0). In the march the cable steps
+!>     with the deck's Newton controls on both routes (1e-8 by default), in the driver and in the
+!>     library march of the driver's loop alike: it agrees within DRIVER_CABLE_TOL (measured 0) and
+!>     LIBRARY_CABLE_TOL (1.9e-8). Before the coupled cable took the deck's controls, it stepped to
+!>     5e-3 on the mixed route and differed by 1.2e-3 of the range, in still water too. The chain
+!>     agrees within CHAIN_TOL (exactly in a sheared current; its
 !>     row-1 transfer re-derives its interior accelerations on the mixed route, by 5e-5 in still
 !>     water). The current is felt: both mid nodes leave the vertical plane of their chord, and
 !>     the chain's fairlead tension history differs from the still-water run's.
@@ -66,8 +64,8 @@ PROGRAM test_mixed_route_currents
   CHARACTER(16), PARAMETER :: CHAIN_OUTS(5) = [CHARACTER(16) :: 'FairTen1', 'AnchTen1', 'L1N11px', 'L1N11py', &
                                                                                                              'L1N11pz']
   ! differences of the mixed route from the single-line routes, of each channel's range (gate 1): the
-  ! static start; the cable stepped with the coupled Newton controls, and with the deck's; the chain
-  REAL(wp), PARAMETER :: STATIC_TOL = 1.0e-5_wp, DRIVER_CABLE_TOL = 2.0e-3_wp, LIBRARY_CABLE_TOL = 1.0e-5_wp
+  ! static start; the cable stepped by the driver, and by the library loop; the chain
+  REAL(wp), PARAMETER :: STATIC_TOL = 1.0e-6_wp, DRIVER_CABLE_TOL = 1.0e-6_wp, LIBRARY_CABLE_TOL = 1.0e-6_wp
   REAL(wp), PARAMETER :: CHAIN_TOL = 1.0e-4_wp
   ! round-off between two writings of one field (gates 3 and 4), of each channel's range, and of a
   ! uniform field interpolated on a grid (gate 4)
@@ -363,7 +361,7 @@ CONTAINS
       e_cable_static, e_cable, ', chain ', e_chain_static, e_chain, ' (static start, march; of each channel''s range)'
     CALL require(e_cable_static <= STATIC_TOL .AND. e_chain_static <= STATIC_TOL, &
                  label//': the static start agrees within the static tolerance')
-    CALL require(e_cable <= DRIVER_CABLE_TOL, label//': the cable agrees within the coupled Newton tolerance')
+    CALL require(e_cable <= DRIVER_CABLE_TOL, label//': the cable agrees within the deck''s Newton tolerance')
     CALL require(e_chain <= CHAIN_TOL, label//': the chain agrees within the row-1 transfer')
     ! the current is felt: both mid nodes leave the vertical plane of their chord
     IF (PRESENT(still)) THEN

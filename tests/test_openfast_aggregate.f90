@@ -1123,20 +1123,18 @@ CONTAINS
     ! The DETERMINISTIC plumbing gate: the option must land on the cable model itself
     ! (a plumbed-but-dead flag fails here; the flag's solver behavior is gated at the
     ! element level by hermite_cable_dynamic::check_modified_newton). The counters are
-    ! reported, not gated: at this path's frozen production tolerance (5e-3 relative)
-    ! per-iteration contraction is weak, so reuse yields no assembly saving on this rig
-    ! -- the benefit lives at tighter tolerances (the committed 800 m bench at 1e-4).
+    ! reported, not gated: on this small rig reuse yields no reliable assembly saving
+    ! -- the benefit lives on longer, finer cables (the committed 800 m bench at 1e-4).
     CALL require(.NOT. aggf%cables(1)%line%modified_newton, 'mn-cable: plain deck leaves the flag off')
     CALL require(aggm%cables(1)%line%modified_newton, 'mn-cable: the OPTIONS row reaches the cable model')
-    ! Both variants commit each step at the SAME relative tolerance; the coupled-node
-    ! reaction lives on FIXED DOFs outside the converged free residual, so the honest
-    ! agreement bound is tolerance-consistent (a few x 5e-3 of the force scale), not
-    ! trajectory-tight. Gate at 10% of magnitude as the same-physics sanity check.
+    ! Both variants commit each step at the SAME relative tolerance (the deck's); the
+    ! coupled-node reaction lives on FIXED DOFs outside the converged free residual, so the
+    ! agreement bound is tolerance-consistent, not trajectory-tight. Gate at 10% of
+    ! magnitude as the same-physics sanity check.
     CALL require(NORM2(lf(:, 1) - lm(:, 1)) <= 0.10_wp*NORM2(lf(:, 1)), &
                  'mn-cable: coupled loads agree to the shared step tolerance')
-    ! The counters stay collected (they document that reuse saves nothing at this
-    ! path's frozen 5e-3 tolerance -- see the CHANGELOG scope note) but a passing
-    ! test prints nothing; gate them only for finiteness of the collection itself.
+    ! The counters stay collected but a passing test prints nothing; gate them only for
+    ! finiteness of the collection itself.
     CALL require(ntan_full > 0 .AND. ntan_mn > 0, 'mn-cable: profile counters collected')
 
     CALL CD_AGG_End(aggf, es, em)
