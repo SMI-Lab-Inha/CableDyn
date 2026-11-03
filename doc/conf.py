@@ -164,6 +164,7 @@ nitpick_ignore += [
         "RodEnd",
         "RodType",
         "Section",
+        "Stiffener",
         "SyropeIC",
         "Turbine",
     )
