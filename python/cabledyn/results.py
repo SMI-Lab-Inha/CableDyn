@@ -853,6 +853,7 @@ class TimeHistory(OutputTable):
 # Indices are capped at nine digits so int() never meets an unbounded string.
 _NODE_CHANNEL = re.compile(r"Node([1-9][0-9]{0,8})([XYZ])\(([^()]*)\)")
 _SEGMENT_CHANNEL = re.compile(r"Segment([1-9][0-9]{0,8})Tension\(([^()]*)\)")
+_LIFT_CHANNEL = re.compile(r"Node([1-9][0-9]{0,8})Lift([XYZ])\(([^()]*)\)")
 
 
 @dataclass(frozen=True)
@@ -1708,10 +1709,16 @@ def read_output(path: str | os.PathLike[str]) -> OutputTable:
     first = channels[0].lower()
     if first in {"time", "time(s)"}:
         remaining = channels[1:]
-        node_like = remaining and (
-            any(_NODE_CHANNEL.fullmatch(channel) for channel in remaining)
-            or all(channel.startswith("Node") for channel in remaining)
-            or re.search(r"\.Line[1-9][0-9]*\.p\.out$", table_path.name) is not None
+        # A VIV lift file (.Line<L>.V.out, Node<i>LiftX/Y/Z in N) is a plain time history.
+        lift_like = bool(remaining) and all(_LIFT_CHANNEL.fullmatch(c) for c in remaining)
+        node_like = (
+            not lift_like
+            and remaining
+            and (
+                any(_NODE_CHANNEL.fullmatch(channel) for channel in remaining)
+                or all(channel.startswith("Node") for channel in remaining)
+                or re.search(r"\.Line[1-9][0-9]*\.p\.out$", table_path.name) is not None
+            )
         )
         segment_like = remaining and (
             any(_SEGMENT_CHANNEL.fullmatch(channel) for channel in remaining)

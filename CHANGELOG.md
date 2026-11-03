@@ -93,6 +93,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Messages that said something untrue (SeaState kinematics, body/rod start moves, deck current
   source, torsion twist, FAST.Farm `DT_Mooring`), and a coupled deck mixing bodies and rods now
   says where it runs.
+- Output files: the driver refuses an output root whose `.modes.out` or `.Line<N>.V.out` would
+  overwrite an input; the Python `overwrite` run keeps aside and restores the `.V.out`,
+  `.range.out` and `.modes.out` files as well (an existing one now needs `overwrite`);
+  `read_output` reads a `.V.out` lift file; renaming a line in `DeckModel` carries its
+  `CurvX`/`CurvY` channels.
 
 ### Upgrading
 

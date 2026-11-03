@@ -553,6 +553,24 @@ def test_line_node_coordinates_are_read_only_and_time_is_validated(tmp_path):
     assert table.arc_length(0.0)[-1] == pytest.approx(math.sqrt(9 + 16 + 16))
 
 
+@pytest.mark.parametrize("deck_nodes", [False, True])
+def test_viv_lift_file_is_read_as_a_time_history(tmp_path, deck_nodes):
+    # <root>.Line<L>.V.out (LINES Outputs flag V): Node<i>LiftX/Y/Z(N), no units row
+    channels = [f"Node{i}Lift{axis}(N)" for i in (1, 2) for axis in "XYZ"]
+    text = "# CableDyn dynamic line VIV lift force at the nodes; public node order EndA -> EndB\n"
+    if deck_nodes:
+        text += "# DeckNode\t1\t0\n"
+    text += "\t".join(["Time(s)", *channels]) + "\n"
+    text += "0.0\t0\t0\t0\t0\t0\t0\n0.1\t0\t1.5\t0\t0\t-2.5\t0\n"
+    path = tmp_path / "run.Line1.V.out"
+    path.write_text(text, encoding="ascii")
+    table = read_output(path)
+    assert type(table) is TimeHistory
+    assert table.channels == ("Time(s)", *channels)
+    assert table.values.shape == (2, 7)
+    assert table.values[1, 2] == 1.5
+
+
 def test_line_node_history_rejects_bad_channels(tmp_path):
     with pytest.raises(OutputFormatError, match="malformed dynamic line-node channels"):
         LineNodeHistory(tmp_path / "p.out", "", ("Time(s)",), None, np.zeros((1, 1)))

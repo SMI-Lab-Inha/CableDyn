@@ -102,10 +102,9 @@ Before the deck is solved, the driver rejects, with exit code 1 and a message on
 * an output root one of whose result files would be the deck, however spelled
   (``CableDyn_driver: output root "<root>" would overwrite the input deck``), or a file the
   deck reads (``… would overwrite the input file "<file>" that the deck reads``). The check
-  covers ``.out``, ``.static.out``, ``.elements.out``, the per-line ``.Line<N>.p.out`` /
-  ``.t.out`` / ``.range.out`` and per-rod ``.Rod<N>.p.out`` files, the probe, and the lock.
-  The modal table ``.modes.out`` (written only when ``nModes`` is set) is not checked, so do
-  not choose an output root whose ``.modes.out`` name is one of your input files;
+  covers every file a run writes: ``.out``, ``.static.out``, ``.elements.out``, the modal
+  table ``.modes.out``, the per-line ``.Line<N>.p.out`` / ``.t.out`` / ``.V.out`` /
+  ``.range.out`` and per-rod ``.Rod<N>.p.out`` files, the probe, and the lock;
 * an output location that cannot be written — a missing directory or one without write
   permission (``CableDyn_driver: cannot write output files at "<root>" (check that the
   directory exists and is writable)``). The check creates and removes a probe file
@@ -391,12 +390,9 @@ readable main output table.
 
 **Files written.** The native driver writes ``<root>.out`` and, depending on the deck,
 ``<root>.static.out``, ``<root>.elements.out``, ``<root>.Line<N>.p.out``,
-``<root>.Line<N>.t.out``, ``<root>.Line<N>.range.out``, ``<root>.Rod<N>.p.out`` and
-``<root>.modes.out`` (see :doc:`outputs`). If any of ``<root>.out``, ``<root>.static.out``,
-``<root>.elements.out``, or a ``.Line<N>.p.out``, ``.Line<N>.t.out`` or ``.Rod<N>.p.out`` file
-of that root already exists, the run is refused unless ``--overwrite`` is given. The range
-graphs ``.Line<N>.range.out`` and the modal table ``.modes.out`` are not part of this check: an
-existing file of that name is replaced by the new run and is not restored if it fails. With
+``<root>.Line<N>.t.out``, ``<root>.Line<N>.V.out``, ``<root>.Line<N>.range.out``,
+``<root>.Rod<N>.p.out`` and ``<root>.modes.out`` (see :doc:`outputs`). If any of these files of
+that root already exists, the run is refused unless ``--overwrite`` is given. With
 ``--overwrite`` the previous files are moved into a temporary directory
 ``.<stem>.previous-<random>`` beside them while the solver runs. They are deleted once the new
 run has succeeded; if the rerun fails for any reason (non-zero exit, timeout, missing or
