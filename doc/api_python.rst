@@ -501,6 +501,17 @@ library is located. Array ordering, frames, and units at the coupling boundary f
       :returns: The message, or an empty string when there is none.
       :rtype: str
 
+   .. py:property:: init_notes
+
+      The notes of the last deck initialisation, successful or not, on the point and aggregate
+      routes alike: the ``Note:`` lines a driver run of the deck prints at its start, without
+      the prefix. They take what is known at initialisation: the deck's current, also with a
+      host field (:meth:`set_host_fluid`), and not a field the host applies afterwards. The
+      notes of the march are not among them.
+
+      :returns: One string per note, empty when there are none.
+      :rtype: list[str]
+
    .. py:method:: init_deck(deck)
 
       Initialise from a deck file: parse it, build the model, and solve the static initial
