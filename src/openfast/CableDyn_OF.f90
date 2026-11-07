@@ -83,7 +83,7 @@ MODULE CableDyn
    USE CableDyn_Conventions, ONLY: CD_NATIVE_CHANNEL_FMT
    USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_SeaState_Steady_Current, CD_HYDRO_OK
    USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_Is_Line_Node_Channel, &
-                                  CD_LINE_NODE_NUMBERING_NOTE
+                                  CD_LINE_NODE_NUMBERING_NOTE, CD_INIT_NOTE_LEN
    USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_UpdateStates_Moving, &
                                           CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_GetMovingPointMesh, &
                                           CD_AGG_Snapshot, CD_AGG_Restore, &
@@ -578,7 +578,8 @@ CONTAINS
       CHARACTER(16)             :: host_kin
       REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static start
       CHARACTER(ChanLen)        :: chan_hdr, chan_unt
-      CHARACTER(1024)           :: native_root, init_note
+      CHARACTER(1024)           :: native_root
+      CHARACTER(CD_INIT_NOTE_LEN) :: init_note
       INTEGER(IntKi)            :: note_at, note_end
 
       ErrStat = ErrID_None

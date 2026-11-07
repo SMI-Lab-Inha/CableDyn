@@ -23,7 +23,7 @@ PROGRAM test_openfast_aggregate
   !!   8) line control -- CONTROL on EI=0 lines and finite-EI cables (alone and mixed), its
   !!      fail-closed bounds, rewind and bit-identical checkpoint restart (--line-control-only).
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK
+  USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_INIT_NOTE_LEN
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_UpdateStates_Moving, &
                                          CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
@@ -136,6 +136,7 @@ PROGRAM test_openfast_aggregate
   CALL case_anchor_uplift_channels()
   CALL case_output_channels()
   CALL case_range_graph_host()
+  CALL case_long_init_notes()
   CALL case_pure_cable_deck()
   CALL case_cable_load_feedback()
   CALL case_end_connection_orientation_and_moment()
@@ -1129,6 +1130,39 @@ CONTAINS
     CALL CD_AGG_Step_Moving(a, dt, tgt, v, ac, cv, st, ni, es, em, t_committed=tc)
     CALL require(es == CD_AGG_OK .AND. cv, label//': '//TRIM(em))
   END SUBROUTINE range_march
+
+  SUBROUTINE case_long_init_notes()
+    !! A cable that collects a long list of initialisation notes: the two stiffener notes of each
+    !! end, the friction resolution note and, appended after them on the line summary, the dtM
+    !! advisory. They run past the 1024 characters of a cable's note and of the OpenFAST shell's
+    !! old buffer; every note arrives whole, in a buffer of CD_INIT_NOTE_LEN.
+    TYPE(CD_AGG_ModuleType) :: agg
+    REAL(wp) :: ten, force(3), incl, decl, azi
+    INTEGER :: es, line_id, nlines, k
+    CHARACTER(512) :: em
+    CHARACTER(CD_INIT_NOTE_LEN) :: note
+
+    CALL write_touchdown_cable_deck('agg_long_notes.dat', 'FairTen2', stiffeners=.TRUE.)
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_long_notes.dat', 0.1_wp, es, em)
+    CALL require(es == CD_AGG_OK, 'long-notes:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetInitLine(agg, 2, line_id, ten, force, incl, decl, azi, es, em, note=note)
+    CALL require(es == CD_AGG_OK .AND. line_id == 2, 'long-notes:line')
+    WRITE (*, '(A,I0)') '  initialisation notes of the cable, characters: ', LEN_TRIM(note)
+    CALL require(LEN_TRIM(note) > 1024, 'long-notes:longer-than-the-old-buffer')
+    CALL require(INDEX(note, 'stiffener at End A spans') > 0 .AND. INDEX(note, 'stiffener at End A sleeves') > 0 .AND. &
+                 INDEX(note, 'stiffener at End B spans') > 0 .AND. INDEX(note, 'stiffener at End B sleeves') > 0, &
+                 'long-notes:the-four-stiffener-notes')
+    CALL require(INDEX(note, 'seabed friction acts at the nodes') > 0, 'long-notes:the-friction-note')
+    CALL require(INDEX(note, 'axial period') > 0, 'long-notes:the-dtM-advisory-appended-last')
+    CALL require(INDEX(note, 'notes omitted') == 0, 'long-notes:nothing-omitted')
+    nlines = 1
+    DO k = 1, LEN_TRIM(note)
+      IF (note(k:k) == NEW_LINE('a')) nlines = nlines + 1
+    END DO
+    CALL require(nlines >= 6, 'long-notes:one-text-line-per-note')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE case_long_init_notes
 
   SUBROUTINE check_static_profile(path, expected_rows)
     CHARACTER(*), INTENT(IN) :: path
@@ -5480,10 +5514,12 @@ CONTAINS
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_anchor_uplift_channels
 
-  SUBROUTINE write_touchdown_cable_deck(path, outputs_row)
+  SUBROUTINE write_touchdown_cable_deck(path, outputs_row, stiffeners)
     !! IEA-15MW mooring chain (line 1, Fixed anchor point 2) + touchdown power cable (line 2,
-    !! Fixed anchor point 4) on a 200 m seabed, with the given OUTPUTS row(s).
+    !! Fixed anchor point 4) on a 200 m seabed, with the given OUTPUTS row(s); stiffeners adds a
+    !! bend stiffener over each end of the cable, one deck element long.
     CHARACTER(*), INTENT(IN) :: path, outputs_row
+    LOGICAL, INTENT(IN), OPTIONAL :: stiffeners
     INTEGER :: u, ios
 
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
@@ -5515,6 +5551,15 @@ CONTAINS
     WRITE (u, '(A)') '2 bare 80.0 20'
     WRITE (u, '(A)') '2 buoy 100.0 25'
     WRITE (u, '(A)') '2 bare 420.0 42'
+    IF (PRESENT(stiffeners)) THEN
+      IF (stiffeners) THEN
+        WRITE (u, '(A)') '--- STIFFENERS ---'
+        WRITE (u, '(A)') 'LineID End Length RootOD TipOD InnerD E Density'
+        WRITE (u, '(A)') '(-) (-) (m) (m) (m) (m) (Pa) (kg/m^3)'
+        WRITE (u, '(A)') '2 A 4.0 0.45 0.18 0.17 5.0e7 1150'
+        WRITE (u, '(A)') '2 B 4.0 0.45 0.18 0.17 5.0e7 1150'
+      END IF
+    END IF
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
