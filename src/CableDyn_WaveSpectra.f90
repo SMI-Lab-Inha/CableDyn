@@ -30,7 +30,7 @@ MODULE CableDyn_WaveSpectra
   !! |theta - theta_p| <= pi/2, K(s) = Gamma(s+1)/(sqrt(pi) Gamma(s+1/2)).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_Is_Finite
   USE CableDyn_Hydro, ONLY: CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
-  USE CableDyn_WaveMath, ONLY: CD_Wave_SinCos, CD_Wave_Exp
+  USE CableDyn_WaveMath, ONLY: CD_Wave_SinCos, CD_Wave_Exp, CD_Wave_Sum_Lanes, CD_WAVE_LANES
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   IMPLICIT NONE
   PRIVATE
@@ -623,7 +623,9 @@ CONTAINS
     !! scale multiplies every amplitude (the start-up ramp). pdyn: the linear dynamic
     !! pressure per unit density at the stretched depth [m^2/s^2]; zero above the surface.
     !! The phase sines and cosines (one argument reduction for both) and the depth exponentials
-    !! come from the block kernels of CableDyn_WaveMath.
+    !! come from the block kernels of CableDyn_WaveMath, and the sums run in interleaved lanes
+    !! added up at the end (CD_Wave_Sum_Lanes), so that they vectorise in a fixed order; the
+    !! amplitude scale multiplies the finished sums.
     TYPE(CD_SeaType), INTENT(IN) :: sea
     REAL(wp), INTENT(IN) :: x, y, z, t, depth, scale
     REAL(wp), INTENT(OUT) :: eta, velocity(3), acceleration(3)
@@ -635,9 +637,12 @@ CONTAINS
     ! chunk loop would compute the same values again), for the first NKEEP components; the rest
     ! are recomputed there. A multiple of NB, so each chunk is either kept whole or recomputed.
     INTEGER, PARAMETER :: NKEEP = 16*NB
-    REAL(wp) :: th(NB), cth(NB), sth(NB), ch(NB), sh(NB), ckeep(NKEEP), skeep(NKEEP)
-    INTEGER :: i0, i1, i, m, n_small
+    REAL(wp) :: th(NB), cth(NB), sth(NB), ch(NB), sh(NB), e_low(NB), ckeep(NKEEP), skeep(NKEEP)
+    REAL(wp) :: lane_eta(CD_WAVE_LANES), lane_vx(CD_WAVE_LANES), lane_vy(CD_WAVE_LANES), lane_vz(CD_WAVE_LANES)
+    REAL(wp) :: lane_ax(CD_WAVE_LANES), lane_ay(CD_WAVE_LANES), lane_az(CD_WAVE_LANES), lane_p(CD_WAVE_LANES)
+    INTEGER :: i0, i1, i, ic, j0, l, m, n_small, lanes
     REAL(wp) :: z_eval, a, e1, e2, den, uh
+    LOGICAL :: same_depth
 
     eta = CD_ZERO
     velocity = CD_ZERO
@@ -649,6 +654,8 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'sea kinematics called before synthesis')
       RETURN
     END IF
+    lanes = MIN(sea%n_comp, CD_WAVE_LANES)
+    lane_eta(1:lanes) = CD_ZERO
     DO i0 = 1, sea%n_comp, NB
       i1 = MIN(sea%n_comp, i0 + NB - 1)
       m = i1 - i0 + 1
@@ -656,14 +663,17 @@ CONTAINS
         th(i - i0 + 1) = sea%k(i)*(x*sea%cosb(i) + y*sea%sinb(i)) - sea%omega(i)*t + sea%phase(i)
       END DO
       CALL CD_Wave_SinCos(m, th, sth, cth)
-      DO i = i0, i1
-        eta = eta + (scale*sea%amplitude(i))*cth(i - i0 + 1)
+      DO j0 = 0, m - 1, CD_WAVE_LANES
+        DO l = 1, MIN(CD_WAVE_LANES, m - j0)
+          lane_eta(l) = lane_eta(l) + sea%amplitude(i0 + j0 + l - 1)*cth(j0 + l)
+        END DO
       END DO
       IF (i1 <= NKEEP) THEN
         ckeep(i0:i1) = cth(1:m)
         skeep(i0:i1) = sth(1:m)
       END IF
     END DO
+    eta = scale*CD_Wave_Sum_Lanes(lane_eta, lanes)
     IF (z > eta) RETURN
     IF (.NOT. (depth + eta > EPSILON(depth)*depth)) THEN
       CALL fail(ErrStat, ErrMsg, 'Wheeler stretching is undefined: the wave trough reaches the seabed '// &
@@ -671,6 +681,14 @@ CONTAINS
       RETURN
     END IF
     z_eval = MIN(CD_ZERO, (z - eta)*depth/(depth + eta))
+    same_depth = ABS(depth - sea%depth) <= CD_ZERO
+    lane_vx(1:lanes) = CD_ZERO
+    lane_vy(1:lanes) = CD_ZERO
+    lane_vz(1:lanes) = CD_ZERO
+    lane_ax(1:lanes) = CD_ZERO
+    lane_ay(1:lanes) = CD_ZERO
+    lane_az(1:lanes) = CD_ZERO
+    lane_p(1:lanes) = CD_ZERO
     DO i0 = 1, sea%n_comp, NB
       i1 = MIN(sea%n_comp, i0 + NB - 1)
       m = i1 - i0 + 1
@@ -684,48 +702,72 @@ CONTAINS
         CALL CD_Wave_SinCos(m, th, sth, cth)
       END IF
       ! cosh(k(z+h))/sinh(kh) and sinh(k(z+h))/sinh(kh) without overflow, from e1 = EXP(k z)
-      ! and e2 = EXP(-k (z + 2h)) = e2kd/e1 at the synthesis depth: one exponential per
-      ! component. A component whose e1 or e2kd underflows, or a call at another depth than the
-      ! synthesis, takes the second exponential instead.
+      ! and e2 = EXP(-2 k h) at the synthesis depth, on one division. A block in which e1^2 or
+      ! e2 underflows, or a call at another depth than the synthesis, forms the lower
+      ! exponential EXP(-k (z + 2h)) on its own.
       DO i = i0, i1
         th(i - i0 + 1) = sea%k(i)*z_eval
       END DO
       CALL CD_Wave_Exp(m, th, ch)
-      n_small = 0
-      IF (ABS(depth - sea%depth) <= CD_ZERO) THEN
-        n_small = COUNT(ch(1:m) <= TINY(CD_ONE) .OR. sea%e2kd(i0:i1) <= TINY(CD_ONE))
+      n_small = 1
+      IF (same_depth) THEN
+        n_small = 0
+        DO i = i0, i1
+          n_small = n_small + MERGE(0, 1, ch(i - i0 + 1)*ch(i - i0 + 1) > TINY(CD_ONE) .AND. sea%e2kd(i) > TINY(CD_ONE))
+        END DO
+      END IF
+      IF (n_small == 0) THEN
         DO i = i0, i1
           e1 = ch(i - i0 + 1)
-          e2 = sea%e2kd(i)/MAX(e1, TINY(CD_ONE))
-          den = CD_ONE - sea%e2kd(i)
-          ch(i - i0 + 1) = (e1 + e2)/den
-          sh(i - i0 + 1) = (e1 - e2)/den
+          e2 = sea%e2kd(i)
+          den = CD_ONE/(e1*(CD_ONE - e2))
+          ch(i - i0 + 1) = (e1*e1 + e2)*den
+          sh(i - i0 + 1) = (e1*e1 - e2)*den
         END DO
-      END IF
-      IF (n_small > 0 .OR. ABS(depth - sea%depth) > CD_ZERO) THEN
+      ELSE
         DO i = i0, i1
-          e1 = EXP(sea%k(i)*z_eval)
-          IF (ABS(depth - sea%depth) <= CD_ZERO .AND. e1 > TINY(CD_ONE) .AND. sea%e2kd(i) > TINY(CD_ONE)) CYCLE
-          e2 = EXP(-sea%k(i)*(z_eval + 2.0_wp*depth))
+          th(i - i0 + 1) = -sea%k(i)*(z_eval + 2.0_wp*depth)
+        END DO
+        CALL CD_Wave_Exp(m, th, e_low)
+        DO i = i0, i1
+          e1 = ch(i - i0 + 1)
+          e2 = e_low(i - i0 + 1)
           den = CD_ONE - sea%e2kd(i)
           ch(i - i0 + 1) = (e1 + e2)/den
           sh(i - i0 + 1) = (e1 - e2)/den
         END DO
       END IF
-      DO i = 1, m
-        a = scale*sea%amplitude(i0 + i - 1)*sea%omega(i0 + i - 1)
-        uh = a*ch(i)*cth(i)
-        velocity(1) = velocity(1) + uh*sea%cosb(i0 + i - 1)
-        velocity(2) = velocity(2) + uh*sea%sinb(i0 + i - 1)
-        velocity(3) = velocity(3) + a*sh(i)*sth(i)
-        a = a*sea%omega(i0 + i - 1)
-        uh = a*ch(i)*sth(i)
-        acceleration(1) = acceleration(1) + uh*sea%cosb(i0 + i - 1)
-        acceleration(2) = acceleration(2) + uh*sea%sinb(i0 + i - 1)
-        acceleration(3) = acceleration(3) - a*sh(i)*cth(i)
-        IF (PRESENT(pdyn)) pdyn = pdyn + a/sea%k(i0 + i - 1)*ch(i)*cth(i)
+      DO j0 = 0, m - 1, CD_WAVE_LANES
+        DO l = 1, MIN(CD_WAVE_LANES, m - j0)
+          i = j0 + l
+          ic = i0 + i - 1
+          a = sea%amplitude(ic)*sea%omega(ic)
+          uh = a*ch(i)*cth(i)
+          lane_vx(l) = lane_vx(l) + uh*sea%cosb(ic)
+          lane_vy(l) = lane_vy(l) + uh*sea%sinb(ic)
+          lane_vz(l) = lane_vz(l) + a*sh(i)*sth(i)
+          a = a*sea%omega(ic)
+          uh = a*ch(i)*sth(i)
+          lane_ax(l) = lane_ax(l) + uh*sea%cosb(ic)
+          lane_ay(l) = lane_ay(l) + uh*sea%sinb(ic)
+          lane_az(l) = lane_az(l) - a*sh(i)*cth(i)
+        END DO
       END DO
+      IF (PRESENT(pdyn)) THEN
+        DO j0 = 0, m - 1, CD_WAVE_LANES
+          DO l = 1, MIN(CD_WAVE_LANES, m - j0)
+            i = j0 + l
+            ic = i0 + i - 1
+            lane_p(l) = lane_p(l) + sea%amplitude(ic)*sea%omega(ic)*sea%omega(ic)/sea%k(ic)*ch(i)*cth(i)
+          END DO
+        END DO
+      END IF
     END DO
+    velocity = scale*[CD_Wave_Sum_Lanes(lane_vx, lanes), CD_Wave_Sum_Lanes(lane_vy, lanes), &
+                      CD_Wave_Sum_Lanes(lane_vz, lanes)]
+    acceleration = scale*[CD_Wave_Sum_Lanes(lane_ax, lanes), CD_Wave_Sum_Lanes(lane_ay, lanes), &
+                          CD_Wave_Sum_Lanes(lane_az, lanes)]
+    IF (PRESENT(pdyn)) pdyn = scale*CD_Wave_Sum_Lanes(lane_p, lanes)
   END SUBROUTINE CD_Sea_Kinematics
 
   SUBROUTINE tokenize(line, tok, ntok)
