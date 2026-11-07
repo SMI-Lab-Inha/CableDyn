@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -442,10 +443,158 @@ _ANCILLARY_CASES = [
     ("mixed_body_rods_points.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
     ("objects", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
 ]
-_ALL_FILE_CASES = [("held", rows, files) for rows, files in _WAVE_RECORD_CASES] + _ANCILLARY_CASES
+# every spelling the reader takes of the options and kinds these rules read
+_KEYWORD_SPELLINGS = (
+    ("waves", "wave"),
+    ("wavetrain", "wave_train"),
+    ("WaveSpreading", "wave_spreading"),
+    ("WaveDirections", "wave_directions"),
+    ("WaveComponents", "wave_components"),
+    ("WtrDpth", "water_depth"),
+    ("dtM", "dt"),
+    ("WaterKin", "WaveKin"),
+    ("bathymetryFile", "seafloor_file"),
+    ("rampTime", "tramp"),
+)
+_KIND_VALUES = {
+    "airy": ("2 8 30", "2 8 30"),
+    "Airy": ("2 8 30", "2 8 30"),
+    "jonswap": ("2 9 3.3 30", "2 9 3.3 30 0"),
+    "JONSWAP": ("2 9 3.3 30", "2 9 3.3 30 0"),
+    "pm": ("2 9 30", "2 9 30 0"),
+    "issc": ("2 9 30", "2 9 30 0"),
+    "bretschneider": ("2 9 30", "2 9 30 0"),
+    "torsethaugen": ("6 12 30", "6 12 30 0"),
+    "ochihubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+    "ochi-hubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+    "ochi_hubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+    "Ochi_Hubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+}
+# every kind and keyword against a one-heading RAO table: at the sea's heading and off it, on
+# the dynamic clock and on the static check's
+_SPELLED_CASES = [
+    (base, (f"{kind} {values[train]} {keyword}", *_RAO_ROWS), {"rao.txt": _rao(heads=(heading,))})
+    for kind, values in _KIND_VALUES.items()
+    for train, keyword in ((0, "waves"), (0, "wave"), (1, "wavetrain"), (1, "wave_train"))
+    for heading in (30.0, 31.0)
+    for base in ("held", "held_static")
+]
+_SPELLED_CASES += [
+    # the kinds whose rows spread, and the spellings of the options that spread them
+    (base, (f"pm 2 9 30 {keyword}", f"4 {spread}", *_RAO_ROWS), {"rao.txt": _rao(heads=heads)})
+    for base in ("held", "held_static")
+    for keyword in ("waves", "wave")
+    for spread in ("WaveSpreading", "wave_spreading", "WAVESPREADING")
+    for heads in ((30.0,), (-180.0, 179.0))
+] + [
+    (base, (f"ochi_hubble 2 8 1 1 12 1 30 4 {keyword}", *_RAO_ROWS), {"rao.txt": _rao(heads=heads)})
+    for base in ("held", "held_static")
+    for keyword in ("wavetrain", "wave_train")
+    for heads in ((30.0,), (-180.0, 179.0))
+]
+# a record or a kinematics file on the static check's clock, under each spelling of its selector
+_STATIC_CASES = [
+    ("held_static", (f"{value} {keyword}", *rows), files)
+    for keyword in ("WaterKin", "WaveKin", "WATERKIN")
+    for value, rows, files in (
+        ("wk.dat", (), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+        ("wk.dat", ("12.5 WaveRefX",), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+        ("wk.dat", ("12.5 WaveRefX",), {"wk.dat": _kin("0"), "eta.txt": _ETA}),
+        ("wk.dat", (), {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 0\n"}),
+        ("wk.dat", (), {"wk.dat": _kin("1", dt="100"), "eta.txt": _ETA}),
+        (
+            "wk.dat",
+            _RAO_ROWS,
+            {"wk.dat": _kin("1"), "eta.txt": _ETA, "rao.txt": _rao(heads=(37.0,))},
+        ),
+        (
+            "wk.dat",
+            _RAO_ROWS,
+            {"wk.dat": _kin("1"), "eta.txt": _ETA, "rao.txt": _rao(heads=(38.0,))},
+        ),
+        ("7", (), {_FREE: _ROWS}),
+        ("7", ("12.5 WaveRefY",), {_FREE: _ROWS}),
+        ("7", (), {_FREE: "0 0 0 0\n0.5 0.5 0 6.3\n"}),
+        ("3", ("0.1 dtWave",), {"wave_elevation.txt": _ETA.replace("time elevation\n", "")}),
+    )
+] + [
+    ("held_static", ("m.txt motionFile",), {"m.txt": "0.0 2 0 0 0 0 0 0 0 0 0\n"}),
+    (
+        "held_static",
+        ("m.txt motionFile",),
+        {"m.txt": "0.0 2 0 0 0 0 0 0 0 0 0\n0.05 2 0 0 0 0 0 0 0 0 0\n"},
+    ),
+    ("held_static", ("m.txt motionFile",), {"m.txt": _hold()}),
+    ("held_static", ("m.txt motionFile",), {"m.txt": "1.0 2 0 0 0 0 0 0 0 0 0\n"}),
+    ("held_static", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel(steps=1)}),
+    ("held_static", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel()}),
+    ("bed_static", (), {"b.txt": _sea_bed()}),
+    ("held", ("airy 2 8 0 waves", "4 WaveSpreading"), {}),
+]
+
+
+def _shipped_decks() -> list[str]:
+    decks = [path.name for path in sorted(EXAMPLES.glob("*.dat"))]
+    decks.remove("cabledyn_options_reference.dat")
+    return [*decks, "moordynC_wavekin/chain_wavekin7_currents1.dat"]
+
+
+def _carries_waves(name: str) -> bool:
+    text = (EXAMPLES / name).read_text(encoding="utf-8")
+    return re.search(r"(?mi)^(?!none\b|--)\S.*\s(?:waves?|wave_?train)\b", text) is not None or (
+        re.search(r"(?mi)^(?!0\s|none\s)\S+\s+(?:WaterKin|WaveKin)\b", text) is not None
+    )
+
+
+# every shipped deck as a static check without dtM; every shipped wave deck under each spelling
+_SHIPPED_CASES = [(f"shipped:static:{name}", (), {}) for name in _shipped_decks()] + [
+    (f"shipped:{variant}:{name}", (), {})
+    for name in _shipped_decks()
+    if _carries_waves(name)
+    for variant in ("spelled", "upper")
+]
+_ALL_FILE_CASES = [
+    *[("held", rows, files) for rows, files in _WAVE_RECORD_CASES],
+    *_ANCILLARY_CASES,
+    *_SPELLED_CASES,
+    *_STATIC_CASES,
+    *_SHIPPED_CASES,
+]
+
+
+def _respell(text: str, old: str, new: str) -> str:
+    """``text`` with the first token ``old`` of each row (any case) spelled ``new``."""
+    token = re.compile(rf"(?i)(?<!\S){re.escape(old)}(?!\S)")
+    return "\n".join(
+        line if line.startswith("--") else token.sub(new, line, count=1)
+        for line in text.split("\n")
+    )
+
+
+def _static_check(text: str, *, keep_dtm: bool = False) -> str:
+    """``text`` as a static check: TMax 0, and without dtM unless it is kept."""
+    text = re.sub(r"(?mi)^\s*\S+(\s+TMax\b)", r"0.0\1", text, count=1)
+    return text if keep_dtm else re.sub(r"(?mi)^\s*\S+\s+dtM\b.*\n", "", text, count=1)
+
+
+def _shipped_text(variant: str, name: str) -> str:
+    text = (EXAMPLES / name).read_text(encoding="utf-8")
+    if variant == "static":
+        return _static_check(text)
+    text = _static_check(text, keep_dtm=True)
+    for old, new in _KEYWORD_SPELLINGS:
+        text = _respell(text, old, new if variant == "spelled" else old.upper())
+    if variant == "upper":
+        for kind in ("airy", "jonswap", "pm", "issc", "torsethaugen", "ochihubble", "stream"):
+            text = _respell(text, kind, kind.upper())
+    return text
 
 
 def _deck_text(deck: str, rows: tuple[str, ...]) -> str:
+    if deck.startswith("shipped:"):
+        return _shipped_text(*deck.split(":")[1:])
+    if deck.endswith("_static"):
+        return _static_check(_deck_text(deck[: -len("_static")], rows))
     if deck == "bed":
         return _options(_HELD, "b.txt bathymetryFile", *rows).replace("50.0 WtrDpth\n", "")
     if deck == "syrope":
@@ -463,6 +612,13 @@ def _stage(folder: Path, rows: tuple[str, ...], files: dict[str, str], deck: str
     for name, text in files.items():
         (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_text(text, encoding="utf-8")
+    if deck.startswith("shipped:"):
+        source = (EXAMPLES / deck.split(":")[2]).parent
+        for item in source.iterdir():
+            if item.is_dir():
+                shutil.copytree(item, folder / item.name, dirs_exist_ok=True)
+            elif item.suffix != ".dat":
+                shutil.copy2(item, folder / item.name)
     path = folder / "deck.dat"
     path.write_text(_deck_text(deck, rows), encoding="utf-8")
     return path
@@ -524,6 +680,22 @@ def test_wave_record_rules_match_the_driver(tmp_path, base, rows, files):
 def test_wave_files_next_to_the_deck_are_read(tmp_path, rows, files, message):
     with pytest.raises(DeckFormatError, match=message):
         DeckFile.read(_stage(tmp_path, rows, files))
+
+
+@pytest.mark.parametrize("kind", ["ochihubble", "ochi-hubble", "ochi_hubble", "OCHI_HUBBLE"])
+def test_every_spelling_of_a_kind_takes_its_heading_from_its_own_column(tmp_path, kind):
+    rows = (f"{kind} 2 8 1 1 12 1 30 waves", *_RAO_ROWS)
+    DeckFile.read(_stage(tmp_path, rows, {"rao.txt": _rao(heads=(30.0,))}))
+    with pytest.raises(DeckFormatError, match="one-heading RAO table"):
+        DeckFile.read(_stage(tmp_path, rows, {"rao.txt": _rao(heads=(31.0,))}))
+
+
+def test_a_static_check_reads_a_record_on_its_own_clock(tmp_path):
+    # TMax = 0 without dtM: the record resamples on its dtWave, whatever the nominal step
+    files = {"wk.dat": _kin("1"), "eta.txt": _ETA}
+    DeckFile.read(_stage(tmp_path, _WK, files, "held_static"))
+    with pytest.raises(DeckFormatError, match="four `time elevation` rows"):
+        DeckFile.read(_stage(tmp_path, _WK, {"eta.txt": "0 0\n1 0\n"}, "held_static"))
 
 
 def test_wave_files_that_are_not_there_are_left_to_the_solver(tmp_path):

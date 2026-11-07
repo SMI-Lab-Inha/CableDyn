@@ -1469,6 +1469,7 @@ _SYROPE_SCAN_SAMPLES = 200  # CD_SYROPE_NSCAN
 _BATHY_CREASE_FRACTION = 0.05
 _BATHY_CREASE_MIN_HEIGHT = 1.0e-6
 _SEA_DEFAULT_DIRECTIONS = 9
+_STATIC_CHECK_DT = 1.0  # the nominal dtM of a standalone TMax = 0 without one (parse_deck)
 
 
 class _AncillaryError(ValueError):
@@ -1823,8 +1824,16 @@ def _check_grid_current(records: list[str], name: str) -> None:
     _check_current_resample(axes[3], spatial, field, [*axes[0], *axes[1], *axes[2]])
 
 
-def _motion_time_index(time: float, dt: float, n_time: int, tolerance: float) -> int | None:
-    """Mirror ``motion_grid_index``: the 0-based step, -1 past TMax, ``None`` off the grid."""
+def _motion_time_index(
+    time: float, dt: float, n_time: int, tolerance: float, start_row_only: bool
+) -> int | None:
+    """Mirror ``motion_grid_index``: the 0-based step, -1 past TMax, ``None`` off the grid.
+
+    start_row_only: a static check without dtM, whose grid is the t = 0 row: a later row is not
+    used, whatever its time step.
+    """
+    if start_row_only and time > tolerance:
+        return -1
     if not abs(time / dt) < _MAX_GRID_STEPS:
         return None
     step = round(time / dt)
@@ -1844,6 +1853,7 @@ def _check_motion_rows(
     eligible: set[int] | None,
     roll_ends: set[int] | None,
     turbines: dict[int, list[int]] | None,
+    start_row_only: bool,
 ) -> None:
     """Mirror ``read_motion_file``.
 
@@ -1874,7 +1884,7 @@ def _check_motion_rows(
                 raise _AncillaryError(f"{where}: J must be the integer id of a TURBINES row")
             if abs(math.sqrt(sum(value * value for value in row[5:9])) - 1.0) > 1.0e-6:
                 raise _AncillaryError(f"{where}: the quaternion must have unit norm (within 1e-6)")
-            step = _motion_time_index(row[0], dt, n_time, tolerance)
+            step = _motion_time_index(row[0], dt, n_time, tolerance, start_row_only)
             if step is None:
                 raise _AncillaryError(f"{where}: time is outside the dtM/TMax grid")
             if step == -1:
@@ -1896,7 +1906,7 @@ def _check_motion_rows(
         point = int(row[1]) if abs(row[1]) <= 2**31 - 1 and row[1] == int(row[1]) else 0
         if point < 1:
             raise _AncillaryError(f"{where}: point_id must be a positive integer")
-        step = _motion_time_index(row[0], dt, n_time, tolerance)
+        step = _motion_time_index(row[0], dt, n_time, tolerance, start_row_only)
         if step is None:
             raise _AncillaryError(f"{where}: time is outside the dtM/TMax grid")
         if eligible is not None and point not in eligible:
@@ -1936,7 +1946,7 @@ def _check_motion_rows(
                 )
 
 
-def _check_vessel_rows(records: list[str], dt: float, tmax: float) -> None:
+def _check_vessel_rows(records: list[str], dt: float, tmax: float, start_row_only: bool) -> None:
     """Mirror ``read_vessel_record``."""
     n_time = round(tmax / dt) + 1
     tolerance = 100.0 * _NATIVE_EPSILON * max(1.0, tmax)
@@ -1952,7 +1962,7 @@ def _check_vessel_rows(records: list[str], dt: float, tmax: float) -> None:
             raise _AncillaryError(f"{where}: rows must hold 19 or 20 values, one form for the file")
         if any(abs(value) > _NATIVE_MAX_COORDINATE for value in row[1:]):
             raise _AncillaryError(f"{where}: value outside the admissible range")
-        step = _motion_time_index(row[0], dt, n_time, tolerance)
+        step = _motion_time_index(row[0], dt, n_time, tolerance, start_row_only)
         if step is None:
             raise _AncillaryError(f"{where}: time is outside the dtM/TMax grid")
         if step == -1:
@@ -2301,7 +2311,7 @@ def _train_direction(values: tuple[str, ...]) -> tuple[float, float]:
     kind = values[0].lower()
     if kind == "airy":
         return _native_float(values[3]), 0.0
-    index = {"jonswap": 4}.get(kind, 7 if kind.replace("-", "") in {"ochihubble", "ochi"} else 3)
+    index = 4 if kind == "jonswap" else 7 if kind.startswith("ochi") else 3
     spreading = _native_float(values[index + 1]) if len(values) > index + 1 else 0.0
     return _native_float(values[index]), spreading
 
@@ -5239,6 +5249,7 @@ class DeckFile:
                 ),
                 bool(finite_length_rods),
                 has_rigid6,
+                static_check,
             )
         except _AncillaryError as exc:
             raise DeckFormatError(f"{self._label}: {exc}") from None
@@ -5255,14 +5266,18 @@ class DeckFile:
         roll_ends: set[str] | None,
         has_rods: bool,
         has_rigid6: bool,
+        static_check: bool,
     ) -> None:
-        """Run the native rules of the ancillary files the deck names, those that are there."""
+        """Run the native rules of the ancillary files the deck names, those that are there.
+
+        A static check runs on the nominal clock the native parser installs before it validates.
+        """
 
         def number(key: str) -> float | None:
             row = option_by_key.get(key)
             return None if row is None else _native_float(row.values[0])
 
-        dt = number("dtm")
+        dt = _STATIC_CHECK_DT if static_check else number("dtm")
         tmax = number("tmax") or 0.0
         depth = number("water_depth")
         record_dir: float | None = None
@@ -5323,7 +5338,7 @@ class DeckFile:
                     "vesselMotion/vesselRAO move Coupled/Vessel line points; decks with prescribed "
                     "rods or Rigid6 bodies take motionFile rows"
                 )
-            _check_vessel_rows(records, dt, tmax)
+            _check_vessel_rows(records, dt, tmax, static_check)
         elif motion_source == "vesselrao":
             if has_rods or has_rigid6:
                 raise _AncillaryError(
@@ -5337,7 +5352,9 @@ class DeckFile:
                 headings = self._sea_headings(option_by_key, options)
             _check_rao_table(records, headings)
         else:
-            self._check_motion_file(records, dt, tmax, roll_ends, has_rods, has_rigid6)
+            self._check_motion_file(
+                records, dt, tmax, roll_ends, has_rods, has_rigid6, static_check
+            )
 
     def _check_waterkin_file(
         self,
@@ -5508,6 +5525,7 @@ class DeckFile:
         roll_ends: set[str] | None,
         has_rods: bool,
         has_rigid6: bool,
+        start_row_only: bool,
     ) -> None:
         """Mirror ``read_motion_file`` on the route the native dispatch takes.
 
@@ -5548,6 +5566,7 @@ class DeckFile:
             if roll_ends is None or has_rods or has_rigid6
             else {int(point) for point in roll_ends},
             turbines,
+            start_row_only,
         )
 
     def _ancillary_path(self, value: str) -> Path:
