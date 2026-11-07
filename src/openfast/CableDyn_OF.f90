@@ -489,14 +489,11 @@ CONTAINS
          RETURN
       END IF
 
+      ! A restore can also go forward: CalcSteady linearizes at several saved operating points, in
+      ! time order, after rewinding to the first. There is nothing to trim then.
       tol = 1.0E-7_DbKi*MAX(1.0_DbKi, ABS(t_start), ABS(Inst(old_id)%native_wrote_t))
-      delta = Inst(old_id)%native_wrote_t - t_start
-      IF (delta < -tol) THEN
-         CALL SetErrStat( ErrID_Fatal, 'The live native history ends before the restored committed state.', &
-                          ErrStat, ErrMsg, RoutineName )
-         RETURN
-      END IF
-      ntrim = MAX(0_IntKi, NINT(MAX(delta, 0.0_DbKi)/dt_moor, IntKi))
+      delta = MAX(Inst(old_id)%native_wrote_t - t_start, 0.0_DbKi)
+      ntrim = NINT(delta/dt_moor, IntKi)
       IF (ABS(delta - REAL(ntrim, DbKi)*dt_moor) > tol) THEN
          CALL SetErrStat( ErrID_Fatal, 'The native-history rewind is not an integer number of CableDyn steps.', &
                           ErrStat, ErrMsg, RoutineName )
