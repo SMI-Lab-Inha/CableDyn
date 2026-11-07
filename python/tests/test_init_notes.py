@@ -24,6 +24,8 @@ EXAMPLES = ROOT / "examples"
 DRIVER = os.environ.get("CABLEDYN_TEST_DRIVER", "").strip() or os.environ.get("CABLEDYN_DRIVER", "")
 DRIFT = "on the seabed at the static start with no seabed friction"
 CURRENT = "uniform 0.5 0 0 current"
+# a Currents 2 table that holds one current over its 1 s
+CONSTANT_GRID = "dynamic\n\n\n\n-50.0 0.0\nt ux... uy...\n0.0 0.1 0.1 0.0 0.0\n1.0 0.1 0.1 0.0 0.0\n"
 _BAR = "-" * 21
 _DECK = f"""{_BAR} CableDyn Input File {_BAR}
 a grounded chain
@@ -117,8 +119,7 @@ def test_the_notes_of_a_deck_on_both_routes(tmp_path):
 
 def test_a_note_of_the_parse_is_kept_once(tmp_path):
     # the deck is read twice, to find its route and to build it
-    record = "dynamic\n\n\n\n-50.0 0.0\nt ux... uy...\n0.0 0.1 0.1 0.0 0.0\n1.0 0.1 0.1 0.0 0.0\n"
-    (tmp_path / "current_profile_dynamic.txt").write_text(record, encoding="utf-8")
+    (tmp_path / "current_profile_dynamic.txt").write_text(CONSTANT_GRID, encoding="utf-8")
     with CableDyn(_deck(tmp_path, "2 Currents")) as model:
         notes = model.init_notes
     assert len([note for note in notes if "TMax outlasts the last sample" in note]) == 1
@@ -157,8 +158,7 @@ def test_a_failed_initialisation_keeps_its_notes_and_the_model(tmp_path):
     with CableDyn(_deck(tmp_path, CURRENT)) as model:
         assert _drift(model.init_notes)
         n_lines = model.n_lines
-        record = "dynamic\n\n\n\n-50.0 0.0\nt ux... uy...\n0.0 0.1 0.1 0.0 0.0\n1.0 0.1 0.1 0.0 0.0\n"
-        (tmp_path / "current_profile_dynamic.txt").write_text(record, encoding="utf-8")
+        (tmp_path / "current_profile_dynamic.txt").write_text(CONSTANT_GRID, encoding="utf-8")
         bad = _deck(tmp_path, "2 Currents", "r.txt vesselRAO", name="bad.dat")
         with pytest.raises(CableDynError):
             model.init_deck(bad)

@@ -1459,7 +1459,7 @@ CONTAINS
     END IF
     IF (capture_notes .AND. ErrStat == CD_DECKDRV_OK) THEN
       CALL deck_start_notes(lines, channels, opts, .TRUE., .FALSE.)
-      CALL capture_system_notes(lines, points, sections, types, opts, system)
+      CALL capture_system_notes(lines, points, sections, types, opts, system, dtM)
     END IF
   END SUBROUTINE CD_Init_Deck_System
 
@@ -1572,16 +1572,18 @@ CONTAINS
     captured_notes = ''
   END SUBROUTINE CD_Init_Notes_Take
 
-  SUBROUTINE capture_system_notes(lines, points, sections, types, opts, system)
+  SUBROUTINE capture_system_notes(lines, points, sections, types, opts, system, dt)
     !! The notes of a point system built for an in-process caller, who marches it: those a run of
-    !! the deck prints in its initialisation report (print_deck_init_report). A note that cannot be
-    !! worked out does not stop the initialisation: the notes then say so.
+    !! the deck prints in its initialisation report (print_deck_init_report). dt: the deck's own
+    !! step, zero without one. A note that cannot be worked out does not stop the initialisation:
+    !! the notes then say so.
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
     TYPE(CD_SystemType), INTENT(IN) :: system
+    REAL(wp), INTENT(IN) :: dt
     TYPE(CD_LineInitSummary), ALLOCATABLE :: summaries(:)
     CHARACTER(:), ALLOCATABLE :: drift_note
     CHARACTER(1024) :: note
@@ -1598,8 +1600,8 @@ CONTAINS
       CALL CD_Init_Notes_Add(summaries(i)%note)
       CALL static_strain_note(summaries(i)%line_id, summaries(i)%fair_tension, sections, types, opts, note)
       CALL capture_note(note)
-      IF (opts%has_dtm) THEN
-        CALL axial_period_note(summaries(i)%line_id, opts%dtM, sections, types, note)
+      IF (dt > CD_ZERO) THEN
+        CALL axial_period_note(summaries(i)%line_id, dt, sections, types, note)
         CALL capture_note(note)
       END IF
     END DO

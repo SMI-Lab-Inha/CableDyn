@@ -39,6 +39,8 @@ REVIEWED_STATIC = {
     ("CableDyn_OF.f90", "g_serial"): "OpenFAST instance generation counter, at initialisation only",
     ("CableDyn_DeckDriver.f90", "body_static_pass_limit"): "test hook of the standalone body statics",
     ("CableDyn_DeckDriver.f90", "probe_armed"): "test hook of the standalone multibody march",
+    ("CableDyn_DeckDriver.f90", "capture_notes"): "set only under the C API's process-wide input lock",
+    ("CableDyn_DeckDriver.f90", "captured_notes"): "written only under the C API's process-wide input lock",
     ("CableDyn_DeckDriver.f90", "probe_v0"): "test hook of the standalone multibody march",
     ("CableDyn_DeckDriver.f90", "probe_w0"): "test hook of the standalone multibody march",
     ("CableDyn_DeckDriver.f90", "probe_rec"): "test hook of the standalone multibody march",
