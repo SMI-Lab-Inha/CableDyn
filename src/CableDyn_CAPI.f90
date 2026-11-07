@@ -17,7 +17,7 @@ MODULE CableDyn_CAPI
                                  CD_Deck_Query_dtM, CD_DECK_NAMELEN, CD_Eval_Aggregate_Channel, &
                                  CD_Eval_Aggregate_Segment_Tensions, CD_Eval_Aggregate_Line_Values, &
                                  CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses, CD_Cable_Deck_Node, &
-                                 CD_Init_Notes_Start, CD_Init_Notes_Add, CD_Init_Notes_Take
+                                 CD_Init_Notes_Start, CD_Init_Notes_Add, CD_Init_Notes_Take, CD_INIT_NOTE_LEN
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_End, CD_AGG_IsInitialized, CD_AGG_OK, &
@@ -640,7 +640,7 @@ CONTAINS
     INTEGER :: i, es, n_lines, n_points, n_sections, n_ei0, n_finite, line_id
     REAL(wp) :: tension, force(3), inclination, declination, azimuth
     CHARACTER(CD_C_MSG_LEN) :: em
-    CHARACTER(2048) :: note
+    CHARACTER(CD_INIT_NOTE_LEN) :: note
 
     CALL CD_AGG_GetInitMetadata(agg, n_lines, n_points, n_sections, n_ei0, n_finite, es, em)
     IF (es == CD_AGG_OK) THEN
