@@ -105,6 +105,7 @@ LineID  End  Stiffness  EzX     EzY  EzZ
 1       A    Rigid      0.3     0.0  -0.9539
 """
 
+FRICTION = "0.5 frictionMu\nasLaid staticsFriction\n0 layAzimuth"
 CURRENT = f"uniform {SPEED} 0 0 current"
 WAVE = f"airy {HEIGHT} {PERIOD} 0 waves"
 
@@ -250,8 +251,7 @@ def test_host_field_matches_the_driver_in_current_and_waves(tmp_path):
 
 
 def test_host_field_takes_a_stiffener_and_as_laid_friction(tmp_path):
-    friction = "0.5 frictionMu\nasLaid staticsFriction\n0 layAzimuth"
-    options = f"{CURRENT}\n{friction}"
+    options = f"{CURRENT}\n{FRICTION}"
     reference = _driver_run(tmp_path, f"{options}\n{WAVE}", STIFFENER)
     with CableDyn() as model:
         model.set_host_fluid()
@@ -273,10 +273,15 @@ def test_a_host_marches_past_the_deck_tmax(tmp_path):
         assert np.all(np.isfinite(model.calc_output()))
 
 
-def test_save_and_restore_carry_the_held_field(tmp_path):
+@pytest.mark.parametrize(
+    "options, tables",
+    [(CURRENT, ""), (CURRENT + "\n" + FRICTION, STIFFENER)],
+    ids=["plain", "stiffener-and-as-laid-friction"],
+)
+def test_save_and_restore_carry_the_held_field(tmp_path, options, tables):
     with CableDyn() as model:
         model.set_host_fluid()
-        model.init_deck(_deck(tmp_path, "library", CURRENT))
+        model.init_deck_rotating(_deck(tmp_path, "library", options, tables))
         _host_field(model, 0.0, SPEED)
         for i in range(1, 6):
             _host_field(model, i * DT, SPEED)
