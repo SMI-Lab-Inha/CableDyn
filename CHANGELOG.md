@@ -15,6 +15,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `.CD.out`, once per step when OpenFAST retries a step, and across a checkpoint restart. The
   file appears when the run reaches `TMax`. A FAST.Farm shared mooring and the C API reject the
   flag by name.
+- An OpenFAST initialisation note when the deepest interval of the SeaState depth grid exceeds 5 %
+  of the depth and a line lies in it: the field is linear there, unlike a deck depth table.
 
 ### Changed
 

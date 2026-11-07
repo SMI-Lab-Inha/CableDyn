@@ -207,6 +207,12 @@ the seabed (``Z_Depth = WtrDpth + MSL2SWL``): they are in the seabed, where the 
 grid bottom are the right ones. FAST.Farm runs, which use still water, and SeaState fields
 without waves or current are not checked.
 
+SeaState's cosine depth grid is coarsest at the bottom: its deepest interval is
+``Z_Depth*sin(pi/(2*(NZ - 1)))``, about 22 m at 200 m depth with ``NZ = 15``, and the field falls
+linearly across it to the seabed, so near the seabed it differs from a deck depth table; when that
+interval exceeds 5 % of the depth (``NZ`` below 33) and a line lies in it, an initialisation note
+states the interval and the ``NZ`` that would bring it under 5 %.
+
 Run and confirm
 ---------------
 

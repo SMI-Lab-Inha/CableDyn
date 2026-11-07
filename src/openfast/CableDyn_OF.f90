@@ -142,6 +142,10 @@ MODULE CableDyn
 
    PRIVATE
 
+   ! Depth fraction above which the deepest interval of the SeaState grid is noted at initialisation
+   ! (note_seastate_deep_interval).
+   REAL(wp), PARAMETER :: SEASTATE_DEEP_INTERVAL = 0.05_wp
+
    ! the kinds of first-order linearization state (lin_state_map)
    INTEGER(IntKi), PARAMETER :: LIN1_VE = 1, LIN1_SYROPE = 2
 
@@ -997,6 +1001,7 @@ CONTAINS
          IF (ErrStat2 < AbortErrLev) CALL save_held_fluid( Inst(id), other )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) RETURN
+         CALL note_seastate_deep_interval( Inst(id), InitInp%WaveField )
       END IF
 
       ! The coupling mesh carries ONLY the host-prescribed (Coupled/Vessel) points.
@@ -2335,6 +2340,45 @@ CONTAINS
       ! during the time march reaches the screen through the glue's error check.
       IF (at_init) CALL WrScr( '   WARNING: '//msg )
    END SUBROUTINE check_wavefield_grid
+
+   SUBROUTINE note_seastate_deep_interval( inst_e, wf )
+      !! Say at initialisation, once per run (a restart rebuilds without passing here), when the
+      !! deepest interval of the SeaState depth grid is coarse and a line lies in it. The levels
+      !! are z_k = Z_Depth*(sin(k*delta) - 1) with delta = pi/(2*(NZ - 1)): the grid is finest at
+      !! the surface and coarsest at the bottom, where the interval H = Z_Depth*sin(delta) is
+      !! pi/2 times the uniform spacing. Inside H the field is interpolated linearly down to the
+      !! seabed. For the 1/7-power current of CurrMod 1 that is up to 62 % of the value at the top
+      !! of the interval low, whatever H is, so H alone sets how much of the column carries the
+      !! difference: the depth integral of the current lacks 3/7*(H/D)^(8/7) of its value, 1.4 %
+      !! at the threshold H = 5 % of the depth (NZ >= 33 stays below it) and 3.5 % at NZ = 15. A
+      !! grid short of the seabed has the out-of-grid warning of check_wavefield_grid instead.
+      !! Reads the grid and the node positions and writes to the screen only.
+      TYPE(CD_OF_Instance),      INTENT(IN) :: inst_e
+      TYPE(SeaSt_WaveFieldType), INTENT(IN) :: wf
+      REAL(wp), PARAMETER :: HALF_PI = 2.0_wp*ATAN(1.0_wp)
+      LOGICAL  :: waves, grid_current
+      INTEGER(IntKi) :: nz, nodes
+      REAL(wp) :: depth, interval
+
+      waves = inst_e%agg%host_wave_enabled .AND. wf%WaveMod /= WaveMod_None
+      grid_current = inst_e%agg%host_current_enabled .AND. wf%Current_InitInput%CurrMod /= 0_IntKi
+      nz = wf%VolGridParams%n(4)
+      IF (.NOT. (waves .OR. grid_current) .OR. nz < 2_IntKi) RETURN
+      depth = REAL(wf%GridDepth, wp)
+      interval = depth*SIN(REAL(wf%VolGridParams%delta(4), wp))
+      IF (depth < REAL(wf%EffWtrDpth, wp) - 0.01_wp*interval) RETURN
+      IF (interval <= SEASTATE_DEEP_INTERVAL*depth) RETURN
+      nodes = COUNT(inst_e%fx_xyz(3, 1:inst_e%nfluid) < interval - depth)
+      IF (nodes == 0_IntKi) RETURN
+      CALL WrScr( '   Note: the deepest interval of the SeaState depth grid is '//TRIM(Num2LStr(interval))// &
+                  ' m (NZ = '//TRIM(Num2LStr(nz))//', Z_Depth = '//TRIM(Num2LStr(depth))//' m), over '// &
+                  TRIM(Num2LStr(NINT(100.0_wp*SEASTATE_DEEP_INTERVAL)))//' % of the depth, and '// &
+                  TRIM(Num2LStr(nodes))//' of the '//TRIM(Num2LStr(inst_e%nfluid))// &
+                  ' CableDyn sampling nodes lie in it. The field is linear there, so near the seabed '// &
+                  'it differs from a deck depth table. More depth levels refine it: NZ = '// &
+                  TRIM(Num2LStr(1_IntKi + CEILING(HALF_PI/ASIN(SEASTATE_DEEP_INTERVAL), IntKi)))// &
+                  ' or more in the SeaState input file.' )
+   END SUBROUTINE note_seastate_deep_interval
 
    SUBROUTINE check_current_field_grid( inst_e, wf, t_sample )
       !! A dynamically populated current field (an InflowWind-driven MHK current, hasCurrField) is
