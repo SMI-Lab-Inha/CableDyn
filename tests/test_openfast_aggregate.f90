@@ -162,6 +162,7 @@ PROGRAM test_openfast_aggregate
   CALL case_step_atomicity()
   CALL case_ptfm_init_equivalence()
   CALL case_correction_rewind()
+  CALL case_retry_after_probe()
   CALL case_external_fluid()
   CALL case_still_water_deck_ambient()
   CALL case_external_fluid_report()
@@ -2810,6 +2811,77 @@ CONTAINS
     m(2, 3) = sx*cy
     m(3, 3) = cx*cy
   END FUNCTION test_zyx_dcm
+
+  SUBROUTINE case_retry_after_probe()
+    !! A host that retries a step after an output probe of it (the OpenFAST shell at dtM = DT): the
+    !! probe's setters clear the cached committed force, but the retried step must take the path
+    !! the first pass took, which reused that cache. A fresh evaluation differs from it in the last
+    !! bits where a friction anchor slid. The run with retries matches one without bit for bit.
+    TYPE(CD_AGG_ModuleType) :: agg, once
+    REAL(wp), PARAMETER :: DT = 0.05_wp, OMEGA = 2.0_wp*PI/8.0_wp, AMP = 12.0_wp
+    INTEGER, PARAMETER :: NSTEP = 160
+    REAL(wp) :: r0(3, 2), tgt(3, 2), v(3, 2), a(3, 2), lds(3, 2), tc
+    INTEGER :: es, ni, s
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+
+    CALL write_touchdown_cable_deck('agg_retry_probe.dat', 'FairTen2')
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_retry_probe.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'retry-probe:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_Init_From_Deck(once, 'agg_retry_probe.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'retry-probe:init-once: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetMovingPointMesh(agg, r0, v, a, lds, es, em)
+    DO s = 1, NSTEP
+      tc = REAL(s, wp)*DT
+      tgt = r0
+      tgt(1, 2) = r0(1, 2) + AMP*SIN(OMEGA*tc)
+      v = 0.0_wp
+      v(1, 2) = AMP*OMEGA*COS(OMEGA*tc)
+      a = 0.0_wp
+      a(1, 2) = -AMP*OMEGA**2*SIN(OMEGA*tc)
+      CALL CD_AGG_Snapshot(agg, es, em)
+      CALL CD_AGG_Step_Moving(agg, DT, tgt, v, a, cv, st, ni, es, em, t_committed=tc)
+      CALL require(es == CD_AGG_OK .AND. cv, 'retry-probe:first-pass: '//TRIM(em))
+      CALL retry_probe_cycle(agg, tgt, v, a, tc)
+      CALL CD_AGG_Restore(agg, es, em)
+      CALL require(es == CD_AGG_OK, 'retry-probe:restore: '//TRIM(em))
+      CALL CD_AGG_Step_Moving(agg, DT, tgt, v, a, cv, st, ni, es, em, t_committed=tc)
+      CALL require(es == CD_AGG_OK .AND. cv, 'retry-probe:second-pass: '//TRIM(em))
+      CALL retry_probe_cycle(agg, tgt, v, a, tc)
+      CALL CD_AGG_Snapshot(once, es, em)
+      CALL CD_AGG_Step_Moving(once, DT, tgt, v, a, cv, st, ni, es, em, t_committed=tc)
+      CALL require(es == CD_AGG_OK .AND. cv, 'retry-probe:once: '//TRIM(em))
+      IF (es /= CD_AGG_OK) EXIT
+      CALL retry_probe_cycle(once, tgt, v, a, tc)
+    END DO
+    WRITE (*, '(A,ES10.3)') '  retried against single steps, largest cable state difference: ', &
+      nan_max_abs(agg%cables(1)%line%q - once%cables(1)%line%q)
+    CALL require(nan_max_abs(agg%cables(1)%line%q - once%cables(1)%line%q) <= 0.0_wp, 'retry-probe:positions')
+    CALL require(nan_max_abs(agg%cables(1)%line%v - once%cables(1)%line%v) <= 0.0_wp, 'retry-probe:velocities')
+    CALL require(nan_max_abs(agg%cables(1)%line%a - once%cables(1)%line%a) <= 0.0_wp, 'retry-probe:accelerations')
+    CALL CD_AGG_End(agg, es, em)
+    CALL CD_AGG_End(once, es, em)
+  END SUBROUTINE case_retry_after_probe
+
+  SUBROUTINE retry_probe_cycle(a, tgt, v, acc, t)
+    !! An output probe at the committed kinematics and the cable's state mirror back after it, as
+    !! the OpenFAST shell's CalcOutput does at dtM = DT.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: a
+    REAL(wp), INTENT(IN) :: tgt(:, :), v(:, :), acc(:, :), t
+    REAL(wp), ALLOCATABLE :: buf(:)
+    INTEGER :: es
+    CHARACTER(512) :: em
+
+    ALLOCATE (buf(CD_HFMF_MirrorSize(a%cables(1))))
+    CALL CD_HFMF_PackMirror(a%cables(1), buf, es, em)
+    CALL require(es == CD_HFMF_OK, 'retry-probe:pack: '//TRIM(em))
+    CALL CD_AGG_UpdateStates_Moving(a, tgt, v, acc, es, em, output_probe=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'retry-probe:probe: '//TRIM(em))
+    CALL CD_HFMF_UnpackMirror(a%cables(1), buf, t, es, em)
+    CALL require(es == CD_HFMF_OK, 'retry-probe:unpack: '//TRIM(em))
+  END SUBROUTINE retry_probe_cycle
 
   SUBROUTINE case_correction_rewind()
     !! Correction-iteration semantics at the aggregate level (the OpenFAST shell's
