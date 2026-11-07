@@ -179,14 +179,15 @@ Clock, motion, and environment
    * - Message
      - Cause and fix
    * - ``dynamic run requires both dtM and TMax options``
-     - the standalone driver needs both or neither. Add the missing one.
+     - the standalone driver needs both or neither. Add the missing one; ``TMax = 0``, a check of
+       the static start, needs no ``dtM``.
    * - ``OPTIONS TMax must be an integer multiple of dtM``
      - choose ``TMax = n·dtM`` exactly (for example ``dtM = 0.05``, ``TMax = 600``).
    * - ``standalone OPTION current requires dtM and TMax`` (likewise ``waves``, ``motionFile``,
        ``frictionMu``, ``RODS``, ``Rigid6 BODY``, ``Point3 BODY``, ``Connect``/``Free`` points,
        ``finite-EI section (EI>0)``)
-     - these features act only in a dynamic march. Add ``dtM``/``TMax``, or remove the feature for
-       a static calculation. A mixed ``EI = 0`` + finite-EI deck may run static without them. A
+     - these features act only in a dynamic march. Add ``dtM``/``TMax``, ``TMax = 0`` to check the
+       static start, or remove the feature for a static calculation. A mixed ``EI = 0`` + finite-EI deck may run static without them. A
        coupled (caller-driven) deck takes its clock from the host, so ``current`` and ``frictionMu``
        need no ``dtM`` there.
    * - ``OPTION waves requires WtrDpth``

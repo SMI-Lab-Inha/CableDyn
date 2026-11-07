@@ -262,7 +262,7 @@ Clock and initial condition
      - real, s
      - absent (static-only)
      - finite, > 0. In the standalone driver ``dtM`` and ``TMax`` are given together or not at
-       all
+       all; only ``TMax = 0``, which marches no step, needs no ``dtM``
      - standalone step; OpenFAST targets ``0.1`` s when absent, rounds it to at least one whole
        glue ``DT``, and reports the value used
      - ``0.05 dtM``
@@ -272,7 +272,7 @@ Clock and initial condition
      - finite, ≥ 0 and an integer multiple of ``dtM``. ``TMax = 0`` runs the dynamic
        initialisation and writes the ``t = 0`` row: the static start of a dynamic deck, checked
        with every other option kept (motion records longer than ``TMax`` and a later
-       ``RangeStart`` included)
+       ``RangeStart`` included), with or without ``dtM``
      - standalone only; OpenFAST uses the host ``TMax``. Do not copy the host duration into a
        coupled deck
      - ``600.0 TMax``
@@ -841,11 +841,11 @@ cables, Rigid6 bodies or rods.
 Standalone versus OpenFAST checklist
 ------------------------------------
 
-For a standalone static calculation, omit both ``dtM`` and ``TMax`` or set a deliberate pair with
-``TMax=0`` when exercising the dynamic initialisation route. For standalone dynamics, provide
+For a standalone static calculation, omit both ``dtM`` and ``TMax`` or set ``TMax=0`` (``dtM`` is
+then optional) when exercising the dynamic initialisation route. For standalone dynamics, provide
 both and ensure ``TMax/dtM`` is integral. ``current``, ``waves``, ``motionFile``, a positive
 ``frictionMu``, rods, bodies, ``Connect``/``Free`` points, and finite-EI sections (outside a mixed
-deck) all need the ``dtM``/``TMax`` pair. File paths are resolved relative to the deck and may use
+deck) all need the ``dtM``/``TMax`` pair or ``TMax=0``. File paths are resolved relative to the deck and may use
 ordinary nested paths longer than the 64-character deck-identifier limit.
 
 For ``CompMooring = 5``, OpenFAST owns gravity, density, flat depth, platform motion, run duration,

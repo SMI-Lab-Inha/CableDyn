@@ -1790,7 +1790,8 @@ if(Python3_Interpreter_FOUND)
   endif()
 
   # TMax = 0 checks the static start of a dynamic deck: vesselMotion and motionFile records
-  # that outlast TMax, RangeStart at TMax = 0, and the hint of a deck without dtM and TMax.
+  # that outlast TMax, RangeStart at TMax = 0, a deck of each route without dtM, and the hint of a
+  # deck without dtM and TMax.
   add_test(NAME static_check
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_static_check.py
                    --exe $<TARGET_FILE:cabledyn>

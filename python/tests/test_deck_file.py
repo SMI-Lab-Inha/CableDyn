@@ -1924,7 +1924,7 @@ def test_host_route_does_not_relax_deck_owned_kinematics_clock(tmp_path, option_
         with pytest.raises(DeckFormatError, match=message) as err:
             DeckFile.read(path, caller_driven=caller_driven)
         # the standalone error says how to check the deck's static start; the host route's not
-        assert ("give dtM with TMax = 0" in str(err.value)) is not caller_driven
+        assert ("give TMax = 0" in str(err.value)) is not caller_driven
 
 
 def test_current_needs_the_deck_clock_only_on_the_standalone_route(tmp_path):

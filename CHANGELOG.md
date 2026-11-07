@@ -8,6 +8,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A standalone deck with `TMax 0` no longer needs `dtM`: the static check marches no step, so it
+  runs without one on every standalone route and writes the same `t = 0` row as with one. A
+  mixed deck that marches no step no longer prints the `dtM` advisory.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added

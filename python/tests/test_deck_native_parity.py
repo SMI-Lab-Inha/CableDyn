@@ -1813,3 +1813,87 @@ def test_mixed_route_currents_get_the_native_verdict(rows, tmp_path):
     assert python_accepts == (completed.returncode != 1), completed.stdout + completed.stderr
     if python_accepts:
         assert "mixed standalone aggregate" in completed.stdout, completed.stdout
+
+
+# A static check: TMax = 0 and no dtM.
+_CHECK = _edit(_HELD, ("0.1 dtM\n10.0 TMax\n", "0.0 TMax\n"))
+_CHECK_MIXED = _edit(_MIXED, ("0.1 dtM\n10.0 TMax\n", "0.0 TMax\n"))
+_CHECK_FINITE = _edit(
+    _CHECK, ("chain 0.252 390.0 1.674e9 -1.0 0.0 ", "chain 0.252 390.0 1.674e9 -1.0 1.0e6 ")
+)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        (),
+        ("uniform 1 0 0 current",),
+        ("airy 2 8 0 waves",),
+        ("0.3 frictionMu",),
+        ("m.txt motionFile",),
+        ("v.txt vesselMotion", "0|0|0 vesselRef"),
+    ],
+)
+def test_static_check_needs_no_dtm(rows):
+    DeckFile.from_text(_options(_CHECK, *rows))
+    DeckFile.from_text(_options(_CHECK_FINITE, *rows))
+    if "airy 2 8 0 waves" not in rows:
+        DeckFile.from_text(_options(_CHECK_MIXED, *rows))
+
+
+def test_static_check_takes_a_negative_zero_tmax_and_no_other():
+    DeckFile.from_text(_edit(_CHECK, ("0.0 TMax", "-0.0 TMax")))
+    _rejects(_edit(_CHECK, ("0.0 TMax", "1.0e-9 TMax")), "dynamic run requires both dtM and TMax")
+    _rejects(_edit(_CHECK, ("0.0 TMax", "10.0 TMax")), "dynamic run requires both dtM and TMax")
+
+
+def test_static_check_leaves_the_host_clock_rules_alone():
+    # a host marches a caller-driven deck: its TMax says nothing about the deck-owned kinematics
+    DeckFile.from_text(_CHECK, caller_driven=True)
+    _rejects(_options(_CHECK, "airy 2 8 0 waves"), "waves requires dtM", caller_driven=True)
+    _rejects(_options(_CHECK, "m.txt motionFile"), "motionFile requires dtM", caller_driven=True)
+
+
+def test_a_lone_dtm_says_how_to_check_the_static_start():
+    _rejects(_edit(_HELD, ("10.0 TMax\n", "")), "requires both dtM and TMax.*give TMax = 0")
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the native clock parity",
+)
+@pytest.mark.parametrize(
+    ("text", "accepted"),
+    [
+        (_CHECK, True),
+        (_options(_CHECK, "uniform 1 0 0 current"), True),
+        (_options(_CHECK, "airy 2 8 0 waves"), True),
+        (_options(_CHECK, "0.3 frictionMu"), True),
+        (_CHECK_FINITE, True),
+        (_options(_CHECK_FINITE, "uniform 1 0 0 current"), True),
+        (_CHECK_MIXED, True),
+        (_options(_CHECK_MIXED, "uniform 0.5 0 0 current"), True),
+        (_edit(_CHECK, ("0.0 TMax", "-0.0 TMax")), True),
+        (_edit(_CHECK, ("0.0 TMax", "1.0 TMax")), False),
+        (_edit(_CHECK_MIXED, ("0.0 TMax", "1.0 TMax")), False),
+        (_edit(_HELD, ("10.0 TMax\n", "")), False),
+    ],
+)
+def test_static_check_clock_gets_the_native_verdict(text, accepted, tmp_path):
+    try:
+        DeckFile.from_text(text)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    deck = tmp_path / "check.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "check")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=600,
+        check=False,
+    )
+    assert python_accepts == accepted
+    assert (completed.returncode == 0) == accepted, completed.stdout + completed.stderr

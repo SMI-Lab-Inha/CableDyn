@@ -326,7 +326,7 @@ _DISABLED_MOTION_FILE_VALUES = frozenset({"0", "none"})
 _MOTION_SOURCE_KEYWORDS = ("motionfile", "vesselmotion", "vesselrao")
 # Native STATIC_CHECK_HINT: appended to the errors that ask a standalone deck without TMax for
 # the march (those naming one of the cues).
-_STATIC_CHECK_HINT = "; to check a dynamic deck's static start only, give dtM with TMax = 0"
+_STATIC_CHECK_HINT = "; to check a dynamic deck's static start only, give TMax = 0"
 _STATIC_CHECK_CUES = ("dtM and TMax", "requires dtM", "require dtM", "dynamic deck (TMax)")
 _END_CONNECTION_ENDS = {
     "a": "a",
@@ -2505,7 +2505,14 @@ class DeckFile:
             )
         has_dtm = "dtm" in option_by_key
         has_tmax = "tmax" in option_by_key
-        if not self.caller_driven and has_dtm != has_tmax:
+        # native parse_deck: a static check marches no step, so standalone TMax = 0 needs no dtM
+        static_check = (
+            not self.caller_driven
+            and has_tmax
+            and not has_dtm
+            and _native_float(option_by_key["tmax"].values[0]) == 0.0
+        )
+        if not self.caller_driven and has_dtm != has_tmax and not static_check:
             raise DeckFormatError(
                 f"{self._label}: standalone dynamic run requires both dtM and TMax options"
             )
@@ -2525,6 +2532,7 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{self._label}: OPTION TMax must be an integer multiple of dtM"
                 )
+        has_dtm = has_dtm or static_check
         # MoorDyn-C WaveKin 3/7 and Currents 1/2/5 (native read_moordyn_c_kinematics): component
         # waves and a current profile or grid read from fixed-name files in the deck folder.
         # The coupled aggregate takes its water kinematics from the host and rejects both.
