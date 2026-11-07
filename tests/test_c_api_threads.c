@@ -19,13 +19,14 @@
  *   3. 8 threads initialise the same Syrope deck, which shares one OWC table file.
  *   4. A missing deck reports "file not found".
  *   5. 24 threads step distinct handles concurrently while other threads keep
- *      failing to open a missing deck; every trajectory matches a serial reference.
+ *      failing to open a missing deck; every trajectory, and the line values each thread
+ *      reads at every step, match a serial reference.
  *
  * test_c_api_threads --mixed <n_steps> <deck> [<deck> ...] instead steps every deck on
  * several threads at once, all decks concurrently (each handle its own model: EI = 0
  * lines, finite-EI cables, Syrope and viscoelastic segments, points, bodies and rods take
- * their own code paths), n_steps steps each, and checks every trajectory against the
- * deck's serial reference. A procedure whose locals or callbacks live in storage that
+ * their own code paths), n_steps steps each, and checks every trajectory and the line
+ * values read at every step against the deck's serial reference. A procedure whose locals or callbacks live in storage that
  * every thread shares (static locals, closure trampolines) fails it.
  *
  * CABLEDYN_THREAD_TEST_LOOPS=<n> repeats checks 2-5 n times in one process (stress
@@ -259,8 +260,37 @@ static double private_mb(void)
 #endif
 }
 
-/* Initialises `path`, takes n_step steps, and records the final coupled loads. */
-static int step_deck(const char *path, int n_step, double *loads, int *ndof_out, char *msg, size_t msg_len)
+/* Reads every node quantity of every line of the handle and adds up their magnitudes. */
+static double read_lines(void *h, int *err)
+{
+    static const int width[8] = {3, 3, 1, 3, 1, 1, 1, 1}; /* CD_C_LINE_POSITION .. _AZIMUTH */
+    double sum = 0.0;
+    int n_lines = CableDyn_NObjects(h, CD_C_OBJ_LINE, err), line, quantity, i;
+
+    for (line = 0; line < n_lines && *err == CD_C_OK; ++line) {
+        int id, nn, sub;
+        double *buf;
+        CableDyn_GetObjectInfo(h, CD_C_OBJ_LINE, line, &id, &nn, &sub, err);
+        if (*err != CD_C_OK) break;
+        buf = (double *)malloc(3 * (size_t)nn * sizeof *buf);
+        if (buf == NULL) {
+            *err = CD_C_ALLOC_FAIL;
+            break;
+        }
+        for (quantity = 1; quantity <= 8 && *err == CD_C_OK; ++quantity) {
+            int n = width[quantity - 1] * nn;
+            CableDyn_GetLineValues(h, line, quantity, buf, n, err);
+            for (i = 0; i < n && *err == CD_C_OK; ++i) sum += fabs(buf[i]);
+        }
+        free(buf);
+    }
+    return sum;
+}
+
+/* Initialises `path`, takes n_step steps reading its lines at each, and records the final
+ * coupled loads and the sum of the line values read. */
+static int step_deck(const char *path, int n_step, double *loads, double *lines, int *ndof_out, char *msg,
+                     size_t msg_len)
 {
     void *h = NULL;
     int err = -1, ndof, k, n_iter = 0;
@@ -280,6 +310,7 @@ static int step_deck(const char *path, int n_step, double *loads, int *ndof_out,
         return 1;
     }
     CableDyn_GetCoupledMotion(h, q, v, a, ndof, &err);
+    *lines = 0.0;
     for (k = 0; k < n_step && err == CD_C_OK; ++k) {
         /* A slow surge of every coupled x DOF keeps the lines working. */
         int i;
@@ -290,6 +321,7 @@ static int step_deck(const char *path, int n_step, double *loads, int *ndof_out,
             CableDyn_Close(&h, &err);
             return 1;
         }
+        if (err == CD_C_OK) *lines += read_lines(h, &err);
     }
     if (err == CD_C_OK) CableDyn_CalcOutput(h, loads, ndof, &err);
     if (err != CD_C_OK) CableDyn_GetLastError(h, msg, (int)msg_len);
@@ -337,13 +369,14 @@ struct step_job {
     int ndof;
     int failed;
     double loads[MAX_DOF];
+    double lines;
     char msg[512];
 };
 
 static void step_worker(void *raw)
 {
     struct step_job *job = (struct step_job *)raw;
-    job->failed = step_deck(job->path, job->n_step, job->loads, &job->ndof, job->msg, sizeof job->msg);
+    job->failed = step_deck(job->path, job->n_step, job->loads, &job->lines, &job->ndof, job->msg, sizeof job->msg);
 }
 
 static void missing_worker(void *raw)
@@ -482,11 +515,11 @@ static int check_concurrent_steps(const char *deck)
     enum { N_STEPPERS = 24, N_MISSING = 4 };
     static struct step_job jobs[N_STEPPERS + N_MISSING];
     struct task tasks[N_STEPPERS + N_MISSING];
-    double reference[MAX_DOF];
+    double reference[MAX_DOF], reference_lines = 0.0;
     char msg[512] = {0};
     int i, j, ndof = 0, failed = 0;
 
-    if (step_deck(deck, N_STEP, reference, &ndof, msg, sizeof msg) != 0) {
+    if (step_deck(deck, N_STEP, reference, &reference_lines, &ndof, msg, sizeof msg) != 0) {
         fprintf(stderr, "FAIL serial reference run: %s\n", msg);
         return 1;
     }
@@ -522,6 +555,10 @@ static int check_concurrent_steps(const char *deck)
                 break;
             }
         }
+        if (j == ndof && fabs(jobs[i].lines - reference_lines) > 1.0e-9 * (1.0 + fabs(reference_lines))) {
+            fprintf(stderr, "  thread %d: line values %.17g, reference %.17g\n", i, jobs[i].lines, reference_lines);
+            ++failed;
+        }
     }
     printf("concurrent steps: %d threads x %d steps on distinct handles, %d missing-deck threads: failed=%d\n",
            N_STEPPERS, N_STEP, N_MISSING, failed);
@@ -539,6 +576,7 @@ static int check_mixed_steps(int n_decks, char **decks, int n_step)
     enum { MAX_DECKS = 8 };
     static struct step_job jobs[MAX_THREADS];
     static double reference[MAX_DECKS][MAX_DOF];
+    double reference_lines[MAX_DECKS];
     struct task tasks[MAX_THREADS];
     int ndof[MAX_DECKS];
     char msg[512] = {0};
@@ -549,7 +587,7 @@ static int check_mixed_steps(int n_decks, char **decks, int n_step)
         return 1;
     }
     for (d = 0; d < n_decks; ++d) {
-        if (step_deck(decks[d], n_step, reference[d], &ndof[d], msg, sizeof msg) != 0) {
+        if (step_deck(decks[d], n_step, reference[d], &reference_lines[d], &ndof[d], msg, sizeof msg) != 0) {
             fprintf(stderr, "FAIL serial reference run of %s: %s\n", decks[d], msg);
             return 1;
         }
@@ -582,6 +620,11 @@ static int check_mixed_steps(int n_decks, char **decks, int n_step)
                 ++failed;
                 break;
             }
+        }
+        if (j == ndof[d] && fabs(jobs[i].lines - reference_lines[d]) > 1.0e-9 * (1.0 + fabs(reference_lines[d]))) {
+            fprintf(stderr, "  thread %d (%s): line values %.17g, reference %.17g\n", i, decks[d], jobs[i].lines,
+                    reference_lines[d]);
+            ++failed;
         }
     }
     printf("mixed concurrent steps: %d decks x %d threads x %d steps: failed=%d\n", n_decks, per_deck, n_step,

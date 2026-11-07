@@ -54,6 +54,7 @@ LineQuantity = Literal[
     "declination",
     "azimuth",
     "segment_tension",
+    "section_curvature",
 ]
 _LINE_QUANTITIES: dict[str, tuple[int, int]] = {
     "position": (1, 3),
@@ -65,6 +66,7 @@ _LINE_QUANTITIES: dict[str, tuple[int, int]] = {
     "declination": (7, 1),
     "azimuth": (8, 1),
     "segment_tension": (9, 1),
+    "section_curvature": (11, 2),
 }
 
 #: C ABI code of the deck node of each mesh node (``CD_C_LINE_DECK_NODE``).
@@ -219,7 +221,7 @@ class Line(_View):
             )
         code, width = _LINE_QUANTITIES[quantity]
         count = self.n_segments if quantity == "segment_tension" else self.n_nodes
-        shape = (count, 3) if width == 3 else (count,)
+        shape = (count, width) if width > 1 else (count,)
         buf = _buffer(out, shape)
         with self._model._lock:
             handle = self._handle()
@@ -258,6 +260,14 @@ class Line(_View):
         """Curvature at each node ``(n_nodes,)`` [1/m] (``Curv<L>N<k>``)."""
         return self.values("curvature", out)
 
+    def section_curvature(self, out: FloatArray | None = None) -> FloatArray:
+        """Curvature on the section axes at each node ``(n_nodes, 2)`` [1/m].
+
+        Columns ``CurvX<L>N<k>`` and ``CurvY<L>N<k>``, on a finite-EI line; one evaluation
+        for the whole line, so it is much cheaper than a channel per node.
+        """
+        return self.values("section_curvature", out)
+
     def bend_moment(self, out: FloatArray | None = None) -> FloatArray:
         """Bend moment magnitude at each node ``(n_nodes,)`` [N-m]; zero when EI = 0."""
         return self.values("bend_moment", out)
@@ -267,7 +277,10 @@ class Line(_View):
         return self.values("declination", out)
 
     def azimuth(self, out: FloatArray | None = None) -> FloatArray:
-        """Azimuth at each node ``(n_nodes,)`` [deg] (``L<L>N<k>Azi``)."""
+        """Azimuth at each node ``(n_nodes,)`` [deg] (``L<L>N<k>Azi``), in the line's range.
+
+        (-180, 180] on a line whose deck chord heads within 45 deg of +X, otherwise [0, 360).
+        """
         return self.values("azimuth", out)
 
     def arc_length(self) -> FloatArray:

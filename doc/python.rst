@@ -939,6 +939,7 @@ state at the time of the call through the same evaluator as the deck ``OUTPUTS``
        line = model.line(1)
        xyz = line.node_positions()          # (n_nodes, 3), End A first
        seg = line.segment_tensions()        # (n_segments,)
+       axes = line.section_curvature()      # (n_nodes, 2): CurvX, CurvY of a finite-EI line
        kappa = line.curvature()             # (n_nodes,); bend_moment() on finite-EI lines
        buf = np.empty_like(xyz)
        for _ in range(100):

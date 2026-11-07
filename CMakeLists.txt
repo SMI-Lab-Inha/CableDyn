@@ -1087,6 +1087,13 @@ add_test(NAME aggregate_step_atomicity COMMAND test_aggregate_step_atomicity
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(aggregate_step_atomicity PROPERTIES LABELS "fortran;unit;dynamic;capi")
 
+add_executable(test_line_values tests/test_line_values.f90)
+target_link_libraries(test_line_values PRIVATE cabledyn_core)
+add_test(NAME line_values_match_channels
+         COMMAND test_line_values ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_touchdown_planar_coarse.dat
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(line_values_match_channels PROPERTIES LABELS "fortran;unit;dynamic;capi")
+
 add_executable(test_core_input_guards tests/test_core_input_guards.f90)
 target_link_libraries(test_core_input_guards PRIVATE cabledyn_core)
 add_test(NAME core_input_guards COMMAND test_core_input_guards WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

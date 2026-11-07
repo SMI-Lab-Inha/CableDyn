@@ -1881,8 +1881,9 @@ handle numbers its lines 1..n).
        one value per node; ``_SEGMENT_TENSION`` (9), one value per segment;
        ``_DECK_NODE`` (10), one value per node: the deck node ``J`` of the node (the ``<J>``
        of the node channels), 0 for a node a mesh refinement added, ``1 … n_nodes`` on a line
-       meshed as the deck. ``n_out`` must equal the value count. A library without code 10
-       rejects it with ``CD_C_BAD_INPUT``.
+       meshed as the deck; ``_SECTION_CURVATURE`` (11), two values per node, ``CurvX`` and
+       ``CurvY`` interleaved, on a finite-EI line. ``n_out`` must equal the value count. A library
+       without code 10 or 11 rejects it with ``CD_C_BAD_INPUT``.
    * - ``CableDyn_GetPointState``
      - position, velocity and the resultant force of the attached lines (``Point<P>F``),
        3 doubles each
@@ -1903,6 +1904,11 @@ On a finite-EI line whose mesh the static solve refined, ``n_nodes`` and the
 ``CableDyn_EvalChannel`` (``Ten1N5``, ``L1N5px``) names deck node 5 at its node of that mesh
 (:ref:`outputs-refined-nodes`); ``CD_C_LINE_DECK_NODE`` locates it: the array row whose value is
 5.
+
+``CableDyn_GetLineValues`` evaluates a whole line in one call, with no text token per node, and
+each value is bit for bit the node channel's. It is the cheap way to read many nodes at every
+step. Reading the tension, curvature and bend moment of a line after a step shares one evaluation
+of its elements.
 
 A ``NULL`` output pointer skips that output, except for the ``out`` array of
 ``CableDyn_GetLineValues`` and the ``value`` of ``CableDyn_EvalChannel``; the latter is not

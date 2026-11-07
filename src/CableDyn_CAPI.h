@@ -151,6 +151,8 @@ int CableDyn_NLines(void *handle, int *err_stat);
 #define CD_C_LINE_DECK_NODE 10      /* 1 per mesh node: its deck node J, 0 if added by a
                                      * refinement (an earlier library rejects the
                                      * code with CD_C_BAD_INPUT) */
+#define CD_C_LINE_SECTION_CURVATURE 11 /* 2 per node, CurvX CurvY interleaved [1/m];
+                                        * finite-EI lines (ABI minor 4) */
 
 int CableDyn_GetAbiMinor(void);
 int CableDyn_NObjects(void *handle, int kind, int *err_stat);
