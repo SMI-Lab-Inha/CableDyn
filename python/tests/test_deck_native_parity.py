@@ -383,6 +383,37 @@ _ANCILLARY_CASES = [
         ("jonswap 2 9 3.3 30 waves", "4 WaveSpreading", "5 WaveDirections", *_RAO_ROWS),
         {"rao.txt": _rao(heads=(-42.0, 102.0))},
     ),
+    # a narrow spreading underflows the outer bins: only the bins with energy need a heading
+    (
+        "held",
+        ("jonswap 2 9 3.3 0 waves", "1000 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-40.0, 40.0))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 0 waves", "1000 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-20.0, 20.0))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 0 waves", "838 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-40.0, 40.0))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 0 waves", "700 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-40.0, 40.0))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 0 1000 wavetrain", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-40.0, 40.0))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 0 1000 wavetrain", "5 WaveDirections", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-36.0, 36.0))},
+    ),
     ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(), _FREE: _ROWS}),
     ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0, 100.0)), _FREE: _ROWS}),
     ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(heads=(28.0, 29.0)), _FREE: _ONE_BETA}),

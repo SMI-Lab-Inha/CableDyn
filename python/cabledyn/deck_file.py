@@ -1469,6 +1469,7 @@ _SYROPE_SCAN_SAMPLES = 200  # CD_SYROPE_NSCAN
 _BATHY_CREASE_FRACTION = 0.05
 _BATHY_CREASE_MIN_HEIGHT = 1.0e-6
 _SEA_DEFAULT_DIRECTIONS = 9
+_SPREADING_QUADRATURE = 128
 _STATIC_CHECK_DT = 1.0  # the nominal dtM of a standalone TMax = 0 without one (parse_deck)
 
 
@@ -2316,11 +2317,39 @@ def _train_direction(values: tuple[str, ...]) -> tuple[float, float]:
     return _native_float(values[index]), spreading
 
 
+def _spreading_weights(spreading: float, bins: int) -> list[float]:
+    """Mirror ``CD_Spreading_Weights``: the cos-2s weight of each equal-angle bin."""
+    constant = math.exp(math.lgamma(spreading + 1.0) - math.lgamma(spreading + 0.5))
+    constant /= math.sqrt(math.pi)
+    weights = []
+    for j in range(bins):
+        start = -0.5 * math.pi + math.pi * j / bins
+        step = (-0.5 * math.pi + math.pi * (j + 1) / bins - start) / _SPREADING_QUADRATURE
+        weight = 0.0
+        for q in range(_SPREADING_QUADRATURE + 1):
+            density = constant * max(0.0, math.cos(start + step * q)) ** (2.0 * spreading)
+            end = q in (0, _SPREADING_QUADRATURE)
+            weight += density * (1.0 if end else 4.0 if q % 2 == 1 else 2.0)
+        weights.append(weight * step / 3.0)
+    total = sum(weights)
+    if total > 0.0:
+        weights = [weight / total for weight in weights]
+    return [weight if weight >= sys.float_info.min else 0.0 for weight in weights]
+
+
 def _spread_headings(direction: float, spreading: float, bins: int) -> list[float]:
-    """The headings of a train (``CD_Sea_Synthesise``): the bin centres of a spread one."""
+    """The headings of a train (``CD_Sea_Synthesise``) that carry energy.
+
+    A spread train has one heading per bin centre. A narrow spreading leaves the outer bins with
+    no weight, and ``synthesize_vessel_rao`` skips their zero-amplitude components.
+    """
     if spreading <= 0.0:
         return [direction]
-    return [direction - 90.0 + 180.0 * (j + 0.5) / bins for j in range(bins)]
+    return [
+        direction - 90.0 + 180.0 * (j + 0.5) / bins
+        for j, weight in enumerate(_spreading_weights(spreading, bins))
+        if weight > 0.0
+    ]
 
 
 @dataclass(frozen=True)
