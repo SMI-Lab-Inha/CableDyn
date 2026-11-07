@@ -1332,7 +1332,7 @@ every node's position and time as MoorDyn-C interpolates them. Standalone decks 
 | Option | File | Meaning |
 |---|---|---|
 | `WaveKin 3` | `wave_elevation.txt` | `time elevation` rows from `t = 0` (no header rows), resampled linearly at `dtWave` to `floor(t_last/dtWave) + 1` samples (the last dropped when the count is odd) and reduced to its Fourier components; components above `WvHiCOff` (default 0.5 Hz, MoorDyn-C's fixed cut) are dropped and the mean is a mean-level offset, as MoorDyn-C does. Waves travel along +x |
-| `WaveKin 7` | `wave_frequencies.txt` | `omega Re Im [beta]` rows [rad/s, m, m, rad], the first at `omega = 0`: each row is the component `\|c\| sin(omega t - k d + arg c)`, `d = x cos(beta) + y sin(beta)`; the `omega = 0` row is a mean-level offset. All rows must share one `beta` |
+| `WaveKin 7` | `wave_frequencies.txt` | `omega Re Im [beta]` rows [rad/s, m, m, rad], the first at `omega = 0`: each row is the component `\|c\| sin(omega t - k d + arg c)`, `d = x cos(beta) + y sin(beta)` with the row's own `beta` (0 when the column is left out); the `omega = 0` row is a mean-level offset and its `beta` has no effect. Rows of different directions describe a short-crested sea, summed in ascending frequency |
 | `Currents 1` | `current_profile.txt` | `z ux uy uz` rows after its header rows, strictly increasing `z`; linear in `z` and held beyond the end rows |
 | `Currents 2` | `current_profile_dynamic.txt` | a depth profile in time: lines 1-4 and 6 are free text, line 5 lists the depths `z1 ... zn` (strictly increasing, read in single precision as MoorDyn-C does), and each later row is `t ux1 ... uxn [uy1 ... uyn [uz1 ... uzn]]` (missing components zero), at least two rows with strictly increasing `t` |
 | `Currents 5` | `current_profile_4d.txt` | a grid in x, y, z and time: line 1 is `nx ny nz nt`, lines 2-5 the x, y, z and t coordinates (each strictly increasing, at least two times), then one `x y z t ux uy uz` row per grid point, in any order, matched to the grid by value; a text line 6 is a header |
@@ -1371,15 +1371,24 @@ where it is sampled on `water_grid.txt`; CableDyn adds the current at the nodes,
 Rejected by name: `WaveKin 1` (kinematics set node by node through the MoorDyn-C API; a deck has
 no source for them), `WaveKin 2` (the FFT grid: `wave_frequencies.txt` resampled to an even
 spectrum; `WaveKin 7` evaluates the same file's components exactly), `WaveKin 4`-`6` and
-`Currents 3`-`4` (no kinematics source in MoorDyn-C v2.7.1), and a `wave_frequencies.txt` whose
-rows have different directions. A deck that also declares a `waves` option, a WaterKin file, or a
-second current source is rejected as double counting. On shared inputs the `wavekin_modes` test
-holds `WaveKin 7` and `Currents 1` identical to MoorDyn-C v2.7.1 (`5e-12` relative) and `WaveKin 3`
+`Currents 3`-`4` (no kinematics source in MoorDyn-C v2.7.1). A deck that also declares a `waves`
+option, a WaterKin file, or a second current source is rejected as double counting. On shared
+inputs the `wavekin_modes` test holds `WaveKin 7` and `Currents 1` identical to MoorDyn-C v2.7.1 (`5e-12` relative) and `WaveKin 3`
 within `3e-7` m in elevation and `1e-4` in velocity and acceleration at MoorDyn-C's grid points,
 the remainder being MoorDyn-C's grid interpolation and its approximate wave number. The
 `mdc_currents` test holds `Currents 2` and `5` identical to MoorDyn-C v2.7.1 at 739 points and
 times (including past the last sample), and `mdc_currents_runs` matches the tension change of a
 time-varying and of a sheared current to MoorDyn-C's within 0.9 % on a 70 m rope.
+
+`wave_frequencies.txt` is the file MoorDyn-C v2.7.1 reads, a `beta` per row included: its
+`SUM_COMPONENTS` mode gives each row its own direction too. `WaveRefX` and `WaveRefY`
+([options](options.rst)) are an extension of CableDyn and no part of MoorDyn-C or MoorDyn-F: a
+deck with them is not a plain MoorDyn deck, and a MoorDyn solver would not place the phases there.
+
+A non-zero `omega = 0` row raises the still-water level. CableDyn then takes every wave number at
+the depth `WtrDpth` plus that level, as it does for the mean of an elevation record, where
+MoorDyn-C keeps `WtrDpth` and adds the level to the elevation alone. The two differ by the order
+of the level over the depth in the long components.
 
 (waterkin-file-modes)=
 ### MoorDyn-F `WaterKin` file modes

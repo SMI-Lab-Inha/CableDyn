@@ -668,7 +668,14 @@ MODULE CableDyn_DeckDriver
     REAL(wp), ALLOCATABLE :: wave_component_amplitude(:), wave_component_phase(:)
     ! exp(-2 k (wtrdpth + wave_eta_mean)) and the tail_sums of the table (CD_Component_Wave_Kinematics)
     REAL(wp), ALLOCATABLE :: wave_component_e2kd(:), wave_component_tail(:, :)
+    ! a short-crested table (WaveKin 7 rows of different directions): each component's direction
+    ! cosine and sine, in ascending frequency; unallocated when all share wave_direction
+    REAL(wp), ALLOCATABLE :: wave_component_cos(:), wave_component_sin(:)
     REAL(wp) :: wave_eta_mean = CD_ZERO
+    ! OPTION WaveRefX, WaveRefY: the point the phases of an elevation record or a component file
+    ! refer to (the record was measured there); the origin by default
+    REAL(wp) :: wave_ref_x = CD_ZERO, wave_ref_y = CD_ZERO
+    LOGICAL :: has_wave_ref = .FALSE.
     ! N-level vertical current profile (ascending z): from the two-point deck
     ! OPTION row or a MoorDyn WaterKin file's CurrentMod-1 depth table.
     REAL(wp), ALLOCATABLE :: current_profile_z(:)
@@ -14033,8 +14040,10 @@ CONTAINS
     !!    the mean-level offset, as MoorDyn-C does. Waves travel along +x.
     !!  - WaveKin 7, wave_frequencies.txt (`omega Re Im [beta]` rows, the first at omega = 0):
     !!    each row is the component |c| sin(omega t - k d + arg c) of MoorDyn-C's SUM_COMPONENTS
-    !!    mode, d = x cos(beta) + y sin(beta); the omega = 0 row is the mean-level offset. The rows
-    !!    must share one direction beta.
+    !!    mode, d = x cos(beta) + y sin(beta) with the row's own direction beta; the omega = 0 row
+    !!    is the mean-level offset and its beta has no effect. Rows that share one direction are
+    !!    a long-crested table in file order; rows that differ a short-crested table in ascending
+    !!    frequency, the order the tail bound of the sums needs.
     !!  - Currents 1, current_profile.txt (`z ux uy uz` rows after its header rows): the steady
     !!    profile, linear in z and held beyond its ends, as MoorDyn-C's current grid.
     !!  - Currents 2, current_profile_dynamic.txt (constructDynamicCurrentGrid of MoorDyn-C's
@@ -14054,9 +14063,11 @@ CONTAINS
     TYPE(DeckOptions), INTENT(INOUT) :: opts
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp), ALLOCATABLE :: tab(:, :), eta(:), comp_w(:), comp_a(:), comp_p(:)
+    REAL(wp), ALLOCATABLE :: tab(:, :), eta(:), comp_w(:), comp_a(:), comp_p(:), comp_b(:)
     REAL(wp) :: dt, tl, frac, ca, sa, angle, scale, beta, mean_level, arg
     INTEGER :: n, nt, j, k, nc, bracket
+    INTEGER, ALLOCATABLE :: order(:)
+    LOGICAL :: one_direction
     INTEGER(KIND=8) :: kj
     CHARACTER(32) :: fname
     ! the longest row of a MoorDyn-C current table (a time and 3 nz velocities per row)
@@ -14164,15 +14175,15 @@ CONTAINS
       IF (ABS(tab(1, 1)) > CD_ZERO) THEN
         CALL fail(ErrStat, ErrMsg, 'WaveKin 7: the first wave_frequencies.txt row must be at omega = 0'); RETURN
       END IF
+      ! the omega = 0 row has no direction of its own: the first component's stands for the table
       beta = tab(4, 1)
+      IF (ABS(tab(4, 2) - beta) > 1.0e-12_wp) beta = tab(4, 2)
+      one_direction = .TRUE.
       DO j = 1, n
         IF (ABS(tab(4, j)) > TWO_PI) THEN
           CALL fail(ErrStat, ErrMsg, 'WaveKin 7: wave_frequencies.txt directions are radians within +-2 pi'); RETURN
         END IF
-        IF (ABS(tab(4, j) - beta) > 1.0e-12_wp) THEN
-          CALL fail(ErrStat, ErrMsg, 'WaveKin 7: wave_frequencies.txt rows with different directions '// &
-                    '(short-crested seas) are not supported; give every row one direction'); RETURN
-        END IF
+        IF (j > 1 .AND. ABS(tab(4, j) - beta) > 1.0e-12_wp) one_direction = .FALSE.
         IF (j > 1) THEN
           IF (.NOT. tab(1, j) > CD_ZERO) THEN
             CALL fail(ErrStat, ErrMsg, 'WaveKin 7: wave_frequencies.txt frequencies after the first row '// &
@@ -14185,6 +14196,14 @@ CONTAINS
       comp_w = tab(1, 2:n)
       comp_a = SQRT(tab(2, 2:n)**2 + tab(3, 2:n)**2)
       comp_p = 0.25_wp*TWO_PI - ATAN2(tab(3, 2:n), tab(2, 2:n))
+      IF (.NOT. one_direction) THEN
+        ALLOCATE (order(n - 1))
+        CALL sort_index(comp_w, order)
+        comp_w = comp_w(order)
+        comp_a = comp_a(order)
+        comp_p = comp_p(order)
+        comp_b = tab(4, order + 1)
+      END IF
       CALL install_components()
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
     END SELECT
@@ -14609,7 +14628,7 @@ CONTAINS
 
     SUBROUTINE install_components()
       !! The component waves (omega, amplitude, phase in CableDyn's cos(k d - omega t + phase)
-      !! convention), their direction beta [rad] and the mean level.
+      !! convention), their direction beta [rad], or each their own comp_b, and the mean level.
       IF (.NOT. (ALL(IEEE_IS_FINITE(comp_w)) .AND. ALL(IEEE_IS_FINITE(comp_a)) .AND. &
                  ALL(IEEE_IS_FINITE(comp_p)) .AND. IEEE_IS_FINITE(mean_level))) THEN
         CALL fail(ErrStat, ErrMsg, 'WaveKin '//TRIM(int_to_str(opts%mdc_wave_kin))//': '//TRIM(fname)// &
@@ -14631,6 +14650,11 @@ CONTAINS
       opts%wave_component_phase = comp_p
       opts%wave_eta_mean = mean_level
       opts%wave_direction = beta*45.0_wp/ATAN(CD_ONE)
+      IF (ALLOCATED(opts%wave_component_cos)) DEALLOCATE (opts%wave_component_cos, opts%wave_component_sin)
+      IF (ALLOCATED(comp_b)) THEN
+        opts%wave_component_cos = COS(comp_b)
+        opts%wave_component_sin = SIN(comp_b)
+      END IF
       opts%wave_kind = WAVE_COMPONENTS
       opts%has_wave = .TRUE.
     END SUBROUTINE install_components
@@ -16851,6 +16875,12 @@ CONTAINS
       ELSE
         CALL rd(val, opts%wv_hi_cutoff, ErrStat, ErrMsg)
       END IF
+    CASE ('waverefx')
+      CALL rd(val, opts%wave_ref_x, ErrStat, ErrMsg)
+      opts%has_wave_ref = .TRUE.
+    CASE ('waverefy')
+      CALL rd(val, opts%wave_ref_y, ErrStat, ErrMsg)
+      opts%has_wave_ref = .TRUE.
     CASE ('ramptime', 'ramp_time', 'tramp')
       CALL rd(val, opts%ramp_time, ErrStat, ErrMsg)
     CASE ('maxstrain', 'max_strain')
@@ -17355,7 +17385,7 @@ CONTAINS
       rule = 'non-negative'
     CASE ('aslaidtension', 'as_laid_tension')
       rule = 'non-negative'
-    CASE ('layazimuth', 'lay_azimuth')
+    CASE ('layazimuth', 'lay_azimuth', 'waverefx', 'waverefy')
       rule = 'finite'
     CASE ('rhoinf', 'rho_inf')
       rule = 'unit'
@@ -17987,6 +18017,15 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'current grid coordinates must be at most 1e6 m and velocities at most '// &
                     '1e3 m/s in magnitude'); RETURN
         END IF
+      END IF
+    END IF
+    IF (opts%has_wave_ref) THEN
+      IF (ABS(opts%wave_ref_x) > MAX_COORDINATE .OR. ABS(opts%wave_ref_y) > MAX_COORDINATE) THEN
+        CALL fail(ErrStat, ErrMsg, 'WaveRefX and WaveRefY must be at most 1e6 m in magnitude'); RETURN
+      END IF
+      IF (.NOT. (opts%has_wave .AND. opts%wave_kind == WAVE_COMPONENTS)) THEN
+        CALL fail(ErrStat, ErrMsg, 'WaveRefX and WaveRefY place the reference point of an elevation record or a '// &
+                  'component file (WaterKin WaveKinMod 1, WaveKin 3 or 7); this deck has none'); RETURN
       END IF
     END IF
     IF (opts%has_wave) THEN
@@ -32484,21 +32523,23 @@ CONTAINS
                                 pdyn)
     CASE (WAVE_COMPONENTS)
       IF (ramp < CD_ONE) THEN
-        CALL CD_Component_Wave_Kinematics(x, y, z - opts%wave_eta_mean, time, &
+        CALL CD_Component_Wave_Kinematics(x - opts%wave_ref_x, y - opts%wave_ref_y, z - opts%wave_eta_mean, time, &
                                           opts%wtrdpth + opts%wave_eta_mean, opts%wave_direction, .TRUE., &
                                           opts%wave_component_omega, opts%wave_component_k, &
                                           opts%wave_component_amplitude, opts%wave_component_phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated=.TRUE., &
                                           amplitude_scale=ramp, pdyn=pdyn, exp_m2kd=opts%wave_component_e2kd, &
-                                          tail_sums=opts%wave_component_tail)
+                                          tail_sums=opts%wave_component_tail, comp_cos=opts%wave_component_cos, &
+                                          comp_sin=opts%wave_component_sin)
       ELSE
-        CALL CD_Component_Wave_Kinematics(x, y, z - opts%wave_eta_mean, time, &
+        CALL CD_Component_Wave_Kinematics(x - opts%wave_ref_x, y - opts%wave_ref_y, z - opts%wave_eta_mean, time, &
                                           opts%wtrdpth + opts%wave_eta_mean, opts%wave_direction, .TRUE., &
                                           opts%wave_component_omega, opts%wave_component_k, &
                                           opts%wave_component_amplitude, opts%wave_component_phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated=.TRUE., &
                                           pdyn=pdyn, exp_m2kd=opts%wave_component_e2kd, &
-                                          tail_sums=opts%wave_component_tail)
+                                          tail_sums=opts%wave_component_tail, comp_cos=opts%wave_component_cos, &
+                                          comp_sin=opts%wave_component_sin)
       END IF
       eta = eta + opts%wave_eta_mean
     CASE DEFAULT
@@ -35349,6 +35390,10 @@ CONTAINS
     CASE (WAVE_COMPONENTS)
       ALLOCATE (om, SOURCE=opts%wave_component_omega); ALLOCATE (kk, SOURCE=opts%wave_component_k)
       ALLOCATE (amp, SOURCE=opts%wave_component_amplitude); ALLOCATE (phs, SOURCE=opts%wave_component_phase)
+      IF (ALLOCATED(opts%wave_component_cos)) THEN
+        ALLOCATE (dir(SIZE(om)))
+        dir = ATAN2(opts%wave_component_sin, opts%wave_component_cos)*R2D
+      END IF
     CASE (WAVE_SEA)
       nc = opts%sea%n_comp
       ALLOCATE (om, SOURCE=opts%sea%omega(1:nc)); ALLOCATE (kk, SOURCE=opts%sea%k(1:nc))
@@ -35374,7 +35419,7 @@ CONTAINS
     DO i = 1, nc
       cb = COS(dir(i)*QUARTER_PI/45.0_wp)
       sb = SIN(dir(i)*QUARTER_PI/45.0_wp)
-      eps(i) = kk(i)*(opts%vessel_ref(1)*cb + opts%vessel_ref(2)*sb) + phs(i)
+      eps(i) = kk(i)*((opts%vessel_ref(1) - opts%wave_ref_x)*cb + (opts%vessel_ref(2) - opts%wave_ref_y)*sb) + phs(i)
       IF (.NOT. (amp(i) > CD_ZERO)) CYCLE
       CALL CD_Vessel_RAO_Eval(rao, TWO_PI/om(i), dir(i), cre(:, i), cim(:, i), clamped, es, em)
       IF (es /= CD_VESSEL_OK) THEN

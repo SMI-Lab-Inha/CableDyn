@@ -834,7 +834,7 @@ def _vessel_source(rows: str) -> str:
 
 def test_vessel_motion_options_parse_and_rebase(tmp_path):
     source = _vessel_source("vessel.dat vesselMotion\n80.0|0.0|-10.0 vesselRef")
-    path = tmp_path / "vessel.dat"
+    path = tmp_path / "deck.dat"
     path.write_text(source, encoding="utf-8")
 
     deck = DeckFile.read(path)
@@ -2210,7 +2210,10 @@ def test_case_generation_rebases_relative_ancillary_paths(tmp_path):
 
     bathymetry = source_directory / "data" / "bathy_profile.dat"
     bathymetry.parent.mkdir()
-    bathymetry.write_text("placeholder\n", encoding="utf-8")
+    bathymetry.write_text(
+        "".join(f"{x} {y} 100.0\n" for x in (-2000.0, 2000.0) for y in (-2000.0, 2000.0)),
+        encoding="utf-8",
+    )
     deck_text = (ROOT / "examples/chain_catenary_r3_100m.dat").read_text(encoding="utf-8")
     deck_text = deck_text.replace("100.0        WtrDpth", "data/bathy_profile.dat bathymetryFile")
     deck_path = source_directory / "base.dat"

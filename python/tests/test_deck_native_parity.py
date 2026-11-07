@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -86,6 +87,640 @@ def _rejects(text: str, message: str, *, caller_driven: bool = False) -> None:
 # --------------------------------------------------------------------------- options
 
 
+_WATERKIN = (
+    "MoorDyn v2 water kinematics file\n(header line 2)\n--- WAVES ---\n"
+    '{mode} WaveKinMod\n"eta.txt" WaveKinFile\n0.25 dtWave\n37.0 WaveDir\n'
+    "0 X\n0.0\n0 Y\n0.0\n0 Z\n0.0\n--- CURRENT ---\n0 CurrentMod\n0 Z\n0.0\n"
+    "--- need this line ---\n"
+)
+_ETA = "time elevation\n" + "".join(
+    f"{0.5 * i:g} {0.4 * (-1.0) ** (i // 4):g}\n" for i in range(41)
+)
+_RAO = (EXAMPLES / "data" / "vessel" / "sample_rao.txt").read_text(encoding="utf-8")
+_ROWS = "0 0 0 0\n0.5 0.5 0 0.3\n0.6 0.3 0.1 2.4\n0.6 0.2 -0.1 -1.0\n"
+
+
+def _waterkin(mode: str) -> dict[str, str]:
+    return {"wk.dat": _WATERKIN.format(mode=mode), "eta.txt": _ETA}
+
+
+# (rows of the deck, files next to it): every case is judged by DeckFile and by the driver
+_WAVE_RECORD_CASES = [
+    # a reference point needs component waves
+    (("12.5 WaveRefX",), {}),
+    (("0 WaveRefY",), {}),
+    (("airy 2 8 0 waves", "1 WaveRefX"), {}),
+    (("airy 2 8 0 wavetrain", "1 WaveRefY"), {}),
+    (("7 WaterKin", "12.5 WaveRefX", "-3 WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1.0e6 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1.0000001e6 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "-2e6 WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "nan WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "north WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1e-320 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "2e6 WaveRefX", "1 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1 WAVEREFX"), {"wave_frequencies.txt": _ROWS}),
+    # the WaveKinMod of a WaterKin file decides
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("1")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("0")),
+    (("wk.dat WaterKin", "0 WaveRefY"), _waterkin("0")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("2")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("SEASTATE")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("3")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("one")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), {"wk.dat": "header\nheader\n"}),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), {"wk.dat": "header\nheader\nwaves\n"}),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), {"wk.dat": "header\nheader\nwaves\n\n"}),
+    (("wk.dat WaterKin", "rao.txt vesselRAO"), {**_waterkin("0"), "rao.txt": _RAO}),
+    (("wk.dat WaterKin", "rao.txt vesselRAO"), {**_waterkin("1"), "rao.txt": _RAO}),
+    # the rows of wave_frequencies.txt
+    (("7 WaterKin",), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 1.0\n0.5 0.5 0 0.3\n\n0.6 0.3 0.1 0.3\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0\n0.5 0.5 0\n0.6 0.3 0.1 -6.2\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 6.3\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 -6.3\n0.5 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 east\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 nan\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 nan 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "omega Re Im\n0 0 0 0\n0.5 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0.1 0 0 0\n0.5 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 0\n0 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 2000 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n2e4 0.1 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 -60 0\n0.5 0.5 0 0\n"}),
+]
+
+
+_CURRENT_TABLES = {
+    "2": "a\nb\nc\nd\n-40 -10\ne\n0 0.1 0.2\n5 0.2 0.3\n10 0.2 0.3\n",
+    "5": "1 1 2 2\n0\n0\n-40 -10\n0 10\n"
+    + "".join(f"0 0 {z} {t} 0.1 0 0\n" for z in (-40, -10) for t in (0, 10)),
+}
+_PROFILE = "z ux uy uz\n-40 0.1 0 0\n-10 0.2 0.1 0\n"
+_TABLE = "-40 0.1 0.0\n-10 0.2 0.1\n"
+
+
+def _kin(wave="0", current="0", table="", dt="0.25", direction="37.0", record='"eta.txt"') -> str:
+    return (
+        "MoorDyn v2 water kinematics file\n(header line 2)\n--- WAVES ---\n"
+        f"{wave} WaveKinMod\n{record} WaveKinFile\n{dt} dtWave\n{direction} WaveDir\n"
+        "0 X\n0.0\n0 Y\n0.0\n0 Z\n0.0\n--- CURRENT ---\n"
+        f"{current} CurrentMod\nz ux uy\n(m) (m/s) (m/s)\n{table}--- need this line ---\n"
+    )
+
+
+def _hold(point=2, *, tail=(), steps=101, last=None) -> str:
+    rows = [f"{0.1 * i:.1f} {point} 0 0 0 0 0 0 0 0 0\n" for i in range(steps)]
+    return "".join(rows[:last]) + "".join(tail)
+
+
+def _vessel(*, form=19, steps=101, tail=()) -> str:
+    pose = "0 0 0 0 0 0" if form == 19 else "0 0 0 1 0 0 0"
+    rows = [f"{0.1 * i:.1f} {pose} {'0 ' * 12}\n" for i in range(steps)]
+    return "".join(rows) + "".join(tail)
+
+
+def _rao(
+    heads=(-180.0, 179.0), period_row="0.5 0 0 0 0 1 0 0 0 0 0 0 0\n100 0 0 0 0 1 0 0 0 0 0 0 0\n"
+):
+    return "".join(f"HEADING {head}\n{period_row}" for head in heads)
+
+
+def _sea_bed(depth=50.0, **changes) -> str:
+    rows = {(x, y): depth for x in (-1000.0, 1000.0) for y in (-1000.0, 1000.0)}
+    rows.update(changes.get("rows", {}))
+    return "".join(f"{x} {y} {value}\n" for (x, y), value in rows.items()) + changes.get("tail", "")
+
+
+_SETTINGS = (EXAMPLES / "data" / "syrope" / "syrope_settings.dat").read_text(encoding="utf-8")
+_OWC = (EXAMPLES / "data" / "syrope" / "syrope_owc.dat").read_text(encoding="utf-8")
+
+
+def _syrope(settings=_SETTINGS, owc=_OWC) -> dict[str, str]:
+    return {"data/syrope/syrope_settings.dat": settings, "data/syrope/syrope_owc.dat": owc}
+
+
+# a deck of objects and no lines: the only route that does not read a motion file
+_OBJECTS = """Dry rod pinned to a heavy body
+--- ROD TYPES ---
+Name Diam Mass Cd Ca CdEnd CaEnd
+(-) (m) (kg/m) (-) (-) (-) (-)
+pend 0.2 50 0 0 0 0
+--- BODIES ---
+ID Attachment X0 Y0 Z0 r0 p0 y0 Mass CG* I* Volume CdA* Ca*
+(#) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m) (kg-m^2) (m^3) (m^2) (-)
+1 Free 5 0 20 0 0 0 5.0e10 0 1.0e13 4.87804882926829E+07 0 0
+--- RODS ---
+ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs
+(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)
+1 pend Body1Pinned 0 0 0 5.0 0 -8.66025403784439 4 -
+--- OPTIONS ---
+100 WtrDpth
+deck bodyIC
+moordyn bodyWetting
+0.05 dtM
+1.0 TMax
+--- OUTPUTS ---
+Rod1Px Body1Pz
+--- end ---
+"""
+_FREE = "wave_frequencies.txt"
+_ONE_BETA = "0 0 0 0.5\n0.5 0.5 0 0.5\n"
+_WK = ("wk.dat WaterKin",)
+_C1 = "current_profile.txt"
+_C2 = "current_profile_dynamic.txt"
+_C5 = "current_profile_4d.txt"
+_RAO_ROWS = ("rao.txt vesselRAO", "0|0|0 vesselRef")
+# (deck, rows, files): every case is judged by DeckFile and by the driver
+_ANCILLARY_CASES = [
+    # WaterKin: the rest of the file
+    ("held", _WK, {"wk.dat": _kin()}),
+    ("held", _WK, {"wk.dat": _kin(dt="-1")}),
+    ("held", _WK, {"wk.dat": _kin(dt="x")}),
+    ("held", _WK, {"wk.dat": _kin(direction="north")}),
+    ("held", _WK, {"wk.dat": 'a\nb\nc\n0\n""\n0\n0\n0\n'}),
+    ("held", _WK, {"wk.dat": _kin(current="x")}),
+    ("held", _WK, {"wk.dat": _kin(current="3")}),
+    ("held", _WK, {"wk.dat": _kin(current="2")}),
+    ("held", _WK, {"wk.dat": _kin(wave="1", current="2"), "eta.txt": _ETA}),
+    ("held", _WK, {"wk.dat": _kin(wave="1", record='""')}),
+    ("held", _WK, {"wk.dat": _kin(wave="1", dt="0"), "eta.txt": _ETA}),
+    ("held", ("wk.dat WaterKin", "airy 2 8 0 waves"), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+    # the WaterKin current table, and a current doubled
+    ("held", _WK, {"wk.dat": _kin(current="1", table=_TABLE)}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="10 0.2 0.1\n40 0.1 0.0\n")}),
+    (
+        "held",
+        ("wk.dat WaterKin", "uniform 0.1 0 0 current"),
+        {"wk.dat": _kin(current="1", table=_TABLE)},
+    ),
+    ("held", ("wk.dat WaterKin", "uniform 0.1 0 0 current"), {"wk.dat": _kin()}),
+    (
+        "held",
+        ("wk.dat WaterKin", "1 Currents"),
+        {"wk.dat": _kin(current="1", table=_TABLE), _C1: _PROFILE},
+    ),
+    ("held", ("wk.dat WaterKin", "1 Currents"), {"wk.dat": _kin(), _C1: _PROFILE}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1 0\n10 0.2 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1 0\n-40 0.2 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1\n-10 0.2 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 2000 0\n-10 0.2 0\n")}),
+    # the record of WaveKinMod 1
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 0\n2 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "1 0\n2 0\n3 0\n4 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n2 0\n1 0\n3 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 0\nend\n2 0\n3 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 x\n2 0\n3 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": _ETA.replace(" 0.4\n", " 4000\n")}),
+    (
+        "held",
+        _WK,
+        {
+            "wk.dat": _kin("1"),
+            "eta.txt": _ETA.replace(" 0.4\n", " -70\n").replace(" -0.4\n", " -70\n"),
+        },
+    ),
+    ("held", ("wk.dat WaterKin", "0.1 WvHiCOff"), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+    ("held", ("wk.dat WaterKin", "none WvHiCOff"), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+    # Currents 1, 2 and 5
+    ("held", ("1 Currents",), {_C1: _PROFILE}),
+    ("held", ("1 Currents",), {_C1: "z ux uy uz\n"}),
+    ("held", ("1 Currents",), {_C1: "-10 0 0 0\n-40 0 0 0\n"}),
+    ("held", ("1 Currents",), {_C1: "-40 2000 0 0\n-10 0 0 0\n"}),
+    ("held", ("1 Currents",), {_C1: "-40 0 0\n-10 0 0 x\n"}),
+    ("held", ("1 Currents",), {_C1: "-40 0\n"}),
+    ("held", ("2 Currents",), {_C2: _CURRENT_TABLES["2"]}),
+    ("held", ("2 Currents",), {_C2: "a\nb\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 0.1 0.2\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-10 -40\ne\n0 1 1\n5 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 1 1\n0 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 1\n5 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 x 1\n5 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 2000 1\n5 1 1\n"}),
+    ("held", ("5 Currents",), {_C5: _CURRENT_TABLES["5"]}),
+    ("held", ("5 Currents",), {_C5: "1 1 x 2\n"}),
+    ("held", ("5 Currents",), {_C5: "1 1 2 2\n0\n0\n-40\n0 10\n"}),
+    ("held", ("5 Currents",), {_C5: _CURRENT_TABLES["5"] + "0 0 -40 0 0.1 0 0\n"}),
+    (
+        "held",
+        ("5 Currents",),
+        {_C5: _CURRENT_TABLES["5"].replace("0 0 -40 0 0.1", "0 0 -41 0 0.1")},
+    ),
+    ("held", ("5 Currents",), {_C5: _CURRENT_TABLES["5"].replace("0 0 -40 0 0.1 0 0\n", "")}),
+    ("held", ("5 Currents",), {_C5: "1 1 1 1\n0\n0\n-40\n0\n0 0 -40 0 0.1 0 0\n"}),
+    (
+        "held",
+        ("5 Currents",),
+        {_C5: _CURRENT_TABLES["5"].replace("0 0 -40 0 0.1", "0 0 -40 0 2000")},
+    ),
+    # motionFile
+    ("held", ("m.txt motionFile",), {"m.txt": _hold()}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("10.1 2 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(last=100)}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 2 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.05 2 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 1 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 2.5 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 2 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(point=1)}),
+    ("held", ("m.txt motionFile",), {"m.txt": "0.0 2 2e6 0 0 0 0 0 0 0 0\n"}),
+    ("held", ("m.txt motionFile",), {"m.txt": "0.0 2 0 0 0 2e4 0 0 0 0 0\n"}),
+    ("held", ("m.txt motionFile",), {"m.txt": "0.0 2 0 0 0 0 0 0 2e6 0 0\n"}),
+    # vesselMotion
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel()}),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel(form=20)}),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel(steps=100)}),
+    (
+        "held",
+        ("v.txt vesselMotion", "0|0|0 vesselRef"),
+        {"v.txt": _vessel(form=19, tail=("0.0 " + "0 " * 19 + "\n",))},
+    ),
+    (
+        "held",
+        ("v.txt vesselMotion", "0|0|0 vesselRef"),
+        {"v.txt": _vessel(form=20).replace("0 0 0 1 0 0 0", "0 0 0 2 0 0 0", 1)},
+    ),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": "0.05 " + "0 " * 18 + "\n"}),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": "0.0 2e6 " + "0 " * 17 + "\n"}),
+    # vesselRAO, its rows and the headings of the sea
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao()}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(30.0,))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0,))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(40.0, 90.0))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0, 90.0))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0, 360.0))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "1 0 0 0 0 1 0 0 0 0 0 0 0\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30 40\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30\n1 0 0\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30\n-1 " + "0 " * 12 + "\n"}),
+    (
+        "held",
+        ("airy 2 8 30 waves", *_RAO_ROWS),
+        {"rao.txt": "HEADING 30\n1 -1 " + "0 " * 11 + "\n"},
+    ),
+    (
+        "held",
+        ("airy 2 8 30 waves", *_RAO_ROWS),
+        {"rao.txt": "HEADING 30\n1 " + "0 " * 12 + "\nHEADING 40\n2 " + "0 " * 12 + "\n"},
+    ),
+    ("held", ("jonswap 2 9 3.3 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(30.0,))}),
+    (
+        "held",
+        ("jonswap 2 9 3.3 30 waves", "4 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(30.0,))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 30 waves", "4 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-60.0, 120.0))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 30 waves", "4 WaveSpreading", "5 WaveDirections", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-42.0, 102.0))},
+    ),
+    ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(), _FREE: _ROWS}),
+    ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0, 100.0)), _FREE: _ROWS}),
+    ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(heads=(28.0, 29.0)), _FREE: _ONE_BETA}),
+    (
+        "held",
+        ("wk.dat WaterKin", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(37.0,)), "wk.dat": _kin("1"), "eta.txt": _ETA},
+    ),
+    (
+        "held",
+        ("wk.dat WaterKin", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(38.0,)), "wk.dat": _kin("1"), "eta.txt": _ETA},
+    ),
+    # bathymetry
+    ("bed", (), {"b.txt": _sea_bed()}),
+    ("bed", (), {"b.txt": _sea_bed(depth=49.0)}),
+    ("bed", (), {"b.txt": _sea_bed(depth=50.0004)}),
+    ("bed", (), {"b.txt": _sea_bed(depth=0.0)}),
+    ("bed", (), {"b.txt": "0 0 50\n1 0 50\n"}),
+    ("bed", (), {"b.txt": _sea_bed(tail="0 0 50\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="-1000.0 -1000.0 50\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="1 2\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="1 x 3\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="-1000.0 0.0 50\n1000.0 0.0 50\n")}),
+    # a crease at the anchor: the rounded and the tabulated surfaces differ there
+    (
+        "bed",
+        (),
+        {
+            "b.txt": "".join(
+                f"{x} {y} {d}\n"
+                for x, d in ((-1000.0, 40.0), (400.0, 50.0), (1000.0, 40.0))
+                for y in (-1000.0, 1000.0)
+            )
+        },
+    ),
+    # Syrope settings and OWC table
+    ("syrope", (), _syrope()),
+    ("syrope", (), _syrope(settings=_SETTINGS + "1.0 k1\n")),
+    ("syrope", (), _syrope(settings="data/x.dat OWC\n")),
+    (
+        "syrope",
+        (),
+        _syrope(
+            settings=_SETTINGS.replace("LINEAR", "CUBIC")
+            .replace("QUADRATIC", "CUBIC")
+            .replace("EXP", "CUBIC")
+        ),
+    ),
+    ("syrope", (), _syrope(owc="strain tension\n0.0 0.0\n")),
+    ("syrope", (), _syrope(owc="0.0 0.0\n0.01 x\n")),
+    ("syrope", (), _syrope(owc="0.02 1e6\n0.01 2e6\n0.03 3e6\n")),
+    ("syrope", (), _syrope(owc="0.0 2e6\n0.01 1e6\n0.03 3e6\n")),
+    # the routes of the objects: which of them read a motion file
+    ("rigid6_buoy.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("rod_moored_spar.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("spar_pinned_rods.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("mixed_body_rods_points.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("objects", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+]
+# every spelling the reader takes of the options and kinds these rules read
+_KEYWORD_SPELLINGS = (
+    ("waves", "wave"),
+    ("wavetrain", "wave_train"),
+    ("WaveSpreading", "wave_spreading"),
+    ("WaveDirections", "wave_directions"),
+    ("WaveComponents", "wave_components"),
+    ("WtrDpth", "water_depth"),
+    ("dtM", "dt"),
+    ("WaterKin", "WaveKin"),
+    ("bathymetryFile", "seafloor_file"),
+    ("rampTime", "tramp"),
+)
+_KIND_VALUES = {
+    "airy": ("2 8 30", "2 8 30"),
+    "Airy": ("2 8 30", "2 8 30"),
+    "jonswap": ("2 9 3.3 30", "2 9 3.3 30 0"),
+    "JONSWAP": ("2 9 3.3 30", "2 9 3.3 30 0"),
+    "pm": ("2 9 30", "2 9 30 0"),
+    "issc": ("2 9 30", "2 9 30 0"),
+    "bretschneider": ("2 9 30", "2 9 30 0"),
+    "torsethaugen": ("6 12 30", "6 12 30 0"),
+    "ochihubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+    "ochi-hubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+    "ochi_hubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+    "Ochi_Hubble": ("2 8 1 1 12 1 30", "2 8 1 1 12 1 30 0"),
+}
+# every kind and keyword against a one-heading RAO table: at the sea's heading and off it, on
+# the dynamic clock and on the static check's
+_SPELLED_CASES = [
+    (base, (f"{kind} {values[train]} {keyword}", *_RAO_ROWS), {"rao.txt": _rao(heads=(heading,))})
+    for kind, values in _KIND_VALUES.items()
+    for train, keyword in ((0, "waves"), (0, "wave"), (1, "wavetrain"), (1, "wave_train"))
+    for heading in (30.0, 31.0)
+    for base in ("held", "held_static")
+]
+_SPELLED_CASES += [
+    # the kinds whose rows spread, and the spellings of the options that spread them
+    (base, (f"pm 2 9 30 {keyword}", f"4 {spread}", *_RAO_ROWS), {"rao.txt": _rao(heads=heads)})
+    for base in ("held", "held_static")
+    for keyword in ("waves", "wave")
+    for spread in ("WaveSpreading", "wave_spreading", "WAVESPREADING")
+    for heads in ((30.0,), (-180.0, 179.0))
+] + [
+    (base, (f"ochi_hubble 2 8 1 1 12 1 30 4 {keyword}", *_RAO_ROWS), {"rao.txt": _rao(heads=heads)})
+    for base in ("held", "held_static")
+    for keyword in ("wavetrain", "wave_train")
+    for heads in ((30.0,), (-180.0, 179.0))
+]
+# a record or a kinematics file on the static check's clock, under each spelling of its selector
+_STATIC_CASES = [
+    ("held_static", (f"{value} {keyword}", *rows), files)
+    for keyword in ("WaterKin", "WaveKin", "WATERKIN")
+    for value, rows, files in (
+        ("wk.dat", (), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+        ("wk.dat", ("12.5 WaveRefX",), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+        ("wk.dat", ("12.5 WaveRefX",), {"wk.dat": _kin("0"), "eta.txt": _ETA}),
+        ("wk.dat", (), {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 0\n"}),
+        ("wk.dat", (), {"wk.dat": _kin("1", dt="100"), "eta.txt": _ETA}),
+        (
+            "wk.dat",
+            _RAO_ROWS,
+            {"wk.dat": _kin("1"), "eta.txt": _ETA, "rao.txt": _rao(heads=(37.0,))},
+        ),
+        (
+            "wk.dat",
+            _RAO_ROWS,
+            {"wk.dat": _kin("1"), "eta.txt": _ETA, "rao.txt": _rao(heads=(38.0,))},
+        ),
+        ("7", (), {_FREE: _ROWS}),
+        ("7", ("12.5 WaveRefY",), {_FREE: _ROWS}),
+        ("7", (), {_FREE: "0 0 0 0\n0.5 0.5 0 6.3\n"}),
+        ("3", ("0.1 dtWave",), {"wave_elevation.txt": _ETA.replace("time elevation\n", "")}),
+    )
+] + [
+    ("held_static", ("m.txt motionFile",), {"m.txt": "0.0 2 0 0 0 0 0 0 0 0 0\n"}),
+    (
+        "held_static",
+        ("m.txt motionFile",),
+        {"m.txt": "0.0 2 0 0 0 0 0 0 0 0 0\n0.05 2 0 0 0 0 0 0 0 0 0\n"},
+    ),
+    ("held_static", ("m.txt motionFile",), {"m.txt": _hold()}),
+    ("held_static", ("m.txt motionFile",), {"m.txt": "1.0 2 0 0 0 0 0 0 0 0 0\n"}),
+    ("held_static", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel(steps=1)}),
+    ("held_static", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel()}),
+    ("bed_static", (), {"b.txt": _sea_bed()}),
+    ("held", ("airy 2 8 0 waves", "4 WaveSpreading"), {}),
+]
+
+
+def _shipped_decks() -> list[str]:
+    decks = [path.name for path in sorted(EXAMPLES.glob("*.dat"))]
+    decks.remove("cabledyn_options_reference.dat")
+    return [*decks, "moordynC_wavekin/chain_wavekin7_currents1.dat"]
+
+
+def _carries_waves(name: str) -> bool:
+    text = (EXAMPLES / name).read_text(encoding="utf-8")
+    return re.search(r"(?mi)^(?!none\b|--)\S.*\s(?:waves?|wave_?train)\b", text) is not None or (
+        re.search(r"(?mi)^(?!0\s|none\s)\S+\s+(?:WaterKin|WaveKin)\b", text) is not None
+    )
+
+
+# every shipped deck as a static check without dtM; every shipped wave deck under each spelling
+_SHIPPED_CASES = [(f"shipped:static:{name}", (), {}) for name in _shipped_decks()] + [
+    (f"shipped:{variant}:{name}", (), {})
+    for name in _shipped_decks()
+    if _carries_waves(name)
+    for variant in ("spelled", "upper")
+]
+_ALL_FILE_CASES = [
+    *[("held", rows, files) for rows, files in _WAVE_RECORD_CASES],
+    *_ANCILLARY_CASES,
+    *_SPELLED_CASES,
+    *_STATIC_CASES,
+    *_SHIPPED_CASES,
+]
+
+
+def _respell(text: str, old: str, new: str) -> str:
+    """``text`` with the first token ``old`` of each row (any case) spelled ``new``."""
+    token = re.compile(rf"(?i)(?<!\S){re.escape(old)}(?!\S)")
+    return "\n".join(
+        line if line.startswith("--") else token.sub(new, line, count=1)
+        for line in text.split("\n")
+    )
+
+
+def _static_check(text: str, *, keep_dtm: bool = False) -> str:
+    """``text`` as a static check: TMax 0, and without dtM unless it is kept."""
+    text = re.sub(r"(?mi)^\s*\S+(\s+TMax\b)", r"0.0\1", text, count=1)
+    return text if keep_dtm else re.sub(r"(?mi)^\s*\S+\s+dtM\b.*\n", "", text, count=1)
+
+
+def _shipped_text(variant: str, name: str) -> str:
+    text = (EXAMPLES / name).read_text(encoding="utf-8")
+    if variant == "static":
+        return _static_check(text)
+    text = _static_check(text, keep_dtm=True)
+    for old, new in _KEYWORD_SPELLINGS:
+        text = _respell(text, old, new if variant == "spelled" else old.upper())
+    if variant == "upper":
+        for kind in ("airy", "jonswap", "pm", "issc", "torsethaugen", "ochihubble", "stream"):
+            text = _respell(text, kind, kind.upper())
+    return text
+
+
+def _deck_text(deck: str, rows: tuple[str, ...]) -> str:
+    if deck.startswith("shipped:"):
+        return _shipped_text(*deck.split(":")[1:])
+    if deck.endswith("_static"):
+        return _static_check(_deck_text(deck[: -len("_static")], rows))
+    if deck == "bed":
+        return _options(_HELD, "b.txt bathymetryFile", *rows).replace("50.0 WtrDpth\n", "")
+    if deck == "syrope":
+        return (EXAMPLES / "syrope_polyester_mooring.dat").read_text(encoding="utf-8")
+    if deck == "objects":
+        return _OBJECTS.replace("1.0 TMax\n", "1.0 TMax\n" + "".join(f"{r}\n" for r in rows))
+    if deck.endswith(".dat"):
+        text = (EXAMPLES / deck).read_text(encoding="utf-8")
+        return re.sub(r"(?m)^(\S+\s+TMax\b.*)$", "\\1\n" + "\n".join(rows), text, count=1)
+    return _options(_HELD, *rows)
+
+
+def _stage(folder: Path, rows: tuple[str, ...], files: dict[str, str], deck: str = "held") -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, text in files.items():
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_text(text, encoding="utf-8")
+    if deck.startswith("shipped:"):
+        source = (EXAMPLES / deck.split(":")[2]).parent
+        for item in source.iterdir():
+            if item.is_dir():
+                shutil.copytree(item, folder / item.name, dirs_exist_ok=True)
+            elif item.suffix != ".dat":
+                shutil.copy2(item, folder / item.name)
+    path = folder / "deck.dat"
+    path.write_text(_deck_text(deck, rows), encoding="utf-8")
+    return path
+
+
+def _accepted(deck: Path) -> bool:
+    try:
+        DeckFile.read(deck)
+    except DeckFormatError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(
+    not os.environ.get("CABLEDYN_DRIVER", "").strip(),
+    reason="needs the native driver (CABLEDYN_DRIVER)",
+)
+@pytest.mark.parametrize(("base", "rows", "files"), _ALL_FILE_CASES)
+def test_wave_record_rules_match_the_driver(tmp_path, base, rows, files):
+    deck = _stage(tmp_path, rows, files, base)
+    run = subprocess.run(
+        [os.environ["CABLEDYN_DRIVER"], str(deck), str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+        check=False,
+    )
+    assert _accepted(deck) == (run.returncode == 0), run.stdout[-400:] + run.stderr[-400:]
+
+
+@pytest.mark.parametrize(
+    ("rows", "files", "message"),
+    [
+        (
+            ("wk.dat WaterKin", "1 WaveRefX"),
+            _waterkin("0"),
+            "reference point of an elevation record",
+        ),
+        (
+            ("wk.dat WaterKin", "1 WaveRefX"),
+            _waterkin("SEASTATE"),
+            "reference point of an elevation",
+        ),
+        (("wk.dat WaterKin", "1 WaveRefX"), _waterkin("3"), "WaveKinMod supports 0"),
+        (("wk.dat WaterKin", "1 WaveRefX"), _waterkin("one"), "must be 0, 1, 2, or SEASTATE"),
+        (("wk.dat WaterKin", "1 WaveRefX"), {"wk.dat": "a\nb\n"}, "ended inside its header"),
+        (("wk.dat WaterKin", "1 WaveRefX"), {"wk.dat": "a\nb\nc\n"}, "no WaveKinMod line"),
+        (("wk.dat WaterKin", "1 WaveRefX"), {"wk.dat": "a\nb\nc\n \n"}, "line has no value"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 6.3\n"}, "within \\+-2 pi"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n"}, "at least two"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "1 0 0 0\n2 1 0 0\n"}, "at omega = 0"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0 1 0 0\n"}, "must be positive"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 x 0 0\n"}, "plain numbers"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 2000 0 0\n"}, "at most 1e3 m"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 -60 0\n0.5 1 0 0\n"}, "effective depth"),
+    ],
+)
+def test_wave_files_next_to_the_deck_are_read(tmp_path, rows, files, message):
+    with pytest.raises(DeckFormatError, match=message):
+        DeckFile.read(_stage(tmp_path, rows, files))
+
+
+@pytest.mark.parametrize("kind", ["ochihubble", "ochi-hubble", "ochi_hubble", "OCHI_HUBBLE"])
+def test_every_spelling_of_a_kind_takes_its_heading_from_its_own_column(tmp_path, kind):
+    rows = (f"{kind} 2 8 1 1 12 1 30 waves", *_RAO_ROWS)
+    DeckFile.read(_stage(tmp_path, rows, {"rao.txt": _rao(heads=(30.0,))}))
+    with pytest.raises(DeckFormatError, match="one-heading RAO table"):
+        DeckFile.read(_stage(tmp_path, rows, {"rao.txt": _rao(heads=(31.0,))}))
+
+
+def test_a_static_check_reads_a_record_on_its_own_clock(tmp_path):
+    # TMax = 0 without dtM: the record resamples on its dtWave, whatever the nominal step
+    files = {"wk.dat": _kin("1"), "eta.txt": _ETA}
+    DeckFile.read(_stage(tmp_path, _WK, files, "held_static"))
+    with pytest.raises(DeckFormatError, match="four `time elevation` rows"):
+        DeckFile.read(_stage(tmp_path, _WK, {"eta.txt": "0 0\n1 0\n"}, "held_static"))
+
+
+def test_wave_files_that_are_not_there_are_left_to_the_solver(tmp_path):
+    # In memory under the nominal path, or on disk ahead of its files: the deck passes here,
+    # and the driver, which must open the file, refuses it by name while it is missing.
+    for rows in (("wk.dat WaterKin", "1 WaveRefX"), ("7 WaterKin", "1 WaveRefX")):
+        DeckFile.from_text(_options(_HELD, *rows))
+        DeckFile.from_text(_options(_HELD, *rows), path=tmp_path / "deck.dat")
+    # once the file is there the same text is judged by it
+    (tmp_path / "wk.dat").write_text(_WATERKIN.format(mode="0"), encoding="utf-8")
+    with pytest.raises(DeckFormatError, match="reference point of an elevation record"):
+        DeckFile.from_text(
+            _options(_HELD, "wk.dat WaterKin", "1 WaveRefX"), path=tmp_path / "deck.dat"
+        )
+
+
+def test_a_waterkin_file_is_found_as_the_native_reader_finds_it(tmp_path):
+    # quoted, in a subfolder, and by an absolute path
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "wk.dat").write_text(_WATERKIN.format(mode="0"), encoding="utf-8")
+    for value in ('"sub/wk.dat"', "sub/wk.dat", (tmp_path / "sub" / "wk.dat").as_posix()):
+        with pytest.raises(DeckFormatError, match="reference point of an elevation record"):
+            DeckFile.read(_stage(tmp_path, (f"{value} WaterKin", "1 WaveRefX"), {}))
+
+
 @pytest.mark.parametrize("value", ["0", "-0.1"])
 def test_dtwave_must_be_positive(value):
     _rejects(_options(_HELD, f"{value} dtWave"), "OPTION dtWave must be positive")
@@ -105,6 +740,16 @@ def test_dtwave_must_be_positive(value):
         (("uniform 0.1 0 0 current", "1 Currents"), "both a current OPTION and Currents 1"),
         (("uniform 0.1 0 0 current", "2 Currents"), "both a current OPTION and Currents 2"),
         (("uniform 0.1 0 0 current", "5 Currents"), "both a current OPTION and Currents 5"),
+        (("7 WaterKin", "12.5 WaveRefX", "-3 WaveRefY"), None),
+        (("3 WaveKin", "0.1 dtWave", "0 WaveRefY"), None),
+        (("wk.dat WaterKin", "12.5 WaveRefX"), None),
+        (("12.5 WaveRefX",), "reference point of an elevation record"),
+        (("0 WaveRefY",), "reference point of an elevation record"),
+        (("airy 2 8 0 waves", "1 WaveRefX"), "reference point of an elevation record"),
+        (("airy 2 8 0 wavetrain", "1 WaveRefY"), "reference point of an elevation record"),
+        (("7 WaterKin", "2e6 WaveRefX"), "at most 1e6 m"),
+        (("7 WaterKin", "nan WaveRefY"), "must be"),
+        (("7 WaterKin", "north WaveRefY"), "must be numeric"),
     ],
 )
 def test_moordyn_c_kinematics_follow_the_native_rules(rows, message):
@@ -633,7 +1278,7 @@ def test_generated_cases_carry_the_fixed_name_kinematics_files(tmp_path):
     ("mode", "name"), [("2", "current_profile_dynamic.txt"), ("5", "current_profile_4d.txt")]
 )
 def test_generated_cases_carry_the_moordyn_c_current_tables(tmp_path, mode, name):
-    table = "a MoorDyn-C current table\n"
+    table = _CURRENT_TABLES[mode]
     base = _kinematic_base(tmp_path / "src", f"{mode} Currents", files={name: table})
     out = tmp_path / "cases"
     generate_deck_cases(base, out, {"a": {"option.dtM": 0.05}})

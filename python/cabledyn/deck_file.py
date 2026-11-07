@@ -12,6 +12,7 @@ must be plain unquoted Fortran numbers.
 
 from __future__ import annotations
 
+import bisect
 import contextlib
 import copy
 import hashlib
@@ -22,10 +23,11 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
+from typing import Any
 
 from cabledyn._paths import windows_device_component
 from cabledyn.errors import DeckFormatError
@@ -277,6 +279,8 @@ _SCALAR_OPTION_KEYWORDS = frozenset(_OPTION_ALIASES) | {
     "bodysubstep",
     "dtwave",
     "wvhicoff",
+    "waverefx",
+    "waverefy",
     "bodywetting",
     "bodyhydro",
     "rodhydro",
@@ -1229,6 +1233,8 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "dtout",
         "dtwave",
         "wvhicoff",
+        "waverefx",
+        "waverefy",
         "inertialf",
         "inertialf_rampt",
     }:
@@ -1439,6 +1445,882 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
     # Path-valued options and the ignored stock tScheme selector accept any
     # non-empty native token; tokenization has already enforced that contract.
     return None
+
+
+# --------------------------------------------------------------------------- ancillary files
+# The native readers of the files a deck names, as far as they refuse a deck. Each function
+# follows the subroutine it names in src/CableDyn_DeckDriver.f90 (or the module given) and raises
+# _AncillaryError with the native message; DeckFile adds the deck's label.
+
+_NATIVE_RECORD_LENGTH = 512  # DECK_RECLEN: the longest non-comment record of next_record
+_NATIVE_TABLE_ROW_LENGTH = 65536  # LONG_ROW of read_moordyn_c_kinematics
+_NATIVE_EPSILON = sys.float_info.epsilon
+_NUMERIC_SHAPE = re.compile(
+    r"[+-]?(?:(?i:inf|infinity|nan)|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eEdD][+-]?[0-9]+)?)"
+)
+_MAX_GRID_STEPS = float(2**31 - 2)
+_MAX_MOTION_SPEED = 1.0e4
+_MAX_MOTION_ACCEL = 1.0e6
+_MAX_FLUID_SPEED = 1.0e3
+_MAX_WAVE_SAMPLES = 1.0e6
+_MAX_CURRENT_SAMPLES = 2000000
+_SYROPE_CURVE_SAMPLES = 30  # CD_SYROPE_NWC
+_SYROPE_SCAN_SAMPLES = 200  # CD_SYROPE_NSCAN
+_BATHY_CREASE_FRACTION = 0.05
+_BATHY_CREASE_MIN_HEIGHT = 1.0e-6
+_SEA_DEFAULT_DIRECTIONS = 9
+_STATIC_CHECK_DT = 1.0  # the nominal dtM of a standalone TMax = 0 without one (parse_deck)
+
+
+class _AncillaryError(ValueError):
+    """A refusal of a native ancillary-file reader."""
+
+
+def _token_real(token: str) -> float | None:
+    """Mirror the native ``parse_real_token``: the finite, normal real of a whole token."""
+    if _NUMERIC_SHAPE.fullmatch(token) is None:
+        return None
+    try:
+        value = float(re.sub("[dD]", "e", token))
+    except ValueError:
+        return None
+    if not math.isfinite(value) or _is_subnormal(value):
+        return None
+    return value
+
+
+def _real_row(tokens: list[str], count: int) -> tuple[int, list[float]]:
+    """Mirror the native ``parse_real_row``: status 0, 1 (no number) or 2 (malformed), values."""
+    if not tokens or _NUMERIC_SHAPE.fullmatch(tokens[0]) is None:
+        return 1, []
+    values: list[float] = []
+    for token in tokens[:count]:
+        value = _token_real(token)
+        if value is None:
+            return 2, []
+        values.append(value)
+    return (0, values) if len(values) == count else (2, [])
+
+
+def _data_rows(records: list[str], what: str) -> Iterator[tuple[int, list[str]]]:
+    """Mirror the native ``next_record``: non-blank rows without comments, by file line."""
+    for number, raw in enumerate(records, start=1):
+        visible = _strip_inline_comment(raw)
+        if not visible.strip(_WHITESPACE):
+            continue
+        defect = _character_error(visible)
+        if defect is not None:
+            raise _AncillaryError(f"{what} line {number} {defect}")
+        if len(visible) > _NATIVE_RECORD_LENGTH:
+            raise _AncillaryError(f"{what} line {number} is longer than the record limit")
+        yield number, visible.split()
+
+
+def _increasing(values: Sequence[float]) -> bool:
+    return all(later > earlier for earlier, later in itertools.pairwise(values))
+
+
+def _padded_fft_size(wanted: int) -> int:
+    """Mirror ``padded_fft_size``: twice the next 7-smooth half length."""
+    half = max((wanted + 1) // 2, 1)
+    while True:
+        rest = half
+        for prime in (2, 3, 5, 7):
+            while rest % prime == 0:
+                rest //= prime
+        if rest == 1:
+            return 2 * half
+        half += 1
+
+
+def _check_elevation_record(
+    records: list[str], dt_wave: float, window: float, cutoff: float, depth: float | None
+) -> None:
+    """Mirror ``read_wave_elevation_components`` and the component bounds of validation."""
+    import numpy as np
+
+    times: list[float] = []
+    heights: list[float] = []
+    for raw in records:
+        tokens = raw.split()
+        if not tokens:
+            continue
+        status, values = _real_row(tokens, 2)
+        if status == 2:
+            raise _AncillaryError(f'WaterKin WaveKinFile row "{raw}" is not "time elevation"')
+        if status != 0:
+            if times:
+                raise _AncillaryError("WaterKin WaveKinFile contains a non-data row in its history")
+            continue
+        times.append(values[0])
+        heights.append(values[1])
+    if len(times) < 4:
+        raise _AncillaryError("WaterKin WaveKinFile needs at least four `time elevation` rows")
+    tolerance = 1000.0 * _NATIVE_EPSILON * max(1.0, abs(times[-1]))
+    if abs(times[0]) > tolerance:
+        raise _AncillaryError("WaterKin WaveKinFile time history must start at t = 0")
+    if not _increasing(times):
+        raise _AncillaryError("WaterKin WaveKinFile times must be strictly increasing")
+    span = window if window > 0.0 else times[-1]
+    if not span / dt_wave <= _MAX_WAVE_SAMPLES:
+        raise _AncillaryError("WaterKin TMax/dtWave needs more than 1000000 wave samples")
+    wanted = math.ceil(span / dt_wave)
+    samples = _padded_fft_size(wanted)
+    series = np.zeros(samples)
+    series[:wanted] = np.interp(np.arange(wanted) * dt_wave, times, heights, right=0.0)
+    kept = samples // 2
+    if cutoff >= 0.0:
+        step = 2.0 * math.pi / (samples * dt_wave)
+        kept = min(kept, math.floor(cutoff / step * (1.0 + 1.0e-15)))
+    if kept < 1:
+        raise _AncillaryError("WvHiCOff keeps no component of the WaterKin WaveKinFile record")
+    mean = float(series.sum() / samples)
+    amplitudes = np.abs(np.fft.rfft(series - mean))[1 : kept + 1] * (2.0 / samples)
+    if samples % 2 == 0 and kept == samples // 2:
+        amplitudes[-1] *= 0.5
+    top = 2.0 * math.pi * kept / (samples * dt_wave)
+    if float(amplitudes.max()) > 1.0e3 or top > 1.0e4:
+        raise _AncillaryError(
+            "the wave components (WaterKin WaveKinMod 1 or WaveKin 3/7) need amplitudes of at "
+            "most 1e3 m and frequencies of at most 1e4 rad/s"
+        )
+    if depth is not None and depth + mean <= 0.0:
+        raise _AncillaryError("WaterKin mean elevation leaves a non-positive effective depth")
+
+
+def _check_waterkin_current(records: list[str]) -> None:
+    """Mirror the CurrentMod 1 table of ``read_waterkin_records`` (records after CurrentMod)."""
+    if len(records) < 2:
+        raise _AncillaryError("WaterKin file ended inside the current-table header")
+    malformed = "malformed WaterKin current row (expected z ux uy as plain numbers)"
+    rows: list[list[float]] = []
+    start = 2
+    for offset in range(4):
+        if start + offset >= len(records):
+            break
+        status, values = _real_row(records[start + offset].split(), 3)
+        if status == 2:
+            raise _AncillaryError(malformed)
+        if status == 0:
+            rows.append(values)
+            start += offset + 1
+            break
+    if not rows:
+        raise _AncillaryError("could not find the WaterKin current profile table")
+    for record in records[start:]:
+        status, values = _real_row(record.split(), 3)
+        if status == 2:
+            raise _AncillaryError(malformed)
+        if status != 0:
+            break
+        rows.append(values)
+    if len(rows) < 2:
+        raise _AncillaryError("WaterKin CurrentMod 1 needs at least two `z ux uy` depth rows")
+    depths = [row[0] for row in rows]
+    if any(value > 0.0 for value in depths):
+        if not all(value >= 0.0 for value in depths):
+            raise _AncillaryError("WaterKin current depth column mixes signs")
+        depths = [-value for value in depths]
+    if depths[0] > depths[-1]:
+        depths.reverse()
+    if any(b - a <= 100.0 * _NATIVE_EPSILON for a, b in itertools.pairwise(depths)):
+        raise _AncillaryError("WaterKin current depths must be strictly monotonic")
+    _check_current_bounds(depths, [value for row in rows for value in row[1:]])
+
+
+def _check_current_bounds(depths: Sequence[float], velocities: Iterable[float]) -> None:
+    if any(abs(value) > _NATIVE_MAX_COORDINATE for value in depths) or any(
+        abs(value) > _MAX_FLUID_SPEED for value in velocities
+    ):
+        raise _AncillaryError(
+            "current profile depths must be at most 1e6 m and velocities at most 1e3 m/s in "
+            "magnitude"
+        )
+
+
+def _wave_frequency_rows(records: list[str], label: str) -> list[list[float]]:
+    """Mirror ``read_table``: rows `omega Re Im beta`, the direction zero when left out."""
+    rows: list[list[float]] = []
+    for number, record in enumerate(records, start=1):
+        tokens = record.split()
+        if not tokens:
+            continue
+        status, values = _real_row(tokens, 4)
+        if status != 0:
+            status, values = _real_row(tokens, 3)
+            values.append(0.0)
+        if status != 0:
+            raise DeckFormatError(f"{label} line {number}: row is not 3 to 4 plain numbers")
+        rows.append(values)
+    return rows
+
+
+def _table_tokens(record: str) -> list[str]:
+    """Mirror ``row_tokens``: the tokens up to the first one holding a ``#``."""
+    tokens: list[str] = []
+    for token in record.split():
+        if "#" in token:
+            break
+        tokens.append(token)
+    return tokens
+
+
+def _table_number(token: str, name: str, number: int) -> float:
+    value = _token_real(token)
+    if value is None:
+        raise _AncillaryError(f'{name} line {number}: value "{token}" is not a plain finite number')
+    return value
+
+
+def _check_current_profile(records: list[str], name: str) -> None:
+    """Mirror ``Currents 1``: `z ux uy uz` rows after their header rows."""
+    rows: list[list[float]] = []
+    for number, raw in enumerate(records, start=1):
+        tokens = raw.split()
+        if not tokens:
+            continue
+        status, values = _real_row(tokens, 4)
+        if status != 0:
+            status, values = _real_row(tokens, 3)
+        if status == 1 and not rows:
+            continue
+        if status != 0:
+            raise _AncillaryError(f"{name} line {number}: row is not 3 to 4 plain numbers")
+        rows.append(values)
+    if not rows:
+        raise _AncillaryError(f"Currents 1: {name} has no `z ux uy uz` rows")
+    depths = [row[0] for row in rows]
+    if not _increasing(depths):
+        raise _AncillaryError(f"Currents 1: {name} depths must be strictly increasing")
+    if any(b - a <= 100.0 * _NATIVE_EPSILON for a, b in itertools.pairwise(depths)):
+        raise _AncillaryError("current profile depths must be strictly increasing")
+    _check_current_bounds(depths, [value for row in rows for value in row[1:]])
+
+
+def _check_current_resample(
+    times: list[float], spatial: int, velocities: Any, coordinates: Iterable[float]
+) -> None:
+    """Mirror ``CD_Current_Grid_Resample`` and the grid bounds; velocities is (nt, points)."""
+    import numpy as np
+
+    step = min(b - a for a, b in itertools.pairwise(times))
+    if times[-1] < 0.0:
+        raise _AncillaryError("current grid: the last time must not be negative")
+    if not times[-1] / _MAX_CURRENT_SAMPLES < step:
+        raise _AncillaryError(
+            "current grid: the last time over the smallest time interval exceeds the sample limit"
+        )
+    samples = math.floor(times[-1] / step) + 1
+    if samples * spatial > _MAX_CURRENT_SAMPLES:
+        raise _AncillaryError("current grid: more than 2e6 resampled space-time samples")
+    at = np.arange(samples) * step
+    upper = np.clip(np.searchsorted(times, at, side="right"), 1, len(times) - 1)
+    lower = upper - 1
+    knots = np.asarray(times)
+    weight = np.clip((at - knots[lower]) / (knots[upper] - knots[lower]), 0.0, 1.0)[:, None]
+    resampled = (1.0 - weight) * velocities[lower] + weight * velocities[upper]
+    if any(abs(value) > _NATIVE_MAX_COORDINATE for value in coordinates) or (
+        float(np.abs(resampled).max()) > _MAX_FLUID_SPEED
+    ):
+        raise _AncillaryError(
+            "current grid coordinates must be at most 1e6 m and velocities at most 1e3 m/s in "
+            "magnitude"
+        )
+
+
+def _check_dynamic_current(records: list[str], name: str) -> None:
+    """Mirror ``read_dynamic_profile`` (Currents 2)."""
+    import numpy as np
+
+    depths: list[float] = []
+    times: list[float] = []
+    rows: list[list[float]] = []
+    for number, raw in enumerate(records, start=1):
+        if len(raw) > _NATIVE_TABLE_ROW_LENGTH:
+            raise _AncillaryError(f"{name} line {number}: row is too long")
+        if number <= 4 or number == 6:
+            continue
+        tokens = _table_tokens(raw)
+        if number == 5:
+            if not tokens:
+                raise _AncillaryError(f"Currents 2: line 5 of {name} must list the depths")
+            for token in tokens:
+                depth = float(np.float32(_table_number(token, name, number)))
+                if not math.isfinite(depth):
+                    raise _AncillaryError(f"{name} depth is not a single-precision number")
+                depths.append(depth)
+            continue
+        if not tokens:
+            continue
+        count = len(depths)
+        if len(tokens) not in (1 + count, 1 + 2 * count, 1 + 3 * count):
+            raise _AncillaryError(f"Currents 2: {name} line {number}: wrong number of values")
+        values = [_table_number(token, name, number) for token in tokens]
+        times.append(values[0])
+        rows.append(values[1:] + [0.0] * (3 * count - len(values) + 1))
+    if not depths or len(records) < 7:
+        raise _AncillaryError(f"Currents 2: {name} needs at least 7 lines")
+    if len(times) < 2:
+        raise _AncillaryError(f"Currents 2: {name} needs at least two time rows")
+    if not _increasing(depths):
+        raise _AncillaryError(f"Currents 2: {name} depths must be strictly increasing")
+    if not _increasing(times):
+        raise _AncillaryError(f"Currents 2: {name} times must be strictly increasing")
+    _check_current_resample(times, len(depths), np.asarray(rows), [*depths, 0.0])
+
+
+def _check_grid_current(records: list[str], name: str) -> None:
+    """Mirror ``read_4d_grid`` (Currents 5)."""
+    import numpy as np
+
+    sizes: list[int] = []
+    axes: list[list[float]] = []
+    points: dict[tuple[int, int, int, int], list[float]] = {}
+    for number, raw in enumerate(records, start=1):
+        if len(raw) > _NATIVE_TABLE_ROW_LENGTH:
+            raise _AncillaryError(f"{name} line {number}: row is too long")
+        tokens = _table_tokens(raw)
+        if number == 1:
+            good = len(tokens) == 4 and all(re.fullmatch(r"[+-]?[0-9]+", t) for t in tokens)
+            sizes = [int(token) for token in tokens] if good else []
+            if not good or any(size < 1 for size in sizes):
+                raise _AncillaryError(f"Currents 5: line 1 of {name} must be `nx ny nz nt`")
+            if math.prod(sizes) > _MAX_CURRENT_SAMPLES:
+                raise _AncillaryError(f"Currents 5: {name} declares more than 2e6 grid points")
+        elif number <= 5:
+            if len(tokens) != sizes[number - 2]:
+                raise _AncillaryError(f"Currents 5: line {number} of {name} has the wrong length")
+            axes.append([_table_number(token, name, number) for token in tokens])
+        else:
+            if not tokens:
+                continue
+            if number == 6 and _NUMERIC_SHAPE.fullmatch(tokens[0]) is None:
+                continue
+            if len(tokens) != 7:
+                raise _AncillaryError(f"Currents 5: {name} line {number}: a row is 7 numbers")
+            row = [_table_number(token, name, number) for token in tokens]
+            where: list[int] = []
+            for axis, value in zip(axes, row, strict=False):
+                if value not in axis:
+                    raise _AncillaryError(f"Currents 5: {name} line {number}: off the grid")
+                where.append(axis.index(value))
+            key = (where[0], where[1], where[2], where[3])
+            if key in points:
+                raise _AncillaryError(f"Currents 5: {name} line {number}: repeats a grid point")
+            points[key] = row[4:]
+    if len(axes) < 4:
+        raise _AncillaryError(f"Currents 5: {name} needs the grid sizes and coordinates")
+    if not all(_increasing(axis) for axis in axes):
+        raise _AncillaryError(f"Currents 5: {name} coordinates must be strictly increasing")
+    if len(axes[3]) < 2:
+        raise _AncillaryError(f"Currents 5: {name} needs at least two times")
+    if len(points) < math.prod(sizes):
+        raise _AncillaryError(f"Currents 5: {name} has no row for a grid point")
+    spatial = math.prod(sizes[:3])
+    field = np.zeros((sizes[3], spatial * 3))
+    for (ix, iy, iz, it), velocity in points.items():
+        column = 3 * ((ix * sizes[1] + iy) * sizes[2] + iz)
+        field[it, column : column + 3] = velocity
+    _check_current_resample(axes[3], spatial, field, [*axes[0], *axes[1], *axes[2]])
+
+
+def _motion_time_index(
+    time: float, dt: float, n_time: int, tolerance: float, start_row_only: bool
+) -> int | None:
+    """Mirror ``motion_grid_index``: the 0-based step, -1 past TMax, ``None`` off the grid.
+
+    start_row_only: a static check without dtM, whose grid is the t = 0 row: a later row is not
+    used, whatever its time step.
+    """
+    if start_row_only and time > tolerance:
+        return -1
+    if not abs(time / dt) < _MAX_GRID_STEPS:
+        return None
+    step = round(time / dt)
+    if step < 0:
+        return None
+    if step < n_time:
+        return step if abs(step * dt - time) <= tolerance else None
+    if abs(step * dt - time) <= 100.0 * _NATIVE_EPSILON * max(1.0, abs(time)):
+        return -1
+    return None
+
+
+def _check_motion_rows(
+    records: list[str],
+    dt: float,
+    tmax: float,
+    eligible: set[int] | None,
+    roll_ends: set[int] | None,
+    turbines: dict[int, list[int]] | None,
+    start_row_only: bool,
+) -> None:
+    """Mirror ``read_motion_file``.
+
+    eligible: the ids the file must move at every time (``None``: on a route that takes
+    other points as well, their rows are only read). roll_ends: with a line solved in torsion,
+    the points whose moving end is restrained in torsion. turbines: the point ids of each
+    TURBINES row, on a deck that has them.
+    """
+    n_time = round(tmax / dt) + 1
+    tolerance = 100.0 * _NATIVE_EPSILON * max(1.0, tmax)
+    what = "motionFile"
+    seen: set[tuple[int, int]] = set()
+    roll_rows: dict[int, dict[int, float]] = {}
+    for number, tokens in _data_rows(records, what):
+        where = f"{what} line {number}"
+        if turbines is not None:
+            status, row = _real_row(tokens, 21)
+            if status != 0:
+                raise _AncillaryError(f"{where}: TURBINES motion rows must be 21 numbers")
+            if (
+                any(abs(value) > _NATIVE_MAX_COORDINATE for value in row[2:9])
+                or any(abs(value) > _MAX_MOTION_SPEED for value in row[9:15])
+                or any(abs(value) > _MAX_MOTION_ACCEL for value in row[15:21])
+            ):
+                raise _AncillaryError(f"{where}: value outside the admissible range")
+            turbine = int(row[1]) if row[1] == int(row[1]) else 0
+            if turbine not in turbines:
+                raise _AncillaryError(f"{where}: J must be the integer id of a TURBINES row")
+            if abs(math.sqrt(sum(value * value for value in row[5:9])) - 1.0) > 1.0e-6:
+                raise _AncillaryError(f"{where}: the quaternion must have unit norm (within 1e-6)")
+            step = _motion_time_index(row[0], dt, n_time, tolerance, start_row_only)
+            if step is None:
+                raise _AncillaryError(f"{where}: time is outside the dtM/TMax grid")
+            if step == -1:
+                continue
+            if (-turbine, step) in seen:
+                raise _AncillaryError(f"{where}: duplicate row for turbine {turbine}")
+            seen.add((-turbine, step))
+            seen.update((point, step) for point in turbines[turbine])
+            continue
+        status, row = _real_row(tokens, 11)
+        if status != 0:
+            raise _AncillaryError(f"{where}: rows must be: time point_id x y z vx vy vz ax ay az")
+        if (
+            any(abs(value) > _NATIVE_MAX_COORDINATE for value in row[2:5])
+            or any(abs(value) > _MAX_MOTION_SPEED for value in row[5:8])
+            or any(abs(value) > _MAX_MOTION_ACCEL for value in row[8:11])
+        ):
+            raise _AncillaryError(f"{where}: value outside the admissible range")
+        point = int(row[1]) if abs(row[1]) <= 2**31 - 1 and row[1] == int(row[1]) else 0
+        if point < 1:
+            raise _AncillaryError(f"{where}: point_id must be a positive integer")
+        step = _motion_time_index(row[0], dt, n_time, tolerance, start_row_only)
+        if step is None:
+            raise _AncillaryError(f"{where}: time is outside the dtM/TMax grid")
+        if eligible is not None and point not in eligible:
+            raise _AncillaryError(f"{where}: references point id {point}, which is not eligible")
+        if step == -1:
+            continue
+        if (point, step) in seen:
+            raise _AncillaryError(f"{where}: duplicate row for point {point} at this time")
+        seen.add((point, step))
+        if roll_ends is not None and len(tokens) >= 12 and _NUMERIC_SHAPE.fullmatch(tokens[11]):
+            roll = _token_real(tokens[11])
+            if roll is None:
+                raise _AncillaryError(f"{where}: the roll column must be a finite number")
+            roll_rows.setdefault(point, {})[step] = roll
+    if eligible is not None and any(
+        (point, step) not in seen for point in eligible for step in range(n_time)
+    ):
+        raise _AncillaryError(
+            "motionFile must provide every Coupled/Vessel point at every dtM time"
+        )
+    if roll_ends is None:
+        return
+    for point, rolls in roll_rows.items():
+        if len(rolls) != n_time:
+            raise _AncillaryError(
+                f"motionFile: point {point} gives the roll column on some rows only"
+            )
+        if any(rolls.values()):
+            if point not in roll_ends:
+                raise _AncillaryError(
+                    f"motionFile: point {point} has a non-zero roll column, but no line restrained "
+                    "in torsion has its moving end there"
+                )
+            if rolls[0] != 0.0:
+                raise _AncillaryError(
+                    f"motionFile: the roll column of point {point} must be 0 at t = 0"
+                )
+
+
+def _check_vessel_rows(records: list[str], dt: float, tmax: float, start_row_only: bool) -> None:
+    """Mirror ``read_vessel_record``."""
+    n_time = round(tmax / dt) + 1
+    tolerance = 100.0 * _NATIVE_EPSILON * max(1.0, tmax)
+    what = "vesselMotion file"
+    form = 0
+    seen: set[int] = set()
+    for number, tokens in _data_rows(records, what):
+        where = f"{what} line {number}"
+        if form == 0 and len(tokens) in (19, 20):
+            form = len(tokens)
+        status, row = (1, []) if len(tokens) != form else _real_row(tokens, form)
+        if status != 0:
+            raise _AncillaryError(f"{where}: rows must hold 19 or 20 values, one form for the file")
+        if any(abs(value) > _NATIVE_MAX_COORDINATE for value in row[1:]):
+            raise _AncillaryError(f"{where}: value outside the admissible range")
+        step = _motion_time_index(row[0], dt, n_time, tolerance, start_row_only)
+        if step is None:
+            raise _AncillaryError(f"{where}: time is outside the dtM/TMax grid")
+        if step == -1:
+            continue
+        if step in seen:
+            raise _AncillaryError(f"{where}: duplicate row at this time")
+        if form == 20 and abs(math.sqrt(sum(v * v for v in row[4:8])) - 1.0) > 1.0e-6:
+            raise _AncillaryError(f"{where}: the quaternion must have unit norm (within 1e-6)")
+        seen.add(step)
+    if len(seen) < n_time:
+        raise _AncillaryError("vesselMotion file must provide one row at every dtM time")
+
+
+def _check_rao_table(records: list[str], headings_in_use: Iterable[float]) -> None:
+    """Mirror ``read_rao_table``, ``CD_Vessel_RAO_Set`` and the heading test of ``_RAO_Eval``."""
+    what = "vesselRAO file"
+    heads: list[float] = []
+    blocks: list[list[float]] = []
+    amplitudes: list[float] = []
+    for number, tokens in _data_rows(records, what):
+        where = f"{what} line {number}"
+        if tokens[0].lower() == "heading":
+            value = _token_real(tokens[1]) if len(tokens) == 2 else None
+            if value is None or len(heads) >= 361:
+                raise _AncillaryError(f'{where}: a heading row must be "HEADING <deg>"')
+            heads.append(value)
+            blocks.append([])
+            continue
+        status, row = (1, []) if len(tokens) != 13 else _real_row(tokens, 13)
+        if status != 0 or not heads or len(blocks[-1]) >= 2000:
+            raise _AncillaryError(f'{where}: data rows follow a "HEADING <deg>" row with 13 values')
+        blocks[-1].append(row[0])
+        amplitudes.extend(row[1::2])
+    if not heads:
+        raise _AncillaryError('vesselRAO file holds no "HEADING <deg>" block')
+    if any(not block for block in blocks):
+        raise _AncillaryError("a vesselRAO heading block holds no period rows")
+    if any(block != blocks[0] for block in blocks):
+        raise _AncillaryError("every vesselRAO heading block must list the same periods")
+    periods = sorted(blocks[0])
+    heads = sorted(heads)
+    if periods[0] <= 0.0:
+        raise _AncillaryError("vesselRAO file: RAO periods must be positive")
+    if any(value < 0.0 for value in amplitudes):
+        raise _AncillaryError("vesselRAO file: RAO amplitudes must be non-negative")
+    if not _increasing(periods):
+        raise _AncillaryError("vesselRAO file: RAO periods must be strictly ascending")
+    if not _increasing(heads):
+        raise _AncillaryError("vesselRAO file: RAO headings must be strictly ascending")
+    if heads[-1] - heads[0] >= 360.0:
+        raise _AncillaryError("vesselRAO file: RAO headings must lie within one 360 deg turn")
+    for heading in headings_in_use:
+        turned = heads[0] + (heading - heads[0]) % 360.0
+        if turned > heads[-1] + 1.0e-9 and abs(turned - 360.0 - heads[0]) <= 1.0e-9:
+            turned = heads[0]
+        if len(heads) == 1:
+            if abs(turned - heads[0]) > 1.0e-9:
+                raise _AncillaryError("relative wave heading is not in the one-heading RAO table")
+        elif turned > heads[-1] + 1.0e-9:
+            raise _AncillaryError("relative wave heading lies outside the RAO table heading range")
+
+
+def _floor_axis(axis: list[float], q: float) -> tuple[int, float, bool]:
+    """Mirror ``locate_axis`` (0-based): the cell, the fraction and whether q is off the grid."""
+    if q <= axis[0]:
+        return 0, 0.0, q < axis[0]
+    if q >= axis[-1]:
+        return len(axis) - 2, 1.0, q > axis[-1]
+    cell = bisect.bisect_left(axis, q) - 1
+    return cell, (q - axis[cell]) / (axis[cell + 1] - axis[cell]), False
+
+
+def _crease_band(axis: list[float], cell: int, q: float) -> tuple[int, float, float]:
+    """Mirror ``crease_band`` (0-based; -1: none)."""
+    if cell > 0:
+        band = _BATHY_CREASE_FRACTION * min(
+            axis[cell] - axis[cell - 1], axis[cell + 1] - axis[cell]
+        )
+        if q - axis[cell] < band:
+            return cell, q - axis[cell], band
+    if cell + 2 < len(axis):
+        band = _BATHY_CREASE_FRACTION * min(
+            axis[cell + 1] - axis[cell], axis[cell + 2] - axis[cell + 1]
+        )
+        if axis[cell + 1] - q < band:
+            return cell + 1, q - axis[cell + 1], band
+    return -1, 0.0, 0.0
+
+
+def _bathymetry_floor(
+    xs: list[float], ys: list[float], depth: dict[tuple[int, int], float], x: float, y: float
+) -> tuple[float, float]:
+    """Mirror ``floor_eval``: the rounded and the bilinear seabed elevation at (x, y)."""
+    ix, tx, clamp_x = _floor_axis(xs, x)
+    iy, ty, clamp_y = _floor_axis(ys, y)
+    grid = (
+        -(1.0 - tx) * (1.0 - ty) * depth[ix, iy]
+        - tx * (1.0 - ty) * depth[ix + 1, iy]
+        - (1.0 - tx) * ty * depth[ix, iy + 1]
+        - tx * ty * depth[ix + 1, iy + 1]
+    )
+    if len(xs) <= 2 and len(ys) <= 2:
+        return grid, grid
+
+    def x_jump(k: int, j: int, band: float) -> tuple[float, bool]:
+        jump = (depth[k, j] - depth[k + 1, j]) / (xs[k + 1] - xs[k]) - (
+            depth[k - 1, j] - depth[k, j]
+        ) / (xs[k] - xs[k - 1])
+        active = abs(jump) * band / 6.0 > _BATHY_CREASE_MIN_HEIGHT
+        return (jump if active else 0.0), active
+
+    def y_jump(i: int, k: int, band: float) -> tuple[float, bool]:
+        jump = (depth[i, k] - depth[i, k + 1]) / (ys[k + 1] - ys[k]) - (
+            depth[i, k - 1] - depth[i, k]
+        ) / (ys[k] - ys[k - 1])
+        active = abs(jump) * band / 6.0 > _BATHY_CREASE_MIN_HEIGHT
+        return (jump if active else 0.0), active
+
+    kx, u, band_x = (-1, 0.0, 0.0) if clamp_x else _crease_band(xs, ix, x)
+    ky, v, band_y = (-1, 0.0, 0.0) if clamp_y else _crease_band(ys, iy, y)
+    if kx < 0 and ky < 0:
+        return grid, grid
+    floor = grid
+    hx = 0.0
+    if kx >= 0:
+        hx = (band_x - abs(u)) ** 3 / (6.0 * band_x * band_x)
+        jx0, on0 = x_jump(kx, iy, band_x)
+        jx1, on1 = x_jump(kx, iy + 1, band_x)
+        if on0 or on1:
+            floor += hx * ((1.0 - ty) * jx0 + ty * jx1)
+    if ky >= 0:
+        hy = (band_y - abs(v)) ** 3 / (6.0 * band_y * band_y)
+        jy0, on0 = y_jump(ix, ky, band_y)
+        jy1, on1 = y_jump(ix + 1, ky, band_y)
+        mixed = 0.0
+        on_mixed = False
+        if kx >= 0:
+            below, _ = x_jump(kx, ky - 1, band_x)
+            centre, _ = x_jump(kx, ky, band_x)
+            above, _ = x_jump(kx, ky + 1, band_x)
+            mixed = (above - centre) / (ys[ky + 1] - ys[ky]) - (centre - below) / (
+                ys[ky] - ys[ky - 1]
+            )
+            on_mixed = abs(mixed) * band_x * band_y / 36.0 > _BATHY_CREASE_MIN_HEIGHT
+            if not on_mixed:
+                mixed = 0.0
+        if on0 or on1 or on_mixed:
+            floor += hy * ((1.0 - tx) * jy0 + tx * jy1 + hx * mixed)
+    return floor, grid
+
+
+def _check_bathymetry(
+    records: list[str], fixed_points: list[tuple[int, float, float, float]]
+) -> None:
+    """Mirror ``load_bathymetry_file`` and ``check_fixed_points_on_bathymetry``."""
+    what = "bathymetry file"
+    rows: list[list[float]] = []
+    for number, tokens in _data_rows(records, what):
+        if len(tokens) != 3:
+            raise _AncillaryError(f'{what} line {number}: rows must be "x y depth"')
+        status, row = _real_row(tokens, 3)
+        if status != 0:
+            raise _AncillaryError(f"{what} line {number}: malformed row")
+        rows.append(row)
+    if len(rows) < 4:
+        raise _AncillaryError("bathymetry file needs at least a 2x2 grid")
+    if any(row[2] <= 0.0 for row in rows):
+        raise _AncillaryError("bathymetry file depths must be positive")
+
+    def unique(values: list[float]) -> list[float]:
+        kept: list[float] = []
+        for value in sorted(values):
+            if not kept or abs(value - kept[-1]) > 16.0 * _NATIVE_EPSILON * max(
+                1.0, abs(value), abs(kept[-1])
+            ):
+                kept.append(value)
+        return kept
+
+    def nearest(axis: list[float], value: float) -> int:
+        at = bisect.bisect_left(axis, value)
+        return min(
+            (i for i in (at - 1, at) if 0 <= i < len(axis)), key=lambda i: abs(axis[i] - value)
+        )
+
+    xs = unique([row[0] for row in rows])
+    ys = unique([row[1] for row in rows])
+    if len(xs) < 2 or len(ys) < 2 or len(rows) != len(xs) * len(ys):
+        raise _AncillaryError("bathymetry file must define one complete rectangular grid")
+    depth: dict[tuple[int, int], float] = {}
+    for x, y, value in rows:
+        key = (nearest(xs, x), nearest(ys, y))
+        if key in depth:
+            raise _AncillaryError("bathymetry file has duplicate x/y entries")
+        depth[key] = value
+    for point, x, y, z in fixed_points:
+        floor, grid = _bathymetry_floor(xs, ys, depth, x, y)
+        tolerance = max(1.0e-3, 1.0e-5 * abs(floor)) * (1.0 + 1.0e-9)
+        if abs(z - floor) <= tolerance or abs(z - grid) <= tolerance or z > floor:
+            continue
+        raise _AncillaryError(f"POINT {point} (Fixed) lies below the seabed: z = {z:g}")
+
+
+def _read_syrope_settings(records: list[str]) -> tuple[str, str, float, float]:
+    """Mirror the settings rows of ``read_syrope_settings``: OWC path, WCType, k1, k2."""
+    what = "Syrope settings file"
+    found: dict[str, str] = {}
+    for number, tokens in _data_rows(records, what):
+        if len(tokens) < 2:
+            continue
+        name = tokens[1].lower()
+        value = _strip_quotes(tokens[0])
+        if name not in {"owc", "wctype", "k1", "k2"}:
+            continue
+        if name in found:
+            raise _AncillaryError(f"{what} line {number}: duplicate Syrope {tokens[1]} row")
+        if name == "wctype" and value.lower() not in {"linear", "quadratic", "exp"}:
+            raise _AncillaryError(
+                f"{what} line {number}: Syrope WCType must be LINEAR, QUADRATIC, or EXP"
+            )
+        if name in {"k1", "k2"} and _token_real(value) is None:
+            raise _AncillaryError(f"{what} line {number}: Syrope {tokens[1]} is not a plain number")
+        found[name] = value
+    if len(found) < 4:
+        raise _AncillaryError("the Syrope settings file needs OWC, WCType, k1, and k2 rows")
+    k1 = _token_real(found["k1"])
+    k2 = _token_real(found["k2"])
+    assert k1 is not None and k2 is not None
+    return found["owc"], found["wctype"].lower(), k1, k2
+
+
+def _read_syrope_table(records: list[str]) -> list[list[float]]:
+    """Mirror the OWC table rows of ``read_syrope_settings``."""
+    what = "Syrope OWC table"
+    rows: list[list[float]] = []
+    for number, tokens in _data_rows(records, what):
+        if not any(_NUMERIC_SHAPE.fullmatch(token) for token in tokens):
+            continue
+        status, row = _real_row(tokens, 2)
+        if status != 0:
+            raise _AncillaryError(f"{what} line {number}: malformed row")
+        rows.append(row)
+    if len(rows) < 2:
+        raise _AncillaryError("the Syrope OWC table needs at least two rows")
+    return rows
+
+
+def _syrope_curve_defect(
+    strain: list[float],
+    tension: list[float],
+    shape: str,
+    k1: float,
+    k2: float,
+    alpha: float,
+    beta: float,
+    t_max: float,
+) -> bool:
+    """True when ``CD_Syrope_Working_Curve`` fails at the running maximum ``t_max``."""
+
+    def fast(value: float) -> float:
+        return math.log(1.0 + beta / alpha * value) / beta
+
+    if not t_max > 0.0 or t_max < tension[0] or t_max > tension[-1]:
+        return True
+    at = bisect.bisect_left(tension, t_max)
+    if at == 0:
+        eps_max = strain[0]
+    elif at == len(tension):
+        eps_max = strain[-1]
+    else:
+        eps_max = strain[at - 1] + (strain[at] - strain[at - 1]) * (t_max - tension[at - 1]) / (
+            tension[at] - tension[at - 1]
+        )
+    eps_min = strain[0] + k1 * (eps_max - strain[0])
+    if shape == "linear" and k1 >= 1.0:
+        eps_min = eps_max - t_max / k1
+    if not (eps_min >= 0.0 and eps_max - eps_min > 0.0):
+        return True
+    previous: tuple[float, float] | None = None
+    for index in range(_SYROPE_CURVE_SAMPLES):
+        at_strain = eps_min + (eps_max - eps_min) * index / (_SYROPE_CURVE_SAMPLES - 1)
+        xi = (at_strain - eps_min) / (eps_max - eps_min)
+        if shape == "linear":
+            value = t_max * xi
+        elif shape == "quadratic":
+            value = t_max * xi * (k2 * xi + (1.0 - k2))
+        else:
+            value = t_max * (1.0 - math.exp(k2 * xi)) / (1.0 - math.exp(k2))
+        argument = 1.0 + beta / alpha * value
+        if argument <= 0.0:
+            return True
+        slow = at_strain - fast(value)
+        if previous is not None and (value <= previous[0] or slow <= previous[1]):
+            return True
+        previous = (value, slow)
+    return False
+
+
+def _check_syrope_curve(
+    rows: list[list[float]],
+    shape: str,
+    k1: float,
+    k2: float,
+    alpha: float,
+    beta: float,
+) -> None:
+    """Mirror ``CD_Syrope_Init`` (the constants BA_s and BA_d are checked with the row)."""
+    strain = [row[0] for row in rows]
+    tension = [row[1] for row in rows]
+    if not (_increasing(strain) and _increasing(tension)):
+        raise _AncillaryError("the OWC strain and tension columns must be strictly increasing")
+    if shape == "exp" and not k2 > 0.0:
+        raise _AncillaryError("the EXP working curve needs a positive shape parameter p2 (k2 > 0)")
+    if shape == "linear" and k1 < 0.0:
+        raise _AncillaryError("the LINEAR working curve requires k1 >= 0")
+    if shape == "quadratic" and (k1 < 0.0 or k1 >= 1.0 or k2 <= 0.0 or k2 > 1.0):
+        raise _AncillaryError("the QUADRATIC working curve requires 0 <= k1 < 1 and 0 < k2 <= 1")
+    if shape == "exp" and (k1 < 0.0 or k1 >= 1.0 or k2 < 1.0e-6 or k2 > 700.0):
+        raise _AncillaryError("the EXP working curve requires 0 <= k1 < 1 and 1e-6 <= k2 <= 700")
+    if any(1.0 + beta / alpha * value <= 0.0 for value in tension):
+        raise _AncillaryError("the OWC slow-spring static strain is non-finite")
+    slow = [
+        e - math.log(1.0 + beta / alpha * t) / beta for e, t in zip(strain, tension, strict=True)
+    ]
+    if not _increasing(slow):
+        raise _AncillaryError("the OWC slow-spring static strain must be strictly increasing")
+    low = max(tension[0], 0.0)
+    high = tension[-1]
+    if all(
+        _syrope_curve_defect(
+            strain,
+            tension,
+            shape,
+            k1,
+            k2,
+            alpha,
+            beta,
+            low + (high - low) * k / _SYROPE_SCAN_SAMPLES,
+        )
+        for k in range(1, _SYROPE_SCAN_SAMPLES + 1)
+    ):
+        raise _AncillaryError("no running maximum in the OWC table range admits a working curve")
+
+
+def _train_direction(values: tuple[str, ...]) -> tuple[float, float]:
+    """Mirror ``CD_Sea_Parse_Train``: the direction and spreading of a wave row's values."""
+    kind = values[0].lower()
+    if kind == "airy":
+        return _native_float(values[3]), 0.0
+    index = 4 if kind == "jonswap" else 7 if kind.startswith("ochi") else 3
+    spreading = _native_float(values[index + 1]) if len(values) > index + 1 else 0.0
+    return _native_float(values[index]), spreading
+
+
+def _spread_headings(direction: float, spreading: float, bins: int) -> list[float]:
+    """The headings of a train (``CD_Sea_Synthesise``): the bin centres of a spread one."""
+    if spreading <= 0.0:
+        return [direction]
+    return [direction - 90.0 + 180.0 * (j + 0.5) / bins for j in range(bins)]
 
 
 @dataclass(frozen=True)
@@ -2424,12 +3306,13 @@ class DeckFile:
         between rows. A deck that passes can still be rejected by the solver on
         physical grounds.
 
-        The ancillary files a deck names (motion, bathymetry, WaterKin, Syrope,
-        and the MoorDyn-C kinematics files) are not read here, so the checks
-        that depend on their contents stay with the solver: for example the
-        anchor height on a bathymetry surface, whether a WaterKin file carries
-        waves (``WaveKinMod``) for ``vesselRAO``, and whether its current
-        doubles a ``current`` row or ``Currents 1``, ``2`` or ``5``.
+        The ancillary files a deck names (WaterKin and its wave record, the
+        MoorDyn-C kinematics files, motion and vessel records, the RAO table,
+        bathymetry, and the Syrope settings and OWC table) are read from the
+        deck's folder, with the rules of their native readers. A file that is
+        not there, as for a deck held in memory under its nominal path, is not
+        an error at this stage: the deck passes these checks and the solver,
+        which must open the file, refuses it by name if it is still missing.
 
         Raises
         ------
@@ -2583,6 +3466,8 @@ class DeckFile:
             has_waterkin_file = waterkin_value.lower() not in {"", "none", "seastate"} and any(
                 character in _WATERKIN_FILENAME_LETTERS for character in waterkin_value
             )
+            if has_waterkin_file and motion_source == "vesselrao":
+                has_waterkin_file = self._waterkin_wave_mode(waterkin_value) in {None, 1}
             has_trains = any(o.keyword.lower() in _WAVETRAIN_KEYWORDS for o in options)
             # WaveKin 3/7 installs linear component waves (native has_wave)
             if motion_source == "vesselrao" and not (
@@ -2674,6 +3559,35 @@ class DeckFile:
             if not (has_dtm and has_depth):
                 raise DeckFormatError(
                     f"{self._label}: WaveKin {mdc_wave_kin} waves require dtM, TMax and WtrDpth"
+                )
+            if mdc_wave_kin == 7:
+                self._check_wave_frequencies(_native_float(option_by_key["water_depth"].values[0]))
+        # native validation: WaveRefX and WaveRefY place the phases of component waves alone,
+        # which a WaterKin file carries under WaveKinMod 1.
+        # The bound applies to the value in force: a later row of an option replaces an earlier one.
+        wave_ref_rows = {
+            o.keyword.lower(): o for o in options if o.keyword.lower() in {"waverefx", "waverefy"}
+        }
+        if wave_ref_rows:
+            if any(
+                abs(_native_float(o.values[0])) > _NATIVE_MAX_COORDINATE
+                for o in wave_ref_rows.values()
+            ):
+                raise DeckFormatError(
+                    f"{self._label}: WaveRefX and WaveRefY must be at most 1e6 m in magnitude"
+                )
+            waterkin_ref = option_by_key.get("waterkin")
+            waterkin_text = "" if waterkin_ref is None else waterkin_ref.values[0]
+            has_record = bool(mdc_wave_kin) or (
+                waterkin_text.lower() not in {"", "none", "seastate"}
+                and any(character in _WATERKIN_FILENAME_LETTERS for character in waterkin_text)
+                and self._waterkin_wave_mode(waterkin_text) in {None, 1}
+            )
+            if self.caller_driven or has_waves or trains or not has_record:
+                raise DeckFormatError(
+                    f"{self._label}: WaveRefX and WaveRefY place the reference point of an "
+                    "elevation record or a component file (WaterKin WaveKinMod 1, WaveKin 3 or 7); "
+                    "this deck has none"
                 )
         if mdc_currents:
             if current is not None and current.values[0].lower() != "none":
@@ -4311,6 +5225,431 @@ class DeckFile:
                         )
                     continue
             raise DeckFormatError(f"{self._label}: unsupported OUTPUT channel {channel!r}")
+        try:
+            self._check_ancillary_files(
+                option_by_key,
+                options,
+                motion_source,
+                mdc_wave_kin,
+                mdc_currents,
+                has_waves or bool(trains),
+                current is not None and current.values[0].lower() != "none",
+                (
+                    {
+                        node
+                        for line_id in torsion_lines
+                        for node, end in zip(
+                            normalized_line_endpoints[line_id], ("a", "b"), strict=True
+                        )
+                        if torsion_ends.get(line_id, {}).get(end, False)
+                        and point_types[node] != "fixed"
+                    }
+                    if torsion_lines
+                    else None
+                ),
+                bool(finite_length_rods),
+                has_rigid6,
+                static_check,
+            )
+        except _AncillaryError as exc:
+            raise DeckFormatError(f"{self._label}: {exc}") from None
+
+    def _check_ancillary_files(
+        self,
+        option_by_key: dict[str, OptionRecord],
+        options: tuple[OptionRecord, ...],
+        motion_source: str | None,
+        mdc_wave_kin: int,
+        mdc_currents: int,
+        has_sea: bool,
+        has_current: bool,
+        roll_ends: set[str] | None,
+        has_rods: bool,
+        has_rigid6: bool,
+        static_check: bool,
+    ) -> None:
+        """Run the native rules of the ancillary files the deck names, those that are there.
+
+        A static check runs on the nominal clock the native parser installs before it validates.
+        """
+
+        def number(key: str) -> float | None:
+            row = option_by_key.get(key)
+            return None if row is None else _native_float(row.values[0])
+
+        dt = _STATIC_CHECK_DT if static_check else number("dtm")
+        tmax = number("tmax") or 0.0
+        depth = number("water_depth")
+        record_dir: float | None = None
+        component_headings: list[float] | None = None
+        waterkin_row = option_by_key.get("waterkin")
+        if waterkin_row is not None and not mdc_wave_kin:
+            value = waterkin_row.values[0]
+            if value.lower() not in {"", "none", "seastate"} and any(
+                character in _WATERKIN_FILENAME_LETTERS for character in value
+            ):
+                record_dir = self._check_waterkin_file(
+                    value, tmax, dt, depth, has_sea, has_current, mdc_currents, option_by_key
+                )
+        if mdc_wave_kin == 3:
+            component_headings = [0.0]
+        elif mdc_wave_kin == 7:
+            component_headings = self._wave_frequency_headings()
+        if mdc_currents:
+            name = _MOORDYN_C_CURRENT_FILES[mdc_currents]
+            records = self._ancillary_records(name)
+            if records is not None:
+                check = {
+                    1: _check_current_profile,
+                    2: _check_dynamic_current,
+                    5: _check_grid_current,
+                }[mdc_currents]
+                check(records, name)
+        rows = self._rows("POINTS")
+        for key in ("bathymetry",):
+            row = option_by_key.get(key)
+            if row is None:
+                continue
+            records = self._ancillary_records(row.values[0])
+            if records is not None:
+                _check_bathymetry(
+                    records,
+                    [
+                        (
+                            _native_int(point.tokens[0]),
+                            _native_float(point.tokens[2]),
+                            _native_float(point.tokens[3]),
+                            _native_float(point.tokens[4]),
+                        )
+                        for point in rows
+                        if point.tokens[1].lower() == "fixed"
+                    ],
+                )
+        self._check_syrope_files()
+        if motion_source is None or dt is None or self.caller_driven:
+            return
+        source = next(o for o in reversed(options) if o.keyword.lower() == motion_source)
+        records = self._ancillary_records(source.values[0])
+        if records is None:
+            return
+        if motion_source == "vesselmotion":
+            if has_rods or has_rigid6:
+                raise _AncillaryError(
+                    "vesselMotion/vesselRAO move Coupled/Vessel line points; decks with prescribed "
+                    "rods or Rigid6 bodies take motionFile rows"
+                )
+            _check_vessel_rows(records, dt, tmax, static_check)
+        elif motion_source == "vesselrao":
+            if has_rods or has_rigid6:
+                raise _AncillaryError(
+                    "vesselMotion/vesselRAO move Coupled/Vessel line points; decks with prescribed "
+                    "rods or Rigid6 bodies take motionFile rows"
+                )
+            headings = component_headings
+            if record_dir is not None:
+                headings = [record_dir]
+            if headings is None:
+                headings = self._sea_headings(option_by_key, options)
+            _check_rao_table(records, headings)
+        else:
+            self._check_motion_file(
+                records, dt, tmax, roll_ends, has_rods, has_rigid6, static_check
+            )
+
+    def _check_waterkin_file(
+        self,
+        value: str,
+        tmax: float,
+        dt: float | None,
+        depth: float | None,
+        has_sea: bool,
+        has_current: bool,
+        mdc_currents: int,
+        option_by_key: dict[str, OptionRecord],
+    ) -> float | None:
+        """Mirror ``read_waterkin_records``; returns the WaveDir of a WaveKinMod 1 record."""
+        records = self._ancillary_records(value)
+        mode = self._waterkin_wave_mode(value)
+        if records is None or mode is None:
+            return None
+
+        def line(index: int, name: str) -> str:
+            if index >= len(records):
+                raise _AncillaryError(f"WaterKin file has no {name} line")
+            return records[index]
+
+        tokens = line(4, "WaveKinFile").split()
+        wave_file = _strip_quotes(tokens[0]) if tokens else ""
+        tokens = line(5, "dtWave").split()
+        dt_wave = _token_real(tokens[0]) if tokens else None
+        if dt_wave is None or dt_wave < 0.0:
+            raise _AncillaryError("WaterKin dtWave must be finite and non-negative")
+        tokens = line(6, "WaveDir").split()
+        wave_dir = _token_real(tokens[0]) if tokens else None
+        if wave_dir is None:
+            raise _AncillaryError("WaterKin WaveDir must be finite")
+        if len(records) < 13:
+            raise _AncillaryError("WaterKin file ended inside the waves block")
+        if mode == 1:
+            if self.caller_driven:
+                raise _AncillaryError(
+                    "WaterKin WaveKinMod 1 is supported only by the standalone driver; coupled "
+                    "aggregate runs must use WaveKinMod 2/SEASTATE through external_fluid"
+                )
+            if not wave_file:
+                raise _AncillaryError("WaterKin WaveKinMod 1 requires WaveKinFile")
+            if dt_wave <= 0.0:
+                raise _AncillaryError("WaterKin WaveKinMod 1 requires positive dtWave")
+            if has_sea:
+                raise _AncillaryError(
+                    "the deck declares BOTH a waves OPTION and WaterKin WaveKinMod 1 "
+                    "(double-counting); keep one"
+                )
+            if dt is None or depth is None:
+                raise _AncillaryError("deck waves require dtM, TMax and WtrDpth")
+            history = self._ancillary_records(wave_file)
+            if history is None:
+                history = self._ancillary_records(
+                    str(self._ancillary_path(value).parent / wave_file)
+                )
+            if history is not None:
+                cutoff_row = option_by_key.get("wvhicoff")
+                cutoff = math.pi
+                if cutoff_row is not None:
+                    cutoff = (
+                        -1.0
+                        if cutoff_row.values[0].lower() == "none"
+                        else _native_float(cutoff_row.values[0])
+                    )
+                _check_elevation_record(history, dt_wave, tmax, cutoff, depth)
+        elif mode == 2 and not self.caller_driven:
+            raise _AncillaryError(
+                "WaterKin WaveKinMod 2/SEASTATE is coupled-only; the standalone driver has no host "
+                "SeaState field"
+            )
+        line(13, "current header")
+        tokens = line(14, "CurrentMod").split()
+        if not tokens or re.fullmatch(r"[+-]?[0-9]{1,18}", tokens[0]) is None:
+            raise _AncillaryError("WaterKin CurrentMod must be an integer (0, 1, or 2)")
+        current_mode = int(tokens[0])
+        if not 0 <= current_mode <= 2:
+            raise _AncillaryError(
+                "WaterKin CurrentMod supports 0 (none), 1 (depth profile), or 2 (SeaState hybrid)"
+            )
+        if current_mode == 2:
+            if mode == 1:
+                raise _AncillaryError(
+                    "WaterKin WaveKinMod 1 plus CurrentMod 2 mixes self-driven waves with a host "
+                    "SeaState current, which the nodewise host field cannot separate"
+                )
+            if not self.caller_driven:
+                raise _AncillaryError(
+                    "WaterKin WaveKinMod 2/SEASTATE is coupled-only; the standalone driver has no "
+                    "host SeaState field"
+                )
+        if current_mode == 1:
+            _check_waterkin_current(records[15:])
+            if has_current:
+                raise _AncillaryError(
+                    "the deck declares BOTH a current OPTION and a WaterKin current "
+                    "(double-counting); keep one"
+                )
+            if mdc_currents:
+                raise _AncillaryError(
+                    "the deck declares BOTH a current OPTION (or a WaterKin current) and "
+                    f"Currents {mdc_currents} (double-counting); keep one"
+                )
+        return wave_dir if mode == 1 else None
+
+    def _wave_frequency_headings(self) -> list[float] | None:
+        """The directions [deg] of the components of ``wave_frequencies.txt``, if it is there."""
+        records = self._ancillary_records(_MOORDYN_C_WAVE_FILES[7])
+        if records is None:
+            return None
+        headings = [
+            math.degrees(math.atan2(math.sin(beta), math.cos(beta)))
+            for omega, real_part, imaginary, beta in _wave_frequency_rows(records, "")
+            if omega > 0.0 and math.hypot(real_part, imaginary) > 0.0
+        ]
+        return headings
+
+    def _sea_headings(
+        self, option_by_key: dict[str, OptionRecord], options: tuple[OptionRecord, ...]
+    ) -> list[float]:
+        """The headings of a deck's own sea, as ``CD_Sea_Synthesise`` lays them out."""
+        bins_row = option_by_key.get("wave_directions")
+        bins = _SEA_DEFAULT_DIRECTIONS
+        if bins_row is not None and round(_native_float(bins_row.values[0])) > 0:
+            bins = round(_native_float(bins_row.values[0]))
+        spreading_row = option_by_key.get("wave_spreading")
+        spreading = 0.0 if spreading_row is None else _native_float(spreading_row.values[0])
+        headings: list[float] = []
+        waves = option_by_key.get("waves")
+        if waves is not None and waves.values[0].lower() != "none":
+            direction, _ = _train_direction(waves.values)
+            headings.extend(_spread_headings(direction, spreading, bins))
+        for option in options:
+            if option.keyword.lower() in _WAVETRAIN_KEYWORDS:
+                direction, own = _train_direction(option.values)
+                headings.extend(_spread_headings(direction, own, bins))
+        return headings
+
+    def _check_syrope_files(self) -> None:
+        """Mirror ``read_syrope_settings``, and ``CD_Syrope_Init`` for the types lines use."""
+        used = {row.tokens[1].lower() for row in self.sections}
+        for row in self.line_types:
+            parts = row.tokens[3].split("|")
+            if not parts[0].lower().startswith("syrope:"):
+                continue
+            records = self._ancillary_records(parts[0][len("syrope:") :])
+            if records is None:
+                continue
+            owc, shape, k1, k2 = _read_syrope_settings(records)
+            settings = self._ancillary_path(parts[0][len("syrope:") :])
+            name = _strip_quotes(owc)
+            absolute = name.startswith(("/", "\\")) or name[1:2] == ":"
+            table = self._ancillary_records(name if absolute else str(settings.parent / name))
+            if table is None:
+                continue
+            rows = _read_syrope_table(table)
+            if row.tokens[0].lower() in used:
+                _check_syrope_curve(
+                    rows, shape, k1, k2, _native_float(parts[1]), _native_float(parts[2])
+                )
+
+    def _check_motion_file(
+        self,
+        records: list[str],
+        dt: float,
+        tmax: float,
+        roll_ends: set[str] | None,
+        has_rods: bool,
+        has_rigid6: bool,
+        start_row_only: bool,
+    ) -> None:
+        """Mirror ``read_motion_file`` on the route the native dispatch takes.
+
+        Only the routes with lines read the file, and only those of lines alone its roll column.
+        """
+        if not self.lines and (has_rods or has_rigid6):
+            return
+        moved = {"coupled", "vessel"}
+        ids: dict[int, str] = {
+            _native_int(row.tokens[0]): row.tokens[1].lower() for row in self.points
+        }
+        turbine_rows = self._rows("TURBINES")
+        eligible: set[int] | None = {
+            point for point, kind in ids.items() if kind in moved or _is_turbine_point_type(kind)
+        }
+        if has_rods and has_rigid6:
+            eligible = None
+        elif has_rods:
+            assert eligible is not None
+            eligible |= {point for point, kind in ids.items() if _rod_point(kind) is not None}
+        elif has_rigid6:
+            assert eligible is not None
+            eligible |= {point for point, kind in ids.items() if kind.startswith("body")}
+        if eligible is not None and not eligible:
+            raise _AncillaryError("motionFile requires at least one Coupled/Vessel point")
+        turbines: dict[int, list[int]] | None = None
+        if turbine_rows:
+            turbines = {_native_int(row.tokens[0]): [] for row in turbine_rows}
+            for point, kind in ids.items():
+                if _is_turbine_point_type(kind):
+                    turbines.setdefault(_turbine_id(kind), []).append(point)
+        _check_motion_rows(
+            records,
+            dt,
+            tmax,
+            eligible,
+            None
+            if roll_ends is None or has_rods or has_rigid6
+            else {int(point) for point in roll_ends},
+            turbines,
+            start_row_only,
+        )
+
+    def _ancillary_path(self, value: str) -> Path:
+        """Return the file an ancillary value names, as the native ``path_join``."""
+        name = _strip_quotes(value)
+        absolute = name.startswith(("/", "\\")) or name[1:2] == ":"
+        return Path(name) if absolute else self.path.parent / name
+
+    def _ancillary_records(self, value: str) -> list[str] | None:
+        """Return the records of the ancillary file ``value`` names, ``None`` if it is not there.
+
+        A relative name is taken from the deck's folder.
+        """
+        source = self._ancillary_path(value)
+        try:
+            payload = source.read_bytes()
+        except OSError:
+            return None
+        records, _ = _split_records(payload.decode("utf-8", "surrogateescape"))
+        if records and records[0].startswith(_UTF8_BOM):
+            records[0] = records[0][len(_UTF8_BOM) :]
+        return records
+
+    def _waterkin_wave_mode(self, value: str) -> int | None:
+        """Return the ``WaveKinMod`` of WaterKin file ``value``, ``None`` if it is not there.
+
+        Mirrors the head of the native ``read_waterkin_records``: two header lines, a waves
+        header, then the WaveKinMod line.
+        """
+        records = self._ancillary_records(value)
+        if records is None:
+            return None
+        if len(records) < 3:
+            raise DeckFormatError(f"{self._label}: WaterKin file ended inside its header")
+        if len(records) < 4:
+            raise DeckFormatError(f"{self._label}: WaterKin file has no WaveKinMod line")
+        tokens = records[3].split()
+        if not tokens:
+            raise DeckFormatError(f"{self._label}: WaterKin WaveKinMod line has no value")
+        if _strip_quotes(tokens[0]).lower() == "seastate":
+            return 2
+        if re.fullmatch(r"[+-]?[0-9]{1,18}", tokens[0]) is None:
+            raise DeckFormatError(
+                f"{self._label}: WaterKin WaveKinMod must be 0, 1, 2, or SEASTATE"
+            )
+        mode = int(tokens[0])
+        if not 0 <= mode <= 2:
+            raise DeckFormatError(
+                f"{self._label}: WaterKin WaveKinMod supports 0 (none), 1 (elevation history), "
+                "or 2 (coupled SeaState hybrid)"
+            )
+        return mode
+
+    def _check_wave_frequencies(self, depth: float) -> None:
+        """Check ``wave_frequencies.txt`` in the deck's folder, if it is there.
+
+        Mirrors the ``WaveKin 7`` branch of the native ``read_moordyn_c_kinematics``, the
+        component bounds of its validation and the effective depth of the wave precompute.
+        A row takes four numbers, or three and a direction of zero.
+        """
+        records = self._ancillary_records(_MOORDYN_C_WAVE_FILES[7])
+        if records is None:
+            return
+        label = f"{self._label}: WaveKin 7: wave_frequencies.txt"
+        rows = _wave_frequency_rows(records, label)
+        if len(rows) < 2:
+            raise DeckFormatError(f"{label} needs at least two `omega Re Im` rows")
+        if rows[0][0] != 0.0:
+            raise DeckFormatError(f"{label}: the first row must be at omega = 0")
+        for index, (omega, real_part, imaginary, beta) in enumerate(rows):
+            if abs(beta) > 2.0 * math.pi:
+                raise DeckFormatError(f"{label} directions are radians within +-2 pi")
+            if index == 0:
+                continue
+            if omega <= 0.0:
+                raise DeckFormatError(f"{label} frequencies after the first row must be positive")
+            if math.hypot(real_part, imaginary) > 1.0e3 or omega > 1.0e4:
+                raise DeckFormatError(
+                    f"{label} components need amplitudes of at most 1e3 m and frequencies of "
+                    "at most 1e4 rad/s"
+                )
+        if depth + rows[0][2] <= 0.0:
+            raise DeckFormatError(f"{label}: the mean level leaves a non-positive effective depth")
 
     def _check_torsion_normal(
         self,
