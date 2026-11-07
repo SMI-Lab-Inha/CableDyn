@@ -18,6 +18,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `n_fluid_nodes`, `fluid_node_positions` and `update_fluid_fields`. The field is sampled and held
   as in the standalone march and in OpenFAST; in current and waves a stepped cable matches the
   standalone driver to the digits of its output.
+- `Line.section_curvature()` and the C API quantity `CD_C_LINE_SECTION_CURVATURE` return `CurvX`
+  and `CurvY` at every node of a finite-EI line in one evaluation.
 
 ### Fixed
 

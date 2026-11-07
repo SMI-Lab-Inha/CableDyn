@@ -31,7 +31,7 @@ MODULE CableDyn_CAPI
                                CD_FAST_CalcOutputDerivatives, CD_FAST_GetCoupledMotion, CD_FAST_IsInitialized, &
                                CD_FAST_NCoupledDOF, CD_FAST_NPoints, CD_FAST_NLines, CD_FAST_OK, CD_FAST_BADINPUT, &
                                CD_FAST_NOT_INITIALIZED, CD_FAST_ALLOCFAIL, CD_FAST_UpdatePointFluidFields
-  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType
+  USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Section_Curvature, CD_HFMF_OK
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
   USE CableDyn_System, ONLY: CD_SystemType, CD_System_Line_NDOF, CD_Get_System_PointBlocks, CD_SYSTEM_OK, &
                              CD_POINT_COUPLED
@@ -100,7 +100,8 @@ MODULE CableDyn_CAPI
                                CD_C_LINE_TENSION = 3_C_INT, CD_C_LINE_ACCELERATION = 4_C_INT, &
                                CD_C_LINE_CURVATURE = 5_C_INT, CD_C_LINE_BEND_MOMENT = 6_C_INT, &
                                CD_C_LINE_DECLINATION = 7_C_INT, CD_C_LINE_AZIMUTH = 8_C_INT, &
-                               CD_C_LINE_SEGMENT_TENSION = 9_C_INT, CD_C_LINE_DECK_NODE = 10_C_INT
+                               CD_C_LINE_SEGMENT_TENSION = 9_C_INT, CD_C_LINE_DECK_NODE = 10_C_INT, &
+                               CD_C_LINE_SECTION_CURVATURE = 11_C_INT
   !> Capacity of the per-handle diagnostic retained for CableDyn_GetLastError.
   INTEGER, PARAMETER :: CD_C_MSG_LEN = 4096
 
@@ -1740,7 +1741,8 @@ CONTAINS
     !! quantity: CD_C_LINE_POSITION / VELOCITY / ACCELERATION (3 per node, xyz interleaved),
     !! TENSION / CURVATURE / BEND_MOMENT / DECLINATION / AZIMUTH (1 per node), or
     !! SEGMENT_TENSION (1 per segment), or DECK_NODE (1 per node: the deck node of each node of the
-    !! line's final mesh, the J of the node channels; 0 for a node a refinement added). Every quantity
+    !! line's final mesh, the J of the node channels; 0 for a node a refinement added), or
+    !! SECTION_CURVATURE (2 per node, CurvX and CurvY interleaved; finite-EI lines). Every quantity
     !! covers every node of the final mesh. n_out must equal the value count exactly.
     TYPE(C_PTR), VALUE :: handle, out_ptr
     INTEGER(C_INT), VALUE :: index, quantity, n_out
@@ -1773,6 +1775,8 @@ CONTAINS
     CASE (CD_C_LINE_TENSION, CD_C_LINE_CURVATURE, CD_C_LINE_BEND_MOMENT, CD_C_LINE_DECLINATION, &
           CD_C_LINE_AZIMUTH, CD_C_LINE_DECK_NODE)
       nvals = nnode
+    CASE (CD_C_LINE_SECTION_CURVATURE)
+      nvals = 2*nnode
     CASE (CD_C_LINE_SEGMENT_TENSION)
       nvals = nnode - 1
     CASE DEFAULT
@@ -1796,6 +1800,34 @@ CONTAINS
             REAL(CD_Cable_Deck_Node(h%agg%cables(h%agg%line_obj_index(line_id)), node), C_DOUBLE)
         END IF
       END DO
+      CALL store_status(h, CD_C_OK, '')
+      RETURN
+    END IF
+
+    IF (quantity == CD_C_LINE_SECTION_CURVATURE) THEN
+      ! one evaluation for the whole line, in internal node order (node nn is End A)
+      IF (.NOT. h%use_agg) THEN
+        CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_GetLineValues: the section curvature is defined on '// &
+                        'finite-EI lines', err_stat)
+        RETURN
+      END IF
+      IF (.NOT. h%agg%line_is_cable(line_id)) THEN
+        CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_GetLineValues: the section curvature is defined on '// &
+                        'finite-EI lines', err_stat)
+        RETURN
+      END IF
+      BLOCK
+        REAL(wp) :: kx(nnode), ky(nnode)
+        CALL CD_HFMF_Section_Curvature(h%agg%cables(h%agg%line_obj_index(line_id)), kx, ky, es, em)
+        IF (es /= CD_HFMF_OK) THEN
+          CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_GetLineValues: '//TRIM(em), err_stat)
+          RETURN
+        END IF
+        DO node = 1, nnode
+          out_c(2*node - 1) = REAL(kx(nnode + 1 - node), C_DOUBLE)
+          out_c(2*node) = REAL(ky(nnode + 1 - node), C_DOUBLE)
+        END DO
+      END BLOCK
       CALL store_status(h, CD_C_OK, '')
       RETURN
     END IF

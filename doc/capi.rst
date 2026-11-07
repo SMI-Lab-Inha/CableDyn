@@ -1879,8 +1879,9 @@ handle numbers its lines 1..n).
        one value per node; ``_SEGMENT_TENSION`` (9), one value per segment;
        ``_DECK_NODE`` (10), one value per node: the deck node ``J`` of the node (the ``<J>``
        of the node channels), 0 for a node a mesh refinement added, ``1 … n_nodes`` on a line
-       meshed as the deck. ``n_out`` must equal the value count. A library without code 10
-       rejects it with ``CD_C_BAD_INPUT``.
+       meshed as the deck; ``_SECTION_CURVATURE`` (11), two values per node, ``CurvX`` and
+       ``CurvY`` interleaved, on a finite-EI line. ``n_out`` must equal the value count. A library
+       without code 10 or 11 rejects it with ``CD_C_BAD_INPUT``.
    * - ``CableDyn_GetPointState``
      - position, velocity and the resultant force of the attached lines (``Point<P>F``),
        3 doubles each
