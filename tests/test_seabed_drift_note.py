@@ -130,7 +130,7 @@ def silent(exe: str, work: Path, name: str, text: str) -> None:
 
 def set_row(text: str, key: str, value: str | None) -> str:
     """Set OPTION ``key`` of a shipped deck; a key it lacks goes first in OPTIONS."""
-    pattern = re.compile(r"^[ \t]*\S+(?:[ \t]+\S+)*?[ \t]+" + key + r"\b.*$", re.M)
+    pattern = re.compile(r"^(?![ \t]*--)[ \t]*\S+(?:[ \t]+\S+)*?[ \t]+" + key + r"\b.*$", re.M)
     if pattern.search(text):
         return pattern.sub("" if value is None else value, text, count=1)
     head = re.search(r"^-+ *OPTIONS.*\n", text, re.M)
@@ -142,6 +142,7 @@ def shipped(work: Path, name: str, *rows: tuple[str, str | None]) -> str:
     text = set_row(set_row(text, "dtM", "0.005 dtM"), "TMax", "0.01 TMax")
     for key, value in rows:
         text = set_row(text, key, value)
+    assert len(re.findall(r"^(?![ \t]*--).*\bTMax\b", text, re.M)) == 1, name
     return text
 
 
