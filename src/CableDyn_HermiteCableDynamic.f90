@@ -335,6 +335,10 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp) :: snap_fc_t = 0.0_wp, snap_fc_d0(3, 2) = 0.0_wp
     LOGICAL :: snap_fc_valid = .FALSE.
     INTEGER :: snap_fc_clears = 0
+    ! fc_clears when the first step after the snapshot began: what happens to the cache after
+    ! that (the setters of an output probe) is no part of the path a restored step must repeat
+    LOGICAL :: snap_stepped = .FALSE.
+    INTEGER :: snap_step_clears = 0
     ! Generalised-alpha blend: .TRUE. blends the forces (the default), .FALSE. evaluates the
     ! forces at the blended configuration q_alpha = (1-af) q_{n+1} + af q_n.
     LOGICAL :: force_blend = CD_HC_FORCE_BLEND_DEFAULT
@@ -3874,6 +3878,10 @@ CONTAINS
     ! lengths the committed state was reached with (active line control: l0_c): reused from
     ! the previous step's converged evaluation when its key matches the committed state
     ! exactly, evaluated here otherwise (one residual assembly).
+    IF (.NOT. model%snap_stepped) THEN
+      model%snap_stepped = .TRUE.
+      model%snap_step_clears = model%fc_clears
+    END IF
     fc_hit = .FALSE.
     IF (model%force_blend) fc_hit = force_cache_matches()
     ! Cross-step factor reuse needs the step to continue bitwise from the state the carried
@@ -7946,6 +7954,7 @@ CONTAINS
     ! the cached committed force goes with the state it describes (see fc_clears)
     model%snap_fc_valid = model%fc_valid .AND. ALLOCATED(model%fc_R)
     model%snap_fc_clears = model%fc_clears
+    model%snap_stepped = .FALSE.
     IF (model%snap_fc_valid) THEN
       model%snap_fc_R = model%fc_R
       model%snap_fc_q = model%fc_q
@@ -8036,11 +8045,12 @@ CONTAINS
     model%max_step_rotation = model%snap_max_step_rotation
     model%recovery_event_count = model%snap_recovery_event_count
     model%recovery_max_substeps_used = model%snap_recovery_max_substeps_used
-    ! The snapshot's cached committed force comes back with its state unless a setter has
-    ! invalidated the cache since the snapshot, so the next step takes the path it took after
-    ! the snapshot (the cache differs from a fresh evaluation in the last bits where a
-    ! friction anchor slid). Otherwise the next step evaluates it afresh.
-    IF (model%snap_fc_valid .AND. model%snap_fc_clears == model%fc_clears) THEN
+    ! The snapshot's cached committed force comes back with its state unless a setter
+    ! invalidated the cache between the snapshot and the step that followed it, so the next
+    ! step takes the path that step took (the cache differs from a fresh evaluation in the last
+    ! bits where a friction anchor slid). Otherwise the next step evaluates it afresh.
+    IF (.NOT. model%snap_stepped) model%snap_step_clears = model%fc_clears
+    IF (model%snap_fc_valid .AND. model%snap_fc_clears == model%snap_step_clears) THEN
       IF (model%tw_active) model%tw_fcR = model%snap_tw_fcR
       model%fc_R = model%snap_fc_R
       model%fc_q = model%snap_fc_q

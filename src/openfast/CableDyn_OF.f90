@@ -49,11 +49,11 @@ MODULE CableDyn
    !! Fixed/Coupled(Vessel) points, EI=0 mooring lines (BA damping + the Morison set),
    !! finite-EI power cables, penalty seabed, nonzero initial platform displacement
    !! (PtfmInit), the module's own mooring step (supercycling + zero-order-hold loads),
-   !! glue correction iterations (NumCrctn > 0: snapshot-rewind re-advance), SeaState
+   !! glue step retries (snapshot-rewind re-advance at any dtM/DT), SeaState
    !! wave/current kinematics sampled at the line nodes (single-turbine only; see the
    !! farm scope at the use_extf guard), range graphs of the LINES flag r (single-turbine
-   !! only: <root>.Line<L>.range.out, sampled at every committed mooring step, written when
-   !! the run reaches TMax), checkpoint restart (rebuild from the packed
+   !! only: <root>.Line<L>.range.out, sampled at every committed mooring step, written at the
+   !! end of a run the host reports complete), checkpoint restart (rebuild from the packed
    !! deck + state mirror, accepted on committed mooring-interval boundaries),
    !! linearization with the line dynamics (as MoorDyn-F: the continuous states are the
    !! EI=0 lines' interior-node positions and the finite-EI cables' free DOFs, positions
@@ -83,7 +83,7 @@ MODULE CableDyn
    USE CableDyn_Conventions, ONLY: CD_NATIVE_CHANNEL_FMT
    USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_SeaState_Steady_Current, CD_HYDRO_OK
    USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_Is_Line_Node_Channel, &
-                                  CD_LINE_NODE_NUMBERING_NOTE
+                                  CD_LINE_NODE_NUMBERING_NOTE, CD_INIT_NOTE_LEN
    USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_UpdateStates_Moving, &
                                           CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_GetMovingPointMesh, &
                                           CD_AGG_Snapshot, CD_AGG_Restore, &
@@ -250,6 +250,7 @@ MODULE CableDyn
       ! (sample_range); ws_range is the double-precision transfer buffer to the OtherState
       ! mirror, which a checkpoint packs and a correction iteration's state copy rewinds.
       LOGICAL                 :: range_on = .FALSE.
+      LOGICAL                 :: range_sampled = .FALSE.   ! this instance has sampled (not a checkpoint alone)
       REAL(wp), ALLOCATABLE   :: ws_range(:)
       ! SeaState ambient-fluid sampling (host-driven wave/current kinematics): when the
       ! glue's WaveField declares waves or a current, the aggregate is built wave-capable
@@ -272,6 +273,13 @@ MODULE CableDyn
       ! rebuild_from_checkpoint.
       INTEGER(IntKi)          :: serial = 0
       REAL(DbKi)              :: t_commit = -1.0_DbKi
+      ! t_commit_prev: the commit the last advance started from, which a glue retry of that step
+      ! restores (step_retry). t_run_end: the last time the run has committed, later than
+      ! t_commit after a restore of an operating point; rewound marks that state, in which the
+      ! rows and the range samples past t_commit stand until the run takes another step.
+      REAL(DbKi)              :: t_commit_prev = -1.0_DbKi
+      REAL(DbKi)              :: t_run_end = -1.0_DbKi
+      LOGICAL                 :: rewound = .FALSE.
       ! Opt-in end-to-end profiler. CABLEDYN_PROFILE=1 arms these counters and
       ! the existing detailed Hermite profiler; ordinary production runs pay no
       ! SYSTEM_CLOCK overhead. Times are accumulated only for successful calls.
@@ -436,21 +444,21 @@ CONTAINS
    END SUBROUTINE open_native_outputs
 
 !----------------------------------------------------------------------------------------------------------------------------------
-   SUBROUTINE restore_native_outputs( id, old_id, root, t_start, restart_serial, dt_moor, nsuper, &
-                                      ErrStat, ErrMsg )
-      !! Transfer the run-level native history from a superseded in-process solver
-      !! instance to its checkpoint reconstruction. If the restored state rewinds
-      !! time, remove the abandoned committed rows before handing over the still-open
-      !! unit. A fresh-process restart has no live owner and creates a new history.
-      INTEGER(IntKi), INTENT(IN)  :: id, old_id, restart_serial, nsuper
+   SUBROUTINE restore_native_outputs( id, old_id, root, t_start, restart_serial, ErrStat, ErrMsg )
+      !! Transfer the run-level native history from a superseded in-process solver instance to
+      !! its checkpoint reconstruction: the restore of an operating point (CalcSteady) keeps the
+      !! rows of the run, and only a later step abandons those past the restored commit
+      !! (resume_after_rewind). A fresh-process restart has no live owner and creates a new
+      !! history. Neither route writes the static profile: the state here is the checkpoint's,
+      !! not the static equilibrium that file records.
+      INTEGER(IntKi), INTENT(IN)  :: id, old_id, restart_serial
       CHARACTER(*),   INTENT(IN)  :: root
-      REAL(DbKi),      INTENT(IN)  :: t_start, dt_moor
+      REAL(DbKi),      INTENT(IN)  :: t_start
       INTEGER(IntKi), INTENT(OUT) :: ErrStat
       CHARACTER(*),   INTENT(OUT) :: ErrMsg
 
       character(*), parameter :: RoutineName = 'CableDyn:restore_native_outputs'
-      INTEGER(IntKi)          :: ntrim, k, ios
-      REAL(DbKi)              :: delta, tol
+      INTEGER(IntKi)          :: ios
       LOGICAL                 :: live_owner, same_history
 
       ErrStat = ErrID_None
@@ -465,14 +473,14 @@ CONTAINS
          END IF
       END IF
       IF (.NOT. live_owner) THEN
-         CALL open_native_outputs( id, root, t_start, ErrStat, ErrMsg )
+         CALL open_native_outputs( id, root, t_start, ErrStat, ErrMsg, write_profile=.FALSE. )
          RETURN
       END IF
 
       ! A fresh-process restart first passes through CD_Init, which creates a
       ! provisional t=0 stream. The restored generation stamp differs, so release
       ! that stream and recreate it at the checkpoint. It must not be treated as a
-      ! same-process rewind because it contains no pre-checkpoint history.
+      ! same-process restore because it contains no pre-checkpoint history.
       IF (.NOT. same_history) THEN
          CLOSE (Inst(old_id)%native_un, IOSTAT=ios)
          IF (ios /= 0) THEN
@@ -485,52 +493,14 @@ CONTAINS
          Inst(old_id)%native_wrote_n = -123456789_IntKi
          Inst(old_id)%native_wrote_t = 0.0_DbKi
          Inst(old_id)%native_pending = .FALSE.
-         CALL open_native_outputs( id, root, t_start, ErrStat, ErrMsg )
+         CALL open_native_outputs( id, root, t_start, ErrStat, ErrMsg, write_profile=.FALSE. )
          RETURN
-      END IF
-
-      tol = 1.0E-7_DbKi*MAX(1.0_DbKi, ABS(t_start), ABS(Inst(old_id)%native_wrote_t))
-      delta = Inst(old_id)%native_wrote_t - t_start
-      IF (delta < -tol) THEN
-         CALL SetErrStat( ErrID_Fatal, 'The live native history ends before the restored committed state.', &
-                          ErrStat, ErrMsg, RoutineName )
-         RETURN
-      END IF
-      ntrim = MAX(0_IntKi, NINT(MAX(delta, 0.0_DbKi)/dt_moor, IntKi))
-      IF (ABS(delta - REAL(ntrim, DbKi)*dt_moor) > tol) THEN
-         CALL SetErrStat( ErrID_Fatal, 'The native-history rewind is not an integer number of CableDyn steps.', &
-                          ErrStat, ErrMsg, RoutineName )
-         RETURN
-      END IF
-      DO k = 1, ntrim
-         BACKSPACE (Inst(old_id)%native_un, IOSTAT=ios)
-         IF (ios /= 0) THEN
-            CALL SetErrStat( ErrID_Fatal, 'Could not remove abandoned native-output record '// &
-                             TRIM(Num2LStr(k))//' of '//TRIM(Num2LStr(ntrim))//' while rewinding from t = '// &
-                             TRIM(Num2LStr(Inst(old_id)%native_wrote_t))//' s to t = '// &
-                             TRIM(Num2LStr(t_start))//' s.', &
-                             ErrStat, ErrMsg, RoutineName )
-            RETURN
-         END IF
-      END DO
-      IF (ntrim > 0_IntKi) THEN
-         ENDFILE (Inst(old_id)%native_un, IOSTAT=ios)
-         IF (ios == 0) BACKSPACE (Inst(old_id)%native_un, IOSTAT=ios)
-         IF (ios /= 0) THEN
-            CALL SetErrStat( ErrID_Fatal, 'Could not truncate the abandoned native-output branch.', &
-                             ErrStat, ErrMsg, RoutineName )
-            RETURN
-         END IF
       END IF
 
       Inst(id)%native_un = Inst(old_id)%native_un
       Inst(id)%native_root = Inst(old_id)%native_root
-      Inst(id)%native_wrote_t = t_start
-      IF (Inst(old_id)%native_wrote_n >= 0_IntKi) THEN
-         Inst(id)%native_wrote_n = MAX(-1_IntKi, Inst(old_id)%native_wrote_n - ntrim*MAX(1_IntKi, nsuper))
-      ELSE
-         Inst(id)%native_wrote_n = Inst(old_id)%native_wrote_n
-      END IF
+      Inst(id)%native_wrote_t = Inst(old_id)%native_wrote_t
+      Inst(id)%native_wrote_n = Inst(old_id)%native_wrote_n
       Inst(id)%native_pending = .FALSE.
 
       Inst(old_id)%native_un = -1_IntKi
@@ -539,6 +509,58 @@ CONTAINS
       Inst(old_id)%native_wrote_t = 0.0_DbKi
       Inst(old_id)%native_pending = .FALSE.
    END SUBROUTINE restore_native_outputs
+
+   SUBROUTINE resume_after_rewind( inst_e, other, ErrStat, ErrMsg )
+      !! The run takes a step from a restored state that lies before its last commit: the rows
+      !! and the range samples past the restored commit now belong to an abandoned branch.
+      TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(IN   ) :: other
+      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
+      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
+
+      character(*), parameter :: RoutineName = 'CableDyn:resume_after_rewind'
+      INTEGER(IntKi)          :: ntrim, k, ios
+      REAL(DbKi)              :: delta, tol
+
+      ErrStat = ErrID_None
+      ErrMsg = ''
+      inst_e%rewound = .FALSE.
+      inst_e%t_run_end = inst_e%t_commit
+      IF (inst_e%range_on) THEN
+         CALL restore_range_state( inst_e, other, ErrStat, ErrMsg )
+         IF (ErrStat >= AbortErrLev) RETURN
+      END IF
+      IF (inst_e%native_un <= 0_IntKi) RETURN
+      tol = 1.0E-7_DbKi*MAX(1.0_DbKi, ABS(inst_e%t_commit), ABS(inst_e%native_wrote_t))
+      delta = MAX(inst_e%native_wrote_t - inst_e%t_commit, 0.0_DbKi)
+      ntrim = NINT(delta/REAL(inst_e%dt_moor, DbKi), IntKi)
+      IF (ABS(delta - REAL(ntrim, DbKi)*REAL(inst_e%dt_moor, DbKi)) > tol) THEN
+         CALL SetErrStat( ErrID_Fatal, 'The native-history rewind is not an integer number of CableDyn steps.', &
+                          ErrStat, ErrMsg, RoutineName )
+         RETURN
+      END IF
+      DO k = 1, ntrim
+         BACKSPACE (inst_e%native_un, IOSTAT=ios)
+         IF (ios /= 0) THEN
+            CALL SetErrStat( ErrID_Fatal, 'Could not remove abandoned native-output record '// &
+                             TRIM(Num2LStr(k))//' of '//TRIM(Num2LStr(ntrim))//' while rewinding from t = '// &
+                             TRIM(Num2LStr(inst_e%native_wrote_t))//' s to t = '// &
+                             TRIM(Num2LStr(inst_e%t_commit))//' s.', ErrStat, ErrMsg, RoutineName )
+            RETURN
+         END IF
+      END DO
+      IF (ntrim > 0_IntKi) THEN
+         ENDFILE (inst_e%native_un, IOSTAT=ios)
+         IF (ios == 0) BACKSPACE (inst_e%native_un, IOSTAT=ios)
+         IF (ios /= 0) THEN
+            CALL SetErrStat( ErrID_Fatal, 'Could not truncate the abandoned native-output branch.', &
+                             ErrStat, ErrMsg, RoutineName )
+            RETURN
+         END IF
+      END IF
+      inst_e%native_wrote_n = -123456789_IntKi
+      inst_e%native_wrote_t = inst_e%t_commit
+   END SUBROUTINE resume_after_rewind
 
 !----------------------------------------------------------------------------------------------------------------------------------
    SUBROUTINE CD_Init(InitInp, u, p, x, xd, z, other, y, m, DTcoupling, InitOut, ErrStat, ErrMsg)
@@ -578,7 +600,8 @@ CONTAINS
       CHARACTER(16)             :: host_kin
       REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static start
       CHARACTER(ChanLen)        :: chan_hdr, chan_unt
-      CHARACTER(1024)           :: native_root, init_note
+      CHARACTER(1024)           :: native_root
+      CHARACTER(CD_INIT_NOTE_LEN) :: init_note
       INTEGER(IntKi)            :: note_at, note_end
 
       ErrStat = ErrID_None
@@ -1046,6 +1069,7 @@ CONTAINS
       p%dtCoupling  = REAL(DTcoupling, DbKi)
       p%PtfmInit    = REAL(ptfm6, ReKi)   ! the rebuild reapplies the displaced-start geometry
       p%Tmax        = InitInp%Tmax
+      p%Linearize   = InitInp%Linearize
       ! DTcoupling itself is deliberately left untouched (SubSteps = 1 in MV_AddModule).
       ! The module provides no visualization meshes: say so when the glue asks for them
       ! (WrVTK > 0) instead of leaving the mooring silently absent from the VTK output.
@@ -1286,6 +1310,8 @@ CONTAINS
       g_serial = g_serial + 1_IntKi
       Inst(id)%serial = g_serial
       Inst(id)%t_commit = 0.0_DbKi          ! committed at the static IC (t = 0)
+      Inst(id)%t_commit_prev = 0.0_DbKi
+      Inst(id)%t_run_end = 0.0_DbKi
       other%restart_serial = g_serial
       other%t_commit = Inst(id)%t_commit
       other%pred_t = -1.0_DbKi   ! no previous commit yet (load predictor)
@@ -1345,7 +1371,7 @@ CONTAINS
       IF (ErrStat >= AbortErrLev) RETURN
 
       ! Range graphs (LINES flag r): the first sample is the state of the t = 0 output row. The
-      ! files of an earlier run go now: this run writes its own only when it reaches TMax.
+      ! files of an earlier run go now: this run writes its own only when it completes.
       Inst(id)%range_on = CD_AGG_Range_Graphs( Inst(id)%agg )
       IF (Inst(id)%range_on) THEN
          CALL CD_AGG_Range_Discard( Inst(id)%agg, TRIM(native_root), es, em )
@@ -1468,6 +1494,24 @@ CONTAINS
       ok = .TRUE.
    END FUNCTION instance_matches
 
+   LOGICAL FUNCTION step_retry( m, other, n ) RESULT(retry)
+      !! TRUE when the glue runs the mooring step n again: the solver's correction loop copies
+      !! the states of the step's start back over the predicted ones before each pass, so the
+      !! OtherState then stands at the commit that step started from, while the instance has
+      !! advanced from it. The aggregate's step-start snapshot rewinds that exactly, at any
+      !! dtM/DT; the time of the retried call lies inside the mooring interval, not on a commit.
+      TYPE(CD_MiscVarType),    INTENT(IN) :: m
+      TYPE(CD_OtherStateType), INTENT(IN) :: other
+      INTEGER(IntKi),          INTENT(IN) :: n
+      retry = .FALSE.
+      IF (.NOT. ALLOCATED(Inst)) RETURN
+      IF (m%CDInst < 1 .OR. m%CDInst > SIZE(Inst)) RETURN
+      IF (.NOT. Inst(m%CDInst)%active) RETURN
+      IF (Inst(m%CDInst)%serial /= other%restart_serial) RETURN
+      IF (n /= Inst(m%CDInst)%last_n .OR. n /= Inst(m%CDInst)%last_solve_n) RETURN
+      retry = ABS(Inst(m%CDInst)%t_commit_prev - other%t_commit) <= 1.0E-9_DbKi*MAX(1.0_DbKi, ABS(other%t_commit))
+   END FUNCTION step_retry
+
    SUBROUTINE rebuild_from_checkpoint( t, u1, p, x, other, m, ErrStat, ErrMsg )
       !! CHECKPOINT-RESTART: rebuild the module's internal solver instance from the
       !! registry-packed data alone -- the deck copy in p, the state mirror in x, the
@@ -1489,7 +1533,7 @@ CONTAINS
       character(*), parameter   :: RoutineName = 'CableDyn:rebuild_from_checkpoint'
       CHARACTER(2100)           :: rst_deck
       INTEGER(IntKi)            :: id, old_id, stale_id, i, es, ncp, nlines, il, ndofl, nin, k, ic, csz, koff
-      LOGICAL                   :: use_extf, profile_requested, preserve_profile
+      LOGICAL                   :: use_extf, profile_requested, preserve_profile, same_run
       REAL(wp), ALLOCATABLE     :: static_cur(:,:)   ! the host's steady current for the static start
       LOGICAL                   :: restored   ! held fluid fields restored from the checkpoint
       CHARACTER(ErrMsgLen)            :: em
@@ -1697,12 +1741,40 @@ CONTAINS
             RETURN
          END IF
       END IF
-      ! The range graphs continue from the checkpoint: the rebuild sized them, the restored
-      ! OtherState holds them through other%t_commit (a same-process rewind drops the samples
-      ! of the abandoned steps with it).
+      ! The same run restoring one of its own states (CalcSteady's operating points) keeps what
+      ! it has committed, the range samples too, until it steps on from there
+      ! (resume_after_rewind). A checkpoint in a new process continues from the restored
+      ! OtherState, which holds the range graphs through other%t_commit.
+      same_run = .FALSE.
+      IF (old_id >= 1_IntKi .AND. old_id <= SIZE(Inst) .AND. old_id /= id) &
+         same_run = Inst(old_id)%active .AND. Inst(old_id)%serial == other%restart_serial
+      Inst(id)%t_run_end = other%t_commit
+      IF (same_run) THEN
+         Inst(id)%t_run_end = MAX(Inst(old_id)%t_run_end, other%t_commit)
+         Inst(id)%rewound = Inst(id)%t_run_end > other%t_commit + 1.0E-9_DbKi*MAX(1.0_DbKi, ABS(other%t_commit))
+      END IF
       Inst(id)%range_on = CD_AGG_Range_Graphs( Inst(id)%agg )
       IF (Inst(id)%range_on) THEN
-         CALL restore_range_state( Inst(id), other, ErrStat2, ErrMsg2 )
+         IF (same_run) THEN
+            Inst(id)%range_sampled = Inst(old_id)%range_sampled
+            ALLOCATE (Inst(id)%ws_range(CD_AGG_Range_MirrorSize( Inst(id)%agg )))
+            CALL CD_AGG_Range_Get_State( Inst(old_id)%agg, Inst(id)%ws_range, es, em )
+            IF (es == CD_AGG_OK) CALL CD_AGG_Range_Set_State( Inst(id)%agg, Inst(id)%ws_range, es, em )
+            IF (es /= CD_AGG_OK) CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: range graphs of the '// &
+                                                  'restored run: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+         ELSE
+            CALL restore_range_state( Inst(id), other, ErrStat2, ErrMsg2 )
+            CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         END IF
+         IF (ErrStat >= AbortErrLev) THEN
+            CALL release_instance( id )
+            RETURN
+         END IF
+      END IF
+      ! A linearizing run keeps its state map: CalcSteady rewinds to the operating point through
+      ! this rebuild, and a restart may linearize later.
+      IF (p%Linearize) THEN
+         CALL lin_state_map( Inst(id), m, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) THEN
             CALL release_instance( id )
@@ -1726,12 +1798,11 @@ CONTAINS
          Inst(stale_id)%native_un = -1_IntKi
          Inst(stale_id)%native_root = ''
       END IF
-      ! A same-process replacement adopts the run-level stream from its predecessor.
-      ! Any rows beyond the restored commit are removed before the open unit changes
-      ! owner. A fresh-process restart has no live unit and starts a new result file at
-      ! the checkpoint state, matching the normal OpenFAST restart-output policy.
+      ! A same-process replacement adopts the run-level stream from its predecessor, rows and
+      ! all. A fresh-process restart has no live unit and starts a new result file at the
+      ! checkpoint state, matching the normal OpenFAST restart-output policy.
       CALL restore_native_outputs( id, old_id, TRIM(p%RootName), other%t_commit, other%restart_serial, &
-                                   p%dtM0, Inst(id)%nsuper, ErrStat2, ErrMsg2 )
+                                   ErrStat2, ErrMsg2 )
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) THEN
          CALL release_instance( id )
@@ -1744,6 +1815,7 @@ CONTAINS
       ! adopt the restored identity (the OtherState is authoritative across the restart)
       Inst(id)%serial = other%restart_serial
       Inst(id)%t_commit = other%t_commit
+      Inst(id)%t_commit_prev = other%t_commit
       Inst(id)%last_n = -1_IntKi
       Inst(id)%last_solve_n = -1_IntKi
       Inst(id)%loads_cached = .FALSE.
@@ -1797,7 +1869,7 @@ CONTAINS
       ! PREDICTED input for the upcoming interval (t_array(1) = t + DT), one glue step
       ! AHEAD of the committed boundary; overlaying it would start the restored run from
       ! a boundary it never had. Pick the u(:) entry whose time is t.
-      IF (.NOT. instance_matches(m, other)) THEN
+      IF (.NOT. (step_retry(m, other, n) .OR. instance_matches(m, other))) THEN
          iu_t = 1_IntKi
          DO i_u = 1, SIZE(t_array)
             IF (ABS(t_array(i_u) - t) <= 1.0E-6_DbKi*MAX(1.0_DbKi, ABS(t))) THEN
@@ -1810,18 +1882,25 @@ CONTAINS
          IF (ErrStat >= AbortErrLev) RETURN
       END IF
       id = m%CDInst
+      IF (Inst(id)%rewound) THEN
+         CALL resume_after_rewind( Inst(id), other, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) RETURN
+      END IF
       IF (Inst(id)%prof_enabled) THEN
          CALL SYSTEM_CLOCK(prof_c0, prof_rate)
          Inst(id)%prof_n_update = Inst(id)%prof_n_update + 1_IntKi
       END IF
 
-      ! Correction iterations (NumCrctn > 0): the glue re-runs UpdateStates over the SAME
-      ! interval with corrected inputs. A re-entry over a glue step where nothing was
-      ! advanced (an intermediate supercycle call) is a no-op; a re-entry over a COMPLETED
+      ! Correction iterations: the glue re-runs UpdateStates over the SAME interval with
+      ! corrected inputs when its solver retries a step. A re-entry over a glue step where nothing
+      ! was advanced (an intermediate supercycle call) is a no-op; a re-entry over a COMPLETED
       ! mooring step rewinds the aggregate to the snapshot taken at that step's start and
       ! falls through to re-advance with the corrected inputs -- exactly the
       ! copy-states-back semantics a registry-state module gets from the glue, expressed
-      ! on the module's internal state.
+      ! on the module's internal state. The glue's copy has taken the OtherState back with the
+      ! states, so what the first pass mirrored there and does not repeat is mirrored again:
+      ! the load predictor, shifted once per mooring step.
       IF (n == Inst(id)%last_n) THEN
          IF (Inst(id)%last_solve_n /= n) THEN
             IF (Inst(id)%prof_enabled) THEN
@@ -1837,6 +1916,9 @@ CONTAINS
                              TRIM(em), ErrStat, ErrMsg, RoutineName )
             RETURN
          END IF
+         Inst(id)%t_commit = Inst(id)%t_commit_prev
+         other%t_commit = Inst(id)%t_commit
+         CALL mirror_predictor_loads( Inst(id), other )
       END IF
 
       ! Supercycling (CableDyn's own dtM): the mooring interval [.., (n+1)*DT] completes only
@@ -1954,7 +2036,9 @@ CONTAINS
                ! the interval end is t + dtCoupling (t + dt_moor from here overshoots by
                ! dt_moor - DT under supercycling -- the same arithmetic as the WaveField
                ! sampling time).
+               Inst(id)%t_commit_prev = Inst(id)%t_commit
                Inst(id)%t_commit = t + p%dtCoupling
+               Inst(id)%t_run_end = Inst(id)%t_commit
                other%t_commit = Inst(id)%t_commit
                CALL pack_state_mirror( Inst(id), m, x, ErrStat2, ErrMsg2 )
                CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
@@ -2802,6 +2886,7 @@ CONTAINS
       END IF
       IF (.NOT. ALLOCATED(other%range_state)) ALLOCATE (other%range_state(nr))
       other%range_state = REAL(inst_e%ws_range, DbKi)
+      inst_e%range_sampled = .TRUE.
    END SUBROUTINE sample_range
 
    SUBROUTINE restore_range_state( inst_e, other, ErrStat, ErrMsg )
@@ -2836,23 +2921,31 @@ CONTAINS
       !! continues the extrapolation from the same two commits.
       TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
       TYPE(CD_OtherStateType),  INTENT(INOUT) :: other
-      INTEGER(IntKi) :: nl
       IF (inst_e%loads_cached .AND. inst_e%loads_at_n == inst_e%last_solve_n) THEN
          inst_e%pred_fld = inst_e%ws_fld
          inst_e%pred_mom = inst_e%ws_moment
          inst_e%pred_t = inst_e%t_commit
-         nl = 3_IntKi*inst_e%ncp
-         IF (ALLOCATED(other%pred_loads)) THEN
-            IF (SIZE(other%pred_loads) /= 2*nl) DEALLOCATE (other%pred_loads)
-         END IF
-         IF (.NOT. ALLOCATED(other%pred_loads)) ALLOCATE (other%pred_loads(2*nl))
-         other%pred_loads(1:nl) = RESHAPE(REAL(inst_e%ws_fld, DbKi), [nl])
-         other%pred_loads(nl + 1:2*nl) = RESHAPE(REAL(inst_e%ws_moment, DbKi), [nl])
       ELSE
          inst_e%pred_t = -1.0_DbKi
       END IF
-      other%pred_t = inst_e%pred_t
+      CALL mirror_predictor_loads( inst_e, other )
    END SUBROUTINE shift_predictor_loads
+
+   SUBROUTINE mirror_predictor_loads( inst_e, other )
+      !! The load predictor's previous commit, as the instance holds it, into the OtherState.
+      TYPE(CD_OF_Instance),     INTENT(IN   ) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(INOUT) :: other
+      INTEGER(IntKi) :: nl
+      other%pred_t = inst_e%pred_t
+      IF (inst_e%pred_t < 0.0_DbKi) RETURN
+      nl = 3_IntKi*inst_e%ncp
+      IF (ALLOCATED(other%pred_loads)) THEN
+         IF (SIZE(other%pred_loads) /= 2*nl) DEALLOCATE (other%pred_loads)
+      END IF
+      IF (.NOT. ALLOCATED(other%pred_loads)) ALLOCATE (other%pred_loads(2*nl))
+      other%pred_loads(1:nl) = RESHAPE(REAL(inst_e%pred_fld, DbKi), [nl])
+      other%pred_loads(nl + 1:2*nl) = RESHAPE(REAL(inst_e%pred_mom, DbKi), [nl])
+   END SUBROUTINE mirror_predictor_loads
 
    SUBROUTINE restore_calcoutput_probe( inst_e, m, ErrStat, ErrMsg )
       !! Restore every state surface after the output-probe
@@ -3322,18 +3415,19 @@ CONTAINS
       IF (ALLOCATED(Inst)) THEN
          IF (m%CDInst >= 1 .AND. m%CDInst <= SIZE(Inst)) THEN
             IF (Inst(m%CDInst)%active) THEN
-               ! The range graphs cover the whole run, so only a run that reached TMax writes them
-               ! (as the standalone driver, which writes them on completion); the glue also comes
-               ! here after an abort. TMax passes through ReKi, so the test allows its rounding.
+               ! The range graphs cover the whole run, so a run that ended on an error writes none
+               ! (as the standalone driver, which writes them on completion). The glue comes here
+               ! after an abort too, so the host says which it was (m%HostComplete): a run can also
+               ! complete before TMax, on CalcSteady or at FAST.Farm's last whole DT_Low. A process
+               ! that only restored a checkpoint and stepped nothing (-VTKLin) leaves the file as it is.
                IF (Inst(m%CDInst)%range_on) THEN
-                  IF (Inst(m%CDInst)%t_commit >= p%Tmax - 1.0E-6_DbKi*p%dtM0 - &
-                      2.0_DbKi*REAL(EPSILON(1.0_ReKi), DbKi)*ABS(p%Tmax)) THEN
+                  IF (.NOT. m%HostComplete) THEN
+                     CALL WrScr( '   CableDyn: the run stopped on an error at t = '// &
+                                 TRIM(Num2LStr(Inst(m%CDInst)%t_commit))//' s: no range graph is written.' )
+                  ELSE IF (Inst(m%CDInst)%range_sampled) THEN
                      CALL CD_AGG_Range_Write( Inst(m%CDInst)%agg, TRIM(p%RootName), range_es, range_em )
                      IF (range_es /= CD_AGG_OK) CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '// &
                                                                  TRIM(range_em), ErrStat, ErrMsg, RoutineName )
-                  ELSE
-                     CALL WrScr( '   CableDyn: the run ended at t = '//TRIM(Num2LStr(Inst(m%CDInst)%t_commit))// &
-                                 ' s, before TMax = '//TRIM(Num2LStr(p%Tmax))//' s: no range graph is written.' )
                   END IF
                END IF
                ! the rotation- and snap-resolved sub-steps of the EI=0 lines (ei0_substeps), as the

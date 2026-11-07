@@ -385,6 +385,7 @@ typedef   ^       ^                    IntKi               nCpldPoints    {:}   
 typedef   ^       ^                    IntKi               NConns         -     0    -   "number of Connect type Points - not to be confused with NPoints"             ""
 typedef   ^       ^                    IntKi               NAnchs         -     0    -   "number of Anchor type Points"             ""
 typedef   ^       ^                    DbKi                Tmax           -     -    -   "simulation duration" "[s]"
+typedef   ^       ^                    LOGICAL             Linearize         -  .FALSE. -   "the run linearizes: a rebuilt instance needs the linearization state map" -
 typedef   ^       ^                    IntKi               tScheme        -     0    -   "Time integration scheme (0 = RK2, 1 = RK4). Default is RK2"    - 
 typedef   ^       ^                    DbKi                g              -  9.81    -   "gravitational constant (positive)"   "[m/s^2]"
 typedef   ^       ^                    DbKi                rhoW           -  1025    -   "density of seawater"              "[kg/m^3]"
@@ -514,3 +515,4 @@ typedef   ^       ^                    IntKi               BathGrid_npoints {:} 
 typedef   ^       ^          GridInterp_MiscVarType        WaveField_m       -   -  -   "misc var information from the SeaState Interpolation module"   -
 typedef  ^        ^                    LOGICAL             IC_gen           - .FALSE. -   "boolean to indicate dynamic relaxation occuring"  "-"
 typedef   ^       ^                    IntKi               CDInst            -   0  -   "CableDyn mooring-backend instance handle (0 = none / needs rebuild after restart)"   ""
+typedef   ^       ^                    LOGICAL             HostComplete      -  .FALSE. -   "set by the host before CD_End when the run ended without an error" -

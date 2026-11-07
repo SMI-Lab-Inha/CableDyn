@@ -172,6 +172,7 @@ PROGRAM CableDyn_OF_Driver
    END DO
    CLOSE (un_out)
 
+   m%HostComplete = .TRUE.
    CALL CD_End(u(1), p, x, xd, z, other, y, m, es, em)
    IF (es >= AbortErrLev) CALL fail_out('CD_End: '//TRIM(em))
    CALL WrScr('CableDyn_OF_Driver: completed '//TRIM(Num2LStr(nglue))//' steps.')
