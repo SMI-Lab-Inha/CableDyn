@@ -305,6 +305,8 @@ def _bind_host_fluid() -> bool:
         return False
     set_fluid.argtypes = [c_void_p, c_int, POINTER(c_int)]
     set_fluid.restype = None
+    _lib.CableDyn_GetInitNotes.argtypes = [c_void_p, c_char_p, c_int]
+    _lib.CableDyn_GetInitNotes.restype = c_int
     _lib.CableDyn_NFluidNodes.argtypes = [c_void_p, POINTER(c_int)]
     _lib.CableDyn_NFluidNodes.restype = c_int
     _lib.CableDyn_GetFluidNodePositions.argtypes = [c_void_p, _DBL, c_int, POINTER(c_int)]

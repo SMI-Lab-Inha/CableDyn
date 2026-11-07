@@ -198,6 +198,7 @@ MODULE CableDyn_DeckDriver
   REAL(wp), PARAMETER :: STF_ARC_TOL = 1.0e-9_wp
 
   PUBLIC :: CD_Run_Deck_Driver
+  PUBLIC :: CD_Init_Notes_Start, CD_Init_Notes_Add, CD_Init_Notes_Take
   PUBLIC :: CD_Deck_Equilibrium_Jacobian_Check
   PUBLIC :: CD_Init_Deck_Models
   PUBLIC :: CD_Init_Deck_System
@@ -281,6 +282,11 @@ MODULE CableDyn_DeckDriver
   INTEGER, SAVE :: body_static_pass_limit = 0
   INTEGER, PARAMETER, PUBLIC :: CD_MB_PROBE_NCOL = 56
   LOGICAL, SAVE :: probe_armed = .FALSE.
+  ! The notes of one initialisation for an in-process caller (CD_Init_Notes_Start to
+  ! CD_Init_Notes_Take), one per text line. Module state: the caller holds its process-wide input
+  ! lock over the whole initialisation.
+  LOGICAL, SAVE :: capture_notes = .FALSE.
+  CHARACTER(:), ALLOCATABLE, SAVE :: captured_notes
   REAL(wp), SAVE :: probe_v0(3) = 0.0_wp, probe_w0(3) = 0.0_wp
   REAL(wp), ALLOCATABLE, SAVE :: probe_rec(:, :)
   INTEGER, PARAMETER, PUBLIC :: CD_DECKDRV_OK = 0, CD_DECKDRV_BADINPUT = 1, CD_DECKDRV_SOLVEFAIL = 2
@@ -1457,7 +1463,158 @@ CONTAINS
       ALLOCATE (line_ids(SIZE(lines)))
       line_ids = lines(:)%id
     END IF
+    IF (capture_notes .AND. ErrStat == CD_DECKDRV_OK) THEN
+      CALL deck_start_notes(lines, channels, opts, .TRUE., .FALSE.)
+      CALL capture_system_notes(lines, points, sections, types, opts, system)
+    END IF
   END SUBROUTINE CD_Init_Deck_System
+
+  SUBROUTINE deck_start_notes(lines, channels, opts, marched, printed)
+    !! The notes of a deck read for a run: printed as the driver prints them, or only captured for
+    !! an in-process caller, whose library prints nothing new. marched: the run takes time steps.
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    CHARACTER(NAMELEN), INTENT(IN) :: channels(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    LOGICAL, INTENT(IN) :: marched, printed
+    CHARACTER(8) :: rho
+    INTEGER :: j
+
+    IF (ANY([(CD_Is_Line_Node_Channel(channels(j)), j=1, SIZE(channels))]) .OR. &
+        ANY([(line_outputs_requested(lines(j)%outputs), j=1, SIZE(lines))])) &
+      CALL start_note(CD_LINE_NODE_NUMBERING_NOTE//'.')
+    ! Torsion (a line torsionally restrained at both ends, or at one with the other free to
+    ! twist) runs on the standalone cubic-Hermite route, the multibody march and the mixed
+    ! EI = 0 + finite-EI aggregate, in statics and in dynamics with the nodal twist's polar
+    ! inertia and the torque-tension coupling. A line restrained at one end only whose torsion
+    ! is not solved (resolve_one_end_torsion) is noted with the reason.
+    DO j = 1, SIZE(lines)
+      IF (COUNT(lines(j)%tors_mode /= TORS_FREE) == 1 .AND. lines(j)%tors_free_end == 0 .AND. &
+          LEN_TRIM(lines(j)%tors_note) > 0) CALL start_note('line '// &
+        TRIM(int_to_str(lines(j)%id))//' is torsionally restrained at one end only and its torsion is not '// &
+        'solved: '//TRIM(lines(j)%tors_note)//'.')
+    END DO
+    ! rhoInf near 1 leaves the march without numerical dissipation of the modes dtM does not
+    ! resolve (axial waves, slack-taut transitions). In an irregular sea a finite-EI lazy wave
+    ! at rhoInf = 1 with a 1e-4 Newton tolerance peaked at 2e5 N against 1.02e4 N (3e4 N at
+    ! 0.99), and was exact at 1e-6; EI=0 lines at rhoInf = 1 and 1e-4 failed the plausibility
+    ! guard, and at the default tolerance their peaks rose by factors of 2 to 5 at rhoInf >= 0.95.
+    IF (marched .AND. opts%rho_inf > RHO_INF_NOTE) THEN
+      WRITE (rho, '(F5.3)') opts%rho_inf
+      CALL start_note('rhoInf = '//TRIM(rho)//' leaves almost no numerical '// &
+                      'dissipation: modes dtM does not resolve (axial waves, slack-taut transitions) keep the '// &
+                      'residual a Newton step leaves and the energy of under-resolved snaps, which can raise '// &
+                      'tensions several times. Use rhoInf <= 0.95 (default 0.4), or a relative dynamic_solver '// &
+                      'tolerance of 1e-6 or tighter and a dtM that resolves the snaps.')
+    END IF
+
+  CONTAINS
+
+    SUBROUTINE start_note(text)
+      CHARACTER(*), INTENT(IN) :: text
+      IF (printed) THEN
+        CALL print_note(output_unit, '  ', text)
+      ELSE
+        CALL capture_note(text)
+      END IF
+    END SUBROUTINE start_note
+  END SUBROUTINE deck_start_notes
+
+  SUBROUTINE print_note(unit, lead, text)
+    !! Print one note at its indent, and capture it for an in-process caller.
+    INTEGER, INTENT(IN) :: unit
+    CHARACTER(*), INTENT(IN) :: lead, text
+    WRITE (unit, '(A)') lead//'Note: '//text
+    CALL capture_note(text)
+  END SUBROUTINE print_note
+
+  SUBROUTINE capture_note(text)
+    !! Keep one note of the initialisation under way, ended by a full stop as it is printed. A
+    !! deck read twice (the route scan, then the build) repeats the notes of its parse: kept once.
+    CHARACTER(*), INTENT(IN) :: text
+    CHARACTER(:), ALLOCATABLE :: note
+    INTEGER :: n
+
+    IF (.NOT. capture_notes) RETURN
+    n = LEN_TRIM(text)
+    IF (n == 0) RETURN
+    note = text(1:n)
+    IF (text(n:n) /= '.') note = note//'.'
+    !$OMP CRITICAL (cabledyn_init_notes)
+    IF (INDEX(NEW_LINE('a')//captured_notes, NEW_LINE('a')//note//NEW_LINE('a')) == 0) &
+      captured_notes = captured_notes//note//NEW_LINE('a')
+    !$OMP END CRITICAL (cabledyn_init_notes)
+  END SUBROUTINE capture_note
+
+  SUBROUTINE CD_Init_Notes_Start()
+    !! Capture the notes of the initialisation that follows. The caller holds its process-wide
+    !! input lock until CD_Init_Notes_Take.
+    capture_notes = .TRUE.
+    captured_notes = ''
+  END SUBROUTINE CD_Init_Notes_Start
+
+  SUBROUTINE CD_Init_Notes_Add(text)
+    !! Add the notes of a line summary, one per text line, to the initialisation under way.
+    CHARACTER(*), INTENT(IN) :: text
+    INTEGER :: a, b, n
+
+    n = LEN_TRIM(text)
+    a = 1
+    DO WHILE (a <= n)
+      b = INDEX(text(a:n), NEW_LINE('a'))
+      IF (b == 0) THEN
+        CALL capture_note(text(a:n))
+        RETURN
+      END IF
+      CALL capture_note(text(a:a + b - 2))
+      a = a + b
+    END DO
+  END SUBROUTINE CD_Init_Notes_Add
+
+  SUBROUTINE CD_Init_Notes_Take(notes)
+    !! End the capture: the notes of the initialisation, each ended by a new line.
+    CHARACTER(:), ALLOCATABLE, INTENT(OUT) :: notes
+    notes = captured_notes
+    capture_notes = .FALSE.
+    captured_notes = ''
+  END SUBROUTINE CD_Init_Notes_Take
+
+  SUBROUTINE capture_system_notes(lines, points, sections, types, opts, system)
+    !! The notes of a point system built for an in-process caller, who marches it: those a run of
+    !! the deck prints in its initialisation report (print_deck_init_report). A note that cannot be
+    !! worked out does not stop the initialisation: the notes then say so.
+    TYPE(DeckLine), INTENT(IN) :: lines(:)
+    TYPE(DeckPoint), INTENT(IN) :: points(:)
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    TYPE(CD_LineInitSummary), ALLOCATABLE :: summaries(:)
+    CHARACTER(:), ALLOCATABLE :: drift_note
+    CHARACTER(1024) :: note
+    INTEGER :: i, es
+
+    CALL collect_system_init_summaries(lines, points, system, summaries, es, note, opts=opts, &
+                                       friction_support=MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_FULL, &
+                                                              deck_has_dynamic_points(points)))
+    IF (es /= CD_DECKDRV_OK) THEN
+      CALL capture_note('the initialisation notes are incomplete: '//TRIM(note))
+      RETURN
+    END IF
+    DO i = 1, SIZE(summaries)
+      CALL CD_Init_Notes_Add(summaries(i)%note)
+      CALL static_strain_note(summaries(i)%line_id, summaries(i)%fair_tension, sections, types, opts, note)
+      CALL capture_note(note)
+      IF (opts%has_dtm) THEN
+        CALL axial_period_note(summaries(i)%line_id, opts%dtM, sections, types, note)
+        CALL capture_note(note)
+      END IF
+    END DO
+    IF (ANY(summaries%seabed_drift)) THEN
+      CALL seabed_drift_note(PACK(summaries%line_id, summaries%seabed_drift), &
+                             ANY(summaries%seabed_drift .AND. summaries%friction_refused), drift_note)
+      CALL capture_note(drift_note)
+    END IF
+  END SUBROUTINE capture_system_notes
 
   SUBROUTINE init_deck_models_from_parsed(types, points, lines, sections, opts, models, ErrStat, ErrMsg, bathymetry)
     !! Initialize persistent line models from an already parsed and validated deck.
@@ -8349,6 +8506,7 @@ CONTAINS
         END DO
       END BLOCK
     END IF
+    IF (capture_notes) CALL deck_start_notes(lines, channels, opts, .NOT. static_only, .FALSE.)
     ! One note for the run, on the first line it names (every route that prints the notes of this
     ! summary shows it): opts_static knows the host's steady current, a current the host brings
     ! in later is unknown here. A run that marches no step does not drift.
@@ -9331,32 +9489,7 @@ CONTAINS
     CALL parse_deck(deck_path, types, bodies, rod_types, rods, points, lines, sections, opts, channels, &
                     ErrStat, ErrMsg, failures=fails)
     IF (ErrStat /= 0) RETURN
-    IF (ANY([(CD_Is_Line_Node_Channel(channels(j)), j=1, SIZE(channels))]) .OR. &
-        ANY([(line_outputs_requested(lines(j)%outputs), j=1, SIZE(lines))])) &
-      WRITE (output_unit, '(A)') '  Note: '//CD_LINE_NODE_NUMBERING_NOTE//'.'
-    ! Torsion (a line torsionally restrained at both ends, or at one with the other free to
-    ! twist) runs on the standalone cubic-Hermite route, the multibody march and the mixed
-    ! EI = 0 + finite-EI aggregate, in statics and in dynamics with the nodal twist's polar
-    ! inertia and the torque-tension coupling. A line restrained at one end only whose torsion
-    ! is not solved (resolve_one_end_torsion) is noted with the reason.
-    DO li = 1, SIZE(lines)
-      IF (COUNT(lines(li)%tors_mode /= TORS_FREE) == 1 .AND. lines(li)%tors_free_end == 0 .AND. &
-          LEN_TRIM(lines(li)%tors_note) > 0) WRITE (output_unit, '(A)') '  Note: line '// &
-        TRIM(int_to_str(lines(li)%id))//' is torsionally restrained at one end only and its torsion is not '// &
-        'solved: '//TRIM(lines(li)%tors_note)//'.'
-    END DO
-    ! rhoInf near 1 leaves the march without numerical dissipation of the modes dtM does not
-    ! resolve (axial waves, slack-taut transitions). In an irregular sea a finite-EI lazy wave
-    ! at rhoInf = 1 with a 1e-4 Newton tolerance peaked at 2e5 N against 1.02e4 N (3e4 N at
-    ! 0.99), and was exact at 1e-6; EI=0 lines at rhoInf = 1 and 1e-4 failed the plausibility
-    ! guard, and at the default tolerance their peaks rose by factors of 2 to 5 at rhoInf >= 0.95.
-    IF (opts%has_dtm .AND. opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. opts%rho_inf > RHO_INF_NOTE) THEN
-      WRITE (output_unit, '(A,F5.3,A)') '  Note: rhoInf = ', opts%rho_inf, ' leaves almost no numerical '// &
-        'dissipation: modes dtM does not resolve (axial waves, slack-taut transitions) keep the residual a '// &
-        'Newton step leaves and the energy of under-resolved snaps, which can raise tensions several times. '// &
-        'Use rhoInf <= 0.95 (default 0.4), or a relative dynamic_solver tolerance of 1e-6 or tighter and a '// &
-        'dtM that resolves the snaps.'
-    END IF
+    CALL deck_start_notes(lines, channels, opts, opts%has_dtm .AND. opts%has_tmax .AND. opts%tmax > CD_ZERO, .TRUE.)
     IF (ANY([(line_torsion_active(lines(li)), li=1, SIZE(lines))])) THEN
       IF (opts%has_tmax .AND. opts%tmax > CD_ZERO .AND. .NOT. opts%alpha_force_blend) THEN
         CALL fail(ErrStat, ErrMsg, TORSION_NEEDS_FORCE_BLEND); RETURN
@@ -14020,9 +14153,10 @@ CONTAINS
     END IF
     n_window = CEILING(window/dt)
     n = padded_fft_size(n_window)
-    IF (n > LONG_WAVE_RECORD) WRITE (error_unit, '(A)') '   Note: reducing the WaterKin wave record ('// &
-      TRIM(int_to_str(n))//' samples) to Fourier components; this one-time setup grows with the square '// &
-      'of the sample count (a larger dtWave shortens it).'
+    IF (n > LONG_WAVE_RECORD) CALL print_note(error_unit, '   ', 'reducing the WaterKin wave record ('// &
+                                              TRIM(int_to_str(n))//' samples) to Fourier components; this one-time '// &
+                                              'setup grows with the square of the sample count (a larger dtWave '// &
+                                              'shortens it).')
     ALLOCATE (sample_eta(n))
     sample_eta = CD_ZERO
     bracket = 1
@@ -14211,9 +14345,10 @@ CONTAINS
       END IF
       nt = FLOOR(tl/dt) + 1
       IF (MOD(nt, 2) /= 0) nt = nt - 1
-      IF (nt > LONG_WAVE_RECORD) WRITE (error_unit, '(A)') '   Note: reducing wave_elevation.txt ('// &
-        TRIM(int_to_str(nt))//' samples) to Fourier components; this one-time setup grows with the square '// &
-        'of the sample count (a larger dtWave shortens it).'
+      IF (nt > LONG_WAVE_RECORD) CALL print_note(error_unit, '   ', 'reducing wave_elevation.txt ('// &
+                                                 TRIM(int_to_str(nt))//' samples) to Fourier components; this '// &
+                                                 'one-time setup grows with the square of the sample count (a '// &
+                                                 'larger dtWave shortens it).')
       IF (nt < 4) THEN
         CALL fail(ErrStat, ErrMsg, 'WaveKin 3: wave_elevation.txt spans fewer than four dtWave samples'); RETURN
       END IF
@@ -14338,11 +14473,12 @@ CONTAINS
       ! past its last sample MoorDyn-C's grid repeats (CD_Current_Grid_Velocity)
       IF (opts%has_tmax .AND. opts%current_grid%nt > 1) THEN
         tl = REAL(opts%current_grid%nt - 1, wp)*opts%current_grid%dt
-        IF (opts%tmax > tl) WRITE (error_unit, '(A)') '   Note: Currents '//TRIM(int_to_str(opts%mdc_currents))// &
-          ': TMax outlasts the last sample of '//TRIM(fname)//' (t = '//TRIM(real_to_str(tl))//' s); as in '// &
-          'MoorDyn-C the current then repeats with period '// &
-          TRIM(real_to_str(REAL(opts%current_grid%nt, wp)*opts%current_grid%dt))// &
-          ' s, holding its t = 0 value over the last interval of each period.'
+        IF (opts%tmax > tl) CALL print_note(error_unit, '   ', 'Currents '//TRIM(int_to_str(opts%mdc_currents))// &
+                                            ': TMax outlasts the last sample of '//TRIM(fname)//' (t = '// &
+                                            TRIM(real_to_str(tl))//' s); as in MoorDyn-C the current then repeats '// &
+                                            'with period '// &
+                                            TRIM(real_to_str(REAL(opts%current_grid%nt, wp)*opts%current_grid%dt))// &
+                                            ' s, holding its t = 0 value over the last interval of each period.')
       END IF
     END IF
 
@@ -26964,8 +27100,8 @@ CONTAINS
       IF (silent) EXIT
       IF (.NOT. lmove(j)) CYCLE
       IF (.NOT. line_is_finite_ei(lines(j), types, sections)) CYCLE
-      WRITE (output_unit, '(A)') '   Note: the body/rod/point static solve treats finite-EI LINE '// &
-        TRIM(int_to_str(lines(j)%id))//' as a cable without bending stiffness.'
+      CALL print_note(output_unit, '   ', 'the body/rod/point static solve treats finite-EI LINE '// &
+                      TRIM(int_to_str(lines(j)%id))//' as a cable without bending stiffness.')
     END DO
 
     ALLOCATE (off(nobj), ndof(nobj), lsc(nobj), base_r(3, nobj), base_rot(3, 3, nobj), e1(3, nobj), e2(3, nobj))

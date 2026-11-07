@@ -1365,6 +1365,13 @@ add_test(NAME c_api_host_rotation
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(c_api_host_rotation PROPERTIES LABELS "c;unit;capi;shared;dynamic;torsion")
 
+# CableDyn_GetInitNotes on the point route, the aggregate and a host fluid field.
+add_executable(test_c_api_init_notes tests/test_c_api_init_notes.c)
+target_include_directories(test_c_api_init_notes PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(test_c_api_init_notes PRIVATE cabledyn_shared)
+add_test(NAME c_api_init_notes COMMAND test_c_api_init_notes WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(c_api_init_notes PROPERTIES LABELS "c;unit;capi;shared")
+
 find_package(Threads QUIET)
 if(Threads_FOUND AND CMAKE_USE_PTHREADS_INIT)
   add_executable(test_c_api_concurrency tests/test_c_api_concurrency.c)
