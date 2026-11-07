@@ -663,6 +663,16 @@ def _is_subnormal(value: float) -> bool:
     return math.isfinite(value) and value != 0.0 and abs(value) < sys.float_info.min
 
 
+def _plain_real(token: str) -> float | None:
+    """Mirror the native ``parse_real_token``: the finite, normal real a token reads as."""
+    if any(character in " \"'/,;*\t" for character in token):
+        return None
+    value = _fortran_real_value(token)
+    if value is None or not math.isfinite(value) or _is_subnormal(value):
+        return None
+    return value
+
+
 def _real_token_defect(token: str) -> str | None:
     """Mirror the native ``real_token_defect``: why a numeric token is inadmissible.
 
@@ -2428,13 +2438,17 @@ class DeckFile:
         between rows. A deck that passes can still be rejected by the solver on
         physical grounds.
 
-        The ancillary files a deck names (motion, bathymetry, WaterKin, Syrope,
-        and the MoorDyn-C kinematics files) are not read here, so the checks
-        that depend on their contents stay with the solver: for example the
-        anchor height on a bathymetry surface, whether a WaterKin file carries
-        waves (``WaveKinMod``) for ``vesselRAO``, ``WaveRefX`` or ``WaveRefY``,
-        and whether its current doubles a ``current`` row or ``Currents 1``,
-        ``2`` or ``5``.
+        A WaterKin file's ``WaveKinMod`` (which decides whether ``vesselRAO``,
+        ``WaveRefX`` and ``WaveRefY`` have waves to act on) and the rows of
+        ``wave_frequencies.txt`` are read here, from the deck's folder. A file
+        that is not there, as for a deck held in memory under its nominal path,
+        is not an error at this stage: the deck passes these checks and the
+        solver, which must open the file, refuses it by name if it is still
+        missing. The other ancillary files (motion, bathymetry, Syrope and the
+        other MoorDyn-C kinematics files) are not read here, so the checks that
+        depend on their contents stay with the solver: for example the anchor
+        height on a bathymetry surface, and whether a WaterKin current doubles
+        a ``current`` row or ``Currents 1``, ``2`` or ``5``.
 
         Raises
         ------
@@ -2588,6 +2602,8 @@ class DeckFile:
             has_waterkin_file = waterkin_value.lower() not in {"", "none", "seastate"} and any(
                 character in _WATERKIN_FILENAME_LETTERS for character in waterkin_value
             )
+            if has_waterkin_file and motion_source == "vesselrao":
+                has_waterkin_file = self._waterkin_wave_mode(waterkin_value) in {None, 1}
             has_trains = any(o.keyword.lower() in _WAVETRAIN_KEYWORDS for o in options)
             # WaveKin 3/7 installs linear component waves (native has_wave)
             if motion_source == "vesselrao" and not (
@@ -2680,11 +2696,19 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{self._label}: WaveKin {mdc_wave_kin} waves require dtM, TMax and WtrDpth"
                 )
-        # native validation: WaveRefX and WaveRefY place the phases of component waves alone. A
-        # WaterKin file may carry them (its WaveKinMod is read at run time).
-        wave_ref_rows = [o for o in options if o.keyword.lower() in {"waverefx", "waverefy"}]
+            if mdc_wave_kin == 7:
+                self._check_wave_frequencies(_native_float(option_by_key["water_depth"].values[0]))
+        # native validation: WaveRefX and WaveRefY place the phases of component waves alone,
+        # which a WaterKin file carries under WaveKinMod 1.
+        # The bound applies to the value in force: a later row of an option replaces an earlier one.
+        wave_ref_rows = {
+            o.keyword.lower(): o for o in options if o.keyword.lower() in {"waverefx", "waverefy"}
+        }
         if wave_ref_rows:
-            if any(abs(_native_float(o.values[0])) > _NATIVE_MAX_COORDINATE for o in wave_ref_rows):
+            if any(
+                abs(_native_float(o.values[0])) > _NATIVE_MAX_COORDINATE
+                for o in wave_ref_rows.values()
+            ):
                 raise DeckFormatError(
                     f"{self._label}: WaveRefX and WaveRefY must be at most 1e6 m in magnitude"
                 )
@@ -2693,6 +2717,7 @@ class DeckFile:
             has_record = bool(mdc_wave_kin) or (
                 waterkin_text.lower() not in {"", "none", "seastate"}
                 and any(character in _WATERKIN_FILENAME_LETTERS for character in waterkin_text)
+                and self._waterkin_wave_mode(waterkin_text) in {None, 1}
             )
             if self.caller_driven or has_waves or trains or not has_record:
                 raise DeckFormatError(
@@ -4336,6 +4361,95 @@ class DeckFile:
                         )
                     continue
             raise DeckFormatError(f"{self._label}: unsupported OUTPUT channel {channel!r}")
+
+    def _ancillary_records(self, value: str) -> list[str] | None:
+        """Return the records of the ancillary file ``value`` names, ``None`` if it is not there.
+
+        As the native ``path_join``: a relative name is taken from the deck's folder.
+        """
+        name = _strip_quotes(value)
+        absolute = name.startswith(("/", "\\")) or name[1:2] == ":"
+        source = Path(name) if absolute else self.path.parent / name
+        try:
+            payload = source.read_bytes()
+        except OSError:
+            return None
+        records, _ = _split_records(payload.decode("utf-8", "surrogateescape"))
+        if records and records[0].startswith(_UTF8_BOM):
+            records[0] = records[0][len(_UTF8_BOM) :]
+        return records
+
+    def _waterkin_wave_mode(self, value: str) -> int | None:
+        """Return the ``WaveKinMod`` of WaterKin file ``value``, ``None`` if it is not there.
+
+        Mirrors the head of the native ``read_waterkin_records``: two header lines, a waves
+        header, then the WaveKinMod line.
+        """
+        records = self._ancillary_records(value)
+        if records is None:
+            return None
+        if len(records) < 3:
+            raise DeckFormatError(f"{self._label}: WaterKin file ended inside its header")
+        if len(records) < 4:
+            raise DeckFormatError(f"{self._label}: WaterKin file has no WaveKinMod line")
+        tokens = records[3].split()
+        if not tokens:
+            raise DeckFormatError(f"{self._label}: WaterKin WaveKinMod line has no value")
+        if _strip_quotes(tokens[0]).lower() == "seastate":
+            return 2
+        if re.fullmatch(r"[+-]?[0-9]{1,18}", tokens[0]) is None:
+            raise DeckFormatError(
+                f"{self._label}: WaterKin WaveKinMod must be 0, 1, 2, or SEASTATE"
+            )
+        mode = int(tokens[0])
+        if not 0 <= mode <= 2:
+            raise DeckFormatError(
+                f"{self._label}: WaterKin WaveKinMod supports 0 (none), 1 (elevation history), "
+                "or 2 (coupled SeaState hybrid)"
+            )
+        return mode
+
+    def _check_wave_frequencies(self, depth: float) -> None:
+        """Check ``wave_frequencies.txt`` in the deck's folder, if it is there.
+
+        Mirrors the ``WaveKin 7`` branch of the native ``read_moordyn_c_kinematics``, the
+        component bounds of its validation and the effective depth of the wave precompute.
+        A row takes four numbers, or three and a direction of zero.
+        """
+        records = self._ancillary_records(_MOORDYN_C_WAVE_FILES[7])
+        if records is None:
+            return
+        label = f"{self._label}: WaveKin 7: wave_frequencies.txt"
+        rows: list[tuple[float, float, float, float]] = []
+        for number, record in enumerate(records, start=1):
+            tokens = record.split()
+            if not tokens:
+                continue
+            values = [_plain_real(token) for token in tokens[:4]]
+            if len(values) == 4 and values[3] is None:
+                values = values[:3]
+            if len(values) < 3 or any(value is None for value in values):
+                raise DeckFormatError(f"{label} line {number}: row is not 3 to 4 plain numbers")
+            omega, real_part, imaginary, *beta = values
+            rows.append((omega, real_part, imaginary, beta[0] if beta else 0.0))
+        if len(rows) < 2:
+            raise DeckFormatError(f"{label} needs at least two `omega Re Im` rows")
+        if rows[0][0] != 0.0:
+            raise DeckFormatError(f"{label}: the first row must be at omega = 0")
+        for index, (omega, real_part, imaginary, beta) in enumerate(rows):
+            if abs(beta) > 2.0 * math.pi:
+                raise DeckFormatError(f"{label} directions are radians within +-2 pi")
+            if index == 0:
+                continue
+            if omega <= 0.0:
+                raise DeckFormatError(f"{label} frequencies after the first row must be positive")
+            if math.hypot(real_part, imaginary) > 1.0e3 or omega > 1.0e4:
+                raise DeckFormatError(
+                    f"{label} components need amplitudes of at most 1e3 m and frequencies of "
+                    "at most 1e4 rad/s"
+                )
+        if depth + rows[0][2] <= 0.0:
+            raise DeckFormatError(f"{label}: the mean level leaves a non-positive effective depth")
 
     def _check_torsion_normal(
         self,

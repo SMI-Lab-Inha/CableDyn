@@ -86,6 +86,162 @@ def _rejects(text: str, message: str, *, caller_driven: bool = False) -> None:
 # --------------------------------------------------------------------------- options
 
 
+_WATERKIN = (
+    "MoorDyn v2 water kinematics file\n(header line 2)\n--- WAVES ---\n"
+    '{mode} WaveKinMod\n"eta.txt" WaveKinFile\n0.25 dtWave\n37.0 WaveDir\n'
+    "0 X\n0.0\n0 Y\n0.0\n0 Z\n0.0\n--- CURRENT ---\n0 CurrentMod\n0 Z\n0.0\n"
+    "--- need this line ---\n"
+)
+_ETA = "time elevation\n" + "".join(
+    f"{0.5 * i:g} {0.4 * (-1.0) ** (i // 4):g}\n" for i in range(41)
+)
+_RAO = (EXAMPLES / "data" / "vessel" / "sample_rao.txt").read_text(encoding="utf-8")
+_ROWS = "0 0 0 0\n0.5 0.5 0 0.3\n0.6 0.3 0.1 2.4\n0.6 0.2 -0.1 -1.0\n"
+
+
+def _waterkin(mode: str) -> dict[str, str]:
+    return {"wk.dat": _WATERKIN.format(mode=mode), "eta.txt": _ETA}
+
+
+# (rows of the deck, files next to it): every case is judged by DeckFile and by the driver
+_WAVE_RECORD_CASES = [
+    # a reference point needs component waves
+    (("12.5 WaveRefX",), {}),
+    (("0 WaveRefY",), {}),
+    (("airy 2 8 0 waves", "1 WaveRefX"), {}),
+    (("airy 2 8 0 wavetrain", "1 WaveRefY"), {}),
+    (("7 WaterKin", "12.5 WaveRefX", "-3 WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1.0e6 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1.0000001e6 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "-2e6 WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "nan WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "north WaveRefY"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1e-320 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "2e6 WaveRefX", "1 WaveRefX"), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin", "1 WAVEREFX"), {"wave_frequencies.txt": _ROWS}),
+    # the WaveKinMod of a WaterKin file decides
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("1")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("0")),
+    (("wk.dat WaterKin", "0 WaveRefY"), _waterkin("0")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("2")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("SEASTATE")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("3")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), _waterkin("one")),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), {"wk.dat": "header\nheader\n"}),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), {"wk.dat": "header\nheader\nwaves\n"}),
+    (("wk.dat WaterKin", "12.5 WaveRefX"), {"wk.dat": "header\nheader\nwaves\n\n"}),
+    (("wk.dat WaterKin", "rao.txt vesselRAO"), {**_waterkin("0"), "rao.txt": _RAO}),
+    (("wk.dat WaterKin", "rao.txt vesselRAO"), {**_waterkin("1"), "rao.txt": _RAO}),
+    # the rows of wave_frequencies.txt
+    (("7 WaterKin",), {"wave_frequencies.txt": _ROWS}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 1.0\n0.5 0.5 0 0.3\n\n0.6 0.3 0.1 0.3\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0\n0.5 0.5 0\n0.6 0.3 0.1 -6.2\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 6.3\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 -6.3\n0.5 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 east\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 nan\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 nan 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "omega Re Im\n0 0 0 0\n0.5 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0.1 0 0 0\n0.5 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 0\n0 0.5 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 2000 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n2e4 0.1 0 0\n"}),
+    (("7 WaterKin",), {"wave_frequencies.txt": "0 0 -60 0\n0.5 0.5 0 0\n"}),
+]
+
+
+def _stage(folder: Path, rows: tuple[str, ...], files: dict[str, str]) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, text in files.items():
+        (folder / name).write_text(text, encoding="utf-8")
+    deck = folder / "deck.dat"
+    deck.write_text(_options(_HELD, *rows), encoding="utf-8")
+    return deck
+
+
+def _accepted(deck: Path) -> bool:
+    try:
+        DeckFile.read(deck)
+    except DeckFormatError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(
+    not os.environ.get("CABLEDYN_DRIVER", "").strip(),
+    reason="needs the native driver (CABLEDYN_DRIVER)",
+)
+@pytest.mark.parametrize(("rows", "files"), _WAVE_RECORD_CASES)
+def test_wave_record_rules_match_the_driver(tmp_path, rows, files):
+    deck = _stage(tmp_path, rows, files)
+    run = subprocess.run(
+        [os.environ["CABLEDYN_DRIVER"], str(deck), str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+        check=False,
+    )
+    assert _accepted(deck) == (run.returncode == 0), run.stdout[-400:] + run.stderr[-400:]
+
+
+@pytest.mark.parametrize(
+    ("rows", "files", "message"),
+    [
+        (
+            ("wk.dat WaterKin", "1 WaveRefX"),
+            _waterkin("0"),
+            "reference point of an elevation record",
+        ),
+        (
+            ("wk.dat WaterKin", "1 WaveRefX"),
+            _waterkin("SEASTATE"),
+            "reference point of an elevation",
+        ),
+        (("wk.dat WaterKin", "1 WaveRefX"), _waterkin("3"), "WaveKinMod supports 0"),
+        (("wk.dat WaterKin", "1 WaveRefX"), _waterkin("one"), "must be 0, 1, 2, or SEASTATE"),
+        (("wk.dat WaterKin", "1 WaveRefX"), {"wk.dat": "a\nb\n"}, "ended inside its header"),
+        (("wk.dat WaterKin", "1 WaveRefX"), {"wk.dat": "a\nb\nc\n"}, "no WaveKinMod line"),
+        (("wk.dat WaterKin", "1 WaveRefX"), {"wk.dat": "a\nb\nc\n \n"}, "line has no value"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 0.5 0 6.3\n"}, "within \\+-2 pi"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n"}, "at least two"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "1 0 0 0\n2 1 0 0\n"}, "at omega = 0"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0 1 0 0\n"}, "must be positive"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 x 0 0\n"}, "plain numbers"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 0 0\n0.5 2000 0 0\n"}, "at most 1e3 m"),
+        (("7 WaterKin",), {"wave_frequencies.txt": "0 0 -60 0\n0.5 1 0 0\n"}, "effective depth"),
+    ],
+)
+def test_wave_files_next_to_the_deck_are_read(tmp_path, rows, files, message):
+    with pytest.raises(DeckFormatError, match=message):
+        DeckFile.read(_stage(tmp_path, rows, files))
+
+
+def test_wave_files_that_are_not_there_are_left_to_the_solver(tmp_path):
+    # In memory under the nominal path, or on disk ahead of its files: the deck passes here,
+    # and the driver, which must open the file, refuses it by name while it is missing.
+    for rows in (("wk.dat WaterKin", "1 WaveRefX"), ("7 WaterKin", "1 WaveRefX")):
+        DeckFile.from_text(_options(_HELD, *rows))
+        DeckFile.from_text(_options(_HELD, *rows), path=tmp_path / "deck.dat")
+    # once the file is there the same text is judged by it
+    (tmp_path / "wk.dat").write_text(_WATERKIN.format(mode="0"), encoding="utf-8")
+    with pytest.raises(DeckFormatError, match="reference point of an elevation record"):
+        DeckFile.from_text(
+            _options(_HELD, "wk.dat WaterKin", "1 WaveRefX"), path=tmp_path / "deck.dat"
+        )
+
+
+def test_a_waterkin_file_is_found_as_the_native_reader_finds_it(tmp_path):
+    # quoted, in a subfolder, and by an absolute path
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "wk.dat").write_text(_WATERKIN.format(mode="0"), encoding="utf-8")
+    for value in ('"sub/wk.dat"', "sub/wk.dat", (tmp_path / "sub" / "wk.dat").as_posix()):
+        with pytest.raises(DeckFormatError, match="reference point of an elevation record"):
+            DeckFile.read(_stage(tmp_path, (f"{value} WaterKin", "1 WaveRefX"), {}))
+
+
 @pytest.mark.parametrize("value", ["0", "-0.1"])
 def test_dtwave_must_be_positive(value):
     _rejects(_options(_HELD, f"{value} dtWave"), "OPTION dtWave must be positive")

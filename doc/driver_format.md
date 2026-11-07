@@ -1382,6 +1382,11 @@ time-varying and of a sheared current to MoorDyn-C's within 0.9 % on a 70 m rope
 ([options](options.rst)) are an extension of CableDyn and no part of MoorDyn-C or MoorDyn-F: a
 deck with them is not a plain MoorDyn deck, and a MoorDyn solver would not place the phases there.
 
+A non-zero `omega = 0` row raises the still-water level. CableDyn then takes every wave number at
+the depth `WtrDpth` plus that level, as it does for the mean of an elevation record, where
+MoorDyn-C keeps `WtrDpth` and adds the level to the elevation alone. The two differ by the order
+of the level over the depth in the long components.
+
 (waterkin-file-modes)=
 ### MoorDyn-F `WaterKin` file modes
 
