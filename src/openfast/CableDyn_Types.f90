@@ -396,6 +396,7 @@ IMPLICIT NONE
     REAL(DbKi)  :: pred_t = -1      !< load predictor: time of the committed solve before the last (negative: none), from which the coupled loads between supercycled solves are extrapolated [-]
     REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: pred_loads      !< load predictor: the coupled forces (3 x ncp) and then moments (3 x ncp) of that solve [-]
     REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: fluid_held      !< the held ambient-fluid fields of the last committed mooring step (velocity, acceleration, free-surface elevation, dynamic pressure at the line nodes), restored at a restart instead of re-sampled [-]
+    REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: range_state      !< the accumulated range graphs (LINES flag r) through the last committed mooring step, in double precision, restored at a restart [-]
   END TYPE CD_OtherStateType
 ! =======================
 ! =========  CD_ParameterType  =======
@@ -3004,6 +3005,18 @@ subroutine CD_CopyOtherState(SrcOtherStateData, DstOtherStateData, CtrlCode, Err
       end if
       DstOtherStateData%fluid_held = SrcOtherStateData%fluid_held
    end if
+   if (allocated(SrcOtherStateData%range_state)) then
+      LB(1:1) = lbound(SrcOtherStateData%range_state)
+      UB(1:1) = ubound(SrcOtherStateData%range_state)
+      if (.not. allocated(DstOtherStateData%range_state)) then
+         allocate(DstOtherStateData%range_state(LB(1):UB(1)), stat=ErrStat2)
+         if (ErrStat2 /= 0) then
+            call SetErrStat(ErrID_Fatal, 'Error allocating DstOtherStateData%range_state.', ErrStat, ErrMsg, RoutineName)
+            return
+         end if
+      end if
+      DstOtherStateData%range_state = SrcOtherStateData%range_state
+   end if
 end subroutine
 
 subroutine CD_DestroyOtherState(OtherStateData, ErrStat, ErrMsg)
@@ -3019,6 +3032,9 @@ subroutine CD_DestroyOtherState(OtherStateData, ErrStat, ErrMsg)
    if (allocated(OtherStateData%fluid_held)) then
       deallocate(OtherStateData%fluid_held)
    end if
+   if (allocated(OtherStateData%range_state)) then
+      deallocate(OtherStateData%range_state)
+   end if
 end subroutine
 
 subroutine CD_PackOtherState(RF, Indata)
@@ -3031,6 +3047,7 @@ subroutine CD_PackOtherState(RF, Indata)
    call RegPack(RF, InData%pred_t)
    call RegPackAlloc(RF, InData%pred_loads)
    call RegPackAlloc(RF, InData%fluid_held)
+   call RegPackAlloc(RF, InData%range_state)
    if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
@@ -3047,6 +3064,7 @@ subroutine CD_UnPackOtherState(RF, OutData)
    call RegUnpack(RF, OutData%pred_t); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpackAlloc(RF, OutData%pred_loads); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpackAlloc(RF, OutData%fluid_held); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpackAlloc(RF, OutData%range_state); if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
 subroutine CD_CopyParam(SrcParamData, DstParamData, CtrlCode, ErrStat, ErrMsg)

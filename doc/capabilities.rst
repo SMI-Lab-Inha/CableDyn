@@ -108,7 +108,7 @@ Line and constitutive capability
        the platform, ``PtfmInit``, checkpoints, linearisation with the twist angles as states;
        see :doc:`openfast`) and through the C API with the host's rotations
        (``CableDyn_InitDeckRotating``, :doc:`capi`), active line control (``CONTROL``) of the
-       fairlead segment on the coupled route; ``Torq``/``Twist`` channels and standalone range
+       fairlead segment on the coupled route; ``Torq``/``Twist`` channels and range
        graphs. Stopped by name: ``CableDyn_InitDeck``/``InitDeckAt`` (which move the line ends by
        translation only), ends of free and pinned rods (axisymmetric, no roll angle) and of
        ``Coupled``/``Vessel`` rods, bodies other than Rigid6 and ``False alpha_force_blend``.
@@ -193,9 +193,10 @@ Loads and environment
      - a 6-DOF vessel record, or the RAO response to the deck waves, moves every
        ``Coupled``/``Vessel`` point of a line deck; see :doc:`options`
    * - Range graphs (``r`` line output flag, ``RangeStart``)
-     - Standalone only
-     - minimum, maximum, and mean along each line over the run; a coupled OpenFAST deck rejects
-       the flag
+     - Standalone and OpenFAST
+     - minimum, maximum, and mean along each line over the run, from the committed steps; a run
+       restarted from a checkpoint keeps them. A FAST.Farm shared mooring and the C API reject
+       the flag by name
    * - WaterKin CurrentMod-1 file table
      - Supported
      - bit-identical to the equivalent inline depth profile

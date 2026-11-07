@@ -1623,8 +1623,11 @@ class DeckFile:
     current is kept as a steady field when SeaState carries no waves or current and is
     rejected otherwise. The native C API (:class:`cabledyn.CableDyn`) reads decks with the
     standalone rules, so it rejects the ``CoupledPinned``/``VesselPinned`` bodies and rods
-    that ``caller_driven=True`` accepts; FAST.Farm, in turn, refuses bodies and rods when it
-    initialises the module. A coupled deck carries bodies or rods, not both (a rod fixed to a
+    that ``caller_driven=True`` accepts; a FAST.Farm shared mooring, in turn, refuses bodies and
+    rods and the ``LINES`` range-graph flag ``r`` when it initialises the module, and the C API
+    refuses the flag. ``RangeStart`` is held
+    against the host's ``TMax`` when OpenFAST initialises the module, not against a deck
+    ``TMax``. A coupled deck carries bodies or rods, not both (a rod fixed to a
     body counts as a rod): ``caller_driven=True`` rejects a deck with both, as the coupled
     route and the C API do, while the standalone driver's multibody march takes them.
     """
@@ -4125,17 +4128,19 @@ class DeckFile:
                     f"{self._label}: OPTION RangeStart needs a line with the LINES Outputs "
                     "flag r (range graph)"
                 )
-            if not has_tmax:
-                raise DeckFormatError(
-                    f"{self._label}: OPTION RangeStart needs a dynamic deck (TMax)"
-                )
-            tmax_value = _native_float(option_by_key["tmax"].values[0])
-            # at TMax = 0 (a dynamic deck's static start) the range graphs hold the t = 0 row
-            if _native_float(range_start.values[0]) > tmax_value and tmax_value > 0.0:
-                raise DeckFormatError(
-                    f"{self._label}: OPTION RangeStart exceeds TMax: the range window would hold "
-                    "no output time"
-                )
+            # a coupled host owns the run time: the native init holds the window against it
+            if not self.caller_driven:
+                if not has_tmax:
+                    raise DeckFormatError(
+                        f"{self._label}: OPTION RangeStart needs a dynamic deck (TMax)"
+                    )
+                tmax_value = _native_float(option_by_key["tmax"].values[0])
+                # at TMax = 0 (a dynamic deck's static start) the range graphs hold the t = 0 row
+                if _native_float(range_start.values[0]) > tmax_value and tmax_value > 0.0:
+                    raise DeckFormatError(
+                        f"{self._label}: OPTION RangeStart exceeds TMax: the range window would "
+                        "hold no output time"
+                    )
 
         # Native check_channel: ids are digit strings compared by value, so leading zeros
         # are accepted (FairTen01 is FairTen1).

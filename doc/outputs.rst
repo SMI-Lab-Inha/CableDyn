@@ -384,6 +384,16 @@ every node: the minimum and maximum equal those of the channel time
 histories exactly, and the mean is their arithmetic mean. The file is written when the run
 completes; a run that stops early leaves none.
 
+A single-turbine OpenFAST run writes the same file as ``<RootName>.CD.Line<L>.range.out``. Its
+samples are the rows of ``<RootName>.CD.out``: the state at ``t = 0`` and every committed ``dtM``
+step, once each whatever ``DT``, ``DT_Out`` and the correction iterations are; a step OpenFAST
+corrects counts once, with its corrected state. The accumulators are double precision on every
+OpenFAST build and travel in the checkpoint, so a restart continues them. The file is written at
+the end of a run that reaches ``TMax``; the run removes one left by an earlier run when it starts,
+and one that stops before ``TMax`` says so and leaves none. An OpenFAST run stopped early on
+purpose (``CalcSteady`` once steady) counts as stopping early. A FAST.Farm shared mooring and the
+C API write no range file and reject the flag by name.
+
 Layout: title line, header row, **units row**, then one row per node, End A first. The title reads
 ``CableDyn range graph (line <L>; <n> samples from t = <t0> s to t = <t1> s; public node order
 End A -> End B)``.
@@ -1018,8 +1028,9 @@ a run and intact after a crash.
 
 Select CableDyn channels in the ``OUTPUTS`` section of the CableDyn ``MooringFile``; they are not
 members of the top-level ``.fst`` ``OutList``. The ``TDP<L>`` channels are evaluated from the
-coupled state against the touchdown reference of the converged initialisation; the range files of
-the ``LINES`` flag ``r`` are a standalone output, and a coupled deck with that flag is rejected. For
+coupled state against the touchdown reference of the converged initialisation. The ``LINES`` flag
+``r`` adds ``<RootName>.CD.Line<L>.range.out`` (see above) to a single-turbine run; a FAST.Farm
+shared-mooring deck with that flag is rejected. For
 a single-turbine run the module also prints
 every selected channel's static value to the screen after initialisation. A deck with no
 ``OUTPUTS`` section is valid but publishes no channels.

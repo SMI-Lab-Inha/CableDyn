@@ -39,7 +39,11 @@ PROGRAM test_openfast_aggregate
                                          CD_AGG_Refresh_PointMesh, CD_AGG_HasRigid6, CD_AGG_HasRod, &
                                          CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
                                          CD_AGG_Set_Rigid6_States, CD_AGG_Rod_MirrorSize, &
-                                         CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States
+                                         CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States, &
+                                         CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_Range_Discard, &
+                                         CD_AGG_Range_Graphs, CD_AGG_Range_MirrorSize, CD_AGG_Range_Get_State, &
+                                         CD_AGG_Range_Set_State
+  USE CableDyn_RangeOutput, ONLY: CD_RQ_TENSION, CD_RQ_CURVATURE, CD_RQ_BEND, CD_RQ_DECLINATION
   USE CableDyn_OpenFAST_FMF, ONLY: CD_FMF_ModuleType, CD_FMF_Init_From_Deck, CD_FMF_NMovingPoints, &
                                    CD_FMF_GetMovingPointMesh, CD_FMF_Step_Moving, CD_FMF_CalcOutput, &
                                    CD_FMF_End, CD_FMF_OK
@@ -131,6 +135,7 @@ PROGRAM test_openfast_aggregate
   CALL case_touchdown_cable_end_tension()
   CALL case_anchor_uplift_channels()
   CALL case_output_channels()
+  CALL case_range_graph_host()
   CALL case_pure_cable_deck()
   CALL case_cable_load_feedback()
   CALL case_end_connection_orientation_and_moment()
@@ -934,6 +939,196 @@ CONTAINS
     CALL require(es == CD_AGG_OK, 'chan:allow-fixed-cable-point-channel: '//TRIM(em))
     IF (es == CD_AGG_OK) CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_output_channels
+
+  SUBROUTINE case_range_graph_host()
+    !! The range graphs (LINES flag r) as the OpenFAST module drives them: one sample per committed
+    !! step from RangeStart, against the run's own node channels; a correction rewind that takes
+    !! the sample of the abandoned step back; the state mirror a checkpoint carries; the files of
+    !! a completed run, and the removal of an earlier run's; the refusal on a host that writes no
+    !! file; RangeStart against the host's run time, not the deck's standalone TMax.
+    INTEGER, PARAMETER :: NSTEP = 6, NCH = 9, CHK = 3
+    REAL(wp), PARAMETER :: DT = 0.05_wp, RUN_T = NSTEP*DT, T_START = 0.1_wp
+    CHARACTER(*), PARAMETER :: ROW = 'Ten1N1 Ten1N10 Curv1N5 BendMom1N5 L1N5Dec Ten2N1 Ten2N5 Curv2N5 L2N5Dec'
+    ! the channels above: deck line, public node, range-graph row
+    INTEGER, PARAMETER :: CH_LINE(NCH) = [1, 1, 1, 1, 1, 2, 2, 2, 2], CH_NODE(NCH) = [1, 10, 5, 5, 5, 1, 5, 5, 5]
+    INTEGER, PARAMETER :: CH_ROW(NCH) = [CD_RQ_TENSION, CD_RQ_TENSION, CD_RQ_CURVATURE, CD_RQ_BEND, &
+                                         CD_RQ_DECLINATION, CD_RQ_TENSION, CD_RQ_TENSION, CD_RQ_CURVATURE, &
+                                         CD_RQ_DECLINATION]
+    TYPE(CD_AGG_ModuleType) :: agg, whole, back, plain
+    REAL(wp) :: r0(3, 2), vel(3, 2), acc(3, 2), lds(3, 2), cval, lo(NCH), hi(NCH), total(NCH), t
+    REAL(wp), ALLOCATABLE :: state(:), other(:), saved(:)
+    INTEGER :: es, ic, s, nsamp, u, ios, n
+    LOGICAL :: there
+    CHARACTER(512) :: em
+    CHARACTER(256) :: title
+
+    ! a host that writes no file refuses the flag by name
+    CALL write_mixed_channels_deck('agg_range.dat', outputs_row=ROW, line_outputs='r', extra_option='0.0 TMax', &
+                                   extra_option2='0.1 RangeStart')
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_range.dat', DT, es, em, run_tmax=RUN_T)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'flag r') > 0 .AND. INDEX(em, 'FAST.Farm') > 0 .AND. &
+                 INDEX(em, 'C API') > 0, &
+                 'range:host-without-files-refused: '//TRIM(em))
+
+    ! RangeStart holds against the host's run time, and the deck's own TMax = 0 does not clamp it
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_range.dat', DT, es, em, run_tmax=0.05_wp, range_files=.TRUE.)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'RangeStart exceeds TMax') > 0, &
+                 'range:window-beyond-host-run-refused: '//TRIM(em))
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_range.dat', DT, es, em, run_tmax=RUN_T, range_files=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'range:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL require(ABS(agg%ranges%t_start - T_START) <= 0.0_wp, 'range:host-window-start')
+    CALL require(CD_AGG_Range_Graphs(agg), 'range:graphs-requested')
+    CALL CD_AGG_Init_From_Deck(whole, 'agg_range.dat', DT, es, em, run_tmax=RUN_T, range_files=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'range:whole-init: '//TRIM(em))
+    CALL CD_AGG_Init_From_Deck(back, 'agg_range.dat', DT, es, em, run_tmax=RUN_T, range_files=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'range:restart-init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+
+    n = CD_AGG_Range_MirrorSize(agg)
+    ! four head reals, the arc and three seven-row envelopes per node, per line
+    CALL require(n == 2*4 + 22*(agg%ranges%lines(1)%nn + agg%ranges%lines(2)%nn), 'range:mirror-size')
+    ALLOCATE (state(n), other(n), saved(n))
+
+    CALL CD_AGG_GetMovingPointMesh(agg, r0, vel, acc, lds, es, em)
+    CALL require(es == CD_AGG_OK, 'range:mesh0: '//TRIM(em))
+    lo = HUGE(1.0_wp)
+    hi = -HUGE(1.0_wp)
+    total = 0.0_wp
+    nsamp = 0
+    CALL CD_AGG_Range_Sample(agg, 0.0_wp, es, em)
+    CALL require(es == CD_AGG_OK, 'range:sample0: '//TRIM(em))
+    CALL CD_AGG_Range_Sample(whole, 0.0_wp, es, em)
+    CALL require(es == CD_AGG_OK, 'range:whole-sample0: '//TRIM(em))
+    DO s = 1, NSTEP
+      t = REAL(s, wp)*DT
+      IF (s == CHK) THEN
+        ! a correction: an abandoned advance with other motion, sampled, then rewound
+        CALL CD_AGG_Snapshot(agg, es, em)
+        CALL require(es == CD_AGG_OK, 'range:snapshot: '//TRIM(em))
+        CALL range_march(agg, r0, DT, s, 40.0_wp, 'range:abandoned-step')
+        CALL CD_AGG_Range_Sample(agg, t, es, em)
+        CALL require(es == CD_AGG_OK, 'range:abandoned-sample: '//TRIM(em))
+        CALL CD_AGG_Range_Get_State(agg, state, es, em)
+        CALL CD_AGG_Range_Get_State(whole, other, es, em)
+        CALL require(nan_max_abs(state - other) > 0.0_wp, 'range:abandoned-sample-counts')
+        CALL CD_AGG_Restore(agg, es, em)
+        CALL require(es == CD_AGG_OK, 'range:restore: '//TRIM(em))
+        CALL CD_AGG_Range_Get_State(agg, state, es, em)
+        CALL require(nan_max_abs(state - other) <= 0.0_wp, 'range:rewind-takes-the-sample-back')
+      END IF
+      CALL range_march(agg, r0, DT, s, 1.0_wp, 'range:step')
+      CALL CD_AGG_Range_Sample(agg, t, es, em)
+      CALL require(es == CD_AGG_OK, 'range:sample: '//TRIM(em))
+      CALL range_march(whole, r0, DT, s, 1.0_wp, 'range:whole-step')
+      CALL CD_AGG_Range_Sample(whole, t, es, em)
+      CALL require(es == CD_AGG_OK, 'range:whole-sample: '//TRIM(em))
+      IF (s <= CHK) CALL range_march(back, r0, DT, s, 1.0_wp, 'range:restart-step')
+      IF (s == CHK) THEN
+        CALL CD_AGG_Range_Get_State(whole, saved, es, em)
+        CALL require(es == CD_AGG_OK, 'range:mirror-get: '//TRIM(em))
+        CALL CD_AGG_Range_Set_State(back, saved, es, em)
+        CALL require(es == CD_AGG_OK, 'range:mirror-set: '//TRIM(em))
+      ELSE IF (s > CHK) THEN
+        CALL range_march(back, r0, DT, s, 1.0_wp, 'range:restart-step')
+        CALL CD_AGG_Range_Sample(back, t, es, em)
+        CALL require(es == CD_AGG_OK, 'range:restart-sample: '//TRIM(em))
+      END IF
+      IF (t < T_START - 1.0e-9_wp) CYCLE
+      nsamp = nsamp + 1
+      DO ic = 1, NCH
+        CALL CD_AGG_EvalChannel(agg, ic, cval, es, em)
+        CALL require(es == CD_AGG_OK, 'range:channel: '//TRIM(em))
+        lo(ic) = MIN(lo(ic), cval)
+        hi(ic) = MAX(hi(ic), cval)
+        total(ic) = total(ic) + cval
+      END DO
+    END DO
+
+    ! the envelopes are the node channels' own extremes and mean over the window
+    DO ic = 1, NCH
+      ASSOCIATE (rl => agg%ranges%lines(CH_LINE(ic)))
+        CALL require(rl%nsample == nsamp, 'range:one-sample-per-committed-step-in-the-window')
+        CALL require(ABS(rl%vmin(CH_ROW(ic), CH_NODE(ic)) - lo(ic)) <= 1.0e-12_wp*MAX(ABS(lo(ic)), 1.0e-12_wp), &
+                     'range:min-equals-channel')
+        CALL require(ABS(rl%vmax(CH_ROW(ic), CH_NODE(ic)) - hi(ic)) <= 1.0e-12_wp*MAX(ABS(hi(ic)), 1.0e-12_wp), &
+                     'range:max-equals-channel')
+        CALL require(ABS(rl%vsum(CH_ROW(ic), CH_NODE(ic)) - total(ic)) <= 1.0e-12_wp*MAX(ABS(total(ic)), 1.0e-12_wp), &
+                     'range:mean-equals-channel')
+        CALL require(ABS(rl%t_first - T_START) <= 1.0e-12_wp .AND. ABS(rl%t_last - RUN_T) <= 1.0e-12_wp, &
+                     'range:window-times')
+      END ASSOCIATE
+    END DO
+    CALL require(hi(2) > lo(2), 'range:channel-moved')
+    ! the rewound and the restored runs match the uninterrupted one bit for bit
+    CALL CD_AGG_Range_Get_State(agg, state, es, em)
+    CALL CD_AGG_Range_Get_State(whole, other, es, em)
+    CALL require(nan_max_abs(state - other) <= 0.0_wp, 'range:corrected-equals-uninterrupted')
+    CALL CD_AGG_Range_Get_State(back, state, es, em)
+    CALL require(nan_max_abs(state - other) <= 0.0_wp, 'range:restored-equals-uninterrupted')
+    CALL CD_AGG_Range_Set_State(back, saved(1:n - 1), es, em)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'do not match') > 0, &
+                 'range:mirror-of-another-deck-refused: '//TRIM(em))
+
+    ! a file of an earlier run goes at the start of the run; the completed run writes its own
+    OPEN (NEWUNIT=u, FILE='agg_range.Line2.range.out', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    WRITE (u, '(A)') 'stale'
+    CLOSE (u)
+    CALL CD_AGG_Range_Discard(agg, 'agg_range', es, em)
+    CALL require(es == CD_AGG_OK, 'range:discard: '//TRIM(em))
+    INQUIRE (FILE='agg_range.Line2.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range:earlier-file-removed')
+    CALL CD_AGG_Range_Discard(agg, 'agg_range', es, em)
+    CALL require(es == CD_AGG_OK, 'range:discard-without-a-file: '//TRIM(em))
+    CALL CD_AGG_Range_Write(agg, 'agg_range', es, em)
+    CALL require(es == CD_AGG_OK, 'range:write: '//TRIM(em))
+    OPEN (NEWUNIT=u, FILE='agg_range.Line2.range.out', STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    CALL require(ios == 0, 'range:file-at-root')
+    IF (ios == 0) THEN
+      READ (u, '(A)', IOSTAT=ios) title
+      CLOSE (u)
+      CALL require(ios == 0 .AND. INDEX(title, 'line 2; 5 samples') > 0, 'range:file-title: '//TRIM(title))
+    END IF
+    CALL CD_AGG_End(agg, es, em)
+    CALL CD_AGG_End(whole, es, em)
+    CALL CD_AGG_End(back, es, em)
+
+    ! a deck without the flag has nothing to sample or mirror, also with range_files
+    CALL write_mixed_channels_deck('agg_range_none.dat', outputs_row=ROW)
+    CALL CD_AGG_Init_From_Deck(plain, 'agg_range_none.dat', DT, es, em, run_tmax=RUN_T, range_files=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'range:plain-init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL require(.NOT. CD_AGG_Range_Graphs(plain) .AND. CD_AGG_Range_MirrorSize(plain) == 0, 'range:plain-empty')
+    CALL CD_AGG_End(plain, es, em)
+  END SUBROUTINE case_range_graph_host
+
+  SUBROUTINE range_march(a, r0, dt, step, amplitude, label)
+    !! Advance to step's committed time with a small surge and heave of the fairleads about r0,
+    !! scaled by amplitude: the same motion for every instance at amplitude 1.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: a
+    REAL(wp), INTENT(IN) :: r0(3, 2), dt, amplitude
+    INTEGER, INTENT(IN) :: step
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), PARAMETER :: OMEGA = 2.0_wp*PI/1.2_wp
+    REAL(wp) :: tc, tgt(3, 2), v(3, 2), ac(3, 2), wave
+    INTEGER :: ni, es
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+
+    tc = REAL(step, wp)*dt
+    wave = 0.2_wp*amplitude
+    tgt = r0
+    tgt(1, :) = r0(1, :) + wave*SIN(OMEGA*tc)
+    tgt(3, :) = r0(3, :) + 0.5_wp*wave*SIN(OMEGA*tc)
+    v = 0.0_wp
+    v(1, :) = wave*OMEGA*COS(OMEGA*tc)
+    v(3, :) = 0.5_wp*wave*OMEGA*COS(OMEGA*tc)
+    ac = 0.0_wp
+    ac(1, :) = -wave*OMEGA**2*SIN(OMEGA*tc)
+    ac(3, :) = -0.5_wp*wave*OMEGA**2*SIN(OMEGA*tc)
+    CALL CD_AGG_Step_Moving(a, dt, tgt, v, ac, cv, st, ni, es, em, t_committed=tc)
+    CALL require(es == CD_AGG_OK .AND. cv, label//': '//TRIM(em))
+  END SUBROUTINE range_march
 
   SUBROUTINE check_static_profile(path, expected_rows)
     CHARACTER(*), INTENT(IN) :: path
@@ -5422,18 +5617,22 @@ CONTAINS
     END DO
   END SUBROUTINE write_control_section
 
-  SUBROUTINE write_mixed_channels_deck(path, point_channel_id, outputs_row)
+  SUBROUTINE write_mixed_channels_deck(path, point_channel_id, outputs_row, line_outputs, extra_option, extra_option2)
     !! The write_mixed_deck geometry (cable = line 1, mooring chain = line 2) plus an OUTPUTS
     !! section exercising both objects and multiple channel kinds: FairTen/AnchTen on the mooring,
     !! and curvature / fairlead-angle / bend-moment / nodal-tension on the cable. outputs_row
-    !! replaces the default OUTPUTS row.
+    !! replaces the default OUTPUTS row, line_outputs the LINES Outputs flags of both lines;
+    !! extra_option and extra_option2 add OPTIONS rows.
     CHARACTER(*), INTENT(IN) :: path
     INTEGER, INTENT(IN), OPTIONAL :: point_channel_id
-    CHARACTER(*), INTENT(IN), OPTIONAL :: outputs_row
+    CHARACTER(*), INTENT(IN), OPTIONAL :: outputs_row, line_outputs, extra_option, extra_option2
     INTEGER :: u, ios
     INTEGER :: point_id
+    CHARACTER(8) :: flags
     point_id = 0
     IF (PRESENT(point_channel_id)) point_id = point_channel_id
+    flags = '-'
+    IF (PRESENT(line_outputs)) flags = line_outputs
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     WRITE (u, '(A)') 'MIXED deck with OUTPUTS: EI=0 chain mooring + finite-EI lazy-wave cable'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -5453,8 +5652,8 @@ CONTAINS
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
-    WRITE (u, '(A)') '1 1 2 -'
-    WRITE (u, '(A)') '2 3 4 -'
+    WRITE (u, '(A)') '1 1 2 '//TRIM(flags)
+    WRITE (u, '(A)') '2 3 4 '//TRIM(flags)
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
@@ -5469,6 +5668,8 @@ CONTAINS
     WRITE (u, '(A)') '3.0e6 kBot'
     WRITE (u, '(A)') '3.0e5 cBot'
     WRITE (u, '(A)') '0.5 rhoInf'
+    IF (PRESENT(extra_option)) WRITE (u, '(A)') extra_option
+    IF (PRESENT(extra_option2)) WRITE (u, '(A)') extra_option2
     WRITE (u, '(A)') '--- OUTPUTS ---'
     IF (point_id > 0) THEN
       WRITE (u, '(A,I0,A)') 'Point', point_id, 'px'

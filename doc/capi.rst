@@ -937,6 +937,8 @@ The deck is validated under the standalone-deck rules:
      - the standalone driver (prescribe motion through ``CableDyn_Step`` instead)
    * - a ``FAILURE`` section (line failures)
      - the standalone driver; the OpenFAST module
+   * - the ``LINES`` ``Outputs`` flag ``r`` (range graph)
+     - the standalone driver; the OpenFAST module in a single-turbine run
    * - a ``CONTROL`` section (active line control)
      - the OpenFAST module
    * - ``WaveKinMod 2`` / ``SEASTATE`` wave kinematics
