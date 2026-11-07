@@ -8,26 +8,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
-### Added
-
-- Range graphs in coupled OpenFAST runs: the `LINES` `Outputs` flag `r` and `RangeStart` now write
-  `<RootName>.CD.Line<L>.range.out` in a single-turbine run, from the committed `dtM` steps of
-  `.CD.out`, once per step when OpenFAST retries a step, and across a checkpoint restart. The
-  file appears when the run reaches `TMax`. A FAST.Farm shared mooring and the C API reject the
-  flag by name.
-- An OpenFAST initialisation note when the deepest interval of the SeaState depth grid exceeds 5 %
-  of the depth and a line lies in it: the field is linear there, unlike a deck depth table.
-
-### Changed
-
-- OpenFAST checkpoints carry the accumulated range graphs: a checkpoint written by an earlier
-  CableDyn cannot be restarted with this one.
-- The C API refuses the flag `r` on `EI = 0` decks too, which it accepted without writing a file.
-
-### Fixed
-
-- A range-graph file that cannot be written completely is removed instead of left behind.
-
 ## [0.4.0] - 2026-11-04
 
 ### Added
