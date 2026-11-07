@@ -277,7 +277,10 @@ class Line(_View):
         return self.values("declination", out)
 
     def azimuth(self, out: FloatArray | None = None) -> FloatArray:
-        """Azimuth at each node ``(n_nodes,)`` [deg] (``L<L>N<k>Azi``)."""
+        """Azimuth at each node ``(n_nodes,)`` [deg] (``L<L>N<k>Azi``), in the line's range.
+
+        (-180, 180] on a line whose deck chord heads within 45 deg of +X, otherwise [0, 360).
+        """
         return self.values("azimuth", out)
 
     def arc_length(self) -> FloatArray:

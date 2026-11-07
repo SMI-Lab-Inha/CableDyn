@@ -6925,6 +6925,7 @@ CONTAINS
 
     to%initialized = from%initialized
     to%tension_only = from%tension_only
+    to%azimuth_signed = from%azimuth_signed
     to%n_dof = from%n_dof
     to%n_elem = from%n_elem
     to%has_seabed = from%has_seabed

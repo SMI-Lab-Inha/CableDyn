@@ -16,6 +16,10 @@ PROGRAM test_line_values
   !! refines, and decks with bodies or rods. A state with a NaN then fails at the same value on
   !! both paths.
   !!
+  !! Lines on headings on both sides of +x, EI = 0 alone and beside cables, must report the azimuth
+  !! range of their deck chord (doc/outputs.rst) through the line values, the channels, the
+  !! aggregate's channels (the OpenFAST shell's) and its initialisation summary.
+  !!
   !! usage: test_line_values <coarse lazy-wave deck>
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_BOOL, C_CHAR, C_DOUBLE, C_INT, C_LOC, C_NULL_PTR, C_PTR
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
@@ -27,8 +31,9 @@ PROGRAM test_line_values
                            CableDyn_UpdateRotations
   USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_Eval_Aggregate_Channel, &
                                  CD_Eval_Aggregate_Line_Values
-  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_End, CD_AGG_GetMovingPointMesh, &
-                                         CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, CD_AGG_OK, CD_AGG_Step_Moving
+  USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_End, CD_AGG_EvalChannel, CD_AGG_GetInitLine, &
+                                         CD_AGG_GetMovingPointMesh, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
+                                         CD_AGG_NumChannels, CD_AGG_OK, CD_AGG_Step_Moving
   USE CableDyn_System, ONLY: CD_System_Line_NDOF
   IMPLICIT NONE
 
@@ -36,6 +41,9 @@ PROGRAM test_line_values
   INTEGER(C_INT), PARAMETER :: LINE_KIND = 1_C_INT, DECK_NODE = 10_C_INT
   INTEGER, PARAMETER :: QUANTITY(N_QUANTITY) = [1, 2, 4, 3, 5, 6, 7, 8]
   REAL(wp), PARAMETER :: SWAY = 0.05_wp, RATE = 4.0_wp, ROLL = 0.02_wp, PI = 4.0_wp*ATAN(1.0_wp)
+  ! Line headings [deg]: within 45 deg of +x on either side, just outside it, and elsewhere.
+  REAL(wp), PARAMETER :: HEADINGS(12) = [-46.0_wp, -44.0_wp, -30.0_wp, -10.0_wp, -1.0_wp, 1.0_wp, 10.0_wp, 30.0_wp, &
+                                         44.0_wp, 46.0_wp, 180.0_wp, 270.0_wp]
   INTEGER :: nfail
   INTEGER(INT64) :: n_capi, n_mesh, n_added
   CHARACTER(1024) :: arg
@@ -75,6 +83,12 @@ PROGRAM test_line_values
   CALL check_deck('lv_body.dat')
   CALL write_object_deck('lv_rod.dat', body=.FALSE.)
   CALL check_deck('lv_rod.dat')
+  CALL write_heading_deck('lv_range_chains.dat', cables=.FALSE.)
+  CALL check_deck('lv_range_chains.dat')
+  CALL check_azimuth_range('lv_range_chains.dat')
+  CALL write_heading_deck('lv_range_mixed.dat', cables=.TRUE.)
+  CALL check_deck('lv_range_mixed.dat')
+  CALL check_azimuth_range('lv_range_mixed.dat')
 
   WRITE (*, '(A,I0,A,I0,A,I0,A)') 'compared ', n_capi, ' values with CableDyn_EvalChannel and ', n_mesh, &
     ' with the mesh-node channels (', n_added, ' at added nodes)'
@@ -434,6 +448,121 @@ CONTAINS
       CALL require(es /= CD_DECKDRV_OK .AND. n_done == 0, label//': a wrongly sized output is refused')
     END DO
   END SUBROUTINE compare_mesh
+
+  PURE REAL(wp) FUNCTION range_azimuth(heading) RESULT(azimuth)
+    !! The azimuth [deg] of a line on heading in its range: (-180, 180] within 45 deg of +x,
+    !! otherwise [0, 360).
+    REAL(wp), INTENT(IN) :: heading
+    azimuth = heading
+    IF (ABS(heading) > 45.0_wp) azimuth = MODULO(heading, 360.0_wp)
+  END FUNCTION range_azimuth
+
+  SUBROUTINE check_azimuth_range(path)
+    !! Line 2 k of the deck runs on HEADINGS(k), in its vertical plane, at the static start.
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), PARAMETER :: TOL = 1.0e-6_wp
+    TYPE(C_PTR) :: h
+    TYPE(CD_AGG_ModuleType) :: agg
+    INTEGER(C_INT) :: es, n_lines, il, id, nn, sub
+    CHARACTER(C_CHAR), TARGET :: c_path(1024)
+    REAL(C_DOUBLE), ALLOCATABLE, TARGET :: azi(:)
+    REAL(wp) :: val, tension, force(3), inclination, declination, azimuth
+    INTEGER :: k, n, line_id, ies
+    CHARACTER(512) :: em
+
+    c_path = ' '
+    DO k = 1, LEN(path)
+      c_path(k) = path(k:k)
+    END DO
+    CALL CableDyn_Create(h, es)
+    CALL CableDyn_InitDeck(h, C_LOC(c_path), INT(LEN(path), C_INT), es)
+    CALL require(es == 0_C_INT, path//': range: init')
+    n_lines = CableDyn_NObjects(h, LINE_KIND, es)
+    CALL require(n_lines == SIZE(HEADINGS), path//': range: line count')
+    DO il = 0_C_INT, n_lines - 1_C_INT
+      CALL CableDyn_GetObjectInfo(h, LINE_KIND, il, id, nn, sub, es)
+      IF (ALLOCATED(azi)) DEALLOCATE (azi)
+      ALLOCATE (azi(nn))
+      CALL CableDyn_GetLineValues(h, il, 8_C_INT, C_LOC(azi), nn, es)
+      CALL require(es == 0_C_INT .AND. MAXVAL(ABS(azi - range_azimuth(HEADINGS(id/2)))) <= TOL, &
+                   path//': range: the azimuths of line '//text(INT(id))//' read through the C API')
+    END DO
+    CALL CableDyn_Close(h, es)
+
+    CALL CD_AGG_Init_From_Deck(agg, path, 0.02_wp, ies, em)
+    CALL require(ies == CD_AGG_OK, path//': range: aggregate: '//TRIM(em))
+    IF (ies /= CD_AGG_OK) RETURN
+    n = CD_AGG_NumChannels(agg)
+    CALL require(n == SIZE(HEADINGS), path//': range: channel count')
+    DO k = 1, n
+      CALL CD_AGG_EvalChannel(agg, k, val, ies, em)
+      CALL require(ies == CD_AGG_OK .AND. ABS(val - range_azimuth(HEADINGS(k))) <= TOL, &
+                   path//': range: aggregate channel of line '//text(2*k))
+      CALL CD_AGG_GetInitLine(agg, k, line_id, tension, force, inclination, declination, azimuth, ies, em)
+      CALL require(ies == CD_AGG_OK .AND. ABS(azimuth - range_azimuth(HEADINGS(line_id/2))) <= TOL, &
+                   path//': range: initialisation summary of line '//text(line_id))
+    END DO
+    CALL CD_AGG_End(agg, ies, em)
+  END SUBROUTINE check_azimuth_range
+
+  SUBROUTINE write_heading_deck(path, cables)
+    !! Line 2 k from its own coupled point to its own anchor on HEADINGS(k): an EI = 0 chain, or
+    !! with cables every second line a finite-EI cable.
+    CHARACTER(*), INTENT(IN) :: path
+    LOGICAL, INTENT(IN) :: cables
+    REAL(wp) :: cx, sy, reach
+    INTEGER :: u, k
+    LOGICAL :: cable
+
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Line values against the channels, lines on both sides of +x'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'cable 0.16 36.7 4.69e8 -1.0 1.99e4 1.2 0.1 1.0 0.0'
+    WRITE (u, '(A)') 'chain 0.10 150.0 8.0e8 -1.0 0.0 1.2 0.4 1.0 0.5'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m)'
+    DO k = 1, SIZE(HEADINGS)
+      cable = cables .AND. MOD(k, 2) == 0
+      reach = MERGE(70.0_wp, 240.0_wp, cable)
+      cx = COS(HEADINGS(k)*PI/180.0_wp)
+      sy = SIN(HEADINGS(k)*PI/180.0_wp)
+      WRITE (u, '(I0,A,2(1X,ES23.15),A)') 2*k - 1, ' Coupled', 5.0_wp*cx, 5.0_wp*sy, ' -10.0'
+      WRITE (u, '(I0,A,2(1X,ES23.15),A)') 2*k, ' Fixed', (5.0_wp + reach)*cx, (5.0_wp + reach)*sy, ' -60.0'
+    END DO
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    DO k = 1, SIZE(HEADINGS)
+      WRITE (u, '(I0,1X,I0,1X,I0,A)') 2*k, 2*k - 1, 2*k, ' -'
+    END DO
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    DO k = 1, SIZE(HEADINGS)
+      IF (cables .AND. MOD(k, 2) == 0) THEN
+        WRITE (u, '(I0,A)') 2*k, ' cable 100.0 20'
+      ELSE
+        WRITE (u, '(I0,A)') 2*k, ' chain 260.0 13'
+      END IF
+    END DO
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '60.0 WtrDpth'
+    WRITE (u, '(A)') '1.0e6 kBot'
+    WRITE (u, '(A)') '1.0e5 cBot'
+    WRITE (u, '(A)') '0.02 dtM'
+    WRITE (u, '(A)') '0.0 TMax'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    DO k = 1, SIZE(HEADINGS)
+      WRITE (u, '(A,I0,A)') 'L', 2*k, 'N1Azi'
+    END DO
+    WRITE (u, '(A)') '--- END ---'
+    CLOSE (u)
+  END SUBROUTINE write_heading_deck
 
   SUBROUTINE write_cable_deck(path, heading, element_recovery, stiffener, torsion, chain)
     !! A 100 m finite-EI cable from a coupled point at z = -10 to an anchor 70 m away along

@@ -526,7 +526,8 @@ chord from End A to End B, at the deck positions, heads within 45° of +X, and i
 every other line. The cut of a line's range then lies at least 45° from its heading: a line
 swaying about its heading reads continuously, where a line along +X would otherwise jump
 between 0 and 360 as it moves a fraction of a degree to either side. The range is fixed for
-the run, so the motion of the line cannot switch it. A round-off component across the cut
+the run, so the motion of the line cannot switch it, and the same on every route: the standalone
+driver, the C API and Python, and OpenFAST. A round-off component across the cut
 reads on its included side (0, or 180 in the signed range), and one across +X reads exactly 0.
 A line a host builds through the C interface without a deck reports [0, 360).
 
