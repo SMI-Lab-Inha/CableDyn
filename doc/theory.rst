@@ -183,10 +183,10 @@ steps at every node although the section does not, and the softer side would ove
 curvature by about :math:`h\lvert EI'\rvert/(2 EI)`, first order in the element length
 :math:`h`. A node takes :math:`EI(s)` at its own arc instead, from the stiffener rows, one limit
 from either side. The section moment :math:`M` (:ref:`theory-output-recovery`) is continuous and
-second-order accurate, so the curvature :math:`\kappa = M/EI(s)` is too. Cable and sleeve take
-that curvature and share the moment in proportion to the stiffnesses: the cable carries
-:math:`EI_c\,\kappa`, reported as ``BendMom``, and the sleeve
-:math:`(EI(s) - EI_c)\,\kappa`, reported as ``StfMom``.
+second-order accurate, so the curvature :math:`\kappa = (1+\varepsilon) M/EI(s)` is too. Cable
+and sleeve take that curvature and share the moment in proportion to the stiffnesses: the cable
+carries :math:`EI_c\,M/EI(s)`, reported as ``BendMom``, and the sleeve the rest,
+:math:`(EI(s) - EI_c)\,M/EI(s)`, reported as ``StfMom``.
 
 The two limits differ only at a real step of the section: at the bare tip, between stiffener
 rows whose end diameter, bore or modulus do not match, and between line types of different
@@ -199,8 +199,8 @@ element, so at an element's end it is off by the same first-order step against :
 high where the curvature falls toward the tip and low where it rises, and :math:`EI_e` times it
 is low by :math:`h^2 M''/12` against :math:`M`. Two outputs that read the interpolation elsewhere read
 the section here. The peak of such an element in ``.elements.out`` is the largest
-:math:`\lvert M(u)\rvert/EI(s(u))` along it, with :math:`M(u)` the quadratic through the
-recovered moments of the end nodes that keeps the mean of the fit; a row end inside the element,
+:math:`(1+\varepsilon)\lvert M(u)\rvert/EI(s(u))` along it, with :math:`M(u)` the quadratic
+through the recovered moments of the end nodes that keeps the mean of the fit; a row end inside the element,
 or the tip, is a step of :math:`EI(s)` that the search keeps. Below the stiffness that resolves
 the recovered moment (:ref:`theory-output-recovery`) both the nodes and the peak fall back on
 the interpolation's curvature times :math:`EI_e/EI(s)`. ``OutputRecovery element`` reports
@@ -217,19 +217,17 @@ the line), the angle through which the stiffener turns the cable.
 The planar check ``driver_bend_stiffener`` compares a hang-off clamped through a 5 m stiffener
 (a cylindrical root and a cone, 16 times the cable's stiffness at the root) with an independent
 collocation solution of the extensible elastica
-:math:`\theta' = M/EI(s)`, :math:`M' = -(1 + \varepsilon)(\cos\theta\,n_z - \sin\theta\,n_x)`,
+:math:`\theta' = (1+\varepsilon)^2 M/EI(s)`,
+:math:`M' = -(1 + \varepsilon)(\cos\theta\,n_z - \sin\theta\,n_x)`,
 :math:`\mathbf n' = (0, w(s))`: on 0.05 m elements the cable's moment over the stiffener and
-3 m beyond follows the elastica within 0.2 % of its root value, cable and sleeve moments add up
-to the section moment within 0.2 % at the root, the deflection angle agrees within 0.003°, and
-the node positions within 1 mm. Node by node, the curvature and the cable's moment follow the
-elastica within 0.24 % of their local value on 0.1 m elements and 0.18 % on 0.05 m, 0.97 % on
+3 m beyond follows the elastica within 0.01 % of its root value, cable and sleeve moments add up
+to the section moment within 0.01 % at the root, the deflection angle agrees within 0.0001°, and
+the node positions within 0.03 mm. Node by node, the curvature and the cable's moment follow the
+elastica within 0.27 % of their local value on 0.1 m elements and 0.06 % on 0.05 m, 0.99 % on
 0.2 m, under either output recovery, and the peaks of ``.elements.out`` under the stiffener
-as closely. The local value is floored at 0.1 % of the root curvature, as the curvature changes sign
-near the tip, and part of the difference is not mesh error: the elastica takes the moment
-proportional to the rotation per unstretched length, the element energy the curvature of the
-stretched line, a difference of order :math:`T/EA` that is 0.12 % at this root. On the same
-hang-off, the curvature along the stiffener follows OrcaFlex 11.6d with its stiffener given as a
-line attachment within 0.6 % of the root curvature.
+as closely. The local value is floored at 0.1 % of the root curvature, as the curvature changes
+sign near the tip. On the same hang-off, the curvature along the stiffener follows OrcaFlex
+11.6d with its stiffener given as a line attachment within 0.5 % of the root curvature.
 
 .. _theory-output-recovery:
 
@@ -247,11 +245,25 @@ and the conjugate of the material tangent are
    \mathbf{m} = \frac{\partial W}{\partial \mathbf{b}}
               = EI\,\frac{(\mathbf{a}\times\mathbf{b})\times\mathbf{a}}{\lvert\mathbf{a}\rvert^{6}} .
 
+The energy is unchanged by a rotation of the whole line, so
+:math:`\mathbf{r}\times\mathbf{F} + \mathbf{a}\times\mathbf{m}` changes along the line only by
+the moment of the loads: the section moment is :math:`\mathbf{a}\times\mathbf{m}`, not
+:math:`\mathbf{m}`, which is the conjugate of the tangent. With :math:`\kappa` the curvature of
+the stretched line, the energy :math:`\tfrac12 EI\kappa^2` per unstretched metre gives
+
+.. math::
+
+   \lvert\mathbf{m}_\perp\rvert = \frac{EI\,\kappa}{(1+\varepsilon)^2},
+   \qquad
+   M = \lvert\mathbf{a}\times\mathbf{m}\rvert = \frac{EI\,\kappa}{1+\varepsilon},
+   \qquad
+   \kappa = (1+\varepsilon)\,\frac{M}{EI} .
+
 On a stiff-``EA`` cable :math:`\lvert\mathbf{a}\rvert = 1 + \varepsilon` with
 :math:`\varepsilon \ll 1`, :math:`\mathbf{a}\cdot\mathbf{b} = O(\varepsilon)` and
 :math:`\mathbf{b} = \kappa\,\mathbf{n}`, so that
 :math:`\partial W/\partial\mathbf{a} = (EA\,\varepsilon - 2EI\kappa^2)\,\mathbf{t}` plus normal
-terms, :math:`\mathbf{m} = EI\,\kappa\,\mathbf{n}`, and
+terms, :math:`\mathbf{m} \approx EI\,\kappa\,\mathbf{n}`, and
 :math:`(\partial W/\partial\mathbf{b})'\cdot\mathbf{t} = EI\,\mathbf{b}'\cdot\mathbf{t} = -EI\kappa^2`.
 The axial internal force of the rod, the effective tension that balances the loads, and the
 bend moment are therefore
@@ -260,7 +272,18 @@ bend moment are therefore
 
    N = \mathbf{F}\cdot\mathbf{t} = EA\,\varepsilon - EI\,\kappa^2,
    \qquad
-   M = \lvert \mathbf{m} - (\mathbf{m}\cdot\mathbf{t})\,\mathbf{t} \rvert = EI\,\kappa .
+   M = EI\,\kappa \quad\text{to } O(\varepsilon) .
+
+The curvature output is the geometric one, the reciprocal of the bend radius of the stretched
+line: what the bend radius limit and the bending strain :math:`y\kappa` of a section point read.
+``BendMom`` is :math:`M`, the moment that balances the forces, and at a line end the moment of
+the end connection, whose potential depends on the direction of the tangent only. The check
+``driver_curvature_stretch`` holds both against the elastica of this energy on a cable strained
+up to 1.2 %: within 0.006 % and 0.001 % of the local value, against the 2.3 % and 1.2 % that
+reading :math:`\lvert\mathbf{m}_\perp\rvert` as the moment gives. The stretch at a node is
+:math:`\lvert\mathbf{r}'\rvert`, the length of its tangent, the one the discrete moment balance
+holds with exactly; on a coarse stiff-``EA`` line it carries the pointwise oscillation above,
+of order :math:`10^{-4}` of the curvature.
 
 The bending energy measures the curvature per deformed length, and its dependence on the
 stretch puts :math:`-EI\kappa^2` into the axial force: :math:`EA(\lvert\mathbf{r}'\rvert - 1)`
@@ -306,12 +329,13 @@ it, and its tangent rows are :math:`\mathbf{m}` there. An interior node reports
 
    N_j = \mathbf{t}_j\cdot\tfrac{1}{2}\left(\mathbf{F}_j^- + \mathbf{F}_j^+\right),
    \qquad
-   M_j = \lvert \mathbf{m}_j - (\mathbf{m}_j\cdot\mathbf{t}_j)\,\mathbf{t}_j \rvert,
+   M_j = \lvert\mathbf{r}'_j\rvert\,
+         \lvert \mathbf{m}_j - (\mathbf{m}_j\cdot\mathbf{t}_j)\,\mathbf{t}_j \rvert,
    \qquad
-   \kappa_j = M_j / EI ,
+   \kappa_j = \lvert\mathbf{r}'_j\rvert\, M_j / EI ,
 
 with :math:`\mathbf{t}_j` the unit nodal tangent, :math:`\mathbf{m}_j` the mean of the two
-one-sided values, and at a section junction the larger of :math:`M_j/EI` on the two sides (under
+one-sided values, and at a section junction the larger of :math:`\kappa_j` on the two sides (under
 a bend stiffener :math:`EI` is the stiffness at the node, :ref:`theory-bend-stiffeners`). The
 recovered moment carries an error that does not depend on :math:`EI`, of the order of the largest
 consistent-load moment :math:`w L_0^2/12` of an element (a section junction leaves a jump of that

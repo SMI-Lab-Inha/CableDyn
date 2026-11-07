@@ -6083,8 +6083,8 @@ CONTAINS
     END IF
     CALL node_values(model, node, fm, mm, fp, mp, ten, kap, bend, ErrStat, ErrMsg, moment_vector=mv)
     IF (ErrStat /= CD_HCDYN_OK) RETURN
-    curvature = NORM2(mv)/ei
-    IF (PRESENT(kvec)) kvec = mv/ei
+    curvature = node_stretch(model, node)*NORM2(mv)/ei
+    IF (PRESENT(kvec)) kvec = node_stretch(model, node)*mv/ei
   END SUBROUTINE CD_HermiteCable_Dyn_Side_Curvature
 
   SUBROUTINE CD_HermiteCable_Dyn_Section_Curvature(model, ref_a, kx, ky, ErrStat, ErrMsg, frame)
@@ -6687,8 +6687,11 @@ CONTAINS
     !! oscillation of the stiff-EA axial strain.
     !!
     !! tension(j) = t_j . F_j (t_j the unit nodal tangent; a line end reports the end force
-    !! magnitude of CD_HermiteCable_Dyn_End_Force), the section moment M_j = |m_j - (m_j . t_j) t_j|,
-    !! curvature(j) = M_j/EI, the larger of the two sides at a section junction (under a bend
+    !! magnitude of CD_HermiteCable_Dyn_End_Force), the section moment
+    !! M_j = (1 + e_j) |m_j - (m_j . t_j) t_j|, 1 + e_j = |r'_j| the stretch at the node (m_j is the
+    !! conjugate of the tangent r', the section moment r' x m_j),
+    !! curvature(j) = (1 + e_j) M_j/EI, the geometric curvature of the stretched line, the larger
+    !! of the two sides at a section junction (under a bend
     !! stiffener EI is the stiffness at the node, not the element's; see node_values), and
     !! bend_moment(j) the cable's own share EI_line curvature (M_j itself where no bend stiffener
     !! sleeves the element; see node_values) (the
@@ -6698,10 +6701,10 @@ CONTAINS
     !! mean of the axial components of element e's own two end forces. curvature_vector(:, j)
     !! is the curvature vector kappa n of node j in the solve frame, toward the centre of
     !! curvature, of length curvature(j): the section moment vector over EI on the side that
-    !! gives curvature(j), or the exact trace's vector. moment_vector(:, j) is the part of the
-    !! section moment normal to the tangent, of length M_j. Every output is optional (node arrays
-    !! nn, curvature_vector and moment_vector (3, nn), segment_tension ne); the routine allocates
-    !! nothing.
+    !! gives curvature(j), or the exact trace's vector. moment_vector(:, j) is the section moment
+    !! turned into the plane of the curvature, along kappa n, of length M_j. Every output is
+    !! optional (node arrays nn, curvature_vector and moment_vector (3, nn), segment_tension ne);
+    !! the routine allocates nothing.
     !!
     !! The condensed torque of a line restrained in torsion is not part of g_e: it adds a shear
     !! normal to the tangent and does no work on bending rotations, so tension and bend moment
@@ -7121,14 +7124,19 @@ CONTAINS
     !! curvature vector kappa n (solve frame, toward the centre of curvature) of the side that
     !! gives curvature: the normal part of the section moment over EI, or the exact trace's.
     !!
+    !! The energy EI kappa^2/2 per unstretched length, with kappa the curvature of the stretched
+    !! line, gives m = EI kappa n/|r'|^2 as the conjugate of the tangent r'. Rotating the whole
+    !! line leaves the energy unchanged, so the moment that balances the forces is r' x m, of
+    !! length M = |r'| |m_perp| = EI kappa/|r'|, and kappa = |r'| M/EI.
+    !!
     !! The EI of a side is the element's, or on a stiffened line the limit of EI(s) at the node
     !! from that side (EI_node): the element's compliance average stands for its whole length
     !! and, under a taper, steps at every node although the section does not, so the softer side
     !! would overstate the curvature by about h |EI'|/(2 EI). The two limits differ only at a
     !! real step of the section (the bare tip, a junction of two line types, a step between
     !! stiffener rows), where the larger-side rule still applies. The exact trace of a side too
-    !! soft to recover takes the same stiffness (trace_scale). moment_vector is the normal part
-    !! of the section moment.
+    !! soft to recover takes the same stiffness (trace_scale). moment_vector is the section
+    !! moment turned into the plane of the curvature, along kappa n.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(IN) :: fm(3), mm(3), fp(3), mp(3)
@@ -7137,6 +7145,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment, curvature_vector(3), moment_vector(3)
     REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace, section_moment, cable_moment, m_perp(3), kv(3), ei_side
+    REAL(wp) :: stretch
     INTEGER :: e, side
     CHARACTER(200) :: em2
 
@@ -7156,7 +7165,8 @@ CONTAINS
     ELSE
       tension = DOT_PRODUCT(t, f) + 0.5_wp*(coupling_tension(model, node - 1) + coupling_tension(model, node))
     END IF
-    m_perp = m - DOT_PRODUCT(m, t)*t
+    stretch = node_stretch(model, node)
+    m_perp = stretch*(m - DOT_PRODUCT(m, t)*t)
     section_moment = NORM2(m_perp)
     IF (PRESENT(moment_vector)) moment_vector = m_perp
     curvature = CD_ZERO
@@ -7167,9 +7177,9 @@ CONTAINS
       IF (e < 1 .OR. e > model%ne) CYCLE
       ei_side = CD_HermiteCable_Dyn_Side_EI(model, e, node)
       IF (model%EI(e) > CD_ZERO .AND. ei_side >= model%ei_resolve) THEN
-        IF (PRESENT(curvature_vector) .AND. section_moment/ei_side > curvature) &
-          curvature_vector = m_perp/ei_side
-        curvature = MAX(curvature, section_moment/ei_side)
+        IF (PRESENT(curvature_vector) .AND. stretch*section_moment/ei_side > curvature) &
+          curvature_vector = stretch*m_perp/ei_side
+        curvature = MAX(curvature, stretch*section_moment/ei_side)
         IF (ABS(model%EI_line(e) - ei_side) <= CD_ZERO) THEN
           cable_moment = MAX(cable_moment, section_moment)
         ELSE
@@ -7187,13 +7197,22 @@ CONTAINS
         IF (ABS(model%EI_line(e) - model%EI(e)) <= CD_ZERO) THEN
           cable_moment = MAX(cable_moment, section_moment)
         ELSE
-          cable_moment = MAX(cable_moment, model%EI_line(e)*trace)
+          cable_moment = MAX(cable_moment, model%EI_line(e)*trace/stretch)
         END IF
       END IF
     END DO
     bend_moment = cable_moment
     IF (PRESENT(sleeve_moment)) sleeve_moment = MAX(CD_ZERO, section_moment - cable_moment)
   END SUBROUTINE node_values
+
+  PURE FUNCTION node_stretch(model, node) RESULT(stretch)
+    !! The stretch |r'| = 1 + e of a node, the length of its material tangent; 1 when degenerate.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: node
+    REAL(wp) :: stretch
+    stretch = NORM2(model%q(6*(node - 1) + 4:6*(node - 1) + 6))
+    IF (.NOT. stretch > CD_ZERO) stretch = CD_ONE
+  END FUNCTION node_stretch
 
   PURE FUNCTION unit_tangent(model, node) RESULT(t)
     !! Unit material tangent of a node (internal arc direction); zero when degenerate.

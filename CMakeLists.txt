@@ -2770,6 +2770,15 @@ if(Python3_Interpreter_FOUND)
     LABELS "python;driver;integration;static;validation"
     SKIP_RETURN_CODE 77
     ENVIRONMENT "${_cabledyn_python_test_environment}")
+  # The curvature of a stretched cable is the geometric one and the bend moment the section's:
+  # both follow the elastica of the element energy at strains up to 1.2 %.
+  add_test(NAME driver_curvature_stretch
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_curvature_stretch.py
+                   $<TARGET_FILE:cabledyn>)
+  set_tests_properties(driver_curvature_stretch PROPERTIES
+    LABELS "python;driver;integration;static;validation"
+    SKIP_RETURN_CODE 77
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
 endif()
 # The scan of the round-off CI job: it must flag a fallback note, a failed run and a forced
 # BLAS kernel that did not take effect, or a clean scan would prove nothing.

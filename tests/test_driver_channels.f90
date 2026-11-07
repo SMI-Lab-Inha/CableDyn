@@ -279,7 +279,7 @@ CONTAINS
     WRITE (*, '(A,I0,A,F10.5)') 'static.out rows=', nrow, '  node3 curvature=', cv3
   END SUBROUTINE test_static_config_file
 
-  ! ---- Part 4: finite-EI initialised deck; non-zero bend moment = EI*curvature ----
+  ! ---- Part 4: finite-EI initialised deck; non-zero bend moment = EI*curvature/stretch ----
 
   SUBROUTINE test_finite_dynamic_channels()
     INTEGER :: es, ok
@@ -310,10 +310,12 @@ CONTAINS
     ! element-interior maximum and is retained only for EI=0 nodal lines.
     CALL require(ABS(v(4) - ref_curv(n2, n3, n4)) > 5.0e-6_wp, &
                  'finite-EI Curv1N3 uses exact Hermite traces rather than Menger curvature')
-    ! BendMom = EI(node) * |kvec_current - kvec_reference|; straight reference => EI * geometric,
-    ! EI = 2.0e5 for this homogeneous line (the required straight-reference agreement check).
-    CALL require(ABS(v(5) - EI*v(4)) <= 1.0e-6_wp*ABS(v(5)) + 1.0e-9_wp, &
-                 'BendMom1N3 = EI * geometric curvature for the straight reference')
+    ! BendMom = EI(node) * |kvec_current - kvec_reference|/|r'|; straight reference => EI * geometric
+    ! over the stretch, EI = 2.0e5 for this homogeneous line (the required straight-reference
+    ! agreement check). The channels do not give |r'|, within 1e-4 of 1 on this stiff line: the
+    ! exact relation is gated in test_openfast_aggregate and check_curvature_stretch.py.
+    CALL require(ABS(v(5) - EI*v(4)) <= 1.0e-4_wp*ABS(v(5)) + 1.0e-9_wp, &
+                 'BendMom1N3 = EI * geometric curvature, over the stretch, for the straight reference')
     CALL require(v(5) > 1.0_wp, 'finite-EI BendMom1N3 is non-zero (bent vs straight reference)')
     CALL check_continuous_element_file('chan_fin.elements.out', 20, EI)
     ! tensile_safety True judges the element-mean axial force (the pointwise resultant of a
