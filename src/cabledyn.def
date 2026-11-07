@@ -12,6 +12,7 @@ EXPORTS
     CableDyn_GetCoupledMoments
     CableDyn_GetCoupledMotion
     CableDyn_GetLastError
+    CableDyn_GetInitNotes
     CableDyn_GetLineValues
     CableDyn_GetObjectInfo
     CableDyn_GetPointState

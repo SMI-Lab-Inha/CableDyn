@@ -121,6 +121,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_SegmentLength
   PUBLIC :: CD_HermiteCableControlSaveType, CD_HermiteCable_Dyn_Save_Control, CD_HermiteCable_Dyn_Restore_Control
   PUBLIC :: CD_HermiteCable_Dyn_Set_Control_Seabed
+  PUBLIC :: CD_HermiteCable_Dyn_On_Seabed
   PUBLIC :: CD_HermiteCable_Dyn_Set_Irregular_Waves
   PUBLIC :: CD_HermiteCable_Drag_Element
   PUBLIC :: CD_HermiteCable_Axial_Damping_Element
@@ -1936,6 +1937,34 @@ CONTAINS
       close = ABS(x - y) <= 8.0_wp*SPACING(MAX(ABS(x), ABS(y)))
     END FUNCTION within_ulps
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Control_Seabed
+
+  LOGICAL FUNCTION CD_HermiteCable_Dyn_On_Seabed(model) RESULT(on)
+    !! Whether an interior node of the cable is in seabed contact in its present state: inside
+    !! the reach of the normal contact law. The two end nodes, held or driven, do not count.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp) :: z_floor, xg, yg, gx, gy
+    INTEGER :: node, iz, es
+    CHARACTER(200) :: em
+
+    on = .FALSE.
+    IF (.NOT. (model%has_contact .OR. model%kn > CD_ZERO)) RETURN
+    DO node = 2, model%nn - 1
+      iz = 6*(node - 1) + 3
+      z_floor = model%seabed_z
+      gx = CD_ZERO
+      gy = CD_ZERO
+      IF (model%has_contact_bathymetry) THEN
+        xg = model%contact_frame_c*model%q(iz - 2) - model%contact_frame_s*model%q(iz - 1)
+        yg = model%contact_frame_s*model%q(iz - 2) + model%contact_frame_c*model%q(iz - 1)
+        CALL CD_Bathymetry_Floor_Gradient(model%contact_bathymetry, xg, yg, z_floor, gx, gy, es, em)
+        IF (es /= CD_BATHY_OK) CYCLE
+      END IF
+      IF (z_floor - model%q(iz) > -CD_SEABED_CONTACT_BLEND*SQRT(CD_ONE + gx*gx + gy*gy)) THEN
+        on = .TRUE.
+        RETURN
+      END IF
+    END DO
+  END FUNCTION CD_HermiteCable_Dyn_On_Seabed
 
   SUBROUTINE rebuild_length_caches(model, l0_new, ErrStat, ErrMsg)
     !! Install the unstretched lengths l0_new with every cache built from them, in the order

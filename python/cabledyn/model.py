@@ -320,6 +320,29 @@ class CableDyn:
         with self._lock:
             return self._last_error()
 
+    @property
+    def init_notes(self) -> list[str]:
+        """The notes of the last deck initialisation, successful or not.
+
+        These are the ``Note:`` lines a driver run of the deck prints at its start, without the
+        prefix, on the point and aggregate routes alike. They take what is known at
+        initialisation: the deck's current, not a field a host applies later. A raw-line
+        initialisation has none.
+        """
+        with self._lock:
+            if not _lib_module._has_init_notes:
+                # not a C status: the loaded library lacks the entry point
+                raise RuntimeError(
+                    "the loaded CableDyn library predates CableDyn_GetInitNotes; "
+                    "rebuild it from this checkout"
+                )
+            size = _lib.CableDyn_GetInitNotes(self._handle, None, 0)
+            if size <= 0:
+                return []
+            buf = ctypes.create_string_buffer(size + 1)
+            _lib.CableDyn_GetInitNotes(self._handle, buf, len(buf))
+            return buf.value.decode("utf-8", errors="replace").splitlines()
+
     # -- initialization -------------------------------------------------------
 
     def init_deck(self, deck: str | os.PathLike[str]) -> None:

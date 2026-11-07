@@ -16,12 +16,14 @@ MODULE CableDyn_CAPI
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_System, CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, &
                                  CD_Deck_Query_dtM, CD_DECK_NAMELEN, CD_Eval_Aggregate_Channel, &
                                  CD_Eval_Aggregate_Segment_Tensions, CD_Eval_Aggregate_Line_Values, &
-                                 CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses, CD_Cable_Deck_Node
+                                 CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses, CD_Cable_Deck_Node, &
+                                 CD_Init_Notes_Start, CD_Init_Notes_Add, CD_Init_Notes_Take, CD_INIT_NOTE_LEN
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_End, CD_AGG_IsInitialized, CD_AGG_OK, &
                                          CD_AGG_BADINPUT, CD_AGG_NOT_INITIALIZED, CD_AGG_ALLOCFAIL, &
-                                         CD_AGG_NFluidNodes, CD_AGG_GetFluidNodePositions, CD_AGG_SetFluidFields
+                                         CD_AGG_NFluidNodes, CD_AGG_GetFluidNodePositions, CD_AGG_SetFluidFields, &
+                                         CD_AGG_GetInitMetadata, CD_AGG_GetInitLine
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Init_Model, CD_End_Model, CD_MODEL_OK, CD_MODEL_BADINPUT, &
@@ -50,6 +52,7 @@ MODULE CableDyn_CAPI
   PUBLIC :: CableDyn_CalcOutputDerivatives
   PUBLIC :: CableDyn_GetCoupledMotion
   PUBLIC :: CableDyn_GetLastError
+  PUBLIC :: CableDyn_GetInitNotes
   PUBLIC :: CableDyn_GetVersion
   PUBLIC :: CableDyn_GetVersionString
   PUBLIC :: CableDyn_IsInitialized
@@ -198,6 +201,8 @@ MODULE CableDyn_CAPI
     REAL(wp) :: saved_agg_t = CD_ZERO
     REAL(wp), ALLOCATABLE :: saved_dcm(:, :, :), saved_om(:, :), saved_al(:, :)
     CHARACTER(CD_C_MSG_LEN) :: last_error = ''
+    ! The notes of the last initialisation (CableDyn_GetInitNotes), each ended by a new line.
+    CHARACTER(:), ALLOCATABLE :: init_notes
   END TYPE CD_C_Handle
 
 CONTAINS
@@ -325,6 +330,7 @@ CONTAINS
       RETURN
     END IF
     IF (n_q0 > 0_C_INT .AND. .NOT. C_ASSOCIATED(q0_ptr)) THEN
+      h%init_notes = ''
       CALL set_status(h, CD_C_BAD_INPUT, caller//': q0 pointer is null', err_stat)
       RETURN
     END IF
@@ -343,6 +349,7 @@ CONTAINS
     IF (n_q0 > 0_C_INT) THEN
       CALL C_F_POINTER(q0_ptr, q0_c, [INT(n_q0)])
       IF (.NOT. ALL(IEEE_IS_FINITE(q0_c))) THEN
+        h%init_notes = ''
         CALL set_status(h, CD_C_BAD_INPUT, caller//': q0 must be finite', err_stat)
         RETURN
       END IF
@@ -354,9 +361,27 @@ CONTAINS
   END SUBROUTINE init_deck_at
 
   SUBROUTINE init_deck_serialised(handle, deck_path_ptr, deck_path_len, caller, err_stat, positions, rotating)
-    !! CableDyn_InitDeck / CableDyn_InitDeckAt / CableDyn_InitDeckRotating body; the caller holds
-    !! the process-wide input lock. positions (3, n): the host positions of CableDyn_InitDeckAt;
-    !! rotating: the handle takes the host's rotations (CableDyn_InitDeckRotating).
+    !! init_deck_build with the notes of the attempt kept on the handle, on success or failure; the
+    !! caller holds the process-wide input lock, which the capture of the notes relies on.
+    TYPE(C_PTR), VALUE :: handle, deck_path_ptr
+    INTEGER(C_INT), VALUE :: deck_path_len
+    CHARACTER(*), INTENT(IN) :: caller
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    REAL(wp), INTENT(IN), OPTIONAL :: positions(:, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: rotating
+    TYPE(CD_C_Handle), POINTER :: h
+    CHARACTER(:), ALLOCATABLE :: notes
+
+    CALL CD_Init_Notes_Start()
+    CALL init_deck_build(handle, deck_path_ptr, deck_path_len, caller, err_stat, positions, rotating)
+    CALL CD_Init_Notes_Take(notes)
+    IF (validate_handle(handle, h) == CD_C_OK) CALL MOVE_ALLOC(notes, h%init_notes)
+  END SUBROUTINE init_deck_serialised
+
+  SUBROUTINE init_deck_build(handle, deck_path_ptr, deck_path_len, caller, err_stat, positions, rotating)
+    !! CableDyn_InitDeck / CableDyn_InitDeckAt / CableDyn_InitDeckRotating body. positions (3, n):
+    !! the host positions of CableDyn_InitDeckAt; rotating: the handle takes the host's rotations
+    !! (CableDyn_InitDeckRotating).
     TYPE(C_PTR), VALUE :: handle, deck_path_ptr
     INTEGER(C_INT), VALUE :: deck_path_len
     CHARACTER(*), INTENT(IN) :: caller
@@ -439,7 +464,7 @@ CONTAINS
     h%host_rot = rot
     CALL store_status(h, CD_C_OK, '')
     err_stat = CD_C_OK
-  END SUBROUTINE init_deck_serialised
+  END SUBROUTINE init_deck_build
 
   SUBROUTINE check_point_start(fast, positions, msg)
     !! Post-condition of CableDyn_InitDeckAt on the point route: every Coupled block of the new
@@ -575,6 +600,7 @@ CONTAINS
         RETURN
       END IF
     END IF
+    CALL add_aggregate_notes(new_agg)
     CALL CD_FAST_End(h%fast, es, em)
     CALL drop_aggregate(h)
     CALL drop_saved_state(h)
@@ -607,6 +633,25 @@ CONTAINS
     CALL store_status(h, CD_C_OK, '')
     err_stat = CD_C_OK
   END SUBROUTINE init_deck_aggregate
+
+  SUBROUTINE add_aggregate_notes(agg)
+    !! The notes of the lines of a new aggregate, to the notes of its initialisation.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: agg
+    INTEGER :: i, es, n_lines, n_points, n_sections, n_ei0, n_finite, line_id
+    REAL(wp) :: tension, force(3), inclination, declination, azimuth
+    CHARACTER(CD_C_MSG_LEN) :: em
+    CHARACTER(CD_INIT_NOTE_LEN) :: note
+
+    CALL CD_AGG_GetInitMetadata(agg, n_lines, n_points, n_sections, n_ei0, n_finite, es, em)
+    IF (es == CD_AGG_OK) THEN
+      DO i = 1, n_lines
+        CALL CD_AGG_GetInitLine(agg, i, line_id, tension, force, inclination, declination, azimuth, es, em, note=note)
+        IF (es /= CD_AGG_OK) EXIT
+        CALL CD_Init_Notes_Add(note)
+      END DO
+    END IF
+    IF (es /= CD_AGG_OK) CALL CD_Init_Notes_Add('the initialisation notes are incomplete: '//TRIM(em))
+  END SUBROUTINE add_aggregate_notes
 
   SUBROUTINE move_aggregate(src, dst)
     !! Take over an initialized aggregate (deep copy, then release the source).
@@ -742,6 +787,7 @@ CONTAINS
 
     err_stat = validate_handle(handle, h)
     IF (err_stat /= CD_C_OK) RETURN
+    h%init_notes = ''
     IF (n_nodes < 2_C_INT .OR. n_elem < 1_C_INT .OR. n_fixed < 0_C_INT) THEN
       CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitLine: invalid node, element, or fixed-DOF count', err_stat)
       RETURN
@@ -870,6 +916,7 @@ CONTAINS
     NULLIFY (fixed_c, map_c)
     err_stat = validate_handle(handle, h)
     IF (err_stat /= CD_C_OK) RETURN
+    h%init_notes = ''
     IF (n_lines < 1_C_INT .OR. .NOT. (C_ASSOCIATED(n_nodes_ptr) .AND. C_ASSOCIATED(n_elem_ptr) .AND. &
                                       C_ASSOCIATED(n_fixed_ptr))) THEN
       CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_InitLines: invalid line count or null count pointer', err_stat)
@@ -1542,6 +1589,33 @@ CONTAINS
     END IF
     CALL copy_message_to_c(TRIM(msg), message_c)
   END SUBROUTINE CableDyn_GetLastError
+
+  FUNCTION CableDyn_GetInitNotes(handle, notes_ptr, notes_len) RESULT(needed) BIND(C, NAME='CableDyn_GetInitNotes')
+    !! Copy the notes of the last deck initialisation on the handle, one per line, into a C-owned
+    !! character buffer, under the conventions of CableDyn_GetLastError: always null-terminated
+    !! when `notes_len > 0` and `notes_ptr` is associated, and truncated to notes_len - 1. Returns
+    !! the length of the whole text without the terminator, so a null buffer asks for the size;
+    !! -1 on a bad handle.
+    TYPE(C_PTR), VALUE :: handle, notes_ptr
+    INTEGER(C_INT), VALUE :: notes_len
+    INTEGER(C_INT) :: needed
+
+    TYPE(CD_C_Handle), POINTER :: h
+    CHARACTER(KIND=C_CHAR), POINTER :: notes_c(:)
+    LOGICAL :: has_buffer
+
+    has_buffer = notes_len >= 1_C_INT .AND. C_ASSOCIATED(notes_ptr)
+    IF (has_buffer) THEN
+      CALL C_F_POINTER(notes_ptr, notes_c, [INT(notes_len)])
+      notes_c = C_NULL_CHAR
+    END IF
+    needed = -1_C_INT
+    IF (validate_handle(handle, h) /= CD_C_OK) RETURN
+    needed = 0_C_INT
+    IF (.NOT. ALLOCATED(h%init_notes)) RETURN
+    needed = INT(LEN(h%init_notes), C_INT)
+    IF (has_buffer) CALL copy_message_to_c(h%init_notes, notes_c)
+  END FUNCTION CableDyn_GetInitNotes
 
   SUBROUTINE CableDyn_Close(handle, err_stat) BIND(C, NAME='CableDyn_Close')
     !! Release a CableDyn C handle. A null handle is an idempotent no-op

@@ -325,6 +325,21 @@ def _bind_host_fluid() -> bool:
 _has_host_fluid = _bind_host_fluid()
 
 
+def _bind_init_notes() -> bool:
+    # Bound on its own: a library of ABI minor 4 may predate this entry point, and nothing but
+    # ``CableDyn.init_notes`` needs it.
+    try:
+        get_notes = _lib.CableDyn_GetInitNotes
+    except AttributeError:
+        return False
+    get_notes.argtypes = [c_void_p, c_char_p, c_int]
+    get_notes.restype = c_int
+    return True
+
+
+_has_init_notes = _bind_init_notes()
+
+
 def abi_minor() -> int:
     """The loaded library's ABI 1 extension level (0 before the object queries)."""
     if not _has_object_queries:

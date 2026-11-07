@@ -75,6 +75,8 @@ MoorDyn's C API.
      - read the current coupled-point motion
    * - ``CableDyn_GetLastError``
      - diagnostic text for the last failure on a handle
+   * - ``CableDyn_GetInitNotes``
+     - the notes of the last deck initialisation on a handle
    * - ``CableDyn_IsInitialized``, ``CableDyn_NCoupledDOF``, ``CableDyn_NPoints``,
        ``CableDyn_NLines``
      - state and size queries
@@ -1756,6 +1758,35 @@ solution: the deck coordinates of every attached point, with zero velocity and a
 After ``CableDyn_InitDeckAt`` the host-driven blocks hold their entries of ``q0`` instead.
 Use it to seed the host's coupled vectors before the first step. The buffers are set to zero
 before the copy and stay zero if the call fails. The model is not changed.
+
+``CableDyn_GetInitNotes``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: c
+
+   int CableDyn_GetInitNotes(void *handle, char *notes, int notes_len);
+
+ABI 1 minor extension 4. Copies the notes of the last deck initialisation on the handle, on the
+point route and the aggregate alike: the ``Note:`` lines a driver run of the deck prints at its
+start, without the prefix, one per line, each ended by a new line. The library prints no more or
+less than before; the text is for a host that does not read its standard streams. The notes of
+the march are not among them, and a raw-line initialisation has none.
+
+The buffer follows ``CableDyn_GetLastError``: it is always ``NUL``-terminated when ``notes_len``
+is positive and ``notes`` is not ``NULL``, and the text is truncated to ``notes_len - 1``
+characters. The return value is the length of the whole text without the terminator, so a ``NULL``
+buffer asks for the size. It is 0 without notes and -1 on a bad handle.
+
+The notes belong to the last attempt: a failed initialisation replaces them, although the handle
+keeps its previous model. They take what is known at initialisation. With
+``CableDyn_SetHostFluid`` the deck's steady current sets the static start and counts; a field the
+host applies afterwards does not.
+
+.. code-block:: c
+
+   int size = CableDyn_GetInitNotes(h, NULL, 0);
+   char *notes = malloc((size_t)size + 1);
+   CableDyn_GetInitNotes(h, notes, size + 1);
 
 ``CableDyn_GetLastError``
 ~~~~~~~~~~~~~~~~~~~~~~~~~

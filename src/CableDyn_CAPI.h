@@ -106,6 +106,17 @@ void CableDyn_GetCoupledMotion(void *handle, double *q_coupled,
 
 void CableDyn_GetLastError(void *handle, char *message, int message_len);
 
+/* ABI 1, minor extension 4. The notes of the last deck initialisation on the
+ * handle, successful or not: the Note: lines a driver run of the deck prints
+ * at its start, without the prefix, one per line, each ended by a new line.
+ * The buffer follows CableDyn_GetLastError: always NUL-terminated when
+ * notes_len > 0 and notes is not NULL, truncated to notes_len - 1. Returns the
+ * length of the whole text without the terminator, so a NULL buffer asks for
+ * the size; 0 without notes (a raw-line initialisation has none) and -1 on a
+ * bad handle. The notes take what is known at initialisation: the deck's
+ * current, not a field a host applies later. */
+int CableDyn_GetInitNotes(void *handle, char *notes, int notes_len);
+
 bool CableDyn_IsInitialized(void *handle);
 int CableDyn_NCoupledDOF(void *handle, int *err_stat);
 /* Stored system point count: the column count CableDyn_UpdatePointFluidFields
@@ -127,8 +138,8 @@ int CableDyn_NLines(void *handle, int *err_stat);
  * aggregate (it needs dtM); other decks keep the point route. Check
  * CableDyn_GetAbiMinor() >= 1 before using these on a library of unknown
  * vintage. CABLEDYN_CAPI_ABI_MINOR is the extension level this header
- * declares (4: the host-coupling, host-rotation and host fluid calls below are
- * present too). */
+ * declares (4: the host-coupling, host-rotation and host fluid calls below and
+ * CableDyn_GetInitNotes above are present too). */
 #define CABLEDYN_CAPI_ABI_MINOR 4
 
 #define CD_C_OBJ_LINE 1
