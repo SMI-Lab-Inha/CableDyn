@@ -101,7 +101,7 @@ MODULE CableDyn
                                           CD_AGG_NumChannels, CD_AGG_ChannelHeader, CD_AGG_EvalChannel, &
                                           CD_AGG_GetInitMetadata, CD_AGG_GetInitLine, &
                                           CD_AGG_WriteStaticProfile, CD_AGG_Range_Graphs, CD_AGG_Range_Sample, &
-                                          CD_AGG_Range_Write, CD_AGG_Range_Discard, CD_AGG_Range_MirrorSize, &
+                                          CD_AGG_Range_Write, CD_AGG_Range_MirrorSize, &
                                           CD_AGG_Range_Get_State, CD_AGG_Range_Set_State
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
                                            CD_HFMF_FrictionMirrorSize, CD_HFMF_BoundaryMirrorSize, &
@@ -809,6 +809,13 @@ CONTAINS
 
       ! The host owns the environment: gravity, water density, and depth override
       ! whatever the deck declares (MoorDyn-faithful coupled behavior).
+      ! CableDyn-owned result files. Single-turbine names use p%RootName =
+      ! <OpenFASTRoot>.CD; FAST.Farm preserves its established FarmCD root.
+      IF (nT > 0) THEN
+         native_root = TRIM(InitInp%RootName)
+      ELSE
+         native_root = TRIM(InitInp%RootName)//'.CD'
+      END IF
       CALL WrScr( '  Parsing CableDyn input file: '//TRIM(InitInp%FileName) )
       IF (nT > 0) THEN
          ! an allocated-but-empty/too-small PtfmInit means "no initial displacement"
@@ -855,7 +862,8 @@ CONTAINS
                                      env_gravity=REAL(InitInp%g, wp), env_rho_water=REAL(InitInp%rhoW, wp), &
                                      env_wtrdpth=REAL(InitInp%WtrDepth, wp), ptfm_init=REAL(ptfm6, wp), &
                                      external_fluid=use_extf, run_tmax=REAL(InitInp%Tmax, wp), &
-                                     host_orientation=.TRUE., static_current=static_cur, range_files=.TRUE. )
+                                     host_orientation=.TRUE., static_current=static_cur, range_files=.TRUE., &
+                                     range_discard_root=TRIM(native_root) )
       END IF
       IF (es /= CD_AGG_OK) THEN
          ! The slot stays inactive (it is activated only after full success, below), so this and
@@ -959,13 +967,6 @@ CONTAINS
                         'samples only. Verify dtM convergence for fatigue, snap, contact, or local cable-response '// &
                         'calculations; omit dtM or set it to DT for glue-rate solves.' )
          END IF
-      END IF
-      ! CableDyn-owned result files. Single-turbine names use p%RootName =
-      ! <OpenFASTRoot>.CD; FAST.Farm preserves its established FarmCD root.
-      IF (nT > 0) THEN
-         native_root = TRIM(InitInp%RootName)
-      ELSE
-         native_root = TRIM(InitInp%RootName)//'.CD'
       END IF
       ! The static profile records the converged static equilibrium, the state the
       ! initialization summary reports, so it is written before the SeaState kinematics
@@ -1384,14 +1385,10 @@ CONTAINS
       IF (ErrStat >= AbortErrLev) RETURN
 
       ! Range graphs (LINES flag r): the first sample is the state of the t = 0 output row. The
-      ! files of an earlier run go now: this run writes its own only when it completes.
+      ! files of an earlier run went when the deck was parsed: this run writes its own only when
+      ! it completes.
       Inst(id)%range_on = CD_AGG_Range_Graphs( Inst(id)%agg )
       IF (Inst(id)%range_on) THEN
-         CALL CD_AGG_Range_Discard( Inst(id)%agg, TRIM(native_root), es, em )
-         IF (es /= CD_AGG_OK) THEN
-            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
-            RETURN
-         END IF
          CALL sample_range( Inst(id), other, 0.0_DbKi, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) RETURN

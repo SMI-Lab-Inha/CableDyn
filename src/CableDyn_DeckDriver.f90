@@ -151,7 +151,8 @@ MODULE CableDyn_DeckDriver
                                   CD_Sea_Parse_Train, CD_Sea_Add_Train, CD_Sea_Synthesise, CD_Sea_Kinematics
   USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_RangeLine, CD_Range_Setup, CD_Range_End, CD_Range_Needs_Sample, &
                                   CD_Range_Commit_Sample, CD_Range_Clearance, CD_Range_TDP_Evaluate, &
-                                  CD_Range_TDP_Reference, CD_Range_Write_Files, CD_Is_TDP_Channel, &
+                                  CD_Range_TDP_Reference, CD_Range_Write_Files, CD_Range_Discard_File, &
+                                  CD_Is_TDP_Channel, &
                                   CD_Parse_TDP_Channel, CD_RANGE_OK, CD_RANGE_BADINPUT, CD_RQ_TENSION, &
                                   CD_RQ_CURVATURE, CD_RQ_BEND, CD_RQ_DECLINATION, CD_RQ_CLEARANCE, CD_TDP_N, &
                                   CD_RQ_TORQUE, CD_RQ_TWIST
@@ -7414,7 +7415,8 @@ CONTAINS
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                     range_files, host_orientation, static_current, prescribed_motion, &
-                                    static_run, deck_current, deck_turbines, static_deck_current)
+                                    static_run, deck_current, deck_turbines, static_deck_current, &
+                                    range_discard_root)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -7485,6 +7487,11 @@ CONTAINS
     ! standalone mixed route, the single-turbine OpenFAST module); a host that does not (a FAST.Farm
     ! shared mooring, the C API) leaves it out, and the flag fails closed there.
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
+    ! range_discard_root: the output root of a run that starts here: the range files of an earlier
+    ! run go as soon as the parsed deck names them, so nothing that fails after this point (the
+    ! statics, the host's own checks) leaves one to be taken for this run's. A rebuild of a run
+    ! already under way leaves it out.
+    CHARACTER(*), INTENT(IN), OPTIONAL :: range_discard_root
     ! host_orientation: the caller passes each moving point's orientation with every update
     ! (the OpenFAST and FAST.Farm shells, and the standalone mixed route, which holds the frame
     ! or turns it with its vesselMotion table), which turns the fairlead frame of a finite-EI
@@ -7575,6 +7582,17 @@ CONTAINS
                     env_rho_water=env_rho_water, env_wtrdpth=env_wtrdpth, allow_turbine=.NOT. own_turbines, &
                     failures=fails, controls=ctrls, run_tmax=run_tmax, host_coupled_objects=.TRUE., &
                     static_run=static_run)
+    IF (ErrStat == CD_DECKDRV_OK .AND. PRESENT(range_discard_root)) THEN
+      DO i = 1, SIZE(lines)
+        IF (.NOT. line_output_has_flag(lines(i)%outputs, 'r')) CYCLE
+        CALL CD_Range_Discard_File(range_discard_root, lines(i)%id, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_RANGE_OK) THEN
+          ErrStat = CD_DECKDRV_BADINPUT
+          RETURN
+        END IF
+      END DO
+      ErrStat = CD_DECKDRV_OK
+    END IF
     IF (ErrStat == CD_DECKDRV_OK) THEN
       host_turns = .FALSE.
       IF (PRESENT(host_orientation)) host_turns = host_orientation

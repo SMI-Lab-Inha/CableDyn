@@ -136,6 +136,7 @@ PROGRAM test_openfast_aggregate
   CALL case_anchor_uplift_channels()
   CALL case_output_channels()
   CALL case_range_graph_host()
+  CALL case_range_discard_at_parse()
   CALL case_long_init_notes()
   CALL case_pure_cable_deck()
   CALL case_cable_load_feedback()
@@ -1103,6 +1104,53 @@ CONTAINS
     CALL require(.NOT. CD_AGG_Range_Graphs(plain) .AND. CD_AGG_Range_MirrorSize(plain) == 0, 'range:plain-empty')
     CALL CD_AGG_End(plain, es, em)
   END SUBROUTINE case_range_graph_host
+
+  SUBROUTINE case_range_discard_at_parse()
+    !! The range files of an earlier run go once the deck has named them, so an initialisation that
+    !! fails after the parse leaves none. A rebuild of a run under way passes no root and leaves
+    !! them, and a deck that does not parse names none: the earlier run's outputs stand whole.
+    TYPE(CD_AGG_ModuleType) :: a
+    INTEGER :: es, u, ios
+    LOGICAL :: there
+    CHARACTER(512) :: em
+
+    CALL write_mixed_channels_deck('agg_discard.dat', outputs_row='Ten1N1', line_outputs='r', &
+                                   extra_option='0.0 TMax', extra_option2='0.1 RangeStart')
+    ! refused after the parse: RangeStart beyond the host's run time
+    CALL seed_range_file('agg_discard.Line1.range.out')
+    CALL seed_range_file('agg_discard.Line2.range.out')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE.)
+    CALL require(es /= CD_AGG_OK, 'range-discard:refused-without-root')
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(there, 'range-discard:no-root-leaves-the-file')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE., &
+                               range_discard_root='agg_discard')
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'RangeStart exceeds TMax') > 0, 'range-discard:refused: '//TRIM(em))
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:line1-removed')
+    INQUIRE (FILE='agg_discard.Line2.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:line2-removed')
+    ! a deck that does not parse
+    OPEN (NEWUNIT=u, FILE='agg_discard_bad.dat', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    WRITE (u, '(A)') 'not a deck'
+    CLOSE (u)
+    CALL seed_range_file('agg_discard.Line1.range.out')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard_bad.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE., &
+                               range_discard_root='agg_discard')
+    CALL require(es /= CD_AGG_OK, 'range-discard:bad-deck-refused')
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(there, 'range-discard:bad-deck-leaves-the-file')
+    OPEN (NEWUNIT=u, FILE='agg_discard.Line1.range.out', STATUS='OLD', IOSTAT=ios)
+    IF (ios == 0) CLOSE (u, STATUS='DELETE')
+  END SUBROUTINE case_range_discard_at_parse
+
+  SUBROUTINE seed_range_file(path)
+    CHARACTER(*), INTENT(IN) :: path
+    INTEGER :: u, ios
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    WRITE (u, '(A)') 'stale'
+    CLOSE (u)
+  END SUBROUTINE seed_range_file
 
   SUBROUTINE range_march(a, r0, dt, step, amplitude, label)
     !! Advance to step's committed time with a small surge and heave of the fairleads about r0,

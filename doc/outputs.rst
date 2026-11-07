@@ -393,8 +393,9 @@ corrects counts once, with its corrected state. The accumulators are double prec
 OpenFAST build and travel in the checkpoint, so a restart continues them. The file is written at
 the end of a run that completes, whenever the host ends it: at ``TMax``, at a steady state found
 by ``CalcSteady``, or at FAST.Farm's last whole ``DT_Low``, and holds the samples up to there.
-The run removes a file left by an earlier run when it starts; a run that stops on an error, in any
-module, says so and leaves none. A turbine's own CableDyn instance in FAST.Farm (``CompMooring = 5``
+The run removes a file left by an earlier run as soon as its deck is parsed, and a run that stops on
+an error after that, in any module, leaves none. A deck that does not parse, or a module that stops
+before CableDyn starts, leaves every output of the earlier run as it was. A turbine's own CableDyn instance in FAST.Farm (``CompMooring = 5``
 in its ``.fst``) writes ``<RootName>.T<n>.CD.Line<L>.range.out``. A FAST.Farm shared mooring and
 the C API write no range file and reject the flag by name.
 

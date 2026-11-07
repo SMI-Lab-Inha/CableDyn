@@ -296,7 +296,7 @@ CONTAINS
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                    range_files, host_orientation, static_current, prescribed_motion, static_run, &
-                                   deck_current, deck_turbines, static_deck_current)
+                                   deck_current, deck_turbines, static_deck_current, range_discard_root)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -332,6 +332,8 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: forbid_deck_ambient
     ! range_files: the caller samples and writes the range graphs of the LINES flag r (CD_AGG_Range_*)
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
+    ! range_discard_root: the output root of a run that starts here (see CD_Init_Deck_Aggregate)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: range_discard_root
     ! host_orientation: the caller passes the moving-point orientations with every update,
     ! which a finite-EI line restrained in torsion requires (see CD_Init_Deck_Aggregate)
     LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
@@ -394,7 +396,8 @@ CONTAINS
                                 range_files=range_files, host_orientation=host_orientation, &
                                 static_current=static_current, prescribed_motion=prescribed_motion, &
                                 static_run=static_run, deck_current=deck_current, &
-                                deck_turbines=deck_turbines, static_deck_current=static_deck_current)
+                                deck_turbines=deck_turbines, static_deck_current=static_deck_current, &
+                                range_discard_root=range_discard_root)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF

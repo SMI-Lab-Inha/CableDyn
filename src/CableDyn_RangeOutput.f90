@@ -38,7 +38,7 @@ MODULE CableDyn_RangeOutput
   PUBLIC :: CD_RangeLine, CD_RangeSet
   PUBLIC :: CD_Range_Setup, CD_Range_End, CD_Range_Needs_Sample, CD_Range_Commit_Sample
   PUBLIC :: CD_Range_Clearance, CD_Range_TDP_Evaluate, CD_Range_TDP_Reference
-  PUBLIC :: CD_Range_Write_Files, CD_Range_Discard_Files
+  PUBLIC :: CD_Range_Write_Files, CD_Range_Discard_Files, CD_Range_Discard_File
   PUBLIC :: CD_Range_Has_Graph, CD_Range_Mirror_Size, CD_Range_Get_State, CD_Range_Set_State
   PUBLIC :: CD_Is_TDP_Channel, CD_Parse_TDP_Channel
 
@@ -673,30 +673,43 @@ CONTAINS
     CHARACTER(*), INTENT(IN) :: out_root
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: il, unit, ios
-    CHARACTER(LEN(out_root) + 32) :: path
-    CHARACTER(16) :: id_text
+    INTEGER :: il
 
     ErrStat = CD_RANGE_OK
     ErrMsg = ''
     IF (.NOT. set%active) RETURN
     DO il = 1, SIZE(set%lines)
       IF (.NOT. set%lines(il)%want_range) CYCLE
-      WRITE (id_text, '(I0)') set%lines(il)%line_id
-      path = TRIM(out_root)//'.Line'//TRIM(id_text)//'.range.out'
-      IF (.NOT. CD_Path_Openable(TRIM(path), .FALSE.)) CYCLE   ! no such file
-      CALL CD_Open_Write(unit, TRIM(path), ios, status='OLD')
-      IF (ios == 0) CLOSE (unit, STATUS='DELETE', IOSTAT=ios)
-      IF (ios == 0) THEN
-        IF (CD_Path_Openable(TRIM(path), .FALSE.)) ios = 1
-      END IF
-      IF (ios /= 0) THEN
-        ErrStat = CD_RANGE_BADINPUT
-        ErrMsg = 'CableDyn_RangeOutput: cannot replace the range-graph output file of an earlier run: '//TRIM(path)
-        RETURN
-      END IF
+      CALL CD_Range_Discard_File(out_root, set%lines(il)%line_id, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_RANGE_OK) RETURN
     END DO
   END SUBROUTINE CD_Range_Discard_Files
+
+  SUBROUTINE CD_Range_Discard_File(out_root, line_id, ErrStat, ErrMsg)
+    !! Remove the <out_root>.Line<line_id>.range.out file of an earlier run, if there is one.
+    CHARACTER(*), INTENT(IN) :: out_root
+    INTEGER, INTENT(IN) :: line_id
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: unit, ios
+    CHARACTER(LEN(out_root) + 32) :: path
+    CHARACTER(16) :: id_text
+
+    ErrStat = CD_RANGE_OK
+    ErrMsg = ''
+    WRITE (id_text, '(I0)') line_id
+    path = TRIM(out_root)//'.Line'//TRIM(id_text)//'.range.out'
+    IF (.NOT. CD_Path_Openable(TRIM(path), .FALSE.)) RETURN   ! no such file
+    CALL CD_Open_Write(unit, TRIM(path), ios, status='OLD')
+    IF (ios == 0) CLOSE (unit, STATUS='DELETE', IOSTAT=ios)
+    IF (ios == 0) THEN
+      IF (CD_Path_Openable(TRIM(path), .FALSE.)) ios = 1
+    END IF
+    IF (ios /= 0) THEN
+      ErrStat = CD_RANGE_BADINPUT
+      ErrMsg = 'CableDyn_RangeOutput: cannot replace the range-graph output file of an earlier run: '//TRIM(path)
+    END IF
+  END SUBROUTINE CD_Range_Discard_File
 
   PURE LOGICAL FUNCTION CD_Is_TDP_Channel(lo) RESULT(yes)
     !! True for a name of the TDP family (lower case), valid or not: "tdp" then a digit.
