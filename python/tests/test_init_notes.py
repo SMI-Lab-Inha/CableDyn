@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 try:
-    from cabledyn import _lib  # noqa: F401
+    from cabledyn import _lib
 except OSError as exc:
     pytest.skip(f"CableDyn shared library not available: {exc}", allow_module_level=True)
 
@@ -218,3 +218,10 @@ def test_the_notes_match_those_of_a_driver_run(tmp_path, deck, host_fluid):
         model.init_deck(path)
         notes = set(model.init_notes)
     assert printed <= notes, printed - notes
+
+
+def test_a_library_without_the_notes_call_still_loads(monkeypatch):
+    # a library of ABI minor 4 can predate the entry point: only init_notes may refuse
+    monkeypatch.setattr(_lib, "_has_init_notes", False)
+    with CableDyn() as model, pytest.raises(RuntimeError, match="CableDyn_GetInitNotes"):
+        _ = model.init_notes

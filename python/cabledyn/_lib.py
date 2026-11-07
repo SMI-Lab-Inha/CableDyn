@@ -305,8 +305,6 @@ def _bind_host_fluid() -> bool:
         return False
     set_fluid.argtypes = [c_void_p, c_int, POINTER(c_int)]
     set_fluid.restype = None
-    _lib.CableDyn_GetInitNotes.argtypes = [c_void_p, c_char_p, c_int]
-    _lib.CableDyn_GetInitNotes.restype = c_int
     _lib.CableDyn_NFluidNodes.argtypes = [c_void_p, POINTER(c_int)]
     _lib.CableDyn_NFluidNodes.restype = c_int
     _lib.CableDyn_GetFluidNodePositions.argtypes = [c_void_p, _DBL, c_int, POINTER(c_int)]
@@ -325,6 +323,21 @@ def _bind_host_fluid() -> bool:
 
 
 _has_host_fluid = _bind_host_fluid()
+
+
+def _bind_init_notes() -> bool:
+    # Bound on its own: a library of ABI minor 4 may predate this entry point, and nothing but
+    # ``CableDyn.init_notes`` needs it.
+    try:
+        get_notes = _lib.CableDyn_GetInitNotes
+    except AttributeError:
+        return False
+    get_notes.argtypes = [c_void_p, c_char_p, c_int]
+    get_notes.restype = c_int
+    return True
+
+
+_has_init_notes = _bind_init_notes()
 
 
 def abi_minor() -> int:

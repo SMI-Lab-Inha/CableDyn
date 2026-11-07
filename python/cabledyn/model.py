@@ -330,11 +330,11 @@ class CableDyn:
         initialisation has none.
         """
         with self._lock:
-            if _lib_module.abi_minor() < _lib_module.HOST_FLUID_ABI_MINOR:
+            if not _lib_module._has_init_notes:
                 # not a C status: the loaded library lacks the entry point
                 raise RuntimeError(
-                    "the loaded CableDyn library predates CableDyn_GetInitNotes "
-                    "(ABI 1 minor extension 4); rebuild it from this checkout"
+                    "the loaded CableDyn library predates CableDyn_GetInitNotes; "
+                    "rebuild it from this checkout"
                 )
             size = _lib.CableDyn_GetInitNotes(self._handle, None, 0)
             if size <= 0:
