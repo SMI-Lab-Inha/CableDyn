@@ -38,7 +38,7 @@ PROGRAM test_openfast_aggregate
                                          CD_AGG_NCtrlChans, CD_AGG_Apply_LineControl, &
                                          CD_AGG_Refresh_PointMesh, CD_AGG_HasRigid6, CD_AGG_HasRod, &
                                          CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
-                                         CD_AGG_Set_Rigid6_States, CD_AGG_Rod_MirrorSize, &
+                                         CD_AGG_Set_Rigid6_States, CD_AGG_Reopen_Start, CD_AGG_Rod_MirrorSize, &
                                          CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States, &
                                          CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_Range_Discard, &
                                          CD_AGG_Range_Graphs, CD_AGG_Range_MirrorSize, CD_AGG_Range_Get_State, &
@@ -137,6 +137,7 @@ PROGRAM test_openfast_aggregate
   CALL case_output_channels()
   CALL case_range_graph_host()
   CALL case_range_discard_at_parse()
+  CALL case_reopen_start()
   CALL case_long_init_notes()
   CALL case_pure_cable_deck()
   CALL case_cable_load_feedback()
@@ -1143,6 +1144,68 @@ CONTAINS
     OPEN (NEWUNIT=u, FILE='agg_discard.Line1.range.out', STATUS='OLD', IOSTAT=ios)
     IF (ios == 0) CLOSE (u, STATUS='DELETE')
   END SUBROUTINE case_range_discard_at_parse
+
+  SUBROUTINE case_reopen_start()
+    !! A state mirror restored from before the first commit keeps the body's start open: the host
+    !! fluid fields of the first step re-solve the start accelerations, as in the run that was
+    !! never restored (a checkpoint inside the first mooring step). Without CD_AGG_Reopen_Start
+    !! they do not.
+    REAL(wp), PARAMETER :: DT = 0.005_wp
+    TYPE(CD_AGG_ModuleType) :: a, b, c
+    REAL(wp) :: r0(3, 1), vel(3, 1), acc(3, 1), lds(3, 1)
+    REAL(wp), ALLOCATABLE :: sa(:), sb(:), sc(:), fv(:, :), fa(:, :), fw(:)
+    INTEGER :: es, n, ia, nf
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+
+    CALL write_coupled_rigid6_deck('agg_reopen.dat', 1.0_wp, 0.5_wp, .FALSE.)
+    CALL CD_AGG_Init_From_Deck(a, 'agg_reopen.dat', DT, es, em, external_fluid=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'reopen:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_Init_From_Deck(b, 'agg_reopen.dat', DT, es, em, external_fluid=.TRUE.)
+    CALL CD_AGG_Init_From_Deck(c, 'agg_reopen.dat', DT, es, em, external_fluid=.TRUE.)
+    n = CD_AGG_Rigid6_MirrorSize(a)
+    nf = CD_AGG_NFluidNodes(a, es, em)
+    ALLOCATE (fv(3, nf), fa(3, nf), fw(nf))
+    fv = 0.0_wp
+    fv(1, :) = 0.4_wp
+    fa = 0.0_wp
+    fa(1, :) = 0.3_wp
+    fw = 0.0_wp
+    ALLOCATE (sa(n), sb(n), sc(n))
+    CALL CD_AGG_Get_Rigid6_States(b, sb, es, em)
+    CALL CD_AGG_Set_Rigid6_States(b, sb, es, em)
+    CALL CD_AGG_Reopen_Start(b)
+    CALL CD_AGG_Get_Rigid6_States(c, sc, es, em)
+    CALL CD_AGG_Set_Rigid6_States(c, sc, es, em)
+    ! the first step: new fields, then an advance that moves the fairlead
+    CALL CD_AGG_SetFluidFields(a, fv, fa, fw, es, em)
+    CALL require(es == CD_AGG_OK, 'reopen:fields-a: '//TRIM(em))
+    CALL CD_AGG_SetFluidFields(b, fv, fa, fw, es, em)
+    CALL require(es == CD_AGG_OK, 'reopen:fields-b: '//TRIM(em))
+    CALL CD_AGG_SetFluidFields(c, fv, fa, fw, es, em)
+    CALL require(es == CD_AGG_OK, 'reopen:fields-c: '//TRIM(em))
+    CALL CD_AGG_GetMovingPointMesh(a, r0, vel, acc, lds, es, em)
+    r0(1, 1) = r0(1, 1) + 0.01_wp
+    vel = 0.0_wp
+    vel(1, 1) = 0.2_wp
+    acc = 0.0_wp
+    acc(1, 1) = 1.0_wp
+    CALL CD_AGG_Step_Moving(a, DT, r0, vel, acc, cv, st, ia, es, em, t_committed=DT)
+    CALL require(es == CD_AGG_OK, 'reopen:step-a: '//TRIM(em))
+    CALL CD_AGG_Step_Moving(b, DT, r0, vel, acc, cv, st, ia, es, em, t_committed=DT)
+    CALL require(es == CD_AGG_OK, 'reopen:step-b: '//TRIM(em))
+    CALL CD_AGG_Step_Moving(c, DT, r0, vel, acc, cv, st, ia, es, em, t_committed=DT)
+    CALL require(es == CD_AGG_OK, 'reopen:step-c: '//TRIM(em))
+    CALL CD_AGG_Get_Rigid6_States(a, sa, es, em)
+    CALL CD_AGG_Get_Rigid6_States(b, sb, es, em)
+    CALL CD_AGG_Get_Rigid6_States(c, sc, es, em)
+    CALL require(nan_max_abs(sb - sa) <= 0.0_wp, 'reopen:restored-equals-never-restored')
+    CALL require(nan_max_abs(sc - sa) > 0.0_wp, 'reopen:closed-start-differs')
+    CALL CD_AGG_End(a, es, em)
+    CALL CD_AGG_End(b, es, em)
+    CALL CD_AGG_End(c, es, em)
+  END SUBROUTINE case_reopen_start
 
   SUBROUTINE seed_range_file(path)
     CHARACTER(*), INTENT(IN) :: path

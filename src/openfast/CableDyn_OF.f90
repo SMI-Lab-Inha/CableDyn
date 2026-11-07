@@ -101,7 +101,7 @@ MODULE CableDyn
                                           CD_AGG_NumChannels, CD_AGG_ChannelHeader, CD_AGG_EvalChannel, &
                                           CD_AGG_GetInitMetadata, CD_AGG_GetInitLine, &
                                           CD_AGG_WriteStaticProfile, CD_AGG_Range_Graphs, CD_AGG_Range_Sample, &
-                                          CD_AGG_Range_Write, CD_AGG_Range_MirrorSize, &
+                                          CD_AGG_Range_Write, CD_AGG_Range_MirrorSize, CD_AGG_Reopen_Start, &
                                           CD_AGG_Range_Get_State, CD_AGG_Range_Set_State
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
                                            CD_HFMF_FrictionMirrorSize, CD_HFMF_BoundaryMirrorSize, &
@@ -1759,6 +1759,11 @@ CONTAINS
             RETURN
          END IF
       END IF
+      ! A restart inside the first mooring step: no commit yet, so the bodies and rods are still
+      ! at their start, and the fluid fields of the first step re-solve their accelerations. At
+      ! dtM = DT there is no such state: the CalcOutput at t = 0 restores the mirror, which
+      ! closes the start.
+      IF (Inst(id)%nsuper > 1_IntKi .AND. other%t_commit <= 0.0_DbKi) CALL CD_AGG_Reopen_Start( Inst(id)%agg )
       ! The same run restoring one of its own states (CalcSteady's operating points) keeps what
       ! it has committed, the range samples too, until it steps on from there
       ! (resume_after_rewind). A checkpoint in a new process continues from the restored
