@@ -39,7 +39,9 @@ compose the curvature, the moments are EI_cable and EI(s) - EI_cable times it. A
 the section the side of the larger curvature must give the values: the bare tip, a step between
 stiffener rows and a junction of two line types; a junction of two meshes of one line type
 under the stiffener is no step. A deck node keeps the rule on a mesh the static solve refined.
-These parts need no scipy either.
+A sleeve too soft for the recovered moment, where the moment's error is far above its elastic
+moment, must keep its element peaks at the curvature of its nodes. These parts need no scipy
+either.
 
 The initialisation notes are checked too: none on this deck; the resolution note when the 5 m
 stiffener spans 3 elements (2 m elements); the pinned-end note when End A has no END
@@ -339,6 +341,35 @@ def check_refined(exe: str, tmp: str) -> bool:
     return ok
 
 
+def check_soft_sleeve(exe: str, tmp: str) -> bool:
+    """The coarse lazy wave with EI 100 N m^2 under a 100 m sleeve of 120 N m^2 at most, far below
+    the stiffness that resolves the recovered moment, max(w L0^2)/12 of about 1300 N m^2 on its
+    10 m elements: moment over stiffness would be noise there. The element peaks must stay with
+    the curvature of their end nodes, which take the interpolation's."""
+    length = 100.0
+    deck = REFINED_DECK.read_text().replace(" 1.99e4 ", " 100.0 ")
+    deck = deck.replace("--------------------- OPTIONS", (
+        "--------------------- STIFFENERS ---------------------------------------------\n"
+        "LineID End Length RootOD TipOD InnerD E Density\n"
+        "(-) (-) (m) (m) (m) (m) (Pa) (kg/m^3)\n"
+        f"4 A {length} 0.18 0.17 0.16 1.0e6 {RHO_STF}\n"
+        "--------------------- OPTIONS"), 1)
+    rc, log, rows, _ = solve(exe, tmp, "soft", deck)
+    if rc != 0:
+        print(log[-3000:])
+        print("FAIL: the driver did not solve the deck with a soft sleeve")
+        return False
+    nodes = np.array([float(r.split()[7]) for r in rows if r.strip()])
+    table = (pathlib.Path(tmp) / "soft.elements.out").read_text().splitlines()[3:]
+    table = np.array([[float(v) for v in r.split()] for r in table if r.strip()])
+    covered = int(np.sum(table[:, 3] <= length + 1.0e-9))
+    ratio = np.max(table[:covered, 6] / np.maximum(nodes[:covered], nodes[1:covered + 1]))
+    ok = ratio <= 1.02
+    print(f"{'ok  ' if ok else 'FAIL'} soft sleeve: element peaks within a factor {ratio:.3f} of the "
+          f"curvature at their end nodes")
+    return ok
+
+
 def check_identities(out: dict[str, float], name: str = "node 41") -> bool:
     """Curv, CurvX, CurvY, BendMom and StfMom of a node inside the cone (node 41, 2 m)."""
     curvature = out["Curv1N41"]
@@ -427,6 +458,7 @@ def main() -> int:
         notes_ok = check_notes(exe, tmp, log)
         notes_ok = check_steps(exe, tmp) and notes_ok
         notes_ok = check_refined(exe, tmp) and notes_ok
+        notes_ok = check_soft_sleeve(exe, tmp) and notes_ok
         data = np.array([[float(v) for v in r.split()[2:9]] for r in rows if r.strip()])
         notes_ok = check_identities(out) and notes_ok
         rc, log, _, element_out = solve(exe, tmp, "element", DECK.replace(*ELEMENT_RECOVERY))

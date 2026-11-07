@@ -201,7 +201,9 @@ is low by :math:`h^2 M''/12` against :math:`M`. Two outputs that read the interp
 the section here. The peak of such an element in ``.elements.out`` is the largest
 :math:`\lvert M(u)\rvert/EI(s(u))` along it, with :math:`M(u)` the quadratic through the
 recovered moments of the end nodes that keeps the mean of the fit; a row end inside the element,
-or the tip, is a step of :math:`EI(s)` that the search keeps. ``OutputRecovery element`` reports
+or the tip, is a step of :math:`EI(s)` that the search keeps. Below the stiffness that resolves
+the recovered moment (:ref:`theory-output-recovery`) both the nodes and the peak fall back on
+the interpolation's curvature times :math:`EI_e/EI(s)`. ``OutputRecovery element`` reports
 the recovered moment over :math:`EI(s)` on such an element, the same value as the equilibrium
 recovery, and the exact trace on every other element. The geometric traces themselves stay
 available as ``CD_HermiteCable_Dyn_Curvature_Exact``, and the mesh diagnostics
