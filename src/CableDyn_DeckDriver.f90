@@ -1490,8 +1490,8 @@ CONTAINS
     DO j = 1, SIZE(lines)
       IF (COUNT(lines(j)%tors_mode /= TORS_FREE) == 1 .AND. lines(j)%tors_free_end == 0 .AND. &
           LEN_TRIM(lines(j)%tors_note) > 0) CALL start_note('line '// &
-        TRIM(int_to_str(lines(j)%id))//' is torsionally restrained at one end only and its torsion is not '// &
-        'solved: '//TRIM(lines(j)%tors_note)//'.')
+                 TRIM(int_to_str(lines(j)%id))//' is torsionally restrained at one end only and its torsion is not '// &
+                                                            'solved: '//TRIM(lines(j)%tors_note)//'.')
     END DO
     ! rhoInf near 1 leaves the march without numerical dissipation of the modes dtM does not
     ! resolve (axial waves, slack-taut transitions). In an irregular sea a finite-EI lazy wave
@@ -8508,7 +8508,7 @@ CONTAINS
         END DO
       END BLOCK
     END IF
-    IF (capture_notes) CALL deck_start_notes(lines, channels, opts, .NOT. static_only, .FALSE.)
+    IF (capture_notes) CALL deck_start_notes(lines, channels, opts,.NOT. static_only, .FALSE.)
     ! One note for the run, on the first line it names (every route that prints the notes of this
     ! summary shows it): opts_static knows the host's steady current, a current the host brings
     ! in later is unknown here. A run that marches no step does not drift.
