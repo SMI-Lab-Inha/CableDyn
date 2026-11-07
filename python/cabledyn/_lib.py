@@ -214,8 +214,7 @@ _has_host_coupling = _bind_host_coupling()
 # the coupled moments. A library built before the extension lacks these symbols
 # and reports ``abi_minor() < 3``.
 
-#: Minor extension level of ABI 1 this binding uses for the host-rotation calls
-#: (the newest extension the binding knows).
+#: Minor extension level of ABI 1 this binding uses for the host-rotation calls.
 HOST_ROTATION_ABI_MINOR = 3
 
 
@@ -234,6 +233,40 @@ def _bind_host_rotation() -> bool:
 
 
 _has_host_rotation = _bind_host_rotation()
+
+# Host fluid field (ABI minor 4). A library built before the extension lacks these
+# symbols and reports ``abi_minor() < 4``.
+
+#: Minor extension level of ABI 1 this binding uses for the host fluid field
+#: (the newest extension the binding knows).
+HOST_FLUID_ABI_MINOR = 4
+
+
+def _bind_host_fluid() -> bool:
+    try:
+        set_fluid = _lib.CableDyn_SetHostFluid
+    except AttributeError:
+        return False
+    set_fluid.argtypes = [c_void_p, c_int, POINTER(c_int)]
+    set_fluid.restype = None
+    _lib.CableDyn_NFluidNodes.argtypes = [c_void_p, POINTER(c_int)]
+    _lib.CableDyn_NFluidNodes.restype = c_int
+    _lib.CableDyn_GetFluidNodePositions.argtypes = [c_void_p, _DBL, c_int, POINTER(c_int)]
+    _lib.CableDyn_GetFluidNodePositions.restype = None
+    _lib.CableDyn_UpdateFluidFields.argtypes = [
+        c_void_p,
+        _DBL,
+        _DBL,
+        _DBL,
+        _DBL,
+        c_int,
+        POINTER(c_int),
+    ]
+    _lib.CableDyn_UpdateFluidFields.restype = None
+    return True
+
+
+_has_host_fluid = _bind_host_fluid()
 
 
 def abi_minor() -> int:

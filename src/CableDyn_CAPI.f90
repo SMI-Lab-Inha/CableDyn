@@ -20,7 +20,8 @@ MODULE CableDyn_CAPI
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_End, CD_AGG_IsInitialized, CD_AGG_OK, &
-                                         CD_AGG_BADINPUT, CD_AGG_NOT_INITIALIZED, CD_AGG_ALLOCFAIL
+                                         CD_AGG_BADINPUT, CD_AGG_NOT_INITIALIZED, CD_AGG_ALLOCFAIL, &
+                                         CD_AGG_NFluidNodes, CD_AGG_GetFluidNodePositions, CD_AGG_SetFluidFields
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Init_Model, CD_End_Model, CD_MODEL_OK, CD_MODEL_BADINPUT, &
@@ -68,6 +69,10 @@ MODULE CableDyn_CAPI
   PUBLIC :: CableDyn_RestoreState
   PUBLIC :: CableDyn_GetCoupledLayout
   PUBLIC :: CableDyn_InitDeckRotating
+  PUBLIC :: CableDyn_SetHostFluid
+  PUBLIC :: CableDyn_NFluidNodes
+  PUBLIC :: CableDyn_GetFluidNodePositions
+  PUBLIC :: CableDyn_UpdateFluidFields
   PUBLIC :: CableDyn_UpdateRotations
   PUBLIC :: CableDyn_GetCoupledMoments
 
@@ -85,8 +90,8 @@ MODULE CableDyn_CAPI
   !> Minor extension level of ABI 1: 1 adds the in-process object queries, 2 the host-coupling
   !> calls (initialization at host positions, state save/restore, the coupled layout query), 3
   !> the host rotations (initialization for a host that turns its coupled points, their
-  !> rotations, the coupled moments).
-  INTEGER(C_INT), PARAMETER :: CD_C_ABI_MINOR = 3_C_INT
+  !> rotations, the coupled moments), 4 the host fluid field at the nodes of a deck.
+  INTEGER(C_INT), PARAMETER :: CD_C_ABI_MINOR = 4_C_INT
   !> Object kinds of CableDyn_NObjects / CableDyn_GetObjectInfo.
   INTEGER(C_INT), PARAMETER :: CD_C_OBJ_LINE = 1_C_INT, CD_C_OBJ_POINT = 2_C_INT, CD_C_OBJ_BODY = 3_C_INT, &
                                CD_C_OBJ_ROD = 4_C_INT
@@ -167,6 +172,11 @@ MODULE CableDyn_CAPI
     ! velocity and acceleration in global axes; identity and rest at the static start).
     ! agg_moment: the coupled moments' workspace of CableDyn_GetCoupledMoments.
     LOGICAL :: host_rot = .FALSE.
+    ! CableDyn_SetHostFluid: the next deck initialization takes the host's fluid field; agg_host_fluid
+    ! is what the live model was built with, and fluid_ready that it holds a field (the march
+    ! refuses a step without one: the deck's declared water would silently be still).
+    LOGICAL :: host_fluid = .FALSE., agg_host_fluid = .FALSE., fluid_ready = .FALSE.
+    LOGICAL :: saved_fluid_ready = .FALSE.
     REAL(wp), ALLOCATABLE :: agg_dcm(:, :, :), agg_om(:, :), agg_al(:, :), agg_moment(:, :)
     ! Point-route line inventory for the object queries: the deck-line-id -> system-line map
     ! (pt_obj, 0 = no such line; pt_is_cable all .FALSE.) the shared channel evaluator resolves
@@ -389,9 +399,12 @@ CONTAINS
     ! A deck with BODIES or RODS (standalone rules: a motionFile-free deck with dtM) runs on the
     ! coupled aggregate; every other deck keeps the point-system route and its diagnostics.
     ! A deck with finite-EI lines likewise runs on the aggregate (its Hermite cables).
-    CALL CD_Deck_Query_dtM(TRIM(deck_path), dtm, has_dtm, es, em, standalone_scan=.TRUE., n_bodies_rods=n_objects, &
+    ! With a host fluid field the deck is read as the aggregate reads it, a caller-driven deck, so
+    ! the SEASTATE and WaveKinMod 2 water policies of a host reach it.
+    CALL CD_Deck_Query_dtM(TRIM(deck_path), dtm, has_dtm, es, em, standalone_scan=.NOT. h%host_fluid, &
+                           n_bodies_rods=n_objects, &
                            n_finite_ei=n_finite)
-    IF (es == CD_DECKDRV_OK .AND. (n_objects > 0 .OR. n_finite > 0)) THEN
+    IF (es == CD_DECKDRV_OK .AND. (n_objects > 0 .OR. n_finite > 0 .OR. h%host_fluid)) THEN
       CALL init_deck_aggregate(h, TRIM(deck_path), has_dtm, dtm, caller, rot, err_stat, positions)
       RETURN
     END IF
@@ -513,8 +526,11 @@ CONTAINS
       RETURN
     END IF
     ! An absent positions argument stays absent through the optional coupled_positions.
+    ! The deck's own current is marched here, unless the host supplies the field: then it sets
+    ! the static start only.
     CALL CD_AGG_Init_From_Deck(new_agg, deck_path, dtm, es, em, coupled_positions=positions, &
-                               host_orientation=rotating)
+                               host_orientation=rotating, external_fluid=h%host_fluid, &
+                               deck_current=.NOT. h%host_fluid, static_deck_current=h%host_fluid)
     IF (es /= CD_AGG_OK) THEN
       CALL map_agg_status(es, err_stat)
       CALL store_status(h, err_stat, caller//': '//TRIM(em))
@@ -578,6 +594,8 @@ CONTAINS
     CALL MOVE_ALLOC(al, h%agg_al)
     CALL MOVE_ALLOC(moment, h%agg_moment)
     h%host_rot = rotating
+    h%agg_host_fluid = h%host_fluid
+    h%fluid_ready = .FALSE.
     CALL move_aggregate(new_agg, h%agg)
     CALL clear_point_line_map(h)
     h%use_agg = .TRUE.
@@ -645,6 +663,8 @@ CONTAINS
     IF (ALLOCATED(h%agg_pos)) DEALLOCATE (h%agg_pos, h%agg_vel, h%agg_acc, h%agg_load)
     IF (ALLOCATED(h%agg_dcm)) DEALLOCATE (h%agg_dcm, h%agg_om, h%agg_al, h%agg_moment)
     h%host_rot = .FALSE.
+    h%agg_host_fluid = .FALSE.
+    h%fluid_ready = .FALSE.
   END SUBROUTINE drop_aggregate
 
   SUBROUTINE map_agg_status(agg_stat, err_stat)
@@ -1052,7 +1072,8 @@ CONTAINS
     IF (err_stat /= CD_C_OK) RETURN
     IF (h%use_agg) THEN
       CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdatePointFluidFields: a deck with finite-EI lines, BODIES or '// &
-                      'RODS runs on the coupled aggregate, which takes no point fluid fields', err_stat)
+                      'RODS runs on the coupled aggregate, which takes no point fluid fields; supply the '// &
+                      'fluid at its nodes with CableDyn_SetHostFluid and CableDyn_UpdateFluidFields', err_stat)
       RETURN
     END IF
     IF (n_point < 0_C_INT) THEN
@@ -1101,6 +1122,161 @@ CONTAINS
     CALL store_status(h, err_stat, em)
   END SUBROUTINE CableDyn_UpdatePointFluidFields
 
+  SUBROUTINE CableDyn_SetHostFluid(handle, enable, err_stat) BIND(C, NAME='CableDyn_SetHostFluid')
+    !! Choose, before a deck initialization, whether the host supplies the ambient fluid
+    !! (nonzero) or the deck does (0, the default). It applies to every following CableDyn_InitDeck,
+    !! CableDyn_InitDeckAt and CableDyn_InitDeckRotating of the handle. With it, the deck runs on
+    !! the coupled aggregate whatever its lines; its waves are refused, a steady deck current sets
+    !! the static start only, and CableDyn_UpdateFluidFields supplies the whole field of the march.
+    TYPE(C_PTR), VALUE :: handle
+    INTEGER(C_INT), VALUE :: enable
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+
+    err_stat = validate_handle(handle, h)
+    IF (err_stat /= CD_C_OK) RETURN
+    h%host_fluid = enable /= 0_C_INT
+    CALL store_status(h, CD_C_OK, '')
+  END SUBROUTINE CableDyn_SetHostFluid
+
+  FUNCTION CableDyn_NFluidNodes(handle, err_stat) RESULT(n) BIND(C, NAME='CableDyn_NFluidNodes')
+    !! The number of nodes at which the host supplies the fluid field (every line node, then the
+    !! bodies, rods and hydrodynamic points of the deck), or zero for a null or uninitialized
+    !! handle and for a handle without a host fluid field.
+    TYPE(C_PTR), VALUE :: handle
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    INTEGER(C_INT) :: n
+    TYPE(CD_C_Handle), POINTER :: h
+    INTEGER :: es
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    n = 0_C_INT
+    IF (.NOT. query_ready(handle, h, 'CableDyn_NFluidNodes', err_stat)) RETURN
+    IF (h%agg_host_fluid) THEN
+      n = INT(CD_AGG_NFluidNodes(h%agg, es, em), C_INT)
+      CALL map_agg_status(es, err_stat)
+      CALL store_status(h, err_stat, em)
+    ELSE
+      CALL store_status(h, CD_C_OK, '')
+    END IF
+  END FUNCTION CableDyn_NFluidNodes
+
+  SUBROUTINE CableDyn_GetFluidNodePositions(handle, xyz_ptr, n_node, err_stat) &
+    BIND(C, NAME='CableDyn_GetFluidNodePositions')
+    !! The committed position of every fluid node (x, y, z triples, global axes): where the host
+    !! evaluates the field of the coming step.
+    TYPE(C_PTR), VALUE :: handle, xyz_ptr
+    INTEGER(C_INT), VALUE :: n_node
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    REAL(C_DOUBLE), POINTER :: xyz_c(:)
+    INTEGER :: es, n, p
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    IF (.NOT. host_fluid_call(handle, h, 'CableDyn_GetFluidNodePositions', n_node, n, err_stat)) RETURN
+    IF (n == 0) THEN
+      CALL store_status(h, CD_C_OK, '')
+      RETURN
+    END IF
+    IF (.NOT. C_ASSOCIATED(xyz_ptr)) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_GetFluidNodePositions: output pointer is null', err_stat)
+      RETURN
+    END IF
+    CALL ensure_c_fluid_workspace(h, n, err_stat)
+    IF (err_stat /= CD_C_OK) RETURN
+    CALL CD_AGG_GetFluidNodePositions(h%agg, h%fluid_velocity_work(:, 1:n), es, em)
+    CALL map_agg_status(es, err_stat)
+    CALL store_status(h, err_stat, em)
+    IF (err_stat /= CD_C_OK) RETURN
+    CALL C_F_POINTER(xyz_ptr, xyz_c, [3*n])
+    DO p = 1, n
+      xyz_c(3*p - 2:3*p) = REAL(h%fluid_velocity_work(:, p), C_DOUBLE)
+    END DO
+  END SUBROUTINE CableDyn_GetFluidNodePositions
+
+  SUBROUTINE CableDyn_UpdateFluidFields(handle, fluid_velocity_ptr, fluid_acceleration_ptr, waterline_z_ptr, &
+                                        dynamic_pressure_ptr, n_node, err_stat) &
+    BIND(C, NAME='CableDyn_UpdateFluidFields')
+    !! The ambient fluid at every fluid node (CableDyn_GetFluidNodePositions), held until the next
+    !! call: velocity and acceleration as x, y, z triples in global axes, the free-surface
+    !! elevation, and the wave dynamic pressure (may be NULL; rods use it for their end caps).
+    !! The first call, before the first step, is the field at t = 0 and sets the start
+    !! acceleration; later calls are the field of the coming step, the field at t + dt at the
+    !! step-start positions. The density is the deck's.
+    TYPE(C_PTR), VALUE :: handle, fluid_velocity_ptr, fluid_acceleration_ptr, waterline_z_ptr
+    TYPE(C_PTR), VALUE :: dynamic_pressure_ptr
+    INTEGER(C_INT), VALUE :: n_node
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    TYPE(CD_C_Handle), POINTER :: h
+    REAL(C_DOUBLE), POINTER :: velocity_c(:), acceleration_c(:), waterline_c(:), pressure_c(:)
+    INTEGER :: es, n, p
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    IF (.NOT. host_fluid_call(handle, h, 'CableDyn_UpdateFluidFields', n_node, n, err_stat)) RETURN
+    IF (n > 0 .AND. .NOT. (C_ASSOCIATED(fluid_velocity_ptr) .AND. C_ASSOCIATED(fluid_acceleration_ptr) .AND. &
+                           C_ASSOCIATED(waterline_z_ptr))) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdateFluidFields: input pointer is null', err_stat)
+      RETURN
+    END IF
+    CALL ensure_c_fluid_workspace(h, n, err_stat)
+    IF (err_stat /= CD_C_OK) RETURN
+    IF (n > 0) THEN
+      CALL C_F_POINTER(fluid_velocity_ptr, velocity_c, [3*n])
+      CALL C_F_POINTER(fluid_acceleration_ptr, acceleration_c, [3*n])
+      CALL C_F_POINTER(waterline_z_ptr, waterline_c, [n])
+      DO p = 1, n
+        h%fluid_velocity_work(:, p) = REAL(velocity_c(3*p - 2:3*p), wp)
+        h%fluid_acceleration_work(:, p) = REAL(acceleration_c(3*p - 2:3*p), wp)
+      END DO
+      h%waterline_work(1:n) = REAL(waterline_c, wp)
+    END IF
+    IF (n > 0 .AND. C_ASSOCIATED(dynamic_pressure_ptr)) THEN
+      CALL C_F_POINTER(dynamic_pressure_ptr, pressure_c, [n])
+      CALL CD_AGG_SetFluidFields(h%agg, h%fluid_velocity_work(:, 1:n), h%fluid_acceleration_work(:, 1:n), &
+                                 h%waterline_work(1:n), es, em, dynamic_pressure=REAL(pressure_c, wp), &
+                                 initial_condition=.NOT. h%fluid_ready)
+    ELSE
+      CALL CD_AGG_SetFluidFields(h%agg, h%fluid_velocity_work(:, 1:n), h%fluid_acceleration_work(:, 1:n), &
+                                 h%waterline_work(1:n), es, em, initial_condition=.NOT. h%fluid_ready)
+    END IF
+    CALL map_agg_status(es, err_stat)
+    CALL store_status(h, err_stat, em)
+    IF (err_stat == CD_C_OK) h%fluid_ready = .TRUE.
+  END SUBROUTINE CableDyn_UpdateFluidFields
+
+  LOGICAL FUNCTION host_fluid_call(handle, h, caller, n_node, n, err_stat) RESULT(ready)
+    !! Validate a host fluid call: an initialized model built for a host field, with n_node equal
+    !! to the fluid node count n.
+    TYPE(C_PTR), VALUE :: handle
+    TYPE(CD_C_Handle), POINTER, INTENT(OUT) :: h
+    CHARACTER(*), INTENT(IN) :: caller
+    INTEGER(C_INT), INTENT(IN) :: n_node
+    INTEGER, INTENT(OUT) :: n
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    INTEGER :: es
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    ready = .FALSE.
+    n = 0
+    IF (.NOT. query_ready(handle, h, caller, err_stat)) RETURN
+    IF (.NOT. h%agg_host_fluid) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, caller//': the model takes no host fluid field: call '// &
+                      'CableDyn_SetHostFluid before its deck initialization', err_stat)
+      RETURN
+    END IF
+    n = CD_AGG_NFluidNodes(h%agg, es, em)
+    IF (es /= CD_AGG_OK) THEN
+      CALL map_agg_status(es, err_stat)
+      CALL store_status(h, err_stat, em)
+      RETURN
+    END IF
+    IF (INT(n_node) /= n) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, caller//': node count does not match CableDyn_NFluidNodes', err_stat)
+      RETURN
+    END IF
+    ready = .TRUE.
+  END FUNCTION host_fluid_call
+
   SUBROUTINE CableDyn_Step(handle, dt, q_ptr, v_ptr, a_ptr, n_coupled_dof, converged, stalled, n_iter, err_stat) &
     BIND(C, NAME='CableDyn_Step')
     !! Advance one coupled time step.
@@ -1121,6 +1297,11 @@ CONTAINS
     CALL coupled_inputs(handle, q_ptr, v_ptr, a_ptr, n_coupled_dof, h, q_c, v_c, a_c, err_stat)
     IF (err_stat /= CD_C_OK) RETURN
     IF (h%use_agg) THEN
+      IF (h%agg_host_fluid .AND. .NOT. h%fluid_ready) THEN
+        CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_Step: the model takes a host fluid field: call '// &
+                        'CableDyn_UpdateFluidFields before the first step', err_stat)
+        RETURN
+      END IF
       IF (n_coupled_dof > 0_C_INT) THEN
         h%agg_pos = RESHAPE(REAL(q_c, wp), SHAPE(h%agg_pos))
         h%agg_vel = RESHAPE(REAL(v_c, wp), SHAPE(h%agg_vel))
@@ -1864,7 +2045,8 @@ CONTAINS
     !! Save the whole model into the handle's single save slot, replacing any earlier save:
     !! every line, point, body and rod state with its solver history (viscoelastic, Syrope and
     !! friction states, the last converged step), the point fluid fields, and on the aggregate
-    !! route the committed time and the host's rotations (CableDyn_UpdateRotations). The slot
+    !! route the committed time, the host's rotations (CableDyn_UpdateRotations) and the host's
+    !! fluid field (CableDyn_UpdateFluidFields). The slot
     !! holds a deep copy of the model object, independent of the step's own rollback buffers,
     !! so any number of steps may follow before the restore.
     !! A successful Init* call discards the slot; a failed InitDeck/InitDeckAt keeps it with the
@@ -1891,6 +2073,7 @@ CONTAINS
       END IF
       CALL copy_aggregate(h%agg, h%saved_agg)
       h%saved_agg_t = h%agg_t
+      h%saved_fluid_ready = h%fluid_ready
       ! the host's rotations are the inputs of the saved instant (CableDyn_UpdateRotations)
       IF (h%host_rot) THEN
         h%saved_dcm = h%agg_dcm
@@ -1922,6 +2105,7 @@ CONTAINS
     IF (h%use_agg) THEN
       CALL copy_aggregate(h%saved_agg, h%agg)
       h%agg_t = h%saved_agg_t
+      h%fluid_ready = h%saved_fluid_ready
       IF (h%host_rot) THEN
         h%agg_dcm = h%saved_dcm
         h%agg_om = h%saved_om

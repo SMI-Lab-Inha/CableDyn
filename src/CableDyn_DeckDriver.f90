@@ -7394,7 +7394,7 @@ CONTAINS
                                     ptfm_init, external_fluid, coupled_positions, &
                                     n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                     range_files, host_orientation, static_current, prescribed_motion, &
-                                    static_run, deck_current, deck_turbines)
+                                    static_run, deck_current, deck_turbines, static_deck_current)
     !! Parse a MIXED deck ONCE and partition its lines into {EI=0 mooring} and
     !! {finite-EI cable}, returning the raw parts the OpenFAST aggregate facade wraps:
     !! the EI=0 mooring SYSTEM built from the mooring subset (over ALL deck points, the
@@ -7495,6 +7495,11 @@ CONTAINS
     ! every node before each step (CD_Deck_Current_Sample_System/_Cables). A coupled host keeps
     ! supplying its own field and passes no deck_current.
     LOGICAL, INTENT(IN), OPTIONAL :: deck_current
+    ! static_deck_current (with external_fluid): the deck's steady current (a current OPTION, a
+    ! WaterKin CurrentMod 1 table or MoorDyn-C Currents 1) sets the static start only, as a
+    ! host's static_current does, and the dynamics take the host field alone. A library host
+    ! that evaluates its own field passes it; a current that varies in time is refused.
+    LOGICAL, INTENT(IN), OPTIONAL :: static_deck_current
 
     ! deck_turbines: the caller is the standalone driver, which runs a TURBINES deck by itself: the
     ! deck's TURBINES rows place every Turbine<J> point at ref_J + PtfmInit_J(p) as the parse of
@@ -7516,6 +7521,10 @@ CONTAINS
     TYPE(DeckOptions) :: opts
     ! opts plus the host's steady current (static_current): the options of the static builders
     TYPE(DeckOptions) :: opts_static
+    ! the deck's steady current of static_deck_current, kept for the static builders
+    LOGICAL :: keep_static_current, kept_has_current, kept_has_profile
+    REAL(wp) :: kept_velocity(3)
+    REAL(wp), ALLOCATABLE :: kept_profile_z(:), kept_profile_velocity(:, :)
     CHARACTER(NAMELEN), ALLOCATABLE :: channels(:)
     TYPE(CD_BathymetryType) :: bathymetry
     TYPE(DeckFailure), ALLOCATABLE :: fails(:)
@@ -7653,6 +7662,27 @@ CONTAINS
     END IF
     own_current = .FALSE.
     IF (PRESENT(deck_current)) own_current = deck_current
+    keep_static_current = .FALSE.
+    IF (PRESENT(static_deck_current)) keep_static_current = static_deck_current
+    keep_static_current = keep_static_current .AND. (opts%has_current .OR. opts%has_current_profile)
+    IF (keep_static_current) THEN
+      IF (opts%has_current_grid) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: the deck current varies in time, and a host '// &
+                  'fluid field replaces it in the dynamics: supply it through the host field and '// &
+                  'remove it from the deck'); RETURN
+      END IF
+      kept_has_current = opts%has_current
+      kept_has_profile = opts%has_current_profile
+      kept_velocity = opts%current_velocity
+      IF (ALLOCATED(opts%current_profile_z)) THEN
+        kept_profile_z = opts%current_profile_z
+        kept_profile_velocity = opts%current_profile_velocity
+      END IF
+      opts%has_current = .FALSE.
+      opts%has_current_profile = .FALSE.
+      opts%mdc_currents = 0
+      opts%waterkin_current_mode = -1
+    END IF
     IF (opts%mdc_wave_kin > 0 .AND. own_current) THEN
       CALL fail(ErrStat, ErrMsg, 'the MoorDyn-C WaveKin '//TRIM(int_to_str(opts%mdc_wave_kin))//' waves are '// &
                 'not supported for a standalone mixed EI=0/finite-EI deck (it takes a deck current but no '// &
@@ -7665,10 +7695,10 @@ CONTAINS
                 'aggregate route (coupled runs take water kinematics from the host)')
       RETURN
     END IF
-    ! The deck's own current (deck_current) is marched by the standalone driver over lines between
-    ! Fixed/Coupled/Vessel points held or moved by the deck's motion, from the deck pose: no host
-    ! field, placement or farm, and no body, rod or Connect/Free point (those decks run on the
-    ! standalone multibody or point-system march, which take the current themselves).
+    ! The deck's own current (deck_current) is marched by the standalone driver and the C API over
+    ! lines between Fixed/Coupled/Vessel points: no host field, platform placement or farm, and no
+    ! body, rod or Connect/Free point (those decks run on the standalone multibody or point-system
+    ! march, which take the current themselves).
     IF (own_current .AND. (opts%has_current .OR. opts%has_current_profile)) THEN
       IF (PRESENT(external_fluid)) THEN
         IF (external_fluid) THEN
@@ -7676,9 +7706,9 @@ CONTAINS
                     'host fluid field (external_fluid) would double-count the current'); RETURN
         END IF
       END IF
-      IF (nturb > 0 .OR. PRESENT(ptfm_init) .OR. PRESENT(coupled_positions) .OR. PRESENT(static_current)) THEN
-        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a deck-owned current (deck_current) is marched '// &
-                  'from the deck pose of a standalone deck (no host placement, farm or host current)'); RETURN
+      IF (nturb > 0 .OR. PRESENT(ptfm_init) .OR. PRESENT(static_current)) THEN
+        CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a deck-owned current (deck_current) takes no '// &
+                  'platform placement, farm or host current'); RETURN
       END IF
       IF (deck_has_dynamic_points(points) .OR. SIZE(bodies) > 0 .OR. SIZE(rods) > 0) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: a deck-owned current (deck_current) drives lines '// &
@@ -8054,6 +8084,15 @@ CONTAINS
     ! The static builders' options: the deck's, plus the host's steady current when the host
     ! current drives this deck (a WaterKin CurrentMod 1 file keeps its own profile instead).
     opts_static = opts
+    IF (keep_static_current) THEN
+      opts_static%has_current = kept_has_current
+      opts_static%has_current_profile = kept_has_profile
+      opts_static%current_velocity = kept_velocity
+      IF (ALLOCATED(kept_profile_z)) THEN
+        opts_static%current_profile_z = kept_profile_z
+        opts_static%current_profile_velocity = kept_profile_velocity
+      END IF
+    END IF
     IF (PRESENT(static_current)) THEN
       IF (.NOT. opts%external_fluid) THEN
         CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_Aggregate: static_current needs the host fluid field '// &

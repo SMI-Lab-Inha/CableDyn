@@ -28,9 +28,12 @@ acceleration enters the dynamic residual through the consistent mass.
 
 **Fluid fields in.**
 
-- Line nodes take their fluid kinematics from the deck environment (waves and current) in
-  standalone and C API use, and from the host field in OpenFAST, where SeaState is sampled at the
-  structural nodes and held over the step.
+- Line nodes take their fluid kinematics from the deck environment in standalone use (waves and
+  current) and in C API use (current), and from a host field in OpenFAST, where SeaState is sampled
+  at the structural nodes, and in C API use after `CableDyn_SetHostFluid`, where the host passes
+  velocity, acceleration and surface elevation at every node through
+  `CableDyn_UpdateFluidFields`. All routes sample the field of a step at `t + dt` at the
+  step-start node positions and hold it over the step.
 - Dynamic `Free`/`Connect` points with hydrodynamic properties accept an external point-level
   field through `CableDyn_UpdatePointFluidFields`: velocity and acceleration (3 × `n_point`),
   local surface elevation (`n_point`), and one fluid density. A point above its surface

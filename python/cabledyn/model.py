@@ -86,6 +86,21 @@ def _as_dof_array(x: ArrayInput, n: int, name: str) -> FloatArray:
     return arr
 
 
+def _as_field(x: ArrayInput, n: int, name: str) -> FloatArray:
+    """Return a per-node vector field as flat ``(3 n,)``; accepts ``(3, n)`` or flat."""
+    return _as_dof_array(x, 3 * n, name)
+
+
+def _as_node_values(x: ArrayInput, n: int, name: str) -> FloatArray:
+    """Return one finite value per node as a contiguous ``(n,)`` array."""
+    arr = _as_real_array(x, name)
+    if arr.ndim != 1 or arr.size != n:
+        raise ValueError(f"{name} must have {n} entries")
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{name} must be finite (no NaN or Inf)")
+    return np.ascontiguousarray(arr)
+
+
 def _dbl_ptr(arr: FloatArray) -> Any:
     return arr.ctypes.data_as(POINTER(c_double))
 
@@ -309,6 +324,15 @@ class CableDyn:
         self._time = 0.0
         self._saved_time = None
         self._deck = deck
+
+    @staticmethod
+    def _require_host_fluid() -> None:
+        if _lib_module.abi_minor() < _lib_module.HOST_FLUID_ABI_MINOR:
+            # not a C status: the loaded library lacks the entry points
+            raise RuntimeError(
+                "the loaded CableDyn library predates the host fluid calls "
+                "(ABI 1 minor extension 4); rebuild it from this checkout"
+            )
 
     @staticmethod
     def _require_host_rotation() -> None:
@@ -686,6 +710,83 @@ class CableDyn:
         layout = self.coupled_layout()
         blocks = [k for k, (_, kind) in enumerate(layout) if kind == "coupled"]
         return np.array([3 * k + c for k in blocks for c in range(3)], dtype=np.intp)
+
+    def set_host_fluid(self, enable: bool = True) -> None:
+        """Choose, before a deck initialization, whether the host supplies the fluid.
+
+        With ``enable`` the following :meth:`init_deck`, :meth:`init_deck_at` and
+        :meth:`init_deck_rotating` take the field of :meth:`update_fluid_fields`:
+        deck waves are refused, and a steady deck current sets the static start
+        only. The deck needs ``dtM`` and a seabed.
+        """
+        with self._lock:
+            self._require_host_fluid()
+            status = c_int()
+            _lib.CableDyn_SetHostFluid(self._handle, 1 if enable else 0, byref(status))
+            self._check("CableDyn_SetHostFluid", status.value)
+
+    @property
+    def n_fluid_nodes(self) -> int:
+        """Nodes of the host fluid field; zero without one."""
+        with self._lock:
+            self._require_host_fluid()
+            status = c_int()
+            n = _lib.CableDyn_NFluidNodes(self._handle, byref(status))
+            self._check("CableDyn_NFluidNodes", status.value)
+            return int(n)
+
+    def fluid_node_positions(self) -> FloatArray:
+        """Committed fluid node positions ``(3, n_fluid_nodes)``, global axes [m].
+
+        Where the host evaluates the field of the coming step.
+        """
+        with self._lock:
+            n = self.n_fluid_nodes
+            xyz = np.zeros(3 * n)
+            status = c_int()
+            _lib.CableDyn_GetFluidNodePositions(
+                self._handle, _dbl_ptr(xyz) if n else None, n, byref(status)
+            )
+            self._check("CableDyn_GetFluidNodePositions", status.value)
+            return xyz.reshape(n, 3).T.copy()
+
+    def update_fluid_fields(
+        self,
+        fluid_velocity: ArrayInput,
+        fluid_acceleration: ArrayInput,
+        waterline_z: ArrayInput,
+        dynamic_pressure: ArrayInput | None = None,
+    ) -> None:
+        """Prescribe the ambient fluid at every fluid node, held until the next call.
+
+        ``fluid_velocity`` and ``fluid_acceleration`` are ``(3, n_fluid_nodes)`` in
+        global axes, ``waterline_z`` the free-surface elevation ``(n_fluid_nodes,)``,
+        ``dynamic_pressure`` the wave pressure ``(n_fluid_nodes,)`` rods use for their
+        end caps. Call it once with the field at ``t = 0`` before the first step, then
+        before each step from ``t`` to ``t + dt`` with the field at ``t + dt`` at the
+        positions of :meth:`fluid_node_positions`. The density is the deck's.
+        """
+        with self._lock:
+            n = self.n_fluid_nodes
+            fv = _as_field(fluid_velocity, n, "fluid_velocity")
+            fa = _as_field(fluid_acceleration, n, "fluid_acceleration")
+            wl = _as_node_values(waterline_z, n, "waterline_z")
+            dp = (
+                None
+                if dynamic_pressure is None
+                else _as_node_values(dynamic_pressure, n, "dynamic_pressure")
+            )
+            status = c_int()
+            _lib.CableDyn_UpdateFluidFields(
+                self._handle,
+                _dbl_ptr(fv) if n else None,
+                _dbl_ptr(fa) if n else None,
+                _dbl_ptr(wl) if n else None,
+                _dbl_ptr(dp) if dp is not None and n else None,
+                n,
+                byref(status),
+            )
+            self._check("CableDyn_UpdateFluidFields", status.value)
 
     def update_point_fluid_fields(
         self,

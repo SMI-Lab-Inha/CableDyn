@@ -769,9 +769,34 @@ through the C API (:doc:`capi`).
 
 A deck with finite-EI lines, ``BODIES`` or ``RODS`` runs on the coupled aggregate and needs
 ``dtM``; other decks run on the point route. Decks with deck waves, a ``motionFile`` or vessel
-motion are rejected in-process (they run in the standalone driver): time-varying fluid
-kinematics enter through :meth:`~cabledyn.CableDyn.update_point_fluid_fields`, and motion through
-the coupled kinematics of every step.
+motion are rejected in-process (they run in the standalone driver): motion enters through the
+coupled kinematics of every step. A steady deck current is marched in-process, in the static
+start and in every step. Other moving water comes from the host, at the nodes of every line:
+
+.. code-block:: python
+
+   model = cabledyn.CableDyn()
+   model.set_host_fluid()                  # before the initialization
+   model.init_deck_rotating(deck)
+
+   def field(t):
+       xyz = model.fluid_node_positions()  # (3, n), the committed positions
+       velocity, acceleration, elevation = my_sea(xyz, t)
+       model.update_fluid_fields(velocity, acceleration, elevation)
+
+   field(0.0)                              # the start acceleration
+   for i in range(1, steps + 1):
+       t = i * dt
+       field(t)                            # held over the step
+       model.step(dt, q(t), v(t), a(t))
+
+``examples/python/step_in_moving_water.py`` is a complete script of this loop.
+
+``velocity`` is the whole ambient velocity, current and waves together. The field of a step to
+``t + dt`` is evaluated at ``t + dt`` at the step-start positions and held over the step, as in
+the standalone march and in OpenFAST; :meth:`~cabledyn.CableDyn.save_state` carries it. A steady
+deck current then sets the static start only; the rules are in :doc:`capi`. On a deck of the
+point route, :meth:`~cabledyn.CableDyn.update_point_fluid_fields` sets the field at the points.
 
 A host that moves the ``Coupled`` points from its own body solver starts the model at its
 positions and rewinds it between the passes of an iterated time step. The save is keyed on the

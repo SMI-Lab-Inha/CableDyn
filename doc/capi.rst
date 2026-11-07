@@ -29,11 +29,12 @@ A model lives behind an opaque handle. The lifecycle is:
 .. code-block:: text
 
    CableDyn_Create
+     -> [CableDyn_SetHostFluid]                                         (host fluid field)
      -> CableDyn_InitDeck | CableDyn_InitDeckAt | CableDyn_InitDeckRotating
         | CableDyn_InitLine | CableDyn_InitLines                      (initialize; may repeat)
      -> CableDyn_GetCoupledMotion                                     (read the initial state)
      -> loop:  [CableDyn_SaveState | CableDyn_RestoreState]           (host outer correctors)
-               [CableDyn_UpdatePointFluidFields]
+               [CableDyn_UpdatePointFluidFields | CableDyn_UpdateFluidFields]
                [CableDyn_UpdateRotations]                             (a host that turns)
                CableDyn_Step(dt, motion at t+dt)
                CableDyn_CalcOutput [, CableDyn_GetCoupledMoments]     (loads at t+dt)
@@ -61,6 +62,9 @@ MoorDyn's C API.
      - set the coupled-point motion without advancing time
    * - ``CableDyn_UpdatePointFluidFields``
      - set fluid kinematics at the deck points (point hydrodynamics)
+   * - ``CableDyn_SetHostFluid``, ``CableDyn_NFluidNodes``, ``CableDyn_GetFluidNodePositions``,
+       ``CableDyn_UpdateFluidFields``
+     - supply the ambient fluid at the nodes of every line (`Step 9: moving water`_)
    * - ``CableDyn_Step``
      - advance one implicit step to :math:`t+\Delta t`
    * - ``CableDyn_CalcOutput``
@@ -685,6 +689,58 @@ The rotations are inputs, like the motion: an end frame turned by more than a qu
 about its line since the last committed step is refused, and ``CableDyn_SaveState``/``CableDyn_RestoreState`` carry the
 last rotations with the model.
 
+Step 9: moving water
+~~~~~~~~~~~~~~~~~~~~
+
+A deck's steady current is marched as in the standalone driver: a ``current`` option, a WaterKin
+``CurrentMod 1`` depth table or a MoorDyn-C ``Currents 1`` profile acts in the static start and in
+every step, on lines between ``Fixed``, ``Coupled`` and ``Vessel`` points. Nothing else is needed.
+
+A host that evaluates the water itself, such as a wave field not known in advance, supplies it at
+the nodes:
+
+.. code-block:: c
+
+   CableDyn_SetHostFluid(h, 1, &err);                    /* before the initialization */
+   CableDyn_InitDeckRotating(h, deck, len, q0, n_q0, &err);
+   n = CableDyn_NFluidNodes(h, &err);
+
+   CableDyn_GetFluidNodePositions(h, xyz, n, &err);      /* the field at t = 0 */
+   CableDyn_UpdateFluidFields(h, vel, acc, eta, NULL, n, &err);
+   for (;;) {                                            /* a step from t to t + dt */
+       CableDyn_GetFluidNodePositions(h, xyz, n, &err);  /* the step-start positions */
+       /* evaluate vel, acc, eta at xyz at time t + dt */
+       CableDyn_UpdateFluidFields(h, vel, acc, eta, NULL, n, &err);
+       CableDyn_Step(h, dt, q, v, a, n_dof, &converged, &stalled, &n_iter, &err);
+   }
+
+The convention is that of the standalone march and of the OpenFAST module:
+
+* the field of a step from ``t`` to ``t + dt`` is sampled at ``t + dt`` at the step-start node
+  positions, and it is held unchanged over the step;
+* ``vel`` is the whole ambient velocity, current and waves together, ``acc`` the fluid
+  acceleration, both as ``x, y, z`` triples in global axes, and ``eta`` the free-surface elevation
+  above each node, which decides the wetting of its drag, added mass and buoyancy;
+* the first call, before the first step, is the field at ``t = 0`` and sets the start acceleration;
+  a step without any field is refused, because the march would otherwise run in still water;
+* ``dynamic_pressure`` may be ``NULL``; rods use it for their end caps;
+* the density is the deck's ``rhoW``;
+* the nodes are every node of every line, then the deck's bodies, rods and hydrodynamic points.
+  The field depends on position alone, so the host needs no node numbering;
+* ``CableDyn_SaveState`` and ``CableDyn_RestoreState`` carry the held field.
+
+With the host field, a deck runs on the coupled aggregate whatever its lines, needs ``dtM``, and
+needs a seabed if it has ``EI = 0`` lines. Deck waves are refused. A steady deck current sets the
+static start only, so the start is the equilibrium in that current, and the host's field is then
+the whole water of the march; a deck current that varies in time is refused.
+
+Seabed friction, ``staticsFriction asLaid`` and ``STIFFENERS`` work on this route.
+
+With a host field the deck is read by the coupled rules, as in OpenFAST: it needs no ``TMax``, and a
+``SEASTATE`` or ``WaveKinMod 2`` water policy takes the host's field. A deck current marched without
+one follows the standalone rules and declares ``TMax``. Neither limits the host, which owns the clock
+and may step past it.
+
 Call sequence
 ~~~~~~~~~~~~~
 
@@ -908,8 +964,10 @@ coupled aggregate as the OpenFAST module, with these differences from the point-
   the order of `Coupled DOF layout`_ (anchors are not part of the vector); the bodies and
   rods are integrated internally;
 * the deck must declare ``dtM``, and every ``CableDyn_Step`` must use that ``dt``;
-* the run is in still water: deck waves or currents are rejected, and
-  ``CableDyn_UpdatePointFluidFields`` and ``CableDyn_CalcOutputDerivatives`` return
+* a deck current is marched on lines between ``Fixed``, ``Coupled`` and ``Vessel`` points,
+  deck waves are rejected, and other moving water comes from the host (`Step 9: moving
+  water`_);
+* ``CableDyn_UpdatePointFluidFields`` and ``CableDyn_CalcOutputDerivatives`` return
   ``CD_C_BAD_INPUT``;
 * ``CableDyn_NPoints`` and ``CableDyn_NLines`` report the deck's point and line counts.
 
@@ -942,13 +1000,15 @@ The deck is validated under the standalone-deck rules:
    * - a ``CONTROL`` section (active line control)
      - the OpenFAST module
    * - ``WaveKinMod 2`` / ``SEASTATE`` wave kinematics
-     - the OpenFAST module
+     - the OpenFAST module; a host that calls ``CableDyn_SetHostFluid``
    * - a ``waves`` option (regular or JONSWAP deck waves)
      - the standalone driver; supply time-varying fluid kinematics through
-       ``CableDyn_UpdatePointFluidFields``
+       ``CableDyn_UpdateFluidFields`` (`Step 9: moving water`_), or at the points of a point
+       deck through ``CableDyn_UpdatePointFluidFields``
    * - a MoorDyn-C ``Currents 2``/``5`` table that varies in time
      - the standalone driver; supply time-varying fluid kinematics through
-       ``CableDyn_UpdatePointFluidFields``
+       ``CableDyn_UpdateFluidFields`` (`Step 9: moving water`_), or at the points of a point
+       deck through ``CableDyn_UpdatePointFluidFields``
    * - FAST.Farm ``Turbine<J>`` points
      - the OpenFAST module in FAST.Farm
    * - ``frictionMu`` in a deck that has ``Free`` or ``Connect`` points

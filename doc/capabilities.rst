@@ -222,7 +222,8 @@ node that takes the platform position only and returns a force with zero moment,
 rods turn about a fixed End A. A coupled deck (OpenFAST, the C API and Python) carries bodies or
 rods, not both, a rod fixed to a body counting as a rod; the standalone driver's multibody march
 takes both, as does MoorDyn (``CompMooring = 3``). The C API and Python
-run free, fixed and pinned rods and free bodies in still water. The coupled body/rod routes carry
+run free, fixed and pinned rods and free bodies in still water or in a field the host supplies
+at the nodes (:doc:`capi`). The coupled body/rod routes carry
 checkpoint state and SeaState drag, Froude–Krylov, and added mass.
 ``Rigid6`` also carries the documented hydrostatic restoring terms. Consult :doc:`driver_format`
 before using an imported object because unsupported fields fail closed.

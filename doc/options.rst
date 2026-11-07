@@ -743,7 +743,7 @@ Ambient fluid and prescribed motion
        filename; ``SEASTATE`` selects the host field. The other MoorDyn-C modes fail closed by
        name. Mode rules are in :ref:`moordyn-c-wavekin` and :ref:`waterkin-file-modes`
      - ``3``/``7`` and file ``WaveKinMod 1``: standalone decks only; ``SEASTATE``,
-       ``WaveKinMod 2``, and ``CurrentMod 2``: OpenFAST only
+       ``WaveKinMod 2``, and ``CurrentMod 2``: OpenFAST and C API hosts with a host fluid field
      - ``waterkin.dat WaterKin``
    * - ``dtWave``
      - positive number [s]
