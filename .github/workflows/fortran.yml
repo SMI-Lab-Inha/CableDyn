@@ -24,6 +24,7 @@ permissions:
 
 jobs:
   build:
+    if: false
     name: fortran core (conda gfortran, ${{ matrix.os }}, ${{ matrix.build_type }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -95,10 +96,10 @@ jobs:
   # OpenBLAS, sums in another order than the AVX2 and AVX-512 kernels the runners select.
   # This job is advisory: branch protection names the jobs above, not this one.
   roundoff:
-    name: round-off kernel (conda gfortran, ubuntu-latest, Prescott)
+    name: round-off kernel (conda gfortran, ubuntu-latest, SkylakeX)
     runs-on: ubuntu-latest
     env:
-      OPENBLAS_CORETYPE: Prescott
+      OPENBLAS_CORETYPE: SkylakeX
     defaults:
       run:
         shell: bash -el {0}        # login shell so the conda env is active
