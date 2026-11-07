@@ -1047,6 +1047,7 @@ CONTAINS
       p%dtCoupling  = REAL(DTcoupling, DbKi)
       p%PtfmInit    = REAL(ptfm6, ReKi)   ! the rebuild reapplies the displaced-start geometry
       p%Tmax        = InitInp%Tmax
+      p%Linearize   = InitInp%Linearize
       ! DTcoupling itself is deliberately left untouched (SubSteps = 1 in MV_AddModule).
       ! The module provides no visualization meshes: say so when the glue asks for them
       ! (WrVTK > 0) instead of leaving the mooring silently absent from the VTK output.
@@ -1704,6 +1705,16 @@ CONTAINS
       Inst(id)%range_on = CD_AGG_Range_Graphs( Inst(id)%agg )
       IF (Inst(id)%range_on) THEN
          CALL restore_range_state( Inst(id), other, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) THEN
+            CALL release_instance( id )
+            RETURN
+         END IF
+      END IF
+      ! A linearizing run keeps its state map: CalcSteady rewinds to the operating point through
+      ! this rebuild, and a restart may linearize later.
+      IF (p%Linearize) THEN
+         CALL lin_state_map( Inst(id), m, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) THEN
             CALL release_instance( id )

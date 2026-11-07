@@ -421,6 +421,7 @@ IMPLICIT NONE
     INTEGER(IntKi)  :: NConns = 0      !< number of Connect type Points - not to be confused with NPoints []
     INTEGER(IntKi)  :: NAnchs = 0      !< number of Anchor type Points []
     REAL(DbKi)  :: Tmax = 0.0_R8Ki      !< simulation duration [[s]]
+    LOGICAL  :: Linearize = .FALSE.      !< the run linearizes: a rebuilt instance needs the linearization state map [-]
     INTEGER(IntKi)  :: tScheme = 0      !< Time integration scheme (0 = RK2, 1 = RK4). Default is RK2 [-]
     REAL(DbKi)  :: g = 9.81      !< gravitational constant (positive) [[m/s^2]]
     REAL(DbKi)  :: rhoW = 1025      !< density of seawater [[kg/m^3]]
@@ -3133,6 +3134,7 @@ subroutine CD_CopyParam(SrcParamData, DstParamData, CtrlCode, ErrStat, ErrMsg)
    DstParamData%NConns = SrcParamData%NConns
    DstParamData%NAnchs = SrcParamData%NAnchs
    DstParamData%Tmax = SrcParamData%Tmax
+   DstParamData%Linearize = SrcParamData%Linearize
    DstParamData%tScheme = SrcParamData%tScheme
    DstParamData%g = SrcParamData%g
    DstParamData%rhoW = SrcParamData%rhoW
@@ -3502,6 +3504,7 @@ subroutine CD_PackParam(RF, Indata)
    call RegPack(RF, InData%NConns)
    call RegPack(RF, InData%NAnchs)
    call RegPack(RF, InData%Tmax)
+   call RegPack(RF, InData%Linearize)
    call RegPack(RF, InData%tScheme)
    call RegPack(RF, InData%g)
    call RegPack(RF, InData%rhoW)
@@ -3612,6 +3615,7 @@ subroutine CD_UnPackParam(RF, OutData)
    call RegUnpack(RF, OutData%NConns); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%NAnchs); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%Tmax); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpack(RF, OutData%Linearize); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%tScheme); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%g); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%rhoW); if (RegCheckErr(RF, RoutineName)) return

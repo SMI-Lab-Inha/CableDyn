@@ -385,6 +385,7 @@ typedef   ^       ^                    IntKi               nCpldPoints    {:}   
 typedef   ^       ^                    IntKi               NConns         -     0    -   "number of Connect type Points - not to be confused with NPoints"             ""
 typedef   ^       ^                    IntKi               NAnchs         -     0    -   "number of Anchor type Points"             ""
 typedef   ^       ^                    DbKi                Tmax           -     -    -   "simulation duration" "[s]"
+typedef   ^       ^                    LOGICAL             Linearize         -  .FALSE. -   "the run linearizes: a rebuilt instance needs the linearization state map" -
 typedef   ^       ^                    IntKi               tScheme        -     0    -   "Time integration scheme (0 = RK2, 1 = RK4). Default is RK2"    - 
 typedef   ^       ^                    DbKi                g              -  9.81    -   "gravitational constant (positive)"   "[m/s^2]"
 typedef   ^       ^                    DbKi                rhoW           -  1025    -   "density of seawater"              "[kg/m^3]"
