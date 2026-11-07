@@ -25,6 +25,9 @@ PROGRAM test_vessel_motion
   !!   7. Fail-closed option and file grammar.
   !!   8. Deck, vesselRAO in a spread sea: each spread component drives the vessel with its own
   !!      heading and phase; a nonlinear stream wave is rejected by name.
+  !!   9. Deck, vesselRAO in a WaveKin 7 sea of rows with different directions referred to a point
+  !!      (WaveRefX, WaveRefY): each row drives the vessel with its own heading, and its phase
+  !!      from the position of the vessel relative to that point.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Vessel, ONLY: CD_VesselRAOType, CD_Vessel_Euler_DCM, CD_Vessel_Euler_Angular, &
                              CD_Vessel_Point_Kinematics, CD_Vessel_RAO_Set, CD_Vessel_RAO_Eval, &
@@ -49,6 +52,7 @@ PROGRAM test_vessel_motion
   CALL case_deck_rao_regular()
   CALL case_deck_rao_irregular()
   CALL case_deck_rao_spread()
+  CALL case_deck_rao_wavekin7()
   CALL case_deck_rao_stream_rejected()
   CALL case_deck_rejections()
 
@@ -700,6 +704,67 @@ CONTAINS
     CALL require(dmax - dmin > 1.0_wp, 'rao spread: the sea is spread over headings')
     CALL require(err < 1.0e-5_wp, 'rao spread: every spread component drives the vessel with its own phase')
   END SUBROUTINE case_deck_rao_spread
+
+  SUBROUTINE case_deck_rao_wavekin7()
+    !! A heave-only RAO over the full circle of headings: the fairlead below the reference point
+    !! heaves with the elevation of the file's rows there.
+    INTEGER, PARAMETER :: NC = 3
+    REAL(wp), PARAMETER :: W(NC) = [0.6_wp, 0.75_wp, 0.9_wp], RE(NC) = [0.5_wp, -0.2_wp, 0.3_wp]
+    REAL(wp), PARAMETER :: IM(NC) = [0.1_wp, 0.4_wp, -0.25_wp], BETA(NC) = [0.65_wp, 2.9_wp, -2.2_wp]
+    REAL(wp), PARAMETER :: X0 = 31.5_wp, Y0 = -12.0_wp
+    CHARACTER(40) :: opts(9)
+    CHARACTER(512) :: msg
+    LOGICAL :: ok
+    REAL(wp), ALLOCATABLE :: d(:, :)
+    REAL(wp) :: kk(NC), t, eta, err, dist, r, rd, rdd
+    INTEGER :: nr, n, i, es, u
+    CHARACTER(200) :: em
+    OPEN (NEWUNIT=u, FILE='vm_wk7/vm_rao.txt', STATUS='REPLACE', ACTION='WRITE')
+    DO i = 1, 2
+      WRITE (u, '(A,F7.1)') 'HEADING ', MERGE(-180.0_wp, 179.0_wp, i == 1)
+      WRITE (u, '(A)') '0.5 0 0 0 0 1 0 0 0 0 0 0 0'
+      WRITE (u, '(A)') '100 0 0 0 0 1 0 0 0 0 0 0 0'
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE='vm_wk7/wave_frequencies.txt', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') '0.0 0.0 0.0 0.0'
+    DO i = 1, NC
+      WRITE (u, '(4ES24.16)') W(i), RE(i), IM(i), BETA(i)
+    END DO
+    CLOSE (u)
+    opts(1) = '0.05 dtM'
+    opts(2) = '20.0 TMax'
+    opts(3) = '60.0 WtrDpth'
+    opts(4) = '7 WaveKin'
+    opts(5) = 'vm_rao.txt vesselRAO'
+    opts(6) = '90.0|0.0|0.0 vesselRef'
+    opts(7) = '31.5 WaveRefX'
+    opts(8) = '-12.0 WaveRefY'
+    opts(9) = '6.0 rampTime'
+    CALL write_deck('vm_wk7/vm_wk7.dat', opts)
+    CALL run('vm_wk7/vm_wk7.dat', 'vm_wk7/out', ok, msg)
+    CALL require(ok, 'rao WaveKin 7: deck runs: '//TRIM(msg))
+    CALL read_out('vm_wk7/out.out', d, nr, 10)
+    CALL require(nr == 401, 'rao WaveKin 7: full record written')
+    IF (nr /= 401) RETURN
+    DO i = 1, NC
+      CALL CD_Solve_Dispersion_Wavenumber(W(i), 60.0_wp, 9.80665_wp, kk(i), es, em)
+      CALL require(es == 0, 'rao WaveKin 7: dispersion solve: '//TRIM(em))
+    END DO
+    err = 0.0_wp
+    DO n = 1, nr
+      t = d(1, n)
+      CALL CD_Vessel_Ramp(6.0_wp, t, r, rd, rdd)
+      eta = 0.0_wp
+      DO i = 1, NC
+        dist = (90.0_wp - X0)*COS(BETA(i)) + (0.0_wp - Y0)*SIN(BETA(i))
+        eta = eta + SQRT(RE(i)**2 + IM(i)**2)*SIN(W(i)*t - kk(i)*dist + ATAN2(IM(i), RE(i)))
+      END DO
+      err = MAX(err, ABS(d(7, n) - (-14.0_wp + r*eta)))
+    END DO
+    WRITE (*, '(A,ES12.4)') '  rao WaveKin 7: max fairlead heave error [m] = ', err
+    CALL require(err < 1.0e-5_wp, 'rao WaveKin 7: each row drives the vessel with its own heading and phase')
+  END SUBROUTINE case_deck_rao_wavekin7
 
   SUBROUTINE case_deck_rao_stream_rejected()
     CHARACTER(40) :: opts(6)

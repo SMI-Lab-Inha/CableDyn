@@ -13,7 +13,11 @@ PROGRAM test_wave_component_sum
   !!      sum of squares: they are independent) and, for the stretched depth, of the elevation;
   !!   2. the sum is a function of its arguments alone: the same call after others gives the same
   !!      bits, and so do the tables in any thread count (the sums keep a fixed order);
-  !!   3. amplitude_scale equals a scaled table to round-off.
+  !!   3. amplitude_scale equals a scaled table to round-off;
+  !!   4. a short-crested table (a direction per component) equals the two long-crested tables it
+  !!      is made of to round-off, for directions in every quadrant, one direction everywhere
+  !!      equals the long-crested sum, and the stretched sum equals the unstretched one at the
+  !!      stretched depth; half a table of cosines fails closed.
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Hydro, ONLY: CD_Component_Wave_Kinematics, CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
@@ -45,6 +49,7 @@ PROGRAM test_wave_component_sum
   END DO
   WRITE (*, '(A,F6.3)') '    largest error over its round-off bound: ', worst
   CALL check_pure()
+  CALL check_short_crested()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -262,6 +267,85 @@ CONTAINS
     CALL require(ABS(eta - eta_s) <= tol .AND. MAXVAL(ABS(u - u_s)) <= tol .AND. MAXVAL(ABS(a - a_s)) <= tol, &
                  'amplitude_scale equals a scaled table to round-off')
   END SUBROUTINE check_pure
+
+  SUBROUTINE check_short_crested()
+    !! A table past the phase buffer in which every other component goes in direction a or b.
+    INTEGER, PARAMETER :: N = 4200, NH = N/2, NPAIR = 5
+    REAL(wp), PARAMETER :: PAIRS(2, NPAIR) = RESHAPE([0.0_wp, 90.0_wp, 37.5_wp, 127.0_wp, 200.0_wp, 311.3_wp, &
+                                                      -45.0_wp, 233.3_wp, 180.0_wp, 271.0_wp], [2, NPAIR])
+    REAL(wp), PARAMETER :: X = 41.0_wp, Y = -17.5_wp, T = 1234.5_wp, D = 60.0_wp
+    REAL(wp) :: om(N), k(N), amp(N), ph(N), e2kd(N), tail(3, N), cb(N), sb(N), half(4, NH, 2)
+    REAL(wp) :: e0, u0(3), a0(3), p0, e1, u1(3), a1(3), p1, e2, u2(3), a2(3), p2, tol, ze
+    REAL(wp), PARAMETER :: ZS(3) = [-0.8_wp, -7.0_wp, -33.0_wp]
+    INTEGER :: ip, iz, es
+    CHARACTER(200) :: em
+
+    CALL make_table(N, D, 4.0_wp, om, k, amp, ph, e2kd, tail)
+    tol = 32.0_wp*EPSILON(1.0_wp)*SUM(amp*MAX(1.0_wp, om*om, om*om/k))
+    DO iz = 1, 2
+      half(1, :, iz) = om(iz:N:2)
+      half(2, :, iz) = k(iz:N:2)
+      half(3, :, iz) = amp(iz:N:2)
+      half(4, :, iz) = ph(iz:N:2)
+    END DO
+    DO ip = 1, NPAIR
+      cb(1:N:2) = COS(PAIRS(1, ip)*PI/180.0_wp)
+      sb(1:N:2) = SIN(PAIRS(1, ip)*PI/180.0_wp)
+      cb(2:N:2) = COS(PAIRS(2, ip)*PI/180.0_wp)
+      sb(2:N:2) = SIN(PAIRS(2, ip)*PI/180.0_wp)
+      DO iz = 1, SIZE(ZS)
+        CALL CD_Component_Wave_Kinematics(X, Y, ZS(iz), T, D, 0.0_wp, .FALSE., om, k, amp, ph, e0, u0, a0, es, em, &
+                                          pdyn=p0, exp_m2kd=e2kd, tail_sums=tail, comp_cos=cb, comp_sin=sb)
+        CALL require(es == CD_HYDRO_OK, 'short-crested sum: '//TRIM(em))
+        CALL long_crested(X, Y, ZS(iz), T, D, PAIRS(1, ip), half(:, :, 1), e1, u1, a1, p1, es, em)
+        CALL require(es == CD_HYDRO_OK, 'first long-crested half: '//TRIM(em))
+        CALL long_crested(X, Y, ZS(iz), T, D, PAIRS(2, ip), half(:, :, 2), e2, u2, a2, p2, es, em)
+        CALL require(es == CD_HYDRO_OK, 'second long-crested half: '//TRIM(em))
+        CALL require(ABS(e0 - e1 - e2) <= tol .AND. MAXVAL(ABS(u0 - u1 - u2)) <= tol .AND. &
+                     MAXVAL(ABS(a0 - a1 - a2)) <= tol .AND. ABS(p0 - p1 - p2) <= tol, &
+                     'a short-crested table is the sum of its long-crested halves')
+        ! stretched: the sum at the stretched depth of the one total elevation
+        CALL CD_Component_Wave_Kinematics(X, Y, ZS(iz), T, D, 0.0_wp, .TRUE., om, k, amp, ph, e1, u1, a1, es, em, &
+                                          exp_m2kd=e2kd, tail_sums=tail, comp_cos=cb, comp_sin=sb)
+        CALL require(es == CD_HYDRO_OK, 'stretched short-crested sum: '//TRIM(em))
+        IF (ZS(iz) > e1) CYCLE   ! above this trough the point is dry
+        ze = (ZS(iz) - e1)*D/(D + e1)
+        CALL CD_Component_Wave_Kinematics(X, Y, ze, T, D, 0.0_wp, .FALSE., om, k, amp, ph, e2, u2, a2, es, em, &
+                                          exp_m2kd=e2kd, comp_cos=cb, comp_sin=sb)
+        CALL require(es == CD_HYDRO_OK, 'at the stretched depth: '//TRIM(em))
+        CALL require(MAXVAL(ABS(u1 - u2)) <= tol .AND. MAXVAL(ABS(a1 - a2)) <= tol, &
+                     'stretched short-crested sum at the depth of the total elevation')
+      END DO
+      ! one direction everywhere
+      cb = COS(PAIRS(2, ip)*PI/180.0_wp)
+      sb = SIN(PAIRS(2, ip)*PI/180.0_wp)
+      CALL CD_Component_Wave_Kinematics(X, Y, -4.0_wp, T, D, 0.0_wp, .TRUE., om, k, amp, ph, e1, u1, a1, es, em, &
+                                        comp_cos=cb, comp_sin=sb)
+      CALL CD_Component_Wave_Kinematics(X, Y, -4.0_wp, T, D, PAIRS(2, ip), .TRUE., om, k, amp, ph, e2, u2, a2, es, em)
+      CALL require(ABS(e1 - e2) <= tol .AND. MAXVAL(ABS(u1 - u2)) <= tol .AND. MAXVAL(ABS(a1 - a2)) <= tol, &
+                   'one direction per component equals the long-crested sum')
+    END DO
+    CALL CD_Component_Wave_Kinematics(X, Y, -4.0_wp, T, D, 0.0_wp, .TRUE., om, k, amp, ph, e1, u1, a1, es, em, &
+                                      comp_cos=cb)
+    CALL require(es /= CD_HYDRO_OK, 'comp_cos without comp_sin fails closed')
+    CALL CD_Component_Wave_Kinematics(X, Y, -4.0_wp, T, D, 0.0_wp, .TRUE., om, k, amp, ph, e1, u1, a1, es, em, &
+                                      comp_cos=cb(1:NH), comp_sin=sb(1:NH))
+    CALL require(es /= CD_HYDRO_OK, 'direction tables of the wrong length fail closed')
+  END SUBROUTINE check_short_crested
+
+  SUBROUTINE long_crested(x, y, z, t, depth, direction, table, eta, u, a, p, es, em)
+    !! The unstretched sum of the table rows omega, k, amplitude and phase along one direction.
+    REAL(wp), INTENT(IN) :: x, y, z, t, depth, direction, table(:, :)
+    REAL(wp), INTENT(OUT) :: eta, u(3), a(3), p
+    INTEGER, INTENT(OUT) :: es
+    CHARACTER(*), INTENT(OUT) :: em
+    REAL(wp) :: om(SIZE(table, 2)), k(SIZE(table, 2)), amp(SIZE(table, 2)), ph(SIZE(table, 2))
+    om = table(1, :)
+    k = table(2, :)
+    amp = table(3, :)
+    ph = table(4, :)
+    CALL CD_Component_Wave_Kinematics(x, y, z, t, depth, direction, .FALSE., om, k, amp, ph, eta, u, a, es, em, pdyn=p)
+  END SUBROUTINE long_crested
 
   SUBROUTINE sample(p, t, om, k, amp, ph, e2kd, tail, out)
     REAL(wp), INTENT(IN) :: p(3), t, om(:), k(:), amp(:), ph(:), e2kd(:), tail(:, :)

@@ -2239,7 +2239,7 @@ CONTAINS
   SUBROUTINE CD_Component_Wave_Kinematics(x, y, z, t, depth, direction_deg, stretch, &
                                           omega_comp, k_comp, amplitude, phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated, &
-                                          amplitude_scale, pdyn, exp_m2kd, tail_sums)
+                                          amplitude_scale, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
     !! Evaluate linear irregular-wave kinematics from a CALLER-SUPPLIED component table:
     !! the general (arbitrary length, explicit per-component phase) form of the fixed-size
     !! deterministic-phase JONSWAP evaluator above, sharing its conventions exactly --
@@ -2275,6 +2275,9 @@ CONTAINS
     !! once that bound is below half an ulp of the magnitude already summed: a deep point drops
     !! the short components that have decayed to nothing there, and the result changes at
     !! round-off only. The elevation always sums every component.
+    !! comp_cos and comp_sin, given together, hold the cosine and sine of each component's own
+    !! direction, in place of the one direction_deg of a long-crested table: a short-crested
+    !! table. The bound of tail_sums holds for any direction, since it bounds the magnitude.
     REAL(wp), INTENT(IN) :: x, y, z, t, depth, direction_deg
     LOGICAL, INTENT(IN) :: stretch
     REAL(wp), INTENT(IN) :: omega_comp(:), k_comp(:), amplitude(:), phase(:)
@@ -2286,7 +2289,7 @@ CONTAINS
     ! the linear dynamic pressure per unit density (sum over the components of
     ! (omega^2/k) a cosh(k(z+h))/sinh(kh) cos(theta)), as in CD_Airy_Wave_Kinematics_Precomputed
     REAL(wp), INTENT(OUT), OPTIONAL :: pdyn
-    REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(:), tail_sums(:, :)
+    REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(:), tail_sums(:, :), comp_cos(:), comp_sin(:)
     INTEGER :: n
     REAL(wp) :: cb, sb, scl
     LOGICAL :: trust_inputs
@@ -2314,6 +2317,22 @@ CONTAINS
       IF (SIZE(tail_sums, 1) /= 3 .OR. SIZE(tail_sums, 2) /= n) THEN
         CALL fail(ErrStat, ErrMsg, 'tail_sums must be shaped (3, n) for the component-wave arrays')
         RETURN
+      END IF
+    END IF
+    IF (PRESENT(comp_cos) .NEQV. PRESENT(comp_sin)) THEN
+      CALL fail(ErrStat, ErrMsg, 'comp_cos and comp_sin must be given together')
+      RETURN
+    END IF
+    IF (PRESENT(comp_cos)) THEN
+      IF (SIZE(comp_cos) /= n .OR. SIZE(comp_sin) /= n) THEN
+        CALL fail(ErrStat, ErrMsg, 'comp_cos and comp_sin must match the component-wave arrays')
+        RETURN
+      END IF
+      IF (.NOT. trust_inputs) THEN
+        IF (.NOT. (CD_All_Finite(comp_cos) .AND. CD_All_Finite(comp_sin))) THEN
+          CALL fail(ErrStat, ErrMsg, 'comp_cos and comp_sin must be finite')
+          RETURN
+        END IF
       END IF
     END IF
     ! Fortran does not require short-circuit evaluation: keep the O(n) scans inside a
@@ -2345,7 +2364,7 @@ CONTAINS
     ! a unit scale is exact, so the unscaled table is reproduced bit for bit
     scl = CD_ONE
     IF (PRESENT(amplitude_scale)) scl = amplitude_scale
-    IF (n == 1 .AND. ABS(phase(1)) <= CD_ZERO .AND. scl*amplitude(1) > CD_ZERO) THEN
+    IF (n == 1 .AND. ABS(phase(1)) <= CD_ZERO .AND. scl*amplitude(1) > CD_ZERO .AND. .NOT. PRESENT(comp_cos)) THEN
       CALL CD_Airy_Wave_Kinematics_Precomputed(x, y, z, t, 2.0_wp*(scl*amplitude(1)), omega_comp(1), k_comp(1), &
                                                depth, direction_deg, stretch, eta, velocity, acceleration, &
                                                ErrStat, ErrMsg, pdyn)
@@ -2353,25 +2372,28 @@ CONTAINS
     END IF
     cb = COS(direction_deg*DEG2RAD)
     sb = SIN(direction_deg*DEG2RAD)
-    CALL component_sums(n, x*cb + y*sb, z, t, depth, stretch, scl, cb, sb, omega_comp, k_comp, amplitude, phase, eta, &
-                        velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums)
+    CALL component_sums(n, x, y, z, t, depth, stretch, scl, cb, sb, omega_comp, k_comp, amplitude, phase, eta, &
+                        velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
   END SUBROUTINE CD_Component_Wave_Kinematics
 
-  SUBROUTINE component_sums(n, x_along, z, t, depth, stretch, scl, cb, sb, omega_comp, k_comp, amplitude, phase, eta, &
-                            velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums)
+  SUBROUTINE component_sums(n, x, y, z, t, depth, stretch, scl, cb, sb, omega_comp, k_comp, amplitude, phase, eta, &
+                            velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
     !! The sums of CD_Component_Wave_Kinematics, on explicit-shape tables: their blocks pass to
-    !! the block kernels without a copy, and the loops run at unit stride.
+    !! the block kernels without a copy, and the loops run at unit stride. A long-crested table
+    !! forms each phase from the one distance along its direction and sums the horizontal
+    !! velocity and acceleration once, for cb and sb to multiply; a short-crested one (comp_cos,
+    !! comp_sin) forms each phase from the component's own direction and sums x and y apart.
     INTEGER, INTENT(IN) :: n
-    REAL(wp), INTENT(IN) :: x_along, z, t, depth, scl, cb, sb
+    REAL(wp), INTENT(IN) :: x, y, z, t, depth, scl, cb, sb
     LOGICAL, INTENT(IN) :: stretch
     REAL(wp), INTENT(IN) :: omega_comp(n), k_comp(n), amplitude(n), phase(n)
     REAL(wp), INTENT(INOUT) :: eta, velocity(3), acceleration(3)
     INTEGER, INTENT(INOUT) :: ErrStat
     CHARACTER(*), INTENT(INOUT) :: ErrMsg
     REAL(wp), INTENT(INOUT), OPTIONAL :: pdyn
-    REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(n), tail_sums(3, n)
+    REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(n), tail_sums(3, n), comp_cos(n), comp_sin(n)
     INTEGER :: nb, n_small, i0, i1, j, nk, m, lanes
-    REAL(wp) :: z_eval
+    REAL(wp) :: z_eval, x_along
     ! the velocity sums run in blocks of NLANE and the elevation in chunks of NCHUNK (NBUF a
     ! multiple of NCHUNK and NCHUNK of NLANE, so a block lies wholly inside or past the buffer)
     INTEGER, PARAMETER :: NBUF = 4096, NCHUNK = 512
@@ -2379,10 +2401,12 @@ CONTAINS
     REAL(wp) :: denom, e2, first_ratio
     REAL(wp) :: cth(NBUF), sth(NBUF), th(NCHUNK), bc(NCHUNK), bs(NCHUNK), ch(NLANE), sh(NLANE), e_bed(NLANE)
     REAL(wp) :: lane_eta(NLANE), lane_vc(NLANE), lane_vs(NLANE), lane_as(NLANE), lane_ac(NLANE)
-    REAL(wp) :: lane_p(NLANE), lane_m(NLANE, 3), sum_vc, sum_vs, sum_as, sum_ac
+    REAL(wp) :: lane_p(NLANE), lane_m(NLANE, 3), lane_vy(NLANE), lane_ay(NLANE), sum_vc, sum_vs, sum_as, sum_ac
     REAL(wp) :: mag(3), rest(3)
-    LOGICAL :: at_bed, use_tail, want_p
+    LOGICAL :: at_bed, use_tail, want_p, spread
 
+    spread = PRESENT(comp_cos)
+    x_along = x*cb + y*sb
     nb = MIN(n, NBUF)
     lanes = MIN(n, NLANE)
     ! the elevation sums every component (Wheeler stretching needs the total eta); the phase
@@ -2391,9 +2415,15 @@ CONTAINS
     DO i0 = 1, n, NCHUNK
       nk = MIN(n - i0 + 1, NCHUNK)
       i1 = i0 + nk - 1
-      DO j = 1, nk
-        th(j) = k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1)
-      END DO
+      IF (spread) THEN
+        DO j = i0, i1
+          th(j - i0 + 1) = k_comp(j)*(x*comp_cos(j) + y*comp_sin(j)) - omega_comp(j)*t + phase(j)
+        END DO
+      ELSE
+        DO j = 1, nk
+          th(j) = k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1)
+        END DO
+      END IF
       IF (i0 <= nb) THEN
         CALL CD_Wave_SinCos(nk, th, sth(i0), cth(i0))
         CALL add_elevation_lanes(nk, amplitude(i0:i1), cth(i0), lane_eta)
@@ -2429,6 +2459,10 @@ CONTAINS
     lane_ac(1:lanes) = CD_ZERO
     lane_p(1:lanes) = CD_ZERO
     lane_m(1:lanes, :) = CD_ZERO
+    IF (spread) THEN
+      lane_vy(1:lanes) = CD_ZERO
+      lane_ay(1:lanes) = CD_ZERO
+    END IF
     first_ratio = CD_ZERO
     DO i0 = 1, n, NLANE
       nk = MIN(n - i0 + 1, NLANE)
@@ -2479,20 +2513,42 @@ CONTAINS
           END DO
         END IF
       END IF
-      IF (i0 <= nb) THEN
+      IF (i0 > nb) THEN
+        IF (spread) THEN
+          DO j = i0, i1
+            th(j - i0 + 1) = k_comp(j)*(x*comp_cos(j) + y*comp_sin(j)) - omega_comp(j)*t + phase(j)
+          END DO
+        ELSE
+          DO j = 1, nk
+            th(j) = k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1)
+          END DO
+        END IF
+        CALL CD_Wave_SinCos(nk, th, bs, bc)
+      END IF
+      IF (spread) THEN
+        IF (i0 <= nb) THEN
+          CALL add_spread_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), comp_cos(i0:i1), comp_sin(i0:i1), ch, sh, &
+                                cth(i0), sth(i0), lane_vc, lane_vy, lane_vs, lane_as, lane_ay, lane_ac, lane_m(1, 1), &
+                                lane_m(1, 2))
+        ELSE
+          CALL add_spread_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), comp_cos(i0:i1), comp_sin(i0:i1), ch, sh, &
+                                bc, bs, lane_vc, lane_vy, lane_vs, lane_as, lane_ay, lane_ac, lane_m(1, 1), &
+                                lane_m(1, 2))
+        END IF
+      ELSE IF (i0 <= nb) THEN
         CALL add_velocity_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), ch, sh, cth(i0), sth(i0), lane_vc, &
                                 lane_vs, lane_as, lane_ac, lane_m(1, 1), lane_m(1, 2))
-        IF (want_p) CALL add_pressure_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), k_comp(i0:i1), ch, cth(i0), &
-                                            lane_p, lane_m(1, 3))
       ELSE
-        DO j = 1, nk
-          th(j) = k_comp(i0 + j - 1)*x_along - omega_comp(i0 + j - 1)*t + phase(i0 + j - 1)
-        END DO
-        CALL CD_Wave_SinCos(nk, th, bs, bc)
         CALL add_velocity_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), ch, sh, bc, bs, lane_vc, lane_vs, lane_as, &
                                 lane_ac, lane_m(1, 1), lane_m(1, 2))
-        IF (want_p) CALL add_pressure_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), k_comp(i0:i1), ch, bc, lane_p, &
-                                            lane_m(1, 3))
+      END IF
+      IF (want_p) THEN
+        IF (i0 <= nb) THEN
+          CALL add_pressure_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), k_comp(i0:i1), ch, cth(i0), lane_p, &
+                                  lane_m(1, 3))
+        ELSE
+          CALL add_pressure_lanes(nk, amplitude(i0:i1), omega_comp(i0:i1), k_comp(i0:i1), ch, bc, lane_p, lane_m(1, 3))
+        END IF
       END IF
       IF (i0 == 1) first_ratio = ch(1)
       IF (use_tail) THEN
@@ -2515,8 +2571,13 @@ CONTAINS
     sum_vs = scl*CD_Wave_Sum_Lanes(lane_vs, lanes)
     sum_as = scl*CD_Wave_Sum_Lanes(lane_as, lanes)
     sum_ac = scl*CD_Wave_Sum_Lanes(lane_ac, lanes)
-    velocity = [sum_vc*cb, sum_vc*sb, sum_vs]
-    acceleration = [sum_as*cb, sum_as*sb, -sum_ac]
+    IF (spread) THEN
+      velocity = [sum_vc, scl*CD_Wave_Sum_Lanes(lane_vy, lanes), sum_vs]
+      acceleration = [sum_as, scl*CD_Wave_Sum_Lanes(lane_ay, lanes), -sum_ac]
+    ELSE
+      velocity = [sum_vc*cb, sum_vc*sb, sum_vs]
+      acceleration = [sum_as*cb, sum_as*sb, -sum_ac]
+    END IF
     IF (want_p) pdyn = scl*CD_Wave_Sum_Lanes(lane_p, lanes)
   END SUBROUTINE component_sums
 
@@ -2556,6 +2617,34 @@ CONTAINS
       lane_ma(j) = lane_ma(j) + ga
     END DO
   END SUBROUTINE add_velocity_lanes
+
+  PURE SUBROUTINE add_spread_lanes(n, amplitude, omega, cosb, sinb, ch, sh, c, s, lane_vx, lane_vy, lane_vs, lane_ax, &
+                                   lane_ay, lane_ac, lane_mv, lane_ma)
+    !! add_velocity_lanes for components each with its own direction: the horizontal sums go to
+    !! x and y apart.
+    INTEGER, INTENT(IN) :: n
+    REAL(wp), INTENT(IN) :: amplitude(n), omega(n), cosb(n), sinb(n), ch(n), sh(n), c(n), s(n)
+    REAL(wp), INTENT(INOUT) :: lane_vx(n), lane_vy(n), lane_vs(n), lane_ax(n), lane_ay(n), lane_ac(n), lane_mv(n), &
+                               lane_ma(n)
+    INTEGER :: j
+    REAL(wp) :: wv, wa, gv, ga, uh
+    DO j = 1, n
+      wv = amplitude(j)*omega(j)
+      wa = wv*omega(j)
+      gv = wv*ch(j)
+      ga = wa*ch(j)
+      uh = gv*c(j)
+      lane_vx(j) = lane_vx(j) + uh*cosb(j)
+      lane_vy(j) = lane_vy(j) + uh*sinb(j)
+      lane_vs(j) = lane_vs(j) + (wv*sh(j))*s(j)
+      uh = ga*s(j)
+      lane_ax(j) = lane_ax(j) + uh*cosb(j)
+      lane_ay(j) = lane_ay(j) + uh*sinb(j)
+      lane_ac(j) = lane_ac(j) + (wa*sh(j))*c(j)
+      lane_mv(j) = lane_mv(j) + gv
+      lane_ma(j) = lane_ma(j) + ga
+    END DO
+  END SUBROUTINE add_spread_lanes
 
   PURE SUBROUTINE add_pressure_lanes(n, amplitude, omega, k, ch, c, lane_p, lane_mp)
     !! One block (n <= NLANE) of the pressure sum of CD_Component_Wave_Kinematics.

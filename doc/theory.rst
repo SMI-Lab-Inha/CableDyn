@@ -1172,6 +1172,19 @@ commensurate, the record does not repeat (an equally spaced comb would repeat af
 its component table (amplitude, frequency, phase), for example a WaterKin ``WaveKinMod`` 1
 elevation history, which is reduced once to its Fourier components on the run time base.
 
+The phase of a component of an elevation history or a ``WaveKin 7`` table is
+
+.. math::
+
+   \theta_i = k_i\big[(x - x_r)\cos\beta_i + (y - y_r)\sin\beta_i\big] - \omega_i t + \phi_i,
+
+with :math:`(x_r, y_r)` the ``WaveRefX``, ``WaveRefY`` point where the record was measured, the
+origin by default. The sea of a record referred to a point is therefore the same sea with the
+deck translated, and a vessel RAO takes the vessel's position relative to that point. A history
+has one direction :math:`\beta_i = \beta`. The rows of a ``WaveKin 7`` table may each have
+their own: a short-crested sea, whose elevation and kinematics are the sums of those of its
+directions, stretched by the one total elevation.
+
 Every point sums every component of the elevation. The sums run in interleaved partial sums
 added up in a fixed order, so a result does not depend on the vector width or the thread
 count, and each point is a function of its position and time alone: nothing carries from one

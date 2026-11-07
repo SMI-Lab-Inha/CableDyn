@@ -233,7 +233,9 @@ CONTAINS
   PURE SUBROUTINE CD_Spreading_Weights(s, n, offset, weight)
     !! Discretise D(theta) = K(s) cos^2s(theta) on [-pi/2, pi/2] into n equal-angle bins:
     !! offset(j) [rad] is the bin centre and weight(j) the bin integral of D (composite
-    !! Simpson quadrature, 128 intervals per bin), normalised to sum 1.
+    !! Simpson quadrature, 128 intervals per bin), normalised to sum 1. A bin below the smallest
+    !! normal number holds no energy: its weight is exactly zero, so which bins carry the sea
+    !! depends on s and n alone, not on where the spectrum's product with it underflows.
     REAL(wp), INTENT(IN) :: s
     INTEGER, INTENT(IN) :: n
     REAL(wp), INTENT(OUT) :: offset(n), weight(n)
@@ -263,6 +265,7 @@ CONTAINS
     END DO
     total = SUM(weight)
     IF (total > CD_ZERO) weight = weight/total
+    WHERE (weight < TINY(CD_ONE)) weight = CD_ZERO
   END SUBROUTINE CD_Spreading_Weights
 
   SUBROUTINE CD_Sea_Reset(sea)
