@@ -18,11 +18,111 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `n_fluid_nodes`, `fluid_node_positions` and `update_fluid_fields`. The field is sampled and held
   as in the standalone march and in OpenFAST; in current and waves a stepped cable matches the
   standalone driver to the digits of its output.
+- `Line.section_curvature()` and the C API quantity `CD_C_LINE_SECTION_CURVATURE` return `CurvX`
+  and `CurvY` at every node of a finite-EI line in one evaluation.
+- `CableDyn_GetInitNotes` in the C API and `CableDyn.init_notes` in Python: the notes of the last
+  deck initialisation on the point route and the aggregate, for a host that does not read the
+  standard streams.
+- Python: `CableDyn.init_line`, `init_lines` and `calc_output_derivatives` bind the raw-array line
+  calls and the load Jacobians of the C API.
+- Python: `read_output` reads both tables of `<root>.modes.out` into `NaturalModes` and
+  `ModeShapes`; `DriverResult` gains `modes_output` and `read_modes()`.
+- Range graphs in coupled OpenFAST runs: the `LINES` `Outputs` flag `r` and `RangeStart` now write
+  `<RootName>.CD.Line<L>.range.out` in a single-turbine run, from the committed `dtM` steps of
+  `.CD.out`, once per step when OpenFAST retries a step, and across a checkpoint restart. A
+  turbine's own instance in FAST.Farm writes `<RootName>.T<n>.CD.Line<L>.range.out`. A FAST.Farm
+  shared mooring and the C API reject the flag by name.
+- An OpenFAST initialisation note when the deepest interval of the SeaState depth grid exceeds 5 %
+  of the depth and a line lies in it: the field is linear there, unlike a deck depth table.
+- An initialisation note names the lines that a current can move along a seabed without friction.
+- `WaveKin 7`: each row of `wave_frequencies.txt` may carry its own `beta`, as MoorDyn-C reads it,
+  so that a component file can describe a short-crested sea; vessel RAOs take each row's heading.
+- `WaveRefX` and `WaveRefY` options: the point that an elevation record or a component file
+  (`WaterKin WaveKinMod 1`, `WaveKin 3` and `7`) refers to. An extension of CableDyn; default 0, 0.
+- CI: a Linux job runs the full test suite on the Prescott OpenBLAS kernel and fails on a fallback
+  note in any shipped example deck.
+
+### Changed
+
+- A standalone deck with `TMax 0` no longer needs `dtM`: the static check marches no step, so it
+  runs without one on every standalone route and writes the same `t = 0` row as with one. A
+  mixed deck that marches no step no longer prints the `dtM` advisory.
+- Wave kinematics cost half to a fifth as much, depending on the compiler: on a 298-node line
+  in a 4,200 s elevation record of 2,400 components the sum falls from 6.0 to 3.0 ms per step
+  in the release build and from 18 to 3.6 ms in a GNU AVX2 build. Results change at round-off.
+- `CableDyn_GetLineValues` evaluates the position, velocity, acceleration, tension, curvature,
+  bend moment, declination and azimuth of a line in one pass, without a text token per node. The
+  values are unchanged bit for bit. A read of `EI = 0` tension was O(n²) and is now linear.
+- A coupled run restarts from a checkpoint at any glue step: `ChkptTime` need not be a multiple of
+  `dtM`, and the restarted run matches the uninterrupted one bit for bit.
+- Range graphs are written when the host reports a completed run, so also at FAST.Farm's last
+  whole `DT_Low` and after `CalcSteady`. An earlier run's range graphs are removed as soon as the
+  deck is parsed, and a run that stops on an error writes none.
+- The Python deck validator reads the files a deck names (WaterKin, the MoorDyn-C kinematics
+  files, motion and vessel records, the RAO table, bathymetry, Syrope) and refuses what the solver
+  refuses.
+- A direction bin below the smallest normal weight holds no energy: its components are exactly
+  zero, and a vessel RAO table needs no heading for it.
+- The C API refuses the flag `r` on `EI = 0` decks too, which it accepted without writing a file.
 
 ### Fixed
 
+- Nodal curvature under a tapered bend stiffener: a node took the stiffness of the softer
+  neighbouring element, which steps at every node of a taper, and so overstated the curvature
+  by about `h |EI'| / (2 EI)`. It now takes the stiffness `EI(s)` at the node, and the softer
+  side only at a real step of the section (the bare tip, stiffener rows that do not match, two
+  line types).
+- Element curvature under a tapered bend stiffener: the peaks of `.elements.out` and the node
+  values of `OutputRecovery element` read the element's interpolation, which bends under one
+  stiffness per element. Against the section its curvature is off by the same `h |EI'| / (2 EI)`,
+  high where the curvature falls toward the tip and low where it rises. On an element with a
+  sleeve they now report the section: the moment over `EI(s)`.
+- Curvature and bend moment of a stretched finite-EI line: the node outputs read the conjugate of
+  the tangent as the moment, which put `Curv` 2 ε and `BendMom` ε below their definitions.
+  `Curv` is now the geometric curvature of the stretched line and `BendMom` the moment that
+  balances the forces, `EI κ / (1 + ε)`.
+- An `EI = 0` line whose deck chord heads within 45 degrees of +X reported its azimuth in [0, 360)
+  instead of (-180, 180] outside the standalone `EI = 0` route: in the C API and Python, on the
+  standalone mixed and multibody routes, and in OpenFAST. Its `L<L>N<J>Azi` channels, the
+  `Azimuth` column of the static profile and the azimuth of the initialisation summary now follow
+  the documented range on every route.
+- A solver step retry in OpenFAST works at any `dtM/DT` and matches an unretried step exactly,
+  including across a restart; it rebuilt the model at `dtM = DT` and stopped at `dtM > DT`.
+- `CalcSteady` with several operating points no longer stops at the second, works at `dtM` larger
+  than `DT`, and `.CD.out` and the range graphs run to the end of its run. `-VTKLin` works at `dtM`
+  larger than `DT`. Linearisation after `CalcSteady` or after a restart keeps its line states.
+- A restart before the first commit keeps a body or rod at its start, and a restart no longer
+  rewrites `.CD.static.out`.
+- Every initialisation note of a coupled line reaches the console; long lists were cut or dropped.
+- The OpenFAST module driver runs a rotating motion in a single-precision build.
+- A range-graph file that cannot be written completely is removed instead of left behind.
 - The C API messages of `CableDyn_UpdatePointFluidFields` and `CableDyn_CalcOutputDerivatives` on
   the coupled aggregate name its real scope: decks with finite-EI lines, bodies or rods.
+
+### Upgrading
+
+- `Curv`, `CurvX`, `CurvY`, `BendMom` and `StfMom`, and the `Curvature` and `BendMoment` of the
+  static profile and the range graphs, change at nodes inside a bend stiffener. Curvature and
+  `BendMom` fall by that first-order error, on `lazy_wave_bend_stiffener.dat` by about 5 % on
+  0.2 m elements, 4 % on 0.15 m, 2 % on 0.1 m and 0.7 % on 0.05 m; `StfMom` rises by the same
+  moment, so the two still add up to the section moment. A line end on a conical root
+  changes likewise, and a step between rows on a taper now compares the two stiffnesses at the
+  node. Positions, forces, the section moment and every node outside a stiffener are unchanged.
+- `PeakCurvature`, `BendMomentAtPeak` and `PeakXi` of `.elements.out`, so `bend_check` and
+  `element_range_graph` on that table, change on elements with a stiffener sleeve, and so do
+  `Curv`, `CurvX` and `CurvY` under `OutputRecovery element` at their nodes, where they now equal
+  the default recovery. The peaks fall by 1.6 / 3.1 / 5.8 % on 0.05 / 0.1 / 0.2 m elements of a
+  hang-off whose curvature falls toward the tip, and rise by up to 4.4 % on the 0.15 m elements of
+  `lazy_wave_bend_stiffener.dat`, whose curvature rises. Elements without a sleeve are unchanged,
+  and `CD_HermiteCable_Dyn_Curvature_Exact` stays the geometric trace.
+- `Curv`, `CurvX`, `CurvY`, `BendMom` and `StfMom`, and the `Curvature` and `BendMoment` of the
+  static profile and the range graphs, rise on every finite-EI line: curvature by twice the axial
+  strain, the moments by the strain, at most 0.024 % and 0.012 % on the examples. `BendMom` equals
+  `EI × Curv` only to within the strain. Tension, positions and forces are unchanged, and so are
+  `OutputRecovery element` values on elements without a stiffener sleeve.
+- Azimuth values of the `EI = 0` lines named above read 360 degrees lower on those routes.
+- OpenFAST checkpoints change format: they carry the range graphs and the input of the last
+  commit, so a checkpoint written by an earlier CableDyn cannot be restarted with this one.
 
 ## [0.4.0] - 2026-11-04
 
