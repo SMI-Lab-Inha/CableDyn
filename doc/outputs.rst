@@ -289,7 +289,9 @@ B)``, header row, units row, data (12 columns):
      - unstretched arc length of the curvature maximum
    * - ``PeakCurvature``
      - ``(1/m)``
-     - maximum curvature over the element
+     - maximum curvature over the element; under a bend stiffener the curvature of the section,
+       the moment over the stiffness ``EI(s)`` along the element, not of the interpolation
+       (:ref:`theory-bend-stiffeners`)
    * - ``BendMomentAtPeak``
      - ``(N.m)``
      - ``EI × PeakCurvature``, with the line type's ``EI`` (the cable's share under a bend
@@ -688,7 +690,8 @@ Line-node channels
        at the node, :ref:`theory-bend-stiffeners`), and the exact geometric curvature where
        ``EI`` is below ``max(|w| L0^2)/12`` times 1 m (:ref:`theory-output-recovery`) (``OutputRecovery
        element``: exact curvature of the continuous
-       centreline, the larger of the two one-sided element values at an interior node). The
+       centreline, the larger of the two one-sided element values at an interior node; the
+       recovered moment over ``EI(s)`` on an element with a bend stiffener sleeve). The
        library routines ``CD_HermiteCable_Dyn_Curvature`` and ``CD_HFMF_Curvature`` return the
        same value; ``CD_HermiteCable_Dyn_Curvature_Exact`` and ``CD_HFMF_Curvature_Exact`` the
        exact geometric traces

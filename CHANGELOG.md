@@ -15,6 +15,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   by about `h |EI'| / (2 EI)`. It now takes the stiffness `EI(s)` at the node, and the softer
   side only at a real step of the section (the bare tip, stiffener rows that do not match, two
   line types).
+- Element curvature under a tapered bend stiffener: the peaks of `.elements.out` and the node
+  values of `OutputRecovery element` read the element's interpolation, which bends under one
+  stiffness per element. Against the section its curvature is off by the same `h |EI'| / (2 EI)`,
+  high where the curvature falls toward the tip and low where it rises. On an element with a
+  sleeve they now report the section: the moment over `EI(s)`.
 
 ### Upgrading
 
@@ -24,8 +29,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   0.2 m elements, 4 % on 0.15 m, 2 % on 0.1 m and 0.7 % on 0.05 m; `StfMom` rises by the same
   moment, so the two still add up to the section moment. A line end on a conical root
   changes likewise, and a step between rows on a taper now compares the two stiffnesses at the
-  node. Positions, forces, the section moment, `OutputRecovery element`, the element profile
-  and every node outside a stiffener are unchanged.
+  node. Positions, forces, the section moment and every node outside a stiffener are unchanged.
+- `PeakCurvature`, `BendMomentAtPeak` and `PeakXi` of `.elements.out`, so `bend_check` and
+  `element_range_graph` on that table, change on elements with a stiffener sleeve, and so do
+  `Curv`, `CurvX`, `CurvY`, `BendMom` and `StfMom` under `OutputRecovery element` at their nodes,
+  where they now equal the default recovery. The peaks fall by 1.6 / 3.1 / 5.8 % on 0.05 / 0.1 /
+  0.2 m elements of a hang-off whose curvature falls toward the tip, and rise by up to 4.4 % on
+  the 0.15 m elements of `lazy_wave_bend_stiffener.dat`, whose curvature rises. Elements without
+  a sleeve are unchanged, and `CD_HermiteCable_Dyn_Curvature_Exact` stays the geometric trace.
 
 ## [0.4.0] - 2026-11-04
 

@@ -283,7 +283,9 @@ initialisation.
   positions within **0.6 mm**, and the end force's deflection from the clamp axis within
   **0.003°** (32.37°). Node by node, relative to the local value floored at 0.1% of the root
   curvature, the curvature follows the elastica within **0.97 / 0.49 / 0.24 / 0.18%** on
-  0.2 / 0.15 / 0.1 / 0.05 m elements (gates 1 / 1 / 0.5 / 0.5%); 0.12% of it at the root is
+  0.2 / 0.15 / 0.1 / 0.05 m elements (gates 1 / 1 / 0.5 / 0.5%), under either output recovery,
+  and under the stiffener the element peaks of `.elements.out`, read through `bend_check`,
+  within **the same figures** on the same gates; 0.12% of it at the root is
   the order-`T/EA` difference between the elastica's bending law and the element energy's,
   not mesh error.
 - **L-fig curvature overlay**: `l3_lazywave_dynamic` writes each site's along-arc

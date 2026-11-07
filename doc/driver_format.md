@@ -1100,8 +1100,9 @@ Behaviour:
   must resolve the taper: an initialisation note names a stiffener that spans fewer than 10
   elements and the element length that resolves it. Split the section at the stiffener tip and
   mesh the part under it finely (about 0.1–0.2 m elements for a typical 3–8 m stiffener). The
-  node outputs do not take these element values: a node reads `EI(s)` at its own arc, and at a
-  real step of the section (the tip, rows that do not match, two line types) the softer side's.
+  node outputs and the element peaks of `.elements.out` do not take these element values: they
+  read `EI(s)` at their own arc, and at a real step of the section (the tip, rows that do not
+  match, two line types) the softer side's.
 - The stiffener root takes the moment only where the end is held in rotation: declare the end
   `Rigid`, or a rotational spring, in [END CONNECTIONS](#end-connections-optional-finite-ei-lines).
   A stiffener at a pinned end prints a note.

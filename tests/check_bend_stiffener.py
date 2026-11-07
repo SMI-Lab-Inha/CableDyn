@@ -25,7 +25,10 @@ The nodal curvature and the cable's moment are also gated locally: at every node
 value: 0.5 % on elements of 0.1 and 0.05 m, 1 % on 0.2 and 0.15 m (the tip then inside an
 element). The curvature changes sign near the tip, so the value is floored at 0.1 % of the root
 curvature. The stiffness at a node is EI(s) there; at the tip the bare side's, the larger
-curvature of a real step.
+curvature of a real step. The same gate holds under the stiffener, where a sleeve makes the
+interpolation's curvature no section's, the node values of OutputRecovery element and the peak of
+each element in .elements.out against the largest reference curvature over that element, read
+through cabledyn.bend_check where the package imports.
 
 The curvature over the same 8 m must also follow OrcaFlex 11.6d, with the stiffener given as a
 line attachment (tests/data/orcaflex_bend_stiffener_curvature.csv), within 1.5 % of the root
@@ -59,6 +62,12 @@ try:
 except ImportError:  # pragma: no cover - environment dependent
     solve_bvp = None
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "python"))
+try:
+    from cabledyn import bend_check, read_output
+except ImportError:  # pragma: no cover - environment dependent
+    bend_check = read_output = None
+
 MOMENT_TOLERANCE = 0.02
 POSITION_TOLERANCE = 0.01
 ANGLE_TOLERANCE = 0.05
@@ -68,6 +77,7 @@ IDENTITY_TOLERANCE = 1.0e-5
 # inside an element), 0.1 and 0.05 m
 MESH_SWEEP = ((40, 0.01), (54, 0.01), (80, 0.005), (160, 0.005))
 LOCAL_FLOOR = 1.0e-3
+ELEMENT_RECOVERY = ("9.80665 g\n", "element OutputRecovery\n9.80665 g\n")
 ORCAFLEX_CSV = pathlib.Path(__file__).resolve().parent / "data" / "orcaflex_bend_stiffener_curvature.csv"
 REFINED_DECK = pathlib.Path(__file__).resolve().parent / "data" / "lazy_wave_touchdown_planar_coarse.dat"
 WINDOW = 8.0
@@ -329,7 +339,7 @@ def check_refined(exe: str, tmp: str) -> bool:
     return ok
 
 
-def check_identities(out: dict[str, float]) -> bool:
+def check_identities(out: dict[str, float], name: str = "node 41") -> bool:
     """Curv, CurvX, CurvY, BendMom and StfMom of a node inside the cone (node 41, 2 m)."""
     curvature = out["Curv1N41"]
     ei = float(section(np.array([2.0]))[0][0])
@@ -337,38 +347,71 @@ def check_identities(out: dict[str, float]) -> bool:
                 abs(out["BendMom1N41"] / (EI_CABLE * curvature) - 1.0),
                 abs(out["StfMom1N41"] / ((ei - EI_CABLE) * curvature) - 1.0))
     ok = error <= IDENTITY_TOLERANCE
-    print(f"{'ok  ' if ok else 'FAIL'} node 41: curvature components and moment shares agree "
+    print(f"{'ok  ' if ok else 'FAIL'} {name}: curvature components and moment shares agree "
           f"within {error:.1e}")
     return ok
 
 
+def element_peaks(path: pathlib.Path, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Arc start and end of the first n elements of a .elements.out, and their peak curvature,
+    through bend_check where the package imports."""
+    table = np.array([[float(v) for v in r.split()] for r in path.read_text().splitlines()[3:]])[:n]
+    if bend_check is None:
+        return table[:, 2], table[:, 3], table[:, 6]
+    return table[:, 2], table[:, 3], bend_check(read_output(path), 1.0, condition="storage", line_id=1).curvature[:n]
+
+
+def reference_curvature(sol, s: np.ndarray) -> np.ndarray:
+    return np.abs(sol.sol(s)[3]) * MOMENT_SCALE / section(s)[0]
+
+
 def check_local(exe: str, tmp: str, sol) -> bool:
-    """Nodal curvature and cable moment over the first WINDOW m against the elastica, each within
-    the tolerance of MESH_SWEEP of the reference at the node's own arc, element size swept."""
+    """Curvature and cable moment over the first WINDOW m against the elastica, each within the
+    tolerance of MESH_SWEEP of the reference where it is reported, element size swept: at the
+    nodes, and under the stiffener at the nodes of OutputRecovery element and the peak of each
+    element."""
     ok = True
+    root_curvature = float(reference_curvature(sol, np.array([0.0]))[0])
+    tip = SEGMENTS[-1][1]
     for n, tolerance in MESH_SWEEP:
-        rc, log, rows, _ = solve(exe, tmp, "local", DECK.replace("1 cable 8.0 160", f"1 cable 8.0 {n}"))
-        if rc != 0:
-            print(log[-3000:])
-            print(f"FAIL: the driver did not solve the deck with {n} elements")
-            return False
-        if any(note in log for note in FALLBACK_NOTES):
-            print(log[-3000:])
-            print(f"FAIL: the static solve with {n} elements fell back")
-            return False
-        data = np.array([[float(v) for v in r.split()[2:9]] for r in rows[:n + 1]])
+        deck = DECK.replace("1 cable 8.0 160", f"1 cable 8.0 {n}")
         s = np.arange(n + 1) * (WINDOW / n)
         ei = section(s)[0]
-        ei[np.abs(s - SEGMENTS[-1][1]) < 1.0e-9] = EI_CABLE
+        ei[np.abs(s - tip) < 1.0e-9] = EI_CABLE
         curvature = np.abs(sol.sol(s)[3]) * MOMENT_SCALE / ei
-        scale = np.maximum(curvature, LOCAL_FLOOR * curvature[0])
-        error = np.abs(data[:, 5] - curvature) / scale
-        moment_error = np.max(np.abs(np.abs(data[:, 6]) / EI_CABLE - curvature) / scale)
+        scale = np.maximum(curvature, LOCAL_FLOOR * root_curvature)
+        for name, text in (("equilibrium nodes", deck), ("element nodes", deck.replace(*ELEMENT_RECOVERY))):
+            rc, log, rows, _ = solve(exe, tmp, "local", text)
+            if rc != 0:
+                print(log[-3000:])
+                print(f"FAIL: the driver did not solve the deck with {n} elements")
+                return False
+            if any(note in log for note in FALLBACK_NOTES):
+                print(log[-3000:])
+                print(f"FAIL: the static solve with {n} elements fell back")
+                return False
+            data = np.array([[float(v) for v in r.split()[2:9]] for r in rows[:n + 1]])
+            # past the tip an element's own curvature is the section's, by definition
+            covered = s < tip - 1.0e-9 if name == "element nodes" else s < np.inf
+            error = np.where(covered, np.abs(data[:, 5] - curvature) / scale, 0.0)
+            moment_error = np.max(np.where(covered, np.abs(np.abs(data[:, 6]) / EI_CABLE - curvature) / scale, 0.0))
+            worst = int(np.argmax(error))
+            good = max(error[worst], moment_error) <= tolerance
+            print(f"{'ok  ' if good else 'FAIL'} {WINDOW / n:.3f} m elements, {name}: curvature within "
+                  f"{100 * error[worst]:.3f} % locally (at {s[worst]:.3f} m), cable moment within "
+                  f"{100 * moment_error:.3f} %, gate {100 * tolerance:.1f} %")
+            ok = ok and good
+        start, stop, peak = element_peaks(pathlib.Path(tmp) / "local.elements.out", n)
+        # inside each element, so a tip on its end reads the element's own side
+        inner = start[:, None] + (stop - start)[:, None] * np.linspace(1.0e-6, 1.0 - 1.0e-6, 33)
+        reference = reference_curvature(sol, inner.ravel()).reshape(inner.shape).max(axis=1)
+        error = np.abs(peak - reference) / np.maximum(reference, LOCAL_FLOOR * root_curvature)
+        error[start >= tip - 1.0e-9] = 0.0
         worst = int(np.argmax(error))
-        good = max(error[worst], moment_error) <= tolerance
-        print(f"{'ok  ' if good else 'FAIL'} {WINDOW / n:.3f} m elements: curvature within "
-              f"{100 * error[worst]:.3f} % locally (at {s[worst]:.3f} m), cable moment within "
-              f"{100 * moment_error:.3f} %, gate {100 * tolerance:.1f} %")
+        good = error[worst] <= tolerance
+        print(f"{'ok  ' if good else 'FAIL'} {WINDOW / n:.3f} m elements, element peaks: within "
+              f"{100 * error[worst]:.3f} % locally (element at {start[worst]:.3f} m), gate "
+              f"{100 * tolerance:.1f} %")
         ok = ok and good
     return ok
 
@@ -386,6 +429,12 @@ def main() -> int:
         notes_ok = check_refined(exe, tmp) and notes_ok
         data = np.array([[float(v) for v in r.split()[2:9]] for r in rows if r.strip()])
         notes_ok = check_identities(out) and notes_ok
+        rc, log, _, element_out = solve(exe, tmp, "element", DECK.replace(*ELEMENT_RECOVERY))
+        if rc != 0:
+            print(log[-3000:])
+            print("FAIL: the driver did not solve the deck under OutputRecovery element")
+            return 1
+        notes_ok = check_identities(element_out, "node 41, OutputRecovery element") and notes_ok
         orcaflex_ok = check_orcaflex(data[:, 0], data[:, 5])
         if solve_bvp is None:
             print("SKIP: scipy is not installed (the elastica comparison needs solve_bvp)")

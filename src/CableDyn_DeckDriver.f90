@@ -98,6 +98,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Axial_Damping_Resultant, &
                                           CD_HermiteCable_Axial_Damping_Element, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HermiteCable_Dyn_Node_Values, CD_HermiteCable_Dyn_Node_Recovery, &
+                                          CD_HermiteCable_Dyn_Side_EI, CD_HermiteCable_Dyn_Side_Curvature, &
                                           CD_HermiteCable_Dyn_Set_Output_Recovery, &
                                           CD_HermiteCable_Dyn_Set_ForceBlend, CD_HC_FORCE_BLEND_DEFAULT, &
                                           CD_HermiteCable_Dyn_Set_Friction_Anchors, &
@@ -192,6 +193,8 @@ MODULE CableDyn_DeckDriver
   REAL(wp), PARAMETER :: STATIC_STRAIN_NOTE_DEFAULT = 0.1_wp
   ! dtM advisor (axial_period_note): the fewest steps of dtM per axial period of a line
   REAL(wp), PARAMETER :: AXIAL_STEPS_PER_PERIOD = 6.0_wp
+  ! A point within this share of an element length of a STIFFENERS row end counts as on it.
+  REAL(wp), PARAMETER :: STF_ARC_TOL = 1.0e-9_wp
 
   PUBLIC :: CD_Run_Deck_Driver
   PUBLIC :: CD_Deck_Equilibrium_Jacobian_Check
@@ -11027,11 +11030,8 @@ CONTAINS
     !! The limit on the missing side of a line end stays 0.
     REAL(wp), INTENT(IN) :: stf(:, :), l0(:), ei_line(:)
     REAL(wp), INTENT(OUT) :: ei_node(:, :)
-    REAL(wp), PARAMETER :: PI_64 = 0.0490873852123405193_wp   ! pi/64
-    REAL(wp), PARAMETER :: ARC_TOL = 1.0e-9_wp
-    REAL(wp) :: arc(SIZE(l0) + 1, 2), a, tol, t, od
-    INTEGER :: ne, j, e, k, side, iend
-    LOGICAL :: tipward, covers
+    REAL(wp) :: arc(SIZE(l0) + 1, 2)
+    INTEGER :: ne, j, e, side
 
     ne = SIZE(l0)
     ! each node's arc from either end, summed from that end
@@ -11046,27 +11046,140 @@ CONTAINS
       DO side = 1, 2
         e = j - 2 + side
         IF (e < 1 .OR. e > ne) CYCLE
-        ei_node(side, j) = ei_line(e)
-        tol = ARC_TOL*l0(e)
-        DO k = 1, SIZE(stf, 2)
-          iend = NINT(stf(1, k))
-          a = arc(j, iend)
-          ! does this side of the node look toward the stiffener's tip, or toward its root?
-          tipward = (iend == 1) .EQV. (side == 2)
-          IF (tipward) THEN
-            covers = a >= stf(2, k) - tol .AND. a < stf(3, k) - tol
-          ELSE
-            covers = a > stf(2, k) + tol .AND. a <= stf(3, k) + tol
-          END IF
-          IF (.NOT. covers) CYCLE
-          t = MIN(CD_ONE, MAX(CD_ZERO, (a - stf(2, k))/(stf(3, k) - stf(2, k))))
-          od = (CD_ONE - t)*stf(4, k) + t*stf(5, k)
-          ei_node(side, j) = ei_line(e) + stf(7, k)*PI_64*(od**4 - stf(6, k)**4)
-          EXIT
-        END DO
+        ei_node(side, j) = ei_line(e) + sleeve_ei_at(stf, arc(j, 1), arc(j, 2), side == 2, STF_ARC_TOL*l0(e))
       END DO
     END DO
   END SUBROUTINE CD_Stiffener_Node_EI
+
+  PURE FUNCTION sleeve_ei_at(stf, arc_a, arc_b, toward_b, tol) RESULT(ei)
+    !! The sleeve's share E pi/64 (OD^4 - ID^4) of the bending stiffness at a point arc_a from
+    !! End A and arc_b from End B, 0 where no stiffener row covers it: the limit from the End B
+    !! side (toward_b) or the End A side. A point within tol of a row end counts as on it.
+    REAL(wp), INTENT(IN) :: stf(:, :), arc_a, arc_b, tol
+    LOGICAL, INTENT(IN) :: toward_b
+    REAL(wp) :: ei
+    REAL(wp), PARAMETER :: PI_64 = 0.0490873852123405193_wp   ! pi/64
+    REAL(wp) :: a, t, od
+    INTEGER :: k, iend
+    LOGICAL :: tipward, covers
+
+    ei = CD_ZERO
+    DO k = 1, SIZE(stf, 2)
+      iend = NINT(stf(1, k))
+      a = MERGE(arc_a, arc_b, iend == 1)
+      ! does this side of the point look toward the stiffener's tip, or toward its root?
+      tipward = (iend == 1) .EQV. toward_b
+      IF (tipward) THEN
+        covers = a >= stf(2, k) - tol .AND. a < stf(3, k) - tol
+      ELSE
+        covers = a > stf(2, k) + tol .AND. a <= stf(3, k) + tol
+      END IF
+      IF (.NOT. covers) CYCLE
+      t = MIN(CD_ONE, MAX(CD_ZERO, (a - stf(2, k))/(stf(3, k) - stf(2, k))))
+      od = (CD_ONE - t)*stf(4, k) + t*stf(5, k)
+      ei = stf(7, k)*PI_64*(od**4 - stf(6, k)**4)
+      RETURN
+    END DO
+  END FUNCTION sleeve_ei_at
+
+  SUBROUTINE stiffened_element_peak(stf, qr, l0, ei_element, ei_line, arc_a, arc_b, m0, m1, peak, u_peak, &
+                                    ErrStat, ErrMsg)
+    !! Largest curvature of the section along one element under a bend stiffener, |M(u)|/EI(u).
+    !! The element's interpolation bends under its one stiffness ei_element, so it gives the
+    !! section neither its curvature nor, at its ends, its moment to second order: ei_element
+    !! times the interpolation's curvature is the linear fit of the moment over the element. Its
+    !! mean is the element's mean moment, and with the recovered moments m0 and m1 of the end nodes
+    !! (u = 0 at End B's side, as the internal element runs) it fixes the quadratic
+    !! M(u) = (1 - u) m0 + u m1 + 6 u (1 - u) (mean - (m0 + m1)/2). EI(u) is ei_line, the line
+    !! type's, plus the sleeve; arc_a and arc_b are the arcs of the element's End A side from End
+    !! A and of its End B side from End B. The field is smooth between the row ends inside the
+    !! element: each such piece is sampled, reading EI(u) from inside the piece up to its ends,
+    !! and its best sample refined by golden section.
+    REAL(wp), INTENT(IN) :: stf(:, :), qr(12), l0, ei_element, ei_line, arc_a, arc_b, m0(3), m1(3)
+    REAL(wp), INTENT(OUT) :: peak, u_peak
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, PARAMETER :: NSAMPLE = 128, NGOLDEN = 40
+    REAL(wp), PARAMETER :: GOLDEN = 0.6180339887498949_wp
+    REAL(wp) :: knot(2*SIZE(stf, 2) + 2), u, ua, ub, x1, x2, g1, g2, f1, f2, f, best, u_best, kappa, kv(3), bubble(3)
+    INTEGER :: nk, k, c, i, p
+
+    peak = CD_ZERO
+    u_peak = CD_ZERO
+    CALL CD_HermiteCable_Curvature(qr, l0, 0.5_wp, kappa, ErrStat, ErrMsg, kvec=kv)
+    IF (ErrStat /= CD_HCABLE_OK) RETURN
+    ! the moment conjugate to the tangent is EI kappa n/|r'|^2, as the recovered ones are
+    bubble = ei_element*kv*(l0/NORM2(qr(7:9) - qr(1:3)))**2 - 0.5_wp*(m0 + m1)
+    knot(1) = CD_ZERO
+    nk = 1
+    DO k = 1, SIZE(stf, 2)
+      DO c = 2, 3
+        u = MERGE(CD_ONE - (stf(c, k) - arc_a)/l0, (stf(c, k) - arc_b)/l0, NINT(stf(1, k)) == 1)
+        IF (.NOT. (u > STF_ARC_TOL .AND. u < CD_ONE - STF_ARC_TOL)) CYCLE
+        ! in ascending order
+        i = nk
+        DO WHILE (knot(i) > u)
+          knot(i + 1) = knot(i)
+          i = i - 1
+        END DO
+        knot(i + 1) = u
+        nk = nk + 1
+      END DO
+    END DO
+    nk = nk + 1
+    knot(nk) = CD_ONE
+    DO p = 1, nk - 1
+      ua = knot(p)
+      ub = knot(p + 1)
+      IF (ub - ua <= STF_ARC_TOL) CYCLE
+      best = -CD_ONE
+      u_best = ua
+      DO i = 0, NSAMPLE
+        u = ua + (ub - ua)*REAL(i, wp)/REAL(NSAMPLE, wp)
+        f = section_curvature(u, 2*i > NSAMPLE)
+        IF (f > best) THEN
+          best = f
+          u_best = u
+        END IF
+      END DO
+      IF (best > peak) THEN
+        peak = best
+        u_peak = u_best
+      END IF
+      x1 = MAX(ua, u_best - (ub - ua)/REAL(NSAMPLE, wp))
+      x2 = MIN(ub, u_best + (ub - ua)/REAL(NSAMPLE, wp))
+      DO i = 1, NGOLDEN
+        g1 = x2 - GOLDEN*(x2 - x1)
+        g2 = x1 + GOLDEN*(x2 - x1)
+        f1 = section_curvature(g1, 2.0_wp*g1 > ua + ub)
+        f2 = section_curvature(g2, 2.0_wp*g2 > ua + ub)
+        IF (f1 > peak) THEN
+          peak = f1
+          u_peak = g1
+        END IF
+        IF (f2 > peak) THEN
+          peak = f2
+          u_peak = g2
+        END IF
+        IF (f1 > f2) THEN
+          x2 = g2
+        ELSE
+          x1 = g1
+        END IF
+      END DO
+    END DO
+
+  CONTAINS
+
+    PURE REAL(wp) FUNCTION section_curvature(uu, from_b)
+      REAL(wp), INTENT(IN) :: uu
+      LOGICAL, INTENT(IN) :: from_b   ! the piece lies on the End B side of uu (u runs from End B)
+      REAL(wp) :: ei
+      ei = ei_line + sleeve_ei_at(stf, arc_a + (CD_ONE - uu)*l0, arc_b + uu*l0, from_b, STF_ARC_TOL*l0)
+      IF (.NOT. ei > CD_ZERO) ei = ei_element
+      section_curvature = NORM2((CD_ONE - uu)*m0 + uu*m1 + 6.0_wp*uu*(CD_ONE - uu)*bubble)/ei
+    END FUNCTION section_curvature
+  END SUBROUTINE stiffened_element_peak
 
   SUBROUTINE remap_elem_by_reference_arc(a, l0_parent, l0_child)
     !! Map a piecewise-constant per-element field from a parent reference mesh to
@@ -31688,9 +31801,10 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
     INTEGER :: unit, ios, li, public_element, internal_element, ne, es
-    REAL(wp) :: qr(12), l0, arc_start, arc_end, curvature_peak, u_curvature_internal, &
+    REAL(wp) :: qr(12), l0, ei_element, arc_start, arc_end, curvature_peak, u_curvature_internal, &
                 u_curvature_public, arc_peak, moment_peak, minimum_resultant, minimum_u_internal, &
                 minimum_u_public, maximum_resultant, maximum_u_internal, maximum_u_public
+    REAL(wp), ALLOCATABLE :: moments(:, :)
     CHARACTER(1024) :: em
     CHARACTER(LEN(out_root) + 20) :: path
     CHARACTER(1) :: tab
@@ -31716,12 +31830,31 @@ CONTAINS
     DO li = 1, SIZE(lines)
       ne = cables(li)%line%ne
       arc_start = CD_ZERO
+      IF (ALLOCATED(moments)) DEALLOCATE (moments)
+      IF (ALLOCATED(lines(li)%stf)) THEN
+        ALLOCATE (moments(3, ne + 1))
+        CALL CD_HermiteCable_Dyn_Node_Recovery(cables(li)%line, es, em, moment_vector=moments)
+        IF (es /= CD_HCDYN_OK) THEN
+          CLOSE (unit, STATUS='DELETE')
+          CALL fail_solve(ErrStat, ErrMsg, 'continuous curvature extraction failed: '//TRIM(em)); RETURN
+        END IF
+      END IF
       DO public_element = 1, ne
         internal_element = ne - public_element + 1
         l0 = cables(li)%line%l0(internal_element)
         qr(1:6) = cables(li)%line%q(6*(internal_element - 1) + 1:6*(internal_element - 1) + 6)
         qr(7:12) = cables(li)%line%q(6*internal_element + 1:6*internal_element + 6)
-        CALL CD_HermiteCable_Peak_Curvature(qr, l0, curvature_peak, u_curvature_internal, es, em)
+        ! an element under a bend stiffener: the section's curvature, not the element's
+        ei_element = cables(li)%line%EI(internal_element)
+        IF (ALLOCATED(lines(li)%stf) .AND. ei_element > CD_ZERO .AND. &
+            ABS(ei_element - cables(li)%line%EI_line(internal_element)) > CD_ZERO) THEN
+          CALL stiffened_element_peak(lines(li)%stf, qr, l0, ei_element, cables(li)%line%EI_line(internal_element), &
+                                      arc_start, SUM(cables(li)%line%l0(1:internal_element - 1)), &
+                                      moments(:, internal_element), moments(:, internal_element + 1), &
+                                      curvature_peak, u_curvature_internal, es, em)
+        ELSE
+          CALL CD_HermiteCable_Peak_Curvature(qr, l0, curvature_peak, u_curvature_internal, es, em)
+        END IF
         IF (es /= CD_HCABLE_OK) THEN
           CLOSE (unit, STATUS='DELETE')
           CALL fail_solve(ErrStat, ErrMsg, 'continuous curvature extraction failed: '//TRIM(em)); RETURN
@@ -36700,7 +36833,7 @@ CONTAINS
 
     SUBROUTINE range_sample_cable_element(ErrStat, ErrMsg)
       !! OutputRecovery element: end-force tension at the ends and the length-weighted
-      !! element-mean axial force inside, the larger one-sided exact curvature and EI * curvature.
+      !! element-mean axial force inside, the larger one-sided element curvature and EI * curvature.
       INTEGER, INTENT(OUT) :: ErrStat
       CHARACTER(*), INTENT(OUT) :: ErrMsg
       ErrStat = CD_DECKDRV_OK
@@ -37861,9 +37994,9 @@ CONTAINS
   END SUBROUTINE cable_segment_tensions
 
   SUBROUTINE cable_nodal_curvature(cable, inode, curvature, ErrStat, ErrMsg)
-    !! Exact one-sided Hermite curvature traces at an internal line node.  Curvature
-    !! need not be continuous across a material interface because the interpolation
-    !! is C1, so the public nodal value conservatively retains the larger trace.
+    !! One-sided element curvatures at an internal line node (cable_element_curvature).
+    !! Curvature need not be continuous across a material interface because the
+    !! interpolation is C1, so the public nodal value conservatively retains the larger one.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
     INTEGER, INTENT(IN) :: inode
     REAL(wp), INTENT(OUT) :: curvature
@@ -37890,10 +38023,10 @@ CONTAINS
   END SUBROUTINE cable_nodal_curvature
 
   SUBROUTINE cable_nodal_bend_moment(cable, inode, bend_moment, ErrStat, ErrMsg, sleeve_moment)
-    !! Magnitudes of the two one-sided EI*kappa traces at a node.  Taking their
-    !! maximum avoids inventing an averaged EI at a stepped section interface. bend_moment is the
-    !! cable's own share EI_line kappa; sleeve_moment (optional) the share of a bend stiffener,
-    !! (EI - EI_line) kappa.
+    !! Magnitudes of the two one-sided EI*kappa values at a node (cable_element_curvature). Taking
+    !! their maximum avoids inventing an averaged EI at a stepped section interface. bend_moment is
+    !! the cable's own share EI_line kappa; sleeve_moment (optional) the share of a bend stiffener,
+    !! (EI - EI_line) kappa, with the stiffness EI of the section at the node.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
     INTEGER, INTENT(IN) :: inode
     REAL(wp), INTENT(OUT) :: bend_moment
@@ -37913,33 +38046,35 @@ CONTAINS
       CALL cable_element_curvature(cable, inode - 1, CD_ONE, curvature, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCABLE_OK) RETURN
       bend_moment = MAX(bend_moment, cable%line%EI_line(inode - 1)*curvature)
-      IF (PRESENT(sleeve_moment)) sleeve_moment = MAX(sleeve_moment, &
-                                                   (cable%line%EI(inode - 1) - cable%line%EI_line(inode - 1))*curvature)
+      IF (PRESENT(sleeve_moment)) &
+        sleeve_moment = MAX(sleeve_moment, (CD_HermiteCable_Dyn_Side_EI(cable%line, inode - 1, inode) - &
+                                            cable%line%EI_line(inode - 1))*curvature)
     END IF
     IF (inode <= cable%line%ne) THEN
       CALL cable_element_curvature(cable, inode, CD_ZERO, curvature, ErrStat, ErrMsg)
       IF (ErrStat /= CD_HCABLE_OK) RETURN
       bend_moment = MAX(bend_moment, cable%line%EI_line(inode)*curvature)
-      IF (PRESENT(sleeve_moment)) sleeve_moment = MAX(sleeve_moment, &
-                                                      (cable%line%EI(inode) - cable%line%EI_line(inode))*curvature)
+      IF (PRESENT(sleeve_moment)) &
+        sleeve_moment = MAX(sleeve_moment, (CD_HermiteCable_Dyn_Side_EI(cable%line, inode, inode) - &
+                                            cable%line%EI_line(inode))*curvature)
     END IF
   END SUBROUTINE cable_nodal_bend_moment
 
   SUBROUTINE cable_element_curvature(cable, e, xi, curvature, ErrStat, ErrMsg)
+    !! The curvature of the section at an end of element e (xi 0 or 1, node e or e + 1) from the
+    !! element: its exact trace there, or under a bend stiffener the section's curvature
+    !! (CD_HermiteCable_Dyn_Side_Curvature).
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: xi
     REAL(wp), INTENT(OUT) :: curvature
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp) :: qr(12)
 
     IF (e < 1 .OR. e > cable%line%ne) THEN
       ErrStat = 1; ErrMsg = 'cable_element_curvature: element index out of range'; curvature = CD_ZERO; RETURN
     END IF
-    qr(1:6) = cable%line%q(6*(e - 1) + 1:6*(e - 1) + 6)
-    qr(7:12) = cable%line%q(6*e + 1:6*e + 6)
-    CALL CD_HermiteCable_Curvature(qr, cable%line%l0(e), xi, curvature, ErrStat, ErrMsg)
+    CALL CD_HermiteCable_Dyn_Side_Curvature(cable%line, e, e + NINT(xi), curvature, ErrStat, ErrMsg)
   END SUBROUTINE cable_element_curvature
 
   FUNCTION CD_Channel_Unit(ch) RESULT(unit)

@@ -492,7 +492,8 @@ Finite-EI cable controls
        :math:`\mathbf F\cdot\mathbf t`, the moment the neighbouring elements carry, and
        curvature = moment / ``EI`` (see :ref:`theory-output-recovery`). ``element`` reports the
        length-weighted element-mean axial force :math:`EA(\lvert\mathbf r'\rvert - 1)`, the
-       larger one-sided exact curvature, and the axial resultant at the element midpoint as the
+       larger one-sided exact curvature (on an element with a bend stiffener sleeve, the recovered
+       moment over ``EI(s)``), and the axial resultant at the element midpoint as the
        segment tension, the definitions of the releases before 0.2.0. End forces, positions, ``TDP``
        channels and the material-strain checks (``tensile_safety``, compression notes) are the
        same under both

@@ -192,9 +192,20 @@ The two limits differ only at a real step of the section: at the bare tip, betwe
 rows whose end diameter, bore or modulus do not match, and between line types of different
 :math:`EI`. There the side of the larger curvature gives the values, the bare one at the tip;
 no threshold on the stiffness ratio is involved. A node past a tip inside an element is bare.
-``OutputRecovery element`` and the element profile report the curvature of the element
-interpolation instead, which keeps the one-per-element :math:`EI_e` and with it the first-order
-step: 1.7 % at 2 m along the stiffener below on 0.05 m elements.
+
+An element's interpolation bends under :math:`EI_e`, so on an element with a sleeve its curvature
+is the curvature of no section: :math:`EI_e` times it is the linear fit of the moment over the
+element, so at an element's end it is off by the same first-order step against :math:`EI(s)`,
+high where the curvature falls toward the tip and low where it rises, and :math:`EI_e` times it
+is low by :math:`h^2 M''/12` against :math:`M`. Two outputs that read the interpolation elsewhere read
+the section here. The peak of such an element in ``.elements.out`` is the largest
+:math:`\lvert M(u)\rvert/EI(s(u))` along it, with :math:`M(u)` the quadratic through the
+recovered moments of the end nodes that keeps the mean of the fit; a row end inside the element,
+or the tip, is a step of :math:`EI(s)` that the search keeps. ``OutputRecovery element`` reports
+the recovered moment over :math:`EI(s)` on such an element, the same value as the equilibrium
+recovery, and the exact trace on every other element. The geometric traces themselves stay
+available as ``CD_HermiteCable_Dyn_Curvature_Exact``, and the mesh diagnostics
+(:math:`h\kappa`) read them.
 
 The deflection angle
 ``FairDefl``/``AnchDefl`` is :math:`\arccos(\hat{\mathbf F}\cdot\hat{\mathbf d})` between the
@@ -210,7 +221,8 @@ collocation solution of the extensible elastica
 to the section moment within 0.2 % at the root, the deflection angle agrees within 0.003°, and
 the node positions within 1 mm. Node by node, the curvature and the cable's moment follow the
 elastica within 0.24 % of their local value on 0.1 m elements and 0.18 % on 0.05 m, 0.97 % on
-0.2 m. The local value is floored at 0.1 % of the root curvature, as the curvature changes sign
+0.2 m, under either output recovery, and the peaks of ``.elements.out`` under the stiffener
+as closely. The local value is floored at 0.1 % of the root curvature, as the curvature changes sign
 near the tip, and part of the difference is not mesh error: the elastica takes the moment
 proportional to the rotation per unstretched length, the element energy the curvature of the
 stretched line, a difference of order :math:`T/EA` that is 0.12 % at this root. On the same
@@ -346,7 +358,8 @@ at most 0.45 N of 9.4 kN and moves the bend moment away from :math:`EI\kappa`.
 
 ``OPTIONS`` ``OutputRecovery element`` restores the element definitions: the length-weighted
 mean of the element-mean axial forces :math:`EA(\lvert\mathbf{r}'\rvert - 1)` at an interior
-node, the larger one-sided exact curvature, and the midpoint axial resultant as the segment
+node, the larger one-sided exact curvature (the section's on an element with a bend stiffener
+sleeve, :ref:`theory-bend-stiffeners`), and the midpoint axial resultant as the segment
 tension. The material-strain checks (``tensile_safety``, the static compression notes) judge
 :math:`EA\varepsilon` under either setting.
 
