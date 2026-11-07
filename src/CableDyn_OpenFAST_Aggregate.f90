@@ -142,6 +142,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   PUBLIC :: CD_AGG_WriteStaticProfile
   ! Range graphs of the LINES flag r: the standalone mixed route and the single-turbine OpenFAST
   ! module sample and write them; the accumulated state rides a host's checkpoint
+  PUBLIC :: CD_AGG_Reopen_Start
   PUBLIC :: CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_Range_Discard, CD_AGG_Range_Graphs, &
             CD_AGG_Range_MirrorSize, CD_AGG_Range_Get_State, CD_AGG_Range_Set_State
   PUBLIC :: CD_AGG_GetInitMetadata, CD_AGG_GetInitLine
@@ -296,7 +297,7 @@ CONTAINS
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                    range_files, host_orientation, static_current, prescribed_motion, static_run, &
-                                   deck_current, deck_turbines, static_deck_current)
+                                   deck_current, deck_turbines, static_deck_current, range_discard_root)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -332,6 +333,8 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: forbid_deck_ambient
     ! range_files: the caller samples and writes the range graphs of the LINES flag r (CD_AGG_Range_*)
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
+    ! range_discard_root: the output root of a run that starts here (see CD_Init_Deck_Aggregate)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: range_discard_root
     ! host_orientation: the caller passes the moving-point orientations with every update,
     ! which a finite-EI line restrained in torsion requires (see CD_Init_Deck_Aggregate)
     LOGICAL, INTENT(IN), OPTIONAL :: host_orientation
@@ -394,7 +397,8 @@ CONTAINS
                                 range_files=range_files, host_orientation=host_orientation, &
                                 static_current=static_current, prescribed_motion=prescribed_motion, &
                                 static_run=static_run, deck_current=deck_current, &
-                                deck_turbines=deck_turbines, static_deck_current=static_deck_current)
+                                deck_turbines=deck_turbines, static_deck_current=static_deck_current, &
+                                range_discard_root=range_discard_root)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF
@@ -3329,6 +3333,15 @@ CONTAINS
     ErrMsg = ''
     IF (self%has_rod) CALL CD_Rod_Get_States(self%rod, states, ErrStat, ErrMsg)
   END SUBROUTINE CD_AGG_Get_Rod_States
+
+  SUBROUTINE CD_AGG_Reopen_Start(self)
+    !! Back to the start of the first step after a restored state mirror, which marks the object
+    !! accelerations committed: a state from before the first commit keeps its start open, as the
+    !! run it continues does, so the fluid fields of the first step re-solve them
+    !! (objects_committed). Until then they stay those of the mirror.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    self%objects_committed = .FALSE.
+  END SUBROUTINE CD_AGG_Reopen_Start
 
   SUBROUTINE CD_AGG_Set_Rod_States(self, states, ErrStat, ErrMsg)
     !! Restore the rod state and immediately scatter its end-point kinematics

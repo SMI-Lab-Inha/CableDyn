@@ -392,9 +392,8 @@ without an auxiliary process:
   with ``dtM`` larger than ``DT``, the loads of the solve before it (the load predictor), so a
   restart continues the run bit for bit at any ``dtM``. The accumulated range graphs (``LINES``
   flag ``r``) are part of it, so a restarted run writes the range files of an uninterrupted one. A
-  checkpoint is accepted only on a committed CableDyn
-  step, so choose ``ChkptTime`` as a whole multiple of ``dtM``; a checkpoint written between two
-  commits stops the restart with a message that says so. On restart the module writes a
+  checkpoint can fall on any glue step: ``ChkptTime`` need not be a multiple of ``dtM``, and a run
+  restarted between two commits goes on as the uninterrupted run. On restart the module writes a
   temporary deck copy, ``<RootName>.CD.rst.dat``, beside the ``MooringFile``, rebuilds the model
   from it and removes it; files the deck names (``bathymetryFile``, a WaterKin file, Syrope
   tables) resolve against the ``MooringFile`` folder as in the original run. Keep restart files with the exact executable and complete input set.

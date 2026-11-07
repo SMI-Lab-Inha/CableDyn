@@ -349,7 +349,7 @@ CONTAINS
          uu%CoupledKinematics(1)%TranslationDisp(:, ip) = REAL(rr, ReKi)
          uu%CoupledKinematics(1)%TranslationVel(:, ip) = REAL(vv, ReKi)
          uu%CoupledKinematics(1)%TranslationAcc(:, ip) = REAL(aa, ReKi)
-         uu%CoupledKinematics(1)%Orientation(:, :, ip) = REAL(dcm, ReKi)
+         uu%CoupledKinematics(1)%Orientation(:, :, ip) = dcm
          uu%CoupledKinematics(1)%RotationVel(:, ip) = REAL(omg, ReKi)
          uu%CoupledKinematics(1)%RotationAcc(:, ip) = REAL(alp, ReKi)
       END DO

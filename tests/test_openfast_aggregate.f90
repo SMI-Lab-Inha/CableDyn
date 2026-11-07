@@ -38,7 +38,7 @@ PROGRAM test_openfast_aggregate
                                          CD_AGG_NCtrlChans, CD_AGG_Apply_LineControl, &
                                          CD_AGG_Refresh_PointMesh, CD_AGG_HasRigid6, CD_AGG_HasRod, &
                                          CD_AGG_Rigid6_MirrorSize, CD_AGG_Get_Rigid6_States, &
-                                         CD_AGG_Set_Rigid6_States, CD_AGG_Rod_MirrorSize, &
+                                         CD_AGG_Set_Rigid6_States, CD_AGG_Reopen_Start, CD_AGG_Rod_MirrorSize, &
                                          CD_AGG_Get_Rod_States, CD_AGG_Set_Rod_States, &
                                          CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_Range_Discard, &
                                          CD_AGG_Range_Graphs, CD_AGG_Range_MirrorSize, CD_AGG_Range_Get_State, &
@@ -136,6 +136,8 @@ PROGRAM test_openfast_aggregate
   CALL case_anchor_uplift_channels()
   CALL case_output_channels()
   CALL case_range_graph_host()
+  CALL case_range_discard_at_parse()
+  CALL case_reopen_start()
   CALL case_long_init_notes()
   CALL case_pure_cable_deck()
   CALL case_cable_load_feedback()
@@ -1108,6 +1110,126 @@ CONTAINS
     CALL CD_AGG_End(plain, es, em)
   END SUBROUTINE case_range_graph_host
 
+  SUBROUTINE case_range_discard_at_parse()
+    !! The range files of an earlier run go once the deck has named them, so an initialisation that
+    !! fails after the parse leaves none. A rebuild of a run under way passes no root and leaves
+    !! them, and a deck that does not parse names none: the earlier run's outputs stand whole.
+    TYPE(CD_AGG_ModuleType) :: a
+    INTEGER :: es, u, ios
+    LOGICAL :: there
+    CHARACTER(512) :: em
+
+    CALL write_mixed_channels_deck('agg_discard.dat', outputs_row='Ten1N1', line_outputs='r', &
+                                   extra_option='0.0 TMax', extra_option2='0.1 RangeStart')
+    ! refused after the parse: RangeStart beyond the host's run time
+    CALL seed_range_file('agg_discard.Line1.range.out')
+    CALL seed_range_file('agg_discard.Line2.range.out')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE.)
+    CALL require(es /= CD_AGG_OK, 'range-discard:refused-without-root')
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(there, 'range-discard:no-root-leaves-the-file')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE., &
+                               range_discard_root='agg_discard')
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'RangeStart exceeds TMax') > 0, 'range-discard:refused: '//TRIM(em))
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:line1-removed')
+    INQUIRE (FILE='agg_discard.Line2.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:line2-removed')
+    ! a static solve that fails: the deck parsed, the equilibrium is not found
+    CALL write_coupled_rigid6_deck('agg_discard_st.dat', 0.0_wp, 0.0_wp, .FALSE., overloaded=.TRUE.)
+    CALL seed_range_file('agg_discard.Line1.range.out')
+    CALL seed_range_file('agg_discard.Line2.range.out')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard_st.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE., &
+                               range_discard_root='agg_discard')
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'equilibrium not found') > 0, 'range-discard:statics-fail: '//TRIM(em))
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:statics-fail-line1-removed')
+    INQUIRE (FILE='agg_discard.Line2.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:statics-fail-line2-removed')
+    ! a deck that does not parse
+    OPEN (NEWUNIT=u, FILE='agg_discard_bad.dat', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    WRITE (u, '(A)') 'not a deck'
+    CLOSE (u)
+    CALL seed_range_file('agg_discard.Line1.range.out')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard_bad.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE., &
+                               range_discard_root='agg_discard')
+    CALL require(es /= CD_AGG_OK, 'range-discard:bad-deck-refused')
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(there, 'range-discard:bad-deck-leaves-the-file')
+    OPEN (NEWUNIT=u, FILE='agg_discard.Line1.range.out', STATUS='OLD', IOSTAT=ios)
+    IF (ios == 0) CLOSE (u, STATUS='DELETE')
+  END SUBROUTINE case_range_discard_at_parse
+
+  SUBROUTINE case_reopen_start()
+    !! A state mirror restored from before the first commit keeps the body's start open: the host
+    !! fluid fields of the first step re-solve the start accelerations, as in the run that was
+    !! never restored (a checkpoint inside the first mooring step). Without CD_AGG_Reopen_Start
+    !! they do not.
+    REAL(wp), PARAMETER :: DT = 0.005_wp
+    TYPE(CD_AGG_ModuleType) :: a, b, c
+    REAL(wp) :: r0(3, 1), vel(3, 1), acc(3, 1), lds(3, 1)
+    REAL(wp), ALLOCATABLE :: sa(:), sb(:), sc(:), fv(:, :), fa(:, :), fw(:)
+    INTEGER :: es, n, ia, nf
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+
+    CALL write_coupled_rigid6_deck('agg_reopen.dat', 1.0_wp, 0.5_wp, .FALSE.)
+    CALL CD_AGG_Init_From_Deck(a, 'agg_reopen.dat', DT, es, em, external_fluid=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'reopen:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_Init_From_Deck(b, 'agg_reopen.dat', DT, es, em, external_fluid=.TRUE.)
+    CALL CD_AGG_Init_From_Deck(c, 'agg_reopen.dat', DT, es, em, external_fluid=.TRUE.)
+    n = CD_AGG_Rigid6_MirrorSize(a)
+    nf = CD_AGG_NFluidNodes(a, es, em)
+    ALLOCATE (fv(3, nf), fa(3, nf), fw(nf))
+    fv = 0.0_wp
+    fv(1, :) = 0.4_wp
+    fa = 0.0_wp
+    fa(1, :) = 0.3_wp
+    fw = 0.0_wp
+    ALLOCATE (sa(n), sb(n), sc(n))
+    CALL CD_AGG_Get_Rigid6_States(b, sb, es, em)
+    CALL CD_AGG_Set_Rigid6_States(b, sb, es, em)
+    CALL CD_AGG_Reopen_Start(b)
+    CALL CD_AGG_Get_Rigid6_States(c, sc, es, em)
+    CALL CD_AGG_Set_Rigid6_States(c, sc, es, em)
+    ! the first step: new fields, then an advance that moves the fairlead
+    CALL CD_AGG_SetFluidFields(a, fv, fa, fw, es, em)
+    CALL require(es == CD_AGG_OK, 'reopen:fields-a: '//TRIM(em))
+    CALL CD_AGG_SetFluidFields(b, fv, fa, fw, es, em)
+    CALL require(es == CD_AGG_OK, 'reopen:fields-b: '//TRIM(em))
+    CALL CD_AGG_SetFluidFields(c, fv, fa, fw, es, em)
+    CALL require(es == CD_AGG_OK, 'reopen:fields-c: '//TRIM(em))
+    CALL CD_AGG_GetMovingPointMesh(a, r0, vel, acc, lds, es, em)
+    r0(1, 1) = r0(1, 1) + 0.01_wp
+    vel = 0.0_wp
+    vel(1, 1) = 0.2_wp
+    acc = 0.0_wp
+    acc(1, 1) = 1.0_wp
+    CALL CD_AGG_Step_Moving(a, DT, r0, vel, acc, cv, st, ia, es, em, t_committed=DT)
+    CALL require(es == CD_AGG_OK, 'reopen:step-a: '//TRIM(em))
+    CALL CD_AGG_Step_Moving(b, DT, r0, vel, acc, cv, st, ia, es, em, t_committed=DT)
+    CALL require(es == CD_AGG_OK, 'reopen:step-b: '//TRIM(em))
+    CALL CD_AGG_Step_Moving(c, DT, r0, vel, acc, cv, st, ia, es, em, t_committed=DT)
+    CALL require(es == CD_AGG_OK, 'reopen:step-c: '//TRIM(em))
+    CALL CD_AGG_Get_Rigid6_States(a, sa, es, em)
+    CALL CD_AGG_Get_Rigid6_States(b, sb, es, em)
+    CALL CD_AGG_Get_Rigid6_States(c, sc, es, em)
+    CALL require(nan_max_abs(sb - sa) <= 0.0_wp, 'reopen:restored-equals-never-restored')
+    CALL require(nan_max_abs(sc - sa) > 0.0_wp, 'reopen:closed-start-differs')
+    CALL CD_AGG_End(a, es, em)
+    CALL CD_AGG_End(b, es, em)
+    CALL CD_AGG_End(c, es, em)
+  END SUBROUTINE case_reopen_start
+
+  SUBROUTINE seed_range_file(path)
+    CHARACTER(*), INTENT(IN) :: path
+    INTEGER :: u, ios
+    OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
+    WRITE (u, '(A)') 'stale'
+    CLOSE (u)
+  END SUBROUTINE seed_range_file
+
   SUBROUTINE range_march(a, r0, dt, step, amplitude, label)
     !! Advance to step's committed time with a small surge and heave of the fairleads about r0,
     !! scaled by amplitude: the same motion for every instance at amplitude 1.
@@ -1804,17 +1926,21 @@ CONTAINS
     DEALLOCATE (xyz, fv, fa, wl)
   END SUBROUTINE case_coupled_point3_fluid
 
-  SUBROUTINE write_coupled_rigid6_deck(path, cda, ca, extra_free, deck_pose)
+  SUBROUTINE write_coupled_rigid6_deck(path, cda, ca, extra_free, deck_pose, overloaded)
     !! A submerged Rigid6 body hung between a Fixed anchor and a Coupled fairlead by two
     !! chain lines (still water). cda/ca parametrise the body fluid coefficients (0/0 is the
     !! supported pure-inertia+buoyancy+restoring case); extra_free adds a stray Free point to
     !! exercise the scope guard; deck_pose starts the body at its deck pose (bodyIC deck)
-    !! instead of its static equilibrium.
+    !! instead of its static equilibrium; overloaded flags both lines r and makes the body far too
+    !! heavy for them, so that the static equilibrium is not found.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: cda, ca
     LOGICAL, INTENT(IN) :: extra_free
-    LOGICAL, INTENT(IN), OPTIONAL :: deck_pose
+    LOGICAL, INTENT(IN), OPTIONAL :: deck_pose, overloaded
     INTEGER :: u, ios
+    LOGICAL :: heavy
+    heavy = .FALSE.
+    IF (PRESENT(overloaded)) heavy = overloaded
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     WRITE (u, '(A)') 'coupled rigid6 body deck'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -1825,8 +1951,13 @@ CONTAINS
     WRITE (u, '(A)') 'ID Type X Y Z Rot1 Rot2 Rot3 Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm/rad) (Nm/rad) (m2) (-) '// &
       '(kgm2) (kgm2) (kgm2)'
-    WRITE (u, '(A,F6.3,1X,F6.3,A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 ', &
-      cda, ca, ' 20.0 20.0 20.0'
+    IF (heavy) THEN
+      WRITE (u, '(A,F6.3,1X,F6.3,A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 1.0e7 0.05 0.0 100.0 100.0 ', &
+        cda, ca, ' 20.0 20.0 20.0'
+    ELSE
+      WRITE (u, '(A,F6.3,1X,F6.3,A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 ', &
+        cda, ca, ' 20.0 20.0 20.0'
+    END IF
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
@@ -1837,8 +1968,13 @@ CONTAINS
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
-    WRITE (u, '(A)') '1 2 1 -'
-    WRITE (u, '(A)') '2 3 2 -'
+    IF (heavy) THEN
+      WRITE (u, '(A)') '1 2 1 r'
+      WRITE (u, '(A)') '2 3 2 r'
+    ELSE
+      WRITE (u, '(A)') '1 2 1 -'
+      WRITE (u, '(A)') '2 3 2 -'
+    END IF
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
