@@ -25,7 +25,9 @@ DRIVER = os.environ.get("CABLEDYN_TEST_DRIVER", "").strip() or os.environ.get("C
 DRIFT = "on the seabed at the static start with no seabed friction"
 CURRENT = "uniform 0.5 0 0 current"
 # a Currents 2 table that holds one current over its 1 s
-CONSTANT_GRID = "dynamic\n\n\n\n-50.0 0.0\nt ux... uy...\n0.0 0.1 0.1 0.0 0.0\n1.0 0.1 0.1 0.0 0.0\n"
+CONSTANT_GRID = (
+    "dynamic\n\n\n\n-50.0 0.0\nt ux... uy...\n0.0 0.1 0.1 0.0 0.0\n1.0 0.1 0.1 0.0 0.0\n"
+)
 _BAR = "-" * 21
 _DECK = f"""{_BAR} CableDyn Input File {_BAR}
 a grounded chain
