@@ -185,6 +185,13 @@ class DocumentationTests(unittest.TestCase):
                 farm_patch,
                 f"FAST.Farm host environment propagation lost: {token}",
             )
+        # both hosts tell CableDyn that a run completed, which gates its whole-run outputs
+        for hook in ("0014-fast-subs.patch", "0023-fast-farm-end.patch"):
+            self.assertIn(
+                "%CD%m%HostComplete = .true.",
+                (ROOT / "integration" / "openfast" / "patches" / hook).read_text(encoding="utf-8"),
+                f"run-completion signal lost: {hook}",
+            )
         self.assertNotIn("CD_InitInp%g         =    9.81", farm_patch)
         self.assertNotIn("CD_InitInp%rhoW      = 1025.0", farm_patch)
         farm_registry = (

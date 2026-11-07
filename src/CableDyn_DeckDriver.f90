@@ -208,7 +208,7 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_Deck_Query_dtM
   PUBLIC :: CD_End_Deck_Aggregate
   PUBLIC :: CD_DeckAggregateType
-  PUBLIC :: CD_LineInitSummary
+  PUBLIC :: CD_LineInitSummary, CD_INIT_NOTE_LEN
   ! Coupled Rigid6 runtime: the aggregate facade owns a CD_Rigid6RuntimeType and marches
   ! it over the EI=0 system each mooring step (opaque; RigidBodyState/DeckOptions stay private).
   PUBLIC :: CD_Rigid6RuntimeType
@@ -1138,6 +1138,12 @@ MODULE CableDyn_DeckDriver
     TYPE(HydroUpdateWorkspace) :: work
   END TYPE
 
+  ! Length of the initialisation notes of one line, and of a caller's buffer for them
+  ! (CD_LineInitSummary%note). A line reports each of its notes at most once per end, fewer than
+  ! 32 in all, and none is longer than 1024 characters, so every note fits and the omission marker
+  ! of append_note_line is never reached.
+  INTEGER, PARAMETER :: CD_INIT_NOTE_LEN = 32*1024
+
   TYPE :: CD_LineInitSummary
     !! Engineering quantities at the converged static initial condition.  The
     !! fairlead force is the force exerted by the line on public End A and the
@@ -1153,8 +1159,7 @@ MODULE CableDyn_DeckDriver
     ! finite-EI line (compression, mesh refinement, accepted residual floor, a run past its
     ! anchor), the fold note of an EI = 0 line (ei0_fold_note), and the static strain note and
     ! the dtM advisory (axial_period_note) of any line; empty when there is nothing to report.
-    ! It holds a whole cable note (1024) and the two others.
-    CHARACTER(2048) :: note = ''
+    CHARACTER(CD_INIT_NOTE_LEN) :: note = ''
   END TYPE CD_LineInitSummary
 
   TYPE :: CD_DeckAggregateType
@@ -1192,7 +1197,7 @@ MODULE CableDyn_DeckDriver
     TYPE(CD_SystemType) :: sys
     TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cables(:)
     ! Static-initialisation notes of each finite-EI cable (build_one_hermite_cable).
-    CHARACTER(1024), ALLOCATABLE :: cable_note(:)
+    CHARACTER(CD_INIT_NOTE_LEN), ALLOCATABLE :: cable_note(:)
     ! Deck point ids of each cable's End A and End B (Point<P>F channels).
     INTEGER, ALLOCATABLE :: cable_points(:, :)
     REAL(wp) :: gravity = CD_ZERO, rho_water = CD_ZERO

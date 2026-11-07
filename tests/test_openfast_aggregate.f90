@@ -23,7 +23,7 @@ PROGRAM test_openfast_aggregate
   !!   8) line control -- CONTROL on EI=0 lines and finite-EI cables (alone and mixed), its
   !!      fail-closed bounds, rewind and bit-identical checkpoint restart (--line-control-only).
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK
+  USE CableDyn_DeckDriver, ONLY: CD_Deck_Query_dtM, CD_DECKDRV_OK, CD_INIT_NOTE_LEN
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_UpdateStates_Moving, &
                                          CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
@@ -136,6 +136,7 @@ PROGRAM test_openfast_aggregate
   CALL case_anchor_uplift_channels()
   CALL case_output_channels()
   CALL case_range_graph_host()
+  CALL case_long_init_notes()
   CALL case_pure_cable_deck()
   CALL case_cable_load_feedback()
   CALL case_end_connection_orientation_and_moment()
@@ -161,6 +162,7 @@ PROGRAM test_openfast_aggregate
   CALL case_step_atomicity()
   CALL case_ptfm_init_equivalence()
   CALL case_correction_rewind()
+  CALL case_retry_after_probe()
   CALL case_external_fluid()
   CALL case_still_water_deck_ambient()
   CALL case_external_fluid_report()
@@ -1129,6 +1131,39 @@ CONTAINS
     CALL CD_AGG_Step_Moving(a, dt, tgt, v, ac, cv, st, ni, es, em, t_committed=tc)
     CALL require(es == CD_AGG_OK .AND. cv, label//': '//TRIM(em))
   END SUBROUTINE range_march
+
+  SUBROUTINE case_long_init_notes()
+    !! A cable that collects a long list of initialisation notes: the two stiffener notes of each
+    !! end, the friction resolution note and, appended after them on the line summary, the dtM
+    !! advisory. They run past the 1024 characters of a cable's note and of the OpenFAST shell's
+    !! old buffer; every note arrives whole, in a buffer of CD_INIT_NOTE_LEN.
+    TYPE(CD_AGG_ModuleType) :: agg
+    REAL(wp) :: ten, force(3), incl, decl, azi
+    INTEGER :: es, line_id, nlines, k
+    CHARACTER(512) :: em
+    CHARACTER(CD_INIT_NOTE_LEN) :: note
+
+    CALL write_touchdown_cable_deck('agg_long_notes.dat', 'FairTen2', stiffeners=.TRUE.)
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_long_notes.dat', 0.1_wp, es, em)
+    CALL require(es == CD_AGG_OK, 'long-notes:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetInitLine(agg, 2, line_id, ten, force, incl, decl, azi, es, em, note=note)
+    CALL require(es == CD_AGG_OK .AND. line_id == 2, 'long-notes:line')
+    WRITE (*, '(A,I0)') '  initialisation notes of the cable, characters: ', LEN_TRIM(note)
+    CALL require(LEN_TRIM(note) > 1024, 'long-notes:longer-than-the-old-buffer')
+    CALL require(INDEX(note, 'stiffener at End A spans') > 0 .AND. INDEX(note, 'stiffener at End A sleeves') > 0 .AND. &
+                 INDEX(note, 'stiffener at End B spans') > 0 .AND. INDEX(note, 'stiffener at End B sleeves') > 0, &
+                 'long-notes:the-four-stiffener-notes')
+    CALL require(INDEX(note, 'seabed friction acts at the nodes') > 0, 'long-notes:the-friction-note')
+    CALL require(INDEX(note, 'axial period') > 0, 'long-notes:the-dtM-advisory-appended-last')
+    CALL require(INDEX(note, 'notes omitted') == 0, 'long-notes:nothing-omitted')
+    nlines = 1
+    DO k = 1, LEN_TRIM(note)
+      IF (note(k:k) == NEW_LINE('a')) nlines = nlines + 1
+    END DO
+    CALL require(nlines >= 6, 'long-notes:one-text-line-per-note')
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE case_long_init_notes
 
   SUBROUTINE check_static_profile(path, expected_rows)
     CHARACTER(*), INTENT(IN) :: path
@@ -2776,6 +2811,77 @@ CONTAINS
     m(2, 3) = sx*cy
     m(3, 3) = cx*cy
   END FUNCTION test_zyx_dcm
+
+  SUBROUTINE case_retry_after_probe()
+    !! A host that retries a step after an output probe of it (the OpenFAST shell at dtM = DT): the
+    !! probe's setters clear the cached committed force, but the retried step must take the path
+    !! the first pass took, which reused that cache. A fresh evaluation differs from it in the last
+    !! bits where a friction anchor slid. The run with retries matches one without bit for bit.
+    TYPE(CD_AGG_ModuleType) :: agg, once
+    REAL(wp), PARAMETER :: DT = 0.05_wp, OMEGA = 2.0_wp*PI/8.0_wp, AMP = 12.0_wp
+    INTEGER, PARAMETER :: NSTEP = 160
+    REAL(wp) :: r0(3, 2), tgt(3, 2), v(3, 2), a(3, 2), lds(3, 2), tc
+    INTEGER :: es, ni, s
+    LOGICAL :: cv, st
+    CHARACTER(512) :: em
+
+    CALL write_touchdown_cable_deck('agg_retry_probe.dat', 'FairTen2')
+    CALL CD_AGG_Init_From_Deck(agg, 'agg_retry_probe.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'retry-probe:init: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_Init_From_Deck(once, 'agg_retry_probe.dat', DT, es, em)
+    CALL require(es == CD_AGG_OK, 'retry-probe:init-once: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL CD_AGG_GetMovingPointMesh(agg, r0, v, a, lds, es, em)
+    DO s = 1, NSTEP
+      tc = REAL(s, wp)*DT
+      tgt = r0
+      tgt(1, 2) = r0(1, 2) + AMP*SIN(OMEGA*tc)
+      v = 0.0_wp
+      v(1, 2) = AMP*OMEGA*COS(OMEGA*tc)
+      a = 0.0_wp
+      a(1, 2) = -AMP*OMEGA**2*SIN(OMEGA*tc)
+      CALL CD_AGG_Snapshot(agg, es, em)
+      CALL CD_AGG_Step_Moving(agg, DT, tgt, v, a, cv, st, ni, es, em, t_committed=tc)
+      CALL require(es == CD_AGG_OK .AND. cv, 'retry-probe:first-pass: '//TRIM(em))
+      CALL retry_probe_cycle(agg, tgt, v, a, tc)
+      CALL CD_AGG_Restore(agg, es, em)
+      CALL require(es == CD_AGG_OK, 'retry-probe:restore: '//TRIM(em))
+      CALL CD_AGG_Step_Moving(agg, DT, tgt, v, a, cv, st, ni, es, em, t_committed=tc)
+      CALL require(es == CD_AGG_OK .AND. cv, 'retry-probe:second-pass: '//TRIM(em))
+      CALL retry_probe_cycle(agg, tgt, v, a, tc)
+      CALL CD_AGG_Snapshot(once, es, em)
+      CALL CD_AGG_Step_Moving(once, DT, tgt, v, a, cv, st, ni, es, em, t_committed=tc)
+      CALL require(es == CD_AGG_OK .AND. cv, 'retry-probe:once: '//TRIM(em))
+      IF (es /= CD_AGG_OK) EXIT
+      CALL retry_probe_cycle(once, tgt, v, a, tc)
+    END DO
+    WRITE (*, '(A,ES10.3)') '  retried against single steps, largest cable state difference: ', &
+      nan_max_abs(agg%cables(1)%line%q - once%cables(1)%line%q)
+    CALL require(nan_max_abs(agg%cables(1)%line%q - once%cables(1)%line%q) <= 0.0_wp, 'retry-probe:positions')
+    CALL require(nan_max_abs(agg%cables(1)%line%v - once%cables(1)%line%v) <= 0.0_wp, 'retry-probe:velocities')
+    CALL require(nan_max_abs(agg%cables(1)%line%a - once%cables(1)%line%a) <= 0.0_wp, 'retry-probe:accelerations')
+    CALL CD_AGG_End(agg, es, em)
+    CALL CD_AGG_End(once, es, em)
+  END SUBROUTINE case_retry_after_probe
+
+  SUBROUTINE retry_probe_cycle(a, tgt, v, acc, t)
+    !! An output probe at the committed kinematics and the cable's state mirror back after it, as
+    !! the OpenFAST shell's CalcOutput does at dtM = DT.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: a
+    REAL(wp), INTENT(IN) :: tgt(:, :), v(:, :), acc(:, :), t
+    REAL(wp), ALLOCATABLE :: buf(:)
+    INTEGER :: es
+    CHARACTER(512) :: em
+
+    ALLOCATE (buf(CD_HFMF_MirrorSize(a%cables(1))))
+    CALL CD_HFMF_PackMirror(a%cables(1), buf, es, em)
+    CALL require(es == CD_HFMF_OK, 'retry-probe:pack: '//TRIM(em))
+    CALL CD_AGG_UpdateStates_Moving(a, tgt, v, acc, es, em, output_probe=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'retry-probe:probe: '//TRIM(em))
+    CALL CD_HFMF_UnpackMirror(a%cables(1), buf, t, es, em)
+    CALL require(es == CD_HFMF_OK, 'retry-probe:unpack: '//TRIM(em))
+  END SUBROUTINE retry_probe_cycle
 
   SUBROUTINE case_correction_rewind()
     !! Correction-iteration semantics at the aggregate level (the OpenFAST shell's
@@ -5480,10 +5586,12 @@ CONTAINS
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_anchor_uplift_channels
 
-  SUBROUTINE write_touchdown_cable_deck(path, outputs_row)
+  SUBROUTINE write_touchdown_cable_deck(path, outputs_row, stiffeners)
     !! IEA-15MW mooring chain (line 1, Fixed anchor point 2) + touchdown power cable (line 2,
-    !! Fixed anchor point 4) on a 200 m seabed, with the given OUTPUTS row(s).
+    !! Fixed anchor point 4) on a 200 m seabed, with the given OUTPUTS row(s); stiffeners adds a
+    !! bend stiffener over each end of the cable, one deck element long.
     CHARACTER(*), INTENT(IN) :: path, outputs_row
+    LOGICAL, INTENT(IN), OPTIONAL :: stiffeners
     INTEGER :: u, ios
 
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
@@ -5515,6 +5623,15 @@ CONTAINS
     WRITE (u, '(A)') '2 bare 80.0 20'
     WRITE (u, '(A)') '2 buoy 100.0 25'
     WRITE (u, '(A)') '2 bare 420.0 42'
+    IF (PRESENT(stiffeners)) THEN
+      IF (stiffeners) THEN
+        WRITE (u, '(A)') '--- STIFFENERS ---'
+        WRITE (u, '(A)') 'LineID End Length RootOD TipOD InnerD E Density'
+        WRITE (u, '(A)') '(-) (-) (m) (m) (m) (m) (Pa) (kg/m^3)'
+        WRITE (u, '(A)') '2 A 4.0 0.45 0.18 0.17 5.0e7 1150'
+        WRITE (u, '(A)') '2 B 4.0 0.45 0.18 0.17 5.0e7 1150'
+      END IF
+    END IF
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'

@@ -421,6 +421,7 @@ IMPLICIT NONE
     INTEGER(IntKi)  :: NConns = 0      !< number of Connect type Points - not to be confused with NPoints []
     INTEGER(IntKi)  :: NAnchs = 0      !< number of Anchor type Points []
     REAL(DbKi)  :: Tmax = 0.0_R8Ki      !< simulation duration [[s]]
+    LOGICAL  :: Linearize = .FALSE.      !< the run linearizes: a rebuilt instance needs the linearization state map [-]
     INTEGER(IntKi)  :: tScheme = 0      !< Time integration scheme (0 = RK2, 1 = RK4). Default is RK2 [-]
     REAL(DbKi)  :: g = 9.81      !< gravitational constant (positive) [[m/s^2]]
     REAL(DbKi)  :: rhoW = 1025      !< density of seawater [[kg/m^3]]
@@ -541,6 +542,7 @@ IMPLICIT NONE
     TYPE(GridInterp_MiscVarType)  :: WaveField_m      !< misc var information from the SeaState Interpolation module [-]
     LOGICAL  :: IC_gen = .FALSE.      !< boolean to indicate dynamic relaxation occuring [-]
     INTEGER(IntKi)  :: CDInst = 0      !< CableDyn mooring-backend instance handle (0 = none / needs rebuild after restart) []
+    LOGICAL  :: HostComplete = .FALSE.      !< set by the host before CD_End when the run ended without an error [-]
   END TYPE CD_MiscVarType
 ! =======================
    integer(IntKi), public, parameter :: CD_x_states                      =   1 ! CD%states
@@ -3133,6 +3135,7 @@ subroutine CD_CopyParam(SrcParamData, DstParamData, CtrlCode, ErrStat, ErrMsg)
    DstParamData%NConns = SrcParamData%NConns
    DstParamData%NAnchs = SrcParamData%NAnchs
    DstParamData%Tmax = SrcParamData%Tmax
+   DstParamData%Linearize = SrcParamData%Linearize
    DstParamData%tScheme = SrcParamData%tScheme
    DstParamData%g = SrcParamData%g
    DstParamData%rhoW = SrcParamData%rhoW
@@ -3502,6 +3505,7 @@ subroutine CD_PackParam(RF, Indata)
    call RegPack(RF, InData%NConns)
    call RegPack(RF, InData%NAnchs)
    call RegPack(RF, InData%Tmax)
+   call RegPack(RF, InData%Linearize)
    call RegPack(RF, InData%tScheme)
    call RegPack(RF, InData%g)
    call RegPack(RF, InData%rhoW)
@@ -3612,6 +3616,7 @@ subroutine CD_UnPackParam(RF, OutData)
    call RegUnpack(RF, OutData%NConns); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%NAnchs); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%Tmax); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpack(RF, OutData%Linearize); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%tScheme); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%g); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%rhoW); if (RegCheckErr(RF, RoutineName)) return
@@ -4547,6 +4552,7 @@ subroutine CD_CopyMisc(SrcMiscData, DstMiscData, CtrlCode, ErrStat, ErrMsg)
    if (ErrStat >= AbortErrLev) return
    DstMiscData%IC_gen = SrcMiscData%IC_gen
    DstMiscData%CDInst = SrcMiscData%CDInst
+   DstMiscData%HostComplete = SrcMiscData%HostComplete
 end subroutine
 
 subroutine CD_DestroyMisc(MiscData, ErrStat, ErrMsg)
@@ -4827,6 +4833,7 @@ subroutine CD_PackMisc(RF, Indata)
    call GridInterp_PackMisc(RF, InData%WaveField_m) 
    call RegPack(RF, InData%IC_gen)
    call RegPack(RF, InData%CDInst)
+   call RegPack(RF, InData%HostComplete)
    if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
@@ -4980,6 +4987,7 @@ subroutine CD_UnPackMisc(RF, OutData)
    call GridInterp_UnpackMisc(RF, OutData%WaveField_m) ! WaveField_m 
    call RegUnpack(RF, OutData%IC_gen); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%CDInst); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpack(RF, OutData%HostComplete); if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
 subroutine CD_Input_ExtrapInterp(u, t, u_out, t_out, ErrStat, ErrMsg)

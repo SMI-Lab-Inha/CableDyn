@@ -22,7 +22,7 @@ PROGRAM cabledyn
   USE CableDyn_Conventions, ONLY: CD_CHANNEL_FMT
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_Deck_Query_dtM, &
                                  CD_Classify_Dynamic_Completion, CD_DECKDRV_OK, &
-                                 CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, CD_DECK_PATHLEN
+                                 CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, CD_DECK_PATHLEN, CD_INIT_NOTE_LEN
   USE CableDyn_PathIO, ONLY: CD_Get_Argument, CD_Native_Path, CD_Lock_Path, CD_PATH_OK, &
                              CD_LOCK_ACQUIRED, CD_LOCK_HELD, CD_Open_Read, CD_Open_Write
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, &
@@ -777,7 +777,7 @@ CONTAINS
     INTEGER :: n_lines, n_points, n_sections, n_ei0, n_finite, i, line_id, es
     REAL(wp) :: tension, force(3), inclination, declination, azimuth
     CHARACTER(4096) :: em
-    CHARACTER(2048) :: note
+    CHARACTER(CD_INIT_NOTE_LEN) :: note
 
     CALL CD_AGG_GetInitMetadata(aggregate, n_lines, n_points, n_sections, n_ei0, n_finite, es, em)
     IF (es /= CD_AGG_OK) THEN
