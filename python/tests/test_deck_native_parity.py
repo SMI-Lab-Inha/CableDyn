@@ -152,13 +152,320 @@ _WAVE_RECORD_CASES = [
 ]
 
 
-def _stage(folder: Path, rows: tuple[str, ...], files: dict[str, str]) -> Path:
+_CURRENT_TABLES = {
+    "2": "a\nb\nc\nd\n-40 -10\ne\n0 0.1 0.2\n5 0.2 0.3\n10 0.2 0.3\n",
+    "5": "1 1 2 2\n0\n0\n-40 -10\n0 10\n"
+    + "".join(f"0 0 {z} {t} 0.1 0 0\n" for z in (-40, -10) for t in (0, 10)),
+}
+_PROFILE = "z ux uy uz\n-40 0.1 0 0\n-10 0.2 0.1 0\n"
+_TABLE = "-40 0.1 0.0\n-10 0.2 0.1\n"
+
+
+def _kin(wave="0", current="0", table="", dt="0.25", direction="37.0", record='"eta.txt"') -> str:
+    return (
+        "MoorDyn v2 water kinematics file\n(header line 2)\n--- WAVES ---\n"
+        f"{wave} WaveKinMod\n{record} WaveKinFile\n{dt} dtWave\n{direction} WaveDir\n"
+        "0 X\n0.0\n0 Y\n0.0\n0 Z\n0.0\n--- CURRENT ---\n"
+        f"{current} CurrentMod\nz ux uy\n(m) (m/s) (m/s)\n{table}--- need this line ---\n"
+    )
+
+
+def _hold(point=2, *, tail=(), steps=101, last=None) -> str:
+    rows = [f"{0.1 * i:.1f} {point} 0 0 0 0 0 0 0 0 0\n" for i in range(steps)]
+    return "".join(rows[:last]) + "".join(tail)
+
+
+def _vessel(*, form=19, steps=101, tail=()) -> str:
+    pose = "0 0 0 0 0 0" if form == 19 else "0 0 0 1 0 0 0"
+    rows = [f"{0.1 * i:.1f} {pose} {'0 ' * 12}\n" for i in range(steps)]
+    return "".join(rows) + "".join(tail)
+
+
+def _rao(
+    heads=(-180.0, 179.0), period_row="0.5 0 0 0 0 1 0 0 0 0 0 0 0\n100 0 0 0 0 1 0 0 0 0 0 0 0\n"
+):
+    return "".join(f"HEADING {head}\n{period_row}" for head in heads)
+
+
+def _sea_bed(depth=50.0, **changes) -> str:
+    rows = {(x, y): depth for x in (-1000.0, 1000.0) for y in (-1000.0, 1000.0)}
+    rows.update(changes.get("rows", {}))
+    return "".join(f"{x} {y} {value}\n" for (x, y), value in rows.items()) + changes.get("tail", "")
+
+
+_SETTINGS = (EXAMPLES / "data" / "syrope" / "syrope_settings.dat").read_text(encoding="utf-8")
+_OWC = (EXAMPLES / "data" / "syrope" / "syrope_owc.dat").read_text(encoding="utf-8")
+
+
+def _syrope(settings=_SETTINGS, owc=_OWC) -> dict[str, str]:
+    return {"data/syrope/syrope_settings.dat": settings, "data/syrope/syrope_owc.dat": owc}
+
+
+# a deck of objects and no lines: the only route that does not read a motion file
+_OBJECTS = """Dry rod pinned to a heavy body
+--- ROD TYPES ---
+Name Diam Mass Cd Ca CdEnd CaEnd
+(-) (m) (kg/m) (-) (-) (-) (-)
+pend 0.2 50 0 0 0 0
+--- BODIES ---
+ID Attachment X0 Y0 Z0 r0 p0 y0 Mass CG* I* Volume CdA* Ca*
+(#) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m) (kg-m^2) (m^3) (m^2) (-)
+1 Free 5 0 20 0 0 0 5.0e10 0 1.0e13 4.87804882926829E+07 0 0
+--- RODS ---
+ID RodType Attachment XA YA ZA XB YB ZB NumSegs Outputs
+(-) (-) (-) (m) (m) (m) (m) (m) (m) (-) (-)
+1 pend Body1Pinned 0 0 0 5.0 0 -8.66025403784439 4 -
+--- OPTIONS ---
+100 WtrDpth
+deck bodyIC
+moordyn bodyWetting
+0.05 dtM
+1.0 TMax
+--- OUTPUTS ---
+Rod1Px Body1Pz
+--- end ---
+"""
+_FREE = "wave_frequencies.txt"
+_ONE_BETA = "0 0 0 0.5\n0.5 0.5 0 0.5\n"
+_WK = ("wk.dat WaterKin",)
+_C1 = "current_profile.txt"
+_C2 = "current_profile_dynamic.txt"
+_C5 = "current_profile_4d.txt"
+_RAO_ROWS = ("rao.txt vesselRAO", "0|0|0 vesselRef")
+# (deck, rows, files): every case is judged by DeckFile and by the driver
+_ANCILLARY_CASES = [
+    # WaterKin: the rest of the file
+    ("held", _WK, {"wk.dat": _kin()}),
+    ("held", _WK, {"wk.dat": _kin(dt="-1")}),
+    ("held", _WK, {"wk.dat": _kin(dt="x")}),
+    ("held", _WK, {"wk.dat": _kin(direction="north")}),
+    ("held", _WK, {"wk.dat": 'a\nb\nc\n0\n""\n0\n0\n0\n'}),
+    ("held", _WK, {"wk.dat": _kin(current="x")}),
+    ("held", _WK, {"wk.dat": _kin(current="3")}),
+    ("held", _WK, {"wk.dat": _kin(current="2")}),
+    ("held", _WK, {"wk.dat": _kin(wave="1", current="2"), "eta.txt": _ETA}),
+    ("held", _WK, {"wk.dat": _kin(wave="1", record='""')}),
+    ("held", _WK, {"wk.dat": _kin(wave="1", dt="0"), "eta.txt": _ETA}),
+    ("held", ("wk.dat WaterKin", "airy 2 8 0 waves"), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+    # the WaterKin current table, and a current doubled
+    ("held", _WK, {"wk.dat": _kin(current="1", table=_TABLE)}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="10 0.2 0.1\n40 0.1 0.0\n")}),
+    (
+        "held",
+        ("wk.dat WaterKin", "uniform 0.1 0 0 current"),
+        {"wk.dat": _kin(current="1", table=_TABLE)},
+    ),
+    ("held", ("wk.dat WaterKin", "uniform 0.1 0 0 current"), {"wk.dat": _kin()}),
+    (
+        "held",
+        ("wk.dat WaterKin", "1 Currents"),
+        {"wk.dat": _kin(current="1", table=_TABLE), _C1: _PROFILE},
+    ),
+    ("held", ("wk.dat WaterKin", "1 Currents"), {"wk.dat": _kin(), _C1: _PROFILE}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1 0\n10 0.2 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1 0\n-40 0.2 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 0.1\n-10 0.2 0\n")}),
+    ("held", _WK, {"wk.dat": _kin(current="1", table="-40 2000 0\n-10 0.2 0\n")}),
+    # the record of WaveKinMod 1
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 0\n2 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "1 0\n2 0\n3 0\n4 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n2 0\n1 0\n3 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 0\nend\n2 0\n3 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": "0 0\n1 x\n2 0\n3 0\n"}),
+    ("held", _WK, {"wk.dat": _kin("1"), "eta.txt": _ETA.replace(" 0.4\n", " 4000\n")}),
+    (
+        "held",
+        _WK,
+        {
+            "wk.dat": _kin("1"),
+            "eta.txt": _ETA.replace(" 0.4\n", " -70\n").replace(" -0.4\n", " -70\n"),
+        },
+    ),
+    ("held", ("wk.dat WaterKin", "0.1 WvHiCOff"), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+    ("held", ("wk.dat WaterKin", "none WvHiCOff"), {"wk.dat": _kin("1"), "eta.txt": _ETA}),
+    # Currents 1, 2 and 5
+    ("held", ("1 Currents",), {_C1: _PROFILE}),
+    ("held", ("1 Currents",), {_C1: "z ux uy uz\n"}),
+    ("held", ("1 Currents",), {_C1: "-10 0 0 0\n-40 0 0 0\n"}),
+    ("held", ("1 Currents",), {_C1: "-40 2000 0 0\n-10 0 0 0\n"}),
+    ("held", ("1 Currents",), {_C1: "-40 0 0\n-10 0 0 x\n"}),
+    ("held", ("1 Currents",), {_C1: "-40 0\n"}),
+    ("held", ("2 Currents",), {_C2: _CURRENT_TABLES["2"]}),
+    ("held", ("2 Currents",), {_C2: "a\nb\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 0.1 0.2\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-10 -40\ne\n0 1 1\n5 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 1 1\n0 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 1\n5 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 x 1\n5 1 1\n"}),
+    ("held", ("2 Currents",), {_C2: "a\nb\nc\nd\n-40 -10\ne\n0 2000 1\n5 1 1\n"}),
+    ("held", ("5 Currents",), {_C5: _CURRENT_TABLES["5"]}),
+    ("held", ("5 Currents",), {_C5: "1 1 x 2\n"}),
+    ("held", ("5 Currents",), {_C5: "1 1 2 2\n0\n0\n-40\n0 10\n"}),
+    ("held", ("5 Currents",), {_C5: _CURRENT_TABLES["5"] + "0 0 -40 0 0.1 0 0\n"}),
+    (
+        "held",
+        ("5 Currents",),
+        {_C5: _CURRENT_TABLES["5"].replace("0 0 -40 0 0.1", "0 0 -41 0 0.1")},
+    ),
+    ("held", ("5 Currents",), {_C5: _CURRENT_TABLES["5"].replace("0 0 -40 0 0.1 0 0\n", "")}),
+    ("held", ("5 Currents",), {_C5: "1 1 1 1\n0\n0\n-40\n0\n0 0 -40 0 0.1 0 0\n"}),
+    (
+        "held",
+        ("5 Currents",),
+        {_C5: _CURRENT_TABLES["5"].replace("0 0 -40 0 0.1", "0 0 -40 0 2000")},
+    ),
+    # motionFile
+    ("held", ("m.txt motionFile",), {"m.txt": _hold()}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("10.1 2 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(last=100)}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 2 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.05 2 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 1 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 2.5 0 0 0 0 0 0 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(tail=("0.0 2 0 0 0\n",))}),
+    ("held", ("m.txt motionFile",), {"m.txt": _hold(point=1)}),
+    ("held", ("m.txt motionFile",), {"m.txt": "0.0 2 2e6 0 0 0 0 0 0 0 0\n"}),
+    ("held", ("m.txt motionFile",), {"m.txt": "0.0 2 0 0 0 2e4 0 0 0 0 0\n"}),
+    ("held", ("m.txt motionFile",), {"m.txt": "0.0 2 0 0 0 0 0 0 2e6 0 0\n"}),
+    # vesselMotion
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel()}),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel(form=20)}),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": _vessel(steps=100)}),
+    (
+        "held",
+        ("v.txt vesselMotion", "0|0|0 vesselRef"),
+        {"v.txt": _vessel(form=19, tail=("0.0 " + "0 " * 19 + "\n",))},
+    ),
+    (
+        "held",
+        ("v.txt vesselMotion", "0|0|0 vesselRef"),
+        {"v.txt": _vessel(form=20).replace("0 0 0 1 0 0 0", "0 0 0 2 0 0 0", 1)},
+    ),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": "0.05 " + "0 " * 18 + "\n"}),
+    ("held", ("v.txt vesselMotion", "0|0|0 vesselRef"), {"v.txt": "0.0 2e6 " + "0 " * 17 + "\n"}),
+    # vesselRAO, its rows and the headings of the sea
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao()}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(30.0,))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0,))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(40.0, 90.0))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0, 90.0))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0, 360.0))}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "1 0 0 0 0 1 0 0 0 0 0 0 0\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30 40\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30\n1 0 0\n"}),
+    ("held", ("airy 2 8 30 waves", *_RAO_ROWS), {"rao.txt": "HEADING 30\n-1 " + "0 " * 12 + "\n"}),
+    (
+        "held",
+        ("airy 2 8 30 waves", *_RAO_ROWS),
+        {"rao.txt": "HEADING 30\n1 -1 " + "0 " * 11 + "\n"},
+    ),
+    (
+        "held",
+        ("airy 2 8 30 waves", *_RAO_ROWS),
+        {"rao.txt": "HEADING 30\n1 " + "0 " * 12 + "\nHEADING 40\n2 " + "0 " * 12 + "\n"},
+    ),
+    ("held", ("jonswap 2 9 3.3 30 waves", *_RAO_ROWS), {"rao.txt": _rao(heads=(30.0,))}),
+    (
+        "held",
+        ("jonswap 2 9 3.3 30 waves", "4 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(30.0,))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 30 waves", "4 WaveSpreading", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-60.0, 120.0))},
+    ),
+    (
+        "held",
+        ("jonswap 2 9 3.3 30 waves", "4 WaveSpreading", "5 WaveDirections", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(-42.0, 102.0))},
+    ),
+    ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(), _FREE: _ROWS}),
+    ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(heads=(0.0, 100.0)), _FREE: _ROWS}),
+    ("held", ("7 WaterKin", *_RAO_ROWS), {"rao.txt": _rao(heads=(28.0, 29.0)), _FREE: _ONE_BETA}),
+    (
+        "held",
+        ("wk.dat WaterKin", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(37.0,)), "wk.dat": _kin("1"), "eta.txt": _ETA},
+    ),
+    (
+        "held",
+        ("wk.dat WaterKin", *_RAO_ROWS),
+        {"rao.txt": _rao(heads=(38.0,)), "wk.dat": _kin("1"), "eta.txt": _ETA},
+    ),
+    # bathymetry
+    ("bed", (), {"b.txt": _sea_bed()}),
+    ("bed", (), {"b.txt": _sea_bed(depth=49.0)}),
+    ("bed", (), {"b.txt": _sea_bed(depth=50.0004)}),
+    ("bed", (), {"b.txt": _sea_bed(depth=0.0)}),
+    ("bed", (), {"b.txt": "0 0 50\n1 0 50\n"}),
+    ("bed", (), {"b.txt": _sea_bed(tail="0 0 50\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="-1000.0 -1000.0 50\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="1 2\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="1 x 3\n")}),
+    ("bed", (), {"b.txt": _sea_bed(tail="-1000.0 0.0 50\n1000.0 0.0 50\n")}),
+    # a crease at the anchor: the rounded and the tabulated surfaces differ there
+    (
+        "bed",
+        (),
+        {
+            "b.txt": "".join(
+                f"{x} {y} {d}\n"
+                for x, d in ((-1000.0, 40.0), (400.0, 50.0), (1000.0, 40.0))
+                for y in (-1000.0, 1000.0)
+            )
+        },
+    ),
+    # Syrope settings and OWC table
+    ("syrope", (), _syrope()),
+    ("syrope", (), _syrope(settings=_SETTINGS + "1.0 k1\n")),
+    ("syrope", (), _syrope(settings="data/x.dat OWC\n")),
+    (
+        "syrope",
+        (),
+        _syrope(
+            settings=_SETTINGS.replace("LINEAR", "CUBIC")
+            .replace("QUADRATIC", "CUBIC")
+            .replace("EXP", "CUBIC")
+        ),
+    ),
+    ("syrope", (), _syrope(owc="strain tension\n0.0 0.0\n")),
+    ("syrope", (), _syrope(owc="0.0 0.0\n0.01 x\n")),
+    ("syrope", (), _syrope(owc="0.02 1e6\n0.01 2e6\n0.03 3e6\n")),
+    ("syrope", (), _syrope(owc="0.0 2e6\n0.01 1e6\n0.03 3e6\n")),
+    # the routes of the objects: which of them read a motion file
+    ("rigid6_buoy.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("rod_moored_spar.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("spar_pinned_rods.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("mixed_body_rods_points.dat", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+    ("objects", ("m.txt motionFile",), {"m.txt": "not a motion row\n"}),
+]
+_ALL_FILE_CASES = [("held", rows, files) for rows, files in _WAVE_RECORD_CASES] + _ANCILLARY_CASES
+
+
+def _deck_text(deck: str, rows: tuple[str, ...]) -> str:
+    if deck == "bed":
+        return _options(_HELD, "b.txt bathymetryFile", *rows).replace("50.0 WtrDpth\n", "")
+    if deck == "syrope":
+        return (EXAMPLES / "syrope_polyester_mooring.dat").read_text(encoding="utf-8")
+    if deck == "objects":
+        return _OBJECTS.replace("1.0 TMax\n", "1.0 TMax\n" + "".join(f"{r}\n" for r in rows))
+    if deck.endswith(".dat"):
+        text = (EXAMPLES / deck).read_text(encoding="utf-8")
+        return re.sub(r"(?m)^(\S+\s+TMax\b.*)$", "\\1\n" + "\n".join(rows), text, count=1)
+    return _options(_HELD, *rows)
+
+
+def _stage(folder: Path, rows: tuple[str, ...], files: dict[str, str], deck: str = "held") -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     for name, text in files.items():
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_text(text, encoding="utf-8")
-    deck = folder / "deck.dat"
-    deck.write_text(_options(_HELD, *rows), encoding="utf-8")
-    return deck
+    path = folder / "deck.dat"
+    path.write_text(_deck_text(deck, rows), encoding="utf-8")
+    return path
 
 
 def _accepted(deck: Path) -> bool:
@@ -173,9 +480,9 @@ def _accepted(deck: Path) -> bool:
     not os.environ.get("CABLEDYN_DRIVER", "").strip(),
     reason="needs the native driver (CABLEDYN_DRIVER)",
 )
-@pytest.mark.parametrize(("rows", "files"), _WAVE_RECORD_CASES)
-def test_wave_record_rules_match_the_driver(tmp_path, rows, files):
-    deck = _stage(tmp_path, rows, files)
+@pytest.mark.parametrize(("base", "rows", "files"), _ALL_FILE_CASES)
+def test_wave_record_rules_match_the_driver(tmp_path, base, rows, files):
+    deck = _stage(tmp_path, rows, files, base)
     run = subprocess.run(
         [os.environ["CABLEDYN_DRIVER"], str(deck), str(tmp_path / "out")],
         capture_output=True,
@@ -799,7 +1106,7 @@ def test_generated_cases_carry_the_fixed_name_kinematics_files(tmp_path):
     ("mode", "name"), [("2", "current_profile_dynamic.txt"), ("5", "current_profile_4d.txt")]
 )
 def test_generated_cases_carry_the_moordyn_c_current_tables(tmp_path, mode, name):
-    table = "a MoorDyn-C current table\n"
+    table = _CURRENT_TABLES[mode]
     base = _kinematic_base(tmp_path / "src", f"{mode} Currents", files={name: table})
     out = tmp_path / "cases"
     generate_deck_cases(base, out, {"a": {"option.dtM": 0.05}})
