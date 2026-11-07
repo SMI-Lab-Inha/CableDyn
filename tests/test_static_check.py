@@ -16,7 +16,8 @@ Gates, on the shipped lazy-wave decks driven by a vesselMotion record and by a m
   give TMax = 0.
 
 and on one deck of each route (EI = 0 and finite-EI lines, the mixed aggregate, the multibody
-march, deck current and waves, vesselMotion, vesselRAO and motionFile records):
+march, deck current and waves, vesselMotion, vesselRAO and motionFile records, a TURBINES deck on
+its per-turbine record):
 
 * TMax = 0 needs no dtM: the deck runs, on records off any step, and writes the output of the
   run with dtM byte for byte;
@@ -42,6 +43,37 @@ ROUTES = ("dynamic_chain_held", "dynamic_chain_current", "dynamic_chain_waves", 
           "iea15mw_umaine_mixed_cabledyn", "mixed_body_rods_points", "rigid6_buoy", "rod_moored_spar",
           "connect_weighted_point", "lazy_wave_vessel_motion", "lazy_wave_vessel_rao",
           "lozon_gomex80_power_cable_motion")
+
+
+TURBINES = """--------------------- CableDyn Input File ---------------------
+a TURBINES deck on its per-turbine record, at 0.1 s
+--------------------- LINE TYPES ---------------------
+Name Diam Mass EA BA EI Cdn Cdt Can Cat
+chain 0.1 20.0 1.0e9 -1.0 0.0 1.2 0.2 1.0 0.0
+--------------------- TURBINES ---------------------
+J X0 Y0 Z0 PtfmSurge PtfmSway PtfmHeave PtfmRoll PtfmPitch PtfmYaw
+1 300.0 0.0 0 0 0 0 0 0 0
+--------------------- POINTS ---------------------
+ID Type X Y Z Mass Vol CdA Ca
+1 Turbine1 0 0 -10 0 0 0 0
+2 Fixed 0.0 0.0 -100.0 0 0 0 0
+--------------------- LINES ---------------------
+ID NodeA NodeB Outputs
+1 1 2 -
+--------------------- SECTIONS ---------------------
+LineID LineType Length NumSegs
+1 chain 380.0 20
+--------------------- OPTIONS ---------------------
+9.80665 g
+1025.0 rhoW
+100.0 WtrDpth
+0.1 dtM
+4.0 TMax
+turbine.motion motionFile
+--------------------- OUTPUTS ---------------------
+AnchTen1
+--------------------- need this line ---------------------
+"""
 
 
 def check(ok: bool, message: str) -> None:
@@ -174,7 +206,11 @@ def main() -> int:
     record = "data/vessel/vessel_surge_heave_pitch_12s_dt005.txt  vesselMotion"
     (work / "mixed_vessel_motion.dat").write_text(
         set_option(mixed, "TMax", f"{record}\n0|0|0  vesselRef\n0.0"), encoding="utf-8", newline="\n")
-    for deck_name in (*ROUTES, "mixed_vessel_motion"):
+    # a TURBINES deck: time J x y z q0 q1 q2 q3 and the rates, at rest, every 0.1 s
+    rows = [f"{0.1 * k:.1f} 1 300 0 0 1 0 0 0 " + " ".join(["0"] * 12) for k in range(41)]
+    (work / "turbine.motion").write_text("\n".join(rows) + "\n", encoding="utf-8", newline="\n")
+    (work / "turbines_motion.dat").write_text(TURBINES, encoding="utf-8", newline="\n")
+    for deck_name in (*ROUTES, "mixed_vessel_motion", "turbines_motion"):
         no_dtm(args.exe, work, deck_name)
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0

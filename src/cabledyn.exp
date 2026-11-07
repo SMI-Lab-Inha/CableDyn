@@ -11,6 +11,7 @@ _CableDyn_GetCoupledLayout
 _CableDyn_GetCoupledMoments
 _CableDyn_GetCoupledMotion
 _CableDyn_GetLastError
+_CableDyn_GetInitNotes
 _CableDyn_GetLineValues
 _CableDyn_GetObjectInfo
 _CableDyn_GetPointState

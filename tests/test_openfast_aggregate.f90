@@ -4755,7 +4755,10 @@ CONTAINS
     !!  - on the mixed deck (EI = 0 line and finite-EI cable), held under the host field of the
     !!    same current, the start stays at its loads -- the equilibrium in that current, with no
     !!    second copy of it in the dynamics -- where the still-water start moves away;
-    !!  - static_current needs the host field, and z levels that ascend.
+    !!  - static_current needs the host field, and z levels that ascend;
+    !!  - the grounded chains of the EI = 0 deck in that current, or in the deck's, carry one
+    !!    seabed drift note for the run, naming them; none in still water, with frictionMu or
+    !!    on a run that marches no step.
     TYPE(CD_AGG_ModuleType) :: agg_w, agg_c, agg_u
     REAL(wp), PARAMETER :: DT = 0.05_wp
     REAL(wp), PARAMETER :: UC(3) = [0.4_wp, 0.3_wp, 0.0_wp]
@@ -4782,8 +4785,24 @@ CONTAINS
       CALL CD_AGG_GetMovingPointMesh(agg_c, r0, v3, a3, lc3, es, em)
       CALL require(nan_max_abs(lc3 - lu) <= 1.0e-9_wp*nan_max_abs(lu), &
                    'static-current:ei0-start-equals-deck-current-start')
+      CALL require_drift_note(agg_u, 1, 'static-current:deck-current-drift-note')
+      CALL require_drift_note(agg_c, 1, 'static-current:host-current-drift-note')
     END IF
     CALL CD_AGG_End(agg_u, es, em)
+    CALL CD_AGG_End(agg_c, es, em)
+    CALL CD_AGG_Init_From_Deck(agg_c, 'agg_sc_still.dat', DT, es, em, external_fluid=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'static-current:ei0-still-init: '//TRIM(em))
+    IF (es == CD_AGG_OK) CALL require_drift_note(agg_c, 0, 'static-current:still-water-no-drift-note')
+    CALL CD_AGG_End(agg_c, es, em)
+    CALL CD_AGG_Init_From_Deck(agg_c, 'agg_sc_deck.dat', DT, es, em, static_run=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'static-current:static-run-init: '//TRIM(em))
+    IF (es == CD_AGG_OK) CALL require_drift_note(agg_c, 0, 'static-current:static-run-no-drift-note')
+    CALL CD_AGG_End(agg_c, es, em)
+    CALL write_volturnus_deck('agg_sc_friction.dat', extra_option='0.5 frictionMu', extra_option2='0.05 dtM', &
+                              extra_option3='60.0 TMax')
+    CALL CD_AGG_Init_From_Deck(agg_c, 'agg_sc_friction.dat', DT, es, em, external_fluid=.TRUE., static_current=prof)
+    CALL require(es == CD_AGG_OK, 'static-current:friction-init: '//TRIM(em))
+    IF (es == CD_AGG_OK) CALL require_drift_note(agg_c, 0, 'static-current:friction-no-drift-note')
     CALL CD_AGG_End(agg_c, es, em)
 
     ! (2) mixed deck: held in the host's current, the start in that current stays put
@@ -4813,6 +4832,30 @@ CONTAINS
     CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'ascend') > 0, 'static-current:levels-ascend: '//TRIM(em))
     CALL CD_AGG_End(agg_c, es, em)
   END SUBROUTINE case_static_current
+
+  SUBROUTINE require_drift_note(agg, expected, label)
+    !! The seabed drift note appears expected times over the lines of the three-chain deck, and
+    !! names the three.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: agg
+    INTEGER, INTENT(IN) :: expected
+    CHARACTER(*), INTENT(IN) :: label
+    CHARACTER(*), PARAMETER :: TEXT = 'on the seabed at the static start with no seabed friction'
+    CHARACTER(2048) :: note
+    CHARACTER(1024) :: em
+    REAL(wp) :: tension, force(3), incl, decl, azi
+    INTEGER :: i, line_id, es, found
+
+    found = 0
+    DO i = 1, 3
+      CALL CD_AGG_GetInitLine(agg, i, line_id, tension, force, incl, decl, azi, es, em, note=note)
+      CALL require(es == CD_AGG_OK, label//': line summary: '//TRIM(em))
+      IF (INDEX(note, TEXT) == 0) CYCLE
+      found = found + 1
+      CALL require(INDEX(note, 'lines 1, 2, 3 lie') > 0 .AND. INDEX(note, 'Set frictionMu to hold them') > 0, &
+                   label//': names the lines and the remedy: '//TRIM(note))
+    END DO
+    CALL require(found == expected, label)
+  END SUBROUTINE require_drift_note
 
   SUBROUTINE held_drift(agg, uc, rel)
     !! Largest relative change of the two moving-point loads of the mixed deck over 1 s with the
