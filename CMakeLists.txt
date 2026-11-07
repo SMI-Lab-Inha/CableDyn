@@ -1166,7 +1166,7 @@ set_tests_properties(cable_statics_modes PROPERTIES LABELS "fortran;driver;hermi
 # clamped hang-off moment under vessel pitch.
 add_executable(test_vessel_motion tests/test_vessel_motion.f90)
 target_link_libraries(test_vessel_motion PRIVATE cabledyn_core)
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/vessel_motion)
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/vessel_motion/vm_wk7)
 add_test(NAME vessel_motion COMMAND test_vessel_motion WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/vessel_motion)
 set_tests_properties(vessel_motion PROPERTIES LABELS "fortran;unit;dynamic;validation")
 

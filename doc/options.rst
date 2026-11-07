@@ -761,6 +761,16 @@ Ambient fluid and prescribed motion
        component at or below the cut-off is refused
      - standalone
      - ``6.2832 WvHiCOff``
+   * - ``WaveRefX``, ``WaveRefY``
+     - number [m], at most 10\ :sup:`6` in magnitude
+     - ``0``
+     - the horizontal point that the phases of an elevation record or a component file
+       (WaterKin ``WaveKinMod 1``, ``WaveKin 3`` and ``7``) refer to: the record was measured
+       there, and each phase uses the position relative to it (:ref:`theory-waves`). An
+       extension of CableDyn, which neither MoorDyn-C nor MoorDyn-F reads. A deck with any other
+       sea, or none, is refused by name
+     - standalone
+     - ``250.0 WaveRefX``
    * - ``Currents``
      - ``0``, ``1``, ``2`` or ``5``
      - ``0``

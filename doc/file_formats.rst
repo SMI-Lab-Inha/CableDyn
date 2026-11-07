@@ -549,7 +549,8 @@ two columns:
    * - 2
      - ``elevation``
      - m
-     - Free-surface elevation η at the reference location.
+     - Free-surface elevation η at the reference location: the origin, or the point of the
+       ``WaveRefX`` and ``WaveRefY`` options, an extension of CableDyn.
 
 * Blank lines are skipped. Lines before the first data row whose first token is not
   a number, such as a ``time elevation`` header, are skipped. Once data has

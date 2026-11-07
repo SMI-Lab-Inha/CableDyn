@@ -277,6 +277,8 @@ _SCALAR_OPTION_KEYWORDS = frozenset(_OPTION_ALIASES) | {
     "bodysubstep",
     "dtwave",
     "wvhicoff",
+    "waverefx",
+    "waverefy",
     "bodywetting",
     "bodyhydro",
     "rodhydro",
@@ -1229,6 +1231,8 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "dtout",
         "dtwave",
         "wvhicoff",
+        "waverefx",
+        "waverefy",
         "inertialf",
         "inertialf_rampt",
     }:
@@ -2428,8 +2432,9 @@ class DeckFile:
         and the MoorDyn-C kinematics files) are not read here, so the checks
         that depend on their contents stay with the solver: for example the
         anchor height on a bathymetry surface, whether a WaterKin file carries
-        waves (``WaveKinMod``) for ``vesselRAO``, and whether its current
-        doubles a ``current`` row or ``Currents 1``, ``2`` or ``5``.
+        waves (``WaveKinMod``) for ``vesselRAO``, ``WaveRefX`` or ``WaveRefY``,
+        and whether its current doubles a ``current`` row or ``Currents 1``,
+        ``2`` or ``5``.
 
         Raises
         ------
@@ -2674,6 +2679,26 @@ class DeckFile:
             if not (has_dtm and has_depth):
                 raise DeckFormatError(
                     f"{self._label}: WaveKin {mdc_wave_kin} waves require dtM, TMax and WtrDpth"
+                )
+        # native validation: WaveRefX and WaveRefY place the phases of component waves alone. A
+        # WaterKin file may carry them (its WaveKinMod is read at run time).
+        wave_ref_rows = [o for o in options if o.keyword.lower() in {"waverefx", "waverefy"}]
+        if wave_ref_rows:
+            if any(abs(_native_float(o.values[0])) > _NATIVE_MAX_COORDINATE for o in wave_ref_rows):
+                raise DeckFormatError(
+                    f"{self._label}: WaveRefX and WaveRefY must be at most 1e6 m in magnitude"
+                )
+            waterkin_ref = option_by_key.get("waterkin")
+            waterkin_text = "" if waterkin_ref is None else waterkin_ref.values[0]
+            has_record = bool(mdc_wave_kin) or (
+                waterkin_text.lower() not in {"", "none", "seastate"}
+                and any(character in _WATERKIN_FILENAME_LETTERS for character in waterkin_text)
+            )
+            if self.caller_driven or has_waves or trains or not has_record:
+                raise DeckFormatError(
+                    f"{self._label}: WaveRefX and WaveRefY place the reference point of an "
+                    "elevation record or a component file (WaterKin WaveKinMod 1, WaveKin 3 or 7); "
+                    "this deck has none"
                 )
         if mdc_currents:
             if current is not None and current.values[0].lower() != "none":

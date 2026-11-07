@@ -105,6 +105,16 @@ def test_dtwave_must_be_positive(value):
         (("uniform 0.1 0 0 current", "1 Currents"), "both a current OPTION and Currents 1"),
         (("uniform 0.1 0 0 current", "2 Currents"), "both a current OPTION and Currents 2"),
         (("uniform 0.1 0 0 current", "5 Currents"), "both a current OPTION and Currents 5"),
+        (("7 WaterKin", "12.5 WaveRefX", "-3 WaveRefY"), None),
+        (("3 WaveKin", "0.1 dtWave", "0 WaveRefY"), None),
+        (("wk.dat WaterKin", "12.5 WaveRefX"), None),
+        (("12.5 WaveRefX",), "reference point of an elevation record"),
+        (("0 WaveRefY",), "reference point of an elevation record"),
+        (("airy 2 8 0 waves", "1 WaveRefX"), "reference point of an elevation record"),
+        (("airy 2 8 0 wavetrain", "1 WaveRefY"), "reference point of an elevation record"),
+        (("7 WaterKin", "2e6 WaveRefX"), "at most 1e6 m"),
+        (("7 WaterKin", "nan WaveRefY"), "must be"),
+        (("7 WaterKin", "north WaveRefY"), "must be numeric"),
     ],
 )
 def test_moordyn_c_kinematics_follow_the_native_rules(rows, message):
