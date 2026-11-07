@@ -35,6 +35,7 @@ from cabledyn.objects import (
 __all__ = ["Body", "CableDyn", "CableDynError", "ConvergenceError", "Line", "Point", "Rod"]
 
 FloatArray = npt.NDArray[np.float64]
+IntArray = npt.NDArray[np.intc]
 ArrayInput = npt.ArrayLike
 
 # The C library retains up to 4096 characters per handle; +1 for the NUL.
@@ -105,23 +106,104 @@ def _dbl_ptr(arr: FloatArray) -> Any:
     return arr.ctypes.data_as(POINTER(c_double))
 
 
-def _host_positions(q0: ArrayInput) -> FloatArray:
+def _int_ptr(arr: IntArray) -> Any:
+    return arr.ctypes.data_as(POINTER(c_int))
+
+
+def _as_index_array(x: ArrayInput, name: str) -> IntArray:
+    """Return ``x`` as a contiguous C ``int`` array, rejecting non-integer input.
+
+    Connectivity, DOF and count arrays stay exact: a float array is not rounded to one.
+    """
+    src = np.asarray(x)
+    if src.size == 0:
+        return np.zeros(src.shape, dtype=np.intc)
+    if src.dtype.kind not in "iu":
+        raise TypeError(f"{name} must be an integer array; got dtype {src.dtype}")
+    limits = np.iinfo(np.intc)
+    if int(src.min()) < limits.min or int(src.max()) > limits.max:
+        raise ValueError(f"{name} holds a value outside the range of a C int")
+    return np.ascontiguousarray(src, dtype=np.intc)
+
+
+def _as_flag(value: object, name: str) -> int:
+    """Return a true-or-false argument as the C ``int`` 1 or 0."""
+    if not isinstance(value, (bool, np.bool_, numbers.Integral)):
+        raise TypeError(f"{name} must be a boolean; got {type(value).__name__}")
+    return 1 if value else 0
+
+
+def _as_spectral_radius(value: object) -> float:
+    """Return ``rho_inf``, a finite real number in ``[0, 1]``."""
+    result = _as_real_scalar(value, "rho_inf", positive=False)
+    if result > 1.0:
+        raise ValueError(f"rho_inf must lie in [0, 1]; got {result}")
+    return result
+
+
+def _as_element_array(x: ArrayInput, n_elem: int, name: str) -> FloatArray:
+    """Return a per-element array: flat, ``n_elem`` finite values."""
+    arr = _as_real_array(x, name)
+    if arr.ndim != 1 or arr.size != n_elem:
+        raise ValueError(f"{name} must be flat ({n_elem},); got shape {np.shape(x)}")
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{name} must be finite (no NaN or Inf)")
+    return arr
+
+
+def _raw_line_arrays(
+    q0: ArrayInput,
+    v0: ArrayInput,
+    elem_conn: ArrayInput,
+    l0: ArrayInput,
+    ea: ArrayInput,
+    rho_a: ArrayInput,
+    fixed_dofs: ArrayInput,
+) -> tuple[FloatArray, FloatArray, IntArray, FloatArray, FloatArray, FloatArray, IntArray]:
+    """The arrays of :meth:`CableDyn.init_line` and :meth:`CableDyn.init_lines`, checked for shape.
+
+    Returns them in that order, each flat. The values are the library's to judge.
+    """
+    q = _host_positions(q0)
+    v = _host_positions(v0, "v0")
+    if v.size != q.size:
+        raise ValueError(f"v0 must hold as many values as q0 ({q.size}); got {v.size}")
+    length = _as_real_array(l0, "l0")
+    if length.ndim != 1:
+        raise ValueError(f"l0 must be flat (n_elem,); got shape {np.shape(l0)}")
+    n_elem = int(length.size)
+    length = _as_element_array(length, n_elem, "l0")
+    stiffness = _as_element_array(ea, n_elem, "ea")
+    mass = _as_element_array(rho_a, n_elem, "rho_a")
+    conn = _as_index_array(elem_conn, "elem_conn")
+    if conn.shape not in {(2 * n_elem,), (n_elem, 2)}:
+        raise ValueError(
+            f"elem_conn must be flat ({2 * n_elem},) or one row per element ({n_elem}, 2); "
+            f"got shape {conn.shape}"
+        )
+    fixed = _as_index_array(fixed_dofs, "fixed_dofs")
+    if fixed.ndim != 1:
+        raise ValueError(f"fixed_dofs must be flat; got shape {fixed.shape}")
+    return q, v, conn.reshape(-1), length, stiffness, mass, fixed
+
+
+def _host_positions(q0: ArrayInput, name: str = "q0") -> FloatArray:
     """``q0`` of :meth:`CableDyn.init_deck_at`: flat ``(3 n,)`` or column-per-point ``(3, n)``."""
-    q = _as_real_array(q0, "q0")
+    q = _as_real_array(q0, name)
     if q.ndim == 2 and q.shape == (3, 3):
         # three points: column-per-point and row-per-point look alike
         raise ValueError(
-            "q0 of shape (3, 3) is ambiguous (column-per-point or row-per-point); "
+            f"{name} of shape (3, 3) is ambiguous (column-per-point or row-per-point); "
             "pass it flat, x1 y1 z1 x2 y2 z2 ..."
         )
     if q.ndim == 2 and q.shape[0] == 3:
         q = np.ascontiguousarray(q.reshape(-1, order="F"))
     if q.ndim != 1 or q.size % 3 != 0:
         raise ValueError(
-            f"q0 must be flat (3 * n,) or column-per-point (3, n); got shape {np.shape(q0)}"
+            f"{name} must be flat (3 * n,) or column-per-point (3, n); got shape {np.shape(q0)}"
         )
     if not np.all(np.isfinite(q)):
-        raise ValueError("q0 must be finite (no NaN or Inf)")
+        raise ValueError(f"{name} must be finite (no NaN or Inf)")
     return q
 
 
@@ -151,7 +233,8 @@ class CableDyn:
         A MoorDyn-style sectioned ``.dat`` deck (the deck format in the
         documentation, https://cabledyn.readthedocs.io).
         When given, the static initial condition is solved immediately.
-        ``None`` creates an unbound handle for a later :meth:`init_deck`.
+        ``None`` creates an unbound handle for a later :meth:`init_deck`, or for
+        :meth:`init_line` or :meth:`init_lines` with lines meshed by the caller.
 
     The coupled exchange follows the coupling boundary described in the
     documentation (https://cabledyn.readthedocs.io): kinematics in
@@ -317,8 +400,184 @@ class CableDyn:
             self._check("CableDyn_InitDeckRotating", status.value)
             self._initialized_from(resolved)
 
-    def _initialized_from(self, deck: Path) -> None:
-        """Book-keeping after a successful deck initialization (the caller holds the lock)."""
+    def init_line(
+        self,
+        q0: ArrayInput,
+        v0: ArrayInput,
+        elem_conn: ArrayInput,
+        l0: ArrayInput,
+        ea: ArrayInput,
+        rho_a: ArrayInput,
+        fixed_dofs: ArrayInput,
+        tension_only: bool,
+        rho_inf: float,
+    ) -> None:
+        """Initialize from one line meshed by the caller (``CableDyn_InitLine``).
+
+        The model is structural only: two-node ``EI = 0`` axial elements with a
+        consistent mass matrix, without gravity, buoyancy, seabed, hydrodynamics or
+        structural damping, and without a static solve: the state starts at ``q0``,
+        ``v0`` exactly. ``q0`` and ``v0`` are the node positions [m] and velocities
+        [m/s], flat ``(3 * n_nodes,)`` or column-per-point ``(3, n_nodes)`` (a
+        ``(3, 3)`` array is rejected as ambiguous). ``elem_conn`` is the **1-based**
+        node pair of each element, flat ``(2 * n_elem,)`` or ``(n_elem, 2)``.
+        ``l0``, ``ea`` and ``rho_a`` are the unstretched length [m], axial stiffness
+        [N] and mass per unit length [kg/m] of each element, ``(n_elem,)``.
+        ``fixed_dofs`` lists the **1-based** DOFs the caller prescribes; node ``k``
+        owns DOFs ``3k-2, 3k-1, 3k``, and their order is the order of the coupled
+        vector. A true ``tension_only`` lets an element go slack instead of carrying
+        compression. ``rho_inf`` is the generalised-alpha spectral radius in
+        ``[0, 1]``.
+
+        The handle then has no deck and no points: :attr:`deck` is ``None`` and every
+        coupled DOF is prescribed by the caller. The views of :attr:`lines` run from
+        the last node of ``q0`` to its first, as they run from End A on a deck line,
+        whose model holds End B first.
+
+        A wrong shape, a non-finite value or a non-integer index raises
+        :class:`ValueError` or :class:`TypeError` before the library is called, and
+        changes nothing. The library judges the values and raises
+        :class:`CableDynError`. After that error the handle must be initialized
+        again, and a saved state is lost, unless it held a model on the coupled
+        aggregate (finite-EI lines, bodies or rods), which stays live with its save.
+        """
+        q, v, conn, length, stiffness, mass, fixed = _raw_line_arrays(
+            q0, v0, elem_conn, l0, ea, rho_a, fixed_dofs
+        )
+        slack = _as_flag(tension_only, "tension_only")
+        radius = _as_spectral_radius(rho_inf)
+        if q.size < 6 or length.size < 1:
+            raise ValueError(
+                f"a line needs at least 2 nodes and 1 element; got {q.size // 3} and {length.size}"
+            )
+        with self._lock:
+            status = c_int()
+            _lib.CableDyn_InitLine(
+                self._handle,
+                q.size // 3,
+                length.size,
+                _dbl_ptr(q),
+                _dbl_ptr(v),
+                _int_ptr(conn),
+                _dbl_ptr(length),
+                _dbl_ptr(stiffness),
+                _dbl_ptr(mass),
+                _int_ptr(fixed) if fixed.size else None,
+                fixed.size,
+                slack,
+                radius,
+                byref(status),
+            )
+            self._finish_raw_init("CableDyn_InitLine", status.value)
+
+    def init_lines(
+        self,
+        n_nodes: ArrayInput,
+        n_elem: ArrayInput,
+        n_fixed: ArrayInput,
+        q0: ArrayInput,
+        v0: ArrayInput,
+        elem_conn: ArrayInput,
+        l0: ArrayInput,
+        ea: ArrayInput,
+        rho_a: ArrayInput,
+        fixed_dofs: ArrayInput,
+        tension_only: bool,
+        rho_inf: float,
+        coupled_map: ArrayInput | None = None,
+    ) -> None:
+        """Initialize from several lines meshed by the caller (``CableDyn_InitLines``).
+
+        The lines are those of :meth:`init_line`, in one system. ``n_nodes``,
+        ``n_elem`` and ``n_fixed`` hold the counts of each line; every other array is
+        the concatenation, in line order, of that line's :meth:`init_line` array.
+        ``elem_conn`` and ``fixed_dofs`` stay local to each line: node 1 is the first
+        node of that line. ``tension_only`` and ``rho_inf`` apply to every line.
+
+        Without ``coupled_map`` the lines are independent, and the coupled vector is
+        their ``fixed_dofs`` in turn. ``coupled_map`` connects lines at shared points:
+        every line has exactly six fixed DOFs, and entry ``6 * i + j`` (0-based ``i``,
+        ``j``) is the **1-based** system DOF of line ``i``'s ``j``-th fixed DOF. The
+        entries use every index from 1 to their maximum, which is the coupled DOF
+        count; loads and Jacobian entries of a shared DOF are summed.
+
+        Errors are those of :meth:`init_line`.
+        """
+        q, v, conn, length, stiffness, mass, fixed = _raw_line_arrays(
+            q0, v0, elem_conn, l0, ea, rho_a, fixed_dofs
+        )
+        slack = _as_flag(tension_only, "tension_only")
+        radius = _as_spectral_radius(rho_inf)
+        nodes = _as_index_array(n_nodes, "n_nodes")
+        elements = _as_index_array(n_elem, "n_elem")
+        fixed_counts = _as_index_array(n_fixed, "n_fixed")
+        n_lines = nodes.size
+        if nodes.ndim != 1 or n_lines < 1:
+            raise ValueError(f"n_nodes must be flat with an entry per line; got {nodes.shape}")
+        for name, counts in (("n_elem", elements), ("n_fixed", fixed_counts)):
+            if counts.shape != nodes.shape:
+                raise ValueError(f"{name} must have {n_lines} entries; got shape {counts.shape}")
+        if np.any(nodes < 2) or np.any(elements < 1) or np.any(fixed_counts < 0):
+            raise ValueError(
+                "every line needs at least 2 nodes, 1 element and 0 fixed DOFs; got "
+                f"n_nodes {nodes.tolist()}, n_elem {elements.tolist()}, "
+                f"n_fixed {fixed_counts.tolist()}"
+            )
+        totals = (
+            ("q0", q.size, 3 * int(nodes.sum(dtype=np.int64))),
+            ("l0", length.size, int(elements.sum(dtype=np.int64))),
+            ("fixed_dofs", fixed.size, int(fixed_counts.sum(dtype=np.int64))),
+        )
+        for name, size, expected in totals:
+            if size != expected:
+                raise ValueError(f"{name} must hold {expected} values in all; got {size}")
+        shared = _as_index_array((), "coupled_map")
+        if coupled_map is not None:
+            shared = _as_index_array(coupled_map, "coupled_map")
+        if shared.size:
+            if shared.shape != (6 * n_lines,):
+                raise ValueError(
+                    f"coupled_map must be flat ({6 * n_lines},); got shape {shared.shape}"
+                )
+            if np.any(fixed_counts != 6):
+                raise ValueError("coupled_map needs exactly six fixed DOFs on every line")
+        with self._lock:
+            status = c_int()
+            _lib.CableDyn_InitLines(
+                self._handle,
+                n_lines,
+                _int_ptr(nodes),
+                _int_ptr(elements),
+                _int_ptr(fixed_counts),
+                _dbl_ptr(q),
+                _dbl_ptr(v),
+                _int_ptr(conn),
+                _dbl_ptr(length),
+                _dbl_ptr(stiffness),
+                _dbl_ptr(mass),
+                _int_ptr(fixed) if fixed.size else None,
+                _int_ptr(shared) if shared.size else None,
+                shared.size,
+                slack,
+                radius,
+                byref(status),
+            )
+            self._finish_raw_init("CableDyn_InitLines", status.value)
+
+    def _finish_raw_init(self, call: str, status: int) -> None:
+        """Book-keeping after InitLine or InitLines (the caller holds the lock).
+
+        A failed call can leave the earlier model live, whose time and views then stand.
+        """
+        if status != 0:
+            message = self._last_error()
+            if not _lib.CableDyn_IsInitialized(self._handle):
+                self._initialized_from(None)
+            raise CableDynError(call, status, message)
+        self._initialized_from(None)
+
+    def _initialized_from(self, deck: Path | None) -> None:
+        """Book-keeping after a successful initialization (the caller holds the lock)."""
         self._generation += 1
         self._views_valid = False
         self._time = 0.0
@@ -573,6 +832,60 @@ class CableDyn:
             _lib.CableDyn_CalcOutput(self._handle, _dbl_ptr(loads), n, byref(status))
             self._check("CableDyn_CalcOutput", status.value)
             return loads
+
+    def calc_output_derivatives(
+        self, q: ArrayInput, v: ArrayInput, a: ArrayInput
+    ) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray, FloatArray]:
+        """The coupled loads and their analytic Jacobians at an operating point.
+
+        ``q``, ``v`` and ``a`` are the operating point, as in :meth:`update_states`.
+        Returns ``(loads, dload_dq, dload_dv, dload_da, added_mass)``: ``loads`` is
+        ``(n_dof,)`` [N], and the others are ``(n_dof, n_dof)`` with ``J[i, j]`` the
+        derivative of load ``i`` with respect to coupled DOF ``j``, in N/m, N s/m and
+        kg; ``added_mass`` is ``-dload_da``.
+
+        Each line's interior DOFs are condensed out at the operating point: interior
+        positions and velocities are held, and interior accelerations are eliminated
+        through the mass matrix, so ``dload_da`` is
+        ``-(M_cc - M_cf inv(M_ff) M_fc)``. The Jacobians are therefore those of
+        :meth:`update_states` followed by :meth:`calc_output`, the instantaneous
+        response of the end loads to the end motion.
+
+        This call **sets the model state**, as :meth:`update_states` does, also when
+        a later stage of it fails; :attr:`time` stays. Call :meth:`update_states` with
+        the previous kinematics to return to them. A model on the coupled aggregate
+        (finite-EI lines, bodies or rods) has no load derivatives and raises
+        :class:`CableDynError`.
+        """
+        with self._lock:
+            n = self.n_coupled_dof
+            qa = _as_dof_array(q, n, "q")
+            va = _as_dof_array(v, n, "v")
+            aa = _as_dof_array(a, n, "a")
+            loads = np.zeros(n)
+            # The library writes J[i + j*n]: column-major, so J[i, j] reads as it should.
+            dload_dq = np.zeros((n, n), order="F")
+            dload_dv = np.zeros((n, n), order="F")
+            dload_da = np.zeros((n, n), order="F")
+            added_mass = np.zeros((n, n), order="F")
+            status = c_int()
+            # The library's eps_fd argument is unused: the blocks are analytic.
+            _lib.CableDyn_CalcOutputDerivatives(
+                self._handle,
+                _dbl_ptr(qa) if n else None,
+                _dbl_ptr(va) if n else None,
+                _dbl_ptr(aa) if n else None,
+                n,
+                0.0,
+                _dbl_ptr(loads) if n else None,
+                _dbl_ptr(dload_dq) if n else None,
+                _dbl_ptr(dload_dv) if n else None,
+                _dbl_ptr(dload_da) if n else None,
+                _dbl_ptr(added_mass) if n else None,
+                byref(status),
+            )
+            self._check("CableDyn_CalcOutputDerivatives", status.value)
+            return loads, dload_dq, dload_dv, dload_da, added_mass
 
     # -- host coupling: outer correctors and the coupled layout -------------------
 
