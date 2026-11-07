@@ -395,9 +395,10 @@ the end of a run that completes, whenever the host ends it: at ``TMax``, at a st
 by ``CalcSteady``, or at FAST.Farm's last whole ``DT_Low``, and holds the samples up to there.
 The run removes a file left by an earlier run as soon as its deck is parsed, and a run that stops on
 an error after that, in any module, leaves none. A deck that does not parse, or a module that stops
-before CableDyn starts, leaves every output of the earlier run as it was. A turbine's own CableDyn instance in FAST.Farm (``CompMooring = 5``
-in its ``.fst``) writes ``<RootName>.T<n>.CD.Line<L>.range.out``. A FAST.Farm shared mooring and
-the C API write no range file and reject the flag by name.
+before CableDyn starts, leaves every output of the earlier run as it was. A turbine's own CableDyn
+instance in FAST.Farm (``CompMooring = 5`` in its ``.fst``) writes
+``<RootName>.T<n>.CD.Line<L>.range.out``. A FAST.Farm shared mooring and the C API write no range
+file and reject the flag by name.
 
 Layout: title line, header row, **units row**, then one row per node, End A first. The title reads
 ``CableDyn range graph (line <L>; <n> samples from t = <t0> s to t = <t1> s; public node order
