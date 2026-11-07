@@ -2754,7 +2754,8 @@ if(Python3_Interpreter_FOUND)
     LABELS "python;driver;integration;static"
     ENVIRONMENT "${_cabledyn_python_test_environment}")
   # A hang-off through a tapered bend stiffener follows the planar elastica (scipy solve_bvp)
-  # within 2 % of the root moment and 1 cm; skipped where scipy is not installed.
+  # within 2 % of the root moment and 1 cm, and node by node on a sweep of element sizes within
+  # 0.5 % of the local curvature on 0.1 m elements; skipped where scipy is not installed.
   add_test(NAME driver_bend_stiffener
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_bend_stiffener.py
                    $<TARGET_FILE:cabledyn>)

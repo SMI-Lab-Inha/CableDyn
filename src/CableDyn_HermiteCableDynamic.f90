@@ -141,6 +141,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Section_Curvature
   PUBLIC :: CD_HermiteCable_Dyn_Reaction
   PUBLIC :: CD_HermiteCable_Dyn_Curvature_Exact
+  PUBLIC :: CD_HermiteCable_Dyn_Side_EI, CD_HermiteCable_Dyn_Side_Curvature
   PUBLIC :: CD_HermiteCable_Dyn_Set_Output_Recovery
   PUBLIC :: CD_HermiteCable_Dyn_Node_Recovery
   PUBLIC :: CD_HermiteCable_Dyn_Node_Values
@@ -238,6 +239,12 @@ MODULE CableDyn_HermiteCableDynamic
     ! bend stiffener (STIFFENERS), and equal to EI on every element without one. The bend
     ! moment outputs report the cable's share EI_line kappa and the sleeve's the rest.
     REAL(wp), ALLOCATABLE :: EI_line(:)
+    ! On a line with STIFFENERS, the local bending stiffness EI(s) at each node, one value per
+    ! side: EI_node(1, j) the limit from element j - 1, EI_node(2, j) from element j, the same
+    ! number where EI(s) is continuous. A one-per-element EI steps at every node of a taper
+    ! without the section doing so, so the node outputs read these (node_values). Unallocated on
+    ! a line without a stiffener, whose node outputs read EI per element.
+    REAL(wp), ALLOCATABLE :: EI_node(:, :)
     ! Optional axial Kelvin-Voigt damping. BA is the axial constitutive dashpot
     ! coefficient [N s] after resolving the deck's direct-BA / negative-zeta convention.
     ! It is integrated over reference arc length with the same Hermite kinematics and
@@ -5923,15 +5930,15 @@ CONTAINS
   SUBROUTINE CD_HermiteCable_Dyn_Curvature(model, curv_out, ErrStat, ErrMsg)
     !! Per-node curvature at the current state, the definition of the Curv<L>N<J> channels: the
     !! bend moment recovered from nodal equilibrium over EI (CD_HermiteCable_Dyn_Node_Recovery),
-    !! or, under CD_HermiteCable_Dyn_Set_Output_Recovery(.TRUE.), the exact one-sided traces of
-    !! CD_HermiteCable_Dyn_Curvature_Exact.
+    !! or, under CD_HermiteCable_Dyn_Set_Output_Recovery(.TRUE.), the larger of the one-sided
+    !! values of CD_HermiteCable_Dyn_Side_Curvature.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     REAL(wp), INTENT(OUT) :: curv_out(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     IF (model%output_element_recovery) THEN
-      CALL CD_HermiteCable_Dyn_Curvature_Exact(model, curv_out, ErrStat, ErrMsg)
+      CALL CD_HermiteCable_Dyn_Curvature_Exact(model, curv_out, ErrStat, ErrMsg, section=.TRUE.)
       RETURN
     END IF
     IF (.NOT. model%initialized) THEN
@@ -5943,14 +5950,18 @@ CONTAINS
     CALL CD_HermiteCable_Dyn_Node_Recovery(model, ErrStat, ErrMsg, curvature=curv_out)
   END SUBROUTINE CD_HermiteCable_Dyn_Curvature
 
-  SUBROUTINE CD_HermiteCable_Dyn_Curvature_Exact(model, curv_out, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_Dyn_Curvature_Exact(model, curv_out, ErrStat, ErrMsg, section)
     !! Per-node geometric curvature of the cubic-Hermite centreline at the current state: the
     !! exact curvature of the element interpolation at the node, the larger of the two
-    !! one-sided traces at an interior node (the curvature is discontinuous there).
+    !! one-sided traces at an interior node (the curvature is discontinuous there). With section
+    !! .TRUE. the one-sided values are CD_HermiteCable_Dyn_Side_Curvature's, which differ from the
+    !! traces only under a bend stiffener.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     REAL(wp), INTENT(OUT) :: curv_out(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: section
+    LOGICAL :: to_section
     INTEGER :: a, es
     REAL(wp) :: qe(12), kL, kR
     CHARACTER(1024) :: em2
@@ -5961,22 +5972,32 @@ CONTAINS
     IF (SIZE(curv_out) /= model%nn) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: curv_out must be nn'; RETURN
     END IF
+    to_section = .FALSE.
+    IF (PRESENT(section)) to_section = section
     DO a = 1, model%nn
       curv_out(a) = CD_ZERO
       ! A degenerate nodal tangent makes the curvature undefined; propagate that failure rather than
       ! silently reporting zero curvature -- a fatigue assessment reads this channel, so a hidden
       ! zero at a degenerate state would understate the peak sag-bend curvature.
       IF (a <= model%ne) THEN
-        CALL gather_elem(model, a, qe)
-        CALL CD_HermiteCable_Curvature(qe, model%l0(a), CD_ZERO, kR, es, em2)
+        IF (to_section) THEN
+          CALL CD_HermiteCable_Dyn_Side_Curvature(model, a, a, kR, es, em2)
+        ELSE
+          CALL gather_elem(model, a, qe)
+          CALL CD_HermiteCable_Curvature(qe, model%l0(a), CD_ZERO, kR, es, em2)
+        END IF
         IF (es /= CD_HCABLE_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: '//TRIM(em2); RETURN
         END IF
         curv_out(a) = kR
       END IF
       IF (a >= 2) THEN
-        CALL gather_elem(model, a - 1, qe)
-        CALL CD_HermiteCable_Curvature(qe, model%l0(a - 1), CD_ONE, kL, es, em2)
+        IF (to_section) THEN
+          CALL CD_HermiteCable_Dyn_Side_Curvature(model, a - 1, a, kL, es, em2)
+        ELSE
+          CALL gather_elem(model, a - 1, qe)
+          CALL CD_HermiteCable_Curvature(qe, model%l0(a - 1), CD_ONE, kL, es, em2)
+        END IF
         IF (es /= CD_HCABLE_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Curvature_Exact: '//TRIM(em2); RETURN
         END IF
@@ -5985,13 +6006,86 @@ CONTAINS
     END DO
   END SUBROUTINE CD_HermiteCable_Dyn_Curvature_Exact
 
+  PURE FUNCTION CD_HermiteCable_Dyn_Side_EI(model, e, node) RESULT(ei)
+    !! The bending stiffness of the section at node (e or e + 1), on the side of its element e:
+    !! on a stiffened line the limit of EI(s) there (EI_node), else the element's EI. An element
+    !! without bending stiffness keeps its zero.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e, node
+    REAL(wp) :: ei
+    ei = model%EI(e)
+    IF (.NOT. ALLOCATED(model%EI_node) .OR. .NOT. ei > CD_ZERO) RETURN
+    IF (model%EI_node(MERGE(2, 1, node == e), node) > CD_ZERO) ei = model%EI_node(MERGE(2, 1, node == e), node)
+  END FUNCTION CD_HermiteCable_Dyn_Side_EI
+
+  PURE FUNCTION trace_scale(model, e, node) RESULT(scale)
+    !! What turns the curvature of element e's interpolation at node (e or e + 1) into the
+    !! curvature of the section there: the element bends under one stiffness, so its curvature is
+    !! the moment over that EI, and the section takes the same moment over its own stiffness.
+    !! Exactly 1 wherever the two agree, as on every element without a bend stiffener.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e, node
+    REAL(wp) :: scale
+    scale = CD_ONE
+    IF (ALLOCATED(model%EI_node) .AND. model%EI(e) > CD_ZERO) &
+      scale = model%EI(e)/CD_HermiteCable_Dyn_Side_EI(model, e, node)
+  END FUNCTION trace_scale
+
+  SUBROUTINE CD_HermiteCable_Dyn_Side_Curvature(model, e, node, curvature, ErrStat, ErrMsg, kvec)
+    !! The one-sided curvature of element output recovery at node (e or e + 1), on the side of
+    !! element e: the exact trace of the element's interpolation. Under a bend stiffener that
+    !! trace is the moment over the element's one stiffness, which is no section's: the element
+    !! then reports what the section has there, the recovered moment over EI(s), as the
+    !! equilibrium recovery does, and its scaled trace on a section too soft to recover the
+    !! moment. kvec, when asked for, is the curvature vector kappa n. Read-only.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e, node
+    REAL(wp), INTENT(OUT) :: curvature
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: kvec(3)
+    REAL(wp) :: qe(12), g(12), fm(3), mm(3), fp(3), mp(3), mv(3), kv(3), ei, ten, kap, bend
+    LOGICAL :: sleeved
+
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    sleeved = .FALSE.
+    IF (ALLOCATED(model%EI_node)) sleeved = model%EI(e) > CD_ZERO .AND. ABS(model%EI_line(e) - model%EI(e)) > CD_ZERO
+    ei = CD_HermiteCable_Dyn_Side_EI(model, e, node)
+    IF (.NOT. sleeved .OR. ei < model%ei_resolve) THEN
+      CALL gather_elem(model, e, qe)
+      CALL CD_HermiteCable_Curvature(qe, model%l0(e), REAL(node - e, wp), curvature, ErrStat, ErrMsg, kvec=kv)
+      IF (ErrStat /= CD_HCABLE_OK) RETURN
+      IF (sleeved) THEN
+        curvature = curvature*trace_scale(model, e, node)
+        kv = kv*trace_scale(model, e, node)
+      END IF
+      IF (PRESENT(kvec)) kvec = kv
+      RETURN
+    END IF
+    fm = CD_ZERO; mm = CD_ZERO; fp = CD_ZERO; mp = CD_ZERO
+    IF (node > 1) THEN
+      CALL element_end_residual(model, node - 1, g, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      fm = g(7:9); mm = g(10:12)
+    END IF
+    IF (node < model%nn) THEN
+      CALL element_end_residual(model, node, g, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HCDYN_OK) RETURN
+      fp = -g(1:3); mp = -g(4:6)
+    END IF
+    CALL node_values(model, node, fm, mm, fp, mp, ten, kap, bend, ErrStat, ErrMsg, moment_vector=mv)
+    IF (ErrStat /= CD_HCDYN_OK) RETURN
+    curvature = NORM2(mv)/ei
+    IF (PRESENT(kvec)) kvec = mv/ei
+  END SUBROUTINE CD_HermiteCable_Dyn_Side_Curvature
+
   SUBROUTINE CD_HermiteCable_Dyn_Section_Curvature(model, ref_a, kx, ky, ErrStat, ErrMsg, frame)
     !! The two components of the nodal curvature vector on the cross-section axes (the channels
     !! CurvX<L>N<J>, CurvY<L>N<J>), in internal node order (node nn is End A). The curvature
     !! vector kappa n points to the centre of curvature and its length is the curvature of
     !! CD_HermiteCable_Dyn_Curvature: the recovered section moment over EI on the side that
-    !! gives it (CD_HermiteCable_Dyn_Node_Recovery), or the larger exact one-sided trace under
-    !! element output recovery.
+    !! gives it (CD_HermiteCable_Dyn_Node_Recovery), or the larger one-sided element curvature
+    !! under element output recovery (CD_HermiteCable_Dyn_Side_Curvature).
     !!
     !! The section axes: d1 at End A is the reference normal -- the End A torsion normal on a
     !! line restrained in torsion, else ref_a (solve frame) -- made normal to the End A tangent.
@@ -6029,13 +6123,12 @@ CONTAINS
       frame = CD_ZERO
     END IF
     IF (model%output_element_recovery) THEN
-      ! the larger exact one-sided trace and its vector (CD_HermiteCable_Dyn_Curvature_Exact)
+      ! the larger one-sided element curvature and its vector, in section form
       DO a = 1, model%nn
         kvec(:, a) = CD_ZERO
         kl = -CD_ONE
         IF (a <= model%ne) THEN
-          CALL gather_elem(model, a, qe)
-          CALL CD_HermiteCable_Curvature(qe, model%l0(a), CD_ZERO, kr, es, em2, kvec=kv)
+          CALL CD_HermiteCable_Dyn_Side_Curvature(model, a, a, kr, es, em2, kvec=kv)
           IF (es /= CD_HCABLE_OK) THEN
             ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Section_Curvature: '//TRIM(em2); RETURN
           END IF
@@ -6043,8 +6136,7 @@ CONTAINS
           kl = kr
         END IF
         IF (a >= 2) THEN
-          CALL gather_elem(model, a - 1, qe)
-          CALL CD_HermiteCable_Curvature(qe, model%l0(a - 1), CD_ONE, kr, es, em2, kvec=kv)
+          CALL CD_HermiteCable_Dyn_Side_Curvature(model, a - 1, a, kr, es, em2, kvec=kv)
           IF (es /= CD_HCABLE_OK) THEN
             ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Section_Curvature: '//TRIM(em2); RETURN
           END IF
@@ -6570,7 +6662,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Node_Values
 
   SUBROUTINE CD_HermiteCable_Dyn_Node_Recovery(model, ErrStat, ErrMsg, tension, curvature, bend_moment, &
-                                               segment_tension, curvature_vector)
+                                               segment_tension, curvature_vector, moment_vector)
     !! Effective tension, curvature and bend moment at every node (internal order) recovered
     !! from nodal equilibrium, in one pass over the elements.
     !!
@@ -6588,7 +6680,8 @@ CONTAINS
     !!
     !! tension(j) = t_j . F_j (t_j the unit nodal tangent; a line end reports the end force
     !! magnitude of CD_HermiteCable_Dyn_End_Force), the section moment M_j = |m_j - (m_j . t_j) t_j|,
-    !! curvature(j) = M_j/EI, the larger of the two sides at a section junction, and
+    !! curvature(j) = M_j/EI, the larger of the two sides at a section junction (under a bend
+    !! stiffener EI is the stiffness at the node, not the element's; see node_values), and
     !! bend_moment(j) the cable's own share EI_line curvature (M_j itself where no bend stiffener
     !! sleeves the element; see node_values) (the
     !! exact geometric trace on an element without bending stiffness, or with EI below ei_resolve,
@@ -6597,8 +6690,10 @@ CONTAINS
     !! mean of the axial components of element e's own two end forces. curvature_vector(:, j)
     !! is the curvature vector kappa n of node j in the solve frame, toward the centre of
     !! curvature, of length curvature(j): the section moment vector over EI on the side that
-    !! gives curvature(j), or the exact trace's vector. Every output is optional (node arrays nn,
-    !! curvature_vector (3, nn), segment_tension ne); the routine allocates nothing.
+    !! gives curvature(j), or the exact trace's vector. moment_vector(:, j) is the part of the
+    !! section moment normal to the tangent, of length M_j. Every output is optional (node arrays
+    !! nn, curvature_vector and moment_vector (3, nn), segment_tension ne); the routine allocates
+    !! nothing.
     !!
     !! The condensed torque of a line restrained in torsion is not part of g_e: it adds a shear
     !! normal to the tangent and does no work on bending rotations, so tension and bend moment
@@ -6609,7 +6704,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: tension(:), curvature(:), bend_moment(:), segment_tension(:)
-    REAL(wp), INTENT(OUT), OPTIONAL :: curvature_vector(:, :)
+    REAL(wp), INTENT(OUT), OPTIONAL :: curvature_vector(:, :), moment_vector(:, :)
     REAL(wp) :: g(12), fm(3), mm(3), fp(3), mp(3), ta(3), tb(3)
     INTEGER :: e, nn
     LOGICAL :: want_nodes
@@ -6630,7 +6725,14 @@ CONTAINS
         ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: curvature_vector must be (3, nn)'; RETURN
       END IF
     END IF
-    want_nodes = PRESENT(tension) .OR. PRESENT(curvature) .OR. PRESENT(bend_moment) .OR. PRESENT(curvature_vector)
+    IF (PRESENT(moment_vector)) THEN
+      IF (SIZE(moment_vector, 1) /= 3 .OR. SIZE(moment_vector, 2) /= nn) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: moment_vector must be (3, nn)'; RETURN
+      END IF
+    END IF
+    want_nodes = PRESENT(tension) .OR. PRESENT(curvature) .OR. PRESENT(bend_moment) .OR. &
+                 PRESENT(curvature_vector) .OR. PRESENT(moment_vector)
     fm = CD_ZERO; mm = CD_ZERO
     DO e = 1, model%ne
       CALL element_end_residual(model, e, g, ErrStat, ErrMsg)
@@ -6654,9 +6756,11 @@ CONTAINS
 
     SUBROUTINE store_node(node)
       INTEGER, INTENT(IN) :: node
-      REAL(wp) :: t_n, k_n, b_n, kv(3)
-      CALL node_values(model, node, fm, mm, fp, mp, t_n, k_n, b_n, ErrStat, ErrMsg, curvature_vector=kv)
+      REAL(wp) :: t_n, k_n, b_n, kv(3), mv(3)
+      CALL node_values(model, node, fm, mm, fp, mp, t_n, k_n, b_n, ErrStat, ErrMsg, curvature_vector=kv, &
+                       moment_vector=mv)
       IF (PRESENT(curvature_vector)) curvature_vector(:, node) = kv
+      IF (PRESENT(moment_vector)) moment_vector(:, node) = mv
       IF (PRESENT(tension)) tension(node) = t_n
       IF (PRESENT(curvature)) curvature(node) = k_n
       IF (PRESENT(bend_moment)) bend_moment(node) = b_n
@@ -7000,7 +7104,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Twist_Unpack
 
   SUBROUTINE node_values(model, node, fm, mm, fp, mp, tension, curvature, bend_moment, ErrStat, ErrMsg, &
-                         sleeve_moment, curvature_vector)
+                         sleeve_moment, curvature_vector, moment_vector)
     !! Node values from the one-sided section force and moment before (fm, mm) and after
     !! (fp, mp) the node; a line end uses its only side (see CD_HermiteCable_Dyn_Node_Recovery).
     !! bend_moment is the cable's own share of the section moment, EI_line kappa on the side of
@@ -7008,14 +7112,23 @@ CONTAINS
     !! sleeve_moment the rest, the share a stiffener sleeve carries. curvature_vector is the
     !! curvature vector kappa n (solve frame, toward the centre of curvature) of the side that
     !! gives curvature: the normal part of the section moment over EI, or the exact trace's.
+    !!
+    !! The EI of a side is the element's, or on a stiffened line the limit of EI(s) at the node
+    !! from that side (EI_node): the element's compliance average stands for its whole length
+    !! and, under a taper, steps at every node although the section does not, so the softer side
+    !! would overstate the curvature by about h |EI'|/(2 EI). The two limits differ only at a
+    !! real step of the section (the bare tip, a junction of two line types, a step between
+    !! stiffener rows), where the larger-side rule still applies. The exact trace of a side too
+    !! soft to recover takes the same stiffness (trace_scale). moment_vector is the normal part
+    !! of the section moment.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(IN) :: fm(3), mm(3), fp(3), mp(3)
     REAL(wp), INTENT(OUT) :: tension, curvature, bend_moment
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment, curvature_vector(3)
-    REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace, section_moment, cable_moment, m_perp(3), kv(3)
+    REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment, curvature_vector(3), moment_vector(3)
+    REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace, section_moment, cable_moment, m_perp(3), kv(3), ei_side
     INTEGER :: e, side
     CHARACTER(200) :: em2
 
@@ -7037,20 +7150,22 @@ CONTAINS
     END IF
     m_perp = m - DOT_PRODUCT(m, t)*t
     section_moment = NORM2(m_perp)
+    IF (PRESENT(moment_vector)) moment_vector = m_perp
     curvature = CD_ZERO
     cable_moment = CD_ZERO
     IF (PRESENT(curvature_vector)) curvature_vector = CD_ZERO
     DO side = 0, 1
       e = node - 1 + side
       IF (e < 1 .OR. e > model%ne) CYCLE
-      IF (model%EI(e) > CD_ZERO .AND. model%EI(e) >= model%ei_resolve) THEN
-        IF (PRESENT(curvature_vector) .AND. section_moment/model%EI(e) > curvature) &
-          curvature_vector = m_perp/model%EI(e)
-        curvature = MAX(curvature, section_moment/model%EI(e))
-        IF (ABS(model%EI_line(e) - model%EI(e)) <= CD_ZERO) THEN
+      ei_side = CD_HermiteCable_Dyn_Side_EI(model, e, node)
+      IF (model%EI(e) > CD_ZERO .AND. ei_side >= model%ei_resolve) THEN
+        IF (PRESENT(curvature_vector) .AND. section_moment/ei_side > curvature) &
+          curvature_vector = m_perp/ei_side
+        curvature = MAX(curvature, section_moment/ei_side)
+        IF (ABS(model%EI_line(e) - ei_side) <= CD_ZERO) THEN
           cable_moment = MAX(cable_moment, section_moment)
         ELSE
-          cable_moment = MAX(cable_moment, model%EI_line(e)*(section_moment/model%EI(e)))
+          cable_moment = MAX(cable_moment, model%EI_line(e)*(section_moment/ei_side))
         END IF
       ELSE
         CALL gather_elem(model, e, qe)
@@ -7058,7 +7173,8 @@ CONTAINS
         IF (ErrStat /= CD_HCABLE_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Node_Recovery: '//TRIM(em2); RETURN
         END IF
-        IF (PRESENT(curvature_vector) .AND. trace > curvature) curvature_vector = kv
+        trace = trace*trace_scale(model, e, node)
+        IF (PRESENT(curvature_vector) .AND. trace > curvature) curvature_vector = kv*trace_scale(model, e, node)
         curvature = MAX(curvature, trace)
         IF (ABS(model%EI_line(e) - model%EI(e)) <= CD_ZERO) THEN
           cable_moment = MAX(cable_moment, section_moment)
@@ -8075,6 +8191,7 @@ CONTAINS
     IF (ALLOCATED(model%EA)) DEALLOCATE (model%EA)
     IF (ALLOCATED(model%EI)) DEALLOCATE (model%EI)
     IF (ALLOCATED(model%EI_line)) DEALLOCATE (model%EI_line)
+    IF (ALLOCATED(model%EI_node)) DEALLOCATE (model%EI_node)
     IF (ALLOCATED(model%rho_a)) DEALLOCATE (model%rho_a)
     IF (ALLOCATED(model%w)) DEALLOCATE (model%w)
     IF (ALLOCATED(model%BA)) DEALLOCATE (model%BA)

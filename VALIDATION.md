@@ -78,7 +78,7 @@ article's methods, are compared in
 | **L3-6d** | Moving-touchdown dynamic contact | OrcaFlex 11.6d installed | curv 0.48/0.58%, tension 0.74/0.90/0.80%, TDP 0.08 m, migration 2–3 m/cycle | curv <3–5%, tension <2–3%, TDP excursion bounds <1.5 m | Pass |
 | **L3-6e** | Out-of-plane / 3D whirl response | OrcaFlex 11.6d | 3D curv 0.52%, interior Y env ≤1.0 mm, sag ≤22 mm, tension 0.14/0.17/0.12% | curv <3%, env <5 cm, tension <2–3% | Pass |
 | **L3-7** | 1-hour VolturnUS-S mooring dynamic | OrcaFlex 11.6d | `FairTen` mean 0.27%, std 0.26%, min/max 0.50/0.43%, Fourier 0.27/1.14% | ≤5% | Pass |
-| **L3-8** | Bend stiffener at a clamped hang-off (5 m tapered polyurethane) | OrcaFlex 11.6d (stiffener attachment) / planar elastica | curvature 0.74% of root; cable moment 0.74%, section moment 0.18%, deflection angle 0.003° | <1.5% / <2%, 0.05° | Pass |
+| **L3-8** | Bend stiffener at a clamped hang-off (5 m tapered polyurethane) | OrcaFlex 11.6d (stiffener attachment) / planar elastica | curvature 0.51% of root; cable moment 0.18%, section moment 0.18%, deflection angle 0.003°; local curvature 0.24% (0.1 m elements) | <1.5% / <2%, 0.05°, <0.5% | Pass |
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
 | **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.11%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
@@ -275,13 +275,19 @@ initialisation.
   polyurethane stiffener (0.5 m cylinder of 0.60 m, cone to 0.22 m, bore 0.20 m, E 50 MPa;
   16 times the cable's EI at the root), on 0.05 m elements. The static curvature over the
   stiffener and 3 m beyond follows OrcaFlex 11.6d with the stiffener given as a line attachment
-  within **0.74% of the root curvature** (root 0.4523 against 0.4522 1/m;
+  within **0.51% of the root curvature** (root 0.4523 against 0.4522 1/m;
   [`orcaflex_bend_stiffener.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/orcaflex_bend_stiffener.py)).
   Against an independent collocation solution of the planar extensible elastica with
-  `EI(s)` and the sleeve's weight, the cable's own moment follows within **0.74%** of its root
+  `EI(s)` and the sleeve's weight, the cable's own moment follows within **0.18%** of its root
   value, cable and sleeve moments add up to the section moment within **0.18%**, the node
   positions within **0.6 mm**, and the end force's deflection from the clamp axis within
-  **0.003°** (32.37°).
+  **0.003°** (32.37°). Node by node, relative to the local value floored at 0.1% of the root
+  curvature, the curvature follows the elastica within **0.97 / 0.49 / 0.24 / 0.18%** on
+  0.2 / 0.15 / 0.1 / 0.05 m elements (gates 1 / 1 / 0.5 / 0.5%), under either output recovery,
+  and under the stiffener the element peaks of `.elements.out`, read through `bend_check`,
+  within **the same figures** on the same gates; 0.12% of it at the root is
+  the order-`T/EA` difference between the elastica's bending law and the element energy's,
+  not mesh error.
 - **L-fig curvature overlay**: `l3_lazywave_dynamic` writes each site's along-arc
   curvature profile.
   [`validation/scripts/curvature_profile_overlay.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/curvature_profile_overlay.py)

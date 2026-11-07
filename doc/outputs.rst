@@ -289,7 +289,9 @@ B)``, header row, units row, data (12 columns):
      - unstretched arc length of the curvature maximum
    * - ``PeakCurvature``
      - ``(1/m)``
-     - maximum curvature over the element
+     - maximum curvature over the element; under a bend stiffener the curvature of the section,
+       the moment over the stiffness ``EI(s)`` along the element, not of the interpolation
+       (:ref:`theory-bend-stiffeners`)
    * - ``BendMomentAtPeak``
      - ``(N.m)``
      - ``EI × PeakCurvature``, with the line type's ``EI`` (the cable's share under a bend
@@ -694,10 +696,12 @@ Line-node channels
      - curvature at node ``J``. ``EI = 0`` lines: discrete curvature of the circle through
        the node and its two neighbours (end nodes take the adjacent interior value).
        Cubic-Hermite lines: ``BendMom<L>N<J>`` / ``EI``, the larger of the two sides at a
-       section junction, and the exact geometric curvature where ``EI`` is below
-       ``max(|w| L0^2)/12`` times 1 m (:ref:`theory-output-recovery`) (``OutputRecovery
+       section junction (under a bend stiffener the section moment over the stiffness ``EI(s)``
+       at the node, :ref:`theory-bend-stiffeners`), and the exact geometric curvature where
+       ``EI`` is below ``max(|w| L0^2)/12`` times 1 m (:ref:`theory-output-recovery`) (``OutputRecovery
        element``: exact curvature of the continuous
-       centreline, the larger of the two one-sided element values at an interior node). The
+       centreline, the larger of the two one-sided element values at an interior node; the
+       recovered moment over ``EI(s)`` on an element with a bend stiffener sleeve). The
        library routines ``CD_HermiteCable_Dyn_Curvature`` and ``CD_HFMF_Curvature`` return the
        same value; ``CD_HermiteCable_Dyn_Curvature_Exact`` and ``CD_HFMF_Curvature_Exact`` the
        exact geometric traces
@@ -719,8 +723,9 @@ Line-node channels
        (one-sided at a line end, where it is the end connection moment);
        ``OutputRecovery element``: ``EI`` times the larger one-sided exact curvature. 0 on
        ``EI = 0`` lines. Under a bend stiffener (``STIFFENERS``) it is the cable's own share,
-       the line type's ``EI`` times the curvature; the stiffener's share is ``StfMom<L>N<J>``
-       and the two add up to the section moment
+       the line type's ``EI`` times the curvature, which is the section moment over the
+       stiffness ``EI(s)`` at the node; the stiffener's share is ``StfMom<L>N<J>`` and the two
+       add up to the section moment
      - N·m
    * - ``StfMom<L>N<J>``
      - the share of the section moment a bend stiffener carries at node ``J``, the section
