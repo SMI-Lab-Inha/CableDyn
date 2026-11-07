@@ -15,8 +15,8 @@ MODULE CableDyn_CAPI
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_System, CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, &
                                  CD_Deck_Query_dtM, CD_DECK_NAMELEN, CD_Eval_Aggregate_Channel, &
-                                 CD_Eval_Aggregate_Segment_Tensions, CD_Rigid6_Inventory, CD_Rod_Inventory, &
-                                 CD_Channel_Token_Parses, CD_Cable_Deck_Node
+                                 CD_Eval_Aggregate_Segment_Tensions, CD_Eval_Aggregate_Line_Values, &
+                                 CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses, CD_Cable_Deck_Node
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_Step_Moving, CD_AGG_CalcOutput, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_End, CD_AGG_IsInitialized, CD_AGG_OK, &
@@ -161,6 +161,8 @@ MODULE CableDyn_CAPI
     REAL(wp), ALLOCATABLE :: fluid_velocity_work(:, :)
     REAL(wp), ALLOCATABLE :: fluid_acceleration_work(:, :)
     REAL(wp), ALLOCATABLE :: waterline_work(:)
+    ! CableDyn_GetLineValues: one value per node of the longest line read so far.
+    REAL(wp), ALLOCATABLE :: line_work(:)
     ! Decks with BODIES or RODS run on the coupled aggregate (use_agg): its moving points are the
     ! coupled DOFs, its step is the deck dtM (agg_dt), and agg_t is its committed time.
     LOGICAL :: use_agg = .FALSE.
@@ -1743,35 +1745,25 @@ CONTAINS
     !! SEGMENT_TENSION (1 per segment), or DECK_NODE (1 per node: the deck node of each node of the
     !! line's final mesh, the J of the node channels; 0 for a node a refinement added), or
     !! SECTION_CURVATURE (2 per node, CurvX and CurvY interleaved; finite-EI lines). Every quantity
-    !! covers every node of the final mesh. n_out must equal the value count exactly.
+    !! covers every node of the final mesh. n_out must equal the value count exactly. The node
+    !! channels are evaluated for the whole line at once (CD_Eval_Aggregate_Line_Values).
     TYPE(C_PTR), VALUE :: handle, out_ptr
     INTEGER(C_INT), VALUE :: index, quantity, n_out
     INTEGER(C_INT), INTENT(OUT) :: err_stat
     TYPE(CD_C_Handle), POINTER :: h
     REAL(C_DOUBLE), POINTER :: out_c(:)
-    INTEGER, ALLOCATABLE :: ids(:), nnodes(:), sub(:)
-    INTEGER :: nnode, nvals, line_id, node, c, es
-    REAL(wp) :: val
-    CHARACTER(CD_DECK_NAMELEN) :: token, stem
+    INTEGER :: nnode, nvals, line_id, node, es, n_done, bad
     CHARACTER(CD_C_MSG_LEN) :: em
-    CHARACTER(1) :: field
-    CHARACTER(1), PARAMETER :: xyz(3) = ['x', 'y', 'z']
 
     IF (.NOT. query_ready(handle, h, 'CableDyn_GetLineValues', err_stat)) RETURN
-    CALL object_inventory(h, INT(CD_C_OBJ_LINE), ids, nnodes, sub, err_stat)
-    IF (err_stat /= CD_C_OK) RETURN
-    IF (index < 0_C_INT .OR. INT(index) >= SIZE(ids)) THEN
+    CALL line_at_index(h, INT(index), line_id, nnode)
+    IF (line_id < 1) THEN
       CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_GetLineValues: line index out of range', err_stat)
       RETURN
     END IF
-    line_id = ids(index + 1)
-    nnode = nnodes(index + 1)
-    field = 'p'
     SELECT CASE (quantity)
     CASE (CD_C_LINE_POSITION, CD_C_LINE_VELOCITY, CD_C_LINE_ACCELERATION)
       nvals = 3*nnode
-      IF (quantity == CD_C_LINE_VELOCITY) field = 'v'
-      IF (quantity == CD_C_LINE_ACCELERATION) field = 'a'
     CASE (CD_C_LINE_TENSION, CD_C_LINE_CURVATURE, CD_C_LINE_BEND_MOMENT, CD_C_LINE_DECLINATION, &
           CD_C_LINE_AZIMUTH, CD_C_LINE_DECK_NODE)
       nvals = nnode
@@ -1853,31 +1845,35 @@ CONTAINS
       RETURN
     END IF
 
-    DO node = 1, nnode
-      stem = TRIM(int_text(line_id))//'N'//TRIM(int_text(node))
-      SELECT CASE (quantity)
-      CASE (CD_C_LINE_POSITION, CD_C_LINE_VELOCITY, CD_C_LINE_ACCELERATION)
-        DO c = 1, 3
-          CALL eval_token(h, 'L'//TRIM(stem)//field//xyz(c), val, err_stat, mesh_node=.TRUE.)
-          IF (err_stat /= CD_C_OK) RETURN
-          out_c(3*(node - 1) + c) = REAL(val, C_DOUBLE)
-        END DO
-        CYCLE
-      CASE (CD_C_LINE_TENSION)
-        token = 'Ten'//TRIM(stem)
-      CASE (CD_C_LINE_CURVATURE)
-        token = 'Curv'//TRIM(stem)
-      CASE (CD_C_LINE_BEND_MOMENT)
-        token = 'BendMom'//TRIM(stem)
-      CASE (CD_C_LINE_DECLINATION)
-        token = 'L'//TRIM(stem)//'Dec'
-      CASE DEFAULT
-        token = 'L'//TRIM(stem)//'Azi'
-      END SELECT
-      CALL eval_token(h, token, val, err_stat, mesh_node=.TRUE.)
-      IF (err_stat /= CD_C_OK) RETURN
-      out_c(node) = REAL(val, C_DOUBLE)
+    ! the node channels, whose codes are the quantity codes
+    IF (.NOT. line_work_ready(h, nnode)) THEN
+      CALL set_status(h, CD_C_ALLOC_FAIL, 'CableDyn_GetLineValues: workspace allocation failed', err_stat)
+      RETURN
+    END IF
+    IF (h%use_agg) THEN
+      CALL CD_Eval_Aggregate_Line_Values(line_id, INT(quantity), h%agg%has_sys, h%agg%sys%fast%system, h%agg%cables, &
+                                         h%agg%line_is_cable, h%agg%line_obj_index, out_c, h%line_work, n_done, es, em)
+    ELSE
+      CALL CD_Eval_Aggregate_Line_Values(line_id, INT(quantity), .TRUE., h%fast%system, h%no_cables, h%pt_is_cable, &
+                                         h%pt_obj, out_c, h%line_work, n_done, es, em)
+    END IF
+    ! the first value that failed: its channel gives the status and the reason, as a token would
+    bad = 0
+    DO node = 1, n_done
+      IF (.NOT. IEEE_IS_FINITE(out_c(node))) THEN
+        bad = node
+        EXIT
+      END IF
     END DO
+    IF (bad == 0 .AND. es /= CD_DECKDRV_OK) bad = n_done + 1
+    IF (bad > 0) THEN
+      CALL line_value_failure(h, line_id, quantity, bad, err_stat)
+      IF (err_stat /= CD_C_OK) RETURN
+      CALL map_deck_status(es, err_stat)
+      IF (err_stat == CD_C_OK) err_stat = CD_C_SOLVE_FAIL
+      CALL store_status(h, err_stat, 'CableDyn_GetLineValues: '//TRIM(em))
+      RETURN
+    END IF
     CALL store_status(h, CD_C_OK, '')
   END SUBROUTINE CableDyn_GetLineValues
 
@@ -2409,6 +2405,113 @@ CONTAINS
     ready = .TRUE.
   END FUNCTION query_ready
 
+  SUBROUTINE line_at_index(h, index, line_id, nnode)
+    !! Deck id and node count of entry `index` (0-based) of the line inventory (ascending deck id,
+    !! object_inventory's order) without building it; line_id = 0 when there is no such entry.
+    TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
+    INTEGER, INTENT(IN) :: index
+    INTEGER, INTENT(OUT) :: line_id, nnode
+
+    line_id = 0
+    nnode = 0
+    IF (h%use_agg) THEN
+      CALL find_line(h%agg%line_is_cable, h%agg%line_obj_index)
+    ELSE
+      CALL find_line(h%pt_is_cable, h%pt_obj)
+    END IF
+
+  CONTAINS
+
+    SUBROUTINE find_line(is_cable, obj_index)
+      LOGICAL, ALLOCATABLE, INTENT(IN) :: is_cable(:)
+      INTEGER, ALLOCATABLE, INTENT(IN) :: obj_index(:)
+      INTEGER :: k, n
+      IF (index < 0 .OR. .NOT. (ALLOCATED(obj_index) .AND. ALLOCATED(is_cable))) RETURN
+      n = -1
+      DO k = 1, SIZE(obj_index)
+        IF (obj_index(k) < 1) CYCLE
+        n = n + 1
+        IF (n /= index) CYCLE
+        line_id = k
+        nnode = line_node_count(h, is_cable(k), obj_index(k))
+        RETURN
+      END DO
+    END SUBROUTINE find_line
+  END SUBROUTINE line_at_index
+
+  INTEGER FUNCTION line_node_count(h, is_cable, obj) RESULT(nnode)
+    !! Node count of a line of the handle's model: cable or system line obj.
+    TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
+    LOGICAL, INTENT(IN) :: is_cable
+    INTEGER, INTENT(IN) :: obj
+    INTEGER :: es
+    CHARACTER(CD_C_MSG_LEN) :: em
+
+    IF (is_cable) THEN
+      nnode = h%agg%cables(obj)%line%nn
+    ELSE IF (h%use_agg) THEN
+      nnode = CD_System_Line_NDOF(h%agg%sys%fast%system, obj, es, em)/3
+    ELSE
+      nnode = CD_System_Line_NDOF(h%fast%system, obj, es, em)/3
+    END IF
+  END FUNCTION line_node_count
+
+  LOGICAL FUNCTION line_work_ready(h, nnode) RESULT(ready)
+    !! Make the handle's line workspace hold nnode values; it only ever grows.
+    TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
+    INTEGER, INTENT(IN) :: nnode
+    INTEGER :: ios
+
+    ready = .TRUE.
+    IF (ALLOCATED(h%line_work)) THEN
+      IF (SIZE(h%line_work) >= nnode) RETURN
+      DEALLOCATE (h%line_work)
+    END IF
+    ALLOCATE (h%line_work(nnode), STAT=ios)
+    ready = ios == 0
+  END FUNCTION line_work_ready
+
+  SUBROUTINE line_value_failure(h, line_id, quantity, value_index, err_stat)
+    !! Evaluate value value_index (1-based, in the array of CableDyn_GetLineValues) through its
+    !! channel, which sets the status and the message of a failed or non-finite node value.
+    TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
+    INTEGER, INTENT(IN) :: line_id, value_index
+    INTEGER(C_INT), INTENT(IN) :: quantity
+    INTEGER(C_INT), INTENT(OUT) :: err_stat
+    INTEGER :: node, c
+    REAL(wp) :: val
+    CHARACTER(CD_DECK_NAMELEN) :: token, stem
+    CHARACTER(1), PARAMETER :: xyz(3) = ['x', 'y', 'z']
+
+    node = value_index
+    c = 1
+    IF (quantity == CD_C_LINE_POSITION .OR. quantity == CD_C_LINE_VELOCITY .OR. &
+        quantity == CD_C_LINE_ACCELERATION) THEN
+      node = (value_index - 1)/3 + 1
+      c = value_index - 3*(node - 1)
+    END IF
+    stem = TRIM(int_text(line_id))//'N'//TRIM(int_text(node))
+    SELECT CASE (quantity)
+    CASE (CD_C_LINE_POSITION)
+      token = 'L'//TRIM(stem)//'p'//xyz(c)
+    CASE (CD_C_LINE_VELOCITY)
+      token = 'L'//TRIM(stem)//'v'//xyz(c)
+    CASE (CD_C_LINE_ACCELERATION)
+      token = 'L'//TRIM(stem)//'a'//xyz(c)
+    CASE (CD_C_LINE_TENSION)
+      token = 'Ten'//TRIM(stem)
+    CASE (CD_C_LINE_CURVATURE)
+      token = 'Curv'//TRIM(stem)
+    CASE (CD_C_LINE_BEND_MOMENT)
+      token = 'BendMom'//TRIM(stem)
+    CASE (CD_C_LINE_DECLINATION)
+      token = 'L'//TRIM(stem)//'Dec'
+    CASE DEFAULT
+      token = 'L'//TRIM(stem)//'Azi'
+    END SELECT
+    CALL eval_token(h, token, val, err_stat, mesh_node=.TRUE.)
+  END SUBROUTINE line_value_failure
+
   SUBROUTINE object_inventory(h, kind, ids, nnodes, sub, err_stat)
     !! The handle's objects of one kind: deck ids, node counts and subtypes. Lines are listed in
     !! ascending deck id, points in system order, bodies and rods in runtime order.
@@ -2465,8 +2568,7 @@ CONTAINS
     SUBROUTINE collect_lines(is_cable, obj_index)
       LOGICAL, ALLOCATABLE, INTENT(IN) :: is_cable(:)
       INTEGER, ALLOCATABLE, INTENT(IN) :: obj_index(:)
-      INTEGER :: k, n, obj, es
-      CHARACTER(CD_C_MSG_LEN) :: em
+      INTEGER :: k, n, obj
       IF (.NOT. (ALLOCATED(obj_index) .AND. ALLOCATED(is_cable))) THEN
         ALLOCATE (ids(0), nnodes(0), sub(0))
         RETURN
@@ -2479,15 +2581,8 @@ CONTAINS
         IF (obj < 1) CYCLE
         n = n + 1
         ids(n) = k
-        sub(n) = 0
-        IF (is_cable(k)) THEN
-          nnodes(n) = h%agg%cables(obj)%line%nn
-          sub(n) = 1
-        ELSE IF (h%use_agg) THEN
-          nnodes(n) = CD_System_Line_NDOF(h%agg%sys%fast%system, obj, es, em)/3
-        ELSE
-          nnodes(n) = CD_System_Line_NDOF(h%fast%system, obj, es, em)/3
-        END IF
+        sub(n) = MERGE(1, 0, is_cable(k))
+        nnodes(n) = line_node_count(h, is_cable(k), obj)
       END DO
     END SUBROUTINE collect_lines
 

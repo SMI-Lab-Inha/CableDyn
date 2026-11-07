@@ -258,6 +258,7 @@ MODULE CableDyn_DeckDriver
   ! In-process object queries of the C API (CableDyn_CAPI): segment tensions in the .t.out
   ! convention, and the body/rod inventories the Body<N>/Rod<N> channels resolve on.
   PUBLIC :: CD_Eval_Aggregate_Segment_Tensions, CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses
+  PUBLIC :: CD_Eval_Aggregate_Line_Values
   ! The refusal of the LINES flag r on a route that writes no range file.
   CHARACTER(*), PARAMETER :: RANGE_FLAG_REFUSED = 'the LINES Outputs flag r (range graph) is written by the '// &
                              'standalone driver and a single-turbine OpenFAST run; a FAST.Farm shared '// &
@@ -36102,6 +36103,19 @@ CONTAINS
     v = line_geom_from_r(kind, r, nnode, deck_node, signed)
   END FUNCTION line_geom_value
 
+  PURE SUBROUTINE line_geom_values(kind, nnode, stride, q, signed, values)
+    !! line_geom_value at every deck node of a line. q(:, n) is internal node n's state, its first
+    !! three entries the position; the deck-ordered positions are read in place, not copied.
+    INTEGER, INTENT(IN) :: kind, nnode, stride
+    REAL(wp), INTENT(IN) :: q(stride, nnode)
+    LOGICAL, INTENT(IN) :: signed
+    REAL(wp), INTENT(OUT) :: values(nnode)
+    INTEGER :: j
+    DO j = 1, nnode
+      values(j) = line_geom_from_r(kind, q(1:3, nnode:1:-1), nnode, j, signed)
+    END DO
+  END SUBROUTINE line_geom_values
+
   PURE REAL(wp) FUNCTION line_geom_from_r(kind, r, nnode, deck_node, signed) RESULT(v)
     !! Geometric channel value (kind: 5 curvature, 7 declination, 8 azimuth) from the
     !! deck-ordered node positions r(3, nnode). Factored out of line_geom_value so a caller
@@ -36109,7 +36123,7 @@ CONTAINS
     !! rather than rebuilding it inside each per-node call -- O(nnode) instead of O(nnode^2).
     !! signed: the line's azimuth range (DeckLine%azi_signed).
     INTEGER, INTENT(IN) :: kind, nnode, deck_node
-    REAL(wp), INTENT(IN) :: r(3, nnode)
+    REAL(wp), INTENT(IN) :: r(:, :)      ! 3 x nnode, deck order
     LOGICAL, INTENT(IN), OPTIONAL :: signed
     v = CD_ZERO
     SELECT CASE (kind)
@@ -37210,6 +37224,177 @@ CONTAINS
     END BLOCK
   END SUBROUTINE CD_Eval_Aggregate_Segment_Tensions
 
+  SUBROUTINE CD_Eval_Aggregate_Line_Values(line_id, kind, has_sys, system, cables, line_is_cable, line_obj_index, &
+                                           values, work, n_done, ErrStat, ErrMsg)
+    !! One line-node channel at every node of the final mesh of deck line line_id, End A first,
+    !! with no token per node. kind is the channel's code (parse_line_node_channel): 1, 2 and 4
+    !! give three values per node, xyz interleaved, and 3, 5, 6, 7 and 8 one. Every value is bit
+    !! for bit the one CD_Eval_Aggregate_Channel returns for that node with mesh_node = .TRUE.:
+    !! the two routes share the per-node rules (cable_recovered_value, system_node_tension,
+    !! line_geom_from_r, cable_global_component, cable_global_azimuth). work holds at least one
+    !! value per element. On a failure n_done counts the values written before it, in order, so a
+    !! caller can name the first bad value's channel.
+    INTEGER, INTENT(IN) :: line_id, kind
+    LOGICAL, INTENT(IN) :: has_sys
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE, INTENT(INOUT) :: cables(:)
+    LOGICAL, INTENT(IN) :: line_is_cable(:)
+    INTEGER, INTENT(IN) :: line_obj_index(:)
+    REAL(wp), INTENT(OUT) :: values(:)
+    REAL(wp), INTENT(INOUT) :: work(:)
+    INTEGER, INTENT(OUT) :: n_done, ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: obj
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    n_done = 0
+    IF (kind < 1 .OR. kind > 8) THEN
+      CALL fail(ErrStat, ErrMsg, 'line values: not a line-node channel code'); RETURN
+    END IF
+    IF (line_id < 1 .OR. line_id > SIZE(line_obj_index)) THEN
+      CALL fail(ErrStat, ErrMsg, 'line values: unknown line id'); RETURN
+    END IF
+    obj = line_obj_index(line_id)
+    IF (obj < 1) THEN
+      CALL fail(ErrStat, ErrMsg, 'line values: line id maps to no built line'); RETURN
+    END IF
+    IF (line_is_cable(line_id)) THEN
+      IF (.NOT. ALLOCATED(cables)) THEN
+        CALL fail(ErrStat, ErrMsg, 'line values: line maps to a cable but none are built'); RETURN
+      END IF
+      IF (obj > SIZE(cables)) THEN
+        CALL fail(ErrStat, ErrMsg, 'line values: cable index out of range'); RETURN
+      END IF
+      CALL cable_line_values(cables(obj), kind, values, n_done, ErrStat, ErrMsg)
+    ELSE
+      IF (.NOT. has_sys) THEN
+        CALL fail(ErrStat, ErrMsg, 'line values: line maps to the EI=0 system but no system is present'); RETURN
+      END IF
+      CALL system_line_values(system, obj, kind, values, work, n_done, ErrStat, ErrMsg)
+    END IF
+  END SUBROUTINE CD_Eval_Aggregate_Line_Values
+
+  SUBROUTINE system_line_values(system, li, kind, values, work, n_done, ErrStat, ErrMsg)
+    !! CD_Eval_Aggregate_Line_Values on EI=0 system line li (eval_system_line_channel at every node).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: li, kind
+    REAL(wp), INTENT(OUT) :: values(:)
+    REAL(wp), INTENT(INOUT) :: work(:)
+    INTEGER, INTENT(OUT) :: n_done, ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: ndof, nnode, node, es
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    n_done = 0
+    ndof = CD_System_Line_NDOF(system, li, es, em)
+    IF (es /= CD_SYSTEM_OK) THEN
+      CALL fail_solve(ErrStat, ErrMsg, 'line values: '//TRIM(em)); RETURN
+    END IF
+    nnode = ndof/3
+    IF (SIZE(values) /= MERGE(ndof, nnode, kind == 1 .OR. kind == 2 .OR. kind == 4) .OR. SIZE(work) < nnode - 1) THEN
+      CALL fail(ErrStat, ErrMsg, 'line values: output size does not match the line'); RETURN
+    END IF
+    SELECT CASE (kind)
+    CASE (1)   ! position
+      CALL node_vectors_reversed(system%lines(li)%q, nnode, values)
+    CASE (2)   ! velocity
+      CALL node_vectors_reversed(system%lines(li)%v, nnode, values)
+    CASE (4)   ! acceleration
+      CALL node_vectors_reversed(system%lines(li)%a, nnode, values)
+    CASE (3)   ! nodal tension
+      CALL CD_Get_System_Line_Tension(system, li, work(1:nnode - 1), es, em)
+      IF (es /= CD_SYSTEM_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'line values: '//TRIM(em)); RETURN
+      END IF
+      DO node = 1, nnode
+        CALL system_node_tension(system%lines(li), work(1:nnode - 1), deck_to_internal_node(node, nnode - 1), nnode, &
+                                 values(node), es, em)
+        IF (es /= CD_DECKDRV_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'line values: '//TRIM(em)); RETURN
+        END IF
+        n_done = node
+      END DO
+    CASE DEFAULT   ! curvature (5) / bend moment (6, EI=0 => 0) / declination (7) / azimuth (8)
+      CALL line_geom_values(kind, nnode, 3, system%lines(li)%q, system%lines(li)%azimuth_signed, values)
+    END SELECT
+    n_done = SIZE(values)
+  END SUBROUTINE system_line_values
+
+  PURE SUBROUTINE node_vectors_reversed(state, nnode, values)
+    !! The 3-vectors of an EI=0 line's nodes (internal order) in public order, xyz interleaved.
+    INTEGER, INTENT(IN) :: nnode
+    REAL(wp), INTENT(IN) :: state(3, nnode)
+    REAL(wp), INTENT(OUT) :: values(3, nnode)
+    values = state(:, nnode:1:-1)
+  END SUBROUTINE node_vectors_reversed
+
+  SUBROUTINE cable_line_values(cable, kind, values, n_done, ErrStat, ErrMsg)
+    !! CD_Eval_Aggregate_Line_Values on a finite-EI cable (eval_cable_channel at every node of the
+    !! final mesh). The tension, curvature and bend moment of the nodes share one element
+    !! evaluation through the cache of CD_HermiteCable_Dyn_Node_Values.
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
+    INTEGER, INTENT(IN) :: kind
+    REAL(wp), INTENT(OUT) :: values(:)
+    INTEGER, INTENT(OUT) :: n_done, ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: nnode, nelem, node
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    n_done = 0
+    IF (.NOT. cable_state_ready(cable)) THEN
+      CALL fail(ErrStat, ErrMsg, 'line values: cable state not available'); RETURN
+    END IF
+    nelem = cable%line%ne
+    nnode = cable%line%nn
+    IF (SIZE(values) /= MERGE(3*nnode, nnode, kind == 1 .OR. kind == 2 .OR. kind == 4)) THEN
+      CALL fail(ErrStat, ErrMsg, 'line values: output size does not match the line'); RETURN
+    END IF
+    SELECT CASE (kind)
+    CASE (1)   ! position
+      CALL cable_global_vectors(cable, cable%line%q, values)
+    CASE (2)   ! velocity
+      CALL cable_global_vectors(cable, cable%line%v, values)
+    CASE (4)   ! acceleration
+      CALL cable_global_vectors(cable, cable%line%a, values)
+    CASE (3, 5, 6)   ! nodal tension, curvature, bend moment
+      DO node = 1, nnode
+        CALL cable_recovered_value(cable, kind, deck_to_internal_node(node, nelem), 'line values', values(node), &
+                                   ErrStat, ErrMsg)
+        IF (ErrStat /= CD_DECKDRV_OK) RETURN
+        n_done = node
+      END DO
+    CASE DEFAULT   ! declination (7), azimuth (8)
+      CALL line_geom_values(kind, nnode, 6, cable%line%q, cable%azimuth_signed, values)
+      IF (kind == 8) THEN
+        DO node = 1, nnode
+          values(node) = cable_global_azimuth(cable, values(node))
+        END DO
+      END IF
+    END SELECT
+    n_done = SIZE(values)
+  END SUBROUTINE cable_line_values
+
+  PURE SUBROUTINE cable_global_vectors(cable, state, values)
+    !! A cable's nodal vector state (internal order, stride 6) in the deck's global frame and
+    !! public order, xyz interleaved.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    REAL(wp), CONTIGUOUS, INTENT(IN) :: state(:)
+    REAL(wp), INTENT(OUT) :: values(:)
+    INTEGER :: nnode, node, c, base
+
+    nnode = cable%line%nn
+    DO node = 1, nnode
+      base = 6*(nnode - node)
+      DO c = 1, 3
+        values(3*(node - 1) + c) = cable_global_component(cable, state(base + 1:base + 3), c)
+      END DO
+    END DO
+  END SUBROUTINE cable_global_vectors
+
   SUBROUTINE CD_Rigid6_Inventory(rt, body_ids, rod_ids, rod_nsegs)
     !! Deck ids of the Rigid6 bodies the runtime owns (runtime order), and of the rods fixed or
     !! pinned to them (body order, then attachment order) with their NumSegs: the objects the
@@ -37323,6 +37508,22 @@ CONTAINS
     END IF
   END SUBROUTINE line_model_end_tension
 
+  SUBROUTINE system_node_tension(model, tension, inode, nnode, val, ErrStat, ErrMsg)
+    !! Tension at node inode (internal order) of an EI=0 line from its element tensions: the mean
+    !! of the two adjacent elements, and at a line end the force on the end's point.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: tension(:)
+    INTEGER, INTENT(IN) :: inode, nnode
+    REAL(wp), INTENT(OUT) :: val
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    val = nodal_tension_value(tension, inode)
+    IF (inode == 1 .OR. inode == nnode) CALL line_model_end_tension(model, inode, nnode, val, ErrStat, ErrMsg)
+  END SUBROUTINE system_node_tension
+
   SUBROUTINE eval_system_line_channel(system, li, ch, val, ErrStat, ErrMsg)
     !! Evaluate one channel for EI=0 system line `li` (internal system line index). Mirrors the
     !! standalone driver's system_channel_value but takes the resolved line index directly and
@@ -37400,12 +37601,9 @@ CONTAINS
         IF (es /= CD_SYSTEM_OK) THEN
           CALL sys_solvefail(ch, em, ErrStat, ErrMsg); RETURN
         END IF
-        val = nodal_tension_value(tension, inode)
-        IF (inode == 1 .OR. inode == nnode) THEN
-          CALL line_model_end_tension(system%lines(li), inode, nnode, val, es, em)
-          IF (es /= CD_DECKDRV_OK) THEN
-            CALL sys_solvefail(ch, em, ErrStat, ErrMsg); RETURN
-          END IF
+        CALL system_node_tension(system%lines(li), tension, inode, nnode, val, es, em)
+        IF (es /= CD_DECKDRV_OK) THEN
+          CALL sys_solvefail(ch, em, ErrStat, ErrMsg); RETURN
         END IF
       END BLOCK
       RETURN
@@ -37469,7 +37667,7 @@ CONTAINS
     lo = to_lower(ch)
     nelem = cable%line%ne
     nnode = cable%line%nn
-    IF (nelem < 1 .OR. nnode /= nelem + 1 .OR. SIZE(cable%line%q) < 6*nnode) THEN
+    IF (.NOT. cable_state_ready(cable)) THEN
       CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": cable state not available'); RETURN
     END IF
     IF (starts_with(lo, 'fairten')) THEN
@@ -37540,47 +37738,14 @@ CONTAINS
     END IF
     inode = deck_to_internal_node(node, nelem)
     SELECT CASE (kind)
-    CASE (3)   ! nodal tension
-      BLOCK
-        IF (inode == 1 .OR. inode == nnode) THEN
-          ! a line end: the same support-reaction tension as FairTen/AnchTen
-          CALL cable_end_tension(cable, inode, val, ErrStat, ErrMsg)
-        ELSE IF (cable%line%output_element_recovery) THEN
-          ! OutputRecovery element: the length-weighted average of the two adjacent
-          ! element-mean axial forces EA (|r'| - 1)
-          val = (cable%line%l0(inode - 1)*cable_element_mean_tension(cable, inode - 1) + &
-                 cable%line%l0(inode)*cable_element_mean_tension(cable, inode))/ &
-                (cable%line%l0(inode - 1) + cable%line%l0(inode))
-        ELSE
-          ! effective tension from nodal equilibrium (CD_HermiteCable_Dyn_Node_Recovery)
-          CALL cable_node_values(cable, inode, val, sec_curv, sec_bend, ErrStat, ErrMsg)
-          IF (ErrStat /= CD_DECKDRV_OK) RETURN
-        END IF
-      END BLOCK
+    CASE (3, 5, 6)   ! nodal tension, curvature, bend moment
+      CALL cable_recovered_value(cable, kind, inode, ch, val, ErrStat, ErrMsg)
     CASE (1)   ! position (cable-local state rotated to the deck's global frame)
       val = cable_global_component(cable, cable%line%q(6*(inode - 1) + 1:6*(inode - 1) + 3), comp)
     CASE (2)   ! velocity
       val = cable_global_component(cable, cable%line%v(6*(inode - 1) + 1:6*(inode - 1) + 3), comp)
     CASE (4)   ! acceleration
       val = cable_global_component(cable, cable%line%a(6*(inode - 1) + 1:6*(inode - 1) + 3), comp)
-    CASE (5)   ! curvature: recovered bend moment / EI, or the larger exact one-sided trace
-      IF (.NOT. cable%line%output_element_recovery) THEN
-        CALL cable_node_values(cable, inode, sec_ten, val, sec_bend, ErrStat, ErrMsg)
-        RETURN
-      END IF
-      CALL cable_nodal_curvature(cable, inode, val, es, em)
-      IF (es /= CD_HCABLE_OK) THEN
-        CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
-      END IF
-    CASE (6)   ! bend moment: recovered from nodal equilibrium, or EI times the larger exact trace
-      IF (.NOT. cable%line%output_element_recovery) THEN
-        CALL cable_node_values(cable, inode, sec_ten, sec_curv, val, ErrStat, ErrMsg)
-        RETURN
-      END IF
-      CALL cable_nodal_bend_moment(cable, inode, val, es, em)
-      IF (es /= CD_HCABLE_OK) THEN
-        CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
-      END IF
     CASE (12)   ! the bend stiffener's share of the section moment (zero outside a stiffener)
       IF (.NOT. cable%line%output_element_recovery) THEN
         CALL cable_node_values(cable, inode, sec_ten, sec_curv, sec_bend, ErrStat, ErrMsg, sleeve_moment=val)
@@ -37646,15 +37811,79 @@ CONTAINS
         END IF
       END BLOCK
     CASE (8)   ! azimuth: local-frame azimuth plus the cable's frame heading, wrapped
-      val = line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6, cable%azimuth_signed)
-      IF (.NOT. cable_frame_is_identity(cable)) THEN
-        val = wrap_azimuth_deg(val + ATAN2(cable%frame_s, cable%frame_c)*45.0_wp/QUARTER_PI, &
-                               cable%azimuth_signed)
-      END IF
+      val = cable_global_azimuth(cable, line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6, &
+                                                        cable%azimuth_signed))
     CASE DEFAULT   ! declination (7) -- rotation-invariant geometric scalar
       val = line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6)
     END SELECT
   END SUBROUTINE eval_cable_channel
+
+  PURE LOGICAL FUNCTION cable_state_ready(cable) RESULT(ready)
+    !! Whether a finite-EI cable holds the state its channels read.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    ready = .FALSE.
+    IF (cable%line%ne < 1 .OR. cable%line%nn /= cable%line%ne + 1) RETURN
+    ready = SIZE(cable%line%q) >= 6*cable%line%nn
+  END FUNCTION cable_state_ready
+
+  SUBROUTINE cable_recovered_value(cable, kind, inode, label, val, ErrStat, ErrMsg)
+    !! The tension (kind 3), curvature (5) or bend moment (6) of a finite-EI cable at internal node
+    !! inode, under the line's OutputRecovery. label names the value in a failure message.
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
+    INTEGER, INTENT(IN) :: kind, inode
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), INTENT(OUT) :: val
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: sec_ten, sec_curv, sec_bend
+    INTEGER :: es
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    val = CD_ZERO
+    SELECT CASE (kind)
+    CASE (3)   ! nodal tension
+      IF (inode == 1 .OR. inode == cable%line%nn) THEN
+        ! a line end: the same support-reaction tension as FairTen/AnchTen
+        CALL cable_end_tension(cable, inode, val, ErrStat, ErrMsg)
+      ELSE IF (cable%line%output_element_recovery) THEN
+        ! OutputRecovery element: the length-weighted average of the two adjacent
+        ! element-mean axial forces EA (|r'| - 1)
+        val = (cable%line%l0(inode - 1)*cable_element_mean_tension(cable, inode - 1) + &
+               cable%line%l0(inode)*cable_element_mean_tension(cable, inode))/ &
+              (cable%line%l0(inode - 1) + cable%line%l0(inode))
+      ELSE
+        ! effective tension from nodal equilibrium (CD_HermiteCable_Dyn_Node_Recovery)
+        CALL cable_node_values(cable, inode, val, sec_curv, sec_bend, ErrStat, ErrMsg)
+      END IF
+    CASE (5)   ! curvature: recovered bend moment / EI, or the larger exact one-sided trace
+      IF (.NOT. cable%line%output_element_recovery) THEN
+        CALL cable_node_values(cable, inode, sec_ten, val, sec_bend, ErrStat, ErrMsg)
+        RETURN
+      END IF
+      CALL cable_nodal_curvature(cable, inode, val, es, em)
+      IF (es /= CD_HCABLE_OK) CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(label)//'": '//TRIM(em))
+    CASE (6)   ! bend moment: recovered from nodal equilibrium, or EI times the larger exact trace
+      IF (.NOT. cable%line%output_element_recovery) THEN
+        CALL cable_node_values(cable, inode, sec_ten, sec_curv, val, ErrStat, ErrMsg)
+        RETURN
+      END IF
+      CALL cable_nodal_bend_moment(cable, inode, val, es, em)
+      IF (es /= CD_HCABLE_OK) CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(label)//'": '//TRIM(em))
+    END SELECT
+  END SUBROUTINE cable_recovered_value
+
+  PURE REAL(wp) FUNCTION cable_global_azimuth(cable, azimuth) RESULT(val)
+    !! A cable-local azimuth [deg] in the deck's global frame: plus the cable's frame heading,
+    !! wrapped. Identity heading reads it straight through, bit-for-bit.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    REAL(wp), INTENT(IN) :: azimuth
+    val = azimuth
+    IF (.NOT. cable_frame_is_identity(cable)) THEN
+      val = wrap_azimuth_deg(val + ATAN2(cable%frame_s, cable%frame_c)*45.0_wp/QUARTER_PI, cable%azimuth_signed)
+    END IF
+  END FUNCTION cable_global_azimuth
 
   PURE FUNCTION cable_frame_is_identity(cable) RESULT(is_id)
     !! Exact identity-heading test. Order comparisons preserve the bit-for-bit

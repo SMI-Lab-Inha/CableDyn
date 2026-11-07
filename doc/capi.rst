@@ -1903,6 +1903,11 @@ On a finite-EI line whose mesh the static solve refined, ``n_nodes`` and the
 (:ref:`outputs-refined-nodes`); ``CD_C_LINE_DECK_NODE`` locates it: the array row whose value is
 5.
 
+``CableDyn_GetLineValues`` evaluates a whole line in one call, with no text token per node, and
+each value is bit for bit the node channel's. It is the cheap way to read many nodes at every
+step. Reading the tension, curvature and bend moment of a line after a step shares one evaluation
+of its elements.
+
 A ``NULL`` output pointer skips that output, except for the ``out`` array of
 ``CableDyn_GetLineValues`` and the ``value`` of ``CableDyn_EvalChannel``; the latter is not
 checked and must point to valid storage. An index out of range, a wrongly sized buffer, an
