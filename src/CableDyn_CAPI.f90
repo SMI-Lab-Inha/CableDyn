@@ -399,7 +399,10 @@ CONTAINS
     ! A deck with BODIES or RODS (standalone rules: a motionFile-free deck with dtM) runs on the
     ! coupled aggregate; every other deck keeps the point-system route and its diagnostics.
     ! A deck with finite-EI lines likewise runs on the aggregate (its Hermite cables).
-    CALL CD_Deck_Query_dtM(TRIM(deck_path), dtm, has_dtm, es, em, standalone_scan=.TRUE., n_bodies_rods=n_objects, &
+    ! With a host fluid field the deck is read as the aggregate reads it, a caller-driven deck, so
+    ! the SEASTATE and WaveKinMod 2 water policies of a host reach it.
+    CALL CD_Deck_Query_dtM(TRIM(deck_path), dtm, has_dtm, es, em, standalone_scan=.NOT. h%host_fluid, &
+                           n_bodies_rods=n_objects, &
                            n_finite_ei=n_finite)
     IF (es == CD_DECKDRV_OK .AND. (n_objects > 0 .OR. n_finite > 0 .OR. h%host_fluid)) THEN
       CALL init_deck_aggregate(h, TRIM(deck_path), has_dtm, dtm, caller, rot, err_stat, positions)

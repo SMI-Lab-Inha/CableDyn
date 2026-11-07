@@ -273,6 +273,32 @@ def test_a_host_marches_past_the_deck_tmax(tmp_path):
         assert np.all(np.isfinite(model.calc_output()))
 
 
+@pytest.mark.parametrize("policy", ["SEASTATE WaterKin", "water.dat WaterKin"])
+def test_host_water_policies_of_a_deck_take_the_host_field(tmp_path, policy):
+    text = WATERKIN.replace("0                    WaveKinMod", "2                    WaveKinMod")
+    text = text.replace("1                    CurrentMod", "2                    CurrentMod")
+    (tmp_path / "water.dat").write_text(text, encoding="utf-8")
+    with CableDyn() as model:
+        model.set_host_fluid()
+        model.init_deck(_deck(tmp_path, "library", policy))
+        _host_field(model, 0.0, SPEED)
+        _host_field(model, DT, SPEED)
+        model.step(DT, *_motion(DT))
+        assert np.all(np.isfinite(model.calc_output()))
+
+
+def test_a_host_field_deck_needs_no_tmax(tmp_path):
+    deck = _deck(tmp_path, "library", CURRENT)
+    deck.write_text(deck.read_text(encoding="utf-8").replace("6.0      TMax", ""), "utf-8")
+    with CableDyn() as model:
+        model.set_host_fluid()
+        model.init_deck(deck)
+        _host_field(model, 0.0, SPEED)
+        _host_field(model, DT, SPEED)
+        model.step(DT, *_motion(DT))
+        assert np.all(np.isfinite(model.calc_output()))
+
+
 @pytest.mark.parametrize(
     "options, tables",
     [(CURRENT, ""), (CURRENT + "\n" + FRICTION, STIFFENER)],

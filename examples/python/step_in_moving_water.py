@@ -48,7 +48,6 @@ LineID  LineType  Length   NumSegs
 1025.0   rhoW
 60.0     WtrDpth
 0.05     dtM
-3600.0   TMax   - required with a deck current; the host owns the clock and may run past it
 uniform 0.4 0 0 current
 --------------------- OUTPUTS -----------------------------------------------
 "FairTen1"

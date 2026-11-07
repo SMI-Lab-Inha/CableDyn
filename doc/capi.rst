@@ -736,8 +736,10 @@ the whole water of the march; a deck current that varies in time is refused.
 
 Seabed friction, ``staticsFriction asLaid`` and ``STIFFENERS`` work on this route.
 
-A deck with a current also declares ``TMax``, as under the standalone rules; it does not limit the
-host, which owns the clock and may step past it.
+With a host field the deck is read by the coupled rules, as in OpenFAST: it needs no ``TMax``, and a
+``SEASTATE`` or ``WaveKinMod 2`` water policy takes the host's field. A deck current marched without
+one follows the standalone rules and declares ``TMax``. Neither limits the host, which owns the clock
+and may step past it.
 
 Call sequence
 ~~~~~~~~~~~~~
