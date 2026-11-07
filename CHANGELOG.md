@@ -8,6 +8,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- In-process stepping in moving water (ABI 1.4). On decks with finite-EI lines, bodies or rods
+  the C API and Python march a steady deck current (`current`, WaterKin `CurrentMod 1`, MoorDyn-C
+  `Currents 1`), in the static start and in every step. A host can instead supply the fluid at
+  every line node: `CableDyn_SetHostFluid`, `CableDyn_NFluidNodes`,
+  `CableDyn_GetFluidNodePositions` and `CableDyn_UpdateFluidFields`, in Python `set_host_fluid`,
+  `n_fluid_nodes`, `fluid_node_positions` and `update_fluid_fields`. The field is sampled and held
+  as in the standalone march and in OpenFAST; in current and waves a stepped cable matches the
+  standalone driver to the digits of its output.
+
 ### Fixed
 
 - The C API messages of `CableDyn_UpdatePointFluidFields` and `CableDyn_CalcOutputDerivatives` on

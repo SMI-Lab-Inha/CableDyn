@@ -710,6 +710,49 @@ library is located. Array ordering, frames, and units at the coupling boundary f
       :rtype: numpy.ndarray
       :raises CableDynError: if the call fails.
 
+   .. py:method:: set_host_fluid(enable=True)
+
+      Choose, before a deck initialization, whether the host supplies the ambient fluid.
+      With ``enable``, the following :meth:`init_deck`, :meth:`init_deck_at` and
+      :meth:`init_deck_rotating` take the field of :meth:`update_fluid_fields`: deck waves
+      are refused and a steady deck current sets the static start only.
+
+      :param enable: Whether the host supplies the fluid.
+      :type enable: bool
+      :raises CableDynError: if the call fails.
+
+   .. py:attribute:: n_fluid_nodes
+
+      Nodes of the host fluid field; zero without one.
+
+   .. py:method:: fluid_node_positions()
+
+      Committed positions of the fluid nodes, where the host evaluates the field of the
+      coming step.
+
+      :returns: Global positions (m), shaped ``(3, n_fluid_nodes)``.
+      :rtype: numpy.ndarray
+      :raises CableDynError: on a model built without a host fluid field.
+
+   .. py:method:: update_fluid_fields(fluid_velocity, fluid_acceleration, waterline_z, dynamic_pressure=None)
+
+      Prescribe the ambient fluid at every fluid node, held until the next call. Call it
+      once with the field at ``t = 0`` before the first step, then before each step from
+      ``t`` to ``t + dt`` with the field at ``t + dt`` at the positions of
+      :meth:`fluid_node_positions`. The density is the deck's.
+
+      :param fluid_velocity: Whole ambient velocity (m/s), global axes, shaped
+         ``(3, n_fluid_nodes)`` or flat.
+      :type fluid_velocity: array_like
+      :param fluid_acceleration: Fluid acceleration (m/s\ :sup:`2`), with the same shape.
+      :type fluid_acceleration: array_like
+      :param waterline_z: Free-surface elevation above each node (m), ``(n_fluid_nodes,)``.
+      :type waterline_z: array_like
+      :param dynamic_pressure: Wave dynamic pressure (Pa) for the end caps of rods.
+      :type dynamic_pressure: array_like, optional
+      :raises CableDynError: on a model built without a host fluid field, or if the call
+         fails.
+
    .. py:method:: update_point_fluid_fields(fluid_velocity, fluid_acceleration, waterline_z, fluid_density)
 
       Prescribe external fluid kinematics at every system point.
@@ -828,7 +871,8 @@ imports without the shared library.
 
 .. py:function:: abi_minor()
 
-   Return the extension level of ABI 1 of the loaded library: 3 when it also has the
+   Return the extension level of ABI 1 of the loaded library: 4 when it also has the host
+   fluid calls behind :meth:`CableDyn.update_fluid_fields`, 3 when it has the
    host-rotation calls behind :meth:`CableDyn.init_deck_rotating`,
    :meth:`CableDyn.update_rotations` and :meth:`CableDyn.coupled_moments`, 2 when it has the
    host-coupling calls behind :meth:`CableDyn.init_deck_at`, :meth:`CableDyn.save_state` and

@@ -67,7 +67,7 @@ def _roll(phi: float) -> np.ndarray:
 
 def test_abi_minor_reports_the_host_rotation_extension():
     assert _lib.HOST_ROTATION_ABI_MINOR == 3
-    assert _lib.abi_minor() == cabledyn.abi_minor() == _lib.HOST_ROTATION_ABI_MINOR
+    assert _lib.abi_minor() == cabledyn.abi_minor() >= _lib.HOST_ROTATION_ABI_MINOR
 
 
 def test_torsion_deck_needs_the_rotating_initialization(tmp_path):

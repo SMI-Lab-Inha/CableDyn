@@ -63,7 +63,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Profile_Enabled, CD_HermiteCableControlSaveType, &
                                           CD_HermiteCable_Dyn_Save_Control, CD_HermiteCable_Dyn_Restore_Control, &
                                           CD_HCDYN_OK
-  USE CableDyn_Model, ONLY: CD_ModelControlSaveType
+  USE CableDyn_Model, ONLY: CD_ModelControlSaveType, CD_Recompute_Model_Acceleration, CD_MODEL_OK
   USE CableDyn_DeckDriver, ONLY: CD_DeckAggregateType, CD_Init_Deck_Aggregate, CD_End_Deck_Aggregate, &
                                  CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_Eval_Aggregate_Channel, &
                                  CD_Cable_Deck_Node, &
@@ -292,7 +292,7 @@ CONTAINS
                                    ptfm_init, external_fluid, coupled_positions, &
                                    n_turbines, turbine_ref_pos, farm_ptfm_init, forbid_deck_ambient, run_tmax, &
                                    range_files, host_orientation, static_current, prescribed_motion, static_run, &
-                                   deck_current, deck_turbines)
+                                   deck_current, deck_turbines, static_deck_current)
     !! Build the aggregate from ONE mixed deck: partition its lines into {EI=0 mooring}
     !! and {finite-EI cable}, wrap the mooring subset into a CD_FMF, and own one CD_HFMF
     !! per cable. Same signature philosophy as CD_FMF_Init_From_Deck (host environment
@@ -343,6 +343,9 @@ CONTAINS
     ! deck_current: the caller marches the deck's own current (the standalone driver; see
     ! CD_Init_Deck_Aggregate): every step samples it at the nodes, at its t_committed
     LOGICAL, INTENT(IN), OPTIONAL :: deck_current
+    ! static_deck_current (with external_fluid): the deck's steady current sets the static start
+    ! only and the dynamics take the host field alone (see CD_Init_Deck_Aggregate)
+    LOGICAL, INTENT(IN), OPTIONAL :: static_deck_current
     ! deck_turbines: the standalone driver runs a TURBINES deck, whose TURBINES rows place the
     ! Turbine<J> points and whose per-turbine records move them (see CD_Init_Deck_Aggregate)
     LOGICAL, INTENT(IN), OPTIONAL :: deck_turbines
@@ -387,7 +390,7 @@ CONTAINS
                                 range_files=range_files, host_orientation=host_orientation, &
                                 static_current=static_current, prescribed_motion=prescribed_motion, &
                                 static_run=static_run, deck_current=deck_current, &
-                                deck_turbines=deck_turbines)
+                                deck_turbines=deck_turbines, static_deck_current=static_deck_current)
     IF (PRESENT(external_fluid)) THEN
       candidate%built_extfluid = external_fluid
     END IF
@@ -1938,7 +1941,7 @@ CONTAINS
   END SUBROUTINE CD_AGG_GetFluidNodePositions
 
   SUBROUTINE CD_AGG_SetFluidFields(self, fluid_velocity, fluid_acceleration, waterline_z, ErrStat, ErrMsg, &
-                                   dynamic_pressure)
+                                   dynamic_pressure, initial_condition)
     !! Prescribe the ambient fluid kinematics at every fluid sampling node for the NEXT
     !! advance: velocity + acceleration shaped (3, nfluid), the local free-surface
     !! elevation waterline_z shaped (nfluid) (drives the wetting of drag / FK / added
@@ -1947,6 +1950,9 @@ CONTAINS
     !! drag configuration, so the model layer alone cannot catch them).
     !! dynamic_pressure (optional, Pa, shaped (nfluid)): the wave dynamic pressure at the nodes;
     !! the rod blocks use it for the end-cap pressure (other blocks ignore it).
+    !! initial_condition (optional): the field at t = 0 of a host that starts its march in it:
+    !! the EI = 0 lines re-derive their start acceleration, as a cable's first field does and
+    !! as the standalone routes do at their t = 0 sample.
     !! Before the first committed step (and before a state mirror is restored) the integrated
     !! bodies and rods re-solve their start accelerations in the new fields: the accelerations
     !! solved at Init saw the zero fields of the build, and the first step starts from them.
@@ -1955,9 +1961,13 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: dynamic_pressure(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: initial_condition
     INTEGER :: li, o1, o2, i, es
+    LOGICAL :: at_start
     CHARACTER(1024) :: em
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    at_start = .FALSE.
+    IF (PRESENT(initial_condition)) at_start = initial_condition
     ! Uniform contract for BOTH line families: host fields are only accepted on a
     ! build that declared them. Cables always carry a drag/added-mass configuration,
     ! so without this gate a plain cable-only build would silently accept held fields
@@ -2012,6 +2022,14 @@ CONTAINS
         ErrStat = CD_AGG_BADINPUT
         ErrMsg = 'CableDyn_OpenFAST_Aggregate: fluid-field update: '//TRIM(em)
         RETURN
+      END IF
+      IF (at_start) THEN
+        CALL CD_Recompute_Model_Acceleration(self%sys%fast%system%lines(li), es, em)
+        IF (es /= CD_MODEL_OK) THEN
+          ErrStat = CD_AGG_BADINPUT
+          ErrMsg = 'CableDyn_OpenFAST_Aggregate: start acceleration in the fluid field: '//TRIM(em)
+          RETURN
+        END IF
       END IF
     END DO
     ! finite-EI cables: the held-field mode (frozen over the step; the drag adds the

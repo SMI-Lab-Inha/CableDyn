@@ -127,9 +127,9 @@ int CableDyn_NLines(void *handle, int *err_stat);
  * aggregate (it needs dtM); other decks keep the point route. Check
  * CableDyn_GetAbiMinor() >= 1 before using these on a library of unknown
  * vintage. CABLEDYN_CAPI_ABI_MINOR is the extension level this header
- * declares (3: the host-coupling and host-rotation calls below are present
- * too). */
-#define CABLEDYN_CAPI_ABI_MINOR 3
+ * declares (4: the host-coupling, host-rotation and host fluid calls below are
+ * present too). */
+#define CABLEDYN_CAPI_ABI_MINOR 4
 
 #define CD_C_OBJ_LINE 1
 #define CD_C_OBJ_POINT 2
@@ -255,6 +255,34 @@ void CableDyn_UpdateRotations(void *handle, const double *dcm,
  * handle. */
 void CableDyn_GetCoupledMoments(void *handle, double *coupled_moments,
                                 int n_coupled_dof, int *err_stat);
+
+/* Host fluid field (ABI minor 4). The host evaluates the ambient fluid and hands
+ * it over at the nodes of the deck, on any deck with dtM and a seabed. Check
+ * CableDyn_GetAbiMinor() >= 4 before using these on a library of unknown
+ * vintage. */
+
+/* Before a deck initialization: nonzero makes every following InitDeck,
+ * InitDeckAt and InitDeckRotating of the handle take the host's field (0, the
+ * default, keeps the deck's). A steady deck current then sets the static start
+ * only, and deck waves are refused. */
+void CableDyn_SetHostFluid(void *handle, int enable, int *err_stat);
+/* The fluid node count; zero without a host fluid field. */
+int CableDyn_NFluidNodes(void *handle, int *err_stat);
+/* The committed node positions, x y z triples in global axes: where the host
+ * evaluates the field of the coming step. */
+void CableDyn_GetFluidNodePositions(void *handle, double *xyz, int n_node,
+                                    int *err_stat);
+/* The fluid at every node, held until the next call: velocity and acceleration
+ * as x y z triples in global axes, the free-surface elevation, and the wave
+ * dynamic pressure (may be NULL; rods use it for their end caps). Call it once
+ * with the t = 0 field before the first step, then before each step from t to
+ * t + dt with the field at t + dt at the positions of
+ * CableDyn_GetFluidNodePositions. A step before the first call is refused. */
+void CableDyn_UpdateFluidFields(void *handle, const double *fluid_velocity,
+                                const double *fluid_acceleration,
+                                const double *waterline_z,
+                                const double *dynamic_pressure, int n_node,
+                                int *err_stat);
 
 #ifdef __cplusplus
 }

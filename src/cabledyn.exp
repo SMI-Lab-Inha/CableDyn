@@ -30,6 +30,10 @@ _CableDyn_NPoints
 _CableDyn_RestoreState
 _CableDyn_SaveState
 _CableDyn_Step
+_CableDyn_SetHostFluid
+_CableDyn_NFluidNodes
+_CableDyn_GetFluidNodePositions
+_CableDyn_UpdateFluidFields
 _CableDyn_UpdatePointFluidFields
 _CableDyn_UpdateRotations
 _CableDyn_UpdateStates

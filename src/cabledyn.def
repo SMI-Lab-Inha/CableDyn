@@ -31,6 +31,10 @@ EXPORTS
     CableDyn_RestoreState
     CableDyn_SaveState
     CableDyn_Step
+    CableDyn_SetHostFluid
+    CableDyn_NFluidNodes
+    CableDyn_GetFluidNodePositions
+    CableDyn_UpdateFluidFields
     CableDyn_UpdatePointFluidFields
     CableDyn_UpdateRotations
     CableDyn_UpdateStates

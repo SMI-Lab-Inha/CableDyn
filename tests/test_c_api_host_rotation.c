@@ -25,6 +25,7 @@
  * - a handle initialised without rotations refuses CableDyn_UpdateRotations;
  *   the EI = 0 point route (box_points.dat) takes rotations and ignores them,
  *   and its coupled moments are zero.
+ * - the host fluid calls of extension 4 link and run through the public header.
  * The decks this test writes are removed on every exit path.
  */
 #include "CableDyn_CAPI.h"
@@ -381,6 +382,41 @@ done:
     return failed;
 }
 
+static int check_host_fluid(void)
+{
+    enum { MAX_NODES = NSEG + 1 };
+    static double xyz[3 * MAX_NODES], vel[3 * MAX_NODES], acc[3 * MAX_NODES], eta[MAX_NODES];
+    const double q[3] = {0.0, 0.0, -50.0}, z[3] = {0.0, 0.0, 0.0};
+    bool converged = false, stalled = false;
+    void *h = NULL;
+    int err = -1, failed = 1, n, n_iter = 0;
+    CHECK(CableDyn_GetAbiMinor() >= 4, "the library declares ABI minor 4");
+    CableDyn_Create(&h, &err);
+    REQUIRE(err == CD_C_OK, "create");
+    CableDyn_SetHostFluid(h, 1, &err);
+    REQUIRE(err == CD_C_OK, "SetHostFluid");
+    CableDyn_InitDeckRotating(h, TORSION_DECK, (int)strlen(TORSION_DECK), NULL, 0, &err);
+    REQUIRE(err == CD_C_OK, "InitDeckRotating with a host fluid field");
+    n = CableDyn_NFluidNodes(h, &err);
+    REQUIRE(err == CD_C_OK && n == MAX_NODES, "one fluid node per line node");
+    CableDyn_GetFluidNodePositions(h, xyz, n, &err);
+    REQUIRE(err == CD_C_OK && xyz[3 * (n - 1) + 2] < 0.0, "the node positions");
+    CableDyn_GetFluidNodePositions(h, xyz, n - 1, &err);
+    REQUIRE(err == CD_C_BAD_INPUT, "a wrong node count is refused");
+    CableDyn_Step(h, DT, q, z, z, 3, &converged, &stalled, &n_iter, &err);
+    REQUIRE(err == CD_C_BAD_INPUT && last_error_has(h, "before the first step"),
+            "a step before the first field is refused");
+    CableDyn_UpdateFluidFields(h, vel, acc, eta, NULL, n, &err);
+    REQUIRE(err == CD_C_OK, "UpdateFluidFields");
+    CableDyn_UpdateFluidFields(h, NULL, acc, eta, NULL, n, &err);
+    REQUIRE(err == CD_C_BAD_INPUT, "a null field is refused");
+    REQUIRE(step_at_deck(h) == 0, "a step in the held field");
+    failed = 0;
+done:
+    close_handle(&h);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
     int failed;
@@ -396,7 +432,7 @@ int main(int argc, char **argv)
         return 1;
     }
     failed = check_init() || check_feedthrough() || check_march() || check_save_restore() || check_rejections() ||
-             check_point_route();
+             check_point_route() || check_host_fluid();
     remove_written_decks();
     if (failed) return 1;
     puts("PASS: CableDyn C API host rotations");
