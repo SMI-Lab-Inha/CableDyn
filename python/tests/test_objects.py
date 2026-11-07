@@ -352,8 +352,9 @@ def test_finite_ei_views_report_bending(tmp_path):
         curv = line.curvature()
         moment = line.bend_moment()
         assert curv.max() > 0.01
-        # EI is uniform (1.99e4 N.m^2) along this cable
-        np.testing.assert_allclose(moment, 1.99e4 * curv, rtol=1.0e-9, atol=1.0e-9)
+        # EI is uniform (1.99e4 N.m^2) along this cable; the moment is EI kappa over the stretch
+        stretch = 1.0 + (line.values("tension") + 1.99e4 * curv**2) / 4.69e8
+        np.testing.assert_allclose(moment * stretch, 1.99e4 * curv, rtol=1.0e-6, atol=1.0e-9)
         assert line.bend_moment()[95] == model.channel("BendMom1N96")
         np.testing.assert_allclose(line.node_positions()[0], [5.0, 0.0, -14.0], atol=1e-9)
         np.testing.assert_allclose(line.node_positions()[-1], [125.0, 0.0, -80.0], atol=1e-9)

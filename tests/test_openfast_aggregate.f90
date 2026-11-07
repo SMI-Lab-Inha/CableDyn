@@ -831,7 +831,7 @@ CONTAINS
     CALL require(vFairTen2 > 1.0e3_wp, 'chan:FairTen2-physical')
 
     ! (b) cable Curv1N5 and the public HFMF nodal curvature share one definition at deck node 5:
-    ! the bend moment recovered from nodal equilibrium over EI by default, and under
+    ! the recovered bend moment times the stretch over EI by default, and under
     ! OutputRecovery element the exact one-sided Hermite curvature, the larger adjacent-element
     ! trace (CD_HFMF_Curvature_Exact). The channel follows the cable's setting.
     nnode = agg%cables(1)%line%nn
@@ -864,10 +864,14 @@ CONTAINS
     CALL require(ABS(vFairIncl1 - (decexp - 90.0_wp)) <= 1.0e-9_wp + 1.0e-6_wp*ABS(decexp), &
                  'chan:FairIncl1-signed-below-horizontal')
 
-    ! (d) cable BendMom1N5 == EI(node) * geometric curvature; the cable EI is uniform (bare/buoy
-    ! both 1.99e4), so nodal EI = EI_BARE and BendMom reduces to EI_BARE * Curv1N5.
-    CALL require(ABS(vBendMom1N5 - EI_BARE*vCurv1N5) <= 1.0e-6_wp*MAX(1.0_wp, ABS(EI_BARE*vCurv1N5)), &
-                 'chan:BendMom1N5-equals-EI-times-curv')
+    ! (d) cable BendMom1N5 == EI(node) * geometric curvature/|r'|, the stretch of the node's tangent;
+    ! the cable EI is uniform (bare/buoy both 1.99e4), so nodal EI = EI_BARE.
+    BLOCK
+      INTEGER :: i0
+      i0 = 6*(nnode - 5)
+      CALL require(ABS(vBendMom1N5*NORM2(agg%cables(1)%line%q(i0 + 4:i0 + 6)) - EI_BARE*vCurv1N5) <= &
+                   1.0e-9_wp*MAX(1.0_wp, ABS(EI_BARE*vCurv1N5)), 'chan:BendMom1N5-equals-EI-times-curv-over-stretch')
+    END BLOCK
 
     WRITE (*, '(A,ES12.4,A,ES12.4,A,ES12.4)') 'channels: FairTen2 = ', vFairTen2, ' N;  Curv1N5 = ', &
       vCurv1N5, ' 1/m;  FairAngle1 = ', vFairAngle1

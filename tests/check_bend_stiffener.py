@@ -4,11 +4,12 @@
 A power cable leaves a hang-off clamped horizontal at End A through a 5 m polyurethane bend
 stiffener (a 0.5 m cylindrical root and a 4.5 m cone) and hangs to a fixed End B 52 m away and
 30 m lower. The driver solves the static equilibrium with the stiffener given as a STIFFENERS
-table. The reference is an independent solution of the planar extensible elastica,
+table. The reference is an independent solution of the planar extensible elastica of the energy
+EI kappa^2/2 + EA e^2/2 per unstretched length, kappa the curvature of the stretched line,
 
-    x' = (1 + e) cos(theta),  z' = (1 + e) sin(theta),  theta' = M / EI(s),
+    x' = (1 + e) cos(theta),  z' = (1 + e) sin(theta),  theta' = (1 + e)^2 M / EI(s),
     M' = -(1 + e) (cos(theta) n_z - sin(theta) n_x),   n' = (0, w(s)),
-    e = (n_x cos(theta) + n_z sin(theta)) / EA,
+    EA e - (1 + e) M^2 / EI(s) = n_x cos(theta) + n_z sin(theta),
 
 with EI(s) the cable's EI plus E pi/64 (OD(s)^4 - ID^4) of the sleeve and w(s) the submerged
 weight of cable and sleeve per unstretched length, solved by collocation (scipy solve_bvp)
@@ -142,6 +143,7 @@ LineID End Stiffness EzX EzY EzZ
 "Curv1N41"
 "CurvX1N41"
 "CurvY1N41"
+"Ten1N41"
 END
 """
 
@@ -170,6 +172,13 @@ FORCE_SCALE = 1.0e5
 MOMENT_SCALE = 1.0e4
 
 
+def reference_stretch(y: np.ndarray, ei: np.ndarray) -> np.ndarray:
+    """1 + e of the elastica state y = (x, z, theta, M, n_x, n_z), scaled as in reference()."""
+    bending = (MOMENT_SCALE * y[3]) ** 2 / ei
+    axial = FORCE_SCALE * (y[4] * np.cos(y[2]) + y[5] * np.sin(y[2]))
+    return 1.0 + (axial + bending) / (EA - bending)
+
+
 def reference(s_nodes: np.ndarray, x_seed: np.ndarray, z_seed: np.ndarray):
     """Planar extensible elastica along the unstretched arc, y = (x, z, theta, M, n_x, n_z), with
     the moment and the force scaled by MOMENT_SCALE and FORCE_SCALE. The seed is the shape only:
@@ -179,8 +188,8 @@ def reference(s_nodes: np.ndarray, x_seed: np.ndarray, z_seed: np.ndarray):
         x, z, th, m, nx, nz = y
         ei, w = section(s)
         c, sn = np.cos(th), np.sin(th)
-        stretch = 1.0 + FORCE_SCALE * (nx * c + nz * sn) / EA
-        return np.vstack([stretch * c, stretch * sn, MOMENT_SCALE * m / ei,
+        stretch = reference_stretch(y, ei)
+        return np.vstack([stretch * c, stretch * sn, stretch**2 * MOMENT_SCALE * m / ei,
                           -stretch * FORCE_SCALE / MOMENT_SCALE * (c * nz - sn * nx),
                           np.zeros_like(s), w / FORCE_SCALE])
 
@@ -279,7 +288,7 @@ def check_steps(exe: str, tmp: str) -> bool:
     the 5 m tip)."""
     cone = [(0.5, 0.60, 0.60), (4.5, 0.60, 0.22)]
     od_3m = 0.60 + 2.5 / 4.5 * (0.22 - 0.60)
-    # name, sections, stiffener rows, node, stiffness giving the curvature, cable stiffness of
+    # name, sections, stiffener rows, node, stiffness of the side of the curvature, cable stiffness of
     # the BendMom share (the larger share, on the side of the larger EI_cable)
     cases = [
         ("bare tip", "1 cable 8.0 80\n", cone, 51, EI_CABLE, EI_CABLE),
@@ -292,21 +301,22 @@ def check_steps(exe: str, tmp: str) -> bool:
     ]
     ok = True
     for name, sections, rows, node, ei, ei_cable in cases:
-        channels = [f"{c}1N{node}" for c in ("Curv", "BendMom", "StfMom")]
+        channels = [f"{c}1N{node}" for c in ("Curv", "BendMom", "StfMom", "Ten")]
         rc, log, _, out = solve(exe, tmp, "step", step_deck(sections, rows, channels))
         if rc != 0:
             print(log[-3000:])
             print(f"FAIL {name}: the driver did not solve the deck")
             return False
-        curvature, bend, stiffener = (out[c] for c in channels)
+        curvature, bend, stiffener, tension = (out[c] for c in channels)
         moment = bend + stiffener
+        stretch = 1.0 + tension / EA
         full = ei_cable == ei
         if name == "junction of two line types":
             # the stiffer type's own share: EI_cable M / (EI_cable + sleeve)
             share = ei_cable * moment / (ei_cable + sleeve(od_3m))
         else:
-            share = moment if full else ei_cable * curvature
-        error = max(abs(curvature * ei / moment - 1.0), abs(bend / share - 1.0))
+            share = moment if full else ei_cable * curvature / stretch
+        error = max(abs(curvature * ei / (stretch * moment) - 1.0), abs(bend / share - 1.0))
         good = error <= IDENTITY_TOLERANCE
         print(f"{'ok  ' if good else 'FAIL'} {name}: curvature {curvature:.5f} 1/m, "
               f"section moment {moment:.1f} N m, largest relative difference {error:.1e}")
@@ -326,7 +336,7 @@ def check_refined(exe: str, tmp: str) -> bool:
         "(-) (-) (m) (m) (m) (m) (Pa) (kg/m^3)\n"
         f"4 A {length} {od0} {od1} {bore} {E_STF} {RHO_STF}\n"
         "--------------------- OPTIONS"), 1)
-    deck = deck.replace("FairTen4\n", "Curv4N3\nBendMom4N3\nStfMom4N3\n")
+    deck = deck.replace("FairTen4\n", "Curv4N3\nBendMom4N3\nStfMom4N3\nTen4N3\n")
     rc, log, rows, out = solve(exe, tmp, "refined", deck)
     if rc != 0 or "refined to" not in log:
         print(log[-3000:])
@@ -334,7 +344,8 @@ def check_refined(exe: str, tmp: str) -> bool:
         return False
     od = od0 + 40.0 / length * (od1 - od0)
     ei = 1.99e4 + E_STF * math.pi / 64.0 * (od**4 - bore**4)
-    error = abs(out["Curv4N3"] * ei / (out["BendMom4N3"] + out["StfMom4N3"]) - 1.0)
+    stretch = 1.0 + out["Ten4N3"] / 4.69e8
+    error = abs(out["Curv4N3"] * ei / (stretch * (out["BendMom4N3"] + out["StfMom4N3"])) - 1.0)
     ok = error <= IDENTITY_TOLERANCE
     print(f"{'ok  ' if ok else 'FAIL'} refined mesh of {len(rows) - 1} elements: curvature at the "
           f"deck node within {error:.1e} of the section moment over EI(s)")
@@ -370,13 +381,15 @@ def check_soft_sleeve(exe: str, tmp: str) -> bool:
     return ok
 
 
-def check_identities(out: dict[str, float], name: str = "node 41") -> bool:
-    """Curv, CurvX, CurvY, BendMom and StfMom of a node inside the cone (node 41, 2 m)."""
+def check_identities(out: dict[str, float], name: str = "node 41", stretch: float | None = None) -> bool:
+    """Curv, CurvX, CurvY, BendMom and StfMom of a node inside the cone (node 41, 2 m): the moments
+    are the stiffnesses times the curvature over the stretch, 1 under OutputRecovery element."""
     curvature = out["Curv1N41"]
     ei = float(section(np.array([2.0]))[0][0])
+    stretch = 1.0 + out["Ten1N41"] / EA if stretch is None else stretch
     error = max(abs(math.hypot(out["CurvX1N41"], out["CurvY1N41"]) / curvature - 1.0),
-                abs(out["BendMom1N41"] / (EI_CABLE * curvature) - 1.0),
-                abs(out["StfMom1N41"] / ((ei - EI_CABLE) * curvature) - 1.0))
+                abs(out["BendMom1N41"] * stretch / (EI_CABLE * curvature) - 1.0),
+                abs(out["StfMom1N41"] * stretch / ((ei - EI_CABLE) * curvature) - 1.0))
     ok = error <= IDENTITY_TOLERANCE
     print(f"{'ok  ' if ok else 'FAIL'} {name}: curvature components and moment shares agree "
           f"within {error:.1e}")
@@ -392,8 +405,11 @@ def element_peaks(path: pathlib.Path, n: int) -> tuple[np.ndarray, np.ndarray, n
     return table[:, 2], table[:, 3], bend_check(read_output(path), 1.0, condition="storage", line_id=1).curvature[:n]
 
 
-def reference_curvature(sol, s: np.ndarray) -> np.ndarray:
-    return np.abs(sol.sol(s)[3]) * MOMENT_SCALE / section(s)[0]
+def reference_curvature(sol, s: np.ndarray, ei: np.ndarray | None = None) -> np.ndarray:
+    """Curvature of the stretched line, (1 + e) M / EI, at arc s."""
+    ei = section(s)[0] if ei is None else ei
+    y = sol.sol(s)
+    return reference_stretch(y, ei) * np.abs(y[3]) * MOMENT_SCALE / ei
 
 
 def check_local(exe: str, tmp: str, sol) -> bool:
@@ -409,7 +425,8 @@ def check_local(exe: str, tmp: str, sol) -> bool:
         s = np.arange(n + 1) * (WINDOW / n)
         ei = section(s)[0]
         ei[np.abs(s - tip) < 1.0e-9] = EI_CABLE
-        curvature = np.abs(sol.sol(s)[3]) * MOMENT_SCALE / ei
+        curvature = reference_curvature(sol, s, ei)
+        moment = np.abs(sol.sol(s)[3]) * MOMENT_SCALE / ei
         scale = np.maximum(curvature, LOCAL_FLOOR * root_curvature)
         for name, text in (("equilibrium nodes", deck), ("element nodes", deck.replace(*ELEMENT_RECOVERY))):
             rc, log, rows, _ = solve(exe, tmp, "local", text)
@@ -425,7 +442,9 @@ def check_local(exe: str, tmp: str, sol) -> bool:
             # past the tip an element's own curvature is the section's, by definition
             covered = s < tip - 1.0e-9 if name == "element nodes" else s < np.inf
             error = np.where(covered, np.abs(data[:, 5] - curvature) / scale, 0.0)
-            moment_error = np.max(np.where(covered, np.abs(np.abs(data[:, 6]) / EI_CABLE - curvature) / scale, 0.0))
+            # the element definition of the bend moment is EI times the curvature
+            shared = curvature if name == "element nodes" else moment
+            moment_error = np.max(np.where(covered, np.abs(np.abs(data[:, 6]) / EI_CABLE - shared) / scale, 0.0))
             worst = int(np.argmax(error))
             good = max(error[worst], moment_error) <= tolerance
             print(f"{'ok  ' if good else 'FAIL'} {WINDOW / n:.3f} m elements, {name}: curvature within "
@@ -466,7 +485,7 @@ def main() -> int:
             print(log[-3000:])
             print("FAIL: the driver did not solve the deck under OutputRecovery element")
             return 1
-        notes_ok = check_identities(element_out, "node 41, OutputRecovery element") and notes_ok
+        notes_ok = check_identities(element_out, "node 41, OutputRecovery element", 1.0) and notes_ok
         orcaflex_ok = check_orcaflex(data[:, 0], data[:, 5])
         if solve_bvp is None:
             print("SKIP: scipy is not installed (the elastica comparison needs solve_bvp)")
