@@ -1588,7 +1588,7 @@ class ModeShapes(OutputTable):
         return tuple(dict.fromkeys(int(value) for value in self.column("LineID")))
 
     def _line_rows(self, line_id: int) -> npt.NDArray[np.bool_]:
-        mask = self.column("LineID") == int(line_id)
+        mask: npt.NDArray[np.bool_] = self.column("LineID") == int(line_id)
         if not np.any(mask):
             raise KeyError(
                 f"LineID {line_id} is not in {self.path.name}; available: {self.line_ids}"
@@ -1596,7 +1596,7 @@ class ModeShapes(OutputTable):
         return mask
 
     def _mode_rows(self, line_id: int, mode: int) -> npt.NDArray[np.bool_]:
-        mask = self._line_rows(line_id) & (self.column("Mode") == int(mode))
+        mask: npt.NDArray[np.bool_] = self._line_rows(line_id) & (self.column("Mode") == int(mode))
         if not np.any(mask):
             raise KeyError(f"LineID {line_id} has no mode {mode} in {self.path.name}")
         return mask
@@ -1794,7 +1794,8 @@ class NaturalModes(OutputTable):
             raise KeyError(
                 f"LineID {line_id} is not in {self.path.name}; available: {self.line_ids}"
             )
-        return self.column(channel)[mask].copy()
+        values: npt.NDArray[Any] = self.column(channel)[mask].copy()
+        return values
 
     def line(self, line_id: int) -> NaturalModes:
         """Return the frequency and shape rows of one line.
