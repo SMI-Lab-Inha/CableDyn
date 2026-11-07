@@ -397,6 +397,7 @@ IMPLICIT NONE
     REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: pred_loads      !< load predictor: the coupled forces (3 x ncp) and then moments (3 x ncp) of that solve [-]
     REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: fluid_held      !< the held ambient-fluid fields of the last committed mooring step (velocity, acceleration, free-surface elevation, dynamic pressure at the line nodes), restored at a restart instead of re-sampled [-]
     REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: range_state      !< the accumulated range graphs (LINES flag r) through the last committed mooring step, in double precision, restored at a restart [-]
+    REAL(DbKi) , DIMENSION(:), ALLOCATABLE  :: commit_input      !< what the last commit was reached with: the coupled kinematics (position, velocity, acceleration, orientation, angular velocity, angular acceleration; 24 x ncp) then the line-control command (DeltaL, DeltaLdot); a rebuild stands on it, at any time of the mooring step after the commit [-]
   END TYPE CD_OtherStateType
 ! =======================
 ! =========  CD_ParameterType  =======
@@ -3019,6 +3020,18 @@ subroutine CD_CopyOtherState(SrcOtherStateData, DstOtherStateData, CtrlCode, Err
       end if
       DstOtherStateData%range_state = SrcOtherStateData%range_state
    end if
+   if (allocated(SrcOtherStateData%commit_input)) then
+      LB(1:1) = lbound(SrcOtherStateData%commit_input)
+      UB(1:1) = ubound(SrcOtherStateData%commit_input)
+      if (.not. allocated(DstOtherStateData%commit_input)) then
+         allocate(DstOtherStateData%commit_input(LB(1):UB(1)), stat=ErrStat2)
+         if (ErrStat2 /= 0) then
+            call SetErrStat(ErrID_Fatal, 'Error allocating DstOtherStateData%commit_input.', ErrStat, ErrMsg, RoutineName)
+            return
+         end if
+      end if
+      DstOtherStateData%commit_input = SrcOtherStateData%commit_input
+   end if
 end subroutine
 
 subroutine CD_DestroyOtherState(OtherStateData, ErrStat, ErrMsg)
@@ -3037,6 +3050,9 @@ subroutine CD_DestroyOtherState(OtherStateData, ErrStat, ErrMsg)
    if (allocated(OtherStateData%range_state)) then
       deallocate(OtherStateData%range_state)
    end if
+   if (allocated(OtherStateData%commit_input)) then
+      deallocate(OtherStateData%commit_input)
+   end if
 end subroutine
 
 subroutine CD_PackOtherState(RF, Indata)
@@ -3050,6 +3066,7 @@ subroutine CD_PackOtherState(RF, Indata)
    call RegPackAlloc(RF, InData%pred_loads)
    call RegPackAlloc(RF, InData%fluid_held)
    call RegPackAlloc(RF, InData%range_state)
+   call RegPackAlloc(RF, InData%commit_input)
    if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
@@ -3067,6 +3084,7 @@ subroutine CD_UnPackOtherState(RF, OutData)
    call RegUnpackAlloc(RF, OutData%pred_loads); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpackAlloc(RF, OutData%fluid_held); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpackAlloc(RF, OutData%range_state); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpackAlloc(RF, OutData%commit_input); if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
 subroutine CD_CopyParam(SrcParamData, DstParamData, CtrlCode, ErrStat, ErrMsg)

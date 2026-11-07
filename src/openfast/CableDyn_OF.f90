@@ -280,6 +280,9 @@ MODULE CableDyn
       REAL(DbKi)              :: t_commit_prev = -1.0_DbKi
       REAL(DbKi)              :: t_run_end = -1.0_DbKi
       LOGICAL                 :: rewound = .FALSE.
+      ! restored_unserved: a rebuilt, supercycled instance whose committed loads have not been
+      ! evaluated yet (serve_committed_loads)
+      LOGICAL                 :: restored_unserved = .FALSE.
       ! Opt-in end-to-end profiler. CABLEDYN_PROFILE=1 arms these counters and
       ! the existing detailed Hermite profiler; ordinary production runs pay no
       ! SYSTEM_CLOCK overhead. Times are accumulated only for successful calls.
@@ -1270,13 +1273,13 @@ CONTAINS
       ! normal step, so a state violating the invariant cannot even advance, let alone
       ! be packed. The vector's real payload is the COMMITTED boundary kinematics: the
       ! vessel-end kinematics the last advance committed differ in the last bits from the
-      ! restored input mesh (the glue's input at the restart time, not the extrapolated one
-      ! the advance used), and on a point deck that round-off is amplified through the
+      ! glue's input at that time (the advance used an extrapolated one), and on a point
+      ! deck that round-off is amplified through the
       ! explicit-point window. A finite-EI cable carries its committed boundary in its own
       ! mirror block (CD_HFMF_BoundaryMirrorSize).
       IF (Inst(id)%agg%has_sys) THEN
          ! the committed boundary kinematics [q; v; a] of the EI=0 lines' coupled endpoints:
-         ! the rebuild moves them to the restored input mesh, then reloads them from here
+         ! the rebuild moves them to the committed input, then reloads them from here
          nstates = nstates + 3*CD_System_NSystemCoupledDOF( Inst(id)%agg%sys%fast%system )
       END IF
       IF (CD_AGG_NDynamicPoints( Inst(id)%agg ) > 0 .AND. Inst(id)%agg%has_sys) THEN
@@ -1315,6 +1318,16 @@ CONTAINS
       other%restart_serial = g_serial
       other%t_commit = Inst(id)%t_commit
       other%pred_t = -1.0_DbKi   ! no previous commit yet (load predictor)
+      ! what the state at t = 0 stands on, for a checkpoint written before the first commit
+      CALL CD_AGG_GetMovingPointMesh( Inst(id)%agg, Inst(id)%sv_pos, Inst(id)%sv_vel, Inst(id)%sv_acc, &
+                                      Inst(id)%ws_fld, es, em, orientation=Inst(id)%sv_orient, &
+                                      angular_velocity=Inst(id)%sv_omega, angular_acceleration=Inst(id)%sv_alpha, &
+                                      cable_loads=.FALSE. )
+      IF (es /= CD_AGG_OK) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName ); RETURN
+      END IF
+      CALL save_commit_input( Inst(id), other, Inst(id)%sv_pos, Inst(id)%sv_vel, Inst(id)%sv_acc, &
+                              Inst(id)%sv_orient, Inst(id)%sv_omega, Inst(id)%sv_alpha, u )
 
       ! ------------------------------------------------------------------------------
       ! Output channels: the deck OUTPUTS list in the OrcaFlex vocabulary, emitted through
@@ -1518,9 +1531,12 @@ CONTAINS
       !! coupled mesh in u -- exactly the data an `openfast -restart` run unpacks. The
       !! deck is re-parsed and the static build re-run (structure, meshes, hydro
       !! configuration), then the committed dynamic state is overlaid: coupled endpoint
-      !! kinematics from the input mesh, line interiors from the mirror with the
-      !! acceleration re-derived (the EI=0 mirror is MoorDyn-layout [rd; r]), and each
-      !! cable's [v; q; a] free-DOF mirror reloaded exactly with the restart clock.
+      !! kinematics and line-control command as the last commit was reached with them
+      !! (other%commit_input), line interiors from the mirror (the EI=0 mirror is
+      !! MoorDyn-layout [rd; r; rdd]), and each cable's [v; q; a] free-DOF mirror, all at the
+      !! clock of that commit. The restart time t can lie anywhere in the mooring step that
+      !! follows the commit: between commits nothing of the solver moves, and the input of the
+      !! coming solve is the glue's, so a run restarted there goes on as the uninterrupted one.
       REAL(DbKi),                   INTENT(IN   ) :: t
       TYPE(CD_InputType),           INTENT(IN   ) :: u1
       TYPE(CD_ParameterType),       INTENT(IN   ) :: p
@@ -1554,16 +1570,13 @@ CONTAINS
          RETURN
       END IF
 
-      ! A checkpoint written mid-mooring-interval carries interiors from the LAST
-      ! committed solve (other%t_commit) while the glue would overlay the boundary at
-      ! the newer t -- a state no continuous run ever had. Fail closed: restarts are
-      ! valid only on committed interval boundaries (choose ChkptTime as a multiple
-      ! of the mooring step dtM).
-      IF (ABS(REAL(t, DbKi) - other%t_commit) > 1.0E-6_DbKi*MAX(1.0_DbKi, ABS(other%t_commit))) THEN
-         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the checkpoint was written at t = '// &
-                          TRIM(Num2LStr(t))//' s, between mooring commits (last commit at '// &
-                          TRIM(Num2LStr(other%t_commit))//' s). Choose ChkptTime as a multiple of the '// &
-                          'mooring step dtM so the restored state is a committed interval boundary.', &
+      ! The state of a run at t is its last commit, at most one mooring step back: a restored
+      ! time and commit further apart are not a state of this run. Fail closed.
+      IF (t < other%t_commit - 1.0E-6_DbKi*MAX(1.0_DbKi, ABS(other%t_commit)) .OR. &
+          t > other%t_commit + p%dtM0 - p%dtCoupling + 1.0E-6_DbKi*MAX(1.0_DbKi, ABS(other%t_commit))) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the restored state at t = '// &
+                          TRIM(Num2LStr(t))//' s has its last commit at '//TRIM(Num2LStr(other%t_commit))// &
+                          ' s, outside the mooring step dtM = '//TRIM(Num2LStr(p%dtM0))//' s before it.', &
                           ErrStat, ErrMsg, RoutineName )
          RETURN
       END IF
@@ -1636,8 +1649,8 @@ CONTAINS
       END IF
       ! Dynamic (Free/Connect) point states ride two trailing mirror blocks: the compact
       ! coupled-motion vector (the committed endpoint/boundary kinematics -- the vessel
-      ! ends' committed accelerations differ at round-off from the restored input mesh,
-      ! which a point deck amplifies) and the per-point store. A deck whose layout
+      ! ends' committed accelerations differ at round-off from the glue's input at that
+      ! time, which a point deck amplifies) and the per-point store. A deck whose layout
       ! changed since the checkpoint fails closed on the mirror-extent checks.
 
       Inst(id)%ncp    = ncp
@@ -1677,16 +1690,14 @@ CONTAINS
          END IF
       END IF
 
-      ! overlay the committed dynamic state: coupled endpoints from the restored mesh...
-      CALL mesh_to_arrays( u1%CoupledKinematics(1), ncp, Inst(id)%ws_pos, Inst(id)%ws_vel, &
-                           Inst(id)%ws_acc, Inst(id)%ws_orient, Inst(id)%ws_omega, Inst(id)%ws_alpha, &
-                           ErrStat2, ErrMsg2 )
+      ! overlay the committed dynamic state: coupled endpoints as the last commit took them...
+      CALL restore_commit_kinematics( Inst(id), other, ErrStat2, ErrMsg2 )
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) RETURN
       ! a cable restrained in torsion first takes its committed state: moving its fairlead
       ! frame from the static pose to the restart pose is bounded (pi/2) against the twist
       ! it had at the checkpoint, not at t = 0
-      CALL reload_cable_mirrors( Inst(id), m, x%states, REAL(t, wp), .TRUE., koff, ErrStat2, ErrMsg2 )
+      CALL reload_cable_mirrors( Inst(id), m, x%states, REAL(other%t_commit, wp), .TRUE., koff, ErrStat2, ErrMsg2 )
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) RETURN
       CALL CD_AGG_UpdateStates_Moving( Inst(id)%agg, Inst(id)%ws_pos, Inst(id)%ws_vel, Inst(id)%ws_acc, es, em, &
@@ -1707,7 +1718,16 @@ CONTAINS
       ! line interiors and cable mirrors reload below, which bring back the committed state
       ! of the uninterrupted run, a cable's committed force included.
       IF (ALLOCATED(u1%DeltaL)) THEN
-         CALL CD_AGG_Apply_LineControl( Inst(id)%agg, REAL(u1%DeltaL, wp), REAL(u1%DeltaLdot, wp), es, em, &
+         k = 24_IntKi*ncp
+         ic = SIZE(u1%DeltaL)
+         IF (SIZE(other%commit_input) /= k + 2_IntKi*ic) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: checkpoint rebuild: the committed '// &
+                             'line-control command does not match the control channels.', &
+                             ErrStat, ErrMsg, RoutineName )
+            RETURN
+         END IF
+         CALL CD_AGG_Apply_LineControl( Inst(id)%agg, REAL(other%commit_input(k + 1:k + ic), wp), &
+                                        REAL(other%commit_input(k + ic + 1:k + 2_IntKi*ic), wp), es, em, &
                                         restored=.TRUE. )
          IF (es /= CD_AGG_OK) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: line-control apply after the '// &
@@ -1717,12 +1737,12 @@ CONTAINS
       END IF
       ! ...line interiors + cable free-DOF mirrors, exactly (committed accelerations
       ! reload from the mirror -- shared helper with the state-const CalcOutput)
-      CALL reload_interiors_ary( Inst(id), m, x%states, REAL(t, wp), ErrStat2, ErrMsg2 )
+      CALL reload_interiors_ary( Inst(id), m, x%states, REAL(other%t_commit, wp), ErrStat2, ErrMsg2 )
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) RETURN
 
       ! restore the ambient-fluid fields the reference's committed state carried. The last
-      ! pre-checkpoint solve sampled the WaveField at ITS interval end (= the restart time) at
+      ! pre-checkpoint solve sampled the WaveField at ITS interval end (= the last commit) at
       ! the node positions of its START, and held them: the checkpoint carries them, and with
       ! supercycling they act on the loads served until the next solve. Init saves the first
       ! fields, so a checkpoint of an instance that takes host fluid always carries them;
@@ -1734,7 +1754,8 @@ CONTAINS
       Inst(id)%active = .TRUE.       ! sample_wavefield reads through the live instance
       IF (use_extf) THEN
          CALL restore_held_fluid( Inst(id), other, restored, ErrStat2, ErrMsg2 )
-         IF (ErrStat2 < AbortErrLev .AND. .NOT. restored) CALL sample_wavefield( Inst(id), p, m, t, ErrStat2, ErrMsg2 )
+         IF (ErrStat2 < AbortErrLev .AND. .NOT. restored) &
+            CALL sample_wavefield( Inst(id), p, m, other%t_commit, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) THEN
             CALL release_instance( id )
@@ -1819,6 +1840,7 @@ CONTAINS
       Inst(id)%last_n = -1_IntKi
       Inst(id)%last_solve_n = -1_IntKi
       Inst(id)%loads_cached = .FALSE.
+      Inst(id)%restored_unserved = Inst(id)%nsuper > 1_IntKi
       ! the load predictor's previous commit (shift_predictor_loads)
       Inst(id)%pred_t = other%pred_t
       IF (Inst(id)%pred_t >= 0.0_DbKi) THEN
@@ -1855,7 +1877,7 @@ CONTAINS
       CHARACTER(*)                    , INTENT(  OUT) :: ErrMsg
 
       character(*), parameter   :: RoutineName = 'CD_UpdateStates'
-      INTEGER(IntKi)            :: ErrStat2, es, id, niter, iu_t, i_u
+      INTEGER(IntKi)            :: ErrStat2, es, id, niter
       INTEGER(IntKi)            :: prof_c0, prof_c1, prof_rate, prof_phase0
       CHARACTER(ErrMsgLen)      :: ErrMsg2
       CHARACTER(ErrMsgLen)            :: em
@@ -1864,20 +1886,9 @@ CONTAINS
       ErrStat = ErrID_None
       ErrMsg  = ''
       ! CHECKPOINT-RESTART: a restored OtherState that does not match the live instance
-      ! (fresh process, or a same-process rewind) rebuilds the solver from p + x + u.
-      ! The overlay must use the input AT the restart time t -- u(1) here is the glue's
-      ! PREDICTED input for the upcoming interval (t_array(1) = t + DT), one glue step
-      ! AHEAD of the committed boundary; overlaying it would start the restored run from
-      ! a boundary it never had. Pick the u(:) entry whose time is t.
+      ! (fresh process, or a same-process rewind) rebuilds the solver from p + x + other.
       IF (.NOT. (step_retry(m, other, n) .OR. instance_matches(m, other))) THEN
-         iu_t = 1_IntKi
-         DO i_u = 1, SIZE(t_array)
-            IF (ABS(t_array(i_u) - t) <= 1.0E-6_DbKi*MAX(1.0_DbKi, ABS(t))) THEN
-               iu_t = i_u
-               EXIT
-            END IF
-         END DO
-         CALL rebuild_from_checkpoint( t, u(iu_t), p, x, other, m, ErrStat2, ErrMsg2 )
+         CALL rebuild_from_checkpoint( t, u(1), p, x, other, m, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) RETURN
       END IF
@@ -1959,6 +1970,11 @@ CONTAINS
          END IF
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat < AbortErrLev) THEN
+            IF (Inst(id)%restored_unserved) THEN
+               CALL serve_committed_loads( Inst(id), ErrStat2, ErrMsg2 )
+               CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+               IF (ErrStat >= AbortErrLev) RETURN
+            END IF
             ! Load predictor: a new mooring step (not a correction re-entry over the same n)
             ! makes the loads served since the last commit the previous ones.
             IF (Inst(id)%nsuper > 1_IntKi .AND. Inst(id)%agg%predict_loads .AND. &
@@ -2040,6 +2056,8 @@ CONTAINS
                Inst(id)%t_commit = t + p%dtCoupling
                Inst(id)%t_run_end = Inst(id)%t_commit
                other%t_commit = Inst(id)%t_commit
+               CALL save_commit_input( Inst(id), other, Inst(id)%ws_pos, Inst(id)%ws_vel, Inst(id)%ws_acc, &
+                                       Inst(id)%ws_orient, Inst(id)%ws_omega, Inst(id)%ws_alpha, Inst(id)%u_interp )
                CALL pack_state_mirror( Inst(id), m, x, ErrStat2, ErrMsg2 )
                CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
                ! one range-graph sample per commit, here where the OtherState can carry it: a
@@ -2701,6 +2719,7 @@ CONTAINS
          END IF
          Inst(id)%loads_cached = .TRUE.
          Inst(id)%loads_at_n = Inst(id)%last_solve_n
+         Inst(id)%restored_unserved = .FALSE.
       END IF
 
       ! restore the committed coupled kinematics saved above (state-const CalcOutput),
@@ -2946,6 +2965,93 @@ CONTAINS
       other%pred_loads(1:nl) = RESHAPE(REAL(inst_e%pred_fld, DbKi), [nl])
       other%pred_loads(nl + 1:2*nl) = RESHAPE(REAL(inst_e%pred_mom, DbKi), [nl])
    END SUBROUTINE mirror_predictor_loads
+
+   SUBROUTINE save_commit_input( inst_e, other, pos, vel, acc, orient, omega, alpha, u_ctrl )
+      !! What the state now committed was reached with, into the OtherState: the coupled
+      !! kinematics [position; velocity; acceleration; orientation; angular velocity; angular
+      !! acceleration] and the line-control command [DeltaL; DeltaLdot] of u_ctrl. The glue's
+      !! input moves on between commits, so a restart inside the mooring step that follows
+      !! rebuilds from this, not from the input at its own time.
+      TYPE(CD_OF_Instance),     INTENT(IN   ) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(INOUT) :: other
+      REAL(wp),                 INTENT(IN   ) :: pos(:,:), vel(:,:), acc(:,:), orient(:,:,:), omega(:,:), alpha(:,:)
+      TYPE(CD_InputType),       INTENT(IN   ) :: u_ctrl
+      INTEGER(IntKi) :: n3, nc, k
+      n3 = 3_IntKi*inst_e%ncp
+      nc = 0_IntKi
+      IF (ALLOCATED(u_ctrl%DeltaL)) nc = SIZE(u_ctrl%DeltaL)
+      IF (ALLOCATED(other%commit_input)) THEN
+         IF (SIZE(other%commit_input) /= 8_IntKi*n3 + 2_IntKi*nc) DEALLOCATE (other%commit_input)
+      END IF
+      IF (.NOT. ALLOCATED(other%commit_input)) ALLOCATE (other%commit_input(8_IntKi*n3 + 2_IntKi*nc))
+      other%commit_input(1:n3) = RESHAPE(REAL(pos, DbKi), [n3])
+      other%commit_input(n3 + 1:2*n3) = RESHAPE(REAL(vel, DbKi), [n3])
+      other%commit_input(2*n3 + 1:3*n3) = RESHAPE(REAL(acc, DbKi), [n3])
+      other%commit_input(3*n3 + 1:6*n3) = RESHAPE(REAL(orient, DbKi), [3*n3])
+      other%commit_input(6*n3 + 1:7*n3) = RESHAPE(REAL(omega, DbKi), [n3])
+      other%commit_input(7*n3 + 1:8*n3) = RESHAPE(REAL(alpha, DbKi), [n3])
+      IF (nc > 0_IntKi) THEN
+         k = 8_IntKi*n3
+         other%commit_input(k + 1:k + nc) = REAL(u_ctrl%DeltaL, DbKi)
+         other%commit_input(k + nc + 1:k + 2_IntKi*nc) = REAL(u_ctrl%DeltaLdot, DbKi)
+      END IF
+   END SUBROUTINE save_commit_input
+
+   SUBROUTINE restore_commit_kinematics( inst_e, other, ErrStat, ErrMsg )
+      !! The coupled kinematics of the last commit (save_commit_input) into the workspace.
+      TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(IN   ) :: other
+      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
+      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
+      INTEGER(IntKi) :: ncp, n3
+      ErrStat = ErrID_None
+      ErrMsg = ''
+      ncp = inst_e%ncp
+      n3 = 3_IntKi*ncp
+      IF (.NOT. ALLOCATED(other%commit_input)) THEN
+         ErrStat = ErrID_Fatal
+         ErrMsg = 'CableDyn mooring module: checkpoint rebuild: the checkpoint carries no committed input.'
+         RETURN
+      END IF
+      IF (SIZE(other%commit_input) < 8_IntKi*n3) THEN
+         ErrStat = ErrID_Fatal
+         ErrMsg = 'CableDyn mooring module: checkpoint rebuild: the committed input does not match the coupled points.'
+         RETURN
+      END IF
+      inst_e%ws_pos = RESHAPE(REAL(other%commit_input(1:n3), wp), [3, ncp])
+      inst_e%ws_vel = RESHAPE(REAL(other%commit_input(n3 + 1:2*n3), wp), [3, ncp])
+      inst_e%ws_acc = RESHAPE(REAL(other%commit_input(2*n3 + 1:3*n3), wp), [3, ncp])
+      inst_e%ws_orient = RESHAPE(REAL(other%commit_input(3*n3 + 1:6*n3), wp), [3, 3, ncp])
+      inst_e%ws_omega = RESHAPE(REAL(other%commit_input(6*n3 + 1:7*n3), wp), [3, ncp])
+      inst_e%ws_alpha = RESHAPE(REAL(other%commit_input(7*n3 + 1:8*n3), wp), [3, ncp])
+   END SUBROUTINE restore_commit_kinematics
+
+   SUBROUTINE serve_committed_loads( inst_e, ErrStat, ErrMsg )
+      !! A rebuild on the last glue step of a mooring interval reaches the solve with no
+      !! CalcOutput since the commit, though the uninterrupted run evaluated the committed loads
+      !! there and the load predictor shifts them. They are evaluated here, as CalcOutput does;
+      !! the channels are not needed, as the advance that follows invalidates the cache.
+      TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
+      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
+      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
+      INTEGER(IntKi) :: es
+      CHARACTER(ErrMsgLen) :: em
+      ErrStat = ErrID_None
+      ErrMsg = ''
+      CALL CD_AGG_CalcOutput( inst_e%agg, es, em )
+      IF (es == CD_AGG_OK) &
+         CALL CD_AGG_GetMovingPointMesh( inst_e%agg, inst_e%sv_pos, inst_e%sv_vel, inst_e%sv_acc, inst_e%ws_fld, &
+                                         es, em, orientation=inst_e%sv_orient, moment=inst_e%ws_moment, &
+                                         angular_velocity=inst_e%sv_omega, angular_acceleration=inst_e%sv_alpha )
+      IF (es /= CD_AGG_OK) THEN
+         ErrStat = ErrID_Fatal
+         ErrMsg = 'CableDyn mooring module: committed loads of the restored state: '//TRIM(em)
+         RETURN
+      END IF
+      inst_e%loads_cached = .TRUE.
+      inst_e%loads_at_n = inst_e%last_solve_n
+      inst_e%restored_unserved = .FALSE.
+   END SUBROUTINE serve_committed_loads
 
    SUBROUTINE restore_calcoutput_probe( inst_e, m, ErrStat, ErrMsg )
       !! Restore every state surface after the output-probe
@@ -4751,8 +4857,7 @@ CONTAINS
       ! guarantees the vector's values regardless).
       npd = 9*CD_AGG_NDynamicPoints( inst_%agg )
       IF (npd == 0 .AND. inst_%agg%has_sys) THEN
-         ! no dynamic points: restore the committed boundary kinematics (the restored input
-         ! mesh carries the glue's input at the restart time, not the committed kinematics)
+         ! no dynamic points: restore the committed boundary kinematics
          ncd = CD_System_NSystemCoupledDOF( inst_%agg%sys%fast%system )
          IF (koff + 3*ncd > SIZE(states)) THEN
             CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: the coupled-motion mirror extends '// &
