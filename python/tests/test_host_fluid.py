@@ -11,6 +11,7 @@ in this file and handed over node by node (``update_fluid_fields``). Both routes
 from __future__ import annotations
 
 import math
+import runpy
 import subprocess
 from pathlib import Path
 
@@ -259,6 +260,19 @@ def test_host_field_takes_a_stiffener_and_as_laid_friction(tmp_path):
     assert _nrmse(reference, history) < TOLERANCE
 
 
+def test_a_host_marches_past_the_deck_tmax(tmp_path):
+    deck = _deck(tmp_path, "library", CURRENT)
+    deck.write_text(deck.read_text(encoding="utf-8").replace("6.0      TMax", "0.1 TMax"), "utf-8")
+    with CableDyn() as model:
+        model.set_host_fluid()
+        model.init_deck(deck)
+        _host_field(model, 0.0, SPEED)
+        for i in range(1, 21):
+            _host_field(model, i * DT, SPEED)
+            model.step(DT, *_motion(i * DT))
+        assert np.all(np.isfinite(model.calc_output()))
+
+
 def test_save_and_restore_carry_the_held_field(tmp_path):
     with CableDyn() as model:
         model.set_host_fluid()
@@ -350,3 +364,12 @@ def test_the_switch_can_be_turned_off(tmp_path):
         model.set_host_fluid(False)
         model.init_deck(deck)
         assert model.n_fluid_nodes == 0
+
+
+def test_the_stepping_example_runs():
+    example = (
+        Path(__file__).resolve().parents[2] / "examples" / "python" / "step_in_moving_water.py"
+    )
+    tensions = runpy.run_path(str(example))["main"](duration=2.0)
+    assert len(tensions) == 40
+    assert all(math.isfinite(value) and value > 0.0 for value in tensions)

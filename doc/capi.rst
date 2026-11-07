@@ -736,6 +736,9 @@ the whole water of the march; a deck current that varies in time is refused.
 
 Seabed friction, ``staticsFriction asLaid`` and ``STIFFENERS`` work on this route.
 
+A deck with a current also declares ``TMax``, as under the standalone rules; it does not limit the
+host, which owns the clock and may step past it.
+
 Call sequence
 ~~~~~~~~~~~~~
 

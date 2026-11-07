@@ -790,6 +790,8 @@ start and in every step. Other moving water comes from the host, at the nodes of
        field(t)                            # held over the step
        model.step(dt, q(t), v(t), a(t))
 
+``examples/python/step_in_moving_water.py`` is a complete script of this loop.
+
 ``velocity`` is the whole ambient velocity, current and waves together. The field of a step to
 ``t + dt`` is evaluated at ``t + dt`` at the step-start positions and held over the step, as in
 the standalone march and in OpenFAST; :meth:`~cabledyn.CableDyn.save_state` carries it. A steady
