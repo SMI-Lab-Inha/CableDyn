@@ -368,7 +368,7 @@ def test_rod_deck_steps_through_the_coupled_aggregate(tmp_path):
         with pytest.raises(CableDynError) as caught:
             m.step(0.01, q, np.zeros(3), np.zeros(3))
         assert caught.value.status == 3
-        with pytest.raises(CableDynError, match="BODIES or RODS"):
+        with pytest.raises(CableDynError, match="finite-EI lines, BODIES or RODS runs on the coupled"):
             npt = m.n_points
             m.update_point_fluid_fields(np.zeros(3 * npt), np.zeros(3 * npt), np.zeros(npt), 1025.0)
 

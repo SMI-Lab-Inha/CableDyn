@@ -1051,8 +1051,8 @@ CONTAINS
     err_stat = validate_handle(handle, h)
     IF (err_stat /= CD_C_OK) RETURN
     IF (h%use_agg) THEN
-      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdatePointFluidFields: point fluid fields are not '// &
-                      'available on a deck with BODIES or RODS (still water)', err_stat)
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdatePointFluidFields: a deck with finite-EI lines, BODIES or '// &
+                      'RODS runs on the coupled aggregate, which takes no point fluid fields', err_stat)
       RETURN
     END IF
     IF (n_point < 0_C_INT) THEN
@@ -1233,8 +1233,8 @@ CONTAINS
     CALL coupled_inputs(handle, q_ptr, v_ptr, a_ptr, n_coupled_dof, h, q_c, v_c, a_c, err_stat)
     IF (err_stat /= CD_C_OK) RETURN
     IF (h%use_agg) THEN
-      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_CalcOutputDerivatives: load derivatives are not available on '// &
-                      'a deck with BODIES or RODS', err_stat)
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_CalcOutputDerivatives: a deck with finite-EI lines, BODIES or '// &
+                      'RODS runs on the coupled aggregate, which has no load derivatives', err_stat)
       RETURN
     END IF
     IF (n_coupled_dof > 0_C_INT .AND. &

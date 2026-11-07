@@ -8,6 +8,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The C API messages of `CableDyn_UpdatePointFluidFields` and `CableDyn_CalcOutputDerivatives` on
+  the coupled aggregate name its real scope: decks with finite-EI lines, bodies or rods.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added
