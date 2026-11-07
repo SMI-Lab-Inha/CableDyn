@@ -1069,7 +1069,8 @@ CONTAINS
     IF (err_stat /= CD_C_OK) RETURN
     IF (h%use_agg) THEN
       CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_UpdatePointFluidFields: a deck with finite-EI lines, BODIES or '// &
-                      'RODS runs on the coupled aggregate, which takes no point fluid fields', err_stat)
+                      'RODS runs on the coupled aggregate, which takes no point fluid fields; supply the '// &
+                      'fluid at its nodes with CableDyn_SetHostFluid and CableDyn_UpdateFluidFields', err_stat)
       RETURN
     END IF
     IF (n_point < 0_C_INT) THEN
