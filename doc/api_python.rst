@@ -62,8 +62,10 @@ Reading results
 :func:`read_output` returns the most specific table class for the file it reads:
 :class:`TimeHistory` for the main output, :class:`LineNodeHistory` and
 :class:`LineSegmentHistory` for per-line dynamic outputs, :class:`StaticProfile` for the static
-profile, and :class:`OutputTable` for any other numeric table. :class:`TimeHistory` and
-:class:`StaticProfile` are subclasses of :class:`OutputTable`; :class:`LineNodeHistory` and
+profile, :class:`NaturalModes` for the two tables of a ``.modes.out`` file, and
+:class:`OutputTable` for any other numeric table. :class:`TimeHistory`, :class:`StaticProfile`,
+:class:`NaturalModes` and :class:`ModeShapes` are subclasses of :class:`OutputTable`;
+:class:`LineNodeHistory` and
 :class:`LineSegmentHistory` are subclasses of :class:`TimeHistory`, so every table method is
 available on them.
 
@@ -82,6 +84,12 @@ available on them.
    :members:
 
 .. autoclass:: cabledyn.StaticProfile
+   :members:
+
+.. autoclass:: cabledyn.NaturalModes
+   :members:
+
+.. autoclass:: cabledyn.ModeShapes
    :members:
 
 .. autoclass:: cabledyn.ChannelStatistics
