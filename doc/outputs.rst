@@ -695,9 +695,11 @@ Line-node channels
    * - ``Curv<L>N<J>``
      - curvature at node ``J``. ``EI = 0`` lines: discrete curvature of the circle through
        the node and its two neighbours (end nodes take the adjacent interior value).
-       Cubic-Hermite lines: ``BendMom<L>N<J>`` / ``EI``, the larger of the two sides at a
-       section junction (under a bend stiffener the section moment over the stiffness ``EI(s)``
-       at the node, :ref:`theory-bend-stiffeners`), and the exact geometric curvature where
+       Cubic-Hermite lines: the geometric curvature of the stretched line, the reciprocal of the
+       bend radius, ``(1 + ε) BendMom<L>N<J>`` / ``EI`` with ``ε`` the axial strain at the node,
+       the larger of the two sides at a section junction (under a bend stiffener ``(1 + ε)``
+       times the section moment over the stiffness ``EI(s)`` at the node,
+       :ref:`theory-bend-stiffeners`), and the exact geometric curvature where
        ``EI`` is below ``max(|w| L0^2)/12`` times 1 m (:ref:`theory-output-recovery`) (``OutputRecovery
        element``: exact curvature of the continuous
        centreline, the larger of the two one-sided element values at an interior node; the
@@ -717,15 +719,15 @@ Line-node channels
        returns them for every node
      - 1/m
    * - ``BendMom<L>N<J>``
-     - bend moment ``EI × κ`` measured relative to the stress-free reference shape (the
-       cubic-Hermite reference is straight). Finite-EI lines: the component normal to the tangent
-       of the moment recovered from nodal equilibrium, the mean of the two neighbouring elements
+     - bend moment ``EI × κ / (1 + ε)``, the moment that balances the forces on the section (it
+       is ``EI × κ`` to within the axial strain ``ε``), measured relative to the stress-free
+       reference shape (the cubic-Hermite reference is straight). Finite-EI lines: the moment
+       recovered from nodal equilibrium, the mean of the two neighbouring elements
        (one-sided at a line end, where it is the end connection moment);
        ``OutputRecovery element``: ``EI`` times the larger one-sided exact curvature. 0 on
        ``EI = 0`` lines. Under a bend stiffener (``STIFFENERS``) it is the cable's own share,
-       the line type's ``EI`` times the curvature, which is the section moment over the
-       stiffness ``EI(s)`` at the node; the stiffener's share is ``StfMom<L>N<J>`` and the two
-       add up to the section moment
+       the section moment times the line type's ``EI`` over the stiffness ``EI(s)`` at the node;
+       the stiffener's share is ``StfMom<L>N<J>`` and the two add up to the section moment
      - N·m
    * - ``StfMom<L>N<J>``
      - the share of the section moment a bend stiffener carries at node ``J``, the section

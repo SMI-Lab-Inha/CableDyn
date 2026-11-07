@@ -11151,7 +11151,8 @@ CONTAINS
 
   SUBROUTINE stiffened_element_peak(stf, qr, l0, ei_element, ei_line, ei_resolve, arc_a, arc_b, m0, m1, peak, u_peak, &
                                     ErrStat, ErrMsg)
-    !! Largest curvature of the section along one element under a bend stiffener, |M(u)|/EI(u).
+    !! Largest curvature of the section along one element under a bend stiffener,
+    !! (1 + e(u)) |M(u)|/EI(u), the stretch e running linearly between the end nodes.
     !! The element's interpolation bends under its one stiffness ei_element, so it gives the
     !! section neither its curvature nor, at its ends, its moment to second order: ei_element
     !! times the interpolation's curvature is the linear fit of the moment over the element. Its
@@ -11177,9 +11178,9 @@ CONTAINS
     u_peak = CD_ZERO
     CALL CD_HermiteCable_Curvature(qr, l0, 0.5_wp, kappa, ErrStat, ErrMsg, kvec=kv)
     IF (ErrStat /= CD_HCABLE_OK) RETURN
-    ! the moment conjugate to the tangent is EI kappa n/|r'|^2, as the recovered ones are; the
-    ! curvature above has checked that the tangent r' at the midpoint does not vanish
-    bubble = ei_element*kv/SUM((1.5_wp*(qr(7:9) - qr(1:3))/l0 - 0.25_wp*(qr(4:6) + qr(10:12)))**2) - 0.5_wp*(m0 + m1)
+    ! the section moment is EI kappa n/|r'|, as the recovered ones are; the curvature above has
+    ! checked that the tangent r' at the midpoint does not vanish
+    bubble = ei_element*kv/NORM2(1.5_wp*(qr(7:9) - qr(1:3))/l0 - 0.25_wp*(qr(4:6) + qr(10:12))) - 0.5_wp*(m0 + m1)
     IF (.NOT. ALL(IEEE_IS_FINITE(bubble))) THEN
       ErrStat = CD_HCABLE_BADINPUT; ErrMsg = 'stiffened_element_peak: the element moments are not finite'; RETURN
     END IF
@@ -11253,7 +11254,8 @@ CONTAINS
       ei = ei_line + sleeve_ei_at(stf, arc_a + (CD_ONE - uu)*l0, arc_b + uu*l0, from_b, STF_ARC_TOL*l0)
       IF (.NOT. ei > CD_ZERO) ei = ei_element
       IF (ei >= ei_resolve) THEN
-        section_curvature = NORM2((CD_ONE - uu)*m0 + uu*m1 + 6.0_wp*uu*(CD_ONE - uu)*bubble)/ei
+        section_curvature = ((CD_ONE - uu)*NORM2(qr(4:6)) + uu*NORM2(qr(10:12)))* &
+                            NORM2((CD_ONE - uu)*m0 + uu*m1 + 6.0_wp*uu*(CD_ONE - uu)*bubble)/ei
       ELSE
         CALL CD_HermiteCable_Curvature(qr, l0, uu, section_curvature, ErrStat, ErrMsg)
         section_curvature = section_curvature*(ei_element/ei)
