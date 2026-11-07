@@ -99,6 +99,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HermiteCable_Axial_Damping_Element, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HermiteCable_Dyn_Node_Values, CD_HermiteCable_Dyn_Node_Recovery, &
                                           CD_HermiteCable_Dyn_Side_EI, CD_HermiteCable_Dyn_Side_Curvature, &
+                                          CD_HermiteCable_Dyn_On_Seabed, &
                                           CD_HermiteCable_Dyn_Set_Output_Recovery, &
                                           CD_HermiteCable_Dyn_Set_ForceBlend, CD_HC_FORCE_BLEND_DEFAULT, &
                                           CD_HermiteCable_Dyn_Set_Friction_Anchors, &
@@ -1160,6 +1161,9 @@ MODULE CableDyn_DeckDriver
     ! anchor), the fold note of an EI = 0 line (ei0_fold_note), and the static strain note and
     ! the dtM advisory (axial_period_note) of any line; empty when there is nothing to report.
     CHARACTER(CD_INIT_NOTE_LEN) :: note = ''
+    ! seabed_drift: a current moves the line along a seabed without friction (seabed_drift_note);
+    ! friction_refused: the line's route rejects frictionMu (FOLD_FRICTION_NONE).
+    LOGICAL :: seabed_drift = .FALSE., friction_refused = .FALSE.
   END TYPE CD_LineInitSummary
 
   TYPE :: CD_DeckAggregateType
@@ -8345,6 +8349,28 @@ CONTAINS
         END DO
       END BLOCK
     END IF
+    ! One note for the run, on the first line it names (every route that prints the notes of this
+    ! summary shows it): opts_static knows the host's steady current, a current the host brings
+    ! in later is unknown here. A run that marches no step does not drift.
+    IF (.NOT. static_only) THEN
+      BLOCK
+        CHARACTER(:), ALLOCATABLE :: drift_note
+        DO c = 1, SIZE(lines)
+          IF (agg%line_is_cable(lines(c)%id)) THEN
+            agg%init_lines(c)%seabed_drift = cable_seabed_drift(opts_static, &
+                                                                agg%cables(agg%line_obj_index(lines(c)%id)))
+          ELSE IF (agg%has_sys) THEN
+            agg%init_lines(c)%seabed_drift = model_seabed_drift(opts_static, &
+                                                                agg%sys%lines(agg%line_obj_index(lines(c)%id)))
+          END IF
+        END DO
+        IF (ANY(agg%init_lines%seabed_drift)) THEN
+          CALL seabed_drift_note(PACK(agg%init_lines%line_id, agg%init_lines%seabed_drift), &
+                                 deck_has_dynamic_points(points), drift_note)
+          CALL append_note_line(agg%init_lines(FINDLOC(agg%init_lines%seabed_drift, .TRUE., 1))%note, drift_note)
+        END IF
+      END BLOCK
+    END IF
     ! A static strain above the note level is named in the line's initialisation note (every route that
     ! prints the notes of this summary shows it), and the standalone mixed route -- the caller that
     ! takes the deck's own current -- also warns about coarse sections, as the single-topology driver does.
@@ -9492,7 +9518,8 @@ CONTAINS
           IF (ErrStat /= CD_DECKDRV_OK) EXIT
         END DO
         IF (ErrStat == CD_DECKDRV_OK) THEN
-          CALL collect_hermite_init_summaries(lines, hermite_models, init_summaries, ErrStat, ErrMsg)
+          CALL collect_hermite_init_summaries(lines, hermite_models, init_summaries, opts, FOLD_FRICTION_FULL, &
+                                              ErrStat, ErrMsg)
         END IF
         IF (ErrStat == CD_DECKDRV_OK .AND. opts%n_modes > 0) &
           CALL write_deck_modes_hermite(out_root, lines, opts, hermite_models, ErrStat, ErrMsg)
@@ -12412,7 +12439,8 @@ CONTAINS
 
   SUBROUTINE add_model_fold_notes(lines, points, opts, models, summaries, friction_support)
     !! ei0_fold_note of every EI = 0 line model (index-aligned with lines), appended to the notes
-    !! of its summary; friction_support as in ei0_fold_note.
+    !! of its summary, and whether a current moves the line along the seabed (seabed_drift_note);
+    !! friction_support as in ei0_fold_note.
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
@@ -12426,8 +12454,79 @@ CONTAINS
       CALL ei0_fold_note(lines(i), points, opts, models(i)%q, fold_note, model=models(i), &
                          friction_support=friction_support)
       IF (LEN_TRIM(fold_note) > 0) CALL append_note_line(summaries(i)%note, fold_note)
+      summaries(i)%seabed_drift = model_seabed_drift(opts, models(i))
+      summaries(i)%friction_refused = friction_support == FOLD_FRICTION_NONE
     END DO
   END SUBROUTINE add_model_fold_notes
+
+  LOGICAL FUNCTION model_seabed_drift(opts, model) RESULT(drifts)
+    !! Whether a current moves this EI = 0 line along the seabed: no seabed friction, an interior
+    !! node in contact in the model's present state (inside the reach of the normal contact law;
+    !! the end nodes, held or on a point, do not count), and a current on the line.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp) :: z_floor, gx, gy
+    INTEGER :: k, es
+    CHARACTER(160) :: em
+
+    drifts = .FALSE.
+    IF (opts%has_friction .OR. .NOT. model%has_seabed) RETURN
+    DO k = 2, SIZE(model%q)/3 - 1
+      z_floor = model%seabed_z_floor
+      gx = CD_ZERO
+      gy = CD_ZERO
+      IF (model%has_bathymetry) THEN
+        CALL CD_Bathymetry_Floor_Gradient(model%bathymetry, model%q(3*k - 2), model%q(3*k - 1), z_floor, gx, gy, &
+                                          es, em)
+        IF (es /= CD_BATHY_OK) CYCLE
+      END IF
+      IF (z_floor - model%q(3*k) > -CD_SEABED_CONTACT_BLEND*SQRT(CD_ONE + gx*gx + gy*gy)) THEN
+        drifts = deck_current_on_line(opts, model%q(3::3))
+        RETURN
+      END IF
+    END DO
+  END FUNCTION model_seabed_drift
+
+  LOGICAL FUNCTION cable_seabed_drift(opts, cable) RESULT(drifts)
+    !! model_seabed_drift of a finite-EI cable.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    drifts = .FALSE.
+    IF (opts%has_friction) RETURN
+    IF (CD_HermiteCable_Dyn_On_Seabed(cable%line)) drifts = deck_current_on_line(opts, cable%line%q(3::6))
+  END FUNCTION cable_seabed_drift
+
+  SUBROUTINE seabed_drift_note(ids, friction_refused, note)
+    !! The note of a dynamic run whose current moves grounded lines along a seabed without
+    !! friction, which nothing in the run reports: one note for the run, naming the lines (the
+    !! first MAX_NAMED of them, so that it fits a line summary's notes) and the remedy.
+    INTEGER, INTENT(IN) :: ids(:)
+    LOGICAL, INTENT(IN) :: friction_refused
+    CHARACTER(:), ALLOCATABLE, INTENT(OUT) :: note
+    INTEGER, PARAMETER :: MAX_NAMED = 40
+    CHARACTER(:), ALLOCATABLE :: names, subject, object
+    INTEGER :: i
+
+    names = TRIM(int_to_str(ids(1)))
+    DO i = 2, MIN(SIZE(ids), MAX_NAMED)
+      names = names//', '//TRIM(int_to_str(ids(i)))
+    END DO
+    IF (SIZE(ids) > MAX_NAMED) names = names//' and '//TRIM(int_to_str(SIZE(ids) - MAX_NAMED))//' more'
+    IF (SIZE(ids) == 1) THEN
+      subject = 'line '//names//' lies'
+      object = 'it'
+    ELSE
+      subject = 'lines '//names//' lie'
+      object = 'them'
+    END IF
+    note = subject//' on the seabed at the static start with no seabed friction: the current moves the '// &
+           'grounded nodes freely along the seabed, which can reach tens of metres in an hour of simulated time. '
+    IF (friction_refused) THEN
+      note = note//'Seabed friction (frictionMu), which would hold '//object//', is not supported on this deck'
+    ELSE
+      note = note//'Set frictionMu to hold '//object
+    END IF
+  END SUBROUTINE seabed_drift_note
 
   LOGICAL FUNCTION deck_current_on_line(opts, z) RESULT(on)
     !! Whether the deck current is non-zero at any of the node elevations z: its drag on the
@@ -22173,7 +22272,9 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
     END DO
     IF (SIZE(cab_lines) > 0) THEN
-      CALL collect_hermite_init_summaries(cab_lines, mb%cables, sum_cab, ErrStat, ErrMsg)
+      CALL collect_hermite_init_summaries(cab_lines, mb%cables, sum_cab, opts, &
+                                          MERGE(FOLD_FRICTION_NONE, FOLD_FRICTION_NO_AS_LAID, &
+                                                deck_has_non_rigid6_dynamic_points(points, bodies)), ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) GOTO 900
     ELSE
       ALLOCATE (sum_cab(0))
@@ -36569,10 +36670,13 @@ CONTAINS
     END IF
   END SUBROUTINE collect_system_init_summaries
 
-  SUBROUTINE collect_hermite_init_summaries(lines, cables, summaries, ErrStat, ErrMsg)
+  SUBROUTINE collect_hermite_init_summaries(lines, cables, summaries, opts, friction_support, ErrStat, ErrMsg)
+    !! friction_support: the seabed friction the route accepts (FOLD_FRICTION_*)
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cables(:)
     TYPE(CD_LineInitSummary), ALLOCATABLE, INTENT(OUT) :: summaries(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    INTEGER, INTENT(IN) :: friction_support
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: i
@@ -36589,6 +36693,8 @@ CONTAINS
       IF (ErrStat == CD_DECKDRV_OK) CALL CD_HFMF_CalcOutput(cables(i), fair_force, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       CALL set_init_summary(lines(i)%id, tension, declination, azimuth, summaries(i), fair_force=fair_force)
+      summaries(i)%seabed_drift = cable_seabed_drift(opts, cables(i))
+      summaries(i)%friction_refused = friction_support == FOLD_FRICTION_NONE
     END DO
   END SUBROUTINE collect_hermite_init_summaries
 
@@ -36605,6 +36711,7 @@ CONTAINS
     INTEGER :: i, a, b
     REAL(wp) :: f_incl
     CHARACTER(1024) :: strain_note
+    CHARACTER(:), ALLOCATABLE :: drift_note
 
     WRITE (error_unit, '(A)') '  Parsing CableDyn input file: '//TRIM(deck_path)
     WRITE (error_unit, '(A,I0,A,I0,A,I0,A,I0,A,I0,A)') &
@@ -36652,6 +36759,14 @@ CONTAINS
         END IF
       END IF
     END DO
+    ! one note for the run; a run that marches no step does not drift
+    IF (PRESENT(opts)) THEN
+      IF (opts%has_dtm .AND. opts%tmax > CD_ZERO .AND. ANY(summaries%seabed_drift)) THEN
+        CALL seabed_drift_note(PACK(summaries%line_id, summaries%seabed_drift), &
+                               ANY(summaries%seabed_drift .AND. summaries%friction_refused), drift_note)
+        WRITE (error_unit, '(A)') '   Note: '//drift_note//'.'
+      END IF
+    END IF
     WRITE (error_unit, '(A)') '  CableDyn initialization completed.'
   END SUBROUTINE print_deck_init_report
 
