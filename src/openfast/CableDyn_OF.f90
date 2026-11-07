@@ -52,8 +52,8 @@ MODULE CableDyn
    !! glue correction iterations (NumCrctn > 0: snapshot-rewind re-advance), SeaState
    !! wave/current kinematics sampled at the line nodes (single-turbine only; see the
    !! farm scope at the use_extf guard), range graphs of the LINES flag r (single-turbine
-   !! only: <root>.Line<L>.range.out, sampled at every committed mooring step, written when
-   !! the run reaches TMax), checkpoint restart (rebuild from the packed
+   !! only: <root>.Line<L>.range.out, sampled at every committed mooring step, written at the
+   !! end of a run the host reports complete), checkpoint restart (rebuild from the packed
    !! deck + state mirror, accepted on committed mooring-interval boundaries),
    !! linearization with the line dynamics (as MoorDyn-F: the continuous states are the
    !! EI=0 lines' interior-node positions and the finite-EI cables' free DOFs, positions
@@ -250,6 +250,7 @@ MODULE CableDyn
       ! (sample_range); ws_range is the double-precision transfer buffer to the OtherState
       ! mirror, which a checkpoint packs and a correction iteration's state copy rewinds.
       LOGICAL                 :: range_on = .FALSE.
+      LOGICAL                 :: range_sampled = .FALSE.   ! this instance has sampled (not a checkpoint alone)
       REAL(wp), ALLOCATABLE   :: ws_range(:)
       ! SeaState ambient-fluid sampling (host-driven wave/current kinematics): when the
       ! glue's WaveField declares waves or a current, the aggregate is built wave-capable
@@ -1344,7 +1345,7 @@ CONTAINS
       IF (ErrStat >= AbortErrLev) RETURN
 
       ! Range graphs (LINES flag r): the first sample is the state of the t = 0 output row. The
-      ! files of an earlier run go now: this run writes its own only when it reaches TMax.
+      ! files of an earlier run go now: this run writes its own only when it completes.
       Inst(id)%range_on = CD_AGG_Range_Graphs( Inst(id)%agg )
       IF (Inst(id)%range_on) THEN
          CALL CD_AGG_Range_Discard( Inst(id)%agg, TRIM(native_root), es, em )
@@ -1707,6 +1708,10 @@ CONTAINS
             CALL release_instance( id )
             RETURN
          END IF
+         ! a same-process rewind goes on with a run that has sampled
+         IF (old_id >= 1_IntKi .AND. old_id <= SIZE(Inst) .AND. old_id /= id) &
+            Inst(id)%range_sampled = Inst(old_id)%active .AND. Inst(old_id)%range_sampled .AND. &
+                                     Inst(old_id)%serial == other%restart_serial
       END IF
       ! A linearizing run keeps its state map: CalcSteady rewinds to the operating point through
       ! this rebuild, and a restart may linearize later.
@@ -2811,6 +2816,7 @@ CONTAINS
       END IF
       IF (.NOT. ALLOCATED(other%range_state)) ALLOCATE (other%range_state(nr))
       other%range_state = REAL(inst_e%ws_range, DbKi)
+      inst_e%range_sampled = .TRUE.
    END SUBROUTINE sample_range
 
    SUBROUTINE restore_range_state( inst_e, other, ErrStat, ErrMsg )
@@ -3331,18 +3337,19 @@ CONTAINS
       IF (ALLOCATED(Inst)) THEN
          IF (m%CDInst >= 1 .AND. m%CDInst <= SIZE(Inst)) THEN
             IF (Inst(m%CDInst)%active) THEN
-               ! The range graphs cover the whole run, so only a run that reached TMax writes them
-               ! (as the standalone driver, which writes them on completion); the glue also comes
-               ! here after an abort. TMax passes through ReKi, so the test allows its rounding.
+               ! The range graphs cover the whole run, so a run that ended on an error writes none
+               ! (as the standalone driver, which writes them on completion). The glue comes here
+               ! after an abort too, so the host says which it was (m%HostComplete): a run can also
+               ! complete before TMax, on CalcSteady or at FAST.Farm's last whole DT_Low. A process
+               ! that only restored a checkpoint and stepped nothing (-VTKLin) leaves the file as it is.
                IF (Inst(m%CDInst)%range_on) THEN
-                  IF (Inst(m%CDInst)%t_commit >= p%Tmax - 1.0E-6_DbKi*p%dtM0 - &
-                      2.0_DbKi*REAL(EPSILON(1.0_ReKi), DbKi)*ABS(p%Tmax)) THEN
+                  IF (.NOT. m%HostComplete) THEN
+                     CALL WrScr( '   CableDyn: the run stopped on an error at t = '// &
+                                 TRIM(Num2LStr(Inst(m%CDInst)%t_commit))//' s: no range graph is written.' )
+                  ELSE IF (Inst(m%CDInst)%range_sampled) THEN
                      CALL CD_AGG_Range_Write( Inst(m%CDInst)%agg, TRIM(p%RootName), range_es, range_em )
                      IF (range_es /= CD_AGG_OK) CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '// &
                                                                  TRIM(range_em), ErrStat, ErrMsg, RoutineName )
-                  ELSE
-                     CALL WrScr( '   CableDyn: the run ended at t = '//TRIM(Num2LStr(Inst(m%CDInst)%t_commit))// &
-                                 ' s, before TMax = '//TRIM(Num2LStr(p%Tmax))//' s: no range graph is written.' )
                   END IF
                END IF
                ! the rotation- and snap-resolved sub-steps of the EI=0 lines (ei0_substeps), as the

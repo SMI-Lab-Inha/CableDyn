@@ -1,5 +1,5 @@
 diff --git a/modules/openfast-library/src/FAST_Subs.f90 b/modules/openfast-library/src/FAST_Subs.f90
-index 48d3be5ed..3284a8c5d 100644
+index 48d3be5ed..2ad5a40fc 100644
 --- a/modules/openfast-library/src/FAST_Subs.f90
 +++ b/modules/openfast-library/src/FAST_Subs.f90
 @@ -40,6 +40,7 @@ MODULE FAST_Subs
@@ -540,7 +540,18 @@ index 48d3be5ed..3284a8c5d 100644
     end if
  
     ! If we are doing AeroMaps, there is leftover data in AD15 parameters
-@@ -7621,7 +7752,7 @@ contains
+@@ -6900,6 +7031,10 @@ SUBROUTINE ExitThisProgram_T( Turbine, ErrLevel_in, StopTheProgram, ErrLocMsg, S
+       if (associated(Turbine%AD%p%FlowField))  deallocate(Turbine%AD%p%FlowField)
+    endif
+ 
++   ! CableDyn writes its whole-run outputs only after a run that ended without an error. FAST.Farm
++   ! ends its turbines with no error level either way and sets this itself after its last step.
++   if (ErrorLevel < AbortErrLev .and. .not. Turbine%p_FAST%FarmIntegration) Turbine%CD%m%HostComplete = .true.
++
+    ! End all modules
+    if (allocated(Turbine%m_Glue%ModData)) then
+       CALL FAST_ModEnd(Turbine%m_Glue%ModData, Turbine, ErrStat, ErrMsg)
+@@ -7621,7 +7756,7 @@ contains
        ! Write VTK output
        call WriteVTK(TimeVTK, T%p_FAST, T%y_FAST, &
                      T%ED, T%SED, T%BD, T%AD, T%IfW, T%ExtInfw, T%SeaSt, T%HD, T%SD, &
@@ -549,4 +560,3 @@ index 48d3be5ed..3284a8c5d 100644
  
     end subroutine
  
-

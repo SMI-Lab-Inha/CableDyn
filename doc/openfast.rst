@@ -278,7 +278,7 @@ channels ``AnchFz<L>``, ``AnchFH<L>`` and ``TDP<L>Grd``) and units are in :doc:`
    * - ``<RootName>.CD.Line<L>.range.out``
      - CableDyn-owned, for a line with the ``LINES`` ``Outputs`` flag ``r``: the range graph, the
        minimum, maximum and mean at every node over the committed steps from ``RangeStart``,
-       written when the run reaches ``TMax`` (:doc:`outputs`)
+       written at the end of a run that completes (:doc:`outputs`)
    * - ``<RootName>.CD.rst.dat``
      - temporary CableDyn-owned copy of the deck, written in the ``MooringFile`` folder only
        when a run restarts from a checkpoint (see *Lifecycle features*), and removed after use

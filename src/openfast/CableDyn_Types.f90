@@ -542,6 +542,7 @@ IMPLICIT NONE
     TYPE(GridInterp_MiscVarType)  :: WaveField_m      !< misc var information from the SeaState Interpolation module [-]
     LOGICAL  :: IC_gen = .FALSE.      !< boolean to indicate dynamic relaxation occuring [-]
     INTEGER(IntKi)  :: CDInst = 0      !< CableDyn mooring-backend instance handle (0 = none / needs rebuild after restart) []
+    LOGICAL  :: HostComplete = .FALSE.      !< set by the host before CD_End when the run ended without an error [-]
   END TYPE CD_MiscVarType
 ! =======================
    integer(IntKi), public, parameter :: CD_x_states                      =   1 ! CD%states
@@ -4551,6 +4552,7 @@ subroutine CD_CopyMisc(SrcMiscData, DstMiscData, CtrlCode, ErrStat, ErrMsg)
    if (ErrStat >= AbortErrLev) return
    DstMiscData%IC_gen = SrcMiscData%IC_gen
    DstMiscData%CDInst = SrcMiscData%CDInst
+   DstMiscData%HostComplete = SrcMiscData%HostComplete
 end subroutine
 
 subroutine CD_DestroyMisc(MiscData, ErrStat, ErrMsg)
@@ -4831,6 +4833,7 @@ subroutine CD_PackMisc(RF, Indata)
    call GridInterp_PackMisc(RF, InData%WaveField_m) 
    call RegPack(RF, InData%IC_gen)
    call RegPack(RF, InData%CDInst)
+   call RegPack(RF, InData%HostComplete)
    if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
@@ -4984,6 +4987,7 @@ subroutine CD_UnPackMisc(RF, OutData)
    call GridInterp_UnpackMisc(RF, OutData%WaveField_m) ! WaveField_m 
    call RegUnpack(RF, OutData%IC_gen); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%CDInst); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpack(RF, OutData%HostComplete); if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
 subroutine CD_Input_ExtrapInterp(u, t, u_out, t_out, ErrStat, ErrMsg)
