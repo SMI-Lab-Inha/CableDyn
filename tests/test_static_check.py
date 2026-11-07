@@ -13,7 +13,14 @@ Gates, on the shipped lazy-wave decks driven by a vesselMotion record and by a m
   1 s run, with the range graph of that row;
 * RangeStart after a TMax > 0 is still refused;
 * without dtM and TMax the deck stops on its first dynamic input, and the message says to
-  give dtM with TMax = 0.
+  give TMax = 0.
+
+and on one deck of each route (EI = 0 and finite-EI lines, the mixed aggregate, the multibody
+march, deck current and waves, vesselMotion, vesselRAO and motionFile records):
+
+* TMax = 0 needs no dtM: the deck runs, on records off any step, and writes the output of the
+  run with dtM byte for byte;
+* a positive TMax without dtM is still refused as a dynamic run.
 
 usage: test_static_check.py --exe <cabledyn> --examples <examples dir> --output <dir>
 """
@@ -29,7 +36,12 @@ import sys
 from pathlib import Path
 
 FAILURES: list[str] = []
-HINT = "to check a dynamic deck's static start only, give dtM with TMax = 0"
+HINT = "to check a dynamic deck's static start only, give TMax = 0"
+# one deck of each route of a static check
+ROUTES = ("dynamic_chain_held", "dynamic_chain_current", "dynamic_chain_waves", "lazy_wave_buoyancy_modules",
+          "iea15mw_umaine_mixed_cabledyn", "mixed_body_rods_points", "rigid6_buoy", "rod_moored_spar",
+          "connect_weighted_point", "lazy_wave_vessel_motion", "lazy_wave_vessel_rao",
+          "lozon_gomex80_power_cable_motion")
 
 
 def check(ok: bool, message: str) -> None:
@@ -116,7 +128,28 @@ def case(exe: str, examples: Path, out: Path, deck_name: str, record: str, keywo
 
     p_none = run(exe, work, "none", set_option(set_option(text, "TMax", None), "dtM", None))
     check(p_none.returncode != 0 and HINT in p_none.stderr,
-          f"{deck_name}: without dtM and TMax the message says to give dtM with TMax = 0")
+          f"{deck_name}: without dtM and TMax the message says to give TMax = 0")
+
+
+def no_dtm(exe: str, work: Path, deck_name: str) -> None:
+    """The deck at TMax = 0 with and without dtM, and at a positive TMax (past any RangeStart) without dtM."""
+    text = (work / f"{deck_name}.dat").read_text(encoding="utf-8")
+    zero = set_option(text, "TMax", "0.0")
+    p_with = run(exe, work, f"{deck_name}_with", zero)
+    p_none = run(exe, work, f"{deck_name}_none", set_option(zero, "dtM", None))
+    check(p_with.returncode == 0 and p_none.returncode == 0,
+          f"{deck_name}: TMax = 0 runs with and without dtM (exit {p_with.returncode}, {p_none.returncode})")
+    if p_none.returncode != 0:
+        print(p_none.stderr[-1500:])
+        return
+    log = p_none.stdout + p_none.stderr
+    check("dynamic run" not in log and "dtM =" not in log,
+          f"{deck_name}: and says nothing of a dynamic run or a time step")
+    same = (work / f"{deck_name}_with.out").read_bytes() == (work / f"{deck_name}_none.out").read_bytes()
+    check(same, f"{deck_name}: and writes the same output byte for byte")
+    p_late = run(exe, work, f"{deck_name}_late", set_option(set_option(text, "TMax", "1000.0"), "dtM", None))
+    check(p_late.returncode == 1 and "dynamic run requires both dtM and TMax" in p_late.stderr,
+          f"{deck_name}: a positive TMax without dtM is still refused (exit {p_late.returncode})")
 
 
 def main() -> int:
@@ -134,6 +167,15 @@ def main() -> int:
          "vesselMotion")
     case(args.exe, examples, out, "lozon_gomex80_power_cable_motion", "data/lozon/gomex80_heave_3m_12s_dt005.txt",
          "motionFile")
+    work = out / "no_dtm"
+    shutil.copytree(examples, work)
+    # the mixed aggregate on a vessel record
+    mixed = (work / "iea15mw_umaine_mixed_cabledyn.dat").read_text(encoding="utf-8")
+    record = "data/vessel/vessel_surge_heave_pitch_12s_dt005.txt  vesselMotion"
+    (work / "mixed_vessel_motion.dat").write_text(
+        set_option(mixed, "TMax", f"{record}\n0|0|0  vesselRef\n0.0"), encoding="utf-8", newline="\n")
+    for deck_name in (*ROUTES, "mixed_vessel_motion"):
+        no_dtm(args.exe, work, deck_name)
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
 

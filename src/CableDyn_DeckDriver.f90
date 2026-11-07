@@ -348,7 +348,10 @@ MODULE CableDyn_DeckDriver
   INTEGER, PARAMETER :: MOTION_PAST_TMAX = -1
   ! appended to the dtM/TMax-required errors of a standalone deck without TMax
   CHARACTER(*), PARAMETER :: STATIC_CHECK_HINT = &
-                             '; to check a dynamic deck''s static start only, give dtM with TMax = 0'
+                             '; to check a dynamic deck''s static start only, give TMax = 0'
+  ! The step a standalone TMax = 0 deck without dtM is built with. It marches no step, so no
+  ! result depends on the value (DeckOptions static_check_clock).
+  REAL(wp), PARAMETER :: STATIC_CHECK_DT = CD_ONE
   INTEGER, PARAMETER :: MOTION_POINT_ROWS = 0, MOTION_VESSEL_FILE = 1, MOTION_VESSEL_RAO = 2
   ! Largest WaterKin WaveKinMod-1 record (TMax/dtWave samples) reduced to Fourier components.
   REAL(wp), PARAMETER :: MAX_WAVE_SAMPLES = 1.0e6_wp
@@ -685,6 +688,9 @@ MODULE CableDyn_DeckDriver
     LOGICAL  :: has_wtrdpth = .FALSE.
     LOGICAL  :: has_bathymetry_file = .FALSE.
     LOGICAL  :: has_dtm = .FALSE., has_tmax = .FALSE.
+    ! A static check without dtM: a standalone deck with TMax = 0 and no dtM runs the TMax = 0
+    ! route on the nominal STATIC_CHECK_DT, so has_dtm is set; the deck itself gives no step.
+    LOGICAL  :: static_check_clock = .FALSE.
     LOGICAL  :: has_motion_file = .FALSE.
     ! Source of the prescribed motion when has_motion_file: MOTION_POINT_ROWS (motionFile),
     ! MOTION_VESSEL_FILE (vesselMotion 6-DOF record) or MOTION_VESSEL_RAO (vesselRAO table
@@ -851,6 +857,9 @@ MODULE CableDyn_DeckDriver
     ! CONNECTIONS Pretwist of those ends; has_roll when some row gives one.
     LOGICAL :: has_roll = .FALSE.
     REAL(wp), ALLOCATABLE :: roll(:, :)
+    ! A static check without dtM (DeckOptions static_check_clock): the grid is the t = 0 row, and
+    ! a later record row is not used, whatever its time step.
+    LOGICAL :: start_row_only = .FALSE.
   END TYPE
 
   TYPE :: DriverProgress
@@ -1394,7 +1403,7 @@ CONTAINS
         RETURN
       END IF
     END IF
-    dtM = MERGE(opts%dtM, CD_ZERO, opts%has_dtm)
+    dtM = MERGE(opts%dtM, CD_ZERO, opts%has_dtm .AND. .NOT. opts%static_check_clock)
     gravity = opts%g
     rho_water = opts%rhoW
     IF (deck_has_finite_ei(types, sections)) THEN
@@ -8287,6 +8296,8 @@ CONTAINS
         CALL static_strain_note(agg%init_lines(il)%line_id, agg%init_lines(il)%fair_tension, sections, types, opts, &
                                 strain_note)
         IF (LEN_TRIM(strain_note) > 0) CALL append_note_line(agg%init_lines(il)%note, strain_note)
+        ! a run that marches no step has no time step to advise on
+        IF (static_only) CYCLE
         CALL axial_period_note(agg%init_lines(il)%line_id, dt, sections, types, strain_note)
         IF (LEN_TRIM(strain_note) > 0) CALL append_note_line(agg%init_lines(il)%note, strain_note)
       END DO
@@ -8757,7 +8768,8 @@ CONTAINS
                     host_coupled_objects=.NOT. scan_standalone)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
     IF (PRESENT(n_bodies_rods)) n_bodies_rods = SIZE(bodies) + SIZE(rods)
-    has_dtm = opts%has_dtm
+    ! the deck's own step: the nominal step of a static check is no clock for a caller to march on
+    has_dtm = opts%has_dtm .AND. .NOT. opts%static_check_clock
     IF (has_dtm) dtM = opts%dtM
     IF (PRESENT(has_tmax)) has_tmax = opts%has_tmax
     IF (PRESENT(tmax)) THEN
@@ -12950,6 +12962,15 @@ CONTAINS
     CALL normalize_stock_endpoint_order(points, lines, sections, types)
     tors_marched = ext_march
     IF (PRESENT(static_run)) tors_marched = ext_march .AND. .NOT. static_run
+    ! A static check marches no step, so it needs no dtM: on the routes no caller marches
+    ! (.NOT. tors_marched: the standalone ones, the mixed aggregate's static_run among them)
+    ! TMax = 0 alone asks for it. A host's clock is its own.
+    IF ((.NOT. tors_marched) .AND. opts%has_tmax .AND. .NOT. opts%has_dtm .AND. opts%tmax >= CD_ZERO .AND. &
+        .NOT. opts%tmax > CD_ZERO) THEN
+      opts%has_dtm = .TRUE.
+      opts%dtM = STATIC_CHECK_DT
+      opts%static_check_clock = .TRUE.
+    END IF
     CALL resolve_one_end_torsion(types, bodies, rods, points, lines, sections, opts, tors_marched)
     CALL finalize_and_validate(types, bodies, rod_types, rods, points, lines, sections, opts, channels, ext_march, &
                                static_finite_ok, ErrStat, ErrMsg, channel_lines)
@@ -34463,6 +34484,7 @@ CONTAINS
     IF (PRESENT(include_body_points)) accept_body_points = include_body_points
     read_roll = .FALSE.
     IF (PRESENT(with_roll)) read_roll = with_roll
+    motion%start_row_only = opts%static_check_clock
     CALL grid_step_count(opts%tmax, opts%dtM, nstep, grid_ok)
     IF (.NOT. grid_ok .OR. nstep < 0) THEN
       CALL fail(ErrStat, ErrMsg, 'motionFile needs finite dtM > 0 and TMax >= 0 with a representable step count')
@@ -40307,6 +40329,10 @@ CONTAINS
     TYPE(MotionTable), INTENT(IN) :: motion
     INTEGER :: k
     it = 0
+    IF (motion%start_row_only .AND. t > tol) THEN
+      it = MOTION_PAST_TMAX
+      RETURN
+    END IF
     IF (.NOT. ABS(t/dt) < MAX_GRID_STEPS) RETURN
     k = NINT(t/dt)
     IF (k < 0) RETURN

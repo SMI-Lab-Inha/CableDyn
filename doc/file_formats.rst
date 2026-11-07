@@ -215,7 +215,8 @@ whole multiple of ``dtM``. The file is checked against this grid:
   (``time is outside the dtM/TMax grid``). Write times with enough digits to hit the
   grid exactly. A file may run past ``TMax``: its rows after ``TMax`` are checked
   (on the ``dtM`` grid, to within ``100·ε·max(1, time)``) and not used, so a long
-  record serves a shorter run and ``TMax = 0`` checks the static start.
+  record serves a shorter run and ``TMax = 0`` checks the static start. At ``TMax = 0``
+  without ``dtM`` the grid is the ``t = 0`` row and later rows are not checked.
 * Every eligible point needs exactly one row at every grid time. A repeated
   point/time pair is rejected (``duplicate row for point <id> at this time``). A
   missing pair is rejected once the whole file has been read (``motionFile must
