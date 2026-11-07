@@ -757,6 +757,12 @@ Warnings and notes that do not stop a run
        on the seabed). The node is a deck node, numbered as the ``<J>`` of the node channels
        (1 = End A). As above, the layout is an equilibrium of the deck as written; check the
        line length before using it.
+   * - ``Note: line(s) ... on the seabed at the static start with no seabed friction``
+     - a dynamic deck with a current and interior line nodes in seabed contact at the static
+       start: nothing holds those nodes along the seabed, so a run can drift tens of metres in an
+       hour. Set ``frictionMu``; the note says so where the deck's route rejects it. It is printed
+       once per run, and nothing in the solution changes. On the coupled route it takes the
+       current known at initialisation (the deck's, or the host's steady current).
    * - ``Note: line ...: the equilibrium in the current is held in the vertical plane of the line; it
        is unstable out of that plane ...``
      - in a current along the plane of the line the static state is a planar equilibrium that a

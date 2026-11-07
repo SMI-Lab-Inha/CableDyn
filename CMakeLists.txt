@@ -1808,6 +1808,19 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # The note on grounded lines that a current moves over a seabed without friction: once per run
+  # on every standalone route, and never without a grounded node, a current, or a march, or
+  # with friction.
+  add_test(NAME seabed_drift_note
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_seabed_drift_note.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --examples ${CMAKE_CURRENT_SOURCE_DIR}/examples
+                   --output ${CMAKE_BINARY_DIR}/seabed_drift_note)
+  set_tests_properties(seabed_drift_note PROPERTIES
+    LABELS "python;driver;integration;contact"
+    TIMEOUT 600
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # A rod numbered as a body is not one of the body's points: a Rod1B end POINT listed before
   # the Body1 points gives the run of the same deck with the rod renumbered, bit for bit.
   # A lazy wave restrained in torsion starts in an in-plane current (its untwisted state's
