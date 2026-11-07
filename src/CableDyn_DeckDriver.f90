@@ -12519,8 +12519,8 @@ CONTAINS
       subject = 'lines '//names//' lie'
       object = 'them'
     END IF
-    note = subject//' on the seabed at the static start with no seabed friction: the current moves the '// &
-           'grounded nodes freely along the seabed, which can reach tens of metres in an hour of simulated time. '
+    note = subject//' on the seabed at the static start with no seabed friction: nothing holds the grounded '// &
+           'nodes against the current, so the layout can drift along the seabed through the run. '
     IF (friction_refused) THEN
       note = note//'Seabed friction (frictionMu), which would hold '//object//', is not supported on this deck'
     ELSE

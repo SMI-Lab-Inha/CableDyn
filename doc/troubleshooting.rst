@@ -759,8 +759,9 @@ Warnings and notes that do not stop a run
        line length before using it.
    * - ``Note: line(s) ... on the seabed at the static start with no seabed friction``
      - a dynamic deck with a current and interior line nodes in seabed contact at the static
-       start: nothing holds those nodes along the seabed, so a run can drift tens of metres in an
-       hour. Set ``frictionMu``; the note says so where the deck's route rejects it. It is printed
+       start: nothing holds those nodes against the current, so the layout can drift along the
+       seabed through the run. Set ``frictionMu``; the note says so where the deck's route rejects
+       it. It is printed
        once per run, and nothing in the solution changes. On the coupled route it takes the
        current known at initialisation (the deck's, or the host's steady current).
    * - ``Note: line ...: the equilibrium in the current is held in the vertical plane of the line; it
