@@ -207,6 +207,12 @@ the seabed (``Z_Depth = WtrDpth + MSL2SWL``): they are in the seabed, where the 
 grid bottom are the right ones. FAST.Farm runs, which use still water, and SeaState fields
 without waves or current are not checked.
 
+SeaState's cosine depth grid is coarsest at the bottom: its deepest interval is
+``Z_Depth*sin(pi/(2*(NZ - 1)))``, about 22 m at 200 m depth with ``NZ = 15``, and the field falls
+linearly across it to the seabed, so near the seabed it differs from a deck depth table; when that
+interval exceeds 5 % of the depth (``NZ`` below 33) and a line lies in it, an initialisation note
+states the interval and the ``NZ`` that would bring it under 5 %.
+
 Run and confirm
 ---------------
 
@@ -268,7 +274,11 @@ channels ``AnchFz<L>``, ``AnchFH<L>`` and ``TDP<L>Grd``) and units are in :doc:`
    * - ``<RootName>.CD.static.out``
      - CableDyn-owned, always written: the static-equilibrium profile of every line, one row per
        node (arc length, coordinates, effective tension, curvature, bend moment, declination,
-       inclination, azimuth) — the coupled range graph, at the state of the printed line summary
+       inclination, azimuth), at the state of the printed line summary
+   * - ``<RootName>.CD.Line<L>.range.out``
+     - CableDyn-owned, for a line with the ``LINES`` ``Outputs`` flag ``r``: the range graph, the
+       minimum, maximum and mean at every node over the committed steps from ``RangeStart``,
+       written when the run reaches ``TMax`` (:doc:`outputs`)
    * - ``<RootName>.CD.rst.dat``
      - temporary CableDyn-owned copy of the deck, written in the ``MooringFile`` folder only
        when a run restarts from a checkpoint (see *Lifecycle features*), and removed after use
@@ -380,7 +390,9 @@ without an auxiliary process:
 * **Checkpoint/restart** serialises the committed line, constitutive, connection, body, and rod
   state needed to continue the trajectory, with the SeaState fields the committed step holds and,
   with ``dtM`` larger than ``DT``, the loads of the solve before it (the load predictor), so a
-  restart continues the run bit for bit at any ``dtM``. A checkpoint is accepted only on a committed CableDyn
+  restart continues the run bit for bit at any ``dtM``. The accumulated range graphs (``LINES``
+  flag ``r``) are part of it, so a restarted run writes the range files of an uninterrupted one. A
+  checkpoint is accepted only on a committed CableDyn
   step, so choose ``ChkptTime`` as a whole multiple of ``dtM``; a checkpoint written between two
   commits stops the restart with a message that says so. On restart the module writes a
   temporary deck copy, ``<RootName>.CD.rst.dat``, beside the ``MooringFile``, rebuilds the model

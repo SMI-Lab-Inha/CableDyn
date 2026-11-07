@@ -113,7 +113,7 @@ What CableDyn does
      - yes
    * - Modal analysis (``nModes``), range graphs, discrete ``ATTACHMENTS``
      - yes
-     - ``ATTACHMENTS`` only
+     - range graphs and ``ATTACHMENTS``
    * - Checkpoint/restart, linearisation, FAST.Farm, active tensioning
      - —
      - yes (:doc:`openfast`)

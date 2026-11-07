@@ -258,7 +258,12 @@ MODULE CableDyn_DeckDriver
   ! In-process object queries of the C API (CableDyn_CAPI): segment tensions in the .t.out
   ! convention, and the body/rod inventories the Body<N>/Rod<N> channels resolve on.
   PUBLIC :: CD_Eval_Aggregate_Segment_Tensions, CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses
-  ! Range graphs of an aggregate run (the standalone mixed route samples and writes them).
+  ! The refusal of the LINES flag r on a route that writes no range file.
+  CHARACTER(*), PARAMETER :: RANGE_FLAG_REFUSED = 'the LINES Outputs flag r (range graph) is written by the '// &
+                             'standalone driver and a single-turbine OpenFAST run; a FAST.Farm shared '// &
+                             'mooring or a C API run reports TDP<L> and node channels instead'
+  ! Range graphs of an aggregate run (the standalone mixed route and the OpenFAST module sample
+  ! and write them).
   PUBLIC :: CD_Deck_Range_Sample_Aggregate, CD_Deck_Range_Write
   ! Diagnostic probe of the multibody march (verification tests): CD_Multibody_Probe_Arm makes
   ! the next multibody run start body 1 with the given velocity and angular velocity and record
@@ -1230,7 +1235,7 @@ MODULE CableDyn_DeckDriver
     TYPE(CD_RodRuntimeType) :: rod
     ! Point3 buoys: stepped as Free points of the EI=0 system, but not placed by the static solve
     LOGICAL :: has_point3 = .FALSE.
-    ! Range graphs (LINES flag r, standalone only) and the touchdown references of the
+    ! Range graphs (LINES flag r) and the touchdown references of the
     ! TDP<L> channels, keyed by deck line id and fixed at the converged initial state.
     TYPE(CD_RangeSet) :: ranges
     ! The deck's own prescribed motion (prescribed_motion: the standalone driver), in the
@@ -1347,6 +1352,7 @@ CONTAINS
     CHARACTER(NAMELEN), ALLOCATABLE :: channels(:)
     TYPE(CD_BathymetryType) :: bathymetry
     LOGICAL :: ext_march
+    INTEGER :: i
     ErrStat = CD_DECKDRV_OK
     ErrMsg = ''
     dtM = CD_ZERO
@@ -1361,6 +1367,10 @@ CONTAINS
                     ErrStat, ErrMsg, caller_driven=ext_march, env_gravity=env_gravity, &
                     env_rho_water=env_rho_water, env_wtrdpth=env_wtrdpth)
     IF (ErrStat /= CD_DECKDRV_OK) RETURN
+    ! the caller steps the system and writes no file: the flag does not pass silently
+    IF (ANY([(line_output_has_flag(lines(i)%outputs, 'r'), i=1, SIZE(lines))])) THEN
+      CALL fail(ErrStat, ErrMsg, RANGE_FLAG_REFUSED); RETURN
+    END IF
     IF (opts%waterkin_seastate) THEN
       CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_System cannot consume WaveKinMod 2/SEASTATE; use the '// &
                 'OpenFAST aggregate with its external SeaState field')
@@ -7442,8 +7452,9 @@ CONTAINS
     ! self-drive ambient forcing against that scope. Independent of external_fluid
     ! (which rejects the same options for the opposite reason: double-counting).
     LOGICAL, INTENT(IN), OPTIONAL :: forbid_deck_ambient
-    ! range_files: the caller writes the range graphs of the LINES flag r (the standalone
-    ! mixed route); a coupled host does not, so the flag fails closed there.
+    ! range_files: the caller samples and writes the range graphs of the LINES flag r (the
+    ! standalone mixed route, the single-turbine OpenFAST module); a host that does not (a FAST.Farm
+    ! shared mooring, the C API) leaves it out, and the flag fails closed there.
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
     ! host_orientation: the caller passes each moving point's orientation with every update
     ! (the OpenFAST and FAST.Farm shells, and the standalone mixed route, which holds the frame
@@ -8268,7 +8279,7 @@ CONTAINS
     END IF
     ! A static strain above the note level is named in the line's initialisation note (every route that
     ! prints the notes of this summary shows it), and the standalone mixed route -- the caller that
-    ! asks for the range graphs -- also warns about coarse sections, as the single-topology driver does.
+    ! takes the deck's own current -- also warns about coarse sections, as the single-topology driver does.
     BLOCK
       INTEGER :: il
       CHARACTER(1024) :: strain_note
@@ -8279,9 +8290,7 @@ CONTAINS
         CALL axial_period_note(agg%init_lines(il)%line_id, dt, sections, types, strain_note)
         IF (LEN_TRIM(strain_note) > 0) CALL append_note_line(agg%init_lines(il)%note, strain_note)
       END DO
-      IF (PRESENT(range_files)) THEN
-        IF (range_files) CALL warn_coarse_sections(lines, sections)
-      END IF
+      IF (own_current) CALL warn_coarse_sections(lines, sections)
     END BLOCK
 
     ! Per moving slot, the driving turbine (0 outside farm mode) -- the SAME
@@ -8316,9 +8325,16 @@ CONTAINS
       wants_range = ANY([(line_output_has_flag(lines(i)%outputs, 'r'), i=1, SIZE(lines))])
       wants_tdp = ANY([(CD_Is_TDP_Channel(to_lower(channels(i))), i=1, SIZE(channels))])
       IF (wants_range .AND. .NOT. files_ok) THEN
-        CALL fail(ErrStat, ErrMsg, 'the LINES Outputs flag r (range graph) is written by the standalone driver; '// &
-                  'a coupled run reports TDP<L> and node channels instead')
+        CALL fail(ErrStat, ErrMsg, RANGE_FLAG_REFUSED)
         CALL CD_End_Deck_Aggregate(agg); RETURN
+      END IF
+      ! the run time of a coupled host is known here, not at the deck's own checks; the host's TMax
+      ! can have passed through single precision
+      IF (wants_range .AND. opts%has_range_start .AND. PRESENT(run_tmax)) THEN
+        IF (opts%range_start > run_tmax*(CD_ONE + 1.0e-6_wp) .AND. run_tmax > CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart exceeds TMax: the range window would hold no output time')
+          CALL CD_End_Deck_Aggregate(agg); RETURN
+        END IF
       END IF
       IF (wants_range .OR. wants_tdp) THEN
         IF (opts%has_bathymetry_file) THEN
@@ -8330,10 +8346,10 @@ CONTAINS
         END IF
         IF (ALLOCATED(agg%cables)) THEN
           CALL range_setup_aggregate(agg%ranges, lines, channels, opts, agg%has_sys, agg%sys, agg%cables, &
-                                     agg%line_is_cable, agg%line_obj_index, ErrStat, ErrMsg, bathymetry)
+                                     agg%line_is_cable, agg%line_obj_index, ErrStat, ErrMsg, bathymetry, run_tmax)
         ELSE
           CALL range_setup_aggregate(agg%ranges, lines, channels, opts, agg%has_sys, agg%sys, no_cables, &
-                                     agg%line_is_cable, agg%line_obj_index, ErrStat, ErrMsg, bathymetry)
+                                     agg%line_is_cable, agg%line_obj_index, ErrStat, ErrMsg, bathymetry, run_tmax)
         END IF
         IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
         IF (ErrStat /= CD_DECKDRV_OK) THEN
@@ -17547,13 +17563,16 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart needs a line with the LINES Outputs flag r (range graph)')
         RETURN
       END IF
-      IF (.NOT. opts%has_tmax) THEN
-        CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart needs a dynamic deck (TMax)'); RETURN
-      END IF
-      ! at TMax = 0 (a dynamic deck's static start) the range graphs hold the t = 0 row
-      IF (opts%range_start > opts%tmax .AND. opts%tmax > CD_ZERO) THEN
-        CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart exceeds TMax: the range window would hold no output time')
-        RETURN
+      ! a coupled host owns the run time: CD_Init_Deck_Aggregate holds the window against it
+      IF (.NOT. caller_driven) THEN
+        IF (.NOT. opts%has_tmax) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart needs a dynamic deck (TMax)'); RETURN
+        END IF
+        ! at TMax = 0 (a dynamic deck's static start) the range graphs hold the t = 0 row
+        IF (opts%range_start > opts%tmax .AND. opts%tmax > CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'OPTION RangeStart exceeds TMax: the range window would hold no output time')
+          RETURN
+        END IF
       END IF
     END IF
 
@@ -36365,10 +36384,12 @@ CONTAINS
     ErrMsg = 'CableDyn_DeckDriver: '//TRIM(em)
   END SUBROUTINE range_status
 
-  SUBROUTINE range_setup(rset, lines, channels, opts, nnodes, by_id, ErrStat, ErrMsg, bathymetry)
+  SUBROUTINE range_setup(rset, lines, channels, opts, nnodes, by_id, ErrStat, ErrMsg, bathymetry, run_tmax)
     !! Size the range set of a run from the LINES flag r and the TDP<L> channels. by_id:
     !! rset%lines(k) is deck line id k (the aggregate line map) and nnodes is indexed by
     !! id; otherwise rset%lines(i) is lines(i) and nnodes follows the deck line order.
+    !! run_tmax: the run time of the aggregate's caller, which replaces a deck TMax (a coupled
+    !! deck's TMax is the standalone one).
     TYPE(CD_RangeSet), INTENT(INOUT) :: rset
     TYPE(DeckLine), INTENT(IN) :: lines(:)
     CHARACTER(*), INTENT(IN) :: channels(:)
@@ -36378,6 +36399,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), INTENT(IN), OPTIONAL :: run_tmax
     INTEGER, ALLOCATABLE :: ids(:)
     LOGICAL, ALLOCATABLE :: want_r(:), want_t(:)
     INTEGER :: i, k, n, line_id, comp, es
@@ -36407,7 +36429,11 @@ CONTAINS
     END DO
     ! TMax = 0 (a static start check) puts the t = 0 row in the range graphs whatever RangeStart says
     t_start = opts%range_start
-    IF (opts%has_tmax) t_start = MIN(t_start, opts%tmax)
+    IF (PRESENT(run_tmax)) THEN
+      t_start = MIN(t_start, run_tmax)
+    ELSE IF (opts%has_tmax) THEN
+      t_start = MIN(t_start, opts%tmax)
+    END IF
     CALL CD_Range_Setup(rset, ids, nnodes, want_r, want_t, t_start, opts%has_wtrdpth, -opts%wtrdpth, &
                         es, em, bathymetry=bathymetry)
     CALL range_status(es, em, ErrStat, ErrMsg)
@@ -36720,7 +36746,7 @@ CONTAINS
   END SUBROUTINE aggregate_line_positions
 
   SUBROUTINE range_setup_aggregate(rset, lines, channels, opts, has_sys, system, cables, line_is_cable, &
-                                   line_obj_index, ErrStat, ErrMsg, bathymetry)
+                                   line_obj_index, ErrStat, ErrMsg, bathymetry, run_tmax)
     !! Range set of an aggregate (EI=0 system + Hermite cables), keyed by deck line id, with
     !! the touchdown references fixed at the current (initial) state.
     TYPE(CD_RangeSet), INTENT(INOUT) :: rset
@@ -36735,6 +36761,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
+    REAL(wp), INTENT(IN), OPTIONAL :: run_tmax
     INTEGER, ALLOCATABLE :: nnodes(:)
     INTEGER :: k, obj, es
     CHARACTER(1024) :: em
@@ -36755,7 +36782,7 @@ CONTAINS
         END IF
       END IF
     END DO
-    CALL range_setup(rset, lines, channels, opts, nnodes, .TRUE., ErrStat, ErrMsg, bathymetry)
+    CALL range_setup(rset, lines, channels, opts, nnodes, .TRUE., ErrStat, ErrMsg, bathymetry, run_tmax)
     IF (ErrStat /= CD_DECKDRV_OK .OR. .NOT. rset%active) RETURN
     DO k = 1, SIZE(rset%lines)
       IF (.NOT. rset%lines(k)%want_tdp) CYCLE

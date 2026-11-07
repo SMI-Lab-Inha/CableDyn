@@ -282,8 +282,10 @@ Clock and initial condition
      - finite, ≥ 0 and ≤ ``TMax`` (any value at ``TMax = 0``, where the graphs hold the
        ``t = 0`` row). First output time accumulated into the range graphs
        (``<out_root>.Line<L>.range.out``, ``LINES`` ``Outputs`` flag ``r``), so a start-up
-       transient is left out. Needs ``TMax`` and at least one line with the ``r`` flag
-     - standalone only
+       transient is left out. Needs at least one line with the ``r`` flag and, standalone,
+       ``TMax``
+     - both; OpenFAST holds it against the host ``TMax``. A FAST.Farm shared mooring rejects the
+       ``r`` flag
      - ``100.0 RangeStart``
 
 Nonlinear solver

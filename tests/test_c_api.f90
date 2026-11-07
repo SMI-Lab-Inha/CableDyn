@@ -27,6 +27,7 @@ PROGRAM test_c_api
   CALL case_deck_init()
   CALL case_deck_dynamic_point_fluid()
   CALL case_deck_current_in_time()
+  CALL case_deck_range_flag()
   CALL case_deck_bodies_rods()
   CALL case_init_update_output_step()
   CALL case_multiline_shared_map()
@@ -233,11 +234,41 @@ CONTAINS
     CALL require(es == 0_C_INT .AND. .NOT. C_ASSOCIATED(handle), 'c-api-currents2:close')
   END SUBROUTINE case_deck_current_in_time
 
-  SUBROUTINE write_capi_currents_deck(path, row_later)
+  SUBROUTINE case_deck_range_flag()
+    !! The C ABI writes no result files: the LINES range-graph flag is refused by name, not
+    !! accepted and left without a file.
+    CHARACTER(*), PARAMETER :: DECK_PATH = 'capi_range_flag_deck.dat'
+    CHARACTER(KIND=C_CHAR), TARGET :: c_path(LEN(DECK_PATH))
+    CHARACTER(KIND=C_CHAR), TARGET :: msg(300)
+    TYPE(C_PTR) :: handle
+    INTEGER(C_INT) :: es
+    INTEGER :: i
+
+    DO i = 1, LEN(DECK_PATH)
+      c_path(i) = DECK_PATH(i:i)
+    END DO
+    CALL write_capi_currents_deck(DECK_PATH, '0.1 0.1 0.0 0.0', line_outputs='r')
+    CALL CableDyn_Create(handle, es)
+    CALL require(es == 0_C_INT .AND. C_ASSOCIATED(handle), 'c-api-range-flag:create')
+    CALL CableDyn_InitDeck(handle, C_LOC(c_path), INT(LEN(DECK_PATH), C_INT), es)
+    CALL require(es == 3_C_INT, 'c-api-range-flag:rejected')
+    CALL CableDyn_GetLastError(handle, C_LOC(msg), INT(SIZE(msg), C_INT))
+    CALL require(INDEX(c_text(msg), 'flag r') > 0 .AND. INDEX(c_text(msg), 'C API') > 0, 'c-api-range-flag:message')
+    CALL CableDyn_Close(handle, es)
+    CALL require(es == 0_C_INT .AND. .NOT. C_ASSOCIATED(handle), 'c-api-range-flag:close')
+  END SUBROUTINE case_deck_range_flag
+
+  SUBROUTINE write_capi_currents_deck(path, row_later, line_outputs)
     !! The smoke deck with Currents 2 and its current_profile_dynamic.txt: x velocities
-    !! 0.1 m/s at the two depths at t = 0 and the given row at t = 5 s.
+    !! 0.1 m/s at the two depths at t = 0 and the given row at t = 5 s. line_outputs gives the
+    !! LINES Outputs flags.
     CHARACTER(*), INTENT(IN) :: path, row_later
+    CHARACTER(*), INTENT(IN), OPTIONAL :: line_outputs
     INTEGER :: u, ios
+    CHARACTER(8) :: flags
+
+    flags = '-'
+    IF (PRESENT(line_outputs)) flags = line_outputs
 
     OPEN (NEWUNIT=u, FILE='current_profile_dynamic.txt', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     CALL require(ios == 0, 'c-api-currents2:create-table')
@@ -267,7 +298,7 @@ CONTAINS
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
-    WRITE (u, '(A)') '1 2 1 -'
+    WRITE (u, '(A)') '1 2 1 '//TRIM(flags)
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'

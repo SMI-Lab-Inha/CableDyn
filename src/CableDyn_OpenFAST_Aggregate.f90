@@ -91,7 +91,8 @@ MODULE CableDyn_OpenFAST_Aggregate
                                  CD_DeckCurrentRuntimeType, CD_Deck_Current_Active, &
                                  CD_Deck_Current_Sample_System, CD_Deck_Current_Sample_Cables, &
                                  CD_Deck_Current_End
-  USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End
+  USE CableDyn_RangeOutput, ONLY: CD_RangeSet, CD_Range_End, CD_Range_Has_Graph, CD_Range_Mirror_Size, &
+                                  CD_Range_Get_State, CD_Range_Set_State, CD_Range_Discard_Files, CD_RANGE_OK
   USE CableDyn_System, ONLY: CD_Get_System_Substep_Counts, CD_System_NLines, CD_System_Line_NDOF, &
                              CD_System_Fallback_Count, CD_System_Fallback_Reset, &
                              CD_Get_System_Line_State, &
@@ -139,8 +140,10 @@ MODULE CableDyn_OpenFAST_Aggregate
   PUBLIC :: CD_AGG_ChannelHeader
   PUBLIC :: CD_AGG_EvalChannel
   PUBLIC :: CD_AGG_WriteStaticProfile
-  ! Range graphs of the LINES flag r on the standalone mixed route (not a coupled-host surface)
-  PUBLIC :: CD_AGG_Range_Sample, CD_AGG_Range_Write
+  ! Range graphs of the LINES flag r: the standalone mixed route and the single-turbine OpenFAST
+  ! module sample and write them; the accumulated state rides a host's checkpoint
+  PUBLIC :: CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_Range_Discard, CD_AGG_Range_Graphs, &
+            CD_AGG_Range_MirrorSize, CD_AGG_Range_Get_State, CD_AGG_Range_Set_State
   PUBLIC :: CD_AGG_GetInitMetadata, CD_AGG_GetInitLine
 
   ! Status space mirrors CD_FMF_* (and the CD_HFMF_* / CD_DECKDRV_* subsets) so the facade
@@ -263,10 +266,11 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! branch (mutually exclusive with has_rigid6); its snapshot buffer joins the aggregate snapshot.
     LOGICAL :: has_rod = .FALSE.
     TYPE(CD_RodRuntimeType) :: rod
-    ! Range graphs (standalone mixed route) and the touchdown references of the TDP<L>
+    ! Range graphs (standalone mixed route, OpenFAST module) and the touchdown references of the TDP<L>
     ! channels, keyed by deck line id. The references are fixed at the converged initial
     ! state (a checkpoint rebuild re-derives the same state), so they carry no step state.
     TYPE(CD_RangeSet) :: ranges
+    REAL(wp), ALLOCATABLE :: snap_range(:)   ! the accumulated range graphs at the last CD_AGG_Snapshot
     ! Coupled/Vessel and CoupledPinned rods: the trailing host nodes of the moving surface, and
     ! the full EI=0 coupled-block scratch (3, n_system_coupled_dof/3) their Rod<N>A/B points are
     ! overlaid on.
@@ -326,7 +330,7 @@ CONTAINS
     ! forbid_deck_ambient: the caller evaluates no deck waves (and, without deck_current, no
     ! deck current), so reject a deck that declares them (see CD_Init_Deck_Aggregate).
     LOGICAL, INTENT(IN), OPTIONAL :: forbid_deck_ambient
-    ! range_files: the caller writes the range graphs of the LINES flag r (CD_AGG_Range_*)
+    ! range_files: the caller samples and writes the range graphs of the LINES flag r (CD_AGG_Range_*)
     LOGICAL, INTENT(IN), OPTIONAL :: range_files
     ! host_orientation: the caller passes the moving-point orientations with every update,
     ! which a finite-EI line restrained in torsion requires (see CD_Init_Deck_Aggregate)
@@ -1693,6 +1697,11 @@ CONTAINS
     ! a rewind to a state before the first step takes the start accelerations open again (new
     ! fluid fields re-solve them)
     self%snap_objects_committed = self%objects_committed
+    ! the range graphs as of the step start: a rewind takes back the sample of the abandoned step
+    IF (CD_Range_Has_Graph(self%ranges)) THEN
+      IF (.NOT. ALLOCATED(self%snap_range)) ALLOCATE (self%snap_range(CD_Range_Mirror_Size(self%ranges)))
+      CALL CD_Range_Get_State(self%ranges, self%snap_range)
+    END IF
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_Snapshot
@@ -1728,6 +1737,14 @@ CONTAINS
     IF (self%has_rigid6) CALL CD_Rigid6_Restore(self%rigid6)
     IF (self%has_rod) CALL CD_Rod_Restore(self%rod)
     self%objects_committed = self%snap_objects_committed
+    IF (ALLOCATED(self%snap_range)) THEN
+      CALL CD_Range_Set_State(self%ranges, self%snap_range, es, em)
+      IF (es /= CD_RANGE_OK) THEN
+        ErrStat = CD_AGG_BADINPUT
+        ErrMsg = 'CableDyn_OpenFAST_Aggregate: '//TRIM(em)
+        RETURN
+      END IF
+    END IF
     ErrStat = CD_AGG_OK
     ErrMsg = ''
   END SUBROUTINE CD_AGG_Restore
@@ -2468,6 +2485,7 @@ CONTAINS
     self%has_rod = .FALSE.
     self%has_point3 = .FALSE.
     CALL CD_Range_End(self%ranges)
+    IF (ALLOCATED(self%snap_range)) DEALLOCATE (self%snap_range)
     self%nhost_rod = 0
     self%nhost_body = 0
     IF (ALLOCATED(self%hf_mask)) DEALLOCATE (self%hf_mask)
@@ -2633,8 +2651,8 @@ CONTAINS
   END SUBROUTINE CD_AGG_EvalChannel
 
   SUBROUTINE CD_AGG_Range_Sample(self, time, ErrStat, ErrMsg)
-    !! Accumulate the range graphs (LINES flag r) at a committed output time. The standalone
-    !! mixed route calls it once per written row; a coupled host never does.
+    !! Accumulate the range graphs (LINES flag r) at a committed output time: once per written
+    !! row on the standalone mixed route, once per committed mooring step in the OpenFAST module.
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: time
     INTEGER, INTENT(OUT) :: ErrStat
@@ -2670,6 +2688,69 @@ CONTAINS
     CALL CD_Deck_Range_Write(self%ranges, root, es, em)
     CALL map_deck_status(es, em, ErrStat, ErrMsg)
   END SUBROUTINE CD_AGG_Range_Write
+
+  SUBROUTINE CD_AGG_Range_Discard(self, root, ErrStat, ErrMsg)
+    !! Remove the <root>.Line<L>.range.out files an earlier run left (CD_Range_Discard_Files).
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    CHARACTER(*), INTENT(IN) :: root
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(1024) :: em
+
+    IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    CALL CD_Range_Discard_Files(self%ranges, root, es, em)
+    IF (es /= CD_RANGE_OK) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: '//TRIM(em)
+    END IF
+  END SUBROUTINE CD_AGG_Range_Discard
+
+  LOGICAL FUNCTION CD_AGG_Range_Graphs(self) RESULT(yes)
+    !! True when a line of the deck carries the LINES flag r; touchdown channels alone need no
+    !! sampling, they are evaluated from the state.
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    yes = CD_Range_Has_Graph(self%ranges)
+  END FUNCTION CD_AGG_Range_Graphs
+
+  INTEGER FUNCTION CD_AGG_Range_MirrorSize(self) RESULT(n)
+    !! Reals of the accumulated range graphs (checkpoint pack surface; 0 without a LINES flag r).
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    n = CD_Range_Mirror_Size(self%ranges)
+  END FUNCTION CD_AGG_Range_MirrorSize
+
+  SUBROUTINE CD_AGG_Range_Get_State(self, state, ErrStat, ErrMsg)
+    !! The accumulated range graphs, CD_AGG_Range_MirrorSize reals (checkpoint pack surface).
+    TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
+    REAL(wp), INTENT(OUT) :: state(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    IF (SIZE(state) /= CD_Range_Mirror_Size(self%ranges)) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: range-graph query needs CD_AGG_Range_MirrorSize slots'
+      RETURN
+    END IF
+    CALL CD_Range_Get_State(self%ranges, state)
+  END SUBROUTINE CD_AGG_Range_Get_State
+
+  SUBROUTINE CD_AGG_Range_Set_State(self, state, ErrStat, ErrMsg)
+    !! Reload the accumulated range graphs of CD_AGG_Range_Get_State (checkpoint restore surface).
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    REAL(wp), INTENT(IN) :: state(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(1024) :: em
+
+    IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    CALL CD_Range_Set_State(self%ranges, state, es, em)
+    IF (es /= CD_RANGE_OK) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: '//TRIM(em)
+    END IF
+  END SUBROUTINE CD_AGG_Range_Set_State
 
   SUBROUTINE CD_AGG_WriteStaticProfile(self, path, ErrStat, ErrMsg)
     !! Write the converged coupled initialization as an OrcaFlex-statics-style range table.

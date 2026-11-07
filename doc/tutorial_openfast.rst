@@ -232,7 +232,7 @@ Check, in order:
        CableDyn step (every ``dtM``), with a units row
    * - ``IEA-15-UMaine_CompMooring5_CableDyn.CD.static.out``
      - the initial nodal equilibrium of every line (arc length, coordinates, tension, curvature,
-       bend moment, declination, inclination, azimuth) — the coupled range graph
+       bend moment, declination, inclination, azimuth)
    * - ``*.ED.sum``, ``*.HD.sum``
      - the usual OpenFAST module summaries
 

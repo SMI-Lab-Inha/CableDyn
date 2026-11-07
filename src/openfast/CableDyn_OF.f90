@@ -51,7 +51,9 @@ MODULE CableDyn
    !! (PtfmInit), the module's own mooring step (supercycling + zero-order-hold loads),
    !! glue correction iterations (NumCrctn > 0: snapshot-rewind re-advance), SeaState
    !! wave/current kinematics sampled at the line nodes (single-turbine only; see the
-   !! farm scope at the use_extf guard), checkpoint restart (rebuild from the packed
+   !! farm scope at the use_extf guard), range graphs of the LINES flag r (single-turbine
+   !! only: <root>.Line<L>.range.out, sampled at every committed mooring step, written when
+   !! the run reaches TMax), checkpoint restart (rebuild from the packed
    !! deck + state mirror, accepted on committed mooring-interval boundaries),
    !! linearization with the line dynamics (as MoorDyn-F: the continuous states are the
    !! EI=0 lines' interior-node positions and the finite-EI cables' free DOFs, positions
@@ -98,7 +100,9 @@ MODULE CableDyn
                                           CD_AGG_NFluidNodes, CD_AGG_GetFluidNodePositions, CD_AGG_SetFluidFields, &
                                           CD_AGG_NumChannels, CD_AGG_ChannelHeader, CD_AGG_EvalChannel, &
                                           CD_AGG_GetInitMetadata, CD_AGG_GetInitLine, &
-                                          CD_AGG_WriteStaticProfile
+                                          CD_AGG_WriteStaticProfile, CD_AGG_Range_Graphs, CD_AGG_Range_Sample, &
+                                          CD_AGG_Range_Write, CD_AGG_Range_Discard, CD_AGG_Range_MirrorSize, &
+                                          CD_AGG_Range_Get_State, CD_AGG_Range_Set_State
    USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, &
                                            CD_HFMF_FrictionMirrorSize, CD_HFMF_BoundaryMirrorSize, &
                                            CD_HFMF_ForceMirrorSize, CD_HFMF_TorsionMirrorSize, CD_HFMF_VIVMirrorSize, &
@@ -137,6 +141,10 @@ MODULE CableDyn
    IMPLICIT NONE
 
    PRIVATE
+
+   ! Depth fraction above which the deepest interval of the SeaState grid is noted at initialisation
+   ! (note_seastate_deep_interval).
+   REAL(wp), PARAMETER :: SEASTATE_DEEP_INTERVAL = 0.05_wp
 
    ! the kinds of first-order linearization state (lin_state_map)
    INTEGER(IntKi), PARAMETER :: LIN1_VE = 1, LIN1_SYROPE = 2
@@ -238,6 +246,11 @@ MODULE CableDyn
       REAL(DbKi)              :: native_wrote_t = 0.0_DbKi
       LOGICAL                 :: native_pending = .FALSE.
       CHARACTER(1024)         :: native_root = ''
+      ! Range graphs (LINES flag r): sampled by the aggregate once per committed mooring step
+      ! (sample_range); ws_range is the double-precision transfer buffer to the OtherState
+      ! mirror, which a checkpoint packs and a correction iteration's state copy rewinds.
+      LOGICAL                 :: range_on = .FALSE.
+      REAL(wp), ALLOCATABLE   :: ws_range(:)
       ! SeaState ambient-fluid sampling (host-driven wave/current kinematics): when the
       ! glue's WaveField declares waves or a current, the aggregate is built wave-capable
       ! (external_fluid) and every mooring advance samples the field at the line nodes'
@@ -816,7 +829,7 @@ CONTAINS
                                      env_gravity=REAL(InitInp%g, wp), env_rho_water=REAL(InitInp%rhoW, wp), &
                                      env_wtrdpth=REAL(InitInp%WtrDepth, wp), ptfm_init=REAL(ptfm6, wp), &
                                      external_fluid=use_extf, run_tmax=REAL(InitInp%Tmax, wp), &
-                                     host_orientation=.TRUE., static_current=static_cur )
+                                     host_orientation=.TRUE., static_current=static_cur, range_files=.TRUE. )
       END IF
       IF (es /= CD_AGG_OK) THEN
          ! The slot stays inactive (it is activated only after full success, below), so this and
@@ -988,6 +1001,7 @@ CONTAINS
          IF (ErrStat2 < AbortErrLev) CALL save_held_fluid( Inst(id), other )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) RETURN
+         CALL note_seastate_deep_interval( Inst(id), InitInp%WaveField )
       END IF
 
       ! The coupling mesh carries ONLY the host-prescribed (Coupled/Vessel) points.
@@ -1330,6 +1344,20 @@ CONTAINS
       CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
       IF (ErrStat >= AbortErrLev) RETURN
 
+      ! Range graphs (LINES flag r): the first sample is the state of the t = 0 output row. The
+      ! files of an earlier run go now: this run writes its own only when it reaches TMax.
+      Inst(id)%range_on = CD_AGG_Range_Graphs( Inst(id)%agg )
+      IF (Inst(id)%range_on) THEN
+         CALL CD_AGG_Range_Discard( Inst(id)%agg, TRIM(native_root), es, em )
+         IF (es /= CD_AGG_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '//TRIM(em), ErrStat, ErrMsg, RoutineName )
+            RETURN
+         END IF
+         CALL sample_range( Inst(id), other, 0.0_DbKi, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) RETURN
+      END IF
+
       IF (profile_requested) THEN
          CALL SYSTEM_CLOCK(prof_c1)
          CALL reset_instance_profile( id, .TRUE., &
@@ -1536,7 +1564,7 @@ CONTAINS
                                   env_gravity=REAL(p%g, wp), env_rho_water=REAL(p%rhoW, wp), &
                                   env_wtrdpth=REAL(p%WtrDpth, wp), external_fluid=use_extf, &
                                   ptfm_init=REAL(p%PtfmInit, wp), run_tmax=REAL(p%Tmax, wp), &
-                                  host_orientation=.TRUE., static_current=static_cur )
+                                  host_orientation=.TRUE., static_current=static_cur, range_files=.TRUE. )
       CALL delete_file( rst_deck )
       IF (es /= CD_AGG_OK) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: checkpoint rebuild: '//TRIM(em), &
@@ -1663,6 +1691,18 @@ CONTAINS
       IF (use_extf) THEN
          CALL restore_held_fluid( Inst(id), other, restored, ErrStat2, ErrMsg2 )
          IF (ErrStat2 < AbortErrLev .AND. .NOT. restored) CALL sample_wavefield( Inst(id), p, m, t, ErrStat2, ErrMsg2 )
+         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+         IF (ErrStat >= AbortErrLev) THEN
+            CALL release_instance( id )
+            RETURN
+         END IF
+      END IF
+      ! The range graphs continue from the checkpoint: the rebuild sized them, the restored
+      ! OtherState holds them through other%t_commit (a same-process rewind drops the samples
+      ! of the abandoned steps with it).
+      Inst(id)%range_on = CD_AGG_Range_Graphs( Inst(id)%agg )
+      IF (Inst(id)%range_on) THEN
+         CALL restore_range_state( Inst(id), other, ErrStat2, ErrMsg2 )
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
          IF (ErrStat >= AbortErrLev) THEN
             CALL release_instance( id )
@@ -1918,6 +1958,14 @@ CONTAINS
                other%t_commit = Inst(id)%t_commit
                CALL pack_state_mirror( Inst(id), m, x, ErrStat2, ErrMsg2 )
                CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+               ! one range-graph sample per commit, here where the OtherState can carry it: a
+               ! correction re-advance takes the sample back with the step (CD_AGG_Restore, or
+               ! the glue's state copy and the rebuild), an intermediate supercycle call never
+               ! gets here, and CalcOutput's probes of off-step inputs are not commits
+               IF (Inst(id)%range_on .AND. ErrStat < AbortErrLev) THEN
+                  CALL sample_range( Inst(id), other, Inst(id)%t_commit, ErrStat2, ErrMsg2 )
+                  CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+               END IF
             END IF
          END IF
 
@@ -2292,6 +2340,45 @@ CONTAINS
       ! during the time march reaches the screen through the glue's error check.
       IF (at_init) CALL WrScr( '   WARNING: '//msg )
    END SUBROUTINE check_wavefield_grid
+
+   SUBROUTINE note_seastate_deep_interval( inst_e, wf )
+      !! Say at initialisation, once per run (a restart rebuilds without passing here), when the
+      !! deepest interval of the SeaState depth grid is coarse and a line lies in it. The levels
+      !! are z_k = Z_Depth*(sin(k*delta) - 1) with delta = pi/(2*(NZ - 1)): the grid is finest at
+      !! the surface and coarsest at the bottom, where the interval H = Z_Depth*sin(delta) is
+      !! pi/2 times the uniform spacing. Inside H the field is interpolated linearly down to the
+      !! seabed. For the 1/7-power current of CurrMod 1 that is up to 62 % of the value at the top
+      !! of the interval low, whatever H is, so H alone sets how much of the column carries the
+      !! difference: the depth integral of the current lacks 3/7*(H/D)^(8/7) of its value, 1.4 %
+      !! at the threshold H = 5 % of the depth (NZ >= 33 stays below it) and 3.5 % at NZ = 15. A
+      !! grid short of the seabed has the out-of-grid warning of check_wavefield_grid instead.
+      !! Reads the grid and the node positions and writes to the screen only.
+      TYPE(CD_OF_Instance),      INTENT(IN) :: inst_e
+      TYPE(SeaSt_WaveFieldType), INTENT(IN) :: wf
+      REAL(wp), PARAMETER :: HALF_PI = 2.0_wp*ATAN(1.0_wp)
+      LOGICAL  :: waves, grid_current
+      INTEGER(IntKi) :: nz, nodes
+      REAL(wp) :: depth, interval
+
+      waves = inst_e%agg%host_wave_enabled .AND. wf%WaveMod /= WaveMod_None
+      grid_current = inst_e%agg%host_current_enabled .AND. wf%Current_InitInput%CurrMod /= 0_IntKi
+      nz = wf%VolGridParams%n(4)
+      IF (.NOT. (waves .OR. grid_current) .OR. nz < 2_IntKi) RETURN
+      depth = REAL(wf%GridDepth, wp)
+      interval = depth*SIN(REAL(wf%VolGridParams%delta(4), wp))
+      IF (depth < REAL(wf%EffWtrDpth, wp) - 0.01_wp*interval) RETURN
+      IF (interval <= SEASTATE_DEEP_INTERVAL*depth) RETURN
+      nodes = COUNT(inst_e%fx_xyz(3, 1:inst_e%nfluid) < interval - depth)
+      IF (nodes == 0_IntKi) RETURN
+      CALL WrScr( '   Note: the deepest interval of the SeaState depth grid is '//TRIM(Num2LStr(interval))// &
+                  ' m (NZ = '//TRIM(Num2LStr(nz))//', Z_Depth = '//TRIM(Num2LStr(depth))//' m), over '// &
+                  TRIM(Num2LStr(NINT(100.0_wp*SEASTATE_DEEP_INTERVAL)))//' % of the depth, and '// &
+                  TRIM(Num2LStr(nodes))//' of the '//TRIM(Num2LStr(inst_e%nfluid))// &
+                  ' CableDyn sampling nodes lie in it. The field is linear there, so near the seabed '// &
+                  'it differs from a deck depth table. More depth levels refine it: NZ = '// &
+                  TRIM(Num2LStr(1_IntKi + CEILING(HALF_PI/ASIN(SEASTATE_DEEP_INTERVAL), IntKi)))// &
+                  ' or more in the SeaState input file.' )
+   END SUBROUTINE note_seastate_deep_interval
 
    SUBROUTINE check_current_field_grid( inst_e, wf, t_sample )
       !! A dynamically populated current field (an InflowWind-driven MHK current, hasCurrField) is
@@ -2687,6 +2774,60 @@ CONTAINS
       END IF
       restored = .TRUE.
    END SUBROUTINE restore_held_fluid
+
+   SUBROUTINE sample_range( inst_e, other, t_sample, ErrStat, ErrMsg )
+      !! Add the committed state at t_sample to the range graphs and mirror them into the
+      !! OtherState, so a checkpoint carries them. The samples are the aggregate's own double
+      !! precision node values, whatever the precision of the host's outputs (ReKi).
+      TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(INOUT) :: other
+      REAL(DbKi),               INTENT(IN   ) :: t_sample
+      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
+      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
+      INTEGER(IntKi) :: es, nr
+      CHARACTER(ErrMsgLen) :: em
+      ErrStat = ErrID_None
+      ErrMsg = ''
+      CALL CD_AGG_Range_Sample( inst_e%agg, REAL(t_sample, wp), es, em )
+      nr = CD_AGG_Range_MirrorSize( inst_e%agg )
+      IF (.NOT. ALLOCATED(inst_e%ws_range)) ALLOCATE (inst_e%ws_range(nr))
+      IF (es == CD_AGG_OK) CALL CD_AGG_Range_Get_State( inst_e%agg, inst_e%ws_range, es, em )
+      IF (es /= CD_AGG_OK) THEN
+         ErrStat = ErrID_Fatal
+         ErrMsg = 'CableDyn mooring module: range-graph sample at t = '//TRIM(Num2LStr(t_sample))//' s: '//TRIM(em)
+         RETURN
+      END IF
+      IF (ALLOCATED(other%range_state)) THEN
+         IF (SIZE(other%range_state) /= nr) DEALLOCATE (other%range_state)
+      END IF
+      IF (.NOT. ALLOCATED(other%range_state)) ALLOCATE (other%range_state(nr))
+      other%range_state = REAL(inst_e%ws_range, DbKi)
+   END SUBROUTINE sample_range
+
+   SUBROUTINE restore_range_state( inst_e, other, ErrStat, ErrMsg )
+      !! Hand the range graphs of a checkpoint (sample_range) back to the rebuilt aggregate. A
+      !! checkpoint without them for these lines fails by name: continuing would write a range
+      !! graph that silently misses the run before the restart.
+      TYPE(CD_OF_Instance),     INTENT(INOUT) :: inst_e
+      TYPE(CD_OtherStateType),  INTENT(IN   ) :: other
+      INTEGER(IntKi),           INTENT(  OUT) :: ErrStat
+      CHARACTER(*),             INTENT(  OUT) :: ErrMsg
+      INTEGER(IntKi) :: es
+      CHARACTER(ErrMsgLen) :: em
+      ErrStat = ErrID_None
+      ErrMsg = ''
+      es = CD_AGG_OK
+      IF (ALLOCATED(other%range_state)) THEN
+         CALL CD_AGG_Range_Set_State( inst_e%agg, REAL(other%range_state, wp), es, em )
+      ELSE
+         es = ErrID_Fatal
+         em = 'the checkpoint carries no range graphs'
+      END IF
+      IF (es /= CD_AGG_OK) THEN
+         ErrStat = ErrID_Fatal
+         ErrMsg = 'CableDyn mooring module: checkpoint rebuild of the range graphs (LINES flag r): '//TRIM(em)
+      END IF
+   END SUBROUTINE restore_range_state
 
    SUBROUTINE shift_predictor_loads( inst_e, other )
       !! The load predictor's previous commit when a new mooring step starts: the loads served
@@ -3169,6 +3310,8 @@ CONTAINS
       CHARACTER(:), ALLOCATABLE :: asm_txt
       INTEGER                 :: k_i
       INTEGER                 :: sb_max, sb_ios
+      INTEGER(IntKi)          :: range_es
+      CHARACTER(ErrMsgLen)    :: range_em
       CHARACTER(24)           :: sb_txt(5)
       REAL(wp)                :: ht_step, ht_resid, ht_eff, ht_solve, ht_am, ht_tan
       CHARACTER(ErrMsgLen)    :: ErrMsg2
@@ -3179,6 +3322,20 @@ CONTAINS
       IF (ALLOCATED(Inst)) THEN
          IF (m%CDInst >= 1 .AND. m%CDInst <= SIZE(Inst)) THEN
             IF (Inst(m%CDInst)%active) THEN
+               ! The range graphs cover the whole run, so only a run that reached TMax writes them
+               ! (as the standalone driver, which writes them on completion); the glue also comes
+               ! here after an abort. TMax passes through ReKi, so the test allows its rounding.
+               IF (Inst(m%CDInst)%range_on) THEN
+                  IF (Inst(m%CDInst)%t_commit >= p%Tmax - 1.0E-6_DbKi*p%dtM0 - &
+                      2.0_DbKi*REAL(EPSILON(1.0_ReKi), DbKi)*ABS(p%Tmax)) THEN
+                     CALL CD_AGG_Range_Write( Inst(m%CDInst)%agg, TRIM(p%RootName), range_es, range_em )
+                     IF (range_es /= CD_AGG_OK) CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: '// &
+                                                                 TRIM(range_em), ErrStat, ErrMsg, RoutineName )
+                  ELSE
+                     CALL WrScr( '   CableDyn: the run ended at t = '//TRIM(Num2LStr(Inst(m%CDInst)%t_commit))// &
+                                 ' s, before TMax = '//TRIM(Num2LStr(p%Tmax))//' s: no range graph is written.' )
+                  END IF
+               END IF
                ! the rotation- and snap-resolved sub-steps of the EI=0 lines (ei0_substeps), as the
                ! standalone driver reports them
                CALL CD_AGG_Get_Substep_Counts( Inst(m%CDInst)%agg, sb_calls, sb_events, sb_max, sb_capped, &

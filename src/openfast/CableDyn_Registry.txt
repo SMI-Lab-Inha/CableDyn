@@ -362,6 +362,7 @@ typedef   ^       ^                    DbKi                t_commit          -  
 typedef   ^       ^                    DbKi                pred_t            -  -1 -   "load predictor: time of the committed solve before the last (negative: none), from which the coupled loads between supercycled solves are extrapolated" -
 typedef   ^       ^                    DbKi                pred_loads        {:} - -   "load predictor: the coupled forces (3 x ncp) and then moments (3 x ncp) of that solve" -
 typedef   ^       ^                    DbKi                fluid_held        {:} - -   "the held ambient-fluid fields of the last committed mooring step (velocity, acceleration, free-surface elevation, dynamic pressure at the line nodes), restored at a restart instead of re-sampled" -
+typedef   ^       ^                    DbKi                range_state       {:} - -   "the accumulated range graphs (LINES flag r) through the last committed mooring step, in double precision, restored at a restart" -
 
 ## ============================== Parameters ============================================================================================================================================
 typedef   ^       ParameterType        IntKi               nLineTypes     -     0    -   "number of line types"                       ""

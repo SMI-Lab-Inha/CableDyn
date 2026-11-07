@@ -2547,6 +2547,29 @@ def test_range_flag_and_range_start_follow_native_rules():
     assert DeckFile.from_text(_edit(_STATIC, ("1 2 1 -\n", "1 2 1 r\n"))).lines[0].tokens[3] == "r"
 
 
+def test_coupled_range_flag_and_range_start_take_the_host_clock():
+    # the host owns the run time: no deck TMax is needed, and one is not a bound on RangeStart
+    no_tmax = _edit(
+        _STATIC,
+        ("1 2 1 -\n", "1 2 1 r\n"),
+        ("50.0 WtrDpth\n", "50.0 WtrDpth\n100.0 RangeStart\n"),
+    )
+    deck = DeckFile.from_text(no_tmax, caller_driven=True)
+    assert deck.option("RangeStart").values == ("100.0",)
+    assert deck.lines[0].tokens[3] == "r"
+    deck_tmax = _edit(
+        _DYNAMIC, ("1 2 1 -\n", "1 2 1 r\n"), ("10.0 TMax\n", "10.0 TMax\n12.0 RangeStart\n")
+    )
+    with pytest.raises(DeckFormatError, match="exceeds TMax"):
+        DeckFile.from_text(deck_tmax)
+    assert DeckFile.from_text(deck_tmax, caller_driven=True).option("RangeStart").values == (
+        "12.0",
+    )
+    # the flag is still what RangeStart needs
+    with pytest.raises(DeckFormatError, match="needs a line with the LINES Outputs flag r"):
+        DeckFile.from_text(_edit(no_tmax, ("1 2 1 r\n", "1 2 1 -\n")), caller_driven=True)
+
+
 def test_fixtures_are_valid_decks():
     static = DeckFile.from_text(_STATIC)
     dynamic = DeckFile.from_text(_DYNAMIC)

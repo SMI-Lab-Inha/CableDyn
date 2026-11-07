@@ -27,7 +27,7 @@ MODULE CableDyn_RangeOutput
   !! length the deformed chord length from the grounded end to the TDP (0 while no node
   !! beyond the grounded end node is grounded).
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
-  USE CableDyn_PathIO, ONLY: CD_Open_Write
+  USE CableDyn_PathIO, ONLY: CD_Open_Write, CD_Path_Openable
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Floor, CD_Bathymetry_Is_Initialized, &
                                  CD_BATHY_OK
   USE CableDyn_SeabedContact, ONLY: CD_SEABED_CONTACT_BLEND
@@ -38,7 +38,8 @@ MODULE CableDyn_RangeOutput
   PUBLIC :: CD_RangeLine, CD_RangeSet
   PUBLIC :: CD_Range_Setup, CD_Range_End, CD_Range_Needs_Sample, CD_Range_Commit_Sample
   PUBLIC :: CD_Range_Clearance, CD_Range_TDP_Evaluate, CD_Range_TDP_Reference
-  PUBLIC :: CD_Range_Write_Files
+  PUBLIC :: CD_Range_Write_Files, CD_Range_Discard_Files
+  PUBLIC :: CD_Range_Has_Graph, CD_Range_Mirror_Size, CD_Range_Get_State, CD_Range_Set_State
   PUBLIC :: CD_Is_TDP_Channel, CD_Parse_TDP_Channel
 
   INTEGER, PARAMETER, PUBLIC :: CD_RANGE_OK = 0, CD_RANGE_BADINPUT = 1, CD_RANGE_SOLVEFAIL = 2
@@ -49,6 +50,9 @@ MODULE CableDyn_RangeOutput
   ! Components of the TDP channels (TDP<L>s, x, y, z, Lay, Exc, Grd).
   INTEGER, PARAMETER, PUBLIC :: CD_TDP_S = 1, CD_TDP_X = 2, CD_TDP_Y = 3, CD_TDP_Z = 4, CD_TDP_LAY = 5, &
                                 CD_TDP_EXC = 6, CD_TDP_GRD = 7, CD_TDP_N = 7
+
+  ! Leading reals of a line in CD_Range_Get_State: sample count, t_first, t_last, arc-ready flag.
+  INTEGER, PARAMETER :: RANGE_MIRROR_HEAD = 4
 
   TYPE :: CD_RangeLine
     INTEGER :: line_id = 0
@@ -195,6 +199,96 @@ CONTAINS
     IF (il < 1 .OR. il > SIZE(set%lines)) RETURN
     yes = set%lines(il)%want_range .OR. set%lines(il)%want_tdp
   END FUNCTION CD_Range_Needs_Sample
+
+  PURE LOGICAL FUNCTION CD_Range_Has_Graph(set) RESULT(yes)
+    !! True when some line of the set accumulates a range graph (LINES flag r), not only
+    !! touchdown channels.
+    TYPE(CD_RangeSet), INTENT(IN) :: set
+    INTEGER :: il
+    yes = .FALSE.
+    IF (.NOT. set%active) RETURN
+    DO il = 1, SIZE(set%lines)
+      IF (set%lines(il)%want_range) yes = .TRUE.
+    END DO
+  END FUNCTION CD_Range_Has_Graph
+
+  PURE INTEGER FUNCTION CD_Range_Mirror_Size(set) RESULT(n)
+    !! Reals of the accumulated range graphs (CD_Range_Get_State): per line with a range file,
+    !! the sample count, the first and last sample times, the arc-ready flag, the arc stations
+    !! and the three envelopes.
+    TYPE(CD_RangeSet), INTENT(IN) :: set
+    INTEGER :: il
+    n = 0
+    IF (.NOT. set%active) RETURN
+    DO il = 1, SIZE(set%lines)
+      IF (set%lines(il)%want_range) n = n + RANGE_MIRROR_HEAD + (1 + 3*CD_RQ_N)*set%lines(il)%nn
+    END DO
+  END FUNCTION CD_Range_Mirror_Size
+
+  PURE SUBROUTINE CD_Range_Get_State(set, state)
+    !! Copy the accumulated range graphs into state (CD_Range_Mirror_Size reals, every one
+    !! double precision whatever the host's output precision). The touchdown references and
+    !! the sample scratch are not part of it: a route rebuilds them.
+    TYPE(CD_RangeSet), INTENT(IN) :: set
+    REAL(wp), INTENT(OUT) :: state(:)
+    INTEGER :: il, j, k, nn
+
+    k = 0
+    IF (.NOT. set%active) RETURN
+    DO il = 1, SIZE(set%lines)
+      IF (.NOT. set%lines(il)%want_range) CYCLE
+      nn = set%lines(il)%nn
+      state(k + 1) = REAL(set%lines(il)%nsample, wp)
+      state(k + 2) = set%lines(il)%t_first
+      state(k + 3) = set%lines(il)%t_last
+      state(k + 4) = MERGE(CD_ONE, CD_ZERO, set%lines(il)%arc_ready)
+      k = k + RANGE_MIRROR_HEAD
+      state(k + 1:k + nn) = set%lines(il)%arc
+      k = k + nn
+      DO j = 1, nn
+        state(k + 1:k + CD_RQ_N) = set%lines(il)%vmin(:, j)
+        state(k + CD_RQ_N + 1:k + 2*CD_RQ_N) = set%lines(il)%vmax(:, j)
+        state(k + 2*CD_RQ_N + 1:k + 3*CD_RQ_N) = set%lines(il)%vsum(:, j)
+        k = k + 3*CD_RQ_N
+      END DO
+    END DO
+  END SUBROUTINE CD_Range_Get_State
+
+  SUBROUTINE CD_Range_Set_State(set, state, ErrStat, ErrMsg)
+    !! Reload the accumulated range graphs of CD_Range_Get_State, of a set sized alike.
+    TYPE(CD_RangeSet), INTENT(INOUT) :: set
+    REAL(wp), INTENT(IN) :: state(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: il, j, k, nn
+
+    ErrStat = CD_RANGE_OK
+    ErrMsg = ''
+    IF (SIZE(state) /= CD_Range_Mirror_Size(set)) THEN
+      ErrStat = CD_RANGE_BADINPUT
+      ErrMsg = 'CableDyn_RangeOutput: the saved range graphs do not match the lines of this run'
+      RETURN
+    END IF
+    k = 0
+    IF (.NOT. set%active) RETURN
+    DO il = 1, SIZE(set%lines)
+      IF (.NOT. set%lines(il)%want_range) CYCLE
+      nn = set%lines(il)%nn
+      set%lines(il)%nsample = NINT(state(k + 1))
+      set%lines(il)%t_first = state(k + 2)
+      set%lines(il)%t_last = state(k + 3)
+      set%lines(il)%arc_ready = state(k + 4) > CD_ZERO
+      k = k + RANGE_MIRROR_HEAD
+      set%lines(il)%arc = state(k + 1:k + nn)
+      k = k + nn
+      DO j = 1, nn
+        set%lines(il)%vmin(:, j) = state(k + 1:k + CD_RQ_N)
+        set%lines(il)%vmax(:, j) = state(k + CD_RQ_N + 1:k + 2*CD_RQ_N)
+        set%lines(il)%vsum(:, j) = state(k + 2*CD_RQ_N + 1:k + 3*CD_RQ_N)
+        k = k + 3*CD_RQ_N
+      END DO
+    END DO
+  END SUBROUTINE CD_Range_Set_State
 
   SUBROUTINE CD_Range_Clearance(set, r, clearance, ErrStat, ErrMsg)
     !! Vertical centreline clearance above the seabed, z - z_floor(x, y), per node.
@@ -560,13 +654,49 @@ CONTAINS
         WRITE (unit, '(A)', IOSTAT=ios) ''
         IF (ios /= 0) GOTO 910
       END DO
+      FLUSH (unit, IOSTAT=ios)
+      IF (ios /= 0) GOTO 910
       CLOSE (unit)
     END DO
     RETURN
+    ! a file that could not be completed does not stay behind looking like a finished graph
 910 ErrStat = CD_RANGE_BADINPUT
     ErrMsg = 'CableDyn_RangeOutput: cannot write range-graph output file: '//TRIM(path)
-    CLOSE (unit)
+    CLOSE (unit, STATUS='DELETE', IOSTAT=ios)
   END SUBROUTINE CD_Range_Write_Files
+
+  SUBROUTINE CD_Range_Discard_Files(set, out_root, ErrStat, ErrMsg)
+    !! Remove the <out_root>.Line<L>.range.out files of an earlier run, so a run that ends
+    !! before writing its own leaves none behind to be taken for its result. A file that
+    !! cannot be removed fails here, at the start of the run, not after it.
+    TYPE(CD_RangeSet), INTENT(IN) :: set
+    CHARACTER(*), INTENT(IN) :: out_root
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: il, unit, ios
+    CHARACTER(LEN(out_root) + 32) :: path
+    CHARACTER(16) :: id_text
+
+    ErrStat = CD_RANGE_OK
+    ErrMsg = ''
+    IF (.NOT. set%active) RETURN
+    DO il = 1, SIZE(set%lines)
+      IF (.NOT. set%lines(il)%want_range) CYCLE
+      WRITE (id_text, '(I0)') set%lines(il)%line_id
+      path = TRIM(out_root)//'.Line'//TRIM(id_text)//'.range.out'
+      IF (.NOT. CD_Path_Openable(TRIM(path), .FALSE.)) CYCLE   ! no such file
+      CALL CD_Open_Write(unit, TRIM(path), ios, status='OLD')
+      IF (ios == 0) CLOSE (unit, STATUS='DELETE', IOSTAT=ios)
+      IF (ios == 0) THEN
+        IF (CD_Path_Openable(TRIM(path), .FALSE.)) ios = 1
+      END IF
+      IF (ios /= 0) THEN
+        ErrStat = CD_RANGE_BADINPUT
+        ErrMsg = 'CableDyn_RangeOutput: cannot replace the range-graph output file of an earlier run: '//TRIM(path)
+        RETURN
+      END IF
+    END DO
+  END SUBROUTINE CD_Range_Discard_Files
 
   PURE LOGICAL FUNCTION CD_Is_TDP_Channel(lo) RESULT(yes)
     !! True for a name of the TDP family (lower case), valid or not: "tdp" then a digit.
