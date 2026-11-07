@@ -200,6 +200,7 @@ MODULE CableDyn_DeckDriver
   PUBLIC :: CD_Init_Deck_HermiteCable
   PUBLIC :: CD_Deck_VIV_Phase_Seed
   PUBLIC :: CD_Stiffener_Overlay
+  PUBLIC :: CD_Stiffener_Node_EI
   PUBLIC :: CD_Init_Deck_Aggregate
   PUBLIC :: CD_Deck_Query_dtM
   PUBLIC :: CD_End_Deck_Aggregate
@@ -3136,8 +3137,18 @@ CONTAINS
     END IF
     IF (ALLOCATED(deck_map)) CALL MOVE_ALLOC(deck_map, cable%deck_node)
     cable%azimuth_signed = ln%azi_signed
-    ! a stiffened line: the outputs report the cable's own share of the bend moment
-    IF (ALLOCATED(ei_cable)) cable%line%EI_line = ei_cable
+    ! a stiffened line: the outputs report the cable's own share of the bend moment, and take
+    ! the stiffness at the node on the final mesh (public node j is internal node nn + 1 - j, and
+    ! its End B side the internal element before the node)
+    IF (ALLOCATED(ei_cable)) THEN
+      cable%line%EI_line = ei_cable
+      BLOCK
+        REAL(wp), ALLOCATABLE :: ei_public(:, :)
+        ALLOCATE (ei_public(2, SIZE(l0) + 1))
+        CALL CD_Stiffener_Node_EI(ln%stf, l0(SIZE(l0):1:-1), ei_cable(SIZE(l0):1:-1), ei_public)
+        cable%line%EI_node = ei_public(2:1:-1, SIZE(l0) + 1:1:-1)
+      END BLOCK
+    END IF
     IF (ANY(ba > CD_ZERO)) THEN
       CALL CD_HFMF_Set_Axial_Damping(cable, ba, es, em)
       IF (es /= CD_HFMF_OK) THEN
@@ -11001,6 +11012,61 @@ CONTAINS
       diam(e) = SQRT(d_line**2 + sleeve_area/l0(e))
     END DO
   END SUBROUTINE CD_Stiffener_Overlay
+
+  SUBROUTINE CD_Stiffener_Node_EI(stf, l0, ei_line, ei_node)
+    !! The local bending stiffness EI(s) of a line with bend stiffeners (ln%stf columns) at its
+    !! nodes, in public order (End A first): ei_node(1, j) is the limit of EI(s) at node j from
+    !! the End A side, on element j - 1, and ei_node(2, j) from the End B side, on element j.
+    !! Each is the element's line-type stiffness ei_line (no sleeve) plus, where a stiffener row
+    !! covers the arc next to the node on that side, E pi/64 (OD^4 - ID^4) of that row at the
+    !! node. The per-element stiffness of CD_Stiffener_Overlay steps at every node of a taper;
+    !! these limits differ only where the section does: at the bare tip, between stiffener rows
+    !! of different end diameter, bore or modulus, and between line types of different EI. A
+    !! node within a billionth of an element length of a row end counts as on it, which absorbs
+    !! the round-off of summing the element lengths and decides only which row a limit reads.
+    !! The limit on the missing side of a line end stays 0.
+    REAL(wp), INTENT(IN) :: stf(:, :), l0(:), ei_line(:)
+    REAL(wp), INTENT(OUT) :: ei_node(:, :)
+    REAL(wp), PARAMETER :: PI_64 = 0.0490873852123405193_wp   ! pi/64
+    REAL(wp), PARAMETER :: ARC_TOL = 1.0e-9_wp
+    REAL(wp) :: arc(SIZE(l0) + 1, 2), a, tol, t, od
+    INTEGER :: ne, j, e, k, side, iend
+    LOGICAL :: tipward, covers
+
+    ne = SIZE(l0)
+    ! each node's arc from either end, summed from that end
+    arc(1, 1) = CD_ZERO
+    arc(ne + 1, 2) = CD_ZERO
+    DO j = 1, ne
+      arc(j + 1, 1) = arc(j, 1) + l0(j)
+      arc(ne + 1 - j, 2) = arc(ne + 2 - j, 2) + l0(ne + 1 - j)
+    END DO
+    ei_node = CD_ZERO
+    DO j = 1, ne + 1
+      DO side = 1, 2
+        e = j - 2 + side
+        IF (e < 1 .OR. e > ne) CYCLE
+        ei_node(side, j) = ei_line(e)
+        tol = ARC_TOL*l0(e)
+        DO k = 1, SIZE(stf, 2)
+          iend = NINT(stf(1, k))
+          a = arc(j, iend)
+          ! does this side of the node look toward the stiffener's tip, or toward its root?
+          tipward = (iend == 1) .EQV. (side == 2)
+          IF (tipward) THEN
+            covers = a >= stf(2, k) - tol .AND. a < stf(3, k) - tol
+          ELSE
+            covers = a > stf(2, k) + tol .AND. a <= stf(3, k) + tol
+          END IF
+          IF (.NOT. covers) CYCLE
+          t = MIN(CD_ONE, MAX(CD_ZERO, (a - stf(2, k))/(stf(3, k) - stf(2, k))))
+          od = (CD_ONE - t)*stf(4, k) + t*stf(5, k)
+          ei_node(side, j) = ei_line(e) + stf(7, k)*PI_64*(od**4 - stf(6, k)**4)
+          EXIT
+        END DO
+      END DO
+    END DO
+  END SUBROUTINE CD_Stiffener_Node_EI
 
   SUBROUTINE remap_elem_by_reference_arc(a, l0_parent, l0_child)
     !! Map a piecewise-constant per-element field from a parent reference mesh to

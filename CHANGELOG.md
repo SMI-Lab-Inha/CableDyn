@@ -8,6 +8,25 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Nodal curvature under a tapered bend stiffener: a node took the stiffness of the softer
+  neighbouring element, which steps at every node of a taper, and so overstated the curvature
+  by about `h |EI'| / (2 EI)`. It now takes the stiffness `EI(s)` at the node, and the softer
+  side only at a real step of the section (the bare tip, stiffener rows that do not match, two
+  line types).
+
+### Upgrading
+
+- `Curv`, `CurvX`, `CurvY`, `BendMom` and `StfMom`, and the `Curvature` and `BendMoment` of the
+  static profile and the range graphs, change at nodes inside a bend stiffener. Curvature and
+  `BendMom` fall by that first-order error, on `lazy_wave_bend_stiffener.dat` by about 5 % on
+  0.2 m elements, 4 % on 0.15 m, 2 % on 0.1 m and 0.7 % on 0.05 m; `StfMom` rises by the same
+  moment, so the two still add up to the section moment. A line end on a conical root
+  changes likewise, and a step between rows on a taper now compares the two stiffnesses at the
+  node. Positions, forces, the section moment, `OutputRecovery element`, the element profile
+  and every node outside a stiffener are unchanged.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added

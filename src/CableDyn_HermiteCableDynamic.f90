@@ -238,6 +238,12 @@ MODULE CableDyn_HermiteCableDynamic
     ! bend stiffener (STIFFENERS), and equal to EI on every element without one. The bend
     ! moment outputs report the cable's share EI_line kappa and the sleeve's the rest.
     REAL(wp), ALLOCATABLE :: EI_line(:)
+    ! On a line with STIFFENERS, the local bending stiffness EI(s) at each node, one value per
+    ! side: EI_node(1, j) the limit from element j - 1, EI_node(2, j) from element j, the same
+    ! number where EI(s) is continuous. A one-per-element EI steps at every node of a taper
+    ! without the section doing so, so the node outputs read these (node_values). Unallocated on
+    ! a line without a stiffener, whose node outputs read EI per element.
+    REAL(wp), ALLOCATABLE :: EI_node(:, :)
     ! Optional axial Kelvin-Voigt damping. BA is the axial constitutive dashpot
     ! coefficient [N s] after resolving the deck's direct-BA / negative-zeta convention.
     ! It is integrated over reference arc length with the same Hermite kinematics and
@@ -6588,7 +6594,8 @@ CONTAINS
     !!
     !! tension(j) = t_j . F_j (t_j the unit nodal tangent; a line end reports the end force
     !! magnitude of CD_HermiteCable_Dyn_End_Force), the section moment M_j = |m_j - (m_j . t_j) t_j|,
-    !! curvature(j) = M_j/EI, the larger of the two sides at a section junction, and
+    !! curvature(j) = M_j/EI, the larger of the two sides at a section junction (under a bend
+    !! stiffener EI is the stiffness at the node, not the element's; see node_values), and
     !! bend_moment(j) the cable's own share EI_line curvature (M_j itself where no bend stiffener
     !! sleeves the element; see node_values) (the
     !! exact geometric trace on an element without bending stiffness, or with EI below ei_resolve,
@@ -7008,6 +7015,13 @@ CONTAINS
     !! sleeve_moment the rest, the share a stiffener sleeve carries. curvature_vector is the
     !! curvature vector kappa n (solve frame, toward the centre of curvature) of the side that
     !! gives curvature: the normal part of the section moment over EI, or the exact trace's.
+    !!
+    !! The EI of a side is the element's, or on a stiffened line the limit of EI(s) at the node
+    !! from that side (EI_node): the element's compliance average stands for its whole length
+    !! and, under a taper, steps at every node although the section does not, so the softer side
+    !! would overstate the curvature by about h |EI'|/(2 EI). The two limits differ only at a
+    !! real step of the section (the bare tip, a junction of two line types, a step between
+    !! stiffener rows), where the larger-side rule still applies.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(IN) :: fm(3), mm(3), fp(3), mp(3)
@@ -7015,7 +7029,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: sleeve_moment, curvature_vector(3)
-    REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace, section_moment, cable_moment, m_perp(3), kv(3)
+    REAL(wp) :: t(3), f(3), m(3), fend(3), qe(12), trace, section_moment, cable_moment, m_perp(3), kv(3), ei_side
     INTEGER :: e, side
     CHARACTER(200) :: em2
 
@@ -7043,14 +7057,18 @@ CONTAINS
     DO side = 0, 1
       e = node - 1 + side
       IF (e < 1 .OR. e > model%ne) CYCLE
-      IF (model%EI(e) > CD_ZERO .AND. model%EI(e) >= model%ei_resolve) THEN
-        IF (PRESENT(curvature_vector) .AND. section_moment/model%EI(e) > curvature) &
-          curvature_vector = m_perp/model%EI(e)
-        curvature = MAX(curvature, section_moment/model%EI(e))
-        IF (ABS(model%EI_line(e) - model%EI(e)) <= CD_ZERO) THEN
+      ei_side = model%EI(e)
+      IF (ALLOCATED(model%EI_node)) THEN
+        IF (model%EI_node(side + 1, node) > CD_ZERO) ei_side = model%EI_node(side + 1, node)
+      END IF
+      IF (model%EI(e) > CD_ZERO .AND. ei_side >= model%ei_resolve) THEN
+        IF (PRESENT(curvature_vector) .AND. section_moment/ei_side > curvature) &
+          curvature_vector = m_perp/ei_side
+        curvature = MAX(curvature, section_moment/ei_side)
+        IF (ABS(model%EI_line(e) - ei_side) <= CD_ZERO) THEN
           cable_moment = MAX(cable_moment, section_moment)
         ELSE
-          cable_moment = MAX(cable_moment, model%EI_line(e)*(section_moment/model%EI(e)))
+          cable_moment = MAX(cable_moment, model%EI_line(e)*(section_moment/ei_side))
         END IF
       ELSE
         CALL gather_elem(model, e, qe)
@@ -8075,6 +8093,7 @@ CONTAINS
     IF (ALLOCATED(model%EA)) DEALLOCATE (model%EA)
     IF (ALLOCATED(model%EI)) DEALLOCATE (model%EI)
     IF (ALLOCATED(model%EI_line)) DEALLOCATE (model%EI_line)
+    IF (ALLOCATED(model%EI_node)) DEALLOCATE (model%EI_node)
     IF (ALLOCATED(model%rho_a)) DEALLOCATE (model%rho_a)
     IF (ALLOCATED(model%w)) DEALLOCATE (model%w)
     IF (ALLOCATED(model%BA)) DEALLOCATE (model%BA)

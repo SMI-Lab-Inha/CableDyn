@@ -91,7 +91,11 @@ sleeve's bending stiffness, mass, buoyancy and drag to the elements it covers
   the hang-off direction. A pinned end carries no moment, so the stiffener then takes none;
 - **the mesh under the stiffener.** One stiffness per element: split the section at the
   stiffener tip and mesh the part under it with elements of about 0.1–0.2 m, at least ten over
-  the stiffener (the driver notes fewer);
+  the stiffener (the driver notes fewer). The node outputs take the stiffness at the node, so
+  on that mesh the curvature follows a much finer one within about 0.2 %
+  (``lazy_wave_bend_stiffener.dat``), and shortening the elements further gains little.
+  ``OutputRecovery element`` and the element profile are the exception: they carry the
+  stiffness step of the element, about 3 % on 0.1 m elements of a steep taper;
 - **the material.** The sleeve is linear elastic. Polyurethane stiffness depends on temperature
   and strain rate; use the modulus for the design temperature and check the result at the
   ends of its range.

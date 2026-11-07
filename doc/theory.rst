@@ -178,11 +178,25 @@ part of the element a segment covers. With these one-per-element values the tape
 by the mesh, as in a segmented line model; the driver notes a stiffener that spans fewer than
 ten elements.
 
-The recovered section moment :math:`M` (:ref:`theory-output-recovery`) is shared in proportion
-to the stiffnesses, since cable and sleeve take the same curvature :math:`\kappa = M/EI_e`: the
-cable carries :math:`EI_c\,\kappa`, reported as ``BendMom``, and the sleeve
-:math:`(EI_e - EI_c)\,\kappa`, reported as ``StfMom``. At a node between a covered and a bare
-element the side of the larger curvature, the bare one, gives the values. The deflection angle
+The node outputs do not use :math:`EI_e`. It stands for the whole element, so under a taper it
+steps at every node although the section does not, and the softer side would overstate the
+curvature by about :math:`h\lvert EI'\rvert/(2 EI)`, first order in the element length
+:math:`h`. A node takes :math:`EI(s)` at its own arc instead, from the stiffener rows, one limit
+from either side. The section moment :math:`M` (:ref:`theory-output-recovery`) is continuous and
+second-order accurate, so the curvature :math:`\kappa = M/EI(s)` is too. Cable and sleeve take
+that curvature and share the moment in proportion to the stiffnesses: the cable carries
+:math:`EI_c\,\kappa`, reported as ``BendMom``, and the sleeve
+:math:`(EI(s) - EI_c)\,\kappa`, reported as ``StfMom``.
+
+The two limits differ only at a real step of the section: at the bare tip, between stiffener
+rows whose end diameter, bore or modulus do not match, and between line types of different
+:math:`EI`. There the side of the larger curvature gives the values, the bare one at the tip;
+no threshold on the stiffness ratio is involved. A node past a tip inside an element is bare.
+``OutputRecovery element`` and the element profile report the curvature of the element
+interpolation instead, which keeps the one-per-element :math:`EI_e` and with it the first-order
+step: 1.7 % at 2 m along the stiffener below on 0.05 m elements.
+
+The deflection angle
 ``FairDefl``/``AnchDefl`` is :math:`\arccos(\hat{\mathbf F}\cdot\hat{\mathbf d})` between the
 end force :math:`\mathbf F` and the direction :math:`\mathbf d` the end connection holds (into
 the line), the angle through which the stiffener turns the cable.
@@ -192,10 +206,16 @@ The planar check ``driver_bend_stiffener`` compares a hang-off clamped through a
 collocation solution of the extensible elastica
 :math:`\theta' = M/EI(s)`, :math:`M' = -(1 + \varepsilon)(\cos\theta\,n_z - \sin\theta\,n_x)`,
 :math:`\mathbf n' = (0, w(s))`: on 0.05 m elements the cable's moment over the stiffener and
-3 m beyond follows the elastica within 0.8 % of its root value, cable and sleeve moments add up
+3 m beyond follows the elastica within 0.2 % of its root value, cable and sleeve moments add up
 to the section moment within 0.2 % at the root, the deflection angle agrees within 0.003°, and
-the node positions within 1 mm. On the same hang-off, the curvature along the stiffener follows
-OrcaFlex 11.6d with its stiffener given as a line attachment within 0.8 % of the root curvature.
+the node positions within 1 mm. Node by node, the curvature and the cable's moment follow the
+elastica within 0.24 % of their local value on 0.1 m elements and 0.18 % on 0.05 m, 0.97 % on
+0.2 m. The local value is floored at 0.1 % of the root curvature, as the curvature changes sign
+near the tip, and part of the difference is not mesh error: the elastica takes the moment
+proportional to the rotation per unstretched length, the element energy the curvature of the
+stretched line, a difference of order :math:`T/EA` that is 0.12 % at this root. On the same
+hang-off, the curvature along the stiffener follows OrcaFlex 11.6d with its stiffener given as a
+line attachment within 0.6 % of the root curvature.
 
 .. _theory-output-recovery:
 
@@ -277,7 +297,8 @@ it, and its tangent rows are :math:`\mathbf{m}` there. An interior node reports
    \kappa_j = M_j / EI ,
 
 with :math:`\mathbf{t}_j` the unit nodal tangent, :math:`\mathbf{m}_j` the mean of the two
-one-sided values, and at a section junction the larger of :math:`M_j/EI` on the two sides. The
+one-sided values, and at a section junction the larger of :math:`M_j/EI` on the two sides (under
+a bend stiffener :math:`EI` is the stiffness at the node, :ref:`theory-bend-stiffeners`). The
 recovered moment carries an error that does not depend on :math:`EI`, of the order of the largest
 consistent-load moment :math:`w L_0^2/12` of an element (a section junction leaves a jump of that
 order between the two one-sided moments), so over a soft section dividing by :math:`EI` amplifies

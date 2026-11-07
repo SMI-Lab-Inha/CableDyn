@@ -11,15 +11,21 @@ PROGRAM test_bend_stiffener
   !!      for bit.
   !!   2. A cone: the element values follow a 20 000-interval midpoint integration of the same
   !!      averages to 1e-10.
-  !!   3. Deck grammar: malformed rows, a stiffener on an EI = 0 line and stiffeners longer than
+  !!   3. The stiffness at the nodes (CD_Stiffener_Node_EI) against closed forms: both limits are
+  !!      the same number where EI(s) is continuous (a cone, a junction of rows that match) and
+  !!      differ only at a real step: the bare tip, rows that do not match, two line types. A tip
+  !!      inside an element leaves the node past it bare; End B mirrors End A; a tip on a node
+  !!      whose arc sums off it by round-off is still on it.
+  !!   4. Deck grammar: malformed rows, a stiffener on an EI = 0 line and stiffeners longer than
   !!      the line fail closed by name; on a stock-order LINES row the stiffener sleeves the same
   !!      physical end, and the static profile is the native deck's; StfMom on a line without a
   !!      stiffener and AnchDefl at a pinned end fail closed, FairDefl at the clamped end runs.
-  !!   4. Coupled route (the OpenFAST aggregate): the cable carries the stiffened root element,
-  !!      and its initial fairlead load is the standalone static solve's.
+  !!   5. Coupled route (the OpenFAST aggregate): the cable carries the stiffened root element and
+  !!      the node stiffness on the two sides of the tip, its initial fairlead load is the
+  !!      standalone static solve's, and a line without a stiffener has no node stiffness.
   !! The static equilibrium against the planar elastica is tests/check_bend_stiffener.py.
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Stiffener_Overlay
+  USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK, CD_Stiffener_Overlay, CD_Stiffener_Node_EI
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_End, CD_AGG_OK
   IMPLICIT NONE
@@ -30,6 +36,7 @@ PROGRAM test_bend_stiffener
 
   CALL case_cylinder()
   CALL case_cone()
+  CALL case_node_stiffness()
   CALL case_grammar()
   CALL case_coupled()
 
@@ -135,6 +142,65 @@ CONTAINS
     CALL require(ei(5) == EI_C .AND. mpl(5) == M_C .AND. dv(5) == D_C, &
                  'cone: bare elements unchanged')
   END SUBROUTINE case_cone
+
+  SUBROUTINE case_node_stiffness()
+    !! Ten 1 m elements, line type EI_C on the first six and 2 EI_C beyond, under a cylinder over
+    !! 0-2 m (OD 0.6), a cone over 2-5 m (0.6 -> 0.3) and a cone over 5-7.5 m (0.25 -> 0.22),
+    !! whose tip lies inside element 8.
+    REAL(wp), PARAMETER :: EI_C = 2.0e4_wp, ID = 0.2_wp, EMOD = 5.0e7_wp, RHO = 1150.0_wp
+    REAL(wp), PARAMETER :: TOL = 1.0e-13_wp
+    REAL(wp) :: stf(8, 3), l0(10), eic(10), en(2, 11), eb(2, 11), od7, tip(8, 1), l1(40), e1(40), n1(2, 41)
+    INTEGER :: j
+    l0 = 1.0_wp
+    eic(1:6) = EI_C
+    eic(7:10) = 2.0_wp*EI_C
+    stf(:, 1) = [1.0_wp, 0.0_wp, 2.0_wp, 0.6_wp, 0.6_wp, ID, EMOD, RHO]
+    stf(:, 2) = [1.0_wp, 2.0_wp, 5.0_wp, 0.6_wp, 0.3_wp, ID, EMOD, RHO]
+    stf(:, 3) = [1.0_wp, 5.0_wp, 7.5_wp, 0.25_wp, 0.22_wp, ID, EMOD, RHO]
+    CALL CD_Stiffener_Node_EI(stf, l0, eic, en)
+    CALL require(en(1, 1) == 0.0_wp .AND. en(2, 11) == 0.0_wp, 'node EI: no limit beyond a line end')
+    CALL require(close_rel(en(2, 1), EI_C + sleeve(0.6_wp), TOL), 'node EI: the root')
+    CALL require(en(1, 3) == en(2, 3) .AND. close_rel(en(1, 3), EI_C + sleeve(0.6_wp), TOL), &
+                 'node EI: rows that match are continuous, to the bit')
+    CALL require(en(1, 4) == en(2, 4) .AND. close_rel(en(1, 4), EI_C + sleeve(0.5_wp), TOL), &
+                 'node EI: EI(s) at a node inside a cone')
+    CALL require(close_rel(en(1, 6), EI_C + sleeve(0.3_wp), TOL) .AND. &
+                 close_rel(en(2, 6), EI_C + sleeve(0.25_wp), TOL), &
+                 'node EI: a step between rows keeps both sides')
+    od7 = 0.25_wp + 0.4_wp*(0.22_wp - 0.25_wp)
+    CALL require(close_rel(en(1, 7), EI_C + sleeve(od7), TOL) .AND. &
+                 close_rel(en(2, 7), 2.0_wp*EI_C + sleeve(od7), TOL), &
+                 'node EI: a junction of line types keeps both sides')
+    CALL require(en(1, 9) == 2.0_wp*EI_C .AND. en(2, 9) == 2.0_wp*EI_C, &
+                 'node EI: the node past a tip inside an element is bare')
+    CALL require(en(1, 11) == 2.0_wp*EI_C, 'node EI: the bare line end')
+    ! the same stiffener from End B, on the mirrored line: the limits mirror, each side swapping
+    stf(1, :) = 2.0_wp
+    CALL CD_Stiffener_Node_EI(stf, l0, eic(10:1:-1), eb)
+    DO j = 1, 11
+      CALL require(close_rel(eb(1, 12 - j), en(2, j), TOL) .AND. close_rel(eb(2, 12 - j), en(1, j), TOL), &
+                   'node EI: End B mirrors End A')
+    END DO
+    ! a section without bending stiffness: the sleeve alone, and nothing past it
+    CALL CD_Stiffener_Node_EI(stf(:, 1:1), l0, [(0.0_wp, j=1, 10)], eb)
+    CALL require(close_rel(eb(1, 10), sleeve(0.6_wp), TOL) .AND. eb(1, 9) == 0.0_wp .AND. eb(2, 1) == 0.0_wp, &
+                 'node EI: an EI = 0 section takes the sleeve alone')
+    ! a 3 m tip off node 31 of forty 0.1 m elements by round-off, either way, is on the node
+    l1 = 0.1_wp
+    e1 = EI_C
+    DO j = -1, 1, 2
+      tip(:, 1) = [1.0_wp, 0.0_wp, 3.0_wp*(1.0_wp + REAL(j, wp)*1.0e-14_wp), 0.5_wp, 0.3_wp, ID, EMOD, RHO]
+      CALL CD_Stiffener_Node_EI(tip, l1, e1, n1)
+      CALL require(close_rel(n1(1, 31), EI_C + sleeve(0.3_wp), 1.0e-12_wp) .AND. n1(2, 31) == EI_C, &
+                   'node EI: a tip on a node is a step there, whatever the round-off of the arc')
+    END DO
+  END SUBROUTINE case_node_stiffness
+
+  PURE REAL(wp) FUNCTION sleeve(od)
+    !! Bending stiffness of the 50 MPa sleeve of case_node_stiffness, bored to 0.2 m.
+    REAL(wp), INTENT(IN) :: od
+    sleeve = 5.0e7_wp*PI/64.0_wp*(od**4 - 0.2_wp**4)
+  END FUNCTION sleeve
 
   SUBROUTINE write_deck(path, stiffener_rows, ei, stock, channel)
     !! A 60 m cable clamped horizontal at a 20 m deep hang-off and fixed 30 m lower; stock: the
@@ -257,6 +323,7 @@ CONTAINS
     CALL require(na == nb .AND. na > 0, 'grammar: both decks write a static profile')
     IF (na == nb .AND. na > 0) THEN
       CALL require(MAXVAL(ABS(pa(2:4, :na) - pb(2:4, :nb))) < 1.0e-6_wp .AND. &
+                   MAXVAL(ABS(pa(6, :na) - pb(6, :nb))) < 1.0e-6_wp*MAXVAL(ABS(pa(6, :na))) .AND. &
                    MAXVAL(ABS(pa(7, :na) - pb(7, :nb))) < 1.0e-6_wp*MAXVAL(ABS(pa(7, :na))), &
                    'grammar: on a stock-order row the stiffener sleeves the same physical end')
     END IF
@@ -309,14 +376,16 @@ CONTAINS
 
   SUBROUTINE case_coupled()
     !! The native deck of case_grammar on the coupled route: its root element, wholly inside the
-    !! 0.5 m cylindrical root (OD 0.6 m, ID 0.2 m), has EI_c + E pi/64 (OD^4 - ID^4), and the
-    !! initial fairlead load matches the standalone static fairlead tension.
+    !! 0.5 m cylindrical root (OD 0.6 m, ID 0.2 m), has EI_c + E pi/64 (OD^4 - ID^4), the 5 m tip
+    !! is a step between its two node limits, and the initial fairlead load matches the
+    !! standalone static fairlead tension. Without a stiffener the cable has no node stiffness.
     TYPE(CD_AGG_ModuleType), SAVE :: agg
     REAL(wp), PARAMETER :: EI_ROOT = 2.0e4_wp + 5.0e7_wp*PI/64.0_wp*(0.6_wp**4 - 0.2_wp**4)
+    REAL(wp), PARAMETER :: EI_TIP = 2.0e4_wp + 5.0e7_wp*PI/64.0_wp*(0.22_wp**4 - 0.2_wp**4)
     REAL(wp) :: r0(3, 1), vel(3, 1), acc(3, 1), load(3, 1)
     REAL(wp), ALLOCATABLE :: prof(:, :)
     CHARACTER(512) :: em
-    INTEGER :: es, ne, n
+    INTEGER :: es, ne, n, tip
     CALL CD_AGG_Init_From_Deck(agg, 'stf_native.dat', 0.05_wp, es, em)
     CALL require(es == CD_AGG_OK, 'coupled: the stiffener deck initializes: '//TRIM(em))
     IF (es /= CD_AGG_OK) RETURN
@@ -324,10 +393,25 @@ CONTAINS
     ne = SIZE(agg%cables(1)%line%EI)
     CALL require(close_rel(agg%cables(1)%line%EI(ne), EI_ROOT, 1.0e-12_wp), &
                  'coupled: the root element carries the stiffener')
+    ! the tip, 5 m from End A on 0.5 m elements: the internal element before the node is bare
+    tip = ne + 1 - 10
+    CALL require(ALLOCATED(agg%cables(1)%line%EI_node), 'coupled: the cable has the node stiffness')
+    IF (ALLOCATED(agg%cables(1)%line%EI_node)) THEN
+      CALL require(close_rel(agg%cables(1)%line%EI_node(1, ne + 1), EI_ROOT, 1.0e-12_wp), &
+                   'coupled: the stiffness at the root node, on its element')
+      CALL require(agg%cables(1)%line%EI_node(1, tip) == 2.0e4_wp .AND. &
+                   close_rel(agg%cables(1)%line%EI_node(2, tip), EI_TIP, 1.0e-12_wp), &
+                   'coupled: the two limits at the tip, each on its own side')
+    END IF
     CALL CD_AGG_GetMovingPointMesh(agg, r0, vel, acc, load, es, em)
     CALL read_static('stf_native.static.out', prof, n)
     IF (n > 0) CALL require(close_rel(NORM2(load(:, 1)), prof(5, 1), 1.0e-6_wp), &
                             'coupled: the initial fairlead load is the standalone static tension')
+    CALL CD_AGG_End(agg, es, em)
+    CALL CD_AGG_Init_From_Deck(agg, 'stf_none.dat', 0.05_wp, es, em)
+    CALL require(es == CD_AGG_OK, 'coupled: the deck without a stiffener initializes: '//TRIM(em))
+    IF (es /= CD_AGG_OK) RETURN
+    CALL require(.NOT. ALLOCATED(agg%cables(1)%line%EI_node), 'coupled: no stiffener, no node stiffness')
     CALL CD_AGG_End(agg, es, em)
   END SUBROUTINE case_coupled
 

@@ -19,7 +19,7 @@ first 8 m and 1 m beyond, as in the check. The CSV holds the static curvature of
 along its first 8 m (arc from End A, curvature in 1/m).
 
 Result (OrcFxAPI 11.6d): root curvature 0.4522 /m (CableDyn 0.4523), cable bend moment at the
-root 9.04 kN.m; CableDyn's curvature follows the profile within 0.8 % of the root curvature.
+root 9.04 kN.m; CableDyn's curvature follows the profile within 0.6 % of the root curvature.
 OrcaFlex SI (m, te, kN).
 
 Usage: python validation/scripts/orcaflex_bend_stiffener.py [output.csv]
