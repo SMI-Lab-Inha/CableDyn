@@ -1131,6 +1131,17 @@ CONTAINS
     CALL require(.NOT. there, 'range-discard:line1-removed')
     INQUIRE (FILE='agg_discard.Line2.range.out', EXIST=there)
     CALL require(.NOT. there, 'range-discard:line2-removed')
+    ! a static solve that fails: the deck parsed, the equilibrium is not found
+    CALL write_coupled_rigid6_deck('agg_discard_st.dat', 0.0_wp, 0.0_wp, .FALSE., overloaded=.TRUE.)
+    CALL seed_range_file('agg_discard.Line1.range.out')
+    CALL seed_range_file('agg_discard.Line2.range.out')
+    CALL CD_AGG_Init_From_Deck(a, 'agg_discard_st.dat', 0.05_wp, es, em, run_tmax=0.05_wp, range_files=.TRUE., &
+                               range_discard_root='agg_discard')
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'equilibrium not found') > 0, 'range-discard:statics-fail: '//TRIM(em))
+    INQUIRE (FILE='agg_discard.Line1.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:statics-fail-line1-removed')
+    INQUIRE (FILE='agg_discard.Line2.range.out', EXIST=there)
+    CALL require(.NOT. there, 'range-discard:statics-fail-line2-removed')
     ! a deck that does not parse
     OPEN (NEWUNIT=u, FILE='agg_discard_bad.dat', STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     WRITE (u, '(A)') 'not a deck'
@@ -1911,17 +1922,21 @@ CONTAINS
     DEALLOCATE (xyz, fv, fa, wl)
   END SUBROUTINE case_coupled_point3_fluid
 
-  SUBROUTINE write_coupled_rigid6_deck(path, cda, ca, extra_free, deck_pose)
+  SUBROUTINE write_coupled_rigid6_deck(path, cda, ca, extra_free, deck_pose, overloaded)
     !! A submerged Rigid6 body hung between a Fixed anchor and a Coupled fairlead by two
     !! chain lines (still water). cda/ca parametrise the body fluid coefficients (0/0 is the
     !! supported pure-inertia+buoyancy+restoring case); extra_free adds a stray Free point to
     !! exercise the scope guard; deck_pose starts the body at its deck pose (bodyIC deck)
-    !! instead of its static equilibrium.
+    !! instead of its static equilibrium; overloaded flags both lines r and makes the body far too
+    !! heavy for them, so that the static equilibrium is not found.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: cda, ca
     LOGICAL, INTENT(IN) :: extra_free
-    LOGICAL, INTENT(IN), OPTIONAL :: deck_pose
+    LOGICAL, INTENT(IN), OPTIONAL :: deck_pose, overloaded
     INTEGER :: u, ios
+    LOGICAL :: heavy
+    heavy = .FALSE.
+    IF (PRESENT(overloaded)) heavy = overloaded
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE', IOSTAT=ios)
     WRITE (u, '(A)') 'coupled rigid6 body deck'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -1932,8 +1947,13 @@ CONTAINS
     WRITE (u, '(A)') 'ID Type X Y Z Rot1 Rot2 Rot3 Mass Vol C33 C44 C55 CdA Ca Ixx Iyy Izz'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (deg) (deg) (deg) (kg) (m3) (N/m) (Nm/rad) (Nm/rad) (m2) (-) '// &
       '(kgm2) (kgm2) (kgm2)'
-    WRITE (u, '(A,F6.3,1X,F6.3,A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 ', &
-      cda, ca, ' 20.0 20.0 20.0'
+    IF (heavy) THEN
+      WRITE (u, '(A,F6.3,1X,F6.3,A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 1.0e7 0.05 0.0 100.0 100.0 ', &
+        cda, ca, ' 20.0 20.0 20.0'
+    ELSE
+      WRITE (u, '(A,F6.3,1X,F6.3,A)') '1 Rigid6 0.0 0.0 -4.0 0.0 0.0 0.0 100.0 0.05 0.0 100.0 100.0 ', &
+        cda, ca, ' 20.0 20.0 20.0'
+    END IF
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
@@ -1944,8 +1964,13 @@ CONTAINS
     WRITE (u, '(A)') '--- LINES ---'
     WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
     WRITE (u, '(A)') '(-) (-) (-) (-)'
-    WRITE (u, '(A)') '1 2 1 -'
-    WRITE (u, '(A)') '2 3 2 -'
+    IF (heavy) THEN
+      WRITE (u, '(A)') '1 2 1 r'
+      WRITE (u, '(A)') '2 3 2 r'
+    ELSE
+      WRITE (u, '(A)') '1 2 1 -'
+      WRITE (u, '(A)') '2 3 2 -'
+    END IF
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
