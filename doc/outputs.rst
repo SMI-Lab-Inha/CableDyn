@@ -463,6 +463,8 @@ column, for every line of the file (``0`` on a line without torsion):
   mode (``PolarShare`` above 0.5) is scaled to a unit largest ``dTwist`` instead, and its
   translations are then in metres per radian of that twist.
 
+:func:`cabledyn.read_output` reads both tables into a :class:`cabledyn.NaturalModes`.
+
 Per-rod files (``RODS`` ``Outputs`` flag)
 -----------------------------------------
 

@@ -24,6 +24,7 @@ from cabledyn.errors import (
 from cabledyn.results import (
     LineNodeHistory,
     LineSegmentHistory,
+    NaturalModes,
     OutputTable,
     StaticProfile,
     TimeHistory,
@@ -174,6 +175,9 @@ class DriverResult:
         Captured standard error of the driver.
     returncode : int
         Native exit code; always ``0`` for a result.
+    modes_output : pathlib.Path | None
+        Natural frequencies and mode shapes ``<root>.modes.out``, or ``None``
+        if not written.
     """
 
     executable: Path
@@ -187,6 +191,7 @@ class DriverResult:
     stdout: str
     stderr: str
     returncode: int
+    modes_output: Path | None = None
 
     def read_main(self) -> TimeHistory:
         """Read the primary channel history again from disk.
@@ -228,6 +233,29 @@ class DriverResult:
         table = read_output(self.static_output)
         if not isinstance(table, StaticProfile):
             raise OutputFormatError(f"{self.static_output}: static output is not a line profile")
+        return table
+
+    def read_modes(self) -> NaturalModes:
+        """Read the natural modes, raising if this run did not write them.
+
+        Returns
+        -------
+        NaturalModes
+            The frequency table of each line, with the mode shapes in its
+            ``shapes`` attribute.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the run did not write a modal output (the deck sets no ``nModes``).
+        OutputFormatError
+            If the file is malformed or not a modal output.
+        """
+        if self.modes_output is None:
+            raise FileNotFoundError("the run did not produce a .modes.out file")
+        table = read_output(self.modes_output)
+        if not isinstance(table, NaturalModes):
+            raise OutputFormatError(f"{self.modes_output}: modal output has no modal tables")
         return table
 
     @property
@@ -646,6 +674,7 @@ class CableDynDriver:
             ) from exc
         static_candidate = Path(f"{root}.static.out")
         elements_candidate = Path(f"{root}.elements.out")
+        modes_candidate = Path(f"{root}.modes.out")
         line_outputs = _auxiliary_outputs(root, "Line")
         rod_outputs = _auxiliary_outputs(root, "Rod")
         return DriverResult(
@@ -660,4 +689,5 @@ class CableDynDriver:
             stdout=completed.stdout,
             stderr=completed.stderr,
             returncode=completed.returncode,
+            modes_output=modes_candidate if modes_candidate.is_file() else None,
         )

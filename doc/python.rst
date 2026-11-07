@@ -74,8 +74,9 @@ Pass the executable explicitly for the most reproducible setup:
    fairlead_tension = history.column("FairTen1")  # N
 
 ``result`` retains the executable, absolute deck and output paths, captured ``stdout`` and
-``stderr``, return code, the optional static profile and finite-EI element table
-(``elements_output``), and all requested per-line and per-rod outputs. A result is returned only
+``stderr``, return code, the optional static profile, finite-EI element table
+(``elements_output``) and modal table (``modes_output``, read with ``result.read_modes()``), and
+all requested per-line and per-rod outputs. A result is returned only
 for a fully converged analysis: the driver exits non-zero whenever a nonlinear step fails.
 Arrays returned by the parser are read-only so post-processing cannot accidentally mutate the
 recorded result.
@@ -135,7 +136,8 @@ archive the native diagnostic.
 Typed result objects
 --------------------
 
-:func:`cabledyn.read_output` accepts main histories, static profiles, and per-line tables. It
+:func:`cabledyn.read_output` accepts main histories, static profiles, per-line tables, and modal
+tables. It
 recognises both current main output (title + channel row) and tables with a units row in the
 style of OpenFAST (maintained by NLR, the National Laboratory of the Rockies, formerly NREL):
 
@@ -160,6 +162,41 @@ and a generic :class:`cabledyn.OutputTable` for static per-line node or segment 
 :class:`cabledyn.LineSegmentHistory`, respectively. Arrays are read-only. Time must be finite and
 strictly increasing; line and node identifiers must be positive integers; and arc length must be
 monotonic within each line.
+
+Natural modes
+~~~~~~~~~~~~~
+
+A deck that sets ``nModes`` writes ``<root>.modes.out``, which holds two tables (see
+:doc:`outputs`). :func:`cabledyn.read_output` reads both into one
+:class:`cabledyn.NaturalModes`: the object is the frequency table, and its ``shapes`` attribute is
+the mode-shape table, a :class:`cabledyn.ModeShapes`. Each table is an
+:class:`cabledyn.OutputTable`, so ``column``, ``unit`` and ``to_dataframe`` work on either; an
+export of the object writes the frequency table only.
+
+.. code-block:: python
+
+   from cabledyn import read_output
+
+   modes = read_output("results/baseline.modes.out")   # or result.read_modes()
+
+   print(modes.line_ids)
+   print(modes.periods(1))                 # s, by mode
+   print(modes.frequencies(1))             # Hz, by mode
+
+   xyz = modes.shapes.positions(1)         # static node positions, (n_nodes, 3), m
+   shape = modes.shapes.displacements(1, 2)    # mode 2, (n_nodes, 3), largest node 1
+   line_2 = modes.line(2)                  # both tables of one line
+
+A file with a line restrained in torsion has the columns ``PolarShare`` and ``dTwist`` for every
+line, and ``has_twist`` is true. ``modes.polar_shares(1)`` and ``modes.shapes.twist(1, mode)``
+return them, and ``modes.torsional_modes(1)`` the modes above a polar share of 0.5, which are
+scaled to a unit largest twist instead of a unit largest displacement. On a file without the
+columns these return zeros and no modes, as on a line without torsion.
+
+A negative eigenvalue has a negative ``Frequency`` and ``Omega`` and a ``Period`` of 0. A line
+without free nodes has no modes and no rows, so it is absent from ``line_ids``. The reader refuses
+a file without a mode-shape table, and one whose two tables do not hold the same modes of the same
+lines.
 
 Statistics, range graphs, and geometry
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

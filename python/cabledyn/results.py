@@ -1197,6 +1197,29 @@ class LineSegmentHistory(TimeHistory):
         return ax
 
 
+def _check_positive_integers(table: OutputTable, channels: tuple[str, ...]) -> None:
+    """Refuse a table whose identifier columns are not positive integers."""
+    for channel in channels:
+        values = table.column(channel)
+        if np.any(values <= 0.0) or np.any(values != np.floor(values)):
+            raise OutputFormatError(f"{table.path}: {channel} values must be positive integers")
+
+
+def _check_contiguous_lines(table: OutputTable) -> None:
+    """Refuse a table whose rows of one line are split by rows of another."""
+    seen: set[int] = set()
+    active: int | None = None
+    for value in table.column("LineID"):
+        identifier = int(value)
+        if identifier != active:
+            if identifier in seen:
+                raise OutputFormatError(
+                    f"{table.path}: LineID {identifier} rows are not contiguous"
+                )
+            seen.add(identifier)
+            active = identifier
+
+
 @dataclass(frozen=True)
 class StaticProfile(OutputTable):
     """One or more CableDyn line profiles indexed by line and arc length.
@@ -1236,21 +1259,8 @@ class StaticProfile(OutputTable):
             raise OutputFormatError(
                 f"{self.path}: static profile missing {', '.join(sorted(missing))}"
             )
-        for channel in ("LineID", "Node"):
-            values = self.column(channel)
-            if np.any(values <= 0.0) or np.any(values != np.floor(values)):
-                raise OutputFormatError(f"{self.path}: {channel} values must be positive integers")
-        seen: set[int] = set()
-        active: int | None = None
-        for value in self.column("LineID"):
-            identifier = int(value)
-            if identifier != active:
-                if identifier in seen:
-                    raise OutputFormatError(
-                        f"{self.path}: LineID {identifier} rows are not contiguous"
-                    )
-                seen.add(identifier)
-                active = identifier
+        _check_positive_integers(self, ("LineID", "Node"))
+        _check_contiguous_lines(self)
         for line_id in self.line_ids:
             mask = self.column("LineID") == line_id
             arc = self.column("ArcLength")[mask]
@@ -1515,8 +1525,431 @@ class StaticProfile(OutputTable):
         return ax
 
 
+@dataclass(frozen=True)
+class ModeShapes(OutputTable):
+    """The mode-shape table of a ``.modes.out`` file.
+
+    A subclass of :class:`cabledyn.OutputTable` holding one row per line, mode
+    and node, with the columns ``LineID``, ``Mode``, ``Node``, ``X``, ``Y``,
+    ``Z``, ``dX``, ``dY``, and ``dZ``, and ``dTwist`` in a file that carries
+    twist angles. It is read as :attr:`cabledyn.NaturalModes.shapes`.
+
+    ``X``, ``Y``, ``Z`` are the static node positions in m. ``dX``, ``dY``,
+    ``dZ`` are the nodal translations of the mode, scaled so that its largest
+    nodal displacement is 1. ``dTwist`` is the rotation of the section about
+    the line tangent, positive right-handed from End A to End B, on the same
+    scale; a torsional mode is scaled to a unit largest ``dTwist`` instead.
+    Nodes are numbered from End A. The attributes are those of
+    :class:`cabledyn.OutputTable`.
+
+    Raises
+    ------
+    OutputFormatError
+        If a required column is missing, ``LineID``, ``Mode``, or ``Node``
+        values are not positive integers, a line's rows are not contiguous,
+        they are not the nodes 1, 2, ... of the modes 1, 2, ... in order, or
+        the static position of a node differs between modes.
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        required = {"LineID", "Mode", "Node", "X", "Y", "Z", "dX", "dY", "dZ"}
+        missing = required.difference(self.channels)
+        if missing:
+            raise OutputFormatError(
+                f"{self.path}: mode-shape table missing {', '.join(sorted(missing))}"
+            )
+        _check_positive_integers(self, ("LineID", "Mode", "Node"))
+        _check_contiguous_lines(self)
+        static = np.column_stack([self.column(axis) for axis in ("X", "Y", "Z")])
+        for line_id in self.line_ids:
+            mask = self.column("LineID") == line_id
+            mode = self.column("Mode")[mask]
+            node = self.column("Node")[mask]
+            n_modes = int(np.count_nonzero(node == 1.0))
+            n_nodes = mode.size // n_modes if n_modes else 0
+            if not (
+                np.array_equal(mode, np.repeat(np.arange(1, n_modes + 1), n_nodes))
+                and np.array_equal(node, np.tile(np.arange(1, n_nodes + 1), n_modes))
+            ):
+                raise OutputFormatError(
+                    f"{self.path}: LineID {line_id} rows are not the nodes 1, 2, ... "
+                    "of the modes 1, 2, ..."
+                )
+            positions = static[mask].reshape(n_modes, n_nodes, 3)
+            if np.any(positions != positions[0]):
+                raise OutputFormatError(
+                    f"{self.path}: LineID {line_id} static positions differ between modes"
+                )
+
+    @property
+    def line_ids(self) -> tuple[int, ...]:
+        """Line identifiers in first-appearance order."""
+        return tuple(dict.fromkeys(int(value) for value in self.column("LineID")))
+
+    def _line_rows(self, line_id: int) -> npt.NDArray[np.bool_]:
+        mask = self.column("LineID") == int(line_id)
+        if not np.any(mask):
+            raise KeyError(
+                f"LineID {line_id} is not in {self.path.name}; available: {self.line_ids}"
+            )
+        return mask
+
+    def _mode_rows(self, line_id: int, mode: int) -> npt.NDArray[np.bool_]:
+        mask = self._line_rows(line_id) & (self.column("Mode") == int(mode))
+        if not np.any(mask):
+            raise KeyError(f"LineID {line_id} has no mode {mode} in {self.path.name}")
+        return mask
+
+    def line(self, line_id: int) -> ModeShapes:
+        """Return the rows belonging to one line identifier.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        ModeShapes
+            A new table holding only that line's rows.
+
+        Raises
+        ------
+        KeyError
+            If the table has no rows for ``line_id``.
+        """
+        return ModeShapes(
+            self.path,
+            self.title,
+            self.channels,
+            self.units,
+            self.values[self._line_rows(line_id)].copy(),
+        )
+
+    def node_ids(self, line_id: int) -> tuple[int, ...]:
+        """Return the node numbers of one line, from End A.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        tuple[int, ...]
+            Node numbers ``1, 2, ...``.
+
+        Raises
+        ------
+        KeyError
+            If the table has no rows for ``line_id``.
+        """
+        return tuple(int(value) for value in self.column("Node")[self._mode_rows(line_id, 1)])
+
+    def positions(self, line_id: int) -> npt.NDArray[Any]:
+        """Return the static node positions of one line.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_nodes, 3)`` array of ``X``, ``Y``, ``Z`` in m, from End A.
+
+        Raises
+        ------
+        KeyError
+            If the table has no rows for ``line_id``.
+        """
+        rows = self._mode_rows(line_id, 1)
+        return np.column_stack([self.column(axis)[rows] for axis in ("X", "Y", "Z")])
+
+    def displacements(self, line_id: int, mode: int) -> npt.NDArray[Any]:
+        """Return the nodal translations of one mode.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+        mode : int
+            One-based mode number, as in the ``Mode`` column.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_nodes, 3)`` array of ``dX``, ``dY``, ``dZ``, from End A.
+
+        Raises
+        ------
+        KeyError
+            If the table does not hold that mode of that line.
+        """
+        rows = self._mode_rows(line_id, mode)
+        return np.column_stack([self.column(axis)[rows] for axis in ("dX", "dY", "dZ")])
+
+    def twist(self, line_id: int, mode: int) -> npt.NDArray[Any]:
+        """Return the nodal twist of one mode.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+        mode : int
+            One-based mode number, as in the ``Mode`` column.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_nodes,)`` array of ``dTwist``, from End A; zeros in a file
+            without twist angles, as on a line without torsion.
+
+        Raises
+        ------
+        KeyError
+            If the table does not hold that mode of that line.
+        """
+        rows = self._mode_rows(line_id, mode)
+        if "dTwist" not in self.channels:
+            return np.zeros(int(np.count_nonzero(rows)))
+        return self.column("dTwist")[rows].copy()
+
+
+@dataclass(frozen=True)
+class NaturalModes(OutputTable):
+    """Natural frequencies and mode shapes of a ``.modes.out`` file.
+
+    A subclass of :class:`cabledyn.OutputTable` whose own table is the frequency
+    table, one row per line and mode, with the columns ``LineID``, ``Mode``,
+    ``Frequency`` (Hz), ``Period`` (s), and ``Omega`` (rad/s), and
+    ``PolarShare`` in a file that carries twist angles. The mode-shape table is
+    :attr:`shapes`.
+
+    A negative eigenvalue is recorded with a negative ``Frequency`` and
+    ``Omega`` and a ``Period`` of 0. A line without free nodes has no modes and
+    no rows, so a file of such lines reads as two empty tables.
+
+    Attributes
+    ----------
+    shapes : ModeShapes
+        The mode-shape table of the same file.
+
+    Raises
+    ------
+    OutputFormatError
+        If a required column is missing, ``LineID`` or ``Mode`` values are not
+        positive integers, a line's rows are not contiguous or its modes are
+        not numbered 1, 2, ..., only one table carries the twist columns, or
+        the two tables do not hold the same modes.
+    """
+
+    shapes: ModeShapes
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        missing = {"LineID", "Mode", "Frequency", "Period", "Omega"}.difference(self.channels)
+        if missing:
+            raise OutputFormatError(
+                f"{self.path}: frequency table missing {', '.join(sorted(missing))}"
+            )
+        _check_positive_integers(self, ("LineID", "Mode"))
+        _check_contiguous_lines(self)
+        if self.has_twist != ("dTwist" in self.shapes.channels):
+            raise OutputFormatError(
+                f"{self.path}: PolarShare and dTwist must appear together in the two tables"
+            )
+        if self.line_ids != self.shapes.line_ids:
+            raise OutputFormatError(f"{self.path}: the two tables do not hold the same lines")
+        shape_line = self.shapes.column("LineID")
+        shape_mode = self.shapes.column("Mode")
+        for line_id in self.line_ids:
+            mode = self.column("Mode")[self.column("LineID") == line_id]
+            if np.any(mode != np.arange(1, mode.size + 1)):
+                raise OutputFormatError(
+                    f"{self.path}: LineID {line_id} modes are not numbered 1, 2, ..."
+                )
+            n_shapes = int(shape_mode[shape_line == line_id].max())
+            if n_shapes != mode.size:
+                raise OutputFormatError(
+                    f"{self.path}: LineID {line_id} has {mode.size} frequency rows "
+                    f"but {n_shapes} mode shapes"
+                )
+
+    @property
+    def line_ids(self) -> tuple[int, ...]:
+        """Line identifiers in first-appearance order."""
+        return tuple(dict.fromkeys(int(value) for value in self.column("LineID")))
+
+    @property
+    def has_twist(self) -> bool:
+        """Whether the file carries the ``PolarShare`` and ``dTwist`` columns."""
+        return "PolarShare" in self.channels
+
+    def _line_column(self, channel: str, line_id: int) -> npt.NDArray[Any]:
+        mask = self.column("LineID") == int(line_id)
+        if not np.any(mask):
+            raise KeyError(
+                f"LineID {line_id} is not in {self.path.name}; available: {self.line_ids}"
+            )
+        return self.column(channel)[mask].copy()
+
+    def line(self, line_id: int) -> NaturalModes:
+        """Return the frequency and shape rows of one line.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        NaturalModes
+            New tables holding only that line's rows.
+
+        Raises
+        ------
+        KeyError
+            If the file has no modes for ``line_id``.
+        """
+        shapes = self.shapes.line(line_id)
+        rows = self.values[self.column("LineID") == int(line_id)].copy()
+        return NaturalModes(self.path, self.title, self.channels, self.units, rows, shapes)
+
+    def mode_numbers(self, line_id: int) -> tuple[int, ...]:
+        """Return the mode numbers of one line, lowest frequency first.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        tuple[int, ...]
+            Mode numbers ``1, 2, ...``.
+
+        Raises
+        ------
+        KeyError
+            If the file has no modes for ``line_id``.
+        """
+        return tuple(int(value) for value in self._line_column("Mode", line_id))
+
+    def frequencies(self, line_id: int) -> npt.NDArray[Any]:
+        """Return the natural frequencies of one line in Hz, by mode.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_modes,)`` array of ``Frequency``.
+
+        Raises
+        ------
+        KeyError
+            If the file has no modes for ``line_id``.
+        """
+        return self._line_column("Frequency", line_id)
+
+    def periods(self, line_id: int) -> npt.NDArray[Any]:
+        """Return the natural periods of one line in s, by mode.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_modes,)`` array of ``Period``; 0 for a negative eigenvalue.
+
+        Raises
+        ------
+        KeyError
+            If the file has no modes for ``line_id``.
+        """
+        return self._line_column("Period", line_id)
+
+    def angular_frequencies(self, line_id: int) -> npt.NDArray[Any]:
+        """Return the angular natural frequencies of one line in rad/s, by mode.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_modes,)`` array of ``Omega``.
+
+        Raises
+        ------
+        KeyError
+            If the file has no modes for ``line_id``.
+        """
+        return self._line_column("Omega", line_id)
+
+    def polar_shares(self, line_id: int) -> npt.NDArray[Any]:
+        """Return the polar share of the kinetic energy of each mode of one line.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_modes,)`` array of ``PolarShare``, 1 for a pure torsional mode;
+            zeros in a file without twist angles, as on a line without torsion.
+
+        Raises
+        ------
+        KeyError
+            If the file has no modes for ``line_id``.
+        """
+        if self.has_twist:
+            return self._line_column("PolarShare", line_id)
+        return np.zeros_like(self._line_column("Mode", line_id))
+
+    def torsional_modes(self, line_id: int) -> tuple[int, ...]:
+        """Return the modes of one line that are mostly torsional.
+
+        Parameters
+        ----------
+        line_id : int
+            Line identifier, as in the ``LineID`` column.
+
+        Returns
+        -------
+        tuple[int, ...]
+            Mode numbers whose ``PolarShare`` is above 0.5, the modes a file
+            scales to a unit largest ``dTwist``.
+
+        Raises
+        ------
+        KeyError
+            If the file has no modes for ``line_id``.
+        """
+        share = self.polar_shares(line_id)
+        return tuple(int(mode) for mode in self._line_column("Mode", line_id)[share > 0.5])
+
+
 _HEADER_FIRST = frozenset({"time", "time(s)", "lineid", "node", "segment"})
 _TIME_HEADERS = frozenset({"time", "time(s)"})
+# The first columns of the frequency table of a ``.modes.out`` file, and the comment that
+# introduces its mode-shape table.
+_MODE_FREQUENCY_CHANNELS = ("LineID", "Mode", "Frequency", "Period", "Omega")
+_MODE_SHAPE_COMMENT = "# Mode shapes"
 
 # Fortran formatted real output: optional sign, digits with an optional decimal
 # point, and an optional exponent. ``ES``/``E`` editing omits the exponent
@@ -1636,6 +2069,76 @@ def _unique_channels(channels: tuple[str, ...], source: str) -> tuple[str, ...]:
     return tuple(unique)
 
 
+def _read_units(
+    table_path: Path, lines: list[str], cursor: int, channels: tuple[str, ...]
+) -> tuple[tuple[str, ...] | None, int]:
+    """Return the units row at ``cursor``, if there is one, and the index of the first data row."""
+    if cursor < len(lines):
+        tokens = tuple(lines[cursor].split())
+        if tokens and all(token.startswith("(") and token.endswith(")") for token in tokens):
+            if len(tokens) != len(channels):
+                raise OutputFormatError(
+                    f"{table_path}:{cursor + 1}: expected {len(channels)} units, got {len(tokens)}"
+                )
+            return tokens, cursor + 1
+    return None, cursor
+
+
+def _read_rows(
+    table_path: Path, lines: list[str], start: int, stop: int, channels: tuple[str, ...]
+) -> list[list[float]]:
+    """Parse the data rows ``lines[start:stop]``, one finite value per channel."""
+    rows: list[list[float]] = []
+    for i in range(start, stop):
+        fields = lines[i].split()
+        if not fields:
+            continue
+        if len(fields) != len(channels):
+            raise OutputFormatError(
+                f"{table_path}:{i + 1}: expected {len(channels)} fields, got {len(fields)}"
+            )
+        rows.append([_parse_float(field, table_path, i + 1) for field in fields])
+    return rows
+
+
+def _read_natural_modes(
+    table_path: Path,
+    lines: list[str],
+    header_index: int,
+    channels: tuple[str, ...],
+    title: str,
+) -> NaturalModes:
+    """Read the frequency table at ``header_index`` and the mode-shape table after it."""
+    units, cursor = _read_units(table_path, lines, header_index + 1, channels)
+    comment = next(
+        (i for i in range(cursor, len(lines)) if lines[i].startswith(_MODE_SHAPE_COMMENT)),
+        None,
+    )
+    if comment is None or comment + 1 >= len(lines):
+        raise OutputFormatError(f"{table_path}: modal output has no mode-shape table")
+    rows = _read_rows(table_path, lines, cursor, comment, channels)
+    shape_channels = tuple(lines[comment + 1].split())
+    if len(shape_channels) != len(set(shape_channels)):
+        raise OutputFormatError(f"{table_path}:{comment + 2}: duplicate channel name")
+    shape_units, shape_cursor = _read_units(table_path, lines, comment + 2, shape_channels)
+    shape_rows = _read_rows(table_path, lines, shape_cursor, len(lines), shape_channels)
+    shapes = ModeShapes(
+        table_path,
+        lines[comment],
+        shape_channels,
+        shape_units,
+        np.asarray(shape_rows, dtype=np.float64).reshape(-1, len(shape_channels)),
+    )
+    return NaturalModes(
+        table_path,
+        title,
+        channels,
+        units,
+        np.asarray(rows, dtype=np.float64).reshape(-1, len(channels)),
+        shapes,
+    )
+
+
 def read_output(path: str | os.PathLike[str]) -> OutputTable:
     """Read and strictly validate a CableDyn numeric output table.
 
@@ -1654,8 +2157,9 @@ def read_output(path: str | os.PathLike[str]) -> OutputTable:
     -------
     OutputTable
         A :class:`TimeHistory`, :class:`LineNodeHistory`,
-        :class:`LineSegmentHistory`, or :class:`StaticProfile` when the layout
-        is recognized, otherwise a plain :class:`OutputTable`.
+        :class:`LineSegmentHistory`, :class:`StaticProfile`, or
+        :class:`NaturalModes` when the layout is recognized, otherwise a plain
+        :class:`OutputTable`.
 
     Raises
     ------
@@ -1681,28 +2185,10 @@ def read_output(path: str | os.PathLike[str]) -> OutputTable:
     elif len(channels) != len(set(channels)):
         raise OutputFormatError(f"{table_path}:{header_index + 1}: duplicate channel name")
     title = "\n".join(line for line in lines[:header_index] if line.strip())
-    cursor = header_index + 1
-    units: tuple[str, ...] | None = None
-    if cursor < len(lines):
-        tokens = tuple(lines[cursor].split())
-        if tokens and all(token.startswith("(") and token.endswith(")") for token in tokens):
-            if len(tokens) != len(channels):
-                raise OutputFormatError(
-                    f"{table_path}:{cursor + 1}: expected {len(channels)} units, got {len(tokens)}"
-                )
-            units = tokens
-            cursor += 1
-
-    rows: list[list[float]] = []
-    for i in range(cursor, len(lines)):
-        fields = lines[i].split()
-        if not fields:
-            continue
-        if len(fields) != len(channels):
-            raise OutputFormatError(
-                f"{table_path}:{i + 1}: expected {len(channels)} fields, got {len(fields)}"
-            )
-        rows.append([_parse_float(field, table_path, i + 1) for field in fields])
+    if channels[: len(_MODE_FREQUENCY_CHANNELS)] == _MODE_FREQUENCY_CHANNELS:
+        return _read_natural_modes(table_path, lines, header_index, channels, title)
+    units, cursor = _read_units(table_path, lines, header_index + 1, channels)
+    rows = _read_rows(table_path, lines, cursor, len(lines), channels)
     if not rows:
         raise OutputFormatError(f"{table_path}: table has no data rows")
     values = np.asarray(rows, dtype=np.float64)
