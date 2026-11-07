@@ -404,3 +404,24 @@ def test_the_stepping_example_runs():
     tensions = runpy.run_path(str(example))["main"](duration=2.0)
     assert len(tensions) == 40
     assert all(math.isfinite(value) and value > 0.0 for value in tensions)
+
+
+def test_section_curvature_of_a_line_matches_its_channels(tmp_path):
+    deck = _deck(tmp_path, "library", "", STIFFENER)
+    with CableDyn() as model:
+        model.init_deck_rotating(deck)
+        model.calc_output()
+        line = model.lines[0]
+        values = line.section_curvature()
+        assert values.shape == (line.n_nodes, 2)
+        tokens = [f"Curv{axis}1N{j}" for j in range(1, line.n_nodes + 1) for axis in "XY"]
+        expected = model.channels(tokens).reshape(-1, 2)
+        np.testing.assert_array_equal(values, expected)
+        assert np.abs(values).max() > 0.0
+        np.testing.assert_allclose(np.hypot(*values.T), line.curvature(), rtol=1e-9, atol=1e-12)
+
+
+def test_section_curvature_needs_a_finite_ei_line(tmp_path):
+    with CableDyn(_deck(tmp_path, "library", "", template=EI0_DECK)) as model:
+        with pytest.raises(CableDynError, match="finite-EI"):
+            model.lines[0].section_curvature()

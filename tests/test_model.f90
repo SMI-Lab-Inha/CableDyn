@@ -718,9 +718,11 @@ CONTAINS
     CALL require(es == CD_MODEL_OK .AND. CD_Model_Is_Initialized(src), 'copy:init-src: '//TRIM(em))
     CALL CD_Calc_Model_CoupledLoads(src, load_src, es, em)
     CALL require(es == CD_MODEL_OK .AND. ALLOCATED(src%dynamic_workspace%R), 'copy:source-loads: '//TRIM(em))
+    src%azimuth_signed = .TRUE.
 
     CALL CD_Copy_Model(src, dst, es, em)
     CALL require(es == CD_MODEL_OK .AND. CD_Model_Is_Initialized(dst), 'copy:model: '//TRIM(em))
+    CALL require(dst%azimuth_signed, 'copy:azimuth-range')
     CALL require(.NOT. ALLOCATED(dst%dynamic_workspace%R), 'copy:workspace-not-shared')
     CALL CD_Get_Model_State(src, q_src, v_src, a_src, es, em)
     CALL require(es == CD_MODEL_OK, 'copy:get-src: '//TRIM(em))

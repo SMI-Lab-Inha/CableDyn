@@ -10,6 +10,7 @@ other gates need only the shared library.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from pathlib import Path
@@ -268,6 +269,97 @@ def test_body_and_rod_decks_match_driver_outputs_at_the_initial_state(tmp_path):
         result = _driver_run(deck, tmp_path)
         with CableDyn(deck) as model:
             _check_row(model, result, 0.0)
+
+
+def _heading_deck(cables: bool) -> tuple[str, dict[int, float]]:
+    """Lines on headings on both sides of +x, and the azimuth each must report at End A.
+
+    Line ``2 k`` runs in its vertical plane from its own coupled point to its own anchor. Within
+    45 deg of +x the range is (-180, 180], otherwise [0, 360). With ``cables`` every second line
+    is finite-EI, which puts the deck on the mixed route.
+    """
+    headings = [-46.0, -44.0, -30.0, -10.0, -1.0, 1.0, 10.0, 30.0, 44.0, 46.0, 180.0, 270.0]
+    points, lines, sections, outputs, expected = [], [], [], [], {}
+    for k, heading in enumerate(headings, start=1):
+        cable = cables and k % 2 == 0
+        reach = 70.0 if cable else 240.0
+        cx, sy = math.cos(math.radians(heading)), math.sin(math.radians(heading))
+        points.append(f"{2 * k - 1} Coupled {5.0 * cx:.15e} {5.0 * sy:.15e} -10.0")
+        points.append(f"{2 * k} Fixed {(5.0 + reach) * cx:.15e} {(5.0 + reach) * sy:.15e} -60.0")
+        lines.append(f"{2 * k} {2 * k - 1} {2 * k} -")
+        sections.append(f"{2 * k} {'cable 100.0 20' if cable else 'chain 260.0 13'}")
+        outputs.append(f"L{2 * k}N1Azi")
+        expected[2 * k] = heading if abs(heading) < 45.0 else heading % 360.0
+    text = "\n".join(
+        [
+            "Lines on both sides of +x",
+            "--- LINE TYPES ---",
+            "Name Diam Mass EA BA EI Cdn Cdt Can Cat",
+            "(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)",
+            "cable 0.16 36.7 4.69e8 -1.0 1.99e4 1.2 0.1 1.0 0.0",
+            "chain 0.10 150.0 8.0e8 -1.0 0.0 1.2 0.4 1.0 0.5",
+            "--- POINTS ---",
+            "ID Type X Y Z",
+            "(-) (-) (m) (m) (m)",
+            *points,
+            "--- LINES ---",
+            "ID NodeA NodeB Outputs",
+            "(-) (-) (-) (-)",
+            *lines,
+            "--- SECTIONS ---",
+            "LineID LineType Length NumSegs",
+            "(-) (-) (m) (-)",
+            *sections,
+            "--- OPTIONS ---",
+            "9.80665 g",
+            "1025.0 rhoW",
+            "60.0 WtrDpth",
+            "1.0e6 kBot",
+            "1.0e5 cBot",
+            "0.02 dtM",
+            "0.04 TMax",
+            "--- OUTPUTS ---",
+            *outputs,
+            "--- need this line ---",
+            "",
+        ]
+    )
+    return text, expected
+
+
+@needs_driver
+@pytest.mark.parametrize("cables", [False, True], ids=["ei0", "mixed"])
+def test_azimuth_range_is_the_same_on_every_route(tmp_path, cables):
+    text, expected = _heading_deck(cables)
+    deck = _write(tmp_path, "headings.dat", text)
+    result = _driver_run(deck, tmp_path)
+    main = result.read_main()
+    # a run without dtM and TMax stops at the static solution, which an EI = 0 deck writes out
+    static_text = text.replace("0.02 dtM\n", "").replace("0.04 TMax\n", "")
+    static_deck = _write(tmp_path, "headings_static.dat", static_text)
+    static = _driver_run(static_deck, tmp_path).read_static()
+    with CableDyn(deck) as model:
+        for line_id, azimuth in expected.items():
+            token = f"L{line_id}N1Azi"
+            driver = float(main.values[0, list(main.channels).index(token)])
+            assert driver == pytest.approx(azimuth, abs=1.0e-5), f"driver {token}"
+            assert model.channel(token) == pytest.approx(azimuth, abs=1.0e-6), f"library {token}"
+            line = model.line(line_id)
+            np.testing.assert_allclose(line.azimuth(), azimuth, rtol=0.0, atol=1.0e-6)
+            profile = static.line(line_id).column("Azimuth")
+            np.testing.assert_allclose(profile, azimuth, rtol=0.0, atol=1.0e-5)
+
+
+@needs_driver
+def test_azimuth_range_of_a_line_on_a_body(tmp_path):
+    text = _BODY_DECK.replace("4 Fixed 40.0 0.0 -100.0", "4 Fixed 40.0 -10.0 -100.0")
+    text = text.replace('"FairTen1"\n', '"FairTen1"\n"L1N1Azi"\n')
+    deck = _write(tmp_path, "body_heading.dat", text)
+    main = _driver_run(deck, tmp_path).read_main()
+    driver = float(main.values[0, list(main.channels).index("L1N1Azi")])
+    with CableDyn(deck) as model:
+        assert model.channel("L1N1Azi") == pytest.approx(driver, abs=1.0e-5)
+    assert -45.0 < driver < 0.0
 
 
 # --- library-only gates --------------------------------------------------------
