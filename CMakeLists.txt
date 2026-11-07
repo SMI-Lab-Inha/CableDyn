@@ -2764,6 +2764,17 @@ if(Python3_Interpreter_FOUND)
     SKIP_RETURN_CODE 77
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 endif()
+# The scan of the round-off CI job: it must flag a fallback note, a failed run and a forced
+# BLAS kernel that did not take effect, or a clean scan would prove nothing.
+if(Python3_Interpreter_FOUND)
+  add_test(NAME example_fallback_scan
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_check_example_fallbacks.py
+                   $<TARGET_FILE:cabledyn> ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+  set_tests_properties(example_fallback_scan PROPERTIES
+    LABELS "python;driver;integration"
+    TIMEOUT 120
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+endif()
 # A clamped finite-EI cable with a buoyant section on a Rigid6 body: the body static solve
 # holds the objects at their deck poses, warns once, and reports no balanced clamped end loads.
 add_test(NAME driver_clamped_buoyant_held

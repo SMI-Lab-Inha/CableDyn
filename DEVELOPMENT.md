@@ -86,6 +86,19 @@ stops at the first mismatch. The Fortran CI workflow builds Release and Debug on
 Ubuntu and Windows and runs the full suite on every pull request and push to
 `main`.
 
+The `roundoff` job of the same workflow repeats the Linux Release build and the full
+CTest on the SSE3 OpenBLAS kernel (`OPENBLAS_CORETYPE=Prescott`), then runs every shipped
+example deck through `tests/check_example_fallbacks.py`, which fails on a non-zero exit and on a
+fallback note where a deck should converge cleanly, and lists the offending decks. The job stops
+first if OpenBLAS does not report that kernel. It is advisory, not a required check. To repeat it
+locally, on Linux or Windows:
+
+```bash
+OPENBLAS_CORETYPE=Prescott ctest --test-dir build --output-on-failure
+python tests/check_example_fallbacks.py --driver build/cabledyn --examples examples \
+    --out build/example_scan --coretype Prescott
+```
+
 ## Python package
 
 The `cabledyn` package (`python/`) loads the C-ABI shared library built by
