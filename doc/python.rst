@@ -799,10 +799,8 @@ environment variable ``CABLEDYN_BLAS_THREADS`` changes that (:doc:`capi`).
 Array ordering is defined in :ref:`capi:Calling conventions`; frames, fluid fields, and
 lifecycle rules are defined in :doc:`coupling_boundary`. Use this API only when the Python
 process owns time integration; use ``CompMooring = 5`` for OpenFAST (:doc:`openfast`). The Python
-class covers deck initialisation and the coupled step/output cycle; raw-array initialisation
-(``CableDyn_InitLine`` and
-``CableDyn_InitLines``) and output Jacobians (``CableDyn_CalcOutputDerivatives``) are available
-through the C API (:doc:`capi`).
+class covers deck initialisation, raw-array lines, the coupled step/output cycle and the load
+Jacobians (see `Raw-array lines and load Jacobians`_).
 
 A deck with finite-EI lines, ``BODIES`` or ``RODS`` runs on the coupled aggregate and needs
 ``dtM``; other decks run on the point route. Decks with deck waves, a ``motionFile`` or vessel
@@ -867,6 +865,63 @@ start time of the pass, so a pass retried with a smaller ``dt`` restores as well
            self.q[self.host], self.v[self.host], self.a[self.host] = x_end, v_end, a_end
            self.model.step(dt, self.q, self.v, self.a)
            return self.model.calc_output()[self.host].reshape(3, -1, order="F")
+
+Raw-array lines and load Jacobians
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:meth:`~cabledyn.CableDyn.init_line` and :meth:`~cabledyn.CableDyn.init_lines` build a model from
+lines the caller has meshed, without a deck. These lines are **structural only**: two-node
+``EI = 0`` axial elements with a consistent mass matrix, without gravity, buoyancy, seabed,
+hydrodynamics or structural damping, and without a static solve, so the state starts at ``q0``,
+``v0`` exactly. Use a deck for anything else. As in the C API, ``elem_conn``, ``fixed_dofs`` and
+``coupled_map`` are **1-based**, and the order of ``fixed_dofs`` is the order of the coupled
+vector:
+
+.. code-block:: python
+
+   import numpy as np
+   from cabledyn import CableDyn
+
+   n_elem = 10
+   nodes = np.linspace(0.0, 1.0, n_elem + 1)[:, None] * [100.5, 0.0, 0.0]
+   first = np.arange(1, n_elem + 1)
+
+   with CableDyn() as model:
+       model.init_line(
+           q0=nodes.reshape(-1),
+           v0=np.zeros(nodes.size),
+           elem_conn=np.column_stack([first, first + 1]),   # 1-based node pairs
+           l0=np.full(n_elem, 10.0),                        # m
+           ea=np.full(n_elem, 1.0e7),                       # N
+           rho_a=np.full(n_elem, 50.0),                     # kg/m
+           fixed_dofs=[1, 2, 3, 31, 32, 33],                # both end nodes, 1-based
+           tension_only=True,
+           rho_inf=0.8,
+       )
+       q, v, a = model.get_coupled_motion()
+       loads, dload_dq, dload_dv, dload_da, added_mass = model.calc_output_derivatives(q, v, a)
+
+:meth:`~cabledyn.CableDyn.init_lines` takes the counts of each line, then the same arrays
+concatenated in line order, with connectivity and ``fixed_dofs`` local to each line. Its optional
+``coupled_map`` connects lines at shared points; see ``CableDyn_InitLines`` in :doc:`capi`.
+Shapes, non-finite values and non-integer indices raise ``ValueError`` or ``TypeError`` before the
+library is called, which changes nothing. The library judges the values (an index out of range, a
+repeated fixed DOF, a non-positive length) and raises :class:`cabledyn.CableDynError`; the handle
+must then be initialised again, unless it held a model on the coupled aggregate, which stays live.
+
+:meth:`~cabledyn.CableDyn.calc_output_derivatives` returns the loads at an operating point and
+their analytic Jacobians, ``J[i, j]`` being the derivative of load ``i`` with respect to coupled
+DOF ``j``, and works on raw lines and on decks of the point route. A model on the coupled aggregate
+has no load derivatives and raises :class:`cabledyn.CableDynError`. Each line's interior DOFs are
+condensed out: interior positions and velocities are held and interior accelerations eliminated
+through the mass matrix, so the blocks are those of ``update_states`` followed by ``calc_output``,
+the instantaneous response of the end loads to the end motion. ``added_mass`` is ``-dload_da``.
+
+.. warning::
+
+   ``calc_output_derivatives`` **sets the model state**: on return the model is at the operating
+   point, as after ``update_states``, and the previous state is not restored. Call
+   ``update_states`` with the previous kinematics to return to them.
 
 Objects and output channels
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -348,8 +348,10 @@ These rules apply to every entry point. The Python package uses the same array o
   ``CableDyn_InitDeckAt`` on an initialised handle replaces the model only on success. If the
   new initialisation fails, the previous model is kept unchanged, and so is the state saved by
   ``CableDyn_SaveState``; a successful one discards that save. ``CableDyn_InitLine`` and
-  ``CableDyn_InitLines`` build the point model in place: after a failure the handle must be
-  initialised again, and the saved state is discarded. The one exception is a handle whose
+  ``CableDyn_InitLines`` build the point model in place: a failure during the build leaves the
+  handle to be initialised again, an input rejected before it leaves the previous model live
+  (``CableDyn_IsInitialized`` tells which), and either way the saved state is discarded. The one
+  exception is a handle whose
   deck model runs on the coupled aggregate (finite-EI lines, bodies or rods): a failed
   ``InitLine``/``InitLines`` leaves that model live, and its saved state with it.
 * **Time.** The library keeps no clock. Only ``dt`` enters ``CableDyn_Step``, and the host owns

@@ -502,6 +502,66 @@ library is located. Array ordering, frames, and units at the coupling boundary f
 
       Release the native handle. Calling it again is harmless.
 
+   .. py:method:: init_line(q0, v0, elem_conn, l0, ea, rho_a, fixed_dofs, tension_only, rho_inf)
+
+      Initialise from one line meshed by the caller (``CableDyn_InitLine``). The model is
+      structural only: two-node ``EI = 0`` axial elements with a consistent mass matrix, without
+      gravity, buoyancy, seabed, hydrodynamics or structural damping, and without a static solve.
+      The handle has no deck and no points; the views of :attr:`lines` run from the last node of
+      ``q0`` to its first.
+
+      :param q0: Initial node positions (m), flat ``(3 * n_nodes,)`` or column-per-point
+         ``(3, n_nodes)``; a ``(3, 3)`` array is rejected as ambiguous.
+      :type q0: array_like
+      :param v0: Initial node velocities (m/s), shaped as ``q0``.
+      :type v0: array_like
+      :param elem_conn: **1-based** node pair of each element, flat ``(2 * n_elem,)`` or
+         ``(n_elem, 2)``. An integer array.
+      :type elem_conn: array_like
+      :param l0: Unstretched length of each element (m), ``(n_elem,)``.
+      :type l0: array_like
+      :param ea: Axial stiffness of each element (N), ``(n_elem,)``.
+      :type ea: array_like
+      :param rho_a: Mass per unit unstretched length of each element (kg/m), ``(n_elem,)``.
+      :type rho_a: array_like
+      :param fixed_dofs: **1-based** DOFs the caller prescribes, in the order of the coupled
+         vector; node ``k`` owns DOFs ``3k-2``, ``3k-1`` and ``3k``. May be empty.
+      :type fixed_dofs: array_like
+      :param tension_only: If true an element goes slack instead of carrying compression.
+      :type tension_only: bool
+      :param rho_inf: Generalised-α spectral radius, in ``[0, 1]``.
+      :type rho_inf: float
+      :raises ValueError: on a wrong shape, a non-finite value, or ``rho_inf`` outside
+         ``[0, 1]``, before the library is called.
+      :raises TypeError: on a non-real array, a non-integer index array, or a non-numeric
+         scalar, before the library is called.
+      :raises CableDynError: if the library rejects the values (an index out of range, a repeated
+         fixed DOF, a non-positive ``l0``, ``ea`` or ``rho_a``) or the initial acceleration solve
+         fails. The handle must then be initialised again and a saved state is lost, unless it
+         held a model on the coupled aggregate, which stays live with its save.
+
+   .. py:method:: init_lines(n_nodes, n_elem, n_fixed, q0, v0, elem_conn, l0, ea, rho_a, fixed_dofs, tension_only, rho_inf, coupled_map=None)
+
+      Initialise from several lines meshed by the caller (``CableDyn_InitLines``), each as in
+      :meth:`init_line`, in one system. Every array is the concatenation, in line order, of that
+      line's :meth:`init_line` array; ``elem_conn`` and ``fixed_dofs`` stay local to each line.
+
+      :param n_nodes: Node count of each line, at least 2.
+      :type n_nodes: array_like
+      :param n_elem: Element count of each line, at least 1.
+      :type n_elem: array_like
+      :param n_fixed: Prescribed DOF count of each line, at least 0.
+      :type n_fixed: array_like
+      :param coupled_map: Connects lines at shared points. Every line has exactly six fixed DOFs,
+         and entry ``6 * i + j`` (0-based ``i``, ``j``) is the **1-based** system DOF of line
+         ``i``'s ``j``-th fixed DOF. The entries use every index from 1 to their maximum, which is
+         the coupled DOF count; loads and Jacobian entries of a shared DOF are summed. ``None``
+         keeps the lines independent, their ``fixed_dofs`` in turn forming the coupled vector.
+      :type coupled_map: array_like | None
+      :raises ValueError: as :meth:`init_line`, and if the counts do not match the arrays.
+      :raises TypeError: as :meth:`init_line`.
+      :raises CableDynError: as :meth:`init_line`, and on a ``coupled_map`` with a gap.
+
    .. py:method:: last_error()
 
       Return the library's most recent diagnostic message for this instance.
@@ -760,6 +820,33 @@ library is located. Array ordering, frames, and units at the coupling boundary f
       :type dynamic_pressure: array_like, optional
       :raises CableDynError: on a model built without a host fluid field, or if the call
          fails.
+
+   .. py:method:: calc_output_derivatives(q, v, a)
+
+      Return the coupled loads at an operating point and their analytic Jacobians
+      (``CableDyn_CalcOutputDerivatives``). Each line's interior DOFs are condensed out: interior
+      positions and velocities are held and interior accelerations eliminated through the mass
+      matrix, so ``dload_da`` is :math:`-(M_{cc} - M_{cf} M_{ff}^{-1} M_{fc})`, and the blocks are
+      those of :meth:`update_states` followed by :meth:`calc_output`.
+
+      This call **sets the model state**, as :meth:`update_states` does, also when a later stage
+      of it fails; the previous state is not restored and :attr:`time` does not change. The
+      library's unused ``eps_fd`` argument is not exposed.
+
+      :param q: Operating-point positions (m).
+      :type q: array_like
+      :param v: Operating-point velocities (m/s).
+      :type v: array_like
+      :param a: Operating-point accelerations (m/s\ :sup:`2`).
+      :type a: array_like
+      :returns: ``(loads, dload_dq, dload_dv, dload_da, added_mass)``. ``loads`` is flat,
+         ``(n_coupled_dof,)`` (N). The others are ``(n_coupled_dof, n_coupled_dof)`` with
+         ``J[i, j]`` the derivative of load ``i`` with respect to coupled DOF ``j``: N/m, N·s/m,
+         kg and kg; ``added_mass`` is ``-dload_da``.
+      :rtype: tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]
+      :raises ValueError: if an array has the wrong shape or a non-finite value.
+      :raises CableDynError: if the library rejects the call, as on a model on the coupled
+         aggregate (finite-EI lines, bodies or rods), which has no load derivatives.
 
    .. py:method:: update_point_fluid_fields(fluid_velocity, fluid_acceleration, waterline_z, fluid_density)
 

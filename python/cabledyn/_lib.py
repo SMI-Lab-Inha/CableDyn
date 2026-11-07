@@ -87,6 +87,46 @@ _lib.CableDyn_GetLastError.argtypes = [c_void_p, c_char_p, c_int]
 _lib.CableDyn_GetLastError.restype = None
 
 _DBL = POINTER(c_double)
+_INT = POINTER(c_int)
+
+_lib.CableDyn_InitLine.argtypes = [
+    c_void_p,
+    c_int,
+    c_int,
+    _DBL,
+    _DBL,
+    _INT,
+    _DBL,
+    _DBL,
+    _DBL,
+    _INT,
+    c_int,
+    c_int,
+    c_double,
+    _INT,
+]
+_lib.CableDyn_InitLine.restype = None
+
+_lib.CableDyn_InitLines.argtypes = [
+    c_void_p,
+    c_int,
+    _INT,
+    _INT,
+    _INT,
+    _DBL,
+    _DBL,
+    _INT,
+    _DBL,
+    _DBL,
+    _DBL,
+    _INT,
+    _INT,
+    c_int,
+    c_int,
+    c_double,
+    _INT,
+]
+_lib.CableDyn_InitLines.restype = None
 
 _lib.CableDyn_UpdateStates.argtypes = [c_void_p, _DBL, _DBL, _DBL, c_int, POINTER(c_int)]
 _lib.CableDyn_UpdateStates.restype = None
@@ -107,6 +147,22 @@ _lib.CableDyn_Step.restype = None
 
 _lib.CableDyn_CalcOutput.argtypes = [c_void_p, _DBL, c_int, POINTER(c_int)]
 _lib.CableDyn_CalcOutput.restype = None
+
+_lib.CableDyn_CalcOutputDerivatives.argtypes = [
+    c_void_p,
+    _DBL,
+    _DBL,
+    _DBL,
+    c_int,
+    c_double,
+    _DBL,
+    _DBL,
+    _DBL,
+    _DBL,
+    _DBL,
+    _INT,
+]
+_lib.CableDyn_CalcOutputDerivatives.restype = None
 
 _lib.CableDyn_GetCoupledMotion.argtypes = [c_void_p, _DBL, _DBL, _DBL, c_int, POINTER(c_int)]
 _lib.CableDyn_GetCoupledMotion.restype = None
