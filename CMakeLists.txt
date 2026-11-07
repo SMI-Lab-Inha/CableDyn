@@ -835,6 +835,12 @@ target_link_libraries(test_wave_math PRIVATE cabledyn_core)
 add_test(NAME wave_math COMMAND test_wave_math)
 set_tests_properties(wave_math PROPERTIES LABELS "fortran;unit;hydro")
 
+# The fast sum of the component wave kernel against a direct quadruple-precision sum.
+add_executable(test_wave_component_sum tests/test_wave_component_sum.f90)
+target_link_libraries(test_wave_component_sum PRIVATE cabledyn_core)
+add_test(NAME wave_component_sum COMMAND test_wave_component_sum)
+set_tests_properties(wave_component_sum PROPERTIES LABELS "fortran;unit;hydro" TIMEOUT 120)
+
 add_executable(test_cable_static tests/test_cable_static.f90)
 target_link_libraries(test_cable_static PRIVATE cabledyn_core)
 add_test(NAME cable_static COMMAND test_cable_static)

@@ -572,7 +572,10 @@ two columns:
   ``TMax / (2 dtWave)`` with ``none`` (600 at ``dtWave`` 0.25 s), against the 200 of a
   ``jonswap`` sea. Every node sums all of them for its surface elevation. Below the surface,
   the components too short to reach the node's depth are dropped once they cannot change its
-  velocity and acceleration beyond round-off (:ref:`theory-waves`).
+  velocity and acceleration beyond round-off (:ref:`theory-waves`). The sum costs about 4 ns
+  per node, component and step on one core of a current desktop: 3 ms per step for 300 nodes
+  and 2,400 components, the 4,200 s record at ``WvHiCOff`` 3.6, against 2.5 ms for the solve
+  of that line. A longer record costs proportionally more, and a larger ``dtM`` less.
 
 Example
 ~~~~~~~

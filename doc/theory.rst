@@ -1112,8 +1112,11 @@ commensurate, the record does not repeat (an equally spaced comb would repeat af
 its component table (amplitude, frequency, phase), for example a WaterKin ``WaveKinMod`` 1
 elevation history, which is reduced once to its Fourier components on the run time base.
 
-Every point sums every component of the elevation. The velocity, acceleration and dynamic
-pressure sums run in order of increasing :math:`k_i`. For :math:`-h \le z' \le 0` both depth
+Every point sums every component of the elevation. The sums run in interleaved partial sums
+added up in a fixed order, so a result does not depend on the vector width or the thread
+count, and each point is a function of its position and time alone: nothing carries from one
+step to the next. The velocity, acceleration and dynamic pressure sums run in order of
+increasing :math:`k_i`. For :math:`-h \le z' \le 0` both depth
 ratios :math:`\cosh k(z' + h)/\sinh kh` and :math:`\sinh k(z' + h)/\sinh kh` fall as
 :math:`k` grows, so the cosh ratio of the last summed component times the remaining
 :math:`\sum_{j \ge i} a_j\omega_j`, :math:`\sum a_j\omega_j^2` and :math:`\sum a_j\omega_j^2/k_j`

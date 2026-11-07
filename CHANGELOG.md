@@ -8,6 +8,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Wave kinematics cost half to a fifth as much, depending on the compiler: on a 298-node line
+  in a 4,200 s elevation record of 2,400 components the sum falls from 6.0 to 3.0 ms per step
+  in the release build and from 18 to 3.6 ms in a GNU AVX2 build. Results change at round-off.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added
