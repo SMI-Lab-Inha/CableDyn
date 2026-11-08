@@ -1804,6 +1804,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # A heavily damped finite-EI line held at rest completes every step and stays at rest over
+  # a sweep of the axial damping coefficient and dtM (the damping's residual round-off floor).
+  add_test(NAME hermite_damped_rest
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hermite_damped_rest.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/hermite_damped_rest)
+  set_tests_properties(hermite_damped_rest PROPERTIES
+    LABELS "python;hermite;dynamic;robustness"
+    TIMEOUT 300
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # Range graphs (LINES flag r) and touchdown channels on every standalone route: envelopes
   # against the node channels, the analytic catenary TDP, quasi-static tracking under a
   # moving fairlead, and agreement with cabledyn.touchdown_history (needs numpy).

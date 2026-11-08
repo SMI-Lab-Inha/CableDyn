@@ -4868,7 +4868,7 @@ CONTAINS
       REAL(wp), POINTER :: Gout(:)
       INTEGER :: ii, nd
       INTEGER(INT64) :: ec0, ec1
-      REAL(wp) :: xref, xd, xc, ea_r, kt, tw_round
+      REAL(wp) :: xref, xd, xc, ea_r, ka, kt, tw_round
       REAL(wp), PARAMETER :: RESID_ROUNDOFF = 16.0_wp
       REAL(wp), PARAMETER :: STATE_DIVERGED = 1.0e12_wp
       ec0 = 0_INT64      ! defined even with profiling off (see the step-entry note)
@@ -4989,18 +4989,24 @@ CONTAINS
         ! whose rounding is (K^2/GJ) eps |r|/l0, so the floor takes the whole axial stiffness
         ! EA - K^2/GJ + K^2/GJ of the line (without it the floor fell by 1 - K^2/(EA GJ): at
         ! K = 0.99 sqrt(EA GJ) to 2 % of the rounding it bounds, and a held line failed its step).
+        ! The axial damping force BA d(|r'|)/dt takes the strain rate from the Newmark velocity,
+        ! whose rounding is gamma/(beta dt) times that of the coordinates, so the floor adds
+        ! BA gamma/(beta dt) to the axial stiffness, as the twist floor below adds Bt: without it a
+        ! held line damped near its first axial mode (BA = 2 zeta EA/omega_1, which at small dt
+        ! puts the damping term well above EA) stagnated at a residual of a few times the
+        ! tolerance and failed its step.
         xref = MAXVAL(model%l0)
         DO ii = 1, ndof
           IF (MOD(ii - 1, 6) < 3) xref = MAX(xref, ABS(qcur(ii)))
         END DO
-        IF (model%torsion%active .AND. ALLOCATED(model%torsion%couple)) THEN
-          ea_r = CD_ZERO
-          DO ii = 1, SIZE(model%l0)
-            ea_r = MAX(ea_r, (ABS(model%EA(ii)) + model%torsion%couple(ii)**2*model%torsion%gj(ii))/model%l0(ii))
-          END DO
-        ELSE
-          ea_r = MAXVAL(model%EA/model%l0)
-        END IF
+        ea_r = CD_ZERO
+        DO ii = 1, SIZE(model%l0)
+          ka = ABS(model%EA(ii))
+          IF (model%torsion%active .AND. ALLOCATED(model%torsion%couple)) &
+            ka = ka + model%torsion%couple(ii)**2*model%torsion%gj(ii)
+          IF (model%has_axial_damping) ka = ka + ABS(model%BA(ii))*gm/(bt*dt)
+          ea_r = MAX(ea_r, ka/model%l0(ii))
+        END DO
         fscale = MAX(fscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*ea_r*xref/tol)
         ! Nodal twist: the torque scale of the angle rows, frozen with fscale and formed like it
         ! from the nodal loads (a node's torque imbalance, not the torque the line carries,
