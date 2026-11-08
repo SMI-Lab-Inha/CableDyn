@@ -3394,8 +3394,8 @@ class DeckFile:
         option_by_key = {_option_key(option.keyword): option for option in options}
         # native finalize_checks: the magnitude bounds of the waves and current rows in
         # effect (the last of each); a row a later row overrides takes its row rules only
-        for key in ("waves", "current"):
-            record = option_by_key.get(key)
+        for overridden_kind in ("waves", "current"):
+            record = option_by_key.get(overridden_kind)
             if record is None or record.keyword_first:
                 continue
             tokens = [*record.values, record.keyword]
