@@ -184,7 +184,7 @@ vertical), 19.9 s (out of plane, along the grounded run) and 16.9 s (in plane). 
 2048 elements the out-of-plane periods and the 20.4 s mode agree to four digits. The in-plane
 modes that move the touchdown (39.9 s, 16.9 s and 11.7 s) shift by up to 0.5 %, because the
 linearised seabed contact at the touchdown changes with the node spacing. The run takes about
-2 s, most of it in the modal solve.
+a second, a quarter of it in the modal solve.
 
 Exercises
 ---------

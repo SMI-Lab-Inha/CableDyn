@@ -622,8 +622,8 @@ Ambient fluid and prescribed motion
        lines stops with ``OPTION nModes is not supported for mixed EI=0/finite-EI decks;
        remove it or set it to 0``. A line restrained in torsion adds the twist angle of every
        node to its modes (``PolarShare`` and ``dTwist`` in :doc:`outputs`). The banded solver has
-       no line-length limit: a
-       1024-element finite-EI cable takes a few seconds. See :doc:`theory`
+       no line-length limit: the 10 modes of a 1024-element finite-EI cable take a fraction of a
+       second. See :doc:`theory`
      - standalone
      - ``10 nModes``
    * - ``WaveSeed`` / ``wave_seed``

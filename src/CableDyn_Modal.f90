@@ -13,14 +13,16 @@ MODULE CableDyn_Modal
   !!
   !! K and M are assembled as their symmetric parts in LAPACK symmetric band storage (the
   !! nodes of a line are numbered along it, so the bandwidth is set by one element) and
-  !! CD_Modal_Solve_Band computes only the requested lowest modes: the eigenvalues by
-  !! LAPACK DSBGVX (band reduction and bisection), each mode shape by inverse iteration
-  !! on the banded pencil, M-orthogonalised against the modes before it, and the returned
-  !! eigenvalue as the Rayleigh quotient of that shape. Memory and time
-  !! grow linearly with the line length for the shapes and quadratically, with a small
-  !! constant, for the band reduction. The dense routines (CD_Modal_Bar_Matrices,
-  !! CD_Modal_Hermite_Matrices, CD_Modal_Solve with LAPACK DSYGV) are kept as the reference
-  !! the banded solver is tested against, for small lines only.
+  !! CD_Modal_Solve_Band computes only the requested lowest modes: the eigenvalues by a
+  !! shift-invert block Lanczos iteration on the banded Cholesky factor of K, certified by
+  !! a Sturm count of K - sigma M (or, for a short line, many modes, an indefinite or
+  !! singular K, or a Lanczos run that is not certified, by LAPACK DSBGVX: band reduction
+  !! and bisection), each mode shape by inverse iteration on the banded pencil,
+  !! M-orthogonalised against the modes before it, and the returned eigenvalue as the
+  !! Rayleigh quotient of that shape. Memory and time grow linearly with the line length
+  !! (quadratically, with a small constant, for the band reduction). The dense routines
+  !! (CD_Modal_Bar_Matrices, CD_Modal_Hermite_Matrices, CD_Modal_Solve with LAPACK DSYGV)
+  !! are kept as the reference the banded solver is tested against, for small lines only.
   !!
   !! EI = 0 lines (two-node bars, three translations per node): an element of rest length
   !! l0 and current length l along the unit vector e, tension T = EA (l/l0 - 1) (zero when
@@ -58,7 +60,25 @@ MODULE CableDyn_Modal
   PRIVATE
 
   INTEGER, PARAMETER, PUBLIC :: CD_MODAL_OK = 0, CD_MODAL_BADINPUT = 1, CD_MODAL_FAIL = 2
+  ! Eigenvalue stage of CD_Modal_Solve_Band: chosen by problem size, the shift-invert Lanczos
+  ! iteration (falling back to the band reduction when it is not certified), or the band
+  ! reduction (DSBGVX)
+  INTEGER, PARAMETER, PUBLIC :: CD_MODAL_EIG_AUTO = 0, CD_MODAL_EIG_LANCZOS = 1, CD_MODAL_EIG_BANDRED = 2
   INTEGER, PARAMETER :: I8 = SELECTED_INT_KIND(18)
+  ! Shift-invert block Lanczos: block size (two, for the exactly repeated frequencies of the
+  ! two transverse planes of a straight line), the residual tolerance of a wanted Ritz value
+  ! and of the Ritz values that bound the Sturm interval (relative to the Ritz value of the
+  ! shift-inverted operator, with a floor at round-off of the largest one), the relative gap
+  ! the Sturm shift sits in, and the breakdown threshold of a new Lanczos vector. Below
+  ! LZ_MIN_DOF free DOFs, or where the basis and its M-image would hold more than
+  ! LZ_MAX_WORDS values (256 MB), the band reduction is used.
+  INTEGER, PARAMETER :: LZ_BLOCK = 2, LZ_MIN_DOF = 200
+  INTEGER(I8), PARAMETER :: LZ_MAX_WORDS = 32000000_I8
+  REAL(wp), PARAMETER :: LZ_TOL = 1.0e-10_wp, LZ_TOL_MAX = 1.0e-7_wp, LZ_TOL_GUARD = 1.0e-6_wp
+  REAL(wp), PARAMETER :: LZ_FLOOR = 1.0e-13_wp, LZ_GAP = 1.0e-3_wp, LZ_BREAK = 1.0e-10_wp
+  ! Relative tolerance within which two components of a mode shape count as equally large in
+  ! its sign convention
+  REAL(wp), PARAMETER :: SIGN_TIE = 1.0e-6_wp
   ! Largest problem of the dense reference solver: three 4000 x 4000 matrices are 400 MB
   INTEGER, PARAMETER :: DENSE_MAX_DOF = 4000
   ! Inverse iterations per mode: at least MIN_ITER, at most MAX_ITER
@@ -715,19 +735,25 @@ CONTAINS
     CALL band_to_dense(mb, kd, M)
   END SUBROUTINE CD_Modal_Hermite_Matrices
 
-  SUBROUTINE CD_Modal_Solve_Band(K, M, kd, free, n_modes, omega2, shapes, n_found, ErrStat, ErrMsg)
+  RECURSIVE SUBROUTINE CD_Modal_Solve_Band(K, M, kd, free, n_modes, omega2, shapes, n_found, ErrStat, ErrMsg, &
+                                           eig_method, eig_used)
     !! The n_modes lowest eigenpairs of K phi = omega^2 M phi on the free DOFs, K and M in
     !! symmetric upper band storage of half-bandwidth kd (CD_Modal_Bar_Band,
-    !! CD_Modal_Hermite_Band). The held DOFs are removed, which keeps the band. DSBGVX
-    !! returns the lowest n_modes eigenvalues without eigenvectors (its eigenvectors would
-    !! need an n x n work matrix); each shape is then found by inverse iteration with the
-    !! banded LU factors of K - omega^2 M, M-orthogonalised against the shapes before it
-    !! (so a repeated frequency, such as the two transverse planes of a taut string, gets
-    !! two orthogonal shapes), and accepted on the residual of its eigen-equation. omega2
-    !! is the Rayleigh quotient of the shape (quadruple-precision sums), in ascending order.
-    !! shapes(:, j) is the full-length mode vector (zero on the held DOFs), M-orthonormal
-    !! on the free DOFs, signed so that its largest component is positive. A negative
-    !! omega2 (an unstable or compressed state) is returned as computed.
+    !! CD_Modal_Hermite_Band). The held DOFs are removed, which keeps the band. The lowest
+    !! n_modes eigenvalues come from a shift-invert block Lanczos iteration (lanczos_lowest)
+    !! when it is the cheaper solver and its count is certified, else from DSBGVX (without
+    !! eigenvectors: those would need an n x n work matrix); each shape is then found by
+    !! inverse iteration with the banded LU factors of K - omega^2 M, M-orthogonalised
+    !! against the shapes before it (so a repeated frequency, such as the two transverse
+    !! planes of a taut string, gets two orthogonal shapes), and accepted on the residual of
+    !! its eigen-equation. omega2 is the Rayleigh quotient of the shape (quadruple-precision
+    !! sums), in ascending order. shapes(:, j) is the full-length mode vector (zero on the
+    !! held DOFs), M-orthonormal on the free DOFs, signed so that its largest component is
+    !! positive (the first of those equal to it within SIGN_TIE: a symmetric line's mirrored
+    !! nodes). A negative omega2 (an unstable or compressed state) is returned as computed.
+    !! eig_method (CD_MODAL_EIG_AUTO by default) selects the eigenvalue stage; eig_used
+    !! returns the one that produced the eigenvalues (CD_MODAL_EIG_LANCZOS or
+    !! CD_MODAL_EIG_BANDRED; CD_MODAL_EIG_AUTO when none did).
     REAL(wp), INTENT(IN) :: K(:, :), M(:, :)
     INTEGER, INTENT(IN) :: kd
     LOGICAL, INTENT(IN) :: free(:)
@@ -735,13 +761,15 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: omega2(:), shapes(:, :)
     INTEGER, INTENT(OUT) :: n_found, ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: n, nf, kc, i, j, ii, jj, info, m_found, mode, it, ntry, prev, pass, es
+    INTEGER, INTENT(IN), OPTIONAL :: eig_method
+    INTEGER, INTENT(OUT), OPTIONAL :: eig_used
+    INTEGER :: n, nf, kc, i, j, ii, jj, info, m_found, mode, it, ntry, prev, pass, es, method
     INTEGER, ALLOCATABLE :: map(:), iwork(:), ifail(:), ipiv(:)
     INTEGER(I8) :: seed
     REAL(wp), ALLOCATABLE :: ac(:, :), bc(:, :), a(:, :), b(:, :), w(:), work(:), lu(:, :), x(:), y(:), r(:)
     REAL(wp), ALLOCATABLE :: vec(:, :), bvec(:, :)
-    REAL(wp) :: qdum(1, 1), zdum(1, 1), anorm, bnorm, shift, scale, nrm, res, rq, noise
-    LOGICAL :: converged
+    REAL(wp) :: qdum(1, 1), zdum(1, 1), anorm, bnorm, shift, scale, nrm, res, rq, noise, xmax
+    LOGICAL :: converged, lz_ok
     CHARACTER(1024) :: em
     EXTERNAL :: dsbgvx
 
@@ -750,6 +778,9 @@ CONTAINS
     omega2 = CD_ZERO
     shapes = CD_ZERO
     n_found = 0
+    IF (PRESENT(eig_used)) eig_used = CD_MODAL_EIG_AUTO
+    method = CD_MODAL_EIG_AUTO
+    IF (PRESENT(eig_method)) method = eig_method
     n = SIZE(free)
     IF (kd < 0 .OR. SIZE(K, 1) /= kd + 1 .OR. SIZE(M, 1) /= kd + 1 .OR. SIZE(K, 2) /= n .OR. SIZE(M, 2) /= n .OR. &
         SIZE(shapes, 1) /= n .OR. SIZE(shapes, 2) < n_modes .OR. SIZE(omega2) < n_modes .OR. n_modes < 1) THEN
@@ -789,35 +820,46 @@ CONTAINS
     END DO
     n_found = MIN(n_modes, nf)
 
-    ! The lowest n_found eigenvalues (DSBGVX overwrites its band copies).
-    ALLOCATE (a(kc + 1, nf), b(kc + 1, nf), w(nf), work(7*nf), iwork(5*nf), ifail(nf))
-    a = ac
-    b = bc
-    CALL dsbgvx('N', 'I', 'U', nf, kc, kc, a, kc + 1, b, kc + 1, qdum, 1, CD_ZERO, CD_ZERO, 1, n_found, &
-                2.0_wp*TINY(CD_ONE), m_found, w, zdum, 1, work, iwork, ifail, info)
-    IF (info /= 0 .OR. m_found /= n_found) THEN
-      ErrStat = CD_MODAL_FAIL
-      IF (info == CD_BLAS_UNAVAILABLE_INFO) THEN
-        CALL CD_Blas_Runtime_Check('CableDyn_Modal (DSBGVX)', es, em)
-        ErrMsg = 'CableDyn_Modal: '//TRIM(em)
-      ELSE IF (info > nf) THEN
-        ErrMsg = 'CableDyn_Modal: the mass matrix is not positive definite (DSBGVX)'
-      ELSE
-        BLOCK
-          ! Local buffer: a record longer than the caller's ErrMsg truncates
-          ! instead of aborting the internal write.
-          CHARACTER(1024) :: wmsg
-          INTEGER :: wios
-          wmsg = ''
-          WRITE (wmsg, '(A,I0,A,I0,A,I0)', IOSTAT=wios) 'CableDyn_Modal: DSBGVX failed, INFO = ', info, ', ', m_found, &
-            ' of the requested eigenvalues found: ', n_found
-          ErrMsg = wmsg
-        END BLOCK
+    ! The lowest n_found eigenvalues: the shift-invert Lanczos iteration where it is the
+    ! cheaper solver, else (or when its count is not certified) the band reduction.
+    ALLOCATE (w(nf))
+    lz_ok = .FALSE.
+    IF (method == CD_MODAL_EIG_LANCZOS .OR. (method == CD_MODAL_EIG_AUTO .AND. lanczos_cheaper(nf, kc, n_found))) &
+      CALL lanczos_lowest(ac, bc, kc, n_found, w, lz_ok)
+    IF (lz_ok) THEN
+      IF (PRESENT(eig_used)) eig_used = CD_MODAL_EIG_LANCZOS
+    ELSE
+      ! DSBGVX overwrites its band copies.
+      ALLOCATE (a(kc + 1, nf), b(kc + 1, nf), work(7*nf), iwork(5*nf), ifail(nf))
+      a = ac
+      b = bc
+      CALL dsbgvx('N', 'I', 'U', nf, kc, kc, a, kc + 1, b, kc + 1, qdum, 1, CD_ZERO, CD_ZERO, 1, n_found, &
+                  2.0_wp*TINY(CD_ONE), m_found, w, zdum, 1, work, iwork, ifail, info)
+      IF (info /= 0 .OR. m_found /= n_found) THEN
+        ErrStat = CD_MODAL_FAIL
+        IF (info == CD_BLAS_UNAVAILABLE_INFO) THEN
+          CALL CD_Blas_Runtime_Check('CableDyn_Modal (DSBGVX)', es, em)
+          ErrMsg = 'CableDyn_Modal: '//TRIM(em)
+        ELSE IF (info > nf) THEN
+          ErrMsg = 'CableDyn_Modal: the mass matrix is not positive definite (DSBGVX)'
+        ELSE
+          BLOCK
+            ! Local buffer: a record longer than the caller's ErrMsg truncates
+            ! instead of aborting the internal write.
+            CHARACTER(1024) :: wmsg
+            INTEGER :: wios
+            wmsg = ''
+            WRITE (wmsg, '(A,I0,A,I0,A,I0)', IOSTAT=wios) 'CableDyn_Modal: DSBGVX failed, INFO = ', info, ', ', &
+              m_found, ' of the requested eigenvalues found: ', n_found
+            ErrMsg = wmsg
+          END BLOCK
+        END IF
+        n_found = 0
+        RETURN
       END IF
-      n_found = 0
-      RETURN
+      DEALLOCATE (a, b, work, iwork, ifail)
+      IF (PRESENT(eig_used)) eig_used = CD_MODAL_EIG_BANDRED
     END IF
-    DEALLOCATE (a, b, work, iwork, ifail)
 
     ! The shapes by inverse iteration on the banded pencil.
     anorm = sym_band_norm(ac, kc)
@@ -894,7 +936,12 @@ CONTAINS
           RETURN
         END IF
       END DO
-      i = MAXLOC(ABS(x), 1)
+      ! the sign: the largest component positive; of components equal to it in magnitude to
+      ! round-off (the mirrored nodes of a symmetric line) the first one
+      xmax = MAXVAL(ABS(x))
+      DO i = 1, nf - 1
+        IF (ABS(x(i)) >= (CD_ONE - SIGN_TIE)*xmax) EXIT
+      END DO
       IF (x(i) < CD_ZERO) x = -x
       vec(:, mode) = x
       CALL sym_band_mv(bc, kc, x, bvec(:, mode))
@@ -934,6 +981,15 @@ CONTAINS
 
     SUBROUTINE mode_fail(msg)
       CHARACTER(*), INTENT(IN) :: msg
+      INTEGER :: used
+      IF (lz_ok) THEN
+        ! A shape the Lanczos eigenvalues did not give: the whole solve again on the
+        ! eigenvalues of the band reduction, which succeeds or fails as it does alone.
+        CALL CD_Modal_Solve_Band(K, M, kd, free, n_modes, omega2, shapes, n_found, ErrStat, ErrMsg, &
+                                 eig_method=CD_MODAL_EIG_BANDRED, eig_used=used)
+        IF (PRESENT(eig_used)) eig_used = used
+        RETURN
+      END IF
       ErrStat = CD_MODAL_FAIL
       BLOCK
         ! Local buffer: a record longer than the caller's ErrMsg truncates
@@ -950,6 +1006,254 @@ CONTAINS
     END SUBROUTINE mode_fail
 
   END SUBROUTINE CD_Modal_Solve_Band
+
+  INTEGER FUNCTION lanczos_max_basis(nf, nwant) RESULT(mb)
+    !! The bound on the Lanczos basis for nwant of nf eigenvalues: the iteration usually
+    !! converges with about twice nwant vectors.
+    INTEGER, INTENT(IN) :: nf, nwant
+    mb = MIN(nf, 2*nwant + MAX(nwant, 40))
+  END FUNCTION lanczos_max_basis
+
+  LOGICAL FUNCTION lanczos_cheaper(nf, kc, nwant) RESULT(yes)
+    !! Whether the shift-invert Lanczos iteration is expected to cost less than the band
+    !! reduction for nwant of nf eigenvalues at half-bandwidth kc: the work of its
+    !! reorthogonalisation grows as nf m**2 with the basis size m (about 2 nwant + 20),
+    !! that of the reduction as nf**2 kc (the constant measured on lines of 300 to 24000
+    !! free DOFs).
+    !! The memory of the basis is bounded (LZ_MAX_WORDS).
+    INTEGER, INTENT(IN) :: nf, kc, nwant
+    INTEGER(I8) :: m
+    m = INT(MIN(nf, 2*nwant + 20), I8)
+    yes = nf >= LZ_MIN_DOF .AND. m*m <= 4_I8*INT(nf, I8)*INT(MAX(kc, 1), I8) .AND. &
+          2_I8*INT(lanczos_max_basis(nf, nwant), I8)*INT(nf, I8) <= LZ_MAX_WORDS
+  END FUNCTION lanczos_cheaper
+
+  SUBROUTINE lanczos_lowest(ac, bc, kc, nwant, w, ok)
+    !! The nwant lowest eigenvalues w (ascending) of K x = lambda M x, K and M symmetric in
+    !! upper band storage of half-bandwidth kc, both positive definite: a block Lanczos
+    !! iteration (block LZ_BLOCK, a deterministic pseudo-random start, full
+    !! M-reorthogonalisation by two passes of classical Gram-Schmidt) on the shift-invert
+    !! operator S = K^-1 M (banded Cholesky factor of K), whose largest eigenvalues
+    !! theta = 1/lambda belong to the wanted modes. The Ritz values are those of the
+    !! projection V^T M S V, each accepted on its Lanczos residual, the norm of
+    !! S x - theta x. Shift-invert keeps the low end of the spectrum to relative accuracy
+    !! where a band reduction loses it to the round-off of the axial stiffness. The count is
+    !! certified: the Cholesky factor of K shows that no eigenvalue lies at or below zero,
+    !! and the inertia of K - sigma M (sturm_count) at a shift sigma in a gap above the
+    !! wanted values equals the number of Ritz values below sigma, so no mode is missed (a
+    !! frequency repeated more often than the block size, an eigenvector the start misses)
+    !! and none is counted twice. ok is false (w undefined) when K or M is not positive
+    !! definite, the basis reaches lanczos_max_basis unconverged or uncertified, or a LAPACK
+    !! call fails; the caller then uses the band reduction.
+    REAL(wp), INTENT(IN) :: ac(:, :), bc(:, :)
+    INTEGER, INTENT(IN) :: kc, nwant
+    REAL(wp), INTENT(OUT) :: w(:)
+    LOGICAL, INTENT(OUT) :: ok
+    INTEGER :: nf, mmax, nb, c0, pb, pn, nnew, i, j, r, k, info, lwork, next_check, pass
+    INTEGER(I8) :: seed
+    REAL(wp), ALLOCATABLE :: fk(:, :), v(:, :), mv(:, :), wb(:, :), mwb(:, :), h(:, :), t(:, :), theta(:)
+    REAL(wp), ALLOCATABLE :: work(:), c(:, :), cc(:), est(:), lam(:), y(:), my(:)
+    REAL(wp) :: wq(1), g(LZ_BLOCK, LZ_BLOCK), ref(LZ_BLOCK), thmax, sigma, avg
+    LOGICAL :: good, conv
+    EXTERNAL :: dpbtrf, dpbtrs, dsyev
+
+    ok = .FALSE.
+    w = CD_ZERO
+    nf = SIZE(ac, 2)
+    IF (nwant < 1 .OR. nwant > nf .OR. nf < 2*LZ_BLOCK) RETURN
+    mmax = lanczos_max_basis(nf, nwant)
+    ! M, then K, positive definite (the factor of M is not used further)
+    ALLOCATE (fk(kc + 1, nf))
+    fk = bc
+    CALL dpbtrf('U', nf, kc, fk, kc + 1, info)
+    IF (info /= 0) RETURN
+    fk = ac
+    CALL dpbtrf('U', nf, kc, fk, kc + 1, info)
+    IF (info /= 0) RETURN
+    ALLOCATE (v(nf, mmax), mv(nf, mmax), wb(nf, LZ_BLOCK), mwb(nf, LZ_BLOCK), h(mmax, mmax), t(mmax, mmax), &
+              theta(mmax), c(mmax, LZ_BLOCK), cc(mmax), est(mmax), lam(mmax), y(nf), my(nf))
+    h = CD_ZERO
+    t = CD_ZERO
+    CALL dsyev('V', 'U', mmax, t, mmax, theta, wq, -1, info)
+    IF (info /= 0) RETURN
+    lwork = MAX(3*mmax, INT(wq(1)))
+    ALLOCATE (work(lwork))
+
+    nb = 0
+    DO j = 1, LZ_BLOCK
+      CALL random_vector(j)
+      CALL append(1, SQRT(SUM(y*y)), good)
+      IF (.NOT. good) RETURN
+    END DO
+    c0 = 0
+    next_check = MIN(nwant + 1, nf)
+    DO
+      ! the block c0 + 1..nb: wb = S v, projected out of the basis (twice), the projection
+      ! coefficients the new columns of H = V^T M S V
+      pb = nb - c0
+      wb(:, 1:pb) = mv(:, c0 + 1:nb)
+      CALL dpbtrs('U', nf, kc, pb, fk, kc + 1, wb, nf, info)
+      IF (info /= 0) RETURN
+      IF (.NOT. CD_All_Finite(wb(:, 1:pb))) RETURN
+      DO j = 1, pb
+        ref(j) = SQRT(SUM(wb(:, j)**2))
+      END DO
+      DO pass = 1, 2
+        c(1:nb, 1:pb) = MATMUL(TRANSPOSE(mv(:, 1:nb)), wb(:, 1:pb))
+        wb(:, 1:pb) = wb(:, 1:pb) - MATMUL(v(:, 1:nb), c(1:nb, 1:pb))
+        h(1:nb, c0 + 1:nb) = h(1:nb, c0 + 1:nb) + c(1:nb, 1:pb)
+      END DO
+      h(c0 + 1:nb, 1:c0) = TRANSPOSE(h(1:c0, c0 + 1:nb))
+      DO j = c0 + 1, nb
+        DO i = c0 + 1, j - 1
+          avg = 0.5_wp*(h(i, j) + h(j, i))
+          h(i, j) = avg
+          h(j, i) = avg
+        END DO
+      END DO
+
+      IF (nb >= next_check .OR. nb == nf .OR. nb >= mmax) THEN
+        next_check = nb + MAX(LZ_BLOCK, nb/8)
+        ! Ritz values lam(r) = 1/theta, ascending, and the norms est(r) of their residuals
+        ! wb s (s the Ritz vector's components on the last block)
+        t(1:nb, 1:nb) = h(1:nb, 1:nb)
+        CALL dsyev('V', 'U', nb, t, mmax, theta, work, lwork, info)
+        IF (info /= 0) RETURN
+        DO j = 1, pb
+          CALL sym_band_mv(bc, kc, wb(:, j), mwb(:, j))
+        END DO
+        DO j = 1, pb
+          DO i = 1, pb
+            g(i, j) = DOT_PRODUCT(wb(:, i), mwb(:, j))
+          END DO
+        END DO
+        thmax = theta(nb)
+        DO r = 1, nb
+          k = nb + 1 - r
+          lam(r) = HUGE(CD_ONE)
+          IF (theta(k) > CD_ZERO) lam(r) = CD_ONE/theta(k)
+          est(r) = SQRT(MAX(DOT_PRODUCT(t(c0 + 1:nb, k), MATMUL(g(1:pb, 1:pb), t(c0 + 1:nb, k))), CD_ZERO))
+        END DO
+        conv = .TRUE.
+        DO r = 1, nwant
+          conv = conv .AND. converged_ritz(r, LZ_TOL) .AND. est(r) <= LZ_TOL_MAX*theta(nb + 1 - r)
+        END DO
+        IF (conv) THEN
+          IF (nb == nf) THEN
+            ! a complete basis: its Ritz values are the eigenvalues
+            ok = .TRUE.
+          ELSE
+            ! the first gap above the wanted values with every Ritz value below it converged
+            DO k = nwant, nb - 1
+              IF (k > nwant .AND. .NOT. converged_ritz(k, LZ_TOL_GUARD)) EXIT
+              IF (.NOT. theta(nb - k) > CD_ZERO) EXIT
+              IF (lam(k + 1) - lam(k) >= LZ_GAP*lam(k + 1)) THEN
+                sigma = 0.5_wp*(lam(k) + lam(k + 1))
+                ok = sturm_count(ac, bc, kc, sigma) == k
+                EXIT
+              END IF
+            END DO
+          END IF
+          IF (ok) THEN
+            w(1:nwant) = lam(1:nwant)
+            RETURN
+          END IF
+        END IF
+      END IF
+      IF (nb >= mmax .OR. nb == nf) RETURN
+
+      ! the next block: the projected wb, M-orthonormalised (a column that has vanished, an
+      ! invariant subspace, is replaced by a fresh pseudo-random vector)
+      pn = MIN(LZ_BLOCK, nf - nb, mmax - nb, pb)
+      nnew = nb
+      DO j = 1, pn
+        y = wb(:, j)
+        CALL append(nnew + 1, ref(j), good)
+        IF (.NOT. good) THEN
+          CALL random_vector(nb + LZ_BLOCK + 1)
+          CALL append(1, SQRT(SUM(y*y)), good)
+          IF (.NOT. good) RETURN
+        END IF
+      END DO
+      c0 = nnew
+    END DO
+
+  CONTAINS
+
+    LOGICAL FUNCTION converged_ritz(r, tol) RESULT(yes)
+      !! Ritz value r (ascending) converged to tol relative to its theta, or to round-off of
+      !! the largest theta.
+      INTEGER, INTENT(IN) :: r
+      REAL(wp), INTENT(IN) :: tol
+      yes = theta(nb + 1 - r) > CD_ZERO .AND. est(r) <= MAX(tol*theta(nb + 1 - r), LZ_FLOOR*thmax)
+    END FUNCTION converged_ritz
+
+    SUBROUTINE random_vector(stream)
+      !! y: a deterministic pseudo-random vector of the given stream.
+      INTEGER, INTENT(IN) :: stream
+      INTEGER :: ir
+      seed = 24680_I8 + 7919_I8*INT(stream, I8)
+      DO ir = 1, nf
+        seed = MOD(69069_I8*seed + 1_I8, 2147483647_I8)
+        y(ir) = REAL(seed, wp)/2147483647.0_wp - 0.5_wp
+      END DO
+    END SUBROUTINE random_vector
+
+    SUBROUTINE append(lo, yref, good)
+      !! y orthogonalised (two passes) against the basis vectors lo..nb, M-normalised and
+      !! appended; good is false when it has vanished against its reference norm yref.
+      INTEGER, INTENT(IN) :: lo
+      REAL(wp), INTENT(IN) :: yref
+      LOGICAL, INTENT(OUT) :: good
+      INTEGER :: ip
+      REAL(wp) :: nrm2
+      good = .FALSE.
+      DO ip = 1, 2
+        IF (nb < lo) EXIT
+        cc(1:nb - lo + 1) = MATMUL(TRANSPOSE(mv(:, lo:nb)), y)
+        y = y - MATMUL(v(:, lo:nb), cc(1:nb - lo + 1))
+      END DO
+      CALL sym_band_mv(bc, kc, y, my)
+      nrm2 = DOT_PRODUCT(y, my)
+      IF (.NOT. (nrm2 > CD_ZERO .AND. SQRT(SUM(y*y)) > LZ_BREAK*yref .AND. nrm2 <= HUGE(nrm2))) RETURN
+      nb = nb + 1
+      v(:, nb) = y/SQRT(nrm2)
+      mv(:, nb) = my/SQRT(nrm2)
+      good = .TRUE.
+    END SUBROUTINE append
+
+  END SUBROUTINE lanczos_lowest
+
+  INTEGER FUNCTION sturm_count(ac, bc, kc, sigma) RESULT(cnt)
+    !! The number of eigenvalues of K x = lambda M x below sigma, K and M symmetric in upper
+    !! band storage of half-bandwidth kc and M positive definite: by Sylvester's law of
+    !! inertia, the number of negative pivots of the LDL^T factorisation of K - sigma M
+    !! without pivoting (which keeps the band). -1 when a pivot is zero or not finite.
+    REAL(wp), INTENT(IN) :: ac(:, :), bc(:, :), sigma
+    INTEGER, INTENT(IN) :: kc
+    REAL(wp), ALLOCATABLE :: a(:, :)
+    REAL(wp) :: d, f
+    INTEGER :: nf, k, i, j
+    nf = SIZE(ac, 2)
+    ALLOCATE (a(kc + 1, nf))
+    a = ac - sigma*bc
+    cnt = 0
+    DO k = 1, nf
+      d = a(kc + 1, k)
+      IF (.NOT. (ABS(d) > CD_ZERO .AND. ABS(d) <= HUGE(d))) THEN
+        cnt = -1
+        RETURN
+      END IF
+      IF (d < CD_ZERO) cnt = cnt + 1
+      ! the trailing block of the band: a(i, j) -= a(k, i) a(k, j) / d, k < i <= j <= k + kc
+      DO j = k + 1, MIN(nf, k + kc)
+        f = a(kc + 1 + k - j, j)/d
+        DO i = k + 1, j
+          a(kc + 1 + i - j, j) = a(kc + 1 + i - j, j) - f*a(kc + 1 + k - i, i)
+        END DO
+      END DO
+    END DO
+  END FUNCTION sturm_count
 
   SUBROUTINE CD_Modal_Solve(K, M, free, n_modes, omega2, shapes, n_found, ErrStat, ErrMsg)
     !! Dense reference solver: the n_modes lowest eigenpairs of K phi = omega^2 M phi on the

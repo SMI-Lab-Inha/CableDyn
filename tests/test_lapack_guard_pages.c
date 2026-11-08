@@ -2,14 +2,16 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
  *
- * The modal eigensolves (DSYGV, the dense reference; DSBGVX, the banded production solver)
- * called through CableDyn's LAPACK layer -- in Windows GNU builds the run-time forwarders to
- * openblas.dll -- with every argument array placed against a no-access page, at its end and,
- * in a second pass, at its start. Any read or write outside the arrays the modal code passes
- * faults at once and names the call. Sizes cover the test_modal cases and more (n <= 96, half
- * band widths 0..11), with the argument sizes CableDyn_Modal uses (WORK 7n and IWORK 5n for
- * DSBGVX, the queried LWORK for DSYGV). CTest runs it with OPENBLAS_CORETYPE=Haswell, the
- * kernel selected on the hosts where test_modal was seen to fault.
+ * The modal eigensolves (DSYGV, the dense reference; DSBGVX, the band reduction; DPBTRF and
+ * DPBTRS, the banded Cholesky factor and solves of the shift-invert Lanczos stage; DSYEV, its
+ * projected eigenproblem) called through CableDyn's LAPACK layer -- in Windows GNU builds the
+ * run-time forwarders to openblas.dll -- with every argument array placed against a no-access
+ * page, at its end and, in a second pass, at its start. Any read or write outside the arrays
+ * the modal code passes faults at once and names the call. Sizes cover the test_modal cases and
+ * more (n <= 96, half band widths 0..11), with the argument sizes CableDyn_Modal uses (WORK 7n
+ * and IWORK 5n for DSBGVX, two right-hand sides for DPBTRS, the queried LWORK for DSYGV and
+ * DSYEV). CTest runs it with OPENBLAS_CORETYPE=Haswell, the kernel selected on the hosts where
+ * test_modal was seen to fault.
  */
 #if !defined(_WIN32)
 #define _DEFAULT_SOURCE
@@ -28,6 +30,11 @@ void dsbgvx_(const char *jobz, const char *range, const char *uplo, const int *n
              const double *vu, const int *il, const int *iu, const double *abstol, int *m, double *w, double *z,
              const int *ldz, double *work, int *iwork, int *ifail, int *info, size_t jobz_len, size_t range_len,
              size_t uplo_len);
+void dsyev_(const char *jobz, const char *uplo, const int *n, double *a, const int *lda, double *w, double *work,
+            const int *lwork, int *info, size_t jobz_len, size_t uplo_len);
+void dpbtrf_(const char *uplo, const int *n, const int *kd, double *ab, const int *ldab, int *info, size_t uplo_len);
+void dpbtrs_(const char *uplo, const int *n, const int *kd, const int *nrhs, const double *ab, const int *ldab,
+             double *b, const int *ldb, int *info, size_t uplo_len);
 
 static char where[96] = "start";
 
@@ -160,6 +167,25 @@ int main(void)
                 fprintf(stderr, "FAIL: DSYGV n = %d returned INFO = %d\n", n, info);
                 ++failures;
             }
+            for (j = 0; j < n; ++j) {
+                for (i = 0; i <= j; ++i) {
+                    a[i + j * n] = a[j + i * n] = next_random(&state) - 0.5;
+                }
+            }
+            lwork = -1;
+            snprintf(where, sizeof where, "DSYEV workspace query, n = %d", n);
+            dsyev_("V", "U", &n, a, &n, w, &query, &lwork, &info, 1, 1);
+            lwork = (int)query;
+            if (lwork < 3 * n) {
+                lwork = 3 * n;
+            }
+            work = guarded(sizeof(double) * (size_t)lwork, front);
+            snprintf(where, sizeof where, "DSYEV, n = %d, %s guard", n, front ? "front" : "end");
+            dsyev_("V", "U", &n, a, &n, w, work, &lwork, &info, 1, 1);
+            if (info != 0) {
+                fprintf(stderr, "FAIL: DSYEV n = %d returned INFO = %d\n", n, info);
+                ++failures;
+            }
             for (kd = 0; kd <= 11 && kd < n; ++kd) {
                 int ld = kd + 1, il = 1, iu = n < 6 ? n : 6, m = 0, one = 1;
                 double vl = 0.0, vu = 0.0, tol = 4.4501477170144028e-308, q = 0.0, z = 0.0;
@@ -183,12 +209,40 @@ int main(void)
                     fprintf(stderr, "FAIL: DSBGVX n = %d kd = %d returned INFO = %d, M = %d\n", n, kd, info, m);
                     ++failures;
                 }
+                {
+                    int two = 2;
+                    double *fk = guarded(sizeof(double) * (size_t)ld * (size_t)n, front);
+                    double *rhs = guarded(sizeof(double) * 2 * (size_t)n, front);
+                    for (j = 0; j < n; ++j) {
+                        for (i = j - kd > 0 ? j - kd : 0; i <= j; ++i) {
+                            fk[(kd + i - j) + j * ld] = i == j ? 2.0 * n + kd : next_random(&state) - 0.5;
+                        }
+                        rhs[j] = next_random(&state);
+                        rhs[j + n] = next_random(&state);
+                    }
+                    snprintf(where, sizeof where, "DPBTRF, n = %d, kd = %d, %s guard", n, kd,
+                             front ? "front" : "end");
+                    dpbtrf_("U", &n, &kd, fk, &ld, &info, 1);
+                    if (info != 0) {
+                        fprintf(stderr, "FAIL: DPBTRF n = %d kd = %d returned INFO = %d\n", n, kd, info);
+                        ++failures;
+                        continue;
+                    }
+                    snprintf(where, sizeof where, "DPBTRS, n = %d, kd = %d, %s guard", n, kd,
+                             front ? "front" : "end");
+                    dpbtrs_("U", &n, &kd, &two, fk, &ld, rhs, &n, &info, 1);
+                    if (info != 0) {
+                        fprintf(stderr, "FAIL: DPBTRS n = %d kd = %d returned INFO = %d\n", n, kd, info);
+                        ++failures;
+                    }
+                }
             }
         }
     }
     if (failures != 0) {
         return 1;
     }
-    printf("PASS: DSYGV and DSBGVX stay inside the arrays the modal code passes (n <= 96)\n");
+    printf("PASS: DSYGV, DSYEV, DSBGVX, DPBTRF and DPBTRS stay inside the arrays the modal code passes "
+           "(n <= 96)\n");
     return 0;
 }

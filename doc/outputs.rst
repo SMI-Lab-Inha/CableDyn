@@ -462,7 +462,9 @@ row:
 * ``# Mode shapes``: ``LineID  Mode  Node  X  Y  Z  dX  dY  dZ``, one row per mode and node.
   ``X Y Z`` is the static node position and ``dX dY dZ`` the nodal translation of the mode,
   scaled so that the largest nodal displacement of the mode is 1. Nodes are numbered End A first,
-  as in the other line files; the held end nodes have zero displacement.
+  as in the other line files; the held end nodes have zero displacement. The sign of a mode
+  makes the largest component of its mode vector positive; where two components are equally
+  large (the mirrored nodes of a symmetric line), the first of them in the solver's node order.
 
 When a line is restrained in torsion (both ends, see :doc:`driver_format`), its modes carry the
 twist angle of every node (:ref:`nodal twist <theory-nodal-twist>`) and both tables gain a
