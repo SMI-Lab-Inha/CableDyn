@@ -12299,7 +12299,10 @@ CONTAINS
     DO i = 1, SIZE(points)
       IF (point_moves(i)) np = np + 1
     END DO
-    IF (np == 0) RETURN
+    IF (np == 0) THEN
+      CALL point3_balance_note()
+      RETURN
+    END IF
     ALLOCATE (pidx(np))
     np = 0
     DO i = 1, SIZE(points)
@@ -12327,8 +12330,73 @@ CONTAINS
     END DO
     CALL solve_body_equilibrium(types, no_bodies, no_rod_types, no_rods, points, lines, sections, opts, ErrStat, &
                                 ErrMsg, bathymetry, points_only=.TRUE.)
+    IF (ErrStat == CD_DECKDRV_OK) CALL point3_balance_note()
 
   CONTAINS
+
+    SUBROUTINE point3_balance_note()
+      !! A Point3 buoy is not placed by the static solve: it starts at its deck position. Under
+      !! bodyIC static, where every other free object starts balanced, note the force its line,
+      !! weight, buoyancy, current drag and seabed contact leave on it there, and how far its
+      !! static equilibrium (the balance of the buoy as a Free point, with the Free/Connect
+      !! points held where the static solve put them) lies from it.
+      TYPE(DeckPoint), ALLOCATABLE :: pc(:)
+      REAL(wp), ALLOCATABLE :: f0(:)
+      REAL(wp) :: w_net
+      INTEGER :: ip, es_n
+      LOGICAL :: any3, skp
+      CHARACTER(1024) :: em_n
+      CHARACTER(32) :: fbuf, dbuf
+      IF (.NOT. opts%body_ic_static) RETURN
+      any3 = .FALSE.
+      DO ip = 1, SIZE(points)
+        IF (points(ip)%point3 .AND. point_has_line(ip)) any3 = .TRUE.
+      END DO
+      IF (.NOT. any3) RETURN
+      pc = points
+      DO ip = 1, SIZE(pc)
+        IF (pc(ip)%point3 .AND. point_has_line(ip)) THEN
+          pc(ip)%ptype = 'free'
+        ELSE IF (TRIM(pc(ip)%ptype) == 'free' .OR. TRIM(pc(ip)%ptype) == 'connect') THEN
+          pc(ip)%ptype = 'fixed'
+        END IF
+      END DO
+      ALLOCATE (f0(SIZE(pc)))
+      f0 = CD_ZERO
+      skp = .FALSE.
+      CALL solve_body_equilibrium_core(types, no_bodies, no_rod_types, no_rods, pc, lines, sections, opts, es_n, &
+                                       em_n, bathymetry, points_only=.TRUE., quiet=.TRUE., skipped=skp, &
+                                       point_force_start=f0)
+      IF (skp) RETURN
+      DO ip = 1, SIZE(points)
+        IF (.NOT. (points(ip)%point3 .AND. point_has_line(ip))) CYCLE
+        w_net = ABS(opts%rhoW*points(ip)%vol - points(ip)%mass)*opts%g
+        IF (.NOT. (f0(ip) > 1.0e-4_wp*w_net + CD_ONE)) CYCLE
+        WRITE (fbuf, '(ES10.3)') f0(ip)
+        IF (es_n == CD_DECKDRV_OK) THEN
+          WRITE (dbuf, '(ES10.3)') NORM2(pc(ip)%pos - points(ip)%pos)
+          CALL print_note(output_unit, '  ', 'BODY '//TRIM(int_to_str(points(ip)%body_id))//' (Point3) starts '// &
+                          'at its deck position, which the static solve does not change, with an unbalanced '// &
+                          'force of '//TRIM(ADJUSTL(fbuf))//' N there; its static equilibrium lies '// &
+                          TRIM(ADJUSTL(dbuf))//' m away. Give the deck position of its equilibrium, or set '// &
+                          'OPTION bodyIC deck to start it from its deck position on purpose')
+        ELSE
+          CALL print_note(output_unit, '  ', 'BODY '//TRIM(int_to_str(points(ip)%body_id))//' (Point3) starts '// &
+                          'at its deck position, which the static solve does not change, with an unbalanced '// &
+                          'force of '//TRIM(ADJUSTL(fbuf))//' N there. Give the deck position of its '// &
+                          'equilibrium, or set OPTION bodyIC deck to start it from its deck position on purpose')
+        END IF
+      END DO
+    END SUBROUTINE point3_balance_note
+
+    LOGICAL FUNCTION point_has_line(ip) RESULT(has)
+      INTEGER, INTENT(IN) :: ip
+      INTEGER :: jl
+      has = .FALSE.
+      DO jl = 1, SIZE(lines)
+        IF (lines(jl)%nodeA == points(ip)%id .OR. lines(jl)%nodeB == points(ip)%id) has = .TRUE.
+      END DO
+    END FUNCTION point_has_line
 
     LOGICAL FUNCTION point_moves(ip) RESULT(mv)
       INTEGER, INTENT(IN) :: ip
@@ -27294,7 +27362,8 @@ CONTAINS
 
   SUBROUTINE solve_body_equilibrium_core(types, bodies, rod_types, rods, points, lines, sections, opts, ErrStat, &
                                          ErrMsg, bathymetry, points_only, jac_check_err, ext_pt, ext_fm, &
-                                         end_force_a, quiet, skipped, ext_km, ext_rot, end_force_b, res_left)
+                                         end_force_a, quiet, skipped, ext_km, ext_rot, end_force_b, res_left, &
+                                         point_force_start)
     !! Static equilibrium of the free objects of a deck: free Rigid6 bodies (six DOFs: position
     !! and a rotation-vector increment on SO(3); a CoupledPinned body holds its position at its
     !! host node and balances its moment about it), free rods (position and the two rotations
@@ -27381,6 +27450,9 @@ CONTAINS
     ! [N m] of an object at the returned poses (zero when nothing was balanced): the resolution of
     ! the balance, which the passes of solve_body_equilibrium cannot refine
     REAL(wp), INTENT(OUT), OPTIONAL :: res_left
+    ! point_force_start: the magnitude of the net force on every moving point at its starting
+    ! position (per entry of points; zero for a point that does not move)
+    REAL(wp), INTENT(OUT), OPTIONAL :: point_force_start(:)
 
     TYPE :: LineStaticCache
       !! A moving line's mesh and loads (fixed) and its last converged shape (the warm seed).
@@ -27429,6 +27501,7 @@ CONTAINS
     IF (PRESENT(quiet)) silent = quiet
     IF (PRESENT(skipped)) skipped = .FALSE.
     IF (PRESENT(res_left)) res_left = CD_ZERO
+    IF (PRESENT(point_force_start)) point_force_start = CD_ZERO
     IF (.NOT. (only_points .OR. opts%body_ic_static)) RETURN
     ! the objects that move: free Rigid6 bodies and free rods with a line, then Free/Connect points
     ALLOCATE (okind(SIZE(bodies) + SIZE(rods) + SIZE(points)), idx(SIZE(bodies) + SIZE(rods) + SIZE(points)))
@@ -27616,6 +27689,11 @@ CONTAINS
     DO
       CALL residual(x, r, sc, ok, .TRUE.)
       IF (.NOT. ok) RETURN
+      IF (phase == 1 .AND. PRESENT(point_force_start)) THEN
+        DO k = 1, nobj
+          IF (okind(k) == OBJ_POINT) point_force_start(idx(k)) = NORM2(r(off(k) + 1:off(k) + 3))
+        END DO
+      END IF
       rnorm = NORM2(r)
       mu = 1.0e-8_wp
       trust = -CD_ONE

@@ -1867,6 +1867,16 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 300
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # A Point3 buoy that starts off balance under bodyIC static is noted with its unbalanced force.
+  add_test(NAME point3_balance_note
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_point3_balance_note.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/point3_balance_note)
+  set_tests_properties(point3_balance_note PROPERTIES
+    LABELS "python;bodies;static"
+    TIMEOUT 300
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # The note on grounded lines that a current moves over a seabed without friction: once per run
   # on every standalone route, and never without a grounded node, a current, or a march, or
   # with friction.

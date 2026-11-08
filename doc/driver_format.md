@@ -527,7 +527,10 @@ A line's End A attaches to a body through a `Body<ID>` point; the point's positi
 fairlead offset in the body frame.
 
 - A `Point3` body supports exactly one attachment point, which becomes a dynamic point with the
-  body's `Mass`/`Vol`/`CdA`/`Ca`.
+  body's `Mass`/`Vol`/`CdA`/`Ca`. The static solve does not place it: it starts at its deck
+  position. Under `bodyIC static` (the default) a run whose buoy is not balanced there notes the
+  unbalanced force and the distance to its static balance as a `Free` point; give the deck
+  position of that balance, or set `bodyIC deck` to start it off balance on purpose.
 - A `Rigid6` body transfers structural force and moment through rigid attachment kinematics, plus
   lumped translational current and wave hydrodynamics from `CdA`/`Ca`. Rotational body
   hydrodynamics are not modelled.
