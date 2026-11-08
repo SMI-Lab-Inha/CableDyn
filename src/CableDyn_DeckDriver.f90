@@ -9634,6 +9634,17 @@ CONTAINS
         ! coerced through the all-lines Hermite builder.
         IF (.NOT. all_lines_have_finite_ei(types, lines, sections)) THEN
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
+          ! name the line that has both kinds of section (the standalone executable sends a deck
+          ! of separate EI=0 and finite-EI lines to the aggregate, never here)
+          DO li = 1, SIZE(lines)
+            IF (line_is_finite_ei(lines(li), types, sections) .AND. &
+                .NOT. all_lines_have_finite_ei(types, lines(li:li), sections)) THEN
+              CALL fail(ErrStat, ErrMsg, 'LINE '//TRIM(int_to_str(lines(li)%id))//' combines EI=0 and '// &
+                        'finite-EI sections, which the standalone finite-EI march does not take: give every '// &
+                        'section of the line a finite EI')
+              RETURN
+            END IF
+          END DO
           CALL fail(ErrStat, ErrMsg, 'mixed EI=0 and finite-EI dynamic decks are not supported by this entry point')
           RETURN
         END IF
@@ -18961,6 +18972,12 @@ CONTAINS
       IF (.NOT. (types(idx)%diam > CD_ZERO) .OR. .NOT. (types(idx)%ea > CD_ZERO)) THEN
         CALL fail(ErrStat, ErrMsg, 'LINE TYPE "'//TRIM(types(idx)%name)// &
                   '": Diam and EA must be > 0'); RETURN
+      END IF
+      ! A finite-EI line carries its mass in the bending dynamics and its weight in the statics
+      ! (an EI=0 line without mass is refused as net-buoyant below).
+      IF (types(idx)%ei > CD_ZERO .AND. .NOT. (types(idx)%mass > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPE "'//TRIM(types(idx)%name)// &
+                  '": MassDenInAir must be > 0 on a finite-EI line'); RETURN
       END IF
       ! Net-buoyant gate: EI=0 decks cannot build a lazy-wave arch. The finite-EI
       ! route has the cubic-Hermite arch seed and may proceed. A dynamic standalone

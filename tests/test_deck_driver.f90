@@ -2166,6 +2166,37 @@ CONTAINS
       CALL require(es_l == CD_DECKDRV_OK, 'caller-driven current deck needs no dtM: '//TRIM(em_l))
       IF (es_l == CD_DECKDRV_OK) CALL CD_End_Deck_Aggregate(cagg)
     END BLOCK
+
+    ! A finite-EI line needs mass, and the standalone finite-EI march a line whose sections all
+    ! have a finite EI: both are named input errors, not a failure inside the model build.
+    BLOCK
+      CHARACTER(*), PARAMETER :: CHAIN_ROW = 'chain 0.252 390.0 1.674e9 -1.0 0.0 1.37 0.64 1.0 0.0'
+      CHARACTER(*), PARAMETER :: STIFF_ROW = 'stiff 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0'
+      CHARACTER(:), ALLOCATABLE :: body
+      CHARACTER(1) :: nl
+      CHARACTER(8), PARAMETER :: MASSES(2) = [CHARACTER(8) :: '0.0', '-1.0']
+      INTEGER :: k, m
+      nl = NEW_LINE('a')
+      DO m = 1, SIZE(MASSES)
+        body = hardening_deck(ANCHOR, SECTION, '0.1 dtM'//nl//'0.2 TMax', 'FairTen1')
+        k = INDEX(body, CHAIN_ROW)
+        CALL require(k > 0, 'finite-EI mass fixture locates the LINE TYPES row')
+        IF (k == 0) CYCLE
+        body = body(1:k - 1)//'chain 0.252 '//TRIM(MASSES(m))//' 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0'// &
+               body(k + LEN(CHAIN_ROW):)
+        CALL expect_badinput('deck_hard_finite_mass.dat', body, 'a finite-EI line type of mass '//TRIM(MASSES(m)), &
+                             'LINE TYPE "chain": MassDenInAir must be > 0 on a finite-EI line')
+      END DO
+      body = hardening_deck(ANCHOR, '1 chain 200.0 20'//nl//'1 stiff 210.0 21', '0.1 dtM'//nl//'0.2 TMax', &
+                            'FairTen1')
+      k = INDEX(body, CHAIN_ROW)
+      CALL require(k > 0, 'split-line fixture locates the LINE TYPES row')
+      IF (k > 0) THEN
+        body = body(1:k - 1)//CHAIN_ROW//nl//STIFF_ROW//body(k + LEN(CHAIN_ROW):)
+        CALL expect_badinput('deck_hard_split_line.dat', body, 'a line of EI=0 and finite-EI sections', &
+                             'LINE 1 combines EI=0 and finite-EI sections')
+      END IF
+    END BLOCK
   END SUBROUTINE check_parser_hardening
 
   FUNCTION rigid6_failure_deck(failure_rows, extra_point) RESULT(body)

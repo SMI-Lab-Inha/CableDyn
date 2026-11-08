@@ -18,6 +18,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- A finite-EI line type with `MassDenInAir` of zero or less is refused by name
+  (`MassDenInAir must be > 0 on a finite-EI line`), and a line combining EI = 0 and finite-EI
+  sections on the standalone finite-EI march names that line, instead of failing inside the model
+  build or as an unsupported "mixed deck".
+- The Python deck validator refuses, as the solver does, `TDP<L>` channels on a standalone deck
+  without a seabed, `Point<P>p` channels of a Coupled/Vessel point that only finite-EI lines reach
+  on the aggregate and of any point on a standalone multibody march without an EI = 0 line, a
+  finite-EI line type without mass, and a line combining EI = 0 and finite-EI sections on the
+  standalone finite-EI march.
 
 ## [0.4.1] - 2026-11-08
 
