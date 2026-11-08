@@ -18249,7 +18249,7 @@ CONTAINS
       IF (x < CD_ZERO .OR. x > CD_ONE) CALL fail(ErrStat, ErrMsg, 'OPTION '//TRIM(kw)//' must lie in [0, 1]')
     CASE ('time step')
       IF (.NOT. (x >= CD_MIN_TIME_STEP)) CALL fail(ErrStat, ErrMsg, 'OPTION '//TRIM(kw)//' must be at least '// &
-                                                  '1e-100 s: the time integration divides by its square')
+                                                   '1e-100 s: the time integration divides by its square')
     END SELECT
   END SUBROUTINE check_option_row_value
 
