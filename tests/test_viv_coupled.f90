@@ -175,14 +175,21 @@ CONTAINS
     INTEGER :: k, pass, nn
     ! four mesh elements (internal order, End B first) over two deck segments: deck nodes at public
     ! nodes 1, 3 and 5, so public node 4 lies 3/4 of the way along the second deck segment
+    ! MoorDyn's i/N from the deck's End A; a line kept in the deck order adds half a turn, as the
+    ! model's tangent runs against MoorDyn's there (End B to End A)
     CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .FALSE., seed, deck_map=[1, 3, 5])
     want = [1.0_wp, 0.875_wp, 0.5_wp, 0.25_wp, 0.0_wp]
-    CALL check(MAXVAL(ABS(seed - want)) < 1.0e-14_wp, 'refined mesh: deck nodes keep i/N, added nodes interpolate')
+    CALL check(MAXVAL(ABS(seed - MODULO(want + 0.5_wp, 1.0_wp))) < 1.0e-14_wp, &
+               'refined mesh: deck nodes keep i/N, added nodes interpolate')
     CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .TRUE., seed, deck_map=[1, 3, 5])
     CALL check(MAXVAL(ABS(seed - (1.0_wp - want))) < 1.0e-14_wp, 'a turned-around line counts from its End B')
     CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .FALSE., seed)
-    CALL check(MAXVAL(ABS(seed - [4.0_wp, 3.0_wp, 2.0_wp, 1.0_wp, 0.0_wp]/4.0_wp)) < 1.0e-14_wp, &
+    CALL check(MAXVAL(ABS(seed - [0.5_wp, 0.25_wp, 0.0_wp, 0.75_wp, 0.5_wp])) < 1.0e-14_wp, &
                'the deck mesh keeps the node index')
+    CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .FALSE., seed, zero=.TRUE.)
+    CALL check(MAXVAL(ABS(seed - 0.5_wp)) < 1.0e-14_wp, 'zero: every phase at 0 in MoorDyn''s frame')
+    CALL CD_Deck_VIV_Phase_Seed([1.0_wp, 3.0_wp, 2.0_wp, 2.0_wp], .TRUE., seed, zero=.TRUE.)
+    CALL check(MAXVAL(ABS(seed)) < 1.0e-14_wp, 'zero on a turned-around line')
     CALL write_deck('viv_coupled_stock.dat', 0.8_wp, anchor_first=.TRUE.)
     DO pass = 1, 2
       IF (.NOT. start(agg, MERGE('viv_coupled.dat      ', 'viv_coupled_stock.dat', pass == 1))) RETURN
@@ -191,12 +198,17 @@ CONTAINS
       worst_cable = 0.0_wp
       DO k = 2, nn - 1
         ! internal node k (k = 1 at the anchor); MoorDyn's node from the deck's End A
+        ! (half a turn on where the reader keeps the deck order: the model's tangent runs against
+        ! MoorDyn's there)
         IF (pass == 1) THEN
-          worst_line = MAX(worst_line, ABS(agg%sys%fast%system%lines(1)%viv_phi(k) - TWO_PI*REAL(nn - k, wp)/50.0_wp))
-          worst_cable = MAX(worst_cable, ABS(agg%cables(1)%line%viv_phi(k) - TWO_PI*REAL(nn - k, wp)/50.0_wp))
+          worst_line = MAX(worst_line, turn_gap(agg%sys%fast%system%lines(1)%viv_phi(k), &
+                                                TWO_PI*(REAL(nn - k, wp)/50.0_wp + 0.5_wp)))
+          worst_cable = MAX(worst_cable, turn_gap(agg%cables(1)%line%viv_phi(k), &
+                                                  TWO_PI*(REAL(nn - k, wp)/50.0_wp + 0.5_wp)))
         ELSE
-          worst_line = MAX(worst_line, ABS(agg%sys%fast%system%lines(1)%viv_phi(k) - TWO_PI*REAL(k - 1, wp)/50.0_wp))
-          worst_cable = MAX(worst_cable, ABS(agg%cables(1)%line%viv_phi(k) - TWO_PI*REAL(k - 1, wp)/50.0_wp))
+          worst_line = MAX(worst_line, turn_gap(agg%sys%fast%system%lines(1)%viv_phi(k), &
+                                                TWO_PI*REAL(k - 1, wp)/50.0_wp))
+          worst_cable = MAX(worst_cable, turn_gap(agg%cables(1)%line%viv_phi(k), TWO_PI*REAL(k - 1, wp)/50.0_wp))
         END IF
       END DO
       CALL check(worst_line < 1.0e-12_wp .AND. worst_cable < 1.0e-12_wp, &
@@ -205,6 +217,14 @@ CONTAINS
       CALL finish(agg)
     END DO
   END SUBROUTINE case_seed
+
+  PURE REAL(wp) FUNCTION turn_gap(a, b) RESULT(gap)
+    !! Distance of two phases on the circle (rad).
+    REAL(wp), INTENT(IN) :: a, b
+    REAL(wp), PARAMETER :: TWO_PI = 8.0_wp*ATAN(1.0_wp)
+    gap = MODULO(a - b, TWO_PI)
+    gap = MIN(gap, TWO_PI - gap)
+  END FUNCTION turn_gap
 
   LOGICAL FUNCTION start(agg, path) RESULT(ok)
     !! A host-fluid build of the deck at dt.

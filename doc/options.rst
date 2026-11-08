@@ -695,6 +695,15 @@ Ambient fluid and prescribed motion
        different ``dtM`` with the same averaging time
      - lines with a LINE TYPES ``Cl > 0``, on every route
      - ``0.25 VIVrmsWindow``
+   * - ``VIVphaseSeed`` / ``viv_phase_seed``
+     - mode
+     - ``spread``
+     - the initial phases of the VIV synchronisation model (:ref:`theory-viv`): ``spread`` starts
+       node ``i`` from the deck's End A at ``2 pi i/N``, as MoorDyn-C; ``zero`` starts every node
+       at zero, where MoorDyn-F in OpenFAST v5.0.0 starts (it does not carry its seed into its
+       state). Where two lock-in branches coexist, the seed selects the one a run settles on
+     - lines with a LINE TYPES ``Cl > 0``, on every route
+     - ``zero VIVphaseSeed``
    * - ``motionFile``
      - path, or ``0``/``none``
      - absent

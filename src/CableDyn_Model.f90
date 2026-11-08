@@ -398,6 +398,9 @@ MODULE CableDyn_Model
     ! explicit generalised-alpha force-level phase. viv_rate (phase rate at the step start)
     ! and viv_ms_next (mean squares updated with the step-start sample) are step scratch.
     LOGICAL :: has_viv = .FALSE.
+    ! the cross-flow phase of a node at rest (CD_VIV_Phase_Rate phi_rest): pi where the node
+    ! tangent runs against MoorDyn's (End B to End A), 0 where it runs as MoorDyn's
+    REAL(wp) :: viv_phi_rest = CD_ZERO
     REAL(wp) :: viv_rho = CD_ZERO
     REAL(wp) :: viv_tw = CD_ZERO
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_d(:)
@@ -3879,16 +3882,20 @@ CONTAINS
     model%recovery_syrope_tmax = tmax
   END SUBROUTINE CD_Set_Model_Syrope_State
 
-  SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg, phase_seed)
+  SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg, phase_seed, &
+                              tangent_reversed)
     !! Install the cross-flow VIV model (CableDyn_VIV) on an initialised line. Per element:
     !! the lift coefficient cl (0 = no lift on that element), hydrodynamic diameter, and the
     !! synchronisation centre cf and half-range df of the non-dimensional shedding frequency;
     !! rho is the water density. t_window is the averaging time of the running cross-flow mean
     !! squares [s]; 0 selects MoorDyn's 500 time steps, latched at the first step. Every
     !! interior free node next to a cl > 0 element carries a lift and a shedding phase; the
-    !! phases start spread over [0, 2 pi) along the line (MoorDyn-C: 2 pi i/N at node i from
-    !! End A; phase_seed, per node, gives i/N instead, for a line whose deck End A the reader
-    !! turned around), the mean squares at 0.
+    !! phases start spread over [0, 2 pi) along the line, the mean squares at 0. MoorDyn-C starts
+    !! node i from End A at 2 pi i/N with the node tangent from End A to End B; the model's
+    !! tangent (from node nd - 1 to nd + 1) runs from End B to End A, which turns the lift and the
+    !! cross-flow axis around, so the same motion starts here from those phases plus pi.
+    !! phase_seed, per node, gives the start as a fraction of a turn instead
+    !! (CD_Deck_VIV_Phase_Seed: a line whose deck End A the reader turned around, a refined mesh).
     !! An all-zero cl leaves the model without VIV. The mesh must be the single chain the
     !! line builder makes (element e joins nodes e and e+1). The caller recomputes the
     !! acceleration if the lift should enter the initial state (CD_Recompute_Model_Acceleration).
@@ -3897,6 +3904,10 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: phase_seed(:)
+    !! tangent_reversed (default .TRUE., the model's own seed): the node tangent runs against
+    !! MoorDyn's, so a node at rest takes the cross-flow phase pi (CD_VIV_Phase_Rate phi_rest);
+    !! .FALSE. on a line the reader turned around, whose tangent runs as MoorDyn's
+    LOGICAL, INTENT(IN), OPTIONAL :: tangent_reversed
     INTEGER :: n_nodes, n_elem, e, nd, istat, k
     REAL(wp) :: wsum
 
@@ -3993,8 +4004,9 @@ CONTAINS
       model%viv_df(nd) = model%viv_df(nd)/wsum
       model%viv_dn(nd) = model%viv_dn(nd)/wsum
       ! MoorDyn: phi_i = 2 pi i/N at node i = 0..N counted from End A; the model numbers its
-      ! nodes from End B, so node nd is MoorDyn's node n_nodes - nd
-      model%viv_phi(nd) = CD_VIV_TWO_PI*REAL(n_nodes - nd, wp)/REAL(n_elem, wp)
+      ! nodes from End B, so node nd is MoorDyn's node n_nodes - nd, and its tangent runs the other
+      ! way (half a turn on)
+      model%viv_phi(nd) = CD_VIV_Wrap_Phase(CD_VIV_TWO_PI*(REAL(n_nodes - nd, wp)/REAL(n_elem, wp) + 0.5_wp))
       IF (PRESENT(phase_seed)) model%viv_phi(nd) = CD_VIV_TWO_PI*phase_seed(nd)
     END DO
     model%viv_phi_rollback = model%viv_phi
@@ -4005,6 +4017,8 @@ CONTAINS
     model%viv_rate = CD_ZERO
     model%viv_ms_next = model%viv_ms
     model%viv_phi_next = model%viv_phi
+    model%viv_phi_rest = 0.5_wp*CD_VIV_TWO_PI
+    IF (PRESENT(tangent_reversed)) model%viv_phi_rest = MERGE(0.5_wp*CD_VIV_TWO_PI, CD_ZERO, tangent_reversed)
     model%has_viv = .TRUE.
   END SUBROUTINE CD_Set_Model_VIV
 
@@ -4191,7 +4205,7 @@ CONTAINS
       model%viv_ms_next(2, nd) = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, w)
       model%viv_rate(nd) = CD_VIV_Phase_Rate(yd, ydd, model%viv_ms_next(1, nd), model%viv_ms_next(2, nd), &
                                              model%viv_phi(nd), un, model%viv_dn(nd), model%viv_cf(nd), &
-                                             model%viv_df(nd))
+                                             model%viv_df(nd), phi_rest=model%viv_phi_rest)
       model%viv_phi_eval(nd) = model%viv_phi(nd) + (CD_ONE - alpha_f)*dt*model%viv_rate(nd)
     END DO
   END SUBROUTINE viv_step_begin
@@ -4225,7 +4239,7 @@ CONTAINS
       ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, nd), yd, w)
       ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, nd), ydd, w)
       rate_end = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(nd) + dt*model%viv_rate(nd), un, &
-                                   model%viv_dn(nd), model%viv_cf(nd), model%viv_df(nd))
+                                   model%viv_dn(nd), model%viv_cf(nd), model%viv_df(nd), phi_rest=model%viv_phi_rest)
       model%viv_phi_next(nd) = CD_VIV_Wrap_Phase(model%viv_phi(nd) + 0.5_wp*dt*(model%viv_rate(nd) + rate_end))
     END DO
     IF (.NOT. CD_All_Finite(model%viv_phi_next)) THEN
@@ -6872,6 +6886,7 @@ CONTAINS
     work%has_viv = src%has_viv
     work%viv_rho = src%viv_rho
     work%viv_tw = src%viv_tw
+    work%viv_phi_rest = src%viv_phi_rest
     CALL copy_real1(src%viv_cl, work%viv_cl, 'viv_cl', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%viv_d, work%viv_d, 'viv_d', ErrStat, ErrMsg)
@@ -7043,6 +7058,7 @@ CONTAINS
     to%has_viv = from%has_viv
     to%viv_rho = from%viv_rho
     to%viv_tw = from%viv_tw
+    to%viv_phi_rest = from%viv_phi_rest
     CALL MOVE_ALLOC(from%viv_cl, to%viv_cl)
     CALL MOVE_ALLOC(from%viv_d, to%viv_d)
     CALL MOVE_ALLOC(from%viv_node, to%viv_node)
