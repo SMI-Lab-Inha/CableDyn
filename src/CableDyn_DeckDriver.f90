@@ -17339,6 +17339,8 @@ CONTAINS
           opts%current_profile_velocity(:, 1) = [x6, x7, x8]
           opts%current_profile_velocity(:, 2) = [x2, x3, x4]
         END IF
+        ! last row wins: an earlier uniform row leaves no velocity behind
+        opts%current_velocity = CD_ZERO
         opts%has_current = .TRUE.
         opts%has_current_profile = .TRUE.
         RETURN
@@ -17394,6 +17396,8 @@ CONTAINS
         opts%wave_height = x1
         opts%wave_period = x2
         opts%wave_direction = x3
+        ! last row wins: a regular wave has no gamma, so an earlier JONSWAP row leaves none
+        opts%wave_gamma = CD_ONE
         opts%has_wave = .TRUE.
         opts%wave_kind = WAVE_AIRY
         IF (to_lower(TRIM(mode)) /= 'airy') opts%wave_kind = WAVE_STREAM

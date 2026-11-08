@@ -2197,6 +2197,42 @@ CONTAINS
                              'LINE 1 combines EI=0 and finite-EI sections')
       END IF
     END BLOCK
+
+    ! The last waves or current row sets the sea: a row it overrides leaves nothing behind
+    ! that the bounds of the effective row are checked against (a JONSWAP gamma under an
+    ! Airy row, a uniform velocity under a profile row), while the effective row is checked.
+    BLOCK
+      CHARACTER(1) :: nl
+      CHARACTER(*), PARAMETER :: CLOCK = '0.1 dtM'//NEW_LINE('a')//'0.2 TMax'
+      CHARACTER(64), PARAMETER :: OVERRIDDEN(4) = [CHARACTER(64) :: &
+                                                   'jonswap 3.0 10.0 2000.0 0.0 waves', &
+                                                   'jonswap 3.0 10.0 2000.0 0.0 waves', &
+                                                   'uniform 2000.0 0.0 0.0 current', &
+                                                   'airy 2000.0 8.0 0.0 waves']
+      CHARACTER(64), PARAMETER :: EFFECTIVE(4) = [CHARACTER(64) :: &
+                                                  'airy 2.0 8.0 0.0 waves', 'stream 2.0 8.0 0.0 waves', &
+                                                  'profile -30 0.2 0 0 0 0.5 0 0 current', 'none waves']
+      INTEGER :: k
+      nl = NEW_LINE('a')
+      DO k = 1, SIZE(OVERRIDDEN)
+        CALL write_text_file('deck_hard_overridden.dat', hardening_deck(ANCHOR, SECTION, CLOCK//nl// &
+                                                                        TRIM(OVERRIDDEN(k))//nl//TRIM(EFFECTIVE(k)), &
+                                                                        'FairTen1'))
+        CALL CD_Run_Deck_Driver('deck_hard_overridden.dat', 'deck_hard_overridden', conv_l, es_l, em_l)
+        CALL require(es_l == CD_DECKDRV_OK .AND. conv_l, '"'//TRIM(OVERRIDDEN(k))//'" overridden by "'// &
+                     TRIM(EFFECTIVE(k))//'" leaves no stale bound: '//TRIM(em_l))
+      END DO
+      CALL expect_badinput('deck_hard_effective_gamma.dat', hardening_deck(ANCHOR, SECTION, CLOCK//nl// &
+                                                                           'airy 2.0 8.0 0.0 waves'//nl// &
+                                                                           'jonswap 3.0 10.0 2000.0 0.0 waves', &
+                                                                           'FairTen1'), &
+                           'an out-of-range JONSWAP gamma on the effective row', 'gamma <= 1e3')
+      CALL expect_badinput('deck_hard_effective_current.dat', hardening_deck(ANCHOR, SECTION, CLOCK//nl// &
+                                                                             'profile -30 0.2 0 0 0 0.5 0 0 current'// &
+                                                                             nl//'uniform 2000.0 0.0 0.0 current', &
+                                                                             'FairTen1'), &
+                           'an out-of-range uniform current on the effective row', 'at most 1e3 m/s')
+    END BLOCK
   END SUBROUTINE check_parser_hardening
 
   FUNCTION rigid6_failure_deck(failure_rows, extra_point) RESULT(body)

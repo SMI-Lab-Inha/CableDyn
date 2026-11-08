@@ -584,12 +584,41 @@ _SHIPPED_CASES = [(f"shipped:static:{name}", (), {}) for name in _shipped_decks(
     if _carries_waves(name)
     for variant in ("spelled", "upper")
 ]
+_PROFILE_ROW = "profile -30 0.2 0 0 0 0.5 0 0 current"
+# (rows, message): the last waves or current row is the one in effect; the native reader
+# checks the magnitude bounds on that row alone and the row rules on every row
+_OVERRIDDEN_ROW_CASES = [
+    (("airy 2000 8 0 waves", "none waves"), None),
+    (("airy 2 0.01 0 waves", "airy 2 8 0 waves"), None),
+    (("stream 2 2e5 0 waves", "pm 3 10 0 waves"), None),
+    (("jonswap 3 10 40 0 waves", "airy 2 8 0 waves"), None),
+    (("jonswap 3 10 2000 0 waves", "airy 2 8 0 waves"), None),
+    (("jonswap 3 10 2000 0 waves", "stream 2 8 0 waves"), None),
+    (("jonswap 3000 10 3.3 0 waves", "none waves"), None),
+    (("uniform 2000 0 0 current", "none current"), None),
+    (("uniform 2000 0 0 current", _PROFILE_ROW), None),
+    (("profile -2e6 0.2 0 0 0 0.5 0 0 current", "uniform 0.1 0 0 current"), None),
+    (("profile -30 2000 0 0 0 0.5 0 0 current", _PROFILE_ROW), None),
+    (("airy 2 8 0 waves", "airy 2000 8 0 waves"), r"waves need height <= 1e3 m"),
+    (("none waves", "jonswap 3 10 40 0 waves"), r"JONSWAP gamma must be in \[1, 32\.6\)"),
+    (("airy 2 8 0 waves", "jonswap 3 10 2000 0 waves"), r"JONSWAP gamma must be in \[1, 32\.6\)"),
+    ((_PROFILE_ROW, "uniform 2000 0 0 current"), r"at most 1e3 m/s"),
+    (("uniform 0.1 0 0 current", "profile -2e6 0.2 0 0 0 0.5 0 0 current"), r"at most 1e6 m"),
+    # the row rules hold on an overridden row too
+    (("airy 0 8 0 waves", "none waves"), r"positive height/period"),
+    (("jonswap 3 10 0.5 0 waves", "airy 2 8 0 waves"), r"JONSWAP gamma >= 1"),
+    (("profile -30 0.2 0 0 -30 0.5 0 0 current", "none current"), r"strictly increasing"),
+    (("pm 3000 10 0 waves", "none waves"), r"a wave train needs height <= 1e3 m"),
+]
+
+
 _ALL_FILE_CASES = [
     *[("held", rows, files) for rows, files in _WAVE_RECORD_CASES],
     *_ANCILLARY_CASES,
     *_SPELLED_CASES,
     *_STATIC_CASES,
     *_SHIPPED_CASES,
+    *[("held", rows, {}) for rows, _ in _OVERRIDDEN_ROW_CASES],
 ]
 
 
@@ -825,6 +854,21 @@ def test_vessel_rao_takes_moordyn_c_component_waves():
 )
 def test_jonswap_gamma_limit_applies_on_every_path(rows):
     _rejects(_options(_HELD, *rows), r"JONSWAP gamma must be in \[1, 32\.6\)")
+
+
+@pytest.mark.parametrize(("rows", "message"), _OVERRIDDEN_ROW_CASES)
+def test_magnitude_bounds_apply_to_the_waves_and_current_rows_in_effect(rows, message):
+    text = _options(_HELD, *rows)
+    if message is None:
+        DeckFile.from_text(text)
+    else:
+        _rejects(text, message)
+
+
+def test_an_edited_waves_row_takes_the_magnitude_bounds():
+    deck = DeckFile.from_text(_options(_HELD, "airy 2000 8 0 waves", "airy 2 8 0 waves"))
+    with pytest.raises(ValueError, match="waves need height <= 1e3 m"):
+        deck.set_option("waves", ("airy", 2000.0, 8.0, 0.0))
 
 
 def test_spread_jonswap_row_is_validated_as_a_wave_train():
