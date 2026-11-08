@@ -58,7 +58,8 @@ def fourier_amp(ts, vals, period, t_hi):
     return 2.0 * math.hypot(c, s) / max(n, 1), t_lo, t_hi
 
 
-def main():
+def build_model():
+    """Return the reference model and its mooring line (also timed by performance_records.py)."""
     m = ofx.Model()
     env = m.environment
     env.WaterDepth = DEPTH
@@ -102,7 +103,11 @@ def main():
     gen.DynamicsSolutionMethod = "Implicit time domain"
     gen.ImplicitConstantTimeStep = DT
     gen.TargetLogSampleInterval = DT
+    return m, line
 
+
+def main():
+    m, line = build_model()
     m.CalculateStatics()
     t_static = line.StaticResult("Effective Tension", ofx.oeEndB)
     t0 = time.time()

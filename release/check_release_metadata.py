@@ -41,6 +41,7 @@ HISTORICAL = re.compile(
     r"^(CHANGELOG\.md|validation/(RELEASE|PERFORMANCE)_\d+_\d+_\d+\.md"
     r"|validation/PAPER_REPRODUCTION\.md|validation/README\.md"
     r"|validation/experiments/[^/]+/provenance\.json|validation/bodies/references/.*"
+    r"|validation/performance/.*"
     r"|tests/test_documentation\.py)$"
 )
 
