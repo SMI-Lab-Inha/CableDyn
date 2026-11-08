@@ -306,6 +306,9 @@ MODULE CableDyn_HermiteCableDynamic
     ! the Newton iterations); viv_rate/viv_ms_next hold the step-start rate and mean squares.
     ! ws_recovery_viv_* is the step-start copy of the recovering step, snap_viv_* the snapshot.
     LOGICAL :: has_viv = .FALSE.
+    ! the cross-flow phase of a node at rest (CD_VIV_Phase_Rate phi_rest): pi where the material
+    ! tangent runs against MoorDyn's node tangent (End B to End A), 0 where it runs as MoorDyn's
+    REAL(wp) :: viv_phi_rest = CD_ZERO
     REAL(wp) :: viv_tw = CD_ZERO
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_k(:), viv_cf(:), viv_df(:), viv_dn(:), viv_phi(:), viv_phi_eval(:)
     REAL(wp), ALLOCATABLE :: viv_rate(:), viv_ms(:, :), viv_ms_next(:, :)
@@ -1045,7 +1048,7 @@ CONTAINS
     model%tr_valid = .FALSE.
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
 
-  SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg, phase_seed)
+  SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg, phase_seed, tangent_reversed)
     !! Install the cross-flow VIV synchronisation model (CableDyn_VIV) on a cable with drag:
     !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
     !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
@@ -1065,8 +1068,12 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: phase_seed(:)
+    !! tangent_reversed (default .TRUE., the model's own seed): the material tangent runs against
+    !! MoorDyn's node tangent, so a node at rest takes the cross-flow phase pi
+    !! (CD_VIV_Phase_Rate phi_rest); .FALSE. on a line the reader turned around
+    LOGICAL, INTENT(IN), OPTIONAL :: tangent_reversed
     INTEGER :: e, k, ne, nn, es
-    REAL(wp) :: wsum, tw_old
+    REAL(wp) :: wsum, tw_old, rest_old
     LOGICAL :: had_viv
     CHARACTER(LEN=1024) :: em
     REAL(wp), ALLOCATABLE :: a_old(:), o_cl(:), o_k(:), o_cf(:), o_df(:), o_dn(:), o_phi(:), o_phi_eval(:), &
@@ -1112,6 +1119,7 @@ CONTAINS
     ! the previous configuration and state, kept for a rollback
     had_viv = model%has_viv
     tw_old = model%viv_tw
+    rest_old = model%viv_phi_rest
     a_old = model%a
     CALL move_viv(.FALSE.)
     CALL clear_viv(model)
@@ -1159,6 +1167,8 @@ CONTAINS
     model%snap_viv_phi = model%viv_phi
     model%snap_viv_ms = model%viv_ms
     model%viv_tw = t_window
+    model%viv_phi_rest = 0.5_wp*CD_VIV_TWO_PI
+    IF (PRESENT(tangent_reversed)) model%viv_phi_rest = MERGE(0.5_wp*CD_VIV_TWO_PI, CD_ZERO, tangent_reversed)
     model%has_viv = .TRUE.
     ! the lift is part of the committed load: the first step's predictor and phase rate need it
     CALL refresh_acceleration()
@@ -1171,6 +1181,7 @@ CONTAINS
       CALL move_viv(.TRUE.)
       model%has_viv = had_viv
       model%viv_tw = tw_old
+      model%viv_phi_rest = rest_old
       model%a = a_old
       ErrStat = es
       ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: acceleration refresh failed: '//TRIM(em)
@@ -1282,7 +1293,7 @@ CONTAINS
       model%viv_ms_next(2, k) = CD_VIV_Mean_Square(model%viv_ms(2, k), ydd, w)
       model%viv_rate(k) = CD_VIV_Phase_Rate(yd, ydd, model%viv_ms_next(1, k), model%viv_ms_next(2, k), &
                                             model%viv_phi(k), un, model%viv_dn(k), model%viv_cf(k), &
-                                            model%viv_df(k))
+                                            model%viv_df(k), phi_rest=model%viv_phi_rest)
       model%viv_phi_eval(k) = model%viv_phi(k) + frac*dt*model%viv_rate(k)
     END DO
   END SUBROUTINE viv_step_begin
@@ -1308,7 +1319,7 @@ CONTAINS
         ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, k), yd, w)
         ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, k), ydd, w)
         rate_end = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(k) + dt*model%viv_rate(k), un, &
-                                     model%viv_dn(k), model%viv_cf(k), model%viv_df(k))
+                                     model%viv_dn(k), model%viv_cf(k), model%viv_df(k), phi_rest=model%viv_phi_rest)
         IF (.NOT. CD_Is_Finite(rate_end)) rate_end = model%viv_rate(k)
       END IF
       model%viv_phi(k) = CD_VIV_Wrap_Phase(model%viv_phi(k) + 0.5_wp*dt*(model%viv_rate(k) + rate_end))

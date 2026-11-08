@@ -1039,8 +1039,10 @@ so the shedding frequency locks onto the cross-flow motion inside the band
 :math:`2\pi i/N` at node :math:`i` counted from the deck's End A (MoorDyn's ``AttachA``), also on
 a line written anchor first, which the reader turns around. The node tangent
 :math:`\mathbf{q}` runs from End A to End B, as MoorDyn's; turning it around turns the lift and
-:math:`\mathbf{e}` around and starts the same motion from the phases plus :math:`\pi`, so the
-lift field is MoorDyn's whichever end a deck writes first. On a finite-EI mesh the static solve
+:math:`\mathbf{e}` around and starts the same motion from the phases plus :math:`\pi`, with
+:math:`\phi_{\dot y} = \pi` instead of MoorDyn's 0 at a node with no cross-flow motion (a node at
+rest, a held end of a finite-EI cable), so the lift field is MoorDyn's whichever end a deck writes
+first. On a finite-EI mesh the static solve
 refined, the deck nodes keep that seed and the nodes it added take the seed interpolated in
 arc length. The static equilibrium carries no lift.
 

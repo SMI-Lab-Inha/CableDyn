@@ -3485,7 +3485,8 @@ CONTAINS
           CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                            MERGE(opts%viv_rms_window, &
                                                  REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
-                                                 opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed)
+                                                 opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
+                                           tangent_reversed=.NOT. ln%ends_swapped)
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI cable VIV wiring failed: '//TRIM(em)); RETURN
@@ -10383,7 +10384,7 @@ CONTAINS
           REAL(wp) :: seed(model%n_dof/3)
           CALL CD_Deck_VIV_Phase_Seed(model%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
           CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
-                                phase_seed=seed)
+                                phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped)
         END BLOCK
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
         IF (es /= CD_MODEL_OK) THEN

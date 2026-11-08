@@ -268,15 +268,19 @@ CONTAINS
     ms = ms_old + weight*(sample*sample - ms_old)
   END FUNCTION CD_VIV_Mean_Square
 
-  PURE REAL(wp) FUNCTION CD_VIV_Phase_Rate(yd, ydd, ms_yd, ms_ydd, phi, un, diameter, cf, df) RESULT(rate)
+  PURE REAL(wp) FUNCTION CD_VIV_Phase_Rate(yd, ydd, ms_yd, ms_ydd, phi, un, diameter, cf, df, phi_rest) RESULT(rate)
     !! Rate of the vortex-shedding phase, d phi/dt = 2 pi (cF + dF sin(phi_y - phi)) U/D, with
     !! the cross-flow velocity phase phi_y from y', y'' normalised by their running RMS values
-    !! (unnormalised while either mean square is still zero, as MoorDyn).
+    !! (unnormalised while either mean square is still zero, as MoorDyn). A node with no
+    !! cross-flow motion takes phi_y = phi_rest (default 0, MoorDyn's): pi on a line whose node
+    !! tangent runs against MoorDyn's, which turns the cross-flow axis and so phi_y half a turn.
     REAL(wp), INTENT(IN) :: yd, ydd, ms_yd, ms_ydd, phi, un, diameter, cf, df
+    REAL(wp), INTENT(IN), OPTIONAL :: phi_rest
     REAL(wp) :: phi_y
 
     IF (.NOT. (ABS(yd) > CD_ZERO .OR. ABS(ydd) > CD_ZERO)) THEN
       phi_y = CD_ZERO
+      IF (PRESENT(phi_rest)) phi_y = phi_rest
     ELSE IF (ms_yd > CD_ZERO .AND. ms_ydd > CD_ZERO) THEN
       phi_y = ATAN2(-ydd/SQRT(ms_ydd), yd/SQRT(ms_yd))
     ELSE

@@ -37,7 +37,9 @@ locks in. MoorDyn-F (OpenFAST v5 moordyn_driver, dtM 5e-4 s) gives a mid-span A/
   bin of 0.527 Hz), and VIVphaseSeed zero in mode 1 as MoorDyn-F in OpenFAST v5.0.0 (whose phases
   start at zero) does (mid-span A/D within 1 % of its 0.699, frequency within one bin of 0.353 Hz);
 * the lift at t = 0, 2 m from the deck's End A, has MoorDyn's direction and size on an EI = 0 line
-  and a finite-EI cable, whether the deck writes the line fairlead first or anchor first.
+  and a finite-EI cable, whether the deck writes the line fairlead first or anchor first, and the
+  mid-span response over 60 s is the same on both orders (within 1e-5 m: a node at rest takes
+  MoorDyn's cross-flow phase in the line's own frame).
 
 usage: test_viv_lockin.py --exe <cabledyn> --output <dir>
 """
@@ -241,6 +243,11 @@ def main() -> int:
                                                                                   "0.02     TMax")
         runs.append((("t0", tag, False), f"viv_t0_{tag}", start))
         runs.append((("t0", tag, True), f"viv_t0_{tag}_anchor_first", anchor_first(start)))
+        # and the whole response is the same: 60 s at U 0.24 m/s, mid span, either deck order
+        order = deck(0.01, ei=ei, waterkin="current_0.24.dat").replace(
+            "L1N25PZ\nL1N12PZ", "L1N26PZ\nL1N13PZ").replace("120.0    TMax", "60.0     TMax")
+        runs.append((("order", tag, False), f"viv_order_{tag}", order))
+        runs.append((("order", tag, True), f"viv_order_{tag}_anchor_first", anchor_first(order)))
     for _, name, text in runs:
         (out / f"{name}.dat").write_text(text, encoding="utf-8", newline="\n")
     env = dict(os.environ, OMP_NUM_THREADS="1")
@@ -260,6 +267,9 @@ def main() -> int:
             continue
         if isinstance(key, tuple) and key[0] == "t0":
             results[key] = first_lift(out / f"{name}.Line1.V.out", 2.0, key[2])
+        elif isinstance(key, tuple) and key[0] == "order":
+            hist = read_output(out / f"{name}.out")
+            results[key] = hist.column("L1N26PZ")
         elif key in ("band", "band_zero"):
             results[key] = response(out / f"{name}.out", "L1N26PZ", "L1N13PZ",
                                     "qtr" if key == "band" else "mid")
@@ -335,6 +345,13 @@ def main() -> int:
             check(a > 4.0 and abs(b - a) <= 1.0e-9 * abs(a),
                   f"{what}: lift at t = 0, 2 m from the deck's End A, {a:+.4f} N fairlead first and "
                   f"{b:+.4f} N anchor first (MoorDyn's +z, the same on both)")
+    for tag, what in (("ei0", "EI = 0 line"), ("fei", "finite-EI cable")):
+        a, b = results.get(("order", tag, False)), results.get(("order", tag, True))
+        if a is not None and b is not None and a.size == b.size:
+            gap = float(np.max(np.abs(a - b)))
+            check(gap <= 1.0e-5,
+                  f"{what}: mid-span response over 60 s at U 0.24 m/s, fairlead first against anchor first, "
+                  f"within {gap:.1e} m (1e-5 m; amplitude about 1.6e-2 m)")
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
 
