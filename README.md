@@ -9,38 +9,76 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.oceaneng.2026.128332-blue.svg)](https://doi.org/10.1016/j.oceaneng.2026.128332)
 
-CableDyn is an open-source, geometrically exact finite-element solver for the
-static and dynamic analysis of offshore mooring lines and dynamic power cables.
-Its strain and curvature are the exact large-deformation measures, never
-linearised, so large displacements and rotations, slack and snap, and a line
-lifting off the seabed lie inside the formulation. It is written in
-Fortran 2018 and runs as a standalone program, as a mooring module of OpenFAST,
-maintained by NLR (National Laboratory of the Rockies, formerly NREL)
-(`CompMooring = 5`), through a C interface, or from Python. It reads input decks
-in the MoorDyn v2 format and solves them with two line formulations:
+CableDyn is an open-source, geometrically exact finite-element solver for the static and
+dynamic analysis of mooring lines and dynamic power cables. It resolves what a power cable is
+designed against: the curvature along the line, under a bend stiffener, through a lazy wave and
+across a moving touchdown, together with tension, torque and twist. Strain and curvature are the
+exact large-deformation measures, never linearised, so slack and snap, large rotations and a line
+lifting off the seabed lie inside the formulation.
 
-- **Tension-only lines** (`EI = 0`): chains, wire ropes, and synthetic-fibre
-  moorings.
-- **Finite-bending lines** (finite-EI): cubic-Hermite elements for dynamic power
-  cables, including lazy-wave configurations, with continuous centreline curvature.
+It runs as a standalone program, as a mooring module of OpenFAST and FAST.Farm
+(`CompMooring = 5`), through a C interface, or from Python.
+The current stable release is `v0.4.1`; interfaces are versioned and may change before `1.0.0`.
 
-The current stable release is `v0.4.1`. Interfaces are
-versioned and may change before `1.0.0`.
+## What CableDyn does
 
-## Capabilities
+- **Finite-element cables with real bending stiffness.** Cubic-Hermite elements carry position
+  and tangent at every node, so curvature is continuous along the line and converges at fourth
+  order with the mesh (measured slope 3.99). Tension-only `EI = 0` elements serve chains, wire
+  and fibre ropes in the same model.
+- **An implicit solver.** Generalised-alpha integration with consistent mass and automatic step
+  subdivision: a snap load stays within 1.5 % of a 0.5 ms reference at a 20 ms step, where an
+  explicit lumped-mass step must stay near 1 ms.
+- **Bend stiffeners and section curvature.** Tapered stiffener sleeves with their own mass,
+  buoyancy and drag; the curvature of the section, its two components on the section's own axes
+  (`CurvX`, `CurvY`) and the moments of the cable and of the sleeve, for fatigue.
+- **Torsion.** A twist angle and polar inertia at every node, torque–tension coupling for
+  armoured cables, the buckling onset of a twisted line, and end restraints that are rigid,
+  elastic or free in twist.
+- **Statics that start from the geometry alone.** No seed files: a catenary start, continuation in
+  bending stiffness and buoyancy, mesh sequencing and refinement to the bending length solve hard
+  lazy waves, long grounded runs, bathymetry and friction held as laid; a deck that has no
+  equilibrium stops with a named reason.
+- **Coupled analysis.** OpenFAST and FAST.Farm coupling with checkpoint restart at any step, the
+  host's waves and current at every node, active line control, line failure, and linearisation
+  that carries the line dynamics as states.
+- **More analyses.** Natural modes and shapes, cross-flow vortex-induced vibration of chains and
+  cables, viscoelastic and Syrope fibre ropes, buoyancy modules, clumps, rigid bodies and rods,
+  range graphs and seabed contact channels.
+- **In-process hosts.** The C API and Python step a deck from a CFD code or a script, with the
+  host's fluid field at every node, saved and restored states and whole-line reads in one call.
 
-| Area | Features |
-|---|---|
-| Statics | Catenary seeding, Newton solution, load continuation, mesh sequencing, adaptive meshing |
-| Dynamics | Implicit generalised-alpha integration, prescribed support motion, consistent mass, automatic step subdivision, torsion with a twist angle and rotary inertia at every node, cross-flow vortex-induced vibration |
-| Environment | Buoyancy, Morison drag, added mass, Froude–Krylov loading, regular and irregular waves, current profiles, seabed contact with friction |
-| Materials | Linear axial stiffness, Kelvin–Voigt damping, viscoelastic (series-Kelvin; MoorDyn `ElasticMod` 2/3), Syrope polyester model, torsional stiffness with torque–tension coupling, tapered bend stiffeners |
-| Topology | Fixed, coupled, free, and connected points; clump weights; buoyancy modules along cables; rigid bodies and rods; end rotational stiffness; cables between two moving ends; active line-length control; line failure |
-| Outputs | Effective tension, position, velocity, acceleration, curvature (also on the section's own axes), bending moment, torque and twist, end angles, contact response, natural modes, solver diagnostics |
-| Interfaces | Standalone driver, OpenFAST and FAST.Farm (with linearisation of the line dynamics), C ABI, Python package |
+## Evidence
 
-Section and keyword names follow MoorDyn v2; unsupported combinations stop with
-a named error rather than running approximately.
+Every capability above is tested, and the comparisons are published with their data and scripts
+in the [validation record](https://cabledyn.readthedocs.io/en/latest/validation.html). A
+selection:
+
+| Case | Reference | Result |
+|---|---|---|
+| Large-deflection elastica | Bisshopp–Drucker closed form | error 1.9e-6 |
+| Lazy-wave cables at 80, 200 and 800 m, static | OrcaFlex 11.6d | peak curvature within 0.08, 0.26 and 4.8 % |
+| Installed 800 m lazy-wave cable | OrcaFlex 11.6d | peak curvature 0.06 %, hang-off tension 0.15 % |
+| Lazy wave in an irregular sea | OrcaFlex 11.6d, same 80-component sea | curvature 0.21 %, tension 0.20 % |
+| Moving touchdown under heave | OrcaFlex 11.6d | curvature within 0.6 %, touchdown point within 0.08 m |
+| Tapered bend stiffener at a clamped hang-off | OrcaFlex 11.6d | curvature 0.45 % of its root value, moments 0.01 % |
+| Lazy-wave cable twisted five turns | OrcaFlex 11.6d | torque 0.019 %, peak curvature 0.049 % |
+| One-hour VolturnUS-S chain mooring | OrcaFlex 11.6d | fairlead tension mean 0.27 %, standard deviation 0.26 % |
+| Holcombe lazy-wave model test | measured geometry | position error 1.1–1.9 % of the suspended length |
+| Bergdahl dynamic chain test, 30 conditions | measured end force | correlation 0.993 |
+| IEA 15 MW VolturnUS-S in OpenFAST with a power cable | OpenFAST with MoorDyn | platform motions within 0.6 % |
+
+Run times on one processor thread, same host and protocol, with the timing scripts in
+[`validation/performance`](https://cabledyn.readthedocs.io/en/latest/validation.html):
+
+| Case | CableDyn 0.4.1 | OrcaFlex 11.6d |
+|---|---|---|
+| 80 / 200 / 800 m lazy-wave spans, 60 s of heave | 1.4 / 2.6 / 5.3 s | 2.7 / 5.3 / 27.8 s |
+| One-hour VolturnUS-S chain mooring | 4.4 s | 19.7 s |
+
+The method and the lazy-wave comparisons are peer-reviewed
+([Ocean Engineering 368, 128332, 2026](https://doi.org/10.1016/j.oceaneng.2026.128332)).
+Unsupported combinations stop with a named error rather than running approximately.
 
 ## Quick start
 
@@ -100,6 +138,11 @@ For OpenFAST, set `CompMooring = 5` in the `.fst` file and point `MooringFile` a
 a CableDyn deck; ready-to-run cases are in
 [`examples/openfast`](https://cabledyn.readthedocs.io/en/latest/tutorial_openfast.html). Every shipped deck is listed
 in [`examples/`](https://cabledyn.readthedocs.io/en/latest/examples.html).
+
+Coming from MoorDyn: CableDyn reads decks written in the MoorDyn v2 format (its section and
+keyword names), so an existing mooring model runs as it is and can then take finite-EI sections,
+stiffeners and the other features above; the
+[migration guide](https://cabledyn.readthedocs.io/en/latest/migrating.html) lists the differences.
 
 ## Documentation
 
