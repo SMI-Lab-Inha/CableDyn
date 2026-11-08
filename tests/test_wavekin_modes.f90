@@ -14,6 +14,13 @@
 !>    equals the record's two harmonics to 1e-10 m), and velocity and acceleration, which
 !>    MoorDyn-C interpolates in the stretched depth on its 0.25 m grid, within 1e-3 of their
 !>    scale;
+!>  - a mean level (tests/data/wavekin_mdc_mean, MoorDyn-C v2.7.2): an omega = 0 row of 0.8 m
+!>    under six WaveKin 7 components in six directions, and the WaveKin 3 record raised by
+!>    0.8 m. MoorDyn-C adds the level to the elevation alone, which its stretching then maps, and
+!>    keeps the wave numbers of WtrDpth; CableDyn matches it to the tolerances above (WaveKin 7
+!>    to 1e-8). Taking
+!>    the wave numbers at WtrDpth plus the level, as 0.4.0 did, put WaveKin 7 7.7e-3 m off in
+!>    elevation and 1e-2 of its scale in velocity, and WaveKin 3 2.2e-4 m and 6e-3;
 !>  - WvHiCOff: 1 rad/s keeps only the record's 8 s harmonic, exactly; none keeps both, as the
 !>    0.5 Hz default does (the record has nothing above it);
 !>  - Currents 1: identical to 1e-12 m/s;
@@ -34,6 +41,10 @@ PROGRAM test_wavekin_modes
                   1.0e-6_wp, 1.0e-6_wp)
   CALL check_mode('wavekin_mdc/wavekin3.dat', 'wavekin_mdc/mdc_wavekin3.csv', 'WaveKin 3', 1.0e-6_wp, &
                   1.0e-3_wp, 1.0e-3_wp)
+  CALL check_mode('wavekin_mdc_mean/wavekin7.dat', 'wavekin_mdc_mean/mdc_wavekin7.csv', 'WaveKin 7, mean level', &
+                  1.0e-6_wp, 1.0e-6_wp, 1.0e-6_wp)
+  CALL check_mode('wavekin_mdc_mean/wavekin3.dat', 'wavekin_mdc_mean/mdc_wavekin3.csv', 'WaveKin 3, mean level', &
+                  1.0e-6_wp, 1.0e-3_wp, 1.0e-3_wp)
   CALL check_record()
   CALL check_cutoff()
   CALL check_mode('wavekin_mdc/currents1.dat', 'wavekin_mdc/mdc_currents1.csv', 'Currents 1', 1.0e-12_wp, &

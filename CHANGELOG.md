@@ -96,6 +96,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Every initialisation note of a coupled line reaches the console; long lists were cut or dropped.
 - The OpenFAST module driver runs a rotating motion in a single-precision build.
 - A range-graph file that cannot be written completely is removed instead of left behind.
+- A mean level in a MoorDyn-C kinematics file, a non-zero `omega = 0` row of `WaveKin 7` or the
+  mean of a `WaveKin 3` record, is added to the elevation alone, as MoorDyn-C does: the wave
+  numbers stay those of `WtrDpth` and the stretching maps the water under the total elevation.
+  CableDyn took the wave numbers at `WtrDpth` plus the level. With a 0.8 m level in 50 m of water
+  and six components in six directions, `WaveKin 7` now matches MoorDyn-C v2.7.2 to 1e-8 instead
+  of 7.7e-3 m in elevation and 1 % in velocity. The mean of a WaterKin `WaveKinMod 1` record still
+  raises the still-water level; MoorDyn-F drops it.
 - The C API messages of `CableDyn_UpdatePointFluidFields` and `CableDyn_CalcOutputDerivatives` on
   the coupled aggregate name its real scope: decks with finite-EI lines, bodies or rods.
 
@@ -121,6 +128,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `EI × Curv` only to within the strain. Tension, positions and forces are unchanged, and so are
   `OutputRecovery element` values on elements without a stiffener sleeve.
 - Azimuth values of the `EI = 0` lines named above read 360 degrees lower on those routes.
+- On a `WaveKin 3` or `WaveKin 7` deck whose mean level is not zero, the elevation away from the
+  origin, the fluid velocity and acceleration, and so the loads and every output, change by the
+  order of the level over the depth: up to 1 % in velocity at 0.8 m in 50 m. A deck with no mean
+  level is unchanged bit for bit.
 - OpenFAST checkpoints change format: they carry the range graphs and the input of the last
   commit, so a checkpoint written by an earlier CableDyn cannot be restarted with this one.
 
