@@ -459,7 +459,11 @@ holds two tab-separated tables, each introduced by a ``#`` comment line, a heade
 row:
 
 * ``# Natural frequencies``: ``LineID  Mode  Frequency  Period  Omega`` (Hz, s, rad/s), the
-  ``nModes`` lowest modes of every line in ascending order;
+  ``nModes`` lowest modes of every line in ascending order of :math:`\omega^2`. A mode with
+  :math:`\omega^2 < 0`, an instability of the static state (a planar equilibrium that is
+  unstable out of its plane, a compressed strut), is written with the signed values
+  ``Omega`` :math:`= -\sqrt{|\omega^2|}` and ``Frequency`` :math:`= -\sqrt{|\omega^2|}/2\pi` and
+  ``Period`` 0, and the run prints a note naming the line and the number of such modes;
 * ``# Mode shapes``: ``LineID  Mode  Node  X  Y  Z  dX  dY  dZ``, one row per mode and node.
   ``X Y Z`` is the static node position and ``dX dY dZ`` the nodal translation of the mode,
   scaled so that the largest nodal displacement of the mode is 1. Nodes are numbered End A first,

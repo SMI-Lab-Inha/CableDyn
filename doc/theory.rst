@@ -2075,7 +2075,9 @@ positive; where two components are equally large to round-off (the mirrored node
 symmetric line), the first of them in the solver's node order is. Memory grows linearly with the line
 length. The frequencies
 :math:`f = \omega/2\pi` and the nodal translations of each mode (scaled to a unit largest
-nodal displacement) are written to ``<root>.modes.out``. For a taut string of tension
+nodal displacement) are written to ``<root>.modes.out``; an eigenvalue :math:`\omega^2 < 0`, an
+instability of the static state, is written as the negative frequency
+:math:`-\sqrt{|\omega^2|}/2\pi` and noted. For a taut string of tension
 :math:`T` the transverse frequencies are :math:`f_n = (n/2L)\sqrt{T/m}`; for a shallow sagging
 cable the out-of-plane and antisymmetric in-plane modes follow the string with the horizontal
 tension :math:`H`, and the symmetric in-plane modes satisfy

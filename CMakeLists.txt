@@ -3174,6 +3174,14 @@ if(Python3_Interpreter_FOUND)
       --source ${CMAKE_CURRENT_SOURCE_DIR}
       --output ${CMAKE_CURRENT_BINARY_DIR}/modal_torsion_deck)
   set_tests_properties(modal_torsion_deck PROPERTIES LABELS "python;driver;integration;validation")
+  # A modal analysis about an unstable static state writes its negative omega^2 as a negative
+  # frequency of period 0 and notes it; the stable state of a finer mesh does neither.
+  add_test(
+    NAME modal_negative_note
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_modal_negative_note.py
+      --exe $<TARGET_FILE:cabledyn>
+      --output ${CMAKE_CURRENT_BINARY_DIR}/modal_negative_note)
+  set_tests_properties(modal_negative_note PROPERTIES LABELS "python;driver;modal" TIMEOUT 300)
   # Static-initialization robustness matrix: a deterministic sample of EI=0 mooring regimes
   # (catenary, semi-taut, taut, suspended, composite, slack/vertical, anchors off the seabed,
   # sloped seabed, fine mesh, soft seabed, current, one/two segments, Free/Connect points)
