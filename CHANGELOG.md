@@ -18,12 +18,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
-- Static solve of discrete `ATTACHMENTS` in a current across the line's vertical plane: the
-  smeared start now carries the attachments' drag as well as their weight, and the attachment
-  polish moves both to the nodes. It applied the whole attachment drag to a state without it, and
-  on a frictional seabed its Newton solves diverged, so the discrete state was reached only
-  through the fallback solves or not at all (a lazy wave with 25 modules in 0.3 m/s across its
-  plane). A current along the plane takes the former path.
 
 ## [0.4.1] - 2026-11-08
 
