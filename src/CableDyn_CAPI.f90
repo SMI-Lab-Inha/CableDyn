@@ -14,6 +14,7 @@ MODULE CableDyn_CAPI
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64, COMPILER_VERSION
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_System, CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_DECKDRV_SOLVEFAIL, &
+                                 CD_DeckCurrentRuntimeType, CD_Deck_Current_Active, CD_Deck_Current_Sample_System, &
                                  CD_Deck_Query_dtM, CD_DECK_NAMELEN, CD_Eval_Aggregate_Channel, &
                                  CD_Eval_Aggregate_Segment_Tensions, CD_Eval_Aggregate_Line_Values, &
                                  CD_Rigid6_Inventory, CD_Rod_Inventory, CD_Channel_Token_Parses, CD_Cable_Deck_Node, &
@@ -170,6 +171,9 @@ MODULE CableDyn_CAPI
     ! coupled DOFs, its step is the deck dtM (agg_dt), and agg_t is its committed time.
     LOGICAL :: use_agg = .FALSE.
     TYPE(CD_AGG_ModuleType) :: agg
+    ! The point route's deck current (a steady field), sampled at the step-start node positions
+    ! before every step, as the standalone point-system march samples it.
+    TYPE(CD_DeckCurrentRuntimeType) :: pt_current
     REAL(wp) :: agg_dt = CD_ZERO, agg_t = CD_ZERO
     REAL(wp), ALLOCATABLE :: agg_pos(:, :), agg_vel(:, :), agg_acc(:, :), agg_load(:, :)
     ! A handle initialised by CableDyn_InitDeckRotating (host_rot): the host's rotation of each
@@ -391,6 +395,7 @@ CONTAINS
 
     TYPE(CD_C_Handle), POINTER :: h
     TYPE(CD_FAST_ModuleType) :: new_fast
+    TYPE(CD_DeckCurrentRuntimeType) :: new_current
     CHARACTER(KIND=C_CHAR), POINTER :: path_c(:)
     CHARACTER(:), ALLOCATABLE :: deck_path
     INTEGER :: i, es, end_es, stat, n_objects, n_finite
@@ -438,7 +443,7 @@ CONTAINS
     END IF
     ! An absent positions argument stays absent through the optional coupled_positions.
     CALL CD_Init_Deck_System(TRIM(deck_path), new_fast%system, dtm, gravity, rho_water, es, em, line_ids=line_ids, &
-                             coupled_positions=positions)
+                             coupled_positions=positions, deck_current=new_current)
     IF (es /= CD_DECKDRV_OK) THEN
       CALL map_deck_status(es, err_stat)
       CALL store_status(h, err_stat, caller//': '//TRIM(em))
@@ -455,6 +460,7 @@ CONTAINS
     END IF
     CALL CD_FAST_End(h%fast, end_es, end_em)
     h%fast = new_fast
+    h%pt_current = new_current
     CALL CD_FAST_End(new_fast, end_es, end_em)
     CALL drop_aggregate(h)
     CALL drop_saved_state(h)
@@ -602,6 +608,7 @@ CONTAINS
     END IF
     CALL add_aggregate_notes(new_agg)
     CALL CD_FAST_End(h%fast, es, em)
+    CALL drop_point_current(h)
     CALL drop_aggregate(h)
     CALL drop_saved_state(h)
     CALL clear_c_workspace(h)
@@ -698,6 +705,14 @@ CONTAINS
     IF (ALLOCATED(h%saved_dcm)) DEALLOCATE (h%saved_dcm, h%saved_om, h%saved_al)
     h%has_saved = .FALSE.
   END SUBROUTINE drop_saved_state
+
+  SUBROUTINE drop_point_current(h)
+    !! Forget the point route's deck current (a model built from raw lines or on the aggregate
+    !! has none of its own).
+    TYPE(CD_C_Handle), POINTER, INTENT(INOUT) :: h
+    TYPE(CD_DeckCurrentRuntimeType) :: none
+    h%pt_current = none
+  END SUBROUTINE drop_point_current
 
   SUBROUTINE drop_aggregate(h)
     !! Release the aggregate route of a handle (another initialization replaces it).
@@ -850,6 +865,7 @@ CONTAINS
       CALL CD_End_Model(model, es, em)
       RETURN
     END IF
+    CALL drop_point_current(h)
     CALL CD_FAST_Init_From_Models(h%fast, [model], es, fast_em)
     CALL CD_End_Model(model, end_es, em)
     CALL map_fast_status(es, err_stat)
@@ -1045,6 +1061,7 @@ CONTAINS
       elem_off = elem_stop
       fixed_off = fixed_stop
     END DO
+    CALL drop_point_current(h)
     IF (ALLOCATED(coupled_map)) THEN
       CALL CD_FAST_Init_From_Models(h%fast, models, es, em, coupled_dof_map=coupled_map)
     ELSE
@@ -1380,6 +1397,14 @@ CONTAINS
       h%q_work(1:INT(n_coupled_dof)) = REAL(q_c, wp)
       h%v_work(1:INT(n_coupled_dof)) = REAL(v_c, wp)
       h%a_work(1:INT(n_coupled_dof)) = REAL(a_c, wp)
+    END IF
+    ! the deck's steady current at the step-start node positions, held over the step
+    IF (CD_Deck_Current_Active(h%pt_current)) THEN
+      CALL CD_Deck_Current_Sample_System(h%pt_current, h%fast%system, CD_ZERO, es, em)
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_Step: '//TRIM(em), err_stat)
+        RETURN
+      END IF
     END IF
     CALL CD_FAST_Step(h%fast, REAL(dt, wp), h%q_work(1:INT(n_coupled_dof)), h%v_work(1:INT(n_coupled_dof)), &
                       h%a_work(1:INT(n_coupled_dof)), conv_f, stall_f, nit, es, em)

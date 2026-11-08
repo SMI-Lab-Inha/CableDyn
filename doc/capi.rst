@@ -1024,7 +1024,10 @@ The deck is validated under the standalone-deck rules:
    The C ABI has no simulation clock and no per-node fluid input. A deck's current is applied
    as a steady field. A deck with a ``waves`` option, or a MoorDyn-C ``Currents 2``/``5`` table
    that varies in time, is rejected with ``CD_C_BAD_INPUT``, because it could not be evaluated
-   in time; such a table constant in time is applied as the steady field. Time-varying fluid kinematics reach the ``Free``
+   in time; such a table constant in time is applied as the steady field. On a deck of
+   ``EI = 0`` lines the field is sampled at every node of the static state and again at the
+   step-start nodes before every ``CableDyn_Step``, as the standalone driver samples it, so a
+   depth profile or grid follows the line. Time-varying fluid kinematics reach the ``Free``
    and ``Connect`` points through ``CableDyn_UpdatePointFluidFields``.
 
 Parse and validation failures, including a file that cannot be opened, return

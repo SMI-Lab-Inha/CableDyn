@@ -18,6 +18,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- C API and Python on a deck of `EI = 0` lines in a current that varies in space (a `profile`
+  current, a `Currents 1` table or a steady grid): the lines took the current at the nodes of
+  their straight seeds, while the static solve sampled it at its own nodes. The start was not
+  the static state's (end loads off by up to 1.7 % of a component), and a line held at rest
+  drifted (0.4 % of its fairlead tension and 12 % of a force component in 2 s). The field is
+  now sampled at the static nodes and at the step-start nodes before every step, as the
+  standalone driver samples it; a uniform current is unchanged.
 
 ## [0.4.1] - 2026-11-08
 
