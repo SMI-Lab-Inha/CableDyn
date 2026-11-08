@@ -1770,6 +1770,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # A clump on a cable clamped in a tight bend at its anchor: the attachment polish accepts the
+  # residual floor of its solves at the coupled static tolerance, as the line's own solve does.
+  add_test(NAME attachment_polish_floor
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_attachment_polish_floor.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/attachment_polish_floor)
+  set_tests_properties(attachment_polish_floor PROPERTIES
+    LABELS "python;hermite;static;robustness;attachments"
+    TIMEOUT 900
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # Finite-EI generalised-alpha blends: force-blend dtM convergence under prescribed surge.
   add_test(NAME hermite_force_blend_dt
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hermite_force_blend_dt.py

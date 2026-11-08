@@ -3016,8 +3016,12 @@ weight in water above it has no static position, and the solve fails closed, nam
 attachment that crossed the surface). Before, an attachment above the surface
 kept its buoyancy in the statics: a 500 kg, 0.2 m\ :sup:`3` module 3 m above it moved the
 fairlead load by up to 6.1 % in the first second of the march. The load moves
-in eighths; a step whose damped Newton solve does not converge is repeated from the last
-converged state with pseudo-transient continuation and then with a residual-merit line search,
+in eighths; a solve that stalls on a residual floor above the tight static tolerance is
+repeated from the same state at the coupled static tolerance :math:`10^{-6}`, as the line's own
+static solve accepts such a floor, and the run notes the residual of the discrete equilibrium
+when it lies above the tight tolerance. A step whose damped Newton solve does not converge is
+repeated from the last converged state with pseudo-transient continuation and then with a
+residual-merit line search,
 and is halved (down to 1/1024) when neither converges. A halved step doubles again (up to 1/8)
 after two consecutive converged steps of its size; each time a doubled step fails, the number
 of converged steps a doubling waits for doubles, so a homotopy that converges steadily at one
