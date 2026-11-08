@@ -18,6 +18,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- A finite-EI static solve whose equilibrium is in axial compression (with `tensile_safety True`)
+  stops refining once two passes leave the compression where it was (to 0.1 %), instead of
+  splitting elements up to the element budget: a power cable given twice its length fails in 6 s
+  instead of 76 s, with the same compression named. Decks that refinement does resolve are
+  unchanged (the static matrix and every example give identical outputs).
 
 ## [0.4.1] - 2026-11-08
 

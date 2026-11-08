@@ -2713,3 +2713,36 @@ def test_route_rules_match_the_driver(text, tmp_path):
     )
     assert completed.returncode in (0, 1), completed.stderr[-600:]
     assert _accepted(deck) == (completed.returncode == 0), completed.stderr[-600:]
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the refinement-stop check",
+)
+def test_a_compression_refinement_leaves_where_it_was_stops_the_refinement(tmp_path):
+    # the power cable with its sections given twice: too long to hang clear of the seabed, it is
+    # held in axial compression by its bending stiffness, a compression of the equilibrium that
+    # no mesh removes; the axial refinement stops once two passes leave it where it was instead
+    # of splitting elements to the element budget (6 passes, 32768 elements)
+    tail = "1       bare      52.101   256\n"
+    text = _example(
+        "lozon_gomex80_power_cable.dat",
+        (tail, tail + "1       bare      68.114   448\n1       buoy      50.000   320\n" + tail),
+    )
+    deck = tmp_path / "long.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "long")],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        cwd=tmp_path,
+        timeout=900,
+        env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+        check=False,
+    )
+    assert completed.returncode == 2, completed.stderr[-600:]
+    assert "two passes left the compression where it was" in completed.stderr, completed.stderr[
+        -900:
+    ]
+    assert _accepted(deck)
