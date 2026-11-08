@@ -2022,6 +2022,39 @@ if(Python3_Interpreter_FOUND)
     message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
+  # Deck-driver end-to-end oracles (need numpy): one linear sea written as deck wave rows, as a
+  # MoorDyn-C WaveKin 7 table and as a WaveKin 3 record gives one line response; the modes of a
+  # two-section string are the roots of its closed-form frequency equation; a cylindrical bend
+  # stiffener is the section of cable and sleeve, and a cable clamped at the angle a off its
+  # tangent carries the root moment a sqrt(EI T).
+  if(_range_tdp_numpy_rc EQUAL 0)
+    add_test(NAME wave_input_equivalence
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_wave_input_equivalence.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/wave_input_equivalence)
+    set_tests_properties(wave_input_equivalence PROPERTIES
+      LABELS "python;driver;integration;dynamic;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+    add_test(NAME composite_string_modes
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_composite_string_modes.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/composite_string_modes)
+    set_tests_properties(composite_string_modes PROPERTIES
+      LABELS "python;driver;integration;static;modal;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+    add_test(NAME stiffener_section_equivalence
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_stiffener_section_equivalence.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --examples ${CMAKE_CURRENT_SOURCE_DIR}/examples
+                     --output ${CMAKE_BINARY_DIR}/stiffener_section_equivalence)
+    set_tests_properties(stiffener_section_equivalence PROPERTIES
+      LABELS "python;driver;integration;static;dynamic;finite_ei;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+  endif()
+
   # Node channels on a refined finite-EI line name deck nodes: the static profile's DeckNode
   # column, the standalone static and dynamic cubic-Hermite routes, the mixed route (the OpenFAST
   # aggregate evaluator) and the C API on the coarse lazy-wave deck the static solve refines

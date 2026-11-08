@@ -16,6 +16,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   bathymetry with as-laid friction, torsion with one end free, and the modes of a composite
   line; every shipped deck, those of the `moordynC_*` folders included, now runs in CTest and in
   the example fallback scan.
+- Regression tests through the deck driver: one linear sea as deck wave rows, `WaveKin 7` and
+  `WaveKin 3` gives one response; the modes of a two-section string match its closed-form
+  frequency equation at second order in the element length; a cylindrical bend stiffener
+  matches the equivalent cable-and-sleeve section, and a clamped cable's root moment is
+  `a sqrt(EI T)`.
 
 ### Fixed
 
