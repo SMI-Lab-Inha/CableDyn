@@ -1591,7 +1591,9 @@ hang it from the seabed. The contact acts along the surface normal of a sloped o
 bathymetry, in the point static equilibrium and in the monolithic and staggered point steps
 alike (in the staggered step its stiffness and damping are linearly implicit, like the end
 blocks of the attached lines), so a grounded point starts at rest. A ``Point3`` buoy is not
-placed by the static solve (it starts at its deck position) but carries the same contact in
+placed by the static solve (it starts at its deck position; under ``bodyIC static`` the run notes
+the force its line, weight, buoyancy, drag and contact leave on it there and the distance to its
+balance as a ``Free`` point) but carries the same contact in
 every march, the monolithic and staggered steps and the coupled point step of the OpenFAST
 aggregate and the C API. The contact is frictionless: the point routes reject ``frictionMu``. A
 point clear of the seabed sees exactly no contact load, and its results are unchanged.

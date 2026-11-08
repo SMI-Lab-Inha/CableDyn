@@ -18,6 +18,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- `Point3` buoys under the default `bodyIC static`: the static solve does not place a `Point3`
+  buoy, so it started at its deck position off balance without a word while every other free
+  object started balanced (a 112 t, 259 m^3 buoy started with 1.5 MN unbalanced and surfaced in
+  2 s). The run now notes the unbalanced force and the distance to the buoy's static balance as
+  a `Free` point.
 
 ## [0.4.1] - 2026-11-08
 
