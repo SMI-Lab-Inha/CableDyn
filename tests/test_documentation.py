@@ -287,6 +287,7 @@ class DocumentationTests(unittest.TestCase):
         catalogue = (DOC / "examples.rst").read_text(encoding="utf-8")
         examples = ROOT / "examples"
         public_inputs = list(examples.glob("*.dat"))
+        public_inputs += list(examples.glob("moordynC_*/*.dat"))
         public_inputs += list((examples / "openfast").glob("*.dat"))
         public_inputs += list((examples / "openfast").glob("*.fst"))
         for path in public_inputs:

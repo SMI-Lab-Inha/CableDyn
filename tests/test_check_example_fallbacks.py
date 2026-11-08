@@ -125,6 +125,20 @@ def main() -> int:
         status, text = run_scan(command, [taken, other], root / "mixed", coretype="Prescott")
         check(status == 1 and "ran Haswell" in text, "one wrong run fails", failures, text)
 
+        # The shipped decks: the top-level decks and those of the MoorDyn-C kinematics folders,
+        # with distinct names (each writes its outputs under its own name), and no auxiliary file.
+        shipped = scan.example_decks(examples.resolve())
+        names = [deck.name for deck in shipped]
+        folders = {deck.parent.name for deck in shipped}
+        check(
+            "chain_wavekin7_currents1.dat" in names
+            and len(set(names)) == len(names)
+            and not folders & {"data", "openfast"},
+            "the scan collects every shipped deck once",
+            failures,
+            "\n".join(str(deck) for deck in shipped),
+        )
+
         # The real driver and OpenBLAS: a kernel that does not exist cannot be confirmed.
         real = io.StringIO()
         with contextlib.redirect_stdout(real):

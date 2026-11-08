@@ -8,6 +8,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Example decks for cross-flow VIV, the mode-1 axial damping ratio, MoorDyn-C `WaveKin 3` and
+  `Currents 2`/`5` files, viscoelastic and Syrope composite legs on an RAO-driven floater, a
+  cable shared by two moving floaters, buoyancy modules under a bend stiffener, a sloping
+  bathymetry with as-laid friction, torsion with one end free, and the modes of a composite
+  line; every shipped deck, those of the `moordynC_*` folders included, now runs in CTest and in
+  the example fallback scan.
+
 ### Fixed
 
 - Finite-EI node tension, curvature and bend moment next to the touchdown point: the floor
