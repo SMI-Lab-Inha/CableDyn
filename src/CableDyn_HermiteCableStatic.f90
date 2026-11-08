@@ -2911,17 +2911,22 @@ CONTAINS
       !! (CD_HermiteCable_Dry_Buoyancy with the section radius d/2, d the laid_diam of the
       !! element's midpoint arc), a node above that level also node_dry_load: W = nl + the dry
       !! load at z(W), solved by Newton's method with the dry load's exact height derivative (its
-      !! residual decreases monotonically in W). The turning force of the laid tension is left
+      !! residual decreases monotonically in W), each step halved until it reduces the residual's
+      !! 2-norm: a full step can jump between a node held off the floor (wholly dry) and one sunk
+      !! below the surface (wholly wet) and cycle there. The turning force of the laid tension is left
       !! out of the height. nl is unchanged where the line lies below the surface by more than
       !! its radius.
       REAL(wp), INTENT(INOUT) :: nl(:)
       INTEGER, INTENT(OUT) :: esd
       CHARACTER(*), INTENT(OUT) :: emd
-      INTEGER, PARAMETER :: MAX_NEWTON = 50
+      INTEGER, PARAMETER :: MAX_NEWTON = 200
       REAL(wp), PARAMETER :: LOAD_RTOL = 1.0e-12_wp
+      ! the Armijo slope of the step acceptance and the shortest step tried
+      REAL(wp), PARAMETER :: ARMIJO = 1.0e-4_wp, MIN_STEP = 2.0_wp**(-30)
       REAL(wp), ALLOCATABLE :: ref_u(:, :), zf(:), dzds(:), sfac2(:), de(:), base(:), wl(:), z(:), fd(:), &
-                               gres(:), dg(:), lo(:), up(:), y(:)
-      REAL(wp) :: dir(2), gx, gy, ga, qz(4), fdry(4), kdry(4, 4), s_mid, stretch, scale_w, piv
+                               gres(:), dg(:), lo(:), up(:), y(:), wl_acc(:)
+      REAL(wp) :: dir(2), gx, gy, ga, qz(4), fdry(4), kdry(4, 4), s_mid, stretch, scale_w, piv, gnorm, &
+                  gnorm_acc, lam
       INTEGER :: j, e, ix, esq, it
       LOGICAL :: dry, any_dry
       esd = CD_HCSTAT_OK
@@ -2970,7 +2975,11 @@ CONTAINS
       base = nl
       wl = nl
       scale_w = MAX(CD_ONE, MAXVAL(ABS(base)))
-      ALLOCATE (z(ne + 1), fd(ne + 1), gres(ne + 1), dg(ne + 1), lo(ne + 1), up(ne + 1), y(ne + 1))
+      ALLOCATE (z(ne + 1), fd(ne + 1), gres(ne + 1), dg(ne + 1), lo(ne + 1), up(ne + 1), y(ne + 1), &
+                wl_acc(ne + 1))
+      wl_acc = wl
+      gnorm_acc = HUGE(CD_ONE)
+      lam = CD_ONE
       DO it = 1, MAX_NEWTON
         ! the dry load at the heights of the loads wl, and its derivative with respect to them
         z = zf - MAX(wl, CD_ZERO)*sfac2/node_kn
@@ -3006,6 +3015,17 @@ CONTAINS
         IF (it == 1 .AND. .NOT. any_dry) RETURN
         gres = wl - base - fd
         IF (MAXVAL(ABS(gres)) <= LOAD_RTOL*scale_w) EXIT
+        ! a step that does not reduce the residual is halved from the last accepted loads (the
+        ! Newton step is a descent direction of its 2-norm); the shortest is taken as it is
+        gnorm = SQRT(SUM(gres*gres))
+        IF (.NOT. (gnorm <= (CD_ONE - ARMIJO*lam)*gnorm_acc) .AND. lam > MIN_STEP) THEN
+          lam = 0.5_wp*lam
+          wl = wl_acc + lam*y
+          CYCLE
+        END IF
+        wl_acc = wl
+        gnorm_acc = gnorm
+        lam = CD_ONE
         ! (I + K D) dw = -gres, tridiagonal (diagonal dg, sub lo, super up): Thomas elimination;
         ! the diagonal is at least 1 and grows with the dry stiffness
         y = -gres

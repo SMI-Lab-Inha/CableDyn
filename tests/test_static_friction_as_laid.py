@@ -40,6 +40,9 @@ driver:
   reference sinks each node under the load the solver applies there, the dry part of the section
   that pierces the surface included, so the run rests on its laid path and a march from the
   static state stays at rest;
+* ``buoyant_shallow`` (a net-buoyant 0.5 m cable on a flat seabed 0.01 m deep, kBot = 1000): the
+  reference's dry load, whose full Newton step cycles between a wholly dry and a wholly wet node,
+  converges with halved steps, and a march from the static state stays at rest;
 * ``pl_*``: per-line rows win over the global ones (``layAzimuth<ID>`` over ``layAzimuth``,
   ``asLaidTension<ID>`` over ``asLaidTension``, in either order), and a row for line 2 leaves
   line 1 alone; ``aniso_*``: the axial coefficient rules the friction along a laid run;
@@ -557,6 +560,28 @@ def main() -> int:
         if rc == 0:
             drift = at_rest(cdir, "shallow", "shallow_rest")
             check(drift <= REST_TOL, "shallow_cross stays at rest from the static state (drift %.2e)" % drift)
+
+    # --- net-buoyant cable on a flat seabed shallower than its radius, soft seabed ---
+    # A 0.5 m cable of 180 kg/m floats (its displaced water is 201 kg/m), held on a seabed 0.01 m
+    # deep with kBot = 1000. A node held off the floor is wholly dry and one sunk under the dry
+    # load wholly wet, so the full Newton step of the reference's dry load jumps between about
+    # -208 and 728 N/m; the root (70.3 N/m, a sink of 0.14 m) lies between. Checked: the
+    # halved steps reach it, the static solve converges, and a march from it stays at rest.
+    cdir = root / "buoyant_shallow"
+    cdir.mkdir(parents=True, exist_ok=True)
+    rows = ["%.1f %.1f 0.01" % (x, y) for x in range(-300, 1000, 100) for y in (-300.0, 300.0)]
+    (cdir / "bathy.txt").write_text("\n".join(rows) + "\n", encoding="utf-8", newline="\n")
+    bs = dict(ei=1.0e4, length=100.0, nseg=50, fair=(100.0, 0.0, -0.005), anch=(0.0, 0.0, -0.01), seabed=sb,
+              types="chain 0.5 180.0 1.0e8 -1 1.0e4 1.2 0.008 1 0\n")
+    rc, log = run(a.exe, cdir, "buoyant", deck("buoyant shallow", **bs).replace("100000.0 kBot", "1000.0 kBot"))
+    check(rc == 0, "buoyant_shallow converges (rc %d)%s" % (rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+    if rc == 0:
+        rc, _ = run(a.exe, cdir, "buoyant_rest",
+                    deck("buoyant shallow rest", **bs, tmax=1.0).replace("100000.0 kBot", "1000.0 kBot"))
+        check(rc == 0, "buoyant_shallow at-rest march runs (rc %d)" % rc)
+        if rc == 0:
+            drift = at_rest(cdir, "buoyant", "buoyant_rest")
+            check(drift <= REST_TOL, "buoyant_shallow stays at rest from the static state (drift %.2e)" % drift)
 
     # --- per-line rows, non-default azimuth and tension, anisotropic friction (EI = 0) ---
     cdir = root / "perline"
