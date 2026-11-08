@@ -113,6 +113,11 @@ jobs:
           environment-file: environment.yml
           cache-environment: true
 
+      - name: Require AVX-512 for SkylakeX
+        run: |
+          grep -m1 "model name" /proc/cpuinfo
+          grep -q avx512f /proc/cpuinfo || { echo "this runner has no AVX-512; rerun the job"; exit 1; }
+
       - name: Show toolchain
         run: gfortran --version && cmake --version
 
