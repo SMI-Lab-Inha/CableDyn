@@ -18,6 +18,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Finite-EI dynamic step at rest under a large axial damping coefficient: the round-off floor of
+  the step's force scale left out the axial damping, whose strain rate is formed from the Newmark
+  velocity and carries gamma/(beta dtM) times the rounding of the coordinates. A held line damped
+  near its first axial mode (`BA` = 2 zeta EA/omega_1, as `mode1 axialDampingRatio` gives, or a
+  direct `BA` of that size) stalled at a few times the tolerance and stopped (3 of 30 runs of a
+  400 m wire held at rest, `BA` 5e7 to 8e8 N s, `dtM` 0.002 to 0.01 s). The floor now includes
+  `BA` gamma/(beta dtM), as the twist floor includes its damping.
 
 ## [0.4.1] - 2026-11-08
 
