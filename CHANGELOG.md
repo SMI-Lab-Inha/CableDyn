@@ -18,6 +18,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- `EI = 0` statics: a residual inside the round-off floor of the nodal forces but above the
+  relative tolerance was converged only when it stayed flat. Iterates that alternated between two
+  values there ran every stage out of iterations, so a line could fail to find its equilibrium or
+  find it depending on the last digits of its coordinates (13 of 32 small translations of a
+  suspended three-section line in a current failed, as did translated copies of point systems). A
+  residual inside the floor that sets no new minimum over three iterations is now converged.
 
 ## [0.4.1] - 2026-11-08
 

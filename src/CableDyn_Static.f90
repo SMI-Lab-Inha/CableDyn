@@ -726,6 +726,15 @@ CONTAINS
             RETURN
           END IF
         END IF
+        ! Inside the round-off floor a residual can also cycle between two or more values (the
+        ! rounding of the last digits alternating), which the flat test above never sees: when
+        ! the last stall_window samples set no new minimum, there is no digit left to gain either
+        IF (k > cfg%stall_window .AND. hist(k) <= r_floor) THEN
+          IF (lo >= MINVAL(hist(1:k - cfg%stall_window))) THEN
+            converged = .TRUE.
+            RETURN
+          END IF
+        END IF
       END IF
     END DO
     ! exhausted max_iter without converging or stalling

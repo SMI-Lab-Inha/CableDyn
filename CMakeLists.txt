@@ -1828,6 +1828,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # EI = 0 statics: a residual that cycles inside its round-off floor is converged, so a line in
+  # a current solves the same under every small translation of its deck.
+  add_test(NAME ei0_static_floor_cycle
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ei0_static_floor_cycle.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/ei0_static_floor_cycle)
+  set_tests_properties(ei0_static_floor_cycle PROPERTIES
+    LABELS "python;static;robustness"
+    TIMEOUT 300
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # The note on grounded lines that a current moves over a seabed without friction: once per run
   # on every standalone route, and never without a grounded node, a current, or a march, or
   # with friction.
