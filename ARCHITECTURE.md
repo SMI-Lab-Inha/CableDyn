@@ -322,14 +322,16 @@ analytic Jacobians.
 about its static equilibrium, `K φ = ω² M φ`, over the free DOFs, with `K` the
 static tangent (element stiffness and linearised seabed contact) and `M` the
 consistent mass plus Morison added mass. `K` and `M` are assembled in symmetric
-band storage; LAPACK `DSBGVX` gives the eigenvalues and inverse iteration on the
-banded pencil gives each mode shape, so the cost grows with line length rather
-than with its square. Dense `DSYGV` is kept as the test reference. Both line paths
-are supported (`nModes`). A finite-EI line's modes (`CD_Modal_Hermite_Line`) take
-its end connections and attachments from the dynamic model, and a line restrained
-in torsion adds the twist angle of every node: its lumped polar inertia and the
-second variation of the nodal-twist energy (`CD_HermiteCable_Dyn_Twist_Hessian`)
-in a band of 7 DOFs per node.
+band storage. A shift-invert block Lanczos iteration on the banded Cholesky factor
+of `K` gives the eigenvalues, certified by a Sturm count of `K - σM` (LAPACK
+`DSBGVX` takes short lines, an indefinite or singular `K`, and an uncertified run),
+and inverse iteration on the banded pencil gives each mode shape, so the cost
+grows with line length rather than with its square. Dense `DSYGV` is kept as the
+test reference. Both line paths are supported (`nModes`). A finite-EI line's
+modes (`CD_Modal_Hermite_Line`) take its end connections and attachments from the
+dynamic model, and a line restrained in torsion adds the twist angle of every
+node: its lumped polar inertia and the second variation of the nodal-twist energy
+(`CD_HermiteCable_Dyn_Twist_Hessian`) in a band of 7 DOFs per node.
 
 ### Outputs
 

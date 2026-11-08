@@ -2004,13 +2004,31 @@ element, the Hessian of its strain energy. The linearised seabed normal contact 
 stiffness on the contacting nodes. :math:`\mathbf M` is the consistent structural mass plus the
 Morison added mass at the static shape. Friction, damping, and drag are left out, as in any
 undamped modal analysis. :math:`\mathbf K` and :math:`\mathbf M` are banded (the nodes are
-numbered along the line), and only the ``nModes`` lowest modes are computed: LAPACK ``dsbgvx``
-gives the eigenvalues, inverse iteration with the banded factors of
-:math:`\mathbf K - \omega^2\mathbf M` gives each shape (M-orthogonal to the shapes before
-it, so a repeated frequency gets independent shapes), and the returned :math:`\omega^2` is the
-Rayleigh quotient of the shape, summed in quadruple precision. That quotient keeps the lowest
-frequencies of a long, axially stiff line accurate, where the band reduction alone loses
-digits. Memory grows linearly with the line length. The frequencies
+numbered along the line), and only the ``nModes`` lowest modes are computed. Their eigenvalues
+come from a block Lanczos iteration on the shift-inverted operator
+:math:`\mathbf K^{-1}\mathbf M`, applied with the banded Cholesky factor of :math:`\mathbf K`,
+in the :math:`\mathbf M` inner product with full reorthogonalisation. The block holds two
+vectors, so both planes of a straight line, whose transverse frequencies coincide, are found.
+A Ritz value is accepted when the residual of the shift-inverted eigenproblem is below
+:math:`10^{-10}` of its eigenvalue. The count is then certified: the Cholesky factor shows that
+no eigenvalue lies at or below zero, and the inertia of :math:`\mathbf K - \sigma\mathbf M`
+(the negative pivots of its banded :math:`\mathbf L\mathbf D\mathbf L^{\mathsf T}`
+factorisation, by Sylvester's law of inertia) at a shift :math:`\sigma` in a gap above the
+wanted eigenvalues must equal the number of Ritz values below :math:`\sigma`, so no frequency
+is missed or counted twice. The iteration's time grows linearly with the line length. Short
+lines, many modes of a short line, an indefinite or singular :math:`\mathbf K` (a compressed
+or slack line), and an iteration that does not converge or is not certified within its basis
+bound take LAPACK ``dsbgvx`` instead (band reduction and bisection), whose time grows with the
+square of the line length. Inverse iteration with the banded factors of
+:math:`\mathbf K - \omega^2\mathbf M` then gives each shape (M-orthogonal to the shapes
+before it, so a repeated frequency gets independent shapes), and the returned
+:math:`\omega^2` is the Rayleigh quotient of the shape, summed in quadruple precision. That
+quotient keeps the lowest frequencies of a long, axially stiff line accurate, where the band
+reduction alone loses digits. A shape the Lanczos eigenvalues do not give is solved again on
+the eigenvalues of the band reduction. Each shape is signed so that its largest component is
+positive; where two components are equally large to round-off (the mirrored nodes of a
+symmetric line), the first of them in the solver's node order is. Memory grows linearly with the line
+length. The frequencies
 :math:`f = \omega/2\pi` and the nodal translations of each mode (scaled to a unit largest
 nodal displacement) are written to ``<root>.modes.out``. For a taut string of tension
 :math:`T` the transverse frequencies are :math:`f_n = (n/2L)\sqrt{T/m}`; for a shallow sagging

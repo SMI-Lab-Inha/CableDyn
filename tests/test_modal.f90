@@ -41,6 +41,8 @@ PROGRAM test_modal
   CALL case_hermite_beam()
   CALL case_hermite_long_beam()
   CALL case_slack_string()
+  CALL case_solver_agreement()
+  CALL case_repeated_frequency()
   CALL case_irvine()
   CALL case_deck_hermite_and_rules()
   IF (nfail > 0) THEN
@@ -201,23 +203,35 @@ CONTAINS
   END SUBROUTINE case_hermite_beam
 
   SUBROUTINE check_band_against_dense(label, k, m, kb, mb, kd, free, om2_dense)
-    !! The banded solver on the band form of the dense matrices k, m: the frequencies of the
-    !! dense reference, and shapes that are M-orthonormal, zero on the held DOFs and satisfy
-    !! K phi = omega^2 M phi.
+    !! The banded solver on the band form of the dense matrices k, m, with each eigenvalue
+    !! stage (the shift-invert Lanczos iteration and the band reduction): the frequencies of
+    !! the dense reference, and shapes that are M-orthonormal, zero on the held DOFs and
+    !! satisfy K phi = omega^2 M phi.
     CHARACTER(*), INTENT(IN) :: label
     REAL(wp), INTENT(IN) :: k(:, :), m(:, :), kb(:, :), mb(:, :), om2_dense(:)
     INTEGER, INTENT(IN) :: kd
     LOGICAL, INTENT(IN) :: free(:)
+    CALL check_band_method(label//'[lanczos]', k, m, kb, mb, kd, free, om2_dense, CD_MODAL_EIG_LANCZOS)
+    CALL check_band_method(label//'[band-reduction]', k, m, kb, mb, kd, free, om2_dense, CD_MODAL_EIG_BANDRED)
+  END SUBROUTINE check_band_against_dense
+
+  SUBROUTINE check_band_method(label, k, m, kb, mb, kd, free, om2_dense, method)
+    !! check_band_against_dense with one eigenvalue stage, which must be the one used.
+    CHARACTER(*), INTENT(IN) :: label
+    REAL(wp), INTENT(IN) :: k(:, :), m(:, :), kb(:, :), mb(:, :), om2_dense(:)
+    INTEGER, INTENT(IN) :: kd, method
+    LOGICAL, INTENT(IN) :: free(:)
     REAL(wp), ALLOCATABLE :: om2(:), sh(:, :), ksh(:, :), msh(:, :), gram(:, :)
     REAL(wp) :: knorm, fdiff, resid, ortho
-    INTEGER :: nm, nf, es, j
+    INTEGER :: nm, nf, es, j, used
     LOGICAL :: held_zero
     CHARACTER(256) :: em
     nm = SIZE(om2_dense)
     ALLOCATE (om2(nm), sh(SIZE(free), nm))
-    CALL CD_Modal_Solve_Band(kb, mb, kd, free, nm, om2, sh, nf, es, em)
+    CALL CD_Modal_Solve_Band(kb, mb, kd, free, nm, om2, sh, nf, es, em, eig_method=method, eig_used=used)
     CALL require(es == CD_MODAL_OK .AND. nf == nm, label//':band-solve: '//TRIM(em))
     IF (es /= CD_MODAL_OK .OR. nf /= nm) RETURN
+    CALL require(used == method, label//':eigenvalue-stage-used')
     knorm = MAXVAL(SUM(ABS(k), 1))
     fdiff = 0.0_wp
     DO j = 1, nm
@@ -244,7 +258,7 @@ CONTAINS
     CALL require(resid < 1.0e-9_wp, label//':band-shape-residual')
     CALL require(ortho < 1.0e-8_wp, label//':band-shapes-M-orthonormal')
     CALL require(held_zero, label//':band-held-dofs-zero')
-  END SUBROUTINE check_band_against_dense
+  END SUBROUTINE check_band_method
 
   SUBROUTINE case_slack_string()
     !! A slack tension-only string has no stiffness (K = 0): every frequency is zero and the
@@ -252,7 +266,7 @@ CONTAINS
     INTEGER, PARAMETER :: NE = 20, NN = NE + 1, NM = 6
     REAL(wp) :: q(3*NN), l0(NE), ea_(NE), rho_a(NE), om2(NM), gram(NM, NM)
     REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :), k(:, :), m(:, :), sh(:, :)
-    INTEGER :: conn(2, NE), i, es, nf, kd
+    INTEGER :: conn(2, NE), i, es, nf, kd, used
     LOGICAL :: free(3*NN)
     CHARACTER(256) :: em
     ALLOCATE (k(3*NN, 3*NN), m(3*NN, 3*NN), sh(3*NN, NM))
@@ -280,18 +294,25 @@ CONTAINS
       gram(i, i) = gram(i, i) - 1.0_wp
     END DO
     CALL require(nan_max_abs(gram) < 1.0e-10_wp, 'slack:shapes-M-orthonormal')
+    ! K = 0 is not positive definite: the Lanczos stage hands over to the band reduction
+    CALL CD_Modal_Solve_Band(kb, mb, kd, free, NM, om2, sh, nf, es, em, eig_method=CD_MODAL_EIG_LANCZOS, &
+                             eig_used=used)
+    CALL require(es == CD_MODAL_OK .AND. nf == NM .AND. used == CD_MODAL_EIG_BANDRED, &
+                 'slack:lanczos-hands-over: '//TRIM(em))
+    CALL require(nan_max_abs(om2) < 1.0e-9_wp, 'slack:lanczos-hands-over-zero-frequencies')
   END SUBROUTINE case_slack_string
 
   SUBROUTINE case_hermite_long_beam()
     !! A pre-tensioned 1024-element beam-string (6150 DOFs, beyond the dense reference): the
     !! banded solver against the closed-form frequencies; each repeated frequency (the two
-    !! transverse planes) gets shapes in both planes.
+    !! transverse planes) gets shapes in both planes. A line this long takes the shift-invert
+    !! Lanczos eigenvalue stage.
     INTEGER, PARAMETER :: NE = 1024, NN = NE + 1, NM = 10
     REAL(wp), PARAMETER :: L = 500.0_wp, EI = 1.0e6_wp, RHO = 100.0_wp, EPS = 1.0e-4_wp
     REAL(wp), ALLOCATABLE :: q(:), l0(:), ea(:), eiv(:), rho_a(:), kb(:, :), mb(:, :), sh(:, :)
     LOGICAL, ALLOCATABLE :: free(:)
     REAL(wp) :: om2(NM), t, mc, f_exp, f_got, sy, sz
-    INTEGER :: i, es, kd, nf, j, n
+    INTEGER :: i, es, kd, nf, j, n, used
     INTEGER(8) :: c0, c1, rate
     CHARACTER(256) :: em
     ALLOCATE (q(6*NN), l0(NE), ea(NE), eiv(NE), rho_a(NE), sh(6*NN, NM), free(6*NN))
@@ -308,10 +329,11 @@ CONTAINS
     CALL SYSTEM_CLOCK(c0, rate)
     CALL CD_Modal_Hermite_Band(q, l0, ea, eiv, rho_a, kd, kb, mb, es, em)
     CALL require(es == CD_MODAL_OK, 'long-beam:band-matrices: '//TRIM(em))
-    CALL CD_Modal_Solve_Band(kb, mb, kd, free, NM, om2, sh, nf, es, em)
+    CALL CD_Modal_Solve_Band(kb, mb, kd, free, NM, om2, sh, nf, es, em, eig_used=used)
     CALL SYSTEM_CLOCK(c1)
     CALL require(es == CD_MODAL_OK .AND. nf == NM, 'long-beam:band-solve: '//TRIM(em))
     IF (es /= CD_MODAL_OK .OR. nf /= NM) RETURN
+    CALL require(used == CD_MODAL_EIG_LANCZOS, 'long-beam:lanczos-eigenvalues')
     WRITE (*, '(A,I0,A,F8.3,A)') 'long beam: ', COUNT(free), ' free DOFs, banded solve in ', &
       REAL(c1 - c0, wp)/REAL(rate, wp), ' s'
     t = 1.0e9_wp*EPS
@@ -329,6 +351,160 @@ CONTAINS
       CALL require(MIN(sy, sz) > 0.25_wp*(sy + sz), 'long-beam:repeated-frequency-spans-both-planes')
     END DO
   END SUBROUTINE case_hermite_long_beam
+
+  SUBROUTINE sagged_line(finite_ei, ne, kb, mb, kd, free)
+    !! A line sagged on a parabola (span 500 m, sag 60 m, stretch 1e-3, ends held) with the
+    !! Morison added mass: a finite-EI power cable or an EI = 0 chain, in band storage.
+    LOGICAL, INTENT(IN) :: finite_ei
+    INTEGER, INTENT(IN) :: ne
+    REAL(wp), ALLOCATABLE, INTENT(OUT) :: kb(:, :), mb(:, :)
+    INTEGER, INTENT(OUT) :: kd
+    LOGICAL, ALLOCATABLE, INTENT(OUT) :: free(:)
+    REAL(wp), PARAMETER :: SPAN = 500.0_wp, SAG = 60.0_wp, EPS = 1.0e-3_wp
+    REAL(wp), ALLOCATABLE :: q(:), l0(:), ea(:), ei(:), rho(:), dia(:), can(:), cat(:), wl(:), xs(:), zs(:)
+    REAL(wp) :: dzdx, tl
+    INTEGER :: i, nn, es
+    INTEGER, ALLOCATABLE :: conn(:, :)
+    CHARACTER(256) :: em
+    nn = ne + 1
+    ALLOCATE (l0(ne), ea(ne), ei(ne), rho(ne), dia(ne), can(ne), cat(ne), xs(0:ne), zs(0:ne))
+    DO i = 0, ne
+      xs(i) = SPAN*REAL(i, wp)/ne
+      zs(i) = -4.0_wp*SAG*(xs(i)/SPAN)*(1.0_wp - xs(i)/SPAN)
+    END DO
+    DO i = 1, ne
+      l0(i) = SQRT((xs(i) - xs(i - 1))**2 + (zs(i) - zs(i - 1))**2)/(1.0_wp + EPS)
+    END DO
+    dia = 0.16_wp
+    can = 1.0_wp
+    cat = 0.0_wp
+    IF (finite_ei) THEN
+      ALLOCATE (q(6*nn), free(6*nn))
+      DO i = 0, ne
+        dzdx = -4.0_wp*SAG/SPAN*(1.0_wp - 2.0_wp*xs(i)/SPAN)
+        tl = SQRT(1.0_wp + dzdx**2)
+        q(6*i + 1:6*i + 6) = [xs(i), 0.0_wp, zs(i), (1.0_wp + EPS)/tl, 0.0_wp, (1.0_wp + EPS)*dzdx/tl]
+      END DO
+      ea = 4.69e8_wp
+      ei = 1.99e4_wp
+      rho = 36.7_wp
+      free = .TRUE.
+      free(1:3) = .FALSE.
+      free(6*nn - 5:6*nn - 3) = .FALSE.
+      CALL CD_Modal_Hermite_Band(q, l0, ea, ei, rho, kd, kb, mb, es, em, am_rho=1025.0_wp, am_waterline=0.0_wp, &
+                                 am_diam=dia, am_can=can, am_cat=cat)
+    ELSE
+      ALLOCATE (q(3*nn), free(3*nn), wl(nn), conn(2, ne))
+      DO i = 0, ne
+        q(3*i + 1:3*i + 3) = [xs(i), 0.0_wp, zs(i)]
+      END DO
+      DO i = 1, ne
+        conn(:, i) = [i, i + 1]
+      END DO
+      ea = 8.0e8_wp
+      rho = 150.0_wp
+      wl = 0.0_wp
+      free = .TRUE.
+      free(1:3) = .FALSE.
+      free(3*nn - 2:3*nn) = .FALSE.
+      CALL CD_Modal_Bar_Band(q, conn, l0, ea, rho, .TRUE., kd, kb, mb, es, em, am_rho=1025.0_wp, am_waterline=wl, &
+                             am_diam=dia, am_can=can, am_cat=cat)
+    END IF
+    CALL require(es == CD_MODAL_OK, 'sagged-line:band-matrices: '//TRIM(em))
+  END SUBROUTINE sagged_line
+
+  SUBROUTINE case_solver_agreement()
+    !! The two eigenvalue stages on lines of distinct frequencies: a sagged finite-EI line
+    !! with added mass (300 elements, 1800 free DOFs) and a sagged EI = 0 chain (400
+    !! elements, 1197). The production route takes the shift-invert Lanczos stage and gives
+    !! the frequencies of the band reduction to 1e-10 and the same shapes, with the same
+    !! signs (the symmetric sag puts equally large components on mirrored nodes: the first
+    !! one is positive).
+    INTEGER, PARAMETER :: NM = 20
+    REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :), sh_l(:, :), sh_b(:, :)
+    LOGICAL, ALLOCATABLE :: free(:)
+    REAL(wp) :: om2_l(NM), om2_b(NM), fdiff, sdiff, gap
+    INTEGER :: kd, nf_l, nf_b, es_l, es_b, used, j, icase
+    CHARACTER(256) :: em
+    CHARACTER(16) :: label
+    DO icase = 1, 2
+      IF (icase == 1) THEN
+        label = 'agree-hermite'
+        CALL sagged_line(.TRUE., 300, kb, mb, kd, free)
+      ELSE
+        label = 'agree-chain'
+        CALL sagged_line(.FALSE., 400, kb, mb, kd, free)
+      END IF
+      IF (ALLOCATED(sh_l)) DEALLOCATE (sh_l, sh_b)
+      ALLOCATE (sh_l(SIZE(free), NM), sh_b(SIZE(free), NM))
+      CALL CD_Modal_Solve_Band(kb, mb, kd, free, NM, om2_l, sh_l, nf_l, es_l, em, eig_used=used)
+      CALL require(es_l == CD_MODAL_OK .AND. nf_l == NM, TRIM(label)//':solve: '//TRIM(em))
+      CALL require(used == CD_MODAL_EIG_LANCZOS, TRIM(label)//':lanczos-eigenvalues')
+      CALL CD_Modal_Solve_Band(kb, mb, kd, free, NM, om2_b, sh_b, nf_b, es_b, em, eig_method=CD_MODAL_EIG_BANDRED)
+      CALL require(es_b == CD_MODAL_OK .AND. nf_b == NM, TRIM(label)//':band-reduction-solve: '//TRIM(em))
+      IF (es_l /= CD_MODAL_OK .OR. es_b /= CD_MODAL_OK .OR. nf_l /= NM .OR. nf_b /= NM) CYCLE
+      fdiff = 0.0_wp
+      sdiff = 0.0_wp
+      DO j = 1, NM
+        fdiff = MAX(fdiff, ABS(om2_l(j) - om2_b(j))/ABS(om2_b(j)))
+        gap = HUGE(1.0_wp)
+        IF (j > 1) gap = MIN(gap, (om2_b(j) - om2_b(j - 1))/om2_b(j))
+        IF (j < NM) gap = MIN(gap, (om2_b(j + 1) - om2_b(j))/om2_b(j))
+        IF (gap > 1.0e-4_wp) sdiff = MAX(sdiff, nan_max_abs(sh_l(:, j) - sh_b(:, j))/nan_max_abs(sh_b(:, j)))
+      END DO
+      WRITE (*, '(A,2ES11.3)') TRIM(label)//': Lanczos vs band reduction, max relative omega^2 and shape '// &
+        'differences: ', fdiff, sdiff
+      CALL require(fdiff <= 1.0e-10_wp, TRIM(label)//':frequencies-equal')
+      CALL require(sdiff <= 1.0e-8_wp, TRIM(label)//':shapes-and-signs-equal')
+    END DO
+  END SUBROUTINE case_solver_agreement
+
+  SUBROUTINE case_repeated_frequency()
+    !! A frequency repeated six times, three times the Lanczos block: NN nodes of six DOFs
+    !! joined along a chain by identical springs on each DOF (ends held), K = L (x) I6 with L
+    !! the chain Laplacian, M = I, eigenvalues 2 k (1 - cos(j pi/(NN + 1))), each sixfold; the
+    !! 8 lowest modes cut the second value's copies. The Sturm count of the Lanczos stage
+    !! rejects a run that misses a copy (without it, a single-vector block accepts one): each
+    !! stage returns every copy, with M-orthonormal shapes. The same lattice shifted to a
+    !! negative lowest eigenvalue (K - s M, indefinite): the Lanczos stage hands over to the
+    !! band reduction.
+    INTEGER, PARAMETER :: NN = 150, NC = 6, N = NC*NN, NM = 8, KD = NC
+    REAL(wp), PARAMETER :: KS = 1.0e4_wp
+    REAL(wp), ALLOCATABLE :: kb(:, :), mb(:, :), sh(:, :), gram(:, :)
+    REAL(wp) :: om2(NM), lam(NM), shift, err
+    LOGICAL :: free(N)
+    INTEGER :: i, j, nf, es, used, method, pass
+    CHARACTER(256) :: em
+    ALLOCATE (kb(KD + 1, N), mb(KD + 1, N), sh(N, NM))
+    free = .TRUE.
+    DO pass = 1, 2
+      shift = 0.0_wp
+      IF (pass == 2) shift = 3.0_wp*KS*(1.0_wp - COS(PI/REAL(NN + 1, wp)))
+      kb = 0.0_wp
+      mb = 0.0_wp
+      kb(KD + 1, :) = 2.0_wp*KS - shift
+      kb(1, KD + 1:N) = -KS
+      mb(KD + 1, :) = 1.0_wp
+      DO j = 1, NM
+        lam(j) = 2.0_wp*KS*(1.0_wp - COS(REAL((j + NC - 1)/NC, wp)*PI/REAL(NN + 1, wp))) - shift
+      END DO
+      DO method = CD_MODAL_EIG_AUTO, CD_MODAL_EIG_LANCZOS
+        CALL CD_Modal_Solve_Band(kb, mb, KD, free, NM, om2, sh, nf, es, em, eig_method=method, eig_used=used)
+        CALL require(es == CD_MODAL_OK .AND. nf == NM, 'repeated:solve: '//TRIM(em))
+        IF (es /= CD_MODAL_OK .OR. nf /= NM) CYCLE
+        err = MAXVAL(ABS(om2 - lam))/MAXVAL(ABS(lam))
+        gram = MATMUL(TRANSPOSE(sh), sh)
+        DO i = 1, NM
+          gram(i, i) = gram(i, i) - 1.0_wp
+        END DO
+        WRITE (*, '(A,I0,A,I0,A,I0,A,2ES11.3)') 'repeated frequency: pass ', pass, ', method ', method, ', used ', &
+          used, ': omega^2 error, M-orthonormality error ', err, nan_max_abs(gram)
+        CALL require(err < 1.0e-9_wp, 'repeated:every-copy-found')
+        CALL require(nan_max_abs(gram) < 1.0e-10_wp, 'repeated:shapes-M-orthonormal')
+        IF (pass == 2) CALL require(used == CD_MODAL_EIG_BANDRED, 'repeated:indefinite-hands-over')
+      END DO
+    END DO
+  END SUBROUTINE case_repeated_frequency
 
   ! ------------------------------------------------------------------ deck helpers
 

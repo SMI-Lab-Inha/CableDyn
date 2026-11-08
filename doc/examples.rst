@@ -360,7 +360,7 @@ touchdown and lazy-wave shape from the geometry alone; there is no initial-shape
      - the 10 lowest natural periods and mode shapes (``nModes``) of the 80 m cable on its
        1024-element mesh — :doc:`tutorial_lazywave`
      - Hermite, modal
-     - ~2 s
+     - ~1 s
    * - ``torsion_lazy_wave_hangoff_twist.dat``
      - the 80 m cable with an illustrative ``GJ`` of 50 kN·m², clamped and restrained in torsion
        at both ends, twisted two turns at the hang-off over 60 s by the ``motionFile`` roll column
