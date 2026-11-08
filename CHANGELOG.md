@@ -8,21 +8,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-- The modal analysis (`nModes`) of a long line is many times faster. Its lowest eigenvalues come
-  from a shift-invert block Lanczos iteration on the banded Cholesky factor of the stiffness,
-  their count certified by the inertia of `K - σM`, instead of the band reduction (LAPACK
-  `dsbgvx`), whose time grew with the square of the line length. The 10 modes of a 1024-element
-  finite-EI line take 0.14 s instead of 3.7 s; on a 4000-element line 10 modes take 0.5 s
-  instead of 55 s and 50 modes 2.9 s instead of 59 s (GNU build, one thread). Shapes and
-  frequencies still come from inverse iteration and the quadruple-precision Rayleigh quotient:
-  on the same matrices the frequencies agree to 1e-15, and `lazy_wave_modes.dat` writes the same
-  frequencies and shapes within 2e-8 of a unit displacement. Short lines, an indefinite or
-  singular stiffness, and an iteration that is not certified keep the band reduction.
-- A mode whose largest components are equally large (the mirrored nodes of a symmetric line)
-  takes its sign from the first of them in node order instead of from round-off.
-
 ## [0.4.1] - 2026-11-08
 
 ### Added
