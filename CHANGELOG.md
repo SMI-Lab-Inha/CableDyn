@@ -18,6 +18,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Finite-EI statics in a current with a `Rigid` end connection: when the drag load steps stall at
+  a limit point, the pseudo-arclength continuation that follows the path around it was skipped
+  for a line with a `Rigid` end, so the statics failed where the same line with a stiff
+  rotational spring solved (a 3 km cable clamped at its fairlead in 1.1 m/s, folded back past
+  its anchor). The continuation now takes a `Rigid` end in the basis of its direction, with the
+  transverse components of the end tangent held, as the static solve does.
 
 ## [0.4.1] - 2026-11-08
 

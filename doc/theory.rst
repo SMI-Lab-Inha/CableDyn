@@ -1937,7 +1937,9 @@ still-water equilibrium is found first and the drag is brought in by load steps.
 that stalls hands over to a pseudo-arclength continuation in the drag fraction
 :math:`\lambda`: each corrector solves the bordered system
 :math:`[K,\,-D;\ t_q^T,\ t_\lambda]` (:math:`D` the drag at full current) by block elimination
-with two banded solves, so the path can turn at a limit point in :math:`\lambda`. A current
+with two banded solves, so the path can turn at a limit point in :math:`\lambda`. At a ``Rigid``
+end the system is taken in the basis of the end direction, as in the static solve, with the
+two transverse components of the end tangent held. A current
 across the vertical plane of the line makes the static solve three-dimensional, as the
 dynamics are.
 

@@ -1924,6 +1924,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 300
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # A Rigid-ended cable in a strong current follows its drag path past a limit point by the
+  # pseudo-arclength continuation, as a stiff rotational spring does.
+  add_test(NAME arclength_rigid_end
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_arclength_rigid_end.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/arclength_rigid_end)
+  set_tests_properties(arclength_rigid_end PROPERTIES
+    LABELS "python;hermite;static;robustness;current"
+    TIMEOUT 900
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # The note on grounded lines that a current moves over a seabed without friction: once per run
   # on every standalone route, and never without a grounded node, a current, or a march, or
   # with friction.
