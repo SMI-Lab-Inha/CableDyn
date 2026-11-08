@@ -4428,6 +4428,14 @@ CONTAINS
         ErrMsg = 'CableDyn_Model: internal-force assembly failed during coupled-load calculation: '//TRIM(em)
         RETURN
       END IF
+      ! A line coupled at its end nodes only (a line between points): the remaining terms on the
+      ! end rows alone (coupled_loads_at_ends), bit-identical to the whole-line residual below.
+      ! The whole-line terms validate the accelerations element by element (the added-mass
+      ! kernels): with any non-finite one they are formed whole, to fail as they do.
+      IF (ALL(model%fixed_dofs <= 3 .OR. model%fixed_dofs > model%n_dof - 3) .AND. CD_All_Finite(model%a)) THEN
+        CALL coupled_loads_at_ends(model, fint, coupled_loads, ErrStat, ErrMsg)
+        RETURN
+      END IF
       CALL model_structural_mass_product(model, model%a, residual)
       residual = residual + fint - model%f_ext
       IF (model%has_added_mass) THEN
@@ -4452,6 +4460,119 @@ CONTAINS
       END DO
     END ASSOCIATE
   END SUBROUTINE CD_Calc_Model_CoupledLoads
+
+  SUBROUTINE coupled_loads_at_ends(model, fint, coupled_loads, ErrStat, ErrMsg)
+    !! The rest of CD_Calc_Model_CoupledLoads, given the whole-line internal force fint, for a
+    !! line whose coupled DOFs all belong to its first or last node and whose accelerations are
+    !! finite. Only the two end rows of M a + f_int - f_ext + M_add a - load are formed, from
+    !! the elements that touch an end node and the end nodes' own terms (model_contributor_force
+    !! end_nodes_only). Each row takes its terms in the element order of the whole-line
+    !! assembly and its operations in the same order, so the loads are bit-identical to it, as
+    !! in CD_Get_Model_EndForces; the elements that touch no end node, which add nothing to
+    !! these rows, are not evaluated.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(IN) :: fint(:)
+    REAL(wp), INTENT(OUT) :: coupled_loads(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: n, nn, e, a, b, ia, ib, sa, sb, k, d, es, idx(6), lk
+    REAL(wp) :: inertia(3, 2), added(3, 2), residual(3, 2), load(9)
+    REAL(wp) :: coeff, q2(6), a2(6), wl2(2), ma2(6)
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    coupled_loads = CD_ZERO
+    lk = MIN(LEN(em), KERNEL_MSG_LEN)
+    n = model%n_dof
+    nn = n/3
+    ! M a (model_structural_mass_product) on the end rows, from zero in element order
+    inertia = CD_ZERO
+    DO e = 1, model%n_elem
+      a = model%elem_conn(1, e)
+      b = model%elem_conn(2, e)
+      sa = end_slot(a)
+      sb = end_slot(b)
+      IF (sa == 0 .AND. sb == 0) CYCLE
+      ia = 3*a - 2
+      ib = 3*b - 2
+      coeff = model%rho_a(e)*model%l0(e)/6.0_wp
+      IF (sa /= 0) inertia(:, sa) = inertia(:, sa) + coeff*(2.0_wp*model%a(ia:ia + 2) + model%a(ib:ib + 2))
+      IF (sb /= 0) inertia(:, sb) = inertia(:, sb) + coeff*(model%a(ia:ia + 2) + 2.0_wp*model%a(ib:ib + 2))
+    END DO
+    DO k = 1, 2
+      residual(:, k) = inertia(:, k) + fint(end_base(k) + 1:end_base(k) + 3) - &
+                       model%f_ext(end_base(k) + 1:end_base(k) + 3)
+    END DO
+    ! M_add a (model_added_mass_force), from zero in element order
+    IF (model%has_added_mass) THEN
+      added = CD_ZERO
+      DO e = 1, model%n_elem
+        sa = end_slot(model%elem_conn(1, e))
+        sb = end_slot(model%elem_conn(2, e))
+        IF (sa == 0 .AND. sb == 0) CYCLE
+        CALL extract_element_positions(model, e, model%q, idx, q2)
+        a2 = model%a(idx)
+        CALL extract_nodal_scalar(model%added_mass_waterline_z, model, e, wl2)
+        em = ''
+        CALL CD_Added_Mass_Element_Force(q2(1:3), q2(4:6), a2(1:3), a2(4:6), model%l0(e), wl2(1), wl2(2), &
+                                         model%added_mass_rho, model%added_mass_diameter_elem(e), &
+                                         model%added_mass_can_elem(e), model%added_mass_cat_elem(e), &
+                                         ma2, es, em(1:lk))
+        IF (es /= 0) THEN
+          ErrStat = CD_MODEL_SOLVEFAIL
+          ErrMsg = 'CableDyn_Model: added-mass assembly failed during coupled-load calculation: '//TRIM(em)
+          RETURN
+        END IF
+        ! the far node's share stays finite-checked as in the whole-line force
+        IF (.NOT. CD_All_Finite(ma2)) THEN
+          CALL fail(es, em, 'added-mass force returned non-finite values')
+          ErrStat = CD_MODEL_SOLVEFAIL
+          ErrMsg = 'CableDyn_Model: added-mass assembly failed during coupled-load calculation: '//TRIM(em)
+          RETURN
+        END IF
+        IF (sa /= 0) added(:, sa) = added(:, sa) + ma2(1:3)
+        IF (sb /= 0) added(:, sb) = added(:, sb) + ma2(4:6)
+      END DO
+      residual = residual + added
+    END IF
+    CALL model_contributor_force(model, model%q, model%v, load, es, em, end_nodes_only=.TRUE.)
+    IF (es /= 0) THEN
+      ErrStat = CD_MODEL_SOLVEFAIL
+      ErrMsg = 'CableDyn_Model: load assembly failed during coupled-load calculation: '//TRIM(em)
+      RETURN
+    END IF
+    residual(:, 1) = residual(:, 1) - load(1:3)
+    residual(:, 2) = residual(:, 2) - load(4:6)
+    DO k = 1, SIZE(model%fixed_dofs)
+      d = model%fixed_dofs(k)
+      IF (d <= 3) THEN
+        coupled_loads(k) = -residual(d, 1)
+      ELSE
+        coupled_loads(k) = -residual(d - end_base(2), 2)
+      END IF
+    END DO
+
+  CONTAINS
+
+    PURE INTEGER FUNCTION end_slot(node) RESULT(s)
+      !! 1 for the first node, 2 for the last, 0 for an interior node.
+      INTEGER, INTENT(IN) :: node
+      s = 0
+      IF (node == 1) THEN
+        s = 1
+      ELSE IF (node == nn) THEN
+        s = 2
+      END IF
+    END FUNCTION end_slot
+
+    PURE INTEGER FUNCTION end_base(s) RESULT(base)
+      !! DOF offset of end slot s.
+      INTEGER, INTENT(IN) :: s
+      base = MERGE(0, n - 3, s == 1)
+    END FUNCTION end_base
+  END SUBROUTINE coupled_loads_at_ends
 
   SUBROUTINE CD_Calc_Model_CoupledKinematicDerivatives(model, dload_dq, dload_dv, ErrStat, ErrMsg)
     !! Analytic reduced coupled-load derivatives with respect to prescribed
@@ -9106,8 +9227,11 @@ CONTAINS
     a = model%elem_conn(1, e)
     b = model%elem_conn(2, e)
     idx = [3*a - 2, 3*a - 1, 3*a, 3*b - 2, 3*b - 1, 3*b]
-    q2 = q(idx)
-    v2 = v(idx)
+    ! the two nodes' contiguous triples (the copies q(idx), v(idx) without a vector subscript)
+    q2(1:3) = q(3*a - 2:3*a)
+    q2(4:6) = q(3*b - 2:3*b)
+    v2(1:3) = v(3*a - 2:3*a)
+    v2(4:6) = v(3*b - 2:3*b)
   END SUBROUTINE extract_element_state
 
   PURE SUBROUTINE extract_element_positions(model, e, q, idx, q2)
@@ -9122,7 +9246,8 @@ CONTAINS
     a = model%elem_conn(1, e)
     b = model%elem_conn(2, e)
     idx = [3*a - 2, 3*a - 1, 3*a, 3*b - 2, 3*b - 1, 3*b]
-    q2 = q(idx)
+    q2(1:3) = q(3*a - 2:3*a)
+    q2(4:6) = q(3*b - 2:3*b)
   END SUBROUTINE extract_element_positions
 
   PURE SUBROUTINE extract_nodal_vector(field, model, e, field2)
