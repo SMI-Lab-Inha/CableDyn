@@ -31,6 +31,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - A negative `BA` of an `EI = 0` line of several sections is resolved with the length, `EA` and
   mass of its own element. It took those of the element at the mirrored position from the other
   end, so the line types of an asymmetric composite line exchanged their axial damping.
+- Documentation: the length the Morison drag is taken over on each path (unstretched on `EI = 0`
+  lines, the deformed centreline on finite-EI lines), and how an independent check of the static
+  force balance in a current must integrate it. The end reactions of a finite-EI cable at rest
+  in a current, pinned or clamped, balance its weight and drag to 2e-8 of the end force; a test
+  checks it.
 
 ## [0.4.1] - 2026-11-08
 

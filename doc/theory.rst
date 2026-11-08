@@ -1010,7 +1010,17 @@ With the relative velocity :math:`\mathbf{u}_r = \mathbf{u}_f - \mathbf{v}` spli
                 + \tfrac{1}{2}\rho\,\pi d\,C_{d,t}\,\lvert\mathbf{u}_{r,t}\rvert\,\mathbf{u}_{r,t}.
 
 Its derivatives with respect to position (through :math:`\mathbf{t}`) and velocity enter the
-implicit tangent exactly.
+implicit tangent exactly. The length is the element's unstretched length :math:`L_0` on the
+``EI = 0`` path (with the chord tangent and the wet-weighted relative velocity) and
+the deformed length :math:`\lvert\mathbf r_{,\xi}\rvert\,\mathrm{d}\xi` of the cubic centreline
+on the Hermite path (three Gauss points per element). At rest in a current the end reactions
+(``FairTen``/``AnchTen``, ``Point<P>F``) balance the weight and this drag to the static
+tolerance, about :math:`10^{-8}` of the end force, pinned or clamped ends alike. A check of the
+balance must integrate the drag the same way: on straight chords between the nodes of a
+finite-EI line it misses by a share that falls with the square of the element length
+(:math:`3\times10^{-5}` of the end force on 1.25 m elements of a cable in a 1 m/s current,
+:math:`4.5\times10^{-4}` on 5 m elements), and per unstretched length by about the axial strain
+times the drag.
 
 Added mass and fluid inertia
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
