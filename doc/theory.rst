@@ -1834,7 +1834,12 @@ mesh-sequenced route described below first and this route as its fallback):
    take over, because the seabed contact and waterline laws are only piecewise smooth (and the
    curvature of a structured bathymetry grid is not differentiated). Stages that jump
    further than a small fraction of the line are retried at a smaller step; a first stage that
-   does not converge is restarted at full ``EI``.
+   does not converge is restarted at full ``EI``. Such a descent from the seed (and the one past
+   a limit point of the continuation) can run for more than a thousand iterations while the
+   energy falls and the residual rises and falls, and that count scatters with the last digits
+   of the input, such as the line's azimuth. Past its allowance it therefore runs on while the
+   two-norm of the scaled residual keeps halving within an allowance, to one and a half
+   allowances (a longer descent can settle on a folded branch that the other routes avoid).
 3. **Polish and diagnosis** on the deck mesh at the static tolerance. A residual floor above it
    is accepted at :math:`10^{-6}` (or, for a line on the seabed, :math:`10^{-5}`, nodes
    alternating across the 1 µm contact blend) and reported. An element folded beyond

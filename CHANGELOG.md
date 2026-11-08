@@ -18,6 +18,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Finite-EI statics that restart at full stiffness no longer depend on the line's azimuth. When
+  the first stage of the stiffness continuation fails (a clamped end on a mesh too coarse for
+  its boundary layer), the energy descent from the seed was cut at a fixed count (1600
+  iterations at the default allowance). On a 3.8 km clamped lazy wave that descent takes 1171
+  to 1661 iterations depending on the last digits of the input, so turning the deck about the
+  vertical failed the statics at 328.3 and 329 deg and solved them elsewhere. Past its allowance
+  the descent now runs on while the norm of its residual keeps halving within an allowance, to
+  one and a half allowances. The lazy wave solves at all 28 azimuths tried, with the same
+  tensions, and the static states of the decks that solved before are unchanged.
 
 ## [0.4.1] - 2026-11-08
 

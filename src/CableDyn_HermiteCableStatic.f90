@@ -309,7 +309,7 @@ CONTAINS
                                           waterline_z, dry_buoyancy, merit_line_search, pseudo_transient, &
                                           energy_minimization, stable, water_weight, current, residual_out, &
                                           tangent_out, friction, residual_unmet, torsion, energy_out, &
-                                          end_share_hold, f_nodal_twist)
+                                          end_share_hold, f_nodal_twist, stall_limit)
     !! Solve the finite-EI static equilibrium of a Hermite bending-cable line.
     !!
     !! l0(ne), EA(ne), EI(ne), w(ne) : per-element rest length, axial/bending stiffness,
@@ -451,6 +451,15 @@ CONTAINS
     !!                                  attachments in a current, evaluated at a twisted state)
     !!                                  then leaves the untwisted state in equilibrium under
     !!                                  f_nodal alone.
+    !! stall_limit (optional, >= 1)    : max_iter becomes the cap of a long descent, which
+    !!                                  stops (not converged) once stall_limit updates have
+    !!                                  not brought the two-norm of the scaled residual below
+    !!                                  half its value at the last such fall (the first: the
+    !!                                  start), so after stall_limit updates without any. A
+    !!                                  descent that is still converging is then not cut at a
+    !!                                  fixed count; the norm, unlike the largest component
+    !!                                  that decides convergence, does not change when the
+    !!                                  line is turned.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping
@@ -489,8 +498,13 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: end_share_hold(2)
     TYPE(CD_HermiteTorsionType), INTENT(INOUT), OPTIONAL :: torsion
     REAL(wp), INTENT(IN), OPTIONAL :: f_nodal_twist(:)
+    INTEGER, INTENT(IN), OPTIONAL :: stall_limit
 
     INTEGER :: ne, nn, ndof, c, it, es, i, b, nci, n_buoy, omp_threads, axial_order, bending_order
+    ! stall_limit: the residual merit at the start of an update, its value at the last halving
+    ! of the norm, and the number of updates that had reached that state.
+    REAL(wp) :: merit_update, merit_fall
+    INTEGER :: it_fall
     REAL(wp) :: eifac, rnorm, fscale, bfac, rmerit, ptc_tau, ptc_rprev, pi_total, pi_abs, lm_mu, chord
     REAL(wp), ALLOCATABLE :: q(:), trib(:), w_cur(:), q_base(:)
     REAL(wp) :: endconn_k(2), endconn_d0(3, 2), direction_norm
@@ -614,6 +628,11 @@ CONTAINS
     IF (n_cont < 1 .OR. max_iter < 1 .OR. .NOT. CD_Is_Finite(tol) .OR. tol <= CD_ZERO .OR. &
         .NOT. CD_Is_Finite(damping) .OR. damping <= CD_ZERO .OR. damping > CD_ONE) THEN
       CALL fail('need n_cont>=1, max_iter>=1, finite tol>0, finite 0<damping<=1'); RETURN
+    END IF
+    IF (PRESENT(stall_limit)) THEN
+      IF (stall_limit < 1) THEN
+        CALL fail('need stall_limit >= 1'); RETURN
+      END IF
     END IF
     IF (PRESENT(residual_history)) THEN
       IF (SIZE(residual_history) < max_iter) THEN
@@ -1034,10 +1053,20 @@ CONTAINS
         drag_now = use_current .AND. b == n_buoy .AND. c == nci
         IF (PRESENT(history_count)) history_count = 0
         IF (PRESENT(residual_history)) residual_history = CD_ZERO
+        it_fall = 0
         DO it = 1, max_iter
           ! newton_step measures the residual at the CURRENT q and updates only when
           ! not yet converged, so it never over-steps a converged state.
           CALL newton_step(rnorm, es, ErrMsg, .TRUE.)
+          IF (PRESENT(stall_limit) .AND. rnorm >= tol .AND. es == CD_HCSTAT_OK) THEN
+            ! The norm has halved when its square (the merit) falls below a quarter.
+            IF (it == 1) THEN
+              merit_fall = merit_update
+            ELSE IF (merit_update < 0.25_wp*merit_fall) THEN
+              merit_fall = merit_update
+              it_fall = it - 1
+            END IF
+          END IF
           ! A stall is sticky by design: every later stage then runs a single step, so the
           ! stage loops still end at the full load and full EI, where the final evaluation
           ! gives the verdict (a stalled solve ends NOCONVERGE).
@@ -1053,6 +1082,9 @@ CONTAINS
           IF (PRESENT(residual_history)) residual_history(it) = rnorm
           IF (PRESENT(history_count)) history_count = it
           IF (rnorm < tol) EXIT
+          IF (PRESENT(stall_limit)) THEN
+            IF (it - it_fall >= stall_limit) EXIT
+          END IF
         END DO
       END DO
       q_sec2 = q_sec1
@@ -1450,6 +1482,7 @@ CONTAINS
       IF (.NOT. CD_Is_Finite(rnorm)) THEN
         es = CD_HCSTAT_NOCONVERGE; em = 'non-finite residual'; RETURN
       END IF
+      IF (do_update) merit_update = rmerit
       ! Pure residual evaluation, or already at tolerance: do not step.
       IF (.NOT. do_update .OR. rnorm < tol) RETURN
 
@@ -3532,6 +3565,11 @@ CONTAINS
     !! full-stiffness descent from the last converged state is tried (a limit point where
     !! the equilibrium snaps to another stable configuration); the continuation then stops
     !! with NOCONVERGE, as it does once iteration_budget Newton iterations are spent.
+    !! A full-stiffness descent (that one, or the restart from the seed of a first stage
+    !! that does not converge) has RESTART_ITER_FACTOR stage allowances; its energy pass runs
+    !! on to one and a half of them, within the budget, while its residual keeps falling, and
+    !! stops after that allowance without the norm of the residual halving (stall_limit of
+    !! CD_HermiteCable_Static_Solve).
     !! Intermediate stages use a looser tolerance (MAX(tol, 1e-6)); the final stage uses tol.
     !! The budget makes the failure path bounded: a caller's fallback route receives control
     !! after at most that many Newton iterations.
@@ -3565,7 +3603,8 @@ CONTAINS
     REAL(wp), PARAMETER :: STAGE_MOVE_TOL = 0.02_wp
     ! Every stage (energy solve and pseudo-transient retry) gets this multiple of max_iter.
     INTEGER, PARAMETER :: PTC_ITER_FACTOR = 4
-    ! A full-stiffness restart from the seed descends from far away; its stage allowance.
+    ! A full-stiffness restart from the seed descends from far away: its stage allowance, of
+    ! the iterations without progress in the energy pass.
     INTEGER, PARAMETER :: RESTART_ITER_FACTOR = 10
     INTEGER :: ne, nn, it, es, n_accepted
     REAL(wp) :: lambda, lambda_try, dlog, stage_tol, res
@@ -4324,9 +4363,19 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: em_x
       LOGICAL, INTENT(IN) :: ptc
       REAL(wp), INTENT(IN), OPTIONAL :: f_frozen(:)
-      INTEGER :: iter_x
+      INTEGER :: iter_x, stall_x
       iter_x = PTC_ITER_FACTOR*max_iter
       IF (restart_stage) iter_x = MAX(iter_x, MIN(iteration_budget - iters_out, RESTART_ITER_FACTOR*iter_x))
+      ! The energy pass of a restart descends from far away (on a long line, through more than
+      ! a thousand iterations in which the residual rises and falls while the energy falls):
+      ! past the restart allowance it runs on while the residual keeps falling, and stops after
+      ! an allowance without progress. A fixed count sat within the scatter of the length of
+      ! such a descent, so the last digits of the input (as from turning the line about the
+      ! vertical) decided whether the statics solved. The extension ends at one and a half
+      ! allowances: a descent still going there can settle on a folded branch that a
+      ! different start avoids (the PTC retry and the caller's other routes follow).
+      stall_x = iter_x
+      IF (restart_stage .AND. .NOT. ptc) iter_x = MAX(iter_x, MIN(iteration_budget - iters_out, (3*iter_x)/2))
       IF (PRESENT(endconn_stiffness)) THEN
         CALL CD_HermiteCable_Static_Solve(l0, EA, ei_x, w, seed_x, fixed_dofs, seabed_z, kn, 1, iter_x, &
                                           stage_tol, CD_ONE, q_x, curv_x, res_x, it_x, es_x, em_x, &
@@ -4340,7 +4389,7 @@ CONTAINS
                                           endconn_stiffness=k_stage, endconn_direction=endconn_direction, &
                                           endconn_mode=endconn_mode, waterline_z=waterline_z, &
                                           dry_buoyancy=dry_buoyancy, water_weight=water_weight, current=cur_stage, &
-                                          friction=fric_stage)
+                                          friction=fric_stage, stall_limit=stall_x)
       ELSE
         CALL CD_HermiteCable_Static_Solve(l0, EA, ei_x, w, seed_x, fixed_dofs, seabed_z, kn, 1, iter_x, &
                                           stage_tol, CD_ONE, q_x, curv_x, res_x, it_x, es_x, em_x, &
@@ -4352,7 +4401,8 @@ CONTAINS
                                           axial_quadrature_order=axial_quadrature_order, &
                                           bending_quadrature_order=bending_quadrature_order, &
                                           waterline_z=waterline_z, dry_buoyancy=dry_buoyancy, &
-                                          water_weight=water_weight, current=cur_stage, friction=fric_stage)
+                                          water_weight=water_weight, current=cur_stage, friction=fric_stage, &
+                                          stall_limit=stall_x)
       END IF
     END SUBROUTINE stage_solve
 
