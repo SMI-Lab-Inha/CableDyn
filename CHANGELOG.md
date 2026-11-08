@@ -18,23 +18,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
-- The tangent outputs of a finite-EI line take the line's tangent, the node's Hermite tangent
-  DOF, instead of a difference of node positions. At an end clamped by an `END CONNECTIONS`
-  `Rigid` row they now give the direction the clamp holds: a cable clamped 15 deg off the
-  vertical read 163.8 deg for a 165 deg clamp, and up to 14 deg off where the line bends within
-  its first element.
-
-### Upgrading
-
-- On finite-EI lines `L<L>N<J>Dec` and `L<L>N<J>Azi`, `FairDecl`/`AnchDecl`, `FairIncl`/`AnchIncl`
-  and `FairAngle`/`AnchAngle`, the `Declination`, `Inclination` and `Azimuth` columns of
-  `.static.out`, the `Declination` envelope of the range graph and the `line tangent` of the
-  initialisation reports (driver, mixed route, C API notes and OpenFAST) change: by up to 3.1 deg
-  at the clamped end of `buoy_clamped_cable.dat`, 1.8 deg in the static profile of
-  `lozon_gomex80_power_cable_motion.dat` (1.4 deg in `iea15mw_umaine_mixed_cabledyn.dat`, 0.5 deg
-  in `torsion_lazy_wave_hangoff_twist.dat`) and 0.6 deg in the `FairIncl1` history of
-  `lazy_wave_vessel_motion.dat`, and by 0.2 deg or less on the other finite-EI examples.
-  Positions, forces, tensions, curvatures and every `EI = 0` line are unchanged.
 
 ## [0.4.1] - 2026-11-08
 
