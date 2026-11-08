@@ -18,18 +18,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
-### Added
-
-- `VIVphaseSeed zero` starts every VIV phase at zero, the start of MoorDyn-F in OpenFAST v5.0.0,
-  which does not carry its phase seed into its state; the default `spread` keeps MoorDyn-C's
-  `2 pi i/N`.
-
-### Fixed
-
-- The VIV lift of a line written fairlead first pointed against MoorDyn's: the node tangent ran
-  from End B to End A, which is MoorDyn's model started from the phases plus pi. The lift and the
-  `V` line files now match MoorDyn's on either deck order. Where two lock-in branches coexist the
-  start can select the other one.
 
 ## [0.4.1] - 2026-11-08
 
