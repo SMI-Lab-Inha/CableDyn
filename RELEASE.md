@@ -140,7 +140,7 @@ python release/smoke_test_wheel.py examples/dynamic_chain_current.dat --expect-b
 Tag only the commit that passed every check:
 
 ```powershell
-$ReleaseVersion = "0.4.0"
+$ReleaseVersion = "MAJOR.MINOR.PATCH"
 git tag -s "v$ReleaseVersion" -m "CableDyn v$ReleaseVersion"
 git push origin "v$ReleaseVersion"
 ```
