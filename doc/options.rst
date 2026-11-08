@@ -355,10 +355,14 @@ rejected as unknown. The dynamic Newton controls are set with ``dynamic_solver``
      - ``False``
      - ``True`` enables guarded within-step tangent reuse on every dynamic solver the deck builds.
        It does not relax convergence tolerances and should be qualified against full Newton.
-       Measured against full Newton: 8-12 % faster on free-hanging finite-EI cables (lazy wave,
-       buoyed cable), about 1.5 times slower on finite-EI lines on the seabed (contact fails the
-       reuse contraction test and rebuilds the tangent), 3 % slower to 5 % faster on ``EI = 0``
-       systems;
+       Measured against full Newton on the example decks (one thread): 4 to 20 % faster on
+       finite-EI cables, free-hanging or with a touchdown (lazy waves in waves, current and vessel
+       motion, a buoyed cable, rods on a spar); 12 % slower on an ``EI = 0`` cable laid on a
+       frictional seabed in a current, whose stick-slip friction makes a reused tangent take more
+       iterations; within a few per cent elsewhere on ``EI = 0`` systems. A finite-EI cable in
+       the monolithic step of the multibody march keeps full Newton, as it is stepped again from
+       the same start at every coupling iteration (reuse there made ``mixed_body_rods_points.dat``
+       7.0 s against 5.8 s);
        results move at the solver tolerance (Bergdahl mean cycle maxima within 0.16 %)
      - both
      - ``False modified_newton``
